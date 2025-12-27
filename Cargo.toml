@@ -65,6 +65,8 @@ webp = { version = "0.3.1", default-features = false }
 wuff = "0.2"
 tar = "0.4"
 sha2 = { version = "0.10", optional = true }
+httpdate = "1.0"
+http = "1"
 
 [dev-dependencies]
 criterion = "0.5"

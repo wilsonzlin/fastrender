@@ -23,7 +23,10 @@
 //! ```
 
 use crate::error::{Error, ImageError, ResourceError, Result};
+use http::HeaderMap;
+use httpdate::parse_http_date;
 use lru::LruCache;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::convert::TryFrom;
@@ -35,6 +38,7 @@ use std::sync::Arc;
 use std::sync::Condvar;
 use std::sync::Mutex;
 use std::time::Duration;
+use std::time::SystemTime;
 use ureq::ResponseExt;
 use url::Url;
 
@@ -721,6 +725,91 @@ pub fn normalize_user_agent_for_log(ua: &str) -> &str {
 // Core types
 // ============================================================================
 
+/// Parsed HTTP caching policy extracted from response headers.
+#[derive(Debug, Clone, Default)]
+pub struct HttpCachePolicy {
+  pub max_age: Option<u64>,
+  pub no_cache: bool,
+  pub no_store: bool,
+  pub must_revalidate: bool,
+  pub expires: Option<SystemTime>,
+}
+
+impl HttpCachePolicy {
+  fn is_empty(&self) -> bool {
+    self.max_age.is_none()
+      && !self.no_cache
+      && !self.no_store
+      && !self.must_revalidate
+      && self.expires.is_none()
+  }
+}
+
+#[derive(Debug, Clone)]
+struct CachedHttpMetadata {
+  stored_at: SystemTime,
+  max_age: Option<Duration>,
+  expires: Option<SystemTime>,
+  no_cache: bool,
+  no_store: bool,
+  must_revalidate: bool,
+}
+
+impl CachedHttpMetadata {
+  fn from_policy(policy: &HttpCachePolicy, stored_at: SystemTime) -> Option<Self> {
+    if policy.is_empty() {
+      return None;
+    }
+    Some(Self {
+      stored_at,
+      max_age: policy.max_age.map(Duration::from_secs),
+      expires: policy.expires,
+      no_cache: policy.no_cache,
+      no_store: policy.no_store,
+      must_revalidate: policy.must_revalidate,
+    })
+  }
+
+  fn with_updated_policy(
+    &self,
+    policy: Option<&HttpCachePolicy>,
+    stored_at: SystemTime,
+  ) -> Option<Self> {
+    match policy {
+      Some(policy) if policy.no_store => None,
+      Some(policy) => CachedHttpMetadata::from_policy(policy, stored_at),
+      None => Some(Self {
+        stored_at,
+        ..self.clone()
+      }),
+    }
+  }
+
+  fn requires_revalidation(&self) -> bool {
+    self.no_cache || self.must_revalidate
+  }
+
+  fn expires_at(&self) -> Option<SystemTime> {
+    if let Some(max_age) = self.max_age {
+      return self.stored_at.checked_add(max_age);
+    }
+    self.expires
+  }
+
+  fn is_fresh(&self, now: SystemTime, freshness_cap: Option<Duration>) -> bool {
+    let mut expires_at = self.expires_at();
+    if let Some(cap) = freshness_cap {
+      if let Some(capped) = self.stored_at.checked_add(cap) {
+        expires_at = match expires_at {
+          Some(exp) if exp < capped => Some(exp),
+          _ => Some(capped),
+        };
+      }
+    }
+    expires_at.map(|t| t > now).unwrap_or(false)
+  }
+}
+
 /// Result of fetching an external resource
 #[derive(Debug, Clone)]
 pub struct FetchedResource {
@@ -736,6 +825,8 @@ pub struct FetchedResource {
   pub last_modified: Option<String>,
   /// The final URL after redirects, when available
   pub final_url: Option<String>,
+  /// Parsed HTTP caching policy when fetched over HTTP(S).
+  pub cache_policy: Option<HttpCachePolicy>,
 }
 
 impl FetchedResource {
@@ -748,6 +839,7 @@ impl FetchedResource {
       etag: None,
       last_modified: None,
       final_url: None,
+      cache_policy: None,
     }
   }
 
@@ -764,6 +856,7 @@ impl FetchedResource {
       etag: None,
       last_modified: None,
       final_url,
+      cache_policy: None,
     }
   }
 
@@ -1054,6 +1147,7 @@ impl HttpFetcher {
         .get("last-modified")
         .and_then(|h| h.to_str().ok())
         .map(|s| s.to_string());
+      let cache_policy = parse_http_cache_policy(response.headers());
 
       let body_result = response
         .body_mut()
@@ -1076,6 +1170,7 @@ impl HttpFetcher {
           resource.status = Some(status.as_u16());
           resource.etag = etag;
           resource.last_modified = last_modified;
+          resource.cache_policy = cache_policy;
           return Ok(resource);
         }
         Err(err) if accept_encoding.is_none() && is_decompression_error(&err) => {
@@ -1223,6 +1318,50 @@ impl ResourceFetcher for HttpFetcher {
   }
 }
 
+fn parse_http_cache_policy(headers: &http::HeaderMap) -> Option<HttpCachePolicy> {
+  let mut policy = HttpCachePolicy::default();
+  if let Some(value) = headers.get("cache-control").and_then(|h| h.to_str().ok()) {
+    for directive in value.split(',') {
+      let directive = directive.trim();
+      if directive.is_empty() {
+        continue;
+      }
+      let (name, value) = directive
+        .split_once('=')
+        .map(|(k, v)| (k.trim(), Some(v.trim())))
+        .unwrap_or((directive, None));
+      match name.to_ascii_lowercase().as_str() {
+        "max-age" => {
+          if let Some(raw) = value {
+            let raw = raw.trim_matches('"');
+            if let Ok(parsed) = raw.parse::<u64>() {
+              policy.max_age = Some(parsed);
+            }
+          }
+        }
+        "no-cache" => policy.no_cache = true,
+        "no-store" => policy.no_store = true,
+        "must-revalidate" => policy.must_revalidate = true,
+        _ => {}
+      }
+    }
+  }
+
+  if let Some(expires) = headers
+    .get("expires")
+    .and_then(|h| h.to_str().ok())
+    .and_then(|v| parse_http_date(v).ok())
+  {
+    policy.expires = Some(expires);
+  }
+
+  if policy.is_empty() {
+    None
+  } else {
+    Some(policy)
+  }
+}
+
 // ============================================================================
 // CachingFetcher - in-memory cache + single-flight
 // ============================================================================
@@ -1238,6 +1377,8 @@ pub struct CachingFetcherConfig {
   pub cache_errors: bool,
   /// Whether to use HTTP validators (ETag/Last-Modified) when present.
   pub honor_http_cache_headers: bool,
+  /// Whether to honor HTTP freshness metadata (Cache-Control/Expires) to avoid revalidation.
+  pub honor_http_cache_freshness: bool,
 }
 
 impl Default for CachingFetcherConfig {
@@ -1247,6 +1388,7 @@ impl Default for CachingFetcherConfig {
       max_items: 512,
       cache_errors: true,
       honor_http_cache_headers: true,
+      honor_http_cache_freshness: false,
     }
   }
 }
@@ -1278,6 +1420,7 @@ struct CacheEntry {
   value: CacheValue,
   etag: Option<String>,
   last_modified: Option<String>,
+  http_cache: Option<CachedHttpMetadata>,
 }
 
 impl CacheEntry {
@@ -1291,6 +1434,7 @@ struct CachedSnapshot {
   value: CacheValue,
   etag: Option<String>,
   last_modified: Option<String>,
+  http_cache: Option<CachedHttpMetadata>,
 }
 
 impl CachedSnapshot {
@@ -1301,6 +1445,68 @@ impl CachedSnapshot {
       CacheValue::Error(_) => None,
     }
   }
+}
+
+#[derive(Clone)]
+pub(crate) enum CacheAction {
+  UseCached,
+  Validate {
+    etag: Option<String>,
+    last_modified: Option<String>,
+  },
+  Fetch,
+}
+
+#[derive(Clone)]
+pub(crate) struct CachePlan {
+  pub(crate) cached: Option<CachedSnapshot>,
+  pub(crate) action: CacheAction,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct ResourceCacheDiagnostics {
+  pub fresh_hits: usize,
+  pub revalidated_hits: usize,
+  pub misses: usize,
+}
+
+thread_local! {
+  static RESOURCE_CACHE_DIAGNOSTICS: RefCell<Option<ResourceCacheDiagnostics>> =
+    RefCell::new(None);
+}
+
+pub(crate) fn enable_resource_cache_diagnostics() {
+  RESOURCE_CACHE_DIAGNOSTICS.with(|cell| {
+    *cell.borrow_mut() = Some(ResourceCacheDiagnostics::default());
+  });
+}
+
+pub(crate) fn take_resource_cache_diagnostics() -> Option<ResourceCacheDiagnostics> {
+  RESOURCE_CACHE_DIAGNOSTICS.with(|cell| cell.borrow_mut().take())
+}
+
+fn record_cache_fresh_hit() {
+  RESOURCE_CACHE_DIAGNOSTICS.with(|cell| {
+    if let Some(stats) = cell.borrow_mut().as_mut() {
+      stats.fresh_hits += 1;
+    }
+  });
+}
+
+fn record_cache_revalidated_hit() {
+  RESOURCE_CACHE_DIAGNOSTICS.with(|cell| {
+    if let Some(stats) = cell.borrow_mut().as_mut() {
+      stats.revalidated_hits += 1;
+    }
+  });
+}
+
+fn record_cache_miss() {
+  RESOURCE_CACHE_DIAGNOSTICS.with(|cell| {
+    if let Some(stats) = cell.borrow_mut().as_mut() {
+      stats.misses += 1;
+    }
+  });
 }
 
 struct CacheState {
@@ -1422,22 +1628,101 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
     self
   }
 
+  /// Enables or disables honoring HTTP freshness headers (Cache-Control/Expires).
+  ///
+  /// When enabled, fresh cached entries are served without revalidation. Stale
+  /// or `no-cache`/`must-revalidate` entries will trigger conditional requests
+  /// when validators are available.
+  pub fn with_http_cache_freshness(mut self, enabled: bool) -> Self {
+    self.config.honor_http_cache_freshness = enabled;
+    self
+  }
+
   /// Apply a resource policy. When set, disallowed URLs are rejected before consulting the cache.
   pub fn with_policy(mut self, policy: ResourcePolicy) -> Self {
     self.policy = Some(policy);
     self
   }
 
-  fn should_revalidate(&self, url: &str, cached: &CachedSnapshot) -> bool {
-    if !self.config.honor_http_cache_headers {
-      return false;
+  fn plan_cache_use(
+    &self,
+    url: &str,
+    cached: Option<CachedSnapshot>,
+    freshness_cap: Option<Duration>,
+  ) -> CachePlan {
+    let is_http = matches!(
+      classify_scheme(url),
+      ResourceScheme::Http | ResourceScheme::Https
+    );
+    let Some(snapshot) = cached else {
+      return CachePlan {
+        cached: None,
+        action: CacheAction::Fetch,
+      };
+    };
+
+    let has_validators = snapshot.etag.is_some() || snapshot.last_modified.is_some();
+    let http_cache = snapshot.http_cache.clone();
+    let etag = snapshot.etag.clone();
+    let last_modified = snapshot.last_modified.clone();
+    let cached = Some(snapshot);
+
+    if !is_http {
+      return CachePlan {
+        cached,
+        action: CacheAction::UseCached,
+      };
     }
 
-    if !(url.starts_with("http://") || url.starts_with("https://")) {
-      return false;
+    if self.config.honor_http_cache_freshness {
+      if let Some(meta) = http_cache.as_ref() {
+        if meta.no_store {
+          return CachePlan {
+            cached: None,
+            action: CacheAction::Fetch,
+          };
+        }
+        if meta.is_fresh(SystemTime::now(), freshness_cap) && !meta.requires_revalidation() {
+          return CachePlan {
+            cached,
+            action: CacheAction::UseCached,
+          };
+        }
+        if self.config.honor_http_cache_headers && has_validators {
+          return CachePlan {
+            cached,
+            action: CacheAction::Validate {
+              etag,
+              last_modified,
+            },
+          };
+        }
+        return CachePlan {
+          cached,
+          action: CacheAction::Fetch,
+        };
+      } else if !self.config.honor_http_cache_headers {
+        return CachePlan {
+          cached,
+          action: CacheAction::UseCached,
+        };
+      }
     }
 
-    cached.etag.is_some() || cached.last_modified.is_some()
+    if self.config.honor_http_cache_headers && has_validators {
+      CachePlan {
+        cached,
+        action: CacheAction::Validate {
+          etag,
+          last_modified,
+        },
+      }
+    } else {
+      CachePlan {
+        cached,
+        action: CacheAction::UseCached,
+      }
+    }
   }
 
   fn insert_cache(&self, url: &str, entry: CacheEntry) {
@@ -1453,6 +1738,41 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
       state.lru.put(url.to_string(), entry);
       self.evict_locked(&mut state);
     }
+  }
+
+  fn remove_cached(&self, url: &str) {
+    if let Ok(mut state) = self.state.lock() {
+      if let Some((_k, entry)) = state.lru.pop_entry(url) {
+        state.current_bytes = state.current_bytes.saturating_sub(entry.weight());
+      }
+    }
+  }
+
+  fn build_cache_entry(
+    &self,
+    resource: &FetchedResource,
+    stored_at: SystemTime,
+  ) -> Option<CacheEntry> {
+    if resource
+      .cache_policy
+      .as_ref()
+      .map(|p| p.no_store)
+      .unwrap_or(false)
+    {
+      return None;
+    }
+
+    let http_cache = resource
+      .cache_policy
+      .as_ref()
+      .and_then(|policy| CachedHttpMetadata::from_policy(policy, stored_at));
+
+    Some(CacheEntry {
+      etag: resource.etag.clone(),
+      last_modified: resource.last_modified.clone(),
+      http_cache,
+      value: CacheValue::Resource(resource.clone()),
+    })
   }
 
   fn evict_locked(&self, state: &mut CacheState) {
@@ -1477,6 +1797,7 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
         value: entry.value,
         etag: entry.etag,
         last_modified: entry.last_modified,
+        http_cache: entry.http_cache,
       })
   }
 
@@ -1486,15 +1807,24 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
   }
 
   #[cfg(feature = "disk_cache")]
-  pub(crate) fn prime_cache_with_resource(&self, url: &str, resource: FetchedResource) {
+  pub(crate) fn prime_cache_with_snapshot(&self, url: &str, snapshot: CachedSnapshot) {
     self.insert_cache(
       url,
       CacheEntry {
-        etag: resource.etag.clone(),
-        last_modified: resource.last_modified.clone(),
-        value: CacheValue::Resource(resource),
+        etag: snapshot.etag,
+        last_modified: snapshot.last_modified,
+        http_cache: snapshot.http_cache,
+        value: snapshot.value,
       },
     );
+  }
+
+  #[cfg(feature = "disk_cache")]
+  pub(crate) fn prime_cache_with_resource(&self, url: &str, resource: FetchedResource) {
+    let stored_at = SystemTime::now();
+    if let Some(entry) = self.build_cache_entry(&resource, stored_at) {
+      self.insert_cache(url, entry);
+    }
   }
 
   fn join_inflight(&self, url: &str) -> (Arc<InFlight>, bool) {
@@ -1523,13 +1853,10 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
     }
 
     let cached = self.cached_entry(url);
-    let needs_revalidate = cached
-      .as_ref()
-      .map(|c| self.should_revalidate(url, c))
-      .unwrap_or(false);
-
-    if let Some(snapshot) = &cached {
-      if !needs_revalidate {
+    let plan = self.plan_cache_use(url, cached.clone(), None);
+    if let CacheAction::UseCached = plan.action {
+      if let Some(snapshot) = plan.cached.as_ref() {
+        record_cache_fresh_hit();
         return snapshot.value.as_result();
       }
     }
@@ -1539,13 +1866,12 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
       return flight.wait();
     }
 
-    let validators = if needs_revalidate {
-      Some((
-        cached.as_ref().and_then(|c| c.etag.as_deref()),
-        cached.as_ref().and_then(|c| c.last_modified.as_deref()),
-      ))
-    } else {
-      None
+    let validators = match &plan.action {
+      CacheAction::Validate {
+        etag,
+        last_modified,
+      } => Some((etag.as_deref(), last_modified.as_deref())),
+      _ => None,
     };
 
     let fetch_result = match validators {
@@ -1558,26 +1884,44 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
     let result = match fetch_result {
       Ok(res) => {
         if res.is_not_modified() {
-          if let Some(snapshot) = cached.as_ref() {
+          if let Some(snapshot) = plan.cached.as_ref() {
             let value = snapshot.value.as_result();
             if let Ok(ref ok) = value {
-              // Refresh validators if the server changed them during revalidation.
-              let mut updated = snapshot.clone();
-              if res.etag.is_some() {
-                updated.etag = res.etag.clone();
+              let stored_at = SystemTime::now();
+              let should_store = !res
+                .cache_policy
+                .as_ref()
+                .map(|p| p.no_store)
+                .unwrap_or(false);
+              let updated_meta = snapshot
+                .http_cache
+                .as_ref()
+                .and_then(|meta| meta.with_updated_policy(res.cache_policy.as_ref(), stored_at))
+                .or_else(|| {
+                  res
+                    .cache_policy
+                    .as_ref()
+                    .and_then(|policy| CachedHttpMetadata::from_policy(policy, stored_at))
+                });
+
+              if should_store {
+                self.insert_cache(
+                  url,
+                  CacheEntry {
+                    value: CacheValue::Resource(ok.clone()),
+                    etag: res.etag.clone().or_else(|| snapshot.etag.clone()),
+                    last_modified: res
+                      .last_modified
+                      .clone()
+                      .or_else(|| snapshot.last_modified.clone()),
+                    http_cache: updated_meta,
+                  },
+                );
+              } else {
+                self.remove_cached(url);
               }
-              if res.last_modified.is_some() {
-                updated.last_modified = res.last_modified.clone();
-              }
-              self.insert_cache(
-                url,
-                CacheEntry {
-                  value: CacheValue::Resource(ok.clone()),
-                  etag: updated.etag,
-                  last_modified: updated.last_modified,
-                },
-              );
             }
+            record_cache_revalidated_hit();
             shared = value
               .as_ref()
               .ok()
@@ -1590,18 +1934,24 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
             ))
           }
         } else {
-          let entry = CacheEntry {
-            etag: res.etag.clone(),
-            last_modified: res.last_modified.clone(),
-            value: CacheValue::Resource(res.clone()),
-          };
-          self.insert_cache(url, entry);
+          let stored_at = SystemTime::now();
+          if let Some(entry) = self.build_cache_entry(&res, stored_at) {
+            self.insert_cache(url, entry);
+          } else if res
+            .cache_policy
+            .as_ref()
+            .map(|p| p.no_store)
+            .unwrap_or(false)
+          {
+            self.remove_cached(url);
+          }
+          record_cache_miss();
           shared = Some(SharedResult::Success(res.clone()));
           Ok(res)
         }
       }
       Err(err) => {
-        if let Some(snapshot) = cached.as_ref() {
+        if let Some(snapshot) = plan.cached.as_ref() {
           let fallback = snapshot.value.as_result();
           if let Ok(ok) = &fallback {
             shared = Some(SharedResult::Success(ok.clone()));
@@ -1615,6 +1965,7 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
                 value: CacheValue::Error(err.clone()),
                 etag: None,
                 last_modified: None,
+                http_cache: None,
               },
             );
           }

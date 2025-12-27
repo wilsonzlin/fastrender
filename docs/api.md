@@ -39,6 +39,20 @@ let mut renderer = FastRender::builder()
     .build()?;
 ```
 
+Resource fetches made by the library and CLI tools default to the in-memory
+[`CachingFetcher`](../src/resource.rs). It performs single-flight deduplication and
+keeps an LRU cache of responses. When `CachingFetcherConfig::honor_http_cache_headers`
+is enabled (the default), ETag/Last-Modified validators are used for HTTP
+revalidation. Set `CachingFetcherConfig::honor_http_cache_freshness` to respect
+`Cache-Control`/`Expires` freshness directives: fresh entries are served from
+cache without a network request, while stale or `no-cache`/`must-revalidate`
+responses trigger conditional requests when validators are present. `Cache-Control:
+no-store` responses are never cached (in-memory or on disk).
+
+The optional `DiskCachingFetcher` persists the same metadata on disk. Its
+`DiskCacheConfig::max_age` value caps freshness even when servers advertise
+longer lifetimes.
+
 Fetches blocked by policy (disallowed scheme/host, over budget, etc.) are recorded in `RenderDiagnostics.fetch_errors` when rendering URLs.
 
 `FastRenderConfig` also carries a `ResourceAccessPolicy` for subresource access. By default it mirrors browser defaults (block `file://` from HTTP(S) documents, allow cross-origin loads). Set `with_block_mixed_content(true)` to forbid HTTP under HTTPS; `with_same_origin_subresources(true)` to reject cross-origin CSS/images/fonts when the document origin is known; and `with_allowed_subresource_origins(...)` to permit an explicit allowlist alongside the document origin.
