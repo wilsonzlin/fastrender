@@ -199,18 +199,15 @@ pub fn resolve_transform3d(
 
 /// Shared backface visibility test for 3D transforms.
 pub fn backface_is_hidden(transform: &Transform3D) -> bool {
-  let project = |x: f32, y: f32, m: &Transform3D| -> [f32; 3] {
-    let (tx, ty, tz, tw) = m.transform_point(x, y, 0.0);
-    if tw.abs() < 1e-6 {
-      [tx, ty, tz]
-    } else {
-      [tx / tw, ty / tw, tz / tw]
-    }
+  let Some(p0) = transform.project_point(0.0, 0.0, 0.0) else {
+    return false;
   };
-
-  let p0 = project(0.0, 0.0, transform);
-  let p1 = project(1.0, 0.0, transform);
-  let p2 = project(0.0, 1.0, transform);
+  let Some(p1) = transform.project_point(1.0, 0.0, 0.0) else {
+    return false;
+  };
+  let Some(p2) = transform.project_point(0.0, 1.0, 0.0) else {
+    return false;
+  };
   let ux = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]];
   let uy = [p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]];
 
