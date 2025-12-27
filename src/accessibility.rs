@@ -946,12 +946,11 @@ fn meter_value(node: &DomNode) -> Option<String> {
 }
 
 fn compute_invalid(node: &DomNode, element_ref: &ElementRef) -> bool {
-  match parse_bool_attr(node, "aria-invalid") {
-    Some(value) => value,
-    None => {
-      element_ref.accessibility_supports_validation() && !element_ref.accessibility_is_valid()
-    }
+  if let Some(value) = parse_aria_invalid(node) {
+    return value;
   }
+
+  element_ref.accessibility_supports_validation() && !element_ref.accessibility_is_valid()
 }
 
 fn compute_checked(
@@ -1054,16 +1053,29 @@ fn parse_invalid(node: &DomNode, element_ref: &ElementRef) -> bool {
   compute_invalid(node, element_ref)
 }
 
-fn parse_bool_attr(node: &DomNode, name: &str) -> Option<bool> {
-  let value = node.get_attribute_ref(name)?;
-  let lower = value.trim().to_ascii_lowercase();
-  if lower.is_empty() {
+fn parse_aria_invalid(node: &DomNode) -> Option<bool> {
+  let value = node.get_attribute_ref("aria-invalid")?;
+  let token = value.trim().to_ascii_lowercase();
+
+  if matches!(token.as_str(), "grammar" | "spelling") {
     return Some(true);
   }
-  match lower.as_str() {
-    "true" | "1" => Some(true),
-    "false" | "0" => Some(false),
-    _ => Some(true),
+
+  parse_bool_token(&token)
+}
+
+fn parse_bool_attr(node: &DomNode, name: &str) -> Option<bool> {
+  let value = node.get_attribute_ref(name)?;
+  let token = value.trim().to_ascii_lowercase();
+  parse_bool_token(&token)
+}
+
+fn parse_bool_token(token: &str) -> Option<bool> {
+  match token {
+    "" => Some(true),
+    "true" | "1" | "yes" => Some(true),
+    "false" | "0" | "no" => Some(false),
+    _ => None,
   }
 }
 

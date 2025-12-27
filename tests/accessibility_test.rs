@@ -247,6 +247,35 @@ fn accessibility_relations_and_visibility() {
 }
 
 #[test]
+fn accessibility_invalid_aria_boolean_values() {
+  let mut renderer = FastRender::new().expect("renderer");
+  let html = r##"
+    <html>
+      <body>
+        <div id="visible" aria-hidden="nope">Visible content</div>
+        <button id="maybe-disabled" aria-disabled="nope">Click</button>
+        <input id="typo-invalid" aria-invalid="grammar" />
+      </body>
+    </html>
+  "##;
+
+  let dom = renderer.parse_html(html).expect("parse");
+  let tree = renderer
+    .accessibility_tree(&dom, 800, 600)
+    .expect("accessibility tree");
+
+  let visible = find_by_id(&tree, "visible").expect("visible node");
+  assert_eq!(visible.name.as_deref(), Some("Visible content"));
+
+  let maybe_disabled = find_by_id(&tree, "maybe-disabled").expect("button node");
+  assert!(!maybe_disabled.states.disabled);
+  assert!(maybe_disabled.states.focusable);
+
+  let typo_invalid = find_by_id(&tree, "typo-invalid").expect("input node");
+  assert!(typo_invalid.states.invalid);
+}
+
+#[test]
 fn accessibility_label_snapshot_json() {
   let html = r##"
     <html>
