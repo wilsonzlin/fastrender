@@ -101,13 +101,22 @@ pub fn build_accessibility_tree(root: &StyledNode) -> AccessibilityNode {
   let mut lookup = HashMap::new();
   build_styled_lookup(root, &mut lookup);
   let mut hidden = HashMap::new();
+  let mut aria_hidden = HashMap::new();
   let mut ids = HashMap::new();
-  compute_hidden_and_ids(root, false, &mut hidden, &mut ids);
+  compute_hidden_and_ids(
+    root,
+    false,
+    false,
+    &mut hidden,
+    &mut aria_hidden,
+    &mut ids,
+  );
 
   let labels = collect_labels(root, &hidden, &ids, &lookup);
 
   let ctx = BuildContext {
     hidden,
+    aria_hidden,
     ids,
     labels,
     lookup,
@@ -179,14 +188,36 @@ fn composed_children<'a>(
 
 struct BuildContext<'a> {
   hidden: HashMap<usize, bool>,
+  aria_hidden: HashMap<usize, bool>,
   ids: HashMap<String, usize>,
   labels: HashMap<usize, Vec<usize>>,
   lookup: HashMap<usize, &'a StyledNode>,
 }
 
+#[derive(Clone, Copy)]
+enum TextAlternativeMode {
+  /// Only include nodes that are visible in the rendered output.
+  Visible,
+  /// Include nodes that are hidden by CSS/HTML but not explicitly aria-hidden.
+  Referenced,
+}
+
 impl<'a> BuildContext<'a> {
   fn is_hidden(&self, node: &StyledNode) -> bool {
     *self.hidden.get(&node.node_id).unwrap_or(&false)
+  }
+
+  /// Whether the node or any ancestor is hidden from assistive technology via
+  /// `aria-hidden` or `inert`.
+  fn is_accessibility_hidden(&self, node: &StyledNode) -> bool {
+    *self.aria_hidden.get(&node.node_id).unwrap_or(&false)
+  }
+
+  fn is_hidden_for_mode(&self, node: &StyledNode, mode: TextAlternativeMode) -> bool {
+    match mode {
+      TextAlternativeMode::Visible => self.is_hidden(node),
+      TextAlternativeMode::Referenced => self.is_accessibility_hidden(node),
+    }
   }
 
   fn node_for_id(&self, id: &str) -> Option<&'a StyledNode> {
@@ -203,7 +234,11 @@ impl<'a> BuildContext<'a> {
   }
 
   fn visible_text(&self, node: &'a StyledNode) -> String {
-    if self.is_hidden(node) {
+    self.text_content(node, TextAlternativeMode::Visible)
+  }
+
+  fn text_content(&self, node: &'a StyledNode, mode: TextAlternativeMode) -> String {
+    if self.is_hidden_for_mode(node, mode) {
       return String::new();
     }
 
@@ -231,7 +266,7 @@ impl<'a> BuildContext<'a> {
 
         let mut parts = Vec::new();
         for child in self.composed_children(node) {
-          let text = self.visible_text(child);
+          let text = self.text_content(child, mode);
           if !text.is_empty() {
             parts.push(text);
           }
@@ -241,7 +276,7 @@ impl<'a> BuildContext<'a> {
       DomNodeType::Document | DomNodeType::ShadowRoot { .. } => {
         let mut parts = Vec::new();
         for child in self.composed_children(node) {
-          let text = self.visible_text(child);
+          let text = self.text_content(child, mode);
           if !text.is_empty() {
             parts.push(text);
           }
@@ -255,12 +290,13 @@ impl<'a> BuildContext<'a> {
     &self,
     node: &'a StyledNode,
     visited: &mut HashSet<usize>,
+    mode: TextAlternativeMode,
   ) -> Option<String> {
-    if !visited.insert(node.node_id) || self.is_hidden(node) {
+    if !visited.insert(node.node_id) || self.is_hidden_for_mode(node, mode) {
       return None;
     }
 
-    if let Some(labelled) = referenced_text_attr(node, self, "aria-labelledby", visited) {
+    if let Some(labelled) = referenced_text_attr(node, self, "aria-labelledby", visited, mode) {
       return Some(labelled);
     }
 
@@ -271,11 +307,11 @@ impl<'a> BuildContext<'a> {
       }
     }
 
-    if let Some(label) = label_association_name(node, self, visited) {
+    if let Some(label) = label_association_name(node, self, visited, mode) {
       return Some(label);
     }
 
-    if let Some(native) = native_name_from_html(node, self, visited) {
+    if let Some(native) = native_name_from_html(node, self, visited, mode) {
       if !native.is_empty() {
         return Some(native);
       }
@@ -297,7 +333,7 @@ impl<'a> BuildContext<'a> {
 
     let (role, _) = compute_role(node, &[], None);
     if allows_visible_text_name(node.node.tag_name(), role.as_deref(), true) {
-      let text = self.visible_text(node);
+      let text = self.text_content(node, mode);
       if !text.is_empty() {
         return Some(text);
       }
@@ -432,22 +468,24 @@ fn build_nodes<'a>(
 fn compute_hidden_and_ids(
   node: &StyledNode,
   ancestor_hidden: bool,
+  ancestor_aria_hidden: bool,
   hidden: &mut HashMap<usize, bool>,
+  aria_hidden: &mut HashMap<usize, bool>,
   ids: &mut HashMap<String, usize>,
 ) {
   let is_hidden = ancestor_hidden || is_node_hidden(node);
+  let is_aria_hidden = ancestor_aria_hidden || is_node_aria_hidden(node);
   hidden.insert(node.node_id, is_hidden);
+  aria_hidden.insert(node.node_id, is_aria_hidden);
 
-  if !is_hidden {
-    if let DomNodeType::Element { .. } = node.node.node_type {
-      if let Some(id) = node.node.get_attribute_ref("id") {
-        ids.entry(id.to_string()).or_insert(node.node_id);
-      }
+  if let DomNodeType::Element { .. } = node.node.node_type {
+    if let Some(id) = node.node.get_attribute_ref("id") {
+      ids.entry(id.to_string()).or_insert(node.node_id);
     }
   }
 
   for child in &node.children {
-    compute_hidden_and_ids(child, is_hidden, hidden, ids);
+    compute_hidden_and_ids(child, is_hidden, is_aria_hidden, hidden, aria_hidden, ids);
   }
 }
 
@@ -580,17 +618,18 @@ fn is_decorative_img(node: &StyledNode, ctx: &BuildContext) -> bool {
 
 fn is_node_hidden(node: &StyledNode) -> bool {
   let attr_hidden = match node.node.node_type {
-    DomNodeType::Element { .. } => {
-      node.node.get_attribute_ref("hidden").is_some()
-        || parse_bool_attr(&node.node, "aria-hidden").unwrap_or(false)
-    }
+    DomNodeType::Element { .. } => node.node.get_attribute_ref("hidden").is_some(),
     _ => false,
   };
 
   attr_hidden
-    || node.styles.inert
+    || is_node_aria_hidden(node)
     || matches!(node.styles.display, Display::None)
     || node.styles.visibility != Visibility::Visible
+}
+
+fn is_node_aria_hidden(node: &StyledNode) -> bool {
+  parse_bool_attr(&node.node, "aria-hidden").unwrap_or(false) || node.styles.inert
 }
 
 fn normalize_whitespace(input: &str) -> String {
@@ -808,7 +847,9 @@ fn compute_name_internal(
     return None;
   }
 
-  if let Some(labelled) = referenced_text_attr(node, ctx, "aria-labelledby", visited) {
+  if let Some(labelled) =
+    referenced_text_attr(node, ctx, "aria-labelledby", visited, TextAlternativeMode::Referenced)
+  {
     return Some(labelled);
   }
 
@@ -819,11 +860,16 @@ fn compute_name_internal(
     }
   }
 
-  if let Some(label) = label_association_name(node, ctx, visited) {
+  if let Some(label) = label_association_name(
+    node,
+    ctx,
+    visited,
+    TextAlternativeMode::Visible,
+  ) {
     return Some(label);
   }
 
-  if let Some(native) = native_name_from_html(node, ctx, visited) {
+  if let Some(native) = native_name_from_html(node, ctx, visited, TextAlternativeMode::Visible) {
     if !native.is_empty() {
       return Some(native);
     }
@@ -856,6 +902,7 @@ fn native_name_from_html<'a>(
   node: &'a StyledNode,
   ctx: &BuildContext<'a>,
   visited: &mut HashSet<usize>,
+  mode: TextAlternativeMode,
 ) -> Option<String> {
   let tag = node
     .node
@@ -863,12 +910,12 @@ fn native_name_from_html<'a>(
     .map(|t| t.to_ascii_lowercase())?;
 
   match tag.as_str() {
-    "fieldset" => first_child_with_tag(node, ctx, "legend", false)
-      .and_then(|legend| ctx.text_alternative(legend, visited)),
-    "figure" => first_child_with_tag(node, ctx, "figcaption", true)
-      .and_then(|caption| ctx.text_alternative(caption, visited)),
-    "table" => first_child_with_tag(node, ctx, "caption", true)
-      .and_then(|caption| ctx.text_alternative(caption, visited)),
+    "fieldset" => first_child_with_tag(node, ctx, "legend", false, mode)
+      .and_then(|legend| ctx.text_alternative(legend, visited, mode)),
+    "figure" => first_child_with_tag(node, ctx, "figcaption", true, mode)
+      .and_then(|caption| ctx.text_alternative(caption, visited, mode)),
+    "table" => first_child_with_tag(node, ctx, "caption", true, mode)
+      .and_then(|caption| ctx.text_alternative(caption, visited, mode)),
     _ => None,
   }
 }
@@ -878,9 +925,10 @@ fn first_child_with_tag<'a>(
   ctx: &BuildContext<'a>,
   tag: &str,
   require_visible: bool,
+  mode: TextAlternativeMode,
 ) -> Option<&'a StyledNode> {
   for child in ctx.composed_children(node) {
-    if require_visible && ctx.is_hidden(child) {
+    if require_visible && ctx.is_hidden_for_mode(child, mode) {
       continue;
     }
 
@@ -930,6 +978,7 @@ fn referenced_text_attr(
   ctx: &BuildContext,
   attr: &str,
   visited: &mut HashSet<usize>,
+  mode: TextAlternativeMode,
 ) -> Option<String> {
   let Some(attr_value) = node.node.get_attribute_ref(attr) else {
     return None;
@@ -938,7 +987,7 @@ fn referenced_text_attr(
   let mut parts = Vec::new();
   for id in attr_value.split_whitespace() {
     if let Some(target) = ctx.node_for_id(id) {
-      if let Some(text) = ctx.text_alternative(target, visited) {
+      if let Some(text) = ctx.text_alternative(target, visited, mode) {
         if !text.is_empty() {
           parts.push(text);
         }
@@ -957,6 +1006,7 @@ fn label_association_name(
   node: &StyledNode,
   ctx: &BuildContext,
   visited: &mut HashSet<usize>,
+  mode: TextAlternativeMode,
 ) -> Option<String> {
   if !is_labelable(&node.node) {
     return None;
@@ -969,7 +1019,7 @@ fn label_association_name(
   let mut parts = Vec::new();
   for label_id in label_ids {
     if let Some(label_node) = ctx.node_by_id(*label_id) {
-      if let Some(text) = ctx.text_alternative(label_node, visited) {
+      if let Some(text) = ctx.text_alternative(label_node, visited, mode) {
         if !text.is_empty() {
           parts.push(text);
         }
@@ -1143,7 +1193,13 @@ fn compute_description(node: &StyledNode, ctx: &BuildContext) -> Option<String> 
   let mut parts = Vec::new();
   let mut visited = HashSet::new();
 
-  if let Some(desc) = referenced_text_attr(node, ctx, "aria-describedby", &mut visited) {
+  if let Some(desc) = referenced_text_attr(
+    node,
+    ctx,
+    "aria-describedby",
+    &mut visited,
+    TextAlternativeMode::Referenced,
+  ) {
     parts.push(desc);
   }
 
