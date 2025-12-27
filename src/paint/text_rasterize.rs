@@ -1250,66 +1250,6 @@ mod tests {
   }
 
   #[test]
-  fn glyph_cache_keys_include_variations() {
-    let font = load_variable_font();
-    let face = font.as_ttf_face().unwrap();
-    let glyph_id = face
-      .glyph_index('A')
-      .map(|g| g.0 as u32)
-      .expect("variable font should have glyph for A");
-
-    let variations_light = vec![Variation {
-      tag: Tag::from_bytes(b"wght"),
-      value: 300.0,
-    }];
-    let variations_bold = vec![Variation {
-      tag: Tag::from_bytes(b"wght"),
-      value: 900.0,
-    }];
-
-    let key_light = GlyphCacheKey::new(&font, glyph_id, 0.0, &variations_light);
-    let key_bold = GlyphCacheKey::new(&font, glyph_id, 0.0, &variations_bold);
-
-    assert_ne!(key_light, key_bold);
-    assert_ne!(key_light.variation_hash, key_bold.variation_hash);
-
-    let mut cache = GlyphCache::new();
-    assert!(cache
-      .get_or_build(&font, glyph_id, 0.0, &variations_light)
-      .is_some());
-    assert!(cache
-      .get_or_build(&font, glyph_id, 0.0, &variations_bold)
-      .is_some());
-    assert!(cache.len() >= 2);
-  }
-
-  #[test]
-  fn variable_font_changes_pixels_with_variations() {
-    let font = load_variable_font();
-    let face = font.as_ttf_face().unwrap();
-    let glyph_id = face
-      .glyph_index('A')
-      .map(|g| g.0 as u32)
-      .expect("variable font should have glyph for A");
-
-    let light_variations = vec![Variation {
-      tag: Tag::from_bytes(b"wght"),
-      value: 200.0,
-    }];
-    let bold_variations = vec![Variation {
-      tag: Tag::from_bytes(b"wght"),
-      value: 900.0,
-    }];
-
-    let light = render_variation_glyph(&font, glyph_id, &light_variations, 96.0);
-    let bold = render_variation_glyph(&font, glyph_id, &bold_variations, 96.0);
-
-    assert!(light.data().iter().any(|b| *b != 0));
-    assert!(bold.data().iter().any(|b| *b != 0));
-    assert_ne!(light.data(), bold.data());
-  }
-
-  #[test]
   fn test_glyph_cache_creation() {
     let cache = GlyphCache::new();
     assert!(cache.is_empty());

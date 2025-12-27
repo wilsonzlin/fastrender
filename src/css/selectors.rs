@@ -13,6 +13,7 @@ use selectors::parser::SelectorList;
 use selectors::parser::SelectorParseErrorKind;
 use selectors::parser::{Combinator, RelativeSelector, RelativeSelectorMatchHint};
 use selectors::OpaqueElement;
+use std::collections::HashMap;
 use std::fmt;
 
 /// Direction keyword for :dir()
@@ -51,6 +52,11 @@ impl<'a> ShadowMatchData<'a> {
       shadow_host: Some(shadow_host),
       ..Self::default()
     }
+  }
+
+  pub fn with_part_export_map(mut self, part_export_map: Option<&'a PartExportMap>) -> Self {
+    self.part_export_map = part_export_map;
+    self
   }
 }
 
@@ -125,9 +131,39 @@ impl<'a> SlotAssignmentMap<'a> {
   }
 }
 
-/// Placeholder for future ::part() export chain data.
-#[derive(Debug)]
-pub struct PartExportMap;
+/// Mapping of exported parts for each shadow host.
+///
+/// Keys use stable DOM traversal ids so selector matching can efficiently determine which
+/// elements inside a shadow tree are exposed for a given `::part()` name at the host boundary.
+#[derive(Debug, Default, Clone)]
+pub struct PartExportMap {
+  host_exports: HashMap<usize, HashMap<String, Vec<usize>>>,
+}
+
+impl PartExportMap {
+  pub fn new() -> Self {
+    Self::default()
+  }
+
+  /// Returns the exported part mapping for a given host, if any.
+  pub fn exports_for_host(&self, host_id: usize) -> Option<&HashMap<String, Vec<usize>>> {
+    self.host_exports.get(&host_id)
+  }
+
+  /// Returns true when `target_id` is exposed from `host_id` under the provided part name.
+  pub fn exposes(&self, host_id: usize, part_name: &str, target_id: usize) -> bool {
+    self
+      .host_exports
+      .get(&host_id)
+      .and_then(|exports| exports.get(part_name))
+      .map_or(false, |targets| targets.contains(&target_id))
+  }
+
+  /// Registers all exported parts for a host. Existing entries are replaced.
+  pub fn insert_host_exports(&mut self, host_id: usize, exports: HashMap<String, Vec<usize>>) {
+    self.host_exports.insert(host_id, exports);
+  }
+}
 
 impl SelectorImpl for FastRenderSelectorImpl {
   type AttrValue = CssString;
@@ -751,8 +787,8 @@ fn parse_part_pseudo_element<'i, 't>(
   name: &cssparser::CowRcStr<'i>,
 ) -> std::result::Result<PseudoElement, ParseError<'i, SelectorParseErrorKind<'i>>> {
   let mut names = Vec::new();
-  let first =
-    match parser.expect_ident() {
+  loop {
+    let ident = match parser.expect_ident() {
       Ok(first) => CssString::from(first.as_ref()),
       Err(_) => {
         return Err(parser.new_custom_error(
@@ -760,22 +796,23 @@ fn parse_part_pseudo_element<'i, 't>(
         ))
       }
     };
-  names.push(first);
+    names.push(ident);
 
-  while let Ok(next) = parser.try_parse(|p| {
-    p.expect_ident()
-      .map(|ident| CssString::from(ident.as_ref()))
-  }) {
-    names.push(next);
-  }
+    parser.skip_whitespace();
+    if parser.is_exhausted() {
+      break;
+    }
 
-  parser.skip_whitespace();
-  if !parser.is_exhausted() {
-    return Err(
-      parser.new_custom_error(SelectorParseErrorKind::UnsupportedPseudoClassOrElement(
-        name.clone(),
-      )),
-    );
+    let had_comma = parser.try_parse(|p| p.expect_comma()).is_ok();
+    parser.skip_whitespace();
+    if parser.is_exhausted() {
+      if had_comma {
+        return Err(parser.new_custom_error(
+          SelectorParseErrorKind::UnsupportedPseudoClassOrElement(name.clone()),
+        ));
+      }
+      break;
+    }
   }
 
   Ok(PseudoElement::Part(names))

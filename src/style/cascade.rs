@@ -9,6 +9,7 @@
 use crate::css::parser::parse_declarations;
 use crate::css::parser::parse_stylesheet;
 use crate::css::selectors::FastRenderSelectorImpl;
+use crate::css::selectors::PartExportMap;
 use crate::css::selectors::PseudoClass;
 use crate::css::selectors::PseudoElement;
 use crate::css::selectors::ShadowMatchData;
@@ -23,9 +24,9 @@ use crate::css::types::ScopeContext;
 use crate::css::types::StyleRule;
 use crate::css::types::StyleSheet;
 use crate::debug::runtime;
+use crate::dom::compute_part_export_map_with_ids;
 use crate::dom::compute_slot_assignment;
 use crate::dom::enumerate_dom_ids;
-use crate::dom::parse_exportparts;
 use crate::dom::resolve_first_strong_direction;
 use crate::dom::with_target_fragment;
 use crate::dom::DomNode;
@@ -1474,6 +1475,7 @@ pub fn apply_styles_with_media_target_and_imports_cached_with_deadline(
   };
 
   let dom_maps = DomMaps::new(dom);
+  let part_export_map = compute_part_export_map_with_ids(dom, &dom_maps.id_map);
   let shadow_stylesheets = collect_shadow_stylesheets(dom, &dom_maps.id_map);
   let slot_assignment = compute_slot_assignment(dom);
   let slot_maps = build_slot_maps(&slot_assignment, &dom_maps);
@@ -1696,6 +1698,7 @@ pub fn apply_styles_with_media_target_and_imports_cached_with_deadline(
         reuse_map,
         reuse_counter_opt,
         &dom_maps,
+        &part_export_map,
         &slot_assignment,
         deadline,
       )
@@ -1853,6 +1856,7 @@ pub fn apply_style_set_with_media_target_and_imports_cached_with_deadline(
   }
 
   let dom_maps = DomMaps::new(dom);
+  let part_export_map = compute_part_export_map_with_ids(dom, &dom_maps.id_map);
   let slot_assignment = compute_slot_assignment(dom);
   let slot_maps = build_slot_maps(&slot_assignment, &dom_maps);
   let mut host_to_shadow_root: HashMap<usize, usize> = HashMap::new();
@@ -2049,6 +2053,7 @@ pub fn apply_style_set_with_media_target_and_imports_cached_with_deadline(
         reuse_map,
         reuse_counter_opt,
         &dom_maps,
+        &part_export_map,
         &slot_assignment,
         deadline,
       )
@@ -2361,48 +2366,15 @@ fn scope_has_pseudo_content(
   false
 }
 
-fn part_names(node: &DomNode) -> Vec<CssString> {
-  let Some(attr) = node.get_attribute_ref("part") else {
-    return Vec::new();
-  };
-
-  let mut names = Vec::new();
-  let mut seen: HashSet<&str> = HashSet::new();
-  for token in attr.split_whitespace().filter(|t| !t.is_empty()) {
-    if seen.insert(token) {
-      names.push(CssString::from(token));
-    }
-  }
-
-  names
-}
-
-fn exported_part_names(host: &DomNode, names: &[CssString]) -> Vec<CssString> {
-  let Some(attr) = host.get_attribute_ref("exportparts") else {
-    return Vec::new();
-  };
-  let mappings = parse_exportparts(attr);
-
-  let mut exported = Vec::new();
-  let mut seen: HashSet<&str> = HashSet::new();
-  for name in names {
-    let target = name.as_str();
-    for (internal, alias) in mappings.iter() {
-      if internal == target && seen.insert(alias.as_str()) {
-        exported.push(CssString::from(alias.as_str()));
-      }
-    }
-  }
-
-  exported
-}
-
 fn match_part_rules<'a>(
   node: &DomNode,
   ancestors: &[&DomNode],
   rules: &'a RuleIndex<'a>,
   selector_caches: &mut SelectorCaches,
   scratch: &mut CascadeScratch,
+  dom_maps: &DomMaps,
+  part_export_map: &PartExportMap,
+  node_id: usize,
 ) -> Vec<MatchedRule<'a>> {
   if !ancestors
     .iter()
@@ -2421,11 +2393,6 @@ fn match_part_rules<'a>(
     .filter(|pe| matches!(pe, PseudoElement::Part(_)))
     .collect();
   if part_pseudos.is_empty() {
-    return Vec::new();
-  }
-
-  let mut names = part_names(node);
-  if names.is_empty() {
     return Vec::new();
   }
 
@@ -2453,44 +2420,44 @@ fn match_part_rules<'a>(
       .iter()
       .any(|ancestor| matches!(ancestor.node_type, DomNodeType::ShadowRoot { .. }));
 
-    if host_is_in_document_tree {
-      let mut name_set: HashSet<&str> = HashSet::new();
-      for name in names.iter() {
-        name_set.insert(name.as_str());
-      }
+    let Some(host_id) = dom_maps.id_map.get(&(host as *const DomNode)).copied() else {
+      continue;
+    };
 
-      for pseudo in part_pseudos.iter().copied() {
-        let PseudoElement::Part(required) = pseudo else {
-          continue;
-        };
-        if !required.iter().all(|req| name_set.contains(req.as_str())) {
-          continue;
-        }
-        let part_matches = find_pseudo_element_rules(
-          host,
-          rules,
-          selector_caches,
-          scratch,
-          host_ancestors,
-          None,
-          pseudo,
-        );
-        for rule in part_matches {
-          if let Some(pos) = matched_by_order.get(&rule.order).copied() {
-            if rule.specificity > matched[pos].specificity {
-              matched[pos].specificity = rule.specificity;
-            }
-          } else {
-            matched_by_order.insert(rule.order, matched.len());
-            matched.push(rule);
-          }
-        }
-      }
+    if !host_is_in_document_tree {
+      continue;
     }
 
-    names = exported_part_names(host, &names);
-    if names.is_empty() {
-      break;
+    for pseudo in part_pseudos.iter().copied() {
+      let PseudoElement::Part(required) = pseudo else {
+        continue;
+      };
+      if !required
+        .iter()
+        .all(|req| part_export_map.exposes(host_id, req.as_str(), node_id))
+      {
+        continue;
+      }
+      let part_matches = find_pseudo_element_rules(
+        host,
+        rules,
+        selector_caches,
+        scratch,
+        host_ancestors,
+        part_export_map,
+        None,
+        pseudo,
+      );
+      for rule in part_matches {
+        if let Some(pos) = matched_by_order.get(&rule.order).copied() {
+          if rule.specificity > matched[pos].specificity {
+            matched[pos].specificity = rule.specificity;
+          }
+        } else {
+          matched_by_order.insert(rule.order, matched.len());
+          matched.push(rule);
+        }
+      }
     }
   }
 
@@ -2508,6 +2475,7 @@ fn collect_matching_rules<'a>(
   node_id: usize,
   container_ctx: Option<&ContainerQueryContext>,
   dom_maps: &DomMaps,
+  part_export_map: &PartExportMap,
   slot_assignment: &SlotAssignment,
 ) -> Vec<MatchedRule<'a>> {
   let current_shadow = dom_maps.containing_shadow_root(node_id);
@@ -2521,6 +2489,7 @@ fn collect_matching_rules<'a>(
     node_id,
     container_ctx,
     dom_maps,
+    part_export_map,
     slot_assignment,
     None,
   );
@@ -2554,6 +2523,7 @@ fn collect_matching_rules<'a>(
       node_id,
       container_ctx,
       dom_maps,
+      part_export_map,
       slot_assignment,
       base_slot_map,
     ));
@@ -2575,6 +2545,7 @@ fn collect_matching_rules<'a>(
           node_id,
           container_ctx,
           dom_maps,
+          part_export_map,
           slot_assignment,
           None,
         ));
@@ -2594,6 +2565,7 @@ fn collect_matching_rules<'a>(
       node_id,
       container_ctx,
       dom_maps,
+      part_export_map,
       slot_assignment,
       host_slot_map,
     ));
@@ -2613,6 +2585,7 @@ fn collect_matching_rules<'a>(
           node_id,
           container_ctx,
           dom_maps,
+          part_export_map,
           slot_assignment,
           scopes.slot_maps.get(&slot.shadow_root_id),
         ));
@@ -2626,6 +2599,9 @@ fn collect_matching_rules<'a>(
     &scopes.document,
     selector_caches,
     scratch,
+    dom_maps,
+    part_export_map,
+    node_id,
   ));
 
   matches
@@ -2639,6 +2615,7 @@ fn collect_pseudo_matching_rules<'a>(
   scratch: &mut CascadeScratch,
   ancestors: &[&DomNode],
   node_id: usize,
+  part_export_map: &PartExportMap,
   pseudo: &PseudoElement,
 ) -> Vec<MatchedRule<'a>> {
   let mut matches = find_pseudo_element_rules(
@@ -2647,6 +2624,7 @@ fn collect_pseudo_matching_rules<'a>(
     selector_caches,
     scratch,
     ancestors,
+    part_export_map,
     None,
     pseudo,
   );
@@ -2658,6 +2636,7 @@ fn collect_pseudo_matching_rules<'a>(
       selector_caches,
       scratch,
       ancestors,
+      part_export_map,
       None,
       pseudo,
     ));
@@ -2672,6 +2651,7 @@ fn collect_pseudo_matching_rules<'a>(
           selector_caches,
           scratch,
           ancestors,
+          part_export_map,
           None,
           pseudo,
         ));
@@ -2686,6 +2666,7 @@ fn collect_pseudo_matching_rules<'a>(
       selector_caches,
       scratch,
       ancestors,
+      part_export_map,
       None,
       pseudo,
     ));
@@ -2712,6 +2693,7 @@ fn compute_base_styles<'a>(
   node_id: usize,
   container_ctx: Option<&ContainerQueryContext>,
   dom_maps: &DomMaps,
+  part_export_map: &PartExportMap,
   slot_assignment: &SlotAssignment,
 ) -> NodeBaseStyles {
   if !node.is_element() {
@@ -2761,6 +2743,7 @@ fn compute_base_styles<'a>(
     node_id,
     container_ctx,
     dom_maps,
+    part_export_map,
     slot_assignment,
   );
   matching_rules.extend(ua_default_rules(node, parent_styles.direction));
@@ -2936,6 +2919,7 @@ fn apply_styles_internal(
   reuse_map: Option<&HashMap<usize, *const StyledNode>>,
   reuse_counter: Option<&mut usize>,
   dom_maps: &DomMaps,
+  part_export_map: &PartExportMap,
   slot_assignment: &SlotAssignment,
   deadline: Option<&RenderDeadline>,
 ) -> Result<StyledNode, RenderError> {
@@ -2960,6 +2944,7 @@ fn apply_styles_internal(
     reuse_map,
     reuse_counter,
     dom_maps,
+    part_export_map,
     slot_assignment,
     deadline,
   )?;
@@ -2980,6 +2965,7 @@ fn compute_pseudo_styles(
   scratch: &mut CascadeScratch,
   ancestors: &[&DomNode],
   node_id: usize,
+  part_export_map: &PartExportMap,
   styles: &mut ComputedStyle,
   ua_styles: &ComputedStyle,
   root_font_size: f32,
@@ -3010,6 +2996,7 @@ fn compute_pseudo_styles(
       scratch,
       ancestors,
       node_id,
+      part_export_map,
       styles,
       ua_styles,
       root_font_size,
@@ -3031,6 +3018,7 @@ fn compute_pseudo_styles(
     scratch,
     ancestors,
     node_id,
+    part_export_map,
     styles,
     ua_styles,
     root_font_size,
@@ -3051,6 +3039,7 @@ fn compute_pseudo_styles(
     scratch,
     ancestors,
     node_id,
+    part_export_map,
     base_first_letter_styles,
     base_first_letter_ua_styles,
     root_font_size,
@@ -3068,6 +3057,7 @@ fn compute_pseudo_styles(
         scratch,
         ancestors,
         node_id,
+        part_export_map,
         styles,
         ua_styles,
         root_font_size,
@@ -3089,6 +3079,7 @@ fn compute_pseudo_styles(
         scratch,
         ancestors,
         node_id,
+        part_export_map,
         styles,
         ua_styles,
         root_font_size,
@@ -3108,6 +3099,7 @@ fn compute_pseudo_styles(
     scratch,
     ancestors,
     node_id,
+    part_export_map,
     styles,
     ua_styles,
     root_font_size,
@@ -3176,6 +3168,7 @@ fn apply_styles_internal_with_ancestors<'a>(
   reuse_map: Option<&HashMap<usize, *const StyledNode>>,
   reuse_counter: Option<&mut usize>,
   dom_maps: &DomMaps,
+  part_export_map: &PartExportMap,
   slot_assignment: &SlotAssignment,
   deadline: Option<&RenderDeadline>,
 ) -> Result<Box<StyledNode>, RenderError> {
@@ -3220,6 +3213,7 @@ fn apply_styles_internal_with_ancestors<'a>(
     node_id,
     container_ctx,
     dom_maps,
+    part_export_map,
     slot_assignment,
   );
 
@@ -3255,6 +3249,7 @@ fn apply_styles_internal_with_ancestors<'a>(
       reuse_map,
       child_reuse,
       dom_maps,
+      part_export_map,
       slot_assignment,
       deadline,
     )?;
@@ -3272,6 +3267,7 @@ fn apply_styles_internal_with_ancestors<'a>(
       scratch,
       ancestors.as_slice(),
       node_id,
+      part_export_map,
       &mut base.styles,
       &base.ua_styles,
       base.current_root_font_size,
@@ -7515,6 +7511,7 @@ mod tests {
     let ancestors: Vec<&DomNode> = vec![&dom]; // ul ancestor for the li
     let element_ref = build_element_ref_chain(&dom.children[0], &ancestors, None);
     let mut caches = SelectorCaches::default();
+    let part_export_map = PartExportMap::new();
     let mut context = MatchingContext::new(
       MatchingMode::ForStatelessPseudoElement,
       None,
@@ -7523,7 +7520,8 @@ mod tests {
       selectors::matching::NeedsSelectorFlags::No,
       selectors::matching::MatchingForInvalidation::No,
     );
-    context.extra_data = ShadowMatchData::for_document();
+    context.extra_data =
+      ShadowMatchData::for_document().with_part_export_map(Some(&part_export_map));
     let selector = rule_index.rules[0]
       .rule
       .selectors
@@ -7542,6 +7540,7 @@ mod tests {
       &mut caches,
       &mut scratch,
       &ancestors,
+      &part_export_map,
       None,
       &PseudoElement::Marker,
     );
@@ -8179,6 +8178,7 @@ fn find_matching_rules<'a>(
   node_id: usize,
   container_ctx: Option<&ContainerQueryContext>,
   dom_maps: &DomMaps,
+  part_export_map: &PartExportMap,
   slot_assignment: &SlotAssignment,
   slot_map: Option<&'a crate::css::selectors::SlotAssignmentMap<'a>>,
 ) -> Vec<MatchedRule<'a>> {
@@ -8214,8 +8214,11 @@ fn find_matching_rules<'a>(
     selectors::matching::NeedsSelectorFlags::No,
     selectors::matching::MatchingForInvalidation::No,
   );
-  context.extra_data = ShadowMatchData::<'a>::for_document();
-  context.extra_data.slot_map = slot_map.map(|m| m as &'a SlotAssignmentMap<'a>);
+  context.extra_data = ShadowMatchData {
+    shadow_host: None,
+    slot_map,
+    part_export_map: Some(part_export_map),
+  };
 
   let mut scoped_rule_idx: Option<usize> = None;
   let mut scoped_match: Option<Option<ScopeMatch<'_>>> = None;
@@ -8337,7 +8340,8 @@ fn find_pseudo_element_rules<'a>(
   selector_caches: &'a mut SelectorCaches,
   scratch: &mut CascadeScratch,
   ancestors: &[&DomNode],
-  slot_map: Option<&'a SlotAssignmentMap<'a>>,
+  part_export_map: &PartExportMap,
+  slot_map: Option<&SlotAssignmentMap<'a>>,
   pseudo: &PseudoElement,
 ) -> Vec<MatchedRule<'a>> {
   if !node.is_element() {
@@ -8377,8 +8381,11 @@ fn find_pseudo_element_rules<'a>(
     selectors::matching::NeedsSelectorFlags::No,
     selectors::matching::MatchingForInvalidation::No,
   );
-  context.extra_data = ShadowMatchData::<'a>::for_document();
-  context.extra_data.slot_map = slot_map.map(|m| m as &'a SlotAssignmentMap<'a>);
+  context.extra_data = ShadowMatchData {
+    shadow_host: None,
+    slot_map,
+    part_export_map: Some(part_export_map),
+  };
 
   let mut scoped_rule_idx: Option<usize> = None;
   let mut scoped_match: Option<Option<ScopeMatch<'_>>> = None;
@@ -9222,6 +9229,7 @@ fn compute_pseudo_element_styles(
   scratch: &mut CascadeScratch,
   ancestors: &[&DomNode],
   node_id: usize,
+  part_export_map: &PartExportMap,
   parent_styles: &ComputedStyle,
   ua_parent_styles: &ComputedStyle,
   root_font_size: f32,
@@ -9241,6 +9249,7 @@ fn compute_pseudo_element_styles(
     scratch,
     ancestors,
     node_id,
+    part_export_map,
     pseudo,
   );
 
@@ -9374,6 +9383,7 @@ fn compute_first_line_styles(
   scratch: &mut CascadeScratch,
   ancestors: &[&DomNode],
   node_id: usize,
+  part_export_map: &PartExportMap,
   base_styles: &ComputedStyle,
   base_ua_styles: &ComputedStyle,
   root_font_size: f32,
@@ -9392,6 +9402,7 @@ fn compute_first_line_styles(
     scratch,
     ancestors,
     node_id,
+    part_export_map,
     &PseudoElement::FirstLine,
   );
   if matching_rules.is_empty() {
@@ -9456,6 +9467,7 @@ fn compute_first_letter_styles(
   scratch: &mut CascadeScratch,
   ancestors: &[&DomNode],
   node_id: usize,
+  part_export_map: &PartExportMap,
   base_styles: &ComputedStyle,
   base_ua_styles: &ComputedStyle,
   root_font_size: f32,
@@ -9479,6 +9491,7 @@ fn compute_first_letter_styles(
     scratch,
     ancestors,
     node_id,
+    part_export_map,
     &PseudoElement::FirstLetter,
   );
   if matching_rules.is_empty() {
@@ -9545,6 +9558,7 @@ fn compute_marker_styles(
   scratch: &mut CascadeScratch,
   ancestors: &[&DomNode],
   node_id: usize,
+  part_export_map: &PartExportMap,
   list_item_styles: &ComputedStyle,
   ua_list_item_styles: &ComputedStyle,
   root_font_size: f32,
@@ -9565,6 +9579,7 @@ fn compute_marker_styles(
         scratch,
         ancestors,
         node_id,
+        part_export_map,
         &PseudoElement::Marker,
       )
     } else {

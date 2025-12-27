@@ -6950,6 +6950,7 @@ mod tests {
         font_size,
         advance_width: advance,
         font_id: Some(font_id.clone()),
+        variations: Vec::new(),
         synthetic_bold: 0.0,
         synthetic_oblique: 0.0,
         emphasis: None,

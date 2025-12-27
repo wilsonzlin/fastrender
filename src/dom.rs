@@ -1,4 +1,5 @@
 use crate::css::selectors::FastRenderSelectorImpl;
+use crate::css::selectors::PartExportMap;
 use crate::css::selectors::PseudoClass;
 use crate::css::selectors::PseudoElement;
 use crate::css::selectors::TextDirection;
@@ -556,6 +557,112 @@ pub fn compute_slot_assignment(root: &DomNode) -> SlotAssignment {
   walk(root, None, &ids, &mut assignment);
   assignment
 }
+
+fn push_part_export(exports: &mut HashMap<String, Vec<usize>>, name: &str, node_id: usize) {
+  let entry = exports.entry(name.to_string()).or_default();
+  if !entry.contains(&node_id) {
+    entry.push(node_id);
+  }
+}
+
+/// Compute the mapping of exported parts for each shadow host in the DOM.
+///
+/// Closed shadow roots are still traversed here because declarative snapshots include their
+/// contents, and `exportparts` is an explicit opt-in for styling from the outside.
+pub fn compute_part_export_map(root: &DomNode) -> PartExportMap {
+  let ids = enumerate_dom_ids(root);
+  compute_part_export_map_with_ids(root, &ids)
+}
+
+/// Compute the mapping of exported parts for each shadow host using a precomputed id map.
+pub fn compute_part_export_map_with_ids(
+  root: &DomNode,
+  ids: &HashMap<*const DomNode, usize>,
+) -> PartExportMap {
+  fn collect_for_host(
+    host: &DomNode,
+    ids: &HashMap<*const DomNode, usize>,
+    map: &mut PartExportMap,
+  ) -> HashMap<String, Vec<usize>> {
+    let host_id = ids.get(&(host as *const DomNode)).copied().unwrap_or(0);
+    if let Some(existing) = map.exports_for_host(host_id) {
+      return existing.clone();
+    }
+
+    let shadow_root = host
+      .children
+      .iter()
+      .find(|child| matches!(child.node_type, DomNodeType::ShadowRoot { .. }));
+    let Some(shadow_root) = shadow_root else {
+      return HashMap::new();
+    };
+
+    fn walk(
+      node: &DomNode,
+      ids: &HashMap<*const DomNode, usize>,
+      map: &mut PartExportMap,
+      exports: &mut HashMap<String, Vec<usize>>,
+    ) {
+      if let Some(parts) = node.get_attribute_ref("part") {
+        let node_id = ids.get(&(node as *const DomNode)).copied().unwrap_or(0);
+        for part in parts.split_whitespace().filter(|p| !p.is_empty()) {
+          push_part_export(exports, part, node_id);
+        }
+      }
+
+      if node.is_shadow_host() {
+        let nested_exports = collect_for_host(node, ids, map);
+        if let Some(mapping) = node.get_attribute_ref("exportparts") {
+          for (inner, alias) in parse_exportparts(mapping) {
+            if let Some(targets) = nested_exports.get(&inner) {
+              for target in targets {
+                push_part_export(exports, &alias, *target);
+              }
+            }
+          }
+        }
+      }
+
+      for child in &node.children {
+        if matches!(child.node_type, DomNodeType::ShadowRoot { .. }) {
+          // Nested shadow contents are only exposed via exportparts on the host.
+          continue;
+        }
+        walk(child, ids, map, exports);
+      }
+    }
+
+    let mut exports: HashMap<String, Vec<usize>> = HashMap::new();
+    walk(shadow_root, ids, map, &mut exports);
+
+    if let Some(exportparts) = host.get_attribute_ref("exportparts") {
+      for (internal, alias) in parse_exportparts(exportparts) {
+        if let Some(targets) = exports.get(&internal).cloned() {
+          for target in targets {
+            push_part_export(&mut exports, &alias, target);
+          }
+        }
+      }
+    }
+
+    map.insert_host_exports(host_id, exports.clone());
+    exports
+  }
+
+  fn traverse(node: &DomNode, ids: &HashMap<*const DomNode, usize>, map: &mut PartExportMap) {
+    if node.is_shadow_host() {
+      collect_for_host(node, ids, map);
+    }
+    for child in &node.children {
+      traverse(child, ids, map);
+    }
+  }
+
+  let mut map = PartExportMap::default();
+  traverse(root, ids, &mut map);
+  map
+}
+
 /// Optional DOM compatibility tweaks applied after HTML parsing.
 ///
 /// Some documents bootstrap by marking the root with `no-js` and replacing it with a
