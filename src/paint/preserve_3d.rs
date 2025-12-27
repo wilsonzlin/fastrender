@@ -6,7 +6,9 @@
 //! still sorting planes by depth when possible.
 
 use crate::geometry::Rect;
-use crate::paint::display_list::{DisplayItem, DisplayList, StackingContextItem, Transform2D, Transform3D};
+use crate::paint::display_list::{
+  DisplayItem, DisplayList, StackingContextItem, Transform2D, Transform3D,
+};
 use crate::style::types::{BackfaceVisibility, TransformStyle};
 use std::cmp::Ordering;
 use std::sync::OnceLock;
@@ -102,7 +104,10 @@ pub fn composite_preserve_3d(list: &DisplayList) -> DisplayList {
 }
 
 /// Compose a display list with custom options (useful for testing).
-pub fn composite_preserve_3d_with_options(list: &DisplayList, options: Preserve3dOptions) -> DisplayList {
+pub fn composite_preserve_3d_with_options(
+  list: &DisplayList,
+  options: Preserve3dOptions,
+) -> DisplayList {
   if list.is_empty() {
     return list.clone();
   }
@@ -231,19 +236,22 @@ fn compose_fragments(
         } else {
           evaluate_depth(&depth_transform, item.bounds)
         };
-        let fallback = if options.warp_available && matches!(classification, TransformKind::Perspective3D) {
-          FallbackPath::Warp
-        } else if depth.is_none() {
-          FallbackPath::FlatOrder
-        } else {
-          FallbackPath::Approximate2d
-        };
+        let fallback =
+          if options.warp_available && matches!(classification, TransformKind::Perspective3D) {
+            FallbackPath::Warp
+          } else if depth.is_none() {
+            FallbackPath::FlatOrder
+          } else {
+            FallbackPath::Approximate2d
+          };
 
         let render_transform = match fallback {
           FallbackPath::Warp => local_transform,
-          FallbackPath::Approximate2d | FallbackPath::FlatOrder => {
-            Transform3D::from_2d(&local_transform.to_2d().unwrap_or_else(|| local_transform.approximate_2d()))
-          }
+          FallbackPath::Approximate2d | FallbackPath::FlatOrder => Transform3D::from_2d(
+            &local_transform
+              .to_2d()
+              .unwrap_or_else(|| local_transform.approximate_2d()),
+          ),
         };
         let effective_world_render = parent_world_render.multiply(&render_transform);
         let effective_world_depth = parent_world_depth.multiply(&local_transform);
@@ -321,7 +329,10 @@ fn compose_fragments(
 }
 
 fn evaluate_depth(transform: &Transform3D, bounds: Rect) -> Option<f32> {
-  let center = (bounds.x() + bounds.width() * 0.5, bounds.y() + bounds.height() * 0.5);
+  let center = (
+    bounds.x() + bounds.width() * 0.5,
+    bounds.y() + bounds.height() * 0.5,
+  );
   let (_tx, _ty, tz, tw) = transform.transform_point(center.0, center.1, 0.0);
   if !tz.is_finite() || !tw.is_finite() || tw.abs() < 1e-3 {
     return None;
@@ -398,7 +409,10 @@ mod tests {
       transform_style: TransformStyle::Preserve3d,
       backface_visibility: BackfaceVisibility::Visible,
     };
-    assert_eq!(classify_transform(&perspective_item), TransformKind::Perspective3D);
+    assert_eq!(
+      classify_transform(&perspective_item),
+      TransformKind::Perspective3D
+    );
   }
 
   #[test]
@@ -463,7 +477,10 @@ mod tests {
     assert_eq!(stacking_transforms.len(), 2);
     let depth0 = stacking_transforms[0].transform_point(0.0, 0.0, 0.0).2;
     let depth1 = stacking_transforms[1].transform_point(0.0, 0.0, 0.0).2;
-    assert!(depth0 < depth1, "expected back element before front element");
+    assert!(
+      depth0 < depth1,
+      "expected back element before front element"
+    );
   }
 
   #[test]
