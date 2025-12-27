@@ -732,7 +732,7 @@ impl DisplayListOptimizer {
             reference.min_y() + reference.height() * 0.5,
           ),
         ];
-        let mut max_scale = 1.0;
+        let mut max_scale: f32 = 1.0;
         for p in samples {
           let base = match homography.map_point(p) {
             Some(p) => p,
