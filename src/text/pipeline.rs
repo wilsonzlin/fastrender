@@ -68,11 +68,19 @@ use crate::style::types::NumericSpacing;
 use crate::style::ComputedStyle;
 use crate::text::cpal;
 use crate::text::emoji;
-use crate::text::font_db::FontDatabase;
 use crate::text::font_db::FontStretch as DbFontStretch;
 use crate::text::font_db::FontStyle;
 use crate::text::font_db::LoadedFont;
 use crate::text::font_loader::FontContext;
+use crate::text::font_resolver::emoji_preference_for_char;
+use crate::text::font_resolver::emoji_preference_with_selector;
+use crate::text::font_resolver::resolve_font_for_char;
+use crate::text::font_resolver::resolve_font_for_cluster;
+use crate::text::font_resolver::slope_preference_order;
+use crate::text::font_resolver::stretch_preference_order;
+use crate::text::font_resolver::weight_preference_order;
+use crate::text::font_resolver::EmojiPreference;
+use crate::text::font_resolver::FontPreferencePicker;
 use lru::LruCache;
 use rustybuzz::Direction as HbDirection;
 use rustybuzz::Face;
@@ -1266,16 +1274,6 @@ fn cluster_signature(text: &str) -> u64 {
   hasher.finish()
 }
 
-fn font_supports_all_chars(font: &LoadedFont, chars: &[char]) -> bool {
-  if chars.is_empty() {
-    return true;
-  }
-  let Ok(face) = font.as_ttf_face() else {
-    return false;
-  };
-  chars.iter().all(|c| face.glyph_index(*c).is_some())
-}
-
 /// Assigns fonts to itemized runs.
 ///
 /// Uses the font context to find appropriate fonts for each script,
@@ -1352,7 +1350,7 @@ fn assign_fonts_internal(
         _ => None,
       };
 
-      let mut resolved: Option<LoadedFont> = cached_cluster.clone().flatten();
+      let mut resolved = cached_cluster.clone().flatten();
       let mut skip_resolution = cached_cluster.is_some() && resolved.is_none();
 
       if !skip_resolution && resolved.is_none() && cluster_char_count == 1 {
@@ -1392,9 +1390,11 @@ fn assign_fonts_internal(
         } else {
           relevant_chars.clone()
         };
+        let require_base_glyph = !is_non_rendering_for_coverage(base_char);
         resolved = resolve_font_for_cluster(
           base_char,
           &coverage_chars,
+          require_base_glyph,
           &families,
           style.font_weight.to_u16(),
           font_style,
@@ -1409,16 +1409,17 @@ fn assign_fonts_internal(
         cache.insert_cluster(key, resolved.clone());
       }
 
-      let font = resolved.ok_or_else(|| TextError::ShapingFailed {
+      let resolved_font = resolved.ok_or_else(|| TextError::ShapingFailed {
         text: run.text.clone(),
         reason: format!("No suitable font found for cluster {}", cluster_text),
       })?;
-      let used_font_size = compute_adjusted_font_size(style, &font, preferred_aspect);
-      let (mut synthetic_bold, synthetic_oblique) = compute_synthetic_styles(style, &font);
+      let used_font_size = compute_adjusted_font_size(style, &resolved_font.font, preferred_aspect);
+      let (mut synthetic_bold, synthetic_oblique) =
+        compute_synthetic_styles(style, &resolved_font.font);
       if style.font_size > 0.0 {
         synthetic_bold *= used_font_size / style.font_size;
       }
-      let font_arc = Arc::new(font);
+      let font_arc = Arc::new(resolved_font.font.clone());
       let (position_scale, baseline_shift) =
         synthetic_position_adjustment(style, &font_arc, used_font_size, font_context);
       let run_font_size = used_font_size * position_scale;
@@ -1753,102 +1754,6 @@ fn os2_position_metrics(
   }
 }
 
-pub(crate) fn slope_preference_order(style: FontStyle) -> &'static [FontStyle] {
-  match style {
-    FontStyle::Normal => &[FontStyle::Normal],
-    FontStyle::Italic => &[FontStyle::Italic, FontStyle::Oblique, FontStyle::Normal],
-    FontStyle::Oblique => &[FontStyle::Oblique, FontStyle::Italic, FontStyle::Normal],
-  }
-}
-
-pub(crate) fn weight_preference_order(weight: u16) -> Vec<u16> {
-  let desired = weight.clamp(1, 1000);
-  let mut candidates: Vec<u16> = (1..=9).map(|i| i * 100).collect();
-  if !candidates.contains(&desired) {
-    candidates.push(desired);
-  }
-  candidates.sort_by(|a, b| {
-    weight_order_key(*a, desired)
-      .cmp(&weight_order_key(*b, desired))
-      .then_with(|| a.cmp(b))
-  });
-  candidates.dedup();
-  candidates
-}
-
-pub(crate) fn stretch_preference_order(stretch: DbFontStretch) -> Vec<DbFontStretch> {
-  let target = stretch.to_percentage();
-  let mut variants = [
-    DbFontStretch::UltraCondensed,
-    DbFontStretch::ExtraCondensed,
-    DbFontStretch::Condensed,
-    DbFontStretch::SemiCondensed,
-    DbFontStretch::Normal,
-    DbFontStretch::SemiExpanded,
-    DbFontStretch::Expanded,
-    DbFontStretch::ExtraExpanded,
-    DbFontStretch::UltraExpanded,
-  ];
-  variants.sort_by(|a, b| {
-    let ka = stretch_order_key(a.to_percentage(), target);
-    let kb = stretch_order_key(b.to_percentage(), target);
-    match ka.0.cmp(&kb.0) {
-      std::cmp::Ordering::Equal => ka.1.partial_cmp(&kb.1).unwrap_or(std::cmp::Ordering::Equal),
-      other => other,
-    }
-  });
-  variants.to_vec()
-}
-
-fn weight_order_key(candidate: u16, desired: u16) -> (u8, i32) {
-  let desired = desired.clamp(1, 1000) as i32;
-  let candidate = candidate as i32;
-
-  if (400..=500).contains(&desired) {
-    if candidate >= desired && candidate <= 500 {
-      return (0, (candidate - desired).abs());
-    }
-    if candidate < desired {
-      return (1, (desired - candidate).abs());
-    }
-    return (2, (candidate - desired).abs());
-  }
-
-  if desired < 400 {
-    if candidate <= desired {
-      return (0, (desired - candidate).abs());
-    }
-    return (1, (candidate - desired).abs());
-  }
-
-  // desired > 500
-  if candidate >= desired {
-    (0, (candidate - desired).abs())
-  } else {
-    (1, (desired - candidate).abs())
-  }
-}
-
-fn stretch_order_key(candidate: f32, desired: f32) -> (u8, f32) {
-  if (candidate - desired).abs() < f32::EPSILON {
-    return (0, 0.0);
-  }
-
-  if desired <= 100.0 {
-    if candidate <= desired {
-      return (0, (desired - candidate).abs());
-    }
-    return (1, (candidate - desired).abs());
-  }
-
-  // desired > 100
-  if candidate >= desired {
-    (0, (candidate - desired).abs())
-  } else {
-    (1, (desired - candidate).abs())
-  }
-}
-
 fn is_bidi_control_char(ch: char) -> bool {
   matches!(
     ch,
@@ -1878,168 +1783,6 @@ fn is_emoji_dominant(text: &str) -> bool {
     return false;
   }
   saw_emoji
-}
-
-fn font_is_emoji_font(db: &FontDatabase, id: Option<fontdb::ID>, font: &LoadedFont) -> bool {
-  if let Some(id) = id {
-    if let Some(is_color) = db.is_color_capable_font(id) {
-      return is_color;
-    }
-  }
-
-  crate::text::font_db::font_name_indicates_emoji(&font.family)
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum EmojiPreference {
-  PreferEmoji,
-  AvoidEmoji,
-  Neutral,
-}
-
-#[derive(Default)]
-struct FontPreferencePicker {
-  prefer_emoji: bool,
-  avoid_emoji: bool,
-  first_emoji: Option<(LoadedFont, usize)>,
-  first_text: Option<(LoadedFont, usize)>,
-  first_emoji_any: Option<(LoadedFont, usize)>,
-  first_text_any: Option<(LoadedFont, usize)>,
-  order: usize,
-}
-
-impl FontPreferencePicker {
-  fn new(pref: EmojiPreference) -> Self {
-    Self {
-      prefer_emoji: matches!(pref, EmojiPreference::PreferEmoji),
-      avoid_emoji: matches!(pref, EmojiPreference::AvoidEmoji),
-      ..Self::default()
-    }
-  }
-
-  fn bump_order(&mut self) -> usize {
-    let idx = self.order;
-    self.order += 1;
-    idx
-  }
-
-  fn record_any(&mut self, font: &LoadedFont, is_emoji_font: bool, idx: usize) {
-    if is_emoji_font {
-      if self.first_emoji_any.is_none() {
-        self.first_emoji_any = Some((font.clone(), idx));
-      }
-    } else if self.first_text_any.is_none() {
-      self.first_text_any = Some((font.clone(), idx));
-    }
-  }
-
-  fn consider(&mut self, font: LoadedFont, is_emoji_font: bool, idx: usize) -> Option<LoadedFont> {
-    if is_emoji_font {
-      if self.first_emoji.is_none() {
-        self.first_emoji = Some((font.clone(), idx));
-      }
-      if self.prefer_emoji && !self.avoid_emoji {
-        return Some(font);
-      }
-      if !self.prefer_emoji && !self.avoid_emoji {
-        return Some(font);
-      }
-      // avoid_emoji => keep as fallback if nothing else has a glyph
-    } else {
-      if self.first_text.is_none() {
-        self.first_text = Some((font.clone(), idx));
-      }
-      if self.avoid_emoji {
-        return Some(font);
-      }
-      if !self.prefer_emoji {
-        return Some(font);
-      }
-      // prefer_emoji => keep searching for an emoji font with coverage
-    }
-
-    None
-  }
-
-  fn finish(&mut self) -> Option<LoadedFont> {
-    let first_emoji = self
-      .first_emoji
-      .take()
-      .or_else(|| self.first_emoji_any.take());
-    let first_text = self
-      .first_text
-      .take()
-      .or_else(|| self.first_text_any.take());
-
-    if self.prefer_emoji && !self.avoid_emoji {
-      first_emoji
-        .map(|(f, _)| f)
-        .or_else(|| first_text.map(|(f, _)| f))
-    } else if self.avoid_emoji {
-      first_text
-        .map(|(f, _)| f)
-        .or_else(|| first_emoji.map(|(f, _)| f))
-    } else {
-      match (first_text, first_emoji) {
-        (Some((text, ti)), Some((emoji, ei))) => {
-          if ti <= ei {
-            Some(text)
-          } else {
-            Some(emoji)
-          }
-        }
-        (Some((text, _)), None) => Some(text),
-        (None, Some((emoji, _))) => Some(emoji),
-        (None, None) => None,
-      }
-    }
-  }
-}
-
-fn emoji_preference_for_char(ch: char, variant: FontVariantEmoji) -> EmojiPreference {
-  match variant {
-    FontVariantEmoji::Emoji => EmojiPreference::PreferEmoji,
-    FontVariantEmoji::Text => EmojiPreference::AvoidEmoji,
-    FontVariantEmoji::Unicode => {
-      if emoji::is_emoji_presentation(ch) {
-        EmojiPreference::PreferEmoji
-      } else {
-        EmojiPreference::AvoidEmoji
-      }
-    }
-    FontVariantEmoji::Normal => {
-      if emoji::is_emoji_presentation(ch) {
-        EmojiPreference::PreferEmoji
-      } else {
-        EmojiPreference::Neutral
-      }
-    }
-  }
-}
-
-fn emoji_preference_with_selector(
-  ch: char,
-  next: Option<char>,
-  variant: FontVariantEmoji,
-) -> EmojiPreference {
-  if let Some(sel) = next {
-    if sel == '\u{FE0F}' {
-      return EmojiPreference::PreferEmoji;
-    }
-    if sel == '\u{FE0E}' {
-      return EmojiPreference::AvoidEmoji;
-    }
-  }
-
-  let base_pref = emoji_preference_for_char(ch, variant);
-
-  if let Some('\u{200d}') = next {
-    if emoji::is_emoji(ch) || emoji::is_emoji_presentation(ch) {
-      return EmojiPreference::PreferEmoji;
-    }
-  }
-
-  base_pref
 }
 
 fn build_family_entries(style: &ComputedStyle) -> Vec<crate::text::font_fallback::FamilyEntry> {
@@ -2083,398 +1826,6 @@ fn build_family_entries(style: &ComputedStyle) -> Vec<crate::text::font_fallback
   }
 
   entries
-}
-
-#[allow(clippy::cognitive_complexity)]
-fn resolve_font_for_char(
-  ch: char,
-  families: &[crate::text::font_fallback::FamilyEntry],
-  weight: u16,
-  style: FontStyle,
-  oblique_angle: Option<f32>,
-  stretch: DbFontStretch,
-  font_context: &FontContext,
-  picker: &mut FontPreferencePicker,
-) -> Option<LoadedFont> {
-  use crate::text::font_fallback::FamilyEntry;
-  use fontdb::Family;
-  let db = font_context.database();
-  let is_emoji = emoji::is_emoji(ch);
-  let weight_preferences = weight_preference_order(weight);
-  let slope_preferences = slope_preference_order(style);
-  let stretch_preferences = stretch_preference_order(stretch);
-  let math_families = font_context.math_family_names();
-  for entry in families {
-    if let FamilyEntry::Generic(crate::text::font_db::GenericFamily::Math) = entry {
-      for family in &math_families {
-        if let Some(font) =
-          font_context.match_web_font_for_char(family, weight, style, stretch, oblique_angle, ch)
-        {
-          return Some(font);
-        }
-        for stretch_choice in &stretch_preferences {
-          for slope in slope_preferences {
-            for weight_choice in &weight_preferences {
-              let query = fontdb::Query {
-                families: &[Family::Name(family.as_str())],
-                weight: fontdb::Weight(*weight_choice),
-                stretch: (*stretch_choice).into(),
-                style: (*slope).into(),
-              };
-              if let Some(id) = db.inner().query(&query) {
-                if let Some(font) = db.load_font(id) {
-                  let is_emoji_font = font_is_emoji_font(db, Some(id), &font);
-                  let idx = picker.bump_order();
-                  picker.record_any(&font, is_emoji_font, idx);
-                  if db.has_glyph_cached(id, ch) {
-                    if let Some(font) = picker.consider(font, is_emoji_font, idx) {
-                      return Some(font);
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-    if let FamilyEntry::Named(name) = entry {
-      if let Some(font) =
-        font_context.match_web_font_for_char(name, weight, style, stretch, oblique_angle, ch)
-      {
-        return Some(font);
-      }
-      if font_context.is_web_family_declared(name) {
-        continue;
-      }
-    }
-
-    for stretch_choice in &stretch_preferences {
-      for slope in slope_preferences {
-        for weight_choice in &weight_preferences {
-          let query = match entry {
-            FamilyEntry::Named(name) => fontdb::Query {
-              families: &[Family::Name(name)],
-              weight: fontdb::Weight(*weight_choice),
-              stretch: (*stretch_choice).into(),
-              style: (*slope).into(),
-            },
-            FamilyEntry::Generic(generic) => fontdb::Query {
-              families: &[generic.to_fontdb()],
-              weight: fontdb::Weight(*weight_choice),
-              stretch: (*stretch_choice).into(),
-              style: (*slope).into(),
-            },
-          };
-
-          if let Some(id) = db.inner().query(&query) {
-            if let Some(font) = db.load_font(id) {
-              let is_emoji_font = font_is_emoji_font(db, Some(id), &font);
-              let idx = picker.bump_order();
-              picker.record_any(&font, is_emoji_font, idx);
-              if db.has_glyph_cached(id, ch) {
-                if let Some(font) = picker.consider(font, is_emoji_font, idx) {
-                  return Some(font);
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-
-    if let FamilyEntry::Generic(generic) = entry {
-      for name in generic.fallback_families() {
-        for weight_choice in &weight_preferences {
-          for slope in slope_preferences {
-            for stretch_choice in &stretch_preferences {
-              let query = fontdb::Query {
-                families: &[Family::Name(name)],
-                weight: fontdb::Weight(*weight_choice),
-                stretch: (*stretch_choice).into(),
-                style: (*slope).into(),
-              };
-              if let Some(id) = db.inner().query(&query) {
-                if let Some(font) = db.load_font(id) {
-                  let is_emoji_font = font_is_emoji_font(db, Some(id), &font);
-                  let idx = picker.bump_order();
-                  picker.record_any(&font, is_emoji_font, idx);
-                  if db.has_glyph_cached(id, ch) {
-                    if let Some(font) = picker.consider(font, is_emoji_font, idx) {
-                      return Some(font);
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-
-  if is_emoji && !picker.avoid_emoji {
-    for id in db.find_emoji_fonts() {
-      if let Some(font) = db.load_font(id) {
-        let idx = picker.bump_order();
-        picker.record_any(&font, true, idx);
-        if db.has_glyph_cached(id, ch) {
-          if let Some(font) = picker.consider(font, true, idx) {
-            return Some(font);
-          }
-        }
-      }
-    }
-  }
-
-  for face in db.faces() {
-    if let Some(font) = db.load_font(face.id) {
-      let is_emoji_font = font_is_emoji_font(db, Some(face.id), &font);
-      let idx = picker.bump_order();
-      picker.record_any(&font, is_emoji_font, idx);
-      if db.has_glyph_cached(face.id, ch) {
-        if let Some(font) = picker.consider(font, is_emoji_font, idx) {
-          return Some(font);
-        }
-      }
-    }
-  }
-
-  picker.finish()
-}
-
-#[allow(clippy::cognitive_complexity)]
-fn resolve_font_for_cluster(
-  base_char: char,
-  coverage_chars: &[char],
-  families: &[crate::text::font_fallback::FamilyEntry],
-  weight: u16,
-  style: FontStyle,
-  oblique_angle: Option<f32>,
-  stretch: DbFontStretch,
-  font_context: &FontContext,
-  emoji_pref: EmojiPreference,
-) -> Option<LoadedFont> {
-  use crate::text::font_fallback::FamilyEntry;
-  use fontdb::Family;
-  let db = font_context.database();
-  let is_emoji = crate::text::font_db::FontDatabase::is_emoji(base_char);
-  let weight_preferences = weight_preference_order(weight);
-  let slope_preferences = slope_preference_order(style);
-  let stretch_preferences = stretch_preference_order(stretch);
-  let math_families = font_context.math_family_names();
-  let mut picker = FontPreferencePicker::new(emoji_pref);
-  let require_base_glyph = !is_non_rendering_for_coverage(base_char);
-
-  let mut needed: Vec<char> = coverage_chars.iter().copied().collect();
-  needed.sort_unstable();
-  needed.dedup();
-  if needed.is_empty() && require_base_glyph {
-    needed.push(base_char);
-  }
-
-  let base_supported = |id: fontdb::ID| !require_base_glyph || db.has_glyph_cached(id, base_char);
-  let covers_needed = |id: fontdb::ID| needed.iter().all(|c| db.has_glyph_cached(id, *c));
-
-  for entry in families {
-    if let FamilyEntry::Generic(crate::text::font_db::GenericFamily::Math) = entry {
-      for family in &math_families {
-        if let Some(font) = font_context.match_web_font_for_char(
-          family,
-          weight,
-          style,
-          stretch,
-          oblique_angle,
-          base_char,
-        ) {
-<<<<<<< HEAD
-          let is_emoji_font = crate::text::font_db::font_name_indicates_emoji(&font.family);
-=======
-          let is_emoji_font = font_is_emoji_font(db, None, &font);
->>>>>>> 6f3d1ad (Fix font resolution cache handling and emoji font checks)
-          let idx = picker.bump_order();
-          if !require_base_glyph || font_supports_all_chars(&font, &[base_char]) {
-            picker.record_any(&font, is_emoji_font, idx);
-            if font_supports_all_chars(&font, &needed) {
-              if let Some(font) = picker.consider(font, is_emoji_font, idx) {
-                return Some(font);
-              }
-            }
-          }
-        }
-        for stretch_choice in &stretch_preferences {
-          for slope in slope_preferences {
-            for weight_choice in &weight_preferences {
-              let query = fontdb::Query {
-                families: &[Family::Name(family.as_str())],
-                weight: fontdb::Weight(*weight_choice),
-                stretch: (*stretch_choice).into(),
-                style: (*slope).into(),
-              };
-              if let Some(id) = db.inner().query(&query) {
-                if let Some(font) = db.load_font(id) {
-                  if !base_supported(id) {
-                    continue;
-                  }
-<<<<<<< HEAD
-                  let is_emoji_font = font_is_emoji_font(db, id, &font);
-=======
-                  let is_emoji_font = font_is_emoji_font(db, Some(id), &font);
->>>>>>> 6f3d1ad (Fix font resolution cache handling and emoji font checks)
-                  let idx = picker.bump_order();
-                  picker.record_any(&font, is_emoji_font, idx);
-                  if covers_needed(id) {
-                    if let Some(font) = picker.consider(font, is_emoji_font, idx) {
-                      return Some(font);
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-    if let FamilyEntry::Named(name) = entry {
-      if let Some(font) =
-        font_context.match_web_font_for_char(name, weight, style, stretch, oblique_angle, base_char)
-      {
-<<<<<<< HEAD
-        let is_emoji_font = crate::text::font_db::font_name_indicates_emoji(&font.family);
-=======
-        let is_emoji_font = font_is_emoji_font(db, None, &font);
->>>>>>> 6f3d1ad (Fix font resolution cache handling and emoji font checks)
-        let idx = picker.bump_order();
-        if !require_base_glyph || font_supports_all_chars(&font, &[base_char]) {
-          picker.record_any(&font, is_emoji_font, idx);
-          if font_supports_all_chars(&font, &needed) {
-            if let Some(font) = picker.consider(font, is_emoji_font, idx) {
-              return Some(font);
-            }
-          }
-        }
-      }
-      if font_context.is_web_family_declared(name) {
-        continue;
-      }
-    }
-
-    for stretch_choice in &stretch_preferences {
-      for slope in slope_preferences {
-        for weight_choice in &weight_preferences {
-          let query = match entry {
-            FamilyEntry::Named(name) => fontdb::Query {
-              families: &[Family::Name(name)],
-              weight: fontdb::Weight(*weight_choice),
-              stretch: (*stretch_choice).into(),
-              style: (*slope).into(),
-            },
-            FamilyEntry::Generic(generic) => fontdb::Query {
-              families: &[generic.to_fontdb()],
-              weight: fontdb::Weight(*weight_choice),
-              stretch: (*stretch_choice).into(),
-              style: (*slope).into(),
-            },
-          };
-
-          if let Some(id) = db.inner().query(&query) {
-            if let Some(font) = db.load_font(id) {
-              if !base_supported(id) {
-                continue;
-              }
-<<<<<<< HEAD
-              let is_emoji_font = font_is_emoji_font(db, id, &font);
-=======
-              let is_emoji_font = font_is_emoji_font(db, Some(id), &font);
->>>>>>> 6f3d1ad (Fix font resolution cache handling and emoji font checks)
-              let idx = picker.bump_order();
-              picker.record_any(&font, is_emoji_font, idx);
-              if covers_needed(id) {
-                if let Some(font) = picker.consider(font, is_emoji_font, idx) {
-                  return Some(font);
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-
-    if let FamilyEntry::Generic(generic) = entry {
-      for name in generic.fallback_families() {
-        for weight_choice in &weight_preferences {
-          for slope in slope_preferences {
-            for stretch_choice in &stretch_preferences {
-              let query = fontdb::Query {
-                families: &[Family::Name(name)],
-                weight: fontdb::Weight(*weight_choice),
-                stretch: (*stretch_choice).into(),
-                style: (*slope).into(),
-              };
-              if let Some(id) = db.inner().query(&query) {
-                if let Some(font) = db.load_font(id) {
-                  if !base_supported(id) {
-                    continue;
-                  }
-<<<<<<< HEAD
-                  let is_emoji_font = font_is_emoji_font(db, id, &font);
-=======
-                  let is_emoji_font = font_is_emoji_font(db, Some(id), &font);
->>>>>>> 6f3d1ad (Fix font resolution cache handling and emoji font checks)
-                  let idx = picker.bump_order();
-                  picker.record_any(&font, is_emoji_font, idx);
-                  if covers_needed(id) {
-                    if let Some(font) = picker.consider(font, is_emoji_font, idx) {
-                      return Some(font);
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-
-  if is_emoji && !picker.avoid_emoji {
-    for id in db.find_emoji_fonts() {
-      if let Some(font) = db.load_font(id) {
-        if !base_supported(id) {
-          continue;
-        }
-        let idx = picker.bump_order();
-        picker.record_any(&font, true, idx);
-        if covers_needed(id) {
-          if let Some(font) = picker.consider(font, true, idx) {
-            return Some(font);
-          }
-        }
-      }
-    }
-  }
-
-  for face in db.faces() {
-    if let Some(font) = db.load_font(face.id) {
-      if !base_supported(face.id) {
-        continue;
-      }
-<<<<<<< HEAD
-      let is_emoji_font = font_is_emoji_font(db, face.id, &font);
-=======
-      let is_emoji_font = font_is_emoji_font(db, Some(face.id), &font);
->>>>>>> 6f3d1ad (Fix font resolution cache handling and emoji font checks)
-      let idx = picker.bump_order();
-      picker.record_any(&font, is_emoji_font, idx);
-      if covers_needed(face.id) {
-        if let Some(font) = picker.consider(font, is_emoji_font, idx) {
-          return Some(font);
-        }
-      }
-    }
-  }
-
-  picker.finish()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2755,10 +2106,15 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
     }
   }
 
+  // Shape the text
   let mut features = run.features.clone();
   if run.vertical {
-    let need_vert = !features.iter().any(|f| f.tag.to_bytes() == *b"vert" && f.value != 0);
-    let need_vrt2 = !features.iter().any(|f| f.tag.to_bytes() == *b"vrt2" && f.value != 0);
+    let need_vert = !features
+      .iter()
+      .any(|f| f.tag.to_bytes() == *b"vert" && f.value != 0);
+    let need_vrt2 = !features
+      .iter()
+      .any(|f| f.tag.to_bytes() == *b"vrt2" && f.value != 0);
     if need_vert {
       features.push(Feature {
         tag: Tag::from_bytes(b"vert"),
@@ -2777,7 +2133,6 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
     }
   }
 
-  // Shape the text
   let output = rustybuzz::shape(&rb_face, &features, buffer);
 
   // Calculate scale factor
@@ -2803,10 +2158,26 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
       .and_then(|s| s.chars().next())
       .is_some_and(is_bidi_control_char);
 
-    let inline_advance_raw = if run.vertical { pos.y_advance } else { pos.x_advance };
-    let cross_advance_raw = if run.vertical { pos.x_advance } else { pos.y_advance };
-    let inline_offset_raw = if run.vertical { pos.y_offset } else { pos.x_offset };
-    let cross_offset_raw = if run.vertical { pos.x_offset } else { pos.y_offset };
+    let inline_advance_raw = if run.vertical {
+      pos.y_advance
+    } else {
+      pos.x_advance
+    };
+    let cross_advance_raw = if run.vertical {
+      pos.x_advance
+    } else {
+      pos.y_advance
+    };
+    let inline_offset_raw = if run.vertical {
+      pos.y_offset
+    } else {
+      pos.x_offset
+    };
+    let cross_offset_raw = if run.vertical {
+      pos.x_offset
+    } else {
+      pos.y_offset
+    };
     let inline_advance = inline_advance_raw as f32 * scale;
     let cross_advance = cross_advance_raw as f32 * scale;
     if !is_bidi_control {
@@ -3027,8 +2398,8 @@ struct ClusterResolverCacheKey {
 
 #[derive(Clone, Debug)]
 struct FontResolverCache {
-  single: Arc<Mutex<LruCache<FontResolverCacheKey, Option<LoadedFont>>>>,
-  clusters: Arc<Mutex<LruCache<ClusterResolverCacheKey, Option<LoadedFont>>>>,
+  single: Arc<Mutex<LruCache<FontResolverCacheKey, Option<ResolvedFont>>>>,
+  clusters: Arc<Mutex<LruCache<ClusterResolverCacheKey, Option<ResolvedFont>>>>,
 }
 
 impl FontResolverCache {
@@ -3040,7 +2411,7 @@ impl FontResolverCache {
     }
   }
 
-  fn get(&self, key: &FontResolverCacheKey) -> Option<Option<LoadedFont>> {
+  fn get(&self, key: &FontResolverCacheKey) -> Option<Option<ResolvedFont>> {
     self
       .single
       .lock()
@@ -3048,7 +2419,7 @@ impl FontResolverCache {
       .and_then(|mut cache| cache.get(key).cloned())
   }
 
-  fn get_cluster(&self, key: &ClusterResolverCacheKey) -> Option<Option<LoadedFont>> {
+  fn get_cluster(&self, key: &ClusterResolverCacheKey) -> Option<Option<ResolvedFont>> {
     self
       .clusters
       .lock()
@@ -3056,13 +2427,13 @@ impl FontResolverCache {
       .and_then(|mut cache| cache.get(key).cloned())
   }
 
-  fn insert(&self, key: FontResolverCacheKey, value: Option<LoadedFont>) {
+  fn insert(&self, key: FontResolverCacheKey, value: Option<ResolvedFont>) {
     if let Ok(mut cache) = self.single.lock() {
       cache.put(key, value);
     }
   }
 
-  fn insert_cluster(&self, key: ClusterResolverCacheKey, value: Option<LoadedFont>) {
+  fn insert_cluster(&self, key: ClusterResolverCacheKey, value: Option<ResolvedFont>) {
     if let Ok(mut cache) = self.clusters.lock() {
       cache.put(key, value);
     }
@@ -4500,7 +3871,7 @@ mod tests {
       &mut picker,
     )
     .expect("font for uppercase");
-    assert_eq!(upper.family, "RangeFace");
+    assert_eq!(upper.font.family, "RangeFace");
 
     let mut picker = FontPreferencePicker::new(EmojiPreference::Neutral);
     let lower = resolve_font_for_char(
@@ -4514,7 +3885,7 @@ mod tests {
       &mut picker,
     )
     .expect("fallback font");
-    assert_ne!(lower.family, "RangeFace");
+    assert_ne!(lower.font.family, "RangeFace");
   }
 
   #[cfg(debug_assertions)]

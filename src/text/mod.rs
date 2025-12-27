@@ -70,6 +70,7 @@ pub mod cpal;
 pub mod font_db;
 pub mod font_fallback;
 pub mod font_loader;
+pub mod font_resolver;
 
 // Text Shaping Pipeline (Wave 4)
 // ============================================================================

@@ -3,14 +3,20 @@
 //! These tests verify the font fallback chain behavior according to
 //! CSS Fonts Module Level 4, Section 5.
 
+use fastrender::style::types::FontVariantEmoji;
 use fastrender::text::emoji;
+use fastrender::ComputedStyle;
 use fastrender::FallbackChain;
 use fastrender::FallbackChainBuilder;
 use fastrender::FamilyEntry;
+use fastrender::FontConfig;
+use fastrender::FontContext;
 use fastrender::FontDatabase;
 use fastrender::FontStretch;
 use fastrender::FontStyleDb as FontStyle;
 use fastrender::GenericFamily;
+use fastrender::ShapingPipeline;
+use std::sync::Arc;
 
 // ============================================================================
 // GenericFamily Tests
@@ -513,6 +519,94 @@ fn test_fallback_chain_emoji_resolution() {
   let result = chain.resolve('😀', &db);
   // May or may not find emoji font depending on system
   let _ = result;
+}
+
+#[test]
+fn bundled_fallback_chain_matches_pipeline_for_ascii() {
+  let db = Arc::new(FontDatabase::with_config(&FontConfig::bundled_only()));
+  if db.is_empty() {
+    return;
+  }
+
+  let ctx = FontContext::with_database(Arc::clone(&db));
+  let mut style = ComputedStyle::default();
+  style.font_family = vec!["DejaVu Sans".to_string()];
+  let chain = FallbackChain::from_families(&style.font_family);
+
+  let runs = match ShapingPipeline::new().shape("F", &style, &ctx) {
+    Ok(runs) => runs,
+    Err(_) => return,
+  };
+  if runs.is_empty() {
+    return;
+  }
+
+  if let Some(chain_font) = chain
+    .resolve('F', db.as_ref())
+    .and_then(|id| db.load_font(id.inner()))
+  {
+    assert_eq!(runs[0].font.family, chain_font.family);
+  }
+}
+
+#[test]
+fn fallback_chain_matches_pipeline_for_cjk_when_available() {
+  let db = Arc::new(FontDatabase::new());
+  if db.is_empty() {
+    return;
+  }
+
+  let ctx = FontContext::with_database(Arc::clone(&db));
+  let mut style = ComputedStyle::default();
+  style.font_family = vec!["sans-serif".to_string()];
+  let chain = FallbackChain::from_families(&style.font_family);
+
+  let runs = match ShapingPipeline::new().shape("中", &style, &ctx) {
+    Ok(runs) => runs,
+    Err(_) => return,
+  };
+  if runs.is_empty() {
+    return;
+  }
+
+  if let Some(chain_font) = chain
+    .resolve('中', db.as_ref())
+    .and_then(|id| db.load_font(id.inner()))
+  {
+    assert_eq!(runs[0].font.family, chain_font.family);
+  }
+}
+
+#[test]
+fn fallback_chain_matches_pipeline_for_emoji_when_available() {
+  let db = Arc::new(FontDatabase::new());
+  if db.is_empty() {
+    return;
+  }
+
+  let ctx = FontContext::with_database(Arc::clone(&db));
+  let mut style = ComputedStyle::default();
+  style.font_family = vec!["sans-serif".to_string()];
+  style.font_variant_emoji = FontVariantEmoji::Emoji;
+  let mut chain = FallbackChain::new()
+    .with_emoji_variant(FontVariantEmoji::Emoji)
+    .add_generic(GenericFamily::Emoji)
+    .add_generic(GenericFamily::SansSerif);
+
+  let runs = match ShapingPipeline::new().shape("😀", &style, &ctx) {
+    Ok(runs) => runs,
+    Err(_) => return,
+  };
+  if runs.is_empty() {
+    return;
+  }
+
+  if let Some(chain_font) = chain
+    .resolve('😀', db.as_ref())
+    .and_then(|id| db.load_font(id.inner()))
+  {
+    assert_eq!(runs[0].font.family, chain_font.family);
+  }
 }
 
 // ============================================================================

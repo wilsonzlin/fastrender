@@ -42,6 +42,10 @@ use crate::text::font_db::FontStyle;
 use crate::text::font_db::FontWeight;
 use crate::text::font_db::LoadedFont;
 use crate::text::font_db::ScaledMetrics;
+use crate::text::font_resolver::slope_preference_order;
+use crate::text::font_resolver::stretch_preference_order;
+use crate::text::font_resolver::weight_preference_order;
+use crate::text::font_resolver::FontResolverContext;
 use crate::text::pipeline::DEFAULT_OBLIQUE_ANGLE_DEG;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
@@ -456,9 +460,9 @@ impl FontContext {
       None
     };
 
-    let stretches = crate::text::pipeline::stretch_preference_order(FontStretch::Normal);
-    let slopes = crate::text::pipeline::slope_preference_order(requested_style);
-    let weights = crate::text::pipeline::weight_preference_order(weight);
+    let stretches = stretch_preference_order(FontStretch::Normal);
+    let slopes = slope_preference_order(requested_style);
+    let weights = weight_preference_order(weight);
     for family in families {
       if let Some(font) = self.select_web_font(
         family,
@@ -525,9 +529,9 @@ impl FontContext {
     style: FontStyle,
     stretch: FontStretch,
   ) -> Option<LoadedFont> {
-    let stretches = crate::text::pipeline::stretch_preference_order(stretch);
-    let weights = crate::text::pipeline::weight_preference_order(weight);
-    let slopes = crate::text::pipeline::slope_preference_order(style);
+    let stretches = stretch_preference_order(stretch);
+    let weights = weight_preference_order(weight);
+    let slopes = slope_preference_order(style);
     let requested_angle = if matches!(style, FontStyle::Oblique) {
       Some(DEFAULT_OBLIQUE_ANGLE_DEG)
     } else {
@@ -1703,6 +1707,32 @@ fn decode_data_url(url: &str) -> Result<FetchedFont> {
     content_type: mime,
     final_url: Some(url.to_string()),
   })
+}
+
+impl FontResolverContext for FontContext {
+  fn database(&self) -> &FontDatabase {
+    &self.db
+  }
+
+  fn match_web_font_for_char(
+    &self,
+    family: &str,
+    weight: u16,
+    style: FontStyle,
+    stretch: FontStretch,
+    oblique_angle: Option<f32>,
+    ch: char,
+  ) -> Option<LoadedFont> {
+    FontContext::match_web_font_for_char(self, family, weight, style, stretch, oblique_angle, ch)
+  }
+
+  fn is_web_family_declared(&self, family: &str) -> bool {
+    FontContext::is_web_family_declared(self, family)
+  }
+
+  fn math_family_names(&self) -> Vec<String> {
+    FontContext::math_family_names(self)
+  }
 }
 
 // ============================================================================
