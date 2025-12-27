@@ -324,16 +324,16 @@ fn layout_engine_pagination_splits_pages() {
   assert!((fragments.additional_fragments[1].bounds.y() - 140.0).abs() < 0.1);
 }
 
-#[test]
-fn pagination_keeps_fragment_boundary_margins_separate() {
-  let mut first_style = ComputedStyle::default();
-  first_style.height = Some(Length::px(10.0));
-  first_style.margin_bottom = Length::px(30.0);
+  #[test]
+  fn pagination_keeps_fragment_boundary_margins_separate() {
+    let mut first_style = ComputedStyle::default();
+    first_style.height = Some(Length::px(10.0));
+    first_style.margin_bottom = Some(Length::px(30.0));
 
-  let mut second_style = ComputedStyle::default();
-  second_style.height = Some(Length::px(10.0));
-  second_style.margin_top = Length::px(40.0);
-  second_style.break_before = BreakBetween::Page;
+    let mut second_style = ComputedStyle::default();
+    second_style.height = Some(Length::px(10.0));
+    second_style.margin_top = Some(Length::px(40.0));
+    second_style.break_before = BreakBetween::Page;
 
   let first = BoxNode::new_block(Arc::new(first_style), FormattingContextType::Block, vec![]);
   let second = BoxNode::new_block(Arc::new(second_style), FormattingContextType::Block, vec![]);
@@ -375,19 +375,19 @@ fn pagination_keeps_fragment_boundary_margins_separate() {
 }
 
 #[test]
-fn multicolumn_breaks_do_not_carry_collapsed_margins() {
+  fn multicolumn_breaks_do_not_carry_collapsed_margins() {
   let mut root_style = ComputedStyle::default();
   root_style.column_count = Some(2);
   root_style.column_gap = Length::px(0.0);
   root_style.width = Some(Length::px(200.0));
 
-  let mut first_style = ComputedStyle::default();
-  first_style.height = Some(Length::px(20.0));
-  first_style.margin_bottom = Length::px(60.0);
+    let mut first_style = ComputedStyle::default();
+    first_style.height = Some(Length::px(20.0));
+    first_style.margin_bottom = Some(Length::px(60.0));
 
-  let mut second_style = ComputedStyle::default();
-  second_style.height = Some(Length::px(20.0));
-  second_style.margin_top = Length::px(20.0);
+    let mut second_style = ComputedStyle::default();
+    second_style.height = Some(Length::px(20.0));
+    second_style.margin_top = Some(Length::px(20.0));
 
   let first = BoxNode::new_block(Arc::new(first_style), FormattingContextType::Block, vec![]);
   let second = BoxNode::new_block(Arc::new(second_style), FormattingContextType::Block, vec![]);
