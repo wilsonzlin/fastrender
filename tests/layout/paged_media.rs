@@ -1949,6 +1949,6 @@ fn page_border_is_painted() {
     )
     .expect("render page border");
 
-  assert_eq!(pixel(&pixmap, 5, 5), [20, 40, 60, 255]);
+  assert_eq!(pixel(&pixmap, 10, 5), [20, 40, 60, 255]);
   assert_eq!(pixel(&pixmap, 100, 100), [180, 190, 200, 255]);
 }

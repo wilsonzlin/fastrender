@@ -302,7 +302,7 @@ pub fn paginate_fragment_tree(
         page_style.total_size.height,
       ),
       Vec::new(),
-      page_style.page_style.clone(),
+      Arc::new(page_style.page_style.clone()),
     );
     let mut page_running_elements: HashMap<String, Vec<FragmentNode>> = HashMap::new();
 

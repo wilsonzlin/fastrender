@@ -860,7 +860,9 @@ pub fn parse_property_value_in_context(
 fn property_allowed_in_context(context: DeclarationContext, property: &str) -> bool {
   match context {
     DeclarationContext::Style => is_known_style_property(property),
-    DeclarationContext::Page => is_known_page_property(property),
+    DeclarationContext::Page => {
+      is_known_page_property(property) || is_known_style_property(property)
+    }
   }
 }
 
