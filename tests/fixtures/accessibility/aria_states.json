@@ -1,0 +1,176 @@
+{
+  "present": {
+    "busy-region": {
+      "role": "region",
+      "name": "Loading",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "section",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false,
+        "busy": true
+      }
+    },
+    "idle-region": {
+      "role": "region",
+      "name": "Idle",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "section",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "current-page": {
+      "role": "link",
+      "name": "Page",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "a",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false,
+        "current": "page"
+      }
+    },
+    "current-step": {
+      "role": "link",
+      "name": "Step",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "a",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false,
+        "current": "step"
+      }
+    },
+    "current-location": {
+      "role": "link",
+      "name": "Location",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "a",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false,
+        "current": "location"
+      }
+    },
+    "current-date": {
+      "role": "link",
+      "name": "Date",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "a",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false,
+        "current": "date"
+      }
+    },
+    "current-time": {
+      "role": "link",
+      "name": "Time",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "a",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false,
+        "current": "time"
+      }
+    },
+    "current-true": {
+      "role": "link",
+      "name": "True Token",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "a",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false,
+        "current": "true"
+      }
+    },
+    "current-false": {
+      "role": "link",
+      "name": "False Token",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "a",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "current-invalid": {
+      "role": "link",
+      "name": "Invalid Token",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "a",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "current-empty": {
+      "role": "link",
+      "name": "Empty Token",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "a",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    }
+  }
+}

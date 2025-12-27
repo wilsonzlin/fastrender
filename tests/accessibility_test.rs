@@ -433,6 +433,52 @@ fn accessibility_invalid_aria_boolean_values() {
 }
 
 #[test]
+fn accessibility_aria_states() {
+  let html =
+    fs::read_to_string("tests/fixtures/accessibility/aria_states.html").expect("read fixture");
+  let tree = render_accessibility_json(&html);
+
+  let busy = find_json_node(&tree, "busy-region").expect("busy region");
+  let busy_states = busy
+    .get("states")
+    .and_then(|s| s.as_object())
+    .expect("busy states");
+  assert_eq!(busy_states.get("busy"), Some(&json!(true)));
+
+  let idle = find_json_node(&tree, "idle-region").expect("idle region");
+  let idle_states = idle
+    .get("states")
+    .and_then(|s| s.as_object())
+    .expect("idle states");
+  assert!(!idle_states.contains_key("busy"));
+
+  let current_expectations = [
+    ("current-page", Some("page")),
+    ("current-step", Some("step")),
+    ("current-location", Some("location")),
+    ("current-date", Some("date")),
+    ("current-time", Some("time")),
+    ("current-true", Some("true")),
+    ("current-false", None),
+    ("current-invalid", None),
+    ("current-empty", None),
+  ];
+
+  for (id, expected) in current_expectations {
+    let node = find_json_node(&tree, id).unwrap_or_else(|| panic!("missing node {id}"));
+    let states = node
+      .get("states")
+      .and_then(|s| s.as_object())
+      .unwrap_or_else(|| panic!("missing states for {id}"));
+
+    match expected {
+      Some(token) => assert_eq!(states.get("current"), Some(&json!(token)), "{id} current"),
+      None => assert!(states.get("current").is_none(), "{id} should not have current"),
+    }
+  }
+}
+
+#[test]
 fn accessibility_details_expanded_state() {
   let html = r##"
     <html>
@@ -989,6 +1035,7 @@ fn accessibility_fixture_snapshots() {
     "modal_top_layer",
     "header_footer_landmarks",
     "form_role_gating",
+    "aria_states",
     "shadow_dom_slotting",
   ];
 

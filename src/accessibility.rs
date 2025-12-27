@@ -23,6 +23,18 @@ pub enum PressedState {
   Mixed,
 }
 
+/// Current state for landmarks and navigation items.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AriaCurrent {
+  Page,
+  Step,
+  Location,
+  Date,
+  Time,
+  True,
+}
+
 /// Accessibility-related states for a node.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AccessibilityState {
@@ -31,6 +43,8 @@ pub struct AccessibilityState {
   pub required: bool,
   pub invalid: bool,
   pub visited: bool,
+  #[serde(skip_serializing_if = "is_false")]
+  pub busy: bool,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub checked: Option<CheckState>,
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -39,6 +53,8 @@ pub struct AccessibilityState {
   pub pressed: Option<PressedState>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub expanded: Option<bool>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub current: Option<AriaCurrent>,
 }
 
 impl Default for AccessibilityState {
@@ -49,10 +65,12 @@ impl Default for AccessibilityState {
       required: false,
       invalid: false,
       visited: false,
+      busy: false,
       checked: None,
       selected: None,
       pressed: None,
       expanded: None,
+      current: None,
     }
   }
 }
@@ -329,6 +347,8 @@ fn build_nodes<'a>(
       let checked = compute_checked(node, role.as_deref(), &element_ref);
       let selected = compute_selected(node, role.as_deref(), &element_ref);
       let pressed = compute_pressed(node, role.as_deref());
+      let busy = attr_truthy(&node.node, "aria-busy");
+      let current = parse_aria_current(&node.node);
       let expanded = compute_expanded(node, role.as_deref(), ancestors);
       let visited =
         role.as_deref() == Some("link") && attr_truthy(&node.node, "data-fastr-visited");
@@ -346,10 +366,12 @@ fn build_nodes<'a>(
         required,
         invalid,
         visited,
+        busy,
         checked,
         selected,
         pressed,
         expanded,
+        current,
       };
 
       let should_expose = !decorative_image
@@ -1322,6 +1344,29 @@ fn parse_pressed_state(node: &DomNode, name: &str) -> Option<PressedState> {
     "mixed" => Some(PressedState::Mixed),
     _ => None,
   }
+}
+
+fn parse_aria_current(node: &DomNode) -> Option<AriaCurrent> {
+  let value = node.get_attribute_ref("aria-current")?;
+  let token = value.trim().to_ascii_lowercase();
+
+  if token.is_empty() || token == "false" {
+    return None;
+  }
+
+  match token.as_str() {
+    "page" => Some(AriaCurrent::Page),
+    "step" => Some(AriaCurrent::Step),
+    "location" => Some(AriaCurrent::Location),
+    "date" => Some(AriaCurrent::Date),
+    "time" => Some(AriaCurrent::Time),
+    "true" => Some(AriaCurrent::True),
+    _ => None,
+  }
+}
+
+fn is_false(value: &bool) -> bool {
+  !*value
 }
 
 fn is_labelable(node: &DomNode) -> bool {
