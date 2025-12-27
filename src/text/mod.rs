@@ -82,7 +82,11 @@ pub mod hyphenation;
 pub mod justify;
 pub mod line_break;
 pub mod pipeline;
+<<<<<<< HEAD
 pub mod segmentation;
+=======
+pub mod variations;
+>>>>>>> 944f6f1 (feat: apply font variations during paint)
 
 pub use pipeline::itemize_text;
 pub use pipeline::BidiAnalysis;
@@ -97,4 +101,8 @@ pub use pipeline::RunRotation;
 pub use pipeline::Script;
 pub use pipeline::ShapedRun;
 pub use pipeline::ShapingPipeline;
+<<<<<<< HEAD
 pub use segmentation::segment_grapheme_clusters;
+=======
+pub use variations::{apply_rustybuzz_variations, apply_variations_to_face, FontVariation};
+>>>>>>> 944f6f1 (feat: apply font variations during paint)

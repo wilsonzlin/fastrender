@@ -118,6 +118,7 @@ use crate::text::font_db::ScaledMetrics;
 use crate::text::font_loader::FontContext;
 use crate::text::pipeline::ShapedRun;
 use crate::text::pipeline::ShapingPipeline;
+use crate::text::variations::apply_rustybuzz_variations;
 use crate::tree;
 use crate::tree::box_tree::ForeignObjectInfo;
 use crate::tree::box_tree::ReplacedBox;
@@ -7233,10 +7234,11 @@ fn collect_underline_exclusions(
 
   let mut pen_x = line_start * device_scale;
   for run in runs {
-    let face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
+    let mut face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
       Ok(f) => f,
       Err(_) => continue,
     };
+    apply_rustybuzz_variations(&mut face, &run.variations);
     let units_per_em = face.units_per_em() as f32;
     if units_per_em == 0.0 {
       continue;
@@ -7300,10 +7302,11 @@ fn collect_underline_exclusions_vertical(
 
   let mut pen_inline = inline_start * device_scale;
   for run in runs {
-    let face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
+    let mut face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
       Ok(f) => f,
       Err(_) => continue,
     };
+    apply_rustybuzz_variations(&mut face, &run.variations);
     let units_per_em = face.units_per_em() as f32;
     if units_per_em == 0.0 {
       continue;

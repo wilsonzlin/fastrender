@@ -88,6 +88,7 @@ use crate::style::types::TransformStyle;
 use crate::style::values::Length;
 #[cfg(test)]
 use crate::style::ComputedStyle;
+use crate::text::apply_variations_to_face;
 use crate::text::font_db::FontStretch;
 use crate::text::font_db::FontStyle as DbFontStyle;
 use crate::text::font_db::LoadedFont;
@@ -1487,6 +1488,7 @@ impl DisplayListRenderer {
       font_size: item.font_size,
       advance_width: item.advance_width,
       font_id: item.font_id.clone(),
+      variations: item.variations.clone(),
       synthetic_bold: item.synthetic_bold,
       synthetic_oblique: item.synthetic_oblique,
       emphasis: item.emphasis.clone(),
@@ -1501,6 +1503,7 @@ impl DisplayListRenderer {
       font_size: scaled.font_size,
       advance_width: scaled.advance_width,
       font_id: scaled.font_id,
+      variations: scaled.variations,
       synthetic_bold: scaled.synthetic_bold,
       synthetic_oblique: scaled.synthetic_oblique,
       emphasis: scaled.emphasis,
@@ -3609,6 +3612,7 @@ impl DisplayListRenderer {
       );
     };
 
+<<<<<<< HEAD
     let glyphs = Self::glyph_positions(item);
 
     if !item.shadows.is_empty() {
@@ -3616,6 +3620,25 @@ impl DisplayListRenderer {
       if !paths.is_empty() && bounds.is_valid() {
         self.render_text_shadows(&paths, &bounds, item);
       }
+=======
+    let mut face = match font.as_ttf_face() {
+      Ok(f) => f,
+      Err(_) => {
+        return Err(
+          RenderError::RasterizationFailed {
+            reason: "Unable to parse font face for text shadows".into(),
+          }
+          .into(),
+        )
+      }
+    };
+
+    apply_variations_to_face(&mut face, &item.variations);
+
+    let (paths, bounds) = self.glyph_paths(&face, item);
+    if !item.shadows.is_empty() && !paths.is_empty() && bounds.is_valid() {
+      self.render_text_shadows(&paths, &bounds, item);
+>>>>>>> 944f6f1 (feat: apply font variations during paint)
     }
 
     self.canvas.draw_text(
@@ -3626,6 +3649,7 @@ impl DisplayListRenderer {
       item.color,
       item.synthetic_bold,
       item.synthetic_oblique,
+      &item.variations,
     );
     if let Some(emphasis) = &item.emphasis {
       self.render_emphasis(emphasis)?;
@@ -3647,6 +3671,7 @@ impl DisplayListRenderer {
       font_size: item.font_size,
       advance_width: item.advance_width,
       font_id: item.font_id.clone(),
+      variations: item.variations.clone(),
       synthetic_bold: item.synthetic_bold,
       synthetic_oblique: item.synthetic_oblique,
       emphasis: item.emphasis.clone(),
@@ -4052,6 +4077,7 @@ impl DisplayListRenderer {
             emphasis.color,
             0.0,
             0.0,
+            &text.variations,
           );
         }
         return Ok(());
@@ -6586,6 +6612,7 @@ mod tests {
         style: font.style,
         stretch: font.stretch,
       }),
+      variations: Vec::new(),
       synthetic_bold: 0.0,
       synthetic_oblique: 0.0,
       emphasis: None,
@@ -6650,6 +6677,7 @@ mod tests {
         style: font.style,
         stretch: font.stretch,
       }),
+      variations: Vec::new(),
       synthetic_bold: 0.0,
       synthetic_oblique: 0.0,
       emphasis: None,
@@ -6744,6 +6772,7 @@ mod tests {
         style: font.style,
         stretch: font.stretch,
       }),
+      variations: Vec::new(),
       synthetic_bold: 0.0,
       synthetic_oblique: 0.0,
       emphasis: None,
@@ -6818,6 +6847,7 @@ mod tests {
         style: font.style,
         stretch: font.stretch,
       }),
+      variations: Vec::new(),
       synthetic_bold: 0.0,
       synthetic_oblique: 0.0,
       emphasis: None,
@@ -6859,6 +6889,7 @@ mod tests {
       font_size: 16.0,
       advance_width: 0.0,
       font_id: None,
+      variations: Vec::new(),
       synthetic_bold: 0.0,
       synthetic_oblique: 0.0,
       emphasis: Some(TextEmphasis {

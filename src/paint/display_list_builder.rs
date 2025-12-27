@@ -88,9 +88,9 @@ use crate::paint::object_fit::default_object_position;
 use crate::paint::stacking::Layer6Item;
 use crate::paint::stacking::StackingContext;
 use crate::paint::svg_filter::SvgFilterResolver;
+use crate::paint::text_shadow::resolve_text_shadows;
 use crate::paint::transform3d::backface_is_hidden;
 use crate::paint::transform_resolver::ResolvedTransforms;
-use crate::paint::text_shadow::resolve_text_shadows;
 use crate::style::color::Rgba;
 use crate::style::types::AccentColor;
 use crate::style::types::Appearance;
@@ -135,6 +135,7 @@ use crate::text::font_db::ScaledMetrics;
 use crate::text::font_loader::FontContext;
 use crate::text::pipeline::ShapedRun;
 use crate::text::pipeline::ShapingPipeline;
+use crate::text::variations::{apply_rustybuzz_variations, FontVariation};
 use crate::tree::box_tree::FormControl;
 use crate::tree::box_tree::FormControlKind;
 use crate::tree::box_tree::ReplacedType;
@@ -454,7 +455,12 @@ impl DisplayListBuilder {
     out.extend(context.layer3_blocks.iter());
     out.extend(context.layer4_floats.iter());
     out.extend(context.layer5_inlines.iter());
-    out.extend(context.layer6_positioned.iter().map(|ordered| &ordered.fragment));
+    out.extend(
+      context
+        .layer6_positioned
+        .iter()
+        .map(|ordered| &ordered.fragment),
+    );
     for child in &context.children {
       Self::collect_stacking_fragments(child, out);
     }
@@ -762,7 +768,9 @@ impl DisplayListBuilder {
       ));
     let transform_bounds = root_fragment_rect.unwrap_or(context_bounds);
     let transforms = root_style
-      .map(|style| crate::paint::transform_resolver::resolve_transforms(style, transform_bounds, self.viewport))
+      .map(|style| {
+        crate::paint::transform_resolver::resolve_transforms(style, transform_bounds, self.viewport)
+      })
       .unwrap_or_default();
     let transform = transforms.self_transform;
     let child_perspective = transforms.child_perspective;
@@ -2346,6 +2354,7 @@ impl DisplayListBuilder {
               font_size,
               advance_width,
               font_id: None,
+              variations: Vec::new(),
               synthetic_bold: 0.0,
               synthetic_oblique: 0.0,
               emphasis: None,
@@ -2360,6 +2369,7 @@ impl DisplayListBuilder {
               font_size,
               advance_width,
               font_id: None,
+              variations: Vec::new(),
               synthetic_bold: 0.0,
               synthetic_oblique: 0.0,
               emphasis: None,
@@ -3438,6 +3448,12 @@ impl DisplayListBuilder {
         font_size: run.font_size,
         advance_width: run.advance,
         font_id: Some(font_id),
+        variations: run
+          .variations
+          .iter()
+          .copied()
+          .map(FontVariation::from)
+          .collect(),
         synthetic_bold: run.synthetic_bold,
         synthetic_oblique: run.synthetic_oblique,
         emphasis,
@@ -3478,6 +3494,12 @@ impl DisplayListBuilder {
         font_size: run.font_size,
         advance_width: run.advance,
         font_id: Some(font_id),
+        variations: run
+          .variations
+          .iter()
+          .copied()
+          .map(FontVariation::from)
+          .collect(),
         synthetic_bold: run.synthetic_bold,
         synthetic_oblique: run.synthetic_oblique,
         emphasis,
@@ -3517,6 +3539,12 @@ impl DisplayListBuilder {
         shadows: shadows.to_vec(),
         advance_width: run.advance,
         font_id: Some(font_id),
+        variations: run
+          .variations
+          .iter()
+          .copied()
+          .map(FontVariation::from)
+          .collect(),
         synthetic_bold: run.synthetic_bold,
         synthetic_oblique: run.synthetic_oblique,
         emphasis,
@@ -3556,6 +3584,12 @@ impl DisplayListBuilder {
         shadows: shadows.to_vec(),
         advance_width: run.advance,
         font_id: Some(font_id),
+        variations: run
+          .variations
+          .iter()
+          .copied()
+          .map(FontVariation::from)
+          .collect(),
         synthetic_bold: run.synthetic_bold,
         synthetic_oblique: run.synthetic_oblique,
         emphasis,
@@ -4106,6 +4140,12 @@ impl DisplayListBuilder {
         match self.shaper.shape(s, &mark_style, &self.font_ctx) {
           Ok(mark_runs) if !mark_runs.is_empty() => {
             let mark_font_id = self.font_id_from_run(&mark_runs[0]);
+            let mark_variations = mark_runs[0]
+              .variations
+              .iter()
+              .copied()
+              .map(FontVariation::from)
+              .collect();
             let mut glyphs = Vec::new();
             let mut width = 0.0;
             let mut ascent: f32 = 0.0;
@@ -4154,6 +4194,7 @@ impl DisplayListBuilder {
               width,
               height: ascent + descent,
               baseline_offset: ascent,
+              variations: mark_variations,
             })
           }
           _ => None,
@@ -4482,6 +4523,7 @@ impl DisplayListBuilder {
       font_size,
       advance_width,
       font_id: None,
+      variations: Vec::new(),
       synthetic_bold: 0.0,
       synthetic_oblique: 0.0,
       emphasis: None,
@@ -4560,10 +4602,11 @@ fn collect_underline_exclusions(
 
   let mut pen_x = line_start;
   for run in runs {
-    let face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
+    let mut face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
       Ok(f) => f,
       Err(_) => continue,
     };
+    apply_rustybuzz_variations(&mut face, &run.variations);
     let units_per_em = face.units_per_em() as f32;
     if units_per_em == 0.0 {
       continue;
@@ -4611,10 +4654,11 @@ fn collect_underline_exclusions_vertical(
   let mut pen_inline = inline_start;
 
   for run in runs {
-    let face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
+    let mut face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
       Ok(f) => f,
       Err(_) => continue,
     };
+    apply_rustybuzz_variations(&mut face, &run.variations);
     let units_per_em = face.units_per_em() as f32;
     if units_per_em == 0.0 {
       continue;

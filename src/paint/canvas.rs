@@ -54,8 +54,10 @@ use crate::paint::clip_path::ResolvedClipPath;
 use crate::paint::text_rasterize::{GlyphCacheStats, TextRasterizer, TextRenderState};
 use crate::paint::text_shadow::PathBounds;
 use crate::style::color::Rgba;
+use crate::text::apply_variations_to_face;
 use crate::text::font_db::LoadedFont;
 use crate::text::pipeline::GlyphPosition;
+use crate::text::variations::FontVariation;
 use tiny_skia::BlendMode as SkiaBlendMode;
 use tiny_skia::FillRule;
 use tiny_skia::IntSize;
@@ -942,6 +944,7 @@ impl Canvas {
   ///   Rgba::BLACK,
   ///   run.synthetic_bold,
   ///   run.synthetic_oblique,
+  ///   &[],
   /// );
   /// ```
   pub fn draw_text(
@@ -953,17 +956,26 @@ impl Canvas {
     color: Rgba,
     synthetic_bold: f32,
     synthetic_oblique: f32,
+    variations: &[FontVariation],
   ) {
     if glyphs.is_empty() || (color.a == 0.0 && self.current_state.opacity == 0.0) {
       return;
     }
 
+<<<<<<< HEAD
     let state = TextRenderState {
       transform: self.current_state.transform,
       clip_mask: self.current_state.clip_mask.as_ref(),
       opacity: self.current_state.opacity,
       blend_mode: self.current_state.blend_mode,
+=======
+    // Parse the font for glyph outlines
+    let mut face = match ttf_parser::Face::parse(&font.data, font.index) {
+      Ok(f) => f,
+      Err(_) => return,
+>>>>>>> 944f6f1 (feat: apply font variations during paint)
     };
+    apply_variations_to_face(&mut face, variations);
 
     let _ = self.text_rasterizer.render_glyphs_with_state(
       glyphs,

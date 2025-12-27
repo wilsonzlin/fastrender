@@ -62,6 +62,7 @@ use crate::style::types::TextEmphasisStyle;
 use crate::style::types::TransformStyle;
 use crate::text::font_db::FontStretch;
 use crate::text::font_db::FontStyle;
+use crate::text::variations::FontVariation;
 use std::fmt;
 use std::sync::Arc;
 use tiny_skia::FilterQuality;
@@ -591,6 +592,9 @@ pub struct TextItem {
   /// Font identifier (for looking up font data)
   pub font_id: Option<FontId>,
 
+  /// Variation coordinates applied during shaping.
+  pub variations: Vec<FontVariation>,
+
   /// Synthetic bold stroke width in pixels (0 = none).
   pub synthetic_bold: f32,
 
@@ -636,6 +640,7 @@ pub struct EmphasisText {
   pub width: f32,
   pub height: f32,
   pub baseline_offset: f32,
+  pub variations: Vec<FontVariation>,
 }
 
 /// Resolved emphasis data for a text run.
@@ -771,6 +776,9 @@ pub struct ListMarkerItem {
 
   /// Resolved font id for glyph lookup
   pub font_id: Option<FontId>,
+
+  /// Variation coordinates applied during shaping.
+  pub variations: Vec<FontVariation>,
 
   /// Synthetic bold stroke width in CSS px (0 = none)
   pub synthetic_bold: f32,
