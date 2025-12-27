@@ -1736,6 +1736,20 @@ impl<'a> ElementRef<'a> {
     self.is_required()
   }
 
+  /// Expose whether the control is read-only for accessibility mapping.
+  pub(crate) fn accessibility_readonly(&self) -> bool {
+    if let Some(tag) = self.node.tag_name() {
+      if tag.eq_ignore_ascii_case("textarea") {
+        return self.node.get_attribute_ref("readonly").is_some();
+      }
+      if tag.eq_ignore_ascii_case("input") && self.is_text_editable_input() {
+        return self.node.get_attribute_ref("readonly").is_some();
+      }
+    }
+
+    false
+  }
+
   /// Expose whether the control supports constraint validation.
   pub(crate) fn accessibility_supports_validation(&self) -> bool {
     self.supports_validation()

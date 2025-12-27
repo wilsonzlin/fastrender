@@ -2,7 +2,7 @@
   "present": {
     "modal": {
       "role": "dialog",
-      "name": null,
+      "name": "Confirm",
       "description": null,
       "value": null,
       "level": null,
@@ -12,7 +12,9 @@
         "disabled": false,
         "required": false,
         "invalid": false,
-        "visited": false
+        "visited": false,
+        "readonly": false,
+        "modal": true
       }
     },
     "modal-btn": {
@@ -27,7 +29,8 @@
         "disabled": false,
         "required": false,
         "invalid": false,
-        "visited": false
+        "visited": false,
+        "readonly": false
       }
     }
   },

@@ -276,6 +276,7 @@ fn accessibility_details_expanded_state() {
           "required": false,
           "invalid": false,
           "visited": false,
+          "readonly": false,
           "expanded": true
         }
       },
@@ -292,6 +293,7 @@ fn accessibility_details_expanded_state() {
           "required": false,
           "invalid": false,
           "visited": false,
+          "readonly": false,
           "expanded": false
         }
       }
@@ -602,7 +604,8 @@ fn accessibility_label_snapshot_json() {
           "disabled": false,
           "required": false,
           "invalid": false,
-          "visited": false
+          "visited": false,
+          "readonly": false
         }
       },
       "check": {
@@ -618,6 +621,7 @@ fn accessibility_label_snapshot_json() {
           "required": false,
           "invalid": false,
           "visited": false,
+          "readonly": false,
           "checked": "false"
         }
       },
@@ -633,7 +637,8 @@ fn accessibility_label_snapshot_json() {
           "disabled": false,
           "required": false,
           "invalid": false,
-          "visited": false
+          "visited": false,
+          "readonly": false
         }
       },
       "hidden-target": {
@@ -648,7 +653,8 @@ fn accessibility_label_snapshot_json() {
           "disabled": false,
           "required": false,
           "invalid": false,
-          "visited": false
+          "visited": false,
+          "readonly": false
         }
       }
     })
@@ -700,7 +706,8 @@ fn accessibility_table_snapshot_json() {
           "disabled": false,
           "required": false,
           "invalid": false,
-          "visited": false
+          "visited": false,
+          "readonly": false
         }
       },
       "caption": {
@@ -715,7 +722,8 @@ fn accessibility_table_snapshot_json() {
           "disabled": false,
           "required": false,
           "invalid": false,
-          "visited": false
+          "visited": false,
+          "readonly": false
         }
       },
       "head-row": {
@@ -730,7 +738,8 @@ fn accessibility_table_snapshot_json() {
           "disabled": false,
           "required": false,
           "invalid": false,
-          "visited": false
+          "visited": false,
+          "readonly": false
         }
       },
       "h1": {
@@ -745,7 +754,8 @@ fn accessibility_table_snapshot_json() {
           "disabled": false,
           "required": false,
           "invalid": false,
-          "visited": false
+          "visited": false,
+          "readonly": false
         }
       },
       "h2": {
@@ -760,7 +770,8 @@ fn accessibility_table_snapshot_json() {
           "disabled": false,
           "required": false,
           "invalid": false,
-          "visited": false
+          "visited": false,
+          "readonly": false
         }
       },
       "r1": {
@@ -775,7 +786,8 @@ fn accessibility_table_snapshot_json() {
           "disabled": false,
           "required": false,
           "invalid": false,
-          "visited": false
+          "visited": false,
+          "readonly": false
         }
       },
       "c1": {
@@ -790,7 +802,8 @@ fn accessibility_table_snapshot_json() {
           "disabled": false,
           "required": false,
           "invalid": false,
-          "visited": false
+          "visited": false,
+          "readonly": false
         }
       }
     })
@@ -892,7 +905,8 @@ fn accessibility_form_controls_snapshot_json() {
           "disabled": false,
           "required": false,
           "invalid": false,
-          "visited": false
+          "visited": false,
+          "readonly": false
         }
       },
       "slider": {
@@ -907,7 +921,8 @@ fn accessibility_form_controls_snapshot_json() {
           "disabled": false,
           "required": false,
           "invalid": false,
-          "visited": false
+          "visited": false,
+          "readonly": false
         }
       },
       "progress": {
@@ -922,7 +937,8 @@ fn accessibility_form_controls_snapshot_json() {
           "disabled": false,
           "required": false,
           "invalid": false,
-          "visited": false
+          "visited": false,
+          "readonly": false
         }
       },
       "meter": {
@@ -937,7 +953,8 @@ fn accessibility_form_controls_snapshot_json() {
           "disabled": false,
           "required": false,
           "invalid": false,
-          "visited": false
+          "visited": false,
+          "readonly": false
         }
       }
     })
@@ -979,7 +996,8 @@ fn accessibility_fieldset_legend_name() {
           "disabled": false,
           "required": false,
           "invalid": false,
-          "visited": false
+          "visited": false,
+          "readonly": false
         }
       },
       "hidden-legend": {
@@ -994,7 +1012,8 @@ fn accessibility_fieldset_legend_name() {
           "disabled": false,
           "required": false,
           "invalid": false,
-          "visited": false
+          "visited": false,
+          "readonly": false
         }
       }
     })
@@ -1045,6 +1064,7 @@ fn accessibility_fixture_snapshots() {
     "inert_and_hidden",
     "details_summary_states",
     "modal_top_layer",
+    "modal_and_readonly",
     "header_footer_landmarks",
     "form_role_gating",
     "aria_states",

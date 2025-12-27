@@ -1,66 +1,68 @@
 {
   "present": {
-    "title": {
-      "role": "heading",
-      "name": "Main Title",
+    "modal": {
+      "role": "dialog",
+      "name": "Modal dialog",
       "description": null,
       "value": null,
-      "level": 1,
-      "html_tag": "h1",
+      "level": null,
+      "html_tag": "dialog",
       "states": {
         "focusable": false,
         "disabled": false,
         "required": false,
         "invalid": false,
         "visited": false,
-        "readonly": false
+        "readonly": false,
+        "modal": true
       }
     },
-    "subtitle": {
-      "role": "heading",
-      "name": "Subtitle",
+    "aria-modal-false": {
+      "role": "dialog",
+      "name": "Non-modal dialog",
       "description": null,
       "value": null,
-      "level": 5,
-      "html_tag": "h2",
+      "level": null,
+      "html_tag": "dialog",
       "states": {
         "focusable": false,
         "disabled": false,
         "required": false,
         "invalid": false,
         "visited": false,
-        "readonly": false
+        "readonly": false,
+        "modal": false
       }
     },
-    "link": {
-      "role": "link",
-      "name": "Primary link",
+    "readonly-input": {
+      "role": "textbox",
+      "name": "Locked",
       "description": null,
-      "value": null,
+      "value": "Locked",
       "level": null,
-      "html_tag": "a",
+      "html_tag": "input",
       "states": {
         "focusable": true,
         "disabled": false,
         "required": false,
         "invalid": false,
         "visited": false,
-        "readonly": false
+        "readonly": true
       }
     },
-    "visited": {
-      "role": "link",
-      "name": "Visited link",
+    "aria-override": {
+      "role": "textbox",
+      "name": "Editable text",
       "description": null,
-      "value": null,
+      "value": "Editable text",
       "level": null,
-      "html_tag": "a",
+      "html_tag": "textarea",
       "states": {
         "focusable": true,
         "disabled": false,
         "required": false,
         "invalid": false,
-        "visited": true,
+        "visited": false,
         "readonly": false
       }
     }

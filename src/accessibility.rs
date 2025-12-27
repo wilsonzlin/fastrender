@@ -46,6 +46,7 @@ pub struct AccessibilityState {
   pub visited: bool,
   #[serde(skip_serializing_if = "is_false")]
   pub busy: bool,
+  pub readonly: bool,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub checked: Option<CheckState>,
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -56,6 +57,8 @@ pub struct AccessibilityState {
   pub expanded: Option<bool>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub current: Option<AriaCurrent>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub modal: Option<bool>,
 }
 
 impl Default for AccessibilityState {
@@ -67,11 +70,13 @@ impl Default for AccessibilityState {
       invalid: false,
       visited: false,
       busy: false,
+      readonly: false,
       checked: None,
       selected: None,
       pressed: None,
       expanded: None,
       current: None,
+      modal: None,
     }
   }
 }
@@ -406,11 +411,13 @@ fn build_nodes<'a>(
       let selected = compute_selected(node, role.as_deref(), &element_ref);
       let pressed = compute_pressed(node, role.as_deref());
       let busy = attr_truthy(&node.node, "aria-busy");
+      let modal = compute_modal(&node.node);
       let current = parse_aria_current(&node.node);
       let expanded = compute_expanded(node, role.as_deref(), ancestors);
       let visited =
         role.as_deref() == Some("link") && attr_truthy(&node.node, "data-fastr-visited");
       let focusable = compute_focusable(&node.node, role.as_deref(), disabled);
+      let readonly = compute_readonly(&node.node, role.as_deref(), &element_ref);
       let value = compute_value(node, role.as_deref(), &element_ref, ctx);
       let level = compute_level(&node.node, role.as_deref());
 
@@ -425,11 +432,13 @@ fn build_nodes<'a>(
         invalid,
         visited,
         busy,
+        readonly,
         checked,
         selected,
         pressed,
         expanded,
         current,
+        modal,
       };
 
       let should_expose = !decorative_image
@@ -1389,6 +1398,31 @@ fn compute_pressed(node: &StyledNode, role: Option<&str>) -> Option<PressedState
   }
 
   None
+}
+
+fn compute_modal(node: &DomNode) -> Option<bool> {
+  if let Some(value) = parse_bool_attr(node, "aria-modal") {
+    return Some(value);
+  }
+
+  let is_dialog = match node.tag_name() {
+    Some(tag) => tag.eq_ignore_ascii_case("dialog"),
+    None => false,
+  };
+
+  if is_dialog && attr_truthy(node, "data-fastr-modal") {
+    return Some(true);
+  }
+
+  None
+}
+
+fn compute_readonly(node: &DomNode, _role: Option<&str>, element_ref: &ElementRef) -> bool {
+  if let Some(value) = parse_bool_attr(node, "aria-readonly") {
+    return value;
+  }
+
+  element_ref.accessibility_readonly()
 }
 
 fn compute_expanded(node: &StyledNode, role: Option<&str>, ancestors: &[&DomNode]) -> Option<bool> {

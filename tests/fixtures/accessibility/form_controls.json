@@ -13,6 +13,7 @@
         "required": false,
         "invalid": false,
         "visited": false,
+        "readonly": false,
         "checked": "true"
       }
     },
@@ -28,12 +29,13 @@
         "disabled": false,
         "required": false,
         "invalid": false,
-        "visited": false
+        "visited": false,
+        "readonly": false
       }
     },
     "combo": {
       "role": "combobox",
-      "name": "B",
+      "name": "A B",
       "description": null,
       "value": "B",
       "level": null,
@@ -43,7 +45,8 @@
         "disabled": false,
         "required": false,
         "invalid": false,
-        "visited": false
+        "visited": false,
+        "readonly": false
       }
     },
     "opt-b": {
@@ -59,6 +62,7 @@
         "required": false,
         "invalid": false,
         "visited": false,
+        "readonly": false,
         "selected": true
       }
     },
@@ -75,6 +79,7 @@
         "required": false,
         "invalid": false,
         "visited": false,
+        "readonly": false,
         "pressed": "mixed"
       }
     }
