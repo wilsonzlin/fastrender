@@ -307,7 +307,7 @@ pub fn paginate_fragment_tree(
     }
 
     pages.push((page_root, page_style));
-    let base_advance = (end / total_height) * base_total_height;
+    let base_advance = ((end - start).max(0.0) / total_height) * base_total_height;
     consumed_base = (consumed_base + base_advance).min(base_total_height);
     page_index += 1;
 
@@ -380,7 +380,9 @@ fn adjust_for_atomic_ranges(start: f32, mut end: f32, ranges: &[AtomicRange]) ->
   if let Some(containing) = ranges.iter().copied().find(|range| {
     start >= range.start - EPSILON && start < range.end - EPSILON && range.end > range.start
   }) {
-    return containing.end;
+    if end < containing.end - EPSILON {
+      return containing.end;
+    }
   }
 
   if let Some(overlap) = ranges
