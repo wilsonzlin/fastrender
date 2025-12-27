@@ -71,7 +71,7 @@ impl ColorFontRenderer {
       return Some(svg);
     }
 
-    // COLR v1 (currently parsed for caching; rendering unsupported for now).
+    // COLR v1 paint graphs
     if let Some(colr) = colr_v1::render_colr_glyph(
       &face,
       font_key,
