@@ -829,7 +829,7 @@ fn accessibility_figure_figcaption_name() {
   );
   assert_eq!(
     figure1.get("role").and_then(|v| v.as_str()),
-    Some("generic")
+    Some("figure")
   );
   assert_eq!(
     figure1.get("html_tag").and_then(|v| v.as_str()),
@@ -849,7 +849,7 @@ fn accessibility_figure_figcaption_name() {
   );
   assert_eq!(
     figure3.get("role").and_then(|v| v.as_str()),
-    Some("generic")
+    Some("figure")
   );
   assert_eq!(
     figure3.get("html_tag").and_then(|v| v.as_str()),
@@ -1037,6 +1037,7 @@ fn accessibility_fixture_snapshots() {
     "form_role_gating",
     "aria_states",
     "shadow_dom_slotting",
+    "native_names",
   ];
 
   for name in fixtures {

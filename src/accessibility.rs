@@ -268,6 +268,12 @@ impl<'a> BuildContext<'a> {
       return Some(label);
     }
 
+    if let Some(native) = native_name_from_html(node, self, visited) {
+      if !native.is_empty() {
+        return Some(native);
+      }
+    }
+
     if let Some(alt) = node.node.get_attribute_ref("alt") {
       let norm = normalize_whitespace(alt);
       if !norm.is_empty() {
@@ -282,12 +288,15 @@ impl<'a> BuildContext<'a> {
       }
     }
 
-    let text = self.visible_text(node);
-    if text.is_empty() {
-      None
-    } else {
-      Some(text)
+    let (role, _) = compute_role(&node.node, &[]);
+    if allows_visible_text_name(node.node.tag_name(), role.as_deref(), true) {
+      let text = self.visible_text(node);
+      if !text.is_empty() {
+        return Some(text);
+      }
     }
+
+    None
   }
 }
 
@@ -621,6 +630,7 @@ fn compute_role(node: &DomNode, ancestors: &[&DomNode]) -> (Option<String>, bool
     "select" => Some(select_role(node)),
     "option" => Some("option".to_string()),
     "img" => Some("img".to_string()),
+    "figure" => Some("figure".to_string()),
     "ul" | "ol" => Some("list".to_string()),
     "li" => Some("listitem".to_string()),
     "table" => Some("table".to_string()),
@@ -753,6 +763,12 @@ fn compute_name_internal(
     return Some(label);
   }
 
+  if let Some(native) = native_name_from_html(node, ctx, visited) {
+    if !native.is_empty() {
+      return Some(native);
+    }
+  }
+
   if let Some(specific) = role_specific_name(node, ctx, role) {
     if !specific.is_empty() {
       return Some(specific);
@@ -766,29 +782,87 @@ fn compute_name_internal(
     }
   }
 
-  if allow_visible_text {
-    let is_fieldset = node
+  if allow_visible_text && allows_visible_text_name(node.node.tag_name(), role, false) {
+    let text = ctx.visible_text(node);
+    if !text.is_empty() {
+      return Some(text);
+    }
+  }
+
+  None
+}
+
+fn native_name_from_html<'a>(
+  node: &'a StyledNode,
+  ctx: &BuildContext<'a>,
+  visited: &mut HashSet<usize>,
+) -> Option<String> {
+  let tag = node
+    .node
+    .tag_name()
+    .map(|t| t.to_ascii_lowercase())?;
+
+  match tag.as_str() {
+    "fieldset" => first_child_with_tag(node, ctx, "legend", false)
+      .and_then(|legend| ctx.text_alternative(legend, visited)),
+    "figure" => first_child_with_tag(node, ctx, "figcaption", true)
+      .and_then(|caption| ctx.text_alternative(caption, visited)),
+    "table" => first_child_with_tag(node, ctx, "caption", true)
+      .and_then(|caption| ctx.text_alternative(caption, visited)),
+    _ => None,
+  }
+}
+
+fn first_child_with_tag<'a>(
+  node: &'a StyledNode,
+  ctx: &BuildContext<'a>,
+  tag: &str,
+  require_visible: bool,
+) -> Option<&'a StyledNode> {
+  for child in ctx.composed_children(node) {
+    if require_visible && ctx.is_hidden(child) {
+      continue;
+    }
+
+    let is_match = child
       .node
       .tag_name()
-      .map(|t| t.eq_ignore_ascii_case("fieldset"))
+      .map(|t| t.eq_ignore_ascii_case(tag))
       .unwrap_or(false);
-    if is_fieldset {
-      return None;
+    if is_match {
+      return Some(child);
     }
 
-    if matches!(role, Some("combobox") | Some("listbox")) {
-      return None;
-    }
-
-    let text = ctx.visible_text(node);
-    if text.is_empty() {
-      None
-    } else {
-      Some(text)
-    }
-  } else {
-    None
   }
+
+  None
+}
+
+fn allows_visible_text_name(tag: Option<&str>, role: Option<&str>, allow_legend: bool) -> bool {
+  let tag_blocked = tag
+    .map(|t| {
+      let lower = t.to_ascii_lowercase();
+      matches!(lower.as_str(), "fieldset" | "figure" | "table" | "dialog" | "select")
+        || (!allow_legend && lower == "legend")
+    })
+    .unwrap_or(false);
+
+  if tag_blocked {
+    return false;
+  }
+
+  if let Some(role) = role {
+    if role.eq_ignore_ascii_case("dialog")
+      || role.eq_ignore_ascii_case("table")
+      || role.eq_ignore_ascii_case("figure")
+      || role.eq_ignore_ascii_case("combobox")
+      || role.eq_ignore_ascii_case("listbox")
+    {
+      return false;
+    }
+  }
+
+  true
 }
 
 fn referenced_text_attr(

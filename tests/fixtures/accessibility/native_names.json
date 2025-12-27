@@ -1,0 +1,68 @@
+{
+  "present": {
+    "shipping": {
+      "role": "group",
+      "name": "Shipping",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "fieldset",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "figure": {
+      "role": "figure",
+      "name": "Figure caption",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "figure",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "data": {
+      "role": "table",
+      "name": "Visible caption",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "table",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "dialog": {
+      "role": "dialog",
+      "name": "Dialog title",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "dialog",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    }
+  },
+  "absent": [
+    "legend",
+    "table-caption"
+  ]
+}
