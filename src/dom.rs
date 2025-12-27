@@ -313,7 +313,7 @@ pub fn parse_html_with_options(html: &str, options: DomParseOptions) -> Result<D
       })
     })?;
 
-  let mut root = convert_handle_to_node(&dom.document);
+  let mut root = convert_handle_to_node(&dom.document).expect("DOM must have a document root node");
   attach_shadow_roots(&mut root);
 
   if matches!(
@@ -600,10 +600,8 @@ fn apply_dom_compatibility_mutations(node: &mut DomNode) {
   }
 }
 
-fn convert_handle_to_node(handle: &Handle) -> DomNode {
-  let node = handle;
-
-  let node_type = match &node.data {
+fn convert_handle_to_node(handle: &Handle) -> Option<DomNode> {
+  let node_type = match &handle.data {
     NodeData::Document => DomNodeType::Document,
     NodeData::Element { name, attrs, .. } => {
       let tag_name = name.local.to_string();
@@ -632,52 +630,42 @@ fn convert_handle_to_node(handle: &Handle) -> DomNode {
       let content = contents.borrow().to_string();
       DomNodeType::Text { content }
     }
-    _ => {
-      // Skip comments, processing instructions, doctypes
-      return DomNode {
-        node_type: DomNodeType::Document,
-        children: node
-          .children
-          .borrow()
-          .iter()
-          .map(convert_handle_to_node)
-          .collect(),
-      };
-    }
+    _ => return None,
   };
 
-  let mut children: Vec<DomNode> = if let NodeData::Element {
-    name,
-    template_contents,
-    ..
-  } = &node.data
-  {
-    if name.local.as_ref().eq_ignore_ascii_case("template") {
-      let borrowed = template_contents.borrow();
-      match &*borrowed {
-        Some(content) => content
+  let mut children: Vec<DomNode> = match &handle.data {
+    NodeData::Element {
+      name,
+      template_contents,
+      ..
+    } => {
+      if name.local.as_ref().eq_ignore_ascii_case("template") {
+        let borrowed = template_contents.borrow();
+        match &*borrowed {
+          Some(content) => content
+            .children
+            .borrow()
+            .iter()
+            .filter_map(convert_handle_to_node)
+            .collect(),
+          None => Vec::new(),
+        }
+      } else {
+        handle
           .children
           .borrow()
           .iter()
-          .map(convert_handle_to_node)
-          .collect(),
-        None => Vec::new(),
+          .filter_map(convert_handle_to_node)
+          .collect::<Vec<_>>()
       }
-    } else {
-      node
-        .children
-        .borrow()
-        .iter()
-        .map(convert_handle_to_node)
-        .collect::<Vec<_>>()
     }
-  } else {
-    node
+    NodeData::Document => handle
       .children
       .borrow()
       .iter()
-      .map(convert_handle_to_node)
-      .collect::<Vec<_>>()
+      .filter_map(convert_handle_to_node)
+      .collect(),
+    _ => Vec::new(),
   };
 
   // HTML <wbr> elements represent optional break opportunities. Synthesize a zero-width break
@@ -694,10 +682,10 @@ fn convert_handle_to_node(handle: &Handle) -> DomNode {
     }
   }
 
-  DomNode {
+  Some(DomNode {
     node_type,
     children,
-  }
+  })
 }
 
 impl DomNode {
@@ -2914,10 +2902,7 @@ mod tests {
     let mut parser = Parser::new(&mut input);
     let selector_list =
       SelectorList::parse(&PseudoClassParser, &mut parser, ParseRelative::No).expect("parse");
-    let selector = selector_list
-      .slice()
-      .first()
-      .expect("expected a selector");
+    let selector = selector_list.slice().first().expect("expected a selector");
 
     let mut caches = SelectorCaches::default();
     let mut context = MatchingContext::new(
