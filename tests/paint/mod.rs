@@ -25,6 +25,7 @@ mod rasterize_test;
 mod stacking_test;
 mod svg_filter_color_interpolation;
 mod svg_filter_display_none_defs_test;
+mod svg_filter_layer_bounds;
 mod svg_filter_offset_test;
 mod svg_filter_painter_test;
 mod svg_filter_test;

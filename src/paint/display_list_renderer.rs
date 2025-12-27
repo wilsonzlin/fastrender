@@ -1364,14 +1364,17 @@ impl DisplayListRenderer {
 
   fn stacking_layer_bounds(
     &self,
-    bounds: Rect,
+    css_bounds: Rect,
+    device_bounds: Rect,
     transform: Transform,
     filters: &[ResolvedFilter],
     backdrop_filters: &[ResolvedFilter],
   ) -> Option<Rect> {
-    let mut layer_bounds = transform_rect(bounds, &transform);
-    let (f_l, f_t, f_r, f_b) = filter_outset(filters, self.scale).as_tuple();
-    let (b_l, b_t, b_r, b_b) = filter_outset(backdrop_filters, self.scale).as_tuple();
+    let mut layer_bounds = transform_rect(device_bounds, &transform);
+    let (f_l, f_t, f_r, f_b) =
+      filter_outset_with_bounds(filters, self.scale, Some(css_bounds)).as_tuple();
+    let (b_l, b_t, b_r, b_b) =
+      filter_outset_with_bounds(backdrop_filters, self.scale, Some(css_bounds)).as_tuple();
     let expand_left = f_l.max(b_l);
     let expand_top = f_t.max(b_t);
     let expand_right = f_r.max(b_r);
@@ -3259,7 +3262,13 @@ impl DisplayListRenderer {
             } else {
               combined_transform
             };
-            self.stacking_layer_bounds(bounds, bounds_transform, &scaled_filters, &scaled_backdrop)
+            self.stacking_layer_bounds(
+              css_bounds,
+              bounds,
+              bounds_transform,
+              &scaled_filters,
+              &scaled_backdrop,
+            )
           })
           .flatten();
         let layer_origin = if needs_layer && !has_backdrop {
