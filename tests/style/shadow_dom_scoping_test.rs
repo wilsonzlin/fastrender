@@ -48,6 +48,7 @@ fn shadow_styles_are_scoped() {
       <template shadowroot="open">
         <style>
           .inside { color: rgb(0, 0, 255); }
+          ::slotted(.inside) { color: rgb(0, 0, 255); }
           :host { background-color: rgb(10, 20, 30); }
           :host(.foo) { opacity: 0.5; }
         </style>
@@ -60,6 +61,7 @@ fn shadow_styles_are_scoped() {
       <template shadowroot="open">
         <style>
           .inside { color: rgb(0, 0, 255); }
+          ::slotted(.inside) { color: rgb(0, 0, 255); }
           :host { background-color: rgb(10, 20, 30); }
           :host(.foo) { opacity: 0.5; }
         </style>

@@ -574,7 +574,7 @@ struct IndexedSelector<'a> {
 struct IndexedSlottedSelector<'a> {
   rule_idx: usize,
   selector: &'a Selector<crate::css::selectors::FastRenderSelectorImpl>,
-  specificity: u32,
+  prelude_specificity: u32,
   prelude: Option<Selector<crate::css::selectors::FastRenderSelectorImpl>>,
 }
 
@@ -977,11 +977,16 @@ impl<'a> RuleIndex<'a> {
         if let Some(pe) = selector.pseudo_element() {
           if matches!(pe, PseudoElement::Slotted(_)) {
             let selector_idx = index.slotted_selectors.len();
+            let prelude = parse_slotted_prelude(selector);
+            let prelude_specificity = prelude
+              .as_ref()
+              .map(|sel| sel.specificity())
+              .unwrap_or(0);
             index.slotted_selectors.push(IndexedSlottedSelector {
               rule_idx,
               selector,
-              specificity: selector.specificity(),
-              prelude: parse_slotted_prelude(selector),
+              prelude_specificity,
+              prelude,
             });
             for key in slotted_selector_keys(pe) {
               match key {
@@ -1646,6 +1651,7 @@ pub fn apply_styles_with_media_target_and_imports_cached_with_deadline(
     max_author_rules = max_author_rules.max(count);
   }
   let document_order_base = max_author_rules.saturating_add(1);
+  let shadow_order_base = document_order_base.saturating_mul(2);
 
   let ua_index = RuleIndex::new(
     ua_rules
@@ -1694,7 +1700,7 @@ pub fn apply_styles_with_media_target_and_imports_cached_with_deadline(
     for (idx, rule) in collected.iter().enumerate() {
       let cascade_rule = CascadeRule {
         origin: StyleOrigin::Author,
-        order: idx,
+        order: shadow_order_base + idx,
         rule: rule.rule,
         layer_order: rule.layer_order.clone(),
         container_conditions: rule.container_conditions.clone(),
@@ -1984,6 +1990,7 @@ pub fn apply_style_set_with_media_target_and_imports_cached_with_deadline(
     max_author_rules = max_author_rules.max(count);
   }
   let document_order_base = max_author_rules.saturating_add(1);
+  let shadow_order_base = document_order_base.saturating_mul(2);
 
   let ua_index = RuleIndex::new(
     ua_rules
@@ -2035,7 +2042,7 @@ pub fn apply_style_set_with_media_target_and_imports_cached_with_deadline(
     for (idx, rule) in collected.iter().enumerate() {
       let cascade_rule = CascadeRule {
         origin: StyleOrigin::Author,
-        order: idx,
+        order: shadow_order_base + idx,
         rule: rule.rule,
         layer_order: rule.layer_order.clone(),
         container_conditions: rule.container_conditions.clone(),
@@ -8273,21 +8280,30 @@ fn find_matching_rules<'a>(
       _ => continue,
     };
 
-    let selector_matches = if let Some(scope_root) = &scope_for_rule {
+    let mut best_arg_specificity: Option<u32> = None;
+    if let Some(scope_root) = &scope_for_rule {
       let scope_ref = ElementRef::with_ancestors(scope_root.root, &scope_root.ancestors);
       context.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
-        args
-          .iter()
-          .any(|sel| matches_selector(sel, 0, None, &element_ref, ctx))
-      })
+        for sel in args.iter() {
+          if matches_selector(sel, 0, None, &element_ref, ctx) {
+            let spec = sel.specificity();
+            best_arg_specificity = Some(best_arg_specificity.map_or(spec, |best| best.max(spec)));
+          }
+        }
+        best_arg_specificity.is_some()
+      });
     } else {
-      args
-        .iter()
-        .any(|sel| matches_selector(sel, 0, None, &element_ref, &mut context))
-    };
-    if !selector_matches {
-      continue;
+      for sel in args.iter() {
+        if matches_selector(sel, 0, None, &element_ref, &mut context) {
+          let spec = sel.specificity();
+          best_arg_specificity = Some(best_arg_specificity.map_or(spec, |best| best.max(spec)));
+        }
+      }
     }
+
+    let Some(best_arg_specificity) = best_arg_specificity else {
+      continue;
+    };
 
     if let Some(prelude) = &indexed.prelude {
       let Some(slot_info) = assigned_slot else {
@@ -8313,7 +8329,7 @@ fn find_matching_rules<'a>(
       }
     }
 
-    let spec = indexed.specificity;
+    let spec = indexed.prelude_specificity.saturating_add(best_arg_specificity);
     if let Some(pos) = scratch.match_index.get(indexed.rule_idx) {
       if spec > matches[pos].specificity {
         matches[pos].specificity = spec;
