@@ -49,46 +49,93 @@ pub use disk_cache::{DiskCacheConfig, DiskCachingFetcher};
 // Origin and resource policy
 // ============================================================================
 
-/// Simplified origin model for the current document.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DocumentOrigin {
-  Http,
-  Https,
-  File,
-  Other(String),
+/// Origin model capturing scheme, host, and port.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DocumentOrigin {
+  scheme: String,
+  host: Option<String>,
+  port: Option<u16>,
 }
 
 impl DocumentOrigin {
+  fn new(scheme: String, host: Option<String>, port: Option<u16>) -> Self {
+    Self { scheme, host, port }
+  }
+
+  fn from_parsed_url(url: &Url) -> Self {
+    let scheme = url.scheme().to_ascii_lowercase();
+    let host = url.host_str().map(|h| h.to_ascii_lowercase());
+    let port = match scheme.as_str() {
+      "http" | "https" => url.port_or_known_default(),
+      _ => url.port(),
+    };
+    Self::new(scheme, host, port)
+  }
+
   /// Return the scheme string for this origin.
   pub fn scheme(&self) -> &str {
-    match self {
-      DocumentOrigin::Http => "http",
-      DocumentOrigin::Https => "https",
-      DocumentOrigin::File => "file",
-      DocumentOrigin::Other(s) => s,
+    &self.scheme
+  }
+
+  /// Host portion of the origin, if present.
+  pub fn host(&self) -> Option<&str> {
+    self.host.as_deref()
+  }
+
+  /// Port portion of the origin, if present.
+  pub fn port(&self) -> Option<u16> {
+    self.port
+  }
+
+  fn effective_port(&self) -> Option<u16> {
+    match (self.scheme.as_str(), self.port) {
+      ("http", None) => Some(80),
+      ("https", None) => Some(443),
+      _ => self.port,
     }
+  }
+
+  fn same_origin(&self, other: &DocumentOrigin) -> bool {
+    if self.scheme != other.scheme {
+      return false;
+    }
+    if self.is_http_like() {
+      return self.host == other.host && self.effective_port() == other.effective_port();
+    }
+    if self.scheme == "file" {
+      return true;
+    }
+    self.host == other.host && self.port == other.port
   }
 
   /// True for HTTPS documents.
   pub fn is_secure_http(&self) -> bool {
-    matches!(self, DocumentOrigin::Https)
+    self.scheme == "https"
   }
 
   /// True for HTTP/HTTPS documents.
   pub fn is_http_like(&self) -> bool {
-    matches!(self, DocumentOrigin::Http | DocumentOrigin::Https)
+    matches!(self.scheme.as_str(), "http" | "https")
+  }
+}
+
+impl std::fmt::Display for DocumentOrigin {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    if self.scheme == "file" {
+      return write!(f, "file://");
+    }
+    let host = self.host.as_deref().unwrap_or("<unknown>");
+    match self.effective_port() {
+      Some(port) => write!(f, "{}://{}:{}", self.scheme, host, port),
+      None => write!(f, "{}://{}", self.scheme, host),
+    }
   }
 }
 
 /// Attempt to derive a document origin from a URL string.
 pub fn origin_from_url(url: &str) -> Option<DocumentOrigin> {
   let parsed = Url::parse(url).ok()?;
-  match parsed.scheme() {
-    "http" => Some(DocumentOrigin::Http),
-    "https" => Some(DocumentOrigin::Https),
-    "file" => Some(DocumentOrigin::File),
-    other => Some(DocumentOrigin::Other(other.to_string())),
-  }
+  Some(DocumentOrigin::from_parsed_url(&parsed))
 }
 
 /// Policy controlling which subresources can be loaded for a document.
@@ -100,6 +147,10 @@ pub struct ResourceAccessPolicy {
   pub allow_file_from_http: bool,
   /// Block mixed HTTP content when the document is HTTPS.
   pub block_mixed_content: bool,
+  /// Restrict subresources to the document origin unless explicitly allowlisted.
+  pub same_origin_only: bool,
+  /// Additional origins allowed when enforcing same-origin subresource loading.
+  pub allowed_origins: Vec<DocumentOrigin>,
 }
 
 impl Default for ResourceAccessPolicy {
@@ -108,6 +159,8 @@ impl Default for ResourceAccessPolicy {
       document_origin: None,
       allow_file_from_http: false,
       block_mixed_content: false,
+      same_origin_only: false,
+      allowed_origins: Vec::new(),
     }
   }
 }
@@ -122,15 +175,47 @@ impl ResourceAccessPolicy {
 
   /// Check whether a subresource URL is allowed under this policy.
   pub fn allows(&self, target_url: &str) -> std::result::Result<(), PolicyError> {
+    self.allows_with_final(target_url, None)
+  }
+
+  /// Check whether a subresource URL is allowed, considering any final URL after redirects.
+  pub fn allows_with_final(
+    &self,
+    target_url: &str,
+    final_url: Option<&str>,
+  ) -> std::result::Result<(), PolicyError> {
     let Some(origin) = &self.document_origin else {
       return Ok(());
     };
 
-    // Parse the target URL scheme; if unparseable, allow to avoid over-blocking.
-    let scheme = match Url::parse(target_url) {
-      Ok(parsed) => parsed.scheme().to_ascii_lowercase(),
-      Err(_) => return Ok(()),
+    let effective_url = final_url.unwrap_or(target_url);
+    let parsed = match Url::parse(effective_url) {
+      Ok(parsed) => parsed,
+      Err(_) => {
+        if self.same_origin_only
+          && (effective_url.starts_with("http://") || effective_url.starts_with("https://"))
+        {
+          return Err(PolicyError {
+            reason: format!("Blocked subresource with invalid or missing host: {effective_url}"),
+          });
+        }
+        return Ok(());
+      }
     };
+
+    let target_origin = DocumentOrigin::from_parsed_url(&parsed);
+    if target_origin.is_http_like() && target_origin.host().is_none() && self.same_origin_only {
+      return Err(PolicyError {
+        reason: format!("Blocked subresource with missing host: {effective_url}"),
+      });
+    }
+
+    // Parse the target URL scheme; if unparseable, allow to avoid over-blocking.
+    let scheme = parsed.scheme().to_ascii_lowercase();
+
+    if scheme == "data" {
+      return Ok(());
+    }
 
     if origin.is_http_like() && scheme == "file" && !self.allow_file_from_http {
       return Err(PolicyError {
@@ -144,7 +229,28 @@ impl ResourceAccessPolicy {
       });
     }
 
-    Ok(())
+    if !self.same_origin_only {
+      return Ok(());
+    }
+
+    if self
+      .allowed_origins
+      .iter()
+      .any(|allowed| allowed.same_origin(&target_origin))
+    {
+      return Ok(());
+    }
+
+    if origin.same_origin(&target_origin) {
+      return Ok(());
+    }
+
+    Err(PolicyError {
+      reason: format!(
+        "Blocked cross-origin resource: document origin {} does not match {} ({})",
+        origin, target_origin, effective_url
+      ),
+    })
   }
 }
 
@@ -1068,8 +1174,7 @@ impl HttpFetcher {
       }
       return Err(policy_error(format!(
         "response too large ({} > {} bytes)",
-        len,
-        limit
+        len, limit
       )));
     }
     self.policy.reserve_budget(len)?;

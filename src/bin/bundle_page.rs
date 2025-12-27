@@ -73,6 +73,14 @@ struct FetchArgs {
   /// Expand render target to the full document height
   #[arg(long, action = ArgAction::SetTrue)]
   full_page: bool,
+
+  /// Restrict subresource loads to the document origin unless allowlisted.
+  #[arg(long)]
+  same_origin_subresources: bool,
+
+  /// Allow additional origins when blocking cross-origin subresources (repeatable).
+  #[arg(long, value_name = "ORIGIN")]
+  allow_subresource_origin: Vec<String>,
 }
 
 #[derive(Args, Debug)]
@@ -107,6 +115,14 @@ struct RenderArgs {
   /// Disable full-page rendering even if the bundle captured it
   #[arg(long, action = ArgAction::SetTrue)]
   no_full_page: bool,
+
+  /// Restrict subresource loads to the document origin unless allowlisted.
+  #[arg(long)]
+  same_origin_subresources: bool,
+
+  /// Allow additional origins when blocking cross-origin subresources (repeatable).
+  #[arg(long, value_name = "ORIGIN")]
+  allow_subresource_origin: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -208,6 +224,8 @@ fn fetch_bundle(args: FetchArgs) -> Result<()> {
     scroll_x: args.scroll_x,
     scroll_y: args.scroll_y,
     full_page: args.full_page,
+    same_origin_subresources: args.same_origin_subresources,
+    allowed_subresource_origins: args.allow_subresource_origin.clone(),
   };
   apply_full_page_env(render.full_page);
 
@@ -231,6 +249,8 @@ fn fetch_bundle(args: FetchArgs) -> Result<()> {
     base_url: None,
     allow_file_from_http: false,
     block_mixed_content: false,
+    same_origin_subresources: render.same_origin_subresources,
+    allowed_subresource_origins: render.allowed_subresource_origins.clone(),
     trace_output: None,
   });
   let fetcher: Arc<dyn ResourceFetcher> = Arc::new(recording.clone());
@@ -281,6 +301,12 @@ fn render_bundle(args: RenderArgs) -> Result<()> {
   } else if args.no_full_page {
     render.full_page = false;
   }
+  if args.same_origin_subresources {
+    render.same_origin_subresources = true;
+  }
+  if !args.allow_subresource_origin.is_empty() {
+    render.allowed_subresource_origins = args.allow_subresource_origin.clone();
+  }
   apply_full_page_env(render.full_page);
 
   let RenderConfigBundle { config, options } = build_render_configs(&RenderSurface {
@@ -295,6 +321,8 @@ fn render_bundle(args: RenderArgs) -> Result<()> {
     base_url: None,
     allow_file_from_http: false,
     block_mixed_content: false,
+    same_origin_subresources: render.same_origin_subresources,
+    allowed_subresource_origins: render.allowed_subresource_origins.clone(),
     trace_output: None,
   });
 

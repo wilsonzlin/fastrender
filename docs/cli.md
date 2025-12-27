@@ -36,7 +36,7 @@ FastRender ships a few small binaries/examples intended for internal debugging a
 - Purpose: fetch one URL (or read one `file://` target) and render to a PNG.
 - Entry: `src/bin/fetch_and_render.rs`
 - Run: `cargo run --release --bin fetch_and_render -- --help`
-- Security defaults mirror the library: `file://` subresources are blocked for HTTP(S) documents. Use `--allow-file-from-http` to override during local testing and `--block-mixed-content` to forbid HTTP under HTTPS.
+- Security defaults mirror the library: `file://` subresources are blocked for HTTP(S) documents. Use `--allow-file-from-http` to override during local testing, `--block-mixed-content` to forbid HTTP under HTTPS, and `--same-origin-subresources` (plus optional `--allow-subresource-origin`) to block cross-origin CSS/images/fonts when rendering untrusted pages.
 
 ## `bundle_page`
 
@@ -45,6 +45,7 @@ FastRender ships a few small binaries/examples intended for internal debugging a
 - Run:
   - Fetch: `cargo run --release --bin bundle_page -- fetch <url> --out <bundle_dir|.tar>`
   - Render: `cargo run --release --bin bundle_page -- render <bundle> --out <png>`
+- Security: `--same-origin-subresources` (plus optional `--allow-subresource-origin`) applies both when capturing and replaying bundles to keep cross-origin assets out of offline artifacts.
 
 ## `inspect_frag`
 

@@ -389,6 +389,12 @@ pub struct FastRenderConfig {
   /// Block mixed HTTP subresources when the document is HTTPS.
   pub block_mixed_content: bool,
 
+  /// Block cross-origin subresources unless explicitly allowlisted.
+  pub same_origin_subresources: bool,
+
+  /// Additional origins allowed when same-origin subresource blocking is enabled.
+  pub allowed_subresource_origins: Vec<DocumentOrigin>,
+
   /// Compatibility profile controlling opt-in site-specific behaviors.
   pub compat_profile: CompatProfile,
 
@@ -424,6 +430,8 @@ impl Default for FastRenderConfig {
       max_iframe_depth: DEFAULT_MAX_IFRAME_DEPTH,
       allow_file_from_http: false,
       block_mixed_content: false,
+      same_origin_subresources: false,
+      allowed_subresource_origins: Vec::new(),
       compat_profile: CompatProfile::default(),
       dom_compat_mode: DomCompatibilityMode::Standard,
       apply_meta_viewport: false,
@@ -518,6 +526,18 @@ impl FastRenderBuilder {
   /// Block mixed HTTP subresources when rendering HTTPS documents.
   pub fn block_mixed_content(mut self, block: bool) -> Self {
     self.config.block_mixed_content = block;
+    self
+  }
+
+  /// Block cross-origin subresources unless explicitly allowed.
+  pub fn same_origin_subresources(mut self, enabled: bool) -> Self {
+    self.config.same_origin_subresources = enabled;
+    self
+  }
+
+  /// Allow additional origins when same-origin subresource blocking is enabled.
+  pub fn allow_subresource_origin(mut self, origin: DocumentOrigin) -> Self {
+    self.config.allowed_subresource_origins.push(origin);
     self
   }
 
@@ -815,9 +835,20 @@ impl RenderDiagnostics {
     url: impl Into<String>,
     message: impl Into<String>,
   ) {
-    self
-      .fetch_errors
-      .push(ResourceFetchError::new(kind, url, message));
+    self.record_message_with_final(kind, url, None, message);
+  }
+
+  /// Record a failed fetch with a plain message and optional final URL.
+  pub fn record_message_with_final(
+    &mut self,
+    kind: ResourceKind,
+    url: impl Into<String>,
+    final_url: Option<&str>,
+    message: impl Into<String>,
+  ) {
+    let mut entry = ResourceFetchError::new(kind, url, message);
+    entry.final_url = final_url.map(|url| url.to_string());
+    self.fetch_errors.push(entry);
   }
 
   /// Mark a document-level fetch failure.
@@ -842,6 +873,19 @@ impl SharedRenderDiagnostics {
   pub fn record(&self, kind: ResourceKind, url: impl Into<String>, message: impl Into<String>) {
     if let Ok(mut guard) = self.inner.lock() {
       guard.record_message(kind, url, message);
+    }
+  }
+
+  /// Record a failed fetch with an optional final URL.
+  pub fn record_message_with_final(
+    &self,
+    kind: ResourceKind,
+    url: impl Into<String>,
+    final_url: Option<&str>,
+    message: impl Into<String>,
+  ) {
+    if let Ok(mut guard) = self.inner.lock() {
+      guard.record_message_with_final(kind, url, final_url, message);
     }
   }
 
@@ -957,10 +1001,23 @@ impl ResourceContext {
     kind: ResourceKind,
     url: &str,
   ) -> std::result::Result<(), PolicyError> {
-    match self.policy.allows(url) {
+    self.check_allowed_with_final(kind, url, None)
+  }
+
+  /// Evaluate whether a URL is allowed by policy, considering a final URL when known.
+  pub fn check_allowed_with_final(
+    &self,
+    kind: ResourceKind,
+    url: &str,
+    final_url: Option<&str>,
+  ) -> std::result::Result<(), PolicyError> {
+    match self.policy.allows_with_final(url, final_url) {
       Ok(()) => Ok(()),
       Err(err) => {
-        self.record(kind, url, err.reason.clone());
+        self
+          .diagnostics
+          .as_ref()
+          .map(|diag| diag.record_message_with_final(kind, url, final_url, err.reason.clone()));
         Err(err)
       }
     }
@@ -1596,6 +1653,18 @@ impl FastRenderConfig {
   /// Block mixed HTTP subresources when rendering HTTPS documents.
   pub fn with_block_mixed_content(mut self, block: bool) -> Self {
     self.block_mixed_content = block;
+    self
+  }
+
+  /// Block cross-origin subresources unless explicitly allowlisted.
+  pub fn with_same_origin_subresources(mut self, enabled: bool) -> Self {
+    self.same_origin_subresources = enabled;
+    self
+  }
+
+  /// Allow additional origins when enforcing same-origin subresource loading.
+  pub fn with_allowed_subresource_origins(mut self, origins: Vec<DocumentOrigin>) -> Self {
+    self.allowed_subresource_origins = origins;
     self
   }
 
@@ -2404,6 +2473,8 @@ impl FastRender {
           .and_then(|url| origin_from_url(url)),
         allow_file_from_http: config.allow_file_from_http,
         block_mixed_content: config.block_mixed_content,
+        same_origin_only: config.same_origin_subresources,
+        allowed_origins: config.allowed_subresource_origins.clone(),
       },
       resource_context: None,
       max_iframe_depth: config.max_iframe_depth,
@@ -4031,100 +4102,113 @@ impl FastRender {
       self.resource_context.clone(),
     );
 
-    let collect_from_sources =
-      |sources: &[StylesheetSource], cache: &mut MediaQueryCache| -> StyleSheet {
-        let mut combined_rules = Vec::new();
+    let collect_from_sources = |sources: &[StylesheetSource],
+                                cache: &mut MediaQueryCache|
+     -> StyleSheet {
+      let mut combined_rules = Vec::new();
 
-        for source in sources {
-          match source {
-            StylesheetSource::Inline(inline) => {
-              if inline.disabled || !Self::stylesheet_type_is_css(inline.type_attr.as_deref()) {
-                continue;
-              }
-              if !Self::media_attr_allows(inline.media.as_deref(), media_ctx, cache) {
-                continue;
-              }
-              if inline.css.trim().is_empty() {
-                continue;
-              }
-
-              if let Ok(sheet) = parse_stylesheet(&inline.css) {
-                let resolved = sheet.resolve_imports_with_cache(
-                  &inline_loader,
-                  self.base_url.as_deref(),
-                  media_ctx,
-                  Some(cache),
-                );
-                combined_rules.extend(resolved.rules);
-              }
+      for source in sources {
+        match source {
+          StylesheetSource::Inline(inline) => {
+            if inline.disabled || !Self::stylesheet_type_is_css(inline.type_attr.as_deref()) {
+              continue;
             }
-            StylesheetSource::External(link) => {
-              if link.disabled
-                || !rel_list_contains_stylesheet(&link.rel)
-                || !Self::stylesheet_type_is_css(link.type_attr.as_deref())
+            if !Self::media_attr_allows(inline.media.as_deref(), media_ctx, cache) {
+              continue;
+            }
+            if inline.css.trim().is_empty() {
+              continue;
+            }
+
+            if let Ok(sheet) = parse_stylesheet(&inline.css) {
+              let resolved = sheet.resolve_imports_with_cache(
+                &inline_loader,
+                self.base_url.as_deref(),
+                media_ctx,
+                Some(cache),
+              );
+              combined_rules.extend(resolved.rules);
+            }
+          }
+          StylesheetSource::External(link) => {
+            if link.disabled
+              || !rel_list_contains_stylesheet(&link.rel)
+              || !Self::stylesheet_type_is_css(link.type_attr.as_deref())
+            {
+              continue;
+            }
+            if !Self::media_attr_allows(link.media.as_deref(), media_ctx, cache) {
+              continue;
+            }
+            if link.href.trim().is_empty() {
+              continue;
+            }
+
+            let Some(stylesheet_url) = resolve_href_with_base(self.base_url.as_deref(), &link.href)
+            else {
+              continue;
+            };
+
+            if let Some(ctx) = resource_context {
+              if ctx
+                .check_allowed(ResourceKind::Stylesheet, &stylesheet_url)
+                .is_err()
               {
                 continue;
               }
-              if !Self::media_attr_allows(link.media.as_deref(), media_ctx, cache) {
-                continue;
-              }
-              if link.href.trim().is_empty() {
-                continue;
-              }
+            }
 
-              let Some(stylesheet_url) = resolve_href_with_base(self.base_url.as_deref(), &link.href)
-              else {
-                continue;
-              };
-
-              if let Some(ctx) = resource_context {
-                if ctx
-                  .check_allowed(ResourceKind::Stylesheet, &stylesheet_url)
-                  .is_err()
-                {
-                  continue;
-                }
-              }
-
-              match fetcher.fetch(&stylesheet_url) {
-                Ok(resource) => {
-                  let mut css_text =
-                    decode_css_bytes(&resource.bytes, resource.content_type.as_deref());
-                  css_text = absolutize_css_urls(&css_text, &stylesheet_url);
-
-                  if let Ok(sheet) = parse_stylesheet(&css_text) {
-                    let loader = CssImportFetcher::new(
-                      Some(stylesheet_url.clone()),
-                      Arc::clone(&fetcher),
-                      resource_context.cloned(),
-                    );
-                    let resolved = sheet.resolve_imports_with_cache(
-                      &loader,
-                      Some(&stylesheet_url),
-                      media_ctx,
-                      Some(cache),
-                    );
-                    combined_rules.extend(resolved.rules);
+            match fetcher.fetch(&stylesheet_url) {
+              Ok(resource) => {
+                if let Some(ctx) = resource_context {
+                  if ctx
+                    .check_allowed_with_final(
+                      ResourceKind::Stylesheet,
+                      &stylesheet_url,
+                      resource.final_url.as_deref(),
+                    )
+                    .is_err()
+                  {
+                    continue;
                   }
                 }
-                Err(err) => {
-                  // Per spec, stylesheet loads are best-effort. On failure, continue.
-                  if let Some(diag) = &self.diagnostics {
-                    if let Ok(mut guard) = diag.lock() {
-                      guard.record_error(ResourceKind::Stylesheet, &stylesheet_url, &err);
-                    }
-                  }
-                  continue;
+                let mut css_text =
+                  decode_css_bytes(&resource.bytes, resource.content_type.as_deref());
+                css_text = absolutize_css_urls(&css_text, &stylesheet_url);
+
+                if let Ok(sheet) = parse_stylesheet(&css_text) {
+                  let loader = CssImportFetcher::new(
+                    Some(stylesheet_url.clone()),
+                    Arc::clone(&fetcher),
+                    resource_context.cloned(),
+                  );
+                  let resolved = sheet.resolve_imports_with_cache(
+                    &loader,
+                    Some(&stylesheet_url),
+                    media_ctx,
+                    Some(cache),
+                  );
+                  combined_rules.extend(resolved.rules);
                 }
+              }
+              Err(err) => {
+                // Per spec, stylesheet loads are best-effort. On failure, continue.
+                if let Some(diag) = &self.diagnostics {
+                  if let Ok(mut guard) = diag.lock() {
+                    guard.record_error(ResourceKind::Stylesheet, &stylesheet_url, &err);
+                  }
+                }
+                continue;
               }
             }
           }
         }
+      }
 
-        StyleSheet {
-          rules: combined_rules,
-        }
-      };
+      StyleSheet {
+        rules: combined_rules,
+      }
+    };
 
     let document = collect_from_sources(&scoped_sources.document, media_query_cache);
     let mut shadows = HashMap::new();
@@ -4208,6 +4292,18 @@ impl FastRender {
 
           match fetcher.fetch(&stylesheet_url) {
             Ok(resource) => {
+              if let Some(ctx) = resource_context {
+                if ctx
+                  .check_allowed_with_final(
+                    ResourceKind::Stylesheet,
+                    &stylesheet_url,
+                    resource.final_url.as_deref(),
+                  )
+                  .is_err()
+                {
+                  continue;
+                }
+              }
               let mut css_text =
                 decode_css_bytes(&resource.bytes, resource.content_type.as_deref());
               css_text = absolutize_css_urls(&css_text, &stylesheet_url);
@@ -4341,7 +4437,8 @@ impl FastRender {
     .with_device_pixel_ratio(resolved_viewport.device_pixel_ratio)
     .with_env_overrides();
     let mut media_query_cache = MediaQueryCache::default();
-    let style_set = self.collect_document_style_set(&dom_with_state, &media_ctx, &mut media_query_cache);
+    let style_set =
+      self.collect_document_style_set(&dom_with_state, &media_ctx, &mut media_query_cache);
     // Style and accessibility tree construction are deeply recursive. Run them on a larger-stack
     // helper thread to avoid stack overflows on debug builds and on documents with deep nesting.
     let result = std::thread::scope(|scope| {
@@ -4661,7 +4758,9 @@ impl FastRender {
     let mut first_page_style = None;
     let mut page_base_style: Option<Arc<ComputedStyle>> = None;
     if !page_rules.is_empty() {
-      fn find_body_node(node: &crate::style::cascade::StyledNode) -> Option<&crate::style::cascade::StyledNode> {
+      fn find_body_node(
+        node: &crate::style::cascade::StyledNode,
+      ) -> Option<&crate::style::cascade::StyledNode> {
         if let crate::dom::DomNodeType::Element { tag_name, .. } = &node.node.node_type {
           if tag_name.eq_ignore_ascii_case("body") {
             return Some(node);
@@ -4676,7 +4775,9 @@ impl FastRender {
       }
 
       let body_node = find_body_node(&styled_tree);
-      let base_style = body_node.map(|node| &node.styles).unwrap_or(&styled_tree.styles);
+      let base_style = body_node
+        .map(|node| &node.styles)
+        .unwrap_or(&styled_tree.styles);
       page_name_hint = body_node
         .and_then(|node| {
           if node.styles.page.is_some() {
@@ -4685,7 +4786,12 @@ impl FastRender {
           node
             .children
             .iter()
-            .find(|child| matches!(child.node.node_type, crate::dom::DomNodeType::Element { .. }))
+            .find(|child| {
+              matches!(
+                child.node.node_type,
+                crate::dom::DomNodeType::Element { .. }
+              )
+            })
             .and_then(|child| child.styles.page.clone())
         })
         .or_else(|| styled_tree.styles.page.clone());
@@ -5672,13 +5778,27 @@ impl FastRender {
         rec.record_fetch(ResourceKind::Stylesheet);
       }
       if let Some(ctx) = resource_context {
-        if let Err(err) = ctx.policy.allows(&css_url) {
-          diagnostics.record_message(ResourceKind::Stylesheet, &css_url, err.reason);
+        if ctx
+          .check_allowed(ResourceKind::Stylesheet, &css_url)
+          .is_err()
+        {
           continue;
         }
       }
       match fetcher.fetch(&css_url) {
         Ok(res) => {
+          if let Some(ctx) = resource_context {
+            if ctx
+              .check_allowed_with_final(
+                ResourceKind::Stylesheet,
+                &css_url,
+                res.final_url.as_deref(),
+              )
+              .is_err()
+            {
+              continue;
+            }
+          }
           let css_text = decode_css_bytes(&res.bytes, res.content_type.as_deref());
           let rewritten = absolutize_css_urls(&css_text, &css_url);
           let mut import_diags: Vec<(String, String)> = Vec::new();
@@ -5688,8 +5808,7 @@ impl FastRender {
                 rec.record_fetch(ResourceKind::Stylesheet);
               }
               if let Some(ctx) = resource_context {
-                if let Err(err) = ctx.policy.allows(u) {
-                  diagnostics.record_message(ResourceKind::Stylesheet, u, &err.reason);
+                if let Err(err) = ctx.check_allowed(ResourceKind::Stylesheet, u) {
                   return Err(Error::Resource(ResourceError::new(
                     u.to_string(),
                     err.reason,
@@ -5697,7 +5816,21 @@ impl FastRender {
                 }
               }
               match fetcher.fetch(u) {
-                Ok(res) => Ok(decode_css_bytes(&res.bytes, res.content_type.as_deref())),
+                Ok(res) => {
+                  if let Some(ctx) = resource_context {
+                    if let Err(err) = ctx.check_allowed_with_final(
+                      ResourceKind::Stylesheet,
+                      u,
+                      res.final_url.as_deref(),
+                    ) {
+                      return Err(Error::Resource(ResourceError::new(
+                        u.to_string(),
+                        err.reason,
+                      )));
+                    }
+                  }
+                  Ok(decode_css_bytes(&res.bytes, res.content_type.as_deref()))
+                }
                 Err(err) => {
                   diagnostics.record_error(ResourceKind::Stylesheet, u, &err);
                   Err(err)
@@ -6398,6 +6531,19 @@ impl CssImportLoader for CssImportFetcher {
         return Err(err);
       }
     };
+
+    if let Some(ctx) = &self.resource_context {
+      if let Err(err) = ctx.check_allowed_with_final(
+        ResourceKind::Stylesheet,
+        &resolved,
+        resource.final_url.as_deref(),
+      ) {
+        return Err(Error::Io(io::Error::new(
+          io::ErrorKind::PermissionDenied,
+          err.reason,
+        )));
+      }
+    }
 
     // Decode CSS bytes with charset handling
     let decoded = decode_css_bytes(&resource.bytes, resource.content_type.as_deref());

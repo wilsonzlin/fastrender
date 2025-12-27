@@ -7,6 +7,7 @@
 mod common;
 
 use clap::{Parser, ValueEnum};
+use common::args::ResourceAccessArgs;
 use common::render_pipeline::{
   build_render_configs, build_renderer_with_fetcher, follow_client_redirects,
   format_error_with_chain, log_diagnostics, read_cached_document, render_document_with_artifacts,
@@ -140,13 +141,8 @@ struct Args {
   #[arg(long)]
   css_limit: Option<usize>,
 
-  /// Allow HTTP(S) documents to load file:// subresources
-  #[arg(long)]
-  allow_file_from_http: bool,
-
-  /// Block mixed HTTP subresources when rendering HTTPS documents
-  #[arg(long)]
-  block_mixed_content: bool,
+  #[command(flatten)]
+  resource_access: ResourceAccessArgs,
 
   /// Enable per-stage timing logs
   #[arg(long)]
@@ -385,8 +381,10 @@ fn main() {
     allow_partial: false,
     apply_meta_viewport: true,
     base_url: None,
-    allow_file_from_http: args.allow_file_from_http,
-    block_mixed_content: args.block_mixed_content,
+    allow_file_from_http: args.resource_access.allow_file_from_http,
+    block_mixed_content: args.resource_access.block_mixed_content,
+    same_origin_subresources: args.resource_access.same_origin_subresources,
+    allowed_subresource_origins: args.resource_access.allow_subresource_origin.clone(),
     trace_output: None,
   });
 

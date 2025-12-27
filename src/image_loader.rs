@@ -1411,6 +1411,20 @@ impl ImageCache {
         return Err(err);
       }
     };
+    if let Some(ctx) = &self.resource_context {
+      if let Err(err) = ctx.check_allowed_with_final(
+        ResourceKind::Image,
+        resolved_url,
+        resource.final_url.as_deref(),
+      ) {
+        let blocked = Error::Image(ImageError::LoadFailed {
+          url: resolved_url.to_string(),
+          reason: err.reason,
+        });
+        self.record_image_error(resolved_url, &blocked);
+        return Err(blocked);
+      }
+    }
     let fetch_ms = fetch_start.map(|s| s.elapsed().as_secs_f64() * 1000.0);
     let decode_start = profile_enabled.then(Instant::now);
     let (img, orientation, resolution, is_vector, intrinsic_ratio, aspect_ratio_none) =
@@ -1538,6 +1552,20 @@ impl ImageCache {
         return Err(err);
       }
     };
+    if let Some(ctx) = &self.resource_context {
+      if let Err(err) = ctx.check_allowed_with_final(
+        ResourceKind::Image,
+        resolved_url,
+        resource.final_url.as_deref(),
+      ) {
+        let blocked = Error::Image(ImageError::LoadFailed {
+          url: resolved_url.to_string(),
+          reason: err.reason,
+        });
+        self.record_image_error(resolved_url, &blocked);
+        return Err(blocked);
+      }
+    }
     let fetch_ms = fetch_start.map(|s| s.elapsed().as_secs_f64() * 1000.0);
     let probe_start = profile_enabled.then(Instant::now);
     let meta = match self.probe_resource(&resource, resolved_url) {
@@ -1678,7 +1706,9 @@ impl ImageCache {
       if parsed.scheme() == "file" {
         if let Ok(path) = parsed.to_file_path() {
           if let Some(dir) = path.parent() {
-            options.resources_dir = std::fs::canonicalize(dir).ok().or_else(|| Some(dir.to_path_buf()));
+            options.resources_dir = std::fs::canonicalize(dir)
+              .ok()
+              .or_else(|| Some(dir.to_path_buf()));
           }
         }
       }
@@ -2286,7 +2316,9 @@ impl ImageCache {
       if parsed.scheme() == "file" {
         if let Ok(path) = parsed.to_file_path() {
           if let Some(dir) = path.parent() {
-            options.resources_dir = std::fs::canonicalize(dir).ok().or_else(|| Some(dir.to_path_buf()));
+            options.resources_dir = std::fs::canonicalize(dir)
+              .ok()
+              .or_else(|| Some(dir.to_path_buf()));
           }
         }
       }

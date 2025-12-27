@@ -118,6 +118,25 @@ pub struct AllowPartialArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+pub struct ResourceAccessArgs {
+  /// Allow HTTP(S) documents to load file:// subresources
+  #[arg(long)]
+  pub allow_file_from_http: bool,
+
+  /// Block mixed HTTP subresources when rendering HTTPS documents
+  #[arg(long)]
+  pub block_mixed_content: bool,
+
+  /// Restrict subresource loads to the document origin unless allowlisted.
+  #[arg(long)]
+  pub same_origin_subresources: bool,
+
+  /// Allow additional origins when blocking cross-origin subresources (repeatable).
+  #[arg(long, value_name = "ORIGIN")]
+  pub allow_subresource_origin: Vec<String>,
+}
+
+#[derive(Debug, Clone, Args)]
 pub struct TimeoutArgs {
   /// Timeout in seconds (0 = no timeout)
   #[arg(long)]

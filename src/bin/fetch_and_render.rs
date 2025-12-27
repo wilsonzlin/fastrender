@@ -12,7 +12,8 @@ mod common;
 
 use clap::Parser;
 use common::args::{
-  AllowPartialArgs, BaseUrlArgs, MediaArgs, OutputFormatArgs, TimeoutArgs, ViewportArgs,
+  AllowPartialArgs, BaseUrlArgs, MediaArgs, OutputFormatArgs, ResourceAccessArgs, TimeoutArgs,
+  ViewportArgs,
 };
 use common::media_prefs::MediaPreferences;
 use common::render_pipeline::{
@@ -96,6 +97,9 @@ struct Args {
   #[command(flatten)]
   allow_partial: AllowPartialArgs,
 
+  #[command(flatten)]
+  resource_access: ResourceAccessArgs,
+
   /// Expand render target to full content size
   #[arg(long)]
   full_page: bool,
@@ -111,14 +115,6 @@ struct Args {
   /// Maximum number of external stylesheets to fetch
   #[arg(long)]
   css_limit: Option<usize>,
-
-  /// Allow HTTP(S) documents to load file:// subresources
-  #[arg(long)]
-  allow_file_from_http: bool,
-
-  /// Block mixed HTTP subresources when rendering HTTPS documents
-  #[arg(long)]
-  block_mixed_content: bool,
 
   /// Enable per-stage timing logs
   #[arg(long)]
@@ -231,8 +227,10 @@ fn try_main(args: Args) -> Result<()> {
     allow_partial: args.allow_partial.allow_partial,
     apply_meta_viewport: true,
     base_url: args.base_url.base_url.clone(),
-    allow_file_from_http: args.allow_file_from_http,
-    block_mixed_content: args.block_mixed_content,
+    allow_file_from_http: args.resource_access.allow_file_from_http,
+    block_mixed_content: args.resource_access.block_mixed_content,
+    same_origin_subresources: args.resource_access.same_origin_subresources,
+    allowed_subresource_origins: args.resource_access.allow_subresource_origin.clone(),
     trace_output: args.trace_out.clone(),
   });
 

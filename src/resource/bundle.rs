@@ -21,6 +21,10 @@ pub struct BundleRenderConfig {
   pub scroll_x: f32,
   pub scroll_y: f32,
   pub full_page: bool,
+  #[serde(default)]
+  pub same_origin_subresources: bool,
+  #[serde(default)]
+  pub allowed_subresource_origins: Vec<String>,
 }
 
 /// Metadata describing the bundled document.

@@ -7,7 +7,9 @@ use fastrender::api::{
 use fastrender::css::loader::{infer_base_url, resolve_href};
 use fastrender::html::encoding::decode_html_bytes;
 use fastrender::html::meta_refresh::{extract_js_location_redirect, extract_meta_refresh_url};
-use fastrender::resource::{parse_cached_html_meta, FetchedResource, HttpFetcher, ResourceFetcher};
+use fastrender::resource::{
+  origin_from_url, parse_cached_html_meta, FetchedResource, HttpFetcher, ResourceFetcher,
+};
 use fastrender::style::media::MediaType;
 use fastrender::{Error, Result};
 use std::path::{Path, PathBuf};
@@ -35,6 +37,8 @@ pub struct RenderSurface {
   pub base_url: Option<String>,
   pub allow_file_from_http: bool,
   pub block_mixed_content: bool,
+  pub same_origin_subresources: bool,
+  pub allowed_subresource_origins: Vec<String>,
   pub trace_output: Option<PathBuf>,
 }
 
@@ -45,7 +49,21 @@ pub fn build_render_configs(surface: &RenderSurface) -> RenderConfigBundle {
     .with_device_pixel_ratio(surface.dpr)
     .with_meta_viewport(surface.apply_meta_viewport)
     .with_allow_file_from_http(surface.allow_file_from_http)
-    .with_block_mixed_content(surface.block_mixed_content);
+    .with_block_mixed_content(surface.block_mixed_content)
+    .with_same_origin_subresources(surface.same_origin_subresources);
+  if !surface.allowed_subresource_origins.is_empty() {
+    let mut allowed = Vec::new();
+    for origin in &surface.allowed_subresource_origins {
+      if let Some(parsed) = origin_from_url(origin) {
+        allowed.push(parsed);
+      } else {
+        eprintln!("Warning: ignoring invalid origin '{}'", origin);
+      }
+    }
+    if !allowed.is_empty() {
+      config = config.with_allowed_subresource_origins(allowed);
+    }
+  }
   if let Some(base_url) = &surface.base_url {
     config = config.with_base_url(base_url.clone());
   }
