@@ -1,0 +1,45 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>opacity flattens preserve-3d reference (green above red)</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+  }
+
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: white;
+  }
+
+  .scene {
+    position: relative;
+    width: 200px;
+    height: 200px;
+  }
+
+  .box {
+    position: absolute;
+    width: 120px;
+    height: 120px;
+    top: 40px;
+    left: 40px;
+  }
+
+  .red {
+    background: rgb(220, 0, 0);
+    z-index: 1;
+  }
+
+  .green {
+    background: rgb(0, 160, 0);
+    z-index: 2;
+  }
+</style>
+
+<div class="scene">
+  <div class="box red"></div>
+  <div class="box green"></div>
+</div>

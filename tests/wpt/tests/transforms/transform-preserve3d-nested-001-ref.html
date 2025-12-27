@@ -1,0 +1,57 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>nested preserve-3d reference (grandchild above sibling)</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+  }
+
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: white;
+  }
+
+  .scene {
+    position: relative;
+    width: 200px;
+    height: 200px;
+  }
+
+  .container {
+    position: absolute;
+    top: 35px;
+    left: 25px;
+    width: 130px;
+    height: 130px;
+  }
+
+  .grandchild {
+    position: absolute;
+    width: 110px;
+    height: 110px;
+    top: 10px;
+    left: 30px;
+    background: rgb(220, 0, 0);
+    z-index: 2;
+  }
+
+  .sibling {
+    position: absolute;
+    top: 70px;
+    left: 70px;
+    width: 120px;
+    height: 120px;
+    background: rgb(0, 150, 0);
+    z-index: 1;
+  }
+</style>
+
+<div class="scene">
+  <div class="container">
+    <div class="grandchild"></div>
+  </div>
+  <div class="sibling"></div>
+</div>

@@ -168,3 +168,30 @@ viewport = { width = 220, height = 220 }
 dpr = 1.0
 expected = "pass"
 timeout_ms = 12000
+
+[[tests]]
+id = "transforms/transform-preserve3d-z-order-001"
+path = "transforms/transform-preserve3d-z-order-001.html"
+test_type = "reftest"
+viewport = { width = 200, height = 200 }
+dpr = 1.0
+expected = "pass"
+timeout_ms = 12000
+
+[[tests]]
+id = "transforms/transform-preserve3d-nested-001"
+path = "transforms/transform-preserve3d-nested-001.html"
+test_type = "reftest"
+viewport = { width = 200, height = 200 }
+dpr = 1.0
+expected = "pass"
+timeout_ms = 12000
+
+[[tests]]
+id = "transforms/transform-preserve3d-opacity-flattens-001"
+path = "transforms/transform-preserve3d-opacity-flattens-001.html"
+test_type = "reftest"
+viewport = { width = 200, height = 200 }
+dpr = 1.0
+expected = "pass"
+timeout_ms = 12000

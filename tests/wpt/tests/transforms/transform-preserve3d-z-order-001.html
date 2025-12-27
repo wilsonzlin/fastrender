@@ -1,0 +1,47 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>preserve-3d z-order keeps nearest object on top</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+  }
+
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: white;
+  }
+
+  .scene {
+    position: relative;
+    width: 200px;
+    height: 200px;
+    transform-style: preserve-3d;
+    transform: translateZ(0);
+  }
+
+  .box {
+    position: absolute;
+    width: 120px;
+    height: 120px;
+    top: 40px;
+    left: 40px;
+  }
+
+  .red {
+    background: rgb(220, 0, 0);
+    transform: translateZ(10px);
+  }
+
+  .green {
+    background: rgb(0, 160, 0);
+    transform: translateZ(0px);
+  }
+</style>
+
+<div class="scene">
+  <div class="box red"></div>
+  <div class="box green"></div>
+</div>
