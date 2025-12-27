@@ -531,6 +531,115 @@ fn element_last_uses_last_anchor_on_page() {
 }
 
 #[test]
+fn running_element_in_flex_is_out_of_flow_and_available_to_margin_boxes() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          @page {
+            size: 200px 200px;
+            margin: 20px;
+            @top-left { content: element(header); }
+          }
+          body { margin: 0; }
+          .flex { display: flex; flex-direction: column; gap: 8px; }
+          .running { position: running(header); padding: 4px; }
+          .tall { height: 400px; }
+        </style>
+      </head>
+      <body>
+        <div class="flex">
+          <div class="running">Flex Header</div>
+          <div class="tall">Body content</div>
+        </div>
+      </body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let tree = renderer.layout_document(&dom, 200, 200).unwrap();
+  let page_roots = pages(&tree);
+
+  assert!(
+    page_roots.len() >= 2,
+    "tall content should paginate across multiple pages"
+  );
+
+  let first_page = page_roots[0];
+  let content = first_page.children.first().expect("page content");
+  assert!(
+    !collected_text_compacted(content).contains("FlexHeader"),
+    "running element should not consume space in main content"
+  );
+
+  assert!(
+    margin_boxes_contain_text(first_page, "Flex Header"),
+    "running element should be available to margin boxes"
+  );
+  let header_y = find_text_position(first_page, "Flex", (0.0, 0.0))
+    .expect("running header in margin box")
+    .1;
+  let content_y = first_page.bounds.y() + content.bounds.y();
+  assert!(
+    header_y < content_y,
+    "header should appear in the page margin area"
+  );
+}
+
+#[test]
+fn inline_running_element_used_in_margin_box() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          @page {
+            size: 200px 200px;
+            margin: 20px;
+            @top-center { content: element(header); }
+          }
+          h1 span { position: running(header); }
+        </style>
+      </head>
+      <body>
+        <h1><span>Inline Header</span></h1>
+        <div style="height: 50px"></div>
+      </body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let tree = renderer.layout_document(&dom, 400, 400).unwrap();
+  let page = pages(&tree)[0];
+
+  let mut anchor_names = Vec::new();
+  fn collect(node: &FragmentNode, out: &mut Vec<String>) {
+    if let FragmentContent::RunningAnchor { name, .. } = &node.content {
+      out.push(name.clone());
+    }
+    for child in &node.children {
+      collect(child, out);
+    }
+  }
+  collect(page, &mut anchor_names);
+  assert!(
+    anchor_names.contains(&"header".to_string()),
+    "running anchor should be captured"
+  );
+
+  assert!(
+    margin_boxes_contain_text(page, "Inline Header"),
+    "running header should appear in margin box"
+  );
+  let content = page.children.first().expect("page content");
+  assert!(
+    !collected_text_compacted(content).contains("InlineHeader"),
+    "running element should not paint in normal flow"
+  );
+}
+
+#[test]
 fn content_descendants_use_local_coordinates() {
   let html = r#"
     <html>

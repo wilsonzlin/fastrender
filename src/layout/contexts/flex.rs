@@ -283,20 +283,26 @@ impl FormattingContext for FlexFormattingContext {
     }
     // Keep block axis as provided; many flex containers legitimately size-to-content.
 
-    if let Some(cached) = layout_cache_lookup(
-      box_node,
-      FormattingContextType::Flex,
-      &constraints,
-      self.viewport_size,
-    ) {
-      return Ok(cached);
+    let has_running_children = box_node
+      .children
+      .iter()
+      .any(|child| child.style.running_position.is_some());
+    if !has_running_children {
+      if let Some(cached) = layout_cache_lookup(
+        box_node,
+        FormattingContextType::Flex,
+        &constraints,
+        self.viewport_size,
+      ) {
+        return Ok(cached);
+      }
     }
 
     // Reuse full layout fragments when the same flex container is laid out repeatedly with
     // identical available sizes (common on carousel-heavy pages). This is scoped per layout
     // run via the factory cache reset.
     let toggles = crate::debug::runtime::runtime_toggles();
-    let disable_cache = toggles.truthy("FASTR_DISABLE_FLEX_CACHE");
+    let disable_cache = toggles.truthy("FASTR_DISABLE_FLEX_CACHE") || has_running_children;
     let layout_cache_entry = if disable_cache {
       None
     } else {
@@ -335,7 +341,14 @@ impl FormattingContext for FlexFormattingContext {
     // Partition children: out-of-flow abs/fixed are handled after flex layout per CSS positioning.
     let mut in_flow_children: Vec<(usize, &BoxNode)> = Vec::new();
     let mut positioned_children = Vec::new();
+    let mut running_children: Vec<(usize, BoxNode)> = Vec::new();
     for (idx, child) in box_node.children.iter().enumerate() {
+      if child.style.running_position.is_some() {
+        // Running elements do not participate in flex layout; instead, capture a snapshot at the
+        // position the element would have occupied in flow.
+        running_children.push((idx, child.clone()));
+        continue;
+      }
       match child.style.position {
         crate::style::position::Position::Absolute | crate::style::position::Position::Fixed => {
           positioned_children.push(child.clone());
@@ -1910,13 +1923,83 @@ impl FormattingContext for FlexFormattingContext {
       }
     }
 
-    layout_cache_store(
-      box_node,
-      FormattingContextType::Flex,
-      &constraints,
-      &fragment,
-      self.viewport_size,
-    );
+    if !running_children.is_empty() {
+      let mut id_to_bounds: HashMap<usize, Rect> = HashMap::new();
+      for child in &fragment.children {
+        let Some(box_id) = (match &child.content {
+          FragmentContent::Block { box_id }
+          | FragmentContent::Inline { box_id, .. }
+          | FragmentContent::Text { box_id, .. }
+          | FragmentContent::Replaced { box_id, .. } => *box_id,
+          FragmentContent::Line { .. } | FragmentContent::RunningAnchor { .. } => None,
+        }) else {
+          continue;
+        };
+        id_to_bounds.entry(box_id).or_insert(child.bounds);
+      }
+
+      let snapshot_factory = FormattingContextFactory::with_font_context_viewport_and_cb(
+        self.font_context.clone(),
+        self.viewport_size,
+        self.nearest_positioned_cb,
+      );
+      for (order, (running_idx, running_child)) in running_children.into_iter().enumerate() {
+        let Some(name) = running_child.style.running_position.clone() else {
+          continue;
+        };
+
+        let mut anchor_x = 0.0f32;
+        let mut anchor_y = 0.0f32;
+        if let Some((_, next_child)) = box_node
+          .children
+          .iter()
+          .enumerate()
+          .filter(|(idx, child)| {
+            *idx > running_idx
+              && child.style.running_position.is_none()
+              && !matches!(child.style.position, Position::Absolute | Position::Fixed)
+          })
+          .min_by_key(|(idx, _)| *idx)
+        {
+          if let Some(bounds) = id_to_bounds.get(&next_child.id) {
+            anchor_x = bounds.x();
+            anchor_y = bounds.y();
+          }
+        }
+
+        let mut snapshot_node = running_child.clone();
+        let mut snapshot_style = snapshot_node.style.as_ref().clone();
+        snapshot_style.running_position = None;
+        snapshot_style.position = Position::Static;
+        snapshot_node.style = Arc::new(snapshot_style);
+
+        let fc_type = snapshot_node
+          .formatting_context()
+          .unwrap_or(FormattingContextType::Block);
+        let fc = snapshot_factory.create(fc_type);
+        let snapshot_constraints = LayoutConstraints::new(
+          CrateAvailableSpace::Definite(fragment.bounds.width()),
+          CrateAvailableSpace::Indefinite,
+        );
+        if let Ok(snapshot_fragment) = fc.layout(&snapshot_node, &snapshot_constraints) {
+          let anchor_bounds =
+            Rect::from_xywh(anchor_x, anchor_y + (order as f32) * 1e-4, 0.0, 0.01);
+          let mut anchor = FragmentNode::new_running_anchor(anchor_bounds, name, snapshot_fragment);
+          anchor.style = Some(running_child.style.clone());
+          fragment.children.push(anchor);
+        }
+      }
+    }
+
+    if !disable_cache {
+      layout_cache_store(
+        box_node,
+        FormattingContextType::Flex,
+        &constraints,
+        &fragment,
+        self.viewport_size,
+      );
+    }
 
     Ok(fragment)
   }
