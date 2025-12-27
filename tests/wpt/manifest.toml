@@ -134,6 +134,26 @@ expected = "pass"
 timeout_ms = 12000
 
 [[tests]]
+id = "transforms/perspective-property-001"
+path = "transforms/perspective-property-001.html"
+test_type = "reftest"
+reference = "transforms/perspective-property-001-ref.html"
+viewport = { width = 420, height = 320 }
+dpr = 1.0
+expected = "pass"
+timeout_ms = 20000
+
+[[tests]]
+id = "transforms/perspective-preserve-3d-001"
+path = "transforms/perspective-preserve-3d-001.html"
+test_type = "reftest"
+reference = "transforms/perspective-preserve-3d-001-ref.html"
+viewport = { width = 440, height = 340 }
+dpr = 1.0
+expected = "pass"
+timeout_ms = 20000
+
+[[tests]]
 id = "style/media-list-or-001"
 path = "style/media-list-or-001.html"
 test_type = "visual"

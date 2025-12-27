@@ -35,6 +35,7 @@ fn renderer_falls_back_for_degenerate_projection() {
     mix_blend_mode: BlendMode::Normal,
     is_isolated: false,
     transform: Some(near_clipping_transform()),
+    child_perspective: None,
     transform_style: TransformStyle::Flat,
     backface_visibility: BackfaceVisibility::Visible,
     filters: Vec::new(),

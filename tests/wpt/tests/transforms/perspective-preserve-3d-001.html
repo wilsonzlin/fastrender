@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>perspective property with preserve-3d</title>
+  <style>
+    body {
+      margin: 0;
+      background: #f4f6fb;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 340px;
+      font: 16px/1.4 "Helvetica Neue", Arial, sans-serif;
+      color: #16395b;
+    }
+
+    .stage {
+      width: 240px;
+      height: 180px;
+      padding: 18px;
+      border-radius: 14px;
+      background: linear-gradient(180deg, #eef3ff 0%, #ffffff 70%);
+      box-shadow: 0 10px 20px rgba(0, 40, 120, 0.14);
+      position: relative;
+      perspective: 320px;
+      perspective-origin: 50% 50%;
+      transform-style: preserve-3d;
+      overflow: hidden;
+    }
+
+    .layer {
+      position: absolute;
+      inset: 18px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      color: #ffffff;
+      box-shadow: 0 10px 18px rgba(0, 0, 0, 0.18);
+      backface-visibility: visible;
+    }
+
+    .front {
+      background: linear-gradient(135deg, #ff8a8a 0%, #e25555 100%);
+      transform: translateZ(40px) rotateY(-12deg);
+    }
+
+    .back {
+      background: linear-gradient(135deg, #6d9dff 0%, #466fcf 100%);
+      transform: translateZ(-40px) rotateY(14deg);
+    }
+  </style>
+</head>
+<body>
+  <div class="stage">
+    <div class="layer back">Behind</div>
+    <div class="layer front">Front</div>
+  </div>
+</body>
+</html>

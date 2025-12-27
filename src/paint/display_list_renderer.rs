@@ -1093,6 +1093,7 @@ pub struct DisplayListRenderer {
   blend_stack: Vec<Option<BlendMode>>,
   scale: f32,
   transform_stack: Vec<Transform3D>,
+  perspective_stack: Vec<Transform3D>,
   culled_depth: usize,
   preserve_3d_disabled: bool,
 }
@@ -1228,6 +1229,12 @@ fn collect_scene_items(
 ) -> Vec<SceneItem> {
   let local_transform = node.context.transform.unwrap_or_else(Transform3D::identity);
   let combined_transform = parent_transform.multiply(&local_transform);
+  let child_transform = node
+    .context
+    .child_perspective
+    .as_ref()
+    .map(|perspective| combined_transform.multiply(perspective))
+    .unwrap_or(combined_transform);
   let mut items = Vec::new();
   let transform_style = node.context.transform_style;
 
@@ -1266,7 +1273,7 @@ fn collect_scene_items(
       StackingSegment::Child(child) => {
         items.extend(collect_scene_items(
           child,
-          &combined_transform,
+          &child_transform,
           true,
           order_counter,
         ));
@@ -1562,6 +1569,7 @@ impl DisplayListRenderer {
       blend_stack: Vec::new(),
       scale,
       transform_stack: vec![Transform3D::identity()],
+      perspective_stack: vec![Transform3D::identity()],
       culled_depth: 0,
       preserve_3d_disabled: false,
     })
@@ -2988,25 +2996,89 @@ impl DisplayListRenderer {
   }
 
   fn warp_pixmap(&mut self, pixmap: &Pixmap, transform: &Transform3D) {
-    #[cfg(feature = "preserve3d_warp")]
-    {
-      // Placeholder for a future projective warp implementation. For now, fall back to the
-      // affine approximation so control flow is exercised behind the feature flag.
-      let _ = (pixmap, transform);
-    }
+    let mut paint = PixmapPaint::default();
+    paint.blend_mode = self.canvas.blend_mode();
 
-    #[cfg(not(feature = "preserve3d_warp"))]
-    {
-      let mut paint = PixmapPaint::default();
-      paint.blend_mode = self.canvas.blend_mode();
+    let parent_transform = self.canvas.transform();
+
+    let homography = Homography::from_transform3d_z0(transform);
+    if homography.is_affine() {
       let clip = self.canvas.clip_mask().cloned();
       let (t, _valid) = self.to_skia_transform_checked(transform);
-      let skia_transform = self.canvas.transform().post_concat(t);
+      let skia_transform = parent_transform.post_concat(t);
       self
         .canvas
         .pixmap_mut()
         .draw_pixmap(0, 0, pixmap.as_ref(), &paint, skia_transform, clip.as_ref());
+      return;
     }
+
+    let src_w = pixmap.width() as f32;
+    let src_h = pixmap.height() as f32;
+    if src_w <= 0.0 || src_h <= 0.0 {
+      return;
+    }
+    let css_w = src_w / self.scale;
+    let css_h = src_h / self.scale;
+
+    let corners = [(0.0, 0.0), (css_w, 0.0), (css_w, css_h), (0.0, css_h)];
+    let mut dst_quad_points = [Point::ZERO; 4];
+    let mut dst_quad = [(0.0f32, 0.0f32); 4];
+    let mut valid = true;
+
+    for (i, (x, y)) in corners.iter().enumerate() {
+      let (tx, ty, _tz, tw) = transform.transform_point(*x, *y, 0.0);
+      if tw.abs() < Transform3D::MIN_PROJECTIVE_W {
+        valid = false;
+        break;
+      }
+      let px = (tx / tw) * self.scale;
+      let py = (ty / tw) * self.scale;
+      let dst_x = px * parent_transform.sx + py * parent_transform.kx + parent_transform.tx;
+      let dst_y = px * parent_transform.ky + py * parent_transform.sy + parent_transform.ty;
+      dst_quad[i] = (dst_x, dst_y);
+      dst_quad_points[i] = Point::new(dst_x, dst_y);
+    }
+
+    let src_quad = [
+      Point::new(0.0, 0.0),
+      Point::new(src_w, 0.0),
+      Point::new(src_w, src_h),
+      Point::new(0.0, src_h),
+    ];
+    let warped = valid
+      .then(|| Homography::from_quad_to_quad(src_quad, dst_quad_points))
+      .flatten()
+      .and_then(|h| {
+        warp_pixmap(
+          pixmap,
+          &h,
+          &dst_quad,
+          (self.canvas.width(), self.canvas.height()),
+          self.canvas.clip_mask(),
+        )
+      });
+
+    if let Some(warped) = warped {
+      self.canvas.pixmap_mut().draw_pixmap(
+        warped.offset.0,
+        warped.offset.1,
+        warped.pixmap.as_ref(),
+        &paint,
+        Transform::identity(),
+        None,
+      );
+      return;
+    }
+
+    // Fall back to the affine approximation when a stable projective warp can't be computed.
+    let clip = self.canvas.clip_mask().cloned();
+    let (t, _valid) = self.to_skia_transform_checked(transform);
+    let skia_transform = parent_transform.post_concat(t);
+    self
+      .canvas
+      .pixmap_mut()
+      .draw_pixmap(0, 0, pixmap.as_ref(), &paint, skia_transform, clip.as_ref());
   }
 
   fn render_item(&mut self, item: &DisplayItem) -> Result<()> {
@@ -3075,24 +3147,35 @@ impl DisplayListRenderer {
         self.render_list_marker(&scaled)?;
       }
       DisplayItem::PushStackingContext(item) => {
-        let parent_transform_3d = *self
+        let parent_child_transform = *self
           .transform_stack
           .last()
           .unwrap_or(&Transform3D::identity());
+        let parent_perspective = *self
+          .perspective_stack
+          .last()
+          .unwrap_or(&Transform3D::identity());
         let local_transform = item.transform.unwrap_or(Transform3D::identity());
-        let combined_transform_3d = parent_transform_3d.multiply(&local_transform);
-
-        let projective_transform = item.transform.and_then(|t| {
-          let h = Homography::from_transform3d_z0(&t);
-          (!h.is_affine()).then_some(t)
-        });
+        let painting_transform_3d = parent_child_transform.multiply(&local_transform);
 
         if matches!(item.backface_visibility, BackfaceVisibility::Hidden)
-          && backface_is_hidden(&combined_transform_3d)
+          && backface_is_hidden(&painting_transform_3d)
         {
           self.culled_depth = 1;
           return Ok(());
         }
+
+        let warp_candidate = parent_perspective.multiply(&local_transform);
+        let projective_transform = {
+          let h = Homography::from_transform3d_z0(&warp_candidate);
+          (!h.is_affine()).then_some(warp_candidate)
+        };
+
+        let child_base_transform = if let Some(perspective) = item.child_perspective.as_ref() {
+          painting_transform_3d.multiply(perspective)
+        } else {
+          painting_transform_3d
+        };
 
         let scaled_filters = self.ds_filters(&item.filters);
         let scaled_backdrop = self.ds_filters(&item.backdrop_filters);
@@ -3111,17 +3194,33 @@ impl DisplayListRenderer {
 
         let parent_transform = self.canvas.transform();
         let mut combined_transform = parent_transform;
-        if item.transform.is_some() {
+        if projective_transform.is_none() && item.transform.is_some() {
           let (t, valid) = self.to_skia_transform_checked(&local_transform);
           if valid {
             combined_transform = combined_transform.post_concat(t);
           }
         }
 
-        self.transform_stack.push(combined_transform_3d);
+        self.transform_stack.push(child_base_transform);
+        let perspective_base = if projective_transform.is_some() {
+          Transform3D::identity()
+        } else {
+          parent_perspective
+        };
+        let next_perspective = item
+          .child_perspective
+          .as_ref()
+          .map(|p| perspective_base.multiply(p))
+          .unwrap_or(perspective_base);
+        self.perspective_stack.push(next_perspective);
 
+        let backdrop_transform = if projective_transform.is_some() {
+          parent_transform
+        } else {
+          combined_transform
+        };
         let pending_backdrop = if has_backdrop {
-          let backdrop_bounds = transform_rect(bounds, &combined_transform);
+          let backdrop_bounds = transform_rect(bounds, &backdrop_transform);
           Some(PendingBackdrop {
             bounds: backdrop_bounds,
             filters: scaled_backdrop.clone(),
@@ -3199,7 +3298,7 @@ impl DisplayListRenderer {
           pending_backdrop,
         });
 
-        if item.transform.is_some() && projective_transform.is_none() {
+        if projective_transform.is_none() && item.transform.is_some() {
           self.canvas.set_transform(combined_transform);
         }
       }
@@ -3223,6 +3322,7 @@ impl DisplayListRenderer {
           });
 
         let _ = self.transform_stack.pop();
+        let _ = self.perspective_stack.pop();
         if record.culled {
           if self.culled_depth > 0 {
             self.culled_depth -= 1;
@@ -6133,6 +6233,7 @@ mod tests {
       mix_blend_mode: BlendMode::Normal,
       is_isolated: false,
       transform: None,
+      child_perspective: None,
       transform_style: TransformStyle::Flat,
       backface_visibility: BackfaceVisibility::Visible,
       filters: vec![ResolvedFilter::DropShadow {
@@ -6217,6 +6318,7 @@ mod tests {
       mix_blend_mode: BlendMode::Normal,
       is_isolated: false,
       transform: None,
+      child_perspective: None,
       transform_style: TransformStyle::Flat,
       backface_visibility: BackfaceVisibility::Visible,
       filters: vec![
@@ -6467,6 +6569,7 @@ mod tests {
         mix_blend_mode: crate::paint::display_list::BlendMode::Normal,
         is_isolated: false,
         transform: None,
+        child_perspective: None,
         transform_style: TransformStyle::Flat,
         backface_visibility: BackfaceVisibility::Visible,
         filters: Vec::new(),
@@ -6847,6 +6950,7 @@ mod tests {
         mix_blend_mode: crate::paint::display_list::BlendMode::Normal,
         is_isolated: false,
         transform: None,
+        child_perspective: None,
         transform_style: TransformStyle::Flat,
         backface_visibility: BackfaceVisibility::Visible,
         filters: Vec::new(),
@@ -6892,6 +6996,7 @@ mod tests {
       mix_blend_mode: crate::paint::display_list::BlendMode::Normal,
       is_isolated: false,
       transform: Some(Transform3D::translate(2.0, 1.0, 0.0)),
+      child_perspective: None,
       transform_style: TransformStyle::Flat,
       backface_visibility: BackfaceVisibility::Visible,
       filters: Vec::new(),
@@ -6999,6 +7104,7 @@ mod tests {
         mix_blend_mode: crate::paint::display_list::BlendMode::Multiply,
         is_isolated: false,
         transform: None,
+        child_perspective: None,
         transform_style: TransformStyle::Flat,
         backface_visibility: BackfaceVisibility::Visible,
         filters: Vec::new(),
@@ -7042,6 +7148,7 @@ mod tests {
         mix_blend_mode: crate::paint::display_list::BlendMode::Multiply,
         is_isolated: false,
         transform: None,
+        child_perspective: None,
         transform_style: TransformStyle::Flat,
         backface_visibility: BackfaceVisibility::Visible,
         filters: Vec::new(),
@@ -7215,6 +7322,7 @@ mod tests {
       mix_blend_mode: BlendMode::Normal,
       is_isolated: true,
       transform: None,
+      child_perspective: None,
       transform_style: TransformStyle::Flat,
       backface_visibility: BackfaceVisibility::Visible,
       filters: Vec::new(),
@@ -7336,6 +7444,7 @@ mod tests {
       mix_blend_mode: BlendMode::Normal,
       is_isolated: true,
       transform: None,
+      child_perspective: None,
       transform_style: TransformStyle::Flat,
       backface_visibility: BackfaceVisibility::Visible,
       filters: Vec::new(),
@@ -7410,6 +7519,7 @@ mod tests {
       mix_blend_mode: BlendMode::Normal,
       is_isolated: true,
       transform: None,
+      child_perspective: None,
       transform_style: TransformStyle::Flat,
       backface_visibility: BackfaceVisibility::Visible,
       filters: Vec::new(),

@@ -1823,6 +1823,7 @@ fn test_stacking_context() {
     mix_blend_mode: BlendMode::Normal,
     is_isolated: false,
     transform: None,
+    child_perspective: None,
     transform_style: TransformStyle::Flat,
     backface_visibility: BackfaceVisibility::Visible,
     filters: Vec::new(),

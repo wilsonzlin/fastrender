@@ -379,8 +379,8 @@ impl DisplayListOptimizer {
           include_item = true;
         }
         DisplayItem::PushStackingContext(sc) => {
-          let pushed_transform = sc.transform.is_some();
-          if let Some(transform) = sc.transform.as_ref() {
+          let pushed_transform = sc.transform.is_some() || sc.child_perspective.is_some();
+          if pushed_transform {
             transform_stack.push(transform_state.clone());
             if !clip_stack.is_empty() {
               for clip in &mut clip_stack {
@@ -388,8 +388,13 @@ impl DisplayListOptimizer {
               }
               refresh_context_clipping(&mut context_stack, &clip_stack);
             }
-            let mapping = Self::transform_mapping(transform);
-            transform_state.current = transform_state.current.multiply(&mapping);
+            if let Some(transform) = sc.transform.as_ref() {
+              let mapping = Self::transform_mapping(transform);
+              transform_state.current = transform_state.current.multiply(&mapping);
+            }
+            if sc.child_perspective.is_some() {
+              transform_state.current = TransformMapping::Unsupported;
+            }
           }
           let filters_outset = filter_outset_with_bounds(&sc.filters, 1.0, Some(sc.bounds));
           let backdrop_outset =

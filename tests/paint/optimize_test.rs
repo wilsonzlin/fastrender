@@ -926,6 +926,7 @@ fn test_stacking_context_preserved() {
     mix_blend_mode: BlendMode::Normal,
     is_isolated: false,
     transform: None,
+    child_perspective: None,
     transform_style: TransformStyle::Flat,
     backface_visibility: BackfaceVisibility::Visible,
     filters: Vec::new(),
@@ -953,6 +954,7 @@ fn stacking_context_filters_expand_cull_bounds() {
     mix_blend_mode: BlendMode::Normal,
     is_isolated: false,
     transform: None,
+    child_perspective: None,
     transform_style: TransformStyle::Flat,
     backface_visibility: BackfaceVisibility::Visible,
     filters: vec![ResolvedFilter::DropShadow {
@@ -987,6 +989,7 @@ fn offscreen_filtered_stacking_context_is_culled() {
     mix_blend_mode: BlendMode::Normal,
     is_isolated: false,
     transform: None,
+    child_perspective: None,
     transform_style: TransformStyle::Flat,
     backface_visibility: BackfaceVisibility::Visible,
     filters: vec![ResolvedFilter::DropShadow {

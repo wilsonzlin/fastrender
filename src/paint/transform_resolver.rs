@@ -12,6 +12,12 @@ struct BackgroundRects {
   content: Rect,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ResolvedTransforms {
+  pub self_transform: Option<Transform3D>,
+  pub child_perspective: Option<Transform3D>,
+}
+
 /// Resolve the computed transform (including motion path) into a 4×4 matrix.
 ///
 /// Mirrors `DisplayListBuilder::build_transform` so painter and display list pipelines stay in
@@ -21,6 +27,14 @@ pub fn resolve_transform3d(
   bounds: Rect,
   viewport: Option<(f32, f32)>,
 ) -> Option<Transform3D> {
+  resolve_transforms(style, bounds, viewport).self_transform
+}
+
+pub fn resolve_transforms(
+  style: &ComputedStyle,
+  bounds: Rect,
+  viewport: Option<(f32, f32)>,
+) -> ResolvedTransforms {
   let reference = transform_reference_box(style, bounds, viewport);
   let percentage_width = reference.width();
   let percentage_height = reference.height();
@@ -39,7 +53,7 @@ pub fn resolve_transform3d(
 
   let mut transform_from_list: Option<Transform3D> = None;
 
-  if !style.transform.is_empty() || resolved_perspective.is_some() {
+  if !style.transform.is_empty() {
     let mut ts = Transform3D::identity();
     const EPS: f32 = 1e-6;
     for component in &style.transform {
@@ -154,34 +168,9 @@ pub fn resolve_transform3d(
     );
     let origin = Point::new(reference.x() + origin_x, reference.y() + origin_y);
 
-    let mut matrix = Transform3D::translate(origin.x, origin.y, 0.0)
+    let matrix = Transform3D::translate(origin.x, origin.y, 0.0)
       .multiply(&ts)
       .multiply(&Transform3D::translate(-origin.x, -origin.y, 0.0));
-
-    if let Some(perspective) = resolved_perspective {
-      let po_x = resolve_transform_length(
-        &style.perspective_origin.x,
-        style.font_size,
-        style.root_font_size,
-        percentage_width,
-      );
-      let po_y = resolve_transform_length(
-        &style.perspective_origin.y,
-        style.font_size,
-        style.root_font_size,
-        percentage_height,
-      );
-      let perspective_origin = Point::new(reference.x() + po_x, reference.y() + po_y);
-      let perspective_matrix =
-        Transform3D::translate(perspective_origin.x, perspective_origin.y, 0.0)
-          .multiply(&Transform3D::perspective(perspective))
-          .multiply(&Transform3D::translate(
-            -perspective_origin.x,
-            -perspective_origin.y,
-            0.0,
-          ));
-      matrix = perspective_matrix.multiply(&matrix);
-    }
 
     transform_from_list = Some(matrix);
   }
@@ -189,11 +178,39 @@ pub fn resolve_transform3d(
   let motion = crate::paint::motion_path::compute_motion_transform(style, bounds, viewport)
     .map(|t| Transform3D::from_2d(&t));
 
-  match (motion, transform_from_list) {
+  let child_perspective = resolved_perspective.map(|perspective| {
+    let po_x = resolve_transform_length(
+      &style.perspective_origin.x,
+      style.font_size,
+      style.root_font_size,
+      percentage_width,
+    );
+    let po_y = resolve_transform_length(
+      &style.perspective_origin.y,
+      style.font_size,
+      style.root_font_size,
+      percentage_height,
+    );
+    let perspective_origin = Point::new(reference.x() + po_x, reference.y() + po_y);
+    Transform3D::translate(perspective_origin.x, perspective_origin.y, 0.0)
+      .multiply(&Transform3D::perspective(perspective))
+      .multiply(&Transform3D::translate(
+        -perspective_origin.x,
+        -perspective_origin.y,
+        0.0,
+      ))
+  });
+
+  let self_transform = match (motion, transform_from_list) {
     (None, None) => None,
     (Some(motion), None) => Some(motion),
     (None, Some(matrix)) => Some(matrix),
     (Some(motion), Some(matrix)) => Some(matrix.multiply(&motion)),
+  };
+
+  ResolvedTransforms {
+    self_transform,
+    child_perspective,
   }
 }
 
@@ -432,10 +449,13 @@ mod tests {
     style.perspective = Some(Length::px(500.0));
     style.transform.push(Transform::RotateX(45.0));
 
-    let transform =
-      resolve_transform3d(&style, Rect::from_xywh(0.0, 0.0, 20.0, 20.0), None).expect("transform");
+    let transforms = resolve_transforms(&style, Rect::from_xywh(0.0, 0.0, 20.0, 20.0), None);
+    let child_perspective = transforms
+      .child_perspective
+      .expect("child perspective matrix");
+    assert!((child_perspective.m[11] + 1.0 / 500.0).abs() < 1e-6);
 
-    assert!((transform.m[11] + 1.0 / 500.0).abs() < 1e-6);
+    let transform = transforms.self_transform.expect("self transform");
     let expected = 45.0_f32.to_radians().cos();
     assert!((transform.m[5] - expected).abs() < 1e-6);
     assert!(
@@ -468,22 +488,25 @@ mod tests {
     style.transform.push(Transform::Scale(2.0, 1.0));
 
     let bounds = Rect::from_xywh(0.0, 0.0, 200.0, 100.0);
-    let without_perspective =
-      resolve_transform3d(&style, bounds, None).expect("transform without perspective");
+    let without_perspective = resolve_transforms(&style, bounds, None)
+      .self_transform
+      .expect("transform without perspective");
     let affine = without_perspective.to_2d().expect("affine");
     // Scale around center => translate by (1 - sx) * origin_x.
     assert!((affine.e + 100.0).abs() < 1e-4);
 
     let mut with_default_po = style.clone();
     with_default_po.perspective = Some(Length::px(400.0));
-    let default_po =
-      resolve_transform3d(&with_default_po, bounds, None).expect("default perspective origin");
+    let default_po = resolve_transforms(&with_default_po, bounds, None)
+      .child_perspective
+      .expect("default perspective origin");
 
     let mut shifted_po = with_default_po.clone();
     shifted_po.perspective_origin.x = Length::percent(25.0);
     shifted_po.perspective_origin.y = Length::percent(0.0);
-    let shifted =
-      resolve_transform3d(&shifted_po, bounds, None).expect("shifted perspective origin");
+    let shifted = resolve_transforms(&shifted_po, bounds, None)
+      .child_perspective
+      .expect("shifted perspective origin");
 
     assert_ne!(default_po.m, shifted.m);
   }

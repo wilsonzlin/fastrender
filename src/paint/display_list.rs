@@ -1754,6 +1754,9 @@ pub struct StackingContextItem {
   /// Optional transform applied to this stacking context
   pub transform: Option<Transform3D>,
 
+  /// Perspective that applies to child contexts only (CSS perspective property)
+  pub child_perspective: Option<Transform3D>,
+
   /// 3D rendering context preservation
   pub transform_style: TransformStyle,
 

@@ -751,8 +751,11 @@ impl DisplayListBuilder {
         crate::paint::display_list::BorderRadii::ZERO,
       ));
     let transform_bounds = root_fragment_rect.unwrap_or(context_bounds);
-    let transform =
-      root_style.and_then(|style| Self::build_transform(style, transform_bounds, self.viewport));
+    let transforms = root_style
+      .map(|style| crate::paint::transform_resolver::resolve_transforms(style, transform_bounds, self.viewport))
+      .unwrap_or_default();
+    let transform = transforms.self_transform;
+    let child_perspective = transforms.child_perspective;
     let transform_style = root_style
       .map(|style| Self::used_transform_style(style))
       .unwrap_or(TransformStyle::Flat);
@@ -813,6 +816,7 @@ impl DisplayListBuilder {
 
     let has_effects = is_isolated
       || transform.is_some()
+      || child_perspective.is_some()
       || mix_blend_mode != BlendMode::Normal
       || !filters.is_empty()
       || !backdrop_filters.is_empty()
@@ -872,6 +876,7 @@ impl DisplayListBuilder {
         mix_blend_mode,
         is_isolated,
         transform,
+        child_perspective,
         transform_style,
         backface_visibility,
         filters,
@@ -6406,8 +6411,9 @@ mod tests {
     ));
 
     let bounds = Rect::from_xywh(0.0, 0.0, 200.0, 100.0);
-    let transform =
-      DisplayListBuilder::build_transform(&style, bounds, None).expect("transform should build");
+    let transform = DisplayListBuilder::build_transform(&style, bounds, None)
+      .self_transform
+      .expect("transform should build");
     let transform = transform.to_2d().expect("2d transform");
 
     assert!((transform.e - 85.0).abs() < 1e-3);
@@ -6427,8 +6433,9 @@ mod tests {
     style.transform.push(Transform::Scale(2.0, 1.0));
 
     let bounds = Rect::from_xywh(0.0, 0.0, 200.0, 100.0);
-    let transform =
-      DisplayListBuilder::build_transform(&style, bounds, None).expect("transform should build");
+    let transform = DisplayListBuilder::build_transform(&style, bounds, None)
+      .self_transform
+      .expect("transform should build");
     let transform = transform.to_2d().expect("2d transform");
 
     assert!((transform.e + 15.0).abs() < 1e-3);
@@ -6460,8 +6467,9 @@ mod tests {
     style.offset_distance = Length::percent(100.0);
 
     let bounds = Rect::from_xywh(0.0, 0.0, 20.0, 20.0);
-    let transform =
-      DisplayListBuilder::build_transform(&style, bounds, None).expect("transform should build");
+    let transform = DisplayListBuilder::build_transform(&style, bounds, None)
+      .self_transform
+      .expect("transform should build");
     let transform = transform.to_2d().expect("2d transform");
 
     // Motion path translation composes before the transform list, so scaling affects translation.
@@ -6494,7 +6502,9 @@ mod tests {
     style.offset_distance = Length::percent(50.0);
 
     let bounds = Rect::from_xywh(0.0, 0.0, 20.0, 20.0);
-    let child = DisplayListBuilder::build_transform(&style, bounds, None).expect("transform");
+    let child = DisplayListBuilder::build_transform(&style, bounds, None)
+      .self_transform
+      .expect("transform");
     let parent = Transform3D::translate(25.0, 5.0, 0.0);
     let combined = parent.multiply(&child).to_2d().expect("2d transform");
 
@@ -6517,8 +6527,9 @@ mod tests {
     ));
 
     let bounds = Rect::from_xywh(0.0, 0.0, 200.0, 100.0);
-    let transform =
-      DisplayListBuilder::build_transform(&style, bounds, None).expect("transform should build");
+    let transform = DisplayListBuilder::build_transform(&style, bounds, None)
+      .self_transform
+      .expect("transform should build");
     let transform = transform.to_2d().expect("2d transform");
 
     // 50% of 200 = 100; 2em at 10px = 20 -> total 120.
@@ -6538,8 +6549,9 @@ mod tests {
     style.transform.push(Transform::Matrix3d(values));
 
     let bounds = Rect::from_xywh(0.0, 0.0, 50.0, 50.0);
-    let transform =
-      DisplayListBuilder::build_transform(&style, bounds, None).expect("matrix3d should build");
+    let transform = DisplayListBuilder::build_transform(&style, bounds, None)
+      .self_transform
+      .expect("matrix3d should build");
 
     assert_eq!(transform.m[12], 5.0);
     assert_eq!(transform.m[13], 6.0);
@@ -6557,14 +6569,20 @@ mod tests {
     style.perspective = Some(Length::px(500.0));
 
     let bounds = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
-    let transform =
-      DisplayListBuilder::build_transform(&style, bounds, None).expect("perspective builds");
+    let transforms = DisplayListBuilder::build_transform(&style, bounds, None);
 
     assert!(
-      transform.to_2d().is_none(),
+      transforms.self_transform.is_none(),
+      "perspective property should not affect self"
+    );
+    let perspective = transforms
+      .child_perspective
+      .expect("perspective builds child transform");
+    assert!(
+      perspective.to_2d().is_none(),
       "perspective should keep 3d components"
     );
-    assert!((transform.m[11] + 1.0 / 500.0).abs() < 1e-6);
+    assert!((perspective.m[11] + 1.0 / 500.0).abs() < 1e-6);
   }
 
   #[test]
