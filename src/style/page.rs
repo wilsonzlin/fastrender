@@ -8,6 +8,7 @@ use crate::geometry::{Point, Size};
 use crate::style::cascade::inherit_styles;
 use crate::style::display::Display;
 use crate::style::properties::{apply_declaration_with_base, resolve_pending_logical_properties};
+use crate::style::types::TextAlign;
 use crate::style::values::{Length, LengthUnit};
 use crate::style::ComputedStyle;
 
