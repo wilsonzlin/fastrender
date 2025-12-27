@@ -73,6 +73,7 @@ pub mod font_loader;
 // Text Shaping Pipeline (Wave 4)
 // ============================================================================
 
+pub mod cluster;
 pub mod emoji;
 pub mod hyphenation;
 pub mod justify;
