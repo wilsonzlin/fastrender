@@ -906,7 +906,9 @@ fn perspective_transform_matches_when_downsampled_from_hidpi() {
   let hidpi = hidpi_renderer.render(&list).expect("render 2x");
   let hidpi_down = downsample_half(hidpi);
 
-  let red_predicate = |(r, g, b, a): (u8, u8, u8, u8)| a > 0 && r > g + 10 && r > b + 10;
+  let red_predicate = |(r, g, b, a): (u8, u8, u8, u8)| {
+    a > 0 && (r as u16) > (g as u16 + 10) && (r as u16) > (b as u16 + 10)
+  };
   let bbox_base = bounding_box_for_color(&baseline, red_predicate).expect("baseline bbox");
   let bbox_down = bounding_box_for_color(&hidpi_down, red_predicate).expect("hidpi bbox");
 

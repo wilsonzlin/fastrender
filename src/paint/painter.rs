@@ -1795,6 +1795,7 @@ impl Painter {
       .filter(|s| s.mask_layers.iter().any(|layer| layer.image.is_some()));
     if opacity < 1.0
       || transform.is_some()
+      || transform_3d.is_some()
       || !matches!(blend_mode, MixBlendMode::Normal)
       || isolated
       || has_filters
@@ -2552,8 +2553,8 @@ impl Painter {
         let src_quad = [
           Point::new(0.0, 0.0),
           Point::new(layer_pixmap.width() as f32, 0.0),
-          Point::new(0.0, layer_pixmap.height() as f32),
           Point::new(layer_pixmap.width() as f32, layer_pixmap.height() as f32),
+          Point::new(0.0, layer_pixmap.height() as f32),
         ];
         let mut dest_quad_device = src_quad;
         let mut projected = true;
@@ -10451,7 +10452,9 @@ mod tests {
     let hidpi = paint_tree_scaled(&tree, 80, 60, Rgba::WHITE, 2.0).expect("paint 2x");
     let hidpi_down = downsample_half(hidpi);
 
-    let red_predicate = |(r, g, b, a): (u8, u8, u8, u8)| a > 0 && r > g + 10 && r > b + 10;
+    let red_predicate = |(r, g, b, a): (u8, u8, u8, u8)| {
+      a > 0 && (r as u16) > (g as u16 + 10) && (r as u16) > (b as u16 + 10)
+    };
     let bbox_base = bounding_box_for_color(&baseline, red_predicate).expect("baseline bbox");
     let bbox_down = bounding_box_for_color(&hidpi_down, red_predicate).expect("hidpi bbox");
 
