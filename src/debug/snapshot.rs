@@ -325,6 +325,7 @@ fn snapshot_dom_node(node: &DomNode, next: &mut usize) -> DomNodeSnapshot {
     DomNodeType::Slot {
       namespace,
       attributes,
+      ..
     } => DomNodeKindSnapshot::Slot {
       namespace: namespace.clone(),
       attributes: snapshot_attributes(attributes),

@@ -1007,6 +1007,7 @@ fn serialize_dom(node: &DomNode) -> SerializableDomNode {
     DomNodeType::Slot {
       namespace,
       attributes,
+      ..
     } => (
       "slot".to_string(),
       Some(namespace.clone()),

@@ -596,6 +596,7 @@ fn serialize_node_with_namespaces(
     crate::dom::DomNodeType::Slot {
       namespace,
       attributes,
+      ..
     } => {
       let mut attrs = attributes.clone();
       let mut namespaces: Vec<(String, String)> = inherited_xmlns.to_vec();

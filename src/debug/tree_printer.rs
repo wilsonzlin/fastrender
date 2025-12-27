@@ -737,6 +737,7 @@ impl TreeJsonExporter {
       DomNodeType::Slot {
         namespace,
         attributes,
+        ..
       } => map_from_pairs(vec![
         ("type", Value::String("slot".into())),
         ("namespace", Value::String(namespace.clone())),
@@ -768,6 +769,7 @@ impl TreeJsonExporter {
       DomNodeType::Slot {
         namespace,
         attributes,
+        ..
       } => vec![
         ("type", Value::String("slot".into())),
         ("namespace", Value::String(namespace.clone())),
