@@ -11,6 +11,7 @@ use crate::tree::box_tree::BoxType;
 use crate::tree::box_tree::MarkerContent;
 use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
+use crate::tree::fragment_tree::FragmentTree;
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -254,6 +255,31 @@ impl EnhancedTreePrinter {
     output
   }
 
+  /// Prints all roots in a fragment tree (pagination/columns)
+  pub fn print_fragment_forest(&self, tree: &FragmentTree) -> String {
+    let mut output = String::new();
+
+    let total_roots = 1 + tree.additional_fragments.len();
+    for (i, root) in std::iter::once(&tree.root)
+      .chain(tree.additional_fragments.iter())
+      .enumerate()
+    {
+      let _ = writeln!(
+        output,
+        "== root[{i}] fragmentainer_index={} bounds={} ==",
+        root.fragmentainer_index,
+        self.format_plain_bounds(&root.bounds)
+      );
+      self.print_fragment_node(root, 0, "", true, &mut output);
+
+      if i + 1 < total_roots {
+        output.push('\n');
+      }
+    }
+
+    output
+  }
+
   fn print_fragment_node(
     &self,
     fragment: &FragmentNode,
@@ -314,14 +340,16 @@ impl EnhancedTreePrinter {
   }
 
   fn format_fragment(&self, fragment: &FragmentNode) -> String {
+    let metadata = self.format_fragment_metadata(fragment);
     let type_str = match &fragment.content {
       FragmentContent::Block { .. } => "Block",
       FragmentContent::Inline { .. } => "Inline",
       FragmentContent::Text { text, .. } => {
         let truncated = truncate(text, 20);
         return format!(
-          "{} \"{}\" {}",
+          "{} {} \"{}\" {}",
           self.colorize("Text", colors::YELLOW),
+          metadata,
           self.colorize(&truncated, colors::GREEN),
           self.format_bounds(&fragment.bounds)
         );
@@ -331,8 +359,9 @@ impl EnhancedTreePrinter {
     };
 
     format!(
-      "{} {}",
+      "{} {} {}",
       self.colorize(type_str, colors::YELLOW),
+      metadata,
       self.format_bounds(&fragment.bounds)
     )
   }
@@ -347,6 +376,26 @@ impl EnhancedTreePrinter {
         bounds.height()
       ),
       colors::CYAN,
+    )
+  }
+
+  fn format_plain_bounds(&self, bounds: &Rect) -> String {
+    format!(
+      "({:.1}, {:.1}, {:.1}, {:.1})",
+      bounds.x(),
+      bounds.y(),
+      bounds.width(),
+      bounds.height()
+    )
+  }
+
+  fn format_fragment_metadata(&self, fragment: &FragmentNode) -> String {
+    self.colorize(
+      &format!(
+        "[fragment_index={}/{} fragmentainer_index={}]",
+        fragment.fragment_index, fragment.fragment_count, fragment.fragmentainer_index
+      ),
+      colors::GRAY,
     )
   }
 
@@ -1067,9 +1116,11 @@ fn map_from_pairs(entries: Vec<(&str, Value)>) -> Value {
 mod tests {
   use super::*;
   use crate::geometry::Rect;
+  use crate::geometry::Size;
   use crate::style::display::FormattingContextType;
   use crate::style::ComputedStyle;
   use crate::tree::debug::DebugInfo;
+  use crate::tree::fragment_tree::FragmentTree;
   use std::sync::Arc;
 
   fn default_style() -> Arc<ComputedStyle> {
@@ -1160,6 +1211,24 @@ mod tests {
     let output = printer.print_fragment_tree(&fragment);
     assert!(output.contains("Block"));
     assert!(output.contains("800"));
+    assert!(output.contains("fragment_index"));
+  }
+
+  #[test]
+  fn test_fragment_forest_printer_multiple_roots() {
+    let printer = EnhancedTreePrinter::with_config(PrintConfig::test());
+    let mut root0 = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 800.0, 600.0), vec![]);
+    root0.fragment_count = 2;
+    let mut root1 = FragmentNode::new_block(Rect::from_xywh(0.0, 600.0, 800.0, 600.0), vec![]);
+    root1.fragment_index = 1;
+    root1.fragment_count = 2;
+    root1.fragmentainer_index = 1;
+    let tree = FragmentTree::from_fragments(vec![root0, root1], Size::new(800.0, 1200.0));
+
+    let output = printer.print_fragment_forest(&tree);
+    assert!(output.contains("root[0]"));
+    assert!(output.contains("root[1]"));
+    assert!(output.contains("fragmentainer_index=1"));
   }
 
   #[test]
