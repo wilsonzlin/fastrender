@@ -807,12 +807,7 @@ pub struct ListMarkerItem {
 
   /// Resolved font id for glyph lookup
   pub font_id: Option<FontId>,
-
-<<<<<<< HEAD
-  /// Variation coordinates applied during shaping.
-=======
   /// Active variation coordinates for this run.
->>>>>>> 1293ba2 (Propagate font variations through display list)
   pub variations: Vec<FontVariation>,
 
   /// Synthetic bold stroke width in CSS px (0 = none)
