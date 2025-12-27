@@ -79,6 +79,7 @@ pub mod hyphenation;
 pub mod justify;
 pub mod line_break;
 pub mod pipeline;
+pub mod segmentation;
 
 pub use pipeline::itemize_text;
 pub use pipeline::BidiAnalysis;
@@ -93,3 +94,4 @@ pub use pipeline::RunRotation;
 pub use pipeline::Script;
 pub use pipeline::ShapedRun;
 pub use pipeline::ShapingPipeline;
+pub use segmentation::segment_grapheme_clusters;

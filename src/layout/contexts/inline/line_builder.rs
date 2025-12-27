@@ -348,8 +348,42 @@ impl TextItem {
   }
 
   /// Byte offsets for each grapheme cluster boundary within the item.
-  pub fn cluster_byte_offsets(&self) -> impl Iterator<Item = usize> + '_ {
-    self.cluster_advances.iter().map(|c| c.byte_offset)
+  pub fn cluster_byte_offsets(&self) -> Vec<usize> {
+    if self.text.is_empty() {
+      return Vec::new();
+    }
+
+    let mut offsets: Vec<usize> = self
+      .runs
+      .iter()
+      .flat_map(|run| {
+        let mut run_offsets = Vec::new();
+
+        if run.glyphs.is_empty() {
+          run_offsets.push(Self::previous_char_boundary_in_text(&self.text, run.start));
+          run_offsets.push(Self::previous_char_boundary_in_text(&self.text, run.end));
+          return run_offsets;
+        }
+
+        for glyph in &run.glyphs {
+          let raw_offset = run.start.saturating_add(glyph.cluster as usize);
+          run_offsets.push(Self::previous_char_boundary_in_text(&self.text, raw_offset));
+        }
+        run_offsets.push(Self::previous_char_boundary_in_text(&self.text, run.end));
+        run_offsets
+      })
+      .collect();
+
+    if offsets.is_empty() {
+      offsets = crate::text::segmentation::segment_grapheme_clusters(&self.text);
+    } else {
+      offsets.push(0);
+      offsets.push(self.text.len());
+      offsets.sort_unstable();
+      offsets.dedup();
+    }
+
+    offsets
   }
 
   /// Add allowed break opportunities at every cluster boundary.
@@ -359,6 +393,7 @@ impl TextItem {
     }
     let additional: Vec<BreakOpportunity> = self
       .cluster_byte_offsets()
+      .into_iter()
       .filter(|offset| *offset > 0 && *offset < self.text.len())
       .map(|offset| BreakOpportunity::new(offset, BreakType::Allowed))
       .collect();

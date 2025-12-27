@@ -99,6 +99,7 @@ use crate::text::pipeline::preferred_font_aspect;
 use crate::text::pipeline::ExplicitBidiContext;
 use crate::text::pipeline::ShapedRun;
 use crate::text::pipeline::ShapingPipeline;
+use crate::text::segmentation::segment_grapheme_clusters;
 use crate::tree::box_tree::AnonymousBox;
 use crate::tree::box_tree::AnonymousType;
 use crate::tree::box_tree::BoxNode;
@@ -2544,13 +2545,12 @@ impl InlineFormattingContext {
   fn split_text_item_into_clusters(&self, item: TextItem) -> Vec<TextItem> {
     let mut offsets: Vec<usize> = item
       .cluster_byte_offsets()
+      .into_iter()
       .filter(|o| *o > 0 && *o < item.text.len())
       .collect();
     if offsets.is_empty() {
-      offsets = item
-        .text
-        .char_indices()
-        .map(|(idx, _)| idx)
+      offsets = segment_grapheme_clusters(&item.text)
+        .into_iter()
         .filter(|o| *o > 0 && *o < item.text.len())
         .collect();
       if offsets.is_empty() {
@@ -4331,20 +4331,19 @@ impl InlineFormattingContext {
     let mut consumed = 0usize;
     let mut break_offsets: Vec<usize> = match mode {
       TextJustify::InterCharacter | TextJustify::Distribute => {
-        let mut offsets: Vec<usize> = item.cluster_byte_offsets().skip(1).collect();
+        let mut offsets: Vec<usize> = item
+          .cluster_byte_offsets()
+          .into_iter()
+          .filter(|o| *o > 0 && *o < item.text.len())
+          .collect();
         if offsets.is_empty() {
-          // Fallback to per-character splitting when shaping did not emit cluster boundaries.
-          let mut acc = 0usize;
-          offsets = item
-            .text
-            .chars()
-            .skip(1)
-            .map(|c| {
-              acc += c.len_utf8();
-              acc
-            })
+          offsets = segment_grapheme_clusters(&item.text)
+            .into_iter()
+            .filter(|o| *o > 0 && *o < item.text.len())
             .collect();
         }
+        offsets.sort_unstable();
+        offsets.dedup();
         offsets
       }
       _ => item
@@ -8770,7 +8769,9 @@ fn item_has_interchar_opportunity(item: &InlineItem) -> bool {
       if t.is_marker {
         return false;
       }
-      t.cluster_byte_offsets().nth(1).is_some() || t.text.chars().count() > 1
+      t.cluster_byte_offsets()
+        .into_iter()
+        .any(|offset| offset > 0 && offset < t.text.len())
     }
     InlineItem::InlineBox(b) => b.children.iter().any(item_has_interchar_opportunity),
     InlineItem::Ruby(r) => r
@@ -11267,6 +11268,55 @@ mod tests {
       gap > 10.0,
       "inter-character justify should expand space between styled spans; gap={gap}"
     );
+  }
+
+  #[test]
+  fn justify_fallback_keeps_combining_clusters_intact() {
+    let ctx = InlineFormattingContext::new();
+    let mut style = ComputedStyle::default();
+    style.font_size = 16.0;
+    let style = Arc::new(style);
+    let metrics = TextItem::metrics_from_runs(&[], 16.0, style.font_size);
+    let item = TextItem::new(
+      Vec::new(),
+      "a\u{0301}".to_string(),
+      metrics,
+      Vec::new(),
+      Vec::new(),
+      style.clone(),
+      crate::style::types::Direction::Ltr,
+    );
+
+    let segments = ctx.split_text_item_for_justify(&item, TextJustify::InterCharacter);
+    assert_eq!(
+      segments.len(),
+      1,
+      "combining marks should not be split from their base character"
+    );
+    assert_eq!(segments[0].text, "a\u{0301}");
+  }
+
+  #[test]
+  fn justify_fallback_respects_zwj_emoji_clusters() {
+    let ctx = InlineFormattingContext::new();
+    let mut style = ComputedStyle::default();
+    style.font_size = 16.0;
+    let style = Arc::new(style);
+    let metrics = TextItem::metrics_from_runs(&[], 16.0, style.font_size);
+    let text = "👨\u{200D}👩";
+    let item = TextItem::new(
+      Vec::new(),
+      text.to_string(),
+      metrics,
+      Vec::new(),
+      Vec::new(),
+      style,
+      crate::style::types::Direction::Ltr,
+    );
+
+    let segments = ctx.split_text_item_for_justify(&item, TextJustify::InterCharacter);
+    assert_eq!(segments.len(), 1, "emoji ZWJ sequences should not be split");
+    assert_eq!(segments[0].text, text);
   }
 
   #[test]
