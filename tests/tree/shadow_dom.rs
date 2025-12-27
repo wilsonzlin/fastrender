@@ -61,7 +61,7 @@ fn declarative_shadow_dom_attaches_shadow_root() {
 
   let shadow_root = find_shadow_root(host).expect("shadow root child");
   match shadow_root.node_type {
-    DomNodeType::ShadowRoot { mode } => assert_eq!(mode, ShadowRootMode::Open),
+    DomNodeType::ShadowRoot { mode, .. } => assert_eq!(mode, ShadowRootMode::Open),
     _ => panic!("expected shadow root child"),
   }
 
@@ -88,7 +88,7 @@ fn slot_uses_fallback_when_unassigned() {
   let host = find_by_id(&dom, "host").expect("host element");
   let shadow_root = host.children.first().expect("shadow root");
   match shadow_root.node_type {
-    DomNodeType::ShadowRoot { mode } => assert_eq!(mode, ShadowRootMode::Closed),
+    DomNodeType::ShadowRoot { mode, .. } => assert_eq!(mode, ShadowRootMode::Closed),
     _ => panic!("expected shadow root"),
   }
 
@@ -197,7 +197,7 @@ fn first_template_wins_for_multiple_declarative_shadow_roots() {
 
   let shadow_root = find_shadow_root(host).expect("shadow root child");
   match shadow_root.node_type {
-    DomNodeType::ShadowRoot { mode } => assert_eq!(mode, ShadowRootMode::Open),
+    DomNodeType::ShadowRoot { mode, .. } => assert_eq!(mode, ShadowRootMode::Open),
     _ => panic!("expected shadow root child"),
   }
 

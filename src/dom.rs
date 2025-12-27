@@ -112,6 +112,7 @@ pub enum DomNodeType {
   Document,
   ShadowRoot {
     mode: ShadowRootMode,
+    delegates_focus: bool,
   },
   Slot {
     namespace: String,
@@ -326,7 +327,7 @@ pub fn parse_html_with_options(html: &str, options: DomParseOptions) -> Result<D
   Ok(root)
 }
 
-fn parse_shadow_root_mode(template: &DomNode) -> Option<ShadowRootMode> {
+fn parse_shadow_root_definition(template: &DomNode) -> Option<(ShadowRootMode, bool)> {
   if !template
     .tag_name()
     .map(|t| t.eq_ignore_ascii_case("template"))
@@ -343,11 +344,17 @@ fn parse_shadow_root_mode(template: &DomNode) -> Option<ShadowRootMode> {
   let mode_attr = template
     .get_attribute_ref("shadowroot")
     .or_else(|| template.get_attribute_ref("shadowrootmode"))?;
-  match mode_attr.to_ascii_lowercase().as_str() {
-    "open" => Some(ShadowRootMode::Open),
-    "closed" => Some(ShadowRootMode::Closed),
-    _ => None,
-  }
+  let mode = match mode_attr.to_ascii_lowercase().as_str() {
+    "open" => ShadowRootMode::Open,
+    "closed" => ShadowRootMode::Closed,
+    _ => return None,
+  };
+
+  let delegates_focus = template
+    .get_attribute_ref("shadowrootdelegatesfocus")
+    .is_some();
+
+  Some((mode, delegates_focus))
 }
 
 fn attach_shadow_roots(node: &mut DomNode) {
@@ -361,19 +368,24 @@ fn attach_shadow_roots(node: &mut DomNode) {
 
   let mut shadow_template = None;
   for (idx, child) in node.children.iter().enumerate() {
-    if let Some(mode) = parse_shadow_root_mode(child) {
-      shadow_template = Some((idx, mode));
+    if let Some((mode, delegates_focus)) = parse_shadow_root_definition(child) {
+      shadow_template = Some((idx, mode, delegates_focus));
       break;
     }
   }
 
-  let Some((template_idx, mode)) = shadow_template else {
+  let Some((template_idx, mode, delegates_focus)) = shadow_template else {
     return;
   };
 
+  // Only the first declarative shadow template is promoted to a shadow root, matching browsers.
+  // Subsequent templates remain as inert light DOM children.
   let template = node.children.remove(template_idx);
   let shadow_root = DomNode {
-    node_type: DomNodeType::ShadowRoot { mode },
+    node_type: DomNodeType::ShadowRoot {
+      mode,
+      delegates_focus,
+    },
     children: template.children,
   };
   let light_children = std::mem::take(&mut node.children);
@@ -2780,6 +2792,73 @@ mod tests {
     None
   }
 
+  #[test]
+  fn declarative_shadow_dom_only_attaches_first_template() {
+    let html = "<div id='host'><template shadowroot='open'><p id='first'>first</p></template><template shadowroot='closed'><p id='second'>second</p></template><p id='light'>light</p></div>";
+    let dom = parse_html(html).expect("parse html");
+
+    let host = find_element_by_id(&dom, "host").expect("host element");
+    let shadow_roots: Vec<&DomNode> = host
+      .children
+      .iter()
+      .filter(|child| matches!(child.node_type, DomNodeType::ShadowRoot { .. }))
+      .collect();
+    assert_eq!(
+      shadow_roots.len(),
+      1,
+      "only the first declarative shadow template should attach"
+    );
+
+    assert!(
+      shadow_roots[0]
+        .children
+        .iter()
+        .any(|child| child.get_attribute_ref("id") == Some("first")),
+      "shadow root should be populated from the first template's content"
+    );
+
+    let remaining_templates = host
+      .children
+      .iter()
+      .filter(|child| {
+        child
+          .tag_name()
+          .map(|name| name.eq_ignore_ascii_case("template"))
+          .unwrap_or(false)
+      })
+      .count();
+    assert_eq!(
+      remaining_templates, 1,
+      "subsequent shadow templates should remain inert in the light DOM"
+    );
+  }
+
+  #[test]
+  fn declarative_shadow_dom_records_delegates_focus() {
+    let html = "<div id='host'><template shadowroot='open' shadowrootdelegatesfocus><slot></slot></template></div>";
+    let dom = parse_html(html).expect("parse html");
+
+    let host = find_element_by_id(&dom, "host").expect("host element");
+    let shadow_root = host
+      .children
+      .iter()
+      .find(|child| matches!(child.node_type, DomNodeType::ShadowRoot { .. }))
+      .expect("shadow root attached");
+    match shadow_root.node_type {
+      DomNodeType::ShadowRoot {
+        mode,
+        delegates_focus,
+      } => {
+        assert_eq!(mode, ShadowRootMode::Open);
+        assert!(
+          delegates_focus,
+          "shadowrootdelegatesfocus should be recorded on the shadow root"
+        );
+      }
+      _ => panic!("expected shadow root child"),
+    }
+  }
+
   fn matches(node: &DomNode, ancestors: &[&DomNode], pseudo: &PseudoClass) -> bool {
     let mut caches = SelectorCaches::default();
     let mut context = MatchingContext::new(
@@ -2855,6 +2934,7 @@ mod tests {
     let shadow_root = DomNode {
       node_type: DomNodeType::ShadowRoot {
         mode: ShadowRootMode::Open,
+        delegates_focus: false,
       },
       children: vec![shadow_child],
     };
@@ -2887,6 +2967,7 @@ mod tests {
     let shadow_root = DomNode {
       node_type: DomNodeType::ShadowRoot {
         mode: ShadowRootMode::Open,
+        delegates_focus: false,
       },
       children: vec![shadow_child],
     };

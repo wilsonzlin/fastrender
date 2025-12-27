@@ -826,7 +826,7 @@ impl TreeJsonExporter {
         ("namespace", Value::String(namespace.clone())),
         ("attributes", attributes_value(attributes)),
       ],
-      DomNodeType::ShadowRoot { mode } => vec![
+      DomNodeType::ShadowRoot { mode, .. } => vec![
         ("type", Value::String("shadow_root".into())),
         ("mode", Value::String(format!("{:?}", mode))),
       ],
