@@ -12,6 +12,7 @@
 use fastrender::style::types::TextOrientation;
 use fastrender::style::types::UnicodeBidi;
 use fastrender::style::types::WritingMode;
+use fastrender::text::pipeline::atomic_shaping_clusters;
 use fastrender::text::pipeline::itemize_text;
 use fastrender::text::pipeline::BidiAnalysis;
 use fastrender::text::pipeline::Direction;
@@ -148,6 +149,31 @@ fn vertical_sideways_left_orientation_rotates_counter_clockwise() {
   for run in runs {
     assert_eq!(run.rotation, RunRotation::Ccw90);
   }
+}
+
+// ============================================================================
+// Cluster Segmentation Tests
+// ============================================================================
+
+#[test]
+fn atomic_clusters_do_not_split_combining_marks() {
+  let text = "a\u{0301}";
+  let clusters = atomic_shaping_clusters(text);
+  assert_eq!(clusters, vec![(0, text.len())]);
+}
+
+#[test]
+fn atomic_clusters_do_not_split_zwj_sequences() {
+  let text = "👨\u{200d}👩";
+  let clusters = atomic_shaping_clusters(text);
+  assert_eq!(clusters, vec![(0, text.len())]);
+}
+
+#[test]
+fn atomic_clusters_preserve_emoji_variation_sequences() {
+  let text = "❤️";
+  let clusters = atomic_shaping_clusters(text);
+  assert_eq!(clusters, vec![(0, text.len())]);
 }
 
 // ============================================================================
@@ -642,6 +668,33 @@ fn test_pipeline_measure_width_longer_text() {
   let long_width = require_fonts!(pipeline.measure_width("Hello, world!", &style, &font_context));
 
   assert!(long_width > short_width);
+}
+
+#[test]
+fn zwj_sequences_stay_in_a_single_run() {
+  let pipeline = ShapingPipeline::new();
+  let font_context = FontContext::new();
+  let style = ComputedStyle::default();
+
+  if !font_context.has_fonts() {
+    return;
+  }
+
+  let text = "👨\u{200d}👩\u{200d}👧";
+  let runs = require_fonts!(pipeline.shape(text, &style, &font_context));
+  if runs.is_empty() {
+    return;
+  }
+
+  for boundary in runs.iter().flat_map(|r| [r.start, r.end]) {
+    if boundary != 0 && boundary != text.len() {
+      panic!(
+        "run boundary at {} splits ZWJ sequence (len {})",
+        boundary,
+        text.len()
+      );
+    }
+  }
 }
 
 // ============================================================================
