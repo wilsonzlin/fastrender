@@ -141,23 +141,16 @@ fn parse_rule_list_collecting<'i, 't>(
   rules
 }
 
-/// Parse a list of CSS rules (internal use - discards errors)
+/// Parse a list of CSS rules within a nested context.
 ///
-/// Used for parsing nested rule lists inside @media and @layer blocks
-fn parse_rule_list<'i, 't>(parser: &mut Parser<'i, 't>, css_source: &str) -> Vec<CssRule> {
-  let mut errors = Vec::new();
-  parse_rule_list_collecting(parser, &mut errors, None, css_source)
-  // Errors from nested rules are discarded here
-  // In the future, we could pass down the error collector
-}
-
+/// This uses the shared error collector so parse errors bubble up to the caller.
 fn parse_rule_list_with_context<'i, 't>(
   parser: &mut Parser<'i, 't>,
+  errors: &mut Vec<CssParseError>,
   parent_selectors: Option<&SelectorList<FastRenderSelectorImpl>>,
   css_source: &str,
 ) -> Vec<CssRule> {
-  let mut errors = Vec::new();
-  parse_rule_list_collecting(parser, &mut errors, parent_selectors, css_source)
+  parse_rule_list_collecting(parser, errors, parent_selectors, css_source)
 }
 
 /// Recover from a parse error by skipping to the next rule
@@ -193,11 +186,11 @@ fn parse_rule<'i, 't>(
       let kw_str = kw.to_string();
       match kw_str.as_str() {
         "import" => parse_import_rule(p),
-        "media" => parse_media_rule(p, parent_selectors, css_source),
-        "container" => parse_container_rule(p, parent_selectors, css_source),
-        "scope" => parse_scope_rule(p, parent_selectors, css_source),
-        "supports" => parse_supports_rule(p, parent_selectors, css_source),
-        "layer" => parse_layer_rule(p, parent_selectors, css_source),
+        "media" => parse_media_rule(p, errors, parent_selectors, css_source),
+        "container" => parse_container_rule(p, errors, parent_selectors, css_source),
+        "scope" => parse_scope_rule(p, errors, parent_selectors, css_source),
+        "supports" => parse_supports_rule(p, errors, parent_selectors, css_source),
+        "layer" => parse_layer_rule(p, errors, parent_selectors, css_source),
         "page" => parse_page_rule(p, css_source),
         "counter-style" => parse_counter_style_rule(p),
         "font-face" => parse_font_face_rule(p),
@@ -272,6 +265,7 @@ fn parse_import_rule<'i, 't>(
 /// Parse a @media rule
 fn parse_media_rule<'i, 't>(
   parser: &mut Parser<'i, 't>,
+  errors: &mut Vec<CssParseError>,
   parent_selectors: Option<&SelectorList<FastRenderSelectorImpl>>,
   css_source: &str,
 ) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
@@ -325,6 +319,7 @@ fn parse_media_rule<'i, 't>(
   let nested_rules = parser.parse_nested_block(|nested_parser| {
     Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(parse_rule_list_with_context(
       nested_parser,
+      errors,
       parent_selectors,
       css_source,
     ))
@@ -339,6 +334,7 @@ fn parse_media_rule<'i, 't>(
 /// Parse a @container rule (size queries only; name is optional and stored for future use).
 fn parse_container_rule<'i, 't>(
   parser: &mut Parser<'i, 't>,
+  errors: &mut Vec<CssParseError>,
   parent_selectors: Option<&SelectorList<FastRenderSelectorImpl>>,
   css_source: &str,
 ) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
@@ -410,6 +406,7 @@ fn parse_container_rule<'i, 't>(
   let nested_rules = parser.parse_nested_block(|nested_parser| {
     Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(parse_rule_list_with_context(
       nested_parser,
+      errors,
       parent_selectors,
       css_source,
     ))
@@ -430,6 +427,7 @@ fn parse_container_rule<'i, 't>(
 /// Parse an @scope rule with optional scope root/limit selectors.
 fn parse_scope_rule<'i, 't>(
   parser: &mut Parser<'i, 't>,
+  errors: &mut Vec<CssParseError>,
   parent_selectors: Option<&SelectorList<FastRenderSelectorImpl>>,
   css_source: &str,
 ) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
@@ -497,6 +495,7 @@ fn parse_scope_rule<'i, 't>(
   let nested_rules = parser.parse_nested_block(|nested_parser| {
     Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(parse_rule_list_with_context(
       nested_parser,
+      errors,
       parent_selectors,
       css_source,
     ))
@@ -512,6 +511,7 @@ fn parse_scope_rule<'i, 't>(
 /// Parse a @supports rule
 fn parse_supports_rule<'i, 't>(
   parser: &mut Parser<'i, 't>,
+  errors: &mut Vec<CssParseError>,
   parent_selectors: Option<&SelectorList<FastRenderSelectorImpl>>,
   css_source: &str,
 ) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
@@ -533,6 +533,7 @@ fn parse_supports_rule<'i, 't>(
   let rules = parser.parse_nested_block(|nested| {
     Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(parse_rule_list_with_context(
       nested,
+      errors,
       parent_selectors,
       css_source,
     ))
@@ -929,6 +930,7 @@ fn parse_supports_declaration_in_parens<'i, 't>(
 
 fn parse_layer_rule<'i, 't>(
   parser: &mut Parser<'i, 't>,
+  errors: &mut Vec<CssParseError>,
   parent_selectors: Option<&SelectorList<FastRenderSelectorImpl>>,
   css_source: &str,
 ) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
@@ -968,6 +970,7 @@ fn parse_layer_rule<'i, 't>(
     parser.parse_nested_block(|nested| {
       Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(parse_rule_list_with_context(
         nested,
+        errors,
         parent_selectors,
         css_source,
       ))
@@ -2254,6 +2257,7 @@ fn skip_at_rule<'i, 't>(parser: &mut Parser<'i, 't>) {
 
 fn parse_nested_at_rule<'i, 't>(
   parser: &mut Parser<'i, 't>,
+  errors: &mut Vec<CssParseError>,
   parent_selectors: &SelectorList<FastRenderSelectorImpl>,
   css_source: &str,
 ) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
@@ -2270,11 +2274,11 @@ fn parse_nested_at_rule<'i, 't>(
   };
   let kw_lower = kw.to_ascii_lowercase();
   match kw_lower.as_str() {
-    "media" => parse_media_rule(parser, Some(parent_selectors), css_source),
-    "supports" => parse_supports_rule(parser, Some(parent_selectors), css_source),
-    "container" => parse_container_rule(parser, Some(parent_selectors), css_source),
-    "layer" => parse_layer_rule(parser, Some(parent_selectors), css_source),
-    "nest" => parse_nest_rule(parser, parent_selectors, css_source),
+    "media" => parse_media_rule(parser, errors, Some(parent_selectors), css_source),
+    "supports" => parse_supports_rule(parser, errors, Some(parent_selectors), css_source),
+    "container" => parse_container_rule(parser, errors, Some(parent_selectors), css_source),
+    "layer" => parse_layer_rule(parser, errors, Some(parent_selectors), css_source),
+    "nest" => parse_nest_rule(parser, errors, parent_selectors, css_source),
     _ => {
       skip_at_rule(parser);
       Ok(None)
@@ -2299,7 +2303,7 @@ fn parse_style_block<'i, 't>(
     }
 
     if let Ok(Some(rule)) =
-      parser.try_parse(|p| parse_nested_at_rule(p, parent_selectors, css_source))
+      parser.try_parse(|p| parse_nested_at_rule(p, errors, parent_selectors, css_source))
     {
       nested_rules.push(rule);
       continue;
@@ -2370,6 +2374,7 @@ fn parse_style_rule<'i, 't>(
         let _ = parser.parse_nested_block(|nested| {
           Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(parse_rule_list_with_context(
             nested,
+            errors,
             Some(parent),
             css_source,
           ))
@@ -2409,6 +2414,7 @@ fn parse_style_rule<'i, 't>(
 
 fn parse_nest_rule<'i, 't>(
   parser: &mut Parser<'i, 't>,
+  errors: &mut Vec<CssParseError>,
   parent_selectors: &SelectorList<FastRenderSelectorImpl>,
   css_source: &str,
 ) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
@@ -2431,6 +2437,7 @@ fn parse_nest_rule<'i, 't>(
       let _ = parser.parse_nested_block(|nested| {
         Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(parse_rule_list_with_context(
           nested,
+          errors,
           Some(parent_selectors),
           css_source,
         ))
@@ -2444,8 +2451,7 @@ fn parse_nest_rule<'i, 't>(
   })?;
 
   let (declarations, nested_rules) = parser.parse_nested_block(|nested| {
-    let mut nested_errors = Vec::new();
-    parse_style_block(nested, &mut nested_errors, &selectors, css_source).map_err(|_| {
+    parse_style_block(nested, errors, &selectors, css_source).map_err(|_| {
       nested.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
         "declaration".into(),
       ))
@@ -2729,7 +2735,10 @@ pub fn rel_list_contains_stylesheet(tokens: &[String]) -> bool {
 /// shadow root). Document order is preserved within each scope by walking the tree preorder.
 pub fn extract_css_sources(dom: &DomNode) -> Vec<ScopedStylesheetSource> {
   fn contributes_to_scope_path(node: &DomNode) -> bool {
-    !matches!(node.node_type, DomNodeType::Text { .. } | DomNodeType::Document)
+    !matches!(
+      node.node_type,
+      DomNodeType::Text { .. } | DomNodeType::Document
+    )
   }
 
   fn walk(
@@ -2960,6 +2969,40 @@ mod tests {
     assert!(msg.contains("column"));
     assert!(msg.contains("body { color: }"));
     assert!(msg.contains('^'));
+  }
+
+  #[test]
+  fn nested_rule_errors_are_reported() {
+    let css = "body { color: red; }\n@media (max-width: 600px) {\n  .bad {\n    color: ;\n  }\n}\n";
+    let result = parse_stylesheet_with_errors(css);
+    assert!(
+      !result.errors.is_empty(),
+      "expected nested parse errors to be collected"
+    );
+
+    let nested_error = result
+      .errors
+      .iter()
+      .find(|err| err.line >= 3)
+      .expect("expected nested error with location");
+    assert!(
+      nested_error
+        .snippet
+        .as_deref()
+        .map(|line| line.contains("color: ;"))
+        .unwrap_or(false),
+      "snippet should point inside nested block, got {:?}",
+      nested_error
+    );
+
+    assert!(
+      result
+        .stylesheet
+        .rules
+        .iter()
+        .any(|rule| matches!(rule, CssRule::Style(_))),
+      "top-level style rule should still be present"
+    );
   }
 
   #[test]
