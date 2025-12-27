@@ -2838,6 +2838,7 @@ mod tests {
       }
     }
     TextItem {
+      box_id: 0,
       runs: Vec::new(),
       advance,
       advance_for_layout: advance,

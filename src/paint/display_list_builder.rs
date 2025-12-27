@@ -89,6 +89,7 @@ use crate::paint::stacking::Layer6Item;
 use crate::paint::stacking::StackingContext;
 use crate::paint::svg_filter::SvgFilterResolver;
 use crate::paint::transform3d::backface_is_hidden;
+use crate::paint::transform_resolver::ResolvedTransforms;
 use crate::paint::text_shadow::resolve_text_shadows;
 use crate::style::color::Rgba;
 use crate::style::types::AccentColor;
@@ -507,8 +508,9 @@ impl DisplayListBuilder {
       if matches!(style.backface_visibility, BackfaceVisibility::Hidden)
         && (!style.transform.is_empty() || style.perspective.is_some() || style.has_motion_path())
       {
-        if let Some(transform) = Self::build_transform(style, absolute_rect, self.viewport) {
-          if backface_is_hidden(&transform) {
+        let transforms = Self::build_transform(style, absolute_rect, self.viewport);
+        if let Some(transform) = transforms.self_transform.as_ref() {
+          if backface_is_hidden(transform) {
             if push_opacity {
               self.pop_opacity();
             }
@@ -2109,8 +2111,8 @@ impl DisplayListBuilder {
     style: &ComputedStyle,
     bounds: Rect,
     viewport: Option<(f32, f32)>,
-  ) -> Option<Transform3D> {
-    crate::paint::transform_resolver::resolve_transform3d(style, bounds, viewport)
+  ) -> ResolvedTransforms {
+    crate::paint::transform_resolver::resolve_transforms(style, bounds, viewport)
   }
 
   /// Exposes transform resolution for debugging/inspection tools.
@@ -4632,7 +4634,7 @@ pub(crate) fn resolve_transform3d(
   bounds: Rect,
   viewport: Option<(f32, f32)>,
 ) -> Option<Transform3D> {
-  DisplayListBuilder::build_transform(style, bounds, viewport)
+  DisplayListBuilder::build_transform(style, bounds, viewport).self_transform
 }
 
 // ============================================================================
