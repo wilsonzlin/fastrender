@@ -48,6 +48,7 @@
 //! - Unicode Standard Annex #14: <https://www.unicode.org/reports/tr14/>
 //! - CSS Text Module Level 3: <https://www.w3.org/TR/css-text-3/>
 
+use crate::text::emoji::find_emoji_sequences;
 use unicode_linebreak::linebreaks;
 use unicode_linebreak::BreakOpportunity as UnicodeBreakOpportunity;
 
@@ -173,6 +174,8 @@ impl BreakOpportunity {
 ///
 /// Returns a list of positions where line breaks are allowed or required,
 /// sorted by byte offset in ascending order.
+/// Break opportunities that would fall inside emoji sequences (ZWJ sequences,
+/// flag pairs, keycaps) are filtered out to keep those sequences intact.
 ///
 /// # Arguments
 ///
@@ -257,7 +260,64 @@ pub fn find_break_opportunities(text: &str) -> Vec<BreakOpportunity> {
     });
   }
 
-  opportunities
+  filter_breaks_inside_emoji_sequences(text, opportunities)
+}
+
+fn filter_breaks_inside_emoji_sequences(
+  text: &str,
+  opportunities: Vec<BreakOpportunity>,
+) -> Vec<BreakOpportunity> {
+  let emoji_sequences = find_emoji_sequences(text);
+  if emoji_sequences.is_empty() {
+    return opportunities;
+  }
+
+  let newline_break_offsets = collect_newline_break_offsets(text);
+
+  let mut filtered = Vec::with_capacity(opportunities.len());
+  let mut seq_iter = emoji_sequences.iter().peekable();
+
+  'opportunities: for opportunity in opportunities {
+    while let Some(seq) = seq_iter.peek() {
+      if opportunity.byte_offset >= seq.end {
+        seq_iter.next();
+      } else {
+        break;
+      }
+    }
+
+    if let Some(seq) = seq_iter.peek() {
+      if opportunity.byte_offset > seq.start && opportunity.byte_offset < seq.end {
+        if !newline_break_offsets.contains(&opportunity.byte_offset) {
+          continue 'opportunities;
+        }
+      }
+    }
+
+    filtered.push(opportunity);
+  }
+
+  filtered
+}
+
+fn collect_newline_break_offsets(text: &str) -> Vec<usize> {
+  text
+    .char_indices()
+    .filter_map(|(idx, ch)| {
+      if is_newline(ch) {
+        Some(idx + ch.len_utf8())
+      } else {
+        None
+      }
+    })
+    .collect()
+}
+
+fn is_newline(ch: char) -> bool {
+  matches!(
+    ch,
+    '\n' | '\r' | '\u{000B}' | '\u{000C}' | '\u{0085}' | '\u{2028}' | '\u{2029}'
+  )
 }
 
 /// Find break opportunities and return only mandatory breaks.

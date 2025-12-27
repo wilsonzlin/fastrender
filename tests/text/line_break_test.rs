@@ -3,6 +3,7 @@
 //! These tests verify the line break module works correctly
 //! with various text inputs and edge cases.
 
+use fastrender::text::emoji::find_emoji_sequences;
 use fastrender::text::line_break::find_break_opportunities;
 use fastrender::text::line_break::find_interior_breaks;
 use fastrender::text::line_break::find_mandatory_breaks;
@@ -10,6 +11,8 @@ use fastrender::text::line_break::has_break_at;
 use fastrender::text::line_break::BreakIterator;
 use fastrender::text::line_break::BreakOpportunity;
 use fastrender::text::line_break::BreakType;
+use unicode_linebreak::linebreaks;
+use unicode_linebreak::BreakOpportunity as UnicodeBreakOpportunity;
 
 // =============================================================================
 // Basic English text tests
@@ -271,6 +274,77 @@ fn test_flag_emoji_no_interior_break() {
     interior.is_empty(),
     "Flag emoji should have no interior breaks"
   );
+}
+
+#[test]
+fn test_family_emoji_short_sequence_is_unbreakable() {
+  let text = "👨‍👩";
+  let breaks = find_break_opportunities(text);
+  let seqs = find_emoji_sequences(text);
+  assert_eq!(seqs.len(), 1);
+  let seq = &seqs[0];
+
+  assert!(
+    !breaks.iter().any(|b| {
+      b.break_type == BreakType::Allowed && b.byte_offset > seq.start && b.byte_offset < seq.end
+    }),
+    "Should not allow breaking inside short family emoji sequence"
+  );
+}
+
+#[test]
+fn test_family_emoji_longer_sequence_is_unbreakable() {
+  let text = "👨‍👩‍👧";
+  let breaks = find_break_opportunities(text);
+  let seqs = find_emoji_sequences(text);
+  assert_eq!(seqs.len(), 1);
+  let seq = &seqs[0];
+
+  assert!(
+    !breaks.iter().any(|b| {
+      b.break_type == BreakType::Allowed && b.byte_offset > seq.start && b.byte_offset < seq.end
+    }),
+    "Should not allow breaking inside longer family emoji sequence"
+  );
+}
+
+#[test]
+fn test_breaks_outside_emoji_sequence_are_preserved() {
+  let text = "A👨‍👩B";
+  let seqs = find_emoji_sequences(text);
+  assert_eq!(seqs.len(), 1);
+  let seq = &seqs[0];
+
+  let filtered_breaks = find_break_opportunities(text);
+
+  assert!(
+    !filtered_breaks
+      .iter()
+      .any(|b| seq.start < b.byte_offset && b.byte_offset < seq.end),
+    "Should not allow breaks inside emoji sequence"
+  );
+
+  let outside_expected: Vec<(usize, BreakType)> = linebreaks(text)
+    .filter(|(offset, _)| !(seq.start < *offset && *offset < seq.end))
+    .map(|(offset, brk)| {
+      let break_type = match brk {
+        UnicodeBreakOpportunity::Mandatory => BreakType::Mandatory,
+        UnicodeBreakOpportunity::Allowed => BreakType::Allowed,
+      };
+      (offset, break_type)
+    })
+    .collect();
+
+  for (offset, break_type) in outside_expected {
+    assert!(
+      filtered_breaks
+        .iter()
+        .any(|b| b.byte_offset == offset && b.break_type == break_type),
+      "Break at offset {} with type {:?} should be preserved outside emoji sequence",
+      offset,
+      break_type
+    );
+  }
 }
 
 // =============================================================================
