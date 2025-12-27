@@ -156,7 +156,8 @@ pub fn extract_viewport(dom: &DomNode) -> Option<MetaViewport> {
 
   let mut stack = vec![head];
   while let Some(node) = stack.pop() {
-    if let Some(tag) = node.tag_name() {
+    let tag_name = node.tag_name();
+    if let Some(tag) = tag_name {
       if tag.eq_ignore_ascii_case("meta") {
         let name_attr = node.get_attribute_ref("name");
         let content_attr = node.get_attribute_ref("content");
@@ -174,10 +175,16 @@ pub fn extract_viewport(dom: &DomNode) -> Option<MetaViewport> {
       }
     }
 
-    if !matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
-      for child in node.children.iter().rev() {
-        stack.push(child);
-      }
+    let skip_children = matches!(node.node_type, DomNodeType::ShadowRoot { .. })
+      || tag_name
+        .map(|t| t.eq_ignore_ascii_case("template"))
+        .unwrap_or(false);
+    if skip_children {
+      continue;
+    }
+
+    for child in node.children.iter().rev() {
+      stack.push(child);
     }
   }
 
@@ -339,6 +346,14 @@ mod tests {
   #[test]
   fn ignores_shadow_root_viewport_meta() {
     let html = "<html><head></head><body><div><template shadowroot='open'><meta name=viewport content='width=device-width'></template></div></body></html>";
+    let dom = crate::dom::parse_html(html).unwrap();
+    assert!(extract_viewport(&dom).is_none());
+  }
+
+  #[test]
+  fn extract_viewport_ignores_template_contents() {
+    let html =
+      "<html><head><template><meta name=viewport content='width=device-width'></template></head></html>";
     let dom = crate::dom::parse_html(html).unwrap();
     assert!(extract_viewport(&dom).is_none());
   }

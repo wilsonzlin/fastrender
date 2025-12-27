@@ -34,6 +34,8 @@ pub fn find_base_href(dom: &DomNode) -> Option<String> {
 
   let mut stack = vec![head];
   while let Some(node) = stack.pop() {
+    let mut skip_children = false;
+
     if let Some(tag) = node.tag_name() {
       if tag.eq_ignore_ascii_case("base") {
         if let Some(href) = node.get_attribute_ref("href") {
@@ -43,6 +45,13 @@ pub fn find_base_href(dom: &DomNode) -> Option<String> {
           }
         }
       }
+      if tag.eq_ignore_ascii_case("template") {
+        skip_children = true;
+      }
+    }
+
+    if skip_children {
+      continue;
     }
 
     for child in node.children.iter().rev() {
@@ -115,6 +124,19 @@ mod tests {
     assert_eq!(
       find_base_href(&dom),
       Some("https://example.com/base/".to_string())
+    );
+  }
+
+  #[test]
+  fn find_base_href_ignores_template_contents() {
+    let dom = parse_html(
+      "<html><head><template><base href=\"https://bad.example/\"></template><base href=\"https://good.example/\"></head></html>",
+    )
+    .unwrap();
+
+    assert_eq!(
+      find_base_href(&dom),
+      Some("https://good.example/".to_string())
     );
   }
 
