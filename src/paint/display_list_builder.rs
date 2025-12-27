@@ -404,8 +404,18 @@ impl DisplayListBuilder {
         self.viewport = Some((first.bounds.width(), first.bounds.height()));
       }
     }
+    let mut svg_roots = Vec::new();
     for stacking in stackings {
-      self.build_stacking_context(stacking, Point::ZERO, true);
+      Self::collect_stacking_fragments(stacking, &mut svg_roots);
+    }
+    let image_cache = self.image_cache.clone();
+    let mut svg_filters = SvgFilterResolver::new(
+      self.svg_filter_defs.clone(),
+      svg_roots,
+      image_cache.as_ref(),
+    );
+    for stacking in stackings {
+      self.build_stacking_context(stacking, Point::ZERO, true, &mut svg_filters);
     }
     self.list
   }
@@ -416,6 +426,11 @@ impl DisplayListBuilder {
       let viewport = tree.viewport_size();
       self.viewport = Some((viewport.width, viewport.height));
     }
+    let defs = tree
+      .svg_filter_defs
+      .clone()
+      .or_else(|| self.svg_filter_defs.clone());
+    self.svg_filter_defs = defs;
     let stackings = crate::paint::stacking::build_stacking_tree_from_tree(tree);
     self.build_from_stacking_contexts(&stackings)
   }
