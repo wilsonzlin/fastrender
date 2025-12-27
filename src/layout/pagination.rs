@@ -635,6 +635,9 @@ fn build_margin_box_children(
               text_buf.push_str(&formatted.join(separator));
             }
           }
+          ContentItem::NamedString { name, position } => {
+            text_buf.push_str(&context.resolve_named_string(name, *position));
+          }
           ContentItem::OpenQuote => {
             text_buf.push_str(context.open_quote());
             context.push_quote();
