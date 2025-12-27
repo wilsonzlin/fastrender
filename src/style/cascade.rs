@@ -8214,6 +8214,7 @@ fn find_matching_rules<'a>(
     selectors::matching::MatchingForInvalidation::No,
   );
   context.extra_data = ShadowMatchData::for_document();
+  let slot_map: Option<&SlotAssignmentMap<'a>> = slot_map;
   context.extra_data.slot_map = slot_map;
 
   let mut scoped_rule_idx: Option<usize> = None;
@@ -8377,6 +8378,7 @@ fn find_pseudo_element_rules<'a>(
     selectors::matching::MatchingForInvalidation::No,
   );
   context.extra_data = ShadowMatchData::for_document();
+  let slot_map: Option<&SlotAssignmentMap<'a>> = slot_map;
   context.extra_data.slot_map = slot_map;
 
   let mut scoped_rule_idx: Option<usize> = None;

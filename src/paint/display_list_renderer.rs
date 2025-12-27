@@ -3933,6 +3933,7 @@ impl DisplayListRenderer {
       item.font_size,
       item.synthetic_oblique,
       None,
+      &item.variations,
     )?;
     Ok((paths, bounds))
   }

@@ -101,7 +101,6 @@ be safely checked in alongside their regeneration scripts.
   ```bash
   python tests/fixtures/fonts/generate_svg_color_font.py
   ```
-
 ## Variable font fixtures
 
 - **Font:** AmstelvarAlpha (variable)

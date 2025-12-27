@@ -57,6 +57,7 @@ use crate::style::color::Rgba;
 use crate::text::font_db::LoadedFont;
 use crate::text::pipeline::GlyphPosition;
 use crate::text::variations::FontVariation;
+use rustybuzz::Variation;
 use tiny_skia::BlendMode as SkiaBlendMode;
 use tiny_skia::FillRule;
 use tiny_skia::IntSize;
@@ -898,7 +899,15 @@ impl Canvas {
     font_size: f32,
     synthetic_oblique: f32,
     rotation: Option<Transform>,
+    variations: &[FontVariation],
   ) -> Result<(Vec<tiny_skia::Path>, PathBounds)> {
+    let variation_coords: Vec<Variation> = variations
+      .iter()
+      .map(|v| Variation {
+        tag: v.tag,
+        value: v.value,
+      })
+      .collect();
     let paths = self.text_rasterizer.positioned_glyph_paths(
       glyphs,
       font,
@@ -907,6 +916,7 @@ impl Canvas {
       position.y,
       synthetic_oblique,
       rotation,
+      &variation_coords,
     )?;
     let mut bounds = PathBounds::new();
     for path in &paths {
@@ -972,6 +982,14 @@ impl Canvas {
       blend_mode: self.current_state.blend_mode,
     };
 
+    let variation_coords: Vec<Variation> = variations
+      .iter()
+      .map(|v| Variation {
+        tag: v.tag,
+        value: v.value,
+      })
+      .collect();
+
     let _ = self.text_rasterizer.render_glyphs_with_state(
       glyphs,
       font,
@@ -982,7 +1000,7 @@ impl Canvas {
       synthetic_bold,
       synthetic_oblique,
       palette_index,
-      variations,
+      &variation_coords,
       None,
       state,
       &mut self.pixmap,

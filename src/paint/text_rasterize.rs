@@ -56,6 +56,7 @@ use crate::style::color::Rgba;
 use crate::text::color_fonts::{ColorFontRenderer, ColorGlyphRaster};
 use crate::text::font_db::LoadedFont;
 use crate::text::glyph_path::{glyph_transform, GlyphOutlineBuilder, GlyphOutlineMetrics};
+use crate::text::variations::apply_rustybuzz_variations;
 use crate::text::pipeline::GlyphPosition;
 use crate::text::pipeline::ShapedRun;
 use rustybuzz::Variation;
@@ -91,15 +92,18 @@ struct GlyphCacheKey {
   glyph_id: u32,
   /// Quantized synthetic skew (tan(angle) * 1e4)
   skew_units: i32,
+  /// Hash of variation coordinates applied to the face.
+  variation_hash: u64,
 }
 
 impl GlyphCacheKey {
-  fn new(font: &LoadedFont, glyph_id: u32, skew: f32) -> Self {
+  fn new(font: &LoadedFont, glyph_id: u32, skew: f32, variations: &[Variation]) -> Self {
     Self {
       font_ptr: Arc::as_ptr(&font.data) as usize,
       font_index: font.index,
       glyph_id,
       skew_units: quantize_skew(skew),
+      variation_hash: hash_variations(variations),
     }
   }
 }
@@ -231,8 +235,14 @@ impl GlyphCache {
   }
 
   /// Gets a cached glyph path or builds and caches it.
-  fn get_or_build(&mut self, font: &LoadedFont, glyph_id: u32, skew: f32) -> Option<&CachedGlyph> {
-    let key = GlyphCacheKey::new(font, glyph_id, skew);
+  fn get_or_build(
+    &mut self,
+    font: &LoadedFont,
+    glyph_id: u32,
+    skew: f32,
+    variations: &[Variation],
+  ) -> Option<&CachedGlyph> {
+    let key = GlyphCacheKey::new(font, glyph_id, skew, variations);
     let generation = self.bump_generation();
 
     if let Some(entry) = self.glyphs.get_mut(&key) {
@@ -240,7 +250,7 @@ impl GlyphCache {
       entry.last_used = generation;
     } else {
       self.misses += 1;
-      let mut cached = self.build_glyph_path(font, glyph_id)?;
+      let mut cached = self.build_glyph_path(font, glyph_id, variations)?;
       cached.last_used = generation;
       self.current_bytes = self.current_bytes.saturating_add(cached.estimated_size);
       self.glyphs.insert(key, cached);
@@ -252,9 +262,15 @@ impl GlyphCache {
   }
 
   /// Builds a glyph path without caching.
-  fn build_glyph_path(&self, font: &LoadedFont, glyph_id: u32) -> Option<CachedGlyph> {
+  fn build_glyph_path(
+    &self,
+    font: &LoadedFont,
+    glyph_id: u32,
+    variations: &[Variation],
+  ) -> Option<CachedGlyph> {
     // Parse font face
-    let face = font.as_ttf_face().ok()?;
+    let mut face = font.as_ttf_face().ok()?;
+    apply_rustybuzz_variations(&mut face, variations);
     let mut builder = GlyphOutlineBuilder::new();
 
     let glyph_id = ttf_parser::GlyphId(glyph_id as u16);
@@ -663,11 +679,12 @@ impl TextRasterizer {
     paint.anti_alias = true;
     paint.blend_mode = state.blend_mode;
 
-    let face = font
+    let mut face = font
       .as_ttf_face()
       .map_err(|_| RenderError::RasterizationFailed {
         reason: format!("Failed to parse font: {}", font.family),
       })?;
+    apply_rustybuzz_variations(&mut face, variations);
 
     let units_per_em = face.units_per_em() as f32;
     if units_per_em == 0.0 {
@@ -725,7 +742,11 @@ impl TextRasterizer {
           transform = concat_transforms(rotation, transform);
         }
         draw_color_glyph(pixmap, &color_image, transform, state);
-      } else if let Some(cached) = self.cache.get_or_build(font, glyph.glyph_id, synthetic_oblique) {
+       } else if let Some(cached) =
+         self
+           .cache
+           .get_or_build(font, glyph.glyph_id, synthetic_oblique, variations)
+       {
         if let Some(path) = cached.path.as_ref() {
           let mut transform = glyph_transform(scale, synthetic_oblique, glyph_x, glyph_y);
           if let Some(rotation) = rotation {
@@ -843,6 +864,7 @@ impl TextRasterizer {
       synthetic_bold,
       synthetic_oblique,
       palette_index,
+      palette_index,
       variations,
       rotation,
       x,
@@ -890,12 +912,14 @@ impl TextRasterizer {
     baseline_y: f32,
     synthetic_oblique: f32,
     rotation: Option<Transform>,
+    variations: &[Variation],
   ) -> Result<Vec<Path>> {
-    let face = font
+    let mut face = font
       .as_ttf_face()
       .map_err(|_| RenderError::RasterizationFailed {
         reason: format!("Failed to parse font: {}", font.family),
       })?;
+    apply_rustybuzz_variations(&mut face, variations);
 
     let units_per_em = face.units_per_em() as f32;
     if units_per_em == 0.0 {
@@ -915,10 +939,10 @@ impl TextRasterizer {
     for glyph in glyphs {
       let glyph_x = cursor_x + glyph.x_offset;
       let glyph_y = baseline_y + cursor_y + glyph.y_offset;
-      if let Some(cached) = self
-        .cache
-        .get_or_build(font, glyph.glyph_id, synthetic_oblique)
-      {
+       if let Some(cached) = self
+         .cache
+         .get_or_build(font, glyph.glyph_id, synthetic_oblique, variations)
+       {
         if let Some(path) = cached.path.as_ref() {
           let mut transform = glyph_transform(scale, synthetic_oblique, glyph_x, glyph_y);
           if let Some(rotation) = rotation {
@@ -1246,10 +1270,12 @@ mod tests {
       None => return,
     };
 
-    let key1 = GlyphCacheKey::new(&font, 65, 0.0);
-    let key2 = GlyphCacheKey::new(&font, 65, 0.0);
-    let key3 = GlyphCacheKey::new(&font, 66, 0.0);
-    let key4 = GlyphCacheKey::new(&font, 65, 0.25);
+    let variations: &[Variation] = &[];
+
+    let key1 = GlyphCacheKey::new(&font, 65, 0.0, variations);
+    let key2 = GlyphCacheKey::new(&font, 65, 0.0, variations);
+    let key3 = GlyphCacheKey::new(&font, 66, 0.0, variations);
+    let key4 = GlyphCacheKey::new(&font, 65, 0.25, variations);
 
     // Same font, glyph, and size should be equal
     assert_eq!(key1, key2);
@@ -1274,17 +1300,19 @@ mod tests {
 
     let mut cache = GlyphCache::with_capacity(1);
 
-    assert!(cache.get_or_build(&font, glyph_a, 0.0).is_some());
+    let variations: &[Variation] = &[];
+
+    assert!(cache.get_or_build(&font, glyph_a, 0.0, variations).is_some());
     let stats = cache.stats();
     assert_eq!(stats.misses, 1);
     assert_eq!(stats.hits, 0);
 
-    assert!(cache.get_or_build(&font, glyph_a, 0.0).is_some());
+    assert!(cache.get_or_build(&font, glyph_a, 0.0, variations).is_some());
     let stats = cache.stats();
     assert_eq!(stats.hits, 1);
 
     // Insert another glyph to trigger eviction
-    assert!(cache.get_or_build(&font, glyph_b, 0.0).is_some());
+    assert!(cache.get_or_build(&font, glyph_b, 0.0, variations).is_some());
     let stats = cache.stats();
     assert!(stats.evictions >= 1);
     assert!(cache.len() <= 1);

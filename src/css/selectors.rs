@@ -104,18 +104,22 @@ impl<'a> SlotAssignmentMap<'a> {
   }
 
   /// Get the slot this node is assigned to, if any.
-  pub fn assigned_slot(&self, node: &crate::dom::DomNode) -> Option<AssignedSlotRef<'a>> {
+  pub fn assigned_slot(&'a self, node: &crate::dom::DomNode) -> Option<AssignedSlotRef<'a>> {
     let slot_ptr = *self.node_to_slot.get(&(node as *const _))?;
     let info = self.slots.get(&slot_ptr)?;
+    let ancestors: &'a [&'a crate::dom::DomNode] = info.ancestors.as_ref();
     Some(AssignedSlotRef {
       slot: info.slot,
-      ancestors: &info.ancestors,
+      ancestors,
       shadow_root_id: info.shadow_root_id,
     })
   }
 
   /// Get nodes assigned to the given slot, in distribution order.
-  pub fn assigned_nodes(&self, slot: &crate::dom::DomNode) -> Option<&[&'a crate::dom::DomNode]> {
+  pub fn assigned_nodes(
+    &'a self,
+    slot: &crate::dom::DomNode,
+  ) -> Option<&'a [&'a crate::dom::DomNode]> {
     let slot_ptr = slot as *const crate::dom::DomNode;
     self.slot_to_nodes.get(&slot_ptr).map(|v| v.as_slice())
   }
