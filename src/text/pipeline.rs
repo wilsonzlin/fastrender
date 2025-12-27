@@ -1350,7 +1350,7 @@ fn assign_fonts_internal(
         _ => None,
       };
 
-      let mut resolved = cached_cluster.clone().flatten();
+      let mut resolved = cached_cluster.flatten();
       let mut skip_resolution = cached_cluster.is_some() && resolved.is_none();
 
       if !skip_resolution && resolved.is_none() && cluster_char_count == 1 {
@@ -1826,6 +1826,374 @@ fn build_family_entries(style: &ComputedStyle) -> Vec<crate::text::font_fallback
   }
 
   entries
+}
+
+#[allow(clippy::cognitive_complexity)]
+fn resolve_font_for_char(
+  ch: char,
+  families: &[crate::text::font_fallback::FamilyEntry],
+  weight: u16,
+  style: FontStyle,
+  oblique_angle: Option<f32>,
+  stretch: DbFontStretch,
+  font_context: &FontContext,
+  picker: &mut FontPreferencePicker,
+) -> Option<LoadedFont> {
+  use crate::text::font_fallback::FamilyEntry;
+  use fontdb::Family;
+  let db = font_context.database();
+  let is_emoji = emoji::is_emoji(ch);
+  let weight_preferences = weight_preference_order(weight);
+  let slope_preferences = slope_preference_order(style);
+  let stretch_preferences = stretch_preference_order(stretch);
+  let math_families = font_context.math_family_names();
+  for entry in families {
+    if let FamilyEntry::Generic(crate::text::font_db::GenericFamily::Math) = entry {
+      for family in &math_families {
+        if let Some(font) =
+          font_context.match_web_font_for_char(family, weight, style, stretch, oblique_angle, ch)
+        {
+          return Some(font);
+        }
+        for stretch_choice in &stretch_preferences {
+          for slope in slope_preferences {
+            for weight_choice in &weight_preferences {
+              let query = fontdb::Query {
+                families: &[Family::Name(family.as_str())],
+                weight: fontdb::Weight(*weight_choice),
+                stretch: (*stretch_choice).into(),
+                style: (*slope).into(),
+              };
+              if let Some(id) = db.inner().query(&query) {
+                if let Some(font) = db.load_font(id) {
+                  let is_emoji_font = font_is_emoji_font(db, Some(id), &font);
+                  let idx = picker.bump_order();
+                  picker.record_any(&font, is_emoji_font, idx);
+                  if db.has_glyph_cached(id, ch) {
+                    if let Some(font) = picker.consider(font, is_emoji_font, idx) {
+                      return Some(font);
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    if let FamilyEntry::Named(name) = entry {
+      if let Some(font) =
+        font_context.match_web_font_for_char(name, weight, style, stretch, oblique_angle, ch)
+      {
+        return Some(font);
+      }
+      if font_context.is_web_family_declared(name) {
+        continue;
+      }
+    }
+
+    for stretch_choice in &stretch_preferences {
+      for slope in slope_preferences {
+        for weight_choice in &weight_preferences {
+          let query = match entry {
+            FamilyEntry::Named(name) => fontdb::Query {
+              families: &[Family::Name(name)],
+              weight: fontdb::Weight(*weight_choice),
+              stretch: (*stretch_choice).into(),
+              style: (*slope).into(),
+            },
+            FamilyEntry::Generic(generic) => fontdb::Query {
+              families: &[generic.to_fontdb()],
+              weight: fontdb::Weight(*weight_choice),
+              stretch: (*stretch_choice).into(),
+              style: (*slope).into(),
+            },
+          };
+
+          if let Some(id) = db.inner().query(&query) {
+            if let Some(font) = db.load_font(id) {
+              let is_emoji_font = font_is_emoji_font(db, Some(id), &font);
+              let idx = picker.bump_order();
+              picker.record_any(&font, is_emoji_font, idx);
+              if db.has_glyph_cached(id, ch) {
+                if let Some(font) = picker.consider(font, is_emoji_font, idx) {
+                  return Some(font);
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if let FamilyEntry::Generic(generic) = entry {
+      for name in generic.fallback_families() {
+        for weight_choice in &weight_preferences {
+          for slope in slope_preferences {
+            for stretch_choice in &stretch_preferences {
+              let query = fontdb::Query {
+                families: &[Family::Name(name)],
+                weight: fontdb::Weight(*weight_choice),
+                stretch: (*stretch_choice).into(),
+                style: (*slope).into(),
+              };
+              if let Some(id) = db.inner().query(&query) {
+                if let Some(font) = db.load_font(id) {
+                  let is_emoji_font = font_is_emoji_font(db, Some(id), &font);
+                  let idx = picker.bump_order();
+                  picker.record_any(&font, is_emoji_font, idx);
+                  if db.has_glyph_cached(id, ch) {
+                    if let Some(font) = picker.consider(font, is_emoji_font, idx) {
+                      return Some(font);
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  if is_emoji && !picker.avoid_emoji {
+    for id in db.find_emoji_fonts() {
+      if let Some(font) = db.load_font(id) {
+        let idx = picker.bump_order();
+        picker.record_any(&font, true, idx);
+        if db.has_glyph_cached(id, ch) {
+          if let Some(font) = picker.consider(font, true, idx) {
+            return Some(font);
+          }
+        }
+      }
+    }
+  }
+
+  for face in db.faces() {
+    if let Some(font) = db.load_font(face.id) {
+      let is_emoji_font = font_is_emoji_font(db, Some(face.id), &font);
+      let idx = picker.bump_order();
+      picker.record_any(&font, is_emoji_font, idx);
+      if db.has_glyph_cached(face.id, ch) {
+        if let Some(font) = picker.consider(font, is_emoji_font, idx) {
+          return Some(font);
+        }
+      }
+    }
+  }
+
+  picker.finish()
+}
+
+#[allow(clippy::cognitive_complexity)]
+fn resolve_font_for_cluster(
+  base_char: char,
+  coverage_chars: &[char],
+  families: &[crate::text::font_fallback::FamilyEntry],
+  weight: u16,
+  style: FontStyle,
+  oblique_angle: Option<f32>,
+  stretch: DbFontStretch,
+  font_context: &FontContext,
+  emoji_pref: EmojiPreference,
+) -> Option<LoadedFont> {
+  use crate::text::font_fallback::FamilyEntry;
+  use fontdb::Family;
+  let db = font_context.database();
+  let is_emoji = crate::text::font_db::FontDatabase::is_emoji(base_char);
+  let weight_preferences = weight_preference_order(weight);
+  let slope_preferences = slope_preference_order(style);
+  let stretch_preferences = stretch_preference_order(stretch);
+  let math_families = font_context.math_family_names();
+  let mut picker = FontPreferencePicker::new(emoji_pref);
+  let require_base_glyph = !is_non_rendering_for_coverage(base_char);
+
+  let mut needed: Vec<char> = coverage_chars.iter().copied().collect();
+  needed.sort_unstable();
+  needed.dedup();
+  if needed.is_empty() && require_base_glyph {
+    needed.push(base_char);
+  }
+
+  let base_supported = |id: fontdb::ID| !require_base_glyph || db.has_glyph_cached(id, base_char);
+  let covers_needed = |id: fontdb::ID| needed.iter().all(|c| db.has_glyph_cached(id, *c));
+
+  for entry in families {
+    if let FamilyEntry::Generic(crate::text::font_db::GenericFamily::Math) = entry {
+      for family in &math_families {
+        if let Some(font) = font_context.match_web_font_for_char(
+          family,
+          weight,
+          style,
+          stretch,
+          oblique_angle,
+          base_char,
+        ) {
+          let is_emoji_font = font_is_emoji_font(db, None, &font);
+          let idx = picker.bump_order();
+          if !require_base_glyph || font_supports_all_chars(&font, &[base_char]) {
+            picker.record_any(&font, is_emoji_font, idx);
+            if font_supports_all_chars(&font, &needed) {
+              if let Some(font) = picker.consider(font, is_emoji_font, idx) {
+                return Some(font);
+              }
+            }
+          }
+        }
+        for stretch_choice in &stretch_preferences {
+          for slope in slope_preferences {
+            for weight_choice in &weight_preferences {
+              let query = fontdb::Query {
+                families: &[Family::Name(family.as_str())],
+                weight: fontdb::Weight(*weight_choice),
+                stretch: (*stretch_choice).into(),
+                style: (*slope).into(),
+              };
+              if let Some(id) = db.inner().query(&query) {
+                if let Some(font) = db.load_font(id) {
+                  if !base_supported(id) {
+                    continue;
+                  }
+                  let is_emoji_font = font_is_emoji_font(db, Some(id), &font);
+                  let idx = picker.bump_order();
+                  picker.record_any(&font, is_emoji_font, idx);
+                  if covers_needed(id) {
+                    if let Some(font) = picker.consider(font, is_emoji_font, idx) {
+                      return Some(font);
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    if let FamilyEntry::Named(name) = entry {
+      if let Some(font) =
+        font_context.match_web_font_for_char(name, weight, style, stretch, oblique_angle, base_char)
+      {
+        let is_emoji_font = font_is_emoji_font(db, None, &font);
+        let idx = picker.bump_order();
+        if !require_base_glyph || font_supports_all_chars(&font, &[base_char]) {
+          picker.record_any(&font, is_emoji_font, idx);
+          if font_supports_all_chars(&font, &needed) {
+            if let Some(font) = picker.consider(font, is_emoji_font, idx) {
+              return Some(font);
+            }
+          }
+        }
+      }
+      if font_context.is_web_family_declared(name) {
+        continue;
+      }
+    }
+
+    for stretch_choice in &stretch_preferences {
+      for slope in slope_preferences {
+        for weight_choice in &weight_preferences {
+          let query = match entry {
+            FamilyEntry::Named(name) => fontdb::Query {
+              families: &[Family::Name(name)],
+              weight: fontdb::Weight(*weight_choice),
+              stretch: (*stretch_choice).into(),
+              style: (*slope).into(),
+            },
+            FamilyEntry::Generic(generic) => fontdb::Query {
+              families: &[generic.to_fontdb()],
+              weight: fontdb::Weight(*weight_choice),
+              stretch: (*stretch_choice).into(),
+              style: (*slope).into(),
+            },
+          };
+
+          if let Some(id) = db.inner().query(&query) {
+            if let Some(font) = db.load_font(id) {
+              if !base_supported(id) {
+                continue;
+              }
+              let is_emoji_font = font_is_emoji_font(db, Some(id), &font);
+              let idx = picker.bump_order();
+              picker.record_any(&font, is_emoji_font, idx);
+              if covers_needed(id) {
+                if let Some(font) = picker.consider(font, is_emoji_font, idx) {
+                  return Some(font);
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if let FamilyEntry::Generic(generic) = entry {
+      for name in generic.fallback_families() {
+        for weight_choice in &weight_preferences {
+          for slope in slope_preferences {
+            for stretch_choice in &stretch_preferences {
+              let query = fontdb::Query {
+                families: &[Family::Name(name)],
+                weight: fontdb::Weight(*weight_choice),
+                stretch: (*stretch_choice).into(),
+                style: (*slope).into(),
+              };
+              if let Some(id) = db.inner().query(&query) {
+                if let Some(font) = db.load_font(id) {
+                  if !base_supported(id) {
+                    continue;
+                  }
+                  let is_emoji_font = font_is_emoji_font(db, Some(id), &font);
+                  let idx = picker.bump_order();
+                  picker.record_any(&font, is_emoji_font, idx);
+                  if covers_needed(id) {
+                    if let Some(font) = picker.consider(font, is_emoji_font, idx) {
+                      return Some(font);
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  if is_emoji && !picker.avoid_emoji {
+    for id in db.find_emoji_fonts() {
+      if let Some(font) = db.load_font(id) {
+        if !base_supported(id) {
+          continue;
+        }
+        let idx = picker.bump_order();
+        picker.record_any(&font, true, idx);
+        if covers_needed(id) {
+          if let Some(font) = picker.consider(font, true, idx) {
+            return Some(font);
+          }
+        }
+      }
+    }
+  }
+
+  for face in db.faces() {
+    if let Some(font) = db.load_font(face.id) {
+      if !base_supported(face.id) {
+        continue;
+      }
+      let is_emoji_font = font_is_emoji_font(db, Some(face.id), &font);
+      let idx = picker.bump_order();
+      picker.record_any(&font, is_emoji_font, idx);
+      if covers_needed(face.id) {
+        if let Some(font) = picker.consider(font, is_emoji_font, idx) {
+          return Some(font);
+        }
+      }
+    }
+  }
+
+  picker.finish()
 }
 
 #[allow(clippy::too_many_arguments)]

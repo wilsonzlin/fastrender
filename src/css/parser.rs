@@ -355,7 +355,7 @@ fn parse_container_prelude(prelude: &str) -> Option<(Option<String>, Vec<MediaQu
 
   let mut input = ParserInput::new(trimmed);
   let mut parser = Parser::new(&mut input);
-  let name = match parser.try_parse(|p| p.expect_ident()) {
+  let name = match parser.try_parse(|p| p.expect_ident_cloned()) {
     Ok(name) => name.to_string(),
     Err(_) => return None,
   };
