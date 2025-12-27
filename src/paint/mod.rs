@@ -90,6 +90,7 @@
 pub mod blur;
 pub mod canvas;
 pub mod clip_path;
+pub mod depth_sort;
 pub mod display_list;
 pub mod display_list_builder;
 pub mod display_list_renderer;
