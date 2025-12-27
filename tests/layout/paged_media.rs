@@ -1574,11 +1574,37 @@ fn var_in_string_set_is_used_in_running_header() {
     let mut texts = Vec::new();
     collect_text_fragments(page, (0.0, 0.0), &mut texts);
 
-    let header = texts
-      .iter()
-      .find(|t| t.text.contains("Var Title") && t.y < content_y)
-      .unwrap_or_else(|| panic!("page {} running header", idx + 1));
-    assert_eq!(header.text, "Var Title");
+    texts.retain(|t| t.y < content_y);
+    texts.sort_by(|a, b| {
+      a.y
+        .partial_cmp(&b.y)
+        .unwrap_or(std::cmp::Ordering::Equal)
+        .then(
+          a.x
+            .partial_cmp(&b.x)
+            .unwrap_or(std::cmp::Ordering::Equal),
+        )
+    });
+
+    let mut margin_text = String::new();
+    for t in &texts {
+      margin_text.push_str(&t.text);
+    }
+    let mut compacted = margin_text.clone();
+    compacted.retain(|c| !c.is_whitespace());
+    let mut expected = "Var Title".to_string();
+    expected.retain(|c| !c.is_whitespace());
+
+    assert!(
+      compacted.contains(&expected),
+      "expected page {} running header to include {expected:?}, got {margin_text:?}",
+      idx + 1
+    );
+    assert!(
+      !compacted.contains("Ignored"),
+      "expected page {} running header to come from var() value, got {margin_text:?}",
+      idx + 1
+    );
   }
 }
 

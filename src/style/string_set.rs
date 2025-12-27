@@ -78,6 +78,32 @@ mod tests {
   use super::*;
 
   #[test]
+  fn resolves_var_reference_in_string_set() {
+    use crate::css::types::PropertyValue;
+    use crate::style::content::StringSetValue;
+    use crate::style::var_resolution::{resolve_var_for_property, VarResolutionResult};
+    use std::collections::HashMap;
+
+    let mut custom_properties = HashMap::new();
+    custom_properties.insert("--title".to_string(), " \"Var Title\"".to_string());
+
+    let value = PropertyValue::Keyword("header var(--title)".to_string());
+    let VarResolutionResult::Resolved { value, .. } =
+      resolve_var_for_property(&value, &custom_properties, "string-set")
+    else {
+      panic!("expected var() resolution to succeed for string-set value");
+    };
+
+    let assignments = parse_string_set_value(&value).expect("parse string-set after resolution");
+    assert_eq!(assignments.len(), 1);
+    assert_eq!(assignments[0].name, "header");
+    match &assignments[0].value {
+      StringSetValue::Literal(value) => assert_eq!(value, "Var Title"),
+      other => panic!("expected literal string value, got {other:?}"),
+    }
+  }
+
+  #[test]
   fn parses_none_keyword() {
     assert_eq!(parse_string_set("none"), Some(Vec::new()));
     assert_eq!(parse_string_set("NONE"), Some(Vec::new()));
