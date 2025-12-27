@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+  <body>
+    <div id="aria-true" aria-label="Expanded true" aria-expanded="true"></div>
+    <div id="aria-false" aria-label="Expanded false" aria-expanded="false"></div>
+
+    <details id="closed-details" aria-label="Closed details">
+      <summary id="closed-summary">Closed Summary</summary>
+      <p>Closed content</p>
+    </details>
+
+    <details id="open-details" aria-label="Open details" open>
+      <summary id="open-summary">Open Summary</summary>
+      <p>Open content</p>
+    </details>
+
+    <details id="parent-override" aria-label="Parent override" open aria-expanded="false">
+      <summary id="parent-override-summary">Parent Override Summary</summary>
+      <p>Override content</p>
+    </details>
+
+    <details id="summary-override" aria-label="Summary override">
+      <summary id="summary-override-summary" aria-expanded="true">Summary Override</summary>
+      <p>Summary override content</p>
+    </details>
+
+    <details id="hidden-details" hidden open>
+      <summary id="hidden-summary">Hidden Summary</summary>
+      <p>Hidden content</p>
+    </details>
+
+    <details id="inert-details" inert open>
+      <summary id="inert-summary">Inert Summary</summary>
+      <p>Inert content</p>
+    </details>
+  </body>
+</html>

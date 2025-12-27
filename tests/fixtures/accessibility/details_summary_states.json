@@ -1,0 +1,122 @@
+{
+  "present": {
+    "aria-true": {
+      "role": "generic",
+      "name": "Expanded true",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "div",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false,
+        "expanded": true
+      }
+    },
+    "aria-false": {
+      "role": "generic",
+      "name": "Expanded false",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "div",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false,
+        "expanded": false
+      }
+    },
+    "closed-summary": {
+      "role": "button",
+      "name": "Closed Summary",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "summary",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false,
+        "expanded": false
+      }
+    },
+    "open-summary": {
+      "role": "button",
+      "name": "Open Summary",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "summary",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false,
+        "expanded": true
+      }
+    },
+    "parent-override": {
+      "role": "generic",
+      "name": "Parent override",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "details",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false,
+        "expanded": false
+      }
+    },
+    "parent-override-summary": {
+      "role": "button",
+      "name": "Parent Override Summary",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "summary",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false,
+        "expanded": false
+      }
+    },
+    "summary-override-summary": {
+      "role": "button",
+      "name": "Summary Override",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "summary",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false,
+        "expanded": true
+      }
+    }
+  },
+  "absent": [
+    "hidden-details",
+    "hidden-summary",
+    "inert-details",
+    "inert-summary"
+  ]
+}

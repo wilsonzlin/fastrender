@@ -1180,7 +1180,7 @@ fn compute_pressed(node: &StyledNode, role: Option<&str>) -> Option<PressedState
 }
 
 fn compute_expanded(node: &StyledNode, role: Option<&str>, ancestors: &[&DomNode]) -> Option<bool> {
-  if let Some(expanded) = parse_bool_attr(&node.node, "aria-expanded") {
+  if let Some(expanded) = parse_expanded(&node.node) {
     return Some(expanded);
   }
 
@@ -1197,6 +1197,9 @@ fn compute_expanded(node: &StyledNode, role: Option<&str>, ancestors: &[&DomNode
         .map(|t| t.eq_ignore_ascii_case("details"))
         .unwrap_or(false)
       {
+        if let Some(expanded) = parse_expanded(parent) {
+          return Some(expanded);
+        }
         return Some(parent.get_attribute_ref("open").is_some());
       }
     }
@@ -1253,6 +1256,19 @@ fn compute_focusable(node: &DomNode, role: Option<&str>, disabled: bool) -> bool
 
 fn parse_invalid(node: &DomNode, element_ref: &ElementRef) -> bool {
   compute_invalid(node, element_ref)
+}
+
+fn parse_expanded(node: &DomNode) -> Option<bool> {
+  let value = node.get_attribute_ref("aria-expanded")?;
+  let lower = value.trim().to_ascii_lowercase();
+  if lower.is_empty() {
+    return Some(true);
+  }
+  match lower.as_str() {
+    "true" | "1" => Some(true),
+    "false" | "0" => Some(false),
+    _ => None,
+  }
 }
 
 fn parse_aria_invalid(node: &DomNode) -> Option<bool> {

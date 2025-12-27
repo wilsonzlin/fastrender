@@ -895,6 +895,7 @@ fn accessibility_fixture_snapshots() {
     "labels",
     "form_controls",
     "inert_and_hidden",
+    "details_summary_states",
     "modal_top_layer",
     "header_footer_landmarks",
     "form_role_gating",
