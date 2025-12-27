@@ -728,6 +728,7 @@ impl TreeJsonExporter {
         }
       }
       FragmentContent::Line { .. } => {}
+      FragmentContent::RunningAnchor { .. } => {}
     }
 
     if let FragmentContent::Text { text, .. } = &fragment.content {
@@ -996,6 +997,7 @@ fn fragment_kind(fragment: &FragmentNode) -> String {
     FragmentContent::Text { .. } => "text".into(),
     FragmentContent::Line { .. } => "line".into(),
     FragmentContent::Replaced { .. } => "replaced".into(),
+    FragmentContent::RunningAnchor { .. } => "running-anchor".into(),
   }
 }
 

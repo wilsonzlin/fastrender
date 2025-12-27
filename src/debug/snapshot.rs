@@ -629,6 +629,7 @@ fn snapshot_fragment_content(content: &FragmentContent) -> FragmentContentSnapsh
       box_id: *box_id,
       replaced: snapshot_replaced(replaced_type),
     },
+    FragmentContent::RunningAnchor { .. } => FragmentContentSnapshot::Block { box_id: None },
   }
 }
 

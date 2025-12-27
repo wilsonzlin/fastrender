@@ -3017,6 +3017,9 @@ impl FastRender {
             crate::tree::fragment_tree::FragmentContent::Replaced { box_id, .. } => {
               format!("Replaced(box_id={:?}, display={})", box_id, display)
             }
+            crate::tree::fragment_tree::FragmentContent::RunningAnchor { name, .. } => {
+              format!("RunningAnchor(name={:?}, display={})", name, display)
+            }
           }
         }
 
@@ -3312,6 +3315,9 @@ impl FastRender {
           }
           crate::tree::fragment_tree::FragmentContent::Replaced { box_id, .. } => {
             format!("Replaced(box_id={:?}, display={})", box_id, display)
+          }
+          crate::tree::fragment_tree::FragmentContent::RunningAnchor { name, .. } => {
+            format!("RunningAnchor(name={:?}, display={})", name, display)
           }
         }
       }

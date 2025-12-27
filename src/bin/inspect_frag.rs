@@ -2116,6 +2116,7 @@ fn find_us_fragment(
     FragmentContent::Line { .. } => "line".to_string(),
     FragmentContent::Block { .. } => "block".to_string(),
     FragmentContent::Replaced { .. } => "replaced".to_string(),
+    FragmentContent::RunningAnchor { .. } => "running-anchor".to_string(),
   };
   let extra = style.map(|s| {
     format!(
@@ -2245,6 +2246,7 @@ fn label_fragment(
       format!("text {:?}", text.chars().take(40).collect::<String>())
     }
     FragmentContent::Replaced { .. } => "replaced".to_string(),
+    FragmentContent::RunningAnchor { .. } => "running-anchor".to_string(),
   };
   label.push_str(&format!(
     " @ ({:.1},{:.1},{:.1},{:.1})",
