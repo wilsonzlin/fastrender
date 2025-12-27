@@ -66,6 +66,7 @@ use crate::style::types::NumericFigure;
 use crate::style::types::NumericFraction;
 use crate::style::types::NumericSpacing;
 use crate::style::ComputedStyle;
+use crate::text::cpal;
 use crate::text::emoji;
 use crate::text::font_db::FontDatabase;
 use crate::text::font_db::FontStretch as DbFontStretch;
@@ -2494,6 +2495,7 @@ fn push_font_run(
 ) {
   let segment_text = &run.text[start..end];
   let mut variations = authored_variations.to_vec();
+  let mut palette_index = 0;
   if let Ok(face) = font.as_ttf_face() {
     let axes: Vec<_> = face.variation_axes().into_iter().collect();
     if !axes.is_empty() {
@@ -2564,6 +2566,8 @@ fn push_font_run(
         }
       }
     }
+
+    palette_index = cpal::select_palette_index(&face, style.font_palette);
   }
 
   let language = match &style.font_language_override {
@@ -2586,7 +2590,7 @@ fn push_font_run(
     language,
     features: features.to_vec(),
     variations,
-    palette_index: 0,
+    palette_index,
     rotation: RunRotation::None,
     vertical: false,
   });
@@ -2958,6 +2962,7 @@ fn shaping_style_hash(style: &ComputedStyle) -> u64 {
   (style.font_synthesis.small_caps as u8).hash(&mut hasher);
   (style.font_synthesis.position as u8).hash(&mut hasher);
   std::mem::discriminant(&style.font_optical_sizing).hash(&mut hasher);
+  std::mem::discriminant(&style.font_palette).hash(&mut hasher);
 
   match style.font_language_override.clone() {
     FontLanguageOverride::Normal => 0u8.hash(&mut hasher),

@@ -1823,6 +1823,20 @@ pub enum FontOpticalSizing {
   None,
 }
 
+/// Palette selection hint for color fonts (`font-palette`)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FontPalette {
+  Normal,
+  Light,
+  Dark,
+}
+
+impl Default for FontPalette {
+  fn default() -> Self {
+    FontPalette::Normal
+  }
+}
+
 /// Emoji rendering preference (`font-variant-emoji`)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FontVariantEmoji {

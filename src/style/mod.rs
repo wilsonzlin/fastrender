@@ -17,8 +17,8 @@ pub mod media;
 pub mod page;
 pub mod position;
 pub mod properties;
-pub mod style_set;
 pub mod string_set;
+pub mod style_set;
 pub mod types;
 pub mod values;
 pub mod var_resolution;
@@ -81,6 +81,7 @@ use types::FontFeatureSetting;
 use types::FontKerning;
 use types::FontLanguageOverride;
 use types::FontOpticalSizing;
+use types::FontPalette;
 use types::FontSizeAdjust;
 use types::FontStretch;
 use types::FontStyle;
@@ -611,6 +612,7 @@ pub struct ComputedStyle {
   pub font_variant_emoji: FontVariantEmoji,
   pub font_stretch: FontStretch,
   pub font_kerning: FontKerning,
+  pub font_palette: FontPalette,
   pub line_height: LineHeight,
   pub direction: Direction,
   pub unicode_bidi: UnicodeBidi,
@@ -925,6 +927,7 @@ impl Default for ComputedStyle {
       font_variant_emoji: FontVariantEmoji::Normal,
       font_stretch: FontStretch::Normal,
       font_kerning: FontKerning::Auto,
+      font_palette: FontPalette::Normal,
       line_height: LineHeight::Normal,
       direction: Direction::Ltr,
       unicode_bidi: UnicodeBidi::Normal,

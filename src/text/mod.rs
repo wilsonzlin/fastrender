@@ -66,6 +66,7 @@
 // ============================================================================
 
 pub mod color_fonts;
+pub mod cpal;
 pub mod font_db;
 pub mod font_fallback;
 pub mod font_loader;

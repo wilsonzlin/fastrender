@@ -1745,6 +1745,7 @@ fn is_inherited_property(name: &str) -> bool {
       | "font-synthesis-style"
       | "font-synthesis-small-caps"
       | "font-synthesis-position"
+      | "font-palette"
       | "font-kerning"
       | "line-height"
       | "text-align"
@@ -3074,6 +3075,7 @@ fn apply_property_from_source(
     }
     "font-stretch" => styles.font_stretch = source.font_stretch,
     "font-kerning" => styles.font_kerning = source.font_kerning,
+    "font-palette" => styles.font_palette = source.font_palette,
     "font-synthesis" => styles.font_synthesis = source.font_synthesis,
     "font-synthesis-weight" => styles.font_synthesis.weight = source.font_synthesis.weight,
     "font-synthesis-style" => styles.font_synthesis.style = source.font_synthesis.style,
@@ -6336,6 +6338,16 @@ pub fn apply_declaration_with_base(
           "normal" => FontKerning::Normal,
           "none" => FontKerning::None,
           _ => styles.font_kerning,
+        };
+      }
+    }
+    "font-palette" => {
+      if let PropertyValue::Keyword(raw) = &resolved_value {
+        styles.font_palette = match raw.to_ascii_lowercase().as_str() {
+          "normal" => FontPalette::Normal,
+          "light" => FontPalette::Light,
+          "dark" => FontPalette::Dark,
+          _ => styles.font_palette,
         };
       }
     }
@@ -12440,6 +12452,7 @@ mod tests {
   use super::*;
   use crate::css::properties::parse_property_value;
   use crate::geometry::Size;
+  use crate::style::cascade::inherit_styles;
   use crate::style::content::{ContentItem, ContentValue, RunningElementSelect};
   use crate::style::string_set::{StringSetAssignment, StringSetValue};
   use crate::style::types::AlignContent;
@@ -12455,6 +12468,7 @@ mod tests {
   use crate::style::types::CaseTransform;
   use crate::style::types::FlexDirection;
   use crate::style::types::FlexWrap;
+  use crate::style::types::FontPalette;
   use crate::style::types::FontStretch;
   use crate::style::types::FontVariant;
   use crate::style::types::GridAutoFlow;
@@ -19884,6 +19898,34 @@ mod tests {
       style.font_variant_emoji,
       crate::style::types::FontVariantEmoji::Normal
     ));
+  }
+
+  #[test]
+  fn parses_font_palette() {
+    let mut style = ComputedStyle::default();
+    for (value, expected) in [
+      ("normal", FontPalette::Normal),
+      ("light", FontPalette::Light),
+      ("dark", FontPalette::Dark),
+    ] {
+      let decl = Declaration {
+        property: "font-palette".to_string(),
+        value: PropertyValue::Keyword(value.to_string()),
+        raw_value: String::new(),
+        important: false,
+      };
+      apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+      assert_eq!(style.font_palette, expected);
+    }
+  }
+
+  #[test]
+  fn font_palette_inherits() {
+    let mut parent = ComputedStyle::default();
+    parent.font_palette = FontPalette::Dark;
+    let mut child = ComputedStyle::default();
+    inherit_styles(&mut child, &parent);
+    assert_eq!(child.font_palette, FontPalette::Dark);
   }
 
   #[test]

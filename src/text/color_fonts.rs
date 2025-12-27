@@ -3,6 +3,7 @@
 //! Provides color glyph rasterization for bitmap, SVG, and COLR/CPAL fonts.
 
 use crate::style::color::Rgba;
+use crate::text::cpal::parse_cpal_palette;
 use crate::text::font_db::LoadedFont;
 use std::sync::Arc;
 use tiny_skia::{FillRule, Paint, Path, PathBuilder, Pixmap, Transform};
@@ -293,62 +294,6 @@ fn find_base_glyph(
 struct LayerRecord {
   glyph_id: u16,
   palette_index: u16,
-}
-
-// ----------------------------------------------------------------------------
-// CPAL parsing (version 0 and 1 basics)
-// ----------------------------------------------------------------------------
-
-fn parse_cpal_palette(face: &ttf_parser::Face<'_>, palette_index: u16) -> Option<Vec<Rgba>> {
-  let data = face
-    .raw_face()
-    .table(ttf_parser::Tag::from_bytes(b"CPAL"))?;
-  if data.len() < 12 {
-    return None;
-  }
-
-  let _version = read_u16(data, 0)?;
-  let num_entries = read_u16(data, 2)? as usize;
-  let num_palettes = read_u16(data, 4)? as usize;
-  let num_color_records = read_u16(data, 6)? as usize;
-  let color_offset = read_u32(data, 8)? as usize;
-
-  if num_entries == 0 || num_palettes == 0 || num_color_records == 0 {
-    return None;
-  }
-
-  let palette = palette_index.min(num_palettes.saturating_sub(1) as u16) as usize;
-  let indices_start = 12;
-  let indices_end = indices_start + num_palettes * 2;
-  if indices_end > data.len() {
-    return None;
-  }
-  if color_offset + num_color_records * 4 > data.len() {
-    return None;
-  }
-  let start_index = read_u16(data, indices_start + palette * 2)? as usize;
-
-  if start_index >= num_color_records {
-    return None;
-  }
-
-  let colors_start = color_offset + start_index * 4;
-  let needed = num_entries * 4;
-  if colors_start + needed > data.len() {
-    return None;
-  }
-
-  let mut colors = Vec::with_capacity(num_entries);
-  for i in 0..num_entries {
-    let off = colors_start + i * 4;
-    let b = data[off];
-    let g = data[off + 1];
-    let r = data[off + 2];
-    let a = data[off + 3];
-    colors.push(Rgba::from_rgba8(r, g, b, a));
-  }
-
-  Some(colors)
 }
 
 // ----------------------------------------------------------------------------

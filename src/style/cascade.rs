@@ -3411,6 +3411,7 @@ pub(crate) fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle)
   styles.font_variant_emoji = parent.font_variant_emoji;
   styles.font_stretch = parent.font_stretch;
   styles.font_kerning = parent.font_kerning;
+  styles.font_palette = parent.font_palette;
   styles.line_height = parent.line_height.clone();
   styles.direction = parent.direction;
   styles.text_align = parent.text_align;
