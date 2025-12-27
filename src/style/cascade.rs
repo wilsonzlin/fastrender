@@ -9203,11 +9203,16 @@ fn with_shadow_host<'a, F, R>(
 where
   F: FnOnce(&mut MatchingContext<FastRenderSelectorImpl>) -> R,
 {
-  if let Some(host) = shadow_host {
+  let prev_shadow_host = context.extra_data.shadow_host;
+  let result = if let Some(host) = shadow_host {
+    context.extra_data.shadow_host = Some(host.opaque());
     context.with_shadow_host(Some(host), f)
   } else {
+    context.extra_data.shadow_host = None;
     f(context)
-  }
+  };
+  context.extra_data.shadow_host = prev_shadow_host;
+  result
 }
 
 fn selector_contains_host_context(
