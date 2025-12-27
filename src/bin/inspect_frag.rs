@@ -1,10 +1,8 @@
 mod common;
 
 use clap::Parser;
-use common::args::{BaseUrlArgs, MediaArgs, TimeoutArgs, ViewportArgs};
+use common::args::{parse_viewport, MediaPreferenceArgs};
 use common::media_prefs::MediaPreferences;
-use cssparser::Parser as CssParser;
-use cssparser::ParserInput;
 use fastrender::api::FastRender;
 use fastrender::css::encoding::decode_css_bytes;
 use fastrender::css::loader::absolutize_css_urls;
@@ -14,20 +12,13 @@ use fastrender::css::loader::infer_base_url;
 use fastrender::css::loader::inject_css_into_html;
 use fastrender::css::loader::inline_imports;
 use fastrender::css::parser::extract_css;
-use fastrender::css::selectors::FastRenderSelectorImpl;
-use fastrender::css::selectors::PseudoClassParser;
-use fastrender::debug::inspect::InspectQuery;
-use fastrender::debug::runtime::{set_runtime_toggles, RuntimeToggles};
-use fastrender::debug::tree_printer::{JsonExportConfig, TreeJsonExporter};
 use fastrender::dom::DomNodeType;
 use fastrender::dom::{self};
 use fastrender::geometry::Point;
 use fastrender::geometry::Rect;
 use fastrender::geometry::Size;
-use fastrender::image_output::encode_image;
 use fastrender::layout::engine::LayoutConfig;
 use fastrender::layout::engine::LayoutEngine;
-use fastrender::paint::canvas::Canvas;
 use fastrender::paint::display_list::Transform3D;
 use fastrender::paint::display_list_builder::DisplayListBuilder;
 use fastrender::paint::stacking::creates_stacking_context;
@@ -35,38 +26,21 @@ use fastrender::resource::HttpFetcher;
 use fastrender::resource::ResourceFetcher;
 use fastrender::resource::DEFAULT_ACCEPT_LANGUAGE;
 use fastrender::resource::DEFAULT_USER_AGENT;
-use fastrender::snapshot_pipeline;
 use fastrender::style::cascade::apply_styles_with_media_and_target;
 use fastrender::style::cascade::StyledNode;
-use fastrender::style::color::Rgba;
 use fastrender::style::computed::Visibility;
 use fastrender::style::display::Display;
+use fastrender::style::media::MediaType;
 use fastrender::style::position::Position;
-use fastrender::style::types::Overflow;
 use fastrender::style::ComputedStyle;
-use fastrender::text::font_loader::FontContext;
-use fastrender::text::pipeline::ShapingPipeline;
 use fastrender::tree::box_generation::generate_box_tree_with_anonymous_fixup;
 use fastrender::tree::box_tree::BoxNode;
-use fastrender::tree::box_tree::BoxTree;
 use fastrender::tree::fragment_tree::FragmentContent;
 use fastrender::tree::fragment_tree::FragmentNode;
-use fastrender::tree::fragment_tree::FragmentTree;
-use fastrender::OutputFormat;
-use selectors::matching::matches_selector;
-use selectors::matching::MatchingContext;
-use selectors::matching::MatchingForInvalidation;
-use selectors::matching::MatchingMode;
-use selectors::matching::NeedsSelectorFlags;
-use selectors::matching::QuirksMode;
-use selectors::matching::SelectorCaches;
-use selectors::parser::SelectorList;
-use serde_json::Value;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::env;
 use std::fs;
-use std::path::Path;
-use std::sync::Arc;
 use std::time::Duration;
 use url::Url;
 
@@ -77,8 +51,13 @@ struct Args {
   /// HTML file or file:// URL to inspect
   file: String,
 
-  #[command(flatten)]
-  surface: ViewportArgs,
+  /// Viewport size as WxH (e.g., 1200x800)
+  #[arg(long, value_parser = parse_viewport, default_value = "1200x800")]
+  viewport: (u32, u32),
+
+  /// Device pixel ratio for media queries/srcset
+  #[arg(long, default_value = "1.0")]
+  dpr: f32,
 
   /// Horizontal scroll offset in CSS px
   #[arg(long, default_value = "0.0")]
@@ -88,44 +67,8 @@ struct Args {
   #[arg(long, default_value = "0.0")]
   scroll_y: f32,
 
-  /// Emit fragmentation decision traces (also available via FASTR_TRACE_FRAGMENTATION=1)
-  #[arg(long)]
-  trace_fragmentation: bool,
-
-  /// Directory to write JSON dumps for each pipeline stage
-  #[arg(long, value_name = "DIR")]
-  dump_json: Option<String>,
-
-  /// Render the document with debug overlays to a PNG file
-  #[arg(long, value_name = "PNG")]
-  render_overlay: Option<String>,
-
-  /// CSS selector to filter dumps/overlays to the first matching element
-  #[arg(long, conflicts_with = "filter_id")]
-  filter_selector: Option<String>,
-
-  /// Element id to filter dumps/overlays to the first matching element
-  #[arg(long, conflicts_with = "filter_selector")]
-  filter_id: Option<String>,
-
-  /// Whether to draw fragment bounds when rendering overlays
-  #[arg(long, default_value_t = true)]
-  overlay_fragments: bool,
-
-  /// Whether to annotate box ids when rendering overlays
-  #[arg(long, default_value_t = true)]
-  overlay_box_ids: bool,
-
-  /// Whether to outline stacking contexts when rendering overlays
-  #[arg(long, default_value_t = true)]
-  overlay_stacking_contexts: bool,
-
-  /// Whether to highlight scroll containers when rendering overlays
-  #[arg(long, default_value_t = true)]
-  overlay_scroll_containers: bool,
-
   #[command(flatten)]
-  media: MediaArgs,
+  media_prefs: MediaPreferenceArgs,
 
   /// Override the User-Agent header
   #[arg(long, default_value = DEFAULT_USER_AGENT)]
@@ -136,38 +79,8 @@ struct Args {
   accept_language: String,
 
   /// Abort after this many seconds
-  #[command(flatten)]
-  timeout: TimeoutArgs,
-
-  #[command(flatten)]
-  base_url: BaseUrlArgs,
-
-  /// Dump a combined pipeline snapshot as JSON to stdout and exit.
-  #[arg(
-    long,
-    conflicts_with_all = [
-      "dump_json",
-      "render_overlay",
-      "filter_selector",
-      "filter_id",
-      "query",
-      "query_id",
-      "query_node"
-    ]
-  )]
-  dump_snapshot: bool,
-
-  /// Dump inspection JSON for a CSS selector (bypasses other output).
   #[arg(long)]
-  query: Option<String>,
-
-  /// Dump inspection JSON for an element with this id.
-  #[arg(long)]
-  query_id: Option<String>,
-
-  /// Dump inspection JSON for a styled node id.
-  #[arg(long)]
-  query_node: Option<usize>,
+  timeout: Option<u64>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -188,16 +101,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   }));
 
   let args = Args::parse();
-  let runtime_toggles = Arc::new(RuntimeToggles::from_env());
-  let _toggle_guard = set_runtime_toggles(runtime_toggles.clone());
-  let media_prefs = MediaPreferences::from(&args.media.prefs);
-  if args.trace_fragmentation {
-    std::env::set_var("FASTR_TRACE_FRAGMENTATION", "1");
-  }
+  let media_prefs = MediaPreferences::from(&args.media_prefs);
 
-  let (viewport_w, viewport_h) = args.surface.viewport;
+  let (viewport_w, viewport_h) = args.viewport;
 
-  if let Some(sec) = args.timeout.seconds(None) {
+  if let Some(sec) = args.timeout {
     std::thread::spawn(move || {
       std::thread::sleep(Duration::from_secs(sec));
       eprintln!("inspect_frag: timed out after {}s", sec);
@@ -228,13 +136,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   };
 
   let mut html = fs::read_to_string(&path)?;
-  let inferred_base = infer_base_url(&html, &input_url).into_owned();
-  let resource_base = args
-    .base_url
-    .base_url
-    .as_ref()
-    .map(|base| infer_base_url(&html, base).into_owned())
-    .unwrap_or(inferred_base);
+  let resource_base = infer_base_url(&html, &input_url).into_owned();
 
   media_prefs.apply_env();
 
@@ -245,21 +147,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
   }
 
-  let mut renderer = FastRender::builder()
-    .device_pixel_ratio(args.surface.dpr)
-    .runtime_toggles((*runtime_toggles).clone())
-    .build()?;
+  let mut renderer = FastRender::builder().device_pixel_ratio(args.dpr).build()?;
   renderer.set_base_url(resource_base.clone());
 
-  if let Some(val) = runtime_toggles.get("FASTR_TRACE_BOXES") {
+  if let Ok(val) = env::var("FASTR_TRACE_BOXES") {
     eprintln!("FASTR_TRACE_BOXES env in inspect_frag: {val}");
   }
-  let inspect_mask = runtime_toggles.truthy("FASTR_INSPECT_MASK");
+  let inspect_mask = env::var("FASTR_INSPECT_MASK")
+    .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+    .unwrap_or(false);
 
   // Optionally fetch and inline external CSS links to mirror the render_pages pipeline.
-  let fetch_css = runtime_toggles.truthy_with_default("FASTR_FETCH_LINK_CSS", true);
+  let fetch_css = env::var("FASTR_FETCH_LINK_CSS")
+    .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+    .unwrap_or(true);
   if fetch_css {
-    let mut css_links = extract_css_links(&html, &resource_base, args.media.media_type());
+    let mut css_links = extract_css_links(&html, &resource_base, MediaType::Screen);
     let mut seen_links: HashSet<String> = css_links.iter().cloned().collect();
     for extra in extract_embedded_css_urls(&html, &resource_base) {
       if seen_links.insert(extra.clone()) {
@@ -284,15 +187,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .fetch(u)
                 .map(|res| decode_css_bytes(&res.bytes, res.content_type.as_deref()))
             };
-            let inlined = inline_imports(
+            match inline_imports(
               &rewritten,
               &link,
               &mut import_fetch,
               &mut seen_imports,
               None,
-            )
-            .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
-            combined_css.push_str(&inlined);
+            ) {
+              Ok(inlined) => combined_css.push_str(&inlined),
+              Err(err) => {
+                eprintln!("warn: failed to inline @import rules in {link}: {err}");
+                combined_css.push_str(&rewritten);
+              }
+            }
             combined_css.push('\n');
           }
           Err(err) => eprintln!("warn: failed to fetch css {link}: {err}"),
@@ -306,41 +213,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   let dom = dom::parse_html(&html)?;
 
-  let query = args
-    .query_node
-    .map(InspectQuery::NodeId)
-    .or_else(|| args.query_id.clone().map(InspectQuery::Id))
-    .or_else(|| args.query.clone().map(InspectQuery::Selector));
-  if let Some(query) = query {
-    let inspections = renderer.inspect(&dom, viewport_w, viewport_h, query)?;
-    println!("{}", serde_json::to_string_pretty(&inspections)?);
-    return Ok(());
-  }
-
   let media_ctx = media_prefs.media_context_with_overrides(
     (viewport_w, viewport_h),
-    args.surface.dpr,
-    args.media.media_type(),
+    args.dpr,
+    MediaType::Screen,
   );
   let stylesheet = extract_css(&dom)?;
   let styled = apply_styles_with_media_and_target(&dom, &stylesheet, &media_ctx, None);
-
-  if args.dump_snapshot {
-    let box_tree = generate_box_tree_with_anonymous_fixup(&styled);
-    let engine = LayoutEngine::with_font_context(
-      LayoutConfig::for_viewport(Size::new(viewport_w as f32, viewport_h as f32)),
-      renderer.font_context().clone(),
-    );
-    let fragment_tree = engine.layout_tree(&box_tree)?;
-    let mut display_list = DisplayListBuilder::new().build_with_stacking_tree(&fragment_tree.root);
-    for extra in &fragment_tree.additional_fragments {
-      let extra_list = DisplayListBuilder::new().build_with_stacking_tree(extra);
-      display_list.append(extra_list);
-    }
-    let snapshot = snapshot_pipeline(&dom, &styled, &box_tree, &fragment_tree, &display_list);
-    serde_json::to_writer_pretty(std::io::stdout(), &snapshot)?;
-    return Ok(());
-  }
 
   let mut styled_text = 0;
   let mut styled_text_visible = 0;
@@ -477,7 +356,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     styled_text, styled_text_visible
   );
 
-  if let Some(needle) = runtime_toggles.get("FASTR_FIND_TEXT") {
+  if let Ok(needle) = env::var("FASTR_FIND_TEXT") {
     fn walk(node: &StyledNode, needle: &str, stack: &mut Vec<String>, found: &mut bool) {
       stack.push(format!(
         "{}({:?})",
@@ -505,7 +384,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut stack = Vec::new();
     let mut found = false;
-    walk(&styled, needle, &mut stack, &mut found);
+    walk(&styled, &needle, &mut stack, &mut found);
     if !found {
       eprintln!("styled text node containing {:?} not found", needle);
     }
@@ -539,9 +418,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
   }
 
-  let find_box_text = runtime_toggles
-    .get("FASTR_FIND_BOX_TEXT")
-    .map(|s| s.to_string());
+  let find_box_text = env::var("FASTR_FIND_BOX_TEXT").ok();
   let box_tree = generate_box_tree_with_anonymous_fixup(&styled);
   let mut text_boxes = 0;
   let mut path: Vec<String> = Vec::new();
@@ -580,34 +457,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   });
   println!("text boxes: {}", text_boxes);
 
-  let engine = LayoutEngine::with_font_context(
-    LayoutConfig::for_viewport(Size::new(viewport_w as f32, viewport_h as f32)),
-    renderer.font_context().clone(),
-  );
+  let mut layout_config =
+    LayoutConfig::for_viewport(Size::new(viewport_w as f32, viewport_h as f32));
+  if let Some(page_height) = env::var("FASTR_FRAGMENTATION_PAGE_HEIGHT")
+    .ok()
+    .and_then(|v| v.parse::<f32>().ok())
+  {
+    let gap = env::var("FASTR_FRAGMENTATION_GAP")
+      .ok()
+      .and_then(|v| v.parse::<f32>().ok())
+      .unwrap_or(0.0);
+    layout_config = LayoutConfig::for_pagination(Size::new(viewport_w as f32, page_height), gap);
+  }
+  let engine = LayoutEngine::with_font_context(layout_config, renderer.font_context().clone());
   let fragment_tree = engine.layout_tree(&box_tree)?;
   let scroll_offset = Point::new(-args.scroll_x, -args.scroll_y);
-  let filter_path = resolve_filter_path(
-    &dom,
-    args.filter_id.as_deref(),
-    args.filter_selector.as_deref(),
-  );
-  let dump_targets = build_dump_targets(
-    &dom,
-    &styled,
-    &box_tree,
-    &fragment_tree,
-    filter_path.as_deref(),
-  );
-  if let Some(dir) = args.dump_json.as_deref() {
-    dump_json_outputs(
-      Path::new(dir),
-      &dump_targets,
-      scroll_offset,
-      &resource_base,
-      args.surface.dpr,
-      renderer.font_context(),
-    )?;
-  }
   let mut box_debug: HashMap<usize, String> = HashMap::new();
   collect_box_debug(&box_tree.root, &mut box_debug);
   let mut box_styles: HashMap<usize, std::sync::Arc<ComputedStyle>> = HashMap::new();
@@ -691,14 +555,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   }
 
   println!("fragments: {}", fragment_tree.fragment_count());
-
-  let mut fragments_abs: Vec<(Rect, &FragmentNode)> = Vec::new();
-  for root in std::iter::once(&fragment_tree.root).chain(fragment_tree.additional_fragments.iter()) {
-    collect_fragments_abs(root, scroll_offset, &mut fragments_abs);
+  let root_contexts = fragment_roots(&fragment_tree, scroll_offset);
+  println!("fragment roots (applied offsets):");
+  for ctx in &root_contexts {
+    let frag = ctx.fragment;
+    let base_desc = ctx
+      .base
+      .map(|b| format!(" base=({:.1},{:.1}) include_base={}", b.x, b.y, ctx.include_base))
+      .unwrap_or_else(|| format!(" base=None include_base={}", ctx.include_base));
+    println!(
+      "  root[{}]: bounds=({:.1},{:.1},{:.1},{:.1}) offset=({:.1},{:.1}) fragmentainer={}/{}{}",
+      ctx.index,
+      frag.bounds.x(),
+      frag.bounds.y(),
+      frag.bounds.width(),
+      frag.bounds.height(),
+      ctx.offset.x,
+      ctx.offset.y,
+      frag.fragmentainer_index + 1,
+      frag.fragment_count,
+      base_desc
+    );
   }
 
-  let mut fragments_by_box: HashMap<usize, Vec<(Rect, &FragmentNode)>> = HashMap::new();
-  let mut transformed: Vec<(Rect, &FragmentNode, Option<Transform3D>)> = Vec::new();
+  let mut fragments_abs: Vec<(Rect, &FragmentNode, usize)> = Vec::new();
+  for ctx in root_contexts.iter().copied() {
+    collect_fragments_abs(
+      ctx.fragment,
+      ctx.offset,
+      ctx.base,
+      ctx.include_base,
+      ctx.index,
+      &mut fragments_abs,
+    );
+  }
+
+  let mut fragments_by_box: HashMap<usize, Vec<(Rect, &FragmentNode, usize)>> = HashMap::new();
+  let mut transformed: Vec<(Rect, &FragmentNode, usize, Option<Transform3D>)> = Vec::new();
 
   let mut text_count = 0;
   let mut block_count = 0;
@@ -709,7 +602,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   let mut maxx = f32::MIN;
   let mut maxy = f32::MIN;
 
-  for (abs, frag) in &fragments_abs {
+  for (abs, frag, root_idx) in &fragments_abs {
     minx = minx.min(abs.x());
     miny = miny.min(abs.y());
     maxx = maxx.max(abs.max_x());
@@ -720,7 +613,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         text_count += 1;
         if text_count <= 5 {
           let preview: String = text.chars().take(50).collect();
-          println!("text {:?} @ {:?}", preview, abs);
+          println!("text {:?} @ {:?} [root {}]", preview, abs, root_idx);
         }
       }
       FragmentContent::Block { .. } => block_count += 1,
@@ -733,7 +626,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       fragments_by_box
         .entry(box_id)
         .or_default()
-        .push((*abs, *frag));
+        .push((*abs, *frag, *root_idx));
     }
     if let Some(style) = frag.style.as_deref() {
       if !style.transform.is_empty() {
@@ -742,7 +635,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
           Rect::from_xywh(abs.x(), abs.y(), abs.width(), abs.height()),
           Some((viewport_w as f32, viewport_h as f32)),
         );
-        transformed.push((*abs, *frag, matrix));
+        transformed.push((*abs, *frag, *root_idx, matrix));
       }
     }
   }
@@ -769,7 +662,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       .unwrap_or_else(|| format!("box {box_id}"));
     let ranges: Vec<String> = frags
       .iter()
-      .map(|(rect, frag)| {
+      .map(|(rect, frag, root_idx)| {
         let extra = match &frag.content {
           FragmentContent::Inline { fragment_index, .. } => {
             format!(" fragment_index={fragment_index}")
@@ -777,12 +670,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
           _ => String::new(),
         };
         format!(
-          "({:.1},{:.1},{:.1},{:.1}){}",
+          "({:.1},{:.1},{:.1},{:.1}){} [root {}]",
           rect.x(),
           rect.y(),
           rect.width(),
           rect.height(),
-          extra
+          extra,
+          root_idx
         )
       })
       .collect();
@@ -795,8 +689,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   }
 
   println!("fragments with transforms: {}", transformed.len());
-  for (idx, (abs, frag, matrix)) in transformed.iter().enumerate().take(8) {
-    let label = label_fragment(frag, *abs, &box_debug);
+  for (idx, (abs, frag, root_idx, matrix)) in transformed.iter().enumerate().take(8) {
+    let mut label = label_fragment(frag, *abs, &box_debug);
+    label.push_str(&format!(" [root {}]", root_idx));
     if let Some(m) = matrix {
       let mm = &m.m;
       println!(
@@ -834,13 +729,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
   }
   // Optional viewport-overlap stats to understand what appears in the initial viewport.
-  let log_viewport = runtime_toggles.truthy("FASTR_LOG_VIEWPORT_OVERLAP");
+  let log_viewport = env::var("FASTR_LOG_VIEWPORT_OVERLAP")
+    .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+    .unwrap_or(false);
   if log_viewport {
     let viewport_rect = Rect::from_xywh(0.0, 0.0, viewport_w as f32, viewport_h as f32);
     let mut in_view = 0usize;
     let mut text_in_view = 0usize;
     let mut samples: Vec<(f32, String)> = Vec::new();
-    for (abs, frag) in &fragments_abs {
+    for (abs, frag, _) in &fragments_abs {
       let intersects = abs.x() < viewport_rect.x() + viewport_rect.width()
         && abs.x() + abs.width() > viewport_rect.x()
         && abs.y() < viewport_rect.y() + viewport_rect.height()
@@ -875,7 +772,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
   }
   let mut dark_backgrounds: Vec<(f32, f32, Rect, String)> = Vec::new();
-  for (abs, frag) in &fragments_abs {
+  for (abs, frag, root_idx) in &fragments_abs {
     if let Some(style) = frag.style.as_deref() {
       let bg = style.background_color;
       if bg.a > 0.0 && bg.r == 12 && bg.g == 12 && bg.b == 12 {
@@ -886,9 +783,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
           match &frag.content {
             FragmentContent::Block { box_id } | FragmentContent::Inline { box_id, .. } => box_id
               .and_then(|id| box_debug.get(&id))
-              .cloned()
-              .unwrap_or_else(|| format!("{:?}", frag.content)),
-            _ => format!("{:?}", frag.content),
+              .map(|dbg| format!("[root {root_idx}] {dbg}"))
+              .unwrap_or_else(|| format!("[root {root_idx}] {:?}", frag.content)),
+            _ => format!("[root {root_idx}] {:?}", frag.content),
           },
         ));
       }
@@ -896,25 +793,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   }
   dark_backgrounds.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
   for (idx, (_, _, rect, content)) in dark_backgrounds.iter().take(5).enumerate() {
-    println!("dark bg #{idx}: {:?} @ {:?}", content, rect);
+    println!("dark bg #{idx}: {content} @ {:?}", rect);
   }
-  let mut all_text: Vec<(f32, f32, String)> = Vec::new();
-  for root in std::iter::once(&fragment_tree.root).chain(fragment_tree.additional_fragments.iter()) {
-    collect_text_abs(root, scroll_offset, &mut all_text);
+  let mut all_text: Vec<(f32, f32, usize, String)> = Vec::new();
+  for ctx in root_contexts.iter().copied() {
+    collect_text_abs(
+      ctx.fragment,
+      ctx.offset,
+      ctx.base,
+      ctx.include_base,
+      ctx.index,
+      &mut all_text,
+    );
   }
   all_text.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
   println!("leftmost text fragments:");
-  for (idx, (x, y, text)) in all_text.iter().take(10).enumerate() {
+  for (idx, (x, y, root_idx, text)) in all_text.iter().take(10).enumerate() {
     let preview: String = text.chars().take(40).collect();
-    println!("  {idx}: ({x:.1}, {y:.1}) {preview:?}");
+    println!("  {idx}: ({x:.1}, {y:.1}) [root {root_idx}] {preview:?}");
   }
   println!("rightmost text fragments:");
-  for (idx, (x, y, text)) in all_text.iter().rev().take(10).enumerate() {
+  for (idx, (x, y, root_idx, text)) in all_text.iter().rev().take(10).enumerate() {
     let preview: String = text.chars().take(40).collect();
-    println!("  {idx}: ({x:.1}, {y:.1}) {preview:?}");
+    println!("  {idx}: ({x:.1}, {y:.1}) [root {root_idx}] {preview:?}");
   }
   let mut ranks: Vec<(i32, f32, f32)> = Vec::new();
-  for (x, y, text) in &all_text {
+  for (x, y, _, text) in &all_text {
     if let Some(stripped) = text.strip_suffix('.') {
       if let Ok(n) = stripped.trim().parse::<i32>() {
         ranks.push((n, *x, *y));
@@ -929,8 +833,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   // Surface far-right fragments to catch runaway translations.
   let mut far_right: Vec<_> = fragments_abs
     .iter()
-    .filter(|(abs, _)| abs.max_x() > 2000.0)
-    .map(|(abs, f)| {
+    .filter(|(abs, _, _)| abs.max_x() > 2000.0)
+    .map(|(abs, f, root_idx)| {
       let (id, debug) = match &f.content {
         FragmentContent::Block { box_id } | FragmentContent::Inline { box_id, .. } => {
           if let Some(id) = box_id {
@@ -952,7 +856,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         abs.width(),
         abs.height(),
         id,
-        debug,
+        format!("[root {root_idx}] {debug}"),
       )
     })
     .collect();
@@ -965,14 +869,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   let mut by_y = all_text.clone();
   by_y.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
   println!("top-most text fragments:");
-  for (idx, (x, y, text)) in by_y.iter().take(10).enumerate() {
+  for (idx, (x, y, root_idx, text)) in by_y.iter().take(10).enumerate() {
     let preview: String = text.chars().take(40).collect();
-    println!("  {idx}: ({x:.1}, {y:.1}) {preview:?}");
+    println!("  {idx}: ({x:.1}, {y:.1}) [root {root_idx}] {preview:?}");
   }
   println!("first 5 text fragments with color/font-size:");
-  for (abs, frag) in fragments_abs
+  for (abs, frag, root_idx) in fragments_abs
     .iter()
-    .filter(|(_, f)| matches!(f.content, FragmentContent::Text { .. }))
+    .filter(|(_, f, _)| matches!(f.content, FragmentContent::Text { .. }))
     .take(5)
   {
     if let FragmentContent::Text { text, .. } = &frag.content {
@@ -986,10 +890,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|c| (c.r, c.g, c.b, c.a))
         .unwrap_or((0, 0, 0, 0.0));
       println!(
-        "  text {:?} @ ({:.1},{:.1}) size={:.1} color=rgba({},{},{},{:.2}) visibility={}",
+        "  text {:?} @ ({:.1},{:.1}) [root {}] size={:.1} color=rgba({},{},{},{:.2}) visibility={}",
         text.chars().take(40).collect::<String>(),
         abs.x(),
         abs.y(),
+        root_idx,
         fs,
         r,
         g,
@@ -1000,32 +905,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
   }
   println!("path to first 'US' text fragment (absolute bounds):");
-  let mut path: Vec<String> = Vec::new();
-  for root in std::iter::once(&fragment_tree.root).chain(fragment_tree.additional_fragments.iter()) {
-    if find_us_fragment(root, scroll_offset, &mut path) {
+  let mut found_us = false;
+  for ctx in root_contexts.iter().copied() {
+    let mut path: Vec<String> = Vec::new();
+    if find_us_fragment(
+      ctx.fragment,
+      ctx.offset,
+      ctx.base,
+      ctx.include_base,
+      ctx.index,
+      &mut path,
+    ) {
+      found_us = true;
       break;
     }
   }
+  if !found_us {
+    println!("  (not found)");
+  }
 
   let mut stacks = Vec::new();
-  for (idx, root) in std::iter::once(&fragment_tree.root)
-    .chain(fragment_tree.additional_fragments.iter())
-    .enumerate()
-  {
-    collect_stacking_contexts(root, scroll_offset, None, idx == 0, &mut stacks);
+  for ctx in root_contexts.iter().copied() {
+    collect_stacking_contexts(
+      ctx.fragment,
+      ctx.offset,
+      ctx.base,
+      ctx.include_base,
+      None,
+      true,
+      ctx.index,
+      &mut stacks,
+    );
   }
   stacks.sort_by(|a, b| {
-    a.rect
+    a.1
+      .rect
       .y()
-      .partial_cmp(&b.rect.y())
+      .partial_cmp(&b.1.rect.y())
       .unwrap_or(std::cmp::Ordering::Equal)
   });
   println!("stacking contexts (top to bottom): {}", stacks.len());
-  for (idx, ctx) in stacks.iter().enumerate() {
+  for (idx, (root_idx, ctx)) in stacks.iter().enumerate() {
     let bg = ctx.style.background_color;
     let bg = format!("rgba({},{},{},{:.2})", bg.r, bg.g, bg.b, bg.a);
     println!(
-            "  #{idx}: ({:.1}, {:.1}, {:.1}, {:.1}) display={:?} pos={:?} z={:?} opacity={:.2} transform_ops={} bg={}",
+            "  #{idx}: ({:.1}, {:.1}, {:.1}, {:.1}) display={:?} pos={:?} z={:?} opacity={:.2} transform_ops={} bg={} [root {}]",
             ctx.rect.x(),
             ctx.rect.y(),
             ctx.rect.width(),
@@ -1035,7 +959,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ctx.z_index,
             ctx.opacity,
             ctx.transform_ops,
-            bg
+            bg,
+            root_idx
         );
     if idx < 5 {
       // Show a couple of custom properties for early contexts when present.
@@ -1049,10 +974,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   // Also list contexts intersecting the viewport to locate visible layers.
   println!("viewport-intersecting stacking contexts:");
   let viewport = Rect::from_xywh(0.0, 0.0, viewport_w as f32, viewport_h as f32);
-  for ctx in stacks.iter().filter(|c| c.rect.intersects(viewport)) {
+  for (root_idx, ctx) in stacks
+    .iter()
+    .filter(|(_, c)| c.rect.intersects(viewport))
+    .map(|(r, c)| (*r, c))
+  {
     let bg = ctx.style.background_color;
     println!(
-      "  vis: ({:.1},{:.1},{:.1},{:.1}) z={:?} display={:?} bg=rgba({},{},{},{:.2})",
+      "  vis: ({:.1},{:.1},{:.1},{:.1}) z={:?} display={:?} bg=rgba({},{},{},{:.2}) [root {}]",
       ctx.rect.x(),
       ctx.rect.y(),
       ctx.rect.width(),
@@ -1062,12 +991,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       bg.r,
       bg.g,
       bg.b,
-      bg.a
+      bg.a,
+      root_idx
     );
   }
 
   let mut backgrounds = Vec::new();
-  for (abs, frag) in &fragments_abs {
+  for (abs, frag, root_idx) in &fragments_abs {
     if let Some(style) = frag.style.as_deref() {
       let bg = style.background_color;
       if bg.a > 0.0 {
@@ -1078,29 +1008,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
           format!("{:?}", frag.content),
           abs.width(),
           abs.height(),
+          *root_idx,
         ));
       }
     }
   }
   backgrounds.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
   println!("first backgrounds with alpha > 0:");
-  for (idx, (y, x, bg, content, w, h)) in backgrounds.iter().take(10).enumerate() {
+  for (idx, (y, x, bg, content, w, h, root_idx)) in backgrounds.iter().take(10).enumerate() {
     println!(
-      "  #{idx}: ({x:.1},{y:.1},{w:.1},{h:.1}) bg=rgba({},{},{},{:.2}) content={}",
-      bg.r, bg.g, bg.b, bg.a, content
+      "  #{idx}: ({x:.1},{y:.1},{w:.1},{h:.1}) bg=rgba({},{},{},{:.2}) content={} [root {}]",
+      bg.r, bg.g, bg.b, bg.a, content, root_idx
     );
   }
   // Backgrounds that intersect the viewport
   let viewport = Rect::from_xywh(0.0, 0.0, viewport_w as f32, viewport_h as f32);
   let mut view_bgs: Vec<_> = fragments_abs
     .iter()
-    .filter_map(|(abs, frag)| {
+    .filter_map(|(abs, frag, root_idx)| {
       frag
         .style
         .as_deref()
-        .map(|style| (style.background_color, *abs, frag))
+        .map(|style| (style.background_color, *abs, frag, *root_idx))
     })
-    .filter(|(bg, rect, _)| bg.a > 0.0 && rect.intersects(viewport))
+    .filter(|(bg, rect, _, _)| bg.a > 0.0 && rect.intersects(viewport))
     .collect();
   view_bgs.sort_by(|a, b| {
     a.1
@@ -1112,14 +1043,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     "viewport-intersecting backgrounds (alpha>0): {}",
     view_bgs.len()
   );
-  for (idx, (bg, rect, frag)) in view_bgs
+  for (idx, (bg, rect, frag, root_idx)) in view_bgs
     .iter()
-    .filter(|(_, r, _)| r.width() * r.height() > 1000.0)
+    .filter(|(_, r, _, _)| r.width() * r.height() > 1000.0)
     .take(20)
     .enumerate()
   {
     println!(
-      "  #{idx}: ({:.1},{:.1},{:.1},{:.1}) bg=rgba({},{},{},{:.2}) content={:?}",
+      "  #{idx}: ({:.1},{:.1},{:.1},{:.1}) bg=rgba({},{},{},{:.2}) content={:?} [root {}]",
       rect.x(),
       rect.y(),
       rect.width(),
@@ -1128,18 +1059,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       bg.g,
       bg.b,
       bg.a,
-      frag.content
+      frag.content,
+      root_idx
     );
   }
   let mut view_bgs_by_area: Vec<_> = view_bgs
     .iter()
-    .map(|(bg, rect, frag)| (rect.width() * rect.height(), *bg, rect, frag))
+    .map(|(bg, rect, frag, root_idx)| (rect.width() * rect.height(), *bg, rect, frag, *root_idx))
     .collect();
   view_bgs_by_area.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
   println!("largest viewport-intersecting backgrounds (alpha>0):");
-  for (idx, (area, bg, rect, frag)) in view_bgs_by_area.iter().take(10).enumerate() {
+  for (idx, (area, bg, rect, frag, root_idx)) in view_bgs_by_area.iter().take(10).enumerate() {
     println!(
-      "  #{idx}: area={:.1} rect=({:.1},{:.1},{:.1},{:.1}) bg=rgba({},{},{},{:.2}) content={:?}",
+      "  #{idx}: area={:.1} rect=({:.1},{:.1},{:.1},{:.1}) bg=rgba({},{},{},{:.2}) content={:?} [root {}]",
       *area,
       rect.x(),
       rect.y(),
@@ -1149,24 +1081,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       bg.g,
       bg.b,
       bg.a,
-      frag.content
+      frag.content,
+      root_idx
     );
   }
 
-  // Absolute-coordinate background analysis across all fragment roots.
-  let mut abs_backgrounds: Vec<(Rect, &FragmentNode)> = Vec::new();
-  for root in std::iter::once(&fragment_tree.root).chain(fragment_tree.additional_fragments.iter()) {
-    collect_backgrounds_abs(root, scroll_offset, &mut abs_backgrounds);
+  // Absolute-coordinate background analysis.
+  let mut abs_backgrounds: Vec<(Rect, &FragmentNode, usize)> = Vec::new();
+  for ctx in root_contexts.iter().copied() {
+    collect_backgrounds_abs(
+      ctx.fragment,
+      ctx.offset,
+      ctx.base,
+      ctx.include_base,
+      ctx.index,
+      &mut abs_backgrounds,
+    );
   }
   let mut abs_view_bgs: Vec<_> = abs_backgrounds
     .iter()
-    .filter_map(|(rect, frag)| {
+    .filter_map(|(rect, frag, root_idx)| {
       frag
         .style
         .as_deref()
-        .map(|style| (rect, style.background_color, *frag))
+        .map(|style| (rect, style.background_color, *frag, *root_idx))
     })
-    .filter(|(rect, bg, _)| bg.a > 0.0 && rect.intersects(viewport))
+    .filter(|(rect, bg, _, _)| bg.a > 0.0 && rect.intersects(viewport))
     .collect();
   abs_view_bgs.sort_by(|a, b| {
     a.0
@@ -1178,14 +1118,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     "abs viewport-intersecting backgrounds (alpha>0): {}",
     abs_view_bgs.len()
   );
-  for (idx, (rect, bg, frag)) in abs_view_bgs
+  for (idx, (rect, bg, frag, root_idx)) in abs_view_bgs
     .iter()
-    .filter(|(r, _, _)| r.width() * r.height() > 1000.0)
+    .filter(|(r, _, _, _)| r.width() * r.height() > 1000.0)
     .take(20)
     .enumerate()
   {
     println!(
-      "  #{idx}: ({:.1},{:.1},{:.1},{:.1}) bg=rgba({},{},{},{:.2}) content={:?}",
+      "  #{idx}: ({:.1},{:.1},{:.1},{:.1}) bg=rgba({},{},{},{:.2}) content={:?} [root {}]",
       rect.x(),
       rect.y(),
       rect.width(),
@@ -1194,32 +1134,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       bg.g,
       bg.b,
       bg.a,
-      frag.content
+      frag.content,
+      root_idx
     );
   }
   let mut abs_by_area: Vec<_> = abs_backgrounds
     .iter()
-    .filter_map(|(rect, frag)| {
+    .filter_map(|(rect, frag, root_idx)| {
       frag.style.as_deref().map(|style| {
         (
           rect.width() * rect.height(),
           *rect,
           style.background_color,
           *frag,
+          *root_idx,
         )
       })
     })
     .collect();
   abs_by_area.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
   println!("largest absolute backgrounds (alpha>0):");
-  for (idx, (area, rect, bg, frag)) in abs_by_area
+  for (idx, (area, rect, bg, frag, root_idx)) in abs_by_area
     .iter()
-    .filter(|(_, _, bg, _)| bg.a > 0.0)
+    .filter(|(_, _, bg, _, _)| bg.a > 0.0)
     .take(10)
     .enumerate()
   {
     println!(
-      "  #{idx}: area={:.1} rect=({:.1},{:.1},{:.1},{:.1}) bg=rgba({},{},{},{:.2}) content={:?}",
+      "  #{idx}: area={:.1} rect=({:.1},{:.1},{:.1},{:.1}) bg=rgba({},{},{},{:.2}) content={:?} [root {}]",
       *area,
       rect.x(),
       rect.y(),
@@ -1229,25 +1171,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       bg.g,
       bg.b,
       bg.a,
-      frag.content
+      frag.content,
+      root_idx
     );
   }
 
   // Trace nav/header positioning for HN: find first text containing "Hacker News" or ".pagetop" span.
-  let mut nav_path = Vec::new();
-  let mut found_nav = false;
-  for root in std::iter::once(&fragment_tree.root).chain(fragment_tree.additional_fragments.iter()) {
-    if find_fragment_with_text(root, scroll_offset, "Hacker News", &mut nav_path) {
-      found_nav = true;
+  let mut nav_found = false;
+  for ctx in root_contexts.iter().copied() {
+    let mut nav_path = Vec::new();
+    if find_fragment_with_text(
+      ctx.fragment,
+      ctx.offset,
+      ctx.base,
+      ctx.include_base,
+      "Hacker News",
+      &mut nav_path,
+    ) {
+      println!("path to 'Hacker News' fragment (root {}):", ctx.index);
+      for (idx, entry) in nav_path.iter().enumerate() {
+        println!("  {idx}: {entry}");
+      }
+      nav_found = true;
       break;
     }
   }
-  if found_nav {
-    println!("path to 'Hacker News' fragment:");
-    for (idx, entry) in nav_path.iter().enumerate() {
-      println!("  {idx}: {entry}");
-    }
-  } else {
+  if !nav_found {
     println!("no 'Hacker News' text fragment found");
   }
 
@@ -1255,8 +1204,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   // inflate the document height (seen on CNN flex items).
   let mut skinny: Vec<_> = abs_backgrounds
         .iter()
-        .filter(|(rect, _)| rect.width() <= 5.0 && rect.height() >= 600.0)
-        .map(|(rect, frag)| {
+        .filter(|(rect, _, _)| rect.width() <= 5.0 && rect.height() >= 600.0)
+        .map(|(rect, frag, root_idx)| {
             let mut info = match &frag.content {
                 FragmentContent::Block { .. } => "block".to_string(),
                 FragmentContent::Inline { .. } => "inline".to_string(),
@@ -1291,9 +1240,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 _ => None,
             } {
                 if let Some(debug) = box_debug.get(&box_id) {
-                    info.push_str(&format!(" box#{box_id} {debug}"));
+                    info.push_str(&format!(" box#{box_id} {debug} [root {root_idx}]"));
                 } else {
-                    info.push_str(&format!(" box#{box_id}"));
+                    info.push_str(&format!(" box#{box_id} [root {root_idx}]"));
                 }
             }
             (*rect, info)
@@ -1334,25 +1283,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       );
     }
   }
-  let skinny_path = std::iter::once(&fragment_tree.root)
-    .chain(fragment_tree.additional_fragments.iter())
-    .find_map(|root| find_first_skinny(root, scroll_offset, &box_debug));
-  if let Some(path) = skinny_path {
+  if let Some(path) = root_contexts.iter().copied().find_map(|ctx| {
+    find_first_skinny(
+      ctx.fragment,
+      ctx.offset,
+      ctx.base,
+      ctx.include_base,
+      ctx.index,
+      &box_debug,
+    )
+  }) {
     println!("path to first skinny fragment:");
     for (idx, entry) in path.iter().enumerate() {
       println!("  {idx}: {entry}");
     }
   }
-  if let Some((rect, frag)) = abs_backgrounds
+  if let Some((rect, frag, root_idx)) = abs_backgrounds
     .iter()
-    .find(|(rect, _)| rect.width() <= 5.0 && rect.height() >= 600.0)
+    .find(|(rect, _, _)| rect.width() <= 5.0 && rect.height() >= 600.0)
   {
     println!(
-            "first skinny fragment children (absolute coords, first 10): parent @ ({:.1},{:.1},{:.1},{:.1})",
+            "first skinny fragment children (absolute coords, first 10): parent @ ({:.1},{:.1},{:.1},{:.1}) [root {}]",
             rect.x(),
             rect.y(),
             rect.width(),
-            rect.height()
+            rect.height(),
+            root_idx
         );
     for (idx, child) in frag.children.iter().take(10).enumerate() {
       let child_abs = Rect::from_xywh(
@@ -1370,26 +1326,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   // Trace a problematic headline (or a caller-provided needle) to understand how its ancestors
   // are sized/positioned.
-  let needle = runtime_toggles
-    .get("FASTR_NEEDLE")
-    .map(|v| v.to_string())
-    .unwrap_or_else(|| "New photos released from Epstein".into());
+  let needle =
+    env::var("FASTR_NEEDLE").unwrap_or_else(|_| "New photos released from Epstein".into());
   if !needle.is_empty() {
-    let path = std::iter::once(&fragment_tree.root)
-      .chain(fragment_tree.additional_fragments.iter())
-      .find_map(|root| find_fragment_path(root, scroll_offset, &needle));
-    if let Some(path) = path {
-      println!("ancestor chain for text containing {:?}:", needle);
-      for (depth, (label, rect)) in path.iter().enumerate() {
+    let mut found_path = false;
+    for ctx in root_contexts.iter().copied() {
+      if let Some(path) =
+        find_fragment_path(ctx.fragment, ctx.offset, ctx.base, ctx.include_base, &needle)
+      {
         println!(
-          "  {depth}: {label} @ ({:.1},{:.1},{:.1},{:.1})",
-          rect.x(),
-          rect.y(),
-          rect.width(),
-          rect.height()
+          "ancestor chain for text containing {:?} (root {}):",
+          needle, ctx.index
         );
+        for (depth, (label, rect)) in path.iter().enumerate() {
+          println!(
+            "  {depth}: {label} @ ({:.1},{:.1},{:.1},{:.1})",
+            rect.x(),
+            rect.y(),
+            rect.width(),
+            rect.height()
+          );
+        }
+        found_path = true;
+        break;
       }
-    } else {
+    }
+    if !found_path {
       println!("no fragment found containing {:?}", needle);
     }
   }
@@ -1398,11 +1360,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   if let Some((first_li, _)) = li_nodes.first() {
     trace_ids.push(*first_li);
   }
-  if let Some(env_ids) = runtime_toggles.usize_list("FASTR_TRACE_BOXES") {
-    trace_ids.extend(env_ids);
+  if let Ok(env_ids) = env::var("FASTR_TRACE_BOXES") {
+    for id in env_ids
+      .split(',')
+      .filter_map(|tok| tok.trim().parse::<usize>().ok())
+    {
+      trace_ids.push(id);
+    }
   }
-  if let Some(info_ids) = runtime_toggles.usize_list("FASTR_TRACE_BOX_INFO") {
-    for id in info_ids {
+  if let Ok(info_ids) = env::var("FASTR_TRACE_BOX_INFO") {
+    for id in info_ids
+      .split(',')
+      .filter_map(|tok| tok.trim().parse::<usize>().ok())
+    {
       if let Some(node) = find_box_by_id(&box_tree.root, id) {
         println!(
                     "box {} info: display={:?} position={:?} visibility={:?} opacity={} size=({:?},{:?}) min=({:?},{:?}) max=({:?},{:?}) overflow=({:?},{:?}) flex=({:.2},{:.2},{:?}) order={} selector={:?}",
@@ -1428,81 +1398,103 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       }
     }
   }
-  if let Some(dump_id) = runtime_toggles
-    .get("FASTR_DUMP_FRAGMENT")
+  if let Some(dump_id) = env::var("FASTR_DUMP_FRAGMENT")
+    .ok()
     .and_then(|v| v.parse::<usize>().ok())
   {
-    if let Some(fragment) = std::iter::once(&fragment_tree.root)
-      .chain(fragment_tree.additional_fragments.iter())
-      .find_map(|root| find_fragment_node(root, scroll_offset, dump_id))
-    {
-      println!(
-        "fragment subtree for box_id {}: text_fragments={}",
-        dump_id,
-        count_text_fragments(fragment)
-      );
-      print_fragment_tree(fragment, 0, 80);
-    } else {
+    let mut found_fragment = false;
+    for ctx in root_contexts.iter().copied() {
+      if let Some(fragment) =
+        find_fragment_node(ctx.fragment, ctx.offset, ctx.base, ctx.include_base, dump_id)
+      {
+        println!(
+          "fragment subtree for box_id {}: text_fragments={} [root {}]",
+          dump_id,
+          count_text_fragments(fragment),
+          ctx.index
+        );
+        print_fragment_tree(fragment, 0, 80);
+        found_fragment = true;
+        break;
+      }
+    }
+    if !found_fragment {
       println!("no fragment found for box_id {}", dump_id);
     }
   }
   for target_id in trace_ids {
-    if let Some(path) = std::iter::once(&fragment_tree.root)
-      .chain(fragment_tree.additional_fragments.iter())
-      .find_map(|root| find_fragment_by_box_id(root, scroll_offset, target_id, &box_debug))
-    {
-      println!("path to box_id {target_id}:");
-      for (idx, entry) in path.iter().enumerate() {
-        println!("  {idx}: {entry}");
-      }
-      if let Some(style) = box_styles.get(&target_id) {
-        println!(
-                    "  style: display={:?} position={:?} width={:?} height={:?} min=({:?},{:?}) max=({:?},{:?}) flex=({:?},{:?},{:?}) flex_dir={:?} flex_wrap={:?} align=({:?},{:?}) justify={:?} opacity={:.2} visibility={:?}",
-                    style.display,
-                    style.position,
-                    style.width,
-                    style.height,
-                    style.min_width,
-                    style.min_height,
-                    style.max_width,
-                    style.max_height,
-                    style.flex_grow,
-                    style.flex_shrink,
-                    style.flex_basis,
-                    style.flex_direction,
-                    style.flex_wrap,
-                    style.align_items,
-                    style.align_self,
-                    style.justify_content,
-                    style.opacity,
-                    style.visibility,
-                );
-
-        if !style.background_layers.is_empty() {
-          let summaries: Vec<String> = style
-            .background_layers
-            .iter()
-            .map(|layer| match &layer.image {
-              Some(fastrender::style::types::BackgroundImage::Url(url)) => {
-                format!("url({})", url)
-              }
-              Some(fastrender::style::types::BackgroundImage::None) => "none".to_string(),
-              Some(_) => "gradient".to_string(),
-              None => "(none)".to_string(),
-            })
-            .collect();
-          println!("  backgrounds: {:?}", summaries);
+    let mut found = false;
+    for ctx in root_contexts.iter().copied() {
+      if let Some(path) = find_fragment_by_box_id(
+        ctx.fragment,
+        ctx.offset,
+        ctx.base,
+        ctx.include_base,
+        target_id,
+        &box_debug,
+      ) {
+        println!("path to box_id {target_id} (root {}):", ctx.index);
+        for (idx, entry) in path.iter().enumerate() {
+          println!("  {idx}: {entry}");
         }
+        if let Some(style) = box_styles.get(&target_id) {
+          println!(
+                      "  style: display={:?} position={:?} width={:?} height={:?} min=({:?},{:?}) max=({:?},{:?}) flex=({:?},{:?},{:?}) flex_dir={:?} flex_wrap={:?} align=({:?},{:?}) justify={:?} opacity={:.2} visibility={:?}",
+                      style.display,
+                      style.position,
+                      style.width,
+                      style.height,
+                      style.min_width,
+                      style.min_height,
+                      style.max_width,
+                      style.max_height,
+                      style.flex_grow,
+                      style.flex_shrink,
+                      style.flex_basis,
+                      style.flex_direction,
+                      style.flex_wrap,
+                      style.align_items,
+                      style.align_self,
+                      style.justify_content,
+                      style.opacity,
+                      style.visibility,
+                  );
+
+          if !style.background_layers.is_empty() {
+            let summaries: Vec<String> = style
+              .background_layers
+              .iter()
+              .map(|layer| match &layer.image {
+                Some(fastrender::style::types::BackgroundImage::Url(url)) => {
+                  format!("url({})", url)
+                }
+                Some(fastrender::style::types::BackgroundImage::None) => "none".to_string(),
+                Some(_) => "gradient".to_string(),
+                None => "(none)".to_string(),
+              })
+              .collect();
+            println!("  backgrounds: {:?}", summaries);
+          }
+        }
+        found = true;
+        break;
       }
-    } else {
+    }
+    if !found {
       println!("box_id {target_id} not found in fragments");
     }
   }
-  if let Some(path) = std::iter::once(&fragment_tree.root)
-    .chain(fragment_tree.additional_fragments.iter())
-    .find_map(|root| find_max_x_fragment(root, scroll_offset))
-  {
-    println!("path to fragment with largest max_x:");
+  let mut max_path_root = None;
+  let mut max_path = None;
+  for ctx in root_contexts.iter().copied() {
+    if let Some(path) = find_max_x_fragment(ctx.fragment, ctx.offset, ctx.base, ctx.include_base) {
+      max_path_root = Some(ctx.index);
+      max_path = Some(path);
+      break;
+    }
+  }
+  if let (Some(root_idx), Some(path)) = (max_path_root, max_path) {
+    println!("path to fragment with largest max_x (root {}):", root_idx);
     for (idx, entry) in path.iter().enumerate() {
       println!("  {idx}: {entry}");
     }
@@ -1538,437 +1530,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
   }
 
-  if let Some(output) = args.render_overlay.as_deref() {
-    let overlay_tree = if filter_path.is_some() {
-      &dump_targets.fragment_tree
-    } else {
-      &fragment_tree
-    };
-    let options = OverlayOptions {
-      fragments: args.overlay_fragments,
-      box_ids: args.overlay_box_ids,
-      stacking_contexts: args.overlay_stacking_contexts,
-      scroll_containers: args.overlay_scroll_containers,
-    };
-    render_overlay_png(
-      &renderer,
-      &fragment_tree,
-      overlay_tree,
-      &box_debug,
-      scroll_offset,
-      (viewport_w, viewport_h),
-      Path::new(output),
-      &options,
-      renderer.font_context(),
-    )?;
-  }
-
   Ok(())
-}
-
-struct DumpTrees {
-  dom: dom::DomNode,
-  styled: StyledNode,
-  box_root: BoxNode,
-  fragment_tree: FragmentTree,
-}
-
-fn resolve_filter_path(
-  dom: &dom::DomNode,
-  filter_id: Option<&str>,
-  filter_selector: Option<&str>,
-) -> Option<Vec<usize>> {
-  if let Some(id) = filter_id {
-    return find_dom_path_by_id(dom, id);
-  }
-
-  let selector_list = if let Some(selector) = filter_selector {
-    let mut input = ParserInput::new(selector);
-    let mut parser = CssParser::new(&mut input);
-    match SelectorList::parse(
-      &PseudoClassParser,
-      &mut parser,
-      selectors::parser::ParseRelative::No,
-    ) {
-      Ok(list) => Some(list),
-      Err(err) => {
-        eprintln!("warn: failed to parse filter selector {selector:?}: {err:?}");
-        None
-      }
-    }
-  } else {
-    None
-  };
-
-  if let Some(selectors) = selector_list.as_ref() {
-    return find_dom_path_by_selector(dom, selectors);
-  }
-
-  None
-}
-
-fn build_dump_targets(
-  dom: &dom::DomNode,
-  styled: &StyledNode,
-  box_tree: &BoxTree,
-  fragment_tree: &FragmentTree,
-  filter_path: Option<&[usize]>,
-) -> DumpTrees {
-  if let Some(path) = filter_path {
-    let dom_sub = dom_subtree_by_path(dom, path).unwrap_or_else(|| dom.clone());
-    let styled_sub = styled_subtree_by_path(styled, path).unwrap_or_else(|| styled.clone());
-
-    let mut styled_ids = HashSet::new();
-    collect_styled_ids(&styled_sub, &mut styled_ids);
-
-    let box_root = filter_box_tree_for_styled(&box_tree.root, &styled_ids)
-      .unwrap_or_else(|| box_tree.root.clone());
-
-    let mut box_ids = HashSet::new();
-    collect_box_ids_for_filter(&box_root, &mut box_ids);
-    let fragment_tree = filter_fragment_tree_for_boxes(fragment_tree, &box_ids)
-      .unwrap_or_else(|| fragment_tree.clone());
-
-    DumpTrees {
-      dom: dom_sub,
-      styled: styled_sub,
-      box_root,
-      fragment_tree,
-    }
-  } else {
-    DumpTrees {
-      dom: dom.clone(),
-      styled: styled.clone(),
-      box_root: box_tree.root.clone(),
-      fragment_tree: fragment_tree.clone(),
-    }
-  }
-}
-
-fn dump_json_outputs(
-  dir: &Path,
-  targets: &DumpTrees,
-  scroll_offset: Point,
-  base_url: &str,
-  dpr: f32,
-  font_ctx: &FontContext,
-) -> Result<(), Box<dyn std::error::Error>> {
-  fs::create_dir_all(dir)?;
-
-  let exporter = TreeJsonExporter::with_config(JsonExportConfig {
-    scroll_offset: Some(scroll_offset),
-  });
-
-  write_json_file(&dir.join("dom.json"), &exporter.export_dom(&targets.dom))?;
-  write_json_file(
-    &dir.join("styled.json"),
-    &exporter.export_styled_tree(&targets.styled),
-  )?;
-  write_json_file(
-    &dir.join("box_tree.json"),
-    &exporter.export_box_tree(&targets.box_root),
-  )?;
-  write_json_file(
-    &dir.join("fragment_tree.json"),
-    &exporter.export_fragment_tree(&targets.fragment_tree.root),
-  )?;
-
-  let display_list = DisplayListBuilder::new()
-    .with_font_context(font_ctx.clone())
-    .with_device_pixel_ratio(dpr)
-    .with_base_url(base_url.to_string())
-    .build_tree(&targets.fragment_tree);
-  write_json_file(
-    &dir.join("display_list.json"),
-    &exporter.export_display_list(&display_list),
-  )?;
-
-  Ok(())
-}
-
-fn write_json_file(path: &Path, value: &Value) -> Result<(), Box<dyn std::error::Error>> {
-  let json = serde_json::to_string_pretty(value)?;
-  fs::write(path, json)?;
-  Ok(())
-}
-
-fn dom_subtree_by_path(node: &dom::DomNode, path: &[usize]) -> Option<dom::DomNode> {
-  if path.is_empty() {
-    return Some(node.clone());
-  }
-  let (idx, rest) = path.split_first()?;
-  node
-    .children
-    .get(*idx)
-    .and_then(|child| dom_subtree_by_path(child, rest))
-}
-
-fn styled_subtree_by_path(node: &StyledNode, path: &[usize]) -> Option<StyledNode> {
-  if path.is_empty() {
-    return Some(node.clone());
-  }
-  let (idx, rest) = path.split_first()?;
-  node
-    .children
-    .get(*idx)
-    .and_then(|child| styled_subtree_by_path(child, rest))
-}
-
-fn collect_styled_ids(node: &StyledNode, out: &mut HashSet<usize>) {
-  out.insert(node.node_id);
-  for child in &node.children {
-    collect_styled_ids(child, out);
-  }
-}
-
-fn filter_box_tree_for_styled(node: &BoxNode, allowed: &HashSet<usize>) -> Option<BoxNode> {
-  let filtered_children: Vec<_> = node
-    .children
-    .iter()
-    .filter_map(|child| filter_box_tree_for_styled(child, allowed))
-    .collect();
-  let keep = node
-    .styled_node_id
-    .map(|id| allowed.contains(&id))
-    .unwrap_or(false)
-    || !filtered_children.is_empty();
-  if keep {
-    let mut clone = node.clone();
-    clone.children = filtered_children;
-    Some(clone)
-  } else {
-    None
-  }
-}
-
-fn collect_box_ids_for_filter(node: &BoxNode, out: &mut HashSet<usize>) {
-  out.insert(node.id);
-  for child in &node.children {
-    collect_box_ids_for_filter(child, out);
-  }
-}
-
-fn filter_fragment_tree_for_boxes(
-  tree: &FragmentTree,
-  allowed: &HashSet<usize>,
-) -> Option<FragmentTree> {
-  filter_fragment_node_for_boxes(&tree.root, allowed).map(|root| {
-    let mut clone = tree.clone();
-    clone.root = root;
-    clone.additional_fragments.clear();
-    clone
-  })
-}
-
-fn filter_fragment_node_for_boxes(
-  node: &FragmentNode,
-  allowed: &HashSet<usize>,
-) -> Option<FragmentNode> {
-  let filtered_children: Vec<_> = node
-    .children
-    .iter()
-    .filter_map(|child| filter_fragment_node_for_boxes(child, allowed))
-    .collect();
-  let keep = fragment_box_id(node)
-    .map(|id| allowed.contains(&id))
-    .unwrap_or(false)
-    || !filtered_children.is_empty();
-
-  if keep {
-    let mut clone = node.clone();
-    clone.children = filtered_children;
-    Some(clone)
-  } else {
-    None
-  }
-}
-
-fn find_dom_path_by_id(node: &dom::DomNode, target: &str) -> Option<Vec<usize>> {
-  let mut path = Vec::new();
-  fn walk(node: &dom::DomNode, target: &str, path: &mut Vec<usize>) -> Option<Vec<usize>> {
-    if node
-      .get_attribute_ref("id")
-      .map(|id| id == target)
-      .unwrap_or(false)
-    {
-      return Some(path.clone());
-    }
-    for (idx, child) in node.children.iter().enumerate() {
-      path.push(idx);
-      if let Some(found) = walk(child, target, path) {
-        return Some(found);
-      }
-      path.pop();
-    }
-    None
-  }
-
-  walk(node, target, &mut path)
-}
-
-fn find_dom_path_by_selector(
-  node: &dom::DomNode,
-  selectors: &SelectorList<FastRenderSelectorImpl>,
-) -> Option<Vec<usize>> {
-  let mut caches = SelectorCaches::default();
-  let mut context = MatchingContext::new(
-    MatchingMode::Normal,
-    None,
-    &mut caches,
-    QuirksMode::NoQuirks,
-    NeedsSelectorFlags::Yes,
-    MatchingForInvalidation::No,
-  );
-  let mut ancestors: Vec<&dom::DomNode> = Vec::new();
-  let mut path = Vec::new();
-
-  fn walk<'a>(
-    node: &'a dom::DomNode,
-    selectors: &SelectorList<FastRenderSelectorImpl>,
-    context: &mut MatchingContext<FastRenderSelectorImpl>,
-    ancestors: &mut Vec<&'a dom::DomNode>,
-    path: &mut Vec<usize>,
-  ) -> Option<Vec<usize>> {
-    if node.is_element() || matches!(node.node_type, DomNodeType::Slot { .. }) {
-      let element_ref = dom::ElementRef::with_ancestors(node, ancestors);
-      if selectors
-        .slice()
-        .iter()
-        .any(|sel| matches_selector(sel, 0, None, &element_ref, context))
-      {
-        return Some(path.clone());
-      }
-    }
-
-    ancestors.push(node);
-    for (idx, child) in node.children.iter().enumerate() {
-      path.push(idx);
-      if let Some(found) = walk(child, selectors, context, ancestors, path) {
-        return Some(found);
-      }
-      path.pop();
-    }
-    ancestors.pop();
-    None
-  }
-
-  walk(node, selectors, &mut context, &mut ancestors, &mut path)
-}
-
-struct OverlayOptions {
-  fragments: bool,
-  box_ids: bool,
-  stacking_contexts: bool,
-  scroll_containers: bool,
-}
-
-fn render_overlay_png(
-  renderer: &FastRender,
-  paint_tree: &FragmentTree,
-  overlay_tree: &FragmentTree,
-  box_debug: &HashMap<usize, String>,
-  scroll_offset: Point,
-  viewport: (u32, u32),
-  output: &Path,
-  options: &OverlayOptions,
-  font_ctx: &FontContext,
-) -> Result<(), Box<dyn std::error::Error>> {
-  let pixmap = renderer.paint_with_offset(paint_tree, viewport.0, viewport.1, scroll_offset)?;
-  let mut canvas = Canvas::from_pixmap(pixmap);
-  let mut fragments_abs = Vec::new();
-  collect_fragments_abs(&overlay_tree.root, scroll_offset, &mut fragments_abs);
-
-  if options.fragments {
-    for (rect, _) in &fragments_abs {
-      canvas.stroke_rect(*rect, Rgba::rgb(46, 204, 113), 1.0);
-    }
-  }
-
-  if options.stacking_contexts {
-    let mut stacks = Vec::new();
-    collect_stacking_contexts(&overlay_tree.root, scroll_offset, None, true, &mut stacks);
-    for ctx in &stacks {
-      canvas.stroke_rect(ctx.rect, Rgba::rgb(52, 152, 219), 1.2);
-    }
-  }
-
-  if options.scroll_containers {
-    for (rect, frag) in &fragments_abs {
-      if fragment_is_scroll_container(frag) {
-        canvas.stroke_rect(*rect, Rgba::rgb(231, 76, 60), 1.2);
-      }
-    }
-  }
-
-  if options.box_ids {
-    let mut by_box: HashMap<usize, Rect> = HashMap::new();
-    for (rect, frag) in &fragments_abs {
-      if let Some(id) = fragment_box_id(frag) {
-        by_box.entry(id).or_insert(*rect);
-      }
-    }
-
-    let mut shaper = ShapingPipeline::new();
-    let mut label_style = ComputedStyle::default();
-    label_style.font_size = 11.0;
-    label_style.color = Rgba::rgb(20, 20, 20);
-
-    for (id, rect) in by_box {
-      let label = box_debug
-        .get(&id)
-        .cloned()
-        .unwrap_or_else(|| format!("box {id}"));
-      let origin = Point::new(rect.x() + 2.0, rect.y() + 12.0);
-      draw_overlay_label(
-        &mut canvas,
-        &label,
-        origin,
-        &mut shaper,
-        font_ctx,
-        &label_style,
-      );
-    }
-  }
-
-  let png = encode_image(&canvas.into_pixmap(), OutputFormat::Png)?;
-  fs::write(output, png)?;
-  Ok(())
-}
-
-fn fragment_is_scroll_container(fragment: &FragmentNode) -> bool {
-  fragment
-    .style
-    .as_deref()
-    .map(|style| {
-      matches!(style.overflow_x, Overflow::Auto | Overflow::Scroll)
-        || matches!(style.overflow_y, Overflow::Auto | Overflow::Scroll)
-    })
-    .unwrap_or(false)
-}
-
-fn draw_overlay_label(
-  canvas: &mut Canvas,
-  text: &str,
-  origin: Point,
-  shaper: &mut ShapingPipeline,
-  font_ctx: &FontContext,
-  style: &ComputedStyle,
-) {
-  if let Ok(runs) = shaper.shape(text, style, font_ctx) {
-    let mut cursor = origin;
-    for run in runs {
-      canvas.draw_text(
-        cursor,
-        &run.glyphs,
-        &run.font,
-        run.font_size,
-        style.color,
-        run.synthetic_bold,
-        run.synthetic_oblique,
-      );
-      cursor.x += run.advance;
-    }
-  }
 }
 
 fn collect_tag_ids(node: &BoxNode, tag: &str, out: &mut Vec<usize>) {
@@ -1986,13 +1548,14 @@ fn collect_tag_ids(node: &BoxNode, tag: &str, out: &mut Vec<usize>) {
   }
 }
 
-fn find_fragment_node(node: &FragmentNode, offset: Point, target: usize) -> Option<&FragmentNode> {
-  let abs = Rect::from_xywh(
-    node.bounds.x() + offset.x,
-    node.bounds.y() + offset.y,
-    node.bounds.width(),
-    node.bounds.height(),
-  );
+fn find_fragment_node(
+  node: &FragmentNode,
+  offset: Point,
+  base: Option<Point>,
+  include_base: bool,
+  target: usize,
+) -> Option<&FragmentNode> {
+  let (_abs, next_offset) = absolute_rect(node, offset, base, include_base);
   let mut matches = false;
   match &node.content {
     FragmentContent::Block { box_id }
@@ -2007,9 +1570,9 @@ fn find_fragment_node(node: &FragmentNode, offset: Point, target: usize) -> Opti
   if matches {
     return Some(node);
   }
-  let next_offset = Point::new(abs.x(), abs.y());
+  let child_base = if include_base { None } else { base };
   for child in &node.children {
-    if let Some(found) = find_fragment_node(child, next_offset, target) {
+    if let Some(found) = find_fragment_node(child, next_offset, child_base, false, target) {
       return Some(found);
     }
   }
@@ -2140,14 +1703,11 @@ fn walk_boxes<F: FnMut(&BoxNode, &[String])>(node: &BoxNode, path: &mut Vec<Stri
 fn find_fragment_path(
   node: &FragmentNode,
   offset: Point,
+  base: Option<Point>,
+  include_base: bool,
   needle: &str,
 ) -> Option<Vec<(String, Rect)>> {
-  let abs = Rect::from_xywh(
-    node.bounds.x() + offset.x,
-    node.bounds.y() + offset.y,
-    node.bounds.width(),
-    node.bounds.height(),
-  );
+  let (abs, next_offset) = absolute_rect(node, offset, base, include_base);
   let mut label = match &node.content {
     FragmentContent::Text { text, .. } => {
       format!("text {:?}", text.chars().take(40).collect::<String>())
@@ -2163,6 +1723,7 @@ fn find_fragment_path(
       style.display, style.position
     ));
   }
+  append_fragmentainer(&mut label, node);
 
   let mut path = vec![(label, abs)];
 
@@ -2172,9 +1733,11 @@ fn find_fragment_path(
     }
   }
 
-  let next_offset = Point::new(offset.x + node.bounds.x(), offset.y + node.bounds.y());
+  let child_base = if include_base { None } else { base };
   for child in &node.children {
-    if let Some(mut child_path) = find_fragment_path(child, next_offset, needle) {
+    if let Some(mut child_path) =
+      find_fragment_path(child, next_offset, child_base, include_base, needle)
+    {
       path.append(&mut child_path);
       return Some(path);
     }
@@ -2186,15 +1749,12 @@ fn find_fragment_path(
 fn find_fragment_by_box_id(
   node: &FragmentNode,
   offset: Point,
+  base: Option<Point>,
+  include_base: bool,
   target: usize,
   box_debug: &HashMap<usize, String>,
 ) -> Option<Vec<String>> {
-  let abs = Rect::from_xywh(
-    node.bounds.x() + offset.x,
-    node.bounds.y() + offset.y,
-    node.bounds.width(),
-    node.bounds.height(),
-  );
+  let (abs, next_offset) = absolute_rect(node, offset, base, include_base);
   let mut label = match &node.content {
     FragmentContent::Block { box_id }
     | FragmentContent::Inline { box_id, .. }
@@ -2218,6 +1778,7 @@ fn find_fragment_by_box_id(
     abs.width(),
     abs.height()
   ));
+  append_fragmentainer(&mut label, node);
 
   let mut path = vec![label];
   let mut matches = false;
@@ -2232,9 +1793,11 @@ fn find_fragment_by_box_id(
     _ => {}
   }
 
-  let next_offset = Point::new(abs.x(), abs.y());
   for child in &node.children {
-    if let Some(mut child_path) = find_fragment_by_box_id(child, next_offset, target, box_debug) {
+    let child_base = if include_base { None } else { base };
+    if let Some(mut child_path) =
+      find_fragment_by_box_id(child, next_offset, child_base, include_base, target, box_debug)
+    {
       path.append(&mut child_path);
       matches = true;
       break;
@@ -2248,19 +1811,21 @@ fn find_fragment_by_box_id(
   }
 }
 
-fn find_max_x_fragment(node: &FragmentNode, offset: Point) -> Option<Vec<String>> {
+fn find_max_x_fragment(
+  node: &FragmentNode,
+  offset: Point,
+  base: Option<Point>,
+  include_base: bool,
+) -> Option<Vec<String>> {
   fn walk(
     node: &FragmentNode,
     offset: Point,
+    base: Option<Point>,
+    include_base: bool,
     best: &mut (f32, Vec<String>),
     current: &mut Vec<String>,
   ) {
-    let abs = Rect::from_xywh(
-      node.bounds.x() + offset.x,
-      node.bounds.y() + offset.y,
-      node.bounds.width(),
-      node.bounds.height(),
-    );
+    let (abs, next_offset) = absolute_rect(node, offset, base, include_base);
     let label = match &node.content {
       FragmentContent::Block { .. } => "block",
       FragmentContent::Inline { .. } => "inline",
@@ -2285,21 +1850,22 @@ fn find_max_x_fragment(node: &FragmentNode, offset: Point) -> Option<Vec<String>
         style.z_index
       ));
     }
+    append_fragmentainer(&mut entry, node);
     current.push(entry);
     if abs.max_x() > best.0 {
       best.0 = abs.max_x();
       best.1 = current.clone();
     }
-    let next_offset = Point::new(abs.x(), abs.y());
+    let child_base = if include_base { None } else { base };
     for child in &node.children {
-      walk(child, next_offset, best, current);
+      walk(child, next_offset, child_base, include_base, best, current);
     }
     current.pop();
   }
 
   let mut best = (f32::MIN, Vec::new());
   let mut current = Vec::new();
-  walk(node, offset, &mut best, &mut current);
+  walk(node, offset, base, include_base, &mut best, &mut current);
   if best.1.is_empty() {
     None
   } else {
@@ -2419,67 +1985,126 @@ fn collect_dark_boxes(node: &BoxNode, out: &mut Vec<DarkBox>) {
   }
 }
 
-fn collect_fragments_abs<'a>(
+#[derive(Clone, Copy)]
+struct RootContext<'a> {
+  index: usize,
   fragment: &'a FragmentNode,
   offset: Point,
-  out: &mut Vec<(Rect, &'a FragmentNode)>,
-) {
+  base: Option<Point>,
+  include_base: bool,
+}
+
+fn fragment_roots<'a>(
+  fragment_tree: &'a fastrender::tree::fragment_tree::FragmentTree,
+  scroll_offset: Point,
+) -> Vec<RootContext<'a>> {
+  let mut roots = vec![RootContext {
+    index: 0,
+    fragment: &fragment_tree.root,
+    offset: scroll_offset,
+    base: None,
+    include_base: false,
+  }];
+  for (idx, fragment) in fragment_tree.additional_fragments.iter().enumerate() {
+    let base = Point::new(fragment.bounds.x(), fragment.bounds.y());
+    // Fragmentation sometimes translates the entire subtree by the fragmentainer origin;
+    // detect that so absolute coordinates don't double-count the page offset.
+    let translated_children = fragment.children.first().map_or(false, |child| {
+      (child.bounds.x() - base.x).abs() < 0.5 && (child.bounds.y() - base.y).abs() < 0.5
+    });
+    let offset = if translated_children {
+      scroll_offset
+    } else {
+      Point::new(scroll_offset.x + base.x, scroll_offset.y + base.y)
+    };
+    roots.push(RootContext {
+      index: idx + 1,
+      fragment,
+      offset,
+      base: if translated_children { None } else { Some(base) },
+      include_base: translated_children,
+    });
+  }
+  roots
+}
+
+fn absolute_rect(
+  fragment: &FragmentNode,
+  offset: Point,
+  _base: Option<Point>,
+  include_base: bool,
+) -> (Rect, Point) {
   let abs = Rect::from_xywh(
     fragment.bounds.x() + offset.x,
     fragment.bounds.y() + offset.y,
     fragment.bounds.width(),
     fragment.bounds.height(),
   );
-  out.push((abs, fragment));
-  let next_offset = Point::new(abs.x(), abs.y());
+  let next_offset = if include_base { offset } else { abs.origin };
+  (abs, next_offset)
+}
+
+fn collect_fragments_abs<'a>(
+  fragment: &'a FragmentNode,
+  offset: Point,
+  base: Option<Point>,
+  include_base: bool,
+  root_index: usize,
+  out: &mut Vec<(Rect, &'a FragmentNode, usize)>,
+) {
+  let (abs, next_offset) = absolute_rect(fragment, offset, base, include_base);
+  out.push((abs, fragment, root_index));
+  let child_base = if include_base { None } else { base };
   for child in &fragment.children {
-    collect_fragments_abs(child, next_offset, out);
+    collect_fragments_abs(child, next_offset, child_base, include_base, root_index, out);
   }
 }
 
 fn collect_backgrounds_abs<'a>(
   fragment: &'a FragmentNode,
   offset: Point,
-  out: &mut Vec<(Rect, &'a FragmentNode)>,
+  base: Option<Point>,
+  include_base: bool,
+  root_index: usize,
+  out: &mut Vec<(Rect, &'a FragmentNode, usize)>,
 ) {
-  let abs = Rect::from_xywh(
-    fragment.bounds.x() + offset.x,
-    fragment.bounds.y() + offset.y,
-    fragment.bounds.width(),
-    fragment.bounds.height(),
-  );
-  out.push((abs, fragment));
-  let next_offset = Point::new(abs.x(), abs.y());
+  let (abs, next_offset) = absolute_rect(fragment, offset, base, include_base);
+  out.push((abs, fragment, root_index));
+  let child_base = if include_base { None } else { base };
   for child in &fragment.children {
-    collect_backgrounds_abs(child, next_offset, out);
+    collect_backgrounds_abs(child, next_offset, child_base, include_base, root_index, out);
   }
 }
 
-fn collect_text_abs(fragment: &FragmentNode, offset: Point, out: &mut Vec<(f32, f32, String)>) {
-  let abs = Rect::from_xywh(
-    fragment.bounds.x() + offset.x,
-    fragment.bounds.y() + offset.y,
-    fragment.bounds.width(),
-    fragment.bounds.height(),
-  );
+fn collect_text_abs(
+  fragment: &FragmentNode,
+  offset: Point,
+  base: Option<Point>,
+  include_base: bool,
+  root_index: usize,
+  out: &mut Vec<(f32, f32, usize, String)>,
+) {
+  let (abs, next_offset) = absolute_rect(fragment, offset, base, include_base);
   if let FragmentContent::Text { text, .. } = &fragment.content {
-    out.push((abs.x(), abs.y(), text.clone()));
+    out.push((abs.x(), abs.y(), root_index, text.clone()));
   }
-  let next_offset = Point::new(abs.x(), abs.y());
+  let child_base = if include_base { None } else { base };
   for child in &fragment.children {
-    collect_text_abs(child, next_offset, out);
+    collect_text_abs(child, next_offset, child_base, include_base, root_index, out);
   }
 }
 
-fn find_us_fragment(node: &FragmentNode, offset: Point, path: &mut Vec<String>) -> bool {
-  let abs = Rect::from_xywh(
-    node.bounds.x() + offset.x,
-    node.bounds.y() + offset.y,
-    node.bounds.width(),
-    node.bounds.height(),
-  );
+fn find_us_fragment(
+  node: &FragmentNode,
+  offset: Point,
+  base: Option<Point>,
+  include_base: bool,
+  root_index: usize,
+  path: &mut Vec<String>,
+) -> bool {
+  let (abs, next_offset) = absolute_rect(node, offset, base, include_base);
   let style = node.style.as_deref();
-  let label = match &node.content {
+  let mut label = match &node.content {
     FragmentContent::Text { text, .. } => {
       format!("text \"{}\"", text.chars().take(30).collect::<String>())
     }
@@ -2494,6 +2119,7 @@ fn find_us_fragment(node: &FragmentNode, offset: Point, path: &mut Vec<String>) 
       s.display, s.flex_direction, s.flex_wrap, s.flex_basis, s.opacity, s.visibility
     )
   });
+  append_fragmentainer(&mut label, node);
   path.push(format!(
     "{label} @ ({:.1},{:.1},{:.1},{:.1}){}",
     abs.x(),
@@ -2506,15 +2132,23 @@ fn find_us_fragment(node: &FragmentNode, offset: Point, path: &mut Vec<String>) 
   let found = match &node.content {
     FragmentContent::Text { text, .. } if text.trim() == "US" => true,
     _ => {
-      let next_offset = Point::new(offset.x + node.bounds.x(), offset.y + node.bounds.y());
+      let child_base = if include_base { None } else { base };
       node
         .children
         .iter()
-        .any(|child| find_us_fragment(child, next_offset, path))
+        .any(|child| find_us_fragment(
+          child,
+          next_offset,
+          child_base,
+          include_base,
+          root_index,
+          path
+        ))
     }
   };
 
   if found {
+    println!("  root {}", root_index);
     for (idx, entry) in path.iter().enumerate() {
       println!("  {idx}: {entry}");
     }
@@ -2537,40 +2171,60 @@ struct StackCtx<'a> {
 fn collect_stacking_contexts<'a>(
   fragment: &'a FragmentNode,
   offset: Point,
+  base: Option<Point>,
+  include_base: bool,
   parent_style: Option<&'a ComputedStyle>,
   is_root: bool,
-  out: &mut Vec<StackCtx<'a>>,
+  root_index: usize,
+  out: &mut Vec<(usize, StackCtx<'a>)>,
 ) {
-  let abs = Rect::from_xywh(
-    fragment.bounds.x() + offset.x,
-    fragment.bounds.y() + offset.y,
-    fragment.bounds.width(),
-    fragment.bounds.height(),
-  );
+  let (abs, next_offset) = absolute_rect(fragment, offset, base, include_base);
   let style = fragment.style.as_deref();
   let establishes = style
     .map(|s| creates_stacking_context(s, parent_style, is_root))
     .unwrap_or(is_root);
 
-  let next_offset = Point::new(abs.x(), abs.y());
   let next_parent = style.or(parent_style);
 
   if establishes {
     if let Some(style) = style {
-      out.push(StackCtx {
-        rect: abs,
-        display: style.display,
-        position: style.position,
-        z_index: style.z_index,
-        opacity: style.opacity,
-        transform_ops: style.transform.len(),
-        style,
-      });
+      out.push((
+        root_index,
+        StackCtx {
+          rect: abs,
+          display: style.display,
+          position: style.position,
+          z_index: style.z_index,
+          opacity: style.opacity,
+          transform_ops: style.transform.len(),
+          style,
+        },
+      ));
     }
   }
 
+  let child_base = if include_base { None } else { base };
   for child in &fragment.children {
-    collect_stacking_contexts(child, next_offset, next_parent, false, out);
+    collect_stacking_contexts(
+      child,
+      next_offset,
+      child_base,
+      include_base,
+      next_parent,
+      false,
+      root_index,
+      out,
+    );
+  }
+}
+
+fn append_fragmentainer(label: &mut String, fragment: &FragmentNode) {
+  if fragment.fragment_count > 1 {
+    label.push_str(&format!(
+      " fragmentainer={}/{}",
+      fragment.fragmentainer_index + 1,
+      fragment.fragment_count
+    ));
   }
 }
 
@@ -2615,6 +2269,13 @@ fn label_fragment(
             style.max_height
         ));
   }
+  if fragment.fragment_count > 1 {
+    label.push_str(&format!(
+      " fragmentainer={}/{}",
+      fragment.fragmentainer_index + 1,
+      fragment.fragment_count
+    ));
+  }
   if let Some(box_id) = match &fragment.content {
     FragmentContent::Block { box_id } => *box_id,
     FragmentContent::Inline { box_id, .. } => *box_id,
@@ -2643,24 +2304,25 @@ fn fragment_box_id(fragment: &FragmentNode) -> Option<usize> {
 fn find_first_skinny(
   fragment: &FragmentNode,
   offset: Point,
+  base: Option<Point>,
+  include_base: bool,
+  root_index: usize,
   box_debug: &HashMap<usize, String>,
 ) -> Option<Vec<String>> {
-  let abs = Rect::from_xywh(
-    fragment.bounds.x() + offset.x,
-    fragment.bounds.y() + offset.y,
-    fragment.bounds.width(),
-    fragment.bounds.height(),
-  );
-  let label = label_fragment(fragment, abs, box_debug);
+  let (abs, next_offset) = absolute_rect(fragment, offset, base, include_base);
+  let mut label = label_fragment(fragment, abs, box_debug);
+  label.push_str(&format!(" [root {root_index}]"));
   let is_skinny = abs.width() <= 5.0 && abs.height() >= 600.0;
 
   if is_skinny {
     return Some(vec![label]);
   }
 
-  let next_offset = Point::new(abs.x(), abs.y());
+  let child_base = if include_base { None } else { base };
   for child in &fragment.children {
-    if let Some(mut path) = find_first_skinny(child, next_offset, box_debug) {
+    if let Some(mut path) =
+      find_first_skinny(child, next_offset, child_base, include_base, root_index, box_debug)
+    {
       path.insert(0, label.clone());
       return Some(path);
     }
@@ -2671,15 +2333,12 @@ fn find_first_skinny(
 fn find_fragment_with_text(
   fragment: &FragmentNode,
   offset: Point,
+  base: Option<Point>,
+  include_base: bool,
   needle: &str,
   path: &mut Vec<String>,
 ) -> bool {
-  let abs = Rect::from_xywh(
-    fragment.bounds.x() + offset.x,
-    fragment.bounds.y() + offset.y,
-    fragment.bounds.width(),
-    fragment.bounds.height(),
-  );
+  let (abs, next_offset) = absolute_rect(fragment, offset, base, include_base);
   let mut label = format!(
     "{:?} @ ({:.1},{:.1},{:.1},{:.1})",
     fragment.content,
@@ -2694,6 +2353,7 @@ fn find_fragment_with_text(
       style.display, style.position
     ));
   }
+  append_fragmentainer(&mut label, fragment);
 
   if let FragmentContent::Text { text, .. } = &fragment.content {
     if text.contains(needle) {
@@ -2702,9 +2362,9 @@ fn find_fragment_with_text(
     }
   }
 
-  let next_offset = Point::new(abs.x(), abs.y());
+  let child_base = if include_base { None } else { base };
   for child in &fragment.children {
-    if find_fragment_with_text(child, next_offset, needle, path) {
+    if find_fragment_with_text(child, next_offset, child_base, false, needle, path) {
       path.insert(0, label);
       return true;
     }

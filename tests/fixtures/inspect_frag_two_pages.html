@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>inspect_frag pagination fixture</title>
+    <style>
+      @page {
+        size: 400px 200px;
+        margin: 0;
+      }
+      body {
+        margin: 0;
+        font: 16px/1.4 sans-serif;
+      }
+      section {
+        box-sizing: border-box;
+        padding: 12px;
+        height: 180px;
+      }
+      .first {
+        background: #f8f8f8;
+        break-after: page;
+      }
+      .second {
+        background: #e7f1ff;
+      }
+      h1 {
+        margin: 0 0 8px;
+      }
+      p {
+        margin: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <section class="first">
+      <h1>First page</h1>
+      <p>The first page of the inspect_frag pagination fixture.</p>
+    </section>
+    <section class="second">
+      <h1>Second page</h1>
+      <p>This text must appear on the second page.</p>
+    </section>
+  </body>
+</html>
