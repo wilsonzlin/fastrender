@@ -74,7 +74,11 @@ fn env_flag(name: &str) -> bool {
 fn default_options() -> Preserve3dOptions {
   static OPTIONS: OnceLock<Preserve3dOptions> = OnceLock::new();
   *OPTIONS.get_or_init(|| Preserve3dOptions {
-    warp_available: env_flag("FASTR_PRESERVE3D_WARP"),
+    warp_available: {
+      let disabled = env_flag("FASTR_PRESERVE3D_DISABLE_WARP");
+      let legacy_enable = env_flag("FASTR_PRESERVE3D_WARP");
+      legacy_enable || !disabled
+    },
     diagnostics: env_flag("FASTR_PRESERVE3D_DEBUG"),
   })
 }

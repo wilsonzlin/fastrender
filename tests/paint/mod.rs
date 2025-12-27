@@ -24,6 +24,7 @@ mod overflow_clip_test;
 mod paged_media_margin_boxes;
 mod picture_source_selection;
 mod preserve3d_scene;
+mod preserve_3d_depth_sort;
 mod preserve_3d_test;
 mod projective_mapping;
 mod rasterize_test;

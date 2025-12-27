@@ -167,7 +167,10 @@ fn project_rect(transform: &Transform3D, rect: Rect) -> Option<[Vec3; 4]> {
 
 fn project_point(transform: &Transform3D, x: f32, y: f32) -> Option<Vec3> {
   let (tx, ty, tz, tw) = transform.transform_point(x, y, 0.0);
-  if tw.abs() < EPSILON {
+  if !tx.is_finite() || !ty.is_finite() || !tz.is_finite() || !tw.is_finite() {
+    return None;
+  }
+  if tw.abs() < EPSILON || tw < 0.0 {
     return None;
   }
 

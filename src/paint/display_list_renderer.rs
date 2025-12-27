@@ -14,6 +14,7 @@ use crate::geometry::Rect;
 use crate::paint::blur::apply_gaussian_blur;
 use crate::paint::canvas::crop_mask;
 use crate::paint::canvas::Canvas;
+use crate::paint::depth_sort;
 use crate::paint::display_list::BlendMode;
 use crate::paint::display_list::BorderImageItem;
 use crate::paint::display_list::BorderImageSourceItem;
@@ -94,6 +95,7 @@ use crate::text::font_db::LoadedFont;
 use crate::text::font_loader::FontContext;
 use crate::text::pipeline::GlyphPosition;
 use rayon::prelude::*;
+use std::sync::OnceLock;
 use tiny_skia::BlendMode as SkiaBlendMode;
 use tiny_skia::GradientStop as SkiaGradientStop;
 use tiny_skia::IntSize;
@@ -1096,6 +1098,7 @@ pub struct DisplayListRenderer {
   perspective_stack: Vec<Transform3D>,
   culled_depth: usize,
   preserve_3d_disabled: bool,
+  preserve_3d_warp_enabled: bool,
 }
 
 #[derive(Debug)]
@@ -1142,6 +1145,7 @@ struct SceneItem {
   source: SceneItemSource,
   transform: Transform3D,
   bounds: Rect,
+  plane_rect: Rect,
   backface_visibility: BackfaceVisibility,
   transform_style: TransformStyle,
   order: usize,
@@ -1245,6 +1249,7 @@ fn collect_scene_items(
       source: SceneItemSource::FlattenedSubtree(node.clone()),
       transform: combined_transform,
       bounds: node.context.bounds,
+      plane_rect: node.context.plane_rect,
       backface_visibility: node.context.backface_visibility,
       transform_style,
       order,
@@ -1265,6 +1270,7 @@ fn collect_scene_items(
           source: SceneItemSource::Segment(list.clone()),
           transform: combined_transform,
           bounds,
+          plane_rect: node.context.plane_rect,
           backface_visibility: node.context.backface_visibility,
           transform_style,
           order,
@@ -1284,19 +1290,19 @@ fn collect_scene_items(
   items
 }
 
-fn scene_depth(transform: &Transform3D, bounds: Rect) -> f32 {
-  let corners = [
-    (bounds.min_x(), bounds.min_y()),
-    (bounds.max_x(), bounds.min_y()),
-    (bounds.max_x(), bounds.max_y()),
-    (bounds.min_x(), bounds.max_y()),
-  ];
-  let mut total = 0.0;
-  for (x, y) in corners {
-    let (_, _, z, w) = transform.transform_point(x, y, 0.0);
-    total += if w.abs() > 1e-6 { z / w } else { z };
-  }
-  total / 4.0
+fn env_flag(name: &str) -> bool {
+  std::env::var(name)
+    .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+    .unwrap_or(false)
+}
+
+fn preserve_3d_warp_is_enabled() -> bool {
+  static ENABLED: OnceLock<bool> = OnceLock::new();
+  *ENABLED.get_or_init(|| {
+    let disabled = env_flag("FASTR_PRESERVE3D_DISABLE_WARP");
+    let legacy_enable = env_flag("FASTR_PRESERVE3D_WARP");
+    legacy_enable || !disabled
+  })
 }
 
 impl DisplayListRenderer {
@@ -1579,6 +1585,7 @@ impl DisplayListRenderer {
       perspective_stack: vec![Transform3D::identity()],
       culled_depth: 0,
       preserve_3d_disabled: false,
+      preserve_3d_warp_enabled: preserve_3d_warp_is_enabled(),
     })
   }
 
@@ -2852,7 +2859,6 @@ impl DisplayListRenderer {
 
   /// Consumes the renderer and returns the painted pixmap.
   pub fn render(mut self, list: &DisplayList) -> Result<Pixmap> {
-    let list = crate::paint::preserve_3d::composite_preserve_3d(list);
     self.render_slice(list.items())?;
     Ok(self.canvas.into_pixmap())
   }
@@ -2933,16 +2939,19 @@ impl DisplayListRenderer {
       !matches!(item.backface_visibility, BackfaceVisibility::Hidden)
         || !backface_is_hidden(&item.transform)
     });
-    scene_items.sort_by(|a, b| {
-      let da = scene_depth(&a.transform, a.bounds);
-      let db = scene_depth(&b.transform, b.bounds);
-      da.partial_cmp(&db)
-        .unwrap_or(std::cmp::Ordering::Equal)
-        .then_with(|| a.order.cmp(&b.order))
-    });
+    let sort_inputs: Vec<_> = scene_items
+      .iter()
+      .map(|item| depth_sort::SceneItem {
+        transform: item.transform,
+        plane_rect: item.plane_rect,
+        paint_order: item.order,
+      })
+      .collect();
+    let ordered_indices = depth_sort::depth_sort(&sort_inputs);
 
-    for scene_item in scene_items {
-      if let Some(pixmap) = self.render_scene_item(&scene_item)? {
+    for idx in ordered_indices {
+      let scene_item = &scene_items[idx];
+      if let Some(pixmap) = self.render_scene_item(scene_item)? {
         let adjusted_transform = scene_item.transform.multiply(&Transform3D::translate(
           scene_item.bounds.x(),
           scene_item.bounds.y(),
@@ -2999,6 +3008,7 @@ impl DisplayListRenderer {
       self.scale,
     )?;
     renderer.preserve_3d_disabled = true;
+    renderer.preserve_3d_warp_enabled = self.preserve_3d_warp_enabled;
     let pixmap = renderer.render(&list)?;
     Ok(Some(pixmap))
   }
@@ -3008,6 +3018,21 @@ impl DisplayListRenderer {
     paint.blend_mode = self.canvas.blend_mode();
 
     let parent_transform = self.canvas.transform();
+
+    if !self.preserve_3d_warp_enabled {
+      let clip = self.canvas.clip_mask().cloned();
+      let (t, _valid) = self.to_skia_transform_checked(transform);
+      let skia_transform = parent_transform.post_concat(t);
+      self.canvas.pixmap_mut().draw_pixmap(
+        0,
+        0,
+        pixmap.as_ref(),
+        &paint,
+        skia_transform,
+        clip.as_ref(),
+      );
+      return;
+    }
 
     let homography = Homography::from_transform3d_z0(transform);
     if homography.is_affine() {
