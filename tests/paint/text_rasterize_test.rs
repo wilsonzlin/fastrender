@@ -4,6 +4,7 @@
 //! (glyph IDs + positions) into rendered pixels using font outlines
 //! and tiny-skia.
 
+use fastrender::text::font_db::{FontStretch, FontStyle, FontWeight, LoadedFont};
 use fastrender::text::font_loader::FontContext;
 use fastrender::text::pipeline::Direction;
 use fastrender::text::pipeline::GlyphPosition;
@@ -14,8 +15,10 @@ use fastrender::ComputedStyle;
 use fastrender::GlyphCache;
 use fastrender::Rgba;
 use fastrender::TextRasterizer;
+use std::fs;
 use std::sync::Arc;
 use tiny_skia::Pixmap;
+use ttf_parser::GlyphId;
 
 // ============================================================================
 // Test Helpers
@@ -62,6 +65,75 @@ fn painted_bounds(pixmap: &Pixmap) -> Option<(u32, u32, u32, u32)> {
     None
   } else {
     Some((min_x, max_x, min_y, max_y))
+  }
+}
+
+fn row_leftmost(pixmap: &Pixmap, row: u32) -> Option<u32> {
+  if row >= pixmap.height() {
+    return None;
+  }
+  let width = pixmap.width() as usize;
+  let start = row as usize * width * 4;
+  let end = start + width * 4;
+  for (idx, chunk) in pixmap.data()[start..end].chunks(4).enumerate() {
+    if chunk[0] != 255 || chunk[1] != 255 || chunk[2] != 255 {
+      return Some(idx as u32);
+    }
+  }
+  None
+}
+
+fn load_color_font(path: &str, family: &str) -> LoadedFont {
+  let data = fs::read(path).expect("failed to read test font");
+  LoadedFont {
+    data: Arc::new(data),
+    index: 0,
+    family: family.to_string(),
+    weight: FontWeight::NORMAL,
+    style: FontStyle::Normal,
+    stretch: FontStretch::Normal,
+  }
+}
+
+fn single_glyph_run(
+  font: &Arc<LoadedFont>,
+  glyph_id: u32,
+  font_size: f32,
+  synthetic_oblique: f32,
+) -> ShapedRun {
+  let face = font.as_ttf_face().unwrap();
+  let advance_units = face
+    .glyph_hor_advance(GlyphId(glyph_id as u16))
+    .unwrap_or(0) as f32;
+  let units_per_em = face.units_per_em() as f32;
+  let scale = font_size / units_per_em;
+  let advance = advance_units * scale;
+
+  ShapedRun {
+    text: "A".to_string(),
+    start: 0,
+    end: 1,
+    glyphs: vec![GlyphPosition {
+      glyph_id,
+      cluster: 0,
+      x_offset: 0.0,
+      y_offset: 0.0,
+      x_advance: advance,
+      y_advance: 0.0,
+    }],
+    direction: Direction::LeftToRight,
+    level: 0,
+    advance,
+    font: Arc::clone(font),
+    font_size,
+    baseline_shift: 0.0,
+    language: None,
+    synthetic_bold: 0.0,
+    synthetic_oblique,
+    rotation: RunRotation::None,
+    palette_index: 0,
+    variations: Vec::new(),
+    scale: 1.0,
   }
 }
 
@@ -178,6 +250,80 @@ fn test_render_multiple_glyphs() {
 
   assert!(result.is_ok());
   assert!(has_changed_pixels(&pixmap));
+}
+
+#[test]
+fn synthetic_oblique_slants_bitmap_color_glyphs() {
+  let font = Arc::new(load_color_font(
+    "tests/fonts/ColorBitmapTest.ttf",
+    "Test Bitmap Color",
+  ));
+  let glyph_id = font
+    .as_ttf_face()
+    .ok()
+    .and_then(|face| face.glyph_index('A'))
+    .map(|g| g.0 as u32)
+    .expect("bitmap color font should contain 'A'");
+
+  let mut rasterizer = TextRasterizer::new();
+  let mut upright = create_test_pixmap(160, 160);
+  let mut oblique = create_test_pixmap(160, 160);
+
+  let upright_run = single_glyph_run(&font, glyph_id, 32.0, 0.0);
+  let oblique_run = single_glyph_run(&font, glyph_id, 32.0, 0.25);
+
+  rasterizer
+    .render_shaped_run(&upright_run, 20.0, 120.0, Rgba::BLACK, &mut upright)
+    .unwrap();
+  rasterizer
+    .render_shaped_run(&oblique_run, 20.0, 120.0, Rgba::BLACK, &mut oblique)
+    .unwrap();
+
+  assert_ne!(upright.data(), oblique.data());
+  let oblique_bounds = painted_bounds(&oblique).expect("oblique bitmap glyph should render");
+  let top_left = row_leftmost(&oblique, oblique_bounds.2).unwrap();
+  let bottom_left = row_leftmost(&oblique, oblique_bounds.3).unwrap();
+  assert!(
+    bottom_left > top_left,
+    "positive synthetic oblique should slant bitmap glyphs to the right"
+  );
+}
+
+#[test]
+fn synthetic_oblique_slants_svg_color_glyphs() {
+  let font = Arc::new(load_color_font(
+    "tests/fonts/ColorSvgTest.ttf",
+    "Test SVG Color",
+  ));
+  let glyph_id = font
+    .as_ttf_face()
+    .ok()
+    .and_then(|face| face.glyph_index('A'))
+    .map(|g| g.0 as u32)
+    .expect("svg color font should contain 'A'");
+
+  let mut rasterizer = TextRasterizer::new();
+  let mut upright = create_test_pixmap(160, 160);
+  let mut oblique = create_test_pixmap(160, 160);
+
+  let upright_run = single_glyph_run(&font, glyph_id, 32.0, 0.0);
+  let oblique_run = single_glyph_run(&font, glyph_id, 32.0, 0.25);
+
+  rasterizer
+    .render_shaped_run(&upright_run, 20.0, 120.0, Rgba::BLACK, &mut upright)
+    .unwrap();
+  rasterizer
+    .render_shaped_run(&oblique_run, 20.0, 120.0, Rgba::BLACK, &mut oblique)
+    .unwrap();
+
+  assert_ne!(upright.data(), oblique.data());
+  let oblique_bounds = painted_bounds(&oblique).expect("oblique svg glyph should render");
+  let top_left = row_leftmost(&oblique, oblique_bounds.2).unwrap();
+  let bottom_left = row_leftmost(&oblique, oblique_bounds.3).unwrap();
+  assert!(
+    bottom_left > top_left,
+    "positive synthetic oblique should slant SVG glyphs to the right"
+  );
 }
 
 #[test]

@@ -118,7 +118,7 @@ pub fn render_colr_glyph(
   font_size: f32,
   palette_index: u16,
   text_color: Rgba,
-  synthetic_oblique: f32,
+  _synthetic_oblique: f32,
   caches: &Arc<Mutex<ColorFontCaches>>,
 ) -> Option<ColorGlyphRaster> {
   let colr_data = face
@@ -158,7 +158,9 @@ pub fn render_colr_glyph(
     return None;
   }
   let scale = font_size / units_per_em;
-  let transform = glyph_transform(scale, synthetic_oblique, 0.0, 0.0);
+  // Synthetic oblique is applied when painting color glyphs to keep the cached
+  // rasters shared across runs.
+  let transform = glyph_transform(scale, 0.0, 0.0, 0.0);
 
   let mut paths: Vec<(Path, Rgba)> = Vec::new();
   for layer in layer_records {

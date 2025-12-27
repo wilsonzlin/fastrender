@@ -471,6 +471,13 @@ fn concat_transforms(a: Transform, b: Transform) -> Transform {
   )
 }
 
+fn color_glyph_transform(skew: f32, glyph_x: f32, glyph_y: f32, left: f32, top: f32) -> Transform {
+  // Color glyph rasters are already in device pixels with a Y-down origin, so we
+  // only need to add the synthetic oblique shear in X.
+  let transform = Transform::from_row(1.0, 0.0, skew, 1.0, glyph_x, glyph_y);
+  concat_transforms(transform, Transform::from_translate(left, top))
+}
+
 // ============================================================================
 // Text Rasterizer
 // ============================================================================
@@ -707,11 +714,18 @@ impl TextRasterizer {
       }
 
       if let Some(color_image) = color_glyph {
-        draw_color_glyph(pixmap, &color_image, glyph_x, glyph_y, rotation, state);
-      } else if let Some(cached) = self
-        .cache
-        .get_or_build(font, glyph.glyph_id, synthetic_oblique)
-      {
+        let mut transform = color_glyph_transform(
+          synthetic_oblique,
+          glyph_x,
+          glyph_y,
+          color_image.left,
+          color_image.top,
+        );
+        if let Some(rotation) = rotation {
+          transform = concat_transforms(rotation, transform);
+        }
+        draw_color_glyph(pixmap, &color_image, transform, state);
+      } else if let Some(cached) = self.cache.get_or_build(font, glyph.glyph_id, synthetic_oblique) {
         if let Some(path) = cached.path.as_ref() {
           let mut transform = glyph_transform(scale, synthetic_oblique, glyph_x, glyph_y);
           if let Some(rotation) = rotation {
@@ -958,19 +972,13 @@ impl TextRasterizer {
 fn draw_color_glyph(
   target: &mut Pixmap,
   glyph: &ColorGlyphRaster,
-  glyph_x: f32,
-  glyph_y: f32,
-  rotation: Option<Transform>,
+  transform: Transform,
   state: TextRenderState<'_>,
 ) {
   let mut paint = PixmapPaint::default();
   paint.opacity = state.opacity.clamp(0.0, 1.0);
   paint.blend_mode = state.blend_mode;
-  let mut transform = Transform::from_translate(glyph_x + glyph.left, glyph_y + glyph.top);
-  if let Some(rotation) = rotation {
-    transform = concat_transforms(rotation, transform);
-  }
-  transform = concat_transforms(state.transform, transform);
+  let transform = concat_transforms(state.transform, transform);
   let pixmap_ref = glyph.image.as_ref().as_ref();
   target.draw_pixmap(0, 0, pixmap_ref, &paint, transform, state.clip_mask);
 }
