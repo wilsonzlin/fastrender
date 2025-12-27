@@ -3,10 +3,11 @@ use std::path::Path;
 use std::sync::Arc;
 
 use fastrender::paint::display_list::{DisplayItem, DisplayList, FontId, GlyphInstance, TextItem};
+use fastrender::paint::display_list_renderer::DisplayListRenderer;
 use fastrender::style::color::Rgba;
 use fastrender::text::font_db::FontDatabase;
 use fastrender::text::pipeline::{Direction, ShapedRun, ShapingPipeline};
-use fastrender::{ComputedStyle, DisplayListRenderer, FontContext, Point};
+use fastrender::{ComputedStyle, FontContext, Point};
 
 fn load_color_font_context() -> (FontContext, String) {
   let font_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fonts/ColorTestCOLR.ttf");

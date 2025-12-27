@@ -326,7 +326,9 @@ impl DisplayListOptimizer {
   }
 
   fn is_noop_stacking_context(item: &StackingContextItem) -> bool {
-    item.transform.is_none()
+    !item.creates_stacking_context
+      && item.child_perspective.is_none()
+      && item.transform.is_none()
       && item.filters.is_empty()
       && item.backdrop_filters.is_empty()
       && item.mask.is_none()
@@ -380,6 +382,11 @@ impl DisplayListOptimizer {
         }
         DisplayItem::PushStackingContext(sc) => {
           let pushed_transform = sc.transform.is_some() || sc.child_perspective.is_some();
+          let mut context_transform = transform_state.current.clone();
+          if let Some(transform) = sc.transform.as_ref() {
+            let mapping = Self::transform_mapping(transform);
+            context_transform = context_transform.multiply(&mapping);
+          }
           if pushed_transform {
             transform_stack.push(transform_state.clone());
             if !clip_stack.is_empty() {
@@ -388,31 +395,29 @@ impl DisplayListOptimizer {
               }
               refresh_context_clipping(&mut context_stack, &clip_stack);
             }
-            if let Some(transform) = sc.transform.as_ref() {
-              let mapping = Self::transform_mapping(transform);
-              transform_state.current = transform_state.current.multiply(&mapping);
-            }
-            if sc.child_perspective.is_some() {
-              transform_state.current = TransformMapping::Unsupported;
-            }
+            transform_state.current = if sc.child_perspective.is_some() {
+              TransformMapping::Unsupported
+            } else {
+              context_transform.clone()
+            };
           }
           let filters_outset = filter_outset_with_bounds(&sc.filters, 1.0, Some(sc.bounds));
           let backdrop_outset =
             filter_outset_with_bounds(&sc.backdrop_filters, 1.0, Some(sc.bounds));
           let max_outset = filters_outset.max_side().max(backdrop_outset.max_side());
-          let world_outset = if transform_state.culling_disabled() {
+          let world_outset = if matches!(context_transform, TransformMapping::Unsupported) {
             0.0
           } else if max_outset == 0.0 {
             0.0
           } else {
-            max_outset * Self::transform_scale_factor(&transform_state.current, sc.bounds)
+            max_outset * Self::transform_scale_factor(&context_transform, sc.bounds)
           };
           filter_stack.push(world_outset);
 
-          let transform_for_bounds = if transform_state.culling_disabled() {
+          let transform_for_bounds = if matches!(context_transform, TransformMapping::Unsupported) {
             None
           } else {
-            Some(transform_state.current.clone())
+            Some(context_transform.clone())
           };
 
           context_stack.push(ContextRecord {
@@ -421,7 +426,7 @@ impl DisplayListOptimizer {
             item: sc.clone(),
             transform_for_bounds,
             clipped_by_clip: clip_stack.iter().any(|c| c.can_cull),
-            culling_disabled: transform_state.culling_disabled(),
+            culling_disabled: matches!(context_transform, TransformMapping::Unsupported),
             pushed_transform,
           });
           include_item = true;

@@ -240,11 +240,13 @@ where
 
   fn get(&mut self, key: &K) -> Option<V> {
     let generation = self.bump_generation();
-    if let Some(entry) = self.entries.get_mut(key) {
+    if let Some(value) = self.entries.get_mut(key).map(|entry| {
       entry.last_used = generation;
+      entry.value.clone()
+    }) {
       self.usage.push_back((*key, generation));
       self.evict_if_needed();
-      return Some(entry.value.clone());
+      return Some(value);
     }
     None
   }

@@ -94,6 +94,57 @@ fn small_viewport() -> Rect {
   Rect::from_xywh(0.0, 0.0, 100.0, 100.0)
 }
 
+fn stacking_context(bounds: Rect, child_perspective: Option<Transform3D>) -> StackingContextItem {
+  StackingContextItem {
+    z_index: 0,
+    creates_stacking_context: true,
+    bounds,
+    plane_rect: bounds,
+    mix_blend_mode: BlendMode::Normal,
+    is_isolated: false,
+    transform: None,
+    child_perspective,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
+    filters: vec![],
+    backdrop_filters: vec![],
+    radii: BorderRadii::ZERO,
+    mask: None,
+  }
+}
+
+fn assert_balanced(items: &[DisplayItem]) {
+  let mut clip = 0i32;
+  let mut opacity = 0i32;
+  let mut transform = 0i32;
+  let mut blend = 0i32;
+  let mut stacking = 0i32;
+
+  for item in items {
+    match item {
+      DisplayItem::PushClip(_) => clip += 1,
+      DisplayItem::PopClip => clip -= 1,
+      DisplayItem::PushOpacity(_) => opacity += 1,
+      DisplayItem::PopOpacity => opacity -= 1,
+      DisplayItem::PushTransform(_) => transform += 1,
+      DisplayItem::PopTransform => transform -= 1,
+      DisplayItem::PushBlendMode(_) => blend += 1,
+      DisplayItem::PopBlendMode => blend -= 1,
+      DisplayItem::PushStackingContext(_) => stacking += 1,
+      DisplayItem::PopStackingContext => stacking -= 1,
+      _ => {}
+    }
+
+    assert!(clip >= 0 && opacity >= 0 && transform >= 0 && blend >= 0 && stacking >= 0);
+  }
+
+  assert_eq!(clip, 0);
+  assert_eq!(opacity, 0);
+  assert_eq!(transform, 0);
+  assert_eq!(blend, 0);
+  assert_eq!(stacking, 0);
+}
+
 // ============================================================================
 // Display List Basic Tests
 // ============================================================================
@@ -270,6 +321,75 @@ fn test_cull_image_items() {
 
   assert_eq!(stats.culled_count, 1);
   assert_eq!(optimized.len(), 1);
+}
+
+#[test]
+fn culls_offscreen_perspective_stacking_context() {
+  let mut list = DisplayList::new();
+  let bounds = Rect::from_xywh(500.0, 500.0, 50.0, 50.0);
+  list.push(DisplayItem::PushStackingContext(stacking_context(
+    bounds,
+    Some(Transform3D::perspective(500.0)),
+  )));
+  list.push(make_fill_rect(500.0, 500.0, 10.0, 10.0, Rgba::RED));
+  list.push(DisplayItem::PopStackingContext);
+
+  let (optimized, stats) = DisplayListOptimizer::new().optimize(list, small_viewport());
+
+  assert_eq!(
+    optimized.len(),
+    0,
+    "offscreen stacking context with child perspective should be removed"
+  );
+  assert_eq!(stats.culled_count, 3);
+  assert_balanced(optimized.items());
+}
+
+#[test]
+fn keeps_perspective_context_when_it_intersects_viewport() {
+  let mut list = DisplayList::new();
+  let bounds = Rect::from_xywh(20.0, 20.0, 50.0, 50.0);
+  list.push(DisplayItem::PushStackingContext(stacking_context(
+    bounds,
+    Some(Transform3D::perspective(800.0)),
+  )));
+  list.push(make_fill_rect(25.0, 25.0, 10.0, 10.0, Rgba::GREEN));
+  list.push(DisplayItem::PopStackingContext);
+
+  let (optimized, stats) = DisplayListOptimizer::new().optimize(list, small_viewport());
+
+  assert_eq!(stats.culled_count, 0);
+  assert_eq!(optimized.len(), 3);
+  assert_balanced(optimized.items());
+}
+
+#[test]
+fn clip_with_child_perspective_remains_conservative() {
+  let mut list = DisplayList::new();
+  list.push(DisplayItem::PushClip(ClipItem {
+    shape: ClipShape::Rect {
+      rect: Rect::from_xywh(500.0, 500.0, 20.0, 20.0),
+      radii: None,
+    },
+  }));
+  let bounds = Rect::from_xywh(0.0, 0.0, 20.0, 20.0);
+  list.push(DisplayItem::PushStackingContext(stacking_context(
+    bounds,
+    Some(Transform3D::perspective(400.0)),
+  )));
+  list.push(make_fill_rect(0.0, 0.0, 10.0, 10.0, Rgba::BLUE));
+  list.push(DisplayItem::PopStackingContext);
+  list.push(DisplayItem::PopClip);
+
+  let (optimized, stats) = DisplayListOptimizer::new().optimize(list, small_viewport());
+
+  assert_eq!(
+    optimized.len(),
+    5,
+    "clip combined with child perspective should avoid aggressive culling"
+  );
+  assert_eq!(stats.culled_count, 0);
+  assert_balanced(optimized.items());
 }
 
 // ============================================================================
