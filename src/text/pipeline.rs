@@ -1351,8 +1351,10 @@ fn assign_fonts_internal(
         _ => None,
       };
 
-      let mut resolved = cached_cluster.flatten();
-      if resolved.is_none() && cluster_char_count == 1 {
+      let mut resolved: Option<LoadedFont> = cached_cluster.clone().flatten();
+      let mut skip_resolution = cached_cluster.is_some() && resolved.is_none();
+
+      if !skip_resolution && resolved.is_none() && cluster_char_count == 1 {
         let char_cache_key = font_cache.map(|_| FontResolverCacheKey {
           ch: base_char,
           style_hash,
@@ -1360,9 +1362,11 @@ fn assign_fonts_internal(
           emoji_pref,
         });
         if let (Some(cache), Some(key)) = (font_cache, char_cache_key.as_ref()) {
-          resolved = cache.get(key).flatten();
+          let cached = cache.get(key);
+          skip_resolution = cached.is_some() && cached.as_ref().is_none();
+          resolved = cached.flatten();
         }
-        if resolved.is_none() {
+        if !skip_resolution && resolved.is_none() {
           let mut picker = FontPreferencePicker::new(emoji_pref);
           let candidate = resolve_font_for_char(
             base_char,
@@ -1381,7 +1385,7 @@ fn assign_fonts_internal(
         }
       }
 
-      if resolved.is_none() {
+      if !skip_resolution && resolved.is_none() {
         let coverage_chars = if relevant_chars.is_empty() {
           vec![base_char]
         } else {
@@ -1875,9 +1879,11 @@ fn is_emoji_dominant(text: &str) -> bool {
   saw_emoji
 }
 
-fn font_is_emoji_font(db: &FontDatabase, id: fontdb::ID, font: &LoadedFont) -> bool {
-  if let Some(is_color) = db.is_color_capable_font(id) {
-    return is_color;
+fn font_is_emoji_font(db: &FontDatabase, id: Option<fontdb::ID>, font: &LoadedFont) -> bool {
+  if let Some(id) = id {
+    if let Some(is_color) = db.is_color_capable_font(id) {
+      return is_color;
+    }
   }
 
   crate::text::font_db::font_name_indicates_emoji(&font.family)
@@ -2116,7 +2122,7 @@ fn resolve_font_for_char(
               };
               if let Some(id) = db.inner().query(&query) {
                 if let Some(font) = db.load_font(id) {
-                  let is_emoji_font = font_is_emoji_font(db, id, &font);
+                  let is_emoji_font = font_is_emoji_font(db, Some(id), &font);
                   let idx = picker.bump_order();
                   picker.record_any(&font, is_emoji_font, idx);
                   if db.has_glyph_cached(id, ch) {
@@ -2162,7 +2168,7 @@ fn resolve_font_for_char(
 
           if let Some(id) = db.inner().query(&query) {
             if let Some(font) = db.load_font(id) {
-              let is_emoji_font = font_is_emoji_font(db, id, &font);
+              let is_emoji_font = font_is_emoji_font(db, Some(id), &font);
               let idx = picker.bump_order();
               picker.record_any(&font, is_emoji_font, idx);
               if db.has_glyph_cached(id, ch) {
@@ -2189,7 +2195,7 @@ fn resolve_font_for_char(
               };
               if let Some(id) = db.inner().query(&query) {
                 if let Some(font) = db.load_font(id) {
-                  let is_emoji_font = font_is_emoji_font(db, id, &font);
+                  let is_emoji_font = font_is_emoji_font(db, Some(id), &font);
                   let idx = picker.bump_order();
                   picker.record_any(&font, is_emoji_font, idx);
                   if db.has_glyph_cached(id, ch) {
@@ -2222,7 +2228,7 @@ fn resolve_font_for_char(
 
   for face in db.faces() {
     if let Some(font) = db.load_font(face.id) {
-      let is_emoji_font = font_is_emoji_font(db, face.id, &font);
+      let is_emoji_font = font_is_emoji_font(db, Some(face.id), &font);
       let idx = picker.bump_order();
       picker.record_any(&font, is_emoji_font, idx);
       if db.has_glyph_cached(face.id, ch) {
@@ -2280,7 +2286,11 @@ fn resolve_font_for_cluster(
           oblique_angle,
           base_char,
         ) {
+<<<<<<< HEAD
           let is_emoji_font = crate::text::font_db::font_name_indicates_emoji(&font.family);
+=======
+          let is_emoji_font = font_is_emoji_font(db, None, &font);
+>>>>>>> 6f3d1ad (Fix font resolution cache handling and emoji font checks)
           let idx = picker.bump_order();
           if !require_base_glyph || font_supports_all_chars(&font, &[base_char]) {
             picker.record_any(&font, is_emoji_font, idx);
@@ -2305,7 +2315,11 @@ fn resolve_font_for_cluster(
                   if !base_supported(id) {
                     continue;
                   }
+<<<<<<< HEAD
                   let is_emoji_font = font_is_emoji_font(db, id, &font);
+=======
+                  let is_emoji_font = font_is_emoji_font(db, Some(id), &font);
+>>>>>>> 6f3d1ad (Fix font resolution cache handling and emoji font checks)
                   let idx = picker.bump_order();
                   picker.record_any(&font, is_emoji_font, idx);
                   if covers_needed(id) {
@@ -2324,7 +2338,11 @@ fn resolve_font_for_cluster(
       if let Some(font) =
         font_context.match_web_font_for_char(name, weight, style, stretch, oblique_angle, base_char)
       {
+<<<<<<< HEAD
         let is_emoji_font = crate::text::font_db::font_name_indicates_emoji(&font.family);
+=======
+        let is_emoji_font = font_is_emoji_font(db, None, &font);
+>>>>>>> 6f3d1ad (Fix font resolution cache handling and emoji font checks)
         let idx = picker.bump_order();
         if !require_base_glyph || font_supports_all_chars(&font, &[base_char]) {
           picker.record_any(&font, is_emoji_font, idx);
@@ -2363,7 +2381,11 @@ fn resolve_font_for_cluster(
               if !base_supported(id) {
                 continue;
               }
+<<<<<<< HEAD
               let is_emoji_font = font_is_emoji_font(db, id, &font);
+=======
+              let is_emoji_font = font_is_emoji_font(db, Some(id), &font);
+>>>>>>> 6f3d1ad (Fix font resolution cache handling and emoji font checks)
               let idx = picker.bump_order();
               picker.record_any(&font, is_emoji_font, idx);
               if covers_needed(id) {
@@ -2393,7 +2415,11 @@ fn resolve_font_for_cluster(
                   if !base_supported(id) {
                     continue;
                   }
+<<<<<<< HEAD
                   let is_emoji_font = font_is_emoji_font(db, id, &font);
+=======
+                  let is_emoji_font = font_is_emoji_font(db, Some(id), &font);
+>>>>>>> 6f3d1ad (Fix font resolution cache handling and emoji font checks)
                   let idx = picker.bump_order();
                   picker.record_any(&font, is_emoji_font, idx);
                   if covers_needed(id) {
@@ -2432,7 +2458,11 @@ fn resolve_font_for_cluster(
       if !base_supported(face.id) {
         continue;
       }
+<<<<<<< HEAD
       let is_emoji_font = font_is_emoji_font(db, face.id, &font);
+=======
+      let is_emoji_font = font_is_emoji_font(db, Some(face.id), &font);
+>>>>>>> 6f3d1ad (Fix font resolution cache handling and emoji font checks)
       let idx = picker.bump_order();
       picker.record_any(&font, is_emoji_font, idx);
       if covers_needed(face.id) {
