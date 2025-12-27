@@ -2320,8 +2320,12 @@ impl<'a> Element for ElementRef<'a> {
     None
   }
 
-  fn is_part(&self, _name: &CssString) -> bool {
-    false
+  fn is_part(&self, name: &CssString) -> bool {
+    self
+      .node
+      .get_attribute_ref("part")
+      .map(|value| value.split_whitespace().any(|token| token == name.as_str()))
+      .unwrap_or(false)
   }
 
   fn is_empty(&self) -> bool {

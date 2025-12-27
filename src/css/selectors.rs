@@ -290,6 +290,16 @@ impl std::hash::Hash for PseudoElement {
   }
 }
 
+impl PseudoElement {
+  /// Pseudo-elements that generate their own boxes (::before/::after/::marker/::backdrop).
+  pub fn is_generated_box(&self) -> bool {
+    matches!(
+      self,
+      PseudoElement::Before | PseudoElement::After | PseudoElement::Marker | PseudoElement::Backdrop
+    )
+  }
+}
+
 impl ToCss for PseudoElement {
   fn to_css<W>(&self, dest: &mut W) -> fmt::Result
   where
