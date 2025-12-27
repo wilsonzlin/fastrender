@@ -532,8 +532,8 @@ fn collect_rules_recursive<'a>(
         }
       }
       CssRule::Media(media_rule) => {
-        // Only include rules from @media blocks that match
-        if media_ctx.evaluate_with_cache(&media_rule.query, cache.as_deref_mut()) {
+        // Only include rules from @media blocks that match (empty query lists are non-matching).
+        if media_ctx.evaluate_list_with_cache(&media_rule.queries, cache.as_deref_mut()) {
           collect_rules_recursive(
             &media_rule.rules,
             media_ctx,
@@ -674,7 +674,7 @@ fn collect_page_rules_recursive<'a>(
         });
       }
       CssRule::Media(media_rule) => {
-        if media_ctx.evaluate_with_cache(&media_rule.query, cache.as_deref_mut()) {
+        if media_ctx.evaluate_list_with_cache(&media_rule.queries, cache.as_deref_mut()) {
           collect_page_rules_recursive(
             &media_rule.rules,
             media_ctx,
@@ -763,7 +763,7 @@ fn collect_font_faces_recursive(
     match rule {
       CssRule::FontFace(face) => out.push(face.clone()),
       CssRule::Media(media_rule) => {
-        if media_ctx.evaluate_with_cache(&media_rule.query, cache.as_deref_mut()) {
+        if media_ctx.evaluate_list_with_cache(&media_rule.queries, cache.as_deref_mut()) {
           collect_font_faces_recursive(&media_rule.rules, media_ctx, cache.as_deref_mut(), out);
         }
       }
@@ -812,7 +812,7 @@ fn collect_keyframes_recursive(
     match rule {
       CssRule::Keyframes(kf) => out.push(kf.clone()),
       CssRule::Media(media_rule) => {
-        if media_ctx.evaluate_with_cache(&media_rule.query, cache.as_deref_mut()) {
+        if media_ctx.evaluate_list_with_cache(&media_rule.queries, cache.as_deref_mut()) {
           collect_keyframes_recursive(&media_rule.rules, media_ctx, cache.as_deref_mut(), out);
         }
       }
@@ -866,7 +866,7 @@ fn collect_counter_styles_recursive<'a>(
         });
       }
       CssRule::Media(media_rule) => {
-        if media_ctx.evaluate_with_cache(&media_rule.query, cache.as_deref_mut()) {
+        if media_ctx.evaluate_list_with_cache(&media_rule.queries, cache.as_deref_mut()) {
           collect_counter_styles_recursive(
             &media_rule.rules,
             media_ctx,
@@ -1157,8 +1157,8 @@ pub enum CssRule {
 /// A @media rule containing conditional rules
 #[derive(Debug, Clone)]
 pub struct MediaRule {
-  /// The media query to evaluate
-  pub query: MediaQuery,
+  /// Media queries to evaluate with OR semantics (a match when any query is true).
+  pub queries: Vec<MediaQuery>,
   /// Rules that apply when query matches (can be nested)
   pub rules: Vec<CssRule>,
 }

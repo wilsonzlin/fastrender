@@ -269,51 +269,20 @@ fn parse_media_rule<'i, 't>(
   parent_selectors: Option<&SelectorList<FastRenderSelectorImpl>>,
   css_source: &str,
 ) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
-  // Collect tokens as strings until we hit the {
-  let mut query_parts = Vec::new();
-  loop {
-    match parser.next_including_whitespace() {
-      Ok(Token::CurlyBracketBlock) => break,
-      Ok(Token::WhiteSpace(ws)) => query_parts.push((*ws).to_string()),
-      Ok(Token::Ident(id)) => query_parts.push(id.to_string()),
-      Ok(Token::Number { value, .. }) => query_parts.push(value.to_string()),
-      Ok(Token::Dimension { value, unit, .. }) => {
-        query_parts.push(format!("{}{}", value, unit));
-      }
-      Ok(Token::Colon) => query_parts.push(":".to_string()),
-      Ok(Token::ParenthesisBlock) => {
-        // Parse contents of parenthesis block
-        let inner = parser.parse_nested_block(|p| {
-          let mut inner_parts = Vec::new();
-          while !p.is_exhausted() {
-            match p.next_including_whitespace() {
-              Ok(Token::WhiteSpace(ws)) => inner_parts.push((*ws).to_string()),
-              Ok(Token::Ident(id)) => inner_parts.push(id.to_string()),
-              Ok(Token::Number { value, .. }) => inner_parts.push(value.to_string()),
-              Ok(Token::Dimension { value, unit, .. }) => {
-                inner_parts.push(format!("{}{}", value, unit));
-              }
-              Ok(Token::Colon) => inner_parts.push(":".to_string()),
-              Ok(_) => {}
-              Err(_) => break,
-            }
-          }
-          Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(inner_parts.join(""))
-        })?;
-        query_parts.push(format!("({})", inner));
-      }
-      Ok(_) => {}
-      Err(_) => break,
+  let start = parser.position();
+  parser.parse_until_before(cssparser::Delimiter::CurlyBracketBlock, |parser| {
+    while !parser.is_exhausted() {
+      let _ = parser.next_including_whitespace()?;
     }
-  }
-  let query_str = query_parts.join("");
+    Ok(())
+  })?;
 
-  // Parse the media query
-  let query = MediaQuery::parse(query_str.trim()).unwrap_or_else(|_| {
-    // If parsing fails, create a query that always matches
-    // This is for compatibility - we don't want to drop rules we can't parse
-    MediaQuery::new()
-  });
+  let prelude = parser.slice_from(start);
+  let queries = MediaQuery::parse_list(prelude).unwrap_or_default();
+
+  parser.expect_curly_bracket_block().map_err(|_| {
+    parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent("expected {".into()))
+  })?;
 
   // Parse the nested rules from the block we already matched
   let nested_rules = parser.parse_nested_block(|nested_parser| {
@@ -326,7 +295,7 @@ fn parse_media_rule<'i, 't>(
   })?;
 
   Ok(Some(CssRule::Media(MediaRule {
-    query,
+    queries,
     rules: nested_rules,
   })))
 }

@@ -2187,7 +2187,8 @@ impl MediaContext {
 
   /// Evaluates a media query list (OR logic)
   ///
-  /// Returns true if ANY query in the list matches.
+  /// Returns true if ANY query in the list matches. Empty lists evaluate to
+  /// `false`, which ensures invalid @media preludes do not accidentally match.
   ///
   /// # Examples
   ///
@@ -2206,7 +2207,8 @@ impl MediaContext {
   ///
   /// When a cache is provided, media query results are memoized for the
   /// lifetime of the cache, avoiding repeated evaluation of identical queries
-  /// (useful when collecting both style rules and @font-face rules).
+  /// (useful when collecting both style rules and @font-face rules). Empty lists
+  /// short-circuit to `false`.
   pub fn evaluate_list_with_cache(
     &self,
     queries: &[MediaQuery],
