@@ -79,22 +79,24 @@ pub struct AccessibilityNode {
 
 /// Build an accessibility tree from a styled DOM.
 pub fn build_accessibility_tree(root: &StyledNode) -> AccessibilityNode {
+  let mut lookup = HashMap::new();
+  build_styled_lookup(root, &mut lookup);
   let mut hidden = HashMap::new();
   let mut ids = HashMap::new();
   compute_hidden_and_ids(root, false, &mut hidden, &mut ids);
 
-  let labels = collect_labels(root, &hidden, &ids);
+  let labels = collect_labels(root, &hidden, &ids, &lookup);
 
   let ctx = BuildContext {
-    root,
     hidden,
     ids,
     labels,
+    lookup,
   };
 
   let mut ancestors: Vec<&DomNode> = Vec::new();
   let mut children = Vec::new();
-  for child in &root.children {
+  for child in ctx.composed_children(root) {
     children.extend(build_nodes(child, &ctx, &mut ancestors));
   }
 
@@ -116,11 +118,45 @@ pub fn accessibility_tree_json(root: &StyledNode) -> serde_json::Value {
   serde_json::to_value(build_accessibility_tree(root)).unwrap_or(serde_json::Value::Null)
 }
 
+fn build_styled_lookup<'a>(node: &'a StyledNode, out: &mut HashMap<usize, &'a StyledNode>) {
+  out.insert(node.node_id, node);
+  for child in &node.children {
+    build_styled_lookup(child, out);
+  }
+}
+
+fn composed_children<'a>(
+  styled: &'a StyledNode,
+  lookup: &HashMap<usize, &'a StyledNode>,
+) -> Vec<&'a StyledNode> {
+  if let Some(shadow_root) = styled
+    .children
+    .iter()
+    .find(|c| matches!(c.node.node_type, DomNodeType::ShadowRoot { .. }))
+  {
+    return vec![shadow_root];
+  }
+
+  if matches!(styled.node.node_type, DomNodeType::Slot { .. })
+    && !styled.slotted_node_ids.is_empty()
+  {
+    let mut resolved: Vec<&'a StyledNode> = Vec::new();
+    for id in &styled.slotted_node_ids {
+      if let Some(node) = lookup.get(id) {
+        resolved.push(*node);
+      }
+    }
+    return resolved;
+  }
+
+  styled.children.iter().collect()
+}
+
 struct BuildContext<'a> {
-  root: &'a StyledNode,
   hidden: HashMap<usize, bool>,
   ids: HashMap<String, usize>,
   labels: HashMap<usize, Vec<usize>>,
+  lookup: HashMap<usize, &'a StyledNode>,
 }
 
 impl<'a> BuildContext<'a> {
@@ -130,10 +166,18 @@ impl<'a> BuildContext<'a> {
 
   fn node_for_id(&self, id: &str) -> Option<&'a StyledNode> {
     let node_id = self.ids.get(id)?;
-    find_node_by_id(self.root, *node_id)
+    self.lookup.get(node_id).copied()
   }
 
-  fn visible_text(&self, node: &StyledNode) -> String {
+  fn node_by_id(&self, id: usize) -> Option<&'a StyledNode> {
+    self.lookup.get(&id).copied()
+  }
+
+  fn composed_children(&self, node: &'a StyledNode) -> Vec<&'a StyledNode> {
+    composed_children(node, &self.lookup)
+  }
+
+  fn visible_text(&self, node: &'a StyledNode) -> String {
     if self.is_hidden(node) {
       return String::new();
     }
@@ -161,7 +205,7 @@ impl<'a> BuildContext<'a> {
         }
 
         let mut parts = Vec::new();
-        for child in &node.children {
+        for child in self.composed_children(node) {
           let text = self.visible_text(child);
           if !text.is_empty() {
             parts.push(text);
@@ -171,7 +215,7 @@ impl<'a> BuildContext<'a> {
       }
       DomNodeType::Document | DomNodeType::ShadowRoot { .. } => {
         let mut parts = Vec::new();
-        for child in &node.children {
+        for child in self.composed_children(node) {
           let text = self.visible_text(child);
           if !text.is_empty() {
             parts.push(text);
@@ -182,7 +226,11 @@ impl<'a> BuildContext<'a> {
     }
   }
 
-  fn text_alternative(&self, node: &StyledNode, visited: &mut HashSet<usize>) -> Option<String> {
+  fn text_alternative(
+    &self,
+    node: &'a StyledNode,
+    visited: &mut HashSet<usize>,
+  ) -> Option<String> {
     if !visited.insert(node.node_id) || self.is_hidden(node) {
       return None;
     }
@@ -239,7 +287,7 @@ fn build_nodes<'a>(
     DomNodeType::Document | DomNodeType::ShadowRoot { .. } => {
       let mut children = Vec::new();
       ancestors.push(&node.node);
-      for child in &node.children {
+      for child in ctx.composed_children(node) {
         children.extend(build_nodes(child, ctx, ancestors));
       }
       ancestors.pop();
@@ -248,7 +296,7 @@ fn build_nodes<'a>(
     DomNodeType::Element { .. } | DomNodeType::Slot { .. } => {
       let mut children = Vec::new();
       ancestors.push(&node.node);
-      for child in &node.children {
+      for child in ctx.composed_children(node) {
         children.extend(build_nodes(child, ctx, ancestors));
       }
       ancestors.pop();
@@ -363,6 +411,7 @@ fn collect_labels(
   root: &StyledNode,
   hidden: &HashMap<usize, bool>,
   ids: &HashMap<String, usize>,
+  lookup: &HashMap<usize, &StyledNode>,
 ) -> HashMap<usize, Vec<usize>> {
   fn is_hidden(node: &StyledNode, hidden: &HashMap<usize, bool>) -> bool {
     *hidden.get(&node.node_id).unwrap_or(&false)
@@ -371,15 +420,16 @@ fn collect_labels(
   fn first_labelable_descendant<'a>(
     node: &'a StyledNode,
     hidden: &HashMap<usize, bool>,
+    lookup: &'a HashMap<usize, &'a StyledNode>,
   ) -> Option<&'a StyledNode> {
-    for child in &node.children {
+    for child in composed_children(node, lookup) {
       if is_hidden(child, hidden) {
         continue;
       }
       if is_labelable(&child.node) {
         return Some(child);
       }
-      if let Some(found) = first_labelable_descendant(child, hidden) {
+      if let Some(found) = first_labelable_descendant(child, hidden, lookup) {
         return Some(found);
       }
     }
@@ -388,9 +438,9 @@ fn collect_labels(
 
   fn walk(
     node: &StyledNode,
-    root: &StyledNode,
     hidden: &HashMap<usize, bool>,
     ids: &HashMap<String, usize>,
+    lookup: &HashMap<usize, &StyledNode>,
     labels: &mut HashMap<usize, Vec<usize>>,
   ) {
     if is_hidden(node, hidden) {
@@ -408,25 +458,27 @@ fn collect_labels(
         let target_key = for_attr.trim();
         if !target_key.is_empty() {
           if let Some(target_id) = ids.get(target_key) {
-            if let Some(target_node) = find_node_by_id(root, *target_id) {
+            if let Some(target_node) = lookup.get(target_id) {
               if is_labelable(&target_node.node) {
                 labels.entry(*target_id).or_default().push(node.node_id);
               }
             }
           }
         }
-      } else if let Some(target) = first_labelable_descendant(node, hidden) {
+      } else if let Some(target) = first_labelable_descendant(node, hidden, lookup) {
         labels.entry(target.node_id).or_default().push(node.node_id);
       }
     }
 
     for child in &node.children {
-      walk(child, root, hidden, ids, labels);
+      walk(child, hidden, ids, lookup, labels);
     }
   }
 
   let mut labels: HashMap<usize, Vec<usize>> = HashMap::new();
-  walk(root, root, hidden, ids, &mut labels);
+  // Labels are collected based on the styled tree (not composed), but labelable descendants within
+  // a label follow the composed tree to mirror rendered structure.
+  walk(root, hidden, ids, lookup, &mut labels);
   labels
 }
 
@@ -502,18 +554,6 @@ fn normalize_whitespace(input: &str) -> String {
     }
   }
   out.trim().to_string()
-}
-
-fn find_node_by_id<'a>(root: &'a StyledNode, id: usize) -> Option<&'a StyledNode> {
-  if root.node_id == id {
-    return Some(root);
-  }
-  for child in &root.children {
-    if let Some(found) = find_node_by_id(child, id) {
-      return Some(found);
-    }
-  }
-  None
 }
 
 fn is_sectioning_ancestor(ancestors: &[&DomNode]) -> bool {
@@ -772,7 +812,7 @@ fn label_association_name(
 
   let mut parts = Vec::new();
   for label_id in label_ids {
-    if let Some(label_node) = find_node_by_id(ctx.root, *label_id) {
+    if let Some(label_node) = ctx.node_by_id(*label_id) {
       if let Some(text) = ctx.text_alternative(label_node, visited) {
         if !text.is_empty() {
           parts.push(text);

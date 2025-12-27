@@ -1,0 +1,65 @@
+{
+  "present": {
+    "host": {
+      "role": "generic",
+      "name": "Light",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "x-host",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "shadow": {
+      "role": "generic",
+      "name": "Light",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "div",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "slot-s": {
+      "role": "generic",
+      "name": "Light",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "slot",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "light": {
+      "role": "button",
+      "name": "Light",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "button",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    }
+  },
+  "absent": ["ignored", "fallback"]
+}

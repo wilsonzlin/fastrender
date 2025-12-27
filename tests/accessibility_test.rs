@@ -28,6 +28,30 @@ fn collect_by_role<'a>(
   }
 }
 
+fn count_by_id(node: &AccessibilityNode, id: &str) -> usize {
+  let mut count = 0usize;
+  if node.id.as_deref() == Some(id) {
+    count += 1;
+  }
+  for child in &node.children {
+    count += count_by_id(child, id);
+  }
+  count
+}
+
+fn find_path<'a>(node: &'a AccessibilityNode, id: &str) -> Option<Vec<&'a AccessibilityNode>> {
+  if node.id.as_deref() == Some(id) {
+    return Some(vec![node]);
+  }
+  for child in &node.children {
+    if let Some(mut path) = find_path(child, id) {
+      path.insert(0, node);
+      return Some(path);
+    }
+  }
+  None
+}
+
 fn render_accessibility_json(html: &str) -> Value {
   let mut renderer = FastRender::new().expect("renderer");
   let dom = renderer.parse_html(html).expect("parse");
@@ -851,6 +875,7 @@ fn accessibility_fixture_snapshots() {
     "modal_top_layer",
     "header_footer_landmarks",
     "form_role_gating",
+    "shadow_dom_slotting",
   ];
 
   for name in fixtures {
@@ -893,4 +918,38 @@ fn accessibility_fixture_snapshots() {
       );
     }
   }
+}
+
+#[test]
+fn accessibility_shadow_dom_slotting() {
+  let html = fs::read_to_string("tests/fixtures/accessibility/shadow_dom_slotting.html")
+    .expect("read shadow dom fixture");
+
+  let mut renderer = FastRender::new().expect("renderer");
+  let dom = renderer.parse_html(&html).expect("parse html");
+  let tree = renderer
+    .accessibility_tree(&dom, 800, 600)
+    .expect("accessibility tree");
+
+  assert_eq!(count_by_id(&tree, "light"), 1, "light should not duplicate");
+  assert_eq!(
+    count_by_id(&tree, "ignored"),
+    0,
+    "unslotted light children should be skipped"
+  );
+  assert_eq!(
+    count_by_id(&tree, "fallback"),
+    0,
+    "fallback slot content should not render when assignments exist"
+  );
+
+  let path = find_path(&tree, "light").expect("path to light");
+  assert!(
+    path.iter().any(|n| n.id.as_deref() == Some("shadow")),
+    "light should appear within the shadow root subtree"
+  );
+  assert!(
+    path.iter().any(|n| n.id.as_deref() == Some("slot-s")),
+    "light should be projected through its assigned slot"
+  );
 }

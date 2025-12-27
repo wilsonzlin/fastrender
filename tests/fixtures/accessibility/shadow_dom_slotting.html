@@ -1,0 +1,15 @@
+<html>
+  <body>
+    <x-host id="host">
+      <template shadowroot="open">
+        <div id="shadow">
+          <slot id="slot-s" name="s">
+            <span id="fallback">Fallback</span>
+          </slot>
+        </div>
+      </template>
+      <button id="light" slot="s">Light</button>
+      <p id="ignored">Ignored</p>
+    </x-host>
+  </body>
+</html>
