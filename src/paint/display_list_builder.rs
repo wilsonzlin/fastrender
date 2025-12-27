@@ -744,7 +744,7 @@ impl DisplayListBuilder {
     let transform =
       root_style.and_then(|style| Self::build_transform(style, context_bounds, self.viewport));
     let transform_style = root_style
-      .map(|style| style.transform_style)
+      .map(|style| Self::used_transform_style(style))
       .unwrap_or(TransformStyle::Flat);
     let backface_visibility = root_style
       .map(|style| style.backface_visibility)
@@ -1029,6 +1029,36 @@ impl DisplayListBuilder {
         shape: ClipShape::Rect { rect, radii: None },
       })
     }
+  }
+
+  fn used_transform_style(style: &ComputedStyle) -> TransformStyle {
+    if Self::is_3d_flattening_boundary(style) {
+      TransformStyle::Flat
+    } else {
+      style.transform_style
+    }
+  }
+
+  fn is_3d_flattening_boundary(style: &ComputedStyle) -> bool {
+    if !style.filter.is_empty() || !style.backdrop_filter.is_empty() {
+      return true;
+    }
+    if style.opacity < 1.0 - f32::EPSILON {
+      return true;
+    }
+    if !matches!(style.clip_path, crate::style::types::ClipPath::None) {
+      return true;
+    }
+    if style.mask_layers.iter().any(|layer| layer.image.is_some()) {
+      return true;
+    }
+    if !matches!(style.mix_blend_mode, MixBlendMode::Normal) {
+      return true;
+    }
+    if matches!(style.isolation, Isolation::Isolate) {
+      return true;
+    }
+    false
   }
 
   fn convert_blend_mode(mode: MixBlendMode) -> BlendMode {

@@ -7,6 +7,7 @@ use fastrender::css::types::BoxShadow;
 use fastrender::css::types::ColorStop;
 use fastrender::css::types::Declaration;
 use fastrender::css::types::PropertyValue;
+use fastrender::css::types::Transform;
 use fastrender::geometry::Point;
 use fastrender::geometry::Rect;
 use fastrender::paint::display_list::BorderRadius as DisplayBorderRadius;
@@ -23,7 +24,10 @@ use fastrender::style::types::BackgroundLayer;
 use fastrender::style::types::BackgroundRepeat;
 use fastrender::style::types::BorderCornerRadius;
 use fastrender::style::types::BorderStyle;
+use fastrender::style::types::ClipPath;
 use fastrender::style::types::Containment;
+use fastrender::style::types::FilterFunction;
+use fastrender::style::types::ReferenceBox;
 use fastrender::style::types::TextDecorationLine;
 use fastrender::style::types::TextDecorationSkipInk;
 use fastrender::style::types::TextUnderlineOffset;
@@ -1719,6 +1723,90 @@ fn test_nested_transforms() {
   list.push(DisplayItem::PopTransform);
 
   assert_eq!(list.len(), 5);
+}
+
+fn stacking_context_transform_style(mut style: ComputedStyle) -> TransformStyle {
+  style.transform_style = TransformStyle::Preserve3d;
+  style
+    .transform
+    .push(Transform::Translate(Length::px(0.0), Length::px(0.0)));
+
+  let fragment = fastrender::FragmentNode::new_block_styled(
+    Rect::from_xywh(0.0, 0.0, 20.0, 20.0),
+    vec![],
+    Arc::new(style),
+  );
+
+  let list = fastrender::paint::display_list_builder::DisplayListBuilder::new()
+    .build_with_stacking_tree(&fragment);
+
+  list
+    .items()
+    .iter()
+    .find_map(|item| match item {
+      DisplayItem::PushStackingContext(ctx) => Some(ctx.transform_style),
+      _ => None,
+    })
+    .expect("stacking context should be present")
+}
+
+#[test]
+fn preserve_3d_used_when_no_flattening_boundary() {
+  let style = ComputedStyle::default();
+  assert_eq!(
+    stacking_context_transform_style(style),
+    TransformStyle::Preserve3d
+  );
+}
+
+#[test]
+fn preserve_3d_flattens_with_opacity() {
+  let mut style = ComputedStyle::default();
+  style.opacity = 0.5;
+  assert_eq!(
+    stacking_context_transform_style(style),
+    TransformStyle::Flat
+  );
+}
+
+#[test]
+fn preserve_3d_flattens_with_grouping_effects() {
+  let mut filter_style = ComputedStyle::default();
+  filter_style
+    .filter
+    .push(FilterFunction::Blur(Length::px(2.0)));
+  assert_eq!(
+    stacking_context_transform_style(filter_style),
+    TransformStyle::Flat
+  );
+
+  let mut backdrop_style = ComputedStyle::default();
+  backdrop_style
+    .backdrop_filter
+    .push(FilterFunction::Blur(Length::px(1.0)));
+  assert_eq!(
+    stacking_context_transform_style(backdrop_style),
+    TransformStyle::Flat
+  );
+
+  let mut mask_style = ComputedStyle::default();
+  if mask_style.mask_layers.is_empty() {
+    mask_style
+      .mask_layers
+      .push(fastrender::style::types::MaskLayer::default());
+  }
+  mask_style.mask_layers[0].image = Some(BackgroundImage::Url("mask.png".into()));
+  assert_eq!(
+    stacking_context_transform_style(mask_style),
+    TransformStyle::Flat
+  );
+
+  let mut clip_style = ComputedStyle::default();
+  clip_style.clip_path = ClipPath::Box(ReferenceBox::BorderBox);
+  assert_eq!(
+    stacking_context_transform_style(clip_style),
+    TransformStyle::Flat
+  );
 }
 
 #[test]
