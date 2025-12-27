@@ -1,23 +1,8 @@
 use crate::css::types::PropertyValue;
+pub use crate::style::content::{StringSetAssignment, StringSetValue};
 use cssparser::Parser;
 use cssparser::ParserInput;
 use cssparser::Token;
-
-/// Value assigned to a named string via `string-set`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum StringSetValue {
-  /// Capture the element's generated content (content()).
-  Content,
-  /// A literal string value.
-  Literal(String),
-}
-
-/// Assignment of a named string.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StringSetAssignment {
-  pub name: String,
-  pub value: StringSetValue,
-}
 
 fn value_to_css_text(value: &PropertyValue) -> Option<String> {
   match value {

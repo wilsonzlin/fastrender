@@ -706,12 +706,12 @@ fn collect_break_opportunities(
       .as_ref()
       .map(|s| s.as_ref())
       .unwrap_or(default_style);
-    let next_style = node
-      .children
-      .get(idx + 1)
+    let next_child = node.children.get(idx + 1);
+    let next_style = next_child
       .and_then(|c| c.style.as_ref())
       .map(|s| s.as_ref())
       .unwrap_or(default_style);
+    let next_abs_start = next_child.map(|next| abs_start + next.bounds.y());
 
     if let (Some(container_id), Some((line_index_end, line_end))) =
       (line_container_id, line_positions[idx])
@@ -761,6 +761,19 @@ fn collect_break_opportunities(
     {
       strength = BreakStrength::Avoid;
     }
+    let mut boundary_pos = child_abs_end;
+    if matches!(strength, BreakStrength::Forced) {
+      if let Some(meta) = child.block_metadata.as_ref() {
+        let mut candidate = child_abs_end + meta.margin_bottom;
+        if candidate < child_abs_end {
+          candidate = child_abs_end;
+        }
+        if let Some(next_start) = next_abs_start {
+          candidate = candidate.min(next_start);
+        }
+        boundary_pos = candidate;
+      }
+    }
     let include_boundary = if inside_inline > 0 {
       strength != BreakStrength::Auto
     } else {
@@ -773,7 +786,7 @@ fn collect_break_opportunities(
     };
     if include_boundary {
       collection.opportunities.push(BreakOpportunity {
-        pos: child_abs_end,
+        pos: boundary_pos,
         strength,
         kind: BreakKind::BetweenSiblings,
       });
@@ -822,7 +835,19 @@ pub(crate) fn collect_forced_boundaries(node: &FragmentNode, abs_start: f32) -> 
       if is_forced_page_break(child_style.break_after)
         || is_forced_page_break(next_style.break_before)
       {
-        forced.push(child_abs_end);
+        let mut boundary = child_abs_end;
+        if let Some(meta) = child.block_metadata.as_ref() {
+          let mut candidate = child_abs_end + meta.margin_bottom;
+          if candidate < child_abs_end {
+            candidate = child_abs_end;
+          }
+          if let Some(next_child) = node.children.get(idx + 1) {
+            let next_start = abs_start + next_child.bounds.y();
+            candidate = candidate.min(next_start);
+          }
+          boundary = candidate;
+        }
+        forced.push(boundary);
       }
 
       collect(child, child_abs_start, forced, default_style);

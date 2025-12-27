@@ -1551,8 +1551,10 @@ fn create_pseudo_element_box(
           text_buf.push_str(&formatted.join(separator));
         }
       }
-      ContentItem::NamedString { name, position } => {
-        text_buf.push_str(&context.resolve_named_string(name, *position));
+      ContentItem::StringReference { name, kind } => {
+        if let Some(value) = context.get_running_string(name, *kind) {
+          text_buf.push_str(value);
+        }
       }
       ContentItem::OpenQuote => {
         text_buf.push_str(context.open_quote());
@@ -1708,8 +1710,10 @@ pub(crate) fn marker_content_from_style(
               text.push_str(&formatted.join(separator));
             }
           }
-          ContentItem::NamedString { name, position } => {
-            text.push_str(&context.resolve_named_string(name, *position));
+          ContentItem::StringReference { name, kind } => {
+            if let Some(value) = context.get_running_string(name, *kind) {
+              text.push_str(value);
+            }
           }
           ContentItem::OpenQuote => {
             text.push_str(context.open_quote());

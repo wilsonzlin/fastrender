@@ -243,41 +243,6 @@ pub enum ContentItem {
   /// CSS: `content: url(image.png);`
   /// Note: Image content requires special handling during layout/paint.
   Url(String),
-
-  /// A named string, typically used for running headers/footers in margin boxes.
-  ///
-  /// CSS: `content: string(header[, first|start|last]);`
-  NamedString {
-    /// The name of the string to resolve.
-    name: String,
-    /// Which running string value to use.
-    position: RunningStringPosition,
-  },
-}
-
-/// Which value of a running string to use when resolving `string()`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RunningStringPosition {
-  First,
-  Start,
-  Last,
-}
-
-impl Default for RunningStringPosition {
-  fn default() -> Self {
-    RunningStringPosition::First
-  }
-}
-
-impl fmt::Display for RunningStringPosition {
-  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    let value = match self {
-      RunningStringPosition::First => "first",
-      RunningStringPosition::Start => "start",
-      RunningStringPosition::Last => "last",
-    };
-    write!(f, "{}", value)
-  }
 }
 
 /// Which value of a named string set to resolve.
@@ -440,13 +405,6 @@ impl fmt::Display for ContentItem {
       ContentItem::NoOpenQuote => write!(f, "no-open-quote"),
       ContentItem::NoCloseQuote => write!(f, "no-close-quote"),
       ContentItem::Url(url) => write!(f, "url(\"{}\")", url),
-      ContentItem::NamedString { name, position } => {
-        if *position == RunningStringPosition::First {
-          write!(f, "string({})", name)
-        } else {
-          write!(f, "string({}, {})", name, position)
-        }
-      }
     }
   }
 }
@@ -817,20 +775,6 @@ fn to_greek(n: i32) -> String {
   GREEK[(n - 1) as usize].to_string()
 }
 
-/// Values for a named running string on the current page.
-#[derive(Debug, Clone, Default)]
-pub struct RunningStringValues {
-  pub start: Option<String>,
-  pub first: Option<String>,
-  pub last: Option<String>,
-}
-
-impl RunningStringValues {
-  pub fn new(start: Option<String>, first: Option<String>, last: Option<String>) -> Self {
-    Self { start, first, last }
-  }
-}
-
 /// Context for content generation
 ///
 /// Contains all the information needed to resolve content values,
@@ -863,11 +807,6 @@ pub struct ContentContext {
   /// Key: attribute name, Value: attribute value
   attributes: HashMap<String, String>,
 
-  /// Named strings for running headers/footers (per page).
-  ///
-  /// Key: string name, Value: running string values for the page.
-  named_strings: HashMap<String, RunningStringValues>,
-
   /// Quote nesting level (0 = no open quotes)
   quote_depth: usize,
 
@@ -885,7 +824,6 @@ impl ContentContext {
       counters: HashMap::new(),
       running_strings: HashMap::new(),
       attributes: HashMap::new(),
-      named_strings: HashMap::new(),
       quote_depth: 0,
       quotes: default_quotes(),
     }
@@ -1079,53 +1017,6 @@ impl ContentContext {
   pub fn quote_depth(&self) -> usize {
     self.quote_depth
   }
-
-  /// Sets the values for a named running string on the current page.
-  pub fn set_named_string_values(&mut self, name: &str, values: RunningStringValues) {
-    self.named_strings.insert(name.to_string(), values);
-  }
-
-  /// Sets a single value for a running string position.
-  pub fn set_named_string(
-    &mut self,
-    name: &str,
-    position: RunningStringPosition,
-    value: impl Into<String>,
-  ) {
-    let entry = self
-      .named_strings
-      .entry(name.to_string())
-      .or_insert_with(RunningStringValues::default);
-
-    let value = Some(value.into());
-    match position {
-      RunningStringPosition::Start => entry.start = value,
-      RunningStringPosition::First => entry.first = value,
-      RunningStringPosition::Last => entry.last = value,
-    }
-  }
-
-  /// Resolves a named string for the given position, applying fallback rules.
-  pub fn resolve_named_string(&self, name: &str, position: RunningStringPosition) -> String {
-    let values = match self.named_strings.get(name) {
-      Some(values) => values,
-      None => return String::new(),
-    };
-
-    match position {
-      RunningStringPosition::Start => values.start.clone().unwrap_or_default(),
-      RunningStringPosition::First => values
-        .first
-        .clone()
-        .or_else(|| values.start.clone())
-        .unwrap_or_default(),
-      RunningStringPosition::Last => values
-        .last
-        .clone()
-        .or_else(|| values.start.clone())
-        .unwrap_or_default(),
-    }
-  }
 }
 
 /// Content generator
@@ -1278,8 +1169,6 @@ impl ContentGenerator {
         // Return empty string - the caller should handle this specially
         String::new()
       }
-
-      ContentItem::NamedString { name, position } => context.resolve_named_string(name, *position),
     }
   }
 
@@ -1940,24 +1829,31 @@ mod tests {
   }
 
   #[test]
-  fn test_generate_named_strings() {
+  fn test_generate_running_strings() {
     let gen = ContentGenerator::new();
     let mut ctx = ContentContext::new();
-    ctx.set_named_string("header", RunningStringPosition::Start, "A");
-    ctx.set_named_string("header", RunningStringPosition::First, "B");
-    ctx.set_named_string("header", RunningStringPosition::Last, "C");
+    ctx.set_running_strings(
+      std::collections::HashMap::from_iter([(
+        "header".to_string(),
+        RunningStringValues {
+          start: Some("A".to_string()),
+          first: Some("B".to_string()),
+          last: Some("C".to_string()),
+        },
+      )]),
+    );
 
-    let start_content = ContentValue::Items(vec![ContentItem::NamedString {
+    let start_content = ContentValue::Items(vec![ContentItem::StringReference {
       name: "header".to_string(),
-      position: RunningStringPosition::Start,
+      kind: StringReferenceKind::Start,
     }]);
-    let first_content = ContentValue::Items(vec![ContentItem::NamedString {
+    let first_content = ContentValue::Items(vec![ContentItem::StringReference {
       name: "header".to_string(),
-      position: RunningStringPosition::First,
+      kind: StringReferenceKind::First,
     }]);
-    let last_content = ContentValue::Items(vec![ContentItem::NamedString {
+    let last_content = ContentValue::Items(vec![ContentItem::StringReference {
       name: "header".to_string(),
-      position: RunningStringPosition::Last,
+      kind: StringReferenceKind::Last,
     }]);
 
     assert_eq!(gen.generate(&start_content, &mut ctx), "A");
@@ -1965,7 +1861,16 @@ mod tests {
     assert_eq!(gen.generate(&last_content, &mut ctx), "C");
 
     let mut fallback_ctx = ContentContext::new();
-    fallback_ctx.set_named_string("header", RunningStringPosition::Start, "A");
+    fallback_ctx.set_running_strings(
+      std::collections::HashMap::from_iter([(
+        "header".to_string(),
+        RunningStringValues {
+          start: Some("A".to_string()),
+          first: None,
+          last: None,
+        },
+      )]),
+    );
     assert_eq!(gen.generate(&first_content, &mut fallback_ctx), "A");
     assert_eq!(gen.generate(&last_content, &mut fallback_ctx), "A");
   }
@@ -2097,9 +2002,9 @@ mod tests {
     let content = parse_content("string(header)").unwrap();
     assert_eq!(
       content,
-      ContentValue::Items(vec![ContentItem::NamedString {
+      ContentValue::Items(vec![ContentItem::StringReference {
         name: "header".to_string(),
-        position: RunningStringPosition::First
+        kind: StringReferenceKind::Last
       }])
     );
   }
@@ -2109,9 +2014,9 @@ mod tests {
     let content = parse_content("string(header, START)").unwrap();
     assert_eq!(
       content,
-      ContentValue::Items(vec![ContentItem::NamedString {
+      ContentValue::Items(vec![ContentItem::StringReference {
         name: "header".to_string(),
-        position: RunningStringPosition::Start
+        kind: StringReferenceKind::Start
       }])
     );
   }

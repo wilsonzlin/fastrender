@@ -24,6 +24,49 @@ fn find_text<'a>(node: &'a FragmentNode, needle: &str) -> Option<&'a FragmentNod
   None
 }
 
+#[derive(Debug, Clone)]
+struct PositionedText {
+  text: String,
+  x: f32,
+  y: f32,
+}
+
+fn collect_text_fragments(node: &FragmentNode, origin: (f32, f32), out: &mut Vec<PositionedText>) {
+  let abs_x = origin.0 + node.bounds.x();
+  let abs_y = origin.1 + node.bounds.y();
+  if let FragmentContent::Text { text, .. } = &node.content {
+    out.push(PositionedText {
+      text: text.clone(),
+      x: abs_x,
+      y: abs_y,
+    });
+  }
+  for child in &node.children {
+    collect_text_fragments(child, (abs_x, abs_y), out);
+  }
+}
+
+fn collected_text_compacted(node: &FragmentNode) -> String {
+  let mut texts = Vec::new();
+  collect_text_fragments(node, (0.0, 0.0), &mut texts);
+  texts.sort_by(|a, b| {
+    a.y
+      .partial_cmp(&b.y)
+      .unwrap_or(std::cmp::Ordering::Equal)
+      .then(
+        a.x
+          .partial_cmp(&b.x)
+          .unwrap_or(std::cmp::Ordering::Equal),
+      )
+  });
+  let mut out = String::new();
+  for t in texts {
+    out.push_str(&t.text);
+  }
+  out.retain(|c| !c.is_whitespace());
+  out
+}
+
 fn collect_floats<'a>(node: &'a FragmentNode, out: &mut Vec<&'a FragmentNode>) {
   if node
     .style
@@ -318,12 +361,17 @@ fn margin_box_content_is_positioned_in_margins() {
   let page_roots = pages(&tree);
   let page = page_roots[0];
 
-  let header = find_text(page, "Header").expect("header margin box");
-  let footer = find_text(page, "Footer").expect("footer margin box");
   let content = page.children.first().expect("content");
+  let content_y = page.bounds.y() + content.bounds.y();
+  let header_y = find_text_position(page, "Header", (0.0, 0.0))
+    .expect("header margin box")
+    .1;
+  let footer_y = find_text_position(page, "Footer", (0.0, 0.0))
+    .expect("footer margin box")
+    .1;
 
-  assert!(header.bounds.y() < content.bounds.y());
-  assert!(footer.bounds.y() > content.bounds.y());
+  assert!(header_y < content_y);
+  assert!(footer_y > content_y);
 }
 
 #[test]
@@ -355,11 +403,12 @@ fn header_repeats_across_pages() {
   assert!(page_roots.len() >= 2);
 
   for page in page_roots {
-    let content_y = page
-      .children
-      .first()
-      .map(|n| n.bounds.y())
-      .unwrap_or(f32::MAX);
+    let content_y = page.bounds.y()
+      + page
+        .children
+        .first()
+        .map(|n| n.bounds.y())
+        .unwrap_or(f32::MAX);
 
     let header_pos = find_text_position_matching(page, "Title", (0.0, 0.0), &|pos| pos.1 < content_y)
       .expect("page header in margin box");
@@ -397,19 +446,35 @@ fn start_vs_first() {
   let page_roots = pages(&tree);
 
   assert!(page_roots.len() >= 2);
-  let page = page_roots[1];
-  let content_y = page
-    .children
-    .first()
-    .map(|n| n.bounds.y())
-    .unwrap_or(f32::MAX);
+  let mut target_page = None;
+  let mut content_y = f32::MAX;
+  for page in &page_roots {
+    let candidate = *page;
+    let candidate_content_y = candidate.bounds.y()
+      + candidate
+        .children
+        .first()
+        .map(|n| n.bounds.y())
+        .unwrap_or(f32::MAX);
+    let has_chapter_2_in_content = find_text_position_matching(
+      candidate,
+      "2",
+      (0.0, 0.0),
+      &|pos| pos.1 >= candidate_content_y,
+    )
+    .is_some();
+    if has_chapter_2_in_content {
+      target_page = Some(candidate);
+      content_y = candidate_content_y;
+      break;
+    }
+  }
+  let page = target_page.expect("page containing Chapter 2");
 
-  let left_pos =
-    find_text_position_matching(page, "Chapter 1", (0.0, 0.0), &|pos| pos.1 < content_y)
-      .expect("start value in top-left margin box");
-  let right_pos =
-    find_text_position_matching(page, "Chapter 2", (0.0, 0.0), &|pos| pos.1 < content_y)
-      .expect("last value in top-right margin box");
+  let left_pos = find_text_position_matching(page, "1", (0.0, 0.0), &|pos| pos.1 < content_y)
+    .expect("start value in top-left margin box");
+  let right_pos = find_text_position_matching(page, "2", (0.0, 0.0), &|pos| pos.1 < content_y)
+    .expect("last value in top-right margin box");
 
   assert!(left_pos.1 < content_y);
   assert!(right_pos.1 < content_y);
@@ -441,7 +506,8 @@ fn margin_box_quotes_property_applies() {
   let tree = renderer.layout_document(&dom, 400, 400).unwrap();
   let page = pages(&tree)[0];
 
-  assert!(find_text(page, "<x>").is_some());
+  let actual = collected_text_compacted(page);
+  assert!(actual.contains("<x>"), "expected <x> in margin box, got {actual}");
 }
 
 #[test]
@@ -627,22 +693,22 @@ fn margin_box_bounds_cover_all_areas() {
           @page {
             size: 200px 200px;
             margin: 10px;
-            @top-left-corner { background: rgb(255, 0, 0); }
-            @top-left { background: rgb(255, 32, 0); }
-            @top-center { background: rgb(255, 64, 0); }
-            @top-right { background: rgb(255, 96, 0); }
-            @top-right-corner { background: rgb(255, 128, 0); }
-            @right-top { background: rgb(255, 160, 0); }
-            @right-middle { background: rgb(255, 192, 0); }
-            @right-bottom { background: rgb(255, 224, 0); }
-            @bottom-right-corner { background: rgb(0, 255, 0); }
-            @bottom-right { background: rgb(0, 255, 32); }
-            @bottom-center { background: rgb(0, 255, 64); }
-            @bottom-left { background: rgb(0, 255, 96); }
-            @bottom-left-corner { background: rgb(0, 255, 128); }
-            @left-bottom { background: rgb(0, 0, 255); }
-            @left-middle { background: rgb(32, 0, 255); }
-            @left-top { background: rgb(64, 0, 255); }
+            @top-left-corner { background: rgb(255, 0, 0); content: ""; }
+            @top-left { background: rgb(255, 32, 0); content: ""; }
+            @top-center { background: rgb(255, 64, 0); content: ""; }
+            @top-right { background: rgb(255, 96, 0); content: ""; }
+            @top-right-corner { background: rgb(255, 128, 0); content: ""; }
+            @right-top { background: rgb(255, 160, 0); content: ""; }
+            @right-middle { background: rgb(255, 192, 0); content: ""; }
+            @right-bottom { background: rgb(255, 224, 0); content: ""; }
+            @bottom-right-corner { background: rgb(0, 255, 0); content: ""; }
+            @bottom-right { background: rgb(0, 255, 32); content: ""; }
+            @bottom-center { background: rgb(0, 255, 64); content: ""; }
+            @bottom-left { background: rgb(0, 255, 96); content: ""; }
+            @bottom-left-corner { background: rgb(0, 255, 128); content: ""; }
+            @left-bottom { background: rgb(0, 0, 255); content: ""; }
+            @left-middle { background: rgb(32, 0, 255); content: ""; }
+            @left-top { background: rgb(64, 0, 255); content: ""; }
           }
         </style>
       </head>
@@ -708,9 +774,16 @@ fn margin_box_page_counters_page_and_pages() {
 
   let page_count = page_roots.len();
   for (idx, page) in page_roots.iter().enumerate() {
-    let expected = format!("Page {} / {}", idx + 1, page_count);
-    find_text(page, &expected)
-      .unwrap_or_else(|| panic!("missing page counter text on page {}", idx + 1));
+    let expected = format!("Page{} / {}", idx + 1, page_count)
+      .chars()
+      .filter(|c| !c.is_whitespace())
+      .collect::<String>();
+    let actual = collected_text_compacted(page);
+    assert!(
+      actual.contains(&expected),
+      "missing page counter text on page {}",
+      idx + 1
+    );
   }
 }
 

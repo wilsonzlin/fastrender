@@ -15,15 +15,25 @@ struct TextFragment {
 }
 
 fn collect_text_fragments(node: &FragmentNode, out: &mut Vec<TextFragment>) {
+  collect_text_fragments_with_origin(node, (0.0, 0.0), out);
+}
+
+fn collect_text_fragments_with_origin(
+  node: &FragmentNode,
+  origin: (f32, f32),
+  out: &mut Vec<TextFragment>,
+) {
+  let abs_x = origin.0 + node.bounds.x();
+  let abs_y = origin.1 + node.bounds.y();
   if let FragmentContent::Text { text, .. } = &node.content {
     out.push(TextFragment {
       text: text.clone(),
-      x: node.bounds.x(),
-      y: node.bounds.y(),
+      x: abs_x,
+      y: abs_y,
     });
   }
   for child in &node.children {
-    collect_text_fragments(child, out);
+    collect_text_fragments_with_origin(child, (abs_x, abs_y), out);
   }
 }
 

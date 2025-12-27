@@ -37,7 +37,6 @@ use display::Display;
 use position::Position;
 use std::collections::HashMap;
 use std::sync::Arc;
-use string_set::StringSetAssignment;
 use types::AccentColor;
 use types::AlignContent;
 use types::AlignItems;
@@ -735,9 +734,6 @@ pub struct ComputedStyle {
   pub caption_side: CaptionSide,
   pub empty_cells: EmptyCells,
 
-  /// Named strings assigned by the `string-set` property.
-  pub string_set: Vec<StringSetAssignment>,
-
   // CSS Custom Properties (variables)
   pub custom_properties: HashMap<String, String>,
 
@@ -748,7 +744,7 @@ pub struct ComputedStyle {
   /// Quotes used by open-quote/close-quote
   pub quotes: Vec<(String, String)>,
 
-  /// String-set assignments (CSS `string-set`).
+  /// Named strings assigned by the `string-set` property.
   pub string_set: Vec<crate::style::content::StringSetAssignment>,
 }
 
@@ -1042,8 +1038,6 @@ impl Default for ComputedStyle {
       table_layout: TableLayout::Auto,
       caption_side: CaptionSide::Top,
       empty_cells: EmptyCells::Show,
-
-      string_set: Vec::new(),
 
       custom_properties: HashMap::new(),
 

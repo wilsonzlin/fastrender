@@ -1072,6 +1072,7 @@ fn parse_known_property_value(property: &str, value_str: &str) -> Option<Propert
         | "border-block-start"
         | "border-block-end"
         | "outline"
+        | "quotes"
         | "size"
         | "text-combine-upright"
     )
@@ -1306,6 +1307,19 @@ pub(crate) fn supports_parsed_declaration_is_valid(
 }
 
 fn parse_simple_value(value_str: &str) -> Option<PropertyValue> {
+  let trimmed = value_str.trim();
+  if trimmed.len() >= 2 {
+    let first = trimmed.chars().next();
+    let last = trimmed.chars().last();
+    if let (Some(quote), Some(end_quote)) = (first, last) {
+      if (quote == '"' || quote == '\'') && end_quote == quote {
+        return Some(PropertyValue::String(
+          trimmed[1..trimmed.len() - 1].to_string(),
+        ));
+      }
+    }
+  }
+
   if let Some(num) = parse_function_number(value_str) {
     return Some(PropertyValue::Number(num));
   }

@@ -16,7 +16,7 @@ use crate::layout::fragmentation::{
 };
 use crate::layout::running_strings::{collect_string_set_events, StringSetEvent};
 use crate::style::content::{
-  ContentContext, ContentItem, ContentValue, CounterStyle, RunningStringValues, StringReferenceKind,
+  ContentContext, ContentItem, ContentValue, CounterStyle, RunningStringValues,
 };
 use crate::style::display::{Display, FormattingContextType};
 use crate::style::page::{resolve_page_style, PageSide, ResolvedPageStyle};
@@ -177,7 +177,7 @@ pub fn paginate_fragment_tree(
   let base_spans = base_layout.page_name_spans.clone();
   let base_root = base_layout.root.clone();
 
-  let mut string_set_events = collect_string_set_events(&base_root);
+  let mut string_set_events = collect_string_set_events(&base_root, box_tree);
   string_set_events.sort_by(|a, b| a.abs_y.partial_cmp(&b.abs_y).unwrap_or(Ordering::Equal));
   let mut string_event_idx = 0usize;
   let mut string_set_carry: HashMap<String, String> = HashMap::new();
@@ -504,6 +504,13 @@ fn running_strings_for_page(
   start: f32,
   end: f32,
 ) -> HashMap<String, RunningStringValues> {
+  let start_boundary = start - EPSILON;
+  while *idx < events.len() && events[*idx].abs_y < start_boundary {
+    let event = &events[*idx];
+    carry.insert(event.name.clone(), event.value.clone());
+    *idx += 1;
+  }
+
   let mut snapshot = HashMap::new();
   for (name, value) in carry.iter() {
     snapshot.insert(
@@ -517,11 +524,6 @@ fn running_strings_for_page(
   }
 
   while *idx < events.len() && events[*idx].abs_y < end {
-    if events[*idx].abs_y < start {
-      *idx += 1;
-      continue;
-    }
-
     let event = &events[*idx];
     let entry = snapshot
       .entry(event.name.clone())
@@ -625,6 +627,18 @@ fn build_margin_box_fragments(
       let config = LayoutConfig::new(Size::new(bounds.width(), bounds.height()));
       let engine = LayoutEngine::with_font_context(config, font_ctx.clone());
       if let Ok(mut tree) = engine.layout_tree(&box_tree) {
+        tree.root.bounds = Rect::from_xywh(
+          tree.root.bounds.x(),
+          tree.root.bounds.y(),
+          bounds.width(),
+          bounds.height(),
+        );
+        tree.root.scroll_overflow = Rect::from_xywh(
+          tree.root.scroll_overflow.x(),
+          tree.root.scroll_overflow.y(),
+          tree.root.scroll_overflow.width().max(bounds.width()),
+          tree.root.scroll_overflow.height().max(bounds.height()),
+        );
         translate_fragment(&mut tree.root, bounds.x(), bounds.y());
         fragments.push(tree.root);
       }
@@ -699,14 +713,6 @@ fn build_margin_box_children(
           }
           ContentItem::StringReference { name, kind } => {
             text_buf.push_str(context.get_running_string(name, *kind).unwrap_or(""));
-          }
-          ContentItem::NamedString { name, position } => {
-            let kind = match position {
-              crate::style::content::RunningStringPosition::Start => StringReferenceKind::Start,
-              crate::style::content::RunningStringPosition::First => StringReferenceKind::First,
-              crate::style::content::RunningStringPosition::Last => StringReferenceKind::Last,
-            };
-            text_buf.push_str(context.get_running_string(name, kind).unwrap_or(""));
           }
           ContentItem::OpenQuote => {
             text_buf.push_str(context.open_quote());
