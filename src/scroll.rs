@@ -624,13 +624,22 @@ fn merge_containers(containers: Vec<ScrollSnapContainer>) -> Vec<ScrollSnapConta
         existing.uses_viewport_scroll,
         container.uses_viewport_scroll
       );
-      debug_assert_eq!(existing.viewport, container.viewport);
       debug_assert_eq!(existing.strictness, container.strictness);
       debug_assert_eq!(existing.behavior, container.behavior);
       debug_assert_eq!(existing.snap_x, container.snap_x);
       debug_assert_eq!(existing.snap_y, container.snap_y);
-      debug_assert_eq!(existing.padding_x, container.padding_x);
-      debug_assert_eq!(existing.padding_y, container.padding_y);
+      existing.viewport = Size::new(
+        existing.viewport.width.max(container.viewport.width),
+        existing.viewport.height.max(container.viewport.height),
+      );
+      existing.padding_x = (
+        existing.padding_x.0.max(container.padding_x.0),
+        existing.padding_x.1.max(container.padding_x.1),
+      );
+      existing.padding_y = (
+        existing.padding_y.0.max(container.padding_y.0),
+        existing.padding_y.1.max(container.padding_y.1),
+      );
 
       existing.scroll_bounds = existing.scroll_bounds.union(container.scroll_bounds);
       existing.targets_x.extend(container.targets_x);
