@@ -143,6 +143,26 @@ fn accessibility_roles_and_states_basic() {
 }
 
 #[test]
+fn accessibility_decorative_images_with_empty_alt_are_hidden() {
+  let html = r##"
+    <html>
+      <body>
+        <img id="decor" alt="" src="x" />
+        <img id="labeled" alt="" aria-label="Logo" src="x" />
+      </body>
+    </html>
+  "##;
+
+  let tree = render_accessibility_json(html);
+
+  assert!(find_json_node(&tree, "decor").is_none(), "decorative image should be omitted");
+
+  let labeled = find_json_node(&tree, "labeled").expect("labeled image present");
+  assert_eq!(labeled.get("role").and_then(|v| v.as_str()), Some("img"));
+  assert_eq!(labeled.get("name").and_then(|v| v.as_str()), Some("Logo"));
+}
+
+#[test]
 fn accessibility_lists_and_tables() {
   let mut renderer = FastRender::new().expect("renderer");
   let html = r##"

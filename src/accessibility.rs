@@ -253,7 +253,14 @@ fn build_nodes<'a>(
       let element_ref = ElementRef::with_ancestors(&node.node, ancestors);
       let mut role = compute_role(&node.node);
       let mut name = compute_name(node, ctx, role.as_deref());
-      let description = compute_description(node, ctx);
+      let mut description = compute_description(node, ctx);
+      let decorative_image = is_decorative_img(node, ctx);
+
+      if decorative_image {
+        role = None;
+        name = None;
+        description = None;
+      }
 
       // Regions should expose only when labelled.
       if role.as_deref() == Some("region") && name.is_none() {
@@ -289,8 +296,8 @@ fn build_nodes<'a>(
         pressed,
       };
 
-      let should_expose =
-        role.is_some() || name.is_some() || description.is_some() || value.is_some() || focusable;
+      let should_expose = !decorative_image
+        && (role.is_some() || name.is_some() || description.is_some() || value.is_some() || focusable);
       if !should_expose {
         return children;
       }
@@ -409,6 +416,48 @@ fn collect_labels(
   let mut labels: HashMap<usize, Vec<usize>> = HashMap::new();
   walk(root, root, hidden, ids, &mut labels);
   labels
+}
+
+fn is_decorative_img(node: &StyledNode, ctx: &BuildContext) -> bool {
+  let Some(tag) = node.node.tag_name().map(|t| t.to_ascii_lowercase()) else {
+    return false;
+  };
+  if tag != "img" {
+    return false;
+  }
+
+  let alt_empty = node
+    .node
+    .get_attribute_ref("alt")
+    .map(normalize_whitespace)
+    .is_some_and(|alt| alt.is_empty());
+  if !alt_empty {
+    return false;
+  }
+
+  if node.node.get_attribute_ref("aria-label").is_some()
+    || node.node.get_attribute_ref("aria-labelledby").is_some()
+  {
+    return false;
+  }
+
+  if ctx.labels.contains_key(&node.node_id) {
+    return false;
+  }
+
+  let role_attr = node
+    .node
+    .get_attribute_ref("role")
+    .map(|r| r.trim().to_ascii_lowercase())
+    .filter(|r| !r.is_empty());
+
+  if let Some(role) = role_attr {
+    if role != "none" && role != "presentation" {
+      return false;
+    }
+  }
+
+  true
 }
 
 fn is_node_hidden(node: &StyledNode) -> bool {
