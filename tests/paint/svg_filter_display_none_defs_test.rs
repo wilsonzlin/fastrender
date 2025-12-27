@@ -10,32 +10,35 @@ fn pixel(pixmap: &Pixmap, x: u32, y: u32) -> [u8; 4] {
   [data[idx], data[idx + 1], data[idx + 2], data[idx + 3]]
 }
 
-#[test]
-fn display_none_svg_defs_apply_filters() {
+fn run_display_none_filter_test(filter_value: &str) {
+  let filter_value = filter_value.to_string();
   thread::Builder::new()
     .stack_size(64 * 1024 * 1024)
-    .spawn(|| {
+    .spawn(move || {
       let mut renderer = FastRender::new().expect("renderer");
-      let html = r#"
-      <style>
-        body { margin: 0; }
-        .box {
-          width: 10px;
-          height: 10px;
-          background: rgb(0, 0, 255);
-          filter: url(#recolor);
-        }
-      </style>
-      <svg style="display: none">
-        <defs>
-          <filter id="recolor" color-interpolation-filters="sRGB">
-            <feColorMatrix type="matrix"
-              values="0 0 0 0 1  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0" />
-          </filter>
-        </defs>
-      </svg>
-      <div class="box"></div>
-      "#;
+      let html = format!(
+        r#"
+        <style>
+          body {{ margin: 0; }}
+          .box {{
+            width: 10px;
+            height: 10px;
+            background: rgb(0, 0, 255);
+            filter: {filter_value};
+          }}
+        </style>
+        <svg style="display: none">
+          <defs>
+            <filter id="recolor" color-interpolation-filters="sRGB">
+              <feColorMatrix type="matrix"
+                values="0 0 0 0 1  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0" />
+            </filter>
+          </defs>
+        </svg>
+        <div class="box"></div>
+        "#,
+        filter_value = filter_value
+      );
 
       let dom = renderer.parse_html(html).expect("parse html");
       let fragments = renderer
@@ -68,8 +71,8 @@ fn display_none_svg_defs_apply_filters() {
         Some(&cache),
       );
       assert!(
-        resolver.resolve("#recolor").is_some(),
-        "svg filter resolver should find #recolor in defs"
+        resolver.resolve(&filter_value).is_some(),
+        "svg filter resolver should find recolor filter in defs"
       );
 
       let pixmap = renderer.paint(&fragments, 20, 20).expect("paint");
@@ -84,4 +87,14 @@ fn display_none_svg_defs_apply_filters() {
     .expect("spawn test thread")
     .join()
     .expect("test thread panicked");
+}
+
+#[test]
+fn display_none_svg_defs_apply_filters() {
+  run_display_none_filter_test("url(#recolor)");
+}
+
+#[test]
+fn display_none_svg_defs_apply_filters_with_quoted_url() {
+  run_display_none_filter_test("url(\"#recolor\")");
 }

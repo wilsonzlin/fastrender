@@ -879,6 +879,9 @@ pub(crate) fn collect_svg_filters(
 /// This resolver prioritizes serialized definitions collected from the DOM (which include display-
 /// none SVGs) before falling back to scanning laid-out fragments for inline SVG content. Results
 /// are cached per-instance to avoid reparsing filters referenced multiple times.
+///
+/// The resolver defensively normalizes URLs that may still include `url(...)` wrappers or quotes
+/// that should have been stripped during CSS parsing.
 pub struct SvgFilterResolver<'a> {
   svg_defs: Option<Arc<HashMap<String, String>>>,
   fragment_roots: Vec<&'a FragmentNode>,
@@ -903,13 +906,15 @@ impl<'a> SvgFilterResolver<'a> {
 
   /// Resolves the given URL into a parsed SVG filter, caching the result.
   pub fn resolve(&mut self, url: &str) -> Option<Arc<SvgFilter>> {
-    if let Some(existing) = self.cache.get(url) {
+    let normalized = normalize_filter_url(url)?;
+
+    if let Some(existing) = self.cache.get(&normalized) {
       return Some(existing.clone());
     }
 
-    let resolved = self.resolve_uncached(url);
+    let resolved = self.resolve_uncached(&normalized);
     if let Some(filter) = resolved.as_ref() {
-      self.cache.insert(url.to_string(), filter.clone());
+      self.cache.insert(normalized, filter.clone());
     }
     resolved
   }
@@ -947,6 +952,53 @@ impl<'a> SvgFilterResolver<'a> {
       load_svg_filter(trimmed, cache)
     }
   }
+}
+
+fn normalize_filter_url(raw: &str) -> Option<String> {
+  let mut value = raw.trim();
+  if value.is_empty() {
+    return None;
+  }
+
+  // Defensively strip nested url(...) wrappers that may have been serialized into the value.
+  loop {
+    let Some(open_paren) = value.find('(') else {
+      break;
+    };
+    if !value[..open_paren].trim().eq_ignore_ascii_case("url") {
+      break;
+    }
+    value = unwrap_url_function(value, open_paren)?;
+  }
+
+  let value = strip_matching_quotes(value.trim());
+  let normalized = value.trim();
+  if normalized.is_empty() {
+    None
+  } else {
+    Some(normalized.to_string())
+  }
+}
+
+fn unwrap_url_function(value: &str, open_paren_idx: usize) -> Option<&str> {
+  let after_paren = value.get(open_paren_idx + 1..)?;
+  let close_paren_idx = after_paren.rfind(')')?;
+  if !after_paren[close_paren_idx + 1..].trim().is_empty() {
+    return None;
+  }
+  Some(after_paren[..close_paren_idx].trim())
+}
+
+fn strip_matching_quotes(value: &str) -> &str {
+  let bytes = value.as_bytes();
+  if bytes.len() >= 2 {
+    let first = bytes.first().copied().unwrap();
+    let last = bytes.last().copied().unwrap();
+    if (first == b'"' && last == b'"') || (first == b'\'' && last == b'\'') {
+      return &value[1..value.len() - 1];
+    }
+  }
+  value
 }
 
 fn parse_input(attr: Option<&str>) -> FilterInput {
@@ -1453,7 +1505,11 @@ fn parse_fe_convolve_matrix(node: &roxmltree::Node) -> Option<FilterPrimitive> {
 /// `scale` should be the device pixel ratio so that numeric parameters expressed in CSS pixels
 /// (e.g. stdDeviation, dx/dy, radius) are interpreted in device pixels.
 pub fn apply_svg_filter(def: &SvgFilter, pixmap: &mut Pixmap, scale: f32, bbox: Rect) {
-  let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
+  let scale = if scale.is_finite() && scale > 0.0 {
+    scale
+  } else {
+    1.0
+  };
 
   let Some((_, filter_region)) = resolve_filter_regions(def, scale, scale, bbox) else {
     for px in pixmap.pixels_mut() {
@@ -2084,9 +2140,9 @@ fn composite_pixmaps(
     CompositeOperator::Atop => {
       composite_porter_duff(&a.pixmap, &b.pixmap, |a_a, b_a| (b_a, 1.0 - a_a))?
     }
-    CompositeOperator::Xor => composite_porter_duff(&a.pixmap, &b.pixmap, |a_a, b_a| {
-      (1.0 - b_a, 1.0 - a_a)
-    })?,
+    CompositeOperator::Xor => {
+      composite_porter_duff(&a.pixmap, &b.pixmap, |a_a, b_a| (1.0 - b_a, 1.0 - a_a))?
+    }
   };
 
   let region = match op {
@@ -2215,8 +2271,7 @@ fn drop_shadow_pixmap(
   let blur_spread_x = (stddev.0.abs() * 3.0).max(0.0);
   let blur_spread_y = (stddev.1.abs() * 3.0).max(0.0);
   let shadow_region = clip_region(
-    inflate_rect_xy(base_region, blur_spread_x, blur_spread_y)
-      .translate(Point::new(dx, dy)),
+    inflate_rect_xy(base_region, blur_spread_x, blur_spread_y).translate(Point::new(dx, dy)),
     filter_region,
   );
   let region = clip_region(base_region.union(shadow_region), filter_region);
@@ -2943,30 +2998,30 @@ mod tests {
     PremultipliedColorU8::from_rgba(pm(r), pm(g), pm(b), a).unwrap()
   }
 
-	  fn apply_for_test(prim: &FilterPrimitive, pixmap: &Pixmap) -> FilterResult {
-	    let region = filter_region_for_pixmap(pixmap);
-	    let src = FilterResult::full_region(pixmap.clone(), region);
-	    let filter = SvgFilter {
-	      color_interpolation_filters: ColorInterpolationFilters::LinearRGB,
-	      steps: Vec::new(),
-	      region: SvgFilterRegion::default_for_units(SvgFilterUnits::UserSpaceOnUse),
-	      filter_res: None,
-	      primitive_units: SvgFilterUnits::UserSpaceOnUse,
-	    };
-	    apply_primitive(
-	      &filter,
-	      &region,
-	      prim,
-	      &src,
-	      &HashMap::new(),
-	      &src,
-	      1.0,
-	      1.0,
-	      region,
-	      ColorInterpolationFilters::LinearRGB,
-	    )
-	    .unwrap()
-	  }
+  fn apply_for_test(prim: &FilterPrimitive, pixmap: &Pixmap) -> FilterResult {
+    let region = filter_region_for_pixmap(pixmap);
+    let src = FilterResult::full_region(pixmap.clone(), region);
+    let filter = SvgFilter {
+      color_interpolation_filters: ColorInterpolationFilters::LinearRGB,
+      steps: Vec::new(),
+      region: SvgFilterRegion::default_for_units(SvgFilterUnits::UserSpaceOnUse),
+      filter_res: None,
+      primitive_units: SvgFilterUnits::UserSpaceOnUse,
+    };
+    apply_primitive(
+      &filter,
+      &region,
+      prim,
+      &src,
+      &HashMap::new(),
+      &src,
+      1.0,
+      1.0,
+      region,
+      ColorInterpolationFilters::LinearRGB,
+    )
+    .unwrap()
+  }
 
   #[test]
   fn color_matrix_uses_unpremultiplied_channels() {
@@ -3287,9 +3342,9 @@ mod tests {
     }
 
     let bbox = Rect::from_xywh(0.0, 0.0, 4.0, 4.0);
-	    let filter = SvgFilter {
-	      color_interpolation_filters: ColorInterpolationFilters::LinearRGB,
-	      steps: vec![
+    let filter = SvgFilter {
+      color_interpolation_filters: ColorInterpolationFilters::LinearRGB,
+      steps: vec![
         FilterStep {
           result: None,
           color_interpolation_filters: None,
@@ -3316,16 +3371,16 @@ mod tests {
           }),
         },
       ],
-	      region: SvgFilterRegion {
-	        x: SvgLength::Number(0.0),
-	        y: SvgLength::Number(0.0),
-	        width: SvgLength::Number(4.0),
-	        height: SvgLength::Number(4.0),
-	        units: SvgFilterUnits::UserSpaceOnUse,
-	      },
-	      filter_res: None,
-	      primitive_units: SvgFilterUnits::UserSpaceOnUse,
-	    };
+      region: SvgFilterRegion {
+        x: SvgLength::Number(0.0),
+        y: SvgLength::Number(0.0),
+        width: SvgLength::Number(4.0),
+        height: SvgLength::Number(4.0),
+        units: SvgFilterUnits::UserSpaceOnUse,
+      },
+      filter_res: None,
+      primitive_units: SvgFilterUnits::UserSpaceOnUse,
+    };
 
     apply_svg_filter(&filter, &mut pixmap, 1.0, bbox);
     assert!(pixmap.pixels().iter().all(|px| px.alpha() == 0));
@@ -3420,7 +3475,11 @@ mod filter_res_tests {
     apply_svg_filter(filter_low.as_ref(), &mut low_res, 1.0, bbox);
     apply_svg_filter(filter_low.as_ref(), &mut low_res_repeat, 1.0, bbox);
 
-    assert_ne!(high_res.data(), low_res.data(), "filterRes should alter filter output");
+    assert_ne!(
+      high_res.data(),
+      low_res.data(),
+      "filterRes should alter filter output"
+    );
     assert_eq!(
       low_res.data(),
       low_res_repeat.data(),
@@ -3574,9 +3633,7 @@ mod tests_composite {
       CompositeOperator::In => composite_porter_duff(&a, &b, |_, b_a| (b_a, 0.0)),
       CompositeOperator::Out => composite_porter_duff(&a, &b, |_, b_a| (1.0 - b_a, 0.0)),
       CompositeOperator::Atop => composite_porter_duff(&a, &b, |a_a, b_a| (b_a, 1.0 - a_a)),
-      CompositeOperator::Xor => {
-        composite_porter_duff(&a, &b, |a_a, b_a| (1.0 - b_a, 1.0 - a_a))
-      }
+      CompositeOperator::Xor => composite_porter_duff(&a, &b, |a_a, b_a| (1.0 - b_a, 1.0 - a_a)),
     }
   }
 

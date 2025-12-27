@@ -108,7 +108,6 @@ pub mod scene_tree;
 pub mod stacking;
 pub mod transform3d;
 pub mod svg_filter;
-pub mod svg_filter_registry;
 pub mod text_rasterize;
 pub mod text_shadow;
 pub mod transform_resolver;
