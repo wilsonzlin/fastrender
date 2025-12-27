@@ -4,6 +4,7 @@ use crate::style::computed::Visibility;
 use crate::style::display::Display;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
+use std::ptr;
 
 /// Checked state for toggleable controls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -113,9 +114,15 @@ pub fn build_accessibility_tree(root: &StyledNode) -> AccessibilityNode {
   };
 
   let mut ancestors: Vec<&DomNode> = Vec::new();
+  let mut styled_ancestors: Vec<&StyledNode> = Vec::new();
   let mut children = Vec::new();
   for child in ctx.composed_children(root) {
-    children.extend(build_nodes(child, &ctx, &mut ancestors));
+    children.extend(build_nodes(
+      child,
+      &ctx,
+      &mut ancestors,
+      &mut styled_ancestors,
+    ));
   }
 
   AccessibilityNode {
@@ -288,7 +295,7 @@ impl<'a> BuildContext<'a> {
       }
     }
 
-    let (role, _) = compute_role(&node.node, &[]);
+    let (role, _) = compute_role(node, &[], None);
     if allows_visible_text_name(node.node.tag_name(), role.as_deref(), true) {
       let text = self.visible_text(node);
       if !text.is_empty() {
@@ -304,6 +311,7 @@ fn build_nodes<'a>(
   node: &'a StyledNode,
   ctx: &BuildContext<'a>,
   ancestors: &mut Vec<&'a DomNode>,
+  styled_ancestors: &mut Vec<&'a StyledNode>,
 ) -> Vec<AccessibilityNode> {
   if ctx.is_hidden(node) {
     return Vec::new();
@@ -314,22 +322,27 @@ fn build_nodes<'a>(
     DomNodeType::Document | DomNodeType::ShadowRoot { .. } => {
       let mut children = Vec::new();
       ancestors.push(&node.node);
+      styled_ancestors.push(node);
       for child in ctx.composed_children(node) {
-        children.extend(build_nodes(child, ctx, ancestors));
+        children.extend(build_nodes(child, ctx, ancestors, styled_ancestors));
       }
+      styled_ancestors.pop();
       ancestors.pop();
       children
     }
     DomNodeType::Element { .. } | DomNodeType::Slot { .. } => {
       let mut children = Vec::new();
       ancestors.push(&node.node);
+      styled_ancestors.push(node);
       for child in ctx.composed_children(node) {
-        children.extend(build_nodes(child, ctx, ancestors));
+        children.extend(build_nodes(child, ctx, ancestors, styled_ancestors));
       }
+      styled_ancestors.pop();
       ancestors.pop();
 
       let element_ref = ElementRef::with_ancestors(&node.node, ancestors);
-      let (mut role, presentational_role) = compute_role(&node.node, ancestors);
+      let (mut role, presentational_role) =
+        compute_role(node, ancestors, styled_ancestors.last().copied());
       let mut name = compute_name(node, ctx, role.as_deref(), !presentational_role);
       let mut description = compute_description(node, ctx);
       let decorative_image = is_decorative_img(node, ctx);
@@ -611,8 +624,13 @@ fn is_sectioning_ancestor(ancestors: &[&DomNode]) -> bool {
   })
 }
 
-fn compute_role(node: &DomNode, ancestors: &[&DomNode]) -> (Option<String>, bool) {
-  let role_attr = node
+fn compute_role(
+  node: &StyledNode,
+  ancestors: &[&DomNode],
+  styled_parent: Option<&StyledNode>,
+) -> (Option<String>, bool) {
+  let dom_node = &node.node;
+  let role_attr = dom_node
     .get_attribute_ref("role")
     .and_then(|r| r.split_ascii_whitespace().find(|t| !t.is_empty()))
     .map(|r| r.to_ascii_lowercase());
@@ -626,18 +644,22 @@ fn compute_role(node: &DomNode, ancestors: &[&DomNode]) -> (Option<String>, bool
     return (Some(role), false);
   }
 
-  let Some(tag) = node.tag_name().map(|t| t.to_ascii_lowercase()) else {
+  let Some(tag) = dom_node.tag_name().map(|t| t.to_ascii_lowercase()) else {
     return (None, false);
   };
 
   let role = match tag.as_str() {
-    "a" => node.get_attribute_ref("href").map(|_| "link".to_string()),
-    "area" => node.get_attribute_ref("href").map(|_| "link".to_string()),
+    "a" => dom_node
+      .get_attribute_ref("href")
+      .map(|_| "link".to_string()),
+    "area" => dom_node
+      .get_attribute_ref("href")
+      .map(|_| "link".to_string()),
     "button" => Some("button".to_string()),
-    "summary" => Some("button".to_string()),
-    "input" => input_role(node),
+    "summary" => is_details_summary(node, styled_parent).then(|| "button".to_string()),
+    "input" => input_role(dom_node),
     "textarea" => Some("textbox".to_string()),
-    "select" => Some(select_role(node)),
+    "select" => Some(select_role(dom_node)),
     "option" => Some("option".to_string()),
     "img" => Some("img".to_string()),
     "figure" => Some("figure".to_string()),
@@ -647,7 +669,7 @@ fn compute_role(node: &DomNode, ancestors: &[&DomNode]) -> (Option<String>, bool
     "thead" | "tbody" | "tfoot" => Some("rowgroup".to_string()),
     "tr" => Some("row".to_string()),
     "td" => Some("cell".to_string()),
-    "th" => header_role(node),
+    "th" => header_role(dom_node),
     "caption" => Some("caption".to_string()),
     "progress" => Some("progressbar".to_string()),
     "meter" => Some("meter".to_string()),
@@ -680,6 +702,34 @@ fn compute_role(node: &DomNode, ancestors: &[&DomNode]) -> (Option<String>, bool
   };
 
   (role, false)
+}
+
+fn is_details_summary(node: &StyledNode, styled_parent: Option<&StyledNode>) -> bool {
+  let Some(parent) = styled_parent else {
+    return false;
+  };
+
+  if !parent
+    .node
+    .tag_name()
+    .map(|t| t.eq_ignore_ascii_case("details"))
+    .unwrap_or(false)
+  {
+    return false;
+  }
+
+  for child in &parent.children {
+    if child
+      .node
+      .tag_name()
+      .map(|t| t.eq_ignore_ascii_case("summary"))
+      .unwrap_or(false)
+    {
+      return ptr::eq(child, node);
+    }
+  }
+
+  false
 }
 
 fn input_role(node: &DomNode) -> Option<String> {

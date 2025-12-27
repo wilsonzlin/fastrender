@@ -1051,6 +1051,8 @@ fn accessibility_fixture_snapshots() {
     "shadow_dom_slotting",
     "native_names",
     "img_alt_presentational",
+    "summary_context",
+    "summary_context",
   ];
 
   for name in fixtures {

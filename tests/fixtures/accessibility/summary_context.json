@@ -1,0 +1,49 @@
+{
+  "present": {
+    "s1": {
+      "role": "button",
+      "name": "Details summary",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "summary",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "s2": {
+      "role": "generic",
+      "name": "Standalone",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "summary",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "s3": {
+      "role": "generic",
+      "name": "Extra summary",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "summary",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    }
+  }
+}
