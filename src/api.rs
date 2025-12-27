@@ -8567,7 +8567,7 @@ mod tests {
       &target_ancestors,
       &[crate::css::types::ContainerCondition {
         name: None,
-        query: cond.clone(),
+        query_list: vec![cond.clone()],
       }],
     );
     eprintln!("container match result: {}", matches);

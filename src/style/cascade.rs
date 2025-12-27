@@ -1418,7 +1418,10 @@ impl ContainerQueryContext {
         _ => container.block_size,
       };
       ctx.base_font_size = container.font_size;
-      if !ctx.evaluate(&condition.query) {
+      if condition.query_list.is_empty() {
+        return false;
+      }
+      if !ctx.evaluate_list(&condition.query_list) {
         return false;
       }
     }

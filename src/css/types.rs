@@ -550,7 +550,7 @@ fn collect_rules_recursive<'a>(
         let mut updated_conditions = container_conditions.to_vec();
         updated_conditions.push(ContainerCondition {
           name: container_rule.name.clone(),
-          query: container_rule.query.clone(),
+          query_list: container_rule.query_list.clone(),
         });
         collect_rules_recursive(
           &container_rule.rules,
@@ -768,7 +768,7 @@ fn collect_font_faces_recursive(
         }
       }
       CssRule::Container(container_rule) => {
-        if media_ctx.evaluate_with_cache(&container_rule.query, cache.as_deref_mut()) {
+        if media_ctx.evaluate_list_with_cache(&container_rule.query_list, cache.as_deref_mut()) {
           collect_font_faces_recursive(&container_rule.rules, media_ctx, cache.as_deref_mut(), out);
         }
       }
@@ -817,7 +817,7 @@ fn collect_keyframes_recursive(
         }
       }
       CssRule::Container(container_rule) => {
-        if media_ctx.evaluate_with_cache(&container_rule.query, cache.as_deref_mut()) {
+        if media_ctx.evaluate_list_with_cache(&container_rule.query_list, cache.as_deref_mut()) {
           collect_keyframes_recursive(&container_rule.rules, media_ctx, cache.as_deref_mut(), out);
         }
       }
@@ -1166,10 +1166,10 @@ pub struct MediaRule {
 /// A @container rule containing conditional rules
 #[derive(Debug, Clone)]
 pub struct ContainerRule {
-  /// Optional named container list to target (ignored for now).
+  /// Optional named container to target.
   pub name: Option<String>,
-  /// The container query to evaluate (size queries only).
-  pub query: MediaQuery,
+  /// Container query list to evaluate (size queries only, OR semantics).
+  pub query_list: Vec<MediaQuery>,
   /// Rules that apply when query matches (can be nested)
   pub rules: Vec<CssRule>,
 }
@@ -1190,8 +1190,8 @@ pub struct ScopeRule {
 pub struct ContainerCondition {
   /// Optional container name to match (None targets the nearest container).
   pub name: Option<String>,
-  /// The parsed container query (size queries only at present).
-  pub query: MediaQuery,
+  /// Parsed container queries (size queries only, OR semantics).
+  pub query_list: Vec<MediaQuery>,
 }
 
 /// A scoping context attached to collected style rules.
@@ -1445,7 +1445,7 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
         );
         out.push(CssRule::Container(ContainerRule {
           name: container_rule.name.clone(),
-          query: container_rule.query.clone(),
+          query_list: container_rule.query_list.clone(),
           rules: resolved_children,
         }));
       }

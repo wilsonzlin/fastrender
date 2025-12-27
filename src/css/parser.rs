@@ -338,69 +338,18 @@ fn parse_container_rule<'i, 't>(
   parent_selectors: Option<&SelectorList<FastRenderSelectorImpl>>,
   css_source: &str,
 ) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
-  // Collect tokens forming the prelude (optional name + query) up to the block.
-  let mut prelude_parts = Vec::new();
-  loop {
-    match parser.next_including_whitespace() {
-      Ok(Token::CurlyBracketBlock) => break,
-      Ok(Token::WhiteSpace(ws)) => prelude_parts.push((*ws).to_string()),
-      Ok(Token::Ident(id)) => prelude_parts.push(id.to_string()),
-      Ok(Token::Number { value, .. }) => prelude_parts.push(value.to_string()),
-      Ok(Token::Dimension { value, unit, .. }) => prelude_parts.push(format!("{}{}", value, unit)),
-      Ok(Token::Colon) => prelude_parts.push(":".to_string()),
-      Ok(Token::Delim(c)) => prelude_parts.push(c.to_string()),
-      Ok(Token::ParenthesisBlock) => {
-        let inner = parser.parse_nested_block(|p| {
-          let mut inner_parts = Vec::new();
-          while !p.is_exhausted() {
-            match p.next_including_whitespace() {
-              Ok(Token::WhiteSpace(ws)) => inner_parts.push((*ws).to_string()),
-              Ok(Token::Ident(id)) => inner_parts.push(id.to_string()),
-              Ok(Token::Number { value, .. }) => inner_parts.push(value.to_string()),
-              Ok(Token::Dimension { value, unit, .. }) => {
-                inner_parts.push(format!("{}{}", value, unit))
-              }
-              Ok(Token::Colon) => inner_parts.push(":".to_string()),
-              Ok(Token::Delim(c)) => inner_parts.push(c.to_string()),
-              Ok(_) => {}
-              Err(_) => break,
-            }
-          }
-          Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(inner_parts.join(""))
-        })?;
-        prelude_parts.push(format!("({})", inner));
-      }
-      Ok(_) => {}
-      Err(_) => break,
+  let start = parser.position();
+  parser.parse_until_before(cssparser::Delimiter::CurlyBracketBlock, |parser| {
+    while !parser.is_exhausted() {
+      let _ = parser.next_including_whitespace()?;
     }
-  }
+    Ok(())
+  })?;
 
-  let prelude = prelude_parts.join("");
-  let prelude_trimmed = prelude.trim();
-  if prelude_trimmed.is_empty() {
-    skip_at_rule(parser);
-    return Ok(None);
-  }
+  let prelude = parser.slice_from(start);
 
-  // Split optional name and query: text before the first '(' is treated as the name.
-  let (name, query_str) = if let Some(idx) = prelude_trimmed.find('(') {
-    let (before, after) = prelude_trimmed.split_at(idx);
-    let name = before.trim();
-    let name = if name.is_empty() {
-      None
-    } else {
-      Some(name.to_string())
-    };
-    (name, after)
-  } else {
-    (None, prelude_trimmed)
-  };
-
-  let query = MediaQuery::parse(query_str).map_err(|_| {
-    skip_at_rule(parser);
-    parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
-      "invalid container query".into(),
-    ))
+  parser.expect_curly_bracket_block().map_err(|_| {
+    parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent("expected {".into()))
   })?;
 
   let nested_rules = parser.parse_nested_block(|nested_parser| {
@@ -412,16 +361,49 @@ fn parse_container_rule<'i, 't>(
     ))
   })?;
 
-  if !query.is_size_query() {
-    // Container queries level 1 accept only size features; drop invalid container rules.
+  let Some((name, query_list)) = parse_container_prelude(prelude) else {
     return Ok(None);
-  }
+  };
 
   Ok(Some(CssRule::Container(ContainerRule {
     name,
-    query,
+    query_list,
     rules: nested_rules,
   })))
+}
+
+fn parse_container_prelude(prelude: &str) -> Option<(Option<String>, Vec<MediaQuery>)> {
+  let trimmed = prelude.trim();
+  if trimmed.is_empty() {
+    return None;
+  }
+
+  if let Ok(list) = MediaQuery::parse_list(trimmed) {
+    if !list.is_empty() && list.iter().all(MediaQuery::is_size_query) {
+      return Some((None, list));
+    }
+  }
+
+  let mut input = ParserInput::new(trimmed);
+  let mut parser = Parser::new(&mut input);
+  let name = match parser.try_parse(|p| p.expect_ident()) {
+    Ok(name) => name.to_string(),
+    Err(_) => return None,
+  };
+
+  parser.skip_whitespace();
+  let query_slice = parser.slice_from(parser.position()).trim();
+  if query_slice.is_empty() {
+    return None;
+  }
+
+  if let Ok(list) = MediaQuery::parse_list(query_slice) {
+    if !list.is_empty() && list.iter().all(MediaQuery::is_size_query) {
+      return Some((Some(name), list));
+    }
+  }
+
+  None
 }
 
 /// Parse an @scope rule with optional scope root/limit selectors.
