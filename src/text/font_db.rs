@@ -34,6 +34,7 @@
 
 use crate::error::FontError;
 use crate::error::Result;
+use crate::text::emoji;
 use fontdb::Database as FontDbDatabase;
 use fontdb::Family as FontDbFamily;
 use fontdb::Query as FontDbQuery;
@@ -1218,61 +1219,11 @@ impl FontDatabase {
   /// Checks if a character is an emoji.
   ///
   /// Uses Unicode properties to determine if a character should be
-  /// rendered with an emoji font.
+  /// rendered with an emoji font. Delegates to the shared emoji
+  /// detection logic to keep font fallback and emoji sequence parsing
+  /// in sync.
   pub fn is_emoji(c: char) -> bool {
-    let cp = c as u32;
-
-    // Emoticons (U+1F600 - U+1F64F)
-    if (0x1f600..=0x1f64f).contains(&cp) {
-      return true;
-    }
-
-    // Miscellaneous Symbols and Pictographs (U+1F300 - U+1F5FF)
-    if (0x1f300..=0x1f5ff).contains(&cp) {
-      return true;
-    }
-
-    // Transport and Map Symbols (U+1F680 - U+1F6FF)
-    if (0x1f680..=0x1f6ff).contains(&cp) {
-      return true;
-    }
-
-    // Supplemental Symbols and Pictographs (U+1F900 - U+1F9FF)
-    if (0x1f900..=0x1f9ff).contains(&cp) {
-      return true;
-    }
-
-    // Symbols and Pictographs Extended-A (U+1FA00 - U+1FA6F)
-    if (0x1fa00..=0x1fa6f).contains(&cp) {
-      return true;
-    }
-
-    // Symbols and Pictographs Extended-B (U+1FA70 - U+1FAFF)
-    if (0x1fa70..=0x1faff).contains(&cp) {
-      return true;
-    }
-
-    // Dingbats (U+2700 - U+27BF)
-    if (0x2700..=0x27bf).contains(&cp) {
-      return true;
-    }
-
-    // Regional Indicator Symbols (U+1F1E0 - U+1F1FF) - flags
-    if (0x1f1e0..=0x1f1ff).contains(&cp) {
-      return true;
-    }
-
-    // Variation Selector-16 (emoji presentation)
-    if cp == 0xfe0f {
-      return true;
-    }
-
-    // Zero Width Joiner (used in emoji sequences)
-    if cp == 0x200d {
-      return true;
-    }
-
-    false
+    emoji::is_emoji(c)
   }
 
   /// Finds emoji fonts in the database.

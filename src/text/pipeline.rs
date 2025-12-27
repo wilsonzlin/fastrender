@@ -1979,7 +1979,7 @@ fn resolve_font_for_char(
   use crate::text::font_fallback::FamilyEntry;
   use fontdb::Family;
   let db = font_context.database();
-  let is_emoji = crate::text::font_db::FontDatabase::is_emoji(ch);
+  let is_emoji = emoji::is_emoji(ch);
   let weight_preferences = weight_preference_order(weight);
   let slope_preferences = slope_preference_order(style);
   let stretch_preferences = stretch_preference_order(stretch);

@@ -39,6 +39,7 @@
 //!
 //! - CSS Fonts Module Level 4, Section 5: <https://www.w3.org/TR/css-fonts-4/#font-matching-algorithm>
 
+use super::emoji;
 use super::font_db::FontDatabase;
 use super::font_db::FontStretch;
 use super::font_db::FontStyle;
@@ -252,7 +253,7 @@ impl FallbackChain {
   /// ```
   pub fn resolve(&self, c: char, db: &FontDatabase) -> Option<FontId> {
     // Special handling for emoji characters
-    if FontDatabase::is_emoji(c) {
+    if emoji::is_emoji(c) {
       if let Some(font_id) = self.resolve_emoji(c, db) {
         return Some(font_id);
       }

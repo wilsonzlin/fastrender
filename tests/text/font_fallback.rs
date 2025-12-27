@@ -3,6 +3,7 @@
 //! These tests verify the font fallback chain behavior according to
 //! CSS Fonts Module Level 4, Section 5.
 
+use fastrender::text::emoji;
 use fastrender::FallbackChain;
 use fastrender::FallbackChainBuilder;
 use fastrender::FamilyEntry;
@@ -342,21 +343,34 @@ fn test_font_database_new_loads_system_fonts() {
 
 #[test]
 fn test_font_database_is_emoji() {
-  // Emoji characters
-  assert!(FontDatabase::is_emoji('😀')); // Grinning face
-  assert!(FontDatabase::is_emoji('🎉')); // Party popper
-  assert!(FontDatabase::is_emoji('🚀')); // Rocket
-  assert!(FontDatabase::is_emoji('❤')); // Heavy heart (dingbat)
-  assert!(FontDatabase::is_emoji('🇺')); // Regional indicator
+  let cases = [
+    '😀',       // Emoji presentation
+    '🎉',       // Emoji presentation
+    '🚀',       // Emoji presentation
+    '❤',        // Emoji that may be text by default
+    '🇺',        // Regional indicator
+    '#',        // Keycap base (text-default without VS16)
+    '©',        // Text-default emoji
+    '\u{200D}', // ZWJ
+    '\u{FE0F}', // VS16 (emoji presentation)
+    '\u{FE0E}', // VS15 (text presentation)
+    'A',        // Latin letter
+    'z',        // Latin letter
+    '0',        // Digit (keycap base)
+    '!',        // Punctuation
+    '中',       // CJK
+    'ñ',        // Latin extended
+    'α',        // Greek
+  ];
 
-  // Non-emoji characters
-  assert!(!FontDatabase::is_emoji('A'));
-  assert!(!FontDatabase::is_emoji('z'));
-  assert!(!FontDatabase::is_emoji('0'));
-  assert!(!FontDatabase::is_emoji('!'));
-  assert!(!FontDatabase::is_emoji('中'));
-  assert!(!FontDatabase::is_emoji('ñ'));
-  assert!(!FontDatabase::is_emoji('α'));
+  for ch in cases {
+    assert_eq!(
+      FontDatabase::is_emoji(ch),
+      emoji::is_emoji(ch),
+      "FontDatabase::is_emoji disagrees with emoji::is_emoji for {:?}",
+      ch
+    );
+  }
 }
 
 // ============================================================================

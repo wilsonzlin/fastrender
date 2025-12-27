@@ -3,6 +3,7 @@
 mod bidi;
 mod bidi_visual_order;
 mod emoji_test;
+mod emoji_unified_test;
 mod font_fallback;
 mod font_metrics_test;
 mod hyphenation_test;
