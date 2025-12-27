@@ -123,6 +123,7 @@ use crate::style::types::TextEmphasisPosition;
 use crate::style::types::TextEmphasisStyle;
 use crate::style::types::TextUnderlineOffset;
 use crate::style::types::TextUnderlinePosition;
+use crate::style::types::TransformBox;
 use crate::style::types::TransformStyle;
 use crate::style::values::Length;
 use crate::style::values::LengthUnit;
@@ -703,6 +704,21 @@ impl DisplayListBuilder {
     let layer6_items = context.layer6_items();
     let mask = root_style.and_then(|style| self.resolve_mask(style, context_bounds));
 
+    let root_fragment_rect = root_fragment.map(|fragment| {
+      Rect::new(
+        Point::new(
+          fragment.bounds.origin.x + offset.x,
+          fragment.bounds.origin.y + offset.y,
+        ),
+        fragment.bounds.size,
+      )
+    });
+    let plane_rect = match (root_style, root_fragment_rect) {
+      (Some(style), Some(rect)) => Self::transform_reference_box(style, rect, self.viewport),
+      (_, Some(rect)) => rect,
+      _ => context_bounds,
+    };
+
     let mix_blend_mode = root_style
       .map(|s| Self::convert_blend_mode(s.mix_blend_mode))
       .unwrap_or(BlendMode::Normal);
@@ -734,8 +750,9 @@ impl DisplayListBuilder {
         Vec::new(),
         crate::paint::display_list::BorderRadii::ZERO,
       ));
+    let transform_bounds = root_fragment_rect.unwrap_or(context_bounds);
     let transform =
-      root_style.and_then(|style| Self::build_transform(style, context_bounds, self.viewport));
+      root_style.and_then(|style| Self::build_transform(style, transform_bounds, self.viewport));
     let transform_style = root_style
       .map(|style| Self::used_transform_style(style))
       .unwrap_or(TransformStyle::Flat);
@@ -851,6 +868,7 @@ impl DisplayListBuilder {
         z_index: context.z_index,
         creates_stacking_context: true,
         bounds: context_bounds,
+        plane_rect,
         mix_blend_mode,
         is_isolated,
         transform,
@@ -2065,6 +2083,21 @@ impl DisplayListBuilder {
 
   fn border_side_visible(side: &BorderSide) -> bool {
     side.width > 0.0 && Self::border_style_visible(side.style) && !side.color.is_transparent()
+  }
+
+  fn transform_reference_box(
+    style: &ComputedStyle,
+    bounds: Rect,
+    viewport: Option<(f32, f32)>,
+  ) -> Rect {
+    let rects = Self::background_rects(bounds, style, viewport);
+    match style.transform_box {
+      TransformBox::ContentBox => rects.content,
+      TransformBox::BorderBox
+      | TransformBox::FillBox
+      | TransformBox::StrokeBox
+      | TransformBox::ViewBox => rects.border,
+    }
   }
 
   fn build_transform(
@@ -5126,6 +5159,63 @@ mod tests {
     if let DisplayItem::PushOpacity(opacity) = &items[push_opacity] {
       assert!((opacity.opacity - 0.5).abs() < f32::EPSILON);
     }
+  }
+
+  #[test]
+  fn stacking_context_plane_rect_uses_root_fragment_bounds() {
+    let mut style = ComputedStyle::default();
+    style
+      .transform
+      .push(Transform::Translate(Length::px(0.0), Length::px(0.0)));
+
+    let child = FragmentNode::new_block(Rect::from_xywh(80.0, 80.0, 50.0, 50.0), vec![]);
+    let root = FragmentNode::new_block_styled(
+      Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+      vec![child],
+      Arc::new(style),
+    );
+
+    let list = DisplayListBuilder::new().build_with_stacking_tree(&root);
+    let stacking = list
+      .items()
+      .iter()
+      .find_map(|item| match item {
+        DisplayItem::PushStackingContext(context) => Some(context),
+        _ => None,
+      })
+      .expect("stacking context present");
+
+    assert_eq!(stacking.bounds, Rect::from_xywh(0.0, 0.0, 130.0, 130.0));
+    assert_eq!(stacking.plane_rect, Rect::from_xywh(0.0, 0.0, 100.0, 100.0));
+  }
+
+  #[test]
+  fn stacking_context_transform_origin_uses_plane_rect() {
+    let mut style = ComputedStyle::default();
+    style.transform.push(Transform::Scale(2.0, 2.0));
+
+    let child = FragmentNode::new_block(Rect::from_xywh(80.0, 80.0, 50.0, 50.0), vec![]);
+    let root = FragmentNode::new_block_styled(
+      Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+      vec![child],
+      Arc::new(style),
+    );
+
+    let list = DisplayListBuilder::new().build_with_stacking_tree(&root);
+    let stacking = list
+      .items()
+      .iter()
+      .find_map(|item| match item {
+        DisplayItem::PushStackingContext(context) => Some(context),
+        _ => None,
+      })
+      .expect("stacking context present");
+
+    let transform = stacking.transform.as_ref().expect("transform present");
+    let transform = transform.to_2d().expect("transform should be 2d");
+    assert!((transform.a - 2.0).abs() < 1e-3);
+    assert!((transform.e + 50.0).abs() < 1e-3);
+    assert!((transform.f + 50.0).abs() < 1e-3);
   }
 
   #[test]

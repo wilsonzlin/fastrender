@@ -1819,6 +1819,7 @@ fn test_stacking_context() {
     z_index: 10,
     creates_stacking_context: true,
     bounds: Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+    plane_rect: Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
     mix_blend_mode: BlendMode::Normal,
     is_isolated: false,
     transform: None,

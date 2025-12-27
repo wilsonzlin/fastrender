@@ -1740,6 +1740,11 @@ pub struct StackingContextItem {
   /// Bounds of the stacking context
   pub bounds: Rect,
 
+  /// Local plane used for transform reference (e.g., transform-box)
+  ///
+  /// This is the element's own reference box, without descendant overflow.
+  pub plane_rect: Rect,
+
   /// mix-blend-mode applied when compositing this stacking context
   pub mix_blend_mode: BlendMode,
 
