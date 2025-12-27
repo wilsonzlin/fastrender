@@ -40,6 +40,7 @@ use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::geometry::Size;
 use crate::paint::clip_path::ResolvedClipPath;
+use crate::paint::homography::Homography;
 use crate::style::color::Rgba;
 use crate::style::types::BackfaceVisibility;
 use crate::style::types::BackgroundImage;
@@ -1411,6 +1412,10 @@ impl Transform3D {
 
   /// Transform an axis-aligned rectangle using a 2D projection of this matrix.
   pub fn transform_rect(&self, rect: Rect) -> Rect {
+    if let Some(transform_2d) = self.to_2d() {
+      return transform_2d.transform_rect(rect);
+    }
+
     if let Some(quad) = self.project_quad(rect) {
       let mut min_x = f32::INFINITY;
       let mut min_y = f32::INFINITY;
@@ -1427,10 +1432,11 @@ impl Transform3D {
       return Rect::from_xywh(min_x, min_y, max_x - min_x, max_y - min_y);
     }
 
-    self
-      .to_2d()
-      .unwrap_or_else(|| self.approximate_2d())
-      .transform_rect(rect)
+    if let Some(projected) = Homography::from_transform3d_z0(self).map_rect_aabb(rect) {
+      return projected;
+    }
+
+    self.approximate_2d().transform_rect(rect)
   }
 
   /// Project a rectangle to a quad; returns None if any corner has an invalid w.
@@ -2203,6 +2209,39 @@ mod tests {
     assert_eq!(transformed.y(), 20.0);
     assert_eq!(transformed.width(), 100.0);
     assert_eq!(transformed.height(), 50.0);
+  }
+
+  // ========================================================================
+  // Transform3D Tests
+  // ========================================================================
+
+  #[test]
+  fn test_transform3d_rect_perspective_bounds_cover_projected_corners() {
+    let rect = Rect::from_xywh(30.0, 20.0, 120.0, 90.0);
+    let transform =
+      Transform3D::perspective(150.0).multiply(&Transform3D::rotate_y(std::f32::consts::FRAC_PI_4));
+
+    let homography_bounds = transform.transform_rect(rect);
+    let affine_bounds = transform.approximate_2d().transform_rect(rect);
+
+    assert!(
+      (homography_bounds.x() - affine_bounds.x()).abs() > 0.001
+        || (homography_bounds.y() - affine_bounds.y()).abs() > 0.001
+        || (homography_bounds.width() - affine_bounds.width()).abs() > 0.001
+        || (homography_bounds.height() - affine_bounds.height()).abs() > 0.001
+    );
+
+    for (x, y) in [
+      (rect.min_x(), rect.min_y()),
+      (rect.max_x(), rect.min_y()),
+      (rect.min_x(), rect.max_y()),
+      (rect.max_x(), rect.max_y()),
+    ] {
+      let (tx, ty, _tz, tw) = transform.transform_point(x, y, 0.0);
+      assert!(tw.abs() > 1e-6);
+      let projected = Point::new(tx / tw, ty / tw);
+      assert!(homography_bounds.contains_point(projected));
+    }
   }
 
   // ========================================================================
