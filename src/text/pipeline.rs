@@ -2704,7 +2704,12 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
   let mut language: Option<HbLanguage> = None;
 
   // Set buffer properties
-  buffer.set_direction(run.direction.to_harfbuzz());
+  let hb_direction = if run.vertical {
+    HbDirection::TopToBottom
+  } else {
+    run.direction.to_harfbuzz()
+  };
+  buffer.set_direction(hb_direction);
   if let Some(script) = run.script.to_harfbuzz() {
     buffer.set_script(script);
   }
@@ -2716,8 +2721,30 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
     }
   }
 
+  let mut features = run.features.clone();
+  if run.vertical {
+    let need_vert = !features.iter().any(|f| f.tag.to_bytes() == *b"vert" && f.value != 0);
+    let need_vrt2 = !features.iter().any(|f| f.tag.to_bytes() == *b"vrt2" && f.value != 0);
+    if need_vert {
+      features.push(Feature {
+        tag: Tag::from_bytes(b"vert"),
+        value: 1,
+        start: 0,
+        end: u32::MAX,
+      });
+    }
+    if need_vrt2 {
+      features.push(Feature {
+        tag: Tag::from_bytes(b"vrt2"),
+        value: 1,
+        start: 0,
+        end: u32::MAX,
+      });
+    }
+  }
+
   // Shape the text
-  let output = rustybuzz::shape(&rb_face, &run.features, buffer);
+  let output = rustybuzz::shape(&rb_face, &features, buffer);
 
   // Calculate scale factor
   let units_per_em = rb_face.units_per_em() as f32;
@@ -2728,7 +2755,7 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
   let glyph_positions = output.glyph_positions();
 
   let mut glyphs = Vec::with_capacity(glyph_infos.len());
-  let mut x_position = 0.0_f32;
+  let mut inline_position = 0.0_f32;
 
   for (info, pos) in glyph_infos.iter().zip(glyph_positions.iter()) {
     let cluster_in_shape = info.cluster as usize;
@@ -2742,11 +2769,20 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
       .and_then(|s| s.chars().next())
       .is_some_and(is_bidi_control_char);
 
-    let x_advance = pos.x_advance as f32 * scale;
+    let inline_advance_raw = if run.vertical { pos.y_advance } else { pos.x_advance };
+    let cross_advance_raw = if run.vertical { pos.x_advance } else { pos.y_advance };
+    let inline_offset_raw = if run.vertical { pos.y_offset } else { pos.x_offset };
+    let cross_offset_raw = if run.vertical { pos.x_offset } else { pos.y_offset };
+    let inline_advance = inline_advance_raw as f32 * scale;
+    let cross_advance = cross_advance_raw as f32 * scale;
     if !is_bidi_control {
-      let x_offset = x_position + (pos.x_offset as f32 * scale);
-      let y_offset = pos.y_offset as f32 * scale + run.baseline_shift;
-      let y_advance = pos.y_advance as f32 * scale;
+      let x_offset = inline_offset_raw as f32 * scale;
+      let y_offset = cross_offset_raw as f32 * scale + run.baseline_shift;
+      let (x_advance, y_advance) = if run.vertical {
+        (cross_advance, inline_advance)
+      } else {
+        (inline_advance, cross_advance)
+      };
 
       glyphs.push(GlyphPosition {
         glyph_id: info.glyph_id,
@@ -2756,7 +2792,7 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
         x_advance,
         y_advance,
       });
-      x_position += x_advance;
+      inline_position += inline_advance;
     }
   }
 
@@ -2767,7 +2803,7 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
     glyphs,
     direction: run.direction,
     level: run.level,
-    advance: x_position,
+    advance: inline_position,
     font: Arc::clone(&run.font),
     font_size: run.font_size,
     baseline_shift: run.baseline_shift,

@@ -151,6 +151,42 @@ fn vertical_sideways_left_orientation_rotates_counter_clockwise() {
   }
 }
 
+#[test]
+fn vertical_shaping_uses_vertical_advances() {
+  let pipeline = ShapingPipeline::new();
+  let font_ctx = FontContext::new();
+
+  let mut vertical_style = ComputedStyle::default();
+  vertical_style.writing_mode = WritingMode::VerticalRl;
+  vertical_style.text_orientation = TextOrientation::Upright;
+
+  let vertical_runs = match pipeline.shape("日本語", &vertical_style, &font_ctx) {
+    Ok(runs) => runs,
+    Err(_) => return, // Skip if font fallback is unavailable in the test environment.
+  };
+
+  let horizontal_runs = match pipeline.shape("日本語", &ComputedStyle::default(), &font_ctx) {
+    Ok(runs) => runs,
+    Err(_) => return,
+  };
+
+  let vertical_y_advance: f32 = vertical_runs
+    .iter()
+    .flat_map(|r| r.glyphs.iter())
+    .map(|g| g.y_advance.abs())
+    .sum();
+  let horizontal_y_advance: f32 = horizontal_runs
+    .iter()
+    .flat_map(|r| r.glyphs.iter())
+    .map(|g| g.y_advance.abs())
+    .sum();
+
+  assert!(
+    vertical_y_advance > horizontal_y_advance + 0.1,
+    "vertical shaping should expose vertical advances for inline progression"
+  );
+}
+
 // ============================================================================
 // Cluster Segmentation Tests
 // ============================================================================

@@ -770,12 +770,13 @@ impl TextRasterizer {
 
     let scale = font_size / units_per_em;
     let mut cursor_x = x;
+    let mut cursor_y = 0.0_f32;
 
     // Render each glyph
     for glyph in glyphs {
       // Calculate glyph position
       let glyph_x = cursor_x + glyph.x_offset;
-      let glyph_y = baseline_y + glyph.y_offset;
+      let glyph_y = baseline_y + cursor_y + glyph.y_offset;
 
       let color_key = ColorGlyphCacheKey::new(
         font,
@@ -828,9 +829,16 @@ impl TextRasterizer {
 
       // Advance cursor (x_offset is already applied, x_advance is the main movement)
       cursor_x += glyph.x_advance;
+      cursor_y += glyph.y_advance;
     }
 
-    Ok(cursor_x - x)
+    let advance = if cursor_y.abs() > (cursor_x - x).abs() {
+      cursor_y
+    } else {
+      cursor_x - x
+    };
+
+    Ok(advance)
   }
 
   /// Renders multiple shaped runs.
@@ -857,20 +865,27 @@ impl TextRasterizer {
     pixmap: &mut Pixmap,
   ) -> Result<f32> {
     let mut cursor_x = x;
+    let mut cursor_y = 0.0_f32;
 
     for run in runs {
       let advance = self.render_shaped_run_with_state(
         run,
         cursor_x,
-        baseline_y,
+        baseline_y + cursor_y,
         color,
         pixmap,
         TextRenderState::default(),
       )?;
-      cursor_x += advance;
+      let total_x_advance: f32 = run.glyphs.iter().map(|g| g.x_advance.abs()).sum();
+      let total_y_advance: f32 = run.glyphs.iter().map(|g| g.y_advance.abs()).sum();
+      if total_y_advance > total_x_advance {
+        cursor_y += advance;
+      } else {
+        cursor_x += advance;
+      }
     }
 
-    Ok(cursor_x - x)
+    Ok((cursor_x - x) + cursor_y)
   }
 
   /// Renders text with a specific font (low-level API).
@@ -972,10 +987,12 @@ impl TextRasterizer {
 
     let scale = font_size / units_per_em;
     let mut paths = Vec::with_capacity(glyphs.len());
+    let mut cursor_x = x;
+    let mut cursor_y = 0.0_f32;
 
     for glyph in glyphs {
-      let glyph_x = x + glyph.x_offset;
-      let glyph_y = baseline_y + glyph.y_offset;
+      let glyph_x = cursor_x + glyph.x_offset;
+      let glyph_y = baseline_y + cursor_y + glyph.y_offset;
       if let Some(cached) = self
         .cache
         .get_or_build(font, glyph.glyph_id, synthetic_oblique)
@@ -990,6 +1007,9 @@ impl TextRasterizer {
           }
         }
       }
+
+      cursor_x += glyph.x_advance;
+      cursor_y += glyph.y_advance;
     }
 
     Ok(paths)

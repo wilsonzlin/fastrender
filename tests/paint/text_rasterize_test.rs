@@ -747,6 +747,51 @@ fn test_render_at_edge_of_pixmap() {
   assert!(result.is_ok());
 }
 
+#[test]
+fn test_vertical_rendering_extents() {
+  let pipeline = ShapingPipeline::new();
+  let font_ctx = FontContext::new();
+
+  let mut vertical_style = ComputedStyle::default();
+  vertical_style.writing_mode = fastrender::style::types::WritingMode::VerticalRl;
+  vertical_style.text_orientation = fastrender::style::types::TextOrientation::Upright;
+
+  let vertical_runs = match pipeline.shape("縦書き", &vertical_style, &font_ctx) {
+    Ok(runs) => runs,
+    Err(_) => return,
+  };
+  let horizontal_runs = match pipeline.shape("縦書き", &ComputedStyle::default(), &font_ctx) {
+    Ok(runs) => runs,
+    Err(_) => return,
+  };
+
+  let mut rasterizer = TextRasterizer::new();
+  let mut vertical = create_test_pixmap(120, 120);
+  let mut horizontal = create_test_pixmap(120, 120);
+
+  for run in &vertical_runs {
+    let _ = rasterizer.render_shaped_run(run, 60.0, 10.0, Rgba::BLACK, &mut vertical);
+  }
+  for run in &horizontal_runs {
+    let _ = rasterizer.render_shaped_run(run, 10.0, 70.0, Rgba::BLACK, &mut horizontal);
+  }
+
+  let Some((h_min_x, h_max_x, h_min_y, h_max_y)) = painted_bounds(&horizontal) else {
+    return;
+  };
+  let Some((v_min_x, v_max_x, v_min_y, v_max_y)) = painted_bounds(&vertical) else {
+    return;
+  };
+
+  let h_width = h_max_x.saturating_sub(h_min_x);
+  let h_height = h_max_y.saturating_sub(h_min_y);
+  let v_width = v_max_x.saturating_sub(v_min_x);
+  let v_height = v_max_y.saturating_sub(v_min_y);
+
+  assert!(v_height > h_height, "vertical text should extend along the y axis");
+  assert!(v_width < h_width, "vertical text should occupy less horizontal span than horizontal text");
+}
+
 // ============================================================================
 // Performance / Cache Tests
 // ============================================================================

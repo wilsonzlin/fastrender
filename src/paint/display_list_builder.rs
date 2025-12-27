@@ -3931,18 +3931,25 @@ impl DisplayListBuilder {
 
   fn glyphs_from_run(&self, run: &ShapedRun, origin_x: f32, baseline_y: f32) -> Vec<GlyphInstance> {
     let mut glyphs = Vec::with_capacity(run.glyphs.len());
+    let mut pen_x = if run.direction.is_rtl() { run.advance } else { 0.0 };
+    let mut pen_y = 0.0_f32;
 
     for glyph in &run.glyphs {
       let x = match run.direction {
-        crate::text::pipeline::Direction::RightToLeft => origin_x - glyph.x_offset,
-        crate::text::pipeline::Direction::LeftToRight => origin_x + glyph.x_offset,
+        crate::text::pipeline::Direction::RightToLeft => origin_x + pen_x - glyph.x_offset,
+        crate::text::pipeline::Direction::LeftToRight => origin_x + pen_x + glyph.x_offset,
       };
-      let y = baseline_y - glyph.y_offset;
+      let y = baseline_y + pen_y + glyph.y_offset;
       glyphs.push(GlyphInstance {
         glyph_id: glyph.glyph_id,
         offset: Point::new(x - origin_x, y - baseline_y),
-        advance: glyph.x_advance,
+        advance: 0.0,
       });
+      pen_x += match run.direction {
+        crate::text::pipeline::Direction::RightToLeft => -glyph.x_advance,
+        crate::text::pipeline::Direction::LeftToRight => glyph.x_advance,
+      };
+      pen_y += glyph.y_advance;
     }
 
     glyphs
@@ -3956,18 +3963,35 @@ impl DisplayListBuilder {
     inline_start: f32,
   ) -> Vec<GlyphInstance> {
     let mut glyphs = Vec::with_capacity(run.glyphs.len());
+    let mut pen_inline = if run.direction.is_rtl() { run.advance } else { 0.0 };
+    let mut pen_block = 0.0_f32;
 
     for glyph in &run.glyphs {
-      let inline_pos = match run.direction {
-        crate::text::pipeline::Direction::RightToLeft => inline_origin - glyph.x_offset,
-        crate::text::pipeline::Direction::LeftToRight => inline_origin + glyph.x_offset,
+      let inline_step = if glyph.y_advance.abs() > glyph.x_advance.abs() {
+        glyph.y_advance
+      } else {
+        glyph.x_advance
       };
-      let block_pos = block_baseline - glyph.y_offset;
+      let block_step = if inline_step == glyph.y_advance {
+        glyph.x_advance
+      } else {
+        glyph.y_advance
+      };
+      let inline_pos = match run.direction {
+        crate::text::pipeline::Direction::RightToLeft => inline_origin + pen_inline - glyph.x_offset,
+        crate::text::pipeline::Direction::LeftToRight => inline_origin + pen_inline + glyph.x_offset,
+      };
+      let block_pos = block_baseline + pen_block + glyph.y_offset;
       glyphs.push(GlyphInstance {
         glyph_id: glyph.glyph_id,
         offset: Point::new(block_pos - block_baseline, inline_pos - inline_start),
         advance: 0.0,
       });
+      pen_inline += match run.direction {
+        crate::text::pipeline::Direction::RightToLeft => -inline_step,
+        crate::text::pipeline::Direction::LeftToRight => inline_step,
+      };
+      pen_block += block_step;
     }
 
     glyphs
@@ -4027,6 +4051,8 @@ impl DisplayListBuilder {
     } else {
       inline_origin
     };
+    let mut pen_inline = if run.direction.is_rtl() { run.advance } else { 0.0 };
+    let mut pen_block = 0.0_f32;
     for glyph in &run.glyphs {
       if !seen_clusters.insert(glyph.cluster) {
         continue;
@@ -4039,20 +4065,36 @@ impl DisplayListBuilder {
           }
         }
       }
-      let inline_center = match run.direction {
+      let inline_step = if inline_vertical && glyph.y_advance.abs() > glyph.x_advance.abs() {
+        glyph.y_advance
+      } else {
+        glyph.x_advance
+      };
+      let block_step = if inline_vertical { glyph.y_advance + glyph.x_advance - inline_step } else { glyph.y_advance };
+      let inline_pos = match run.direction {
         crate::text::pipeline::Direction::RightToLeft => {
-          run_origin_inline - (glyph.x_offset + glyph.x_advance * 0.5)
+          run_origin_inline + pen_inline - glyph.x_offset
         }
         crate::text::pipeline::Direction::LeftToRight => {
-          run_origin_inline + glyph.x_offset + glyph.x_advance * 0.5
+          run_origin_inline + pen_inline + glyph.x_offset
         }
       };
+      let inline_center = match run.direction {
+        crate::text::pipeline::Direction::RightToLeft => inline_pos - inline_step * 0.5,
+        crate::text::pipeline::Direction::LeftToRight => inline_pos + inline_step * 0.5,
+      };
+      let block_center_with_pen = block_center + pen_block + glyph.y_offset;
       let center = if inline_vertical {
-        Point::new(block_center, inline_center)
+        Point::new(block_center_with_pen, inline_center)
       } else {
-        Point::new(inline_center, block_center)
+        Point::new(inline_center, block_center_with_pen)
       };
       marks.push(EmphasisMark { center });
+      pen_inline += match run.direction {
+        crate::text::pipeline::Direction::RightToLeft => -inline_step,
+        crate::text::pipeline::Direction::LeftToRight => inline_step,
+      };
+      pen_block += block_step;
     }
 
     let text = if let TextEmphasisStyle::String(ref s) = style.text_emphasis_style {
@@ -4080,21 +4122,28 @@ impl DisplayListBuilder {
               descent = mark_style.font_size * 0.2;
             }
             for r in mark_runs {
-              let mark_origin = if r.direction.is_rtl() {
-                width + r.advance
-              } else {
-                width
-              };
+              let mark_origin = if r.direction.is_rtl() { width + r.advance } else { width };
+              let mut pen_inline = if r.direction.is_rtl() { r.advance } else { 0.0 };
+              let mut pen_block = 0.0_f32;
               for g in r.glyphs {
                 let x = match r.direction {
-                  crate::text::pipeline::Direction::RightToLeft => mark_origin - g.x_offset,
-                  crate::text::pipeline::Direction::LeftToRight => mark_origin + g.x_offset,
+                  crate::text::pipeline::Direction::RightToLeft => {
+                    mark_origin + pen_inline - g.x_offset
+                  }
+                  crate::text::pipeline::Direction::LeftToRight => {
+                    mark_origin + pen_inline + g.x_offset
+                  }
                 };
                 glyphs.push(GlyphInstance {
                   glyph_id: g.glyph_id,
-                  offset: Point::new(x, -g.y_offset),
-                  advance: g.x_advance,
+                  offset: Point::new(x, pen_block + g.y_offset),
+                  advance: 0.0,
                 });
+                pen_inline += match r.direction {
+                  crate::text::pipeline::Direction::RightToLeft => -g.x_advance,
+                  crate::text::pipeline::Direction::LeftToRight => g.x_advance,
+                };
+                pen_block += g.y_advance;
               }
               width += r.advance;
             }
