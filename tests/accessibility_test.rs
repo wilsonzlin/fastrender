@@ -1038,6 +1038,7 @@ fn accessibility_fixture_snapshots() {
     "aria_states",
     "shadow_dom_slotting",
     "native_names",
+    "img_alt_presentational",
   ];
 
   for name in fixtures {

@@ -546,10 +546,20 @@ fn is_decorative_img(node: &StyledNode, ctx: &BuildContext) -> bool {
     .and_then(|r| r.split_ascii_whitespace().find(|t| !t.is_empty()))
     .map(|r| r.to_ascii_lowercase());
 
-  if let Some(role) = role_attr {
+  if let Some(role) = role_attr.as_deref() {
     if role != "none" && role != "presentation" {
       return false;
     }
+  }
+
+  if node
+    .node
+    .get_attribute_ref("title")
+    .map(normalize_whitespace)
+    .is_some_and(|title| !title.is_empty())
+    && role_attr.is_none()
+  {
+    return false;
   }
 
   true

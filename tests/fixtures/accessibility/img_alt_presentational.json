@@ -1,0 +1,83 @@
+{
+  "present": {
+    "logo": {
+      "role": "img",
+      "name": "Logo",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "img",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "aria-named": {
+      "role": "img",
+      "name": "Meaningful",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "img",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "titled": {
+      "role": "img",
+      "name": "Tooltip title",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "img",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "missing": {
+      "role": "img",
+      "name": null,
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "img",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "role-img": {
+      "role": "img",
+      "name": null,
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "img",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    }
+  },
+  "absent": [
+    "decor",
+    "role-presentation"
+  ]
+}
