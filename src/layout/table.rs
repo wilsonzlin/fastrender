@@ -1111,7 +1111,11 @@ impl TableStructure {
 
     // Track explicit columns from <col>/<colgroup> to honor Tables spec that the number of columns
     // is the maximum of col elements and the actual grid.
-    for child in &table_box.children {
+    for child in table_box
+      .children
+      .iter()
+      .filter(|child| child.style.running_position.is_none())
+    {
       match Self::get_table_element_type(child) {
         TableElementType::Column => {
           let span = child
@@ -1149,7 +1153,12 @@ impl TableStructure {
       }
     }
 
-    for (child_idx, child) in table_box.children.iter().enumerate() {
+    for (child_idx, child) in table_box
+      .children
+      .iter()
+      .filter(|child| child.style.running_position.is_none())
+      .enumerate()
+    {
       match Self::get_table_element_type(child) {
         TableElementType::RowGroup
         | TableElementType::HeaderGroup
@@ -1299,7 +1308,11 @@ impl TableStructure {
 
     // Apply column widths from <col>/<colgroup> if present
     let mut col_cursor = 0;
-    for child in &table_box.children {
+    for child in table_box
+      .children
+      .iter()
+      .filter(|child| child.style.running_position.is_none())
+    {
       match Self::get_table_element_type(child) {
         TableElementType::Column => {
           let span = child
@@ -2086,7 +2099,11 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
   let mut source_row_idx = 0usize;
   let mut source_col_idx = 0usize;
 
-  for child in &table_box.children {
+  for child in table_box
+    .children
+    .iter()
+    .filter(|child| child.style.running_position.is_none())
+  {
     match TableStructure::get_table_element_type(child) {
       TableElementType::RowGroup
       | TableElementType::HeaderGroup
@@ -3624,7 +3641,11 @@ impl TableFormattingContext {
   /// Gets the box node for a cell
   fn get_cell_box<'a>(&self, table_box: &'a BoxNode, cell: &CellInfo) -> Option<&'a BoxNode> {
     let mut row_idx = 0;
-    for child in &table_box.children {
+    for child in table_box
+      .children
+      .iter()
+      .filter(|child| child.style.running_position.is_none())
+    {
       match TableStructure::get_table_element_type(child) {
         TableElementType::RowGroup
         | TableElementType::HeaderGroup
@@ -3655,7 +3676,11 @@ impl TableFormattingContext {
   ) -> Vec<RowGroupConstraints> {
     let mut constraints = Vec::new();
     let mut source_row_idx = 0usize;
-    for child in &table_box.children {
+    for child in table_box
+      .children
+      .iter()
+      .filter(|child| child.style.running_position.is_none())
+    {
       match TableStructure::get_table_element_type(child) {
         TableElementType::RowGroup
         | TableElementType::HeaderGroup
@@ -3715,17 +3740,28 @@ impl FormattingContext for TableFormattingContext {
     constraints: &LayoutConstraints,
   ) -> Result<FragmentNode, LayoutError> {
     let _profile = layout_timer(LayoutKind::Table);
-    if let Some(cached) = layout_cache_lookup(
-      box_node,
-      FormattingContextType::Table,
-      constraints,
-      self.viewport_size,
-    ) {
-      return Ok(cached);
+    let has_running_children = box_node
+      .children
+      .iter()
+      .any(|child| child.style.running_position.is_some());
+    if !has_running_children {
+      if let Some(cached) = layout_cache_lookup(
+        box_node,
+        FormattingContextType::Table,
+        constraints,
+        self.viewport_size,
+      ) {
+        return Ok(cached);
+      }
     }
     let dump = runtime::runtime_toggles().truthy("FASTR_DUMP_TABLE");
     let mut positioned_children: Vec<BoxNode> = Vec::new();
-    for child in &box_node.children {
+    let mut running_children: Vec<(usize, BoxNode)> = Vec::new();
+    for (child_idx, child) in box_node.children.iter().enumerate() {
+      if child.style.running_position.is_some() {
+        running_children.push((child_idx, child.clone()));
+        continue;
+      }
       if matches!(
         child.style.position,
         crate::style::position::Position::Absolute | crate::style::position::Position::Fixed
@@ -3763,10 +3799,12 @@ impl FormattingContext for TableFormattingContext {
       .children
       .iter()
       .filter(|child| {
-        !matches!(
-          child.style.position,
-          crate::style::position::Position::Absolute | crate::style::position::Position::Fixed
-        ) && matches!(child.style.display, Display::TableCaption)
+        child.style.running_position.is_none()
+          && !matches!(
+            child.style.position,
+            crate::style::position::Position::Absolute | crate::style::position::Position::Fixed
+          )
+          && matches!(child.style.display, Display::TableCaption)
       })
       .collect();
 
@@ -4018,6 +4056,35 @@ impl FormattingContext for TableFormattingContext {
         vec![],
         box_node.style.clone(),
       );
+      if !running_children.is_empty() {
+        let snapshot_constraints = LayoutConstraints::new(
+          AvailableSpace::Definite(width.max(0.0)),
+          AvailableSpace::Indefinite,
+        );
+        for (order, (_, running_child)) in running_children.iter().enumerate() {
+          let Some(name) = running_child.style.running_position.clone() else {
+            continue;
+          };
+
+          let mut snapshot_node = running_child.clone();
+          let mut snapshot_style = snapshot_node.style.as_ref().clone();
+          snapshot_style.running_position = None;
+          snapshot_style.position = crate::style::position::Position::Static;
+          snapshot_node.style = Arc::new(snapshot_style);
+
+          let fc_type = snapshot_node
+            .formatting_context()
+            .unwrap_or(FormattingContextType::Block);
+          let fc = self.factory.create(fc_type);
+          if let Ok(snapshot_fragment) = fc.layout(&snapshot_node, &snapshot_constraints) {
+            let anchor_bounds = Rect::from_xywh(0.0, (order as f32) * 1e-4, 0.0, 0.01);
+            let mut anchor =
+              FragmentNode::new_running_anchor(anchor_bounds, name, snapshot_fragment);
+            anchor.style = Some(running_child.style.clone());
+            fragment.children.push(anchor);
+          }
+        }
+      }
       if !positioned_children.is_empty() {
         let cb = if box_node.style.position.is_positioned() {
           let padding_origin = Point::new(border_left + pad_left, border_top + pad_top);
@@ -4044,13 +4111,15 @@ impl FormattingContext for TableFormattingContext {
         };
         place_out_of_flow(&mut fragment, cb)?;
       }
-      layout_cache_store(
-        box_node,
-        FormattingContextType::Table,
-        constraints,
-        &fragment,
-        self.viewport_size,
-      );
+      if !has_running_children {
+        layout_cache_store(
+          box_node,
+          FormattingContextType::Table,
+          constraints,
+          &fragment,
+          self.viewport_size,
+        );
+      }
       return Ok(fragment);
     }
 
@@ -4740,7 +4809,11 @@ impl FormattingContext for TableFormattingContext {
     let mut column_styles: Vec<Option<Arc<ComputedStyle>>> = vec![None; structure.column_count];
     let mut column_groups: Vec<(usize, usize, Arc<ComputedStyle>)> = Vec::new();
     let mut source_col_idx = 0usize;
-    for child in &box_node.children {
+    for child in box_node
+      .children
+      .iter()
+      .filter(|child| child.style.running_position.is_none())
+    {
       match TableStructure::get_table_element_type(child) {
         TableElementType::Column => {
           if let Some(visible) = source_col_to_visible.get(source_col_idx).and_then(|m| *m) {
@@ -4839,7 +4912,11 @@ impl FormattingContext for TableFormattingContext {
     let mut row_styles: Vec<Option<Arc<ComputedStyle>>> = vec![None; structure.row_count];
     let mut row_groups: Vec<(usize, usize, Arc<ComputedStyle>)> = Vec::new();
     let mut row_cursor = 0usize;
-    for child in &box_node.children {
+    for child in box_node
+      .children
+      .iter()
+      .filter(|child| child.style.running_position.is_none())
+    {
       match TableStructure::get_table_element_type(child) {
         TableElementType::RowGroup
         | TableElementType::HeaderGroup
@@ -5309,13 +5386,44 @@ impl FormattingContext for TableFormattingContext {
         Arc::new(table_style),
       );
       fragment.baseline = baseline_offset;
-      layout_cache_store(
-        box_node,
-        FormattingContextType::Table,
-        constraints,
-        &fragment,
-        self.viewport_size,
-      );
+      if !running_children.is_empty() {
+        let snapshot_constraints = LayoutConstraints::new(
+          AvailableSpace::Definite(table_bounds.width().max(0.0)),
+          AvailableSpace::Indefinite,
+        );
+        for (order, (_, running_child)) in running_children.iter().enumerate() {
+          let Some(name) = running_child.style.running_position.clone() else {
+            continue;
+          };
+
+          let mut snapshot_node = running_child.clone();
+          let mut snapshot_style = snapshot_node.style.as_ref().clone();
+          snapshot_style.running_position = None;
+          snapshot_style.position = crate::style::position::Position::Static;
+          snapshot_node.style = Arc::new(snapshot_style);
+
+          let fc_type = snapshot_node
+            .formatting_context()
+            .unwrap_or(FormattingContextType::Block);
+          let fc = self.factory.create(fc_type);
+          if let Ok(snapshot_fragment) = fc.layout(&snapshot_node, &snapshot_constraints) {
+            let anchor_bounds = Rect::from_xywh(0.0, (order as f32) * 1e-4, 0.0, 0.01);
+            let mut anchor =
+              FragmentNode::new_running_anchor(anchor_bounds, name, snapshot_fragment);
+            anchor.style = Some(running_child.style.clone());
+            fragment.children.push(anchor);
+          }
+        }
+      }
+      if !has_running_children {
+        layout_cache_store(
+          box_node,
+          FormattingContextType::Table,
+          constraints,
+          &fragment,
+          self.viewport_size,
+        );
+      }
       return Ok(fragment);
     }
 
@@ -5362,13 +5470,17 @@ impl FormattingContext for TableFormattingContext {
       Ok((frag, height))
     };
 
+    let mut caption_offsets: std::collections::HashMap<usize, f32> =
+      std::collections::HashMap::new();
     for caption in captions
       .iter()
       .copied()
       .filter(|c| matches!(c.style.caption_side, CaptionSide::Top))
     {
-      let (frag, h) = layout_caption(caption, offset_y)?;
+      let y = offset_y;
+      let (frag, h) = layout_caption(caption, y)?;
       offset_y += h;
+      caption_offsets.insert(caption.id, y);
       wrapper_children.push(frag);
     }
 
@@ -5385,8 +5497,10 @@ impl FormattingContext for TableFormattingContext {
       .copied()
       .filter(|c| matches!(c.style.caption_side, CaptionSide::Bottom))
     {
-      let (frag, h) = layout_caption(caption, offset_y)?;
+      let y = offset_y;
+      let (frag, h) = layout_caption(caption, y)?;
       offset_y += h;
+      caption_offsets.insert(caption.id, y);
       wrapper_children.push(frag);
     }
 
@@ -5410,6 +5524,59 @@ impl FormattingContext for TableFormattingContext {
       wrapper_children,
       Arc::new(wrapper_style),
     );
+
+    if !running_children.is_empty() {
+      let snapshot_constraints = LayoutConstraints::new(
+        AvailableSpace::Definite(wrapper_width.max(0.0)),
+        AvailableSpace::Indefinite,
+      );
+
+      for (order, (idx, running_child)) in running_children.iter().enumerate() {
+        let Some(name) = running_child.style.running_position.clone() else {
+          continue;
+        };
+
+        let idx = *idx;
+        let mut anchor_y = offset_y;
+        for sibling in box_node.children.iter().skip(idx.saturating_add(1)) {
+          if sibling.style.running_position.is_some() {
+            continue;
+          }
+          if matches!(
+            sibling.style.position,
+            crate::style::position::Position::Absolute | crate::style::position::Position::Fixed
+          ) {
+            continue;
+          }
+          anchor_y = if matches!(sibling.style.display, Display::TableCaption) {
+            caption_offsets
+              .get(&sibling.id)
+              .copied()
+              .unwrap_or(table_origin_y)
+          } else {
+            table_origin_y
+          };
+          break;
+        }
+
+        let mut snapshot_node = running_child.clone();
+        let mut snapshot_style = snapshot_node.style.as_ref().clone();
+        snapshot_style.running_position = None;
+        snapshot_style.position = crate::style::position::Position::Static;
+        snapshot_node.style = Arc::new(snapshot_style);
+
+        let fc_type = snapshot_node
+          .formatting_context()
+          .unwrap_or(FormattingContextType::Block);
+        let fc = self.factory.create(fc_type);
+        if let Ok(snapshot_fragment) = fc.layout(&snapshot_node, &snapshot_constraints) {
+          let anchor_bounds = Rect::from_xywh(0.0, anchor_y + (order as f32) * 1e-4, 0.0, 0.01);
+          let mut anchor = FragmentNode::new_running_anchor(anchor_bounds, name, snapshot_fragment);
+          anchor.style = Some(running_child.style.clone());
+          wrapper_fragment.children.push(anchor);
+        }
+      }
+    }
 
     if !positioned_children.is_empty() {
       // Containing block is the table's padding box when the table itself is positioned; otherwise, inherit.
@@ -5443,13 +5610,15 @@ impl FormattingContext for TableFormattingContext {
       place_out_of_flow(&mut wrapper_fragment, cb)?;
     }
 
-    layout_cache_store(
-      box_node,
-      FormattingContextType::Table,
-      constraints,
-      &wrapper_fragment,
-      self.viewport_size,
-    );
+    if !has_running_children {
+      layout_cache_store(
+        box_node,
+        FormattingContextType::Table,
+        constraints,
+        &wrapper_fragment,
+        self.viewport_size,
+      );
+    }
 
     Ok(wrapper_fragment)
   }
@@ -5515,10 +5684,12 @@ impl FormattingContext for TableFormattingContext {
     }
     let mut caption_min: f32 = 0.0;
     for child in box_node.children.iter().filter(|child| {
-      !matches!(
-        child.style.position,
-        crate::style::position::Position::Absolute | crate::style::position::Position::Fixed
-      ) && matches!(child.style.display, Display::TableCaption)
+      child.style.running_position.is_none()
+        && !matches!(
+          child.style.position,
+          crate::style::position::Position::Absolute | crate::style::position::Position::Fixed
+        )
+        && matches!(child.style.display, Display::TableCaption)
     }) {
       let fc_type = child
         .formatting_context()
