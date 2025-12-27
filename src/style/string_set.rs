@@ -68,7 +68,7 @@ pub fn parse_string_set(input: &str) -> Option<Vec<StringSetAssignment>> {
           .parse_nested_block(|nested| {
             nested.skip_whitespace();
             if nested.is_exhausted() {
-              Ok(())
+              Ok::<(), cssparser::ParseError<'_, ()>>(())
             } else {
               Err(nested.new_custom_error(()))
             }
