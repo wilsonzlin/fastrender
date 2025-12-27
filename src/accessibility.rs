@@ -725,6 +725,28 @@ fn label_association_name(
   }
 }
 
+fn first_visible_child_text(
+  node: &StyledNode,
+  ctx: &BuildContext,
+  tag_name: &str,
+) -> Option<String> {
+  for child in &node.children {
+    if child
+      .node
+      .tag_name()
+      .map(|t| t.eq_ignore_ascii_case(tag_name))
+      .unwrap_or(false)
+    {
+      let text = ctx.visible_text(child);
+      if !text.is_empty() {
+        return Some(text);
+      }
+    }
+  }
+
+  None
+}
+
 fn role_specific_name(node: &StyledNode, ctx: &BuildContext, role: Option<&str>) -> Option<String> {
   let tag = node
     .node
@@ -811,6 +833,8 @@ fn role_specific_name(node: &StyledNode, ctx: &BuildContext, role: Option<&str>)
         None => None,
       }
     }
+    "table" => first_visible_child_text(node, ctx, "caption"),
+    "figure" => first_visible_child_text(node, ctx, "figcaption"),
     _ => {
       if role == Some("heading") {
         let text = ctx.visible_text(node);

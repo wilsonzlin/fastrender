@@ -417,7 +417,7 @@ fn accessibility_table_snapshot_json() {
     json!({
       "table": {
         "role": "table",
-        "name": "Summary Head 1 Row Head Cell 1 Cell 2",
+        "name": "Summary",
         "description": null,
         "value": null,
         "level": null,
@@ -521,6 +521,66 @@ fn accessibility_table_snapshot_json() {
         }
       }
     })
+  );
+}
+
+#[test]
+fn accessibility_figure_figcaption_name() {
+  let html = r##"
+    <html>
+      <body>
+        <figure id="figure1">
+          <figcaption id="figcaption1">Primary caption</figcaption>
+          <img src="example.png" alt="Alt text" />
+        </figure>
+        <figure id="figure2" aria-label="ARIA label">
+          <figcaption id="figcaption2">Should not be used</figcaption>
+        </figure>
+        <figure id="figure3">
+          <div>
+            <figcaption id="nested-caption">Nested caption</figcaption>
+          </div>
+          <figcaption id="hidden-caption" style="display:none">Hidden caption</figcaption>
+          <figcaption id="figcaption3">Visible caption</figcaption>
+        </figure>
+      </body>
+    </html>
+  "##;
+
+  let tree = render_accessibility_json(html);
+
+  let figure1 = find_json_node(&tree, "figure1").expect("figure1 node");
+  assert_eq!(
+    figure1.get("name").and_then(|v| v.as_str()),
+    Some("Primary caption")
+  );
+  assert_eq!(
+    figure1.get("role").and_then(|v| v.as_str()),
+    Some("generic")
+  );
+  assert_eq!(
+    figure1.get("html_tag").and_then(|v| v.as_str()),
+    Some("figure")
+  );
+
+  let figure2 = find_json_node(&tree, "figure2").expect("figure2 node");
+  assert_eq!(
+    figure2.get("name").and_then(|v| v.as_str()),
+    Some("ARIA label")
+  );
+
+  let figure3 = find_json_node(&tree, "figure3").expect("figure3 node");
+  assert_eq!(
+    figure3.get("name").and_then(|v| v.as_str()),
+    Some("Visible caption")
+  );
+  assert_eq!(
+    figure3.get("role").and_then(|v| v.as_str()),
+    Some("generic")
+  );
+  assert_eq!(
+    figure3.get("html_tag").and_then(|v| v.as_str()),
+    Some("figure")
   );
 }
 
