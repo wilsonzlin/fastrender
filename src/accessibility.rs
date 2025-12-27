@@ -600,6 +600,15 @@ fn compute_name_internal(
     }
   }
 
+  let is_fieldset = node
+    .node
+    .tag_name()
+    .map(|t| t.eq_ignore_ascii_case("fieldset"))
+    .unwrap_or(false);
+  if is_fieldset {
+    return None;
+  }
+
   let text = ctx.visible_text(node);
   if text.is_empty() {
     None
@@ -726,6 +735,31 @@ fn role_specific_name(node: &StyledNode, ctx: &BuildContext, role: Option<&str>)
         None
       } else {
         Some(text)
+      }
+    }
+    "fieldset" => {
+      let legend = node.children.iter().find(|child| {
+        child
+          .node
+          .tag_name()
+          .map(|t| t.eq_ignore_ascii_case("legend"))
+          .unwrap_or(false)
+      });
+
+      match legend {
+        Some(legend_node) => {
+          if ctx.is_hidden(legend_node) {
+            None
+          } else {
+            let text = ctx.visible_text(legend_node);
+            if text.is_empty() {
+              None
+            } else {
+              Some(text)
+            }
+          }
+        }
+        None => None,
       }
     }
     _ => {

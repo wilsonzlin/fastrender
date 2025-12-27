@@ -563,6 +563,63 @@ fn accessibility_form_controls_snapshot_json() {
 }
 
 #[test]
+fn accessibility_fieldset_legend_name() {
+  let html = r##"
+    <html>
+      <body>
+        <fieldset id="contact">
+          <legend>Contact Details</legend>
+          <input />
+        </fieldset>
+        <fieldset id="hidden-legend">
+          <legend style="display:none">Hidden Legend</legend>
+          <legend>Second Legend</legend>
+        </fieldset>
+      </body>
+    </html>
+  "##;
+
+  let tree = render_accessibility_json(html);
+  let subset = snapshot_subset(&tree, &["contact", "hidden-legend"]);
+
+  assert_eq!(
+    subset,
+    json!({
+      "contact": {
+        "role": "group",
+        "name": "Contact Details",
+        "description": null,
+        "value": null,
+        "level": null,
+        "html_tag": "fieldset",
+        "states": {
+          "focusable": false,
+          "disabled": false,
+          "required": false,
+          "invalid": false,
+          "visited": false
+        }
+      },
+      "hidden-legend": {
+        "role": "group",
+        "name": null,
+        "description": null,
+        "value": null,
+        "level": null,
+        "html_tag": "fieldset",
+        "states": {
+          "focusable": false,
+          "disabled": false,
+          "required": false,
+          "invalid": false,
+          "visited": false
+        }
+      }
+    })
+  );
+}
+
+#[test]
 fn accessibility_fixture_snapshots() {
   let fixtures = [
     "headings_links",
