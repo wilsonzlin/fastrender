@@ -38,16 +38,15 @@
 //! # References
 //!
 //! - CSS Fonts Module Level 4, Section 5: <https://www.w3.org/TR/css-fonts-4/#font-matching-algorithm>
+
+use super::emoji;
 use super::font_db::FontDatabase;
 use super::font_db::FontStretch;
 use super::font_db::FontStyle;
 use super::font_db::FontWeight;
 use super::font_db::GenericFamily;
-use crate::style::types::FontVariantEmoji;
-use crate::text::font_resolver::emoji_preference_for_char;
-use crate::text::font_resolver::resolve_font_for_char;
-use crate::text::font_resolver::FontPreferencePicker;
-use crate::text::font_resolver::FontResolverContext;
+use fontdb::Family;
+use fontdb::Query;
 use fontdb::ID;
 
 /// Unique identifier for a font face in the database.
@@ -97,16 +96,6 @@ impl FamilyEntry {
   }
 }
 
-struct DatabaseResolver<'a> {
-  db: &'a FontDatabase,
-}
-
-impl FontResolverContext for DatabaseResolver<'_> {
-  fn database(&self) -> &FontDatabase {
-    self.db
-  }
-}
-
 /// Font fallback chain.
 ///
 /// Represents an ordered list of font families to try when rendering text.
@@ -133,7 +122,7 @@ impl FontResolverContext for DatabaseResolver<'_> {
 ///     .add_family("Arial")
 ///     .add_generic(GenericFamily::SansSerif);
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct FallbackChain {
   /// Ordered list of font families to try.
   families: Vec<FamilyEntry>,
@@ -146,9 +135,6 @@ pub struct FallbackChain {
 
   /// Font stretch for matching.
   stretch: FontStretch,
-
-  /// Emoji presentation preference.
-  emoji_variant: FontVariantEmoji,
 }
 
 impl FallbackChain {
@@ -159,14 +145,7 @@ impl FallbackChain {
       weight: FontWeight::NORMAL,
       style: FontStyle::Normal,
       stretch: FontStretch::Normal,
-      emoji_variant: FontVariantEmoji::Normal,
     }
-  }
-
-  /// Sets the emoji presentation preference used for fallback resolution.
-  pub fn with_emoji_variant(mut self, variant: FontVariantEmoji) -> Self {
-    self.emoji_variant = variant;
-    self
   }
 
   /// Creates a fallback chain from a list of family names.
@@ -273,20 +252,23 @@ impl FallbackChain {
   /// }
   /// ```
   pub fn resolve(&self, c: char, db: &FontDatabase) -> Option<FontId> {
-    let pref = emoji_preference_for_char(c, self.emoji_variant);
-    let mut picker = FontPreferencePicker::new(pref);
-    let context = DatabaseResolver { db };
-    resolve_font_for_char(
-      c,
-      &self.families,
-      self.weight.value(),
-      self.style,
-      None,
-      self.stretch,
-      &context,
-      &mut picker,
-    )
-    .and_then(|resolved| resolved.id.map(FontId::new))
+    // Special handling for emoji characters
+    if emoji::is_emoji(c) {
+      if let Some(font_id) = self.resolve_emoji(c, db) {
+        return Some(font_id);
+      }
+      // If no emoji font found, fall through to regular resolution
+    }
+
+    // Try each family in order
+    for entry in &self.families {
+      if let Some(font_id) = self.try_resolve_entry(entry, c, db) {
+        return Some(font_id);
+      }
+    }
+
+    // Last resort: try any font in the database
+    self.resolve_any_font(c, db)
   }
 
   /// Resolves the best font for any text (not character-specific).
@@ -295,13 +277,155 @@ impl FallbackChain {
   /// glyph coverage. Useful for getting the primary font before
   /// text is known.
   pub fn resolve_default(&self, db: &FontDatabase) -> Option<FontId> {
-    self.resolve(' ', db)
-  }
-}
+    for entry in &self.families {
+      if let Some(font_id) = self.query_font(entry, db) {
+        return Some(font_id);
+      }
+    }
 
-impl Default for FallbackChain {
-  fn default() -> Self {
-    Self::new()
+    // Fall back to any font
+    db.faces().next().map(|f| FontId::new(f.id))
+  }
+
+  /// Resolves an emoji character.
+  ///
+  /// Tries emoji-specific fonts first before falling back to
+  /// the regular chain.
+  fn resolve_emoji(&self, c: char, db: &FontDatabase) -> Option<FontId> {
+    // Check if chain explicitly includes emoji fonts
+    for entry in &self.families {
+      if let FamilyEntry::Generic(GenericFamily::Emoji) = entry {
+        if let Some(font_id) = self.try_resolve_entry(entry, c, db) {
+          return Some(font_id);
+        }
+      }
+    }
+
+    // Try system emoji fonts
+    db.find_emoji_fonts()
+      .into_iter()
+      .find(|&id| db.has_glyph(id, c))
+      .map(FontId::new)
+  }
+
+  /// Tries to resolve a single family entry for a character.
+  fn try_resolve_entry(&self, entry: &FamilyEntry, c: char, db: &FontDatabase) -> Option<FontId> {
+    match entry {
+      FamilyEntry::Named(name) => self.resolve_named(name, c, db),
+      FamilyEntry::Generic(generic) => self.resolve_generic(*generic, c, db),
+    }
+  }
+
+  /// Resolves a named font family for a character.
+  fn resolve_named(&self, name: &str, c: char, db: &FontDatabase) -> Option<FontId> {
+    let query = Query {
+      families: &[Family::Name(name)],
+      weight: fontdb::Weight(self.weight.value()),
+      stretch: self.stretch.into(),
+      style: self.style.into(),
+    };
+
+    if let Some(id) = db.inner().query(&query) {
+      if db.has_glyph(id, c) {
+        return Some(FontId::new(id));
+      }
+    }
+
+    None
+  }
+
+  /// Resolves a generic font family for a character.
+  fn resolve_generic(&self, generic: GenericFamily, c: char, db: &FontDatabase) -> Option<FontId> {
+    let prefer_named_fallbacks = generic.prefers_named_fallbacks_first();
+
+    if prefer_named_fallbacks {
+      for name in generic.fallback_families() {
+        if let Some(font_id) = self.resolve_named(name, c, db) {
+          return Some(font_id);
+        }
+      }
+    }
+
+    let query = Query {
+      families: &[generic.to_fontdb()],
+      weight: fontdb::Weight(self.weight.value()),
+      stretch: self.stretch.into(),
+      style: self.style.into(),
+    };
+
+    if let Some(id) = db.inner().query(&query) {
+      if db.has_glyph(id, c) {
+        return Some(FontId::new(id));
+      }
+    }
+
+    if !prefer_named_fallbacks {
+      for name in generic.fallback_families() {
+        if let Some(font_id) = self.resolve_named(name, c, db) {
+          return Some(font_id);
+        }
+      }
+    }
+
+    None
+  }
+
+  /// Queries for a font without checking glyph coverage.
+  fn query_font(&self, entry: &FamilyEntry, db: &FontDatabase) -> Option<FontId> {
+    let families: Vec<Family> = match entry {
+      FamilyEntry::Named(name) => vec![Family::Name(name)],
+      FamilyEntry::Generic(generic) => {
+        // Include the generic family and its fallback names
+        let prefer_named = generic.prefers_named_fallbacks_first();
+        let mut families = if prefer_named {
+          generic
+            .fallback_families()
+            .iter()
+            .copied()
+            .map(Family::Name)
+            .collect::<Vec<_>>()
+        } else {
+          vec![generic.to_fontdb()]
+        };
+        if !prefer_named {
+          families.extend(
+            generic
+              .fallback_families()
+              .iter()
+              .copied()
+              .map(Family::Name),
+          );
+        } else {
+          families.push(generic.to_fontdb());
+        }
+        families
+      }
+    };
+
+    for family in &families {
+      let query = Query {
+        families: std::slice::from_ref(family),
+        weight: fontdb::Weight(self.weight.value()),
+        stretch: self.stretch.into(),
+        style: self.style.into(),
+      };
+
+      if let Some(id) = db.inner().query(&query) {
+        return Some(FontId::new(id));
+      }
+    }
+
+    None
+  }
+
+  /// Last resort: try to find any font that has the glyph.
+  fn resolve_any_font(&self, c: char, db: &FontDatabase) -> Option<FontId> {
+    for face in db.faces() {
+      if db.has_glyph(face.id, c) {
+        return Some(FontId::new(face.id));
+      }
+    }
+    None
   }
 }
 
@@ -362,12 +486,6 @@ impl FallbackChainBuilder {
   /// Sets the font stretch.
   pub fn stretch(mut self, stretch: FontStretch) -> Self {
     self.chain = self.chain.with_stretch(stretch);
-    self
-  }
-
-  /// Sets the emoji rendering preference.
-  pub fn emoji_variant(mut self, variant: FontVariantEmoji) -> Self {
-    self.chain = self.chain.with_emoji_variant(variant);
     self
   }
 
@@ -442,13 +560,11 @@ mod tests {
       .generic(GenericFamily::SansSerif)
       .bold()
       .italic()
-      .emoji_variant(FontVariantEmoji::Emoji)
       .build();
 
     assert_eq!(chain.len(), 3);
     assert_eq!(chain.weight, FontWeight::BOLD);
     assert_eq!(chain.style, FontStyle::Italic);
-    assert_eq!(chain.emoji_variant, FontVariantEmoji::Emoji);
   }
 
   #[test]

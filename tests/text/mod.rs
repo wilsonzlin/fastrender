@@ -9,6 +9,7 @@ mod emoji_unified_test;
 mod font_fallback;
 mod font_metrics_test;
 mod font_palette;
+mod generic_family_mapping_test;
 mod hyphenation_test;
 mod justify_test;
 mod line_break_test;

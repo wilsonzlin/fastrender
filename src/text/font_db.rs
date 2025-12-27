@@ -750,6 +750,21 @@ impl GenericFamily {
     }
   }
 
+  /// Returns true if resolution should try explicit fallback names before mapping to a fontdb generic.
+  pub fn prefers_named_fallbacks_first(self) -> bool {
+    matches!(
+      self,
+      GenericFamily::SystemUi
+        | GenericFamily::UiSerif
+        | GenericFamily::UiSansSerif
+        | GenericFamily::UiMonospace
+        | GenericFamily::UiRounded
+        | GenericFamily::Emoji
+        | GenericFamily::Math
+        | GenericFamily::Fangsong
+    )
+  }
+
   /// Converts to fontdb Family for querying.
   pub fn to_fontdb(self) -> FontDbFamily<'static> {
     match self {
@@ -936,20 +951,58 @@ impl FontDatabase {
     }
   }
 
-  fn set_generic_fallbacks(&mut self) {
-    let primary = self
-      .faces()
-      .next()
-      .and_then(|face| face.families.first().map(|(name, _)| name.clone()));
+  /// Recomputes the default families used for fontdb generic queries based on the currently loaded fonts.
+  pub fn refresh_generic_fallbacks(&mut self) {
+    self.set_generic_fallbacks();
+  }
 
-    if let Some(primary) = primary {
-      let db = Arc::make_mut(&mut self.db);
-      db.set_serif_family(primary.clone());
-      db.set_sans_serif_family(primary.clone());
-      db.set_monospace_family(primary.clone());
-      db.set_cursive_family(primary.clone());
-      db.set_fantasy_family(primary);
-    }
+  fn set_generic_fallbacks(&mut self) {
+    let face_families: Vec<Vec<String>> = self
+      .faces()
+      .map(|face| face.families.iter().map(|(name, _)| name.clone()).collect())
+      .collect();
+
+    let Some(primary_family) = face_families
+      .first()
+      .and_then(|families| families.first().cloned())
+    else {
+      return;
+    };
+
+    let first_matching_family = |fallbacks: &[&str]| -> Option<String> {
+      for families in &face_families {
+        for name in families {
+          if fallbacks
+            .iter()
+            .any(|fallback| fallback.eq_ignore_ascii_case(name))
+          {
+            return Some(name.clone());
+          }
+        }
+      }
+      None
+    };
+
+    let db = Arc::make_mut(&mut self.db);
+    let serif = first_matching_family(GenericFamily::Serif.fallback_families())
+      .unwrap_or_else(|| primary_family.clone());
+    db.set_serif_family(serif);
+
+    let sans = first_matching_family(GenericFamily::SansSerif.fallback_families())
+      .unwrap_or_else(|| primary_family.clone());
+    db.set_sans_serif_family(sans);
+
+    let monospace = first_matching_family(GenericFamily::Monospace.fallback_families())
+      .unwrap_or_else(|| primary_family.clone());
+    db.set_monospace_family(monospace);
+
+    let cursive = first_matching_family(GenericFamily::Cursive.fallback_families())
+      .unwrap_or_else(|| primary_family.clone());
+    db.set_cursive_family(cursive);
+
+    let fantasy =
+      first_matching_family(GenericFamily::Fantasy.fallback_families()).unwrap_or(primary_family);
+    db.set_fantasy_family(fantasy);
   }
 
   /// Loads a font from binary data
