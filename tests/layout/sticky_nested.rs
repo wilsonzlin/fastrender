@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use fastrender::{
-  ComputedStyle, FastRender, FragmentContent, FragmentNode, FragmentTree, LengthOrAuto, Point,
-  Position, Rect, Size,
+  ComputedStyle, FastRender, FragmentContent, FragmentNode, FragmentTree, Length, Point, Position,
+  Rect, Size,
 };
 
 #[test]
@@ -11,11 +11,11 @@ fn nested_sticky_descendants_use_updated_containing_rect() {
 
   let mut outer_style = ComputedStyle::default();
   outer_style.position = Position::Sticky;
-  outer_style.top = LengthOrAuto::px(0.0);
+  outer_style.top = Some(Length::px(0.0));
 
   let mut inner_style = ComputedStyle::default();
   inner_style.position = Position::Sticky;
-  inner_style.top = LengthOrAuto::px(5.0);
+  inner_style.top = Some(Length::px(5.0));
 
   let inner = FragmentNode::new_with_style(
     Rect::from_xywh(0.0, 10.0, 100.0, 20.0),
