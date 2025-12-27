@@ -7,7 +7,8 @@ use fastrender::style::types::{BreakBetween, BreakInside};
 use fastrender::style::values::Length;
 use fastrender::tree::box_tree::BoxNode;
 use fastrender::{
-  BoxTree, ComputedStyle, FragmentContent, FragmentNode, LayoutConfig, LayoutEngine, Rect, Size,
+  BoxTree, ComputedStyle, FastRender, FragmentContent, FragmentNode, FragmentTree, LayoutConfig,
+  LayoutEngine, Point, Rect, Size,
 };
 
 fn line(y: f32, height: f32) -> FragmentNode {
