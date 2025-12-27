@@ -3,6 +3,7 @@
 //! These tests verify the complete rendering pipeline from HTML/CSS to images.
 
 use fastrender::{FastRender, FastRenderConfig};
+use image::GenericImageView;
 
 fn with_large_stack<F, R>(f: F) -> R
 where
@@ -37,6 +38,53 @@ fn test_simple_html_rendering() {
     assert!(result.is_ok());
     let image_bytes = result.unwrap();
     assert!(!image_bytes.is_empty());
+  });
+}
+
+#[test]
+fn preserve_3d_depth_sorting_orders_by_z() {
+  with_large_stack(|| {
+    let html = r#"
+        <html>
+            <head>
+                <style>
+                    html, body { margin: 0; padding: 0; }
+                    .scene {
+                        width: 150px;
+                        height: 150px;
+                        perspective: 500px;
+                        transform-style: preserve-3d;
+                        position: relative;
+                    }
+                    .back {
+                        position: absolute;
+                        inset: 0;
+                        background: green;
+                        transform: translateZ(-60px);
+                    }
+                    .front {
+                        position: absolute;
+                        inset: 0;
+                        background: red;
+                        transform: translateZ(60px);
+                    }
+                </style>
+            </head>
+            <body>
+                <div class="scene">
+                    <div class="back"></div>
+                    <div class="front"></div>
+                </div>
+            </body>
+        </html>
+    "#;
+
+    let mut renderer = FastRender::new().unwrap();
+    let png_bytes = renderer.render_to_png(html, 200, 200).unwrap();
+    let image = image::load_from_memory(&png_bytes).unwrap().to_rgba8();
+    // Sample near the center of the scene; the red front face should be drawn over green.
+    let pixel = image.get_pixel(75, 75);
+    assert!(pixel[0] > pixel[1], "front face should win depth sort");
   });
 }
 

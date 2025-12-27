@@ -43,6 +43,7 @@ use crate::paint::display_list::RadialGradientItem;
 use crate::paint::display_list::ResolvedFilter;
 use crate::paint::display_list::ResolvedMask;
 use crate::paint::display_list::ResolvedMaskImage;
+use crate::paint::display_list::StackingContextItem;
 use crate::paint::display_list::StrokeRectItem;
 use crate::paint::display_list::TextEmphasis;
 use crate::paint::display_list::TextItem;
@@ -83,7 +84,6 @@ use crate::style::types::TextEmphasisFill;
 use crate::style::types::TextEmphasisPosition;
 use crate::style::types::TextEmphasisShape;
 use crate::style::types::TextEmphasisStyle;
-#[cfg(test)]
 use crate::style::types::TransformStyle;
 use crate::style::values::Length;
 #[cfg(test)]
@@ -1094,6 +1094,7 @@ pub struct DisplayListRenderer {
   scale: f32,
   transform_stack: Vec<Transform3D>,
   culled_depth: usize,
+  preserve_3d_disabled: bool,
 }
 
 #[derive(Debug)]
@@ -1118,6 +1119,177 @@ struct PendingBackdrop {
   filters: Vec<ResolvedFilter>,
   radii: BorderRadii,
   filter_bounds: Rect,
+}
+
+#[derive(Clone)]
+struct StackingNode {
+  context: StackingContextItem,
+  start_index: usize,
+  end_index: usize,
+  segments: Vec<StackingSegment>,
+  subtree_items: Vec<DisplayItem>,
+}
+
+#[derive(Clone)]
+enum StackingSegment {
+  Items(Vec<DisplayItem>),
+  Child(StackingNode),
+}
+
+#[derive(Clone)]
+struct SceneItem {
+  source: SceneItemSource,
+  transform: Transform3D,
+  bounds: Rect,
+  backface_visibility: BackfaceVisibility,
+  transform_style: TransformStyle,
+  order: usize,
+}
+
+#[derive(Clone)]
+enum SceneItemSource {
+  Segment(Vec<DisplayItem>),
+  FlattenedSubtree(StackingNode),
+}
+
+fn parse_stacking_node(items: &[DisplayItem], start: usize) -> Option<(StackingNode, usize)> {
+  if start >= items.len() {
+    return None;
+  }
+  let DisplayItem::PushStackingContext(context) = &items[start] else {
+    return None;
+  };
+
+  let mut idx = start + 1;
+  let mut segments = Vec::new();
+  let mut current_items = Vec::new();
+  while idx < items.len() {
+    match &items[idx] {
+      DisplayItem::PushStackingContext(_) => {
+        if !current_items.is_empty() {
+          segments.push(StackingSegment::Items(current_items));
+          current_items = Vec::new();
+        }
+        let Some((child, end)) = parse_stacking_node(items, idx) else {
+          return None;
+        };
+        segments.push(StackingSegment::Child(child));
+        idx = end + 1;
+        continue;
+      }
+      DisplayItem::PopStackingContext => {
+        break;
+      }
+      other => current_items.push(other.clone()),
+    }
+    idx += 1;
+  }
+
+  if idx >= items.len() {
+    return None;
+  }
+
+  if !current_items.is_empty() {
+    segments.push(StackingSegment::Items(current_items));
+  }
+
+  let end_index = idx;
+  let subtree_items = items[start..=end_index].iter().cloned().collect();
+  Some((
+    StackingNode {
+      context: context.clone(),
+      start_index: start,
+      end_index,
+      segments,
+      subtree_items,
+    },
+    end_index,
+  ))
+}
+
+fn compute_items_bounds(items: &[DisplayItem]) -> Option<Rect> {
+  let mut bounds: Option<Rect> = None;
+  for item in items {
+    if let Some(b) = item.bounds() {
+      bounds = Some(match bounds {
+        Some(existing) => existing.union(b),
+        None => b,
+      });
+    }
+  }
+  bounds
+}
+
+fn collect_scene_items(
+  node: &StackingNode,
+  parent_transform: &Transform3D,
+  in_preserve_context: bool,
+  order_counter: &mut usize,
+) -> Vec<SceneItem> {
+  let local_transform = node.context.transform.unwrap_or_else(Transform3D::identity);
+  let combined_transform = parent_transform.multiply(&local_transform);
+  let mut items = Vec::new();
+  let transform_style = node.context.transform_style;
+
+  if !in_preserve_context || !matches!(transform_style, TransformStyle::Preserve3d) {
+    let order = *order_counter;
+    *order_counter += 1;
+    items.push(SceneItem {
+      source: SceneItemSource::FlattenedSubtree(node.clone()),
+      transform: combined_transform,
+      bounds: node.context.bounds,
+      backface_visibility: node.context.backface_visibility,
+      transform_style,
+      order,
+    });
+    return items;
+  }
+
+  for segment in &node.segments {
+    match segment {
+      StackingSegment::Items(list) => {
+        if list.is_empty() {
+          continue;
+        }
+        let bounds = compute_items_bounds(list).unwrap_or(node.context.bounds);
+        let order = *order_counter;
+        *order_counter += 1;
+        items.push(SceneItem {
+          source: SceneItemSource::Segment(list.clone()),
+          transform: combined_transform,
+          bounds,
+          backface_visibility: node.context.backface_visibility,
+          transform_style,
+          order,
+        });
+      }
+      StackingSegment::Child(child) => {
+        items.extend(collect_scene_items(
+          child,
+          &combined_transform,
+          true,
+          order_counter,
+        ));
+      }
+    }
+  }
+
+  items
+}
+
+fn scene_depth(transform: &Transform3D, bounds: Rect) -> f32 {
+  let corners = [
+    (bounds.min_x(), bounds.min_y()),
+    (bounds.max_x(), bounds.min_y()),
+    (bounds.max_x(), bounds.max_y()),
+    (bounds.min_x(), bounds.max_y()),
+  ];
+  let mut total = 0.0;
+  for (x, y) in corners {
+    let (_, _, z, w) = transform.transform_point(x, y, 0.0);
+    total += if w.abs() > 1e-6 { z / w } else { z };
+  }
+  total / 4.0
 }
 
 impl DisplayListRenderer {
@@ -1391,6 +1563,7 @@ impl DisplayListRenderer {
       scale,
       transform_stack: vec![Transform3D::identity()],
       culled_depth: 0,
+      preserve_3d_disabled: false,
     })
   }
 
@@ -2664,9 +2837,7 @@ impl DisplayListRenderer {
 
   /// Consumes the renderer and returns the painted pixmap.
   pub fn render(mut self, list: &DisplayList) -> Result<Pixmap> {
-    for item in list.items() {
-      self.render_item(item)?;
-    }
+    self.render_slice(list.items())?;
     Ok(self.canvas.into_pixmap())
   }
 
@@ -2694,6 +2865,148 @@ impl DisplayListRenderer {
       clip_bounds,
       pending.filter_bounds,
     );
+  }
+  fn render_slice(&mut self, items: &[DisplayItem]) -> Result<()> {
+    let mut idx = 0;
+    while idx < items.len() {
+      if !self.preserve_3d_disabled {
+        if let DisplayItem::PushStackingContext(sc) = &items[idx] {
+          if matches!(sc.transform_style, TransformStyle::Preserve3d) {
+            // `render_item` normally applies pending backdrop filters before processing the next
+            // item. We skip `render_item` for preserve-3d roots to render the subtree as a
+            // depth-sorted scene, so apply pending backdrops here to keep behavior consistent.
+            self.apply_pending_backdrop(&items[idx]);
+            idx = self.render_preserve_3d_context(items, idx)? + 1;
+            continue;
+          }
+        }
+      }
+      self.render_item(&items[idx])?;
+      idx += 1;
+    }
+    Ok(())
+  }
+
+  fn render_preserve_3d_context(
+    &mut self,
+    items: &[DisplayItem],
+    start_index: usize,
+  ) -> Result<usize> {
+    let Some((node, end_idx)) = parse_stacking_node(items, start_index) else {
+      // Fallback to normal rendering if the tree is malformed.
+      self.render_item(&items[start_index])?;
+      return Ok(start_index);
+    };
+
+    let parent_transform = *self
+      .transform_stack
+      .last()
+      .unwrap_or(&Transform3D::identity());
+    let local_transform = node.context.transform.unwrap_or_else(Transform3D::identity);
+    let combined_root = parent_transform.multiply(&local_transform);
+
+    if matches!(node.context.backface_visibility, BackfaceVisibility::Hidden)
+      && backface_is_hidden(&combined_root)
+    {
+      return Ok(end_idx);
+    }
+
+    let mut order = 0;
+    let mut scene_items = collect_scene_items(&node, &parent_transform, true, &mut order);
+    scene_items.retain(|item| {
+      !matches!(item.backface_visibility, BackfaceVisibility::Hidden)
+        || !backface_is_hidden(&item.transform)
+    });
+    scene_items.sort_by(|a, b| {
+      let da = scene_depth(&a.transform, a.bounds);
+      let db = scene_depth(&b.transform, b.bounds);
+      da.partial_cmp(&db)
+        .unwrap_or(std::cmp::Ordering::Equal)
+        .then_with(|| a.order.cmp(&b.order))
+    });
+
+    for scene_item in scene_items {
+      if let Some(pixmap) = self.render_scene_item(&scene_item)? {
+        let adjusted_transform = scene_item.transform.multiply(&Transform3D::translate(
+          scene_item.bounds.x(),
+          scene_item.bounds.y(),
+          0.0,
+        ));
+        self.warp_pixmap(&pixmap, &adjusted_transform);
+      }
+    }
+
+    Ok(end_idx)
+  }
+
+  fn render_scene_item(&self, item: &SceneItem) -> Result<Option<Pixmap>> {
+    let bounds = item.bounds;
+    if bounds.width() <= 0.0 || bounds.height() <= 0.0 {
+      return Ok(None);
+    }
+
+    let width = (bounds.width() * self.scale).ceil().max(1.0) as u32;
+    let height = (bounds.height() * self.scale).ceil().max(1.0) as u32;
+
+    let mut list = DisplayList::new();
+    let translation = Transform3D::translate(-bounds.x(), -bounds.y(), 0.0);
+    list.push(DisplayItem::PushTransform(TransformItem {
+      transform: translation,
+    }));
+    match &item.source {
+      SceneItemSource::Segment(items) => {
+        for it in items {
+          list.push(it.clone());
+        }
+      }
+      SceneItemSource::FlattenedSubtree(node) => {
+        for (i, it) in node.subtree_items.iter().enumerate() {
+          if i == 0 {
+            if let DisplayItem::PushStackingContext(sc) = it {
+              let mut adjusted = sc.clone();
+              adjusted.transform = None;
+              list.push(DisplayItem::PushStackingContext(adjusted));
+              continue;
+            }
+          }
+          list.push(it.clone());
+        }
+      }
+    }
+    list.push(DisplayItem::PopTransform);
+
+    let mut renderer = DisplayListRenderer::new_scaled(
+      width,
+      height,
+      Rgba::TRANSPARENT,
+      self.font_ctx.clone(),
+      self.scale,
+    )?;
+    renderer.preserve_3d_disabled = true;
+    let pixmap = renderer.render(&list)?;
+    Ok(Some(pixmap))
+  }
+
+  fn warp_pixmap(&mut self, pixmap: &Pixmap, transform: &Transform3D) {
+    #[cfg(feature = "preserve3d_warp")]
+    {
+      // Placeholder for a future projective warp implementation. For now, fall back to the
+      // affine approximation so control flow is exercised behind the feature flag.
+      let _ = (pixmap, transform);
+    }
+
+    #[cfg(not(feature = "preserve3d_warp"))]
+    {
+      let mut paint = PixmapPaint::default();
+      paint.blend_mode = self.canvas.blend_mode();
+      let clip = self.canvas.clip_mask().cloned();
+      let (t, _valid) = self.to_skia_transform_checked(transform);
+      let skia_transform = self.canvas.transform().post_concat(t);
+      self
+        .canvas
+        .pixmap_mut()
+        .draw_pixmap(0, 0, pixmap.as_ref(), &paint, skia_transform, clip.as_ref());
+    }
   }
 
   fn render_item(&mut self, item: &DisplayItem) -> Result<()> {

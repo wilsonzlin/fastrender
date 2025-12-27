@@ -14,6 +14,7 @@ resolver = "2"
 default = []
 box_generation_demo = []
 disk_cache = ["sha2"]
+preserve3d_warp = []
 
 [dependencies]
 base64 = "0.22"
