@@ -849,6 +849,8 @@ fn accessibility_fixture_snapshots() {
     "form_controls",
     "inert_and_hidden",
     "modal_top_layer",
+    "header_footer_landmarks",
+    "form_role_gating",
   ];
 
   for name in fixtures {

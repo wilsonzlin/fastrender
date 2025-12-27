@@ -254,7 +254,7 @@ fn build_nodes<'a>(
       ancestors.pop();
 
       let element_ref = ElementRef::with_ancestors(&node.node, ancestors);
-      let (mut role, presentational_role) = compute_role(&node.node);
+      let (mut role, presentational_role) = compute_role(&node.node, ancestors);
       let mut name = compute_name(node, ctx, role.as_deref(), !presentational_role);
       let mut description = compute_description(node, ctx);
       let decorative_image = is_decorative_img(node, ctx);
@@ -267,6 +267,9 @@ fn build_nodes<'a>(
 
       // Regions should expose only when labelled.
       if role.as_deref() == Some("region") && name.is_none() {
+        role = None;
+      }
+      if role.as_deref() == Some("form") && name.is_none() {
         role = None;
       }
 
@@ -513,7 +516,21 @@ fn find_node_by_id<'a>(root: &'a StyledNode, id: usize) -> Option<&'a StyledNode
   None
 }
 
-fn compute_role(node: &DomNode) -> (Option<String>, bool) {
+fn is_sectioning_ancestor(ancestors: &[&DomNode]) -> bool {
+  ancestors.iter().any(|ancestor| {
+    ancestor
+      .tag_name()
+      .map(|t| {
+        matches!(
+          t.to_ascii_lowercase().as_str(),
+          "article" | "aside" | "main" | "nav" | "section" | "header" | "footer"
+        )
+      })
+      .unwrap_or(false)
+  })
+}
+
+fn compute_role(node: &DomNode, ancestors: &[&DomNode]) -> (Option<String>, bool) {
   let role_attr = node
     .get_attribute_ref("role")
     .and_then(|r| r.split_ascii_whitespace().find(|t| !t.is_empty()))
@@ -557,12 +574,25 @@ fn compute_role(node: &DomNode) -> (Option<String>, bool) {
     "fieldset" => Some("group".to_string()),
     "main" => Some("main".to_string()),
     "nav" => Some("navigation".to_string()),
-    "header" => Some("banner".to_string()),
-    "footer" => Some("contentinfo".to_string()),
+    "header" => {
+      if is_sectioning_ancestor(ancestors) {
+        None
+      } else {
+        Some("banner".to_string())
+      }
+    }
+    "footer" => {
+      if is_sectioning_ancestor(ancestors) {
+        None
+      } else {
+        Some("contentinfo".to_string())
+      }
+    }
     "aside" => Some("complementary".to_string()),
     "form" => Some("form".to_string()),
     "article" => Some("article".to_string()),
     "section" => Some("region".to_string()),
+    "dialog" => Some("dialog".to_string()),
     "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => Some("heading".to_string()),
     _ => None,
   };
@@ -681,6 +711,10 @@ fn compute_name_internal(
       .map(|t| t.eq_ignore_ascii_case("fieldset"))
       .unwrap_or(false);
     if is_fieldset {
+      return None;
+    }
+
+    if matches!(role, Some("combobox") | Some("listbox")) {
       return None;
     }
 

@@ -1,0 +1,50 @@
+{
+  "present": {
+    "i": {
+      "role": "textbox",
+      "name": null,
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "input",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "f2": {
+      "role": "form",
+      "name": "Contact",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "form",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "i2": {
+      "role": "textbox",
+      "name": null,
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "input",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    }
+  },
+  "absent": ["f"]
+}

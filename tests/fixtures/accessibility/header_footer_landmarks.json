@@ -1,0 +1,79 @@
+{
+  "present": {
+    "h1": {
+      "role": "banner",
+      "name": "Site",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "header",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "f1": {
+      "role": "contentinfo",
+      "name": "Global footer",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "footer",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "h2": {
+      "role": "generic",
+      "name": "Article",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "header",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "f2": {
+      "role": "generic",
+      "name": "Article footer",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "footer",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "f3": {
+      "role": "generic",
+      "name": "Section footer",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "footer",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    }
+  }
+}

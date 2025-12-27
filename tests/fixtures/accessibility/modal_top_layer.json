@@ -1,7 +1,7 @@
 {
   "present": {
     "modal": {
-      "role": "generic",
+      "role": "dialog",
       "name": "Confirm",
       "description": null,
       "value": null,
