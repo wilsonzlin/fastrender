@@ -5,8 +5,8 @@
 use super::types::CssString;
 use cssparser::ParseError;
 use cssparser::Parser;
-use cssparser::Token;
 use cssparser::ToCss;
+use cssparser::Token;
 use selectors::parser::Selector;
 use selectors::parser::SelectorImpl;
 use selectors::parser::SelectorList;
@@ -36,7 +36,7 @@ pub struct ShadowMatchData<'a> {
   /// The shadow host for the stylesheet being matched, or None for document styles.
   pub shadow_host: Option<OpaqueElement>,
   /// Mapping from slot elements to their assigned nodes for ::slotted() resolution.
-  pub slot_map: Option<&'a SlotAssignmentMap>,
+  pub slot_map: Option<&'a SlotAssignmentMap<'a>>,
   /// Exported part mappings for resolving ::part() across shadow boundaries.
   pub part_export_map: Option<&'a PartExportMap>,
 }
@@ -54,9 +54,72 @@ impl<'a> ShadowMatchData<'a> {
   }
 }
 
-/// Placeholder for future ::slotted() resolution data.
+/// Mapping between shadow slots and assigned light DOM nodes for ::slotted().
+#[derive(Debug, Default)]
+pub struct SlotAssignmentMap<'a> {
+  slots: std::collections::HashMap<*const crate::dom::DomNode, SlotInfo<'a>>,
+  slot_to_nodes:
+    std::collections::HashMap<*const crate::dom::DomNode, Vec<&'a crate::dom::DomNode>>,
+  node_to_slot: std::collections::HashMap<*const crate::dom::DomNode, *const crate::dom::DomNode>,
+}
+
 #[derive(Debug)]
-pub struct SlotAssignmentMap;
+struct SlotInfo<'a> {
+  slot: &'a crate::dom::DomNode,
+  ancestors: Box<[&'a crate::dom::DomNode]>,
+  shadow_root_id: usize,
+}
+
+/// Slot assignment lookup result for a light DOM node.
+#[derive(Debug, Clone, Copy)]
+pub struct AssignedSlotRef<'a> {
+  pub slot: &'a crate::dom::DomNode,
+  pub ancestors: &'a [&'a crate::dom::DomNode],
+  pub shadow_root_id: usize,
+}
+
+impl<'a> SlotAssignmentMap<'a> {
+  pub fn new() -> Self {
+    Self::default()
+  }
+
+  pub fn add_slot(
+    &mut self,
+    slot: &'a crate::dom::DomNode,
+    ancestors: Vec<&'a crate::dom::DomNode>,
+    assigned_nodes: impl IntoIterator<Item = &'a crate::dom::DomNode>,
+    shadow_root_id: usize,
+  ) {
+    let slot_ptr = slot as *const crate::dom::DomNode;
+    self.slots.entry(slot_ptr).or_insert(SlotInfo {
+      slot,
+      ancestors: ancestors.into_boxed_slice(),
+      shadow_root_id,
+    });
+    let nodes = self.slot_to_nodes.entry(slot_ptr).or_default();
+    for node in assigned_nodes {
+      nodes.push(node);
+      self.node_to_slot.insert(node as *const _, slot_ptr);
+    }
+  }
+
+  /// Get the slot this node is assigned to, if any.
+  pub fn assigned_slot(&self, node: &crate::dom::DomNode) -> Option<AssignedSlotRef<'a>> {
+    let slot_ptr = *self.node_to_slot.get(&(node as *const _))?;
+    let info = self.slots.get(&slot_ptr)?;
+    Some(AssignedSlotRef {
+      slot: info.slot,
+      ancestors: &info.ancestors,
+      shadow_root_id: info.shadow_root_id,
+    })
+  }
+
+  /// Get nodes assigned to the given slot, in distribution order.
+  pub fn assigned_nodes(&self, slot: &crate::dom::DomNode) -> Option<&[&'a crate::dom::DomNode]> {
+    let slot_ptr = slot as *const crate::dom::DomNode;
+    self.slot_to_nodes.get(&slot_ptr).map(|v| v.as_slice())
+  }
+}
 
 /// Placeholder for future ::part() export chain data.
 #[derive(Debug)]
@@ -328,7 +391,10 @@ impl PseudoElement {
   pub fn is_generated_box(&self) -> bool {
     matches!(
       self,
-      PseudoElement::Before | PseudoElement::After | PseudoElement::Marker | PseudoElement::Backdrop
+      PseudoElement::Before
+        | PseudoElement::After
+        | PseudoElement::Marker
+        | PseudoElement::Backdrop
     )
   }
 }
@@ -385,6 +451,10 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
   type Impl = FastRenderSelectorImpl;
 
   fn parse_nth_child_of(&self) -> bool {
+    true
+  }
+
+  fn parse_slotted(&self) -> bool {
     true
   }
 
@@ -677,19 +747,21 @@ fn parse_part_pseudo_element<'i, 't>(
   name: &cssparser::CowRcStr<'i>,
 ) -> std::result::Result<PseudoElement, ParseError<'i, SelectorParseErrorKind<'i>>> {
   let mut names = Vec::new();
-  let first = match parser.expect_ident() {
-    Ok(first) => CssString::from(first.as_ref()),
-    Err(_) => {
-      return Err(parser.new_custom_error(
-        SelectorParseErrorKind::UnsupportedPseudoClassOrElement(name.clone()),
-      ))
-    }
-  };
+  let first =
+    match parser.expect_ident() {
+      Ok(first) => CssString::from(first.as_ref()),
+      Err(_) => {
+        return Err(parser.new_custom_error(
+          SelectorParseErrorKind::UnsupportedPseudoClassOrElement(name.clone()),
+        ))
+      }
+    };
   names.push(first);
 
-  while let Ok(next) =
-    parser.try_parse(|p| p.expect_ident().map(|ident| CssString::from(ident.as_ref())))
-  {
+  while let Ok(next) = parser.try_parse(|p| {
+    p.expect_ident()
+      .map(|ident| CssString::from(ident.as_ref()))
+  }) {
     names.push(next);
   }
 
@@ -779,8 +851,8 @@ mod tests {
   use cssparser::ParserInput;
   use cssparser::SourceLocation;
   use cssparser::ToCss;
-  use selectors::parser::Parser as SelectorParser;
   use selectors::parser::ParseRelative;
+  use selectors::parser::Parser as SelectorParser;
 
   fn parse(expr: &str) -> (i32, i32) {
     let mut input = ParserInput::new(expr);

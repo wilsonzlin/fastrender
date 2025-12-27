@@ -23,6 +23,7 @@ mod preserve3d_scene;
 mod preserve_3d_test;
 mod projective_mapping;
 mod rasterize_test;
+mod shadow_dom_slotted_paint;
 mod stacking_test;
 mod svg_filter_color_interpolation;
 mod svg_filter_display_none_defs_test;

@@ -842,6 +842,7 @@ pub struct ElementRef<'a> {
   pub node: &'a DomNode,
   pub parent: Option<&'a DomNode>,
   all_ancestors: &'a [&'a DomNode],
+  slot_map: Option<&'a crate::css::selectors::SlotAssignmentMap<'a>>,
 }
 
 impl<'a> ElementRef<'a> {
@@ -850,6 +851,7 @@ impl<'a> ElementRef<'a> {
       node,
       parent: None,
       all_ancestors: &[],
+      slot_map: None,
     }
   }
 
@@ -859,7 +861,16 @@ impl<'a> ElementRef<'a> {
       node,
       parent,
       all_ancestors: ancestors,
+      slot_map: None,
     }
+  }
+
+  pub fn with_slot_map(
+    mut self,
+    slot_map: Option<&'a crate::css::selectors::SlotAssignmentMap<'a>>,
+  ) -> Self {
+    self.slot_map = slot_map;
+    self
   }
 
   fn visited_flag(&self) -> bool {
@@ -1084,7 +1095,8 @@ impl<'a> ElementRef<'a> {
         if !child.is_element() {
           continue;
         }
-        let child_ref = ElementRef::with_ancestors(child, self.all_ancestors);
+        let child_ref =
+          ElementRef::with_ancestors(child, self.all_ancestors).with_slot_map(self.slot_map);
         let matches = selectors
           .slice()
           .iter()
@@ -1944,9 +1956,10 @@ impl<'a> Element for ElementRef<'a> {
     Some(if self.all_ancestors.len() > 1 {
       // If we have multiple ancestors, the parent's ancestors are all but the last
       ElementRef::with_ancestors(parent, &self.all_ancestors[..self.all_ancestors.len() - 1])
+        .with_slot_map(self.slot_map)
     } else {
       // Parent is the root
-      ElementRef::new(parent)
+      ElementRef::new(parent).with_slot_map(self.slot_map)
     })
   }
 
@@ -1964,10 +1977,10 @@ impl<'a> Element for ElementRef<'a> {
           return None;
         }
         let host = self.all_ancestors[idx - 1];
-        return Some(ElementRef::with_ancestors(
-          host,
-          &self.all_ancestors[..idx - 1],
-        ));
+        return Some(
+          ElementRef::with_ancestors(host, &self.all_ancestors[..idx - 1])
+            .with_slot_map(self.slot_map),
+        );
       }
     }
     None
@@ -1989,6 +2002,7 @@ impl<'a> Element for ElementRef<'a> {
           node,
           parent: self.parent,
           all_ancestors: self.all_ancestors,
+          slot_map: self.slot_map,
         });
       }
       prev = Some(child);
@@ -2008,6 +2022,7 @@ impl<'a> Element for ElementRef<'a> {
           node: child,
           parent: self.parent,
           all_ancestors: self.all_ancestors,
+          slot_map: self.slot_map,
         });
       }
       if ptr::eq(child, self.node) {
@@ -2169,7 +2184,8 @@ impl<'a> Element for ElementRef<'a> {
             if !ancestor.is_element() {
               continue;
             }
-            let ancestor_ref = ElementRef::with_ancestors(*ancestor, &self.all_ancestors[..idx]);
+            let ancestor_ref = ElementRef::with_ancestors(*ancestor, &self.all_ancestors[..idx])
+              .with_slot_map(self.slot_map);
             if selectors
               .slice()
               .iter()
@@ -2350,6 +2366,18 @@ impl<'a> Element for ElementRef<'a> {
       .node
       .tag_name()
       .is_some_and(|t| t.eq_ignore_ascii_case("slot"))
+  }
+
+  fn assigned_slot(&self) -> Option<Self> {
+    let slot_map = self.slot_map?;
+    let slot = slot_map.assigned_slot(self.node)?;
+    let parent = slot.ancestors.last().copied();
+    Some(ElementRef {
+      node: slot.slot,
+      parent,
+      all_ancestors: slot.ancestors,
+      slot_map: Some(slot_map),
+    })
   }
 
   fn has_id(&self, id: &CssString, case_sensitivity: CaseSensitivity) -> bool {
@@ -2679,7 +2707,8 @@ fn match_relative_selector_descendants<'a>(
 ) -> bool {
   ancestors.with_pushed(anchor, |ancestors| {
     for child in anchor.children.iter().filter(|c| c.is_element()) {
-      let child_ref = ElementRef::with_ancestors(child, ancestors.as_slice());
+      let child_ref = ElementRef::with_ancestors(child, ancestors.as_slice())
+        .with_slot_map(context.extra_data.slot_map);
       let mut matched = matches_selector(&selector.selector, 0, None, &child_ref, context);
       if !matched && selector.match_hint.is_subtree() {
         matched = match_relative_selector_subtree(selector, child, ancestors, context);
@@ -2713,7 +2742,8 @@ fn match_relative_selector_siblings<'a>(
       continue;
     }
 
-    let sibling_ref = ElementRef::with_ancestors(sibling, ancestors.as_slice());
+    let sibling_ref = ElementRef::with_ancestors(sibling, ancestors.as_slice())
+      .with_slot_map(context.extra_data.slot_map);
     let matched = if selector.match_hint.is_subtree() {
       match_relative_selector_subtree(selector, sibling, ancestors, context)
     } else {
@@ -2742,7 +2772,8 @@ fn match_relative_selector_subtree<'a>(
 
   ancestors.with_pushed(node, |ancestors| {
     for child in node.children.iter().filter(|c| c.is_element()) {
-      let child_ref = ElementRef::with_ancestors(child, ancestors.as_slice());
+      let child_ref = ElementRef::with_ancestors(child, ancestors.as_slice())
+        .with_slot_map(context.extra_data.slot_map);
       if matches_selector(&selector.selector, 0, None, &child_ref, context) {
         return true;
       }
