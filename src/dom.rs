@@ -1411,13 +1411,18 @@ impl<'a> ElementRef<'a> {
 
   fn select_value(&self) -> Option<String> {
     let multiple = self.node.get_attribute_ref("multiple").is_some();
+    if multiple {
+      let mut values = Vec::new();
+      collect_selected_option_values(self.node, false, &mut values);
+      if values.is_empty() {
+        return None;
+      }
+      return Some(values.join(", "));
+    }
+
     let explicit = find_selected_option_value(self.node, false);
     if explicit.is_some() {
       return explicit;
-    }
-
-    if multiple {
-      return None;
     }
 
     first_enabled_option(self.node, false).map(option_value_from_node)
@@ -1858,6 +1863,26 @@ fn option_value_from_node(node: &DomNode) -> String {
       _ => None,
     })
     .collect()
+}
+
+fn collect_selected_option_values(node: &DomNode, optgroup_disabled: bool, out: &mut Vec<String>) {
+  let tag = node.tag_name().map(|t| t.to_ascii_lowercase());
+  let is_option = tag.as_deref() == Some("option");
+
+  let option_disabled = node.get_attribute_ref("disabled").is_some();
+  let next_optgroup_disabled =
+    optgroup_disabled || (tag.as_deref() == Some("optgroup") && option_disabled);
+
+  if is_option
+    && node.get_attribute_ref("selected").is_some()
+    && !(option_disabled || optgroup_disabled)
+  {
+    out.push(option_value_from_node(node));
+  }
+
+  for child in &node.children {
+    collect_selected_option_values(child, next_optgroup_disabled, out);
+  }
 }
 
 fn find_selected_option_value(node: &DomNode, optgroup_disabled: bool) -> Option<String> {

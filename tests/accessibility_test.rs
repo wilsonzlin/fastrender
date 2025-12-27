@@ -866,6 +866,29 @@ fn accessibility_fieldset_legend_name() {
 }
 
 #[test]
+fn accessibility_multi_select_value() {
+  let html = r##"
+    <html>
+      <body>
+        <select id="m" multiple aria-label="M">
+          <option selected>One</option>
+          <option selected>Two</option>
+        </select>
+      </body>
+    </html>
+  "##;
+
+  let tree = render_accessibility_json(html);
+  let select = find_json_node(&tree, "m").expect("select node");
+
+  assert_eq!(select.get("role").and_then(|v| v.as_str()), Some("listbox"));
+  assert_eq!(
+    select.get("value").and_then(|v| v.as_str()),
+    Some("One, Two")
+  );
+}
+
+#[test]
 fn accessibility_fixture_snapshots() {
   let fixtures = [
     "headings_links",
