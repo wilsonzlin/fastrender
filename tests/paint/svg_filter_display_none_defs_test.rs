@@ -40,7 +40,7 @@ fn run_display_none_filter_test(filter_value: &str) {
         filter_value = filter_value
       );
 
-      let dom = renderer.parse_html(html).expect("parse html");
+      let dom = renderer.parse_html(&html).expect("parse html");
       let fragments = renderer
         .layout_document(&dom, 20, 20)
         .expect("layout document");
