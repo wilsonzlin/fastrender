@@ -37,6 +37,8 @@ use crate::paint::display_list::ImageFilterQuality;
 use crate::paint::display_list::ImageItem;
 use crate::paint::display_list::LinearGradientItem;
 use crate::paint::display_list::ListMarkerItem;
+#[cfg(test)]
+use crate::paint::display_list::MaskReferenceRects;
 use crate::paint::display_list::OpacityItem;
 use crate::paint::display_list::OutlineItem;
 use crate::paint::display_list::RadialGradientItem;
@@ -50,17 +52,15 @@ use crate::paint::display_list::TextItem;
 use crate::paint::display_list::TextShadowItem;
 use crate::paint::display_list::Transform3D;
 use crate::paint::display_list::TransformItem;
-#[cfg(test)]
-use crate::paint::display_list::MaskReferenceRects;
 use crate::paint::filter_outset::filter_outset;
 use crate::paint::filter_outset::filter_outset_with_bounds;
 use crate::paint::homography::Homography;
 use crate::paint::projective_warp::warp_pixmap;
-use crate::paint::transform3d::backface_is_hidden;
 use crate::paint::rasterize::fill_rounded_rect;
 use crate::paint::rasterize::render_box_shadow;
 use crate::paint::rasterize::BoxShadow;
 use crate::paint::text_shadow::PathBounds;
+use crate::paint::transform3d::backface_is_hidden;
 use crate::style::color::Rgba;
 use crate::style::types::BackfaceVisibility;
 use crate::style::types::BackgroundImage;
@@ -3007,10 +3007,14 @@ impl DisplayListRenderer {
       let clip = self.canvas.clip_mask().cloned();
       let (t, _valid) = self.to_skia_transform_checked(transform);
       let skia_transform = parent_transform.post_concat(t);
-      self
-        .canvas
-        .pixmap_mut()
-        .draw_pixmap(0, 0, pixmap.as_ref(), &paint, skia_transform, clip.as_ref());
+      self.canvas.pixmap_mut().draw_pixmap(
+        0,
+        0,
+        pixmap.as_ref(),
+        &paint,
+        skia_transform,
+        clip.as_ref(),
+      );
       return;
     }
 
@@ -3076,10 +3080,14 @@ impl DisplayListRenderer {
     let clip = self.canvas.clip_mask().cloned();
     let (t, _valid) = self.to_skia_transform_checked(transform);
     let skia_transform = parent_transform.post_concat(t);
-    self
-      .canvas
-      .pixmap_mut()
-      .draw_pixmap(0, 0, pixmap.as_ref(), &paint, skia_transform, clip.as_ref());
+    self.canvas.pixmap_mut().draw_pixmap(
+      0,
+      0,
+      pixmap.as_ref(),
+      &paint,
+      skia_transform,
+      clip.as_ref(),
+    );
   }
 
   fn render_item(&mut self, item: &DisplayItem) -> Result<()> {
@@ -3251,12 +3259,7 @@ impl DisplayListRenderer {
             } else {
               combined_transform
             };
-            self.stacking_layer_bounds(
-              bounds,
-              bounds_transform,
-              &scaled_filters,
-              &scaled_backdrop,
-            )
+            self.stacking_layer_bounds(bounds, bounds_transform, &scaled_filters, &scaled_backdrop)
           })
           .flatten();
         let layer_origin = if needs_layer && !has_backdrop {
@@ -3362,7 +3365,8 @@ impl DisplayListRenderer {
             }
           }
 
-          let layer_region = effect_bounds.and_then(|rect| self.layer_space_bounds(rect, origin, &layer));
+          let layer_region =
+            effect_bounds.and_then(|rect| self.layer_space_bounds(rect, origin, &layer));
 
           if let Some(mask_style) = record.mask.as_ref() {
             if let Some(mask) = self.render_mask(mask_style) {
@@ -3483,13 +3487,7 @@ impl DisplayListRenderer {
 
             if let Some(warped) = warped {
               if let Some(mode) = record.manual_blend {
-                self.composite_manual_layer(
-                  &warped.pixmap,
-                  opacity,
-                  mode,
-                  warped.offset,
-                  None,
-                )?;
+                self.composite_manual_layer(&warped.pixmap, opacity, mode, warped.offset, None)?;
               } else {
                 let mut paint = PixmapPaint::default();
                 paint.opacity = opacity;
@@ -3602,35 +3600,14 @@ impl DisplayListRenderer {
       );
     };
 
-    let face = match font.as_ttf_face() {
-      Ok(f) => f,
-      Err(_) => {
-        return Err(
-          RenderError::RasterizationFailed {
-            reason: "Unable to parse font face for text shadows".into(),
-          }
-          .into(),
-        )
+    let glyphs = Self::glyph_positions(item);
+
+    if !item.shadows.is_empty() {
+      let (paths, bounds) = self.glyph_paths_from_positions(&glyphs, &font, item)?;
+      if !paths.is_empty() && bounds.is_valid() {
+        self.render_text_shadows(&paths, &bounds, item);
       }
-    };
-
-    let (paths, bounds) = self.glyph_paths(&face, item);
-    if !item.shadows.is_empty() && !paths.is_empty() && bounds.is_valid() {
-      self.render_text_shadows(&paths, &bounds, item);
     }
-
-    let glyphs: Vec<GlyphPosition> = item
-      .glyphs
-      .iter()
-      .map(|g| GlyphPosition {
-        glyph_id: g.glyph_id,
-        cluster: 0,
-        x_offset: g.offset.x,
-        y_offset: g.offset.y,
-        x_advance: g.advance,
-        y_advance: 0.0,
-      })
-      .collect();
 
     self.canvas.draw_text(
       item.origin,
@@ -3911,103 +3888,45 @@ impl DisplayListRenderer {
     Ok(())
   }
 
-  fn glyph_paths(
-    &self,
-    face: &ttf_parser::Face<'_>,
-    item: &TextItem,
-  ) -> (Vec<tiny_skia::Path>, PathBounds) {
-    let units_per_em = face.units_per_em() as f32;
-    let scale = item.font_size / units_per_em;
-    let mut paths = Vec::with_capacity(item.glyphs.len());
-    let mut bounds = PathBounds::new();
-
-    for glyph in &item.glyphs {
-      let x = item.origin.x + glyph.offset.x;
-      let y = item.origin.y + glyph.offset.y;
-      if let Some(path) = Self::build_glyph_path(
-        face,
-        glyph.glyph_id as u16,
-        x,
-        y,
-        scale,
-        item.synthetic_oblique,
-      ) {
-        bounds.include(&path.bounds());
-        paths.push(path);
-      }
-    }
-
-    (paths, bounds)
+  fn glyph_positions(item: &TextItem) -> Vec<GlyphPosition> {
+    item
+      .glyphs
+      .iter()
+      .map(|g| GlyphPosition {
+        glyph_id: g.glyph_id,
+        cluster: 0,
+        x_offset: g.offset.x,
+        y_offset: g.offset.y,
+        x_advance: g.advance,
+        y_advance: 0.0,
+      })
+      .collect()
   }
 
-  fn build_glyph_path(
-    face: &ttf_parser::Face<'_>,
-    glyph_id: u16,
-    x: f32,
-    baseline_y: f32,
-    scale: f32,
-    synthetic_oblique: f32,
-  ) -> Option<tiny_skia::Path> {
-    use ttf_parser::OutlineBuilder;
+  fn glyph_paths_from_positions(
+    &mut self,
+    glyphs: &[GlyphPosition],
+    font: &LoadedFont,
+    item: &TextItem,
+  ) -> Result<(Vec<tiny_skia::Path>, PathBounds)> {
+    let (paths, bounds) = self.canvas.glyph_paths(
+      item.origin,
+      glyphs,
+      font,
+      item.font_size,
+      item.synthetic_oblique,
+      None,
+    )?;
+    Ok((paths, bounds))
+  }
 
-    struct PathConverter {
-      builder: PathBuilder,
-      scale: f32,
-      x: f32,
-      y: f32,
-      skew: f32,
-    }
-
-    impl OutlineBuilder for PathConverter {
-      fn move_to(&mut self, px: f32, py: f32) {
-        self.builder.move_to(
-          self.x + (px + self.skew * py) * self.scale,
-          self.y - py * self.scale,
-        );
-      }
-
-      fn line_to(&mut self, px: f32, py: f32) {
-        self.builder.line_to(
-          self.x + (px + self.skew * py) * self.scale,
-          self.y - py * self.scale,
-        );
-      }
-
-      fn quad_to(&mut self, x1: f32, y1: f32, px: f32, py: f32) {
-        self.builder.quad_to(
-          self.x + (x1 + self.skew * y1) * self.scale,
-          self.y - y1 * self.scale,
-          self.x + (px + self.skew * py) * self.scale,
-          self.y - py * self.scale,
-        );
-      }
-
-      fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, px: f32, py: f32) {
-        self.builder.cubic_to(
-          self.x + (x1 + self.skew * y1) * self.scale,
-          self.y - y1 * self.scale,
-          self.x + (x2 + self.skew * y2) * self.scale,
-          self.y - y2 * self.scale,
-          self.x + (px + self.skew * py) * self.scale,
-          self.y - py * self.scale,
-        );
-      }
-
-      fn close(&mut self) {
-        self.builder.close();
-      }
-    }
-
-    let mut converter = PathConverter {
-      builder: PathBuilder::new(),
-      scale,
-      x,
-      y: baseline_y,
-      skew: synthetic_oblique,
-    };
-
-    face.outline_glyph(ttf_parser::GlyphId(glyph_id), &mut converter)?;
-    converter.builder.finish()
+  fn glyph_paths(
+    &mut self,
+    font: &LoadedFont,
+    item: &TextItem,
+  ) -> Result<(Vec<tiny_skia::Path>, PathBounds)> {
+    let glyphs = Self::glyph_positions(item);
+    self.glyph_paths_from_positions(&glyphs, font, item)
   }
 
   fn render_text_shadows(
@@ -6728,7 +6647,7 @@ mod tests {
       decorations: Vec::new(),
     }));
 
-    let renderer = DisplayListRenderer::new_scaled(80, 40, Rgba::WHITE, font_ctx, 2.0)
+    let mut renderer = DisplayListRenderer::new_scaled(80, 40, Rgba::WHITE, font_ctx, 2.0)
       .expect("renderer with scale");
     let text_item = match &list.items()[0] {
       DisplayItem::Text(t) => t,
@@ -6740,7 +6659,9 @@ mod tests {
       "shadow offset should scale with DPR (expected ~4, got {})",
       scaled_item.shadows[0].offset.x
     );
-    let (_paths, bounds) = renderer.glyph_paths(&face, &scaled_item);
+    let (_paths, bounds) = renderer
+      .glyph_paths(&font, &scaled_item)
+      .expect("glyph paths");
     let shadow = &scaled_item.shadows[0];
     let shadow_min_x = bounds.min_x + shadow.offset.x;
     let shadow_max_x = bounds.max_x + shadow.offset.x;
@@ -6820,7 +6741,7 @@ mod tests {
       decorations: Vec::new(),
     }));
 
-    let renderer = DisplayListRenderer::new_scaled(80, 40, Rgba::WHITE, font_ctx.clone(), 2.0)
+    let mut renderer = DisplayListRenderer::new_scaled(80, 40, Rgba::WHITE, font_ctx.clone(), 2.0)
       .expect("renderer with scale");
     let text_item = match &list.items()[0] {
       DisplayItem::Text(t) => t,
@@ -6832,7 +6753,9 @@ mod tests {
       "blur radius should scale with DPR (expected ~8, got {})",
       scaled_item.shadows[0].blur_radius
     );
-    let (_paths, bounds) = renderer.glyph_paths(&face, &scaled_item);
+    let (_paths, bounds) = renderer
+      .glyph_paths(&font, &scaled_item)
+      .expect("glyph paths");
     let shadow = &scaled_item.shadows[0];
     let blur_margin = (shadow.blur_radius.abs() * 3.0).ceil();
     let shadow_min_x = bounds.min_x + shadow.offset.x - blur_margin;

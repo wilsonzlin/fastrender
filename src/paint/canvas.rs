@@ -51,6 +51,8 @@ use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::geometry::Size;
 use crate::paint::clip_path::ResolvedClipPath;
+use crate::paint::text_rasterize::{GlyphCacheStats, TextRasterizer, TextRenderState};
+use crate::paint::text_shadow::PathBounds;
 use crate::style::color::Rgba;
 use crate::text::font_db::LoadedFont;
 use crate::text::pipeline::GlyphPosition;
@@ -162,6 +164,8 @@ pub struct Canvas {
   layer_stack: Vec<LayerRecord>,
   /// Current graphics state
   current_state: CanvasState,
+  /// Cached text rasterizer
+  text_rasterizer: TextRasterizer,
 }
 
 impl Canvas {
@@ -204,6 +208,7 @@ impl Canvas {
       state_stack: Vec::new(),
       layer_stack: Vec::new(),
       current_state: CanvasState::new(),
+      text_rasterizer: TextRasterizer::new(),
     };
 
     // Fill with background color
@@ -230,6 +235,7 @@ impl Canvas {
       state_stack: Vec::new(),
       layer_stack: Vec::new(),
       current_state: CanvasState::new(),
+      text_rasterizer: TextRasterizer::new(),
     }
   }
 
@@ -291,6 +297,16 @@ impl Canvas {
   #[inline]
   pub fn pixmap_mut(&mut self) -> &mut Pixmap {
     &mut self.pixmap
+  }
+
+  /// Returns glyph cache statistics for text rendering.
+  pub fn text_cache_stats(&self) -> GlyphCacheStats {
+    self.text_rasterizer.cache_stats()
+  }
+
+  /// Resets glyph cache stats without clearing cached outlines.
+  pub fn reset_text_cache_stats(&mut self) {
+    self.text_rasterizer.reset_cache_stats();
   }
 
   /// Returns a mutable reference to the pixmap that will receive composited output.
@@ -873,6 +889,31 @@ impl Canvas {
     }
   }
 
+  pub(crate) fn glyph_paths(
+    &mut self,
+    position: Point,
+    glyphs: &[GlyphPosition],
+    font: &LoadedFont,
+    font_size: f32,
+    synthetic_oblique: f32,
+    rotation: Option<Transform>,
+  ) -> Result<(Vec<tiny_skia::Path>, PathBounds)> {
+    let paths = self.text_rasterizer.positioned_glyph_paths(
+      glyphs,
+      font,
+      font_size,
+      position.x,
+      position.y,
+      synthetic_oblique,
+      rotation,
+    )?;
+    let mut bounds = PathBounds::new();
+    for path in &paths {
+      bounds.include(&path.bounds());
+    }
+    Ok((paths, bounds))
+  }
+
   /// Draws text glyphs at the specified position
   ///
   /// Renders shaped glyphs from the text shaping pipeline. Each glyph is
@@ -917,55 +958,26 @@ impl Canvas {
       return;
     }
 
-    // Parse the font for glyph outlines
-    let face = match ttf_parser::Face::parse(&font.data, font.index) {
-      Ok(f) => f,
-      Err(_) => return,
+    let state = TextRenderState {
+      transform: self.current_state.transform,
+      clip_mask: self.current_state.clip_mask.as_ref(),
+      opacity: self.current_state.opacity,
+      blend_mode: self.current_state.blend_mode,
     };
 
-    let units_per_em = face.units_per_em() as f32;
-    let scale = font_size / units_per_em;
-
-    let paint = self.current_state.create_paint(color);
-    let mut x = position.x;
-
-    for glyph in glyphs {
-      let glyph_x = x + glyph.x_offset;
-      let glyph_y = position.y + glyph.y_offset;
-
-      // Get the glyph outline
-      if let Some(path) = self.build_glyph_path(
-        &face,
-        glyph.glyph_id as u16,
-        glyph_x,
-        glyph_y,
-        scale,
-        synthetic_oblique,
-      ) {
-        self.pixmap.fill_path(
-          &path,
-          &paint,
-          FillRule::Winding,
-          self.current_state.transform,
-          self.current_state.clip_mask.as_ref(),
-        );
-        if synthetic_bold > 0.0 {
-          let mut stroke = Stroke::default();
-          stroke.width = synthetic_bold * 2.0;
-          stroke.line_join = tiny_skia::LineJoin::Round;
-          stroke.line_cap = tiny_skia::LineCap::Round;
-          self.pixmap.stroke_path(
-            &path,
-            &paint,
-            &stroke,
-            self.current_state.transform,
-            self.current_state.clip_mask.as_ref(),
-          );
-        }
-      }
-
-      x += glyph.x_advance;
-    }
+    let _ = self.text_rasterizer.render_glyphs_with_state(
+      glyphs,
+      font,
+      font_size,
+      position.x,
+      position.y,
+      color,
+      synthetic_bold,
+      synthetic_oblique,
+      None,
+      state,
+      &mut self.pixmap,
+    );
   }
 
   /// Draws a line between two points
@@ -1193,102 +1205,6 @@ impl Canvas {
 
     pb.close();
     pb.finish()
-  }
-
-  /// Builds a path for a glyph outline
-  fn build_glyph_path(
-    &self,
-    face: &ttf_parser::Face,
-    glyph_id: u16,
-    x: f32,
-    y: f32,
-    scale: f32,
-    synthetic_oblique: f32,
-  ) -> Option<tiny_skia::Path> {
-    let glyph_id = ttf_parser::GlyphId(glyph_id);
-
-    // Create a path builder that collects glyph outline
-    let mut builder = GlyphPathBuilder::new(x, y, scale, synthetic_oblique);
-
-    face.outline_glyph(glyph_id, &mut builder);
-
-    builder.finish()
-  }
-}
-
-// ============================================================================
-// Glyph Path Builder
-// ============================================================================
-
-/// Helper struct for building glyph outlines
-struct GlyphPathBuilder {
-  path_builder: PathBuilder,
-  x: f32,
-  y: f32,
-  scale: f32,
-  skew: f32,
-}
-
-impl GlyphPathBuilder {
-  fn new(x: f32, y: f32, scale: f32, skew: f32) -> Self {
-    Self {
-      path_builder: PathBuilder::new(),
-      x,
-      y,
-      scale,
-      skew,
-    }
-  }
-
-  fn transform_x(&self, gx: f32, gy: f32) -> f32 {
-    self.x + (gx + self.skew * gy) * self.scale
-  }
-
-  fn transform_y(&self, gy: f32) -> f32 {
-    // Font coordinates have Y axis pointing up, flip for screen coordinates
-    self.y - gy * self.scale
-  }
-
-  fn finish(self) -> Option<tiny_skia::Path> {
-    self.path_builder.finish()
-  }
-}
-
-impl ttf_parser::OutlineBuilder for GlyphPathBuilder {
-  fn move_to(&mut self, x: f32, y: f32) {
-    self
-      .path_builder
-      .move_to(self.transform_x(x, y), self.transform_y(y));
-  }
-
-  fn line_to(&mut self, x: f32, y: f32) {
-    self
-      .path_builder
-      .line_to(self.transform_x(x, y), self.transform_y(y));
-  }
-
-  fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
-    self.path_builder.quad_to(
-      self.transform_x(x1, y1),
-      self.transform_y(y1),
-      self.transform_x(x, y),
-      self.transform_y(y),
-    );
-  }
-
-  fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
-    self.path_builder.cubic_to(
-      self.transform_x(x1, y1),
-      self.transform_y(y1),
-      self.transform_x(x2, y2),
-      self.transform_y(y2),
-      self.transform_x(x, y),
-      self.transform_y(y),
-    );
-  }
-
-  fn close(&mut self) {
-    self.path_builder.close();
   }
 }
 

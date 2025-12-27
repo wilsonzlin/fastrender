@@ -63,7 +63,9 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use tiny_skia::BlendMode as SkiaBlendMode;
 use tiny_skia::FillRule;
+use tiny_skia::Mask;
 use tiny_skia::Paint;
 use tiny_skia::Path;
 use tiny_skia::PathBuilder;
@@ -569,6 +571,30 @@ fn concat_transforms(a: Transform, b: Transform) -> Transform {
 // Text Rasterizer
 // ============================================================================
 
+/// Rendering state applied to glyph rasterization.
+#[derive(Debug, Clone, Copy)]
+pub struct TextRenderState<'a> {
+  /// Transform to apply after glyph positioning.
+  pub transform: Transform,
+  /// Optional clip mask to apply while painting.
+  pub clip_mask: Option<&'a Mask>,
+  /// Additional opacity multiplier.
+  pub opacity: f32,
+  /// Blend mode for the glyph draw.
+  pub blend_mode: SkiaBlendMode,
+}
+
+impl<'a> Default for TextRenderState<'a> {
+  fn default() -> Self {
+    Self {
+      transform: Transform::identity(),
+      clip_mask: None,
+      opacity: 1.0,
+      blend_mode: SkiaBlendMode::SourceOver,
+    }
+  }
+}
+
 /// Main text rasterizer for rendering shaped text to pixels.
 ///
 /// Converts shaped text runs (glyph IDs + positions) into rendered
@@ -656,57 +682,119 @@ impl TextRasterizer {
     color: Rgba,
     pixmap: &mut Pixmap,
   ) -> Result<f32> {
+    self.render_shaped_run_with_state(
+      run,
+      x,
+      baseline_y,
+      color,
+      pixmap,
+      TextRenderState::default(),
+    )
+  }
+
+  /// Renders a shaped text run with explicit render state (transform/clip/blend).
+  pub fn render_shaped_run_with_state(
+    &mut self,
+    run: &ShapedRun,
+    x: f32,
+    baseline_y: f32,
+    color: Rgba,
+    pixmap: &mut Pixmap,
+    state: TextRenderState<'_>,
+  ) -> Result<f32> {
+    let rotation = rotation_transform(run.rotation, x, baseline_y);
+    self.render_glyph_run(
+      &run.glyphs,
+      &run.font,
+      run.font_size * run.scale,
+      run.synthetic_bold,
+      run.synthetic_oblique,
+      run.palette_index,
+      &run.variations,
+      rotation,
+      x,
+      baseline_y,
+      color,
+      state,
+      pixmap,
+    )?;
+
+    // Preserve previous behavior of returning the shaped run's advance.
+    Ok(run.advance)
+  }
+
+  fn render_glyph_run(
+    &mut self,
+    glyphs: &[GlyphPosition],
+    font: &LoadedFont,
+    font_size: f32,
+    synthetic_bold: f32,
+    synthetic_oblique: f32,
+    palette_index: u16,
+    variations: &[Variation],
+    rotation: Option<Transform>,
+    x: f32,
+    baseline_y: f32,
+    color: Rgba,
+    state: TextRenderState<'_>,
+    pixmap: &mut Pixmap,
+  ) -> Result<f32> {
     // Create paint with text color
     let mut paint = Paint::default();
-    paint.set_color_rgba8(color.r, color.g, color.b, color.alpha_u8());
+    let opacity = state.opacity.clamp(0.0, 1.0);
+    let alpha = (color.a * opacity).clamp(0.0, 1.0);
+    paint.set_color_rgba8(
+      color.r,
+      color.g,
+      color.b,
+      (alpha * 255.0).round().clamp(0.0, 255.0) as u8,
+    );
     paint.anti_alias = true;
+    paint.blend_mode = state.blend_mode;
 
-    let face = run
-      .font
+    let face = font
       .as_ttf_face()
       .map_err(|_| RenderError::RasterizationFailed {
-        reason: format!("Failed to parse font: {}", run.font.family),
+        reason: format!("Failed to parse font: {}", font.family),
       })?;
 
     let units_per_em = face.units_per_em() as f32;
     if units_per_em == 0.0 {
       return Err(
         RenderError::RasterizationFailed {
-          reason: format!("Font {} has invalid units_per_em", run.font.family),
+          reason: format!("Font {} has invalid units_per_em", font.family),
         }
         .into(),
       );
     }
 
-    let font_size = run.font_size * run.scale;
     let scale = font_size / units_per_em;
-    let rotation = rotation_transform(run.rotation, x, baseline_y);
     let mut cursor_x = x;
 
     // Render each glyph
-    for glyph in &run.glyphs {
+    for glyph in glyphs {
       // Calculate glyph position
       let glyph_x = cursor_x + glyph.x_offset;
       let glyph_y = baseline_y + glyph.y_offset;
 
       let color_key = ColorGlyphCacheKey::new(
-        &run.font,
+        font,
         glyph.glyph_id,
         font_size,
-        run.palette_index,
-        &run.variations,
+        palette_index,
+        variations,
         color,
       );
 
       let mut color_glyph = self.color_cache.get(&color_key);
       if color_glyph.is_none() {
         color_glyph = self.color_renderer.render(
-          &run.font,
+          font,
           glyph.glyph_id,
           font_size,
-          run.palette_index,
+          palette_index,
           color,
-          run.synthetic_oblique,
+          synthetic_oblique,
         );
         if let Some(ref rendered) = color_glyph {
           self.color_cache.insert(color_key, rendered.clone());
@@ -714,26 +802,26 @@ impl TextRasterizer {
       }
 
       if let Some(color_image) = color_glyph {
-        draw_color_glyph(pixmap, &color_image, glyph_x, glyph_y, rotation);
-      } else if let Some(cached) =
-        self
-          .cache
-          .get_or_build(&run.font, glyph.glyph_id, run.synthetic_oblique)
+        draw_color_glyph(pixmap, &color_image, glyph_x, glyph_y, rotation, state);
+      } else if let Some(cached) = self
+        .cache
+        .get_or_build(font, glyph.glyph_id, synthetic_oblique)
       {
         if let Some(path) = cached.path.as_ref() {
-          let mut transform = glyph_transform(scale, run.synthetic_oblique, glyph_x, glyph_y);
+          let mut transform = glyph_transform(scale, synthetic_oblique, glyph_x, glyph_y);
           if let Some(rotation) = rotation {
             transform = concat_transforms(rotation, transform);
           }
+          transform = concat_transforms(state.transform, transform);
 
           // Render the path
-          pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
-          if run.synthetic_bold > 0.0 {
+          pixmap.fill_path(&path, &paint, FillRule::Winding, transform, state.clip_mask);
+          if synthetic_bold > 0.0 {
             let mut stroke = tiny_skia::Stroke::default();
-            stroke.width = run.synthetic_bold * 2.0;
+            stroke.width = synthetic_bold * 2.0;
             stroke.line_join = tiny_skia::LineJoin::Round;
             stroke.line_cap = tiny_skia::LineCap::Round;
-            pixmap.stroke_path(&path, &paint, &stroke, transform, None);
+            pixmap.stroke_path(&path, &paint, &stroke, transform, state.clip_mask);
           }
         }
       }
@@ -742,7 +830,7 @@ impl TextRasterizer {
       cursor_x += glyph.x_advance;
     }
 
-    Ok(run.advance)
+    Ok(cursor_x - x)
   }
 
   /// Renders multiple shaped runs.
@@ -771,7 +859,14 @@ impl TextRasterizer {
     let mut cursor_x = x;
 
     for run in runs {
-      let advance = self.render_shaped_run(run, cursor_x, baseline_y, color, pixmap)?;
+      let advance = self.render_shaped_run_with_state(
+        run,
+        cursor_x,
+        baseline_y,
+        color,
+        pixmap,
+        TextRenderState::default(),
+      )?;
       cursor_x += advance;
     }
 
@@ -792,6 +887,37 @@ impl TextRasterizer {
   /// * `baseline_y` - Baseline Y position
   /// * `color` - Fill color
   /// * `pixmap` - Target pixmap
+  pub fn render_glyphs_with_state(
+    &mut self,
+    glyphs: &[GlyphPosition],
+    font: &LoadedFont,
+    font_size: f32,
+    x: f32,
+    baseline_y: f32,
+    color: Rgba,
+    synthetic_bold: f32,
+    synthetic_oblique: f32,
+    rotation: Option<Transform>,
+    state: TextRenderState<'_>,
+    pixmap: &mut Pixmap,
+  ) -> Result<f32> {
+    self.render_glyph_run(
+      glyphs,
+      font,
+      font_size,
+      synthetic_bold,
+      synthetic_oblique,
+      0,
+      &[],
+      rotation,
+      x,
+      baseline_y,
+      color,
+      state,
+      pixmap,
+    )
+  }
+
   pub fn render_glyphs(
     &mut self,
     glyphs: &[GlyphPosition],
@@ -802,10 +928,32 @@ impl TextRasterizer {
     color: Rgba,
     pixmap: &mut Pixmap,
   ) -> Result<f32> {
-    let mut paint = Paint::default();
-    paint.set_color_rgba8(color.r, color.g, color.b, color.alpha_u8());
-    paint.anti_alias = true;
+    self.render_glyphs_with_state(
+      glyphs,
+      font,
+      font_size,
+      x,
+      baseline_y,
+      color,
+      0.0,
+      0.0,
+      None,
+      TextRenderState::default(),
+      pixmap,
+    )
+  }
 
+  /// Returns positioned glyph paths for the provided run using the outline cache.
+  pub fn positioned_glyph_paths(
+    &mut self,
+    glyphs: &[GlyphPosition],
+    font: &LoadedFont,
+    font_size: f32,
+    x: f32,
+    baseline_y: f32,
+    synthetic_oblique: f32,
+    rotation: Option<Transform>,
+  ) -> Result<Vec<Path>> {
     let face = font
       .as_ttf_face()
       .map_err(|_| RenderError::RasterizationFailed {
@@ -823,36 +971,28 @@ impl TextRasterizer {
     }
 
     let scale = font_size / units_per_em;
-    let mut cursor_x = x;
+    let mut paths = Vec::with_capacity(glyphs.len());
 
     for glyph in glyphs {
-      let glyph_x = cursor_x + glyph.x_offset;
+      let glyph_x = x + glyph.x_offset;
       let glyph_y = baseline_y + glyph.y_offset;
-
-      let color_key = ColorGlyphCacheKey::new(font, glyph.glyph_id, font_size, 0, &[], color);
-      let mut color_glyph = self.color_cache.get(&color_key);
-      if color_glyph.is_none() {
-        color_glyph = self
-          .color_renderer
-          .render(font, glyph.glyph_id, font_size, 0, color, 0.0);
-        if let Some(ref rendered) = color_glyph {
-          self.color_cache.insert(color_key, rendered.clone());
-        }
-      }
-
-      if let Some(color_image) = color_glyph {
-        draw_color_glyph(pixmap, &color_image, glyph_x, glyph_y, None);
-      } else if let Some(cached) = self.cache.get_or_build(font, glyph.glyph_id, 0.0) {
+      if let Some(cached) = self
+        .cache
+        .get_or_build(font, glyph.glyph_id, synthetic_oblique)
+      {
         if let Some(path) = cached.path.as_ref() {
-          let transform = glyph_transform(scale, 0.0, glyph_x, glyph_y);
-          pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
+          let mut transform = glyph_transform(scale, synthetic_oblique, glyph_x, glyph_y);
+          if let Some(rotation) = rotation {
+            transform = concat_transforms(rotation, transform);
+          }
+          if let Some(transformed) = path.clone().transform(transform) {
+            paths.push(transformed);
+          }
         }
       }
-
-      cursor_x += glyph.x_advance;
     }
 
-    Ok(cursor_x - x)
+    Ok(paths)
   }
 
   /// Clears the glyph cache.
@@ -897,13 +1037,18 @@ fn draw_color_glyph(
   glyph_x: f32,
   glyph_y: f32,
   rotation: Option<Transform>,
+  state: TextRenderState<'_>,
 ) {
-  let paint = PixmapPaint::default();
-  let transform = rotation.unwrap_or_else(Transform::identity);
-  let dx = (glyph_x + glyph.left).round() as i32;
-  let dy = (glyph_y + glyph.top).round() as i32;
+  let mut paint = PixmapPaint::default();
+  paint.opacity = state.opacity.clamp(0.0, 1.0);
+  paint.blend_mode = state.blend_mode;
+  let mut transform = Transform::from_translate(glyph_x + glyph.left, glyph_y + glyph.top);
+  if let Some(rotation) = rotation {
+    transform = concat_transforms(rotation, transform);
+  }
+  transform = concat_transforms(state.transform, transform);
   let pixmap_ref = glyph.image.as_ref().as_ref();
-  target.draw_pixmap(dx, dy, pixmap_ref, &paint, transform, None);
+  target.draw_pixmap(0, 0, pixmap_ref, &paint, transform, state.clip_mask);
 }
 
 // ============================================================================
