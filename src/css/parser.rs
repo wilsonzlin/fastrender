@@ -2876,7 +2876,10 @@ pub fn extract_scoped_css_sources(dom: &DomNode) -> ScopedStylesheetSources {
 pub fn extract_css(dom: &DomNode) -> Result<StyleSheet> {
   let mut css_content = String::new();
 
-  dom.walk_tree(&mut |node| {
+  fn walk(node: &DomNode, css_content: &mut String) {
+    if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
+      return;
+    }
     if let Some(tag) = node.tag_name() {
       if tag == "style" {
         for child in &node.children {
@@ -2887,7 +2890,12 @@ pub fn extract_css(dom: &DomNode) -> Result<StyleSheet> {
         }
       }
     }
-  });
+    for child in &node.children {
+      walk(child, css_content);
+    }
+  }
+
+  walk(dom, &mut css_content);
 
   if css_content.is_empty() {
     Ok(StyleSheet::new())

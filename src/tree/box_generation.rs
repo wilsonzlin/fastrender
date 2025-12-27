@@ -295,10 +295,13 @@ impl BoxGenerationOptions {
 fn build_box_tree_root(styled: &StyledNode, options: &BoxGenerationOptions) -> BoxNode {
   let document_css = collect_document_css(styled);
   let picture_sources = collect_picture_source_map(styled);
+  let mut styled_lookup: HashMap<usize, &StyledNode> = HashMap::new();
+  build_styled_lookup(styled, &mut styled_lookup);
   let mut counters = CounterManager::new_with_styles(styled.styles.counter_styles.clone());
   counters.enter_scope();
   let mut roots = generate_boxes_for_styled(
     styled,
+    &styled_lookup,
     &mut counters,
     true,
     &document_css,
@@ -400,6 +403,40 @@ fn collect_document_css(styled: &StyledNode) -> String {
   let mut css = String::new();
   walk(styled, &mut css);
   css
+}
+
+fn build_styled_lookup<'a>(node: &'a StyledNode, out: &mut HashMap<usize, &'a StyledNode>) {
+  out.insert(node.node_id, node);
+  for child in &node.children {
+    build_styled_lookup(child, out);
+  }
+}
+
+fn composed_children<'a>(
+  styled: &'a StyledNode,
+  lookup: &'a HashMap<usize, &'a StyledNode>,
+) -> Vec<&'a StyledNode> {
+  if let Some(shadow_root) = styled
+    .children
+    .iter()
+    .find(|c| matches!(c.node.node_type, crate::dom::DomNodeType::ShadowRoot { .. }))
+  {
+    return vec![shadow_root];
+  }
+
+  if matches!(styled.node.node_type, crate::dom::DomNodeType::Slot { .. })
+    && !styled.slotted_node_ids.is_empty()
+  {
+    let mut resolved: Vec<&'a StyledNode> = Vec::new();
+    for id in &styled.slotted_node_ids {
+      if let Some(node) = lookup.get(id) {
+        resolved.push(*node);
+      }
+    }
+    return resolved;
+  }
+
+  styled.children.iter().collect()
 }
 
 fn normalize_mime_type(value: &str) -> Option<String> {
@@ -1138,6 +1175,7 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
 /// splicing grandchildren into the parent’s child list rather than creating a box.
 fn generate_boxes_for_styled(
   styled: &StyledNode,
+  styled_lookup: &HashMap<usize, &StyledNode>,
   counters: &mut CounterManager,
   _is_root: bool,
   document_css: &str,
@@ -1257,10 +1295,11 @@ fn generate_boxes_for_styled(
     }
   }
 
+  let composed_children = composed_children(styled, styled_lookup);
   let mut children: Vec<BoxNode> = Vec::new();
   let mut idx = 0;
-  while idx < styled.children.len() {
-    let child = &styled.children[idx];
+  while idx < composed_children.len() {
+    let child = composed_children[idx];
     if site_compat {
       if let Some(testid) = child.node.get_attribute("data-testid") {
         if testid == "one-nav-overlay" {
@@ -1269,8 +1308,8 @@ fn generate_boxes_for_styled(
           if overlay_hidden {
             // Skip the overlay and the subsequent focus-trap container when the overlay is hidden (menu closed).
             idx += 1;
-            while idx < styled.children.len() {
-              let next = &styled.children[idx];
+            while idx < composed_children.len() {
+              let next = composed_children[idx];
               // Skip over whitespace/text nodes between the overlay and drawer.
               if let crate::dom::DomNodeType::Text { content } = &next.node.node_type {
                 if content.trim().is_empty() {
@@ -1284,6 +1323,7 @@ fn generate_boxes_for_styled(
                   for grandchild in &next.children {
                     children.extend(generate_boxes_for_styled(
                       grandchild,
+                      styled_lookup,
                       counters,
                       false,
                       document_css,
@@ -1303,6 +1343,7 @@ fn generate_boxes_for_styled(
     }
     children.extend(generate_boxes_for_styled(
       child,
+      styled_lookup,
       counters,
       false,
       document_css,
@@ -2248,6 +2289,8 @@ mod tests {
       marker_styles: None,
       first_line_styles: None,
       first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
       children: vec![],
     }
   }
@@ -2282,6 +2325,8 @@ mod tests {
       marker_styles: None,
       first_line_styles: None,
       first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
       children: vec![],
     };
 
@@ -2303,6 +2348,8 @@ mod tests {
       marker_styles: Some(Box::new(marker_style)),
       first_line_styles: None,
       first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
       children: vec![text_node],
     };
 
@@ -2688,6 +2735,12 @@ mod tests {
       marker_styles: None,
       first_line_styles: None,
       first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
+      first_line_styles: None,
+      first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
       children: vec![],
     };
 
@@ -2753,6 +2806,8 @@ mod tests {
       marker_styles: Some(Box::new(marker_styles)),
       first_line_styles: None,
       first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
       children: vec![],
     };
 
@@ -2812,6 +2867,10 @@ mod tests {
       marker_styles: Some(Box::new(marker_styles)),
       first_line_styles: None,
       first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
       children: vec![],
     };
 
@@ -2854,6 +2913,12 @@ mod tests {
       marker_styles: None,
       first_line_styles: None,
       first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
+      first_line_styles: None,
+      first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
       children: vec![],
     };
 
@@ -2915,6 +2980,12 @@ mod tests {
       marker_styles: None,
       first_line_styles: None,
       first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
+      first_line_styles: None,
+      first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
       children: vec![],
     };
 
@@ -2981,6 +3052,10 @@ mod tests {
       marker_styles: Some(Box::new(marker_style)),
       first_line_styles: None,
       first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
       children: vec![],
     };
 
@@ -3022,6 +3097,8 @@ mod tests {
       after_styles: None,
       first_line_styles: None,
       first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
       children: vec![],
     };
 
@@ -3071,6 +3148,8 @@ mod tests {
       after_styles: None,
       first_line_styles: None,
       first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
       children: vec![],
     };
 
@@ -3129,6 +3208,12 @@ mod tests {
       marker_styles: None,
       first_line_styles: None,
       first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
+      first_line_styles: None,
+      first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
       children: vec![StyledNode {
         node_id: 0,
         node: dom::DomNode {
@@ -3143,6 +3228,12 @@ mod tests {
         marker_styles: None,
         first_line_styles: None,
         first_letter_styles: None,
+        assigned_slot: None,
+        slotted_node_ids: Vec::new(),
+        first_line_styles: None,
+        first_letter_styles: None,
+        assigned_slot: None,
+        slotted_node_ids: Vec::new(),
         children: vec![],
       }],
     };
@@ -3156,6 +3247,12 @@ mod tests {
       marker_styles: None,
       first_line_styles: None,
       first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
+      first_line_styles: None,
+      first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
       children: vec![mk_li("one"), mk_li("two"), mk_li("three")],
     };
 
@@ -3217,6 +3314,12 @@ mod tests {
       marker_styles: None,
       first_line_styles: None,
       first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
+      first_line_styles: None,
+      first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
       children: vec![StyledNode {
         node_id: 0,
         node: dom::DomNode {
@@ -3231,6 +3334,12 @@ mod tests {
         marker_styles: None,
         first_line_styles: None,
         first_letter_styles: None,
+        assigned_slot: None,
+        slotted_node_ids: Vec::new(),
+        first_line_styles: None,
+        first_letter_styles: None,
+        assigned_slot: None,
+        slotted_node_ids: Vec::new(),
         children: vec![],
       }],
     };
@@ -3244,6 +3353,12 @@ mod tests {
       marker_styles: None,
       first_line_styles: None,
       first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
+      first_line_styles: None,
+      first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
       children: vec![mk_li("one"), mk_li("two"), mk_li("three")],
     };
 
@@ -3305,6 +3420,12 @@ mod tests {
       marker_styles: None,
       first_line_styles: None,
       first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
+      first_line_styles: None,
+      first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
       children: vec![StyledNode {
         node_id: 0,
         node: dom::DomNode {
@@ -3319,6 +3440,12 @@ mod tests {
         marker_styles: None,
         first_line_styles: None,
         first_letter_styles: None,
+        assigned_slot: None,
+        slotted_node_ids: Vec::new(),
+        first_line_styles: None,
+        first_letter_styles: None,
+        assigned_slot: None,
+        slotted_node_ids: Vec::new(),
         children: vec![],
       }],
     };
@@ -3332,6 +3459,12 @@ mod tests {
       marker_styles: None,
       first_line_styles: None,
       first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
+      first_line_styles: None,
+      first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
       children: vec![mk_li("one"), mk_li("two"), mk_li("three")],
     };
 
@@ -3395,6 +3528,12 @@ mod tests {
       marker_styles: None,
       first_line_styles: None,
       first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
+      first_line_styles: None,
+      first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
       children: vec![StyledNode {
         node_id: 0,
         node: dom::DomNode {
@@ -3409,6 +3548,12 @@ mod tests {
         marker_styles: None,
         first_line_styles: None,
         first_letter_styles: None,
+        assigned_slot: None,
+        slotted_node_ids: Vec::new(),
+        first_line_styles: None,
+        first_letter_styles: None,
+        assigned_slot: None,
+        slotted_node_ids: Vec::new(),
         children: vec![],
       }],
     };
@@ -3422,6 +3567,12 @@ mod tests {
       marker_styles: None,
       first_line_styles: None,
       first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
+      first_line_styles: None,
+      first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
       children: vec![
         mk_li("one", None),
         mk_li("two", Some("10")),
@@ -3489,6 +3640,12 @@ mod tests {
       marker_styles: None,
       first_line_styles: None,
       first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
+      first_line_styles: None,
+      first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
       children: vec![StyledNode {
         node_id: 0,
         node: dom::DomNode {
@@ -3503,6 +3660,12 @@ mod tests {
         marker_styles: None,
         first_line_styles: None,
         first_letter_styles: None,
+        assigned_slot: None,
+        slotted_node_ids: Vec::new(),
+        first_line_styles: None,
+        first_letter_styles: None,
+        assigned_slot: None,
+        slotted_node_ids: Vec::new(),
         children: vec![],
       }],
     };
@@ -3516,6 +3679,12 @@ mod tests {
       marker_styles: None,
       first_line_styles: None,
       first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
+      first_line_styles: None,
+      first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
       children: vec![
         mk_li("one", None),
         mk_li("two", Some("10")),
@@ -3567,6 +3736,12 @@ mod tests {
       marker_styles: None,
       first_line_styles: None,
       first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
+      first_line_styles: None,
+      first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
       children: vec![StyledNode {
         node_id: 0,
         node: dom::DomNode {
@@ -3588,6 +3763,12 @@ mod tests {
         marker_styles: None,
         first_line_styles: None,
         first_letter_styles: None,
+        assigned_slot: None,
+        slotted_node_ids: Vec::new(),
+        first_line_styles: None,
+        first_letter_styles: None,
+        assigned_slot: None,
+        slotted_node_ids: Vec::new(),
         children: vec![StyledNode {
           node_id: 0,
           node: dom::DomNode {
@@ -3602,6 +3783,12 @@ mod tests {
           marker_styles: None,
           first_line_styles: None,
           first_letter_styles: None,
+          assigned_slot: None,
+          slotted_node_ids: Vec::new(),
+          first_line_styles: None,
+          first_letter_styles: None,
+          assigned_slot: None,
+          slotted_node_ids: Vec::new(),
           children: vec![],
         }],
       }],
@@ -3632,6 +3819,12 @@ mod tests {
       marker_styles: None,
       first_line_styles: None,
       first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
+      first_line_styles: None,
+      first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
       children: vec![child],
     };
 
@@ -3644,6 +3837,12 @@ mod tests {
       marker_styles: None,
       first_line_styles: None,
       first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
+      first_line_styles: None,
+      first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
       children: vec![
         outer_li(StyledNode {
           node_id: 0,
@@ -3659,6 +3858,12 @@ mod tests {
           marker_styles: None,
           first_line_styles: None,
           first_letter_styles: None,
+          assigned_slot: None,
+          slotted_node_ids: Vec::new(),
+          first_line_styles: None,
+          first_letter_styles: None,
+          assigned_slot: None,
+          slotted_node_ids: Vec::new(),
           children: vec![],
         }),
         outer_li(nested_ol),
@@ -3712,6 +3917,12 @@ mod tests {
       marker_styles: None,
       first_line_styles: None,
       first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
+      first_line_styles: None,
+      first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
       children: vec![],
     };
 
@@ -3731,6 +3942,12 @@ mod tests {
       marker_styles: None,
       first_line_styles: None,
       first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
+      first_line_styles: None,
+      first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
       children: vec![text_node(content)],
     };
 
@@ -3750,6 +3967,12 @@ mod tests {
       marker_styles: None,
       first_line_styles: None,
       first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
+      first_line_styles: None,
+      first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
       children: vec![li("skip-1"), li("skip-2")],
     };
 
@@ -3769,6 +3992,12 @@ mod tests {
       marker_styles: None,
       first_line_styles: None,
       first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
+      first_line_styles: None,
+      first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
       children: vec![li("one"), menu, li("two")],
     };
 
@@ -3818,6 +4047,12 @@ mod tests {
       marker_styles: None,
       first_line_styles: None,
       first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
+      first_line_styles: None,
+      first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
       children: vec![],
     };
 
@@ -3837,6 +4072,12 @@ mod tests {
       marker_styles: None,
       first_line_styles: None,
       first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
+      first_line_styles: None,
+      first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
       children: vec![text_node(content)],
     };
 
@@ -3856,6 +4097,12 @@ mod tests {
       marker_styles: None,
       first_line_styles: None,
       first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
+      first_line_styles: None,
+      first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
       children: vec![mk_li("inner-one"), mk_li("inner-two")],
     };
 
@@ -3875,6 +4122,12 @@ mod tests {
       marker_styles: None,
       first_line_styles: None,
       first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
+      first_line_styles: None,
+      first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
       children: vec![text_node("outer"), inner_ol],
     };
 
@@ -3894,6 +4147,12 @@ mod tests {
       marker_styles: None,
       first_line_styles: None,
       first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
+      first_line_styles: None,
+      first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
       children: vec![outer_li],
     };
 

@@ -635,6 +635,8 @@ impl BoxGenerator {
       marker_styles: None,
       first_line_styles: None,
       first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
       children: vec![],
     };
     let marker_content = marker_content_from_style(&dummy_styled, &style, counters);
