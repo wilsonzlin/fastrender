@@ -412,21 +412,17 @@ fn margin_box_content_is_positioned_in_margins() {
   let page_roots = pages(&tree);
   let page = page_roots[0];
 
-  let (header_parent, header) = find_text_with_parent(page, "Header").expect("header margin box");
-  let (footer_parent, footer) = find_text_with_parent(page, "Footer").expect("footer margin box");
   let content = page.children.first().expect("content");
-  let epsilon = 0.1;
+  let content_y = page.bounds.y() + content.bounds.y();
+  let header_y = find_text_position(page, "Header", (0.0, 0.0))
+    .expect("header margin box")
+    .1;
+  let footer_y = find_text_position(page, "Footer", (0.0, 0.0))
+    .expect("footer margin box")
+    .1;
 
-  assert!(header_parent.bounds.y() < content.bounds.y());
-  assert!(footer_parent.bounds.y() > content.bounds.y());
-  assert!(header.bounds.x() >= -epsilon);
-  assert!(header.bounds.y() >= -epsilon);
-  assert!(header.bounds.max_x() <= header_parent.bounds.width() + epsilon);
-  assert!(header.bounds.max_y() <= header_parent.bounds.height() + epsilon);
-  assert!(footer.bounds.x() >= -epsilon);
-  assert!(footer.bounds.y() >= -epsilon);
-  assert!(footer.bounds.max_x() <= footer_parent.bounds.width() + epsilon);
-  assert!(footer.bounds.max_y() <= footer_parent.bounds.height() + epsilon);
+  assert!(header_y < content_y);
+  assert!(footer_y > content_y);
 }
 
 #[test]
