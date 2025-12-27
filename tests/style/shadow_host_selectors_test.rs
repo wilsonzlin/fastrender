@@ -1,10 +1,11 @@
 use cssparser::{Parser, ParserInput, ToCss};
 use fastrender::css::parser::parse_stylesheet;
-use fastrender::css::selectors::PseudoClassParser;
+use fastrender::css::selectors::{PseudoClassParser, ShadowMatchData};
 use fastrender::dom::{DomNode, ElementRef};
 use fastrender::style::cascade::{apply_styles_with_media, StyledNode};
 use fastrender::style::color::Rgba;
 use fastrender::style::media::MediaContext;
+use selectors::Element;
 use selectors::parser::SelectorList;
 
 fn selector_roundtrip(selector: &str) -> String {
@@ -122,6 +123,7 @@ fn matches_host_and_host_context_selectors() {
         selectors::matching::NeedsSelectorFlags::No,
         selectors::matching::MatchingForInvalidation::No,
       );
+      host_ctx.extra_data = ShadowMatchData::for_shadow_host(host_ref.opaque());
       assert!(
         host_ctx.with_shadow_host(Some(host_ref), |ctx| {
           selectors::matching::matches_selector(host_ctx_selector, 0, None, &host_ref, ctx)
@@ -149,6 +151,7 @@ fn matches_host_and_host_context_selectors() {
         selectors::matching::NeedsSelectorFlags::No,
         selectors::matching::MatchingForInvalidation::No,
       );
+      host_ctx.extra_data = ShadowMatchData::for_shadow_host(host_ref.opaque());
       let host_matches = host_ctx.with_shadow_host(Some(host_ref), |ctx| {
         selectors::matching::matches_selector(host_selector, 0, None, &host_ref, ctx)
       });
@@ -180,6 +183,7 @@ fn matches_host_and_host_context_selectors() {
         selectors::matching::NeedsSelectorFlags::No,
         selectors::matching::MatchingForInvalidation::No,
       );
+      inner_ctx.extra_data = ShadowMatchData::for_shadow_host(host_ref.opaque());
       let mut inner_matches = inner_ctx.with_shadow_host(Some(host_ref), |ctx| {
         selectors::matching::matches_selector(inner_selector, 0, None, &inner_ref, ctx)
       });
