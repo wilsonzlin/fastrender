@@ -604,7 +604,7 @@ fn collect_scroll_metadata(
 }
 
 fn merge_containers(containers: Vec<ScrollSnapContainer>) -> Vec<ScrollSnapContainer> {
-  let mut merged = Vec::new();
+  let mut merged: Vec<ScrollSnapContainer> = Vec::new();
   let mut by_id: HashMap<usize, usize> = HashMap::new();
   let mut viewport_idx: Option<usize> = None;
 
@@ -712,7 +712,7 @@ fn snap_axis(
 }
 
 /// Applies scroll snap to all snap containers in the fragment tree.
-pub(crate) fn apply_scroll_snap(tree: &mut FragmentTree, scroll: &ScrollState) -> ScrollSnapResult {
+pub fn apply_scroll_snap(tree: &mut FragmentTree, scroll: &ScrollState) -> ScrollSnapResult {
   tree.ensure_scroll_metadata();
   let metadata = tree.scroll_metadata.clone().unwrap_or_default();
 
