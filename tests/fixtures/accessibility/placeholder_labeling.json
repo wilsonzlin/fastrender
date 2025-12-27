@@ -1,0 +1,156 @@
+{
+  "present": {
+    "unlabeled-text": {
+      "role": "textbox",
+      "name": "Your name",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "input",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "labeled-email": {
+      "role": "textbox",
+      "name": "Email address",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "input",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "notes": {
+      "role": "textbox",
+      "name": "Enter notes here",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "textarea",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "age": {
+      "role": "spinbutton",
+      "name": "Age",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "input",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "search": {
+      "role": "searchbox",
+      "name": "Search terms",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "input",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "password-ph": {
+      "role": "textbox",
+      "name": "Password",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "input",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "tel-ph": {
+      "role": "textbox",
+      "name": "Phone number",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "input",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "url-ph": {
+      "role": "textbox",
+      "name": "Website",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "input",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "checkbox-ph": {
+      "role": "checkbox",
+      "name": null,
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "input",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false,
+        "checked": "false"
+      }
+    },
+    "blank-placeholder": {
+      "role": "textbox",
+      "name": null,
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "input",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    }
+  },
+  "absent": ["hidden-ph"]
+}

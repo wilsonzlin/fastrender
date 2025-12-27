@@ -878,6 +878,10 @@ fn compute_name_internal(
     return Some(label);
   }
 
+  if let Some(placeholder) = placeholder_as_name(node) {
+    return Some(placeholder);
+  }
+
   if let Some(native) = native_name_from_html(node, ctx, visited, TextAlternativeMode::Visible) {
     if !native.is_empty() {
       return Some(native);
@@ -980,6 +984,46 @@ fn allows_visible_text_name(tag: Option<&str>, role: Option<&str>, allow_legend:
   }
 
   true
+}
+
+/// Use placeholder text as a fallback accessible name for text-entry controls.
+///
+/// HTML-AAM and major browsers expose the `placeholder` attribute as the name
+/// when an `<input>`/`<textarea>` has no explicit label. We mirror that behavior
+/// (after ARIA and `<label>` sources) so unlabeled text fields remain
+/// discoverable to assistive tech.
+fn placeholder_as_name(node: &StyledNode) -> Option<String> {
+  let tag = node.node.tag_name()?.to_ascii_lowercase();
+  let is_textbox_like = match tag.as_str() {
+    "textarea" => true,
+    "input" => {
+      let mut input_type = node
+        .node
+        .get_attribute_ref("type")
+        .map(|t| t.to_ascii_lowercase())
+        .unwrap_or_else(|| "text".to_string());
+      if input_type.trim().is_empty() {
+        input_type = "text".to_string();
+      }
+      matches!(
+        input_type.as_str(),
+        "text" | "search" | "email" | "tel" | "url" | "password" | "number"
+      )
+    }
+    _ => false,
+  };
+
+  if !is_textbox_like {
+    return None;
+  }
+
+  let placeholder = node.node.get_attribute_ref("placeholder")?;
+  let norm = normalize_whitespace(placeholder);
+  if norm.is_empty() {
+    None
+  } else {
+    Some(norm)
+  }
 }
 
 fn referenced_text_attr(

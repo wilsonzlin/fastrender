@@ -1073,6 +1073,7 @@ fn accessibility_fixture_snapshots() {
     "img_alt_presentational",
     "summary_context",
     "summary_context",
+    "placeholder_labeling",
   ];
 
   for name in fixtures {
