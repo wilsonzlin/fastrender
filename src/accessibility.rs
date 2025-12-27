@@ -254,8 +254,8 @@ fn build_nodes<'a>(
       ancestors.pop();
 
       let element_ref = ElementRef::with_ancestors(&node.node, ancestors);
-      let mut role = compute_role(&node.node);
-      let mut name = compute_name(node, ctx, role.as_deref());
+      let (mut role, presentational_role) = compute_role(&node.node);
+      let mut name = compute_name(node, ctx, role.as_deref(), !presentational_role);
       let mut description = compute_description(node, ctx);
       let decorative_image = is_decorative_img(node, ctx);
 
@@ -302,7 +302,11 @@ fn build_nodes<'a>(
       };
 
       let should_expose = !decorative_image
-        && (role.is_some() || name.is_some() || description.is_some() || value.is_some() || focusable);
+        && (role.is_some()
+          || name.is_some()
+          || description.is_some()
+          || value.is_some()
+          || focusable);
       if !should_expose {
         return children;
       }
@@ -453,8 +457,8 @@ fn is_decorative_img(node: &StyledNode, ctx: &BuildContext) -> bool {
   let role_attr = node
     .node
     .get_attribute_ref("role")
-    .map(|r| r.trim().to_ascii_lowercase())
-    .filter(|r| !r.is_empty());
+    .and_then(|r| r.split_ascii_whitespace().find(|t| !t.is_empty()))
+    .map(|r| r.to_ascii_lowercase());
 
   if let Some(role) = role_attr {
     if role != "none" && role != "presentation" {
@@ -509,19 +513,26 @@ fn find_node_by_id<'a>(root: &'a StyledNode, id: usize) -> Option<&'a StyledNode
   None
 }
 
-fn compute_role(node: &DomNode) -> Option<String> {
-  if let Some(role) = node
+fn compute_role(node: &DomNode) -> (Option<String>, bool) {
+  let role_attr = node
     .get_attribute_ref("role")
-    .map(|r| r.trim().to_ascii_lowercase())
-  {
-    if !role.is_empty() {
-      return Some(role);
+    .and_then(|r| r.split_ascii_whitespace().find(|t| !t.is_empty()))
+    .map(|r| r.to_ascii_lowercase());
+
+  if let Some(role) = role_attr {
+    let presentational = matches!(role.as_str(), "none" | "presentation");
+    if presentational {
+      return (None, true);
     }
+
+    return (Some(role), false);
   }
 
-  let tag = node.tag_name()?.to_ascii_lowercase();
+  let Some(tag) = node.tag_name().map(|t| t.to_ascii_lowercase()) else {
+    return (None, false);
+  };
 
-  match tag.as_str() {
+  let role = match tag.as_str() {
     "a" => node.get_attribute_ref("href").map(|_| "link".to_string()),
     "area" => node.get_attribute_ref("href").map(|_| "link".to_string()),
     "button" => Some("button".to_string()),
@@ -554,7 +565,9 @@ fn compute_role(node: &DomNode) -> Option<String> {
     "section" => Some("region".to_string()),
     "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => Some("heading".to_string()),
     _ => None,
-  }
+  };
+
+  (role, false)
 }
 
 fn input_role(node: &DomNode) -> Option<String> {
@@ -612,15 +625,21 @@ fn header_role(node: &DomNode) -> Option<String> {
   }
 }
 
-fn compute_name(node: &StyledNode, ctx: &BuildContext, role: Option<&str>) -> Option<String> {
+fn compute_name(
+  node: &StyledNode,
+  ctx: &BuildContext,
+  role: Option<&str>,
+  allow_visible_text: bool,
+) -> Option<String> {
   let mut visited = HashSet::new();
-  compute_name_internal(node, ctx, role, &mut visited)
+  compute_name_internal(node, ctx, role, allow_visible_text, &mut visited)
 }
 
 fn compute_name_internal(
   node: &StyledNode,
   ctx: &BuildContext,
   role: Option<&str>,
+  allow_visible_text: bool,
   visited: &mut HashSet<usize>,
 ) -> Option<String> {
   if !visited.insert(node.node_id) {
@@ -655,20 +674,24 @@ fn compute_name_internal(
     }
   }
 
-  let is_fieldset = node
-    .node
-    .tag_name()
-    .map(|t| t.eq_ignore_ascii_case("fieldset"))
-    .unwrap_or(false);
-  if is_fieldset {
-    return None;
-  }
+  if allow_visible_text {
+    let is_fieldset = node
+      .node
+      .tag_name()
+      .map(|t| t.eq_ignore_ascii_case("fieldset"))
+      .unwrap_or(false);
+    if is_fieldset {
+      return None;
+    }
 
-  let text = ctx.visible_text(node);
-  if text.is_empty() {
-    None
+    let text = ctx.visible_text(node);
+    if text.is_empty() {
+      None
+    } else {
+      Some(text)
+    }
   } else {
-    Some(text)
+    None
   }
 }
 

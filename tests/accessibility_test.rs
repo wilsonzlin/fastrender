@@ -155,11 +155,59 @@ fn accessibility_decorative_images_with_empty_alt_are_hidden() {
 
   let tree = render_accessibility_json(html);
 
-  assert!(find_json_node(&tree, "decor").is_none(), "decorative image should be omitted");
+  assert!(
+    find_json_node(&tree, "decor").is_none(),
+    "decorative image should be omitted"
+  );
 
   let labeled = find_json_node(&tree, "labeled").expect("labeled image present");
   assert_eq!(labeled.get("role").and_then(|v| v.as_str()), Some("img"));
   assert_eq!(labeled.get("name").and_then(|v| v.as_str()), Some("Logo"));
+}
+
+#[test]
+fn accessibility_role_tokenization_uses_first_token() {
+  let mut renderer = FastRender::new().expect("renderer");
+  let html = r##"
+    <html>
+      <body>
+        <div id="x" role="button link"></div>
+      </body>
+    </html>
+  "##;
+  let dom = renderer.parse_html(html).expect("parse");
+  let tree = renderer
+    .accessibility_tree(&dom, 800, 600)
+    .expect("accessibility tree");
+
+  let node = find_by_id(&tree, "x").expect("node with id x");
+  assert_eq!(node.role, "button");
+}
+
+#[test]
+fn accessibility_presentational_role_suppresses_semantics() {
+  let mut renderer = FastRender::new().expect("renderer");
+  let html = r##"
+    <html>
+      <body>
+        <div id="parent">
+          <div id="x" role="none">Text</div>
+          <div id="labeled" role="presentation" aria-label="Labelled"></div>
+        </div>
+      </body>
+    </html>
+  "##;
+  let dom = renderer.parse_html(html).expect("parse");
+  let tree = renderer
+    .accessibility_tree(&dom, 800, 600)
+    .expect("accessibility tree");
+
+  assert!(find_by_id(&tree, "x").is_none());
+  let parent = find_by_id(&tree, "parent").expect("parent node");
+  assert_eq!(parent.name.as_deref(), Some("Text"));
+
+  let labeled = find_by_id(&tree, "labeled").expect("presentational with label");
+  assert_eq!(labeled.name.as_deref(), Some("Labelled"));
 }
 
 #[test]
