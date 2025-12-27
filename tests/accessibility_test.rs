@@ -296,6 +296,71 @@ fn accessibility_invalid_aria_boolean_values() {
 }
 
 #[test]
+fn accessibility_details_expanded_state() {
+  let html = r##"
+    <html>
+      <body>
+        <details id="d1" open>
+          <summary id="s">More</summary>
+          <div>Content</div>
+        </details>
+        <details id="d2">
+          <summary id="s2">More</summary>
+        </details>
+      </body>
+    </html>
+  "##;
+
+  let tree = render_accessibility_json(html);
+
+  let d1 = find_json_node(&tree, "d1").expect("open details node");
+  assert_eq!(d1.get("role").and_then(|v| v.as_str()), Some("group"));
+
+  let d2 = find_json_node(&tree, "d2").expect("closed details node");
+  assert_eq!(d2.get("role").and_then(|v| v.as_str()), Some("group"));
+
+  let subset = snapshot_subset(&tree, &["s", "s2"]);
+
+  assert_eq!(
+    subset,
+    json!({
+      "s": {
+        "role": "button",
+        "name": "More",
+        "description": null,
+        "value": null,
+        "level": null,
+        "html_tag": "summary",
+        "states": {
+          "focusable": true,
+          "disabled": false,
+          "required": false,
+          "invalid": false,
+          "visited": false,
+          "expanded": true
+        }
+      },
+      "s2": {
+        "role": "button",
+        "name": "More",
+        "description": null,
+        "value": null,
+        "level": null,
+        "html_tag": "summary",
+        "states": {
+          "focusable": true,
+          "disabled": false,
+          "required": false,
+          "invalid": false,
+          "visited": false,
+          "expanded": false
+        }
+      }
+    })
+  );
+}
+
+#[test]
 fn accessibility_label_snapshot_json() {
   let html = r##"
     <html>

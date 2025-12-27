@@ -37,6 +37,8 @@ pub struct AccessibilityState {
   pub selected: Option<bool>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub pressed: Option<PressedState>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub expanded: Option<bool>,
 }
 
 impl Default for AccessibilityState {
@@ -50,6 +52,7 @@ impl Default for AccessibilityState {
       checked: None,
       selected: None,
       pressed: None,
+      expanded: None,
     }
   }
 }
@@ -275,6 +278,7 @@ fn build_nodes<'a>(
       let checked = compute_checked(node, role.as_deref(), &element_ref);
       let selected = compute_selected(node, role.as_deref(), &element_ref);
       let pressed = compute_pressed(node, role.as_deref());
+      let expanded = compute_expanded(node, role.as_deref(), ancestors);
       let visited =
         role.as_deref() == Some("link") && attr_truthy(&node.node, "data-fastr-visited");
       let focusable = compute_focusable(&node.node, role.as_deref(), disabled);
@@ -294,6 +298,7 @@ fn build_nodes<'a>(
         checked,
         selected,
         pressed,
+        expanded,
       };
 
       let should_expose = !decorative_image
@@ -537,6 +542,7 @@ fn compute_role(node: &DomNode) -> Option<String> {
     "progress" => Some("progressbar".to_string()),
     "meter" => Some("meter".to_string()),
     "output" => Some("status".to_string()),
+    "details" => Some("group".to_string()),
     "fieldset" => Some("group".to_string()),
     "main" => Some("main".to_string()),
     "nav" => Some("navigation".to_string()),
@@ -1071,6 +1077,32 @@ fn compute_pressed(node: &StyledNode, role: Option<&str>) -> Option<PressedState
 
   if role == Some("button") && attr_truthy(&node.node, "data-fastr-active") {
     return Some(PressedState::True);
+  }
+
+  None
+}
+
+fn compute_expanded(node: &StyledNode, role: Option<&str>, ancestors: &[&DomNode]) -> Option<bool> {
+  if let Some(expanded) = parse_bool_attr(&node.node, "aria-expanded") {
+    return Some(expanded);
+  }
+
+  let is_summary = node
+    .node
+    .tag_name()
+    .map(|t| t.eq_ignore_ascii_case("summary"))
+    .unwrap_or(false);
+
+  if role == Some("button") && is_summary {
+    if let Some(parent) = ancestors.last() {
+      if parent
+        .tag_name()
+        .map(|t| t.eq_ignore_ascii_case("details"))
+        .unwrap_or(false)
+      {
+        return Some(parent.get_attribute_ref("open").is_some());
+      }
+    }
   }
 
   None
