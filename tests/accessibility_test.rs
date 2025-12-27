@@ -498,6 +498,31 @@ fn accessibility_details_expanded_state() {
 }
 
 #[test]
+fn accessibility_tabindex_parsing() {
+  let mut renderer = FastRender::new().expect("renderer");
+  let html = r##"
+    <html>
+      <body>
+        <div id="t1" tabindex="-1"></div>
+        <div id="t2" tabindex="bogus"></div>
+      </body>
+    </html>
+  "##;
+  let dom = renderer.parse_html(html).expect("parse");
+  let tree = renderer
+    .accessibility_tree(&dom, 800, 600)
+    .expect("accessibility tree");
+
+  let t1 = find_by_id(&tree, "t1").expect("tabindex -1 node");
+  assert!(t1.states.focusable);
+
+  assert!(
+    find_by_id(&tree, "t2").is_none(),
+    "invalid tabindex should not make node focusable"
+  );
+}
+
+#[test]
 fn accessibility_label_snapshot_json() {
   let html = r##"
     <html>

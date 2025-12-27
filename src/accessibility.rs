@@ -1213,8 +1213,11 @@ fn compute_focusable(node: &DomNode, role: Option<&str>, disabled: bool) -> bool
     return false;
   }
 
-  if node.get_attribute_ref("tabindex").is_some() {
-    return true;
+  if let Some(tabindex) = node.get_attribute_ref("tabindex") {
+    let trimmed = tabindex.trim();
+    if !trimmed.is_empty() && trimmed.parse::<i32>().is_ok() {
+      return true;
+    }
   }
 
   let tag = match node.tag_name() {
