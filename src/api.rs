@@ -7852,6 +7852,7 @@ pub(crate) fn render_html_with_shared_resources(
     base_url,
     compat_profile: CompatProfile::default(),
     dom_compat_mode: DomCompatibilityMode::Standard,
+    fragmentation: None,
     resource_policy,
     resource_context: resource_context.clone(),
     max_iframe_depth,
