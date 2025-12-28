@@ -48,6 +48,8 @@ pub struct AccessibilityState {
   pub busy: bool,
   pub readonly: bool,
   #[serde(skip_serializing_if = "Option::is_none")]
+  pub has_popup: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
   pub checked: Option<CheckState>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub selected: Option<bool>,
@@ -71,6 +73,7 @@ impl Default for AccessibilityState {
       visited: false,
       busy: false,
       readonly: false,
+      has_popup: None,
       checked: None,
       selected: None,
       pressed: None,
@@ -414,6 +417,7 @@ fn build_nodes<'a>(
       let modal = compute_modal(&node.node);
       let current = parse_aria_current(&node.node);
       let expanded = compute_expanded(node, role.as_deref(), ancestors);
+      let has_popup = parse_has_popup(&node.node);
       let visited =
         role.as_deref() == Some("link") && attr_truthy(&node.node, "data-fastr-visited");
       let focusable = compute_focusable(&node.node, role.as_deref(), disabled);
@@ -433,6 +437,7 @@ fn build_nodes<'a>(
         visited,
         busy,
         readonly,
+        has_popup,
         checked,
         selected,
         pressed,
@@ -660,15 +665,16 @@ fn normalize_whitespace(input: &str) -> String {
 
 fn is_sectioning_ancestor(ancestors: &[&DomNode]) -> bool {
   ancestors.iter().any(|ancestor| {
-    ancestor
-      .tag_name()
-      .map(|t| {
-        matches!(
-          t.to_ascii_lowercase().as_str(),
-          "article" | "aside" | "main" | "nav" | "section" | "header" | "footer"
-        )
-      })
-      .unwrap_or(false)
+    matches!(ancestor.node_type, DomNodeType::ShadowRoot { .. })
+      || ancestor
+        .tag_name()
+        .map(|t| {
+          matches!(
+            t.to_ascii_lowercase().as_str(),
+            "article" | "aside" | "main" | "nav" | "section" | "header" | "footer"
+          )
+        })
+        .unwrap_or(false)
   })
 }
 
@@ -724,7 +730,13 @@ fn compute_role(
     "output" => Some("status".to_string()),
     "details" => Some("group".to_string()),
     "fieldset" => Some("group".to_string()),
-    "main" => Some("main".to_string()),
+    "main" => {
+      if is_sectioning_ancestor(ancestors) {
+        None
+      } else {
+        Some("main".to_string())
+      }
+    }
     "nav" => Some("navigation".to_string()),
     "header" => {
       if is_sectioning_ancestor(ancestors) {
@@ -1281,15 +1293,15 @@ fn compute_level(node: &DomNode, role: Option<&str>) -> Option<u32> {
     }
   }
 
-  let tag = node.tag_name()?.to_ascii_lowercase();
-  match tag.as_str() {
-    "h1" => Some(1),
-    "h2" => Some(2),
-    "h3" => Some(3),
-    "h4" => Some(4),
-    "h5" => Some(5),
-    "h6" => Some(6),
-    _ => None,
+  let tag = node.tag_name().map(|t| t.to_ascii_lowercase());
+  match tag.as_deref() {
+    Some("h1") => Some(1),
+    Some("h2") => Some(2),
+    Some("h3") => Some(3),
+    Some("h4") => Some(4),
+    Some("h5") => Some(5),
+    Some("h6") => Some(6),
+    _ => Some(2),
   }
 }
 
@@ -1405,7 +1417,7 @@ fn compute_checked(
     return Some(state);
   }
 
-  if matches!(role, Some("checkbox") | Some("radio")) {
+  if matches!(role, Some("checkbox") | Some("radio") | Some("switch")) {
     if element_ref.accessibility_indeterminate() {
       return Some(CheckState::Mixed);
     }
@@ -1497,6 +1509,15 @@ fn compute_expanded(node: &StyledNode, role: Option<&str>, ancestors: &[&DomNode
     }
   }
 
+  if role == Some("combobox")
+    && node
+      .node
+      .get_attribute_ref("data-fastr-open")
+      .is_some()
+  {
+    return Some(attr_truthy(&node.node, "data-fastr-open"));
+  }
+
   None
 }
 
@@ -1564,6 +1585,21 @@ fn parse_expanded(node: &DomNode) -> Option<bool> {
     "false" | "0" => Some(false),
     _ => None,
   }
+}
+
+fn parse_has_popup(node: &DomNode) -> Option<String> {
+  let value = node.get_attribute_ref("aria-haspopup")?;
+  let trimmed = value.trim();
+  if trimmed.is_empty() {
+    return Some("true".to_string());
+  }
+
+  let lower = trimmed.to_ascii_lowercase();
+  if lower == "false" || lower == "0" {
+    return None;
+  }
+
+  Some(lower)
 }
 
 fn parse_aria_invalid(node: &DomNode) -> Option<bool> {
