@@ -54,7 +54,6 @@ use crate::paint::clip_path::ResolvedClipPath;
 use crate::paint::text_rasterize::{GlyphCacheStats, TextRasterizer, TextRenderState};
 use crate::paint::text_shadow::PathBounds;
 use crate::style::color::Rgba;
-use crate::text::apply_variations_to_face;
 use crate::text::font_db::LoadedFont;
 use crate::text::pipeline::GlyphPosition;
 use crate::text::variations::FontVariation;
@@ -962,20 +961,12 @@ impl Canvas {
       return;
     }
 
-<<<<<<< HEAD
     let state = TextRenderState {
       transform: self.current_state.transform,
       clip_mask: self.current_state.clip_mask.as_ref(),
       opacity: self.current_state.opacity,
       blend_mode: self.current_state.blend_mode,
-=======
-    // Parse the font for glyph outlines
-    let mut face = match ttf_parser::Face::parse(&font.data, font.index) {
-      Ok(f) => f,
-      Err(_) => return,
->>>>>>> 944f6f1 (feat: apply font variations during paint)
     };
-    apply_variations_to_face(&mut face, variations);
 
     let _ = self.text_rasterizer.render_glyphs_with_state(
       glyphs,

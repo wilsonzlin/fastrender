@@ -387,8 +387,8 @@ impl DisplayListOptimizer {
             let mapping = Self::transform_mapping(transform);
             context_transform = context_transform.multiply(&mapping);
           }
-          let context_culling_disabled =
-            transform_state.culling_disabled() || matches!(context_transform, TransformMapping::Unsupported);
+          let context_culling_disabled = transform_state.culling_disabled()
+            || matches!(context_transform, TransformMapping::Unsupported);
           if pushed_transform {
             transform_stack.push(transform_state.clone());
             if !clip_stack.is_empty() {

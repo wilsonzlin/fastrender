@@ -88,7 +88,6 @@ use crate::style::types::TransformStyle;
 use crate::style::values::Length;
 #[cfg(test)]
 use crate::style::ComputedStyle;
-use crate::text::apply_variations_to_face;
 use crate::text::font_db::FontStretch;
 use crate::text::font_db::FontStyle as DbFontStyle;
 use crate::text::font_db::LoadedFont;
@@ -3612,7 +3611,6 @@ impl DisplayListRenderer {
       );
     };
 
-<<<<<<< HEAD
     let glyphs = Self::glyph_positions(item);
 
     if !item.shadows.is_empty() {
@@ -3620,25 +3618,6 @@ impl DisplayListRenderer {
       if !paths.is_empty() && bounds.is_valid() {
         self.render_text_shadows(&paths, &bounds, item);
       }
-=======
-    let mut face = match font.as_ttf_face() {
-      Ok(f) => f,
-      Err(_) => {
-        return Err(
-          RenderError::RasterizationFailed {
-            reason: "Unable to parse font face for text shadows".into(),
-          }
-          .into(),
-        )
-      }
-    };
-
-    apply_variations_to_face(&mut face, &item.variations);
-
-    let (paths, bounds) = self.glyph_paths(&face, item);
-    if !item.shadows.is_empty() && !paths.is_empty() && bounds.is_valid() {
-      self.render_text_shadows(&paths, &bounds, item);
->>>>>>> 944f6f1 (feat: apply font variations during paint)
     }
 
     self.canvas.draw_text(
