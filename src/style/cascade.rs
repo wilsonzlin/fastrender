@@ -527,10 +527,7 @@ impl DomMaps {
           shadow_hosts.insert(id, p);
         }
       }
-      if let Some(mapping) = node
-        .get_attribute_ref("exportparts")
-        .map(parse_exportparts)
-      {
+      if let Some(mapping) = node.get_attribute_ref("exportparts").map(parse_exportparts) {
         if !mapping.is_empty() {
           exportparts_map.insert(id, mapping);
         }
@@ -2566,6 +2563,26 @@ fn scope_rule_index<'a>(
   }
 }
 
+// Return the rule index for the current scope along with whether shadow-host context
+// should be provided during selector matching.
+fn scope_rule_index_with_shadow_host<'a>(
+  scopes: &'a RuleScopes<'a>,
+  scope_host: Option<usize>,
+) -> Option<(&'a RuleIndex<'a>, bool)> {
+  match scope_host {
+    Some(host) => scopes
+      .shadows
+      .get(&host)
+      .map(|index| (index, true))
+      .or_else(|| {
+        scopes
+          .fallback_document_rules_in_shadow_scopes
+          .then_some((&scopes.document, false))
+      }),
+    None => Some((&scopes.document, false)),
+  }
+}
+
 fn scope_has_pseudo_rules(
   scopes: &RuleScopes<'_>,
   scope_host: Option<usize>,
@@ -2715,7 +2732,9 @@ fn match_part_rules<'a>(
     };
 
     if let Some(scope_host) = containing_scope_host_id(dom_maps, host) {
-      if let Some(rules) = scope_rule_index(scopes, scope_host) {
+      if let Some((rules, allow_shadow_host)) =
+        scope_rule_index_with_shadow_host(scopes, scope_host)
+      {
         if rules.part_pseudos.is_empty() {
           names = mapped_names;
           if names.is_empty() {
@@ -2764,6 +2783,7 @@ fn match_part_rules<'a>(
               host_ancestors,
               slot_map,
               &info.pseudo,
+              allow_shadow_host,
             );
             for rule in part_matches {
               if let Some(pos) = matched_by_order.get(&rule.order).copied() {
@@ -2831,9 +2851,10 @@ fn collect_matching_rules<'a>(
     dom_maps,
     slot_assignment,
     current_slot_map,
+    false,
   );
 
-  if let Some(base) = scope_rule_index(scopes, scope_host) {
+  if let Some((base, allow_shadow_host)) = scope_rule_index_with_shadow_host(scopes, scope_host) {
     let base_slot_map = match scope_host {
       Some(host) => slot_map_for_host(host),
       None => current_slot_map,
@@ -2850,6 +2871,7 @@ fn collect_matching_rules<'a>(
       dom_maps,
       slot_assignment,
       base_slot_map,
+      allow_shadow_host,
     ));
   }
 
@@ -2871,6 +2893,7 @@ fn collect_matching_rules<'a>(
           dom_maps,
           slot_assignment,
           current_slot_map,
+          false,
         ));
       }
     }
@@ -2890,6 +2913,7 @@ fn collect_matching_rules<'a>(
       dom_maps,
       slot_assignment,
       host_slot_map,
+      true,
     ));
   }
 
@@ -2909,6 +2933,7 @@ fn collect_matching_rules<'a>(
           dom_maps,
           slot_assignment,
           scopes.slot_maps.get(&slot.shadow_root_id),
+          true,
         ));
       }
     }
@@ -2966,9 +2991,10 @@ fn collect_pseudo_matching_rules<'a>(
     ancestors,
     current_slot_map,
     pseudo,
+    false,
   );
 
-  if let Some(base) = scope_rule_index(scopes, scope_host) {
+  if let Some((base, allow_shadow_host)) = scope_rule_index_with_shadow_host(scopes, scope_host) {
     matches.extend(find_pseudo_element_rules(
       node,
       base,
@@ -2977,6 +3003,7 @@ fn collect_pseudo_matching_rules<'a>(
       ancestors,
       base_slot_map,
       pseudo,
+      allow_shadow_host,
     ));
   }
 
@@ -2991,6 +3018,7 @@ fn collect_pseudo_matching_rules<'a>(
           ancestors,
           current_slot_map,
           pseudo,
+          false,
         ));
       }
     }
@@ -3005,6 +3033,7 @@ fn collect_pseudo_matching_rules<'a>(
       ancestors,
       slot_map_for_host(node_id),
       pseudo,
+      true,
     ));
   }
 
@@ -7868,6 +7897,7 @@ mod tests {
       &ancestors,
       None,
       &PseudoElement::Marker,
+      false,
     );
     assert_eq!(
       marker_matches.len(),
@@ -8505,6 +8535,7 @@ fn find_matching_rules<'a>(
   dom_maps: &DomMaps,
   slot_assignment: &SlotAssignment,
   slot_map: Option<&'a SlotAssignmentMap<'a>>,
+  allow_shadow_host: bool,
 ) -> Vec<MatchedRule<'a>> {
   if !node.is_element() {
     return Vec::new();
@@ -8528,7 +8559,11 @@ fn find_matching_rules<'a>(
 
   // Build ElementRef chain with proper parent links
   let element_ref = build_element_ref_chain(node, ancestors, slot_map);
-  let shadow_host = shadow_host_ref(node, ancestors, slot_map);
+  let shadow_host = if allow_shadow_host {
+    shadow_host_ref(node, ancestors, slot_map)
+  } else {
+    None
+  };
 
   // Create selector caches and matching context
   let mut context = MatchingContext::new_for_visited(
@@ -8598,23 +8633,24 @@ fn find_matching_rules<'a>(
     let selector = indexed.selector;
     let mut selector_matches = if let Some(scope_root) = &scope_for_rule {
       let scope_ref = ElementRef::with_ancestors(scope_root.root, &scope_root.ancestors);
-      with_shadow_host(&mut context, shadow_host, |ctx| {
+      match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
         ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
           matches_selector(selector, 0, None, &element_ref, ctx)
         })
       })
     } else {
-      with_shadow_host(&mut context, shadow_host, |ctx| {
+      match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
         matches_selector(selector, 0, None, &element_ref, ctx)
       })
     };
 
-    if !selector_matches && selector_contains_host_context(selector) {
-      selector_matches = with_shadow_host(&mut context, shadow_host, |ctx| {
-        ctx.with_featureless(false, |ctx| {
-          matches_selector(selector, 0, None, &element_ref, ctx)
-        })
-      });
+    if allow_shadow_host && !selector_matches && selector_contains_host_context(selector) {
+      selector_matches =
+        match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
+          ctx.with_featureless(false, |ctx| {
+            matches_selector(selector, 0, None, &element_ref, ctx)
+          })
+        });
     }
 
     if selector_matches {
@@ -8700,26 +8736,37 @@ fn find_matching_rules<'a>(
     let mut best_arg_specificity: Option<u32> = None;
     if let Some(scope_root) = &scope_for_rule {
       let scope_ref = ElementRef::with_ancestors(scope_root.root, &scope_root.ancestors);
-      with_shadow_host(&mut context, shadow_host_for_slotted, |ctx| {
-        ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
+      match_with_shadow_host(
+        allow_shadow_host,
+        &mut context,
+        shadow_host_for_slotted,
+        |ctx| {
+          ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
+            for sel in args.iter() {
+              if matches_selector(sel, 0, None, &element_ref, ctx) {
+                let spec = sel.specificity();
+                best_arg_specificity =
+                  Some(best_arg_specificity.map_or(spec, |best| best.max(spec)));
+              }
+            }
+            best_arg_specificity.is_some()
+          })
+        },
+      );
+    } else {
+      match_with_shadow_host(
+        allow_shadow_host,
+        &mut context,
+        shadow_host_for_slotted,
+        |ctx| {
           for sel in args.iter() {
             if matches_selector(sel, 0, None, &element_ref, ctx) {
               let spec = sel.specificity();
               best_arg_specificity = Some(best_arg_specificity.map_or(spec, |best| best.max(spec)));
             }
           }
-          best_arg_specificity.is_some()
-        })
-      });
-    } else {
-      with_shadow_host(&mut context, shadow_host_for_slotted, |ctx| {
-        for sel in args.iter() {
-          if matches_selector(sel, 0, None, &element_ref, ctx) {
-            let spec = sel.specificity();
-            best_arg_specificity = Some(best_arg_specificity.map_or(spec, |best| best.max(spec)));
-          }
-        }
-      });
+        },
+      );
     }
 
     let Some(best_arg_specificity) = best_arg_specificity else {
@@ -8739,15 +8786,23 @@ fn find_matching_rules<'a>(
       let slot_ref = ElementRef::with_ancestors(slot_node, &slot_ancestors);
       let slot_matches = if let Some(scope_root) = &scope_for_rule {
         let scope_ref = ElementRef::with_ancestors(scope_root.root, &scope_root.ancestors);
-        with_shadow_host(&mut context, shadow_host_for_slotted, |ctx| {
-          ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
-            matches_selector(prelude, 0, None, &slot_ref, ctx)
-          })
-        })
+        match_with_shadow_host(
+          allow_shadow_host,
+          &mut context,
+          shadow_host_for_slotted,
+          |ctx| {
+            ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
+              matches_selector(prelude, 0, None, &slot_ref, ctx)
+            })
+          },
+        )
       } else {
-        with_shadow_host(&mut context, shadow_host_for_slotted, |ctx| {
-          matches_selector(prelude, 0, None, &slot_ref, ctx)
-        })
+        match_with_shadow_host(
+          allow_shadow_host,
+          &mut context,
+          shadow_host_for_slotted,
+          |ctx| matches_selector(prelude, 0, None, &slot_ref, ctx),
+        )
       };
       if !slot_matches {
         continue;
@@ -8802,6 +8857,7 @@ fn find_pseudo_element_rules<'a>(
   ancestors: &[&DomNode],
   slot_map: Option<&SlotAssignmentMap<'a>>,
   pseudo: &PseudoElement,
+  allow_shadow_host: bool,
 ) -> Vec<MatchedRule<'a>> {
   if !node.is_element() {
     return Vec::new();
@@ -8829,7 +8885,11 @@ fn find_pseudo_element_rules<'a>(
 
   // Build ElementRef chain with proper parent links
   let element_ref = build_element_ref_chain(node, ancestors, slot_map);
-  let shadow_host = shadow_host_ref(node, ancestors, slot_map);
+  let shadow_host = if allow_shadow_host {
+    shadow_host_ref(node, ancestors, slot_map)
+  } else {
+    None
+  };
 
   // Create selector caches and matching context
   let mut context = MatchingContext::new(
@@ -8878,23 +8938,24 @@ fn find_pseudo_element_rules<'a>(
     let selector = indexed.selector;
     let mut selector_matches = if let Some(scope_root) = &scope_for_rule {
       let scope_ref = ElementRef::with_ancestors(scope_root.root, &scope_root.ancestors);
-      with_shadow_host(&mut context, shadow_host, |ctx| {
+      match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
         ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
           matches_selector(selector, 0, None, &element_ref, ctx)
         })
       })
     } else {
-      with_shadow_host(&mut context, shadow_host, |ctx| {
+      match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
         matches_selector(selector, 0, None, &element_ref, ctx)
       })
     };
 
-    if !selector_matches && selector_contains_host_context(selector) {
-      selector_matches = with_shadow_host(&mut context, shadow_host, |ctx| {
-        ctx.with_featureless(false, |ctx| {
-          matches_selector(selector, 0, None, &element_ref, ctx)
-        })
-      });
+    if allow_shadow_host && !selector_matches && selector_contains_host_context(selector) {
+      selector_matches =
+        match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
+          ctx.with_featureless(false, |ctx| {
+            matches_selector(selector, 0, None, &element_ref, ctx)
+          })
+        });
     }
 
     if selector_matches {
@@ -9652,6 +9713,23 @@ where
   };
   context.extra_data.shadow_host = prev_shadow_host;
   result
+}
+
+// Only inject a shadow-host context for selectors that originate from shadow-scoped styles.
+fn match_with_shadow_host<'a, F, R>(
+  allow_shadow_host: bool,
+  context: &mut MatchingContext<FastRenderSelectorImpl>,
+  shadow_host: Option<ElementRef<'a>>,
+  f: F,
+) -> R
+where
+  F: FnOnce(&mut MatchingContext<FastRenderSelectorImpl>) -> R,
+{
+  if allow_shadow_host {
+    with_shadow_host(context, shadow_host, f)
+  } else {
+    f(context)
+  }
 }
 
 fn selector_contains_host_context(

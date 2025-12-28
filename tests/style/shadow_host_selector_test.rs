@@ -2,10 +2,14 @@ use fastrender::css::parser::parse_stylesheet;
 use fastrender::css::selectors::ShadowMatchData;
 use fastrender::css::types::CssRule;
 use fastrender::dom::{
-  next_selector_cache_epoch, DomNode, DomNodeType, ElementRef, HTML_NAMESPACE,
+  self, next_selector_cache_epoch, DomNode, DomNodeType, ElementRef, HTML_NAMESPACE,
 };
-use fastrender::style::cascade::apply_styles;
+use fastrender::style::cascade::{
+  apply_style_set_with_media_target_and_imports, apply_styles, StyledNode,
+};
 use fastrender::style::defaults::get_default_styles_for_element;
+use fastrender::style::media::MediaContext;
+use fastrender::style::style_set::StyleSet;
 use selectors::matching::{
   matches_selector, MatchingContext, MatchingForInvalidation, MatchingMode, NeedsSelectorFlags,
   QuirksMode, SelectorCaches,
@@ -23,6 +27,21 @@ fn host_element() -> DomNode {
   }
 }
 
+fn find_styled_by_id<'a>(node: &'a StyledNode, id: &str) -> Option<&'a StyledNode> {
+  if node
+    .node
+    .get_attribute_ref("id")
+    .is_some_and(|value| value.eq_ignore_ascii_case(id))
+  {
+    return Some(node);
+  }
+
+  node
+    .children
+    .iter()
+    .find_map(|child| find_styled_by_id(child, id))
+}
+
 #[test]
 fn document_host_selector_is_ignored() {
   let dom = host_element();
@@ -34,6 +53,33 @@ fn document_host_selector_is_ignored() {
   assert_eq!(
     styled.styles.padding_left, defaults.padding_left,
     ":host from document stylesheets should not match"
+  );
+}
+
+#[test]
+fn document_host_selector_is_ignored_for_real_shadow_host() {
+  let html = r#"
+    <div id="host">
+      <template shadowroot="open">
+        <div>shadow child</div>
+      </template>
+    </div>
+  "#;
+
+  let dom = dom::parse_html(html).expect("parse html");
+  let stylesheet = parse_stylesheet(":host { padding-left: 5px; }").unwrap();
+  let style_set = StyleSet::from_document(stylesheet);
+  let media = MediaContext::screen(800.0, 600.0);
+  let styled = apply_style_set_with_media_target_and_imports(
+    &dom, &style_set, &media, None, None, None, None, None, None,
+  );
+
+  let host = find_styled_by_id(&styled, "host").expect("host element styled");
+  let defaults = get_default_styles_for_element(&host.node);
+
+  assert_eq!(
+    host.styles.padding_left, defaults.padding_left,
+    "Document :host selectors should not match real shadow hosts"
   );
 }
 
