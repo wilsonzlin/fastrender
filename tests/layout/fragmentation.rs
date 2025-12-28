@@ -287,6 +287,69 @@ fn forced_break_overrides_natural_flow() {
 }
 
 #[test]
+fn column_break_hints_follow_column_context() {
+  let mut first_style = ComputedStyle::default();
+  first_style.break_after = BreakBetween::Column;
+  let first = FragmentNode::new_block_styled(
+    Rect::from_xywh(0.0, 0.0, 50.0, 20.0),
+    vec![],
+    Arc::new(first_style),
+  );
+  let second = FragmentNode::new_block(Rect::from_xywh(0.0, 20.0, 50.0, 20.0), vec![]);
+  let root = FragmentNode::new_block(
+    Rect::from_xywh(0.0, 0.0, 50.0, 40.0),
+    vec![first, second],
+  );
+
+  let options = FragmentationOptions::new(80.0).with_columns(2, 0.0);
+  let fragments = fragment_tree(&root, &options);
+
+  assert_eq!(
+    fragments.len(),
+    2,
+    "forced column break should split fragments even when content fits"
+  );
+
+  let first_children: Vec<_> = fragments[0]
+    .children
+    .iter()
+    .filter(|child| matches!(child.content, FragmentContent::Block { .. }))
+    .collect();
+  let second_children: Vec<_> = fragments[1]
+    .children
+    .iter()
+    .filter(|child| matches!(child.content, FragmentContent::Block { .. }))
+    .collect();
+
+  assert_eq!(
+    first_children.len(),
+    1,
+    "first fragment should only include the pre-break block"
+  );
+  assert_eq!(
+    second_children.len(),
+    1,
+    "second fragment should only include the post-break block"
+  );
+  assert_eq!(
+    first_children[0]
+      .style
+      .as_ref()
+      .map(|s| s.break_after)
+      .unwrap_or(BreakBetween::Auto),
+    BreakBetween::Column
+  );
+  assert_eq!(
+    second_children[0]
+      .style
+      .as_ref()
+      .map(|s| s.break_after)
+      .unwrap_or(BreakBetween::Auto),
+    BreakBetween::Auto
+  );
+}
+
+#[test]
 fn break_inside_avoid_keeps_block_together() {
   let mut avoid_style = ComputedStyle::default();
   avoid_style.break_inside = BreakInside::Avoid;
