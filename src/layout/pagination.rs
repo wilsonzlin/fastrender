@@ -13,9 +13,8 @@ use crate::layout::formatting_context::{
 };
 use crate::layout::fragmentation::{
   clip_node_with_axes, collect_atomic_ranges_with_axes, collect_forced_boundaries_with_axes,
-  normalize_atomic_ranges, normalize_fragment_margins_with_axes,
-  resolve_fragmentation_boundaries_with_axes, FragmentationContext, propagate_fragment_metadata,
-  AtomicRange, ForcedBoundary,
+  normalize_atomic_ranges, normalize_fragment_margins_with_axes, propagate_fragment_metadata,
+  resolve_fragmentation_boundaries_with_axes, AtomicRange, ForcedBoundary, FragmentationContext,
 };
 use crate::layout::running_strings::{collect_string_set_events, StringSetEvent};
 use crate::style::content::{
@@ -138,10 +137,17 @@ impl CachedLayout {
         }),
     );
     let mut atomic_ranges = Vec::new();
-    collect_atomic_ranges_with_axes(&root, 0.0, axes, &mut atomic_ranges);
+    let fragmentainer = page_block_size(style, axes).max(EPSILON);
+    collect_atomic_ranges_with_axes(
+      &root,
+      0.0,
+      axes,
+      &mut atomic_ranges,
+      FragmentationContext::Page,
+      Some(fragmentainer),
+    );
     normalize_atomic_ranges(&mut atomic_ranges);
 
-    let fragmentainer = page_block_size(style, axes).max(EPSILON);
     let mut boundaries = resolve_fragmentation_boundaries_with_axes(
       &root,
       fragmentainer,
@@ -278,11 +284,7 @@ pub fn paginate_fragment_tree(
   let base_root = base_layout.root.clone();
 
   let mut string_set_events = collect_string_set_events(&base_root, box_tree);
-  string_set_events.sort_by(|a, b| {
-    a.abs_y
-      .partial_cmp(&b.abs_y)
-      .unwrap_or(Ordering::Equal)
-  });
+  string_set_events.sort_by(|a, b| a.abs_y.partial_cmp(&b.abs_y).unwrap_or(Ordering::Equal));
   let mut string_event_idx = 0usize;
   let mut string_set_carry: HashMap<String, String> = HashMap::new();
 
@@ -426,6 +428,7 @@ pub fn paginate_fragment_tree(
         axes,
         page_index,
         0,
+        FragmentationContext::Page,
       );
       if let Some(mut content) = clipped {
         strip_fixed_fragments(&mut content);

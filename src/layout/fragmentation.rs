@@ -178,7 +178,15 @@ pub fn resolve_fragmentation_boundaries_with_context(
 
   let total_height = root.logical_bounding_box().height().max(fragmentainer_size);
   let mut collection = BreakCollection::default();
-  collect_break_opportunities(root, 0.0, &mut collection, 0, 0, context);
+  collect_break_opportunities(
+    root,
+    0.0,
+    &mut collection,
+    0,
+    0,
+    context,
+    fragmentainer_size,
+  );
   collection.opportunities.push(BreakOpportunity {
     pos: total_height,
     strength: BreakStrength::Forced,
@@ -259,7 +267,9 @@ pub fn fragment_tree(root: &FragmentNode, options: &FragmentationOptions) -> Vec
       continue;
     }
 
-    if let Some(mut clipped) = clip_node(root, start, end, 0.0, start, index, fragment_count) {
+    if let Some(mut clipped) =
+      clip_node(root, start, end, 0.0, start, index, fragment_count, context)
+    {
       normalize_fragment_margins(&mut clipped, index == 0, index + 1 == fragment_count);
       propagate_fragment_metadata(&mut clipped, index, fragment_count);
 
@@ -301,6 +311,7 @@ pub(crate) fn clip_node(
   parent_clipped_abs_start: f32,
   fragment_index: usize,
   fragment_count: usize,
+  context: FragmentationContext,
 ) -> Option<FragmentNode> {
   let node_abs_start = parent_abs_start + node.bounds.y();
   let node_abs_end = node_abs_start + node.bounds.height();
@@ -325,7 +336,7 @@ pub(crate) fn clip_node(
       | Display::TableHeaderGroup
       | Display::TableFooterGroup
   );
-  let mut avoid_inside = matches!(style.break_inside, BreakInside::Avoid) || is_table_row_like;
+  let mut avoid_inside = avoids_break_inside(style.break_inside, context) || is_table_row_like;
   if avoid_inside && node.bounds.height() > (fragment_end - fragment_start) + 0.01 {
     avoid_inside = false;
   }
@@ -423,6 +434,7 @@ pub(crate) fn clip_node(
       clipped_abs_start,
       fragment_index,
       fragment_count,
+      context,
     ) {
       cloned.children.push(child_clipped);
     }
@@ -435,6 +447,49 @@ pub(crate) fn clip_node(
   Some(cloned)
 }
 
+<<<<<<< HEAD
+=======
+/// Axis-aware wrapper around [`clip_node`]. The fragmentation algorithm currently operates in
+/// physical block progression; for the common horizontal-tb writing mode this defers to the
+/// primary implementation and otherwise falls back to the same logic.
+pub(crate) fn clip_node_with_axes(
+  node: &FragmentNode,
+  fragment_start: f32,
+  fragment_end: f32,
+  parent_abs_start: f32,
+  parent_clipped_abs_start: f32,
+  _parent_block_size: f32,
+  axes: FragmentAxes,
+  fragment_index: usize,
+  fragment_count: usize,
+  context: FragmentationContext,
+) -> Option<FragmentNode> {
+  if axes.block_axis() == PhysicalAxis::Y && axes.block_positive() {
+    return clip_node(
+      node,
+      fragment_start,
+      fragment_end,
+      parent_abs_start,
+      parent_clipped_abs_start,
+      fragment_index,
+      fragment_count,
+      context,
+    );
+  }
+
+  clip_node(
+    node,
+    fragment_start,
+    fragment_end,
+    parent_abs_start,
+    parent_clipped_abs_start,
+    fragment_index,
+    fragment_count,
+    context,
+  )
+}
+
+>>>>>>> 6922fdc (Respect break-inside avoid for pages and columns)
 fn clone_without_children(node: &FragmentNode) -> FragmentNode {
   FragmentNode {
     bounds: node.bounds,
@@ -676,6 +731,7 @@ fn collect_break_opportunities(
   avoid_depth: usize,
   inline_depth: usize,
   context: FragmentationContext,
+  fragmentainer_size: f32,
 ) {
   let default_style = default_style();
   let style = node
@@ -699,13 +755,14 @@ fn collect_break_opportunities(
       FragmentContent::Line { .. } | FragmentContent::Inline { .. }
     ));
 
-  let abs_end = abs_start + node.bounds.height();
-  if style.float.is_floating() {
-    collection.atomic.push(AtomicRange {
-      start: abs_start,
-      end: abs_end,
-    });
-  }
+  collect_atomic_range_for_node(
+    node,
+    abs_start,
+    FragmentAxes::default(),
+    &mut collection.atomic,
+    context,
+    Some(fragmentainer_size),
+  );
 
   let mut line_positions: Vec<Option<(usize, f32)>> = vec![None; node.children.len()];
   let mut line_ends = Vec::new();
@@ -785,6 +842,7 @@ fn collect_break_opportunities(
       inside_avoid,
       inside_inline,
       context,
+      fragmentainer_size,
     );
 
     let mut strength = combine_breaks(child_style.break_after, next_style.break_before, context);
@@ -1095,11 +1153,57 @@ fn next_atomic_in_range(start: f32, end: f32, atomic: &[AtomicRange]) -> Option<
     })
 }
 
+fn collect_atomic_range_for_node(
+  node: &FragmentNode,
+  abs_start: f32,
+  axes: FragmentAxes,
+  ranges: &mut Vec<AtomicRange>,
+  context: FragmentationContext,
+  fragmentainer_size: Option<f32>,
+) {
+  let default_style = default_style();
+  let style = node
+    .style
+    .as_ref()
+    .map(|s| s.as_ref())
+    .unwrap_or(default_style);
+  let node_block_size = axes.block_size(&node.bounds);
+  let start = abs_start;
+  let end = abs_start + node_block_size;
+  if end <= start + BREAK_EPSILON {
+    return;
+  }
+
+  let height = end - start;
+  if style.float.is_floating() {
+    ranges.push(AtomicRange { start, end });
+  }
+
+  let is_table_row_like = matches!(
+    style.display,
+    Display::TableRow
+      | Display::TableRowGroup
+      | Display::TableHeaderGroup
+      | Display::TableFooterGroup
+  );
+  let avoid_inside = avoids_break_inside(style.break_inside, context) || is_table_row_like;
+  let fits_fragmentainer = fragmentainer_size
+    .map(|size| height <= size + BREAK_EPSILON)
+    .unwrap_or(true);
+
+  if avoid_inside && (fits_fragmentainer || !matches!(context, FragmentationContext::Page)) {
+    ranges.push(AtomicRange { start, end });
+  }
+}
+
 pub(crate) fn collect_atomic_ranges(
   node: &FragmentNode,
   abs_start: f32,
   ranges: &mut Vec<AtomicRange>,
+  context: FragmentationContext,
+  fragmentainer_size: Option<f32>,
 ) {
+<<<<<<< HEAD
   let abs_end = abs_start + node.bounds.height();
   if node
     .style
@@ -1111,10 +1215,44 @@ pub(crate) fn collect_atomic_ranges(
       end: abs_end,
     });
   }
+=======
+  collect_atomic_ranges_with_axes(
+    node,
+    abs_start,
+    FragmentAxes::default(),
+    ranges,
+    context,
+    fragmentainer_size,
+  );
+}
 
+pub(crate) fn collect_atomic_ranges_with_axes(
+  node: &FragmentNode,
+  abs_start: f32,
+  axes: FragmentAxes,
+  ranges: &mut Vec<AtomicRange>,
+  context: FragmentationContext,
+  fragmentainer_size: Option<f32>,
+) {
+  collect_atomic_range_for_node(node, abs_start, axes, ranges, context, fragmentainer_size);
+>>>>>>> 6922fdc (Respect break-inside avoid for pages and columns)
+
+  let node_block_size = axes.block_size(&node.bounds);
   for child in &node.children {
+<<<<<<< HEAD
     let child_abs_start = abs_start + child.bounds.y();
     collect_atomic_ranges(child, child_abs_start, ranges);
+=======
+    let child_abs_start = abs_start + axes.block_start(&child.bounds, node_block_size);
+    collect_atomic_ranges_with_axes(
+      child,
+      child_abs_start,
+      axes,
+      ranges,
+      context,
+      fragmentainer_size,
+    );
+>>>>>>> 6922fdc (Respect break-inside avoid for pages and columns)
   }
 }
 

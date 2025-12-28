@@ -5,6 +5,7 @@ use fastrender::style::color::Rgba;
 use fastrender::style::display::FormattingContextType;
 use fastrender::style::types::BorderStyle;
 use fastrender::style::types::BreakBetween;
+use fastrender::style::types::BreakInside;
 use fastrender::style::types::ColumnFill;
 use fastrender::style::types::ColumnSpan;
 use fastrender::style::types::WhiteSpace;
@@ -480,6 +481,46 @@ fn break_before_column_advances_column() {
   assert!(first_frag.bounds.x() < 0.1);
   assert!(second_frag.bounds.x() > 90.0);
   assert!(second_frag.bounds.y() < 0.1);
+}
+
+#[test]
+fn avoid_column_blocks_stay_whole() {
+  let mut parent_style = ComputedStyle::default();
+  parent_style.width = Some(Length::px(200.0));
+  parent_style.column_count = Some(2);
+  parent_style.column_gap = Length::px(0.0);
+  let parent_style = Arc::new(parent_style);
+
+  let mut child_style = ComputedStyle::default();
+  child_style.height = Some(Length::px(80.0));
+  child_style.break_inside = BreakInside::AvoidColumn;
+  let child_style = Arc::new(child_style);
+
+  let mut child = BoxNode::new_block(child_style, FormattingContextType::Block, vec![]);
+  child.id = 77;
+
+  let mut parent = BoxNode::new_block(
+    parent_style,
+    FormattingContextType::Block,
+    vec![child.clone()],
+  );
+  parent.id = 78;
+
+  let fc = BlockFormattingContext::new();
+  let fragment = fc
+    .layout(&parent, &LayoutConstraints::definite_width(200.0))
+    .expect("layout");
+
+  let child_frags = fragments_with_id(&fragment, child.id);
+  assert_eq!(
+    child_frags.len(),
+    1,
+    "avoid-column block should not split across columns"
+  );
+  assert!(
+    (child_frags[0].bounds.height() - 80.0).abs() < 0.1,
+    "avoided block should keep its full height"
+  );
 }
 
 #[test]

@@ -70,6 +70,22 @@ fn collect_lines<'a>(fragment: &'a FragmentNode) -> Vec<&'a FragmentNode> {
   lines
 }
 
+fn fragments_with_id<'a>(fragment: &'a FragmentNode, id: usize) -> Vec<&'a FragmentNode> {
+  let mut out = Vec::new();
+  let mut stack = vec![fragment];
+  while let Some(node) = stack.pop() {
+    if let FragmentContent::Block { box_id: Some(b) } = node.content {
+      if b == id {
+        out.push(node);
+      }
+    }
+    for child in &node.children {
+      stack.push(child);
+    }
+  }
+  out
+}
+
 #[test]
 fn pagination_respects_gap_and_forced_break() {
   let mut breaker_style = ComputedStyle::default();
@@ -302,6 +318,47 @@ fn break_inside_avoid_keeps_block_together() {
   assert!(
     (trailing_height - 20.0).abs() < 0.1,
     "trailing block should appear in the final fragment"
+  );
+}
+
+#[test]
+fn avoid_page_blocks_aren_t_split_across_pages() {
+  let mut avoid_style = ComputedStyle::default();
+  avoid_style.break_inside = BreakInside::AvoidPage;
+  let avoid_style = Arc::new(avoid_style);
+
+  let leading = FragmentNode::new_block_with_id(Rect::from_xywh(0.0, 0.0, 40.0, 6.0), 1, vec![]);
+  let mut avoid = FragmentNode::new_block_with_id(Rect::from_xywh(0.0, 6.0, 40.0, 8.0), 2, vec![]);
+  avoid.style = Some(avoid_style);
+  let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 50.0, 20.0), vec![leading, avoid]);
+
+  let fragments = fragment_tree(&root, &FragmentationOptions::new(10.0));
+
+  assert!(
+    fragments.len() >= 2,
+    "overflowing content should fragment across pages"
+  );
+
+  assert!(
+    fragments_with_id(&fragments[0], 2).is_empty(),
+    "avoid-page content should be pushed out of the fragment that would slice it"
+  );
+  let avoid_fragments: Vec<_> = fragments
+    .iter()
+    .flat_map(|fragment| fragments_with_id(fragment, 2))
+    .collect();
+  assert_eq!(
+    avoid_fragments.len(),
+    1,
+    "avoid-page content should stay intact across pagination"
+  );
+  assert!(
+    avoid_fragments[0].fragment_index > 0,
+    "avoid-page block should be moved wholly into a later fragmentainer"
+  );
+  assert!(
+    (avoid_fragments[0].bounds.height() - 8.0).abs() < 0.1,
+    "avoid-page block should retain its full height when fragmented"
   );
 }
 
@@ -584,7 +641,11 @@ fn break_before_column_only_applies_in_column_context() {
 
   let page_boundaries =
     resolve_fragmentation_boundaries_with_context(&root, 100.0, FragmentationContext::Page);
-  assert_eq!(page_boundaries.len(), 2, "page context ignores column breaks");
+  assert_eq!(
+    page_boundaries.len(),
+    2,
+    "page context ignores column breaks"
+  );
 
   let column_boundaries =
     resolve_fragmentation_boundaries_with_context(&root, 100.0, FragmentationContext::Column);
@@ -608,21 +669,40 @@ fn table_headers_repeat_across_fragments() {
     FragmentNode::new_block_styled(bounds, children, Arc::new(style))
   };
 
-  let header_cell = make(Display::TableCell, Rect::from_xywh(0.0, 0.0, 100.0, 12.0), vec![]);
+  let header_cell = make(
+    Display::TableCell,
+    Rect::from_xywh(0.0, 0.0, 100.0, 12.0),
+    vec![],
+  );
   let header_row = make(
     Display::TableRow,
     Rect::from_xywh(0.0, 0.0, 100.0, 12.0),
     vec![header_cell],
   );
-  let header_group =
-    make(Display::TableHeaderGroup, Rect::from_xywh(0.0, 0.0, 100.0, 12.0), vec![header_row]);
+  let header_group = make(
+    Display::TableHeaderGroup,
+    Rect::from_xywh(0.0, 0.0, 100.0, 12.0),
+    vec![header_row],
+  );
 
   let mut rows = Vec::new();
   let mut y = 12.0;
   for _ in 0..6 {
-    let cell = make(Display::TableCell, Rect::from_xywh(0.0, 0.0, 100.0, 12.0), vec![]);
-    let row = make(Display::TableRow, Rect::from_xywh(0.0, 0.0, 100.0, 12.0), vec![cell]);
-    let row_group = make(Display::TableRowGroup, Rect::from_xywh(0.0, y, 100.0, 12.0), vec![row]);
+    let cell = make(
+      Display::TableCell,
+      Rect::from_xywh(0.0, 0.0, 100.0, 12.0),
+      vec![],
+    );
+    let row = make(
+      Display::TableRow,
+      Rect::from_xywh(0.0, 0.0, 100.0, 12.0),
+      vec![cell],
+    );
+    let row_group = make(
+      Display::TableRowGroup,
+      Rect::from_xywh(0.0, y, 100.0, 12.0),
+      vec![row],
+    );
     rows.push(row_group);
     y += 12.0;
   }

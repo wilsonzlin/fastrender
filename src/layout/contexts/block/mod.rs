@@ -2148,9 +2148,16 @@ impl BlockFormattingContext {
         continue;
       }
 
-      if let Some(mut clipped) =
-        clip_node(&flow_root, start, end, 0.0, start, index, fragment_count)
-      {
+      if let Some(mut clipped) = clip_node(
+        &flow_root,
+        start,
+        end,
+        0.0,
+        start,
+        index,
+        fragment_count,
+        FragmentationContext::Column,
+      ) {
         normalize_fragment_margins(&mut clipped, index == 0, index + 1 >= fragment_count);
         // `clip_node` preserves existing logical overrides from the unclipped flow tree.
         // For multi-column layout we translate fragments into column coordinates, so ensure
