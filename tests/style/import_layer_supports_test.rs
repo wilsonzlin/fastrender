@@ -110,6 +110,21 @@ fn import_layer_participates_in_layer_ordering() {
 }
 
 #[test]
+fn anonymous_import_layer_stays_below_later_layers() {
+  let loader =
+    MapImportLoader::new().with("https://example.com/a.css", "#t { color: rgb(1, 2, 3); }");
+  let target = styled_target(
+    r#"
+      @import "a.css" layer;
+      @layer b { #t { color: rgb(9, 9, 9); } }
+    "#,
+    &loader,
+  );
+
+  assert_eq!(target.styles.color, Rgba::rgb(9, 9, 9));
+}
+
+#[test]
 fn import_modifiers_are_order_insensitive() {
   let loader =
     MapImportLoader::new().with("https://example.com/a.css", "#t { color: rgb(1, 2, 3); }");
