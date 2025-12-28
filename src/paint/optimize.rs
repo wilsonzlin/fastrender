@@ -387,6 +387,8 @@ impl DisplayListOptimizer {
             let mapping = Self::transform_mapping(transform);
             context_transform = context_transform.multiply(&mapping);
           }
+          let context_culling_disabled =
+            transform_state.culling_disabled() || matches!(context_transform, TransformMapping::Unsupported);
           if pushed_transform {
             transform_stack.push(transform_state.clone());
             if !clip_stack.is_empty() {
@@ -395,11 +397,13 @@ impl DisplayListOptimizer {
               }
               refresh_context_clipping(&mut context_stack, &clip_stack);
             }
-            transform_state.current = if sc.child_perspective.is_some() {
-              TransformMapping::Unsupported
-            } else {
-              context_transform.clone()
-            };
+            transform_state.current = context_transform.clone();
+            if sc.child_perspective.is_some() {
+              // Perspective applies to descendants, not the stacking context plane itself.
+              // Keep the mapping so the root can still be culled while avoiding aggressive
+              // culling within the projected subtree.
+              transform_state.suppress_culling = true;
+            }
           }
           let filters_outset = filter_outset_with_bounds(&sc.filters, 1.0, Some(sc.bounds));
           let backdrop_outset =
@@ -426,7 +430,7 @@ impl DisplayListOptimizer {
             item: sc.clone(),
             transform_for_bounds,
             clipped_by_clip: clip_stack.iter().any(|c| c.can_cull),
-            culling_disabled: matches!(context_transform, TransformMapping::Unsupported),
+            culling_disabled: context_culling_disabled,
             pushed_transform,
           });
           include_item = true;
@@ -945,11 +949,12 @@ impl TransformMapping {
 #[derive(Clone)]
 struct TransformState {
   current: TransformMapping,
+  suppress_culling: bool,
 }
 
 impl TransformState {
   fn culling_disabled(&self) -> bool {
-    matches!(self.current, TransformMapping::Unsupported)
+    self.suppress_culling || matches!(self.current, TransformMapping::Unsupported)
   }
 }
 
@@ -957,6 +962,7 @@ impl Default for TransformState {
   fn default() -> Self {
     Self {
       current: TransformMapping::identity(),
+      suppress_culling: false,
     }
   }
 }
