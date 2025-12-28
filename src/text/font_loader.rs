@@ -42,10 +42,6 @@ use crate::text::font_db::FontStyle;
 use crate::text::font_db::FontWeight;
 use crate::text::font_db::LoadedFont;
 use crate::text::font_db::ScaledMetrics;
-use crate::text::font_resolver::slope_preference_order;
-use crate::text::font_resolver::stretch_preference_order;
-use crate::text::font_resolver::weight_preference_order;
-use crate::text::font_resolver::FontResolverContext;
 use crate::text::pipeline::DEFAULT_OBLIQUE_ANGLE_DEG;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
@@ -84,23 +80,15 @@ const FALLBACK_SWAP_PERIOD: Duration = Duration::from_millis(400);
 /// Optional fonts must finish within this period to be adopted.
 const OPTIONAL_BLOCK_PERIOD: Duration = Duration::from_millis(100);
 
-/// Font bytes fetched from a URL.
-#[derive(Debug, Clone)]
-pub struct FetchedFont {
-  pub bytes: Vec<u8>,
-  pub content_type: Option<String>,
-  pub final_url: Option<String>,
-}
-
 /// Abstraction over font byte fetching so tests can simulate slow/failed loads.
 pub trait FontFetcher: Send + Sync {
-  fn fetch(&self, url: &str) -> Result<FetchedFont>;
+  fn fetch(&self, url: &str) -> Result<(Vec<u8>, Option<String>)>;
 }
 
 struct DefaultFontFetcher;
 
 impl FontFetcher for DefaultFontFetcher {
-  fn fetch(&self, url: &str) -> Result<FetchedFont> {
+  fn fetch(&self, url: &str) -> Result<(Vec<u8>, Option<String>)> {
     fetch_font_bytes(url)
   }
 }
@@ -110,12 +98,11 @@ struct ResourceFontFetcher {
 }
 
 impl FontFetcher for ResourceFontFetcher {
-  fn fetch(&self, url: &str) -> Result<FetchedFont> {
-    self.fetcher.fetch(url).map(|res| FetchedFont {
-      bytes: res.bytes,
-      content_type: res.content_type,
-      final_url: res.final_url.or_else(|| Some(url.to_string())),
-    })
+  fn fetch(&self, url: &str) -> Result<(Vec<u8>, Option<String>)> {
+    self
+      .fetcher
+      .fetch(url)
+      .map(|res| (res.bytes, res.content_type))
   }
 }
 
@@ -391,6 +378,14 @@ impl FontContext {
     self.resource_context.clone()
   }
 
+  fn record_font_error(&self, url: &str, error: &Error) {
+    if let Some(ctx) = &self.resource_context {
+      if let Some(diag) = &ctx.diagnostics {
+        diag.record_error(ResourceKind::Font, url, error);
+      }
+    }
+  }
+
   /// Returns whether there are no usable fonts (system + web).
   ///
   /// This is primarily used to make layout/paining fail gracefully in minimal
@@ -460,9 +455,9 @@ impl FontContext {
       None
     };
 
-    let stretches = stretch_preference_order(FontStretch::Normal);
-    let slopes = slope_preference_order(requested_style);
-    let weights = weight_preference_order(weight);
+    let stretches = crate::text::pipeline::stretch_preference_order(FontStretch::Normal);
+    let slopes = crate::text::pipeline::slope_preference_order(requested_style);
+    let weights = crate::text::pipeline::weight_preference_order(weight);
     for family in families {
       if let Some(font) = self.select_web_font(
         family,
@@ -529,9 +524,9 @@ impl FontContext {
     style: FontStyle,
     stretch: FontStretch,
   ) -> Option<LoadedFont> {
-    let stretches = stretch_preference_order(stretch);
-    let weights = weight_preference_order(weight);
-    let slopes = slope_preference_order(style);
+    let stretches = crate::text::pipeline::stretch_preference_order(stretch);
+    let weights = crate::text::pipeline::weight_preference_order(weight);
+    let slopes = crate::text::pipeline::slope_preference_order(style);
     let requested_angle = if matches!(style, FontStyle::Oblique) {
       Some(DEFAULT_OBLIQUE_ANGLE_DEG)
     } else {
@@ -846,24 +841,28 @@ impl FontContext {
     let resolved = resolve_font_url(url, base_url);
     if let Some(ctx) = &self.resource_context {
       if let Err(err) = ctx.check_allowed(ResourceKind::Font, &resolved) {
-        return Err(Error::Font(crate::error::FontError::LoadFailed {
+        let blocked = Error::Font(crate::error::FontError::LoadFailed {
           family: family.to_string(),
           reason: err.reason,
-        }));
+        });
+        self.record_font_error(&resolved, &blocked);
+        return Err(blocked);
       }
     }
-    let fetched = self.fetcher.fetch(&resolved)?;
-    if let Some(ctx) = &self.resource_context {
-      if let Err(err) =
-        ctx.check_allowed_with_final(ResourceKind::Font, &resolved, fetched.final_url.as_deref())
-      {
-        return Err(Error::Font(crate::error::FontError::LoadFailed {
-          family: family.to_string(),
-          reason: err.reason,
-        }));
+    let (bytes, content_type) = match self.fetcher.fetch(&resolved) {
+      Ok(result) => result,
+      Err(err) => {
+        self.record_font_error(&resolved, &err);
+        return Err(err);
       }
-    }
-    let decoded = decode_font_bytes(fetched.bytes, fetched.content_type.as_deref())?;
+    };
+    let decoded = match decode_font_bytes(bytes, content_type.as_deref()) {
+      Ok(decoded) => decoded,
+      Err(err) => {
+        self.record_font_error(&resolved, &err);
+        return Err(err);
+      }
+    };
     if !display_allows_use(face.display, start.elapsed()) {
       return Ok(LoadOutcome::Skipped);
     }
@@ -1512,7 +1511,7 @@ fn resolve_font_url(url: &str, base_url: Option<&str>) -> String {
   url.to_string()
 }
 
-fn fetch_font_bytes(url: &str) -> Result<FetchedFont> {
+fn fetch_font_bytes(url: &str) -> Result<(Vec<u8>, Option<String>)> {
   if url.starts_with("data:") {
     return decode_data_url(url);
   }
@@ -1544,41 +1543,25 @@ fn fetch_font_bytes(url: &str) -> Result<FetchedFont> {
       .get("content-type")
       .and_then(|h| h.to_str().ok())
       .map(|s| s.to_string());
-    return Ok(FetchedFont {
-      bytes,
-      content_type,
-      final_url: Some(url.to_string()),
-    });
+    return Ok((bytes, content_type));
   }
 
   if url.starts_with("file://") {
     let path = url.trim_start_matches("file://");
-    return std::fs::read(path)
-      .map(|b| FetchedFont {
-        bytes: b,
-        content_type: None,
-        final_url: Some(url.to_string()),
-      })
-      .map_err(|e| {
-        Error::Font(crate::error::FontError::LoadFailed {
-          family: url.to_string(),
-          reason: e.to_string(),
-        })
-      });
-  }
-
-  std::fs::read(url)
-    .map(|b| FetchedFont {
-      bytes: b,
-      content_type: None,
-      final_url: Some(url.to_string()),
-    })
-    .map_err(|e| {
+    return std::fs::read(path).map(|b| (b, None)).map_err(|e| {
       Error::Font(crate::error::FontError::LoadFailed {
         family: url.to_string(),
         reason: e.to_string(),
       })
+    });
+  }
+
+  std::fs::read(url).map(|b| (b, None)).map_err(|e| {
+    Error::Font(crate::error::FontError::LoadFailed {
+      family: url.to_string(),
+      reason: e.to_string(),
     })
+  })
 }
 
 fn ordered_sources<'a>(sources: &'a [FontFaceSource]) -> Vec<&'a FontFaceSource> {
@@ -1665,7 +1648,7 @@ fn decode_font_bytes(bytes: Vec<u8>, content_type: Option<&str>) -> Result<Vec<u
   Ok(bytes)
 }
 
-fn decode_data_url(url: &str) -> Result<FetchedFont> {
+fn decode_data_url(url: &str) -> Result<(Vec<u8>, Option<String>)> {
   let without_prefix = url.trim_start_matches("data:");
   let mut parts = without_prefix.splitn(2, ',');
   let meta = parts.next().unwrap_or("");
@@ -1689,11 +1672,7 @@ fn decode_data_url(url: &str) -> Result<FetchedFont> {
         reason: e.to_string(),
       })
     })?;
-    return Ok(FetchedFont {
-      bytes: decoded,
-      content_type: mime,
-      final_url: Some(url.to_string()),
-    });
+    return Ok((decoded, mime));
   }
 
   let decoded = percent_decode_str(data).decode_utf8().map_err(|e| {
@@ -1702,37 +1681,7 @@ fn decode_data_url(url: &str) -> Result<FetchedFont> {
       reason: e.to_string(),
     })
   })?;
-  Ok(FetchedFont {
-    bytes: decoded.as_bytes().to_vec(),
-    content_type: mime,
-    final_url: Some(url.to_string()),
-  })
-}
-
-impl FontResolverContext for FontContext {
-  fn database(&self) -> &FontDatabase {
-    &self.db
-  }
-
-  fn match_web_font_for_char(
-    &self,
-    family: &str,
-    weight: u16,
-    style: FontStyle,
-    stretch: FontStretch,
-    oblique_angle: Option<f32>,
-    ch: char,
-  ) -> Option<LoadedFont> {
-    FontContext::match_web_font_for_char(self, family, weight, style, stretch, oblique_angle, ch)
-  }
-
-  fn is_web_family_declared(&self, family: &str) -> bool {
-    FontContext::is_web_family_declared(self, family)
-  }
-
-  fn math_family_names(&self) -> Vec<String> {
-    FontContext::math_family_names(self)
-  }
+  Ok((decoded.as_bytes().to_vec(), mime))
 }
 
 // ============================================================================
@@ -1795,7 +1744,7 @@ mod tests {
   }
 
   impl FontFetcher for StubFetcher {
-    fn fetch(&self, url: &str) -> Result<FetchedFont> {
+    fn fetch(&self, _url: &str) -> Result<(Vec<u8>, Option<String>)> {
       if self.delay > Duration::ZERO {
         thread::sleep(self.delay);
       }
@@ -1805,11 +1754,7 @@ mod tests {
           reason: "intentional failure".into(),
         }));
       }
-      Ok(FetchedFont {
-        bytes: self.data.clone(),
-        content_type: None,
-        final_url: Some(url.to_string()),
-      })
+      Ok((self.data.clone(), None))
     }
   }
 
@@ -1836,26 +1781,17 @@ mod tests {
   }
 
   impl FontFetcher for RecordingFetcher {
-    fn fetch(&self, url: &str) -> Result<FetchedFont> {
+    fn fetch(&self, url: &str) -> Result<(Vec<u8>, Option<String>)> {
       if let Ok(mut calls) = self.calls.lock() {
         calls.push(url.to_string());
       }
 
-      self
-        .responses
-        .get(url)
-        .cloned()
-        .map(|(bytes, content_type)| FetchedFont {
-          bytes,
-          content_type,
-          final_url: Some(url.to_string()),
+      self.responses.get(url).cloned().ok_or_else(|| {
+        Error::Font(crate::error::FontError::LoadFailed {
+          family: url.to_string(),
+          reason: "missing response".into(),
         })
-        .ok_or_else(|| {
-          Error::Font(crate::error::FontError::LoadFailed {
-            family: url.to_string(),
-            reason: "missing response".into(),
-          })
-        })
+      })
     }
   }
 

@@ -66,10 +66,10 @@ use crate::css::loader::{
   inject_css_into_html, inline_imports_with_diagnostics, resolve_href_with_base,
 };
 use crate::css::parser::{
-  extract_css_sources, extract_scoped_css_sources, parse_stylesheet, rel_list_contains_stylesheet,
-  CssTreeScope, StylesheetSource,
+  extract_css_sources, extract_scoped_css_sources, parse_stylesheet_with_errors,
+  rel_list_contains_stylesheet, CssTreeScope, StylesheetSource,
 };
-use crate::css::types::{CssImportLoader, StyleSheet};
+use crate::css::types::{CssImportLoader, CssParseError, StyleSheet};
 use crate::debug;
 use crate::debug::inspect::{InspectQuery, InspectionSnapshot};
 use crate::debug::runtime::{self, RuntimeToggles};
@@ -389,12 +389,6 @@ pub struct FastRenderConfig {
   /// Block mixed HTTP subresources when the document is HTTPS.
   pub block_mixed_content: bool,
 
-  /// Block cross-origin subresources unless explicitly allowlisted.
-  pub same_origin_subresources: bool,
-
-  /// Additional origins allowed when same-origin subresource blocking is enabled.
-  pub allowed_subresource_origins: Vec<DocumentOrigin>,
-
   /// Compatibility profile controlling opt-in site-specific behaviors.
   pub compat_profile: CompatProfile,
 
@@ -430,8 +424,6 @@ impl Default for FastRenderConfig {
       max_iframe_depth: DEFAULT_MAX_IFRAME_DEPTH,
       allow_file_from_http: false,
       block_mixed_content: false,
-      same_origin_subresources: false,
-      allowed_subresource_origins: Vec::new(),
       compat_profile: CompatProfile::default(),
       dom_compat_mode: DomCompatibilityMode::Standard,
       apply_meta_viewport: false,
@@ -526,18 +518,6 @@ impl FastRenderBuilder {
   /// Block mixed HTTP subresources when rendering HTTPS documents.
   pub fn block_mixed_content(mut self, block: bool) -> Self {
     self.config.block_mixed_content = block;
-    self
-  }
-
-  /// Block cross-origin subresources unless explicitly allowed.
-  pub fn same_origin_subresources(mut self, enabled: bool) -> Self {
-    self.config.same_origin_subresources = enabled;
-    self
-  }
-
-  /// Allow additional origins when same-origin subresource blocking is enabled.
-  pub fn allow_subresource_origin(mut self, origin: DocumentOrigin) -> Self {
-    self.config.allowed_subresource_origins.push(origin);
     self
   }
 
@@ -653,7 +633,13 @@ pub struct RenderOptions {
   pub css_limit: Option<usize>,
   /// When true, include an accessibility tree alongside rendering results.
   pub capture_accessibility: bool,
-  /// When true, document fetch failures will return a placeholder pixmap with diagnostics instead of an error.
+  /// Allow partial outputs when parts of the pipeline fail.
+  ///
+  /// When enabled:
+  /// - DOM parse, layout, or paint failures return an error overlay with diagnostics.
+  /// - CSS fetch/parse failures are recorded and rendering continues with available styles.
+  /// - Image/font subresources paint placeholders instead of aborting.
+  /// - Timeouts produce an overlay that notes the timed-out stage.
   pub allow_partial: bool,
   /// When Some(true), expand the paint canvas to fit the laid-out content bounds for this render.
   pub fit_canvas_to_content: Option<bool>,
@@ -810,6 +796,8 @@ pub struct RenderDiagnostics {
   pub document_error: Option<String>,
   /// Stage at which rendering timed out, when allow_partial is used.
   pub timeout_stage: Option<RenderStage>,
+  /// Stage that failed when allow_partial produced a placeholder output.
+  pub failure_stage: Option<RenderStage>,
   /// Optional structured statistics gathered during rendering.
   pub stats: Option<RenderStats>,
 }
@@ -835,25 +823,19 @@ impl RenderDiagnostics {
     url: impl Into<String>,
     message: impl Into<String>,
   ) {
-    self.record_message_with_final(kind, url, None, message);
-  }
-
-  /// Record a failed fetch with a plain message and optional final URL.
-  pub fn record_message_with_final(
-    &mut self,
-    kind: ResourceKind,
-    url: impl Into<String>,
-    final_url: Option<&str>,
-    message: impl Into<String>,
-  ) {
-    let mut entry = ResourceFetchError::new(kind, url, message);
-    entry.final_url = final_url.map(|url| url.to_string());
-    self.fetch_errors.push(entry);
+    self
+      .fetch_errors
+      .push(ResourceFetchError::new(kind, url, message));
   }
 
   /// Mark a document-level fetch failure.
   pub fn set_document_error(&mut self, message: impl Into<String>) {
     self.document_error = Some(message.into());
+  }
+
+  /// Record the render stage that failed.
+  pub fn set_failure_stage(&mut self, stage: RenderStage) {
+    self.failure_stage = Some(stage);
   }
 }
 
@@ -876,19 +858,6 @@ impl SharedRenderDiagnostics {
     }
   }
 
-  /// Record a failed fetch with an optional final URL.
-  pub fn record_message_with_final(
-    &self,
-    kind: ResourceKind,
-    url: impl Into<String>,
-    final_url: Option<&str>,
-    message: impl Into<String>,
-  ) {
-    if let Ok(mut guard) = self.inner.lock() {
-      guard.record_message_with_final(kind, url, final_url, message);
-    }
-  }
-
   /// Record a failed fetch using structured error information.
   pub fn record_error(&self, kind: ResourceKind, url: impl Into<String>, error: &Error) {
     if let Ok(mut guard) = self.inner.lock() {
@@ -900,6 +869,13 @@ impl SharedRenderDiagnostics {
   pub fn set_document_error(&self, message: impl Into<String>) {
     if let Ok(mut guard) = self.inner.lock() {
       guard.set_document_error(message);
+    }
+  }
+
+  /// Record the stage that failed when a partial render was produced.
+  pub fn set_failure_stage(&self, stage: RenderStage) {
+    if let Ok(mut guard) = self.inner.lock() {
+      guard.set_failure_stage(stage);
     }
   }
 
@@ -995,29 +971,23 @@ impl ResourceContext {
     }
   }
 
+  /// Record a structured resource error if diagnostics collection is enabled.
+  pub fn record_error(&self, kind: ResourceKind, url: impl Into<String>, error: &Error) {
+    if let Some(diag) = &self.diagnostics {
+      diag.record_error(kind, url, error);
+    }
+  }
+
   /// Evaluate whether a URL is allowed by policy, recording a diagnostic on failure.
   pub fn check_allowed(
     &self,
     kind: ResourceKind,
     url: &str,
   ) -> std::result::Result<(), PolicyError> {
-    self.check_allowed_with_final(kind, url, None)
-  }
-
-  /// Evaluate whether a URL is allowed by policy, considering a final URL when known.
-  pub fn check_allowed_with_final(
-    &self,
-    kind: ResourceKind,
-    url: &str,
-    final_url: Option<&str>,
-  ) -> std::result::Result<(), PolicyError> {
-    match self.policy.allows_with_final(url, final_url) {
+    match self.policy.allows(url) {
       Ok(()) => Ok(()),
       Err(err) => {
-        self
-          .diagnostics
-          .as_ref()
-          .map(|diag| diag.record_message_with_final(kind, url, final_url, err.reason.clone()));
+        self.record(kind, url, err.reason.clone());
         Err(err)
       }
     }
@@ -1317,9 +1287,6 @@ pub struct ResourceDiagnostics {
   pub fetch_counts: HashMap<ResourceKind, usize>,
   pub image_cache_hits: Option<usize>,
   pub image_cache_misses: Option<usize>,
-  pub resource_cache_hits: Option<usize>,
-  pub resource_cache_revalidated_hits: Option<usize>,
-  pub resource_cache_misses: Option<usize>,
 }
 
 /// Structured report describing a render.
@@ -1356,14 +1323,6 @@ fn merge_image_cache_diagnostics(stats: &mut RenderStats) {
         .entry(ResourceKind::Image)
         .or_default() += image_stats.cache_misses;
     }
-  }
-}
-
-fn merge_resource_cache_diagnostics(stats: &mut RenderStats) {
-  if let Some(cache_stats) = crate::resource::take_resource_cache_diagnostics() {
-    stats.resources.resource_cache_hits = Some(cache_stats.fresh_hits);
-    stats.resources.resource_cache_revalidated_hits = Some(cache_stats.revalidated_hits);
-    stats.resources.resource_cache_misses = Some(cache_stats.misses);
   }
 }
 
@@ -1664,18 +1623,6 @@ impl FastRenderConfig {
   /// Block mixed HTTP subresources when rendering HTTPS documents.
   pub fn with_block_mixed_content(mut self, block: bool) -> Self {
     self.block_mixed_content = block;
-    self
-  }
-
-  /// Block cross-origin subresources unless explicitly allowlisted.
-  pub fn with_same_origin_subresources(mut self, enabled: bool) -> Self {
-    self.same_origin_subresources = enabled;
-    self
-  }
-
-  /// Allow additional origins when enforcing same-origin subresource loading.
-  pub fn with_allowed_subresource_origins(mut self, origins: Vec<DocumentOrigin>) -> Self {
-    self.allowed_subresource_origins = origins;
     self
   }
 
@@ -2484,8 +2431,6 @@ impl FastRender {
           .and_then(|url| origin_from_url(url)),
         allow_file_from_http: config.allow_file_from_http,
         block_mixed_content: config.block_mixed_content,
-        same_origin_only: config.same_origin_subresources,
-        allowed_origins: config.allowed_subresource_origins.clone(),
       },
       resource_context: None,
       max_iframe_depth: config.max_iframe_depth,
@@ -2690,7 +2635,6 @@ impl FastRender {
     };
     if stats_recorder.is_some() {
       crate::image_loader::enable_image_cache_diagnostics();
-      crate::resource::enable_resource_cache_diagnostics();
       crate::paint::painter::enable_paint_diagnostics();
       intrinsic_cache_reset_counters();
       crate::layout::formatting_context::layout_cache_reset_counters();
@@ -2711,7 +2655,6 @@ impl FastRender {
       Err(err) => {
         if stats_recorder.is_some() {
           let _ = crate::image_loader::take_image_cache_diagnostics();
-          let _ = crate::resource::take_resource_cache_diagnostics();
           let _ = crate::paint::painter::take_paint_diagnostics();
         }
         if let Some(previous) = restore_cascade_profile {
@@ -2724,7 +2667,6 @@ impl FastRender {
     if let Some(recorder) = stats_recorder {
       let mut stats = recorder.finish();
       merge_image_cache_diagnostics(&mut stats);
-      merge_resource_cache_diagnostics(&mut stats);
       if let Ok(mut guard) = diagnostics.lock() {
         guard.stats = Some(stats);
       }
@@ -2854,28 +2796,7 @@ impl FastRender {
     self.pop_resource_context(prev_self, prev_image, prev_font);
     let result = match result {
       Ok(outputs) => Ok(outputs),
-      Err(err) => {
-        if options.allow_partial {
-          let stage = match &err {
-            Error::Render(RenderError::Timeout { stage, .. }) => Some(*stage),
-            Error::Layout(crate::error::LayoutError::Timeout { .. }) => Some(RenderStage::Layout),
-            _ => None,
-          };
-          if let Some(stage) = stage {
-            if let Some(diag) = &self.diagnostics {
-              if let Ok(mut guard) = diag.lock() {
-                guard.timeout_stage = Some(stage);
-              }
-            }
-            let pixmap = self.render_error_overlay(width, height)?;
-            return Ok(RenderOutputs {
-              pixmap,
-              accessibility: None,
-            });
-          }
-        }
-        Err(err)
-      }
+      Err(err) => self.recover_partial_from_error(err, options.allow_partial, width, height),
     };
 
     if options.device_pixel_ratio.is_some() {
@@ -3596,7 +3517,6 @@ impl FastRender {
     };
     if let Some(stats) = stats_recorder.as_mut() {
       crate::image_loader::enable_image_cache_diagnostics();
-      crate::resource::enable_resource_cache_diagnostics();
       crate::paint::painter::enable_paint_diagnostics();
       intrinsic_cache_reset_counters();
       crate::layout::formatting_context::layout_cache_reset_counters();
@@ -3624,7 +3544,6 @@ impl FastRender {
               if let Some(recorder) = stats_recorder.take() {
                 let mut stats = recorder.finish();
                 merge_image_cache_diagnostics(&mut stats);
-                merge_resource_cache_diagnostics(&mut stats);
                 let _ = crate::paint::painter::take_paint_diagnostics();
                 guard.stats = Some(stats);
               }
@@ -3661,7 +3580,6 @@ impl FastRender {
       if let Some(recorder) = stats_recorder.take() {
         let mut stats = recorder.finish();
         merge_image_cache_diagnostics(&mut stats);
-        merge_resource_cache_diagnostics(&mut stats);
         if let Ok(mut guard) = diagnostics.lock() {
           guard.stats = Some(stats);
         }
@@ -3676,7 +3594,6 @@ impl FastRender {
     }
     if result.is_err() && stats_recorder.is_some() {
       let _ = crate::image_loader::take_image_cache_diagnostics();
-      let _ = crate::resource::take_resource_cache_diagnostics();
       let _ = crate::paint::painter::take_paint_diagnostics();
     }
     drop(_root_span);
@@ -3756,7 +3673,6 @@ impl FastRender {
       };
     if stats.is_none() && local_recorder.is_some() {
       crate::image_loader::enable_image_cache_diagnostics();
-      crate::resource::enable_resource_cache_diagnostics();
       crate::paint::painter::enable_paint_diagnostics();
       intrinsic_cache_reset_counters();
       crate::layout::formatting_context::layout_cache_reset_counters();
@@ -3802,37 +3718,43 @@ impl FastRender {
       ) {
         Ok(inlined) => inlined,
         Err(err) => {
-          if options.allow_partial {
-            if let RenderError::Timeout { stage, .. } = &err {
-              guard.timeout_stage = Some(*stage);
-              let diagnostics = guard.clone();
-              if !had_sink {
-                self.set_diagnostics_sink(None);
-              }
-              if local_recorder.is_some() {
-                let _ = crate::image_loader::take_image_cache_diagnostics();
-                let _ = crate::resource::take_resource_cache_diagnostics();
-                let _ = crate::paint::painter::take_paint_diagnostics();
-              }
-              let pixmap = self.render_error_overlay(width, height)?;
-              return Ok(RenderReport {
-                pixmap,
-                accessibility: None,
-                diagnostics,
-                artifacts: RenderArtifacts::new(artifacts),
-              });
-            }
+          guard.failure_stage = Some(RenderStage::Css);
+          if let RenderError::Timeout { stage, .. } = &err {
+            guard.timeout_stage = Some(*stage);
+          } else {
+            guard.record_message(ResourceKind::Stylesheet, &base_url, err.to_string());
           }
+          if let RenderError::Timeout { .. } = &err {
+            let diagnostics = guard.clone();
+            drop(guard);
+            if !had_sink {
+              self.set_diagnostics_sink(None);
+            }
+            if local_recorder.is_some() {
+              let _ = crate::image_loader::take_image_cache_diagnostics();
+              let _ = crate::paint::painter::take_paint_diagnostics();
+            }
+            let pixmap = self.render_error_overlay(width, height)?;
+            return Ok(RenderReport {
+              pixmap,
+              accessibility: None,
+              diagnostics,
+              artifacts: RenderArtifacts::new(artifacts),
+            });
+          }
+          let render_err = err.clone();
           drop(guard);
           if !had_sink {
             self.set_diagnostics_sink(None);
           }
           if local_recorder.is_some() {
             let _ = crate::image_loader::take_image_cache_diagnostics();
-            let _ = crate::resource::take_resource_cache_diagnostics();
             let _ = crate::paint::painter::take_paint_diagnostics();
           }
-          return Err(Error::Render(err));
+          if !options.allow_partial {
+            return Err(Error::Render(render_err));
+          }
+          html.to_string()
         }
       }
     };
@@ -3853,7 +3775,6 @@ impl FastRender {
       Err(err) => {
         if local_recorder.is_some() {
           let _ = crate::image_loader::take_image_cache_diagnostics();
-          let _ = crate::resource::take_resource_cache_diagnostics();
           let _ = crate::paint::painter::take_paint_diagnostics();
         }
         return Err(err);
@@ -3870,7 +3791,6 @@ impl FastRender {
     if let Some(recorder) = local_recorder {
       let mut finished = recorder.finish();
       merge_image_cache_diagnostics(&mut finished);
-      merge_resource_cache_diagnostics(&mut finished);
       report.diagnostics.stats = Some(finished);
     }
     Ok(report)
@@ -3934,20 +3854,23 @@ impl FastRender {
         ) {
           Ok(inlined) => inlined,
           Err(err) => {
-            if options.allow_partial {
-              if let RenderError::Timeout { stage, .. } = &err {
-                guard.timeout_stage = Some(*stage);
-                let diagnostics = guard.clone();
-                let pixmap = self.render_error_overlay(width, height)?;
-                return Ok(RenderReport {
-                  pixmap,
-                  accessibility: None,
-                  diagnostics,
-                  artifacts: RenderArtifacts::new(artifacts),
-                });
-              }
+            guard.failure_stage = Some(RenderStage::Css);
+            if let RenderError::Timeout { stage, .. } = &err {
+              guard.timeout_stage = Some(*stage);
+              let diagnostics = guard.clone();
+              let pixmap = self.render_error_overlay(width, height)?;
+              return Ok(RenderReport {
+                pixmap,
+                accessibility: None,
+                diagnostics,
+                artifacts: RenderArtifacts::new(artifacts),
+              });
             }
-            return Err(Error::Render(err));
+            guard.record_message(ResourceKind::Stylesheet, &base_url, err.to_string());
+            if !options.allow_partial {
+              return Err(Error::Render(err));
+            }
+            html.to_string()
           }
         }
       };
@@ -4143,15 +4066,18 @@ impl FastRender {
               continue;
             }
 
-            if let Ok(sheet) = parse_stylesheet(&inline.css) {
-              let resolved = sheet.resolve_imports_with_cache(
-                &inline_loader,
-                self.base_url.as_deref(),
-                media_ctx,
-                Some(cache),
-              );
-              combined_rules.extend(resolved.rules);
-            }
+            let parsed = parse_stylesheet_with_errors(&inline.css);
+            self.record_stylesheet_parse_errors(
+              self.base_url.as_deref().unwrap_or("<inline style>"),
+              &parsed.errors,
+            );
+            let resolved = parsed.stylesheet.resolve_imports_with_cache(
+              &inline_loader,
+              self.base_url.as_deref(),
+              media_ctx,
+              Some(cache),
+            );
+            combined_rules.extend(resolved.rules);
           }
           StylesheetSource::External(link) => {
             if link.disabled
@@ -4183,36 +4109,24 @@ impl FastRender {
 
             match fetcher.fetch(&stylesheet_url) {
               Ok(resource) => {
-                if let Some(ctx) = resource_context {
-                  if ctx
-                    .check_allowed_with_final(
-                      ResourceKind::Stylesheet,
-                      &stylesheet_url,
-                      resource.final_url.as_deref(),
-                    )
-                    .is_err()
-                  {
-                    continue;
-                  }
-                }
                 let mut css_text =
                   decode_css_bytes(&resource.bytes, resource.content_type.as_deref());
                 css_text = absolutize_css_urls(&css_text, &stylesheet_url);
 
-                if let Ok(sheet) = parse_stylesheet(&css_text) {
-                  let loader = CssImportFetcher::new(
-                    Some(stylesheet_url.clone()),
-                    Arc::clone(&fetcher),
-                    resource_context.cloned(),
-                  );
-                  let resolved = sheet.resolve_imports_with_cache(
-                    &loader,
-                    Some(&stylesheet_url),
-                    media_ctx,
-                    Some(cache),
-                  );
-                  combined_rules.extend(resolved.rules);
-                }
+                let parsed = parse_stylesheet_with_errors(&css_text);
+                self.record_stylesheet_parse_errors(&stylesheet_url, &parsed.errors);
+                let loader = CssImportFetcher::new(
+                  Some(stylesheet_url.clone()),
+                  Arc::clone(&fetcher),
+                  resource_context.cloned(),
+                );
+                let resolved = parsed.stylesheet.resolve_imports_with_cache(
+                  &loader,
+                  Some(&stylesheet_url),
+                  media_ctx,
+                  Some(cache),
+                );
+                combined_rules.extend(resolved.rules);
               }
               Err(err) => {
                 // Per spec, stylesheet loads are best-effort. On failure, continue.
@@ -4275,15 +4189,18 @@ impl FastRender {
             continue;
           }
 
-          if let Ok(sheet) = parse_stylesheet(&inline.css) {
-            let resolved = sheet.resolve_imports_with_cache(
-              &inline_loader,
-              self.base_url.as_deref(),
-              media_ctx,
-              Some(media_query_cache),
-            );
-            combined_rules.extend(resolved.rules);
-          }
+          let parsed = parse_stylesheet_with_errors(&inline.css);
+          self.record_stylesheet_parse_errors(
+            self.base_url.as_deref().unwrap_or("<inline style>"),
+            &parsed.errors,
+          );
+          let resolved = parsed.stylesheet.resolve_imports_with_cache(
+            &inline_loader,
+            self.base_url.as_deref(),
+            media_ctx,
+            Some(media_query_cache),
+          );
+          combined_rules.extend(resolved.rules);
         }
         StylesheetSource::External(link) => {
           if link.disabled
@@ -4315,36 +4232,24 @@ impl FastRender {
 
           match fetcher.fetch(&stylesheet_url) {
             Ok(resource) => {
-              if let Some(ctx) = resource_context {
-                if ctx
-                  .check_allowed_with_final(
-                    ResourceKind::Stylesheet,
-                    &stylesheet_url,
-                    resource.final_url.as_deref(),
-                  )
-                  .is_err()
-                {
-                  continue;
-                }
-              }
               let mut css_text =
                 decode_css_bytes(&resource.bytes, resource.content_type.as_deref());
               css_text = absolutize_css_urls(&css_text, &stylesheet_url);
 
-              if let Ok(sheet) = parse_stylesheet(&css_text) {
-                let loader = CssImportFetcher::new(
-                  Some(stylesheet_url.clone()),
-                  Arc::clone(&fetcher),
-                  resource_context.cloned(),
-                );
-                let resolved = sheet.resolve_imports_with_cache(
-                  &loader,
-                  Some(&stylesheet_url),
-                  media_ctx,
-                  Some(media_query_cache),
-                );
-                combined_rules.extend(resolved.rules);
-              }
+              let parsed = parse_stylesheet_with_errors(&css_text);
+              self.record_stylesheet_parse_errors(&stylesheet_url, &parsed.errors);
+              let loader = CssImportFetcher::new(
+                Some(stylesheet_url.clone()),
+                Arc::clone(&fetcher),
+                resource_context.cloned(),
+              );
+              let resolved = parsed.stylesheet.resolve_imports_with_cache(
+                &loader,
+                Some(&stylesheet_url),
+                media_ctx,
+                Some(media_query_cache),
+              );
+              combined_rules.extend(resolved.rules);
             }
             Err(err) => {
               // Per spec, stylesheet loads are best-effort. On failure, continue.
@@ -5553,6 +5458,22 @@ impl FastRender {
     self.image_cache.set_diagnostics_sink(sink);
   }
 
+  fn record_timeout_stage(&self, stage: RenderStage) {
+    if let Some(diag) = &self.diagnostics {
+      if let Ok(mut guard) = diag.lock() {
+        guard.timeout_stage = Some(stage);
+      }
+    }
+  }
+
+  fn record_failure_stage(&self, stage: RenderStage) {
+    if let Some(diag) = &self.diagnostics {
+      if let Ok(mut guard) = diag.lock() {
+        guard.failure_stage = Some(stage);
+      }
+    }
+  }
+
   fn record_fetch_error(&self, kind: ResourceKind, url: &str, message: impl Into<String>) {
     if let Some(diag) = &self.diagnostics {
       if let Ok(mut guard) = diag.lock() {
@@ -5561,6 +5482,20 @@ impl FastRender {
           url,
           &Error::Resource(ResourceError::new(url.to_string(), message.into())),
         );
+      }
+    }
+  }
+
+  fn record_stylesheet_parse_errors(&self, source: &str, errors: &[CssParseError]) {
+    if errors.is_empty() {
+      return;
+    }
+    if let Some(diag) = &self.diagnostics {
+      if let Ok(mut guard) = diag.lock() {
+        if let Some(first) = errors.first() {
+          guard.record_message(ResourceKind::Stylesheet, source, first.to_string());
+        }
+        guard.failure_stage.get_or_insert(RenderStage::Css);
       }
     }
   }
@@ -5575,6 +5510,48 @@ impl FastRender {
       policy: self.resource_policy.for_origin(origin),
       diagnostics,
     }
+  }
+
+  fn stage_from_error(err: &Error) -> Option<RenderStage> {
+    match err {
+      Error::Parse(_) => Some(RenderStage::DomParse),
+      Error::Style(_) | Error::Font(_) => Some(RenderStage::Cascade),
+      Error::Layout(_) | Error::Text(_) => Some(RenderStage::Layout),
+      Error::Render(render) => match render {
+        RenderError::Timeout { stage, .. } => Some(*stage),
+        _ => Some(RenderStage::Paint),
+      },
+      _ => None,
+    }
+  }
+
+  fn recover_partial_from_error(
+    &self,
+    err: Error,
+    allow_partial: bool,
+    width: u32,
+    height: u32,
+  ) -> Result<RenderOutputs> {
+    if !allow_partial {
+      return Err(err);
+    }
+
+    let Some(stage) = Self::stage_from_error(&err) else {
+      return Err(err);
+    };
+
+    if let Error::Render(RenderError::Timeout { stage, .. }) = &err {
+      self.record_timeout_stage(*stage);
+    }
+    if let Error::Layout(crate::error::LayoutError::Timeout { .. }) = &err {
+      self.record_timeout_stage(RenderStage::Layout);
+    }
+    self.record_failure_stage(stage);
+    let pixmap = self.render_error_overlay(width, height)?;
+    Ok(RenderOutputs {
+      pixmap,
+      accessibility: None,
+    })
   }
 
   fn push_resource_context(
@@ -5801,27 +5778,14 @@ impl FastRender {
         rec.record_fetch(ResourceKind::Stylesheet);
       }
       if let Some(ctx) = resource_context {
-        if ctx
-          .check_allowed(ResourceKind::Stylesheet, &css_url)
-          .is_err()
-        {
+        if let Err(err) = ctx.policy.allows(&css_url) {
+          diagnostics.record_message(ResourceKind::Stylesheet, &css_url, err.reason);
+          diagnostics.failure_stage.get_or_insert(RenderStage::Css);
           continue;
         }
       }
       match fetcher.fetch(&css_url) {
         Ok(res) => {
-          if let Some(ctx) = resource_context {
-            if ctx
-              .check_allowed_with_final(
-                ResourceKind::Stylesheet,
-                &css_url,
-                res.final_url.as_deref(),
-              )
-              .is_err()
-            {
-              continue;
-            }
-          }
           let css_text = decode_css_bytes(&res.bytes, res.content_type.as_deref());
           let rewritten = absolutize_css_urls(&css_text, &css_url);
           let mut import_diags: Vec<(String, String)> = Vec::new();
@@ -5831,7 +5795,9 @@ impl FastRender {
                 rec.record_fetch(ResourceKind::Stylesheet);
               }
               if let Some(ctx) = resource_context {
-                if let Err(err) = ctx.check_allowed(ResourceKind::Stylesheet, u) {
+                if let Err(err) = ctx.policy.allows(u) {
+                  diagnostics.record_message(ResourceKind::Stylesheet, u, &err.reason);
+                  diagnostics.failure_stage.get_or_insert(RenderStage::Css);
                   return Err(Error::Resource(ResourceError::new(
                     u.to_string(),
                     err.reason,
@@ -5839,23 +5805,10 @@ impl FastRender {
                 }
               }
               match fetcher.fetch(u) {
-                Ok(res) => {
-                  if let Some(ctx) = resource_context {
-                    if let Err(err) = ctx.check_allowed_with_final(
-                      ResourceKind::Stylesheet,
-                      u,
-                      res.final_url.as_deref(),
-                    ) {
-                      return Err(Error::Resource(ResourceError::new(
-                        u.to_string(),
-                        err.reason,
-                      )));
-                    }
-                  }
-                  Ok(decode_css_bytes(&res.bytes, res.content_type.as_deref()))
-                }
+                Ok(res) => Ok(decode_css_bytes(&res.bytes, res.content_type.as_deref())),
                 Err(err) => {
                   diagnostics.record_error(ResourceKind::Stylesheet, u, &err);
+                  diagnostics.failure_stage.get_or_insert(RenderStage::Css);
                   Err(err)
                 }
               }
@@ -5876,11 +5829,15 @@ impl FastRender {
           };
           for (url, reason) in import_diags.drain(..) {
             diagnostics.record_message(ResourceKind::Stylesheet, &url, &reason);
+            diagnostics.failure_stage.get_or_insert(RenderStage::Css);
           }
           combined_css.push_str(&inlined);
           combined_css.push('\n');
         }
-        Err(err) => diagnostics.record_error(ResourceKind::Stylesheet, &css_url, &err),
+        Err(err) => {
+          diagnostics.record_error(ResourceKind::Stylesheet, &css_url, &err);
+          diagnostics.failure_stage.get_or_insert(RenderStage::Css);
+        }
       }
     }
 
@@ -6554,19 +6511,6 @@ impl CssImportLoader for CssImportFetcher {
         return Err(err);
       }
     };
-
-    if let Some(ctx) = &self.resource_context {
-      if let Err(err) = ctx.check_allowed_with_final(
-        ResourceKind::Stylesheet,
-        &resolved,
-        resource.final_url.as_deref(),
-      ) {
-        return Err(Error::Io(io::Error::new(
-          io::ErrorKind::PermissionDenied,
-          err.reason,
-        )));
-      }
-    }
 
     // Decode CSS bytes with charset handling
     let decoded = decode_css_bytes(&resource.bytes, resource.content_type.as_deref());
@@ -8736,7 +8680,7 @@ mod tests {
       &target_ancestors,
       &[crate::css::types::ContainerCondition {
         name: None,
-        query_list: vec![cond.clone()],
+        query: cond.clone(),
       }],
     );
     eprintln!("container match result: {}", matches);
