@@ -1,9 +1,7 @@
 use crate::text::font_db::LoadedFont;
 use rustybuzz::Variation;
 use skrifa::instance::{Location, LocationRef, Size};
-use skrifa::outline::{
-  pen::PathStyle, DrawSettings, OutlineGlyph, OutlineGlyphCollection, OutlinePen,
-};
+use skrifa::outline::{DrawSettings, OutlineGlyph, OutlineGlyphCollection, OutlinePen};
 use skrifa::{FontRef, GlyphId, MetadataProvider, Tag};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::BTreeMap;
@@ -302,10 +300,7 @@ fn draw_outline_unscaled(
   location: LocationRef<'_>,
   pen: &mut impl OutlinePen,
 ) -> Result<skrifa::outline::AdjustedMetrics, skrifa::outline::DrawError> {
-  outline.draw(
-    DrawSettings::unhinted(Size::unscaled(), location).with_path_style(PathStyle::FreeType),
-    pen,
-  )
+  outline.draw(DrawSettings::unhinted(Size::unscaled(), location), pen)
 }
 
 fn variations_to_settings<'a>(

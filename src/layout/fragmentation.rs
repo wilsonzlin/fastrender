@@ -14,7 +14,11 @@ use crate::layout::axis::{FragmentAxes, PhysicalAxis};
 use crate::style::display::Display;
 use crate::style::page::PageSide;
 use crate::style::types::{BreakBetween, BreakInside, Direction, WritingMode};
+<<<<<<< HEAD
 use crate::style::{block_axis_is_horizontal, block_axis_positive, ComputedStyle};
+=======
+use crate::style::ComputedStyle;
+>>>>>>> 3bddf60 (fix: carry font metadata through painting and stabilize grid layout)
 use crate::tree::fragment_tree::{
   FragmentContent, FragmentNode, FragmentSliceInfo, FragmentainerPath,
 };
@@ -403,6 +407,31 @@ fn resolve_fragmentation_boundaries_for_axis(
   boundaries
 }
 
+/// Fragment a tree using the provided writing mode and direction. Non-default axes currently
+/// defer to the primary fragmentation path while keeping pagination API-compatible.
+pub fn fragment_tree_for_writing_mode(
+  root: &FragmentNode,
+  options: &FragmentationOptions,
+  writing_mode: WritingMode,
+  direction: Direction,
+) -> Vec<FragmentNode> {
+  let axes = FragmentAxes::from_writing_mode_and_direction(writing_mode, direction);
+  fragment_tree_with_axes(root, options, axes)
+}
+
+/// Axis-aware fragmentation entry point.
+pub fn fragment_tree_with_axes(
+  root: &FragmentNode,
+  options: &FragmentationOptions,
+  axes: FragmentAxes,
+) -> Vec<FragmentNode> {
+  if axes.block_axis() == PhysicalAxis::Y && axes.block_positive() {
+    return fragment_tree(root, options);
+  }
+
+  fragment_tree(root, options)
+}
+
 /// Splits a fragment tree into multiple fragmentainer roots based on the given options.
 ///
 /// The returned fragments retain the original tree structure but are clipped to the
@@ -711,6 +740,7 @@ fn clone_without_children(node: &FragmentNode) -> FragmentNode {
     baseline: node.baseline,
     children: Vec::new(),
     style: node.style.clone(),
+    starting_style: node.starting_style.clone(),
     fragment_index: node.fragment_index,
     fragment_count: node.fragment_count,
     fragmentainer_index: node.fragmentainer_index,
@@ -997,6 +1027,17 @@ pub(crate) fn normalize_fragment_margins(
       fragment.scroll_overflow = scroll_overflow;
     }
   }
+}
+
+/// Axis-aware wrapper around [`normalize_fragment_margins`].
+pub(crate) fn normalize_fragment_margins_with_axes(
+  fragment: &mut FragmentNode,
+  is_first_fragment: bool,
+  is_last_fragment: bool,
+  _block_size: f32,
+  _axes: FragmentAxes,
+) {
+  normalize_fragment_margins(fragment, is_first_fragment, is_last_fragment);
 }
 
 fn collect_break_opportunities(

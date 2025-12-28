@@ -103,6 +103,12 @@ impl Point {
   }
 }
 
+impl Default for Point {
+  fn default() -> Self {
+    Point::ZERO
+  }
+}
+
 // Implement Display for better debug output
 impl fmt::Display for Point {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

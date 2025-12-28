@@ -1494,6 +1494,8 @@ pub struct StyledNode {
   pub node_id: usize,
   pub node: DomNode,
   pub styles: ComputedStyle,
+  /// Starting-style snapshots for transitions and animation sampling.
+  pub starting_styles: StartingStyleSet,
   /// Styles for ::before pseudo-element (if content is set)
   pub before_styles: Option<Box<ComputedStyle>>,
   /// Styles for ::after pseudo-element (if content is set)
@@ -1509,6 +1511,15 @@ pub struct StyledNode {
   /// Slotted light DOM node ids assigned to this <slot> element.
   pub slotted_node_ids: Vec<usize>,
   pub children: Vec<StyledNode>,
+}
+
+/// Snapshot of starting styles for an element and its pseudos.
+#[derive(Debug, Clone, Default)]
+pub struct StartingStyleSet {
+  pub base: Option<Box<ComputedStyle>>,
+  pub before: Option<Box<ComputedStyle>>,
+  pub after: Option<Box<ComputedStyle>>,
+  pub marker: Option<Box<ComputedStyle>>,
 }
 
 fn count_styled_nodes(node: &StyledNode) -> usize {
@@ -2702,6 +2713,10 @@ fn exported_part_names(
   Some(exported)
 }
 
+fn containing_scope_host_id(dom_maps: &DomMaps, host: &DomNode) -> Option<usize> {
+  dom_maps.id_map.get(&(host as *const DomNode)).copied()
+}
+
 fn match_part_rules<'a>(
   node: &DomNode,
   ancestors: &[&DomNode],
@@ -2709,8 +2724,8 @@ fn match_part_rules<'a>(
   selector_caches: &mut SelectorCaches,
   scratch: &mut CascadeScratch,
   dom_maps: &DomMaps,
-  slot_map_for_host: &dyn Fn(usize) -> Option<&SlotAssignmentMap<'a>>,
-  current_slot_map: Option<&SlotAssignmentMap<'a>>,
+  slot_map_for_host: &dyn Fn(usize) -> Option<&'a SlotAssignmentMap<'a>>,
+  current_slot_map: Option<&'a SlotAssignmentMap<'a>>,
 ) -> Vec<MatchedRule<'a>> {
   if !ancestors
     .iter()
@@ -2759,66 +2774,64 @@ fn match_part_rules<'a>(
       names.as_slice()
     };
 
-    if let Some(scope_host) = containing_scope_host_id(dom_maps, host) {
-      if let Some((rules, allow_shadow_host)) =
-        scope_rule_index_with_shadow_host(scopes, scope_host)
-      {
-        if rules.part_pseudos.is_empty() {
-          names = mapped_names;
-          if names.is_empty() {
-            break;
-          }
-          continue;
+    let scope_host = containing_scope_host_id(dom_maps, host);
+    if let Some((rules, allow_shadow_host)) =
+      scope_rule_index_with_shadow_host(scopes, scope_host)
+    {
+      if rules.part_pseudos.is_empty() {
+        names = mapped_names;
+        if names.is_empty() {
+          break;
         }
+        continue;
+      }
 
-        scratch.part_candidates.clear();
-        scratch.part_seen.reset();
+      scratch.part_candidates.clear();
+      scratch.part_seen.reset();
+      for name in visible_names.iter() {
+        if let Some(list) = rules.part_lookup.get(name.as_str()) {
+          for &idx in list {
+            if scratch.part_seen.insert(idx) {
+              scratch.part_candidates.push(idx);
+            }
+          }
+        }
+      }
+
+      if !scratch.part_candidates.is_empty() {
+        let mut name_set: HashSet<&str> = HashSet::new();
         for name in visible_names.iter() {
-          if let Some(list) = rules.part_lookup.get(name.as_str()) {
-            for &idx in list {
-              if scratch.part_seen.insert(idx) {
-                scratch.part_candidates.push(idx);
-              }
-            }
-          }
+          name_set.insert(name.as_str());
         }
 
-        if !scratch.part_candidates.is_empty() {
-          let mut name_set: HashSet<&str> = HashSet::new();
-          for name in visible_names.iter() {
-            name_set.insert(name.as_str());
+        let slot_map = match scope_host {
+          Some(host_id) => slot_map_for_host(host_id),
+          None => current_slot_map,
+        };
+
+        for idx in scratch.part_candidates.clone() {
+          let info = &rules.part_pseudos[idx];
+          if !name_set.contains(info.required.as_str()) {
+            continue;
           }
-
-          let slot_map = match scope_host {
-            Some(host_id) => slot_map_for_host(host_id),
-            None => current_slot_map,
-          };
-
-          for &idx in scratch.part_candidates.iter() {
-            let info = &rules.part_pseudos[idx];
-            if !name_set.contains(info.required.as_str()) {
-              continue;
-            }
-            // allow_shadow_host prevents document-scope ::part selectors from exposing :host context.
-            let part_matches = find_pseudo_element_rules(
-              host,
-              rules,
-              selector_caches,
-              scratch,
-              host_ancestors,
-              slot_map,
-              &info.pseudo,
-              allow_shadow_host,
-            );
-            for rule in part_matches {
-              if let Some(pos) = matched_by_order.get(&rule.order).copied() {
-                if rule.specificity > matched[pos].specificity {
-                  matched[pos].specificity = rule.specificity;
-                }
-              } else {
-                matched_by_order.insert(rule.order, matched.len());
-                matched.push(rule);
+          let part_matches = find_pseudo_element_rules(
+            host,
+            rules,
+            selector_caches,
+            scratch,
+            host_ancestors,
+            slot_map,
+            &info.pseudo,
+            allow_shadow_host,
+          );
+          for rule in part_matches {
+            if let Some(pos) = matched_by_order.get(&rule.order).copied() {
+              if rule.specificity > matched[pos].specificity {
+                matched[pos].specificity = rule.specificity;
               }
+            } else {
+              matched_by_order.insert(rule.order, matched.len());
+              matched.push(rule);
             }
           }
         }
@@ -2850,7 +2863,7 @@ fn collect_matching_rules<'a>(
   slot_assignment: &SlotAssignment,
 ) -> Vec<MatchedRule<'a>> {
   let current_shadow = dom_maps.containing_shadow_root(node_id);
-  let slot_map_for_host = |host_id: usize| -> Option<&SlotAssignmentMap> {
+  let slot_map_for_host = |host_id: usize| -> Option<&SlotAssignmentMap<'a>> {
     dom_maps
       .shadow_hosts
       .iter()
@@ -3672,6 +3685,7 @@ fn apply_styles_internal_with_ancestors<'a>(
     node_id,
     node: node.clone(),
     styles,
+    starting_styles: StartingStyleSet::default(),
     before_styles,
     after_styles,
     marker_styles,

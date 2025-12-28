@@ -2033,7 +2033,7 @@ fn parse_string_or_ident<'i, 't>(
     .map_err(ParseError::from)
 }
 
-fn parse_angle_token(token: &str) -> Option<f32> {
+pub(crate) fn parse_angle_token(token: &str) -> Option<f32> {
   let trimmed = token.trim();
   if trimmed.ends_with("deg") {
     trimmed[..trimmed.len() - 3].trim().parse::<f32>().ok()

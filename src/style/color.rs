@@ -272,6 +272,12 @@ pub struct Rgba {
   pub a: f32,
 }
 
+impl Default for Rgba {
+  fn default() -> Self {
+    Self::TRANSPARENT
+  }
+}
+
 impl Rgba {
   /// Opaque black
   pub const BLACK: Self = Self {

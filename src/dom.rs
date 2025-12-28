@@ -1145,7 +1145,7 @@ impl<'a> ElementRef<'a> {
       .unwrap_or(false)
   }
 
-  fn push_assigned_slot_nodes<'a>(
+  fn push_assigned_slot_nodes(
     current: &'a DomNode,
     slot_map: Option<&SlotAssignmentMap<'a>>,
     visited: Option<&HashSet<usize>>,
@@ -1182,7 +1182,7 @@ impl<'a> ElementRef<'a> {
     pushed
   }
 
-  fn subtree_contains_focus(&self, slot_map: Option<&SlotAssignmentMap<'_>>) -> bool {
+  fn subtree_contains_focus(&self, slot_map: Option<&SlotAssignmentMap<'a>>) -> bool {
     if self.inert_flag() {
       return false;
     }
@@ -1190,10 +1190,10 @@ impl<'a> ElementRef<'a> {
   }
 
   fn node_or_descendant_has_focus(
-    node: &DomNode,
-    slot_map: Option<&SlotAssignmentMap<'_>>,
+    node: &'a DomNode,
+    slot_map: Option<&SlotAssignmentMap<'a>>,
   ) -> bool {
-    let mut stack: Vec<&DomNode> = vec![node];
+    let mut stack: Vec<&'a DomNode> = vec![node];
     let mut visited = slot_map.is_some().then(HashSet::new);
 
     while let Some(current) = stack.pop() {
@@ -2019,7 +2019,7 @@ impl<'a> ElementRef<'a> {
       .unwrap_or(false)
   }
 
-  fn subtree_contains_target(&self, slot_map: Option<&SlotAssignmentMap<'_>>) -> bool {
+  fn subtree_contains_target(&self, slot_map: Option<&SlotAssignmentMap<'a>>) -> bool {
     let Some(target) = current_target_fragment() else {
       return false;
     };
@@ -2027,11 +2027,11 @@ impl<'a> ElementRef<'a> {
   }
 
   fn subtree_has_target(
-    node: &DomNode,
+    node: &'a DomNode,
     target: &str,
-    slot_map: Option<&SlotAssignmentMap<'_>>,
+    slot_map: Option<&SlotAssignmentMap<'a>>,
   ) -> bool {
-    let mut stack: Vec<&DomNode> = vec![node];
+    let mut stack: Vec<&'a DomNode> = vec![node];
     let mut visited = slot_map.is_some().then(HashSet::new);
 
     while let Some(current) = stack.pop() {

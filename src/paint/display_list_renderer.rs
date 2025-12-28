@@ -1545,14 +1545,18 @@ impl DisplayListRenderer {
       origin: item.origin,
       glyphs: item.glyphs.clone(),
       color: item.color,
+      palette_index: item.palette_index,
       shadows: item.shadows.clone(),
       font_size: item.font_size,
       advance_width: item.advance_width,
       font_id: item.font_id.clone(),
+      font: item.font.clone(),
+      variations: item.variations.clone(),
       synthetic_bold: item.synthetic_bold,
       synthetic_oblique: item.synthetic_oblique,
       emphasis: item.emphasis.clone(),
       decorations: Vec::new(),
+      ..Default::default()
     };
     let scaled = self.scale_text_item(&text_equiv);
     ListMarkerItem {
@@ -1563,6 +1567,9 @@ impl DisplayListRenderer {
       font_size: scaled.font_size,
       advance_width: scaled.advance_width,
       font_id: scaled.font_id,
+      palette_index: scaled.palette_index,
+      font: scaled.font,
+      variations: scaled.variations,
       synthetic_bold: scaled.synthetic_bold,
       synthetic_oblique: scaled.synthetic_oblique,
       emphasis: scaled.emphasis,
@@ -3969,6 +3976,8 @@ impl DisplayListRenderer {
       item.color,
       item.synthetic_bold,
       item.synthetic_oblique,
+      item.palette_index,
+      &item.variations,
     );
     if let Some(emphasis) = &item.emphasis {
       self.render_emphasis(emphasis)?;
@@ -3986,14 +3995,18 @@ impl DisplayListRenderer {
       origin: item.origin,
       glyphs: item.glyphs.clone(),
       color: item.color,
+      palette_index: item.palette_index,
       shadows: item.shadows.clone(),
       font_size: item.font_size,
       advance_width: item.advance_width,
       font_id: item.font_id.clone(),
+      font: item.font.clone(),
+      variations: item.variations.clone(),
       synthetic_bold: item.synthetic_bold,
       synthetic_oblique: item.synthetic_oblique,
       emphasis: item.emphasis.clone(),
       decorations: Vec::new(),
+      ..Default::default()
     };
     self.render_text(&text)
   }
@@ -4453,6 +4466,8 @@ impl DisplayListRenderer {
             emphasis.color,
             0.0,
             0.0,
+            text.palette_index,
+            &text.variations,
           );
         }
         return Ok(());
@@ -6974,6 +6989,7 @@ mod tests {
         advance: 14.0,
       }],
       color: Rgba::BLACK,
+      palette_index: 0,
       shadows: vec![TextShadowItem {
         offset: Point::new(4.0, 0.0),
         blur_radius: 0.0,
@@ -6987,6 +7003,8 @@ mod tests {
         style: font.style,
         stretch: font.stretch,
       }),
+      font: Some(Arc::new(font.clone())),
+      variations: Vec::new(),
       synthetic_bold: 0.0,
       synthetic_oblique: 0.0,
       emphasis: None,
@@ -7038,6 +7056,7 @@ mod tests {
         advance: 14.0,
       }],
       color: Rgba::BLACK,
+      palette_index: 0,
       shadows: vec![TextShadowItem {
         offset: Point::new(2.0, 0.0),
         blur_radius: 0.0,
@@ -7051,6 +7070,8 @@ mod tests {
         style: font.style,
         stretch: font.stretch,
       }),
+      font: Some(Arc::new(font.clone())),
+      variations: Vec::new(),
       synthetic_bold: 0.0,
       synthetic_oblique: 0.0,
       emphasis: None,
@@ -7130,6 +7151,7 @@ mod tests {
         advance: 14.0,
       }],
       color: Rgba::BLACK,
+      palette_index: 0,
       shadows: vec![TextShadowItem {
         offset: Point::new(0.0, 0.0),
         blur_radius: 4.0,
@@ -7143,6 +7165,8 @@ mod tests {
         style: font.style,
         stretch: font.stretch,
       }),
+      font: Some(Arc::new(font.clone())),
+      variations: Vec::new(),
       synthetic_bold: 0.0,
       synthetic_oblique: 0.0,
       emphasis: None,
@@ -7202,6 +7226,7 @@ mod tests {
         advance: 14.0,
       }],
       color: Rgba::BLACK,
+      palette_index: 0,
       shadows: vec![TextShadowItem {
         offset: Point::new(10.0, 20.0), // percent(50%) + em(1.0) resolved against font size 20px
         blur_radius: 0.0,
@@ -7215,6 +7240,8 @@ mod tests {
         style: font.style,
         stretch: font.stretch,
       }),
+      font: Some(Arc::new(font.clone())),
+      variations: Vec::new(),
       synthetic_bold: 0.0,
       synthetic_oblique: 0.0,
       emphasis: None,
@@ -7252,10 +7279,13 @@ mod tests {
       origin: Point::new(20.0, 30.0),
       glyphs: Vec::new(),
       color: Rgba::BLACK,
+      palette_index: 0,
       shadows: vec![],
       font_size: 16.0,
       advance_width: 0.0,
       font_id: None,
+      font: None,
+      variations: Vec::new(),
       synthetic_bold: 0.0,
       synthetic_oblique: 0.0,
       emphasis: Some(TextEmphasis {

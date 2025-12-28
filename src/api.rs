@@ -1074,6 +1074,22 @@ impl ResourceContext {
     }
   }
 
+  /// Evaluate whether both the requested and final URLs are allowed, recording diagnostics.
+  pub fn check_allowed_with_final(
+    &self,
+    kind: ResourceKind,
+    requested: &str,
+    final_url: Option<&str>,
+  ) -> std::result::Result<(), PolicyError> {
+    self.check_allowed(kind, requested)?;
+    if let Some(final_url) = final_url {
+      if requested != final_url {
+        self.check_allowed(kind, final_url)?;
+      }
+    }
+    Ok(())
+  }
+
   /// Clone this context with a different document origin.
   pub fn for_origin(&self, origin: Option<DocumentOrigin>) -> Self {
     Self {
@@ -6362,7 +6378,7 @@ impl FastRender {
           let selected = replaced_box
             .replaced_type
             .selected_image_source_for_context(crate::tree::box_tree::ImageSelectionContext {
-              scale: self.device_pixel_ratio,
+              device_pixel_ratio: self.device_pixel_ratio,
               slot_width: None,
               viewport: Some(viewport),
               media_context: Some(&media_ctx),
@@ -6406,7 +6422,7 @@ impl FastRender {
                 orientation,
                 &style.image_resolution,
                 self.device_pixel_ratio,
-                selected.resolution,
+                selected.density,
               ) {
                 replaced_box.intrinsic_size = Some(Size::new(w, h));
                 if !explicit_no_ratio {

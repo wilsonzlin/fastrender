@@ -941,12 +941,12 @@ impl FontContext {
       let should_block = display_block > Duration::ZERO && policy_deadline.is_some();
       let job_id = started_count;
       let block_deadline = if let Some(policy_deadline) = policy_deadline {
-        should_block
-          .then(|| {
-            let face_deadline = Instant::now() + display_block;
-            policy_deadline.min(face_deadline)
-          })
-          .flatten()
+        if should_block {
+          let face_deadline = Instant::now() + display_block;
+          Some(policy_deadline.min(face_deadline))
+        } else {
+          None
+        }
       } else {
         None
       };

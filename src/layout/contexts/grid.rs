@@ -62,7 +62,9 @@ use crate::style::ComputedStyle;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::Arc;
 use taffy::geometry::Line;
 use taffy::prelude::TaffyFitContent;
@@ -2207,7 +2209,7 @@ impl FormattingContext for GridFormattingContext {
       &mut positioned_children_map,
     )?;
     if !positioned_children.is_empty() {
-      positioned_children_map.insert(root_id, positioned_children);
+      positioned_children_map.insert(root_id, positioned_children.clone());
     }
 
     if trace_grid_layout {
@@ -2286,9 +2288,12 @@ impl FormattingContext for GridFormattingContext {
 
     // Run Taffy layout
     record_taffy_invocation(TaffyAdapterKind::Grid);
-    let mut measure_cache: HashMap<MeasureKey, taffy::geometry::Size<f32>> = HashMap::new();
-    let mut measured_fragments: HashMap<MeasureKey, FragmentNode> = HashMap::new();
-    let mut measured_node_keys: HashMap<TaffyNodeId, Vec<MeasureKey>> = HashMap::new();
+    let measure_cache: Rc<RefCell<HashMap<MeasureKey, taffy::geometry::Size<f32>>>> =
+      Rc::new(RefCell::new(HashMap::new()));
+    let measured_fragments: Rc<RefCell<HashMap<MeasureKey, FragmentNode>>> =
+      Rc::new(RefCell::new(HashMap::new()));
+    let measured_node_keys: Rc<RefCell<HashMap<TaffyNodeId, Vec<MeasureKey>>>> =
+      Rc::new(RefCell::new(HashMap::new()));
     taffy
 	      .compute_layout_with_measure(
 	        root_id,
@@ -2304,14 +2309,17 @@ impl FormattingContext for GridFormattingContext {
 	          let viewport_size = self.viewport_size;
 	          let parent_inline_base = constraints.inline_percentage_base;
 	          let container_justify_items = box_node.style.justify_items;
-	          let cache = &mut measure_cache;
-	          let measured = &mut measured_fragments;
-	          let measured_keys = &mut measured_node_keys;
+	          let cache = Rc::clone(&measure_cache);
+	          let measured = Rc::clone(&measured_fragments);
+	          let measured_keys = Rc::clone(&measured_node_keys);
 	          move |known_dimensions,
 	                available_space,
 	                node_id,
 	                node_context,
 	                _style: &taffy::style::Style| {
+	            let mut cache = cache.borrow_mut();
+	            let mut measured = measured.borrow_mut();
+	            let mut measured_keys = measured_keys.borrow_mut();
 	            let fallback_size =
 	              |known: Option<f32>, avail_dim: taffy::style::AvailableSpace| {
 	                known.unwrap_or(match avail_dim {
@@ -2503,13 +2511,15 @@ impl FormattingContext for GridFormattingContext {
     }
 
     // Convert back to FragmentNode tree and layout each in-flow child using its formatting context.
+    let measured_fragments_ref = measured_fragments.borrow();
+    let measured_node_keys_ref = measured_node_keys.borrow();
     let mut fragment = self.convert_to_fragments(
       &taffy,
       root_id,
       root_id,
       &constraints,
-      &measured_fragments,
-      &measured_node_keys,
+      &measured_fragments_ref,
+      &measured_node_keys_ref,
       &positioned_children_map,
     )?;
 
@@ -2542,6 +2552,16 @@ impl FormattingContext for GridFormattingContext {
     if !positioned_children.is_empty() {
       let padding_left = self.resolve_length_for_width(
         box_node.style.padding_left,
+        constraints.width().unwrap_or(0.0),
+        &box_node.style,
+      );
+      let padding_right = self.resolve_length_for_width(
+        box_node.style.padding_right,
+        constraints.width().unwrap_or(0.0),
+        &box_node.style,
+      );
+      let padding_bottom = self.resolve_length_for_width(
+        box_node.style.padding_bottom,
         constraints.width().unwrap_or(0.0),
         &box_node.style,
       );
@@ -2631,7 +2651,7 @@ impl FormattingContext for GridFormattingContext {
               .unwrap_or(taffy::style::AlignContent::Stretch),
           );
 
-          for child in positioned_children {
+          for child in &positioned_children {
             let mut pos = Point::ZERO;
             if child.style.grid_column_start > 0
               && child.style.grid_column_end > 0
@@ -2665,7 +2685,7 @@ impl FormattingContext for GridFormattingContext {
       let abs = crate::layout::absolute_positioning::AbsoluteLayout::with_font_context(
         self.font_context.clone(),
       );
-      for child in positioned_children {
+      for child in &positioned_children {
         // Layout child as static for intrinsic size.
         let mut layout_child = child.clone();
         let mut style = (*layout_child.style).clone();

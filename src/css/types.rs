@@ -13,6 +13,7 @@ use crate::style::media::MediaContext;
 use crate::style::media::MediaQuery;
 use crate::style::media::MediaQueryCache;
 use crate::style::values::Length;
+use crate::style::values::{CustomPropertySyntax, CustomPropertyValue};
 use cssparser::Parser;
 use cssparser::ParserInput;
 use cssparser::ToCss;
@@ -289,6 +290,15 @@ pub struct PageRule {
 pub struct StartingStyleRule {
   /// Rules that only apply to the starting-style snapshot.
   pub rules: Vec<CssRule>,
+}
+
+/// A @property rule registering a custom property.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PropertyRule {
+  pub name: String,
+  pub syntax: CustomPropertySyntax,
+  pub inherits: bool,
+  pub initial_value: Option<CustomPropertyValue>,
 }
 
 /// A minimal interface for loading imported stylesheets.

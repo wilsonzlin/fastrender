@@ -165,9 +165,21 @@ impl<'a> SlotAssignmentMap<'a> {
   }
 }
 
-/// Placeholder for future ::part() export chain data.
-#[derive(Debug)]
-pub struct PartExportMap;
+/// Mapping of exported parts per shadow host.
+#[derive(Debug, Default, Clone)]
+pub struct PartExportMap {
+  exports: HashMap<usize, HashMap<String, Vec<usize>>>,
+}
+
+impl PartExportMap {
+  pub fn exports_for_host(&self, host_id: usize) -> Option<&HashMap<String, Vec<usize>>> {
+    self.exports.get(&host_id)
+  }
+
+  pub fn insert_host_exports(&mut self, host_id: usize, exports: HashMap<String, Vec<usize>>) {
+    self.exports.insert(host_id, exports);
+  }
+}
 
 impl SelectorImpl for FastRenderSelectorImpl {
   type AttrValue = CssString;

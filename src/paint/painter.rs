@@ -805,7 +805,7 @@ impl Painter {
             replaced_box
               .replaced_type
               .selected_image_source_for_context(crate::tree::box_tree::ImageSelectionContext {
-                scale: self.scale,
+                device_pixel_ratio: self.scale,
                 slot_width: None,
                 viewport: Some(viewport),
                 media_context: Some(&media_ctx),
@@ -825,7 +825,7 @@ impl Painter {
                 orientation,
                 &style.image_resolution,
                 self.scale,
-                selected.resolution,
+                selected.density,
               ) {
                 if needs_intrinsic {
                   replaced_box.intrinsic_size = Some(Size::new(w, h));
@@ -4851,7 +4851,7 @@ impl Painter {
         let cache_base = self.image_cache.base_url();
         let sources =
           replaced_type.image_sources_with_fallback(crate::tree::box_tree::ImageSelectionContext {
-            scale: self.scale,
+            device_pixel_ratio: self.scale,
             slot_width: Some(content_rect.width()),
             viewport: Some(Size::new(self.css_width, self.css_height)),
             media_context: Some(&media_ctx),
@@ -4860,7 +4860,7 @@ impl Painter {
           });
         for candidate in sources {
           if self.paint_image_from_src(
-            &candidate,
+            candidate.url,
             style,
             content_rect.x(),
             content_rect.y(),
@@ -5017,7 +5017,7 @@ impl Painter {
         let cache_base = self.image_cache.base_url();
         let sources =
           replaced_type.image_sources_with_fallback(crate::tree::box_tree::ImageSelectionContext {
-            scale: self.scale,
+            device_pixel_ratio: self.scale,
             slot_width: Some(content_rect.width()),
             viewport: Some(Size::new(self.css_width, self.css_height)),
             media_context: Some(&media_ctx),
@@ -5026,7 +5026,7 @@ impl Painter {
           });
         for candidate in sources {
           if self.paint_image_from_src(
-            &candidate,
+            candidate.url,
             style,
             content_rect.x(),
             content_rect.y(),

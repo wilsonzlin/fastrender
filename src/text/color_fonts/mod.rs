@@ -87,14 +87,12 @@ impl ColorFontRenderer {
     if let Some(colr) = colr_v1::render_colr_glyph(
       font,
       &face,
-      instance,
       font_key,
       gid,
       font_size,
       palette_index,
       text_color,
       synthetic_oblique,
-      variations,
       &limits,
       &self.caches,
     ) {
