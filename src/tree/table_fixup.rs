@@ -74,8 +74,9 @@ use std::sync::Arc;
 ///
 /// 1. **Cell-to-Row Fixup**: Ensure all cells are inside rows
 /// 2. **Row-to-Group Fixup**: Ensure all rows are inside row-groups
-/// 3. **Column Inference**: Determine column count from cells
-/// 4. **Wrapper Creation**: Create table wrapper if captions present
+/// 3. **Row Content Fixup**: Wrap stray row children in anonymous cells
+/// 4. **Column Inference**: Determine column count from cells
+/// 5. **Wrapper Creation**: Create table wrapper if captions present
 ///
 /// Each phase operates on the tree independently, allowing for clean
 /// separation of concerns and easy testing.
@@ -86,40 +87,36 @@ impl TableStructureFixer {
   ///
   /// Takes a box tree that may have incomplete table structure
   /// and returns a tree with all required anonymous boxes.
-  pub fn fixup_table(table_box: BoxNode) -> Result<BoxNode> {
-    Ok(Self::fixup_table_internal(table_box, true))
-  }
-
-  /// Fixes table internals (rows/row groups/cells) without creating a wrapper.
   ///
-  /// This is intended for layout consumers that already handle caption
-  /// wrappers themselves.
-  pub fn fixup_table_internals(table_box: BoxNode) -> BoxNode {
-    Self::fixup_table_internal(table_box, false)
+  /// # CSS Requirements
+  ///
+  /// 1. Table must contain row groups (thead, tbody, tfoot)
+  /// 2. Row groups must contain rows
+  /// 3. Rows must contain cells (wrapping stray content in anonymous cells)
+  /// 4. Tables with captions need wrapper boxes
+  ///
+  /// # Arguments
+  ///
+  /// * `table_box` - A BoxNode with table formatting context
+  ///
+  /// # Returns
+  ///
+  /// Returns the fixed table structure with all anonymous boxes inserted.
+  ///
+  /// # Errors
+  ///
+  /// Returns an error if the table structure is fundamentally broken
+  /// (e.g., completely empty after fixup).
+  pub fn fixup_table(table_box: BoxNode) -> Result<BoxNode> {
+    Self::fixup_table_structure(table_box, true)
   }
 
-  fn fixup_table_internal(table_box: BoxNode, wrap: bool) -> BoxNode {
-    if !Self::is_table_box(&table_box) {
-      return table_box;
-    }
-
-    let mut fixed = table_box;
-
-    // Step 1: Wrap cells not in rows with anonymous rows
-    fixed = Self::ensure_cells_in_rows(fixed);
-
-    // Step 2: Wrap rows not in row-groups with anonymous tbody
-    fixed = Self::ensure_rows_in_groups(fixed);
-
-    // Step 3: Infer column structure
-    fixed = Self::infer_columns(fixed);
-
-    // Step 4: Create table wrapper if needed (captions)
-    if wrap {
-      fixed = Self::create_wrapper_if_needed(fixed);
-    }
-
-    fixed
+  /// Fixes up table internals without creating wrapper boxes.
+  ///
+  /// This variant normalizes rows, row groups, and cells but leaves caption
+  /// handling to downstream layout (no anonymous table wrapper is generated).
+  pub fn fixup_table_internals(table_box: BoxNode) -> Result<BoxNode> {
+    Self::fixup_table_structure(table_box, false)
   }
 
   // ==================== Type Checking ====================
@@ -394,13 +391,22 @@ impl TableStructureFixer {
   /// Wraps non-cell row children in anonymous table cells.
   fn fixup_row(mut row: BoxNode) -> BoxNode {
     let children = std::mem::take(&mut row.children);
-    let mut fixed_children = Vec::with_capacity(children.len());
+    let mut fixed_children = Vec::new();
+    let mut pending_non_cells: Vec<BoxNode> = Vec::new();
     for child in children {
       if Self::is_table_cell(&child) {
+        if !pending_non_cells.is_empty() {
+          let anon_cell =
+            Self::create_anonymous_cell(std::mem::take(&mut pending_non_cells), &row.style);
+          fixed_children.push(anon_cell);
+        }
         fixed_children.push(child);
       } else {
-        fixed_children.push(Self::create_anonymous_cell(vec![child], &row.style));
+        pending_non_cells.push(child);
       }
+    }
+    if !pending_non_cells.is_empty() {
+      fixed_children.push(Self::create_anonymous_cell(pending_non_cells, &row.style));
     }
     row.children = fixed_children;
     row
@@ -511,6 +517,32 @@ impl TableStructureFixer {
 
   // ==================== Wrapper Creation ====================
 
+  fn fixup_table_structure(table_box: BoxNode, create_wrapper: bool) -> Result<BoxNode> {
+    // Verify this is actually a table
+    if !Self::is_table_box(&table_box) {
+      return Ok(table_box);
+    }
+
+    // Fix table structure in multiple passes
+    let mut fixed = table_box;
+
+    // Step 1: Wrap cells not in rows with anonymous rows
+    fixed = Self::ensure_cells_in_rows(fixed);
+
+    // Step 2: Wrap rows not in row-groups with anonymous tbody
+    fixed = Self::ensure_rows_in_groups(fixed);
+
+    // Step 3: Infer column structure
+    fixed = Self::infer_columns(fixed);
+
+    if create_wrapper {
+      // Step 4: Create table wrapper if needed (captions)
+      fixed = Self::create_wrapper_if_needed(fixed);
+    }
+
+    Ok(fixed)
+  }
+
   /// Creates table wrapper if needed
   ///
   /// CSS 2.1: Tables with captions need a wrapper box
@@ -561,6 +593,25 @@ impl TableStructureFixer {
     // Otherwise, recursively process children
     let children = std::mem::take(&mut root.children);
     let fixed_children: Result<Vec<BoxNode>> = children.into_iter().map(Self::fixup_tree).collect();
+    root.children = fixed_children?;
+
+    Ok(root)
+  }
+
+  /// Recursively fixes up all table boxes in a tree without creating wrappers.
+  ///
+  /// This normalizes table internals for use in pipelines that handle captions
+  /// separately (e.g., layout).
+  pub fn fixup_tree_internals(mut root: BoxNode) -> Result<BoxNode> {
+    if Self::is_table_box(&root) {
+      return Self::fixup_table_internals(root);
+    }
+
+    let children = std::mem::take(&mut root.children);
+    let fixed_children: Result<Vec<BoxNode>> = children
+      .into_iter()
+      .map(Self::fixup_tree_internals)
+      .collect();
     root.children = fixed_children?;
 
     Ok(root)
@@ -848,6 +899,25 @@ mod tests {
     assert_eq!(fixed_tbody.children[0].children.len(), 2);
   }
 
+  #[test]
+  fn test_row_with_text_wraps_in_cell() {
+    // Row containing inline content should get an anonymous cell
+    let row = row_box(vec![BoxNode::new_text(default_style(), "oops".to_string())]);
+    let table = table_box(vec![row]);
+
+    let fixed = TableStructureFixer::fixup_table(table).unwrap();
+
+    let fixed_row = &fixed
+      .children
+      .first()
+      .expect("row group created")
+      .children
+      .first()
+      .expect("row created");
+    assert_eq!(fixed_row.children.len(), 1);
+    assert!(TableStructureFixer::is_table_cell(&fixed_row.children[0]));
+  }
+
   // ==================== Mixed Content Tests ====================
 
   #[test]
@@ -931,6 +1001,32 @@ mod tests {
 
     // Should NOT be wrapped
     assert!(TableStructureFixer::is_table_box(&fixed));
+  }
+
+  #[test]
+  fn test_internals_fixup_leaves_captions_unwrapped() {
+    // Internal fixup should not create a table wrapper even if captions exist
+    let caption = caption_box(vec![BoxNode::new_text(
+      default_style(),
+      "Caption".to_string(),
+    )]);
+    let tbody = row_group_box(vec![row_box(vec![cell_box(vec![])])]);
+
+    let table = table_box(vec![caption, tbody]);
+
+    let fixed = TableStructureFixer::fixup_table_internals(table).unwrap();
+
+    assert!(TableStructureFixer::is_table_box(&fixed));
+    assert!(!matches!(
+      &fixed.box_type,
+      BoxType::Anonymous(AnonymousBox {
+        anonymous_type: AnonymousType::TableWrapper
+      })
+    ));
+    assert!(fixed
+      .children
+      .iter()
+      .any(TableStructureFixer::is_table_row_group));
   }
 
   // ==================== Empty Table Tests ====================

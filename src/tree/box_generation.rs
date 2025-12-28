@@ -54,6 +54,7 @@ use crate::tree::box_tree::SrcsetDescriptor;
 use crate::tree::box_tree::SvgContent;
 use crate::tree::box_tree::TextControlKind;
 use crate::tree::debug::DebugInfo;
+use crate::tree::table_fixup::TableStructureFixer;
 use cssparser::Parser;
 use cssparser::ParserInput;
 use cssparser::Token;
@@ -372,6 +373,9 @@ pub fn generate_box_tree_with_anonymous_fixup_with_options(
 ) -> BoxTree {
   let root = build_box_tree_root(styled, options);
   let fixed_root = AnonymousBoxCreator::fixup_tree(root);
+  let fixed_root = TableStructureFixer::fixup_tree_internals(fixed_root).unwrap_or_else(|err| {
+    panic!("table structure fixup failed: {err}");
+  });
   BoxTree::new(fixed_root)
 }
 

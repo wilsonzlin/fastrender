@@ -3755,7 +3755,9 @@ impl FormattingContext for TableFormattingContext {
         return Ok(cached);
       }
     }
-    let table_box = TableStructureFixer::fixup_table_internals(box_node.clone());
+    let table_box = TableStructureFixer::fixup_table_internals(box_node.clone()).unwrap_or_else(
+      |err| panic!("table structure fixup failed: {err}"),
+    );
     let dump = runtime::runtime_toggles().truthy("FASTR_DUMP_TABLE");
     let mut positioned_children: Vec<BoxNode> = Vec::new();
     let mut running_children: Vec<(usize, BoxNode)> = Vec::new();
@@ -5632,7 +5634,9 @@ impl FormattingContext for TableFormattingContext {
     box_node: &BoxNode,
     mode: IntrinsicSizingMode,
   ) -> Result<f32, LayoutError> {
-    let table_box = TableStructureFixer::fixup_table_internals(box_node.clone());
+    let table_box = TableStructureFixer::fixup_table_internals(box_node.clone()).unwrap_or_else(
+      |err| panic!("table structure fixup failed: {err}"),
+    );
     let structure = TableStructure::from_box_tree(&table_box);
     let mut column_constraints: Vec<ColumnConstraints> = (0..structure.column_count)
       .map(|_| ColumnConstraints::new(0.0, 0.0))
