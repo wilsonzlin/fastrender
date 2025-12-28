@@ -848,7 +848,7 @@ impl TextRasterizer {
     state: TextRenderState<'_>,
     pixmap: &mut Pixmap,
   ) -> Result<f32> {
-    self.render_glyphs_with_variations(
+    self.render_glyphs_with_variations_and_state(
       glyphs,
       font,
       font_size,
@@ -867,6 +867,35 @@ impl TextRasterizer {
 
   /// Renders text with a specific font (low-level API) and explicit variations.
   pub fn render_glyphs_with_variations(
+    &mut self,
+    glyphs: &[GlyphPosition],
+    font: &LoadedFont,
+    font_size: f32,
+    x: f32,
+    baseline_y: f32,
+    color: Rgba,
+    variations: &[Variation],
+    pixmap: &mut Pixmap,
+  ) -> Result<f32> {
+    self.render_glyphs_with_variations_and_state(
+      glyphs,
+      font,
+      font_size,
+      x,
+      baseline_y,
+      color,
+      0.0,
+      0.0,
+      0,
+      variations,
+      None,
+      TextRenderState::default(),
+      pixmap,
+    )
+  }
+
+  /// Renders text with a specific font (low-level API) and explicit variations plus render state.
+  pub fn render_glyphs_with_variations_and_state(
     &mut self,
     glyphs: &[GlyphPosition],
     font: &LoadedFont,
@@ -943,7 +972,7 @@ impl TextRasterizer {
     color: Rgba,
     pixmap: &mut Pixmap,
   ) -> Result<f32> {
-    self.render_glyphs_with_variations(
+    self.render_glyphs_with_variations_and_state(
       glyphs,
       font,
       font_size,
