@@ -279,12 +279,13 @@ pub fn fragment_tree_with_axes(
     return vec![root.clone()];
   }
 
-  let boundaries = resolve_fragmentation_boundaries_with_axes(
-    root,
-    options.fragmentainer_size,
-    FragmentationContext::Page,
-    axes,
-  );
+  let context = if options.column_count > 1 {
+    FragmentationContext::Column
+  } else {
+    FragmentationContext::Page
+  };
+  let boundaries =
+    resolve_fragmentation_boundaries_with_axes(root, options.fragmentainer_size, context, axes);
   if boundaries.len() < 2 {
     return vec![root.clone()];
   }
