@@ -90,6 +90,79 @@ fn collect_line_positions(fragment: &FragmentNode, origin: (f32, f32), out: &mut
   }
 }
 
+fn layout_multicol_fragment(
+  container_width: f32,
+  column_gap: f32,
+  column_count: i32,
+  column_width: f32,
+) -> (FragmentNode, usize) {
+  let mut container_style = ComputedStyle::default();
+  container_style.width = Some(Length::px(container_width));
+  container_style.column_count = Some(column_count);
+  container_style.column_gap = Length::px(column_gap);
+  container_style.column_width = Some(Length::px(column_width));
+  let container_style = Arc::new(container_style);
+
+  let mut child_style = ComputedStyle::default();
+  child_style.height = Some(Length::px(20.0));
+  let child = BoxNode::new_block(
+    Arc::new(child_style),
+    FormattingContextType::Block,
+    vec![],
+  );
+
+  let mut container =
+    BoxNode::new_block(container_style, FormattingContextType::Block, vec![child]);
+  container.id = 900;
+
+  let fc = BlockFormattingContext::new();
+  let fragment = fc
+    .layout(&container, &LayoutConstraints::definite_width(container_width))
+    .expect("layout");
+
+  (fragment, container.id)
+}
+
+#[test]
+fn column_count_is_treated_as_a_maximum() {
+  let (fragment, container_id) = layout_multicol_fragment(250.0, 10.0, 3, 100.0);
+  let container = find_fragment(&fragment, container_id).expect("multicol fragment");
+  let info = container
+    .fragmentation
+    .as_ref()
+    .expect("fragmentation info for multicol container");
+
+  assert_eq!(info.column_count, 2);
+  assert!((info.column_width - 120.0).abs() < 0.01);
+}
+
+#[test]
+fn full_column_count_used_when_widths_fit() {
+  let (fragment, container_id) = layout_multicol_fragment(330.0, 10.0, 3, 100.0);
+  let container = find_fragment(&fragment, container_id).expect("multicol fragment");
+  let info = container
+    .fragmentation
+    .as_ref()
+    .expect("fragmentation info for multicol container");
+
+  assert_eq!(info.column_count, 3);
+  assert!((info.column_width - 103.33).abs() < 0.05);
+  assert!(info.column_width >= 100.0);
+}
+
+#[test]
+fn narrow_container_collapses_to_single_column() {
+  let (fragment, container_id) = layout_multicol_fragment(180.0, 10.0, 3, 100.0);
+  let container = find_fragment(&fragment, container_id).expect("multicol fragment");
+  let info = container
+    .fragmentation
+    .as_ref()
+    .expect("fragmentation info for multicol container");
+
+  assert_eq!(info.column_count, 1);
+  assert!((info.column_width - 180.0).abs() < 0.01);
+}
+
 #[test]
 fn long_paragraph_splits_across_columns() {
   let mut parent_style = ComputedStyle::default();

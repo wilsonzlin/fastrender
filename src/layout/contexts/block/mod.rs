@@ -1933,10 +1933,27 @@ impl BlockFormattingContext {
         self.viewport_size,
       )
     });
-    let specified_count = style.column_count.unwrap_or(0).max(0);
+    let specified_count = style.column_count.unwrap_or(0).max(0) as usize;
 
     if specified_count > 0 {
-      let count = specified_count as usize;
+      if let Some(spec_width) = specified_width.filter(|w| *w > 0.0) {
+        let denom = spec_width + gap;
+        let mut max_fit = if denom > 0.0 {
+          ((available_inline + gap) / denom).floor().max(1.0) as usize
+        } else {
+          1
+        };
+        if max_fit == 0 {
+          max_fit = 1;
+        }
+        let count = specified_count.min(max_fit).max(1);
+        let used_width = ((available_inline - gap * (count.saturating_sub(1) as f32))
+          / count as f32)
+          .max(0.0);
+        return (count, used_width, gap);
+      }
+
+      let count = specified_count;
       let width =
         ((available_inline - gap * (count.saturating_sub(1) as f32)) / count as f32).max(0.0);
       let used_width = specified_width.map(|w| w.min(width)).unwrap_or(width);
@@ -1946,7 +1963,7 @@ impl BlockFormattingContext {
     if let Some(spec_width) = specified_width.filter(|w| *w > 0.0) {
       let denom = spec_width + gap;
       let mut count = if denom > 0.0 {
-        ((available_inline + gap) / denom).floor() as usize
+        ((available_inline + gap) / denom).floor().max(1.0) as usize
       } else {
         1
       };
@@ -2305,7 +2322,13 @@ impl BlockFormattingContext {
     if column_count <= 1 {
       let (frags, height, positioned) =
         self.layout_children(parent, constraints, nearest_positioned_cb)?;
-      return Ok((frags, height, positioned, None));
+      let info = FragmentationInfo {
+        column_count,
+        column_gap,
+        column_width,
+        flow_height: height,
+      };
+      return Ok((frags, height, positioned, Some(info)));
     }
 
     let mut fragments = Vec::new();
