@@ -73,6 +73,7 @@ impl ColorFontRenderer {
 
     // COLR v1 paint graphs
     if let Some(colr) = colr_v1::render_colr_glyph(
+      font,
       &face,
       font_key,
       gid,
@@ -127,8 +128,6 @@ struct ColorFontCaches {
   palette_cache: LruCache<PaletteCacheKey, Option<Arc<cpal::ParsedPalette>>>,
   colr_v0_headers: LruCache<FontKey, Option<colr_v0::ColrV0Header>>,
   colr_v0_base_glyphs: LruCache<colr_v0::BaseGlyphCacheKey, Option<colr_v0::BaseGlyphRecord>>,
-  colr_v1_headers: LruCache<FontKey, Option<colr_v1::ColrV1Header>>,
-  colr_v1_base_glyphs: LruCache<colr_v1::BaseGlyphCacheKey, Option<colr_v1::BaseGlyphRecord>>,
 }
 
 impl ColorFontCaches {
@@ -137,8 +136,6 @@ impl ColorFontCaches {
       palette_cache: LruCache::new(64),
       colr_v0_headers: LruCache::new(64),
       colr_v0_base_glyphs: LruCache::new(1024),
-      colr_v1_headers: LruCache::new(64),
-      colr_v1_base_glyphs: LruCache::new(1024),
     }
   }
 
@@ -180,24 +177,6 @@ impl ColorFontCaches {
     self.colr_v0_base_glyphs.get_or_insert_with(key, || {
       // Cache negative lookups too so repeated attempts avoid rescans.
       Some(colr_v0::find_base_glyph(data, header, key.glyph_id))
-    })
-  }
-
-  fn colr_v1_header(&mut self, font_key: FontKey, data: &[u8]) -> Option<colr_v1::ColrV1Header> {
-    self
-      .colr_v1_headers
-      .get_or_insert_with(font_key, || Some(colr_v1::parse_colr_header(data)))
-      .flatten()
-  }
-
-  fn colr_v1_base_record(
-    &mut self,
-    key: colr_v1::BaseGlyphCacheKey,
-    data: &[u8],
-    header: colr_v1::ColrV1Header,
-  ) -> Option<Option<colr_v1::BaseGlyphRecord>> {
-    self.colr_v1_base_glyphs.get_or_insert_with(key, || {
-      Some(colr_v1::find_base_glyph(data, header, key.glyph_id))
     })
   }
 }

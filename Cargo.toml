@@ -67,6 +67,7 @@ tar = "0.4"
 sha2 = { version = "0.10", optional = true }
 httpdate = "1.0"
 http = "1"
+read-fonts = "0.20"
 
 [dev-dependencies]
 criterion = "0.5"
