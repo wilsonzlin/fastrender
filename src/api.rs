@@ -125,12 +125,6 @@ use crate::resource::{
 use crate::scroll::ScrollState;
 use crate::style::cascade::apply_style_set_with_media_target_and_imports_cached;
 use crate::style::cascade::apply_style_set_with_media_target_and_imports_cached_with_deadline;
-#[cfg(test)]
-use crate::style::cascade::apply_styles_with_media_target_and_imports;
-#[cfg(test)]
-use crate::style::cascade::apply_styles_with_media_target_and_imports_cached;
-#[cfg(test)]
-use crate::style::cascade::apply_styles_with_media_target_and_imports_cached_with_deadline;
 use crate::style::cascade::ContainerQueryContext;
 use crate::style::cascade::ContainerQueryInfo;
 use crate::style::cascade::StyledNode;
