@@ -1,4 +1,5 @@
 use super::util::bounding_box_for_color;
+use fastrender::paint::depth_sort;
 use fastrender::paint::display_list::{
   quad_from_transform3d, BlendMode, BorderRadii, DisplayItem, DisplayList, FillRectItem,
   StackingContextItem, Transform3D,
@@ -31,6 +32,124 @@ fn stacking_context(
     radii: BorderRadii::ZERO,
     mask: None,
   }
+}
+
+#[test]
+fn preserve_3d_depth_sort_prefers_intersection_depth() {
+  let tilted_rect = Rect::from_xywh(10.0, 10.0, 60.0, 60.0);
+  let flat_rect = Rect::from_xywh(40.0, 10.0, 60.0, 60.0);
+  let tilt_center = (
+    tilted_rect.x() + tilted_rect.width() * 0.5,
+    tilted_rect.y() + tilted_rect.height() * 0.5,
+  );
+
+  let tilt = Transform3D::translate(tilt_center.0, tilt_center.1, 15.0)
+    .multiply(&Transform3D::rotate_y(60_f32.to_radians()))
+    .multiply(&Transform3D::translate(-tilt_center.0, -tilt_center.1, 0.0));
+  let flat = Transform3D::translate(0.0, 0.0, 5.0);
+
+  let sort_inputs = vec![
+    depth_sort::SceneItem {
+      transform: Transform3D::perspective(400.0).multiply(&tilt),
+      plane_rect: tilted_rect,
+      paint_order: 0,
+    },
+    depth_sort::SceneItem {
+      transform: Transform3D::perspective(400.0).multiply(&flat),
+      plane_rect: flat_rect,
+      paint_order: 1,
+    },
+  ];
+  println!(
+    "depth sort order {:?}",
+    depth_sort::depth_sort(&sort_inputs)
+  );
+  let tilt_quad = quad_from_transform3d(tilted_rect, &sort_inputs[0].transform).unwrap();
+  let flat_quad = quad_from_transform3d(flat_rect, &sort_inputs[1].transform).unwrap();
+  println!("tilt quad {:?} flat quad {:?}", tilt_quad, flat_quad);
+
+  let mut list = DisplayList::new();
+  list.push(DisplayItem::PushStackingContext(stacking_context(
+    Rect::from_xywh(0.0, 0.0, 140.0, 90.0),
+    Rect::from_xywh(0.0, 0.0, 140.0, 90.0),
+    None,
+    Some(Transform3D::perspective(400.0)),
+  )));
+
+  list.push(DisplayItem::PushStackingContext(stacking_context(
+    tilted_rect,
+    tilted_rect,
+    Some(tilt),
+    None,
+  )));
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: tilted_rect,
+    color: Rgba::RED,
+  }));
+  list.push(DisplayItem::PopStackingContext);
+
+  list.push(DisplayItem::PushStackingContext(stacking_context(
+    flat_rect,
+    flat_rect,
+    Some(flat),
+    None,
+  )));
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: flat_rect,
+    color: Rgba::GREEN,
+  }));
+  list.push(DisplayItem::PopStackingContext);
+
+  list.push(DisplayItem::PopStackingContext);
+
+  let pixmap = DisplayListRenderer::new(140, 90, Rgba::WHITE, FontContext::new())
+    .unwrap()
+    .render(&list)
+    .unwrap();
+
+  let red_box =
+    bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r > 200 && g < 60 && b < 60)
+      .expect("tilted plane should be visible");
+  let green_box =
+    bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && g > 200 && r < 80 && b < 80)
+      .expect("flat plane should be visible");
+  eprintln!("red_box={:?} green_box={:?}", red_box, green_box);
+
+  let overlap = (
+    red_box.0.max(green_box.0),
+    red_box.1.max(green_box.1),
+    red_box.2.min(green_box.2),
+    red_box.3.min(green_box.3),
+  );
+  assert!(
+    overlap.0 < overlap.2 && overlap.1 < overlap.3,
+    "expected overlapping projection for depth sorting"
+  );
+
+  let sample_x = overlap.2.saturating_sub(1);
+  let sample_y = (overlap.1 + overlap.3) / 2;
+  let (_, _, tz_tilt, tw_tilt) =
+    sort_inputs[0]
+      .transform
+      .transform_point(sample_x as f32, sample_y as f32, 0.0);
+  let (_, _, tz_flat, tw_flat) =
+    sort_inputs[1]
+      .transform
+      .transform_point(sample_x as f32, sample_y as f32, 0.0);
+  println!(
+    "sample depth tilt {} flat {}",
+    tz_tilt / tw_tilt,
+    tz_flat / tw_flat
+  );
+  let pixel = pixmap
+    .pixel(sample_x as u32, sample_y as u32)
+    .expect("sample pixel");
+
+  assert!(
+    pixel.green() > pixel.red(),
+    "flatter plane should win where it is closer in the overlap"
+  );
+  assert_eq!(pixel.alpha(), 255);
 }
 
 #[test]
@@ -148,11 +267,9 @@ fn perspective_warp_is_enabled_by_default() {
     clamp(max_y.ceil() as i32, pixmap.height() as i32 - 1),
   );
 
-  let painted = bounding_box_for_color(
-    &pixmap,
-    |(r, g, b, a)| a > 0 && r > 200 && g < 80 && b < 80,
-  )
-  .expect("quad should be visible");
+  let painted =
+    bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r > 200 && g < 80 && b < 80)
+      .expect("quad should be visible");
 
   let expected_size = (expected.2 - expected.0 + 1, expected.3 - expected.1 + 1);
   let painted_size = (

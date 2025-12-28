@@ -1,5 +1,7 @@
+use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::paint::display_list::Transform3D;
+use crate::paint::homography::Homography;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
@@ -51,6 +53,7 @@ struct ProjectedQuad {
   points: [Vec3; 4],
   plane: Option<Plane>,
   average_z: f32,
+  inv_homography: Option<Homography>,
 }
 
 impl ProjectedQuad {
@@ -63,7 +66,15 @@ impl ProjectedQuad {
     ]
   }
 
-  fn sample_depth(&self, point: Vec2) -> Option<f32> {
+  fn sample_depth(&self, transform: &Transform3D, point: Vec2) -> Option<f32> {
+    if let Some(inv) = self.inv_homography {
+      if let Some((px, py)) = inv.transform_point(point.x, point.y) {
+        let (_tx, _ty, tz, tw) = transform.transform_point(px, py, 0.0);
+        if tz.is_finite() && tw.is_finite() && tw.abs() >= Transform3D::MIN_PROJECTIVE_W {
+          return Some(tz / tw);
+        }
+      }
+    }
     if let Some(plane) = self.plane {
       if let Some(z) = eval_plane_z(plane, point.x, point.y) {
         if z.is_finite() {
@@ -115,8 +126,8 @@ pub fn depth_sort(items: &[SceneItem]) -> Vec<usize> {
       }
 
       let sample = centroid(&intersection);
-      let za = pi.sample_depth(sample);
-      let zb = pj.sample_depth(sample);
+      let za = pi.sample_depth(&items[i].transform, sample);
+      let zb = pj.sample_depth(&items[j].transform, sample);
       let (Some(za), Some(zb)) = (za, zb) else {
         continue;
       };
@@ -141,11 +152,15 @@ fn project_item(item: &SceneItem) -> Option<ProjectedQuad> {
   let points = project_rect(&item.transform, item.plane_rect)?;
   let plane = compute_plane(&points);
   let average_z = points.iter().map(|p| p.z).sum::<f32>() / points.len() as f32;
+  let src_quad = rect_to_quad(item.plane_rect);
+  let dst_quad = points.map(|p| Point::new(p.x, p.y));
+  let inv_homography = Homography::from_quad_to_quad(src_quad, dst_quad).and_then(|h| h.inverse());
 
   Some(ProjectedQuad {
     points,
     plane,
     average_z,
+    inv_homography,
   })
 }
 
@@ -170,7 +185,7 @@ fn project_point(transform: &Transform3D, x: f32, y: f32) -> Option<Vec3> {
   if !tx.is_finite() || !ty.is_finite() || !tz.is_finite() || !tw.is_finite() {
     return None;
   }
-  if tw.abs() < EPSILON || tw < 0.0 {
+  if tw.abs() < Transform3D::MIN_PROJECTIVE_W || tw < 0.0 {
     return None;
   }
 
@@ -307,6 +322,15 @@ fn add_edge(edges: &mut [Vec<usize>], indegree: &mut [usize], from: usize, to: u
   }
   edges[from].push(to);
   indegree[to] += 1;
+}
+
+fn rect_to_quad(rect: Rect) -> [Point; 4] {
+  [
+    Point::new(rect.min_x(), rect.min_y()),
+    Point::new(rect.max_x(), rect.min_y()),
+    Point::new(rect.max_x(), rect.max_y()),
+    Point::new(rect.min_x(), rect.max_y()),
+  ]
 }
 
 fn stable_topological_sort(
