@@ -37,7 +37,7 @@ use super::types::StyleRule;
 use super::types::StyleSheet;
 use super::types::SupportsCondition;
 use super::types::SupportsRule;
-use crate::dom::{DomNode, DomNodeType};
+use crate::dom::{DomNode, DomNodeType, HTML_NAMESPACE};
 use crate::error::Result;
 use crate::style::counter_styles::{CounterStyleRule, CounterSystem, SpeakAs};
 use crate::style::media::MediaQuery;
@@ -2805,6 +2805,33 @@ pub fn rel_list_contains_stylesheet(tokens: &[String]) -> bool {
     .any(|token| token.eq_ignore_ascii_case("stylesheet"))
 }
 
+/// Returns true if the node is a `<template>` whose contents should remain inert for styling.
+fn is_inert_template(node: &DomNode) -> bool {
+  // Template contents are inert unless the template declares a shadow root (handled elsewhere).
+  if !node
+    .tag_name()
+    .map(|tag| tag.eq_ignore_ascii_case("template"))
+    .unwrap_or(false)
+  {
+    return false;
+  }
+
+  if let Some(namespace) = node.namespace() {
+    if !(namespace.is_empty() || namespace == HTML_NAMESPACE) {
+      return true;
+    }
+  }
+
+  let Some(mode_attr) = node
+    .get_attribute_ref("shadowroot")
+    .or_else(|| node.get_attribute_ref("shadowrootmode"))
+  else {
+    return true;
+  };
+
+  !matches!(mode_attr.to_ascii_lowercase().as_str(), "open" | "closed")
+}
+
 /// Extract inline `<style>` blocks and external `<link rel="stylesheet">` entries from a DOM.
 ///
 /// Each stylesheet is tagged with the DOM tree scope it belongs to (document vs. a particular
@@ -2858,6 +2885,10 @@ pub fn extract_css_sources(dom: &DomNode) -> Vec<ScopedStylesheetSource> {
           });
         }
       }
+    }
+
+    if is_inert_template(node) {
+      return;
     }
 
     let mut child_index = 0;
@@ -2939,6 +2970,10 @@ pub fn extract_scoped_css_sources(dom: &DomNode) -> ScopedStylesheetSources {
       }
     }
 
+    if is_inert_template(node) {
+      return;
+    }
+
     for child in &node.children {
       let child_scope = match child.node_type {
         DomNodeType::ShadowRoot { .. } => Some(node_id),
@@ -2963,6 +2998,9 @@ pub fn extract_css(dom: &DomNode) -> Result<StyleSheet> {
 
   fn walk(node: &DomNode, css_content: &mut String) {
     if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
+      return;
+    }
+    if is_inert_template(node) {
       return;
     }
     if let Some(tag) = node.tag_name() {
@@ -3591,6 +3629,43 @@ mod tests {
     let tokens = tokenize_rel_list(" StyleSheet  Alternate   PREFETCH ");
     assert_eq!(tokens, vec!["stylesheet", "alternate", "prefetch"]);
     assert!(rel_list_contains_stylesheet(&tokens));
+  }
+
+  #[test]
+  fn style_inside_inert_template_is_ignored() {
+    let html = "<head><template><style>body{color:red}</style></template><style>body{color:green}</style></head>";
+    let dom = crate::dom::parse_html(html).unwrap();
+    let sources = extract_css_sources(&dom);
+    assert_eq!(sources.len(), 1);
+    assert!(matches!(sources[0].scope, CssTreeScope::Document));
+    match &sources[0].source {
+      StylesheetSource::Inline(inline) => {
+        assert!(inline.css.contains("green"));
+        assert!(!inline.css.contains("red"));
+      }
+      other => panic!("expected inline stylesheet, got {:?}", other),
+    }
+  }
+
+  #[test]
+  fn style_inside_declarative_shadow_template_is_scoped() {
+    let html = r#"
+      <div id="host">
+        <template shadowroot="open">
+          <style>.x {}</style>
+        </template>
+      </div>
+    "#;
+    let dom = crate::dom::parse_html(html).unwrap();
+    let sources = extract_scoped_css_sources(&dom);
+    assert!(sources.document.is_empty(), "document styles should remain empty");
+    assert_eq!(sources.shadows.len(), 1, "expected styles scoped to a shadow root");
+    let (_, shadow_sources) = sources.shadows.iter().next().unwrap();
+    assert_eq!(shadow_sources.len(), 1);
+    match &shadow_sources[0] {
+      StylesheetSource::Inline(inline) => assert!(inline.css.contains(".x")),
+      other => panic!("expected inline shadow stylesheet, got {:?}", other),
+    }
   }
 
   #[test]
