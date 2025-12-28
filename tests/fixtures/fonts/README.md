@@ -101,6 +101,16 @@ be safely checked in alongside their regeneration scripts.
   ```bash
   python tests/fixtures/fonts/generate_svg_color_font.py
   ```
+
+### `TestSbixJPEG.ttf`
+- **Source:** Custom test font generated with FontTools/Pillow for exercising bitmap color glyphs.
+- **License:** Created specifically for FastRender tests; no third-party assets or licensing obligations.
+- **Glyphs:** Single sbix strike at 32ppem for the glyph `A`, embedding a small JPEG with a red background and green square.
+
+### `DejaVuSans-subset.ttf` / `DejaVuSans-subset.woff2`
+- **Source:** Subset of the DejaVu Sans family bundled for deterministic text rendering during tests.
+- **License:** Bitstream Vera/DejaVu fonts license.
+
 ## Variable font fixtures
 
 - **Font:** AmstelvarAlpha (variable)
@@ -121,7 +131,7 @@ be safely checked in alongside their regeneration scripts.
     --no-hinting
   ```
 
-The subset keeps the variation tables (`fvar`, `gvar`, `HVAR`, `MVAR`, etc.) so tests can assert that variable font axes (e.g. weight or stretch) affect glyph outlines.
+  The subset keeps the variation tables (`fvar`, `gvar`, `HVAR`, `MVAR`, etc.) so tests can assert that variable font axes (e.g. weight or stretch) affect glyph outlines.
 
-- Relevant axes (from `fvar`): `wght` 38–250 (default 88), `wdth` 60–402 (default 402), `opsz` 10–72 (default 14).
-- Tests exercise the extremes of the `wght` axis (40 vs 250) to ensure glyph outlines visibly change when variations are applied during rasterization.
+  - Relevant axes (from `fvar`): `wght` 38–250 (default 88), `wdth` 60–402 (default 402), `opsz` 10–72 (default 14).
+  - Tests exercise the extremes of the `wght` axis (40 vs 250) to ensure glyph outlines visibly change when variations are applied during rasterization.
