@@ -353,7 +353,9 @@ impl<'a> BuildContext<'a> {
     }
 
     let (role, _, _) = compute_role(node, &[], None);
-    if allows_visible_text_name(node.node.tag_name(), role.as_deref(), true) {
+    if role_allows_name_from_content(role.as_deref(), node.node.tag_name())
+      && allows_visible_text_name(node.node.tag_name(), role.as_deref(), true)
+    {
       let text = self.text_content(node, mode);
       if !text.is_empty() {
         return Some(text);

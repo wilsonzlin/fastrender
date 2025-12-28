@@ -495,6 +495,38 @@ fn accessibility_wbr_name_has_no_zero_width_spaces() {
 }
 
 #[test]
+fn accessibility_name_from_content_blocked_for_form_controls() {
+  let html = r##"
+    <html>
+      <body>
+        <select id="s">
+          <option>A</option>
+          <option selected>B</option>
+        </select>
+        <input id="text" type="text" value="alice" />
+        <button id="btn">Click me</button>
+      </body>
+    </html>
+  "##;
+
+  let tree = render_accessibility_json(html);
+
+  let select = find_json_node(&tree, "s").expect("select node present");
+  assert_eq!(select.get("name").and_then(|v| v.as_str()), None);
+  assert_eq!(select.get("value").and_then(|v| v.as_str()), Some("B"));
+
+  let input = find_json_node(&tree, "text").expect("text input present");
+  assert_eq!(input.get("name").and_then(|v| v.as_str()), None);
+  assert_eq!(input.get("value").and_then(|v| v.as_str()), Some("alice"));
+
+  let button = find_json_node(&tree, "btn").expect("button present");
+  assert_eq!(
+    button.get("name").and_then(|v| v.as_str()),
+    Some("Click me")
+  );
+}
+
+#[test]
 fn accessibility_aria_states() {
   let html =
     fs::read_to_string("tests/fixtures/accessibility/aria_states.html").expect("read fixture");
@@ -566,10 +598,6 @@ fn accessibility_tabindex_parsing() {
     find_by_id(&tree, "t2").is_none(),
     "invalid tabindex should not make node focusable"
   );
-=======
-  let node = find_by_id(&tree, "x").expect("node x");
-  assert_eq!(node.name.as_deref(), Some("HelloWorld"));
->>>>>>> fe412a6 (fix: strip zero-width breaks from accessibility text)
 }
 
 #[test]
