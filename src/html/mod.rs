@@ -14,38 +14,34 @@ use url::Url;
 /// Returns `None` when no `<base>` is present or the element is missing an
 /// `href` attribute.
 pub fn find_base_href(dom: &DomNode) -> Option<String> {
-  let mut stack = vec![dom];
-  let mut head: Option<&DomNode> = None;
-
-  while let Some(node) = stack.pop() {
+  fn find_head(node: &DomNode) -> Option<&DomNode> {
     if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
-      continue;
+      return None;
     }
-
     if let Some(tag) = node.tag_name() {
       if tag.eq_ignore_ascii_case("head") {
-        head = Some(node);
-        break;
+        return Some(node);
       }
       if tag.eq_ignore_ascii_case("template") {
-        continue;
+        return None;
       }
     }
-
-    for child in node.children.iter().rev() {
-      stack.push(child);
+    for child in &node.children {
+      if let Some(head) = find_head(child) {
+        return Some(head);
+      }
     }
+    None
   }
 
-  let Some(head) = head else {
-    return None;
-  };
-
-  let mut stack = vec![head];
-  while let Some(node) = stack.pop() {
-    let mut skip_children = matches!(node.node_type, DomNodeType::ShadowRoot { .. });
-
+  fn find_base(node: &DomNode) -> Option<String> {
+    if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
+      return None;
+    }
     if let Some(tag) = node.tag_name() {
+      if tag.eq_ignore_ascii_case("template") {
+        return None;
+      }
       if tag.eq_ignore_ascii_case("base") {
         if let Some(href) = node.get_attribute_ref("href") {
           let trimmed = href.trim();
@@ -54,21 +50,20 @@ pub fn find_base_href(dom: &DomNode) -> Option<String> {
           }
         }
       }
-      if tag.eq_ignore_ascii_case("template") {
-        skip_children = true;
+    }
+    for child in &node.children {
+      if let Some(found) = find_base(child) {
+        return Some(found);
       }
     }
-
-    if skip_children {
-      continue;
-    }
-
-    for child in node.children.iter().rev() {
-      stack.push(child);
-    }
+    None
   }
 
-  None
+  let head = find_head(dom)?;
+  if let Some(from_head) = find_base(head) {
+    return Some(from_head);
+  }
+  find_base(dom)
 }
 
 /// Compute the document base URL given the parsed DOM and an optional

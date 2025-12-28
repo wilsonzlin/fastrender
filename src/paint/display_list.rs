@@ -625,7 +625,7 @@ impl From<rustybuzz::Variation> for FontVariation {
 ///
 /// Represents shaped text ready for rendering. The glyphs have already
 /// been positioned by the text shaping system.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct TextItem {
   /// Position to draw text (baseline origin)
   pub origin: Point,
@@ -674,6 +674,27 @@ pub struct TextItem {
   /// but kept for forward compatibility.
   #[allow(dead_code)]
   pub decorations: Vec<ResolvedTextDecoration>,
+}
+
+impl Default for TextItem {
+  fn default() -> Self {
+    Self {
+      origin: Point::new(0.0, 0.0),
+      glyphs: Vec::new(),
+      color: Rgba::default(),
+      palette_index: 0,
+      shadows: Vec::new(),
+      font_size: 0.0,
+      advance_width: 0.0,
+      font: None,
+      font_id: None,
+      variations: Vec::new(),
+      synthetic_bold: 0.0,
+      synthetic_oblique: 0.0,
+      emphasis: None,
+      decorations: Vec::new(),
+    }
+  }
 }
 
 /// A single glyph instance for rendering
@@ -804,7 +825,7 @@ pub fn list_marker_bounds(item: &ListMarkerItem) -> Rect {
 }
 
 /// List marker paint item
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ListMarkerItem {
   /// Origin in CSS px (baseline-aligned)
   pub origin: Point,
@@ -848,6 +869,27 @@ pub struct ListMarkerItem {
 
   /// Optional background behind the marker (CSS px)
   pub background: Option<Rgba>,
+}
+
+impl Default for ListMarkerItem {
+  fn default() -> Self {
+    Self {
+      origin: Point::new(0.0, 0.0),
+      glyphs: Vec::new(),
+      color: Rgba::default(),
+      palette_index: 0,
+      shadows: Vec::new(),
+      font_size: 0.0,
+      advance_width: 0.0,
+      font: None,
+      font_id: None,
+      variations: Vec::new(),
+      synthetic_bold: 0.0,
+      synthetic_oblique: 0.0,
+      emphasis: None,
+      background: None,
+    }
+  }
 }
 
 // ============================================================================

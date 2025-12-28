@@ -202,17 +202,20 @@ fn visual_fixture_matches_goldens() {
     .expect("fixture html");
   let compare_config = compare_config_from_env(CompareEnvVars::fixtures()).expect("compare config");
   let mut renderer = FastRender::new().expect("renderer");
+  let prepared = renderer
+    .prepare_html(
+      &html,
+      RenderOptions::new()
+        .with_viewport(260, 180)
+        .with_animation_time(0.0),
+    )
+    .expect("prepare");
   let cases = [
     ("transition_starting_style_0ms", 0.0),
     ("transition_starting_style_400ms", 400.0),
   ];
   for (name, time) in cases {
-    let options = RenderOptions::new()
-      .with_viewport(260, 180)
-      .with_animation_time(time);
-    let pixmap = renderer
-      .render_html_with_options(&html, options)
-      .expect("render");
+    let pixmap = prepared.paint_at_time(time).expect("render");
     let png = encode_image(&pixmap, OutputFormat::Png).expect("encode png");
     let golden_path = root
       .join("tests/fixtures/golden")

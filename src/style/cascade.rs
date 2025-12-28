@@ -2208,7 +2208,13 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
           .then(a.order.cmp(&b.order))
       });
       for rule in collected {
-        registry.register(rule.rule.clone());
+        let converted = crate::style::custom_properties::PropertyRule {
+          name: rule.rule.name.clone(),
+          syntax: rule.rule.syntax,
+          inherits: rule.rule.inherits,
+          initial_value: rule.rule.initial_value.clone(),
+        };
+        registry.register(converted);
       }
     }
 
@@ -2238,7 +2244,6 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
     std::sync::Arc::new(registry)
   };
   let initial_custom_properties = property_registry.initial_values();
-
   let mut base_styles = ComputedStyle::default();
   base_styles.counter_styles = counter_styles.clone();
   base_styles.font_palettes = font_palettes.clone();
@@ -2742,7 +2747,13 @@ fn apply_style_set_with_media_target_and_imports_cached_with_deadline_impl(
           .then(a.order.cmp(&b.order))
       });
       for rule in collected {
-        registry.register(rule.rule.clone());
+        let converted = crate::style::custom_properties::PropertyRule {
+          name: rule.rule.name.clone(),
+          syntax: rule.rule.syntax,
+          inherits: rule.rule.inherits,
+          initial_value: rule.rule.initial_value.clone(),
+        };
+        registry.register(converted);
       }
     }
 
@@ -2772,7 +2783,6 @@ fn apply_style_set_with_media_target_and_imports_cached_with_deadline_impl(
     std::sync::Arc::new(registry)
   };
   let initial_custom_properties = property_registry.initial_values();
-
   let mut base_styles = ComputedStyle::default();
   base_styles.counter_styles = counter_styles.clone();
   base_styles.font_palettes = font_palettes.clone();
@@ -3274,7 +3284,8 @@ fn match_part_rules<'a>(
     };
 
     let scope_host = containing_scope_host_id(dom_maps, host);
-    if let Some((rules, allow_shadow_host)) = scope_rule_index_with_shadow_host(scopes, scope_host) {
+    if let Some((rules, allow_shadow_host)) = scope_rule_index_with_shadow_host(scopes, scope_host)
+    {
       if rules.part_pseudos.is_empty() {
         names = mapped_names;
         if names.is_empty() {

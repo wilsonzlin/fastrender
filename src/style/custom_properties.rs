@@ -1,6 +1,14 @@
-use crate::css::types::PropertyRule;
 use crate::style::values::{CustomPropertySyntax, CustomPropertyValue};
 use std::collections::HashMap;
+
+/// Definition of a registered custom property from an @property rule.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PropertyRule {
+  pub name: String,
+  pub syntax: CustomPropertySyntax,
+  pub inherits: bool,
+  pub initial_value: Option<CustomPropertyValue>,
+}
 
 /// Registry of custom property registrations from @property rules.
 #[derive(Debug, Clone, Default, PartialEq)]

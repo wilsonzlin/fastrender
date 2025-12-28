@@ -44,6 +44,7 @@ const VAR_FONT: &[u8] = include_bytes!("../fixtures/fonts/AmstelvarAlpha-VF.ttf"
 
 fn variable_font() -> LoadedFont {
   LoadedFont {
+    id: None,
     data: Arc::new(VAR_FONT.to_vec()),
     index: 0,
     family: "AmstelvarAlpha".to_string(),
@@ -116,6 +117,7 @@ fn fixtures_path() -> PathBuf {
 fn load_color_font(path: &str, family: &str) -> LoadedFont {
   let data = fs::read(path).expect("failed to read test font");
   LoadedFont {
+    id: None,
     data: Arc::new(data),
     index: 0,
     family: family.to_string(),
@@ -185,6 +187,7 @@ fn get_color_test_font() -> Option<LoadedFont> {
   let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fonts/ColorTestCOLR.ttf");
   let bytes = std::fs::read(path).ok()?;
   Some(LoadedFont {
+    id: None,
     data: Arc::new(bytes),
     index: 0,
     family: "ColorTestCOLR".into(),

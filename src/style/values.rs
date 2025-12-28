@@ -1324,9 +1324,36 @@ impl CustomPropertySyntax {
         .ok()
         .map(CustomPropertyTypedValue::Color),
       CustomPropertySyntax::Angle => {
-        crate::css::parser::parse_angle_token(value.trim()).map(CustomPropertyTypedValue::Angle)
+        parse_angle_token(value.trim()).map(CustomPropertyTypedValue::Angle)
       }
       CustomPropertySyntax::Universal => None,
     }
+  }
+}
+
+fn parse_angle_token(token: &str) -> Option<f32> {
+  let trimmed = token.trim();
+  if trimmed.ends_with("deg") {
+    trimmed[..trimmed.len() - 3].trim().parse::<f32>().ok()
+  } else if trimmed.ends_with("rad") {
+    trimmed[..trimmed.len() - 3]
+      .trim()
+      .parse::<f32>()
+      .ok()
+      .map(|r| r.to_degrees())
+  } else if trimmed.ends_with("turn") {
+    trimmed[..trimmed.len() - 4]
+      .trim()
+      .parse::<f32>()
+      .ok()
+      .map(|t| t * 360.0)
+  } else if trimmed.ends_with("grad") {
+    trimmed[..trimmed.len() - 4]
+      .trim()
+      .parse::<f32>()
+      .ok()
+      .map(|g| g * 0.9)
+  } else {
+    None
   }
 }

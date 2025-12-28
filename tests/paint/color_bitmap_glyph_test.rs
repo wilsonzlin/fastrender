@@ -11,6 +11,7 @@ use tiny_skia::{Color, Pixmap};
 #[test]
 fn renders_sbix_jpeg_bitmap_glyph() {
   let font = LoadedFont {
+    id: None,
     data: Arc::new(
       std::fs::read("tests/fixtures/fonts/TestSbixJPEG.ttf").expect("fixture font should exist"),
     ),

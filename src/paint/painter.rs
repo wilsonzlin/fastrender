@@ -1117,8 +1117,7 @@ impl Painter {
     let _display_list_span = trace.span("display_list_build", "paint");
     let root_paint = RootPaintOptions {
       use_root_background: tree.has_explicit_viewport(),
-      extend_background_to_viewport: tree.has_explicit_viewport()
-        && tree.additional_fragments.is_empty(),
+      extend_background_to_viewport: false,
     };
     let svg_filter_roots: Vec<&FragmentNode> = std::iter::once(&tree.root)
       .chain(tree.additional_fragments.iter())
@@ -4870,7 +4869,7 @@ impl Painter {
           });
         for candidate in sources {
           if self.paint_image_from_src(
-            candidate.url,
+            &candidate,
             style,
             content_rect.x(),
             content_rect.y(),
@@ -4915,8 +4914,14 @@ impl Painter {
         ) {
           return;
         }
+        let image_source = crate::tree::box_tree::SelectedImageSource {
+          url: src.as_str(),
+          descriptor: None,
+          density: None,
+          from_picture: false,
+        };
         if self.paint_image_from_src(
-          src,
+          &image_source,
           style,
           content_rect.x(),
           content_rect.y(),
@@ -4947,8 +4952,14 @@ impl Painter {
         ) {
           return;
         }
+        let fallback_source = crate::tree::box_tree::SelectedImageSource {
+          url: content.fallback_svg.as_str(),
+          descriptor: None,
+          density: None,
+          from_picture: false,
+        };
         if self.paint_image_from_src(
-          &content.fallback_svg,
+          &fallback_source,
           style,
           content_rect.x(),
           content_rect.y(),
@@ -4987,8 +4998,14 @@ impl Painter {
         ) {
           return;
         }
+        let image_source = crate::tree::box_tree::SelectedImageSource {
+          url: content.as_str(),
+          descriptor: None,
+          density: None,
+          from_picture: false,
+        };
         if self.paint_image_from_src(
-          content,
+          &image_source,
           style,
           content_rect.x(),
           content_rect.y(),
@@ -5009,8 +5026,14 @@ impl Painter {
         ) {
           return;
         }
+        let image_source = crate::tree::box_tree::SelectedImageSource {
+          url: content.as_str(),
+          descriptor: None,
+          density: None,
+          from_picture: false,
+        };
         if self.paint_image_from_src(
-          content,
+          &image_source,
           style,
           content_rect.x(),
           content_rect.y(),
@@ -5036,7 +5059,7 @@ impl Painter {
           });
         for candidate in sources {
           if self.paint_image_from_src(
-            candidate.url,
+            &candidate,
             style,
             content_rect.x(),
             content_rect.y(),
@@ -5678,38 +5701,38 @@ impl Painter {
 
   fn paint_image_from_src(
     &mut self,
-    src: &str,
+    src: &crate::tree::box_tree::SelectedImageSource<'_>,
     style: Option<&ComputedStyle>,
     x: f32,
     y: f32,
     width: f32,
     height: f32,
   ) -> bool {
-    if src.is_empty() {
+    if src.url.is_empty() {
       return false;
     }
 
     if let Some(limit) = trace_image_paint_limit() {
       let idx = TRACE_IMAGE_PAINT_COUNT.fetch_add(1, Ordering::Relaxed);
       if idx < limit {
-        let resolved = self.image_cache.resolve_url(src);
+        let resolved = self.image_cache.resolve_url(src.url);
         eprintln!(
           "[image-paint] #{idx} src={} resolved={} rect=({:.1},{:.1},{:.1},{:.1})",
-          src, resolved, x, y, width, height
+          src.url, resolved, x, y, width, height
         );
       }
     }
 
     let log_image_fail = runtime::runtime_toggles().truthy("FASTR_LOG_IMAGE_FAIL");
 
-    let image = match self.image_cache.load(src) {
+    let image = match self.image_cache.load(src.url) {
       Ok(img) => img,
       Err(e) => {
         if log_image_fail {
-          eprintln!("[image-load-fail] src={} stage=load err={}", src, e);
+          eprintln!("[image-load-fail] src={} stage=load err={}", src.url, e);
         }
-        if src.trim_start().starts_with('<') {
-          match self.image_cache.render_svg(src) {
+        if src.url.trim_start().starts_with('<') {
+          match self.image_cache.render_svg(src.url) {
             Ok(img) => img,
             Err(_) => return false,
           }
@@ -5724,7 +5747,7 @@ impl Painter {
       if seen <= limit {
         eprintln!(
           " [image-paint-loaded] src={} cached_image_ptr={:p} dyn_ptr={:p} dims={}x{}",
-          src,
+          src.url,
           Arc::as_ptr(&image),
           Arc::as_ptr(&image.image),
           image.width(),
@@ -5742,18 +5765,18 @@ impl Painter {
       if log_image_fail {
         eprintln!(
           "[image-load-fail] src={} stage=oriented-dimensions w={} h={}",
-          src, img_w_raw, img_h_raw
+          src.url, img_w_raw, img_h_raw
         );
       }
       return false;
     }
     let Some((img_w_css, img_h_css)) =
-      image.css_dimensions(orientation, &image_resolution, self.scale, None)
+      image.css_dimensions(orientation, &image_resolution, self.scale, src.density)
     else {
       if log_image_fail {
         eprintln!(
           "[image-load-fail] src={} stage=css-dimensions orientation={:?} resolution={:?}",
-          src, orientation, image_resolution
+          src.url, orientation, image_resolution
         );
       }
       return false;
@@ -5763,7 +5786,7 @@ impl Painter {
       Some(pixmap) => pixmap,
       None => {
         if log_image_fail {
-          eprintln!("[image-load-fail] src={} stage=pixmap", src);
+          eprintln!("[image-load-fail] src={} stage=pixmap", src.url);
         }
         return false;
       }
@@ -10630,6 +10653,7 @@ mod tests {
 
     let font_bytes = Arc::new(include_bytes!("../../tests/fonts/RobotoFlex-VF.ttf").to_vec());
     let font = Arc::new(crate::text::font_db::LoadedFont {
+      id: None,
       data: font_bytes.clone(),
       index: 0,
       family: "Roboto Flex".to_string(),
@@ -13500,7 +13524,12 @@ mod tests {
         .expect("painter");
     let style = ComputedStyle::default();
     let ok = painter.paint_image_from_src(
-      "tests/fixtures/image_orientation/orientation-6.jpg",
+      &crate::tree::box_tree::SelectedImageSource {
+        url: "tests/fixtures/image_orientation/orientation-6.jpg",
+        descriptor: None,
+        density: None,
+        from_picture: false,
+      },
       Some(&style),
       0.0,
       0.0,
@@ -13530,7 +13559,12 @@ mod tests {
     let mut style = ComputedStyle::default();
     style.image_orientation = ImageOrientation::None;
     let ok = painter.paint_image_from_src(
-      "tests/fixtures/image_orientation/orientation-6.jpg",
+      &crate::tree::box_tree::SelectedImageSource {
+        url: "tests/fixtures/image_orientation/orientation-6.jpg",
+        descriptor: None,
+        density: None,
+        from_picture: false,
+      },
       Some(&style),
       0.0,
       0.0,

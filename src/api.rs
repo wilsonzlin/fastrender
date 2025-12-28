@@ -400,11 +400,10 @@ pub struct FastRenderConfig {
 
   /// Block mixed HTTP subresources when the document is HTTPS.
   pub block_mixed_content: bool,
-
-  /// Restrict subresource loads to the document origin when true.
+  /// Restrict subresource loads to the document origin (plus allowlist) when true.
   pub same_origin_subresources: bool,
 
-  /// Allowlisted origins for subresources when enforcing same-origin policy.
+  /// Additional origins allowed when [`same_origin_subresources`] is enabled.
   pub allowed_subresource_origins: Vec<DocumentOrigin>,
 
   /// Compatibility profile controlling opt-in site-specific behaviors.
@@ -545,7 +544,7 @@ impl FastRenderBuilder {
     self
   }
 
-  /// Restrict subresource loads to the document origin unless explicitly allowed.
+  /// Restrict subresource loads to the document origin (plus any allowlisted origins).
   pub fn same_origin_subresources(mut self, enabled: bool) -> Self {
     self.config.same_origin_subresources = enabled;
     self
@@ -715,11 +714,11 @@ impl Default for RenderOptions {
     Self {
       viewport: None,
       device_pixel_ratio: None,
+      animation_time: None,
       diagnostics_level: DiagnosticsLevel::None,
       media_type: MediaType::Screen,
       scroll_x: 0.0,
       scroll_y: 0.0,
-      animation_time: None,
       element_scroll_offsets: HashMap::new(),
       css_limit: None,
       capture_accessibility: false,
@@ -739,11 +738,11 @@ impl std::fmt::Debug for RenderOptions {
     f.debug_struct("RenderOptions")
       .field("viewport", &self.viewport)
       .field("device_pixel_ratio", &self.device_pixel_ratio)
+      .field("animation_time", &self.animation_time)
       .field("diagnostics_level", &self.diagnostics_level)
       .field("media_type", &self.media_type)
       .field("scroll_x", &self.scroll_x)
       .field("scroll_y", &self.scroll_y)
-      .field("animation_time", &self.animation_time)
       .field("element_scroll_offsets", &self.element_scroll_offsets)
       .field("css_limit", &self.css_limit)
       .field("capture_accessibility", &self.capture_accessibility)
@@ -886,6 +885,8 @@ pub struct RenderDiagnostics {
   pub document_error: Option<String>,
   /// Stage at which rendering timed out, when allow_partial is used.
   pub timeout_stage: Option<RenderStage>,
+  /// Stage at which rendering encountered a failure but still produced output.
+  pub failure_stage: Option<RenderStage>,
   /// Optional structured statistics gathered during rendering.
   pub stats: Option<RenderStats>,
 }
@@ -899,6 +900,9 @@ impl RenderDiagnostics {
   /// Record a failed fetch using structured error information.
   pub fn record_error(&mut self, kind: ResourceKind, url: impl Into<String>, error: &Error) {
     let url = url.into();
+    if let Some(stage) = failure_stage_for_resource(kind) {
+      self.note_failure_stage(stage);
+    }
     self
       .fetch_errors
       .push(ResourceFetchError::from_error(kind, url, error));
@@ -911,14 +915,50 @@ impl RenderDiagnostics {
     url: impl Into<String>,
     message: impl Into<String>,
   ) {
-    self
-      .fetch_errors
-      .push(ResourceFetchError::new(kind, url, message));
+    self.record_message_with_final(kind, url, None, message);
+  }
+
+  /// Record a failed fetch with an optional final URL after redirects.
+  pub fn record_message_with_final(
+    &mut self,
+    kind: ResourceKind,
+    url: impl Into<String>,
+    final_url: Option<&str>,
+    message: impl Into<String>,
+  ) {
+    let mut entry = ResourceFetchError::new(kind, url, message);
+    if let Some(final_url) = final_url {
+      entry.final_url = Some(final_url.to_string());
+    }
+    if entry.final_url.is_none() {
+      entry.final_url = Some(entry.url.clone());
+    }
+    if let Some(stage) = failure_stage_for_resource(kind) {
+      self.note_failure_stage(stage);
+    }
+    self.fetch_errors.push(entry);
   }
 
   /// Mark a document-level fetch failure.
   pub fn set_document_error(&mut self, message: impl Into<String>) {
     self.document_error = Some(message.into());
+  }
+
+  /// Record the first failure stage observed during rendering.
+  pub fn note_failure_stage(&mut self, stage: RenderStage) {
+    if self.failure_stage.is_none() {
+      self.failure_stage = Some(stage);
+    }
+  }
+}
+
+fn failure_stage_for_resource(kind: ResourceKind) -> Option<RenderStage> {
+  match kind {
+    ResourceKind::Document => Some(RenderStage::DomParse),
+    ResourceKind::Stylesheet => Some(RenderStage::Css),
+    ResourceKind::Font => Some(RenderStage::Css),
+    ResourceKind::Image => Some(RenderStage::Paint),
+    ResourceKind::Other => None,
   }
 }
 
@@ -945,6 +985,19 @@ impl SharedRenderDiagnostics {
   pub fn record_error(&self, kind: ResourceKind, url: impl Into<String>, error: &Error) {
     if let Ok(mut guard) = self.inner.lock() {
       guard.record_error(kind, url, error);
+    }
+  }
+
+  /// Record a failed fetch with an optional final URL after redirects.
+  pub fn record_with_final(
+    &self,
+    kind: ResourceKind,
+    url: impl Into<String>,
+    final_url: Option<&str>,
+    message: impl Into<String>,
+  ) {
+    if let Ok(mut guard) = self.inner.lock() {
+      guard.record_message_with_final(kind, url, final_url, message);
     }
   }
 
@@ -1378,6 +1431,11 @@ impl PreparedDocument {
 
   /// Returns the scroll offsets supplied when preparing the document.
   pub fn default_scroll(&self) -> ScrollState {
+    self.default_scroll.clone()
+  }
+
+  /// Returns the prepared scroll state supplied during preparation.
+  pub fn default_scroll_state(&self) -> ScrollState {
     self.default_scroll.clone()
   }
 }
@@ -1842,7 +1900,7 @@ impl FastRenderConfig {
     self
   }
 
-  /// Restrict subresource loads to the document origin when true.
+  /// Restrict subresource loads to the document origin unless allowlisted.
   pub fn with_same_origin_subresources(mut self, enabled: bool) -> Self {
     self.same_origin_subresources = enabled;
     self
@@ -2553,8 +2611,8 @@ fn paint_fragment_tree_with_state(
     font_context,
     &mut fragment_tree.root,
     viewport_rect,
-    scroll_state.viewport,
-    scroll_state.viewport,
+    scroll,
+    scroll,
     &scroll_state,
     viewport_size,
   );
@@ -2563,8 +2621,8 @@ fn paint_fragment_tree_with_state(
       font_context,
       root,
       viewport_rect,
-      scroll_state.viewport,
-      scroll_state.viewport,
+      scroll,
+      scroll,
       &scroll_state,
       viewport_size,
     );
@@ -3118,6 +3176,7 @@ impl FastRender {
             if let Some(diag) = &self.diagnostics {
               if let Ok(mut guard) = diag.lock() {
                 guard.timeout_stage = Some(stage);
+                guard.note_failure_stage(stage);
               }
             }
             let pixmap = self.render_error_overlay(width, height)?;
@@ -4192,7 +4251,7 @@ impl FastRender {
       let html_with_css = {
         let _span = trace_handle.span("css_inline", "style");
         let mut guard = diagnostics.lock().unwrap();
-        match self.inline_stylesheets(
+        let inlined = match self.inline_stylesheets(
           html,
           &base_url,
           options.media_type,
@@ -4206,6 +4265,7 @@ impl FastRender {
             if options.allow_partial {
               if let RenderError::Timeout { stage, .. } = &err {
                 guard.timeout_stage = Some(*stage);
+                guard.note_failure_stage(*stage);
                 let diagnostics = guard.clone();
                 let pixmap = self.render_error_overlay(width, height)?;
                 return Ok(RenderReport {
@@ -4218,7 +4278,17 @@ impl FastRender {
             }
             return Err(Error::Render(err));
           }
+        };
+        if options.allow_partial
+          && guard.failure_stage.is_none()
+          && guard
+            .fetch_errors
+            .iter()
+            .any(|entry| entry.kind == ResourceKind::Stylesheet)
+        {
+          guard.note_failure_stage(RenderStage::Css);
         }
+        inlined
       };
       let mut captured = RenderArtifacts::new(artifacts);
       let outputs = self.render_html_with_options_internal_with_deadline(
@@ -5616,6 +5686,8 @@ impl FastRender {
       fragment_tree.svg_filter_defs = Some(defs);
     }
 
+    fragment_tree.attach_starting_styles_from_boxes(&box_tree);
+
     if report_intrinsic {
       let (lookups, hits, stores, block_calls, flex_calls, inline_calls) = intrinsic_cache_stats();
       eprintln!(
@@ -6149,6 +6221,18 @@ impl FastRender {
       }
       match fetcher.fetch(&css_url) {
         Ok(res) => {
+          if let Some(ctx) = resource_context {
+            if ctx
+              .check_allowed_with_final(
+                ResourceKind::Stylesheet,
+                &css_url,
+                res.final_url.as_deref(),
+              )
+              .is_err()
+            {
+              continue;
+            }
+          }
           let css_text = decode_css_bytes(&res.bytes, res.content_type.as_deref());
           let rewritten = absolutize_css_urls(&css_text, &css_url);
           let mut import_diags: Vec<(String, String)> = Vec::new();
@@ -6167,7 +6251,21 @@ impl FastRender {
                 }
               }
               match fetcher.fetch(u) {
-                Ok(res) => Ok(decode_css_bytes(&res.bytes, res.content_type.as_deref())),
+                Ok(res) => {
+                  if let Some(ctx) = resource_context {
+                    if let Err(err) = ctx.check_allowed_with_final(
+                      ResourceKind::Stylesheet,
+                      u,
+                      res.final_url.as_deref(),
+                    ) {
+                      return Err(Error::Resource(ResourceError::new(
+                        u.to_string(),
+                        err.reason,
+                      )));
+                    }
+                  }
+                  Ok(decode_css_bytes(&res.bytes, res.content_type.as_deref()))
+                }
                 Err(err) => {
                   diagnostics.record_error(ResourceKind::Stylesheet, u, &err);
                   Err(err)
@@ -7878,9 +7976,9 @@ fn styled_style_summary(style: &ComputedStyle) -> String {
   let ct = match style.container_type {
     ContainerType::None => "none",
     ContainerType::Normal => "normal",
+    ContainerType::Style => "style",
     ContainerType::Size => "size",
     ContainerType::InlineSize => "inline-size",
-    ContainerType::Style => "style",
   };
   let names = if style.container_name.is_empty() {
     String::new()
@@ -8100,7 +8198,7 @@ fn build_container_query_context(
       None => continue,
     };
     match node.style.container_type {
-      ContainerType::Size | ContainerType::InlineSize => {
+      ContainerType::Size | ContainerType::InlineSize | ContainerType::Style => {
         if let Some((inline, block)) = sizes.get(&box_id) {
           let (content_inline, content_block) = content_box_sizes(node, *inline, *block);
           if runtime::runtime_toggles().truthy("FASTR_LOG_CONTAINER_QUERY") {
@@ -8121,6 +8219,7 @@ fn build_container_query_context(
               entry.inline_size = entry.inline_size.max(content_inline);
               entry.block_size = entry.block_size.max(content_block);
               entry.font_size = entry.font_size.max(node.style.font_size);
+              entry.styles = node.style.clone();
             })
             .or_insert_with(|| ContainerQueryInfo {
               inline_size: content_inline,
@@ -8130,11 +8229,6 @@ fn build_container_query_context(
               font_size: node.style.font_size,
               styles: node.style.clone(),
             });
-        }
-      }
-      ContainerType::Style => {
-        if node.style.container_name.is_empty() {
-          continue;
         }
       }
       ContainerType::None | ContainerType::Normal => {}

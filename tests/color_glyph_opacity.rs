@@ -10,6 +10,7 @@ fn load_color_font(path: &str, family: &str) -> LoadedFont {
   let full_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
   let data = std::fs::read(&full_path).expect("font bytes");
   LoadedFont {
+    id: None,
     data: Arc::new(data),
     index: 0,
     family: family.to_string(),

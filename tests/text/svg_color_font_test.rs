@@ -11,6 +11,7 @@ fn load_svg_color_font() -> LoadedFont {
   let data =
     std::fs::read("tests/fixtures/fonts/svg-color-glyph-test.ttf").expect("test font missing");
   LoadedFont {
+    id: None,
     data: Arc::new(data),
     index: 0,
     family: "SVG Color Glyph Test".to_string(),

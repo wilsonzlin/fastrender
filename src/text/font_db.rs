@@ -35,6 +35,7 @@
 use crate::error::FontError;
 use crate::error::Result;
 use crate::text::emoji;
+use crate::text::font_fallback::FontId;
 use fontdb::Database as FontDbDatabase;
 use fontdb::Family as FontDbFamily;
 use fontdb::Query as FontDbQuery;
@@ -544,6 +545,8 @@ impl From<fontdb::Stretch> for FontStretch {
 /// ```
 #[derive(Debug, Clone)]
 pub struct LoadedFont {
+  /// Stable identifier for this font in the font database, when available.
+  pub id: Option<FontId>,
   /// Font binary data (shared via Arc for efficiency)
   pub data: Arc<Vec<u8>>,
   /// Font index within the file (for TTC font collections)
@@ -1170,11 +1173,12 @@ impl FontDatabase {
   /// Creates a LoadedFont from face info
   fn create_loaded_font_with_info(
     &self,
-    _id: ID,
+    id: ID,
     data: Arc<Vec<u8>>,
     face_info: &fontdb::FaceInfo,
   ) -> LoadedFont {
     LoadedFont {
+      id: Some(FontId::new(id)),
       data,
       index: face_info.index,
       family: face_info

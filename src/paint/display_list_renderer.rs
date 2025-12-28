@@ -90,6 +90,7 @@ use crate::style::values::Length;
 use crate::text::font_db::LoadedFont;
 use crate::text::font_loader::FontContext;
 use rayon::prelude::*;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 use tiny_skia::BlendMode as SkiaBlendMode;
@@ -3924,12 +3925,7 @@ impl DisplayListRenderer {
   }
 
   fn render_text(&mut self, item: &TextItem) -> Result<()> {
-    let Some(font) = item
-      .font
-      .as_deref()
-      .cloned()
-      .or_else(|| self.resolve_font(item.font_id.as_ref()))
-    else {
+    let Some(font) = self.resolve_font(item.font_id.as_ref(), item.font.as_ref()) else {
       return Err(
         RenderError::RasterizationFailed {
           reason: "Unable to resolve font for display list text".into(),
@@ -4416,11 +4412,8 @@ impl DisplayListRenderer {
     let inline_vertical = emphasis.inline_vertical;
     if let TextEmphasisStyle::String(_) = emphasis.style {
       if let Some(text) = &emphasis.text {
-        let font = text
-          .font
-          .as_deref()
-          .cloned()
-          .or_else(|| self.resolve_font(text.font_id.as_ref()))
+        let font = self
+          .resolve_font(text.font_id.as_ref(), text.font.as_ref())
           .ok_or_else(|| RenderError::RasterizationFailed {
             reason: "Unable to resolve font for emphasis string".into(),
           })?;
@@ -4730,7 +4723,15 @@ impl DisplayListRenderer {
     }
   }
 
-  fn resolve_font(&self, font_id: Option<&FontId>) -> Option<LoadedFont> {
+  fn resolve_font(
+    &self,
+    font_id: Option<&FontId>,
+    font: Option<&Arc<LoadedFont>>,
+  ) -> Option<LoadedFont> {
+    if let Some(f) = font {
+      return Some((**f).clone());
+    }
+
     if let Some(id) = font_id {
       if let Some(font) = self.font_ctx.get_font_by_id(*id) {
         return Some(font);
@@ -6948,7 +6949,7 @@ mod tests {
       }],
       font_size: 20.0,
       advance_width: 14.0,
-      font_id: None,
+      font_id: font.id,
       font: Some(Arc::new(font.clone())),
       variations: Vec::new(),
       synthetic_bold: 0.0,
@@ -7010,7 +7011,7 @@ mod tests {
       }],
       font_size: 20.0,
       advance_width: 14.0,
-      font_id: None,
+      font_id: font.id,
       font: Some(Arc::new(font.clone())),
       variations: Vec::new(),
       synthetic_bold: 0.0,
@@ -7100,7 +7101,7 @@ mod tests {
       }],
       font_size: 20.0,
       advance_width: 14.0,
-      font_id: None,
+      font_id: font.id,
       font: Some(Arc::new(font.clone())),
       variations: Vec::new(),
       synthetic_bold: 0.0,
@@ -7170,7 +7171,7 @@ mod tests {
       }],
       font_size: 20.0,
       advance_width: 14.0,
-      font_id: None,
+      font_id: font.id,
       font: Some(Arc::new(font.clone())),
       variations: Vec::new(),
       synthetic_bold: 0.0,

@@ -224,6 +224,10 @@ pub fn log_diagnostics(diagnostics: &RenderDiagnostics, mut log: impl FnMut(&str
     log(&format!("Document error: {err}"));
   }
 
+  if let Some(stage) = diagnostics.timeout_stage {
+    log(&format!("Timed out during {stage}"));
+  }
+
   for fetch_error in &diagnostics.fetch_errors {
     let kind = match fetch_error.kind {
       ResourceKind::Document => "document",

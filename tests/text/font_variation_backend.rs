@@ -12,6 +12,7 @@ fn parse_face<'a>() -> ttf_parser::Face<'a> {
 
 fn loaded_font() -> LoadedFont {
   LoadedFont {
+    id: None,
     data: Arc::new(VAR_FONT.to_vec()),
     index: 0,
     family: "AmstelvarAlpha".to_string(),

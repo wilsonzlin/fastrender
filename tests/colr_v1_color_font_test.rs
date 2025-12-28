@@ -19,6 +19,7 @@ fn fixtures_path() -> PathBuf {
 fn load_test_font() -> LoadedFont {
   let data = std::fs::read(fixtures_path().join("fonts/colrv1-test.ttf")).unwrap();
   LoadedFont {
+    id: None,
     data: Arc::new(data),
     index: 0,
     family: "ColrV1Test".into(),
@@ -123,6 +124,7 @@ fn malformed_colrv1_table_falls_back() {
 fn load_variable_test_font() -> LoadedFont {
   let data = std::fs::read(fixtures_path().join("fonts/colrv1-var-test.ttf")).unwrap();
   LoadedFont {
+    id: None,
     data: Arc::new(data),
     index: 0,
     family: "ColrV1VarTest".into(),

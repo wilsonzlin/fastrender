@@ -269,8 +269,13 @@ fn build_skrifa_outline(
   location: &Location,
   glyph_id: u32,
 ) -> Option<GlyphOutline> {
+  if glyph_id > u16::MAX as u32 {
+    return None;
+  }
+
+  let glyph_id = GlyphId::new(glyph_id);
   let glyphs = OutlineGlyphCollection::new(font);
-  let outline = glyphs.get(GlyphId::from(glyph_id))?;
+  let outline = glyphs.get(glyph_id)?;
   let mut builder = PathOutlineBuilder::new();
   let loc_ref = LocationRef::from(location);
   let metrics = draw_outline_unscaled(&outline, loc_ref, &mut builder).ok();
@@ -283,7 +288,7 @@ fn build_skrifa_outline(
     .and_then(|m| m.advance_width)
     .or_else(|| {
       let glyph_metrics = font.glyph_metrics(Size::unscaled(), loc_ref);
-      glyph_metrics.advance_width(GlyphId::from(glyph_id))
+      glyph_metrics.advance_width(glyph_id)
     })
     .unwrap_or(0.0);
 

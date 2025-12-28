@@ -3371,6 +3371,9 @@ pub fn extract_css_sources(dom: &DomNode) -> Vec<ScopedStylesheetSource> {
     sources: &mut Vec<ScopedStylesheetSource>,
   ) {
     if let Some(tag) = node.tag_name() {
+      if tag.eq_ignore_ascii_case("template") {
+        return;
+      }
       if tag.eq_ignore_ascii_case("style") {
         let mut css = String::new();
         for child in &node.children {

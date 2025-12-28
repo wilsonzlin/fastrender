@@ -1867,6 +1867,7 @@ impl WebFontFace {
     stretch: FontStretch,
   ) -> LoadedFont {
     LoadedFont {
+      id: None,
       data: Arc::clone(&self.data),
       index: self.index,
       family: family.to_string(),

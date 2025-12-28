@@ -19,6 +19,7 @@ use fastrender::Canvas;
 use fastrender::ComputedStyle;
 use fastrender::FontContext;
 use fastrender::Rgba;
+use fastrender::ShapedRun;
 use fastrender::ShapingPipeline;
 use image::RgbaImage;
 use std::collections::HashSet;
@@ -26,7 +27,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tiny_skia::Pixmap;
 
-fn glyph_instances(run: &fastrender::text::pipeline::ShapedRun) -> Vec<GlyphInstance> {
+fn to_glyph_instances(run: &ShapedRun) -> Vec<GlyphInstance> {
   run
     .glyphs
     .iter()
@@ -538,6 +539,7 @@ fn test_draw_text_with_glyphs() {
   let Some(run) = shaped.first() else {
     return;
   };
+  let glyphs = to_glyph_instances(run);
   let variations: Vec<_> = run
     .variations
     .iter()
@@ -546,7 +548,7 @@ fn test_draw_text_with_glyphs() {
     .collect();
 
   // Draw the glyphs
-  let glyphs = glyph_instances(run);
+  let glyphs = to_glyph_instances(run);
   canvas.draw_text(
     Point::new(10.0, 30.0),
     &glyphs,
@@ -581,13 +583,14 @@ fn test_draw_text_colored() {
   let Some(run) = shaped.first() else {
     return;
   };
+  let glyphs = to_glyph_instances(run);
   let variations: Vec<_> = run
     .variations
     .iter()
     .copied()
     .map(FontVariation::from)
     .collect();
-  let glyphs = glyph_instances(run);
+  let glyphs = to_glyph_instances(run);
   canvas.draw_text(
     Point::new(10.0, 35.0),
     &glyphs,
@@ -624,13 +627,14 @@ fn test_draw_text_with_opacity() {
   let Some(run) = shaped.first() else {
     return;
   };
+  let glyphs = to_glyph_instances(run);
   let variations: Vec<_> = run
     .variations
     .iter()
     .copied()
     .map(FontVariation::from)
     .collect();
-  let glyphs = glyph_instances(run);
+  let glyphs = to_glyph_instances(run);
   canvas.draw_text(
     Point::new(10.0, 35.0),
     &glyphs,
@@ -664,6 +668,7 @@ fn canvas_renders_color_fonts() {
     .shape("A", &style, &font_ctx)
     .expect("shape color glyph");
   let run = shaped.first().expect("color run");
+  let glyphs = to_glyph_instances(run);
   let variations: Vec<_> = run
     .variations
     .iter()
@@ -672,7 +677,7 @@ fn canvas_renders_color_fonts() {
     .collect();
 
   let mut canvas = Canvas::new(64, 64, Rgba::WHITE).unwrap();
-  let glyphs = glyph_instances(run);
+  let glyphs = to_glyph_instances(run);
   canvas.draw_text(
     Point::new(12.0, 48.0),
     &glyphs,

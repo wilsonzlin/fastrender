@@ -5,6 +5,7 @@
 
 use fastrender::style::types::FontVariantEmoji;
 use fastrender::text::emoji;
+use fastrender::text::font_fallback::FontId;
 use fastrender::ComputedStyle;
 use fastrender::FallbackChain;
 use fastrender::FallbackChainBuilder;
@@ -543,7 +544,7 @@ fn bundled_fallback_chain_matches_pipeline_for_ascii() {
 
   if let Some(chain_font) = chain
     .resolve('F', db.as_ref())
-    .and_then(|id| db.load_font(id.inner()))
+    .and_then(|id: FontId| db.load_font(id.inner()))
   {
     assert_eq!(runs[0].font.family, chain_font.family);
   }
@@ -571,7 +572,7 @@ fn fallback_chain_matches_pipeline_for_cjk_when_available() {
 
   if let Some(chain_font) = chain
     .resolve('中', db.as_ref())
-    .and_then(|id| db.load_font(id.inner()))
+    .and_then(|id: FontId| db.load_font(id.inner()))
   {
     assert_eq!(runs[0].font.family, chain_font.family);
   }
@@ -602,7 +603,7 @@ fn fallback_chain_matches_pipeline_for_emoji_when_available() {
 
   if let Some(chain_font) = chain
     .resolve('😀', db.as_ref())
-    .and_then(|id| db.load_font(id.inner()))
+    .and_then(|id: FontId| db.load_font(id.inner()))
   {
     assert_eq!(runs[0].font.family, chain_font.family);
   }

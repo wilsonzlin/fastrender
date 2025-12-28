@@ -4084,6 +4084,7 @@ mod tests {
         level,
         advance: 0.0,
         font: Arc::new(LoadedFont {
+          id: None,
           family: "Test".to_string(),
           data: Arc::new(Vec::new()),
           index: 0,
@@ -5277,6 +5278,7 @@ mod tests {
 
   fn dummy_font(name: &str) -> LoadedFont {
     LoadedFont {
+      id: None,
       data: Arc::new(Vec::new()),
       index: 0,
       family: name.into(),
