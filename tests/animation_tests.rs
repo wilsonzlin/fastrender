@@ -1,3 +1,6 @@
+#[path = "animation/mod.rs"]
+mod animation;
+
 use fastrender::animation::{
   axis_scroll_state, sample_keyframes, scroll_timeline_progress, view_timeline_progress,
   AnimatedValue,

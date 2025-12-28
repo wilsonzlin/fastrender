@@ -4,6 +4,7 @@ use std::sync::Arc;
 use fastrender::animation::apply_scroll_driven_animations;
 use fastrender::css::types::{Declaration, Keyframe, KeyframesRule, PropertyValue};
 use fastrender::geometry::{Point, Rect, Size};
+use fastrender::scroll::ScrollState;
 use fastrender::style::types::{AnimationRange, AnimationTimeline, TimelineAxis, ViewTimeline};
 use fastrender::style::ComputedStyle;
 use fastrender::tree::fragment_tree::{FragmentNode, FragmentTree};
@@ -63,7 +64,7 @@ fn view_timeline_accounts_for_translated_fragment_root() {
   keyframes.insert(animation_name.to_string(), fade_keyframes(animation_name));
   tree.keyframes = keyframes;
 
-  apply_scroll_driven_animations(&mut tree, Point::ZERO);
+  apply_scroll_driven_animations(&mut tree, &ScrollState::with_viewport(Point::ZERO));
 
   let animated = tree.additional_fragments[0].children[0]
     .style

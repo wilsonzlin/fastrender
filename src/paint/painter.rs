@@ -70,6 +70,7 @@ use crate::paint::transform_resolver::{backface_is_hidden, resolve_transform3d};
 use crate::render_control::check_active;
 use crate::resource::origin_from_url;
 use crate::resource::ResourceFetcher;
+use crate::scroll::ScrollState;
 #[cfg(test)]
 use crate::style::color::Color;
 use crate::style::color::Rgba;
@@ -1050,12 +1051,17 @@ impl Painter {
   }
 
   /// Paints a fragment tree and returns the resulting pixmap
-  pub fn paint(self, tree: &FragmentTree) -> Result<Pixmap> {
-    self.paint_with_offset(tree, Point::ZERO)
+  pub fn paint(self, tree: &FragmentTree, scroll_state: &ScrollState) -> Result<Pixmap> {
+    self.paint_with_offset(tree, Point::ZERO, scroll_state)
   }
 
   /// Paints a fragment tree with an additional offset applied to all fragments.
-  pub fn paint_with_offset(mut self, tree: &FragmentTree, offset: Point) -> Result<Pixmap> {
+  pub fn paint_with_offset(
+    mut self,
+    tree: &FragmentTree,
+    offset: Point,
+    scroll_state: &ScrollState,
+  ) -> Result<Pixmap> {
     let profiling = runtime::runtime_toggles().truthy("FASTR_PAINT_STATS");
     let diagnostics_enabled = paint_diagnostics_enabled();
     let mut stats = PaintStats::default();
@@ -1099,6 +1105,7 @@ impl Painter {
       self.collect_stacking_context(
         root,
         offset,
+        scroll_state,
         None,
         true,
         root_paint,
@@ -1340,6 +1347,7 @@ impl Painter {
     &self,
     fragment: &FragmentNode,
     offset: Point,
+    scroll_state: &ScrollState,
     parent_style: Option<&ComputedStyle>,
     is_root_context: bool,
     root_paint: RootPaintOptions,
@@ -1371,6 +1379,10 @@ impl Painter {
       fragment.bounds.width(),
       fragment.bounds.height(),
     );
+    let element_scroll = fragment
+      .box_id()
+      .map(|id| scroll_state.element_offset(id))
+      .unwrap_or(Point::ZERO);
     let viewport = (self.css_width, self.css_height);
 
     if let Some(style) = fragment.style.as_deref() {
@@ -1420,7 +1432,10 @@ impl Painter {
       );
       self.enqueue_content(fragment, abs_bounds, &mut local_commands);
 
-      let next_offset = Point::new(abs_bounds.x(), abs_bounds.y());
+      let next_offset = Point::new(
+        abs_bounds.x() - element_scroll.x,
+        abs_bounds.y() - element_scroll.y,
+      );
       let mut negative_contexts = Vec::new();
       let mut zero_contexts = Vec::new();
       let mut positive_contexts = Vec::new();
@@ -1465,6 +1480,7 @@ impl Painter {
         self.collect_stacking_context(
           &fragment.children[idx],
           next_offset,
+          scroll_state,
           style_ref,
           false,
           root_paint,
@@ -1477,6 +1493,7 @@ impl Painter {
         self.collect_stacking_context(
           &fragment.children[idx],
           next_offset,
+          scroll_state,
           style_ref,
           false,
           root_paint,
@@ -1488,6 +1505,7 @@ impl Painter {
         self.collect_stacking_context(
           &fragment.children[idx],
           next_offset,
+          scroll_state,
           style_ref,
           false,
           root_paint,
@@ -1499,6 +1517,7 @@ impl Painter {
         self.collect_stacking_context(
           &fragment.children[idx],
           next_offset,
+          scroll_state,
           style_ref,
           false,
           root_paint,
@@ -1512,6 +1531,7 @@ impl Painter {
         self.collect_stacking_context(
           &fragment.children[idx],
           next_offset,
+          scroll_state,
           style_ref,
           false,
           root_paint,
@@ -1525,6 +1545,7 @@ impl Painter {
         self.collect_stacking_context(
           &fragment.children[idx],
           next_offset,
+          scroll_state,
           style_ref,
           false,
           root_paint,
@@ -1581,13 +1602,17 @@ impl Painter {
       }
     }
 
-    let child_offset = Point::new(abs_bounds.x(), abs_bounds.y());
+    let child_offset = Point::new(
+      abs_bounds.x() - element_scroll.x,
+      abs_bounds.y() - element_scroll.y,
+    );
 
     negative_contexts.sort_by(|(z1, i1), (z2, i2)| z1.cmp(z2).then_with(|| i1.cmp(i2)));
     for (_, idx) in negative_contexts {
       self.collect_stacking_context(
         &fragment.children[idx],
         child_offset,
+        scroll_state,
         style_ref,
         false,
         root_paint,
@@ -1602,6 +1627,7 @@ impl Painter {
       self.collect_stacking_context(
         &fragment.children[idx],
         child_offset,
+        scroll_state,
         style_ref,
         false,
         root_paint,
@@ -1613,6 +1639,7 @@ impl Painter {
       self.collect_stacking_context(
         &fragment.children[idx],
         child_offset,
+        scroll_state,
         style_ref,
         false,
         root_paint,
@@ -1624,6 +1651,7 @@ impl Painter {
       self.collect_stacking_context(
         &fragment.children[idx],
         child_offset,
+        scroll_state,
         style_ref,
         false,
         root_paint,
@@ -1637,6 +1665,7 @@ impl Painter {
       self.collect_stacking_context(
         &fragment.children[idx],
         child_offset,
+        scroll_state,
         style_ref,
         false,
         root_paint,
@@ -1650,6 +1679,7 @@ impl Painter {
       self.collect_stacking_context(
         &fragment.children[idx],
         child_offset,
+        scroll_state,
         style_ref,
         false,
         root_paint,
@@ -9264,6 +9294,7 @@ fn paint_display_list_with_trace(
   image_cache: ImageCache,
   scale: f32,
   offset: Point,
+  scroll_state: &ScrollState,
   trace: TraceHandle,
 ) -> Result<Pixmap> {
   check_active(RenderStage::Paint).map_err(Error::Render)?;
@@ -9278,6 +9309,7 @@ fn paint_display_list_with_trace(
     .with_svg_filter_defs(tree.svg_filter_defs.clone())
     .with_device_pixel_ratio(scale)
     .with_viewport_size(viewport.width, viewport.height)
+    .with_scroll_state(scroll_state.clone())
     .build_with_stacking_tree_from_tree_offset(tree, offset);
   drop(_build_span);
 
@@ -9323,6 +9355,7 @@ pub fn paint_tree_display_list_with_resources_scaled_offset(
   image_cache: ImageCache,
   scale: f32,
   offset: Point,
+  scroll_state: &ScrollState,
 ) -> Result<Pixmap> {
   paint_display_list_with_trace(
     tree,
@@ -9333,6 +9366,7 @@ pub fn paint_tree_display_list_with_resources_scaled_offset(
     image_cache,
     scale,
     offset,
+    scroll_state,
     TraceHandle::disabled(),
   )
 }
@@ -9345,6 +9379,7 @@ pub fn paint_tree_display_list_with_resources(
   background: Rgba,
   font_ctx: FontContext,
   image_cache: ImageCache,
+  scroll_state: &ScrollState,
 ) -> Result<Pixmap> {
   paint_tree_display_list_with_resources_scaled_offset(
     tree,
@@ -9355,6 +9390,7 @@ pub fn paint_tree_display_list_with_resources(
     image_cache,
     1.0,
     Point::ZERO,
+    scroll_state,
   )
 }
 
@@ -9364,6 +9400,7 @@ pub fn paint_tree_display_list(
   width: u32,
   height: u32,
   background: Rgba,
+  scroll_state: &ScrollState,
 ) -> Result<Pixmap> {
   paint_tree_display_list_with_resources_scaled_offset(
     tree,
@@ -9374,6 +9411,71 @@ pub fn paint_tree_display_list(
     ImageCache::new(),
     1.0,
     Point::ZERO,
+    scroll_state,
+  )
+}
+
+fn paint_tree_with_resources_scaled_offset_backend_with_trace(
+  tree: &FragmentTree,
+  width: u32,
+  height: u32,
+  background: Rgba,
+  font_ctx: FontContext,
+  image_cache: ImageCache,
+  scale: f32,
+  offset: Point,
+  scroll_state: &ScrollState,
+  backend: PaintBackend,
+  trace: TraceHandle,
+) -> Result<Pixmap> {
+  match backend {
+    PaintBackend::Legacy => {
+      let painter =
+        Painter::with_resources_scaled(width, height, background, font_ctx, image_cache, scale)?
+          .with_trace(trace);
+      painter.paint_with_offset(tree, offset, scroll_state)
+    }
+    PaintBackend::DisplayList => paint_display_list_with_trace(
+      tree,
+      width,
+      height,
+      background,
+      font_ctx,
+      image_cache,
+      scale,
+      offset,
+      scroll_state,
+      trace,
+    ),
+  }
+}
+
+/// Paints a fragment tree at a device scale with an additional translation applied using the
+/// selected backend.
+pub fn paint_tree_with_resources_scaled_offset_backend(
+  tree: &FragmentTree,
+  width: u32,
+  height: u32,
+  background: Rgba,
+  font_ctx: FontContext,
+  image_cache: ImageCache,
+  scale: f32,
+  offset: Point,
+  scroll_state: &ScrollState,
+  backend: PaintBackend,
+) -> Result<Pixmap> {
+  paint_tree_with_resources_scaled_offset_backend_with_trace(
+    tree,
+    width,
+    height,
+    background,
+    font_ctx,
+    image_cache,
+    scale,
+    offset,
+    scroll_state,
+    backend,
+    TraceHandle::disabled(),
   )
 }
 
@@ -9387,8 +9489,9 @@ pub fn paint_tree_with_resources_scaled_offset(
   image_cache: ImageCache,
   scale: f32,
   offset: Point,
+  scroll_state: &ScrollState,
 ) -> Result<Pixmap> {
-  paint_tree_with_resources_scaled_offset_with_trace(
+  paint_tree_with_resources_scaled_offset_backend(
     tree,
     width,
     height,
@@ -9397,7 +9500,8 @@ pub fn paint_tree_with_resources_scaled_offset(
     image_cache,
     scale,
     offset,
-    TraceHandle::disabled(),
+    scroll_state,
+    paint_backend_from_env(),
   )
 }
 
@@ -9420,6 +9524,7 @@ pub fn paint_tree_with_resources_scaled(
     image_cache,
     scale,
     Point::ZERO,
+    &ScrollState::default(),
   )
 }
 
@@ -9476,12 +9581,22 @@ pub(crate) fn paint_tree_with_resources_scaled_offset_with_trace(
   image_cache: ImageCache,
   scale: f32,
   offset: Point,
+  scroll_state: &ScrollState,
   trace: TraceHandle,
 ) -> Result<Pixmap> {
-  let painter =
-    Painter::with_resources_scaled(width, height, background, font_ctx, image_cache, scale)?
-      .with_trace(trace);
-  painter.paint_with_offset(tree, offset)
+  paint_tree_with_resources_scaled_offset_backend_with_trace(
+    tree,
+    width,
+    height,
+    background,
+    font_ctx,
+    image_cache,
+    scale,
+    offset,
+    scroll_state,
+    paint_backend_from_env(),
+    trace,
+  )
 }
 
 /// Scales a pixmap by the given device pixel ratio, returning a new pixmap.
@@ -10031,6 +10146,7 @@ mod tests {
     painter.collect_stacking_context(
       &root,
       Point::ZERO,
+      &ScrollState::default(),
       None,
       true,
       RootPaintOptions {

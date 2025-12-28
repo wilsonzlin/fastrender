@@ -91,6 +91,7 @@ use crate::paint::svg_filter::SvgFilterResolver;
 use crate::paint::text_shadow::resolve_text_shadows;
 use crate::paint::transform3d::backface_is_hidden;
 use crate::paint::transform_resolver::ResolvedTransforms;
+use crate::scroll::ScrollState;
 use crate::style::color::Rgba;
 use crate::style::types::AccentColor;
 use crate::style::types::Appearance;
@@ -163,6 +164,7 @@ pub struct DisplayListBuilder {
   device_pixel_ratio: f32,
   parallel_enabled: bool,
   parallel_min: usize,
+  scroll_state: ScrollState,
 }
 
 #[derive(Clone, Copy)]
@@ -208,6 +210,13 @@ impl DisplayListBuilder {
       .map(|m| m.scale(style.font_size))
   }
 
+  fn element_scroll_offset(&self, fragment: &FragmentNode) -> Point {
+    fragment
+      .box_id()
+      .and_then(|id| self.scroll_state.elements.get(&id).copied())
+      .unwrap_or(Point::ZERO)
+  }
+
   /// Creates a new display list builder
   pub fn new() -> Self {
     let (parallel_enabled, parallel_min) = parallel_config_from_env();
@@ -221,6 +230,7 @@ impl DisplayListBuilder {
       device_pixel_ratio: 1.0,
       parallel_enabled,
       parallel_min,
+      scroll_state: ScrollState::default(),
     }
   }
 
@@ -237,6 +247,7 @@ impl DisplayListBuilder {
       device_pixel_ratio: 1.0,
       parallel_enabled,
       parallel_min,
+      scroll_state: ScrollState::default(),
     }
   }
 
@@ -255,6 +266,12 @@ impl DisplayListBuilder {
     if let Some(cache) = self.image_cache.as_mut() {
       cache.set_base_url(base_url);
     }
+  }
+
+  /// Applies a scroll state to be used when translating fragment content during list construction.
+  pub fn with_scroll_state(mut self, scroll_state: ScrollState) -> Self {
+    self.scroll_state = scroll_state;
+    self
   }
 
   /// Sets serialized SVG filter definitions to use when resolving `url(#...)` filters.
@@ -533,6 +550,11 @@ impl DisplayListBuilder {
       ),
       fragment.bounds.size,
     );
+    let element_scroll = self.element_scroll_offset(fragment);
+    let child_offset = Point::new(
+      absolute_rect.origin.x - element_scroll.x,
+      absolute_rect.origin.y - element_scroll.y,
+    );
 
     if let Some(style) = style_opt {
       if matches!(style.backface_visibility, BackfaceVisibility::Hidden)
@@ -595,7 +617,6 @@ impl DisplayListBuilder {
     self.emit_content(fragment, absolute_rect);
 
     if recurse_children {
-      let child_offset = absolute_rect.origin;
       for child in &fragment.children {
         self.build_fragment_internal(child, child_offset, true, false);
       }
@@ -678,7 +699,6 @@ impl DisplayListBuilder {
     }
 
     // Recurse to children
-    let child_offset = absolute_rect.origin;
     for child in &fragment.children {
       self.build_fragment_with_clips(child, child_offset, clips);
     }
@@ -711,13 +731,18 @@ impl DisplayListBuilder {
         .then_with(|| a.tree_order.cmp(&b.tree_order))
     });
 
+    let context_scroll = context
+      .fragments
+      .first()
+      .map(|f| self.element_scroll_offset(f))
+      .unwrap_or(Point::ZERO);
     let (neg, non_neg): (Vec<_>, Vec<_>) = children.into_iter().partition(|c| c.z_index < 0);
     let (_zero, pos): (Vec<_>, Vec<_>) = non_neg.into_iter().partition(|c| c.z_index == 0);
 
     // Descendants are positioned relative to the stacking context's origin (the first fragment).
     let descendant_offset = Point::new(
-      offset.x + context.offset_from_parent_context.x,
-      offset.y + context.offset_from_parent_context.y,
+      offset.x + context.offset_from_parent_context.x - context_scroll.x,
+      offset.y + context.offset_from_parent_context.y - context_scroll.y,
     );
 
     let root_fragment = context.fragments.first();
@@ -2234,6 +2259,7 @@ impl DisplayListBuilder {
       device_pixel_ratio: self.device_pixel_ratio,
       parallel_enabled: self.parallel_enabled,
       parallel_min: self.parallel_min,
+      scroll_state: self.scroll_state.clone(),
     }
   }
 

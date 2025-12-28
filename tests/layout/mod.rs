@@ -20,6 +20,7 @@ mod paged_media;
 mod render_wrap;
 mod ruby;
 mod running_position;
+mod scroll_container_offsets;
 mod scroll_snap_pagination;
 mod scrollbar_gutter;
 mod shadow_dom;

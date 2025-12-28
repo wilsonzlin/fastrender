@@ -1,8 +1,14 @@
 use fastrender::image_loader::ImageCache;
-use fastrender::paint::painter::paint_tree_with_resources_scaled_offset;
+use fastrender::paint::painter::{paint_tree_with_resources_scaled_offset_backend, PaintBackend};
+use fastrender::scroll::ScrollState;
 use fastrender::{FastRender, Point, Rgba};
 
-fn render(html: &str, width: u32, height: u32) -> tiny_skia::Pixmap {
+fn render_with_backend(
+  html: &str,
+  width: u32,
+  height: u32,
+  backend: PaintBackend,
+) -> tiny_skia::Pixmap {
   let mut renderer = FastRender::new().expect("renderer");
   let dom = renderer.parse_html(html).expect("parsed");
   let fragment_tree = renderer
@@ -12,17 +18,34 @@ fn render(html: &str, width: u32, height: u32) -> tiny_skia::Pixmap {
   let font_ctx = renderer.font_context().clone();
   let image_cache = ImageCache::new();
 
-  paint_tree_with_resources_scaled_offset(
+  paint_tree_with_resources_scaled_offset_backend(
     &fragment_tree,
     width,
     height,
     Rgba::WHITE,
-    font_ctx,
-    image_cache,
+    font_ctx.clone(),
+    image_cache.clone(),
     1.0,
     Point::ZERO,
+    &ScrollState::default(),
+    backend,
   )
   .expect("painted")
+}
+
+fn render(html: &str, width: u32, height: u32) -> tiny_skia::Pixmap {
+  let legacy = render_with_backend(html, width, height, PaintBackend::Legacy);
+  let display_list = render_with_backend(html, width, height, PaintBackend::DisplayList);
+
+  assert_eq!(legacy.width(), display_list.width());
+  assert_eq!(legacy.height(), display_list.height());
+  assert_eq!(
+    legacy.data(),
+    display_list.data(),
+    "display list backend should match legacy painter"
+  );
+
+  legacy
 }
 
 fn pixel(pixmap: &tiny_skia::Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
@@ -193,6 +216,6 @@ fn filter_blur_renders() {
   assert_ne!(
     pixel(&blurred, 2, 2),
     pixel(&crisp, 2, 2),
-    "blur should bleed color beyond the element bounds"
+    "blurred edges should differ from crisp edges"
   );
 }

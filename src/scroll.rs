@@ -22,10 +22,12 @@ pub struct ScrollState {
 impl ScrollState {
   /// Creates a scroll state with only a viewport offset.
   pub fn with_viewport(viewport: Point) -> Self {
-    Self {
-      viewport,
-      elements: HashMap::new(),
-    }
+    Self::from_parts(viewport, HashMap::new())
+  }
+
+  /// Creates a scroll state with explicit viewport and element offsets.
+  pub fn from_parts(viewport: Point, elements: HashMap<usize, Point>) -> Self {
+    Self { viewport, elements }
   }
 
   /// Returns the stored scroll offset for an element, if present.
