@@ -82,8 +82,9 @@ fn shadow_styles_are_scoped() {
   };
 
   let media = MediaContext::screen(800.0, 600.0);
-  let styled =
-    apply_style_set_with_media_target_and_imports(&dom, &style_set, &media, None, None, None, None, None, None);
+  let styled = apply_style_set_with_media_target_and_imports(
+    &dom, &style_set, &media, None, None, None, None, None, None,
+  );
 
   let shadow_inside = find_styled_by_id(&styled, "shadow1").expect("shadow child");
   assert_eq!(shadow_inside.styles.color, Rgba::rgb(0, 0, 255));

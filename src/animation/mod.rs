@@ -40,6 +40,7 @@ use crate::tree::fragment_tree::{FragmentNode, FragmentTree};
 use std::collections::HashSet;
 use std::mem::discriminant;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::style::color::Rgba;
 
@@ -1917,6 +1918,7 @@ fn apply_animations_to_node(
   scroll: Point,
   keyframes: &HashMap<String, KeyframesRule>,
   timelines: &HashMap<String, TimelineState>,
+  time_progress: Option<f32>,
 ) {
   if let Some(style_arc) = node.style.clone() {
     let names = &style_arc.animation_names;
@@ -1931,7 +1933,7 @@ fn apply_animations_to_node(
         let timeline_ref = pick(timelines_list, idx, AnimationTimeline::Auto);
         let range = pick(ranges_list, idx, AnimationRange::default());
         let progress = match timeline_ref {
-          AnimationTimeline::Auto => None,
+          AnimationTimeline::Auto => time_progress,
           AnimationTimeline::None => None,
           AnimationTimeline::Named(ref timeline_name) => {
             timelines.get(timeline_name).map(|state| match state {
@@ -1985,20 +1987,37 @@ fn apply_animations_to_node(
 
   for child in &mut node.children {
     let child_offset = Point::new(origin.x + child.bounds.x(), origin.y + child.bounds.y());
-    apply_animations_to_node(child, child_offset, viewport, scroll, keyframes, timelines);
+    apply_animations_to_node(
+      child,
+      child_offset,
+      viewport,
+      scroll,
+      keyframes,
+      timelines,
+      time_progress,
+    );
   }
 }
 
-/// Applies scroll/view timeline-driven animations to the fragment tree by sampling
-/// matching @keyframes rules and applying animated properties (currently opacity).
+fn normalize_time_progress(time: Duration) -> f32 {
+  // Without full CSS animation timing support, treat the provided timestamp as
+  // a position along a 1s default timeline so tests and call sites can drive
+  // animation sampling deterministically.
+  (time.as_secs_f64().fract()) as f32
+}
+
+/// Applies animations to the fragment tree by sampling @keyframes rules based on
+/// scroll/view timelines and an optional time-based default timeline.
 ///
 /// This is a lightweight hook to make scroll-driven effects visible without a full
-/// animation engine. It uses the provided scroll offsets for the root viewport.
-pub fn apply_scroll_driven_animations(tree: &mut FragmentTree, scroll: Point) {
+/// animation engine. Time-based animations use a normalized 0–1 progress derived
+/// from the provided [`Duration`].
+pub fn apply_animations(tree: &mut FragmentTree, scroll: Point, animation_time: Option<Duration>) {
   if tree.keyframes.is_empty() {
     return;
   }
 
+  let time_progress = animation_time.map(normalize_time_progress);
   let viewport = Rect::from_xywh(
     0.0,
     0.0,
@@ -2028,11 +2047,29 @@ pub fn apply_scroll_driven_animations(tree: &mut FragmentTree, scroll: Point) {
     scroll,
     &tree.keyframes,
     &timelines,
+    time_progress,
   );
   for frag in &mut tree.additional_fragments {
     let offset = Point::new(frag.bounds.x(), frag.bounds.y());
-    apply_animations_to_node(frag, offset, viewport, scroll, &tree.keyframes, &timelines);
+    apply_animations_to_node(
+      frag,
+      offset,
+      viewport,
+      scroll,
+      &tree.keyframes,
+      &timelines,
+      time_progress,
+    );
   }
+}
+
+/// Applies scroll/view timeline-driven animations to the fragment tree by sampling
+/// matching @keyframes rules and applying animated properties (currently opacity).
+///
+/// This is a lightweight hook to make scroll-driven effects visible without a full
+/// animation engine. It uses the provided scroll offsets for the root viewport.
+pub fn apply_scroll_driven_animations(tree: &mut FragmentTree, scroll: Point) {
+  apply_animations(tree, scroll, None);
 }
 
 trait AnimationRangeExt {

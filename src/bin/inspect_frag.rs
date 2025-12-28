@@ -213,11 +213,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   let dom = dom::parse_html(&html)?;
 
-  let media_ctx = media_prefs.media_context_with_overrides(
-    (viewport_w, viewport_h),
-    args.dpr,
-    MediaType::Screen,
-  );
+  let media_ctx =
+    media_prefs.media_context_with_overrides((viewport_w, viewport_h), args.dpr, MediaType::Screen);
   let stylesheet = extract_css(&dom)?;
   let styled = apply_styles_with_media_and_target(&dom, &stylesheet, &media_ctx, None);
 
@@ -561,7 +558,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let frag = ctx.fragment;
     let base_desc = ctx
       .base
-      .map(|b| format!(" base=({:.1},{:.1}) include_base={}", b.x, b.y, ctx.include_base))
+      .map(|b| {
+        format!(
+          " base=({:.1},{:.1}) include_base={}",
+          b.x, b.y, ctx.include_base
+        )
+      })
       .unwrap_or_else(|| format!(" base=None include_base={}", ctx.include_base));
     println!(
       "  root[{}]: bounds=({:.1},{:.1},{:.1},{:.1}) offset=({:.1},{:.1}) fragmentainer={}/{}{}",
@@ -1332,9 +1334,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   if !needle.is_empty() {
     let mut found_path = false;
     for ctx in root_contexts.iter().copied() {
-      if let Some(path) =
-        find_fragment_path(ctx.fragment, ctx.offset, ctx.base, ctx.include_base, &needle)
-      {
+      if let Some(path) = find_fragment_path(
+        ctx.fragment,
+        ctx.offset,
+        ctx.base,
+        ctx.include_base,
+        &needle,
+      ) {
         println!(
           "ancestor chain for text containing {:?} (root {}):",
           needle, ctx.index
@@ -1405,9 +1411,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   {
     let mut found_fragment = false;
     for ctx in root_contexts.iter().copied() {
-      if let Some(fragment) =
-        find_fragment_node(ctx.fragment, ctx.offset, ctx.base, ctx.include_base, dump_id)
-      {
+      if let Some(fragment) = find_fragment_node(
+        ctx.fragment,
+        ctx.offset,
+        ctx.base,
+        ctx.include_base,
+        dump_id,
+      ) {
         println!(
           "fragment subtree for box_id {}: text_fragments={} [root {}]",
           dump_id,
@@ -1798,9 +1808,14 @@ fn find_fragment_by_box_id(
 
   for child in &node.children {
     let child_base = if include_base { None } else { base };
-    if let Some(mut child_path) =
-      find_fragment_by_box_id(child, next_offset, child_base, include_base, target, box_debug)
-    {
+    if let Some(mut child_path) = find_fragment_by_box_id(
+      child,
+      next_offset,
+      child_base,
+      include_base,
+      target,
+      box_debug,
+    ) {
       path.append(&mut child_path);
       matches = true;
       break;
@@ -2025,7 +2040,11 @@ fn fragment_roots<'a>(
       index: idx + 1,
       fragment,
       offset,
-      base: if translated_children { None } else { Some(base) },
+      base: if translated_children {
+        None
+      } else {
+        Some(base)
+      },
       include_base: translated_children,
     });
   }
@@ -2060,7 +2079,14 @@ fn collect_fragments_abs<'a>(
   out.push((abs, fragment, root_index));
   let child_base = if include_base { None } else { base };
   for child in &fragment.children {
-    collect_fragments_abs(child, next_offset, child_base, include_base, root_index, out);
+    collect_fragments_abs(
+      child,
+      next_offset,
+      child_base,
+      include_base,
+      root_index,
+      out,
+    );
   }
 }
 
@@ -2076,7 +2102,14 @@ fn collect_backgrounds_abs<'a>(
   out.push((abs, fragment, root_index));
   let child_base = if include_base { None } else { base };
   for child in &fragment.children {
-    collect_backgrounds_abs(child, next_offset, child_base, include_base, root_index, out);
+    collect_backgrounds_abs(
+      child,
+      next_offset,
+      child_base,
+      include_base,
+      root_index,
+      out,
+    );
   }
 }
 
@@ -2094,7 +2127,14 @@ fn collect_text_abs(
   }
   let child_base = if include_base { None } else { base };
   for child in &fragment.children {
-    collect_text_abs(child, next_offset, child_base, include_base, root_index, out);
+    collect_text_abs(
+      child,
+      next_offset,
+      child_base,
+      include_base,
+      root_index,
+      out,
+    );
   }
 }
 
@@ -2138,17 +2178,16 @@ fn find_us_fragment(
     FragmentContent::Text { text, .. } if text.trim() == "US" => true,
     _ => {
       let child_base = if include_base { None } else { base };
-      node
-        .children
-        .iter()
-        .any(|child| find_us_fragment(
+      node.children.iter().any(|child| {
+        find_us_fragment(
           child,
           next_offset,
           child_base,
           include_base,
           root_index,
-          path
-        ))
+          path,
+        )
+      })
     }
   };
 
@@ -2327,9 +2366,14 @@ fn find_first_skinny(
 
   let child_base = if include_base { None } else { base };
   for child in &fragment.children {
-    if let Some(mut path) =
-      find_first_skinny(child, next_offset, child_base, include_base, root_index, box_debug)
-    {
+    if let Some(mut path) = find_first_skinny(
+      child,
+      next_offset,
+      child_base,
+      include_base,
+      root_index,
+      box_debug,
+    ) {
       path.insert(0, label.clone());
       return Some(path);
     }

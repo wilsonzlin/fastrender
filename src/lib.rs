@@ -219,6 +219,7 @@ pub use api::LayoutDiagnostics;
 pub use api::PaintDiagnostics;
 pub use api::Pixmap;
 pub use api::PreparedDocument;
+pub use api::PreparedPaintOptions;
 pub use api::RenderArtifactRequest;
 pub use api::RenderArtifacts;
 pub use api::RenderCounts;

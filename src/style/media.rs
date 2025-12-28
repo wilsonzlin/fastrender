@@ -3340,10 +3340,7 @@ mod tests {
       crate::debug::runtime::update_runtime_toggles(Arc::new(
         crate::debug::runtime::RuntimeToggles::from_env(),
       ));
-      EnvGuard {
-        key,
-        old,
-      }
+      EnvGuard { key, old }
     }
   }
 

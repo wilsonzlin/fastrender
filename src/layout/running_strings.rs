@@ -1,5 +1,5 @@
-use crate::tree::box_tree::{BoxNode, BoxTree, BoxType, MarkerContent};
 use crate::style::content::{StringSetAssignment, StringSetValue};
+use crate::tree::box_tree::{BoxNode, BoxTree, BoxType, MarkerContent};
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -122,7 +122,9 @@ fn collect_string_set_events_inner(
   }
 
   if let Some(assignments) = assignments {
-    let should_emit = assignments_box_id.map(|box_id| seen_boxes.insert(box_id)).unwrap_or(true);
+    let should_emit = assignments_box_id
+      .map(|box_id| seen_boxes.insert(box_id))
+      .unwrap_or(true);
 
     if should_emit {
       for StringSetAssignment { name, value } in assignments {

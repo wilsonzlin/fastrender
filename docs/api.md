@@ -104,10 +104,17 @@ let initial = session.paint_default()?;
 
 // Paint a scrolled view with a darker background
 let scrolled = session.paint(0.0, 200.0, None, Some(fastrender::Rgba::BLACK))?;
+
+// Sample animations at a specific time without re-running layout
+use std::time::Duration;
+let animated = session.paint_at_time(Duration::from_millis(500))?;
 ```
 
 `PreparedDocument::paint` accepts optional viewport and background overrides, and
-`paint_region` is a convenience for tiled rendering. `PreparedDocument` is `Send`
+`paint_region` is a convenience for tiled rendering. `PreparedPaintOptions` exposes
+full scroll state (including element scroll offsets) and animation time overrides when
+repainting without re-running layout, and `paint_at_time` is a shorthand for sampling
+time-based animations. `PreparedDocument` is `Send`
 but not `Sync`; create one session per thread when painting concurrently.
 
 ## Rendering URLs and diagnostics

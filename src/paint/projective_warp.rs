@@ -219,14 +219,7 @@ mod tests {
     src_pixels[3] = color(255, 255, 255, 255);
 
     let dst_quad = [(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 2.0)];
-    let warped = warp_pixmap(
-      &src,
-      &Homography::identity(),
-      &dst_quad,
-      (2, 2),
-      None,
-    )
-    .expect("warp");
+    let warped = warp_pixmap(&src, &Homography::identity(), &dst_quad, (2, 2), None).expect("warp");
 
     assert_eq!(warped.offset, (0, 0));
     assert_eq!(warped.pixmap.width(), 2);

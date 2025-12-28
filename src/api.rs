@@ -66,10 +66,10 @@ use crate::css::loader::{
   inject_css_into_html, inline_imports_with_diagnostics, resolve_href_with_base,
 };
 use crate::css::parser::{
-  extract_css_sources, extract_scoped_css_sources, parse_stylesheet_with_errors,
-  rel_list_contains_stylesheet, CssTreeScope, StylesheetSource,
+  extract_css_sources, extract_scoped_css_sources, parse_stylesheet, rel_list_contains_stylesheet,
+  CssTreeScope, StylesheetSource,
 };
-use crate::css::types::{CssImportLoader, CssParseError, StyleSheet};
+use crate::css::types::{CssImportLoader, StyleSheet};
 use crate::debug;
 use crate::debug::inspect::{InspectQuery, InspectionSnapshot};
 use crate::debug::runtime::{self, RuntimeToggles};
@@ -119,6 +119,7 @@ use crate::resource::{
   origin_from_url, CachingFetcher, DocumentOrigin, HttpFetcher, PolicyError, ResourceAccessPolicy,
   ResourceFetcher, ResourcePolicy,
 };
+use crate::scroll::ScrollState;
 use crate::style::cascade::apply_style_set_with_media_target_and_imports_cached;
 use crate::style::cascade::apply_style_set_with_media_target_and_imports_cached_with_deadline;
 use crate::style::cascade::apply_styles_with_media_target_and_imports;
@@ -633,13 +634,7 @@ pub struct RenderOptions {
   pub css_limit: Option<usize>,
   /// When true, include an accessibility tree alongside rendering results.
   pub capture_accessibility: bool,
-  /// Allow partial outputs when parts of the pipeline fail.
-  ///
-  /// When enabled:
-  /// - DOM parse, layout, or paint failures return an error overlay with diagnostics.
-  /// - CSS fetch/parse failures are recorded and rendering continues with available styles.
-  /// - Image/font subresources paint placeholders instead of aborting.
-  /// - Timeouts produce an overlay that notes the timed-out stage.
+  /// When true, document fetch failures will return a placeholder pixmap with diagnostics instead of an error.
   pub allow_partial: bool,
   /// When Some(true), expand the paint canvas to fit the laid-out content bounds for this render.
   pub fit_canvas_to_content: Option<bool>,
@@ -796,8 +791,6 @@ pub struct RenderDiagnostics {
   pub document_error: Option<String>,
   /// Stage at which rendering timed out, when allow_partial is used.
   pub timeout_stage: Option<RenderStage>,
-  /// Stage that failed when allow_partial produced a placeholder output.
-  pub failure_stage: Option<RenderStage>,
   /// Optional structured statistics gathered during rendering.
   pub stats: Option<RenderStats>,
 }
@@ -832,11 +825,6 @@ impl RenderDiagnostics {
   pub fn set_document_error(&mut self, message: impl Into<String>) {
     self.document_error = Some(message.into());
   }
-
-  /// Record the render stage that failed.
-  pub fn set_failure_stage(&mut self, stage: RenderStage) {
-    self.failure_stage = Some(stage);
-  }
 }
 
 /// Shared diagnostics handle for concurrent render stages.
@@ -869,13 +857,6 @@ impl SharedRenderDiagnostics {
   pub fn set_document_error(&self, message: impl Into<String>) {
     if let Ok(mut guard) = self.inner.lock() {
       guard.set_document_error(message);
-    }
-  }
-
-  /// Record the stage that failed when a partial render was produced.
-  pub fn set_failure_stage(&self, stage: RenderStage) {
-    if let Ok(mut guard) = self.inner.lock() {
-      guard.set_failure_stage(stage);
     }
   }
 
@@ -971,13 +952,6 @@ impl ResourceContext {
     }
   }
 
-  /// Record a structured resource error if diagnostics collection is enabled.
-  pub fn record_error(&self, kind: ResourceKind, url: impl Into<String>, error: &Error) {
-    if let Some(diag) = &self.diagnostics {
-      diag.record_error(kind, url, error);
-    }
-  }
-
   /// Evaluate whether a URL is allowed by policy, recording a diagnostic on failure.
   pub fn check_allowed(
     &self,
@@ -1042,8 +1016,8 @@ pub struct LayoutArtifacts {
 ///
 /// `PreparedDocument` owns the parsed DOM, resolved stylesheet, styled tree, box
 /// tree, and laid-out fragment tree. Painting reuses the same font and image
-/// caches, allowing callers to apply different scroll offsets or viewport
-/// translations without re-running parse/style/layout.
+/// caches, allowing callers to apply different scroll states, animation times,
+/// or viewport translations without re-running parse/style/layout.
 ///
 /// # Thread safety
 ///
@@ -1061,9 +1035,72 @@ pub struct PreparedDocument {
   device_pixel_ratio: f32,
   page_zoom: f32,
   background_color: Rgba,
-  default_scroll: Point,
+  default_scroll: ScrollState,
   font_context: FontContext,
   image_cache: ImageCache,
+}
+
+/// Painting options for a prepared document.
+#[derive(Debug, Clone)]
+pub struct PreparedPaintOptions {
+  /// Scroll offsets to apply before painting. When omitted, the scroll state
+  /// captured during preparation is used. Element offsets in the state shift
+  /// the contents of scroll containers without re-running layout.
+  pub scroll: Option<ScrollState>,
+  /// Optional viewport override in CSS pixels.
+  pub viewport: Option<(u32, u32)>,
+  /// Optional background override.
+  pub background: Option<Rgba>,
+  /// Optional time used for sampling time-based animations.
+  pub animation_time: Option<Duration>,
+}
+
+impl PreparedPaintOptions {
+  /// Creates a new options struct with all fields unset.
+  pub fn new() -> Self {
+    Self::default()
+  }
+
+  /// Applies viewport scroll offsets.
+  pub fn with_scroll(mut self, scroll_x: f32, scroll_y: f32) -> Self {
+    self.scroll = Some(ScrollState::with_viewport(Point::new(scroll_x, scroll_y)));
+    self
+  }
+
+  /// Applies an explicit scroll state (including element scroll offsets).
+  pub fn with_scroll_state(mut self, scroll: ScrollState) -> Self {
+    self.scroll = Some(scroll);
+    self
+  }
+
+  /// Overrides the viewport size for painting.
+  pub fn with_viewport(mut self, width: u32, height: u32) -> Self {
+    self.viewport = Some((width, height));
+    self
+  }
+
+  /// Overrides the canvas background color.
+  pub fn with_background(mut self, background: Rgba) -> Self {
+    self.background = Some(background);
+    self
+  }
+
+  /// Sets the animation timestamp used for sampling time-based animations.
+  pub fn with_animation_time(mut self, time: Duration) -> Self {
+    self.animation_time = Some(time);
+    self
+  }
+}
+
+impl Default for PreparedPaintOptions {
+  fn default() -> Self {
+    Self {
+      scroll: None,
+      viewport: None,
+      background: None,
+      animation_time: None,
+    }
+  }
 }
 
 impl PreparedDocument {
@@ -1079,7 +1116,26 @@ impl PreparedDocument {
     viewport_override: Option<(u32, u32)>,
     background_override: Option<Rgba>,
   ) -> Result<Pixmap> {
+    let mut options = PreparedPaintOptions::default().with_scroll(scroll_x, scroll_y);
     if let Some((w, h)) = viewport_override {
+      options = options.with_viewport(w, h);
+    }
+    if let Some(bg) = background_override {
+      options = options.with_background(bg);
+    }
+    self.paint_with_options(options)
+  }
+
+  /// Paints the prepared document using the captured scroll state at a specific animation time.
+  pub fn paint_at_time(&self, animation_time: Duration) -> Result<Pixmap> {
+    self.paint_with_options(
+      PreparedPaintOptions::default().with_animation_time(animation_time),
+    )
+  }
+
+  /// Paints the prepared document using a rich options struct.
+  pub fn paint_with_options(&self, options: PreparedPaintOptions) -> Result<Pixmap> {
+    if let Some((w, h)) = options.viewport {
       if w == 0 || h == 0 {
         return Err(Error::Render(RenderError::InvalidParameters {
           message: format!("Invalid viewport override: width={w}, height={h}"),
@@ -1087,25 +1143,49 @@ impl PreparedDocument {
       }
     }
 
-    let viewport = viewport_override.map(|(w, h)| Size::new(w as f32, h as f32));
+    let viewport = options.viewport.map(|(w, h)| Size::new(w as f32, h as f32));
     let paint_scale =
       (self.device_pixel_ratio / self.page_zoom.max(f32::EPSILON)).max(f32::EPSILON);
-    paint_fragment_tree_with_scroll(
+    let scroll_state = options
+      .scroll
+      .unwrap_or_else(|| self.default_scroll.clone());
+    paint_fragment_tree_with_state(
       self.fragment_tree.clone(),
-      scroll_x,
-      scroll_y,
+      scroll_state,
       viewport,
-      background_override.unwrap_or(self.background_color),
+      options.background.unwrap_or(self.background_color),
       &self.font_context,
       &self.image_cache,
       paint_scale,
+      options.animation_time,
     )
+  }
+
+  /// Paints the prepared document with an explicit scroll state and animation time.
+  pub fn paint_with_scroll_state(
+    &self,
+    scroll_state: ScrollState,
+    viewport_override: Option<(u32, u32)>,
+    background_override: Option<Rgba>,
+    animation_time: Option<Duration>,
+  ) -> Result<Pixmap> {
+    let mut options = PreparedPaintOptions::default().with_scroll_state(scroll_state);
+    if let Some((w, h)) = viewport_override {
+      options = options.with_viewport(w, h);
+    }
+    if let Some(bg) = background_override {
+      options = options.with_background(bg);
+    }
+    if let Some(time) = animation_time {
+      options = options.with_animation_time(time);
+    }
+    self.paint_with_options(options)
   }
 
   /// Paints using the viewport captured during preparation and the initial
   /// scroll offsets provided in the original `RenderOptions`.
   pub fn paint_default(&self) -> Result<Pixmap> {
-    self.paint(self.default_scroll.x, self.default_scroll.y, None, None)
+    self.paint_with_options(PreparedPaintOptions::default())
   }
 
   /// Paints a specific rectangular region of the prepared document.
@@ -1117,7 +1197,10 @@ impl PreparedDocument {
       rect.width().max(1.0).round() as u32,
       rect.height().max(1.0).round() as u32,
     );
-    self.paint(rect.x(), rect.y(), Some(viewport), None)
+    let options = PreparedPaintOptions::default()
+      .with_scroll(rect.x(), rect.y())
+      .with_viewport(viewport.0, viewport.1);
+    self.paint_with_options(options)
   }
 
   /// Returns the parsed DOM used during preparation.
@@ -1162,7 +1245,12 @@ impl PreparedDocument {
 
   /// Returns the scroll offsets supplied when preparing the document.
   pub fn default_scroll(&self) -> Point {
-    self.default_scroll
+    self.default_scroll.viewport
+  }
+
+  /// Returns the prepared scroll state supplied during preparation.
+  pub fn default_scroll_state(&self) -> ScrollState {
+    self.default_scroll.clone()
   }
 }
 
@@ -1861,30 +1949,13 @@ impl FastRenderPool {
     self.inner.available.notify_one();
   }
 
-  pub(crate) fn with_renderer<F, T>(&self, op: F) -> Result<T>
+  fn with_renderer<F, T>(&self, op: F) -> Result<T>
   where
     F: FnOnce(&mut FastRender) -> Result<T>,
   {
-    struct RendererGuard<'a> {
-      pool: &'a FastRenderPool,
-      renderer: Option<FastRender>,
-    }
-
-    impl<'a> Drop for RendererGuard<'a> {
-      fn drop(&mut self) {
-        if let Some(renderer) = self.renderer.take() {
-          self.pool.release_renderer(renderer);
-        }
-      }
-    }
-
-    let renderer = self.acquire_renderer()?;
-    let mut guard = RendererGuard {
-      pool: self,
-      renderer: Some(renderer),
-    };
-    let result = op(guard.renderer.as_mut().expect("renderer dropped"));
-    drop(guard);
+    let mut renderer = self.acquire_renderer()?;
+    let result = op(&mut renderer);
+    self.release_renderer(renderer);
     result
   }
 
@@ -2265,26 +2336,26 @@ fn apply_sticky_offsets_with_context(
   }
 }
 
-fn paint_fragment_tree_with_scroll(
+fn paint_fragment_tree_with_state(
   mut fragment_tree: FragmentTree,
-  scroll_x: f32,
-  scroll_y: f32,
+  scroll_state: ScrollState,
   viewport_override: Option<Size>,
   background: Rgba,
   font_context: &FontContext,
   image_cache: &ImageCache,
   device_pixel_ratio: f32,
+  animation_time: Option<Duration>,
 ) -> Result<Pixmap> {
   let expand_full_page = std::env::var("FASTR_FULL_PAGE")
     .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
     .unwrap_or(false);
 
   let viewport_size = viewport_override.unwrap_or_else(|| fragment_tree.viewport_size());
-  let scroll_state = crate::scroll::ScrollState::with_viewport(Point::new(scroll_x, scroll_y));
-  let scroll_result = crate::scroll::apply_scroll_snap(&mut fragment_tree, &scroll_state);
-  let scroll = scroll_result.state.viewport;
+  let resolved_scroll = crate::scroll::apply_scroll_snap(&mut fragment_tree, &scroll_state).state;
+  crate::scroll::apply_scroll_offsets(&mut fragment_tree, &resolved_scroll);
+  let scroll = resolved_scroll.viewport;
 
-  animation::apply_scroll_driven_animations(&mut fragment_tree, scroll);
+  animation::apply_animations(&mut fragment_tree, scroll, animation_time);
 
   let viewport_rect = Rect::from_xywh(0.0, 0.0, viewport_size.width, viewport_size.height);
   apply_sticky_offsets_with_context(
@@ -2813,7 +2884,28 @@ impl FastRender {
     self.pop_resource_context(prev_self, prev_image, prev_font);
     let result = match result {
       Ok(outputs) => Ok(outputs),
-      Err(err) => self.recover_partial_from_error(err, options.allow_partial, width, height),
+      Err(err) => {
+        if options.allow_partial {
+          let stage = match &err {
+            Error::Render(RenderError::Timeout { stage, .. }) => Some(*stage),
+            Error::Layout(crate::error::LayoutError::Timeout { .. }) => Some(RenderStage::Layout),
+            _ => None,
+          };
+          if let Some(stage) = stage {
+            if let Some(diag) = &self.diagnostics {
+              if let Ok(mut guard) = diag.lock() {
+                guard.timeout_stage = Some(stage);
+              }
+            }
+            let pixmap = self.render_error_overlay(width, height)?;
+            return Ok(RenderOutputs {
+              pixmap,
+              accessibility: None,
+            });
+          }
+        }
+        Err(err)
+      }
     };
 
     if options.device_pixel_ratio.is_some() {
@@ -3111,10 +3203,11 @@ impl FastRender {
       let fit_canvas = fit_canvas_to_content || env_fit_canvas;
       let viewport_size = layout_viewport;
       let scroll_state = crate::scroll::ScrollState::with_viewport(Point::new(scroll_x, scroll_y));
-      let scroll_result = crate::scroll::apply_scroll_snap(&mut fragment_tree, &scroll_state);
-      let scroll = scroll_result.state.viewport;
+      let resolved_scroll = crate::scroll::apply_scroll_snap(&mut fragment_tree, &scroll_state).state;
+      crate::scroll::apply_scroll_offsets(&mut fragment_tree, &resolved_scroll);
+      let scroll = resolved_scroll.viewport;
 
-      animation::apply_scroll_driven_animations(&mut fragment_tree, scroll);
+      animation::apply_animations(&mut fragment_tree, scroll, None);
 
       self.apply_sticky_offsets_to_tree(&mut fragment_tree, scroll);
 
@@ -3416,7 +3509,7 @@ impl FastRender {
       device_pixel_ratio: resolved_viewport.device_pixel_ratio,
       page_zoom: resolved_viewport.zoom,
       background_color: self.background_color,
-      default_scroll: Point::new(options.scroll_x, options.scroll_y),
+      default_scroll: ScrollState::with_viewport(Point::new(options.scroll_x, options.scroll_y)),
       font_context: self.font_context.clone(),
       image_cache: self.image_cache.clone(),
     })
@@ -3735,31 +3828,26 @@ impl FastRender {
       ) {
         Ok(inlined) => inlined,
         Err(err) => {
-          guard.failure_stage = Some(RenderStage::Css);
-          if let RenderError::Timeout { stage, .. } = &err {
-            guard.timeout_stage = Some(*stage);
-          } else {
-            guard.record_message(ResourceKind::Stylesheet, &base_url, err.to_string());
-          }
-          if let RenderError::Timeout { .. } = &err {
-            let diagnostics = guard.clone();
-            drop(guard);
-            if !had_sink {
-              self.set_diagnostics_sink(None);
+          if options.allow_partial {
+            if let RenderError::Timeout { stage, .. } = &err {
+              guard.timeout_stage = Some(*stage);
+              let diagnostics = guard.clone();
+              if !had_sink {
+                self.set_diagnostics_sink(None);
+              }
+              if local_recorder.is_some() {
+                let _ = crate::image_loader::take_image_cache_diagnostics();
+                let _ = crate::paint::painter::take_paint_diagnostics();
+              }
+              let pixmap = self.render_error_overlay(width, height)?;
+              return Ok(RenderReport {
+                pixmap,
+                accessibility: None,
+                diagnostics,
+                artifacts: RenderArtifacts::new(artifacts),
+              });
             }
-            if local_recorder.is_some() {
-              let _ = crate::image_loader::take_image_cache_diagnostics();
-              let _ = crate::paint::painter::take_paint_diagnostics();
-            }
-            let pixmap = self.render_error_overlay(width, height)?;
-            return Ok(RenderReport {
-              pixmap,
-              accessibility: None,
-              diagnostics,
-              artifacts: RenderArtifacts::new(artifacts),
-            });
           }
-          let render_err = err.clone();
           drop(guard);
           if !had_sink {
             self.set_diagnostics_sink(None);
@@ -3768,10 +3856,7 @@ impl FastRender {
             let _ = crate::image_loader::take_image_cache_diagnostics();
             let _ = crate::paint::painter::take_paint_diagnostics();
           }
-          if !options.allow_partial {
-            return Err(Error::Render(render_err));
-          }
-          html.to_string()
+          return Err(Error::Render(err));
         }
       }
     };
@@ -3871,23 +3956,20 @@ impl FastRender {
         ) {
           Ok(inlined) => inlined,
           Err(err) => {
-            guard.failure_stage = Some(RenderStage::Css);
-            if let RenderError::Timeout { stage, .. } = &err {
-              guard.timeout_stage = Some(*stage);
-              let diagnostics = guard.clone();
-              let pixmap = self.render_error_overlay(width, height)?;
-              return Ok(RenderReport {
-                pixmap,
-                accessibility: None,
-                diagnostics,
-                artifacts: RenderArtifacts::new(artifacts),
-              });
+            if options.allow_partial {
+              if let RenderError::Timeout { stage, .. } = &err {
+                guard.timeout_stage = Some(*stage);
+                let diagnostics = guard.clone();
+                let pixmap = self.render_error_overlay(width, height)?;
+                return Ok(RenderReport {
+                  pixmap,
+                  accessibility: None,
+                  diagnostics,
+                  artifacts: RenderArtifacts::new(artifacts),
+                });
+              }
             }
-            guard.record_message(ResourceKind::Stylesheet, &base_url, err.to_string());
-            if !options.allow_partial {
-              return Err(Error::Render(err));
-            }
-            html.to_string()
+            return Err(Error::Render(err));
           }
         }
       };
@@ -3984,7 +4066,7 @@ impl FastRender {
         crate::scroll::apply_scroll_snap(&mut intermediates.fragment_tree, &scroll_state);
       let scroll = scroll_result.state.viewport;
 
-      animation::apply_scroll_driven_animations(&mut intermediates.fragment_tree, scroll);
+      animation::apply_animations(&mut intermediates.fragment_tree, scroll, None);
 
       self.apply_sticky_offsets(
         &mut intermediates.fragment_tree.root,
@@ -4083,18 +4165,15 @@ impl FastRender {
               continue;
             }
 
-            let parsed = parse_stylesheet_with_errors(&inline.css);
-            self.record_stylesheet_parse_errors(
-              self.base_url.as_deref().unwrap_or("<inline style>"),
-              &parsed.errors,
-            );
-            let resolved = parsed.stylesheet.resolve_imports_with_cache(
-              &inline_loader,
-              self.base_url.as_deref(),
-              media_ctx,
-              Some(cache),
-            );
-            combined_rules.extend(resolved.rules);
+            if let Ok(sheet) = parse_stylesheet(&inline.css) {
+              let resolved = sheet.resolve_imports_with_cache(
+                &inline_loader,
+                self.base_url.as_deref(),
+                media_ctx,
+                Some(cache),
+              );
+              combined_rules.extend(resolved.rules);
+            }
           }
           StylesheetSource::External(link) => {
             if link.disabled
@@ -4130,20 +4209,20 @@ impl FastRender {
                   decode_css_bytes(&resource.bytes, resource.content_type.as_deref());
                 css_text = absolutize_css_urls(&css_text, &stylesheet_url);
 
-                let parsed = parse_stylesheet_with_errors(&css_text);
-                self.record_stylesheet_parse_errors(&stylesheet_url, &parsed.errors);
-                let loader = CssImportFetcher::new(
-                  Some(stylesheet_url.clone()),
-                  Arc::clone(&fetcher),
-                  resource_context.cloned(),
-                );
-                let resolved = parsed.stylesheet.resolve_imports_with_cache(
-                  &loader,
-                  Some(&stylesheet_url),
-                  media_ctx,
-                  Some(cache),
-                );
-                combined_rules.extend(resolved.rules);
+                if let Ok(sheet) = parse_stylesheet(&css_text) {
+                  let loader = CssImportFetcher::new(
+                    Some(stylesheet_url.clone()),
+                    Arc::clone(&fetcher),
+                    resource_context.cloned(),
+                  );
+                  let resolved = sheet.resolve_imports_with_cache(
+                    &loader,
+                    Some(&stylesheet_url),
+                    media_ctx,
+                    Some(cache),
+                  );
+                  combined_rules.extend(resolved.rules);
+                }
               }
               Err(err) => {
                 // Per spec, stylesheet loads are best-effort. On failure, continue.
@@ -4206,18 +4285,15 @@ impl FastRender {
             continue;
           }
 
-          let parsed = parse_stylesheet_with_errors(&inline.css);
-          self.record_stylesheet_parse_errors(
-            self.base_url.as_deref().unwrap_or("<inline style>"),
-            &parsed.errors,
-          );
-          let resolved = parsed.stylesheet.resolve_imports_with_cache(
-            &inline_loader,
-            self.base_url.as_deref(),
-            media_ctx,
-            Some(media_query_cache),
-          );
-          combined_rules.extend(resolved.rules);
+          if let Ok(sheet) = parse_stylesheet(&inline.css) {
+            let resolved = sheet.resolve_imports_with_cache(
+              &inline_loader,
+              self.base_url.as_deref(),
+              media_ctx,
+              Some(media_query_cache),
+            );
+            combined_rules.extend(resolved.rules);
+          }
         }
         StylesheetSource::External(link) => {
           if link.disabled
@@ -4253,20 +4329,20 @@ impl FastRender {
                 decode_css_bytes(&resource.bytes, resource.content_type.as_deref());
               css_text = absolutize_css_urls(&css_text, &stylesheet_url);
 
-              let parsed = parse_stylesheet_with_errors(&css_text);
-              self.record_stylesheet_parse_errors(&stylesheet_url, &parsed.errors);
-              let loader = CssImportFetcher::new(
-                Some(stylesheet_url.clone()),
-                Arc::clone(&fetcher),
-                resource_context.cloned(),
-              );
-              let resolved = parsed.stylesheet.resolve_imports_with_cache(
-                &loader,
-                Some(&stylesheet_url),
-                media_ctx,
-                Some(media_query_cache),
-              );
-              combined_rules.extend(resolved.rules);
+              if let Ok(sheet) = parse_stylesheet(&css_text) {
+                let loader = CssImportFetcher::new(
+                  Some(stylesheet_url.clone()),
+                  Arc::clone(&fetcher),
+                  resource_context.cloned(),
+                );
+                let resolved = sheet.resolve_imports_with_cache(
+                  &loader,
+                  Some(&stylesheet_url),
+                  media_ctx,
+                  Some(media_query_cache),
+                );
+                combined_rules.extend(resolved.rules);
+              }
             }
             Err(err) => {
               // Per spec, stylesheet loads are best-effort. On failure, continue.
@@ -5475,22 +5551,6 @@ impl FastRender {
     self.image_cache.set_diagnostics_sink(sink);
   }
 
-  fn record_timeout_stage(&self, stage: RenderStage) {
-    if let Some(diag) = &self.diagnostics {
-      if let Ok(mut guard) = diag.lock() {
-        guard.timeout_stage = Some(stage);
-      }
-    }
-  }
-
-  fn record_failure_stage(&self, stage: RenderStage) {
-    if let Some(diag) = &self.diagnostics {
-      if let Ok(mut guard) = diag.lock() {
-        guard.failure_stage = Some(stage);
-      }
-    }
-  }
-
   fn record_fetch_error(&self, kind: ResourceKind, url: &str, message: impl Into<String>) {
     if let Some(diag) = &self.diagnostics {
       if let Ok(mut guard) = diag.lock() {
@@ -5499,20 +5559,6 @@ impl FastRender {
           url,
           &Error::Resource(ResourceError::new(url.to_string(), message.into())),
         );
-      }
-    }
-  }
-
-  fn record_stylesheet_parse_errors(&self, source: &str, errors: &[CssParseError]) {
-    if errors.is_empty() {
-      return;
-    }
-    if let Some(diag) = &self.diagnostics {
-      if let Ok(mut guard) = diag.lock() {
-        if let Some(first) = errors.first() {
-          guard.record_message(ResourceKind::Stylesheet, source, first.to_string());
-        }
-        guard.failure_stage.get_or_insert(RenderStage::Css);
       }
     }
   }
@@ -5527,48 +5573,6 @@ impl FastRender {
       policy: self.resource_policy.for_origin(origin),
       diagnostics,
     }
-  }
-
-  fn stage_from_error(err: &Error) -> Option<RenderStage> {
-    match err {
-      Error::Parse(_) => Some(RenderStage::DomParse),
-      Error::Style(_) | Error::Font(_) => Some(RenderStage::Cascade),
-      Error::Layout(_) | Error::Text(_) => Some(RenderStage::Layout),
-      Error::Render(render) => match render {
-        RenderError::Timeout { stage, .. } => Some(*stage),
-        _ => Some(RenderStage::Paint),
-      },
-      _ => None,
-    }
-  }
-
-  fn recover_partial_from_error(
-    &self,
-    err: Error,
-    allow_partial: bool,
-    width: u32,
-    height: u32,
-  ) -> Result<RenderOutputs> {
-    if !allow_partial {
-      return Err(err);
-    }
-
-    let Some(stage) = Self::stage_from_error(&err) else {
-      return Err(err);
-    };
-
-    if let Error::Render(RenderError::Timeout { stage, .. }) = &err {
-      self.record_timeout_stage(*stage);
-    }
-    if let Error::Layout(crate::error::LayoutError::Timeout { .. }) = &err {
-      self.record_timeout_stage(RenderStage::Layout);
-    }
-    self.record_failure_stage(stage);
-    let pixmap = self.render_error_overlay(width, height)?;
-    Ok(RenderOutputs {
-      pixmap,
-      accessibility: None,
-    })
   }
 
   fn push_resource_context(
@@ -5797,7 +5801,6 @@ impl FastRender {
       if let Some(ctx) = resource_context {
         if let Err(err) = ctx.policy.allows(&css_url) {
           diagnostics.record_message(ResourceKind::Stylesheet, &css_url, err.reason);
-          diagnostics.failure_stage.get_or_insert(RenderStage::Css);
           continue;
         }
       }
@@ -5814,7 +5817,6 @@ impl FastRender {
               if let Some(ctx) = resource_context {
                 if let Err(err) = ctx.policy.allows(u) {
                   diagnostics.record_message(ResourceKind::Stylesheet, u, &err.reason);
-                  diagnostics.failure_stage.get_or_insert(RenderStage::Css);
                   return Err(Error::Resource(ResourceError::new(
                     u.to_string(),
                     err.reason,
@@ -5825,7 +5827,6 @@ impl FastRender {
                 Ok(res) => Ok(decode_css_bytes(&res.bytes, res.content_type.as_deref())),
                 Err(err) => {
                   diagnostics.record_error(ResourceKind::Stylesheet, u, &err);
-                  diagnostics.failure_stage.get_or_insert(RenderStage::Css);
                   Err(err)
                 }
               }
@@ -5846,15 +5847,11 @@ impl FastRender {
           };
           for (url, reason) in import_diags.drain(..) {
             diagnostics.record_message(ResourceKind::Stylesheet, &url, &reason);
-            diagnostics.failure_stage.get_or_insert(RenderStage::Css);
           }
           combined_css.push_str(&inlined);
           combined_css.push('\n');
         }
-        Err(err) => {
-          diagnostics.record_error(ResourceKind::Stylesheet, &css_url, &err);
-          diagnostics.failure_stage.get_or_insert(RenderStage::Css);
-        }
+        Err(err) => diagnostics.record_error(ResourceKind::Stylesheet, &css_url, &err),
       }
     }
 

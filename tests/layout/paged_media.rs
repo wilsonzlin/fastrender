@@ -1,8 +1,8 @@
 use fastrender::api::{FastRender, LayoutDocumentOptions, PageStacking, RenderOptions};
 use fastrender::style::media::MediaType;
 use fastrender::tree::box_tree::ReplacedType;
-use fastrender::Rgba;
 use fastrender::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
+use fastrender::Rgba;
 
 fn pages<'a>(tree: &'a FragmentTree) -> Vec<&'a FragmentNode> {
   let mut roots = vec![&tree.root];
@@ -89,11 +89,7 @@ fn collected_text_compacted(node: &FragmentNode) -> String {
     a.y
       .partial_cmp(&b.y)
       .unwrap_or(std::cmp::Ordering::Equal)
-      .then(
-        a.x
-          .partial_cmp(&b.x)
-          .unwrap_or(std::cmp::Ordering::Equal),
-      )
+      .then(a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal))
   });
   let mut out = String::new();
   for t in texts {
@@ -149,7 +145,10 @@ fn find_replaced_image<'a>(node: &'a FragmentNode) -> Option<&'a FragmentNode> {
   None
 }
 
-fn find_fragment_by_background<'a>(node: &'a FragmentNode, color: Rgba) -> Option<&'a FragmentNode> {
+fn find_fragment_by_background<'a>(
+  node: &'a FragmentNode,
+  color: Rgba,
+) -> Option<&'a FragmentNode> {
   if node.content.is_block()
     && node
       .style
@@ -527,7 +526,9 @@ fn element_last_uses_last_anchor_on_page() {
     .map(collected_text_compacted)
     .collect();
   assert!(
-    margin_texts.iter().any(|text| text.contains("SecondHeader")),
+    margin_texts
+      .iter()
+      .any(|text| text.contains("SecondHeader")),
     "element(header, last) should pick the last running element on the page"
   );
   assert!(
@@ -718,8 +719,9 @@ fn header_repeats_across_pages() {
         .map(|n| n.bounds.y())
         .unwrap_or(f32::MAX);
 
-    let header_pos = find_text_position_matching(page, "Title", (0.0, 0.0), &|pos| pos.1 < content_y)
-      .expect("page header in margin box");
+    let header_pos =
+      find_text_position_matching(page, "Title", (0.0, 0.0), &|pos| pos.1 < content_y)
+        .expect("page header in margin box");
     assert!(header_pos.1 < content_y);
   }
 }
@@ -764,11 +766,7 @@ fn string_set_from_split_inline_updates_once() {
     a.y
       .partial_cmp(&b.y)
       .unwrap_or(std::cmp::Ordering::Equal)
-      .then(
-        a.x
-          .partial_cmp(&b.x)
-          .unwrap_or(std::cmp::Ordering::Equal),
-      )
+      .then(a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal))
   });
 
   let mut header_text = String::new();
@@ -825,13 +823,11 @@ fn start_vs_first() {
         .first()
         .map(|n| n.bounds.y())
         .unwrap_or(f32::MAX);
-    let has_chapter_2_in_content = find_text_position_matching(
-      candidate,
-      "2",
-      (0.0, 0.0),
-      &|pos| pos.1 >= candidate_content_y,
-    )
-    .is_some();
+    let has_chapter_2_in_content =
+      find_text_position_matching(candidate, "2", (0.0, 0.0), &|pos| {
+        pos.1 >= candidate_content_y
+      })
+      .is_some();
     if has_chapter_2_in_content {
       target_page = Some(candidate);
       content_y = candidate_content_y;
@@ -876,7 +872,10 @@ fn margin_box_quotes_property_applies() {
   let page = pages(&tree)[0];
 
   let actual = collected_text_compacted(page);
-  assert!(actual.contains("<x>"), "expected <x> in margin box, got {actual}");
+  assert!(
+    actual.contains("<x>"),
+    "expected <x> in margin box, got {actual}"
+  );
 }
 
 #[test]
@@ -1799,11 +1798,7 @@ fn var_in_string_set_is_used_in_running_header() {
       a.y
         .partial_cmp(&b.y)
         .unwrap_or(std::cmp::Ordering::Equal)
-        .then(
-          a.x
-            .partial_cmp(&b.x)
-            .unwrap_or(std::cmp::Ordering::Equal),
-        )
+        .then(a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal))
     });
 
     let mut margin_text = String::new();

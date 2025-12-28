@@ -130,13 +130,11 @@ pub fn resolve_page_style(
     }
 
     for margin_rule in &rule.rule.margin_rules {
-      let style = margin_styles
-        .entry(margin_rule.area)
-        .or_insert_with(|| {
-          let mut style = default_margin_style(base_style, root_font_size);
-          style.text_align = default_margin_text_align(margin_rule.area);
-          style
-        });
+      let style = margin_styles.entry(margin_rule.area).or_insert_with(|| {
+        let mut style = default_margin_style(base_style, root_font_size);
+        style.text_align = default_margin_text_align(margin_rule.area);
+        style
+      });
       for decl in &margin_rule.declarations {
         apply_declaration_with_base(
           style,

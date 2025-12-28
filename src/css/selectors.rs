@@ -13,7 +13,6 @@ use selectors::parser::SelectorList;
 use selectors::parser::SelectorParseErrorKind;
 use selectors::parser::{Combinator, RelativeSelector, RelativeSelectorMatchHint};
 use selectors::OpaqueElement;
-use std::collections::HashMap;
 use std::fmt;
 
 /// Direction keyword for :dir()
@@ -37,7 +36,7 @@ pub struct ShadowMatchData<'a> {
   /// The shadow host for the stylesheet being matched, or None for document styles.
   pub shadow_host: Option<OpaqueElement>,
   /// Mapping from slot elements to their assigned nodes for ::slotted() resolution.
-  pub slot_map: Option<&'a SlotAssignmentMap<'a>>,
+  pub slot_map: Option<&'a SlotAssignmentMap>,
   /// Exported part mappings for resolving ::part() across shadow boundaries.
   pub part_export_map: Option<&'a PartExportMap>,
 }
@@ -53,117 +52,15 @@ impl<'a> ShadowMatchData<'a> {
       ..Self::default()
     }
   }
-
-  pub fn with_part_export_map(mut self, part_export_map: Option<&'a PartExportMap>) -> Self {
-    self.part_export_map = part_export_map;
-    self
-  }
 }
 
-/// Mapping between shadow slots and assigned light DOM nodes for ::slotted().
-#[derive(Debug, Default)]
-pub struct SlotAssignmentMap<'a> {
-  slots: std::collections::HashMap<*const crate::dom::DomNode, SlotInfo<'a>>,
-  slot_to_nodes:
-    std::collections::HashMap<*const crate::dom::DomNode, Vec<&'a crate::dom::DomNode>>,
-  node_to_slot: std::collections::HashMap<*const crate::dom::DomNode, *const crate::dom::DomNode>,
-}
-
+/// Placeholder for future ::slotted() resolution data.
 #[derive(Debug)]
-struct SlotInfo<'a> {
-  slot: &'a crate::dom::DomNode,
-  ancestors: Box<[&'a crate::dom::DomNode]>,
-  shadow_root_id: usize,
-}
+pub struct SlotAssignmentMap;
 
-/// Slot assignment lookup result for a light DOM node.
-#[derive(Debug, Clone, Copy)]
-pub struct AssignedSlotRef<'a> {
-  pub slot: &'a crate::dom::DomNode,
-  pub ancestors: &'a [&'a crate::dom::DomNode],
-  pub shadow_root_id: usize,
-}
-
-impl<'a> SlotAssignmentMap<'a> {
-  pub fn new() -> Self {
-    Self::default()
-  }
-
-  pub fn add_slot(
-    &mut self,
-    slot: &'a crate::dom::DomNode,
-    ancestors: Vec<&'a crate::dom::DomNode>,
-    assigned_nodes: impl IntoIterator<Item = &'a crate::dom::DomNode>,
-    shadow_root_id: usize,
-  ) {
-    let slot_ptr = slot as *const crate::dom::DomNode;
-    self.slots.entry(slot_ptr).or_insert(SlotInfo {
-      slot,
-      ancestors: ancestors.into_boxed_slice(),
-      shadow_root_id,
-    });
-    let nodes = self.slot_to_nodes.entry(slot_ptr).or_default();
-    for node in assigned_nodes {
-      nodes.push(node);
-      self.node_to_slot.insert(node as *const _, slot_ptr);
-    }
-  }
-
-  /// Get the slot this node is assigned to, if any.
-  pub fn assigned_slot(&'a self, node: &crate::dom::DomNode) -> Option<AssignedSlotRef<'a>> {
-    let slot_ptr = *self.node_to_slot.get(&(node as *const _))?;
-    let info = self.slots.get(&slot_ptr)?;
-    let ancestors: &'a [&'a crate::dom::DomNode] = info.ancestors.as_ref();
-    Some(AssignedSlotRef {
-      slot: info.slot,
-      ancestors,
-      shadow_root_id: info.shadow_root_id,
-    })
-  }
-
-  /// Get nodes assigned to the given slot, in distribution order.
-  pub fn assigned_nodes(
-    &'a self,
-    slot: &crate::dom::DomNode,
-  ) -> Option<&'a [&'a crate::dom::DomNode]> {
-    let slot_ptr = slot as *const crate::dom::DomNode;
-    self.slot_to_nodes.get(&slot_ptr).map(|v| v.as_slice())
-  }
-}
-
-/// Mapping of exported parts for each shadow host.
-///
-/// Keys use stable DOM traversal ids so selector matching can efficiently determine which
-/// elements inside a shadow tree are exposed for a given `::part()` name at the host boundary.
-#[derive(Debug, Default, Clone)]
-pub struct PartExportMap {
-  host_exports: HashMap<usize, HashMap<String, Vec<usize>>>,
-}
-
-impl PartExportMap {
-  pub fn new() -> Self {
-    Self::default()
-  }
-
-  /// Returns the exported part mapping for a given host, if any.
-  pub fn exports_for_host(&self, host_id: usize) -> Option<&HashMap<String, Vec<usize>>> {
-    self.host_exports.get(&host_id)
-  }
-
-  /// Returns true when `target_id` is exposed from `host_id` under the provided part name.
-  pub fn exposes(&self, host_id: usize, part_name: &str, target_id: usize) -> bool {
-    self
-      .host_exports
-      .get(&host_id)
-      .and_then(|exports| exports.get(part_name))
-      .map_or(false, |targets| targets.contains(&target_id))
-  }
-
-  /// Registers all exported parts for a host. Existing entries are replaced.
-  pub fn insert_host_exports(&mut self, host_id: usize, exports: HashMap<String, Vec<usize>>) {
-    self.host_exports.insert(host_id, exports);
-  }
-}
+/// Placeholder for future ::part() export chain data.
+#[derive(Debug)]
+pub struct PartExportMap;
 
 impl SelectorImpl for FastRenderSelectorImpl {
   type AttrValue = CssString;
@@ -494,10 +391,6 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
     true
   }
 
-  fn parse_slotted(&self) -> bool {
-    true
-  }
-
   fn parse_non_ts_pseudo_class(
     &self,
     _location: cssparser::SourceLocation,
@@ -787,8 +680,8 @@ fn parse_part_pseudo_element<'i, 't>(
   name: &cssparser::CowRcStr<'i>,
 ) -> std::result::Result<PseudoElement, ParseError<'i, SelectorParseErrorKind<'i>>> {
   let mut names = Vec::new();
-  loop {
-    let ident = match parser.expect_ident() {
+  let first =
+    match parser.expect_ident() {
       Ok(first) => CssString::from(first.as_ref()),
       Err(_) => {
         return Err(parser.new_custom_error(
@@ -796,23 +689,22 @@ fn parse_part_pseudo_element<'i, 't>(
         ))
       }
     };
-    names.push(ident);
+  names.push(first);
 
-    parser.skip_whitespace();
-    if parser.is_exhausted() {
-      break;
-    }
+  while let Ok(next) = parser.try_parse(|p| {
+    p.expect_ident()
+      .map(|ident| CssString::from(ident.as_ref()))
+  }) {
+    names.push(next);
+  }
 
-    let had_comma = parser.try_parse(|p| p.expect_comma()).is_ok();
-    parser.skip_whitespace();
-    if parser.is_exhausted() {
-      if had_comma {
-        return Err(parser.new_custom_error(
-          SelectorParseErrorKind::UnsupportedPseudoClassOrElement(name.clone()),
-        ));
-      }
-      break;
-    }
+  parser.skip_whitespace();
+  if !parser.is_exhausted() {
+    return Err(
+      parser.new_custom_error(SelectorParseErrorKind::UnsupportedPseudoClassOrElement(
+        name.clone(),
+      )),
+    );
   }
 
   Ok(PseudoElement::Part(names))

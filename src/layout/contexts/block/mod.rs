@@ -2077,16 +2077,16 @@ impl BlockFormattingContext {
         low,
         FragmentationContext::Column,
       )
-        .len()
-        .saturating_sub(1);
+      .len()
+      .saturating_sub(1);
       if count_at_low > column_count {
         let count_at_high = resolve_fragmentation_boundaries_with_context(
           &flow_root,
           high,
           FragmentationContext::Column,
         )
-          .len()
-          .saturating_sub(1);
+        .len()
+        .saturating_sub(1);
         if count_at_high <= column_count {
           for _ in 0..12 {
             let mid = (low + high) / 2.0;
@@ -2095,8 +2095,8 @@ impl BlockFormattingContext {
               mid,
               FragmentationContext::Column,
             )
-              .len()
-              .saturating_sub(1);
+            .len()
+            .saturating_sub(1);
             if count_at_mid <= column_count {
               high = mid;
             } else {

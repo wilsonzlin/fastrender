@@ -334,7 +334,10 @@ fn background_rects(
     padding_bottom,
   );
 
-  BackgroundRects { border: border_rect, content: content_rect }
+  BackgroundRects {
+    border: border_rect,
+    content: content_rect,
+  }
 }
 
 fn resolve_length_for_paint(

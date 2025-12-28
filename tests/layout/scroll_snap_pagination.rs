@@ -39,7 +39,10 @@ fn scroll_snap_targets_include_fragment_offsets() {
   );
 
   let fragments = fragment_tree(&root, &FragmentationOptions::new(200.0).with_gap(30.0));
-  assert!(fragments.len() > 1, "pagination should produce multiple fragments");
+  assert!(
+    fragments.len() > 1,
+    "pagination should produce multiple fragments"
+  );
 
   let viewport = Size::new(200.0, 200.0);
   let mut tree = FragmentTree::from_fragments(fragments, viewport);

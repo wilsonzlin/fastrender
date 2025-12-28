@@ -4,8 +4,8 @@ use fastrender::style::cascade::apply_styles_with_media;
 use fastrender::style::cascade::StyledNode;
 use fastrender::style::media::MediaContext;
 use fastrender::style::types::{
-  BackgroundImage, BackgroundPosition, BackgroundRepeatKeyword, BackgroundSize, BackgroundSizeKeyword,
-  MaskClip, MaskComposite, MaskOrigin,
+  BackgroundImage, BackgroundPosition, BackgroundRepeatKeyword, BackgroundSize,
+  BackgroundSizeKeyword, MaskClip, MaskComposite, MaskOrigin,
 };
 use fastrender::style::values::Length;
 
@@ -110,10 +110,8 @@ fn mask_shorthand_sets_origin_and_clip() {
 
 #[test]
 fn mask_layers_repeat_longhands_to_match_images() {
-  let dom = dom::parse_html(
-    r#"<div style="mask: url(a), url(b); mask-repeat: repeat-x;"></div>"#,
-  )
-  .unwrap();
+  let dom =
+    dom::parse_html(r#"<div style="mask: url(a), url(b); mask-repeat: repeat-x;"></div>"#).unwrap();
   let stylesheet = parse_stylesheet("").unwrap();
   let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
 

@@ -2,7 +2,10 @@ use fastrender::css::parser::{extract_css_sources, CssTreeScope, StylesheetSourc
 use fastrender::dom::{parse_html, DomNode, DomNodeType};
 
 fn node_contributes_to_scope_path(node: &DomNode) -> bool {
-  !matches!(node.node_type, DomNodeType::Text { .. } | DomNodeType::Document)
+  !matches!(
+    node.node_type,
+    DomNodeType::Text { .. } | DomNodeType::Document
+  )
 }
 
 fn element_path_by_id(root: &DomNode, id: &str) -> Option<Vec<usize>> {

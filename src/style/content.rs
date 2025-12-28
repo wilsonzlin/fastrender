@@ -1906,16 +1906,14 @@ mod tests {
   fn test_generate_running_strings() {
     let gen = ContentGenerator::new();
     let mut ctx = ContentContext::new();
-    ctx.set_running_strings(
-      std::collections::HashMap::from_iter([(
-        "header".to_string(),
-        RunningStringValues {
-          start: Some("A".to_string()),
-          first: Some("B".to_string()),
-          last: Some("C".to_string()),
-        },
-      )]),
-    );
+    ctx.set_running_strings(std::collections::HashMap::from_iter([(
+      "header".to_string(),
+      RunningStringValues {
+        start: Some("A".to_string()),
+        first: Some("B".to_string()),
+        last: Some("C".to_string()),
+      },
+    )]));
 
     let start_content = ContentValue::Items(vec![ContentItem::StringReference {
       name: "header".to_string(),
@@ -1935,16 +1933,14 @@ mod tests {
     assert_eq!(gen.generate(&last_content, &mut ctx), "C");
 
     let mut fallback_ctx = ContentContext::new();
-    fallback_ctx.set_running_strings(
-      std::collections::HashMap::from_iter([(
-        "header".to_string(),
-        RunningStringValues {
-          start: Some("A".to_string()),
-          first: None,
-          last: None,
-        },
-      )]),
-    );
+    fallback_ctx.set_running_strings(std::collections::HashMap::from_iter([(
+      "header".to_string(),
+      RunningStringValues {
+        start: Some("A".to_string()),
+        first: None,
+        last: None,
+      },
+    )]));
     assert_eq!(gen.generate(&first_content, &mut fallback_ctx), "A");
     assert_eq!(gen.generate(&last_content, &mut fallback_ctx), "A");
   }

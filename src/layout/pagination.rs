@@ -16,7 +16,8 @@ use crate::layout::fragmentation::{
 };
 use crate::layout::running_strings::{collect_string_set_events, StringSetEvent};
 use crate::style::content::{
-  ContentContext, ContentItem, ContentValue, CounterStyle, RunningElementSelect, RunningStringValues,
+  ContentContext, ContentItem, ContentValue, CounterStyle, RunningElementSelect,
+  RunningStringValues,
 };
 use crate::style::display::{Display, FormattingContextType};
 use crate::style::page::{resolve_page_style, PageSide, ResolvedPageStyle};
@@ -415,9 +416,7 @@ pub fn paginate_fragment_tree(
           }
           eprintln!(
             "[paginate-running] page={} anchors={:?} selected={:?}",
-            page_index,
-            counts,
-            previews
+            page_index, counts, previews
           );
         }
         page_root.children.push(content);
@@ -462,19 +461,16 @@ pub fn paginate_fragment_tree(
   let count = pages.len();
   let mut page_roots = Vec::with_capacity(count);
   let mut running_element_state: HashMap<String, FragmentNode> = HashMap::new();
-  for (idx, (mut page, style, running_strings, running_elements)) in pages.into_iter().enumerate()
-  {
-    page
-      .children
-      .extend(build_margin_box_fragments(
-        &style,
-        font_ctx,
-        idx,
-        count,
-        &running_strings,
-        &running_elements,
-        &running_element_state,
-      ));
+  for (idx, (mut page, style, running_strings, running_elements)) in pages.into_iter().enumerate() {
+    page.children.extend(build_margin_box_fragments(
+      &style,
+      font_ctx,
+      idx,
+      count,
+      &running_strings,
+      &running_elements,
+      &running_element_state,
+    ));
     for (name, anchors) in &running_elements {
       if let Some(last) = anchors.last() {
         running_element_state.insert(name.clone(), last.clone());
@@ -873,8 +869,13 @@ fn build_margin_box_fragments(
           }
         }
       }
-      let children =
-        build_margin_box_children(box_style, page_index, page_count, running_strings, &style_arc);
+      let children = build_margin_box_children(
+        box_style,
+        page_index,
+        page_count,
+        running_strings,
+        &style_arc,
+      );
       let root = BoxNode::new_block(style_arc.clone(), FormattingContextType::Block, children);
       let box_tree = BoxTree::new(root);
 
@@ -915,9 +916,7 @@ fn build_margin_box_children(
   context.set_running_strings(running_strings.clone());
   context.set_counter(
     "page",
-    page_index
-      .saturating_add(1)
-      .min(i32::MAX as usize) as i32,
+    page_index.saturating_add(1).min(i32::MAX as usize) as i32,
   );
   context.set_counter("pages", page_count.min(i32::MAX as usize) as i32);
 
@@ -960,7 +959,11 @@ fn build_margin_box_children(
             } else {
               let formatted: Vec<String> = values
                 .iter()
-                .map(|v| box_style.counter_styles.format_value(*v, style_name.clone()))
+                .map(|v| {
+                  box_style
+                    .counter_styles
+                    .format_value(*v, style_name.clone())
+                })
                 .collect();
               text_buf.push_str(&formatted.join(separator));
             }

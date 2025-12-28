@@ -790,6 +790,35 @@ pub fn apply_scroll_snap(tree: &mut FragmentTree, scroll: &ScrollState) -> Scrol
   ScrollSnapResult { state, updates }
 }
 
+fn apply_element_scroll_offsets(node: &mut FragmentNode, scroll: &ScrollState) {
+  let offset = fragment_box_id(node)
+    .and_then(|id| scroll.elements.get(&id))
+    .copied()
+    .unwrap_or(Point::ZERO);
+  if offset != Point::ZERO {
+    let delta = Point::new(-offset.x, -offset.y);
+    for child in node.children.iter_mut() {
+      *child = child.translate_subtree_absolute(delta);
+    }
+  }
+
+  for child in node.children.iter_mut() {
+    apply_element_scroll_offsets(child, scroll);
+  }
+}
+
+/// Applies element scroll offsets to a fragment tree by translating the contents of each scroll
+/// container by the corresponding offset in the [`ScrollState`].
+///
+/// The tree is mutated in place and should typically be a clone of a prepared layout tree to avoid
+/// leaking state across paints.
+pub fn apply_scroll_offsets(tree: &mut FragmentTree, scroll: &ScrollState) {
+  apply_element_scroll_offsets(&mut tree.root, scroll);
+  for fragment in &mut tree.additional_fragments {
+    apply_element_scroll_offsets(fragment, scroll);
+  }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ScrollBounds {
   pub min_x: f32,

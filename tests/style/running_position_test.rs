@@ -20,8 +20,7 @@ fn find_first<'a>(node: &'a StyledNode, tag: &str) -> Option<&'a StyledNode> {
 
 #[test]
 fn running_function_sets_running_position() {
-  let dom =
-    dom::parse_html(r#"<div style="position: RUNNING( header-name )"></div>"#).unwrap();
+  let dom = dom::parse_html(r#"<div style="position: RUNNING( header-name )"></div>"#).unwrap();
   let stylesheet = parse_stylesheet("").unwrap();
   let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
   let div = find_first(&styled, "div").expect("div element");
@@ -32,10 +31,8 @@ fn running_function_sets_running_position() {
 
 #[test]
 fn position_keyword_clears_running_position() {
-  let dom = dom::parse_html(
-    r#"<div style="position: running(foo); position: absolute;"></div>"#,
-  )
-  .unwrap();
+  let dom =
+    dom::parse_html(r#"<div style="position: running(foo); position: absolute;"></div>"#).unwrap();
   let stylesheet = parse_stylesheet("").unwrap();
   let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
   let div = find_first(&styled, "div").expect("div element");

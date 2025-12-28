@@ -94,7 +94,10 @@ fn fe_offset_preserves_subpixel_offsets() {
   let left_alpha = alpha_at(&offset_half, line_x);
   let right_alpha = alpha_at(&offset_half, line_x + 1);
 
-  assert!(left_alpha > 0 && left_alpha < 255, "left edge should be partially covered");
+  assert!(
+    left_alpha > 0 && left_alpha < 255,
+    "left edge should be partially covered"
+  );
   assert!(
     right_alpha > 0 && right_alpha < 255,
     "right edge should be partially covered"

@@ -1251,8 +1251,7 @@ mod tests {
 
   #[test]
   fn test_hit_test_nested_offsets() {
-    let grandchild =
-      FragmentNode::new_block(Rect::from_xywh(5.0, 30.0, 10.0, 10.0), vec![]);
+    let grandchild = FragmentNode::new_block(Rect::from_xywh(5.0, 30.0, 10.0, 10.0), vec![]);
     let child = FragmentNode::new_block(Rect::from_xywh(10.0, 50.0, 40.0, 40.0), vec![grandchild]);
     let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 200.0, 200.0), vec![child]);
     let tree = FragmentTree::new(root);
@@ -1260,10 +1259,7 @@ mod tests {
     // Point should hit grandchild (5+10+?, etc.)
     let hits = tree.hit_test(Point::new(20.0, 90.0));
     assert_eq!(hits.len(), 3);
-    assert!(std::ptr::eq(
-      hits[0],
-      &tree.root.children[0].children[0]
-    ));
+    assert!(std::ptr::eq(hits[0], &tree.root.children[0].children[0]));
   }
 
   // Tree traversal tests
@@ -1325,7 +1321,6 @@ mod tests {
     assert_eq!(second.children[0].bounds.y(), 0.0); // child clipped into second fragment starts at top
     assert!((second.bounds.y() + second.children[0].bounds.y() - 80.0).abs() < 0.001);
   }
-
 
   #[test]
   fn test_fragment_tree_count() {

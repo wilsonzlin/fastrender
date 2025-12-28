@@ -41,6 +41,10 @@ fn culled_backface_plane_does_not_occlude_in_depth_sort() {
   };
 
   let sorted = depth_sort_scene(vec![hidden_front, visible_back.clone()]);
-  assert_eq!(sorted.len(), 1, "hidden plane should be culled before sorting");
+  assert_eq!(
+    sorted.len(),
+    1,
+    "hidden plane should be culled before sorting"
+  );
   assert_eq!(sorted[0].item, visible_back.item);
 }

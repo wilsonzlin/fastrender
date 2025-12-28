@@ -718,8 +718,7 @@ fn perspective_rotation_blur_preserves_outsets() {
   let baseline = render(Vec::new());
   let blurred = render(vec![ResolvedFilter::Blur(8.0)]);
 
-  let baseline_bbox =
-    bounding_box_for_color(&baseline, red_predicate).expect("baseline red bbox");
+  let baseline_bbox = bounding_box_for_color(&baseline, red_predicate).expect("baseline red bbox");
   let blurred_bbox = bounding_box_for_color(&blurred, red_predicate).expect("blurred red bbox");
 
   assert!(
@@ -750,7 +749,10 @@ fn perspective_rotation_blur_preserves_outsets() {
       break;
     }
   }
-  assert!(found_outset, "expected some blurred pixels outside baseline bbox");
+  assert!(
+    found_outset,
+    "expected some blurred pixels outside baseline bbox"
+  );
 }
 
 #[test]
@@ -992,7 +994,9 @@ fn clip_path_warped_with_perspective_transform() {
     (bounds.max_x(), bounds.max_y()),
     (bounds.min_x(), bounds.max_y()),
   ] {
-    if let Some(sample) = project_point_2d(&transform, corner).and_then(|p| sample_pixel_at(&pixmap, p)) {
+    if let Some(sample) =
+      project_point_2d(&transform, corner).and_then(|p| sample_pixel_at(&pixmap, p))
+    {
       assert_eq!(
         sample,
         (255, 255, 255, 255),
@@ -1024,11 +1028,8 @@ fn perspective_transform_matches_when_downsampled_from_hidpi() {
   root_style.background_color = Rgba::WHITE;
   let root_style = Arc::new(root_style);
 
-  let child = FragmentNode::new_block_styled(
-    Rect::from_xywh(20.0, 12.0, 36.0, 28.0),
-    vec![],
-    child_style,
-  );
+  let child =
+    FragmentNode::new_block_styled(Rect::from_xywh(20.0, 12.0, 36.0, 28.0), vec![], child_style);
   let root = FragmentNode::new_block_styled(
     Rect::from_xywh(0.0, 0.0, 80.0, 60.0),
     vec![child],
