@@ -48,7 +48,7 @@ use crate::layout::formatting_context::FormattingContext;
 use crate::layout::formatting_context::IntrinsicSizingMode;
 use crate::layout::formatting_context::LayoutError;
 use crate::layout::fragmentation::{
-  clip_node, normalize_fragment_margins, propagate_fragment_metadata,
+  clip_node, fragmentation_axis, normalize_fragment_margins, propagate_fragment_metadata,
   resolve_fragmentation_boundaries_with_context, FragmentationContext,
 };
 use crate::layout::profile::layout_timer;
@@ -71,6 +71,7 @@ use crate::style::position::Position;
 use crate::style::types::BorderStyle;
 use crate::style::types::ColumnFill;
 use crate::style::types::ColumnSpan;
+use crate::style::types::Direction;
 use crate::style::types::Overflow;
 use crate::style::types::WritingMode;
 use crate::style::values::Length;
@@ -1933,26 +1934,10 @@ impl BlockFormattingContext {
         self.viewport_size,
       )
     });
-    let specified_count = style.column_count.unwrap_or(0).max(0) as usize;
+    let specified_count = style.column_count.unwrap_or(0).max(0);
 
     if specified_count > 0 {
-      if let Some(spec_width) = specified_width.filter(|w| *w > 0.0) {
-        let denom = spec_width + gap;
-        let mut max_fit = if denom > 0.0 {
-          ((available_inline + gap) / denom).floor().max(1.0) as usize
-        } else {
-          1
-        };
-        if max_fit == 0 {
-          max_fit = 1;
-        }
-        let count = specified_count.min(max_fit).max(1);
-        let used_width =
-          ((available_inline - gap * (count.saturating_sub(1) as f32)) / count as f32).max(0.0);
-        return (count, used_width, gap);
-      }
-
-      let count = specified_count;
+      let count = specified_count as usize;
       let width =
         ((available_inline - gap * (count.saturating_sub(1) as f32)) / count as f32).max(0.0);
       let used_width = specified_width.map(|w| w.min(width)).unwrap_or(width);
@@ -1962,7 +1947,7 @@ impl BlockFormattingContext {
     if let Some(spec_width) = specified_width.filter(|w| *w > 0.0) {
       let denom = spec_width + gap;
       let mut count = if denom > 0.0 {
-        ((available_inline + gap) / denom).floor().max(1.0) as usize
+        ((available_inline + gap) / denom).floor() as usize
       } else {
         1
       };
@@ -2155,6 +2140,17 @@ impl BlockFormattingContext {
       ));
     }
 
+    let axis = fragmentation_axis(&flow_root);
+    let (writing_mode, direction) = flow_root
+      .style
+      .as_ref()
+      .map(|s| (s.writing_mode, s.direction))
+      .unwrap_or((WritingMode::HorizontalTb, Direction::Ltr));
+    let inline_is_horizontal = inline_axis_is_horizontal(writing_mode);
+    let inline_positive = inline_axis_positive(writing_mode, direction);
+    let block_sign = if axis.block_positive { 1.0 } else { -1.0 };
+    let inline_sign = if inline_positive { 1.0 } else { -1.0 };
+    let root_block_size = axis.block_size(&flow_root.bounds);
     let mut fragments = Vec::new();
     let mut fragment_heights = vec![0.0f32; fragment_count];
     for (index, window) in boundaries.windows(2).enumerate() {
@@ -2166,15 +2162,18 @@ impl BlockFormattingContext {
 
       if let Some(mut clipped) = clip_node(
         &flow_root,
+        &axis,
         start,
         end,
         0.0,
         start,
+        end,
+        root_block_size,
         index,
         fragment_count,
         FragmentationContext::Column,
       ) {
-        normalize_fragment_margins(&mut clipped, index == 0, index + 1 >= fragment_count);
+        normalize_fragment_margins(&mut clipped, index == 0, index + 1 >= fragment_count, &axis);
         // `clip_node` preserves existing logical overrides from the unclipped flow tree.
         // For multi-column layout we translate fragments into column coordinates, so ensure
         // logical bounds stay in sync with the clipped fragment geometry.
@@ -2182,11 +2181,20 @@ impl BlockFormattingContext {
         propagate_fragment_metadata(&mut clipped, index, fragment_count);
         let col = index % column_count;
         let set = index / column_count;
-        let offset = Point::new(
-          col as f32 * (column_width + column_gap),
-          set as f32 * column_height,
-        );
-        fragment_heights[index] = clipped.bounds.height();
+        let column_offset = col as f32 * (column_width + column_gap) * inline_sign;
+        let row_offset = set as f32 * column_height * block_sign;
+        let mut offset = Point::new(0.0, 0.0);
+        if inline_is_horizontal {
+          offset.x += column_offset;
+        } else {
+          offset.y += column_offset;
+        }
+        if axis.block_is_horizontal {
+          offset.x += row_offset;
+        } else {
+          offset.y += row_offset;
+        }
+        fragment_heights[index] = axis.block_size(&clipped.bounds);
         let mut children = clipped.children;
         for child in &mut children {
           child.bounds = child.bounds.translate(offset);
@@ -2202,17 +2210,36 @@ impl BlockFormattingContext {
     for mut positioned in flow_positioned {
       if let Some(pos) = positioned.static_position {
         if fragment_count > 0 && !boundaries.is_empty() {
+          let block_coord = if axis.block_is_horizontal {
+            pos.x
+          } else {
+            pos.y
+          };
+          let flow_coord = if axis.block_positive {
+            block_coord
+          } else {
+            root_block_size - block_coord
+          };
           let frag_index = boundaries
             .windows(2)
-            .position(|w| pos.y >= w[0] - 0.01 && pos.y < w[1] + 0.01)
+            .position(|w| flow_coord >= w[0] - 0.01 && flow_coord < w[1] + 0.01)
             .unwrap_or(fragment_count - 1);
           let start = boundaries[frag_index];
           let col = frag_index % column_count;
           let set = frag_index / column_count;
-          let translated = Point::new(
-            pos.x + col as f32 * (column_width + column_gap),
-            pos.y - start + set as f32 * column_height,
-          );
+          let mut translated = pos;
+          let column_delta = col as f32 * (column_width + column_gap) * inline_sign;
+          let block_delta = (-start + set as f32 * column_height) * block_sign;
+          if inline_is_horizontal {
+            translated.x += column_delta;
+          } else {
+            translated.y += column_delta;
+          }
+          if axis.block_is_horizontal {
+            translated.x += block_delta;
+          } else {
+            translated.y += block_delta;
+          }
           positioned.static_position = Some(translated);
         }
       }
@@ -2256,7 +2283,6 @@ impl BlockFormattingContext {
         BorderStyle::None | BorderStyle::Hidden
       )
     {
-      let paint_top_border = block_axis_is_horizontal(parent.style.writing_mode);
       let mut rule_width = resolve_length_for_width(
         parent.style.column_rule_width,
         column_width,
@@ -2273,15 +2299,9 @@ impl BlockFormattingContext {
           rule_width = column_gap;
         }
         rule_style.display = Display::Block;
-        if paint_top_border {
-          rule_style.border_top_width = Length::px(rule_width);
-          rule_style.border_top_style = parent.style.column_rule_style;
-          rule_style.border_top_color = color;
-        } else {
-          rule_style.border_left_width = Length::px(rule_width);
-          rule_style.border_left_style = parent.style.column_rule_style;
-          rule_style.border_left_color = color;
-        }
+        rule_style.border_left_width = Length::px(rule_width);
+        rule_style.border_left_style = parent.style.column_rule_style;
+        rule_style.border_left_color = color;
         let rule_style = Arc::new(rule_style);
         for set in 0..set_count {
           let remaining = fragment_count.saturating_sub(set * column_count);
@@ -2328,13 +2348,7 @@ impl BlockFormattingContext {
     if column_count <= 1 {
       let (frags, height, positioned) =
         self.layout_children(parent, constraints, nearest_positioned_cb)?;
-      let info = FragmentationInfo {
-        column_count,
-        column_gap,
-        column_width,
-        flow_height: height,
-      };
-      return Ok((frags, height, positioned, Some(info)));
+      return Ok((frags, height, positioned, None));
     }
 
     let mut fragments = Vec::new();
@@ -3002,11 +3016,8 @@ impl FormattingContext for BlockFormattingContext {
       content_height_base + padding_top + padding_bottom,
     );
     let cb_block_base = resolved_height.map(|h| h.max(0.0) + padding_top + padding_bottom);
-    let establishes_positioned_cb = style.position.is_positioned()
-      || !style.transform.is_empty()
-      || style.perspective.is_some()
-      || style.containment.layout
-      || style.containment.paint;
+    let establishes_positioned_cb =
+      style.position.is_positioned() || !style.transform.is_empty() || style.perspective.is_some();
     let nearest_cb = if establishes_positioned_cb {
       ContainingBlock::with_viewport_and_bases(
         Rect::new(padding_origin, padding_size),
@@ -3036,7 +3047,7 @@ impl FormattingContext for BlockFormattingContext {
         child_ctx.layout_children(box_node, &child_constraints, &nearest_cb)?;
       (frags, height, positioned, None)
     };
-    if style.containment.isolates_block_size() {
+    if style.containment.size {
       content_height = 0.0;
     }
 
@@ -3311,7 +3322,7 @@ impl FormattingContext for BlockFormattingContext {
       }
     }
 
-    if style.containment.isolates_inline_size() {
+    if style.containment.size || style.containment.inline_size {
       intrinsic_cache_store(box_node, mode, edges);
       return Ok(edges);
     }
