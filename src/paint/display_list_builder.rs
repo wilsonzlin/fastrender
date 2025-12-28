@@ -59,6 +59,7 @@ use crate::paint::display_list::EmphasisText;
 use crate::paint::display_list::FillRectItem;
 use crate::paint::display_list::FillRoundedRectItem;
 use crate::paint::display_list::FontId;
+use crate::paint::display_list::FontVariation as DlFontVariation;
 use crate::paint::display_list::GlyphInstance;
 use crate::paint::display_list::GradientSpread;
 use crate::paint::display_list::GradientStop;
@@ -135,7 +136,7 @@ use crate::text::font_db::ScaledMetrics;
 use crate::text::font_loader::FontContext;
 use crate::text::pipeline::ShapedRun;
 use crate::text::pipeline::ShapingPipeline;
-use crate::text::variations::{apply_rustybuzz_variations, FontVariation};
+use crate::text::variations::apply_rustybuzz_variations;
 use crate::tree::box_tree::FormControl;
 use crate::tree::box_tree::FormControlKind;
 use crate::tree::box_tree::ReplacedType;
@@ -3470,12 +3471,7 @@ impl DisplayListBuilder {
         font_size: run.font_size,
         advance_width: run.advance,
         font_id: Some(font_id),
-        variations: run
-          .variations
-          .iter()
-          .copied()
-          .map(FontVariation::from)
-          .collect(),
+        variations: Self::variations_from_run(run),
         synthetic_bold: run.synthetic_bold,
         synthetic_oblique: run.synthetic_oblique,
         emphasis,
@@ -3517,12 +3513,7 @@ impl DisplayListBuilder {
         font_size: run.font_size,
         advance_width: run.advance,
         font_id: Some(font_id),
-        variations: run
-          .variations
-          .iter()
-          .copied()
-          .map(FontVariation::from)
-          .collect(),
+        variations: Self::variations_from_run(run),
         synthetic_bold: run.synthetic_bold,
         synthetic_oblique: run.synthetic_oblique,
         emphasis,
@@ -3563,12 +3554,7 @@ impl DisplayListBuilder {
         shadows: shadows.to_vec(),
         advance_width: run.advance,
         font_id: Some(font_id),
-        variations: run
-          .variations
-          .iter()
-          .copied()
-          .map(FontVariation::from)
-          .collect(),
+        variations: Self::variations_from_run(run),
         synthetic_bold: run.synthetic_bold,
         synthetic_oblique: run.synthetic_oblique,
         emphasis,
@@ -3609,12 +3595,7 @@ impl DisplayListBuilder {
         shadows: shadows.to_vec(),
         advance_width: run.advance,
         font_id: Some(font_id),
-        variations: run
-          .variations
-          .iter()
-          .copied()
-          .map(FontVariation::from)
-          .collect(),
+        variations: Self::variations_from_run(run),
         synthetic_bold: run.synthetic_bold,
         synthetic_oblique: run.synthetic_oblique,
         emphasis,
@@ -4165,12 +4146,7 @@ impl DisplayListBuilder {
         match self.shaper.shape(s, &mark_style, &self.font_ctx) {
           Ok(mark_runs) if !mark_runs.is_empty() => {
             let mark_font_id = self.font_id_from_run(&mark_runs[0]);
-            let mark_variations = mark_runs[0]
-              .variations
-              .iter()
-              .copied()
-              .map(FontVariation::from)
-              .collect();
+            let mark_variations = Self::variations_from_run(&mark_runs[0]);
             let mark_palette_index = mark_runs.first().map(|r| r.palette_index).unwrap_or(0);
             let mut glyphs = Vec::new();
             let mut width = 0.0;
@@ -4216,11 +4192,11 @@ impl DisplayListBuilder {
             Some(EmphasisText {
               glyphs,
               font_id: Some(mark_font_id),
+              variations: mark_variations,
               font_size: mark_style.font_size,
               width,
               height: ascent + descent,
               baseline_offset: ascent,
-              variations: mark_variations,
               palette_index: mark_palette_index,
             })
           }
@@ -4249,6 +4225,16 @@ impl DisplayListBuilder {
       style: run.font.style,
       stretch: run.font.stretch,
     }
+  }
+
+  fn variations_from_run(run: &ShapedRun) -> Vec<DlFontVariation> {
+    let mut variations: Vec<DlFontVariation> = run
+      .variations
+      .iter()
+      .map(|v| DlFontVariation::new(v.tag, v.value))
+      .collect();
+    variations.sort_by_key(|v| v.tag);
+    variations
   }
 
   fn text_shadows_from_style(style: Option<&ComputedStyle>) -> Vec<TextShadowItem> {

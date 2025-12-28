@@ -66,6 +66,7 @@ use crate::text::variations::FontVariation;
 use std::fmt;
 use std::sync::Arc;
 use tiny_skia::FilterQuality;
+use ttf_parser::Tag;
 
 // ============================================================================
 // Display Item Types
@@ -565,6 +566,29 @@ impl Default for BorderRadii {
 // Text Item
 // ============================================================================
 
+/// Variation axis/value pair for variable fonts.
+///
+/// Values are stored as raw bits to keep equality/hash semantics stable
+/// even when NaNs are involved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FontVariation {
+  pub tag: Tag,
+  pub value_bits: u32,
+}
+
+impl FontVariation {
+  pub fn new(tag: Tag, value: f32) -> Self {
+    Self {
+      tag,
+      value_bits: value.to_bits(),
+    }
+  }
+
+  pub fn value(&self) -> f32 {
+    f32::from_bits(self.value_bits)
+  }
+}
+
 /// Draw a text run
 ///
 /// Represents shaped text ready for rendering. The glyphs have already
@@ -595,7 +619,7 @@ pub struct TextItem {
   /// Font identifier (for looking up font data)
   pub font_id: Option<FontId>,
 
-  /// Variation coordinates applied during shaping.
+  /// Active variation coordinates for this run.
   pub variations: Vec<FontVariation>,
 
   /// Synthetic bold stroke width in pixels (0 = none).
@@ -639,11 +663,11 @@ pub struct EmphasisMark {
 pub struct EmphasisText {
   pub glyphs: Vec<GlyphInstance>,
   pub font_id: Option<FontId>,
+  pub variations: Vec<FontVariation>,
   pub font_size: f32,
   pub width: f32,
   pub height: f32,
   pub baseline_offset: f32,
-  pub variations: Vec<FontVariation>,
   pub palette_index: u16,
 }
 
@@ -784,7 +808,11 @@ pub struct ListMarkerItem {
   /// Resolved font id for glyph lookup
   pub font_id: Option<FontId>,
 
+<<<<<<< HEAD
   /// Variation coordinates applied during shaping.
+=======
+  /// Active variation coordinates for this run.
+>>>>>>> 1293ba2 (Propagate font variations through display list)
   pub variations: Vec<FontVariation>,
 
   /// Synthetic bold stroke width in CSS px (0 = none)
