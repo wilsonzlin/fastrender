@@ -185,7 +185,7 @@ fn node_is_inert(node: &DomNode, ancestors: &[&DomNode]) -> bool {
   ancestors.iter().any(|a| explicit_inert(a))
 }
 
-pub(crate) fn cascade_profile_enabled() -> bool {
+pub fn cascade_profile_enabled() -> bool {
   ensure_cascade_profile_initialized();
   CASCADE_PROFILE_ENABLED.load(Ordering::Relaxed)
 }
@@ -214,7 +214,7 @@ pub struct CascadeProfileStats {
   pub pseudo_time_ns: u64,
 }
 
-pub(crate) fn capture_cascade_profile() -> CascadeProfileStats {
+pub fn capture_cascade_profile() -> CascadeProfileStats {
   CascadeProfileStats {
     nodes: CASCADE_PROFILE_NODES.load(Ordering::Relaxed),
     rule_candidates: CASCADE_PROFILE_RULE_CANDIDATES.load(Ordering::Relaxed),
@@ -230,7 +230,7 @@ fn user_agent_stylesheet() -> &'static StyleSheet {
     .get_or_init(|| parse_stylesheet(USER_AGENT_STYLESHEET).unwrap_or_else(|_| StyleSheet::new()))
 }
 
-pub(crate) fn reset_cascade_profile() {
+pub fn reset_cascade_profile() {
   CASCADE_PROFILE_NODES.store(0, Ordering::Relaxed);
   CASCADE_PROFILE_RULE_CANDIDATES.store(0, Ordering::Relaxed);
   CASCADE_PROFILE_RULE_MATCHES.store(0, Ordering::Relaxed);
@@ -496,6 +496,7 @@ struct DomMaps {
   id_to_node: HashMap<usize, *const DomNode>,
   parent_map: HashMap<usize, usize>,
   shadow_hosts: HashMap<usize, usize>,
+  exportparts_map: HashMap<usize, Vec<(String, String)>>,
 }
 
 impl DomMaps {
@@ -508,6 +509,7 @@ impl DomMaps {
 
     let mut parent_map: HashMap<usize, usize> = HashMap::new();
     let mut shadow_hosts: HashMap<usize, usize> = HashMap::new();
+    let mut exportparts_map: HashMap<usize, Vec<(String, String)>> = HashMap::new();
 
     fn walk(
       node: &DomNode,
@@ -515,6 +517,7 @@ impl DomMaps {
       ids: &HashMap<*const DomNode, usize>,
       parent_map: &mut HashMap<usize, usize>,
       shadow_hosts: &mut HashMap<usize, usize>,
+      exportparts_map: &mut HashMap<usize, Vec<(String, String)>>,
     ) {
       let id = ids.get(&(node as *const DomNode)).copied().unwrap_or(0);
       if let Some(p) = parent {
@@ -523,18 +526,41 @@ impl DomMaps {
           shadow_hosts.insert(id, p);
         }
       }
+      if let Some(mapping) = node
+        .get_attribute_ref("exportparts")
+        .map(|value| parse_exportparts(value))
+      {
+        if !mapping.is_empty() {
+          exportparts_map.insert(id, mapping);
+        }
+      }
       for child in &node.children {
-        walk(child, Some(id), ids, parent_map, shadow_hosts);
+        walk(
+          child,
+          Some(id),
+          ids,
+          parent_map,
+          shadow_hosts,
+          exportparts_map,
+        );
       }
     }
 
-    walk(root, None, &id_map, &mut parent_map, &mut shadow_hosts);
+    walk(
+      root,
+      None,
+      &id_map,
+      &mut parent_map,
+      &mut shadow_hosts,
+      &mut exportparts_map,
+    );
 
     Self {
       id_map,
       id_to_node,
       parent_map,
       shadow_hosts,
+      exportparts_map,
     }
   }
 
@@ -564,6 +590,11 @@ impl DomMaps {
       current = parent;
     }
     None
+  }
+
+  fn exportparts_for(&self, node: &DomNode) -> Option<&Vec<(String, String)>> {
+    let id = self.id_map.get(&(node as *const DomNode))?;
+    self.exportparts_map.get(id)
   }
 }
 
@@ -621,6 +652,11 @@ impl SlottedBuckets {
   }
 }
 
+struct PartPseudoInfo {
+  pseudo: PseudoElement,
+  required: Vec<String>,
+}
+
 struct RuleIndex<'a> {
   rules: Vec<CascadeRule<'a>>,
   rule_sets_content: Vec<bool>,
@@ -635,6 +671,8 @@ struct RuleIndex<'a> {
   pseudo_content: HashSet<PseudoElement>,
   slotted_selectors: Vec<IndexedSlottedSelector<'a>>,
   slotted_buckets: SlottedBuckets,
+  part_pseudos: Vec<PartPseudoInfo>,
+  part_lookup: HashMap<String, Vec<usize>>,
 }
 
 struct RuleScopes<'a> {
@@ -685,6 +723,8 @@ struct CascadeScratch {
   candidates: Vec<usize>,
   match_index: MatchIndex,
   candidate_seen: CandidateSet,
+  part_candidates: Vec<usize>,
+  part_seen: CandidateSet,
 }
 
 impl CascadeScratch {
@@ -693,6 +733,8 @@ impl CascadeScratch {
       candidates: Vec::new(),
       match_index: MatchIndex::new(rule_count),
       candidate_seen: CandidateSet::new(rule_count),
+      part_candidates: Vec::new(),
+      part_seen: CandidateSet::new(rule_count),
     }
   }
 }
@@ -979,6 +1021,8 @@ impl<'a> RuleIndex<'a> {
       pseudo_content: HashSet::new(),
       slotted_selectors: Vec::new(),
       slotted_buckets: SlottedBuckets::new(),
+      part_pseudos: Vec::new(),
+      part_lookup: HashMap::new(),
     };
 
     for rule in rules {
@@ -1089,6 +1133,8 @@ impl<'a> RuleIndex<'a> {
       }
     }
 
+    index.build_part_index();
+
     index
   }
 
@@ -1098,6 +1144,25 @@ impl<'a> RuleIndex<'a> {
 
   fn has_pseudo_rules(&self, pseudo: &PseudoElement) -> bool {
     self.pseudo_buckets.contains_key(pseudo)
+  }
+
+  fn build_part_index(&mut self) {
+    for (pseudo, _) in self.pseudo_buckets.iter() {
+      let PseudoElement::Part(required) = pseudo else {
+        continue;
+      };
+      let mut required_names: Vec<String> = required.iter().map(|n| n.to_string()).collect();
+      required_names.sort();
+      required_names.dedup();
+      let idx = self.part_pseudos.len();
+      self.part_pseudos.push(PartPseudoInfo {
+        pseudo: pseudo.clone(),
+        required: required_names.clone(),
+      });
+      for name in required_names {
+        self.part_lookup.entry(name).or_default().push(idx);
+      }
+    }
   }
 
   fn selector_candidates(&self, node: &DomNode, out: &mut Vec<usize>, seen: &mut CandidateSet) {
@@ -2530,11 +2595,10 @@ fn part_names(node: &DomNode) -> Vec<CssString> {
   names
 }
 
-fn exported_part_names(host: &DomNode, names: &[CssString]) -> Vec<CssString> {
-  let Some(attr) = host.get_attribute_ref("exportparts") else {
+fn exported_part_names(host: &DomNode, names: &[CssString], dom_maps: &DomMaps) -> Vec<CssString> {
+  let Some(mappings) = dom_maps.exportparts_for(host) else {
     return Vec::new();
   };
-  let mappings = parse_exportparts(attr);
 
   let mut exported = Vec::new();
   let mut seen: HashSet<&str> = HashSet::new();
@@ -2556,6 +2620,7 @@ fn match_part_rules<'a>(
   rules: &'a RuleIndex<'a>,
   selector_caches: &mut SelectorCaches,
   scratch: &mut CascadeScratch,
+  dom_maps: &DomMaps,
 ) -> Vec<MatchedRule<'a>> {
   if !ancestors
     .iter()
@@ -2564,16 +2629,7 @@ fn match_part_rules<'a>(
     return Vec::new();
   }
 
-  if rules.pseudo_buckets.is_empty() {
-    return Vec::new();
-  }
-
-  let part_pseudos: Vec<&PseudoElement> = rules
-    .pseudo_buckets
-    .keys()
-    .filter(|pe| matches!(pe, PseudoElement::Part(_)))
-    .collect();
-  if part_pseudos.is_empty() {
+  if rules.part_pseudos.is_empty() {
     return Vec::new();
   }
 
@@ -2607,44 +2663,62 @@ fn match_part_rules<'a>(
       .any(|ancestor| matches!(ancestor.node_type, DomNodeType::ShadowRoot { .. }));
 
     if host_is_in_document_tree {
-      let mut name_set: HashSet<&str> = HashSet::new();
+      scratch.part_candidates.clear();
+      scratch.part_seen.reset();
       for name in names.iter() {
-        name_set.insert(name.as_str());
+        if let Some(list) = rules.part_lookup.get(name.as_str()) {
+          for &idx in list {
+            if scratch.part_seen.insert(idx) {
+              scratch.part_candidates.push(idx);
+            }
+          }
+        }
       }
 
-      for pseudo in part_pseudos.iter().copied() {
-        let PseudoElement::Part(required) = pseudo else {
-          continue;
-        };
-        if !required.iter().all(|req| name_set.contains(req.as_str())) {
-          continue;
+      if !scratch.part_candidates.is_empty() {
+        let mut name_set: HashSet<&str> = HashSet::new();
+        for name in names.iter() {
+          name_set.insert(name.as_str());
         }
-        let part_matches = find_pseudo_element_rules(
-          host,
-          rules,
-          selector_caches,
-          scratch,
-          host_ancestors,
-          pseudo,
-        );
-        for rule in part_matches {
-          if let Some(pos) = matched_by_order.get(&rule.order).copied() {
-            if rule.specificity > matched[pos].specificity {
-              matched[pos].specificity = rule.specificity;
+
+        for &idx in scratch.part_candidates.iter() {
+          let info = &rules.part_pseudos[idx];
+          if !info
+            .required
+            .iter()
+            .all(|req| name_set.contains(req.as_str()))
+          {
+            continue;
+          }
+          let part_matches = find_pseudo_element_rules(
+            host,
+            rules,
+            selector_caches,
+            scratch,
+            host_ancestors,
+            &info.pseudo,
+          );
+          for rule in part_matches {
+            if let Some(pos) = matched_by_order.get(&rule.order).copied() {
+              if rule.specificity > matched[pos].specificity {
+                matched[pos].specificity = rule.specificity;
+              }
+            } else {
+              matched_by_order.insert(rule.order, matched.len());
+              matched.push(rule);
             }
-          } else {
-            matched_by_order.insert(rule.order, matched.len());
-            matched.push(rule);
           }
         }
       }
     }
 
-    names = exported_part_names(host, &names);
+    names = exported_part_names(host, &names, dom_maps);
     if names.is_empty() {
       break;
     }
   }
+
+  scratch.part_seen.reset();
 
   matched
 }
@@ -2753,6 +2827,7 @@ fn collect_matching_rules<'a>(
     &scopes.document,
     selector_caches,
     scratch,
+    dom_maps,
   ));
 
   matches
