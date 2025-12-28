@@ -1,4 +1,3 @@
-use crate::layout::axis::FragmentAxes;
 use crate::style::content::{StringSetAssignment, StringSetValue};
 use crate::tree::box_tree::{BoxNode, BoxTree, BoxType, MarkerContent};
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
@@ -9,7 +8,7 @@ use std::sync::Arc;
 #[derive(Debug, Clone)]
 pub struct StringSetEvent {
   /// Absolute block-axis position of the assigning fragment.
-  pub abs_block: f32,
+  pub abs_y: f32,
   /// Name of the string being assigned.
   pub name: String,
   /// Resolved value for the assignment.
@@ -20,11 +19,7 @@ pub struct StringSetEvent {
 ///
 /// The traversal uses the original (unclipped) fragment tree and records the absolute
 /// block-axis position of each fragment carrying a `string-set` declaration.
-pub fn collect_string_set_events(
-  root: &FragmentNode,
-  box_tree: &BoxTree,
-  axes: FragmentAxes,
-) -> Vec<StringSetEvent> {
+pub fn collect_string_set_events(root: &FragmentNode, box_tree: &BoxTree) -> Vec<StringSetEvent> {
   let mut styles_by_id = HashMap::new();
   collect_box_styles(&box_tree.root, &mut styles_by_id);
 
@@ -39,8 +34,6 @@ pub fn collect_string_set_events(
   collect_string_set_events_inner(
     root,
     0.0,
-    axes.block_size(&root.bounds),
-    axes,
     &mut events,
     &styles_by_id,
     &parent_by_id,
@@ -92,16 +85,13 @@ fn collect_box_text(node: &BoxNode, out: &mut HashMap<usize, String>) -> String 
 fn collect_string_set_events_inner(
   node: &FragmentNode,
   abs_start: f32,
-  parent_block_size: f32,
-  axes: FragmentAxes,
   out: &mut Vec<StringSetEvent>,
   styles_by_id: &HashMap<usize, Arc<crate::style::ComputedStyle>>,
   parent_by_id: &HashMap<usize, usize>,
   box_text: &HashMap<usize, String>,
   seen_boxes: &mut HashSet<usize>,
 ) {
-  let start = axes.abs_block_start(&node.bounds, abs_start, parent_block_size);
-  let node_block_size = axes.block_size(&node.bounds);
+  let start = abs_start + node.bounds.y();
 
   let mut assignments: Option<&[StringSetAssignment]> = None;
   let fragment_box_id: Option<usize> = fragment_box_id(node);
@@ -140,7 +130,7 @@ fn collect_string_set_events_inner(
       for StringSetAssignment { name, value } in assignments {
         let resolved = resolve_string_set_value(node, value, assignments_box_id, box_text);
         out.push(StringSetEvent {
-          abs_block: start,
+          abs_y: start,
           name: name.clone(),
           value: resolved,
         });
@@ -152,8 +142,6 @@ fn collect_string_set_events_inner(
     collect_string_set_events_inner(
       child,
       start,
-      node_block_size,
-      axes,
       out,
       styles_by_id,
       parent_by_id,

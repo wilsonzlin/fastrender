@@ -78,7 +78,14 @@ fn shaped_run(font: &LoadedFont, ch: char, font_size: f32, palette_index: u16) -
   }
 }
 
-fn render_to_png(run: &ShapedRun, color: Rgba, width: u32, height: u32, x: f32, baseline: f32) -> Vec<u8> {
+fn render_to_png(
+  run: &ShapedRun,
+  color: Rgba,
+  width: u32,
+  height: u32,
+  x: f32,
+  baseline: f32,
+) -> Vec<u8> {
   let mut pixmap = Pixmap::new(width, height).expect("pixmap");
   pixmap.fill(tiny_skia::Color::WHITE);
   let mut rasterizer = TextRasterizer::new();
@@ -120,13 +127,6 @@ fn colrv1_dark_palette_matches_golden() {
 fn svg_glyph_uses_current_color() {
   let font = load_fixture_font("svg-color-glyph-test.ttf");
   let run = shaped_run(&font, 'A', 64.0, 0);
-  let rendered = render_to_png(
-    &run,
-    Rgba::new(200, 30, 30, 0.8),
-    120,
-    120,
-    10.0,
-    90.0,
-  );
+  let rendered = render_to_png(&run, Rgba::new(200, 30, 30, 0.8), 120, 120, 10.0, 90.0);
   compare_with_golden("svg_color_glyph_red", &rendered);
 }

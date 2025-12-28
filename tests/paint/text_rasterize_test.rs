@@ -4,6 +4,10 @@
 //! (glyph IDs + positions) into rendered pixels using font outlines
 //! and tiny-skia.
 
+#[path = "../ref/mod.rs"]
+mod r#ref;
+
+use fastrender::text::color_fonts::ColorFontRenderer;
 use fastrender::text::font_db::{FontStretch, FontStyle, FontWeight, LoadedFont};
 use fastrender::text::font_loader::FontContext;
 use fastrender::text::pipeline::Direction;
@@ -15,8 +19,10 @@ use fastrender::ComputedStyle;
 use fastrender::GlyphCache;
 use fastrender::Rgba;
 use fastrender::TextRasterizer;
+use r#ref::compare::{compare_images, load_png, CompareConfig};
 use rustybuzz::Variation;
 use std::fs;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tiny_skia::Pixmap;
 use ttf_parser::GlyphId;
@@ -98,6 +104,12 @@ fn row_leftmost(pixmap: &Pixmap, row: u32) -> Option<u32> {
   None
 }
 
+fn fixtures_path() -> PathBuf {
+  PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    .join("tests")
+    .join("fixtures")
+}
+
 fn load_color_font(path: &str, family: &str) -> LoadedFont {
   let data = fs::read(path).expect("failed to read test font");
   LoadedFont {
@@ -150,6 +162,18 @@ fn single_glyph_run(
     variations: Vec::new(),
     scale: 1.0,
   }
+}
+
+fn single_glyph_run_with_variations(
+  font: &Arc<LoadedFont>,
+  glyph_id: u32,
+  font_size: f32,
+  synthetic_oblique: f32,
+  variations: Vec<Variation>,
+) -> ShapedRun {
+  let mut run = single_glyph_run(font, glyph_id, font_size, synthetic_oblique);
+  run.variations = variations;
+  run
 }
 
 // ============================================================================
@@ -244,16 +268,7 @@ fn glyph_cache_keys_include_variations() {
     value: 900.0,
   };
   rasterizer
-    .positioned_glyph_paths(
-      &glyphs,
-      &font,
-      16.0,
-      0.0,
-      0.0,
-      0.0,
-      &[bold_variation],
-      None,
-    )
+    .positioned_glyph_paths(&glyphs, &font, 16.0, 0.0, 0.0, 0.0, &[bold_variation], None)
     .expect("varied glyph path");
   let stats = rasterizer.cache_stats();
   assert_eq!(
@@ -263,16 +278,7 @@ fn glyph_cache_keys_include_variations() {
   assert_eq!(stats.hits, 0);
 
   rasterizer
-    .positioned_glyph_paths(
-      &glyphs,
-      &font,
-      16.0,
-      0.0,
-      0.0,
-      0.0,
-      &[bold_variation],
-      None,
-    )
+    .positioned_glyph_paths(&glyphs, &font, 16.0, 0.0, 0.0, 0.0, &[bold_variation], None)
     .expect("cached varied glyph path");
   let stats = rasterizer.cache_stats();
   assert_eq!(stats.misses, 2);
@@ -479,6 +485,94 @@ fn synthetic_oblique_slants_svg_color_glyphs() {
   assert!(
     bottom_left > top_left,
     "positive synthetic oblique should slant SVG glyphs to the right"
+  );
+}
+
+#[test]
+fn colrv1_color_glyph_respects_variations_in_rasterizer() {
+  let font = Arc::new(load_color_font(
+    "tests/fixtures/fonts/colrv1-var-test.ttf",
+    "COLRv1 Var Test",
+  ));
+  let Some(glyph_id) = font
+    .as_ttf_face()
+    .ok()
+    .and_then(|face| face.glyph_index('A'))
+    .map(|g| g.0 as u32)
+  else {
+    return;
+  };
+
+  let text_color = Rgba::from_rgba8(30, 40, 220, 255);
+  let renderer = ColorFontRenderer::new();
+
+  let base_variations: Vec<Variation> = Vec::new();
+  let varied_variations = vec![Variation {
+    tag: Tag::from_bytes(b"wght"),
+    value: 1.0,
+  }];
+
+  let base_raster = renderer
+    .render(&font, glyph_id, 64.0, 0, text_color, 0.0, &base_variations)
+    .expect("expected default variation colr glyph");
+  let varied_raster = renderer
+    .render(&font, glyph_id, 64.0, 0, text_color, 0.0, &varied_variations)
+    .expect("expected varied colr glyph");
+
+  let golden_dir = fixtures_path().join("golden");
+  let base_golden =
+    load_png(&golden_dir.join("colrv1_var_default.png")).expect("missing default variation golden");
+  let varied_golden =
+    load_png(&golden_dir.join("colrv1_var_wght1.png")).expect("missing wght=1 golden");
+
+  let mut rasterizer = TextRasterizer::new();
+  let mut render_run = |variations: Vec<Variation>,
+                        left: f32,
+                        top: f32,
+                        width: u32,
+                        height: u32| {
+    let run = single_glyph_run_with_variations(&font, glyph_id, 64.0, 0.0, variations);
+    let mut pixmap = Pixmap::new(width, height).expect("failed to allocate test pixmap");
+    rasterizer
+      .render_shaped_run(&run, -left, -top, text_color, &mut pixmap)
+      .expect("failed to render varied colr glyph");
+    pixmap
+  };
+
+  let base_pixmap = render_run(
+    base_variations.clone(),
+    base_raster.left,
+    base_raster.top,
+    base_raster.image.width(),
+    base_raster.image.height(),
+  );
+  let varied_pixmap = render_run(
+    varied_variations.clone(),
+    varied_raster.left,
+    varied_raster.top,
+    varied_raster.image.width(),
+    varied_raster.image.height(),
+  );
+
+  let config = CompareConfig::strict();
+  let base_diff = compare_images(&base_pixmap, &base_golden, &config);
+  assert!(
+    base_diff.is_match(),
+    "default COLRv1 variation did not match golden: {:?}",
+    base_diff.statistics
+  );
+
+  let varied_diff = compare_images(&varied_pixmap, &varied_golden, &config);
+  assert!(
+    varied_diff.is_match(),
+    "wght=1 COLRv1 variation did not match golden: {:?}",
+    varied_diff.statistics
+  );
+
+  let diff = compare_images(&base_pixmap, &varied_pixmap, &config);
+  assert!(
+    !diff.is_match(),
+    "COLRv1 color glyph raster should differ between variations"
   );
 }
 

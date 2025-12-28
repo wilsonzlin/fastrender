@@ -94,6 +94,60 @@ pub fn variation_hash(variations: &[Variation]) -> u64 {
   hash
 }
 
+/// Normalized variation coordinates for a font face.
+///
+/// [`ordered`] follows the axis order returned by [`Face::variation_axes`], while
+/// [`by_tag`] allows quick lookups by axis tag.
+#[derive(Debug, Clone, Default)]
+pub struct NormalizedCoords {
+  pub ordered: Vec<f32>,
+  pub by_tag: BTreeMap<Tag, f32>,
+}
+
+/// Computes normalized coordinates for each variation axis in the face.
+///
+/// Values are clamped to each axis' min/max, normalized against the default per the
+/// OpenType spec, and limited to the [-1.0, 1.0] range.
+pub fn normalized_coords(face: &Face<'_>, variations: &[Variation]) -> NormalizedCoords {
+  let axes: Vec<_> = face.variation_axes().into_iter().collect();
+  if axes.is_empty() {
+    return NormalizedCoords::default();
+  }
+
+  let mut by_tag = BTreeMap::new();
+  let ordered = axes
+    .iter()
+    .map(|axis| {
+      let requested = variations
+        .iter()
+        .find(|v| v.tag == axis.tag)
+        .map(|v| v.value)
+        .unwrap_or(axis.def_value);
+      let clamped = requested.clamp(axis.min_value, axis.max_value);
+      let normalized = if clamped < axis.def_value {
+        if axis.def_value == axis.min_value {
+          0.0
+        } else {
+          (clamped - axis.def_value) / (axis.def_value - axis.min_value)
+        }
+      } else if clamped > axis.def_value {
+        if axis.max_value == axis.def_value {
+          0.0
+        } else {
+          (clamped - axis.def_value) / (axis.max_value - axis.def_value)
+        }
+      } else {
+        0.0
+      }
+      .clamp(-1.0, 1.0);
+      by_tag.insert(axis.tag, normalized);
+      normalized
+    })
+    .collect();
+
+  NormalizedCoords { ordered, by_tag }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;

@@ -87,6 +87,94 @@ so CI and tests can run in fully hermetic environments without relying on platfo
   PY
   ```
 
+### `colrv1-var-test.ttf`
+- **Source:** Generated in-repo with [FontTools](https://github.com/fonttools/fonttools) v4.61.1.
+- **License:** CC0 / Public Domain.
+- **Glyphs:** U+0041 (`A`) references a `rect` outline filled by a COLR v1 `PaintVarLinearGradient`.
+- **Variation:** Single `wght` axis (0–1, default 0). A VarStore entry tied to `wght` shifts the gradient's end point down by +200 design units at `wght=1`, using VarIndexBase slots for the gradient coordinates and color stop offsets/alphas.
+- **Regeneration:** From the repository root:
+  ```bash
+  python - <<'PY'
+  from fontTools.fontBuilder import FontBuilder
+  from fontTools.pens.ttGlyphPen import TTGlyphPen
+  from fontTools.colorLib.builder import buildCOLR, buildCPAL
+  from fontTools.ttLib.tables.otTables import PaintFormat, ExtendMode
+  from fontTools.varLib import builder as varBuilder
+
+  upem = 1000
+  glyph_order = ['.notdef', 'color', 'rect']
+  fb = FontBuilder(upem, isTTF=True)
+  fb.setupGlyphOrder(glyph_order)
+  fb.setupCharacterMap({0x0041: 'color'})
+
+  def rect(x0, y0, x1, y1):
+      pen = TTGlyphPen(None)
+      pen.moveTo((x0, y0)); pen.lineTo((x1, y0)); pen.lineTo((x1, y1)); pen.lineTo((x0, y1))
+      pen.closePath(); return pen.glyph()
+
+  glyphs = {
+      '.notdef': rect(100, 0, 900, 800),
+      'color': rect(100, 0, 900, 800),
+      'rect': rect(80, -20, 920, 840),
+  }
+  metrics = {name: (1000, 0) for name in glyphs}
+  fb.setupGlyf(glyphs)
+  fb.setupHorizontalMetrics(metrics)
+  fb.setupHorizontalHeader(ascent=900, descent=-200)
+  fb.setupOS2(sTypoAscender=900, sTypoDescender=-200, usWinAscent=900, usWinDescent=200)
+  fb.setupNameTable({
+      'familyName': 'COLRv1 Var Test',
+      'styleName': 'Regular',
+      'fullName': 'COLRv1 Var Test',
+      'uniqueFontIdentifier': 'COLRv1 Var Test',
+      'psName': 'COLRv1VarTest-Regular',
+      'version': 'Version 1.0',
+      'licenseDescription': 'Public Domain / CC0',
+      'licenseInfoURL': 'https://creativecommons.org/publicdomain/zero/1.0/',
+  })
+  fb.setupPost(); fb.setupMaxp()
+
+  fb.setupFvar(
+      axes=[('wght', 0.0, 0.0, 1.0, 'Weight')],
+      instances=[
+          {'stylename': 'Regular', 'location': {'wght': 0.0}},
+          {'stylename': 'Bold', 'location': {'wght': 1.0}},
+      ],
+  )
+
+  palette = [(0.85, 0.25, 0.2, 1.0), (0.2, 0.45, 0.95, 1.0)]
+  fb.font['CPAL'] = buildCPAL([palette])
+
+  axis_tags = ['wght']
+  supports = [{'wght': (0.0, 1.0, 1.0)}]
+  var_region_list = varBuilder.buildVarRegionList(supports, axis_tags)
+  items = [[0], [0], [0], [200], [0], [0], [0], [0], [0], [0]]
+  var_data = [varBuilder.buildVarData([0], items, optimize=False)]
+  var_store = varBuilder.buildVarStore(var_region_list, var_data)
+  var_index_map = varBuilder.buildDeltaSetIndexMap(range(len(items)))
+
+  gradient = {
+      'Format': PaintFormat.PaintVarLinearGradient,
+      'ColorLine': {'Extend': ExtendMode.PAD, 'ColorStop': [
+          {'StopOffset': 0.0, 'PaletteIndex': 0, 'Alpha': 1.0, 'VarIndexBase': 6},
+          {'StopOffset': 1.0, 'PaletteIndex': 1, 'Alpha': 1.0, 'VarIndexBase': 8},
+      ]},
+      'x0': 120, 'y0': 80, 'x1': 120, 'y1': 820, 'x2': 880, 'y2': 80,
+      'VarIndexBase': 0,
+  }
+  paint = {'Format': PaintFormat.PaintGlyph, 'Glyph': 'rect', 'Paint': gradient}
+  fb.font['COLR'] = buildCOLR(
+      {'color': paint},
+      version=1,
+      glyphMap=fb.font.getReverseGlyphMap(),
+      varStore=var_store,
+      varIndexMap=var_index_map,
+  )
+
+  fb.save('tests/fixtures/fonts/colrv1-var-test.ttf')
+  PY
+  ```
+
 ### `PaletteTestCOLRv1.ttf`
 - **Source:** Existing COLR v1 palette test fixture included with the FastRender test suite.
 - **License:** Not specified in the font metadata; used only for automated tests.

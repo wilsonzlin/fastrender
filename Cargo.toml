@@ -7,7 +7,7 @@ rust-version = "1.70"
 publish = false
 
 [workspace]
-members = ["xtask"]
+members = ["tmp_colr_render","xtask"]
 resolver = "2"
 
 [features]

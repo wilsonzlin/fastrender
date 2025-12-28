@@ -61,11 +61,7 @@ fn render_sbix_bitmap_glyph(
   })
 }
 
-fn select_sbix_strike(
-  sbix: &[u8],
-  glyph_count: usize,
-  pixels_per_em: u16,
-) -> Option<usize> {
+fn select_sbix_strike(sbix: &[u8], glyph_count: usize, pixels_per_em: u16) -> Option<usize> {
   if sbix.len() < 8 {
     return None;
   }
@@ -86,9 +82,7 @@ fn select_sbix_strike(
 
     // Strike header (ppem, ppi) + glyph offset array.
     let offsets_bytes = (glyph_count + 1).checked_mul(4)?;
-    let needed = strike_offset
-      .checked_add(4)?
-      .checked_add(offsets_bytes)?;
+    let needed = strike_offset.checked_add(4)?.checked_add(offsets_bytes)?;
     if needed > sbix.len() {
       continue;
     }

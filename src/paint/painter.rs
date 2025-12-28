@@ -13403,8 +13403,9 @@ mod tests {
     }
 
     let render_run = |run: &ShapedRun| {
-      let mut painter = Painter::with_resources(200, 150, Rgba::WHITE, font_ctx.clone(), ImageCache::new())
-        .expect("painter");
+      let mut painter =
+        Painter::with_resources(200, 150, Rgba::WHITE, font_ctx.clone(), ImageCache::new())
+          .expect("painter");
       painter.paint_shaped_run(run, 40.0, 110.0, Rgba::BLACK, None);
       painter.pixmap
     };

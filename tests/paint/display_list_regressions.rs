@@ -185,7 +185,11 @@ fn filter_blur_renders() {
 
   let blurred = render(blurred_html, 48, 48);
   let crisp = render(crisp_html, 48, 48);
-  assert_ne!(blurred.data(), crisp.data(), "blur filter should change the output");
+  assert_ne!(
+    blurred.data(),
+    crisp.data(),
+    "blur filter should change the output"
+  );
   assert_ne!(
     pixel(&blurred, 2, 2),
     pixel(&crisp, 2, 2),

@@ -4,10 +4,7 @@ use serde_json::Value;
 fn render_accessibility_json(html: &str) -> Value {
   let mut renderer = FastRender::new().expect("renderer");
   renderer
-    .accessibility_tree_html_json(
-      html,
-      RenderOptions::new().with_viewport(800, 600),
-    )
+    .accessibility_tree_html_json(html, RenderOptions::new().with_viewport(800, 600))
     .expect("accessibility tree json")
 }
 
@@ -97,7 +94,10 @@ fn aria_hidden_references_are_ignored() {
   assert_eq!(blocked_name.get("name").and_then(|v| v.as_str()), None);
 
   let blocked_desc = find_json_node(&tree, "blocked-desc").expect("blocked-desc node present");
-  assert_eq!(blocked_desc.get("description").and_then(|v| v.as_str()), None);
+  assert_eq!(
+    blocked_desc.get("description").and_then(|v| v.as_str()),
+    None
+  );
 
   assert!(find_json_node(&tree, "blocked-label").is_none());
   assert!(find_json_node(&tree, "blocked-desc-text").is_none());

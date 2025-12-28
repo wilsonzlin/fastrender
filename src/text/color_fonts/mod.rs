@@ -88,6 +88,7 @@ impl ColorFontRenderer {
       palette_index,
       text_color,
       synthetic_oblique,
+      variations,
       &self.caches,
     ) {
       return Some(colr);
