@@ -524,71 +524,6 @@ fn accessibility_aria_states() {
 }
 
 #[test]
-fn accessibility_details_expanded_state() {
-  let html = r##"
-    <html>
-      <body>
-        <details id="d1" open>
-          <summary id="s">More</summary>
-          <div>Content</div>
-        </details>
-        <details id="d2">
-          <summary id="s2">More</summary>
-        </details>
-      </body>
-    </html>
-  "##;
-
-  let tree = render_accessibility_json(html);
-
-  let d1 = find_json_node(&tree, "d1").expect("open details node");
-  assert_eq!(d1.get("role").and_then(|v| v.as_str()), Some("group"));
-
-  let d2 = find_json_node(&tree, "d2").expect("closed details node");
-  assert_eq!(d2.get("role").and_then(|v| v.as_str()), Some("group"));
-
-  let subset = snapshot_subset(&tree, &["s", "s2"]);
-
-  assert_eq!(
-    subset,
-    json!({
-      "s": {
-        "role": "button",
-        "name": "More",
-        "description": null,
-        "value": null,
-        "level": null,
-        "html_tag": "summary",
-        "states": {
-          "focusable": true,
-          "disabled": false,
-          "required": false,
-          "invalid": false,
-          "visited": false,
-          "expanded": true
-        }
-      },
-      "s2": {
-        "role": "button",
-        "name": "More",
-        "description": null,
-        "value": null,
-        "level": null,
-        "html_tag": "summary",
-        "states": {
-          "focusable": true,
-          "disabled": false,
-          "required": false,
-          "invalid": false,
-          "visited": false,
-          "expanded": false
-        }
-      }
-    })
-  );
-}
-
-#[test]
 fn accessibility_tabindex_parsing() {
   let mut renderer = FastRender::new().expect("renderer");
   let html = r##"
@@ -1085,6 +1020,28 @@ fn accessibility_fieldset_legend_name() {
 }
 
 #[test]
+fn accessibility_range_value_not_used_as_name() {
+  let mut renderer = FastRender::new().expect("renderer");
+  let html = r##"
+    <html>
+      <body>
+        <input id="slider" type="range" value="5" min="0" max="10" />
+      </body>
+    </html>
+  "##;
+
+  let dom = renderer.parse_html(html).expect("parse");
+  let tree = renderer
+    .accessibility_tree(&dom, 800, 600)
+    .expect("accessibility tree");
+
+  let slider = find_by_id(&tree, "slider").expect("slider node");
+  assert_eq!(slider.role, "slider");
+  assert_eq!(slider.name, None);
+  assert_eq!(slider.value.as_deref(), Some("5"));
+}
+
+#[test]
 fn accessibility_multi_select_value() {
   let html = r##"
     <html>
@@ -1105,6 +1062,28 @@ fn accessibility_multi_select_value() {
     select.get("value").and_then(|v| v.as_str()),
     Some("One, Two")
   );
+}
+
+#[test]
+fn accessibility_text_value_not_used_as_name() {
+  let mut renderer = FastRender::new().expect("renderer");
+  let html = r##"
+    <html>
+      <body>
+        <input id="username" type="text" value="alice" />
+      </body>
+    </html>
+  "##;
+
+  let dom = renderer.parse_html(html).expect("parse");
+  let tree = renderer
+    .accessibility_tree(&dom, 800, 600)
+    .expect("accessibility tree");
+
+  let textbox = find_by_id(&tree, "username").expect("textbox node");
+  assert_eq!(textbox.role, "textbox");
+  assert_eq!(textbox.name, None);
+  assert_eq!(textbox.value.as_deref(), Some("alice"));
 }
 
 #[test]

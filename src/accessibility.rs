@@ -1357,14 +1357,9 @@ fn fallback_name_for_role(
   role: Option<&str>,
   node: &StyledNode,
   ctx: &BuildContext,
-  element_ref: &ElementRef,
+  _element_ref: &ElementRef,
 ) -> Option<String> {
   match role {
-    Some("textbox") | Some("searchbox") | Some("combobox") | Some("listbox")
-    | Some("spinbutton") | Some("slider") => element_ref
-      .accessibility_value()
-      .filter(|v| !v.is_empty())
-      .map(|v| normalize_whitespace(&v)),
     Some("option") => {
       let text = ctx.visible_text(node);
       if text.is_empty() {

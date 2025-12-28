@@ -19,7 +19,7 @@
     },
     "slider": {
       "role": "slider",
-      "name": "5",
+      "name": null,
       "description": null,
       "value": "Medium",
       "level": null,
@@ -35,7 +35,7 @@
     },
     "combo": {
       "role": "combobox",
-      "name": "A B",
+      "name": null,
       "description": null,
       "value": "B",
       "level": null,
