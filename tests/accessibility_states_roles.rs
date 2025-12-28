@@ -16,7 +16,7 @@ fn find_by_id<'a>(node: &'a AccessibilityNode, id: &str) -> Option<&'a Accessibi
 #[test]
 fn aria_state_flags_cover_common_controls() {
   let mut renderer = FastRender::new().expect("renderer");
-  let html = r#"
+  let html = r##"
     <html>
       <body>
         <button id="pressed" aria-pressed="true">Pressed</button>
@@ -38,7 +38,7 @@ fn aria_state_flags_cover_common_controls() {
         <a id="visited" href="#" data-fastr-visited="true">Visited</a>
       </body>
     </html>
-  "#;
+  "##;
 
   let dom = renderer.parse_html(html).expect("parse");
   let tree = renderer
@@ -86,7 +86,7 @@ fn aria_state_flags_cover_common_controls() {
 #[test]
 fn role_inference_and_heading_levels() {
   let mut renderer = FastRender::new().expect("renderer");
-  let html = r#"
+  let html = r##"
     <html>
       <body>
         <button id="btn">Button text</button>
@@ -114,7 +114,7 @@ fn role_inference_and_heading_levels() {
         <footer id="page-footer">Page footer</footer>
       </body>
     </html>
-  "#;
+  "##;
 
   let dom = renderer.parse_html(html).expect("parse");
   let tree = renderer
@@ -187,7 +187,7 @@ fn role_inference_and_heading_levels() {
 #[test]
 fn shadow_dom_nodes_keep_roles_and_names() {
   let mut renderer = FastRender::new().expect("renderer");
-  let html = r#"
+  let html = r##"
     <html>
       <body>
         <div id="host">
@@ -198,7 +198,7 @@ fn shadow_dom_nodes_keep_roles_and_names() {
         </div>
       </body>
     </html>
-  "#;
+  "##;
 
   let dom = renderer.parse_html(html).expect("parse");
   let tree = renderer

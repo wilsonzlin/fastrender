@@ -708,7 +708,7 @@ fn has_landmark_ancestor(ancestors: &[&DomNode]) -> bool {
 
     if matches!(
       tag.as_str(),
-      "article" | "aside" | "main" | "nav" | "section" | "header" | "footer"
+      "article" | "aside" | "main" | "nav" | "section"
     ) {
       return true;
     }
