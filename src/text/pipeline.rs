@@ -1886,7 +1886,7 @@ fn font_is_emoji_font(db: &FontDatabase, id: Option<fontdb::ID>, font: &LoadedFo
     }
   }
 
-  crate::text::font_db::font_name_indicates_emoji(&font.family)
+  FontDatabase::family_name_is_emoji_font(&font.family)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

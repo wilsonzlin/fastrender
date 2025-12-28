@@ -2,7 +2,8 @@
 
 This directory contains self-contained fixtures for deterministic rendering tests. The fonts
 documented below are generated in-repo and released into the public domain (CC0) so they can
-be safely checked in alongside their regeneration scripts.
+be safely checked in alongside their regeneration scripts. They live under `tests/fixtures/fonts`
+so CI and tests can run in fully hermetic environments without relying on platform fonts.
 
 ### `colrv1-test.ttf`
 - **Source:** Generated in-repo with [FontTools](https://github.com/fonttools/fonttools) v4.61.1 (no upstream binary).
@@ -107,9 +108,15 @@ be safely checked in alongside their regeneration scripts.
 - **License:** Created specifically for FastRender tests; no third-party assets or licensing obligations.
 - **Glyphs:** Single sbix strike at 32ppem for the glyph `A`, embedding a small JPEG with a red background and green square.
 
+### `FastRenderEmoji.ttf`
+- **Source:** Hand-authored COLRv0 emoji subset generated with `fontTools` 4.61.1.
+- **License:** Public Domain / CC0.
+- **Glyphs:** U+1F600 (😀), U+2764 (❤), U+1F44D (👍), and U+0020 (space) drawn with simple layered shapes and a single palette to keep CI emoji renders deterministic when bundled fonts are used.
+
 ### `DejaVuSans-subset.ttf` / `DejaVuSans-subset.woff2`
 - **Source:** Subset of the DejaVu Sans family bundled for deterministic text rendering during tests.
 - **License:** Bitstream Vera/DejaVu fonts license.
+- **Notes:** Used as the primary text face for bundled rendering.
 
 ## Variable font fixtures
 

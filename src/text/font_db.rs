@@ -59,11 +59,19 @@ const BUNDLED_FONTS: &[(&str, &[u8])] = &[(
   "DejaVu Sans",
   include_bytes!("../../tests/fixtures/fonts/DejaVuSans-subset.ttf"),
 )];
+const BUNDLED_EMOJI_FONTS: &[(&str, &[u8])] = &[(
+  "FastRender Emoji",
+  include_bytes!("../../tests/fixtures/fonts/FastRenderEmoji.ttf"),
+)];
 
 fn env_flag(var: &str) -> Option<bool> {
   std::env::var(var).ok().map(|v| {
     !matches!(v.as_str(), "0" | "false" | "False" | "FALSE" | "") && !v.eq_ignore_ascii_case("off")
   })
+}
+
+fn should_load_bundled_emoji_fonts() -> bool {
+  env_flag("FASTR_BUNDLE_EMOJI_FONT").unwrap_or(true)
 }
 
 /// Configuration for font discovery and loading.
@@ -607,16 +615,6 @@ fn face_has_color_tables(face: &ttf_parser::Face<'_>) -> bool {
   (has_colr && has_cpal) || (has_cbdt && has_cblc) || has_sbix || has_svg || has_colr
 }
 
-pub(crate) fn font_name_indicates_emoji(name: &str) -> bool {
-  let name_lower = name.to_lowercase();
-  name_lower.contains("emoji")
-    || name_lower.contains("symbola")
-    || name_lower.contains("noto color")
-    || name_lower.contains("apple color")
-    || name_lower.contains("segoe ui emoji")
-    || name_lower.contains("segoe ui symbol")
-}
-
 /// Generic font families as defined by CSS
 ///
 /// These are abstract font families that map to actual system fonts.
@@ -949,29 +947,35 @@ impl FontDatabase {
         eprintln!("failed to load bundled font {}: {:?}", name, err);
       }
     }
+
+    if should_load_bundled_emoji_fonts() {
+      for (name, data) in BUNDLED_EMOJI_FONTS {
+        if let Err(err) = self.load_font_data(data.to_vec()) {
+          eprintln!("failed to load bundled emoji font {}: {:?}", name, err);
+        }
+      }
+    }
   }
 
   /// Recomputes the default families used for fontdb generic queries based on the currently loaded fonts.
   pub fn refresh_generic_fallbacks(&mut self) {
     self.set_generic_fallbacks();
   }
-
   fn set_generic_fallbacks(&mut self) {
-    let face_families: Vec<Vec<String>> = self
-      .faces()
-      .map(|face| face.families.iter().map(|(name, _)| name.clone()).collect())
-      .collect();
-
-    let Some(primary_family) = face_families
-      .first()
-      .and_then(|families| families.first().cloned())
+    let faces: Vec<&fontdb::FaceInfo> = self.faces().collect();
+    let Some(primary_family) = faces
+      .iter()
+      .find(|face| !Self::face_is_emoji_font(face) && self.face_has_basic_latin(face.id))
+      .or_else(|| faces.iter().find(|face| !Self::face_is_emoji_font(face)))
+      .or_else(|| faces.first())
+      .and_then(|face| face.families.first().map(|(name, _)| name.clone()))
     else {
       return;
     };
 
     let first_matching_family = |fallbacks: &[&str]| -> Option<String> {
-      for families in &face_families {
-        for name in families {
+      for face in faces.iter().filter(|face| !Self::face_is_emoji_font(face)) {
+        for (name, _) in &face.families {
           if fallbacks
             .iter()
             .any(|fallback| fallback.eq_ignore_ascii_case(name))
@@ -980,29 +984,49 @@ impl FontDatabase {
           }
         }
       }
+
+      for face in &faces {
+        for (name, _) in &face.families {
+          if fallbacks
+            .iter()
+            .any(|fallback| fallback.eq_ignore_ascii_case(name))
+          {
+            return Some(name.clone());
+          }
+        }
+      }
+
       None
     };
 
-    let db = Arc::make_mut(&mut self.db);
     let serif = first_matching_family(GenericFamily::Serif.fallback_families())
       .unwrap_or_else(|| primary_family.clone());
-    db.set_serif_family(serif);
-
     let sans = first_matching_family(GenericFamily::SansSerif.fallback_families())
       .unwrap_or_else(|| primary_family.clone());
-    db.set_sans_serif_family(sans);
-
     let monospace = first_matching_family(GenericFamily::Monospace.fallback_families())
       .unwrap_or_else(|| primary_family.clone());
-    db.set_monospace_family(monospace);
-
     let cursive = first_matching_family(GenericFamily::Cursive.fallback_families())
       .unwrap_or_else(|| primary_family.clone());
-    db.set_cursive_family(cursive);
-
     let fantasy =
       first_matching_family(GenericFamily::Fantasy.fallback_families()).unwrap_or(primary_family);
+
+    let db = Arc::make_mut(&mut self.db);
+    db.set_serif_family(serif);
+    db.set_sans_serif_family(sans);
+    db.set_monospace_family(monospace);
+    db.set_cursive_family(cursive);
     db.set_fantasy_family(fantasy);
+  }
+
+  fn face_is_emoji_font(face: &fontdb::FaceInfo) -> bool {
+    face
+      .families
+      .iter()
+      .any(|(name, _)| Self::family_name_is_emoji_font(name))
+  }
+
+  fn face_has_basic_latin(&self, id: ID) -> bool {
+    self.has_glyph(id, 'A') && self.has_glyph(id, 'a')
   }
 
   /// Loads a font from binary data
@@ -1303,6 +1327,18 @@ impl FontDatabase {
       .map(|face| face_has_color_tables(&face.face))
   }
 
+  pub(crate) fn family_name_is_emoji_font(name: &str) -> bool {
+    let name_lower = name.to_lowercase();
+    name_lower.contains("emoji")
+      || name_lower.contains("color")
+      || name_lower.contains("twemoji")
+      || name_lower.contains("symbola")
+      || name_lower.contains("noto color")
+      || name_lower.contains("apple color")
+      || name_lower.contains("segoe ui emoji")
+      || name_lower.contains("segoe ui symbol")
+  }
+
   /// Checks if a character is an emoji.
   ///
   /// Uses Unicode properties to determine if a character should be
@@ -1330,7 +1366,7 @@ impl FontDatabase {
         && face
           .families
           .iter()
-          .any(|(name, _)| font_name_indicates_emoji(name))
+          .any(|(name, _)| Self::family_name_is_emoji_font(name))
       {
         emoji_fonts.push(face.id);
       }

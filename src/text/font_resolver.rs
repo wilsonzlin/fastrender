@@ -144,11 +144,7 @@ pub(crate) fn font_is_emoji_font(db: &FontDatabase, id: Option<ID>, font: &Loade
     }
   }
 
-  let name = font.family.to_lowercase();
-  name.contains("emoji")
-    || name.contains("color")
-    || name.contains("twemoji")
-    || name.contains("symbola")
+  FontDatabase::family_name_is_emoji_font(&font.family)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
