@@ -97,6 +97,9 @@ fn snapshot_subset(root: &Value, ids: &[&str]) -> Value {
         "role".into(),
         node.get("role").cloned().unwrap_or(Value::Null),
       );
+      if let Some(role_description) = node.get("role_description") {
+        entry.insert("role_description".into(), role_description.clone());
+      }
       entry.insert(
         "name".into(),
         node.get("name").cloned().unwrap_or(Value::Null),
@@ -1133,6 +1136,7 @@ fn accessibility_fixture_snapshots() {
     "summary_context",
     "html_aam_roles",
     "placeholder_labeling",
+    "aria_roledescription",
   ];
 
   for name in fixtures {

@@ -1,0 +1,66 @@
+{
+  "present": {
+    "custom": {
+      "role": "button",
+      "role_description": "Primary action",
+      "name": "Do it",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "div",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "implicit": {
+      "role": "button",
+      "role_description": "Submit form",
+      "name": "Submit",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "button",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "empty": {
+      "role": "button",
+      "name": "Empty description",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "div",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "norole": {
+      "role": "generic",
+      "name": "No role",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "div",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    }
+  }
+}

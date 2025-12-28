@@ -89,6 +89,8 @@ impl Default for AccessibilityState {
 pub struct AccessibilityNode {
   pub role: String,
   #[serde(skip_serializing_if = "Option::is_none")]
+  pub role_description: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
   pub name: Option<String>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub description: Option<String>,
@@ -137,6 +139,7 @@ pub fn build_accessibility_tree(root: &StyledNode) -> AccessibilityNode {
 
   AccessibilityNode {
     role: "document".to_string(),
+    role_description: None,
     name: None,
     description: None,
     value: None,
@@ -400,6 +403,8 @@ fn build_nodes<'a>(
         }
       }
 
+      let role_description = compute_role_description(role.as_deref(), &node.node);
+
       let aria_disabled = parse_bool_attr(&node.node, "aria-disabled");
       let disabled = aria_disabled.unwrap_or_else(|| element_ref.accessibility_disabled());
       let required = parse_bool_attr(&node.node, "aria-required")
@@ -461,6 +466,7 @@ fn build_nodes<'a>(
 
       vec![AccessibilityNode {
         role,
+        role_description,
         name,
         description,
         value,
@@ -1372,6 +1378,23 @@ fn default_button_label(input_type: &str) -> Option<&'static str> {
     "reset" => Some("Reset"),
     "button" => Some("Button"),
     _ => None,
+  }
+}
+
+fn compute_role_description(role: Option<&str>, node: &DomNode) -> Option<String> {
+  if role.is_none() {
+    return None;
+  }
+
+  let Some(description) = node.get_attribute_ref("aria-roledescription") else {
+    return None;
+  };
+
+  let norm = normalize_whitespace(description);
+  if norm.is_empty() {
+    None
+  } else {
+    Some(norm)
   }
 }
 
