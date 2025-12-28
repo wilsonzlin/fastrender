@@ -2679,9 +2679,13 @@ fn part_names(node: &DomNode) -> Vec<CssString> {
   names
 }
 
-fn exported_part_names(host: &DomNode, names: &[CssString], dom_maps: &DomMaps) -> Vec<CssString> {
+fn exported_part_names(
+  host: &DomNode,
+  names: &[CssString],
+  dom_maps: &DomMaps,
+) -> Option<Vec<CssString>> {
   let Some(mappings) = dom_maps.exportparts_for(host) else {
-    return Vec::new();
+    return None;
   };
 
   let mut exported = Vec::new();
@@ -2695,7 +2699,7 @@ fn exported_part_names(host: &DomNode, names: &[CssString], dom_maps: &DomMaps) 
     }
   }
 
-  exported
+  Some(exported)
 }
 
 fn match_part_rules<'a>(
@@ -2746,11 +2750,13 @@ fn match_part_rules<'a>(
     let host = ancestors[host_idx];
     let host_ancestors = &ancestors[..host_idx];
 
-    let mapped_names = exported_part_names(host, &names, dom_maps);
-    let names_for_matching = if mapped_names.is_empty() {
-      names.as_slice()
-    } else {
+    let exported = exported_part_names(host, &names, dom_maps);
+    let exported_some = exported.is_some();
+    let mut mapped_names = exported.unwrap_or_default();
+    let visible_names: &[CssString] = if exported_some {
       mapped_names.as_slice()
+    } else {
+      names.as_slice()
     };
 
     if let Some(scope_host) = containing_scope_host_id(dom_maps, host) {
@@ -2767,7 +2773,7 @@ fn match_part_rules<'a>(
 
         scratch.part_candidates.clear();
         scratch.part_seen.reset();
-        for name in names_for_matching.iter() {
+        for name in visible_names.iter() {
           if let Some(list) = rules.part_lookup.get(name.as_str()) {
             for &idx in list {
               if scratch.part_seen.insert(idx) {
@@ -2779,7 +2785,7 @@ fn match_part_rules<'a>(
 
         if !scratch.part_candidates.is_empty() {
           let mut name_set: HashSet<&str> = HashSet::new();
-          for name in names_for_matching.iter() {
+          for name in visible_names.iter() {
             name_set.insert(name.as_str());
           }
 
