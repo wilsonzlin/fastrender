@@ -635,6 +635,26 @@ fn build_slot_maps<'a>(
   maps
 }
 
+const DOCUMENT_TREE_SCOPE_PREFIX: u32 = u32::MAX;
+
+fn shadow_tree_scope_prefix(shadow_root_id: usize) -> u32 {
+  u32::try_from(shadow_root_id).unwrap_or(DOCUMENT_TREE_SCOPE_PREFIX.saturating_sub(1))
+}
+
+fn layer_order_with_tree_scope(layer_order: &[u32], tree_scope_prefix: u32) -> Vec<u32> {
+  let mut prefixed = Vec::with_capacity(layer_order.len().saturating_add(1));
+  prefixed.push(tree_scope_prefix);
+  prefixed.extend_from_slice(layer_order);
+  prefixed
+}
+
+fn tree_scope_prefix_for_node(dom_maps: &DomMaps, node_id: usize) -> u32 {
+  dom_maps
+    .containing_shadow_root(node_id)
+    .map(shadow_tree_scope_prefix)
+    .unwrap_or(DOCUMENT_TREE_SCOPE_PREFIX)
+}
+
 /// Simple index over the rightmost compound selector to prune rule matching.
 struct IndexedSelector<'a> {
   rule_idx: usize,
@@ -1786,7 +1806,7 @@ pub fn apply_styles_with_media_target_and_imports_cached_with_deadline(
         origin: StyleOrigin::UserAgent,
         order,
         rule: rule.rule,
-        layer_order: rule.layer_order.clone(),
+        layer_order: layer_order_with_tree_scope(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope: RuleScope::Document,
@@ -1799,15 +1819,15 @@ pub fn apply_styles_with_media_target_and_imports_cached_with_deadline(
       .iter()
       .enumerate()
       .map(|(idx, rule)| CascadeRule {
-        origin: StyleOrigin::Author,
-        order: document_order_base + idx,
-        rule: rule.rule,
-        layer_order: rule.layer_order.clone(),
-        container_conditions: rule.container_conditions.clone(),
-        scopes: rule.scopes.clone(),
-        scope: RuleScope::Document,
-      })
-      .collect(),
+      origin: StyleOrigin::Author,
+      order: document_order_base + idx,
+      rule: rule.rule,
+      layer_order: layer_order_with_tree_scope(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
+      container_conditions: rule.container_conditions.clone(),
+      scopes: rule.scopes.clone(),
+      scope: RuleScope::Document,
+    })
+    .collect(),
   );
 
   let mut shadow_indices: HashMap<usize, RuleIndex<'_>> = HashMap::new();
@@ -1827,7 +1847,10 @@ pub fn apply_styles_with_media_target_and_imports_cached_with_deadline(
         origin: StyleOrigin::Author,
         order: shadow_order_base + idx,
         rule: rule.rule,
-        layer_order: rule.layer_order.clone(),
+        layer_order: layer_order_with_tree_scope(
+          &rule.layer_order,
+          shadow_tree_scope_prefix(*shadow_root_id),
+        ),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope: RuleScope::Shadow {
@@ -2138,7 +2161,7 @@ pub fn apply_style_set_with_media_target_and_imports_cached_with_deadline(
         origin: StyleOrigin::UserAgent,
         order,
         rule: rule.rule,
-        layer_order: rule.layer_order.clone(),
+        layer_order: layer_order_with_tree_scope(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope: RuleScope::Document,
@@ -2151,15 +2174,15 @@ pub fn apply_style_set_with_media_target_and_imports_cached_with_deadline(
       .iter()
       .enumerate()
       .map(|(idx, rule)| CascadeRule {
-        origin: StyleOrigin::Author,
-        order: document_order_base + idx,
-        rule: rule.rule,
-        layer_order: rule.layer_order.clone(),
-        container_conditions: rule.container_conditions.clone(),
-        scopes: rule.scopes.clone(),
-        scope: RuleScope::Document,
-      })
-      .collect(),
+      origin: StyleOrigin::Author,
+      order: document_order_base + idx,
+      rule: rule.rule,
+      layer_order: layer_order_with_tree_scope(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
+      container_conditions: rule.container_conditions.clone(),
+      scopes: rule.scopes.clone(),
+      scope: RuleScope::Document,
+    })
+    .collect(),
   );
 
   let mut shadow_indices: HashMap<usize, RuleIndex<'_>> = HashMap::new();
@@ -2182,7 +2205,10 @@ pub fn apply_style_set_with_media_target_and_imports_cached_with_deadline(
         origin: StyleOrigin::Author,
         order: shadow_order_base + idx,
         rule: rule.rule,
-        layer_order: rule.layer_order.clone(),
+        layer_order: layer_order_with_tree_scope(
+          &rule.layer_order,
+          shadow_tree_scope_prefix(shadow_root_id),
+        ),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope: RuleScope::Shadow { shadow_root_id },
@@ -3102,6 +3128,7 @@ fn compute_base_styles<'a>(
     slot_assignment,
   );
   matching_rules.extend(ua_default_rules(node, parent_styles.direction));
+  let inline_tree_scope = tree_scope_prefix_for_node(dom_maps, node_id);
   let ua_matches: Vec<_> = matching_rules
     .iter()
     .filter(|r| r.origin == StyleOrigin::UserAgent)
@@ -3113,6 +3140,7 @@ fn compute_base_styles<'a>(
     &mut ua_styles,
     ua_matches,
     None,
+    inline_tree_scope,
     parent_ua_styles,
     parent_ua_styles.font_size,
     ua_root_font_size,
@@ -3172,6 +3200,7 @@ fn compute_base_styles<'a>(
     &mut styles,
     matching_rules,
     inline_decls,
+    inline_tree_scope,
     parent_styles,
     parent_styles.font_size,
     root_font_size,
@@ -3911,7 +3940,7 @@ mod tests {
         origin: StyleOrigin::Author,
         order,
         rule: rule.rule,
-        layer_order: rule.layer_order.clone(),
+        layer_order: layer_order_with_tree_scope(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope: RuleScope::Document,
@@ -7845,7 +7874,7 @@ mod tests {
         origin: StyleOrigin::Author,
         order,
         rule: rule.rule,
-        layer_order: rule.layer_order,
+        layer_order: layer_order_with_tree_scope(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes,
         scope: RuleScope::Document,
@@ -9020,6 +9049,7 @@ fn apply_cascaded_declarations<'a, F>(
   styles: &mut ComputedStyle,
   matched_rules: Vec<MatchedRule<'a>>,
   inline_declarations: Option<Vec<Declaration>>,
+  inline_tree_scope: u32,
   parent_styles: &ComputedStyle,
   parent_font_size: f32,
   root_font_size: f32,
@@ -9088,7 +9118,7 @@ fn apply_cascaded_declarations<'a, F>(
         specificity: INLINE_SPECIFICITY,
         rule_order: INLINE_RULE_ORDER,
         decl_order,
-        layer_order: vec![u32::MAX],
+        layer_order: layer_order_with_tree_scope(&[u32::MAX], inline_tree_scope),
         declaration: Cow::Owned(declaration),
       });
     }
@@ -9799,6 +9829,7 @@ fn compute_pseudo_element_styles(
     &mut ua_styles,
     ua_matches,
     None,
+    DOCUMENT_TREE_SCOPE_PREFIX,
     ua_parent_styles,
     ua_parent_styles.font_size,
     ua_root_font_size,
@@ -9826,6 +9857,7 @@ fn compute_pseudo_element_styles(
     &mut styles,
     matching_rules,
     None,
+    DOCUMENT_TREE_SCOPE_PREFIX,
     parent_styles,
     parent_styles.font_size,
     root_font_size,
@@ -9949,6 +9981,7 @@ fn compute_first_line_styles(
     &mut ua_styles,
     ua_matches,
     None,
+    DOCUMENT_TREE_SCOPE_PREFIX,
     base_ua_styles,
     base_ua_styles.font_size,
     ua_root_font_size,
@@ -9970,6 +10003,7 @@ fn compute_first_line_styles(
     &mut styles,
     matching_rules,
     None,
+    DOCUMENT_TREE_SCOPE_PREFIX,
     base_styles,
     base_styles.font_size,
     root_font_size,
@@ -10039,6 +10073,7 @@ fn compute_first_letter_styles(
     &mut ua_styles,
     ua_matches,
     None,
+    DOCUMENT_TREE_SCOPE_PREFIX,
     base_ua_styles,
     base_ua_styles.font_size,
     ua_root_font_size,
@@ -10060,6 +10095,7 @@ fn compute_first_letter_styles(
     &mut styles,
     matching_rules,
     None,
+    DOCUMENT_TREE_SCOPE_PREFIX,
     base_styles,
     base_styles.font_size,
     root_font_size,
@@ -10134,6 +10170,7 @@ fn compute_marker_styles(
     &mut ua_styles,
     ua_matches,
     None,
+    DOCUMENT_TREE_SCOPE_PREFIX,
     ua_list_item_styles,
     ua_list_item_styles.font_size,
     ua_root_font_size,
@@ -10165,6 +10202,7 @@ fn compute_marker_styles(
     &mut styles,
     matching_rules,
     None,
+    DOCUMENT_TREE_SCOPE_PREFIX,
     list_item_styles,
     list_item_styles.font_size,
     root_font_size,
