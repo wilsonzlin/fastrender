@@ -3,6 +3,8 @@
 //! Implements selector parsing and matching using the selectors crate.
 
 use super::types::CssString;
+use crate::dom::AssignedSlot;
+use crate::dom::DomNode;
 use cssparser::ParseError;
 use cssparser::Parser;
 use cssparser::ToCss;
@@ -13,6 +15,7 @@ use selectors::parser::SelectorList;
 use selectors::parser::SelectorParseErrorKind;
 use selectors::parser::{Combinator, RelativeSelector, RelativeSelectorMatchHint};
 use selectors::OpaqueElement;
+use std::collections::HashMap;
 use std::fmt;
 
 /// Direction keyword for :dir()
@@ -36,7 +39,7 @@ pub struct ShadowMatchData<'a> {
   /// The shadow host for the stylesheet being matched, or None for document styles.
   pub shadow_host: Option<OpaqueElement>,
   /// Mapping from slot elements to their assigned nodes for ::slotted() resolution.
-  pub slot_map: Option<&'a SlotAssignmentMap>,
+  pub slot_map: Option<&'a SlotAssignmentMap<'a>>,
   /// Exported part mappings for resolving ::part() across shadow boundaries.
   pub part_export_map: Option<&'a PartExportMap>,
 }
@@ -52,11 +55,115 @@ impl<'a> ShadowMatchData<'a> {
       ..Self::default()
     }
   }
+
+  pub fn with_slot_map(mut self, slot_map: &'a SlotAssignmentMap<'a>) -> Self {
+    self.slot_map = Some(slot_map);
+    self
+  }
+
+  pub fn with_part_export_map(mut self, part_export_map: Option<&'a PartExportMap>) -> Self {
+    self.part_export_map = part_export_map;
+    self
+  }
 }
 
-/// Placeholder for future ::slotted() resolution data.
-#[derive(Debug)]
-pub struct SlotAssignmentMap;
+/// Mapping helpers for shadow slot assignments during selector matching.
+#[derive(Debug, Clone)]
+pub struct SlotAssignmentMap<'a> {
+  pub slot_to_nodes: HashMap<usize, Vec<usize>>,
+  pub node_to_slot: HashMap<usize, AssignedSlot>,
+  pub slot_ancestors: HashMap<usize, Vec<&'a DomNode>>,
+  pub id_to_node: HashMap<usize, *const DomNode>,
+  pub node_to_id: HashMap<*const DomNode, usize>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct AssignedSlotRef<'a> {
+  pub slot: &'a DomNode,
+  pub ancestors: &'a [&'a DomNode],
+  pub shadow_root_id: usize,
+}
+
+impl<'a> SlotAssignmentMap<'a> {
+  pub fn new(
+    node_to_id: &HashMap<*const DomNode, usize>,
+    id_to_node: &HashMap<usize, *const DomNode>,
+  ) -> Self {
+    Self {
+      slot_to_nodes: HashMap::new(),
+      node_to_slot: HashMap::new(),
+      slot_ancestors: HashMap::new(),
+      id_to_node: id_to_node.clone(),
+      node_to_id: node_to_id.clone(),
+    }
+  }
+
+  pub fn add_slot(
+    &mut self,
+    slot: &'a DomNode,
+    ancestors: Vec<&'a DomNode>,
+    assigned_nodes: Vec<&'a DomNode>,
+    shadow_root_id: usize,
+  ) {
+    let Some(slot_id) = self.slot_id(slot) else {
+      return;
+    };
+
+    let assigned_ids: Vec<usize> = assigned_nodes
+      .iter()
+      .filter_map(|node| self.node_id(node))
+      .collect();
+    if assigned_ids.is_empty() {
+      return;
+    }
+
+    self.slot_ancestors.entry(slot_id).or_insert(ancestors);
+    let slot_name = slot.get_attribute_ref("name").unwrap_or("").to_string();
+    for node_id in assigned_ids.iter().copied() {
+      self.node_to_slot.insert(
+        node_id,
+        AssignedSlot {
+          slot_name: slot_name.clone(),
+          slot_node_id: slot_id,
+          shadow_root_id,
+        },
+      );
+    }
+
+    self.slot_to_nodes.insert(slot_id, assigned_ids);
+  }
+
+  pub fn slot_id(&self, slot: &DomNode) -> Option<usize> {
+    self.node_to_id.get(&(slot as *const DomNode)).copied()
+  }
+
+  pub fn node_id(&self, node: &DomNode) -> Option<usize> {
+    self.node_to_id.get(&(node as *const DomNode)).copied()
+  }
+
+  pub fn assigned_node_ids(&self, slot_id: usize) -> Option<&[usize]> {
+    self
+      .slot_to_nodes
+      .get(&slot_id)
+      .map(|nodes| nodes.as_slice())
+  }
+
+  pub fn node_for_id(&self, node_id: usize) -> Option<&'a DomNode> {
+    self.id_to_node.get(&node_id).map(|ptr| unsafe { &**ptr })
+  }
+
+  pub fn assigned_slot(&'a self, node: &DomNode) -> Option<AssignedSlotRef<'a>> {
+    let node_id = self.node_id(node)?;
+    let slot = self.node_to_slot.get(&node_id)?;
+    let slot_node = self.node_for_id(slot.slot_node_id)?;
+    let ancestors = self.slot_ancestors.get(&slot.slot_node_id)?;
+    Some(AssignedSlotRef {
+      slot: slot_node,
+      ancestors,
+      shadow_root_id: slot.shadow_root_id,
+    })
+  }
+}
 
 /// Placeholder for future ::part() export chain data.
 #[derive(Debug)]

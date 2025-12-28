@@ -2,6 +2,7 @@ use crate::css::selectors::FastRenderSelectorImpl;
 use crate::css::selectors::PartExportMap;
 use crate::css::selectors::PseudoClass;
 use crate::css::selectors::PseudoElement;
+use crate::css::selectors::SlotAssignmentMap;
 use crate::css::selectors::TextDirection;
 use crate::css::types::CssString;
 use crate::error::Error;
@@ -1144,22 +1145,83 @@ impl<'a> ElementRef<'a> {
       .unwrap_or(false)
   }
 
-  fn subtree_contains_focus(&self) -> bool {
+  fn push_assigned_slot_nodes<'a>(
+    current: &'a DomNode,
+    slot_map: Option<&SlotAssignmentMap<'a>>,
+    visited: Option<&HashSet<usize>>,
+    stack: &mut Vec<&'a DomNode>,
+  ) -> bool {
+    let Some(map) = slot_map else {
+      return false;
+    };
+    if !matches!(current.node_type, DomNodeType::Slot { .. }) {
+      return false;
+    }
+    let Some(slot_id) = map.slot_id(current) else {
+      return false;
+    };
+    let Some(assigned_ids) = map.assigned_node_ids(slot_id) else {
+      return false;
+    };
+
+    let mut pushed = false;
+    for assigned_id in assigned_ids.iter().rev() {
+      let Some(assigned) = map.node_for_id(*assigned_id) else {
+        continue;
+      };
+      if let Some(seen) = visited {
+        if let Some(id) = map.node_id(assigned) {
+          if seen.contains(&id) {
+            continue;
+          }
+        }
+      }
+      stack.push(assigned);
+      pushed = true;
+    }
+    pushed
+  }
+
+  fn subtree_contains_focus(&self, slot_map: Option<&SlotAssignmentMap<'_>>) -> bool {
     if self.inert_flag() {
       return false;
     }
-    Self::node_or_descendant_has_focus(self.node)
+    Self::node_or_descendant_has_focus(self.node, slot_map)
   }
 
-  fn node_or_descendant_has_focus(node: &DomNode) -> bool {
-    if Self::node_is_inert(node) {
-      return false;
-    }
-    if Self::node_focus_flag(node) {
-      return true;
+  fn node_or_descendant_has_focus(
+    node: &DomNode,
+    slot_map: Option<&SlotAssignmentMap<'_>>,
+  ) -> bool {
+    let mut stack: Vec<&DomNode> = vec![node];
+    let mut visited = slot_map.is_some().then(HashSet::new);
+
+    while let Some(current) = stack.pop() {
+      if Self::node_is_inert(current) {
+        continue;
+      }
+      if let (Some(map), Some(ref mut seen)) = (slot_map, visited.as_mut()) {
+        if let Some(id) = map.node_id(current) {
+          if !seen.insert(id) {
+            continue;
+          }
+        }
+      }
+      if Self::node_focus_flag(current) {
+        return true;
+      }
+
+      let assigned_children_pushed =
+        Self::push_assigned_slot_nodes(current, slot_map, visited.as_ref(), &mut stack);
+
+      if !assigned_children_pushed {
+        for child in current.children.iter().rev() {
+          stack.push(child);
+        }
+      }
     }
 
-    node.children.iter().any(Self::node_or_descendant_has_focus)
+    false
   }
 
   fn subtree_has_content(node: &DomNode) -> bool {
@@ -1957,21 +2019,45 @@ impl<'a> ElementRef<'a> {
       .unwrap_or(false)
   }
 
-  fn subtree_contains_target(&self) -> bool {
+  fn subtree_contains_target(&self, slot_map: Option<&SlotAssignmentMap<'_>>) -> bool {
     let Some(target) = current_target_fragment() else {
       return false;
     };
-    Self::subtree_has_target(self.node, target.as_str())
+    Self::subtree_has_target(self.node, target.as_str(), slot_map)
   }
 
-  fn subtree_has_target(node: &DomNode, target: &str) -> bool {
-    if Self::node_matches_target(node, target) {
-      return true;
+  fn subtree_has_target(
+    node: &DomNode,
+    target: &str,
+    slot_map: Option<&SlotAssignmentMap<'_>>,
+  ) -> bool {
+    let mut stack: Vec<&DomNode> = vec![node];
+    let mut visited = slot_map.is_some().then(HashSet::new);
+
+    while let Some(current) = stack.pop() {
+      if let (Some(map), Some(ref mut seen)) = (slot_map, visited.as_mut()) {
+        if let Some(id) = map.node_id(current) {
+          if !seen.insert(id) {
+            continue;
+          }
+        }
+      }
+
+      if Self::node_matches_target(current, target) {
+        return true;
+      }
+
+      let assigned_children_pushed =
+        Self::push_assigned_slot_nodes(current, slot_map, visited.as_ref(), &mut stack);
+
+      if !assigned_children_pushed {
+        for child in current.children.iter().rev() {
+          stack.push(child);
+        }
+      }
     }
-    node
-      .children
-      .iter()
-      .any(|child| Self::subtree_has_target(child, target))
+
+    false
   }
 
   fn node_matches_target(node: &DomNode, target: &str) -> bool {
@@ -2481,7 +2567,7 @@ impl<'a> Element for ElementRef<'a> {
       PseudoClass::Dir(dir) => self.direction() == *dir,
       PseudoClass::AnyLink => self.is_link(),
       PseudoClass::Target => self.is_target(),
-      PseudoClass::TargetWithin => self.subtree_contains_target(),
+      PseudoClass::TargetWithin => self.subtree_contains_target(_context.extra_data.slot_map),
       PseudoClass::Scope => match _context.relative_selector_anchor() {
         Some(anchor) => anchor == self.opaque(),
         None => !self
@@ -2535,7 +2621,7 @@ impl<'a> Element for ElementRef<'a> {
       // Interactive pseudo-classes (not supported in static rendering)
       PseudoClass::Hover => self.hover_flag(),
       PseudoClass::Focus => self.focus_flag(),
-      PseudoClass::FocusWithin => self.subtree_contains_focus(),
+      PseudoClass::FocusWithin => self.subtree_contains_focus(_context.extra_data.slot_map),
       PseudoClass::FocusVisible => self.focus_visible_flag(),
       PseudoClass::Active => self.active_flag(),
       PseudoClass::Checked => self.is_checked(),

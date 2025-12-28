@@ -36,6 +36,7 @@ mod shadow_host_selector_test;
 mod shadow_host_selectors_test;
 mod shadow_part_shadow_scope_test;
 mod shadow_part_test;
+mod shadow_slot_focus_within_test;
 mod shadow_slotted_test;
 mod string_set_test;
 mod supports_rule_test;

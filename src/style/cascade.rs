@@ -12,6 +12,7 @@ use crate::css::selectors::FastRenderSelectorImpl;
 use crate::css::selectors::PseudoClass;
 use crate::css::selectors::PseudoElement;
 use crate::css::selectors::ShadowMatchData;
+use crate::css::selectors::SlotAssignmentMap;
 use crate::css::selectors::TextDirection;
 use crate::css::types::ContainerCondition;
 use crate::css::types::CssImportLoader;
@@ -567,6 +568,45 @@ impl DomMaps {
   }
 }
 
+fn build_slot_maps<'a>(
+  assignment: &'a SlotAssignment,
+  dom_maps: &'a DomMaps,
+) -> HashMap<usize, SlotAssignmentMap<'a>> {
+  let mut maps: HashMap<usize, SlotAssignmentMap<'a>> = HashMap::new();
+
+  for (&slot_id, nodes) in assignment.slot_to_nodes.iter() {
+    if nodes.is_empty() {
+      continue;
+    }
+    let Some(slot_ptr) = dom_maps.id_to_node.get(&slot_id) else {
+      continue;
+    };
+    let Some(first_node) = nodes.first() else {
+      continue;
+    };
+    let Some(info) = assignment.node_to_slot.get(first_node) else {
+      continue;
+    };
+    let shadow_root_id = info.shadow_root_id;
+    // Safety: DOM nodes are immutable during cascade; pointers come from the parsed tree.
+    let slot_node = unsafe { &**slot_ptr };
+    let ancestors = dom_maps.ancestors_for(slot_id);
+    let assigned_nodes: Vec<&DomNode> = nodes
+      .iter()
+      .filter_map(|id| dom_maps.id_to_node.get(id).map(|ptr| unsafe { &**ptr }))
+      .collect();
+    if assigned_nodes.is_empty() {
+      continue;
+    }
+    let map = maps
+      .entry(shadow_root_id)
+      .or_insert_with(|| SlotAssignmentMap::new(&dom_maps.id_map, &dom_maps.id_to_node));
+    map.add_slot(slot_node, ancestors, assigned_nodes, shadow_root_id);
+  }
+
+  maps
+}
+
 /// Simple index over the rightmost compound selector to prune rule matching.
 struct IndexedSelector<'a> {
   rule_idx: usize,
@@ -642,6 +682,7 @@ struct RuleScopes<'a> {
   document: RuleIndex<'a>,
   shadows: HashMap<usize, RuleIndex<'a>>,
   host_rules: HashMap<usize, RuleIndex<'a>>,
+  slot_maps: HashMap<usize, SlotAssignmentMap<'a>>,
   fallback_document_rules_in_shadow_scopes: bool,
 }
 
@@ -913,10 +954,33 @@ fn slotted_selector_keys(pe: &PseudoElement) -> Vec<SelectorKey> {
 fn parse_slotted_prelude(
   selector: &Selector<crate::css::selectors::FastRenderSelectorImpl>,
 ) -> Option<Selector<crate::css::selectors::FastRenderSelectorImpl>> {
+  use selectors::parser::Combinator;
+
+  // Walk sequences right-to-left to see if the compound immediately preceding
+  // ::slotted() is empty (implicit universal) and whether there is any prelude
+  // at all to match against the assigned slot.
+  let mut iter = selector.iter();
+  while iter.next().is_some() {}
+  let Some(Combinator::PseudoElement) = iter.next_sequence() else {
+    return None;
+  };
+  let mut empty_slot_sequence = true;
+  while iter.next().is_some() {
+    empty_slot_sequence = false;
+  }
+  let has_more_to_left = iter.next_sequence().is_some();
+  if empty_slot_sequence && !has_more_to_left {
+    return None;
+  }
+
   let css = selector.to_css_string();
   let lower = css.to_ascii_lowercase();
   let idx = lower.find("::slotted(")?;
-  let prelude = css[..idx].trim();
+  let mut prelude = css[..idx].to_string();
+  if empty_slot_sequence {
+    prelude.push('*');
+  }
+  let prelude = prelude.trim();
   if prelude.is_empty() {
     return None;
   }
@@ -1610,6 +1674,7 @@ pub fn apply_styles_with_media_target_and_imports_cached_with_deadline(
   let dom_maps = DomMaps::new(dom);
   let shadow_stylesheets = collect_shadow_stylesheets(dom, &dom_maps.id_map);
   let slot_assignment = compute_slot_assignment(dom);
+  let slot_maps = build_slot_maps(&slot_assignment, &dom_maps);
 
   // Collect applicable rules from both stylesheets
   // User-agent rules come first (lower priority)
@@ -1652,8 +1717,7 @@ pub fn apply_styles_with_media_target_and_imports_cached_with_deadline(
     };
     max_author_rules = max_author_rules.max(count);
   }
-  let shadow_rule_stride = max_author_rules.saturating_add(1);
-  let document_order_base = shadow_rule_stride;
+  let document_order_base = max_author_rules.saturating_add(1);
   let shadow_order_base = document_order_base.saturating_mul(2);
 
   let ua_index = RuleIndex::new(
@@ -1700,13 +1764,10 @@ pub fn apply_styles_with_media_target_and_imports_cached_with_deadline(
     let mut rules: Vec<CascadeRule<'_>> = Vec::new();
     let mut host_rules: Vec<CascadeRule<'_>> = Vec::new();
 
-    let shadow_rule_order_base =
-      shadow_order_base.saturating_add(shadow_root_id.saturating_mul(shadow_rule_stride));
-
     for (idx, rule) in collected.iter().enumerate() {
       let cascade_rule = CascadeRule {
         origin: StyleOrigin::Author,
-        order: shadow_rule_order_base.saturating_add(idx),
+        order: shadow_order_base + idx,
         rule: rule.rule,
         layer_order: rule.layer_order.clone(),
         container_conditions: rule.container_conditions.clone(),
@@ -1736,6 +1797,7 @@ pub fn apply_styles_with_media_target_and_imports_cached_with_deadline(
     document: document_author_index,
     shadows: shadow_indices,
     host_rules: shadow_host_indices,
+    slot_maps,
     fallback_document_rules_in_shadow_scopes: true,
   };
 
@@ -1990,6 +2052,7 @@ pub fn apply_style_set_with_media_target_and_imports_cached_with_deadline(
 
   let dom_maps = DomMaps::new(dom);
   let slot_assignment = compute_slot_assignment(dom);
+  let slot_maps = build_slot_maps(&slot_assignment, &dom_maps);
   let mut host_to_shadow_root: HashMap<usize, usize> = HashMap::new();
   for (shadow_root_id, host_id) in dom_maps.shadow_hosts.iter() {
     host_to_shadow_root.insert(*host_id, *shadow_root_id);
@@ -2006,8 +2069,7 @@ pub fn apply_style_set_with_media_target_and_imports_cached_with_deadline(
     };
     max_author_rules = max_author_rules.max(count);
   }
-  let shadow_rule_stride = max_author_rules.saturating_add(1);
-  let document_order_base = shadow_rule_stride;
+  let document_order_base = max_author_rules.saturating_add(1);
   let shadow_order_base = document_order_base.saturating_mul(2);
 
   let ua_index = RuleIndex::new(
@@ -2057,13 +2119,10 @@ pub fn apply_style_set_with_media_target_and_imports_cached_with_deadline(
     let mut rules: Vec<CascadeRule<'_>> = Vec::new();
     let mut host_rules: Vec<CascadeRule<'_>> = Vec::new();
 
-    let shadow_rule_order_base =
-      shadow_order_base.saturating_add(shadow_root_id.saturating_mul(shadow_rule_stride));
-
     for (idx, rule) in collected.iter().enumerate() {
       let cascade_rule = CascadeRule {
         origin: StyleOrigin::Author,
-        order: shadow_rule_order_base.saturating_add(idx),
+        order: shadow_order_base + idx,
         rule: rule.rule,
         layer_order: rule.layer_order.clone(),
         container_conditions: rule.container_conditions.clone(),
@@ -2091,6 +2150,7 @@ pub fn apply_style_set_with_media_target_and_imports_cached_with_deadline(
     document: document_author_index,
     shadows: shadow_indices,
     host_rules: shadow_host_indices,
+    slot_maps,
     fallback_document_rules_in_shadow_scopes: false,
   };
 
@@ -2535,25 +2595,13 @@ fn exported_part_names(host: &DomNode, names: &[CssString]) -> Vec<CssString> {
   exported
 }
 
-fn containing_scope_host_id(dom_maps: &DomMaps, node: &DomNode) -> Option<Option<usize>> {
-  let node_id = *dom_maps.id_map.get(&(node as *const DomNode))?;
-  match dom_maps.containing_shadow_root(node_id) {
-    Some(shadow_root_id) => dom_maps
-      .shadow_hosts
-      .get(&shadow_root_id)
-      .copied()
-      .map(Some),
-    None => Some(None),
-  }
-}
-
 fn match_part_rules<'a>(
   node: &DomNode,
   ancestors: &[&DomNode],
-  scopes: &'a RuleScopes<'a>,
+  rules: &'a RuleIndex<'a>,
   selector_caches: &mut SelectorCaches,
   scratch: &mut CascadeScratch,
-  dom_maps: &DomMaps,
+  slot_map: Option<&SlotAssignmentMap<'a>>,
 ) -> Vec<MatchedRule<'a>> {
   if !ancestors
     .iter()
@@ -2562,12 +2610,16 @@ fn match_part_rules<'a>(
     return Vec::new();
   }
 
-  let has_part_rules = !scopes.document.part_pseudos.is_empty()
-    || scopes
-      .shadows
-      .values()
-      .any(|index| !index.part_pseudos.is_empty());
-  if !has_part_rules {
+  if rules.pseudo_buckets.is_empty() {
+    return Vec::new();
+  }
+
+  let part_pseudos: Vec<&PseudoElement> = rules
+    .pseudo_buckets
+    .keys()
+    .filter(|pe| matches!(pe, PseudoElement::Part(_)))
+    .collect();
+  if part_pseudos.is_empty() {
     return Vec::new();
   }
 
@@ -2593,80 +2645,53 @@ fn match_part_rules<'a>(
     let host = ancestors[host_idx];
     let host_ancestors = &ancestors[..host_idx];
 
-    let mapped_names = exported_part_names(host, &names);
-    let names_for_matching = if mapped_names.is_empty() {
-      names.as_slice()
-    } else {
-      mapped_names.as_slice()
-    };
+    // Document stylesheets should only be matched against document-tree nodes.
+    // Shadow-scoped matching can still reach across boundaries via exportparts, but
+    // the selector prelude itself cannot pierce shadow roots.
+    let host_is_in_document_tree = !host_ancestors
+      .iter()
+      .any(|ancestor| matches!(ancestor.node_type, DomNodeType::ShadowRoot { .. }));
 
-    if let Some(scope_host) = containing_scope_host_id(dom_maps, host) {
-      if let Some(rules) = scope_rule_index(scopes, scope_host) {
-        if rules.part_pseudos.is_empty() {
-          names = mapped_names;
-          if names.is_empty() {
-            break;
-          }
+    if host_is_in_document_tree {
+      let mut name_set: HashSet<&str> = HashSet::new();
+      for name in names.iter() {
+        name_set.insert(name.as_str());
+      }
+
+      for pseudo in part_pseudos.iter().copied() {
+        let PseudoElement::Part(required) = pseudo else {
+          continue;
+        };
+        if !required.iter().all(|req| name_set.contains(req.as_str())) {
           continue;
         }
-
-        scratch.part_candidates.clear();
-        scratch.part_seen.reset();
-        for name in names_for_matching.iter() {
-          if let Some(list) = rules.part_lookup.get(name.as_str()) {
-            for &idx in list {
-              if scratch.part_seen.insert(idx) {
-                scratch.part_candidates.push(idx);
-              }
+        let part_matches = find_pseudo_element_rules(
+          host,
+          rules,
+          selector_caches,
+          scratch,
+          host_ancestors,
+          slot_map,
+          pseudo,
+        );
+        for rule in part_matches {
+          if let Some(pos) = matched_by_order.get(&rule.order).copied() {
+            if rule.specificity > matched[pos].specificity {
+              matched[pos].specificity = rule.specificity;
             }
-          }
-        }
-
-        if !scratch.part_candidates.is_empty() {
-          let mut name_set: HashSet<&str> = HashSet::new();
-          for name in names_for_matching.iter() {
-            name_set.insert(name.as_str());
-          }
-
-          for &idx in scratch.part_candidates.iter() {
-            let info = &rules.part_pseudos[idx];
-            if !info
-              .required
-              .iter()
-              .all(|req| name_set.contains(req.as_str()))
-            {
-              continue;
-            }
-            let part_matches = find_pseudo_element_rules(
-              host,
-              rules,
-              selector_caches,
-              scratch,
-              host_ancestors,
-              &info.pseudo,
-            );
-            for rule in part_matches {
-              if let Some(pos) = matched_by_order.get(&rule.order).copied() {
-                if rule.specificity > matched[pos].specificity {
-                  matched[pos].specificity = rule.specificity;
-                }
-              } else {
-                matched_by_order.insert(rule.order, matched.len());
-                matched.push(rule);
-              }
-            }
+          } else {
+            matched_by_order.insert(rule.order, matched.len());
+            matched.push(rule);
           }
         }
       }
     }
 
-    names = mapped_names;
+    names = exported_part_names(host, &names);
     if names.is_empty() {
       break;
     }
   }
-
-  scratch.part_seen.reset();
 
   matched
 }
@@ -2684,6 +2709,21 @@ fn collect_matching_rules<'a>(
   dom_maps: &DomMaps,
   slot_assignment: &SlotAssignment,
 ) -> Vec<MatchedRule<'a>> {
+  let current_shadow = dom_maps.containing_shadow_root(node_id);
+  let slot_map_for_host = |host_id: usize| -> Option<&SlotAssignmentMap> {
+    dom_maps
+      .shadow_hosts
+      .iter()
+      .find_map(|(shadow_root, host)| {
+        if *host == host_id {
+          Some(shadow_root)
+        } else {
+          None
+        }
+      })
+      .and_then(|shadow| scopes.slot_maps.get(&shadow))
+  };
+  let current_slot_map = current_shadow.and_then(|shadow| scopes.slot_maps.get(&shadow));
   let mut matches = find_matching_rules(
     node,
     &scopes.ua,
@@ -2695,9 +2735,14 @@ fn collect_matching_rules<'a>(
     container_ctx,
     dom_maps,
     slot_assignment,
+    current_slot_map,
   );
 
   if let Some(base) = scope_rule_index(scopes, scope_host) {
+    let base_slot_map = match scope_host {
+      Some(host) => slot_map_for_host(host),
+      None => current_slot_map,
+    };
     matches.extend(find_matching_rules(
       node,
       base,
@@ -2709,6 +2754,7 @@ fn collect_matching_rules<'a>(
       container_ctx,
       dom_maps,
       slot_assignment,
+      base_slot_map,
     ));
   }
 
@@ -2729,12 +2775,14 @@ fn collect_matching_rules<'a>(
           container_ctx,
           dom_maps,
           slot_assignment,
+          current_slot_map,
         ));
       }
     }
   }
 
   if let Some(host) = scopes.host_rules.get(&node_id) {
+    let host_slot_map = slot_map_for_host(node_id);
     matches.extend(find_matching_rules(
       node,
       host,
@@ -2746,6 +2794,7 @@ fn collect_matching_rules<'a>(
       container_ctx,
       dom_maps,
       slot_assignment,
+      host_slot_map,
     ));
   }
 
@@ -2764,6 +2813,7 @@ fn collect_matching_rules<'a>(
           container_ctx,
           dom_maps,
           slot_assignment,
+          scopes.slot_maps.get(&slot.shadow_root_id),
         ));
       }
     }
@@ -2772,10 +2822,10 @@ fn collect_matching_rules<'a>(
   matches.extend(match_part_rules(
     node,
     ancestors,
-    scopes,
+    &scopes.document,
     selector_caches,
     scratch,
-    dom_maps,
+    current_slot_map,
   ));
 
   matches
@@ -2789,14 +2839,35 @@ fn collect_pseudo_matching_rules<'a>(
   scratch: &mut CascadeScratch,
   ancestors: &[&DomNode],
   node_id: usize,
+  dom_maps: &DomMaps,
   pseudo: &PseudoElement,
 ) -> Vec<MatchedRule<'a>> {
+  let current_shadow = dom_maps.containing_shadow_root(node_id);
+  let slot_map_for_host = |host_id: usize| -> Option<&SlotAssignmentMap> {
+    dom_maps
+      .shadow_hosts
+      .iter()
+      .find_map(|(shadow_root, host)| {
+        if *host == host_id {
+          Some(shadow_root)
+        } else {
+          None
+        }
+      })
+      .and_then(|shadow| scopes.slot_maps.get(&shadow))
+  };
+  let current_slot_map = current_shadow.and_then(|shadow| scopes.slot_maps.get(&shadow));
+  let base_slot_map = match scope_host {
+    Some(host) => slot_map_for_host(host),
+    None => current_slot_map,
+  };
   let mut matches = find_pseudo_element_rules(
     node,
     &scopes.ua,
     selector_caches,
     scratch,
     ancestors,
+    current_slot_map,
     pseudo,
   );
 
@@ -2807,6 +2878,7 @@ fn collect_pseudo_matching_rules<'a>(
       selector_caches,
       scratch,
       ancestors,
+      base_slot_map,
       pseudo,
     ));
   }
@@ -2820,6 +2892,7 @@ fn collect_pseudo_matching_rules<'a>(
           selector_caches,
           scratch,
           ancestors,
+          current_slot_map,
           pseudo,
         ));
       }
@@ -2833,6 +2906,7 @@ fn collect_pseudo_matching_rules<'a>(
       selector_caches,
       scratch,
       ancestors,
+      slot_map_for_host(node_id),
       pseudo,
     ));
   }
@@ -3126,6 +3200,7 @@ fn compute_pseudo_styles(
   scratch: &mut CascadeScratch,
   ancestors: &[&DomNode],
   node_id: usize,
+  dom_maps: &DomMaps,
   styles: &mut ComputedStyle,
   ua_styles: &ComputedStyle,
   root_font_size: f32,
@@ -3156,6 +3231,7 @@ fn compute_pseudo_styles(
       scratch,
       ancestors,
       node_id,
+      dom_maps,
       styles,
       ua_styles,
       root_font_size,
@@ -3177,6 +3253,7 @@ fn compute_pseudo_styles(
     scratch,
     ancestors,
     node_id,
+    dom_maps,
     styles,
     ua_styles,
     root_font_size,
@@ -3197,6 +3274,7 @@ fn compute_pseudo_styles(
     scratch,
     ancestors,
     node_id,
+    dom_maps,
     base_first_letter_styles,
     base_first_letter_ua_styles,
     root_font_size,
@@ -3214,6 +3292,7 @@ fn compute_pseudo_styles(
         scratch,
         ancestors,
         node_id,
+        dom_maps,
         styles,
         ua_styles,
         root_font_size,
@@ -3235,6 +3314,7 @@ fn compute_pseudo_styles(
         scratch,
         ancestors,
         node_id,
+        dom_maps,
         styles,
         ua_styles,
         root_font_size,
@@ -3254,6 +3334,7 @@ fn compute_pseudo_styles(
     scratch,
     ancestors,
     node_id,
+    dom_maps,
     styles,
     ua_styles,
     root_font_size,
@@ -3418,6 +3499,7 @@ fn apply_styles_internal_with_ancestors<'a>(
       scratch,
       ancestors.as_slice(),
       node_id,
+      dom_maps,
       &mut base.styles,
       &base.ua_styles,
       base.current_root_font_size,
@@ -7658,7 +7740,7 @@ mod tests {
       "should collect the authored li::marker rule"
     );
     let ancestors: Vec<&DomNode> = vec![&dom]; // ul ancestor for the li
-    let element_ref = build_element_ref_chain(&dom.children[0], &ancestors);
+    let element_ref = build_element_ref_chain(&dom.children[0], &ancestors, None);
     let mut caches = SelectorCaches::default();
     let mut context = MatchingContext::new(
       MatchingMode::ForStatelessPseudoElement,
@@ -7687,6 +7769,7 @@ mod tests {
       &mut caches,
       &mut scratch,
       &ancestors,
+      None,
       &PseudoElement::Marker,
     );
     assert_eq!(
@@ -8324,6 +8407,7 @@ fn find_matching_rules<'a>(
   container_ctx: Option<&ContainerQueryContext>,
   dom_maps: &DomMaps,
   slot_assignment: &SlotAssignment,
+  slot_map: Option<&'a SlotAssignmentMap<'a>>,
 ) -> Vec<MatchedRule<'a>> {
   if !node.is_element() {
     return Vec::new();
@@ -8346,8 +8430,8 @@ fn find_matching_rules<'a>(
   let mut matches: Vec<MatchedRule<'a>> = Vec::new();
 
   // Build ElementRef chain with proper parent links
-  let element_ref = build_element_ref_chain(node, ancestors);
-  let shadow_host = shadow_host_ref(node, ancestors);
+  let element_ref = build_element_ref_chain(node, ancestors, slot_map);
+  let shadow_host = shadow_host_ref(node, ancestors, slot_map);
 
   // Create selector caches and matching context
   let mut context = MatchingContext::new_for_visited(
@@ -8360,7 +8444,11 @@ fn find_matching_rules<'a>(
     selectors::matching::NeedsSelectorFlags::No,
     selectors::matching::MatchingForInvalidation::No,
   );
-  context.extra_data = ShadowMatchData::for_document();
+  context.extra_data = ShadowMatchData {
+    shadow_host: None,
+    slot_map,
+    part_export_map: None,
+  };
 
   let mut scoped_rule_idx: Option<usize> = None;
   let mut scoped_match: Option<Option<ScopeMatch<'_>>> = None;
@@ -8495,25 +8583,46 @@ fn find_matching_rules<'a>(
       _ => continue,
     };
 
+    let slot_shadow_host = assigned_slot.and_then(|slot| {
+      dom_maps
+        .shadow_hosts
+        .get(&slot.shadow_root_id)
+        .and_then(|host_id| {
+          dom_maps.id_to_node.get(host_id).map(|ptr| {
+            let host_node = unsafe { &**ptr };
+            let host_ancestors = dom_maps.ancestors_for(*host_id);
+            (host_node, host_ancestors)
+          })
+        })
+    });
+    let shadow_host_for_slotted = slot_shadow_host
+      .as_ref()
+      .map(|(host_node, ancestors)| ElementRef::with_ancestors(*host_node, ancestors.as_slice()))
+      .or(shadow_host);
+
     let mut best_arg_specificity: Option<u32> = None;
     if let Some(scope_root) = &scope_for_rule {
       let scope_ref = ElementRef::with_ancestors(scope_root.root, &scope_root.ancestors);
-      context.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
+      with_shadow_host(&mut context, shadow_host_for_slotted, |ctx| {
+        ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
+          for sel in args.iter() {
+            if matches_selector(sel, 0, None, &element_ref, ctx) {
+              let spec = sel.specificity();
+              best_arg_specificity = Some(best_arg_specificity.map_or(spec, |best| best.max(spec)));
+            }
+          }
+          best_arg_specificity.is_some()
+        })
+      });
+    } else {
+      with_shadow_host(&mut context, shadow_host_for_slotted, |ctx| {
         for sel in args.iter() {
           if matches_selector(sel, 0, None, &element_ref, ctx) {
             let spec = sel.specificity();
             best_arg_specificity = Some(best_arg_specificity.map_or(spec, |best| best.max(spec)));
           }
         }
-        best_arg_specificity.is_some()
       });
-    } else {
-      for sel in args.iter() {
-        if matches_selector(sel, 0, None, &element_ref, &mut context) {
-          let spec = sel.specificity();
-          best_arg_specificity = Some(best_arg_specificity.map_or(spec, |best| best.max(spec)));
-        }
-      }
     }
 
     let Some(best_arg_specificity) = best_arg_specificity else {
@@ -8531,52 +8640,18 @@ fn find_matching_rules<'a>(
       let slot_node = unsafe { &**slot_ptr };
       let slot_ancestors = dom_maps.ancestors_for(slot_info.slot_node_id);
       let slot_ref = ElementRef::with_ancestors(slot_node, &slot_ancestors);
-      let slot_shadow_host = shadow_host_ref(slot_node, &slot_ancestors);
-      let mut slot_matches = if let Some(scope_root) = &scope_for_rule {
+      let slot_matches = if let Some(scope_root) = &scope_for_rule {
         let scope_ref = ElementRef::with_ancestors(scope_root.root, &scope_root.ancestors);
-        with_shadow_host(&mut context, slot_shadow_host, |ctx| {
+        with_shadow_host(&mut context, shadow_host_for_slotted, |ctx| {
           ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
             matches_selector(prelude, 0, None, &slot_ref, ctx)
           })
         })
       } else {
-        with_shadow_host(&mut context, slot_shadow_host, |ctx| {
+        with_shadow_host(&mut context, shadow_host_for_slotted, |ctx| {
           matches_selector(prelude, 0, None, &slot_ref, ctx)
         })
       };
-      if !slot_matches && selector_contains_host_context(prelude) {
-        slot_matches = with_shadow_host(&mut context, slot_shadow_host, |ctx| {
-          ctx.with_featureless(false, |ctx| {
-            matches_selector(prelude, 0, None, &slot_ref, ctx)
-          })
-        });
-      }
-      if !slot_matches && selector_targets_shadow_host(prelude) {
-        // :host and :host-context() in the prelude should be evaluated against the shadow host,
-        // not the slot element itself.
-        if let Some(host_ref) = slot_shadow_host {
-          let mut host_matches = if let Some(scope_root) = &scope_for_rule {
-            let scope_ref = ElementRef::with_ancestors(scope_root.root, &scope_root.ancestors);
-            with_shadow_host(&mut context, slot_shadow_host, |ctx| {
-              ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
-                matches_selector(prelude, 0, None, &host_ref, ctx)
-              })
-            })
-          } else {
-            with_shadow_host(&mut context, slot_shadow_host, |ctx| {
-              matches_selector(prelude, 0, None, &host_ref, ctx)
-            })
-          };
-          if !host_matches && selector_contains_host_context(prelude) {
-            host_matches = with_shadow_host(&mut context, slot_shadow_host, |ctx| {
-              ctx.with_featureless(false, |ctx| {
-                matches_selector(prelude, 0, None, &host_ref, ctx)
-              })
-            });
-          }
-          slot_matches = host_matches;
-        }
-      }
       if !slot_matches {
         continue;
       }
@@ -8628,6 +8703,7 @@ fn find_pseudo_element_rules<'a>(
   selector_caches: &mut SelectorCaches,
   scratch: &mut CascadeScratch,
   ancestors: &[&DomNode],
+  slot_map: Option<&SlotAssignmentMap<'a>>,
   pseudo: &PseudoElement,
 ) -> Vec<MatchedRule<'a>> {
   if !node.is_element() {
@@ -8655,8 +8731,8 @@ fn find_pseudo_element_rules<'a>(
   let mut matches: Vec<MatchedRule<'a>> = Vec::new();
 
   // Build ElementRef chain with proper parent links
-  let element_ref = build_element_ref_chain(node, ancestors);
-  let shadow_host = shadow_host_ref(node, ancestors);
+  let element_ref = build_element_ref_chain(node, ancestors, slot_map);
+  let shadow_host = shadow_host_ref(node, ancestors, slot_map);
 
   // Create selector caches and matching context
   let mut context = MatchingContext::new(
@@ -8667,7 +8743,11 @@ fn find_pseudo_element_rules<'a>(
     selectors::matching::NeedsSelectorFlags::No,
     selectors::matching::MatchingForInvalidation::No,
   );
-  context.extra_data = ShadowMatchData::for_document();
+  context.extra_data = ShadowMatchData {
+    shadow_host: None,
+    slot_map,
+    part_export_map: None,
+  };
 
   let mut scoped_rule_idx: Option<usize> = None;
   let mut scoped_match: Option<Option<ScopeMatch<'_>>> = None;
@@ -9408,13 +9488,17 @@ fn propagate_text_decorations(styles: &mut ComputedStyle, parent: &ComputedStyle
 }
 
 /// Build an ElementRef with ancestor context
-fn build_element_ref_chain<'a>(node: &'a DomNode, ancestors: &'a [&'a DomNode]) -> ElementRef<'a> {
+fn build_element_ref_chain<'a>(
+  node: &'a DomNode,
+  ancestors: &'a [&'a DomNode],
+  slot_map: Option<&'a SlotAssignmentMap<'a>>,
+) -> ElementRef<'a> {
   if ancestors.is_empty() {
-    return ElementRef::new(node);
+    return ElementRef::new(node).with_slot_map(slot_map);
   }
 
   // Create ElementRef with all ancestors
-  ElementRef::with_ancestors(node, ancestors)
+  ElementRef::with_ancestors(node, ancestors).with_slot_map(slot_map)
 }
 
 fn is_shadow_host_node(node: &DomNode) -> bool {
@@ -9427,9 +9511,13 @@ fn is_shadow_host_node(node: &DomNode) -> bool {
     .any(|child| matches!(child.node_type, DomNodeType::ShadowRoot { .. }))
 }
 
-fn shadow_host_ref<'a>(node: &'a DomNode, ancestors: &'a [&'a DomNode]) -> Option<ElementRef<'a>> {
+fn shadow_host_ref<'a>(
+  node: &'a DomNode,
+  ancestors: &'a [&'a DomNode],
+  slot_map: Option<&'a SlotAssignmentMap<'a>>,
+) -> Option<ElementRef<'a>> {
   if is_shadow_host_node(node) {
-    return Some(ElementRef::with_ancestors(node, ancestors));
+    return Some(ElementRef::with_ancestors(node, ancestors).with_slot_map(slot_map));
   }
 
   for (idx, ancestor) in ancestors.iter().enumerate().rev() {
@@ -9439,7 +9527,9 @@ fn shadow_host_ref<'a>(node: &'a DomNode, ancestors: &'a [&'a DomNode]) -> Optio
       }
       let host = ancestors[idx - 1];
       if is_shadow_host_node(host) {
-        return Some(ElementRef::with_ancestors(host, &ancestors[..idx - 1]));
+        return Some(
+          ElementRef::with_ancestors(host, &ancestors[..idx - 1]).with_slot_map(slot_map),
+        );
       }
     }
   }
@@ -9501,6 +9591,7 @@ fn compute_pseudo_element_styles(
   scratch: &mut CascadeScratch,
   ancestors: &[&DomNode],
   node_id: usize,
+  dom_maps: &DomMaps,
   parent_styles: &ComputedStyle,
   ua_parent_styles: &ComputedStyle,
   root_font_size: f32,
@@ -9520,6 +9611,7 @@ fn compute_pseudo_element_styles(
     scratch,
     ancestors,
     node_id,
+    dom_maps,
     pseudo,
   );
 
@@ -9653,6 +9745,7 @@ fn compute_first_line_styles(
   scratch: &mut CascadeScratch,
   ancestors: &[&DomNode],
   node_id: usize,
+  dom_maps: &DomMaps,
   base_styles: &ComputedStyle,
   base_ua_styles: &ComputedStyle,
   root_font_size: f32,
@@ -9671,6 +9764,7 @@ fn compute_first_line_styles(
     scratch,
     ancestors,
     node_id,
+    dom_maps,
     &PseudoElement::FirstLine,
   );
   if matching_rules.is_empty() {
@@ -9735,6 +9829,7 @@ fn compute_first_letter_styles(
   scratch: &mut CascadeScratch,
   ancestors: &[&DomNode],
   node_id: usize,
+  dom_maps: &DomMaps,
   base_styles: &ComputedStyle,
   base_ua_styles: &ComputedStyle,
   root_font_size: f32,
@@ -9758,6 +9853,7 @@ fn compute_first_letter_styles(
     scratch,
     ancestors,
     node_id,
+    dom_maps,
     &PseudoElement::FirstLetter,
   );
   if matching_rules.is_empty() {
@@ -9824,6 +9920,7 @@ fn compute_marker_styles(
   scratch: &mut CascadeScratch,
   ancestors: &[&DomNode],
   node_id: usize,
+  dom_maps: &DomMaps,
   list_item_styles: &ComputedStyle,
   ua_list_item_styles: &ComputedStyle,
   root_font_size: f32,
@@ -9844,6 +9941,7 @@ fn compute_marker_styles(
         scratch,
         ancestors,
         node_id,
+        dom_maps,
         &PseudoElement::Marker,
       )
     } else {
