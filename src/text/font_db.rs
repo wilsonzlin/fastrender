@@ -1430,10 +1430,12 @@ unsafe impl Sync for FontDatabase {}
 
 #[inline]
 fn parse_face_for_metrics<'a>(data: &'a [u8], index: u32) -> Result<ttf_parser::Face<'a>> {
-  parse_face_with_counter(data, index).map_err(|e| FontError::LoadFailed {
-    family: String::new(),
-    reason: format!("Failed to parse font: {:?}", e),
-  })
+  Ok(
+    parse_face_with_counter(data, index).map_err(|e| FontError::LoadFailed {
+      family: String::new(),
+      reason: format!("Failed to parse font: {:?}", e),
+    })?,
+  )
 }
 
 #[inline]

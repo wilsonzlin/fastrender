@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use fastrender::css::types::{FontDisplay, FontFaceRule, FontFaceSource};
+use fastrender::resource::FetchedResource;
 use fastrender::text::font_db::{FontDatabase, FontStretch, FontStyle};
 use fastrender::text::font_loader::{
   FontContext, FontFetcher, FontLoadStatus, WebFontLoadOptions, WebFontPolicy,
@@ -36,11 +37,15 @@ struct DelayedFetcher {
 }
 
 impl FontFetcher for DelayedFetcher {
-  fn fetch(&self, _url: &str) -> fastrender::Result<(Vec<u8>, Option<String>)> {
+  fn fetch(&self, url: &str) -> fastrender::Result<FetchedResource> {
     if self.delay > Duration::ZERO {
       std::thread::sleep(self.delay);
     }
-    Ok((self.data.clone(), Some("font/ttf".to_string())))
+    Ok(FetchedResource::with_final_url(
+      self.data.clone(),
+      Some("font/ttf".to_string()),
+      Some(url.to_string()),
+    ))
   }
 }
 
@@ -64,11 +69,15 @@ impl RecordingFetcher {
 }
 
 impl FontFetcher for RecordingFetcher {
-  fn fetch(&self, url: &str) -> fastrender::Result<(Vec<u8>, Option<String>)> {
+  fn fetch(&self, url: &str) -> fastrender::Result<FetchedResource> {
     if let Ok(mut calls) = self.calls.lock() {
       calls.push(url.to_string());
     }
-    Ok((self.data.clone(), Some("font/ttf".to_string())))
+    Ok(FetchedResource::with_final_url(
+      self.data.clone(),
+      Some("font/ttf".to_string()),
+      Some(url.to_string()),
+    ))
   }
 }
 

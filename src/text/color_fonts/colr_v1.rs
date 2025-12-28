@@ -29,7 +29,7 @@ pub fn render_colr_glyph(
 ) -> Option<ColorGlyphRaster> {
   let font_ref = FontRef::from_index(font.data.as_slice(), font.index).ok()?;
   let colr = font_ref.colr().ok()?;
-  if colr.version() < 1 {
+  if colr.version() != 1 {
     return None;
   }
 

@@ -33,7 +33,7 @@ use crate::css::types::FontSourceFormat;
 use crate::debug::runtime;
 use crate::error::Error;
 use crate::error::Result;
-use crate::resource::ResourceFetcher;
+use crate::resource::{FetchedResource, ResourceFetcher};
 use crate::text::font_db::FontCacheConfig;
 use crate::text::font_db::FontConfig;
 use crate::text::font_db::FontDatabase;
@@ -196,14 +196,16 @@ pub struct WebFontLoadReport {
 
 /// Abstraction over font byte fetching so tests can simulate slow/failed loads.
 pub trait FontFetcher: Send + Sync {
-  fn fetch(&self, url: &str) -> Result<(Vec<u8>, Option<String>)>;
+  fn fetch(&self, url: &str) -> Result<FetchedResource>;
 }
 
 struct DefaultFontFetcher;
 
 impl FontFetcher for DefaultFontFetcher {
-  fn fetch(&self, url: &str) -> Result<(Vec<u8>, Option<String>)> {
-    fetch_font_bytes(url)
+  fn fetch(&self, url: &str) -> Result<FetchedResource> {
+    fetch_font_bytes(url).map(|(bytes, content_type)| {
+      FetchedResource::with_final_url(bytes, content_type, Some(url.to_string()))
+    })
   }
 }
 
@@ -212,11 +214,8 @@ struct ResourceFontFetcher {
 }
 
 impl FontFetcher for ResourceFontFetcher {
-  fn fetch(&self, url: &str) -> Result<(Vec<u8>, Option<String>)> {
-    self
-      .fetcher
-      .fetch(url)
-      .map(|res| (res.bytes, res.content_type))
+  fn fetch(&self, url: &str) -> Result<FetchedResource> {
+    self.fetcher.fetch(url)
   }
 }
 
@@ -1190,14 +1189,28 @@ impl FontContext {
         return Err(blocked);
       }
     }
-    let (bytes, content_type) = match self.fetcher.fetch(resolved_url) {
+    let resource = match self.fetcher.fetch(resolved_url) {
       Ok(result) => result,
       Err(err) => {
         self.record_font_error(resolved_url, &err);
         return Err(err);
       }
     };
-    let decoded = match decode_font_bytes(bytes, content_type.as_deref()) {
+    if let Some(ctx) = &self.resource_context {
+      if let Err(err) = ctx.check_allowed_with_final(
+        ResourceKind::Font,
+        resolved_url,
+        resource.final_url.as_deref(),
+      ) {
+        let blocked = Error::Font(crate::error::FontError::LoadFailed {
+          family: family.to_string(),
+          reason: err.reason,
+        });
+        self.record_font_error(resolved_url, &blocked);
+        return Err(blocked);
+      }
+    }
+    let decoded = match decode_font_bytes(resource.bytes, resource.content_type.as_deref()) {
       Ok(decoded) => decoded,
       Err(err) => {
         self.record_font_error(resolved_url, &err);
@@ -2329,7 +2342,7 @@ mod tests {
   }
 
   impl FontFetcher for StubFetcher {
-    fn fetch(&self, _url: &str) -> Result<(Vec<u8>, Option<String>)> {
+    fn fetch(&self, url: &str) -> Result<FetchedResource> {
       if self.delay > Duration::ZERO {
         thread::sleep(self.delay);
       }
@@ -2339,7 +2352,11 @@ mod tests {
           reason: "intentional failure".into(),
         }));
       }
-      Ok((self.data.clone(), None))
+      Ok(FetchedResource::with_final_url(
+        self.data.clone(),
+        None,
+        Some(url.to_string()),
+      ))
     }
   }
 
@@ -2366,17 +2383,24 @@ mod tests {
   }
 
   impl FontFetcher for RecordingFetcher {
-    fn fetch(&self, url: &str) -> Result<(Vec<u8>, Option<String>)> {
+    fn fetch(&self, url: &str) -> Result<FetchedResource> {
       if let Ok(mut calls) = self.calls.lock() {
         calls.push(url.to_string());
       }
 
-      self.responses.get(url).cloned().ok_or_else(|| {
-        Error::Font(crate::error::FontError::LoadFailed {
-          family: url.to_string(),
-          reason: "missing response".into(),
+      self
+        .responses
+        .get(url)
+        .cloned()
+        .map(|(data, content_type)| {
+          FetchedResource::with_final_url(data, content_type, Some(url.to_string()))
         })
-      })
+        .ok_or_else(|| {
+          Error::Font(crate::error::FontError::LoadFailed {
+            family: url.to_string(),
+            reason: "missing response".into(),
+          })
+        })
     }
   }
 

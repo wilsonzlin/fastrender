@@ -2740,6 +2740,7 @@ impl<'a> Element for ElementRef<'a> {
           node: child,
           parent: Some(self.node),
           all_ancestors: self.all_ancestors,
+          slot_map: self.slot_map,
         });
       }
     }

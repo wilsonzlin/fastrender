@@ -395,6 +395,10 @@ pub struct FastRenderConfig {
 
   /// Block mixed HTTP subresources when the document is HTTPS.
   pub block_mixed_content: bool,
+  /// Restrict subresources to the document origin unless explicitly allowed.
+  pub same_origin_subresources: bool,
+  /// Allowlisted origins when same-origin subresource blocking is enabled.
+  pub allowed_subresource_origins: Vec<DocumentOrigin>,
 
   /// Compatibility profile controlling opt-in site-specific behaviors.
   pub compat_profile: CompatProfile,
@@ -434,6 +438,8 @@ impl Default for FastRenderConfig {
       max_iframe_depth: DEFAULT_MAX_IFRAME_DEPTH,
       allow_file_from_http: false,
       block_mixed_content: false,
+      same_origin_subresources: false,
+      allowed_subresource_origins: Vec::new(),
       compat_profile: CompatProfile::default(),
       dom_compat_mode: DomCompatibilityMode::Standard,
       apply_meta_viewport: false,
@@ -529,6 +535,18 @@ impl FastRenderBuilder {
   /// Block mixed HTTP subresources when rendering HTTPS documents.
   pub fn block_mixed_content(mut self, block: bool) -> Self {
     self.config.block_mixed_content = block;
+    self
+  }
+
+  /// Restrict subresource loads to the document origin unless explicitly allowed.
+  pub fn same_origin_subresources(mut self, enabled: bool) -> Self {
+    self.config.same_origin_subresources = enabled;
+    self
+  }
+
+  /// Allow specific origins to load subresources when enforcing same-origin.
+  pub fn allowed_subresource_origins(mut self, allowed: Vec<DocumentOrigin>) -> Self {
+    self.config.allowed_subresource_origins = allowed;
     self
   }
 
@@ -1006,7 +1024,51 @@ impl ResourceContext {
     match self.policy.allows(url) {
       Ok(()) => Ok(()),
       Err(err) => {
-        self.record(kind, url, err.reason.clone());
+        if let Some(diag) = &self.diagnostics {
+          if let Ok(mut guard) = diag.inner.lock() {
+            if guard
+              .fetch_errors
+              .iter()
+              .any(|e| e.kind == kind && e.url == url)
+            {
+              return Err(err);
+            }
+            let mut entry = ResourceFetchError::new(kind, url, err.reason.clone());
+            entry.final_url = Some(url.to_string());
+            guard.fetch_errors.push(entry);
+          }
+        }
+        Err(err)
+      }
+    }
+  }
+
+  /// Evaluate whether a URL (and final URL after redirects) is allowed by policy.
+  pub fn check_allowed_with_final(
+    &self,
+    kind: ResourceKind,
+    url: &str,
+    final_url: Option<&str>,
+  ) -> std::result::Result<(), PolicyError> {
+    match self.policy.allows_with_final(url, final_url) {
+      Ok(()) => Ok(()),
+      Err(err) => {
+        if let Some(diag) = &self.diagnostics {
+          if let Ok(mut guard) = diag.inner.lock() {
+            if guard
+              .fetch_errors
+              .iter()
+              .any(|e| e.kind == kind && e.url == url)
+            {
+              return Err(err);
+            }
+            let mut entry = ResourceFetchError::new(kind, url, err.reason.clone());
+            entry.final_url = final_url
+              .map(|u| u.to_string())
+              .or_else(|| Some(url.to_string()));
+            guard.fetch_errors.push(entry);
+          }
+        }
         Err(err)
       }
     }
@@ -1755,6 +1817,18 @@ impl FastRenderConfig {
     self
   }
 
+  /// Restrict subresource loads to the document origin.
+  pub fn with_same_origin_subresources(mut self, enabled: bool) -> Self {
+    self.same_origin_subresources = enabled;
+    self
+  }
+
+  /// Allow specific origins when enforcing same-origin subresource loading.
+  pub fn with_allowed_subresource_origins(mut self, allowed: Vec<DocumentOrigin>) -> Self {
+    self.allowed_subresource_origins = allowed;
+    self
+  }
+
   /// Applies `<meta name="viewport">` directives when computing the layout viewport.
   ///
   /// `width`/`height` set the layout viewport. Zoom is driven by `initial-scale`
@@ -1996,7 +2070,7 @@ impl FastRenderPool {
     self.inner.available.notify_one();
   }
 
-  fn with_renderer<F, T>(&self, op: F) -> Result<T>
+  pub fn with_renderer<F, T>(&self, op: F) -> Result<T>
   where
     F: FnOnce(&mut FastRender) -> Result<T>,
   {
@@ -2612,13 +2686,17 @@ impl FastRender {
       dom_compat_mode: config.dom_compat_mode,
       compat_profile: config.compat_profile,
       fragmentation: config.fragmentation,
-      resource_policy: ResourceAccessPolicy {
-        document_origin: config
+      resource_policy: {
+        let mut policy = ResourceAccessPolicy::default();
+        policy.document_origin = config
           .base_url
           .as_ref()
-          .and_then(|url| origin_from_url(url)),
-        allow_file_from_http: config.allow_file_from_http,
-        block_mixed_content: config.block_mixed_content,
+          .and_then(|url| origin_from_url(url));
+        policy.allow_file_from_http = config.allow_file_from_http;
+        policy.block_mixed_content = config.block_mixed_content;
+        policy.same_origin_only = config.same_origin_subresources;
+        policy.allowed_origins = config.allowed_subresource_origins.clone();
+        policy
       },
       resource_context: None,
       max_iframe_depth: config.max_iframe_depth,
@@ -3899,14 +3977,15 @@ impl FastRender {
       } else {
         None
       };
-    if stats.is_none() && local_recorder.is_some() {
+    let has_local_recorder = local_recorder.is_some();
+    if stats.is_none() && has_local_recorder {
       crate::image_loader::enable_image_cache_diagnostics();
       crate::paint::painter::enable_paint_diagnostics();
       intrinsic_cache_reset_counters();
       crate::layout::formatting_context::layout_cache_reset_counters();
     }
     let _cascade_profile_override = if stats.is_none()
-      && local_recorder.is_some()
+      && has_local_recorder
       && matches!(options.diagnostics_level, DiagnosticsLevel::Verbose)
     {
       Some(CascadeProfileOverride::enable())
@@ -3953,7 +4032,7 @@ impl FastRender {
               if !had_sink {
                 self.set_diagnostics_sink(None);
               }
-              if local_recorder.is_some() {
+              if has_local_recorder {
                 let _ = crate::image_loader::take_image_cache_diagnostics();
                 let _ = crate::paint::painter::take_paint_diagnostics();
               }
@@ -3970,7 +4049,7 @@ impl FastRender {
           if !had_sink {
             self.set_diagnostics_sink(None);
           }
-          if local_recorder.is_some() {
+          if has_local_recorder {
             let _ = crate::image_loader::take_image_cache_diagnostics();
             let _ = crate::paint::painter::take_paint_diagnostics();
           }
@@ -3993,7 +4072,7 @@ impl FastRender {
     let outputs = match outputs {
       Ok(outputs) => outputs,
       Err(err) => {
-        if local_recorder.is_some() {
+        if has_local_recorder {
           let _ = crate::image_loader::take_image_cache_diagnostics();
           let _ = crate::paint::painter::take_paint_diagnostics();
         }
@@ -4331,6 +4410,18 @@ impl FastRender {
 
             match fetcher.fetch(&stylesheet_url) {
               Ok(resource) => {
+                if let Some(ctx) = resource_context {
+                  if ctx
+                    .check_allowed_with_final(
+                      ResourceKind::Stylesheet,
+                      &stylesheet_url,
+                      resource.final_url.as_deref(),
+                    )
+                    .is_err()
+                  {
+                    continue;
+                  }
+                }
                 let mut css_text =
                   decode_css_bytes(&resource.bytes, resource.content_type.as_deref());
                 css_text = absolutize_css_urls(&css_text, &stylesheet_url);
@@ -4451,6 +4542,18 @@ impl FastRender {
 
           match fetcher.fetch(&stylesheet_url) {
             Ok(resource) => {
+              if let Some(ctx) = resource_context {
+                if ctx
+                  .check_allowed_with_final(
+                    ResourceKind::Stylesheet,
+                    &stylesheet_url,
+                    resource.final_url.as_deref(),
+                  )
+                  .is_err()
+                {
+                  continue;
+                }
+              }
               let mut css_text =
                 decode_css_bytes(&resource.bytes, resource.content_type.as_deref());
               css_text = absolutize_css_urls(&css_text, &stylesheet_url);
@@ -6704,6 +6807,19 @@ impl CssImportLoader for CssImportFetcher {
         return Err(err);
       }
     };
+
+    if let Some(ctx) = &self.resource_context {
+      if let Err(err) = ctx.check_allowed_with_final(
+        ResourceKind::Stylesheet,
+        &resolved,
+        resource.final_url.as_deref(),
+      ) {
+        return Err(Error::Io(io::Error::new(
+          io::ErrorKind::PermissionDenied,
+          err.reason,
+        )));
+      }
+    }
 
     // Decode CSS bytes with charset handling
     let decoded = decode_css_bytes(&resource.bytes, resource.content_type.as_deref());

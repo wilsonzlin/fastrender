@@ -1878,6 +1878,16 @@ fn compute_expanded(node: &StyledNode, role: Option<&str>, ancestors: &[&DomNode
     return Some(expanded);
   }
 
+  let tag = node
+    .node
+    .tag_name()
+    .map(|t| t.to_ascii_lowercase())
+    .unwrap_or_default();
+
+  if tag == "details" {
+    return Some(node.node.get_attribute_ref("open").is_some());
+  }
+
   let is_summary = node
     .node
     .tag_name()

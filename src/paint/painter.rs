@@ -5608,6 +5608,18 @@ impl Painter {
       }
     }
     let resource = fetcher.fetch(&resolved).ok()?;
+    if let Some(ctx) = context.as_ref() {
+      if ctx
+        .check_allowed_with_final(
+          ResourceKind::Document,
+          &resolved,
+          resource.final_url.as_deref(),
+        )
+        .is_err()
+      {
+        return None;
+      }
+    }
     let content_type = resource.content_type.as_deref();
     let is_html = content_type
       .map(|ct| {

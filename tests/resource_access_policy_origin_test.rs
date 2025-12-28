@@ -1,6 +1,7 @@
 use fastrender::api::{FastRender, RenderArtifactRequest, RenderOptions};
 use fastrender::ResourceKind;
-use std::io::{Read, Write};
+use std::fmt::Write;
+use std::io::{Read, Write as IoWrite};
 use std::net::{SocketAddr, TcpListener};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;

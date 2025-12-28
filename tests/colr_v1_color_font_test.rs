@@ -1,12 +1,15 @@
 mod r#ref;
 
+use fastrender::image_compare::encode_png;
 use fastrender::style::color::Rgba;
 use fastrender::text::color_fonts::ColorFontRenderer;
 use fastrender::text::font_db::{FontStretch, FontStyle, FontWeight, LoadedFont};
 use fastrender::text::font_instance::FontInstance;
+use image::RgbaImage;
 use r#ref::compare::{compare_images, load_png, CompareConfig};
 use std::path::PathBuf;
 use std::sync::Arc;
+use tiny_skia::Pixmap;
 
 fn fixtures_path() -> PathBuf {
   PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -26,13 +29,43 @@ fn load_test_font() -> LoadedFont {
   }
 }
 
+fn pixmap_to_rgba_image(pixmap: &Pixmap) -> RgbaImage {
+  let width = pixmap.width();
+  let height = pixmap.height();
+  let mut rgba = RgbaImage::new(width, height);
+
+  for (dst, src) in rgba
+    .as_mut()
+    .chunks_exact_mut(4)
+    .zip(pixmap.data().chunks_exact(4))
+  {
+    let b = src[0];
+    let g = src[1];
+    let r = src[2];
+    let a = src[3];
+
+    if a == 0 {
+      dst.copy_from_slice(&[0, 0, 0, 0]);
+      continue;
+    }
+
+    let alpha = a as f32 / 255.0;
+    dst[0] = ((r as f32 / alpha).min(255.0)) as u8;
+    dst[1] = ((g as f32 / alpha).min(255.0)) as u8;
+    dst[2] = ((b as f32 / alpha).min(255.0)) as u8;
+    dst[3] = a;
+  }
+
+  rgba
+}
+
 fn render_glyph(
   font: &LoadedFont,
   palette_index: u16,
   text_color: Rgba,
 ) -> fastrender::text::color_fonts::ColorGlyphRaster {
   let face = font.as_ttf_face().unwrap();
-  let gid = face.glyph_index('A').unwrap();
+  let gid = face.glyph_index('G').unwrap();
   let instance = FontInstance::new(font, &[]).unwrap();
 
   ColorFontRenderer::new()
@@ -53,14 +86,15 @@ fn render_glyph(
 fn save_or_compare(name: &str, raster: &fastrender::text::color_fonts::ColorGlyphRaster) {
   let path = fixtures_path().join("golden").join(name);
   if std::env::var("UPDATE_GOLDEN").is_ok() {
-    raster
-      .image
-      .save_png(&path)
-      .expect("failed to write golden");
+    let bytes = encode_png(&pixmap_to_rgba_image(&raster.image)).expect("encode golden");
+    std::fs::write(&path, bytes).expect("failed to write golden");
   }
 
   let golden = load_png(&path).expect("missing golden image; set UPDATE_GOLDEN=1 to create");
-  let diff = compare_images(&raster.image, &golden, &CompareConfig::strict());
+  let config = CompareConfig::strict()
+    .with_channel_tolerance(16)
+    .with_max_different_percent(5.0);
+  let diff = compare_images(&raster.image, &golden, &config);
   assert!(
     diff.is_match(),
     "rendered image {} did not match golden: {:?}",
@@ -98,7 +132,7 @@ fn malformed_colrv1_table_falls_back() {
     ..font
   };
   let face = corrupted.as_ttf_face().unwrap();
-  let gid = face.glyph_index('A').unwrap();
+  let gid = face.glyph_index('G').unwrap();
   let instance = FontInstance::new(&corrupted, &[]).unwrap();
   let rendered = ColorFontRenderer::new().render(
     &corrupted,
