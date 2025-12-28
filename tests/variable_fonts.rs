@@ -1,6 +1,6 @@
 use fastrender::geometry::Point;
 use fastrender::paint::display_list::{
-  DisplayItem, DisplayList, FontVariation, GlyphInstance, TextItem,
+  DisplayItem, DisplayList, FontVariation, GlyphInstance, ListMarkerItem, TextItem,
 };
 use fastrender::paint::display_list_renderer::DisplayListRenderer;
 use fastrender::style::types::FontVariationSetting;
@@ -104,6 +104,25 @@ fn text_item_from_run(run: &ShapedRun, origin: Point) -> TextItem {
   }
 }
 
+fn list_marker_from_run(run: &ShapedRun, origin: Point) -> ListMarkerItem {
+  let text = text_item_from_run(run, origin);
+  ListMarkerItem {
+    origin: text.origin,
+    glyphs: text.glyphs,
+    color: text.color,
+    palette_index: text.palette_index,
+    shadows: text.shadows,
+    font_size: text.font_size,
+    advance_width: text.advance_width,
+    font: text.font,
+    variations: text.variations,
+    synthetic_bold: text.synthetic_bold,
+    synthetic_oblique: text.synthetic_oblique,
+    emphasis: text.emphasis,
+    background: None,
+  }
+}
+
 fn render_display_list(font_ctx: &FontContext, run: &ShapedRun) -> Pixmap {
   let mut list = DisplayList::new();
   let text = text_item_from_run(run, Point::new(20.0, 150.0));
@@ -112,6 +131,16 @@ fn render_display_list(font_ctx: &FontContext, run: &ShapedRun) -> Pixmap {
   let renderer = DisplayListRenderer::new(PIXMAP_SIZE, PIXMAP_SIZE, Rgba::WHITE, font_ctx.clone())
     .expect("display list renderer");
   renderer.render(&list).expect("render display list")
+}
+
+fn render_list_marker(font_ctx: &FontContext, run: &ShapedRun) -> Pixmap {
+  let mut list = DisplayList::new();
+  let marker = list_marker_from_run(run, Point::new(20.0, 150.0));
+  list.push(DisplayItem::ListMarker(marker));
+
+  let renderer = DisplayListRenderer::new(PIXMAP_SIZE, PIXMAP_SIZE, Rgba::WHITE, font_ctx.clone())
+    .expect("display list renderer");
+  renderer.render(&list).expect("render list marker display list")
 }
 
 fn render_with_rasterizer(run: &ShapedRun) -> Pixmap {
@@ -157,6 +186,40 @@ fn display_list_renderer_applies_variable_font_axes() {
   assert!(
     diff > 200,
     "variable font text should render differently with distinct axes (diff={diff})"
+  );
+}
+
+#[test]
+fn list_marker_renderer_applies_variable_font_axes() {
+  let font_ctx = variable_font_context();
+  let shaper = ShapingPipeline::new();
+
+  let light_run = shape_text(&shaper, &style_with_weight(40.0), &font_ctx);
+  let heavy_run = shape_text(&shaper, &style_with_weight(250.0), &font_ctx);
+  assert_wght_variation(&light_run, 40.0);
+  assert_wght_variation(&heavy_run, 250.0);
+
+  let light_marker = render_list_marker(&font_ctx, &light_run);
+  let heavy_marker = render_list_marker(&font_ctx, &heavy_run);
+
+  let diff = differing_pixels(&light_marker, &heavy_marker, 1);
+  assert!(
+    diff > 200,
+    "variable font list markers should render differently with distinct axes (diff={diff})"
+  );
+
+  let light_text = render_display_list(&font_ctx, &light_run);
+  let heavy_text = render_display_list(&font_ctx, &heavy_run);
+
+  assert_eq!(
+    light_marker.data(),
+    light_text.data(),
+    "list marker rendering should match text rendering for the same variations"
+  );
+  assert_eq!(
+    heavy_marker.data(),
+    heavy_text.data(),
+    "list marker rendering should match text rendering for the same variations"
   );
 }
 
