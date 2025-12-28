@@ -39,3 +39,17 @@ path = "fuzz_targets/vars_and_calc.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "svg_filters"
+path = "fuzz_targets/svg_filters.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "animation_properties"
+path = "fuzz_targets/animation_properties.rs"
+test = false
+doc = false
+bench = false

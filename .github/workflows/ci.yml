@@ -230,6 +230,35 @@ jobs:
         run: cargo audit
 
   # ===========================================================================
+  # Fuzz Smoke Job - Quick libFuzzer sanity runs
+  # ===========================================================================
+  fuzz-smoke:
+    name: Fuzz Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install nightly toolchain for fuzzing
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools-preview
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
+
+      - name: Run fuzz smoke tests
+        working-directory: fuzz
+        run: |
+          export ASAN_OPTIONS=detect_leaks=0
+          cargo fuzz run css_parser ../tests/fuzz_corpus -- -max_total_time=5 -runs=256
+          cargo fuzz run selectors ../tests/fuzz_corpus -- -max_total_time=5 -runs=128
+          cargo fuzz run vars_and_calc ../tests/fuzz_corpus -- -max_total_time=5 -runs=128
+          cargo fuzz run svg_filters ../tests/fuzz_corpus -- -max_total_time=5 -runs=128
+          cargo fuzz run animation_properties ../tests/fuzz_corpus -- -max_total_time=5 -runs=128
+
+  # ===========================================================================
   # Coverage Job - Measure test coverage
   # ===========================================================================
   coverage:
@@ -315,7 +344,7 @@ jobs:
   ci-status:
     name: CI Status
     runs-on: ubuntu-latest
-    needs: [lockfile, test, msrv, clippy, format, docs, audit]
+    needs: [lockfile, test, msrv, clippy, format, docs, audit, fuzz-smoke]
     if: always()
     steps:
       - name: Check CI Status
@@ -326,7 +355,8 @@ jobs:
              [ "${{ needs.clippy.result }}" != "success" ] || \
              [ "${{ needs.format.result }}" != "success" ] || \
              [ "${{ needs.docs.result }}" != "success" ] || \
-             [ "${{ needs.audit.result }}" != "success" ]; then
+             [ "${{ needs.audit.result }}" != "success" ] || \
+             [ "${{ needs.fuzz-smoke.result }}" != "success" ]; then
             echo "One or more CI jobs failed"
             exit 1
           fi

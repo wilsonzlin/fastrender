@@ -1,0 +1,30 @@
+/* Animation + transition seed corpus */
+@keyframes shimmer {
+  0% { opacity: 0; transform: translateY(6px); filter: blur(3px) saturate(0.6); }
+  50% { opacity: 1; transform: translateY(0); filter: blur(0px) saturate(1); }
+  100% { opacity: 0.85; transform: translateY(-3px); filter: blur(1px) saturate(0.8); }
+}
+
+@keyframes pulse {
+  0% { background-color: rgba(255, 160, 120, 0.8); border-radius: 12px; }
+  50% { background-color: rgba(80, 160, 255, 0.9); border-radius: 32px; }
+  100% { background-color: rgba(160, 120, 255, 0.8); border-radius: 18px; }
+}
+
+.button {
+  animation: shimmer 1.4s ease-in-out infinite;
+  transition: transform 180ms ease, background-color 120ms linear, filter 90ms ease-out;
+}
+
+.button:hover {
+  transform: translateY(-2px) scale(1.04);
+  filter: drop-shadow(2px 6px 12px rgba(0, 0, 0, 0.2));
+}
+
+.loader {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  animation: pulse 2s ease-in-out infinite alternate;
+  transition: border-radius 250ms ease-in-out;
+}
