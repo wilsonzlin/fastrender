@@ -2605,6 +2605,63 @@ impl FormattingContext for GridFormattingContext {
         self.nearest_positioned_cb
       };
 
+      let mut static_positions: HashMap<usize, Point> = HashMap::new();
+      if let DetailedLayoutInfo::Grid(info) = taffy.detailed_layout_info(root_id) {
+        if let Ok(container_style) = taffy.style(root_id) {
+          let row_offsets = compute_track_offsets(
+            &info.rows,
+            fragment.bounds.height(),
+            padding_top,
+            padding_bottom,
+            border_top,
+            border_bottom,
+            container_style
+              .align_content
+              .unwrap_or(taffy::style::AlignContent::Stretch),
+          );
+          let col_offsets = compute_track_offsets(
+            &info.columns,
+            fragment.bounds.width(),
+            padding_left,
+            padding_right,
+            border_left,
+            border_right,
+            container_style
+              .justify_content
+              .unwrap_or(taffy::style::AlignContent::Stretch),
+          );
+
+          for child in positioned_children {
+            let mut pos = Point::ZERO;
+            if child.style.grid_column_start > 0
+              && child.style.grid_column_end > 0
+              && child.style.grid_column_end == child.style.grid_column_start + 1
+            {
+              if let Some((start, _)) = grid_area_for_item(
+                &col_offsets,
+                child.style.grid_column_start as u16,
+                child.style.grid_column_end as u16,
+              ) {
+                pos.x = start - padding_origin.x;
+              }
+            }
+            if child.style.grid_row_start > 0
+              && child.style.grid_row_end > 0
+              && child.style.grid_row_end == child.style.grid_row_start + 1
+            {
+              if let Some((start, _)) = grid_area_for_item(
+                &row_offsets,
+                child.style.grid_row_start as u16,
+                child.style.grid_row_end as u16,
+              ) {
+                pos.y = start - padding_origin.y;
+              }
+            }
+            static_positions.insert(child.id, pos);
+          }
+        }
+      }
+
       let abs = crate::layout::absolute_positioning::AbsoluteLayout::with_font_context(
         self.font_context.clone(),
       );
@@ -2656,7 +2713,10 @@ impl FormattingContext for GridFormattingContext {
         );
         // Static position resolves to where the element would be in flow; use the
         // content origin here since AbsoluteLayout adds padding/border.
-        let static_pos = crate::geometry::Point::ZERO;
+        let static_pos = static_positions
+          .get(&child.id)
+          .copied()
+          .unwrap_or(crate::geometry::Point::ZERO);
         let preferred_min_inline = fc
           .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
           .ok();
