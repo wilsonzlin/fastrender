@@ -22,6 +22,8 @@ cargo install cargo-fuzz
   through the filter parser/executor.
 - `animation_properties`: Builds CSS animation/transition/keyframe snippets and
   samples them against a styled DOM tree.
+- `color_fonts`: Builds fonts from arbitrary bytes and exercises color glyph
+  rendering (bitmaps, SVG-in-OT, COLR).
 
 ## Running
 

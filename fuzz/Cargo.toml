@@ -19,6 +19,10 @@ resolver = "2"
 [profile.release]
 debug = 1
 
+# Match the main crate's patched selectors dependency for fuzz builds.
+[patch.crates-io]
+selectors = { path = "../vendor/selectors" }
+
 [[bin]]
 name = "css_parser"
 path = "fuzz_targets/css_parser.rs"
@@ -50,6 +54,13 @@ bench = false
 [[bin]]
 name = "animation_properties"
 path = "fuzz_targets/animation_properties.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "color_fonts"
+path = "fuzz_targets/color_fonts.rs"
 test = false
 doc = false
 bench = false

@@ -3,6 +3,7 @@ target
 corpus
 artifacts
 coverage
+Cargo.lock
 
 # LibFuzzer merge outputs
 *.profraw
