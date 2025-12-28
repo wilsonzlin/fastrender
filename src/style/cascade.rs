@@ -2515,10 +2515,11 @@ fn part_names(node: &DomNode) -> Vec<CssString> {
   names
 }
 
-fn exported_part_names(host: &DomNode, names: &[CssString], dom_maps: &DomMaps) -> Vec<CssString> {
-  let Some(mappings) = dom_maps.exportparts_for(host) else {
+fn exported_part_names(host: &DomNode, names: &[CssString]) -> Vec<CssString> {
+  let Some(attr) = host.get_attribute_ref("exportparts") else {
     return Vec::new();
   };
+  let mappings = parse_exportparts(attr);
 
   let mut exported = Vec::new();
   let mut seen: HashSet<&str> = HashSet::new();
@@ -2532,6 +2533,18 @@ fn exported_part_names(host: &DomNode, names: &[CssString], dom_maps: &DomMaps) 
   }
 
   exported
+}
+
+fn containing_scope_host_id(dom_maps: &DomMaps, node: &DomNode) -> Option<Option<usize>> {
+  let node_id = *dom_maps.id_map.get(&(node as *const DomNode))?;
+  match dom_maps.containing_shadow_root(node_id) {
+    Some(shadow_root_id) => dom_maps
+      .shadow_hosts
+      .get(&shadow_root_id)
+      .copied()
+      .map(Some),
+    None => Some(None),
+  }
 }
 
 fn match_part_rules<'a>(
@@ -2580,80 +2593,74 @@ fn match_part_rules<'a>(
     let host = ancestors[host_idx];
     let host_ancestors = &ancestors[..host_idx];
 
-    let container_rules = match ancestors
-      .iter()
-      .skip(host_idx + 1)
-      .find(|ancestor| matches!(ancestor.node_type, DomNodeType::ShadowRoot { .. }))
-      .and_then(|shadow_root| dom_maps.id_map.get(&(*shadow_root as *const DomNode)))
-      .and_then(|shadow_root_id| dom_maps.shadow_hosts.get(shadow_root_id))
-    {
-      Some(container_host) => scopes.shadows.get(container_host).or_else(|| {
-        scopes
-          .fallback_document_rules_in_shadow_scopes
-          .then_some(&scopes.document)
-      }),
-      None => Some(&scopes.document),
+    let mapped_names = exported_part_names(host, &names);
+    let names_for_matching = if mapped_names.is_empty() {
+      names.as_slice()
+    } else {
+      mapped_names.as_slice()
     };
 
-    if let Some(rules) = container_rules {
-      if rules.part_pseudos.is_empty() {
-        names = exported_part_names(host, &names, dom_maps);
-        if names.is_empty() {
-          break;
+    if let Some(scope_host) = containing_scope_host_id(dom_maps, host) {
+      if let Some(rules) = scope_rule_index(scopes, scope_host) {
+        if rules.part_pseudos.is_empty() {
+          names = mapped_names;
+          if names.is_empty() {
+            break;
+          }
+          continue;
         }
-        continue;
-      }
 
-      scratch.part_candidates.clear();
-      scratch.part_seen.reset();
-      for name in names.iter() {
-        if let Some(list) = rules.part_lookup.get(name.as_str()) {
-          for &idx in list {
-            if scratch.part_seen.insert(idx) {
-              scratch.part_candidates.push(idx);
+        scratch.part_candidates.clear();
+        scratch.part_seen.reset();
+        for name in names_for_matching.iter() {
+          if let Some(list) = rules.part_lookup.get(name.as_str()) {
+            for &idx in list {
+              if scratch.part_seen.insert(idx) {
+                scratch.part_candidates.push(idx);
+              }
             }
           }
         }
-      }
 
-      if !scratch.part_candidates.is_empty() {
-        let mut name_set: HashSet<&str> = HashSet::new();
-        for name in names.iter() {
-          name_set.insert(name.as_str());
-        }
-
-        for &idx in scratch.part_candidates.iter() {
-          let info = &rules.part_pseudos[idx];
-          if !info
-            .required
-            .iter()
-            .all(|req| name_set.contains(req.as_str()))
-          {
-            continue;
+        if !scratch.part_candidates.is_empty() {
+          let mut name_set: HashSet<&str> = HashSet::new();
+          for name in names_for_matching.iter() {
+            name_set.insert(name.as_str());
           }
-          let part_matches = find_pseudo_element_rules(
-            host,
-            rules,
-            selector_caches,
-            scratch,
-            host_ancestors,
-            &info.pseudo,
-          );
-          for rule in part_matches {
-            if let Some(pos) = matched_by_order.get(&rule.order).copied() {
-              if rule.specificity > matched[pos].specificity {
-                matched[pos].specificity = rule.specificity;
+
+          for &idx in scratch.part_candidates.iter() {
+            let info = &rules.part_pseudos[idx];
+            if !info
+              .required
+              .iter()
+              .all(|req| name_set.contains(req.as_str()))
+            {
+              continue;
+            }
+            let part_matches = find_pseudo_element_rules(
+              host,
+              rules,
+              selector_caches,
+              scratch,
+              host_ancestors,
+              &info.pseudo,
+            );
+            for rule in part_matches {
+              if let Some(pos) = matched_by_order.get(&rule.order).copied() {
+                if rule.specificity > matched[pos].specificity {
+                  matched[pos].specificity = rule.specificity;
+                }
+              } else {
+                matched_by_order.insert(rule.order, matched.len());
+                matched.push(rule);
               }
-            } else {
-              matched_by_order.insert(rule.order, matched.len());
-              matched.push(rule);
             }
           }
         }
       }
     }
 
-    names = exported_part_names(host, &names, dom_maps);
+    names = mapped_names;
     if names.is_empty() {
       break;
     }
