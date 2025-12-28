@@ -1,0 +1,27 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>import subgrid rtl ref</title>
+<link rel="stylesheet" href="../../resources/ahem.css">
+<style>
+.outer {
+  display: grid;
+  grid-template-columns: 30px 40px;
+  column-gap: 4px;
+  direction: rtl;
+}
+.subgrid {
+  grid-column: 1 / 3;
+  display: grid;
+  grid-template-columns: 30px 40px;
+  column-gap: 4px;
+  background: #eee;
+}
+.one { background: #ef4444; width: 100%; height: 18px; }
+.two { background: #3b82f6; width: 100%; height: 18px; }
+</style>
+<div class="outer">
+  <div class="subgrid">
+    <div class="one"></div>
+    <div class="two"></div>
+  </div>
+</div>

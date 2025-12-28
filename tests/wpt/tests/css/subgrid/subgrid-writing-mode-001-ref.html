@@ -1,0 +1,26 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>subgrid writing mode reference</title>
+<style>
+.container {
+  display: grid;
+  grid-template-columns: 40px 60px;
+  grid-template-rows: 70px;
+  column-gap: 10px;
+}
+.subgrid {
+  grid-column: 1 / 3;
+  display: grid;
+  writing-mode: vertical-rl;
+  grid-template-columns: 40px 60px;
+  grid-template-rows: 70px;
+}
+.left { grid-column: 1 / 2; background: #38bdf8; width: 100%; height: 100%; }
+.right { grid-column: 2 / 3; background: #f472b6; width: 100%; height: 100%; }
+</style>
+<div class="container">
+  <div class="subgrid">
+    <div class="left"></div>
+    <div class="right"></div>
+  </div>
+</div>

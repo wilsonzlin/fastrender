@@ -37,6 +37,7 @@ use crate::layout::fragmentation::FragmentationOptions;
 use crate::style::display::FormattingContextType;
 use crate::style::float::Float;
 use crate::style::position::Position;
+use crate::style::types::GridTrack;
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
 use crate::tree::box_tree::BoxNode;
@@ -111,7 +112,7 @@ fn cache_key(
   mode: IntrinsicSizingMode,
 ) -> Option<(usize, usize, IntrinsicSizingMode)> {
   let id = node.id();
-  if id == 0 {
+  if id == 0 || subtree_contains_subgrid(node) {
     return None;
   }
   let style_ptr = Arc::as_ptr(&node.style) as usize;
@@ -205,6 +206,7 @@ pub(crate) struct LayoutCacheKey {
   constraints_hash: u64,
   fragmentation_hash: u64,
   viewport_hash: u64,
+  subgrid_dependent: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -259,6 +261,96 @@ fn hash_option_length(len: &Option<Length>, hasher: &mut DefaultHasher) {
     }
     None => 0u8.hash(hasher),
   }
+}
+
+fn hash_string_vecs(vecs: &[Vec<String>], hasher: &mut DefaultHasher) {
+  vecs.len().hash(hasher);
+  for names in vecs {
+    names.len().hash(hasher);
+    for name in names {
+      name.hash(hasher);
+    }
+  }
+}
+
+fn hash_grid_track(track: &GridTrack, hasher: &mut DefaultHasher) {
+  use GridTrack::*;
+  match track {
+    Length(len) => {
+      0u8.hash(hasher);
+      hash_length(len, hasher);
+    }
+    Fr(fr) => {
+      1u8.hash(hasher);
+      fr.to_bits().hash(hasher);
+    }
+    Auto => 2u8.hash(hasher),
+    MinContent => 3u8.hash(hasher),
+    MaxContent => 4u8.hash(hasher),
+    FitContent(len) => {
+      5u8.hash(hasher);
+      hash_length(len, hasher);
+    }
+    MinMax(min, max) => {
+      6u8.hash(hasher);
+      hash_grid_track(min, hasher);
+      hash_grid_track(max, hasher);
+    }
+    RepeatAutoFill { tracks, line_names } => {
+      7u8.hash(hasher);
+      hash_grid_tracks(tracks, hasher);
+      hash_string_vecs(line_names, hasher);
+    }
+    RepeatAutoFit { tracks, line_names } => {
+      8u8.hash(hasher);
+      hash_grid_tracks(tracks, hasher);
+      hash_string_vecs(line_names, hasher);
+    }
+  }
+}
+
+fn hash_grid_tracks(tracks: &[GridTrack], hasher: &mut DefaultHasher) {
+  tracks.len().hash(hasher);
+  for track in tracks {
+    hash_grid_track(track, hasher);
+  }
+}
+
+fn hash_named_lines_map(map: &HashMap<String, Vec<usize>>, hasher: &mut DefaultHasher) {
+  let mut entries: Vec<_> = map.iter().collect();
+  entries.sort_by(|a, b| a.0.cmp(b.0));
+  entries.len().hash(hasher);
+  for (name, positions) in entries {
+    name.hash(hasher);
+    positions.hash(hasher);
+  }
+}
+
+fn hash_template_areas(areas: &[Vec<Option<String>>], hasher: &mut DefaultHasher) {
+  areas.len().hash(hasher);
+  for row in areas {
+    row.len().hash(hasher);
+    for cell in row {
+      match cell {
+        Some(name) => {
+          1u8.hash(hasher);
+          name.hash(hasher);
+        }
+        None => 0u8.hash(hasher),
+      }
+    }
+  }
+}
+
+fn subtree_contains_subgrid(node: &BoxNode) -> bool {
+  if node.style.grid_row_subgrid
+    || node.style.grid_column_subgrid
+    || !node.style.subgrid_row_line_names.is_empty()
+    || !node.style.subgrid_column_line_names.is_empty()
+  {
+    return true;
+  }
+  node.children.iter().any(subtree_contains_subgrid)
 }
 
 fn layout_constraints_hash(constraints: &LayoutConstraints) -> u64 {
@@ -326,6 +418,41 @@ pub(crate) fn layout_style_fingerprint(style: &Arc<ComputedStyle>) -> u64 {
   hash_option_length(&style.column_width, &mut h);
   hash_enum_discriminant(&style.column_count, &mut h);
   hash_length(&style.column_gap, &mut h);
+  hash_enum_discriminant(&style.grid_auto_flow, &mut h);
+  hash_grid_tracks(&style.grid_template_columns, &mut h);
+  hash_grid_tracks(&style.grid_template_rows, &mut h);
+  hash_grid_tracks(&style.grid_auto_columns, &mut h);
+  hash_grid_tracks(&style.grid_auto_rows, &mut h);
+  hash_length(&style.grid_gap, &mut h);
+  hash_length(&style.grid_row_gap, &mut h);
+  hash_length(&style.grid_column_gap, &mut h);
+  style.grid_row_subgrid.hash(&mut h);
+  style.grid_column_subgrid.hash(&mut h);
+  hash_string_vecs(&style.subgrid_row_line_names, &mut h);
+  hash_string_vecs(&style.subgrid_column_line_names, &mut h);
+  hash_string_vecs(&style.grid_row_line_names, &mut h);
+  hash_string_vecs(&style.grid_column_line_names, &mut h);
+  hash_named_lines_map(&style.grid_row_names, &mut h);
+  hash_named_lines_map(&style.grid_column_names, &mut h);
+  hash_template_areas(&style.grid_template_areas, &mut h);
+  style.grid_column_start.hash(&mut h);
+  style.grid_column_end.hash(&mut h);
+  style.grid_row_start.hash(&mut h);
+  style.grid_row_end.hash(&mut h);
+  match &style.grid_column_raw {
+    Some(raw) => {
+      1u8.hash(&mut h);
+      raw.hash(&mut h);
+    }
+    None => 0u8.hash(&mut h),
+  }
+  match &style.grid_row_raw {
+    Some(raw) => {
+      1u8.hash(&mut h);
+      raw.hash(&mut h);
+    }
+    None => 0u8.hash(&mut h),
+  }
   style.containment.size.hash(&mut h);
   style.containment.inline_size.hash(&mut h);
   style.containment.layout.hash(&mut h);
@@ -398,6 +525,7 @@ fn layout_cache_key(
     constraints_hash,
     fragmentation_hash,
     viewport_hash: pack_viewport_size(viewport),
+    subgrid_dependent: subtree_contains_subgrid(box_node),
   })
 }
 
@@ -409,6 +537,18 @@ fn layout_cache_clear() {
       LAYOUT_CACHE_EVICTIONS.with(|counter| counter.set(counter.get() + evicted));
     }
     map.clear();
+  });
+}
+
+fn evict_cache_entries_for_box(box_id: usize) {
+  LAYOUT_RESULT_CACHE.with(|cache| {
+    let mut map = cache.borrow_mut();
+    let before = map.len();
+    map.retain(|existing_key, _| existing_key.box_id != box_id);
+    let evicted = before.saturating_sub(map.len());
+    if evicted > 0 {
+      LAYOUT_CACHE_EVICTIONS.with(|counter| counter.set(counter.get() + evicted));
+    }
   });
 }
 
@@ -454,6 +594,10 @@ pub(crate) fn layout_cache_lookup(
   viewport: Size,
 ) -> Option<FragmentNode> {
   let key = layout_cache_key(box_node, fc_type, constraints, viewport)?;
+  if key.subgrid_dependent {
+    evict_cache_entries_for_box(key.box_id);
+    return None;
+  }
   LAYOUT_CACHE_LOOKUPS.with(|counter| counter.set(counter.get() + 1));
   let epoch = LAYOUT_CACHE_EPOCH.with(|cell| cell.get());
 
@@ -491,6 +635,10 @@ pub(crate) fn layout_cache_store(
     Some(k) => k,
     None => return,
   };
+  if key.subgrid_dependent {
+    evict_cache_entries_for_box(key.box_id);
+    return;
+  }
 
   let epoch = LAYOUT_CACHE_EPOCH.with(|cell| cell.get());
   LAYOUT_RESULT_CACHE.with(|cache| {

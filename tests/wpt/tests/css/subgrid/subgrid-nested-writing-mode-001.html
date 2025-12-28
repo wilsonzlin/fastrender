@@ -1,0 +1,53 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>nested subgrid writing mode inherits parent tracks</title>
+<link rel="match" href="subgrid-nested-writing-mode-001-ref.html" />
+<style>
+  .container {
+    display: grid;
+    grid-template-columns: 28px 42px;
+    grid-template-rows: auto;
+    column-gap: 5px;
+    width: 75px;
+    padding: 4px;
+    background: #f0f0f0;
+  }
+
+  .outer {
+    display: grid;
+    grid-template-columns: subgrid;
+    grid-template-rows: subgrid;
+    writing-mode: vertical-rl;
+    background: rgba(0, 128, 0, 0.08);
+    gap: inherit;
+  }
+
+  .inner {
+    display: grid;
+    grid-template-columns: subgrid;
+    grid-template-rows: subgrid;
+    writing-mode: vertical-rl;
+    background: rgba(0, 0, 255, 0.05);
+    gap: inherit;
+  }
+
+  .a {
+    grid-column: 1;
+    height: 12px;
+    background: salmon;
+  }
+
+  .b {
+    grid-column: 2;
+    height: 12px;
+    background: skyblue;
+  }
+</style>
+<div class="container">
+  <div class="outer">
+    <div class="inner">
+      <div class="a"></div>
+      <div class="b"></div>
+    </div>
+  </div>
+</div>

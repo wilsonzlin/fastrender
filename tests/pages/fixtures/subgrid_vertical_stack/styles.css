@@ -1,0 +1,40 @@
+.wrap {
+  display: grid;
+  grid-template-columns: 240px;
+  grid-template-rows: 60px 140px;
+  padding: 18px;
+  background: #f3f4f6;
+  gap: 12px;
+  font-family: "Inter", "Segoe UI", sans-serif;
+  color: #111827;
+  width: max-content;
+}
+
+.header {
+  font-weight: 600;
+}
+
+.subgrid {
+  display: grid;
+  writing-mode: vertical-rl;
+  grid-template-rows: subgrid;
+  grid-template-columns: 120px 80px;
+  background: #e0f2fe;
+  border-radius: 6px;
+  padding: 10px;
+  gap: 8px;
+}
+
+.cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  border-radius: 6px;
+  background: #0ea5e9;
+  color: white;
+}
+
+.second {
+  background: #22c55e;
+}

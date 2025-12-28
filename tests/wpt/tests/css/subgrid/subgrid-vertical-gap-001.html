@@ -1,0 +1,26 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>subgrid vertical gap</title>
+<style>
+.container {
+  display: grid;
+  grid-template-columns: 80px;
+  grid-template-rows: 40px 40px 40px;
+  row-gap: 6px;
+}
+.subgrid {
+  grid-row: 1 / 4;
+  display: grid;
+  grid-template-rows: subgrid;
+}
+.a { grid-row: 1 / 2; background: #fb7185; height: 100%; }
+.b { grid-row: 2 / 3; background: #22d3ee; height: 100%; }
+.c { grid-row: 3 / 4; background: #4ade80; height: 100%; }
+</style>
+<div class="container">
+  <div class="subgrid">
+    <div class="a"></div>
+    <div class="b"></div>
+    <div class="c"></div>
+  </div>
+</div>

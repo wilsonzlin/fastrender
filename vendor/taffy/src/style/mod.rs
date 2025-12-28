@@ -517,6 +517,12 @@ pub struct Style<S: CheapCloneStr = DefaultCheapStr> {
   /// Whether the column axis is a subgrid of the parent grid
   #[cfg(feature = "grid")]
   pub subgrid_columns: bool,
+  /// Whether the inline/block axes were transposed before being converted to Taffy's physical axes.
+  ///
+  /// This is set by integrators when mapping writing-mode dependent axes into Taffy's fixed
+  /// horizontal/vertical interpretation so subgrid inheritance can remap track data correctly.
+  #[cfg(feature = "grid")]
+  pub axes_swapped: bool,
   /// Line names supplied on a row subgrid
   #[cfg(feature = "grid")]
   pub subgrid_row_names: GridTrackVec<GridTrackVec<S>>,
@@ -613,6 +619,8 @@ impl<S: CheapCloneStr> Style<S> {
     subgrid_rows: false,
     #[cfg(feature = "grid")]
     subgrid_columns: false,
+    #[cfg(feature = "grid")]
+    axes_swapped: false,
     #[cfg(feature = "grid")]
     subgrid_row_names: GridTrackVec::new(),
     #[cfg(feature = "grid")]

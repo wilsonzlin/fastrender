@@ -1,0 +1,30 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>subgrid row writing-mode reference</title>
+<style>
+.container {
+  display: grid;
+  writing-mode: vertical-rl;
+  grid-template-columns: 40px 40px;
+  grid-template-rows: 60px 80px;
+  row-gap: 10px;
+  background: #e2e8f0;
+}
+.subgrid {
+  grid-column: 1 / 3;
+  grid-row: 1 / 3;
+  display: grid;
+  grid-template-columns: 40px 40px;
+  grid-template-rows: 60px 80px;
+  row-gap: 10px;
+}
+.top { grid-row: 1 / 2; background: #a855f7; }
+.bottom { grid-row: 2 / 3; background: #06b6d4; }
+.cell { width: 100%; height: 100%; }
+</style>
+<div class="container">
+  <div class="subgrid">
+    <div class="cell top"></div>
+    <div class="cell bottom"></div>
+  </div>
+</div>

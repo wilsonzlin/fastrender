@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Nested subgrid axes override regression</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="frame">
+      <h1>Nested subgrid axes override</h1>
+      <p class="lede">
+        Both subgrids below inherit the parent column tracks even though their writing mode is vertical.
+      </p>
+      <div class="legend">
+        <span class="swatch first"></span><span class="label">first column</span>
+        <span class="swatch second"></span><span class="label">second column</span>
+      </div>
+      <div class="grid">
+        <div class="outer">
+          <div class="inner">
+            <div class="cell first">A</div>
+            <div class="cell second">B</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

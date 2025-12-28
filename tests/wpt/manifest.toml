@@ -2,216 +2,392 @@
 id = "columns/multicol-001"
 path = "columns/multicol-001.html"
 test_type = "visual"
-viewport = { width = 800, height = 600 }
-dpr = 1.0
 expected = "pass"
 timeout_ms = 20000
+dpr = 1.0
+
+[tests.viewport]
+width = 800
+height = 600
+
+[[tests]]
+id = "css/subgrid/subgrid-basic-001"
+path = "css/subgrid/subgrid-basic-001.html"
+reference = "css/subgrid/subgrid-basic-001-ref.html"
+test_type = "reftest"
+expected = "pass"
+timeout_ms = 20000
+dpr = 1.0
+
+[tests.viewport]
+width = 800
+height = 600
+
+[[tests]]
+id = "css/subgrid/subgrid-direction-rtl-001"
+path = "css/subgrid/subgrid-direction-rtl-001.html"
+reference = "css/subgrid/subgrid-direction-rtl-001-ref.html"
+test_type = "reftest"
+expected = "pass"
+timeout_ms = 20000
+dpr = 1.0
+
+[tests.viewport]
+width = 800
+height = 600
+
+[[tests]]
+id = "css/subgrid/subgrid-gap-alignment-001"
+path = "css/subgrid/subgrid-gap-alignment-001.html"
+reference = "css/subgrid/subgrid-gap-alignment-001-ref.html"
+test_type = "reftest"
+expected = "pass"
+timeout_ms = 12000
+dpr = 1.0
+
+[tests.viewport]
+width = 120
+height = 120
+
+[[tests]]
+id = "css/subgrid/subgrid-justify-items-001"
+path = "css/subgrid/subgrid-justify-items-001.html"
+reference = "css/subgrid/subgrid-justify-items-001-ref.html"
+test_type = "reftest"
+expected = "pass"
+timeout_ms = 20000
+dpr = 1.0
+
+[tests.viewport]
+width = 800
+height = 600
+
+[[tests]]
+id = "css/subgrid/subgrid-row-writing-mode-002"
+path = "css/subgrid/subgrid-row-writing-mode-002.html"
+reference = "css/subgrid/subgrid-row-writing-mode-002-ref.html"
+test_type = "reftest"
+expected = "pass"
+timeout_ms = 12000
+dpr = 1.0
+
+[tests.viewport]
+width = 200
+height = 120
+
+[[tests]]
+id = "css/subgrid/subgrid-nested-writing-mode-001"
+path = "css/subgrid/subgrid-nested-writing-mode-001.html"
+reference = "css/subgrid/subgrid-nested-writing-mode-001-ref.html"
+test_type = "reftest"
+expected = "pass"
+timeout_ms = 20000
+dpr = 1.0
+
+[tests.viewport]
+width = 120
+height = 120
+
+[[tests]]
+id = "css/subgrid/subgrid-vertical-gap-001"
+path = "css/subgrid/subgrid-vertical-gap-001.html"
+reference = "css/subgrid/subgrid-vertical-gap-001-ref.html"
+test_type = "reftest"
+expected = "pass"
+timeout_ms = 20000
+dpr = 1.0
+
+[tests.viewport]
+width = 800
+height = 600
+
+[[tests]]
+id = "css/subgrid/subgrid-writing-mode-001"
+path = "css/subgrid/subgrid-writing-mode-001.html"
+reference = "css/subgrid/subgrid-writing-mode-001-ref.html"
+test_type = "reftest"
+expected = "pass"
+timeout_ms = 20000
+dpr = 1.0
+
+[tests.viewport]
+width = 800
+height = 600
 
 [[tests]]
 id = "forms/form-basics-001"
 path = "forms/form-basics-001.html"
 test_type = "visual"
-viewport = { width = 800, height = 600 }
-dpr = 1.0
 expected = "pass"
 timeout_ms = 20000
+dpr = 1.0
+
+[tests.viewport]
+width = 800
+height = 600
 
 [[tests]]
 id = "forms/form-styled-002"
 path = "forms/form-styled-002.html"
 test_type = "visual"
-viewport = { width = 420, height = 320 }
-dpr = 1.0
 expected = "pass"
 timeout_ms = 20000
-
-[[tests]]
-id = "layout/block-basic-001"
-path = "layout/block-basic-001.html"
-test_type = "visual"
-viewport = { width = 480, height = 320 }
 dpr = 1.0
-expected = "pass"
-timeout_ms = 12000
 
-[[tests]]
-id = "layout/flex-row-001"
-path = "layout/flex-row-001.html"
-test_type = "visual"
-viewport = { width = 500, height = 260 }
-dpr = 1.0
-expected = "pass"
-timeout_ms = 12000
-
-[[tests]]
-id = "layout/grid-basic-001"
-path = "layout/grid-basic-001.html"
-test_type = "visual"
-viewport = { width = 460, height = 260 }
-dpr = 1.25
-expected = "pass"
-timeout_ms = 12000
+[tests.viewport]
+width = 420
+height = 320
 
 [[tests]]
 id = "layout/abs-position-001"
 path = "layout/abs-position-001.html"
 test_type = "visual"
-viewport = { width = 480, height = 280 }
-dpr = 1.0
 expected = "pass"
 timeout_ms = 12000
+dpr = 1.0
+
+[tests.viewport]
+width = 480
+height = 280
+
+[[tests]]
+id = "layout/block-basic-001"
+path = "layout/block-basic-001.html"
+test_type = "visual"
+expected = "pass"
+timeout_ms = 12000
+dpr = 1.0
+
+[tests.viewport]
+width = 480
+height = 320
+
+[[tests]]
+id = "layout/flex-row-001"
+path = "layout/flex-row-001.html"
+test_type = "visual"
+expected = "pass"
+timeout_ms = 12000
+dpr = 1.0
+
+[tests.viewport]
+width = 500
+height = 260
+
+[[tests]]
+id = "layout/grid-basic-001"
+path = "layout/grid-basic-001.html"
+test_type = "visual"
+expected = "pass"
+timeout_ms = 12000
+dpr = 1.25
+
+[tests.viewport]
+width = 460
+height = 260
 
 [[tests]]
 id = "paint/border-radius-001"
 path = "paint/border-radius-001.html"
 test_type = "visual"
-viewport = { width = 460, height = 260 }
-dpr = 1.0
 expected = "pass"
 timeout_ms = 12000
+dpr = 1.0
 
-[[tests]]
-id = "paint/box-shadow-001"
-path = "paint/box-shadow-001.html"
-test_type = "visual"
-viewport = { width = 460, height = 280 }
-dpr = 1.0
-expected = "pass"
-timeout_ms = 12000
+[tests.viewport]
+width = 460
+height = 260
 
 [[tests]]
 id = "paint/border-styles-001"
 path = "paint/border-styles-001.html"
 test_type = "visual"
-viewport = { width = 460, height = 220 }
-dpr = 1.0
 expected = "pass"
 timeout_ms = 12000
+dpr = 1.0
+
+[tests.viewport]
+width = 460
+height = 220
 
 [[tests]]
-id = "text/letter-spacing-001"
-path = "text/letter-spacing-001.html"
+id = "paint/box-shadow-001"
+path = "paint/box-shadow-001.html"
 test_type = "visual"
-viewport = { width = 460, height = 220 }
-dpr = 1.0
 expected = "pass"
 timeout_ms = 12000
-
-[[tests]]
-id = "text/text-align-001"
-path = "text/text-align-001.html"
-test_type = "visual"
-viewport = { width = 420, height = 200 }
 dpr = 1.0
-expected = "pass"
-timeout_ms = 12000
 
-[[tests]]
-id = "text/line-height-001"
-path = "text/line-height-001.html"
-test_type = "visual"
-viewport = { width = 460, height = 260 }
-dpr = 1.0
-expected = "pass"
-timeout_ms = 12000
-
-[[tests]]
-id = "transforms/transform-rotate-001"
-path = "transforms/transform-rotate-001.html"
-test_type = "visual"
-viewport = { width = 800, height = 600 }
-dpr = 1.0
-expected = "pass"
-timeout_ms = 20000
-
-[[tests]]
-id = "transforms/transform-scale-001"
-path = "transforms/transform-scale-001.html"
-test_type = "visual"
-viewport = { width = 420, height = 240 }
-dpr = 1.5
-expected = "pass"
-timeout_ms = 12000
-
-[[tests]]
-id = "transforms/perspective-property-001"
-path = "transforms/perspective-property-001.html"
-test_type = "reftest"
-reference = "transforms/perspective-property-001-ref.html"
-viewport = { width = 420, height = 320 }
-dpr = 1.0
-expected = "pass"
-timeout_ms = 20000
-
-[[tests]]
-id = "transforms/perspective-preserve-3d-001"
-path = "transforms/perspective-preserve-3d-001.html"
-test_type = "reftest"
-reference = "transforms/perspective-preserve-3d-001-ref.html"
-viewport = { width = 440, height = 340 }
-dpr = 1.0
-expected = "pass"
-timeout_ms = 20000
-
-[[tests]]
-id = "style/media-list-or-001"
-path = "style/media-list-or-001.html"
-test_type = "visual"
-viewport = { width = 240, height = 220 }
-dpr = 1.0
-expected = "pass"
-timeout_ms = 12000
+[tests.viewport]
+width = 460
+height = 280
 
 [[tests]]
 id = "style/layer-important-inversion-001"
 path = "style/layer-important-inversion-001.html"
 test_type = "visual"
-viewport = { width = 240, height = 220 }
-dpr = 1.0
 expected = "pass"
 timeout_ms = 12000
+dpr = 1.0
+
+[tests.viewport]
+width = 240
+height = 220
+
+[[tests]]
+id = "style/media-list-or-001"
+path = "style/media-list-or-001.html"
+test_type = "visual"
+expected = "pass"
+timeout_ms = 12000
+dpr = 1.0
+
+[tests.viewport]
+width = 240
+height = 220
 
 [[tests]]
 id = "style/scope-basic-001"
 path = "style/scope-basic-001.html"
 test_type = "visual"
-viewport = { width = 280, height = 180 }
-dpr = 1.0
 expected = "pass"
 timeout_ms = 12000
+dpr = 1.0
+
+[tests.viewport]
+width = 280
+height = 180
 
 [[tests]]
 id = "style/var-fallback-001"
 path = "style/var-fallback-001.html"
 test_type = "visual"
-viewport = { width = 220, height = 220 }
-dpr = 1.0
 expected = "pass"
 timeout_ms = 12000
+dpr = 1.0
+
+[tests.viewport]
+width = 220
+height = 220
 
 [[tests]]
-id = "transforms/transform-preserve3d-z-order-001"
-path = "transforms/transform-preserve3d-z-order-001.html"
-test_type = "reftest"
-viewport = { width = 200, height = 200 }
-dpr = 1.0
+id = "text/letter-spacing-001"
+path = "text/letter-spacing-001.html"
+test_type = "visual"
 expected = "pass"
 timeout_ms = 12000
+dpr = 1.0
+
+[tests.viewport]
+width = 460
+height = 220
+
+[[tests]]
+id = "text/line-height-001"
+path = "text/line-height-001.html"
+test_type = "visual"
+expected = "pass"
+timeout_ms = 12000
+dpr = 1.0
+
+[tests.viewport]
+width = 460
+height = 260
+
+[[tests]]
+id = "text/text-align-001"
+path = "text/text-align-001.html"
+test_type = "visual"
+expected = "pass"
+timeout_ms = 12000
+dpr = 1.0
+
+[tests.viewport]
+width = 420
+height = 200
+
+[[tests]]
+id = "transforms/perspective-preserve-3d-001"
+path = "transforms/perspective-preserve-3d-001.html"
+reference = "transforms/perspective-preserve-3d-001-ref.html"
+test_type = "reftest"
+expected = "pass"
+timeout_ms = 20000
+dpr = 1.0
+
+[tests.viewport]
+width = 440
+height = 340
+
+[[tests]]
+id = "transforms/perspective-property-001"
+path = "transforms/perspective-property-001.html"
+reference = "transforms/perspective-property-001-ref.html"
+test_type = "reftest"
+expected = "pass"
+timeout_ms = 20000
+dpr = 1.0
+
+[tests.viewport]
+width = 420
+height = 320
 
 [[tests]]
 id = "transforms/transform-preserve3d-nested-001"
 path = "transforms/transform-preserve3d-nested-001.html"
 test_type = "reftest"
-viewport = { width = 200, height = 200 }
-dpr = 1.0
 expected = "pass"
 timeout_ms = 12000
+dpr = 1.0
+
+[tests.viewport]
+width = 200
+height = 200
 
 [[tests]]
 id = "transforms/transform-preserve3d-opacity-flattens-001"
 path = "transforms/transform-preserve3d-opacity-flattens-001.html"
 test_type = "reftest"
-viewport = { width = 200, height = 200 }
-dpr = 1.0
 expected = "pass"
 timeout_ms = 12000
+dpr = 1.0
+
+[tests.viewport]
+width = 200
+height = 200
+
+[[tests]]
+id = "transforms/transform-preserve3d-z-order-001"
+path = "transforms/transform-preserve3d-z-order-001.html"
+test_type = "reftest"
+expected = "pass"
+timeout_ms = 12000
+dpr = 1.0
+
+[tests.viewport]
+width = 200
+height = 200
+
+[[tests]]
+id = "transforms/transform-rotate-001"
+path = "transforms/transform-rotate-001.html"
+test_type = "visual"
+expected = "pass"
+timeout_ms = 20000
+dpr = 1.0
+
+[tests.viewport]
+width = 800
+height = 600
+
+[[tests]]
+id = "transforms/transform-scale-001"
+path = "transforms/transform-scale-001.html"
+test_type = "visual"
+expected = "pass"
+timeout_ms = 12000
+dpr = 1.5
+
+[tests.viewport]
+width = 420
+height = 240

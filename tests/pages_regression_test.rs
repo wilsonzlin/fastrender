@@ -98,6 +98,36 @@ const PAGE_FIXTURES: &[PageFixture] = &[
     shots: DEFAULT_SHOTS,
   },
   PageFixture {
+    name: "subgrid_showcase",
+    html: "subgrid_showcase/index.html",
+    shots: DEFAULT_SHOTS,
+  },
+  PageFixture {
+    name: "subgrid_alignment",
+    html: "subgrid_alignment/index.html",
+    shots: DEFAULT_SHOTS,
+  },
+  PageFixture {
+    name: "subgrid_writing_mode_gap",
+    html: "subgrid_writing_mode_gap/index.html",
+    shots: DEFAULT_SHOTS,
+  },
+  PageFixture {
+    name: "subgrid_vertical_inheritance",
+    html: "subgrid_vertical_inheritance/index.html",
+    shots: DEFAULT_SHOTS,
+  },
+  PageFixture {
+    name: "subgrid_vertical_stack",
+    html: "subgrid_vertical_stack/index.html",
+    shots: DEFAULT_SHOTS,
+  },
+  PageFixture {
+    name: "subgrid_nested_axes",
+    html: "subgrid_nested_axes/index.html",
+    shots: DEFAULT_SHOTS,
+  },
+  PageFixture {
     name: "form_controls",
     html: "form_controls/index.html",
     shots: DEFAULT_SHOTS,
