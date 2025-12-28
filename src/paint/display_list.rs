@@ -41,6 +41,7 @@ use crate::geometry::Rect;
 use crate::geometry::Size;
 use crate::paint::clip_path::ResolvedClipPath;
 use crate::paint::homography::Homography;
+use crate::paint::optimize::DisplayListOptimizer;
 use crate::style::color::Rgba;
 use crate::style::types::BackfaceVisibility;
 use crate::style::types::BackgroundImage;
@@ -156,20 +157,40 @@ impl DisplayItem {
   pub fn bounds(&self) -> Option<Rect> {
     match self {
       DisplayItem::FillRect(item) => Some(item.rect),
-      DisplayItem::StrokeRect(item) => Some(item.rect),
+      DisplayItem::StrokeRect(item) => Some(item.rect.inflate(item.width * 0.5)),
       DisplayItem::FillRoundedRect(item) => Some(item.rect),
-      DisplayItem::StrokeRoundedRect(item) => Some(item.rect),
+      DisplayItem::StrokeRoundedRect(item) => Some(item.rect.inflate(item.width * 0.5)),
       DisplayItem::Outline(item) => Some(item.outer_rect()),
       DisplayItem::Text(item) => Some(text_bounds(item)),
       DisplayItem::Image(item) => Some(item.dest_rect),
       DisplayItem::BoxShadow(item) => {
-        // Box shadow extends beyond rect by blur + spread
-        Some(item.rect.inflate(item.blur_radius + item.spread_radius))
+        if item.inset {
+          Some(item.rect)
+        } else {
+          let blur_outset = item.blur_radius.abs() * 3.0;
+          let spread = item.spread_radius;
+          let shadow_rect = Rect::from_xywh(
+            item.rect.x() + item.offset.x - spread,
+            item.rect.y() + item.offset.y - spread,
+            item.rect.width() + spread * 2.0,
+            item.rect.height() + spread * 2.0,
+          )
+          .inflate(blur_outset);
+          Some(shadow_rect)
+        }
       }
       DisplayItem::LinearGradient(item) => Some(item.rect),
       DisplayItem::RadialGradient(item) => Some(item.rect),
       DisplayItem::ConicGradient(item) => Some(item.rect),
-      DisplayItem::Border(item) => Some(item.rect),
+      DisplayItem::Border(item) => {
+        let max_w = item
+          .top
+          .width
+          .max(item.right.width)
+          .max(item.bottom.width)
+          .max(item.left.width);
+        Some(item.rect.inflate(max_w * 0.5))
+      }
       DisplayItem::ListMarker(item) => Some(list_marker_bounds(item)),
       DisplayItem::PushClip(item) => Some(match &item.shape {
         ClipShape::Rect { rect, .. } => *rect,
@@ -2040,6 +2061,14 @@ impl DisplayList {
     }
 
     DisplayList::from_items(culled_items)
+  }
+
+  /// Create a display list containing only items that intersect the viewport.
+  ///
+  /// This preserves the necessary stack operations (clips, transforms, opacity)
+  /// required for correct rendering even when some items are excluded.
+  pub fn intersecting(&self, viewport: Rect) -> DisplayList {
+    DisplayListOptimizer::new().intersect(self, viewport)
   }
 
   /// Optimize the display list

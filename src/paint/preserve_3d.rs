@@ -374,16 +374,15 @@ mod tests {
   use crate::style::types::BackfaceVisibility;
 
   fn basic_context(transform: Transform3D, z: f32) -> StackingContextItem {
-    let bounds = Rect::from_xywh(0.0, 0.0, 10.0, 10.0);
     StackingContextItem {
       z_index: 0,
       creates_stacking_context: true,
-      bounds,
-      plane_rect: bounds,
+      bounds: Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+      plane_rect: Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
       mix_blend_mode: crate::paint::display_list::BlendMode::Normal,
       is_isolated: false,
-      child_perspective: None,
       transform: Some(transform.multiply(&Transform3D::translate(0.0, 0.0, z))),
+      child_perspective: None,
       transform_style: TransformStyle::Preserve3d,
       backface_visibility: BackfaceVisibility::Visible,
       filters: Vec::new(),
@@ -440,8 +439,8 @@ mod tests {
       plane_rect: Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
       mix_blend_mode: crate::paint::display_list::BlendMode::Normal,
       is_isolated: false,
-      child_perspective: None,
       transform: None,
+      child_perspective: None,
       transform_style: TransformStyle::Preserve3d,
       backface_visibility: BackfaceVisibility::Visible,
       filters: Vec::new(),
@@ -494,8 +493,8 @@ mod tests {
       plane_rect: Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
       mix_blend_mode: crate::paint::display_list::BlendMode::Normal,
       is_isolated: false,
-      child_perspective: None,
       transform: None,
+      child_perspective: None,
       transform_style: TransformStyle::Preserve3d,
       backface_visibility: BackfaceVisibility::Visible,
       filters: Vec::new(),

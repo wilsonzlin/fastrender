@@ -34,7 +34,6 @@ mod selector_indexing_test;
 mod shadow_dom_scoping_test;
 mod shadow_host_selector_test;
 mod shadow_host_selectors_test;
-mod shadow_part_shadow_scope_test;
 mod shadow_part_test;
 mod shadow_slot_focus_within_test;
 mod shadow_slotted_test;

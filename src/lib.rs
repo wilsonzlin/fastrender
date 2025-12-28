@@ -303,6 +303,7 @@ pub use paint::display_list::TextItem as PaintTextItem;
 pub use paint::display_list::Transform2D;
 pub use paint::display_list::Transform3D;
 pub use paint::display_list::TransformItem;
+pub use paint::display_list_renderer::PaintParallelism;
 pub use paint::homography::Homography;
 pub use paint::optimize::DisplayListOptimizer;
 pub use paint::optimize::OptimizationConfig;

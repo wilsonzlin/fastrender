@@ -3,7 +3,6 @@ mod common;
 use clap::Parser;
 use common::args::{parse_viewport, MediaPreferenceArgs};
 use common::media_prefs::MediaPreferences;
-use fastrender::animation;
 use fastrender::api::FastRender;
 use fastrender::css::encoding::decode_css_bytes;
 use fastrender::css::loader::absolutize_css_urls;
@@ -27,14 +26,12 @@ use fastrender::resource::HttpFetcher;
 use fastrender::resource::ResourceFetcher;
 use fastrender::resource::DEFAULT_ACCEPT_LANGUAGE;
 use fastrender::resource::DEFAULT_USER_AGENT;
-use fastrender::scroll::ScrollState;
 use fastrender::style::cascade::apply_styles_with_media_and_target;
 use fastrender::style::cascade::StyledNode;
 use fastrender::style::computed::Visibility;
 use fastrender::style::display::Display;
 use fastrender::style::media::MediaType;
 use fastrender::style::position::Position;
-use fastrender::style::types::Overflow;
 use fastrender::style::ComputedStyle;
 use fastrender::tree::box_generation::generate_box_tree_with_anonymous_fixup;
 use fastrender::tree::box_tree::BoxNode;
@@ -46,25 +43,6 @@ use std::env;
 use std::fs;
 use std::time::Duration;
 use url::Url;
-
-fn parse_scroll_element(raw: &str) -> Result<(usize, Point), String> {
-  let (id_raw, coords) = raw
-    .split_once(':')
-    .ok_or_else(|| "expected <id>:<x>,<y>".to_string())?;
-  let (x_raw, y_raw) = coords
-    .split_once(',')
-    .ok_or_else(|| "expected <id>:<x>,<y>".to_string())?;
-  let id = id_raw
-    .parse::<usize>()
-    .map_err(|_| format!("invalid box id: {id_raw}"))?;
-  let x = x_raw
-    .parse::<f32>()
-    .map_err(|_| format!("invalid scroll x: {x_raw}"))?;
-  let y = y_raw
-    .parse::<f32>()
-    .map_err(|_| format!("invalid scroll y: {y_raw}"))?;
-  Ok((id, Point::new(x, y)))
-}
 
 /// Inspect fragment tree for a given HTML file
 #[derive(Parser, Debug)]
@@ -88,10 +66,6 @@ struct Args {
   /// Vertical scroll offset in CSS px
   #[arg(long, default_value = "0.0")]
   scroll_y: f32,
-
-  /// Scroll offsets for element scroll containers using box IDs (`<id>:<x>,<y>`).
-  #[arg(long = "scroll-element", value_parser = parse_scroll_element)]
-  scroll_elements: Vec<(usize, Point)>,
 
   #[command(flatten)]
   media_prefs: MediaPreferenceArgs,
@@ -166,26 +140,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   media_prefs.apply_env();
 
-  let mut element_scrolls: HashMap<usize, Point> = HashMap::new();
-  for (id, offset) in &args.scroll_elements {
-    element_scrolls.insert(*id, *offset);
-  }
-  let scroll_state = ScrollState::from_parts(
-    Point::new(args.scroll_x, args.scroll_y),
-    element_scrolls.clone(),
-  );
-
   if args.scroll_x != 0.0 || args.scroll_y != 0.0 {
     eprintln!(
       "Applying scroll offset: x={:.1}px y={:.1}px",
       args.scroll_x, args.scroll_y
     );
-  }
-  if !element_scrolls.is_empty() {
-    eprintln!("Element scroll offsets:");
-    for (id, offset) in &element_scrolls {
-      eprintln!("  id {id}: ({:.1}, {:.1})", offset.x, offset.y);
-    }
   }
 
   let mut renderer = FastRender::builder().device_pixel_ratio(args.dpr).build()?;
@@ -361,16 +320,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
               style.color.a
             ));
             if let Some(bg_var) = style.custom_properties.get("--theme-header__background") {
-              summary.push_str(&format!(
-                " var(--theme-header__background)={}",
-                bg_var.value
-              ));
+              summary.push_str(&format!(" var(--theme-header__background)={bg_var}"));
             }
             if let Some(copy_var) = style.custom_properties.get("--theme-header__copy-accent") {
-              summary.push_str(&format!(
-                " var(--theme-header__copy-accent)={}",
-                copy_var.value
-              ));
+              summary.push_str(&format!(" var(--theme-header__copy-accent)={copy_var}"));
             }
             header_styles.push((style.clone(), summary));
           }
@@ -389,10 +342,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
           style.color.a
         ));
         if let Some(bg_var) = style.custom_properties.get("--semantic-color-bg-primary") {
-          summary.push_str(&format!(
-            " var(--semantic-color-bg-primary)={}",
-            bg_var.value
-          ));
+          summary.push_str(&format!(" var(--semantic-color-bg-primary)={bg_var}"));
         }
         body_styles.push((style.clone(), summary));
       }
@@ -517,12 +467,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     layout_config = LayoutConfig::for_pagination(Size::new(viewport_w as f32, page_height), gap);
   }
   let engine = LayoutEngine::with_font_context(layout_config, renderer.font_context().clone());
-  let mut fragment_tree = engine.layout_tree(&box_tree)?;
-  let mut scroll_state = scroll_state;
-  let snap = fastrender::scroll::apply_scroll_snap(&mut fragment_tree, &scroll_state);
-  scroll_state = snap.state;
-  animation::apply_scroll_driven_animations(&mut fragment_tree, &scroll_state);
-  renderer.apply_sticky_offsets_to_tree_with_scroll_state(&mut fragment_tree, &scroll_state);
+  let fragment_tree = engine.layout_tree(&box_tree)?;
+  let scroll_offset = Point::new(-args.scroll_x, -args.scroll_y);
   let mut box_debug: HashMap<usize, String> = HashMap::new();
   collect_box_debug(&box_tree.root, &mut box_debug);
   let mut box_styles: HashMap<usize, std::sync::Arc<ComputedStyle>> = HashMap::new();
@@ -606,7 +552,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   }
 
   println!("fragments: {}", fragment_tree.fragment_count());
-  let root_contexts = fragment_roots(&fragment_tree, &scroll_state);
+  let root_contexts = fragment_roots(&fragment_tree, scroll_offset);
   println!("fragment roots (applied offsets):");
   for ctx in &root_contexts {
     let frag = ctx.fragment;
@@ -642,15 +588,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       ctx.base,
       ctx.include_base,
       ctx.index,
-      &scroll_state,
       &mut fragments_abs,
     );
   }
 
   let mut fragments_by_box: HashMap<usize, Vec<(Rect, &FragmentNode, usize)>> = HashMap::new();
   let mut transformed: Vec<(Rect, &FragmentNode, usize, Option<Transform3D>)> = Vec::new();
-  let mut scroll_candidates: Vec<(usize, Rect, usize, Rect, Overflow, Overflow)> = Vec::new();
-  let mut seen_scroll_candidates: HashSet<usize> = HashSet::new();
 
   let mut text_count = 0;
   let mut block_count = 0;
@@ -688,22 +631,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .push((*abs, *frag, *root_idx));
     }
     if let Some(style) = frag.style.as_deref() {
-      let scrollable_x = matches!(style.overflow_x, Overflow::Scroll | Overflow::Auto);
-      let scrollable_y = matches!(style.overflow_y, Overflow::Scroll | Overflow::Auto);
-      if (scrollable_x || scrollable_y) && style.display != Display::None {
-        if let Some(id) = fragment_box_id(frag) {
-          if seen_scroll_candidates.insert(id) {
-            scroll_candidates.push((
-              id,
-              *abs,
-              *root_idx,
-              frag.scroll_overflow,
-              style.overflow_x,
-              style.overflow_y,
-            ));
-          }
-        }
-      }
       if !style.transform.is_empty() {
         let matrix = DisplayListBuilder::debug_resolve_transform(
           style,
@@ -720,34 +647,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     text_count, block_count, line_count, replaced_count
   );
   println!("bbox [{minx:.1},{miny:.1}] -> [{maxx:.1},{maxy:.1}]");
-
-  if scroll_candidates.is_empty() {
-    println!("scroll container candidates: none");
-  } else {
-    println!("scroll container candidates (box_id → bounds, overflow):");
-    for (id, rect, root_idx, overflow, ox, oy) in &scroll_candidates {
-      let applied = scroll_state
-        .elements
-        .get(id)
-        .copied()
-        .unwrap_or(Point::ZERO);
-      println!(
-        "  id {} [root {}] bounds=({:.1},{:.1},{:.1},{:.1}) overflow=({:.1}x{:.1}) overflow_x={:?} overflow_y={:?} scroll=({:.1},{:.1})",
-        id,
-        root_idx,
-        rect.x(),
-        rect.y(),
-        rect.width(),
-        rect.height(),
-        overflow.width(),
-        overflow.height(),
-        ox,
-        oy,
-        applied.x,
-        applied.y
-      );
-    }
-  }
 
   let mut split_boxes: Vec<_> = fragments_by_box
     .iter()
@@ -906,7 +805,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       ctx.base,
       ctx.include_base,
       ctx.index,
-      &scroll_state,
       &mut all_text,
     );
   }
@@ -1018,7 +916,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       ctx.base,
       ctx.include_base,
       ctx.index,
-      &scroll_state,
       &mut path,
     ) {
       found_us = true;
@@ -1039,7 +936,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       None,
       true,
       ctx.index,
-      &scroll_state,
       &mut stacks,
     );
   }
@@ -1072,7 +968,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       // Show a couple of custom properties for early contexts when present.
       for key in ["--theme-header__background", "--semantic-color-bg-primary"] {
         if let Some(val) = ctx.style.custom_properties.get(key) {
-          println!("      var {key} = {}", val.value);
+          println!("      var {key} = {}", val);
         }
       }
     }
@@ -1201,7 +1097,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       ctx.base,
       ctx.include_base,
       ctx.index,
-      &scroll_state,
       &mut abs_backgrounds,
     );
   }
@@ -2116,28 +2011,18 @@ struct RootContext<'a> {
   offset: Point,
   base: Option<Point>,
   include_base: bool,
-  scroll: Point,
-}
-
-fn element_scroll(fragment: &FragmentNode, scroll_state: &ScrollState) -> Point {
-  fragment
-    .box_id()
-    .and_then(|id| scroll_state.elements.get(&id).copied())
-    .unwrap_or(Point::ZERO)
 }
 
 fn fragment_roots<'a>(
   fragment_tree: &'a fastrender::tree::fragment_tree::FragmentTree,
-  scroll_state: &ScrollState,
+  scroll_offset: Point,
 ) -> Vec<RootContext<'a>> {
-  let scroll_offset = Point::new(-scroll_state.viewport.x, -scroll_state.viewport.y);
   let mut roots = vec![RootContext {
     index: 0,
     fragment: &fragment_tree.root,
     offset: scroll_offset,
     base: None,
     include_base: false,
-    scroll: scroll_state.viewport,
   }];
   for (idx, fragment) in fragment_tree.additional_fragments.iter().enumerate() {
     let base = Point::new(fragment.bounds.x(), fragment.bounds.y());
@@ -2161,7 +2046,6 @@ fn fragment_roots<'a>(
         Some(base)
       },
       include_base: translated_children,
-      scroll: scroll_state.viewport,
     });
   }
   roots
@@ -2189,15 +2073,9 @@ fn collect_fragments_abs<'a>(
   base: Option<Point>,
   include_base: bool,
   root_index: usize,
-  scroll_state: &ScrollState,
   out: &mut Vec<(Rect, &'a FragmentNode, usize)>,
 ) {
-  let (abs, mut next_offset) = absolute_rect(fragment, offset, base, include_base);
-  let element_scroll = element_scroll(fragment, scroll_state);
-  next_offset = Point::new(
-    next_offset.x - element_scroll.x,
-    next_offset.y - element_scroll.y,
-  );
+  let (abs, next_offset) = absolute_rect(fragment, offset, base, include_base);
   out.push((abs, fragment, root_index));
   let child_base = if include_base { None } else { base };
   for child in &fragment.children {
@@ -2207,7 +2085,6 @@ fn collect_fragments_abs<'a>(
       child_base,
       include_base,
       root_index,
-      scroll_state,
       out,
     );
   }
@@ -2219,15 +2096,9 @@ fn collect_backgrounds_abs<'a>(
   base: Option<Point>,
   include_base: bool,
   root_index: usize,
-  scroll_state: &ScrollState,
   out: &mut Vec<(Rect, &'a FragmentNode, usize)>,
 ) {
-  let (abs, mut next_offset) = absolute_rect(fragment, offset, base, include_base);
-  let element_scroll = element_scroll(fragment, scroll_state);
-  next_offset = Point::new(
-    next_offset.x - element_scroll.x,
-    next_offset.y - element_scroll.y,
-  );
+  let (abs, next_offset) = absolute_rect(fragment, offset, base, include_base);
   out.push((abs, fragment, root_index));
   let child_base = if include_base { None } else { base };
   for child in &fragment.children {
@@ -2237,7 +2108,6 @@ fn collect_backgrounds_abs<'a>(
       child_base,
       include_base,
       root_index,
-      scroll_state,
       out,
     );
   }
@@ -2249,15 +2119,9 @@ fn collect_text_abs(
   base: Option<Point>,
   include_base: bool,
   root_index: usize,
-  scroll_state: &ScrollState,
   out: &mut Vec<(f32, f32, usize, String)>,
 ) {
-  let (abs, mut next_offset) = absolute_rect(fragment, offset, base, include_base);
-  let element_scroll = element_scroll(fragment, scroll_state);
-  next_offset = Point::new(
-    next_offset.x - element_scroll.x,
-    next_offset.y - element_scroll.y,
-  );
+  let (abs, next_offset) = absolute_rect(fragment, offset, base, include_base);
   if let FragmentContent::Text { text, .. } = &fragment.content {
     out.push((abs.x(), abs.y(), root_index, text.clone()));
   }
@@ -2269,7 +2133,6 @@ fn collect_text_abs(
       child_base,
       include_base,
       root_index,
-      scroll_state,
       out,
     );
   }
@@ -2281,15 +2144,9 @@ fn find_us_fragment(
   base: Option<Point>,
   include_base: bool,
   root_index: usize,
-  scroll_state: &ScrollState,
   path: &mut Vec<String>,
 ) -> bool {
-  let (abs, mut next_offset) = absolute_rect(node, offset, base, include_base);
-  let element_scroll = element_scroll(node, scroll_state);
-  next_offset = Point::new(
-    next_offset.x - element_scroll.x,
-    next_offset.y - element_scroll.y,
-  );
+  let (abs, next_offset) = absolute_rect(node, offset, base, include_base);
   let style = node.style.as_deref();
   let mut label = match &node.content {
     FragmentContent::Text { text, .. } => {
@@ -2328,7 +2185,6 @@ fn find_us_fragment(
           child_base,
           include_base,
           root_index,
-          scroll_state,
           path,
         )
       })
@@ -2364,15 +2220,9 @@ fn collect_stacking_contexts<'a>(
   parent_style: Option<&'a ComputedStyle>,
   is_root: bool,
   root_index: usize,
-  scroll_state: &ScrollState,
   out: &mut Vec<(usize, StackCtx<'a>)>,
 ) {
-  let (abs, mut next_offset) = absolute_rect(fragment, offset, base, include_base);
-  let element_scroll = element_scroll(fragment, scroll_state);
-  next_offset = Point::new(
-    next_offset.x - element_scroll.x,
-    next_offset.y - element_scroll.y,
-  );
+  let (abs, next_offset) = absolute_rect(fragment, offset, base, include_base);
   let style = fragment.style.as_deref();
   let establishes = style
     .map(|s| creates_stacking_context(s, parent_style, is_root))
@@ -2407,7 +2257,6 @@ fn collect_stacking_contexts<'a>(
       next_parent,
       false,
       root_index,
-      scroll_state,
       out,
     );
   }

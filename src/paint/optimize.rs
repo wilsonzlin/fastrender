@@ -200,6 +200,13 @@ impl DisplayListOptimizer {
     (DisplayList::from_items(items), stats)
   }
 
+  /// Extract only the items that intersect the viewport while preserving stack
+  /// operations needed for correct rasterization order.
+  pub fn intersect(&self, list: &DisplayList, viewport: Rect) -> DisplayList {
+    let items = list.items().to_vec();
+    DisplayList::from_items(self.cull_items(items, viewport))
+  }
+
   /// Remove fully transparent items
   fn remove_transparent_items(&self, items: Vec<DisplayItem>) -> Vec<DisplayItem> {
     let mut result = Vec::with_capacity(items.len());
@@ -666,44 +673,7 @@ impl DisplayListOptimizer {
   }
 
   fn item_bounds(&self, item: &DisplayItem) -> Option<Rect> {
-    match item {
-      DisplayItem::FillRect(i) => Some(i.rect),
-      DisplayItem::StrokeRect(i) => Some(i.rect.inflate(i.width / 2.0)),
-      DisplayItem::FillRoundedRect(i) => Some(i.rect),
-      DisplayItem::StrokeRoundedRect(i) => Some(i.rect.inflate(i.width / 2.0)),
-      DisplayItem::Text(item) => Some(crate::paint::display_list::text_bounds(item)),
-      DisplayItem::TextDecoration(item) => Some(item.bounds),
-      DisplayItem::Image(i) => Some(i.dest_rect),
-      DisplayItem::BoxShadow(i) => {
-        if i.inset {
-          Some(i.rect)
-        } else {
-          let blur_outset = i.blur_radius.abs() * 3.0;
-          let spread = i.spread_radius;
-          let shadow_rect = Rect::from_xywh(
-            i.rect.x() + i.offset.x - spread,
-            i.rect.y() + i.offset.y - spread,
-            i.rect.width() + spread * 2.0,
-            i.rect.height() + spread * 2.0,
-          )
-          .inflate(blur_outset);
-          Some(shadow_rect)
-        }
-      }
-      DisplayItem::Border(b) => {
-        let max_w = b
-          .top
-          .width
-          .max(b.right.width)
-          .max(b.bottom.width)
-          .max(b.left.width);
-        Some(b.rect.inflate(max_w * 0.5))
-      }
-      DisplayItem::LinearGradient(i) => Some(i.rect),
-      DisplayItem::RadialGradient(i) => Some(i.rect),
-      DisplayItem::ConicGradient(i) => Some(i.rect),
-      _ => None,
-    }
+    item.bounds()
   }
 
   fn transform_mapping(transform: &Transform3D) -> TransformMapping {

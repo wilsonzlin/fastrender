@@ -45,15 +45,12 @@ use crate::layout::utils::resolve_font_relative_length;
 use crate::paint::blur::apply_gaussian_blur;
 use crate::paint::clip_path::resolve_clip_path;
 use crate::paint::clip_path::ResolvedClipPath;
-use crate::paint::css_filter::{
-  apply_color_filter, apply_contrast, apply_drop_shadow, grayscale, hue_rotate, invert, saturate,
-  scale_color, sepia,
-};
 use crate::paint::display_list::BorderRadii;
 use crate::paint::display_list::Transform2D;
 use crate::paint::display_list::Transform3D;
 use crate::paint::display_list_builder::DisplayListBuilder;
 use crate::paint::display_list_renderer::DisplayListRenderer;
+use crate::paint::display_list_renderer::PaintParallelism;
 use crate::paint::filter_outset::{compute_filter_outset, FilterOutsetExt};
 use crate::paint::homography::{quad_bounds, rect_corners, Homography};
 use crate::paint::object_fit::compute_object_fit;
@@ -70,7 +67,6 @@ use crate::paint::transform_resolver::{backface_is_hidden, resolve_transform3d};
 use crate::render_control::check_active;
 use crate::resource::origin_from_url;
 use crate::resource::ResourceFetcher;
-use crate::scroll::ScrollState;
 #[cfg(test)]
 use crate::style::color::Color;
 use crate::style::color::Rgba;
@@ -120,7 +116,6 @@ use crate::style::ComputedStyle;
 use crate::text::font_db::FontStretch;
 use crate::text::font_db::FontStyle;
 use crate::text::font_db::ScaledMetrics;
-use crate::text::font_instance::{glyph_transform, FontInstance};
 use crate::text::font_loader::FontContext;
 use crate::text::pipeline::ShapedRun;
 use crate::text::pipeline::ShapingPipeline;
@@ -791,7 +786,7 @@ impl Painter {
             replaced_box
               .replaced_type
               .selected_image_source_for_context(crate::tree::box_tree::ImageSelectionContext {
-                device_pixel_ratio: self.scale,
+                scale: self.scale,
                 slot_width: None,
                 viewport: Some(viewport),
                 media_context: Some(&media_ctx),
@@ -811,7 +806,7 @@ impl Painter {
                 orientation,
                 &style.image_resolution,
                 self.scale,
-                selected.density,
+                selected.resolution,
               ) {
                 if needs_intrinsic {
                   replaced_box.intrinsic_size = Some(Size::new(w, h));
@@ -1051,17 +1046,12 @@ impl Painter {
   }
 
   /// Paints a fragment tree and returns the resulting pixmap
-  pub fn paint(self, tree: &FragmentTree, scroll_state: &ScrollState) -> Result<Pixmap> {
-    self.paint_with_offset(tree, Point::ZERO, scroll_state)
+  pub fn paint(self, tree: &FragmentTree) -> Result<Pixmap> {
+    self.paint_with_offset(tree, Point::ZERO)
   }
 
   /// Paints a fragment tree with an additional offset applied to all fragments.
-  pub fn paint_with_offset(
-    mut self,
-    tree: &FragmentTree,
-    offset: Point,
-    scroll_state: &ScrollState,
-  ) -> Result<Pixmap> {
+  pub fn paint_with_offset(mut self, tree: &FragmentTree, offset: Point) -> Result<Pixmap> {
     let profiling = runtime::runtime_toggles().truthy("FASTR_PAINT_STATS");
     let diagnostics_enabled = paint_diagnostics_enabled();
     let mut stats = PaintStats::default();
@@ -1105,7 +1095,6 @@ impl Painter {
       self.collect_stacking_context(
         root,
         offset,
-        scroll_state,
         None,
         true,
         root_paint,
@@ -1347,7 +1336,6 @@ impl Painter {
     &self,
     fragment: &FragmentNode,
     offset: Point,
-    scroll_state: &ScrollState,
     parent_style: Option<&ComputedStyle>,
     is_root_context: bool,
     root_paint: RootPaintOptions,
@@ -1379,10 +1367,6 @@ impl Painter {
       fragment.bounds.width(),
       fragment.bounds.height(),
     );
-    let element_scroll = fragment
-      .box_id()
-      .map(|id| scroll_state.element_offset(id))
-      .unwrap_or(Point::ZERO);
     let viewport = (self.css_width, self.css_height);
 
     if let Some(style) = fragment.style.as_deref() {
@@ -1432,10 +1416,7 @@ impl Painter {
       );
       self.enqueue_content(fragment, abs_bounds, &mut local_commands);
 
-      let next_offset = Point::new(
-        abs_bounds.x() - element_scroll.x,
-        abs_bounds.y() - element_scroll.y,
-      );
+      let next_offset = Point::new(abs_bounds.x(), abs_bounds.y());
       let mut negative_contexts = Vec::new();
       let mut zero_contexts = Vec::new();
       let mut positive_contexts = Vec::new();
@@ -1480,7 +1461,6 @@ impl Painter {
         self.collect_stacking_context(
           &fragment.children[idx],
           next_offset,
-          scroll_state,
           style_ref,
           false,
           root_paint,
@@ -1493,7 +1473,6 @@ impl Painter {
         self.collect_stacking_context(
           &fragment.children[idx],
           next_offset,
-          scroll_state,
           style_ref,
           false,
           root_paint,
@@ -1505,7 +1484,6 @@ impl Painter {
         self.collect_stacking_context(
           &fragment.children[idx],
           next_offset,
-          scroll_state,
           style_ref,
           false,
           root_paint,
@@ -1517,7 +1495,6 @@ impl Painter {
         self.collect_stacking_context(
           &fragment.children[idx],
           next_offset,
-          scroll_state,
           style_ref,
           false,
           root_paint,
@@ -1531,7 +1508,6 @@ impl Painter {
         self.collect_stacking_context(
           &fragment.children[idx],
           next_offset,
-          scroll_state,
           style_ref,
           false,
           root_paint,
@@ -1545,7 +1521,6 @@ impl Painter {
         self.collect_stacking_context(
           &fragment.children[idx],
           next_offset,
-          scroll_state,
           style_ref,
           false,
           root_paint,
@@ -1602,17 +1577,13 @@ impl Painter {
       }
     }
 
-    let child_offset = Point::new(
-      abs_bounds.x() - element_scroll.x,
-      abs_bounds.y() - element_scroll.y,
-    );
+    let child_offset = Point::new(abs_bounds.x(), abs_bounds.y());
 
     negative_contexts.sort_by(|(z1, i1), (z2, i2)| z1.cmp(z2).then_with(|| i1.cmp(i2)));
     for (_, idx) in negative_contexts {
       self.collect_stacking_context(
         &fragment.children[idx],
         child_offset,
-        scroll_state,
         style_ref,
         false,
         root_paint,
@@ -1627,7 +1598,6 @@ impl Painter {
       self.collect_stacking_context(
         &fragment.children[idx],
         child_offset,
-        scroll_state,
         style_ref,
         false,
         root_paint,
@@ -1639,7 +1609,6 @@ impl Painter {
       self.collect_stacking_context(
         &fragment.children[idx],
         child_offset,
-        scroll_state,
         style_ref,
         false,
         root_paint,
@@ -1651,7 +1620,6 @@ impl Painter {
       self.collect_stacking_context(
         &fragment.children[idx],
         child_offset,
-        scroll_state,
         style_ref,
         false,
         root_paint,
@@ -1665,7 +1633,6 @@ impl Painter {
       self.collect_stacking_context(
         &fragment.children[idx],
         child_offset,
-        scroll_state,
         style_ref,
         false,
         root_paint,
@@ -1679,7 +1646,6 @@ impl Painter {
       self.collect_stacking_context(
         &fragment.children[idx],
         child_offset,
-        scroll_state,
         style_ref,
         false,
         root_paint,
@@ -4478,50 +4444,31 @@ impl Painter {
   ) {
     let origin_x = origin_x * self.scale;
     let baseline_y = baseline_y * self.scale;
-    let Some(instance) = FontInstance::new(&run.font, &run.variations) else {
-      return;
+    // ttf_parser face
+    let face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
+      Ok(f) => f,
+      Err(_) => return,
     };
-    let units_per_em = instance.units_per_em();
-    if units_per_em == 0.0 {
-      return;
-    }
+    let units_per_em = face.units_per_em() as f32;
     let mut scale = run.font_size / units_per_em;
     scale *= run.scale * self.scale;
 
     let mut glyph_paths = Vec::with_capacity(run.glyphs.len());
     let mut bounds = PathBounds::new();
 
-    let mut pen_x = if run.direction.is_rtl() {
-      origin_x + run.advance * self.scale
-    } else {
-      origin_x
-    };
-    let mut pen_y = 0.0_f32;
-
     for glyph in &run.glyphs {
       let glyph_x = match run.direction {
-        crate::text::pipeline::Direction::RightToLeft => pen_x - glyph.x_offset * self.scale,
-        crate::text::pipeline::Direction::LeftToRight => pen_x + glyph.x_offset * self.scale,
+        crate::text::pipeline::Direction::RightToLeft => origin_x - glyph.x_offset * self.scale,
+        crate::text::pipeline::Direction::LeftToRight => origin_x + glyph.x_offset * self.scale,
       };
-      let glyph_y = baseline_y + pen_y + glyph.y_offset * self.scale;
+      let glyph_y = baseline_y - glyph.y_offset * self.scale;
 
-      if let Some(path) = Self::build_glyph_path(
-        &instance,
-        glyph.glyph_id,
-        glyph_x,
-        glyph_y,
-        scale,
-        run.synthetic_oblique,
-      ) {
+      let glyph_id: u16 = glyph.glyph_id as u16;
+
+      if let Some(path) = Self::build_glyph_path(&face, glyph_id, glyph_x, glyph_y, scale) {
         bounds.include(&path.bounds());
         glyph_paths.push(path);
       }
-
-      pen_x += match run.direction {
-        crate::text::pipeline::Direction::RightToLeft => -glyph.x_advance * self.scale,
-        crate::text::pipeline::Direction::LeftToRight => glyph.x_advance * self.scale,
-      };
-      pen_y += glyph.y_advance * self.scale;
     }
 
     if glyph_paths.is_empty() || !bounds.is_valid() {
@@ -4612,61 +4559,33 @@ impl Painter {
     let block_origin = block_origin * self.scale;
     let inline_origin = inline_origin * self.scale;
 
-    let Some(instance) = FontInstance::new(&run.font, &run.variations) else {
-      return;
+    let face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
+      Ok(f) => f,
+      Err(_) => return,
     };
-    let units_per_em = instance.units_per_em();
-    if units_per_em == 0.0 {
-      return;
-    }
+    let units_per_em = face.units_per_em() as f32;
     let mut scale = run.font_size / units_per_em;
     scale *= run.scale * self.scale;
 
     let mut glyph_paths = Vec::with_capacity(run.glyphs.len());
     let mut bounds = PathBounds::new();
 
-    let mut pen_inline = if run.direction.is_rtl() {
-      inline_origin + run.advance * self.scale
-    } else {
-      inline_origin
-    };
-    let mut pen_block = 0.0_f32;
-
     for glyph in &run.glyphs {
-      let inline_step_raw = if glyph.y_advance.abs() > glyph.x_advance.abs() {
-        glyph.y_advance
-      } else {
-        glyph.x_advance
-      };
-      let block_step_raw = if inline_step_raw == glyph.y_advance {
-        glyph.x_advance
-      } else {
-        glyph.y_advance
-      };
-      let inline_step = inline_step_raw * self.scale;
-      let block_step = block_step_raw * self.scale;
       let inline_pos = match run.direction {
-        crate::text::pipeline::Direction::RightToLeft => pen_inline - glyph.x_offset * self.scale,
-        crate::text::pipeline::Direction::LeftToRight => pen_inline + glyph.x_offset * self.scale,
+        crate::text::pipeline::Direction::RightToLeft => {
+          inline_origin - glyph.x_offset * self.scale
+        }
+        crate::text::pipeline::Direction::LeftToRight => {
+          inline_origin + glyph.x_offset * self.scale
+        }
       };
-      let block_pos = block_origin + pen_block + glyph.y_offset * self.scale;
-      if let Some(path) = Self::build_glyph_path(
-        &instance,
-        glyph.glyph_id,
-        block_pos,
-        inline_pos,
-        scale,
-        run.synthetic_oblique,
-      ) {
+      let block_pos = block_origin - glyph.y_offset * self.scale;
+      let glyph_id: u16 = glyph.glyph_id as u16;
+
+      if let Some(path) = Self::build_glyph_path(&face, glyph_id, block_pos, inline_pos, scale) {
         bounds.include(&path.bounds());
         glyph_paths.push(path);
       }
-
-      pen_inline += match run.direction {
-        crate::text::pipeline::Direction::RightToLeft => -inline_step,
-        crate::text::pipeline::Direction::LeftToRight => inline_step,
-      };
-      pen_block += block_step;
     }
 
     if glyph_paths.is_empty() || !bounds.is_valid() {
@@ -4726,17 +4645,68 @@ impl Painter {
   }
 
   fn build_glyph_path(
-    instance: &FontInstance,
-    glyph_id: u32,
+    face: &ttf_parser::Face,
+    glyph_id: u16,
     x: f32,
     baseline_y: f32,
     scale: f32,
-    skew: f32,
   ) -> Option<tiny_skia::Path> {
-    let outline = instance.glyph_outline(glyph_id)?;
-    let path = outline.path?;
-    let transform = glyph_transform(scale, skew, x, baseline_y);
-    path.transform(transform)
+    use ttf_parser::OutlineBuilder;
+
+    struct PathConverter {
+      builder: PathBuilder,
+      scale: f32,
+      x: f32,
+      y: f32,
+    }
+
+    impl OutlineBuilder for PathConverter {
+      fn move_to(&mut self, px: f32, py: f32) {
+        self
+          .builder
+          .move_to(self.x + px * self.scale, self.y - py * self.scale);
+      }
+
+      fn line_to(&mut self, px: f32, py: f32) {
+        self
+          .builder
+          .line_to(self.x + px * self.scale, self.y - py * self.scale);
+      }
+
+      fn quad_to(&mut self, x1: f32, y1: f32, px: f32, py: f32) {
+        self.builder.quad_to(
+          self.x + x1 * self.scale,
+          self.y - y1 * self.scale,
+          self.x + px * self.scale,
+          self.y - py * self.scale,
+        );
+      }
+
+      fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, px: f32, py: f32) {
+        self.builder.cubic_to(
+          self.x + x1 * self.scale,
+          self.y - y1 * self.scale,
+          self.x + x2 * self.scale,
+          self.y - y2 * self.scale,
+          self.x + px * self.scale,
+          self.y - py * self.scale,
+        );
+      }
+
+      fn close(&mut self) {
+        self.builder.close();
+      }
+    }
+
+    let mut converter = PathConverter {
+      builder: PathBuilder::new(),
+      scale,
+      x,
+      y: baseline_y,
+    };
+
+    face.outline_glyph(ttf_parser::GlyphId(glyph_id), &mut converter)?;
+    converter.builder.finish()
   }
 
   fn paint_text_shadows(
@@ -4853,7 +4823,7 @@ impl Painter {
         let cache_base = self.image_cache.base_url();
         let sources =
           replaced_type.image_sources_with_fallback(crate::tree::box_tree::ImageSelectionContext {
-            device_pixel_ratio: self.scale,
+            scale: self.scale,
             slot_width: Some(content_rect.width()),
             viewport: Some(Size::new(self.css_width, self.css_height)),
             media_context: Some(&media_ctx),
@@ -4862,8 +4832,7 @@ impl Painter {
           });
         for candidate in sources {
           if self.paint_image_from_src(
-            candidate.url,
-            candidate.density,
+            &candidate,
             style,
             content_rect.x(),
             content_rect.y(),
@@ -4910,7 +4879,6 @@ impl Painter {
         }
         if self.paint_image_from_src(
           src,
-          None,
           style,
           content_rect.x(),
           content_rect.y(),
@@ -4943,7 +4911,6 @@ impl Painter {
         }
         if self.paint_image_from_src(
           &content.fallback_svg,
-          None,
           style,
           content_rect.x(),
           content_rect.y(),
@@ -4984,7 +4951,6 @@ impl Painter {
         }
         if self.paint_image_from_src(
           content,
-          None,
           style,
           content_rect.x(),
           content_rect.y(),
@@ -5007,7 +4973,6 @@ impl Painter {
         }
         if self.paint_image_from_src(
           content,
-          None,
           style,
           content_rect.x(),
           content_rect.y(),
@@ -5024,7 +4989,7 @@ impl Painter {
         let cache_base = self.image_cache.base_url();
         let sources =
           replaced_type.image_sources_with_fallback(crate::tree::box_tree::ImageSelectionContext {
-            device_pixel_ratio: self.scale,
+            scale: self.scale,
             slot_width: Some(content_rect.width()),
             viewport: Some(Size::new(self.css_width, self.css_height)),
             media_context: Some(&media_ctx),
@@ -5033,8 +4998,7 @@ impl Painter {
           });
         for candidate in sources {
           if self.paint_image_from_src(
-            candidate.url,
-            candidate.density,
+            &candidate,
             style,
             content_rect.x(),
             content_rect.y(),
@@ -5484,7 +5448,6 @@ impl Painter {
   fn paint_image_from_src(
     &mut self,
     src: &str,
-    override_resolution: Option<f32>,
     style: Option<&ComputedStyle>,
     x: f32,
     y: f32,
@@ -5553,12 +5516,9 @@ impl Painter {
       }
       return false;
     }
-    let Some((img_w_css, img_h_css)) = image.css_dimensions(
-      orientation,
-      &image_resolution,
-      self.scale,
-      override_resolution,
-    ) else {
+    let Some((img_w_css, img_h_css)) =
+      image.css_dimensions(orientation, &image_resolution, self.scale, None)
+    else {
       if log_image_fail {
         eprintln!(
           "[image-load-fail] src={} stage=css-dimensions orientation={:?} resolution={:?}",
@@ -5988,19 +5948,8 @@ impl Painter {
     style: &ComputedStyle,
   ) -> Option<DecorationMetrics> {
     let mut metrics_source = runs.and_then(|rs| {
-      rs.iter().find_map(|run| {
-        let coords: Vec<_> = run.variations.iter().map(|v| (v.tag, v.value)).collect();
-        let metrics = if coords.is_empty() {
-          run.font.metrics()
-        } else {
-          run
-            .font
-            .metrics_with_variations(&coords)
-            .or_else(|_| run.font.metrics())
-        }
-        .ok()?;
-        Some((metrics, run.font_size))
-      })
+      rs.iter()
+        .find_map(|run| run.font.metrics().ok().map(|m| (m, run.font_size)))
     });
 
     if metrics_source.is_none() {
@@ -6023,34 +5972,7 @@ impl Painter {
           stretch,
         )
         .or_else(|| self.font_ctx.get_sans_serif())
-        .and_then(|font| {
-          let coords = font
-            .as_ttf_face()
-            .ok()
-            .map(|face| {
-              let authored = crate::text::pipeline::authored_variations_from_style(style);
-              let variations = crate::text::pipeline::collect_variations_for_face(
-                &face,
-                style,
-                style.font_size,
-                &authored,
-              );
-              variations
-                .iter()
-                .map(|v| (v.tag, v.value))
-                .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-          if coords.is_empty() {
-            font.metrics().ok().map(|m| (m, style.font_size))
-          } else {
-            font
-              .metrics_with_variations(&coords)
-              .or_else(|_| font.metrics())
-              .ok()
-              .map(|m| (m, style.font_size))
-          }
-        });
+        .and_then(|font| font.metrics().ok().map(|m| (m, style.font_size)));
     }
 
     if let Some((metrics, size)) = metrics_source {
@@ -6919,52 +6841,37 @@ impl Painter {
             mark_style.font_size,
           );
         let mut paths = Vec::new();
-        let mut run_pen_inline = 0.0;
+        let mut pen_x = 0.0;
         for run in &mark_runs {
           let advance = run.advance * self.scale;
           let run_origin = if run.direction.is_rtl() {
-            run_pen_inline + advance
+            pen_x + advance
           } else {
-            run_pen_inline
+            pen_x
           };
-          let Some(instance) = FontInstance::new(&run.font, &run.variations) else {
-            continue;
+          let face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
+            Ok(f) => f,
+            Err(_) => continue,
           };
-          let units_per_em = instance.units_per_em();
-          if units_per_em == 0.0 {
-            continue;
-          }
+          let units_per_em = face.units_per_em() as f32;
           let scale = (run.font_size / units_per_em) * self.scale;
-          let mut pen_inline = if run.direction.is_rtl() { advance } else { 0.0 };
-          let mut pen_block = 0.0_f32;
           for glyph in &run.glyphs {
             let glyph_x = match run.direction {
               crate::text::pipeline::Direction::RightToLeft => {
-                run_origin + pen_inline - glyph.x_offset * self.scale
+                run_origin - glyph.x_offset * self.scale
               }
               crate::text::pipeline::Direction::LeftToRight => {
-                run_origin + pen_inline + glyph.x_offset * self.scale
+                run_origin + glyph.x_offset * self.scale
               }
             };
-            let glyph_y =
-              mark_metrics.baseline_offset * self.scale + pen_block + glyph.y_offset * self.scale;
-            if let Some(path) = Self::build_glyph_path(
-              &instance,
-              glyph.glyph_id,
-              glyph_x,
-              glyph_y,
-              scale,
-              run.synthetic_oblique,
-            ) {
+            let glyph_y = mark_metrics.baseline_offset * self.scale;
+            if let Some(path) =
+              Self::build_glyph_path(&face, glyph.glyph_id as u16, glyph_x, glyph_y, scale)
+            {
               paths.push(path);
             }
-            pen_inline += match run.direction {
-              crate::text::pipeline::Direction::RightToLeft => -glyph.x_advance * self.scale,
-              crate::text::pipeline::Direction::LeftToRight => glyph.x_advance * self.scale,
-            };
-            pen_block += glyph.y_advance * self.scale;
           }
-          run_pen_inline += advance;
+          pen_x += advance;
         }
         if !paths.is_empty() {
           string_mark = Some((
@@ -6986,8 +6893,6 @@ impl Painter {
       };
 
       let mut seen_clusters = std::collections::HashSet::new();
-      let mut glyph_pen_inline = if run.direction.is_rtl() { advance } else { 0.0 };
-      let mut glyph_pen_block = 0.0_f32;
       for glyph in &run.glyphs {
         if !seen_clusters.insert(glyph.cluster) {
           continue;
@@ -7000,27 +6905,18 @@ impl Painter {
             }
           }
         }
-        let inline_pos = match run.direction {
-          crate::text::pipeline::Direction::RightToLeft => {
-            run_origin_inline + glyph_pen_inline - glyph.x_offset * self.scale
-          }
-          crate::text::pipeline::Direction::LeftToRight => {
-            run_origin_inline + glyph_pen_inline + glyph.x_offset * self.scale
-          }
-        };
         let inline_center = match run.direction {
           crate::text::pipeline::Direction::RightToLeft => {
-            inline_pos - glyph.x_advance * 0.5 * self.scale
+            run_origin_inline - (glyph.x_offset + glyph.x_advance * 0.5) * self.scale
           }
           crate::text::pipeline::Direction::LeftToRight => {
-            inline_pos + glyph.x_advance * 0.5 * self.scale
+            run_origin_inline + (glyph.x_offset + glyph.x_advance * 0.5) * self.scale
           }
         };
-        let block_center_with_pen = block_center + glyph_pen_block + glyph.y_offset * self.scale;
         let (mark_center_x, mark_center_y) = if inline_vertical {
-          (block_center_with_pen, inline_center)
+          (block_center, inline_center)
         } else {
-          (inline_center, block_center_with_pen)
+          (inline_center, block_center)
         };
 
         match style.text_emphasis_style {
@@ -7067,12 +6963,6 @@ impl Painter {
           }
           crate::style::types::TextEmphasisStyle::None => {}
         }
-
-        glyph_pen_inline += match run.direction {
-          crate::text::pipeline::Direction::RightToLeft => -glyph.x_advance * self.scale,
-          crate::text::pipeline::Direction::LeftToRight => glyph.x_advance * self.scale,
-        };
-        glyph_pen_block += glyph.y_advance * self.scale;
       }
 
       pen_inline += advance;
@@ -7279,10 +7169,11 @@ fn collect_underline_exclusions(
 
   let mut pen_x = line_start * device_scale;
   for run in runs {
-    let Some(instance) = FontInstance::new(&run.font, &run.variations) else {
-      continue;
+    let face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
+      Ok(f) => f,
+      Err(_) => continue,
     };
-    let units_per_em = instance.units_per_em();
+    let units_per_em = face.units_per_em() as f32;
     if units_per_em == 0.0 {
       continue;
     }
@@ -7294,37 +7185,23 @@ fn collect_underline_exclusions(
     } else {
       pen_x
     };
-    let mut glyph_pen_x = if run.direction.is_rtl() { advance } else { 0.0 };
-    let mut glyph_pen_y = 0.0_f32;
 
     for glyph in &run.glyphs {
       let glyph_x = match run.direction {
-        crate::text::pipeline::Direction::RightToLeft => {
-          run_origin + glyph_pen_x - glyph.x_offset * device_scale
-        }
-        crate::text::pipeline::Direction::LeftToRight => {
-          run_origin + glyph_pen_x + glyph.x_offset * device_scale
-        }
+        crate::text::pipeline::Direction::RightToLeft => run_origin - glyph.x_offset * device_scale,
+        crate::text::pipeline::Direction::LeftToRight => run_origin + glyph.x_offset * device_scale,
       };
-      let glyph_y = baseline_y + glyph_pen_y + glyph.y_offset * device_scale;
-      if let Some(outline) = instance.glyph_outline(glyph.glyph_id) {
-        if let Some(bbox) = outline.bbox {
-          let left = glyph_x + bbox.x_min * scale - tolerance;
-          let right = glyph_x + bbox.x_max * scale + tolerance;
-          let top = glyph_y - bbox.y_max * scale - tolerance;
-          let bottom = glyph_y - bbox.y_min * scale + tolerance;
+      let glyph_y = baseline_y - glyph.y_offset * device_scale;
+      if let Some(bbox) = face.glyph_bounding_box(ttf_parser::GlyphId(glyph.glyph_id as u16)) {
+        let left = glyph_x + bbox.x_min as f32 * scale - tolerance;
+        let right = glyph_x + bbox.x_max as f32 * scale + tolerance;
+        let top = glyph_y - bbox.y_max as f32 * scale - tolerance;
+        let bottom = glyph_y - bbox.y_min as f32 * scale + tolerance;
 
-          if skip_all || (bottom >= band_top && top <= band_bottom) {
-            intervals.push((left, right));
-          }
+        if skip_all || (bottom >= band_top && top <= band_bottom) {
+          intervals.push((left, right));
         }
       }
-
-      glyph_pen_x += match run.direction {
-        crate::text::pipeline::Direction::RightToLeft => -glyph.x_advance * device_scale,
-        crate::text::pipeline::Direction::LeftToRight => glyph.x_advance * device_scale,
-      };
-      glyph_pen_y += glyph.y_advance * device_scale;
     }
 
     pen_x += advance;
@@ -7347,10 +7224,11 @@ fn collect_underline_exclusions_vertical(
 
   let mut pen_inline = inline_start * device_scale;
   for run in runs {
-    let Some(instance) = FontInstance::new(&run.font, &run.variations) else {
-      continue;
+    let face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
+      Ok(f) => f,
+      Err(_) => continue,
     };
-    let units_per_em = instance.units_per_em();
+    let units_per_em = face.units_per_em() as f32;
     if units_per_em == 0.0 {
       continue;
     }
@@ -7362,49 +7240,23 @@ fn collect_underline_exclusions_vertical(
     } else {
       pen_inline
     };
-    let mut glyph_pen_inline = if run.direction.is_rtl() { advance } else { 0.0 };
-    let mut glyph_pen_block = 0.0_f32;
 
     for glyph in &run.glyphs {
-      let inline_step_raw = if glyph.y_advance.abs() > glyph.x_advance.abs() {
-        glyph.y_advance
-      } else {
-        glyph.x_advance
-      };
-      let block_step_raw = if inline_step_raw == glyph.y_advance {
-        glyph.x_advance
-      } else {
-        glyph.y_advance
-      };
-      let inline_step = inline_step_raw * device_scale;
-      let block_step = block_step_raw * device_scale;
       let inline_pos = match run.direction {
-        crate::text::pipeline::Direction::RightToLeft => {
-          run_origin + glyph_pen_inline - glyph.x_offset * device_scale
-        }
-        crate::text::pipeline::Direction::LeftToRight => {
-          run_origin + glyph_pen_inline + glyph.x_offset * device_scale
-        }
+        crate::text::pipeline::Direction::RightToLeft => run_origin - glyph.x_offset * device_scale,
+        crate::text::pipeline::Direction::LeftToRight => run_origin + glyph.x_offset * device_scale,
       };
-      let block_pos = block_baseline + glyph_pen_block + glyph.y_offset * device_scale;
-      if let Some(outline) = instance.glyph_outline(glyph.glyph_id) {
-        if let Some(bbox) = outline.bbox {
-          let inline_left = inline_pos + bbox.x_min * scale - tolerance;
-          let inline_right = inline_pos + bbox.x_max * scale + tolerance;
-          let block_top = block_pos - bbox.y_max * scale - tolerance;
-          let block_bottom = block_pos - bbox.y_min * scale + tolerance;
+      let block_pos = block_baseline - glyph.y_offset * device_scale;
+      if let Some(bbox) = face.glyph_bounding_box(ttf_parser::GlyphId(glyph.glyph_id as u16)) {
+        let inline_left = inline_pos + bbox.x_min as f32 * scale - tolerance;
+        let inline_right = inline_pos + bbox.x_max as f32 * scale + tolerance;
+        let block_top = block_pos - bbox.y_max as f32 * scale - tolerance;
+        let block_bottom = block_pos - bbox.y_min as f32 * scale + tolerance;
 
-          if skip_all || (block_bottom >= band_left && block_top <= band_right) {
-            intervals.push((inline_left, inline_right));
-          }
+        if skip_all || (block_bottom >= band_left && block_top <= band_right) {
+          intervals.push((inline_left, inline_right));
         }
       }
-
-      glyph_pen_inline += match run.direction {
-        crate::text::pipeline::Direction::RightToLeft => -inline_step,
-        crate::text::pipeline::Direction::LeftToRight => inline_step,
-      };
-      glyph_pen_block += block_step;
     }
 
     pen_inline += advance;
@@ -8102,6 +7954,253 @@ fn apply_backdrop_filters(
     Transform::identity(),
     None,
   );
+}
+
+fn apply_color_filter<F>(pixmap: &mut Pixmap, mut f: F)
+where
+  F: FnMut([f32; 3], f32) -> ([f32; 3], f32),
+{
+  for px in pixmap.pixels_mut() {
+    let alpha = px.alpha() as f32 / 255.0;
+    let base = if alpha > 0.0 {
+      [
+        (px.red() as f32 / 255.0) / alpha,
+        (px.green() as f32 / 255.0) / alpha,
+        (px.blue() as f32 / 255.0) / alpha,
+      ]
+    } else {
+      [0.0, 0.0, 0.0]
+    };
+    let (mut color, mut new_alpha) = f(base, alpha);
+    new_alpha = new_alpha.clamp(0.0, 1.0);
+    color[0] = color[0].clamp(0.0, 1.0);
+    color[1] = color[1].clamp(0.0, 1.0);
+    color[2] = color[2].clamp(0.0, 1.0);
+
+    let r = (color[0] * new_alpha * 255.0).round().clamp(0.0, 255.0) as u8;
+    let g = (color[1] * new_alpha * 255.0).round().clamp(0.0, 255.0) as u8;
+    let b = (color[2] * new_alpha * 255.0).round().clamp(0.0, 255.0) as u8;
+    let a = (new_alpha * 255.0).round().clamp(0.0, 255.0) as u8;
+
+    *px = PremultipliedColorU8::from_rgba(r, g, b, a).unwrap_or(PremultipliedColorU8::TRANSPARENT);
+  }
+}
+
+fn scale_color(color: [f32; 3], factor: f32) -> [f32; 3] {
+  [color[0] * factor, color[1] * factor, color[2] * factor]
+}
+
+fn apply_contrast(color: [f32; 3], factor: f32) -> [f32; 3] {
+  [
+    ((color[0] - 0.5) * factor + 0.5),
+    ((color[1] - 0.5) * factor + 0.5),
+    ((color[2] - 0.5) * factor + 0.5),
+  ]
+}
+
+fn grayscale(color: [f32; 3], amount: f32) -> [f32; 3] {
+  let gray = color[0] * 0.2126 + color[1] * 0.7152 + color[2] * 0.0722;
+  [
+    color[0] + (gray - color[0]) * amount,
+    color[1] + (gray - color[1]) * amount,
+    color[2] + (gray - color[2]) * amount,
+  ]
+}
+
+fn sepia(color: [f32; 3], amount: f32) -> [f32; 3] {
+  let sepia_r = color[0] * 0.393 + color[1] * 0.769 + color[2] * 0.189;
+  let sepia_g = color[0] * 0.349 + color[1] * 0.686 + color[2] * 0.168;
+  let sepia_b = color[0] * 0.272 + color[1] * 0.534 + color[2] * 0.131;
+  [
+    color[0] + (sepia_r - color[0]) * amount,
+    color[1] + (sepia_g - color[1]) * amount,
+    color[2] + (sepia_b - color[2]) * amount,
+  ]
+}
+
+fn saturate(color: [f32; 3], factor: f32) -> [f32; 3] {
+  let rw = 0.213;
+  let gw = 0.715;
+  let bw = 0.072;
+  [
+    (rw + (1.0 - rw) * factor) * color[0]
+      + (gw - gw * factor) * color[1]
+      + (bw - bw * factor) * color[2],
+    (rw - rw * factor) * color[0]
+      + (gw + (1.0 - gw) * factor) * color[1]
+      + (bw - bw * factor) * color[2],
+    (rw - rw * factor) * color[0]
+      + (gw - gw * factor) * color[1]
+      + (bw + (1.0 - bw) * factor) * color[2],
+  ]
+}
+
+fn hue_rotate(color: [f32; 3], degrees: f32) -> [f32; 3] {
+  let angle = degrees.to_radians();
+  let cos = angle.cos();
+  let sin = angle.sin();
+
+  let r = color[0];
+  let g = color[1];
+  let b = color[2];
+
+  [
+    r * (0.213 + cos * 0.787 - sin * 0.213)
+      + g * (0.715 - 0.715 * cos - 0.715 * sin)
+      + b * (0.072 - 0.072 * cos + 0.928 * sin),
+    r * (0.213 - 0.213 * cos + 0.143 * sin)
+      + g * (0.715 + 0.285 * cos + 0.140 * sin)
+      + b * (0.072 - 0.072 * cos - 0.283 * sin),
+    r * (0.213 - 0.213 * cos - 0.787 * sin)
+      + g * (0.715 - 0.715 * cos + 0.715 * sin)
+      + b * (0.072 + 0.928 * cos + 0.072 * sin),
+  ]
+}
+
+fn invert(color: [f32; 3], amount: f32) -> [f32; 3] {
+  [
+    color[0] + (1.0 - color[0] - color[0]) * amount,
+    color[1] + (1.0 - color[1] - color[1]) * amount,
+    color[2] + (1.0 - color[2] - color[2]) * amount,
+  ]
+}
+
+fn apply_drop_shadow(
+  pixmap: &mut Pixmap,
+  offset_x: f32,
+  offset_y: f32,
+  blur_radius: f32,
+  spread: f32,
+  color: Rgba,
+) {
+  if pixmap.width() == 0 || pixmap.height() == 0 {
+    return;
+  }
+
+  let source = pixmap.clone();
+  let mut shadow = match Pixmap::new(source.width(), source.height()) {
+    Some(p) => p,
+    None => return,
+  };
+
+  {
+    let src = source.pixels();
+    let dst = shadow.pixels_mut();
+    for (src_px, dst_px) in src.iter().zip(dst.iter_mut()) {
+      let alpha = src_px.alpha() as f32 / 255.0;
+      if alpha == 0.0 {
+        *dst_px = PremultipliedColorU8::TRANSPARENT;
+        continue;
+      }
+      let total_alpha = (color.a * alpha).clamp(0.0, 1.0);
+      let r = (color.r as f32 / 255.0) * total_alpha;
+      let g = (color.g as f32 / 255.0) * total_alpha;
+      let b = (color.b as f32 / 255.0) * total_alpha;
+      let a = total_alpha * 255.0;
+      *dst_px = PremultipliedColorU8::from_rgba(
+        (r * 255.0).round() as u8,
+        (g * 255.0).round() as u8,
+        (b * 255.0).round() as u8,
+        a.round().clamp(0.0, 255.0) as u8,
+      )
+      .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+    }
+  }
+
+  if spread != 0.0 {
+    apply_spread(&mut shadow, spread);
+  }
+
+  if blur_radius > 0.0 {
+    apply_gaussian_blur(&mut shadow, blur_radius);
+  }
+
+  let mut result = match Pixmap::new(source.width(), source.height()) {
+    Some(p) => p,
+    None => return,
+  };
+
+  let mut paint = PixmapPaint::default();
+  paint.blend_mode = SkiaBlendMode::SourceOver;
+  result.draw_pixmap(
+    0,
+    0,
+    shadow.as_ref(),
+    &paint,
+    Transform::from_translate(offset_x, offset_y),
+    None,
+  );
+  result.draw_pixmap(0, 0, source.as_ref(), &paint, Transform::identity(), None);
+
+  *pixmap = result;
+}
+
+fn apply_spread(pixmap: &mut Pixmap, spread: f32) {
+  let radius = spread.abs().ceil() as i32;
+  if radius <= 0 || spread == 0.0 {
+    return;
+  }
+  let expand = spread > 0.0;
+  let width = pixmap.width() as i32;
+  let height = pixmap.height() as i32;
+  let original = pixmap.clone();
+  let src = original.pixels();
+  let dst = pixmap.pixels_mut();
+
+  let mut base_ratio = (0.0, 0.0, 0.0);
+  for px in src.iter() {
+    let alpha = px.alpha();
+    if alpha > 0 {
+      let a = alpha as f32;
+      base_ratio = (
+        px.red() as f32 / a,
+        px.green() as f32 / a,
+        px.blue() as f32 / a,
+      );
+      break;
+    }
+  }
+
+  for y in 0..height {
+    for x in 0..width {
+      let mut agg_alpha = if expand { 0u8 } else { 255u8 };
+      for dy in -radius..=radius {
+        for dx in -radius..=radius {
+          let ny = (y + dy).clamp(0, height - 1);
+          let nx = (x + dx).clamp(0, width - 1);
+          let idx = (ny as usize) * (width as usize) + nx as usize;
+          let px = src[idx];
+          if expand {
+            agg_alpha = agg_alpha.max(px.alpha());
+          } else {
+            agg_alpha = agg_alpha.min(px.alpha());
+          }
+        }
+      }
+      let idx = (y as usize) * (width as usize) + x as usize;
+      if agg_alpha == 0 {
+        dst[idx] = PremultipliedColorU8::TRANSPARENT;
+        continue;
+      }
+
+      let orig = src[idx];
+      let orig_alpha = orig.alpha();
+      if orig_alpha > 0 {
+        let factor = (agg_alpha as f32) / (orig_alpha as f32);
+        let r = (orig.red() as f32 * factor).round().clamp(0.0, 255.0) as u8;
+        let g = (orig.green() as f32 * factor).round().clamp(0.0, 255.0) as u8;
+        let b = (orig.blue() as f32 * factor).round().clamp(0.0, 255.0) as u8;
+        dst[idx] = PremultipliedColorU8::from_rgba(r, g, b, agg_alpha)
+          .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+      } else {
+        let r = (base_ratio.0 * agg_alpha as f32).round().clamp(0.0, 255.0) as u8;
+        let g = (base_ratio.1 * agg_alpha as f32).round().clamp(0.0, 255.0) as u8;
+        let b = (base_ratio.2 * agg_alpha as f32).round().clamp(0.0, 255.0) as u8;
+        dst[idx] = PremultipliedColorU8::from_rgba(r, g, b, agg_alpha)
+          .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+      }
+    }
+  }
 }
 
 fn is_hsl_blend(mode: MixBlendMode) -> bool {
@@ -9295,7 +9394,28 @@ fn tile_positions(
   }
 }
 
-fn paint_display_list_with_trace(
+/// Painting backends supported by the renderer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaintBackend {
+  Legacy,
+  DisplayList,
+}
+
+pub(crate) fn paint_backend_from_env() -> PaintBackend {
+  static BACKEND: OnceLock<PaintBackend> = OnceLock::new();
+  *BACKEND.get_or_init(|| {
+    let Ok(raw) = std::env::var("FASTR_PAINT_BACKEND") else {
+      return PaintBackend::Legacy;
+    };
+    match raw.trim().to_ascii_lowercase().as_str() {
+      "display_list" | "display-list" | "displaylist" => PaintBackend::DisplayList,
+      "legacy" | "immediate" => PaintBackend::Legacy,
+      _ => PaintBackend::Legacy,
+    }
+  })
+}
+
+fn legacy_paint_tree_with_resources_scaled_offset(
   tree: &FragmentTree,
   width: u32,
   height: u32,
@@ -9304,55 +9424,10 @@ fn paint_display_list_with_trace(
   image_cache: ImageCache,
   scale: f32,
   offset: Point,
-  scroll_state: &ScrollState,
-  trace: TraceHandle,
 ) -> Result<Pixmap> {
-  check_active(RenderStage::Paint).map_err(Error::Render)?;
-  let diagnostics_enabled = paint_diagnostics_enabled();
-  let _paint_span = trace.span("paint", "paint");
-
-  let viewport = tree.viewport_size();
-  let build_start = diagnostics_enabled.then(Instant::now);
-  let _build_span = trace.span("display_list_build", "paint");
-  let display_list = DisplayListBuilder::with_image_cache(image_cache)
-    .with_font_context(font_ctx.clone())
-    .with_svg_filter_defs(tree.svg_filter_defs.clone())
-    .with_device_pixel_ratio(scale)
-    .with_viewport_size(viewport.width, viewport.height)
-    .with_scroll_state(scroll_state.clone())
-    .build_with_stacking_tree_from_tree_offset(tree, offset);
-  drop(_build_span);
-
-  let _opt_span = trace.span("display_list_optimize", "paint");
-  let optimizer = DisplayListOptimizer::new();
-  let viewport_rect = Rect::from_xywh(0.0, 0.0, viewport.width, viewport.height);
-  let (optimized, _) = optimizer.optimize(display_list, viewport_rect);
-  drop(_opt_span);
-
-  if let (true, Some(start)) = (diagnostics_enabled, build_start) {
-    with_paint_diagnostics(|diag| {
-      diag.build_ms = start.elapsed().as_secs_f64() * 1000.0;
-      diag.command_count = optimized.len();
-    });
-  }
-
-  check_active(RenderStage::Paint).map_err(Error::Render)?;
-  let raster_start = diagnostics_enabled.then(Instant::now);
-  let _raster_span = trace.span("rasterize", "paint");
-  let renderer = DisplayListRenderer::new_scaled(width, height, background, font_ctx, scale)?;
-  let pixmap = renderer.render(&optimized);
-  drop(_raster_span);
-
-  if let (true, Some(start)) = (diagnostics_enabled, raster_start) {
-    with_paint_diagnostics(|diag| {
-      diag.raster_ms = start.elapsed().as_secs_f64() * 1000.0;
-      if diag.command_count == 0 {
-        diag.command_count = optimized.len();
-      }
-    });
-  }
-
-  pixmap
+  let painter =
+    Painter::with_resources_scaled(width, height, background, font_ctx, image_cache, scale)?;
+  painter.paint_with_offset(tree, offset)
 }
 
 /// Paints a fragment tree via the display-list pipeline (builder → optimize → renderer).
@@ -9365,20 +9440,23 @@ pub fn paint_tree_display_list_with_resources_scaled_offset(
   image_cache: ImageCache,
   scale: f32,
   offset: Point,
-  scroll_state: &ScrollState,
+  paint_parallelism: PaintParallelism,
 ) -> Result<Pixmap> {
-  paint_display_list_with_trace(
-    tree,
-    width,
-    height,
-    background,
-    font_ctx,
-    image_cache,
-    scale,
-    offset,
-    scroll_state,
-    TraceHandle::disabled(),
-  )
+  let viewport = tree.viewport_size();
+  let display_list = DisplayListBuilder::with_image_cache(image_cache)
+    .with_font_context(font_ctx.clone())
+    .with_device_pixel_ratio(scale)
+    .with_viewport_size(viewport.width, viewport.height)
+    .build_with_stacking_tree_offset(&tree.root, offset);
+
+  let optimizer = DisplayListOptimizer::new();
+  let viewport_rect = Rect::from_xywh(0.0, 0.0, viewport.width, viewport.height);
+  let (optimized, _) = optimizer.optimize(display_list, viewport_rect);
+
+  let mut renderer = DisplayListRenderer::new_scaled(width, height, background, font_ctx, scale)?;
+  renderer.set_parallelism(paint_parallelism);
+  let report = renderer.render_with_report(&optimized)?;
+  Ok(report.pixmap)
 }
 
 /// Paints a fragment tree via the display-list pipeline using explicit resources.
@@ -9389,7 +9467,7 @@ pub fn paint_tree_display_list_with_resources(
   background: Rgba,
   font_ctx: FontContext,
   image_cache: ImageCache,
-  scroll_state: &ScrollState,
+  paint_parallelism: PaintParallelism,
 ) -> Result<Pixmap> {
   paint_tree_display_list_with_resources_scaled_offset(
     tree,
@@ -9400,7 +9478,7 @@ pub fn paint_tree_display_list_with_resources(
     image_cache,
     1.0,
     Point::ZERO,
-    scroll_state,
+    paint_parallelism,
   )
 }
 
@@ -9410,7 +9488,7 @@ pub fn paint_tree_display_list(
   width: u32,
   height: u32,
   background: Rgba,
-  scroll_state: &ScrollState,
+  paint_parallelism: PaintParallelism,
 ) -> Result<Pixmap> {
   paint_tree_display_list_with_resources_scaled_offset(
     tree,
@@ -9421,43 +9499,8 @@ pub fn paint_tree_display_list(
     ImageCache::new(),
     1.0,
     Point::ZERO,
-    scroll_state,
+    paint_parallelism,
   )
-}
-
-fn paint_tree_with_resources_scaled_offset_backend_with_trace(
-  tree: &FragmentTree,
-  width: u32,
-  height: u32,
-  background: Rgba,
-  font_ctx: FontContext,
-  image_cache: ImageCache,
-  scale: f32,
-  offset: Point,
-  scroll_state: &ScrollState,
-  backend: PaintBackend,
-  trace: TraceHandle,
-) -> Result<Pixmap> {
-  match backend {
-    PaintBackend::Legacy => {
-      let painter =
-        Painter::with_resources_scaled(width, height, background, font_ctx, image_cache, scale)?
-          .with_trace(trace);
-      painter.paint_with_offset(tree, offset, scroll_state)
-    }
-    PaintBackend::DisplayList => paint_display_list_with_trace(
-      tree,
-      width,
-      height,
-      background,
-      font_ctx,
-      image_cache,
-      scale,
-      offset,
-      scroll_state,
-      trace,
-    ),
-  }
 }
 
 /// Paints a fragment tree at a device scale with an additional translation applied using the
@@ -9471,22 +9514,32 @@ pub fn paint_tree_with_resources_scaled_offset_backend(
   image_cache: ImageCache,
   scale: f32,
   offset: Point,
-  scroll_state: &ScrollState,
+  paint_parallelism: PaintParallelism,
   backend: PaintBackend,
 ) -> Result<Pixmap> {
-  paint_tree_with_resources_scaled_offset_backend_with_trace(
-    tree,
-    width,
-    height,
-    background,
-    font_ctx,
-    image_cache,
-    scale,
-    offset,
-    scroll_state,
-    backend,
-    TraceHandle::disabled(),
-  )
+  match backend {
+    PaintBackend::Legacy => legacy_paint_tree_with_resources_scaled_offset(
+      tree,
+      width,
+      height,
+      background,
+      font_ctx,
+      image_cache,
+      scale,
+      offset,
+    ),
+    PaintBackend::DisplayList => paint_tree_display_list_with_resources_scaled_offset(
+      tree,
+      width,
+      height,
+      background,
+      font_ctx,
+      image_cache,
+      scale,
+      offset,
+      paint_parallelism,
+    ),
+  }
 }
 
 /// Paints a fragment tree at a device scale with an additional translation applied.
@@ -9499,7 +9552,7 @@ pub fn paint_tree_with_resources_scaled_offset(
   image_cache: ImageCache,
   scale: f32,
   offset: Point,
-  scroll_state: &ScrollState,
+  paint_parallelism: PaintParallelism,
 ) -> Result<Pixmap> {
   paint_tree_with_resources_scaled_offset_backend(
     tree,
@@ -9510,7 +9563,7 @@ pub fn paint_tree_with_resources_scaled_offset(
     image_cache,
     scale,
     offset,
-    scroll_state,
+    paint_parallelism,
     paint_backend_from_env(),
   )
 }
@@ -9534,7 +9587,7 @@ pub fn paint_tree_with_resources_scaled(
     image_cache,
     scale,
     Point::ZERO,
-    &ScrollState::default(),
+    PaintParallelism::default(),
   )
 }
 
@@ -9591,22 +9644,12 @@ pub(crate) fn paint_tree_with_resources_scaled_offset_with_trace(
   image_cache: ImageCache,
   scale: f32,
   offset: Point,
-  scroll_state: &ScrollState,
   trace: TraceHandle,
 ) -> Result<Pixmap> {
-  paint_tree_with_resources_scaled_offset_backend_with_trace(
-    tree,
-    width,
-    height,
-    background,
-    font_ctx,
-    image_cache,
-    scale,
-    offset,
-    scroll_state,
-    paint_backend_from_env(),
-    trace,
-  )
+  let painter =
+    Painter::with_resources_scaled(width, height, background, font_ctx, image_cache, scale)?
+      .with_trace(trace);
+  painter.paint_with_offset(tree, offset)
 }
 
 /// Scales a pixmap by the given device pixel ratio, returning a new pixmap.
@@ -9915,7 +9958,6 @@ mod tests {
   use crate::style::types::BorderImageSource;
   use crate::style::types::ClipPath;
   use crate::style::types::FilterShadow;
-  use crate::style::types::FontWeight;
   use crate::style::types::ImageRendering;
   use crate::style::types::Isolation;
   use crate::style::types::MixBlendMode;
@@ -9926,9 +9968,7 @@ mod tests {
   use crate::style::types::TransformBox;
   use crate::style::values::Length;
   use crate::style::ComputedStyle;
-  use crate::text::font_db::FontDatabase;
   use crate::text::font_loader::FontContext;
-  use crate::text::pipeline::ShapingPipeline;
   use crate::tree::box_tree::SrcsetCandidate;
   use crate::tree::box_tree::SrcsetDescriptor;
   use crate::Position;
@@ -9937,7 +9977,6 @@ mod tests {
   use image::ExtendedColorType;
   use image::ImageEncoder;
   use image::RgbaImage;
-  use std::fs;
   use std::sync::Arc;
 
   fn make_empty_tree() -> FragmentTree {
@@ -10156,7 +10195,6 @@ mod tests {
     painter.collect_stacking_context(
       &root,
       Point::ZERO,
-      &ScrollState::default(),
       None,
       true,
       RootPaintOptions {
@@ -10243,69 +10281,6 @@ mod tests {
     let style = ComputedStyle::default();
     let metrics = painter.decoration_metrics(None, &style);
     assert!(metrics.is_some());
-  }
-
-  #[test]
-  fn decoration_metrics_handle_variable_font_variations() {
-    let painter = Painter::new(10, 10, Rgba::WHITE).expect("painter");
-    let mut style = ComputedStyle::default();
-    style.font_size = 14.0;
-
-    let font_bytes = Arc::new(include_bytes!("../../tests/fonts/RobotoFlex-VF.ttf").to_vec());
-    let font = Arc::new(crate::text::font_db::LoadedFont {
-      data: font_bytes.clone(),
-      index: 0,
-      family: "Roboto Flex".to_string(),
-      weight: crate::text::font_db::FontWeight::NORMAL,
-      style: crate::text::font_db::FontStyle::Normal,
-      stretch: crate::text::font_db::FontStretch::Normal,
-    });
-
-    let variations = vec![
-      rustybuzz::Variation {
-        tag: ttf_parser::Tag::from_bytes(b"wght"),
-        value: 720.0,
-      },
-      rustybuzz::Variation {
-        tag: ttf_parser::Tag::from_bytes(b"wdth"),
-        value: 95.0,
-      },
-    ];
-
-    let run = ShapedRun {
-      text: "x".to_string(),
-      start: 0,
-      end: 1,
-      glyphs: Vec::new(),
-      direction: Direction::LeftToRight,
-      level: 0,
-      advance: 0.0,
-      font: font.clone(),
-      font_size: style.font_size,
-      baseline_shift: 0.0,
-      language: None,
-      synthetic_bold: 0.0,
-      synthetic_oblique: 0.0,
-      rotation: RunRotation::None,
-      palette_index: 0,
-      variations: variations.clone(),
-      scale: 1.0,
-    };
-
-    let metrics = painter
-      .decoration_metrics(Some(&[run]), &style)
-      .expect("metrics");
-
-    let coords: Vec<_> = variations.iter().map(|v| (v.tag, v.value)).collect();
-    let font_metrics =
-      crate::text::font_db::FontMetrics::from_data_with_variations(&font.data, font.index, &coords)
-        .expect("font metrics");
-    let scale = style.font_size / font_metrics.units_per_em as f32;
-    let expected_underline_pos = font_metrics.underline_position as f32 * scale;
-    let expected_underline_thickness = (font_metrics.underline_thickness as f32 * scale).max(1.0);
-
-    assert!((metrics.underline_pos - expected_underline_pos).abs() < 0.0001);
-    assert!((metrics.underline_thickness - expected_underline_thickness).abs() < 0.0001);
   }
 
   #[test]
@@ -13122,7 +13097,6 @@ mod tests {
     let style = ComputedStyle::default();
     let ok = painter.paint_image_from_src(
       "tests/fixtures/image_orientation/orientation-6.jpg",
-      None,
       Some(&style),
       0.0,
       0.0,
@@ -13153,7 +13127,6 @@ mod tests {
     style.image_orientation = ImageOrientation::None;
     let ok = painter.paint_image_from_src(
       "tests/fixtures/image_orientation/orientation-6.jpg",
-      None,
       Some(&style),
       0.0,
       0.0,
@@ -13497,225 +13470,6 @@ mod tests {
       next_tile.red() > next_tile.blue(),
       "second tile should repeat starting red, got {:?}",
       next_tile
-    );
-  }
-
-  #[test]
-  fn painter_applies_variable_font_variations() {
-    let font_bytes = match fs::read("tests/fixtures/fonts/TestVar.ttf") {
-      Ok(bytes) => bytes,
-      Err(_) => return,
-    };
-    let mut db = FontDatabase::empty();
-    db.load_font_data(font_bytes).expect("load variable font");
-    let font_ctx = FontContext::with_database(Arc::new(db));
-
-    let mut base_style = ComputedStyle::default();
-    base_style.font_family = vec!["TestVar".to_string()];
-    base_style.font_size = 96.0;
-
-    let mut light_style = base_style.clone();
-    light_style.font_weight = FontWeight::Number(100);
-    let mut heavy_style = base_style;
-    heavy_style.font_weight = FontWeight::Number(900);
-
-    let pipeline = ShapingPipeline::new();
-    let light_run = pipeline
-      .shape("A", &light_style, &font_ctx)
-      .expect("shape light run");
-    let heavy_run = pipeline
-      .shape("A", &heavy_style, &font_ctx)
-      .expect("shape heavy run");
-    if light_run.is_empty() || heavy_run.is_empty() {
-      return;
-    }
-
-    let render_run = |run: &ShapedRun| {
-      let mut painter =
-        Painter::with_resources(200, 150, Rgba::WHITE, font_ctx.clone(), ImageCache::new())
-          .expect("painter");
-      painter.paint_shaped_run(run, 40.0, 110.0, Rgba::BLACK, None);
-      painter.pixmap
-    };
-
-    let light_pixmap = render_run(&light_run[0]);
-    let heavy_pixmap = render_run(&heavy_run[0]);
-
-    let light_box = bounding_box_for_color(&light_pixmap, |c| c.3 > 0).expect("light glyph paints");
-    let heavy_box = bounding_box_for_color(&heavy_pixmap, |c| c.3 > 0).expect("heavy glyph paints");
-
-    let light_width = light_box.2 - light_box.0;
-    let heavy_width = heavy_box.2 - heavy_box.0;
-    assert!(
-      heavy_width > light_width,
-      "heavier variation should widen glyph (light width {}, heavy width {})",
-      light_width,
-      heavy_width
-    );
-  }
-
-  #[test]
-  fn underline_skip_ink_uses_variable_font_bounds() {
-    let font_bytes = match fs::read("tests/fixtures/fonts/TestVar.ttf") {
-      Ok(bytes) => bytes,
-      Err(_) => return,
-    };
-    let mut db = FontDatabase::empty();
-    db.load_font_data(font_bytes).expect("load variable font");
-    let font_ctx = FontContext::with_database(Arc::new(db));
-
-    let mut base_style = ComputedStyle::default();
-    base_style.font_family = vec!["TestVar".to_string()];
-    base_style.font_size = 64.0;
-
-    let mut light_style = base_style.clone();
-    light_style.font_weight = FontWeight::Number(100);
-    let mut heavy_style = base_style;
-    heavy_style.font_weight = FontWeight::Number(900);
-
-    let pipeline = ShapingPipeline::new();
-    let light_runs = match pipeline.shape("A", &light_style, &font_ctx) {
-      Ok(runs) => runs,
-      Err(_) => return,
-    };
-    let heavy_runs = match pipeline.shape("A", &heavy_style, &font_ctx) {
-      Ok(runs) => runs,
-      Err(_) => return,
-    };
-    if light_runs.is_empty() || heavy_runs.is_empty() {
-      return;
-    }
-
-    let light_bounds =
-      collect_underline_exclusions(&light_runs, 0.0, 0.0, -1000.0, 1000.0, true, 1.0);
-    let heavy_bounds =
-      collect_underline_exclusions(&heavy_runs, 0.0, 0.0, -1000.0, 1000.0, true, 1.0);
-    if light_bounds.is_empty() || heavy_bounds.is_empty() {
-      return;
-    }
-
-    let light_width = light_bounds[0].1 - light_bounds[0].0;
-    let heavy_width = heavy_bounds[0].1 - heavy_bounds[0].0;
-    assert!(
-      heavy_width > light_width,
-      "skip-ink bounds should reflect variations (light {}, heavy {})",
-      light_width,
-      heavy_width
-    );
-  }
-
-  #[test]
-  fn painter_applies_variable_font_variations_vertical_runs() {
-    let font_bytes = match fs::read("tests/fixtures/fonts/TestVar.ttf") {
-      Ok(bytes) => bytes,
-      Err(_) => return,
-    };
-    let mut db = FontDatabase::empty();
-    db.load_font_data(font_bytes).expect("load variable font");
-    let font_ctx = FontContext::with_database(Arc::new(db));
-
-    let mut base_style = ComputedStyle::default();
-    base_style.font_family = vec!["TestVar".to_string()];
-    base_style.font_size = 96.0;
-
-    let mut light_style = base_style.clone();
-    light_style.font_weight = FontWeight::Number(100);
-    let mut heavy_style = base_style;
-    heavy_style.font_weight = FontWeight::Number(900);
-
-    let pipeline = ShapingPipeline::new();
-    let light_runs = match pipeline.shape("A", &light_style, &font_ctx) {
-      Ok(runs) => runs,
-      Err(_) => return,
-    };
-    let heavy_runs = match pipeline.shape("A", &heavy_style, &font_ctx) {
-      Ok(runs) => runs,
-      Err(_) => return,
-    };
-    if light_runs.is_empty() || heavy_runs.is_empty() {
-      return;
-    }
-
-    let render_vertical = |run: &ShapedRun| {
-      let mut painter =
-        Painter::with_resources(200, 200, Rgba::WHITE, font_ctx.clone(), ImageCache::new())
-          .expect("painter");
-      painter.paint_shaped_run_vertical(run, 40.0, 120.0, Rgba::BLACK, None);
-      painter.pixmap
-    };
-
-    let light_pixmap = render_vertical(&light_runs[0]);
-    let heavy_pixmap = render_vertical(&heavy_runs[0]);
-
-    let light_box = bounding_box_for_color(&light_pixmap, |c| c.3 > 0).expect("light glyph paints");
-    let heavy_box = bounding_box_for_color(&heavy_pixmap, |c| c.3 > 0).expect("heavy glyph paints");
-
-    let light_area = (light_box.2 - light_box.0) * (light_box.3 - light_box.1);
-    let heavy_area = (heavy_box.2 - heavy_box.0) * (heavy_box.3 - heavy_box.1);
-    assert!(
-      heavy_area > light_area,
-      "vertical runs should expand with heavier variations (light area {}, heavy area {})",
-      light_area,
-      heavy_area
-    );
-  }
-
-  #[test]
-  fn emphasis_string_applies_variable_font_variations() {
-    let font_bytes = match fs::read("tests/fixtures/fonts/TestVar.ttf") {
-      Ok(bytes) => bytes,
-      Err(_) => return,
-    };
-    let mut db = FontDatabase::empty();
-    db.load_font_data(font_bytes).expect("load variable font");
-    let font_ctx = FontContext::with_database(Arc::new(db));
-
-    let mut base_style = ComputedStyle::default();
-    base_style.font_family = vec!["TestVar".to_string()];
-    base_style.font_size = 64.0;
-    base_style.text_emphasis_style = crate::style::types::TextEmphasisStyle::String("A".into());
-    base_style.text_emphasis_color = Some(Rgba::BLACK);
-    base_style.color = Rgba::BLACK;
-
-    let mut light_style = base_style.clone();
-    light_style.font_weight = FontWeight::Number(100);
-    let mut heavy_style = base_style;
-    heavy_style.font_weight = FontWeight::Number(900);
-
-    let pipeline = ShapingPipeline::new();
-    let light_runs = match pipeline.shape("A", &light_style, &font_ctx) {
-      Ok(runs) => runs,
-      Err(_) => return,
-    };
-    let heavy_runs = match pipeline.shape("A", &heavy_style, &font_ctx) {
-      Ok(runs) => runs,
-      Err(_) => return,
-    };
-    if light_runs.is_empty() || heavy_runs.is_empty() {
-      return;
-    }
-
-    let render_emphasis = |style: &ComputedStyle, runs: &[ShapedRun]| {
-      let mut painter =
-        Painter::with_resources(200, 200, Rgba::WHITE, font_ctx.clone(), ImageCache::new())
-          .expect("painter");
-      painter.paint_text_emphasis(style, Some(runs), 60.0, 120.0, false);
-      painter.pixmap
-    };
-
-    let light_pixmap = render_emphasis(&light_style, &light_runs);
-    let heavy_pixmap = render_emphasis(&heavy_style, &heavy_runs);
-
-    let light_box = bounding_box_for_color(&light_pixmap, |c| c.3 > 0).expect("light mark paints");
-    let heavy_box = bounding_box_for_color(&heavy_pixmap, |c| c.3 > 0).expect("heavy mark paints");
-
-    let light_width = light_box.2 - light_box.0;
-    let heavy_width = heavy_box.2 - heavy_box.0;
-    assert!(
-      heavy_width > light_width,
-      "string emphasis marks should widen with heavier variations (light width {}, heavy width {})",
-      light_width,
-      heavy_width
     );
   }
 

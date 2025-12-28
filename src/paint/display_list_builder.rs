@@ -58,6 +58,7 @@ use crate::paint::display_list::EmphasisMark;
 use crate::paint::display_list::EmphasisText;
 use crate::paint::display_list::FillRectItem;
 use crate::paint::display_list::FillRoundedRectItem;
+use crate::paint::display_list::FontId;
 use crate::paint::display_list::GlyphInstance;
 use crate::paint::display_list::GradientSpread;
 use crate::paint::display_list::GradientStop;
@@ -90,7 +91,6 @@ use crate::paint::svg_filter::SvgFilterResolver;
 use crate::paint::text_shadow::resolve_text_shadows;
 use crate::paint::transform3d::backface_is_hidden;
 use crate::paint::transform_resolver::ResolvedTransforms;
-use crate::scroll::ScrollState;
 use crate::style::color::Rgba;
 use crate::style::types::AccentColor;
 use crate::style::types::Appearance;
@@ -132,11 +132,9 @@ use crate::style::ComputedStyle;
 use crate::text::font_db::FontStretch;
 use crate::text::font_db::FontStyle;
 use crate::text::font_db::ScaledMetrics;
-use crate::text::font_instance::FontInstance;
 use crate::text::font_loader::FontContext;
 use crate::text::pipeline::ShapedRun;
 use crate::text::pipeline::ShapingPipeline;
-use crate::text::variations::FontVariation;
 use crate::tree::box_tree::FormControl;
 use crate::tree::box_tree::FormControlKind;
 use crate::tree::box_tree::ReplacedType;
@@ -163,7 +161,6 @@ pub struct DisplayListBuilder {
   device_pixel_ratio: f32,
   parallel_enabled: bool,
   parallel_min: usize,
-  scroll_state: ScrollState,
 }
 
 #[derive(Clone, Copy)]
@@ -209,13 +206,6 @@ impl DisplayListBuilder {
       .map(|m| m.scale(style.font_size))
   }
 
-  fn element_scroll_offset(&self, fragment: &FragmentNode) -> Point {
-    fragment
-      .box_id()
-      .and_then(|id| self.scroll_state.elements.get(&id).copied())
-      .unwrap_or(Point::ZERO)
-  }
-
   /// Creates a new display list builder
   pub fn new() -> Self {
     let (parallel_enabled, parallel_min) = parallel_config_from_env();
@@ -229,7 +219,6 @@ impl DisplayListBuilder {
       device_pixel_ratio: 1.0,
       parallel_enabled,
       parallel_min,
-      scroll_state: ScrollState::default(),
     }
   }
 
@@ -246,7 +235,6 @@ impl DisplayListBuilder {
       device_pixel_ratio: 1.0,
       parallel_enabled,
       parallel_min,
-      scroll_state: ScrollState::default(),
     }
   }
 
@@ -265,12 +253,6 @@ impl DisplayListBuilder {
     if let Some(cache) = self.image_cache.as_mut() {
       cache.set_base_url(base_url);
     }
-  }
-
-  /// Applies a scroll state to be used when translating fragment content during list construction.
-  pub fn with_scroll_state(mut self, scroll_state: ScrollState) -> Self {
-    self.scroll_state = scroll_state;
-    self
   }
 
   /// Sets serialized SVG filter definitions to use when resolving `url(#...)` filters.
@@ -419,15 +401,6 @@ impl DisplayListBuilder {
 
   /// Builds a display list from multiple stacking context roots.
   pub fn build_from_stacking_contexts(mut self, stackings: &[StackingContext]) -> DisplayList {
-    self.build_from_stacking_contexts_with_offset(stackings, Point::ZERO)
-  }
-
-  /// Builds a display list from multiple stacking context roots with an offset applied.
-  pub fn build_from_stacking_contexts_with_offset(
-    mut self,
-    stackings: &[StackingContext],
-    offset: Point,
-  ) -> DisplayList {
     if self.viewport.is_none() {
       if let Some(first) = stackings.first() {
         self.viewport = Some((first.bounds.width(), first.bounds.height()));
@@ -444,23 +417,13 @@ impl DisplayListBuilder {
       image_cache.as_ref(),
     );
     for stacking in stackings {
-      self.build_stacking_context(stacking, offset, true, &mut svg_filters);
+      self.build_stacking_context(stacking, Point::ZERO, true, &mut svg_filters);
     }
     self.list
   }
 
   /// Builds a display list by first constructing stacking context trees from a fragment tree.
   pub fn build_with_stacking_tree_from_tree(mut self, tree: &FragmentTree) -> DisplayList {
-    self.build_with_stacking_tree_from_tree_offset(tree, Point::ZERO)
-  }
-
-  /// Builds a display list by first constructing stacking context trees from a fragment tree and
-  /// applying an additional offset.
-  pub fn build_with_stacking_tree_from_tree_offset(
-    mut self,
-    tree: &FragmentTree,
-    offset: Point,
-  ) -> DisplayList {
     if self.viewport.is_none() {
       let viewport = tree.viewport_size();
       self.viewport = Some((viewport.width, viewport.height));
@@ -471,7 +434,7 @@ impl DisplayListBuilder {
       .or_else(|| self.svg_filter_defs.clone());
     self.svg_filter_defs = defs;
     let stackings = crate::paint::stacking::build_stacking_tree_from_tree(tree);
-    self.build_from_stacking_contexts_with_offset(&stackings, offset)
+    self.build_from_stacking_contexts(&stackings)
   }
 
   /// Builds a display list with clipping support
@@ -549,11 +512,6 @@ impl DisplayListBuilder {
       ),
       fragment.bounds.size,
     );
-    let element_scroll = self.element_scroll_offset(fragment);
-    let child_offset = Point::new(
-      absolute_rect.origin.x - element_scroll.x,
-      absolute_rect.origin.y - element_scroll.y,
-    );
 
     if let Some(style) = style_opt {
       if matches!(style.backface_visibility, BackfaceVisibility::Hidden)
@@ -616,6 +574,7 @@ impl DisplayListBuilder {
     self.emit_content(fragment, absolute_rect);
 
     if recurse_children {
+      let child_offset = absolute_rect.origin;
       for child in &fragment.children {
         self.build_fragment_internal(child, child_offset, true, false);
       }
@@ -698,6 +657,7 @@ impl DisplayListBuilder {
     }
 
     // Recurse to children
+    let child_offset = absolute_rect.origin;
     for child in &fragment.children {
       self.build_fragment_with_clips(child, child_offset, clips);
     }
@@ -730,18 +690,13 @@ impl DisplayListBuilder {
         .then_with(|| a.tree_order.cmp(&b.tree_order))
     });
 
-    let context_scroll = context
-      .fragments
-      .first()
-      .map(|f| self.element_scroll_offset(f))
-      .unwrap_or(Point::ZERO);
     let (neg, non_neg): (Vec<_>, Vec<_>) = children.into_iter().partition(|c| c.z_index < 0);
     let (_zero, pos): (Vec<_>, Vec<_>) = non_neg.into_iter().partition(|c| c.z_index == 0);
 
     // Descendants are positioned relative to the stacking context's origin (the first fragment).
     let descendant_offset = Point::new(
-      offset.x + context.offset_from_parent_context.x - context_scroll.x,
-      offset.y + context.offset_from_parent_context.y - context_scroll.y,
+      offset.x + context.offset_from_parent_context.x,
+      offset.y + context.offset_from_parent_context.y,
     );
 
     let root_fragment = context.fragments.first();
@@ -855,10 +810,10 @@ impl DisplayListBuilder {
           );
           let rects = Self::background_rects(rect, style, self.viewport);
           let radii =
-            Self::resolve_clip_radii(style, &rects, BackgroundBox::ContentBox, self.viewport);
+            Self::resolve_clip_radii(style, &rects, BackgroundBox::PaddingBox, self.viewport);
           Some(ClipItem {
             shape: ClipShape::Rect {
-              rect: rects.content,
+              rect: rects.padding,
               radii: if radii.is_zero() { None } else { Some(radii) },
             },
           })
@@ -1318,7 +1273,7 @@ impl DisplayListBuilder {
           ResolvedMaskImage::Generated(Box::new(image.clone()))
         }
         BackgroundImage::Url(src) => {
-          let Some(image) = self.decode_image(src, None, Some(style), true) else {
+          let Some(image) = self.decode_image(src, Some(style), true) else {
             continue;
           };
           ResolvedMaskImage::Raster(image)
@@ -2258,7 +2213,6 @@ impl DisplayListBuilder {
       device_pixel_ratio: self.device_pixel_ratio,
       parallel_enabled: self.parallel_enabled,
       parallel_min: self.parallel_min,
-      scroll_state: self.scroll_state.clone(),
     }
   }
 
@@ -2395,12 +2349,10 @@ impl DisplayListBuilder {
               origin,
               glyphs,
               color,
-              palette_index: 0,
               shadows: shadows.clone(),
               font_size,
               advance_width,
-              font: None,
-              variations: Vec::new(),
+              font_id: None,
               synthetic_bold: 0.0,
               synthetic_oblique: 0.0,
               emphasis: None,
@@ -2411,12 +2363,10 @@ impl DisplayListBuilder {
               origin,
               glyphs,
               color,
-              palette_index: 0,
               shadows: shadows.clone(),
               font_size,
               advance_width,
-              font: None,
-              variations: Vec::new(),
+              font_id: None,
               synthetic_bold: 0.0,
               synthetic_oblique: 0.0,
               emphasis: None,
@@ -2546,7 +2496,7 @@ impl DisplayListBuilder {
         let cache_base = self.image_cache.as_ref().and_then(|cache| cache.base_url());
         let sources =
           replaced_type.image_sources_with_fallback(crate::tree::box_tree::ImageSelectionContext {
-            device_pixel_ratio: self.device_pixel_ratio,
+            scale: self.device_pixel_ratio,
             slot_width: Some(rect.width()),
             viewport: self.viewport.map(|(w, h)| crate::geometry::Size::new(w, h)),
             media_context: media_ctx.as_ref(),
@@ -2556,7 +2506,7 @@ impl DisplayListBuilder {
 
         if let Some(image) = sources
           .iter()
-          .find_map(|s| self.decode_image(s.url, s.density, style_for_image, false))
+          .find_map(|s| self.decode_image(s, style_for_image, false))
         {
           let (dest_x, dest_y, dest_w, dest_h) = {
             let (fit, position, font_size) = if let Some(style) = fragment.style.as_deref() {
@@ -3125,7 +3075,7 @@ impl DisplayListBuilder {
         }
       }
       BackgroundImage::Url(src) => {
-        if let Some(image) = self.decode_image(src, None, Some(style), true) {
+        if let Some(image) = self.decode_image(src, Some(style), true) {
           let img_w = image.css_width;
           let img_h = image.css_height;
           if img_w > 0.0 && img_h > 0.0 {
@@ -3377,7 +3327,7 @@ impl DisplayListBuilder {
       BorderImageSource::Image(bg) => {
         let source = match bg.as_ref() {
           BackgroundImage::Url(src) => self
-            .decode_image(src, None, Some(style), true)
+            .decode_image(src, Some(style), true)
             .map(BorderImageSourceItem::Raster),
           BackgroundImage::LinearGradient { .. }
           | BackgroundImage::RepeatingLinearGradient { .. }
@@ -3483,6 +3433,7 @@ impl DisplayListBuilder {
         pen_x
       };
       let glyphs = self.glyphs_from_run(run, origin_x, baseline_y);
+      let font_id = self.font_id_from_run(run);
       let emphasis =
         style.and_then(|s| self.build_emphasis(run, s, origin_x, baseline_y, inline_vertical));
 
@@ -3490,12 +3441,10 @@ impl DisplayListBuilder {
         origin: Point::new(origin_x, baseline_y),
         glyphs,
         color,
-        palette_index: run.palette_index,
         shadows: shadows.to_vec(),
         font_size: run.font_size,
         advance_width: run.advance,
-        font: Some(run.font.clone()),
-        variations: Self::variations_from_run(run),
+        font_id: Some(font_id),
         synthetic_bold: run.synthetic_bold,
         synthetic_oblique: run.synthetic_oblique,
         emphasis,
@@ -3524,6 +3473,7 @@ impl DisplayListBuilder {
       };
       let glyphs =
         self.glyphs_from_run_vertical(run, block_baseline, run_origin_inline, inline_start);
+      let font_id = self.font_id_from_run(run);
       let emphasis =
         style.and_then(|s| self.build_emphasis(run, s, block_baseline, run_origin_inline, true));
 
@@ -3531,12 +3481,10 @@ impl DisplayListBuilder {
         origin: Point::new(block_baseline, inline_start),
         glyphs,
         color,
-        palette_index: run.palette_index,
         shadows: shadows.to_vec(),
         font_size: run.font_size,
         advance_width: run.advance,
-        font: Some(run.font.clone()),
-        variations: Self::variations_from_run(run),
+        font_id: Some(font_id),
         synthetic_bold: run.synthetic_bold,
         synthetic_oblique: run.synthetic_oblique,
         emphasis,
@@ -3565,6 +3513,7 @@ impl DisplayListBuilder {
         pen_x
       };
       let glyphs = self.glyphs_from_run(run, origin_x, baseline_y);
+      let font_id = self.font_id_from_run(run);
       let emphasis =
         style.and_then(|s| self.build_emphasis(run, s, origin_x, baseline_y, inline_vertical));
       self.list.push(DisplayItem::ListMarker(ListMarkerItem {
@@ -3572,11 +3521,9 @@ impl DisplayListBuilder {
         glyphs,
         font_size: run.font_size,
         color,
-        palette_index: run.palette_index,
         shadows: shadows.to_vec(),
         advance_width: run.advance,
-        font: Some(run.font.clone()),
-        variations: Self::variations_from_run(run),
+        font_id: Some(font_id),
         synthetic_bold: run.synthetic_bold,
         synthetic_oblique: run.synthetic_oblique,
         emphasis,
@@ -3605,6 +3552,7 @@ impl DisplayListBuilder {
       };
       let glyphs =
         self.glyphs_from_run_vertical(run, block_baseline, run_origin_inline, inline_start);
+      let font_id = self.font_id_from_run(run);
       let emphasis =
         style.and_then(|s| self.build_emphasis(run, s, block_baseline, run_origin_inline, true));
       self.list.push(DisplayItem::ListMarker(ListMarkerItem {
@@ -3612,11 +3560,9 @@ impl DisplayListBuilder {
         glyphs,
         font_size: run.font_size,
         color,
-        palette_index: run.palette_index,
         shadows: shadows.to_vec(),
         advance_width: run.advance,
-        font: Some(run.font.clone()),
-        variations: Self::variations_from_run(run),
+        font_id: Some(font_id),
         synthetic_bold: run.synthetic_bold,
         synthetic_oblique: run.synthetic_oblique,
         emphasis,
@@ -3850,19 +3796,8 @@ impl DisplayListBuilder {
     style: &ComputedStyle,
   ) -> Option<DecorationMetrics> {
     let mut metrics_source = runs.and_then(|rs| {
-      rs.iter().find_map(|run| {
-        let coords: Vec<_> = run.variations.iter().map(|v| (v.tag, v.value)).collect();
-        let metrics = if coords.is_empty() {
-          run.font.metrics()
-        } else {
-          run
-            .font
-            .metrics_with_variations(&coords)
-            .or_else(|_| run.font.metrics())
-        }
-        .ok()?;
-        Some((metrics, run.font_size))
-      })
+      rs.iter()
+        .find_map(|run| run.font.metrics().ok().map(|m| (m, run.font_size)))
     });
 
     if metrics_source.is_none() {
@@ -3885,34 +3820,7 @@ impl DisplayListBuilder {
           stretch,
         )
         .or_else(|| self.font_ctx.get_sans_serif())
-        .and_then(|font| {
-          let coords = font
-            .as_ttf_face()
-            .ok()
-            .map(|face| {
-              let authored = crate::text::pipeline::authored_variations_from_style(style);
-              let variations = crate::text::pipeline::collect_variations_for_face(
-                &face,
-                style,
-                style.font_size,
-                &authored,
-              );
-              variations
-                .iter()
-                .map(|v| (v.tag, v.value))
-                .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-          if coords.is_empty() {
-            font.metrics().ok().map(|m| (m, style.font_size))
-          } else {
-            font
-              .metrics_with_variations(&coords)
-              .or_else(|_| font.metrics())
-              .ok()
-              .map(|m| (m, style.font_size))
-          }
-        });
+        .and_then(|font| font.metrics().ok().map(|m| (m, style.font_size)));
     }
 
     if let Some((metrics, size)) = metrics_source {
@@ -4030,29 +3938,18 @@ impl DisplayListBuilder {
 
   fn glyphs_from_run(&self, run: &ShapedRun, origin_x: f32, baseline_y: f32) -> Vec<GlyphInstance> {
     let mut glyphs = Vec::with_capacity(run.glyphs.len());
-    let mut pen_x = if run.direction.is_rtl() {
-      run.advance
-    } else {
-      0.0
-    };
-    let mut pen_y = 0.0_f32;
 
     for glyph in &run.glyphs {
       let x = match run.direction {
-        crate::text::pipeline::Direction::RightToLeft => origin_x + pen_x - glyph.x_offset,
-        crate::text::pipeline::Direction::LeftToRight => origin_x + pen_x + glyph.x_offset,
+        crate::text::pipeline::Direction::RightToLeft => origin_x - glyph.x_offset,
+        crate::text::pipeline::Direction::LeftToRight => origin_x + glyph.x_offset,
       };
-      let y = baseline_y + pen_y + glyph.y_offset;
+      let y = baseline_y - glyph.y_offset;
       glyphs.push(GlyphInstance {
         glyph_id: glyph.glyph_id,
         offset: Point::new(x - origin_x, y - baseline_y),
-        advance: 0.0,
+        advance: glyph.x_advance,
       });
-      pen_x += match run.direction {
-        crate::text::pipeline::Direction::RightToLeft => -glyph.x_advance,
-        crate::text::pipeline::Direction::LeftToRight => glyph.x_advance,
-      };
-      pen_y += glyph.y_advance;
     }
 
     glyphs
@@ -4066,43 +3963,18 @@ impl DisplayListBuilder {
     inline_start: f32,
   ) -> Vec<GlyphInstance> {
     let mut glyphs = Vec::with_capacity(run.glyphs.len());
-    let mut pen_inline = if run.direction.is_rtl() {
-      run.advance
-    } else {
-      0.0
-    };
-    let mut pen_block = 0.0_f32;
 
     for glyph in &run.glyphs {
-      let inline_step = if glyph.y_advance.abs() > glyph.x_advance.abs() {
-        glyph.y_advance
-      } else {
-        glyph.x_advance
-      };
-      let block_step = if inline_step == glyph.y_advance {
-        glyph.x_advance
-      } else {
-        glyph.y_advance
-      };
       let inline_pos = match run.direction {
-        crate::text::pipeline::Direction::RightToLeft => {
-          inline_origin + pen_inline - glyph.x_offset
-        }
-        crate::text::pipeline::Direction::LeftToRight => {
-          inline_origin + pen_inline + glyph.x_offset
-        }
+        crate::text::pipeline::Direction::RightToLeft => inline_origin - glyph.x_offset,
+        crate::text::pipeline::Direction::LeftToRight => inline_origin + glyph.x_offset,
       };
-      let block_pos = block_baseline + pen_block + glyph.y_offset;
+      let block_pos = block_baseline - glyph.y_offset;
       glyphs.push(GlyphInstance {
         glyph_id: glyph.glyph_id,
         offset: Point::new(block_pos - block_baseline, inline_pos - inline_start),
         advance: 0.0,
       });
-      pen_inline += match run.direction {
-        crate::text::pipeline::Direction::RightToLeft => -inline_step,
-        crate::text::pipeline::Direction::LeftToRight => inline_step,
-      };
-      pen_block += block_step;
     }
 
     glyphs
@@ -4162,12 +4034,6 @@ impl DisplayListBuilder {
     } else {
       inline_origin
     };
-    let mut pen_inline = if run.direction.is_rtl() {
-      run.advance
-    } else {
-      0.0
-    };
-    let mut pen_block = 0.0_f32;
     for glyph in &run.glyphs {
       if !seen_clusters.insert(glyph.cluster) {
         continue;
@@ -4180,40 +4046,20 @@ impl DisplayListBuilder {
           }
         }
       }
-      let inline_step = if inline_vertical && glyph.y_advance.abs() > glyph.x_advance.abs() {
-        glyph.y_advance
-      } else {
-        glyph.x_advance
-      };
-      let block_step = if inline_vertical {
-        glyph.y_advance + glyph.x_advance - inline_step
-      } else {
-        glyph.y_advance
-      };
-      let inline_pos = match run.direction {
+      let inline_center = match run.direction {
         crate::text::pipeline::Direction::RightToLeft => {
-          run_origin_inline + pen_inline - glyph.x_offset
+          run_origin_inline - (glyph.x_offset + glyph.x_advance * 0.5)
         }
         crate::text::pipeline::Direction::LeftToRight => {
-          run_origin_inline + pen_inline + glyph.x_offset
+          run_origin_inline + glyph.x_offset + glyph.x_advance * 0.5
         }
       };
-      let inline_center = match run.direction {
-        crate::text::pipeline::Direction::RightToLeft => inline_pos - inline_step * 0.5,
-        crate::text::pipeline::Direction::LeftToRight => inline_pos + inline_step * 0.5,
-      };
-      let block_center_with_pen = block_center + pen_block + glyph.y_offset;
       let center = if inline_vertical {
-        Point::new(block_center_with_pen, inline_center)
+        Point::new(block_center, inline_center)
       } else {
-        Point::new(inline_center, block_center_with_pen)
+        Point::new(inline_center, block_center)
       };
       marks.push(EmphasisMark { center });
-      pen_inline += match run.direction {
-        crate::text::pipeline::Direction::RightToLeft => -inline_step,
-        crate::text::pipeline::Direction::LeftToRight => inline_step,
-      };
-      pen_block += block_step;
     }
 
     let text = if let TextEmphasisStyle::String(ref s) = style.text_emphasis_style {
@@ -4224,9 +4070,7 @@ impl DisplayListBuilder {
         mark_style.font_size = style.font_size * 0.5;
         match self.shaper.shape(s, &mark_style, &self.font_ctx) {
           Ok(mark_runs) if !mark_runs.is_empty() => {
-            let mark_font = mark_runs[0].font.clone();
-            let mark_variations = Self::variations_from_run(&mark_runs[0]);
-            let mark_palette_index = mark_runs.first().map(|r| r.palette_index).unwrap_or(0);
+            let mark_font_id = self.font_id_from_run(&mark_runs[0]);
             let mut glyphs = Vec::new();
             let mut width = 0.0;
             let mut ascent: f32 = 0.0;
@@ -4248,39 +4092,26 @@ impl DisplayListBuilder {
               } else {
                 width
               };
-              let mut pen_inline = if r.direction.is_rtl() { r.advance } else { 0.0 };
-              let mut pen_block = 0.0_f32;
               for g in r.glyphs {
                 let x = match r.direction {
-                  crate::text::pipeline::Direction::RightToLeft => {
-                    mark_origin + pen_inline - g.x_offset
-                  }
-                  crate::text::pipeline::Direction::LeftToRight => {
-                    mark_origin + pen_inline + g.x_offset
-                  }
+                  crate::text::pipeline::Direction::RightToLeft => mark_origin - g.x_offset,
+                  crate::text::pipeline::Direction::LeftToRight => mark_origin + g.x_offset,
                 };
                 glyphs.push(GlyphInstance {
                   glyph_id: g.glyph_id,
-                  offset: Point::new(x, pen_block + g.y_offset),
-                  advance: 0.0,
+                  offset: Point::new(x, -g.y_offset),
+                  advance: g.x_advance,
                 });
-                pen_inline += match r.direction {
-                  crate::text::pipeline::Direction::RightToLeft => -g.x_advance,
-                  crate::text::pipeline::Direction::LeftToRight => g.x_advance,
-                };
-                pen_block += g.y_advance;
               }
               width += r.advance;
             }
             Some(EmphasisText {
               glyphs,
-              font: Some(mark_font),
-              variations: mark_variations,
+              font_id: Some(mark_font_id),
               font_size: mark_style.font_size,
               width,
               height: ascent + descent,
               baseline_offset: ascent,
-              palette_index: mark_palette_index,
             })
           }
           _ => None,
@@ -4301,17 +4132,13 @@ impl DisplayListBuilder {
     })
   }
 
-  fn variations_from_run(run: &ShapedRun) -> Vec<FontVariation> {
-    let mut variations: Vec<FontVariation> = run
-      .variations
-      .iter()
-      .map(|v| FontVariation {
-        tag: v.tag,
-        value: v.value,
-      })
-      .collect();
-    variations.sort_by_key(|v| v.tag);
-    variations
+  fn font_id_from_run(&self, run: &ShapedRun) -> FontId {
+    FontId {
+      family: run.font.family.clone(),
+      weight: run.font.weight.value(),
+      style: run.font.style,
+      stretch: run.font.stretch,
+    }
   }
 
   fn text_shadows_from_style(style: Option<&ComputedStyle>) -> Vec<TextShadowItem> {
@@ -4609,12 +4436,10 @@ impl DisplayListBuilder {
       origin,
       glyphs,
       color,
-      palette_index: 0,
       shadows,
       font_size,
       advance_width,
-      font: None,
-      variations: Vec::new(),
+      font_id: None,
       synthetic_bold: 0.0,
       synthetic_oblique: 0.0,
       emphasis: None,
@@ -4626,7 +4451,6 @@ impl DisplayListBuilder {
   fn decode_image(
     &self,
     src: &str,
-    override_resolution: Option<f32>,
     style: Option<&ComputedStyle>,
     decorative: bool,
   ) -> Option<ImageData> {
@@ -4644,7 +4468,7 @@ impl DisplayListBuilder {
       orientation,
       &image_resolution,
       self.device_pixel_ratio,
-      override_resolution,
+      None,
     )?;
     let rgba = image.to_oriented_rgba(orientation);
     let (w, h) = rgba.dimensions();
@@ -4694,10 +4518,11 @@ fn collect_underline_exclusions(
 
   let mut pen_x = line_start;
   for run in runs {
-    let Some(instance) = FontInstance::new(&run.font, &run.variations) else {
-      continue;
+    let face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
+      Ok(f) => f,
+      Err(_) => continue,
     };
-    let units_per_em = instance.units_per_em();
+    let units_per_em = face.units_per_em() as f32;
     if units_per_em == 0.0 {
       continue;
     }
@@ -4714,16 +4539,14 @@ fn collect_underline_exclusions(
         crate::text::pipeline::Direction::LeftToRight => run_origin + glyph.x_offset,
       };
       let glyph_y = baseline_y - glyph.y_offset;
-      if let Some(outline) = instance.glyph_outline(glyph.glyph_id) {
-        if let Some(bbox) = outline.bbox {
-          let left = glyph_x + bbox.x_min * scale - tolerance;
-          let right = glyph_x + bbox.x_max * scale + tolerance;
-          let top = glyph_y - bbox.y_max * scale - tolerance;
-          let bottom = glyph_y - bbox.y_min * scale + tolerance;
+      if let Some(bbox) = face.glyph_bounding_box(ttf_parser::GlyphId(glyph.glyph_id as u16)) {
+        let left = glyph_x + bbox.x_min as f32 * scale - tolerance;
+        let right = glyph_x + bbox.x_max as f32 * scale + tolerance;
+        let top = glyph_y - bbox.y_max as f32 * scale - tolerance;
+        let bottom = glyph_y - bbox.y_min as f32 * scale + tolerance;
 
-          if skip_all || (bottom >= band_top && top <= band_bottom) {
-            intervals.push((left, right));
-          }
+        if skip_all || (bottom >= band_top && top <= band_bottom) {
+          intervals.push((left, right));
         }
       }
     }
@@ -4746,10 +4569,11 @@ fn collect_underline_exclusions_vertical(
   let mut pen_inline = inline_start;
 
   for run in runs {
-    let Some(instance) = FontInstance::new(&run.font, &run.variations) else {
-      continue;
+    let face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
+      Ok(f) => f,
+      Err(_) => continue,
     };
-    let units_per_em = instance.units_per_em();
+    let units_per_em = face.units_per_em() as f32;
     if units_per_em == 0.0 {
       continue;
     }
@@ -4767,16 +4591,14 @@ fn collect_underline_exclusions_vertical(
         crate::text::pipeline::Direction::LeftToRight => run_origin + glyph.x_offset,
       };
       let block_pos = block_baseline - glyph.y_offset;
-      if let Some(outline) = instance.glyph_outline(glyph.glyph_id) {
-        if let Some(bbox) = outline.bbox {
-          let inline_left = inline_pos + bbox.x_min * scale;
-          let inline_right = inline_pos + bbox.x_max * scale;
-          let block_top = block_pos - bbox.y_max * scale;
-          let block_bottom = block_pos - bbox.y_min * scale;
+      if let Some(bbox) = face.glyph_bounding_box(ttf_parser::GlyphId(glyph.glyph_id as u16)) {
+        let inline_left = inline_pos + bbox.x_min as f32 * scale;
+        let inline_right = inline_pos + bbox.x_max as f32 * scale;
+        let block_top = block_pos - bbox.y_max as f32 * scale;
+        let block_bottom = block_pos - bbox.y_min as f32 * scale;
 
-          if skip_all || (block_bottom >= band_left && block_top <= band_right) {
-            intervals.push((inline_left, inline_right));
-          }
+        if skip_all || (block_bottom >= band_left && block_top <= band_right) {
+          intervals.push((inline_left, inline_right));
         }
       }
     }

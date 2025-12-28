@@ -25,6 +25,8 @@ use fastrender::geometry::Rect;
 use fastrender::paint::display_list::BorderRadius;
 use fastrender::paint::display_list::ClipShape;
 use fastrender::paint::display_list_builder::DisplayListBuilder;
+use fastrender::paint::display_list_renderer::DisplayListRenderer;
+use fastrender::paint::display_list_renderer::PaintParallelism;
 use fastrender::style::color::Rgba;
 use fastrender::text::font_loader::FontContext;
 use fastrender::text::pipeline::GlyphPosition;
@@ -733,6 +735,48 @@ fn bench_text_rasterizer_cache(c: &mut Criterion) {
   group.finish();
 }
 
+/// Benchmark serial vs parallel display list painting to highlight tiling gains.
+fn bench_parallel_display_list_raster(c: &mut Criterion) {
+  let mut list = DisplayList::new();
+  for y in 0..32 {
+    for x in 0..32 {
+      let px = (x * 10) as f32;
+      let py = (y * 10) as f32;
+      list.push(DisplayItem::FillRect(FillRectItem {
+        rect: Rect::from_xywh(px, py, 8.0, 8.0),
+        color: Rgba::new((x * 7) as u8, (y * 5) as u8, 120, 1.0),
+      }));
+    }
+  }
+
+  let font_ctx = FontContext::new();
+  let width = 512;
+  let height = 512;
+
+  let mut group = c.benchmark_group("display_list_paint_parallelism");
+  group.bench_function("serial", |b| {
+    b.iter(|| {
+      let renderer =
+        DisplayListRenderer::new(width, height, Rgba::WHITE, font_ctx.clone()).unwrap();
+      black_box(renderer.render(&list).unwrap());
+    });
+  });
+  group.bench_function("parallel_tiles", |b| {
+    let parallelism = PaintParallelism {
+      enabled: true,
+      tile_size: 128,
+      log_timing: false,
+    };
+    b.iter(|| {
+      let renderer = DisplayListRenderer::new(width, height, Rgba::WHITE, font_ctx.clone())
+        .unwrap()
+        .with_parallelism(parallelism);
+      black_box(renderer.render(&list).unwrap());
+    });
+  });
+  group.finish();
+}
+
 // ============================================================================
 // Criterion Groups and Main
 // ============================================================================
@@ -747,6 +791,7 @@ criterion_group!(
   bench_display_item_creation,
   bench_fragment_tree_operations,
   bench_paint_stress_tests,
+  bench_parallel_display_list_raster,
   bench_text_rasterizer_cache,
 );
 
