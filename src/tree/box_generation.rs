@@ -390,6 +390,12 @@ fn escape_text(value: &str) -> String {
 fn collect_document_css(styled: &StyledNode) -> String {
   fn walk(node: &StyledNode, out: &mut String) {
     if let Some(tag) = node.node.tag_name() {
+      if tag.eq_ignore_ascii_case("template")
+        && node.node.get_attribute_ref("shadowroot").is_none()
+        && node.node.get_attribute_ref("shadowrootmode").is_none()
+      {
+        return;
+      }
       if tag.eq_ignore_ascii_case("style") {
         for child in &node.children {
           if let Some(text) = child.node.text_content() {

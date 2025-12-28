@@ -3145,6 +3145,12 @@ pub fn extract_css(dom: &DomNode) -> Result<StyleSheet> {
       return;
     }
     if let Some(tag) = node.tag_name() {
+      if tag.eq_ignore_ascii_case("template")
+        && node.get_attribute_ref("shadowroot").is_none()
+        && node.get_attribute_ref("shadowrootmode").is_none()
+      {
+        return;
+      }
       if tag == "style" {
         for child in &node.children {
           if let Some(text) = child.text_content() {
@@ -3763,6 +3769,26 @@ mod tests {
       1,
       "parentheses-adjacent operator should still parse"
     );
+  }
+
+  #[test]
+  fn extract_css_ignores_inert_templates() {
+    let html =
+      "<template><style>body{color:red}</style></template><style>body{color:green}</style>";
+    let dom = crate::dom::parse_html(html).expect("parse html");
+    let stylesheet = extract_css(&dom).expect("extract css");
+    assert_eq!(
+      stylesheet.rules.len(),
+      1,
+      "only non-template styles should be collected"
+    );
+    let rule = match &stylesheet.rules[0] {
+      CssRule::Style(rule) => rule,
+      other => panic!("expected style rule, got {:?}", other),
+    };
+    assert_eq!(rule.declarations.len(), 1);
+    assert_eq!(rule.declarations[0].property, "color");
+    assert_eq!(rule.declarations[0].raw_value, "green");
   }
 
   #[test]
