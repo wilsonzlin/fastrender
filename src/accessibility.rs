@@ -220,6 +220,34 @@ impl<'a> BuildContext<'a> {
     *self.aria_hidden.get(&node.node_id).unwrap_or(&false)
   }
 
+  fn text_from_children(&self, children: Vec<&'a StyledNode>, mode: TextAlternativeMode) -> String {
+    let mut out = String::new();
+    let mut suppress_space = false;
+
+    for child in children {
+      if let DomNodeType::Element { ref tag_name, .. } = child.node.node_type {
+        if tag_name.eq_ignore_ascii_case("wbr") {
+          suppress_space = true;
+          continue;
+        }
+      }
+
+      let text = self.text_content(child, mode);
+      if text.is_empty() {
+        continue;
+      }
+
+      if !out.is_empty() && !suppress_space {
+        out.push(' ');
+      }
+
+      suppress_space = false;
+      out.push_str(&text);
+    }
+
+    normalize_whitespace(&out)
+  }
+
   fn is_hidden_for_mode(&self, node: &StyledNode, mode: TextAlternativeMode) -> bool {
     match mode {
       TextAlternativeMode::Visible => self.is_hidden(node),
@@ -271,24 +299,10 @@ impl<'a> BuildContext<'a> {
           }
         }
 
-        let mut parts = Vec::new();
-        for child in self.composed_children(node) {
-          let text = self.text_content(child, mode);
-          if !text.is_empty() {
-            parts.push(text);
-          }
-        }
-        normalize_whitespace(&parts.join(" "))
+        self.text_from_children(self.composed_children(node), mode)
       }
       DomNodeType::Document | DomNodeType::ShadowRoot { .. } => {
-        let mut parts = Vec::new();
-        for child in self.composed_children(node) {
-          let text = self.text_content(child, mode);
-          if !text.is_empty() {
-            parts.push(text);
-          }
-        }
-        normalize_whitespace(&parts.join(" "))
+        self.text_from_children(self.composed_children(node), mode)
       }
     }
   }
@@ -648,6 +662,11 @@ fn normalize_whitespace(input: &str) -> String {
   let mut out = String::new();
   let mut last_space = false;
   for ch in input.chars() {
+    // Ignore zero-width characters that may be injected for break opportunities.
+    if matches!(ch, '\u{200B}' | '\u{FEFF}' | '\u{2060}') {
+      continue;
+    }
+
     if ch.is_whitespace() {
       if !last_space {
         out.push(' ');

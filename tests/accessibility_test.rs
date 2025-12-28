@@ -475,6 +475,26 @@ fn accessibility_invalid_aria_boolean_values() {
 }
 
 #[test]
+fn accessibility_wbr_name_has_no_zero_width_spaces() {
+  let mut renderer = FastRender::new().expect("renderer");
+  let html = r##"
+    <html>
+      <body>
+        <div id="x">Hello<wbr>World</div>
+      </body>
+    </html>
+  "##;
+
+  let dom = renderer.parse_html(html).expect("parse");
+  let tree = renderer
+    .accessibility_tree(&dom, 800, 600)
+    .expect("accessibility tree");
+
+  let node = find_by_id(&tree, "x").expect("node x");
+  assert_eq!(node.name.as_deref(), Some("HelloWorld"));
+}
+
+#[test]
 fn accessibility_aria_states() {
   let html =
     fs::read_to_string("tests/fixtures/accessibility/aria_states.html").expect("read fixture");
@@ -546,6 +566,10 @@ fn accessibility_tabindex_parsing() {
     find_by_id(&tree, "t2").is_none(),
     "invalid tabindex should not make node focusable"
   );
+=======
+  let node = find_by_id(&tree, "x").expect("node x");
+  assert_eq!(node.name.as_deref(), Some("HelloWorld"));
+>>>>>>> fe412a6 (fix: strip zero-width breaks from accessibility text)
 }
 
 #[test]
