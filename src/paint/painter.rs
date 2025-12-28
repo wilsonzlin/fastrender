@@ -186,6 +186,8 @@ pub struct Painter {
   text_shape_cache: Arc<Mutex<HashMap<TextCacheKey, Vec<ShapedRun>>>>,
   /// Optional trace collector for Chrome trace output.
   trace: TraceHandle,
+  /// Scroll offsets for viewport and element scroll containers.
+  scroll_state: ScrollState,
 }
 
 #[derive(Default)]
@@ -655,6 +657,13 @@ impl Painter {
       .map(|m| m.scale(style.font_size))
   }
 
+  fn element_scroll_offset(&self, fragment: &FragmentNode) -> Point {
+    fragment
+      .box_id()
+      .and_then(|id| self.scroll_state.elements.get(&id).copied())
+      .unwrap_or(Point::ZERO)
+  }
+
   fn filter_quality_for_image(style: Option<&ComputedStyle>) -> FilterQuality {
     match style.map(|s| s.image_rendering) {
       Some(ImageRendering::CrispEdges) | Some(ImageRendering::Pixelated) => FilterQuality::Nearest,
@@ -989,12 +998,19 @@ impl Painter {
       image_cache,
       text_shape_cache: Arc::new(Mutex::new(HashMap::new())),
       trace: TraceHandle::disabled(),
+      scroll_state: ScrollState::default(),
     })
   }
 
   /// Attach a trace handle used for Chrome trace export.
   fn with_trace(mut self, trace: TraceHandle) -> Self {
     self.trace = trace;
+    self
+  }
+
+  /// Attach a scroll state used for translating scroll container contents during paint.
+  fn with_scroll_state(mut self, scroll_state: ScrollState) -> Self {
+    self.scroll_state = scroll_state;
     self
   }
 
@@ -1403,6 +1419,11 @@ impl Painter {
     let establishes_context = style_ref
       .map(|s| creates_stacking_context(s, parent_style, is_root_context))
       .unwrap_or(is_root_context);
+    let element_scroll = self.element_scroll_offset(fragment);
+    let child_offset = Point::new(
+      abs_bounds.x() - element_scroll.x,
+      abs_bounds.y() - element_scroll.y,
+    );
 
     // Collect commands for this subtree locally so we can wrap the context (opacity, etc.)
     let mut local_commands = Vec::new();
@@ -1416,7 +1437,6 @@ impl Painter {
       );
       self.enqueue_content(fragment, abs_bounds, &mut local_commands);
 
-      let next_offset = Point::new(abs_bounds.x(), abs_bounds.y());
       let mut negative_contexts = Vec::new();
       let mut zero_contexts = Vec::new();
       let mut positive_contexts = Vec::new();
@@ -1460,7 +1480,7 @@ impl Painter {
       for (_, idx) in negative_contexts {
         self.collect_stacking_context(
           &fragment.children[idx],
-          next_offset,
+          child_offset,
           style_ref,
           false,
           root_paint,
@@ -1472,7 +1492,7 @@ impl Painter {
       for idx in blocks_and_floats {
         self.collect_stacking_context(
           &fragment.children[idx],
-          next_offset,
+          child_offset,
           style_ref,
           false,
           root_paint,
@@ -1483,7 +1503,7 @@ impl Painter {
       for idx in inlines {
         self.collect_stacking_context(
           &fragment.children[idx],
-          next_offset,
+          child_offset,
           style_ref,
           false,
           root_paint,
@@ -1494,7 +1514,7 @@ impl Painter {
       for idx in positioned_auto {
         self.collect_stacking_context(
           &fragment.children[idx],
-          next_offset,
+          child_offset,
           style_ref,
           false,
           root_paint,
@@ -1507,7 +1527,7 @@ impl Painter {
       for (_, idx) in zero_contexts {
         self.collect_stacking_context(
           &fragment.children[idx],
-          next_offset,
+          child_offset,
           style_ref,
           false,
           root_paint,
@@ -1520,7 +1540,7 @@ impl Painter {
       for (_, idx) in positive_contexts {
         self.collect_stacking_context(
           &fragment.children[idx],
-          next_offset,
+          child_offset,
           style_ref,
           false,
           root_paint,
@@ -1576,8 +1596,6 @@ impl Painter {
         blocks_and_floats.push(idx);
       }
     }
-
-    let child_offset = Point::new(abs_bounds.x(), abs_bounds.y());
 
     negative_contexts.sort_by(|(z1, i1), (z2, i2)| z1.cmp(z2).then_with(|| i1.cmp(i2)));
     for (_, idx) in negative_contexts {
@@ -9424,9 +9442,13 @@ fn legacy_paint_tree_with_resources_scaled_offset(
   image_cache: ImageCache,
   scale: f32,
   offset: Point,
+  scroll_state: &ScrollState,
+  trace: TraceHandle,
 ) -> Result<Pixmap> {
   let painter =
-    Painter::with_resources_scaled(width, height, background, font_ctx, image_cache, scale)?;
+    Painter::with_resources_scaled(width, height, background, font_ctx, image_cache, scale)?
+      .with_scroll_state(scroll_state.clone())
+      .with_trace(trace);
   painter.paint_with_offset(tree, offset)
 }
 
@@ -9441,13 +9463,26 @@ pub fn paint_tree_display_list_with_resources_scaled_offset(
   scale: f32,
   offset: Point,
   paint_parallelism: PaintParallelism,
+  scroll_state: &ScrollState,
 ) -> Result<Pixmap> {
   let viewport = tree.viewport_size();
-  let display_list = DisplayListBuilder::with_image_cache(image_cache)
+  let mut display_list = DisplayListBuilder::with_image_cache(image_cache.clone())
     .with_font_context(font_ctx.clone())
+    .with_svg_filter_defs(tree.svg_filter_defs.clone())
+    .with_scroll_state(scroll_state.clone())
     .with_device_pixel_ratio(scale)
     .with_viewport_size(viewport.width, viewport.height)
     .build_with_stacking_tree_offset(&tree.root, offset);
+  for extra in &tree.additional_fragments {
+    let extra_list = DisplayListBuilder::with_image_cache(image_cache.clone())
+      .with_font_context(font_ctx.clone())
+      .with_svg_filter_defs(tree.svg_filter_defs.clone())
+      .with_scroll_state(scroll_state.clone())
+      .with_device_pixel_ratio(scale)
+      .with_viewport_size(viewport.width, viewport.height)
+      .build_with_stacking_tree_offset(extra, offset);
+    display_list.append(extra_list);
+  }
 
   let optimizer = DisplayListOptimizer::new();
   let viewport_rect = Rect::from_xywh(0.0, 0.0, viewport.width, viewport.height);
@@ -9468,6 +9503,7 @@ pub fn paint_tree_display_list_with_resources(
   font_ctx: FontContext,
   image_cache: ImageCache,
   paint_parallelism: PaintParallelism,
+  scroll_state: &ScrollState,
 ) -> Result<Pixmap> {
   paint_tree_display_list_with_resources_scaled_offset(
     tree,
@@ -9479,6 +9515,7 @@ pub fn paint_tree_display_list_with_resources(
     1.0,
     Point::ZERO,
     paint_parallelism,
+    scroll_state,
   )
 }
 
@@ -9489,6 +9526,7 @@ pub fn paint_tree_display_list(
   height: u32,
   background: Rgba,
   paint_parallelism: PaintParallelism,
+  scroll_state: &ScrollState,
 ) -> Result<Pixmap> {
   paint_tree_display_list_with_resources_scaled_offset(
     tree,
@@ -9500,6 +9538,35 @@ pub fn paint_tree_display_list(
     1.0,
     Point::ZERO,
     paint_parallelism,
+    scroll_state,
+  )
+}
+
+/// Paints a fragment tree at a device scale with an additional translation applied.
+pub fn paint_tree_with_resources_scaled_offset(
+  tree: &FragmentTree,
+  width: u32,
+  height: u32,
+  background: Rgba,
+  font_ctx: FontContext,
+  image_cache: ImageCache,
+  scale: f32,
+  offset: Point,
+  paint_parallelism: PaintParallelism,
+  scroll_state: &ScrollState,
+) -> Result<Pixmap> {
+  paint_tree_with_resources_scaled_offset_backend(
+    tree,
+    width,
+    height,
+    background,
+    font_ctx,
+    image_cache,
+    scale,
+    offset,
+    paint_parallelism,
+    scroll_state,
+    paint_backend_from_env(),
   )
 }
 
@@ -9515,6 +9582,7 @@ pub fn paint_tree_with_resources_scaled_offset_backend(
   scale: f32,
   offset: Point,
   paint_parallelism: PaintParallelism,
+  scroll_state: &ScrollState,
   backend: PaintBackend,
 ) -> Result<Pixmap> {
   match backend {
@@ -9527,6 +9595,8 @@ pub fn paint_tree_with_resources_scaled_offset_backend(
       image_cache,
       scale,
       offset,
+      scroll_state,
+      TraceHandle::disabled(),
     ),
     PaintBackend::DisplayList => paint_tree_display_list_with_resources_scaled_offset(
       tree,
@@ -9538,34 +9608,9 @@ pub fn paint_tree_with_resources_scaled_offset_backend(
       scale,
       offset,
       paint_parallelism,
+      scroll_state,
     ),
   }
-}
-
-/// Paints a fragment tree at a device scale with an additional translation applied.
-pub fn paint_tree_with_resources_scaled_offset(
-  tree: &FragmentTree,
-  width: u32,
-  height: u32,
-  background: Rgba,
-  font_ctx: FontContext,
-  image_cache: ImageCache,
-  scale: f32,
-  offset: Point,
-  paint_parallelism: PaintParallelism,
-) -> Result<Pixmap> {
-  paint_tree_with_resources_scaled_offset_backend(
-    tree,
-    width,
-    height,
-    background,
-    font_ctx,
-    image_cache,
-    scale,
-    offset,
-    paint_parallelism,
-    paint_backend_from_env(),
-  )
 }
 
 /// Paints a fragment tree using explicit resources at the provided device scale.
@@ -9588,6 +9633,7 @@ pub fn paint_tree_with_resources_scaled(
     scale,
     Point::ZERO,
     PaintParallelism::default(),
+    &ScrollState::default(),
   )
 }
 
@@ -9644,12 +9690,22 @@ pub(crate) fn paint_tree_with_resources_scaled_offset_with_trace(
   image_cache: ImageCache,
   scale: f32,
   offset: Point,
+  paint_parallelism: PaintParallelism,
+  scroll_state: &ScrollState,
   trace: TraceHandle,
 ) -> Result<Pixmap> {
-  let painter =
-    Painter::with_resources_scaled(width, height, background, font_ctx, image_cache, scale)?
-      .with_trace(trace);
-  painter.paint_with_offset(tree, offset)
+  legacy_paint_tree_with_resources_scaled_offset(
+    tree,
+    width,
+    height,
+    background,
+    font_ctx,
+    image_cache,
+    scale,
+    offset,
+    scroll_state,
+    trace,
+  )
 }
 
 /// Scales a pixmap by the given device pixel ratio, returning a new pixmap.

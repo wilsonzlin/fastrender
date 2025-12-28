@@ -1,3 +1,6 @@
-// Temporary workspace member placeholder.
-// This crate exists to satisfy the workspace manifest and is not used in production.
-pub fn render() {}
+//! Temporary sandbox crate for experimenting with COLRv1 rendering.
+//!
+//! This crate is kept minimal and is not used by the main library; it simply
+//! ensures the workspace remains complete for tooling.
+
+pub fn placeholder() {}

@@ -83,6 +83,7 @@ fn element_scroll_translates_descendants() {
     1.0,
     Point::ZERO,
     PaintParallelism::default(),
+    &scroll_state,
   )
   .expect("paint scrolled fragment tree");
 

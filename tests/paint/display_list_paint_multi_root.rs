@@ -1,6 +1,8 @@
 use fastrender::geometry::{Point, Rect};
 use fastrender::image_loader::ImageCache;
+use fastrender::paint::display_list_renderer::PaintParallelism;
 use fastrender::paint::painter::paint_tree_display_list_with_resources_scaled_offset;
+use fastrender::scroll::ScrollState;
 use fastrender::style::color::Rgba;
 use fastrender::style::display::Display;
 use fastrender::style::ComputedStyle;
@@ -48,6 +50,8 @@ fn display_list_paints_all_fragment_roots_with_offset() {
     ImageCache::new(),
     1.0,
     offset,
+    PaintParallelism::default(),
+    &ScrollState::default(),
   )
   .expect("paint");
 

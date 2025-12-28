@@ -26,6 +26,7 @@ use fastrender::resource::HttpFetcher;
 use fastrender::resource::ResourceFetcher;
 use fastrender::resource::DEFAULT_ACCEPT_LANGUAGE;
 use fastrender::resource::DEFAULT_USER_AGENT;
+use fastrender::scroll::ScrollState;
 use fastrender::style::cascade::apply_styles_with_media_and_target;
 use fastrender::style::cascade::StyledNode;
 use fastrender::style::computed::Visibility;
@@ -916,6 +917,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       ctx.base,
       ctx.include_base,
       ctx.index,
+      &ScrollState::default(),
       &mut path,
     ) {
       found_us = true;
@@ -2144,6 +2146,7 @@ fn find_us_fragment(
   base: Option<Point>,
   include_base: bool,
   root_index: usize,
+  scroll_state: &ScrollState,
   path: &mut Vec<String>,
 ) -> bool {
   let (abs, next_offset) = absolute_rect(node, offset, base, include_base);
@@ -2185,6 +2188,7 @@ fn find_us_fragment(
           child_base,
           include_base,
           root_index,
+          scroll_state,
           path,
         )
       })

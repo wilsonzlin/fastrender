@@ -161,6 +161,7 @@ pub struct DisplayListBuilder {
   device_pixel_ratio: f32,
   parallel_enabled: bool,
   parallel_min: usize,
+  scroll_state: ScrollState,
 }
 
 #[derive(Clone, Copy)]
@@ -206,6 +207,13 @@ impl DisplayListBuilder {
       .map(|m| m.scale(style.font_size))
   }
 
+  fn element_scroll_offset(&self, fragment: &FragmentNode) -> Point {
+    fragment
+      .box_id()
+      .and_then(|id| self.scroll_state.elements.get(&id).copied())
+      .unwrap_or(Point::ZERO)
+  }
+
   /// Creates a new display list builder
   pub fn new() -> Self {
     let (parallel_enabled, parallel_min) = parallel_config_from_env();
@@ -219,6 +227,7 @@ impl DisplayListBuilder {
       device_pixel_ratio: 1.0,
       parallel_enabled,
       parallel_min,
+      scroll_state: ScrollState::default(),
     }
   }
 
@@ -235,6 +244,7 @@ impl DisplayListBuilder {
       device_pixel_ratio: 1.0,
       parallel_enabled,
       parallel_min,
+      scroll_state: ScrollState::default(),
     }
   }
 
@@ -294,6 +304,12 @@ impl DisplayListBuilder {
   /// Sets the viewport size for resolving viewport-relative units (vw/vh) in object-position.
   pub fn with_viewport_size(mut self, width: f32, height: f32) -> Self {
     self.viewport = Some((width, height));
+    self
+  }
+
+  /// Sets the scroll state used when translating element content during display list construction.
+  pub fn with_scroll_state(mut self, scroll_state: ScrollState) -> Self {
+    self.scroll_state = scroll_state;
     self
   }
 
@@ -574,7 +590,11 @@ impl DisplayListBuilder {
     self.emit_content(fragment, absolute_rect);
 
     if recurse_children {
-      let child_offset = absolute_rect.origin;
+      let element_scroll = self.element_scroll_offset(fragment);
+      let child_offset = Point::new(
+        absolute_rect.origin.x - element_scroll.x,
+        absolute_rect.origin.y - element_scroll.y,
+      );
       for child in &fragment.children {
         self.build_fragment_internal(child, child_offset, true, false);
       }
@@ -657,7 +677,11 @@ impl DisplayListBuilder {
     }
 
     // Recurse to children
-    let child_offset = absolute_rect.origin;
+    let element_scroll = self.element_scroll_offset(fragment);
+    let child_offset = Point::new(
+      absolute_rect.origin.x - element_scroll.x,
+      absolute_rect.origin.y - element_scroll.y,
+    );
     for child in &fragment.children {
       self.build_fragment_with_clips(child, child_offset, clips);
     }

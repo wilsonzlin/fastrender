@@ -1,5 +1,7 @@
 use fastrender::image_loader::ImageCache;
+use fastrender::paint::display_list_renderer::PaintParallelism;
 use fastrender::paint::painter::{paint_tree_with_resources_scaled_offset_backend, PaintBackend};
+use fastrender::scroll::ScrollState;
 use fastrender::{FastRender, Point, Rgba};
 
 fn render_with_backend(
@@ -27,6 +29,8 @@ fn render_with_backend(
     image_cache,
     1.0,
     Point::ZERO,
+    PaintParallelism::default(),
+    &ScrollState::default(),
     backend,
   )
   .expect("painted")

@@ -1,6 +1,8 @@
 use fastrender::geometry::Point;
 use fastrender::image_loader::ImageCache;
+use fastrender::paint::display_list_renderer::PaintParallelism;
 use fastrender::paint::painter::{paint_tree_with_resources_scaled_offset_backend, PaintBackend};
+use fastrender::scroll::ScrollState;
 use fastrender::style::color::Rgba;
 use fastrender::FastRender;
 use fastrender::Pixmap;
@@ -55,6 +57,8 @@ fn display_list_backend_resolves_display_none_svg_defs() {
     ImageCache::new(),
     1.0,
     Point::ZERO,
+    PaintParallelism::default(),
+    &ScrollState::default(),
     PaintBackend::DisplayList,
   )
   .expect("paint");
