@@ -9547,9 +9547,10 @@ pub fn paint_tree_display_list_with_resources_scaled_offset(
   let viewport = tree.viewport_size();
   let display_list = DisplayListBuilder::with_image_cache(image_cache)
     .with_font_context(font_ctx.clone())
+    .with_svg_filter_defs(tree.svg_filter_defs.clone())
     .with_device_pixel_ratio(scale)
     .with_viewport_size(viewport.width, viewport.height)
-    .build_with_stacking_tree_offset(&tree.root, offset);
+    .build_with_stacking_tree_from_tree_offset(tree, offset);
 
   let optimizer = DisplayListOptimizer::new();
   let viewport_rect = Rect::from_xywh(0.0, 0.0, viewport.width, viewport.height);

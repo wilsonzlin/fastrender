@@ -402,6 +402,15 @@ impl DisplayListBuilder {
 
   /// Builds a display list from multiple stacking context roots.
   pub fn build_from_stacking_contexts(mut self, stackings: &[StackingContext]) -> DisplayList {
+    self.build_from_stacking_contexts_with_offset(stackings, Point::ZERO)
+  }
+
+  /// Builds a display list from multiple stacking context roots applying a uniform offset.
+  pub fn build_from_stacking_contexts_with_offset(
+    mut self,
+    stackings: &[StackingContext],
+    offset: Point,
+  ) -> DisplayList {
     if self.viewport.is_none() {
       if let Some(first) = stackings.first() {
         self.viewport = Some((first.bounds.width(), first.bounds.height()));
@@ -418,13 +427,23 @@ impl DisplayListBuilder {
       image_cache.as_ref(),
     );
     for stacking in stackings {
-      self.build_stacking_context(stacking, Point::ZERO, true, &mut svg_filters);
+      self.build_stacking_context(stacking, offset, true, &mut svg_filters);
     }
     self.list
   }
 
   /// Builds a display list by first constructing stacking context trees from a fragment tree.
   pub fn build_with_stacking_tree_from_tree(mut self, tree: &FragmentTree) -> DisplayList {
+    self.build_with_stacking_tree_from_tree_offset(tree, Point::ZERO)
+  }
+
+  /// Builds a display list by first constructing stacking context trees from a fragment tree and
+  /// applying an additional offset to all fragments.
+  pub fn build_with_stacking_tree_from_tree_offset(
+    mut self,
+    tree: &FragmentTree,
+    offset: Point,
+  ) -> DisplayList {
     if self.viewport.is_none() {
       let viewport = tree.viewport_size();
       self.viewport = Some((viewport.width, viewport.height));
@@ -435,7 +454,7 @@ impl DisplayListBuilder {
       .or_else(|| self.svg_filter_defs.clone());
     self.svg_filter_defs = defs;
     let stackings = crate::paint::stacking::build_stacking_tree_from_tree(tree);
-    self.build_from_stacking_contexts(&stackings)
+    self.build_from_stacking_contexts_with_offset(&stackings, offset)
   }
 
   /// Builds a display list with clipping support
