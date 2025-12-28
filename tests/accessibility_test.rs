@@ -1099,6 +1099,79 @@ fn accessibility_textarea_value_strips_leading_newline() {
 }
 
 #[test]
+fn accessibility_form_controls_do_not_use_content_name_fallback() {
+  let html = r##"
+    <html>
+      <body>
+        <select id="select">
+          <option>A</option>
+          <option selected>B</option>
+        </select>
+        <input id="text" type="text" value="alice" />
+        <button id="button">Text</button>
+      </body>
+    </html>
+  "##;
+
+  let tree = render_accessibility_json(html);
+  let subset = snapshot_subset(&tree, &["select", "text", "button"]);
+
+  assert_eq!(
+    subset,
+    json!({
+      "select": {
+        "role": "combobox",
+        "name": null,
+        "description": null,
+        "value": "B",
+        "level": null,
+        "html_tag": "select",
+        "states": {
+          "focusable": true,
+          "disabled": false,
+          "required": false,
+          "invalid": false,
+          "visited": false,
+          "readonly": false
+        }
+      },
+      "text": {
+        "role": "textbox",
+        "name": null,
+        "description": null,
+        "value": "alice",
+        "level": null,
+        "html_tag": "input",
+        "states": {
+          "focusable": true,
+          "disabled": false,
+          "required": false,
+          "invalid": false,
+          "visited": false,
+          "readonly": false
+        }
+      },
+      "button": {
+        "role": "button",
+        "name": "Text",
+        "description": null,
+        "value": null,
+        "level": null,
+        "html_tag": "button",
+        "states": {
+          "focusable": true,
+          "disabled": false,
+          "required": false,
+          "invalid": false,
+          "visited": false,
+          "readonly": false
+        }
+      }
+    })
+  );
+}
+
+#[test]
 fn accessibility_fixture_snapshots() {
   let fixtures = [
     "headings_links",

@@ -980,6 +980,42 @@ fn header_role(node: &DomNode) -> Option<String> {
   }
 }
 
+/// Whether the element can derive its accessible name from its subtree text.
+fn role_allows_name_from_content(role: Option<&str>, tag: Option<&str>) -> bool {
+  if matches!(
+    role,
+    Some("textbox")
+      | Some("searchbox")
+      | Some("combobox")
+      | Some("listbox")
+      | Some("spinbutton")
+      | Some("slider")
+      | Some("checkbox")
+      | Some("radio")
+      | Some("switch")
+      | Some("progressbar")
+      | Some("meter")
+  ) {
+    return false;
+  }
+
+  if role.is_some() {
+    return true;
+  }
+
+  if let Some(tag) = tag {
+    let tag = tag.to_ascii_lowercase();
+    if matches!(
+      tag.as_str(),
+      "input" | "select" | "textarea" | "progress" | "meter"
+    ) {
+      return false;
+    }
+  }
+
+  true
+}
+
 fn compute_name(
   node: &StyledNode,
   ctx: &BuildContext,
@@ -997,6 +1033,9 @@ fn compute_name_internal(
   allow_visible_text: bool,
   visited: &mut HashSet<usize>,
 ) -> Option<String> {
+  let tag = node.node.tag_name();
+  let lowercase_tag = tag.map(|t| t.to_ascii_lowercase());
+
   if !visited.insert(node.node_id) {
     return None;
   }
@@ -1047,7 +1086,10 @@ fn compute_name_internal(
     }
   }
 
-  if allow_visible_text && allows_visible_text_name(node.node.tag_name(), role, false) {
+  if allow_visible_text
+    && role_allows_name_from_content(role, lowercase_tag.as_deref())
+    && allows_visible_text_name(tag, role, false)
+  {
     let text = ctx.visible_text(node);
     if !text.is_empty() {
       return Some(text);
