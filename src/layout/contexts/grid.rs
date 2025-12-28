@@ -382,9 +382,10 @@ impl GridFormattingContext {
     &self,
     taffy: &mut TaffyTree<*const BoxNode>,
     box_node: &BoxNode,
+    positioned_children: &mut HashMap<TaffyNodeId, Vec<BoxNode>>,
   ) -> Result<TaffyNodeId, LayoutError> {
     let root_children: Vec<&BoxNode> = box_node.children.iter().collect();
-    self.build_taffy_tree_children(taffy, box_node, &root_children)
+    self.build_taffy_tree_children(taffy, box_node, &root_children, positioned_children)
   }
 
   /// Builds a Taffy tree using an explicit slice of root children (used to exclude out-of-flow boxes).
@@ -393,8 +394,16 @@ impl GridFormattingContext {
     taffy: &mut TaffyTree<*const BoxNode>,
     box_node: &BoxNode,
     root_children: &[&BoxNode],
+    positioned_children: &mut HashMap<TaffyNodeId, Vec<BoxNode>>,
   ) -> Result<TaffyNodeId, LayoutError> {
-    self.build_taffy_tree_inner(taffy, box_node, true, None, Some(root_children))
+    self.build_taffy_tree_inner(
+      taffy,
+      box_node,
+      true,
+      None,
+      Some(root_children.to_vec()),
+      positioned_children,
+    )
   }
 
   fn build_taffy_tree_inner(
@@ -403,20 +412,55 @@ impl GridFormattingContext {
     box_node: &BoxNode,
     is_root: bool,
     containing_grid: Option<&ComputedStyle>,
-    root_children: Option<&[&BoxNode]>,
+    children_override: Option<Vec<&BoxNode>>,
+    positioned_children: &mut HashMap<TaffyNodeId, Vec<BoxNode>>,
   ) -> Result<TaffyNodeId, LayoutError> {
-    let children_iter: Vec<&BoxNode> = if is_root {
-      root_children
-        .map(|c| c.to_vec())
-        .unwrap_or_else(|| box_node.children.iter().collect())
-    } else {
-      Vec::new()
-    };
+    let mut children_iter: Vec<&BoxNode> = Vec::new();
+    let mut positioned: Vec<BoxNode> = Vec::new();
 
-    let simple_grid = is_root && self.is_simple_grid(&box_node.style, &children_iter);
-    let taffy_style = self.convert_style(&box_node.style, containing_grid, simple_grid, is_root);
+    // Determine whether this grid container should be represented in the Taffy tree.
+    let is_grid_container = matches!(
+      box_node.formatting_context(),
+      Some(FormattingContextType::Grid)
+    );
+    let mut include_children = is_root;
 
-    let node_id = if is_root {
+    // Prefer explicitly provided children (used to pre-filter out-of-flow for the root).
+    let provided_children = children_override.unwrap_or_else(|| box_node.children.iter().collect());
+
+    // Partition children into in-flow vs positioned for grid containers we expand in the tree.
+    if is_grid_container {
+      for child in provided_children {
+        match child.style.position {
+          crate::style::position::Position::Absolute | crate::style::position::Position::Fixed => {
+            positioned.push(child.clone())
+          }
+          _ => children_iter.push(child),
+        }
+      }
+    } else if is_root {
+      children_iter = provided_children;
+    }
+
+    // Expand subgrids (and any grid that hosts a subgrid child) into the Taffy tree so tracks can be shared.
+    if is_grid_container {
+      let is_subgrid = box_node.style.grid_row_subgrid || box_node.style.grid_column_subgrid;
+      let has_subgrid_child = children_iter
+        .iter()
+        .any(|child| child.style.grid_row_subgrid || child.style.grid_column_subgrid);
+      include_children |= is_subgrid || has_subgrid_child;
+    }
+
+    let simple_grid =
+      include_children && is_root && self.is_simple_grid(&box_node.style, &children_iter);
+    let taffy_style = self.convert_style(
+      &box_node.style,
+      containing_grid,
+      simple_grid,
+      include_children,
+    );
+
+    let node_id = if include_children {
       let mut taffy_children = Vec::with_capacity(children_iter.len());
       for child in children_iter {
         taffy_children.push(self.build_taffy_tree_inner(
@@ -425,11 +469,15 @@ impl GridFormattingContext {
           false,
           Some(&*box_node.style),
           None,
+          positioned_children,
         )?);
       }
       let node_id = taffy
         .new_with_children(taffy_style, &taffy_children)
         .map_err(|e| LayoutError::MissingContext(format!("Taffy error: {:?}", e)))?;
+      if !positioned.is_empty() {
+        positioned_children.insert(node_id, positioned);
+      }
       taffy
         .set_node_context(node_id, Some(box_node as *const BoxNode))
         .map_err(|e| LayoutError::MissingContext(format!("Taffy error: {:?}", e)))?;
@@ -449,7 +497,7 @@ impl GridFormattingContext {
     style: &ComputedStyle,
     containing_grid: Option<&ComputedStyle>,
     simple_grid: bool,
-    is_root: bool,
+    is_grid_node: bool,
   ) -> TaffyStyle {
     let mut taffy_style = TaffyStyle::default();
     let inline_positive_container = self.inline_axis_positive(style);
@@ -481,7 +529,7 @@ impl GridFormattingContext {
     let inline_is_horizontal_item = self.inline_axis_is_horizontal(item_axis_style);
 
     // Display mode
-    let is_grid = is_root && !simple_grid;
+    let is_grid = is_grid_node && !simple_grid;
     if is_grid {
       taffy_style.display = Display::Grid;
     } else {
@@ -1177,6 +1225,9 @@ impl GridFormattingContext {
     node_id: TaffyNodeId,
     root_id: TaffyNodeId,
     constraints: &LayoutConstraints,
+    measured_fragments: &HashMap<MeasureKey, FragmentNode>,
+    measured_node_keys: &HashMap<TaffyNodeId, Vec<MeasureKey>>,
+    positioned_children: &HashMap<TaffyNodeId, Vec<BoxNode>>,
   ) -> Result<FragmentNode, LayoutError> {
     let layout = taffy
       .layout(node_id)
@@ -1189,7 +1240,17 @@ impl GridFormattingContext {
 
     let child_fragments: Vec<FragmentNode> = children
       .iter()
-      .map(|&child_id| self.convert_to_fragments(taffy, child_id, root_id, constraints))
+      .map(|&child_id| {
+        self.convert_to_fragments(
+          taffy,
+          child_id,
+          root_id,
+          constraints,
+          measured_fragments,
+          measured_node_keys,
+          positioned_children,
+        )
+      })
       .collect::<Result<_, _>>()?;
 
     // Create fragment bounds from Taffy layout
@@ -1203,7 +1264,9 @@ impl GridFormattingContext {
     // Get style from node context if available
     if let Some(&box_node_ptr) = taffy.get_node_context(node_id) {
       let box_node = unsafe { &*box_node_ptr };
-      if node_id == root_id {
+      let taffy_style = taffy.style(node_id).ok();
+      let is_grid_style = matches!(taffy_style.as_ref().map(|s| s.display), Some(Display::Grid));
+      if is_grid_style || !child_fragments.is_empty() {
         let mut fragment = FragmentNode::new_with_style(
           bounds,
           FragmentContent::Block {
@@ -1212,8 +1275,29 @@ impl GridFormattingContext {
           child_fragments,
           box_node.style.clone(),
         );
-        self.apply_grid_baseline_alignment(taffy, node_id, layout, &children, &mut fragment);
+        if is_grid_style {
+          self.apply_grid_baseline_alignment(taffy, node_id, layout, &children, &mut fragment);
+        }
+        if let Some(positioned) = positioned_children.get(&node_id) {
+          let mut abs_children =
+            self.layout_positioned_children_for_node(box_node, bounds, positioned)?;
+          fragment.children.append(&mut abs_children);
+        }
         return Ok(fragment);
+      }
+
+      if let Some(keys) = measured_node_keys.get(&node_id) {
+        for key in keys {
+          if let Some(measured) = measured_fragments.get(key) {
+            if (measured.bounds.width() - bounds.width()).abs() < 0.1
+              && (measured.bounds.height() - bounds.height()).abs() < 0.1
+            {
+              let mut reused = measured.clone();
+              translate_fragment_tree(&mut reused, Point::new(bounds.x(), bounds.y()));
+              return Ok(reused);
+            }
+          }
+        }
       }
 
       let fc_type = box_node
@@ -1229,95 +1313,6 @@ impl GridFormattingContext {
 
       let mut layout_child = (*box_node).clone();
       let mut layout_style = (*layout_child.style).clone();
-      if matches!(fc_type, FormattingContextType::Grid)
-        && (layout_style.grid_row_subgrid || layout_style.grid_column_subgrid)
-      {
-        if let Some(&container_ptr) = taffy.get_node_context(root_id) {
-          let container_style = unsafe { &*container_ptr }.style.as_ref();
-          let resolve_range = |start: i32, end: i32, track_count: usize| -> (usize, usize) {
-            if track_count == 0 {
-              return (0, 0);
-            }
-            let start_line = if start > 0 { start as usize } else { 1 };
-            let end_line = if end > 0 {
-              end as usize
-            } else {
-              track_count.saturating_add(1)
-            };
-            let start_idx = start_line.saturating_sub(1).min(track_count);
-            let end_idx = end_line.saturating_sub(1).min(track_count);
-            if end_idx < start_idx {
-              (0, track_count)
-            } else {
-              (start_idx, end_idx)
-            }
-          };
-
-          let merge_line_names = |parent: &[Vec<String>],
-                                  extra: &[Vec<String>],
-                                  start_idx: usize,
-                                  end_idx: usize|
-           -> Vec<Vec<String>> {
-            let line_count = end_idx.saturating_sub(start_idx).saturating_add(1);
-            let mut merged: Vec<Vec<String>> = if parent.is_empty() {
-              vec![Vec::new(); line_count]
-            } else {
-              let max_line = end_idx.min(parent.len().saturating_sub(1));
-              let start_line = start_idx.min(max_line);
-              parent[start_line..=max_line].to_vec()
-            };
-            if merged.len() < line_count {
-              merged.resize_with(line_count, Vec::new);
-            }
-            for (idx, target) in merged.iter_mut().enumerate() {
-              if let Some(names) = extra.get(idx) {
-                for name in names {
-                  if !target.iter().any(|n| n == name) {
-                    target.push(name.clone());
-                  }
-                }
-              }
-            }
-            merged
-          };
-
-          if layout_style.grid_row_subgrid {
-            let (start_idx, end_idx) = resolve_range(
-              layout_style.grid_row_start,
-              layout_style.grid_row_end,
-              container_style.grid_template_rows.len(),
-            );
-            layout_style.grid_template_rows =
-              container_style.grid_template_rows[start_idx..end_idx].to_vec();
-            layout_style.grid_row_gap = container_style.grid_row_gap;
-            layout_style.grid_row_line_names = merge_line_names(
-              &container_style.grid_row_line_names,
-              &layout_style.subgrid_row_line_names,
-              start_idx,
-              end_idx,
-            );
-            layout_style.grid_row_subgrid = false;
-          }
-
-          if layout_style.grid_column_subgrid {
-            let (start_idx, end_idx) = resolve_range(
-              layout_style.grid_column_start,
-              layout_style.grid_column_end,
-              container_style.grid_template_columns.len(),
-            );
-            layout_style.grid_template_columns =
-              container_style.grid_template_columns[start_idx..end_idx].to_vec();
-            layout_style.grid_column_gap = container_style.grid_column_gap;
-            layout_style.grid_column_line_names = merge_line_names(
-              &container_style.grid_column_line_names,
-              &layout_style.subgrid_column_line_names,
-              start_idx,
-              end_idx,
-            );
-            layout_style.grid_column_subgrid = false;
-          }
-        }
-      }
       layout_style.width = Some(Length::px(bounds.width()));
       layout_style.height = Some(Length::px(bounds.height()));
       layout_child.style = Arc::new(layout_style);
@@ -1342,6 +1337,154 @@ impl GridFormattingContext {
     } else {
       Ok(FragmentNode::new_block(bounds, child_fragments))
     }
+  }
+
+  fn layout_positioned_children_for_node(
+    &self,
+    box_node: &BoxNode,
+    bounds: Rect,
+    positioned_children: &[BoxNode],
+  ) -> Result<Vec<FragmentNode>, LayoutError> {
+    if positioned_children.is_empty() {
+      return Ok(Vec::new());
+    }
+
+    let padding_left =
+      self.resolve_length_for_width(box_node.style.padding_left, bounds.width(), &box_node.style);
+    let padding_top =
+      self.resolve_length_for_width(box_node.style.padding_top, bounds.width(), &box_node.style);
+    let border_left = self.resolve_length_for_width(
+      box_node.style.border_left_width,
+      bounds.width(),
+      &box_node.style,
+    );
+    let border_top = self.resolve_length_for_width(
+      box_node.style.border_top_width,
+      bounds.width(),
+      &box_node.style,
+    );
+    let border_right = self.resolve_length_for_width(
+      box_node.style.border_right_width,
+      bounds.width(),
+      &box_node.style,
+    );
+    let border_bottom = self.resolve_length_for_width(
+      box_node.style.border_bottom_width,
+      bounds.width(),
+      &box_node.style,
+    );
+    let padding_origin =
+      crate::geometry::Point::new(border_left + padding_left, border_top + padding_top);
+    let padding_size = crate::geometry::Size::new(
+      bounds.width() - border_left - border_right,
+      bounds.height() - border_top - border_bottom,
+    );
+    let padding_rect = crate::geometry::Rect::new(padding_origin, padding_size);
+
+    let block_base = if box_node.style.height.is_some() {
+      Some(padding_rect.size.height)
+    } else {
+      None
+    };
+    let establishes_abs_cb = box_node.style.position.is_positioned()
+      || !box_node.style.transform.is_empty()
+      || box_node.style.perspective.is_some();
+    let establishes_fixed_cb =
+      !box_node.style.transform.is_empty() || box_node.style.perspective.is_some();
+    let padding_cb = crate::layout::contexts::positioned::ContainingBlock::with_viewport_and_bases(
+      padding_rect,
+      self.viewport_size,
+      Some(padding_rect.size.width),
+      block_base,
+    );
+    let cb_for_absolute = if establishes_abs_cb {
+      padding_cb
+    } else {
+      self.nearest_positioned_cb
+    };
+
+    let abs = crate::layout::absolute_positioning::AbsoluteLayout::with_font_context(
+      self.font_context.clone(),
+    );
+    let mut fragments = Vec::with_capacity(positioned_children.len());
+    for child in positioned_children {
+      // Layout child as static for intrinsic size.
+      let mut layout_child = child.clone();
+      let mut style = (*layout_child.style).clone();
+      style.position = crate::style::position::Position::Relative;
+      style.top = None;
+      style.right = None;
+      style.bottom = None;
+      style.left = None;
+      layout_child.style = Arc::new(style);
+
+      let cb = match child.style.position {
+        crate::style::position::Position::Fixed => {
+          if establishes_fixed_cb {
+            padding_cb
+          } else {
+            crate::layout::contexts::positioned::ContainingBlock::viewport(self.viewport_size)
+          }
+        }
+        _ => cb_for_absolute,
+      };
+
+      let factory =
+        crate::layout::contexts::factory::FormattingContextFactory::with_font_context_viewport_and_cb(
+          self.font_context.clone(),
+          self.viewport_size,
+          cb,
+        );
+      let fc_type = layout_child
+        .formatting_context()
+        .unwrap_or(crate::style::display::FormattingContextType::Block);
+      let fc = factory.create(fc_type);
+      let child_constraints = LayoutConstraints::new(
+        CrateAvailableSpace::Definite(padding_rect.size.width),
+        block_base
+          .map(CrateAvailableSpace::Definite)
+          .unwrap_or(CrateAvailableSpace::Indefinite),
+      );
+      let mut child_fragment = fc.layout(&layout_child, &child_constraints)?;
+
+      let positioned_style = crate::layout::absolute_positioning::resolve_positioned_style(
+        &child.style,
+        &cb,
+        self.viewport_size,
+        &self.font_context,
+      );
+      // Static position resolves to where the element would be in flow; use the
+      // content origin here since AbsoluteLayout adds padding/border.
+      let static_pos = crate::geometry::Point::ZERO;
+      let preferred_min_inline = fc
+        .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
+        .ok();
+      let preferred_inline = fc
+        .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent)
+        .ok();
+      let preferred_min_block = fc
+        .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent)
+        .ok();
+      let preferred_block = fc
+        .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent)
+        .ok();
+
+      let mut input = crate::layout::absolute_positioning::AbsoluteLayoutInput::new(
+        positioned_style,
+        child_fragment.bounds.size,
+        static_pos,
+      );
+      input.is_replaced = child.is_replaced();
+      input.preferred_min_inline_size = preferred_min_inline;
+      input.preferred_inline_size = preferred_inline;
+      input.preferred_min_block_size = preferred_min_block;
+      input.preferred_block_size = preferred_block;
+      let result = abs.layout_absolute(&input, &cb)?;
+      child_fragment.bounds = crate::geometry::Rect::new(result.position, result.size);
+      fragments.push(child_fragment);
+    }
+
+    Ok(fragments)
   }
 
   fn alignment_for_axis(
@@ -1644,7 +1787,8 @@ impl GridFormattingContext {
     }
 
     let mut taffy: TaffyTree<*const BoxNode> = TaffyTree::new();
-    let root_id = self.build_taffy_tree(&mut taffy, box_node)?;
+    let mut positioned_children: HashMap<TaffyNodeId, Vec<BoxNode>> = HashMap::new();
+    let root_id = self.build_taffy_tree(&mut taffy, box_node, &mut positioned_children)?;
 
     // Use appropriate available space for intrinsic sizing
     let available_space = match mode {
@@ -2041,6 +2185,7 @@ impl FormattingContext for GridFormattingContext {
 
     // Create fresh Taffy tree for this layout
     let mut taffy: TaffyTree<*const BoxNode> = TaffyTree::new();
+    let mut positioned_children_map: HashMap<TaffyNodeId, Vec<BoxNode>> = HashMap::new();
 
     // Partition children into in-flow vs. out-of-flow positioned.
     let mut in_flow_children: Vec<&BoxNode> = Vec::new();
@@ -2055,7 +2200,15 @@ impl FormattingContext for GridFormattingContext {
     }
 
     // Build Taffy tree from in-flow children
-    let root_id = self.build_taffy_tree_children(&mut taffy, box_node, &in_flow_children)?;
+    let root_id = self.build_taffy_tree_children(
+      &mut taffy,
+      box_node,
+      &in_flow_children,
+      &mut positioned_children_map,
+    )?;
+    if !positioned_children.is_empty() {
+      positioned_children_map.insert(root_id, positioned_children);
+    }
 
     if trace_grid_layout {
       let selector = box_node
@@ -2133,6 +2286,9 @@ impl FormattingContext for GridFormattingContext {
 
     // Run Taffy layout
     record_taffy_invocation(TaffyAdapterKind::Grid);
+    let mut measure_cache: HashMap<MeasureKey, taffy::geometry::Size<f32>> = HashMap::new();
+    let mut measured_fragments: HashMap<MeasureKey, FragmentNode> = HashMap::new();
+    let mut measured_node_keys: HashMap<TaffyNodeId, Vec<MeasureKey>> = HashMap::new();
     taffy
 	      .compute_layout_with_measure(
 	        root_id,
@@ -2148,7 +2304,9 @@ impl FormattingContext for GridFormattingContext {
 	          let viewport_size = self.viewport_size;
 	          let parent_inline_base = constraints.inline_percentage_base;
 	          let container_justify_items = box_node.style.justify_items;
-	          let mut cache: HashMap<MeasureKey, taffy::geometry::Size<f32>> = HashMap::new();
+	          let cache = &mut measure_cache;
+	          let measured = &mut measured_fragments;
+	          let measured_keys = &mut measured_node_keys;
 	          move |known_dimensions,
 	                available_space,
 	                node_id,
@@ -2311,7 +2469,7 @@ impl FormattingContext for GridFormattingContext {
 	              }
 	            }
 
-	            let fragment = match fc.layout(box_node, &constraints) {
+	            let mut fragment = match fc.layout(box_node, &constraints) {
 	              Ok(fragment) => fragment,
 	              Err(_) => return taffy::geometry::Size::ZERO,
 	            };
@@ -2321,11 +2479,17 @@ impl FormattingContext for GridFormattingContext {
 	                .width()
 	                .unwrap_or_else(|| fragment.bounds.width()),
 	            };
+	            fragment.content = FragmentContent::Block {
+	              box_id: Some(box_node.id),
+	            };
+	            fragment.style = Some(box_node.style.clone());
 	            let content_size = this.content_box_size(&fragment, &box_node.style, percentage_base);
 	            let size = taffy::geometry::Size {
 	              width: content_size.width.max(0.0),
 	              height: content_size.height.max(0.0),
 	            };
+	            measured_keys.entry(node_id).or_default().push(key);
+	            measured.insert(key, fragment);
 	            cache.insert(key, size);
 	            size
 	          }
@@ -2339,7 +2503,15 @@ impl FormattingContext for GridFormattingContext {
     }
 
     // Convert back to FragmentNode tree and layout each in-flow child using its formatting context.
-    let mut fragment = self.convert_to_fragments(&taffy, root_id, root_id, &constraints)?;
+    let mut fragment = self.convert_to_fragments(
+      &taffy,
+      root_id,
+      root_id,
+      &constraints,
+      &measured_fragments,
+      &measured_node_keys,
+      &positioned_children_map,
+    )?;
 
     if let Some(trace_id) = crate::debug::runtime::runtime_toggles().usize("FASTR_TRACE_GRID_TEXT")
     {
@@ -2363,150 +2535,6 @@ impl FormattingContext for GridFormattingContext {
           box_node.debug_info.as_ref().map(|d| d.to_selector()),
           count_texts(&fragment)
         );
-      }
-    }
-
-    // Position out-of-flow children against the appropriate containing block.
-    if !positioned_children.is_empty() {
-      let padding_left = self.resolve_length_for_width(
-        box_node.style.padding_left,
-        constraints.width().unwrap_or(0.0),
-        &box_node.style,
-      );
-      let padding_top = self.resolve_length_for_width(
-        box_node.style.padding_top,
-        constraints.width().unwrap_or(0.0),
-        &box_node.style,
-      );
-      let border_left = self.resolve_length_for_width(
-        box_node.style.border_left_width,
-        constraints.width().unwrap_or(0.0),
-        &box_node.style,
-      );
-      let border_top = self.resolve_length_for_width(
-        box_node.style.border_top_width,
-        constraints.width().unwrap_or(0.0),
-        &box_node.style,
-      );
-      let border_right = self.resolve_length_for_width(
-        box_node.style.border_right_width,
-        constraints.width().unwrap_or(0.0),
-        &box_node.style,
-      );
-      let border_bottom = self.resolve_length_for_width(
-        box_node.style.border_bottom_width,
-        constraints.width().unwrap_or(0.0),
-        &box_node.style,
-      );
-      let padding_origin =
-        crate::geometry::Point::new(border_left + padding_left, border_top + padding_top);
-      let padding_size = crate::geometry::Size::new(
-        fragment.bounds.width() - border_left - border_right,
-        fragment.bounds.height() - border_top - border_bottom,
-      );
-      let padding_rect = crate::geometry::Rect::new(padding_origin, padding_size);
-
-      let block_base = if box_node.style.height.is_some() {
-        Some(padding_rect.size.height)
-      } else {
-        None
-      };
-      let establishes_abs_cb = box_node.style.position.is_positioned()
-        || !box_node.style.transform.is_empty()
-        || box_node.style.perspective.is_some();
-      let establishes_fixed_cb =
-        !box_node.style.transform.is_empty() || box_node.style.perspective.is_some();
-      let padding_cb =
-        crate::layout::contexts::positioned::ContainingBlock::with_viewport_and_bases(
-          padding_rect,
-          self.viewport_size,
-          Some(padding_rect.size.width),
-          block_base,
-        );
-      let cb_for_absolute = if establishes_abs_cb {
-        padding_cb
-      } else {
-        self.nearest_positioned_cb
-      };
-
-      let abs = crate::layout::absolute_positioning::AbsoluteLayout::with_font_context(
-        self.font_context.clone(),
-      );
-      for child in positioned_children {
-        // Layout child as static for intrinsic size.
-        let mut layout_child = child.clone();
-        let mut style = (*layout_child.style).clone();
-        style.position = crate::style::position::Position::Relative;
-        style.top = None;
-        style.right = None;
-        style.bottom = None;
-        style.left = None;
-        layout_child.style = Arc::new(style);
-
-        let cb = match child.style.position {
-          crate::style::position::Position::Fixed => {
-            if establishes_fixed_cb {
-              padding_cb
-            } else {
-              crate::layout::contexts::positioned::ContainingBlock::viewport(self.viewport_size)
-            }
-          }
-          _ => cb_for_absolute,
-        };
-
-        let factory =
-                    crate::layout::contexts::factory::FormattingContextFactory::with_font_context_viewport_and_cb(
-                        self.font_context.clone(),
-                        self.viewport_size,
-                        cb,
-                    );
-        let fc_type = layout_child
-          .formatting_context()
-          .unwrap_or(crate::style::display::FormattingContextType::Block);
-        let fc = factory.create(fc_type);
-        let child_constraints = LayoutConstraints::new(
-          CrateAvailableSpace::Definite(padding_rect.size.width),
-          block_base
-            .map(CrateAvailableSpace::Definite)
-            .unwrap_or(CrateAvailableSpace::Indefinite),
-        );
-        let mut child_fragment = fc.layout(&layout_child, &child_constraints)?;
-
-        let positioned_style = crate::layout::absolute_positioning::resolve_positioned_style(
-          &child.style,
-          &cb,
-          self.viewport_size,
-          &self.font_context,
-        );
-        // Static position resolves to where the element would be in flow; use the
-        // content origin here since AbsoluteLayout adds padding/border.
-        let static_pos = crate::geometry::Point::ZERO;
-        let preferred_min_inline = fc
-          .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
-          .ok();
-        let preferred_inline = fc
-          .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent)
-          .ok();
-        let preferred_min_block = fc
-          .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent)
-          .ok();
-        let preferred_block = fc
-          .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent)
-          .ok();
-
-        let mut input = crate::layout::absolute_positioning::AbsoluteLayoutInput::new(
-          positioned_style,
-          child_fragment.bounds.size,
-          static_pos,
-        );
-        input.is_replaced = child.is_replaced();
-        input.preferred_min_inline_size = preferred_min_inline;
-        input.preferred_inline_size = preferred_inline;
-        input.preferred_min_block_size = preferred_min_block;
-        input.preferred_block_size = preferred_block;
-        let result = abs.layout_absolute(&input, &cb)?;
-        child_fragment.bounds = crate::geometry::Rect::new(result.position, result.size);
-        fragment.children.push(child_fragment);
       }
     }
 
@@ -2612,7 +2640,7 @@ mod tests {
 
     let gc = GridFormattingContext::new();
     let _root_id = gc
-      .build_taffy_tree(&mut TaffyTree::new(), &parent)
+      .build_taffy_tree(&mut TaffyTree::new(), &parent, &mut HashMap::new())
       .expect("grid conversion");
     // If the fast path is taken, the parent container style should have been converted to block.
     let taffy_style = gc.convert_style(&parent.style, None, true, true);

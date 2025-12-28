@@ -22,6 +22,144 @@ fn assert_approx(val: f32, expected: f32, msg: &str) {
 }
 
 #[test]
+fn subgrid_contributes_to_parent_row_track_sizing() {
+  let mut parent_style = ComputedStyle::default();
+  parent_style.display = Display::Grid;
+  parent_style.grid_template_rows = vec![GridTrack::Auto, GridTrack::Auto];
+  parent_style.grid_template_columns = vec![GridTrack::Auto];
+  parent_style.width = Some(Length::px(200.0));
+
+  let mut subgrid_style = ComputedStyle::default();
+  subgrid_style.display = Display::Grid;
+  subgrid_style.grid_row_subgrid = true;
+  subgrid_style.grid_row_start = 1;
+  subgrid_style.grid_row_end = 3;
+
+  let mut child1_style = ComputedStyle::default();
+  child1_style.display = Display::Block;
+  child1_style.height = Some(Length::px(10.0));
+  child1_style.grid_row_start = 1;
+  child1_style.grid_row_end = 2;
+
+  let mut child2_style = ComputedStyle::default();
+  child2_style.display = Display::Block;
+  child2_style.height = Some(Length::px(50.0));
+  child2_style.grid_row_start = 2;
+  child2_style.grid_row_end = 3;
+
+  let inner1 = BoxNode::new_block(Arc::new(child1_style), FormattingContextType::Block, vec![]);
+  let inner2 = BoxNode::new_block(Arc::new(child2_style), FormattingContextType::Block, vec![]);
+
+  let subgrid = BoxNode::new_block(
+    Arc::new(subgrid_style),
+    FormattingContextType::Grid,
+    vec![inner1, inner2],
+  );
+
+  let mut sibling_style = ComputedStyle::default();
+  sibling_style.display = Display::Block;
+  sibling_style.height = Some(Length::px(5.0));
+  sibling_style.grid_row_start = 2;
+  sibling_style.grid_row_end = 3;
+  let sibling = BoxNode::new_block(
+    Arc::new(sibling_style),
+    FormattingContextType::Block,
+    vec![],
+  );
+
+  let grid = BoxNode::new_block(
+    Arc::new(parent_style),
+    FormattingContextType::Grid,
+    vec![subgrid, sibling],
+  );
+
+  let fc = GridFormattingContext::new();
+  let fragment = fc
+    .layout(&grid, &LayoutConstraints::definite(200.0, 200.0))
+    .expect("layout succeeds");
+
+  let subgrid_fragment = &fragment.children[0];
+  let sibling_fragment = &fragment.children[1];
+  let inner_second = &subgrid_fragment.children[1];
+
+  assert_approx(sibling_fragment.bounds.y(), 10.0, "second row start");
+  assert_approx(
+    sibling_fragment.bounds.y(),
+    inner_second.bounds.y(),
+    "parent row line matches subgrid row",
+  );
+}
+
+#[test]
+fn subgrid_contributes_to_parent_column_track_sizing() {
+  let mut parent_style = ComputedStyle::default();
+  parent_style.display = Display::Grid;
+  parent_style.grid_template_columns = vec![GridTrack::Auto, GridTrack::Auto];
+  parent_style.grid_template_rows = vec![GridTrack::Auto];
+  parent_style.width = Some(Length::px(200.0));
+
+  let mut subgrid_style = ComputedStyle::default();
+  subgrid_style.display = Display::Grid;
+  subgrid_style.grid_column_subgrid = true;
+  subgrid_style.grid_column_start = 1;
+  subgrid_style.grid_column_end = 3;
+
+  let mut col1_style = ComputedStyle::default();
+  col1_style.display = Display::Block;
+  col1_style.width = Some(Length::px(20.0));
+  col1_style.grid_column_start = 1;
+  col1_style.grid_column_end = 2;
+
+  let mut col2_style = ComputedStyle::default();
+  col2_style.display = Display::Block;
+  col2_style.width = Some(Length::px(60.0));
+  col2_style.grid_column_start = 2;
+  col2_style.grid_column_end = 3;
+
+  let inner1 = BoxNode::new_block(Arc::new(col1_style), FormattingContextType::Block, vec![]);
+  let inner2 = BoxNode::new_block(Arc::new(col2_style), FormattingContextType::Block, vec![]);
+
+  let subgrid = BoxNode::new_block(
+    Arc::new(subgrid_style),
+    FormattingContextType::Grid,
+    vec![inner1, inner2],
+  );
+
+  let mut sibling_style = ComputedStyle::default();
+  sibling_style.display = Display::Block;
+  sibling_style.width = Some(Length::px(5.0));
+  sibling_style.grid_column_start = 2;
+  sibling_style.grid_column_end = 3;
+  let sibling = BoxNode::new_block(
+    Arc::new(sibling_style),
+    FormattingContextType::Block,
+    vec![],
+  );
+
+  let grid = BoxNode::new_block(
+    Arc::new(parent_style),
+    FormattingContextType::Grid,
+    vec![subgrid, sibling],
+  );
+
+  let fc = GridFormattingContext::new();
+  let fragment = fc
+    .layout(&grid, &LayoutConstraints::definite(200.0, 200.0))
+    .expect("layout succeeds");
+
+  let subgrid_fragment = &fragment.children[0];
+  let sibling_fragment = &fragment.children[1];
+  let inner_second = &subgrid_fragment.children[1];
+
+  assert_approx(sibling_fragment.bounds.x(), 20.0, "second column start");
+  assert_approx(
+    sibling_fragment.bounds.x(),
+    inner_second.bounds.x(),
+    "parent column line matches subgrid column",
+  );
+}
+
+#[test]
 fn row_subgrid_uses_parent_tracks() {
   let mut parent_style = ComputedStyle::default();
   parent_style.display = Display::Grid;
