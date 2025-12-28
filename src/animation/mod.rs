@@ -2067,8 +2067,8 @@ fn normalize_time_progress(time: Duration) -> f32 {
   (time.as_secs_f64().fract()) as f32
 }
 
-/// Applies animations to the fragment tree by sampling @keyframes rules based on
-/// scroll/view timelines and an optional time-based default timeline.
+/// Applies scroll/view timeline-driven animations to the fragment tree by sampling
+/// matching @keyframes rules and applying animated properties (currently opacity).
 ///
 /// This is a lightweight hook to make scroll-driven effects visible without a full
 /// animation engine. It uses the provided scroll state for viewport and element scroll offsets.

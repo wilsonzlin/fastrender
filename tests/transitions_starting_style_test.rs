@@ -9,13 +9,12 @@ use fastrender::tree::fragment_tree::{FragmentNode, FragmentTree};
 use r#ref::image_compare::{compare_config_from_env, compare_pngs, CompareEnvVars};
 use std::fs;
 use std::path::PathBuf;
-use std::time::Duration;
 
 fn prepare(html: &str, width: u32, height: u32) -> (BoxTree, FragmentTree, StyledNode) {
   let mut renderer = FastRender::new().expect("renderer");
   let options = RenderOptions::new()
     .with_viewport(width, height)
-    .with_animation_time(Duration::from_secs_f32(0.0));
+    .with_animation_time(0.0);
   let prepared = renderer.prepare_html(html, options).expect("prepare");
   (
     prepared.box_tree().clone(),
@@ -204,13 +203,13 @@ fn visual_fixture_matches_goldens() {
   let compare_config = compare_config_from_env(CompareEnvVars::fixtures()).expect("compare config");
   let mut renderer = FastRender::new().expect("renderer");
   let cases = [
-    ("transition_starting_style_0ms", 0.0_f32),
-    ("transition_starting_style_400ms", 400.0_f32),
+    ("transition_starting_style_0ms", 0.0),
+    ("transition_starting_style_400ms", 400.0),
   ];
   for (name, time) in cases {
     let options = RenderOptions::new()
       .with_viewport(260, 180)
-      .with_animation_time(Duration::from_secs_f32(time));
+      .with_animation_time(time);
     let pixmap = renderer
       .render_html_with_options(&html, options)
       .expect("render");

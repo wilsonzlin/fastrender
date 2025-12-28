@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use fastrender::scroll::ScrollState;
 use fastrender::style::types::Overflow;
 use fastrender::{
@@ -84,13 +82,10 @@ fn repaint_with_different_animation_times_changes_pixels() -> Result<()> {
   "#;
   let prepared = renderer.prepare_html(html, RenderOptions::new().with_viewport(100, 100))?;
 
-  let early =
-    prepared.paint_with_options(PreparedPaintOptions::new().with_animation_time(Duration::ZERO))?;
-  let later = prepared.paint_with_options(
-    PreparedPaintOptions::new().with_animation_time(Duration::from_millis(800)),
-  )?;
-  let repeat =
-    prepared.paint_with_options(PreparedPaintOptions::new().with_animation_time(Duration::ZERO))?;
+  let early = prepared.paint_with_options(PreparedPaintOptions::new().with_animation_time(0.0))?;
+  let later =
+    prepared.paint_with_options(PreparedPaintOptions::new().with_animation_time(800.0))?;
+  let repeat = prepared.paint_with_options(PreparedPaintOptions::new().with_animation_time(0.0))?;
 
   assert_ne!(pixel(&early, 50, 50), pixel(&later, 50, 50));
   assert_eq!(early.data(), repeat.data());

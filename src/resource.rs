@@ -23,7 +23,6 @@
 //! ```
 
 use crate::error::{Error, ImageError, ResourceError, Result};
-use http::HeaderMap;
 use httpdate::parse_http_date;
 use lru::LruCache;
 use std::cell::RefCell;

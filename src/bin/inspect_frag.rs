@@ -321,10 +321,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
               style.color.a
             ));
             if let Some(bg_var) = style.custom_properties.get("--theme-header__background") {
-              summary.push_str(&format!(" var(--theme-header__background)={bg_var:?}"));
+              summary.push_str(&format!(
+                " var(--theme-header__background)={}",
+                bg_var.value
+              ));
             }
             if let Some(copy_var) = style.custom_properties.get("--theme-header__copy-accent") {
-              summary.push_str(&format!(" var(--theme-header__copy-accent)={copy_var:?}"));
+              summary.push_str(&format!(
+                " var(--theme-header__copy-accent)={}",
+                copy_var.value
+              ));
             }
             header_styles.push((style.clone(), summary));
           }
@@ -343,7 +349,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
           style.color.a
         ));
         if let Some(bg_var) = style.custom_properties.get("--semantic-color-bg-primary") {
-          summary.push_str(&format!(" var(--semantic-color-bg-primary)={bg_var:?}"));
+          summary.push_str(&format!(
+            " var(--semantic-color-bg-primary)={}",
+            bg_var.value
+          ));
         }
         body_styles.push((style.clone(), summary));
       }
@@ -973,7 +982,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       // Show a couple of custom properties for early contexts when present.
       for key in ["--theme-header__background", "--semantic-color-bg-primary"] {
         if let Some(val) = ctx.style.custom_properties.get(key) {
-          println!("      var {key} = {:?}", val);
+          println!("      var {key} = {}", val.value);
         }
       }
     }

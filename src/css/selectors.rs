@@ -165,21 +165,19 @@ impl<'a> SlotAssignmentMap<'a> {
   }
 }
 
-/// Mapping of ::part() export chains keyed by shadow host id.
+/// Mapping from shadow hosts to their `exportparts` mappings.
 #[derive(Debug, Default, Clone)]
 pub struct PartExportMap {
-  exports: HashMap<usize, HashMap<String, Vec<usize>>>,
+  hosts: HashMap<usize, HashMap<String, Vec<usize>>>,
 }
 
 impl PartExportMap {
-  /// Returns the export mapping for a given shadow host, when present.
-  pub fn exports_for_host(&self, host_id: usize) -> Option<&HashMap<String, Vec<usize>>> {
-    self.exports.get(&host_id)
+  pub fn exports_for_host(&self, host: usize) -> Option<&HashMap<String, Vec<usize>>> {
+    self.hosts.get(&host)
   }
 
-  /// Stores exported part mappings for a shadow host.
-  pub fn insert_host_exports(&mut self, host_id: usize, exports: HashMap<String, Vec<usize>>) {
-    self.exports.insert(host_id, exports);
+  pub fn insert_host_exports(&mut self, host: usize, exports: HashMap<String, Vec<usize>>) {
+    self.hosts.insert(host, exports);
   }
 }
 

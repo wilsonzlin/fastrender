@@ -265,7 +265,11 @@ pub fn paginate_fragment_tree(
     FragmentAxes::from_writing_mode_and_direction(style.writing_mode, style.direction)
   };
   let mut string_set_events = collect_string_set_events(&base_root, box_tree, base_axes);
-  string_set_events.sort_by(|a, b| a.abs_block.partial_cmp(&b.abs_block).unwrap_or(Ordering::Equal));
+  string_set_events.sort_by(|a, b| {
+    a.abs_block
+      .partial_cmp(&b.abs_block)
+      .unwrap_or(Ordering::Equal)
+  });
   let mut string_event_idx = 0usize;
   let mut string_set_carry: HashMap<String, String> = HashMap::new();
 

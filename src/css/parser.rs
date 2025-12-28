@@ -38,13 +38,13 @@ use super::types::PagePseudoClass;
 use super::types::PageRule;
 use super::types::PageSelector;
 use super::types::PropertyRule;
+use super::types::PropertyValue;
 use super::types::ScopeRule;
 use super::types::StartingStyleRule;
 use super::types::StyleRule;
 use super::types::StyleSheet;
 use super::types::SupportsCondition;
 use super::types::SupportsRule;
-use super::types::PropertyValue;
 use crate::dom::{DomNode, DomNodeType, HTML_NAMESPACE};
 use crate::error::Result;
 use crate::style::color::Color;
@@ -1748,9 +1748,8 @@ fn parse_font_palette_values_rule<'i, 't>(
     parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent("expected {".into()))
   })?;
 
-  let rule = parser.parse_nested_block(|nested| {
-    parse_font_palette_descriptors(nested, name.trim(), css_source)
-  })?;
+  let rule = parser
+    .parse_nested_block(|nested| parse_font_palette_descriptors(nested, name.trim(), css_source))?;
   Ok(rule.map(CssRule::FontPaletteValues))
 }
 

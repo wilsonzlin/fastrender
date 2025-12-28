@@ -14,6 +14,7 @@ use crate::css::selectors::PseudoElement;
 use crate::css::selectors::ShadowMatchData;
 use crate::css::selectors::SlotAssignmentMap;
 use crate::css::selectors::TextDirection;
+use crate::css::types::CollectedRule;
 use crate::css::types::ContainerCondition;
 use crate::css::types::ContainerQuery;
 use crate::css::types::ContainerStyleQuery;
@@ -37,6 +38,7 @@ use crate::dom::SlotAssignment;
 use crate::geometry::Size;
 use crate::render_control::RenderDeadline;
 use crate::style::color::{Color, Rgba};
+use crate::style::custom_properties::CustomPropertyRegistry;
 use crate::style::defaults::get_default_styles_for_element;
 use crate::style::defaults::parse_color_attribute;
 use crate::style::defaults::parse_dimension_attribute;
@@ -1603,17 +1605,15 @@ struct MatchedDeclaration<'a> {
 const INLINE_SPECIFICITY: u32 = 1 << 30;
 const INLINE_RULE_ORDER: usize = usize::MAX / 2;
 
-/// Per-node starting-style snapshots for transitions.
-#[derive(Debug, Clone, Default)]
+/// Starting-style snapshots for an element and its pseudos.
+#[derive(Debug, Default, Clone)]
 pub struct StartingStyleSet {
-  /// Computed style for the element in the starting snapshot.
   pub base: Option<Box<ComputedStyle>>,
-  /// Starting style for ::before, when present.
   pub before: Option<Box<ComputedStyle>>,
-  /// Starting style for ::after, when present.
   pub after: Option<Box<ComputedStyle>>,
-  /// Starting style for ::marker, when present.
   pub marker: Option<Box<ComputedStyle>>,
+  pub first_line: Option<Box<ComputedStyle>>,
+  pub first_letter: Option<Box<ComputedStyle>>,
 }
 
 /// A styled DOM node with computed CSS styles
@@ -1623,7 +1623,7 @@ pub struct StyledNode {
   pub node_id: usize,
   pub node: DomNode,
   pub styles: ComputedStyle,
-  /// Starting-style snapshots used for transitions.
+  /// Starting-style snapshots populated when @starting-style rules are present.
   pub starting_styles: StartingStyleSet,
   /// Styles for ::before pseudo-element (if content is set)
   pub before_styles: Option<Box<ComputedStyle>>,
@@ -1640,6 +1640,35 @@ pub struct StyledNode {
   /// Slotted light DOM node ids assigned to this <slot> element.
   pub slotted_node_ids: Vec<usize>,
   pub children: Vec<StyledNode>,
+}
+
+/// Copies starting-style snapshots from a parallel styled tree into the target tree.
+///
+/// The traversal assumes both trees were produced from the same DOM with identical
+/// pre-order numbering; when their shapes diverge the copy stops at the shortest path.
+pub fn attach_starting_styles(target: &mut StyledNode, starting: &StyledNode) {
+  target.starting_styles.base = Some(Box::new(starting.styles.clone()));
+  target.starting_styles.before = starting.before_styles.clone();
+  target.starting_styles.after = starting.after_styles.clone();
+  target.starting_styles.marker = starting.marker_styles.clone();
+  target.starting_styles.first_line = starting.first_line_styles.clone();
+  target.starting_styles.first_letter = starting.first_letter_styles.clone();
+
+  let child_count = target.children.len().min(starting.children.len());
+  for idx in 0..child_count {
+    attach_starting_styles(&mut target.children[idx], &starting.children[idx]);
+  }
+}
+
+fn filter_starting_rules<'a>(
+  rules: Vec<CollectedRule<'a>>,
+  include_starting_style: bool,
+) -> Vec<CollectedRule<'a>> {
+  if include_starting_style {
+    rules
+  } else {
+    rules.into_iter().filter(|r| !r.starting_style).collect()
+  }
 }
 
 fn count_styled_nodes(node: &StyledNode) -> usize {
@@ -1890,6 +1919,37 @@ pub fn apply_styles_with_media_target_and_imports_cached_with_deadline(
   mut media_cache: Option<&mut MediaQueryCache>,
   deadline: Option<&RenderDeadline>,
 ) -> Result<StyledNode, RenderError> {
+  apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
+    dom,
+    stylesheet,
+    media_ctx,
+    target_fragment,
+    import_loader,
+    base_url,
+    container_ctx,
+    container_scope,
+    reuse_map,
+    media_cache.as_deref_mut(),
+    deadline,
+    false,
+  )
+}
+
+#[allow(clippy::implicit_hasher)]
+fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
+  dom: &DomNode,
+  stylesheet: &StyleSheet,
+  media_ctx: &MediaContext,
+  target_fragment: Option<&str>,
+  import_loader: Option<&dyn CssImportLoader>,
+  base_url: Option<&str>,
+  container_ctx: Option<&ContainerQueryContext>,
+  container_scope: Option<&HashSet<usize>>,
+  reuse_map: Option<&HashMap<usize, *const StyledNode>>,
+  mut media_cache: Option<&mut MediaQueryCache>,
+  deadline: Option<&RenderDeadline>,
+  include_starting_style: bool,
+) -> Result<StyledNode, RenderError> {
   let profile_enabled = cascade_profile_enabled();
   let profile_start = profile_enabled.then(|| Instant::now());
   if profile_enabled {
@@ -1915,16 +1975,22 @@ pub fn apply_styles_with_media_target_and_imports_cached_with_deadline(
 
   // Collect applicable rules from both stylesheets
   // User-agent rules come first (lower priority)
-  let ua_rules = if let Some(cache) = media_cache.as_deref_mut() {
-    ua_stylesheet.collect_style_rules_with_cache(media_ctx, Some(cache))
-  } else {
-    ua_stylesheet.collect_style_rules(media_ctx)
-  };
-  let author_rules = if let Some(cache) = media_cache.as_deref_mut() {
-    author_sheet.collect_style_rules_with_cache(media_ctx, Some(cache))
-  } else {
-    author_sheet.collect_style_rules(media_ctx)
-  };
+  let ua_rules = filter_starting_rules(
+    if let Some(cache) = media_cache.as_deref_mut() {
+      ua_stylesheet.collect_style_rules_with_cache(media_ctx, Some(cache))
+    } else {
+      ua_stylesheet.collect_style_rules(media_ctx)
+    },
+    include_starting_style,
+  );
+  let author_rules = filter_starting_rules(
+    if let Some(cache) = media_cache.as_deref_mut() {
+      author_sheet.collect_style_rules_with_cache(media_ctx, Some(cache))
+    } else {
+      author_sheet.collect_style_rules(media_ctx)
+    },
+    include_starting_style,
+  );
 
   let mut shadow_sheets: Vec<(usize, usize, Box<StyleSheet>)> = Vec::new();
   if !shadow_stylesheets.is_empty() {
@@ -1995,11 +2061,14 @@ pub fn apply_styles_with_media_target_and_imports_cached_with_deadline(
   let mut shadow_host_indices: HashMap<usize, RuleIndex<'_>> = HashMap::new();
 
   for (host, shadow_root_id, sheet) in &shadow_sheets {
-    let collected = if let Some(cache) = media_cache.as_deref_mut() {
-      sheet.collect_style_rules_with_cache(media_ctx, Some(cache))
-    } else {
-      sheet.collect_style_rules(media_ctx)
-    };
+    let collected = filter_starting_rules(
+      if let Some(cache) = media_cache.as_deref_mut() {
+        sheet.collect_style_rules_with_cache(media_ctx, Some(cache))
+      } else {
+        sheet.collect_style_rules(media_ctx)
+      },
+      include_starting_style,
+    );
     let mut rules: Vec<CascadeRule<'_>> = Vec::new();
     let mut host_rules: Vec<CascadeRule<'_>> = Vec::new();
 
@@ -2088,10 +2157,103 @@ pub fn apply_styles_with_media_target_and_imports_cached_with_deadline(
     std::sync::Arc::new(registry)
   };
 
+  let font_palettes = {
+    let mut registry = crate::style::font_palette::FontPaletteRegistry::default();
+
+    let ua_palettes = if let Some(cache) = media_cache.as_deref_mut() {
+      ua_stylesheet.collect_font_palette_rules_with_cache(media_ctx, Some(cache))
+    } else {
+      ua_stylesheet.collect_font_palette_rules(media_ctx)
+    };
+    let author_palettes = if let Some(cache) = media_cache.as_deref_mut() {
+      author_sheet.collect_font_palette_rules_with_cache(media_ctx, Some(cache))
+    } else {
+      author_sheet.collect_font_palette_rules(media_ctx)
+    };
+
+    fn register_collected(
+      registry: &mut crate::style::font_palette::FontPaletteRegistry,
+      mut collected: Vec<crate::css::types::CollectedFontPaletteRule<'_>>,
+    ) {
+      collected.sort_by(|a, b| {
+        a.layer_order
+          .cmp(&b.layer_order)
+          .then(a.order.cmp(&b.order))
+      });
+      for rule in collected {
+        registry.register(rule.rule.clone());
+      }
+    }
+
+    register_collected(&mut registry, ua_palettes);
+    register_collected(&mut registry, author_palettes);
+
+    for (_host, _shadow_root_id, sheet) in &shadow_sheets {
+      let shadow_palettes = if let Some(cache) = media_cache.as_deref_mut() {
+        sheet.collect_font_palette_rules_with_cache(media_ctx, Some(cache))
+      } else {
+        sheet.collect_font_palette_rules(media_ctx)
+      };
+      register_collected(&mut registry, shadow_palettes);
+    }
+
+    std::sync::Arc::new(registry)
+  };
+
+  let property_registry = {
+    let mut registry = CustomPropertyRegistry::default();
+
+    fn register_collected(
+      registry: &mut CustomPropertyRegistry,
+      mut collected: Vec<crate::css::types::CollectedPropertyRule<'_>>,
+    ) {
+      collected.sort_by(|a, b| {
+        a.layer_order
+          .cmp(&b.layer_order)
+          .then(a.order.cmp(&b.order))
+      });
+      for rule in collected {
+        registry.register(rule.rule.clone());
+      }
+    }
+
+    let ua_properties = if let Some(cache) = media_cache.as_deref_mut() {
+      ua_stylesheet.collect_property_rules_with_cache(media_ctx, Some(cache))
+    } else {
+      ua_stylesheet.collect_property_rules(media_ctx)
+    };
+    register_collected(&mut registry, ua_properties);
+
+    let author_properties = if let Some(cache) = media_cache.as_deref_mut() {
+      author_sheet.collect_property_rules_with_cache(media_ctx, Some(cache))
+    } else {
+      author_sheet.collect_property_rules(media_ctx)
+    };
+    register_collected(&mut registry, author_properties);
+
+    for (_host, _shadow_root_id, sheet) in &shadow_sheets {
+      let shadow_properties = if let Some(cache) = media_cache.as_deref_mut() {
+        sheet.collect_property_rules_with_cache(media_ctx, Some(cache))
+      } else {
+        sheet.collect_property_rules(media_ctx)
+      };
+      register_collected(&mut registry, shadow_properties);
+    }
+
+    std::sync::Arc::new(registry)
+  };
+  let initial_custom_properties = property_registry.initial_values();
+
   let mut base_styles = ComputedStyle::default();
   base_styles.counter_styles = counter_styles.clone();
+  base_styles.font_palettes = font_palettes.clone();
+  base_styles.custom_property_registry = property_registry.clone();
+  base_styles.custom_properties = initial_custom_properties.clone();
   let mut base_ua_styles = ComputedStyle::default();
   base_ua_styles.counter_styles = counter_styles;
+  base_ua_styles.font_palettes = font_palettes;
+  base_ua_styles.custom_property_registry = property_registry.clone();
+  base_ua_styles.custom_properties = initial_custom_properties;
   let has_starting_styles = ua_stylesheet.has_starting_style_rules()
     || author_sheet.has_starting_style_rules()
     || shadow_sheets
@@ -2248,6 +2410,70 @@ pub fn apply_style_set_with_media_target_and_imports_cached_with_deadline(
   mut media_cache: Option<&mut MediaQueryCache>,
   deadline: Option<&RenderDeadline>,
 ) -> Result<StyledNode, RenderError> {
+  apply_style_set_with_media_target_and_imports_cached_with_deadline_impl(
+    dom,
+    style_set,
+    media_ctx,
+    target_fragment,
+    import_loader,
+    base_url,
+    container_ctx,
+    container_scope,
+    reuse_map,
+    media_cache.as_deref_mut(),
+    deadline,
+    false,
+  )
+}
+
+/// Apply starting-style rules from a `StyleSet`, preserving import caching and deadlines.
+#[allow(clippy::needless_option_as_deref)]
+#[allow(clippy::implicit_hasher)]
+pub fn apply_starting_style_set_with_media_target_and_imports_cached_with_deadline(
+  dom: &DomNode,
+  style_set: &StyleSet,
+  media_ctx: &MediaContext,
+  target_fragment: Option<&str>,
+  import_loader: Option<&dyn CssImportLoader>,
+  base_url: Option<&str>,
+  container_ctx: Option<&ContainerQueryContext>,
+  container_scope: Option<&HashSet<usize>>,
+  reuse_map: Option<&HashMap<usize, *const StyledNode>>,
+  mut media_cache: Option<&mut MediaQueryCache>,
+  deadline: Option<&RenderDeadline>,
+) -> Result<StyledNode, RenderError> {
+  apply_style_set_with_media_target_and_imports_cached_with_deadline_impl(
+    dom,
+    style_set,
+    media_ctx,
+    target_fragment,
+    import_loader,
+    base_url,
+    container_ctx,
+    container_scope,
+    reuse_map,
+    media_cache.as_deref_mut(),
+    deadline,
+    true,
+  )
+}
+
+#[allow(clippy::needless_option_as_deref)]
+#[allow(clippy::implicit_hasher)]
+fn apply_style_set_with_media_target_and_imports_cached_with_deadline_impl(
+  dom: &DomNode,
+  style_set: &StyleSet,
+  media_ctx: &MediaContext,
+  target_fragment: Option<&str>,
+  import_loader: Option<&dyn CssImportLoader>,
+  base_url: Option<&str>,
+  container_ctx: Option<&ContainerQueryContext>,
+  container_scope: Option<&HashSet<usize>>,
+  reuse_map: Option<&HashMap<usize, *const StyledNode>>,
+  mut media_cache: Option<&mut MediaQueryCache>,
+  deadline: Option<&RenderDeadline>,
+  include_starting_style: bool,
+) -> Result<StyledNode, RenderError> {
   let profile_enabled = cascade_profile_enabled();
   let profile_start = profile_enabled.then(|| Instant::now());
   if profile_enabled {
@@ -2272,22 +2498,28 @@ pub fn apply_style_set_with_media_target_and_imports_cached_with_deadline(
 
   // Collect applicable rules from stylesheets
   // User-agent rules come first (lower priority)
-  let ua_rules = if let Some(cache) = media_cache.as_deref_mut() {
-    ua_stylesheet.collect_style_rules_with_cache(media_ctx, Some(cache))
-  } else {
-    ua_stylesheet.collect_style_rules(media_ctx)
-  };
+  let ua_rules = filter_starting_rules(
+    if let Some(cache) = media_cache.as_deref_mut() {
+      ua_stylesheet.collect_style_rules_with_cache(media_ctx, Some(cache))
+    } else {
+      ua_stylesheet.collect_style_rules(media_ctx)
+    },
+    include_starting_style,
+  );
 
   let document_sheet = resolve_imports(
     &style_set.document,
     import_loader,
     media_cache.as_deref_mut(),
   );
-  let document_rules = if let Some(cache) = media_cache.as_deref_mut() {
-    document_sheet.collect_style_rules_with_cache(media_ctx, Some(cache))
-  } else {
-    document_sheet.collect_style_rules(media_ctx)
-  };
+  let document_rules = filter_starting_rules(
+    if let Some(cache) = media_cache.as_deref_mut() {
+      document_sheet.collect_style_rules_with_cache(media_ctx, Some(cache))
+    } else {
+      document_sheet.collect_style_rules(media_ctx)
+    },
+    include_starting_style,
+  );
 
   let mut shadow_sheets: Vec<(usize, Box<StyleSheet>)> =
     Vec::with_capacity(style_set.shadows.len());
@@ -2311,11 +2543,13 @@ pub fn apply_style_set_with_media_target_and_imports_cached_with_deadline(
   let mut max_author_rules = document_rules.len();
   for (_host, sheet) in &shadow_sheets {
     let count = if let Some(cache) = media_cache.as_deref_mut() {
-      sheet
-        .collect_style_rules_with_cache(media_ctx, Some(cache))
-        .len()
+      filter_starting_rules(
+        sheet.collect_style_rules_with_cache(media_ctx, Some(cache)),
+        include_starting_style,
+      )
+      .len()
     } else {
-      sheet.collect_style_rules(media_ctx).len()
+      filter_starting_rules(sheet.collect_style_rules(media_ctx), include_starting_style).len()
     };
     max_author_rules = max_author_rules.max(count);
   }
@@ -2363,11 +2597,14 @@ pub fn apply_style_set_with_media_target_and_imports_cached_with_deadline(
     let Some(shadow_root_id) = host_to_shadow_root.get(host).copied() else {
       continue;
     };
-    let collected = if let Some(cache) = media_cache.as_deref_mut() {
-      sheet.collect_style_rules_with_cache(media_ctx, Some(cache))
-    } else {
-      sheet.collect_style_rules(media_ctx)
-    };
+    let collected = filter_starting_rules(
+      if let Some(cache) = media_cache.as_deref_mut() {
+        sheet.collect_style_rules_with_cache(media_ctx, Some(cache))
+      } else {
+        sheet.collect_style_rules(media_ctx)
+      },
+      include_starting_style,
+    );
     let mut rules: Vec<CascadeRule<'_>> = Vec::new();
     let mut host_rules: Vec<CascadeRule<'_>> = Vec::new();
 
@@ -2454,10 +2691,103 @@ pub fn apply_style_set_with_media_target_and_imports_cached_with_deadline(
     std::sync::Arc::new(registry)
   };
 
+  let font_palettes = {
+    let mut registry = crate::style::font_palette::FontPaletteRegistry::default();
+
+    let ua_palettes = if let Some(cache) = media_cache.as_deref_mut() {
+      ua_stylesheet.collect_font_palette_rules_with_cache(media_ctx, Some(cache))
+    } else {
+      ua_stylesheet.collect_font_palette_rules(media_ctx)
+    };
+    let author_palettes = if let Some(cache) = media_cache.as_deref_mut() {
+      document_sheet.collect_font_palette_rules_with_cache(media_ctx, Some(cache))
+    } else {
+      document_sheet.collect_font_palette_rules(media_ctx)
+    };
+
+    fn register_collected(
+      registry: &mut crate::style::font_palette::FontPaletteRegistry,
+      mut collected: Vec<crate::css::types::CollectedFontPaletteRule<'_>>,
+    ) {
+      collected.sort_by(|a, b| {
+        a.layer_order
+          .cmp(&b.layer_order)
+          .then(a.order.cmp(&b.order))
+      });
+      for rule in collected {
+        registry.register(rule.rule.clone());
+      }
+    }
+
+    register_collected(&mut registry, ua_palettes);
+    register_collected(&mut registry, author_palettes);
+
+    for (_host, sheet) in &shadow_sheets {
+      let shadow_palettes = if let Some(cache) = media_cache.as_deref_mut() {
+        sheet.collect_font_palette_rules_with_cache(media_ctx, Some(cache))
+      } else {
+        sheet.collect_font_palette_rules(media_ctx)
+      };
+      register_collected(&mut registry, shadow_palettes);
+    }
+
+    std::sync::Arc::new(registry)
+  };
+
+  let property_registry = {
+    let mut registry = CustomPropertyRegistry::default();
+
+    fn register_collected(
+      registry: &mut CustomPropertyRegistry,
+      mut collected: Vec<crate::css::types::CollectedPropertyRule<'_>>,
+    ) {
+      collected.sort_by(|a, b| {
+        a.layer_order
+          .cmp(&b.layer_order)
+          .then(a.order.cmp(&b.order))
+      });
+      for rule in collected {
+        registry.register(rule.rule.clone());
+      }
+    }
+
+    let ua_properties = if let Some(cache) = media_cache.as_deref_mut() {
+      ua_stylesheet.collect_property_rules_with_cache(media_ctx, Some(cache))
+    } else {
+      ua_stylesheet.collect_property_rules(media_ctx)
+    };
+    register_collected(&mut registry, ua_properties);
+
+    let author_properties = if let Some(cache) = media_cache.as_deref_mut() {
+      document_sheet.collect_property_rules_with_cache(media_ctx, Some(cache))
+    } else {
+      document_sheet.collect_property_rules(media_ctx)
+    };
+    register_collected(&mut registry, author_properties);
+
+    for (_host, sheet) in &shadow_sheets {
+      let shadow_properties = if let Some(cache) = media_cache.as_deref_mut() {
+        sheet.collect_property_rules_with_cache(media_ctx, Some(cache))
+      } else {
+        sheet.collect_property_rules(media_ctx)
+      };
+      register_collected(&mut registry, shadow_properties);
+    }
+
+    std::sync::Arc::new(registry)
+  };
+  let initial_custom_properties = property_registry.initial_values();
+
   let mut base_styles = ComputedStyle::default();
   base_styles.counter_styles = counter_styles.clone();
+  base_styles.font_palettes = font_palettes.clone();
+  base_styles.custom_property_registry = property_registry.clone();
+  base_styles.custom_properties = initial_custom_properties.clone();
   let mut base_ua_styles = ComputedStyle::default();
   base_ua_styles.counter_styles = counter_styles;
+  base_ua_styles.font_palettes = font_palettes;
+  base_ua_styles.custom_property_registry = property_registry.clone();
+  base_ua_styles.custom_properties = initial_custom_properties;
   let has_starting_styles = ua_stylesheet.has_starting_style_rules()
     || document_sheet.has_starting_style_rules()
     || shadow_sheets
@@ -2887,6 +3217,10 @@ fn exported_part_names(
   Some(exported)
 }
 
+fn containing_scope_host_id(dom_maps: &DomMaps, node: &DomNode) -> Option<usize> {
+  dom_maps.id_map.get(&(node as *const DomNode)).copied()
+}
+
 fn match_part_rules<'a>(
   node: &DomNode,
   ancestors: &[&DomNode],
@@ -2937,7 +3271,7 @@ fn match_part_rules<'a>(
 
     let exported = exported_part_names(host, &names, dom_maps);
     let exported_some = exported.is_some();
-    let mut mapped_names = exported.unwrap_or_default();
+    let mapped_names = exported.unwrap_or_default();
     let visible_names: &[CssString] = if exported_some {
       mapped_names.as_slice()
     } else {
@@ -2979,12 +3313,13 @@ fn match_part_rules<'a>(
             None => current_slot_map,
           };
 
-          let candidates: Vec<_> = scratch.part_candidates.clone();
-          for &idx in candidates.iter() {
+          let candidates = scratch.part_candidates.clone();
+          for idx in candidates {
             let info = &rules.part_pseudos[idx];
             if !name_set.contains(info.required.as_str()) {
               continue;
             }
+            // allow_shadow_host prevents document-scope ::part selectors from exposing :host context.
             let part_matches = find_pseudo_element_rules(
               host,
               rules,
@@ -3000,16 +3335,12 @@ fn match_part_rules<'a>(
                 if rule.specificity > matched[pos].specificity {
                   matched[pos].specificity = rule.specificity;
                 }
-              } else {
-                matched_by_order.insert(rule.order, matched.len());
-                matched.push(rule);
               }
             }
           }
         }
       }
     }
-
     names = mapped_names;
     if names.is_empty() {
       break;
@@ -4025,8 +4356,35 @@ pub(crate) fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle)
   // Color inherits
   styles.color = parent.color;
 
-  // CSS Custom Properties inherit
-  styles.custom_properties = parent.custom_properties.clone();
+  // CSS Custom Properties inherit according to registration.
+  styles.custom_property_registry = parent.custom_property_registry.clone();
+  let mut custom_properties = HashMap::new();
+  for (name, value) in &parent.custom_properties {
+    if styles
+      .custom_property_registry
+      .inherits(name)
+      .unwrap_or(true)
+    {
+      custom_properties.insert(name.clone(), value.clone());
+    }
+  }
+  for (name, rule) in styles.custom_property_registry.iter() {
+    if !rule.inherits {
+      if let Some(initial) = &rule.initial_value {
+        custom_properties
+          .entry(name.clone())
+          .or_insert_with(|| initial.clone());
+      }
+      continue;
+    }
+    if custom_properties.contains_key(name) {
+      continue;
+    }
+    if let Some(initial) = &rule.initial_value {
+      custom_properties.insert(name.clone(), initial.clone());
+    }
+  }
+  styles.custom_properties = custom_properties;
 }
 
 /// Resolves line-height lengths to absolute pixels using computed font sizes and viewport metrics.
@@ -4181,7 +4539,7 @@ mod tests {
   use crate::style::types::WillChange;
   use crate::style::types::WillChangeHint;
   use crate::style::types::WritingMode;
-  use crate::style::values::Length;
+  use crate::style::values::{CustomPropertyTypedValue, Length};
   use crate::style::ComputedStyle;
   use crate::style::CursorKeyword;
   use crate::style::OutlineStyle;
@@ -4413,6 +4771,76 @@ mod tests {
     let child = styled.children.first().expect("child");
     assert_eq!(child.styles.color, ComputedStyle::default().color);
     assert_ne!(child.styles.color, styled.styles.color);
+  }
+
+  #[test]
+  fn registered_custom_property_with_inherits_false_uses_initial_value() {
+    let dom = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("id".to_string(), "parent".to_string())],
+      },
+      children: vec![DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "div".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: vec![("id".to_string(), "child".to_string())],
+        },
+        children: vec![],
+      }],
+    };
+    let stylesheet = parse_stylesheet(
+      r#"
+        @property --accent {
+          syntax: "<color>";
+          inherits: false;
+          initial-value: red;
+        }
+        #parent { --accent: blue; }
+        #child { color: var(--accent); }
+      "#,
+    )
+    .unwrap();
+
+    let styled = apply_styles(&dom, &stylesheet);
+    let child = styled.children.first().expect("child");
+    assert_eq!(child.styles.color, Rgba::rgb(255, 0, 0));
+    if let Some(value) = child.styles.custom_properties.get("--accent") {
+      assert_eq!(value.value, "red");
+      assert!(matches!(
+        value.typed,
+        Some(CustomPropertyTypedValue::Color(_))
+      ));
+    } else {
+      panic!("missing registered custom property on child");
+    }
+  }
+
+  #[test]
+  fn invalid_registered_custom_property_value_reverts_to_initial() {
+    let dom = element_with_id_and_class("target", "", None);
+    let stylesheet = parse_stylesheet(
+      r#"
+        @property --len {
+          syntax: "<length>";
+          initial-value: 5px;
+        }
+        #target { --len: red; width: var(--len); }
+      "#,
+    )
+    .unwrap();
+
+    let styled = apply_styles(&dom, &stylesheet);
+    assert_eq!(styled.styles.width, Some(Length::px(5.0)));
+    assert_eq!(
+      styled
+        .styles
+        .custom_properties
+        .get("--len")
+        .map(|v| v.value.as_str()),
+      Some("5px")
+    );
   }
 
   #[test]
