@@ -5,7 +5,7 @@ pub mod meta_refresh;
 pub mod viewport;
 
 use crate::css::loader::resolve_href;
-use crate::dom::DomNode;
+use crate::dom::{DomNode, DomNodeType};
 use url::Url;
 
 /// Find the first `<base href>` value within the document `<head>`.
@@ -17,12 +17,20 @@ pub fn find_base_href(dom: &DomNode) -> Option<String> {
   let mut head: Option<&DomNode> = None;
 
   while let Some(node) = stack.pop() {
+    if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
+      continue;
+    }
+
     if let Some(tag) = node.tag_name() {
       if tag.eq_ignore_ascii_case("head") {
         head = Some(node);
         break;
       }
+      if tag.eq_ignore_ascii_case("template") {
+        continue;
+      }
     }
+
     for child in node.children.iter().rev() {
       stack.push(child);
     }
@@ -34,7 +42,7 @@ pub fn find_base_href(dom: &DomNode) -> Option<String> {
 
   let mut stack = vec![head];
   while let Some(node) = stack.pop() {
-    let mut skip_children = false;
+    let mut skip_children = matches!(node.node_type, DomNodeType::ShadowRoot { .. });
 
     if let Some(tag) = node.tag_name() {
       if tag.eq_ignore_ascii_case("base") {
@@ -131,6 +139,22 @@ mod tests {
   fn find_base_href_ignores_template_contents() {
     let dom = parse_html(
       "<html><head><template><base href=\"https://bad.example/\"></template><base href=\"https://good.example/\"></head></html>",
+    )
+    .unwrap();
+
+    assert_eq!(
+      find_base_href(&dom),
+      Some("https://good.example/".to_string())
+    );
+  }
+
+  #[test]
+  fn find_base_href_ignores_shadow_roots_in_head() {
+    let dom = parse_html(
+      "<html><head>
+        <div id=\"host\"><template shadowroot=\"open\"><base href=\"https://bad.example/\"></template></div>
+        <base href=\"https://good.example/\">
+      </head><body></body></html>",
     )
     .unwrap();
 
