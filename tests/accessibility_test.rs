@@ -455,6 +455,11 @@ fn accessibility_invalid_aria_boolean_values() {
     </html>
   "##;
 
+  let dom = renderer.parse_html(html).expect("parse");
+  let tree = renderer
+    .accessibility_tree(&dom, 800, 600)
+    .expect("accessibility tree");
+
   let visible = find_by_id(&tree, "visible").expect("visible node");
   assert_eq!(visible.name.as_deref(), Some("Visible content"));
 

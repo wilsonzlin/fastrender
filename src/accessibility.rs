@@ -1634,15 +1634,8 @@ fn parse_invalid(node: &DomNode, element_ref: &ElementRef) -> bool {
 
 fn parse_expanded(node: &DomNode) -> Option<bool> {
   let value = node.get_attribute_ref("aria-expanded")?;
-  let lower = value.trim().to_ascii_lowercase();
-  if lower.is_empty() {
-    return Some(true);
-  }
-  match lower.as_str() {
-    "true" | "1" => Some(true),
-    "false" | "0" => Some(false),
-    _ => None,
-  }
+  let token = value.trim().to_ascii_lowercase();
+  parse_bool_token(&token)
 }
 
 fn parse_has_popup(node: &DomNode) -> Option<String> {
@@ -1679,9 +1672,9 @@ fn parse_bool_attr(node: &DomNode, name: &str) -> Option<bool> {
 
 fn parse_bool_token(token: &str) -> Option<bool> {
   match token {
-    "" => Some(true),
-    "true" | "1" | "yes" => Some(true),
-    "false" | "0" | "no" => Some(false),
+    "true" | "1" => Some(true),
+    "false" | "0" => Some(false),
+    // ARIA boolean states are enumerated tokens; ignore invalid values (including empty strings).
     _ => None,
   }
 }
