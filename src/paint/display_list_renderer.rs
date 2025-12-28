@@ -3291,7 +3291,6 @@ impl DisplayListRenderer {
             } else {
               combined_transform
             };
-<<<<<<< HEAD
             self.stacking_layer_bounds(
               css_bounds,
               bounds,
@@ -3299,9 +3298,6 @@ impl DisplayListRenderer {
               &scaled_filters,
               &scaled_backdrop,
             )
-=======
-            self.stacking_layer_bounds(bounds, bounds_transform, &scaled_filters, &scaled_backdrop)
->>>>>>> 1293ba2 (Propagate font variations through display list)
           })
           .flatten();
         let layer_origin = if needs_layer && !has_backdrop {
