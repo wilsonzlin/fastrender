@@ -60,8 +60,6 @@ use crate::style::types::ResolvedTextDecoration;
 use crate::style::types::TextEmphasisPosition;
 use crate::style::types::TextEmphasisStyle;
 use crate::style::types::TransformStyle;
-use crate::text::font_db::FontStretch;
-use crate::text::font_db::FontStyle;
 use crate::text::font_db::LoadedFont;
 use std::fmt;
 use std::sync::Arc;
@@ -616,7 +614,9 @@ pub struct TextItem {
   /// Total advance width of the text run
   pub advance_width: f32,
 
-  /// Exact font bytes used for shaping.
+  /// Exact font bytes used for shaping. Carrying the resolved font keeps rasterization
+  /// consistent even if the font database changes between list construction and rendering.
+  /// Renderers may fall back to a generic sans-serif when absent.
   pub font: Option<Arc<LoadedFont>>,
 
   /// Active variation coordinates for this run.
@@ -789,7 +789,8 @@ pub struct ListMarkerItem {
   /// Total advance width for the marker run
   pub advance_width: f32,
 
-  /// Exact font bytes used for shaping.
+  /// Exact font bytes used for shaping. When not provided, renderers may choose a generic
+  /// fallback to keep markers visible.
   pub font: Option<Arc<LoadedFont>>,
 
   /// Active variation coordinates for this run.

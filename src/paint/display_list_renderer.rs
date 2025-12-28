@@ -14,6 +14,7 @@ use crate::geometry::Rect;
 use crate::paint::blur::apply_gaussian_blur;
 use crate::paint::canvas::crop_mask;
 use crate::paint::canvas::Canvas;
+use crate::paint::depth_sort;
 use crate::paint::display_list::BlendMode;
 use crate::paint::display_list::BorderImageItem;
 use crate::paint::display_list::BorderImageSourceItem;
@@ -30,7 +31,6 @@ use crate::paint::display_list::DisplayItem;
 use crate::paint::display_list::DisplayList;
 use crate::paint::display_list::EmphasisMark;
 use crate::paint::display_list::FillRectItem;
-use crate::paint::display_list::FontId;
 use crate::paint::display_list::GlyphInstance;
 use crate::paint::display_list::ImageData;
 use crate::paint::display_list::ImageFilterQuality;
@@ -59,7 +59,6 @@ use crate::paint::projective_warp::warp_pixmap;
 use crate::paint::rasterize::fill_rounded_rect;
 use crate::paint::rasterize::render_box_shadow;
 use crate::paint::rasterize::BoxShadow;
-use crate::paint::text_rasterize::TextRasterizer;
 use crate::paint::text_shadow::PathBounds;
 use crate::paint::transform3d::backface_is_hidden;
 use crate::style::color::Rgba;
@@ -89,13 +88,12 @@ use crate::style::types::TransformStyle;
 use crate::style::values::Length;
 #[cfg(test)]
 use crate::style::ComputedStyle;
-use crate::text::color_fonts::ColorGlyphRaster;
-use crate::text::font_db::FontStretch;
-use crate::text::font_db::FontStyle as DbFontStyle;
 use crate::text::font_db::LoadedFont;
 use crate::text::font_loader::FontContext;
 use crate::text::pipeline::GlyphPosition;
 use rayon::prelude::*;
+use std::sync::Arc;
+use std::sync::OnceLock;
 use tiny_skia::BlendMode as SkiaBlendMode;
 use tiny_skia::GradientStop as SkiaGradientStop;
 use tiny_skia::IntSize;
@@ -1091,7 +1089,6 @@ fn invert((r, g, b): (u8, u8, u8), amount: f32) -> (u8, u8, u8) {
 pub struct DisplayListRenderer {
   canvas: Canvas,
   font_ctx: FontContext,
-  text_rasterizer: TextRasterizer,
   stacking_layers: Vec<StackingRecord>,
   blend_stack: Vec<Option<BlendMode>>,
   scale: f32,
@@ -1099,6 +1096,7 @@ pub struct DisplayListRenderer {
   perspective_stack: Vec<Transform3D>,
   culled_depth: usize,
   preserve_3d_disabled: bool,
+  preserve_3d_warp_enabled: bool,
 }
 
 #[derive(Debug)]
@@ -1145,6 +1143,7 @@ struct SceneItem {
   source: SceneItemSource,
   transform: Transform3D,
   bounds: Rect,
+  plane_rect: Rect,
   backface_visibility: BackfaceVisibility,
   transform_style: TransformStyle,
   order: usize,
@@ -1154,12 +1153,6 @@ struct SceneItem {
 enum SceneItemSource {
   Segment(Vec<DisplayItem>),
   FlattenedSubtree(StackingNode),
-}
-
-struct GlyphShadowSource {
-  path: Option<tiny_skia::Path>,
-  color_glyph: Option<ColorGlyphRaster>,
-  origin: Point,
 }
 
 fn parse_stacking_node(items: &[DisplayItem], start: usize) -> Option<(StackingNode, usize)> {
@@ -1254,6 +1247,7 @@ fn collect_scene_items(
       source: SceneItemSource::FlattenedSubtree(node.clone()),
       transform: combined_transform,
       bounds: node.context.bounds,
+      plane_rect: node.context.plane_rect,
       backface_visibility: node.context.backface_visibility,
       transform_style,
       order,
@@ -1274,6 +1268,7 @@ fn collect_scene_items(
           source: SceneItemSource::Segment(list.clone()),
           transform: combined_transform,
           bounds,
+          plane_rect: node.context.plane_rect,
           backface_visibility: node.context.backface_visibility,
           transform_style,
           order,
@@ -1293,19 +1288,19 @@ fn collect_scene_items(
   items
 }
 
-fn scene_depth(transform: &Transform3D, bounds: Rect) -> f32 {
-  let corners = [
-    (bounds.min_x(), bounds.min_y()),
-    (bounds.max_x(), bounds.min_y()),
-    (bounds.max_x(), bounds.max_y()),
-    (bounds.min_x(), bounds.max_y()),
-  ];
-  let mut total = 0.0;
-  for (x, y) in corners {
-    let (_, _, z, w) = transform.transform_point(x, y, 0.0);
-    total += if w.abs() > 1e-6 { z / w } else { z };
-  }
-  total / 4.0
+fn env_flag(name: &str) -> bool {
+  std::env::var(name)
+    .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+    .unwrap_or(false)
+}
+
+fn preserve_3d_warp_is_enabled() -> bool {
+  static ENABLED: OnceLock<bool> = OnceLock::new();
+  *ENABLED.get_or_init(|| {
+    let disabled = env_flag("FASTR_PRESERVE3D_DISABLE_WARP");
+    let legacy_enable = env_flag("FASTR_PRESERVE3D_WARP");
+    legacy_enable || !disabled
+  })
 }
 
 impl DisplayListRenderer {
@@ -1373,14 +1368,17 @@ impl DisplayListRenderer {
 
   fn stacking_layer_bounds(
     &self,
-    bounds: Rect,
+    css_bounds: Rect,
+    device_bounds: Rect,
     transform: Transform,
     filters: &[ResolvedFilter],
     backdrop_filters: &[ResolvedFilter],
   ) -> Option<Rect> {
-    let mut layer_bounds = transform_rect(bounds, &transform);
-    let (f_l, f_t, f_r, f_b) = filter_outset(filters, self.scale).as_tuple();
-    let (b_l, b_t, b_r, b_b) = filter_outset(backdrop_filters, self.scale).as_tuple();
+    let mut layer_bounds = transform_rect(device_bounds, &transform);
+    let (f_l, f_t, f_r, f_b) =
+      filter_outset_with_bounds(filters, self.scale, Some(css_bounds)).as_tuple();
+    let (b_l, b_t, b_r, b_b) =
+      filter_outset_with_bounds(backdrop_filters, self.scale, Some(css_bounds)).as_tuple();
     let expand_left = f_l.max(b_l);
     let expand_top = f_t.max(b_t);
     let expand_right = f_r.max(b_r);
@@ -1489,10 +1487,12 @@ impl DisplayListRenderer {
       origin: item.origin,
       glyphs: item.glyphs.clone(),
       color: item.color,
+      palette_index: item.palette_index,
       shadows: item.shadows.clone(),
       font_size: item.font_size,
       advance_width: item.advance_width,
-      font_id: item.font_id.clone(),
+      font: item.font.clone(),
+      variations: item.variations.clone(),
       synthetic_bold: item.synthetic_bold,
       synthetic_oblique: item.synthetic_oblique,
       emphasis: item.emphasis.clone(),
@@ -1503,10 +1503,12 @@ impl DisplayListRenderer {
       origin: scaled.origin,
       glyphs: scaled.glyphs,
       color: scaled.color,
+      palette_index: scaled.palette_index,
       shadows: scaled.shadows,
       font_size: scaled.font_size,
       advance_width: scaled.advance_width,
-      font_id: scaled.font_id,
+      font: scaled.font,
+      variations: scaled.variations,
       synthetic_bold: scaled.synthetic_bold,
       synthetic_oblique: scaled.synthetic_oblique,
       emphasis: scaled.emphasis,
@@ -1574,7 +1576,6 @@ impl DisplayListRenderer {
     Ok(Self {
       canvas: Canvas::new(device_w, device_h, background)?,
       font_ctx,
-      text_rasterizer: TextRasterizer::new(),
       stacking_layers: Vec::new(),
       blend_stack: Vec::new(),
       scale,
@@ -1582,6 +1583,7 @@ impl DisplayListRenderer {
       perspective_stack: vec![Transform3D::identity()],
       culled_depth: 0,
       preserve_3d_disabled: false,
+      preserve_3d_warp_enabled: preserve_3d_warp_is_enabled(),
     })
   }
 
@@ -2855,7 +2857,6 @@ impl DisplayListRenderer {
 
   /// Consumes the renderer and returns the painted pixmap.
   pub fn render(mut self, list: &DisplayList) -> Result<Pixmap> {
-    let list = crate::paint::preserve_3d::composite_preserve_3d(list);
     self.render_slice(list.items())?;
     Ok(self.canvas.into_pixmap())
   }
@@ -2936,16 +2937,19 @@ impl DisplayListRenderer {
       !matches!(item.backface_visibility, BackfaceVisibility::Hidden)
         || !backface_is_hidden(&item.transform)
     });
-    scene_items.sort_by(|a, b| {
-      let da = scene_depth(&a.transform, a.bounds);
-      let db = scene_depth(&b.transform, b.bounds);
-      da.partial_cmp(&db)
-        .unwrap_or(std::cmp::Ordering::Equal)
-        .then_with(|| a.order.cmp(&b.order))
-    });
+    let sort_inputs: Vec<_> = scene_items
+      .iter()
+      .map(|item| depth_sort::SceneItem {
+        transform: item.transform,
+        plane_rect: item.plane_rect,
+        paint_order: item.order,
+      })
+      .collect();
+    let ordered_indices = depth_sort::depth_sort(&sort_inputs);
 
-    for scene_item in scene_items {
-      if let Some(pixmap) = self.render_scene_item(&scene_item)? {
+    for idx in ordered_indices {
+      let scene_item = &scene_items[idx];
+      if let Some(pixmap) = self.render_scene_item(scene_item)? {
         let adjusted_transform = scene_item.transform.multiply(&Transform3D::translate(
           scene_item.bounds.x(),
           scene_item.bounds.y(),
@@ -3002,6 +3006,7 @@ impl DisplayListRenderer {
       self.scale,
     )?;
     renderer.preserve_3d_disabled = true;
+    renderer.preserve_3d_warp_enabled = self.preserve_3d_warp_enabled;
     let pixmap = renderer.render(&list)?;
     Ok(Some(pixmap))
   }
@@ -3011,6 +3016,21 @@ impl DisplayListRenderer {
     paint.blend_mode = self.canvas.blend_mode();
 
     let parent_transform = self.canvas.transform();
+
+    if !self.preserve_3d_warp_enabled {
+      let clip = self.canvas.clip_mask().cloned();
+      let (t, _valid) = self.to_skia_transform_checked(transform);
+      let skia_transform = parent_transform.post_concat(t);
+      self.canvas.pixmap_mut().draw_pixmap(
+        0,
+        0,
+        pixmap.as_ref(),
+        &paint,
+        skia_transform,
+        clip.as_ref(),
+      );
+      return;
+    }
 
     let homography = Homography::from_transform3d_z0(transform);
     if homography.is_affine() {
@@ -3269,7 +3289,13 @@ impl DisplayListRenderer {
             } else {
               combined_transform
             };
-            self.stacking_layer_bounds(bounds, bounds_transform, &scaled_filters, &scaled_backdrop)
+            self.stacking_layer_bounds(
+              css_bounds,
+              bounds,
+              bounds_transform,
+              &scaled_filters,
+              &scaled_backdrop,
+            )
           })
           .flatten();
         let layer_origin = if needs_layer && !has_backdrop {
@@ -3277,6 +3303,30 @@ impl DisplayListRenderer {
         } else {
           None
         };
+        if std::env::var("DEBUG_FILTER_LAYER").is_ok()
+          && !scaled_filters.is_empty()
+          && layer_bounds
+            .map(|r| r.width() <= 8.0 && r.height() <= 8.0)
+            .unwrap_or(false)
+        {
+          let (sample_x, sample_y) = layer_origin
+            .map(|(x, y)| {
+              (
+                x.clamp(0.0, self.canvas.width() as f32 - 1.0) as u32,
+                y.clamp(0.0, self.canvas.height() as f32 - 1.0) as u32,
+              )
+            })
+            .unwrap_or((0, 0));
+          if let Some(px) = self.canvas.pixmap().pixel(sample_x, sample_y) {
+            eprintln!(
+              "parent at push ({sample_x}, {sample_y}): r={} g={} b={} a={}",
+              px.red(),
+              px.green(),
+              px.blue(),
+              px.alpha()
+            );
+          }
+        }
         if needs_layer {
           let bounded_rect = if has_backdrop { None } else { layer_bounds };
           if manual_blend.is_some() {
@@ -3393,6 +3443,36 @@ impl DisplayListRenderer {
               } else {
                 return Ok(());
               }
+            }
+          }
+
+          if std::env::var("DEBUG_FILTER_LAYER").is_ok()
+            && !record.filters.is_empty()
+            && layer.width() <= 8
+            && layer.height() <= 8
+          {
+            if let Some(px) = self.canvas.pixmap().pixel(
+              origin.0.clamp(0, self.canvas.width() as i32 - 1).max(0) as u32,
+              origin.1.clamp(0, self.canvas.height() as i32 - 1).max(0) as u32,
+            ) {
+              eprintln!(
+                "parent before filter composite at ({}, {}): r={} g={} b={} a={}",
+                origin.0,
+                origin.1,
+                px.red(),
+                px.green(),
+                px.blue(),
+                px.alpha()
+              );
+            }
+            if let Some(px) = layer.pixel(0, 0) {
+              eprintln!(
+                "layer before filter: r={} g={} b={} a={}",
+                px.red(),
+                px.green(),
+                px.blue(),
+                px.alpha()
+              );
             }
           }
 
@@ -3601,7 +3681,15 @@ impl DisplayListRenderer {
   }
 
   fn render_text(&mut self, item: &TextItem) -> Result<()> {
-    let Some(font) = self.resolve_font(item.font_id.as_ref()) else {
+    let glyphs = Self::glyph_positions(item);
+    if glyphs.is_empty() {
+      if let Some(emphasis) = &item.emphasis {
+        self.render_emphasis(emphasis)?;
+      }
+      return Ok(());
+    }
+
+    let Some(font) = self.font_or_fallback(&item.font) else {
       return Err(
         RenderError::RasterizationFailed {
           reason: "Unable to resolve font for display list text".into(),
@@ -3610,48 +3698,22 @@ impl DisplayListRenderer {
       );
     };
 
-    let face = match font.as_ttf_face() {
-      Ok(f) => f,
-      Err(_) => {
-        return Err(
-          RenderError::RasterizationFailed {
-            reason: "Unable to parse font face for text shadows".into(),
-          }
-          .into(),
-        )
+    if !item.shadows.is_empty() {
+      let (paths, bounds) = self.glyph_paths_from_positions(&glyphs, font.as_ref(), item)?;
+      if !paths.is_empty() && bounds.is_valid() {
+        self.render_text_shadows(&paths, &bounds, item);
       }
-    };
-
-    let (glyphs, bounds) = if item.shadows.is_empty() {
-      (Vec::new(), PathBounds::new())
-    } else {
-      self.glyph_shadow_sources(&face, &font, item)
-    };
-    if !glyphs.is_empty() && bounds.is_valid() {
-      self.render_text_shadows(&glyphs, &bounds, item);
     }
-
-    let glyphs: Vec<GlyphPosition> = item
-      .glyphs
-      .iter()
-      .map(|g| GlyphPosition {
-        glyph_id: g.glyph_id,
-        cluster: 0,
-        x_offset: g.offset.x,
-        y_offset: g.offset.y,
-        x_advance: g.advance,
-        y_advance: 0.0,
-      })
-      .collect();
 
     self.canvas.draw_text(
       item.origin,
       &glyphs,
-      &font,
+      font.as_ref(),
       item.font_size,
       item.color,
       item.synthetic_bold,
       item.synthetic_oblique,
+      &item.variations,
     );
     if let Some(emphasis) = &item.emphasis {
       self.render_emphasis(emphasis)?;
@@ -3669,10 +3731,12 @@ impl DisplayListRenderer {
       origin: item.origin,
       glyphs: item.glyphs.clone(),
       color: item.color,
+      palette_index: item.palette_index,
       shadows: item.shadows.clone(),
       font_size: item.font_size,
       advance_width: item.advance_width,
-      font_id: item.font_id.clone(),
+      font: item.font.clone(),
+      variations: item.variations.clone(),
       synthetic_bold: item.synthetic_bold,
       synthetic_oblique: item.synthetic_oblique,
       emphasis: item.emphasis.clone(),
@@ -3923,150 +3987,60 @@ impl DisplayListRenderer {
     Ok(())
   }
 
-  fn glyph_shadow_sources(
-    &mut self,
-    face: &ttf_parser::Face<'_>,
-    font: &LoadedFont,
-    item: &TextItem,
-  ) -> (Vec<GlyphShadowSource>, PathBounds) {
-    let units_per_em = face.units_per_em() as f32;
-    let scale = item.font_size / units_per_em;
-    let mut glyphs = Vec::with_capacity(item.glyphs.len());
-    let mut bounds = PathBounds::new();
-
-    for glyph in &item.glyphs {
-      let origin = Point::new(
-        item.origin.x + glyph.offset.x,
-        item.origin.y + glyph.offset.y,
-      );
-      let color_glyph = self.text_rasterizer.get_color_glyph(
-        font,
-        glyph.glyph_id,
-        item.font_size,
-        0,
-        &[],
-        item.color,
-        item.synthetic_oblique,
-      );
-      let mut path = None;
-      if color_glyph.is_none() {
-        if let Some(p) = Self::build_glyph_path(
-          face,
-          glyph.glyph_id as u16,
-          origin.x,
-          origin.y,
-          scale,
-          item.synthetic_oblique,
-        ) {
-          bounds.include(&p.bounds());
-          path = Some(p);
-        }
-      }
-
-      if let Some(ref color) = color_glyph {
-        if let Some(rect) = tiny_skia::Rect::from_xywh(
-          origin.x + color.left,
-          origin.y + color.top,
-          color.image.width() as f32,
-          color.image.height() as f32,
-        ) {
-          bounds.include(&rect);
-        }
-      }
-
-      if path.is_none() && color_glyph.is_none() {
-        continue;
-      }
-
-      glyphs.push(GlyphShadowSource {
-        path,
-        color_glyph,
-        origin,
-      });
-    }
-
-    (glyphs, bounds)
+  fn glyph_positions(item: &TextItem) -> Vec<GlyphPosition> {
+    item
+      .glyphs
+      .iter()
+      .map(|g| GlyphPosition {
+        glyph_id: g.glyph_id,
+        cluster: 0,
+        x_offset: g.offset.x,
+        y_offset: g.offset.y,
+        x_advance: g.advance,
+        y_advance: 0.0,
+      })
+      .collect()
   }
 
-  fn build_glyph_path(
-    face: &ttf_parser::Face<'_>,
-    glyph_id: u16,
-    x: f32,
-    baseline_y: f32,
-    scale: f32,
-    synthetic_oblique: f32,
-  ) -> Option<tiny_skia::Path> {
-    use ttf_parser::OutlineBuilder;
+  fn font_or_fallback(&self, font: &Option<Arc<LoadedFont>>) -> Option<Arc<LoadedFont>> {
+    font
+      .clone()
+      .or_else(|| self.font_ctx.get_sans_serif().map(Arc::new))
+  }
 
-    struct PathConverter {
-      builder: PathBuilder,
-      scale: f32,
-      x: f32,
-      y: f32,
-      skew: f32,
-    }
+  fn glyph_paths_from_positions(
+    &mut self,
+    glyphs: &[GlyphPosition],
+    font: &LoadedFont,
+    item: &TextItem,
+  ) -> Result<(Vec<tiny_skia::Path>, PathBounds)> {
+    let (paths, bounds) = self.canvas.glyph_paths(
+      item.origin,
+      glyphs,
+      font,
+      item.font_size,
+      item.synthetic_oblique,
+      &item.variations,
+      None,
+    )?;
+    Ok((paths, bounds))
+  }
 
-    impl OutlineBuilder for PathConverter {
-      fn move_to(&mut self, px: f32, py: f32) {
-        self.builder.move_to(
-          self.x + (px + self.skew * py) * self.scale,
-          self.y - py * self.scale,
-        );
-      }
-
-      fn line_to(&mut self, px: f32, py: f32) {
-        self.builder.line_to(
-          self.x + (px + self.skew * py) * self.scale,
-          self.y - py * self.scale,
-        );
-      }
-
-      fn quad_to(&mut self, x1: f32, y1: f32, px: f32, py: f32) {
-        self.builder.quad_to(
-          self.x + (x1 + self.skew * y1) * self.scale,
-          self.y - y1 * self.scale,
-          self.x + (px + self.skew * py) * self.scale,
-          self.y - py * self.scale,
-        );
-      }
-
-      fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, px: f32, py: f32) {
-        self.builder.cubic_to(
-          self.x + (x1 + self.skew * y1) * self.scale,
-          self.y - y1 * self.scale,
-          self.x + (x2 + self.skew * y2) * self.scale,
-          self.y - y2 * self.scale,
-          self.x + (px + self.skew * py) * self.scale,
-          self.y - py * self.scale,
-        );
-      }
-
-      fn close(&mut self) {
-        self.builder.close();
-      }
-    }
-
-    let mut converter = PathConverter {
-      builder: PathBuilder::new(),
-      scale,
-      x,
-      y: baseline_y,
-      skew: synthetic_oblique,
-    };
-
-    face.outline_glyph(ttf_parser::GlyphId(glyph_id), &mut converter)?;
-    converter.builder.finish()
+  fn glyph_paths(
+    &mut self,
+    font: &LoadedFont,
+    item: &TextItem,
+  ) -> Result<(Vec<tiny_skia::Path>, PathBounds)> {
+    let glyphs = Self::glyph_positions(item);
+    self.glyph_paths_from_positions(&glyphs, font, item)
   }
 
   fn render_text_shadows(
     &mut self,
-    glyphs: &[GlyphShadowSource],
+    paths: &[tiny_skia::Path],
     bounds: &PathBounds,
     item: &TextItem,
   ) {
-    if glyphs.is_empty() {
-      return;
-    }
     let opacity = self.canvas.opacity().clamp(0.0, 1.0);
     for shadow in &item.shadows {
       let blur_margin = (shadow.blur_radius.abs() * 3.0).ceil();
@@ -4098,22 +4072,8 @@ impl DisplayListRenderer {
       let translate_x = -bounds.min_x + blur_margin;
       let translate_y = -bounds.min_y + blur_margin;
       let transform = Transform::from_translate(translate_x, translate_y);
-      for glyph in glyphs {
-        if let Some(color) = &glyph.color_glyph {
-          self.draw_color_shadow(
-            &mut shadow_pixmap,
-            color,
-            glyph.origin,
-            translate_x,
-            translate_y,
-            shadow.color,
-            opacity,
-          );
-          continue;
-        }
-        if let Some(path) = glyph.path.as_ref() {
-          shadow_pixmap.fill_path(path, &paint, tiny_skia::FillRule::EvenOdd, transform, None);
-        }
+      for path in paths {
+        shadow_pixmap.fill_path(path, &paint, tiny_skia::FillRule::EvenOdd, transform, None);
       }
 
       if shadow.blur_radius > 0.0 {
@@ -4144,67 +4104,6 @@ impl DisplayListRenderer {
     }
   }
 
-  fn draw_color_shadow(
-    &self,
-    target: &mut Pixmap,
-    glyph: &ColorGlyphRaster,
-    origin: Point,
-    translate_x: f32,
-    translate_y: f32,
-    shadow_color: Rgba,
-    opacity: f32,
-  ) {
-    let width = glyph.image.width();
-    let height = glyph.image.height();
-    if width == 0 || height == 0 {
-      return;
-    }
-
-    let alpha_scale = (shadow_color.a * opacity).clamp(0.0, 1.0);
-    if alpha_scale <= 0.0 {
-      return;
-    }
-
-    let mut data = Vec::with_capacity((width * height * 4) as usize);
-    for pixel in glyph.image.data().chunks_exact(4) {
-      let glyph_alpha = pixel[3] as f32 / 255.0;
-      let final_alpha = glyph_alpha * alpha_scale;
-      let final_a_u8 = (final_alpha * 255.0).round().clamp(0.0, 255.0) as u8;
-      let premul = |c: u8| (c as f32 * final_alpha).round().clamp(0.0, 255.0) as u8;
-      data.push(premul(shadow_color.b));
-      data.push(premul(shadow_color.g));
-      data.push(premul(shadow_color.r));
-      data.push(final_a_u8);
-    }
-
-    let Some(size) = IntSize::from_wh(width, height) else {
-      return;
-    };
-    let Some(tinted) = Pixmap::from_vec(data, size) else {
-      return;
-    };
-
-    let draw_x = origin.x + glyph.left + translate_x;
-    let draw_y = origin.y + glyph.top + translate_y;
-    let dest_x = draw_x.floor() as i32;
-    let dest_y = draw_y.floor() as i32;
-    let frac_x = draw_x - dest_x as f32;
-    let frac_y = draw_y - dest_y as f32;
-
-    let mut paint = tiny_skia::PixmapPaint::default();
-    paint.opacity = 1.0;
-    paint.blend_mode = tiny_skia::BlendMode::SourceOver;
-
-    target.draw_pixmap(
-      dest_x,
-      dest_y,
-      tinted.as_ref(),
-      &paint,
-      Transform::from_translate(frac_x, frac_y),
-      None,
-    );
-  }
-
   fn render_emphasis(&mut self, emphasis: &TextEmphasis) -> Result<()> {
     if emphasis.marks.is_empty() {
       return Ok(());
@@ -4213,11 +4112,14 @@ impl DisplayListRenderer {
     let inline_vertical = emphasis.inline_vertical;
     if let TextEmphasisStyle::String(_) = emphasis.style {
       if let Some(text) = &emphasis.text {
-        let font = self.resolve_font(text.font_id.as_ref()).ok_or_else(|| {
-          RenderError::RasterizationFailed {
-            reason: "Unable to resolve font for emphasis string".into(),
-          }
-        })?;
+        let Some(font) = self.font_or_fallback(&text.font) else {
+          return Err(
+            RenderError::RasterizationFailed {
+              reason: "Unable to resolve font for emphasis string".into(),
+            }
+            .into(),
+          );
+        };
         let glyphs: Vec<GlyphPosition> = text
           .glyphs
           .iter()
@@ -4245,11 +4147,12 @@ impl DisplayListRenderer {
           self.canvas.draw_text(
             mark_origin,
             &glyphs,
-            &font,
+            font.as_ref(),
             text.font_size,
             emphasis.color,
             0.0,
             0.0,
+            &text.variations,
           );
         }
         return Ok(());
@@ -4532,42 +4435,6 @@ impl DisplayListRenderer {
       let combined = self.canvas.transform().post_concat(matrix);
       self.canvas.set_transform(combined);
     }
-  }
-
-  fn resolve_font(&self, font_id: Option<&FontId>) -> Option<LoadedFont> {
-    let mut families = Vec::new();
-    let (weight, italic, oblique, stretch) = match font_id {
-      Some(id) => {
-        families.push(id.family.clone());
-        (
-          id.weight,
-          matches!(id.style, DbFontStyle::Italic),
-          matches!(id.style, DbFontStyle::Oblique),
-          id.stretch,
-        )
-      }
-      None => (400, false, false, FontStretch::Normal),
-    };
-
-    if families.is_empty() {
-      families.push("sans-serif".to_string());
-    }
-
-    self
-      .font_ctx
-      .get_font_full(
-        &families,
-        weight,
-        if italic {
-          DbFontStyle::Italic
-        } else if oblique {
-          DbFontStyle::Oblique
-        } else {
-          DbFontStyle::Normal
-        },
-        stretch,
-      )
-      .or_else(|| self.font_ctx.get_sans_serif())
   }
 
   fn image_to_pixmap(&self, item: &ImageItem) -> Option<Pixmap> {
@@ -5733,7 +5600,9 @@ mod tests {
   use crate::style::values::Length;
   use crate::style::values::LengthUnit;
   use crate::style::ComputedStyle;
+  use crate::text::font_db::FontDatabase;
   use crate::tree::fragment_tree::FragmentNode;
+  use std::collections::HashMap;
   use std::sync::Arc;
 
   fn pixel(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
@@ -6771,6 +6640,7 @@ mod tests {
         advance: 14.0,
       }],
       color: Rgba::BLACK,
+      palette_index: 0,
       shadows: vec![TextShadowItem {
         offset: Point::new(4.0, 0.0),
         blur_radius: 0.0,
@@ -6778,12 +6648,8 @@ mod tests {
       }],
       font_size: 20.0,
       advance_width: 14.0,
-      font_id: Some(FontId {
-        family: font.family.clone(),
-        weight: font.weight.value(),
-        style: font.style,
-        stretch: font.stretch,
-      }),
+      font: Some(Arc::new(font.clone())),
+      variations: Vec::new(),
       synthetic_bold: 0.0,
       synthetic_oblique: 0.0,
       emphasis: None,
@@ -6835,6 +6701,7 @@ mod tests {
         advance: 14.0,
       }],
       color: Rgba::BLACK,
+      palette_index: 0,
       shadows: vec![TextShadowItem {
         offset: Point::new(2.0, 0.0),
         blur_radius: 0.0,
@@ -6842,12 +6709,8 @@ mod tests {
       }],
       font_size: 20.0,
       advance_width: 14.0,
-      font_id: Some(FontId {
-        family: font.family.clone(),
-        weight: font.weight.value(),
-        style: font.style,
-        stretch: font.stretch,
-      }),
+      font: Some(Arc::new(font.clone())),
+      variations: Vec::new(),
       synthetic_bold: 0.0,
       synthetic_oblique: 0.0,
       emphasis: None,
@@ -6866,7 +6729,9 @@ mod tests {
       "shadow offset should scale with DPR (expected ~4, got {})",
       scaled_item.shadows[0].offset.x
     );
-    let (_glyphs, bounds) = renderer.glyph_shadow_sources(&face, &font, &scaled_item);
+    let (_paths, bounds) = renderer
+      .glyph_paths(&font, &scaled_item)
+      .expect("glyph paths");
     let shadow = &scaled_item.shadows[0];
     let shadow_min_x = bounds.min_x + shadow.offset.x;
     let shadow_max_x = bounds.max_x + shadow.offset.x;
@@ -6927,6 +6792,7 @@ mod tests {
         advance: 14.0,
       }],
       color: Rgba::BLACK,
+      palette_index: 0,
       shadows: vec![TextShadowItem {
         offset: Point::new(0.0, 0.0),
         blur_radius: 4.0,
@@ -6934,12 +6800,8 @@ mod tests {
       }],
       font_size: 20.0,
       advance_width: 14.0,
-      font_id: Some(FontId {
-        family: font.family.clone(),
-        weight: font.weight.value(),
-        style: font.style,
-        stretch: font.stretch,
-      }),
+      font: Some(Arc::new(font.clone())),
+      variations: Vec::new(),
       synthetic_bold: 0.0,
       synthetic_oblique: 0.0,
       emphasis: None,
@@ -6958,7 +6820,9 @@ mod tests {
       "blur radius should scale with DPR (expected ~8, got {})",
       scaled_item.shadows[0].blur_radius
     );
-    let (_glyphs, bounds) = renderer.glyph_shadow_sources(&face, &font, &scaled_item);
+    let (_paths, bounds) = renderer
+      .glyph_paths(&font, &scaled_item)
+      .expect("glyph paths");
     let shadow = &scaled_item.shadows[0];
     let blur_margin = (shadow.blur_radius.abs() * 3.0).ceil();
     let shadow_min_x = bounds.min_x + shadow.offset.x - blur_margin;
@@ -6999,6 +6863,7 @@ mod tests {
         advance: 14.0,
       }],
       color: Rgba::BLACK,
+      palette_index: 0,
       shadows: vec![TextShadowItem {
         offset: Point::new(10.0, 20.0), // percent(50%) + em(1.0) resolved against font size 20px
         blur_radius: 0.0,
@@ -7006,12 +6871,8 @@ mod tests {
       }],
       font_size: 20.0,
       advance_width: 14.0,
-      font_id: Some(FontId {
-        family: font.family.clone(),
-        weight: font.weight.value(),
-        style: font.style,
-        stretch: font.stretch,
-      }),
+      font: Some(Arc::new(font.clone())),
+      variations: Vec::new(),
       synthetic_bold: 0.0,
       synthetic_oblique: 0.0,
       emphasis: None,
@@ -7043,16 +6904,113 @@ mod tests {
   }
 
   #[test]
+  fn text_palette_selection_affects_color_glyphs() {
+    let mut db = FontDatabase::empty();
+    let Ok(font_data) = std::fs::read("tests/fonts/ColorTestCOLR.ttf") else {
+      return;
+    };
+    if db.load_font_data(font_data).is_err() {
+      return;
+    }
+    let font_ctx = FontContext::with_database(Arc::new(db));
+    let family = "ColorTestCOLR".to_string();
+    let Some(font) = font_ctx.get_font_full(
+      &[family.clone()],
+      400,
+      DbFontStyle::Normal,
+      FontStretch::Normal,
+    ) else {
+      return;
+    };
+    let Ok(face) = font.as_ttf_face() else {
+      return;
+    };
+    let Some(glyph_id) = face.glyph_index('A') else {
+      return;
+    };
+    let units_per_em = face.units_per_em() as f32;
+    if units_per_em == 0.0 {
+      return;
+    }
+    let font_size = 32.0;
+    let advance = face.glyph_hor_advance(glyph_id).unwrap_or(0) as f32 * font_size / units_per_em;
+    let glyphs = vec![GlyphInstance {
+      glyph_id: glyph_id.0 as u32,
+      offset: Point::new(0.0, 0.0),
+      advance,
+    }];
+    let font = Arc::new(font);
+
+    let render_with_palette = |palette_index: u16, font_ctx: FontContext| {
+      let mut list = DisplayList::new();
+      list.push(DisplayItem::Text(TextItem {
+        origin: Point::new(10.0, 50.0),
+        glyphs: glyphs.clone(),
+        color: Rgba::BLACK,
+        palette_index,
+        shadows: Vec::new(),
+        font_size,
+        advance_width: advance,
+        font: Some(font.clone()),
+        variations: Vec::new(),
+        synthetic_bold: 0.0,
+        synthetic_oblique: 0.0,
+        emphasis: None,
+        decorations: Vec::new(),
+      }));
+      DisplayListRenderer::new(80, 80, Rgba::WHITE, font_ctx)
+        .expect("renderer")
+        .render(&list)
+        .expect("rendered")
+    };
+
+    let pix0 = render_with_palette(0, font_ctx.clone());
+    let pix1 = render_with_palette(1, font_ctx);
+    assert_ne!(
+      pix0.data(),
+      pix1.data(),
+      "palette index should affect rasterization"
+    );
+
+    let dominant_color = |pix: &Pixmap| -> Option<(u8, u8, u8, u8)> {
+      let mut counts: HashMap<(u8, u8, u8, u8), usize> = HashMap::new();
+      for px in pix.data().chunks_exact(4) {
+        if px[3] == 0 {
+          continue;
+        }
+        let key = (px[0], px[1], px[2], px[3]);
+        if key == (255, 255, 255, 255) {
+          continue;
+        }
+        *counts.entry(key).or_insert(0) += 1;
+      }
+      counts
+        .into_iter()
+        .max_by_key(|(_, count)| *count)
+        .map(|(color, _)| color)
+    };
+
+    let primary0 = dominant_color(&pix0).expect("palette 0 glyph color");
+    let primary1 = dominant_color(&pix1).expect("palette 1 glyph color");
+    assert_ne!(
+      primary0, primary1,
+      "palettes should produce different primary colors"
+    );
+  }
+
+  #[test]
   fn renders_text_emphasis_marks() {
     let mut list = DisplayList::new();
     list.push(DisplayItem::Text(TextItem {
       origin: Point::new(20.0, 30.0),
       glyphs: Vec::new(),
       color: Rgba::BLACK,
+      palette_index: 0,
       shadows: vec![],
       font_size: 16.0,
       advance_width: 0.0,
-      font_id: None,
+      font: None,
+      variations: Vec::new(),
       synthetic_bold: 0.0,
       synthetic_oblique: 0.0,
       emphasis: Some(TextEmphasis {

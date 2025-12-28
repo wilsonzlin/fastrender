@@ -58,7 +58,6 @@ use crate::paint::display_list::EmphasisMark;
 use crate::paint::display_list::EmphasisText;
 use crate::paint::display_list::FillRectItem;
 use crate::paint::display_list::FillRoundedRectItem;
-use crate::paint::display_list::FontId;
 use crate::paint::display_list::GlyphInstance;
 use crate::paint::display_list::GradientSpread;
 use crate::paint::display_list::GradientStop;
@@ -2400,7 +2399,7 @@ impl DisplayListBuilder {
               shadows: shadows.clone(),
               font_size,
               advance_width,
-              font_id: None,
+              font: None,
               variations: Vec::new(),
               synthetic_bold: 0.0,
               synthetic_oblique: 0.0,
@@ -2416,7 +2415,7 @@ impl DisplayListBuilder {
               shadows: shadows.clone(),
               font_size,
               advance_width,
-              font_id: None,
+              font: None,
               variations: Vec::new(),
               synthetic_bold: 0.0,
               synthetic_oblique: 0.0,
@@ -3484,7 +3483,6 @@ impl DisplayListBuilder {
         pen_x
       };
       let glyphs = self.glyphs_from_run(run, origin_x, baseline_y);
-      let font_id = self.font_id_from_run(run);
       let emphasis =
         style.and_then(|s| self.build_emphasis(run, s, origin_x, baseline_y, inline_vertical));
 
@@ -3496,7 +3494,7 @@ impl DisplayListBuilder {
         shadows: shadows.to_vec(),
         font_size: run.font_size,
         advance_width: run.advance,
-        font_id: Some(font_id),
+        font: Some(run.font.clone()),
         variations: Self::variations_from_run(run),
         synthetic_bold: run.synthetic_bold,
         synthetic_oblique: run.synthetic_oblique,
@@ -3526,7 +3524,6 @@ impl DisplayListBuilder {
       };
       let glyphs =
         self.glyphs_from_run_vertical(run, block_baseline, run_origin_inline, inline_start);
-      let font_id = self.font_id_from_run(run);
       let emphasis =
         style.and_then(|s| self.build_emphasis(run, s, block_baseline, run_origin_inline, true));
 
@@ -3538,7 +3535,7 @@ impl DisplayListBuilder {
         shadows: shadows.to_vec(),
         font_size: run.font_size,
         advance_width: run.advance,
-        font_id: Some(font_id),
+        font: Some(run.font.clone()),
         variations: Self::variations_from_run(run),
         synthetic_bold: run.synthetic_bold,
         synthetic_oblique: run.synthetic_oblique,
@@ -3568,7 +3565,6 @@ impl DisplayListBuilder {
         pen_x
       };
       let glyphs = self.glyphs_from_run(run, origin_x, baseline_y);
-      let font_id = self.font_id_from_run(run);
       let emphasis =
         style.and_then(|s| self.build_emphasis(run, s, origin_x, baseline_y, inline_vertical));
       self.list.push(DisplayItem::ListMarker(ListMarkerItem {
@@ -3579,7 +3575,7 @@ impl DisplayListBuilder {
         palette_index: run.palette_index,
         shadows: shadows.to_vec(),
         advance_width: run.advance,
-        font_id: Some(font_id),
+        font: Some(run.font.clone()),
         variations: Self::variations_from_run(run),
         synthetic_bold: run.synthetic_bold,
         synthetic_oblique: run.synthetic_oblique,
@@ -3609,7 +3605,6 @@ impl DisplayListBuilder {
       };
       let glyphs =
         self.glyphs_from_run_vertical(run, block_baseline, run_origin_inline, inline_start);
-      let font_id = self.font_id_from_run(run);
       let emphasis =
         style.and_then(|s| self.build_emphasis(run, s, block_baseline, run_origin_inline, true));
       self.list.push(DisplayItem::ListMarker(ListMarkerItem {
@@ -3620,7 +3615,7 @@ impl DisplayListBuilder {
         palette_index: run.palette_index,
         shadows: shadows.to_vec(),
         advance_width: run.advance,
-        font_id: Some(font_id),
+        font: Some(run.font.clone()),
         variations: Self::variations_from_run(run),
         synthetic_bold: run.synthetic_bold,
         synthetic_oblique: run.synthetic_oblique,
@@ -4229,7 +4224,7 @@ impl DisplayListBuilder {
         mark_style.font_size = style.font_size * 0.5;
         match self.shaper.shape(s, &mark_style, &self.font_ctx) {
           Ok(mark_runs) if !mark_runs.is_empty() => {
-            let mark_font_id = self.font_id_from_run(&mark_runs[0]);
+            let mark_font = mark_runs[0].font.clone();
             let mark_variations = Self::variations_from_run(&mark_runs[0]);
             let mark_palette_index = mark_runs.first().map(|r| r.palette_index).unwrap_or(0);
             let mut glyphs = Vec::new();
@@ -4279,7 +4274,7 @@ impl DisplayListBuilder {
             }
             Some(EmphasisText {
               glyphs,
-              font_id: Some(mark_font_id),
+              font: Some(mark_font),
               variations: mark_variations,
               font_size: mark_style.font_size,
               width,
@@ -4304,15 +4299,6 @@ impl DisplayListBuilder {
       inline_vertical,
       text,
     })
-  }
-
-  fn font_id_from_run(&self, run: &ShapedRun) -> FontId {
-    FontId {
-      family: run.font.family.clone(),
-      weight: run.font.weight.value(),
-      style: run.font.style,
-      stretch: run.font.stretch,
-    }
   }
 
   fn variations_from_run(run: &ShapedRun) -> Vec<FontVariation> {
@@ -4627,7 +4613,7 @@ impl DisplayListBuilder {
       shadows,
       font_size,
       advance_width,
-      font_id: None,
+      font: None,
       variations: Vec::new(),
       synthetic_bold: 0.0,
       synthetic_oblique: 0.0,

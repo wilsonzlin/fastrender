@@ -832,6 +832,14 @@ pub(crate) fn collect_forced_boundaries(
   node: &FragmentNode,
   abs_start: f32,
 ) -> Vec<ForcedBoundary> {
+  collect_forced_boundaries_with_axes(node, abs_start, FragmentAxes::default())
+}
+
+pub(crate) fn collect_forced_boundaries_with_axes(
+  node: &FragmentNode,
+  abs_start: f32,
+  axes: FragmentAxes,
+) -> Vec<ForcedBoundary> {
   fn is_forced_page_break(between: BreakBetween) -> bool {
     matches!(
       between,
@@ -857,10 +865,12 @@ pub(crate) fn collect_forced_boundaries(
     abs_start: f32,
     forced: &mut Vec<ForcedBoundary>,
     default_style: &ComputedStyle,
+    axes: FragmentAxes,
   ) {
+    let node_block_size = axes.block_size(&node.bounds);
     for (idx, child) in node.children.iter().enumerate() {
-      let child_abs_start = abs_start + child.bounds.y();
-      let child_abs_end = child_abs_start + child.bounds.height();
+      let child_abs_start = abs_start + axes.block_start(&child.bounds, node_block_size);
+      let child_abs_end = child_abs_start + axes.block_size(&child.bounds);
       let child_style = child
         .style
         .as_ref()
@@ -890,7 +900,7 @@ pub(crate) fn collect_forced_boundaries(
             candidate = child_abs_end;
           }
           if let Some(next_child) = node.children.get(idx + 1) {
-            let next_start = abs_start + next_child.bounds.y();
+            let next_start = abs_start + axes.block_start(&next_child.bounds, node_block_size);
             candidate = candidate.min(next_start);
           }
           boundary = candidate;
@@ -902,13 +912,13 @@ pub(crate) fn collect_forced_boundaries(
         });
       }
 
-      collect(child, child_abs_start, forced, default_style);
+      collect(child, child_abs_start, forced, default_style, axes);
     }
   }
 
   let default_style = default_style();
   let mut boundaries = Vec::new();
-  collect(node, abs_start, &mut boundaries, default_style);
+  collect(node, abs_start, &mut boundaries, default_style, axes);
   boundaries
 }
 
@@ -1101,7 +1111,17 @@ pub(crate) fn collect_atomic_ranges(
   abs_start: f32,
   ranges: &mut Vec<AtomicRange>,
 ) {
-  let abs_end = abs_start + node.bounds.height();
+  collect_atomic_ranges_with_axes(node, abs_start, FragmentAxes::default(), ranges);
+}
+
+pub(crate) fn collect_atomic_ranges_with_axes(
+  node: &FragmentNode,
+  abs_start: f32,
+  axes: FragmentAxes,
+  ranges: &mut Vec<AtomicRange>,
+) {
+  let node_block_size = axes.block_size(&node.bounds);
+  let abs_end = abs_start + node_block_size;
   if node
     .style
     .as_ref()
@@ -1114,8 +1134,8 @@ pub(crate) fn collect_atomic_ranges(
   }
 
   for child in &node.children {
-    let child_abs_start = abs_start + child.bounds.y();
-    collect_atomic_ranges(child, child_abs_start, ranges);
+    let child_abs_start = abs_start + axes.block_start(&child.bounds, node_block_size);
+    collect_atomic_ranges_with_axes(child, child_abs_start, axes, ranges);
   }
 }
 
