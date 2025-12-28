@@ -691,6 +691,26 @@ fn pack_color(
   to_premultiplied(color)
 }
 
+fn reencode_pixmap_to_linear_rgb(pixmap: &mut Pixmap) {
+  for px in pixmap.pixels_mut() {
+    let mut color = to_unpremultiplied(*px);
+    color.r = srgb_to_linear(color.r);
+    color.g = srgb_to_linear(color.g);
+    color.b = srgb_to_linear(color.b);
+    *px = to_premultiplied(color);
+  }
+}
+
+fn reencode_pixmap_to_srgb(pixmap: &mut Pixmap) {
+  for px in pixmap.pixels_mut() {
+    let mut color = to_unpremultiplied(*px);
+    color.r = linear_to_srgb(color.r);
+    color.g = linear_to_srgb(color.g);
+    color.b = linear_to_srgb(color.b);
+    *px = to_premultiplied(color);
+  }
+}
+
 /// Load and parse an SVG filter from a URL (including data URLs), caching the result.
 pub fn load_svg_filter(url: &str, image_cache: &ImageCache) -> Option<Arc<SvgFilter>> {
   let resolved = image_cache.resolve_url(url);
@@ -1089,7 +1109,6 @@ fn parse_input(attr: Option<&str>) -> FilterInput {
 fn attribute_ci<'a>(node: &'a roxmltree::Node, name: &str) -> Option<&'a str> {
   node
     .attributes()
-    .iter()
     .find(|attr| attr.name().eq_ignore_ascii_case(name))
     .map(|attr| attr.value())
 }
@@ -1957,7 +1976,14 @@ fn apply_primitive(
       let sigma_x = sx * scale_x;
       let sigma_y = sy * scale_y;
       if sigma_x != 0.0 || sigma_y != 0.0 {
+        let use_linear = matches!(color_interpolation_filters, ColorInterpolationFilters::LinearRGB);
+        if use_linear {
+          reencode_pixmap_to_linear_rgb(&mut img.pixmap);
+        }
         apply_gaussian_blur_anisotropic(&mut img.pixmap, sigma_x, sigma_y);
+        if use_linear {
+          reencode_pixmap_to_srgb(&mut img.pixmap);
+        }
         let expanded = inflate_rect_xy(img.region, sigma_x.abs() * 3.0, sigma_y.abs() * 3.0);
         img.region = clip_region(expanded, filter_region);
       }
@@ -2003,7 +2029,16 @@ fn apply_primitive(
       let dy = filter.resolve_primitive_y(*dy, css_bbox) * scale_y;
       let std_dev = filter.resolve_primitive_pair(*std_dev, css_bbox);
       let std_dev = (std_dev.0 * scale_x, std_dev.1 * scale_y);
-      drop_shadow_pixmap(img, dx, dy, std_dev, color, *opacity, filter_region)
+      drop_shadow_pixmap(
+        img,
+        dx,
+        dy,
+        std_dev,
+        color,
+        *opacity,
+        color_interpolation_filters,
+        filter_region,
+      )
     }),
     FilterPrimitive::Blend {
       input1,
@@ -2837,6 +2872,7 @@ fn drop_shadow_pixmap(
   stddev: (f32, f32),
   color: &Rgba,
   opacity: f32,
+  color_interpolation_filters: ColorInterpolationFilters,
   filter_region: Rect,
 ) -> FilterResult {
   let mut tinted = input.pixmap.clone();
@@ -2858,7 +2894,14 @@ fn drop_shadow_pixmap(
 
   let mut shadow = tinted.clone();
   if stddev.0 != 0.0 || stddev.1 != 0.0 {
+    let use_linear = matches!(color_interpolation_filters, ColorInterpolationFilters::LinearRGB);
+    if use_linear {
+      reencode_pixmap_to_linear_rgb(&mut shadow);
+    }
     apply_gaussian_blur_anisotropic(&mut shadow, stddev.0, stddev.1);
+    if use_linear {
+      reencode_pixmap_to_srgb(&mut shadow);
+    }
   }
 
   let mut out = offset_pixmap(shadow, dx, dy);

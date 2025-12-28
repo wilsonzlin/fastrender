@@ -113,3 +113,54 @@ fn identity_matrix_is_a_noop_in_all_color_spaces() {
   assert_eq!(base.data(), linear_result.data());
   assert_eq!(base.data(), srgb_result.data());
 }
+
+fn blur_filter(color_space: ColorInterpolationFilters) -> SvgFilter {
+  SvgFilter {
+    color_interpolation_filters: color_space,
+    steps: vec![FilterStep {
+      result: None,
+      color_interpolation_filters: None,
+      primitive: FilterPrimitive::GaussianBlur {
+        input: FilterInput::SourceGraphic,
+        std_dev: (5.0, 0.0),
+      },
+      region: None,
+    }],
+    region: SvgFilterRegion {
+      x: SvgLength::Number(0.0),
+      y: SvgLength::Number(0.0),
+      width: SvgLength::Number(2.0),
+      height: SvgLength::Number(1.0),
+      units: SvgFilterUnits::UserSpaceOnUse,
+    },
+    filter_res: None,
+    primitive_units: SvgFilterUnits::UserSpaceOnUse,
+  }
+}
+
+#[test]
+fn gaussian_blur_respects_color_interpolation_filters() {
+  let mut base = Pixmap::new(2, 1).unwrap();
+  base.pixels_mut()[0] = PremultipliedColorU8::from_rgba(255, 0, 0, 255).unwrap();
+  base.pixels_mut()[1] = PremultipliedColorU8::from_rgba(0, 255, 0, 255).unwrap();
+
+  let mut linear = base.clone();
+  let mut srgb = base.clone();
+  let bbox = Rect::from_xywh(0.0, 0.0, 2.0, 1.0);
+
+  apply_svg_filter(&blur_filter(ColorInterpolationFilters::LinearRGB), &mut linear, 1.0, bbox);
+  apply_svg_filter(&blur_filter(ColorInterpolationFilters::SRGB), &mut srgb, 1.0, bbox);
+
+  let linear_px = linear.pixel(0, 0).unwrap();
+  let srgb_px = srgb.pixel(0, 0).unwrap();
+
+  assert_ne!(
+    (linear_px.red(), linear_px.green(), linear_px.blue()),
+    (srgb_px.red(), srgb_px.green(), srgb_px.blue()),
+    "blurring in linearRGB should differ from sRGB"
+  );
+  assert!(
+    linear_px.red() > srgb_px.red(),
+    "linear RGB should preserve more intensity after blur"
+  );
+}

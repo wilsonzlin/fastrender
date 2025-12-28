@@ -145,6 +145,50 @@ fn diffuse_lighting_colors_flat_surface() {
   );
 }
 
+#[test]
+fn specular_lighting_colors_flat_surface() {
+  let mut pixmap = solid_pixmap(1, 1, PremultipliedColorU8::from_rgba(0, 0, 0, 255).unwrap());
+  let bbox = Rect::from_xywh(0.0, 0.0, 1.0, 1.0);
+
+  let filter = SvgFilter {
+    color_interpolation_filters: ColorInterpolationFilters::LinearRGB,
+    steps: vec![FilterStep {
+      result: None,
+      color_interpolation_filters: None,
+      primitive: FilterPrimitive::SpecularLighting {
+        input: FilterInput::SourceAlpha,
+        surface_scale: 0.0,
+        specular_constant: 1.0,
+        specular_exponent: 1.0,
+        kernel_unit_length: None,
+        light: LightSource::Distant {
+          azimuth: 0.0,
+          elevation: 90.0,
+        },
+        lighting_color: Rgba::BLUE,
+      },
+      region: None,
+    }],
+    region: SvgFilterRegion {
+      x: SvgLength::Number(0.0),
+      y: SvgLength::Number(0.0),
+      width: SvgLength::Number(1.0),
+      height: SvgLength::Number(1.0),
+      units: SvgFilterUnits::UserSpaceOnUse,
+    },
+    filter_res: None,
+    primitive_units: SvgFilterUnits::UserSpaceOnUse,
+  };
+
+  apply_svg_filter(&filter, &mut pixmap, 1.0, bbox);
+
+  let px = pixmap.pixel(0, 0).unwrap();
+  assert_eq!(
+    (px.red(), px.green(), px.blue(), px.alpha()),
+    (0, 0, 255, 255)
+  );
+}
+
 fn render_diffuse(color_space: ColorInterpolationFilters) -> PremultipliedColorU8 {
   let mut pixmap = solid_pixmap(1, 1, PremultipliedColorU8::from_rgba(0, 0, 0, 255).unwrap());
   let bbox = Rect::from_xywh(0.0, 0.0, 1.0, 1.0);
@@ -253,4 +297,48 @@ fn userspace_percent_regions_resolve_against_bbox() {
 
   let bounds = opaque_bounds(&pixmap).expect("flood should produce opaque pixels");
   assert_eq!(bounds, (30, 20, 40, 20));
+}
+
+#[test]
+fn point_light_percentages_follow_bbox_in_userspace() {
+  let mut pixmap = solid_pixmap(4, 4, PremultipliedColorU8::from_rgba(0, 0, 0, 255).unwrap());
+  let bbox = Rect::from_xywh(10.0, 20.0, 4.0, 4.0);
+  let filter = SvgFilter {
+    color_interpolation_filters: ColorInterpolationFilters::LinearRGB,
+    steps: vec![FilterStep {
+      result: None,
+      color_interpolation_filters: None,
+      primitive: FilterPrimitive::DiffuseLighting {
+        input: FilterInput::SourceAlpha,
+        surface_scale: 0.0,
+        diffuse_constant: 1.0,
+        kernel_unit_length: None,
+        light: LightSource::Point {
+          x: SvgLength::Percent(0.0),
+          y: SvgLength::Percent(0.0),
+          z: SvgLength::Number(10.0),
+        },
+        lighting_color: Rgba::WHITE,
+      },
+      region: None,
+    }],
+    region: SvgFilterRegion {
+      x: SvgLength::Number(0.0),
+      y: SvgLength::Number(0.0),
+      width: SvgLength::Number(4.0),
+      height: SvgLength::Number(4.0),
+      units: SvgFilterUnits::UserSpaceOnUse,
+    },
+    filter_res: None,
+    primitive_units: SvgFilterUnits::UserSpaceOnUse,
+  };
+
+  apply_svg_filter(&filter, &mut pixmap, 1.0, bbox);
+
+  let px = pixmap.pixel(0, 0).unwrap();
+  assert!(
+    px.alpha() > 240,
+    "expected bbox-relative point light to fully illuminate the corner (alpha={})",
+    px.alpha()
+  );
 }
