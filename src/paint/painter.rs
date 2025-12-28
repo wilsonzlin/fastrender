@@ -4449,10 +4449,11 @@ impl Painter {
     let origin_x = origin_x * self.scale;
     let baseline_y = baseline_y * self.scale;
     // ttf_parser face
-    let face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
+    let mut face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
       Ok(f) => f,
       Err(_) => return,
     };
+    apply_rustybuzz_variations(&mut face, &run.variations);
     let units_per_em = face.units_per_em() as f32;
     let mut scale = run.font_size / units_per_em;
     scale *= run.scale * self.scale;
@@ -4576,10 +4577,11 @@ impl Painter {
     let block_origin = block_origin * self.scale;
     let inline_origin = inline_origin * self.scale;
 
-    let face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
+    let mut face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
       Ok(f) => f,
       Err(_) => return,
     };
+    apply_rustybuzz_variations(&mut face, &run.variations);
     let units_per_em = face.units_per_em() as f32;
     let mut scale = run.font_size / units_per_em;
     scale *= run.scale * self.scale;
@@ -6887,10 +6889,11 @@ impl Painter {
           } else {
             run_pen_inline
           };
-          let face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
+          let mut face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
             Ok(f) => f,
             Err(_) => continue,
           };
+          apply_rustybuzz_variations(&mut face, &run.variations);
           let units_per_em = face.units_per_em() as f32;
           let scale = (run.font_size / units_per_em) * self.scale;
           let mut pen_inline = if run.direction.is_rtl() { advance } else { 0.0 };
@@ -9783,6 +9786,7 @@ mod tests {
   use crate::style::types::BorderImageSource;
   use crate::style::types::ClipPath;
   use crate::style::types::FilterShadow;
+  use crate::style::types::FontWeight;
   use crate::style::types::ImageRendering;
   use crate::style::types::Isolation;
   use crate::style::types::MixBlendMode;
@@ -9793,7 +9797,9 @@ mod tests {
   use crate::style::types::TransformBox;
   use crate::style::values::Length;
   use crate::style::ComputedStyle;
+  use crate::text::font_db::FontDatabase;
   use crate::text::font_loader::FontContext;
+  use crate::text::pipeline::ShapingPipeline;
   use crate::tree::box_tree::SrcsetCandidate;
   use crate::tree::box_tree::SrcsetDescriptor;
   use crate::Position;
@@ -9802,6 +9808,7 @@ mod tests {
   use image::ExtendedColorType;
   use image::ImageEncoder;
   use image::RgbaImage;
+  use std::fs;
   use std::sync::Arc;
 
   fn make_empty_tree() -> FragmentTree {
@@ -13295,6 +13302,59 @@ mod tests {
       next_tile.red() > next_tile.blue(),
       "second tile should repeat starting red, got {:?}",
       next_tile
+    );
+  }
+
+  #[test]
+  fn painter_applies_variable_font_variations() {
+    let font_bytes = match fs::read("tests/fixtures/fonts/TestVar.ttf") {
+      Ok(bytes) => bytes,
+      Err(_) => return,
+    };
+    let mut db = FontDatabase::empty();
+    db.load_font_data(font_bytes).expect("load variable font");
+    let font_ctx = FontContext::with_database(Arc::new(db));
+
+    let mut base_style = ComputedStyle::default();
+    base_style.font_family = vec!["TestVar".to_string()];
+    base_style.font_size = 96.0;
+
+    let mut light_style = base_style.clone();
+    light_style.font_weight = FontWeight::Number(100);
+    let mut heavy_style = base_style;
+    heavy_style.font_weight = FontWeight::Number(900);
+
+    let pipeline = ShapingPipeline::new();
+    let light_run = pipeline
+      .shape("A", &light_style, &font_ctx)
+      .expect("shape light run");
+    let heavy_run = pipeline
+      .shape("A", &heavy_style, &font_ctx)
+      .expect("shape heavy run");
+    if light_run.is_empty() || heavy_run.is_empty() {
+      return;
+    }
+
+    let render_run = |run: &ShapedRun| {
+      let mut painter = Painter::with_resources(200, 150, Rgba::WHITE, font_ctx.clone(), ImageCache::new())
+        .expect("painter");
+      painter.paint_shaped_run(run, 40.0, 110.0, Rgba::BLACK, None);
+      painter.pixmap
+    };
+
+    let light_pixmap = render_run(&light_run[0]);
+    let heavy_pixmap = render_run(&heavy_run[0]);
+
+    let light_box = bounding_box_for_color(&light_pixmap, |c| c.3 > 0).expect("light glyph paints");
+    let heavy_box = bounding_box_for_color(&heavy_pixmap, |c| c.3 > 0).expect("heavy glyph paints");
+
+    let light_width = light_box.2 - light_box.0;
+    let heavy_width = heavy_box.2 - heavy_box.0;
+    assert!(
+      heavy_width > light_width,
+      "heavier variation should widen glyph (light width {}, heavy width {})",
+      light_width,
+      heavy_width
     );
   }
 

@@ -135,3 +135,8 @@ be safely checked in alongside their regeneration scripts.
 
   - Relevant axes (from `fvar`): `wght` 38–250 (default 88), `wdth` 60–402 (default 402), `opsz` 10–72 (default 14).
   - Tests exercise the extremes of the `wght` axis (40 vs 250) to ensure glyph outlines visibly change when variations are applied during rasterization.
+
+### `TestVar.ttf`
+- **Source:** Generated in-repo with `fontTools.fontBuilder` for deterministic variable font testing.
+- **License:** Created specifically for FastRender tests; no third-party assets or licensing obligations.
+- **Glyphs / axes:** Minimal `A` glyph with a `wght` axis (100–900, default 400) that widens at heavier weights to validate variation application.
