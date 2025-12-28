@@ -13460,6 +13460,56 @@ mod tests {
   }
 
   #[test]
+  fn underline_skip_ink_uses_variable_font_bounds() {
+    let font_bytes = match fs::read("tests/fixtures/fonts/TestVar.ttf") {
+      Ok(bytes) => bytes,
+      Err(_) => return,
+    };
+    let mut db = FontDatabase::empty();
+    db.load_font_data(font_bytes).expect("load variable font");
+    let font_ctx = FontContext::with_database(Arc::new(db));
+
+    let mut base_style = ComputedStyle::default();
+    base_style.font_family = vec!["TestVar".to_string()];
+    base_style.font_size = 64.0;
+
+    let mut light_style = base_style.clone();
+    light_style.font_weight = FontWeight::Number(100);
+    let mut heavy_style = base_style;
+    heavy_style.font_weight = FontWeight::Number(900);
+
+    let pipeline = ShapingPipeline::new();
+    let light_runs = match pipeline.shape("A", &light_style, &font_ctx) {
+      Ok(runs) => runs,
+      Err(_) => return,
+    };
+    let heavy_runs = match pipeline.shape("A", &heavy_style, &font_ctx) {
+      Ok(runs) => runs,
+      Err(_) => return,
+    };
+    if light_runs.is_empty() || heavy_runs.is_empty() {
+      return;
+    }
+
+    let light_bounds =
+      collect_underline_exclusions(&light_runs, 0.0, 0.0, -1000.0, 1000.0, true, 1.0);
+    let heavy_bounds =
+      collect_underline_exclusions(&heavy_runs, 0.0, 0.0, -1000.0, 1000.0, true, 1.0);
+    if light_bounds.is_empty() || heavy_bounds.is_empty() {
+      return;
+    }
+
+    let light_width = light_bounds[0].1 - light_bounds[0].0;
+    let heavy_width = heavy_bounds[0].1 - heavy_bounds[0].0;
+    assert!(
+      heavy_width > light_width,
+      "skip-ink bounds should reflect variations (light {}, heavy {})",
+      light_width,
+      heavy_width
+    );
+  }
+
+  #[test]
   fn snap_upscale_prefers_integer_factor() {
     assert_eq!(snap_upscale(5.0, 2.0), Some((4.0, 0.5)));
     assert_eq!(snap_upscale(2.0, 2.0), None);
