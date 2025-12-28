@@ -3,6 +3,7 @@ mod r#ref;
 use fastrender::style::color::Rgba;
 use fastrender::text::color_fonts::ColorFontRenderer;
 use fastrender::text::font_db::{FontStretch, FontStyle, FontWeight, LoadedFont};
+use fastrender::text::font_instance::FontInstance;
 use r#ref::compare::{compare_images, load_png, CompareConfig};
 use rustybuzz::Variation;
 use std::path::PathBuf;
@@ -35,10 +36,12 @@ fn render_glyph(
 ) -> fastrender::text::color_fonts::ColorGlyphRaster {
   let face = font.as_ttf_face().unwrap();
   let gid = face.glyph_index('A').unwrap();
+  let instance = FontInstance::new(font, variations).expect("font instance");
 
   ColorFontRenderer::new()
     .render(
       font,
+      &instance,
       gid.0 as u32,
       64.0,
       palette_index,
@@ -96,10 +99,13 @@ fn malformed_colrv1_table_falls_back() {
     data: Arc::new(data),
     ..font
   };
+  let instance =
+    FontInstance::new(&corrupted, &[]).expect("corrupted COLR font should still parse instance");
   let face = corrupted.as_ttf_face().unwrap();
   let gid = face.glyph_index('A').unwrap();
   let rendered =
-    ColorFontRenderer::new().render(&corrupted, gid.0 as u32, 64.0, 0, Rgba::BLACK, 0.0, &[]);
+    ColorFontRenderer::new()
+      .render(&corrupted, &instance, gid.0 as u32, 64.0, 0, Rgba::BLACK, 0.0, &[]);
   assert!(rendered.is_none(), "malformed COLR should not render");
 }
 

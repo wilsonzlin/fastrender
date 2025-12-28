@@ -1,6 +1,7 @@
 use fastrender::paint::text_rasterize::glyph_advance;
 use fastrender::text::color_fonts::ColorFontRenderer;
 use fastrender::text::font_db::{FontStretch, FontStyle, FontWeight, LoadedFont};
+use fastrender::text::font_instance::FontInstance;
 use fastrender::text::pipeline::GlyphPosition;
 use fastrender::{Rgba, TextRasterizer};
 use std::sync::Arc;
@@ -33,8 +34,9 @@ fn renders_sbix_jpeg_bitmap_glyph() {
   }];
 
   let mut color_renderer = ColorFontRenderer::new();
+  let instance = FontInstance::new(&font, &[]).expect("font instance for bitmap font");
   let color_glyph = color_renderer
-    .render(&font, glyph_id, font_size, 0, Rgba::BLUE, 0.0, &[])
+    .render(&font, &instance, glyph_id, font_size, 0, Rgba::BLUE, 0.0, &[])
     .expect("color renderer should produce a bitmap glyph for the sbix strike");
 
   let draw_x = (8.0 + color_glyph.left).round() as i32;

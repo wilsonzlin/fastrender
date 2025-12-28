@@ -5,6 +5,7 @@ use fastrender::style::ComputedStyle;
 use fastrender::text::color_fonts::ColorFontRenderer;
 use fastrender::text::font_db::FontDatabase;
 use fastrender::text::font_loader::FontContext;
+use fastrender::text::font_instance::FontInstance;
 use fastrender::text::pipeline::ShapingPipeline;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -79,6 +80,7 @@ fn font_palette_selects_cpal_palettes_and_renders() {
   let normal_raster = renderer
     .render(
       &normal_run.font,
+      &FontInstance::new(&normal_run.font, &normal_run.variations).expect("normal instance"),
       glyph_id,
       normal_run.font_size,
       normal_run.palette_index,
@@ -90,6 +92,7 @@ fn font_palette_selects_cpal_palettes_and_renders() {
   let dark_raster = renderer
     .render(
       &dark_run.font,
+      &FontInstance::new(&dark_run.font, &dark_run.variations).expect("dark instance"),
       glyph_id,
       dark_run.font_size,
       dark_run.palette_index,

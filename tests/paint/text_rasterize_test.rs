@@ -10,6 +10,7 @@ mod r#ref;
 use fastrender::text::color_fonts::ColorFontRenderer;
 use fastrender::text::font_db::{FontStretch, FontStyle, FontWeight, LoadedFont};
 use fastrender::text::font_loader::FontContext;
+use fastrender::text::font_instance::FontInstance;
 use fastrender::text::pipeline::Direction;
 use fastrender::text::pipeline::GlyphPosition;
 use fastrender::text::pipeline::RunRotation;
@@ -511,12 +512,34 @@ fn colrv1_color_glyph_respects_variations_in_rasterizer() {
     tag: Tag::from_bytes(b"wght"),
     value: 1.0,
   }];
+  let base_instance =
+    FontInstance::new(&font, &base_variations).expect("expected base font instance");
+  let varied_instance =
+    FontInstance::new(&font, &varied_variations).expect("expected varied font instance");
 
   let base_raster = renderer
-    .render(&font, glyph_id, 64.0, 0, text_color, 0.0, &base_variations)
+    .render(
+      &font,
+      &base_instance,
+      glyph_id,
+      64.0,
+      0,
+      text_color,
+      0.0,
+      &base_variations,
+    )
     .expect("expected default variation colr glyph");
   let varied_raster = renderer
-    .render(&font, glyph_id, 64.0, 0, text_color, 0.0, &varied_variations)
+    .render(
+      &font,
+      &varied_instance,
+      glyph_id,
+      64.0,
+      0,
+      text_color,
+      0.0,
+      &varied_variations,
+    )
     .expect("expected varied colr glyph");
 
   let golden_dir = fixtures_path().join("golden");

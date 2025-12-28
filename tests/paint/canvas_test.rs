@@ -10,6 +10,7 @@ use fastrender::paint::display_list::BorderRadius;
 use fastrender::style::types::FontPalette;
 use fastrender::text::color_fonts::ColorFontRenderer;
 use fastrender::text::font_db::FontDatabase;
+use fastrender::text::font_instance::FontInstance;
 use fastrender::text::variations::FontVariation;
 use fastrender::BlendMode;
 use fastrender::BorderRadii;
@@ -718,9 +719,12 @@ fn canvas_respects_font_palette() {
     .expect("shape palette font glyph");
   let palette_run = runs.first().expect("palette run");
   let palette_glyph = palette_run.glyphs.first().expect("palette glyph");
+  let palette_instance =
+    FontInstance::new(&palette_run.font, &palette_run.variations).expect("palette instance");
   let palette_raster = ColorFontRenderer::new()
     .render(
       &palette_run.font,
+      &palette_instance,
       palette_glyph.glyph_id,
       palette_run.font_size,
       palette_run.palette_index,
@@ -763,9 +767,12 @@ fn canvas_respects_font_palette() {
     .expect("shape normal palette glyph");
   let normal_run = normal_runs.first().expect("normal palette run");
   let normal_glyph = normal_run.glyphs.first().expect("normal glyph");
+  let normal_instance =
+    FontInstance::new(&normal_run.font, &normal_run.variations).expect("normal instance");
   let normal_raster = ColorFontRenderer::new()
     .render(
       &normal_run.font,
+      &normal_instance,
       normal_glyph.glyph_id,
       normal_run.font_size,
       normal_run.palette_index,
