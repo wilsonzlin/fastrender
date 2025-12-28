@@ -60,6 +60,11 @@ pub struct RelativeSelectorCache {
 }
 
 impl RelativeSelectorCache {
+    /// Clears all cached matches.
+    pub fn clear(&mut self) {
+        self.cache.clear();
+    }
+
     /// Add a relative selector match into the cache.
     pub fn add<Impl: SelectorImpl>(
         &mut self,

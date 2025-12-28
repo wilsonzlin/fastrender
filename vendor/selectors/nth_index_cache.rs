@@ -23,6 +23,16 @@ pub struct NthIndexCache {
 }
 
 impl NthIndexCache {
+    /// Clears all cached indices.
+    pub fn clear(&mut self) {
+        self.nth.clear();
+        self.nth_of_selectors.clear();
+        self.nth_last.clear();
+        self.nth_last_of_selectors.clear();
+        self.nth_of_type.clear();
+        self.nth_last_of_type.clear();
+    }
+
     /// Gets the appropriate cache for the given parameters.
     pub fn get<Impl: SelectorImpl>(
         &mut self,
@@ -70,6 +80,10 @@ pub struct NthIndexOfSelectorsCaches(FxHashMap<SelectorListCacheKey, NthIndexCac
 /// Get or insert a map of cached incides for the selector list of this
 /// particular :nth-child or :nth-last-child pseudoclass
 impl NthIndexOfSelectorsCaches {
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+
     pub fn lookup<Impl: SelectorImpl>(
         &mut self,
         selectors: &[Selector<Impl>],
@@ -85,6 +99,10 @@ impl NthIndexOfSelectorsCaches {
 pub struct NthIndexCacheInner(FxHashMap<OpaqueElement, i32>);
 
 impl NthIndexCacheInner {
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+
     /// Does a lookup for a given element in the cache.
     pub fn lookup(&mut self, el: OpaqueElement) -> Option<i32> {
         self.0.get(&el).copied()

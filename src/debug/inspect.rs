@@ -1,5 +1,5 @@
 use crate::css::selectors::{FastRenderSelectorImpl, PseudoClassParser};
-use crate::dom::{DomNode, DomNodeType, ElementRef};
+use crate::dom::{next_selector_cache_epoch, DomNode, DomNodeType, ElementRef};
 use crate::error::{Error, RenderError};
 use crate::geometry::Rect;
 use crate::scroll::{ScrollMetadata, ScrollSnapContainer};
@@ -170,6 +170,7 @@ pub fn inspect(
     _ => None,
   };
   let mut selector_caches = SelectorCaches::default();
+  selector_caches.set_epoch(next_selector_cache_epoch());
 
   let mut results = Vec::new();
   let mut ancestors: Vec<&DomNode> = Vec::new();

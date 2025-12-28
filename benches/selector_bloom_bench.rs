@@ -127,6 +127,114 @@ fn generate_descendant_styles(class_variants: usize, chain_lengths: &[usize]) ->
   css
 }
 
+fn build_has_tree_html(depth: usize, branching: usize, needle_stride: usize) -> String {
+  fn build_level(
+    html: &mut String,
+    level: usize,
+    max_depth: usize,
+    branching: usize,
+    needle_stride: usize,
+    counter: &mut usize,
+  ) {
+    let _ = write!(
+      html,
+      "<section class=\"layer{level}\" data-level=\"{level}\">",
+      level = level
+    );
+
+    if level >= max_depth {
+      let leaf_id = *counter;
+      *counter += 1;
+      let needle = if leaf_id % needle_stride == 0 {
+        " needle"
+      } else {
+        ""
+      };
+      let _ = write!(
+        html,
+        "<div class=\"leaf{needle}\" data-leaf=\"{leaf_id}\"></div><div class=\"trail trail{level}\"></div>",
+        needle = needle,
+        leaf_id = leaf_id,
+        level = level
+      );
+      html.push_str("</section>");
+      return;
+    }
+
+    for branch in 0..branching {
+      let branch_id = *counter;
+      *counter += 1;
+      let gate_needle = if (branch_id + branch) % (needle_stride.saturating_mul(2).max(1)) == 0 {
+        " gate-needle"
+      } else {
+        ""
+      };
+      let _ = write!(
+        html,
+        "<div class=\"gate{level}{gate_needle}\" data-branch=\"{branch}\">",
+        level = level,
+        gate_needle = gate_needle,
+        branch = branch
+      );
+      build_level(
+        html,
+        level + 1,
+        max_depth,
+        branching,
+        needle_stride,
+        counter,
+      );
+      html.push_str("</div>");
+    }
+
+    let _ = write!(
+      html,
+      "<div class=\"filler filler{level}\"></div>",
+      level = level
+    );
+    html.push_str("</section>");
+  }
+
+  let mut html = String::from("<html><head></head><body>");
+  let mut counter = 0usize;
+  build_level(&mut html, 0, depth, branching, needle_stride, &mut counter);
+  html.push_str("</body></html>");
+  html
+}
+
+fn generate_has_styles(max_depth: usize, needle_stride: usize) -> String {
+  let mut css = String::from("body { margin: 0; }\n");
+  for level in 0..=max_depth {
+    let _ = write!(
+      css,
+      ".layer{level}:has(.needle) {{ padding-left: {}px; }}\n",
+      (level % 5) + 1,
+      level = level
+    );
+    let _ = write!(
+      css,
+      ".layer{level}:has(:scope > .gate{level}.gate-needle) {{ border-left: {}px solid #ccc; }}\n",
+      (level % 7) + 1,
+      level = level
+    );
+    let _ = write!(
+      css,
+      ".layer{level}:has(.filler{level} ~ .needle) {{ margin-left: {}px; }}\n",
+      (level % 9) + 2,
+      level = level
+    );
+    let target_leaf = (level + 1) * needle_stride;
+    let _ = write!(
+      css,
+      ".layer{level}:has([data-leaf=\"{target_leaf}\"]) {{ margin-bottom: {}px; }}\n",
+      (level % 6) + 1,
+      level = level,
+      target_leaf = target_leaf
+    );
+  }
+  css
+}
+
 fn selector_bloom_benchmark(c: &mut Criterion) {
   let depth = 200;
   let branching = 5;
@@ -159,5 +267,40 @@ fn selector_bloom_benchmark(c: &mut Criterion) {
   set_selector_bloom_enabled(true);
 }
 
-criterion_group!(benches, selector_bloom_benchmark);
+fn has_selector_bloom_benchmark(c: &mut Criterion) {
+  let depth = 7;
+  let branching = 5;
+  let needle_stride = 37;
+
+  let html = build_has_tree_html(depth, branching, needle_stride);
+  let css = generate_has_styles(depth, needle_stride);
+
+  let dom = parse_html(&html).expect("parse html");
+  let stylesheet = parse_stylesheet(&css).expect("parse stylesheet");
+  let media = MediaContext::screen(1280.0, 720.0);
+
+  let mut group = c.benchmark_group("has_selector_bloom_filter");
+  group.bench_function("has_with_bloom", |b| {
+    set_selector_bloom_enabled(true);
+    b.iter(|| {
+      let styled = apply_styles_with_media(black_box(&dom), black_box(&stylesheet), &media);
+      black_box(styled);
+    });
+  });
+  group.bench_function("has_without_bloom", |b| {
+    set_selector_bloom_enabled(false);
+    b.iter(|| {
+      let styled = apply_styles_with_media(black_box(&dom), black_box(&stylesheet), &media);
+      black_box(styled);
+    });
+  });
+  group.finish();
+  set_selector_bloom_enabled(true);
+}
+
+criterion_group!(
+  benches,
+  selector_bloom_benchmark,
+  has_selector_bloom_benchmark
+);
 criterion_main!(benches);

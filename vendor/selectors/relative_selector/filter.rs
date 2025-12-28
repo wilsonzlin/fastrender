@@ -84,6 +84,11 @@ fn fast_reject<Impl: SelectorImpl>(
 }
 
 impl RelativeSelectorFilterMap {
+    /// Clears all cached filters.
+    pub fn clear(&mut self) {
+        self.map.clear();
+    }
+
     fn get_filter<E: Element>(&mut self, element: &E, kind: TraversalKind) -> Option<&BloomFilter> {
         // Insert flag to indicate that we looked up the filter once, and
         // create the filter if and only if that flag is there.

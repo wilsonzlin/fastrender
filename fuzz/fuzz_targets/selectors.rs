@@ -3,7 +3,9 @@
 use arbitrary::Arbitrary;
 use cssparser::{Parser, ParserInput};
 use fastrender::css::selectors::{FastRenderSelectorImpl, PseudoClassParser};
-use fastrender::dom::{DomNode, DomNodeType, ElementRef, HTML_NAMESPACE, SVG_NAMESPACE};
+use fastrender::dom::{
+  next_selector_cache_epoch, DomNode, DomNodeType, ElementRef, HTML_NAMESPACE, SVG_NAMESPACE,
+};
 use libfuzzer_sys::fuzz_target;
 use selectors::matching::{
   matches_selector, MatchingContext, MatchingForInvalidation, MatchingMode, NeedsSelectorFlags,
@@ -152,6 +154,7 @@ fuzz_target!(|case: SelectorCase| {
     }
 
     let mut caches = SelectorCaches::default();
+    caches.set_epoch(next_selector_cache_epoch());
     let mut context = MatchingContext::new(
       MatchingMode::Normal,
       None,

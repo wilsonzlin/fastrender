@@ -130,7 +130,6 @@ impl QuirksMode {
 }
 
 /// Set of caches (And cache-likes) that speed up expensive selector matches.
-#[derive(Default)]
 pub struct SelectorCaches {
     /// A cache to speed up nth-index-like selectors.
     pub nth_index: NthIndexCache,
@@ -138,6 +137,31 @@ pub struct SelectorCaches {
     pub relative_selector: RelativeSelectorCache,
     /// A map of bloom filters to fast-reject relative selector matches.
     pub relative_selector_filter_map: RelativeSelectorFilterMap,
+    epoch: usize,
+}
+
+impl Default for SelectorCaches {
+    fn default() -> Self {
+        Self {
+            nth_index: NthIndexCache::default(),
+            relative_selector: RelativeSelectorCache::default(),
+            relative_selector_filter_map: RelativeSelectorFilterMap::default(),
+            epoch: 0,
+        }
+    }
+}
+
+impl SelectorCaches {
+    /// Clears caches if the epoch has changed and records the current epoch.
+    pub fn set_epoch(&mut self, epoch: usize) {
+        if self.epoch == epoch {
+            return;
+        }
+        self.epoch = epoch;
+        self.nth_index.clear();
+        self.relative_selector.clear();
+        self.relative_selector_filter_map.clear();
+    }
 }
 
 /// Data associated with the matching process for a element.  This context is

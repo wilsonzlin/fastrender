@@ -310,3 +310,48 @@ fn has_inside_shadow_root_skips_nested_shadow_trees() {
     "inline"
   );
 }
+
+#[test]
+fn has_scope_targets_direct_children() {
+  let html = r#"
+    <div id="direct"><span class="hit"></span></div>
+    <div id="indirect"><div><span class="hit"></span></div></div>
+  "#;
+  let dom = dom::parse_html(html).unwrap();
+  let css = r#"div:has(:scope > .hit) { display: inline; }"#;
+  let stylesheet = parse_stylesheet(css).unwrap();
+  let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
+
+  assert_eq!(
+    display(find_by_id(&styled, "direct").expect("direct")),
+    "inline"
+  );
+  assert_eq!(
+    display(find_by_id(&styled, "indirect").expect("indirect")),
+    "block"
+  );
+}
+
+#[test]
+fn has_scope_ignores_shadow_tree_descendants() {
+  let html = r#"
+    <div id="host">
+      <template shadowroot="open">
+        <div class="shadow-hit"></div>
+      </template>
+      <div class="light-hit"></div>
+    </div>
+  "#;
+  let dom = dom::parse_html(html).unwrap();
+  let css = r#"
+    #host:has(:scope > .light-hit) { display: inline; }
+    #host:has(:scope > .shadow-hit) { display: inline-block; }
+  "#;
+  let stylesheet = parse_stylesheet(css).unwrap();
+  let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
+
+  assert_eq!(
+    display(find_by_id(&styled, "host").expect("host")),
+    "inline"
+  );
+}

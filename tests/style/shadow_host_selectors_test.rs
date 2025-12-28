@@ -1,12 +1,12 @@
 use cssparser::{Parser, ParserInput, ToCss};
 use fastrender::css::parser::parse_stylesheet;
 use fastrender::css::selectors::{PseudoClassParser, ShadowMatchData};
-use fastrender::dom::{DomNode, ElementRef};
+use fastrender::dom::{next_selector_cache_epoch, DomNode, ElementRef};
 use fastrender::style::cascade::{apply_styles_with_media, StyledNode};
 use fastrender::style::color::Rgba;
 use fastrender::style::media::MediaContext;
-use selectors::Element;
 use selectors::parser::SelectorList;
+use selectors::Element;
 
 fn selector_roundtrip(selector: &str) -> String {
   let mut input = ParserInput::new(selector);
@@ -113,6 +113,7 @@ fn matches_host_and_host_context_selectors() {
       .unwrap();
       let host_ctx_selector = &host_ctx_selector_list.slice()[0];
       let mut host_ctx_caches = selectors::context::SelectorCaches::default();
+      host_ctx_caches.set_epoch(next_selector_cache_epoch());
       let mut host_ctx = selectors::matching::MatchingContext::new_for_visited(
         selectors::matching::MatchingMode::Normal,
         None,
@@ -141,6 +142,7 @@ fn matches_host_and_host_context_selectors() {
       .unwrap();
       let host_selector = &host_selector_list.slice()[0];
       let mut host_caches = selectors::context::SelectorCaches::default();
+      host_caches.set_epoch(next_selector_cache_epoch());
       let mut host_ctx = selectors::matching::MatchingContext::new_for_visited(
         selectors::matching::MatchingMode::Normal,
         None,
@@ -173,6 +175,7 @@ fn matches_host_and_host_context_selectors() {
       .unwrap();
       let inner_selector = &inner_selector_list.slice()[0];
       let mut inner_caches = selectors::context::SelectorCaches::default();
+      inner_caches.set_epoch(next_selector_cache_epoch());
       let mut inner_ctx = selectors::matching::MatchingContext::new_for_visited(
         selectors::matching::MatchingMode::Normal,
         None,

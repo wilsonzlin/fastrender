@@ -27,6 +27,7 @@ use crate::debug::runtime;
 use crate::dom::compute_part_export_map_with_ids;
 use crate::dom::compute_slot_assignment;
 use crate::dom::enumerate_dom_ids;
+use crate::dom::next_selector_cache_epoch;
 use crate::dom::resolve_first_strong_direction;
 use crate::dom::with_target_fragment;
 use crate::dom::DomNode;
@@ -1657,6 +1658,7 @@ pub fn apply_styles_with_media_target_and_imports_cached_with_deadline(
   let styled = with_target_fragment(target_fragment, || {
     with_image_set_dpr(media_ctx.device_pixel_ratio, || {
       let mut selector_caches = SelectorCaches::default();
+      selector_caches.set_epoch(next_selector_cache_epoch());
       let mut max_rules = rule_scopes
         .ua
         .rules
@@ -2012,6 +2014,7 @@ pub fn apply_style_set_with_media_target_and_imports_cached_with_deadline(
   let styled = with_target_fragment(target_fragment, || {
     with_image_set_dpr(media_ctx.device_pixel_ratio, || {
       let mut selector_caches = SelectorCaches::default();
+      selector_caches.set_epoch(next_selector_cache_epoch());
       let mut max_rules = rule_scopes
         .ua
         .rules
@@ -7511,6 +7514,7 @@ mod tests {
     let ancestors: Vec<&DomNode> = vec![&dom]; // ul ancestor for the li
     let element_ref = build_element_ref_chain(&dom.children[0], &ancestors, None);
     let mut caches = SelectorCaches::default();
+    caches.set_epoch(next_selector_cache_epoch());
     let part_export_map = PartExportMap::new();
     let mut context = MatchingContext::new(
       MatchingMode::ForStatelessPseudoElement,
@@ -7533,6 +7537,7 @@ mod tests {
       "selector should match the originating element"
     );
     let mut caches = SelectorCaches::default();
+    caches.set_epoch(next_selector_cache_epoch());
     let mut scratch = CascadeScratch::new(rule_index.rules.len());
     let marker_matches = find_pseudo_element_rules(
       &dom.children[0],

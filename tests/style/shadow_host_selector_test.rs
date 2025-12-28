@@ -1,7 +1,9 @@
 use fastrender::css::parser::parse_stylesheet;
 use fastrender::css::selectors::ShadowMatchData;
 use fastrender::css::types::CssRule;
-use fastrender::dom::{DomNode, DomNodeType, ElementRef, HTML_NAMESPACE};
+use fastrender::dom::{
+  next_selector_cache_epoch, DomNode, DomNodeType, ElementRef, HTML_NAMESPACE,
+};
 use fastrender::style::cascade::apply_styles;
 use fastrender::style::defaults::get_default_styles_for_element;
 use selectors::matching::{
@@ -50,6 +52,7 @@ fn shadow_stylesheet_host_matches_only_host() {
     .expect("style selector");
 
   let mut caches = SelectorCaches::default();
+  caches.set_epoch(next_selector_cache_epoch());
   let mut context = MatchingContext::new(
     MatchingMode::Normal,
     None,
@@ -66,6 +69,7 @@ fn shadow_stylesheet_host_matches_only_host() {
   );
 
   let mut caches = SelectorCaches::default();
+  caches.set_epoch(next_selector_cache_epoch());
   let mut context = MatchingContext::new(
     MatchingMode::Normal,
     None,
@@ -90,6 +94,7 @@ fn shadow_stylesheet_host_matches_only_host() {
   );
 
   let mut caches = SelectorCaches::default();
+  caches.set_epoch(next_selector_cache_epoch());
   let mut context = MatchingContext::new(
     MatchingMode::Normal,
     None,

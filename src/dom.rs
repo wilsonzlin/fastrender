@@ -28,6 +28,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ptr;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::OnceLock;
 use std::thread_local;
@@ -152,6 +153,7 @@ fn current_target_fragment() -> Option<String> {
 
 static SELECTOR_BLOOM_ENV_INITIALIZED: OnceLock<()> = OnceLock::new();
 static SELECTOR_BLOOM_ENABLED: AtomicBool = AtomicBool::new(true);
+static SELECTOR_CACHE_EPOCH: AtomicUsize = AtomicUsize::new(1);
 
 fn selector_bloom_enabled() -> bool {
   SELECTOR_BLOOM_ENV_INITIALIZED.get_or_init(|| {
@@ -168,6 +170,11 @@ fn selector_bloom_enabled() -> bool {
 pub fn set_selector_bloom_enabled(enabled: bool) {
   SELECTOR_BLOOM_ENV_INITIALIZED.get_or_init(|| ());
   SELECTOR_BLOOM_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+/// Returns a monotonically increasing epoch for selector caches.
+pub fn next_selector_cache_epoch() -> usize {
+  SELECTOR_CACHE_EPOCH.fetch_add(1, Ordering::Relaxed)
 }
 
 /// Resolve the first-strong direction within this subtree, skipping script/style contents.
@@ -2637,7 +2644,15 @@ impl<'a> Element for ElementRef<'a> {
   }
 
   fn first_element_child(&self) -> Option<Self> {
-    // We don't support this for now - static rendering doesn't need it
+    for child in &self.node.children {
+      if child.is_element() {
+        return Some(ElementRef {
+          node: child,
+          parent: Some(self.node),
+          all_ancestors: self.all_ancestors,
+        });
+      }
+    }
     None
   }
 
@@ -2657,7 +2672,7 @@ impl<'a> Element for ElementRef<'a> {
     use selectors::bloom;
 
     if !selector_bloom_enabled() {
-      return true;
+      return false;
     }
 
     let mut insert = |value: &str| {
@@ -2796,39 +2811,55 @@ fn matches_has_relative(
   }
 
   context.nest_for_relative_selector(anchor.opaque(), |ctx| {
-    let mut ancestors = RelativeSelectorAncestorStack::new(anchor.all_ancestors);
+    ctx.nest_for_scope(Some(anchor.opaque()), |ctx| {
+      let mut ancestors = RelativeSelectorAncestorStack::new(anchor.all_ancestors);
 
-    for selector in selectors.iter() {
-      if let Some(cached) = ctx
-        .selector_caches
-        .relative_selector
-        .lookup(anchor.opaque(), selector)
-      {
-        if cached.matched() {
+      for selector in selectors.iter() {
+        if let Some(cached) = ctx
+          .selector_caches
+          .relative_selector
+          .lookup(anchor.opaque(), selector)
+        {
+          if cached.matched() {
+            return true;
+          }
+          continue;
+        }
+
+        if selector_bloom_enabled()
+          && ctx
+            .selector_caches
+            .relative_selector_filter_map
+            .fast_reject(anchor, selector, ctx.quirks_mode())
+        {
+          ctx.selector_caches.relative_selector.add(
+            anchor.opaque(),
+            selector,
+            RelativeSelectorCachedMatch::NotMatched,
+          );
+          continue;
+        }
+
+        let matched = match_relative_selector(selector, anchor.node, &mut ancestors, ctx);
+        debug_assert_eq!(ancestors.len(), ancestors.baseline_len());
+        ancestors.reset();
+
+        ctx.selector_caches.relative_selector.add(
+          anchor.opaque(),
+          selector,
+          if matched {
+            RelativeSelectorCachedMatch::Matched
+          } else {
+            RelativeSelectorCachedMatch::NotMatched
+          },
+        );
+
+        if matched {
           return true;
         }
-        continue;
       }
-
-      let matched = match_relative_selector(selector, anchor.node, &mut ancestors, ctx);
-      debug_assert_eq!(ancestors.len(), ancestors.baseline_len());
-      ancestors.reset();
-
-      ctx.selector_caches.relative_selector.add(
-        anchor.opaque(),
-        selector,
-        if matched {
-          RelativeSelectorCachedMatch::Matched
-        } else {
-          RelativeSelectorCachedMatch::NotMatched
-        },
-      );
-
-      if matched {
-        return true;
-      }
-    }
-    false
+      false
+    })
   })
 }
 
@@ -3116,6 +3147,7 @@ mod tests {
 
   fn matches(node: &DomNode, ancestors: &[&DomNode], pseudo: &PseudoClass) -> bool {
     let mut caches = SelectorCaches::default();
+    caches.set_epoch(next_selector_cache_epoch());
     let mut context = MatchingContext::new(
       MatchingMode::Normal,
       None,
@@ -3141,6 +3173,7 @@ mod tests {
 
   fn selector_matches(element: &ElementRef, selector: &Selector<FastRenderSelectorImpl>) -> bool {
     let mut caches = SelectorCaches::default();
+    caches.set_epoch(next_selector_cache_epoch());
     let mut context = MatchingContext::new(
       MatchingMode::Normal,
       None,
@@ -3241,6 +3274,7 @@ mod tests {
     let selector = selector_list.slice().first().expect("expected a selector");
 
     let mut caches = SelectorCaches::default();
+    caches.set_epoch(next_selector_cache_epoch());
     let mut context = MatchingContext::new(
       MatchingMode::Normal,
       None,
@@ -5026,6 +5060,7 @@ mod tests {
     let node = element("div", vec![]);
     let ancestors: Vec<&DomNode> = vec![];
     let mut caches = SelectorCaches::default();
+    caches.set_epoch(next_selector_cache_epoch());
     let mut context = MatchingContext::new(
       MatchingMode::ForStatelessPseudoElement,
       None,
