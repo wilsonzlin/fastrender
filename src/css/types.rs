@@ -232,6 +232,15 @@ pub struct CollectedFontPaletteRule<'a> {
   pub order: usize,
 }
 
+/// Flattened @property rule with cascade-layer ordering preserved.
+#[derive(Debug, Clone)]
+pub struct CollectedPropertyRule<'a> {
+  pub rule: &'a PropertyRule,
+  /// Cascade layer order (lexicographic; unlayered rules use a sentinel of u32::MAX).
+  pub layer_order: Vec<u32>,
+  pub order: usize,
+}
+
 /// Stylesheet containing CSS rules
 #[derive(Debug, Clone)]
 pub struct StyleSheet {
@@ -465,6 +474,30 @@ impl StyleSheet {
     result
   }
 
+  /// Collects @property rules.
+  pub fn collect_property_rules(&self, media_ctx: &MediaContext) -> Vec<CollectedPropertyRule<'_>> {
+    self.collect_property_rules_with_cache(media_ctx, None)
+  }
+
+  /// Collects @property rules using an optional media-query cache for reuse.
+  pub fn collect_property_rules_with_cache(
+    &self,
+    media_ctx: &MediaContext,
+    cache: Option<&mut MediaQueryCache>,
+  ) -> Vec<CollectedPropertyRule<'_>> {
+    let mut result = Vec::new();
+    let mut registry = LayerRegistry::new();
+    collect_property_rules_recursive(
+      &self.rules,
+      media_ctx,
+      cache,
+      &mut registry,
+      &[],
+      &mut result,
+    );
+    result
+  }
+
   /// Resolve @import rules by fetching external stylesheets and inlining their rules.
   ///
   /// Imports are processed in order; only imports whose media lists match the provided
@@ -541,7 +574,8 @@ impl StyleSheet {
           | CssRule::Import(_)
           | CssRule::FontFace(_)
           | CssRule::Keyframes(_)
-          | CssRule::FontPaletteValues(_) => {}
+          | CssRule::FontPaletteValues(_)
+          | CssRule::Property(_) => {}
         }
       }
       false
@@ -591,7 +625,8 @@ impl StyleSheet {
           | CssRule::Import(_)
           | CssRule::FontFace(_)
           | CssRule::Keyframes(_)
-          | CssRule::FontPaletteValues(_) => {}
+          | CssRule::FontPaletteValues(_)
+          | CssRule::Property(_) => {}
         }
       }
       false
@@ -696,6 +731,7 @@ fn collect_rules_recursive<'a>(
       }
       CssRule::Page(_) => {}
       CssRule::CounterStyle(_) => {}
+      CssRule::Property(_) => {}
       CssRule::Import(_) => {
         // Imports are resolved before collection; nothing to add here.
       }
@@ -873,6 +909,7 @@ fn collect_page_rules_recursive<'a>(
       CssRule::Keyframes(_) | CssRule::CounterStyle(_) => {}
       CssRule::Style(_) | CssRule::Import(_) | CssRule::FontFace(_) => {}
       CssRule::FontPaletteValues(_) => {}
+      CssRule::Property(_) => {}
       CssRule::Scope(scope_rule) => {
         collect_page_rules_recursive(
           &scope_rule.rules,
@@ -925,6 +962,7 @@ fn collect_font_faces_recursive(
       CssRule::Page(_) => {}
       CssRule::CounterStyle(_) => {}
       CssRule::FontPaletteValues(_) => {}
+      CssRule::Property(_) => {}
       CssRule::Layer(layer_rule) => {
         if layer_rule.rules.is_empty() {
           continue;
@@ -984,6 +1022,7 @@ fn collect_keyframes_recursive(
       CssRule::Page(_) | CssRule::CounterStyle(_) => {}
       CssRule::Style(_) | CssRule::Import(_) | CssRule::FontFace(_) => {}
       CssRule::FontPaletteValues(_) => {}
+      CssRule::Property(_) => {}
       CssRule::Scope(scope_rule) => {
         collect_keyframes_recursive(&scope_rule.rules, media_ctx, cache.as_deref_mut(), out);
       }
@@ -1116,6 +1155,7 @@ fn collect_counter_styles_recursive<'a>(
       CssRule::FontFace(_) => {}
       CssRule::Keyframes(_) => {}
       CssRule::FontPaletteValues(_) => {}
+      CssRule::Property(_) => {}
       CssRule::StartingStyle(starting_rule) => {
         collect_counter_styles_recursive(
           &starting_rule.rules,
@@ -1259,6 +1299,134 @@ fn collect_font_palette_rules_recursive<'a>(
           out,
         );
       }
+      CssRule::Property(_) => {}
+    }
+  }
+}
+
+fn collect_property_rules_recursive<'a>(
+  rules: &'a [CssRule],
+  media_ctx: &MediaContext,
+  cache: Option<&mut MediaQueryCache>,
+  registry: &mut LayerRegistry,
+  current_layer: &[u32],
+  out: &mut Vec<CollectedPropertyRule<'a>>,
+) {
+  let mut cache = cache;
+  for rule in rules {
+    match rule {
+      CssRule::Property(property) => {
+        let layer_order = if current_layer.is_empty() {
+          vec![u32::MAX]
+        } else {
+          current_layer.to_vec()
+        };
+        let order = out.len();
+        out.push(CollectedPropertyRule {
+          rule: property,
+          layer_order,
+          order,
+        });
+      }
+      CssRule::Media(media_rule) => {
+        if media_ctx.evaluate_with_cache(&media_rule.query, cache.as_deref_mut()) {
+          collect_property_rules_recursive(
+            &media_rule.rules,
+            media_ctx,
+            cache.as_deref_mut(),
+            registry,
+            current_layer,
+            out,
+          );
+        }
+      }
+      CssRule::Supports(supports_rule) => {
+        if supports_rule.condition.matches() {
+          collect_property_rules_recursive(
+            &supports_rule.rules,
+            media_ctx,
+            cache.as_deref_mut(),
+            registry,
+            current_layer,
+            out,
+          );
+        }
+      }
+      CssRule::Layer(layer_rule) => {
+        if layer_rule.rules.is_empty() {
+          for name in &layer_rule.names {
+            registry.ensure_path(current_layer, name);
+          }
+          if layer_rule.anonymous {
+            registry.ensure_anonymous(current_layer);
+          }
+          continue;
+        }
+
+        if layer_rule.anonymous {
+          let path = registry.ensure_anonymous(current_layer);
+          collect_property_rules_recursive(
+            &layer_rule.rules,
+            media_ctx,
+            cache.as_deref_mut(),
+            registry,
+            &path,
+            out,
+          );
+          continue;
+        }
+
+        if layer_rule.names.len() != 1 {
+          continue;
+        }
+        let path = registry.ensure_path(current_layer, &layer_rule.names[0]);
+        collect_property_rules_recursive(
+          &layer_rule.rules,
+          media_ctx,
+          cache.as_deref_mut(),
+          registry,
+          &path,
+          out,
+        );
+      }
+      CssRule::Style(style_rule) => {
+        if !style_rule.nested_rules.is_empty() {
+          collect_property_rules_recursive(
+            &style_rule.nested_rules,
+            media_ctx,
+            cache.as_deref_mut(),
+            registry,
+            current_layer,
+            out,
+          );
+        }
+      }
+      CssRule::Scope(scope_rule) => {
+        collect_property_rules_recursive(
+          &scope_rule.rules,
+          media_ctx,
+          cache.as_deref_mut(),
+          registry,
+          current_layer,
+          out,
+        );
+      }
+      CssRule::Container(container_rule) => {
+        collect_property_rules_recursive(
+          &container_rule.rules,
+          media_ctx,
+          cache.as_deref_mut(),
+          registry,
+          current_layer,
+          out,
+        );
+      }
+      CssRule::Import(_) => {}
+      CssRule::Page(_) => {}
+      CssRule::FontFace(_) => {}
+      CssRule::Keyframes(_) => {}
+      CssRule::FontPaletteValues(_) => {}
+      CssRule::CounterStyle(_) => {}
     }
   }
 }
@@ -1441,6 +1609,8 @@ pub enum CssRule {
   CounterStyle(CounterStyleRule),
   /// A @font-palette-values rule defining a named color font palette.
   FontPaletteValues(FontPaletteValuesRule),
+  /// A @property rule registering a custom property.
+  Property(PropertyRule),
   /// An @import rule (href + optional media list)
   Import(ImportRule),
   /// A @layer rule establishing cascade layers
@@ -1769,7 +1939,8 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
       | CssRule::FontFace(_)
       | CssRule::Keyframes(_)
       | CssRule::CounterStyle(_)
-      | CssRule::FontPaletteValues(_) => out.push(rule.clone()),
+      | CssRule::FontPaletteValues(_)
+      | CssRule::Property(_) => out.push(rule.clone()),
       CssRule::Container(container_rule) => {
         let mut resolved_children = Vec::new();
         resolve_rules(

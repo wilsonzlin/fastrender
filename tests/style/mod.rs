@@ -10,6 +10,7 @@ mod counters_test;
 mod css_nesting_scope_integration_test;
 mod css_nesting_test;
 mod css_numeric_functions;
+mod custom_property_registration_test;
 mod defaults_test;
 mod extract_print;
 mod flex_property_test;

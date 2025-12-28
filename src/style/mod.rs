@@ -33,7 +33,7 @@ use crate::style::computed::Visibility;
 use crate::style::custom_properties::CustomPropertyRegistry;
 use crate::style::float::Clear;
 use crate::style::float::Float;
-use crate::style::values::{CustomPropertyTypedValue, CustomPropertyValue};
+use crate::style::values::CustomPropertyValue;
 use color::Rgba;
 use counter_styles::CounterStyleRegistry;
 use counters::CounterProperties;

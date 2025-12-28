@@ -45,7 +45,10 @@ use crate::dom::{DomNode, DomNodeType};
 use crate::error::Result;
 use crate::style::color::Color;
 use crate::style::counter_styles::{CounterStyleRule, CounterSystem, SpeakAs};
+use super::types::PropertyRule;
 use crate::style::media::MediaQuery;
+use crate::style::values::{CustomPropertySyntax, CustomPropertyValue};
+use crate::style::var_resolution::is_valid_custom_property_name;
 use cssparser::ParseError;
 use cssparser::Parser;
 use cssparser::ParserInput;
@@ -210,6 +213,7 @@ fn parse_rule<'i, 't>(
         "font-palette-values" => parse_font_palette_values_rule(p, css_source),
         "font-face" => parse_font_face_rule(p),
         "keyframes" | "-webkit-keyframes" => parse_keyframes_rule(p, css_source),
+        "property" => parse_property_rule(p),
         _ => {
           skip_at_rule(p);
           Ok(None)
@@ -1663,6 +1667,123 @@ fn parse_counter_style_pad<'i, 't>(
       "invalid pad".into(),
     ))
   })
+}
+
+fn parse_property_rule<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
+  parser.skip_whitespace();
+
+  let name = match parser.next_including_whitespace() {
+    Ok(Token::Ident(id)) => id.to_string(),
+    _ => {
+      skip_at_rule(parser);
+      return Ok(None);
+    }
+  };
+
+  if !is_valid_custom_property_name(&name) {
+    skip_at_rule(parser);
+    return Ok(None);
+  }
+
+  parser.expect_curly_bracket_block().map_err(|_| {
+    parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent("expected {".into()))
+  })?;
+
+  let rule = parser.parse_nested_block(|parser| parse_property_descriptors(parser, &name))?;
+  Ok(rule.map(CssRule::Property))
+}
+
+fn parse_property_descriptors<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+  name: &str,
+) -> std::result::Result<Option<PropertyRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
+  let mut syntax = CustomPropertySyntax::Universal;
+  let mut inherits = true;
+  let mut initial_value: Option<CustomPropertyValue> = None;
+
+  while !parser.is_exhausted() {
+    parser.skip_whitespace();
+    if parser.is_exhausted() {
+      break;
+    }
+
+    let ident = match parser.expect_ident() {
+      Ok(id) => id.to_ascii_lowercase(),
+      Err(_) => {
+        skip_to_semicolon(parser);
+        continue;
+      }
+    };
+
+    if parser.expect_colon().is_err() {
+      skip_to_semicolon(parser);
+      continue;
+    }
+
+    let value_start = parser.position();
+    while let Ok(token) = parser.next_including_whitespace() {
+      if matches!(token, Token::Semicolon) {
+        break;
+      }
+    }
+    let raw_value = parser.slice_from(value_start);
+    let value = raw_value.trim_end_matches(';').trim();
+
+    match ident.as_str() {
+      "syntax" => {
+        let unquoted = strip_quotes(value);
+        if let Some(parsed) = CustomPropertySyntax::parse(unquoted) {
+          syntax = parsed;
+        } else {
+          return Ok(None);
+        }
+      }
+      "inherits" => {
+        let lower = value.to_ascii_lowercase();
+        match lower.as_str() {
+          "true" => inherits = true,
+          "false" => inherits = false,
+          _ => return Ok(None),
+        }
+      }
+      "initial-value" => {
+        let typed = match syntax {
+          CustomPropertySyntax::Universal => None,
+          _ => syntax.parse_value(value),
+        };
+        if matches!(syntax, CustomPropertySyntax::Universal) || typed.is_some() {
+          initial_value = Some(CustomPropertyValue::new(value, typed));
+        } else {
+          return Ok(None);
+        }
+      }
+      _ => {}
+    }
+  }
+
+  if !inherits && initial_value.is_none() {
+    return Ok(None);
+  }
+
+  Ok(Some(PropertyRule {
+    name: name.to_string(),
+    syntax,
+    inherits,
+    initial_value,
+  }))
+}
+
+fn strip_quotes(value: &str) -> &str {
+  if value.len() >= 2 {
+    let bytes = value.as_bytes();
+    let last = value.len() - 1;
+    if (bytes[0] == b'"' && bytes[last] == b'"') || (bytes[0] == b'\'' && bytes[last] == b'\'') {
+      return &value[1..last];
+    }
+  }
+  value
 }
 
 fn parse_counter_style_fallback<'i, 't>(

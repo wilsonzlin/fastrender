@@ -1980,12 +1980,60 @@ pub fn apply_styles_with_media_target_and_imports_cached_with_deadline(
     std::sync::Arc::new(registry)
   };
 
+  let property_registry = {
+    let mut registry = crate::style::custom_properties::CustomPropertyRegistry::default();
+
+    fn register_collected(
+      registry: &mut crate::style::custom_properties::CustomPropertyRegistry,
+      mut collected: Vec<crate::css::types::CollectedPropertyRule<'_>>,
+    ) {
+      collected.sort_by(|a, b| {
+        a.layer_order
+          .cmp(&b.layer_order)
+          .then(a.order.cmp(&b.order))
+      });
+      for rule in collected {
+        registry.register(rule.rule.clone());
+      }
+    }
+
+    let ua_properties = if let Some(cache) = media_cache.as_deref_mut() {
+      ua_stylesheet.collect_property_rules_with_cache(media_ctx, Some(cache))
+    } else {
+      ua_stylesheet.collect_property_rules(media_ctx)
+    };
+    register_collected(&mut registry, ua_properties);
+
+    let author_properties = if let Some(cache) = media_cache.as_deref_mut() {
+      author_sheet.collect_property_rules_with_cache(media_ctx, Some(cache))
+    } else {
+      author_sheet.collect_property_rules(media_ctx)
+    };
+    register_collected(&mut registry, author_properties);
+
+    for (_host, _shadow_root_id, sheet) in &shadow_sheets {
+      let shadow_properties = if let Some(cache) = media_cache.as_deref_mut() {
+        sheet.collect_property_rules_with_cache(media_ctx, Some(cache))
+      } else {
+        sheet.collect_property_rules(media_ctx)
+      };
+      register_collected(&mut registry, shadow_properties);
+    }
+
+    std::sync::Arc::new(registry)
+  };
+  let initial_custom_properties = property_registry.initial_values();
+
   let mut base_styles = ComputedStyle::default();
   base_styles.counter_styles = counter_styles.clone();
   base_styles.font_palettes = font_palettes.clone();
+  base_styles.custom_property_registry = property_registry.clone();
+  base_styles.custom_properties = initial_custom_properties.clone();
   let mut base_ua_styles = ComputedStyle::default();
   base_ua_styles.counter_styles = counter_styles;
   base_ua_styles.font_palettes = font_palettes;
+  base_ua_styles.custom_property_registry = property_registry.clone();
+  base_ua_styles.custom_properties = initial_custom_properties;
 
   let styled = with_target_fragment(target_fragment, || {
     with_image_set_dpr(media_ctx.device_pixel_ratio, || {
@@ -2381,12 +2429,60 @@ pub fn apply_style_set_with_media_target_and_imports_cached_with_deadline(
     std::sync::Arc::new(registry)
   };
 
+  let property_registry = {
+    let mut registry = crate::style::custom_properties::CustomPropertyRegistry::default();
+
+    fn register_collected(
+      registry: &mut crate::style::custom_properties::CustomPropertyRegistry,
+      mut collected: Vec<crate::css::types::CollectedPropertyRule<'_>>,
+    ) {
+      collected.sort_by(|a, b| {
+        a.layer_order
+          .cmp(&b.layer_order)
+          .then(a.order.cmp(&b.order))
+      });
+      for rule in collected {
+        registry.register(rule.rule.clone());
+      }
+    }
+
+    let ua_properties = if let Some(cache) = media_cache.as_deref_mut() {
+      ua_stylesheet.collect_property_rules_with_cache(media_ctx, Some(cache))
+    } else {
+      ua_stylesheet.collect_property_rules(media_ctx)
+    };
+    register_collected(&mut registry, ua_properties);
+
+    let author_properties = if let Some(cache) = media_cache.as_deref_mut() {
+      document_sheet.collect_property_rules_with_cache(media_ctx, Some(cache))
+    } else {
+      document_sheet.collect_property_rules(media_ctx)
+    };
+    register_collected(&mut registry, author_properties);
+
+    for (_host, _shadow_root_id, sheet) in &shadow_sheets {
+      let shadow_properties = if let Some(cache) = media_cache.as_deref_mut() {
+        sheet.collect_property_rules_with_cache(media_ctx, Some(cache))
+      } else {
+        sheet.collect_property_rules(media_ctx)
+      };
+      register_collected(&mut registry, shadow_properties);
+    }
+
+    std::sync::Arc::new(registry)
+  };
+  let initial_custom_properties = property_registry.initial_values();
+
   let mut base_styles = ComputedStyle::default();
   base_styles.counter_styles = counter_styles.clone();
   base_styles.font_palettes = font_palettes.clone();
+  base_styles.custom_property_registry = property_registry.clone();
+  base_styles.custom_properties = initial_custom_properties.clone();
   let mut base_ua_styles = ComputedStyle::default();
   base_ua_styles.counter_styles = counter_styles;
   base_ua_styles.font_palettes = font_palettes;
+  base_ua_styles.custom_property_registry = property_registry.clone();
+  base_ua_styles.custom_properties = initial_custom_properties;
 
   let styled = with_target_fragment(target_fragment, || {
     with_image_set_dpr(media_ctx.device_pixel_ratio, || {
@@ -3868,7 +3964,18 @@ pub(crate) fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle)
   styles.color = parent.color;
 
   // CSS Custom Properties inherit
+  styles.custom_property_registry = parent.custom_property_registry.clone();
   styles.custom_properties = parent.custom_properties.clone();
+  for (name, rule) in parent.custom_property_registry.iter() {
+    if rule.inherits {
+      continue;
+    }
+    if let Some(initial) = &rule.initial_value {
+      styles.custom_properties.insert(name.clone(), initial.clone());
+    } else {
+      styles.custom_properties.remove(name);
+    }
+  }
 }
 
 /// Resolves line-height lengths to absolute pixels using computed font sizes and viewport metrics.
