@@ -410,31 +410,11 @@ fn resolve_fragmentation_boundaries_for_axis(
 /// `fragmentainer_index`) are populated so downstream stages can reason about page/column
 /// membership.
 pub fn fragment_tree(root: &FragmentNode, options: &FragmentationOptions) -> Vec<FragmentNode> {
-  let axes = axes_from_root(root);
-  fragment_tree_with_axes(root, options, axes)
-}
-
-/// Axis-aware entry point for pagination/columns when the writing-mode/direction are known.
-pub fn fragment_tree_for_writing_mode(
-  root: &FragmentNode,
-  options: &FragmentationOptions,
-  writing_mode: WritingMode,
-  direction: Direction,
-) -> Vec<FragmentNode> {
-  let axes = FragmentAxes::from_writing_mode_and_direction(writing_mode, direction);
-  fragment_tree_with_axes(root, options, axes)
-}
-
-/// Splits a fragment tree using explicit fragment axes.
-pub fn fragment_tree_with_axes(
-  root: &FragmentNode,
-  options: &FragmentationOptions,
-  axes: FragmentAxes,
-) -> Vec<FragmentNode> {
   if options.fragmentainer_size <= 0.0 {
     return vec![root.clone()];
   }
 
+  let axes = axes_from_root(root);
   let axis = axis_from_fragment_axes(axes);
   let inline_is_horizontal = axes.inline_axis() == PhysicalAxis::X;
   let block_sign = if axis.block_positive { 1.0 } else { -1.0 };
