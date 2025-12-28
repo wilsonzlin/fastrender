@@ -45,6 +45,7 @@ fn renders_sbix_jpeg_bitmap_glyph() {
       Rgba::BLUE,
       0.0,
       &[],
+      None,
     )
     .expect("color renderer should produce a bitmap glyph for the sbix strike");
 

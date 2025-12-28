@@ -730,6 +730,8 @@ fn canvas_respects_font_palette() {
       palette_run.palette_index,
       Rgba::BLACK,
       palette_run.synthetic_oblique,
+      &palette_run.variations,
+      None,
     )
     .expect("color glyph raster");
 
@@ -778,6 +780,8 @@ fn canvas_respects_font_palette() {
       normal_run.palette_index,
       Rgba::BLACK,
       normal_run.synthetic_oblique,
+      &normal_run.variations,
+      None,
     )
     .expect("normal palette raster");
   let normal_origin = Point::new(

@@ -1,3 +1,4 @@
+use super::limits::{log_glyph_limit, GlyphRasterLimits};
 use super::ColorGlyphRaster;
 use image::ImageFormat;
 use std::sync::Arc;
@@ -8,10 +9,22 @@ pub fn render_bitmap_glyph(
   face: &ttf_parser::Face<'_>,
   glyph_id: ttf_parser::GlyphId,
   font_size: f32,
+  limits: &GlyphRasterLimits,
 ) -> Option<ColorGlyphRaster> {
-  let ppem = font_size.ceil() as u16;
-  if let Some(raster) = face.glyph_raster_image(glyph_id, ppem) {
-    if let Some(pixmap) = decode_bitmap_pixmap(&raster) {
+  if !font_size.is_finite() || font_size <= 0.0 {
+    return None;
+  }
+
+  let ppem = font_size.ceil();
+  if ppem <= 0.0 || ppem > u16::MAX as f32 {
+    return None;
+  }
+  if let Some(raster) = face.glyph_raster_image(glyph_id, ppem as u16) {
+    let width = u32::from(raster.width);
+    let height = u32::from(raster.height);
+    if let Err(err) = limits.validate(width, height) {
+      log_glyph_limit("bitmap", glyph_id.0 as u32, &err);
+    } else if let Some(pixmap) = decode_bitmap_pixmap(&raster) {
       let image = Arc::new(pixmap);
       let left = raster.x as f32;
       let top = -(raster.y as f32);
@@ -20,7 +33,7 @@ pub fn render_bitmap_glyph(
     }
   }
 
-  render_sbix_bitmap_glyph(face, glyph_id, ppem)
+  render_sbix_bitmap_glyph(face, glyph_id, ppem as u16, limits)
 }
 
 fn decode_bitmap_pixmap(raster: &ttf_parser::RasterGlyphImage<'_>) -> Option<Pixmap> {
@@ -40,6 +53,7 @@ fn render_sbix_bitmap_glyph(
   face: &ttf_parser::Face<'_>,
   glyph_id: ttf_parser::GlyphId,
   pixels_per_em: u16,
+  limits: &GlyphRasterLimits,
 ) -> Option<ColorGlyphRaster> {
   let sbix = face
     .raw_face()
@@ -53,6 +67,11 @@ fn render_sbix_bitmap_glyph(
     b"png " => decode_image_with_format(glyph.data, Some(ImageFormat::Png))?,
     _ => return None,
   };
+
+  if let Err(err) = limits.validate(pixmap.width(), pixmap.height()) {
+    log_glyph_limit("bitmap", glyph_id.0 as u32, &err);
+    return None;
+  }
 
   Some(ColorGlyphRaster {
     image: Arc::new(pixmap),

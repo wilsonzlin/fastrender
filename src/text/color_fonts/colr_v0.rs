@@ -1,3 +1,4 @@
+use super::limits::{log_glyph_limit, round_dimension, GlyphRasterLimits};
 use super::{cpal, read_u16, read_u32, ColorFontCaches, ColorGlyphRaster, FontKey};
 use crate::style::color::Rgba;
 use crate::text::font_instance::{glyph_transform, FontInstance};
@@ -125,6 +126,7 @@ pub fn render_colr_glyph(
   palette_index: u16,
   text_color: Rgba,
   _synthetic_oblique: f32,
+  limits: &GlyphRasterLimits,
   caches: &Arc<Mutex<ColorFontCaches>>,
 ) -> Option<ColorGlyphRaster> {
   let colr_data = face
@@ -164,6 +166,9 @@ pub fn render_colr_glyph(
     return None;
   }
   let scale = font_size / units_per_em;
+  if !scale.is_finite() || !font_size.is_finite() {
+    return None;
+  }
   // Synthetic oblique is applied when painting color glyphs to keep the cached
   // rasters shared across runs.
   let transform = glyph_transform(scale, 0.0, 0.0, 0.0);
@@ -182,6 +187,14 @@ pub fn render_colr_glyph(
     return None;
   }
 
+  rasterize_colr_layers(paths, limits, glyph_id.0 as u32)
+}
+
+fn rasterize_colr_layers(
+  mut paths: Vec<(Path, Rgba)>,
+  limits: &GlyphRasterLimits,
+  glyph_id: u32,
+) -> Option<ColorGlyphRaster> {
   // Compute bounds
   let mut min_x = f32::MAX;
   let mut min_y = f32::MAX;
@@ -206,11 +219,15 @@ pub fn render_colr_glyph(
   max_x = (max_x + pad).ceil();
   max_y = (max_y + pad).ceil();
 
-  let width = (max_x - min_x).max(1.0).round() as u32;
-  let height = (max_y - min_y).max(1.0).round() as u32;
+  let width = round_dimension(max_x - min_x)?;
+  let height = round_dimension(max_y - min_y)?;
+  if let Err(err) = limits.validate(width, height) {
+    log_glyph_limit("colr", glyph_id, &err);
+    return None;
+  }
   let mut pixmap = Pixmap::new(width, height)?;
 
-  for (path, color) in paths {
+  for (path, color) in paths.drain(..) {
     let mut paint = Paint::default();
     paint.set_color_rgba8(color.r, color.g, color.b, color.alpha_u8());
     paint.anti_alias = true;
@@ -227,7 +244,9 @@ pub fn render_colr_glyph(
 
 #[cfg(test)]
 mod tests {
+  use super::super::limits::GlyphRasterLimits;
   use super::*;
+  use tiny_skia::PathBuilder;
 
   #[test]
   fn parse_header_rejects_nonzero_version() {
@@ -272,5 +291,19 @@ mod tests {
     assert_eq!(record.first_layer, 1);
     assert_eq!(record.layer_count, 2);
     assert!(find_base_glyph(&data, header, 7).is_none());
+  }
+
+  #[test]
+  fn colr_layers_exceeding_limits_are_skipped() {
+    let mut builder = PathBuilder::new();
+    builder.move_to(0.0, 0.0);
+    builder.line_to(20000.0, 0.0);
+    builder.line_to(20000.0, 20000.0);
+    builder.line_to(0.0, 20000.0);
+    builder.close();
+    let path = builder.finish().unwrap();
+    let limits = GlyphRasterLimits::new(512, 512_u64 * 512_u64);
+
+    assert!(rasterize_colr_layers(vec![(path, Rgba::RED)], &limits, 1).is_none());
   }
 }

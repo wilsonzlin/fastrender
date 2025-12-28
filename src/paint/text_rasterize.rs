@@ -702,6 +702,7 @@ impl TextRasterizer {
           color_for_glyph,
           0.0,
           variations,
+          Some((pixmap.width(), pixmap.height())),
         );
         if let Some(ref rendered) = color_glyph {
           self.color_cache.insert(color_key, rendered.clone());
@@ -1055,14 +1056,23 @@ impl TextRasterizer {
     color: Rgba,
     synthetic_oblique: f32,
   ) -> Option<ColorGlyphRaster> {
+    let instance = FontInstance::new(font, variations)?;
     let color_key =
       ColorGlyphCacheKey::new(font, glyph_id, font_size, palette_index, variations, color);
     let mut glyph = self.color_cache.get(&color_key);
 
     if glyph.is_none() {
-      glyph = self
-        .color_renderer
-        .render(font, glyph_id, font_size, palette_index, color, 0.0);
+      glyph = self.color_renderer.render(
+        font,
+        &instance,
+        glyph_id,
+        font_size,
+        palette_index,
+        color,
+        0.0,
+        variations,
+        None,
+      );
       if let Some(ref rendered) = glyph {
         self.color_cache.insert(color_key, rendered.clone());
       }

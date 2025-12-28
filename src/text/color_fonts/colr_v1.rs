@@ -1,3 +1,4 @@
+use super::limits::{log_glyph_limit, round_dimension, GlyphRasterLimits};
 use super::{cpal, ColorFontCaches, ColorGlyphRaster, FontKey};
 use crate::style::color::Rgba;
 use crate::text::font_db::LoadedFont;
@@ -23,6 +24,7 @@ pub fn render_colr_glyph(
   palette_index: u16,
   text_color: Rgba,
   synthetic_oblique: f32,
+  limits: &GlyphRasterLimits,
   caches: &Arc<Mutex<ColorFontCaches>>,
 ) -> Option<ColorGlyphRaster> {
   let font_ref = FontRef::from_index(font.data.as_slice(), font.index).ok()?;
@@ -42,7 +44,14 @@ pub fn render_colr_glyph(
       .unwrap_or_else(|| Arc::new(cpal::ParsedPalette::default()))
   };
 
-  let scale = font_size / face.units_per_em() as f32;
+  let units_per_em = face.units_per_em() as f32;
+  if units_per_em <= 0.0 || !units_per_em.is_finite() || !font_size.is_finite() {
+    return None;
+  }
+  let scale = font_size / units_per_em;
+  if !scale.is_finite() {
+    return None;
+  }
   let base_transform = Transform::from_row(scale, 0.0, synthetic_oblique * scale, -scale, 0.0, 0.0);
 
   let clip_path = colr
@@ -111,8 +120,12 @@ pub fn render_colr_glyph(
   max_x = (max_x + pad).ceil();
   max_y = (max_y + pad).ceil();
 
-  let width = (max_x - min_x).max(1.0).round() as u32;
-  let height = (max_y - min_y).max(1.0).round() as u32;
+  let width = round_dimension(max_x - min_x)?;
+  let height = round_dimension(max_y - min_y)?;
+  if let Err(err) = limits.validate(width, height) {
+    log_glyph_limit("colr", glyph_id.0 as u32, &err);
+    return None;
+  }
   let mut pixmap = Pixmap::new(width, height)?;
 
   let clip_mask = clip_path

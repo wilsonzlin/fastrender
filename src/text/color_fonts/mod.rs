@@ -6,12 +6,14 @@ mod bitmap;
 mod colr_v0;
 mod colr_v1;
 mod cpal;
+mod limits;
 mod svg;
 
 use crate::style::color::Rgba;
 use crate::text::font_db::LoadedFont;
 use crate::text::font_instance::FontInstance;
 use crate::text::variations::apply_rustybuzz_variations;
+use limits::GlyphRasterLimits;
 use rustybuzz::Variation;
 use std::collections::HashMap;
 use std::collections::VecDeque;
@@ -63,19 +65,21 @@ impl ColorFontRenderer {
     text_color: Rgba,
     synthetic_oblique: f32,
     variations: &[Variation],
+    target_size: Option<(u32, u32)>,
   ) -> Option<ColorGlyphRaster> {
     let mut face = font.as_ttf_face().ok()?;
     apply_rustybuzz_variations(&mut face, variations);
     let gid = ttf_parser::GlyphId(glyph_id as u16);
     let font_key = FontKey::new(font);
+    let limits = GlyphRasterLimits::for_target_surface(target_size);
 
     // Prefer embedded bitmaps (CBDT/CBLC or sbix)
-    if let Some(bitmap) = bitmap::render_bitmap_glyph(&face, gid, font_size) {
+    if let Some(bitmap) = bitmap::render_bitmap_glyph(&face, gid, font_size, &limits) {
       return Some(bitmap);
     }
 
     // SVG-in-OT
-    if let Some(svg) = svg::render_svg_glyph(&face, gid, font_size, text_color) {
+    if let Some(svg) = svg::render_svg_glyph(&face, gid, font_size, text_color, &limits) {
       return Some(svg);
     }
 
@@ -91,6 +95,7 @@ impl ColorFontRenderer {
       text_color,
       synthetic_oblique,
       variations,
+      &limits,
       &self.caches,
     ) {
       return Some(colr);
@@ -106,6 +111,7 @@ impl ColorFontRenderer {
       palette_index,
       text_color,
       synthetic_oblique,
+      &limits,
       &self.caches,
     ) {
       return Some(colr);

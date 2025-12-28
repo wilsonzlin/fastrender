@@ -1,3 +1,4 @@
+use super::limits::{log_glyph_limit, round_dimension, GlyphRasterLimits};
 use super::ColorGlyphRaster;
 use crate::style::color::Rgba;
 use crate::svg::{svg_root_view_box, svg_view_box_root_transform, SvgViewBox};
@@ -15,15 +16,33 @@ pub fn render_svg_glyph(
   glyph_id: ttf_parser::GlyphId,
   font_size: f32,
   text_color: Rgba,
+  limits: &GlyphRasterLimits,
 ) -> Option<ColorGlyphRaster> {
   let svg_doc = face.glyph_svg_image(glyph_id)?;
   let svg_str = sanitize_svg_glyph(svg_doc.data)?;
   let svg_with_color = inject_current_color(svg_str, text_color)?;
+  let units_per_em = face.units_per_em() as f32;
 
+  rasterize_svg_with_metrics(
+    &svg_with_color,
+    glyph_id.0 as u32,
+    font_size,
+    units_per_em,
+    limits,
+  )
+}
+
+fn rasterize_svg_with_metrics(
+  svg_with_color: &str,
+  glyph_id: u32,
+  font_size: f32,
+  units_per_em: f32,
+  limits: &GlyphRasterLimits,
+) -> Option<ColorGlyphRaster> {
   let mut options = resvg::usvg::Options::default();
   options.resources_dir = None;
 
-  let tree = resvg::usvg::Tree::from_str(&svg_with_color, &options).ok()?;
+  let tree = resvg::usvg::Tree::from_str(svg_with_color, &options).ok()?;
   let size = tree.size();
   let source_width = size.width() as f32;
   let source_height = size.height() as f32;
@@ -31,7 +50,7 @@ pub fn render_svg_glyph(
     return None;
   }
 
-  let view_box = svg_root_view_box(&svg_with_color).unwrap_or(SvgViewBox {
+  let view_box = svg_root_view_box(svg_with_color).unwrap_or(SvgViewBox {
     min_x: 0.0,
     min_y: 0.0,
     width: source_width,
@@ -41,14 +60,20 @@ pub fn render_svg_glyph(
     return None;
   }
 
-  let units_per_em = face.units_per_em() as f32;
   if units_per_em <= 0.0 {
     return None;
   }
 
   let scale = font_size / units_per_em;
-  let width = (view_box.width * scale).max(1.0).ceil() as u32;
-  let height = (view_box.height * scale).max(1.0).ceil() as u32;
+  if !scale.is_finite() || scale <= 0.0 || !font_size.is_finite() {
+    return None;
+  }
+  let width = round_dimension(view_box.width * scale)?;
+  let height = round_dimension(view_box.height * scale)?;
+  if let Err(err) = limits.validate(width, height) {
+    log_glyph_limit("svg", glyph_id, &err);
+    return None;
+  }
 
   let mut pixmap = Pixmap::new(width, height)?;
 
@@ -81,10 +106,15 @@ pub fn render_svg_glyph(
 
   resvg::render(&tree, transform, &mut pixmap.as_mut());
 
+  let top = -max_y * scale;
+  if !top.is_finite() {
+    return None;
+  }
+
   Some(ColorGlyphRaster {
     image: Arc::new(pixmap),
     left: view_box.min_x * scale,
-    top: -max_y * scale,
+    top,
   })
 }
 
@@ -238,4 +268,17 @@ fn concat_transforms(a: Transform, b: Transform) -> Transform {
     a.sx * b.tx + a.kx * b.ty + a.tx,
     a.ky * b.tx + a.sy * b.ty + a.ty,
   )
+}
+
+#[cfg(test)]
+mod tests {
+  use super::super::limits::GlyphRasterLimits;
+  use super::rasterize_svg_with_metrics;
+
+  #[test]
+  fn svg_glyph_rasterization_respects_limits() {
+    let svg = r#"<svg width="10000" height="10000" viewBox="0 0 10000 10000"></svg>"#;
+    let limits = GlyphRasterLimits::new(1024, 1024_u64 * 1024_u64);
+    assert!(rasterize_svg_with_metrics(svg, 1, 50.0, 1.0, &limits).is_none());
+  }
 }

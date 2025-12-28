@@ -662,6 +662,7 @@ fn color_glyph_rasters_follow_outline_transforms() {
       text_color,
       0.0,
       &variations,
+      None,
     )
     .expect("color glyph raster");
   let expected = transformed_bounds(
@@ -834,6 +835,7 @@ fn colrv1_color_glyph_respects_variations_in_rasterizer() {
       text_color,
       0.0,
       &base_variations,
+      None,
     )
     .expect("expected default variation colr glyph");
   let varied_raster = renderer
@@ -846,6 +848,7 @@ fn colrv1_color_glyph_respects_variations_in_rasterizer() {
       text_color,
       0.0,
       &varied_variations,
+      None,
     )
     .expect("expected varied colr glyph");
 
