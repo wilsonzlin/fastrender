@@ -436,7 +436,7 @@ fn build_nodes<'a>(
       let element_ref = ElementRef::with_ancestors(&node.node, ancestors);
       let (mut role, presentational_role, role_from_attr) =
         compute_role(node, ancestors, styled_ancestors.last().copied());
-      let mut name = compute_name(node, ctx, role.as_deref(), !presentational_role);
+      let mut name = compute_name(node, ctx, !presentational_role);
       let mut description = compute_description(node, ctx);
       let decorative_image = is_decorative_img(node, ctx);
 
@@ -984,7 +984,6 @@ fn compute_role(
       }
     }
     "nav" => Some("navigation".to_string()),
-    "details" => Some("group".to_string()),
     "header" => {
       if has_landmark_ancestor(ancestors) {
         None
@@ -1138,7 +1137,6 @@ fn role_allows_name_from_content(role: Option<&str>, tag: Option<&str>) -> bool 
 fn compute_name(
   node: &StyledNode,
   ctx: &BuildContext,
-  role: Option<&str>,
   allow_name_from_content: bool,
 ) -> Option<String> {
   let mut visited = HashSet::new();
