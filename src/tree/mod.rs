@@ -27,5 +27,4 @@ pub mod box_generation_demo;
 pub mod box_tree;
 pub mod debug;
 pub mod fragment_tree;
-pub mod pseudo_elements;
 pub mod table_fixup;
