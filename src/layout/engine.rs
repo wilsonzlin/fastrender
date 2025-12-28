@@ -30,6 +30,7 @@ use crate::layout::fragmentation;
 use crate::layout::fragmentation::FragmentationOptions;
 use crate::render_control::{check_active, DeadlineGuard, RenderDeadline};
 use crate::style::display::FormattingContextType;
+use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::box_tree::BoxTree;
@@ -461,7 +462,14 @@ impl LayoutEngine {
     let root_fragment = self.layout_subtree_internal(&box_tree.root, &constraints, trace)?;
 
     if let Some(options) = &self.config.fragmentation {
-      let fragments = fragmentation::fragment_tree(&root_fragment, options);
+      let default_style = ComputedStyle::default();
+      let style = root_fragment.style.as_deref().unwrap_or(&default_style);
+      let fragments = fragmentation::fragment_tree_for_writing_mode(
+        &root_fragment,
+        options,
+        style.writing_mode,
+        style.direction,
+      );
       let mut tree = FragmentTree::from_fragments(fragments, *icb);
       tree.ensure_scroll_metadata();
       Ok(tree)

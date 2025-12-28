@@ -48,6 +48,7 @@
 //! let fragment_tree = engine.layout_tree(&box_tree)?;
 //! ```
 
+pub mod axis;
 // Shared layout utilities
 pub mod utils;
 
