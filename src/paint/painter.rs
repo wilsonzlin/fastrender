@@ -13510,6 +13510,121 @@ mod tests {
   }
 
   #[test]
+  fn painter_applies_variable_font_variations_vertical_runs() {
+    let font_bytes = match fs::read("tests/fixtures/fonts/TestVar.ttf") {
+      Ok(bytes) => bytes,
+      Err(_) => return,
+    };
+    let mut db = FontDatabase::empty();
+    db.load_font_data(font_bytes).expect("load variable font");
+    let font_ctx = FontContext::with_database(Arc::new(db));
+
+    let mut base_style = ComputedStyle::default();
+    base_style.font_family = vec!["TestVar".to_string()];
+    base_style.font_size = 96.0;
+
+    let mut light_style = base_style.clone();
+    light_style.font_weight = FontWeight::Number(100);
+    let mut heavy_style = base_style;
+    heavy_style.font_weight = FontWeight::Number(900);
+
+    let pipeline = ShapingPipeline::new();
+    let light_runs = match pipeline.shape("A", &light_style, &font_ctx) {
+      Ok(runs) => runs,
+      Err(_) => return,
+    };
+    let heavy_runs = match pipeline.shape("A", &heavy_style, &font_ctx) {
+      Ok(runs) => runs,
+      Err(_) => return,
+    };
+    if light_runs.is_empty() || heavy_runs.is_empty() {
+      return;
+    }
+
+    let render_vertical = |run: &ShapedRun| {
+      let mut painter =
+        Painter::with_resources(200, 200, Rgba::WHITE, font_ctx.clone(), ImageCache::new())
+          .expect("painter");
+      painter.paint_shaped_run_vertical(run, 40.0, 120.0, Rgba::BLACK, None);
+      painter.pixmap
+    };
+
+    let light_pixmap = render_vertical(&light_runs[0]);
+    let heavy_pixmap = render_vertical(&heavy_runs[0]);
+
+    let light_box = bounding_box_for_color(&light_pixmap, |c| c.3 > 0).expect("light glyph paints");
+    let heavy_box = bounding_box_for_color(&heavy_pixmap, |c| c.3 > 0).expect("heavy glyph paints");
+
+    let light_area = (light_box.2 - light_box.0) * (light_box.3 - light_box.1);
+    let heavy_area = (heavy_box.2 - heavy_box.0) * (heavy_box.3 - heavy_box.1);
+    assert!(
+      heavy_area > light_area,
+      "vertical runs should expand with heavier variations (light area {}, heavy area {})",
+      light_area,
+      heavy_area
+    );
+  }
+
+  #[test]
+  fn emphasis_string_applies_variable_font_variations() {
+    let font_bytes = match fs::read("tests/fixtures/fonts/TestVar.ttf") {
+      Ok(bytes) => bytes,
+      Err(_) => return,
+    };
+    let mut db = FontDatabase::empty();
+    db.load_font_data(font_bytes).expect("load variable font");
+    let font_ctx = FontContext::with_database(Arc::new(db));
+
+    let mut base_style = ComputedStyle::default();
+    base_style.font_family = vec!["TestVar".to_string()];
+    base_style.font_size = 64.0;
+    base_style.text_emphasis_style = crate::style::types::TextEmphasisStyle::String("A".into());
+    base_style.text_emphasis_color = Some(Rgba::BLACK);
+    base_style.color = Rgba::BLACK;
+
+    let mut light_style = base_style.clone();
+    light_style.font_weight = FontWeight::Number(100);
+    let mut heavy_style = base_style;
+    heavy_style.font_weight = FontWeight::Number(900);
+
+    let pipeline = ShapingPipeline::new();
+    let light_runs = match pipeline.shape("A", &light_style, &font_ctx) {
+      Ok(runs) => runs,
+      Err(_) => return,
+    };
+    let heavy_runs = match pipeline.shape("A", &heavy_style, &font_ctx) {
+      Ok(runs) => runs,
+      Err(_) => return,
+    };
+    if light_runs.is_empty() || heavy_runs.is_empty() {
+      return;
+    }
+
+    let render_emphasis = |style: &ComputedStyle, runs: &[ShapedRun]| {
+      let mut painter =
+        Painter::with_resources(200, 200, Rgba::WHITE, font_ctx.clone(), ImageCache::new())
+          .expect("painter");
+      painter.paint_text_emphasis(style, Some(runs), 60.0, 120.0, false);
+      painter.pixmap
+    };
+
+    let light_pixmap = render_emphasis(&light_style, &light_runs);
+    let heavy_pixmap = render_emphasis(&heavy_style, &heavy_runs);
+
+    let light_box = bounding_box_for_color(&light_pixmap, |c| c.3 > 0).expect("light mark paints");
+    let heavy_box = bounding_box_for_color(&heavy_pixmap, |c| c.3 > 0).expect("heavy mark paints");
+
+    let light_width = light_box.2 - light_box.0;
+    let heavy_width = heavy_box.2 - heavy_box.0;
+    assert!(
+      heavy_width > light_width,
+      "string emphasis marks should widen with heavier variations (light width {}, heavy width {})",
+      light_width,
+      heavy_width
+    );
+  }
+
+  #[test]
   fn snap_upscale_prefers_integer_factor() {
     assert_eq!(snap_upscale(5.0, 2.0), Some((4.0, 0.5)));
     assert_eq!(snap_upscale(2.0, 2.0), None);
