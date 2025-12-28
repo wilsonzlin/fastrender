@@ -84,6 +84,7 @@ fn font_palette_selects_cpal_palettes_and_renders() {
       normal_run.palette_index,
       Rgba::BLACK,
       normal_run.synthetic_oblique,
+      &normal_run.variations,
     )
     .expect("render normal palette");
   let dark_raster = renderer
@@ -94,6 +95,7 @@ fn font_palette_selects_cpal_palettes_and_renders() {
       dark_run.palette_index,
       Rgba::BLACK,
       dark_run.synthetic_oblique,
+      &dark_run.variations,
     )
     .expect("render dark palette");
 

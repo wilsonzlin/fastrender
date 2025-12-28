@@ -51,14 +51,36 @@ pub fn apply_rustybuzz_variations(face: &mut Face<'_>, variations: &[Variation])
   if variations.is_empty() {
     return;
   }
-  let mapped: Vec<_> = variations
-    .iter()
-    .map(|v| FontVariation {
-      tag: v.tag,
-      value: v.value,
-    })
-    .collect();
+  let mapped: Vec<_> = variations.iter().map(|v| FontVariation::from(*v)).collect();
   apply_variations_to_face(face, &mapped);
+}
+
+const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+const FNV_PRIME: u64 = 0x100000001b3;
+
+fn fnv1a_extend(mut hash: u64, byte: u8) -> u64 {
+  hash ^= byte as u64;
+  hash.wrapping_mul(FNV_PRIME)
+}
+
+/// Stable variation hash used for cache keys.
+pub fn variation_hash(variations: &[Variation]) -> u64 {
+  let mut entries: Vec<([u8; 4], u32)> = variations
+    .iter()
+    .map(|v| (v.tag.to_bytes(), v.value.to_bits()))
+    .collect();
+  entries.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+
+  let mut hash = FNV_OFFSET_BASIS;
+  for (tag, value_bits) in entries {
+    for byte in tag {
+      hash = fnv1a_extend(hash, byte);
+    }
+    for byte in value_bits.to_be_bytes() {
+      hash = fnv1a_extend(hash, byte);
+    }
+  }
+  hash
 }
 
 #[cfg(test)]

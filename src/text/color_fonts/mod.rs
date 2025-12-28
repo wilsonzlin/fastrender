@@ -10,6 +10,8 @@ mod svg;
 
 use crate::style::color::Rgba;
 use crate::text::font_db::LoadedFont;
+use crate::text::variations::apply_rustybuzz_variations;
+use rustybuzz::Variation;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -56,8 +58,10 @@ impl ColorFontRenderer {
     palette_index: u16,
     text_color: Rgba,
     synthetic_oblique: f32,
+    variations: &[Variation],
   ) -> Option<ColorGlyphRaster> {
-    let face = font.as_ttf_face().ok()?;
+    let mut face = font.as_ttf_face().ok()?;
+    apply_rustybuzz_variations(&mut face, variations);
     let gid = ttf_parser::GlyphId(glyph_id as u16);
     let font_key = FontKey::new(font);
 
