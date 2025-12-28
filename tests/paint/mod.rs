@@ -42,6 +42,7 @@ mod svg_inline_css_cdata_test;
 mod svg_inline_test;
 mod text_cache_test;
 mod text_rasterize_test;
+mod text_variable_font_test;
 mod top_layer_test;
 
 mod marker_paint_order;
