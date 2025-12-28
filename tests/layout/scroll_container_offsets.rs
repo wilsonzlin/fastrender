@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use fastrender::api::RenderOptions;
 use fastrender::geometry::{Point, Rect, Size};
+use fastrender::paint::display_list_renderer::PaintParallelism;
 use fastrender::paint::painter::paint_tree_display_list_with_resources_scaled_offset;
 use fastrender::scroll::ScrollState;
 use fastrender::style::color::Rgba;
@@ -63,12 +64,14 @@ fn element_scroll_translates_descendants() {
     FragmentContent::Block { box_id: None },
     vec![scroller],
   );
-  let tree = FragmentTree::with_viewport(root, Size::new(50.0, 50.0));
+  let mut tree = FragmentTree::with_viewport(root, Size::new(50.0, 50.0));
 
   let scroll_state = ScrollState::from_parts(
     Point::ZERO,
     HashMap::from([(1usize, Point::new(0.0, 50.0))]),
   );
+
+  fastrender::scroll::apply_scroll_offsets(&mut tree, &scroll_state);
 
   let pixmap = paint_tree_display_list_with_resources_scaled_offset(
     &tree,
@@ -79,7 +82,7 @@ fn element_scroll_translates_descendants() {
     fastrender::image_loader::ImageCache::new(),
     1.0,
     Point::ZERO,
-    &scroll_state,
+    PaintParallelism::default(),
   )
   .expect("paint scrolled fragment tree");
 
@@ -158,11 +161,11 @@ fn nested_scroller_offsets_flow_from_render_options() {
       #first { height: 60px; background: rgb(255, 0, 0); }
       #second { height: 60px; background: rgb(0, 255, 0); }
     </style>
-    <div id=\"outer\">
-      <div id=\"spacer\"></div>
-      <div id=\"inner\">
-        <div id=\"first\"></div>
-        <div id=\"second\"></div>
+    <div id="outer">
+      <div id="spacer"></div>
+      <div id="inner">
+        <div id="first"></div>
+        <div id="second"></div>
       </div>
     </div>
   "#;
@@ -234,9 +237,9 @@ fn sticky_in_scroller_honors_element_scroll_offsets() {
       #sticky { position: sticky; top: 0; height: 20px; background: rgb(255, 0, 0); }
       #filler { height: 100px; background: rgb(0, 255, 0); }
     </style>
-    <div id=\"scroller\">
-      <div id=\"sticky\"></div>
-      <div id=\"filler\"></div>
+    <div id="scroller">
+      <div id="sticky"></div>
+      <div id="filler"></div>
     </div>
   "#;
 

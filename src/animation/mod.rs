@@ -11,6 +11,7 @@ use crate::css::types::{Keyframe, KeyframesRule};
 use crate::debug::runtime;
 use crate::geometry::{Point, Rect, Size};
 use crate::paint::display_list::{Transform2D, Transform3D};
+use crate::scroll::ScrollState;
 use crate::style::inline_axis_is_horizontal;
 use crate::style::properties::apply_declaration_with_base;
 use crate::style::types::AnimationRange;
@@ -26,6 +27,7 @@ use crate::style::types::ClipPath;
 use crate::style::types::ClipRadii;
 use crate::style::types::FilterColor;
 use crate::style::types::FilterFunction;
+use crate::style::types::Overflow;
 use crate::style::types::RangeOffset;
 use crate::style::types::ReferenceBox;
 use crate::style::types::ScrollTimeline;
@@ -1845,12 +1847,53 @@ fn pick<'a, T: Clone>(list: &'a [T], idx: usize, default: T) -> T {
     .unwrap_or_else(|| list.last().cloned().unwrap_or(default))
 }
 
+struct TimelineScrollContext {
+  scroll: Point,
+  viewport: Size,
+  content: Size,
+  origin: Point,
+}
+
+fn timeline_scroll_context(
+  node: &FragmentNode,
+  origin: Point,
+  scroll_state: &ScrollState,
+  root_viewport: Rect,
+  root_content: Rect,
+) -> TimelineScrollContext {
+  let style = node.style.as_deref();
+  let is_scroll_container = style
+    .map(|s| {
+      matches!(s.overflow_x, Overflow::Scroll | Overflow::Auto)
+        || matches!(s.overflow_y, Overflow::Scroll | Overflow::Auto)
+    })
+    .unwrap_or(false);
+
+  if let Some(id) = node.box_id() {
+    if is_scroll_container || scroll_state.elements.contains_key(&id) {
+      return TimelineScrollContext {
+        scroll: scroll_state.element_offset(id),
+        viewport: Size::new(node.bounds.width(), node.bounds.height()),
+        content: Size::new(node.scroll_overflow.width(), node.scroll_overflow.height()),
+        origin,
+      };
+    }
+  }
+
+  TimelineScrollContext {
+    scroll: scroll_state.viewport,
+    viewport: Size::new(root_viewport.width(), root_viewport.height()),
+    content: Size::new(root_content.width(), root_content.height()),
+    origin: Point::ZERO,
+  }
+}
+
 fn collect_timelines(
   node: &FragmentNode,
   origin: Point,
-  viewport: Rect,
-  content: Rect,
-  scroll: Point,
+  root_viewport: Rect,
+  root_content: Rect,
+  scroll_state: &ScrollState,
   map: &mut HashMap<String, TimelineState>,
 ) {
   let abs = Rect::from_xywh(
@@ -1861,17 +1904,18 @@ fn collect_timelines(
   );
 
   if let Some(style) = node.style.as_ref() {
+    let context = timeline_scroll_context(node, origin, scroll_state, root_viewport, root_content);
     for tl in &style.scroll_timelines {
       if let Some(name) = &tl.name {
         let (scroll_pos, scroll_range, viewport_size) = axis_scroll_state(
           tl.axis,
           style.writing_mode,
-          scroll.x,
-          scroll.y,
-          viewport.width(),
-          viewport.height(),
-          content.width(),
-          content.height(),
+          context.scroll.x,
+          context.scroll.y,
+          context.viewport.width,
+          context.viewport.height,
+          context.content.width,
+          context.content.height,
         );
         map.entry(name.clone()).or_insert(TimelineState::Scroll {
           timeline: tl.clone(),
@@ -1885,18 +1929,26 @@ fn collect_timelines(
     for tl in &style.view_timelines {
       if let Some(name) = &tl.name {
         let horizontal = axis_is_horizontal(tl.axis, style.writing_mode);
-        let target_start = if horizontal { abs.x() } else { abs.y() };
-        let target_end = if horizontal {
-          abs.x() + abs.width()
+        let target_start = if horizontal {
+          abs.x() - context.origin.x
         } else {
-          abs.y() + abs.height()
+          abs.y() - context.origin.y
+        };
+        let target_end = if horizontal {
+          target_start + abs.width()
+        } else {
+          target_start + abs.height()
         };
         let view_size = if horizontal {
-          viewport.width()
+          context.viewport.width
         } else {
-          viewport.height()
+          context.viewport.height
         };
-        let scroll_offset = if horizontal { scroll.x } else { scroll.y };
+        let scroll_offset = if horizontal {
+          context.scroll.x
+        } else {
+          context.scroll.y
+        };
         map.entry(name.clone()).or_insert(TimelineState::View {
           timeline: tl.clone(),
           target_start,
@@ -1910,7 +1962,14 @@ fn collect_timelines(
 
   for child in &node.children {
     let child_offset = Point::new(origin.x + child.bounds.x(), origin.y + child.bounds.y());
-    collect_timelines(child, child_offset, viewport, content, scroll, map);
+    collect_timelines(
+      child,
+      child_offset,
+      root_viewport,
+      root_content,
+      scroll_state,
+      map,
+    );
   }
 }
 
@@ -1918,7 +1977,6 @@ fn apply_animations_to_node(
   node: &mut FragmentNode,
   origin: Point,
   viewport: Rect,
-  scroll: Point,
   keyframes: &HashMap<String, KeyframesRule>,
   timelines: &HashMap<String, TimelineState>,
 ) {
@@ -1989,7 +2047,7 @@ fn apply_animations_to_node(
 
   for child in &mut node.children {
     let child_offset = Point::new(origin.x + child.bounds.x(), origin.y + child.bounds.y());
-    apply_animations_to_node(child, child_offset, viewport, scroll, keyframes, timelines);
+    apply_animations_to_node(child, child_offset, viewport, keyframes, timelines);
   }
 }
 
@@ -1997,8 +2055,8 @@ fn apply_animations_to_node(
 /// matching @keyframes rules and applying animated properties (currently opacity).
 ///
 /// This is a lightweight hook to make scroll-driven effects visible without a full
-/// animation engine. It uses the provided scroll offsets for the root viewport.
-pub fn apply_scroll_driven_animations(tree: &mut FragmentTree, scroll: Point) {
+/// animation engine. It uses the provided scroll state for viewport and element scroll offsets.
+pub fn apply_scroll_driven_animations(tree: &mut FragmentTree, scroll_state: &ScrollState) {
   if tree.keyframes.is_empty() {
     return;
   }
@@ -2017,25 +2075,31 @@ pub fn apply_scroll_driven_animations(tree: &mut FragmentTree, scroll: Point) {
     root_offset,
     viewport,
     content,
-    scroll,
+    scroll_state,
     &mut timelines,
   );
   for frag in &tree.additional_fragments {
     let offset = Point::new(frag.bounds.x(), frag.bounds.y());
-    collect_timelines(frag, offset, viewport, content, scroll, &mut timelines);
+    collect_timelines(
+      frag,
+      offset,
+      viewport,
+      content,
+      scroll_state,
+      &mut timelines,
+    );
   }
 
   apply_animations_to_node(
     &mut tree.root,
     root_offset,
     viewport,
-    scroll,
     &tree.keyframes,
     &timelines,
   );
   for frag in &mut tree.additional_fragments {
     let offset = Point::new(frag.bounds.x(), frag.bounds.y());
-    apply_animations_to_node(frag, offset, viewport, scroll, &tree.keyframes, &timelines);
+    apply_animations_to_node(frag, offset, viewport, &tree.keyframes, &timelines);
   }
 }
 

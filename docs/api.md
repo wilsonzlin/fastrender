@@ -66,6 +66,7 @@ Fetches blocked by policy (disallowed scheme/host, over budget, etc.) are record
 - `diagnostics_level: DiagnosticsLevel` – enable structured diagnostics (`None`/`Basic`/`Verbose`).
 - `media_type: MediaType` – defaults to `MediaType::Screen`.
 - `scroll_x`, `scroll_y` – apply CSS px scroll offsets before painting.
+- `element_scroll_offsets` – map element scroll containers (by box ID) to scroll offsets.
 - `css_limit: Option<usize>` – limit the number of linked stylesheets inlined by the fetch helpers.
 - `capture_accessibility: bool` – include an accessibility tree in render results (see below).
 - `allow_partial` – when rendering URLs, return a placeholder pixmap + diagnostics instead of an error if the document fails to fetch.
@@ -81,6 +82,10 @@ let options = RenderOptions::new()
 
 let pixmap = renderer.render_html_with_options("<p>Scrolled</p>", options)?;
 ```
+
+Element scroll offsets can be supplied via `RenderOptions::with_element_scroll_offsets` or
+`with_element_scroll` using box IDs from a `PreparedDocument::box_tree()` (or the `inspect_frag`
+CLI) to render scrolled containers without re-running layout.
 
 ## Prepared documents for repeated painting
 
