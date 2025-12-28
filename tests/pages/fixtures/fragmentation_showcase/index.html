@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Fragmentation Showcase</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="section">
+      <h1>Fragmentation Showcase</h1>
+      <p>
+        This fixture exercises page and column fragmentation: balanced columns, page breaks,
+        and repeating table headers with enough content to span multiple pages.
+      </p>
+    </div>
+
+    <div class="section columns">
+      <h2>Balanced Columns</h2>
+      <p>
+        Column balancing keeps the content even across the available columns so that the columns
+        end at roughly the same depth instead of leaving a large gap at the bottom.
+      </p>
+      <p>
+        Each paragraph here is short to encourage several distinct line boxes and to create clear
+        break opportunities for the column balancer to consider.
+      </p>
+      <div class="pullquote">
+        A pull-quote with <strong>break-inside: avoid-column</strong> should never be split between
+        columns. When there is not enough space it should move to the top of the next column set.
+      </div>
+      <p>
+        Additional filler text keeps flowing after the pull-quote. The balancer should take this
+        into account when deciding where the second column starts, respecting widows and orphans as
+        it fragments the text.
+      </p>
+      <p>
+        With more text than fits in two balanced columns, the layout should create a second column
+        set while retaining the same column widths and gaps. The inter-column gap is visible thanks
+        to the matching paragraph edges.
+      </p>
+      <p>
+        Short sentences keep the rhythm predictable. This helps the regression test catch changes in
+        how the fragmentation engine distributes content between columns.
+      </p>
+      <p>
+        When pagination interacts with multi-column containers the fragmentainer height hint from
+        the page size should keep the columns roughly balanced without leaving trailing whitespace.
+      </p>
+      <p>
+        Another paragraph to extend the content and ensure that at least two column sets are
+        produced when rendered at the print viewport used by the test harness.
+      </p>
+    </div>
+
+    <div class="section chapter">
+      <h2>Page Break Before Chapter</h2>
+      <p>
+        This chapter starts on a new page thanks to <code>break-before: page</code>. The text itself
+        runs long enough to occupy a chunk of the page so that subsequent sections are forced onto
+        later pages, providing additional pagination coverage.
+      </p>
+      <p>
+        Using an explicit break before a chapter heading should insert a blank page if required to
+        satisfy side preferences. The default rules here allow the pagination algorithm to reuse the
+        existing content flow while respecting the break directive.
+      </p>
+      <p>
+        More filler content keeps the chapter stretching into the page. The goal is simply to
+        increase the amount of material so that repeating table headers in the following section
+        have to cross a fragment boundary.
+      </p>
+    </div>
+
+    <div class="section table-wrap">
+      <h2>Table With Repeating Headers</h2>
+      <table>
+        <thead>
+          <tr><th>Item</th><th>Value</th></tr>
+        </thead>
+        <tfoot>
+          <tr><td colspan="2">Totals remain visible across fragments</td></tr>
+        </tfoot>
+        <tbody>
+          <tr class="row-avoid"><td>Alpha</td><td>42</td></tr>
+          <tr class="row-avoid"><td>Beta</td><td>84</td></tr>
+          <tr class="row-avoid"><td>Gamma</td><td>21</td></tr>
+          <tr class="row-avoid"><td>Delta</td><td>63</td></tr>
+          <tr class="row-avoid"><td>Epsilon</td><td>105</td></tr>
+          <tr class="row-avoid"><td>Zeta</td><td>39</td></tr>
+          <tr class="row-avoid"><td>Eta</td><td>58</td></tr>
+          <tr class="row-avoid"><td>Theta</td><td>91</td></tr>
+          <tr class="row-avoid"><td>Iota</td><td>73</td></tr>
+          <tr class="row-avoid"><td>Kappa</td><td>47</td></tr>
+          <tr class="row-avoid"><td>Lambda</td><td>118</td></tr>
+          <tr class="row-avoid"><td>Mu</td><td>26</td></tr>
+          <tr class="row-avoid"><td>Nu</td><td>67</td></tr>
+          <tr class="row-avoid"><td>Xi</td><td>34</td></tr>
+          <tr class="row-avoid"><td>Omicron</td><td>57</td></tr>
+          <tr class="row-avoid"><td>Pi</td><td>31</td></tr>
+          <tr class="row-avoid"><td>Rho</td><td>15</td></tr>
+          <tr class="row-avoid"><td>Sigma</td><td>82</td></tr>
+          <tr class="row-avoid"><td>Tau</td><td>93</td></tr>
+          <tr class="row-avoid"><td>Upsilon</td><td>68</td></tr>
+          <tr class="row-avoid"><td>Phi</td><td>54</td></tr>
+          <tr class="row-avoid"><td>Chi</td><td>77</td></tr>
+          <tr class="row-avoid"><td>Psi</td><td>29</td></tr>
+          <tr class="row-avoid"><td>Omega</td><td>120</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </body>
+</html>

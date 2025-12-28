@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
-use fastrender::layout::fragmentation::{fragment_tree, FragmentationOptions};
-use fastrender::style::display::FormattingContextType;
+use fastrender::layout::fragmentation::{
+  fragment_tree, resolve_fragmentation_boundaries_with_context, FragmentationContext,
+  FragmentationOptions,
+};
+use fastrender::style::display::{Display, FormattingContextType};
 use fastrender::style::position::Position;
 use fastrender::style::types::{BreakBetween, BreakInside};
 use fastrender::style::values::Length;
@@ -565,4 +568,93 @@ fn column_fragmentation_uses_column_width_for_layout() {
     column_lines.len() > 1,
     "text should wrap when constrained to column width"
   );
+}
+
+#[test]
+fn break_before_column_only_applies_in_column_context() {
+  let lead = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 50.0, 10.0), vec![]);
+  let mut breaker_style = ComputedStyle::default();
+  breaker_style.break_before = BreakBetween::Column;
+  let breaker = FragmentNode::new_block_styled(
+    Rect::from_xywh(0.0, 10.0, 50.0, 10.0),
+    vec![],
+    Arc::new(breaker_style),
+  );
+  let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 50.0, 20.0), vec![lead, breaker]);
+
+  let page_boundaries =
+    resolve_fragmentation_boundaries_with_context(&root, 100.0, FragmentationContext::Page);
+  assert_eq!(page_boundaries.len(), 2, "page context ignores column breaks");
+
+  let column_boundaries =
+    resolve_fragmentation_boundaries_with_context(&root, 100.0, FragmentationContext::Column);
+  assert!(
+    column_boundaries.len() > 2,
+    "column context should honor column-forced breaks"
+  );
+  assert!(
+    column_boundaries
+      .iter()
+      .any(|pos| (*pos - 10.0).abs() < 0.1),
+    "break should align with the second block's start"
+  );
+}
+
+#[test]
+fn table_headers_repeat_across_fragments() {
+  let make = |display: Display, bounds: Rect, children: Vec<FragmentNode>| {
+    let mut style = ComputedStyle::default();
+    style.display = display;
+    FragmentNode::new_block_styled(bounds, children, Arc::new(style))
+  };
+
+  let header_cell = make(Display::TableCell, Rect::from_xywh(0.0, 0.0, 100.0, 12.0), vec![]);
+  let header_row = make(
+    Display::TableRow,
+    Rect::from_xywh(0.0, 0.0, 100.0, 12.0),
+    vec![header_cell],
+  );
+  let header_group =
+    make(Display::TableHeaderGroup, Rect::from_xywh(0.0, 0.0, 100.0, 12.0), vec![header_row]);
+
+  let mut rows = Vec::new();
+  let mut y = 12.0;
+  for _ in 0..6 {
+    let cell = make(Display::TableCell, Rect::from_xywh(0.0, 0.0, 100.0, 12.0), vec![]);
+    let row = make(Display::TableRow, Rect::from_xywh(0.0, 0.0, 100.0, 12.0), vec![cell]);
+    let row_group = make(Display::TableRowGroup, Rect::from_xywh(0.0, y, 100.0, 12.0), vec![row]);
+    rows.push(row_group);
+    y += 12.0;
+  }
+
+  let mut table_style = ComputedStyle::default();
+  table_style.display = Display::Table;
+  let mut table_children = Vec::new();
+  table_children.push(header_group.clone());
+  table_children.extend(rows);
+  let table = FragmentNode::new_block_styled(
+    Rect::from_xywh(0.0, 0.0, 100.0, y),
+    table_children,
+    Arc::new(table_style),
+  );
+  let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, y), vec![table]);
+
+  let fragments = fragment_tree(&root, &FragmentationOptions::new(36.0));
+  assert!(fragments.len() >= 2, "table should fragment across pages");
+
+  for fragment in &fragments {
+    let header_count = fragment
+      .iter_fragments()
+      .filter(|node| {
+        node
+          .style
+          .as_ref()
+          .is_some_and(|style| matches!(style.display, Display::TableHeaderGroup))
+      })
+      .count();
+    assert!(
+      header_count >= 1,
+      "each fragment should receive a repeated table header"
+    );
+  }
 }

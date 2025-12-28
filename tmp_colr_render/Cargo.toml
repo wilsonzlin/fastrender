@@ -1,0 +1,10 @@
+[package]
+name = "tmp_colr_render"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+
+[lib]
+path = "src/lib.rs"

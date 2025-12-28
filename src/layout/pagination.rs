@@ -13,7 +13,8 @@ use crate::layout::formatting_context::{
 };
 use crate::layout::fragmentation::{
   clip_node_with_axes, collect_atomic_ranges_with_axes, collect_forced_boundaries_with_axes,
-  normalize_atomic_ranges, normalize_fragment_margins_with_axes, propagate_fragment_metadata,
+  normalize_atomic_ranges, normalize_fragment_margins_with_axes,
+  resolve_fragmentation_boundaries_with_axes, FragmentationContext, propagate_fragment_metadata,
   AtomicRange, ForcedBoundary,
 };
 use crate::layout::running_strings::{collect_string_set_events, StringSetEvent};
@@ -79,13 +80,6 @@ fn required_page_side(boundaries: &[ForcedBoundary], pos: f32) -> Option<PageSid
     .and_then(|b| b.page_side)
 }
 
-fn next_forced_boundary(boundaries: &[ForcedBoundary], start: f32, limit: f32) -> Option<f32> {
-  boundaries
-    .iter()
-    .map(|b| b.position)
-    .find(|p| *p > start + EPSILON && *p < limit - EPSILON)
-}
-
 fn dedup_forced_boundaries(mut boundaries: Vec<ForcedBoundary>) -> Vec<ForcedBoundary> {
   boundaries.sort_by(|a, b| {
     a.position
@@ -115,6 +109,7 @@ struct CachedLayout {
   forced_boundaries: Vec<ForcedBoundary>,
   atomic_ranges: Vec<AtomicRange>,
   page_name_spans: Vec<PageNameSpan>,
+  boundaries: Vec<f32>,
 }
 
 impl CachedLayout {
@@ -146,17 +141,39 @@ impl CachedLayout {
     collect_atomic_ranges_with_axes(&root, 0.0, axes, &mut atomic_ranges);
     normalize_atomic_ranges(&mut atomic_ranges);
 
+    let fragmentainer = page_block_size(style, axes).max(EPSILON);
+    let mut boundaries = resolve_fragmentation_boundaries_with_axes(
+      &root,
+      fragmentainer,
+      FragmentationContext::Page,
+      axes,
+    );
+
     let content_block_size = axes.block_size(&root.logical_bounding_box());
-    let total_block_size = if content_block_size > EPSILON {
+    let mut total_block_size = if content_block_size > EPSILON {
       content_block_size
     } else {
-      page_block_size(style, axes)
+      fragmentainer
     };
+    boundaries.extend(forced.iter().map(|b| b.position));
+    if total_block_size.is_finite() && total_block_size > 0.0 {
+      boundaries.push(total_block_size);
+    }
+    boundaries.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    boundaries.dedup_by(|a, b| (*a - *b).abs() < EPSILON);
+    if let Some(last) = boundaries.last().copied() {
+      total_block_size = total_block_size.max(last);
+    }
     forced.push(ForcedBoundary {
       position: total_block_size,
       page_side: None,
     });
     forced = dedup_forced_boundaries(forced);
+    if let Some(last) = boundaries.last().copied() {
+      if (last - total_block_size).abs() > EPSILON {
+        boundaries.push(total_block_size);
+      }
+    }
 
     Self {
       root,
@@ -164,6 +181,7 @@ impl CachedLayout {
       forced_boundaries: forced,
       atomic_ranges,
       page_name_spans: spans,
+      boundaries,
     }
   }
 }
@@ -259,10 +277,10 @@ pub fn paginate_fragment_tree(
   let base_forced = base_layout.forced_boundaries.clone();
   let base_root = base_layout.root.clone();
 
-  let mut string_set_events = collect_string_set_events(&base_root, box_tree, axes);
+  let mut string_set_events = collect_string_set_events(&base_root, box_tree);
   string_set_events.sort_by(|a, b| {
-    a.abs_block
-      .partial_cmp(&b.abs_block)
+    a.abs_y
+      .partial_cmp(&b.abs_y)
       .unwrap_or(Ordering::Equal)
   });
   let mut string_event_idx = 0usize;
@@ -274,11 +292,24 @@ pub fn paginate_fragment_tree(
     HashMap<String, RunningStringValues>,
     HashMap<String, Vec<FragmentNode>>,
   )> = Vec::new();
-  let mut consumed_base = 0.0f32;
+  let mut boundary_index = 0usize;
+  let base_boundaries = if base_layout.boundaries.is_empty() {
+    vec![0.0, base_total_block_size]
+  } else {
+    base_layout.boundaries.clone()
+  };
   let mut page_index = 0usize;
 
-  loop {
-    let start_in_base = consumed_base;
+  while boundary_index + 1 < base_boundaries.len() {
+    let start_in_base = base_boundaries
+      .get(boundary_index)
+      .copied()
+      .unwrap_or(base_total_block_size);
+    let base_end = base_boundaries
+      .get(boundary_index + 1)
+      .copied()
+      .unwrap_or(base_total_block_size);
+    let mut end_in_base = start_in_base;
     let mut page_name =
       page_name_for_position(&base_spans, start_in_base, initial_page_name.as_deref());
     let side = page_side_for_index(page_index);
@@ -307,8 +338,7 @@ pub fn paginate_fragment_tree(
       axes,
     )?;
 
-    let mut total_block_size = layout.total_block_size;
-    if total_block_size <= EPSILON {
+    if layout.total_block_size <= EPSILON {
       break;
     }
 
@@ -326,11 +356,20 @@ pub fn paginate_fragment_tree(
     );
     let mut page_running_elements: HashMap<String, Vec<FragmentNode>> = HashMap::new();
 
-    let mut end_in_base = start_in_base;
-
     if !is_blank_page {
-      let mut start =
-        ((consumed_base / base_total_block_size) * total_block_size).min(total_block_size);
+      let layout_boundaries = if layout.boundaries.is_empty() {
+        vec![0.0, layout.total_block_size]
+      } else {
+        layout.boundaries.clone()
+      };
+      let mut start = layout_boundaries
+        .get(boundary_index)
+        .copied()
+        .unwrap_or(layout.total_block_size);
+      let mut end = layout_boundaries
+        .get(boundary_index + 1)
+        .copied()
+        .unwrap_or(layout.total_block_size);
       let actual_page_name =
         page_name_for_position(&layout.page_name_spans, start, initial_page_name.as_deref());
       if actual_page_name != page_name {
@@ -356,34 +395,26 @@ pub fn paginate_fragment_tree(
           enable_layout_cache,
           axes,
         )?;
-        total_block_size = layout.total_block_size;
-        start = ((consumed_base / base_total_block_size) * total_block_size).min(total_block_size);
+        let layout_boundaries = if layout.boundaries.is_empty() {
+          vec![0.0, layout.total_block_size]
+        } else {
+          layout.boundaries.clone()
+        };
+        start = layout_boundaries
+          .get(boundary_index)
+          .copied()
+          .unwrap_or(layout.total_block_size);
+        end = layout_boundaries
+          .get(boundary_index + 1)
+          .copied()
+          .unwrap_or(layout.total_block_size);
       }
 
-      if start >= total_block_size - EPSILON {
+      if start >= layout.total_block_size - EPSILON {
         break;
       }
 
-      let page_block = page_block_size(&page_style, axes).max(1.0);
-      let mut end = (start + page_block).min(total_block_size);
-      if let Some(boundary) = next_forced_boundary(&layout.forced_boundaries, start, end) {
-        end = boundary;
-      }
-
-      end = adjust_for_atomic_ranges(start, end, &layout.atomic_ranges).min(total_block_size);
-
-      if end <= start + EPSILON {
-        end = adjust_for_atomic_ranges(
-          start,
-          (start + page_block).min(total_block_size),
-          &layout.atomic_ranges,
-        )
-        .min(total_block_size);
-        if end <= start + EPSILON {
-          break;
-        }
-      }
-
+      end = end.min(layout.total_block_size);
       let root_block_size = axes.block_size(&layout.root.bounds);
       let clipped = clip_node_with_axes(
         &layout.root,
@@ -401,8 +432,8 @@ pub fn paginate_fragment_tree(
         let content_block_size = axes.block_size(&content.bounds);
         normalize_fragment_margins_with_axes(
           &mut content,
-          page_index == 0,
-          end >= total_block_size - 0.01,
+          boundary_index == 0,
+          end >= layout.total_block_size - 0.01,
           content_block_size,
           axes,
         );
@@ -462,8 +493,7 @@ pub fn paginate_fragment_tree(
         page_root.children.push(content);
       }
 
-      let base_advance = ((end - start).max(0.0) / total_block_size) * base_total_block_size;
-      end_in_base = (consumed_base + base_advance).min(base_total_block_size);
+      end_in_base = base_end;
     }
 
     for mut fixed in fixed_fragments {
@@ -485,13 +515,9 @@ pub fn paginate_fragment_tree(
 
     pages.push((page_root, page_style, page_strings, page_running_elements));
     if !is_blank_page {
-      consumed_base = end_in_base;
+      boundary_index += 1;
     }
     page_index += 1;
-
-    if consumed_base >= base_total_block_size - EPSILON {
-      break;
-    }
   }
 
   if pages.is_empty() {
@@ -551,35 +577,6 @@ pub fn paginate_fragment_tree_with_options(
   apply_page_stacking(&mut pages, root_style.writing_mode, options.stacking);
 
   Ok(pages)
-}
-
-fn adjust_for_atomic_ranges(start: f32, mut end: f32, ranges: &[AtomicRange]) -> f32 {
-  const EPSILON: f32 = 0.01;
-
-  if let Some(containing) = ranges.iter().copied().find(|range| {
-    start >= range.start - EPSILON && start < range.end - EPSILON && range.end > range.start
-  }) {
-    if end < containing.end - EPSILON {
-      return containing.end;
-    }
-  }
-
-  if let Some(overlap) = ranges
-    .iter()
-    .copied()
-    .filter(|range| range.start < end - EPSILON && range.end > start + EPSILON)
-    .min_by(|a, b| {
-      a.start
-        .partial_cmp(&b.start)
-        .unwrap_or(std::cmp::Ordering::Equal)
-    })
-  {
-    if overlap.start > start + EPSILON {
-      end = end.min(overlap.start);
-    }
-  }
-
-  end
 }
 
 #[derive(Debug, Clone)]
@@ -692,7 +689,7 @@ fn running_strings_for_page(
   end: f32,
 ) -> HashMap<String, RunningStringValues> {
   let start_boundary = start - EPSILON;
-  while *idx < events.len() && events[*idx].abs_block < start_boundary {
+  while *idx < events.len() && events[*idx].abs_y < start_boundary {
     let event = &events[*idx];
     carry.insert(event.name.clone(), event.value.clone());
     *idx += 1;
@@ -710,7 +707,7 @@ fn running_strings_for_page(
     );
   }
 
-  while *idx < events.len() && events[*idx].abs_block < end {
+  while *idx < events.len() && events[*idx].abs_y < end {
     let event = &events[*idx];
     let entry = snapshot
       .entry(event.name.clone())

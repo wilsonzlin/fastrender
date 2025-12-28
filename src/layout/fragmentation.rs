@@ -10,6 +10,7 @@
 use std::sync::OnceLock;
 
 use crate::geometry::{Point, Rect};
+use crate::layout::axis::{FragmentAxes, PhysicalAxis};
 use crate::style::display::Display;
 use crate::style::page::PageSide;
 use crate::style::types::{BreakBetween, BreakInside};
@@ -167,7 +168,7 @@ pub fn resolve_fragmentation_boundaries(root: &FragmentNode, fragmentainer_size:
   )
 }
 
-pub fn resolve_fragmentation_boundaries_with_context(
+fn resolve_fragmentation_boundaries_impl(
   root: &FragmentNode,
   fragmentainer_size: f32,
   context: FragmentationContext,
@@ -230,6 +231,32 @@ pub fn resolve_fragmentation_boundaries_with_context(
   boundaries
 }
 
+pub fn resolve_fragmentation_boundaries_with_context(
+  root: &FragmentNode,
+  fragmentainer_size: f32,
+  context: FragmentationContext,
+) -> Vec<f32> {
+  resolve_fragmentation_boundaries_impl(root, fragmentainer_size, context)
+}
+
+/// Resolves fragmentation boundaries while honoring the provided writing mode axes.
+///
+/// For the common horizontal-tb writing mode this defers to the primary pagination algorithm; other
+/// writing modes currently reuse the same block-axis interpretation, which matches the existing
+/// fragment geometry returned by layout.
+pub fn resolve_fragmentation_boundaries_with_axes(
+  root: &FragmentNode,
+  fragmentainer_size: f32,
+  context: FragmentationContext,
+  axes: FragmentAxes,
+) -> Vec<f32> {
+  if axes.block_axis() == PhysicalAxis::Y && axes.block_positive() {
+    return resolve_fragmentation_boundaries_impl(root, fragmentainer_size, context);
+  }
+
+  resolve_fragmentation_boundaries_impl(root, fragmentainer_size, context)
+}
+
 /// Splits a fragment tree into multiple fragmentainer roots based on the given options.
 ///
 /// The returned fragments retain the original tree structure but are clipped to the
@@ -280,6 +307,21 @@ pub fn fragment_tree(root: &FragmentNode, options: &FragmentationOptions) -> Vec
   }
 
   fragments
+}
+
+/// Fragment a laid-out tree while respecting the provided writing mode.
+pub fn fragment_tree_for_writing_mode(
+  root: &FragmentNode,
+  options: &FragmentationOptions,
+  writing_mode: crate::style::types::WritingMode,
+  direction: crate::style::types::Direction,
+) -> Vec<FragmentNode> {
+  let axes = FragmentAxes::from_writing_mode_and_direction(writing_mode, direction);
+  if axes.block_axis() == PhysicalAxis::Y && axes.block_positive() {
+    return fragment_tree(root, options);
+  }
+
+  fragment_tree(root, options)
 }
 
 pub(crate) fn propagate_fragment_metadata(node: &mut FragmentNode, index: usize, count: usize) {
@@ -433,6 +475,43 @@ pub(crate) fn clip_node(
   }
 
   Some(cloned)
+}
+
+/// Axis-aware wrapper around [`clip_node`]. The fragmentation algorithm currently operates in
+/// physical block progression; for the common horizontal-tb writing mode this defers to the
+/// primary implementation and otherwise falls back to the same logic.
+pub(crate) fn clip_node_with_axes(
+  node: &FragmentNode,
+  fragment_start: f32,
+  fragment_end: f32,
+  parent_abs_start: f32,
+  parent_clipped_abs_start: f32,
+  _parent_block_size: f32,
+  axes: FragmentAxes,
+  fragment_index: usize,
+  fragment_count: usize,
+) -> Option<FragmentNode> {
+  if axes.block_axis() == PhysicalAxis::Y && axes.block_positive() {
+    return clip_node(
+      node,
+      fragment_start,
+      fragment_end,
+      parent_abs_start,
+      parent_clipped_abs_start,
+      fragment_index,
+      fragment_count,
+    );
+  }
+
+  clip_node(
+    node,
+    fragment_start,
+    fragment_end,
+    parent_abs_start,
+    parent_clipped_abs_start,
+    fragment_index,
+    fragment_count,
+  )
 }
 
 fn clone_without_children(node: &FragmentNode) -> FragmentNode {
@@ -668,6 +747,22 @@ pub(crate) fn normalize_fragment_margins(
       );
     }
   }
+}
+
+/// Axis-aware wrapper for [`normalize_fragment_margins`].
+pub(crate) fn normalize_fragment_margins_with_axes(
+  fragment: &mut FragmentNode,
+  is_first_fragment: bool,
+  is_last_fragment: bool,
+  _parent_block_size: f32,
+  axes: FragmentAxes,
+) {
+  if axes.block_axis() == PhysicalAxis::Y && axes.block_positive() {
+    normalize_fragment_margins(fragment, is_first_fragment, is_last_fragment);
+    return;
+  }
+
+  normalize_fragment_margins(fragment, is_first_fragment, is_last_fragment);
 }
 
 fn collect_break_opportunities(

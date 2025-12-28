@@ -78,6 +78,11 @@ const PAGE_FIXTURES: &[PageFixture] = &[
     shots: PRINT_SHOTS,
   },
   PageFixture {
+    name: "fragmentation_showcase",
+    html: "fragmentation_showcase/index.html",
+    shots: PRINT_SHOTS,
+  },
+  PageFixture {
     name: "mask_filter_showcase",
     html: "mask_filter_showcase/index.html",
     shots: DEFAULT_SHOTS,
