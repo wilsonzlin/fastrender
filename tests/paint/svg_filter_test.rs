@@ -91,3 +91,57 @@ fn displacement_map_scale_zero_is_identity() {
     assert_eq!(pixel(&pixmap, x), expected[x as usize]);
   }
 }
+
+#[test]
+fn displacement_map_interprets_map_in_color_interpolation_space() {
+  let mut primary = gradient_pixmap();
+  let mut map = Pixmap::new(primary.width(), primary.height()).unwrap();
+  let half = PremultipliedColorU8::from_rgba(128, 128, 128, 128).unwrap();
+  for px in map.pixels_mut() {
+    *px = half;
+  }
+
+  let filter = SvgFilter {
+    color_interpolation_filters: ColorInterpolationFilters::LinearRGB,
+    steps: vec![
+      FilterStep {
+        result: Some("map".to_string()),
+        color_interpolation_filters: None,
+        primitive: FilterPrimitive::Image(ImagePrimitive::from_pixmap(map)),
+        region: None,
+      },
+      FilterStep {
+        result: None,
+        color_interpolation_filters: None,
+        primitive: FilterPrimitive::DisplacementMap {
+          in1: FilterInput::SourceGraphic,
+          in2: FilterInput::Reference("map".to_string()),
+          scale: 4.0,
+          x_channel: ChannelSelector::R,
+          y_channel: ChannelSelector::A,
+        },
+        region: None,
+      },
+    ],
+    region: SvgFilterRegion {
+      x: SvgLength::Percent(-0.1),
+      y: SvgLength::Percent(-0.1),
+      width: SvgLength::Percent(1.2),
+      height: SvgLength::Percent(1.2),
+      units: SvgFilterUnits::ObjectBoundingBox,
+    },
+    filter_res: None,
+    primitive_units: SvgFilterUnits::ObjectBoundingBox,
+  };
+
+  let bbox = Rect::from_xywh(0.0, 0.0, primary.width() as f32, primary.height() as f32);
+  apply_svg_filter(&filter, &mut primary, 1.0, bbox);
+
+  let center = pixel(&primary, 1);
+  assert!(
+    center.0 > center.1,
+    "linearRGB map values should pull color toward red, got {:?}",
+    center
+  );
+  assert!(center.3 > 0, "displacement map should preserve coverage");
+}

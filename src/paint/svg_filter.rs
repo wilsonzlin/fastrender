@@ -294,6 +294,31 @@ pub enum FilterPrimitive {
 }
 
 #[derive(Clone, Debug)]
+<<<<<<< HEAD
+=======
+pub enum LightSource {
+  None,
+  Distant {
+    azimuth: f32,
+    elevation: f32,
+  },
+  Point {
+    x: SvgLength,
+    y: SvgLength,
+    z: SvgLength,
+  },
+  Spot {
+    x: SvgLength,
+    y: SvgLength,
+    z: SvgLength,
+    points_at: (SvgLength, SvgLength, SvgLength),
+    specular_exponent: f32,
+    limiting_cone_angle: Option<f32>,
+  },
+}
+
+#[derive(Clone, Debug)]
+>>>>>>> 2df16e5 (Improve SVG filter lighting fallbacks and color space handling)
 pub enum FilterInput {
   SourceGraphic,
   SourceAlpha,
@@ -836,10 +861,6 @@ impl SvgFilter {
   }
 
   fn resolve_primitive_pair(&self, values: (f32, f32), bbox: &Rect) -> (f32, f32) {
-    if (values.0 - values.1).abs() < f32::EPSILON {
-      let scalar = self.resolve_primitive_scalar(values.0, bbox);
-      return (scalar, scalar);
-    }
     match self.primitive_units {
       SvgFilterUnits::UserSpaceOnUse => values,
       SvgFilterUnits::ObjectBoundingBox => (
@@ -1093,6 +1114,73 @@ fn parse_fe_flood(node: &roxmltree::Node) -> Option<FilterPrimitive> {
   Some(FilterPrimitive::Flood { color, opacity })
 }
 
+<<<<<<< HEAD
+=======
+fn parse_light_source(node: &roxmltree::Node) -> Option<LightSource> {
+  for child in node.children().filter(|c| c.is_element()) {
+    match child.tag_name().name().to_ascii_lowercase().as_str() {
+      "fedistantlight" => {
+        let azimuth = parse_number(attribute_ci(&child, "azimuth"));
+        let elevation = parse_number(attribute_ci(&child, "elevation"));
+        return Some(LightSource::Distant { azimuth, elevation });
+      }
+      "fepointlight" => {
+        let x = SvgLength::parse(attribute_ci(&child, "x"), SvgLength::Number(0.0));
+        let y = SvgLength::parse(attribute_ci(&child, "y"), SvgLength::Number(0.0));
+        let z = SvgLength::parse(attribute_ci(&child, "z"), SvgLength::Number(0.0));
+        return Some(LightSource::Point { x, y, z });
+      }
+      "fespotlight" => {
+        let x = SvgLength::parse(attribute_ci(&child, "x"), SvgLength::Number(0.0));
+        let y = SvgLength::parse(attribute_ci(&child, "y"), SvgLength::Number(0.0));
+        let z = SvgLength::parse(attribute_ci(&child, "z"), SvgLength::Number(0.0));
+        let points_at_x =
+          SvgLength::parse(attribute_ci(&child, "pointsAtX"), SvgLength::Number(0.0));
+        let points_at_y =
+          SvgLength::parse(attribute_ci(&child, "pointsAtY"), SvgLength::Number(0.0));
+        let points_at_z =
+          SvgLength::parse(attribute_ci(&child, "pointsAtZ"), SvgLength::Number(0.0));
+        let specular_exponent = attribute_ci(&child, "specularExponent")
+          .and_then(|v| v.parse::<f32>().ok())
+          .unwrap_or(1.0);
+        let limiting_cone_angle = attribute_ci(&child, "limitingConeAngle")
+          .and_then(|v| v.parse::<f32>().ok())
+          .filter(|v| v.is_finite() && *v >= 0.0);
+        return Some(LightSource::Spot {
+          x,
+          y,
+          z,
+          points_at: (points_at_x, points_at_y, points_at_z),
+          specular_exponent,
+          limiting_cone_angle,
+        });
+      }
+      _ => {}
+    }
+  }
+  None
+}
+
+fn parse_fe_diffuse_lighting(node: &roxmltree::Node) -> Option<FilterPrimitive> {
+  let input = parse_input(attribute_ci(node, "in"));
+  let surface_scale = parse_number(attribute_ci(node, "surfaceScale"));
+  let diffuse_constant = parse_number(attribute_ci(node, "diffuseConstant")).max(0.0);
+  let kernel_unit_length = attribute_ci(node, "kernelUnitLength")
+    .map(|v| parse_number_pair(Some(v)))
+    .map(|(x, y)| (x.abs(), y.abs()));
+  let lighting_color = parse_color(attribute_ci(node, "lighting-color")).unwrap_or(Rgba::WHITE);
+  let light = parse_light_source(node).unwrap_or(LightSource::None);
+  Some(FilterPrimitive::DiffuseLighting {
+    input,
+    surface_scale,
+    diffuse_constant,
+    kernel_unit_length,
+    light,
+    lighting_color,
+  })
+}
+
+>>>>>>> 2df16e5 (Improve SVG filter lighting fallbacks and color space handling)
 fn parse_fe_gaussian_blur(node: &roxmltree::Node) -> Option<FilterPrimitive> {
   let input = parse_input(node.attribute("in"));
   let (sx, sy) = parse_number_pair(node.attribute("stdDeviation"));
@@ -1142,6 +1230,32 @@ fn parse_fe_color_matrix(node: &roxmltree::Node) -> Option<FilterPrimitive> {
   Some(FilterPrimitive::ColorMatrix { input, kind })
 }
 
+<<<<<<< HEAD
+=======
+fn parse_fe_specular_lighting(node: &roxmltree::Node) -> Option<FilterPrimitive> {
+  let input = parse_input(attribute_ci(node, "in"));
+  let surface_scale = parse_number(attribute_ci(node, "surfaceScale"));
+  let specular_constant = parse_number(attribute_ci(node, "specularConstant")).max(0.0);
+  let specular_exponent = attribute_ci(node, "specularExponent")
+    .and_then(|v| v.parse::<f32>().ok())
+    .unwrap_or(1.0);
+  let kernel_unit_length = attribute_ci(node, "kernelUnitLength")
+    .map(|v| parse_number_pair(Some(v)))
+    .map(|(x, y)| (x.abs(), y.abs()));
+  let lighting_color = parse_color(attribute_ci(node, "lighting-color")).unwrap_or(Rgba::WHITE);
+  let light = parse_light_source(node).unwrap_or(LightSource::None);
+  Some(FilterPrimitive::SpecularLighting {
+    input,
+    surface_scale,
+    specular_constant,
+    specular_exponent,
+    kernel_unit_length,
+    light,
+    lighting_color,
+  })
+}
+
+>>>>>>> 2df16e5 (Improve SVG filter lighting fallbacks and color space handling)
 fn parse_fe_blend(node: &roxmltree::Node) -> Option<FilterPrimitive> {
   let input1 = parse_input(node.attribute("in"));
   let input2 = parse_input(node.attribute("in2"));
@@ -1908,6 +2022,7 @@ fn apply_primitive(
         filter.resolve_primitive_scalar(*disp_scale, css_bbox) * scale_avg,
         *x_channel,
         *y_channel,
+        color_interpolation_filters,
       )?;
       let region = clip_region(primary.region.union(map.region), filter_region);
       Some(FilterResult::new(output, region, filter_region))
@@ -2029,6 +2144,400 @@ fn render_fe_image(prim: &ImagePrimitive, filter_region: Rect) -> Option<FilterR
   Some(FilterResult::new(out, dest_region, filter_region))
 }
 
+<<<<<<< HEAD
+=======
+fn lighting_color_in_space(
+  color: &Rgba,
+  color_space: ColorInterpolationFilters,
+) -> UnpremultipliedColor {
+  let mut converted = UnpremultipliedColor {
+    r: color.r as f32 / 255.0,
+    g: color.g as f32 / 255.0,
+    b: color.b as f32 / 255.0,
+    a: color.a.clamp(0.0, 1.0),
+  };
+  if matches!(color_space, ColorInterpolationFilters::LinearRGB) {
+    converted.r = srgb_to_linear(converted.r);
+    converted.g = srgb_to_linear(converted.g);
+    converted.b = srgb_to_linear(converted.b);
+  }
+  converted
+}
+
+fn resolve_light_point(
+  filter: &SvgFilter,
+  css_bbox: &Rect,
+  point: (SvgLength, SvgLength, SvgLength),
+) -> (f32, f32, f32) {
+  (
+    filter.resolve_primitive_pos_x_len(point.0, css_bbox),
+    filter.resolve_primitive_pos_y_len(point.1, css_bbox),
+    filter.resolve_primitive_pos_z_len(point.2, css_bbox),
+  )
+}
+
+fn compute_light_direction(
+  filter: &SvgFilter,
+  css_bbox: &Rect,
+  light: &LightSource,
+  surface_pos: (f32, f32, f32),
+) -> ((f32, f32, f32), f32) {
+  match light {
+    LightSource::None => ((0.0, 0.0, 1.0), 0.0),
+    LightSource::Distant { azimuth, elevation } => {
+      let az = azimuth.to_radians();
+      let el = elevation.to_radians();
+      let dir = (el.cos() * az.cos(), el.cos() * az.sin(), el.sin());
+      (normalize3(dir.0, dir.1, dir.2), 1.0)
+    }
+    LightSource::Point { x, y, z } => {
+      let point = resolve_light_point(filter, css_bbox, (*x, *y, *z));
+      let dir = (
+        point.0 - surface_pos.0,
+        point.1 - surface_pos.1,
+        point.2 - surface_pos.2,
+      );
+      (normalize3(dir.0, dir.1, dir.2), 1.0)
+    }
+    LightSource::Spot {
+      x,
+      y,
+      z,
+      points_at,
+      specular_exponent,
+      limiting_cone_angle,
+    } => {
+      let point = resolve_light_point(filter, css_bbox, (*x, *y, *z));
+      let target = resolve_light_point(filter, css_bbox, *points_at);
+      let light_to_surface = (
+        surface_pos.0 - point.0,
+        surface_pos.1 - point.1,
+        surface_pos.2 - point.2,
+      );
+      let light_dir = normalize3(
+        -light_to_surface.0,
+        -light_to_surface.1,
+        -light_to_surface.2,
+      );
+      let to_target = normalize3(target.0 - point.0, target.1 - point.1, target.2 - point.2);
+      let cone_dot = dot3(
+        normalize3(light_to_surface.0, light_to_surface.1, light_to_surface.2),
+        to_target,
+      );
+      let within_cone = limiting_cone_angle
+        .map(|angle| cone_dot >= angle.to_radians().cos())
+        .unwrap_or(true);
+      let spot_factor = if within_cone && cone_dot.is_finite() {
+        cone_dot.max(0.0).powf(specular_exponent.max(0.0))
+      } else {
+        0.0
+      };
+      (light_dir, spot_factor)
+    }
+  }
+}
+
+fn resolve_kernel_unit_length(
+  filter: &SvgFilter,
+  css_bbox: &Rect,
+  kernel_unit_length: Option<(f32, f32)>,
+) -> (f32, f32) {
+  let resolved = filter.resolve_primitive_pair(kernel_unit_length.unwrap_or((1.0, 1.0)), css_bbox);
+  (resolved.0.abs(), resolved.1.abs())
+}
+
+fn sample_alpha_at(
+  pixmap: &Pixmap,
+  css_x: f32,
+  css_y: f32,
+  css_bbox: &Rect,
+  scale_x: f32,
+  scale_y: f32,
+) -> f32 {
+  let dx = (css_x - css_bbox.x()) * scale_x;
+  let dy = (css_y - css_bbox.y()) * scale_y;
+  if !dx.is_finite() || !dy.is_finite() {
+    return 0.0;
+  }
+  sample_premultiplied(pixmap, dx, dy)[3].clamp(0.0, 1.0)
+}
+
+fn sample_height_at(
+  pixmap: &Pixmap,
+  css_x: f32,
+  css_y: f32,
+  css_bbox: &Rect,
+  scale_x: f32,
+  scale_y: f32,
+  surface_scale: f32,
+) -> f32 {
+  sample_alpha_at(pixmap, css_x, css_y, css_bbox, scale_x, scale_y) * surface_scale
+}
+
+fn surface_normal(
+  pixmap: &Pixmap,
+  css_x: f32,
+  css_y: f32,
+  css_bbox: &Rect,
+  scale_x: f32,
+  scale_y: f32,
+  surface_scale: f32,
+  kernel_unit: (f32, f32),
+) -> (f32, f32, f32) {
+  let (ku_x, ku_y) = (
+    kernel_unit.0.max(f32::EPSILON),
+    kernel_unit.1.max(f32::EPSILON),
+  );
+  let h_l = sample_height_at(
+    pixmap,
+    css_x - ku_x,
+    css_y,
+    css_bbox,
+    scale_x,
+    scale_y,
+    surface_scale,
+  );
+  let h_r = sample_height_at(
+    pixmap,
+    css_x + ku_x,
+    css_y,
+    css_bbox,
+    scale_x,
+    scale_y,
+    surface_scale,
+  );
+  let h_t = sample_height_at(
+    pixmap,
+    css_x,
+    css_y - ku_y,
+    css_bbox,
+    scale_x,
+    scale_y,
+    surface_scale,
+  );
+  let h_b = sample_height_at(
+    pixmap,
+    css_x,
+    css_y + ku_y,
+    css_bbox,
+    scale_x,
+    scale_y,
+    surface_scale,
+  );
+  let dzdx = (h_l - h_r) / (2.0 * ku_x);
+  let dzdy = (h_t - h_b) / (2.0 * ku_y);
+  normalize3(-dzdx, -dzdy, 1.0)
+}
+
+fn normalize3(x: f32, y: f32, z: f32) -> (f32, f32, f32) {
+  let len = (x * x + y * y + z * z).sqrt();
+  if len <= f32::EPSILON || !len.is_finite() {
+    return (0.0, 0.0, 1.0);
+  }
+  (x / len, y / len, z / len)
+}
+
+fn dot3(a: (f32, f32, f32), b: (f32, f32, f32)) -> f32 {
+  a.0 * b.0 + a.1 * b.1 + a.2 * b.2
+}
+
+fn apply_diffuse_lighting(
+  filter: &SvgFilter,
+  css_bbox: &Rect,
+  input: FilterResult,
+  light: &LightSource,
+  surface_scale: f32,
+  diffuse_constant: f32,
+  kernel_unit_length: Option<(f32, f32)>,
+  lighting_color: &Rgba,
+  scale_x: f32,
+  scale_y: f32,
+  filter_region: Rect,
+  color_interpolation_filters: ColorInterpolationFilters,
+) -> Option<FilterResult> {
+  if matches!(light, LightSource::None) {
+    let pixmap = Pixmap::new(input.pixmap.width(), input.pixmap.height())?;
+    return Some(FilterResult::new(pixmap, input.region, filter_region));
+  }
+  let mut out = Pixmap::new(input.pixmap.width(), input.pixmap.height())?;
+  let base_color = lighting_color_in_space(lighting_color, color_interpolation_filters);
+  let kernel_unit = resolve_kernel_unit_length(filter, css_bbox, kernel_unit_length);
+  let surface_scale = filter
+    .resolve_primitive_scalar(surface_scale, css_bbox)
+    .max(0.0);
+  let inv_scale_x = if scale_x.abs() > f32::EPSILON {
+    1.0 / scale_x
+  } else {
+    1.0
+  };
+  let inv_scale_y = if scale_y.abs() > f32::EPSILON {
+    1.0 / scale_y
+  } else {
+    1.0
+  };
+  let origin_x = css_bbox.x();
+  let origin_y = css_bbox.y();
+  let light = light.clone();
+  let width = input.pixmap.width() as usize;
+
+  out
+    .pixels_mut()
+    .par_iter_mut()
+    .enumerate()
+    .for_each(|(idx, dst)| {
+      let y = (idx / width) as u32;
+      let x = (idx % width) as u32;
+      let css_x = origin_x + x as f32 * inv_scale_x;
+      let css_y = origin_y + y as f32 * inv_scale_y;
+      let alpha = sample_alpha_at(&input.pixmap, css_x, css_y, css_bbox, scale_x, scale_y);
+      if alpha <= 0.0 {
+        *dst = PremultipliedColorU8::TRANSPARENT;
+        return;
+      }
+      let normal = surface_normal(
+        &input.pixmap,
+        css_x,
+        css_y,
+        css_bbox,
+        scale_x,
+        scale_y,
+        surface_scale,
+        kernel_unit,
+      );
+      let height = sample_height_at(
+        &input.pixmap,
+        css_x,
+        css_y,
+        css_bbox,
+        scale_x,
+        scale_y,
+        surface_scale,
+      );
+      let (light_dir, light_factor) =
+        compute_light_direction(filter, css_bbox, &light, (css_x, css_y, height));
+      let n_dot_l = dot3(normal, light_dir).max(0.0);
+      let intensity = n_dot_l * diffuse_constant * light_factor;
+      let color_scale = (intensity * base_color.a * alpha).clamp(0.0, 1.0);
+      let out_alpha = color_scale;
+      *dst = pack_color(
+        UnpremultipliedColor {
+          r: base_color.r * color_scale,
+          g: base_color.g * color_scale,
+          b: base_color.b * color_scale,
+          a: out_alpha,
+        },
+        color_interpolation_filters,
+      );
+    });
+
+  Some(FilterResult::new(out, input.region, filter_region))
+}
+
+fn apply_specular_lighting(
+  filter: &SvgFilter,
+  css_bbox: &Rect,
+  input: FilterResult,
+  light: &LightSource,
+  surface_scale: f32,
+  specular_constant: f32,
+  specular_exponent: f32,
+  kernel_unit_length: Option<(f32, f32)>,
+  lighting_color: &Rgba,
+  scale_x: f32,
+  scale_y: f32,
+  filter_region: Rect,
+  color_interpolation_filters: ColorInterpolationFilters,
+) -> Option<FilterResult> {
+  if matches!(light, LightSource::None) {
+    let pixmap = Pixmap::new(input.pixmap.width(), input.pixmap.height())?;
+    return Some(FilterResult::new(pixmap, input.region, filter_region));
+  }
+  let mut out = Pixmap::new(input.pixmap.width(), input.pixmap.height())?;
+  let base_color = lighting_color_in_space(lighting_color, color_interpolation_filters);
+  let kernel_unit = resolve_kernel_unit_length(filter, css_bbox, kernel_unit_length);
+  let surface_scale = filter
+    .resolve_primitive_scalar(surface_scale, css_bbox)
+    .max(0.0);
+  let inv_scale_x = if scale_x.abs() > f32::EPSILON {
+    1.0 / scale_x
+  } else {
+    1.0
+  };
+  let inv_scale_y = if scale_y.abs() > f32::EPSILON {
+    1.0 / scale_y
+  } else {
+    1.0
+  };
+  let origin_x = css_bbox.x();
+  let origin_y = css_bbox.y();
+  let light = light.clone();
+  let width = input.pixmap.width() as usize;
+  let exponent = specular_exponent.clamp(0.0, 128.0);
+
+  out
+    .pixels_mut()
+    .par_iter_mut()
+    .enumerate()
+    .for_each(|(idx, dst)| {
+      let y = (idx / width) as u32;
+      let x = (idx % width) as u32;
+      let css_x = origin_x + x as f32 * inv_scale_x;
+      let css_y = origin_y + y as f32 * inv_scale_y;
+      let alpha = sample_alpha_at(&input.pixmap, css_x, css_y, css_bbox, scale_x, scale_y);
+      if alpha <= 0.0 {
+        *dst = PremultipliedColorU8::TRANSPARENT;
+        return;
+      }
+      let normal = surface_normal(
+        &input.pixmap,
+        css_x,
+        css_y,
+        css_bbox,
+        scale_x,
+        scale_y,
+        surface_scale,
+        kernel_unit,
+      );
+      let height = sample_height_at(
+        &input.pixmap,
+        css_x,
+        css_y,
+        css_bbox,
+        scale_x,
+        scale_y,
+        surface_scale,
+      );
+      let (light_dir, light_factor) =
+        compute_light_direction(filter, css_bbox, &light, (css_x, css_y, height));
+      let n_dot_l = dot3(normal, light_dir).max(0.0);
+      if n_dot_l <= 0.0 || light_factor <= 0.0 {
+        *dst = PremultipliedColorU8::TRANSPARENT;
+        return;
+      }
+      let reflect = normalize3(
+        2.0 * n_dot_l * normal.0 - light_dir.0,
+        2.0 * n_dot_l * normal.1 - light_dir.1,
+        2.0 * n_dot_l * normal.2 - light_dir.2,
+      );
+      let spec_angle = reflect.2.max(0.0).powf(exponent);
+      let intensity = specular_constant * spec_angle * light_factor;
+      let color_scale = (intensity * base_color.a * alpha).clamp(0.0, 1.0);
+      let out_alpha = color_scale;
+      *dst = pack_color(
+        UnpremultipliedColor {
+          r: base_color.r * color_scale,
+          g: base_color.g * color_scale,
+          b: base_color.b * color_scale,
+          a: out_alpha,
+        },
+        color_interpolation_filters,
+      );
+    });
+
+  Some(FilterResult::new(out, input.region, filter_region))
+}
+
+>>>>>>> 2df16e5 (Improve SVG filter lighting fallbacks and color space handling)
 fn flood(width: u32, height: u32, color: &Rgba, opacity: f32) -> Option<Pixmap> {
   let mut pixmap = Pixmap::new(width, height)?;
   let alpha = (color.a * opacity).clamp(0.0, 1.0);
@@ -2459,6 +2968,7 @@ fn apply_displacement_map(
   scale: f32,
   x_channel: ChannelSelector,
   y_channel: ChannelSelector,
+  color_interpolation_filters: ColorInterpolationFilters,
 ) -> Option<Pixmap> {
   let mut out = Pixmap::new(primary.width(), primary.height())?;
   let width = primary.width() as usize;
@@ -2468,8 +2978,9 @@ fn apply_displacement_map(
     let x = (idx % width) as u32;
 
     let map_sample = sample_premultiplied(map, x as f32, y as f32);
-    let channel_value_x = channel_value(map_sample, x_channel);
-    let channel_value_y = channel_value(map_sample, y_channel);
+    let map_color = sample_to_color_space(map_sample, color_interpolation_filters);
+    let channel_value_x = channel_value(&map_color, x_channel);
+    let channel_value_y = channel_value(&map_color, y_channel);
     let dx = (channel_value_x - 0.5) * scale;
     let dy = (channel_value_y - 0.5) * scale;
 
@@ -2487,20 +2998,39 @@ fn apply_displacement_map(
   Some(out)
 }
 
-fn channel_value(sample: [f32; 4], selector: ChannelSelector) -> f32 {
-  let alpha = sample[3];
-  let unpremul = |v: f32| {
-    if alpha <= 0.0 {
-      0.0
-    } else {
-      (v / alpha).clamp(0.0, 1.0)
-    }
+fn sample_to_color_space(
+  sample: [f32; 4],
+  color_space: ColorInterpolationFilters,
+) -> UnpremultipliedColor {
+  let alpha = clamp01(sample[3]);
+  if alpha <= 0.0 {
+    return UnpremultipliedColor {
+      r: 0.0,
+      g: 0.0,
+      b: 0.0,
+      a: 0.0,
+    };
+  }
+  let mut color = UnpremultipliedColor {
+    r: clamp01(sample[0] / alpha),
+    g: clamp01(sample[1] / alpha),
+    b: clamp01(sample[2] / alpha),
+    a: alpha,
   };
+  if matches!(color_space, ColorInterpolationFilters::LinearRGB) {
+    color.r = srgb_to_linear(color.r);
+    color.g = srgb_to_linear(color.g);
+    color.b = srgb_to_linear(color.b);
+  }
+  color
+}
+
+fn channel_value(sample: &UnpremultipliedColor, selector: ChannelSelector) -> f32 {
   match selector {
-    ChannelSelector::R => unpremul(sample[0]),
-    ChannelSelector::G => unpremul(sample[1]),
-    ChannelSelector::B => unpremul(sample[2]),
-    ChannelSelector::A => alpha.clamp(0.0, 1.0),
+    ChannelSelector::R => sample.r,
+    ChannelSelector::G => sample.g,
+    ChannelSelector::B => sample.b,
+    ChannelSelector::A => sample.a,
   }
 }
 

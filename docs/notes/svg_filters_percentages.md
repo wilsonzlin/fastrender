@@ -7,4 +7,16 @@ contexts there is no SVG viewport to anchor user-space percentages, so the
 element bbox is the only consistent base.
 
 This rule is shared across filter regions and primitive subregions via
+<<<<<<< HEAD
 `resolve_user_space_percentage` in `svg_filter.rs` to avoid diverging behavior.
+=======
+`SvgFilterRegion::resolve` and the `SvgFilter::resolve_primitive_*` helpers in
+`svg_filter.rs` to avoid diverging behavior. Light source coordinates for
+lighting primitives are parsed as lengths and resolved through the same paths
+(`resolve_light_point` -> `resolve_primitive_pos_*`) so percentage inputs
+continue to track the filtered element's bounding box even when `primitiveUnits`
+is `userSpaceOnUse`. Paired values that come from a single input (e.g.
+`stdDeviation="2"` or `kernelUnitLength="1"`) are still resolved per-axis so
+`objectBoundingBox` units respect the bbox width for X and height for Y rather
+than averaging the two dimensions.
+>>>>>>> 2df16e5 (Improve SVG filter lighting fallbacks and color space handling)
