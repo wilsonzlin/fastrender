@@ -6,7 +6,7 @@ use fastrender::layout::fragmentation::{
 };
 use fastrender::style::display::{Display, FormattingContextType};
 use fastrender::style::position::Position;
-use fastrender::style::types::{BreakBetween, BreakInside};
+use fastrender::style::types::{BreakBetween, BreakInside, WritingMode};
 use fastrender::style::values::Length;
 use fastrender::tree::box_tree::BoxNode;
 use fastrender::{
@@ -131,6 +131,49 @@ fn pagination_without_candidates_uses_fragmentainer_size() {
   assert_eq!(fragments.len(), 3);
   assert!((fragments[1].bounds.y() - 60.0).abs() < 0.1);
   assert!((fragments[2].bounds.y() - 120.0).abs() < 0.1);
+}
+
+#[test]
+fn vertical_writing_fragment_tree_columns_use_inline_axis() {
+  let mut style = ComputedStyle::default();
+  style.display = Display::Block;
+  style.writing_mode = WritingMode::VerticalLr;
+  let style = Arc::new(style);
+
+  let child = FragmentNode::new_block_styled(
+    Rect::from_xywh(0.0, 0.0, 150.0, 40.0),
+    vec![],
+    style.clone(),
+  );
+  let root =
+    FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 150.0, 40.0), vec![child], style);
+
+  let fragments = fragment_tree(
+    &root,
+    &FragmentationOptions::new(60.0).with_columns(2, 10.0),
+  );
+
+  assert_eq!(fragments.len(), 3);
+  assert_eq!(fragments[0].bounds.origin, Point::ZERO);
+  assert!((fragments[1].bounds.x()).abs() < 0.01);
+  assert!((fragments[1].bounds.y() - (40.0 + 10.0)).abs() < 0.01);
+  assert!((fragments[2].bounds.x() - 60.0).abs() < 0.01);
+  assert!((fragments[2].bounds.y()).abs() < 0.01);
+
+  for (idx, fragment) in fragments.iter().enumerate() {
+    assert_eq!(
+      fragment.children.len(),
+      1,
+      "fragment {idx} should preserve the lone child"
+    );
+    let fragment_child = &fragment.children[0];
+    let slice_start = (idx as f32) * 60.0;
+    let expected_block_size = (root.bounds.width() - slice_start).min(60.0);
+    assert!(
+      (fragment_child.bounds.width() - expected_block_size).abs() < 0.01,
+      "fragment {idx} child width should match the clipped block slice"
+    );
+  }
 }
 
 #[test]

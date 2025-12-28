@@ -10,9 +10,11 @@
 use std::sync::OnceLock;
 
 use crate::geometry::{Point, Rect};
+use crate::layout::axis::{FragmentAxes, PhysicalAxis};
+use crate::style::block_axis_is_horizontal;
 use crate::style::display::Display;
 use crate::style::page::PageSide;
-use crate::style::types::{BreakBetween, BreakInside};
+use crate::style::types::{BreakBetween, BreakInside, WritingMode};
 use crate::style::ComputedStyle;
 use crate::tree::fragment_tree::{
   FragmentContent, FragmentNode, FragmentSliceInfo, FragmentainerPath,
@@ -263,6 +265,27 @@ pub fn resolve_fragmentation_boundaries_with_axes(
 /// `fragmentainer_index`) are populated so downstream stages can reason about page/column
 /// membership.
 pub fn fragment_tree(root: &FragmentNode, options: &FragmentationOptions) -> Vec<FragmentNode> {
+  let writing_mode = root
+    .style
+    .as_ref()
+    .map(|s| s.writing_mode)
+    .unwrap_or(WritingMode::HorizontalTb);
+  if block_axis_is_horizontal(writing_mode) {
+    // Fragmentation logic assumes the block axis maps to the physical Y axis. For writing modes
+    // with a horizontal block axis (vertical writing), transpose the fragment tree so block-axis
+    // slicing/translation can reuse the existing code paths and then swap the result back.
+    let swapped_root = swap_fragment_axes(root);
+    let fragments = fragment_tree_impl(&swapped_root, options);
+    return fragments
+      .into_iter()
+      .map(|fragment| swap_fragment_axes(&fragment))
+      .collect();
+  }
+
+  fragment_tree_impl(root, options)
+}
+
+fn fragment_tree_impl(root: &FragmentNode, options: &FragmentationOptions) -> Vec<FragmentNode> {
   if options.fragmentainer_size <= 0.0 {
     return vec![root.clone()];
   }
@@ -314,6 +337,37 @@ pub fn fragment_tree(root: &FragmentNode, options: &FragmentationOptions) -> Vec
   }
 
   fragments
+}
+
+fn swap_fragment_axes(node: &FragmentNode) -> FragmentNode {
+  let content = match &node.content {
+    FragmentContent::RunningAnchor { name, snapshot } => FragmentContent::RunningAnchor {
+      name: name.clone(),
+      snapshot: Box::new(swap_fragment_axes(snapshot)),
+    },
+    other => other.clone(),
+  };
+
+  FragmentNode {
+    bounds: swap_rect_axes(node.bounds),
+    block_metadata: node.block_metadata.clone(),
+    logical_override: node.logical_override.map(swap_rect_axes),
+    content,
+    baseline: node.baseline,
+    children: node.children.iter().map(swap_fragment_axes).collect(),
+    style: node.style.clone(),
+    fragment_index: node.fragment_index,
+    fragment_count: node.fragment_count,
+    fragmentainer_index: node.fragmentainer_index,
+    fragmentainer: node.fragmentainer,
+    slice_info: node.slice_info,
+    scroll_overflow: swap_rect_axes(node.scroll_overflow),
+    fragmentation: node.fragmentation.clone(),
+  }
+}
+
+fn swap_rect_axes(rect: Rect) -> Rect {
+  Rect::from_xywh(rect.y(), rect.x(), rect.height(), rect.width())
 }
 
 pub(crate) fn propagate_fragment_metadata(node: &mut FragmentNode, index: usize, count: usize) {
