@@ -101,3 +101,28 @@ be safely checked in alongside their regeneration scripts.
   ```bash
   python tests/fixtures/fonts/generate_svg_color_font.py
   ```
+
+## Variable font fixtures
+
+- **Font:** AmstelvarAlpha (variable)
+- **Source:** <https://github.com/google/fonts/tree/main/ofl/amstelvaralpha>
+- **License:** SIL Open Font License 1.1 (see upstream `OFL.txt`)
+- **Subset command:**
+
+  ```bash
+  pyftsubset AmstelvarAlpha-VF.ttf \
+    --output-file=VariableTestFont-AmstelvarAlpha.ttf \
+    --text="HA " \
+    --layout-features='*' \
+    --name-IDs='*' \
+    --name-languages='*' \
+    --glyph-names \
+    --notdef-glyph \
+    --notdef-outline \
+    --no-hinting
+  ```
+
+The subset keeps the variation tables (`fvar`, `gvar`, `HVAR`, `MVAR`, etc.) so tests can assert that variable font axes (e.g. weight or stretch) affect glyph outlines.
+
+- Relevant axes (from `fvar`): `wght` 38–250 (default 88), `wdth` 60–402 (default 402), `opsz` 10–72 (default 14).
+- Tests exercise the extremes of the `wght` axis (40 vs 250) to ensure glyph outlines visibly change when variations are applied during rasterization.
