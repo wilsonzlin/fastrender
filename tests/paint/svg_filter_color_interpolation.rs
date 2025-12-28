@@ -148,8 +148,18 @@ fn gaussian_blur_respects_color_interpolation_filters() {
   let mut srgb = base.clone();
   let bbox = Rect::from_xywh(0.0, 0.0, 2.0, 1.0);
 
-  apply_svg_filter(&blur_filter(ColorInterpolationFilters::LinearRGB), &mut linear, 1.0, bbox);
-  apply_svg_filter(&blur_filter(ColorInterpolationFilters::SRGB), &mut srgb, 1.0, bbox);
+  apply_svg_filter(
+    &blur_filter(ColorInterpolationFilters::LinearRGB),
+    &mut linear,
+    1.0,
+    bbox,
+  );
+  apply_svg_filter(
+    &blur_filter(ColorInterpolationFilters::SRGB),
+    &mut srgb,
+    1.0,
+    bbox,
+  );
 
   let linear_px = linear.pixel(0, 0).unwrap();
   let srgb_px = srgb.pixel(0, 0).unwrap();

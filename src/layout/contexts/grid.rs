@@ -33,6 +33,7 @@ use crate::geometry::Rect;
 use crate::geometry::Size;
 use crate::layout::constraints::AvailableSpace as CrateAvailableSpace;
 use crate::layout::constraints::LayoutConstraints;
+use crate::layout::engine::LayoutParallelism;
 use crate::layout::formatting_context::layout_cache_lookup;
 use crate::layout::formatting_context::layout_cache_store;
 use crate::layout::formatting_context::FormattingContext;
@@ -62,6 +63,7 @@ use crate::style::ComputedStyle;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
+use rayon::prelude::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -206,6 +208,7 @@ pub struct GridFormattingContext {
   viewport_size: crate::geometry::Size,
   font_context: crate::text::font_loader::FontContext,
   nearest_positioned_cb: crate::layout::contexts::positioned::ContainingBlock,
+  parallelism: LayoutParallelism,
 }
 
 impl GridFormattingContext {
@@ -312,7 +315,13 @@ impl GridFormattingContext {
       viewport_size,
       font_context,
       nearest_positioned_cb,
+      parallelism: LayoutParallelism::default(),
     }
+  }
+
+  pub fn with_parallelism(mut self, parallelism: LayoutParallelism) -> Self {
+    self.parallelism = parallelism;
+    self
   }
 
   fn horizontal_edges_px(&self, style: &ComputedStyle) -> Option<f32> {
@@ -1240,20 +1249,43 @@ impl GridFormattingContext {
       .children(node_id)
       .map_err(|e| LayoutError::MissingContext(format!("Taffy children error: {:?}", e)))?;
 
-    let child_fragments: Vec<FragmentNode> = children
-      .iter()
-      .map(|&child_id| {
-        self.convert_to_fragments(
-          taffy,
-          child_id,
-          root_id,
-          constraints,
-          measured_fragments,
-          measured_node_keys,
-          positioned_children,
-        )
-      })
-      .collect::<Result<_, _>>()?;
+    let child_fragments: Vec<FragmentNode> = if self.parallelism.should_parallelize(children.len())
+    {
+      let mut results = children
+        .par_iter()
+        .enumerate()
+        .map(|(idx, &child_id)| {
+          self
+            .convert_to_fragments(
+              taffy,
+              child_id,
+              root_id,
+              constraints,
+              measured_fragments,
+              measured_node_keys,
+              positioned_children,
+            )
+            .map(|fragment| (idx, fragment))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+      results.sort_by_key(|(idx, _)| *idx);
+      results.into_iter().map(|(_, fragment)| fragment).collect()
+    } else {
+      children
+        .iter()
+        .map(|&child_id| {
+          self.convert_to_fragments(
+            taffy,
+            child_id,
+            root_id,
+            constraints,
+            measured_fragments,
+            measured_node_keys,
+            positioned_children,
+          )
+        })
+        .collect::<Result<_, _>>()?
+    };
 
     // Create fragment bounds from Taffy layout
     let bounds = Rect::from_xywh(
@@ -1310,7 +1342,8 @@ impl GridFormattingContext {
           self.font_context.clone(),
           self.viewport_size,
           self.nearest_positioned_cb,
-        );
+        )
+        .with_parallelism(self.parallelism);
       let fc = factory.create(fc_type);
 
       let mut layout_child = (*box_node).clone();
@@ -1436,7 +1469,8 @@ impl GridFormattingContext {
           self.font_context.clone(),
           self.viewport_size,
           cb,
-        );
+        )
+        .with_parallelism(self.parallelism);
       let fc_type = layout_child
         .formatting_context()
         .unwrap_or(crate::style::display::FormattingContextType::Block);
@@ -1815,7 +1849,8 @@ impl GridFormattingContext {
               self.font_context.clone(),
               self.viewport_size,
               self.nearest_positioned_cb,
-            );
+            )
+            .with_parallelism(self.parallelism);
           let viewport_size = self.viewport_size;
           let mut cache: HashMap<MeasureKey, taffy::geometry::Size<f32>> = HashMap::new();
           move |known_dimensions,
@@ -2305,7 +2340,8 @@ impl FormattingContext for GridFormattingContext {
 	              self.font_context.clone(),
 	              self.viewport_size,
 	              self.nearest_positioned_cb,
-	            );
+	            )
+	            .with_parallelism(self.parallelism);
 	          let viewport_size = self.viewport_size;
 	          let parent_inline_base = constraints.inline_percentage_base;
 	          let container_justify_items = box_node.style.justify_items;
@@ -2560,13 +2596,13 @@ impl FormattingContext for GridFormattingContext {
         constraints.width().unwrap_or(0.0),
         &box_node.style,
       );
-      let padding_bottom = self.resolve_length_for_width(
-        box_node.style.padding_bottom,
+      let padding_top = self.resolve_length_for_width(
+        box_node.style.padding_top,
         constraints.width().unwrap_or(0.0),
         &box_node.style,
       );
-      let padding_top = self.resolve_length_for_width(
-        box_node.style.padding_top,
+      let padding_bottom = self.resolve_length_for_width(
+        box_node.style.padding_bottom,
         constraints.width().unwrap_or(0.0),
         &box_node.style,
       );
@@ -2712,7 +2748,8 @@ impl FormattingContext for GridFormattingContext {
                         self.font_context.clone(),
                         self.viewport_size,
                         cb,
-                    );
+                    )
+                    .with_parallelism(self.parallelism);
         let fc_type = layout_child
           .formatting_context()
           .unwrap_or(crate::style::display::FormattingContextType::Block);

@@ -42,7 +42,9 @@ fn apply_scoped_styles(html: &str) -> StyledNode {
 
   let style_set = StyleSet { document, shadows };
   let media = MediaContext::screen(800.0, 600.0);
-  apply_style_set_with_media_target_and_imports(&dom, &style_set, &media, None, None, None, None, None, None)
+  apply_style_set_with_media_target_and_imports(
+    &dom, &style_set, &media, None, None, None, None, None, None,
+  )
 }
 
 #[test]

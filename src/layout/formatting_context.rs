@@ -89,6 +89,7 @@ pub enum IntrinsicSizingMode {
 }
 
 thread_local! {
+    /// Intrinsic sizing cache scoped per-thread so rayon fan-out does not require locking.
     static INTRINSIC_INLINE_CACHE: RefCell<HashMap<(usize, usize, IntrinsicSizingMode), (usize, f32)>> =
         RefCell::new(HashMap::new());
 }
@@ -214,6 +215,7 @@ struct LayoutCacheEntry {
 }
 
 thread_local! {
+  /// Layout result cache kept per-thread to stay contention-free during rayon-powered fan-out.
   static LAYOUT_RESULT_CACHE: RefCell<HashMap<LayoutCacheKey, LayoutCacheEntry>> =
     RefCell::new(HashMap::new());
   static LAYOUT_CACHE_ENABLED: Cell<bool> = const { Cell::new(false) };

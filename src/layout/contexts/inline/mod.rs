@@ -51,6 +51,7 @@ use crate::layout::constraints::LayoutConstraints;
 use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::contexts::inline::line_builder::InlineBoxItem;
 use crate::layout::contexts::positioned::ContainingBlock;
+use crate::layout::engine::LayoutParallelism;
 use crate::layout::float_context::FloatContext;
 use crate::layout::formatting_context::count_inline_intrinsic_call;
 use crate::layout::formatting_context::FormattingContext;
@@ -164,6 +165,7 @@ pub struct InlineFormattingContext {
   default_hyphenator: Option<Hyphenator>,
   viewport_size: crate::geometry::Size,
   nearest_positioned_cb: crate::layout::contexts::positioned::ContainingBlock,
+  parallelism: LayoutParallelism,
 }
 
 fn dump_text_enabled() -> bool {
@@ -222,6 +224,7 @@ impl InlineFormattingContext {
       nearest_positioned_cb: crate::layout::contexts::positioned::ContainingBlock::viewport(
         crate::geometry::Size::new(800.0, 600.0),
       ),
+      parallelism: LayoutParallelism::default(),
     }
   }
 
@@ -262,7 +265,13 @@ impl InlineFormattingContext {
       default_hyphenator: Hyphenator::new("en-us").ok(),
       viewport_size,
       nearest_positioned_cb,
+      parallelism: LayoutParallelism::default(),
     }
+  }
+
+  pub fn with_parallelism(mut self, parallelism: LayoutParallelism) -> Self {
+    self.parallelism = parallelism;
+    self
   }
 
   fn hyphenator_for(&self, language: &str) -> Option<Hyphenator> {

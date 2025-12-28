@@ -277,16 +277,10 @@ fn vertical_writing_fragment_stacking_uses_x_for_gap() {
   style.writing_mode = WritingMode::VerticalLr;
   let style = Arc::new(style);
 
-  let child = FragmentNode::new_block_styled(
-    Rect::from_xywh(0.0, 0.0, 80.0, 20.0),
-    vec![],
-    style.clone(),
-  );
-  let root = FragmentNode::new_block_styled(
-    Rect::from_xywh(0.0, 0.0, 80.0, 20.0),
-    vec![child],
-    style,
-  );
+  let child =
+    FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 80.0, 20.0), vec![], style.clone());
+  let root =
+    FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 80.0, 20.0), vec![child], style);
 
   let fragments = fragment_tree(&root, &FragmentationOptions::new(50.0).with_gap(20.0));
 

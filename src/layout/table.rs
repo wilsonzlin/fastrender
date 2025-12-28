@@ -42,6 +42,7 @@ use crate::layout::contexts::table::column_distribution::distribute_spanning_per
 use crate::layout::contexts::table::column_distribution::ColumnConstraints;
 use crate::layout::contexts::table::column_distribution::ColumnDistributor;
 use crate::layout::contexts::table::column_distribution::DistributionMode;
+use crate::layout::engine::LayoutParallelism;
 use crate::layout::formatting_context::layout_cache_lookup;
 use crate::layout::formatting_context::layout_cache_store;
 use crate::layout::formatting_context::FormattingContext;
@@ -69,6 +70,7 @@ use crate::tree::box_tree::MarkerContent;
 use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
 use crate::tree::table_fixup::TableStructureFixer;
+use rayon::prelude::*;
 use std::sync::Arc;
 
 // ============================================================================
@@ -3308,6 +3310,7 @@ pub struct TableFormattingContext {
   factory: FormattingContextFactory,
   viewport_size: crate::geometry::Size,
   nearest_positioned_cb: ContainingBlock,
+  parallelism: LayoutParallelism,
 }
 
 impl TableFormattingContext {
@@ -3318,6 +3321,7 @@ impl TableFormattingContext {
 
   /// Creates a table formatting context that reuses the provided factory.
   pub fn with_factory(factory: FormattingContextFactory) -> Self {
+    let parallelism = factory.parallelism();
     let viewport_size = factory.viewport_size();
     let nearest_positioned_cb = factory.nearest_positioned_cb();
     Self {
@@ -3325,6 +3329,7 @@ impl TableFormattingContext {
       factory,
       viewport_size,
       nearest_positioned_cb,
+      parallelism,
     }
   }
 
@@ -3624,7 +3629,8 @@ impl TableFormattingContext {
     let bfc = BlockFormattingContext::with_font_context_and_viewport(
       self.factory.font_context().clone(),
       self.factory.viewport_size(),
-    );
+    )
+    .with_parallelism(self.parallelism);
     let constraints = LayoutConstraints::definite_width(cell_width.max(0.0));
     if matches!(border_collapse, BorderCollapse::Collapse) {
       let mut style = (*cloned.style).clone();
@@ -3755,9 +3761,8 @@ impl FormattingContext for TableFormattingContext {
         return Ok(cached);
       }
     }
-    let table_box = TableStructureFixer::fixup_table_internals(box_node.clone()).unwrap_or_else(
-      |err| panic!("table structure fixup failed: {err}"),
-    );
+    let table_box = TableStructureFixer::fixup_table_internals(box_node.clone())
+      .unwrap_or_else(|err| panic!("table structure fixup failed: {err}"));
     let dump = runtime::runtime_toggles().truthy("FASTR_DUMP_TABLE");
     let mut positioned_children: Vec<BoxNode> = Vec::new();
     let mut running_children: Vec<(usize, BoxNode)> = Vec::new();
@@ -4301,9 +4306,13 @@ impl FormattingContext for TableFormattingContext {
     }
 
     // Layout all cells to obtain their fragments and measure heights, then distribute row heights with rowspans.
-    let mut laid_out_cells: Vec<LaidOutCell> = Vec::new();
-    let mut failed_cells = 0usize;
-    for cell in &structure.cells {
+    enum CellOutcome<'a> {
+      Success(LaidOutCell<'a>),
+      Missing,
+      Failed,
+    }
+
+    let layout_single_cell = |cell: &CellInfo| -> CellOutcome {
       let span_end = (cell.col + cell.colspan).min(col_widths.len());
       let width: f32 = col_widths[cell.col..span_end].iter().sum::<f32>()
         + h_spacing * (cell.colspan.saturating_sub(1) as f32);
@@ -4335,20 +4344,53 @@ impl FormattingContext for TableFormattingContext {
             }
             let height = fragment.bounds.height();
             let baseline = cell_baseline(&fragment);
-            laid_out_cells.push(LaidOutCell {
+            CellOutcome::Success(LaidOutCell {
               cell,
               fragment,
               vertical_align: effective_vertical_align,
               baseline,
               height,
-            });
+            })
           }
-          Err(_) => {
-            failed_cells += 1;
+          Err(_) => CellOutcome::Failed,
+        }
+      } else {
+        CellOutcome::Missing
+      }
+    };
+
+    let (mut laid_out_cells, mut failed_cells) =
+      if self.parallelism.should_parallelize(structure.cells.len()) && !dump {
+        let mut outcomes = structure
+          .cells
+          .par_iter()
+          .enumerate()
+          .map(|(idx, cell)| (idx, layout_single_cell(cell)))
+          .collect::<Vec<_>>();
+        outcomes.sort_by_key(|(idx, _)| *idx);
+
+        let mut laid_out_cells = Vec::new();
+        let mut failed = 0usize;
+        for (_, outcome) in outcomes {
+          match outcome {
+            CellOutcome::Success(cell) => laid_out_cells.push(cell),
+            CellOutcome::Failed => failed += 1,
+            CellOutcome::Missing => {}
           }
         }
-      }
-    }
+        (laid_out_cells, failed)
+      } else {
+        let mut laid_out_cells = Vec::new();
+        let mut failed = 0usize;
+        for cell in &structure.cells {
+          match layout_single_cell(cell) {
+            CellOutcome::Success(cell) => laid_out_cells.push(cell),
+            CellOutcome::Failed => failed += 1,
+            CellOutcome::Missing => {}
+          }
+        }
+        (laid_out_cells, failed)
+      };
 
     // Compute row heights, accounting for rowspans and vertical spacing.
     let mut row_heights = vec![0.0f32; structure.row_count];
@@ -5634,9 +5676,8 @@ impl FormattingContext for TableFormattingContext {
     box_node: &BoxNode,
     mode: IntrinsicSizingMode,
   ) -> Result<f32, LayoutError> {
-    let table_box = TableStructureFixer::fixup_table_internals(box_node.clone()).unwrap_or_else(
-      |err| panic!("table structure fixup failed: {err}"),
-    );
+    let table_box = TableStructureFixer::fixup_table_internals(box_node.clone())
+      .unwrap_or_else(|err| panic!("table structure fixup failed: {err}"));
     let structure = TableStructure::from_box_tree(&table_box);
     let mut column_constraints: Vec<ColumnConstraints> = (0..structure.column_count)
       .map(|_| ColumnConstraints::new(0.0, 0.0))

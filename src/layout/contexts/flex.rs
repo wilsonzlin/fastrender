@@ -33,6 +33,7 @@ use crate::layout::constraints::LayoutConstraints;
 use crate::layout::contexts::block::BlockFormattingContext;
 use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::contexts::positioned::ContainingBlock;
+use crate::layout::engine::LayoutParallelism;
 use crate::layout::flex_profile::record_node_measure_hit;
 use crate::layout::flex_profile::record_node_measure_store;
 use crate::layout::flex_profile::DimState;
@@ -73,6 +74,7 @@ use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
 use crate::{error::RenderError, error::RenderStage};
+use rayon::prelude::*;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
@@ -189,6 +191,7 @@ pub struct FlexFormattingContext {
   viewport_size: Size,
   font_context: FontContext,
   nearest_positioned_cb: ContainingBlock,
+  parallelism: LayoutParallelism,
   measured_fragments: Arc<Mutex<FlexMeasureCache>>,
   layout_fragments: Arc<
     Mutex<HashMap<u64, HashMap<(Option<u32>, Option<u32>), (Size, std::sync::Arc<FragmentNode>)>>>,
@@ -239,9 +242,15 @@ impl FlexFormattingContext {
       viewport_size,
       font_context,
       nearest_positioned_cb,
+      parallelism: LayoutParallelism::default(),
       measured_fragments,
       layout_fragments,
     }
+  }
+
+  pub fn with_parallelism(mut self, parallelism: LayoutParallelism) -> Self {
+    self.parallelism = parallelism;
+    self
   }
 }
 
@@ -417,7 +426,8 @@ impl FormattingContext for FlexFormattingContext {
       nearest_positioned_cb,
       measured_fragments.clone(),
       self.layout_fragments.clone(),
-    );
+    )
+    .with_parallelism(self.parallelism);
     let this = self.clone();
     let mut pass_cache: HashMap<
       u64,
@@ -1104,11 +1114,14 @@ impl FormattingContext for FlexFormattingContext {
                     }
 
                     let fc: Box<dyn FormattingContext> = if matches!(fc_type, FormattingContextType::Block) {
-                        Box::new(BlockFormattingContext::for_flex_item_with_font_context_viewport_and_cb(
-                            this.font_context.clone(),
-                            viewport_size,
-                            nearest_positioned_cb,
-                        ))
+                        Box::new(
+                            BlockFormattingContext::for_flex_item_with_font_context_viewport_and_cb(
+                                this.font_context.clone(),
+                                viewport_size,
+                                nearest_positioned_cb,
+                            )
+                            .with_parallelism(this.parallelism),
+                        )
                     } else {
                         factory.create(fc_type)
                     };
@@ -1882,10 +1895,11 @@ impl FormattingContext for FlexFormattingContext {
         };
 
         let factory = crate::layout::contexts::factory::FormattingContextFactory::with_font_context_viewport_and_cb(
-                  self.font_context.clone(),
-                  self.viewport_size,
-                  cb,
-              );
+          self.font_context.clone(),
+          self.viewport_size,
+          cb,
+        )
+        .with_parallelism(self.parallelism);
 
         // Layout child as static to obtain intrinsic size.
         let mut layout_child = child.clone();
@@ -1989,7 +2003,8 @@ impl FormattingContext for FlexFormattingContext {
         self.font_context.clone(),
         self.viewport_size,
         self.nearest_positioned_cb,
-      );
+      )
+      .with_parallelism(self.parallelism);
       for (order, (running_idx, running_child)) in running_children.into_iter().enumerate() {
         let Some(name) = running_child.style.running_position.clone() else {
           continue;
@@ -2072,20 +2087,22 @@ impl FormattingContext for FlexFormattingContext {
     // Approximate intrinsic inline size from flex items per CSS flexbox intrinsic sizing rules:
     // - Row axis: sum of item min/max-content contributions
     // - Column axis: max of item contributions
-    let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
-      self.font_context.clone(),
-      self.viewport_size,
-      self.nearest_positioned_cb,
+    let factory = Arc::new(
+      FormattingContextFactory::with_font_context_viewport_and_cb(
+        self.font_context.clone(),
+        self.viewport_size,
+        self.nearest_positioned_cb,
+      )
+      .with_parallelism(self.parallelism),
     );
     let is_row_axis = matches!(
       style.flex_direction,
       FlexDirection::Row | FlexDirection::RowReverse
     );
 
-    let mut contribution = 0.0f32;
-    for child in &box_node.children {
+    let compute_child_contribution = |child: &BoxNode| -> Result<Option<f32>, LayoutError> {
       if matches!(child.style.position, Position::Absolute | Position::Fixed) {
-        continue;
+        return Ok(None);
       }
 
       let fc_type = child
@@ -2107,7 +2124,25 @@ impl FormattingContext for FlexFormattingContext {
         .map(|l| self.resolve_length_for_width(*l, 0.0, style))
         .unwrap_or(0.0);
       let child_total = child_inline + margin_left + margin_right;
+      Ok(Some(child_total))
+    };
 
+    let contributions = if self.parallelism.should_parallelize(box_node.children.len()) {
+      box_node
+        .children
+        .par_iter()
+        .map(compute_child_contribution)
+        .collect::<Result<Vec<_>, _>>()?
+    } else {
+      box_node
+        .children
+        .iter()
+        .map(compute_child_contribution)
+        .collect::<Result<Vec<_>, _>>()?
+    };
+
+    let mut contribution = 0.0f32;
+    for child_total in contributions.into_iter().flatten() {
       if is_row_axis {
         contribution += child_total;
       } else {
@@ -2857,7 +2892,8 @@ impl FlexFormattingContext {
         self.font_context.clone(),
         self.viewport_size,
         self.nearest_positioned_cb,
-      );
+      )
+      .with_parallelism(self.parallelism);
     let measured_fragments = self.measured_fragments.clone();
     let main_axis_is_row = matches!(
       box_node.style.flex_direction,

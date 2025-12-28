@@ -1976,7 +1976,10 @@ fn apply_primitive(
       let sigma_x = sx * scale_x;
       let sigma_y = sy * scale_y;
       if sigma_x != 0.0 || sigma_y != 0.0 {
-        let use_linear = matches!(color_interpolation_filters, ColorInterpolationFilters::LinearRGB);
+        let use_linear = matches!(
+          color_interpolation_filters,
+          ColorInterpolationFilters::LinearRGB
+        );
         if use_linear {
           reencode_pixmap_to_linear_rgb(&mut img.pixmap);
         }
@@ -2894,7 +2897,10 @@ fn drop_shadow_pixmap(
 
   let mut shadow = tinted.clone();
   if stddev.0 != 0.0 || stddev.1 != 0.0 {
-    let use_linear = matches!(color_interpolation_filters, ColorInterpolationFilters::LinearRGB);
+    let use_linear = matches!(
+      color_interpolation_filters,
+      ColorInterpolationFilters::LinearRGB
+    );
     if use_linear {
       reencode_pixmap_to_linear_rgb(&mut shadow);
     }

@@ -86,6 +86,10 @@ path = "tools/bench_compare.rs"
 name = "selector_bloom_bench"
 harness = false
 
+[[bench]]
+name = "layout_parallel"
+harness = false
+
 [profile.release]
 opt-level = 3
 lto = true

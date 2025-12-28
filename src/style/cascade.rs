@@ -1830,15 +1830,15 @@ pub fn apply_styles_with_media_target_and_imports_cached_with_deadline(
       .iter()
       .enumerate()
       .map(|(idx, rule)| CascadeRule {
-      origin: StyleOrigin::Author,
-      order: document_order_base + idx,
-      rule: rule.rule,
-      layer_order: layer_order_with_tree_scope(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
-      container_conditions: rule.container_conditions.clone(),
-      scopes: rule.scopes.clone(),
-      scope: RuleScope::Document,
-    })
-    .collect(),
+        origin: StyleOrigin::Author,
+        order: document_order_base + idx,
+        rule: rule.rule,
+        layer_order: layer_order_with_tree_scope(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+        scope: RuleScope::Document,
+      })
+      .collect(),
   );
 
   let mut shadow_indices: HashMap<usize, RuleIndex<'_>> = HashMap::new();
@@ -2230,15 +2230,15 @@ pub fn apply_style_set_with_media_target_and_imports_cached_with_deadline(
       .iter()
       .enumerate()
       .map(|(idx, rule)| CascadeRule {
-      origin: StyleOrigin::Author,
-      order: document_order_base + idx,
-      rule: rule.rule,
-      layer_order: layer_order_with_tree_scope(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
-      container_conditions: rule.container_conditions.clone(),
-      scopes: rule.scopes.clone(),
-      scope: RuleScope::Document,
-    })
-    .collect(),
+        origin: StyleOrigin::Author,
+        order: document_order_base + idx,
+        rule: rule.rule,
+        layer_order: layer_order_with_tree_scope(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+        scope: RuleScope::Document,
+      })
+      .collect(),
   );
 
   let mut shadow_indices: HashMap<usize, RuleIndex<'_>> = HashMap::new();
@@ -2865,8 +2865,7 @@ fn match_part_rules<'a>(
     };
 
     let scope_host = containing_scope_host_id(dom_maps, host);
-    if let Some((rules, allow_shadow_host)) =
-      scope_rule_index_with_shadow_host(scopes, scope_host)
+    if let Some((rules, allow_shadow_host)) = scope_rule_index_with_shadow_host(scopes, scope_host)
     {
       if rules.part_pseudos.is_empty() {
         names = mapped_names;

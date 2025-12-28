@@ -37,6 +37,7 @@ use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::contexts::inline::InlineFormattingContext;
 use crate::layout::contexts::positioned::ContainingBlock;
 use crate::layout::contexts::positioned::PositionedLayout;
+use crate::layout::engine::LayoutParallelism;
 use crate::layout::float_context::FloatContext;
 use crate::layout::float_context::FloatSide;
 use crate::layout::formatting_context::count_block_intrinsic_call;
@@ -64,6 +65,7 @@ use crate::style::block_axis_is_horizontal;
 use crate::style::block_axis_positive;
 use crate::style::display::Display;
 use crate::style::display::FormattingContextType;
+use crate::style::float::Clear;
 use crate::style::float::Float;
 use crate::style::inline_axis_is_horizontal;
 use crate::style::inline_axis_positive;
@@ -88,6 +90,7 @@ use crate::tree::fragment_tree::FragmentationInfo;
 use margin_collapse::should_collapse_with_first_child;
 use margin_collapse::should_collapse_with_last_child;
 use margin_collapse::MarginCollapseContext;
+use rayon::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -176,6 +179,7 @@ pub struct BlockFormattingContext {
   /// equation). This is only meant for the flex-item root; descendants revert to normal block
   /// behavior.
   flex_item_mode: bool,
+  parallelism: LayoutParallelism,
 }
 
 impl BlockFormattingContext {
@@ -218,6 +222,7 @@ impl BlockFormattingContext {
       viewport_size,
       nearest_positioned_cb,
       flex_item_mode: false,
+      parallelism: LayoutParallelism::default(),
     }
   }
 
@@ -234,7 +239,13 @@ impl BlockFormattingContext {
       viewport_size,
       nearest_positioned_cb,
       flex_item_mode: true,
+      parallelism: LayoutParallelism::default(),
     }
+  }
+
+  pub fn with_parallelism(mut self, parallelism: LayoutParallelism) -> Self {
+    self.parallelism = parallelism;
+    self
   }
 
   /// Lays out a single block-level child and returns its fragment
@@ -881,6 +892,146 @@ impl BlockFormattingContext {
     Ok((fragment, next_y))
   }
 
+  fn can_parallelize_block_children(parent: &BoxNode) -> bool {
+    !parent.children.is_empty()
+      && parent.children.iter().all(|child| {
+        child.is_block_level()
+          && child.style.float == Float::None
+          && child.style.clear == Clear::None
+          && child.style.running_position.is_none()
+          && matches!(child.style.position, Position::Static | Position::Relative)
+      })
+  }
+
+  fn translate_fragment_tree(fragment: &mut FragmentNode, delta_y: f32) {
+    if delta_y == 0.0 {
+      return;
+    }
+    fragment.bounds = Rect::new(
+      Point::new(fragment.bounds.x(), fragment.bounds.y() + delta_y),
+      fragment.bounds.size,
+    );
+    if let Some(logical) = fragment.logical_override {
+      fragment.logical_override = Some(Rect::new(
+        Point::new(logical.x(), logical.y() + delta_y),
+        logical.size,
+      ));
+    }
+    fragment.scroll_overflow = Rect::new(
+      Point::new(
+        fragment.scroll_overflow.x(),
+        fragment.scroll_overflow.y() + delta_y,
+      ),
+      fragment.scroll_overflow.size,
+    );
+    for child in &mut fragment.children {
+      Self::translate_fragment_tree(child, delta_y);
+    }
+  }
+
+  #[allow(clippy::too_many_arguments)]
+  fn try_parallel_block_children(
+    &self,
+    parent: &BoxNode,
+    constraints: &LayoutConstraints,
+    nearest_positioned_cb: &ContainingBlock,
+    margin_ctx: MarginCollapseContext,
+    relative_cb: &ContainingBlock,
+    containing_width: f32,
+    float_ctx_empty: bool,
+  ) -> Option<Result<(Vec<FragmentNode>, f32, Vec<PositionedCandidate>), LayoutError>> {
+    if !self.parallelism.should_parallelize(parent.children.len())
+      || !float_ctx_empty
+      || !Self::can_parallelize_block_children(parent)
+      || Self::is_multicol_container(&parent.style)
+    {
+      return None;
+    }
+
+    let parallel_results = parent
+      .children
+      .par_iter()
+      .enumerate()
+      .map(|(idx, child)| {
+        let mut margin_ctx = MarginCollapseContext::new();
+        let (fragment, _) = self.layout_block_child(
+          parent,
+          child,
+          containing_width,
+          constraints,
+          &mut margin_ctx,
+          0.0,
+          nearest_positioned_cb,
+        )?;
+        let meta = fragment.block_metadata.clone().ok_or_else(|| {
+          LayoutError::MissingContext("Block fragment missing metadata for parallel layout".into())
+        })?;
+        Ok((idx, fragment, meta))
+      })
+      .collect::<Result<Vec<_>, LayoutError>>();
+
+    let mut parallel_results = match parallel_results {
+      Ok(results) => results,
+      Err(err) => return Some(Err(err)),
+    };
+    parallel_results.sort_by_key(|(idx, _, _)| *idx);
+
+    let mut fragments = Vec::with_capacity(parallel_results.len());
+    let mut content_height: f32 = 0.0;
+    let mut current_y = 0.0;
+    let mut margin_ctx = margin_ctx;
+
+    for (idx, mut fragment, meta) in parallel_results {
+      margin_ctx.push_margin(meta.margin_top);
+      let box_y = current_y + margin_ctx.resolve();
+      let delta = box_y - fragment.bounds.y();
+      Self::translate_fragment_tree(&mut fragment, delta);
+      content_height = content_height.max(fragment.bounds.max_y());
+      current_y = box_y + fragment.bounds.height();
+      margin_ctx.push_margin(meta.margin_bottom);
+
+      if matches!(parent.children[idx].style.position, Position::Relative) {
+        let positioned_style = crate::layout::absolute_positioning::resolve_positioned_style(
+          &parent.children[idx].style,
+          relative_cb,
+          self.viewport_size,
+          &self.font_context,
+        );
+        fragment = match PositionedLayout::with_font_context(self.font_context.clone())
+          .apply_relative_positioning(&fragment, &positioned_style, relative_cb)
+        {
+          Ok(f) => f,
+          Err(err) => return Some(Err(err)),
+        };
+      }
+
+      fragments.push(fragment);
+    }
+
+    let trailing_margin = margin_ctx.pending_margin();
+    let allow_collapse_last = should_collapse_with_last_child(&parent.style);
+    let parent_has_bottom_separation = resolve_length_for_width(
+      parent.style.border_bottom_width,
+      containing_width,
+      &parent.style,
+      &self.font_context,
+      self.viewport_size,
+    ) > 0.0
+      || resolve_length_for_width(
+        parent.style.padding_bottom,
+        containing_width,
+        &parent.style,
+        &self.font_context,
+        self.viewport_size,
+      ) > 0.0;
+
+    if !allow_collapse_last || parent_has_bottom_separation {
+      content_height += trailing_margin.max(0.0);
+    }
+
+    Some(Ok((fragments, content_height, Vec::new())))
+  }
+
   fn layout_replaced_child(
     &self,
     child: &BoxNode,
@@ -1325,7 +1476,8 @@ impl BlockFormattingContext {
         self.font_context.clone(),
         self.viewport_size,
         *nearest_positioned_cb,
-      );
+      )
+      .with_parallelism(self.parallelism);
       let inline_constraints =
         LayoutConstraints::new(AvailableSpace::Definite(containing_width), available_height);
       let mut inline_fragment = inline_fc.layout_with_floats(
@@ -1351,6 +1503,17 @@ impl BlockFormattingContext {
 
     let trace_positioned = trace_positioned_ids();
     let trace_block_text = trace_block_text_ids();
+    if let Some(result) = self.try_parallel_block_children(
+      parent,
+      constraints,
+      nearest_positioned_cb,
+      margin_ctx.clone(),
+      &relative_cb,
+      containing_width,
+      float_ctx.is_empty(),
+    ) {
+      return result;
+    }
     for (child_idx, child) in parent.children.iter().enumerate() {
       if progress_ms > 0 {
         if let Some(cap) = total_cap {

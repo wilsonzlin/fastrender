@@ -30,7 +30,10 @@ fn parses_font_palette_values_rules() {
   };
 
   assert_eq!(rule.name, "--emoji");
-  assert_eq!(rule.font_families, vec!["Foo".to_string(), "Bar".to_string()]);
+  assert_eq!(
+    rule.font_families,
+    vec!["Foo".to_string(), "Bar".to_string()]
+  );
   assert_eq!(rule.base_palette, FontPaletteBase::Dark);
   assert_eq!(
     rule.overrides,
@@ -69,7 +72,10 @@ fn font_palette_property_accepts_named_identifiers() {
     DEFAULT_VIEWPORT,
   );
 
-  assert_eq!(styles.font_palette, FontPalette::Named("--custom-palette".into()));
+  assert_eq!(
+    styles.font_palette,
+    FontPalette::Named("--custom-palette".into())
+  );
 }
 
 fn load_test_font() -> (FontContext, String) {

@@ -25,6 +25,7 @@ use crate::layout::contexts::flex::FlexFormattingContext;
 use crate::layout::contexts::grid::GridFormattingContext;
 use crate::layout::contexts::inline::InlineFormattingContext;
 use crate::layout::contexts::positioned::ContainingBlock;
+use crate::layout::engine::LayoutParallelism;
 use crate::layout::formatting_context::FormattingContext;
 use crate::layout::formatting_context::LayoutError;
 use crate::layout::table::TableFormattingContext;
@@ -86,6 +87,7 @@ pub struct FormattingContextFactory {
     >,
   >,
   shaping_pipeline: crate::text::pipeline::ShapingPipeline,
+  parallelism: LayoutParallelism,
 }
 
 impl std::fmt::Debug for FormattingContextFactory {
@@ -173,6 +175,7 @@ impl FormattingContextFactory {
       flex_measure_cache,
       flex_layout_cache,
       shaping_pipeline: ShapingPipeline::new(),
+      parallelism: LayoutParallelism::default(),
     }
   }
 
@@ -181,6 +184,17 @@ impl FormattingContextFactory {
     let mut clone = self.clone();
     clone.nearest_positioned_cb = cb;
     clone
+  }
+
+  /// Returns a copy of this factory configured with the given parallelism settings.
+  pub fn with_parallelism(mut self, parallelism: LayoutParallelism) -> Self {
+    self.parallelism = parallelism;
+    self
+  }
+
+  /// Returns the active layout parallelism configuration.
+  pub fn parallelism(&self) -> LayoutParallelism {
+    self.parallelism
   }
 
   /// Clears any shared caches held by formatting contexts.
@@ -259,33 +273,41 @@ impl FormattingContextFactory {
   /// - Reusable (can be used for multiple layouts)
   pub fn create(&self, fc_type: FormattingContextType) -> Box<dyn FormattingContext> {
     match fc_type {
-      FormattingContextType::Block => {
-        Box::new(BlockFormattingContext::with_font_context_viewport_and_cb(
+      FormattingContextType::Block => Box::new(
+        BlockFormattingContext::with_font_context_viewport_and_cb(
           self.font_context.clone(),
           self.viewport_size,
           self.nearest_positioned_cb,
-        ))
-      }
+        )
+        .with_parallelism(self.parallelism),
+      ),
       FormattingContextType::Inline => Box::new(
         InlineFormattingContext::with_font_context_viewport_cb_and_pipeline(
           self.font_context.clone(),
           self.viewport_size,
           self.nearest_positioned_cb,
           self.shaping_pipeline.clone(),
-        ),
+        )
+        .with_parallelism(self.parallelism),
       ),
-      FormattingContextType::Flex => Box::new(FlexFormattingContext::with_viewport_and_cb(
-        self.viewport_size,
-        self.nearest_positioned_cb,
-        self.font_context.clone(),
-        self.flex_measure_cache.clone(),
-        self.flex_layout_cache.clone(),
-      )),
-      FormattingContextType::Grid => Box::new(GridFormattingContext::with_viewport_and_cb(
-        self.viewport_size,
-        self.nearest_positioned_cb,
-        self.font_context.clone(),
-      )),
+      FormattingContextType::Flex => Box::new(
+        FlexFormattingContext::with_viewport_and_cb(
+          self.viewport_size,
+          self.nearest_positioned_cb,
+          self.font_context.clone(),
+          self.flex_measure_cache.clone(),
+          self.flex_layout_cache.clone(),
+        )
+        .with_parallelism(self.parallelism),
+      ),
+      FormattingContextType::Grid => Box::new(
+        GridFormattingContext::with_viewport_and_cb(
+          self.viewport_size,
+          self.nearest_positioned_cb,
+          self.font_context.clone(),
+        )
+        .with_parallelism(self.parallelism),
+      ),
       FormattingContextType::Table => Box::new(TableFormattingContext::with_factory(self.clone())),
     }
   }

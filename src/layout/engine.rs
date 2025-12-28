@@ -36,8 +36,60 @@ use crate::tree::box_tree::BoxNode;
 use crate::tree::box_tree::BoxTree;
 use crate::tree::fragment_tree::FragmentNode;
 use crate::tree::fragment_tree::FragmentTree;
+use rayon::ThreadPool;
+use rayon::ThreadPoolBuilder;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
+
+/// Parallel layout configuration
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LayoutParallelism {
+  /// Whether layout fan-out is enabled for independent subtrees.
+  pub enabled: bool,
+  /// Optional ceiling on rayon worker count when fan-out is enabled.
+  pub max_threads: Option<usize>,
+  /// Minimum number of independent work items before spawning.
+  pub min_fanout: usize,
+}
+
+impl LayoutParallelism {
+  pub fn disabled() -> Self {
+    Self {
+      enabled: false,
+      max_threads: None,
+      min_fanout: usize::MAX,
+    }
+  }
+
+  pub fn enabled(min_fanout: usize) -> Self {
+    Self {
+      enabled: true,
+      max_threads: None,
+      min_fanout: min_fanout.max(1),
+    }
+  }
+
+  pub fn with_max_threads(mut self, threads: Option<usize>) -> Self {
+    self.max_threads = threads.map(|threads| threads.max(1));
+    self
+  }
+
+  pub fn with_min_fanout(mut self, min_fanout: usize) -> Self {
+    self.min_fanout = min_fanout.max(1);
+    self
+  }
+
+  pub fn should_parallelize(&self, work_items: usize) -> bool {
+    self.enabled && work_items >= self.min_fanout && rayon::current_num_threads() > 1
+  }
+}
+
+impl Default for LayoutParallelism {
+  fn default() -> Self {
+    LayoutParallelism::disabled()
+  }
+}
 
 /// Configuration for layout engine
 ///
@@ -83,6 +135,9 @@ pub struct LayoutConfig {
 
   /// Optional identifier for profiling/logging (e.g., page name)
   pub name: Option<String>,
+
+  /// Parallel layout configuration (off by default).
+  pub parallelism: LayoutParallelism,
 }
 
 impl LayoutConfig {
@@ -104,6 +159,7 @@ impl LayoutConfig {
       enable_incremental: false,
       fragmentation: None,
       name: None,
+      parallelism: LayoutParallelism::default(),
     }
   }
 
@@ -147,6 +203,12 @@ impl LayoutConfig {
   /// Sets an optional identifier (e.g., page name) for logging/profiling.
   pub fn with_identifier(mut self, name: impl Into<String>) -> Self {
     self.name = Some(name.into());
+    self
+  }
+
+  /// Enables layout fan-out with the provided parallelism configuration.
+  pub fn with_parallelism(mut self, parallelism: LayoutParallelism) -> Self {
+    self.parallelism = parallelism;
     self
   }
 }
@@ -276,6 +338,9 @@ pub struct LayoutEngine {
 
   /// Layout cache (placeholder for future optimization)
   cache: LayoutCache,
+
+  /// Optional rayon pool honoring the configured thread cap.
+  parallel_pool: Option<Arc<ThreadPool>>,
 }
 
 impl LayoutEngine {
@@ -302,12 +367,24 @@ impl LayoutEngine {
     let factory = FormattingContextFactory::with_font_context_and_viewport(
       font_context.clone(),
       config.initial_containing_block,
-    );
+    )
+    .with_parallelism(config.parallelism);
+    let parallel_pool = if config.parallelism.enabled {
+      config
+        .parallelism
+        .max_threads
+        .filter(|threads| *threads > 1)
+        .and_then(|threads| ThreadPoolBuilder::new().num_threads(threads).build().ok())
+        .map(Arc::new)
+    } else {
+      None
+    };
     Self {
       config,
       factory,
       font_context,
       cache: LayoutCache::new(),
+      parallel_pool,
     }
   }
 
@@ -417,6 +494,15 @@ impl LayoutEngine {
     reset_caches: bool,
     trace: Option<&TraceHandle>,
   ) -> Result<FragmentTree, LayoutError> {
+    self.run_in_pool(|| self.layout_tree_inner(box_tree, reset_caches, trace))
+  }
+
+  fn layout_tree_inner(
+    &self,
+    box_tree: &BoxTree,
+    reset_caches: bool,
+    trace: Option<&TraceHandle>,
+  ) -> Result<FragmentTree, LayoutError> {
     if let Err(RenderError::Timeout { elapsed, .. }) = check_active(RenderStage::Layout) {
       return Err(LayoutError::Timeout { elapsed });
     }
@@ -499,6 +585,14 @@ impl LayoutEngine {
       let mut tree = FragmentTree::with_viewport(root_fragment, *icb);
       tree.ensure_scroll_metadata();
       Ok(tree)
+    }
+  }
+
+  fn run_in_pool<T: Send>(&self, f: impl FnOnce() -> T + Send) -> T {
+    if let Some(pool) = &self.parallel_pool {
+      pool.install(f)
+    } else {
+      f()
     }
   }
 

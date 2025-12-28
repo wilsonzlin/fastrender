@@ -12,7 +12,11 @@ fn style_with_display(display: Display) -> Arc<ComputedStyle> {
 }
 
 fn table_box(children: Vec<BoxNode>) -> BoxNode {
-  BoxNode::new_block(style_with_display(Display::Table), FormattingContextType::Table, children)
+  BoxNode::new_block(
+    style_with_display(Display::Table),
+    FormattingContextType::Table,
+    children,
+  )
 }
 
 fn caption_box(caption_side: CaptionSide) -> BoxNode {

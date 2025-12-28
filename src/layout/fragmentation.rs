@@ -14,11 +14,7 @@ use crate::layout::axis::{FragmentAxes, PhysicalAxis};
 use crate::style::display::Display;
 use crate::style::page::PageSide;
 use crate::style::types::{BreakBetween, BreakInside, Direction, WritingMode};
-<<<<<<< HEAD
 use crate::style::{block_axis_is_horizontal, block_axis_positive, ComputedStyle};
-=======
-use crate::style::ComputedStyle;
->>>>>>> 3bddf60 (fix: carry font metadata through painting and stabilize grid layout)
 use crate::tree::fragment_tree::{
   FragmentContent, FragmentNode, FragmentSliceInfo, FragmentainerPath,
 };

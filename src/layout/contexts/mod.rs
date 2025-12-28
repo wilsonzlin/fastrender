@@ -14,5 +14,6 @@ pub mod factory;
 pub mod flex;
 pub mod grid;
 pub mod inline;
+pub mod node_ref;
 pub mod positioned;
 pub mod table;
