@@ -913,10 +913,33 @@ fn slotted_selector_keys(pe: &PseudoElement) -> Vec<SelectorKey> {
 fn parse_slotted_prelude(
   selector: &Selector<crate::css::selectors::FastRenderSelectorImpl>,
 ) -> Option<Selector<crate::css::selectors::FastRenderSelectorImpl>> {
+  use selectors::parser::Combinator;
+
+  // Walk sequences right-to-left to see if the compound immediately preceding
+  // ::slotted() is empty (implicit universal) and whether there is any prelude
+  // at all to match against the assigned slot.
+  let mut iter = selector.iter();
+  while iter.next().is_some() {}
+  let Some(Combinator::PseudoElement) = iter.next_sequence() else {
+    return None;
+  };
+  let mut empty_slot_sequence = true;
+  while iter.next().is_some() {
+    empty_slot_sequence = false;
+  }
+  let has_more_to_left = iter.next_sequence().is_some();
+  if empty_slot_sequence && !has_more_to_left {
+    return None;
+  }
+
   let css = selector.to_css_string();
   let lower = css.to_ascii_lowercase();
   let idx = lower.find("::slotted(")?;
-  let prelude = css[..idx].trim();
+  let mut prelude = css[..idx].to_string();
+  if empty_slot_sequence {
+    prelude.push('*');
+  }
+  let prelude = prelude.trim();
   if prelude.is_empty() {
     return None;
   }
@@ -8449,25 +8472,46 @@ fn find_matching_rules<'a>(
       _ => continue,
     };
 
+    let slot_shadow_host = assigned_slot.and_then(|slot| {
+      dom_maps
+        .shadow_hosts
+        .get(&slot.shadow_root_id)
+        .and_then(|host_id| {
+          dom_maps.id_to_node.get(host_id).map(|ptr| {
+            let host_node = unsafe { &**ptr };
+            let host_ancestors = dom_maps.ancestors_for(*host_id);
+            (host_node, host_ancestors)
+          })
+        })
+    });
+    let shadow_host_for_slotted = slot_shadow_host
+      .as_ref()
+      .map(|(host_node, ancestors)| ElementRef::with_ancestors(*host_node, ancestors.as_slice()))
+      .or(shadow_host);
+
     let mut best_arg_specificity: Option<u32> = None;
     if let Some(scope_root) = &scope_for_rule {
       let scope_ref = ElementRef::with_ancestors(scope_root.root, &scope_root.ancestors);
-      context.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
+      with_shadow_host(&mut context, shadow_host_for_slotted, |ctx| {
+        ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
+          for sel in args.iter() {
+            if matches_selector(sel, 0, None, &element_ref, ctx) {
+              let spec = sel.specificity();
+              best_arg_specificity = Some(best_arg_specificity.map_or(spec, |best| best.max(spec)));
+            }
+          }
+          best_arg_specificity.is_some()
+        })
+      });
+    } else {
+      with_shadow_host(&mut context, shadow_host_for_slotted, |ctx| {
         for sel in args.iter() {
           if matches_selector(sel, 0, None, &element_ref, ctx) {
             let spec = sel.specificity();
             best_arg_specificity = Some(best_arg_specificity.map_or(spec, |best| best.max(spec)));
           }
         }
-        best_arg_specificity.is_some()
       });
-    } else {
-      for sel in args.iter() {
-        if matches_selector(sel, 0, None, &element_ref, &mut context) {
-          let spec = sel.specificity();
-          best_arg_specificity = Some(best_arg_specificity.map_or(spec, |best| best.max(spec)));
-        }
-      }
     }
 
     let Some(best_arg_specificity) = best_arg_specificity else {
@@ -8487,11 +8531,15 @@ fn find_matching_rules<'a>(
       let slot_ref = ElementRef::with_ancestors(slot_node, &slot_ancestors);
       let slot_matches = if let Some(scope_root) = &scope_for_rule {
         let scope_ref = ElementRef::with_ancestors(scope_root.root, &scope_root.ancestors);
-        context.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
-          matches_selector(prelude, 0, None, &slot_ref, ctx)
+        with_shadow_host(&mut context, shadow_host_for_slotted, |ctx| {
+          ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
+            matches_selector(prelude, 0, None, &slot_ref, ctx)
+          })
         })
       } else {
-        matches_selector(prelude, 0, None, &slot_ref, &mut context)
+        with_shadow_host(&mut context, shadow_host_for_slotted, |ctx| {
+          matches_selector(prelude, 0, None, &slot_ref, ctx)
+        })
       };
       if !slot_matches {
         continue;
