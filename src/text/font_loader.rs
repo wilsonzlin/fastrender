@@ -47,7 +47,7 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use fontdb::Database as FontDbDatabase;
 use percent_encoding::percent_decode_str;
-use rustybuzz::ttf_parser::Tag;
+use rustybuzz::ttf_parser::{self, GlyphId, Tag};
 use rustybuzz::Direction;
 use rustybuzz::Face;
 use rustybuzz::Feature;
@@ -191,8 +191,68 @@ pub struct FontContext {
   fetcher: Arc<dyn FontFetcher>,
   pending_async: Arc<(Mutex<usize>, Condvar)>,
   web_used_codepoints: Arc<RwLock<Vec<u32>>>,
+  math_tables:
+    Arc<RwLock<std::collections::HashMap<(usize, u32), Option<Arc<MathTableCacheEntry>>>>>,
   generation: Arc<AtomicU64>,
   resource_context: Option<ResourceContext>,
+}
+
+#[derive(Clone)]
+struct MathTableCacheEntry {
+  table: ttf_parser::math::Table<'static>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct MathConstants {
+  pub script_percent_scale_down: Option<f32>,
+  pub script_script_percent_scale_down: Option<f32>,
+  pub delimited_sub_formula_min_height: Option<f32>,
+  pub display_operator_min_height: Option<f32>,
+  pub math_leading: Option<f32>,
+  pub axis_height: Option<f32>,
+  pub accent_base_height: Option<f32>,
+  pub flattened_accent_base_height: Option<f32>,
+  pub subscript_shift_down: Option<f32>,
+  pub subscript_top_max: Option<f32>,
+  pub subscript_baseline_drop_min: Option<f32>,
+  pub superscript_shift_up: Option<f32>,
+  pub superscript_shift_up_cramped: Option<f32>,
+  pub superscript_bottom_min: Option<f32>,
+  pub superscript_baseline_drop_max: Option<f32>,
+  pub sub_superscript_gap_min: Option<f32>,
+  pub superscript_bottom_max_with_subscript: Option<f32>,
+  pub space_after_script: Option<f32>,
+  pub stretch_stack_gap_above_min: Option<f32>,
+  pub stretch_stack_gap_below_min: Option<f32>,
+  pub fraction_numerator_shift_up: Option<f32>,
+  pub fraction_numerator_display_style_shift_up: Option<f32>,
+  pub fraction_denominator_shift_down: Option<f32>,
+  pub fraction_denominator_display_style_shift_down: Option<f32>,
+  pub fraction_numerator_gap_min: Option<f32>,
+  pub fraction_num_display_style_gap_min: Option<f32>,
+  pub fraction_rule_thickness: Option<f32>,
+  pub fraction_denominator_gap_min: Option<f32>,
+  pub fraction_denom_display_style_gap_min: Option<f32>,
+  pub overbar_vertical_gap: Option<f32>,
+  pub overbar_rule_thickness: Option<f32>,
+  pub overbar_extra_ascender: Option<f32>,
+  pub underbar_vertical_gap: Option<f32>,
+  pub underbar_rule_thickness: Option<f32>,
+  pub underbar_extra_descender: Option<f32>,
+  pub radical_vertical_gap: Option<f32>,
+  pub radical_display_style_vertical_gap: Option<f32>,
+  pub radical_rule_thickness: Option<f32>,
+  pub radical_extra_ascender: Option<f32>,
+  pub radical_kern_before_degree: Option<f32>,
+  pub radical_kern_after_degree: Option<f32>,
+  pub radical_degree_bottom_raise_percent: Option<f32>,
+  pub min_connector_overlap: Option<f32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MathKernSide {
+  Left,
+  Right,
 }
 
 impl FontContext {
@@ -329,6 +389,7 @@ impl FontContext {
       fetcher,
       pending_async: Arc::new((Mutex::new(0), Condvar::new())),
       web_used_codepoints: Arc::new(RwLock::new(Vec::new())),
+      math_tables: Arc::new(RwLock::new(std::collections::HashMap::new())),
       generation: Arc::new(AtomicU64::new(0)),
       resource_context: None,
     }
@@ -1235,6 +1296,222 @@ impl FontContext {
   pub fn get_scaled_metrics(&self, font: &LoadedFont, font_size: f32) -> Option<ScaledMetrics> {
     font.metrics().ok().map(|m| m.scale(font_size))
   }
+
+  /// Returns the parsed MATH table for the given font if present.
+  pub fn math_table(&self, font: &LoadedFont) -> Option<Arc<MathTableCacheEntry>> {
+    let key = (Arc::as_ptr(&font.data) as usize, font.index);
+    if let Ok(cache) = self.math_tables.read() {
+      if let Some(entry) = cache.get(&key) {
+        return entry.clone();
+      }
+    }
+
+    let table = {
+      // SAFETY: the Arc on LoadedFont holds the data for the life of the FontContext, so
+      // extending the lifetime to 'static for caching is sound.
+      let static_data: &'static [u8] =
+        unsafe { std::mem::transmute::<&[u8], &'static [u8]>(&*font.data) };
+      let face = ttf_parser::Face::parse(static_data, font.index).ok()?;
+      face.tables().math
+    };
+
+    let entry = table.map(|table| Arc::new(MathTableCacheEntry { table }));
+    if let Ok(mut cache) = self.math_tables.write() {
+      cache.insert(key, entry.clone());
+    }
+    entry
+  }
+
+  /// Returns math constants scaled to the given font size.
+  pub fn math_constants(&self, font: &LoadedFont, font_size: f32) -> Option<MathConstants> {
+    let scale = font.metrics().ok()?.scale(font_size).scale;
+    let table = self.math_table(font)?;
+    let constants = table.table.constants?;
+    let mut out = MathConstants::default();
+    out.script_percent_scale_down = Some(constants.script_percent_scale_down() as f32 / 100.0);
+    out.script_script_percent_scale_down =
+      Some(constants.script_script_percent_scale_down() as f32 / 100.0);
+    out.delimited_sub_formula_min_height =
+      Some(constants.delimited_sub_formula_min_height() as f32 * scale);
+    out.display_operator_min_height = Some(constants.display_operator_min_height() as f32 * scale);
+    out.math_leading = Some(scale_math_value(constants.math_leading(), scale));
+    out.axis_height = Some(scale_math_value(constants.axis_height(), scale));
+    out.accent_base_height = Some(scale_math_value(constants.accent_base_height(), scale));
+    out.flattened_accent_base_height = Some(scale_math_value(
+      constants.flattened_accent_base_height(),
+      scale,
+    ));
+    out.subscript_shift_down = Some(scale_math_value(constants.subscript_shift_down(), scale));
+    out.subscript_top_max = Some(scale_math_value(constants.subscript_top_max(), scale));
+    out.subscript_baseline_drop_min = Some(scale_math_value(
+      constants.subscript_baseline_drop_min(),
+      scale,
+    ));
+    out.superscript_shift_up = Some(scale_math_value(constants.superscript_shift_up(), scale));
+    out.superscript_shift_up_cramped = Some(scale_math_value(
+      constants.superscript_shift_up_cramped(),
+      scale,
+    ));
+    out.superscript_bottom_min = Some(scale_math_value(constants.superscript_bottom_min(), scale));
+    out.superscript_baseline_drop_max = Some(scale_math_value(
+      constants.superscript_baseline_drop_max(),
+      scale,
+    ));
+    out.sub_superscript_gap_min =
+      Some(scale_math_value(constants.sub_superscript_gap_min(), scale));
+    out.superscript_bottom_max_with_subscript = Some(scale_math_value(
+      constants.superscript_bottom_max_with_subscript(),
+      scale,
+    ));
+    out.space_after_script = Some(scale_math_value(constants.space_after_script(), scale));
+    out.stretch_stack_gap_above_min = Some(scale_math_value(
+      constants.stretch_stack_gap_above_min(),
+      scale,
+    ));
+    out.stretch_stack_gap_below_min = Some(scale_math_value(
+      constants.stretch_stack_gap_below_min(),
+      scale,
+    ));
+    out.fraction_numerator_shift_up = Some(scale_math_value(
+      constants.fraction_numerator_shift_up(),
+      scale,
+    ));
+    out.fraction_numerator_display_style_shift_up = Some(scale_math_value(
+      constants.fraction_numerator_display_style_shift_up(),
+      scale,
+    ));
+    out.fraction_denominator_shift_down = Some(scale_math_value(
+      constants.fraction_denominator_shift_down(),
+      scale,
+    ));
+    out.fraction_denominator_display_style_shift_down = Some(scale_math_value(
+      constants.fraction_denominator_display_style_shift_down(),
+      scale,
+    ));
+    out.fraction_numerator_gap_min = Some(scale_math_value(
+      constants.fraction_numerator_gap_min(),
+      scale,
+    ));
+    out.fraction_num_display_style_gap_min = Some(scale_math_value(
+      constants.fraction_num_display_style_gap_min(),
+      scale,
+    ));
+    out.fraction_rule_thickness =
+      Some(scale_math_value(constants.fraction_rule_thickness(), scale));
+    out.fraction_denominator_gap_min = Some(scale_math_value(
+      constants.fraction_denominator_gap_min(),
+      scale,
+    ));
+    out.fraction_denom_display_style_gap_min = Some(scale_math_value(
+      constants.fraction_denom_display_style_gap_min(),
+      scale,
+    ));
+    out.overbar_vertical_gap = Some(scale_math_value(constants.overbar_vertical_gap(), scale));
+    out.overbar_rule_thickness = Some(scale_math_value(constants.overbar_rule_thickness(), scale));
+    out.overbar_extra_ascender = Some(scale_math_value(constants.overbar_extra_ascender(), scale));
+    out.underbar_vertical_gap = Some(scale_math_value(constants.underbar_vertical_gap(), scale));
+    out.underbar_rule_thickness =
+      Some(scale_math_value(constants.underbar_rule_thickness(), scale));
+    out.underbar_extra_descender = Some(scale_math_value(
+      constants.underbar_extra_descender(),
+      scale,
+    ));
+    out.radical_vertical_gap = Some(scale_math_value(constants.radical_vertical_gap(), scale));
+    out.radical_display_style_vertical_gap = Some(scale_math_value(
+      constants.radical_display_style_vertical_gap(),
+      scale,
+    ));
+    out.radical_rule_thickness = Some(scale_math_value(constants.radical_rule_thickness(), scale));
+    out.radical_extra_ascender = Some(scale_math_value(constants.radical_extra_ascender(), scale));
+    out.radical_kern_before_degree = Some(scale_math_value(
+      constants.radical_kern_before_degree(),
+      scale,
+    ));
+    out.radical_kern_after_degree = Some(scale_math_value(
+      constants.radical_kern_after_degree(),
+      scale,
+    ));
+    out.radical_degree_bottom_raise_percent =
+      Some(constants.radical_degree_bottom_raise_percent() as f32);
+    if let Some(variants) = table.table.variants {
+      out.min_connector_overlap = Some(variants.min_connector_overlap as f32 * scale);
+    }
+    Some(out)
+  }
+
+  /// Math italic correction for a glyph, in pixels.
+  pub fn math_italic_correction(
+    &self,
+    font: &LoadedFont,
+    glyph_id: u16,
+    font_size: f32,
+  ) -> Option<f32> {
+    let scale = font.metrics().ok()?.scale(font_size).scale;
+    let table = self.math_table(font)?;
+    let glyph_info = table.table.glyph_info.as_ref()?;
+    let corrections = glyph_info.italic_corrections.as_ref()?;
+    Some(scale_math_value(corrections.get(GlyphId(glyph_id))?, scale))
+  }
+
+  /// Math kerning for scripts relative to a glyph.
+  pub fn math_kern(
+    &self,
+    font: &LoadedFont,
+    glyph_id: u16,
+    height: f32,
+    font_size: f32,
+    superscript: bool,
+    side: MathKernSide,
+  ) -> f32 {
+    let Some(scale) = font.metrics().ok().map(|m| m.scale(font_size).scale) else {
+      return 0.0;
+    };
+    let Some(table) = self.math_table(font) else {
+      return 0.0;
+    };
+    let Some(glyph_info) = table.table.glyph_info.as_ref() else {
+      return 0.0;
+    };
+    let Some(kerns) = glyph_info.kern_infos.as_ref() else {
+      return 0.0;
+    };
+    let Some(info) = kerns.get(GlyphId(glyph_id)) else {
+      return 0.0;
+    };
+    let kern_table = match (side, superscript) {
+      (MathKernSide::Right, true) => info.top_right.as_ref(),
+      (MathKernSide::Right, false) => info.bottom_right.as_ref(),
+      (MathKernSide::Left, true) => info.top_left.as_ref(),
+      (MathKernSide::Left, false) => info.bottom_left.as_ref(),
+    };
+    let Some(kern_table) = kern_table else {
+      return 0.0;
+    };
+    let height_design_units = if scale > 0.0 { height / scale } else { height };
+    select_math_kern(kern_table, height_design_units)
+      .map(|v| v as f32 * scale)
+      .unwrap_or(0.0)
+  }
+
+  /// Returns glyph construction data for stretchy operators.
+  pub fn math_glyph_construction(
+    &self,
+    font: &LoadedFont,
+    glyph_id: u16,
+    vertical: bool,
+    font_size: f32,
+  ) -> Option<(ttf_parser::math::GlyphConstruction<'static>, f32)> {
+    let scale = font.metrics().ok()?.scale(font_size).scale;
+    let table = self.math_table(font)?;
+    let variants = table.table.variants?;
+    let constructions = if vertical {
+      &variants.vertical_constructions
+    } else {
+      &variants.horizontal_constructions
+    };
+    let construction = constructions.get(GlyphId(glyph_id))?;
+    Some((construction, variants.min_connector_overlap as f32 * scale))
+  }
 }
 
 impl Default for FontContext {
@@ -1455,6 +1732,24 @@ fn case_fold(name: &str) -> String {
     }
   }
   out
+}
+
+fn scale_math_value(value: ttf_parser::math::MathValue<'_>, scale: f32) -> f32 {
+  value.value as f32 * scale
+}
+
+fn select_math_kern(kern: &ttf_parser::math::Kern<'_>, height_design_units: f32) -> Option<i16> {
+  let count = kern.count();
+  if count == 0 {
+    return kern.kern(0).map(|k| k.value);
+  }
+  for idx in 0..count {
+    let h = kern.height(idx)?;
+    if height_design_units < h.value as f32 {
+      return kern.kern(idx).map(|k| k.value);
+    }
+  }
+  kern.kern(count).map(|k| k.value)
 }
 
 fn font_supports_feature(font: &LoadedFont, tag: [u8; 4]) -> bool {

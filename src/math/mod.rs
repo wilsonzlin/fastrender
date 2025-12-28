@@ -9,9 +9,11 @@ use crate::geometry::{Point, Rect, Size};
 use crate::style::types::FontStyle as CssFontStyle;
 use crate::style::types::FontWeight as CssFontWeight;
 use crate::style::ComputedStyle;
-use crate::text::font_db::{FontStretch, FontStyle, ScaledMetrics};
-use crate::text::font_loader::FontContext;
+use crate::text::font_db::{FontStretch, FontStyle, LoadedFont, ScaledMetrics};
+use crate::text::font_loader::{FontContext, MathConstants, MathKernSide};
 use crate::text::pipeline::{Direction as TextDirection, ShapedRun, ShapingPipeline};
+use rustybuzz::ttf_parser;
+use std::sync::Arc;
 
 const SCRIPT_SCALE: f32 = 0.71;
 
@@ -224,6 +226,30 @@ pub enum MathFragment {
   StrokeRect { rect: Rect, radius: f32, width: f32 },
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct MathLayoutAnnotations {
+  /// Metadata about the trailing glyph in this layout, used for script positioning.
+  pub trailing_glyph: Option<MathGlyph>,
+}
+
+impl MathLayoutAnnotations {
+  fn merge_trailing(&self, other: &MathLayoutAnnotations) -> MathLayoutAnnotations {
+    if other.trailing_glyph.is_some() {
+      other.clone()
+    } else {
+      self.clone()
+    }
+  }
+}
+
+#[derive(Debug, Clone)]
+pub struct MathGlyph {
+  pub font: Arc<LoadedFont>,
+  pub glyph_id: u16,
+  pub font_size: f32,
+  pub italic_correction: f32,
+}
+
 /// Final math layout with positioned fragments.
 #[derive(Debug, Clone)]
 pub struct MathLayout {
@@ -231,6 +257,7 @@ pub struct MathLayout {
   pub height: f32,
   pub baseline: f32,
   pub fragments: Vec<MathFragment>,
+  pub annotations: MathLayoutAnnotations,
 }
 
 impl MathFragment {
@@ -266,6 +293,7 @@ struct MathStyle {
   font_size: f32,
   display_style: bool,
   default_variant: Option<MathVariant>,
+  script_level: u8,
 }
 
 impl MathStyle {
@@ -274,11 +302,21 @@ impl MathStyle {
       font_size: style.font_size,
       display_style: style.display.is_block_level(),
       default_variant: None,
+      script_level: 0,
     }
   }
 
-  fn script(&self) -> Self {
-    let mut size = self.font_size * SCRIPT_SCALE;
+  fn script_with_constants(&self, constants: Option<&MathConstants>) -> Self {
+    let scale = if self.script_level == 0 {
+      constants
+        .and_then(|c| c.script_percent_scale_down)
+        .unwrap_or(SCRIPT_SCALE)
+    } else {
+      constants
+        .and_then(|c| c.script_script_percent_scale_down)
+        .unwrap_or(SCRIPT_SCALE)
+    };
+    let mut size = self.font_size * scale;
     if size < 6.0 {
       size = 6.0;
     }
@@ -286,6 +324,7 @@ impl MathStyle {
       font_size: size,
       display_style: false,
       default_variant: self.default_variant,
+      script_level: self.script_level.saturating_add(1),
     }
   }
 }
@@ -835,6 +874,28 @@ pub struct MathLayoutContext {
   font_ctx: FontContext,
 }
 
+enum StretchOrientation {
+  Vertical { target: f32 },
+  Horizontal { target: f32 },
+}
+
+impl StretchOrientation {
+  fn target(&self) -> f32 {
+    match self {
+      StretchOrientation::Vertical { target } | StretchOrientation::Horizontal { target } => {
+        *target
+      }
+    }
+  }
+
+  fn main_dimension(&self, layout: &MathLayout) -> f32 {
+    match self {
+      StretchOrientation::Vertical { .. } => layout.height,
+      StretchOrientation::Horizontal { .. } => layout.width,
+    }
+  }
+}
+
 impl MathLayoutContext {
   pub fn new(font_ctx: FontContext) -> Self {
     Self {
@@ -852,7 +913,14 @@ impl MathLayoutContext {
     }
   }
 
-  fn axis_height(metrics: &ScaledMetrics, style: &MathStyle) -> f32 {
+  fn axis_height(
+    metrics: &ScaledMetrics,
+    style: &MathStyle,
+    constants: Option<&MathConstants>,
+  ) -> f32 {
+    if let Some(c) = constants.and_then(|c| c.axis_height) {
+      return c;
+    }
     metrics
       .x_height
       .unwrap_or(style.font_size * 0.5)
@@ -874,6 +942,421 @@ impl MathLayoutContext {
 
   fn table_spacing(style: &MathStyle) -> (f32, f32) {
     (style.font_size * 0.5, style.font_size * 0.25)
+  }
+
+  fn resolve_math_font(
+    &self,
+    base_style: &ComputedStyle,
+    math_style: &MathStyle,
+    variant: MathVariant,
+  ) -> Option<Arc<LoadedFont>> {
+    let mut style = base_style.clone();
+    style.font_size = math_style.font_size;
+    style.font_family = self.preferred_math_families_for_variant(base_style, variant);
+    style.font_style = if variant.is_italic() {
+      CssFontStyle::Italic
+    } else {
+      CssFontStyle::Normal
+    };
+    if variant.is_bold() {
+      style.font_weight = CssFontWeight::Bold;
+    }
+    let stretch = FontStretch::from_percentage(style.font_stretch.to_percentage());
+    self
+      .font_ctx
+      .get_font_full(
+        &style.font_family,
+        style.font_weight.to_u16(),
+        match style.font_style {
+          CssFontStyle::Normal => FontStyle::Normal,
+          CssFontStyle::Italic => FontStyle::Italic,
+          CssFontStyle::Oblique(_) => FontStyle::Oblique,
+        },
+        stretch,
+      )
+      .map(Arc::new)
+  }
+
+  fn math_constants_for_layout(
+    &self,
+    layout: &MathLayout,
+    style: &MathStyle,
+    base_style: &ComputedStyle,
+    fallback_variant: MathVariant,
+  ) -> Option<MathConstants> {
+    if let Some(glyph) = &layout.annotations.trailing_glyph {
+      if let Some(constants) = self.font_ctx.math_constants(&glyph.font, glyph.font_size) {
+        return Some(constants);
+      }
+    }
+    self.default_math_constants(style, base_style, fallback_variant)
+  }
+
+  fn default_math_constants(
+    &self,
+    style: &MathStyle,
+    base_style: &ComputedStyle,
+    variant: MathVariant,
+  ) -> Option<MathConstants> {
+    let variant = style.default_variant.unwrap_or(variant);
+    let font = self.resolve_math_font(base_style, style, variant)?;
+    self.font_ctx.math_constants(&font, style.font_size)
+  }
+
+  fn layout_glyph_by_id(
+    &self,
+    font: Arc<LoadedFont>,
+    glyph_id: u16,
+    font_size: f32,
+  ) -> Option<MathLayout> {
+    let face = font.as_ttf_face().ok()?;
+    let glyph = ttf_parser::GlyphId(glyph_id);
+    let metrics = font.metrics().ok()?.scale(font_size);
+    let bbox = face.glyph_bounding_box(glyph);
+    let advance = face
+      .glyph_hor_advance(glyph)
+      .map(|v| v as f32 * metrics.scale)
+      .unwrap_or(0.0);
+    let (ascent, descent, width) = if let Some(bbox) = bbox {
+      (
+        bbox.y_max as f32 * metrics.scale,
+        -(bbox.y_min as f32) * metrics.scale,
+        advance.max((bbox.x_max - bbox.x_min) as f32 * metrics.scale),
+      )
+    } else {
+      (
+        metrics.ascent,
+        metrics.descent,
+        advance.max(metrics.font_size * 0.5),
+      )
+    };
+    let glyph_pos = crate::text::pipeline::GlyphPosition {
+      glyph_id: glyph_id as u32,
+      cluster: 0,
+      x_offset: 0.0,
+      y_offset: 0.0,
+      x_advance: advance,
+      y_advance: 0.0,
+    };
+    let run = ShapedRun {
+      text: String::new(),
+      start: 0,
+      end: 0,
+      glyphs: vec![glyph_pos],
+      direction: TextDirection::LeftToRight,
+      level: 0,
+      advance,
+      font: font.clone(),
+      font_size,
+      baseline_shift: 0.0,
+      language: None,
+      synthetic_bold: 0.0,
+      synthetic_oblique: 0.0,
+      rotation: crate::text::pipeline::RunRotation::None,
+      palette_index: 0,
+      variations: Vec::new(),
+      scale: 1.0,
+    };
+    let mut annotations = MathLayoutAnnotations::default();
+    let italic_correction = self
+      .font_ctx
+      .math_italic_correction(&font, glyph_id, font_size)
+      .unwrap_or(0.0);
+    annotations.trailing_glyph = Some(MathGlyph {
+      font,
+      glyph_id,
+      font_size,
+      italic_correction,
+    });
+    Some(MathLayout {
+      width,
+      height: ascent + descent,
+      baseline: ascent,
+      fragments: vec![MathFragment::Glyph {
+        origin: Point::new(0.0, ascent),
+        run,
+      }],
+      annotations,
+    })
+  }
+
+  fn align_stretch(
+    &self,
+    layout: MathLayout,
+    target_ascent: f32,
+    target_descent: f32,
+  ) -> MathLayout {
+    let desired_height = (target_ascent + target_descent).max(layout.height);
+    let offset_y = target_ascent - layout.baseline + (desired_height - layout.height) * 0.5;
+    let fragments = layout
+      .fragments
+      .into_iter()
+      .map(|f| f.translate(Point::new(0.0, offset_y)))
+      .collect();
+    MathLayout {
+      baseline: target_ascent,
+      height: desired_height,
+      width: layout.width,
+      fragments,
+      annotations: layout.annotations,
+    }
+  }
+
+  fn build_glyph_construction(
+    &self,
+    font: Arc<LoadedFont>,
+    construction: ttf_parser::math::GlyphConstruction<'static>,
+    min_overlap: f32,
+    orientation: StretchOrientation,
+    font_size: f32,
+  ) -> Option<MathLayout> {
+    let scale = font.metrics().ok()?.scale(font_size).scale;
+    let target_main = orientation.target();
+    let mut best_variant: Option<(MathLayout, f32)> = None;
+    for idx in 0..(construction.variants.len() as usize) {
+      let Some(var) = construction.variants.get(idx as u16) else {
+        continue;
+      };
+      let layout = self.layout_glyph_by_id(font.clone(), var.variant_glyph.0, font_size)?;
+      let layout_main = orientation.main_dimension(&layout);
+      if layout_main >= target_main
+        && best_variant.as_ref().map(|(_, h)| *h).unwrap_or(f32::MAX) > layout_main
+      {
+        best_variant = Some((layout, layout_main));
+      }
+    }
+    if let Some((layout, _)) = best_variant {
+      return Some(layout);
+    }
+    let Some(assembly) = construction.assembly else {
+      return None;
+    };
+    let parts_len = assembly.parts.len() as usize;
+    if parts_len == 0 {
+      return None;
+    }
+    let mut parts: Vec<ttf_parser::math::GlyphPart> = Vec::new();
+    for idx in 0..parts_len {
+      if let Some(part) = assembly.parts.get(idx as u16) {
+        parts.push(part);
+      }
+    }
+    let mut extender: Option<ttf_parser::math::GlyphPart> = None;
+    let mut base_advance: f32 = 0.0;
+    for part in &parts {
+      let advance = part.full_advance as f32 * scale;
+      if part.part_flags.extender() && extender.is_none() {
+        extender = Some(*part);
+      }
+      base_advance += advance;
+    }
+    let overlap = min_overlap;
+    let base_height = base_advance - overlap * (parts.len().saturating_sub(1)) as f32;
+    let extender_advance = extender
+      .as_ref()
+      .map(|p| (p.full_advance as f32 * scale - overlap).max(0.0))
+      .unwrap_or(0.0);
+    let repeat_count = if target_main > 0.0 && extender_advance > 0.0 && base_height < target_main {
+      ((target_main - base_height) / extender_advance)
+        .ceil()
+        .max(0.0) as usize
+    } else {
+      0
+    };
+    let mut assembly_parts: Vec<ttf_parser::math::GlyphPart> = Vec::new();
+    for part in &parts {
+      assembly_parts.push(*part);
+      if part.part_flags.extender() && repeat_count > 0 {
+        for _ in 0..repeat_count {
+          assembly_parts.push(*part);
+        }
+      }
+    }
+    let mut fragments = Vec::new();
+    let mut max_width: f32 = 0.0;
+    let mut annotations = MathLayoutAnnotations::default();
+    match orientation {
+      StretchOrientation::Vertical { .. } => {
+        let mut laid_out_parts = Vec::new();
+        for part in &assembly_parts {
+          let layout = self.layout_glyph_by_id(font.clone(), part.glyph_id.0, font_size)?;
+          max_width = max_width.max(layout.width);
+          laid_out_parts.push((layout, *part));
+        }
+        let mut cursor = 0.0;
+        for (idx, (layout, part)) in laid_out_parts.into_iter().enumerate() {
+          let x = (max_width - layout.width) * 0.5;
+          for frag in layout.fragments {
+            fragments.push(frag.translate(Point::new(x, cursor)));
+          }
+          annotations = annotations.merge_trailing(&layout.annotations);
+          if idx + 1 < assembly_parts.len() {
+            cursor += (part.full_advance as f32 * scale) - overlap;
+          } else {
+            cursor += part.full_advance as f32 * scale;
+          }
+        }
+        Some(MathLayout {
+          width: max_width,
+          height: cursor,
+          baseline: cursor / 2.0,
+          fragments,
+          annotations,
+        })
+      }
+      StretchOrientation::Horizontal { .. } => {
+        let mut laid_out_parts = Vec::new();
+        let mut baseline: f32 = 0.0;
+        let mut max_height: f32 = 0.0;
+        for part in &assembly_parts {
+          let layout = self.layout_glyph_by_id(font.clone(), part.glyph_id.0, font_size)?;
+          max_height = max_height.max(layout.height);
+          baseline = baseline.max(layout.baseline);
+          laid_out_parts.push((layout, *part));
+        }
+        let mut cursor = 0.0;
+        for (idx, (layout, part)) in laid_out_parts.into_iter().enumerate() {
+          let y_offset = baseline - layout.baseline;
+          for frag in layout.fragments {
+            fragments.push(frag.translate(Point::new(cursor, y_offset)));
+          }
+          annotations = annotations.merge_trailing(&layout.annotations);
+          max_height = max_height.max(y_offset + layout.height);
+          let advance = part.full_advance as f32 * scale;
+          if idx + 1 < assembly_parts.len() {
+            cursor += advance - overlap;
+          } else {
+            cursor += advance;
+          }
+        }
+        Some(MathLayout {
+          width: cursor,
+          height: max_height,
+          baseline,
+          fragments,
+          annotations,
+        })
+      }
+    }
+  }
+
+  fn stretch_operator_vertical(
+    &mut self,
+    text: &str,
+    variant: MathVariant,
+    target_ascent: f32,
+    target_descent: f32,
+    style: &MathStyle,
+    base_style: &ComputedStyle,
+  ) -> Option<MathLayout> {
+    let required_height = target_ascent + target_descent;
+    let (runs, _base_metrics) = self.shape_text(text, base_style, style, variant);
+    let metrics = runs
+      .get(0)
+      .and_then(|run| self.font_ctx.get_scaled_metrics(&run.font, style.font_size))
+      .unwrap_or_else(|| self.base_font_metrics(base_style, style.font_size));
+    let Some(first_run) = runs.first() else {
+      return None;
+    };
+    let glyph_id = first_run.glyphs.first().map(|g| g.glyph_id as u16)?;
+    let font = first_run.font.clone();
+    if let Some((construction, min_overlap)) =
+      self
+        .font_ctx
+        .math_glyph_construction(&font, glyph_id, true, style.font_size)
+    {
+      let min_height = self
+        .font_ctx
+        .math_constants(&font, style.font_size)
+        .and_then(|c| {
+          let mut h = required_height;
+          if let Some(min) = c.delimited_sub_formula_min_height {
+            h = h.max(min);
+          }
+          if let Some(min) = c.display_operator_min_height {
+            h = h.max(min);
+          }
+          Some(h)
+        })
+        .unwrap_or(required_height);
+      if let Some(layout) = self.build_glyph_construction(
+        font.clone(),
+        construction,
+        min_overlap,
+        StretchOrientation::Vertical { target: min_height },
+        style.font_size,
+      ) {
+        return Some(self.align_stretch(layout, target_ascent, target_descent));
+      }
+    }
+    let current_height = metrics.ascent + metrics.descent;
+    let factor = if current_height > 0.0 {
+      (required_height / current_height).clamp(1.0, 8.0)
+    } else {
+      1.0
+    };
+    if factor > 1.01 {
+      let mut stretch_style = *style;
+      stretch_style.font_size *= factor;
+      let resolved_variant =
+        self.resolve_variant(Some(variant), &stretch_style, MathVariant::Normal);
+      let layout = self.layout_glyphs(text, base_style, &stretch_style, resolved_variant);
+      return Some(self.align_stretch(layout, target_ascent, target_descent));
+    }
+    None
+  }
+
+  fn stretch_operator_horizontal(
+    &mut self,
+    text: &str,
+    variant: MathVariant,
+    target_width: f32,
+    style: &MathStyle,
+    base_style: &ComputedStyle,
+  ) -> Option<MathLayout> {
+    if target_width <= 0.0 {
+      return None;
+    }
+    let (runs, _base_metrics) = self.shape_text(text, base_style, style, variant);
+    let Some(first_run) = runs.first() else {
+      return None;
+    };
+    let glyph_id = first_run.glyphs.first().map(|g| g.glyph_id as u16)?;
+    let font = first_run.font.clone();
+    if let Some((construction, min_overlap)) =
+      self
+        .font_ctx
+        .math_glyph_construction(&font, glyph_id, false, style.font_size)
+    {
+      if let Some(layout) = self.build_glyph_construction(
+        font.clone(),
+        construction,
+        min_overlap,
+        StretchOrientation::Horizontal {
+          target: target_width,
+        },
+        style.font_size,
+      ) {
+        if layout.width >= target_width * 0.99 {
+          return Some(layout);
+        }
+      }
+    }
+    let current_width: f32 = runs.iter().map(|r| r.advance).sum();
+    let factor = if current_width > 0.0 {
+      (target_width / current_width).clamp(1.0, 8.0)
+    } else {
+      1.0
+    };
+    if factor > 1.01 {
+      let mut stretch_style = *style;
+      stretch_style.font_size *= factor;
+      let resolved_variant =
+        self.resolve_variant(Some(variant), &stretch_style, MathVariant::Normal);
+      let layout = self.layout_glyphs(text, base_style, &stretch_style, resolved_variant);
+      return Some(layout);
+    }
+    None
   }
 
   fn resolve_variant(
@@ -1044,7 +1527,7 @@ impl MathLayoutContext {
     math_style: &MathStyle,
     variant: MathVariant,
   ) -> MathLayout {
-    let (runs, metrics) = self.shape_text(text, base_style, math_style, variant);
+    let (runs, base_metrics) = self.shape_text(text, base_style, math_style, variant);
     if runs.is_empty() {
       let height = math_style.font_size;
       return MathLayout {
@@ -1052,14 +1535,42 @@ impl MathLayoutContext {
         height,
         baseline: height * 0.8,
         fragments: vec![],
+        annotations: MathLayoutAnnotations::default(),
       };
     }
 
+    let metrics = runs
+      .get(0)
+      .and_then(|run| {
+        self
+          .font_ctx
+          .get_scaled_metrics(&run.font, math_style.font_size)
+      })
+      .unwrap_or(base_metrics);
     let ascent = metrics.ascent;
     let descent = metrics.descent;
     let width: f32 = runs.iter().map(|r| r.advance).sum();
     let mut fragments = Vec::new();
     let mut pen_x = 0.0;
+    let mut annotations = MathLayoutAnnotations::default();
+    if let Some(last_run) = runs.last() {
+      if let Some(last_glyph) = last_run.glyphs.last() {
+        let italic_correction = self
+          .font_ctx
+          .math_italic_correction(
+            &last_run.font,
+            last_glyph.glyph_id as u16,
+            math_style.font_size,
+          )
+          .unwrap_or(0.0);
+        annotations.trailing_glyph = Some(MathGlyph {
+          font: last_run.font.clone(),
+          glyph_id: last_glyph.glyph_id as u16,
+          font_size: math_style.font_size,
+          italic_correction,
+        });
+      }
+    }
     for run in runs {
       let origin = Point::new(pen_x, ascent);
       pen_x += run.advance;
@@ -1070,6 +1581,7 @@ impl MathLayoutContext {
       height: ascent + descent,
       baseline: ascent,
       fragments,
+      annotations,
     }
   }
 
@@ -1124,28 +1636,16 @@ impl MathLayoutContext {
 
       for idx in stretchy_indices {
         if let MathNode::Operator { text, variant, .. } = &children[idx] {
-          let current = &layouts[idx];
-          if current.height <= 0.0 {
-            continue;
-          }
-          let ascent_scale = if current.baseline > 0.0 {
-            target_ascent / current.baseline
-          } else {
-            1.0
-          };
-          let descent = (current.height - current.baseline).max(0.0);
-          let descent_scale = if descent > 0.0 {
-            target_descent / descent
-          } else {
-            1.0
-          };
-          let factor = ascent_scale.max(descent_scale).clamp(1.0, 8.0);
-          if factor > 1.01 {
-            let mut stretch_style = *style;
-            stretch_style.font_size *= factor;
-            let resolved_variant =
-              self.resolve_variant(*variant, &stretch_style, MathVariant::Normal);
-            layouts[idx] = self.layout_glyphs(text, base_style, &stretch_style, resolved_variant);
+          let resolved_variant = self.resolve_variant(*variant, style, MathVariant::Normal);
+          if let Some(layout) = self.stretch_operator_vertical(
+            text,
+            resolved_variant,
+            target_ascent,
+            target_descent,
+            style,
+            base_style,
+          ) {
+            layouts[idx] = layout;
           }
         }
       }
@@ -1163,6 +1663,10 @@ impl MathLayoutContext {
     let baseline = max_ascent;
     let mut x = 0.0;
     let mut fragments = Vec::new();
+    let trailing_annotations = layouts
+      .last()
+      .map(|l| l.annotations.clone())
+      .unwrap_or_default();
     for layout in layouts {
       let y = baseline - layout.baseline;
       for frag in layout.fragments {
@@ -1175,6 +1679,7 @@ impl MathLayoutContext {
       height: baseline + max_descent,
       baseline,
       fragments,
+      annotations: trailing_annotations,
     }
   }
 
@@ -1201,6 +1706,7 @@ impl MathLayoutContext {
       height: height.max(0.0),
       baseline,
       fragments: Vec::new(),
+      annotations: MathLayoutAnnotations::default(),
     }
   }
 
@@ -1212,17 +1718,34 @@ impl MathLayoutContext {
     base_style: &ComputedStyle,
   ) -> MathLayout {
     let metrics = self.base_font_metrics(base_style, style.font_size);
-    let axis = Self::axis_height(&metrics, style);
+    let constants = self.default_math_constants(style, base_style, MathVariant::Normal);
+    let axis = Self::axis_height(&metrics, style, constants.as_ref());
     let script_style = if style.display_style {
       *style
     } else {
-      style.script()
+      style.script_with_constants(constants.as_ref())
     };
     let numerator = self.layout_node(num, &script_style, base_style);
     let denominator = self.layout_node(den, &script_style, base_style);
+    let annotations = numerator
+      .annotations
+      .merge_trailing(&denominator.annotations);
     let width = numerator.width.max(denominator.width);
-    let rule = Self::rule_thickness(style);
-    let gap = Self::frac_gap(style);
+    let rule = constants
+      .as_ref()
+      .and_then(|c| c.fraction_rule_thickness)
+      .unwrap_or_else(|| Self::rule_thickness(style));
+    let gap = if style.display_style {
+      constants
+        .as_ref()
+        .and_then(|c| c.fraction_num_display_style_gap_min)
+        .unwrap_or_else(|| Self::frac_gap(style))
+    } else {
+      constants
+        .as_ref()
+        .and_then(|c| c.fraction_numerator_gap_min)
+        .unwrap_or_else(|| Self::frac_gap(style))
+    };
     let baseline = (numerator.height + gap + rule * 0.5).max(axis + gap + rule * 0.5);
     let mut fragments = Vec::new();
     let num_x = (width - numerator.width) / 2.0;
@@ -1252,6 +1775,7 @@ impl MathLayoutContext {
       height,
       baseline,
       fragments,
+      annotations,
     }
   }
 
@@ -1264,17 +1788,43 @@ impl MathLayoutContext {
     base_style: &ComputedStyle,
   ) -> MathLayout {
     let base_layout = self.layout_node(base, style, base_style);
-    let script_style = style.script();
+    let constants =
+      self.math_constants_for_layout(&base_layout, style, base_style, MathVariant::Normal);
+    let script_style = style.script_with_constants(constants.as_ref());
     let sup_layout = sup.map(|n| self.layout_node(n, &script_style, base_style));
     let sub_layout = sub.map(|n| self.layout_node(n, &script_style, base_style));
     let base_metrics = self.base_font_metrics(base_style, style.font_size);
     let x_height = base_metrics.x_height.unwrap_or(style.font_size * 0.5);
-    let sup_shift = (base_metrics.ascent * 0.6)
-      .max(x_height * 0.65)
-      .max(style.font_size * if style.display_style { 0.4 } else { 0.34 });
-    let sub_shift = (base_metrics.descent * 0.8 + x_height * 0.2).max(style.font_size * 0.24);
-    let min_gap =
-      (Self::script_gap(style) + Self::rule_thickness(style)).max(style.font_size * 0.06);
+    let sup_shift = constants
+      .as_ref()
+      .and_then(|c| {
+        if sub.is_some() {
+          c.superscript_shift_up_cramped
+        } else {
+          c.superscript_shift_up
+        }
+      })
+      .unwrap_or_else(|| {
+        (base_metrics.ascent * 0.6)
+          .max(x_height * 0.65)
+          .max(style.font_size * if style.display_style { 0.4 } else { 0.34 })
+      });
+    let sub_shift = constants
+      .as_ref()
+      .and_then(|c| c.subscript_shift_down)
+      .unwrap_or_else(|| (base_metrics.descent * 0.8 + x_height * 0.2).max(style.font_size * 0.24));
+    let min_gap = constants
+      .as_ref()
+      .and_then(|c| c.sub_superscript_gap_min)
+      .unwrap_or_else(|| {
+        (Self::script_gap(style) + Self::rule_thickness(style)).max(style.font_size * 0.06)
+      });
+    let sup_bottom_max_with_sub = constants
+      .as_ref()
+      .and_then(|c| c.superscript_bottom_max_with_subscript);
+    let sub_baseline_drop_min = constants
+      .as_ref()
+      .and_then(|c| c.subscript_baseline_drop_min);
 
     let mut width = base_layout.width;
     let mut fragments = Vec::new();
@@ -1289,30 +1839,77 @@ impl MathLayoutContext {
       script_width = script_width.max(layout.width);
     }
     if script_width > 0.0 {
-      width += Self::script_gap(style) + script_width;
+      width += constants
+        .as_ref()
+        .and_then(|c| c.space_after_script)
+        .unwrap_or_else(|| Self::script_gap(style))
+        + script_width;
     }
+    let mut max_width = width;
 
     // Base fragments
     for frag in base_layout.fragments {
       fragments.push(frag);
     }
 
-    let x = base_layout.width
-      + if script_width > 0.0 {
-        Self::script_gap(style)
-      } else {
-        0.0
-      };
+    let gap = if script_width > 0.0 {
+      constants
+        .as_ref()
+        .and_then(|c| c.space_after_script)
+        .unwrap_or_else(|| Self::script_gap(style))
+    } else {
+      0.0
+    };
+    let x = base_layout.width + gap;
     let base_descent = base_layout.height - base_layout.baseline;
+    let italic_correction = base_layout
+      .annotations
+      .trailing_glyph
+      .as_ref()
+      .map(|g| g.italic_correction)
+      .unwrap_or(0.0);
+    let mut trailing_annotations = base_layout.annotations.clone();
     let mut sup_y = None;
     if let Some(layout) = sup_layout {
-      let y = base_layout.baseline - sup_shift - layout.baseline;
-      for frag in layout.fragments {
-        fragments.push(frag.translate(Point::new(x, y)));
+      let mut y = base_layout.baseline - sup_shift - layout.baseline;
+      if let Some(bottom_min) = constants.as_ref().and_then(|c| c.superscript_bottom_min) {
+        let sup_bottom = y + layout.height - layout.baseline;
+        let allowed = base_layout.baseline - bottom_min;
+        if sup_bottom > allowed {
+          y -= sup_bottom - allowed;
+        }
       }
+      if let (Some(limit), true) = (sup_bottom_max_with_sub, sub.is_some()) {
+        let sup_bottom = y + layout.height - layout.baseline;
+        let allowed = base_layout.baseline - limit;
+        if sup_bottom > allowed {
+          y -= sup_bottom - allowed;
+        }
+      }
+      let sup_kern = base_layout
+        .annotations
+        .trailing_glyph
+        .as_ref()
+        .map(|g| {
+          self.font_ctx.math_kern(
+            &g.font,
+            g.glyph_id,
+            layout.baseline,
+            g.font_size,
+            true,
+            MathKernSide::Right,
+          )
+        })
+        .unwrap_or(0.0);
+      let sup_x = x + italic_correction + sup_kern;
+      for frag in layout.fragments {
+        fragments.push(frag.translate(Point::new(sup_x, y)));
+      }
+      max_width = max_width.max(sup_x + layout.width);
       max_ascent = max_ascent.max(layout.baseline - y);
       max_descent = max_descent.max(layout.height - (layout.baseline - y));
       sup_y = Some((y, layout.height));
+      trailing_annotations = trailing_annotations.merge_trailing(&layout.annotations);
     }
 
     if let Some(layout) = sub_layout {
@@ -1324,18 +1921,50 @@ impl MathLayoutContext {
           y += min_gap - gap;
         }
       }
-      for frag in layout.fragments {
-        fragments.push(frag.translate(Point::new(x, y)));
+      if let Some(top_max) = constants.as_ref().and_then(|c| c.subscript_top_max) {
+        let sub_top = y + layout.baseline;
+        let min_top = base_layout.baseline + top_max;
+        if sub_top < min_top {
+          y += min_top - sub_top;
+        }
       }
+      if let Some(min_drop) = sub_baseline_drop_min {
+        let drop = y + layout.baseline - base_layout.baseline;
+        if drop < min_drop {
+          y += min_drop - drop;
+        }
+      }
+      let sub_kern = base_layout
+        .annotations
+        .trailing_glyph
+        .as_ref()
+        .map(|g| {
+          self.font_ctx.math_kern(
+            &g.font,
+            g.glyph_id,
+            layout.height - layout.baseline,
+            g.font_size,
+            false,
+            MathKernSide::Right,
+          )
+        })
+        .unwrap_or(0.0);
+      let sub_x = x + sub_kern;
+      for frag in layout.fragments {
+        fragments.push(frag.translate(Point::new(sub_x, y)));
+      }
+      max_width = max_width.max(sub_x + layout.width);
       max_ascent = max_ascent.max(layout.baseline - y);
       max_descent = max_descent.max(layout.height - (layout.baseline - y));
+      trailing_annotations = trailing_annotations.merge_trailing(&layout.annotations);
     }
 
     MathLayout {
-      width,
+      width: max_width,
       height: max_ascent + max_descent,
       baseline: max_ascent,
       fragments,
+      annotations: trailing_annotations,
     }
   }
 
@@ -1348,14 +1977,48 @@ impl MathLayoutContext {
     base_style: &ComputedStyle,
   ) -> MathLayout {
     let base_layout = self.layout_node(base, style, base_style);
+    let constants =
+      self.math_constants_for_layout(&base_layout, style, base_style, MathVariant::Normal);
     let script_style = if style.display_style {
       *style
     } else {
-      style.script()
+      style.script_with_constants(constants.as_ref())
     };
-    let under_layout = under.map(|n| self.layout_node(n, &script_style, base_style));
-    let over_layout = over.map(|n| self.layout_node(n, &script_style, base_style));
-    let gap = Self::frac_gap(style);
+    let stretch_target = base_layout.width + Self::rule_thickness(style);
+    let under_layout = under.map(|n| match n {
+      MathNode::Operator {
+        text,
+        stretchy: true,
+        variant,
+      } => {
+        let resolved = self.resolve_variant(*variant, &script_style, MathVariant::Normal);
+        self
+          .stretch_operator_horizontal(text, resolved, stretch_target, &script_style, base_style)
+          .unwrap_or_else(|| self.layout_node(n, &script_style, base_style))
+      }
+      _ => self.layout_node(n, &script_style, base_style),
+    });
+    let over_layout = over.map(|n| match n {
+      MathNode::Operator {
+        text,
+        stretchy: true,
+        variant,
+      } => {
+        let resolved = self.resolve_variant(*variant, &script_style, MathVariant::Normal);
+        self
+          .stretch_operator_horizontal(text, resolved, stretch_target, &script_style, base_style)
+          .unwrap_or_else(|| self.layout_node(n, &script_style, base_style))
+      }
+      _ => self.layout_node(n, &script_style, base_style),
+    });
+    let over_gap = constants
+      .as_ref()
+      .and_then(|c| c.overbar_vertical_gap)
+      .unwrap_or_else(|| Self::frac_gap(style));
+    let under_gap = constants
+      .as_ref()
+      .and_then(|c| c.underbar_vertical_gap)
+      .unwrap_or_else(|| Self::frac_gap(style));
 
     let mut width = base_layout.width;
     if let Some(layout) = &under_layout {
@@ -1366,6 +2029,7 @@ impl MathLayoutContext {
     }
 
     let mut fragments = Vec::new();
+    let mut annotations = base_layout.annotations.clone();
     // Base
     for frag in base_layout.fragments {
       fragments.push(frag);
@@ -1375,19 +2039,21 @@ impl MathLayoutContext {
     let mut descent = base_layout.height - base_layout.baseline;
     if let Some(layout) = over_layout {
       let x = (width - layout.width) / 2.0;
-      let y = -(layout.height + gap);
+      let y = -(layout.height + over_gap);
       for frag in layout.fragments {
         fragments.push(frag.translate(Point::new(x, y)));
       }
       ascent = ascent.max(base_layout.baseline - y);
+      annotations = annotations.merge_trailing(&layout.annotations);
     }
     if let Some(layout) = under_layout {
       let x = (width - layout.width) / 2.0;
-      let y = base_layout.baseline + gap;
+      let y = base_layout.baseline + under_gap;
       for frag in layout.fragments {
         fragments.push(frag.translate(Point::new(x, y)));
       }
-      descent = descent.max(layout.height + gap);
+      descent = descent.max(layout.height + under_gap);
+      annotations = annotations.merge_trailing(&layout.annotations);
     }
 
     MathLayout {
@@ -1395,6 +2061,7 @@ impl MathLayoutContext {
       height: ascent + descent,
       baseline: ascent,
       fragments,
+      annotations,
     }
   }
 
@@ -1405,25 +2072,48 @@ impl MathLayoutContext {
     base_style: &ComputedStyle,
   ) -> MathLayout {
     let content = self.layout_node(body, style, base_style);
+    let constants =
+      self.math_constants_for_layout(&content, style, base_style, MathVariant::Normal);
     let padding = Self::sqrt_padding(style);
-    let rule = Self::rule_thickness(style);
-    let target_height = content.height + padding + rule;
+    let rule = constants
+      .as_ref()
+      .and_then(|c| c.radical_rule_thickness)
+      .unwrap_or_else(|| Self::rule_thickness(style));
+    let gap = constants
+      .as_ref()
+      .map(|c| {
+        if style.display_style {
+          c.radical_display_style_vertical_gap
+        } else {
+          c.radical_vertical_gap
+        }
+      })
+      .flatten()
+      .unwrap_or_else(|| Self::sqrt_padding(style));
+    let extra_ascender = constants
+      .as_ref()
+      .and_then(|c| c.radical_extra_ascender)
+      .unwrap_or(0.0);
+    let target_height = content.height + gap + rule + extra_ascender;
+    let target_descent = (content.height - content.baseline).max(0.0);
+    let target_ascent = target_height - target_descent;
     let radical_variant = self.resolve_variant(None, style, MathVariant::Normal);
-    let mut radical = self.layout_glyphs("√", base_style, style, radical_variant);
-    if radical.height > 0.0 {
-      let scale = (target_height / radical.height).clamp(0.8, 3.0);
-      if (scale - 1.0).abs() > 0.05 {
-        let scaled_style = MathStyle {
-          font_size: style.font_size * scale,
-          display_style: style.display_style,
-          default_variant: style.default_variant,
-        };
-        radical = self.layout_glyphs("√", base_style, &scaled_style, radical_variant);
-      }
+    let mut radical = self
+      .stretch_operator_vertical(
+        "√",
+        radical_variant,
+        target_ascent,
+        target_descent,
+        style,
+        base_style,
+      )
+      .unwrap_or_else(|| self.layout_glyphs("√", base_style, style, radical_variant));
+    if (radical.height - target_height).abs() > style.font_size * 0.05 {
+      radical = self.align_stretch(radical, target_ascent, target_descent);
     }
 
     let offset_x = radical.width + padding;
-    let content_y = padding + rule;
+    let content_y = gap + rule;
     let baseline = content.baseline + content_y;
     let mut fragments = Vec::new();
     // Radical glyph
@@ -1449,6 +2139,7 @@ impl MathLayoutContext {
       height: height + padding,
       baseline,
       fragments,
+      annotations: content.annotations,
     }
   }
 
@@ -1459,15 +2150,25 @@ impl MathLayoutContext {
     style: &MathStyle,
     base_style: &ComputedStyle,
   ) -> MathLayout {
-    let index_style = style.script();
+    let constants = self.default_math_constants(style, base_style, MathVariant::Normal);
+    let index_style = style.script_with_constants(constants.as_ref());
     let index_layout = self.layout_node(index, &index_style, base_style);
     let sqrt_layout = self.layout_sqrt(radicand, style, base_style);
-    let gap = Self::script_gap(style);
+    let base_gap = constants
+      .as_ref()
+      .and_then(|c| c.radical_kern_before_degree)
+      .unwrap_or_else(|| Self::script_gap(style));
 
-    let offset_x = index_layout.width + gap;
+    let offset_x = index_layout.width + base_gap;
     let mut fragments = Vec::new();
 
-    let index_y = (sqrt_layout.baseline - sqrt_layout.height * 0.6) - index_layout.baseline;
+    let raise_percent = constants
+      .as_ref()
+      .and_then(|c| c.radical_degree_bottom_raise_percent)
+      .unwrap_or(0.0)
+      / 100.0;
+    let raise = sqrt_layout.baseline * raise_percent;
+    let index_y = (sqrt_layout.baseline - sqrt_layout.height * 0.6) - index_layout.baseline - raise;
     for frag in index_layout.fragments {
       fragments.push(frag.translate(Point::new(0.0, index_y)));
     }
@@ -1481,6 +2182,7 @@ impl MathLayoutContext {
       height: sqrt_layout.height.max(index_y + index_layout.height),
       baseline: sqrt_layout.baseline,
       fragments,
+      annotations: sqrt_layout.annotations,
     }
   }
 
@@ -1498,6 +2200,7 @@ impl MathLayoutContext {
     let height = content.height + padding * 2.0 + stroke;
     let baseline = content.baseline + padding + stroke * 0.5;
     let content_offset = Point::new(padding + stroke * 0.5, padding + stroke * 0.5);
+    let annotations = content.annotations.clone();
 
     let mut fragments: Vec<MathFragment> = content
       .fragments
@@ -1585,6 +2288,7 @@ impl MathLayoutContext {
       height,
       baseline,
       fragments,
+      annotations,
     }
   }
 
@@ -1637,6 +2341,7 @@ impl MathLayoutContext {
     let mut y = 0.0;
     let mut fragments = Vec::new();
     let mut table_baseline = 0.0;
+    let mut trailing_annotations = MathLayoutAnnotations::default();
     for (row_idx, (row, layouts)) in table.rows.iter().zip(cell_layouts.into_iter()).enumerate() {
       let row_height = row_heights[row_idx];
       let row_baseline = row_baselines[row_idx];
@@ -1657,7 +2362,7 @@ impl MathLayoutContext {
           .or(row_align_pref)
           .unwrap_or(RowAlign::Baseline);
         let baseline_target = match cell_row_align {
-          RowAlign::Axis => Self::axis_height(&metrics, style) + style.font_size * 0.5,
+          RowAlign::Axis => Self::axis_height(&metrics, style, None) + style.font_size * 0.5,
           _ => row_baseline,
         };
         let offset_y = match cell_row_align {
@@ -1677,6 +2382,7 @@ impl MathLayoutContext {
           fragments.push(frag.translate(Point::new(offset_x, offset_y)));
         }
         x += width_available + col_spacing;
+        trailing_annotations = trailing_annotations.merge_trailing(&layout.annotations);
       }
       y += row_height + row_spacing;
     }
@@ -1686,6 +2392,7 @@ impl MathLayoutContext {
       height: y - row_spacing,
       baseline: table_baseline,
       fragments,
+      annotations: trailing_annotations,
     }
   }
 
@@ -1698,55 +2405,198 @@ impl MathLayoutContext {
     base_style: &ComputedStyle,
   ) -> MathLayout {
     let base_layout = self.layout_node(base, style, base_style);
-    let script_style = style.script();
+    let constants =
+      self.math_constants_for_layout(&base_layout, style, base_style, MathVariant::Normal);
+    let script_style = style.script_with_constants(constants.as_ref());
     let mut fragments = Vec::new();
     let mut ascent = base_layout.baseline;
     let mut descent = base_layout.height - base_layout.baseline;
 
-    let build_block =
-      |scripts: &[(Option<MathNode>, Option<MathNode>)], _is_left: bool, ctx: &mut Self| {
-        let mut block_width: f32 = 0.0;
-        let mut block_ascent: f32 = 0.0;
-        let mut block_descent: f32 = 0.0;
-        let mut frags = Vec::new();
-        for pair in scripts {
-          let sup_layout = pair
-            .1
-            .as_ref()
-            .map(|n| ctx.layout_node(n, &script_style, base_style));
-          let sub_layout = pair
-            .0
-            .as_ref()
-            .map(|n| ctx.layout_node(n, &script_style, base_style));
-          let pair_width = sup_layout
-            .as_ref()
-            .map(|l| l.width)
-            .unwrap_or(0.0)
-            .max(sub_layout.as_ref().map(|l| l.width).unwrap_or(0.0));
-          let x_start = block_width;
-          if let Some(layout) = sup_layout {
-            let y = (base_layout.baseline - layout.baseline - Self::script_gap(style)).min(0.0);
-            for frag in layout.fragments {
-              frags.push(frag.translate(Point::new(x_start, y)));
-            }
-            block_ascent = block_ascent.max(layout.baseline - y);
-            block_descent = block_descent.max(layout.height - (layout.baseline - y));
-          }
-          if let Some(layout) = sub_layout {
-            let y = base_layout.baseline + Self::script_gap(style) - layout.baseline;
-            for frag in layout.fragments {
-              frags.push(frag.translate(Point::new(x_start, y)));
-            }
-            block_ascent = block_ascent.max(layout.baseline - y);
-            block_descent = block_descent.max(layout.height - (layout.baseline - y));
-          }
-          block_width += pair_width + Self::script_gap(style);
-        }
-        (block_width, block_ascent, block_descent, frags)
-      };
+    let script_gap = constants
+      .as_ref()
+      .and_then(|c| c.space_after_script)
+      .unwrap_or_else(|| Self::script_gap(style));
+    let base_metrics = self.base_font_metrics(base_style, style.font_size);
+    let x_height = base_metrics.x_height.unwrap_or(style.font_size * 0.5);
+    let sup_fallback = || {
+      (base_metrics.ascent * 0.6)
+        .max(x_height * 0.65)
+        .max(style.font_size * if style.display_style { 0.4 } else { 0.34 })
+    };
+    let sup_shift_up = constants
+      .as_ref()
+      .and_then(|c| c.superscript_shift_up)
+      .unwrap_or_else(sup_fallback);
+    let sup_shift_up_cramped = constants
+      .as_ref()
+      .and_then(|c| c.superscript_shift_up_cramped)
+      .unwrap_or_else(sup_fallback);
+    let sub_shift = constants
+      .as_ref()
+      .and_then(|c| c.subscript_shift_down)
+      .unwrap_or_else(|| (base_metrics.descent * 0.8 + x_height * 0.2).max(style.font_size * 0.24));
+    let min_gap = constants
+      .as_ref()
+      .and_then(|c| c.sub_superscript_gap_min)
+      .unwrap_or_else(|| {
+        (Self::script_gap(style) + Self::rule_thickness(style)).max(style.font_size * 0.06)
+      });
+    let sup_bottom_min = constants.as_ref().and_then(|c| c.superscript_bottom_min);
+    let sup_bottom_max_with_sub = constants
+      .as_ref()
+      .and_then(|c| c.superscript_bottom_max_with_subscript);
+    let sub_top_max = constants.as_ref().and_then(|c| c.subscript_top_max);
+    let sub_baseline_drop_min = constants
+      .as_ref()
+      .and_then(|c| c.subscript_baseline_drop_min);
+    let base_descent = base_layout.height - base_layout.baseline;
+    let italic_correction = base_layout
+      .annotations
+      .trailing_glyph
+      .as_ref()
+      .map(|g| g.italic_correction)
+      .unwrap_or(0.0);
 
-    let (pre_width, pre_ascent, pre_descent, pre_frags) = build_block(pre, true, self);
-    let (post_width, post_ascent, post_descent, post_frags) = build_block(post, false, self);
+    let build_block = |scripts: &[(Option<MathNode>, Option<MathNode>)],
+                       side: MathKernSide,
+                       apply_italic: bool,
+                       ctx: &mut Self|
+     -> (f32, f32, f32, Vec<MathFragment>, MathLayoutAnnotations) {
+      let mut block_width: f32 = 0.0;
+      let mut block_ascent: f32 = 0.0;
+      let mut block_descent: f32 = 0.0;
+      let mut frags = Vec::new();
+      let mut annotations = MathLayoutAnnotations::default();
+      let mut first_pair = true;
+      for pair in scripts {
+        let sup_layout = pair
+          .1
+          .as_ref()
+          .map(|n| ctx.layout_node(n, &script_style, base_style));
+        let sub_layout = pair
+          .0
+          .as_ref()
+          .map(|n| ctx.layout_node(n, &script_style, base_style));
+        if sup_layout.is_none() && sub_layout.is_none() {
+          continue;
+        }
+        if !first_pair {
+          block_width += script_gap;
+        }
+        first_pair = false;
+        let x_start = block_width;
+        let mut pair_end = block_width;
+        let mut pair_ascent: f32 = 0.0;
+        let mut pair_descent: f32 = 0.0;
+        let mut sup_pos: Option<(f32, f32)> = None;
+        if let Some(layout) = &sup_layout {
+          let has_sub = sub_layout.is_some();
+          let mut y = base_layout.baseline
+            - if has_sub {
+              sup_shift_up_cramped
+            } else {
+              sup_shift_up
+            }
+            - layout.baseline;
+          if let Some(bottom_min) = sup_bottom_min {
+            let sup_bottom = y + layout.height - layout.baseline;
+            let allowed = base_layout.baseline - bottom_min;
+            if sup_bottom > allowed {
+              y -= sup_bottom - allowed;
+            }
+          }
+          if let (Some(limit), true) = (sup_bottom_max_with_sub, has_sub) {
+            let sup_bottom = y + layout.height - layout.baseline;
+            let allowed = base_layout.baseline - limit;
+            if sup_bottom > allowed {
+              y -= sup_bottom - allowed;
+            }
+          }
+          let sup_kern = base_layout
+            .annotations
+            .trailing_glyph
+            .as_ref()
+            .map(|g| {
+              ctx.font_ctx.math_kern(
+                &g.font,
+                g.glyph_id,
+                layout.baseline,
+                g.font_size,
+                true,
+                side,
+              )
+            })
+            .unwrap_or(0.0);
+          let sup_x = x_start + if apply_italic { italic_correction } else { 0.0 } + sup_kern;
+          for frag in &layout.fragments {
+            frags.push(frag.clone().translate(Point::new(sup_x, y)));
+          }
+          pair_end = pair_end.max(sup_x + layout.width);
+          pair_ascent = pair_ascent.max(layout.baseline - y);
+          pair_descent = pair_descent.max(layout.height - (layout.baseline - y));
+          sup_pos = Some((y, layout.height));
+          annotations = annotations.merge_trailing(&layout.annotations);
+        }
+        if let Some(layout) = &sub_layout {
+          let mut y = base_layout.baseline + base_descent + sub_shift - layout.baseline;
+          if let Some((sup_y, sup_h)) = sup_pos {
+            let sup_bottom = sup_y + sup_h;
+            let gap = y - sup_bottom;
+            if gap < min_gap {
+              y += min_gap - gap;
+            }
+          }
+          if let Some(top_max) = sub_top_max {
+            let sub_top = y + layout.baseline;
+            let min_top = base_layout.baseline + top_max;
+            if sub_top < min_top {
+              y += min_top - sub_top;
+            }
+          }
+          if let Some(min_drop) = sub_baseline_drop_min {
+            let drop = y + layout.baseline - base_layout.baseline;
+            if drop < min_drop {
+              y += min_drop - drop;
+            }
+          }
+          let sub_kern = base_layout
+            .annotations
+            .trailing_glyph
+            .as_ref()
+            .map(|g| {
+              ctx.font_ctx.math_kern(
+                &g.font,
+                g.glyph_id,
+                layout.height - layout.baseline,
+                g.font_size,
+                false,
+                side,
+              )
+            })
+            .unwrap_or(0.0);
+          let sub_x = x_start + sub_kern;
+          for frag in &layout.fragments {
+            frags.push(frag.clone().translate(Point::new(sub_x, y)));
+          }
+          pair_end = pair_end.max(sub_x + layout.width);
+          pair_ascent = pair_ascent.max(layout.baseline - y);
+          pair_descent = pair_descent.max(layout.height - (layout.baseline - y));
+          annotations = annotations.merge_trailing(&layout.annotations);
+        }
+        block_ascent = block_ascent.max(pair_ascent);
+        block_descent = block_descent.max(pair_descent);
+        block_width = pair_end;
+      }
+      if !first_pair {
+        block_width += script_gap;
+      }
+      (block_width, block_ascent, block_descent, frags, annotations)
+    };
+
+    let (pre_width, pre_ascent, pre_descent, pre_frags, pre_annot) =
+      build_block(pre, MathKernSide::Left, false, self);
+    let (post_width, post_ascent, post_descent, post_frags, post_annot) =
+      build_block(post, MathKernSide::Right, true, self);
     let width_left = pre_width;
     let width_right = post_width;
     ascent = ascent.max(pre_ascent).max(post_ascent);
@@ -1768,6 +2618,9 @@ impl MathLayoutContext {
       height: ascent + descent,
       baseline: ascent,
       fragments,
+      annotations: post_annot
+        .merge_trailing(&base_layout.annotations)
+        .merge_trailing(&pre_annot),
     }
   }
 

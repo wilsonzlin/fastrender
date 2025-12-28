@@ -2,6 +2,7 @@ use crate::r#ref::compare::{compare_images, load_png_from_bytes, CompareConfig};
 use fastrender::math::{layout_mathml, MathNode, MathVariant};
 use fastrender::paint::display_list::DisplayItem;
 use fastrender::paint::display_list_builder::DisplayListBuilder;
+use fastrender::text::font_db::FontConfig;
 use fastrender::text::font_loader::FontContext;
 use fastrender::tree::box_tree::ReplacedType;
 use fastrender::{FastRender, FragmentContent, FragmentNode};
@@ -105,6 +106,19 @@ fn inline_math_baseline_matches_golden() {
   });
 }
 
+#[test]
+fn math_stretchy_ops_match_golden() {
+  with_stack(|| {
+    let mut renderer = FastRender::new().expect("renderer");
+    let html =
+      std::fs::read_to_string(fixture_path("math_stretchy_ops")).expect("load math_stretchy_ops");
+    let png = renderer
+      .render_to_png(&html, 540, 360)
+      .expect("render stretchy math");
+    compare_golden("math_stretchy_ops", &png, &CompareConfig::lenient());
+  });
+}
+
 fn fixture_path(name: &str) -> PathBuf {
   PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/html/{}.html", name))
 }
@@ -170,6 +184,84 @@ fn math_layout_falls_back_without_fonts() {
   assert!(layout.baseline > 0.0 && layout.baseline < layout.height);
 }
 
+fn math_font_context() -> FontContext {
+  let mut cfg = FontConfig::default();
+  cfg.font_dirs.push(PathBuf::from("tests/fixtures/fonts"));
+  FontContext::with_config(cfg)
+}
+
+#[test]
+fn scripts_on_italic_identifiers_offset_and_raise() {
+  let ctx = math_font_context();
+  let mut style = fastrender::ComputedStyle::default();
+  style.font_size = 24.0;
+  style.font_family = vec!["STIX Two Math".to_string()];
+  let base_node = MathNode::Identifier {
+    text: "f".into(),
+    variant: Some(MathVariant::Italic),
+  };
+  let sup_node = MathNode::Identifier {
+    text: "i".into(),
+    variant: None,
+  };
+  let node = MathNode::Superscript {
+    base: Box::new(base_node.clone()),
+    superscript: Box::new(sup_node),
+  };
+  let base_layout = layout_mathml(&base_node, &style, &ctx);
+  let combined = layout_mathml(&node, &style, &ctx);
+  let base_fragments = base_layout.fragments.len();
+  let (sup_origin, sup_advance) = combined
+    .fragments
+    .get(base_fragments)
+    .and_then(|f| match f {
+      fastrender::math::MathFragment::Glyph { origin, run } => Some((*origin, run.advance)),
+      _ => None,
+    })
+    .expect("superscript fragment");
+  assert!(
+    combined.width > base_layout.width,
+    "superscript should extend total width beyond the base glyph"
+  );
+  assert!(
+    sup_origin.y < combined.baseline,
+    "superscript glyph origin should be above the main baseline"
+  );
+}
+
+#[test]
+fn radicals_scale_with_nested_content() {
+  let ctx = math_font_context();
+  let mut style = fastrender::ComputedStyle::default();
+  style.font_size = 24.0;
+  style.font_family = vec!["STIX Two Math".to_string()];
+  let radicand = MathNode::SubSuperscript {
+    base: Box::new(MathNode::Identifier {
+      text: "x".into(),
+      variant: Some(MathVariant::Italic),
+    }),
+    subscript: Box::new(MathNode::Number {
+      text: "2".into(),
+      variant: None,
+    }),
+    superscript: Box::new(MathNode::Identifier {
+      text: "n".into(),
+      variant: None,
+    }),
+  };
+  let sqrt_node = MathNode::Sqrt(Box::new(radicand.clone()));
+  let radicand_layout = layout_mathml(&radicand, &style, &ctx);
+  let sqrt_layout = layout_mathml(&sqrt_node, &style, &ctx);
+  assert!(
+    sqrt_layout.height > radicand_layout.height + style.font_size * 0.1,
+    "sqrt should add headroom above a scripted radicand"
+  );
+  assert!(
+    sqrt_layout.width > radicand_layout.width,
+    "sqrt layout should extend to cover the radicand"
+  );
+}
+
 #[test]
 fn matrix_table_aligns_cells() {
   with_stack(|| {
@@ -193,6 +285,19 @@ fn matrix_table_aligns_cells() {
       layout.fragments.len() >= 4,
       "matrix should have at least four glyph fragments"
     );
+  });
+}
+
+#[test]
+fn math_piecewise_construct_matches_golden() {
+  with_stack(|| {
+    let mut renderer = FastRender::new().expect("renderer");
+    let html =
+      std::fs::read_to_string(fixture_path("math_piecewise")).expect("load math_piecewise");
+    let png = renderer
+      .render_to_png(&html, 560, 360)
+      .expect("render math piecewise");
+    compare_golden("math_piecewise", &png, &CompareConfig::lenient());
   });
 }
 
