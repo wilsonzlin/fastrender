@@ -114,6 +114,20 @@ fn normalize_fragment_origin(fragment: &FragmentNode) -> FragmentNode {
   normalized
 }
 
+#[derive(Clone)]
+struct PositionedCandidate {
+  child: BoxNode,
+  layout_child: BoxNode,
+  cb: ContainingBlock,
+  fragment: FragmentNode,
+  positioned_style: crate::style::computed::PositionedStyle,
+  preferred_min_inline: Option<f32>,
+  preferred_inline: Option<f32>,
+  preferred_min_block: Option<f32>,
+  preferred_block: Option<f32>,
+  is_replaced: bool,
+}
+
 fn trace_flex_text_ids() -> Vec<usize> {
   crate::debug::runtime::runtime_toggles()
     .usize_list("FASTR_TRACE_FLEX_TEXT")
@@ -4277,6 +4291,114 @@ impl FlexFormattingContext {
         .max(0.0);
 
     Size::new(content_width, content_height)
+  }
+
+  fn compute_static_positions_for_abs_children(
+    &self,
+    box_node: &BoxNode,
+    fragment: &FragmentNode,
+    in_flow_children: &[&BoxNode],
+    positioned: &[PositionedCandidate],
+    padding_origin: Point,
+  ) -> Result<HashMap<usize, Point>, LayoutError> {
+    let mut positions = HashMap::new();
+    if positioned.is_empty() {
+      return Ok(positions);
+    }
+
+    let mut inflow_sizes: HashMap<usize, Size> = HashMap::new();
+    for child in &fragment.children {
+      if let Some(box_id) = match &child.content {
+        FragmentContent::Block { box_id }
+        | FragmentContent::Inline { box_id, .. }
+        | FragmentContent::Text { box_id, .. }
+        | FragmentContent::Replaced { box_id, .. } => *box_id,
+        _ => None,
+      } {
+        inflow_sizes.insert(box_id, child.bounds.size);
+      }
+    }
+
+    let mut positioned_index: HashMap<usize, usize> = HashMap::new();
+    for (idx, candidate) in positioned.iter().enumerate() {
+      positioned_index.insert(candidate.child.id, idx);
+    }
+
+    let mut taffy: TaffyTree<*const BoxNode> = TaffyTree::new();
+    let mut child_nodes = Vec::new();
+    let mut node_lookup: HashMap<usize, NodeId> = HashMap::new();
+
+    let mut ordered_children: Vec<(i32, usize)> = Vec::new();
+    for (idx, child) in box_node.children.iter().enumerate() {
+      if child.style.running_position.is_some() {
+        continue;
+      }
+      ordered_children.push((child.style.order, idx));
+    }
+    ordered_children.sort_by(|(a_order, a_idx), (b_order, b_idx)| {
+      a_order.cmp(b_order).then_with(|| a_idx.cmp(b_idx))
+    });
+
+    for (_, child_idx) in ordered_children {
+      let child = &box_node.children[child_idx];
+      if let Some(&pos_idx) = positioned_index.get(&child.id) {
+        let candidate = &positioned[pos_idx];
+        let mut style =
+          self.computed_style_to_taffy(&candidate.layout_child, false, Some(&box_node.style));
+        style.size.width = Dimension::length(candidate.fragment.bounds.width().max(0.0));
+        style.size.height = Dimension::length(candidate.fragment.bounds.height().max(0.0));
+        let node = taffy.new_leaf(style).map_err(|e| {
+          LayoutError::MissingContext(format!("Failed to create Taffy leaf: {:?}", e))
+        })?;
+        node_lookup.insert(candidate.child.id, node);
+        child_nodes.push(node);
+      } else {
+        let size = inflow_sizes
+          .get(&child.id)
+          .cloned()
+          .unwrap_or(Size::new(0.0, 0.0));
+        let mut style = self.computed_style_to_taffy(child, false, Some(&box_node.style));
+        style.size.width = Dimension::length(size.width.max(0.0));
+        style.size.height = Dimension::length(size.height.max(0.0));
+        let node = taffy.new_leaf(style).map_err(|e| {
+          LayoutError::MissingContext(format!("Failed to create Taffy leaf: {:?}", e))
+        })?;
+        child_nodes.push(node);
+      }
+    }
+
+    let mut root_style = self.computed_style_to_taffy(box_node, true, None);
+    root_style.size.width = Dimension::length(fragment.bounds.width());
+    root_style.size.height = Dimension::length(fragment.bounds.height());
+    let root = taffy
+      .new_with_children(root_style, &child_nodes)
+      .map_err(|e| LayoutError::MissingContext(format!("Failed to create Taffy root: {:?}", e)))?;
+
+    taffy
+      .compute_layout(
+        root,
+        taffy::geometry::Size {
+          width: AvailableSpace::Definite(fragment.bounds.width()),
+          height: AvailableSpace::Definite(fragment.bounds.height()),
+        },
+      )
+      .map_err(|e| LayoutError::MissingContext(format!("Taffy layout failed: {:?}", e)))?;
+
+    for candidate in positioned {
+      if let Some(node_id) = node_lookup.get(&candidate.child.id) {
+        if let Ok(layout) = taffy.layout(*node_id) {
+          positions.insert(
+            candidate.child.id,
+            Point::new(
+              layout.location.x - padding_origin.x,
+              layout.location.y - padding_origin.y,
+            ),
+          );
+        }
+      }
+    }
+
+    Ok(positions)
   }
 
   // ==========================================================================
