@@ -1853,6 +1853,7 @@ impl FormattingContext for FlexFormattingContext {
         self.nearest_positioned_cb
       };
 
+      let mut positioned_candidates: Vec<PositionedCandidate> = Vec::new();
       for child in positioned_children {
         let cb = match child.style.position {
           Position::Fixed => {
@@ -1872,7 +1873,6 @@ impl FormattingContext for FlexFormattingContext {
                   cb,
               );
 
-        let original_style = child.style.clone();
         // Layout child as static to obtain intrinsic size.
         let mut layout_child = child.clone();
         let mut style = (*layout_child.style).clone();
@@ -1893,14 +1893,10 @@ impl FormattingContext for FlexFormattingContext {
             .map(CrateAvailableSpace::Definite)
             .unwrap_or(CrateAvailableSpace::Indefinite),
         );
-        let mut child_fragment = fc.layout(&layout_child, &child_constraints)?;
+        let child_fragment = fc.layout(&layout_child, &child_constraints)?;
 
         let positioned_style =
           resolve_positioned_style(&child.style, &cb, self.viewport_size, &self.font_context);
-        // Static position should start at the padding box origin; AbsoluteLayout will
-        // add padding/border offsets, so use the content origin here to avoid double
-        // counting padding.
-        let static_pos = Point::ZERO;
         let preferred_min_inline = fc
           .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
           .ok();
@@ -1913,16 +1909,49 @@ impl FormattingContext for FlexFormattingContext {
         let preferred_block = fc
           .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent)
           .ok();
-        let mut input =
-          AbsoluteLayoutInput::new(positioned_style, child_fragment.bounds.size, static_pos);
-        input.is_replaced = child.is_replaced();
-        input.preferred_min_inline_size = preferred_min_inline;
-        input.preferred_inline_size = preferred_inline;
-        input.preferred_min_block_size = preferred_min_block;
-        input.preferred_block_size = preferred_block;
-        let result = abs.layout_absolute(&input, &cb)?;
+
+        positioned_candidates.push(PositionedCandidate {
+          child: child.clone(),
+          layout_child,
+          cb,
+          fragment: child_fragment,
+          positioned_style,
+          preferred_min_inline,
+          preferred_inline,
+          preferred_min_block,
+          preferred_block,
+          is_replaced: child.is_replaced(),
+        });
+      }
+
+      let static_positions = self
+        .compute_static_positions_for_abs_children(
+          box_node,
+          &fragment,
+          &in_flow_children,
+          &positioned_candidates,
+          padding_origin,
+        )
+        .unwrap_or_default();
+
+      for candidate in positioned_candidates {
+        let mut input = AbsoluteLayoutInput::new(
+          candidate.positioned_style,
+          candidate.fragment.bounds.size,
+          static_positions
+            .get(&candidate.child.id)
+            .copied()
+            .unwrap_or(Point::ZERO),
+        );
+        input.is_replaced = candidate.is_replaced;
+        input.preferred_min_inline_size = candidate.preferred_min_inline;
+        input.preferred_inline_size = candidate.preferred_inline;
+        input.preferred_min_block_size = candidate.preferred_min_block;
+        input.preferred_block_size = candidate.preferred_block;
+        let result = abs.layout_absolute(&input, &candidate.cb)?;
+        let mut child_fragment = candidate.fragment;
         child_fragment.bounds = Rect::new(result.position, result.size);
-        child_fragment.style = Some(original_style);
+        child_fragment.style = Some(candidate.child.style.clone());
         fragment.children.push(child_fragment);
       }
     }
