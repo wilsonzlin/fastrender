@@ -1,0 +1,48 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      @page {
+        size: 400px 500px;
+        margin: 40px;
+        @top-center {
+          content: "Page " counter(page) " - " element(header, start);
+        }
+        @bottom-center {
+          content: string(chapter) " / " element(header);
+        }
+      }
+
+      body {
+        margin: 0;
+        font-family: sans-serif;
+      }
+
+      h1 {
+        string-set: chapter content();
+        margin: 0 0 8px 0;
+      }
+
+      h2 {
+        position: running(header);
+        margin: 0 0 12px 0;
+        font-size: 20px;
+        font-weight: 600;
+      }
+
+      .section {
+        height: 420px;
+        background: #f0f4ff;
+        margin-bottom: 16px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Running Elements Sample</h1>
+    <h2>Intro Header</h2>
+    <div class="section"></div>
+    <h2>Second Header</h2>
+    <div class="section"></div>
+  </body>
+</html>

@@ -19,6 +19,7 @@ mod noscript_layout;
 mod paged_media;
 mod render_wrap;
 mod ruby;
+mod running_elements;
 mod running_position;
 mod scroll_snap_pagination;
 mod scrollbar_gutter;

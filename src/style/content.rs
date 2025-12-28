@@ -177,6 +177,28 @@ impl fmt::Display for RunningElementSelect {
   }
 }
 
+/// Values captured for a named string on a page.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RunningStringValues {
+  /// Value carried into this page.
+  pub start: Option<String>,
+  /// First assignment within this page.
+  pub first: Option<String>,
+  /// Last assignment within this page.
+  pub last: Option<String>,
+}
+
+/// Running element values captured for a page.
+#[derive(Debug, Clone, Default)]
+pub struct RunningElementValues {
+  /// Value carried into this page (last occurrence before the page start).
+  pub start: Option<crate::tree::fragment_tree::FragmentNode>,
+  /// First occurrence within this page.
+  pub first: Option<crate::tree::fragment_tree::FragmentNode>,
+  /// Last occurrence within this page.
+  pub last: Option<crate::tree::fragment_tree::FragmentNode>,
+}
+
 /// A single content item within a content value
 ///
 /// Content items are concatenated together to form the final content.
@@ -288,17 +310,6 @@ pub enum StringReferenceKind {
   First,
   /// Last assignment within the current page (default for `string()`).
   Last,
-}
-
-/// Values captured for a named string on a page.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct RunningStringValues {
-  /// Value carried into this page.
-  pub start: Option<String>,
-  /// First assignment within this page.
-  pub first: Option<String>,
-  /// Last assignment within this page.
-  pub last: Option<String>,
 }
 
 /// Computed value for a string-set assignment.
@@ -840,6 +851,14 @@ pub struct ContentContext {
   /// Key: string name, Value: per-page running values.
   running_strings: HashMap<String, RunningStringValues>,
 
+  /// Running element snapshots available for the current page.
+  ///
+  /// Key: element identifier, Value: per-page running element values.
+  running_elements: HashMap<String, RunningElementValues>,
+
+  /// First occurrence of each running element in the document.
+  running_element_firsts: HashMap<String, crate::tree::fragment_tree::FragmentNode>,
+
   /// Element attributes
   ///
   /// Key: attribute name, Value: attribute value
@@ -861,6 +880,8 @@ impl ContentContext {
     Self {
       counters: HashMap::new(),
       running_strings: HashMap::new(),
+      running_elements: HashMap::new(),
+      running_element_firsts: HashMap::new(),
       attributes: HashMap::new(),
       quote_depth: 0,
       quotes: default_quotes(),
@@ -908,6 +929,19 @@ impl ContentContext {
     self.running_strings = values;
   }
 
+  /// Sets the per-page running element snapshots available to content generation.
+  pub fn set_running_elements(&mut self, values: HashMap<String, RunningElementValues>) {
+    self.running_elements = values;
+  }
+
+  /// Sets the first occurrence of each running element in the document.
+  pub fn set_running_element_firsts(
+    &mut self,
+    values: HashMap<String, crate::tree::fragment_tree::FragmentNode>,
+  ) {
+    self.running_element_firsts = values;
+  }
+
   /// Resolves a named string value for the current page.
   pub fn get_running_string(&self, name: &str, kind: StringReferenceKind) -> Option<&str> {
     let values = self.running_strings.get(name)?;
@@ -915,6 +949,31 @@ impl ContentContext {
       StringReferenceKind::Start => values.start.as_deref(),
       StringReferenceKind::First => values.first.as_deref().or_else(|| values.start.as_deref()),
       StringReferenceKind::Last => values.last.as_deref().or_else(|| values.start.as_deref()),
+    }
+  }
+
+  /// Resolves a running element snapshot for the current page.
+  pub fn get_running_element(
+    &self,
+    name: &str,
+    select: RunningElementSelect,
+  ) -> Option<crate::tree::fragment_tree::FragmentNode> {
+    let values = self.running_elements.get(name);
+    match select {
+      RunningElementSelect::First => self
+        .running_element_firsts
+        .get(name)
+        .cloned()
+        .or_else(|| values.and_then(|v| v.first.clone().or_else(|| v.start.clone()))),
+      RunningElementSelect::Start => {
+        values.and_then(|v| v.first.clone().or_else(|| v.start.clone()))
+      }
+      RunningElementSelect::Last => values.and_then(|v| {
+        v.last
+          .clone()
+          .or_else(|| v.first.clone())
+          .or_else(|| v.start.clone())
+      }),
     }
   }
 
