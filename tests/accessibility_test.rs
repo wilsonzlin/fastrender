@@ -432,6 +432,86 @@ fn accessibility_relations_and_visibility() {
 }
 
 #[test]
+fn accessibility_aria_labelledby_allows_hidden_reference() {
+  let mut renderer = FastRender::new().expect("renderer");
+  let html = r##"
+    <html>
+      <body>
+        <span id="lbl" style="display:none">Hidden Label</span>
+        <input id="t" aria-labelledby="lbl">
+      </body>
+    </html>
+  "##;
+  let dom = renderer.parse_html(html).expect("parse");
+  let tree = renderer
+    .accessibility_tree(&dom, 800, 600)
+    .expect("accessibility tree");
+
+  let input = find_by_id(&tree, "t").expect("input node");
+  assert_eq!(input.name.as_deref(), Some("Hidden Label"));
+}
+
+#[test]
+fn accessibility_aria_labelledby_skips_aria_hidden_reference() {
+  let mut renderer = FastRender::new().expect("renderer");
+  let html = r##"
+    <html>
+      <body>
+        <span id="lbl" aria-hidden="true" style="display:none">Hidden Label</span>
+        <input id="t" aria-labelledby="lbl">
+      </body>
+    </html>
+  "##;
+  let dom = renderer.parse_html(html).expect("parse");
+  let tree = renderer
+    .accessibility_tree(&dom, 800, 600)
+    .expect("accessibility tree");
+
+  let input = find_by_id(&tree, "t").expect("input node");
+  assert!(input.name.is_none());
+}
+
+#[test]
+fn accessibility_aria_describedby_allows_hidden_reference() {
+  let mut renderer = FastRender::new().expect("renderer");
+  let html = r##"
+    <html>
+      <body>
+        <span id="desc" style="display:none">Hidden Description</span>
+        <input id="t" aria-describedby="desc">
+      </body>
+    </html>
+  "##;
+  let dom = renderer.parse_html(html).expect("parse");
+  let tree = renderer
+    .accessibility_tree(&dom, 800, 600)
+    .expect("accessibility tree");
+
+  let input = find_by_id(&tree, "t").expect("input node");
+  assert_eq!(input.description.as_deref(), Some("Hidden Description"));
+}
+
+#[test]
+fn accessibility_aria_describedby_skips_aria_hidden_reference() {
+  let mut renderer = FastRender::new().expect("renderer");
+  let html = r##"
+    <html>
+      <body>
+        <span id="desc" aria-hidden="true" style="display:none">Hidden Description</span>
+        <input id="t" aria-describedby="desc">
+      </body>
+    </html>
+  "##;
+  let dom = renderer.parse_html(html).expect("parse");
+  let tree = renderer
+    .accessibility_tree(&dom, 800, 600)
+    .expect("accessibility tree");
+
+  let input = find_by_id(&tree, "t").expect("input node");
+  assert!(input.description.is_none());
+}
+
+#[test]
 fn accessibility_range_slider_exposes_default_value() {
   let mut renderer = FastRender::new().expect("renderer");
   let html = r#"<input id="r" type="range" min="0" max="10" />"#;
