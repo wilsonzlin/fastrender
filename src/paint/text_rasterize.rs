@@ -896,6 +896,40 @@ impl TextRasterizer {
     )
   }
 
+  /// Renders text with a specific font (low-level API) and explicit palette/variations plus render state.
+  pub fn render_glyphs_with_state_and_palette(
+    &mut self,
+    glyphs: &[GlyphPosition],
+    font: &LoadedFont,
+    font_size: f32,
+    x: f32,
+    baseline_y: f32,
+    color: Rgba,
+    synthetic_bold: f32,
+    synthetic_oblique: f32,
+    palette_index: u16,
+    variations: &[Variation],
+    rotation: Option<Transform>,
+    state: TextRenderState<'_>,
+    pixmap: &mut Pixmap,
+  ) -> Result<f32> {
+    self.render_glyph_run(
+      glyphs,
+      font,
+      font_size,
+      synthetic_bold,
+      synthetic_oblique,
+      palette_index,
+      variations,
+      rotation,
+      x,
+      baseline_y,
+      color,
+      state,
+      pixmap,
+    )
+  }
+
   pub fn render_glyphs(
     &mut self,
     glyphs: &[GlyphPosition],

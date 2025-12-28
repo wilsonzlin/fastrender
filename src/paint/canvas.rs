@@ -56,6 +56,7 @@ use crate::paint::text_shadow::PathBounds;
 use crate::style::color::Rgba;
 use crate::text::font_db::LoadedFont;
 use crate::text::pipeline::GlyphPosition;
+use crate::text::pipeline::ShapedRun;
 use crate::text::variations::{to_rustybuzz_variations, FontVariation};
 use tiny_skia::BlendMode as SkiaBlendMode;
 use tiny_skia::FillRule;
@@ -684,6 +685,15 @@ impl Canvas {
     self.current_state.clip_mask.as_ref()
   }
 
+  fn current_text_state<'a>(&self, clip_mask: Option<&'a Mask>) -> TextRenderState<'a> {
+    TextRenderState {
+      transform: self.current_state.transform,
+      clip_mask,
+      opacity: self.current_state.opacity,
+      blend_mode: self.current_state.blend_mode,
+    }
+  }
+
   // ========================================================================
   // Drawing Operations
   // ========================================================================
@@ -920,10 +930,41 @@ impl Canvas {
     Ok((paths, bounds))
   }
 
-  /// Draws text glyphs at the specified position
+  /// Draws a shaped text run at the specified position.
   ///
-  /// Renders shaped glyphs from the text shaping pipeline. Each glyph is
-  /// drawn using its outline from the font.
+  /// Applies the current canvas transform, clip, opacity, blend mode, palette
+  /// index, and font variations to the provided [`ShapedRun`].
+  ///
+  /// # Examples
+  ///
+  /// ```rust,ignore
+  /// let pipeline = ShapingPipeline::new();
+  /// let style = ComputedStyle::default();
+  /// let runs = pipeline.shape("Hello", &style, &font_context)?;
+  /// let run = &runs[0];
+  /// canvas.draw_shaped_run(run, Point::new(10.0, 50.0), Rgba::BLACK);
+  /// ```
+  pub fn draw_shaped_run(&mut self, run: &ShapedRun, position: Point, color: Rgba) {
+    if run.glyphs.is_empty() || (color.a == 0.0 && self.current_state.opacity == 0.0) {
+      return;
+    }
+
+    let clip_mask = self.current_state.clip_mask.clone();
+    let state = self.current_text_state(clip_mask.as_ref());
+    let _ = self.text_rasterizer.render_shaped_run_with_state(
+      run,
+      position.x,
+      position.y,
+      color,
+      &mut self.pixmap,
+      state,
+    );
+  }
+
+  /// Draws text glyphs at the specified position.
+  ///
+  /// Renders positioned glyphs from the text shaping pipeline using an explicit
+  /// palette index and variation list.
   ///
   /// # Arguments
   ///
@@ -932,6 +973,10 @@ impl Canvas {
   /// * `font` - Font containing glyph outlines
   /// * `font_size` - Font size in pixels
   /// * `color` - Text color
+  /// * `synthetic_bold` - Additional stroke width to simulate bold
+  /// * `synthetic_oblique` - Shear factor to simulate italics
+  /// * `palette_index` - Color font palette index
+  /// * `variations` - Active variation settings
   ///
   /// # Examples
   ///
@@ -948,7 +993,8 @@ impl Canvas {
   ///   Rgba::BLACK,
   ///   run.synthetic_bold,
   ///   run.synthetic_oblique,
-  ///   &[],
+  ///   run.palette_index,
+  ///   &run.variations,
   /// );
   /// ```
   pub fn draw_text(
@@ -960,6 +1006,7 @@ impl Canvas {
     color: Rgba,
     synthetic_bold: f32,
     synthetic_oblique: f32,
+    palette_index: u16,
     variations: &[FontVariation],
   ) {
     if glyphs.is_empty() || (color.a == 0.0 && self.current_state.opacity == 0.0) {
@@ -967,14 +1014,10 @@ impl Canvas {
     }
 
     let hb_variations = to_rustybuzz_variations(variations);
-    let state = TextRenderState {
-      transform: self.current_state.transform,
-      clip_mask: self.current_state.clip_mask.as_ref(),
-      opacity: self.current_state.opacity,
-      blend_mode: self.current_state.blend_mode,
-    };
+    let clip_mask = self.current_state.clip_mask.clone();
+    let state = self.current_text_state(clip_mask.as_ref());
 
-    let _ = self.text_rasterizer.render_glyphs_with_variations(
+    let _ = self.text_rasterizer.render_glyphs_with_state_and_palette(
       glyphs,
       font,
       font_size,
@@ -983,6 +1026,7 @@ impl Canvas {
       color,
       synthetic_bold,
       synthetic_oblique,
+      palette_index,
       &hb_variations,
       None,
       state,

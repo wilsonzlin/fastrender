@@ -4608,12 +4608,8 @@ impl Painter {
       let inline_step = inline_step_raw * self.scale;
       let block_step = block_step_raw * self.scale;
       let inline_pos = match run.direction {
-        crate::text::pipeline::Direction::RightToLeft => {
-          pen_inline - glyph.x_offset * self.scale
-        }
-        crate::text::pipeline::Direction::LeftToRight => {
-          pen_inline + glyph.x_offset * self.scale
-        }
+        crate::text::pipeline::Direction::RightToLeft => pen_inline - glyph.x_offset * self.scale,
+        crate::text::pipeline::Direction::LeftToRight => pen_inline + glyph.x_offset * self.scale,
       };
       let block_pos = block_origin + pen_block + glyph.y_offset * self.scale;
       let glyph_id: u16 = glyph.glyph_id as u16;
@@ -9320,22 +9316,6 @@ pub fn paint_tree_display_list_with_resources_scaled_offset(
   scale: f32,
   offset: Point,
 ) -> Result<Pixmap> {
-<<<<<<< HEAD
-  let viewport = tree.viewport_size();
-  let display_list = DisplayListBuilder::with_image_cache(image_cache)
-    .with_font_context(font_ctx.clone())
-    .with_svg_filter_defs(tree.svg_filter_defs.clone())
-    .with_device_pixel_ratio(scale)
-    .with_viewport_size(viewport.width, viewport.height)
-    .build_with_stacking_tree_from_tree_offset(tree, offset);
-
-  let optimizer = DisplayListOptimizer::new();
-  let viewport_rect = Rect::from_xywh(0.0, 0.0, viewport.width, viewport.height);
-  let (optimized, _) = optimizer.optimize(display_list, viewport_rect);
-
-  let renderer = DisplayListRenderer::new_scaled(width, height, background, font_ctx, scale)?;
-  renderer.render(&optimized)
-=======
   paint_display_list_with_trace(
     tree,
     width,
@@ -9347,7 +9327,6 @@ pub fn paint_tree_display_list_with_resources_scaled_offset(
     offset,
     TraceHandle::disabled(),
   )
->>>>>>> 2efc5d4 (refactor: make display list the only paint backend)
 }
 
 /// Paints a fragment tree via the display-list pipeline using explicit resources.

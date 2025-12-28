@@ -2311,11 +2311,7 @@ fn resolve_font_for_cluster(
                   if !base_supported(id) {
                     continue;
                   }
-<<<<<<< HEAD
-                  let is_emoji_font = font_is_emoji_font(db, id, &font);
-=======
                   let is_emoji_font = font_is_emoji_font(db, Some(id), &font);
->>>>>>> 6f3d1ad (Fix font resolution cache handling and emoji font checks)
                   let idx = picker.bump_order();
                   picker.record_any(&font, is_emoji_font, idx);
                   if covers_needed(id) {
@@ -2334,11 +2330,7 @@ fn resolve_font_for_cluster(
       if let Some(font) =
         font_context.match_web_font_for_char(name, weight, style, stretch, oblique_angle, base_char)
       {
-<<<<<<< HEAD
-        let is_emoji_font = crate::text::font_db::font_name_indicates_emoji(&font.family);
-=======
         let is_emoji_font = font_is_emoji_font(db, None, &font);
->>>>>>> 6f3d1ad (Fix font resolution cache handling and emoji font checks)
         let idx = picker.bump_order();
         if !require_base_glyph || font_supports_all_chars(&font, &[base_char]) {
           picker.record_any(&font, is_emoji_font, idx);
@@ -2377,11 +2369,7 @@ fn resolve_font_for_cluster(
               if !base_supported(id) {
                 continue;
               }
-<<<<<<< HEAD
-              let is_emoji_font = font_is_emoji_font(db, id, &font);
-=======
               let is_emoji_font = font_is_emoji_font(db, Some(id), &font);
->>>>>>> 6f3d1ad (Fix font resolution cache handling and emoji font checks)
               let idx = picker.bump_order();
               picker.record_any(&font, is_emoji_font, idx);
               if covers_needed(id) {
@@ -2411,11 +2399,7 @@ fn resolve_font_for_cluster(
                   if !base_supported(id) {
                     continue;
                   }
-<<<<<<< HEAD
-                  let is_emoji_font = font_is_emoji_font(db, id, &font);
-=======
                   let is_emoji_font = font_is_emoji_font(db, Some(id), &font);
->>>>>>> 6f3d1ad (Fix font resolution cache handling and emoji font checks)
                   let idx = picker.bump_order();
                   picker.record_any(&font, is_emoji_font, idx);
                   if covers_needed(id) {
@@ -2454,11 +2438,7 @@ fn resolve_font_for_cluster(
       if !base_supported(face.id) {
         continue;
       }
-<<<<<<< HEAD
-      let is_emoji_font = font_is_emoji_font(db, face.id, &font);
-=======
       let is_emoji_font = font_is_emoji_font(db, Some(face.id), &font);
->>>>>>> 6f3d1ad (Fix font resolution cache handling and emoji font checks)
       let idx = picker.bump_order();
       picker.record_any(&font, is_emoji_font, idx);
       if covers_needed(face.id) {
@@ -2749,8 +2729,12 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
 
   let mut features = run.features.clone();
   if run.vertical {
-    let need_vert = !features.iter().any(|f| f.tag.to_bytes() == *b"vert" && f.value != 0);
-    let need_vrt2 = !features.iter().any(|f| f.tag.to_bytes() == *b"vrt2" && f.value != 0);
+    let need_vert = !features
+      .iter()
+      .any(|f| f.tag.to_bytes() == *b"vert" && f.value != 0);
+    let need_vrt2 = !features
+      .iter()
+      .any(|f| f.tag.to_bytes() == *b"vrt2" && f.value != 0);
     if need_vert {
       features.push(Feature {
         tag: Tag::from_bytes(b"vert"),
@@ -2795,10 +2779,26 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
       .and_then(|s| s.chars().next())
       .is_some_and(is_bidi_control_char);
 
-    let inline_advance_raw = if run.vertical { pos.y_advance } else { pos.x_advance };
-    let cross_advance_raw = if run.vertical { pos.x_advance } else { pos.y_advance };
-    let inline_offset_raw = if run.vertical { pos.y_offset } else { pos.x_offset };
-    let cross_offset_raw = if run.vertical { pos.x_offset } else { pos.y_offset };
+    let inline_advance_raw = if run.vertical {
+      pos.y_advance
+    } else {
+      pos.x_advance
+    };
+    let cross_advance_raw = if run.vertical {
+      pos.x_advance
+    } else {
+      pos.y_advance
+    };
+    let inline_offset_raw = if run.vertical {
+      pos.y_offset
+    } else {
+      pos.x_offset
+    };
+    let cross_offset_raw = if run.vertical {
+      pos.x_offset
+    } else {
+      pos.y_offset
+    };
     let inline_advance = inline_advance_raw as f32 * scale;
     let cross_advance = cross_advance_raw as f32 * scale;
     if !is_bidi_control {
