@@ -11,6 +11,7 @@ use fastrender::geometry::EdgeOffsets;
 use fastrender::geometry::Point;
 use fastrender::geometry::Rect;
 use fastrender::geometry::Size;
+use fastrender::style::types::Direction;
 use fastrender::AbsoluteLayout;
 use fastrender::AbsoluteLayoutInput;
 use fastrender::AbsoluteLayoutResult;
@@ -272,6 +273,49 @@ fn test_constraint_overconstrained_ignores_bottom() {
 
   assert_eq!(result.position.y, 30.0);
   assert_eq!(result.size.height, 80.0);
+}
+
+#[test]
+fn test_constraint_overconstrained_ignores_left_in_rtl() {
+  let layout = AbsoluteLayout::new();
+
+  let mut style = default_style();
+  style.direction = Direction::Rtl;
+  style.position = Position::Absolute;
+  style.left = LengthOrAuto::px(20.0);
+  style.width = LengthOrAuto::px(100.0);
+  style.right = LengthOrAuto::px(30.0);
+
+  let input = create_input(style, Size::new(50.0, 50.0));
+  let cb = create_cb(400.0, 300.0);
+
+  let result = layout.layout_absolute(&input, &cb).unwrap();
+
+  assert_eq!(result.position.x, 270.0);
+  assert_eq!(result.size.width, 100.0);
+}
+
+#[test]
+fn constraint_auto_margins_keep_overconstrained_equation_in_rtl() {
+  let layout = AbsoluteLayout::new();
+
+  let mut style = default_style();
+  style.direction = Direction::Rtl;
+  style.position = Position::Absolute;
+  style.left = LengthOrAuto::px(20.0);
+  style.width = LengthOrAuto::px(100.0);
+  style.right = LengthOrAuto::px(30.0);
+  style.margin_left_auto = true;
+  style.margin_right_auto = true;
+
+  let input = create_input(style, Size::new(50.0, 50.0));
+  let cb = create_cb(400.0, 300.0);
+
+  let result = layout.layout_absolute(&input, &cb).unwrap();
+
+  assert_eq!(result.position.x, 145.0);
+  assert_eq!(result.margins.left, 125.0);
+  assert_eq!(result.margins.right, 125.0);
 }
 
 #[test]

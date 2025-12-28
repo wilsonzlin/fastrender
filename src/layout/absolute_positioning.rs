@@ -31,7 +31,7 @@
 //! - Complete constraint equation resolution
 //! - Auto margin centering support
 //! - Static position fallback for unspecified offsets
-//! - Overconstrained case handling (LTR: ignore right, ignore bottom)
+//! - Overconstrained case handling (horizontal inset ignored per direction; vertical ignores bottom)
 //! - Percentage value resolution
 //!
 //! # Example
@@ -59,6 +59,7 @@ use crate::layout::utils::resolve_font_relative_length_for_positioned;
 use crate::layout::utils::resolve_offset_for_positioned;
 use crate::style::computed::PositionedStyle;
 use crate::style::position::Position;
+use crate::style::types::Direction;
 use crate::style::values::Length;
 use crate::style::values::LengthOrAuto;
 use crate::style::values::LengthUnit;
@@ -393,7 +394,7 @@ impl AbsoluteLayout {
   ///
   /// # Cases
   ///
-  /// 1. All three (left, width, right) specified → overconstrained, ignore right (LTR)
+  /// 1. All three (left, width, right) specified → overconstrained, ignore trailing inset (LTR: right, RTL: left)
   /// 2. left + width specified → compute right (ignored)
   /// 3. right + width specified → compute left
   /// 4. left + right specified → compute width
@@ -489,25 +490,37 @@ impl AbsoluteLayout {
       style.margin.right
     };
 
-    let (mut x, mut width, overconstrained) = match (left, specified_width, right) {
-      // Case 1: All three specified (overconstrained) - ignore right for LTR
+    let overconstrained = left.is_some()
+      && specified_width.is_some()
+      && right.is_some()
+      && !margin_left_auto
+      && !margin_right_auto;
+    let (resolved_left, resolved_right) = if overconstrained {
+      match style.direction {
+        Direction::Ltr => (left, None),
+        Direction::Rtl => (None, right),
+      }
+    } else {
+      (left, right)
+    };
+
+    let (mut x, mut width) = match (resolved_left, specified_width, resolved_right) {
+      // Case 1: All three specified (auto margins handled later)
       (Some(l), Some(w), Some(_r)) => {
-        // For LTR, ignore right value
         let x = l + margin_left + border_left + padding_left;
-        // Overconstrained only when margins are definite; auto margins may still resolve the equation.
-        (x, w, !margin_left_auto && !margin_right_auto)
+        (x, w)
       }
 
       // Case 2: left and width specified, right is auto
       (Some(l), Some(w), None) => {
         let x = l + margin_left + border_left + padding_left;
-        (x, w, false)
+        (x, w)
       }
 
       // Case 3: right and width specified, left is auto
       (None, Some(w), Some(r)) => {
         let x = cb_width - r - margin_right - border_right - padding_right - w;
-        (x, w, false)
+        (x, w)
       }
 
       // Case 4: left and right specified, width is auto (solve constraint)
@@ -519,7 +532,7 @@ impl AbsoluteLayout {
           available.max(0.0)
         };
         let x = l + margin_left + border_left + padding_left;
-        (x, width, false)
+        (x, width)
       }
 
       // Case 5: Only left specified - width auto shrink-to-fit
@@ -527,7 +540,7 @@ impl AbsoluteLayout {
         let available = cb_width - l - margin_left - margin_right - total_horizontal_spacing;
         let width = shrink(available);
         let x = l + margin_left + border_left + padding_left;
-        (x, width, false)
+        (x, width)
       }
 
       // Case 6: Only right specified - width auto shrink-to-fit
@@ -535,14 +548,14 @@ impl AbsoluteLayout {
         let available = cb_width - r - margin_left - margin_right - total_horizontal_spacing;
         let width = shrink(available);
         let x = cb_width - r - margin_right - border_right - padding_right - width;
-        (x, width, false)
+        (x, width)
       }
 
       // Case 7: Only width specified - use static position for left
       (None, Some(w), None) => {
         // Use static position
         let x = static_x + margin_left + border_left + padding_left;
-        (x, w, false)
+        (x, w)
       }
 
       // Case 8: None specified - shrink-to-fit using available space
@@ -550,7 +563,7 @@ impl AbsoluteLayout {
         let available = cb_width - margin_left - margin_right - total_horizontal_spacing;
         let width = shrink(available);
         let x = static_x + margin_left + border_left + padding_left;
-        (x, width, false)
+        (x, width)
       }
     };
 
@@ -558,15 +571,17 @@ impl AbsoluteLayout {
 
     // If the leading edge was auto-resolved from the opposite inset, keep the specified inset
     // satisfied after clamping width (CSS 2.1 constraint equation).
-    if left.is_none() {
-      if let Some(r) = right {
+    if resolved_left.is_none() {
+      if let Some(r) = resolved_right {
         x = cb_width - r - margin_right - border_right - padding_right - width;
       }
     }
 
     // Apply auto margin resolution only when both edges participate in the constraint (CSS 2.1 §10.3.7).
     if !overconstrained {
-      if let (Some(left_offset), Some(right_offset), Some(_)) = (left, right, specified_width) {
+      if let (Some(left_offset), Some(right_offset), Some(_)) =
+        (resolved_left, resolved_right, specified_width)
+      {
         let available_for_margins = cb_width
           - left_offset
           - right_offset
@@ -1975,6 +1990,7 @@ pub fn resolve_positioned_style(
   };
   resolved.font_stretch = style.font_stretch;
   resolved.font_size_adjust = style.font_size_adjust;
+  resolved.direction = style.direction;
 
   let cb_width = containing_block.width();
   let inline_base = containing_block.inline_percentage_base().or(Some(cb_width));

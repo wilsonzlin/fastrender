@@ -31,6 +31,7 @@ use crate::style::display::Display;
 use crate::style::position::Position;
 use crate::style::types::BoxSizing;
 use crate::style::types::Containment;
+use crate::style::types::Direction;
 use crate::style::types::FilterFunction;
 use crate::style::types::FontSizeAdjust;
 use crate::style::types::FontStretch;
@@ -357,6 +358,11 @@ pub struct PositionedStyle {
   /// Initial: normal (1.2)
   /// Note: Can be length, number, or percentage
   pub line_height: LineHeight,
+  /// Base text direction (inherited)
+  ///
+  /// CSS: `direction`
+  /// Initial: ltr
+  pub direction: Direction,
 
   /// Text alignment
   ///
@@ -603,6 +609,7 @@ impl Default for PositionedStyle {
       aspect_ratio: super::types::AspectRatio::Auto,
       font_size_adjust: FontSizeAdjust::None,
       line_height: LineHeight::Normal,
+      direction: Direction::Ltr,
       text_align: TextAlign::Start,
       text_align_last: TextAlignLast::Auto,
       text_justify: TextJustify::Auto,
@@ -886,6 +893,7 @@ impl Default for PositionedStyleBuilder {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::style::types::Direction;
   use crate::style::AspectRatio;
 
   #[test]
@@ -907,6 +915,7 @@ mod tests {
     assert_eq!(style.font_size, 16.0);
     assert_eq!(style.root_font_size, 16.0);
     assert_eq!(style.font_weight, 400);
+    assert_eq!(style.direction, Direction::Ltr);
     assert!(matches!(style.font_size_adjust, FontSizeAdjust::None));
     assert!(matches!(style.aspect_ratio, AspectRatio::Auto));
   }
