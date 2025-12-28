@@ -31,6 +31,19 @@ fn get_test_font() -> Option<fastrender::text::font_db::LoadedFont> {
   ctx.get_sans_serif()
 }
 
+const VAR_FONT: &[u8] = include_bytes!("fixtures/fonts/AmstelvarAlpha-VF.ttf");
+
+fn variable_font() -> LoadedFont {
+  LoadedFont {
+    data: Arc::new(VAR_FONT.to_vec()),
+    index: 0,
+    family: "AmstelvarAlpha".to_string(),
+    weight: FontWeight::NORMAL,
+    style: FontStyle::Normal,
+    stretch: FontStretch::Normal,
+  }
+}
+
 fn create_test_pixmap(width: u32, height: u32) -> Pixmap {
   let mut pixmap = Pixmap::new(width, height).unwrap();
   pixmap.fill(tiny_skia::Color::WHITE);
@@ -264,6 +277,67 @@ fn glyph_cache_keys_include_variations() {
   let stats = rasterizer.cache_stats();
   assert_eq!(stats.misses, 2);
   assert_eq!(stats.hits, 1);
+}
+
+#[test]
+fn positioned_paths_use_variations_for_variable_fonts() {
+  let font = variable_font();
+  let face = ttf_parser::Face::parse(VAR_FONT, 0).expect("variable font parses");
+  let glyph_id = face.glyph_index('A').expect("glyph should exist").0 as u32;
+
+  let glyphs = vec![GlyphPosition {
+    glyph_id,
+    cluster: 0,
+    x_offset: 0.0,
+    y_offset: 0.0,
+    x_advance: 0.0,
+    y_advance: 0.0,
+  }];
+
+  let mut rasterizer = TextRasterizer::new();
+  let default_paths = rasterizer
+    .positioned_glyph_paths(&glyphs, &font, 48.0, 0.0, 0.0, 0.0, &[], None)
+    .expect("default outlines");
+  let varied_paths = rasterizer
+    .positioned_glyph_paths(
+      &glyphs,
+      &font,
+      48.0,
+      0.0,
+      0.0,
+      0.0,
+      &[Variation {
+        tag: Tag::from_bytes(b"wght"),
+        value: 900.0,
+      }],
+      None,
+    )
+    .expect("varied outlines");
+
+  assert_eq!(default_paths.len(), 1);
+  assert_eq!(varied_paths.len(), 1);
+
+  let default_bounds = default_paths[0].bounds();
+  let varied_bounds = varied_paths[0].bounds();
+  assert_ne!(
+    (
+      default_bounds.left(),
+      default_bounds.right(),
+      default_bounds.top(),
+      default_bounds.bottom()
+    ),
+    (
+      varied_bounds.left(),
+      varied_bounds.right(),
+      varied_bounds.top(),
+      varied_bounds.bottom()
+    ),
+    "variation coordinates should change extracted outlines"
+  );
+  assert!(
+    rasterizer.cache_size() >= 2,
+    "glyph cache should store separate entries per variation"
+  );
 }
 
 // ============================================================================

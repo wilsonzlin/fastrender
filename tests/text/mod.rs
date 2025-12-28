@@ -8,6 +8,7 @@ mod color_font_detection_test;
 mod emoji_test;
 mod emoji_unified_test;
 mod font_fallback;
+mod font_variation_backend;
 mod font_metrics_test;
 mod font_palette;
 mod generic_family_mapping_test;

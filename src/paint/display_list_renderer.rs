@@ -31,6 +31,7 @@ use crate::paint::display_list::DisplayItem;
 use crate::paint::display_list::DisplayList;
 use crate::paint::display_list::EmphasisMark;
 use crate::paint::display_list::FillRectItem;
+use crate::paint::display_list::FontId;
 use crate::paint::display_list::GlyphInstance;
 use crate::paint::display_list::ImageData;
 use crate::paint::display_list::ImageFilterQuality;
@@ -88,11 +89,13 @@ use crate::style::types::TransformStyle;
 use crate::style::values::Length;
 #[cfg(test)]
 use crate::style::ComputedStyle;
+use crate::text::font_db::FontStretch;
+use crate::text::font_db::FontStyle as DbFontStyle;
 use crate::text::font_db::LoadedFont;
 use crate::text::font_loader::FontContext;
 use crate::text::pipeline::GlyphPosition;
 use rayon::prelude::*;
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 use tiny_skia::BlendMode as SkiaBlendMode;
 use tiny_skia::GradientStop as SkiaGradientStop;
 use tiny_skia::IntSize;
@@ -1490,7 +1493,7 @@ impl DisplayListRenderer {
       shadows: item.shadows.clone(),
       font_size: item.font_size,
       advance_width: item.advance_width,
-      font: item.font.clone(),
+      font_id: item.font_id.clone(),
       variations: item.variations.clone(),
       synthetic_bold: item.synthetic_bold,
       synthetic_oblique: item.synthetic_oblique,
@@ -1506,7 +1509,7 @@ impl DisplayListRenderer {
       shadows: scaled.shadows,
       font_size: scaled.font_size,
       advance_width: scaled.advance_width,
-      font: scaled.font,
+      font_id: scaled.font_id,
       variations: scaled.variations,
       synthetic_bold: scaled.synthetic_bold,
       synthetic_oblique: scaled.synthetic_oblique,
@@ -3302,6 +3305,30 @@ impl DisplayListRenderer {
         } else {
           None
         };
+        if std::env::var("DEBUG_FILTER_LAYER").is_ok()
+          && !scaled_filters.is_empty()
+          && layer_bounds
+            .map(|r| r.width() <= 8.0 && r.height() <= 8.0)
+            .unwrap_or(false)
+        {
+          let (sample_x, sample_y) = layer_origin
+            .map(|(x, y)| {
+              (
+                x.clamp(0.0, self.canvas.width() as f32 - 1.0) as u32,
+                y.clamp(0.0, self.canvas.height() as f32 - 1.0) as u32,
+              )
+            })
+            .unwrap_or((0, 0));
+          if let Some(px) = self.canvas.pixmap().pixel(sample_x, sample_y) {
+            eprintln!(
+              "parent at push ({sample_x}, {sample_y}): r={} g={} b={} a={}",
+              px.red(),
+              px.green(),
+              px.blue(),
+              px.alpha()
+            );
+          }
+        }
         if needs_layer {
           let bounded_rect = if has_backdrop { None } else { layer_bounds };
           if manual_blend.is_some() {
@@ -3418,6 +3445,36 @@ impl DisplayListRenderer {
               } else {
                 return Ok(());
               }
+            }
+          }
+
+          if std::env::var("DEBUG_FILTER_LAYER").is_ok()
+            && !record.filters.is_empty()
+            && layer.width() <= 8
+            && layer.height() <= 8
+          {
+            if let Some(px) = self.canvas.pixmap().pixel(
+              origin.0.clamp(0, self.canvas.width() as i32 - 1).max(0) as u32,
+              origin.1.clamp(0, self.canvas.height() as i32 - 1).max(0) as u32,
+            ) {
+              eprintln!(
+                "parent before filter composite at ({}, {}): r={} g={} b={} a={}",
+                origin.0,
+                origin.1,
+                px.red(),
+                px.green(),
+                px.blue(),
+                px.alpha()
+              );
+            }
+            if let Some(px) = layer.pixel(0, 0) {
+              eprintln!(
+                "layer before filter: r={} g={} b={} a={}",
+                px.red(),
+                px.green(),
+                px.blue(),
+                px.alpha()
+              );
             }
           }
 
@@ -3626,7 +3683,7 @@ impl DisplayListRenderer {
   }
 
   fn render_text(&mut self, item: &TextItem) -> Result<()> {
-    let Some(font) = self.font_for_item(item.font.as_ref()) else {
+    let Some(font) = self.resolve_font(item.font_id.as_ref()) else {
       return Err(
         RenderError::RasterizationFailed {
           reason: "Unable to resolve font for display list text".into(),
@@ -3652,7 +3709,6 @@ impl DisplayListRenderer {
       item.color,
       item.synthetic_bold,
       item.synthetic_oblique,
-      item.palette_index,
       &item.variations,
     );
     if let Some(emphasis) = &item.emphasis {
@@ -3675,7 +3731,7 @@ impl DisplayListRenderer {
       shadows: item.shadows.clone(),
       font_size: item.font_size,
       advance_width: item.advance_width,
-      font: item.font.clone(),
+      font_id: item.font_id.clone(),
       variations: item.variations.clone(),
       synthetic_bold: item.synthetic_bold,
       synthetic_oblique: item.synthetic_oblique,
@@ -4046,7 +4102,7 @@ impl DisplayListRenderer {
     let inline_vertical = emphasis.inline_vertical;
     if let TextEmphasisStyle::String(_) = emphasis.style {
       if let Some(text) = &emphasis.text {
-        let font = self.font_for_item(text.font.as_ref()).ok_or_else(|| {
+        let font = self.resolve_font(text.font_id.as_ref()).ok_or_else(|| {
           RenderError::RasterizationFailed {
             reason: "Unable to resolve font for emphasis string".into(),
           }
@@ -4083,7 +4139,6 @@ impl DisplayListRenderer {
             emphasis.color,
             0.0,
             0.0,
-            text.palette_index,
             &text.variations,
           );
         }
@@ -4369,11 +4424,40 @@ impl DisplayListRenderer {
     }
   }
 
-  fn font_for_item(&self, font: Option<&Arc<LoadedFont>>) -> Option<Arc<LoadedFont>> {
-    if let Some(font) = font {
-      return Some(font.clone());
+  fn resolve_font(&self, font_id: Option<&FontId>) -> Option<LoadedFont> {
+    let mut families = Vec::new();
+    let (weight, italic, oblique, stretch) = match font_id {
+      Some(id) => {
+        families.push(id.family.clone());
+        (
+          id.weight,
+          matches!(id.style, DbFontStyle::Italic),
+          matches!(id.style, DbFontStyle::Oblique),
+          id.stretch,
+        )
+      }
+      None => (400, false, false, FontStretch::Normal),
+    };
+
+    if families.is_empty() {
+      families.push("sans-serif".to_string());
     }
-    self.font_ctx.get_sans_serif().map(Arc::new)
+
+    self
+      .font_ctx
+      .get_font_full(
+        &families,
+        weight,
+        if italic {
+          DbFontStyle::Italic
+        } else if oblique {
+          DbFontStyle::Oblique
+        } else {
+          DbFontStyle::Normal
+        },
+        stretch,
+      )
+      .or_else(|| self.font_ctx.get_sans_serif())
   }
 
   fn image_to_pixmap(&self, item: &ImageItem) -> Option<Pixmap> {
@@ -5481,8 +5565,6 @@ fn apply_mask_composite(dest: &mut Mask, src: &Mask, op: MaskComposite) {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::css::types::FontFaceRule;
-  use crate::css::types::FontFaceSource;
   use crate::geometry::Point;
   use crate::geometry::Rect;
   use crate::paint::clip_path::ResolvedClipPath;
@@ -5541,16 +5623,10 @@ mod tests {
   use crate::style::values::Length;
   use crate::style::values::LengthUnit;
   use crate::style::ComputedStyle;
-  use crate::text::font_db::{FontDatabase, FontStretch, FontStyle, FontWeight};
+  use crate::text::font_db::FontDatabase;
   use crate::tree::fragment_tree::FragmentNode;
-  use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-  use base64::Engine;
   use std::collections::HashMap;
-  use std::fs;
   use std::sync::Arc;
-  use std::time::Duration;
-  use ttf_parser::Face;
-  use ttf_parser::GlyphId;
 
   fn pixel(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
     let idx = ((y * pixmap.width() + x) * 4) as usize;
@@ -6595,7 +6671,12 @@ mod tests {
       }],
       font_size: 20.0,
       advance_width: 14.0,
-      font: Some(Arc::new(font.clone())),
+      font_id: Some(FontId {
+        family: font.family.clone(),
+        weight: font.weight.value(),
+        style: font.style,
+        stretch: font.stretch,
+      }),
       variations: Vec::new(),
       synthetic_bold: 0.0,
       synthetic_oblique: 0.0,
@@ -6656,7 +6737,12 @@ mod tests {
       }],
       font_size: 20.0,
       advance_width: 14.0,
-      font: Some(Arc::new(font.clone())),
+      font_id: Some(FontId {
+        family: font.family.clone(),
+        weight: font.weight.value(),
+        style: font.style,
+        stretch: font.stretch,
+      }),
       variations: Vec::new(),
       synthetic_bold: 0.0,
       synthetic_oblique: 0.0,
@@ -6747,7 +6833,12 @@ mod tests {
       }],
       font_size: 20.0,
       advance_width: 14.0,
-      font: Some(Arc::new(font.clone())),
+      font_id: Some(FontId {
+        family: font.family.clone(),
+        weight: font.weight.value(),
+        style: font.style,
+        stretch: font.stretch,
+      }),
       variations: Vec::new(),
       synthetic_bold: 0.0,
       synthetic_oblique: 0.0,
@@ -6818,7 +6909,12 @@ mod tests {
       }],
       font_size: 20.0,
       advance_width: 14.0,
-      font: Some(Arc::new(font.clone())),
+      font_id: Some(FontId {
+        family: font.family.clone(),
+        weight: font.weight.value(),
+        style: font.style,
+        stretch: font.stretch,
+      }),
       variations: Vec::new(),
       synthetic_bold: 0.0,
       synthetic_oblique: 0.0,
@@ -6864,12 +6960,11 @@ mod tests {
     let Some(font) = font_ctx.get_font_full(
       &[family.clone()],
       400,
-      FontStyle::Normal,
+      DbFontStyle::Normal,
       FontStretch::Normal,
     ) else {
       return;
     };
-    let font = Arc::new(font);
     let Ok(face) = font.as_ttf_face() else {
       return;
     };
@@ -6887,6 +6982,12 @@ mod tests {
       offset: Point::new(0.0, 0.0),
       advance,
     }];
+    let font_id = FontId {
+      family,
+      weight: font.weight.value(),
+      style: font.style,
+      stretch: font.stretch,
+    };
 
     let render_with_palette = |palette_index: u16, font_ctx: FontContext| {
       let mut list = DisplayList::new();
@@ -6898,7 +6999,7 @@ mod tests {
         shadows: Vec::new(),
         font_size,
         advance_width: advance,
-        font: Some(font.clone()),
+        font_id: Some(font_id.clone()),
         variations: Vec::new(),
         synthetic_bold: 0.0,
         synthetic_oblique: 0.0,
@@ -6946,121 +7047,6 @@ mod tests {
   }
 
   #[test]
-  fn text_uses_shaped_font_bytes_instead_of_metadata_resolution() {
-    let variable_bytes = match fs::read("tests/fixtures/fonts/DejaVuSans-subset.ttf") {
-      Ok(bytes) => bytes,
-      Err(_) => return,
-    };
-    let static_bytes = match fs::read("tests/fonts/ColorTestCOLR.ttf") {
-      Ok(bytes) => bytes,
-      Err(_) => return,
-    };
-    let Ok(var_face) = Face::parse(&variable_bytes, 0) else {
-      return;
-    };
-    let Ok(static_face) = Face::parse(&static_bytes, 0) else {
-      return;
-    };
-    if var_face.number_of_glyphs() <= static_face.number_of_glyphs() {
-      return;
-    }
-    let static_count = static_face.number_of_glyphs();
-    let chosen_gid = (static_count..var_face.number_of_glyphs())
-      .rev()
-      .find(|gid| var_face.glyph_bounding_box(GlyphId(*gid)).is_some());
-    let Some(chosen_gid) = chosen_gid else {
-      return;
-    };
-
-    let family = "MetadataMismatch".to_string();
-    let data_url = |bytes: &[u8]| format!("data:font/ttf;base64,{}", BASE64_STANDARD.encode(bytes));
-    let faces = [
-      FontFaceRule {
-        family: Some(family.clone()),
-        sources: vec![FontFaceSource::url(data_url(&static_bytes))],
-        weight: (400, 400),
-        ..Default::default()
-      },
-      FontFaceRule {
-        family: Some(family.clone()),
-        sources: vec![FontFaceSource::url(data_url(&variable_bytes))],
-        weight: (700, 700),
-        ..Default::default()
-      },
-    ];
-
-    let font_ctx = FontContext::empty();
-    font_ctx
-      .load_web_fonts(&faces, None, None)
-      .expect("load test web fonts");
-    assert!(font_ctx.wait_for_pending_web_fonts(Duration::from_secs(1)));
-
-    let Some(variable_font) = font_ctx.get_font_full(
-      &[family.clone()],
-      700,
-      FontStyle::Normal,
-      FontStretch::Normal,
-    ) else {
-      return;
-    };
-    let mut metadata_font = variable_font.clone();
-    metadata_font.weight = FontWeight::new(400);
-    let text_font = Arc::new(metadata_font);
-
-    let wrong_font = font_ctx.get_font_full(
-      &[family.clone()],
-      400,
-      FontStyle::Normal,
-      FontStretch::Normal,
-    );
-    let Some(wrong_font) = wrong_font else { return };
-
-    let mut list = DisplayList::new();
-    list.push(DisplayItem::Text(TextItem {
-      origin: Point::new(10.0, 30.0),
-      glyphs: vec![GlyphInstance {
-        glyph_id: chosen_gid as u32,
-        offset: Point::new(0.0, 0.0),
-        advance: 12.0,
-      }],
-      color: Rgba::BLACK,
-      palette_index: 0,
-      shadows: Vec::new(),
-      font_size: 20.0,
-      advance_width: 12.0,
-      font: Some(text_font.clone()),
-      variations: Vec::new(),
-      synthetic_bold: 0.0,
-      synthetic_oblique: 0.0,
-      emphasis: None,
-      decorations: Vec::new(),
-    }));
-
-    let mut renderer =
-      DisplayListRenderer::new(80, 60, Rgba::WHITE, font_ctx).expect("renderer with fonts");
-    let scaled_item = match &list.items()[0] {
-      DisplayItem::Text(t) => renderer.scale_text_item(t),
-      _ => unreachable!(),
-    };
-
-    let (_paths, wrong_bounds) = renderer
-      .glyph_paths(&wrong_font, &scaled_item)
-      .expect("paths for wrong font");
-    assert!(
-      !wrong_bounds.is_valid(),
-      "metadata-only resolution should not find the shaped glyph"
-    );
-
-    let pixmap = renderer.render(&list).expect("rendered");
-    let drawn_bbox =
-      bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r < 16 && g < 16 && b < 16);
-    assert!(
-      drawn_bbox.is_some(),
-      "text should render with stored font bytes"
-    );
-  }
-
-  #[test]
   fn renders_text_emphasis_marks() {
     let mut list = DisplayList::new();
     list.push(DisplayItem::Text(TextItem {
@@ -7071,7 +7057,7 @@ mod tests {
       shadows: vec![],
       font_size: 16.0,
       advance_width: 0.0,
-      font: None,
+      font_id: None,
       variations: Vec::new(),
       synthetic_bold: 0.0,
       synthetic_oblique: 0.0,

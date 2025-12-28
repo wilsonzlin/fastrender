@@ -119,10 +119,10 @@ use crate::style::ComputedStyle;
 use crate::text::font_db::FontStretch;
 use crate::text::font_db::FontStyle;
 use crate::text::font_db::ScaledMetrics;
+use crate::text::font_instance::{glyph_transform, FontInstance};
 use crate::text::font_loader::FontContext;
 use crate::text::pipeline::ShapedRun;
 use crate::text::pipeline::ShapingPipeline;
-use crate::text::variations::apply_rustybuzz_variations;
 use crate::tree;
 use crate::tree::box_tree::ForeignObjectInfo;
 use crate::tree::box_tree::ReplacedBox;
@@ -4448,13 +4448,13 @@ impl Painter {
   ) {
     let origin_x = origin_x * self.scale;
     let baseline_y = baseline_y * self.scale;
-    // ttf_parser face
-    let mut face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
-      Ok(f) => f,
-      Err(_) => return,
+    let Some(instance) = FontInstance::new(&run.font, &run.variations) else {
+      return;
     };
-    apply_rustybuzz_variations(&mut face, &run.variations);
-    let units_per_em = face.units_per_em() as f32;
+    let units_per_em = instance.units_per_em();
+    if units_per_em == 0.0 {
+      return;
+    }
     let mut scale = run.font_size / units_per_em;
     scale *= run.scale * self.scale;
 
@@ -4475,9 +4475,14 @@ impl Painter {
       };
       let glyph_y = baseline_y + pen_y + glyph.y_offset * self.scale;
 
-      let glyph_id: u16 = glyph.glyph_id as u16;
-
-      if let Some(path) = Self::build_glyph_path(&face, glyph_id, glyph_x, glyph_y, scale) {
+      if let Some(path) = Self::build_glyph_path(
+        &instance,
+        glyph.glyph_id,
+        glyph_x,
+        glyph_y,
+        scale,
+        run.synthetic_oblique,
+      ) {
         bounds.include(&path.bounds());
         glyph_paths.push(path);
       }
@@ -4577,12 +4582,13 @@ impl Painter {
     let block_origin = block_origin * self.scale;
     let inline_origin = inline_origin * self.scale;
 
-    let mut face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
-      Ok(f) => f,
-      Err(_) => return,
+    let Some(instance) = FontInstance::new(&run.font, &run.variations) else {
+      return;
     };
-    apply_rustybuzz_variations(&mut face, &run.variations);
-    let units_per_em = face.units_per_em() as f32;
+    let units_per_em = instance.units_per_em();
+    if units_per_em == 0.0 {
+      return;
+    }
     let mut scale = run.font_size / units_per_em;
     scale *= run.scale * self.scale;
 
@@ -4614,9 +4620,14 @@ impl Painter {
         crate::text::pipeline::Direction::LeftToRight => pen_inline + glyph.x_offset * self.scale,
       };
       let block_pos = block_origin + pen_block + glyph.y_offset * self.scale;
-      let glyph_id: u16 = glyph.glyph_id as u16;
-
-      if let Some(path) = Self::build_glyph_path(&face, glyph_id, block_pos, inline_pos, scale) {
+      if let Some(path) = Self::build_glyph_path(
+        &instance,
+        glyph.glyph_id,
+        block_pos,
+        inline_pos,
+        scale,
+        run.synthetic_oblique,
+      ) {
         bounds.include(&path.bounds());
         glyph_paths.push(path);
       }
@@ -4685,68 +4696,17 @@ impl Painter {
   }
 
   fn build_glyph_path(
-    face: &ttf_parser::Face,
-    glyph_id: u16,
+    instance: &FontInstance,
+    glyph_id: u32,
     x: f32,
     baseline_y: f32,
     scale: f32,
+    skew: f32,
   ) -> Option<tiny_skia::Path> {
-    use ttf_parser::OutlineBuilder;
-
-    struct PathConverter {
-      builder: PathBuilder,
-      scale: f32,
-      x: f32,
-      y: f32,
-    }
-
-    impl OutlineBuilder for PathConverter {
-      fn move_to(&mut self, px: f32, py: f32) {
-        self
-          .builder
-          .move_to(self.x + px * self.scale, self.y - py * self.scale);
-      }
-
-      fn line_to(&mut self, px: f32, py: f32) {
-        self
-          .builder
-          .line_to(self.x + px * self.scale, self.y - py * self.scale);
-      }
-
-      fn quad_to(&mut self, x1: f32, y1: f32, px: f32, py: f32) {
-        self.builder.quad_to(
-          self.x + x1 * self.scale,
-          self.y - y1 * self.scale,
-          self.x + px * self.scale,
-          self.y - py * self.scale,
-        );
-      }
-
-      fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, px: f32, py: f32) {
-        self.builder.cubic_to(
-          self.x + x1 * self.scale,
-          self.y - y1 * self.scale,
-          self.x + x2 * self.scale,
-          self.y - y2 * self.scale,
-          self.x + px * self.scale,
-          self.y - py * self.scale,
-        );
-      }
-
-      fn close(&mut self) {
-        self.builder.close();
-      }
-    }
-
-    let mut converter = PathConverter {
-      builder: PathBuilder::new(),
-      scale,
-      x,
-      y: baseline_y,
-    };
-
-    face.outline_glyph(ttf_parser::GlyphId(glyph_id), &mut converter)?;
-    converter.builder.finish()
+    let outline = instance.glyph_outline(glyph_id)?;
+    let path = outline.path?;
+    let transform = glyph_transform(scale, skew, x, baseline_y);
+    path.transform(transform)
   }
 
   fn paint_text_shadows(
@@ -6927,12 +6887,13 @@ impl Painter {
           } else {
             run_pen_inline
           };
-          let mut face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
-            Ok(f) => f,
-            Err(_) => continue,
+          let Some(instance) = FontInstance::new(&run.font, &run.variations) else {
+            continue;
           };
-          apply_rustybuzz_variations(&mut face, &run.variations);
-          let units_per_em = face.units_per_em() as f32;
+          let units_per_em = instance.units_per_em();
+          if units_per_em == 0.0 {
+            continue;
+          }
           let scale = (run.font_size / units_per_em) * self.scale;
           let mut pen_inline = if run.direction.is_rtl() { advance } else { 0.0 };
           let mut pen_block = 0.0_f32;
@@ -6947,9 +6908,14 @@ impl Painter {
             };
             let glyph_y =
               mark_metrics.baseline_offset * self.scale + pen_block + glyph.y_offset * self.scale;
-            if let Some(path) =
-              Self::build_glyph_path(&face, glyph.glyph_id as u16, glyph_x, glyph_y, scale)
-            {
+            if let Some(path) = Self::build_glyph_path(
+              &instance,
+              glyph.glyph_id,
+              glyph_x,
+              glyph_y,
+              scale,
+              run.synthetic_oblique,
+            ) {
               paths.push(path);
             }
             pen_inline += match run.direction {
@@ -7273,12 +7239,10 @@ fn collect_underline_exclusions(
 
   let mut pen_x = line_start * device_scale;
   for run in runs {
-    let mut face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
-      Ok(f) => f,
-      Err(_) => continue,
+    let Some(instance) = FontInstance::new(&run.font, &run.variations) else {
+      continue;
     };
-    apply_rustybuzz_variations(&mut face, &run.variations);
-    let units_per_em = face.units_per_em() as f32;
+    let units_per_em = instance.units_per_em();
     if units_per_em == 0.0 {
       continue;
     }
@@ -7303,14 +7267,16 @@ fn collect_underline_exclusions(
         }
       };
       let glyph_y = baseline_y + glyph_pen_y + glyph.y_offset * device_scale;
-      if let Some(bbox) = face.glyph_bounding_box(ttf_parser::GlyphId(glyph.glyph_id as u16)) {
-        let left = glyph_x + bbox.x_min as f32 * scale - tolerance;
-        let right = glyph_x + bbox.x_max as f32 * scale + tolerance;
-        let top = glyph_y - bbox.y_max as f32 * scale - tolerance;
-        let bottom = glyph_y - bbox.y_min as f32 * scale + tolerance;
+      if let Some(outline) = instance.glyph_outline(glyph.glyph_id) {
+        if let Some(bbox) = outline.bbox {
+          let left = glyph_x + bbox.x_min * scale - tolerance;
+          let right = glyph_x + bbox.x_max * scale + tolerance;
+          let top = glyph_y - bbox.y_max * scale - tolerance;
+          let bottom = glyph_y - bbox.y_min * scale + tolerance;
 
-        if skip_all || (bottom >= band_top && top <= band_bottom) {
-          intervals.push((left, right));
+          if skip_all || (bottom >= band_top && top <= band_bottom) {
+            intervals.push((left, right));
+          }
         }
       }
 
@@ -7341,12 +7307,10 @@ fn collect_underline_exclusions_vertical(
 
   let mut pen_inline = inline_start * device_scale;
   for run in runs {
-    let mut face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
-      Ok(f) => f,
-      Err(_) => continue,
+    let Some(instance) = FontInstance::new(&run.font, &run.variations) else {
+      continue;
     };
-    apply_rustybuzz_variations(&mut face, &run.variations);
-    let units_per_em = face.units_per_em() as f32;
+    let units_per_em = instance.units_per_em();
     if units_per_em == 0.0 {
       continue;
     }
@@ -7383,14 +7347,16 @@ fn collect_underline_exclusions_vertical(
         }
       };
       let block_pos = block_baseline + glyph_pen_block + glyph.y_offset * device_scale;
-      if let Some(bbox) = face.glyph_bounding_box(ttf_parser::GlyphId(glyph.glyph_id as u16)) {
-        let inline_left = inline_pos + bbox.x_min as f32 * scale - tolerance;
-        let inline_right = inline_pos + bbox.x_max as f32 * scale + tolerance;
-        let block_top = block_pos - bbox.y_max as f32 * scale - tolerance;
-        let block_bottom = block_pos - bbox.y_min as f32 * scale + tolerance;
+      if let Some(outline) = instance.glyph_outline(glyph.glyph_id) {
+        if let Some(bbox) = outline.bbox {
+          let inline_left = inline_pos + bbox.x_min * scale - tolerance;
+          let inline_right = inline_pos + bbox.x_max * scale + tolerance;
+          let block_top = block_pos - bbox.y_max * scale - tolerance;
+          let block_bottom = block_pos - bbox.y_min * scale + tolerance;
 
-        if skip_all || (block_bottom >= band_left && block_top <= band_right) {
-          intervals.push((inline_left, inline_right));
+          if skip_all || (block_bottom >= band_left && block_top <= band_right) {
+            intervals.push((inline_left, inline_right));
+          }
         }
       }
 

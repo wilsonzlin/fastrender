@@ -35,6 +35,7 @@ use fastrender::style::types::TextUnderlinePosition;
 use fastrender::style::types::TransformStyle;
 use fastrender::style::types::WritingMode;
 use fastrender::style::values::Length;
+use fastrender::text::font_instance::FontInstance;
 use fastrender::text::pipeline::Direction;
 use fastrender::text::pipeline::GlyphPosition;
 use fastrender::text::pipeline::RunRotation;
@@ -998,10 +999,10 @@ fn builder_skip_ink_carves_segments() {
   };
   let base = metrics.scale(run.font_size).underline_position;
 
-  let Ok(face) = run.font.as_ttf_face() else {
+  let Some(instance) = FontInstance::new(&run.font, &run.variations) else {
     return;
   };
-  let units_per_em = face.units_per_em() as f32;
+  let units_per_em = instance.units_per_em();
   if units_per_em == 0.0 {
     return;
   }
@@ -1011,14 +1012,15 @@ fn builder_skip_ink_carves_segments() {
   let mut min_top = f32::INFINITY;
   let mut max_bottom = f32::NEG_INFINITY;
   for glyph in &run.glyphs {
-    let Some(bbox) = face.glyph_bounding_box(ttf_parser::GlyphId(glyph.glyph_id as u16)) else {
-      continue;
-    };
-    let glyph_y = baseline_y - glyph.y_offset;
-    let top = glyph_y - bbox.y_max as f32 * scale;
-    let bottom = glyph_y - bbox.y_min as f32 * scale;
-    min_top = min_top.min(top);
-    max_bottom = max_bottom.max(bottom);
+    if let Some(outline) = instance.glyph_outline(glyph.glyph_id) {
+      if let Some(bbox) = outline.bbox {
+        let glyph_y = baseline_y - glyph.y_offset;
+        let top = glyph_y - bbox.y_max * scale;
+        let bottom = glyph_y - bbox.y_min * scale;
+        min_top = min_top.min(top);
+        max_bottom = max_bottom.max(bottom);
+      }
+    }
   }
   if !min_top.is_finite() || !max_bottom.is_finite() {
     return;

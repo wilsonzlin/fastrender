@@ -58,6 +58,7 @@ use crate::paint::display_list::EmphasisMark;
 use crate::paint::display_list::EmphasisText;
 use crate::paint::display_list::FillRectItem;
 use crate::paint::display_list::FillRoundedRectItem;
+use crate::paint::display_list::FontId;
 use crate::paint::display_list::GlyphInstance;
 use crate::paint::display_list::GradientSpread;
 use crate::paint::display_list::GradientStop;
@@ -131,10 +132,11 @@ use crate::style::ComputedStyle;
 use crate::text::font_db::FontStretch;
 use crate::text::font_db::FontStyle;
 use crate::text::font_db::ScaledMetrics;
+use crate::text::font_instance::FontInstance;
 use crate::text::font_loader::FontContext;
 use crate::text::pipeline::ShapedRun;
 use crate::text::pipeline::ShapingPipeline;
-use crate::text::variations::apply_rustybuzz_variations;
+use crate::text::variations::FontVariation;
 use crate::tree::box_tree::FormControl;
 use crate::tree::box_tree::FormControlKind;
 use crate::tree::box_tree::ReplacedType;
@@ -2372,7 +2374,7 @@ impl DisplayListBuilder {
               shadows: shadows.clone(),
               font_size,
               advance_width,
-              font: None,
+              font_id: None,
               variations: Vec::new(),
               synthetic_bold: 0.0,
               synthetic_oblique: 0.0,
@@ -2388,7 +2390,7 @@ impl DisplayListBuilder {
               shadows: shadows.clone(),
               font_size,
               advance_width,
-              font: None,
+              font_id: None,
               variations: Vec::new(),
               synthetic_bold: 0.0,
               synthetic_oblique: 0.0,
@@ -3456,6 +3458,7 @@ impl DisplayListBuilder {
         pen_x
       };
       let glyphs = self.glyphs_from_run(run, origin_x, baseline_y);
+      let font_id = self.font_id_from_run(run);
       let emphasis =
         style.and_then(|s| self.build_emphasis(run, s, origin_x, baseline_y, inline_vertical));
 
@@ -3467,7 +3470,7 @@ impl DisplayListBuilder {
         shadows: shadows.to_vec(),
         font_size: run.font_size,
         advance_width: run.advance,
-        font: Some(run.font.clone()),
+        font_id: Some(font_id),
         variations: Self::variations_from_run(run),
         synthetic_bold: run.synthetic_bold,
         synthetic_oblique: run.synthetic_oblique,
@@ -3497,6 +3500,7 @@ impl DisplayListBuilder {
       };
       let glyphs =
         self.glyphs_from_run_vertical(run, block_baseline, run_origin_inline, inline_start);
+      let font_id = self.font_id_from_run(run);
       let emphasis =
         style.and_then(|s| self.build_emphasis(run, s, block_baseline, run_origin_inline, true));
 
@@ -3508,7 +3512,7 @@ impl DisplayListBuilder {
         shadows: shadows.to_vec(),
         font_size: run.font_size,
         advance_width: run.advance,
-        font: Some(run.font.clone()),
+        font_id: Some(font_id),
         variations: Self::variations_from_run(run),
         synthetic_bold: run.synthetic_bold,
         synthetic_oblique: run.synthetic_oblique,
@@ -3538,6 +3542,7 @@ impl DisplayListBuilder {
         pen_x
       };
       let glyphs = self.glyphs_from_run(run, origin_x, baseline_y);
+      let font_id = self.font_id_from_run(run);
       let emphasis =
         style.and_then(|s| self.build_emphasis(run, s, origin_x, baseline_y, inline_vertical));
       self.list.push(DisplayItem::ListMarker(ListMarkerItem {
@@ -3548,7 +3553,7 @@ impl DisplayListBuilder {
         palette_index: run.palette_index,
         shadows: shadows.to_vec(),
         advance_width: run.advance,
-        font: Some(run.font.clone()),
+        font_id: Some(font_id),
         variations: Self::variations_from_run(run),
         synthetic_bold: run.synthetic_bold,
         synthetic_oblique: run.synthetic_oblique,
@@ -3578,6 +3583,7 @@ impl DisplayListBuilder {
       };
       let glyphs =
         self.glyphs_from_run_vertical(run, block_baseline, run_origin_inline, inline_start);
+      let font_id = self.font_id_from_run(run);
       let emphasis =
         style.and_then(|s| self.build_emphasis(run, s, block_baseline, run_origin_inline, true));
       self.list.push(DisplayItem::ListMarker(ListMarkerItem {
@@ -3588,7 +3594,7 @@ impl DisplayListBuilder {
         palette_index: run.palette_index,
         shadows: shadows.to_vec(),
         advance_width: run.advance,
-        font: Some(run.font.clone()),
+        font_id: Some(font_id),
         variations: Self::variations_from_run(run),
         synthetic_bold: run.synthetic_bold,
         synthetic_oblique: run.synthetic_oblique,
@@ -4003,7 +4009,11 @@ impl DisplayListBuilder {
 
   fn glyphs_from_run(&self, run: &ShapedRun, origin_x: f32, baseline_y: f32) -> Vec<GlyphInstance> {
     let mut glyphs = Vec::with_capacity(run.glyphs.len());
-    let mut pen_x = if run.direction.is_rtl() { run.advance } else { 0.0 };
+    let mut pen_x = if run.direction.is_rtl() {
+      run.advance
+    } else {
+      0.0
+    };
     let mut pen_y = 0.0_f32;
 
     for glyph in &run.glyphs {
@@ -4035,7 +4045,11 @@ impl DisplayListBuilder {
     inline_start: f32,
   ) -> Vec<GlyphInstance> {
     let mut glyphs = Vec::with_capacity(run.glyphs.len());
-    let mut pen_inline = if run.direction.is_rtl() { run.advance } else { 0.0 };
+    let mut pen_inline = if run.direction.is_rtl() {
+      run.advance
+    } else {
+      0.0
+    };
     let mut pen_block = 0.0_f32;
 
     for glyph in &run.glyphs {
@@ -4050,8 +4064,12 @@ impl DisplayListBuilder {
         glyph.y_advance
       };
       let inline_pos = match run.direction {
-        crate::text::pipeline::Direction::RightToLeft => inline_origin + pen_inline - glyph.x_offset,
-        crate::text::pipeline::Direction::LeftToRight => inline_origin + pen_inline + glyph.x_offset,
+        crate::text::pipeline::Direction::RightToLeft => {
+          inline_origin + pen_inline - glyph.x_offset
+        }
+        crate::text::pipeline::Direction::LeftToRight => {
+          inline_origin + pen_inline + glyph.x_offset
+        }
       };
       let block_pos = block_baseline + pen_block + glyph.y_offset;
       glyphs.push(GlyphInstance {
@@ -4123,7 +4141,11 @@ impl DisplayListBuilder {
     } else {
       inline_origin
     };
-    let mut pen_inline = if run.direction.is_rtl() { run.advance } else { 0.0 };
+    let mut pen_inline = if run.direction.is_rtl() {
+      run.advance
+    } else {
+      0.0
+    };
     let mut pen_block = 0.0_f32;
     for glyph in &run.glyphs {
       if !seen_clusters.insert(glyph.cluster) {
@@ -4142,7 +4164,11 @@ impl DisplayListBuilder {
       } else {
         glyph.x_advance
       };
-      let block_step = if inline_vertical { glyph.y_advance + glyph.x_advance - inline_step } else { glyph.y_advance };
+      let block_step = if inline_vertical {
+        glyph.y_advance + glyph.x_advance - inline_step
+      } else {
+        glyph.y_advance
+      };
       let inline_pos = match run.direction {
         crate::text::pipeline::Direction::RightToLeft => {
           run_origin_inline + pen_inline - glyph.x_offset
@@ -4177,7 +4203,7 @@ impl DisplayListBuilder {
         mark_style.font_size = style.font_size * 0.5;
         match self.shaper.shape(s, &mark_style, &self.font_ctx) {
           Ok(mark_runs) if !mark_runs.is_empty() => {
-            let mark_font = mark_runs[0].font.clone();
+            let mark_font_id = self.font_id_from_run(&mark_runs[0]);
             let mark_variations = Self::variations_from_run(&mark_runs[0]);
             let mark_palette_index = mark_runs.first().map(|r| r.palette_index).unwrap_or(0);
             let mut glyphs = Vec::new();
@@ -4196,7 +4222,11 @@ impl DisplayListBuilder {
               descent = mark_style.font_size * 0.2;
             }
             for r in mark_runs {
-              let mark_origin = if r.direction.is_rtl() { width + r.advance } else { width };
+              let mark_origin = if r.direction.is_rtl() {
+                width + r.advance
+              } else {
+                width
+              };
               let mut pen_inline = if r.direction.is_rtl() { r.advance } else { 0.0 };
               let mut pen_block = 0.0_f32;
               for g in r.glyphs {
@@ -4223,12 +4253,12 @@ impl DisplayListBuilder {
             }
             Some(EmphasisText {
               glyphs,
-              font: Some(mark_font),
+              font_id: Some(mark_font_id),
+              variations: mark_variations,
               font_size: mark_style.font_size,
               width,
               height: ascent + descent,
               baseline_offset: ascent,
-              variations: mark_variations,
               palette_index: mark_palette_index,
             })
           }
@@ -4250,6 +4280,15 @@ impl DisplayListBuilder {
     })
   }
 
+  fn font_id_from_run(&self, run: &ShapedRun) -> FontId {
+    FontId {
+      family: run.font.family.clone(),
+      weight: run.font.weight.value(),
+      style: run.font.style,
+      stretch: run.font.stretch,
+    }
+  }
+
   fn variations_from_run(run: &ShapedRun) -> Vec<FontVariation> {
     let mut variations: Vec<FontVariation> = run
       .variations
@@ -4262,6 +4301,7 @@ impl DisplayListBuilder {
     variations.sort_by_key(|v| v.tag);
     variations
   }
+
   fn text_shadows_from_style(style: Option<&ComputedStyle>) -> Vec<TextShadowItem> {
     style
       .map(|s| {
@@ -4561,7 +4601,7 @@ impl DisplayListBuilder {
       shadows,
       font_size,
       advance_width,
-      font: None,
+      font_id: None,
       variations: Vec::new(),
       synthetic_bold: 0.0,
       synthetic_oblique: 0.0,
@@ -4641,12 +4681,10 @@ fn collect_underline_exclusions(
 
   let mut pen_x = line_start;
   for run in runs {
-    let mut face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
-      Ok(f) => f,
-      Err(_) => continue,
+    let Some(instance) = FontInstance::new(&run.font, &run.variations) else {
+      continue;
     };
-    apply_rustybuzz_variations(&mut face, &run.variations);
-    let units_per_em = face.units_per_em() as f32;
+    let units_per_em = instance.units_per_em();
     if units_per_em == 0.0 {
       continue;
     }
@@ -4663,14 +4701,16 @@ fn collect_underline_exclusions(
         crate::text::pipeline::Direction::LeftToRight => run_origin + glyph.x_offset,
       };
       let glyph_y = baseline_y - glyph.y_offset;
-      if let Some(bbox) = face.glyph_bounding_box(ttf_parser::GlyphId(glyph.glyph_id as u16)) {
-        let left = glyph_x + bbox.x_min as f32 * scale - tolerance;
-        let right = glyph_x + bbox.x_max as f32 * scale + tolerance;
-        let top = glyph_y - bbox.y_max as f32 * scale - tolerance;
-        let bottom = glyph_y - bbox.y_min as f32 * scale + tolerance;
+      if let Some(outline) = instance.glyph_outline(glyph.glyph_id) {
+        if let Some(bbox) = outline.bbox {
+          let left = glyph_x + bbox.x_min * scale - tolerance;
+          let right = glyph_x + bbox.x_max * scale + tolerance;
+          let top = glyph_y - bbox.y_max * scale - tolerance;
+          let bottom = glyph_y - bbox.y_min * scale + tolerance;
 
-        if skip_all || (bottom >= band_top && top <= band_bottom) {
-          intervals.push((left, right));
+          if skip_all || (bottom >= band_top && top <= band_bottom) {
+            intervals.push((left, right));
+          }
         }
       }
     }
@@ -4693,12 +4733,10 @@ fn collect_underline_exclusions_vertical(
   let mut pen_inline = inline_start;
 
   for run in runs {
-    let mut face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
-      Ok(f) => f,
-      Err(_) => continue,
+    let Some(instance) = FontInstance::new(&run.font, &run.variations) else {
+      continue;
     };
-    apply_rustybuzz_variations(&mut face, &run.variations);
-    let units_per_em = face.units_per_em() as f32;
+    let units_per_em = instance.units_per_em();
     if units_per_em == 0.0 {
       continue;
     }
@@ -4716,14 +4754,16 @@ fn collect_underline_exclusions_vertical(
         crate::text::pipeline::Direction::LeftToRight => run_origin + glyph.x_offset,
       };
       let block_pos = block_baseline - glyph.y_offset;
-      if let Some(bbox) = face.glyph_bounding_box(ttf_parser::GlyphId(glyph.glyph_id as u16)) {
-        let inline_left = inline_pos + bbox.x_min as f32 * scale;
-        let inline_right = inline_pos + bbox.x_max as f32 * scale;
-        let block_top = block_pos - bbox.y_max as f32 * scale;
-        let block_bottom = block_pos - bbox.y_min as f32 * scale;
+      if let Some(outline) = instance.glyph_outline(glyph.glyph_id) {
+        if let Some(bbox) = outline.bbox {
+          let inline_left = inline_pos + bbox.x_min * scale;
+          let inline_right = inline_pos + bbox.x_max * scale;
+          let block_top = block_pos - bbox.y_max * scale;
+          let block_bottom = block_pos - bbox.y_min * scale;
 
-        if skip_all || (block_bottom >= band_left && block_top <= band_right) {
-          intervals.push((inline_left, inline_right));
+          if skip_all || (block_bottom >= band_left && block_top <= band_right) {
+            intervals.push((inline_left, inline_right));
+          }
         }
       }
     }

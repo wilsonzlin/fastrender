@@ -55,10 +55,11 @@ use crate::error::Result;
 use crate::style::color::Rgba;
 use crate::text::color_fonts::{ColorFontRenderer, ColorGlyphRaster};
 use crate::text::font_db::LoadedFont;
-use crate::text::glyph_path::{glyph_transform, GlyphOutlineBuilder, GlyphOutlineMetrics};
+use crate::text::font_instance::{
+  glyph_transform, variation_hash, FontInstance, GlyphOutlineMetrics,
+};
 use crate::text::pipeline::GlyphPosition;
 use crate::text::pipeline::ShapedRun;
-use crate::text::variations::{apply_rustybuzz_variations, variation_hash, VariationHashBuilder};
 use rustybuzz::Variation;
 use std::collections::HashMap;
 use std::collections::VecDeque;
@@ -78,9 +79,8 @@ use tiny_skia::Transform;
 
 /// Cache key for glyph paths.
 ///
-/// Glyphs are cached by font identity + glyph ID + skew + variation instance.
-/// Using the font data pointer avoids comparing large font binaries while still
-/// differentiating variable font coordinates.
+/// Glyphs are cached by font data pointer + glyph ID + skew + variations.
+/// Using the font data pointer avoids comparing large font binaries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct GlyphCacheKey {
   /// Pointer to font data (used as unique identifier)
@@ -91,18 +91,18 @@ struct GlyphCacheKey {
   glyph_id: u32,
   /// Quantized synthetic skew (tan(angle) * 1e4)
   skew_units: i32,
-  /// Variation signature for variable fonts
+  /// Hash of variation coordinates applied to the face.
   variation_hash: u64,
 }
 
 impl GlyphCacheKey {
-  fn new(font: &LoadedFont, glyph_id: u32, skew: f32, variations: &[Variation]) -> Self {
+  fn new(font: &LoadedFont, glyph_id: u32, skew: f32, variation_hash: u64) -> Self {
     Self {
       font_ptr: Arc::as_ptr(&font.data) as usize,
       font_index: font.index,
       glyph_id,
       skew_units: quantize_skew(skew),
-      variation_hash: variation_hash(variations),
+      variation_hash,
     }
   }
 }
@@ -139,8 +139,7 @@ pub struct GlyphCacheStats {
 ///
 /// Glyph outlines are cached in font design units (unpositioned) and
 /// transformed at draw time. The cache key includes the font identity,
-/// face index, glyph id, synthetic oblique skew, and variable font
-/// coordinates.
+/// face index, glyph id, and synthetic oblique skew.
 ///
 /// The cache uses an LRU eviction policy with an optional memory budget
 /// to keep footprint predictable while still delivering reuse on text-
@@ -238,11 +237,11 @@ impl GlyphCache {
   fn get_or_build(
     &mut self,
     font: &LoadedFont,
+    instance: &FontInstance,
     glyph_id: u32,
     skew: f32,
-    variations: &[Variation],
   ) -> Option<&CachedGlyph> {
-    let key = GlyphCacheKey::new(font, glyph_id, skew, variations);
+    let key = GlyphCacheKey::new(font, glyph_id, skew, instance.variation_hash());
     let generation = self.bump_generation();
 
     if let Some(entry) = self.glyphs.get_mut(&key) {
@@ -250,7 +249,7 @@ impl GlyphCache {
       entry.last_used = generation;
     } else {
       self.misses += 1;
-      let mut cached = self.build_glyph_path(font, glyph_id, variations)?;
+      let mut cached = self.build_glyph_path(instance, glyph_id)?;
       cached.last_used = generation;
       self.current_bytes = self.current_bytes.saturating_add(cached.estimated_size);
       self.glyphs.insert(key, cached);
@@ -262,35 +261,18 @@ impl GlyphCache {
   }
 
   /// Builds a glyph path without caching.
-  fn build_glyph_path(
-    &self,
-    font: &LoadedFont,
-    glyph_id: u32,
-    variations: &[Variation],
-  ) -> Option<CachedGlyph> {
-    // Parse font face
-    let mut face = font.as_ttf_face().ok()?;
-    apply_rustybuzz_variations(&mut face, variations);
-    let mut builder = GlyphOutlineBuilder::new();
-
-    let glyph_id = ttf_parser::GlyphId(glyph_id as u16);
-    let has_outline = face.outline_glyph(glyph_id, &mut builder).is_some();
-    let (path, metrics) = builder.finish();
-
-    let advance = face
-      .glyph_hor_advance(glyph_id)
-      .map(|v| v as f32)
-      .unwrap_or(0.0);
-
+  fn build_glyph_path(&self, instance: &FontInstance, glyph_id: u32) -> Option<CachedGlyph> {
+    let outline = instance.glyph_outline(glyph_id)?;
+    let has_outline = outline.path.is_some();
     let estimated_size = if has_outline {
-      estimate_glyph_size(&metrics)
+      estimate_glyph_size(&outline.metrics)
     } else {
       0
     };
 
     Some(CachedGlyph {
-      path: if has_outline { path } else { None },
-      advance,
+      path: outline.path,
+      advance: outline.advance,
       last_used: 0,
       estimated_size,
     })
@@ -670,14 +652,12 @@ impl TextRasterizer {
     paint.anti_alias = true;
     paint.blend_mode = state.blend_mode;
 
-    let mut face = font
-      .as_ttf_face()
-      .map_err(|_| RenderError::RasterizationFailed {
+    let instance =
+      FontInstance::new(font, variations).ok_or_else(|| RenderError::RasterizationFailed {
         reason: format!("Failed to parse font: {}", font.family),
       })?;
-    apply_rustybuzz_variations(&mut face, variations);
 
-    let units_per_em = face.units_per_em() as f32;
+    let units_per_em = instance.units_per_em();
     if units_per_em == 0.0 {
       return Err(
         RenderError::RasterizationFailed {
@@ -710,6 +690,7 @@ impl TextRasterizer {
       if color_glyph.is_none() {
         color_glyph = self.color_renderer.render(
           font,
+          &instance,
           glyph.glyph_id,
           font_size,
           palette_index,
@@ -737,7 +718,7 @@ impl TextRasterizer {
       } else if let Some(cached) =
         self
           .cache
-          .get_or_build(font, glyph.glyph_id, synthetic_oblique, variations)
+          .get_or_build(font, &instance, glyph.glyph_id, synthetic_oblique)
       {
         if let Some(path) = cached.path.as_ref() {
           let mut transform = glyph_transform(scale, synthetic_oblique, glyph_x, glyph_y);
@@ -844,102 +825,6 @@ impl TextRasterizer {
     synthetic_bold: f32,
     synthetic_oblique: f32,
     palette_index: u16,
-    rotation: Option<Transform>,
-    state: TextRenderState<'_>,
-    pixmap: &mut Pixmap,
-  ) -> Result<f32> {
-    self.render_glyphs_with_variations_and_state(
-      glyphs,
-      font,
-      font_size,
-      x,
-      baseline_y,
-      color,
-      synthetic_bold,
-      synthetic_oblique,
-      palette_index,
-      &[],
-      rotation,
-      state,
-      pixmap,
-    )
-  }
-
-  /// Renders text with a specific font (low-level API) and explicit variations.
-  pub fn render_glyphs_with_variations(
-    &mut self,
-    glyphs: &[GlyphPosition],
-    font: &LoadedFont,
-    font_size: f32,
-    x: f32,
-    baseline_y: f32,
-    color: Rgba,
-    variations: &[Variation],
-    pixmap: &mut Pixmap,
-  ) -> Result<f32> {
-    self.render_glyphs_with_variations_and_state(
-      glyphs,
-      font,
-      font_size,
-      x,
-      baseline_y,
-      color,
-      0.0,
-      0.0,
-      0,
-      variations,
-      None,
-      TextRenderState::default(),
-      pixmap,
-    )
-  }
-
-  /// Renders text with a specific font (low-level API) and explicit variations plus render state.
-  pub fn render_glyphs_with_variations_and_state(
-    &mut self,
-    glyphs: &[GlyphPosition],
-    font: &LoadedFont,
-    font_size: f32,
-    x: f32,
-    baseline_y: f32,
-    color: Rgba,
-    synthetic_bold: f32,
-    synthetic_oblique: f32,
-    palette_index: u16,
-    variations: &[Variation],
-    rotation: Option<Transform>,
-    state: TextRenderState<'_>,
-    pixmap: &mut Pixmap,
-  ) -> Result<f32> {
-    self.render_glyphs_with_state_and_palette(
-      glyphs,
-      font,
-      font_size,
-      x,
-      baseline_y,
-      color,
-      synthetic_bold,
-      synthetic_oblique,
-      palette_index,
-      variations,
-      rotation,
-      state,
-      pixmap,
-    )
-  }
-
-  /// Renders text with a specific font (low-level API) and explicit palette/variations plus render state.
-  pub fn render_glyphs_with_state_and_palette(
-    &mut self,
-    glyphs: &[GlyphPosition],
-    font: &LoadedFont,
-    font_size: f32,
-    x: f32,
-    baseline_y: f32,
-    color: Rgba,
-    synthetic_bold: f32,
-    synthetic_oblique: f32,
-    palette_index: u16,
     variations: &[Variation],
     rotation: Option<Transform>,
     state: TextRenderState<'_>,
@@ -972,7 +857,7 @@ impl TextRasterizer {
     color: Rgba,
     pixmap: &mut Pixmap,
   ) -> Result<f32> {
-    self.render_glyphs_with_variations_and_state(
+    self.render_glyphs_with_state(
       glyphs,
       font,
       font_size,
@@ -999,39 +884,14 @@ impl TextRasterizer {
     baseline_y: f32,
     synthetic_oblique: f32,
     rotation: Option<Transform>,
-  ) -> Result<Vec<Path>> {
-    self.positioned_glyph_paths_with_variations(
-      glyphs,
-      font,
-      font_size,
-      x,
-      baseline_y,
-      synthetic_oblique,
-      rotation,
-      &[],
-    )
-  }
-
-  /// Returns positioned glyph paths for the provided run using the outline cache.
-  pub fn positioned_glyph_paths_with_variations(
-    &mut self,
-    glyphs: &[GlyphPosition],
-    font: &LoadedFont,
-    font_size: f32,
-    x: f32,
-    baseline_y: f32,
-    synthetic_oblique: f32,
-    rotation: Option<Transform>,
     variations: &[Variation],
   ) -> Result<Vec<Path>> {
-    let mut face = font
-      .as_ttf_face()
-      .map_err(|_| RenderError::RasterizationFailed {
+    let instance =
+      FontInstance::new(font, variations).ok_or_else(|| RenderError::RasterizationFailed {
         reason: format!("Failed to parse font: {}", font.family),
       })?;
-    apply_rustybuzz_variations(&mut face, variations);
 
-    let units_per_em = face.units_per_em() as f32;
+    let units_per_em = instance.units_per_em();
     if units_per_em == 0.0 {
       return Err(
         RenderError::RasterizationFailed {
@@ -1052,7 +912,7 @@ impl TextRasterizer {
       if let Some(cached) =
         self
           .cache
-          .get_or_build(font, glyph.glyph_id, synthetic_oblique, variations)
+          .get_or_build(font, &instance, glyph.glyph_id, synthetic_oblique)
       {
         if let Some(path) = cached.path.as_ref() {
           let mut transform = glyph_transform(scale, synthetic_oblique, glyph_x, glyph_y);
@@ -1159,50 +1019,19 @@ pub fn render_glyph(
   color: Rgba,
   pixmap: &mut Pixmap,
 ) -> Result<f32> {
-  render_glyph_with_variations(font, glyph_id, font_size, x, y, color, &[], pixmap)
-}
+  let instance = FontInstance::new(font, &[]).ok_or_else(|| RenderError::RasterizationFailed {
+    reason: format!("Failed to parse font: {}", font.family),
+  })?;
 
-/// Renders a single glyph to a pixmap (standalone function) with variation coordinates.
-pub fn render_glyph_with_variations(
-  font: &LoadedFont,
-  glyph_id: u32,
-  font_size: f32,
-  x: f32,
-  y: f32,
-  color: Rgba,
-  variations: &[Variation],
-  pixmap: &mut Pixmap,
-) -> Result<f32> {
-  // Parse font
-  let mut face = font
-    .as_ttf_face()
-    .map_err(|_| RenderError::RasterizationFailed {
-      reason: format!("Failed to parse font: {}", font.family),
-    })?;
-
-  apply_rustybuzz_variations(&mut face, variations);
-
-  // Calculate scale
-  let units_per_em = face.units_per_em() as f32;
+  let units_per_em = instance.units_per_em();
   let scale = font_size / units_per_em;
 
-  // Build path in font units and transform at draw time
-  let mut builder = GlyphOutlineBuilder::new();
-  let glyph = ttf_parser::GlyphId(glyph_id as u16);
-
-  if face.outline_glyph(glyph, &mut builder).is_none() {
-    // Glyph has no outline (e.g., space character)
-    // Return advance without rendering
-    if let Some(advance) = face.glyph_hor_advance(glyph) {
-      return Ok(advance as f32 * scale);
-    }
+  let Some(outline) = instance.glyph_outline(glyph_id) else {
     return Ok(0.0);
-  }
+  };
 
-  let (path, _) = builder.finish();
-
-  // Render path
-  if let Some(path) = path {
+  // Render path if present.
+  if let Some(path) = outline.path {
     let mut paint = Paint::default();
     paint.set_color_rgba8(color.r, color.g, color.b, color.alpha_u8());
     paint.anti_alias = true;
@@ -1212,46 +1041,24 @@ pub fn render_glyph_with_variations(
     pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
   }
 
-  // Return advance
-  if let Some(advance) = face.glyph_hor_advance(glyph) {
-    Ok(advance as f32 * scale)
-  } else {
-    Ok(0.0)
-  }
+  Ok(outline.advance * scale)
 }
 
 /// Gets the horizontal advance for a glyph.
 ///
 /// Returns the distance to move the cursor after this glyph.
 pub fn glyph_advance(font: &LoadedFont, glyph_id: u32, font_size: f32) -> Result<f32> {
-  glyph_advance_with_variations(font, glyph_id, font_size, &[])
-}
-
-/// Gets the horizontal advance for a glyph with variation coordinates.
-pub fn glyph_advance_with_variations(
-  font: &LoadedFont,
-  glyph_id: u32,
-  font_size: f32,
-  variations: &[Variation],
-) -> Result<f32> {
-  let mut face = font
-    .as_ttf_face()
-    .map_err(|_| RenderError::RasterizationFailed {
-      reason: format!("Failed to parse font: {}", font.family),
-    })?;
-
-  apply_rustybuzz_variations(&mut face, variations);
-
-  let units_per_em = face.units_per_em() as f32;
+  let instance = FontInstance::new(font, &[]).ok_or_else(|| RenderError::RasterizationFailed {
+    reason: format!("Failed to parse font: {}", font.family),
+  })?;
+  let units_per_em = instance.units_per_em();
   let scale = font_size / units_per_em;
-
-  let glyph = ttf_parser::GlyphId(glyph_id as u16);
-
-  if let Some(advance) = face.glyph_hor_advance(glyph) {
-    Ok(advance as f32 * scale)
-  } else {
-    Ok(0.0)
-  }
+  Ok(
+    instance
+      .glyph_outline(glyph_id)
+      .map(|o| o.advance * scale)
+      .unwrap_or(0.0),
+  )
 }
 
 // ============================================================================
@@ -1261,50 +1068,11 @@ pub fn glyph_advance_with_variations(
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::text::font_db::FontDatabase;
   use crate::text::font_loader::FontContext;
-  use rustybuzz::ttf_parser::Tag;
-  use tiny_skia::Color;
 
   fn get_test_font() -> Option<LoadedFont> {
     let ctx = FontContext::new();
     ctx.get_sans_serif()
-  }
-
-  fn load_variable_font() -> LoadedFont {
-    let mut db = FontDatabase::empty();
-    let data =
-      include_bytes!("../../tests/fixtures/fonts/VariableTestFont-AmstelvarAlpha.ttf").to_vec();
-    db.load_font_data(data)
-      .expect("variable font fixture should load");
-    let face = db.faces().next().expect("fixture font missing face");
-    db.load_font(face.id).expect("fixture font should parse")
-  }
-
-  fn render_variation_glyph(
-    font: &LoadedFont,
-    glyph_id: u32,
-    variations: &[Variation],
-    font_size: f32,
-  ) -> Pixmap {
-    let mut cache = GlyphCache::new();
-    let cached = cache
-      .get_or_build(font, glyph_id, 0.0, variations)
-      .expect("glyph should be cached");
-    let mut metrics_face = font.as_ttf_face().unwrap();
-    apply_rustybuzz_variations(&mut metrics_face, variations);
-    let units_per_em = metrics_face.units_per_em() as f32;
-    let scale = font_size / units_per_em;
-    let mut pixmap = Pixmap::new(200, 200).unwrap();
-    pixmap.fill(Color::TRANSPARENT);
-    if let Some(path) = cached.path.clone() {
-      let mut paint = Paint::default();
-      paint.set_color_rgba8(0, 0, 0, 255);
-      paint.anti_alias = true;
-      let transform = glyph_transform(scale, 0.0, 20.0, 150.0);
-      pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
-    }
-    pixmap
   }
 
   #[test]
@@ -1448,10 +1216,13 @@ mod tests {
       None => return,
     };
 
-    let key1 = GlyphCacheKey::new(&font, 65, 0.0, &[]);
-    let key2 = GlyphCacheKey::new(&font, 65, 0.0, &[]);
-    let key3 = GlyphCacheKey::new(&font, 66, 0.0, &[]);
-    let key4 = GlyphCacheKey::new(&font, 65, 0.25, &[]);
+    let variations: &[Variation] = &[];
+    let var_hash = variation_hash(variations);
+
+    let key1 = GlyphCacheKey::new(&font, 65, 0.0, var_hash);
+    let key2 = GlyphCacheKey::new(&font, 65, 0.0, var_hash);
+    let key3 = GlyphCacheKey::new(&font, 66, 0.0, var_hash);
+    let key4 = GlyphCacheKey::new(&font, 65, 0.25, var_hash);
 
     // Same font, glyph, and size should be equal
     assert_eq!(key1, key2);
@@ -1461,154 +1232,6 @@ mod tests {
 
     // Different skew should be different
     assert_ne!(key1, key4);
-  }
-
-  #[test]
-  fn glyph_cache_keys_include_variations() {
-    let font = load_variable_font();
-    let face = font.as_ttf_face().unwrap();
-    let glyph_id = face
-      .glyph_index('A')
-      .map(|g| g.0 as u32)
-      .expect("variable font should have glyph for A");
-
-    let variations_light = vec![Variation {
-      tag: Tag::from_bytes(b"wght"),
-      value: 300.0,
-    }];
-    let variations_bold = vec![Variation {
-      tag: Tag::from_bytes(b"wght"),
-      value: 900.0,
-    }];
-
-    let key_light = GlyphCacheKey::new(&font, glyph_id, 0.0, &variations_light);
-    let key_bold = GlyphCacheKey::new(&font, glyph_id, 0.0, &variations_bold);
-
-    assert_ne!(key_light, key_bold);
-    assert_ne!(key_light.variation_hash, key_bold.variation_hash);
-
-    let mut cache = GlyphCache::new();
-    assert!(cache
-      .get_or_build(&font, glyph_id, 0.0, &variations_light)
-      .is_some());
-    assert!(cache
-      .get_or_build(&font, glyph_id, 0.0, &variations_bold)
-      .is_some());
-    assert!(cache.len() >= 2);
-  }
-
-  #[test]
-  fn variable_font_changes_pixels_with_variations() {
-    let font = load_variable_font();
-    let face = font.as_ttf_face().unwrap();
-    let glyph_id = face
-      .glyph_index('A')
-      .map(|g| g.0 as u32)
-      .expect("variable font should have glyph for A");
-
-    let light_variations = vec![Variation {
-      tag: Tag::from_bytes(b"wght"),
-      value: 200.0,
-    }];
-    let bold_variations = vec![Variation {
-      tag: Tag::from_bytes(b"wght"),
-      value: 900.0,
-    }];
-
-    let light = render_variation_glyph(&font, glyph_id, &light_variations, 96.0);
-    let bold = render_variation_glyph(&font, glyph_id, &bold_variations, 96.0);
-
-    assert!(light.data().iter().any(|b| *b != 0));
-    assert!(bold.data().iter().any(|b| *b != 0));
-    assert_ne!(light.data(), bold.data());
-  }
-
-  #[test]
-  fn glyph_advance_with_variations_reflects_hvar() {
-    let font = load_variable_font();
-    let mut face = font.as_ttf_face().unwrap();
-    let glyph_id = face
-      .glyph_index('A')
-      .map(|g| g.0 as u32)
-      .expect("variable font should have glyph for A");
-    let wght = face
-      .variation_axes()
-      .find(|axis| axis.tag == Tag::from_bytes(b"wght"))
-      .expect("variable font should expose wght axis");
-
-    let light = Variation {
-      tag: wght.tag,
-      value: wght.min_value,
-    };
-    let bold = Variation {
-      tag: wght.tag,
-      value: wght.max_value,
-    };
-
-    let light_advance = glyph_advance_with_variations(&font, glyph_id, 48.0, &[light]).unwrap();
-    let bold_advance = glyph_advance_with_variations(&font, glyph_id, 48.0, &[bold]).unwrap();
-
-    assert!(
-      (light_advance - bold_advance).abs() > 0.01,
-      "variations should influence advances ({} vs {})",
-      light_advance,
-      bold_advance
-    );
-  }
-
-  #[test]
-  fn render_glyph_with_variations_renders_selected_instance() {
-    let font = load_variable_font();
-    let face = font.as_ttf_face().unwrap();
-    let glyph_id = face
-      .glyph_index('A')
-      .map(|g| g.0 as u32)
-      .expect("variable font should have glyph for A");
-    let wght = face
-      .variation_axes()
-      .find(|axis| axis.tag == Tag::from_bytes(b"wght"))
-      .expect("variable font should expose wght axis");
-
-    let light = Variation {
-      tag: wght.tag,
-      value: wght.min_value,
-    };
-    let bold = Variation {
-      tag: wght.tag,
-      value: wght.max_value,
-    };
-
-    let mut light_pixmap = Pixmap::new(200, 200).unwrap();
-    light_pixmap.fill(Color::TRANSPARENT);
-    render_glyph_with_variations(
-      &font,
-      glyph_id,
-      64.0,
-      40.0,
-      140.0,
-      Rgba::BLACK,
-      &[light],
-      &mut light_pixmap,
-    )
-    .unwrap();
-
-    let mut bold_pixmap = Pixmap::new(200, 200).unwrap();
-    bold_pixmap.fill(Color::TRANSPARENT);
-    render_glyph_with_variations(
-      &font,
-      glyph_id,
-      64.0,
-      40.0,
-      140.0,
-      Rgba::BLACK,
-      &[bold],
-      &mut bold_pixmap,
-    )
-    .unwrap();
-
-    assert!(light_pixmap.data().iter().any(|b| *b != 0));
-    assert!(bold_pixmap.data().iter().any(|b| *b != 0));
-    assert_ne!(light_pixmap.data(), bold_pixmap.data());
   }
 
   #[test]
@@ -1624,17 +1247,20 @@ mod tests {
 
     let mut cache = GlyphCache::with_capacity(1);
 
-    assert!(cache.get_or_build(&font, glyph_a, 0.0, &[]).is_some());
+    let variations: &[Variation] = &[];
+    let instance = FontInstance::new(&font, variations).unwrap();
+
+    assert!(cache.get_or_build(&font, &instance, glyph_a, 0.0).is_some());
     let stats = cache.stats();
     assert_eq!(stats.misses, 1);
     assert_eq!(stats.hits, 0);
 
-    assert!(cache.get_or_build(&font, glyph_a, 0.0, &[]).is_some());
+    assert!(cache.get_or_build(&font, &instance, glyph_a, 0.0).is_some());
     let stats = cache.stats();
     assert_eq!(stats.hits, 1);
 
     // Insert another glyph to trigger eviction
-    assert!(cache.get_or_build(&font, glyph_b, 0.0, &[]).is_some());
+    assert!(cache.get_or_build(&font, &instance, glyph_b, 0.0).is_some());
     let stats = cache.stats();
     assert!(stats.evictions >= 1);
     assert!(cache.len() <= 1);
@@ -1704,7 +1330,7 @@ mod tests {
   fn test_glyph_outline_builder_metrics() {
     use ttf_parser::OutlineBuilder;
 
-    let mut builder = GlyphOutlineBuilder::new();
+    let mut builder = crate::text::font_instance::PathOutlineBuilder::new();
     OutlineBuilder::move_to(&mut builder, 0.0, 0.0);
     OutlineBuilder::line_to(&mut builder, 10.0, 0.0);
     OutlineBuilder::quad_to(&mut builder, 15.0, 5.0, 20.0, 0.0);

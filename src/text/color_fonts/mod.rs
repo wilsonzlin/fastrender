@@ -10,6 +10,7 @@ mod svg;
 
 use crate::style::color::Rgba;
 use crate::text::font_db::LoadedFont;
+use crate::text::font_instance::FontInstance;
 use crate::text::variations::apply_rustybuzz_variations;
 use rustybuzz::Variation;
 use std::collections::HashMap;
@@ -53,6 +54,7 @@ impl ColorFontRenderer {
   pub fn render(
     &self,
     font: &LoadedFont,
+    instance: &FontInstance,
     glyph_id: u32,
     font_size: f32,
     palette_index: u16,
@@ -79,6 +81,7 @@ impl ColorFontRenderer {
     if let Some(colr) = colr_v1::render_colr_glyph(
       font,
       &face,
+      instance,
       font_key,
       gid,
       font_size,
@@ -92,6 +95,7 @@ impl ColorFontRenderer {
 
     // COLR/CPAL (v0)
     if let Some(colr) = colr_v0::render_colr_glyph(
+      instance,
       &face,
       font_key,
       gid,
