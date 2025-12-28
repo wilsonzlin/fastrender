@@ -63,6 +63,7 @@ use fastrender::style::types::Overflow;
 use fastrender::style::types::ShapeRadius;
 use fastrender::style::types::TextDecorationStyle;
 use fastrender::style::types::TransformStyle;
+use fastrender::style::types::WritingMode;
 use fastrender::style::values::Length;
 use fastrender::text::font_db::FontConfig;
 use fastrender::text::font_db::FontStretch;
@@ -3605,5 +3606,331 @@ fn box_decoration_break_clone_paints_each_fragment() {
     pixel(&pixmap, 5, 197),
     (0, 0, 0, 255),
     "bottom border paints on last fragment"
+  );
+}
+
+#[test]
+fn box_decoration_break_slice_only_paints_outer_edges_vertical_lr() {
+  let mut style = ComputedStyle::default();
+  style.writing_mode = WritingMode::VerticalLr;
+  style.background_color = Rgba::WHITE;
+  style.border_left_width = Length::px(4.0);
+  style.border_right_width = Length::px(4.0);
+  style.border_left_style = BorderStyle::Solid;
+  style.border_right_style = BorderStyle::Solid;
+  style.border_left_color = Rgba::BLACK;
+  style.border_right_color = Rgba::BLACK;
+  let style = Arc::new(style);
+
+  let total_width = 200.0;
+  let first_width = 120.0;
+  let inline_height = 40.0;
+  let mut first = FragmentNode::new_block_styled(
+    Rect::from_xywh(0.0, 0.0, first_width, inline_height),
+    vec![],
+    style.clone(),
+  );
+  first.fragment_count = 2;
+  first.slice_info = FragmentSliceInfo {
+    is_first: true,
+    is_last: false,
+    slice_offset: 0.0,
+    original_block_size: total_width,
+  };
+
+  let mut second = FragmentNode::new_block_styled(
+    Rect::from_xywh(first_width, 0.0, total_width - first_width, inline_height),
+    vec![],
+    style.clone(),
+  );
+  second.fragment_index = 1;
+  second.fragment_count = 2;
+  second.slice_info = FragmentSliceInfo {
+    is_first: false,
+    is_last: true,
+    slice_offset: first_width,
+    original_block_size: total_width,
+  };
+
+  let root = FragmentNode::new_block(
+    Rect::from_xywh(0.0, 0.0, total_width, inline_height),
+    vec![first, second],
+  );
+
+  let list = DisplayListBuilder::new().build(&root);
+  let pixmap = DisplayListRenderer::new(
+    total_width as u32,
+    inline_height as u32,
+    Rgba::WHITE,
+    FontContext::new(),
+  )
+  .unwrap()
+  .render(&list)
+  .unwrap();
+
+  let y = 5;
+  assert_eq!(
+    pixel(&pixmap, 1, y),
+    (0, 0, 0, 255),
+    "left border paints outer edge"
+  );
+  assert_eq!(
+    pixel(&pixmap, 118, y),
+    (255, 255, 255, 255),
+    "slice should skip boundary border on first fragment"
+  );
+  assert_eq!(
+    pixel(&pixmap, 121, y),
+    (255, 255, 255, 255),
+    "slice should skip boundary border on continuation"
+  );
+  assert_eq!(
+    pixel(&pixmap, 197, y),
+    (0, 0, 0, 255),
+    "right border paints outer edge"
+  );
+}
+
+#[test]
+fn box_decoration_break_clone_paints_each_fragment_vertical_lr() {
+  let mut style = ComputedStyle::default();
+  style.writing_mode = WritingMode::VerticalLr;
+  style.background_color = Rgba::WHITE;
+  style.border_left_width = Length::px(4.0);
+  style.border_right_width = Length::px(4.0);
+  style.border_left_style = BorderStyle::Solid;
+  style.border_right_style = BorderStyle::Solid;
+  style.border_left_color = Rgba::BLACK;
+  style.border_right_color = Rgba::BLACK;
+  style.box_decoration_break = BoxDecorationBreak::Clone;
+  let style = Arc::new(style);
+
+  let total_width = 200.0;
+  let first_width = 120.0;
+  let inline_height = 40.0;
+  let mut first = FragmentNode::new_block_styled(
+    Rect::from_xywh(0.0, 0.0, first_width, inline_height),
+    vec![],
+    style.clone(),
+  );
+  first.fragment_count = 2;
+  first.slice_info = FragmentSliceInfo {
+    is_first: true,
+    is_last: false,
+    slice_offset: 0.0,
+    original_block_size: total_width,
+  };
+
+  let mut second = FragmentNode::new_block_styled(
+    Rect::from_xywh(first_width, 0.0, total_width - first_width, inline_height),
+    vec![],
+    style.clone(),
+  );
+  second.fragment_index = 1;
+  second.fragment_count = 2;
+  second.slice_info = FragmentSliceInfo {
+    is_first: false,
+    is_last: true,
+    slice_offset: first_width,
+    original_block_size: total_width,
+  };
+
+  let root = FragmentNode::new_block(
+    Rect::from_xywh(0.0, 0.0, total_width, inline_height),
+    vec![first, second],
+  );
+
+  let list = DisplayListBuilder::new().build(&root);
+  let pixmap = DisplayListRenderer::new(
+    total_width as u32,
+    inline_height as u32,
+    Rgba::WHITE,
+    FontContext::new(),
+  )
+  .unwrap()
+  .render(&list)
+  .unwrap();
+
+  let y = 5;
+  assert_eq!(pixel(&pixmap, 1, y), (0, 0, 0, 255), "left border paints");
+  assert_eq!(
+    pixel(&pixmap, 118, y),
+    (0, 0, 0, 255),
+    "clone should paint boundary on first fragment"
+  );
+  assert_eq!(
+    pixel(&pixmap, 121, y),
+    (0, 0, 0, 255),
+    "clone should paint boundary on continuation"
+  );
+  assert_eq!(
+    pixel(&pixmap, 197, y),
+    (0, 0, 0, 255),
+    "right border paints"
+  );
+}
+
+#[test]
+fn box_decoration_break_slice_only_paints_outer_edges_vertical_rl() {
+  let mut style = ComputedStyle::default();
+  style.writing_mode = WritingMode::VerticalRl;
+  style.background_color = Rgba::WHITE;
+  style.border_left_width = Length::px(4.0);
+  style.border_right_width = Length::px(4.0);
+  style.border_left_style = BorderStyle::Solid;
+  style.border_right_style = BorderStyle::Solid;
+  style.border_left_color = Rgba::BLACK;
+  style.border_right_color = Rgba::BLACK;
+  let style = Arc::new(style);
+
+  let total_width = 200.0;
+  let first_width = 120.0;
+  let inline_height = 40.0;
+  let mut first = FragmentNode::new_block_styled(
+    Rect::from_xywh(total_width - first_width, 0.0, first_width, inline_height),
+    vec![],
+    style.clone(),
+  );
+  first.fragment_count = 2;
+  first.slice_info = FragmentSliceInfo {
+    is_first: true,
+    is_last: false,
+    slice_offset: 0.0,
+    original_block_size: total_width,
+  };
+
+  let mut second = FragmentNode::new_block_styled(
+    Rect::from_xywh(0.0, 0.0, total_width - first_width, inline_height),
+    vec![],
+    style.clone(),
+  );
+  second.fragment_index = 1;
+  second.fragment_count = 2;
+  second.slice_info = FragmentSliceInfo {
+    is_first: false,
+    is_last: true,
+    slice_offset: first_width,
+    original_block_size: total_width,
+  };
+
+  let root = FragmentNode::new_block(
+    Rect::from_xywh(0.0, 0.0, total_width, inline_height),
+    vec![first, second],
+  );
+
+  let list = DisplayListBuilder::new().build(&root);
+  let pixmap = DisplayListRenderer::new(
+    total_width as u32,
+    inline_height as u32,
+    Rgba::WHITE,
+    FontContext::new(),
+  )
+  .unwrap()
+  .render(&list)
+  .unwrap();
+
+  let y = 5;
+  assert_eq!(
+    pixel(&pixmap, 1, y),
+    (0, 0, 0, 255),
+    "outer left border paints"
+  );
+  assert_eq!(
+    pixel(&pixmap, 78, y),
+    (255, 255, 255, 255),
+    "slice should skip boundary on right edge of second fragment"
+  );
+  assert_eq!(
+    pixel(&pixmap, 82, y),
+    (255, 255, 255, 255),
+    "slice should skip boundary on left edge of first fragment"
+  );
+  assert_eq!(
+    pixel(&pixmap, 197, y),
+    (0, 0, 0, 255),
+    "outer right border paints"
+  );
+}
+
+#[test]
+fn box_decoration_break_clone_paints_each_fragment_vertical_rl() {
+  let mut style = ComputedStyle::default();
+  style.writing_mode = WritingMode::VerticalRl;
+  style.background_color = Rgba::WHITE;
+  style.border_left_width = Length::px(4.0);
+  style.border_right_width = Length::px(4.0);
+  style.border_left_style = BorderStyle::Solid;
+  style.border_right_style = BorderStyle::Solid;
+  style.border_left_color = Rgba::BLACK;
+  style.border_right_color = Rgba::BLACK;
+  style.box_decoration_break = BoxDecorationBreak::Clone;
+  let style = Arc::new(style);
+
+  let total_width = 200.0;
+  let first_width = 120.0;
+  let inline_height = 40.0;
+  let mut first = FragmentNode::new_block_styled(
+    Rect::from_xywh(total_width - first_width, 0.0, first_width, inline_height),
+    vec![],
+    style.clone(),
+  );
+  first.fragment_count = 2;
+  first.slice_info = FragmentSliceInfo {
+    is_first: true,
+    is_last: false,
+    slice_offset: 0.0,
+    original_block_size: total_width,
+  };
+
+  let mut second = FragmentNode::new_block_styled(
+    Rect::from_xywh(0.0, 0.0, total_width - first_width, inline_height),
+    vec![],
+    style.clone(),
+  );
+  second.fragment_index = 1;
+  second.fragment_count = 2;
+  second.slice_info = FragmentSliceInfo {
+    is_first: false,
+    is_last: true,
+    slice_offset: first_width,
+    original_block_size: total_width,
+  };
+
+  let root = FragmentNode::new_block(
+    Rect::from_xywh(0.0, 0.0, total_width, inline_height),
+    vec![first, second],
+  );
+
+  let list = DisplayListBuilder::new().build(&root);
+  let pixmap = DisplayListRenderer::new(
+    total_width as u32,
+    inline_height as u32,
+    Rgba::WHITE,
+    FontContext::new(),
+  )
+  .unwrap()
+  .render(&list)
+  .unwrap();
+
+  let y = 5;
+  assert_eq!(
+    pixel(&pixmap, 1, y),
+    (0, 0, 0, 255),
+    "outer left border paints"
+  );
+  assert_eq!(
+    pixel(&pixmap, 78, y),
+    (0, 0, 0, 255),
+    "clone should paint boundary on right edge of second fragment"
+  );
+  assert_eq!(
+    pixel(&pixmap, 82, y),
+    (0, 0, 0, 255),
+    "clone should paint boundary on left edge of first fragment"
+  );
+  assert_eq!(
+    pixel(&pixmap, 197, y),
+    (0, 0, 0, 255),
+    "outer right border paints"
   );
 }

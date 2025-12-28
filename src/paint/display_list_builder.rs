@@ -91,6 +91,8 @@ use crate::paint::svg_filter::SvgFilterResolver;
 use crate::paint::text_shadow::resolve_text_shadows;
 use crate::paint::transform3d::backface_is_hidden;
 use crate::paint::transform_resolver::ResolvedTransforms;
+use crate::style::block_axis_is_horizontal;
+use crate::style::block_axis_positive;
 use crate::style::color::Rgba;
 use crate::style::types::AccentColor;
 use crate::style::types::Appearance;
@@ -1163,17 +1165,32 @@ impl DisplayListBuilder {
       return (absolute_rect, None);
     }
 
-    let original_block = info
-      .original_block_size
-      .max(absolute_rect.height())
-      .max(0.0);
+    let horizontal_block = block_axis_is_horizontal(style.writing_mode);
+    let block_positive = block_axis_positive(style.writing_mode);
+    let original_block = if horizontal_block {
+      info.original_block_size.max(absolute_rect.width()).max(0.0)
+    } else {
+      info
+        .original_block_size
+        .max(absolute_rect.height())
+        .max(0.0)
+    };
     let slice_offset = info.slice_offset.clamp(0.0, original_block);
-    let rect = Rect::from_xywh(
-      absolute_rect.x(),
-      absolute_rect.y() - slice_offset,
-      absolute_rect.width(),
-      original_block,
-    );
+    let rect = if horizontal_block {
+      let x = if block_positive {
+        absolute_rect.x() - slice_offset
+      } else {
+        absolute_rect.max_x() + slice_offset - original_block
+      };
+      Rect::from_xywh(x, absolute_rect.y(), original_block, absolute_rect.height())
+    } else {
+      Rect::from_xywh(
+        absolute_rect.x(),
+        absolute_rect.y() - slice_offset,
+        absolute_rect.width(),
+        original_block,
+      )
+    };
     let clip = ClipItem {
       shape: ClipShape::Rect {
         rect: absolute_rect,
