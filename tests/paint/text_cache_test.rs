@@ -50,6 +50,8 @@ fn caches_glyph_outlines_between_draws() {
     Rgba::BLACK,
     0.0,
     0.0,
+    0,
+    &[],
   );
   let first = canvas.text_cache_stats();
   assert_eq!(first.hits, 0);
@@ -63,6 +65,8 @@ fn caches_glyph_outlines_between_draws() {
     Rgba::BLACK,
     0.0,
     0.0,
+    0,
+    &[],
   );
   let second = canvas.text_cache_stats();
   assert!(
@@ -87,6 +91,8 @@ fn respects_clip_mask_for_text() {
     Rgba::BLACK,
     0.0,
     0.0,
+    0,
+    &[],
   );
 
   let pixmap = canvas.into_pixmap();

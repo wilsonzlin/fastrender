@@ -56,6 +56,7 @@ use crate::paint::text_shadow::PathBounds;
 use crate::style::color::Rgba;
 use crate::text::font_db::LoadedFont;
 use crate::text::pipeline::GlyphPosition;
+use crate::text::pipeline::ShapedRun;
 use crate::text::variations::FontVariation;
 use rustybuzz::Variation;
 use tiny_skia::BlendMode as SkiaBlendMode;
@@ -959,6 +960,23 @@ impl Canvas {
   ///   &run.variations,
   /// );
   /// ```
+  pub fn draw_shaped_run(&mut self, run: &ShapedRun, position: Point, color: Rgba) {
+    if run.glyphs.is_empty() || (color.a == 0.0 && self.current_state.opacity == 0.0) {
+      return;
+    }
+
+    let clip_mask = self.current_state.clip_mask.clone();
+    let state = self.current_text_state(clip_mask.as_ref());
+    let _ = self.text_rasterizer.render_shaped_run_with_state(
+      run,
+      position.x,
+      position.y,
+      color,
+      &mut self.pixmap,
+      state,
+    );
+  }
+
   pub fn draw_text(
     &mut self,
     position: Point,
@@ -975,12 +993,8 @@ impl Canvas {
       return;
     }
 
-    let state = TextRenderState {
-      transform: self.current_state.transform,
-      clip_mask: self.current_state.clip_mask.as_ref(),
-      opacity: self.current_state.opacity,
-      blend_mode: self.current_state.blend_mode,
-    };
+    let clip_mask = self.current_state.clip_mask.clone();
+    let state = self.current_text_state(clip_mask.as_ref());
 
     let variation_coords: Vec<Variation> = variations
       .iter()
@@ -1142,6 +1156,15 @@ impl Canvas {
     let max_y = p1.y.max(p2.y).max(p3.y).max(p4.y);
 
     Rect::from_xywh(min_x, min_y, max_x - min_x, max_y - min_y)
+  }
+
+  fn current_text_state<'a>(&self, clip_mask: Option<&'a Mask>) -> TextRenderState<'a> {
+    TextRenderState {
+      transform: self.current_state.transform,
+      clip_mask,
+      opacity: self.current_state.opacity,
+      blend_mode: self.current_state.blend_mode,
+    }
   }
 
   fn build_clip_mask(&self, rect: Rect, radii: BorderRadii) -> Option<Mask> {

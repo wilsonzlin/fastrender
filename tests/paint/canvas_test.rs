@@ -5,7 +5,12 @@
 
 use fastrender::geometry::Point;
 use fastrender::geometry::Rect;
+use fastrender::image_compare::{compare_images, decode_png, encode_png, CompareConfig};
 use fastrender::paint::display_list::BorderRadius;
+use fastrender::style::types::FontPalette;
+use fastrender::text::color_fonts::ColorFontRenderer;
+use fastrender::text::font_db::FontDatabase;
+use fastrender::text::variations::FontVariation;
 use fastrender::BlendMode;
 use fastrender::BorderRadii;
 use fastrender::Canvas;
@@ -13,6 +18,41 @@ use fastrender::ComputedStyle;
 use fastrender::FontContext;
 use fastrender::Rgba;
 use fastrender::ShapingPipeline;
+use image::RgbaImage;
+use std::collections::HashSet;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tiny_skia::Pixmap;
+
+fn pixmap_to_rgba_image(pixmap: &Pixmap) -> RgbaImage {
+  let width = pixmap.width();
+  let height = pixmap.height();
+  let mut rgba = RgbaImage::new(width, height);
+
+  for (dst, src) in rgba
+    .as_mut()
+    .chunks_exact_mut(4)
+    .zip(pixmap.data().chunks_exact(4))
+  {
+    let b = src[0];
+    let g = src[1];
+    let r = src[2];
+    let a = src[3];
+
+    if a == 0 {
+      dst.copy_from_slice(&[0, 0, 0, 0]);
+      continue;
+    }
+
+    let alpha = a as f32 / 255.0;
+    dst[0] = ((r as f32 / alpha).min(255.0)) as u8;
+    dst[1] = ((g as f32 / alpha).min(255.0)) as u8;
+    dst[2] = ((b as f32 / alpha).min(255.0)) as u8;
+    dst[3] = a;
+  }
+
+  rgba
+}
 
 // ============================================================================
 // Canvas Creation Tests
@@ -457,6 +497,8 @@ fn test_draw_text_empty() {
     Rgba::BLACK,
     0.0,
     0.0,
+    0,
+    &[],
   );
 
   let _ = canvas.into_pixmap();
@@ -482,6 +524,12 @@ fn test_draw_text_with_glyphs() {
   let Some(run) = shaped.first() else {
     return;
   };
+  let variations: Vec<_> = run
+    .variations
+    .iter()
+    .copied()
+    .map(FontVariation::from)
+    .collect();
 
   // Draw the glyphs
   canvas.draw_text(
@@ -492,6 +540,8 @@ fn test_draw_text_with_glyphs() {
     Rgba::BLACK,
     run.synthetic_bold,
     run.synthetic_oblique,
+    run.palette_index,
+    &variations,
   );
 
   let pixmap = canvas.into_pixmap();
@@ -516,6 +566,12 @@ fn test_draw_text_colored() {
   let Some(run) = shaped.first() else {
     return;
   };
+  let variations: Vec<_> = run
+    .variations
+    .iter()
+    .copied()
+    .map(FontVariation::from)
+    .collect();
   canvas.draw_text(
     Point::new(10.0, 35.0),
     &run.glyphs,
@@ -524,6 +580,8 @@ fn test_draw_text_colored() {
     Rgba::rgb(255, 0, 0),
     run.synthetic_bold,
     run.synthetic_oblique,
+    run.palette_index,
+    &variations,
   );
 
   let _ = canvas.into_pixmap();
@@ -550,6 +608,12 @@ fn test_draw_text_with_opacity() {
   let Some(run) = shaped.first() else {
     return;
   };
+  let variations: Vec<_> = run
+    .variations
+    .iter()
+    .copied()
+    .map(FontVariation::from)
+    .collect();
   canvas.draw_text(
     Point::new(10.0, 35.0),
     &run.glyphs,
@@ -558,9 +622,175 @@ fn test_draw_text_with_opacity() {
     Rgba::BLACK,
     run.synthetic_bold,
     run.synthetic_oblique,
+    run.palette_index,
+    &variations,
   );
 
   let _ = canvas.into_pixmap();
+}
+
+#[test]
+fn canvas_renders_color_fonts() {
+  let font_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fonts/ColorTestCOLR.ttf");
+  let font_bytes = std::fs::read(&font_path).expect("read color font fixture");
+  let mut db = FontDatabase::empty();
+  db.load_font_data(font_bytes)
+    .expect("load color font into database");
+  let font_ctx = FontContext::with_database(Arc::new(db));
+
+  let mut style = ComputedStyle::default();
+  style.font_family = vec!["ColorTestCOLR".to_string()];
+  style.font_size = 32.0;
+
+  let pipeline = ShapingPipeline::new();
+  let shaped = pipeline
+    .shape("A", &style, &font_ctx)
+    .expect("shape color glyph");
+  let run = shaped.first().expect("color run");
+  let variations: Vec<_> = run
+    .variations
+    .iter()
+    .copied()
+    .map(FontVariation::from)
+    .collect();
+
+  let mut canvas = Canvas::new(64, 64, Rgba::WHITE).unwrap();
+  canvas.draw_text(
+    Point::new(12.0, 48.0),
+    &run.glyphs,
+    &run.font,
+    run.font_size * run.scale,
+    Rgba::BLACK,
+    run.synthetic_bold,
+    run.synthetic_oblique,
+    run.palette_index,
+    &variations,
+  );
+  let pixmap = canvas.into_pixmap();
+  let actual_image = pixmap_to_rgba_image(&pixmap);
+  let actual_png = encode_png(&actual_image).expect("encode actual png");
+
+  let golden_path =
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden/canvas_color_font.png");
+  if std::env::var("UPDATE_GOLDEN").is_ok() {
+    std::fs::write(&golden_path, &actual_png).expect("write golden");
+  }
+  let expected_png = std::fs::read(&golden_path).expect("read golden");
+  let expected_image = decode_png(&expected_png).expect("decode golden");
+
+  let diff = compare_images(&actual_image, &expected_image, &CompareConfig::lenient());
+  assert!(
+    diff.is_match(),
+    "color font raster mismatch: {}",
+    diff.summary()
+  );
+
+  let unique_colors: HashSet<(u8, u8, u8)> = pixmap
+    .data()
+    .chunks_exact(4)
+    .map(|c| (c[2], c[1], c[0]))
+    .collect();
+  assert!(
+    unique_colors.len() > 2,
+    "expected multiple colors in color glyph rendering"
+  );
+}
+
+#[test]
+fn canvas_respects_font_palette() {
+  let font_path =
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fonts/PaletteTestCOLRv1.ttf");
+  let font_bytes = std::fs::read(&font_path).expect("read palette font fixture");
+  let mut db = FontDatabase::empty();
+  db.load_font_data(font_bytes)
+    .expect("load palette font into database");
+  let font_ctx = FontContext::with_database(Arc::new(db));
+
+  let mut style = ComputedStyle::default();
+  style.font_family = vec!["PaletteTestCOLRv1".to_string()];
+  style.font_size = 48.0;
+  style.root_font_size = style.font_size;
+  style.font_palette = FontPalette::Dark;
+
+  let pipeline = ShapingPipeline::new();
+  let runs = pipeline
+    .shape("A", &style, &font_ctx)
+    .expect("shape palette font glyph");
+  let palette_run = runs.first().expect("palette run");
+  let palette_glyph = palette_run.glyphs.first().expect("palette glyph");
+  let palette_raster = ColorFontRenderer::new()
+    .render(
+      &palette_run.font,
+      palette_glyph.glyph_id,
+      palette_run.font_size,
+      palette_run.palette_index,
+      Rgba::BLACK,
+      palette_run.synthetic_oblique,
+    )
+    .expect("color glyph raster");
+
+  let origin = Point::new(
+    -(palette_glyph.x_offset + palette_raster.left as f32),
+    -(palette_glyph.y_offset + palette_raster.top as f32),
+  );
+  let mut canvas = Canvas::new(
+    palette_raster.image.width(),
+    palette_raster.image.height(),
+    Rgba::TRANSPARENT,
+  )
+  .unwrap();
+  canvas.draw_shaped_run(palette_run, origin, Rgba::BLACK);
+  let palette_pixmap = canvas.into_pixmap();
+  let palette_image = pixmap_to_rgba_image(&palette_pixmap);
+  let palette_png = encode_png(&palette_image).expect("encode palette png");
+
+  let golden_path =
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden/font_palette_dark.png");
+  let expected_png = std::fs::read(&golden_path).expect("read palette golden");
+  let expected_image = decode_png(&expected_png).expect("decode palette golden");
+
+  let diff = compare_images(&palette_image, &expected_image, &CompareConfig::lenient());
+  assert!(
+    diff.is_match(),
+    "palette color glyph raster mismatch: {}",
+    diff.summary()
+  );
+
+  let mut normal_style = style.clone();
+  normal_style.font_palette = FontPalette::Normal;
+  let normal_runs = pipeline
+    .shape("A", &normal_style, &font_ctx)
+    .expect("shape normal palette glyph");
+  let normal_run = normal_runs.first().expect("normal palette run");
+  let normal_glyph = normal_run.glyphs.first().expect("normal glyph");
+  let normal_raster = ColorFontRenderer::new()
+    .render(
+      &normal_run.font,
+      normal_glyph.glyph_id,
+      normal_run.font_size,
+      normal_run.palette_index,
+      Rgba::BLACK,
+      normal_run.synthetic_oblique,
+    )
+    .expect("normal palette raster");
+  let normal_origin = Point::new(
+    -(normal_glyph.x_offset + normal_raster.left as f32),
+    -(normal_glyph.y_offset + normal_raster.top as f32),
+  );
+  let mut normal_canvas = Canvas::new(
+    normal_raster.image.width(),
+    normal_raster.image.height(),
+    Rgba::TRANSPARENT,
+  )
+  .unwrap();
+  normal_canvas.draw_shaped_run(normal_run, normal_origin, Rgba::BLACK);
+  let normal_png =
+    encode_png(&pixmap_to_rgba_image(&normal_canvas.into_pixmap())).expect("encode normal png");
+
+  assert_ne!(
+    normal_png, palette_png,
+    "different palettes should render different canvas outputs"
+  );
 }
 
 // ============================================================================
