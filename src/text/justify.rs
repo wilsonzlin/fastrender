@@ -40,6 +40,9 @@
 //! // Now glyphs are repositioned with 50px distributed between them
 //! ```
 
+use crate::style::types::TextJustify;
+use unicode_general_category::get_general_category;
+
 /// Position and metrics for a single glyph in a line
 ///
 /// This type represents a glyph with its position and advance width,
@@ -205,6 +208,12 @@ pub struct JustificationOptions {
   /// Whether to justify the last line of a paragraph
   /// (typically false per CSS text-align-last default)
   pub justify_last_line: bool,
+
+  /// CSS `text-justify` mode controlling distribution strategy.
+  pub text_justify: TextJustify,
+
+  /// Inline axis to distribute along (horizontal for default writing modes, vertical otherwise).
+  pub axis: InlineAxis,
 }
 
 impl Default for JustificationOptions {
@@ -215,6 +224,8 @@ impl Default for JustificationOptions {
       use_letter_spacing_fallback: true,
       max_letter_spacing: 2.0,
       justify_last_line: false,
+      text_justify: TextJustify::InterWord,
+      axis: InlineAxis::Horizontal,
     }
   }
 }
@@ -262,6 +273,20 @@ impl JustificationOptions {
   #[must_use]
   pub fn with_justify_last_line(mut self, justify: bool) -> Self {
     self.justify_last_line = justify;
+    self
+  }
+
+  /// Set the text-justify mode.
+  #[must_use]
+  pub fn with_text_justify(mut self, mode: TextJustify) -> Self {
+    self.text_justify = mode;
+    self
+  }
+
+  /// Set the inline axis along which justification will be applied.
+  #[must_use]
+  pub fn with_axis(mut self, axis: InlineAxis) -> Self {
+    self.axis = axis;
     self
   }
 }
@@ -389,13 +414,31 @@ pub fn justify_line_with_options(
   current_width: f32,
   options: &JustificationOptions,
 ) -> JustificationResult {
+  justify_line_with_text(glyphs, target_width, current_width, options, None)
+}
+
+/// Justify a line with optional source text for punctuation-aware spacing.
+pub fn justify_line_with_text(
+  glyphs: &mut [GlyphPosition],
+  target_width: f32,
+  current_width: f32,
+  options: &JustificationOptions,
+  source_text: Option<&str>,
+) -> JustificationResult {
   let mut result = JustificationResult::default();
+
+  let axis = options.axis;
 
   // Early return if nothing to do
   if glyphs.is_empty() || target_width <= current_width {
     return result;
   }
 
+  let current_width = if current_width > 0.0 {
+    current_width
+  } else {
+    calculate_line_advance(glyphs, axis)
+  };
   let extra_space = target_width - current_width;
 
   // Check if line is too short to justify
@@ -403,35 +446,59 @@ pub fn justify_line_with_options(
     return result;
   }
 
-  // Count word boundaries (glyphs that end words)
-  let word_boundaries: usize = glyphs.iter().filter(|g| g.is_word_boundary).count();
-
-  // If we have word boundaries, distribute space among them
-  if word_boundaries > 0 {
-    let space_per_boundary = extra_space / (word_boundaries as f32);
-
-    // Check if word spacing would be too extreme
-    // We consider it extreme if each boundary would get more than max_word_spacing_ratio
-    // times the average glyph advance
-    let avg_advance: f32 = if glyphs.is_empty() {
-      0.0
-    } else {
-      glyphs.iter().map(|g| g.x_advance).sum::<f32>() / glyphs.len() as f32
-    };
-
-    let max_space = avg_advance * options.max_word_spacing_ratio;
-
-    if space_per_boundary <= max_space || !options.use_letter_spacing_fallback {
-      // Use word spacing distribution
-      result = distribute_space_at_word_boundaries(glyphs, extra_space, word_boundaries);
-    } else {
-      // Combine word and letter spacing
-      result = distribute_space_combined(glyphs, extra_space, word_boundaries, options);
-    }
-  } else if options.use_letter_spacing_fallback && glyphs.len() > 1 {
-    // No word boundaries - use letter spacing as fallback
-    result = distribute_space_between_letters(glyphs, extra_space, options);
+  let text_mode = resolve_text_justify(options.text_justify, source_text);
+  if matches!(text_mode, TextJustify::None) {
+    return result;
   }
+
+  let text_chars: Option<Vec<char>> = source_text.map(|t| t.chars().collect());
+  let text_chars_ref = text_chars.as_deref();
+
+  match text_mode {
+    TextJustify::InterCharacter | TextJustify::Distribute => {
+      let gaps = collect_inter_character_gaps(glyphs, text_chars_ref);
+      if !gaps.is_empty() {
+        result = distribute_space_between_letters(glyphs, extra_space, options, axis, &gaps, false);
+      }
+    }
+    _ => {
+      // Count word boundaries (glyphs that end words)
+      let word_boundaries: usize = glyphs.iter().filter(|g| g.is_word_boundary).count();
+
+      // If we have word boundaries, distribute space among them
+      if word_boundaries > 0 {
+        let space_per_boundary = extra_space / (word_boundaries as f32);
+
+        // Check if word spacing would be too extreme
+        // We consider it extreme if each boundary would get more than max_word_spacing_ratio
+        // times the average glyph advance
+        let avg_advance: f32 = if glyphs.is_empty() {
+          0.0
+        } else {
+          glyphs.iter().map(|g| inline_advance(g, axis)).sum::<f32>() / glyphs.len() as f32
+        };
+
+        let max_space = avg_advance * options.max_word_spacing_ratio;
+
+        if space_per_boundary <= max_space || !options.use_letter_spacing_fallback {
+          // Use word spacing distribution
+          result = distribute_space_at_word_boundaries(glyphs, extra_space, word_boundaries, axis);
+        } else {
+          // Combine word and letter spacing
+          let gaps = collect_inter_character_gaps(glyphs, text_chars_ref);
+          result =
+            distribute_space_combined(glyphs, extra_space, word_boundaries, &gaps, options, axis);
+        }
+      } else if options.use_letter_spacing_fallback && glyphs.len() > 1 {
+        // No word boundaries - use letter spacing as fallback
+        let gaps = collect_inter_character_gaps(glyphs, text_chars_ref);
+        if !gaps.is_empty() {
+          result =
+            distribute_space_between_letters(glyphs, extra_space, options, axis, &gaps, true);
+        }
+      }
+    }
+  };
 
   result
 }
@@ -444,6 +511,7 @@ fn distribute_space_at_word_boundaries(
   glyphs: &mut [GlyphPosition],
   extra_space: f32,
   word_boundaries: usize,
+  axis: InlineAxis,
 ) -> JustificationResult {
   if word_boundaries == 0 || glyphs.is_empty() {
     return JustificationResult::default();
@@ -454,7 +522,7 @@ fn distribute_space_at_word_boundaries(
 
   for glyph in glyphs.iter_mut() {
     // Apply cumulative offset to this glyph's position
-    glyph.x += cumulative_offset;
+    apply_inline_offset(glyph, axis, cumulative_offset);
 
     // If this glyph ends a word, add extra space after it
     if glyph.is_word_boundary {
@@ -476,35 +544,41 @@ fn distribute_space_at_word_boundaries(
 ///
 /// This function adds extra space between every glyph (letter spacing).
 /// Used when there are no word boundaries or as a supplement.
+/// When `cap_to_max` is true, spacing is clamped to `max_letter_spacing`.
 fn distribute_space_between_letters(
   glyphs: &mut [GlyphPosition],
   extra_space: f32,
   options: &JustificationOptions,
+  axis: InlineAxis,
+  gaps: &[usize],
+  cap_to_max: bool,
 ) -> JustificationResult {
-  if glyphs.len() <= 1 {
+  if glyphs.len() <= 1 || gaps.is_empty() {
     return JustificationResult::default();
   }
 
   // Number of gaps between glyphs
-  let gaps = glyphs.len() - 1;
-  let mut space_per_gap = extra_space / (gaps as f32);
+  let mut space_per_gap = extra_space / (gaps.len() as f32);
 
   // Cap letter spacing if it would be too extreme
-  if space_per_gap > options.max_letter_spacing {
+  if cap_to_max && space_per_gap > options.max_letter_spacing {
     space_per_gap = options.max_letter_spacing;
   }
 
-  let actual_extra_space = space_per_gap * (gaps as f32);
+  let actual_extra_space = space_per_gap * (gaps.len() as f32);
 
   let mut cumulative_offset = 0.0;
+  let mut gap_iter = gaps.iter().copied();
+  let mut next_gap = gap_iter.next();
 
   for (i, glyph) in glyphs.iter_mut().enumerate() {
     // Apply cumulative offset to this glyph's position
-    glyph.x += cumulative_offset;
+    apply_inline_offset(glyph, axis, cumulative_offset);
 
     // Add space after each glyph except the last
-    if i < gaps {
+    if next_gap.is_some_and(|gap| gap == i) {
       cumulative_offset += space_per_gap;
+      next_gap = gap_iter.next();
     }
   }
 
@@ -513,7 +587,7 @@ fn distribute_space_between_letters(
     space_per_word: 0.0,
     space_per_letter: space_per_gap,
     word_boundaries_used: 0,
-    letter_spaces_used: gaps,
+    letter_spaces_used: gaps.len(),
     is_justified: actual_extra_space > 0.0,
   }
 }
@@ -526,14 +600,17 @@ fn distribute_space_combined(
   glyphs: &mut [GlyphPosition],
   extra_space: f32,
   word_boundaries: usize,
+  letter_gaps: &[usize],
   options: &JustificationOptions,
+  axis: InlineAxis,
 ) -> JustificationResult {
   if glyphs.is_empty() {
     return JustificationResult::default();
   }
 
   // Calculate average advance to determine reasonable word spacing
-  let avg_advance: f32 = glyphs.iter().map(|g| g.x_advance).sum::<f32>() / glyphs.len() as f32;
+  let avg_advance: f32 =
+    glyphs.iter().map(|g| inline_advance(g, axis)).sum::<f32>() / glyphs.len() as f32;
   let max_word_space = avg_advance * options.max_word_spacing_ratio;
 
   // Calculate how much we can distribute via word spacing
@@ -548,13 +625,9 @@ fn distribute_space_combined(
   };
 
   // Distribute remaining space via letter spacing
-  let letter_gaps = if glyphs.len() > 1 {
-    glyphs.len() - 1
-  } else {
-    0
-  };
-  let mut space_per_letter = if letter_gaps > 0 {
-    remaining_space / (letter_gaps as f32)
+  let letter_gap_count = letter_gaps.len();
+  let mut space_per_letter = if letter_gap_count > 0 {
+    remaining_space / (letter_gap_count as f32)
   } else {
     0.0
   };
@@ -564,18 +637,21 @@ fn distribute_space_combined(
     space_per_letter = options.max_letter_spacing;
   }
 
-  let actual_letter_space = space_per_letter * (letter_gaps as f32);
+  let actual_letter_space = space_per_letter * (letter_gap_count as f32);
   let total_extra_space = word_space_portion + actual_letter_space;
 
   // Apply both types of spacing
   let mut cumulative_offset = 0.0;
+  let mut gap_iter = letter_gaps.iter().copied();
+  let mut next_gap = gap_iter.next();
 
   for (i, glyph) in glyphs.iter_mut().enumerate() {
-    glyph.x += cumulative_offset;
+    apply_inline_offset(glyph, axis, cumulative_offset);
 
     // Add letter spacing after each glyph except the last
-    if i < letter_gaps {
+    if next_gap.is_some_and(|gap| gap == i) {
       cumulative_offset += space_per_letter;
+      next_gap = gap_iter.next();
     }
 
     // Add word spacing after word boundaries
@@ -589,7 +665,7 @@ fn distribute_space_combined(
     space_per_word,
     space_per_letter,
     word_boundaries_used: word_boundaries,
-    letter_spaces_used: letter_gaps,
+    letter_spaces_used: letter_gap_count,
     is_justified: total_extra_space > 0.0,
   }
 }
@@ -642,8 +718,8 @@ pub fn justify_lines(
         return JustificationResult::default();
       }
 
-      let current_width = calculate_line_width(line);
-      justify_line_with_options(line, target_width, current_width, options)
+      let current_width = calculate_line_advance(line, options.axis);
+      justify_line_with_text(line, target_width, current_width, options, None)
     })
     .collect()
 }
@@ -659,7 +735,13 @@ pub fn justify_lines(
 /// The total width of the line (sum of all x_advance values).
 #[must_use]
 pub fn calculate_line_width(glyphs: &[GlyphPosition]) -> f32 {
-  glyphs.iter().map(|g| g.x_advance).sum()
+  calculate_line_advance(glyphs, InlineAxis::Horizontal)
+}
+
+/// Calculate inline advance along an axis.
+#[must_use]
+pub fn calculate_line_advance(glyphs: &[GlyphPosition], axis: InlineAxis) -> f32 {
+  glyphs.iter().map(|g| inline_advance(g, axis)).sum()
 }
 
 /// Mark word boundaries in a sequence of glyphs based on whitespace
@@ -768,6 +850,19 @@ impl JustificationMode {
   }
 }
 
+/// Axis to justify along.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InlineAxis {
+  Horizontal,
+  Vertical,
+}
+
+impl Default for InlineAxis {
+  fn default() -> Self {
+    InlineAxis::Horizontal
+  }
+}
+
 /// Check if a character is CJK (Chinese, Japanese, Korean)
 ///
 /// CJK text typically uses letter-spacing justification rather than
@@ -820,6 +915,89 @@ pub fn detect_justification_mode(text: &str) -> JustificationMode {
   }
 }
 
+/// Whether inter-character expansion should be suppressed for a character.
+#[must_use]
+pub fn is_prohibited_interchar_char(ch: char) -> bool {
+  const OBJECT_REPLACEMENT: char = '\u{FFFC}';
+  ch == OBJECT_REPLACEMENT
+    || ch.is_whitespace()
+    || matches!(
+      get_general_category(ch),
+      unicode_general_category::GeneralCategory::ConnectorPunctuation
+        | unicode_general_category::GeneralCategory::DashPunctuation
+        | unicode_general_category::GeneralCategory::ClosePunctuation
+        | unicode_general_category::GeneralCategory::FinalPunctuation
+        | unicode_general_category::GeneralCategory::InitialPunctuation
+        | unicode_general_category::GeneralCategory::OtherPunctuation
+        | unicode_general_category::GeneralCategory::OpenPunctuation
+    )
+}
+
+/// Return true if spacing can be added between the characters.
+#[must_use]
+pub fn allows_inter_character_expansion(prev: Option<char>, next: Option<char>) -> bool {
+  match (prev, next) {
+    (Some(a), Some(b)) => !is_prohibited_interchar_char(a) && !is_prohibited_interchar_char(b),
+    _ => false,
+  }
+}
+
+fn inline_advance(glyph: &GlyphPosition, axis: InlineAxis) -> f32 {
+  let primary = match axis {
+    InlineAxis::Horizontal => glyph.x_advance,
+    InlineAxis::Vertical => glyph.y_advance,
+  };
+  if primary != 0.0 {
+    return primary;
+  }
+  match axis {
+    InlineAxis::Horizontal => glyph.y_advance,
+    InlineAxis::Vertical => glyph.x_advance,
+  }
+}
+
+fn apply_inline_offset(glyph: &mut GlyphPosition, axis: InlineAxis, offset: f32) {
+  match axis {
+    InlineAxis::Horizontal => glyph.x += offset,
+    InlineAxis::Vertical => glyph.y += offset,
+  }
+}
+
+fn resolve_text_justify(mode: TextJustify, text: Option<&str>) -> TextJustify {
+  if !matches!(mode, TextJustify::Auto) {
+    return mode;
+  }
+  let Some(text) = text else {
+    return TextJustify::InterWord;
+  };
+  match detect_justification_mode(text) {
+    JustificationMode::WordSpacing => TextJustify::InterWord,
+    JustificationMode::LetterSpacing => TextJustify::InterCharacter,
+    JustificationMode::Combined | JustificationMode::Auto => TextJustify::Distribute,
+  }
+}
+
+fn collect_inter_character_gaps(glyphs: &[GlyphPosition], text: Option<&[char]>) -> Vec<usize> {
+  let mut gaps = Vec::new();
+  for i in 0..glyphs.len().saturating_sub(1) {
+    if glyphs[i].cluster == glyphs[i + 1].cluster {
+      continue;
+    }
+    if glyphs[i].is_word_boundary || glyphs[i + 1].is_word_boundary {
+      continue;
+    }
+    if let Some(chars) = text {
+      let prev = chars.get(glyphs[i].cluster).copied();
+      let next = chars.get(glyphs[i + 1].cluster).copied();
+      if !allows_inter_character_expansion(prev, next) {
+        continue;
+      }
+    }
+    gaps.push(i);
+  }
+  gaps
+}
+
 /// Apply alignment to a line of glyphs
 ///
 /// This function shifts all glyphs to achieve the specified alignment
@@ -841,6 +1019,23 @@ pub fn apply_alignment(
   available_width: f32,
   alignment: TextAlignment,
 ) -> f32 {
+  apply_alignment_with_axis(
+    glyphs,
+    line_width,
+    available_width,
+    alignment,
+    InlineAxis::Horizontal,
+  )
+}
+
+/// Apply alignment along a given inline axis.
+pub fn apply_alignment_with_axis(
+  glyphs: &mut [GlyphPosition],
+  line_width: f32,
+  available_width: f32,
+  alignment: TextAlignment,
+  axis: InlineAxis,
+) -> f32 {
   let offset = match alignment {
     TextAlignment::Left | TextAlignment::Justify => 0.0,
     TextAlignment::Right => available_width - line_width,
@@ -848,7 +1043,7 @@ pub fn apply_alignment(
   };
 
   for glyph in glyphs.iter_mut() {
-    glyph.x += offset;
+    apply_inline_offset(glyph, axis, offset);
   }
 
   offset

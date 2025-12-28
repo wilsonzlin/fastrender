@@ -48,6 +48,7 @@ use crate::style::types::WhiteSpace;
 use crate::style::types::WordBreak;
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
+use crate::text::justify::InlineAxis;
 use crate::text::line_break::BreakOpportunity;
 use crate::text::line_break::BreakType;
 use crate::text::pipeline::ShapedRun;
@@ -741,6 +742,7 @@ impl TextItem {
         continue;
       }
 
+      let axis = run_inline_axis(run);
       let mut extra_by_glyph = vec![0.0; run.glyphs.len()];
       for (glyph_idx, extra) in run_cluster_extras
         .get(run_idx)
@@ -756,10 +758,13 @@ impl TextItem {
       let mut new_advance = 0.0;
 
       for (idx, glyph) in run.glyphs.iter_mut().enumerate() {
+        let extra = extra_by_glyph[idx];
         glyph.x_offset += cumulative_shift;
-        glyph.x_advance += extra_by_glyph[idx];
-        cumulative_shift += extra_by_glyph[idx];
-        new_advance += glyph.x_advance;
+        if extra != 0.0 {
+          add_inline_advance(glyph, axis, extra);
+        }
+        cumulative_shift += extra;
+        new_advance += glyph_inline_advance(glyph, axis);
       }
 
       run.advance = new_advance;
@@ -886,11 +891,12 @@ impl TextItem {
     let mut cumulative = 0.0;
 
     for run in sorted_runs {
+      let axis = run_inline_axis(run);
       let mut cluster_widths: BTreeMap<usize, f32> = BTreeMap::new();
       for glyph in &run.glyphs {
         let raw_offset = run.start + glyph.cluster as usize;
         let offset = Self::previous_char_boundary_in_text(text, raw_offset);
-        *cluster_widths.entry(offset).or_default() += glyph.x_advance;
+        *cluster_widths.entry(offset).or_default() += glyph_inline_advance(glyph, axis);
       }
 
       if cluster_widths.is_empty() {
@@ -1058,7 +1064,11 @@ impl TextItem {
         }
       }
 
-      let left_advance: f32 = left_glyphs.iter().map(|g| g.x_advance).sum();
+      let run_axis = run_inline_axis(run);
+      let left_advance: f32 = left_glyphs
+        .iter()
+        .map(|g| glyph_inline_advance(g, run_axis))
+        .sum();
 
       // Adjust right glyph offsets/clusters to be relative to the split
       for glyph in &mut right_glyphs {
@@ -1081,12 +1091,48 @@ impl TextItem {
         right_run.start = 0;
         right_run.end = right_run.text.len();
         right_run.glyphs = right_glyphs;
-        right_run.advance = right_run.glyphs.iter().map(|g| g.x_advance).sum();
+        right_run.advance = right_run
+          .glyphs
+          .iter()
+          .map(|g| glyph_inline_advance(g, run_axis))
+          .sum();
         after_runs.push(right_run);
       }
     }
 
     Some((before_runs, after_runs))
+  }
+}
+
+fn run_inline_axis(run: &ShapedRun) -> InlineAxis {
+  if run.glyphs.iter().any(|g| g.y_advance.abs() > f32::EPSILON) {
+    InlineAxis::Vertical
+  } else {
+    InlineAxis::Horizontal
+  }
+}
+
+fn glyph_inline_advance(glyph: &crate::text::pipeline::GlyphPosition, axis: InlineAxis) -> f32 {
+  match axis {
+    InlineAxis::Horizontal => glyph.x_advance,
+    InlineAxis::Vertical => {
+      if glyph.y_advance.abs() > f32::EPSILON {
+        glyph.y_advance
+      } else {
+        glyph.x_advance
+      }
+    }
+  }
+}
+
+fn add_inline_advance(
+  glyph: &mut crate::text::pipeline::GlyphPosition,
+  axis: InlineAxis,
+  delta: f32,
+) {
+  match axis {
+    InlineAxis::Horizontal => glyph.x_advance += delta,
+    InlineAxis::Vertical => glyph.y_advance += delta,
   }
 }
 

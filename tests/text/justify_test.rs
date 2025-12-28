@@ -2,16 +2,20 @@
 //!
 //! Tests the text justification algorithm following CSS Text Module Level 3.
 
+use fastrender::style::types::TextJustify;
 use fastrender::text::justify::apply_alignment;
+use fastrender::text::justify::apply_alignment_with_axis;
 use fastrender::text::justify::calculate_line_width;
 use fastrender::text::justify::detect_justification_mode;
 use fastrender::text::justify::is_cjk_character;
 use fastrender::text::justify::justify_line;
 use fastrender::text::justify::justify_line_with_options;
+use fastrender::text::justify::justify_line_with_text;
 use fastrender::text::justify::justify_lines;
 use fastrender::text::justify::mark_word_boundaries;
 use fastrender::text::justify::mark_word_boundaries_by_glyph_id;
 use fastrender::text::justify::GlyphPosition;
+use fastrender::text::justify::InlineAxis;
 use fastrender::text::justify::JustificationMode;
 use fastrender::text::justify::JustificationOptions;
 use fastrender::text::justify::JustificationResult;
@@ -23,7 +27,9 @@ use fastrender::text::justify::TextAlignment;
 
 /// Create a simple glyph for testing
 fn glyph(id: u16, x: f32, advance: f32, is_word_boundary: bool) -> GlyphPosition {
-  GlyphPosition::new(id, x, 0.0, advance, is_word_boundary)
+  let mut g = GlyphPosition::new(id, x, 0.0, advance, is_word_boundary);
+  g.cluster = id as usize;
+  g
 }
 
 /// Create a glyph with cluster information
@@ -800,4 +806,156 @@ fn test_full_justification_workflow() {
   let result = justify_line_with_options(&mut glyphs, 160.0, 130.0, &options);
 
   assert!(result.is_justified);
+}
+
+// ============================================================================
+// Advanced inter-character justification tests
+// ============================================================================
+
+#[test]
+fn inter_character_justifies_cjk_clusters() {
+  let mut glyphs = vec![
+    glyph_with_cluster(0, 0.0, 10.0, false, 0),
+    glyph_with_cluster(1, 10.0, 10.0, false, 1),
+    glyph_with_cluster(2, 20.0, 10.0, false, 2),
+    glyph_with_cluster(3, 30.0, 10.0, false, 3),
+  ];
+
+  let options = JustificationOptions::default()
+    .with_text_justify(TextJustify::InterCharacter)
+    .with_min_fill_ratio(0.0);
+  let result = justify_line_with_text(&mut glyphs, 70.0, 40.0, &options, Some("漢字漢字"));
+
+  assert!(result.is_justified);
+  assert_approx_eq(glyphs[1].x, 20.0, "second cluster after justification");
+  assert_approx_eq(glyphs[3].x, 60.0, "last cluster after justification");
+}
+
+#[test]
+fn inter_character_avoids_punctuation_boundaries() {
+  let mut glyphs = vec![
+    glyph_with_cluster(0, 0.0, 10.0, false, 0),
+    glyph_with_cluster(1, 10.0, 10.0, false, 1),
+    glyph_with_cluster(2, 20.0, 10.0, false, 2), // punctuation
+    glyph_with_cluster(3, 30.0, 10.0, false, 3),
+    glyph_with_cluster(4, 40.0, 10.0, false, 4),
+  ];
+
+  let options = JustificationOptions::default()
+    .with_text_justify(TextJustify::InterCharacter)
+    .with_min_fill_ratio(0.0);
+  let text = "AB、CD";
+  let result = justify_line_with_text(&mut glyphs, 70.0, 50.0, &options, Some(text));
+
+  assert!(result.is_justified);
+  assert_approx_eq(
+    glyphs[2].x - glyphs[1].x,
+    10.0,
+    "punctuation-adjacent gap should not expand",
+  );
+  assert_approx_eq(glyphs[1].x, 20.0, "gap expands before punctuation");
+  assert_approx_eq(
+    glyphs[4].x - glyphs[3].x,
+    20.0,
+    "gap expands after punctuation",
+  );
+}
+
+#[test]
+fn auto_distribute_justifies_mixed_scripts() {
+  let mut glyphs = vec![
+    glyph_with_cluster(0, 0.0, 10.0, false, 0),
+    glyph_with_cluster(1, 10.0, 10.0, false, 1),
+    glyph_with_cluster(2, 20.0, 10.0, false, 2),
+    glyph_with_cluster(3, 30.0, 10.0, false, 3),
+    glyph_with_cluster(4, 40.0, 10.0, false, 4),
+  ];
+
+  let options = JustificationOptions::default()
+    .with_text_justify(TextJustify::Auto)
+    .with_min_fill_ratio(0.0);
+  let text = "A漢B字C";
+  let result = justify_line_with_text(&mut glyphs, 80.0, 50.0, &options, Some(text));
+
+  assert!(result.is_justified);
+  assert!(
+    result.space_per_letter > options.max_letter_spacing,
+    "auto distribute should not cap per-letter expansion"
+  );
+  assert_approx_eq(glyphs[4].x, 70.0, "last glyph shifted by distributed gaps");
+}
+
+#[test]
+fn vertical_axis_inter_character_distributes_inline_space() {
+  let mut glyphs = vec![
+    GlyphPosition::with_cluster(0, 0.0, 0.0, 0.0, 10.0, false, 0),
+    GlyphPosition::with_cluster(1, 0.0, 10.0, 0.0, 10.0, false, 1),
+    GlyphPosition::with_cluster(2, 0.0, 20.0, 0.0, 10.0, false, 2),
+  ];
+
+  let options = JustificationOptions::default()
+    .with_text_justify(TextJustify::InterCharacter)
+    .with_min_fill_ratio(0.0)
+    .with_axis(InlineAxis::Vertical);
+  let result = justify_line_with_text(&mut glyphs, 50.0, 30.0, &options, Some("縦書き"));
+
+  assert!(result.is_justified);
+  assert_approx_eq(glyphs[1].y, 20.0, "second glyph shifted vertically");
+  assert_approx_eq(glyphs[2].y, 40.0, "third glyph shifted vertically");
+}
+
+#[test]
+fn distribute_mode_spreads_mixed_scripts() {
+  let mut glyphs = vec![
+    glyph_with_cluster(0, 0.0, 10.0, false, 0),
+    glyph_with_cluster(1, 10.0, 10.0, false, 1),
+    glyph_with_cluster(2, 20.0, 10.0, false, 2),
+    glyph_with_cluster(3, 30.0, 10.0, false, 3),
+    glyph_with_cluster(4, 40.0, 10.0, false, 4),
+  ];
+
+  let options = JustificationOptions::default()
+    .with_text_justify(TextJustify::Distribute)
+    .with_min_fill_ratio(0.0);
+  let result = justify_line_with_text(&mut glyphs, 80.0, 50.0, &options, Some("A漢B字C"));
+
+  assert!(result.is_justified);
+  assert_approx_eq(
+    glyphs[4].x,
+    70.0,
+    "last glyph should shift by distributed gaps for mixed scripts",
+  );
+}
+
+#[test]
+fn apply_alignment_with_axis_offsets_vertical_inline() {
+  let mut glyphs = vec![
+    GlyphPosition::with_cluster(0, 5.0, 0.0, 0.0, 10.0, false, 0),
+    GlyphPosition::with_cluster(1, 5.0, 10.0, 0.0, 10.0, false, 1),
+  ];
+
+  let offset = apply_alignment_with_axis(
+    &mut glyphs,
+    20.0,
+    60.0,
+    TextAlignment::Center,
+    InlineAxis::Vertical,
+  );
+
+  assert_approx_eq(
+    offset,
+    20.0,
+    "center alignment should offset along inline axis",
+  );
+  assert_approx_eq(glyphs[0].x, 5.0, "horizontal positions remain unchanged");
+  assert_approx_eq(
+    glyphs[0].y,
+    20.0,
+    "first glyph shifted down the inline axis",
+  );
+  assert_approx_eq(
+    glyphs[1].y,
+    30.0,
+    "second glyph shifted down the inline axis",
+  );
 }

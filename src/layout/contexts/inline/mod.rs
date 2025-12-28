@@ -90,6 +90,7 @@ use crate::style::ComputedStyle;
 use crate::text::font_db::ScaledMetrics;
 use crate::text::font_loader::FontContext;
 use crate::text::hyphenation::Hyphenator;
+use crate::text::justify::allows_inter_character_expansion;
 use crate::text::justify::is_cjk_character;
 use crate::text::line_break::find_break_opportunities;
 use crate::text::line_break::BreakOpportunity;
@@ -4260,14 +4261,7 @@ impl InlineFormattingContext {
     if matches!(mode, TextJustify::InterCharacter | TextJustify::Distribute) {
       return items
         .windows(2)
-        .filter(|pair| {
-          let prev = &pair[0].item;
-          let next = &pair[1].item;
-          !is_marker_item(prev)
-            && !is_marker_item(next)
-            && !matches!(prev, InlineItem::StaticPositionAnchor(_))
-            && !matches!(next, InlineItem::StaticPositionAnchor(_))
-        })
+        .filter(|pair| allows_inter_character_gap(&pair[0].item, &pair[1].item))
         .count();
     }
     items
@@ -4285,14 +4279,7 @@ impl InlineFormattingContext {
       return false;
     }
     if matches!(mode, TextJustify::InterCharacter | TextJustify::Distribute) {
-      if is_marker_item(&items[index].item)
-        || is_marker_item(&items[index + 1].item)
-        || matches!(items[index].item, InlineItem::StaticPositionAnchor(_))
-        || matches!(items[index + 1].item, InlineItem::StaticPositionAnchor(_))
-      {
-        return false;
-      }
-      return true;
+      return allows_inter_character_gap(&items[index].item, &items[index + 1].item);
     }
     let prev = &items[index].item;
     let next = &items[index + 1].item;
@@ -8725,8 +8712,11 @@ fn resolve_auto_text_justify(mode: TextJustify, items: &[PositionedItem]) -> Tex
   if counts.total == 0 {
     return TextJustify::InterWord;
   }
-  if counts.cjk * 2 >= counts.total {
+  let ratio = counts.cjk as f32 / counts.total as f32;
+  if ratio > 0.5 {
     TextJustify::InterCharacter
+  } else if ratio > 0.1 {
+    TextJustify::Distribute
   } else {
     TextJustify::InterWord
   }
@@ -8742,12 +8732,12 @@ fn has_justify_opportunities(items: &[PositionedItem], mode: TextJustify) -> boo
 
   match mode {
     TextJustify::InterCharacter | TextJustify::Distribute => {
-      if non_marker.len() > 1 {
-        return true;
-      }
       non_marker
-        .iter()
-        .any(|pos| item_has_interchar_opportunity(&pos.item))
+        .windows(2)
+        .any(|pair| allows_inter_character_gap(&pair[0].item, &pair[1].item))
+        || non_marker
+          .iter()
+          .any(|pos| item_has_interchar_opportunity(&pos.item))
     }
     _ => {
       if non_marker
@@ -8770,9 +8760,10 @@ fn item_has_interchar_opportunity(item: &InlineItem) -> bool {
       if t.is_marker {
         return false;
       }
-      t.cluster_byte_offsets()
-        .into_iter()
-        .any(|offset| offset > 0 && offset < t.text.len())
+      let chars: Vec<char> = t.text.chars().collect();
+      chars
+        .windows(2)
+        .any(|pair| allows_inter_character_expansion(pair.first().copied(), pair.get(1).copied()))
     }
     InlineItem::InlineBox(b) => b.children.iter().any(item_has_interchar_opportunity),
     InlineItem::Ruby(r) => r
@@ -8819,6 +8810,20 @@ fn is_space_boundary_between(prev: &InlineItem, next: &InlineItem) -> bool {
   let prev_last = last_char_of_item(prev);
   let next_first = first_char_of_item(next);
   matches!((prev_last, next_first), (Some(p), Some(n)) if is_expandable_space(p) && !is_expandable_space(n))
+}
+
+fn allows_inter_character_gap(prev: &InlineItem, next: &InlineItem) -> bool {
+  if is_marker_item(prev) || is_marker_item(next) {
+    return false;
+  }
+  if matches!(prev, InlineItem::StaticPositionAnchor(_))
+    || matches!(next, InlineItem::StaticPositionAnchor(_))
+  {
+    return false;
+  }
+  let prev_last = last_char_of_item(prev);
+  let next_first = first_char_of_item(next);
+  allows_inter_character_expansion(prev_last, next_first)
 }
 
 #[derive(Default)]
@@ -11079,6 +11084,51 @@ mod tests {
       gap > 0.5,
       "justify should expand gaps between CJK clusters; gap={gap}, count={count}"
     );
+  }
+
+  #[test]
+  fn text_justify_auto_uses_distribute_for_mixed_scripts() {
+    let mut root_style = ComputedStyle::default();
+    root_style.text_align = TextAlign::Justify;
+    root_style.text_justify = TextJustify::Auto;
+    root_style.white_space = WhiteSpace::PreWrap;
+    root_style.text_align_last = crate::style::types::TextAlignLast::Justify;
+    let mut text_style = ComputedStyle::default();
+    text_style.white_space = WhiteSpace::PreWrap;
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        Arc::new(text_style),
+        "Latin 漢字 Latin".to_string(),
+      )],
+    );
+    let constraints = LayoutConstraints::definite_width(400.0);
+
+    let ifc = InlineFormattingContext::new();
+    let items = ifc
+      .collect_inline_items(&root, constraints.width().unwrap(), constraints.height())
+      .unwrap();
+    let strut = ifc.compute_strut_metrics(&root.style);
+    let lines = ifc.build_lines(
+      items,
+      constraints.width().unwrap(),
+      constraints.width().unwrap(),
+      true,
+      root.style.text_wrap,
+      0.0,
+      false,
+      false,
+      &strut,
+      Some(unicode_bidi::Level::ltr()),
+      root.style.direction,
+      root.style.unicode_bidi,
+      None,
+      0.0,
+    );
+    let first = lines.first().expect("first line");
+    let resolved = resolve_auto_text_justify(TextJustify::Auto, &first.items);
+    assert_eq!(resolved, TextJustify::Distribute);
   }
 
   #[test]
