@@ -66,7 +66,6 @@ use crate::text::variations::FontVariation;
 use std::fmt;
 use std::sync::Arc;
 use tiny_skia::FilterQuality;
-use ttf_parser::Tag;
 
 // ============================================================================
 // Display Item Types
@@ -565,29 +564,6 @@ impl Default for BorderRadii {
 // ============================================================================
 // Text Item
 // ============================================================================
-
-/// Variation axis/value pair for variable fonts.
-///
-/// Values are stored as raw bits to keep equality/hash semantics stable
-/// even when NaNs are involved.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct FontVariation {
-  pub tag: Tag,
-  pub value_bits: u32,
-}
-
-impl FontVariation {
-  pub fn new(tag: Tag, value: f32) -> Self {
-    Self {
-      tag,
-      value_bits: value.to_bits(),
-    }
-  }
-
-  pub fn value(&self) -> f32 {
-    f32::from_bits(self.value_bits)
-  }
-}
 
 /// Draw a text run
 ///

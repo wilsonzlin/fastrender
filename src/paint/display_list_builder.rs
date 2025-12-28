@@ -59,7 +59,6 @@ use crate::paint::display_list::EmphasisText;
 use crate::paint::display_list::FillRectItem;
 use crate::paint::display_list::FillRoundedRectItem;
 use crate::paint::display_list::FontId;
-use crate::paint::display_list::FontVariation as DlFontVariation;
 use crate::paint::display_list::GlyphInstance;
 use crate::paint::display_list::GradientSpread;
 use crate::paint::display_list::GradientStop;
@@ -4227,11 +4226,14 @@ impl DisplayListBuilder {
     }
   }
 
-  fn variations_from_run(run: &ShapedRun) -> Vec<DlFontVariation> {
-    let mut variations: Vec<DlFontVariation> = run
+  fn variations_from_run(run: &ShapedRun) -> Vec<FontVariation> {
+    let mut variations: Vec<FontVariation> = run
       .variations
       .iter()
-      .map(|v| DlFontVariation::new(v.tag, v.value))
+      .map(|v| FontVariation {
+        tag: v.tag,
+        value: v.value,
+      })
       .collect();
     variations.sort_by_key(|v| v.tag);
     variations
@@ -6782,3 +6784,4 @@ mod tests {
     );
   }
 }
+use crate::text::variations::FontVariation;
