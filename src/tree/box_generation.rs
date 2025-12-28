@@ -31,6 +31,7 @@ use crate::style::values::Length;
 use crate::style::values::LengthUnit;
 use crate::style::ComputedStyle;
 use crate::svg::parse_svg_length_px;
+use crate::svg::svg_intrinsic_dimensions_from_attributes;
 use crate::tree::anonymous::AnonymousBoxCreator;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::box_tree::BoxTree;
@@ -2239,25 +2240,45 @@ fn create_replaced_box_from_styled(
     },
   };
 
-  // Get intrinsic size from attributes when provided
-  let intrinsic_width = styled
-    .node
-    .get_attribute("width")
-    .and_then(|w| w.parse::<f32>().ok());
+  let width_attr = styled.node.get_attribute("width");
+  let height_attr = styled.node.get_attribute("height");
+  let view_box_attr = styled.node.get_attribute("viewBox");
+  let preserve_aspect_ratio_attr = styled.node.get_attribute("preserveAspectRatio");
 
-  let intrinsic_height = styled
-    .node
-    .get_attribute("height")
-    .and_then(|h| h.parse::<f32>().ok());
+  let (mut intrinsic_size, mut aspect_ratio) = match &replaced_type {
+    ReplacedType::Svg { .. } => {
+      let svg_intrinsic = svg_intrinsic_dimensions_from_attributes(
+        width_attr.as_deref(),
+        height_attr.as_deref(),
+        view_box_attr.as_deref(),
+        preserve_aspect_ratio_attr.as_deref(),
+      );
 
-  let mut intrinsic_size = match (intrinsic_width, intrinsic_height) {
-    (Some(w), Some(h)) => Some(Size::new(w, h)),
-    _ => None,
-  };
+      let size = match (svg_intrinsic.width, svg_intrinsic.height) {
+        (Some(w), Some(h)) => Size::new(w, h),
+        (Some(w), None) => Size::new(w, 150.0),
+        (None, Some(h)) => Size::new(300.0, h),
+        (None, None) => Size::new(300.0, 150.0),
+      };
+      (Some(size), svg_intrinsic.aspect_ratio)
+    }
+    _ => {
+      let intrinsic_width = width_attr.as_ref().and_then(|w| w.parse::<f32>().ok());
 
-  let mut aspect_ratio = match (intrinsic_width, intrinsic_height) {
-    (Some(w), Some(h)) if h > 0.0 => Some(w / h),
-    _ => None,
+      let intrinsic_height = height_attr.as_ref().and_then(|h| h.parse::<f32>().ok());
+
+      let intrinsic_size = match (intrinsic_width, intrinsic_height) {
+        (Some(w), Some(h)) => Some(Size::new(w, h)),
+        _ => None,
+      };
+
+      let aspect_ratio = match (intrinsic_width, intrinsic_height) {
+        (Some(w), Some(h)) if h > 0.0 => Some(w / h),
+        _ => None,
+      };
+
+      (intrinsic_size, aspect_ratio)
+    }
   };
 
   if intrinsic_size.is_none() && aspect_ratio.is_none() {

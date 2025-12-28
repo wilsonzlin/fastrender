@@ -18,8 +18,9 @@ use crate::style::color::Rgba;
 use crate::style::types::ImageResolution;
 use crate::style::types::OrientationTransform;
 use crate::svg::{
-  map_svg_aspect_ratio, parse_svg_length_px, parse_svg_view_box, svg_view_box_root_transform,
-  SvgPreserveAspectRatio, SvgViewBox,
+  map_svg_aspect_ratio, parse_svg_length_px, parse_svg_view_box,
+  svg_intrinsic_dimensions_from_attributes, svg_view_box_root_transform, SvgPreserveAspectRatio,
+  SvgViewBox,
 };
 use avif_decode::Decoder as AvifDecoder;
 use avif_decode::Image as AvifImage;
@@ -2284,41 +2285,19 @@ fn svg_intrinsic_metadata(
     return None;
   }
 
-  let aspect_ratio_none = root
-    .attribute("preserveAspectRatio")
-    .and_then(|par| par.split_whitespace().next())
-    .map(|v| v.eq_ignore_ascii_case("none"))
-    .unwrap_or(false);
+  let intrinsic = svg_intrinsic_dimensions_from_attributes(
+    root.attribute("width"),
+    root.attribute("height"),
+    root.attribute("viewBox"),
+    root.attribute("preserveAspectRatio"),
+  );
 
-  let width = root.attribute("width").and_then(parse_svg_length_px);
-  let height = root.attribute("height").and_then(parse_svg_length_px);
-
-  let mut ratio = None;
-  if !aspect_ratio_none {
-    if let (Some(w), Some(h)) = (width, height) {
-      if h > 0.0 {
-        ratio = Some(w / h);
-      }
-    }
-
-    if ratio.is_none() {
-      if let Some(view_box) = root.attribute("viewBox") {
-        let mut parts = view_box
-          .split(|c: char| c == ',' || c.is_whitespace())
-          .filter(|s| !s.is_empty())
-          .filter_map(|s| s.parse::<f32>().ok());
-        let _ = parts.next();
-        let _ = parts.next();
-        if let (Some(w), Some(h)) = (parts.next(), parts.next()) {
-          if h > 0.0 {
-            ratio = Some(w / h);
-          }
-        }
-      }
-    }
-  }
-
-  Some((width, height, ratio, aspect_ratio_none))
+  Some((
+    intrinsic.width,
+    intrinsic.height,
+    intrinsic.aspect_ratio,
+    intrinsic.aspect_ratio_none,
+  ))
 }
 
 // ============================================================================

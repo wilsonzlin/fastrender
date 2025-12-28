@@ -2,9 +2,29 @@ use roxmltree::Document;
 use tiny_skia::Transform;
 
 /// Utility helpers for working with SVG metadata.
-pub(crate) fn parse_svg_length_px(value: &str) -> Option<f32> {
+///
+/// SVG length attributes accept a subset of CSS absolute units. Percentages are
+/// valid in the SVG grammar but cannot be resolved to an intrinsic size without
+/// a viewport, so they are surfaced as [`SvgLength::Percentage`] and treated as
+/// non-definite by callers.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum SvgLength {
+  Px(f32),
+  Percentage(f32),
+}
+
+impl SvgLength {
+  pub(crate) fn to_px(self) -> Option<f32> {
+    match self {
+      SvgLength::Px(px) => Some(px),
+      SvgLength::Percentage(_) => None,
+    }
+  }
+}
+
+pub(crate) fn parse_svg_length(value: &str) -> Option<SvgLength> {
   let trimmed = value.trim();
-  if trimmed.is_empty() || trimmed.ends_with('%') {
+  if trimmed.is_empty() {
     return None;
   }
 
@@ -26,7 +46,11 @@ pub(crate) fn parse_svg_length_px(value: &str) -> Option<f32> {
     return None;
   }
 
-  let unit = trimmed[end..].trim_start();
+  let unit = trimmed[end..].trim();
+  if unit.eq_ignore_ascii_case("%") {
+    return Some(SvgLength::Percentage(number));
+  }
+
   let px = if unit.is_empty() || unit.eq_ignore_ascii_case("px") {
     number
   } else if unit.eq_ignore_ascii_case("in") {
@@ -43,8 +67,85 @@ pub(crate) fn parse_svg_length_px(value: &str) -> Option<f32> {
     return None;
   };
 
-  if px.is_finite() {
-    Some(px)
+  px.is_finite().then_some(SvgLength::Px(px))
+}
+
+pub(crate) fn parse_svg_length_px(value: &str) -> Option<f32> {
+  parse_svg_length(value)?.to_px()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct SvgIntrinsicDimensions {
+  pub width: Option<f32>,
+  pub height: Option<f32>,
+  pub aspect_ratio: Option<f32>,
+  pub aspect_ratio_none: bool,
+}
+
+pub(crate) fn svg_intrinsic_dimensions_from_attributes(
+  width: Option<&str>,
+  height: Option<&str>,
+  view_box: Option<&str>,
+  preserve_aspect_ratio: Option<&str>,
+) -> SvgIntrinsicDimensions {
+  let width_px = width
+    .and_then(parse_svg_length)
+    .and_then(SvgLength::to_px)
+    .filter(|v| v.is_finite());
+  let height_px = height
+    .and_then(parse_svg_length)
+    .and_then(SvgLength::to_px)
+    .filter(|v| v.is_finite());
+
+  let aspect_ratio_none = preserve_aspect_ratio
+    .and_then(|par| par.split_whitespace().next())
+    .map(|v| v.eq_ignore_ascii_case("none"))
+    .unwrap_or(false);
+
+  let view_box_ratio = if aspect_ratio_none {
+    None
+  } else {
+    parse_view_box_ratio(view_box)
+  };
+
+  let aspect_ratio = if aspect_ratio_none {
+    None
+  } else if let (Some(w), Some(h)) = (width_px, height_px) {
+    (h > 0.0).then_some(w / h)
+  } else {
+    view_box_ratio
+  };
+
+  let mut resolved_width = width_px;
+  let mut resolved_height = height_px;
+  if let Some(r) = aspect_ratio {
+    if resolved_width.is_some() && resolved_height.is_none() && r > 0.0 {
+      resolved_height = resolved_width.map(|w| w / r);
+    } else if resolved_height.is_some() && resolved_width.is_none() && r > 0.0 {
+      resolved_width = resolved_height.map(|h| h * r);
+    }
+  }
+
+  SvgIntrinsicDimensions {
+    width: resolved_width,
+    height: resolved_height,
+    aspect_ratio,
+    aspect_ratio_none,
+  }
+}
+
+fn parse_view_box_ratio(view_box: Option<&str>) -> Option<f32> {
+  let raw = view_box?;
+  let mut parts = raw
+    .split(|c: char| c == ',' || c.is_whitespace())
+    .filter(|s| !s.is_empty())
+    .filter_map(|s| s.parse::<f32>().ok());
+  let _ = parts.next();
+  let _ = parts.next();
+  let width = parts.next()?;
+  let height = parts.next()?;
+  if width > 0.0 && height > 0.0 && width.is_finite() && height.is_finite() {
+    Some(width / height)
   } else {
     None
   }
