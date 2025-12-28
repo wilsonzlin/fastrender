@@ -273,13 +273,29 @@ impl selectors::parser::NonTSPseudoClass for PseudoClass {
   }
 
   fn specificity(&self) -> u32 {
+    const PSEUDO_CLASS_SPECIFICITY: u32 = 1 << 10;
+    let argument_specificity = |selectors: &SelectorList<FastRenderSelectorImpl>| {
+      selectors
+        .slice()
+        .iter()
+        .map(|selector| selector.specificity())
+        .max()
+        .unwrap_or(0)
+    };
     match self {
       PseudoClass::Has(relative) => relative
         .iter()
         .map(|selector| selector.selector.specificity())
         .max()
         .unwrap_or(0),
-      _ => 1 << 10, // Pseudo-classes have class-level specificity by default.
+      PseudoClass::Host(None) => PSEUDO_CLASS_SPECIFICITY,
+      PseudoClass::Host(Some(selectors)) => {
+        PSEUDO_CLASS_SPECIFICITY + argument_specificity(selectors)
+      }
+      PseudoClass::HostContext(selectors) => {
+        PSEUDO_CLASS_SPECIFICITY + argument_specificity(selectors)
+      }
+      _ => PSEUDO_CLASS_SPECIFICITY, // Pseudo-classes have class-level specificity by default.
     }
   }
 
