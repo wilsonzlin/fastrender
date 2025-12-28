@@ -13286,8 +13286,8 @@ mod tests {
     let balanced = ifc.layout_segment_lines(
       &items,
       true,
-      220.0,
-      220.0,
+      200.0,
+      200.0,
       style.text_wrap,
       0.0,
       false,
@@ -13305,8 +13305,8 @@ mod tests {
     let auto = ifc.layout_segment_lines(
       &items,
       true,
-      220.0,
-      220.0,
+      200.0,
+      200.0,
       auto_style.text_wrap,
       0.0,
       false,
@@ -14075,7 +14075,7 @@ mod tests {
         "word word\nword word".to_string(),
       )],
     );
-    let constraints = LayoutConstraints::definite_width(60.0);
+    let constraints = LayoutConstraints::definite_width(200.0);
 
     let ifc = InlineFormattingContext::new();
     let fragment = ifc.layout(&root, &constraints).expect("layout");
