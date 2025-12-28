@@ -324,6 +324,75 @@ fn test_cull_image_items() {
 }
 
 #[test]
+fn child_perspective_offscreen_context_is_culled() {
+  let mut list = DisplayList::new();
+  let bounds = Rect::from_xywh(400.0, 400.0, 50.0, 50.0);
+  list.push(DisplayItem::PushStackingContext(stacking_context(
+    bounds,
+    Some(Transform3D::perspective(600.0)),
+  )));
+  list.push(make_fill_rect(400.0, 400.0, 10.0, 10.0, Rgba::RED));
+  list.push(DisplayItem::PopStackingContext);
+
+  let (optimized, stats) = DisplayListOptimizer::new().optimize(list, small_viewport());
+
+  assert_eq!(
+    optimized.len(),
+    0,
+    "offscreen stacking context with child perspective should be removed"
+  );
+  assert_eq!(stats.culled_count, 3);
+  assert_balanced(optimized.items());
+}
+
+#[test]
+fn child_perspective_context_kept_when_intersecting() {
+  let mut list = DisplayList::new();
+  let bounds = Rect::from_xywh(80.0, 80.0, 50.0, 50.0);
+  list.push(DisplayItem::PushStackingContext(stacking_context(
+    bounds,
+    Some(Transform3D::perspective(800.0)),
+  )));
+  list.push(make_fill_rect(85.0, 85.0, 10.0, 10.0, Rgba::GREEN));
+  list.push(DisplayItem::PopStackingContext);
+
+  let (optimized, stats) = DisplayListOptimizer::new().optimize(list, small_viewport());
+
+  assert_eq!(stats.culled_count, 0);
+  assert_eq!(optimized.len(), 3);
+  assert_balanced(optimized.items());
+}
+
+#[test]
+fn clip_plus_child_perspective_remains_conservative() {
+  let mut list = DisplayList::new();
+  list.push(DisplayItem::PushClip(ClipItem {
+    shape: ClipShape::Rect {
+      rect: Rect::from_xywh(500.0, 500.0, 20.0, 20.0),
+      radii: None,
+    },
+  }));
+  let bounds = Rect::from_xywh(0.0, 0.0, 20.0, 20.0);
+  list.push(DisplayItem::PushStackingContext(stacking_context(
+    bounds,
+    Some(Transform3D::perspective(400.0)),
+  )));
+  list.push(make_fill_rect(0.0, 0.0, 10.0, 10.0, Rgba::BLUE));
+  list.push(DisplayItem::PopStackingContext);
+  list.push(DisplayItem::PopClip);
+
+  let (optimized, stats) = DisplayListOptimizer::new().optimize(list, small_viewport());
+
+  assert_eq!(
+    optimized.len(),
+    5,
+    "clip combined with child perspective should avoid aggressive culling"
+  );
+  assert_eq!(stats.culled_count, 0);
+  assert_balanced(optimized.items());
+}
+
+#[test]
 fn culls_offscreen_perspective_stacking_context() {
   let mut list = DisplayList::new();
   let bounds = Rect::from_xywh(500.0, 500.0, 50.0, 50.0);
