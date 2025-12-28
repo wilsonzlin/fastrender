@@ -268,7 +268,13 @@ pub fn fragment_tree(root: &FragmentNode, options: &FragmentationOptions) -> Vec
     return vec![root.clone()];
   }
 
-  let boundaries = resolve_fragmentation_boundaries(root, options.fragmentainer_size);
+  let context = if options.column_count > 1 {
+    FragmentationContext::Column
+  } else {
+    FragmentationContext::Page
+  };
+  let boundaries =
+    resolve_fragmentation_boundaries_with_context(root, options.fragmentainer_size, context);
   if boundaries.len() < 2 {
     return vec![root.clone()];
   }
