@@ -15,6 +15,7 @@ mod display_list_skip_ink_test;
 mod display_list_test;
 mod display_list_paint_multi_root;
 mod display_list_svg_filter_defs_backend;
+mod filter_premultiplication;
 mod fit_canvas_to_content;
 mod fragmented_root_paint;
 mod math_render;

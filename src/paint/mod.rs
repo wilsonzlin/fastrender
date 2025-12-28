@@ -90,6 +90,7 @@
 pub mod blur;
 pub mod canvas;
 pub mod clip_path;
+pub mod css_filter;
 pub mod depth_sort;
 pub mod display_list;
 pub mod display_list_builder;
@@ -99,17 +100,17 @@ pub mod homography;
 pub mod motion_path;
 pub mod object_fit;
 pub mod optimize;
-pub mod preserve_3d;
 pub mod painter;
 pub mod preserve3d;
+pub mod preserve_3d;
 pub mod projective_warp;
 pub mod rasterize;
 pub mod scene_tree;
 pub mod stacking;
-pub mod transform3d;
 pub mod svg_filter;
 pub mod text_rasterize;
 pub mod text_shadow;
+pub mod transform3d;
 pub mod transform_resolver;
 
 /// Stable debug snapshot for display lists.

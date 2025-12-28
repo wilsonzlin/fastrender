@@ -14,6 +14,10 @@ use crate::geometry::Rect;
 use crate::paint::blur::apply_gaussian_blur;
 use crate::paint::canvas::crop_mask;
 use crate::paint::canvas::Canvas;
+use crate::paint::css_filter::{
+  apply_color_filter, apply_contrast, apply_drop_shadow, grayscale, hue_rotate, invert, saturate,
+  scale_color, sepia,
+};
 use crate::paint::display_list::BlendMode;
 use crate::paint::display_list::BorderImageItem;
 use crate::paint::display_list::BorderImageSourceItem;
@@ -93,8 +97,6 @@ use crate::text::font_db::FontStyle as DbFontStyle;
 use crate::text::font_db::LoadedFont;
 use crate::text::font_loader::FontContext;
 use crate::text::pipeline::GlyphPosition;
-use rayon::prelude::*;
-use tiny_skia::BlendMode as SkiaBlendMode;
 use tiny_skia::GradientStop as SkiaGradientStop;
 use tiny_skia::IntSize;
 use tiny_skia::LinearGradient;
@@ -621,6 +623,18 @@ fn apply_filters_scoped(
   );
   apply_filters(&mut region, filters, scale, local_bbox);
 
+  if std::env::var("DEBUG_FILTER_PIXEL").is_ok() {
+    if let Some(px) = region.pixels().first() {
+      eprintln!(
+        "display_list filter region first px after filter: r={} g={} b={} a={}",
+        px.red(),
+        px.green(),
+        px.blue(),
+        px.alpha()
+      );
+    }
+  }
+
   for row in 0..region_h as usize {
     let dst_idx = (clamped_y as usize + row) * bytes_per_row + clamped_x as usize * 4;
     let src_idx = row * region_row_bytes;
@@ -851,238 +865,6 @@ fn rect_int_bounds(rect: &Rect) -> (i32, i32, i32, i32) {
   let x1 = rect.max_x().ceil() as i32;
   let y1 = rect.max_y().ceil() as i32;
   (x0, y0, x1, y1)
-}
-
-fn apply_drop_shadow(
-  pixmap: &mut Pixmap,
-  offset_x: f32,
-  offset_y: f32,
-  blur_radius: f32,
-  spread: f32,
-  color: Rgba,
-) {
-  if pixmap.width() == 0 || pixmap.height() == 0 {
-    return;
-  }
-
-  let source = pixmap.clone();
-  let mut shadow = match Pixmap::new(source.width(), source.height()) {
-    Some(p) => p,
-    None => return,
-  };
-
-  {
-    let src = source.pixels();
-    let dst = shadow.pixels_mut();
-    for (src_px, dst_px) in src.iter().zip(dst.iter_mut()) {
-      let alpha = src_px.alpha() as f32 / 255.0;
-      if alpha == 0.0 {
-        *dst_px = PremultipliedColorU8::TRANSPARENT;
-        continue;
-      }
-      let total_alpha = (color.a * alpha).clamp(0.0, 1.0);
-      let r = (color.r as f32 / 255.0) * total_alpha;
-      let g = (color.g as f32 / 255.0) * total_alpha;
-      let b = (color.b as f32 / 255.0) * total_alpha;
-      let a = total_alpha * 255.0;
-      *dst_px = PremultipliedColorU8::from_rgba(
-        (r * 255.0).round() as u8,
-        (g * 255.0).round() as u8,
-        (b * 255.0).round() as u8,
-        a.round().clamp(0.0, 255.0) as u8,
-      )
-      .unwrap_or(PremultipliedColorU8::TRANSPARENT);
-    }
-  }
-
-  if spread != 0.0 {
-    apply_spread(&mut shadow, spread);
-  }
-
-  if blur_radius > 0.0 {
-    apply_gaussian_blur(&mut shadow, blur_radius);
-  }
-
-  let mut result = match Pixmap::new(source.width(), source.height()) {
-    Some(p) => p,
-    None => return,
-  };
-
-  let mut paint = PixmapPaint::default();
-  paint.blend_mode = SkiaBlendMode::SourceOver;
-  result.draw_pixmap(
-    0,
-    0,
-    shadow.as_ref(),
-    &paint,
-    Transform::from_translate(offset_x, offset_y),
-    None,
-  );
-  result.draw_pixmap(0, 0, source.as_ref(), &paint, Transform::identity(), None);
-
-  *pixmap = result;
-}
-
-fn apply_spread(pixmap: &mut Pixmap, spread: f32) {
-  let radius = spread.abs().ceil() as i32;
-  if radius <= 0 || spread == 0.0 {
-    return;
-  }
-  let expand = spread > 0.0;
-  let width = pixmap.width() as i32;
-  let height = pixmap.height() as i32;
-  let original = pixmap.clone();
-  let src = original.pixels();
-  let dst = pixmap.pixels_mut();
-  let row_len = width as usize;
-
-  dst.par_iter_mut().enumerate().for_each(|(idx, dst_px)| {
-    let y = (idx / row_len) as i32;
-    let x = (idx % row_len) as i32;
-    let mut agg = if expand { [0u8; 4] } else { [255u8; 4] };
-    for dy in -radius..=radius {
-      for dx in -radius..=radius {
-        let ny = (y + dy).clamp(0, height - 1);
-        let nx = (x + dx).clamp(0, width - 1);
-        let sample_idx = (ny as usize) * row_len + nx as usize;
-        let px = src[sample_idx];
-        if expand {
-          agg[0] = agg[0].max(px.red());
-          agg[1] = agg[1].max(px.green());
-          agg[2] = agg[2].max(px.blue());
-          agg[3] = agg[3].max(px.alpha());
-        } else {
-          agg[0] = agg[0].min(px.red());
-          agg[1] = agg[1].min(px.green());
-          agg[2] = agg[2].min(px.blue());
-          agg[3] = agg[3].min(px.alpha());
-        }
-      }
-    }
-    *dst_px = PremultipliedColorU8::from_rgba(agg[0], agg[1], agg[2], agg[3])
-      .unwrap_or(PremultipliedColorU8::TRANSPARENT);
-  });
-}
-
-fn apply_color_filter(
-  pixmap: &mut Pixmap,
-  f: impl Fn((u8, u8, u8), f32) -> ((u8, u8, u8), f32) + Send + Sync,
-) {
-  let pixels = pixmap.pixels_mut();
-  let threshold = 2048;
-  if pixels.len() > threshold {
-    pixels.par_iter_mut().for_each(|pixel| {
-      let a = pixel.alpha() as f32 / 255.0;
-      let (c, a2) = f((pixel.red(), pixel.green(), pixel.blue()), a);
-      let final_a = (a2 * 255.0).round().clamp(0.0, 255.0) as u8;
-      let premultiply = |v: u8| ((v as f32 * a2).round().clamp(0.0, 255.0)) as u8;
-      *pixel = tiny_skia::PremultipliedColorU8::from_rgba(
-        premultiply(c.0),
-        premultiply(c.1),
-        premultiply(c.2),
-        final_a,
-      )
-      .unwrap_or_else(|| tiny_skia::PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap());
-    });
-  } else {
-    for pixel in pixels.iter_mut() {
-      let a = pixel.alpha() as f32 / 255.0;
-      let (c, a2) = f((pixel.red(), pixel.green(), pixel.blue()), a);
-      let final_a = (a2 * 255.0).round().clamp(0.0, 255.0) as u8;
-      let premultiply = |v: u8| ((v as f32 * a2).round().clamp(0.0, 255.0)) as u8;
-      *pixel = tiny_skia::PremultipliedColorU8::from_rgba(
-        premultiply(c.0),
-        premultiply(c.1),
-        premultiply(c.2),
-        final_a,
-      )
-      .unwrap_or_else(|| tiny_skia::PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap());
-    }
-  }
-}
-
-fn scale_color((r, g, b): (u8, u8, u8), amount: f32) -> (u8, u8, u8) {
-  let scale = |v: u8| ((v as f32) * amount).round().clamp(0.0, 255.0) as u8;
-  (scale(r), scale(g), scale(b))
-}
-
-fn apply_contrast((r, g, b): (u8, u8, u8), amount: f32) -> (u8, u8, u8) {
-  let factor = (259.0 * (amount + 255.0)) / (255.0 * (259.0 - amount));
-  let adjust = |v: u8| {
-    ((factor * (v as f32 - 128.0) + 128.0)
-      .round()
-      .clamp(0.0, 255.0)) as u8
-  };
-  (adjust(r), adjust(g), adjust(b))
-}
-
-fn grayscale((r, g, b): (u8, u8, u8), amount: f32) -> (u8, u8, u8) {
-  let gray = (0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32)
-    .round()
-    .clamp(0.0, 255.0) as u8;
-  let mix = |v: u8| {
-    ((v as f32 * (1.0 - amount) + gray as f32 * amount)
-      .round()
-      .clamp(0.0, 255.0)) as u8
-  };
-  (mix(r), mix(g), mix(b))
-}
-
-fn sepia((r, g, b): (u8, u8, u8), amount: f32) -> (u8, u8, u8) {
-  let tr = (0.393 * r as f32 + 0.769 * g as f32 + 0.189 * b as f32)
-    .round()
-    .clamp(0.0, 255.0);
-  let tg = (0.349 * r as f32 + 0.686 * g as f32 + 0.168 * b as f32)
-    .round()
-    .clamp(0.0, 255.0);
-  let tb = (0.272 * r as f32 + 0.534 * g as f32 + 0.131 * b as f32)
-    .round()
-    .clamp(0.0, 255.0);
-  let mix = |orig: u8, target: f32| {
-    ((orig as f32 * (1.0 - amount) + target * amount)
-      .round()
-      .clamp(0.0, 255.0)) as u8
-  };
-  (mix(r, tr), mix(g, tg), mix(b, tb))
-}
-
-fn saturate((r, g, b): (u8, u8, u8), amount: f32) -> (u8, u8, u8) {
-  let gray = 0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32;
-  let mix = |v: u8| {
-    ((gray + (v as f32 - gray) * amount)
-      .round()
-      .clamp(0.0, 255.0)) as u8
-  };
-  (mix(r), mix(g), mix(b))
-}
-
-fn hue_rotate((r, g, b): (u8, u8, u8), degrees: f32) -> (u8, u8, u8) {
-  let rad = degrees.to_radians();
-  let cos = rad.cos();
-  let sin = rad.sin();
-  let nr = (0.213 + cos * 0.787 - sin * 0.213) * r as f32
-    + (0.715 - cos * 0.715 - sin * 0.715) * g as f32
-    + (0.072 - cos * 0.072 + sin * 0.928) * b as f32;
-  let ng = (0.213 - cos * 0.213 + sin * 0.143) * r as f32
-    + (0.715 + cos * 0.285 + sin * 0.140) * g as f32
-    + (0.072 - cos * 0.072 - sin * 0.283) * b as f32;
-  let nb = (0.213 - cos * 0.213 - sin * 0.787) * r as f32
-    + (0.715 - cos * 0.715 + sin * 0.715) * g as f32
-    + (0.072 + cos * 0.928 + sin * 0.072) * b as f32;
-  (
-    nr.round().clamp(0.0, 255.0) as u8,
-    ng.round().clamp(0.0, 255.0) as u8,
-    nb.round().clamp(0.0, 255.0) as u8,
-  )
-}
-
-fn invert((r, g, b): (u8, u8, u8), amount: f32) -> (u8, u8, u8) {
-  let inv = |v: u8| {
-    ((255.0 - v as f32) * amount + v as f32 * (1.0 - amount))
-      .round()
-      .clamp(0.0, 255.0) as u8
-  };
-  (inv(r), inv(g), inv(b))
 }
 
 /// Renders a display list into a pixmap using the provided font context.
@@ -1364,17 +1146,14 @@ impl DisplayListRenderer {
 
   fn stacking_layer_bounds(
     &self,
-    css_bounds: Rect,
-    device_bounds: Rect,
+    bounds: Rect,
     transform: Transform,
     filters: &[ResolvedFilter],
     backdrop_filters: &[ResolvedFilter],
   ) -> Option<Rect> {
-    let mut layer_bounds = transform_rect(device_bounds, &transform);
-    let (f_l, f_t, f_r, f_b) =
-      filter_outset_with_bounds(filters, self.scale, Some(css_bounds)).as_tuple();
-    let (b_l, b_t, b_r, b_b) =
-      filter_outset_with_bounds(backdrop_filters, self.scale, Some(css_bounds)).as_tuple();
+    let mut layer_bounds = transform_rect(bounds, &transform);
+    let (f_l, f_t, f_r, f_b) = filter_outset(filters, self.scale).as_tuple();
+    let (b_l, b_t, b_r, b_b) = filter_outset(backdrop_filters, self.scale).as_tuple();
     let expand_left = f_l.max(b_l);
     let expand_top = f_t.max(b_t);
     let expand_right = f_r.max(b_r);
@@ -1483,12 +1262,10 @@ impl DisplayListRenderer {
       origin: item.origin,
       glyphs: item.glyphs.clone(),
       color: item.color,
-      palette_index: item.palette_index,
       shadows: item.shadows.clone(),
       font_size: item.font_size,
       advance_width: item.advance_width,
       font_id: item.font_id.clone(),
-      variations: item.variations.clone(),
       synthetic_bold: item.synthetic_bold,
       synthetic_oblique: item.synthetic_oblique,
       emphasis: item.emphasis.clone(),
@@ -1499,12 +1276,10 @@ impl DisplayListRenderer {
       origin: scaled.origin,
       glyphs: scaled.glyphs,
       color: scaled.color,
-      palette_index: scaled.palette_index,
       shadows: scaled.shadows,
       font_size: scaled.font_size,
       advance_width: scaled.advance_width,
       font_id: scaled.font_id,
-      variations: scaled.variations,
       synthetic_bold: scaled.synthetic_bold,
       synthetic_oblique: scaled.synthetic_oblique,
       emphasis: scaled.emphasis,
@@ -2852,6 +2627,12 @@ impl DisplayListRenderer {
 
   /// Consumes the renderer and returns the painted pixmap.
   pub fn render(mut self, list: &DisplayList) -> Result<Pixmap> {
+    if std::env::var("DEBUG_FILTER_LAYER").is_ok() {
+      eprintln!("display list items: {}", list.items().len());
+      for (idx, item) in list.items().iter().enumerate() {
+        eprintln!("{idx}: {:?}", item);
+      }
+    }
     let list = crate::paint::preserve_3d::composite_preserve_3d(list);
     self.render_slice(list.items())?;
     Ok(self.canvas.into_pixmap())
@@ -3266,13 +3047,7 @@ impl DisplayListRenderer {
             } else {
               combined_transform
             };
-            self.stacking_layer_bounds(
-              css_bounds,
-              bounds,
-              bounds_transform,
-              &scaled_filters,
-              &scaled_backdrop,
-            )
+            self.stacking_layer_bounds(bounds, bounds_transform, &scaled_filters, &scaled_backdrop)
           })
           .flatten();
         let layer_origin = if needs_layer && !has_backdrop {
@@ -3280,6 +3055,28 @@ impl DisplayListRenderer {
         } else {
           None
         };
+        if std::env::var("DEBUG_FILTER_LAYER").is_ok()
+          && !scaled_filters.is_empty()
+          && layer_bounds.map(|r| r.width() <= 8.0 && r.height() <= 8.0).unwrap_or(false)
+        {
+          let (sample_x, sample_y) = layer_origin
+            .map(|(x, y)| {
+              (
+                x.clamp(0.0, self.canvas.width() as f32 - 1.0) as u32,
+                y.clamp(0.0, self.canvas.height() as f32 - 1.0) as u32,
+              )
+            })
+            .unwrap_or((0, 0));
+          if let Some(px) = self.canvas.pixmap().pixel(sample_x, sample_y) {
+            eprintln!(
+              "parent at push ({sample_x}, {sample_y}): r={} g={} b={} a={}",
+              px.red(),
+              px.green(),
+              px.blue(),
+              px.alpha()
+            );
+          }
+        }
         if needs_layer {
           let bounded_rect = if has_backdrop { None } else { layer_bounds };
           if manual_blend.is_some() {
@@ -3399,6 +3196,38 @@ impl DisplayListRenderer {
             }
           }
 
+          if std::env::var("DEBUG_FILTER_LAYER").is_ok()
+            && !record.filters.is_empty()
+            && layer.width() <= 8
+            && layer.height() <= 8
+          {
+            if let Some(px) = self
+              .canvas
+              .pixmap()
+              .pixel(origin.0.clamp(0, self.canvas.width() as i32 - 1).max(0) as u32,
+                origin.1.clamp(0, self.canvas.height() as i32 - 1).max(0) as u32)
+            {
+              eprintln!(
+                "parent before filter composite at ({}, {}): r={} g={} b={} a={}",
+                origin.0,
+                origin.1,
+                px.red(),
+                px.green(),
+                px.blue(),
+                px.alpha()
+              );
+            }
+            if let Some(px) = layer.pixel(0, 0) {
+              eprintln!(
+                "layer before filter: r={} g={} b={} a={}",
+                px.red(),
+                px.green(),
+                px.blue(),
+                px.alpha()
+              );
+            }
+          }
+
           if !record.filters.is_empty() {
             let bbox = Rect::from_xywh(
               record.mask_bounds.x() - origin.0 as f32,
@@ -3413,6 +3242,20 @@ impl DisplayListRenderer {
               bbox,
               layer_region.as_ref(),
             );
+            if std::env::var("DEBUG_FILTER_LAYER").is_ok()
+              && layer.width() <= 8
+              && layer.height() <= 8
+            {
+              if let Some(px) = layer.pixel(0, 0) {
+                eprintln!(
+                  "layer after filter: r={} g={} b={} a={}",
+                  px.red(),
+                  px.green(),
+                  px.blue(),
+                  px.alpha()
+                );
+              }
+            }
           }
 
           if !record.radii.is_zero() || !record.filters.is_empty() {
@@ -3613,14 +3456,35 @@ impl DisplayListRenderer {
       );
     };
 
-    let glyphs = Self::glyph_positions(item);
-
-    if !item.shadows.is_empty() {
-      let (paths, bounds) = self.glyph_paths_from_positions(&glyphs, &font, item)?;
-      if !paths.is_empty() && bounds.is_valid() {
-        self.render_text_shadows(&paths, &bounds, item);
+    let face = match font.as_ttf_face() {
+      Ok(f) => f,
+      Err(_) => {
+        return Err(
+          RenderError::RasterizationFailed {
+            reason: "Unable to parse font face for text shadows".into(),
+          }
+          .into(),
+        )
       }
+    };
+
+    let (paths, bounds) = self.glyph_paths(&face, item);
+    if !item.shadows.is_empty() && !paths.is_empty() && bounds.is_valid() {
+      self.render_text_shadows(&paths, &bounds, item);
     }
+
+    let glyphs: Vec<GlyphPosition> = item
+      .glyphs
+      .iter()
+      .map(|g| GlyphPosition {
+        glyph_id: g.glyph_id,
+        cluster: 0,
+        x_offset: g.offset.x,
+        y_offset: g.offset.y,
+        x_advance: g.advance,
+        y_advance: 0.0,
+      })
+      .collect();
 
     self.canvas.draw_text(
       item.origin,
@@ -3630,8 +3494,6 @@ impl DisplayListRenderer {
       item.color,
       item.synthetic_bold,
       item.synthetic_oblique,
-      item.palette_index,
-      &item.variations,
     );
     if let Some(emphasis) = &item.emphasis {
       self.render_emphasis(emphasis)?;
@@ -3649,12 +3511,10 @@ impl DisplayListRenderer {
       origin: item.origin,
       glyphs: item.glyphs.clone(),
       color: item.color,
-      palette_index: item.palette_index,
       shadows: item.shadows.clone(),
       font_size: item.font_size,
       advance_width: item.advance_width,
       font_id: item.font_id.clone(),
-      variations: item.variations.clone(),
       synthetic_bold: item.synthetic_bold,
       synthetic_oblique: item.synthetic_oblique,
       emphasis: item.emphasis.clone(),
@@ -3905,46 +3765,103 @@ impl DisplayListRenderer {
     Ok(())
   }
 
-  fn glyph_positions(item: &TextItem) -> Vec<GlyphPosition> {
-    item
-      .glyphs
-      .iter()
-      .map(|g| GlyphPosition {
-        glyph_id: g.glyph_id,
-        cluster: 0,
-        x_offset: g.offset.x,
-        y_offset: g.offset.y,
-        x_advance: g.advance,
-        y_advance: 0.0,
-      })
-      .collect()
-  }
-
-  fn glyph_paths_from_positions(
-    &mut self,
-    glyphs: &[GlyphPosition],
-    font: &LoadedFont,
-    item: &TextItem,
-  ) -> Result<(Vec<tiny_skia::Path>, PathBounds)> {
-    let (paths, bounds) = self.canvas.glyph_paths(
-      item.origin,
-      glyphs,
-      font,
-      item.font_size,
-      item.synthetic_oblique,
-      None,
-      &item.variations,
-    )?;
-    Ok((paths, bounds))
-  }
-
   fn glyph_paths(
-    &mut self,
-    font: &LoadedFont,
+    &self,
+    face: &ttf_parser::Face<'_>,
     item: &TextItem,
-  ) -> Result<(Vec<tiny_skia::Path>, PathBounds)> {
-    let glyphs = Self::glyph_positions(item);
-    self.glyph_paths_from_positions(&glyphs, font, item)
+  ) -> (Vec<tiny_skia::Path>, PathBounds) {
+    let units_per_em = face.units_per_em() as f32;
+    let scale = item.font_size / units_per_em;
+    let mut paths = Vec::with_capacity(item.glyphs.len());
+    let mut bounds = PathBounds::new();
+
+    for glyph in &item.glyphs {
+      let x = item.origin.x + glyph.offset.x;
+      let y = item.origin.y + glyph.offset.y;
+      if let Some(path) = Self::build_glyph_path(
+        face,
+        glyph.glyph_id as u16,
+        x,
+        y,
+        scale,
+        item.synthetic_oblique,
+      ) {
+        bounds.include(&path.bounds());
+        paths.push(path);
+      }
+    }
+
+    (paths, bounds)
+  }
+
+  fn build_glyph_path(
+    face: &ttf_parser::Face<'_>,
+    glyph_id: u16,
+    x: f32,
+    baseline_y: f32,
+    scale: f32,
+    synthetic_oblique: f32,
+  ) -> Option<tiny_skia::Path> {
+    use ttf_parser::OutlineBuilder;
+
+    struct PathConverter {
+      builder: PathBuilder,
+      scale: f32,
+      x: f32,
+      y: f32,
+      skew: f32,
+    }
+
+    impl OutlineBuilder for PathConverter {
+      fn move_to(&mut self, px: f32, py: f32) {
+        self.builder.move_to(
+          self.x + (px + self.skew * py) * self.scale,
+          self.y - py * self.scale,
+        );
+      }
+
+      fn line_to(&mut self, px: f32, py: f32) {
+        self.builder.line_to(
+          self.x + (px + self.skew * py) * self.scale,
+          self.y - py * self.scale,
+        );
+      }
+
+      fn quad_to(&mut self, x1: f32, y1: f32, px: f32, py: f32) {
+        self.builder.quad_to(
+          self.x + (x1 + self.skew * y1) * self.scale,
+          self.y - y1 * self.scale,
+          self.x + (px + self.skew * py) * self.scale,
+          self.y - py * self.scale,
+        );
+      }
+
+      fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, px: f32, py: f32) {
+        self.builder.cubic_to(
+          self.x + (x1 + self.skew * y1) * self.scale,
+          self.y - y1 * self.scale,
+          self.x + (x2 + self.skew * y2) * self.scale,
+          self.y - y2 * self.scale,
+          self.x + (px + self.skew * py) * self.scale,
+          self.y - py * self.scale,
+        );
+      }
+
+      fn close(&mut self) {
+        self.builder.close();
+      }
+    }
+
+    let mut converter = PathConverter {
+      builder: PathBuilder::new(),
+      scale,
+      x,
+      y: baseline_y,
+      skew: synthetic_oblique,
+    };
+
+    face.outline_glyph(ttf_parser::GlyphId(glyph_id), &mut converter)?;
+    converter.builder.finish()
   }
 
   fn render_text_shadows(
@@ -4061,8 +3978,6 @@ impl DisplayListRenderer {
             emphasis.color,
             0.0,
             0.0,
-            text.palette_index,
-            &text.variations,
           );
         }
         return Ok(());
@@ -5546,9 +5461,7 @@ mod tests {
   use crate::style::values::Length;
   use crate::style::values::LengthUnit;
   use crate::style::ComputedStyle;
-  use crate::text::font_db::FontDatabase;
   use crate::tree::fragment_tree::FragmentNode;
-  use std::collections::HashMap;
   use std::sync::Arc;
 
   fn pixel(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
@@ -6586,7 +6499,6 @@ mod tests {
         advance: 14.0,
       }],
       color: Rgba::BLACK,
-      palette_index: 0,
       shadows: vec![TextShadowItem {
         offset: Point::new(4.0, 0.0),
         blur_radius: 0.0,
@@ -6600,7 +6512,6 @@ mod tests {
         style: font.style,
         stretch: font.stretch,
       }),
-      variations: Vec::new(),
       synthetic_bold: 0.0,
       synthetic_oblique: 0.0,
       emphasis: None,
@@ -6652,7 +6563,6 @@ mod tests {
         advance: 14.0,
       }],
       color: Rgba::BLACK,
-      palette_index: 0,
       shadows: vec![TextShadowItem {
         offset: Point::new(2.0, 0.0),
         blur_radius: 0.0,
@@ -6666,14 +6576,13 @@ mod tests {
         style: font.style,
         stretch: font.stretch,
       }),
-      variations: Vec::new(),
       synthetic_bold: 0.0,
       synthetic_oblique: 0.0,
       emphasis: None,
       decorations: Vec::new(),
     }));
 
-    let mut renderer = DisplayListRenderer::new_scaled(80, 40, Rgba::WHITE, font_ctx, 2.0)
+    let renderer = DisplayListRenderer::new_scaled(80, 40, Rgba::WHITE, font_ctx, 2.0)
       .expect("renderer with scale");
     let text_item = match &list.items()[0] {
       DisplayItem::Text(t) => t,
@@ -6685,9 +6594,7 @@ mod tests {
       "shadow offset should scale with DPR (expected ~4, got {})",
       scaled_item.shadows[0].offset.x
     );
-    let (_paths, bounds) = renderer
-      .glyph_paths(&font, &scaled_item)
-      .expect("glyph paths");
+    let (_paths, bounds) = renderer.glyph_paths(&face, &scaled_item);
     let shadow = &scaled_item.shadows[0];
     let shadow_min_x = bounds.min_x + shadow.offset.x;
     let shadow_max_x = bounds.max_x + shadow.offset.x;
@@ -6748,7 +6655,6 @@ mod tests {
         advance: 14.0,
       }],
       color: Rgba::BLACK,
-      palette_index: 0,
       shadows: vec![TextShadowItem {
         offset: Point::new(0.0, 0.0),
         blur_radius: 4.0,
@@ -6762,14 +6668,13 @@ mod tests {
         style: font.style,
         stretch: font.stretch,
       }),
-      variations: Vec::new(),
       synthetic_bold: 0.0,
       synthetic_oblique: 0.0,
       emphasis: None,
       decorations: Vec::new(),
     }));
 
-    let mut renderer = DisplayListRenderer::new_scaled(80, 40, Rgba::WHITE, font_ctx.clone(), 2.0)
+    let renderer = DisplayListRenderer::new_scaled(80, 40, Rgba::WHITE, font_ctx.clone(), 2.0)
       .expect("renderer with scale");
     let text_item = match &list.items()[0] {
       DisplayItem::Text(t) => t,
@@ -6781,9 +6686,7 @@ mod tests {
       "blur radius should scale with DPR (expected ~8, got {})",
       scaled_item.shadows[0].blur_radius
     );
-    let (_paths, bounds) = renderer
-      .glyph_paths(&font, &scaled_item)
-      .expect("glyph paths");
+    let (_paths, bounds) = renderer.glyph_paths(&face, &scaled_item);
     let shadow = &scaled_item.shadows[0];
     let blur_margin = (shadow.blur_radius.abs() * 3.0).ceil();
     let shadow_min_x = bounds.min_x + shadow.offset.x - blur_margin;
@@ -6824,7 +6727,6 @@ mod tests {
         advance: 14.0,
       }],
       color: Rgba::BLACK,
-      palette_index: 0,
       shadows: vec![TextShadowItem {
         offset: Point::new(10.0, 20.0), // percent(50%) + em(1.0) resolved against font size 20px
         blur_radius: 0.0,
@@ -6838,7 +6740,6 @@ mod tests {
         style: font.style,
         stretch: font.stretch,
       }),
-      variations: Vec::new(),
       synthetic_bold: 0.0,
       synthetic_oblique: 0.0,
       emphasis: None,
@@ -6870,117 +6771,16 @@ mod tests {
   }
 
   #[test]
-  fn text_palette_selection_affects_color_glyphs() {
-    let mut db = FontDatabase::empty();
-    let Ok(font_data) = std::fs::read("tests/fonts/ColorTestCOLR.ttf") else {
-      return;
-    };
-    if db.load_font_data(font_data).is_err() {
-      return;
-    }
-    let font_ctx = FontContext::with_database(Arc::new(db));
-    let family = "ColorTestCOLR".to_string();
-    let Some(font) = font_ctx.get_font_full(
-      &[family.clone()],
-      400,
-      DbFontStyle::Normal,
-      FontStretch::Normal,
-    ) else {
-      return;
-    };
-    let Ok(face) = font.as_ttf_face() else {
-      return;
-    };
-    let Some(glyph_id) = face.glyph_index('A') else {
-      return;
-    };
-    let units_per_em = face.units_per_em() as f32;
-    if units_per_em == 0.0 {
-      return;
-    }
-    let font_size = 32.0;
-    let advance = face.glyph_hor_advance(glyph_id).unwrap_or(0) as f32 * font_size / units_per_em;
-    let glyphs = vec![GlyphInstance {
-      glyph_id: glyph_id.0 as u32,
-      offset: Point::new(0.0, 0.0),
-      advance,
-    }];
-    let font_id = FontId {
-      family,
-      weight: font.weight.value(),
-      style: font.style,
-      stretch: font.stretch,
-    };
-
-    let render_with_palette = |palette_index: u16, font_ctx: FontContext| {
-      let mut list = DisplayList::new();
-      list.push(DisplayItem::Text(TextItem {
-        origin: Point::new(10.0, 50.0),
-        glyphs: glyphs.clone(),
-        color: Rgba::BLACK,
-        palette_index,
-        shadows: Vec::new(),
-        font_size,
-        advance_width: advance,
-        font_id: Some(font_id.clone()),
-        synthetic_bold: 0.0,
-        synthetic_oblique: 0.0,
-        emphasis: None,
-        decorations: Vec::new(),
-      }));
-      DisplayListRenderer::new(80, 80, Rgba::WHITE, font_ctx)
-        .expect("renderer")
-        .render(&list)
-        .expect("rendered")
-    };
-
-    let pix0 = render_with_palette(0, font_ctx.clone());
-    let pix1 = render_with_palette(1, font_ctx);
-    assert_ne!(
-      pix0.data(),
-      pix1.data(),
-      "palette index should affect rasterization"
-    );
-
-    let dominant_color = |pix: &Pixmap| -> Option<(u8, u8, u8, u8)> {
-      let mut counts: HashMap<(u8, u8, u8, u8), usize> = HashMap::new();
-      for px in pix.data().chunks_exact(4) {
-        if px[3] == 0 {
-          continue;
-        }
-        let key = (px[0], px[1], px[2], px[3]);
-        if key == (255, 255, 255, 255) {
-          continue;
-        }
-        *counts.entry(key).or_insert(0) += 1;
-      }
-      counts
-        .into_iter()
-        .max_by_key(|(_, count)| *count)
-        .map(|(color, _)| color)
-    };
-
-    let primary0 = dominant_color(&pix0).expect("palette 0 glyph color");
-    let primary1 = dominant_color(&pix1).expect("palette 1 glyph color");
-    assert_ne!(
-      primary0, primary1,
-      "palettes should produce different primary colors"
-    );
-  }
-
-  #[test]
   fn renders_text_emphasis_marks() {
     let mut list = DisplayList::new();
     list.push(DisplayItem::Text(TextItem {
       origin: Point::new(20.0, 30.0),
       glyphs: Vec::new(),
       color: Rgba::BLACK,
-      palette_index: 0,
       shadows: vec![],
       font_size: 16.0,
       advance_width: 0.0,
       font_id: None,
-      variations: Vec::new(),
       synthetic_bold: 0.0,
       synthetic_oblique: 0.0,
       emphasis: Some(TextEmphasis {
