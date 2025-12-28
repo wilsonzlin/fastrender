@@ -1107,6 +1107,7 @@ impl ImageCache {
   pub fn load(&self, url: &str) -> Result<Arc<CachedImage>> {
     // Resolve the URL first
     let resolved_url = self.resolve_url(url);
+    self.enforce_image_policy(&resolved_url)?;
 
     // Check cache first (using resolved URL as key)
     record_image_cache_request();
@@ -1149,6 +1150,7 @@ impl ImageCache {
   /// without fully decoding the image.
   pub fn probe(&self, url: &str) -> Result<Arc<CachedImageMetadata>> {
     let resolved_url = self.resolve_url(url);
+    self.enforce_image_policy(&resolved_url)?;
 
     record_image_cache_request();
     if let Some(img) = self.get_cached(&resolved_url) {
@@ -1209,21 +1211,63 @@ impl ImageCache {
     }
   }
 
+  fn enforce_image_policy(&self, url: &str) -> Result<()> {
+    if let Some(ctx) = &self.resource_context {
+      if let Err(err) = ctx.check_allowed(ResourceKind::Image, url) {
+        let blocked = Error::Image(ImageError::LoadFailed {
+          url: url.to_string(),
+          reason: err.reason,
+        });
+        if ctx.diagnostics.is_none() {
+          self.record_image_error(url, &blocked);
+        }
+        return Err(blocked);
+      }
+    }
+
+    Ok(())
+  }
+
+  /// Enforce the active resource policy for subresources referenced within an SVG document.
+  fn enforce_svg_resource_policy(&self, svg_content: &str, svg_url: &str) -> Result<()> {
+    let Some(ctx) = &self.resource_context else {
+      return Ok(());
+    };
+
+    let doc = match roxmltree::Document::parse(svg_content) {
+      Ok(doc) => doc,
+      Err(_) => return Ok(()),
+    };
+
+    for node in doc.descendants() {
+      for attr in node.attributes() {
+        if attr.name() != "href" {
+          continue;
+        }
+
+        let href = attr.value().trim();
+        if href.is_empty() || href.starts_with('#') || href.starts_with("data:") {
+          continue;
+        }
+
+        let resolved = resolve_against_base(svg_url, href).unwrap_or_else(|| href.to_string());
+        if let Err(err) = ctx.check_allowed(ResourceKind::Image, &resolved) {
+          return Err(Error::Image(ImageError::LoadFailed {
+            url: resolved,
+            reason: err.reason,
+          }));
+        }
+      }
+    }
+
+    Ok(())
+  }
+
   fn fetch_and_decode(&self, resolved_url: &str) -> Result<Arc<CachedImage>> {
     let threshold_ms = image_profile_threshold_ms();
     let profile_enabled = threshold_ms.is_some();
     let total_start = profile_enabled.then(Instant::now);
     let fetch_start = profile_enabled.then(Instant::now);
-    if let Some(ctx) = &self.resource_context {
-      if let Err(err) = ctx.check_allowed(ResourceKind::Image, resolved_url) {
-        let blocked = Error::Image(ImageError::LoadFailed {
-          url: resolved_url.to_string(),
-          reason: err.reason,
-        });
-        self.record_image_error(resolved_url, &blocked);
-        return Err(blocked);
-      }
-    }
 
     let resource = match self.fetcher.fetch(resolved_url) {
       Ok(res) => res,
@@ -1355,16 +1399,6 @@ impl ImageCache {
     let profile_enabled = threshold_ms.is_some();
     let total_start = profile_enabled.then(Instant::now);
     let fetch_start = profile_enabled.then(Instant::now);
-    if let Some(ctx) = &self.resource_context {
-      if let Err(err) = ctx.check_allowed(ResourceKind::Image, resolved_url) {
-        let blocked = Error::Image(ImageError::LoadFailed {
-          url: resolved_url.to_string(),
-          reason: err.reason,
-        });
-        self.record_image_error(resolved_url, &blocked);
-        return Err(blocked);
-      }
-    }
 
     let resource = match self.fetcher.fetch(resolved_url) {
       Ok(res) => Arc::new(res),
@@ -1505,14 +1539,15 @@ impl ImageCache {
   ) -> Result<Arc<tiny_skia::Pixmap>> {
     use resvg::usvg;
 
+    self.enforce_svg_resource_policy(svg_content, url)?;
+    self.enforce_decode_limits(render_width, render_height, url)?;
+
     let key = svg_pixmap_key(svg_content, render_width, render_height);
     if let Ok(cache) = self.svg_pixmap_cache.lock() {
       if let Some(cached) = cache.get(&key) {
         return Ok(Arc::clone(cached));
       }
     }
-
-    self.enforce_decode_limits(render_width, render_height, url)?;
 
     if let Some(pixmap) = try_render_simple_svg_pixmap(svg_content, render_width, render_height) {
       let pixmap = Arc::new(pixmap);
@@ -1590,6 +1625,8 @@ impl ImageCache {
   ) -> Result<CachedImageMetadata> {
     const DEFAULT_WIDTH: f32 = 300.0;
     const DEFAULT_HEIGHT: f32 = 150.0;
+
+    self.enforce_svg_resource_policy(svg_content, url_hint)?;
 
     let (meta_width, meta_height, meta_ratio, aspect_ratio_none) =
       svg_intrinsic_metadata(svg_content).unwrap_or((None, None, None, false));
@@ -2144,6 +2181,7 @@ impl ImageCache {
         }
       }
     }
+    self.enforce_svg_resource_policy(svg_content, url)?;
     let tree = usvg::Tree::from_str(svg_content, &options).map_err(|e| {
       Error::Image(ImageError::DecodeFailed {
         url: url.to_string(),
