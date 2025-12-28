@@ -119,7 +119,11 @@ use crate::resource::{
   origin_from_url, CachingFetcher, DocumentOrigin, HttpFetcher, PolicyError, ResourceAccessPolicy,
   ResourceFetcher, ResourcePolicy,
 };
+<<<<<<< HEAD
 use crate::scroll::ScrollState;
+=======
+use crate::style::cascade::apply_starting_style_set_with_media_target_and_imports_cached_with_deadline;
+>>>>>>> 12d523a (Add @starting-style transition sampling)
 use crate::style::cascade::apply_style_set_with_media_target_and_imports_cached;
 use crate::style::cascade::apply_style_set_with_media_target_and_imports_cached_with_deadline;
 use crate::style::cascade::apply_styles_with_media_target_and_imports;
@@ -630,8 +634,16 @@ pub struct RenderOptions {
   pub scroll_x: f32,
   /// Vertical scroll offset applied before painting.
   pub scroll_y: f32,
+<<<<<<< HEAD
   /// Scroll offsets for element scroll containers keyed by box ID.
   pub element_scroll_offsets: HashMap<usize, Point>,
+=======
+  /// Optional animation/transition sampling time in milliseconds since document load.
+  ///
+  /// When set, time-based effects such as @starting-style transitions will be sampled at this
+  /// moment; when absent, animated properties resolve to their final values.
+  pub animation_time: Option<f32>,
+>>>>>>> 12d523a (Add @starting-style transition sampling)
   /// Maximum number of external stylesheets to inline. `None` means unlimited.
   pub css_limit: Option<usize>,
   /// When true, include an accessibility tree alongside rendering results.
@@ -659,7 +671,11 @@ impl Default for RenderOptions {
       media_type: MediaType::Screen,
       scroll_x: 0.0,
       scroll_y: 0.0,
+<<<<<<< HEAD
       element_scroll_offsets: HashMap::new(),
+=======
+      animation_time: None,
+>>>>>>> 12d523a (Add @starting-style transition sampling)
       css_limit: None,
       capture_accessibility: false,
       allow_partial: false,
@@ -681,7 +697,11 @@ impl std::fmt::Debug for RenderOptions {
       .field("media_type", &self.media_type)
       .field("scroll_x", &self.scroll_x)
       .field("scroll_y", &self.scroll_y)
+<<<<<<< HEAD
       .field("element_scroll_offsets", &self.element_scroll_offsets)
+=======
+      .field("animation_time", &self.animation_time)
+>>>>>>> 12d523a (Add @starting-style transition sampling)
       .field("css_limit", &self.css_limit)
       .field("capture_accessibility", &self.capture_accessibility)
       .field("allow_partial", &self.allow_partial)
@@ -737,6 +757,7 @@ impl RenderOptions {
     self
   }
 
+<<<<<<< HEAD
   /// Apply scroll offsets for element scroll containers keyed by box ID.
   ///
   /// Box IDs come from the generated [`BoxTree`] and are mirrored on fragments
@@ -750,6 +771,11 @@ impl RenderOptions {
   /// Apply a scroll offset for a specific element scroll container by box ID.
   pub fn with_element_scroll(mut self, box_id: usize, x: f32, y: f32) -> Self {
     self.element_scroll_offsets.insert(box_id, Point::new(x, y));
+=======
+  /// Provide a sampling timestamp for animations/transitions in milliseconds since load.
+  pub fn with_animation_time(mut self, time_ms: f32) -> Self {
+    self.animation_time = Some(time_ms.max(0.0));
+>>>>>>> 12d523a (Add @starting-style transition sampling)
     self
   }
 
@@ -1038,6 +1064,7 @@ pub struct LayoutArtifacts {
   pub styled_tree: StyledNode,
   pub box_tree: BoxTree,
   pub fragment_tree: FragmentTree,
+  pub animation_time: Option<f32>,
 }
 
 /// A fully prepared document ready for repeated painting.
@@ -1064,7 +1091,11 @@ pub struct PreparedDocument {
   page_zoom: f32,
   background_color: Rgba,
   default_scroll: Point,
+<<<<<<< HEAD
   default_element_scrolls: HashMap<usize, Point>,
+=======
+  animation_time: Option<f32>,
+>>>>>>> 12d523a (Add @starting-style transition sampling)
   font_context: FontContext,
   image_cache: ImageCache,
 }
@@ -1214,7 +1245,13 @@ impl PreparedDocument {
       .unwrap_or_else(|| self.default_scroll.clone());
     paint_fragment_tree_with_state(
       self.fragment_tree.clone(),
+<<<<<<< HEAD
       scroll_state,
+=======
+      scroll_x,
+      scroll_y,
+      self.animation_time,
+>>>>>>> 12d523a (Add @starting-style transition sampling)
       viewport,
       options.background.unwrap_or(self.background_color),
       &self.font_context,
@@ -1342,6 +1379,8 @@ pub struct LayoutIntermediates {
   pub box_tree: BoxTree,
   /// Positioned fragment tree ready for painting.
   pub fragment_tree: FragmentTree,
+  /// Optional animation/transition sampling time in milliseconds.
+  pub animation_time: Option<f32>,
 }
 
 impl RenderResult {
@@ -2434,10 +2473,16 @@ fn apply_sticky_offsets_with_context(
 fn paint_fragment_tree_with_state(
   mut fragment_tree: FragmentTree,
 <<<<<<< HEAD
+<<<<<<< HEAD
   scroll_state: ScrollState,
 =======
   mut scroll_state: ScrollState,
 >>>>>>> 6e3c014 (feat: support element scroll offsets in renders)
+=======
+  scroll_x: f32,
+  scroll_y: f32,
+  animation_time: Option<f32>,
+>>>>>>> 12d523a (Add @starting-style transition sampling)
   viewport_override: Option<Size>,
   background: Rgba,
   font_context: &FontContext,
@@ -2455,6 +2500,7 @@ fn paint_fragment_tree_with_state(
   crate::scroll::apply_scroll_offsets(&mut fragment_tree, &resolved_scroll);
   let scroll = resolved_scroll.viewport;
 
+<<<<<<< HEAD
   animation::apply_animations(&mut fragment_tree, scroll, animation_time);
 =======
   let scroll_result = crate::scroll::apply_scroll_snap(&mut fragment_tree, &scroll_state);
@@ -2463,6 +2509,14 @@ fn paint_fragment_tree_with_state(
 
   animation::apply_scroll_driven_animations(&mut fragment_tree, &scroll_state);
 >>>>>>> 6e3c014 (feat: support element scroll offsets in renders)
+=======
+  // Sample load-time transitions before scroll-driven animations so timeline-driven animations
+  // remain the final composited result for overlapping properties.
+  if let Some(time_ms) = animation_time {
+    animation::apply_transitions(&mut fragment_tree, time_ms, viewport_size);
+  }
+  animation::apply_scroll_driven_animations(&mut fragment_tree, scroll);
+>>>>>>> 12d523a (Add @starting-style transition sampling)
 
   let viewport_rect = Rect::from_xywh(0.0, 0.0, viewport_size.width, viewport_size.height);
   apply_sticky_offsets_with_context(
@@ -2517,12 +2571,15 @@ fn paint_fragment_tree_with_state(
 pub struct LayoutDocumentOptions {
   /// Whether paginated pages should be stacked along the block axis or left untranslated.
   pub page_stacking: PageStacking,
+  /// Optional animation/transition sampling time in milliseconds.
+  pub animation_time: Option<f32>,
 }
 
 impl Default for LayoutDocumentOptions {
   fn default() -> Self {
     Self {
       page_stacking: PageStacking::Stacked { gap: 0.0 },
+      animation_time: None,
     }
   }
 }
@@ -2536,6 +2593,12 @@ impl LayoutDocumentOptions {
   /// Overrides how paginated pages are positioned in the returned fragment tree.
   pub fn with_page_stacking(mut self, stacking: PageStacking) -> Self {
     self.page_stacking = stacking;
+    self
+  }
+
+  /// Provide an animation/transition sampling timestamp in milliseconds.
+  pub fn with_animation_time(mut self, time_ms: f32) -> Self {
+    self.animation_time = Some(time_ms.max(0.0));
     self
   }
 }
@@ -2989,7 +3052,13 @@ impl FastRender {
       html,
       width,
       height,
+<<<<<<< HEAD
       options.scroll_state(),
+=======
+      options.scroll_x,
+      options.scroll_y,
+      options.animation_time,
+>>>>>>> 12d523a (Add @starting-style transition sampling)
       options.media_type,
       fit_canvas_to_content,
       options.capture_accessibility,
@@ -3042,7 +3111,13 @@ impl FastRender {
     html: &str,
     width: u32,
     height: u32,
+<<<<<<< HEAD
     mut scroll_state: ScrollState,
+=======
+    scroll_x: f32,
+    scroll_y: f32,
+    animation_time: Option<f32>,
+>>>>>>> 12d523a (Add @starting-style transition sampling)
     media_type: MediaType,
     fit_canvas_to_content: bool,
     capture_accessibility: bool,
@@ -3105,12 +3180,16 @@ impl FastRender {
       self.device_pixel_ratio = resolved_viewport.device_pixel_ratio;
       self.pending_device_size = Some(resolved_viewport.visual_viewport);
       let layout_timer = stats.as_deref().and_then(|rec| rec.timer());
+      let layout_options = LayoutDocumentOptions {
+        animation_time,
+        ..LayoutDocumentOptions::default()
+      };
       let layout_artifacts = self.layout_document_for_media_with_artifacts(
         &dom,
         layout_width,
         layout_height,
         media_type,
-        LayoutDocumentOptions::default(),
+        layout_options,
         deadline,
         trace,
       )?;
@@ -3331,8 +3410,17 @@ impl FastRender {
       scroll_state = scroll_result.state;
       let scroll = scroll_state.viewport;
 
+<<<<<<< HEAD
       animation::apply_scroll_driven_animations(&mut fragment_tree, &scroll_state);
 >>>>>>> 6e3c014 (feat: support element scroll offsets in renders)
+=======
+      // Sample load-time transitions before scroll-driven animations so timeline-driven
+      // animations can override overlapping properties.
+      if let Some(time_ms) = animation_time {
+        animation::apply_transitions(&mut fragment_tree, time_ms, viewport_size);
+      }
+      animation::apply_scroll_driven_animations(&mut fragment_tree, scroll);
+>>>>>>> 12d523a (Add @starting-style transition sampling)
 
       self.apply_sticky_offsets_to_tree_with_scroll_state(&mut fragment_tree, &scroll_state);
 
@@ -3457,7 +3545,10 @@ impl FastRender {
         layout_width,
         layout_height,
         options.media_type,
-        LayoutDocumentOptions::default(),
+        LayoutDocumentOptions {
+          animation_time: options.animation_time,
+          ..LayoutDocumentOptions::default()
+        },
         None,
         &trace,
       )
@@ -3640,8 +3731,12 @@ impl FastRender {
       default_scroll: ScrollState::with_viewport(Point::new(options.scroll_x, options.scroll_y)),
 =======
       default_scroll: Point::new(options.scroll_x, options.scroll_y),
+<<<<<<< HEAD
       default_element_scrolls: options.element_scroll_offsets.clone(),
 >>>>>>> 6e3c014 (feat: support element scroll offsets in renders)
+=======
+      animation_time: artifacts.animation_time,
+>>>>>>> 12d523a (Add @starting-style transition sampling)
       font_context: self.font_context.clone(),
       image_cache: self.image_cache.clone(),
     })
@@ -4792,6 +4887,7 @@ impl FastRender {
       styled_tree,
       box_tree,
       fragment_tree,
+      animation_time: artifacts.animation_time,
     })
   }
 
@@ -4899,6 +4995,25 @@ impl FastRender {
         deadline,
       )?
     };
+    if options.animation_time.is_some() && stylesheet.has_starting_style_rules() {
+      if let Ok(mut starting_tree) =
+        apply_starting_style_set_with_media_target_and_imports_cached_with_deadline(
+          &dom_with_state,
+          &style_set,
+          &media_ctx,
+          target_fragment.as_deref(),
+          None,
+          None,
+          None,
+          None,
+          None,
+          Some(&mut media_query_cache),
+          deadline,
+        )
+      {
+        crate::style::cascade::attach_starting_styles(&mut styled_tree, &starting_tree);
+      }
+    }
     check_deadline(deadline, RenderStage::Cascade)?;
     if let Some(start) = style_apply_start {
       eprintln!("timing:style_apply {:?}", start.elapsed());
@@ -5444,6 +5559,10 @@ impl FastRender {
       fragment_tree.svg_filter_defs = Some(defs);
     }
 
+    if options.animation_time.is_some() && stylesheet.has_starting_style_rules() {
+      fragment_tree.attach_starting_styles_from_boxes(&box_tree);
+    }
+
     if report_intrinsic {
       let (lookups, hits, stores, block_calls, flex_calls, inline_calls) = intrinsic_cache_stats();
       eprintln!(
@@ -5483,6 +5602,7 @@ impl FastRender {
       styled_tree,
       box_tree,
       fragment_tree,
+      animation_time: options.animation_time,
     })
   }
 
@@ -8185,7 +8305,13 @@ pub(crate) fn render_html_with_shared_resources(
       html,
       width,
       height,
+<<<<<<< HEAD
       ScrollState::default(),
+=======
+      0.0,
+      0.0,
+      None,
+>>>>>>> 12d523a (Add @starting-style transition sampling)
       MediaType::Screen,
       false,
       false,

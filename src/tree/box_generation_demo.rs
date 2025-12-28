@@ -6,6 +6,7 @@
 
 use crate::dom::{DomNode, DomNodeType, HTML_NAMESPACE};
 use crate::geometry::Size;
+use crate::style::cascade::StartingStyleSet;
 use crate::style::counters::{CounterManager, CounterSet};
 use crate::style::display::{Display, FormattingContextType};
 use crate::style::types::ListStyleType;
@@ -630,6 +631,7 @@ impl BoxGenerator {
       node_id: 0,
       node: dummy_dom,
       styles: (*style).clone(),
+      starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
       marker_styles: None,

@@ -217,6 +217,7 @@ impl AnonymousBoxCreator {
   /// formatting context.
   fn split_inline_with_blocks(inline: BoxNode) -> Vec<BoxNode> {
     let style = inline.style.clone();
+    let starting_style = inline.starting_style.clone();
     let box_type = inline.box_type.clone();
     let debug_info = inline.debug_info.clone();
     let styled_node_id = inline.styled_node_id;
@@ -231,6 +232,7 @@ impl AnonymousBoxCreator {
       }
       let fragment = Self::clone_inline_fragment(
         &style,
+        starting_style.clone(),
         &box_type,
         debug_info.as_ref(),
         styled_node_id,
@@ -292,6 +294,7 @@ impl AnonymousBoxCreator {
   /// Clones an inline box fragment preserving the inline/anonymous inline identity and debug info.
   fn clone_inline_fragment(
     style: &Arc<ComputedStyle>,
+    starting_style: Option<Arc<ComputedStyle>>,
     box_type: &BoxType,
     debug_info: Option<&DebugInfo>,
     styled_node_id: Option<usize>,
@@ -300,6 +303,7 @@ impl AnonymousBoxCreator {
     let fragment = match box_type {
       BoxType::Inline(inline) => BoxNode {
         style: style.clone(),
+        starting_style: starting_style.clone(),
         box_type: BoxType::Inline(InlineBox {
           formatting_context: inline.formatting_context,
         }),
@@ -312,6 +316,7 @@ impl AnonymousBoxCreator {
       },
       BoxType::Anonymous(anon) if matches!(anon.anonymous_type, AnonymousType::Inline) => BoxNode {
         style: style.clone(),
+        starting_style: starting_style.clone(),
         box_type: BoxType::Anonymous(anon.clone()),
         children,
         id: 0,
@@ -324,6 +329,7 @@ impl AnonymousBoxCreator {
         let mut node = BoxNode::new_inline(style.clone(), children);
         node.debug_info = debug_info.cloned();
         node.styled_node_id = styled_node_id;
+        node.starting_style = starting_style;
         node
       }
     };
@@ -485,6 +491,7 @@ impl AnonymousBoxCreator {
     style.display = Display::Block;
     BoxNode {
       style: Arc::new(style),
+      starting_style: None,
       box_type: BoxType::Anonymous(AnonymousBox {
         anonymous_type: AnonymousType::Block,
       }),
@@ -509,6 +516,7 @@ impl AnonymousBoxCreator {
     style.display = Display::Inline;
     BoxNode {
       style: Arc::new(style),
+      starting_style: None,
       box_type: BoxType::Anonymous(AnonymousBox {
         anonymous_type: AnonymousType::Inline,
       }),
@@ -527,6 +535,7 @@ impl AnonymousBoxCreator {
   pub fn create_anonymous_table_row(style: Arc<ComputedStyle>, children: Vec<BoxNode>) -> BoxNode {
     BoxNode {
       style,
+      starting_style: None,
       box_type: BoxType::Anonymous(AnonymousBox {
         anonymous_type: AnonymousType::TableRow,
       }),
@@ -545,6 +554,7 @@ impl AnonymousBoxCreator {
   pub fn create_anonymous_table_cell(style: Arc<ComputedStyle>, children: Vec<BoxNode>) -> BoxNode {
     BoxNode {
       style,
+      starting_style: None,
       box_type: BoxType::Anonymous(AnonymousBox {
         anonymous_type: AnonymousType::TableCell,
       }),

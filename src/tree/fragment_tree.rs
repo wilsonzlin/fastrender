@@ -42,7 +42,7 @@ use crate::geometry::Size;
 use crate::scroll::ScrollMetadata;
 use crate::style::ComputedStyle;
 use crate::text::pipeline::ShapedRun;
-use crate::tree::box_tree::ReplacedType;
+use crate::tree::box_tree::{BoxNode, BoxTree, ReplacedType};
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
@@ -301,6 +301,8 @@ pub struct FragmentNode {
   /// Contains color, background, border, font and other paint-relevant properties.
   /// Optional for backwards compatibility with tests.
   pub style: Option<Arc<ComputedStyle>>,
+  /// Starting style snapshot (pre-transition) when available.
+  pub starting_style: Option<Arc<ComputedStyle>>,
 
   /// Index of this fragment within a fragmented sequence for the same box
   /// (e.g., when flowing across pages or columns).
@@ -381,6 +383,7 @@ impl FragmentNode {
       baseline: None,
       children,
       style: None,
+      starting_style: None,
       fragment_index: 0,
       fragment_count: 1,
       fragmentainer_index: fragmentainer.flattened_index(),
@@ -408,6 +411,7 @@ impl FragmentNode {
       baseline: None,
       children,
       style: Some(style),
+      starting_style: None,
       fragment_index: 0,
       fragment_count: 1,
       fragmentainer_index: fragmentainer.flattened_index(),
@@ -496,6 +500,17 @@ impl FragmentNode {
       children,
       style,
     )
+  }
+
+  /// Returns the originating box identifier when available.
+  pub fn box_id(&self) -> Option<usize> {
+    match &self.content {
+      FragmentContent::Block { box_id } => *box_id,
+      FragmentContent::Inline { box_id, .. } => *box_id,
+      FragmentContent::Text { box_id, .. } => *box_id,
+      FragmentContent::Replaced { box_id, .. } => *box_id,
+      FragmentContent::Line { .. } | FragmentContent::RunningAnchor { .. } => None,
+    }
   }
 
   /// Creates a new text fragment
@@ -712,6 +727,7 @@ impl FragmentNode {
       baseline: self.baseline,
       children: self.children.clone(),
       style: self.style.clone(),
+      starting_style: None,
       fragment_index: self.fragment_index,
       fragment_count: self.fragment_count,
       fragmentainer_index: self.fragmentainer_index,
@@ -747,6 +763,7 @@ impl FragmentNode {
         .map(|child| child.translate_subtree_absolute(offset))
         .collect(),
       style: self.style.clone(),
+      starting_style: None,
       fragment_index: self.fragment_index,
       fragment_count: self.fragment_count,
       fragmentainer_index: self.fragmentainer_index,
@@ -1034,6 +1051,48 @@ impl FragmentTree {
   pub fn ensure_scroll_metadata(&mut self) {
     if self.scroll_metadata.is_none() {
       self.scroll_metadata = Some(crate::scroll::build_scroll_metadata(self));
+    }
+  }
+
+  /// Propagates starting-style snapshots from the box tree onto fragments.
+  ///
+  /// Fragmentation can clone fragments and drop their starting-style handles; this
+  /// function reattaches the snapshots so transition sampling has access to both
+  /// the starting and final computed values.
+  pub(crate) fn attach_starting_styles_from_boxes(&mut self, box_tree: &BoxTree) {
+    let mut map: HashMap<usize, Arc<ComputedStyle>> = HashMap::new();
+    fn collect(node: &BoxNode, out: &mut HashMap<usize, Arc<ComputedStyle>>) {
+      if let Some(start) = &node.starting_style {
+        out.insert(node.id, start.clone());
+      }
+      for child in &node.children {
+        collect(child, out);
+      }
+    }
+    collect(&box_tree.root, &mut map);
+    if map.is_empty() {
+      return;
+    }
+
+    fn apply(fragment: &mut FragmentNode, map: &HashMap<usize, Arc<ComputedStyle>>) {
+      if fragment.starting_style.is_none() {
+        if let Some(id) = fragment.box_id() {
+          if let Some(start) = map.get(&id) {
+            fragment.starting_style = Some(start.clone());
+          }
+        }
+      }
+      if let FragmentContent::RunningAnchor { snapshot, .. } = &mut fragment.content {
+        apply(snapshot, map);
+      }
+      for child in &mut fragment.children {
+        apply(child, map);
+      }
+    }
+
+    apply(&mut self.root, &map);
+    for root in &mut self.additional_fragments {
+      apply(root, &map);
     }
   }
 }

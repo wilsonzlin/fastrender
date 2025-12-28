@@ -2017,6 +2017,7 @@ impl InlineFormattingContext {
       styled_node_id: None,
       first_line_style: None,
       first_letter_style: None,
+      starting_style: None,
     };
     let mut pending_space: Option<PendingSpace> = None;
     self.collect_inline_items_internal(

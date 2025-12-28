@@ -39,6 +39,7 @@ use crate::style::ComputedStyle;
 use cssparser::BasicParseErrorKind;
 use cssparser::Parser;
 use cssparser::ParserInput;
+use cssparser::ToCss;
 use cssparser::Token;
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -1088,6 +1089,241 @@ fn parse_animation_range_list(raw: &str) -> Vec<AnimationRange> {
     ranges.push(AnimationRange { start, end });
   }
   ranges
+}
+
+fn split_top_level_commas(raw: &str) -> Vec<String> {
+  let mut parts = Vec::new();
+  let mut current = String::new();
+  let mut depth = 0i32;
+  for ch in raw.chars() {
+    match ch {
+      '(' => {
+        depth += 1;
+        current.push(ch);
+      }
+      ')' => {
+        depth = (depth - 1).max(0);
+        current.push(ch);
+      }
+      ',' if depth == 0 => {
+        if !current.trim().is_empty() {
+          parts.push(current.trim().to_string());
+        }
+        current.clear();
+      }
+      _ => current.push(ch),
+    }
+  }
+  if !current.trim().is_empty() {
+    parts.push(current.trim().to_string());
+  }
+  parts
+}
+
+fn parse_time_ms(raw: &str) -> Option<f32> {
+  let trimmed = raw.trim();
+  if trimmed.is_empty() {
+    return None;
+  }
+  let lower = trimmed.to_ascii_lowercase();
+  if let Some(num) = lower.strip_suffix("ms") {
+    return num.trim().parse::<f32>().ok();
+  }
+  if let Some(num) = lower.strip_suffix('s') {
+    return num.trim().parse::<f32>().ok().map(|v| v * 1000.0);
+  }
+  if lower == "0" {
+    return Some(0.0);
+  }
+  None
+}
+
+fn parse_transition_property_list(raw: &str) -> Vec<TransitionProperty> {
+  let mut props = Vec::new();
+  for part in split_top_level_commas(raw) {
+    let lower = part.to_ascii_lowercase();
+    if lower == "none" {
+      return vec![TransitionProperty::None];
+    }
+    if lower == "all" {
+      props.push(TransitionProperty::All);
+    } else {
+      props.push(TransitionProperty::Name(lower));
+    }
+  }
+  if props.is_empty() {
+    vec![TransitionProperty::All]
+  } else {
+    props
+  }
+}
+
+fn parse_transition_time_list(raw: &str) -> Vec<f32> {
+  let mut times = Vec::new();
+  for part in split_top_level_commas(raw) {
+    if let Some(ms) = parse_time_ms(&part) {
+      times.push(ms);
+    }
+  }
+  if times.is_empty() {
+    vec![0.0]
+  } else {
+    times
+  }
+}
+
+fn parse_transition_timing_function(raw: &str) -> Option<TransitionTimingFunction> {
+  let lower = raw.trim().to_ascii_lowercase();
+  match lower.as_str() {
+    "ease" => return Some(TransitionTimingFunction::Ease),
+    "linear" => return Some(TransitionTimingFunction::Linear),
+    "ease-in" => return Some(TransitionTimingFunction::EaseIn),
+    "ease-out" => return Some(TransitionTimingFunction::EaseOut),
+    "ease-in-out" => return Some(TransitionTimingFunction::EaseInOut),
+    "step-start" => return Some(TransitionTimingFunction::Steps(1, StepPosition::Start)),
+    "step-end" => return Some(TransitionTimingFunction::Steps(1, StepPosition::End)),
+    _ => {}
+  }
+
+  if lower.starts_with("cubic-bezier") {
+    if let Some(args) = lower
+      .strip_prefix("cubic-bezier(")
+      .and_then(|s| s.strip_suffix(')'))
+    {
+      let nums: Vec<f32> = args
+        .split(',')
+        .filter_map(|n| n.trim().parse::<f32>().ok())
+        .collect();
+      if nums.len() == 4 {
+        return Some(TransitionTimingFunction::CubicBezier(
+          nums[0], nums[1], nums[2], nums[3],
+        ));
+      }
+    }
+  }
+
+  if lower.starts_with("steps(") {
+    if let Some(args) = lower
+      .strip_prefix("steps(")
+      .and_then(|s| s.strip_suffix(')'))
+    {
+      let mut parts = args.split(',').map(|p| p.trim());
+      if let Some(count) = parts.next().and_then(|p| p.parse::<u32>().ok()) {
+        let position = match parts.next().map(|p| p.to_ascii_lowercase()) {
+          Some(p) if p == "start" => StepPosition::Start,
+          Some(p) if p == "end" => StepPosition::End,
+          _ => StepPosition::End,
+        };
+        return Some(TransitionTimingFunction::Steps(count, position));
+      }
+    }
+  }
+
+  None
+}
+
+fn parse_transition_timing_function_list(raw: &str) -> Vec<TransitionTimingFunction> {
+  let mut funcs = Vec::new();
+  for part in split_top_level_commas(raw) {
+    if let Some(tf) = parse_transition_timing_function(&part) {
+      funcs.push(tf);
+    }
+  }
+  if funcs.is_empty() {
+    vec![TransitionTimingFunction::Ease]
+  } else {
+    funcs
+  }
+}
+
+fn parse_transition_shorthand(
+  raw: &str,
+) -> (
+  Vec<TransitionProperty>,
+  Vec<f32>,
+  Vec<f32>,
+  Vec<TransitionTimingFunction>,
+) {
+  let mut properties = Vec::new();
+  let mut durations = Vec::new();
+  let mut delays = Vec::new();
+  let mut timings = Vec::new();
+
+  for part in split_top_level_commas(raw) {
+    let mut property: Option<TransitionProperty> = None;
+    let mut duration: Option<f32> = None;
+    let mut delay: Option<f32> = None;
+    let mut timing: Option<TransitionTimingFunction> = None;
+
+    let mut input = ParserInput::new(part.as_str());
+    let mut parser = Parser::new(&mut input);
+    while !parser.is_exhausted() {
+      parser.skip_whitespace();
+      if parser.is_exhausted() {
+        break;
+      }
+      let token = parser.next_including_whitespace();
+      if token.is_err() {
+        break;
+      }
+      let token = token.unwrap();
+      let token_text = token.to_css_string();
+      if let Some(ms) = parse_time_ms(&token_text) {
+        if duration.is_none() {
+          duration = Some(ms);
+        } else {
+          delay = Some(ms);
+        }
+        continue;
+      }
+
+      if let Some(tf) = parse_transition_timing_function(&token_text) {
+        timing = Some(tf);
+        continue;
+      }
+
+      if let Token::Function(name) = &token {
+        let func_name = name.to_string();
+        if let Some(tf) = parse_transition_timing_function(func_name.as_str()) {
+          timing = Some(tf);
+          continue;
+        }
+        if func_name.eq_ignore_ascii_case("cubic-bezier") || func_name.eq_ignore_ascii_case("steps")
+        {
+          // The to_css_string() above preserves the arguments.
+          if let Some(tf) = parse_transition_timing_function(&token_text) {
+            timing = Some(tf);
+            continue;
+          }
+        }
+      }
+
+      let lower = token_text.to_ascii_lowercase();
+      if property.is_none() {
+        property = Some(match lower.as_str() {
+          "all" => TransitionProperty::All,
+          "none" => TransitionProperty::None,
+          _ => TransitionProperty::Name(lower),
+        });
+      }
+    }
+
+    properties.push(property.unwrap_or(TransitionProperty::All));
+    durations.push(duration.unwrap_or(0.0));
+    delays.push(delay.unwrap_or(0.0));
+    timings.push(timing.unwrap_or(TransitionTimingFunction::Ease));
+  }
+
+  if properties.is_empty() {
+    (
+      vec![TransitionProperty::All],
+      vec![0.0],
+      vec![0.0],
+      vec![TransitionTimingFunction::Ease],
+    )
+  } else {
+    (properties, durations, delays, timings)
+  }
 }
 
 fn parse_touch_action_keywords(tokens: &[String]) -> Option<TouchAction> {
@@ -7303,6 +7539,26 @@ pub fn apply_declaration_with_base(
     }
     "animation-name" => {
       styles.animation_names = parse_animation_names(resolved_css_text_str);
+    }
+    "transition-property" => {
+      styles.transition_properties = parse_transition_property_list(resolved_css_text_str);
+    }
+    "transition-duration" => {
+      styles.transition_durations = parse_transition_time_list(resolved_css_text_str);
+    }
+    "transition-delay" => {
+      styles.transition_delays = parse_transition_time_list(resolved_css_text_str);
+    }
+    "transition-timing-function" => {
+      styles.transition_timing_functions =
+        parse_transition_timing_function_list(resolved_css_text_str);
+    }
+    "transition" => {
+      let (props, durations, delays, timings) = parse_transition_shorthand(resolved_css_text_str);
+      styles.transition_properties = props;
+      styles.transition_durations = durations;
+      styles.transition_delays = delays;
+      styles.transition_timing_functions = timings;
     }
     "scrollbar-gutter" => {
       let mut stable = false;

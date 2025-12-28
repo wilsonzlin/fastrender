@@ -34,6 +34,7 @@ use super::types::PageRule;
 use super::types::PageSelector;
 use super::types::PropertyRule;
 use super::types::ScopeRule;
+use super::types::StartingStyleRule;
 use super::types::StyleRule;
 use super::types::StyleSheet;
 use super::types::SupportsCondition;
@@ -189,11 +190,20 @@ fn parse_rule<'i, 't>(
       let kw_str = kw.to_string();
       match kw_str.as_str() {
         "import" => parse_import_rule(p),
+<<<<<<< HEAD
         "media" => parse_media_rule(p, errors, parent_selectors, css_source),
         "container" => parse_container_rule(p, errors, parent_selectors, css_source),
         "scope" => parse_scope_rule(p, errors, parent_selectors, css_source),
         "supports" => parse_supports_rule(p, errors, parent_selectors, css_source),
         "layer" => parse_layer_rule(p, errors, parent_selectors, css_source),
+=======
+        "media" => parse_media_rule(p, parent_selectors, css_source),
+        "container" => parse_container_rule(p, parent_selectors, css_source),
+        "scope" => parse_scope_rule(p, parent_selectors, css_source),
+        "supports" => parse_supports_rule(p, parent_selectors, css_source),
+        "layer" => parse_layer_rule(p, parent_selectors, css_source),
+        "starting-style" => parse_starting_style_rule(p, parent_selectors, css_source),
+>>>>>>> 12d523a (Add @starting-style transition sampling)
         "page" => parse_page_rule(p, css_source),
         "counter-style" => parse_counter_style_rule(p),
         "font-face" => parse_font_face_rule(p),
@@ -469,6 +479,7 @@ fn parse_container_rule<'i, 't>(
   })))
 }
 
+<<<<<<< HEAD
 fn parse_container_prelude(prelude: &str) -> Option<(Option<String>, Vec<MediaQuery>)> {
   let trimmed = prelude.trim();
   if trimmed.is_empty() {
@@ -501,6 +512,26 @@ fn parse_container_prelude(prelude: &str) -> Option<(Option<String>, Vec<MediaQu
   }
 
   None
+=======
+/// Parse an @starting-style rule which simply wraps a nested rule list.
+fn parse_starting_style_rule<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+  parent_selectors: Option<&SelectorList<FastRenderSelectorImpl>>,
+  css_source: &str,
+) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
+  parser.expect_curly_bracket_block()?;
+  let nested_rules = parser.parse_nested_block(|nested_parser| {
+    Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(parse_rule_list_with_context(
+      nested_parser,
+      parent_selectors,
+      css_source,
+    ))
+  })?;
+
+  Ok(Some(CssRule::StartingStyle(StartingStyleRule {
+    rules: nested_rules,
+  })))
+>>>>>>> 12d523a (Add @starting-style transition sampling)
 }
 
 /// Parse an @scope rule with optional scope root/limit selectors.
@@ -2451,11 +2482,20 @@ fn parse_nested_at_rule<'i, 't>(
   };
   let kw_lower = kw.to_ascii_lowercase();
   match kw_lower.as_str() {
+<<<<<<< HEAD
     "media" => parse_media_rule(parser, errors, Some(parent_selectors), css_source),
     "supports" => parse_supports_rule(parser, errors, Some(parent_selectors), css_source),
     "container" => parse_container_rule(parser, errors, Some(parent_selectors), css_source),
     "layer" => parse_layer_rule(parser, errors, Some(parent_selectors), css_source),
     "nest" => parse_nest_rule(parser, errors, parent_selectors, css_source),
+=======
+    "media" => parse_media_rule(parser, Some(parent_selectors), css_source),
+    "supports" => parse_supports_rule(parser, Some(parent_selectors), css_source),
+    "container" => parse_container_rule(parser, Some(parent_selectors), css_source),
+    "layer" => parse_layer_rule(parser, Some(parent_selectors), css_source),
+    "starting-style" => parse_starting_style_rule(parser, Some(parent_selectors), css_source),
+    "nest" => parse_nest_rule(parser, parent_selectors, css_source),
+>>>>>>> 12d523a (Add @starting-style transition sampling)
     _ => {
       skip_at_rule(parser);
       Ok(None)

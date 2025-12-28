@@ -166,6 +166,8 @@ use types::TouchAction;
 use types::TransformBox;
 use types::TransformOrigin;
 use types::TransformStyle;
+use types::TransitionProperty;
+use types::TransitionTimingFunction;
 use types::UnicodeBidi;
 use types::UserSelect;
 use types::VerticalAlign;
@@ -453,6 +455,14 @@ pub struct ComputedStyle {
   pub animation_ranges: Vec<AnimationRange>,
   /// Names of animations applied to this element.
   pub animation_names: Vec<String>,
+  /// Properties that participate in transitions (empty disables transitions).
+  pub transition_properties: Vec<TransitionProperty>,
+  /// Durations for transitions in milliseconds.
+  pub transition_durations: Vec<f32>,
+  /// Delays for transitions in milliseconds.
+  pub transition_delays: Vec<f32>,
+  /// Timing functions used by transitions.
+  pub transition_timing_functions: Vec<TransitionTimingFunction>,
   pub top: Option<Length>,
   pub right: Option<Length>,
   pub bottom: Option<Length>,
@@ -797,6 +807,10 @@ impl Default for ComputedStyle {
       animation_timelines: Vec::new(),
       animation_ranges: Vec::new(),
       animation_names: Vec::new(),
+      transition_properties: vec![TransitionProperty::All],
+      transition_durations: vec![0.0],
+      transition_delays: vec![0.0],
+      transition_timing_functions: vec![TransitionTimingFunction::Ease],
       top: None,
       right: None,
       bottom: None,

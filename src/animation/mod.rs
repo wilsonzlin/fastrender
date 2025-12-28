@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 
 use crate::css::types::{Keyframe, KeyframesRule};
+use crate::debug::runtime;
 use crate::geometry::{Point, Rect, Size};
 use crate::paint::display_list::{Transform2D, Transform3D};
 use crate::scroll::ScrollState;
@@ -33,12 +34,15 @@ use crate::style::types::ScrollTimeline;
 use crate::style::types::ShapeRadius;
 use crate::style::types::TimelineAxis;
 use crate::style::types::TimelineOffset;
+use crate::style::types::TransitionProperty;
+use crate::style::types::TransitionTimingFunction;
 use crate::style::types::ViewTimeline;
 use crate::style::types::ViewTimelinePhase;
 use crate::style::types::WritingMode;
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
-use crate::tree::fragment_tree::{FragmentNode, FragmentTree};
+use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::mem::discriminant;
 use std::sync::Arc;
@@ -2140,6 +2144,7 @@ pub fn apply_scroll_driven_animations(tree: &mut FragmentTree, scroll_state: &Sc
   }
 }
 
+<<<<<<< HEAD
 /// Applies scroll/view timeline-driven animations to the fragment tree by sampling
 /// matching @keyframes rules and applying animated properties (currently opacity).
 ///
@@ -2147,6 +2152,159 @@ pub fn apply_scroll_driven_animations(tree: &mut FragmentTree, scroll_state: &Sc
 /// animation engine. It uses the provided scroll offsets for the root viewport.
 pub fn apply_scroll_driven_animations(tree: &mut FragmentTree, scroll: Point) {
   apply_animations(tree, scroll, None);
+=======
+fn interpolated_transition_names() -> impl Iterator<Item = &'static str> {
+  property_interpolators().iter().map(|p| p.name)
+}
+
+fn transition_value_for_property(
+  name: &str,
+  idx: usize,
+  style: &ComputedStyle,
+  start_style: &ComputedStyle,
+  durations: &[f32],
+  delays: &[f32],
+  timings: &[TransitionTimingFunction],
+  time_ms: f32,
+  ctx: &AnimationResolveContext,
+) -> Option<(AnimatedValue, f32, f32, f32)> {
+  let duration = pick(durations, idx, *durations.last().unwrap_or(&0.0));
+  if duration <= 0.0 {
+    return None;
+  }
+  let delay = pick(delays, idx, *delays.last().unwrap_or(&0.0));
+  let elapsed = time_ms - delay;
+  if elapsed >= duration {
+    return None;
+  }
+  let raw_progress = if elapsed <= 0.0 {
+    0.0
+  } else {
+    (elapsed / duration).clamp(0.0, 1.0)
+  };
+  let timing = pick(timings, idx, TransitionTimingFunction::Ease);
+  let progress = timing.value_at(raw_progress);
+
+  let Some(interpolator) = interpolator_for(name) else {
+    return None;
+  };
+  let Some(from_val) = (interpolator.extract)(start_style, ctx) else {
+    return None;
+  };
+  let Some(to_val) = (interpolator.extract)(style, ctx) else {
+    return None;
+  };
+  let Some(value) = (interpolator.interpolate)(&from_val, &to_val, progress) else {
+    return None;
+  };
+
+  Some((value, progress, delay, duration))
+}
+
+fn transition_pairs<'a>(
+  properties: &'a [TransitionProperty],
+) -> Option<Vec<(Cow<'a, str>, usize)>> {
+  if properties
+    .iter()
+    .any(|p| matches!(p, TransitionProperty::None))
+  {
+    return None;
+  }
+  let mut pairs = Vec::new();
+  for (idx, prop) in properties.iter().enumerate() {
+    match prop {
+      TransitionProperty::All => {
+        for name in interpolated_transition_names() {
+          pairs.push((Cow::Borrowed(name), idx));
+        }
+      }
+      TransitionProperty::Name(name) => pairs.push((Cow::Owned(name.clone()), idx)),
+      TransitionProperty::None => {}
+    }
+  }
+  Some(pairs)
+}
+
+fn apply_transitions_to_fragment(
+  fragment: &mut FragmentNode,
+  time_ms: f32,
+  viewport: Size,
+  log_enabled: bool,
+) {
+  let Some(style_arc) = fragment.style.clone() else {
+    // Still traverse for running anchors/children.
+    for child in &mut fragment.children {
+      apply_transitions_to_fragment(child, time_ms, viewport, log_enabled);
+    }
+    if let FragmentContent::RunningAnchor { snapshot, .. } = &mut fragment.content {
+      apply_transitions_to_fragment(snapshot, time_ms, viewport, log_enabled);
+    }
+    return;
+  };
+  if let Some(start_arc) = fragment.starting_style.clone() {
+    if let Some(pairs) = transition_pairs(&style_arc.transition_properties) {
+      let ctx = AnimationResolveContext::new(
+        viewport,
+        Size::new(fragment.bounds.width(), fragment.bounds.height()),
+      );
+      let mut updates: HashMap<String, AnimatedValue> = HashMap::new();
+      for (name, idx) in pairs {
+        let value = transition_value_for_property(
+          &name,
+          idx,
+          &style_arc,
+          &start_arc,
+          &style_arc.transition_durations,
+          &style_arc.transition_delays,
+          &style_arc.transition_timing_functions,
+          time_ms,
+          &ctx,
+        );
+        if let Some((animated, progress, delay, duration)) = value {
+          updates.insert(name.to_string(), animated);
+          if log_enabled {
+            let identifier = fragment
+              .box_id()
+              .map(|id| format!("box_id={id}"))
+              .unwrap_or_else(|| "box_id=<none>".to_string());
+            eprintln!(
+              "[transition] {} property={} progress={:.3} delay_ms={:.1} duration_ms={:.1}",
+              identifier, name, progress, delay, duration
+            );
+          }
+        }
+      }
+
+      if !updates.is_empty() {
+        let mut updated_style = (*style_arc).clone();
+        apply_animated_properties(&mut updated_style, &updates);
+        fragment.style = Some(Arc::new(updated_style));
+      }
+    }
+  }
+
+  for child in &mut fragment.children {
+    apply_transitions_to_fragment(child, time_ms, viewport, log_enabled);
+  }
+  if let FragmentContent::RunningAnchor { snapshot, .. } = &mut fragment.content {
+    apply_transitions_to_fragment(snapshot, time_ms, viewport, log_enabled);
+  }
+}
+
+/// Applies `@starting-style` transitions to a fragment tree for the given timestamp in milliseconds.
+///
+/// Transitions are sampled before scroll/view timeline animations so later animation
+/// sampling can override any overlapping properties when both are present.
+pub fn apply_transitions(tree: &mut FragmentTree, time_ms: f32, viewport: Size) {
+  if time_ms < 0.0 {
+    return;
+  }
+  let log_enabled = runtime::runtime_toggles().truthy("FASTR_LOG_TRANSITIONS");
+  apply_transitions_to_fragment(&mut tree.root, time_ms, viewport, log_enabled);
+  for root in &mut tree.additional_fragments {
+    apply_transitions_to_fragment(root, time_ms, viewport, log_enabled);
+  }
+>>>>>>> 12d523a (Add @starting-style transition sampling)
 }
 
 trait AnimationRangeExt {

@@ -1,0 +1,37 @@
+<!doctype html>
+<style>
+  body {
+    margin: 0;
+    background: #fafafa;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .frame {
+    width: 220px;
+    height: 140px;
+    border: 2px solid #ccc;
+    position: relative;
+    background: white;
+  }
+  @starting-style {
+    .box {
+      opacity: 0;
+      transform: translateX(0px);
+    }
+  }
+  .box {
+    position: absolute;
+    top: 30px;
+    left: 20px;
+    width: 80px;
+    height: 80px;
+    background: rgb(0, 128, 255);
+    opacity: 1;
+    transform: translateX(100px);
+    transition: opacity 800ms ease, transform 800ms ease;
+  }
+</style>
+<div class="frame">
+  <div class="box"></div>
+</div>

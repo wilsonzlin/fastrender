@@ -84,6 +84,7 @@ These override user-preference media queries (and are also settable via CLI flag
 - `FASTR_LOG_LINE_WIDTH` / `FASTR_LOG_INLINE_BASELINE` / `FASTR_LOG_OVERFLOW_TEST` – inline layout diagnostics.
 - `FASTR_LOG_TABLE` / `FASTR_DUMP_CELL_CHILD_Y` – table layout tracing.
 - `FASTR_LOG_ABS_CLAMP` – clamp logging for absolutely positioned elements.
+- `FASTR_LOG_TRANSITIONS=1` – log applied @starting-style transitions with property names and progress.
 
 ## Source of truth
 

@@ -444,6 +444,7 @@ fn clone_without_children(node: &FragmentNode) -> FragmentNode {
     baseline: node.baseline,
     children: Vec::new(),
     style: node.style.clone(),
+    starting_style: node.starting_style.clone(),
     fragment_index: node.fragment_index,
     fragment_count: node.fragment_count,
     fragmentainer_index: node.fragmentainer_index,

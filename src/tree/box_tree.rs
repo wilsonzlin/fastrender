@@ -905,6 +905,8 @@ pub struct BoxNode {
   /// - Immutable after computation
   /// - Reduces memory usage for cloned trees
   pub style: Arc<ComputedStyle>,
+  /// Optional starting style snapshot for transitions.
+  pub starting_style: Option<Arc<ComputedStyle>>,
 
   /// What kind of box is this?
   pub box_type: BoxType,
@@ -956,6 +958,7 @@ impl BoxNode {
   ) -> Self {
     Self {
       style,
+      starting_style: None,
       box_type: BoxType::Block(BlockBox {
         formatting_context: fc,
       }),
@@ -972,6 +975,7 @@ impl BoxNode {
   pub fn new_inline(style: Arc<ComputedStyle>, children: Vec<BoxNode>) -> Self {
     Self {
       style,
+      starting_style: None,
       box_type: BoxType::Inline(InlineBox {
         formatting_context: None,
       }),
@@ -992,6 +996,7 @@ impl BoxNode {
   ) -> Self {
     Self {
       style,
+      starting_style: None,
       box_type: BoxType::Inline(InlineBox {
         formatting_context: Some(fc),
       }),
@@ -1008,6 +1013,7 @@ impl BoxNode {
   pub fn new_text(style: Arc<ComputedStyle>, text: String) -> Self {
     Self {
       style,
+      starting_style: None,
       box_type: BoxType::Text(TextBox { text }),
       children: Vec::new(),
       id: 0,
@@ -1022,6 +1028,7 @@ impl BoxNode {
   pub fn new_marker(style: Arc<ComputedStyle>, content: MarkerContent) -> Self {
     Self {
       style,
+      starting_style: None,
       box_type: BoxType::Marker(MarkerBox { content }),
       children: Vec::new(),
       id: 0,
@@ -1041,6 +1048,7 @@ impl BoxNode {
   ) -> Self {
     Self {
       style,
+      starting_style: None,
       box_type: BoxType::Replaced(ReplacedBox {
         replaced_type,
         intrinsic_size,
@@ -1059,6 +1067,7 @@ impl BoxNode {
   pub fn new_anonymous_block(style: Arc<ComputedStyle>, children: Vec<BoxNode>) -> Self {
     Self {
       style,
+      starting_style: None,
       box_type: BoxType::Anonymous(AnonymousBox {
         anonymous_type: AnonymousType::Block,
       }),
@@ -1075,6 +1084,7 @@ impl BoxNode {
   pub fn new_anonymous_inline(style: Arc<ComputedStyle>, children: Vec<BoxNode>) -> Self {
     Self {
       style,
+      starting_style: None,
       box_type: BoxType::Anonymous(AnonymousBox {
         anonymous_type: AnonymousType::Inline,
       }),

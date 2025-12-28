@@ -202,6 +202,8 @@ pub struct CollectedRule<'a> {
   pub rule: &'a StyleRule,
   /// Cascade layer order (lexicographic; unlayered rules use a sentinel of u32::MAX).
   pub layer_order: Vec<u32>,
+  /// Whether this rule originated inside an @starting-style block.
+  pub starting_style: bool,
   /// Container query conditions that must match at cascade time.
   pub container_conditions: Vec<ContainerCondition>,
   /// Scoping contexts that constrain where the rule applies.
@@ -286,6 +288,13 @@ pub struct PageRule {
   pub margin_rules: Vec<PageMarginRule>,
 }
 
+/// A @starting-style rule gating initial transition starting values.
+#[derive(Debug, Clone)]
+pub struct StartingStyleRule {
+  /// Rules that only apply to the starting-style snapshot.
+  pub rules: Vec<CssRule>,
+}
+
 /// A minimal interface for loading imported stylesheets.
 ///
 /// Implementations can fetch from network, filesystem, or an in-memory map.
@@ -326,6 +335,7 @@ impl StyleSheet {
       &[],
       &[],
       &[],
+      false,
       &mut result,
     );
     result
@@ -533,6 +543,60 @@ impl StyleSheet {
               return true;
             }
           }
+          CssRule::StartingStyle(starting) => {
+            if walk(&starting.rules) {
+              return true;
+            }
+          }
+          CssRule::Page(_)
+          | CssRule::CounterStyle(_)
+          | CssRule::Import(_)
+          | CssRule::FontFace(_)
+          | CssRule::Keyframes(_) => {}
+        }
+      }
+      false
+    }
+
+    walk(&self.rules)
+  }
+
+  /// Returns true if the stylesheet (or any nested block) contains @starting-style rules.
+  pub fn has_starting_style_rules(&self) -> bool {
+    fn walk(rules: &[CssRule]) -> bool {
+      for rule in rules {
+        match rule {
+          CssRule::StartingStyle(_) => return true,
+          CssRule::Style(style) => {
+            if walk(&style.nested_rules) {
+              return true;
+            }
+          }
+          CssRule::Media(media) => {
+            if walk(&media.rules) {
+              return true;
+            }
+          }
+          CssRule::Supports(supports) => {
+            if walk(&supports.rules) {
+              return true;
+            }
+          }
+          CssRule::Layer(layer) => {
+            if walk(&layer.rules) {
+              return true;
+            }
+          }
+          CssRule::Scope(scope) => {
+            if walk(&scope.rules) {
+              return true;
+            }
+          }
+          CssRule::Container(container) => {
+            if walk(&container.rules) {
+              return true;
+            }
+          }
           CssRule::Page(_)
           | CssRule::CounterStyle(_)
           | CssRule::Import(_)
@@ -557,6 +621,7 @@ fn collect_rules_recursive<'a>(
   current_layer: &[u32],
   container_conditions: &[ContainerCondition],
   current_scopes: &[ScopeContext<'a>],
+  in_starting_style: bool,
   out: &mut Vec<CollectedRule<'a>>,
 ) {
   // Keep the cache binding mutable so we can call as_deref_mut() repeatedly
@@ -573,6 +638,7 @@ fn collect_rules_recursive<'a>(
         out.push(CollectedRule {
           rule: style_rule,
           layer_order,
+          starting_style: in_starting_style,
           container_conditions: container_conditions.to_vec(),
           scopes: current_scopes.to_vec(),
         });
@@ -585,6 +651,7 @@ fn collect_rules_recursive<'a>(
             current_layer,
             container_conditions,
             current_scopes,
+            in_starting_style,
             out,
           );
         }
@@ -600,6 +667,7 @@ fn collect_rules_recursive<'a>(
             current_layer,
             container_conditions,
             current_scopes,
+            in_starting_style,
             out,
           );
         }
@@ -618,6 +686,7 @@ fn collect_rules_recursive<'a>(
           current_layer,
           &updated_conditions,
           current_scopes,
+          in_starting_style,
           out,
         );
       }
@@ -631,6 +700,7 @@ fn collect_rules_recursive<'a>(
             current_layer,
             container_conditions,
             current_scopes,
+            in_starting_style,
             out,
           );
         }
@@ -663,6 +733,7 @@ fn collect_rules_recursive<'a>(
             &path,
             container_conditions,
             current_scopes,
+            in_starting_style,
             out,
           );
           continue;
@@ -681,6 +752,7 @@ fn collect_rules_recursive<'a>(
           &path,
           container_conditions,
           current_scopes,
+          in_starting_style,
           out,
         );
       }
@@ -700,6 +772,20 @@ fn collect_rules_recursive<'a>(
           current_layer,
           container_conditions,
           &updated_scopes,
+          in_starting_style,
+          out,
+        );
+      }
+      CssRule::StartingStyle(starting_rule) => {
+        collect_rules_recursive(
+          &starting_rule.rules,
+          media_ctx,
+          cache.as_deref_mut(),
+          registry,
+          current_layer,
+          container_conditions,
+          current_scopes,
+          true,
           out,
         );
       }
@@ -808,6 +894,16 @@ fn collect_page_rules_recursive<'a>(
           out,
         );
       }
+      CssRule::StartingStyle(starting_rule) => {
+        collect_page_rules_recursive(
+          &starting_rule.rules,
+          media_ctx,
+          cache.as_deref_mut(),
+          registry,
+          current_layer,
+          out,
+        );
+      }
     }
   }
 }
@@ -858,6 +954,9 @@ fn collect_font_faces_recursive(
       CssRule::Scope(scope_rule) => {
         collect_font_faces_recursive(&scope_rule.rules, media_ctx, cache.as_deref_mut(), out);
       }
+      CssRule::StartingStyle(starting_rule) => {
+        collect_font_faces_recursive(&starting_rule.rules, media_ctx, cache.as_deref_mut(), out);
+      }
     }
   }
 }
@@ -898,6 +997,9 @@ fn collect_keyframes_recursive(
       CssRule::Property(_) => {}
       CssRule::Scope(scope_rule) => {
         collect_keyframes_recursive(&scope_rule.rules, media_ctx, cache.as_deref_mut(), out);
+      }
+      CssRule::StartingStyle(starting_rule) => {
+        collect_keyframes_recursive(&starting_rule.rules, media_ctx, cache.as_deref_mut(), out);
       }
     }
   }
@@ -1024,7 +1126,20 @@ fn collect_counter_styles_recursive<'a>(
       CssRule::Page(_) => {}
       CssRule::FontFace(_) => {}
       CssRule::Keyframes(_) => {}
+<<<<<<< HEAD
       CssRule::Property(_) => {}
+=======
+      CssRule::StartingStyle(starting_rule) => {
+        collect_counter_styles_recursive(
+          &starting_rule.rules,
+          media_ctx,
+          cache.as_deref_mut(),
+          registry,
+          current_layer,
+          out,
+        );
+      }
+>>>>>>> 12d523a (Add @starting-style transition sampling)
     }
   }
 }
@@ -1310,6 +1425,8 @@ pub enum CssRule {
   FontFace(FontFaceRule),
   /// A @keyframes rule defining animated keyframes.
   Keyframes(KeyframesRule),
+  /// An @starting-style rule defining initial transition styles.
+  StartingStyle(StartingStyleRule),
   /// A @scope rule limiting descendant styles to a subtree.
   Scope(ScopeRule),
   /// A @property rule registering a custom property.
@@ -1688,6 +1805,21 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
           names: layer_rule.names.clone(),
           rules: resolved_children,
           anonymous: layer_rule.anonymous,
+        }));
+      }
+      CssRule::StartingStyle(starting_rule) => {
+        let mut resolved_children = Vec::new();
+        resolve_rules(
+          &starting_rule.rules,
+          loader,
+          base_url,
+          media_ctx,
+          cache.as_deref_mut(),
+          seen,
+          &mut resolved_children,
+        );
+        out.push(CssRule::StartingStyle(StartingStyleRule {
+          rules: resolved_children,
         }));
       }
       CssRule::Import(import) => {

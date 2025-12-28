@@ -224,6 +224,7 @@ impl TableStructureFixer {
 
     BoxNode {
       style,
+      starting_style: None,
       box_type: BoxType::Anonymous(AnonymousBox {
         anonymous_type: AnonymousType::TableRow,
       }),
@@ -242,6 +243,7 @@ impl TableStructureFixer {
 
     BoxNode {
       style,
+      starting_style: None,
       box_type: BoxType::Anonymous(AnonymousBox {
         anonymous_type: AnonymousType::TableRowGroup,
       }),
@@ -260,6 +262,7 @@ impl TableStructureFixer {
 
     BoxNode {
       style,
+      starting_style: None,
       box_type: BoxType::Anonymous(AnonymousBox {
         anonymous_type: AnonymousType::TableCell,
       }),
@@ -278,6 +281,7 @@ impl TableStructureFixer {
 
     BoxNode {
       style,
+      starting_style: None,
       box_type: BoxType::Anonymous(AnonymousBox {
         anonymous_type: AnonymousType::TableWrapper,
       }),
@@ -623,6 +627,7 @@ mod tests {
   fn row_box(cells: Vec<BoxNode>) -> BoxNode {
     BoxNode {
       style: table_row_style(),
+      starting_style: None,
       box_type: BoxType::Block(BlockBox {
         formatting_context: FormattingContextType::Block,
       }),
@@ -639,6 +644,7 @@ mod tests {
   fn cell_box(content: Vec<BoxNode>) -> BoxNode {
     BoxNode {
       style: table_cell_style(),
+      starting_style: None,
       box_type: BoxType::Block(BlockBox {
         formatting_context: FormattingContextType::Block,
       }),
@@ -655,6 +661,7 @@ mod tests {
   fn row_group_box(rows: Vec<BoxNode>) -> BoxNode {
     BoxNode {
       style: table_row_group_style(),
+      starting_style: None,
       box_type: BoxType::Block(BlockBox {
         formatting_context: FormattingContextType::Block,
       }),
@@ -671,6 +678,7 @@ mod tests {
   fn caption_box(content: Vec<BoxNode>) -> BoxNode {
     BoxNode {
       style: table_caption_style(),
+      starting_style: None,
       box_type: BoxType::Block(BlockBox {
         formatting_context: FormattingContextType::Block,
       }),

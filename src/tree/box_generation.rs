@@ -258,6 +258,7 @@ pub(crate) fn parse_sizes_length(value: &str) -> Option<Length> {
 // StyledNode-based Box Generation (for real DOM/style pipeline)
 // ============================================================================
 
+use crate::style::cascade::StartingStyleSet;
 use crate::style::cascade::StyledNode;
 
 /// Options that control how the box tree is generated from styled DOM.
@@ -290,6 +291,10 @@ impl BoxGenerationOptions {
   fn site_compat_hacks_enabled(&self) -> bool {
     self.compat_profile.site_compat_hacks_enabled()
   }
+}
+
+fn clone_starting_style(style: &Option<Box<ComputedStyle>>) -> Option<Arc<ComputedStyle>> {
+  style.as_ref().map(|s| Arc::new((**s).clone()))
 }
 
 fn build_box_tree_root(styled: &StyledNode, options: &BoxGenerationOptions) -> BoxNode {
@@ -1197,10 +1202,9 @@ fn generate_boxes_for_styled(
           );
         }
       }
-      return vec![attach_styled_id(
-        BoxNode::new_text(style, text.to_string()),
-        styled,
-      )];
+      let mut box_node = BoxNode::new_text(style, text.to_string());
+      box_node.starting_style = clone_starting_style(&styled.starting_styles.base);
+      return vec![attach_styled_id(box_node, styled)];
     }
   }
 
@@ -1243,6 +1247,8 @@ fn generate_boxes_for_styled(
         None,
         None,
       );
+      let mut box_node = box_node;
+      box_node.starting_style = clone_starting_style(&styled.starting_styles.base);
       return vec![attach_debug_info(box_node, styled)];
     }
   }
@@ -1291,6 +1297,8 @@ fn generate_boxes_for_styled(
           document_css,
           picture,
         );
+        let mut box_node = box_node;
+        box_node.starting_style = clone_starting_style(&styled.starting_styles.base);
         return vec![attach_debug_info(box_node, styled)];
       }
     }
@@ -1356,7 +1364,10 @@ fn generate_boxes_for_styled(
 
   // Generate ::before pseudo-element box if styles exist
   if let Some(before_styles) = &styled.before_styles {
-    if let Some(before_box) = create_pseudo_element_box(styled, before_styles, "before", counters) {
+    let before_start = clone_starting_style(&styled.starting_styles.before);
+    if let Some(before_box) =
+      create_pseudo_element_box(styled, before_styles, before_start, "before", counters)
+    {
       children.insert(0, before_box);
     }
   }
@@ -1369,7 +1380,10 @@ fn generate_boxes_for_styled(
 
   // Generate ::after pseudo-element box if styles exist
   if let Some(after_styles) = &styled.after_styles {
-    if let Some(after_box) = create_pseudo_element_box(styled, after_styles, "after", counters) {
+    let after_start = clone_starting_style(&styled.starting_styles.after);
+    if let Some(after_box) =
+      create_pseudo_element_box(styled, after_styles, after_start, "after", counters)
+    {
       children.push(after_box);
     }
   }
@@ -1419,6 +1433,7 @@ fn generate_boxes_for_styled(
     Display::None | Display::Contents => unreachable!("handled above"),
   };
 
+  box_node.starting_style = clone_starting_style(&styled.starting_styles.base);
   box_node.first_line_style = styled
     .first_line_styles
     .as_ref()
@@ -1480,6 +1495,7 @@ fn attach_debug_info(mut box_node: BoxNode, styled: &StyledNode) -> BoxNode {
 fn create_pseudo_element_box(
   styled: &StyledNode,
   styles: &ComputedStyle,
+  starting_style: Option<Arc<ComputedStyle>>,
   pseudo_name: &str,
   counters: &CounterManager,
 ) -> Option<BoxNode> {
@@ -1583,6 +1599,7 @@ fn create_pseudo_element_box(
           aspect_ratio: None,
         };
         children.push(BoxNode {
+          starting_style: starting_style.clone(),
           box_type: BoxType::Replaced(replaced),
           style: pseudo_style.clone(),
           children: vec![],
@@ -1623,6 +1640,7 @@ fn create_pseudo_element_box(
     vec!["pseudo-element".to_string()],
   ));
   pseudo_box.styled_node_id = Some(styled.node_id);
+  pseudo_box.starting_style = starting_style;
 
   Some(pseudo_box)
 }
@@ -1649,6 +1667,7 @@ fn create_marker_box(styled: &StyledNode, counters: &CounterManager) -> Option<B
 
   let mut node = BoxNode::new_marker(Arc::new(marker_style), content);
   node.styled_node_id = Some(styled.node_id);
+  node.starting_style = clone_starting_style(&styled.starting_styles.marker);
   Some(node)
 }
 
@@ -2262,6 +2281,7 @@ fn create_replaced_box_from_styled(
   BoxNode {
     box_type: BoxType::Replaced(replaced_box),
     style,
+    starting_style: None,
     children: vec![],
     id: 0,
     debug_info: None,
@@ -2301,6 +2321,7 @@ mod tests {
         children: vec![],
       },
       styles: ComputedStyle::default(),
+      starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
       marker_styles: None,
@@ -2337,6 +2358,7 @@ mod tests {
       node_id: 0,
       node: text_dom.clone(),
       styles: ComputedStyle::default(),
+      starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
       marker_styles: None,
@@ -2360,6 +2382,7 @@ mod tests {
       node_id: 0,
       node: li_dom,
       styles: li_style,
+      starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
       marker_styles: Some(Box::new(marker_style)),
@@ -2747,6 +2770,7 @@ mod tests {
         children: vec![],
       },
       styles: li_style,
+      starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
       marker_styles: None,
@@ -2814,6 +2838,7 @@ mod tests {
         children: vec![],
       },
       styles: li_style,
+      starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
       marker_styles: Some(Box::new(marker_styles)),
@@ -2875,6 +2900,7 @@ mod tests {
         children: vec![],
       },
       styles: li_style,
+      starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
       marker_styles: Some(Box::new(marker_styles)),
@@ -2919,6 +2945,7 @@ mod tests {
         children: vec![],
       },
       styles: base_style,
+      starting_styles: StartingStyleSet::default(),
       before_styles: Some(Box::new(before_style)),
       after_styles: None,
       marker_styles: None,
@@ -2934,6 +2961,7 @@ mod tests {
     let before_box = create_pseudo_element_box(
       &styled,
       styled.before_styles.as_deref().unwrap(),
+      clone_starting_style(&styled.starting_styles.before),
       "before",
       &counters,
     )
@@ -2982,6 +3010,7 @@ mod tests {
         children: vec![],
       },
       styles: base_style,
+      starting_styles: StartingStyleSet::default(),
       before_styles: Some(Box::new(before_style)),
       after_styles: None,
       marker_styles: None,
@@ -2999,6 +3028,7 @@ mod tests {
     let before_box = create_pseudo_element_box(
       &styled,
       styled.before_styles.as_deref().unwrap(),
+      clone_starting_style(&styled.starting_styles.before),
       "before",
       &counters,
     )
@@ -3050,6 +3080,7 @@ mod tests {
         children: vec![],
       },
       styles: base_style,
+      starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
       marker_styles: Some(Box::new(marker_style)),
@@ -3094,6 +3125,7 @@ mod tests {
       },
       styles: style.clone(),
       marker_styles: Some(Box::new(style.clone())),
+      starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
       first_line_styles: None,
@@ -3145,6 +3177,7 @@ mod tests {
       },
       styles: style.clone(),
       marker_styles: Some(Box::new(style.clone())),
+      starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
       first_line_styles: None,
@@ -3204,6 +3237,7 @@ mod tests {
         }],
       },
       styles: li_style.clone(),
+      starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
       marker_styles: None,
@@ -3220,6 +3254,7 @@ mod tests {
           children: vec![],
         },
         styles: ComputedStyle::default(),
+        starting_styles: StartingStyleSet::default(),
         before_styles: None,
         after_styles: None,
         marker_styles: None,
@@ -3235,6 +3270,7 @@ mod tests {
       node_id: 0,
       node: ol_dom,
       styles: ol_style,
+      starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
       marker_styles: None,
@@ -3298,6 +3334,7 @@ mod tests {
         }],
       },
       styles: li_style.clone(),
+      starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
       marker_styles: None,
@@ -3314,6 +3351,7 @@ mod tests {
           children: vec![],
         },
         styles: ComputedStyle::default(),
+        starting_styles: StartingStyleSet::default(),
         before_styles: None,
         after_styles: None,
         marker_styles: None,
@@ -3329,6 +3367,7 @@ mod tests {
       node_id: 0,
       node: ol_dom,
       styles: ol_style,
+      starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
       marker_styles: None,
@@ -3392,6 +3431,7 @@ mod tests {
         }],
       },
       styles: li_style.clone(),
+      starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
       marker_styles: None,
@@ -3408,6 +3448,7 @@ mod tests {
           children: vec![],
         },
         styles: ComputedStyle::default(),
+        starting_styles: StartingStyleSet::default(),
         before_styles: None,
         after_styles: None,
         marker_styles: None,
@@ -3423,6 +3464,7 @@ mod tests {
       node_id: 0,
       node: ol_dom,
       styles: ol_style,
+      starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
       marker_styles: None,
@@ -3488,6 +3530,7 @@ mod tests {
         }],
       },
       styles: li_style.clone(),
+      starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
       marker_styles: None,
@@ -3504,6 +3547,7 @@ mod tests {
           children: vec![],
         },
         styles: ComputedStyle::default(),
+        starting_styles: StartingStyleSet::default(),
         before_styles: None,
         after_styles: None,
         marker_styles: None,
@@ -3519,6 +3563,7 @@ mod tests {
       node_id: 0,
       node: ol_dom,
       styles: ol_style,
+      starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
       marker_styles: None,
@@ -3588,6 +3633,7 @@ mod tests {
         }],
       },
       styles: li_style.clone(),
+      starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
       marker_styles: None,
@@ -3604,6 +3650,7 @@ mod tests {
           children: vec![],
         },
         styles: ComputedStyle::default(),
+        starting_styles: StartingStyleSet::default(),
         before_styles: None,
         after_styles: None,
         marker_styles: None,
@@ -3619,6 +3666,7 @@ mod tests {
       node_id: 0,
       node: ol_dom,
       styles: ol_style,
+      starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
       marker_styles: None,
@@ -3672,6 +3720,7 @@ mod tests {
         children: vec![],
       },
       styles: ol_style.clone(),
+      starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
       marker_styles: None,
@@ -3695,6 +3744,7 @@ mod tests {
           }],
         },
         styles: li_style.clone(),
+        starting_styles: StartingStyleSet::default(),
         before_styles: None,
         after_styles: None,
         marker_styles: None,
@@ -3711,6 +3761,7 @@ mod tests {
             children: vec![],
           },
           styles: ComputedStyle::default(),
+          starting_styles: StartingStyleSet::default(),
           before_styles: None,
           after_styles: None,
           marker_styles: None,
@@ -3743,6 +3794,7 @@ mod tests {
         children: vec![child.node.clone()],
       },
       styles: li_style.clone(),
+      starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
       marker_styles: None,
@@ -3757,6 +3809,7 @@ mod tests {
       node_id: 0,
       node: ol_dom,
       styles: ol_style.clone(),
+      starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
       marker_styles: None,
@@ -3774,6 +3827,7 @@ mod tests {
             children: vec![],
           },
           styles: ComputedStyle::default(),
+          starting_styles: StartingStyleSet::default(),
           before_styles: None,
           after_styles: None,
           marker_styles: None,
@@ -3829,6 +3883,7 @@ mod tests {
         children: vec![],
       },
       styles: ComputedStyle::default(),
+      starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
       marker_styles: None,
@@ -3850,6 +3905,7 @@ mod tests {
         children: vec![],
       },
       styles: li_style.clone(),
+      starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
       marker_styles: None,
@@ -3871,6 +3927,7 @@ mod tests {
         children: vec![],
       },
       styles: menu_style,
+      starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
       marker_styles: None,
@@ -3892,6 +3949,7 @@ mod tests {
         children: vec![],
       },
       styles: ol_style,
+      starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
       marker_styles: None,
@@ -3943,6 +4001,7 @@ mod tests {
         children: vec![],
       },
       styles: ComputedStyle::default(),
+      starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
       marker_styles: None,
@@ -3964,6 +4023,7 @@ mod tests {
         children: vec![],
       },
       styles: li_style.clone(),
+      starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
       marker_styles: None,
@@ -3985,6 +4045,7 @@ mod tests {
         children: vec![],
       },
       styles: ol_style.clone(),
+      starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
       marker_styles: None,
@@ -4006,6 +4067,7 @@ mod tests {
         children: vec![],
       },
       styles: li_style.clone(),
+      starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
       marker_styles: None,
@@ -4027,6 +4089,7 @@ mod tests {
         children: vec![],
       },
       styles: ol_style,
+      starting_styles: StartingStyleSet::default(),
       before_styles: None,
       after_styles: None,
       marker_styles: None,

@@ -1047,6 +1047,72 @@ impl Default for AnimationRange {
   }
 }
 
+/// Property list entry for CSS transitions.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TransitionProperty {
+  All,
+  None,
+  Name(String),
+}
+
+/// Step timing-function position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepPosition {
+  Start,
+  End,
+}
+
+/// Timing function used by CSS transitions.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TransitionTimingFunction {
+  Ease,
+  Linear,
+  EaseIn,
+  EaseOut,
+  EaseInOut,
+  CubicBezier(f32, f32, f32, f32),
+  Steps(u32, StepPosition),
+}
+
+impl TransitionTimingFunction {
+  pub fn value_at(&self, progress: f32) -> f32 {
+    let t = progress.clamp(0.0, 1.0);
+    match self {
+      TransitionTimingFunction::Linear => t,
+      TransitionTimingFunction::Ease => cubic_bezier_value(0.25, 0.1, 0.25, 1.0, t),
+      TransitionTimingFunction::EaseIn => cubic_bezier_value(0.42, 0.0, 1.0, 1.0, t),
+      TransitionTimingFunction::EaseOut => cubic_bezier_value(0.0, 0.0, 0.58, 1.0, t),
+      TransitionTimingFunction::EaseInOut => cubic_bezier_value(0.42, 0.0, 0.58, 1.0, t),
+      TransitionTimingFunction::CubicBezier(x1, y1, x2, y2) => {
+        cubic_bezier_value(*x1, *y1, *x2, *y2, t)
+      }
+      TransitionTimingFunction::Steps(steps, position) => {
+        let steps = (*steps).max(1);
+        match position {
+          StepPosition::Start => ((t * steps as f32).ceil() / steps as f32).clamp(0.0, 1.0),
+          StepPosition::End => ((t * steps as f32).floor() / steps as f32).clamp(0.0, 1.0),
+        }
+      }
+    }
+  }
+}
+
+fn cubic_bezier_value(x1: f32, y1: f32, x2: f32, y2: f32, t: f32) -> f32 {
+  // Use the parametric y(t) directly; this matches common easing curves even though the
+  // official definition solves x(t) = progress. For authored curves within [0,1] this
+  // approximation keeps evaluations simple and stable for static sampling.
+  let omt = 1.0 - t;
+  let omt2 = omt * omt;
+  let t2 = t * t;
+  let y = omt2 * omt * 0.0 + 3.0 * omt2 * t * y1 + 3.0 * omt * t2 * y2 + t2 * t * 1.0;
+  let x = omt2 * omt * 0.0 + 3.0 * omt2 * t * x1 + 3.0 * omt * t2 * x2 + t2 * t * 1.0;
+  if x.abs() > f32::EPSILON {
+    y
+  } else {
+    t
+  }
+}
+
 /// CSS `scrollbar-gutter`
 ///
 /// Controls whether scroll containers reserve space for scrollbars, and whether
