@@ -12,14 +12,10 @@ use crate::style::counter_styles::CounterStyleRule;
 use crate::style::media::MediaContext;
 use crate::style::media::MediaQuery;
 use crate::style::media::MediaQueryCache;
-use crate::style::values::CustomPropertySyntax;
-use crate::style::values::CustomPropertyValue;
 use crate::style::values::Length;
-use cssparser::ParseError;
 use cssparser::Parser;
 use cssparser::ParserInput;
 use cssparser::ToCss;
-use cssparser::Token;
 use selectors::parser::SelectorList;
 use std::fmt;
 
@@ -424,59 +420,6 @@ impl StyleSheet {
     result
   }
 
-  /// Collects @property rules that apply to the current media context.
-  pub fn collect_property_rules(&self, media_ctx: &MediaContext) -> Vec<PropertyRule> {
-    self.collect_property_rules_with_cache(media_ctx, None)
-  }
-
-  /// Collects @property rules using an optional media-query cache.
-  pub fn collect_property_rules_with_cache(
-    &self,
-    media_ctx: &MediaContext,
-    mut cache: Option<&mut MediaQueryCache>,
-  ) -> Vec<PropertyRule> {
-    fn walk(
-      rules: &[CssRule],
-      media_ctx: &MediaContext,
-      cache: Option<&mut MediaQueryCache>,
-      out: &mut Vec<PropertyRule>,
-    ) {
-      let mut cache = cache;
-      for rule in rules {
-        match rule {
-          CssRule::Property(p) => out.push(p.clone()),
-          CssRule::Media(media) => {
-            if media_ctx.evaluate_list_with_cache(&media.queries, cache.as_deref_mut()) {
-              walk(&media.rules, media_ctx, cache.as_deref_mut(), out);
-            }
-          }
-          CssRule::Supports(supports) => {
-            if supports.condition.matches() {
-              walk(&supports.rules, media_ctx, cache.as_deref_mut(), out);
-            }
-          }
-          CssRule::Layer(layer) => walk(&layer.rules, media_ctx, cache.as_deref_mut(), out),
-          CssRule::Style(style) => walk(&style.nested_rules, media_ctx, cache.as_deref_mut(), out),
-          CssRule::Container(container) => {
-            if media_ctx.evaluate_list_with_cache(&container.query_list, cache.as_deref_mut()) {
-              walk(&container.rules, media_ctx, cache.as_deref_mut(), out);
-            }
-          }
-          CssRule::Scope(scope) => walk(&scope.rules, media_ctx, cache.as_deref_mut(), out),
-          CssRule::Page(_)
-          | CssRule::CounterStyle(_)
-          | CssRule::Import(_)
-          | CssRule::FontFace(_)
-          | CssRule::Keyframes(_) => {}
-        }
-      }
-    }
-
-    let mut out = Vec::new();
-    walk(&self.rules, media_ctx, cache.as_deref_mut(), &mut out);
-    out
-  }
-
   /// Resolve @import rules by fetching external stylesheets and inlining their rules.
   ///
   /// Imports are processed in order; only imports whose media lists match the provided
@@ -601,8 +544,7 @@ impl StyleSheet {
           | CssRule::CounterStyle(_)
           | CssRule::Import(_)
           | CssRule::FontFace(_)
-          | CssRule::Keyframes(_)
-          | CssRule::Property(_) => {}
+          | CssRule::Keyframes(_) => {}
         }
       }
       false
@@ -657,8 +599,8 @@ fn collect_rules_recursive<'a>(
         }
       }
       CssRule::Media(media_rule) => {
-        // Only include rules from @media blocks that match (empty query lists are non-matching).
-        if media_ctx.evaluate_list_with_cache(&media_rule.queries, cache.as_deref_mut()) {
+        // Only include rules from @media blocks that match
+        if media_ctx.evaluate_with_cache(&media_rule.query, cache.as_deref_mut()) {
           collect_rules_recursive(
             &media_rule.rules,
             media_ctx,
@@ -676,7 +618,7 @@ fn collect_rules_recursive<'a>(
         let mut updated_conditions = container_conditions.to_vec();
         updated_conditions.push(ContainerCondition {
           name: container_rule.name.clone(),
-          query_list: container_rule.query_list.clone(),
+          query: container_rule.query.clone(),
         });
         collect_rules_recursive(
           &container_rule.rules,
@@ -711,7 +653,6 @@ fn collect_rules_recursive<'a>(
         // Imports are resolved before collection; nothing to add here.
       }
       CssRule::Keyframes(_) => {}
-      CssRule::Property(_) => {}
       CssRule::Layer(layer_rule) => {
         if layer_rule.rules.is_empty() {
           for name in &layer_rule.names {
@@ -819,7 +760,7 @@ fn collect_page_rules_recursive<'a>(
         });
       }
       CssRule::Media(media_rule) => {
-        if media_ctx.evaluate_list_with_cache(&media_rule.queries, cache.as_deref_mut()) {
+        if media_ctx.evaluate_with_cache(&media_rule.query, cache.as_deref_mut()) {
           collect_page_rules_recursive(
             &media_rule.rules,
             media_ctx,
@@ -883,7 +824,6 @@ fn collect_page_rules_recursive<'a>(
       CssRule::Container(_) => {}
       CssRule::Keyframes(_) | CssRule::CounterStyle(_) => {}
       CssRule::Style(_) | CssRule::Import(_) | CssRule::FontFace(_) => {}
-      CssRule::Property(_) => {}
       CssRule::Scope(scope_rule) => {
         collect_page_rules_recursive(
           &scope_rule.rules,
@@ -919,12 +859,12 @@ fn collect_font_faces_recursive(
     match rule {
       CssRule::FontFace(face) => out.push(face.clone()),
       CssRule::Media(media_rule) => {
-        if media_ctx.evaluate_list_with_cache(&media_rule.queries, cache.as_deref_mut()) {
+        if media_ctx.evaluate_with_cache(&media_rule.query, cache.as_deref_mut()) {
           collect_font_faces_recursive(&media_rule.rules, media_ctx, cache.as_deref_mut(), out);
         }
       }
       CssRule::Container(container_rule) => {
-        if media_ctx.evaluate_list_with_cache(&container_rule.query_list, cache.as_deref_mut()) {
+        if media_ctx.evaluate_with_cache(&container_rule.query, cache.as_deref_mut()) {
           collect_font_faces_recursive(&container_rule.rules, media_ctx, cache.as_deref_mut(), out);
         }
       }
@@ -950,7 +890,6 @@ fn collect_font_faces_recursive(
       }
       CssRule::Style(_) | CssRule::Import(_) => {}
       CssRule::Keyframes(_) => {}
-      CssRule::Property(_) => {}
       CssRule::Scope(scope_rule) => {
         collect_font_faces_recursive(&scope_rule.rules, media_ctx, cache.as_deref_mut(), out);
       }
@@ -972,12 +911,12 @@ fn collect_keyframes_recursive(
     match rule {
       CssRule::Keyframes(kf) => out.push(kf.clone()),
       CssRule::Media(media_rule) => {
-        if media_ctx.evaluate_list_with_cache(&media_rule.queries, cache.as_deref_mut()) {
+        if media_ctx.evaluate_with_cache(&media_rule.query, cache.as_deref_mut()) {
           collect_keyframes_recursive(&media_rule.rules, media_ctx, cache.as_deref_mut(), out);
         }
       }
       CssRule::Container(container_rule) => {
-        if media_ctx.evaluate_list_with_cache(&container_rule.query_list, cache.as_deref_mut()) {
+        if media_ctx.evaluate_with_cache(&container_rule.query, cache.as_deref_mut()) {
           collect_keyframes_recursive(&container_rule.rules, media_ctx, cache.as_deref_mut(), out);
         }
       }
@@ -994,7 +933,6 @@ fn collect_keyframes_recursive(
       }
       CssRule::Page(_) | CssRule::CounterStyle(_) => {}
       CssRule::Style(_) | CssRule::Import(_) | CssRule::FontFace(_) => {}
-      CssRule::Property(_) => {}
       CssRule::Scope(scope_rule) => {
         collect_keyframes_recursive(&scope_rule.rules, media_ctx, cache.as_deref_mut(), out);
       }
@@ -1030,7 +968,7 @@ fn collect_counter_styles_recursive<'a>(
         });
       }
       CssRule::Media(media_rule) => {
-        if media_ctx.evaluate_list_with_cache(&media_rule.queries, cache.as_deref_mut()) {
+        if media_ctx.evaluate_with_cache(&media_rule.query, cache.as_deref_mut()) {
           collect_counter_styles_recursive(
             &media_rule.rules,
             media_ctx,
@@ -1126,9 +1064,6 @@ fn collect_counter_styles_recursive<'a>(
       CssRule::Page(_) => {}
       CssRule::FontFace(_) => {}
       CssRule::Keyframes(_) => {}
-<<<<<<< HEAD
-      CssRule::Property(_) => {}
-=======
       CssRule::StartingStyle(starting_rule) => {
         collect_counter_styles_recursive(
           &starting_rule.rules,
@@ -1139,7 +1074,6 @@ fn collect_counter_styles_recursive<'a>(
           out,
         );
       }
->>>>>>> 12d523a (Add @starting-style transition sampling)
     }
   }
 }
@@ -1165,98 +1099,19 @@ impl SupportsCondition {
 
 /// Determines whether a selector list is supported for @supports selector() queries.
 ///
-/// The selector list uses forgiving parsing: if any selector in the list parses successfully with
-/// the engine's selector grammar, the overall condition is considered true.
+/// The selector is considered supported when it parses successfully with the engine's selector
+/// grammar. Selectors that fail to parse evaluate to false.
 fn supports_selector_is_valid(selector_list: &str) -> bool {
-  for selector in split_selector_list(selector_list) {
-    let mut input = ParserInput::new(&selector);
-    let mut parser = Parser::new(&mut input);
-    if SelectorList::parse(
-      &PseudoClassParser,
-      &mut parser,
-      selectors::parser::ParseRelative::No,
-    )
-    .is_ok()
-    {
-      return true;
-    }
-  }
-
-  false
-}
-
-fn split_selector_list(selector_list: &str) -> Vec<String> {
   let mut input = ParserInput::new(selector_list);
   let mut parser = Parser::new(&mut input);
-  let mut parts = Vec::new();
-  let mut segment_start = parser.position();
-
-  while !parser.is_exhausted() {
-    let token = match parser.next_including_whitespace() {
-      Ok(token) => token,
-      Err(_) => break,
-    };
-
-    match token {
-      Token::Comma => {
-        let raw = parser.slice_from(segment_start);
-        if let Some(stripped) = raw.strip_suffix(',') {
-          let trimmed = stripped.trim();
-          if !trimmed.is_empty() {
-            parts.push(trimmed.to_string());
-          }
-        }
-        segment_start = parser.position();
-      }
-      Token::Function(_)
-      | Token::ParenthesisBlock
-      | Token::SquareBracketBlock
-      | Token::CurlyBracketBlock => {
-        if parser
-          .parse_nested_block(consume_nested_tokens_for_selector_split)
-          .is_err()
-        {
-          break;
-        }
-      }
-      _ => {}
-    }
+  match SelectorList::parse(
+    &PseudoClassParser,
+    &mut parser,
+    selectors::parser::ParseRelative::No,
+  ) {
+    Ok(_) => true,
+    Err(_) => false,
   }
-
-  let tail = parser.slice_from(segment_start).trim();
-  if !tail.is_empty() {
-    parts.push(tail.to_string());
-  }
-
-  parts
-}
-
-fn consume_nested_tokens_for_selector_split<'i, 't>(
-  parser: &mut Parser<'i, 't>,
-) -> Result<(), ParseError<'i, ()>> {
-  while !parser.is_exhausted() {
-    let token = match parser.next_including_whitespace() {
-      Ok(token) => token,
-      Err(_) => break,
-    };
-
-    match token {
-      Token::Function(_)
-      | Token::ParenthesisBlock
-      | Token::SquareBracketBlock
-      | Token::CurlyBracketBlock => {
-        if parser
-          .parse_nested_block(consume_nested_tokens_for_selector_split)
-          .is_err()
-        {
-          break;
-        }
-      }
-      _ => {}
-    }
-  }
-
-  Ok(())
 }
 
 #[cfg(test)]
@@ -1279,33 +1134,15 @@ mod tests {
   }
 
   #[test]
-  fn supports_selector_is_forgiving_for_selector_list() {
+  fn supports_selector_handles_invalid_selector_list() {
     let cond = SupportsCondition::Selector("div:unknown-pseudo, span".into());
     assert!(
-      cond.matches(),
-      "selector() should match when at least one selector in the list is supported"
+      !cond.matches(),
+      "selector() should fail when any selector in the list is unsupported"
     );
 
     let cond = SupportsCondition::Selector("div + span".into());
     assert!(cond.matches(), "supported selector list should be accepted");
-  }
-
-  #[test]
-  fn supports_selector_fails_when_no_selectors_supported() {
-    let cond = SupportsCondition::Selector(":unknown-pseudo, :also-unknown".into());
-    assert!(
-      !cond.matches(),
-      "selector() should fail when no selectors in the list are supported"
-    );
-  }
-
-  #[test]
-  fn supports_selector_respects_nested_commas() {
-    let cond = SupportsCondition::Selector(":is(.ok, .also-ok), :unknown-pseudo".into());
-    assert!(
-      cond.matches(),
-      "commas inside functional pseudos should not split the selector list for selector()"
-    );
   }
 
   #[test]
@@ -1429,15 +1266,13 @@ pub enum CssRule {
   StartingStyle(StartingStyleRule),
   /// A @scope rule limiting descendant styles to a subtree.
   Scope(ScopeRule),
-  /// A @property rule registering a custom property.
-  Property(PropertyRule),
 }
 
 /// A @media rule containing conditional rules
 #[derive(Debug, Clone)]
 pub struct MediaRule {
-  /// Media queries to evaluate with OR semantics (a match when any query is true).
-  pub queries: Vec<MediaQuery>,
+  /// The media query to evaluate
+  pub query: MediaQuery,
   /// Rules that apply when query matches (can be nested)
   pub rules: Vec<CssRule>,
 }
@@ -1445,10 +1280,10 @@ pub struct MediaRule {
 /// A @container rule containing conditional rules
 #[derive(Debug, Clone)]
 pub struct ContainerRule {
-  /// Optional named container to target.
+  /// Optional named container list to target (ignored for now).
   pub name: Option<String>,
-  /// Container query list to evaluate (size queries only, OR semantics).
-  pub query_list: Vec<MediaQuery>,
+  /// The container query to evaluate (size queries only).
+  pub query: MediaQuery,
   /// Rules that apply when query matches (can be nested)
   pub rules: Vec<CssRule>,
 }
@@ -1469,8 +1304,8 @@ pub struct ScopeRule {
 pub struct ContainerCondition {
   /// Optional container name to match (None targets the nearest container).
   pub name: Option<String>,
-  /// Parsed container queries (size queries only, OR semantics).
-  pub query_list: Vec<MediaQuery>,
+  /// The parsed container query (size queries only at present).
+  pub query: MediaQuery,
 }
 
 /// A scoping context attached to collected style rules.
@@ -1512,15 +1347,6 @@ pub enum SupportsCondition {
   False,
 }
 
-/// Cascade layer modifier attached to an @import rule.
-#[derive(Debug, Clone)]
-pub enum ImportLayer {
-  /// Anonymous layer (equivalent to `@layer { ... }`).
-  Anonymous,
-  /// Named layer path, potentially dotted (e.g., `foo.bar`).
-  Named(Vec<String>),
-}
-
 /// A @import rule targeting another stylesheet
 #[derive(Debug, Clone)]
 pub struct ImportRule {
@@ -1528,23 +1354,6 @@ pub struct ImportRule {
   pub href: String,
   /// Optional list of media queries that gate the import
   pub media: Vec<MediaQuery>,
-  /// Optional cascade layer modifier.
-  pub layer: Option<ImportLayer>,
-  /// Optional @supports condition gating the import.
-  pub supports: Option<SupportsCondition>,
-}
-
-/// A @property rule registering a custom property.
-#[derive(Debug, Clone)]
-pub struct PropertyRule {
-  /// Registered custom property name (must start with `--`).
-  pub name: String,
-  /// Value syntax descriptor.
-  pub syntax: CustomPropertySyntax,
-  /// Whether the property inherits by default.
-  pub inherits: bool,
-  /// Optional initial value validated against the syntax.
-  pub initial_value: Option<CustomPropertyValue>,
 }
 
 /// A single CSS style rule (selectors + declarations)
@@ -1750,7 +1559,7 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
         );
         out.push(CssRule::Container(ContainerRule {
           name: container_rule.name.clone(),
-          query_list: container_rule.query_list.clone(),
+          query: container_rule.query.clone(),
           rules: resolved_children,
         }));
       }
@@ -1823,12 +1632,6 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
         }));
       }
       CssRule::Import(import) => {
-        if let Some(condition) = &import.supports {
-          if !condition.matches() {
-            continue;
-          }
-        }
-
         let media_matches = import.media.is_empty()
           || media_ctx.evaluate_list_with_cache(&import.media, cache.as_deref_mut());
         if !media_matches {
@@ -1853,7 +1656,6 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
           Ok(css_text) => {
             seen.insert(resolved_href.clone());
             if let Ok(sheet) = crate::css::parser::parse_stylesheet(&css_text) {
-              let mut resolved_children = Vec::new();
               resolve_rules(
                 &sheet.rules,
                 loader,
@@ -1861,35 +1663,14 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
                 media_ctx,
                 cache.as_deref_mut(),
                 seen,
-                &mut resolved_children,
+                out,
               );
-
-              if let Some(layer) = &import.layer {
-                let layer_rule = match layer {
-                  ImportLayer::Anonymous => LayerRule {
-                    names: Vec::new(),
-                    rules: resolved_children,
-                    anonymous: true,
-                  },
-                  ImportLayer::Named(path) => LayerRule {
-                    names: vec![path.clone()],
-                    rules: resolved_children,
-                    anonymous: false,
-                  },
-                };
-                out.push(CssRule::Layer(layer_rule));
-              } else {
-                out.extend(resolved_children);
-              }
             }
           }
           Err(_) => {
             // Per spec, failed imports are ignored.
           }
         }
-      }
-      CssRule::Property(property) => {
-        out.push(CssRule::Property(property.clone()));
       }
     }
   }

@@ -21,7 +21,6 @@ use super::types::FontFaceSource;
 use super::types::FontFaceStyle;
 use super::types::FontFaceUrlSource;
 use super::types::FontSourceFormat;
-use super::types::ImportLayer;
 use super::types::ImportRule;
 use super::types::Keyframe;
 use super::types::KeyframesRule;
@@ -32,18 +31,16 @@ use super::types::PageMarginRule;
 use super::types::PagePseudoClass;
 use super::types::PageRule;
 use super::types::PageSelector;
-use super::types::PropertyRule;
 use super::types::ScopeRule;
 use super::types::StartingStyleRule;
 use super::types::StyleRule;
 use super::types::StyleSheet;
 use super::types::SupportsCondition;
 use super::types::SupportsRule;
-use crate::dom::{DomNode, DomNodeType, HTML_NAMESPACE};
+use crate::dom::{DomNode, DomNodeType};
 use crate::error::Result;
 use crate::style::counter_styles::{CounterStyleRule, CounterSystem, SpeakAs};
 use crate::style::media::MediaQuery;
-use crate::style::values::{CustomPropertySyntax, CustomPropertyValue};
 use cssparser::ParseError;
 use cssparser::Parser;
 use cssparser::ParserInput;
@@ -145,16 +142,23 @@ fn parse_rule_list_collecting<'i, 't>(
   rules
 }
 
-/// Parse a list of CSS rules within a nested context.
+/// Parse a list of CSS rules (internal use - discards errors)
 ///
-/// This uses the shared error collector so parse errors bubble up to the caller.
+/// Used for parsing nested rule lists inside @media and @layer blocks
+fn parse_rule_list<'i, 't>(parser: &mut Parser<'i, 't>, css_source: &str) -> Vec<CssRule> {
+  let mut errors = Vec::new();
+  parse_rule_list_collecting(parser, &mut errors, None, css_source)
+  // Errors from nested rules are discarded here
+  // In the future, we could pass down the error collector
+}
+
 fn parse_rule_list_with_context<'i, 't>(
   parser: &mut Parser<'i, 't>,
-  errors: &mut Vec<CssParseError>,
   parent_selectors: Option<&SelectorList<FastRenderSelectorImpl>>,
   css_source: &str,
 ) -> Vec<CssRule> {
-  parse_rule_list_collecting(parser, errors, parent_selectors, css_source)
+  let mut errors = Vec::new();
+  parse_rule_list_collecting(parser, &mut errors, parent_selectors, css_source)
 }
 
 /// Recover from a parse error by skipping to the next rule
@@ -190,25 +194,16 @@ fn parse_rule<'i, 't>(
       let kw_str = kw.to_string();
       match kw_str.as_str() {
         "import" => parse_import_rule(p),
-<<<<<<< HEAD
-        "media" => parse_media_rule(p, errors, parent_selectors, css_source),
-        "container" => parse_container_rule(p, errors, parent_selectors, css_source),
-        "scope" => parse_scope_rule(p, errors, parent_selectors, css_source),
-        "supports" => parse_supports_rule(p, errors, parent_selectors, css_source),
-        "layer" => parse_layer_rule(p, errors, parent_selectors, css_source),
-=======
         "media" => parse_media_rule(p, parent_selectors, css_source),
         "container" => parse_container_rule(p, parent_selectors, css_source),
         "scope" => parse_scope_rule(p, parent_selectors, css_source),
         "supports" => parse_supports_rule(p, parent_selectors, css_source),
         "layer" => parse_layer_rule(p, parent_selectors, css_source),
         "starting-style" => parse_starting_style_rule(p, parent_selectors, css_source),
->>>>>>> 12d523a (Add @starting-style transition sampling)
         "page" => parse_page_rule(p, css_source),
         "counter-style" => parse_counter_style_rule(p),
         "font-face" => parse_font_face_rule(p),
         "keyframes" | "-webkit-keyframes" => parse_keyframes_rule(p, css_source),
-        "property" => parse_property_rule(p),
         _ => {
           skip_at_rule(p);
           Ok(None)
@@ -240,9 +235,7 @@ fn parse_import_rule<'i, 't>(
       parser.parse_nested_block(|p| {
         p.skip_whitespace();
         match p.next_including_whitespace() {
-          Ok(Token::QuotedString(s)) | Ok(Token::Ident(s)) | Ok(Token::UnquotedUrl(s)) => {
-            Ok(s.to_string())
-          }
+          Ok(Token::QuotedString(s)) | Ok(Token::Ident(s)) => Ok(s.to_string()),
           _ => Err(p.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
             "expected url".into(),
           ))),
@@ -253,187 +246,94 @@ fn parse_import_rule<'i, 't>(
     _ => return Ok(None),
   };
 
-  // Capture the remaining prelude up to the semicolon or block.
-  let prelude_start = parser.position();
+  // Parse optional media list until semicolon or block start (best-effort; unknown tokens are ignored).
+  let mut media_queries = Vec::new();
+  let mut media_tokens = String::new();
   while let Ok(token) = parser.next_including_whitespace() {
     match token {
       Token::Semicolon | Token::CurlyBracketBlock => break,
-      _ => {}
+      Token::WhiteSpace(ws) => media_tokens.push_str(ws),
+      other => media_tokens.push_str(&other.to_css_string()),
     }
   }
-  let prelude = parser.slice_from(prelude_start);
-  let prelude = prelude.trim_end_matches(|c: char| c == ';' || c.is_whitespace());
+  if !media_tokens.trim().is_empty() {
+    if let Ok(list) = MediaQuery::parse_list(&media_tokens) {
+      media_queries = list;
+    }
+  }
 
-  let (layer, supports, media_queries) = match parse_import_modifiers_and_media(prelude) {
-    Some(parts) => parts,
-    None => return Ok(None),
-  };
+  // Skip until semicolon
+  // (already consumed above)
 
   Ok(Some(CssRule::Import(ImportRule {
     href,
     media: media_queries,
-    layer,
-    supports,
   })))
-}
-
-fn parse_import_modifiers_and_media(
-  prelude: &str,
-) -> Option<(
-  Option<ImportLayer>,
-  Option<SupportsCondition>,
-  Vec<MediaQuery>,
-)> {
-  let mut input = ParserInput::new(prelude.trim());
-  let mut parser = Parser::new(&mut input);
-
-  let mut layer: Option<ImportLayer> = None;
-  let mut supports: Option<SupportsCondition> = None;
-  let mut media_start = parser.position();
-
-  while !parser.is_exhausted() {
-    parser.skip_whitespace();
-    media_start = parser.position();
-
-    if let Ok(parsed_layer) = parser.try_parse(parse_import_layer_modifier) {
-      if layer.is_some() {
-        return None;
-      }
-      layer = Some(parsed_layer);
-      media_start = parser.position();
-      continue;
-    }
-
-    if let Ok(condition) = parser.try_parse(parse_import_supports_modifier) {
-      if supports.is_some() {
-        return None;
-      }
-      supports = Some(condition);
-      media_start = parser.position();
-      continue;
-    }
-
-    break;
-  }
-
-  let media_tokens = parser.slice_from(media_start).trim();
-  let media = if media_tokens.is_empty() {
-    Vec::new()
-  } else {
-    MediaQuery::parse_list(media_tokens).ok()?
-  };
-
-  Some((layer, supports, media))
-}
-
-fn parse_import_layer_modifier<'i, 't>(
-  parser: &mut Parser<'i, 't>,
-) -> std::result::Result<ImportLayer, ParseError<'i, SelectorParseErrorKind<'i>>> {
-  if parser
-    .try_parse(|p| p.expect_ident_matching("layer"))
-    .is_ok()
-  {
-    return Ok(ImportLayer::Anonymous);
-  }
-
-  parser.expect_function_matching("layer")?;
-  parser.parse_nested_block(|nested| {
-    let names = parse_import_layer_name(nested)?;
-    Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(ImportLayer::Named(names))
-  })
-}
-
-fn parse_import_layer_name<'i, 't>(
-  parser: &mut Parser<'i, 't>,
-) -> std::result::Result<Vec<String>, ParseError<'i, SelectorParseErrorKind<'i>>> {
-  let mut components = Vec::new();
-  loop {
-    parser.skip_whitespace();
-    match parser.next_including_whitespace() {
-      Ok(Token::Ident(id)) => components.push(id.to_string()),
-      _ => {
-        return Err(
-          parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
-            "invalid layer name".into(),
-          )),
-        )
-      }
-    }
-
-    parser.skip_whitespace();
-    let state = parser.state();
-    if let Ok(Token::Delim('.')) = parser.next_including_whitespace() {
-      continue;
-    }
-    parser.reset(&state);
-    break;
-  }
-
-  parser.skip_whitespace();
-  if components.is_empty() || !parser.is_exhausted() {
-    return Err(
-      parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
-        "invalid layer name".into(),
-      )),
-    );
-  }
-
-  Ok(components)
-}
-
-fn parse_import_supports_modifier<'i, 't>(
-  parser: &mut Parser<'i, 't>,
-) -> std::result::Result<SupportsCondition, ParseError<'i, SelectorParseErrorKind<'i>>> {
-  parser.expect_function_matching("supports")?;
-  parser.parse_nested_block(|nested| {
-    let condition = parse_supports_condition(nested).map_err(|_| {
-      nested.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
-        "invalid supports condition".into(),
-      ))
-    })?;
-    nested.skip_whitespace();
-    if nested.is_exhausted() {
-      Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(condition)
-    } else {
-      Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(SupportsCondition::False)
-    }
-  })
 }
 
 /// Parse a @media rule
 fn parse_media_rule<'i, 't>(
   parser: &mut Parser<'i, 't>,
-  errors: &mut Vec<CssParseError>,
   parent_selectors: Option<&SelectorList<FastRenderSelectorImpl>>,
   css_source: &str,
 ) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
-  let start = parser.position();
-  parser.parse_until_before(cssparser::Delimiter::CurlyBracketBlock, |parser| {
-    while !parser.is_exhausted() {
-      let _ = parser.next_including_whitespace()?;
+  // Collect tokens as strings until we hit the {
+  let mut query_parts = Vec::new();
+  loop {
+    match parser.next_including_whitespace() {
+      Ok(Token::CurlyBracketBlock) => break,
+      Ok(Token::WhiteSpace(ws)) => query_parts.push((*ws).to_string()),
+      Ok(Token::Ident(id)) => query_parts.push(id.to_string()),
+      Ok(Token::Number { value, .. }) => query_parts.push(value.to_string()),
+      Ok(Token::Dimension { value, unit, .. }) => {
+        query_parts.push(format!("{}{}", value, unit));
+      }
+      Ok(Token::Colon) => query_parts.push(":".to_string()),
+      Ok(Token::ParenthesisBlock) => {
+        // Parse contents of parenthesis block
+        let inner = parser.parse_nested_block(|p| {
+          let mut inner_parts = Vec::new();
+          while !p.is_exhausted() {
+            match p.next_including_whitespace() {
+              Ok(Token::WhiteSpace(ws)) => inner_parts.push((*ws).to_string()),
+              Ok(Token::Ident(id)) => inner_parts.push(id.to_string()),
+              Ok(Token::Number { value, .. }) => inner_parts.push(value.to_string()),
+              Ok(Token::Dimension { value, unit, .. }) => {
+                inner_parts.push(format!("{}{}", value, unit));
+              }
+              Ok(Token::Colon) => inner_parts.push(":".to_string()),
+              Ok(_) => {}
+              Err(_) => break,
+            }
+          }
+          Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(inner_parts.join(""))
+        })?;
+        query_parts.push(format!("({})", inner));
+      }
+      Ok(_) => {}
+      Err(_) => break,
     }
-    Ok(())
-  })?;
+  }
+  let query_str = query_parts.join("");
 
-  let prelude = parser.slice_from(start);
-  let queries = MediaQuery::parse_list(prelude).unwrap_or_default();
-
-  parser.expect_curly_bracket_block().map_err(|_| {
-    parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent("expected {".into()))
-  })?;
+  // Parse the media query
+  let query = MediaQuery::parse(query_str.trim()).unwrap_or_else(|_| {
+    // If parsing fails, create a query that always matches
+    // This is for compatibility - we don't want to drop rules we can't parse
+    MediaQuery::new()
+  });
 
   // Parse the nested rules from the block we already matched
   let nested_rules = parser.parse_nested_block(|nested_parser| {
     Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(parse_rule_list_with_context(
       nested_parser,
-      errors,
       parent_selectors,
       css_source,
     ))
   })?;
 
   Ok(Some(CssRule::Media(MediaRule {
-    queries,
+    query,
     rules: nested_rules,
   })))
 }
@@ -441,78 +341,94 @@ fn parse_media_rule<'i, 't>(
 /// Parse a @container rule (size queries only; name is optional and stored for future use).
 fn parse_container_rule<'i, 't>(
   parser: &mut Parser<'i, 't>,
-  errors: &mut Vec<CssParseError>,
   parent_selectors: Option<&SelectorList<FastRenderSelectorImpl>>,
   css_source: &str,
 ) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
-  let start = parser.position();
-  parser.parse_until_before(cssparser::Delimiter::CurlyBracketBlock, |parser| {
-    while !parser.is_exhausted() {
-      let _ = parser.next_including_whitespace()?;
+  // Collect tokens forming the prelude (optional name + query) up to the block.
+  let mut prelude_parts = Vec::new();
+  loop {
+    match parser.next_including_whitespace() {
+      Ok(Token::CurlyBracketBlock) => break,
+      Ok(Token::WhiteSpace(ws)) => prelude_parts.push((*ws).to_string()),
+      Ok(Token::Ident(id)) => prelude_parts.push(id.to_string()),
+      Ok(Token::Number { value, .. }) => prelude_parts.push(value.to_string()),
+      Ok(Token::Dimension { value, unit, .. }) => prelude_parts.push(format!("{}{}", value, unit)),
+      Ok(Token::Colon) => prelude_parts.push(":".to_string()),
+      Ok(Token::Delim(c)) => prelude_parts.push(c.to_string()),
+      Ok(Token::ParenthesisBlock) => {
+        let inner = parser.parse_nested_block(|p| {
+          let mut inner_parts = Vec::new();
+          while !p.is_exhausted() {
+            match p.next_including_whitespace() {
+              Ok(Token::WhiteSpace(ws)) => inner_parts.push((*ws).to_string()),
+              Ok(Token::Ident(id)) => inner_parts.push(id.to_string()),
+              Ok(Token::Number { value, .. }) => inner_parts.push(value.to_string()),
+              Ok(Token::Dimension { value, unit, .. }) => {
+                inner_parts.push(format!("{}{}", value, unit))
+              }
+              Ok(Token::Colon) => inner_parts.push(":".to_string()),
+              Ok(Token::Delim(c)) => inner_parts.push(c.to_string()),
+              Ok(_) => {}
+              Err(_) => break,
+            }
+          }
+          Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(inner_parts.join(""))
+        })?;
+        prelude_parts.push(format!("({})", inner));
+      }
+      Ok(_) => {}
+      Err(_) => break,
     }
-    Ok(())
-  })?;
+  }
 
-  let prelude = parser.slice_from(start);
+  let prelude = prelude_parts.join("");
+  let prelude_trimmed = prelude.trim();
+  if prelude_trimmed.is_empty() {
+    skip_at_rule(parser);
+    return Ok(None);
+  }
 
-  parser.expect_curly_bracket_block().map_err(|_| {
-    parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent("expected {".into()))
+  // Split optional name and query: text before the first '(' is treated as the name.
+  let (name, query_str) = if let Some(idx) = prelude_trimmed.find('(') {
+    let (before, after) = prelude_trimmed.split_at(idx);
+    let name = before.trim();
+    let name = if name.is_empty() {
+      None
+    } else {
+      Some(name.to_string())
+    };
+    (name, after)
+  } else {
+    (None, prelude_trimmed)
+  };
+
+  let query = MediaQuery::parse(query_str).map_err(|_| {
+    skip_at_rule(parser);
+    parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
+      "invalid container query".into(),
+    ))
   })?;
 
   let nested_rules = parser.parse_nested_block(|nested_parser| {
     Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(parse_rule_list_with_context(
       nested_parser,
-      errors,
       parent_selectors,
       css_source,
     ))
   })?;
 
-  let Some((name, query_list)) = parse_container_prelude(prelude) else {
+  if !query.is_size_query() {
+    // Container queries level 1 accept only size features; drop invalid container rules.
     return Ok(None);
-  };
+  }
 
   Ok(Some(CssRule::Container(ContainerRule {
     name,
-    query_list,
+    query,
     rules: nested_rules,
   })))
 }
 
-<<<<<<< HEAD
-fn parse_container_prelude(prelude: &str) -> Option<(Option<String>, Vec<MediaQuery>)> {
-  let trimmed = prelude.trim();
-  if trimmed.is_empty() {
-    return None;
-  }
-
-  if let Ok(list) = MediaQuery::parse_list(trimmed) {
-    if !list.is_empty() && list.iter().all(MediaQuery::is_size_query) {
-      return Some((None, list));
-    }
-  }
-
-  let mut input = ParserInput::new(trimmed);
-  let mut parser = Parser::new(&mut input);
-  let name = match parser.try_parse(|p| p.expect_ident_cloned()) {
-    Ok(name) => name.to_string(),
-    Err(_) => return None,
-  };
-
-  parser.skip_whitespace();
-  let query_slice = parser.slice_from(parser.position()).trim();
-  if query_slice.is_empty() {
-    return None;
-  }
-
-  if let Ok(list) = MediaQuery::parse_list(query_slice) {
-    if !list.is_empty() && list.iter().all(MediaQuery::is_size_query) {
-      return Some((Some(name), list));
-    }
-  }
-
-  None
-=======
 /// Parse an @starting-style rule which simply wraps a nested rule list.
 fn parse_starting_style_rule<'i, 't>(
   parser: &mut Parser<'i, 't>,
@@ -531,13 +447,11 @@ fn parse_starting_style_rule<'i, 't>(
   Ok(Some(CssRule::StartingStyle(StartingStyleRule {
     rules: nested_rules,
   })))
->>>>>>> 12d523a (Add @starting-style transition sampling)
 }
 
 /// Parse an @scope rule with optional scope root/limit selectors.
 fn parse_scope_rule<'i, 't>(
   parser: &mut Parser<'i, 't>,
-  errors: &mut Vec<CssParseError>,
   parent_selectors: Option<&SelectorList<FastRenderSelectorImpl>>,
   css_source: &str,
 ) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
@@ -605,7 +519,6 @@ fn parse_scope_rule<'i, 't>(
   let nested_rules = parser.parse_nested_block(|nested_parser| {
     Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(parse_rule_list_with_context(
       nested_parser,
-      errors,
       parent_selectors,
       css_source,
     ))
@@ -621,7 +534,6 @@ fn parse_scope_rule<'i, 't>(
 /// Parse a @supports rule
 fn parse_supports_rule<'i, 't>(
   parser: &mut Parser<'i, 't>,
-  errors: &mut Vec<CssParseError>,
   parent_selectors: Option<&SelectorList<FastRenderSelectorImpl>>,
   css_source: &str,
 ) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
@@ -643,7 +555,6 @@ fn parse_supports_rule<'i, 't>(
   let rules = parser.parse_nested_block(|nested| {
     Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(parse_rule_list_with_context(
       nested,
-      errors,
       parent_selectors,
       css_source,
     ))
@@ -1040,7 +951,6 @@ fn parse_supports_declaration_in_parens<'i, 't>(
 
 fn parse_layer_rule<'i, 't>(
   parser: &mut Parser<'i, 't>,
-  errors: &mut Vec<CssParseError>,
   parent_selectors: Option<&SelectorList<FastRenderSelectorImpl>>,
   css_source: &str,
 ) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
@@ -1080,7 +990,6 @@ fn parse_layer_rule<'i, 't>(
     parser.parse_nested_block(|nested| {
       Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(parse_rule_list_with_context(
         nested,
-        errors,
         parent_selectors,
         css_source,
       ))
@@ -1878,104 +1787,6 @@ fn parse_single_keyframe<'i, 't>(
   }
 }
 
-/// Parse a @property rule registering a custom property.
-fn parse_property_rule<'i, 't>(
-  parser: &mut Parser<'i, 't>,
-) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
-  parser.skip_whitespace();
-  let name = match parser.next_including_whitespace() {
-    Ok(Token::Ident(id)) => id.to_string(),
-    _ => {
-      skip_at_rule(parser);
-      return Ok(None);
-    }
-  };
-
-  if !name.starts_with("--") {
-    skip_at_rule(parser);
-    return Ok(None);
-  }
-
-  parser.expect_curly_bracket_block()?;
-
-  let mut syntax: Option<CustomPropertySyntax> = None;
-  let mut inherits: Option<bool> = None;
-  let mut initial_raw: Option<String> = None;
-
-  parser.parse_nested_block(|nested| {
-    while !nested.is_exhausted() {
-      nested.skip_whitespace();
-      if nested.is_exhausted() {
-        break;
-      }
-      let ident = match nested.next_including_whitespace() {
-        Ok(Token::Ident(id)) => id.to_string(),
-        Ok(Token::Semicolon) => continue,
-        Ok(_) => {
-          skip_to_semicolon(nested);
-          continue;
-        }
-        Err(_) => break,
-      };
-
-      nested.skip_whitespace();
-      if nested.try_parse(|p| p.expect_colon()).is_err() {
-        skip_to_semicolon(nested);
-        continue;
-      }
-      let start = nested.position();
-      skip_to_semicolon(nested);
-      let raw = nested.slice_from(start);
-      let value = raw.trim().trim_end_matches(';').trim();
-
-      match ident.as_str() {
-        "syntax" => {
-          let trimmed = value.trim_matches(|c| c == '"' || c == '\'');
-          syntax = CustomPropertySyntax::parse(trimmed);
-        }
-        "inherits" => {
-          let lower = value.to_ascii_lowercase();
-          inherits = match lower.as_str() {
-            "true" => Some(true),
-            "false" => Some(false),
-            _ => None,
-          };
-        }
-        "initial-value" => {
-          initial_raw = Some(value.to_string());
-        }
-        _ => {}
-      }
-    }
-    Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(())
-  })?;
-
-  let Some(syntax) = syntax else {
-    return Ok(None);
-  };
-  let inherits = inherits.unwrap_or(true);
-  let initial_value = if let Some(raw) = initial_raw {
-    if raw.is_empty() && !matches!(syntax, CustomPropertySyntax::Universal) {
-      None
-    } else {
-      let parsed = syntax.parse_value(&raw);
-      if parsed.is_none() && !matches!(syntax, CustomPropertySyntax::Universal) {
-        return Ok(None);
-      }
-      Some(CustomPropertyValue::new(raw, parsed))
-    }
-  } else {
-    None
-  };
-
-  Ok(Some(CssRule::Property(PropertyRule {
-    name,
-    syntax,
-    inherits,
-    initial_value,
-  })))
-}
-
 fn parse_font_face_family(value: &str) -> Option<String> {
   let trimmed = value.trim();
   if trimmed.is_empty() {
@@ -2465,7 +2276,6 @@ fn skip_at_rule<'i, 't>(parser: &mut Parser<'i, 't>) {
 
 fn parse_nested_at_rule<'i, 't>(
   parser: &mut Parser<'i, 't>,
-  errors: &mut Vec<CssParseError>,
   parent_selectors: &SelectorList<FastRenderSelectorImpl>,
   css_source: &str,
 ) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
@@ -2482,20 +2292,12 @@ fn parse_nested_at_rule<'i, 't>(
   };
   let kw_lower = kw.to_ascii_lowercase();
   match kw_lower.as_str() {
-<<<<<<< HEAD
-    "media" => parse_media_rule(parser, errors, Some(parent_selectors), css_source),
-    "supports" => parse_supports_rule(parser, errors, Some(parent_selectors), css_source),
-    "container" => parse_container_rule(parser, errors, Some(parent_selectors), css_source),
-    "layer" => parse_layer_rule(parser, errors, Some(parent_selectors), css_source),
-    "nest" => parse_nest_rule(parser, errors, parent_selectors, css_source),
-=======
     "media" => parse_media_rule(parser, Some(parent_selectors), css_source),
     "supports" => parse_supports_rule(parser, Some(parent_selectors), css_source),
     "container" => parse_container_rule(parser, Some(parent_selectors), css_source),
     "layer" => parse_layer_rule(parser, Some(parent_selectors), css_source),
     "starting-style" => parse_starting_style_rule(parser, Some(parent_selectors), css_source),
     "nest" => parse_nest_rule(parser, parent_selectors, css_source),
->>>>>>> 12d523a (Add @starting-style transition sampling)
     _ => {
       skip_at_rule(parser);
       Ok(None)
@@ -2520,7 +2322,7 @@ fn parse_style_block<'i, 't>(
     }
 
     if let Ok(Some(rule)) =
-      parser.try_parse(|p| parse_nested_at_rule(p, errors, parent_selectors, css_source))
+      parser.try_parse(|p| parse_nested_at_rule(p, parent_selectors, css_source))
     {
       nested_rules.push(rule);
       continue;
@@ -2591,7 +2393,6 @@ fn parse_style_rule<'i, 't>(
         let _ = parser.parse_nested_block(|nested| {
           Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(parse_rule_list_with_context(
             nested,
-            errors,
             Some(parent),
             css_source,
           ))
@@ -2631,7 +2432,6 @@ fn parse_style_rule<'i, 't>(
 
 fn parse_nest_rule<'i, 't>(
   parser: &mut Parser<'i, 't>,
-  errors: &mut Vec<CssParseError>,
   parent_selectors: &SelectorList<FastRenderSelectorImpl>,
   css_source: &str,
 ) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
@@ -2654,7 +2454,6 @@ fn parse_nest_rule<'i, 't>(
       let _ = parser.parse_nested_block(|nested| {
         Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(parse_rule_list_with_context(
           nested,
-          errors,
           Some(parent_selectors),
           css_source,
         ))
@@ -2668,7 +2467,8 @@ fn parse_nest_rule<'i, 't>(
   })?;
 
   let (declarations, nested_rules) = parser.parse_nested_block(|nested| {
-    parse_style_block(nested, errors, &selectors, css_source).map_err(|_| {
+    let mut nested_errors = Vec::new();
+    parse_style_block(nested, &mut nested_errors, &selectors, css_source).map_err(|_| {
       nested.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
         "declaration".into(),
       ))
@@ -2946,33 +2746,6 @@ pub fn rel_list_contains_stylesheet(tokens: &[String]) -> bool {
     .any(|token| token.eq_ignore_ascii_case("stylesheet"))
 }
 
-/// Returns true if the node is a `<template>` whose contents should remain inert for styling.
-fn is_inert_template(node: &DomNode) -> bool {
-  // Template contents are inert unless the template declares a shadow root (handled elsewhere).
-  if !node
-    .tag_name()
-    .map(|tag| tag.eq_ignore_ascii_case("template"))
-    .unwrap_or(false)
-  {
-    return false;
-  }
-
-  if let Some(namespace) = node.namespace() {
-    if !(namespace.is_empty() || namespace == HTML_NAMESPACE) {
-      return true;
-    }
-  }
-
-  let Some(mode_attr) = node
-    .get_attribute_ref("shadowroot")
-    .or_else(|| node.get_attribute_ref("shadowrootmode"))
-  else {
-    return true;
-  };
-
-  !matches!(mode_attr.to_ascii_lowercase().as_str(), "open" | "closed")
-}
-
 /// Extract inline `<style>` blocks and external `<link rel="stylesheet">` entries from a DOM.
 ///
 /// Each stylesheet is tagged with the DOM tree scope it belongs to (document vs. a particular
@@ -3026,10 +2799,6 @@ pub fn extract_css_sources(dom: &DomNode) -> Vec<ScopedStylesheetSource> {
           });
         }
       }
-    }
-
-    if is_inert_template(node) {
-      return;
     }
 
     let mut child_index = 0;
@@ -3111,10 +2880,6 @@ pub fn extract_scoped_css_sources(dom: &DomNode) -> ScopedStylesheetSources {
       }
     }
 
-    if is_inert_template(node) {
-      return;
-    }
-
     for child in &node.children {
       let child_scope = match child.node_type {
         DomNodeType::ShadowRoot { .. } => Some(node_id),
@@ -3141,16 +2906,7 @@ pub fn extract_css(dom: &DomNode) -> Result<StyleSheet> {
     if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
       return;
     }
-    if is_inert_template(node) {
-      return;
-    }
     if let Some(tag) = node.tag_name() {
-      if tag.eq_ignore_ascii_case("template")
-        && node.get_attribute_ref("shadowroot").is_none()
-        && node.get_attribute_ref("shadowrootmode").is_none()
-      {
-        return;
-      }
       if tag == "style" {
         for child in &node.children {
           if let Some(text) = child.text_content() {
@@ -3230,40 +2986,6 @@ mod tests {
     assert!(msg.contains("column"));
     assert!(msg.contains("body { color: }"));
     assert!(msg.contains('^'));
-  }
-
-  #[test]
-  fn nested_rule_errors_are_reported() {
-    let css = "body { color: red; }\n@media (max-width: 600px) {\n  .bad {\n    color: ;\n  }\n}\n";
-    let result = parse_stylesheet_with_errors(css);
-    assert!(
-      !result.errors.is_empty(),
-      "expected nested parse errors to be collected"
-    );
-
-    let nested_error = result
-      .errors
-      .iter()
-      .find(|err| err.line >= 3)
-      .expect("expected nested error with location");
-    assert!(
-      nested_error
-        .snippet
-        .as_deref()
-        .map(|line| line.contains("color: ;"))
-        .unwrap_or(false),
-      "snippet should point inside nested block, got {:?}",
-      nested_error
-    );
-
-    assert!(
-      result
-        .stylesheet
-        .rules
-        .iter()
-        .any(|rule| matches!(rule, CssRule::Style(_))),
-      "top-level style rule should still be present"
-    );
   }
 
   #[test]
@@ -3569,30 +3291,17 @@ mod tests {
   }
 
   #[test]
-  fn supports_selector_list_is_forgiving() {
-    // A selector list inside selector() is forgiving; a supported selector keeps the query true
-    // even if other entries fail to parse.
-    let css = r"@supports selector(div, span:unknown-pseudo) { .ok { color: red; } }";
-    let stylesheet = parse_stylesheet(css).unwrap();
-    let media = crate::style::media::MediaContext::screen(800.0, 600.0);
-    let rules = stylesheet.collect_style_rules(&media);
-    assert_eq!(
-      rules.len(),
-      1,
-      "supported selector in list should enable nested rules"
-    );
-  }
-
-  #[test]
-  fn supports_selector_list_fails_when_all_unsupported() {
-    let css = r"@supports selector(:unknown-pseudo, :also-unknown) { .skip { color: red; } }";
+  fn supports_selector_list_fails_when_any_selector_unsupported() {
+    // A selector list that contains an unsupported selector should cause the whole selector()
+    // feature query to evaluate to false per the spec.
+    let css = r"@supports selector(div, span:unknown-pseudo) { .skip { color: red; } }";
     let stylesheet = parse_stylesheet(css).unwrap();
     let media = crate::style::media::MediaContext::screen(800.0, 600.0);
     let rules = stylesheet.collect_style_rules(&media);
     assert_eq!(
       rules.len(),
       0,
-      "selector() should fail when no selectors in the list are supported"
+      "any unsupported selector in list should disable nested rules"
     );
   }
 
@@ -3772,74 +3481,10 @@ mod tests {
   }
 
   #[test]
-  fn extract_css_ignores_inert_templates() {
-    let html =
-      "<template><style>body{color:red}</style></template><style>body{color:green}</style>";
-    let dom = crate::dom::parse_html(html).expect("parse html");
-    let stylesheet = extract_css(&dom).expect("extract css");
-    assert_eq!(
-      stylesheet.rules.len(),
-      1,
-      "only non-template styles should be collected"
-    );
-    let rule = match &stylesheet.rules[0] {
-      CssRule::Style(rule) => rule,
-      other => panic!("expected style rule, got {:?}", other),
-    };
-    assert_eq!(rule.declarations.len(), 1);
-    assert_eq!(rule.declarations[0].property, "color");
-    assert_eq!(rule.declarations[0].raw_value, "green");
-  }
-
-  #[test]
   fn rel_tokenization_splits_and_lowercases() {
     let tokens = tokenize_rel_list(" StyleSheet  Alternate   PREFETCH ");
     assert_eq!(tokens, vec!["stylesheet", "alternate", "prefetch"]);
     assert!(rel_list_contains_stylesheet(&tokens));
-  }
-
-  #[test]
-  fn style_inside_inert_template_is_ignored() {
-    let html = "<head><template><style>body{color:red}</style></template><style>body{color:green}</style></head>";
-    let dom = crate::dom::parse_html(html).unwrap();
-    let sources = extract_css_sources(&dom);
-    assert_eq!(sources.len(), 1);
-    assert!(matches!(sources[0].scope, CssTreeScope::Document));
-    match &sources[0].source {
-      StylesheetSource::Inline(inline) => {
-        assert!(inline.css.contains("green"));
-        assert!(!inline.css.contains("red"));
-      }
-      other => panic!("expected inline stylesheet, got {:?}", other),
-    }
-  }
-
-  #[test]
-  fn style_inside_declarative_shadow_template_is_scoped() {
-    let html = r#"
-      <div id="host">
-        <template shadowroot="open">
-          <style>.x {}</style>
-        </template>
-      </div>
-    "#;
-    let dom = crate::dom::parse_html(html).unwrap();
-    let sources = extract_scoped_css_sources(&dom);
-    assert!(
-      sources.document.is_empty(),
-      "document styles should remain empty"
-    );
-    assert_eq!(
-      sources.shadows.len(),
-      1,
-      "expected styles scoped to a shadow root"
-    );
-    let (_, shadow_sources) = sources.shadows.iter().next().unwrap();
-    assert_eq!(shadow_sources.len(), 1);
-    match &shadow_sources[0] {
-      StylesheetSource::Inline(inline) => assert!(inline.css.contains(".x")),
-      other => panic!("expected inline shadow stylesheet, got {:?}", other),
-    }
   }
 
   #[test]

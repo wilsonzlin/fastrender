@@ -119,11 +119,7 @@ use crate::resource::{
   origin_from_url, CachingFetcher, DocumentOrigin, HttpFetcher, PolicyError, ResourceAccessPolicy,
   ResourceFetcher, ResourcePolicy,
 };
-<<<<<<< HEAD
-use crate::scroll::ScrollState;
-=======
 use crate::style::cascade::apply_starting_style_set_with_media_target_and_imports_cached_with_deadline;
->>>>>>> 12d523a (Add @starting-style transition sampling)
 use crate::style::cascade::apply_style_set_with_media_target_and_imports_cached;
 use crate::style::cascade::apply_style_set_with_media_target_and_imports_cached_with_deadline;
 use crate::style::cascade::apply_styles_with_media_target_and_imports;
@@ -634,16 +630,11 @@ pub struct RenderOptions {
   pub scroll_x: f32,
   /// Vertical scroll offset applied before painting.
   pub scroll_y: f32,
-<<<<<<< HEAD
-  /// Scroll offsets for element scroll containers keyed by box ID.
-  pub element_scroll_offsets: HashMap<usize, Point>,
-=======
   /// Optional animation/transition sampling time in milliseconds since document load.
   ///
   /// When set, time-based effects such as @starting-style transitions will be sampled at this
   /// moment; when absent, animated properties resolve to their final values.
   pub animation_time: Option<f32>,
->>>>>>> 12d523a (Add @starting-style transition sampling)
   /// Maximum number of external stylesheets to inline. `None` means unlimited.
   pub css_limit: Option<usize>,
   /// When true, include an accessibility tree alongside rendering results.
@@ -671,11 +662,7 @@ impl Default for RenderOptions {
       media_type: MediaType::Screen,
       scroll_x: 0.0,
       scroll_y: 0.0,
-<<<<<<< HEAD
-      element_scroll_offsets: HashMap::new(),
-=======
       animation_time: None,
->>>>>>> 12d523a (Add @starting-style transition sampling)
       css_limit: None,
       capture_accessibility: false,
       allow_partial: false,
@@ -697,11 +684,7 @@ impl std::fmt::Debug for RenderOptions {
       .field("media_type", &self.media_type)
       .field("scroll_x", &self.scroll_x)
       .field("scroll_y", &self.scroll_y)
-<<<<<<< HEAD
-      .field("element_scroll_offsets", &self.element_scroll_offsets)
-=======
       .field("animation_time", &self.animation_time)
->>>>>>> 12d523a (Add @starting-style transition sampling)
       .field("css_limit", &self.css_limit)
       .field("capture_accessibility", &self.capture_accessibility)
       .field("allow_partial", &self.allow_partial)
@@ -757,25 +740,9 @@ impl RenderOptions {
     self
   }
 
-<<<<<<< HEAD
-  /// Apply scroll offsets for element scroll containers keyed by box ID.
-  ///
-  /// Box IDs come from the generated [`BoxTree`] and are mirrored on fragments
-  /// via their `box_id` field. They can be discovered with [`PreparedDocument::box_tree`],
-  /// the `inspect_frag` CLI, or by traversing a captured [`BoxTree`].
-  pub fn with_element_scroll_offsets(mut self, scroll_offsets: HashMap<usize, Point>) -> Self {
-    self.element_scroll_offsets = scroll_offsets;
-    self
-  }
-
-  /// Apply a scroll offset for a specific element scroll container by box ID.
-  pub fn with_element_scroll(mut self, box_id: usize, x: f32, y: f32) -> Self {
-    self.element_scroll_offsets.insert(box_id, Point::new(x, y));
-=======
   /// Provide a sampling timestamp for animations/transitions in milliseconds since load.
   pub fn with_animation_time(mut self, time_ms: f32) -> Self {
     self.animation_time = Some(time_ms.max(0.0));
->>>>>>> 12d523a (Add @starting-style transition sampling)
     self
   }
 
@@ -825,14 +792,6 @@ impl RenderOptions {
   pub fn with_runtime_toggles(mut self, toggles: RuntimeToggles) -> Self {
     self.runtime_toggles = Some(Arc::new(toggles));
     self
-  }
-
-  /// Builds a [`ScrollState`] combining viewport and element scroll offsets.
-  pub fn scroll_state(&self) -> ScrollState {
-    ScrollState::from_parts(
-      Point::new(self.scroll_x, self.scroll_y),
-      self.element_scroll_offsets.clone(),
-    )
   }
 }
 
@@ -1071,8 +1030,8 @@ pub struct LayoutArtifacts {
 ///
 /// `PreparedDocument` owns the parsed DOM, resolved stylesheet, styled tree, box
 /// tree, and laid-out fragment tree. Painting reuses the same font and image
-/// caches, allowing callers to apply different scroll states, animation times,
-/// or viewport translations without re-running parse/style/layout.
+/// caches, allowing callers to apply different scroll offsets or viewport
+/// translations without re-running parse/style/layout.
 ///
 /// # Thread safety
 ///
@@ -1091,76 +1050,9 @@ pub struct PreparedDocument {
   page_zoom: f32,
   background_color: Rgba,
   default_scroll: Point,
-<<<<<<< HEAD
-  default_element_scrolls: HashMap<usize, Point>,
-=======
   animation_time: Option<f32>,
->>>>>>> 12d523a (Add @starting-style transition sampling)
   font_context: FontContext,
   image_cache: ImageCache,
-}
-
-/// Painting options for a prepared document.
-#[derive(Debug, Clone)]
-pub struct PreparedPaintOptions {
-  /// Scroll offsets to apply before painting. When omitted, the scroll state
-  /// captured during preparation is used. Element offsets in the state shift
-  /// the contents of scroll containers without re-running layout.
-  pub scroll: Option<ScrollState>,
-  /// Optional viewport override in CSS pixels.
-  pub viewport: Option<(u32, u32)>,
-  /// Optional background override.
-  pub background: Option<Rgba>,
-  /// Optional time used for sampling time-based animations.
-  pub animation_time: Option<Duration>,
-}
-
-impl PreparedPaintOptions {
-  /// Creates a new options struct with all fields unset.
-  pub fn new() -> Self {
-    Self::default()
-  }
-
-  /// Applies viewport scroll offsets.
-  pub fn with_scroll(mut self, scroll_x: f32, scroll_y: f32) -> Self {
-    self.scroll = Some(ScrollState::with_viewport(Point::new(scroll_x, scroll_y)));
-    self
-  }
-
-  /// Applies an explicit scroll state (including element scroll offsets).
-  pub fn with_scroll_state(mut self, scroll: ScrollState) -> Self {
-    self.scroll = Some(scroll);
-    self
-  }
-
-  /// Overrides the viewport size for painting.
-  pub fn with_viewport(mut self, width: u32, height: u32) -> Self {
-    self.viewport = Some((width, height));
-    self
-  }
-
-  /// Overrides the canvas background color.
-  pub fn with_background(mut self, background: Rgba) -> Self {
-    self.background = Some(background);
-    self
-  }
-
-  /// Sets the animation timestamp used for sampling time-based animations.
-  pub fn with_animation_time(mut self, time: Duration) -> Self {
-    self.animation_time = Some(time);
-    self
-  }
-}
-
-impl Default for PreparedPaintOptions {
-  fn default() -> Self {
-    Self {
-      scroll: None,
-      viewport: None,
-      background: None,
-      animation_time: None,
-    }
-  }
 }
 
 impl PreparedDocument {
@@ -1168,8 +1060,7 @@ impl PreparedDocument {
   ///
   /// The painting path mirrors `FastRender::render_html_with_scroll`, applying
   /// scroll snap, scroll-driven animations, sticky positioning, and a root
-  /// translation for the scroll offset before rasterization. Element scroll
-  /// offsets captured during preparation are applied automatically.
+  /// translation for the scroll offset before rasterization.
   pub fn paint(
     &self,
     scroll_x: f32,
@@ -1177,59 +1068,7 @@ impl PreparedDocument {
     viewport_override: Option<(u32, u32)>,
     background_override: Option<Rgba>,
   ) -> Result<Pixmap> {
-    self.paint_with_element_scrolls(
-      scroll_x,
-      scroll_y,
-      self.default_element_scrolls.clone(),
-      viewport_override,
-      background_override,
-    )
-  }
-
-  /// Paints using explicit scroll offsets for both the viewport and element scroll containers.
-  ///
-  /// Any provided element offsets override the defaults captured when the document was prepared.
-  pub fn paint_with_element_scrolls(
-    &self,
-    scroll_x: f32,
-    scroll_y: f32,
-    element_scrolls: HashMap<usize, Point>,
-    viewport_override: Option<(u32, u32)>,
-    background_override: Option<Rgba>,
-  ) -> Result<Pixmap> {
-    let mut merged = self.default_element_scrolls.clone();
-    merged.extend(element_scrolls);
-    let scroll_state = ScrollState::from_parts(Point::new(scroll_x, scroll_y), merged);
-    self.paint_with_scroll_state(scroll_state, viewport_override, background_override)
-  }
-
-  /// Paints using an explicit scroll state.
-  pub fn paint_with_scroll_state(
-    &self,
-    scroll_state: ScrollState,
-    viewport_override: Option<(u32, u32)>,
-    background_override: Option<Rgba>,
-  ) -> Result<Pixmap> {
->>>>>>> 6e3c014 (feat: support element scroll offsets in renders)
     if let Some((w, h)) = viewport_override {
-      options = options.with_viewport(w, h);
-    }
-    if let Some(bg) = background_override {
-      options = options.with_background(bg);
-    }
-    self.paint_with_options(options)
-  }
-
-  /// Paints the prepared document using the captured scroll state at a specific animation time.
-  pub fn paint_at_time(&self, animation_time: Duration) -> Result<Pixmap> {
-    self.paint_with_options(
-      PreparedPaintOptions::default().with_animation_time(animation_time),
-    )
-  }
-
-  /// Paints the prepared document using a rich options struct.
-  pub fn paint_with_options(&self, options: PreparedPaintOptions) -> Result<Pixmap> {
-    if let Some((w, h)) = options.viewport {
       if w == 0 || h == 0 {
         return Err(Error::Render(RenderError::InvalidParameters {
           message: format!("Invalid viewport override: width={w}, height={h}"),
@@ -1237,61 +1076,26 @@ impl PreparedDocument {
       }
     }
 
-    let viewport = options.viewport.map(|(w, h)| Size::new(w as f32, h as f32));
+    let viewport = viewport_override.map(|(w, h)| Size::new(w as f32, h as f32));
     let paint_scale =
       (self.device_pixel_ratio / self.page_zoom.max(f32::EPSILON)).max(f32::EPSILON);
-    let scroll_state = options
-      .scroll
-      .unwrap_or_else(|| self.default_scroll.clone());
-    paint_fragment_tree_with_state(
+    paint_fragment_tree_with_scroll(
       self.fragment_tree.clone(),
-<<<<<<< HEAD
-      scroll_state,
-=======
       scroll_x,
       scroll_y,
       self.animation_time,
->>>>>>> 12d523a (Add @starting-style transition sampling)
       viewport,
-      options.background.unwrap_or(self.background_color),
+      background_override.unwrap_or(self.background_color),
       &self.font_context,
       &self.image_cache,
       paint_scale,
-      options.animation_time,
     )
-  }
-
-  /// Paints the prepared document with an explicit scroll state and animation time.
-  pub fn paint_with_scroll_state(
-    &self,
-    scroll_state: ScrollState,
-    viewport_override: Option<(u32, u32)>,
-    background_override: Option<Rgba>,
-    animation_time: Option<Duration>,
-  ) -> Result<Pixmap> {
-    let mut options = PreparedPaintOptions::default().with_scroll_state(scroll_state);
-    if let Some((w, h)) = viewport_override {
-      options = options.with_viewport(w, h);
-    }
-    if let Some(bg) = background_override {
-      options = options.with_background(bg);
-    }
-    if let Some(time) = animation_time {
-      options = options.with_animation_time(time);
-    }
-    self.paint_with_options(options)
   }
 
   /// Paints using the viewport captured during preparation and the initial
   /// scroll offsets provided in the original `RenderOptions`.
   pub fn paint_default(&self) -> Result<Pixmap> {
-<<<<<<< HEAD
-    self.paint_with_options(PreparedPaintOptions::default())
-=======
-    let default_state =
-      ScrollState::from_parts(self.default_scroll, self.default_element_scrolls.clone());
-    self.paint_with_scroll_state(default_state, None, None)
->>>>>>> 6e3c014 (feat: support element scroll offsets in renders)
+    self.paint(self.default_scroll.x, self.default_scroll.y, None, None)
   }
 
   /// Paints a specific rectangular region of the prepared document.
@@ -1303,18 +1107,7 @@ impl PreparedDocument {
       rect.width().max(1.0).round() as u32,
       rect.height().max(1.0).round() as u32,
     );
-<<<<<<< HEAD
-    let options = PreparedPaintOptions::default()
-      .with_scroll(rect.x(), rect.y())
-      .with_viewport(viewport.0, viewport.1);
-    self.paint_with_options(options)
-=======
-    let scroll_state = ScrollState::from_parts(
-      Point::new(rect.x(), rect.y()),
-      self.default_element_scrolls.clone(),
-    );
-    self.paint_with_scroll_state(scroll_state, Some(viewport), None)
->>>>>>> 6e3c014 (feat: support element scroll offsets in renders)
+    self.paint(rect.x(), rect.y(), Some(viewport), None)
   }
 
   /// Returns the parsed DOM used during preparation.
@@ -1359,12 +1152,7 @@ impl PreparedDocument {
 
   /// Returns the scroll offsets supplied when preparing the document.
   pub fn default_scroll(&self) -> Point {
-    self.default_scroll.viewport
-  }
-
-  /// Returns the prepared scroll state supplied during preparation.
-  pub fn default_scroll_state(&self) -> ScrollState {
-    self.default_scroll.clone()
+    self.default_scroll
   }
 }
 
@@ -2360,9 +2148,7 @@ fn apply_sticky_offsets_with_context(
   font_context: &FontContext,
   fragment: &mut FragmentNode,
   parent_rect: Rect,
-  parent_scroll: Point,
-  scroll_for_self: Point,
-  scroll_state: &ScrollState,
+  scroll: Point,
   viewport: Size,
 ) {
   let abs_origin = Point::new(
@@ -2394,13 +2180,13 @@ fn apply_sticky_offsets_with_context(
       );
 
       if constraints.has_constraints() {
-        let mut screen_x = abs_rect.x() - scroll_for_self.x;
-        let mut screen_y = abs_rect.y() - scroll_for_self.y;
+        let mut screen_x = abs_rect.x() - scroll.x;
+        let mut screen_y = abs_rect.y() - scroll.y;
 
-        let container_screen_min_x = parent_rect.x() - parent_scroll.x;
-        let container_screen_max_x = parent_rect.max_x() - parent_scroll.x;
-        let container_screen_min_y = parent_rect.y() - parent_scroll.y;
-        let container_screen_max_y = parent_rect.max_y() - parent_scroll.y;
+        let container_screen_min_x = parent_rect.x() - scroll.x;
+        let container_screen_max_x = parent_rect.max_x() - scroll.x;
+        let container_screen_min_y = parent_rect.y() - scroll.y;
+        let container_screen_max_y = parent_rect.max_y() - scroll.y;
 
         let left = constraints.left.unwrap_or(0.0);
         let right = constraints.right.unwrap_or(0.0);
@@ -2427,8 +2213,8 @@ fn apply_sticky_offsets_with_context(
           screen_y = screen_y.max(clamp_min_y).min(clamp_max_y);
         }
 
-        let mut new_abs_x = screen_x + scroll_for_self.x;
-        let mut new_abs_y = screen_y + scroll_for_self.y;
+        let mut new_abs_x = screen_x + scroll.x;
+        let mut new_abs_y = screen_y + scroll.y;
 
         let cb_min_x = parent_rect.x();
         let cb_min_y = parent_rect.y();
@@ -2449,95 +2235,48 @@ fn apply_sticky_offsets_with_context(
     }
   }
 
-  let self_scroll = fragment
-    .box_id()
-    .and_then(|id| scroll_state.elements.get(&id).copied())
-    .unwrap_or(Point::ZERO);
-  let child_scroll = Point::new(
-    scroll_for_self.x + self_scroll.x,
-    scroll_for_self.y + self_scroll.y,
-  );
   for child in fragment.children.iter_mut() {
-    apply_sticky_offsets_with_context(
-      font_context,
-      child,
-      abs_rect,
-      scroll_for_self,
-      child_scroll,
-      scroll_state,
-      viewport,
-    );
+    apply_sticky_offsets_with_context(font_context, child, abs_rect, scroll, viewport);
   }
 }
 
-fn paint_fragment_tree_with_state(
+fn paint_fragment_tree_with_scroll(
   mut fragment_tree: FragmentTree,
-<<<<<<< HEAD
-<<<<<<< HEAD
-  scroll_state: ScrollState,
-=======
-  mut scroll_state: ScrollState,
->>>>>>> 6e3c014 (feat: support element scroll offsets in renders)
-=======
   scroll_x: f32,
   scroll_y: f32,
   animation_time: Option<f32>,
->>>>>>> 12d523a (Add @starting-style transition sampling)
   viewport_override: Option<Size>,
   background: Rgba,
   font_context: &FontContext,
   image_cache: &ImageCache,
   device_pixel_ratio: f32,
-  animation_time: Option<Duration>,
 ) -> Result<Pixmap> {
   let expand_full_page = std::env::var("FASTR_FULL_PAGE")
     .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
     .unwrap_or(false);
 
   let viewport_size = viewport_override.unwrap_or_else(|| fragment_tree.viewport_size());
-<<<<<<< HEAD
-  let resolved_scroll = crate::scroll::apply_scroll_snap(&mut fragment_tree, &scroll_state).state;
-  crate::scroll::apply_scroll_offsets(&mut fragment_tree, &resolved_scroll);
-  let scroll = resolved_scroll.viewport;
-
-<<<<<<< HEAD
-  animation::apply_animations(&mut fragment_tree, scroll, animation_time);
-=======
+  let scroll_state = crate::scroll::ScrollState::with_viewport(Point::new(scroll_x, scroll_y));
   let scroll_result = crate::scroll::apply_scroll_snap(&mut fragment_tree, &scroll_state);
-  scroll_state = scroll_result.state;
-  let scroll = scroll_state.viewport;
+  let scroll = scroll_result.state.viewport;
 
-  animation::apply_scroll_driven_animations(&mut fragment_tree, &scroll_state);
->>>>>>> 6e3c014 (feat: support element scroll offsets in renders)
-=======
   // Sample load-time transitions before scroll-driven animations so timeline-driven animations
   // remain the final composited result for overlapping properties.
   if let Some(time_ms) = animation_time {
     animation::apply_transitions(&mut fragment_tree, time_ms, viewport_size);
   }
   animation::apply_scroll_driven_animations(&mut fragment_tree, scroll);
->>>>>>> 12d523a (Add @starting-style transition sampling)
 
   let viewport_rect = Rect::from_xywh(0.0, 0.0, viewport_size.width, viewport_size.height);
   apply_sticky_offsets_with_context(
     font_context,
     &mut fragment_tree.root,
     viewport_rect,
-    scroll_state.viewport,
-    scroll_state.viewport,
-    &scroll_state,
+    scroll,
     viewport_size,
   );
   for root in &mut fragment_tree.additional_fragments {
-    apply_sticky_offsets_with_context(
-      font_context,
-      root,
-      viewport_rect,
-      scroll_state.viewport,
-      scroll_state.viewport,
-      &scroll_state,
-      viewport_size,
-    );
+    apply_sticky_offsets_with_context(font_context, root, viewport_rect, scroll, viewport_size);
   }
 
   let viewport_width_px = viewport_size.width.max(1.0).ceil() as u32;
@@ -2562,7 +2301,6 @@ fn paint_fragment_tree_with_state(
     image_cache.clone(),
     device_pixel_ratio,
     offset,
-    &scroll_state,
   )
 }
 
@@ -3052,13 +2790,9 @@ impl FastRender {
       html,
       width,
       height,
-<<<<<<< HEAD
-      options.scroll_state(),
-=======
       options.scroll_x,
       options.scroll_y,
       options.animation_time,
->>>>>>> 12d523a (Add @starting-style transition sampling)
       options.media_type,
       fit_canvas_to_content,
       options.capture_accessibility,
@@ -3111,13 +2845,9 @@ impl FastRender {
     html: &str,
     width: u32,
     height: u32,
-<<<<<<< HEAD
-    mut scroll_state: ScrollState,
-=======
     scroll_x: f32,
     scroll_y: f32,
     animation_time: Option<f32>,
->>>>>>> 12d523a (Add @starting-style transition sampling)
     media_type: MediaType,
     fit_canvas_to_content: bool,
     capture_accessibility: bool,
@@ -3397,32 +3127,18 @@ impl FastRender {
       let env_fit_canvas = toggles.truthy("FASTR_FULL_PAGE");
       let fit_canvas = fit_canvas_to_content || env_fit_canvas;
       let viewport_size = layout_viewport;
-<<<<<<< HEAD
       let scroll_state = crate::scroll::ScrollState::with_viewport(Point::new(scroll_x, scroll_y));
-      let resolved_scroll = crate::scroll::apply_scroll_snap(&mut fragment_tree, &scroll_state).state;
-      crate::scroll::apply_scroll_offsets(&mut fragment_tree, &resolved_scroll);
-      let scroll = resolved_scroll.viewport;
-
-      animation::apply_animations(&mut fragment_tree, scroll, None);
-=======
-      let mut scroll_state = scroll_state;
       let scroll_result = crate::scroll::apply_scroll_snap(&mut fragment_tree, &scroll_state);
-      scroll_state = scroll_result.state;
-      let scroll = scroll_state.viewport;
+      let scroll = scroll_result.state.viewport;
 
-<<<<<<< HEAD
-      animation::apply_scroll_driven_animations(&mut fragment_tree, &scroll_state);
->>>>>>> 6e3c014 (feat: support element scroll offsets in renders)
-=======
       // Sample load-time transitions before scroll-driven animations so timeline-driven
       // animations can override overlapping properties.
       if let Some(time_ms) = animation_time {
         animation::apply_transitions(&mut fragment_tree, time_ms, viewport_size);
       }
       animation::apply_scroll_driven_animations(&mut fragment_tree, scroll);
->>>>>>> 12d523a (Add @starting-style transition sampling)
 
-      self.apply_sticky_offsets_to_tree_with_scroll_state(&mut fragment_tree, &scroll_state);
+      self.apply_sticky_offsets_to_tree(&mut fragment_tree, scroll);
 
       let viewport_width_px = viewport_size.width.max(1.0).ceil() as u32;
       let viewport_height_px = viewport_size.height.max(1.0).ceil() as u32;
@@ -3443,8 +3159,7 @@ impl FastRender {
           let mut builder = DisplayListBuilder::with_image_cache(self.image_cache.clone())
             .with_font_context(self.font_context.clone())
             .with_device_pixel_ratio(self.device_pixel_ratio)
-            .with_viewport_size(viewport.width, viewport.height)
-            .with_scroll_state(scroll_state.clone());
+            .with_viewport_size(viewport.width, viewport.height);
           if let Some(base_url) = &self.base_url {
             builder.set_base_url(base_url.clone());
           }
@@ -3460,7 +3175,6 @@ impl FastRender {
         target_width,
         target_height,
         offset,
-        &scroll_state,
         trace,
       )?;
       if let Some(rec) = stats.as_deref_mut() {
@@ -3727,16 +3441,8 @@ impl FastRender {
       device_pixel_ratio: resolved_viewport.device_pixel_ratio,
       page_zoom: resolved_viewport.zoom,
       background_color: self.background_color,
-<<<<<<< HEAD
-      default_scroll: ScrollState::with_viewport(Point::new(options.scroll_x, options.scroll_y)),
-=======
       default_scroll: Point::new(options.scroll_x, options.scroll_y),
-<<<<<<< HEAD
-      default_element_scrolls: options.element_scroll_offsets.clone(),
->>>>>>> 6e3c014 (feat: support element scroll offsets in renders)
-=======
       animation_time: artifacts.animation_time,
->>>>>>> 12d523a (Add @starting-style transition sampling)
       font_context: self.font_context.clone(),
       image_cache: self.image_cache.clone(),
     })
@@ -4287,29 +3993,25 @@ impl FastRender {
       )?;
 
       let viewport_size = intermediates.fragment_tree.viewport_size();
-      let mut scroll_state = options.scroll_state();
+      let scroll_state =
+        crate::scroll::ScrollState::with_viewport(Point::new(options.scroll_x, options.scroll_y));
       let scroll_result =
         crate::scroll::apply_scroll_snap(&mut intermediates.fragment_tree, &scroll_state);
-      scroll_state = scroll_result.state;
+      let scroll = scroll_result.state.viewport;
 
-<<<<<<< HEAD
-      animation::apply_animations(&mut intermediates.fragment_tree, scroll, None);
-=======
-      animation::apply_scroll_driven_animations(&mut intermediates.fragment_tree, &scroll_state);
->>>>>>> 6e3c014 (feat: support element scroll offsets in renders)
+      animation::apply_scroll_driven_animations(&mut intermediates.fragment_tree, scroll);
 
-      self.apply_sticky_offsets_to_tree_with_scroll_state(
-        &mut intermediates.fragment_tree,
-        &scroll_state,
+      self.apply_sticky_offsets(
+        &mut intermediates.fragment_tree.root,
+        Rect::from_xywh(0.0, 0.0, viewport_size.width, viewport_size.height),
+        scroll,
+        viewport_size,
       );
 
-      let mut display_list = DisplayListBuilder::new()
-        .with_scroll_state(scroll_state.clone())
-        .build_with_stacking_tree(&intermediates.fragment_tree.root);
+      let mut display_list =
+        DisplayListBuilder::new().build_with_stacking_tree(&intermediates.fragment_tree.root);
       for extra in &intermediates.fragment_tree.additional_fragments {
-        let extra_list = DisplayListBuilder::new()
-          .with_scroll_state(scroll_state.clone())
-          .build_with_stacking_tree(extra);
+        let extra_list = DisplayListBuilder::new().build_with_stacking_tree(extra);
         display_list.append(extra_list);
       }
 
@@ -5698,14 +5400,7 @@ impl FastRender {
     let fit_canvas = self.fit_canvas_to_content || Self::fit_canvas_env_enabled();
     let (target_width, target_height) =
       self.resolve_canvas_size(fragment_tree, width, height, fit_canvas);
-    self.paint_with_offset_traced(
-      fragment_tree,
-      target_width,
-      target_height,
-      offset,
-      &ScrollState::default(),
-      &trace,
-    )
+    self.paint_with_offset_traced(fragment_tree, target_width, target_height, offset, &trace)
   }
 
   fn paint_with_offset_traced(
@@ -5714,7 +5409,6 @@ impl FastRender {
     width: u32,
     height: u32,
     offset: Point,
-    scroll_state: &ScrollState,
     trace: &TraceHandle,
   ) -> Result<Pixmap> {
     paint_tree_with_resources_scaled_offset_with_trace(
@@ -5726,7 +5420,6 @@ impl FastRender {
       self.image_cache.clone(),
       self.device_pixel_ratio,
       offset,
-      scroll_state,
       trace.clone(),
     )
   }
@@ -6625,35 +6318,11 @@ impl FastRender {
   /// with a pre-computed fragment tree can apply scroll-dependent sticky
   /// positioning before inspecting or painting it.
   pub fn apply_sticky_offsets_to_tree(&self, fragment_tree: &mut FragmentTree, scroll: Point) {
-    let scroll_state = ScrollState::with_viewport(scroll);
-    self.apply_sticky_offsets_to_tree_with_scroll_state(fragment_tree, &scroll_state);
-  }
-
-  /// Applies sticky offsets using an explicit scroll state, including element scroll offsets.
-  pub fn apply_sticky_offsets_to_tree_with_scroll_state(
-    &self,
-    fragment_tree: &mut FragmentTree,
-    scroll_state: &ScrollState,
-  ) {
     let viewport = fragment_tree.viewport_size();
     let viewport_rect = Rect::from_xywh(0.0, 0.0, viewport.width, viewport.height);
-    self.apply_sticky_offsets(
-      &mut fragment_tree.root,
-      viewport_rect,
-      scroll_state.viewport,
-      scroll_state.viewport,
-      viewport,
-      scroll_state,
-    );
+    self.apply_sticky_offsets(&mut fragment_tree.root, viewport_rect, scroll, viewport);
     for fragment in fragment_tree.additional_fragments.iter_mut() {
-      self.apply_sticky_offsets(
-        fragment,
-        viewport_rect,
-        scroll_state.viewport,
-        scroll_state.viewport,
-        viewport,
-        scroll_state,
-      );
+      self.apply_sticky_offsets(fragment, viewport_rect, scroll, viewport);
     }
   }
 
@@ -6661,20 +6330,10 @@ impl FastRender {
     &self,
     fragment: &mut FragmentNode,
     parent_rect: Rect,
-    parent_scroll: Point,
-    scroll_for_self: Point,
+    scroll: Point,
     viewport: Size,
-    scroll_state: &ScrollState,
   ) {
-    apply_sticky_offsets_with_context(
-      &self.font_context,
-      fragment,
-      parent_rect,
-      parent_scroll,
-      scroll_for_self,
-      scroll_state,
-      viewport,
-    );
+    apply_sticky_offsets_with_context(&self.font_context, fragment, parent_rect, scroll, viewport);
   }
 
   /// Applies sticky positioning adjustments to a fragment tree for the given scroll offset.
@@ -8305,13 +7964,9 @@ pub(crate) fn render_html_with_shared_resources(
       html,
       width,
       height,
-<<<<<<< HEAD
-      ScrollState::default(),
-=======
       0.0,
       0.0,
       None,
->>>>>>> 12d523a (Add @starting-style transition sampling)
       MediaType::Screen,
       false,
       false,
