@@ -90,6 +90,7 @@ pub fn select_palette_index(face: &ttf_parser::Face<'_>, request: FontPalette) -
       .iter()
       .position(|p| p.dark_background)
       .map(|idx| idx as u16),
+    FontPalette::Named(_) => None,
   };
 
   let idx = requested_index.unwrap_or(0);

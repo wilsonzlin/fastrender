@@ -54,6 +54,7 @@ use crate::error::TextError;
 use crate::style::types::Direction as CssDirection;
 use crate::style::types::EastAsianVariant;
 use crate::style::types::EastAsianWidth;
+use crate::style::types::FontPalette;
 use crate::style::types::FontKerning;
 use crate::style::types::FontLanguageOverride;
 use crate::style::types::FontSizeAdjust;
@@ -65,6 +66,8 @@ use crate::style::types::FontVariantPosition;
 use crate::style::types::NumericFigure;
 use crate::style::types::NumericFraction;
 use crate::style::types::NumericSpacing;
+use crate::style::color::Rgba;
+use crate::style::font_palette::resolve_font_palette_for_font;
 use crate::style::ComputedStyle;
 use crate::text::emoji;
 use crate::text::font_db::FontDatabase;
@@ -72,6 +75,8 @@ use crate::text::font_db::FontStretch as DbFontStretch;
 use crate::text::font_db::FontStyle;
 use crate::text::font_db::LoadedFont;
 use crate::text::font_loader::FontContext;
+use crate::css::types::FontPaletteBase;
+use crate::text::color_fonts::select_cpal_palette;
 use lru::LruCache;
 use rustybuzz::Direction as HbDirection;
 use rustybuzz::Face;
@@ -998,6 +1003,10 @@ pub struct FontRun {
 
   /// Palette index for color fonts (CPAL).
   pub palette_index: u16,
+  /// Palette overrides resolved for this run.
+  pub palette_overrides: Arc<Vec<(u16, Rgba)>>,
+  /// Stable hash of palette overrides for cache keys.
+  pub palette_override_hash: u64,
 
   /// Optional rotation hint for vertical writing modes.
   pub rotation: RunRotation,
@@ -2561,6 +2570,15 @@ fn push_font_run(
     .map(|face| collect_variations_for_face(&face, style, font_size, authored_variations))
     .unwrap_or_else(|| authored_variations.to_vec());
 
+  let resolved_palette = resolve_font_palette_for_font(
+    &style.font_palette,
+    &style.font_palettes,
+    &font.family,
+    style.color,
+  );
+  let palette_index = select_palette_index(&font, resolved_palette.base);
+  let palette_overrides = Arc::new(resolved_palette.overrides);
+
   let language = match &style.font_language_override {
     FontLanguageOverride::Normal => style.language.clone(),
     FontLanguageOverride::Override(tag) => tag.clone(),
@@ -2581,10 +2599,20 @@ fn push_font_run(
     language,
     features: features.to_vec(),
     variations,
-    palette_index: 0,
+    palette_index,
+    palette_overrides: Arc::clone(&palette_overrides),
+    palette_override_hash: resolved_palette.override_hash,
     rotation: RunRotation::None,
     vertical: false,
   });
+}
+
+fn select_palette_index(font: &LoadedFont, base: FontPaletteBase) -> u16 {
+  font
+    .as_ttf_face()
+    .ok()
+    .map(|face| select_cpal_palette(&face, base))
+    .unwrap_or(0)
 }
 
 // ============================================================================
@@ -2642,6 +2670,10 @@ pub struct ShapedRun {
 
   /// Palette index for color glyph rendering.
   pub palette_index: u16,
+  /// Palette overrides for color glyph rendering.
+  pub palette_overrides: Arc<Vec<(u16, Rgba)>>,
+  /// Stable hash of palette overrides for cache keys.
+  pub palette_override_hash: u64,
 
   /// Active variation settings for the run (used for cache keys).
   pub variations: Vec<Variation>,
@@ -2857,6 +2889,8 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
     synthetic_oblique: run.synthetic_oblique,
     rotation: RunRotation::None,
     palette_index: run.palette_index,
+    palette_overrides: Arc::clone(&run.palette_overrides),
+    palette_override_hash: run.palette_override_hash,
     variations: run.variations.clone(),
     scale: 1.0,
   })
@@ -2934,6 +2968,17 @@ fn shaping_style_hash(style: &ComputedStyle) -> u64 {
   style.color.g.hash(&mut hasher);
   style.color.b.hash(&mut hasher);
   style.color.a.to_bits().hash(&mut hasher);
+
+  match &style.font_palette {
+    FontPalette::Normal => 0u8.hash(&mut hasher),
+    FontPalette::Light => 1u8.hash(&mut hasher),
+    FontPalette::Dark => 2u8.hash(&mut hasher),
+    FontPalette::Named(name) => {
+      3u8.hash(&mut hasher);
+      name.hash(&mut hasher);
+    }
+  }
+  (Arc::as_ptr(&style.font_palettes) as usize).hash(&mut hasher);
 
   std::mem::discriminant(&style.font_variant).hash(&mut hasher);
   std::mem::discriminant(&style.font_variant_caps).hash(&mut hasher);
@@ -4047,6 +4092,8 @@ mod tests {
         synthetic_oblique: 0.0,
         rotation: RunRotation::None,
         palette_index: 0,
+        palette_overrides: Arc::new(Vec::new()),
+        palette_override_hash: 0,
         variations: Vec::new(),
         scale: 1.0,
       }

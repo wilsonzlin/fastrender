@@ -22,6 +22,7 @@ pub fn render_colr_glyph(
   glyph_id: ttf_parser::GlyphId,
   font_size: f32,
   palette_index: u16,
+  overrides: &[(u16, Rgba)],
   text_color: Rgba,
   synthetic_oblique: f32,
   limits: &GlyphRasterLimits,
@@ -43,6 +44,12 @@ pub fn render_colr_glyph(
       .palette(font_key, face, palette_index)
       .unwrap_or_else(|| Arc::new(cpal::ParsedPalette::default()))
   };
+  let mut palette_colors = palette.colors.clone();
+  for (idx, color) in overrides {
+    if let Some(slot) = palette_colors.get_mut(*idx as usize) {
+      *slot = *color;
+    }
+  }
 
   let units_per_em = face.units_per_em() as f32;
   if units_per_em <= 0.0 || !units_per_em.is_finite() || !font_size.is_finite() {
@@ -65,7 +72,7 @@ pub fn render_colr_glyph(
   let renderer = Renderer {
     face,
     colr: &colr,
-    palette: &palette.colors,
+    palette: &palette_colors,
     text_color,
     base_transform,
   };

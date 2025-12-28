@@ -124,6 +124,7 @@ pub fn render_colr_glyph(
   glyph_id: ttf_parser::GlyphId,
   font_size: f32,
   palette_index: u16,
+  overrides: &[(u16, Rgba)],
   text_color: Rgba,
   _synthetic_oblique: f32,
   limits: &GlyphRasterLimits,
@@ -159,6 +160,12 @@ pub fn render_colr_glyph(
       .palette(font_key, face, palette_index)
       .unwrap_or_else(|| Arc::new(cpal::ParsedPalette::default()))
   };
+  let mut colors = palette.colors.clone();
+  for (idx, color) in overrides {
+    if let Some(slot) = colors.get_mut(*idx as usize) {
+      *slot = *color;
+    }
+  }
 
   let layer_records = parse_layer_records(colr_data, header, base_record)?;
   let units_per_em = instance.units_per_em();
@@ -175,7 +182,7 @@ pub fn render_colr_glyph(
 
   let mut paths: Vec<(Path, Rgba)> = Vec::new();
   for layer in layer_records {
-    let color = resolve_layer_color(layer.palette_index, &palette.colors, text_color);
+    let color = resolve_layer_color(layer.palette_index, &colors, text_color);
     if let Some(outline) = instance.glyph_outline(layer.glyph_id as u32) {
       if let Some(path) = outline.path.and_then(|p| p.transform(transform)) {
         paths.push((path, color));

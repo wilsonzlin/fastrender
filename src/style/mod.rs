@@ -9,6 +9,7 @@ pub mod computed;
 pub mod content;
 pub mod counter_styles;
 pub mod counters;
+pub mod font_palette;
 pub mod custom_properties;
 pub mod defaults;
 pub mod display;
@@ -37,6 +38,7 @@ use color::Rgba;
 use counter_styles::CounterStyleRegistry;
 use counters::CounterProperties;
 use display::Display;
+use font_palette::FontPaletteRegistry;
 use position::Position;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -679,6 +681,8 @@ pub struct ComputedStyle {
   pub counters: CounterProperties,
   /// Registry of counter styles available for formatting counters/markers.
   pub counter_styles: Arc<CounterStyleRegistry>,
+  /// Registry of named color font palettes.
+  pub font_palettes: Arc<FontPaletteRegistry>,
 
   // Color and background
   pub forced_color_adjust: ForcedColorAdjust,
@@ -990,6 +994,7 @@ impl Default for ComputedStyle {
       list_style_image: ListStyleImage::None,
       counters: CounterProperties::default(),
       counter_styles: Arc::new(CounterStyleRegistry::with_builtins()),
+      font_palettes: Arc::new(FontPaletteRegistry::default()),
       forced_color_adjust: ForcedColorAdjust::Auto,
       color_scheme: ColorSchemePreference::Normal,
       caret_color: CaretColor::Auto,

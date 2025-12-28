@@ -1937,10 +1937,55 @@ pub fn apply_styles_with_media_target_and_imports_cached_with_deadline(
     std::sync::Arc::new(registry)
   };
 
+  let font_palettes = {
+    let mut registry = crate::style::font_palette::FontPaletteRegistry::default();
+
+    let ua_palettes = if let Some(cache) = media_cache.as_deref_mut() {
+      ua_stylesheet.collect_font_palette_rules_with_cache(media_ctx, Some(cache))
+    } else {
+      ua_stylesheet.collect_font_palette_rules(media_ctx)
+    };
+    let author_palettes = if let Some(cache) = media_cache.as_deref_mut() {
+      author_sheet.collect_font_palette_rules_with_cache(media_ctx, Some(cache))
+    } else {
+      author_sheet.collect_font_palette_rules(media_ctx)
+    };
+
+    fn register_collected(
+      registry: &mut crate::style::font_palette::FontPaletteRegistry,
+      mut collected: Vec<crate::css::types::CollectedFontPaletteRule<'_>>,
+    ) {
+      collected.sort_by(|a, b| {
+        a.layer_order
+          .cmp(&b.layer_order)
+          .then(a.order.cmp(&b.order))
+      });
+      for rule in collected {
+        registry.register(rule.rule.clone());
+      }
+    }
+
+    register_collected(&mut registry, ua_palettes);
+    register_collected(&mut registry, author_palettes);
+
+    for (_host, _shadow_root_id, sheet) in &shadow_sheets {
+      let shadow_palettes = if let Some(cache) = media_cache.as_deref_mut() {
+        sheet.collect_font_palette_rules_with_cache(media_ctx, Some(cache))
+      } else {
+        sheet.collect_font_palette_rules(media_ctx)
+      };
+      register_collected(&mut registry, shadow_palettes);
+    }
+
+    std::sync::Arc::new(registry)
+  };
+
   let mut base_styles = ComputedStyle::default();
   base_styles.counter_styles = counter_styles.clone();
+  base_styles.font_palettes = font_palettes.clone();
   let mut base_ua_styles = ComputedStyle::default();
   base_ua_styles.counter_styles = counter_styles;
+  base_ua_styles.font_palettes = font_palettes;
 
   let styled = with_target_fragment(target_fragment, || {
     with_image_set_dpr(media_ctx.device_pixel_ratio, || {
@@ -2293,10 +2338,55 @@ pub fn apply_style_set_with_media_target_and_imports_cached_with_deadline(
     std::sync::Arc::new(registry)
   };
 
+  let font_palettes = {
+    let mut registry = crate::style::font_palette::FontPaletteRegistry::default();
+
+    let ua_palettes = if let Some(cache) = media_cache.as_deref_mut() {
+      ua_stylesheet.collect_font_palette_rules_with_cache(media_ctx, Some(cache))
+    } else {
+      ua_stylesheet.collect_font_palette_rules(media_ctx)
+    };
+    let author_palettes = if let Some(cache) = media_cache.as_deref_mut() {
+      document_sheet.collect_font_palette_rules_with_cache(media_ctx, Some(cache))
+    } else {
+      document_sheet.collect_font_palette_rules(media_ctx)
+    };
+
+    fn register_collected(
+      registry: &mut crate::style::font_palette::FontPaletteRegistry,
+      mut collected: Vec<crate::css::types::CollectedFontPaletteRule<'_>>,
+    ) {
+      collected.sort_by(|a, b| {
+        a.layer_order
+          .cmp(&b.layer_order)
+          .then(a.order.cmp(&b.order))
+      });
+      for rule in collected {
+        registry.register(rule.rule.clone());
+      }
+    }
+
+    register_collected(&mut registry, ua_palettes);
+    register_collected(&mut registry, author_palettes);
+
+    for (_host, _shadow_root_id, sheet) in &shadow_sheets {
+      let shadow_palettes = if let Some(cache) = media_cache.as_deref_mut() {
+        sheet.collect_font_palette_rules_with_cache(media_ctx, Some(cache))
+      } else {
+        sheet.collect_font_palette_rules(media_ctx)
+      };
+      register_collected(&mut registry, shadow_palettes);
+    }
+
+    std::sync::Arc::new(registry)
+  };
+
   let mut base_styles = ComputedStyle::default();
   base_styles.counter_styles = counter_styles.clone();
+  base_styles.font_palettes = font_palettes.clone();
   let mut base_ua_styles = ComputedStyle::default();
   base_ua_styles.counter_styles = counter_styles;
+  base_ua_styles.font_palettes = font_palettes;
 
   let styled = with_target_fragment(target_fragment, || {
     with_image_set_dpr(media_ctx.device_pixel_ratio, || {
@@ -3726,6 +3816,7 @@ pub(crate) fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle)
   styles.font_variant_emoji = parent.font_variant_emoji;
   styles.font_stretch = parent.font_stretch;
   styles.font_kerning = parent.font_kerning;
+  styles.font_palette = parent.font_palette.clone();
   styles.line_height = parent.line_height.clone();
   styles.direction = parent.direction;
   styles.text_align = parent.text_align;
@@ -3764,6 +3855,7 @@ pub(crate) fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle)
   styles.list_style_position = parent.list_style_position;
   styles.list_style_image = parent.list_style_image.clone();
   styles.counter_styles = parent.counter_styles.clone();
+  styles.font_palettes = parent.font_palettes.clone();
   styles.image_orientation = parent.image_orientation;
   styles.quotes = parent.quotes.clone();
   styles.cursor = parent.cursor;

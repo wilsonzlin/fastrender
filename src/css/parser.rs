@@ -20,6 +20,9 @@ use super::types::FontFaceRule;
 use super::types::FontFaceSource;
 use super::types::FontFaceStyle;
 use super::types::FontFaceUrlSource;
+use super::types::FontPaletteBase;
+use super::types::FontPaletteOverride;
+use super::types::FontPaletteValuesRule;
 use super::types::FontSourceFormat;
 use super::types::ImportRule;
 use super::types::Keyframe;
@@ -37,8 +40,10 @@ use super::types::StyleRule;
 use super::types::StyleSheet;
 use super::types::SupportsCondition;
 use super::types::SupportsRule;
+use super::types::PropertyValue;
 use crate::dom::{DomNode, DomNodeType};
 use crate::error::Result;
+use crate::style::color::Color;
 use crate::style::counter_styles::{CounterStyleRule, CounterSystem, SpeakAs};
 use crate::style::media::MediaQuery;
 use cssparser::ParseError;
@@ -202,6 +207,7 @@ fn parse_rule<'i, 't>(
         "starting-style" => parse_starting_style_rule(p, parent_selectors, css_source),
         "page" => parse_page_rule(p, css_source),
         "counter-style" => parse_counter_style_rule(p),
+        "font-palette-values" => parse_font_palette_values_rule(p, css_source),
         "font-face" => parse_font_face_rule(p),
         "keyframes" | "-webkit-keyframes" => parse_keyframes_rule(p, css_source),
         _ => {
@@ -1424,6 +1430,164 @@ fn parse_counter_style_descriptor_value<'i, 't>(
     full_value.trim_end_matches(';').trim()
   };
   Ok(trimmed_value.to_string())
+}
+
+fn parse_font_palette_values_rule<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+  css_source: &str,
+) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
+  parser.skip_whitespace();
+  let name = match parser.next_including_whitespace() {
+    Ok(Token::Ident(id)) => id.to_string(),
+    _ => {
+      skip_at_rule(parser);
+      return Ok(None);
+    }
+  };
+
+  if !name.starts_with("--") {
+    skip_at_rule(parser);
+    return Ok(None);
+  }
+
+  parser.expect_curly_bracket_block().map_err(|_| {
+    parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent("expected {".into()))
+  })?;
+
+  let rule = parser.parse_nested_block(|nested| {
+    parse_font_palette_descriptors(nested, name.trim(), css_source)
+  })?;
+  Ok(rule.map(CssRule::FontPaletteValues))
+}
+
+fn parse_font_palette_descriptors<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+  name: &str,
+  _css_source: &str,
+) -> std::result::Result<Option<FontPaletteValuesRule>, ParseError<'i, SelectorParseErrorKind<'i>>>
+{
+  let mut rule = FontPaletteValuesRule::new(name.to_ascii_lowercase());
+
+  while !parser.is_exhausted() {
+    parser.skip_whitespace();
+    if parser.is_exhausted() {
+      break;
+    }
+
+    let property = match parser.expect_ident() {
+      Ok(id) => id.to_string(),
+      Err(_) => {
+        skip_to_semicolon(parser);
+        continue;
+      }
+    };
+
+    if parser.expect_colon().is_err() {
+      skip_to_semicolon(parser);
+      continue;
+    }
+
+    let value_start = parser.position();
+    let mut important = false;
+    loop {
+      match parser.next() {
+        Ok(Token::Semicolon) | Err(_) => break,
+        Ok(Token::Delim('!')) => {
+          if parser
+            .try_parse(|p| p.expect_ident_matching("important"))
+            .is_ok()
+          {
+            important = true;
+            skip_to_semicolon(parser);
+            break;
+          }
+        }
+        _ => {}
+      }
+    }
+
+    let full_value = parser.slice_from(value_start);
+    let trimmed_value = if important {
+      full_value
+        .rsplit_once("!important")
+        .map(|(before, _)| before.trim_end_matches(';').trim())
+        .unwrap_or_else(|| full_value.trim_end_matches(';').trim())
+    } else {
+      full_value.trim_end_matches(';').trim()
+    };
+
+    match property.to_ascii_lowercase().as_str() {
+      "font-family" => {
+        if let Some(PropertyValue::FontFamily(families)) =
+          super::properties::parse_property_value("font-family", trimmed_value)
+        {
+          if !families.is_empty() {
+            rule.font_families = families;
+          }
+        }
+      }
+      "base-palette" => {
+        let lower = trimmed_value.to_ascii_lowercase();
+        if let Ok(idx) = lower.parse::<i32>() {
+          if idx >= 0 {
+            rule.base_palette = FontPaletteBase::Index(idx as u16);
+          }
+        } else {
+          match lower.as_str() {
+            "light" => rule.base_palette = FontPaletteBase::Light,
+            "dark" => rule.base_palette = FontPaletteBase::Dark,
+            "normal" => rule.base_palette = FontPaletteBase::Normal,
+            _ => {}
+          }
+        }
+      }
+      "override-colors" => {
+        let parsed = parse_override_colors(trimmed_value);
+        if !parsed.is_empty() {
+          rule.overrides = parsed;
+        }
+      }
+      _ => {}
+    }
+  }
+
+  if rule.font_families.is_empty() {
+    return Ok(None);
+  }
+
+  Ok(Some(rule))
+}
+
+fn parse_override_colors(value: &str) -> Vec<FontPaletteOverride> {
+  value
+    .split(',')
+    .filter_map(|entry| {
+      let mut parts = entry.split_whitespace();
+      let idx_str = parts.next()?.trim();
+      let Ok(idx) = idx_str.parse::<i32>() else {
+        return None;
+      };
+      if idx < 0 {
+        return None;
+      }
+      let color_str = parts.collect::<Vec<_>>().join(" ");
+      if color_str.is_empty() {
+        return None;
+      }
+      let parsed_color = super::properties::parse_property_value("color", color_str.as_str())?;
+      match parsed_color {
+        PropertyValue::Color(color) => Some(FontPaletteOverride {
+          index: idx as u16,
+          color,
+        }),
+        PropertyValue::Keyword(kw) => Color::parse(&kw).ok().map(|c| FontPaletteOverride {
+          index: idx as u16,
+          color: c,
+        }),
+        _ => None,
+      }
+    })
+    .collect()
 }
 
 fn parse_counter_style_system<'i, 't>(

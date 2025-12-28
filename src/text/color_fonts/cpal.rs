@@ -1,4 +1,5 @@
 use super::{read_u16, read_u32};
+use crate::css::types::FontPaletteBase;
 use crate::style::color::Rgba;
 
 /// Parsed CPAL palette with optional type metadata (v1+).
@@ -73,6 +74,63 @@ pub fn parse_cpal_palette(data: &[u8], palette_index: u16) -> Option<ParsedPalet
     colors,
     palette_type,
   })
+}
+
+/// Selects a CPAL palette index based on a preference and palette metadata.
+pub fn select_cpal_palette(face: &ttf_parser::Face<'_>, preference: FontPaletteBase) -> u16 {
+  let data = match face.raw_face().table(ttf_parser::Tag::from_bytes(b"CPAL")) {
+    Some(data) => data,
+    None => return 0,
+  };
+  if data.len() < 12 {
+    return 0;
+  }
+  let version = match read_u16(data, 0) {
+    Some(v) => v,
+    None => return 0,
+  };
+  let num_palettes = match read_u16(data, 4) {
+    Some(v) if v > 0 => v as usize,
+    _ => return 0,
+  };
+  let clamp_index = |idx: u16| idx.min(num_palettes.saturating_sub(1) as u16);
+  match preference {
+    FontPaletteBase::Index(idx) => return clamp_index(idx),
+    FontPaletteBase::Normal => return 0,
+    _ => {}
+  }
+
+  if version < 1 {
+    return 0;
+  }
+  // paletteTypesArrayOffset follows the colorRecordIndices array.
+  let start = 12usize.checked_add(num_palettes * 2).unwrap_or(data.len());
+  if start + 4 > data.len() {
+    return 0;
+  }
+  let palette_types_offset = match read_u32(data, start) {
+    Some(off) if off > 0 => off as usize,
+    _ => return 0,
+  };
+  if palette_types_offset + num_palettes * 4 > data.len() {
+    return 0;
+  }
+  let desired_bit = match preference {
+    FontPaletteBase::Light => 0x0001,
+    FontPaletteBase::Dark => 0x0002,
+    _ => 0,
+  };
+  if desired_bit == 0 {
+    return 0;
+  }
+  for i in 0..num_palettes {
+    if let Some(ty) = read_u32(data, palette_types_offset + i * 4) {
+      if ty & desired_bit != 0 {
+        return i as u16;
+      }
+    }
+  }
+  0
 }
 
 #[cfg(test)]

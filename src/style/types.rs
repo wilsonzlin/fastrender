@@ -1903,19 +1903,20 @@ pub enum FontLanguageOverride {
   Override(String),
 }
 
+/// Palette selection for color fonts (`font-palette`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum FontPalette {
+  Normal,
+  Light,
+  Dark,
+  Named(String),
+}
+
 /// Optical sizing control (`font-optical-sizing`)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FontOpticalSizing {
   Auto,
   None,
-}
-
-/// Palette selection hint for color fonts (`font-palette`)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum FontPalette {
-  Normal,
-  Light,
-  Dark,
 }
 
 impl Default for FontPalette {

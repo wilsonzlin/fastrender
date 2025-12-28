@@ -3311,7 +3311,7 @@ fn apply_property_from_source(
     }
     "font-stretch" => styles.font_stretch = source.font_stretch,
     "font-kerning" => styles.font_kerning = source.font_kerning,
-    "font-palette" => styles.font_palette = source.font_palette,
+    "font-palette" => styles.font_palette = source.font_palette.clone(),
     "font-synthesis" => styles.font_synthesis = source.font_synthesis,
     "font-synthesis-weight" => styles.font_synthesis.weight = source.font_synthesis.weight,
     "font-synthesis-style" => styles.font_synthesis.style = source.font_synthesis.style,
@@ -6587,12 +6587,15 @@ pub fn apply_declaration_with_base(
     }
     "font-palette" => {
       if let PropertyValue::Keyword(raw) = &resolved_value {
-        styles.font_palette = match raw.to_ascii_lowercase().as_str() {
-          "normal" => FontPalette::Normal,
-          "light" => FontPalette::Light,
-          "dark" => FontPalette::Dark,
-          _ => styles.font_palette,
-        };
+        let lower = raw.trim().to_ascii_lowercase();
+        if !lower.is_empty() {
+          styles.font_palette = match lower.as_str() {
+            "normal" => FontPalette::Normal,
+            "light" => FontPalette::Light,
+            "dark" => FontPalette::Dark,
+            _ => FontPalette::Named(lower),
+          };
+        }
       }
     }
     "font-synthesis" => {
@@ -20177,6 +20180,7 @@ mod tests {
       ("normal", FontPalette::Normal),
       ("light", FontPalette::Light),
       ("dark", FontPalette::Dark),
+      ("--Custom", FontPalette::Named("--custom".into())),
     ] {
       let decl = Declaration {
         property: "font-palette".to_string(),

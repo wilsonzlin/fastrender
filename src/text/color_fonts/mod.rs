@@ -23,6 +23,7 @@ pub use bitmap::render_bitmap_glyph;
 pub use svg::render_svg_glyph;
 pub use svg::sanitize_svg_glyph_for_tests;
 pub use svg::MAX_SVG_GLYPH_BYTES;
+pub use cpal::select_cpal_palette;
 
 /// Rasterized color glyph image with positioning relative to the glyph origin.
 #[derive(Debug, Clone)]
@@ -62,6 +63,7 @@ impl ColorFontRenderer {
     glyph_id: u32,
     font_size: f32,
     palette_index: u16,
+    palette_overrides: &[(u16, Rgba)],
     text_color: Rgba,
     synthetic_oblique: f32,
     variations: &[Variation],
@@ -91,6 +93,7 @@ impl ColorFontRenderer {
       gid,
       font_size,
       palette_index,
+      palette_overrides,
       text_color,
       synthetic_oblique,
       &limits,
@@ -107,6 +110,7 @@ impl ColorFontRenderer {
       gid,
       font_size,
       palette_index,
+      palette_overrides,
       text_color,
       synthetic_oblique,
       &limits,

@@ -355,6 +355,7 @@ struct ColorGlyphCacheKey {
   /// intentionally excluded to keep cached rasters reusable across opacity
   /// changes while still differentiating currentColor layers by hue.
   color_signature: u32,
+  palette_override_hash: u64,
 }
 
 impl ColorGlyphCacheKey {
@@ -365,6 +366,7 @@ impl ColorGlyphCacheKey {
     palette_index: u16,
     variations: &[Variation],
     color: Rgba,
+    palette_override_hash: u64,
   ) -> Self {
     Self {
       font_ptr: Arc::as_ptr(&font.data) as usize,
@@ -374,6 +376,7 @@ impl ColorGlyphCacheKey {
       palette_index,
       variation_hash: variation_hash(variations),
       color_signature: rgb_signature(color),
+      palette_override_hash,
     }
   }
 }
@@ -610,6 +613,8 @@ impl TextRasterizer {
       run.synthetic_bold,
       run.synthetic_oblique,
       run.palette_index,
+      &run.palette_overrides,
+      run.palette_override_hash,
       &run.variations,
       rotation,
       x,
@@ -631,6 +636,8 @@ impl TextRasterizer {
     synthetic_bold: f32,
     synthetic_oblique: f32,
     palette_index: u16,
+    palette_overrides: &[(u16, Rgba)],
+    palette_override_hash: u64,
     variations: &[Variation],
     rotation: Option<Transform>,
     x: f32,
@@ -689,6 +696,7 @@ impl TextRasterizer {
         palette_index,
         variations,
         color_for_glyph,
+        palette_override_hash,
       );
 
       let mut color_glyph = self.color_cache.get(&color_key);
@@ -699,6 +707,7 @@ impl TextRasterizer {
           glyph.glyph_id,
           font_size,
           palette_index,
+          palette_overrides,
           color_for_glyph,
           0.0,
           variations,

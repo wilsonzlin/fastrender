@@ -224,6 +224,14 @@ pub struct CollectedCounterStyleRule<'a> {
   pub order: usize,
 }
 
+/// Flattened @font-palette-values rule with cascade-layer ordering preserved.
+#[derive(Debug, Clone)]
+pub struct CollectedFontPaletteRule<'a> {
+  pub rule: &'a FontPaletteValuesRule,
+  pub layer_order: Vec<u32>,
+  pub order: usize,
+}
+
 /// Stylesheet containing CSS rules
 #[derive(Debug, Clone)]
 pub struct StyleSheet {
@@ -430,6 +438,33 @@ impl StyleSheet {
     result
   }
 
+  /// Collects @font-palette-values rules for the given media context.
+  pub fn collect_font_palette_rules(
+    &self,
+    media_ctx: &MediaContext,
+  ) -> Vec<CollectedFontPaletteRule<'_>> {
+    self.collect_font_palette_rules_with_cache(media_ctx, None)
+  }
+
+  /// Collects @font-palette-values rules using an optional media-query cache.
+  pub fn collect_font_palette_rules_with_cache(
+    &self,
+    media_ctx: &MediaContext,
+    cache: Option<&mut MediaQueryCache>,
+  ) -> Vec<CollectedFontPaletteRule<'_>> {
+    let mut result = Vec::new();
+    let mut registry = LayerRegistry::new();
+    collect_font_palette_rules_recursive(
+      &self.rules,
+      media_ctx,
+      cache,
+      &mut registry,
+      &[],
+      &mut result,
+    );
+    result
+  }
+
   /// Resolve @import rules by fetching external stylesheets and inlining their rules.
   ///
   /// Imports are processed in order; only imports whose media lists match the provided
@@ -505,7 +540,8 @@ impl StyleSheet {
           | CssRule::CounterStyle(_)
           | CssRule::Import(_)
           | CssRule::FontFace(_)
-          | CssRule::Keyframes(_) => {}
+          | CssRule::Keyframes(_)
+          | CssRule::FontPaletteValues(_) => {}
         }
       }
       false
@@ -554,7 +590,8 @@ impl StyleSheet {
           | CssRule::CounterStyle(_)
           | CssRule::Import(_)
           | CssRule::FontFace(_)
-          | CssRule::Keyframes(_) => {}
+          | CssRule::Keyframes(_)
+          | CssRule::FontPaletteValues(_) => {}
         }
       }
       false
@@ -663,6 +700,7 @@ fn collect_rules_recursive<'a>(
         // Imports are resolved before collection; nothing to add here.
       }
       CssRule::Keyframes(_) => {}
+      CssRule::FontPaletteValues(_) => {}
       CssRule::Layer(layer_rule) => {
         if layer_rule.rules.is_empty() {
           for name in &layer_rule.names {
@@ -834,6 +872,7 @@ fn collect_page_rules_recursive<'a>(
       CssRule::Container(_) => {}
       CssRule::Keyframes(_) | CssRule::CounterStyle(_) => {}
       CssRule::Style(_) | CssRule::Import(_) | CssRule::FontFace(_) => {}
+      CssRule::FontPaletteValues(_) => {}
       CssRule::Scope(scope_rule) => {
         collect_page_rules_recursive(
           &scope_rule.rules,
@@ -885,6 +924,7 @@ fn collect_font_faces_recursive(
       }
       CssRule::Page(_) => {}
       CssRule::CounterStyle(_) => {}
+      CssRule::FontPaletteValues(_) => {}
       CssRule::Layer(layer_rule) => {
         if layer_rule.rules.is_empty() {
           continue;
@@ -943,6 +983,7 @@ fn collect_keyframes_recursive(
       }
       CssRule::Page(_) | CssRule::CounterStyle(_) => {}
       CssRule::Style(_) | CssRule::Import(_) | CssRule::FontFace(_) => {}
+      CssRule::FontPaletteValues(_) => {}
       CssRule::Scope(scope_rule) => {
         collect_keyframes_recursive(&scope_rule.rules, media_ctx, cache.as_deref_mut(), out);
       }
@@ -1074,8 +1115,142 @@ fn collect_counter_styles_recursive<'a>(
       CssRule::Page(_) => {}
       CssRule::FontFace(_) => {}
       CssRule::Keyframes(_) => {}
+      CssRule::FontPaletteValues(_) => {}
       CssRule::StartingStyle(starting_rule) => {
         collect_counter_styles_recursive(
+          &starting_rule.rules,
+          media_ctx,
+          cache.as_deref_mut(),
+          registry,
+          current_layer,
+          out,
+        );
+      }
+    }
+  }
+}
+
+fn collect_font_palette_rules_recursive<'a>(
+  rules: &'a [CssRule],
+  media_ctx: &MediaContext,
+  cache: Option<&mut MediaQueryCache>,
+  registry: &mut LayerRegistry,
+  current_layer: &[u32],
+  out: &mut Vec<CollectedFontPaletteRule<'a>>,
+) {
+  let mut cache = cache;
+  for rule in rules {
+    match rule {
+      CssRule::FontPaletteValues(palette) => {
+        let layer_order = if current_layer.is_empty() {
+          vec![u32::MAX]
+        } else {
+          current_layer.to_vec()
+        };
+        let order = out.len();
+        out.push(CollectedFontPaletteRule {
+          rule: palette,
+          layer_order,
+          order,
+        });
+      }
+      CssRule::Media(media_rule) => {
+        if media_ctx.evaluate_with_cache(&media_rule.query, cache.as_deref_mut()) {
+          collect_font_palette_rules_recursive(
+            &media_rule.rules,
+            media_ctx,
+            cache.as_deref_mut(),
+            registry,
+            current_layer,
+            out,
+          );
+        }
+      }
+      CssRule::Supports(supports_rule) => {
+        if supports_rule.condition.matches() {
+          collect_font_palette_rules_recursive(
+            &supports_rule.rules,
+            media_ctx,
+            cache.as_deref_mut(),
+            registry,
+            current_layer,
+            out,
+          );
+        }
+      }
+      CssRule::Layer(layer_rule) => {
+        if layer_rule.rules.is_empty() {
+          for name in &layer_rule.names {
+            registry.ensure_path(current_layer, name);
+          }
+          if layer_rule.anonymous {
+            registry.ensure_anonymous(current_layer);
+          }
+          continue;
+        }
+
+        if layer_rule.anonymous {
+          let path = registry.ensure_anonymous(current_layer);
+          collect_font_palette_rules_recursive(
+            &layer_rule.rules,
+            media_ctx,
+            cache.as_deref_mut(),
+            registry,
+            &path,
+            out,
+          );
+          continue;
+        }
+
+        if layer_rule.names.len() != 1 {
+          continue;
+        }
+        let path = registry.ensure_path(current_layer, &layer_rule.names[0]);
+        collect_font_palette_rules_recursive(
+          &layer_rule.rules,
+          media_ctx,
+          cache.as_deref_mut(),
+          registry,
+          &path,
+          out,
+        );
+      }
+      CssRule::Style(style_rule) => {
+        if !style_rule.nested_rules.is_empty() {
+          collect_font_palette_rules_recursive(
+            &style_rule.nested_rules,
+            media_ctx,
+            cache.as_deref_mut(),
+            registry,
+            current_layer,
+            out,
+          );
+        }
+      }
+      CssRule::Scope(scope_rule) => {
+        collect_font_palette_rules_recursive(
+          &scope_rule.rules,
+          media_ctx,
+          cache.as_deref_mut(),
+          registry,
+          current_layer,
+          out,
+        );
+      }
+      CssRule::Container(container_rule) => {
+        collect_font_palette_rules_recursive(
+          &container_rule.rules,
+          media_ctx,
+          cache.as_deref_mut(),
+          registry,
+          current_layer,
+          out,
+        );
+      }
+      CssRule::Import(_) | CssRule::Page(_) | CssRule::FontFace(_) | CssRule::CounterStyle(_) => {}
+      CssRule::Keyframes(_) => {}
+      CssRule::StartingStyle(starting_rule) => {
+        collect_font_palette_rules_recursive(
           &starting_rule.rules,
           media_ctx,
           cache.as_deref_mut(),
@@ -1264,6 +1439,8 @@ pub enum CssRule {
   Page(PageRule),
   /// A @counter-style rule defining a custom counter style.
   CounterStyle(CounterStyleRule),
+  /// A @font-palette-values rule defining a named color font palette.
+  FontPaletteValues(FontPaletteValuesRule),
   /// An @import rule (href + optional media list)
   Import(ImportRule),
   /// A @layer rule establishing cascade layers
@@ -1438,6 +1615,42 @@ pub struct KeyframesRule {
   pub keyframes: Vec<Keyframe>,
 }
 
+/// Base palette selection for @font-palette-values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FontPaletteBase {
+  Normal,
+  Light,
+  Dark,
+  Index(u16),
+}
+
+/// Override entry within @font-palette-values.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FontPaletteOverride {
+  pub index: u16,
+  pub color: Color,
+}
+
+/// Author-defined palette used by font-palette selection.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FontPaletteValuesRule {
+  pub name: String,
+  pub font_families: Vec<String>,
+  pub base_palette: FontPaletteBase,
+  pub overrides: Vec<FontPaletteOverride>,
+}
+
+impl FontPaletteValuesRule {
+  pub fn new(name: impl Into<String>) -> Self {
+    Self {
+      name: name.into(),
+      font_families: Vec::new(),
+      base_palette: FontPaletteBase::Normal,
+      overrides: Vec::new(),
+    }
+  }
+}
+
 /// Supported @font-face format() hint values.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FontSourceFormat {
@@ -1555,7 +1768,8 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
       | CssRule::Media(_)
       | CssRule::FontFace(_)
       | CssRule::Keyframes(_)
-      | CssRule::CounterStyle(_) => out.push(rule.clone()),
+      | CssRule::CounterStyle(_)
+      | CssRule::FontPaletteValues(_) => out.push(rule.clone()),
       CssRule::Container(container_rule) => {
         let mut resolved_children = Vec::new();
         resolve_rules(
