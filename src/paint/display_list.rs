@@ -60,11 +60,13 @@ use crate::style::types::ResolvedTextDecoration;
 use crate::style::types::TextEmphasisPosition;
 use crate::style::types::TextEmphasisStyle;
 use crate::style::types::TransformStyle;
+use crate::text::font_db::FontStretch;
+use crate::text::font_db::FontStyle;
 use crate::text::font_db::LoadedFont;
-use crate::text::variations::FontVariation;
 use std::fmt;
 use std::sync::Arc;
 use tiny_skia::FilterQuality;
+use ttf_parser::Tag;
 
 // ============================================================================
 // Display Item Types
@@ -564,6 +566,29 @@ impl Default for BorderRadii {
 // Text Item
 // ============================================================================
 
+/// Variation axis/value pair for variable fonts.
+///
+/// Values are stored as raw bits to keep equality/hash semantics stable
+/// even when NaNs are involved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FontVariation {
+  pub tag: Tag,
+  pub value_bits: u32,
+}
+
+impl FontVariation {
+  pub fn new(tag: Tag, value: f32) -> Self {
+    Self {
+      tag,
+      value_bits: value.to_bits(),
+    }
+  }
+
+  pub fn value(&self) -> f32 {
+    f32::from_bits(self.value_bits)
+  }
+}
+
 /// Draw a text run
 ///
 /// Represents shaped text ready for rendering. The glyphs have already
@@ -767,7 +792,7 @@ pub struct ListMarkerItem {
   /// Exact font bytes used for shaping.
   pub font: Option<Arc<LoadedFont>>,
 
-  /// Variation coordinates applied during shaping.
+  /// Active variation coordinates for this run.
   pub variations: Vec<FontVariation>,
 
   /// Synthetic bold stroke width in CSS px (0 = none)

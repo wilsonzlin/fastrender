@@ -911,18 +911,18 @@ impl TextRasterizer {
     state: TextRenderState<'_>,
     pixmap: &mut Pixmap,
   ) -> Result<f32> {
-    self.render_glyph_run(
+    self.render_glyphs_with_state_and_palette(
       glyphs,
       font,
       font_size,
+      x,
+      baseline_y,
+      color,
       synthetic_bold,
       synthetic_oblique,
       palette_index,
       variations,
       rotation,
-      x,
-      baseline_y,
-      color,
       state,
       pixmap,
     )

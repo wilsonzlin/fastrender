@@ -2369,16 +2369,16 @@ fn resolve_font_for_cluster(
           };
 
           if let Some(id) = db.inner().query(&query) {
-              if let Some(font) = db.load_font(id) {
-                if !base_supported(id) {
-                  continue;
-                }
-                let is_emoji_font = font_is_emoji_font(db, Some(id), &font);
-                let idx = picker.bump_order();
-                picker.record_any(&font, is_emoji_font, idx);
-                if covers_needed(id) {
-                  if let Some(font) = picker.consider(font, is_emoji_font, idx) {
-                    return Some(font);
+            if let Some(font) = db.load_font(id) {
+              if !base_supported(id) {
+                continue;
+              }
+              let is_emoji_font = font_is_emoji_font(db, Some(id), &font);
+              let idx = picker.bump_order();
+              picker.record_any(&font, is_emoji_font, idx);
+              if covers_needed(id) {
+                if let Some(font) = picker.consider(font, is_emoji_font, idx) {
+                  return Some(font);
                 }
               }
             }

@@ -45,6 +45,7 @@ use super::display_list::BlendMode;
 use super::display_list::BorderRadii;
 #[cfg(test)]
 use super::display_list::BorderRadius;
+use super::display_list::FontVariation;
 use crate::error::RenderError;
 use crate::error::Result;
 use crate::geometry::Point;
@@ -55,9 +56,8 @@ use crate::paint::text_rasterize::{GlyphCacheStats, TextRasterizer, TextRenderSt
 use crate::paint::text_shadow::PathBounds;
 use crate::style::color::Rgba;
 use crate::text::font_db::LoadedFont;
-use crate::text::pipeline::GlyphPosition;
-use crate::text::pipeline::ShapedRun;
-use crate::text::variations::{to_rustybuzz_variations, FontVariation};
+use crate::text::pipeline::{GlyphPosition, ShapedRun};
+use rustybuzz::Variation as HbVariation;
 use tiny_skia::BlendMode as SkiaBlendMode;
 use tiny_skia::FillRule;
 use tiny_skia::IntSize;
@@ -900,6 +900,16 @@ impl Canvas {
     }
   }
 
+  fn hb_variations(variations: &[FontVariation]) -> Vec<HbVariation> {
+    variations
+      .iter()
+      .map(|v| HbVariation {
+        tag: v.tag,
+        value: v.value(),
+      })
+      .collect()
+  }
+
   pub(crate) fn glyph_paths(
     &mut self,
     position: Point,
@@ -910,7 +920,7 @@ impl Canvas {
     variations: &[FontVariation],
     rotation: Option<Transform>,
   ) -> Result<(Vec<tiny_skia::Path>, PathBounds)> {
-    let hb_variations = to_rustybuzz_variations(variations);
+    let hb_variations = Self::hb_variations(variations);
     let paths = self
       .text_rasterizer
       .positioned_glyph_paths_with_variations(
@@ -994,7 +1004,7 @@ impl Canvas {
   ///   run.synthetic_bold,
   ///   run.synthetic_oblique,
   ///   run.palette_index,
-  ///   &run.variations,
+  ///   &[],
   /// );
   /// ```
   pub fn draw_text(
@@ -1013,7 +1023,7 @@ impl Canvas {
       return;
     }
 
-    let hb_variations = to_rustybuzz_variations(variations);
+    let hb_variations = Self::hb_variations(variations);
     let clip_mask = self.current_state.clip_mask.clone();
     let state = self.current_text_state(clip_mask.as_ref());
 

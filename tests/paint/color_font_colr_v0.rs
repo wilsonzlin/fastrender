@@ -2,12 +2,13 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 
-use fastrender::paint::display_list::{DisplayItem, DisplayList, GlyphInstance, TextItem};
+use fastrender::paint::display_list::{
+  DisplayItem, DisplayList, FontVariation, GlyphInstance, TextItem,
+};
 use fastrender::paint::display_list_renderer::DisplayListRenderer;
 use fastrender::style::color::Rgba;
 use fastrender::text::font_db::FontDatabase;
 use fastrender::text::pipeline::{Direction, ShapedRun, ShapingPipeline};
-use fastrender::text::variations::FontVariation;
 use fastrender::{ComputedStyle, FontContext, Point};
 
 fn load_color_font_context() -> (FontContext, String) {
@@ -51,6 +52,13 @@ fn text_item_from_run(run: &ShapedRun, origin: Point, text_color: Rgba) -> TextI
     })
     .collect();
 
+  let mut variations: Vec<FontVariation> = run
+    .variations
+    .iter()
+    .map(|v| FontVariation::new(v.tag, v.value))
+    .collect();
+  variations.sort_by_key(|v| v.tag);
+
   TextItem {
     origin,
     glyphs,
@@ -59,23 +67,8 @@ fn text_item_from_run(run: &ShapedRun, origin: Point, text_color: Rgba) -> TextI
     shadows: Vec::new(),
     font_size: run.font_size,
     advance_width: run.advance,
-<<<<<<< HEAD
-    font_id: Some(FontId {
-      family: run.font.family.clone(),
-      weight: run.font.weight.value(),
-      style: run.font.style,
-      stretch: run.font.stretch,
-    }),
-    variations: run.variations.iter().copied().collect(),
-=======
     font: Some(run.font.clone()),
-    variations: run
-      .variations
-      .iter()
-      .copied()
-      .map(FontVariation::from)
-      .collect(),
->>>>>>> 8ddee26 (fix: keep shaped font bytes in display items)
+    variations,
     synthetic_bold: run.synthetic_bold,
     synthetic_oblique: run.synthetic_oblique,
     emphasis: None,

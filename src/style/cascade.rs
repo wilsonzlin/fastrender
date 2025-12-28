@@ -8219,11 +8219,9 @@ fn find_matching_rules<'a>(
     selectors::matching::NeedsSelectorFlags::No,
     selectors::matching::MatchingForInvalidation::No,
   );
-  context.extra_data = ShadowMatchData {
-    shadow_host: None,
-    slot_map,
-    part_export_map: Some(part_export_map),
-  };
+  context.extra_data =
+    ShadowMatchData::<'a>::for_document().with_part_export_map(Some(part_export_map));
+  context.extra_data.slot_map = slot_map;
 
   let mut scoped_rule_idx: Option<usize> = None;
   let mut scoped_match: Option<Option<ScopeMatch<'_>>> = None;
@@ -8386,11 +8384,9 @@ fn find_pseudo_element_rules<'a>(
     selectors::matching::NeedsSelectorFlags::No,
     selectors::matching::MatchingForInvalidation::No,
   );
-  context.extra_data = ShadowMatchData {
-    shadow_host: None,
-    slot_map,
-    part_export_map: Some(part_export_map),
-  };
+  context.extra_data =
+    ShadowMatchData::<'a>::for_document().with_part_export_map(Some(part_export_map));
+  context.extra_data.slot_map = slot_map;
 
   let mut scoped_rule_idx: Option<usize> = None;
   let mut scoped_match: Option<Option<ScopeMatch<'_>>> = None;
