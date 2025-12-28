@@ -8450,9 +8450,9 @@ mod tests {
   use crate::layout::engine::LayoutEngine;
   use crate::layout::formatting_context::intrinsic_cache_clear;
   use crate::resource::FetchedResource;
-  use crate::style::cascade::StyledNode;
   use crate::style::cascade::apply_style_set_with_media_target_and_imports_cached;
   use crate::style::cascade::ContainerQueryContext;
+  use crate::style::cascade::StyledNode;
   use crate::style::media::MediaContext;
   use crate::style::style_set::StyleSet;
   use crate::style::types::{

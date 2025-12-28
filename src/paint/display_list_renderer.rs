@@ -87,10 +87,6 @@ use crate::style::types::TextEmphasisShape;
 use crate::style::types::TextEmphasisStyle;
 use crate::style::types::TransformStyle;
 use crate::style::values::Length;
-#[cfg(test)]
-use crate::style::ComputedStyle;
-use crate::text::font_db::FontStretch;
-use crate::text::font_db::FontStyle as DbFontStyle;
 use crate::text::font_db::LoadedFont;
 use crate::text::font_instance::{glyph_transform, FontInstance};
 use crate::text::font_loader::FontContext;

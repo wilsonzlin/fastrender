@@ -1437,16 +1437,6 @@ fn collect_property_rules_recursive<'a>(
       CssRule::Keyframes(_) => {}
       CssRule::FontPaletteValues(_) => {}
       CssRule::CounterStyle(_) => {}
-      CssRule::StartingStyle(starting_rule) => {
-        collect_property_rules_recursive(
-          &starting_rule.rules,
-          media_ctx,
-          cache.as_deref_mut(),
-          registry,
-          current_layer,
-          out,
-        );
-      }
     }
   }
 }

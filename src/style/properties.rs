@@ -12727,7 +12727,6 @@ mod tests {
   use crate::style::types::AspectRatio;
   use crate::style::types::BackgroundImage;
   use crate::style::types::BackgroundPosition;
-  use crate::style::types::BackgroundPositionComponent;
   use crate::style::types::BackgroundRepeatKeyword;
   use crate::style::types::BasicShape;
   use crate::style::types::BorderCornerRadius;

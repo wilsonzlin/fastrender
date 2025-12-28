@@ -3132,6 +3132,10 @@ pub fn extract_scoped_css_sources(dom: &DomNode) -> ScopedStylesheetSources {
     *counter += 1;
 
     if let Some(tag) = node.tag_name() {
+      if tag.eq_ignore_ascii_case("template") {
+        // Skip inert template contents in both document and shadow scopes.
+        return;
+      }
       let bucket = match scope {
         Some(host) => out.shadows.entry(host).or_default(),
         None => &mut out.document,
@@ -3194,6 +3198,9 @@ pub fn extract_css(dom: &DomNode) -> Result<StyleSheet> {
       return;
     }
     if let Some(tag) = node.tag_name() {
+      if tag.eq_ignore_ascii_case("template") {
+        return;
+      }
       if tag == "style" {
         for child in &node.children {
           if let Some(text) = child.text_content() {
