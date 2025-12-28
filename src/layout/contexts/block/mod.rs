@@ -2256,6 +2256,7 @@ impl BlockFormattingContext {
         BorderStyle::None | BorderStyle::Hidden
       )
     {
+      let paint_top_border = block_axis_is_horizontal(parent.style.writing_mode);
       let mut rule_width = resolve_length_for_width(
         parent.style.column_rule_width,
         column_width,
@@ -2272,9 +2273,15 @@ impl BlockFormattingContext {
           rule_width = column_gap;
         }
         rule_style.display = Display::Block;
-        rule_style.border_left_width = Length::px(rule_width);
-        rule_style.border_left_style = parent.style.column_rule_style;
-        rule_style.border_left_color = color;
+        if paint_top_border {
+          rule_style.border_top_width = Length::px(rule_width);
+          rule_style.border_top_style = parent.style.column_rule_style;
+          rule_style.border_top_color = color;
+        } else {
+          rule_style.border_left_width = Length::px(rule_width);
+          rule_style.border_left_style = parent.style.column_rule_style;
+          rule_style.border_left_color = color;
+        }
         let rule_style = Arc::new(rule_style);
         for set in 0..set_count {
           let remaining = fragment_count.saturating_sub(set * column_count);

@@ -8,6 +8,7 @@ use fastrender::style::types::BreakBetween;
 use fastrender::style::types::BreakInside;
 use fastrender::style::types::ColumnFill;
 use fastrender::style::types::ColumnSpan;
+use fastrender::style::types::WritingMode;
 use fastrender::style::types::WhiteSpace;
 use fastrender::style::values::Length;
 use fastrender::style::ComputedStyle;
@@ -43,6 +44,26 @@ fn find_rule_fragment<'a>(fragment: &'a FragmentNode, color: Rgba) -> Option<&'a
   }
   for child in &fragment.children {
     if let Some(found) = find_rule_fragment(child, color) {
+      return Some(found);
+    }
+  }
+  None
+}
+
+fn find_rule_fragment_with_color<'a>(
+  fragment: &'a FragmentNode,
+  color: Rgba,
+) -> Option<&'a FragmentNode> {
+  if matches!(fragment.content, FragmentContent::Block { box_id: None })
+    && fragment.style.as_ref().is_some_and(|s| {
+      (s.border_left_color == color && s.border_left_width.to_px() > 0.0)
+        || (s.border_top_color == color && s.border_top_width.to_px() > 0.0)
+    })
+  {
+    return Some(fragment);
+  }
+  for child in &fragment.children {
+    if let Some(found) = find_rule_fragment_with_color(child, color) {
       return Some(found);
     }
   }
@@ -403,6 +424,56 @@ fn column_rule_emits_dashed_border_item() {
   assert_eq!(border.left.style, BorderStyle::Dashed);
   assert!((border.left.width - 8.0).abs() < 0.1);
   assert_eq!(border.left.color, rule_color);
+}
+
+#[test]
+fn column_rule_uses_top_border_in_vertical_writing_mode() {
+  let mut parent_style = ComputedStyle::default();
+  parent_style.width = Some(Length::px(200.0));
+  parent_style.height = Some(Length::px(200.0));
+  parent_style.column_count = Some(2);
+  parent_style.column_gap = Length::px(20.0);
+  parent_style.column_rule_style = BorderStyle::Solid;
+  parent_style.column_rule_width = Length::px(6.0);
+  let rule_color = Rgba::new(255, 0, 0, 1.0);
+  parent_style.column_rule_color = Some(rule_color);
+  parent_style.writing_mode = WritingMode::VerticalRl;
+  let parent_style = Arc::new(parent_style);
+
+  let child_style = |height: f32| -> Arc<ComputedStyle> {
+    let mut style = ComputedStyle::default();
+    style.height = Some(Length::px(height));
+    Arc::new(style)
+  };
+
+  let first = BoxNode::new_block(child_style(60.0), FormattingContextType::Block, vec![]);
+  let second = BoxNode::new_block(child_style(60.0), FormattingContextType::Block, vec![]);
+
+  let root = BoxNode::new_block(
+    parent_style,
+    FormattingContextType::Block,
+    vec![first, second],
+  );
+
+  let fc = BlockFormattingContext::new();
+  let fragment = fc
+    .layout(&root, &LayoutConstraints::definite(200.0, 200.0))
+    .expect("layout");
+
+  let rule_frag =
+    find_rule_fragment_with_color(&fragment, rule_color).expect("column rule fragment");
+  let style = rule_frag.style.as_ref().expect("rule style");
+  assert!(
+    style.border_top_width.to_px() > 0.0,
+    "column rule should paint using the block-start border in vertical writing modes"
+  );
+  assert_eq!(style.border_top_style, BorderStyle::Solid);
+  assert_eq!(style.border_top_color, rule_color);
+  assert_eq!(style.border_left_width.to_px(), 0.0);
+  assert!(matches!(
+    style.border_left_style,
+    BorderStyle::None | BorderStyle::Hidden
+  ));
 }
 
 #[test]
