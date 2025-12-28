@@ -77,6 +77,16 @@ impl FragmentAxes {
     }
   }
 
+  /// Computes the block-start of a rect relative to the absolute block-start of its parent.
+  /// `parent_block_size` is required for reversed block progression (e.g., vertical-rl).
+  pub fn abs_block_start(&self, rect: &Rect, parent_abs_start: f32, parent_block_size: f32) -> f32 {
+    parent_abs_start + self.block_start(rect, parent_block_size)
+  }
+
+  pub fn abs_block_end(&self, rect: &Rect, parent_abs_start: f32, parent_block_size: f32) -> f32 {
+    self.abs_block_start(rect, parent_abs_start, parent_block_size) + self.block_size(rect)
+  }
+
   /// Returns the block-start position of a rect in monotonic block coordinates relative to its
   /// parent. `parent_block_size` is only used when block progression is reversed.
   pub fn block_start(&self, rect: &Rect, parent_block_size: f32) -> f32 {

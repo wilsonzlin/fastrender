@@ -1947,3 +1947,82 @@ fn page_border_is_painted() {
   assert_eq!(pixel(&pixmap, 10, 5), [20, 40, 60, 255]);
   assert_eq!(pixel(&pixmap, 100, 100), [180, 190, 200, 255]);
 }
+
+#[test]
+fn vertical_writing_mode_paginate_along_block_axis() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          @page { size: 120px 200px; margin: 0; }
+          html { writing-mode: vertical-rl; }
+          body { margin: 0; }
+          .block { block-size: 100px; inline-size: 40px; }
+        </style>
+      </head>
+      <body>
+        <div class="block">Before</div>
+        <div class="block">After</div>
+      </body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let tree = renderer.layout_document(&dom, 300, 300).unwrap();
+  let page_roots = pages(&tree);
+
+  assert!(
+    page_roots.len() >= 2,
+    "expected pagination along the horizontal block axis to create multiple pages"
+  );
+
+  let first_content = page_roots[0].children.first().expect("page content");
+  assert!(find_text(first_content, "Before").is_some());
+  assert!(
+    find_text(first_content, "After").is_none(),
+    "later content should not appear on the first page"
+  );
+
+  let second_content = page_roots[1].children.first().expect("second page content");
+  assert!(find_text(second_content, "After").is_some());
+}
+
+#[test]
+fn vertical_writing_forced_break_respected() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          @page { size: 120px 200px; margin: 0; }
+          html { writing-mode: vertical-rl; }
+          body { margin: 0; }
+          .block { block-size: 40px; inline-size: 40px; }
+          #forced { break-before: page; }
+        </style>
+      </head>
+      <body>
+        <div class="block">Start</div>
+        <div id="forced" class="block">Forced</div>
+        <div class="block">Tail</div>
+      </body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let tree = renderer.layout_document(&dom, 300, 300).unwrap();
+  let page_roots = pages(&tree);
+
+  assert!(
+    page_roots.len() >= 2,
+    "expected forced break to create a new page in vertical writing mode"
+  );
+
+  let first_content = page_roots[0].children.first().expect("page content");
+  assert!(find_text(first_content, "Start").is_some());
+  assert!(find_text(first_content, "Forced").is_none());
+
+  let second_content = page_roots[1].children.first().expect("second page content");
+  assert!(find_text(second_content, "Forced").is_some());
+}
