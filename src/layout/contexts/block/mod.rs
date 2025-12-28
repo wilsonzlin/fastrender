@@ -2966,8 +2966,11 @@ impl FormattingContext for BlockFormattingContext {
       content_height_base + padding_top + padding_bottom,
     );
     let cb_block_base = resolved_height.map(|h| h.max(0.0) + padding_top + padding_bottom);
-    let establishes_positioned_cb =
-      style.position.is_positioned() || !style.transform.is_empty() || style.perspective.is_some();
+    let establishes_positioned_cb = style.position.is_positioned()
+      || !style.transform.is_empty()
+      || style.perspective.is_some()
+      || style.containment.layout
+      || style.containment.paint;
     let nearest_cb = if establishes_positioned_cb {
       ContainingBlock::with_viewport_and_bases(
         Rect::new(padding_origin, padding_size),
@@ -2997,7 +3000,7 @@ impl FormattingContext for BlockFormattingContext {
         child_ctx.layout_children(box_node, &child_constraints, &nearest_cb)?;
       (frags, height, positioned, None)
     };
-    if style.containment.size {
+    if style.containment.isolates_block_size() {
       content_height = 0.0;
     }
 
@@ -3272,7 +3275,7 @@ impl FormattingContext for BlockFormattingContext {
       }
     }
 
-    if style.containment.size || style.containment.inline_size {
+    if style.containment.isolates_inline_size() {
       intrinsic_cache_store(box_node, mode, edges);
       return Ok(edges);
     }

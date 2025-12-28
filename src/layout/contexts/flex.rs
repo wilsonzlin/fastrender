@@ -1834,9 +1834,13 @@ impl FormattingContext for FlexFormattingContext {
       };
       let establishes_abs_cb = box_node.style.position.is_positioned()
         || !box_node.style.transform.is_empty()
-        || box_node.style.perspective.is_some();
-      let establishes_fixed_cb =
-        !box_node.style.transform.is_empty() || box_node.style.perspective.is_some();
+        || box_node.style.perspective.is_some()
+        || box_node.style.containment.layout
+        || box_node.style.containment.paint;
+      let establishes_fixed_cb = !box_node.style.transform.is_empty()
+        || box_node.style.perspective.is_some()
+        || box_node.style.containment.layout
+        || box_node.style.containment.paint;
       let padding_cb = ContainingBlock::with_viewport_and_bases(
         padding_rect,
         self.viewport_size,
@@ -2016,7 +2020,7 @@ impl FormattingContext for FlexFormattingContext {
     }
 
     let style = &box_node.style;
-    if style.containment.size || style.containment.inline_size {
+    if style.containment.isolates_inline_size() {
       let edges = self.horizontal_edges_px(style).unwrap_or(0.0);
       intrinsic_cache_store(box_node, mode, edges.max(0.0));
       return Ok(edges.max(0.0));

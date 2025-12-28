@@ -1442,6 +1442,27 @@ impl Containment {
   pub fn creates_stacking_context(&self) -> bool {
     self.paint
   }
+
+  /// Returns true when the inline axis should ignore descendant contributions for intrinsic sizing.
+  ///
+  /// Layout containment implies inline-size containment per the CSS Containment spec, so treat it
+  /// the same as explicit size/inline-size containment when measuring preferred widths.
+  pub fn isolates_inline_size(&self) -> bool {
+    self.size || self.inline_size || self.layout
+  }
+
+  /// Returns true when block-size should not be derived from descendants.
+  ///
+  /// Only full size containment (or strict containment which includes size) applies here; inline
+  /// size containment is limited to the inline axis.
+  pub fn isolates_block_size(&self) -> bool {
+    self.size
+  }
+
+  /// Returns true when paint containment rules apply.
+  pub fn isolates_paint(&self) -> bool {
+    self.paint
+  }
 }
 
 impl Default for Containment {

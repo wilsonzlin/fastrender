@@ -1781,7 +1781,7 @@ impl GridFormattingContext {
       "GridFormattingContext must only query grid containers",
     );
     let style = &box_node.style;
-    if style.containment.size || style.containment.inline_size {
+    if style.containment.isolates_inline_size() {
       let edges = self.horizontal_edges_px(style).unwrap_or(0.0);
       return Ok(edges.max(0.0));
     }
@@ -2538,6 +2538,153 @@ impl FormattingContext for GridFormattingContext {
       }
     }
 
+    // Position out-of-flow children against the appropriate containing block.
+    if !positioned_children.is_empty() {
+      let padding_left = self.resolve_length_for_width(
+        box_node.style.padding_left,
+        constraints.width().unwrap_or(0.0),
+        &box_node.style,
+      );
+      let padding_top = self.resolve_length_for_width(
+        box_node.style.padding_top,
+        constraints.width().unwrap_or(0.0),
+        &box_node.style,
+      );
+      let border_left = self.resolve_length_for_width(
+        box_node.style.border_left_width,
+        constraints.width().unwrap_or(0.0),
+        &box_node.style,
+      );
+      let border_top = self.resolve_length_for_width(
+        box_node.style.border_top_width,
+        constraints.width().unwrap_or(0.0),
+        &box_node.style,
+      );
+      let border_right = self.resolve_length_for_width(
+        box_node.style.border_right_width,
+        constraints.width().unwrap_or(0.0),
+        &box_node.style,
+      );
+      let border_bottom = self.resolve_length_for_width(
+        box_node.style.border_bottom_width,
+        constraints.width().unwrap_or(0.0),
+        &box_node.style,
+      );
+      let padding_origin =
+        crate::geometry::Point::new(border_left + padding_left, border_top + padding_top);
+      let padding_size = crate::geometry::Size::new(
+        fragment.bounds.width() - border_left - border_right,
+        fragment.bounds.height() - border_top - border_bottom,
+      );
+      let padding_rect = crate::geometry::Rect::new(padding_origin, padding_size);
+
+      let block_base = if box_node.style.height.is_some() {
+        Some(padding_rect.size.height)
+      } else {
+        None
+      };
+      let establishes_abs_cb = box_node.style.position.is_positioned()
+        || !box_node.style.transform.is_empty()
+        || box_node.style.perspective.is_some()
+        || box_node.style.containment.layout
+        || box_node.style.containment.paint;
+      let establishes_fixed_cb = !box_node.style.transform.is_empty()
+        || box_node.style.perspective.is_some()
+        || box_node.style.containment.layout
+        || box_node.style.containment.paint;
+      let padding_cb =
+        crate::layout::contexts::positioned::ContainingBlock::with_viewport_and_bases(
+          padding_rect,
+          self.viewport_size,
+          Some(padding_rect.size.width),
+          block_base,
+        );
+      let cb_for_absolute = if establishes_abs_cb {
+        padding_cb
+      } else {
+        self.nearest_positioned_cb
+      };
+
+      let abs = crate::layout::absolute_positioning::AbsoluteLayout::with_font_context(
+        self.font_context.clone(),
+      );
+      for child in positioned_children {
+        // Layout child as static for intrinsic size.
+        let mut layout_child = child.clone();
+        let mut style = (*layout_child.style).clone();
+        style.position = crate::style::position::Position::Relative;
+        style.top = None;
+        style.right = None;
+        style.bottom = None;
+        style.left = None;
+        layout_child.style = Arc::new(style);
+
+        let cb = match child.style.position {
+          crate::style::position::Position::Fixed => {
+            if establishes_fixed_cb {
+              padding_cb
+            } else {
+              crate::layout::contexts::positioned::ContainingBlock::viewport(self.viewport_size)
+            }
+          }
+          _ => cb_for_absolute,
+        };
+
+        let factory =
+                    crate::layout::contexts::factory::FormattingContextFactory::with_font_context_viewport_and_cb(
+                        self.font_context.clone(),
+                        self.viewport_size,
+                        cb,
+                    );
+        let fc_type = layout_child
+          .formatting_context()
+          .unwrap_or(crate::style::display::FormattingContextType::Block);
+        let fc = factory.create(fc_type);
+        let child_constraints = LayoutConstraints::new(
+          CrateAvailableSpace::Definite(padding_rect.size.width),
+          block_base
+            .map(CrateAvailableSpace::Definite)
+            .unwrap_or(CrateAvailableSpace::Indefinite),
+        );
+        let mut child_fragment = fc.layout(&layout_child, &child_constraints)?;
+
+        let positioned_style = crate::layout::absolute_positioning::resolve_positioned_style(
+          &child.style,
+          &cb,
+          self.viewport_size,
+          &self.font_context,
+        );
+        // Static position resolves to where the element would be in flow; use the
+        // content origin here since AbsoluteLayout adds padding/border.
+        let static_pos = crate::geometry::Point::ZERO;
+        let preferred_min_inline = fc
+          .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
+          .ok();
+        let preferred_inline = fc
+          .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent)
+          .ok();
+        let preferred_min_block = fc
+          .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent)
+          .ok();
+        let preferred_block = fc
+          .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent)
+          .ok();
+
+        let mut input = crate::layout::absolute_positioning::AbsoluteLayoutInput::new(
+          positioned_style,
+          child_fragment.bounds.size,
+          static_pos,
+        );
+        input.is_replaced = child.is_replaced();
+        input.preferred_min_inline_size = preferred_min_inline;
+        input.preferred_inline_size = preferred_inline;
+        input.preferred_min_block_size = preferred_min_block;
+        input.preferred_block_size = preferred_block;
+        let result = abs.layout_absolute(&input, &cb)?;
+        child_fragment.bounds = crate::geometry::Rect::new(result.position, result.size);
+        fragment.children.push(child_fragment);
+      }
+    }
     layout_cache_store(
       box_node,
       FormattingContextType::Grid,

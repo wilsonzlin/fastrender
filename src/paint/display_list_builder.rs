@@ -855,10 +855,10 @@ impl DisplayListBuilder {
           );
           let rects = Self::background_rects(rect, style, self.viewport);
           let radii =
-            Self::resolve_clip_radii(style, &rects, BackgroundBox::PaddingBox, self.viewport);
+            Self::resolve_clip_radii(style, &rects, BackgroundBox::ContentBox, self.viewport);
           Some(ClipItem {
             shape: ClipShape::Rect {
-              rect: rects.padding,
+              rect: rects.content,
               radii: if radii.is_zero() { None } else { Some(radii) },
             },
           })
