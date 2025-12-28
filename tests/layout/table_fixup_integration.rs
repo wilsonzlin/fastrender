@@ -1,6 +1,8 @@
 use fastrender::api::FastRender;
 use fastrender::tree::fragment_tree::{FragmentContent, FragmentNode};
 
+// These tests exercise the table fixup path inside table layout (not global tree fixup),
+// ensuring invalid/mixed table content still renders rather than being silently dropped.
 fn collect_text_fragments(node: &FragmentNode, out: &mut Vec<String>) {
   if let FragmentContent::Text { text, .. } = &node.content {
     let trimmed = text.trim();
