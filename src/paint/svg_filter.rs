@@ -260,6 +260,23 @@ pub enum FilterPrimitive {
     b: TransferFn,
     a: TransferFn,
   },
+  DiffuseLighting {
+    input: FilterInput,
+    surface_scale: f32,
+    diffuse_constant: f32,
+    kernel_unit_length: Option<(f32, f32)>,
+    light: LightSource,
+    lighting_color: Rgba,
+  },
+  SpecularLighting {
+    input: FilterInput,
+    surface_scale: f32,
+    specular_constant: f32,
+    specular_exponent: f32,
+    kernel_unit_length: Option<(f32, f32)>,
+    light: LightSource,
+    lighting_color: Rgba,
+  },
   Image(ImagePrimitive),
   Tile {
     input: FilterInput,
@@ -294,8 +311,6 @@ pub enum FilterPrimitive {
 }
 
 #[derive(Clone, Debug)]
-<<<<<<< HEAD
-=======
 pub enum LightSource {
   None,
   Distant {
@@ -318,7 +333,6 @@ pub enum LightSource {
 }
 
 #[derive(Clone, Debug)]
->>>>>>> 2df16e5 (Improve SVG filter lighting fallbacks and color space handling)
 pub enum FilterInput {
   SourceGraphic,
   SourceAlpha,
@@ -804,7 +818,9 @@ fn parse_filter_node(node: &roxmltree::Node, image_cache: &ImageCache) -> Option
       "feblend" => parse_fe_blend(&child),
       "femorphology" => parse_fe_morphology(&child),
       "fecomponenttransfer" => parse_fe_component_transfer(&child),
+      "fediffuselighting" => parse_fe_diffuse_lighting(&child),
       "feimage" => parse_fe_image(&child, image_cache, primitive_units_coord),
+      "fespecularlighting" => parse_fe_specular_lighting(&child),
       "fetile" => parse_fe_tile(&child),
       "feturbulence" => parse_fe_turbulence(&child),
       "fedisplacementmap" => parse_fe_displacement_map(&child),
@@ -868,6 +884,41 @@ impl SvgFilter {
         self.resolve_primitive_y(values.1, bbox),
       ),
     }
+  }
+
+  fn resolve_primitive_pos_x_len(&self, value: SvgLength, bbox: &Rect) -> f32 {
+    let units = match self.primitive_units {
+      SvgFilterUnits::ObjectBoundingBox => SvgCoordinateUnits::ObjectBoundingBox,
+      SvgFilterUnits::UserSpaceOnUse => SvgCoordinateUnits::UserSpaceOnUse,
+    };
+    let resolved = value.resolve(units, bbox.width());
+    match (self.primitive_units, value) {
+      (SvgFilterUnits::ObjectBoundingBox, _) => bbox.min_x() + resolved,
+      (SvgFilterUnits::UserSpaceOnUse, SvgLength::Percent(_)) => bbox.min_x() + resolved,
+      _ => resolved,
+    }
+  }
+
+  fn resolve_primitive_pos_y_len(&self, value: SvgLength, bbox: &Rect) -> f32 {
+    let units = match self.primitive_units {
+      SvgFilterUnits::ObjectBoundingBox => SvgCoordinateUnits::ObjectBoundingBox,
+      SvgFilterUnits::UserSpaceOnUse => SvgCoordinateUnits::UserSpaceOnUse,
+    };
+    let resolved = value.resolve(units, bbox.height());
+    match (self.primitive_units, value) {
+      (SvgFilterUnits::ObjectBoundingBox, _) => bbox.min_y() + resolved,
+      (SvgFilterUnits::UserSpaceOnUse, SvgLength::Percent(_)) => bbox.min_y() + resolved,
+      _ => resolved,
+    }
+  }
+
+  fn resolve_primitive_pos_z_len(&self, value: SvgLength, bbox: &Rect) -> f32 {
+    let units = match self.primitive_units {
+      SvgFilterUnits::ObjectBoundingBox => SvgCoordinateUnits::ObjectBoundingBox,
+      SvgFilterUnits::UserSpaceOnUse => SvgCoordinateUnits::UserSpaceOnUse,
+    };
+    let reference = (bbox.width().abs() + bbox.height().abs()) * 0.5;
+    value.resolve(units, reference)
   }
 }
 
@@ -1035,6 +1086,14 @@ fn parse_input(attr: Option<&str>) -> FilterInput {
   }
 }
 
+fn attribute_ci<'a>(node: &'a roxmltree::Node, name: &str) -> Option<&'a str> {
+  node
+    .attributes()
+    .iter()
+    .find(|attr| attr.name().eq_ignore_ascii_case(name))
+    .map(|attr| attr.value())
+}
+
 fn parse_number(value: Option<&str>) -> f32 {
   value
     .and_then(|v| v.split_whitespace().next())
@@ -1114,8 +1173,6 @@ fn parse_fe_flood(node: &roxmltree::Node) -> Option<FilterPrimitive> {
   Some(FilterPrimitive::Flood { color, opacity })
 }
 
-<<<<<<< HEAD
-=======
 fn parse_light_source(node: &roxmltree::Node) -> Option<LightSource> {
   for child in node.children().filter(|c| c.is_element()) {
     match child.tag_name().name().to_ascii_lowercase().as_str() {
@@ -1167,7 +1224,7 @@ fn parse_fe_diffuse_lighting(node: &roxmltree::Node) -> Option<FilterPrimitive> 
   let diffuse_constant = parse_number(attribute_ci(node, "diffuseConstant")).max(0.0);
   let kernel_unit_length = attribute_ci(node, "kernelUnitLength")
     .map(|v| parse_number_pair(Some(v)))
-    .map(|(x, y)| (x.abs(), y.abs()));
+    .map(|(x, y)| (x.max(0.0), y.max(0.0)));
   let lighting_color = parse_color(attribute_ci(node, "lighting-color")).unwrap_or(Rgba::WHITE);
   let light = parse_light_source(node).unwrap_or(LightSource::None);
   Some(FilterPrimitive::DiffuseLighting {
@@ -1180,11 +1237,10 @@ fn parse_fe_diffuse_lighting(node: &roxmltree::Node) -> Option<FilterPrimitive> 
   })
 }
 
->>>>>>> 2df16e5 (Improve SVG filter lighting fallbacks and color space handling)
 fn parse_fe_gaussian_blur(node: &roxmltree::Node) -> Option<FilterPrimitive> {
   let input = parse_input(node.attribute("in"));
   let (sx, sy) = parse_number_pair(node.attribute("stdDeviation"));
-  let std_dev = (sx.abs(), sy.abs());
+  let std_dev = (sx.max(0.0), sy.max(0.0));
   Some(FilterPrimitive::GaussianBlur { input, std_dev })
 }
 
@@ -1230,8 +1286,6 @@ fn parse_fe_color_matrix(node: &roxmltree::Node) -> Option<FilterPrimitive> {
   Some(FilterPrimitive::ColorMatrix { input, kind })
 }
 
-<<<<<<< HEAD
-=======
 fn parse_fe_specular_lighting(node: &roxmltree::Node) -> Option<FilterPrimitive> {
   let input = parse_input(attribute_ci(node, "in"));
   let surface_scale = parse_number(attribute_ci(node, "surfaceScale"));
@@ -1241,7 +1295,7 @@ fn parse_fe_specular_lighting(node: &roxmltree::Node) -> Option<FilterPrimitive>
     .unwrap_or(1.0);
   let kernel_unit_length = attribute_ci(node, "kernelUnitLength")
     .map(|v| parse_number_pair(Some(v)))
-    .map(|(x, y)| (x.abs(), y.abs()));
+    .map(|(x, y)| (x.max(0.0), y.max(0.0)));
   let lighting_color = parse_color(attribute_ci(node, "lighting-color")).unwrap_or(Rgba::WHITE);
   let light = parse_light_source(node).unwrap_or(LightSource::None);
   Some(FilterPrimitive::SpecularLighting {
@@ -1255,7 +1309,6 @@ fn parse_fe_specular_lighting(node: &roxmltree::Node) -> Option<FilterPrimitive>
   })
 }
 
->>>>>>> 2df16e5 (Improve SVG filter lighting fallbacks and color space handling)
 fn parse_fe_blend(node: &roxmltree::Node) -> Option<FilterPrimitive> {
   let input1 = parse_input(node.attribute("in"));
   let input2 = parse_input(node.attribute("in2"));
@@ -1983,6 +2036,54 @@ fn apply_primitive(
         img
       })
     }
+    FilterPrimitive::DiffuseLighting {
+      input,
+      surface_scale,
+      diffuse_constant,
+      kernel_unit_length,
+      light,
+      lighting_color,
+    } => resolve_input(input, source, results, current, filter_region).and_then(|img| {
+      apply_diffuse_lighting(
+        filter,
+        css_bbox,
+        img,
+        light,
+        *surface_scale,
+        *diffuse_constant,
+        *kernel_unit_length,
+        lighting_color,
+        scale_x,
+        scale_y,
+        filter_region,
+        color_interpolation_filters,
+      )
+    }),
+    FilterPrimitive::SpecularLighting {
+      input,
+      surface_scale,
+      specular_constant,
+      specular_exponent,
+      kernel_unit_length,
+      light,
+      lighting_color,
+    } => resolve_input(input, source, results, current, filter_region).and_then(|img| {
+      apply_specular_lighting(
+        filter,
+        css_bbox,
+        img,
+        light,
+        *surface_scale,
+        *specular_constant,
+        *specular_exponent,
+        *kernel_unit_length,
+        lighting_color,
+        scale_x,
+        scale_y,
+        filter_region,
+        color_interpolation_filters,
+      )
+    }),
     FilterPrimitive::Image(prim) => render_fe_image(prim, filter_region),
     FilterPrimitive::Tile { input } => {
       resolve_input(input, source, results, current, filter_region)
@@ -2144,8 +2245,6 @@ fn render_fe_image(prim: &ImagePrimitive, filter_region: Rect) -> Option<FilterR
   Some(FilterResult::new(out, dest_region, filter_region))
 }
 
-<<<<<<< HEAD
-=======
 fn lighting_color_in_space(
   color: &Rgba,
   color_space: ColorInterpolationFilters,
@@ -2537,7 +2636,6 @@ fn apply_specular_lighting(
   Some(FilterResult::new(out, input.region, filter_region))
 }
 
->>>>>>> 2df16e5 (Improve SVG filter lighting fallbacks and color space handling)
 fn flood(width: u32, height: u32, color: &Rgba, opacity: f32) -> Option<Pixmap> {
   let mut pixmap = Pixmap::new(width, height)?;
   let alpha = (color.a * opacity).clamp(0.0, 1.0);

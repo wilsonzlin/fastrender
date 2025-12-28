@@ -1,0 +1,106 @@
+<!doctype html>
+<style>
+  body {
+    margin: 0;
+  background: #1c1c1c;
+    padding: 12px;
+    display: flex;
+    gap: 12px;
+  }
+  .box {
+    width: 48px;
+    height: 48px;
+    background: #c8c8c8;
+    border-radius: 6px;
+  }
+  #diffuse {
+    filter: url(#diffuse-light);
+  }
+  #specular {
+    filter: url(#specular-light);
+  }
+  #spot {
+    filter: url(#spot-light);
+  }
+  svg {
+    position: absolute;
+    width: 0;
+    height: 0;
+  }
+</style>
+<svg xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <defs>
+    <filter
+      id="diffuse-light"
+      x="-20%"
+      y="-20%"
+      width="140%"
+      height="140%"
+      color-interpolation-filters="sRGB"
+    >
+      <feGaussianBlur in="SourceAlpha" stdDeviation="0" result="blur" />
+      <feDiffuseLighting
+        in="blur"
+        surfaceScale="0"
+        diffuseConstant="1"
+        lighting-color="rgb(255 220 180)"
+        result="diffuse"
+      >
+        <fePointLight x="0" y="0" z="10000" />
+      </feDiffuseLighting>
+      <feComposite in="diffuse" in2="SourceGraphic" operator="in" />
+    </filter>
+    <filter
+      id="specular-light"
+      x="-20%"
+      y="-20%"
+      width="140%"
+      height="140%"
+      color-interpolation-filters="sRGB"
+    >
+      <feGaussianBlur in="SourceAlpha" stdDeviation="0" result="blur" />
+      <feSpecularLighting
+        in="blur"
+        surfaceScale="0"
+        specularConstant="1"
+        specularExponent="1"
+        lighting-color="rgb(180 220 255)"
+        result="spec"
+      >
+        <feDistantLight azimuth="180" elevation="90" />
+      </feSpecularLighting>
+      <feComposite in="spec" in2="SourceGraphic" operator="in" />
+    </filter>
+    <filter
+      id="spot-light"
+      x="-20%"
+      y="-20%"
+      width="140%"
+      height="140%"
+      color-interpolation-filters="sRGB"
+    >
+      <feGaussianBlur in="SourceAlpha" stdDeviation="0" result="blur" />
+      <feSpecularLighting
+        in="blur"
+        surfaceScale="0"
+        specularConstant="1"
+        specularExponent="1"
+        lighting-color="rgb(200 200 255)"
+        result="spot"
+      >
+        <feSpotLight
+          x="0"
+          y="0"
+          z="10000"
+          pointsAtX="0"
+          pointsAtY="0"
+          pointsAtZ="0"
+        />
+      </feSpecularLighting>
+      <feComposite in="spot" in2="SourceGraphic" operator="in" />
+    </filter>
+  </defs>
+</svg>
+<div id="diffuse" class="box"></div>
+<div id="specular" class="box"></div>
+<div id="spot" class="box"></div>

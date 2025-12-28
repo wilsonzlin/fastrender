@@ -295,6 +295,7 @@ fn fragment_tree_impl(root: &FragmentNode, options: &FragmentationOptions) -> Ve
   } else {
     FragmentationContext::Page
   };
+
   let boundaries =
     resolve_fragmentation_boundaries_with_context(root, options.fragmentainer_size, context);
   if boundaries.len() < 2 {
