@@ -1,6 +1,6 @@
 use super::{cpal, read_u16, read_u32, ColorFontCaches, ColorGlyphRaster, FontKey};
 use crate::style::color::Rgba;
-use crate::text::glyph_path::{build_glyph_path, glyph_transform};
+use crate::text::font_instance::{glyph_transform, FontInstance};
 use std::sync::{Arc, Mutex};
 use tiny_skia::{FillRule, Paint, Path, Pixmap, Transform};
 
@@ -112,6 +112,7 @@ fn resolve_layer_color(idx: u16, palette: &[Rgba], text_color: Rgba) -> Rgba {
 }
 
 pub fn render_colr_glyph(
+  instance: &FontInstance,
   face: &ttf_parser::Face<'_>,
   font_key: FontKey,
   glyph_id: ttf_parser::GlyphId,
@@ -153,7 +154,7 @@ pub fn render_colr_glyph(
   };
 
   let layer_records = parse_layer_records(colr_data, header, base_record)?;
-  let units_per_em = face.units_per_em() as f32;
+  let units_per_em = instance.units_per_em();
   if units_per_em == 0.0 {
     return None;
   }
@@ -165,8 +166,8 @@ pub fn render_colr_glyph(
   let mut paths: Vec<(Path, Rgba)> = Vec::new();
   for layer in layer_records {
     let color = resolve_layer_color(layer.palette_index, &palette.colors, text_color);
-    if let Some((path, _metrics)) = build_glyph_path(face, layer.glyph_id as u32) {
-      if let Some(path) = path.transform(transform) {
+    if let Some(outline) = instance.glyph_outline(layer.glyph_id as u32) {
+      if let Some(path) = outline.path.and_then(|p| p.transform(transform)) {
         paths.push((path, color));
       }
     }
