@@ -65,12 +65,7 @@ fn text_item_from_run(run: &ShapedRun, origin: Point, text_color: Rgba) -> TextI
       style: run.font.style,
       stretch: run.font.stretch,
     }),
-    variations: run
-      .variations
-      .iter()
-      .copied()
-      .map(FontVariation::from)
-      .collect(),
+    variations: run.variations.iter().copied().collect(),
     synthetic_bold: run.synthetic_bold,
     synthetic_oblique: run.synthetic_oblique,
     emphasis: None,

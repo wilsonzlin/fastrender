@@ -97,6 +97,9 @@ use crate::text::font_db::FontStyle as DbFontStyle;
 use crate::text::font_db::LoadedFont;
 use crate::text::font_loader::FontContext;
 use crate::text::pipeline::GlyphPosition;
+use crate::text::variations::FontVariation;
+use rayon::prelude::*;
+use tiny_skia::BlendMode as SkiaBlendMode;
 use tiny_skia::GradientStop as SkiaGradientStop;
 use tiny_skia::IntSize;
 use tiny_skia::LinearGradient;
@@ -3456,35 +3459,15 @@ impl DisplayListRenderer {
       );
     };
 
-    let face = match font.as_ttf_face() {
-      Ok(f) => f,
-      Err(_) => {
-        return Err(
-          RenderError::RasterizationFailed {
-            reason: "Unable to parse font face for text shadows".into(),
-          }
-          .into(),
-        )
+    let glyphs = Self::glyph_positions(item);
+
+    if !item.shadows.is_empty() {
+      let (paths, bounds) =
+        self.glyph_paths_from_positions(&glyphs, &font, item, &item.variations)?;
+      if !paths.is_empty() && bounds.is_valid() {
+        self.render_text_shadows(&paths, &bounds, item);
       }
-    };
-
-    let (paths, bounds) = self.glyph_paths(&face, item);
-    if !item.shadows.is_empty() && !paths.is_empty() && bounds.is_valid() {
-      self.render_text_shadows(&paths, &bounds, item);
     }
-
-    let glyphs: Vec<GlyphPosition> = item
-      .glyphs
-      .iter()
-      .map(|g| GlyphPosition {
-        glyph_id: g.glyph_id,
-        cluster: 0,
-        x_offset: g.offset.x,
-        y_offset: g.offset.y,
-        x_advance: g.advance,
-        y_advance: 0.0,
-      })
-      .collect();
 
     self.canvas.draw_text(
       item.origin,
@@ -3494,6 +3477,8 @@ impl DisplayListRenderer {
       item.color,
       item.synthetic_bold,
       item.synthetic_oblique,
+      item.palette_index,
+      &item.variations,
     );
     if let Some(emphasis) = &item.emphasis {
       self.render_emphasis(emphasis)?;
@@ -3511,10 +3496,12 @@ impl DisplayListRenderer {
       origin: item.origin,
       glyphs: item.glyphs.clone(),
       color: item.color,
+      palette_index: item.palette_index,
       shadows: item.shadows.clone(),
       font_size: item.font_size,
       advance_width: item.advance_width,
       font_id: item.font_id.clone(),
+      variations: item.variations.clone(),
       synthetic_bold: item.synthetic_bold,
       synthetic_oblique: item.synthetic_oblique,
       emphasis: item.emphasis.clone(),
@@ -3765,103 +3752,47 @@ impl DisplayListRenderer {
     Ok(())
   }
 
-  fn glyph_paths(
-    &self,
-    face: &ttf_parser::Face<'_>,
-    item: &TextItem,
-  ) -> (Vec<tiny_skia::Path>, PathBounds) {
-    let units_per_em = face.units_per_em() as f32;
-    let scale = item.font_size / units_per_em;
-    let mut paths = Vec::with_capacity(item.glyphs.len());
-    let mut bounds = PathBounds::new();
-
-    for glyph in &item.glyphs {
-      let x = item.origin.x + glyph.offset.x;
-      let y = item.origin.y + glyph.offset.y;
-      if let Some(path) = Self::build_glyph_path(
-        face,
-        glyph.glyph_id as u16,
-        x,
-        y,
-        scale,
-        item.synthetic_oblique,
-      ) {
-        bounds.include(&path.bounds());
-        paths.push(path);
-      }
-    }
-
-    (paths, bounds)
+  fn glyph_positions(item: &TextItem) -> Vec<GlyphPosition> {
+    item
+      .glyphs
+      .iter()
+      .map(|g| GlyphPosition {
+        glyph_id: g.glyph_id,
+        cluster: 0,
+        x_offset: g.offset.x,
+        y_offset: g.offset.y,
+        x_advance: g.advance,
+        y_advance: 0.0,
+      })
+      .collect()
   }
 
-  fn build_glyph_path(
-    face: &ttf_parser::Face<'_>,
-    glyph_id: u16,
-    x: f32,
-    baseline_y: f32,
-    scale: f32,
-    synthetic_oblique: f32,
-  ) -> Option<tiny_skia::Path> {
-    use ttf_parser::OutlineBuilder;
+  fn glyph_paths_from_positions(
+    &mut self,
+    glyphs: &[GlyphPosition],
+    font: &LoadedFont,
+    item: &TextItem,
+    variations: &[FontVariation],
+  ) -> Result<(Vec<tiny_skia::Path>, PathBounds)> {
+    let (paths, bounds) = self.canvas.glyph_paths(
+      item.origin,
+      glyphs,
+      font,
+      item.font_size,
+      item.synthetic_oblique,
+      None,
+      variations,
+    )?;
+    Ok((paths, bounds))
+  }
 
-    struct PathConverter {
-      builder: PathBuilder,
-      scale: f32,
-      x: f32,
-      y: f32,
-      skew: f32,
-    }
-
-    impl OutlineBuilder for PathConverter {
-      fn move_to(&mut self, px: f32, py: f32) {
-        self.builder.move_to(
-          self.x + (px + self.skew * py) * self.scale,
-          self.y - py * self.scale,
-        );
-      }
-
-      fn line_to(&mut self, px: f32, py: f32) {
-        self.builder.line_to(
-          self.x + (px + self.skew * py) * self.scale,
-          self.y - py * self.scale,
-        );
-      }
-
-      fn quad_to(&mut self, x1: f32, y1: f32, px: f32, py: f32) {
-        self.builder.quad_to(
-          self.x + (x1 + self.skew * y1) * self.scale,
-          self.y - y1 * self.scale,
-          self.x + (px + self.skew * py) * self.scale,
-          self.y - py * self.scale,
-        );
-      }
-
-      fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, px: f32, py: f32) {
-        self.builder.cubic_to(
-          self.x + (x1 + self.skew * y1) * self.scale,
-          self.y - y1 * self.scale,
-          self.x + (x2 + self.skew * y2) * self.scale,
-          self.y - y2 * self.scale,
-          self.x + (px + self.skew * py) * self.scale,
-          self.y - py * self.scale,
-        );
-      }
-
-      fn close(&mut self) {
-        self.builder.close();
-      }
-    }
-
-    let mut converter = PathConverter {
-      builder: PathBuilder::new(),
-      scale,
-      x,
-      y: baseline_y,
-      skew: synthetic_oblique,
-    };
-
-    face.outline_glyph(ttf_parser::GlyphId(glyph_id), &mut converter)?;
-    converter.builder.finish()
+  fn glyph_paths(
+    &mut self,
+    font: &LoadedFont,
+    item: &TextItem,
+  ) -> Result<(Vec<tiny_skia::Path>, PathBounds)> {
+    let glyphs = Self::glyph_positions(item);
+    self.glyph_paths_from_positions(&glyphs, font, item, &item.variations)
   }
 
   fn render_text_shadows(
@@ -3978,6 +3909,8 @@ impl DisplayListRenderer {
             emphasis.color,
             0.0,
             0.0,
+            text.palette_index,
+            &text.variations,
           );
         }
         return Ok(());

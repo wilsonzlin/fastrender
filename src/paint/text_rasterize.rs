@@ -60,6 +60,7 @@ use crate::text::variations::apply_rustybuzz_variations;
 use crate::text::pipeline::GlyphPosition;
 use crate::text::pipeline::ShapedRun;
 use rustybuzz::Variation;
+use std::collections::BTreeMap;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::collections::VecDeque;
@@ -80,7 +81,7 @@ use tiny_skia::Transform;
 
 /// Cache key for glyph paths.
 ///
-/// Glyphs are cached by font data pointer + glyph ID + skew.
+/// Glyphs are cached by font data pointer + glyph ID + skew + variations.
 /// Using the font data pointer avoids comparing large font binaries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct GlyphCacheKey {
@@ -425,9 +426,13 @@ impl ColorGlyphCache {
 
 fn hash_variations(variations: &[Variation]) -> u64 {
   let mut hasher = DefaultHasher::new();
+  let mut ordered: BTreeMap<[u8; 4], f32> = BTreeMap::new();
   for variation in variations {
-    format!("{:?}", variation.tag).hash(&mut hasher);
-    variation.value.to_bits().hash(&mut hasher);
+    ordered.insert(variation.tag.to_bytes(), variation.value);
+  }
+  for (tag, value) in ordered {
+    tag.hash(&mut hasher);
+    value.to_bits().hash(&mut hasher);
   }
   hasher.finish()
 }

@@ -15,10 +15,12 @@ use fastrender::ComputedStyle;
 use fastrender::GlyphCache;
 use fastrender::Rgba;
 use fastrender::TextRasterizer;
+use rustybuzz::Variation;
 use std::fs;
 use std::sync::Arc;
 use tiny_skia::Pixmap;
 use ttf_parser::GlyphId;
+use ttf_parser::Tag;
 
 // ============================================================================
 // Test Helpers
@@ -182,6 +184,86 @@ fn test_glyph_cache_clear() {
   let mut cache = GlyphCache::new();
   cache.clear();
   assert!(cache.is_empty());
+}
+
+#[test]
+fn glyph_cache_keys_include_variations() {
+  let font = match get_test_font() {
+    Some(f) => f,
+    None => return,
+  };
+  let face = match font.as_ttf_face() {
+    Ok(f) => f,
+    Err(_) => return,
+  };
+  let glyph_id = match face.glyph_index('A') {
+    Some(glyph) => glyph,
+    None => return,
+  };
+  let units_per_em = face.units_per_em();
+  if units_per_em == 0 {
+    return;
+  }
+  let advance = face
+    .glyph_hor_advance(glyph_id)
+    .map(|v| v as f32 * (16.0 / units_per_em as f32))
+    .unwrap_or(0.0);
+
+  let glyphs = vec![GlyphPosition {
+    glyph_id: glyph_id.0 as u32,
+    cluster: 0,
+    x_offset: 0.0,
+    y_offset: 0.0,
+    x_advance: advance,
+    y_advance: 0.0,
+  }];
+
+  let mut rasterizer = TextRasterizer::new();
+  rasterizer
+    .positioned_glyph_paths(&glyphs, &font, 16.0, 0.0, 0.0, 0.0, &[], None)
+    .expect("default variation glyph path");
+  let stats = rasterizer.cache_stats();
+  assert_eq!(stats.misses, 1);
+  assert_eq!(stats.hits, 0);
+
+  let bold_variation = Variation {
+    tag: Tag::from_bytes(b"wght"),
+    value: 900.0,
+  };
+  rasterizer
+    .positioned_glyph_paths(
+      &glyphs,
+      &font,
+      16.0,
+      0.0,
+      0.0,
+      0.0,
+      &[bold_variation],
+      None,
+    )
+    .expect("varied glyph path");
+  let stats = rasterizer.cache_stats();
+  assert_eq!(
+    stats.misses, 2,
+    "different variation should use a distinct cache entry"
+  );
+  assert_eq!(stats.hits, 0);
+
+  rasterizer
+    .positioned_glyph_paths(
+      &glyphs,
+      &font,
+      16.0,
+      0.0,
+      0.0,
+      0.0,
+      &[bold_variation],
+      None,
+    )
+    .expect("cached varied glyph path");
+  let stats = rasterizer.cache_stats();
+  assert_eq!(stats.misses, 2);
+  assert_eq!(stats.hits, 1);
 }
 
 // ============================================================================
@@ -934,8 +1016,14 @@ fn test_vertical_rendering_extents() {
   let v_width = v_max_x.saturating_sub(v_min_x);
   let v_height = v_max_y.saturating_sub(v_min_y);
 
-  assert!(v_height > h_height, "vertical text should extend along the y axis");
-  assert!(v_width < h_width, "vertical text should occupy less horizontal span than horizontal text");
+  assert!(
+    v_height > h_height,
+    "vertical text should extend along the y axis"
+  );
+  assert!(
+    v_width < h_width,
+    "vertical text should occupy less horizontal span than horizontal text"
+  );
 }
 
 // ============================================================================
