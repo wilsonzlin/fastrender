@@ -691,7 +691,7 @@ fn inject_table_headers_and_footers(
     clipped.children.extend(clones);
   }
 
-  let children_bottom = clipped
+  let children_block_end = clipped
     .children
     .iter()
     .map(|c| {
@@ -703,7 +703,7 @@ fn inject_table_headers_and_footers(
   let new_block_size = axes
     .block_size(&clipped.bounds)
     .max(max_block)
-    .max(children_bottom);
+    .max(children_block_end);
   clipped.bounds = axes.set_block_start_and_size(
     clipped.bounds,
     parent_block_size,
@@ -1017,6 +1017,7 @@ pub(crate) fn collect_forced_boundaries(
   node: &FragmentNode,
   abs_start: f32,
 ) -> Vec<ForcedBoundary> {
+<<<<<<< HEAD
   collect_forced_boundaries_with_axes(node, abs_start, FragmentAxes::default())
 }
 
@@ -1025,6 +1026,8 @@ pub(crate) fn collect_forced_boundaries_with_axes(
   abs_start: f32,
   axes: FragmentAxes,
 ) -> Vec<ForcedBoundary> {
+=======
+>>>>>>> 538ae87 (fix: make table header repetition axis aware)
   fn is_forced_page_break(between: BreakBetween) -> bool {
     matches!(
       between,
@@ -1296,6 +1299,7 @@ pub(crate) fn collect_atomic_ranges(
   abs_start: f32,
   ranges: &mut Vec<AtomicRange>,
 ) {
+<<<<<<< HEAD
   collect_atomic_ranges_with_axes(node, abs_start, FragmentAxes::default(), ranges);
 }
 
@@ -1307,6 +1311,9 @@ pub(crate) fn collect_atomic_ranges_with_axes(
 ) {
   let node_block_size = axes.block_size(&node.bounds);
   let abs_end = abs_start + node_block_size;
+=======
+  let abs_end = abs_start + node.bounds.height();
+>>>>>>> 538ae87 (fix: make table header repetition axis aware)
   if node
     .style
     .as_ref()
