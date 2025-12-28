@@ -4198,6 +4198,7 @@ impl DisplayListBuilder {
               height: ascent + descent,
               baseline_offset: ascent,
               palette_index: mark_palette_index,
+              variations: mark_variations,
             })
           }
           _ => None,

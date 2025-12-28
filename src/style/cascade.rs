@@ -8172,7 +8172,7 @@ fn resolve_scopes<'a>(
 fn find_matching_rules<'a>(
   node: &DomNode,
   rules: &'a RuleIndex<'a>,
-  selector_caches: &mut SelectorCaches,
+  selector_caches: &'a mut SelectorCaches,
   scratch: &mut CascadeScratch,
   ancestors: &[&DomNode],
   ancestor_ids: &[usize],
@@ -8203,7 +8203,8 @@ fn find_matching_rules<'a>(
   let shadow_host = shadow_host_ref(node, ancestors, slot_map);
 
   // Create selector caches and matching context
-  let mut context = MatchingContext::new_for_visited(
+  let mut context: MatchingContext<'a, crate::css::selectors::FastRenderSelectorImpl> =
+    MatchingContext::new_for_visited(
     MatchingMode::Normal,
     None,
     selector_caches,
@@ -8213,9 +8214,8 @@ fn find_matching_rules<'a>(
     selectors::matching::NeedsSelectorFlags::No,
     selectors::matching::MatchingForInvalidation::No,
   );
-  context.extra_data = ShadowMatchData::for_document();
-  let slot_map: Option<&SlotAssignmentMap<'a>> = slot_map;
-  context.extra_data.slot_map = slot_map;
+  context.extra_data = ShadowMatchData::<'a>::for_document();
+  context.extra_data.slot_map = slot_map.map(|m| m as &'a SlotAssignmentMap<'a>);
 
   let mut scoped_rule_idx: Option<usize> = None;
   let mut scoped_match: Option<Option<ScopeMatch<'_>>> = None;
@@ -8334,7 +8334,7 @@ fn find_matching_rules<'a>(
 fn find_pseudo_element_rules<'a>(
   node: &DomNode,
   rules: &'a RuleIndex<'a>,
-  selector_caches: &mut SelectorCaches,
+  selector_caches: &'a mut SelectorCaches,
   scratch: &mut CascadeScratch,
   ancestors: &[&DomNode],
   slot_map: Option<&'a SlotAssignmentMap<'a>>,
@@ -8369,7 +8369,7 @@ fn find_pseudo_element_rules<'a>(
   let shadow_host = shadow_host_ref(node, ancestors, slot_map);
 
   // Create selector caches and matching context
-  let mut context = MatchingContext::new(
+  let mut context: MatchingContext<'a, crate::css::selectors::FastRenderSelectorImpl> = MatchingContext::new(
     MatchingMode::ForStatelessPseudoElement,
     None,
     selector_caches,
@@ -8377,9 +8377,8 @@ fn find_pseudo_element_rules<'a>(
     selectors::matching::NeedsSelectorFlags::No,
     selectors::matching::MatchingForInvalidation::No,
   );
-  context.extra_data = ShadowMatchData::for_document();
-  let slot_map: Option<&SlotAssignmentMap<'a>> = slot_map;
-  context.extra_data.slot_map = slot_map;
+  context.extra_data = ShadowMatchData::<'a>::for_document();
+  context.extra_data.slot_map = slot_map.map(|m| m as &'a SlotAssignmentMap<'a>);
 
   let mut scoped_rule_idx: Option<usize> = None;
   let mut scoped_match: Option<Option<ScopeMatch<'_>>> = None;
