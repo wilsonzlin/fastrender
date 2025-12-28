@@ -3659,7 +3659,6 @@ impl DisplayListRenderer {
       item.color,
       item.synthetic_bold,
       item.synthetic_oblique,
-      item.palette_index,
       &item.variations,
     );
     if let Some(emphasis) = &item.emphasis {
@@ -4090,7 +4089,6 @@ impl DisplayListRenderer {
             emphasis.color,
             0.0,
             0.0,
-            text.palette_index,
             &text.variations,
           );
         }
