@@ -9854,6 +9854,7 @@ fn parse_container_type_keyword(text: &str) -> Option<ContainerType> {
   match text.to_ascii_lowercase().as_str() {
     "none" => Some(ContainerType::None),
     "normal" => Some(ContainerType::Normal),
+    "style" => Some(ContainerType::Style),
     "size" => Some(ContainerType::Size),
     "inline-size" => Some(ContainerType::InlineSize),
     _ => None,

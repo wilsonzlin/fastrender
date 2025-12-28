@@ -2584,6 +2584,15 @@ fn paint_fragment_tree_with_state(
   let scroll_state = scroll_result.state;
   let scroll = scroll_state.viewport;
 
+  // Sample load-time transitions before scroll-driven animations so timeline-driven animations
+  // remain the final composited result for overlapping properties.
+  if let Some(time) = animation_time {
+    animation::apply_transitions(
+      &mut fragment_tree,
+      time.as_secs_f32() * 1000.0,
+      viewport_size,
+    );
+  }
   animation::apply_animations(&mut fragment_tree, &scroll_state, animation_time);
 
   let viewport_rect = Rect::from_xywh(0.0, 0.0, viewport_size.width, viewport_size.height);
@@ -3464,9 +3473,16 @@ impl FastRender {
       );
       let scroll_result = crate::scroll::apply_scroll_snap(&mut fragment_tree, &scroll_state);
       scroll_state = scroll_result.state;
-      let scroll = scroll_state.viewport;
+      crate::scroll::apply_scroll_offsets(&mut fragment_tree, &scroll_state);
+      let animation_duration =
+        animation_time.map(|ms| Duration::from_secs_f32(ms.max(0.0) / 1000.0));
 
-      animation::apply_animations(&mut fragment_tree, &scroll_state, animation_time);
+      // Sample load-time transitions before scroll-driven animations so timeline-driven
+      // animations can override overlapping properties.
+      if let Some(time_ms) = animation_time {
+        animation::apply_transitions(&mut fragment_tree, time_ms, viewport_size);
+      }
+      animation::apply_animations(&mut fragment_tree, &scroll_state, animation_duration);
 
       self.apply_sticky_offsets_to_tree_with_scroll_state(&mut fragment_tree, &scroll_state);
 
@@ -3500,7 +3516,7 @@ impl FastRender {
       }
 
       // Paint to pixmap
-      let offset = Point::new(-scroll.x, -scroll.y);
+      let offset = Point::new(-scroll_state.viewport.x, -scroll_state.viewport.y);
       let pixmap = self.paint_with_offset_traced(
         &fragment_tree,
         target_width,
@@ -4349,10 +4365,21 @@ impl FastRender {
       let scroll_state = scroll_result.state;
       let scroll = scroll_state.viewport;
 
+      let animation_duration = options
+        .animation_time
+        .map(|ms| Duration::from_secs_f32(ms.max(0.0) / 1000.0));
+      if let Some(time_ms) = options.animation_time {
+        animation::apply_transitions(&mut intermediates.fragment_tree, time_ms, viewport_size);
+      }
       animation::apply_animations(
         &mut intermediates.fragment_tree,
         &scroll_state,
-        options.animation_time,
+        animation_duration,
+      );
+
+      self.apply_sticky_offsets_to_tree_with_scroll_state(
+        &mut intermediates.fragment_tree,
+        &scroll_state,
       );
 
       self.apply_sticky_offsets(
@@ -7907,6 +7934,7 @@ fn styled_style_summary(style: &ComputedStyle) -> String {
   let ct = match style.container_type {
     ContainerType::None => "none",
     ContainerType::Normal => "normal",
+    ContainerType::Style => "style",
     ContainerType::Size => "size",
     ContainerType::InlineSize => "inline-size",
   };
@@ -8149,6 +8177,7 @@ fn build_container_query_context(
               entry.inline_size = entry.inline_size.max(content_inline);
               entry.block_size = entry.block_size.max(content_block);
               entry.font_size = entry.font_size.max(node.style.font_size);
+              entry.styles = node.style.clone();
             })
             .or_insert_with(|| ContainerQueryInfo {
               inline_size: content_inline,
@@ -8156,8 +8185,25 @@ fn build_container_query_context(
               container_type: node.style.container_type,
               names: node.style.container_name.clone(),
               font_size: node.style.font_size,
+              styles: node.style.clone(),
             });
         }
+      }
+      ContainerType::Style => {
+        containers
+          .entry(styled_id)
+          .and_modify(|entry| {
+            entry.font_size = entry.font_size.max(node.style.font_size);
+            entry.styles = node.style.clone();
+          })
+          .or_insert_with(|| ContainerQueryInfo {
+            inline_size: 0.0,
+            block_size: 0.0,
+            container_type: node.style.container_type,
+            names: node.style.container_name.clone(),
+            font_size: node.style.font_size,
+            styles: node.style.clone(),
+          });
       }
       ContainerType::None | ContainerType::Normal => {}
     }

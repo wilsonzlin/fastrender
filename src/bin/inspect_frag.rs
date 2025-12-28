@@ -589,6 +589,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       ctx.base,
       ctx.include_base,
       ctx.index,
+      &scroll_state,
       &mut fragments_abs,
     );
   }
@@ -806,6 +807,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       ctx.base,
       ctx.include_base,
       ctx.index,
+      &scroll_state,
       &mut all_text,
     );
   }
@@ -917,7 +919,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       ctx.base,
       ctx.include_base,
       ctx.index,
-      &ScrollState::default(),
+      &scroll_state,
       &mut path,
     ) {
       found_us = true;
@@ -1099,6 +1101,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       ctx.base,
       ctx.include_base,
       ctx.index,
+      &scroll_state,
       &mut abs_backgrounds,
     );
   }
@@ -2075,9 +2078,15 @@ fn collect_fragments_abs<'a>(
   base: Option<Point>,
   include_base: bool,
   root_index: usize,
+  scroll_state: &ScrollState,
   out: &mut Vec<(Rect, &'a FragmentNode, usize)>,
 ) {
-  let (abs, next_offset) = absolute_rect(fragment, offset, base, include_base);
+  let (abs, mut next_offset) = absolute_rect(fragment, offset, base, include_base);
+  let element_scroll = element_scroll(fragment, scroll_state);
+  next_offset = Point::new(
+    next_offset.x - element_scroll.x,
+    next_offset.y - element_scroll.y,
+  );
   out.push((abs, fragment, root_index));
   let child_base = if include_base { None } else { base };
   for child in &fragment.children {
@@ -2087,6 +2096,7 @@ fn collect_fragments_abs<'a>(
       child_base,
       include_base,
       root_index,
+      scroll_state,
       out,
     );
   }
@@ -2098,9 +2108,15 @@ fn collect_backgrounds_abs<'a>(
   base: Option<Point>,
   include_base: bool,
   root_index: usize,
+  scroll_state: &ScrollState,
   out: &mut Vec<(Rect, &'a FragmentNode, usize)>,
 ) {
-  let (abs, next_offset) = absolute_rect(fragment, offset, base, include_base);
+  let (abs, mut next_offset) = absolute_rect(fragment, offset, base, include_base);
+  let element_scroll = element_scroll(fragment, scroll_state);
+  next_offset = Point::new(
+    next_offset.x - element_scroll.x,
+    next_offset.y - element_scroll.y,
+  );
   out.push((abs, fragment, root_index));
   let child_base = if include_base { None } else { base };
   for child in &fragment.children {
@@ -2110,6 +2126,7 @@ fn collect_backgrounds_abs<'a>(
       child_base,
       include_base,
       root_index,
+      scroll_state,
       out,
     );
   }
@@ -2121,9 +2138,15 @@ fn collect_text_abs(
   base: Option<Point>,
   include_base: bool,
   root_index: usize,
+  scroll_state: &ScrollState,
   out: &mut Vec<(f32, f32, usize, String)>,
 ) {
-  let (abs, next_offset) = absolute_rect(fragment, offset, base, include_base);
+  let (abs, mut next_offset) = absolute_rect(fragment, offset, base, include_base);
+  let element_scroll = element_scroll(fragment, scroll_state);
+  next_offset = Point::new(
+    next_offset.x - element_scroll.x,
+    next_offset.y - element_scroll.y,
+  );
   if let FragmentContent::Text { text, .. } = &fragment.content {
     out.push((abs.x(), abs.y(), root_index, text.clone()));
   }
@@ -2135,6 +2158,7 @@ fn collect_text_abs(
       child_base,
       include_base,
       root_index,
+      scroll_state,
       out,
     );
   }
@@ -2149,7 +2173,12 @@ fn find_us_fragment(
   scroll_state: &ScrollState,
   path: &mut Vec<String>,
 ) -> bool {
-  let (abs, next_offset) = absolute_rect(node, offset, base, include_base);
+  let (abs, mut next_offset) = absolute_rect(node, offset, base, include_base);
+  let element_scroll = element_scroll(node, scroll_state);
+  next_offset = Point::new(
+    next_offset.x - element_scroll.x,
+    next_offset.y - element_scroll.y,
+  );
   let style = node.style.as_deref();
   let mut label = match &node.content {
     FragmentContent::Text { text, .. } => {

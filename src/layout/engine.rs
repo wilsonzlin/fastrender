@@ -569,8 +569,6 @@ impl LayoutEngine {
     let root_fragment = self.layout_subtree_internal(&box_tree.root, &constraints, trace)?;
 
     if let Some(options) = &self.config.fragmentation {
-      let default_style = ComputedStyle::default();
-      let style = root_fragment.style.as_deref().unwrap_or(&default_style);
       let fragments = fragmentation::fragment_tree(&root_fragment, options);
       let mut tree = FragmentTree::from_fragments(fragments, *icb);
       tree.ensure_scroll_metadata();

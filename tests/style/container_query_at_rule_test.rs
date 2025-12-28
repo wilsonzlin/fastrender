@@ -5,7 +5,9 @@ use fastrender::style::cascade::{
 };
 use fastrender::style::media::MediaContext;
 use fastrender::style::types::ContainerType;
+use fastrender::style::ComputedStyle;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 const HTML: &str = r#"<div id="c" class="container"><div id="t" class="target"></div></div>"#;
 
@@ -62,6 +64,7 @@ fn cascade_with_container(css: &str, inline_size: f32, names: Vec<String>) -> St
       container_type: ContainerType::InlineSize,
       names,
       font_size: 16.0,
+      styles: Arc::new(ComputedStyle::default()),
     },
   );
   let ctx = ContainerQueryContext {

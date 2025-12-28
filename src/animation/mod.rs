@@ -2072,6 +2072,7 @@ fn normalize_time_progress(time: Duration) -> f32 {
 ///
 /// This is a lightweight hook to make scroll-driven effects visible without a full
 /// animation engine. It uses the provided scroll state for viewport and element scroll offsets.
+/// Time-based animations use a normalized 0–1 progress derived from the provided [`Duration`].
 pub fn apply_animations(
   tree: &mut FragmentTree,
   scroll_state: &ScrollState,

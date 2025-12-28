@@ -17,6 +17,7 @@ use crate::style::values::{CustomPropertySyntax, CustomPropertyValue};
 use cssparser::Parser;
 use cssparser::ParserInput;
 use cssparser::ToCss;
+use cssparser::Token;
 use selectors::parser::SelectorList;
 use std::fmt;
 
@@ -681,8 +682,8 @@ fn collect_rules_recursive<'a>(
         }
       }
       CssRule::Media(media_rule) => {
-        // Only include rules from @media blocks that match
-        if media_ctx.evaluate_with_cache(&media_rule.query, cache.as_deref_mut()) {
+        // Only include rules from @media blocks that match (empty query lists are non-matching).
+        if media_ctx.evaluate_list_with_cache(&media_rule.queries, cache.as_deref_mut()) {
           collect_rules_recursive(
             &media_rule.rules,
             media_ctx,
@@ -700,7 +701,7 @@ fn collect_rules_recursive<'a>(
         let mut updated_conditions = container_conditions.to_vec();
         updated_conditions.push(ContainerCondition {
           name: container_rule.name.clone(),
-          query: container_rule.query.clone(),
+          query_list: container_rule.query_list.clone(),
         });
         collect_rules_recursive(
           &container_rule.rules,
@@ -844,7 +845,7 @@ fn collect_page_rules_recursive<'a>(
         });
       }
       CssRule::Media(media_rule) => {
-        if media_ctx.evaluate_with_cache(&media_rule.query, cache.as_deref_mut()) {
+        if media_ctx.evaluate_list_with_cache(&media_rule.queries, cache.as_deref_mut()) {
           collect_page_rules_recursive(
             &media_rule.rules,
             media_ctx,
@@ -945,14 +946,12 @@ fn collect_font_faces_recursive(
     match rule {
       CssRule::FontFace(face) => out.push(face.clone()),
       CssRule::Media(media_rule) => {
-        if media_ctx.evaluate_with_cache(&media_rule.query, cache.as_deref_mut()) {
+        if media_ctx.evaluate_list_with_cache(&media_rule.queries, cache.as_deref_mut()) {
           collect_font_faces_recursive(&media_rule.rules, media_ctx, cache.as_deref_mut(), out);
         }
       }
       CssRule::Container(container_rule) => {
-        if media_ctx.evaluate_with_cache(&container_rule.query, cache.as_deref_mut()) {
-          collect_font_faces_recursive(&container_rule.rules, media_ctx, cache.as_deref_mut(), out);
-        }
+        collect_font_faces_recursive(&container_rule.rules, media_ctx, cache.as_deref_mut(), out);
       }
       CssRule::Supports(supports_rule) => {
         if supports_rule.condition.matches() {
@@ -999,14 +998,12 @@ fn collect_keyframes_recursive(
     match rule {
       CssRule::Keyframes(kf) => out.push(kf.clone()),
       CssRule::Media(media_rule) => {
-        if media_ctx.evaluate_with_cache(&media_rule.query, cache.as_deref_mut()) {
+        if media_ctx.evaluate_list_with_cache(&media_rule.queries, cache.as_deref_mut()) {
           collect_keyframes_recursive(&media_rule.rules, media_ctx, cache.as_deref_mut(), out);
         }
       }
       CssRule::Container(container_rule) => {
-        if media_ctx.evaluate_with_cache(&container_rule.query, cache.as_deref_mut()) {
-          collect_keyframes_recursive(&container_rule.rules, media_ctx, cache.as_deref_mut(), out);
-        }
+        collect_keyframes_recursive(&container_rule.rules, media_ctx, cache.as_deref_mut(), out);
       }
       CssRule::Supports(supports_rule) => {
         if supports_rule.condition.matches() {
@@ -1058,7 +1055,7 @@ fn collect_counter_styles_recursive<'a>(
         });
       }
       CssRule::Media(media_rule) => {
-        if media_ctx.evaluate_with_cache(&media_rule.query, cache.as_deref_mut()) {
+        if media_ctx.evaluate_list_with_cache(&media_rule.queries, cache.as_deref_mut()) {
           collect_counter_styles_recursive(
             &media_rule.rules,
             media_ctx,
@@ -1195,7 +1192,7 @@ fn collect_font_palette_rules_recursive<'a>(
         });
       }
       CssRule::Media(media_rule) => {
-        if media_ctx.evaluate_with_cache(&media_rule.query, cache.as_deref_mut()) {
+        if media_ctx.evaluate_list_with_cache(&media_rule.queries, cache.as_deref_mut()) {
           collect_font_palette_rules_recursive(
             &media_rule.rules,
             media_ctx,
@@ -1329,7 +1326,7 @@ fn collect_property_rules_recursive<'a>(
         });
       }
       CssRule::Media(media_rule) => {
-        if media_ctx.evaluate_with_cache(&media_rule.query, cache.as_deref_mut()) {
+        if media_ctx.evaluate_list_with_cache(&media_rule.queries, cache.as_deref_mut()) {
           collect_property_rules_recursive(
             &media_rule.rules,
             media_ctx,
@@ -1421,6 +1418,12 @@ fn collect_property_rules_recursive<'a>(
           out,
         );
       }
+      CssRule::Import(_) => {}
+      CssRule::Page(_) => {}
+      CssRule::FontFace(_) => {}
+      CssRule::Keyframes(_) => {}
+      CssRule::FontPaletteValues(_) => {}
+      CssRule::CounterStyle(_) => {}
       CssRule::StartingStyle(starting_rule) => {
         collect_property_rules_recursive(
           &starting_rule.rules,
@@ -1431,12 +1434,6 @@ fn collect_property_rules_recursive<'a>(
           out,
         );
       }
-      CssRule::Import(_) => {}
-      CssRule::Page(_) => {}
-      CssRule::FontFace(_) => {}
-      CssRule::Keyframes(_) => {}
-      CssRule::FontPaletteValues(_) => {}
-      CssRule::CounterStyle(_) => {}
     }
   }
 }
@@ -1462,19 +1459,98 @@ impl SupportsCondition {
 
 /// Determines whether a selector list is supported for @supports selector() queries.
 ///
-/// The selector is considered supported when it parses successfully with the engine's selector
-/// grammar. Selectors that fail to parse evaluate to false.
+/// The selector list uses forgiving parsing: if any selector in the list parses successfully with
+/// the engine's selector grammar, the overall condition is considered true.
 fn supports_selector_is_valid(selector_list: &str) -> bool {
+  for selector in split_selector_list(selector_list) {
+    let mut input = ParserInput::new(&selector);
+    let mut parser = Parser::new(&mut input);
+    if SelectorList::parse(
+      &PseudoClassParser,
+      &mut parser,
+      selectors::parser::ParseRelative::No,
+    )
+    .is_ok()
+    {
+      return true;
+    }
+  }
+
+  false
+}
+
+fn split_selector_list(selector_list: &str) -> Vec<String> {
   let mut input = ParserInput::new(selector_list);
   let mut parser = Parser::new(&mut input);
-  match SelectorList::parse(
-    &PseudoClassParser,
-    &mut parser,
-    selectors::parser::ParseRelative::No,
-  ) {
-    Ok(_) => true,
-    Err(_) => false,
+  let mut parts = Vec::new();
+  let mut segment_start = parser.position();
+
+  while !parser.is_exhausted() {
+    let token = match parser.next_including_whitespace() {
+      Ok(token) => token,
+      Err(_) => break,
+    };
+
+    match token {
+      Token::Comma => {
+        let raw = parser.slice_from(segment_start);
+        if let Some(stripped) = raw.strip_suffix(',') {
+          let trimmed = stripped.trim();
+          if !trimmed.is_empty() {
+            parts.push(trimmed.to_string());
+          }
+        }
+        segment_start = parser.position();
+      }
+      Token::Function(_)
+      | Token::ParenthesisBlock
+      | Token::SquareBracketBlock
+      | Token::CurlyBracketBlock => {
+        if parser
+          .parse_nested_block(consume_nested_tokens_for_selector_split)
+          .is_err()
+        {
+          break;
+        }
+      }
+      _ => {}
+    }
   }
+
+  let tail = parser.slice_from(segment_start).trim();
+  if !tail.is_empty() {
+    parts.push(tail.to_string());
+  }
+
+  parts
+}
+
+fn consume_nested_tokens_for_selector_split<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> Result<(), cssparser::ParseError<'i, ()>> {
+  while !parser.is_exhausted() {
+    let token = match parser.next_including_whitespace() {
+      Ok(token) => token,
+      Err(_) => break,
+    };
+
+    match token {
+      Token::Function(_)
+      | Token::ParenthesisBlock
+      | Token::SquareBracketBlock
+      | Token::CurlyBracketBlock => {
+        if parser
+          .parse_nested_block(consume_nested_tokens_for_selector_split)
+          .is_err()
+        {
+          break;
+        }
+      }
+      _ => {}
+    }
+  }
+
+  Ok(())
 }
 
 #[cfg(test)]
@@ -1500,12 +1576,30 @@ mod tests {
   fn supports_selector_handles_invalid_selector_list() {
     let cond = SupportsCondition::Selector("div:unknown-pseudo, span".into());
     assert!(
-      !cond.matches(),
-      "selector() should fail when any selector in the list is unsupported"
+      cond.matches(),
+      "selector() should match when at least one selector in the list is supported"
     );
 
     let cond = SupportsCondition::Selector("div + span".into());
     assert!(cond.matches(), "supported selector list should be accepted");
+  }
+
+  #[test]
+  fn supports_selector_fails_when_no_selectors_supported() {
+    let cond = SupportsCondition::Selector(":unknown-pseudo, :also-unknown".into());
+    assert!(
+      !cond.matches(),
+      "selector() should fail when no selectors in the list are supported"
+    );
+  }
+
+  #[test]
+  fn supports_selector_respects_nested_commas() {
+    let cond = SupportsCondition::Selector(":is(.ok, .also-ok), :unknown-pseudo".into());
+    assert!(
+      cond.matches(),
+      "commas inside functional pseudos should not split the selector list for selector()"
+    );
   }
 
   #[test]
@@ -1638,8 +1732,8 @@ pub enum CssRule {
 /// A @media rule containing conditional rules
 #[derive(Debug, Clone)]
 pub struct MediaRule {
-  /// The media query to evaluate
-  pub query: MediaQuery,
+  /// Media queries to evaluate with OR semantics (a match when any query is true).
+  pub queries: Vec<MediaQuery>,
   /// Rules that apply when query matches (can be nested)
   pub rules: Vec<CssRule>,
 }
@@ -1647,12 +1741,36 @@ pub struct MediaRule {
 /// A @container rule containing conditional rules
 #[derive(Debug, Clone)]
 pub struct ContainerRule {
-  /// Optional named container list to target (ignored for now).
+  /// Optional named container to target.
   pub name: Option<String>,
-  /// The container query to evaluate (size queries only).
-  pub query: MediaQuery,
+  /// Container query list to evaluate (OR semantics).
+  pub query_list: Vec<ContainerQuery>,
   /// Rules that apply when query matches (can be nested)
   pub rules: Vec<CssRule>,
+}
+
+/// A parsed container query condition (size queries and/or style queries).
+#[derive(Debug, Clone)]
+pub enum ContainerQuery {
+  /// Container size feature queries parsed with the media-query parser.
+  Size(MediaQuery),
+  /// Style queries inspecting computed styles of the query container.
+  Style(ContainerStyleQuery),
+  /// Logical negation of a nested condition.
+  Not(Box<ContainerQuery>),
+  /// Logical conjunction of multiple conditions.
+  And(Vec<ContainerQuery>),
+  /// Logical disjunction of multiple conditions.
+  Or(Vec<ContainerQuery>),
+}
+
+/// Style-query predicate inside a container query.
+#[derive(Debug, Clone)]
+pub enum ContainerStyleQuery {
+  /// Custom property presence or equality check.
+  CustomProperty { name: String, value: Option<String> },
+  /// Equality check for a supported computed property.
+  Property { name: String, value: String },
 }
 
 /// A @scope rule constraining descendant style rules.
@@ -1671,8 +1789,8 @@ pub struct ScopeRule {
 pub struct ContainerCondition {
   /// Optional container name to match (None targets the nearest container).
   pub name: Option<String>,
-  /// The parsed container query (size queries only at present).
-  pub query: MediaQuery,
+  /// The parsed container queries (OR semantics).
+  pub query_list: Vec<ContainerQuery>,
 }
 
 /// A scoping context attached to collected style rules.
@@ -1721,6 +1839,19 @@ pub struct ImportRule {
   pub href: String,
   /// Optional list of media queries that gate the import
   pub media: Vec<MediaQuery>,
+  /// Optional cascade layer modifier.
+  pub layer: Option<ImportLayer>,
+  /// Optional @supports condition gating the import.
+  pub supports: Option<SupportsCondition>,
+}
+
+/// Cascade layer modifier attached to an @import rule.
+#[derive(Debug, Clone)]
+pub enum ImportLayer {
+  /// Anonymous layer (equivalent to `@layer { ... }`).
+  Anonymous,
+  /// Named layer path, potentially dotted (e.g., `foo.bar`).
+  Named(Vec<String>),
 }
 
 /// A single CSS style rule (selectors + declarations)
@@ -1964,7 +2095,7 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
         );
         out.push(CssRule::Container(ContainerRule {
           name: container_rule.name.clone(),
-          query: container_rule.query.clone(),
+          query_list: container_rule.query_list.clone(),
           rules: resolved_children,
         }));
       }
@@ -2037,6 +2168,12 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
         }));
       }
       CssRule::Import(import) => {
+        if let Some(condition) = &import.supports {
+          if !condition.matches() {
+            continue;
+          }
+        }
+
         let media_matches = import.media.is_empty()
           || media_ctx.evaluate_list_with_cache(&import.media, cache.as_deref_mut());
         if !media_matches {
@@ -2061,6 +2198,7 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
           Ok(css_text) => {
             seen.insert(resolved_href.clone());
             if let Ok(sheet) = crate::css::parser::parse_stylesheet(&css_text) {
+              let mut resolved_children = Vec::new();
               resolve_rules(
                 &sheet.rules,
                 loader,
@@ -2068,8 +2206,26 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
                 media_ctx,
                 cache.as_deref_mut(),
                 seen,
-                out,
+                &mut resolved_children,
               );
+
+              if let Some(layer) = &import.layer {
+                let layer_rule = match layer {
+                  ImportLayer::Anonymous => LayerRule {
+                    names: Vec::new(),
+                    rules: resolved_children,
+                    anonymous: true,
+                  },
+                  ImportLayer::Named(path) => LayerRule {
+                    names: vec![path.clone()],
+                    rules: resolved_children,
+                    anonymous: false,
+                  },
+                };
+                out.push(CssRule::Layer(layer_rule));
+              } else {
+                out.extend(resolved_children);
+              }
             }
           }
           Err(_) => {

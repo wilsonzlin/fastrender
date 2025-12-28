@@ -72,6 +72,8 @@ pub enum BoxDecorationBreak {
 pub enum ContainerType {
   None,
   Normal,
+  /// Establishes a style container for style queries. Size features remain unavailable.
+  Style,
   Size,
   InlineSize,
 }
