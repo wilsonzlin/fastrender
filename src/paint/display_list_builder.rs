@@ -4222,8 +4222,6 @@ impl DisplayListBuilder {
               baseline_offset: ascent,
               variations: mark_variations,
               palette_index: mark_palette_index,
-              variations: mark_variations,
-              palette_index: mark_palette_index,
             })
           }
           _ => None,
