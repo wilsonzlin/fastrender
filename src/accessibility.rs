@@ -605,16 +605,10 @@ fn is_decorative_img(node: &StyledNode, ctx: &BuildContext) -> bool {
     return false;
   }
 
-  let role_attr = node
-    .node
-    .get_attribute_ref("role")
-    .and_then(|r| r.split_ascii_whitespace().find(|t| !t.is_empty()))
-    .map(|r| r.to_ascii_lowercase());
+  let parsed_role = parse_aria_role_attr(&node.node);
 
-  if let Some(role) = role_attr.as_deref() {
-    if role != "none" && role != "presentation" {
-      return false;
-    }
+  if let Some(ParsedRole::Explicit(_)) = parsed_role {
+    return false;
   }
 
   if node
@@ -622,7 +616,7 @@ fn is_decorative_img(node: &StyledNode, ctx: &BuildContext) -> bool {
     .get_attribute_ref("title")
     .map(normalize_whitespace)
     .is_some_and(|title| !title.is_empty())
-    && role_attr.is_none()
+    && parsed_role.is_none()
   {
     return false;
   }
@@ -678,24 +672,84 @@ fn is_sectioning_ancestor(ancestors: &[&DomNode]) -> bool {
   })
 }
 
+enum ParsedRole {
+  Explicit(String),
+  Presentational,
+}
+
+fn is_supported_role(role: &str) -> bool {
+  matches!(
+    role,
+    "article"
+      | "banner"
+      | "button"
+      | "caption"
+      | "cell"
+      | "checkbox"
+      | "columnheader"
+      | "combobox"
+      | "complementary"
+      | "contentinfo"
+      | "dialog"
+      | "figure"
+      | "form"
+      | "generic"
+      | "group"
+      | "heading"
+      | "img"
+      | "link"
+      | "list"
+      | "listbox"
+      | "listitem"
+      | "main"
+      | "meter"
+      | "navigation"
+      | "option"
+      | "progressbar"
+      | "radio"
+      | "region"
+      | "row"
+      | "rowgroup"
+      | "rowheader"
+      | "searchbox"
+      | "slider"
+      | "spinbutton"
+      | "status"
+      | "switch"
+      | "table"
+      | "textbox"
+  )
+}
+
+fn parse_aria_role_attr(node: &DomNode) -> Option<ParsedRole> {
+  let raw_role = node.get_attribute_ref("role")?;
+
+  for token in raw_role.split_ascii_whitespace() {
+    let role = token.to_ascii_lowercase();
+    if role == "none" || role == "presentation" {
+      return Some(ParsedRole::Presentational);
+    }
+
+    if is_supported_role(&role) {
+      return Some(ParsedRole::Explicit(role));
+    }
+  }
+
+  None
+}
+
 fn compute_role(
   node: &StyledNode,
   ancestors: &[&DomNode],
   styled_parent: Option<&StyledNode>,
 ) -> (Option<String>, bool) {
   let dom_node = &node.node;
-  let role_attr = dom_node
-    .get_attribute_ref("role")
-    .and_then(|r| r.split_ascii_whitespace().find(|t| !t.is_empty()))
-    .map(|r| r.to_ascii_lowercase());
 
-  if let Some(role) = role_attr {
-    let presentational = matches!(role.as_str(), "none" | "presentation");
-    if presentational {
-      return (None, true);
-    }
-
-    return (Some(role), false);
+  if let Some(parsed) = parse_aria_role_attr(dom_node) {
+    return match parsed {
+      ParsedRole::Explicit(role) => (Some(role), false),
+      ParsedRole::Presentational => (None, true),
+    };
   }
 
   let Some(tag) = dom_node.tag_name().map(|t| t.to_ascii_lowercase()) else {
@@ -894,15 +948,19 @@ fn compute_name_internal(
     return Some(placeholder);
   }
 
-  if let Some(native) = native_name_from_html(node, ctx, visited, TextAlternativeMode::Visible) {
-    if !native.is_empty() {
-      return Some(native);
+  if allow_visible_text {
+    if let Some(native) =
+      native_name_from_html(node, ctx, visited, TextAlternativeMode::Visible)
+    {
+      if !native.is_empty() {
+        return Some(native);
+      }
     }
-  }
 
-  if let Some(specific) = role_specific_name(node, ctx, role) {
-    if !specific.is_empty() {
-      return Some(specific);
+    if let Some(specific) = role_specific_name(node, ctx, role) {
+      if !specific.is_empty() {
+        return Some(specific);
+      }
     }
   }
 

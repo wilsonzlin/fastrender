@@ -374,11 +374,12 @@ mod tests {
   use crate::style::types::BackfaceVisibility;
 
   fn basic_context(transform: Transform3D, z: f32) -> StackingContextItem {
+    let bounds = Rect::from_xywh(0.0, 0.0, 10.0, 10.0);
     StackingContextItem {
       z_index: 0,
       creates_stacking_context: true,
-      bounds: Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
-      plane_rect: Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+      bounds,
+      plane_rect: bounds,
       mix_blend_mode: crate::paint::display_list::BlendMode::Normal,
       is_isolated: false,
       transform: Some(transform.multiply(&Transform3D::translate(0.0, 0.0, z))),

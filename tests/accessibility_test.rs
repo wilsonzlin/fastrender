@@ -172,6 +172,7 @@ fn accessibility_decorative_images_with_empty_alt_are_hidden() {
     <html>
       <body>
         <img id="decor" alt="" src="x" />
+        <img id="unknown" alt="" role="unknown" src="x" />
         <img id="labeled" alt="" aria-label="Logo" src="x" />
       </body>
     </html>
@@ -182,6 +183,10 @@ fn accessibility_decorative_images_with_empty_alt_are_hidden() {
   assert!(
     find_json_node(&tree, "decor").is_none(),
     "decorative image should be omitted"
+  );
+  assert!(
+    find_json_node(&tree, "unknown").is_none(),
+    "invalid role tokens should not prevent decorative handling"
   );
 
   let labeled = find_json_node(&tree, "labeled").expect("labeled image present");
@@ -196,6 +201,9 @@ fn accessibility_role_tokenization_uses_first_token() {
     <html>
       <body>
         <div id="x" role="button link"></div>
+        <div id="multi" role="button link">Press</div>
+        <div id="uppercase" role="  LINK  ">Go</div>
+        <div id="fallback" role="unknown button">Click</div>
       </body>
     </html>
   "##;
@@ -206,6 +214,15 @@ fn accessibility_role_tokenization_uses_first_token() {
 
   let node = find_by_id(&tree, "x").expect("node with id x");
   assert_eq!(node.role, "button");
+
+  let multi = find_by_id(&tree, "multi").expect("multi node");
+  assert_eq!(multi.role, "button");
+
+  let uppercase = find_by_id(&tree, "uppercase").expect("uppercase node");
+  assert_eq!(uppercase.role, "link");
+
+  let fallback = find_by_id(&tree, "fallback").expect("fallback node");
+  assert_eq!(fallback.role, "button");
 }
 
 #[test]
@@ -218,6 +235,7 @@ fn accessibility_presentational_role_suppresses_semantics() {
           <div id="x" role="none">Text</div>
           <div id="labeled" role="presentation" aria-label="Labelled"></div>
         </div>
+        <button id="presentational" role="presentation">Native</button>
       </body>
     </html>
   "##;
@@ -232,6 +250,11 @@ fn accessibility_presentational_role_suppresses_semantics() {
 
   let labeled = find_by_id(&tree, "labeled").expect("presentational with label");
   assert_eq!(labeled.name.as_deref(), Some("Labelled"));
+
+  let presentational = find_by_id(&tree, "presentational").expect("presentational node");
+  assert_eq!(presentational.role, "generic");
+  assert_eq!(presentational.name, None);
+  assert!(presentational.states.focusable);
 }
 
 #[test]
