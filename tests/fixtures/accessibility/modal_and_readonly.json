@@ -47,7 +47,8 @@
         "required": false,
         "invalid": false,
         "visited": false,
-        "readonly": true
+        "readonly": true,
+        "multiline": false
       }
     },
     "aria-override": {
@@ -63,7 +64,8 @@
         "required": false,
         "invalid": false,
         "visited": false,
-        "readonly": false
+        "readonly": false,
+        "multiline": true
       }
     }
   }

@@ -648,7 +648,8 @@ fn accessibility_label_snapshot_json() {
           "required": false,
           "invalid": false,
           "visited": false,
-          "readonly": false
+          "readonly": false,
+          "multiline": false
         }
       },
       "check": {
@@ -681,7 +682,8 @@ fn accessibility_label_snapshot_json() {
           "required": false,
           "invalid": false,
           "visited": false,
-          "readonly": false
+          "readonly": false,
+          "multiline": false
         }
       },
       "hidden-target": {
@@ -697,7 +699,8 @@ fn accessibility_label_snapshot_json() {
           "required": false,
           "invalid": false,
           "visited": false,
-          "readonly": false
+          "readonly": false,
+          "multiline": false
         }
       }
     })
@@ -1121,6 +1124,7 @@ fn accessibility_fixture_snapshots() {
   let fixtures = [
     "headings_links",
     "labels",
+    "multiline_textbox",
     "form_controls",
     "inert_and_hidden",
     "details_summary_states",

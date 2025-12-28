@@ -50,6 +50,8 @@ pub struct AccessibilityState {
   #[serde(skip_serializing_if = "Option::is_none")]
   pub has_popup: Option<String>,
   #[serde(skip_serializing_if = "Option::is_none")]
+  pub multiline: Option<bool>,
+  #[serde(skip_serializing_if = "Option::is_none")]
   pub checked: Option<CheckState>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub selected: Option<bool>,
@@ -74,6 +76,7 @@ impl Default for AccessibilityState {
       busy: false,
       readonly: false,
       has_popup: None,
+      multiline: None,
       checked: None,
       selected: None,
       pressed: None,
@@ -418,6 +421,7 @@ fn build_nodes<'a>(
       let current = parse_aria_current(&node.node);
       let expanded = compute_expanded(node, role.as_deref(), ancestors);
       let has_popup = parse_has_popup(&node.node);
+      let multiline = compute_multiline(node, role.as_deref());
       let visited =
         role.as_deref() == Some("link") && attr_truthy(&node.node, "data-fastr-visited");
       let focusable = compute_focusable(&node.node, role.as_deref(), disabled);
@@ -438,6 +442,7 @@ fn build_nodes<'a>(
         busy,
         readonly,
         has_popup,
+        multiline,
         checked,
         selected,
         pressed,
@@ -1602,6 +1607,23 @@ fn compute_pressed(node: &StyledNode, role: Option<&str>) -> Option<PressedState
   None
 }
 
+fn compute_multiline(node: &StyledNode, role: Option<&str>) -> Option<bool> {
+  if role != Some("textbox") {
+    return None;
+  }
+
+  if let Some(multiline) = parse_aria_multiline(&node.node) {
+    return Some(multiline);
+  }
+
+  let tag = node.node.tag_name().map(|t| t.to_ascii_lowercase());
+  match tag.as_deref() {
+    Some("textarea") => Some(true),
+    Some("input") => Some(false),
+    _ => None,
+  }
+}
+
 fn compute_modal(node: &DomNode) -> Option<bool> {
   if let Some(value) = parse_bool_attr(node, "aria-modal") {
     return Some(value);
@@ -1762,6 +1784,15 @@ fn parse_bool_token(token: &str) -> Option<bool> {
 
 fn attr_truthy(node: &DomNode, name: &str) -> bool {
   parse_bool_attr(node, name).unwrap_or(false)
+}
+
+fn parse_aria_multiline(node: &DomNode) -> Option<bool> {
+  let value = node.get_attribute_ref("aria-multiline")?;
+  match value.to_ascii_lowercase().trim() {
+    "" | "true" | "1" => Some(true),
+    "false" | "0" => Some(false),
+    _ => None,
+  }
 }
 
 fn parse_check_state(node: &DomNode, name: &str) -> Option<CheckState> {

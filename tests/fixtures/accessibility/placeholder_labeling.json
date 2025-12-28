@@ -12,7 +12,9 @@
         "disabled": false,
         "required": false,
         "invalid": false,
-        "visited": false
+        "visited": false,
+        "readonly": false,
+        "multiline": false
       }
     },
     "labeled-email": {
@@ -27,7 +29,9 @@
         "disabled": false,
         "required": false,
         "invalid": false,
-        "visited": false
+        "visited": false,
+        "readonly": false,
+        "multiline": false
       }
     },
     "notes": {
@@ -42,7 +46,9 @@
         "disabled": false,
         "required": false,
         "invalid": false,
-        "visited": false
+        "visited": false,
+        "readonly": false,
+        "multiline": true
       }
     },
     "age": {
@@ -57,7 +63,8 @@
         "disabled": false,
         "required": false,
         "invalid": false,
-        "visited": false
+        "visited": false,
+        "readonly": false
       }
     },
     "search": {
@@ -72,7 +79,8 @@
         "disabled": false,
         "required": false,
         "invalid": false,
-        "visited": false
+        "visited": false,
+        "readonly": false
       }
     },
     "password-ph": {
@@ -87,7 +95,9 @@
         "disabled": false,
         "required": false,
         "invalid": false,
-        "visited": false
+        "visited": false,
+        "readonly": false,
+        "multiline": false
       }
     },
     "tel-ph": {
@@ -102,7 +112,9 @@
         "disabled": false,
         "required": false,
         "invalid": false,
-        "visited": false
+        "visited": false,
+        "readonly": false,
+        "multiline": false
       }
     },
     "url-ph": {
@@ -117,7 +129,9 @@
         "disabled": false,
         "required": false,
         "invalid": false,
-        "visited": false
+        "visited": false,
+        "readonly": false,
+        "multiline": false
       }
     },
     "checkbox-ph": {
@@ -133,6 +147,7 @@
         "required": false,
         "invalid": false,
         "visited": false,
+        "readonly": false,
         "checked": "false"
       }
     },
@@ -148,7 +163,9 @@
         "disabled": false,
         "required": false,
         "invalid": false,
-        "visited": false
+        "visited": false,
+        "readonly": false,
+        "multiline": false
       }
     }
   },

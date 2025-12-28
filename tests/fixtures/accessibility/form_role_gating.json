@@ -12,7 +12,9 @@
         "disabled": false,
         "required": false,
         "invalid": false,
-        "visited": false
+        "visited": false,
+        "readonly": false,
+        "multiline": false
       }
     },
     "f2": {
@@ -27,7 +29,8 @@
         "disabled": false,
         "required": false,
         "invalid": false,
-        "visited": false
+        "visited": false,
+        "readonly": false
       }
     },
     "i2": {
@@ -42,7 +45,9 @@
         "disabled": false,
         "required": false,
         "invalid": false,
-        "visited": false
+        "visited": false,
+        "readonly": false,
+        "multiline": false
       }
     }
   },

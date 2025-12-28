@@ -1,8 +1,25 @@
 {
   "present": {
-    "user": {
+    "t": {
       "role": "textbox",
-      "name": "Username",
+      "name": "Multiline area",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "textarea",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false,
+        "readonly": false,
+        "multiline": true
+      }
+    },
+    "i": {
+      "role": "textbox",
+      "name": "Single line input",
       "description": null,
       "value": null,
       "level": null,
@@ -17,36 +34,21 @@
         "multiline": false
       }
     },
-    "search": {
-      "role": "searchbox",
-      "name": "Search the site",
+    "custom": {
+      "role": "textbox",
+      "name": "ARIA textbox",
       "description": null,
       "value": null,
       "level": null,
-      "html_tag": "input",
+      "html_tag": "div",
       "states": {
         "focusable": true,
         "disabled": false,
         "required": false,
         "invalid": false,
         "visited": false,
-        "readonly": false
-      }
-    },
-    "named": {
-      "role": "generic",
-      "name": "Custom Label",
-      "description": null,
-      "value": null,
-      "level": null,
-      "html_tag": "div",
-      "states": {
-        "focusable": false,
-        "disabled": false,
-        "required": false,
-        "invalid": false,
-        "visited": false,
-        "readonly": false
+        "readonly": false,
+        "multiline": true
       }
     }
   }
