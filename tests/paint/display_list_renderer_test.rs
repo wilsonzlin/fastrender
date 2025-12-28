@@ -1713,6 +1713,7 @@ fn color_glyph_shadow_matches_golden() {
       advance,
     }],
     color: Rgba::WHITE,
+    palette_index: 0,
     shadows: vec![TextShadowItem {
       offset: Point::new(10.0, 10.0),
       blur_radius: 6.0,
@@ -1726,6 +1727,8 @@ fn color_glyph_shadow_matches_golden() {
       style: DbFontStyle::Normal,
       stretch: FontStretch::Normal,
     }),
+    font: Some(Arc::new(font.clone())),
+    variations: Vec::new(),
     synthetic_bold: 0.0,
     synthetic_oblique: 0.0,
     emphasis: None,

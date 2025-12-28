@@ -116,6 +116,7 @@ use crate::paint::painter::paint_tree_display_list_with_resources_scaled_offset;
 use crate::paint::painter::paint_tree_with_resources_scaled_offset;
 use crate::paint::painter::paint_tree_with_resources_scaled_offset_with_trace;
 use crate::paint::painter::PaintBackend;
+use crate::scroll::ScrollState;
 use crate::render_control::{CancelCallback, DeadlineGuard, RenderDeadline};
 use crate::resource::CachingFetcherConfig;
 use crate::resource::{
@@ -684,6 +685,8 @@ pub struct RenderOptions {
   pub runtime_toggles: Option<Arc<RuntimeToggles>>,
   /// Optional override for display-list paint parallelism.
   pub paint_parallelism: Option<PaintParallelism>,
+  /// Optional animation sample time applied during painting.
+  pub animation_time: Option<Duration>,
 }
 
 impl Default for RenderOptions {
@@ -705,6 +708,7 @@ impl Default for RenderOptions {
       trace_output: None,
       runtime_toggles: None,
       paint_parallelism: None,
+      animation_time: None,
     }
   }
 }
@@ -734,6 +738,7 @@ impl std::fmt::Debug for RenderOptions {
         &self.runtime_toggles.as_ref().map(|_| "<toggles>"),
       )
       .field("paint_parallelism", &self.paint_parallelism)
+      .field("animation_time", &self.animation_time)
       .finish()
   }
 }
@@ -765,6 +770,12 @@ impl RenderOptions {
   /// Override the media type used for media queries.
   pub fn with_media_type(mut self, media_type: MediaType) -> Self {
     self.media_type = media_type;
+    self
+  }
+
+  /// Sample animations at a specific timestamp during rendering.
+  pub fn with_animation_time(mut self, time: Duration) -> Self {
+    self.animation_time = Some(time);
     self
   }
 
@@ -1074,22 +1085,6 @@ impl ResourceContext {
     }
   }
 
-  /// Evaluate whether both the requested and final URLs are allowed, recording diagnostics.
-  pub fn check_allowed_with_final(
-    &self,
-    kind: ResourceKind,
-    requested: &str,
-    final_url: Option<&str>,
-  ) -> std::result::Result<(), PolicyError> {
-    self.check_allowed(kind, requested)?;
-    if let Some(final_url) = final_url {
-      if requested != final_url {
-        self.check_allowed(kind, final_url)?;
-      }
-    }
-    Ok(())
-  }
-
   /// Clone this context with a different document origin.
   pub fn for_origin(&self, origin: Option<DocumentOrigin>) -> Self {
     Self {
@@ -1368,8 +1363,8 @@ impl PreparedDocument {
   }
 
   /// Returns the scroll offsets supplied when preparing the document.
-  pub fn default_scroll(&self) -> Point {
-    self.default_scroll
+  pub fn default_scroll(&self) -> ScrollState {
+    self.default_scroll.clone()
   }
 }
 
@@ -3073,6 +3068,7 @@ impl FastRender {
       height,
       options.scroll_x,
       options.scroll_y,
+      options.element_scroll_offsets.clone(),
       options.media_type,
       fit_canvas_to_content,
       options.capture_accessibility,
@@ -3081,6 +3077,7 @@ impl FastRender {
       stats,
       paint_parallelism,
       trace,
+      options.animation_time,
     );
     self.pop_resource_context(prev_self, prev_image, prev_font);
     let result = match result {
@@ -3128,6 +3125,7 @@ impl FastRender {
     height: u32,
     scroll_x: f32,
     scroll_y: f32,
+    element_scrolls: HashMap<usize, Point>,
     media_type: MediaType,
     fit_canvas_to_content: bool,
     capture_accessibility: bool,
@@ -3136,6 +3134,7 @@ impl FastRender {
     mut stats: Option<&mut RenderStatsRecorder>,
     paint_parallelism: PaintParallelism,
     trace: &TraceHandle,
+    animation_time: Option<Duration>,
   ) -> Result<RenderOutputs> {
     // Validate dimensions
     if width == 0 || height == 0 {
@@ -3403,7 +3402,6 @@ impl FastRender {
 
       let env_fit_canvas = toggles.truthy("FASTR_FULL_PAGE");
       let fit_canvas = fit_canvas_to_content || env_fit_canvas;
-      let element_scrolls = options.element_scroll_offsets.clone();
       let viewport_size = layout_viewport;
       let mut scroll_state =
         crate::scroll::ScrollState::from_parts(Point::new(scroll_x, scroll_y), element_scrolls);
@@ -3411,7 +3409,7 @@ impl FastRender {
       scroll_state = scroll_result.state;
       let scroll = scroll_state.viewport;
 
-      animation::apply_animations(&mut fragment_tree, &scroll_state, None);
+      animation::apply_animations(&mut fragment_tree, &scroll_state, animation_time);
 
       self.apply_sticky_offsets_to_tree_with_scroll_state(&mut fragment_tree, &scroll_state);
 
@@ -4282,7 +4280,11 @@ impl FastRender {
       let scroll_state = scroll_result.state;
       let scroll = scroll_state.viewport;
 
-      animation::apply_animations(&mut intermediates.fragment_tree, &scroll_state, None);
+      animation::apply_animations(
+        &mut intermediates.fragment_tree,
+        &scroll_state,
+        options.animation_time,
+      );
 
       self.apply_sticky_offsets(
         &mut intermediates.fragment_tree.root,
@@ -5722,6 +5724,7 @@ impl FastRender {
         self.image_cache.clone(),
         self.device_pixel_ratio,
         offset,
+        paint_parallelism,
         scroll_state,
         trace.clone(),
       ),
@@ -8320,6 +8323,7 @@ pub(crate) fn render_html_with_shared_resources(
       height,
       0.0,
       0.0,
+      HashMap::new(),
       MediaType::Screen,
       false,
       false,
@@ -8328,6 +8332,7 @@ pub(crate) fn render_html_with_shared_resources(
       None,
       renderer.paint_parallelism,
       &trace,
+      None,
     )
   })
   .map(|out| out.pixmap)

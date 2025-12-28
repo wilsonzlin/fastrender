@@ -85,8 +85,8 @@ pub fn inline_css_text(dom: &DomNode, media_ctx: &MediaContext) -> String {
   let mut css_text = String::new();
   let mut cache = MediaQueryCache::default();
 
-  for source in extract_css_sources(dom) {
-    match source {
+  for scoped in extract_css_sources(dom) {
+    match scoped.source {
       StylesheetSource::Inline(inline) => {
         if inline.disabled || inline.css.trim().is_empty() {
           continue;
@@ -120,8 +120,8 @@ pub fn stylesheet_for_dom(dom: &DomNode, media_ctx: &MediaContext) -> StyleSheet
   let mut rules = Vec::new();
   let mut cache = MediaQueryCache::default();
 
-  for source in extract_css_sources(dom) {
-    match source {
+  for scoped in extract_css_sources(dom) {
+    match scoped.source {
       StylesheetSource::Inline(inline) => {
         if inline.disabled || inline.css.trim().is_empty() {
           continue;

@@ -4,7 +4,7 @@ use rustybuzz::Variation;
 use std::sync::Arc;
 use ttf_parser::Tag;
 
-const VAR_FONT: &[u8] = include_bytes!("fixtures/fonts/AmstelvarAlpha-VF.ttf");
+const VAR_FONT: &[u8] = include_bytes!("../fixtures/fonts/AmstelvarAlpha-VF.ttf");
 
 fn parse_face<'a>() -> ttf_parser::Face<'a> {
   ttf_parser::Face::parse(VAR_FONT, 0).expect("variable font fixture should parse")

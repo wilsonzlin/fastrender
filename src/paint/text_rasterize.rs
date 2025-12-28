@@ -851,6 +851,8 @@ impl TextRasterizer {
     synthetic_bold: f32,
     synthetic_oblique: f32,
     palette_index: u16,
+    palette_overrides: &[(u16, Rgba)],
+    palette_override_hash: u64,
     variations: &[Variation],
     rotation: Option<Transform>,
     state: TextRenderState<'_>,
@@ -863,6 +865,8 @@ impl TextRasterizer {
       synthetic_bold,
       synthetic_oblique,
       palette_index,
+      palette_overrides,
+      palette_override_hash,
       variations,
       rotation,
       x,
@@ -894,6 +898,8 @@ impl TextRasterizer {
       0.0,
       0,
       &[],
+      0,
+      &[],
       None,
       TextRenderState::default(),
       pixmap,
@@ -913,6 +919,8 @@ impl TextRasterizer {
     synthetic_oblique: f32,
     palette_index: u16,
     variations: &[Variation],
+    palette_overrides: &[(u16, Rgba)],
+    palette_override_hash: u64,
     rotation: Option<Transform>,
     state: TextRenderState<'_>,
     pixmap: &mut Pixmap,
@@ -927,6 +935,8 @@ impl TextRasterizer {
       synthetic_bold,
       synthetic_oblique,
       palette_index,
+      palette_overrides,
+      palette_override_hash,
       variations,
       rotation,
       state,
@@ -1066,8 +1076,15 @@ impl TextRasterizer {
     synthetic_oblique: f32,
   ) -> Option<ColorGlyphRaster> {
     let instance = FontInstance::new(font, variations)?;
-    let color_key =
-      ColorGlyphCacheKey::new(font, glyph_id, font_size, palette_index, variations, color);
+    let color_key = ColorGlyphCacheKey::new(
+      font,
+      glyph_id,
+      font_size,
+      palette_index,
+      variations,
+      color,
+      0,
+    );
     let mut glyph = self.color_cache.get(&color_key);
 
     if glyph.is_none() {
@@ -1077,6 +1094,7 @@ impl TextRasterizer {
         glyph_id,
         font_size,
         palette_index,
+        &[],
         color,
         0.0,
         variations,
@@ -1183,6 +1201,60 @@ pub fn glyph_advance(font: &LoadedFont, glyph_id: u32, font_size: f32) -> Result
       .map(|o| o.advance * scale)
       .unwrap_or(0.0),
   )
+}
+
+/// Gets the horizontal advance for a glyph with variation coordinates applied.
+pub fn glyph_advance_with_variations(
+  font: &LoadedFont,
+  glyph_id: u32,
+  font_size: f32,
+  variations: &[Variation],
+) -> Result<f32> {
+  let instance = FontInstance::new(font, variations).ok_or_else(|| RenderError::RasterizationFailed {
+    reason: format!("Failed to parse font: {}", font.family),
+  })?;
+  let units_per_em = instance.units_per_em();
+  let scale = font_size / units_per_em;
+  Ok(
+    instance
+      .glyph_outline(glyph_id)
+      .map(|o| o.advance * scale)
+      .unwrap_or(0.0),
+  )
+}
+
+/// Render a single glyph with variation coordinates applied.
+pub fn render_glyph_with_variations(
+  font: &LoadedFont,
+  glyph_id: u32,
+  font_size: f32,
+  x: f32,
+  y: f32,
+  color: Rgba,
+  variations: &[Variation],
+  pixmap: &mut Pixmap,
+) -> Result<f32> {
+  let instance = FontInstance::new(font, variations).ok_or_else(|| RenderError::RasterizationFailed {
+    reason: format!("Failed to parse font: {}", font.family),
+  })?;
+
+  let units_per_em = instance.units_per_em();
+  let scale = font_size / units_per_em;
+
+  let Some(outline) = instance.glyph_outline(glyph_id) else {
+    return Ok(0.0);
+  };
+
+  if let Some(path) = outline.path {
+    let mut paint = Paint::default();
+    paint.set_color_rgba8(color.r, color.g, color.b, color.alpha_u8());
+    paint.anti_alias = true;
+
+    let transform = glyph_transform(scale, 0.0, x, y);
+    pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
+  }
+
+  Ok(outline.advance * scale)
 }
 
 // ============================================================================

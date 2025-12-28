@@ -144,7 +144,7 @@ pub enum ColorInterpolationFilters {
   SRGB,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SvgFilterUnits {
   ObjectBoundingBox,
   UserSpaceOnUse,

@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use crate::css::types::{CollectedPageRule, PageMarginArea};
 use crate::geometry::{Point, Rect, Size};
+use crate::layout::axis::FragmentAxes;
 use crate::layout::engine::{LayoutConfig, LayoutEngine};
 use crate::layout::formatting_context::{
   layout_style_fingerprint, set_fragmentainer_block_size_hint, LayoutError,
@@ -13,7 +14,7 @@ use crate::layout::formatting_context::{
 use crate::layout::fragmentation::{
   clip_node, collect_atomic_ranges, collect_forced_boundaries, fragmentation_axis,
   normalize_atomic_ranges, normalize_fragment_margins, propagate_fragment_metadata, AtomicRange,
-  ForcedBoundary,
+  ForcedBoundary, FragmentationContext,
 };
 use crate::layout::running_strings::{collect_string_set_events, StringSetEvent};
 use crate::style::content::{
@@ -258,8 +259,13 @@ pub fn paginate_fragment_tree(
   let base_forced = base_layout.forced_boundaries.clone();
   let base_root = base_layout.root.clone();
 
-  let mut string_set_events = collect_string_set_events(&base_root, box_tree);
-  string_set_events.sort_by(|a, b| a.abs_y.partial_cmp(&b.abs_y).unwrap_or(Ordering::Equal));
+  let base_axes = {
+    let default_style = ComputedStyle::default();
+    let style = base_root.style.as_deref().unwrap_or(&default_style);
+    FragmentAxes::from_writing_mode_and_direction(style.writing_mode, style.direction)
+  };
+  let mut string_set_events = collect_string_set_events(&base_root, box_tree, base_axes);
+  string_set_events.sort_by(|a, b| a.abs_block.partial_cmp(&b.abs_block).unwrap_or(Ordering::Equal));
   let mut string_event_idx = 0usize;
   let mut string_set_carry: HashMap<String, String> = HashMap::new();
 
@@ -691,7 +697,7 @@ fn running_strings_for_page(
   end: f32,
 ) -> HashMap<String, RunningStringValues> {
   let start_boundary = start - EPSILON;
-  while *idx < events.len() && events[*idx].abs_y < start_boundary {
+  while *idx < events.len() && events[*idx].abs_block < start_boundary {
     let event = &events[*idx];
     carry.insert(event.name.clone(), event.value.clone());
     *idx += 1;
@@ -709,7 +715,7 @@ fn running_strings_for_page(
     );
   }
 
-  while *idx < events.len() && events[*idx].abs_y < end {
+  while *idx < events.len() && events[*idx].abs_block < end {
     let event = &events[*idx];
     let entry = snapshot
       .entry(event.name.clone())

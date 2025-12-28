@@ -1249,43 +1249,20 @@ impl GridFormattingContext {
       .children(node_id)
       .map_err(|e| LayoutError::MissingContext(format!("Taffy children error: {:?}", e)))?;
 
-    let child_fragments: Vec<FragmentNode> = if self.parallelism.should_parallelize(children.len())
-    {
-      let mut results = children
-        .par_iter()
-        .enumerate()
-        .map(|(idx, &child_id)| {
-          self
-            .convert_to_fragments(
-              taffy,
-              child_id,
-              root_id,
-              constraints,
-              measured_fragments,
-              measured_node_keys,
-              positioned_children,
-            )
-            .map(|fragment| (idx, fragment))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-      results.sort_by_key(|(idx, _)| *idx);
-      results.into_iter().map(|(_, fragment)| fragment).collect()
-    } else {
-      children
-        .iter()
-        .map(|&child_id| {
-          self.convert_to_fragments(
-            taffy,
-            child_id,
-            root_id,
-            constraints,
-            measured_fragments,
-            measured_node_keys,
-            positioned_children,
-          )
-        })
-        .collect::<Result<_, _>>()?
-    };
+    let child_fragments: Vec<FragmentNode> = children
+      .iter()
+      .map(|&child_id| {
+        self.convert_to_fragments(
+          taffy,
+          child_id,
+          root_id,
+          constraints,
+          measured_fragments,
+          measured_node_keys,
+          positioned_children,
+        )
+      })
+      .collect::<Result<_, _>>()?;
 
     // Create fragment bounds from Taffy layout
     let bounds = Rect::from_xywh(

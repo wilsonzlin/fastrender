@@ -1,8 +1,8 @@
 //! Shared helpers for CLI render binaries.
 
 use fastrender::api::{
-  FastRender, FastRenderConfig, FontEventStatus, RenderArtifactRequest, RenderDiagnostics,
-  RenderOptions, RenderReport, RenderResult, ResourceKind,
+  FastRender, FastRenderConfig, RenderArtifactRequest, RenderDiagnostics, RenderOptions,
+  RenderReport, RenderResult, ResourceKind,
 };
 use fastrender::css::loader::{infer_base_url, resolve_href};
 use fastrender::html::encoding::decode_html_bytes;
@@ -272,18 +272,6 @@ pub fn log_diagnostics(diagnostics: &RenderDiagnostics, mut log: impl FnMut(&str
     ));
   }
 
-  for font_event in &diagnostics.font_events {
-    let source = font_event.source.as_deref().unwrap_or("<unspecified>");
-    let status = match &font_event.status {
-      FontEventStatus::Loaded => "loaded".to_string(),
-      FontEventStatus::Skipped { reason } => format!("skipped: {reason}"),
-      FontEventStatus::Failed { reason } => format!("failed: {reason}"),
-    };
-    log(&format!(
-      "Font {} (display {} from {}): {}",
-      font_event.family, font_event.display, source, status
-    ));
-  }
 }
 
 /// Format an error, optionally including its source chain.

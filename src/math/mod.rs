@@ -1054,6 +1054,8 @@ impl MathLayoutContext {
       synthetic_oblique: 0.0,
       rotation: crate::text::pipeline::RunRotation::None,
       palette_index: 0,
+      palette_overrides: Arc::new(Vec::new()),
+      palette_override_hash: 0,
       variations: Vec::new(),
       scale: 1.0,
     };

@@ -40,7 +40,7 @@ fn get_test_font() -> Option<fastrender::text::font_db::LoadedFont> {
   ctx.get_sans_serif()
 }
 
-const VAR_FONT: &[u8] = include_bytes!("fixtures/fonts/AmstelvarAlpha-VF.ttf");
+const VAR_FONT: &[u8] = include_bytes!("../fixtures/fonts/AmstelvarAlpha-VF.ttf");
 
 fn variable_font() -> LoadedFont {
   LoadedFont {
@@ -162,6 +162,8 @@ fn single_glyph_run(
     synthetic_oblique,
     rotation: RunRotation::None,
     palette_index: 0,
+    palette_overrides: Arc::new(Vec::new()),
+    palette_override_hash: 0,
     variations: Vec::new(),
     scale: 1.0,
   }
@@ -379,7 +381,7 @@ fn glyph_cache_keys_include_variations() {
 
   let mut rasterizer = TextRasterizer::new();
   rasterizer
-    .positioned_glyph_paths(&glyphs, &font, 16.0, 0.0, 0.0, 0.0, &[], None)
+    .positioned_glyph_paths(&glyphs, &font, 16.0, 0.0, 0.0, 0.0, None, &[])
     .expect("default variation glyph path");
   let stats = rasterizer.cache_stats();
   assert_eq!(stats.misses, 1);
@@ -390,7 +392,16 @@ fn glyph_cache_keys_include_variations() {
     value: 900.0,
   };
   rasterizer
-    .positioned_glyph_paths(&glyphs, &font, 16.0, 0.0, 0.0, 0.0, &[bold_variation], None)
+    .positioned_glyph_paths(
+      &glyphs,
+      &font,
+      16.0,
+      0.0,
+      0.0,
+      0.0,
+      None,
+      &[bold_variation],
+    )
     .expect("varied glyph path");
   let stats = rasterizer.cache_stats();
   assert_eq!(
@@ -400,7 +411,16 @@ fn glyph_cache_keys_include_variations() {
   assert_eq!(stats.hits, 0);
 
   rasterizer
-    .positioned_glyph_paths(&glyphs, &font, 16.0, 0.0, 0.0, 0.0, &[bold_variation], None)
+    .positioned_glyph_paths(
+      &glyphs,
+      &font,
+      16.0,
+      0.0,
+      0.0,
+      0.0,
+      None,
+      &[bold_variation],
+    )
     .expect("cached varied glyph path");
   let stats = rasterizer.cache_stats();
   assert_eq!(stats.misses, 2);
@@ -424,22 +444,22 @@ fn positioned_paths_use_variations_for_variable_fonts() {
 
   let mut rasterizer = TextRasterizer::new();
   let default_paths = rasterizer
-    .positioned_glyph_paths(&glyphs, &font, 48.0, 0.0, 0.0, 0.0, &[], None)
+    .positioned_glyph_paths(&glyphs, &font, 48.0, 0.0, 0.0, 0.0, None, &[])
     .expect("default outlines");
   let varied_paths = rasterizer
-    .positioned_glyph_paths(
-      &glyphs,
-      &font,
-      48.0,
-      0.0,
-      0.0,
-      0.0,
-      &[Variation {
-        tag: Tag::from_bytes(b"wght"),
-        value: 900.0,
-      }],
-      None,
-    )
+      .positioned_glyph_paths(
+        &glyphs,
+        &font,
+        48.0,
+        0.0,
+        0.0,
+        0.0,
+        None,
+        &[Variation {
+          tag: Tag::from_bytes(b"wght"),
+          value: 900.0,
+        }],
+      )
     .expect("varied outlines");
 
   assert_eq!(default_paths.len(), 1);
@@ -656,12 +676,13 @@ fn color_glyph_rasters_follow_outline_transforms() {
     .render(
       &font,
       &instance,
-      glyph_id,
-      font_size,
-      0,
-      text_color,
-      0.0,
-      &variations,
+    glyph_id,
+    font_size,
+    0,
+    &[],
+    text_color,
+    0.0,
+    &variations,
       None,
     )
     .expect("color glyph raster");
@@ -693,6 +714,8 @@ fn color_glyph_rasters_follow_outline_transforms() {
     synthetic_oblique,
     rotation: RunRotation::None,
     palette_index: 0,
+    palette_overrides: Arc::new(Vec::new()),
+    palette_override_hash: 0,
     variations: variations.clone(),
     scale: 1.0,
   };
@@ -832,6 +855,7 @@ fn colrv1_color_glyph_respects_variations_in_rasterizer() {
       glyph_id,
       64.0,
       0,
+      &[],
       text_color,
       0.0,
       &base_variations,
@@ -845,6 +869,7 @@ fn colrv1_color_glyph_respects_variations_in_rasterizer() {
       glyph_id,
       64.0,
       0,
+      &[],
       text_color,
       0.0,
       &varied_variations,
@@ -1154,6 +1179,8 @@ fn test_render_shaped_run() {
     synthetic_oblique: 0.0,
     rotation: RunRotation::None,
     palette_index: 0,
+    palette_overrides: Arc::new(Vec::new()),
+    palette_override_hash: 0,
     variations: Vec::new(),
     scale: 1.0,
   };
@@ -1211,6 +1238,8 @@ fn test_render_multiple_runs() {
       synthetic_oblique: 0.0,
       rotation: RunRotation::None,
       palette_index: 0,
+      palette_overrides: Arc::new(Vec::new()),
+      palette_override_hash: 0,
       variations: Vec::new(),
       scale: 1.0,
     }

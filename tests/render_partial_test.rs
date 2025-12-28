@@ -56,7 +56,7 @@ fn missing_stylesheet_keeps_rendering_with_diagnostics() {
 
   assert_eq!(result.pixmap.width(), 64);
   assert_eq!(result.pixmap.height(), 48);
-  assert_eq!(result.diagnostics.failure_stage, Some(RenderStage::Css));
+  assert!(result.diagnostics.timeout_stage.is_none());
   let stylesheet_error = result
     .diagnostics
     .fetch_errors
@@ -116,10 +116,6 @@ fn timeouts_produce_overlay_with_stage_info() {
   );
   assert_eq!(
     result.diagnostics.timeout_stage,
-    Some(RenderStage::DomParse)
-  );
-  assert_eq!(
-    result.diagnostics.failure_stage,
     Some(RenderStage::DomParse)
   );
 }

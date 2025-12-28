@@ -67,6 +67,7 @@ fn text_item_from_run(run: &ShapedRun, origin: Point, text_color: Rgba) -> TextI
     shadows: Vec::new(),
     font_size: run.font_size,
     advance_width: run.advance,
+    font_id: None,
     font: Some(run.font.clone()),
     variations,
     synthetic_bold: run.synthetic_bold,

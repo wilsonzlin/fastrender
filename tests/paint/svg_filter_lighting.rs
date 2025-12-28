@@ -222,7 +222,7 @@ fn render_diffuse(color_space: ColorInterpolationFilters) -> PremultipliedColorU
   };
 
   apply_svg_filter(&filter, &mut pixmap, 1.0, bbox);
-  *pixmap.pixel(0, 0).unwrap()
+  pixmap.pixel(0, 0).unwrap().clone()
 }
 
 #[test]

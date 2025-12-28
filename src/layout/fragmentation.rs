@@ -1031,9 +1031,10 @@ pub(crate) fn normalize_fragment_margins_with_axes(
   is_first_fragment: bool,
   is_last_fragment: bool,
   _block_size: f32,
-  _axes: FragmentAxes,
+  axes: FragmentAxes,
 ) {
-  normalize_fragment_margins(fragment, is_first_fragment, is_last_fragment);
+  let axis = axis_from_fragment_axes(axes);
+  normalize_fragment_margins(fragment, is_first_fragment, is_last_fragment, &axis);
 }
 
 fn collect_break_opportunities(

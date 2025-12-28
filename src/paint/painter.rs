@@ -65,6 +65,7 @@ use crate::paint::text_shadow::PathBounds;
 use crate::paint::text_shadow::ResolvedTextShadow;
 use crate::paint::transform_resolver::{backface_is_hidden, resolve_transform3d};
 use crate::render_control::check_active;
+use crate::scroll::ScrollState;
 use crate::resource::origin_from_url;
 use crate::resource::ResourceFetcher;
 #[cfg(test)]
@@ -2406,6 +2407,7 @@ impl Painter {
           image_cache: self.image_cache.clone(),
           text_shape_cache: Arc::clone(&self.text_shape_cache),
           trace: self.trace.clone(),
+          scroll_state: self.scroll_state.clone(),
         };
         let paint_unclipped_start = profile_enabled.then(Instant::now);
         for cmd in unclipped {
@@ -2431,6 +2433,7 @@ impl Painter {
             image_cache: self.image_cache.clone(),
             text_shape_cache: Arc::clone(&self.text_shape_cache),
             trace: self.trace.clone(),
+            scroll_state: self.scroll_state.clone(),
           };
           let paint_clipped_start = profile_enabled.then(Instant::now);
           for cmd in clipped {
@@ -2539,6 +2542,7 @@ impl Painter {
             image_cache: self.image_cache.clone(),
             text_shape_cache: Arc::clone(&self.text_shape_cache),
             trace: self.trace.clone(),
+            scroll_state: self.scroll_state.clone(),
           };
           let outline_start = profile_enabled.then(Instant::now);
           for cmd in outline_commands {

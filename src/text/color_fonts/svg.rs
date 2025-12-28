@@ -253,7 +253,7 @@ fn preprocess_svg_markup(svg: &str, text_color: Rgba) -> Option<String> {
     let is_root = node.id() == root.id();
     for attr in node.attributes() {
       let mut new_value = None;
-      let name = attr.name().name();
+      let name = attr.name();
       if name.eq_ignore_ascii_case("fill") || name.eq_ignore_ascii_case("stroke") {
         new_value = replace_context_paint(attr.value());
       } else if name.eq_ignore_ascii_case("style") {

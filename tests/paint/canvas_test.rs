@@ -6,12 +6,11 @@
 use fastrender::geometry::Point;
 use fastrender::geometry::Rect;
 use fastrender::image_compare::{compare_images, decode_png, encode_png, CompareConfig};
-use fastrender::paint::display_list::BorderRadius;
+use fastrender::paint::display_list::{BorderRadius, FontVariation};
 use fastrender::style::types::FontPalette;
 use fastrender::text::color_fonts::ColorFontRenderer;
 use fastrender::text::font_db::FontDatabase;
 use fastrender::text::font_instance::FontInstance;
-use fastrender::text::variations::FontVariation;
 use fastrender::BlendMode;
 use fastrender::BorderRadii;
 use fastrender::Canvas;
@@ -528,8 +527,7 @@ fn test_draw_text_with_glyphs() {
   let variations: Vec<_> = run
     .variations
     .iter()
-    .copied()
-    .map(FontVariation::from)
+    .map(|v| FontVariation::new(v.tag, v.value))
     .collect();
 
   // Draw the glyphs
@@ -570,8 +568,7 @@ fn test_draw_text_colored() {
   let variations: Vec<_> = run
     .variations
     .iter()
-    .copied()
-    .map(FontVariation::from)
+    .map(|v| FontVariation::new(v.tag, v.value))
     .collect();
   canvas.draw_text(
     Point::new(10.0, 35.0),
@@ -612,8 +609,7 @@ fn test_draw_text_with_opacity() {
   let variations: Vec<_> = run
     .variations
     .iter()
-    .copied()
-    .map(FontVariation::from)
+    .map(|v| FontVariation::new(v.tag, v.value))
     .collect();
   canvas.draw_text(
     Point::new(10.0, 35.0),
@@ -651,8 +647,7 @@ fn canvas_renders_color_fonts() {
   let variations: Vec<_> = run
     .variations
     .iter()
-    .copied()
-    .map(FontVariation::from)
+    .map(|v| FontVariation::new(v.tag, v.value))
     .collect();
 
   let mut canvas = Canvas::new(64, 64, Rgba::WHITE).unwrap();
@@ -728,6 +723,7 @@ fn canvas_respects_font_palette() {
       palette_glyph.glyph_id,
       palette_run.font_size,
       palette_run.palette_index,
+      palette_run.palette_overrides.as_ref(),
       Rgba::BLACK,
       palette_run.synthetic_oblique,
       &palette_run.variations,
@@ -778,6 +774,7 @@ fn canvas_respects_font_palette() {
       normal_glyph.glyph_id,
       normal_run.font_size,
       normal_run.palette_index,
+      normal_run.palette_overrides.as_ref(),
       Rgba::BLACK,
       normal_run.synthetic_oblique,
       &normal_run.variations,

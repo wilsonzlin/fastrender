@@ -243,7 +243,7 @@ fn bench_end_to_end_realistic(c: &mut Criterion) {
 
 criterion_group!(
   name = benches;
-  config = perf_criterion;
+  config = perf_criterion();
   targets =
     bench_parse_dom,
     bench_css_parse,

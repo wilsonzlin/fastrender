@@ -119,7 +119,7 @@ fn layout_multicol_fragment(
 ) -> (FragmentNode, usize) {
   let mut container_style = ComputedStyle::default();
   container_style.width = Some(Length::px(container_width));
-  container_style.column_count = Some(column_count);
+  container_style.column_count = Some(column_count as u32);
   container_style.column_gap = Length::px(column_gap);
   container_style.column_width = Some(Length::px(column_width));
   let container_style = Arc::new(container_style);

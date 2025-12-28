@@ -84,6 +84,7 @@ use crate::paint::display_list::TextEmphasis;
 use crate::paint::display_list::TextItem;
 use crate::paint::display_list::TextShadowItem;
 use crate::paint::display_list::Transform3D;
+use crate::scroll::ScrollState;
 use crate::paint::object_fit::compute_object_fit;
 use crate::paint::object_fit::default_object_position;
 use crate::paint::stacking::Layer6Item;
@@ -2256,6 +2257,7 @@ impl DisplayListBuilder {
       device_pixel_ratio: self.device_pixel_ratio,
       parallel_enabled: self.parallel_enabled,
       parallel_min: self.parallel_min,
+      scroll_state: self.scroll_state.clone(),
     }
   }
 

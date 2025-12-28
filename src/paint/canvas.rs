@@ -1041,6 +1041,8 @@ impl Canvas {
       synthetic_oblique,
       palette_index,
       &hb_variations,
+      &[],
+      0,
       None,
       state,
       &mut self.pixmap,
