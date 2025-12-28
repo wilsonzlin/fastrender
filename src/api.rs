@@ -1137,7 +1137,8 @@ impl PreparedDocument {
   ///
   /// The painting path mirrors `FastRender::render_html_with_scroll`, applying
   /// scroll snap, scroll-driven animations, sticky positioning, and a root
-  /// translation for the scroll offset before rasterization.
+  /// translation for the scroll offset before rasterization. Element scroll
+  /// offsets captured during preparation are applied automatically.
   pub fn paint(
     &self,
     scroll_x: f32,
@@ -1145,9 +1146,6 @@ impl PreparedDocument {
     viewport_override: Option<(u32, u32)>,
     background_override: Option<Rgba>,
   ) -> Result<Pixmap> {
-<<<<<<< HEAD
-    let mut options = PreparedPaintOptions::default().with_scroll(scroll_x, scroll_y);
-=======
     self.paint_with_element_scrolls(
       scroll_x,
       scroll_y,
