@@ -407,7 +407,7 @@ pub enum PseudoElement {
   Marker,
   Backdrop,
   Slotted(Box<[Selector<FastRenderSelectorImpl>]>),
-  Part(Vec<CssString>),
+  Part(CssString),
 }
 
 impl selectors::parser::PseudoElement for PseudoElement {
@@ -424,7 +424,7 @@ impl std::hash::Hash for PseudoElement {
           selector.to_css_string().hash(state);
         }
       }
-      PseudoElement::Part(names) => names.hash(state),
+      PseudoElement::Part(name) => name.hash(state),
       _ => {}
     }
   }
@@ -465,14 +465,9 @@ impl ToCss for PseudoElement {
         }
         dest.write_str(")")
       }
-      PseudoElement::Part(names) => {
+      PseudoElement::Part(name) => {
         dest.write_str("::part(")?;
-        for (i, name) in names.iter().enumerate() {
-          if i > 0 {
-            dest.write_char(' ')?;
-          }
-          name.to_css(dest)?;
-        }
+        name.to_css(dest)?;
         dest.write_str(")")
       }
     }
@@ -786,8 +781,9 @@ fn parse_part_pseudo_element<'i, 't>(
   parser: &mut Parser<'i, 't>,
   name: &cssparser::CowRcStr<'i>,
 ) -> std::result::Result<PseudoElement, ParseError<'i, SelectorParseErrorKind<'i>>> {
-  let mut names = Vec::new();
-  let first =
+  // Per CSS Shadow Parts, ::part() accepts exactly one <ident>. Reject additional tokens.
+  parser.skip_whitespace();
+  let ident =
     match parser.expect_ident() {
       Ok(first) => CssString::from(first.as_ref()),
       Err(_) => {
@@ -796,14 +792,6 @@ fn parse_part_pseudo_element<'i, 't>(
         ))
       }
     };
-  names.push(first);
-
-  while let Ok(next) = parser.try_parse(|p| {
-    p.expect_ident()
-      .map(|ident| CssString::from(ident.as_ref()))
-  }) {
-    names.push(next);
-  }
 
   parser.skip_whitespace();
   if !parser.is_exhausted() {
@@ -814,7 +802,7 @@ fn parse_part_pseudo_element<'i, 't>(
     );
   }
 
-  Ok(PseudoElement::Part(names))
+  Ok(PseudoElement::Part(ident))
 }
 
 fn selector_has_combinators(selector: &Selector<FastRenderSelectorImpl>) -> bool {
@@ -1049,6 +1037,13 @@ mod tests {
   }
 
   #[test]
+  fn rejects_part_with_multiple_names() {
+    let mut input = ParserInput::new("button::part(name badge)");
+    let mut parser = Parser::new(&mut input);
+    assert!(SelectorList::parse(&PseudoClassParser, &mut parser, ParseRelative::No).is_err());
+  }
+
+  #[test]
   fn rejects_non_compound_slotted_selector() {
     let mut input = ParserInput::new("div::slotted(.a .b)");
     let mut parser = Parser::new(&mut input);
@@ -1069,7 +1064,7 @@ mod tests {
     let slotted = PseudoElement::Slotted(vec![selector].into_boxed_slice());
     assert_eq!(slotted.to_css_string(), "::slotted(.foo)");
 
-    let part = PseudoElement::Part(vec![CssString::from("name"), CssString::from("badge")]);
-    assert_eq!(part.to_css_string(), "::part(name badge)");
+    let part = PseudoElement::Part(CssString::from("name"));
+    assert_eq!(part.to_css_string(), "::part(name)");
   }
 }

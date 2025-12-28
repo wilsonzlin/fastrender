@@ -50,6 +50,50 @@ fn part_selector_styles_shadow_content() {
 }
 
 #[test]
+fn part_selector_with_invalid_syntax_is_ignored() {
+  let html = r#"
+    <x-host id="host">
+      <template shadowroot="open">
+        <span id="label" part="label">Hello</span>
+      </template>
+    </x-host>
+  "#;
+
+  let dom = parse_html(html).expect("parsed html");
+  let empty_style_set = StyleSet {
+    document: StyleSheet::new(),
+    shadows: HashMap::new(),
+  };
+  let media = MediaContext::screen(800.0, 600.0);
+  let baseline = apply_style_set_with_media_target_and_imports(
+    &dom,
+    &empty_style_set,
+    &media,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+  );
+  let baseline_label = find_by_id(&baseline, "label").expect("shadow element");
+  let baseline_color = baseline_label.styles.color;
+
+  let stylesheet = parse_stylesheet("x-host::part(name badge) { color: rgb(4, 5, 6); }")
+    .expect("stylesheet still parses with errors dropped");
+  let style_set = StyleSet {
+    document: stylesheet,
+    shadows: HashMap::new(),
+  };
+  let styled = apply_style_set_with_media_target_and_imports(
+    &dom, &style_set, &media, None, None, None, None, None, None,
+  );
+  let label = find_by_id(&styled, "label").expect("shadow element");
+
+  assert_eq!(label.styles.color, baseline_color);
+}
+
+#[test]
 fn light_dom_selector_does_not_cross_shadow_boundary() {
   let html = r#"
     <div id="host">

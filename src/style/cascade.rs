@@ -691,7 +691,7 @@ impl SlottedBuckets {
 
 struct PartPseudoInfo {
   pseudo: PseudoElement,
-  required: Vec<String>,
+  required: String,
 }
 
 struct RuleIndex<'a> {
@@ -1189,17 +1189,13 @@ impl<'a> RuleIndex<'a> {
       let PseudoElement::Part(required) = pseudo else {
         continue;
       };
-      let mut required_names: Vec<String> = required.iter().map(|n| n.to_string()).collect();
-      required_names.sort();
-      required_names.dedup();
+      let required_name = required.to_string();
       let idx = self.part_pseudos.len();
       self.part_pseudos.push(PartPseudoInfo {
         pseudo: pseudo.clone(),
-        required: required_names.clone(),
+        required: required_name.clone(),
       });
-      for name in required_names {
-        self.part_lookup.entry(name).or_default().push(idx);
-      }
+      self.part_lookup.entry(required_name).or_default().push(idx);
     }
   }
 
@@ -2768,11 +2764,7 @@ fn match_part_rules<'a>(
 
           for &idx in scratch.part_candidates.iter() {
             let info = &rules.part_pseudos[idx];
-            if !info
-              .required
-              .iter()
-              .all(|req| name_set.contains(req.as_str()))
-            {
+            if !name_set.contains(info.required.as_str()) {
               continue;
             }
             let part_matches = find_pseudo_element_rules(
