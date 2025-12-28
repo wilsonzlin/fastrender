@@ -68,6 +68,7 @@ use crate::tree::box_tree::BoxType;
 use crate::tree::box_tree::MarkerContent;
 use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
+use crate::tree::table_fixup::TableStructureFixer;
 use std::sync::Arc;
 
 // ============================================================================
@@ -3740,11 +3741,11 @@ impl FormattingContext for TableFormattingContext {
     constraints: &LayoutConstraints,
   ) -> Result<FragmentNode, LayoutError> {
     let _profile = layout_timer(LayoutKind::Table);
-    let has_running_children = box_node
+    let has_running_children_for_cache = box_node
       .children
       .iter()
       .any(|child| child.style.running_position.is_some());
-    if !has_running_children {
+    if !has_running_children_for_cache {
       if let Some(cached) = layout_cache_lookup(
         box_node,
         FormattingContextType::Table,
@@ -3754,10 +3755,11 @@ impl FormattingContext for TableFormattingContext {
         return Ok(cached);
       }
     }
+    let table_box = TableStructureFixer::fixup_table_internals(box_node.clone());
     let dump = runtime::runtime_toggles().truthy("FASTR_DUMP_TABLE");
     let mut positioned_children: Vec<BoxNode> = Vec::new();
     let mut running_children: Vec<(usize, BoxNode)> = Vec::new();
-    for (child_idx, child) in box_node.children.iter().enumerate() {
+    for (child_idx, child) in table_box.children.iter().enumerate() {
       if child.style.running_position.is_some() {
         running_children.push((child_idx, child.clone()));
         continue;
@@ -3769,8 +3771,9 @@ impl FormattingContext for TableFormattingContext {
         positioned_children.push(child.clone());
       }
     }
+    let has_running_children = !running_children.is_empty();
 
-    let structure = TableStructure::from_box_tree(box_node);
+    let structure = TableStructure::from_box_tree(&table_box);
     if dump {
       let cw = match constraints.available_width {
         AvailableSpace::Definite(w) => format!("{:.2}", w),
@@ -3788,14 +3791,14 @@ impl FormattingContext for TableFormattingContext {
                 "table constraints: width={} height={} display={:?} id={} border_spacing=({:.2},{:.2}) collapse={:?}",
                 cw,
                 ch,
-                box_node.style.display,
-                box_node.id,
+                table_box.style.display,
+                table_box.id,
                 structure.border_spacing.0,
                 structure.border_spacing.1,
                 structure.border_collapse
             );
     }
-    let captions: Vec<&BoxNode> = box_node
+    let captions: Vec<&BoxNode> = table_box
       .children
       .iter()
       .filter(|child| {
@@ -3845,7 +3848,7 @@ impl FormattingContext for TableFormattingContext {
     }
 
     let row_group_constraints =
-      self.collect_row_group_constraints(box_node, &source_row_to_visible);
+      self.collect_row_group_constraints(&table_box, &source_row_to_visible);
     let mut row_to_group: Vec<Option<usize>> = vec![None; structure.row_count];
     for (idx, group) in row_group_constraints.iter().enumerate() {
       for row in group.start..group.end {
@@ -3891,29 +3894,29 @@ impl FormattingContext for TableFormattingContext {
       .fold(0.0, f32::max);
 
     // Honor explicit table width if present.
-    let font_size = box_node.style.font_size;
-    let specified_width = box_node
+    let font_size = table_box.style.font_size;
+    let specified_width = table_box
       .style
       .width
       .as_ref()
       .and_then(|len| resolve_length_against(len, font_size, containing_width));
     let resolved_min_width = resolve_opt_length_against(
-      box_node.style.min_width.as_ref(),
+      table_box.style.min_width.as_ref(),
       font_size,
       containing_width,
     );
     let resolved_max_width = resolve_opt_length_against(
-      box_node.style.max_width.as_ref(),
+      table_box.style.max_width.as_ref(),
       font_size,
       containing_width,
     );
     let mut min_width = resolve_opt_length_against(
-      box_node.style.min_width.as_ref(),
+      table_box.style.min_width.as_ref(),
       font_size,
       containing_width,
     );
     let max_width = resolve_opt_length_against(
-      box_node.style.max_width.as_ref(),
+      table_box.style.max_width.as_ref(),
       font_size,
       containing_width,
     );
@@ -3933,14 +3936,14 @@ impl FormattingContext for TableFormattingContext {
       _ if l.unit.is_absolute() => l.to_px(),
       _ => l.value,
     };
-    let _outer_border_left = resolve_abs(&box_node.style.border_left_width);
-    let _outer_border_right = resolve_abs(&box_node.style.border_right_width);
-    let outer_border_top = resolve_abs(&box_node.style.border_top_width);
-    let outer_border_bottom = resolve_abs(&box_node.style.border_bottom_width);
+    let _outer_border_left = resolve_abs(&table_box.style.border_left_width);
+    let _outer_border_right = resolve_abs(&table_box.style.border_right_width);
+    let outer_border_top = resolve_abs(&table_box.style.border_top_width);
+    let outer_border_bottom = resolve_abs(&table_box.style.border_bottom_width);
     let outer_border_v = outer_border_top + outer_border_bottom;
-    let mut pad_left = resolve_abs(&box_node.style.padding_left);
-    let mut pad_right = resolve_abs(&box_node.style.padding_right);
-    let mut pad_top = resolve_abs(&box_node.style.padding_top);
+    let mut pad_left = resolve_abs(&table_box.style.padding_left);
+    let mut pad_right = resolve_abs(&table_box.style.padding_right);
+    let mut pad_top = resolve_abs(&table_box.style.padding_top);
     // In the collapsing border model, the table box has no padding (CSS 2.2 §17.6.2).
     let pad_bottom = if structure.border_collapse == BorderCollapse::Collapse {
       pad_left = 0.0;
@@ -3948,17 +3951,17 @@ impl FormattingContext for TableFormattingContext {
       pad_top = 0.0;
       0.0
     } else {
-      resolve_abs(&box_node.style.padding_bottom)
+      resolve_abs(&table_box.style.padding_bottom)
     };
     let (border_left, border_right, border_top, border_bottom) =
       if structure.border_collapse == BorderCollapse::Collapse {
         (0.0, 0.0, 0.0, 0.0)
       } else {
         (
-          resolve_abs(&box_node.style.border_left_width),
-          resolve_abs(&box_node.style.border_right_width),
-          resolve_abs(&box_node.style.border_top_width),
-          resolve_abs(&box_node.style.border_bottom_width),
+          resolve_abs(&table_box.style.border_left_width),
+          resolve_abs(&table_box.style.border_right_width),
+          resolve_abs(&table_box.style.border_top_width),
+          resolve_abs(&table_box.style.border_bottom_width),
         )
       };
     let padding_h = pad_left + pad_right;
@@ -3966,18 +3969,18 @@ impl FormattingContext for TableFormattingContext {
     let border_h = border_left + border_right;
     let border_v = border_top + border_bottom;
 
-    let specified_height = box_node
+    let specified_height = table_box
       .style
       .height
       .as_ref()
       .and_then(|len| resolve_length_against(len, font_size, containing_height));
     let min_height = resolve_opt_length_against(
-      box_node.style.min_height.as_ref(),
+      table_box.style.min_height.as_ref(),
       font_size,
       containing_height,
     );
     let max_height = resolve_opt_length_against(
-      box_node.style.max_height.as_ref(),
+      table_box.style.max_height.as_ref(),
       font_size,
       containing_height,
     );
@@ -4054,7 +4057,7 @@ impl FormattingContext for TableFormattingContext {
         Rect::from_xywh(0.0, 0.0, width, height),
         FragmentContent::Block { box_id: None },
         vec![],
-        box_node.style.clone(),
+        table_box.style.clone(),
       );
       if !running_children.is_empty() {
         let snapshot_constraints = LayoutConstraints::new(
@@ -4086,7 +4089,7 @@ impl FormattingContext for TableFormattingContext {
         }
       }
       if !positioned_children.is_empty() {
-        let cb = if box_node.style.position.is_positioned() {
+        let cb = if table_box.style.position.is_positioned() {
           let padding_origin = Point::new(border_left + pad_left, border_top + pad_top);
           let padding_rect = Rect::new(
             padding_origin,
@@ -4095,7 +4098,7 @@ impl FormattingContext for TableFormattingContext {
               height - border_top - border_bottom,
             ),
           );
-          let block_base = if box_node.style.height.is_some() {
+          let block_base = if table_box.style.height.is_some() {
             Some(padding_rect.size.height)
           } else {
             None
@@ -4141,7 +4144,7 @@ impl FormattingContext for TableFormattingContext {
     let percent_base = percent_base_width.map(|w| (w - spacing - edge_consumption).max(0.0));
 
     self.populate_column_constraints(
-      box_node,
+      &table_box,
       &structure,
       &mut column_constraints,
       mode,
@@ -4309,7 +4312,7 @@ impl FormattingContext for TableFormattingContext {
         );
       }
 
-      if let Some(cell_box) = self.get_cell_box(box_node, cell) {
+      if let Some(cell_box) = self.get_cell_box(&table_box, cell) {
         let row_vertical_align = structure.rows.get(cell.row).and_then(|r| r.vertical_align);
         let effective_vertical_align = if cell_box.style.vertical_align_specified {
           cell_box.style.vertical_align
@@ -4662,7 +4665,7 @@ impl FormattingContext for TableFormattingContext {
 
     // Border-collapse adjustments
     let collapsed_borders = if structure.border_collapse == BorderCollapse::Collapse {
-      compute_collapsed_borders(box_node, &structure)
+      compute_collapsed_borders(&table_box, &structure)
     } else {
       CollapsedBorders {
         vertical: vec![
@@ -4809,7 +4812,7 @@ impl FormattingContext for TableFormattingContext {
     let mut column_styles: Vec<Option<Arc<ComputedStyle>>> = vec![None; structure.column_count];
     let mut column_groups: Vec<(usize, usize, Arc<ComputedStyle>)> = Vec::new();
     let mut source_col_idx = 0usize;
-    for child in box_node
+    for child in table_box
       .children
       .iter()
       .filter(|child| child.style.running_position.is_none())
@@ -4912,7 +4915,7 @@ impl FormattingContext for TableFormattingContext {
     let mut row_styles: Vec<Option<Arc<ComputedStyle>>> = vec![None; structure.row_count];
     let mut row_groups: Vec<(usize, usize, Arc<ComputedStyle>)> = Vec::new();
     let mut row_cursor = 0usize;
-    for child in box_node
+    for child in table_box
       .children
       .iter()
       .filter(|child| child.style.running_position.is_none())
@@ -5369,7 +5372,7 @@ impl FormattingContext for TableFormattingContext {
       }
     }
 
-    let mut table_style = (*box_node.style).clone();
+    let mut table_style = (*table_box.style).clone();
     if structure.border_collapse == BorderCollapse::Collapse {
       table_style.border_top_width = crate::style::values::Length::px(0.0);
       table_style.border_right_width = crate::style::values::Length::px(0.0);
@@ -5504,7 +5507,7 @@ impl FormattingContext for TableFormattingContext {
       wrapper_children.push(frag);
     }
 
-    let mut wrapper_style = (*box_node.style).clone();
+    let mut wrapper_style = (*table_box.style).clone();
     // Keep transforms/opacity/filters on the wrapper so they apply to both caption and table,
     // but avoid painting an extra background/border around the combined area.
     wrapper_style.reset_background_to_initial();
@@ -5538,7 +5541,7 @@ impl FormattingContext for TableFormattingContext {
 
         let idx = *idx;
         let mut anchor_y = offset_y;
-        for sibling in box_node.children.iter().skip(idx.saturating_add(1)) {
+        for sibling in table_box.children.iter().skip(idx.saturating_add(1)) {
           if sibling.style.running_position.is_some() {
             continue;
           }
@@ -5580,7 +5583,7 @@ impl FormattingContext for TableFormattingContext {
 
     if !positioned_children.is_empty() {
       // Containing block is the table's padding box when the table itself is positioned; otherwise, inherit.
-      let cb = if box_node.style.position.is_positioned() {
+      let cb = if table_box.style.position.is_positioned() {
         let padding_origin = Point::new(
           border_left + pad_left,
           table_origin_y + border_top + pad_top,
@@ -5592,7 +5595,7 @@ impl FormattingContext for TableFormattingContext {
             table_bounds.height() - border_top - border_bottom,
           ),
         );
-        let block_base = if box_node.style.height.is_some() {
+        let block_base = if table_box.style.height.is_some() {
           Some(padding_rect.size.height)
         } else {
           None
@@ -5629,12 +5632,13 @@ impl FormattingContext for TableFormattingContext {
     box_node: &BoxNode,
     mode: IntrinsicSizingMode,
   ) -> Result<f32, LayoutError> {
-    let structure = TableStructure::from_box_tree(box_node);
+    let table_box = TableStructureFixer::fixup_table_internals(box_node.clone());
+    let structure = TableStructure::from_box_tree(&table_box);
     let mut column_constraints: Vec<ColumnConstraints> = (0..structure.column_count)
       .map(|_| ColumnConstraints::new(0.0, 0.0))
       .collect();
     self.populate_column_constraints(
-      box_node,
+      &table_box,
       &structure,
       &mut column_constraints,
       DistributionMode::Auto,
@@ -5650,10 +5654,10 @@ impl FormattingContext for TableFormattingContext {
         _ if l.unit.is_absolute() => l.to_px(),
         _ => l.value,
       };
-      resolve_abs(&box_node.style.padding_left)
-        + resolve_abs(&box_node.style.padding_right)
-        + resolve_abs(&box_node.style.border_left_width)
-        + resolve_abs(&box_node.style.border_right_width)
+      resolve_abs(&table_box.style.padding_left)
+        + resolve_abs(&table_box.style.padding_right)
+        + resolve_abs(&table_box.style.border_left_width)
+        + resolve_abs(&table_box.style.border_right_width)
     };
     let base = match mode {
       IntrinsicSizingMode::MinContent => {
@@ -5666,9 +5670,9 @@ impl FormattingContext for TableFormattingContext {
     let log_ids = runtime::runtime_toggles()
       .usize_list("FASTR_LOG_INTRINSIC_IDS")
       .unwrap_or_default();
-    let log_this = !log_ids.is_empty() && log_ids.contains(&box_node.id);
+    let log_this = !log_ids.is_empty() && log_ids.contains(&table_box.id);
     if log_this {
-      let selector = box_node
+      let selector = table_box
         .debug_info
         .as_ref()
         .map(|d| d.to_selector())
@@ -5679,11 +5683,11 @@ impl FormattingContext for TableFormattingContext {
         .collect();
       eprintln!(
         "[intrinsic-table] id={} selector={} mode={:?} cols={:?} spacing={:.2} edges={:.2}",
-        box_node.id, selector, mode, cols, spacing, edges
+        table_box.id, selector, mode, cols, spacing, edges
       );
     }
     let mut caption_min: f32 = 0.0;
-    for child in box_node.children.iter().filter(|child| {
+    for child in table_box.children.iter().filter(|child| {
       child.style.running_position.is_none()
         && !matches!(
           child.style.position,
@@ -5702,14 +5706,14 @@ impl FormattingContext for TableFormattingContext {
     let width = base.max(caption_min);
 
     // Apply authored min/max width to intrinsic size per CSS preferred width clamping.
-    let font_size = box_node.style.font_size;
+    let font_size = table_box.style.font_size;
     let min_w = resolve_opt_length_against(
-      box_node.style.min_width.as_ref(),
+      table_box.style.min_width.as_ref(),
       font_size,
       None, /* no containing width */
     );
     let max_w = resolve_opt_length_against(
-      box_node.style.max_width.as_ref(),
+      table_box.style.max_width.as_ref(),
       font_size,
       None, /* no containing width */
     );

@@ -81,52 +81,44 @@ use std::sync::Arc;
 pub struct TableStructureFixer;
 
 impl TableStructureFixer {
-  /// Fixes up a table box tree
+  /// Fixes up a table box tree, including caption wrappers.
   ///
   /// Takes a box tree that may have incomplete table structure
   /// and returns a tree with all required anonymous boxes.
-  ///
-  /// # CSS Requirements
-  ///
-  /// 1. Table must contain row groups (thead, tbody, tfoot)
-  /// 2. Row groups must contain rows
-  /// 3. Rows must contain cells
-  /// 4. Tables with captions need wrapper boxes
-  ///
-  /// # Arguments
-  ///
-  /// * `table_box` - A BoxNode with table formatting context
-  ///
-  /// # Returns
-  ///
-  /// Returns the fixed table structure with all anonymous boxes inserted.
-  ///
-  /// # Errors
-  ///
-  /// Returns an error if the table structure is fundamentally broken
-  /// (e.g., completely empty after fixup).
   pub fn fixup_table(table_box: BoxNode) -> Result<BoxNode> {
-    // Verify this is actually a table
+    Ok(Self::fixup_table_internal(table_box, true))
+  }
+
+  /// Fixes table internals (rows/row groups/cells) without creating a wrapper.
+  ///
+  /// This is intended for layout consumers that already handle caption
+  /// wrappers themselves.
+  pub fn fixup_table_internals(table_box: BoxNode) -> BoxNode {
+    Self::fixup_table_internal(table_box, false)
+  }
+
+  fn fixup_table_internal(table_box: BoxNode, wrap: bool) -> BoxNode {
     if !Self::is_table_box(&table_box) {
-      return Ok(table_box);
+      return table_box;
     }
 
-    // Fix table structure in multiple passes
     let mut fixed = table_box;
 
     // Step 1: Wrap cells not in rows with anonymous rows
-    fixed = Self::ensure_cells_in_rows(fixed)?;
+    fixed = Self::ensure_cells_in_rows(fixed);
 
     // Step 2: Wrap rows not in row-groups with anonymous tbody
-    fixed = Self::ensure_rows_in_groups(fixed)?;
+    fixed = Self::ensure_rows_in_groups(fixed);
 
     // Step 3: Infer column structure
-    fixed = Self::infer_columns(fixed)?;
+    fixed = Self::infer_columns(fixed);
 
     // Step 4: Create table wrapper if needed (captions)
-    fixed = Self::create_wrapper_if_needed(fixed)?;
+    if wrap {
+      fixed = Self::create_wrapper_if_needed(fixed);
+    }
 
-    Ok(fixed)
+    fixed
   }
 
   // ==================== Type Checking ====================
@@ -300,18 +292,18 @@ impl TableStructureFixer {
   ///
   /// CSS 2.1 Section 17.2.1: "If a row group has cells not in a row,
   /// generate an anonymous row around those cells."
-  fn ensure_cells_in_rows(mut table: BoxNode) -> Result<BoxNode> {
+  fn ensure_cells_in_rows(mut table: BoxNode) -> BoxNode {
     let children = std::mem::take(&mut table.children);
-    let fixed_children = Self::fixup_table_children_for_rows(children, &table.style)?;
+    let fixed_children = Self::fixup_table_children_for_rows(children, &table.style);
     table.children = fixed_children;
-    Ok(table)
+    table
   }
 
   /// Fixes children to ensure cells are in rows
   fn fixup_table_children_for_rows(
     children: Vec<BoxNode>,
     parent_style: &ComputedStyle,
-  ) -> Result<Vec<BoxNode>> {
+  ) -> Vec<BoxNode> {
     let mut result = Vec::new();
     let mut loose_cells: Vec<BoxNode> = Vec::new();
 
@@ -327,7 +319,7 @@ impl TableStructureFixer {
         }
 
         // Recursively fix row group
-        let fixed_group = Self::fixup_row_group(child)?;
+        let fixed_group = Self::fixup_row_group(child);
         result.push(fixed_group);
       } else if Self::is_table_row(&child) {
         // Flush loose cells
@@ -335,7 +327,7 @@ impl TableStructureFixer {
           let anon_row = Self::create_anonymous_row(std::mem::take(&mut loose_cells), parent_style);
           result.push(anon_row);
         }
-        result.push(child);
+        result.push(Self::fixup_row(child));
       } else if Self::is_table_caption(&child)
         || Self::is_table_column_group(&child)
         || Self::is_table_column(&child)
@@ -359,11 +351,11 @@ impl TableStructureFixer {
       result.push(anon_row);
     }
 
-    Ok(result)
+    result
   }
 
   /// Fixes row group to ensure cells are in rows
-  fn fixup_row_group(mut group: BoxNode) -> Result<BoxNode> {
+  fn fixup_row_group(mut group: BoxNode) -> BoxNode {
     let children = std::mem::take(&mut group.children);
     let mut result = Vec::new();
     let mut loose_cells: Vec<BoxNode> = Vec::new();
@@ -376,7 +368,7 @@ impl TableStructureFixer {
           let anon_row = Self::create_anonymous_row(std::mem::take(&mut loose_cells), &group.style);
           result.push(anon_row);
         }
-        result.push(child);
+        result.push(Self::fixup_row(child));
       } else {
         // Unexpected content - wrap in anonymous cell then add to loose cells
         if !loose_cells.is_empty() {
@@ -395,7 +387,22 @@ impl TableStructureFixer {
     }
 
     group.children = result;
-    Ok(group)
+    group
+  }
+
+  /// Wraps non-cell row children in anonymous table cells.
+  fn fixup_row(mut row: BoxNode) -> BoxNode {
+    let children = std::mem::take(&mut row.children);
+    let mut fixed_children = Vec::with_capacity(children.len());
+    for child in children {
+      if Self::is_table_cell(&child) {
+        fixed_children.push(child);
+      } else {
+        fixed_children.push(Self::create_anonymous_cell(vec![child], &row.style));
+      }
+    }
+    row.children = fixed_children;
+    row
   }
 
   // ==================== Row-to-Group Fixup ====================
@@ -404,15 +411,15 @@ impl TableStructureFixer {
   ///
   /// CSS 2.1 Section 17.2.1: "If a table has rows not in a row group,
   /// generate an anonymous tbody around those rows."
-  fn ensure_rows_in_groups(mut table: BoxNode) -> Result<BoxNode> {
+  fn ensure_rows_in_groups(mut table: BoxNode) -> BoxNode {
     let children = std::mem::take(&mut table.children);
-    let fixed_children = Self::wrap_loose_rows(children, &table.style)?;
+    let fixed_children = Self::wrap_loose_rows(children, &table.style);
     table.children = fixed_children;
-    Ok(table)
+    table
   }
 
   /// Wraps loose rows in anonymous tbody
-  fn wrap_loose_rows(children: Vec<BoxNode>, parent_style: &ComputedStyle) -> Result<Vec<BoxNode>> {
+  fn wrap_loose_rows(children: Vec<BoxNode>, parent_style: &ComputedStyle) -> Vec<BoxNode> {
     let mut result = Vec::new();
     let mut loose_rows: Vec<BoxNode> = Vec::new();
 
@@ -445,7 +452,7 @@ impl TableStructureFixer {
       result.push(anon_tbody);
     }
 
-    Ok(result)
+    result
   }
 
   // ==================== Column Inference ====================
@@ -454,7 +461,7 @@ impl TableStructureFixer {
   ///
   /// CSS tables don't require explicit `<col>` elements - columns
   /// are inferred from the cells in rows.
-  fn infer_columns(table: BoxNode) -> Result<BoxNode> {
+  fn infer_columns(table: BoxNode) -> BoxNode {
     // Find all row groups
     let row_groups: Vec<&BoxNode> = table
       .children
@@ -464,7 +471,7 @@ impl TableStructureFixer {
 
     if row_groups.is_empty() {
       // Empty table is valid
-      return Ok(table);
+      return table;
     }
 
     // Find first row
@@ -482,7 +489,7 @@ impl TableStructureFixer {
       }
     }
 
-    Ok(table)
+    table
   }
 
   /// Counts columns in a row (accounting for colspan)
@@ -506,16 +513,16 @@ impl TableStructureFixer {
   /// Creates table wrapper if needed
   ///
   /// CSS 2.1: Tables with captions need a wrapper box
-  fn create_wrapper_if_needed(table: BoxNode) -> Result<BoxNode> {
+  fn create_wrapper_if_needed(table: BoxNode) -> BoxNode {
     // Check if table has any captions
     let has_caption = table.children.iter().any(|c| Self::is_table_caption(c));
 
     if has_caption {
       // Create wrapper containing table and captions
       let parent_style = table.style.clone();
-      Ok(Self::create_anonymous_wrapper(table, &parent_style))
+      Self::create_anonymous_wrapper(table, &parent_style)
     } else {
-      Ok(table)
+      table
     }
   }
 
