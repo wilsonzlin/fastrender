@@ -1541,7 +1541,9 @@ impl<'a> ElementRef<'a> {
   }
 
   fn is_required(&self) -> bool {
-    self.supports_required() && self.node.get_attribute_ref("required").is_some()
+    self.supports_required()
+      && !self.is_disabled()
+      && self.node.get_attribute_ref("required").is_some()
   }
 
   fn supports_validation(&self) -> bool {
@@ -2491,7 +2493,9 @@ impl<'a> Element for ElementRef<'a> {
       PseudoClass::Disabled => self.supports_disabled() && self.is_disabled(),
       PseudoClass::Enabled => self.supports_disabled() && !self.is_disabled(),
       PseudoClass::Required => self.is_required(),
-      PseudoClass::Optional => self.supports_required() && !self.is_required(),
+      PseudoClass::Optional => {
+        self.supports_required() && !self.is_disabled() && !self.is_required()
+      }
       PseudoClass::Valid => {
         (self.supports_validation() && self.is_disabled())
           || (self.supports_validation() && self.is_valid_control())

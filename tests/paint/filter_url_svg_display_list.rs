@@ -29,7 +29,8 @@ fn filter_url_data_resolves_to_svg_filter() {
     .iter()
     .filter_map(|item| match item {
       DisplayItem::PushStackingContext(ctx) => Some(
-        ctx.filters
+        ctx
+          .filters
           .iter()
           .any(|filter| matches!(filter, ResolvedFilter::SvgFilter(_))),
       ),

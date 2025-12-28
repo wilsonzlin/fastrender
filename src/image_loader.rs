@@ -2287,7 +2287,7 @@ fn svg_intrinsic_metadata(
 // URL Resolution
 // ============================================================================
 
-fn resolve_against_base(base: &str, reference: &str) -> Option<String> {
+pub(crate) fn resolve_against_base(base: &str, reference: &str) -> Option<String> {
   // Normalize file:// bases that point to directories so Url::join keeps the directory segment.
   let mut base_candidate = base.to_string();
   if base_candidate.starts_with("file://") {

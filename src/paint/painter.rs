@@ -791,7 +791,7 @@ impl Painter {
             replaced_box
               .replaced_type
               .selected_image_source_for_context(crate::tree::box_tree::ImageSelectionContext {
-                scale: self.scale,
+                device_pixel_ratio: self.scale,
                 slot_width: None,
                 viewport: Some(viewport),
                 media_context: Some(&media_ctx),
@@ -811,7 +811,7 @@ impl Painter {
                 orientation,
                 &style.image_resolution,
                 self.scale,
-                selected.resolution,
+                selected.density,
               ) {
                 if needs_intrinsic {
                   replaced_box.intrinsic_size = Some(Size::new(w, h));
@@ -4853,7 +4853,7 @@ impl Painter {
         let cache_base = self.image_cache.base_url();
         let sources =
           replaced_type.image_sources_with_fallback(crate::tree::box_tree::ImageSelectionContext {
-            scale: self.scale,
+            device_pixel_ratio: self.scale,
             slot_width: Some(content_rect.width()),
             viewport: Some(Size::new(self.css_width, self.css_height)),
             media_context: Some(&media_ctx),
@@ -4862,7 +4862,8 @@ impl Painter {
           });
         for candidate in sources {
           if self.paint_image_from_src(
-            &candidate,
+            candidate.url,
+            candidate.density,
             style,
             content_rect.x(),
             content_rect.y(),
@@ -4909,6 +4910,7 @@ impl Painter {
         }
         if self.paint_image_from_src(
           src,
+          None,
           style,
           content_rect.x(),
           content_rect.y(),
@@ -4941,6 +4943,7 @@ impl Painter {
         }
         if self.paint_image_from_src(
           &content.fallback_svg,
+          None,
           style,
           content_rect.x(),
           content_rect.y(),
@@ -4981,6 +4984,7 @@ impl Painter {
         }
         if self.paint_image_from_src(
           content,
+          None,
           style,
           content_rect.x(),
           content_rect.y(),
@@ -5003,6 +5007,7 @@ impl Painter {
         }
         if self.paint_image_from_src(
           content,
+          None,
           style,
           content_rect.x(),
           content_rect.y(),
@@ -5019,7 +5024,7 @@ impl Painter {
         let cache_base = self.image_cache.base_url();
         let sources =
           replaced_type.image_sources_with_fallback(crate::tree::box_tree::ImageSelectionContext {
-            scale: self.scale,
+            device_pixel_ratio: self.scale,
             slot_width: Some(content_rect.width()),
             viewport: Some(Size::new(self.css_width, self.css_height)),
             media_context: Some(&media_ctx),
@@ -5028,7 +5033,8 @@ impl Painter {
           });
         for candidate in sources {
           if self.paint_image_from_src(
-            &candidate,
+            candidate.url,
+            candidate.density,
             style,
             content_rect.x(),
             content_rect.y(),
@@ -5478,6 +5484,7 @@ impl Painter {
   fn paint_image_from_src(
     &mut self,
     src: &str,
+    override_resolution: Option<f32>,
     style: Option<&ComputedStyle>,
     x: f32,
     y: f32,
@@ -5546,9 +5553,12 @@ impl Painter {
       }
       return false;
     }
-    let Some((img_w_css, img_h_css)) =
-      image.css_dimensions(orientation, &image_resolution, self.scale, None)
-    else {
+    let Some((img_w_css, img_h_css)) = image.css_dimensions(
+      orientation,
+      &image_resolution,
+      self.scale,
+      override_resolution,
+    ) else {
       if log_image_fail {
         eprintln!(
           "[image-load-fail] src={} stage=css-dimensions orientation={:?} resolution={:?}",
@@ -13112,6 +13122,7 @@ mod tests {
     let style = ComputedStyle::default();
     let ok = painter.paint_image_from_src(
       "tests/fixtures/image_orientation/orientation-6.jpg",
+      None,
       Some(&style),
       0.0,
       0.0,
@@ -13142,6 +13153,7 @@ mod tests {
     style.image_orientation = ImageOrientation::None;
     let ok = painter.paint_image_from_src(
       "tests/fixtures/image_orientation/orientation-6.jpg",
+      None,
       Some(&style),
       0.0,
       0.0,

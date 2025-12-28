@@ -1,6 +1,7 @@
 //! HTML-specific helpers (encoding, parsing utilities)
 
 pub mod encoding;
+pub mod images;
 pub mod meta_refresh;
 pub mod viewport;
 

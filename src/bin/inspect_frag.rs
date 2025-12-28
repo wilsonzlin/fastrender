@@ -2328,10 +2328,7 @@ fn find_us_fragment(
           child_base,
           include_base,
           root_index,
-<<<<<<< HEAD
-=======
           scroll_state,
->>>>>>> 6e3c014 (feat: support element scroll offsets in renders)
           path,
         )
       })

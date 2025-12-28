@@ -1,8 +1,11 @@
 use fastrender::geometry::Rect;
 use fastrender::paint::display_list::{
-  BlendMode, BorderRadii, ClipItem, ClipShape, DisplayItem, DisplayList, FillRectItem, StackingContextItem, Transform3D,
+  BlendMode, BorderRadii, ClipItem, ClipShape, DisplayItem, DisplayList, FillRectItem,
+  StackingContextItem, Transform3D,
 };
-use fastrender::paint::scene_tree::{build_stacking_tree, collect_scene_items, NodeChild, SceneItemContent};
+use fastrender::paint::scene_tree::{
+  build_stacking_tree, collect_scene_items, NodeChild, SceneItemContent,
+};
 use fastrender::style::color::Rgba;
 use fastrender::style::types::{BackfaceVisibility, TransformStyle};
 
@@ -20,6 +23,7 @@ fn stacking_context(
     mix_blend_mode,
     is_isolated: false,
     transform,
+    child_perspective: None,
     transform_style,
     backface_visibility,
     filters: Vec::new(),

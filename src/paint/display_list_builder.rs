@@ -1318,7 +1318,7 @@ impl DisplayListBuilder {
           ResolvedMaskImage::Generated(Box::new(image.clone()))
         }
         BackgroundImage::Url(src) => {
-          let Some(image) = self.decode_image(src, Some(style), true) else {
+          let Some(image) = self.decode_image(src, None, Some(style), true) else {
             continue;
           };
           ResolvedMaskImage::Raster(image)
@@ -2546,7 +2546,7 @@ impl DisplayListBuilder {
         let cache_base = self.image_cache.as_ref().and_then(|cache| cache.base_url());
         let sources =
           replaced_type.image_sources_with_fallback(crate::tree::box_tree::ImageSelectionContext {
-            scale: self.device_pixel_ratio,
+            device_pixel_ratio: self.device_pixel_ratio,
             slot_width: Some(rect.width()),
             viewport: self.viewport.map(|(w, h)| crate::geometry::Size::new(w, h)),
             media_context: media_ctx.as_ref(),
@@ -2556,7 +2556,7 @@ impl DisplayListBuilder {
 
         if let Some(image) = sources
           .iter()
-          .find_map(|s| self.decode_image(s, style_for_image, false))
+          .find_map(|s| self.decode_image(s.url, s.density, style_for_image, false))
         {
           let (dest_x, dest_y, dest_w, dest_h) = {
             let (fit, position, font_size) = if let Some(style) = fragment.style.as_deref() {
@@ -3125,7 +3125,7 @@ impl DisplayListBuilder {
         }
       }
       BackgroundImage::Url(src) => {
-        if let Some(image) = self.decode_image(src, Some(style), true) {
+        if let Some(image) = self.decode_image(src, None, Some(style), true) {
           let img_w = image.css_width;
           let img_h = image.css_height;
           if img_w > 0.0 && img_h > 0.0 {
@@ -3377,7 +3377,7 @@ impl DisplayListBuilder {
       BorderImageSource::Image(bg) => {
         let source = match bg.as_ref() {
           BackgroundImage::Url(src) => self
-            .decode_image(src, Some(style), true)
+            .decode_image(src, None, Some(style), true)
             .map(BorderImageSourceItem::Raster),
           BackgroundImage::LinearGradient { .. }
           | BackgroundImage::RepeatingLinearGradient { .. }
@@ -4626,6 +4626,7 @@ impl DisplayListBuilder {
   fn decode_image(
     &self,
     src: &str,
+    override_resolution: Option<f32>,
     style: Option<&ComputedStyle>,
     decorative: bool,
   ) -> Option<ImageData> {
@@ -4643,7 +4644,7 @@ impl DisplayListBuilder {
       orientation,
       &image_resolution,
       self.device_pixel_ratio,
-      None,
+      override_resolution,
     )?;
     let rgba = image.to_oriented_rgba(orientation);
     let (w, h) = rgba.dimensions();

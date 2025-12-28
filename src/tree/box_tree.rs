@@ -21,7 +21,6 @@
 //! Reference: CSS Display Module Level 3
 //! <https://www.w3.org/TR/css-display-3/>
 
-use crate::css::loader::resolve_href_with_base;
 use crate::geometry::Size;
 use crate::math::MathLayout;
 use crate::style::color::Rgba;
@@ -33,6 +32,8 @@ use crate::style::ComputedStyle;
 use crate::tree::debug::DebugInfo;
 use std::fmt;
 use std::sync::Arc;
+
+pub use crate::html::images::{ImageSelectionContext, SelectedImageSource};
 
 /// A block-level box
 ///
@@ -189,10 +190,25 @@ impl PartialEq for MathReplaced {
   }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SrcsetDescriptor {
   Density(f32),
   Width(u32),
+}
+
+impl fmt::Display for SrcsetDescriptor {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    match self {
+      SrcsetDescriptor::Density(d) => {
+        if d.fract() == 0.0 {
+          write!(f, "{}x", *d as i32)
+        } else {
+          write!(f, "{:.2}x", d)
+        }
+      }
+      SrcsetDescriptor::Width(w) => write!(f, "{}w", w),
+    }
+  }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -332,208 +348,7 @@ pub enum ReplacedType {
   FormControl(FormControl),
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct ImageSelectionContext<'a> {
-  pub scale: f32,
-  pub slot_width: Option<f32>,
-  pub viewport: Option<crate::geometry::Size>,
-  pub media_context: Option<&'a crate::style::media::MediaContext>,
-  pub font_size: Option<f32>,
-  pub base_url: Option<&'a str>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct SelectedImageSource<'a> {
-  pub url: &'a str,
-  /// Resolution in image pixels per CSS px (e.g. srcset density). None when unknown.
-  pub resolution: Option<f32>,
-}
-
-impl PictureSource {
-  fn matches_media(&self, ctx: ImageSelectionContext<'_>) -> bool {
-    match &self.media {
-      Some(queries) => ctx
-        .media_context
-        .map(|m| m.evaluate_list(queries))
-        .unwrap_or(true),
-      None => true,
-    }
-  }
-
-  fn is_applicable(&self, ctx: ImageSelectionContext<'_>) -> bool {
-    if self.srcset.is_empty() {
-      return false;
-    }
-
-    if let Some(mime) = &self.mime_type {
-      if !is_supported_image_mime(mime) {
-        return false;
-      }
-    }
-
-    self.matches_media(ctx)
-  }
-}
-
-fn normalized_image_mime(mime: &str) -> String {
-  mime
-    .split(';')
-    .next()
-    .unwrap_or("")
-    .trim()
-    .to_ascii_lowercase()
-}
-
-fn is_supported_image_mime(mime: &str) -> bool {
-  match normalized_image_mime(mime).as_str() {
-    "image/avif" | "image/webp" | "image/png" | "image/jpeg" | "image/jpg" | "image/gif"
-    | "image/svg+xml" => true,
-    _ => false,
-  }
-}
-
-#[derive(Clone, Copy)]
-struct ActiveImageSources<'a> {
-  primary_src: &'a str,
-  srcset: &'a [SrcsetCandidate],
-  sizes: Option<&'a SizesList>,
-  fallback_src: Option<&'a str>,
-  fallback_srcset: Option<&'a [SrcsetCandidate]>,
-}
-
-impl<'a> ActiveImageSources<'a> {
-  fn base_src(&self) -> &'a str {
-    self
-      .fallback_src
-      .filter(|s| !s.is_empty())
-      .unwrap_or(self.primary_src)
-  }
-}
-
 impl ReplacedType {
-  fn active_image_sources<'a>(&'a self, ctx: ImageSelectionContext<'_>) -> ActiveImageSources<'a> {
-    match self {
-      ReplacedType::Image {
-        src, srcset, sizes, ..
-      } => {
-        if let Some(source) = self.select_picture_source(ctx) {
-          let primary_src = source
-            .srcset
-            .first()
-            .map(|c| c.url.as_str())
-            .unwrap_or(src.as_str());
-          ActiveImageSources {
-            primary_src,
-            srcset: source.srcset.as_slice(),
-            sizes: source.sizes.as_ref(),
-            fallback_src: Some(src.as_str()),
-            fallback_srcset: Some(srcset.as_slice()),
-          }
-        } else {
-          ActiveImageSources {
-            primary_src: src.as_str(),
-            srcset: srcset.as_slice(),
-            sizes: sizes.as_ref(),
-            fallback_src: None,
-            fallback_srcset: None,
-          }
-        }
-      }
-      _ => ActiveImageSources {
-        primary_src: "",
-        srcset: &[],
-        sizes: None,
-        fallback_src: None,
-        fallback_srcset: None,
-      },
-    }
-  }
-
-  fn select_picture_source<'a>(
-    &'a self,
-    ctx: ImageSelectionContext<'_>,
-  ) -> Option<&'a PictureSource> {
-    match self {
-      ReplacedType::Image {
-        picture_sources, ..
-      } => picture_sources
-        .iter()
-        .find(|source| source.is_applicable(ctx)),
-      _ => None,
-    }
-  }
-
-  /// Returns a priority-ordered list of candidate image sources for painting.
-  ///
-  /// The first entry is the best-fit srcset candidate (or the base src when
-  /// no srcset applies), followed by the base `src` (if different) and any
-  /// remaining srcset URLs. Duplicate URLs are removed while preserving order.
-  pub fn image_sources_with_fallback(&self, ctx: ImageSelectionContext<'_>) -> Vec<String> {
-    match self {
-      ReplacedType::Image { .. } => {
-        let active = self.active_image_sources(ctx);
-        let primary = self.image_source_for_context(ctx);
-        let mut seen = std::collections::HashSet::new();
-        let mut ordered = Vec::new();
-        let push_unique =
-          |url: &str, out: &mut Vec<String>, seen: &mut std::collections::HashSet<String>| {
-            let trimmed = url.trim();
-            if trimmed.is_empty() {
-              return;
-            }
-            if trimmed.starts_with('#') {
-              return;
-            }
-            let resolved = resolve_href_with_base(ctx.base_url, trimmed).or_else(|| {
-              let lower = trimmed.to_ascii_lowercase();
-              if lower.starts_with("javascript:")
-                || lower.starts_with("vbscript:")
-                || lower.starts_with("mailto:")
-              {
-                None
-              } else {
-                Some(trimmed.to_string())
-              }
-            });
-            if let Some(resolved) = resolved {
-              if seen.insert(resolved.clone()) {
-                out.push(resolved);
-              }
-            }
-          };
-
-        push_unique(primary, &mut ordered, &mut seen);
-        push_unique(active.base_src(), &mut ordered, &mut seen);
-        if let Some(fallback) = active.fallback_src {
-          push_unique(fallback, &mut ordered, &mut seen);
-        }
-        for cand in active.srcset {
-          let url = &cand.url;
-          // Skip candidates whose descriptors depend on sizes when sizes cannot be evaluated.
-          if matches!(cand.descriptor, SrcsetDescriptor::Width(_))
-            && ctx.slot_width.is_none()
-            && ctx.viewport.is_none()
-          {
-            continue;
-          }
-          push_unique(url, &mut ordered, &mut seen);
-        }
-        if let Some(fallback_srcset) = active.fallback_srcset {
-          for cand in fallback_srcset {
-            push_unique(&cand.url, &mut ordered, &mut seen);
-          }
-        }
-        ordered
-      }
-      ReplacedType::Video { src: _, poster } => poster.iter().cloned().collect(),
-      ReplacedType::Svg { content } => vec![content.svg.clone()],
-      ReplacedType::Embed { src: content }
-      | ReplacedType::Object { data: content }
-      | ReplacedType::Iframe { src: content, .. } => vec![content.clone()],
-      _ => Vec::new(),
-    }
-  }
-
   /// Returns a placeholder label for non-image replaced content.
   pub fn placeholder_label(&self) -> Option<&str> {
     match self {
@@ -546,106 +361,6 @@ impl ReplacedType {
       ReplacedType::FormControl(_) => Some("control"),
       ReplacedType::Math(_) => Some("math"),
       _ => None,
-    }
-  }
-
-  /// Selects the best image source for the given device scale and slot width.
-  ///
-  /// Returns the authored `src` when no better candidate exists.
-  pub fn image_source_for_context<'a>(&'a self, ctx: ImageSelectionContext<'_>) -> &'a str {
-    self.selected_image_source_for_context(ctx).url
-  }
-
-  /// Selects the best image source along with its declared resolution (when known).
-  pub fn selected_image_source_for_context<'a>(
-    &'a self,
-    ctx: ImageSelectionContext<'_>,
-  ) -> SelectedImageSource<'a> {
-    match self {
-      ReplacedType::Image { .. } => {
-        let active = self.active_image_sources(ctx);
-        if active.srcset.is_empty() || !ctx.scale.is_finite() || ctx.scale <= 0.0 {
-          return SelectedImageSource {
-            url: active.base_src(),
-            resolution: None,
-          };
-        }
-
-        let slot_width = ctx.slot_width.filter(|w| *w > 0.0 && w.is_finite());
-
-        let has_width_descriptors = active
-          .srcset
-          .iter()
-          .any(|c| matches!(c.descriptor, SrcsetDescriptor::Width(_)));
-
-        let effective_slot_width = slot_width.or_else(|| {
-          let viewport = ctx.viewport?;
-          if let (Some(sizes_list), Some(media_ctx)) = (active.sizes, ctx.media_context) {
-            Some(sizes_list.evaluate(media_ctx, viewport, ctx.font_size.unwrap_or(16.0)))
-          } else if has_width_descriptors {
-            Some(viewport.width)
-          } else {
-            Some(viewport.width)
-          }
-        });
-
-        // Pick the smallest density >= scale; if none, the largest below.
-        let mut best: Option<(&SrcsetCandidate, f32)> = None;
-        for candidate in active.srcset {
-          let density = candidate.density_for_slot(effective_slot_width);
-          if let Some(density) = density {
-            if density <= 0.0 || !density.is_finite() {
-              continue;
-            }
-            match best {
-              Some((_, current_density)) if current_density >= ctx.scale => {
-                if density >= ctx.scale && density < current_density {
-                  best = Some((candidate, density));
-                }
-              }
-              Some((_, current_density)) => {
-                if density >= ctx.scale {
-                  best = Some((candidate, density));
-                } else if current_density < ctx.scale && density > current_density {
-                  best = Some((candidate, density));
-                }
-              }
-              None => best = Some((candidate, density)),
-            }
-          }
-        }
-
-        if let Some((candidate, density)) = best {
-          SelectedImageSource {
-            url: candidate.url.as_str(),
-            resolution: Some(density),
-          }
-        } else {
-          SelectedImageSource {
-            url: active.base_src(),
-            resolution: None,
-          }
-        }
-      }
-      _ => SelectedImageSource {
-        url: "",
-        resolution: None,
-      },
-    }
-  }
-}
-
-impl SrcsetCandidate {
-  pub fn density_for_slot(&self, slot_width: Option<f32>) -> Option<f32> {
-    match self.descriptor {
-      SrcsetDescriptor::Density(d) => Some(d),
-      SrcsetDescriptor::Width(w) => {
-        let slot = slot_width?;
-        if slot <= 0.0 || !slot.is_finite() {
-          return None;
-        }
-        Some(w as f32 / slot)
-      }
     }
   }
 }
@@ -1587,7 +1302,7 @@ mod tests {
     let media_ctx =
       MediaContext::screen(viewport.width, viewport.height).with_device_pixel_ratio(2.0);
     let chosen = img.image_source_for_context(ImageSelectionContext {
-      scale: 2.0,
+      device_pixel_ratio: 2.0,
       slot_width: None,
       viewport: Some(viewport),
       media_context: Some(&media_ctx),
@@ -1635,7 +1350,7 @@ mod tests {
     let media_ctx =
       MediaContext::screen(viewport.width, viewport.height).with_device_pixel_ratio(1.0);
     let chosen = img.image_source_for_context(ImageSelectionContext {
-      scale: 1.0,
+      device_pixel_ratio: 1.0,
       slot_width: None,
       viewport: Some(viewport),
       media_context: Some(&media_ctx),
@@ -1678,7 +1393,7 @@ mod tests {
     let media_ctx =
       MediaContext::screen(viewport.width, viewport.height).with_device_pixel_ratio(1.0);
     let chosen = img.image_source_for_context(ImageSelectionContext {
-      scale: 1.0,
+      device_pixel_ratio: 1.0,
       slot_width: None,
       viewport: Some(viewport),
       media_context: Some(&media_ctx),
@@ -1713,7 +1428,7 @@ mod tests {
     let media_ctx =
       MediaContext::screen(viewport.width, viewport.height).with_device_pixel_ratio(2.0);
     let chosen = img.image_source_for_context(ImageSelectionContext {
-      scale: 2.0,
+      device_pixel_ratio: 2.0,
       slot_width: None,
       viewport: Some(viewport),
       media_context: Some(&media_ctx),
@@ -1751,7 +1466,7 @@ mod tests {
     let media_ctx =
       MediaContext::screen(viewport.width, viewport.height).with_device_pixel_ratio(1.0);
     let chosen = img.image_source_for_context(ImageSelectionContext {
-      scale: 1.0,
+      device_pixel_ratio: 1.0,
       slot_width: Some(0.0),
       viewport: Some(viewport),
       media_context: Some(&media_ctx),
@@ -1786,7 +1501,7 @@ mod tests {
 
     let media_ctx = MediaContext::screen(800.0, 600.0).with_device_pixel_ratio(2.0);
     let sources = img.image_sources_with_fallback(ImageSelectionContext {
-      scale: 2.0,
+      device_pixel_ratio: 2.0,
       slot_width: Some(400.0),
       viewport: Some(Size::new(800.0, 600.0)),
       media_context: Some(&media_ctx),
@@ -1794,15 +1509,19 @@ mod tests {
       base_url: None,
     });
 
-    assert_eq!(sources[0], "2x", "selected srcset candidate should lead");
+    assert_eq!(
+      sources[0].url, "2x",
+      "selected srcset candidate should lead"
+    );
+    assert_eq!(sources[0].density, Some(2.0));
     assert!(
-      sources.contains(&"base".to_string()),
+      sources.iter().any(|s| s.url == "base"),
       "base src should remain available as fallback"
     );
     assert_eq!(
       sources.len(),
-      3,
-      "srcset entries and base src should be unique"
+      2,
+      "only selected + base fallback should remain"
     );
   }
 
@@ -1851,7 +1570,7 @@ mod tests {
     let small_media = MediaContext::screen(small_viewport.width, small_viewport.height)
       .with_device_pixel_ratio(2.0);
     let chosen_small = img.image_source_for_context(ImageSelectionContext {
-      scale: 2.0,
+      device_pixel_ratio: 2.0,
       slot_width: None,
       viewport: Some(small_viewport),
       media_context: Some(&small_media),
@@ -1864,7 +1583,7 @@ mod tests {
     let large_media = MediaContext::screen(large_viewport.width, large_viewport.height)
       .with_device_pixel_ratio(2.0);
     let chosen_large = img.image_source_for_context(ImageSelectionContext {
-      scale: 2.0,
+      device_pixel_ratio: 2.0,
       slot_width: None,
       viewport: Some(large_viewport),
       media_context: Some(&large_media),
@@ -1907,7 +1626,7 @@ mod tests {
     let media_ctx =
       MediaContext::screen(viewport.width, viewport.height).with_device_pixel_ratio(2.0);
     let chosen = img.image_source_for_context(ImageSelectionContext {
-      scale: 2.0,
+      device_pixel_ratio: 2.0,
       slot_width: None,
       viewport: Some(viewport),
       media_context: Some(&media_ctx),
@@ -1916,6 +1635,175 @@ mod tests {
     });
 
     assert_eq!(chosen, "800w");
+  }
+
+  #[test]
+  fn width_descriptors_shift_with_dpr() {
+    let img = ReplacedType::Image {
+      src: "fallback".to_string(),
+      alt: None,
+      srcset: vec![
+        SrcsetCandidate {
+          url: "400w".to_string(),
+          descriptor: SrcsetDescriptor::Width(400),
+        },
+        SrcsetCandidate {
+          url: "800w".to_string(),
+          descriptor: SrcsetDescriptor::Width(800),
+        },
+      ],
+      sizes: Some(SizesList {
+        entries: vec![SizesEntry {
+          media: None,
+          length: Length::new(100.0, LengthUnit::Vw),
+        }],
+      }),
+      picture_sources: Vec::new(),
+    };
+
+    let viewport = Size::new(400.0, 200.0);
+    let media_1x =
+      MediaContext::screen(viewport.width, viewport.height).with_device_pixel_ratio(1.0);
+    let media_2x =
+      MediaContext::screen(viewport.width, viewport.height).with_device_pixel_ratio(2.0);
+
+    let at_1x = img.image_source_for_context(ImageSelectionContext {
+      device_pixel_ratio: 1.0,
+      slot_width: None,
+      viewport: Some(viewport),
+      media_context: Some(&media_1x),
+      font_size: Some(16.0),
+      base_url: None,
+    });
+    let at_2x = img.image_source_for_context(ImageSelectionContext {
+      device_pixel_ratio: 2.0,
+      slot_width: None,
+      viewport: Some(viewport),
+      media_context: Some(&media_2x),
+      font_size: Some(16.0),
+      base_url: None,
+    });
+
+    assert_eq!(at_1x, "400w");
+    assert_eq!(at_2x, "800w");
+  }
+
+  #[test]
+  fn sizes_media_conditions_control_selection() {
+    let img = ReplacedType::Image {
+      src: "fallback".to_string(),
+      alt: None,
+      srcset: vec![
+        SrcsetCandidate {
+          url: "200w".to_string(),
+          descriptor: SrcsetDescriptor::Width(200),
+        },
+        SrcsetCandidate {
+          url: "800w".to_string(),
+          descriptor: SrcsetDescriptor::Width(800),
+        },
+      ],
+      sizes: Some(SizesList {
+        entries: vec![
+          SizesEntry {
+            media: Some(vec![MediaQuery::parse("(max-width: 500px)").unwrap()]),
+            length: Length::px(200.0),
+          },
+          SizesEntry {
+            media: None,
+            length: Length::px(400.0),
+          },
+        ],
+      }),
+      picture_sources: Vec::new(),
+    };
+
+    let small_viewport = Size::new(300.0, 400.0);
+    let small_media = MediaContext::screen(small_viewport.width, small_viewport.height)
+      .with_device_pixel_ratio(1.0);
+    let large_viewport = Size::new(800.0, 600.0);
+    let large_media = MediaContext::screen(large_viewport.width, large_viewport.height)
+      .with_device_pixel_ratio(1.0);
+
+    let chosen_small = img.image_source_for_context(ImageSelectionContext {
+      device_pixel_ratio: 1.0,
+      slot_width: None,
+      viewport: Some(small_viewport),
+      media_context: Some(&small_media),
+      font_size: Some(16.0),
+      base_url: None,
+    });
+    let chosen_large = img.image_source_for_context(ImageSelectionContext {
+      device_pixel_ratio: 1.0,
+      slot_width: None,
+      viewport: Some(large_viewport),
+      media_context: Some(&large_media),
+      font_size: Some(16.0),
+      base_url: None,
+    });
+
+    assert_eq!(chosen_small, "200w", "media-matching sizes should apply");
+    assert_eq!(
+      chosen_large, "800w",
+      "fallback sizes entry should drive selection when media does not match"
+    );
+  }
+
+  #[test]
+  fn picture_requires_media_and_type_to_match() {
+    let img = ReplacedType::Image {
+      src: "fallback".to_string(),
+      alt: None,
+      srcset: vec![],
+      sizes: None,
+      picture_sources: vec![
+        PictureSource {
+          srcset: vec![SrcsetCandidate {
+            url: "webp-small".to_string(),
+            descriptor: SrcsetDescriptor::Density(1.0),
+          }],
+          sizes: None,
+          media: Some(vec![MediaQuery::parse("(max-width: 500px)").unwrap()]),
+          mime_type: Some("image/webp".to_string()),
+        },
+        PictureSource {
+          srcset: vec![SrcsetCandidate {
+            url: "png-large".to_string(),
+            descriptor: SrcsetDescriptor::Density(1.0),
+          }],
+          sizes: None,
+          media: Some(vec![MediaQuery::parse("(min-width: 501px)").unwrap()]),
+          mime_type: Some("image/png".to_string()),
+        },
+      ],
+    };
+
+    let small_viewport = Size::new(400.0, 300.0);
+    let small_media = MediaContext::screen(small_viewport.width, small_viewport.height)
+      .with_device_pixel_ratio(1.0);
+    let large_viewport = Size::new(800.0, 600.0);
+    let large_media = MediaContext::screen(large_viewport.width, large_viewport.height)
+      .with_device_pixel_ratio(1.0);
+
+    let chosen_small = img.image_source_for_context(ImageSelectionContext {
+      device_pixel_ratio: 1.0,
+      slot_width: None,
+      viewport: Some(small_viewport),
+      media_context: Some(&small_media),
+      font_size: Some(16.0),
+      base_url: None,
+    });
+    let chosen_large = img.image_source_for_context(ImageSelectionContext {
+      device_pixel_ratio: 1.0,
+      slot_width: None,
+      viewport: Some(large_viewport),
+      media_context: Some(&large_media),
+      font_size: Some(16.0),
+      base_url: None,
+    });
+
+    assert_eq!(chosen_small, "webp-small");
+    assert_eq!(chosen_large, "png-large");
   }
 
   #[test]
@@ -1940,7 +1828,7 @@ mod tests {
       poster: Some("thumb.png".to_string()),
     };
     let sources = video.image_sources_with_fallback(ImageSelectionContext {
-      scale: 2.0,
+      device_pixel_ratio: 2.0,
       slot_width: Some(400.0),
       viewport: Some(Size::new(800.0, 600.0)),
       media_context: None,
@@ -1949,8 +1837,8 @@ mod tests {
     });
 
     assert_eq!(
-      sources,
-      vec!["thumb.png".to_string()],
+      sources.iter().map(|s| s.url).collect::<Vec<_>>(),
+      vec!["thumb.png"],
       "video should only expose poster for imaging"
     );
   }

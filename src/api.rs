@@ -795,6 +795,20 @@ impl RenderOptions {
   }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageSelectionDiagnostic {
+  /// Debug label for the element (from debug info), when available.
+  pub element: Option<String>,
+  /// Selected resource URL.
+  pub url: String,
+  /// Authored descriptor string (e.g. `2x` or `400w`).
+  pub descriptor: Option<String>,
+  /// Effective density used for selection.
+  pub density: Option<f32>,
+  /// True when chosen from a `<picture>` source.
+  pub from_picture: bool,
+}
+
 /// Diagnostics collected during rendering.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct RenderDiagnostics {
@@ -806,6 +820,8 @@ pub struct RenderDiagnostics {
   pub timeout_stage: Option<RenderStage>,
   /// Optional structured statistics gathered during rendering.
   pub stats: Option<RenderStats>,
+  /// Recorded responsive image selections.
+  pub image_selections: Vec<ImageSelectionDiagnostic>,
 }
 
 impl RenderDiagnostics {
@@ -837,6 +853,11 @@ impl RenderDiagnostics {
   /// Mark a document-level fetch failure.
   pub fn set_document_error(&mut self, message: impl Into<String>) {
     self.document_error = Some(message.into());
+  }
+
+  /// Record the selected candidate for an `<img>`/`<picture>` element.
+  pub fn record_image_selection(&mut self, selection: ImageSelectionDiagnostic) {
+    self.image_selections.push(selection);
   }
 }
 
@@ -5562,6 +5583,28 @@ impl FastRender {
     self.image_cache.set_resource_context(prev_image);
     self.font_context.set_resource_context(prev_font);
   }
+
+  fn record_image_selection(
+    &self,
+    label: Option<&str>,
+    selected: &crate::tree::box_tree::SelectedImageSource<'_>,
+  ) {
+    if selected.url.trim().is_empty() {
+      return;
+    }
+
+    if let Some(diag) = &self.diagnostics {
+      if let Ok(mut guard) = diag.lock() {
+        guard.record_image_selection(ImageSelectionDiagnostic {
+          element: label.map(|s| s.to_string()),
+          url: selected.url.to_string(),
+          descriptor: selected.descriptor.map(|d| d.to_string()),
+          density: selected.density,
+          from_picture: selected.from_picture,
+        });
+      }
+    }
+  }
   /// Gets the default background color
   pub fn background_color(&self) -> Rgba {
     self.background_color
@@ -5851,6 +5894,8 @@ impl FastRender {
       });
     }
 
+    let debug_label = node.debug_info.as_ref().map(|d| d.short_description());
+
     if let BoxType::Marker(marker_box) = &mut node.box_type {
       if let MarkerContent::Image(replaced) = &mut marker_box.content {
         self.resolve_intrinsic_for_replaced_for_media(
@@ -5859,6 +5904,7 @@ impl FastRender {
           None,
           viewport,
           media_type,
+          debug_label.as_deref(),
         );
       }
     }
@@ -5874,6 +5920,7 @@ impl FastRender {
         alt.as_deref(),
         viewport,
         media_type,
+        debug_label.as_deref(),
       );
     }
 
@@ -5929,6 +5976,7 @@ impl FastRender {
       alt,
       viewport,
       MediaType::Screen,
+      None,
     );
   }
 
@@ -5940,6 +5988,7 @@ impl FastRender {
     alt: Option<&str>,
     viewport: Size,
     media_type: MediaType,
+    element_label: Option<&str>,
   ) {
     if let ReplacedType::Math(math) = &mut replaced_box.replaced_type {
       if math.layout.is_none() {
@@ -6052,7 +6101,7 @@ impl FastRender {
           let selected = replaced_box
             .replaced_type
             .selected_image_source_for_context(crate::tree::box_tree::ImageSelectionContext {
-              scale: self.device_pixel_ratio,
+              device_pixel_ratio: self.device_pixel_ratio,
               slot_width: None,
               viewport: Some(viewport),
               media_context: Some(&media_ctx),
@@ -6073,6 +6122,7 @@ impl FastRender {
         };
 
         if let Some(selected) = selected {
+          self.record_image_selection(element_label, &selected);
           if !selected.url.is_empty() {
             let probe_start = profile_enabled.then(Instant::now);
             let probe_result = self.image_cache.probe(selected.url);
@@ -6096,7 +6146,7 @@ impl FastRender {
                 orientation,
                 &style.image_resolution,
                 self.device_pixel_ratio,
-                selected.resolution,
+                selected.density,
               ) {
                 replaced_box.intrinsic_size = Some(Size::new(w, h));
                 if !explicit_no_ratio {

@@ -24,7 +24,8 @@ fn display_lists_include_additional_fragment_roots() {
     0.0,
     text_style,
   );
-  let extra_root = FragmentNode::new_block(Rect::from_xywh(0.0, 100.0, 50.0, 20.0), vec![extra_text]);
+  let extra_root =
+    FragmentNode::new_block(Rect::from_xywh(0.0, 100.0, 50.0, 20.0), vec![extra_text]);
 
   let mut tree = FragmentTree::new(root);
   tree.additional_fragments.push(extra_root);
