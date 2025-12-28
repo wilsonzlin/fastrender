@@ -10,6 +10,12 @@ pub struct FontVariation {
   pub value: f32,
 }
 
+impl FontVariation {
+  pub fn new(tag: Tag, value: f32) -> Self {
+    Self { tag, value }
+  }
+}
+
 impl From<Variation> for FontVariation {
   fn from(v: Variation) -> Self {
     Self {

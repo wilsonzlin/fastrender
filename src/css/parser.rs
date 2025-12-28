@@ -3048,6 +3048,7 @@ pub fn extract_css_sources(dom: &DomNode) -> Vec<ScopedStylesheetSource> {
     path: &mut Vec<usize>,
     sources: &mut Vec<ScopedStylesheetSource>,
   ) {
+    let mut skip_children = false;
     if let Some(tag) = node.tag_name() {
       if tag.eq_ignore_ascii_case("style") {
         let mut css = String::new();
@@ -3086,6 +3087,13 @@ pub fn extract_css_sources(dom: &DomNode) -> Vec<ScopedStylesheetSource> {
         // Template contents are inert in the light DOM and should not contribute styles.
         return;
       }
+      if tag.eq_ignore_ascii_case("template") {
+        skip_children = true;
+      }
+    }
+
+    if skip_children {
+      return;
     }
 
     let mut child_index = 0;
@@ -3131,6 +3139,7 @@ pub fn extract_scoped_css_sources(dom: &DomNode) -> ScopedStylesheetSources {
     let node_id = *counter;
     *counter += 1;
 
+    let mut skip_children = false;
     if let Some(tag) = node.tag_name() {
       if tag.eq_ignore_ascii_case("template") {
         // Skip inert template contents in both document and shadow scopes.
@@ -3169,6 +3178,13 @@ pub fn extract_scoped_css_sources(dom: &DomNode) -> ScopedStylesheetSources {
           }));
         }
       }
+      if tag.eq_ignore_ascii_case("template") {
+        skip_children = true;
+      }
+    }
+
+    if skip_children {
+      return;
     }
 
     for child in &node.children {
