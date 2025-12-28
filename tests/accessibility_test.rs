@@ -699,6 +699,30 @@ fn accessibility_label_snapshot_json() {
 }
 
 #[test]
+fn accessibility_label_dom_descendant_with_shadow_dom() {
+  let html = r##"
+    <html>
+      <body>
+        <label>Label text
+          <div id="host">
+            <template shadowroot="open"><slot></slot></template>
+            <input id="slotted" type="text" />
+          </div>
+        </label>
+      </body>
+    </html>
+  "##;
+
+  let tree = render_accessibility_json(html);
+  let slotted = find_json_node(&tree, "slotted").expect("slotted input");
+
+  assert_eq!(
+    slotted.get("name").and_then(|v| v.as_str()),
+    Some("Label text")
+  );
+}
+
+#[test]
 fn accessibility_table_snapshot_json() {
   let html = r##"
     <html>

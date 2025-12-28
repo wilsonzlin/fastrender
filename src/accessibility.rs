@@ -513,26 +513,26 @@ fn collect_labels(
     *hidden.get(&node.node_id).unwrap_or(&false)
   }
 
-  fn first_labelable_descendant<'a>(
+  /// HTML label containment is defined in terms of the DOM tree, not the composed tree.
+  fn first_labelable_dom_descendant<'a>(
     node: &'a StyledNode,
     hidden: &HashMap<usize, bool>,
-    lookup: &'a HashMap<usize, &'a StyledNode>,
   ) -> Option<&'a StyledNode> {
-    for child in composed_children(node, lookup) {
+    for child in &node.children {
       if is_hidden(child, hidden) {
         continue;
       }
       if is_labelable(&child.node) {
         return Some(child);
       }
-      if let Some(found) = first_labelable_descendant(child, hidden, lookup) {
+      if let Some(found) = first_labelable_dom_descendant(child, hidden) {
         return Some(found);
       }
     }
     None
   }
 
-  fn walk(
+  fn walk_dom(
     node: &StyledNode,
     hidden: &HashMap<usize, bool>,
     ids: &HashMap<String, usize>,
@@ -561,20 +561,18 @@ fn collect_labels(
             }
           }
         }
-      } else if let Some(target) = first_labelable_descendant(node, hidden, lookup) {
+      } else if let Some(target) = first_labelable_dom_descendant(node, hidden) {
         labels.entry(target.node_id).or_default().push(node.node_id);
       }
     }
 
     for child in &node.children {
-      walk(child, hidden, ids, lookup, labels);
+      walk_dom(child, hidden, ids, lookup, labels);
     }
   }
 
   let mut labels: HashMap<usize, Vec<usize>> = HashMap::new();
-  // Labels are collected based on the styled tree (not composed), but labelable descendants within
-  // a label follow the composed tree to mirror rendered structure.
-  walk(root, hidden, ids, lookup, &mut labels);
+  walk_dom(root, hidden, ids, lookup, &mut labels);
   labels
 }
 
