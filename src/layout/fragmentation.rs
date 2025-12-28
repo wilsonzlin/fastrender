@@ -414,6 +414,7 @@ pub fn fragment_tree(root: &FragmentNode, options: &FragmentationOptions) -> Vec
   fragment_tree_with_axes(root, options, axes)
 }
 
+/// Axis-aware entry point for pagination/columns when the writing-mode/direction are known.
 pub fn fragment_tree_for_writing_mode(
   root: &FragmentNode,
   options: &FragmentationOptions,
@@ -424,6 +425,7 @@ pub fn fragment_tree_for_writing_mode(
   fragment_tree_with_axes(root, options, axes)
 }
 
+/// Splits a fragment tree using explicit fragment axes.
 pub fn fragment_tree_with_axes(
   root: &FragmentNode,
   options: &FragmentationOptions,
