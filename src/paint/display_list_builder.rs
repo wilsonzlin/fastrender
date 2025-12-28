@@ -405,7 +405,7 @@ impl DisplayListBuilder {
     self.build_from_stacking_contexts_with_offset(stackings, Point::ZERO)
   }
 
-  /// Builds a display list from multiple stacking context roots applying a uniform offset.
+  /// Builds a display list from multiple stacking context roots with an offset applied.
   pub fn build_from_stacking_contexts_with_offset(
     mut self,
     stackings: &[StackingContext],
@@ -438,7 +438,7 @@ impl DisplayListBuilder {
   }
 
   /// Builds a display list by first constructing stacking context trees from a fragment tree and
-  /// applying an additional offset to all fragments.
+  /// applying an additional offset.
   pub fn build_with_stacking_tree_from_tree_offset(
     mut self,
     tree: &FragmentTree,

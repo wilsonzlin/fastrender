@@ -14,7 +14,7 @@ The rendering pipeline parses the environment once into a typed [`RuntimeToggles
 - `FASTR_FULL_PAGE=1` – expand output to the full document content size (instead of the viewport).
 - `FASTR_USE_BUNDLED_FONTS=1` – disable system font discovery and use the bundled fixtures (default in CI).
 - `FASTR_FETCH_LINK_CSS=0` – skip fetching linked stylesheets (defaults to on).
-- `FASTR_PAINT_BACKEND=legacy|display_list` – choose between the legacy immediate painter and the display-list (builder → optimizer → renderer) pipeline. Defaults to `legacy`.
+- Painting always uses the display-list (builder → optimizer → renderer) pipeline; the legacy immediate painter has been removed.
 
 ## Resource limits
 

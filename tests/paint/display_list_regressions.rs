@@ -1,13 +1,8 @@
 use fastrender::image_loader::ImageCache;
-use fastrender::paint::painter::{paint_tree_with_resources_scaled_offset_backend, PaintBackend};
+use fastrender::paint::painter::paint_tree_with_resources_scaled_offset;
 use fastrender::{FastRender, Point, Rgba};
 
-fn render_with_backend(
-  html: &str,
-  width: u32,
-  height: u32,
-  backend: PaintBackend,
-) -> tiny_skia::Pixmap {
+fn render(html: &str, width: u32, height: u32) -> tiny_skia::Pixmap {
   let mut renderer = FastRender::new().expect("renderer");
   let dom = renderer.parse_html(html).expect("parsed");
   let fragment_tree = renderer
@@ -17,31 +12,42 @@ fn render_with_backend(
   let font_ctx = renderer.font_context().clone();
   let image_cache = ImageCache::new();
 
-  paint_tree_with_resources_scaled_offset_backend(
+  paint_tree_with_resources_scaled_offset(
     &fragment_tree,
     width,
     height,
     Rgba::WHITE,
-    font_ctx.clone(),
-    image_cache.clone(),
+    font_ctx,
+    image_cache,
     1.0,
     Point::ZERO,
-    backend,
   )
   .expect("painted")
 }
 
-fn assert_parity(html: &str, width: u32, height: u32) {
-  let legacy = render_with_backend(html, width, height, PaintBackend::Legacy);
-  let display_list = render_with_backend(html, width, height, PaintBackend::DisplayList);
+fn pixel(pixmap: &tiny_skia::Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
+  let p = pixmap.pixel(x, y).unwrap();
+  (p.red(), p.green(), p.blue(), p.alpha())
+}
 
-  assert_eq!(legacy.width(), display_list.width());
-  assert_eq!(legacy.height(), display_list.height());
-  assert_eq!(legacy.data(), display_list.data());
+fn assert_close(actual: (u8, u8, u8, u8), expected: (u8, u8, u8, u8), tol: u8) {
+  let diff = (
+    actual.0.abs_diff(expected.0),
+    actual.1.abs_diff(expected.1),
+    actual.2.abs_diff(expected.2),
+    actual.3.abs_diff(expected.3),
+  );
+  assert!(
+    diff.0 <= tol && diff.1 <= tol && diff.2 <= tol && diff.3 <= tol,
+    "pixel {:?} differed from {:?} by {:?} (tol {tol})",
+    actual,
+    expected,
+    diff
+  );
 }
 
 #[test]
-fn stacking_and_opacity_parity() {
+fn stacking_and_opacity_rendering() {
   let html = r#"
     <!doctype html>
     <style>
@@ -73,11 +79,17 @@ fn stacking_and_opacity_parity() {
     </div>
   "#;
 
-  assert_parity(html, 64, 64);
+  let pixmap = render(html, 64, 64);
+  // Red over white at (5,5)
+  assert_close(pixel(&pixmap, 5, 5), (255, 128, 128, 255), 2);
+  // Blue over white at (35,35) (only top box)
+  assert_close(pixel(&pixmap, 35, 35), (128, 128, 255, 255), 2);
+  // Overlap region should blend both
+  assert_close(pixel(&pixmap, 20, 20), (128, 64, 191, 255), 3);
 }
 
 #[test]
-fn overflow_clip_parity() {
+fn overflow_clip_masks_content() {
   let html = r#"
     <!doctype html>
     <style>
@@ -102,11 +114,13 @@ fn overflow_clip_parity() {
     </div>
   "#;
 
-  assert_parity(html, 64, 64);
+  let pixmap = render(html, 64, 64);
+  assert_close(pixel(&pixmap, 20, 20), (0, 128, 0, 255), 2);
+  assert_close(pixel(&pixmap, 45, 20), (230, 230, 230, 255), 1);
 }
 
 #[test]
-fn blend_mode_parity() {
+fn blend_mode_screen_applies() {
   let html = r#"
     <!doctype html>
     <style>
@@ -133,12 +147,15 @@ fn blend_mode_parity() {
     </div>
   "#;
 
-  assert_parity(html, 64, 64);
+  let pixmap = render(html, 64, 64);
+  assert_close(pixel(&pixmap, 5, 5), (200, 0, 0, 255), 1);
+  assert_close(pixel(&pixmap, 20, 20), (200, 200, 0, 255), 5);
+  assert_close(pixel(&pixmap, 60, 60), (120, 120, 120, 255), 1);
 }
 
 #[test]
-fn filter_blur_parity() {
-  let html = r#"
+fn filter_blur_renders() {
+  let blurred_html = r#"
     <!doctype html>
     <style>
       body { margin: 0; background: white; }
@@ -152,6 +169,26 @@ fn filter_blur_parity() {
     </style>
     <div class="blurred"></div>
   "#;
+  let crisp_html = r#"
+    <!doctype html>
+    <style>
+      body { margin: 0; background: white; }
+      .blurred {
+        width: 30px;
+        height: 30px;
+        margin: 5px;
+        background: rgb(50 0 200);
+      }
+    </style>
+    <div class="blurred"></div>
+  "#;
 
-  assert_parity(html, 48, 48);
+  let blurred = render(blurred_html, 48, 48);
+  let crisp = render(crisp_html, 48, 48);
+  assert_ne!(blurred.data(), crisp.data(), "blur filter should change the output");
+  assert_ne!(
+    pixel(&blurred, 2, 2),
+    pixel(&crisp, 2, 2),
+    "blur should bleed color beyond the element bounds"
+  );
 }

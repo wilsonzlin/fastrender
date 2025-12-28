@@ -9252,28 +9252,7 @@ fn tile_positions(
   }
 }
 
-/// Painting backends supported by the renderer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PaintBackend {
-  Legacy,
-  DisplayList,
-}
-
-fn paint_backend_from_env() -> PaintBackend {
-  static BACKEND: OnceLock<PaintBackend> = OnceLock::new();
-  *BACKEND.get_or_init(|| {
-    let Ok(raw) = std::env::var("FASTR_PAINT_BACKEND") else {
-      return PaintBackend::Legacy;
-    };
-    match raw.trim().to_ascii_lowercase().as_str() {
-      "display_list" | "display-list" | "displaylist" => PaintBackend::DisplayList,
-      "legacy" | "immediate" => PaintBackend::Legacy,
-      _ => PaintBackend::Legacy,
-    }
-  })
-}
-
-fn legacy_paint_tree_with_resources_scaled_offset(
+fn paint_display_list_with_trace(
   tree: &FragmentTree,
   width: u32,
   height: u32,
@@ -9282,10 +9261,52 @@ fn legacy_paint_tree_with_resources_scaled_offset(
   image_cache: ImageCache,
   scale: f32,
   offset: Point,
+  trace: TraceHandle,
 ) -> Result<Pixmap> {
-  let painter =
-    Painter::with_resources_scaled(width, height, background, font_ctx, image_cache, scale)?;
-  painter.paint_with_offset(tree, offset)
+  check_active(RenderStage::Paint).map_err(Error::Render)?;
+  let diagnostics_enabled = paint_diagnostics_enabled();
+  let _paint_span = trace.span("paint", "paint");
+
+  let viewport = tree.viewport_size();
+  let build_start = diagnostics_enabled.then(Instant::now);
+  let _build_span = trace.span("display_list_build", "paint");
+  let display_list = DisplayListBuilder::with_image_cache(image_cache)
+    .with_font_context(font_ctx.clone())
+    .with_device_pixel_ratio(scale)
+    .with_viewport_size(viewport.width, viewport.height)
+    .build_with_stacking_tree_from_tree_offset(tree, offset);
+  drop(_build_span);
+
+  let _opt_span = trace.span("display_list_optimize", "paint");
+  let optimizer = DisplayListOptimizer::new();
+  let viewport_rect = Rect::from_xywh(0.0, 0.0, viewport.width, viewport.height);
+  let (optimized, _) = optimizer.optimize(display_list, viewport_rect);
+  drop(_opt_span);
+
+  if let (true, Some(start)) = (diagnostics_enabled, build_start) {
+    with_paint_diagnostics(|diag| {
+      diag.build_ms = start.elapsed().as_secs_f64() * 1000.0;
+      diag.command_count = optimized.len();
+    });
+  }
+
+  check_active(RenderStage::Paint).map_err(Error::Render)?;
+  let raster_start = diagnostics_enabled.then(Instant::now);
+  let _raster_span = trace.span("rasterize", "paint");
+  let renderer = DisplayListRenderer::new_scaled(width, height, background, font_ctx, scale)?;
+  let pixmap = renderer.render(&optimized);
+  drop(_raster_span);
+
+  if let (true, Some(start)) = (diagnostics_enabled, raster_start) {
+    with_paint_diagnostics(|diag| {
+      diag.raster_ms = start.elapsed().as_secs_f64() * 1000.0;
+      if diag.command_count == 0 {
+        diag.command_count = optimized.len();
+      }
+    });
+  }
+
+  pixmap
 }
 
 /// Paints a fragment tree via the display-list pipeline (builder → optimize → renderer).
@@ -9299,6 +9320,7 @@ pub fn paint_tree_display_list_with_resources_scaled_offset(
   scale: f32,
   offset: Point,
 ) -> Result<Pixmap> {
+<<<<<<< HEAD
   let viewport = tree.viewport_size();
   let display_list = DisplayListBuilder::with_image_cache(image_cache)
     .with_font_context(font_ctx.clone())
@@ -9313,6 +9335,19 @@ pub fn paint_tree_display_list_with_resources_scaled_offset(
 
   let renderer = DisplayListRenderer::new_scaled(width, height, background, font_ctx, scale)?;
   renderer.render(&optimized)
+=======
+  paint_display_list_with_trace(
+    tree,
+    width,
+    height,
+    background,
+    font_ctx,
+    image_cache,
+    scale,
+    offset,
+    TraceHandle::disabled(),
+  )
+>>>>>>> 2efc5d4 (refactor: make display list the only paint backend)
 }
 
 /// Paints a fragment tree via the display-list pipeline using explicit resources.
@@ -9355,43 +9390,6 @@ pub fn paint_tree_display_list(
   )
 }
 
-/// Paints a fragment tree at a device scale with an additional translation applied using the
-/// selected backend.
-pub fn paint_tree_with_resources_scaled_offset_backend(
-  tree: &FragmentTree,
-  width: u32,
-  height: u32,
-  background: Rgba,
-  font_ctx: FontContext,
-  image_cache: ImageCache,
-  scale: f32,
-  offset: Point,
-  backend: PaintBackend,
-) -> Result<Pixmap> {
-  match backend {
-    PaintBackend::Legacy => legacy_paint_tree_with_resources_scaled_offset(
-      tree,
-      width,
-      height,
-      background,
-      font_ctx,
-      image_cache,
-      scale,
-      offset,
-    ),
-    PaintBackend::DisplayList => paint_tree_display_list_with_resources_scaled_offset(
-      tree,
-      width,
-      height,
-      background,
-      font_ctx,
-      image_cache,
-      scale,
-      offset,
-    ),
-  }
-}
-
 /// Paints a fragment tree at a device scale with an additional translation applied.
 pub fn paint_tree_with_resources_scaled_offset(
   tree: &FragmentTree,
@@ -9403,7 +9401,7 @@ pub fn paint_tree_with_resources_scaled_offset(
   scale: f32,
   offset: Point,
 ) -> Result<Pixmap> {
-  paint_tree_with_resources_scaled_offset_backend(
+  paint_tree_with_resources_scaled_offset_with_trace(
     tree,
     width,
     height,
@@ -9412,7 +9410,7 @@ pub fn paint_tree_with_resources_scaled_offset(
     image_cache,
     scale,
     offset,
-    paint_backend_from_env(),
+    TraceHandle::disabled(),
   )
 }
 
