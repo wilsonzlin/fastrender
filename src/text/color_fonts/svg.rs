@@ -1,8 +1,13 @@
 use super::ColorGlyphRaster;
 use crate::style::color::Rgba;
 use crate::svg::{svg_root_view_box, svg_view_box_root_transform, SvgViewBox};
+use roxmltree::Document;
 use std::sync::Arc;
 use tiny_skia::{Pixmap, Transform};
+
+pub const MAX_SVG_GLYPH_BYTES: usize = 256 * 1024;
+const MAX_SVG_GLYPH_NODES: usize = 10_000;
+const MAX_SVG_GLYPH_DATA_URL_BYTES: usize = 32 * 1024;
 
 /// Render SVG-in-OpenType glyphs.
 pub fn render_svg_glyph(
@@ -12,10 +17,11 @@ pub fn render_svg_glyph(
   text_color: Rgba,
 ) -> Option<ColorGlyphRaster> {
   let svg_doc = face.glyph_svg_image(glyph_id)?;
-  let svg_str = std::str::from_utf8(svg_doc.data).ok()?;
+  let svg_str = sanitize_svg_glyph(svg_doc.data)?;
   let svg_with_color = inject_current_color(svg_str, text_color)?;
 
-  let options = resvg::usvg::Options::default();
+  let mut options = resvg::usvg::Options::default();
+  options.resources_dir = None;
 
   let tree = resvg::usvg::Tree::from_str(&svg_with_color, &options).ok()?;
   let size = tree.size();
@@ -80,6 +86,126 @@ pub fn render_svg_glyph(
     left: view_box.min_x * scale,
     top: -max_y * scale,
   })
+}
+
+pub fn sanitize_svg_glyph_for_tests(svg_bytes: &[u8]) -> Option<&str> {
+  sanitize_svg_glyph(svg_bytes)
+}
+
+fn sanitize_svg_glyph(svg_bytes: &[u8]) -> Option<&str> {
+  if svg_bytes.len() > MAX_SVG_GLYPH_BYTES {
+    return None;
+  }
+
+  let svg_str = std::str::from_utf8(svg_bytes).ok()?;
+  let doc = Document::parse(svg_str).ok()?;
+  let mut element_count = 0usize;
+
+  for node in doc.descendants().filter(|n| n.is_element()) {
+    element_count += 1;
+    if element_count > MAX_SVG_GLYPH_NODES {
+      return None;
+    }
+    if svg_node_has_external_reference(&node) {
+      return None;
+    }
+  }
+
+  Some(svg_str)
+}
+
+fn svg_node_has_external_reference(node: &roxmltree::Node<'_, '_>) -> bool {
+  if let Some(href) = svg_href_value(node) {
+    if is_disallowed_svg_reference(href) {
+      return true;
+    }
+  }
+
+  for attr in node.attributes() {
+    if contains_disallowed_url_function(attr.value()) {
+      return true;
+    }
+  }
+
+  if node.tag_name().name().eq_ignore_ascii_case("style") {
+    if let Some(text) = node.text() {
+      if contains_disallowed_url_function(text) {
+        return true;
+      }
+    }
+  }
+
+  false
+}
+
+fn svg_href_value(node: &roxmltree::Node<'_, '_>) -> Option<&str> {
+  for attr in node.attributes() {
+    if attr.name().name().eq_ignore_ascii_case("href") {
+      return Some(attr.value());
+    }
+  }
+  None
+}
+
+fn contains_disallowed_url_function(value: &str) -> bool {
+  let lower = value.to_ascii_lowercase();
+  let mut search_start = 0usize;
+
+  while let Some(rel_idx) = lower[search_start..].find("url(") {
+    let idx = search_start + rel_idx;
+    let after = &value[idx + 4..];
+    if let Some(close_idx) = after.find(')') {
+      let raw_target = &after[..close_idx];
+      let target = raw_target.trim().trim_matches(|c| matches!(c, '"' | '\''));
+      if is_disallowed_svg_reference(target) {
+        return true;
+      }
+      search_start = idx + 4 + close_idx + 1;
+    } else {
+      return true;
+    }
+  }
+
+  false
+}
+
+fn is_disallowed_svg_reference(target: &str) -> bool {
+  match classify_svg_reference(target) {
+    SvgReference::Empty | SvgReference::Fragment => false,
+    SvgReference::DataUrl { too_large } => too_large,
+    SvgReference::External => true,
+  }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SvgReference {
+  Empty,
+  Fragment,
+  DataUrl { too_large: bool },
+  External,
+}
+
+fn classify_svg_reference(target: &str) -> SvgReference {
+  let trimmed = target.trim();
+  if trimmed.is_empty() {
+    return SvgReference::Empty;
+  }
+  if trimmed.starts_with('#') {
+    return SvgReference::Fragment;
+  }
+  if starts_with_case_insensitive(trimmed, "data:") {
+    return SvgReference::DataUrl {
+      too_large: trimmed.len() > MAX_SVG_GLYPH_DATA_URL_BYTES,
+    };
+  }
+  SvgReference::External
+}
+
+fn starts_with_case_insensitive(value: &str, prefix: &str) -> bool {
+  value
+    .get(..prefix.len())
+    .map(|s| s.eq_ignore_ascii_case(prefix))
+    .unwrap_or(false)
 }
 
 fn inject_current_color(svg: &str, text_color: Rgba) -> Option<String> {
