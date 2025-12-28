@@ -8531,14 +8531,52 @@ fn find_matching_rules<'a>(
       let slot_node = unsafe { &**slot_ptr };
       let slot_ancestors = dom_maps.ancestors_for(slot_info.slot_node_id);
       let slot_ref = ElementRef::with_ancestors(slot_node, &slot_ancestors);
-      let slot_matches = if let Some(scope_root) = &scope_for_rule {
+      let slot_shadow_host = shadow_host_ref(slot_node, &slot_ancestors);
+      let mut slot_matches = if let Some(scope_root) = &scope_for_rule {
         let scope_ref = ElementRef::with_ancestors(scope_root.root, &scope_root.ancestors);
-        context.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
-          matches_selector(prelude, 0, None, &slot_ref, ctx)
+        with_shadow_host(&mut context, slot_shadow_host, |ctx| {
+          ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
+            matches_selector(prelude, 0, None, &slot_ref, ctx)
+          })
         })
       } else {
-        matches_selector(prelude, 0, None, &slot_ref, &mut context)
+        with_shadow_host(&mut context, slot_shadow_host, |ctx| {
+          matches_selector(prelude, 0, None, &slot_ref, ctx)
+        })
       };
+      if !slot_matches && selector_contains_host_context(prelude) {
+        slot_matches = with_shadow_host(&mut context, slot_shadow_host, |ctx| {
+          ctx.with_featureless(false, |ctx| {
+            matches_selector(prelude, 0, None, &slot_ref, ctx)
+          })
+        });
+      }
+      if !slot_matches && selector_targets_shadow_host(prelude) {
+        // :host and :host-context() in the prelude should be evaluated against the shadow host,
+        // not the slot element itself.
+        if let Some(host_ref) = slot_shadow_host {
+          let mut host_matches = if let Some(scope_root) = &scope_for_rule {
+            let scope_ref = ElementRef::with_ancestors(scope_root.root, &scope_root.ancestors);
+            with_shadow_host(&mut context, slot_shadow_host, |ctx| {
+              ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
+                matches_selector(prelude, 0, None, &host_ref, ctx)
+              })
+            })
+          } else {
+            with_shadow_host(&mut context, slot_shadow_host, |ctx| {
+              matches_selector(prelude, 0, None, &host_ref, ctx)
+            })
+          };
+          if !host_matches && selector_contains_host_context(prelude) {
+            host_matches = with_shadow_host(&mut context, slot_shadow_host, |ctx| {
+              ctx.with_featureless(false, |ctx| {
+                matches_selector(prelude, 0, None, &host_ref, ctx)
+              })
+            });
+          }
+          slot_matches = host_matches;
+        }
+      }
       if !slot_matches {
         continue;
       }

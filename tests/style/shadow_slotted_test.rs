@@ -172,3 +172,76 @@ fn slotted_rule_targets_named_slot() {
   assert_eq!(foo.styles.color, Rgba::rgb(10, 20, 30));
   assert_eq!(bar.styles.color, Rgba::rgb(0, 0, 255));
 }
+
+#[test]
+fn slotted_prelude_honors_host_selector() {
+  let html = r#"
+    <div class="ctx">
+      <div id="host-with" class="foo">
+        <template shadowroot="open">
+          <style>
+            :host(.foo) slot::slotted(.a) { color: rgb(10, 20, 30); }
+          </style>
+          <slot></slot>
+        </template>
+        <span id="light-with" class="a">Light</span>
+      </div>
+      <div id="host-without">
+        <template shadowroot="open">
+          <style>
+            :host(.foo) slot::slotted(.a) { color: rgb(10, 20, 30); }
+          </style>
+          <slot></slot>
+        </template>
+        <span id="light-without" class="a">Light</span>
+      </div>
+    </div>
+  "#;
+  let dom = dom::parse_html(html).expect("parse html");
+  let stylesheet = parse_stylesheet("").expect("empty stylesheet");
+  let styled = apply_styles(&dom, &stylesheet);
+
+  let light_with = find_by_id(&styled, "light-with").expect("slotted element in matching host");
+  let light_without =
+    find_by_id(&styled, "light-without").expect("slotted element in non-matching host");
+
+  assert_eq!(light_with.styles.color, Rgba::rgb(10, 20, 30));
+  assert_ne!(light_without.styles.color, Rgba::rgb(10, 20, 30));
+}
+
+#[test]
+fn slotted_prelude_honors_host_context_selector() {
+  let html = r#"
+    <div class="ctx">
+      <div id="host-inside">
+        <template shadowroot="open">
+          <style>
+            :host-context(.ctx) ::slotted(.a) { color: rgb(50, 60, 70); }
+          </style>
+          <slot></slot>
+        </template>
+        <span id="light-inside" class="a">Light</span>
+      </div>
+    </div>
+    <div id="host-outside">
+      <template shadowroot="open">
+        <style>
+          :host-context(.ctx) ::slotted(.a) { color: rgb(50, 60, 70); }
+        </style>
+        <slot></slot>
+      </template>
+      <span id="light-outside" class="a">Light</span>
+    </div>
+  "#;
+  let dom = dom::parse_html(html).expect("parse html");
+  let stylesheet = parse_stylesheet("").expect("empty stylesheet");
+  let styled = apply_styles(&dom, &stylesheet);
+
+  let light_inside =
+    find_by_id(&styled, "light-inside").expect("slotted element inside matching context");
+  let light_outside =
+    find_by_id(&styled, "light-outside").expect("slotted element outside matching context");
+
+  assert_eq!(light_inside.styles.color, Rgba::rgb(50, 60, 70));
+  assert_ne!(light_outside.styles.color, Rgba::rgb(50, 60, 70));
+}
