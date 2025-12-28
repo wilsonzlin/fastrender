@@ -8,6 +8,7 @@ use fastrender::geometry::Rect;
 use fastrender::image_compare::{compare_images, decode_png, encode_png, CompareConfig};
 use fastrender::paint::display_list::BorderRadius;
 use fastrender::paint::display_list::FontVariation;
+use fastrender::paint::display_list::GlyphInstance;
 use fastrender::style::types::FontPalette;
 use fastrender::text::color_fonts::ColorFontRenderer;
 use fastrender::text::font_db::FontDatabase;
@@ -24,6 +25,18 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tiny_skia::Pixmap;
+
+fn glyph_instances(run: &fastrender::text::pipeline::ShapedRun) -> Vec<GlyphInstance> {
+  run
+    .glyphs
+    .iter()
+    .map(|g| GlyphInstance {
+      glyph_id: g.glyph_id,
+      offset: Point::new(g.x_offset, g.y_offset),
+      advance: g.x_advance,
+    })
+    .collect()
+}
 
 fn pixmap_to_rgba_image(pixmap: &Pixmap) -> RgbaImage {
   let width = pixmap.width();
@@ -533,9 +546,10 @@ fn test_draw_text_with_glyphs() {
     .collect();
 
   // Draw the glyphs
+  let glyphs = glyph_instances(run);
   canvas.draw_text(
     Point::new(10.0, 30.0),
-    &run.glyphs,
+    &glyphs,
     &run.font,
     run.font_size,
     Rgba::BLACK,
@@ -573,9 +587,10 @@ fn test_draw_text_colored() {
     .copied()
     .map(FontVariation::from)
     .collect();
+  let glyphs = glyph_instances(run);
   canvas.draw_text(
     Point::new(10.0, 35.0),
-    &run.glyphs,
+    &glyphs,
     &run.font,
     run.font_size,
     Rgba::rgb(255, 0, 0),
@@ -615,9 +630,10 @@ fn test_draw_text_with_opacity() {
     .copied()
     .map(FontVariation::from)
     .collect();
+  let glyphs = glyph_instances(run);
   canvas.draw_text(
     Point::new(10.0, 35.0),
-    &run.glyphs,
+    &glyphs,
     &run.font,
     run.font_size,
     Rgba::BLACK,
@@ -656,9 +672,10 @@ fn canvas_renders_color_fonts() {
     .collect();
 
   let mut canvas = Canvas::new(64, 64, Rgba::WHITE).unwrap();
+  let glyphs = glyph_instances(run);
   canvas.draw_text(
     Point::new(12.0, 48.0),
-    &run.glyphs,
+    &glyphs,
     &run.font,
     run.font_size * run.scale,
     Rgba::BLACK,

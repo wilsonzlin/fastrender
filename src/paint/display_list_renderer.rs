@@ -87,11 +87,8 @@ use crate::style::types::TextEmphasisShape;
 use crate::style::types::TextEmphasisStyle;
 use crate::style::types::TransformStyle;
 use crate::style::values::Length;
-use crate::text::font_db::FontStretch;
-use crate::text::font_db::FontStyle as DbFontStyle;
 use crate::text::font_db::LoadedFont;
 use crate::text::font_loader::FontContext;
-use crate::text::pipeline::GlyphPosition;
 use rayon::prelude::*;
 use std::time::Duration;
 use std::time::Instant;
@@ -3927,7 +3924,12 @@ impl DisplayListRenderer {
   }
 
   fn render_text(&mut self, item: &TextItem) -> Result<()> {
-    let Some(font) = self.resolve_font(item.font_id.as_ref()) else {
+    let Some(font) = item
+      .font
+      .as_deref()
+      .cloned()
+      .or_else(|| self.resolve_font(item.font_id.as_ref()))
+    else {
       return Err(
         RenderError::RasterizationFailed {
           reason: "Unable to resolve font for display list text".into(),
@@ -3953,22 +3955,9 @@ impl DisplayListRenderer {
       self.render_text_shadows(&paths, &bounds, item);
     }
 
-    let glyphs: Vec<GlyphPosition> = item
-      .glyphs
-      .iter()
-      .map(|g| GlyphPosition {
-        glyph_id: g.glyph_id,
-        cluster: 0,
-        x_offset: g.offset.x,
-        y_offset: g.offset.y,
-        x_advance: g.advance,
-        y_advance: 0.0,
-      })
-      .collect();
-
     self.canvas.draw_text(
       item.origin,
-      &glyphs,
+      &item.glyphs,
       &font,
       item.font_size,
       item.color,
@@ -4427,23 +4416,14 @@ impl DisplayListRenderer {
     let inline_vertical = emphasis.inline_vertical;
     if let TextEmphasisStyle::String(_) = emphasis.style {
       if let Some(text) = &emphasis.text {
-        let font = self.resolve_font(text.font_id.as_ref()).ok_or_else(|| {
-          RenderError::RasterizationFailed {
+        let font = text
+          .font
+          .as_deref()
+          .cloned()
+          .or_else(|| self.resolve_font(text.font_id.as_ref()))
+          .ok_or_else(|| RenderError::RasterizationFailed {
             reason: "Unable to resolve font for emphasis string".into(),
-          }
-        })?;
-        let glyphs: Vec<GlyphPosition> = text
-          .glyphs
-          .iter()
-          .map(|g| GlyphPosition {
-            glyph_id: g.glyph_id,
-            cluster: 0,
-            x_offset: g.offset.x,
-            y_offset: g.offset.y,
-            x_advance: g.advance,
-            y_advance: 0.0,
-          })
-          .collect();
+          })?;
         for mark in &emphasis.marks {
           let mark_origin = if inline_vertical {
             Point::new(
@@ -4458,7 +4438,7 @@ impl DisplayListRenderer {
           };
           self.canvas.draw_text(
             mark_origin,
-            &glyphs,
+            &text.glyphs,
             &font,
             text.font_size,
             emphasis.color,
@@ -4751,39 +4731,12 @@ impl DisplayListRenderer {
   }
 
   fn resolve_font(&self, font_id: Option<&FontId>) -> Option<LoadedFont> {
-    let mut families = Vec::new();
-    let (weight, italic, oblique, stretch) = match font_id {
-      Some(id) => {
-        families.push(id.family.clone());
-        (
-          id.weight,
-          matches!(id.style, DbFontStyle::Italic),
-          matches!(id.style, DbFontStyle::Oblique),
-          id.stretch,
-        )
+    if let Some(id) = font_id {
+      if let Some(font) = self.font_ctx.get_font_by_id(*id) {
+        return Some(font);
       }
-      None => (400, false, false, FontStretch::Normal),
-    };
-
-    if families.is_empty() {
-      families.push("sans-serif".to_string());
     }
-
-    self
-      .font_ctx
-      .get_font_full(
-        &families,
-        weight,
-        if italic {
-          DbFontStyle::Italic
-        } else if oblique {
-          DbFontStyle::Oblique
-        } else {
-          DbFontStyle::Normal
-        },
-        stretch,
-      )
-      .or_else(|| self.font_ctx.get_sans_serif())
+    self.font_ctx.get_sans_serif()
   }
 
   fn image_to_pixmap(&self, item: &ImageItem) -> Option<Pixmap> {
@@ -6995,12 +6948,7 @@ mod tests {
       }],
       font_size: 20.0,
       advance_width: 14.0,
-      font_id: Some(FontId {
-        family: font.family.clone(),
-        weight: font.weight.value(),
-        style: font.style,
-        stretch: font.stretch,
-      }),
+      font_id: None,
       font: Some(Arc::new(font.clone())),
       variations: Vec::new(),
       synthetic_bold: 0.0,
@@ -7062,12 +7010,7 @@ mod tests {
       }],
       font_size: 20.0,
       advance_width: 14.0,
-      font_id: Some(FontId {
-        family: font.family.clone(),
-        weight: font.weight.value(),
-        style: font.style,
-        stretch: font.stretch,
-      }),
+      font_id: None,
       font: Some(Arc::new(font.clone())),
       variations: Vec::new(),
       synthetic_bold: 0.0,
@@ -7157,12 +7100,7 @@ mod tests {
       }],
       font_size: 20.0,
       advance_width: 14.0,
-      font_id: Some(FontId {
-        family: font.family.clone(),
-        weight: font.weight.value(),
-        style: font.style,
-        stretch: font.stretch,
-      }),
+      font_id: None,
       font: Some(Arc::new(font.clone())),
       variations: Vec::new(),
       synthetic_bold: 0.0,
@@ -7232,12 +7170,7 @@ mod tests {
       }],
       font_size: 20.0,
       advance_width: 14.0,
-      font_id: Some(FontId {
-        family: font.family.clone(),
-        weight: font.weight.value(),
-        style: font.style,
-        stretch: font.stretch,
-      }),
+      font_id: None,
       font: Some(Arc::new(font.clone())),
       variations: Vec::new(),
       synthetic_bold: 0.0,

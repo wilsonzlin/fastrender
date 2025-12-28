@@ -690,11 +690,6 @@ impl DomMaps {
   }
 }
 
-fn containing_scope_host_id(dom_maps: &DomMaps, node: &DomNode) -> Option<Option<usize>> {
-  let node_id = dom_maps.id_map.get(&(node as *const DomNode)).copied()?;
-  Some(dom_maps.containing_shadow_root(node_id))
-}
-
 fn build_slot_maps<'a>(
   assignment: &'a SlotAssignment,
   dom_maps: &'a DomMaps,
@@ -3278,63 +3273,60 @@ fn match_part_rules<'a>(
       names.as_slice()
     };
 
-    if let Some(scope_host) = containing_scope_host_id(dom_maps, host) {
-      if let Some((rules, allow_shadow_host)) =
-        scope_rule_index_with_shadow_host(scopes, scope_host)
-      {
-        if rules.part_pseudos.is_empty() {
-          names = mapped_names;
-          if names.is_empty() {
-            break;
-          }
-          continue;
+    let scope_host = containing_scope_host_id(dom_maps, host);
+    if let Some((rules, allow_shadow_host)) = scope_rule_index_with_shadow_host(scopes, scope_host) {
+      if rules.part_pseudos.is_empty() {
+        names = mapped_names;
+        if names.is_empty() {
+          break;
         }
+        continue;
+      }
 
-        scratch.part_candidates.clear();
-        scratch.part_seen.reset();
+      scratch.part_candidates.clear();
+      scratch.part_seen.reset();
+      for name in visible_names.iter() {
+        if let Some(list) = rules.part_lookup.get(name.as_str()) {
+          for &idx in list {
+            if scratch.part_seen.insert(idx) {
+              scratch.part_candidates.push(idx);
+            }
+          }
+        }
+      }
+
+      if !scratch.part_candidates.is_empty() {
+        let mut name_set: HashSet<&str> = HashSet::new();
         for name in visible_names.iter() {
-          if let Some(list) = rules.part_lookup.get(name.as_str()) {
-            for &idx in list {
-              if scratch.part_seen.insert(idx) {
-                scratch.part_candidates.push(idx);
-              }
-            }
-          }
+          name_set.insert(name.as_str());
         }
 
-        if !scratch.part_candidates.is_empty() {
-          let mut name_set: HashSet<&str> = HashSet::new();
-          for name in visible_names.iter() {
-            name_set.insert(name.as_str());
+        let slot_map = match scope_host {
+          Some(host_id) => slot_map_for_host(host_id),
+          None => current_slot_map,
+        };
+
+        let candidates = scratch.part_candidates.clone();
+        for idx in candidates {
+          let info = &rules.part_pseudos[idx];
+          if !name_set.contains(info.required.as_str()) {
+            continue;
           }
-
-          let slot_map = match scope_host {
-            Some(host_id) => slot_map_for_host(host_id),
-            None => current_slot_map,
-          };
-
-          let candidates = scratch.part_candidates.clone();
-          for idx in candidates {
-            let info = &rules.part_pseudos[idx];
-            if !name_set.contains(info.required.as_str()) {
-              continue;
-            }
-            // allow_shadow_host prevents document-scope ::part selectors from exposing :host context.
-            let part_matches = find_pseudo_element_rules(
-              host,
-              rules,
-              selector_caches,
-              scratch,
-              host_ancestors,
-              slot_map,
-              &info.pseudo,
-              allow_shadow_host,
-            );
-            for rule in part_matches {
-              if let Some(pos) = matched_by_order.get(&rule.order).copied() {
-                if rule.specificity > matched[pos].specificity {
-                  matched[pos].specificity = rule.specificity;
-                }
+          // allow_shadow_host prevents document-scope ::part selectors from exposing :host context.
+          let part_matches = find_pseudo_element_rules(
+            host,
+            rules,
+            selector_caches,
+            scratch,
+            host_ancestors,
+            slot_map,
+            &info.pseudo,
+            allow_shadow_host,
+          );
+          for rule in part_matches {
+            if let Some(pos) = matched_by_order.get(&rule.order).copied() {
+              if rule.specificity > matched[pos].specificity {
+                matched[pos].specificity = rule.specificity;
               }
             }
           }
@@ -4230,7 +4222,7 @@ fn apply_styles_internal_with_ancestors<'a>(
 
   let mut starting_styles = StartingStyleSet::default();
   if let Some(mut start) = starting_base {
-    let (before, after, marker, _, _) = compute_pseudo_styles(
+    let (before, after, marker, first_line, first_letter) = compute_pseudo_styles(
       node,
       rule_scopes,
       scope_host,
@@ -4251,6 +4243,8 @@ fn apply_styles_internal_with_ancestors<'a>(
       before,
       after,
       marker,
+      first_line,
+      first_letter,
     };
   }
 

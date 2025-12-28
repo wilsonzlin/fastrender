@@ -625,7 +625,7 @@ impl From<rustybuzz::Variation> for FontVariation {
 ///
 /// Represents shaped text ready for rendering. The glyphs have already
 /// been positioned by the text shaping system.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct TextItem {
   /// Position to draw text (baseline origin)
   pub origin: Point,
@@ -804,7 +804,7 @@ pub fn list_marker_bounds(item: &ListMarkerItem) -> Rect {
 }
 
 /// List marker paint item
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ListMarkerItem {
   /// Origin in CSS px (baseline-aligned)
   pub origin: Point,

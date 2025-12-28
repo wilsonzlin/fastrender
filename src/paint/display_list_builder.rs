@@ -58,7 +58,6 @@ use crate::paint::display_list::EmphasisMark;
 use crate::paint::display_list::EmphasisText;
 use crate::paint::display_list::FillRectItem;
 use crate::paint::display_list::FillRoundedRectItem;
-use crate::paint::display_list::FontId;
 use crate::paint::display_list::FontVariation;
 use crate::paint::display_list::GlyphInstance;
 use crate::paint::display_list::GradientSpread;
@@ -3467,7 +3466,6 @@ impl DisplayListBuilder {
         pen_x
       };
       let glyphs = self.glyphs_from_run(run, origin_x, baseline_y);
-      let font_id = self.font_id_from_run(run);
       let emphasis =
         style.and_then(|s| self.build_emphasis(run, s, origin_x, baseline_y, inline_vertical));
       let variations: Vec<FontVariation> = run
@@ -3484,7 +3482,7 @@ impl DisplayListBuilder {
         shadows: shadows.to_vec(),
         font_size: run.font_size,
         advance_width: run.advance,
-        font_id: Some(font_id),
+        font_id: None,
         font: Some(run.font.clone()),
         variations,
         synthetic_bold: run.synthetic_bold,
@@ -3515,7 +3513,6 @@ impl DisplayListBuilder {
       };
       let glyphs =
         self.glyphs_from_run_vertical(run, block_baseline, run_origin_inline, inline_start);
-      let font_id = self.font_id_from_run(run);
       let emphasis =
         style.and_then(|s| self.build_emphasis(run, s, block_baseline, run_origin_inline, true));
       let variations: Vec<FontVariation> = run
@@ -3532,7 +3529,7 @@ impl DisplayListBuilder {
         shadows: shadows.to_vec(),
         font_size: run.font_size,
         advance_width: run.advance,
-        font_id: Some(font_id),
+        font_id: None,
         font: Some(run.font.clone()),
         variations,
         synthetic_bold: run.synthetic_bold,
@@ -3563,7 +3560,6 @@ impl DisplayListBuilder {
         pen_x
       };
       let glyphs = self.glyphs_from_run(run, origin_x, baseline_y);
-      let font_id = self.font_id_from_run(run);
       let emphasis =
         style.and_then(|s| self.build_emphasis(run, s, origin_x, baseline_y, inline_vertical));
       let variations: Vec<FontVariation> = run
@@ -3578,7 +3574,7 @@ impl DisplayListBuilder {
         color,
         shadows: shadows.to_vec(),
         advance_width: run.advance,
-        font_id: Some(font_id),
+        font_id: None,
         palette_index: run.palette_index,
         font: Some(run.font.clone()),
         variations,
@@ -3610,7 +3606,6 @@ impl DisplayListBuilder {
       };
       let glyphs =
         self.glyphs_from_run_vertical(run, block_baseline, run_origin_inline, inline_start);
-      let font_id = self.font_id_from_run(run);
       let emphasis =
         style.and_then(|s| self.build_emphasis(run, s, block_baseline, run_origin_inline, true));
       let variations: Vec<FontVariation> = run
@@ -3625,7 +3620,7 @@ impl DisplayListBuilder {
         color,
         shadows: shadows.to_vec(),
         advance_width: run.advance,
-        font_id: Some(font_id),
+        font_id: None,
         palette_index: run.palette_index,
         font: Some(run.font.clone()),
         variations,
@@ -4136,7 +4131,6 @@ impl DisplayListBuilder {
         mark_style.font_size = style.font_size * 0.5;
         match self.shaper.shape(s, &mark_style, &self.font_ctx) {
           Ok(mark_runs) if !mark_runs.is_empty() => {
-            let mark_font_id = self.font_id_from_run(&mark_runs[0]);
             let mut glyphs = Vec::new();
             let mut width = 0.0;
             let mut ascent: f32 = 0.0;
@@ -4174,7 +4168,7 @@ impl DisplayListBuilder {
             Some(EmphasisText {
               glyphs,
               font: Some(mark_runs[0].font.clone()),
-              font_id: Some(mark_font_id),
+              font_id: None,
               font_size: mark_style.font_size,
               width,
               height: ascent + descent,
@@ -4203,15 +4197,6 @@ impl DisplayListBuilder {
       inline_vertical,
       text,
     })
-  }
-
-  fn font_id_from_run(&self, run: &ShapedRun) -> FontId {
-    FontId {
-      family: run.font.family.clone(),
-      weight: run.font.weight.value(),
-      style: run.font.style,
-      stretch: run.font.stretch,
-    }
   }
 
   fn text_shadows_from_style(style: Option<&ComputedStyle>) -> Vec<TextShadowItem> {
