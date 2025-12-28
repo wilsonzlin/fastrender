@@ -1861,13 +1861,30 @@ impl FastRenderPool {
     self.inner.available.notify_one();
   }
 
-  fn with_renderer<F, T>(&self, op: F) -> Result<T>
+  pub(crate) fn with_renderer<F, T>(&self, op: F) -> Result<T>
   where
     F: FnOnce(&mut FastRender) -> Result<T>,
   {
-    let mut renderer = self.acquire_renderer()?;
-    let result = op(&mut renderer);
-    self.release_renderer(renderer);
+    struct RendererGuard<'a> {
+      pool: &'a FastRenderPool,
+      renderer: Option<FastRender>,
+    }
+
+    impl<'a> Drop for RendererGuard<'a> {
+      fn drop(&mut self) {
+        if let Some(renderer) = self.renderer.take() {
+          self.pool.release_renderer(renderer);
+        }
+      }
+    }
+
+    let renderer = self.acquire_renderer()?;
+    let mut guard = RendererGuard {
+      pool: self,
+      renderer: Some(renderer),
+    };
+    let result = op(guard.renderer.as_mut().expect("renderer dropped"));
+    drop(guard);
     result
   }
 

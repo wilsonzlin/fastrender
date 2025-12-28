@@ -17,10 +17,11 @@ use common::args::{
 };
 use common::media_prefs::MediaPreferences;
 use common::render_pipeline::{
-  build_http_fetcher, build_render_configs, build_renderer_with_fetcher, decode_html_resource,
-  follow_client_redirects, format_error_with_chain, log_diagnostics, read_cached_document,
-  render_document, RenderConfigBundle, RenderSurface,
+  build_http_fetcher, build_render_configs, decode_html_resource, follow_client_redirects,
+  format_error_with_chain, log_diagnostics, read_cached_document, render_document,
+  RenderConfigBundle, RenderSurface,
 };
+use fastrender::api::{FastRenderPool, FastRenderPoolConfig};
 use fastrender::image_output::encode_image;
 use fastrender::resource::normalize_user_agent_for_log;
 use fastrender::resource::url_to_filename;
@@ -132,20 +133,13 @@ struct Args {
 fn render_page(
   url: &str,
   output: &Path,
-  timeout_secs: Option<u64>,
   bundle: RenderConfigBundle,
-  user_agent: &str,
-  accept_language: &str,
+  render_pool: FastRenderPool,
+  fetcher: Arc<dyn ResourceFetcher>,
   output_format: OutputFormat,
   base_url_override: Option<String>,
 ) -> Result<()> {
-  let http = build_http_fetcher(user_agent, accept_language, timeout_secs);
-  #[cfg(feature = "disk_cache")]
-  let fetcher: Arc<dyn ResourceFetcher> = Arc::new(DiskCachingFetcher::new(http, ASSET_CACHE_DIR));
-  #[cfg(not(feature = "disk_cache"))]
-  let fetcher: Arc<dyn ResourceFetcher> = Arc::new(CachingFetcher::new(http));
-
-  let mut renderer = build_renderer_with_fetcher(bundle.config, fetcher.clone())?;
+  let RenderConfigBundle { options, .. } = bundle;
   let mut log = |line: &str| println!("{line}");
 
   let prepared = if url.starts_with("file://") {
@@ -161,7 +155,8 @@ fn render_page(
   };
   let prepared = prepared.with_base_override(base_url_override.as_deref());
 
-  let render_result = render_document(&mut renderer, prepared, &bundle.options)?;
+  let render_result =
+    render_pool.with_renderer(|renderer| render_document(renderer, prepared, &options))?;
   log_diagnostics(&render_result.diagnostics, &mut log);
 
   let image_data = encode_image(&render_result.pixmap, output_format)?;
@@ -202,8 +197,6 @@ fn try_main(args: Args) -> Result<()> {
     }
   }
 
-  let timeout_secs = args.timeout.seconds(Some(0));
-
   eprintln!(
     "User-Agent: {}\nAccept-Language: {}\nViewport: {}x{} @{}x, scroll ({}, {})\nOutput: {} ({})",
     normalize_user_agent_for_log(&args.user_agent),
@@ -216,6 +209,8 @@ fn try_main(args: Args) -> Result<()> {
     output,
     output_ext
   );
+
+  let timeout_secs = args.timeout.seconds(Some(0));
 
   let RenderConfigBundle { config, options } = build_render_configs(&RenderSurface {
     viewport: (width, height),
@@ -234,13 +229,26 @@ fn try_main(args: Args) -> Result<()> {
     trace_output: args.trace_out.clone(),
   });
 
+  let http = build_http_fetcher(&args.user_agent, &args.accept_language, timeout_secs);
+  #[cfg(feature = "disk_cache")]
+  let fetcher: Arc<dyn ResourceFetcher> = Arc::new(DiskCachingFetcher::new(http, ASSET_CACHE_DIR));
+  #[cfg(not(feature = "disk_cache"))]
+  let fetcher: Arc<dyn ResourceFetcher> = Arc::new(CachingFetcher::new(http));
+
+  let render_pool = FastRenderPool::with_config(
+    FastRenderPoolConfig::new()
+      .with_renderer_config(config.clone())
+      .with_fetcher(Arc::clone(&fetcher))
+      .with_pool_size(1),
+  )?;
+
   let (tx, rx) = channel();
   let url_clone = args.url.clone();
   let output_path = output_path.to_path_buf();
-  let user_agent = args.user_agent.clone();
-  let accept_language = args.accept_language.clone();
   let base_url_override = args.base_url.base_url.clone();
   let output_format = output_format;
+  let render_pool = render_pool.clone();
+  let fetcher = Arc::clone(&fetcher);
 
   thread::Builder::new()
     .name("fetch_and_render-worker".to_string())
@@ -249,10 +257,9 @@ fn try_main(args: Args) -> Result<()> {
       let res = render_page(
         &url_clone,
         &output_path,
-        timeout_secs,
         RenderConfigBundle { config, options },
-        &user_agent,
-        &accept_language,
+        render_pool,
+        fetcher,
         output_format,
         base_url_override,
       );

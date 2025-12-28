@@ -9,10 +9,10 @@ mod common;
 use clap::{Parser, ValueEnum};
 use common::args::ResourceAccessArgs;
 use common::render_pipeline::{
-  build_render_configs, build_renderer_with_fetcher, follow_client_redirects,
-  format_error_with_chain, log_diagnostics, read_cached_document, render_document_with_artifacts,
-  RenderConfigBundle, RenderSurface,
+  build_render_configs, follow_client_redirects, format_error_with_chain, log_diagnostics,
+  read_cached_document, render_document_with_artifacts, RenderConfigBundle, RenderSurface,
 };
+use fastrender::api::{FastRenderPool, FastRenderPoolConfig};
 use fastrender::debug::runtime::RuntimeToggles;
 use fastrender::dom::{DomNode, DomNodeType};
 use fastrender::image_output::encode_image;
@@ -388,6 +388,14 @@ fn main() {
     trace_output: None,
   });
 
+  let render_pool = FastRenderPool::with_config(
+    FastRenderPoolConfig::new()
+      .with_renderer_config(config.clone())
+      .with_fetcher(Arc::clone(&fetcher))
+      .with_pool_size(args.jobs),
+  )
+  .expect("create render pool");
+
   println!(
     "Rendering {} pages ({} parallel)...",
     entries.len(),
@@ -407,7 +415,7 @@ fn main() {
   let results: Mutex<Vec<PageResult>> = Mutex::new(Vec::new());
 
   // Use a thread pool with limited concurrency
-  let pool = rayon::ThreadPoolBuilder::new()
+  let thread_pool = rayon::ThreadPoolBuilder::new()
     .num_threads(args.jobs)
     .build()
     .expect("create thread pool");
@@ -418,14 +426,14 @@ fn main() {
   let diagnostics_json = args.diagnostics_json;
   let artifact_request = dump_mode.artifact_request();
 
-  pool.scope(|s| {
+  thread_pool.scope(|s| {
     for path in &entries {
       let results = &results;
       let path = path.clone();
       let fetcher = Arc::clone(&fetcher);
       let user_agent = args.user_agent.clone();
-      let config = config.clone();
       let options = options.clone();
+      let render_pool = render_pool.clone();
       let verbose = args.verbose;
 
       s.spawn(move |_| {
@@ -479,12 +487,10 @@ fn main() {
         let _ = writeln!(log, "Final resource base: {}", doc.base_url);
 
         let worker_name = name.clone();
-        let render_opts = options.clone();
-        let mut render_config = config.clone();
-        let render_fetcher = fetcher.clone();
+        let mut render_opts = options.clone();
         let has_page_rule = doc.html.to_ascii_lowercase().contains("@page");
         if has_page_rule {
-          render_config.fit_canvas_to_content = true;
+          render_opts.fit_canvas_to_content = Some(true);
           let _ = writeln!(log, "Detected @page rule; fitting canvas to content");
         }
         let doc_for_render = doc.clone();
@@ -499,13 +505,9 @@ fn main() {
 
         let run_render = move || -> Result<RenderOutcome, Status> {
           let render_work = move || -> Result<RenderOutcome, fastrender::Error> {
-            let mut renderer = build_renderer_with_fetcher(render_config, render_fetcher)?;
-            let report = render_document_with_artifacts(
-              &mut renderer,
-              doc_for_render,
-              &render_opts,
-              render_request,
-            )?;
+            let report = render_pool.with_renderer(|renderer| {
+              render_document_with_artifacts(renderer, doc_for_render, &render_opts, render_request)
+            })?;
             let png = encode_image(&report.pixmap, OutputFormat::Png)?;
             Ok(RenderOutcome {
               png,
