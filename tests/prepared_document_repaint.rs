@@ -1,10 +1,10 @@
 use std::time::Duration;
 
+use fastrender::scroll::ScrollState;
+use fastrender::style::types::Overflow;
 use fastrender::{
   FastRender, FragmentContent, FragmentNode, Point, PreparedPaintOptions, RenderOptions, Result,
 };
-use fastrender::style::types::Overflow;
-use fastrender::scroll::ScrollState;
 
 fn pixel(pixmap: &fastrender::Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
   let px = pixmap.pixel(x, y).unwrap();
@@ -123,13 +123,13 @@ fn repaint_with_element_scroll_offsets_changes_pixels() -> Result<()> {
   )?;
 
   let mut scrolled_state = ScrollState::with_viewport(Point::ZERO);
-  scrolled_state.elements.insert(scroller_id, Point::new(0.0, 100.0));
-  let scrolled = prepared.paint_with_options(
-    PreparedPaintOptions::new().with_scroll_state(scrolled_state.clone()),
-  )?;
-  let scrolled_repeat = prepared.paint_with_options(
-    PreparedPaintOptions::new().with_scroll_state(scrolled_state),
-  )?;
+  scrolled_state
+    .elements
+    .insert(scroller_id, Point::new(0.0, 100.0));
+  let scrolled = prepared
+    .paint_with_options(PreparedPaintOptions::new().with_scroll_state(scrolled_state.clone()))?;
+  let scrolled_repeat =
+    prepared.paint_with_options(PreparedPaintOptions::new().with_scroll_state(scrolled_state))?;
   let base_repeat = prepared.paint_with_options(
     PreparedPaintOptions::new().with_scroll_state(ScrollState::with_viewport(Point::ZERO)),
   )?;

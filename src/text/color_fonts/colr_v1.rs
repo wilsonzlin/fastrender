@@ -1,17 +1,11 @@
 use super::{cpal, ColorFontCaches, ColorGlyphRaster, FontKey};
 use crate::style::color::Rgba;
 use crate::text::font_db::LoadedFont;
-use crate::text::variations::normalized_coords;
 use read_fonts::tables::colr::{
   ClipBox, ColorLine, Colr, CompositeMode, Extend, Paint, PaintId, VarColorLine,
 };
-use read_fonts::tables::variations::{
-  DeltaSetIndex, DeltaSetIndexMap, FloatItemDelta, FloatItemDeltaTarget, ItemVariationStore,
-  NO_VARIATION_INDEX,
-};
 use read_fonts::types::{F2Dot14, Fixed, GlyphId};
 use read_fonts::{FontRef, TableProvider};
-use rustybuzz::Variation;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use tiny_skia::{
@@ -29,7 +23,6 @@ pub fn render_colr_glyph(
   palette_index: u16,
   text_color: Rgba,
   synthetic_oblique: f32,
-  variations: &[Variation],
   caches: &Arc<Mutex<ColorFontCaches>>,
 ) -> Option<ColorGlyphRaster> {
   let font_ref = FontRef::from_index(font.data.as_slice(), font.index).ok()?;
@@ -52,23 +45,11 @@ pub fn render_colr_glyph(
   let scale = font_size / face.units_per_em() as f32;
   let base_transform = Transform::from_row(scale, 0.0, synthetic_oblique * scale, -scale, 0.0, 0.0);
 
-  let normalized = normalized_coords(face, variations);
-  let normalized_coords: Vec<_> = normalized
-    .ordered
-    .iter()
-    .map(|v| F2Dot14::from_f32(*v))
-    .collect();
-  let var_index_map = colr.var_index_map().and_then(|map| map.ok());
-  let variation_state = colr
-    .item_variation_store()
-    .and_then(|store| store.ok())
-    .map(|store| VariationState::new(store, var_index_map, normalized_coords));
-
   let clip_path = colr
     .v1_clip_box(GlyphId::from(glyph_id.0 as u32))
     .ok()
     .flatten()
-    .and_then(|clip| build_clip_path(clip, base_transform, variation_state.as_ref()));
+    .and_then(|clip| build_clip_path(clip, base_transform));
 
   let mut commands = Vec::new();
   let mut seen = HashSet::new();
@@ -78,7 +59,6 @@ pub fn render_colr_glyph(
     palette: &palette.colors,
     text_color,
     base_transform,
-    variations: variation_state,
   };
 
   renderer.walk_paint(
@@ -161,56 +141,12 @@ pub fn render_colr_glyph(
   })
 }
 
-#[derive(Clone)]
-struct VariationState<'a> {
-  coords: Vec<F2Dot14>,
-  map: Option<DeltaSetIndexMap<'a>>,
-  store: ItemVariationStore<'a>,
-}
-
-impl<'a> VariationState<'a> {
-  fn new(
-    store: ItemVariationStore<'a>,
-    map: Option<DeltaSetIndexMap<'a>>,
-    coords: Vec<F2Dot14>,
-  ) -> Self {
-    Self { coords, map, store }
-  }
-
-  fn delta_index(&self, base_index: u32, offset: u16) -> Option<DeltaSetIndex> {
-    let index = base_index.checked_add(offset as u32)?;
-    if index == NO_VARIATION_INDEX {
-      return None;
-    }
-    if let Some(map) = &self.map {
-      map.get(index).ok()
-    } else {
-      Some(DeltaSetIndex {
-        outer: (index >> 16) as u16,
-        inner: index as u16,
-      })
-    }
-  }
-
-  fn apply<T: FloatItemDeltaTarget>(&self, base: T, base_index: u32, offset: u16) -> f32 {
-    let base_value = base.apply_float_delta(FloatItemDelta::ZERO);
-    let Some(index) = self.delta_index(base_index, offset) else {
-      return base_value;
-    };
-    match self.store.compute_float_delta(index, &self.coords) {
-      Ok(delta) => base.apply_float_delta(delta),
-      Err(_) => base_value,
-    }
-  }
-}
-
 struct Renderer<'a, 'b> {
   face: &'a ttf_parser::Face<'a>,
   colr: &'b Colr<'a>,
   palette: &'b [Rgba],
   text_color: Rgba,
   base_transform: Transform,
-  variations: Option<VariationState<'a>>,
 }
 
 #[derive(Clone)]
@@ -239,14 +175,6 @@ enum Brush {
 }
 
 impl<'a, 'b> Renderer<'a, 'b> {
-  fn apply_variation<T: FloatItemDeltaTarget>(&self, base: T, base_index: u32, offset: u16) -> f32 {
-    if let Some(variations) = &self.variations {
-      variations.apply(base, base_index, offset)
-    } else {
-      base.apply_float_delta(FloatItemDelta::ZERO)
-    }
-  }
-
   fn walk_paint(
     &self,
     paint: Paint<'a>,
@@ -314,12 +242,12 @@ impl<'a, 'b> Renderer<'a, 'b> {
       Paint::VarTransform(paint_transform) => {
         let transform = paint_transform.transform().ok()?;
         let m = Transform::from_row(
-          self.apply_variation(transform.xx(), transform.var_index_base(), 0),
-          self.apply_variation(transform.yx(), transform.var_index_base(), 1),
-          self.apply_variation(transform.xy(), transform.var_index_base(), 2),
-          self.apply_variation(transform.yy(), transform.var_index_base(), 3),
-          self.apply_variation(transform.dx(), transform.var_index_base(), 4),
-          self.apply_variation(transform.dy(), transform.var_index_base(), 5),
+          fixed_to_f32(transform.xx()),
+          fixed_to_f32(transform.yx()),
+          fixed_to_f32(transform.xy()),
+          fixed_to_f32(transform.yy()),
+          fixed_to_f32(transform.dx()),
+          fixed_to_f32(transform.dy()),
         );
         let child = paint_transform.paint().ok()?;
         self.walk_paint(
@@ -349,8 +277,8 @@ impl<'a, 'b> Renderer<'a, 'b> {
       Paint::VarTranslate(paint_translate) => {
         let child = paint_translate.paint().ok()?;
         let m = Transform::from_translate(
-          self.apply_variation(paint_translate.dx(), paint_translate.var_index_base(), 0),
-          self.apply_variation(paint_translate.dy(), paint_translate.var_index_base(), 1),
+          paint_translate.dx().to_i16() as f32,
+          paint_translate.dy().to_i16() as f32,
         );
         self.walk_paint(
           child.clone(),
@@ -375,11 +303,7 @@ impl<'a, 'b> Renderer<'a, 'b> {
       }
       Paint::VarScale(scale) => {
         let child = scale.paint().ok()?;
-        let base = scale.var_index_base();
-        let m = Transform::from_scale(
-          self.apply_variation(scale.scale_x(), base, 0),
-          self.apply_variation(scale.scale_y(), base, 1),
-        );
+        let m = Transform::from_scale(scale.scale_x().to_f32(), scale.scale_y().to_f32());
         self.walk_paint(
           child.clone(),
           paint_identity(&child),
@@ -408,12 +332,11 @@ impl<'a, 'b> Renderer<'a, 'b> {
       }
       Paint::VarScaleAroundCenter(scale) => {
         let child = scale.paint().ok()?;
-        let base = scale.var_index_base();
         let m = scale_around_center(
-          self.apply_variation(scale.scale_x(), base, 0),
-          self.apply_variation(scale.scale_y(), base, 1),
-          self.apply_variation(scale.center_x(), base, 2),
-          self.apply_variation(scale.center_y(), base, 3),
+          scale.scale_x().to_f32(),
+          scale.scale_y().to_f32(),
+          scale.center_x().to_i16() as f32,
+          scale.center_y().to_i16() as f32,
         );
         self.walk_paint(
           child.clone(),
@@ -438,7 +361,7 @@ impl<'a, 'b> Renderer<'a, 'b> {
       }
       Paint::VarScaleUniform(scale) => {
         let child = scale.paint().ok()?;
-        let s = self.apply_variation(scale.scale(), scale.var_index_base(), 0);
+        let s = scale.scale().to_f32();
         self.walk_paint(
           child.clone(),
           paint_identity(&child),
@@ -468,13 +391,12 @@ impl<'a, 'b> Renderer<'a, 'b> {
       }
       Paint::VarScaleUniformAroundCenter(scale) => {
         let child = scale.paint().ok()?;
-        let base = scale.var_index_base();
-        let s = self.apply_variation(scale.scale(), base, 0);
+        let s = scale.scale().to_f32();
         let m = scale_around_center(
           s,
           s,
-          self.apply_variation(scale.center_x(), base, 1),
-          self.apply_variation(scale.center_y(), base, 2),
+          scale.center_x().to_i16() as f32,
+          scale.center_y().to_i16() as f32,
         );
         self.walk_paint(
           child.clone(),
@@ -499,8 +421,7 @@ impl<'a, 'b> Renderer<'a, 'b> {
       }
       Paint::VarRotate(rotate) => {
         let child = rotate.paint().ok()?;
-        let angle = self.apply_variation(rotate.angle(), rotate.var_index_base(), 0);
-        let m = Transform::from_rotate(rotate_degrees(F2Dot14::from_f32(angle)));
+        let m = Transform::from_rotate(rotate_degrees(rotate.angle()));
         self.walk_paint(
           child.clone(),
           paint_identity(&child),
@@ -528,15 +449,10 @@ impl<'a, 'b> Renderer<'a, 'b> {
       }
       Paint::VarRotateAroundCenter(rotate) => {
         let child = rotate.paint().ok()?;
-        let base = rotate.var_index_base();
         let m = rotate_around_center(
-          rotate_degrees(F2Dot14::from_f32(self.apply_variation(
-            rotate.angle(),
-            base,
-            0,
-          ))),
-          self.apply_variation(rotate.center_x(), base, 1),
-          self.apply_variation(rotate.center_y(), base, 2),
+          rotate_degrees(rotate.angle()),
+          rotate.center_x().to_i16() as f32,
+          rotate.center_y().to_i16() as f32,
         );
         self.walk_paint(
           child.clone(),
@@ -561,12 +477,7 @@ impl<'a, 'b> Renderer<'a, 'b> {
       }
       Paint::VarSkew(skew) => {
         let child = skew.paint().ok()?;
-        let base = skew.var_index_base();
-        let m = skew_transform(
-          F2Dot14::from_f32(self.apply_variation(skew.x_skew_angle(), base, 0)),
-          F2Dot14::from_f32(self.apply_variation(skew.y_skew_angle(), base, 1)),
-          None,
-        );
+        let m = skew_transform(skew.x_skew_angle(), skew.y_skew_angle(), None);
         self.walk_paint(
           child.clone(),
           paint_identity(&child),
@@ -597,13 +508,12 @@ impl<'a, 'b> Renderer<'a, 'b> {
       }
       Paint::VarSkewAroundCenter(skew) => {
         let child = skew.paint().ok()?;
-        let base = skew.var_index_base();
         let m = skew_transform(
-          F2Dot14::from_f32(self.apply_variation(skew.x_skew_angle(), base, 0)),
-          F2Dot14::from_f32(self.apply_variation(skew.y_skew_angle(), base, 1)),
+          skew.x_skew_angle(),
+          skew.y_skew_angle(),
           Some((
-            self.apply_variation(skew.center_x(), base, 2),
-            self.apply_variation(skew.center_y(), base, 3),
+            skew.center_x().to_i16() as f32,
+            skew.center_y().to_i16() as f32,
           )),
         );
         self.walk_paint(
@@ -646,7 +556,7 @@ impl<'a, 'b> Renderer<'a, 'b> {
       ))),
       Paint::VarSolid(solid) => Some(Brush::Solid(resolve_color(
         resolve_palette_color(solid.palette_index(), self.palette, self.text_color),
-        F2Dot14::from_f32(self.apply_variation(solid.alpha(), solid.var_index_base(), 0)),
+        solid.alpha(),
       ))),
       Paint::LinearGradient(gradient) => {
         let color_line = gradient.color_line().ok()?;
@@ -670,21 +580,15 @@ impl<'a, 'b> Renderer<'a, 'b> {
       }
       Paint::VarLinearGradient(gradient) => {
         let color_line = gradient.color_line().ok()?;
-        let (spread, stops) = resolve_var_color_line(
-          color_line,
-          self.palette,
-          self.text_color,
-          self.variations.as_ref(),
-        )?;
-        let base = gradient.var_index_base();
+        let (spread, stops) = resolve_var_color_line(color_line, self.palette, self.text_color)?;
         let start = map_point(
-          self.apply_variation(gradient.x0(), base, 0),
-          self.apply_variation(gradient.y0(), base, 1),
+          gradient.x0().to_i16() as f32,
+          gradient.y0().to_i16() as f32,
           combined,
         );
         let end = map_point(
-          self.apply_variation(gradient.x1(), base, 2),
-          self.apply_variation(gradient.y1(), base, 3),
+          gradient.x1().to_i16() as f32,
+          gradient.y1().to_i16() as f32,
           combined,
         );
         Some(Brush::LinearGradient {
@@ -719,25 +623,19 @@ impl<'a, 'b> Renderer<'a, 'b> {
       }
       Paint::VarRadialGradient(radial) => {
         let color_line = radial.color_line().ok()?;
-        let (spread, stops) = resolve_var_color_line(
-          color_line,
-          self.palette,
-          self.text_color,
-          self.variations.as_ref(),
-        )?;
-        let base = radial.var_index_base();
+        let (spread, stops) = resolve_var_color_line(color_line, self.palette, self.text_color)?;
         let c0 = map_point(
-          self.apply_variation(radial.x0(), base, 0),
-          self.apply_variation(radial.y0(), base, 1),
+          radial.x0().to_i16() as f32,
+          radial.y0().to_i16() as f32,
           combined,
         );
         let c1 = map_point(
-          self.apply_variation(radial.x1(), base, 3),
-          self.apply_variation(radial.y1(), base, 4),
+          radial.x1().to_i16() as f32,
+          radial.y1().to_i16() as f32,
           combined,
         );
-        let r0 = self.apply_variation(radial.radius0(), base, 2);
-        let r1 = self.apply_variation(radial.radius1(), base, 5);
+        let r0 = fixed_to_f32(radial.radius0().to_fixed());
+        let r1 = fixed_to_f32(radial.radius1().to_fixed());
         Some(Brush::RadialGradient {
           start: c0,
           end: c1,
@@ -766,12 +664,12 @@ impl<'a, 'b> Renderer<'a, 'b> {
       Paint::VarTransform(transform) => {
         let m = transform.transform().ok()?;
         let matrix = Transform::from_row(
-          self.apply_variation(m.xx(), m.var_index_base(), 0),
-          self.apply_variation(m.yx(), m.var_index_base(), 1),
-          self.apply_variation(m.xy(), m.var_index_base(), 2),
-          self.apply_variation(m.yy(), m.var_index_base(), 3),
-          self.apply_variation(m.dx(), m.var_index_base(), 4),
-          self.apply_variation(m.dy(), m.var_index_base(), 5),
+          fixed_to_f32(m.xx()),
+          fixed_to_f32(m.yx()),
+          fixed_to_f32(m.xy()),
+          fixed_to_f32(m.yy()),
+          fixed_to_f32(m.dx()),
+          fixed_to_f32(m.dy()),
         );
         self.resolve_brush(transform.paint().ok()?, combined.pre_concat(matrix))
       }
@@ -780,11 +678,7 @@ impl<'a, 'b> Renderer<'a, 'b> {
         self.resolve_brush(t.paint().ok()?, combined.pre_concat(m))
       }
       Paint::VarTranslate(t) => {
-        let base = t.var_index_base();
-        let m = Transform::from_translate(
-          self.apply_variation(t.dx(), base, 0),
-          self.apply_variation(t.dy(), base, 1),
-        );
+        let m = Transform::from_translate(t.dx().to_i16() as f32, t.dy().to_i16() as f32);
         self.resolve_brush(t.paint().ok()?, combined.pre_concat(m))
       }
       Paint::Scale(scale) => {
@@ -792,11 +686,7 @@ impl<'a, 'b> Renderer<'a, 'b> {
         self.resolve_brush(scale.paint().ok()?, combined.pre_concat(m))
       }
       Paint::VarScale(scale) => {
-        let base = scale.var_index_base();
-        let m = Transform::from_scale(
-          self.apply_variation(scale.scale_x(), base, 0),
-          self.apply_variation(scale.scale_y(), base, 1),
-        );
+        let m = Transform::from_scale(scale.scale_x().to_f32(), scale.scale_y().to_f32());
         self.resolve_brush(scale.paint().ok()?, combined.pre_concat(m))
       }
       Paint::ScaleAroundCenter(scale) => {
@@ -809,12 +699,11 @@ impl<'a, 'b> Renderer<'a, 'b> {
         self.resolve_brush(scale.paint().ok()?, combined.pre_concat(m))
       }
       Paint::VarScaleAroundCenter(scale) => {
-        let base = scale.var_index_base();
         let m = scale_around_center(
-          self.apply_variation(scale.scale_x(), base, 0),
-          self.apply_variation(scale.scale_y(), base, 1),
-          self.apply_variation(scale.center_x(), base, 2),
-          self.apply_variation(scale.center_y(), base, 3),
+          scale.scale_x().to_f32(),
+          scale.scale_y().to_f32(),
+          scale.center_x().to_i16() as f32,
+          scale.center_y().to_i16() as f32,
         );
         self.resolve_brush(scale.paint().ok()?, combined.pre_concat(m))
       }
@@ -826,7 +715,7 @@ impl<'a, 'b> Renderer<'a, 'b> {
         )
       }
       Paint::VarScaleUniform(scale) => {
-        let s = self.apply_variation(scale.scale(), scale.var_index_base(), 0);
+        let s = scale.scale().to_f32();
         self.resolve_brush(
           scale.paint().ok()?,
           combined.pre_concat(Transform::from_scale(s, s)),
@@ -843,13 +732,12 @@ impl<'a, 'b> Renderer<'a, 'b> {
         self.resolve_brush(scale.paint().ok()?, combined.pre_concat(m))
       }
       Paint::VarScaleUniformAroundCenter(scale) => {
-        let base = scale.var_index_base();
-        let s = self.apply_variation(scale.scale(), base, 0);
+        let s = scale.scale().to_f32();
         let m = scale_around_center(
           s,
           s,
-          self.apply_variation(scale.center_x(), base, 1),
-          self.apply_variation(scale.center_y(), base, 2),
+          scale.center_x().to_i16() as f32,
+          scale.center_y().to_i16() as f32,
         );
         self.resolve_brush(scale.paint().ok()?, combined.pre_concat(m))
       }
@@ -858,11 +746,7 @@ impl<'a, 'b> Renderer<'a, 'b> {
         self.resolve_brush(rotate.paint().ok()?, combined.pre_concat(m))
       }
       Paint::VarRotate(rotate) => {
-        let m = Transform::from_rotate(rotate_degrees(F2Dot14::from_f32(self.apply_variation(
-          rotate.angle(),
-          rotate.var_index_base(),
-          0,
-        ))));
+        let m = Transform::from_rotate(rotate_degrees(rotate.angle()));
         self.resolve_brush(rotate.paint().ok()?, combined.pre_concat(m))
       }
       Paint::RotateAroundCenter(rotate) => {
@@ -874,15 +758,10 @@ impl<'a, 'b> Renderer<'a, 'b> {
         self.resolve_brush(rotate.paint().ok()?, combined.pre_concat(m))
       }
       Paint::VarRotateAroundCenter(rotate) => {
-        let base = rotate.var_index_base();
         let m = rotate_around_center(
-          rotate_degrees(F2Dot14::from_f32(self.apply_variation(
-            rotate.angle(),
-            base,
-            0,
-          ))),
-          self.apply_variation(rotate.center_x(), base, 1),
-          self.apply_variation(rotate.center_y(), base, 2),
+          rotate_degrees(rotate.angle()),
+          rotate.center_x().to_i16() as f32,
+          rotate.center_y().to_i16() as f32,
         );
         self.resolve_brush(rotate.paint().ok()?, combined.pre_concat(m))
       }
@@ -891,12 +770,7 @@ impl<'a, 'b> Renderer<'a, 'b> {
         self.resolve_brush(skew.paint().ok()?, combined.pre_concat(m))
       }
       Paint::VarSkew(skew) => {
-        let base = skew.var_index_base();
-        let m = skew_transform(
-          F2Dot14::from_f32(self.apply_variation(skew.x_skew_angle(), base, 0)),
-          F2Dot14::from_f32(self.apply_variation(skew.y_skew_angle(), base, 1)),
-          None,
-        );
+        let m = skew_transform(skew.x_skew_angle(), skew.y_skew_angle(), None);
         self.resolve_brush(skew.paint().ok()?, combined.pre_concat(m))
       }
       Paint::SkewAroundCenter(skew) => {
@@ -911,13 +785,12 @@ impl<'a, 'b> Renderer<'a, 'b> {
         self.resolve_brush(skew.paint().ok()?, combined.pre_concat(m))
       }
       Paint::VarSkewAroundCenter(skew) => {
-        let base = skew.var_index_base();
         let m = skew_transform(
-          F2Dot14::from_f32(self.apply_variation(skew.x_skew_angle(), base, 0)),
-          F2Dot14::from_f32(self.apply_variation(skew.y_skew_angle(), base, 1)),
+          skew.x_skew_angle(),
+          skew.y_skew_angle(),
           Some((
-            self.apply_variation(skew.center_x(), base, 2),
-            self.apply_variation(skew.center_y(), base, 3),
+            skew.center_x().to_i16() as f32,
+            skew.center_y().to_i16() as f32,
           )),
         );
         self.resolve_brush(skew.paint().ok()?, combined.pre_concat(m))
@@ -982,10 +855,7 @@ fn resolve_color(color: Rgba, alpha: F2Dot14) -> Color {
 
 fn resolve_palette_color(idx: u16, palette: &[Rgba], text_color: Rgba) -> Rgba {
   if idx == 0xFFFF {
-    return Rgba {
-      a: 1.0,
-      ..text_color
-    };
+    return text_color;
   }
   palette.get(idx as usize).copied().unwrap_or(text_color)
 }
@@ -1016,7 +886,6 @@ fn resolve_var_color_line(
   line: VarColorLine<'_>,
   palette: &[Rgba],
   text_color: Rgba,
-  variations: Option<&VariationState<'_>>,
 ) -> Option<(SpreadMode, Vec<GradientStop>)> {
   let spread = match map_spread(line.extend()) {
     Some(s) => s,
@@ -1024,18 +893,11 @@ fn resolve_var_color_line(
   };
   let mut stops = Vec::with_capacity(line.num_stops() as usize);
   for stop in line.color_stops() {
-    let base = stop.var_index_base();
     stops.push(GradientStop::new(
-      variations
-        .map(|v| v.apply(stop.stop_offset(), base, 0))
-        .unwrap_or_else(|| stop.stop_offset().to_f32()),
+      stop.stop_offset().to_f32(),
       resolve_color(
         resolve_palette_color(stop.palette_index(), palette, text_color),
-        F2Dot14::from_f32(
-          variations
-            .map(|v| v.apply(stop.alpha(), base, 1))
-            .unwrap_or_else(|| stop.alpha().to_f32()),
-        ),
+        stop.alpha(),
       ),
     ));
   }
@@ -1127,11 +989,7 @@ fn build_outline(
   path.transform(transform)
 }
 
-fn build_clip_path(
-  clip: ClipBox<'_>,
-  base_transform: Transform,
-  variations: Option<&VariationState<'_>>,
-) -> Option<Path> {
+fn build_clip_path(clip: ClipBox<'_>, base_transform: Transform) -> Option<Path> {
   let rect = match clip {
     ClipBox::Format1(b) => Rect::from_ltrb(
       b.x_min().to_i16() as f32,
@@ -1139,23 +997,12 @@ fn build_clip_path(
       b.x_max().to_i16() as f32,
       b.y_max().to_i16() as f32,
     )?,
-    ClipBox::Format2(b) => {
-      let base = b.var_index_base();
-      Rect::from_ltrb(
-        variations
-          .map(|v| v.apply(b.x_min(), base, 0))
-          .unwrap_or_else(|| b.x_min().to_i16() as f32),
-        variations
-          .map(|v| v.apply(b.y_min(), base, 1))
-          .unwrap_or_else(|| b.y_min().to_i16() as f32),
-        variations
-          .map(|v| v.apply(b.x_max(), base, 2))
-          .unwrap_or_else(|| b.x_max().to_i16() as f32),
-        variations
-          .map(|v| v.apply(b.y_max(), base, 3))
-          .unwrap_or_else(|| b.y_max().to_i16() as f32),
-      )?
-    }
+    ClipBox::Format2(b) => Rect::from_ltrb(
+      b.x_min().to_i16() as f32,
+      b.y_min().to_i16() as f32,
+      b.x_max().to_i16() as f32,
+      b.y_max().to_i16() as f32,
+    )?,
   };
   let mut builder = PathBuilder::new();
   let points = [

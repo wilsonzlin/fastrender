@@ -143,6 +143,9 @@ use crate::text::font_db::FontStretch;
 use crate::text::font_db::FontStyle as DbFontStyle;
 use crate::text::font_db::ScaledMetrics;
 use crate::text::font_loader::FontContext;
+use crate::text::font_loader::FontLoadEvent;
+use crate::text::font_loader::FontLoadStatus;
+use crate::text::font_loader::WebFontPolicy;
 use crate::text::pipeline::ShapingPipeline;
 use crate::tree::box_generation::BoxGenerationOptions;
 use crate::tree::box_tree::BoxNode;
@@ -291,6 +294,9 @@ pub struct FastRender {
   /// Device pixel ratio used for media queries and resolution-dependent resources
   device_pixel_ratio: f32,
 
+  /// Render-time policy for web font fetching.
+  web_font_policy: WebFontPolicy,
+
   /// Whether to honor `<meta name="viewport">` directives when computing the
   /// layout viewport for screen media.
   apply_meta_viewport: bool,
@@ -333,6 +339,7 @@ impl std::fmt::Debug for FastRender {
       .field("default_width", &self.default_width)
       .field("default_height", &self.default_height)
       .field("device_pixel_ratio", &self.device_pixel_ratio)
+      .field("web_font_policy", &self.web_font_policy)
       .field("apply_meta_viewport", &self.apply_meta_viewport)
       .field("fit_canvas_to_content", &self.fit_canvas_to_content)
       .field("base_url", &self.base_url)
@@ -371,6 +378,9 @@ pub struct FastRenderConfig {
 
   /// Device pixel ratio used for media queries and resolution-dependent resources
   pub device_pixel_ratio: f32,
+
+  /// Render-time policy for web font loading.
+  pub web_font_policy: WebFontPolicy,
 
   /// Base URL used to resolve relative resource references (images, CSS)
   pub base_url: Option<String>,
@@ -419,6 +429,7 @@ impl Default for FastRenderConfig {
       default_width: 800,
       default_height: 600,
       device_pixel_ratio: 1.0,
+      web_font_policy: WebFontPolicy::default(),
       base_url: None,
       resource_cache: Some(CachingFetcherConfig::default()),
       resource_policy: ResourcePolicy::default(),
@@ -551,6 +562,12 @@ impl FastRenderBuilder {
     self
   }
 
+  /// Override the render-time policy used when fetching web fonts.
+  pub fn web_font_policy(mut self, policy: WebFontPolicy) -> Self {
+    self.config.web_font_policy = policy;
+    self
+  }
+
   /// Enables a specific compatibility profile.
   pub fn compat_mode(mut self, profile: CompatProfile) -> Self {
     self.config.compat_profile = profile;
@@ -626,6 +643,8 @@ pub struct RenderOptions {
   pub diagnostics_level: DiagnosticsLevel,
   /// Media type used for evaluating media queries.
   pub media_type: MediaType,
+  /// Override the web font loading policy for this render.
+  pub web_font_policy: Option<WebFontPolicy>,
   /// Horizontal scroll offset applied before painting.
   pub scroll_x: f32,
   /// Vertical scroll offset applied before painting.
@@ -660,6 +679,7 @@ impl Default for RenderOptions {
       device_pixel_ratio: None,
       diagnostics_level: DiagnosticsLevel::None,
       media_type: MediaType::Screen,
+      web_font_policy: None,
       scroll_x: 0.0,
       scroll_y: 0.0,
       animation_time: None,
@@ -682,6 +702,7 @@ impl std::fmt::Debug for RenderOptions {
       .field("device_pixel_ratio", &self.device_pixel_ratio)
       .field("diagnostics_level", &self.diagnostics_level)
       .field("media_type", &self.media_type)
+      .field("web_font_policy", &self.web_font_policy)
       .field("scroll_x", &self.scroll_x)
       .field("scroll_y", &self.scroll_y)
       .field("animation_time", &self.animation_time)
@@ -730,6 +751,12 @@ impl RenderOptions {
   /// Override the media type used for media queries.
   pub fn with_media_type(mut self, media_type: MediaType) -> Self {
     self.media_type = media_type;
+    self
+  }
+
+  /// Override the web font loading policy for this render.
+  pub fn with_web_font_policy(mut self, policy: WebFontPolicy) -> Self {
+    self.web_font_policy = Some(policy);
     self
   }
 
@@ -795,6 +822,27 @@ impl RenderOptions {
   }
 }
 
+/// Outcome of a web font fetch attempt recorded in diagnostics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FontEvent {
+  /// Family declared by the @font-face rule.
+  pub family: String,
+  /// Source that was attempted (URL or local()).
+  pub source: Option<String>,
+  /// font-display descriptor as authored.
+  pub display: String,
+  /// Status of the load attempt.
+  pub status: FontEventStatus,
+}
+
+/// Result of a web font load.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum FontEventStatus {
+  Loaded,
+  Skipped { reason: String },
+  Failed { reason: String },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageSelectionDiagnostic {
   /// Debug label for the element (from debug info), when available.
@@ -814,6 +862,8 @@ pub struct ImageSelectionDiagnostic {
 pub struct RenderDiagnostics {
   /// Network fetch errors encountered while loading subresources.
   pub fetch_errors: Vec<ResourceFetchError>,
+  /// Events captured while loading web fonts.
+  pub font_events: Vec<FontEvent>,
   /// Document-level fetch failure message when a placeholder render is produced.
   pub document_error: Option<String>,
   /// Stage at which rendering timed out, when allow_partial is used.
@@ -855,6 +905,18 @@ impl RenderDiagnostics {
     self.document_error = Some(message.into());
   }
 
+  /// Record a web font load event.
+  pub fn record_font_event(&mut self, event: FontEvent) {
+    self.font_events.push(event);
+  }
+
+  /// Record multiple web font events, converting from internal load diagnostics.
+  pub fn record_font_events(&mut self, events: &[FontLoadEvent]) {
+    self
+      .font_events
+      .extend(events.iter().cloned().map(FontEvent::from));
+  }
+
   /// Record the selected candidate for an `<img>`/`<picture>` element.
   pub fn record_image_selection(&mut self, selection: ImageSelectionDiagnostic) {
     self.image_selections.push(selection);
@@ -887,6 +949,20 @@ impl SharedRenderDiagnostics {
     }
   }
 
+  /// Record web font loading diagnostics.
+  pub fn record_font_events(&self, events: &[FontLoadEvent]) {
+    if let Ok(mut guard) = self.inner.lock() {
+      guard.record_font_events(events);
+    }
+  }
+
+  /// Record the selected candidate for an `<img>`/`<picture>` element.
+  pub fn record_image_selection(&self, selection: ImageSelectionDiagnostic) {
+    if let Ok(mut guard) = self.inner.lock() {
+      guard.record_image_selection(selection);
+    }
+  }
+
   /// Record a document-level failure.
   pub fn set_document_error(&self, message: impl Into<String>) {
     if let Ok(mut guard) = self.inner.lock() {
@@ -899,6 +975,22 @@ impl SharedRenderDiagnostics {
     match Arc::try_unwrap(self.inner) {
       Ok(mutex) => mutex.into_inner().unwrap_or_default(),
       Err(shared) => shared.lock().map(|g| g.clone()).unwrap_or_default(),
+    }
+  }
+}
+
+impl From<FontLoadEvent> for FontEvent {
+  fn from(event: FontLoadEvent) -> Self {
+    let status = match event.status {
+      FontLoadStatus::Loaded => FontEventStatus::Loaded,
+      FontLoadStatus::Skipped { reason } => FontEventStatus::Skipped { reason },
+      FontLoadStatus::Failed { reason } => FontEventStatus::Failed { reason },
+    };
+    Self {
+      family: event.family,
+      source: event.source,
+      display: format!("{:?}", event.display),
+      status,
     }
   }
 }
@@ -1089,7 +1181,24 @@ impl PreparedDocument {
     viewport_override: Option<(u32, u32)>,
     background_override: Option<Rgba>,
   ) -> Result<Pixmap> {
+    let mut options = PreparedPaintOptions::default().with_scroll(scroll_x, scroll_y);
     if let Some((w, h)) = viewport_override {
+      options = options.with_viewport(w, h);
+    }
+    if let Some(bg) = background_override {
+      options = options.with_background(bg);
+    }
+    self.paint_with_options(options)
+  }
+
+  /// Paints the prepared document using the captured scroll state at a specific animation time.
+  pub fn paint_at_time(&self, animation_time: Duration) -> Result<Pixmap> {
+    self.paint_with_options(PreparedPaintOptions::default().with_animation_time(animation_time))
+  }
+
+  /// Paints the prepared document using a rich options struct.
+  pub fn paint_with_options(&self, options: PreparedPaintOptions) -> Result<Pixmap> {
+    if let Some((w, h)) = options.viewport {
       if w == 0 || h == 0 {
         return Err(Error::Render(RenderError::InvalidParameters {
           message: format!("Invalid viewport override: width={w}, height={h}"),
@@ -1097,20 +1206,43 @@ impl PreparedDocument {
       }
     }
 
-    let viewport = viewport_override.map(|(w, h)| Size::new(w as f32, h as f32));
+    let viewport = options.viewport.map(|(w, h)| Size::new(w as f32, h as f32));
     let paint_scale =
       (self.device_pixel_ratio / self.page_zoom.max(f32::EPSILON)).max(f32::EPSILON);
-    paint_fragment_tree_with_scroll(
+    let scroll_state = options
+      .scroll
+      .unwrap_or_else(|| self.default_scroll.clone());
+    paint_fragment_tree_with_state(
       self.fragment_tree.clone(),
-      scroll_x,
-      scroll_y,
-      self.animation_time,
+      scroll_state,
       viewport,
-      background_override.unwrap_or(self.background_color),
+      options.background.unwrap_or(self.background_color),
       &self.font_context,
       &self.image_cache,
       paint_scale,
+      options.animation_time,
     )
+  }
+
+  /// Paints the prepared document with an explicit scroll state and animation time.
+  pub fn paint_with_scroll_state(
+    &self,
+    scroll_state: ScrollState,
+    viewport_override: Option<(u32, u32)>,
+    background_override: Option<Rgba>,
+    animation_time: Option<Duration>,
+  ) -> Result<Pixmap> {
+    let mut options = PreparedPaintOptions::default().with_scroll_state(scroll_state);
+    if let Some((w, h)) = viewport_override {
+      options = options.with_viewport(w, h);
+    }
+    if let Some(bg) = background_override {
+      options = options.with_background(bg);
+    }
+    if let Some(time) = animation_time {
+      options = options.with_animation_time(time);
+    }
+    self.paint_with_options(options)
   }
 
   /// Paints using the viewport captured during preparation and the initial
@@ -2332,6 +2464,8 @@ pub struct LayoutDocumentOptions {
   pub page_stacking: PageStacking,
   /// Optional animation/transition sampling time in milliseconds.
   pub animation_time: Option<f32>,
+  /// Optional override for web font loading behavior.
+  pub web_font_policy: Option<WebFontPolicy>,
 }
 
 impl Default for LayoutDocumentOptions {
@@ -2339,6 +2473,7 @@ impl Default for LayoutDocumentOptions {
     Self {
       page_stacking: PageStacking::Stacked { gap: 0.0 },
       animation_time: None,
+      web_font_policy: None,
     }
   }
 }
@@ -2358,6 +2493,12 @@ impl LayoutDocumentOptions {
   /// Provide an animation/transition sampling timestamp in milliseconds.
   pub fn with_animation_time(mut self, time_ms: f32) -> Self {
     self.animation_time = Some(time_ms.max(0.0));
+    self
+  }
+
+  /// Override the web font policy for layout-only entry points.
+  pub fn with_web_font_policy(mut self, policy: WebFontPolicy) -> Self {
+    self.web_font_policy = Some(policy);
     self
   }
 }
@@ -2445,6 +2586,7 @@ impl FastRender {
       default_width: config.default_width,
       default_height: config.default_height,
       device_pixel_ratio: config.device_pixel_ratio,
+      web_font_policy: config.web_font_policy,
       apply_meta_viewport: config.apply_meta_viewport,
       fit_canvas_to_content: config.fit_canvas_to_content,
       pending_device_size: None,
@@ -2815,6 +2957,7 @@ impl FastRender {
       options.scroll_y,
       options.animation_time,
       options.media_type,
+      options.web_font_policy,
       fit_canvas_to_content,
       options.capture_accessibility,
       deadline,
@@ -2870,6 +3013,7 @@ impl FastRender {
     scroll_y: f32,
     animation_time: Option<f32>,
     media_type: MediaType,
+    web_font_policy: Option<WebFontPolicy>,
     fit_canvas_to_content: bool,
     capture_accessibility: bool,
     deadline: Option<&RenderDeadline>,
@@ -2926,15 +3070,15 @@ impl FastRender {
     let layout_height = resolved_viewport.layout_viewport.height.max(1.0).round() as u32;
 
     let previous_dpr = self.device_pixel_ratio;
+    let effective_web_font_policy = web_font_policy.unwrap_or(self.web_font_policy);
 
     let result = (|| -> Result<RenderOutputs> {
       self.device_pixel_ratio = resolved_viewport.device_pixel_ratio;
       self.pending_device_size = Some(resolved_viewport.visual_viewport);
       let layout_timer = stats.as_deref().and_then(|rec| rec.timer());
-      let layout_options = LayoutDocumentOptions {
-        animation_time,
-        ..LayoutDocumentOptions::default()
-      };
+      let mut layout_options = LayoutDocumentOptions::default();
+      layout_options.animation_time = animation_time;
+      layout_options.web_font_policy = Some(effective_web_font_policy);
       let layout_artifacts = self.layout_document_for_media_with_artifacts(
         &dom,
         layout_width,
@@ -3149,8 +3293,10 @@ impl FastRender {
       let fit_canvas = fit_canvas_to_content || env_fit_canvas;
       let viewport_size = layout_viewport;
       let scroll_state = crate::scroll::ScrollState::with_viewport(Point::new(scroll_x, scroll_y));
-      let scroll_result = crate::scroll::apply_scroll_snap(&mut fragment_tree, &scroll_state);
-      let scroll = scroll_result.state.viewport;
+      let resolved_scroll =
+        crate::scroll::apply_scroll_snap(&mut fragment_tree, &scroll_state).state;
+      crate::scroll::apply_scroll_offsets(&mut fragment_tree, &resolved_scroll);
+      let scroll = resolved_scroll.viewport;
 
       // Sample load-time transitions before scroll-driven animations so timeline-driven
       // animations can override overlapping properties.
@@ -3271,19 +3417,20 @@ impl FastRender {
     let layout_height = resolved_viewport.layout_viewport.height.max(1.0).round() as u32;
 
     let previous_dpr = self.device_pixel_ratio;
+    let effective_web_font_policy = options.web_font_policy.unwrap_or(self.web_font_policy);
     let artifacts_result = (|| -> Result<LayoutArtifacts> {
       self.device_pixel_ratio = resolved_viewport.device_pixel_ratio;
       self.pending_device_size = Some(resolved_viewport.visual_viewport);
       let trace = TraceHandle::disabled();
+      let mut layout_options = LayoutDocumentOptions::default();
+      layout_options.web_font_policy = Some(effective_web_font_policy);
+      layout_options.animation_time = options.animation_time;
       self.layout_document_for_media_with_artifacts(
         &dom,
         layout_width,
         layout_height,
         options.media_type,
-        LayoutDocumentOptions {
-          animation_time: options.animation_time,
-          ..LayoutDocumentOptions::default()
-        },
+        layout_options,
         None,
         &trace,
       )
@@ -4685,16 +4832,26 @@ impl FastRender {
 
     // Apply styles to create styled tree
     let target_fragment = self.current_target_fragment();
+    let web_font_policy = options.web_font_policy.unwrap_or(self.web_font_policy);
     let style_load_start = timings_enabled.then(Instant::now);
     self.font_context.clear_web_fonts();
     let font_faces =
       stylesheet.collect_font_face_rules_with_cache(&media_ctx, Some(&mut media_query_cache));
     // Best-effort loading; rendering should continue even if a web font fails.
-    let _ = self.font_context.load_web_fonts(
-      &font_faces,
-      self.base_url.as_deref(),
-      Some(&used_codepoints),
-    );
+    let font_report = self
+      .font_context
+      .load_web_fonts_with_policy(
+        &font_faces,
+        self.base_url.as_deref(),
+        Some(&used_codepoints),
+        web_font_policy,
+      )
+      .unwrap_or_default();
+    if let Some(context) = &self.resource_context {
+      if let Some(diag) = &context.diagnostics {
+        diag.record_font_events(&font_report.events);
+      }
+    }
     let keyframes =
       stylesheet.collect_keyframes_with_cache(&media_ctx, Some(&mut media_query_cache));
     let has_container_queries = stylesheet.has_container_rules();
@@ -7989,6 +8146,7 @@ pub(crate) fn render_html_with_shared_resources(
     default_width: width,
     default_height: height,
     device_pixel_ratio,
+    web_font_policy: WebFontPolicy::default(),
     apply_meta_viewport: false,
     fit_canvas_to_content: false,
     pending_device_size: None,
@@ -8018,6 +8176,7 @@ pub(crate) fn render_html_with_shared_resources(
       0.0,
       None,
       MediaType::Screen,
+      None,
       false,
       false,
       None,

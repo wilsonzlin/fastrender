@@ -3,12 +3,9 @@ mod r#ref;
 use fastrender::style::color::Rgba;
 use fastrender::text::color_fonts::ColorFontRenderer;
 use fastrender::text::font_db::{FontStretch, FontStyle, FontWeight, LoadedFont};
-use fastrender::text::font_instance::FontInstance;
 use r#ref::compare::{compare_images, load_png, CompareConfig};
-use rustybuzz::Variation;
 use std::path::PathBuf;
 use std::sync::Arc;
-use ttf_parser::Tag;
 
 fn fixtures_path() -> PathBuf {
   PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -32,23 +29,12 @@ fn render_glyph(
   font: &LoadedFont,
   palette_index: u16,
   text_color: Rgba,
-  variations: &[Variation],
 ) -> fastrender::text::color_fonts::ColorGlyphRaster {
   let face = font.as_ttf_face().unwrap();
   let gid = face.glyph_index('A').unwrap();
-  let instance = FontInstance::new(font, variations).expect("font instance");
 
   ColorFontRenderer::new()
-    .render(
-      font,
-      &instance,
-      gid.0 as u32,
-      64.0,
-      palette_index,
-      text_color,
-      0.0,
-      variations,
-    )
+    .render(font, gid.0 as u32, 64.0, palette_index, text_color, 0.0)
     .expect("expected color glyph")
 }
 
@@ -74,14 +60,14 @@ fn save_or_compare(name: &str, raster: &fastrender::text::color_fonts::ColorGlyp
 #[test]
 fn renders_colrv1_palette0_matches_golden() {
   let font = load_test_font();
-  let raster = render_glyph(&font, 0, Rgba::from_rgba8(40, 60, 210, 255), &[]);
+  let raster = render_glyph(&font, 0, Rgba::from_rgba8(40, 60, 210, 255));
   save_or_compare("colrv1_palette0.png", &raster);
 }
 
 #[test]
 fn palette_selection_updates_colors() {
   let font = load_test_font();
-  let raster = render_glyph(&font, 1, Rgba::from_rgba8(40, 60, 210, 255), &[]);
+  let raster = render_glyph(&font, 1, Rgba::from_rgba8(40, 60, 210, 255));
   save_or_compare("colrv1_palette1.png", &raster);
 }
 
@@ -99,50 +85,11 @@ fn malformed_colrv1_table_falls_back() {
     data: Arc::new(data),
     ..font
   };
-  let instance =
-    FontInstance::new(&corrupted, &[]).expect("corrupted COLR font should still parse instance");
   let face = corrupted.as_ttf_face().unwrap();
   let gid = face.glyph_index('A').unwrap();
   let rendered =
-    ColorFontRenderer::new()
-      .render(&corrupted, &instance, gid.0 as u32, 64.0, 0, Rgba::BLACK, 0.0, &[]);
+    ColorFontRenderer::new().render(&corrupted, gid.0 as u32, 64.0, 0, Rgba::BLACK, 0.0);
   assert!(rendered.is_none(), "malformed COLR should not render");
-}
-
-fn load_variable_test_font() -> LoadedFont {
-  let data = std::fs::read(fixtures_path().join("fonts/colrv1-var-test.ttf")).unwrap();
-  LoadedFont {
-    data: Arc::new(data),
-    index: 0,
-    family: "ColrV1VarTest".into(),
-    weight: FontWeight::NORMAL,
-    style: FontStyle::Normal,
-    stretch: FontStretch::Normal,
-  }
-}
-
-#[test]
-fn variable_colrv1_changes_with_variations() {
-  let font = load_variable_test_font();
-  let text_color = Rgba::from_rgba8(30, 40, 220, 255);
-  let base = render_glyph(&font, 0, text_color, &[]);
-  let varied = render_glyph(
-    &font,
-    0,
-    text_color,
-    &[Variation {
-      tag: Tag::from_bytes(b"wght"),
-      value: 1.0,
-    }],
-  );
-  save_or_compare("colrv1_var_default.png", &base);
-  save_or_compare("colrv1_var_wght1.png", &varied);
-
-  let diff = compare_images(&base.image, &varied.image, &CompareConfig::strict());
-  assert!(
-    !diff.is_match(),
-    "variable render should differ between instances"
-  );
 }
 
 fn find_table(data: &[u8], tag: &[u8; 4]) -> Option<(usize, usize)> {

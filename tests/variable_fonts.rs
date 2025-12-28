@@ -140,7 +140,9 @@ fn render_list_marker(font_ctx: &FontContext, run: &ShapedRun) -> Pixmap {
 
   let renderer = DisplayListRenderer::new(PIXMAP_SIZE, PIXMAP_SIZE, Rgba::WHITE, font_ctx.clone())
     .expect("display list renderer");
-  renderer.render(&list).expect("render list marker display list")
+  renderer
+    .render(&list)
+    .expect("render list marker display list")
 }
 
 fn render_with_rasterizer(run: &ShapedRun) -> Pixmap {

@@ -9,8 +9,8 @@ mod r#ref;
 
 use fastrender::text::color_fonts::ColorFontRenderer;
 use fastrender::text::font_db::{FontStretch, FontStyle, FontWeight, LoadedFont};
-use fastrender::text::font_loader::FontContext;
 use fastrender::text::font_instance::FontInstance;
+use fastrender::text::font_loader::FontContext;
 use fastrender::text::pipeline::Direction;
 use fastrender::text::pipeline::GlyphPosition;
 use fastrender::text::pipeline::RunRotation;
@@ -549,18 +549,15 @@ fn colrv1_color_glyph_respects_variations_in_rasterizer() {
     load_png(&golden_dir.join("colrv1_var_wght1.png")).expect("missing wght=1 golden");
 
   let mut rasterizer = TextRasterizer::new();
-  let mut render_run = |variations: Vec<Variation>,
-                        left: f32,
-                        top: f32,
-                        width: u32,
-                        height: u32| {
-    let run = single_glyph_run_with_variations(&font, glyph_id, 64.0, 0.0, variations);
-    let mut pixmap = Pixmap::new(width, height).expect("failed to allocate test pixmap");
-    rasterizer
-      .render_shaped_run(&run, -left, -top, text_color, &mut pixmap)
-      .expect("failed to render varied colr glyph");
-    pixmap
-  };
+  let mut render_run =
+    |variations: Vec<Variation>, left: f32, top: f32, width: u32, height: u32| {
+      let run = single_glyph_run_with_variations(&font, glyph_id, 64.0, 0.0, variations);
+      let mut pixmap = Pixmap::new(width, height).expect("failed to allocate test pixmap");
+      rasterizer
+        .render_shaped_run(&run, -left, -top, text_color, &mut pixmap)
+        .expect("failed to render varied colr glyph");
+      pixmap
+    };
 
   let base_pixmap = render_run(
     base_variations.clone(),

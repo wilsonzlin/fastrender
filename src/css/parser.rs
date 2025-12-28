@@ -3488,6 +3488,50 @@ mod tests {
   }
 
   #[test]
+  fn style_inside_inert_template_is_ignored() {
+    let html = "<head><template><style>body{color:red}</style></template><style>body{color:green}</style></head>";
+    let dom = crate::dom::parse_html(html).unwrap();
+    let sources = extract_css_sources(&dom);
+    assert_eq!(sources.len(), 1);
+    assert!(matches!(sources[0].scope, CssTreeScope::Document));
+    match &sources[0].source {
+      StylesheetSource::Inline(inline) => {
+        assert!(inline.css.contains("green"));
+        assert!(!inline.css.contains("red"));
+      }
+      other => panic!("expected inline stylesheet, got {:?}", other),
+    }
+  }
+
+  #[test]
+  fn style_inside_declarative_shadow_template_is_scoped() {
+    let html = r#"
+      <div id="host">
+        <template shadowroot="open">
+          <style>.x {}</style>
+        </template>
+      </div>
+    "#;
+    let dom = crate::dom::parse_html(html).unwrap();
+    let sources = extract_scoped_css_sources(&dom);
+    assert!(
+      sources.document.is_empty(),
+      "document styles should remain empty"
+    );
+    assert_eq!(
+      sources.shadows.len(),
+      1,
+      "expected styles scoped to a shadow root"
+    );
+    let (_, shadow_sources) = sources.shadows.iter().next().unwrap();
+    assert_eq!(shadow_sources.len(), 1);
+    match &shadow_sources[0] {
+      StylesheetSource::Inline(inline) => assert!(inline.css.contains(".x")),
+      other => panic!("expected inline shadow stylesheet, got {:?}", other),
+    }
+  }
+
+  #[test]
   fn extract_css_sources_preserves_order_and_attrs() {
     let html = r#"
       <head>

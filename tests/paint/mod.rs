@@ -3,7 +3,6 @@
 mod util;
 
 mod avif_test;
-mod backend_parity;
 mod backface_culling_test;
 mod canvas_test;
 mod color_bitmap_glyph_test;

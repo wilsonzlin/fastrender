@@ -56,7 +56,10 @@ fn ttf_parser_set_variation_has_no_effect_on_bbox_or_outline() {
     .glyph_hor_advance(gid)
     .expect("advance available after variations");
 
-  assert_eq!(bbox_default, bbox_varied, "HVAR/gvar not applied by ttf-parser");
+  assert_eq!(
+    bbox_default, bbox_varied,
+    "HVAR/gvar not applied by ttf-parser"
+  );
   assert_eq!(
     metrics_default, metrics_varied,
     "outline stays unchanged when applying variations via ttf-parser"
