@@ -512,7 +512,10 @@ fn accessibility_aria_states() {
 
     match expected {
       Some(token) => assert_eq!(states.get("current"), Some(&json!(token)), "{id} current"),
-      None => assert!(states.get("current").is_none(), "{id} should not have current"),
+      None => assert!(
+        states.get("current").is_none(),
+        "{id} should not have current"
+      ),
     }
   }
 }
@@ -901,10 +904,7 @@ fn accessibility_figure_figcaption_name() {
     figure1.get("name").and_then(|v| v.as_str()),
     Some("Primary caption")
   );
-  assert_eq!(
-    figure1.get("role").and_then(|v| v.as_str()),
-    Some("figure")
-  );
+  assert_eq!(figure1.get("role").and_then(|v| v.as_str()), Some("figure"));
   assert_eq!(
     figure1.get("html_tag").and_then(|v| v.as_str()),
     Some("figure")
@@ -921,10 +921,7 @@ fn accessibility_figure_figcaption_name() {
     figure3.get("name").and_then(|v| v.as_str()),
     Some("Visible caption")
   );
-  assert_eq!(
-    figure3.get("role").and_then(|v| v.as_str()),
-    Some("figure")
-  );
+  assert_eq!(figure3.get("role").and_then(|v| v.as_str()), Some("figure"));
   assert_eq!(
     figure3.get("html_tag").and_then(|v| v.as_str()),
     Some("figure")
@@ -1134,6 +1131,7 @@ fn accessibility_fixture_snapshots() {
     "img_alt_presentational",
     "summary_context",
     "summary_context",
+    "html_aam_roles",
     "placeholder_labeling",
   ];
 

@@ -1,0 +1,245 @@
+{
+  "present": {
+    "site-header": {
+      "role": "banner",
+      "name": "Site Header",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "header",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "site-footer": {
+      "role": "contentinfo",
+      "name": "Site Footer",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "footer",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "article-header": {
+      "role": "generic",
+      "name": "Article Header",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "header",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "article-footer": {
+      "role": "generic",
+      "name": "Article Footer",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "footer",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "dialog": {
+      "role": "dialog",
+      "name": "Dialog text",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "dialog",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "details": {
+      "role": "group",
+      "name": "More Details content",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "details",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "figure": {
+      "role": "figure",
+      "name": "Diagram Figure caption",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "figure",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "figure-img": {
+      "role": "img",
+      "name": "Diagram",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "img",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "definitions": {
+      "role": "list",
+      "name": "Term Definition",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "dl",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "term": {
+      "role": "term",
+      "name": "Term",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "dt",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "definition": {
+      "role": "definition",
+      "name": "Definition",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "dd",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "rule": {
+      "role": "separator",
+      "name": null,
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "hr",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "menu": {
+      "role": "list",
+      "name": "First Second",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "menu",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "menu-item-1": {
+      "role": "listitem",
+      "name": "First",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "li",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "menu-item-2": {
+      "role": "listitem",
+      "name": "Second",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "li",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "named-form": {
+      "role": "form",
+      "name": "Search",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "form",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    }
+  },
+  "absent": ["nameless-form"]
+}

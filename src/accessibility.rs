@@ -1,4 +1,4 @@
-use crate::dom::{DomNode, DomNodeType, ElementRef};
+use crate::dom::{DomNode, DomNodeType, ElementRef, HTML_NAMESPACE};
 use crate::style::cascade::StyledNode;
 use crate::style::computed::Visibility;
 use crate::style::display::Display;
@@ -111,14 +111,7 @@ pub fn build_accessibility_tree(root: &StyledNode) -> AccessibilityNode {
   let mut hidden = HashMap::new();
   let mut aria_hidden = HashMap::new();
   let mut ids = HashMap::new();
-  compute_hidden_and_ids(
-    root,
-    false,
-    false,
-    &mut hidden,
-    &mut aria_hidden,
-    &mut ids,
-  );
+  compute_hidden_and_ids(root, false, false, &mut hidden, &mut aria_hidden, &mut ids);
 
   let labels = collect_labels(root, &hidden, &ids, &lookup);
 
@@ -339,7 +332,7 @@ impl<'a> BuildContext<'a> {
       }
     }
 
-    let (role, _) = compute_role(node, &[], None);
+    let (role, _, _) = compute_role(node, &[], None);
     if allows_visible_text_name(node.node.tag_name(), role.as_deref(), true) {
       let text = self.text_content(node, mode);
       if !text.is_empty() {
@@ -385,7 +378,7 @@ fn build_nodes<'a>(
       ancestors.pop();
 
       let element_ref = ElementRef::with_ancestors(&node.node, ancestors);
-      let (mut role, presentational_role) =
+      let (mut role, presentational_role, role_from_attr) =
         compute_role(node, ancestors, styled_ancestors.last().copied());
       let mut name = compute_name(node, ctx, role.as_deref(), !presentational_role);
       let mut description = compute_description(node, ctx);
@@ -398,11 +391,13 @@ fn build_nodes<'a>(
       }
 
       // Regions should expose only when labelled.
-      if role.as_deref() == Some("region") && name.is_none() {
-        role = None;
-      }
-      if role.as_deref() == Some("form") && name.is_none() {
-        role = None;
+      if !role_from_attr {
+        if role.as_deref() == Some("region") && name.is_none() {
+          role = None;
+        }
+        if role.as_deref() == Some("form") && name.is_none() {
+          role = None;
+        }
       }
 
       let aria_disabled = parse_bool_attr(&node.node, "aria-disabled");
@@ -655,18 +650,81 @@ fn normalize_whitespace(input: &str) -> String {
   out.trim().to_string()
 }
 
-fn is_sectioning_ancestor(ancestors: &[&DomNode]) -> bool {
+fn is_landmark_role(role: &str) -> bool {
+  matches!(
+    role,
+    "article"
+      | "banner"
+      | "complementary"
+      | "contentinfo"
+      | "form"
+      | "main"
+      | "navigation"
+      | "region"
+      | "search"
+  )
+}
+
+fn has_accessible_name_attr(node: &DomNode) -> bool {
+  node
+    .get_attribute_ref("aria-label")
+    .is_some_and(|v| !v.trim().is_empty())
+    || node
+      .get_attribute_ref("aria-labelledby")
+      .is_some_and(|v| !v.trim().is_empty())
+    || node
+      .get_attribute_ref("title")
+      .is_some_and(|v| !v.trim().is_empty())
+}
+
+fn is_html_element(node: &DomNode) -> bool {
+  matches!(node.namespace(), Some(ns) if ns.is_empty() || ns == HTML_NAMESPACE)
+}
+
+// HTML-AAM: banner/contentinfo (and other landmarks like main) only apply when the element is not
+// scoped within other landmarks or sectioning contexts. Sectioning roots also bound these scopes,
+// and forms only become landmarks when they are explicitly named.
+fn has_landmark_ancestor(ancestors: &[&DomNode]) -> bool {
   ancestors.iter().any(|ancestor| {
-    matches!(ancestor.node_type, DomNodeType::ShadowRoot { .. })
-      || ancestor
-        .tag_name()
-        .map(|t| {
-          matches!(
-            t.to_ascii_lowercase().as_str(),
-            "article" | "aside" | "main" | "nav" | "section" | "header" | "footer"
-          )
-        })
-        .unwrap_or(false)
+    if matches!(ancestor.node_type, DomNodeType::ShadowRoot { .. }) {
+      return true;
+    }
+
+    if !is_html_element(ancestor) {
+      return false;
+    }
+
+    if let Some(parsed) = parse_aria_role_attr(ancestor) {
+      if let ParsedRole::Explicit(role) = parsed {
+        if is_landmark_role(&role) {
+          return true;
+        }
+      }
+    }
+
+    let Some(tag) = ancestor.tag_name().map(|t| t.to_ascii_lowercase()) else {
+      return false;
+    };
+
+    if matches!(
+      tag.as_str(),
+      "article" | "aside" | "main" | "nav" | "section" | "header" | "footer"
+    ) {
+      return true;
+    }
+
+    if matches!(
+      tag.as_str(),
+      "blockquote" | "details" | "dialog" | "fieldset" | "figure" | "td"
+    ) {
+      return true;
+    }
+
+    if tag == "form" && has_accessible_name_attr(ancestor) {
+      return true;
+    }
+
+    false
   })
 }
 
@@ -686,6 +744,7 @@ fn is_supported_role(role: &str) -> bool {
       | "checkbox"
       | "columnheader"
       | "combobox"
+      | "definition"
       | "complementary"
       | "contentinfo"
       | "dialog"
@@ -705,13 +764,16 @@ fn is_supported_role(role: &str) -> bool {
       | "option"
       | "progressbar"
       | "radio"
+      | "search"
       | "region"
       | "row"
       | "rowgroup"
       | "rowheader"
+      | "separator"
       | "searchbox"
       | "slider"
       | "spinbutton"
+      | "term"
       | "status"
       | "switch"
       | "table"
@@ -740,18 +802,22 @@ fn compute_role(
   node: &StyledNode,
   ancestors: &[&DomNode],
   styled_parent: Option<&StyledNode>,
-) -> (Option<String>, bool) {
+) -> (Option<String>, bool, bool) {
   let dom_node = &node.node;
 
   if let Some(parsed) = parse_aria_role_attr(dom_node) {
     return match parsed {
-      ParsedRole::Explicit(role) => (Some(role), false),
-      ParsedRole::Presentational => (None, true),
+      ParsedRole::Explicit(role) => (Some(role), false, true),
+      ParsedRole::Presentational => (None, true, true),
     };
   }
 
+  if !is_html_element(dom_node) {
+    return (None, false, false);
+  }
+
   let Some(tag) = dom_node.tag_name().map(|t| t.to_ascii_lowercase()) else {
-    return (None, false);
+    return (None, false, false);
   };
 
   let role = match tag.as_str() {
@@ -769,8 +835,11 @@ fn compute_role(
     "option" => Some("option".to_string()),
     "img" => Some("img".to_string()),
     "figure" => Some("figure".to_string()),
-    "ul" | "ol" => Some("list".to_string()),
+    "ul" | "ol" | "menu" => Some("list".to_string()),
     "li" => Some("listitem".to_string()),
+    "dl" => Some("list".to_string()),
+    "dt" => Some("term".to_string()),
+    "dd" => Some("definition".to_string()),
     "table" => Some("table".to_string()),
     "thead" | "tbody" | "tfoot" => Some("rowgroup".to_string()),
     "tr" => Some("row".to_string()),
@@ -783,7 +852,7 @@ fn compute_role(
     "details" => Some("group".to_string()),
     "fieldset" => Some("group".to_string()),
     "main" => {
-      if is_sectioning_ancestor(ancestors) {
+      if has_landmark_ancestor(ancestors) {
         None
       } else {
         Some("main".to_string())
@@ -791,14 +860,14 @@ fn compute_role(
     }
     "nav" => Some("navigation".to_string()),
     "header" => {
-      if is_sectioning_ancestor(ancestors) {
+      if has_landmark_ancestor(ancestors) {
         None
       } else {
         Some("banner".to_string())
       }
     }
     "footer" => {
-      if is_sectioning_ancestor(ancestors) {
+      if has_landmark_ancestor(ancestors) {
         None
       } else {
         Some("contentinfo".to_string())
@@ -809,11 +878,12 @@ fn compute_role(
     "article" => Some("article".to_string()),
     "section" => Some("region".to_string()),
     "dialog" => Some("dialog".to_string()),
+    "hr" => Some("separator".to_string()),
     "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => Some("heading".to_string()),
     _ => None,
   };
 
-  (role, false)
+  (role, false, false)
 }
 
 fn is_details_summary(node: &StyledNode, styled_parent: Option<&StyledNode>) -> bool {
@@ -920,9 +990,13 @@ fn compute_name_internal(
     return None;
   }
 
-  if let Some(labelled) =
-    referenced_text_attr(node, ctx, "aria-labelledby", visited, TextAlternativeMode::Referenced)
-  {
+  if let Some(labelled) = referenced_text_attr(
+    node,
+    ctx,
+    "aria-labelledby",
+    visited,
+    TextAlternativeMode::Referenced,
+  ) {
     return Some(labelled);
   }
 
@@ -933,12 +1007,7 @@ fn compute_name_internal(
     }
   }
 
-  if let Some(label) = label_association_name(
-    node,
-    ctx,
-    visited,
-    TextAlternativeMode::Visible,
-  ) {
+  if let Some(label) = label_association_name(node, ctx, visited, TextAlternativeMode::Visible) {
     return Some(label);
   }
 
@@ -947,9 +1016,7 @@ fn compute_name_internal(
   }
 
   if allow_visible_text {
-    if let Some(native) =
-      native_name_from_html(node, ctx, visited, TextAlternativeMode::Visible)
-    {
+    if let Some(native) = native_name_from_html(node, ctx, visited, TextAlternativeMode::Visible) {
       if !native.is_empty() {
         return Some(native);
       }
@@ -985,10 +1052,7 @@ fn native_name_from_html<'a>(
   visited: &mut HashSet<usize>,
   mode: TextAlternativeMode,
 ) -> Option<String> {
-  let tag = node
-    .node
-    .tag_name()
-    .map(|t| t.to_ascii_lowercase())?;
+  let tag = node.node.tag_name().map(|t| t.to_ascii_lowercase())?;
 
   match tag.as_str() {
     "fieldset" => first_child_with_tag(node, ctx, "legend", false, mode)
@@ -1021,7 +1085,6 @@ fn first_child_with_tag<'a>(
     if is_match {
       return Some(child);
     }
-
   }
 
   None
@@ -1031,8 +1094,10 @@ fn allows_visible_text_name(tag: Option<&str>, role: Option<&str>, allow_legend:
   let tag_blocked = tag
     .map(|t| {
       let lower = t.to_ascii_lowercase();
-      matches!(lower.as_str(), "fieldset" | "figure" | "table" | "dialog" | "select")
-        || (!allow_legend && lower == "legend")
+      matches!(
+        lower.as_str(),
+        "fieldset" | "figure" | "table" | "dialog" | "select"
+      ) || (!allow_legend && lower == "legend")
     })
     .unwrap_or(false);
 
@@ -1565,12 +1630,7 @@ fn compute_expanded(node: &StyledNode, role: Option<&str>, ancestors: &[&DomNode
     }
   }
 
-  if role == Some("combobox")
-    && node
-      .node
-      .get_attribute_ref("data-fastr-open")
-      .is_some()
-  {
+  if role == Some("combobox") && node.node.get_attribute_ref("data-fastr-open").is_some() {
     return Some(attr_truthy(&node.node, "data-fastr-open"));
   }
 
