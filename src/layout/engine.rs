@@ -30,7 +30,7 @@ use crate::layout::fragmentation;
 use crate::layout::fragmentation::FragmentationOptions;
 use crate::render_control::{check_active, DeadlineGuard, RenderDeadline};
 use crate::style::display::FormattingContextType;
-use crate::style::ComputedStyle;
+use crate::style::{block_axis_is_horizontal, inline_axis_is_horizontal, ComputedStyle};
 use crate::text::font_loader::FontContext;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::box_tree::BoxTree;
@@ -435,26 +435,47 @@ impl LayoutEngine {
     // Create root constraints from initial containing block, preferring explicit
     // fragmentainer size when pagination is enabled.
     let icb = &self.config.initial_containing_block;
-    let constraint_height = self
-      .config
-      .fragmentation
-      .as_ref()
-      .map(|f| {
-        if f.fragmentainer_size > 0.0 {
-          f.fragmentainer_size
+    let (constraint_width, constraint_height) = if let Some(options) = &self.config.fragmentation {
+      let root_style = &box_tree.root.style;
+      let wm = root_style.writing_mode;
+      let _dir = root_style.direction;
+      let inline_is_horizontal = inline_axis_is_horizontal(wm);
+      let block_is_horizontal = block_axis_is_horizontal(wm);
+
+      let mut available_width = icb.width;
+      let mut available_height = icb.height;
+
+      if options.column_count > 1 {
+        let icb_inline = if inline_is_horizontal {
+          icb.width
         } else {
           icb.height
+        };
+        let column_inline = fragmentation::column_inline_size(icb_inline, options);
+        if inline_is_horizontal {
+          available_width = column_inline;
+        } else {
+          available_height = column_inline;
         }
-      })
-      .unwrap_or(icb.height);
-    let constraint_width = if let Some(options) = &self.config.fragmentation {
-      if options.column_count > 1 {
-        fragmentation::column_inline_size(icb.width, options)
-      } else {
-        icb.width
       }
+
+      let fragmentainer_block = if options.fragmentainer_size > 0.0 {
+        options.fragmentainer_size
+      } else if block_is_horizontal {
+        icb.width
+      } else {
+        icb.height
+      };
+
+      if block_is_horizontal {
+        available_width = fragmentainer_block;
+      } else {
+        available_height = fragmentainer_block;
+      }
+
+      (available_width, available_height)
     } else {
-      icb.width
+      (icb.width, icb.height)
     };
     let constraints = LayoutConstraints::definite(constraint_width, constraint_height);
 

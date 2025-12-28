@@ -74,17 +74,18 @@ impl Default for FragmentationOptions {
 
 /// Computes the inline size available to each column when fragmenting into multiple columns.
 ///
-/// The result subtracts total inter-column gaps from the initial containing block width and
-/// divides the remainder evenly across columns. A minimum of one column is enforced to avoid
-/// division by zero when callers construct `FragmentationOptions` manually.
-pub fn column_inline_size(icb_width: f32, options: &FragmentationOptions) -> f32 {
+/// The result subtracts total inter-column gaps from the available inline size (which may map to
+/// physical width or height depending on writing-mode) and divides the remainder evenly across
+/// columns. A minimum of one column is enforced to avoid division by zero when callers construct
+/// `FragmentationOptions` manually.
+pub fn column_inline_size(inline_size: f32, options: &FragmentationOptions) -> f32 {
   let count = options.column_count.max(1) as f32;
   if count <= 1.0 {
-    return icb_width;
+    return inline_size;
   }
 
   let gaps = options.column_gap.max(0.0) * (count - 1.0);
-  let available = (icb_width - gaps).max(0.0);
+  let available = (inline_size - gaps).max(0.0);
   available / count
 }
 
