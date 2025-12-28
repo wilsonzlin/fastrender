@@ -40,7 +40,7 @@ pub fn save_png(pixmap: &Pixmap, path: &Path) -> Result<(), String> {
     .map_err(|e| format!("Failed to save PNG '{}': {}", path.display(), e))
 }
 
-/// Create a solid color pixmap (premultiplied BGRA).
+/// Create a solid color pixmap (premultiplied RGBA).
 pub fn create_solid_pixmap(width: u32, height: u32, r: u8, g: u8, b: u8, a: u8) -> Option<Pixmap> {
   let mut pixmap = Pixmap::new(width, height)?;
 
@@ -50,9 +50,9 @@ pub fn create_solid_pixmap(width: u32, height: u32, r: u8, g: u8, b: u8, a: u8) 
   let pm_b = (b as f32 * alpha) as u8;
 
   for chunk in pixmap.data_mut().chunks_exact_mut(4) {
-    chunk[0] = pm_b;
+    chunk[0] = pm_r;
     chunk[1] = pm_g;
-    chunk[2] = pm_r;
+    chunk[2] = pm_b;
     chunk[3] = a;
   }
 
@@ -69,9 +69,9 @@ fn pixmap_to_rgba_image(pixmap: &Pixmap) -> RgbaImage {
     .chunks_exact_mut(4)
     .zip(pixmap.data().chunks_exact(4))
   {
-    let b = src[0];
+    let r = src[0];
     let g = src[1];
-    let r = src[2];
+    let b = src[2];
     let a = src[3];
 
     if a == 0 {
@@ -113,9 +113,9 @@ fn pixmap_from_rgba_image(rgba: image::RgbaImage) -> Result<Pixmap, String> {
     let pm_g = (g as f32 * alpha) as u8;
     let pm_b = (b as f32 * alpha) as u8;
 
-    dst_data[dst_idx] = pm_b;
+    dst_data[dst_idx] = pm_r;
     dst_data[dst_idx + 1] = pm_g;
-    dst_data[dst_idx + 2] = pm_r;
+    dst_data[dst_idx + 2] = pm_b;
     dst_data[dst_idx + 3] = a;
   }
 

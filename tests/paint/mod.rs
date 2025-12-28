@@ -24,6 +24,7 @@ mod preserve_3d_test;
 mod projective_mapping;
 mod rasterize_test;
 mod stacking_test;
+mod svg_context_paint_font;
 mod svg_filter_color_interpolation;
 mod svg_filter_display_none_defs_test;
 mod svg_filter_offset_test;
