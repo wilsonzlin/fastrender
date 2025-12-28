@@ -91,7 +91,7 @@ fn aria_hidden_references_are_ignored() {
   let tree = render_accessibility_json(html);
 
   let blocked_name = find_json_node(&tree, "blocked-name").expect("blocked-name node present");
-  assert_eq!(blocked_name.get("name").and_then(|v| v.as_str()), None);
+  assert_eq!(blocked_name.get("name").and_then(|v| v.as_str()), Some(""));
 
   let blocked_desc = find_json_node(&tree, "blocked-desc").expect("blocked-desc node present");
   assert_eq!(

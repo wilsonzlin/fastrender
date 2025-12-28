@@ -5,6 +5,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
+tiny-skia = "0.11"
 
 [lib]
 path = "src/lib.rs"

@@ -118,7 +118,7 @@ pub fn build_accessibility_tree(root: &StyledNode) -> AccessibilityNode {
   let mut ids = HashMap::new();
   compute_hidden_and_ids(root, false, false, &mut hidden, &mut aria_hidden, &mut ids);
 
-  let labels = collect_labels(root, &hidden, &ids, &lookup);
+  let labels = collect_labels(root, &aria_hidden, &ids, &lookup);
 
   let ctx = BuildContext {
     hidden,
@@ -201,6 +201,14 @@ struct BuildContext<'a> {
   lookup: HashMap<usize, &'a StyledNode>,
 }
 
+#[derive(Clone, Copy)]
+enum TextAlternativeMode {
+  /// Only include nodes that are visible in the rendered output.
+  Visible,
+  /// Include nodes that are hidden by CSS/HTML but not explicitly aria-hidden.
+  Referenced,
+}
+
 impl<'a> BuildContext<'a> {
   fn is_hidden(&self, node: &StyledNode) -> bool {
     *self.hidden.get(&node.node_id).unwrap_or(&false)
@@ -212,7 +220,12 @@ impl<'a> BuildContext<'a> {
     *self.aria_hidden.get(&node.node_id).unwrap_or(&false)
   }
 
-  fn text_from_children(&self, children: Vec<&'a StyledNode>, include_hidden: bool) -> String {
+  fn text_from_children(
+    &self,
+    children: Vec<&'a StyledNode>,
+    visited: &mut HashSet<usize>,
+    mode: TextAlternativeMode,
+  ) -> String {
     let mut out = String::new();
     let mut suppress_space = false;
 
@@ -224,32 +237,28 @@ impl<'a> BuildContext<'a> {
         }
       }
 
-      let text = self.text_content(child, include_hidden);
-      if text.is_empty() {
-        continue;
-      }
+      if let Some(text) = self.text_alternative(child, visited, mode, None) {
+        if text.is_empty() {
+          continue;
+        }
 
-      if !out.is_empty() && !suppress_space {
-        out.push(' ');
-      }
+        if !out.is_empty() && !suppress_space {
+          out.push(' ');
+        }
 
-      suppress_space = false;
-      out.push_str(&text);
+        suppress_space = false;
+        out.push_str(&text);
+      }
     }
 
     normalize_whitespace(&out)
   }
 
-  fn is_hidden_for_mode(&self, node: &StyledNode, include_hidden: bool) -> bool {
-    if self.is_accessibility_hidden(node) {
-      return true;
+  fn is_hidden_for_mode(&self, node: &StyledNode, mode: TextAlternativeMode) -> bool {
+    match mode {
+      TextAlternativeMode::Visible => self.is_hidden(node),
+      TextAlternativeMode::Referenced => self.is_accessibility_hidden(node),
     }
-
-    if !include_hidden && self.is_hidden(node) {
-      return true;
-    }
-
-    false
   }
 
   fn node_for_id(&self, id: &str) -> Option<&'a StyledNode> {
@@ -265,103 +274,129 @@ impl<'a> BuildContext<'a> {
     composed_children(node, &self.lookup)
   }
 
-  fn visible_text(&self, node: &'a StyledNode) -> String {
-    self.text_content(node, false)
+  fn subtree_text(
+    &self,
+    node: &'a StyledNode,
+    visited: &mut HashSet<usize>,
+    mode: TextAlternativeMode,
+  ) -> String {
+    self.text_from_children(self.composed_children(node), visited, mode)
   }
 
-  fn text_content(&self, node: &'a StyledNode, include_hidden: bool) -> String {
-    if self.is_hidden_for_mode(node, include_hidden) {
-      return String::new();
-    }
-
-    match &node.node.node_type {
-      DomNodeType::Text { content } => normalize_whitespace(content),
-      DomNodeType::Element { .. } | DomNodeType::Slot { .. } => {
-        let tag = node
-          .node
-          .tag_name()
-          .map(|t| t.to_ascii_lowercase())
-          .unwrap_or_default();
-
-        if tag.eq_ignore_ascii_case("script") || tag.eq_ignore_ascii_case("style") {
-          return String::new();
-        }
-
-        if tag == "img" {
-          if let Some(alt) = node.node.get_attribute_ref("alt") {
-            let norm = normalize_whitespace(alt);
-            if !norm.is_empty() {
-              return norm;
-            }
-          }
-        }
-
-        self.text_from_children(self.composed_children(node), include_hidden)
-      }
-      DomNodeType::Document | DomNodeType::ShadowRoot { .. } => {
-        self.text_from_children(self.composed_children(node), include_hidden)
-      }
-    }
+  fn allows_name_from_content(
+    &self,
+    node: &'a StyledNode,
+    role: Option<&str>,
+    allow_name_from_content: Option<bool>,
+  ) -> bool {
+    let tag = node.node.tag_name().map(|t| t.to_ascii_lowercase());
+    let Some(allow) = allow_name_from_content else {
+      let (computed_role, presentational, _) = compute_role(node, &[], None);
+      return !presentational
+        && role_allows_name_from_content(computed_role.as_deref(), tag.as_deref());
+    };
+    allow && role_allows_name_from_content(role, tag.as_deref())
   }
 
   fn text_alternative(
     &self,
     node: &'a StyledNode,
     visited: &mut HashSet<usize>,
-    include_hidden: bool,
+    mode: TextAlternativeMode,
+    allow_name_from_content: Option<bool>,
   ) -> Option<String> {
-    if !visited.insert(node.node_id) || self.is_hidden_for_mode(node, include_hidden) {
-      return None;
+    if !visited.insert(node.node_id) {
+      return Some(String::new());
     }
 
-    if let Some(labelled) =
-      referenced_text_attr(node, self, "aria-labelledby", visited, include_hidden)
-    {
-      return Some(labelled);
+    if self.is_hidden_for_mode(node, mode) {
+      return Some(String::new());
     }
 
-    if let Some(label) = node.node.get_attribute_ref("aria-label") {
-      let norm = normalize_whitespace(label);
-      if !norm.is_empty() {
-        return Some(norm);
+    match &node.node.node_type {
+      DomNodeType::Text { content } => Some(normalize_whitespace(content)),
+      DomNodeType::Document | DomNodeType::ShadowRoot { .. } => {
+        Some(self.subtree_text(node, visited, mode))
+      }
+      DomNodeType::Element { .. } | DomNodeType::Slot { .. } => {
+        let tag = node.node.tag_name().map(|t| t.to_ascii_lowercase());
+        let (role, presentational, _) = compute_role(node, &[], None);
+
+        // Script/style never contribute to the text alternative.
+        if tag
+          .as_deref()
+          .is_some_and(|t| t.eq_ignore_ascii_case("script") || t.eq_ignore_ascii_case("style"))
+        {
+          return Some(String::new());
+        }
+
+        if let Some(labelledby) = node.node.get_attribute_ref("aria-labelledby") {
+          let labelled =
+            referenced_text_attr(self, labelledby, visited, TextAlternativeMode::Referenced);
+          return Some(labelled);
+        }
+
+        if let Some(label) = node.node.get_attribute_ref("aria-label") {
+          return Some(normalize_whitespace(label));
+        }
+
+        if presentational && allow_name_from_content == Some(false) {
+          return None;
+        }
+
+        if let Some(label) = label_association_name(node, self, visited) {
+          return Some(label);
+        }
+
+        if let Some(placeholder) = placeholder_as_name(node, self) {
+          return Some(placeholder);
+        }
+
+        if let Some(native) = native_name_from_html(node, self, visited, mode) {
+          if !native.is_empty() {
+            return Some(native);
+          }
+        }
+
+        if !presentational {
+          if let Some(specific) = role_specific_name(node, self, role.as_deref(), visited, mode) {
+            if !specific.is_empty() {
+              return Some(specific);
+            }
+          }
+        }
+
+        let allows_content =
+          self.allows_name_from_content(node, role.as_deref(), allow_name_from_content)
+            && allows_visible_text_name(tag.as_deref(), role.as_deref());
+        if allows_content {
+          let text = self.subtree_text(node, visited, mode);
+          if !text.is_empty() {
+            return Some(text);
+          }
+        }
+
+        if let Some(alt) = node.node.get_attribute_ref("alt") {
+          if alt_applies(tag.as_deref(), role.as_deref(), &node.node) {
+            let norm = normalize_whitespace(alt);
+            return Some(norm);
+          }
+        }
+
+        if let Some(fallback) = fallback_name_for_role(role.as_deref(), node, self) {
+          return Some(fallback);
+        }
+
+        if let Some(title) = node.node.get_attribute_ref("title") {
+          let norm = normalize_whitespace(title);
+          if !norm.is_empty() {
+            return Some(norm);
+          }
+        }
+
+        None
       }
     }
-
-    if let Some(label) = label_association_name(node, self, visited, include_hidden) {
-      return Some(label);
-    }
-
-    if let Some(native) = native_name_from_html(node, self, visited, include_hidden) {
-      if !native.is_empty() {
-        return Some(native);
-      }
-    }
-
-    if let Some(alt) = node.node.get_attribute_ref("alt") {
-      let norm = normalize_whitespace(alt);
-      if !norm.is_empty() {
-        return Some(norm);
-      }
-    }
-
-    if let Some(title) = node.node.get_attribute_ref("title") {
-      let norm = normalize_whitespace(title);
-      if !norm.is_empty() {
-        return Some(norm);
-      }
-    }
-
-    let (role, _, _) = compute_role(node, &[], None);
-    if role_allows_name_from_content(role.as_deref(), node.node.tag_name())
-      && allows_visible_text_name(node.node.tag_name(), role.as_deref(), true)
-    {
-      let text = self.text_content(node, include_hidden);
-      if !text.is_empty() {
-        return Some(text);
-      }
-    }
-
-    None
   }
 }
 
@@ -444,10 +479,6 @@ fn build_nodes<'a>(
       let value = compute_value(node, role.as_deref(), &element_ref, ctx);
       let level = compute_level(&node.node, role.as_deref());
 
-      if name.is_none() {
-        name = fallback_name_for_role(role.as_deref(), node, ctx, &element_ref);
-      }
-
       let states = AccessibilityState {
         focusable,
         disabled,
@@ -526,27 +557,27 @@ fn compute_hidden_and_ids(
 
 fn collect_labels(
   root: &StyledNode,
-  hidden: &HashMap<usize, bool>,
+  aria_hidden: &HashMap<usize, bool>,
   ids: &HashMap<String, usize>,
   lookup: &HashMap<usize, &StyledNode>,
 ) -> HashMap<usize, Vec<usize>> {
-  fn is_hidden(node: &StyledNode, hidden: &HashMap<usize, bool>) -> bool {
-    *hidden.get(&node.node_id).unwrap_or(&false)
+  fn is_hidden(node: &StyledNode, aria_hidden: &HashMap<usize, bool>) -> bool {
+    *aria_hidden.get(&node.node_id).unwrap_or(&false)
   }
 
   /// HTML label containment is defined in terms of the DOM tree, not the composed tree.
   fn first_labelable_dom_descendant<'a>(
     node: &'a StyledNode,
-    hidden: &HashMap<usize, bool>,
+    aria_hidden: &HashMap<usize, bool>,
   ) -> Option<&'a StyledNode> {
     for child in &node.children {
-      if is_hidden(child, hidden) {
+      if is_hidden(child, aria_hidden) {
         continue;
       }
       if is_labelable(&child.node) {
         return Some(child);
       }
-      if let Some(found) = first_labelable_dom_descendant(child, hidden) {
+      if let Some(found) = first_labelable_dom_descendant(child, aria_hidden) {
         return Some(found);
       }
     }
@@ -555,12 +586,12 @@ fn collect_labels(
 
   fn walk_dom(
     node: &StyledNode,
-    hidden: &HashMap<usize, bool>,
+    aria_hidden: &HashMap<usize, bool>,
     ids: &HashMap<String, usize>,
     lookup: &HashMap<usize, &StyledNode>,
     labels: &mut HashMap<usize, Vec<usize>>,
   ) {
-    if is_hidden(node, hidden) {
+    if is_hidden(node, aria_hidden) {
       return;
     }
 
@@ -582,18 +613,18 @@ fn collect_labels(
             }
           }
         }
-      } else if let Some(target) = first_labelable_dom_descendant(node, hidden) {
+      } else if let Some(target) = first_labelable_dom_descendant(node, aria_hidden) {
         labels.entry(target.node_id).or_default().push(node.node_id);
       }
     }
 
     for child in &node.children {
-      walk_dom(child, hidden, ids, lookup, labels);
+      walk_dom(child, aria_hidden, ids, lookup, labels);
     }
   }
 
   let mut labels: HashMap<usize, Vec<usize>> = HashMap::new();
-  walk_dom(root, hidden, ids, lookup, &mut labels);
+  walk_dom(root, aria_hidden, ids, lookup, &mut labels);
   labels
 }
 
@@ -645,7 +676,9 @@ fn is_decorative_img(node: &StyledNode, ctx: &BuildContext) -> bool {
 
 fn is_node_hidden(node: &StyledNode) -> bool {
   let attr_hidden = match node.node.node_type {
-    DomNodeType::Element { .. } => node.node.get_attribute_ref("hidden").is_some(),
+    DomNodeType::Element { .. } | DomNodeType::Slot { .. } => {
+      node.node.get_attribute_ref("hidden").is_some()
+    }
     _ => false,
   };
 
@@ -767,7 +800,10 @@ enum ParsedRole {
 fn is_supported_role(role: &str) -> bool {
   matches!(
     role,
-    "article"
+    "alert"
+      | "alertdialog"
+      | "application"
+      | "article"
       | "banner"
       | "button"
       | "caption"
@@ -779,9 +815,14 @@ fn is_supported_role(role: &str) -> bool {
       | "complementary"
       | "contentinfo"
       | "dialog"
+      | "directory"
+      | "document"
+      | "feed"
       | "figure"
       | "form"
       | "generic"
+      | "grid"
+      | "gridcell"
       | "group"
       | "heading"
       | "img"
@@ -789,26 +830,48 @@ fn is_supported_role(role: &str) -> bool {
       | "list"
       | "listbox"
       | "listitem"
+      | "log"
       | "main"
+      | "marquee"
+      | "math"
+      | "menu"
+      | "menubar"
+      | "menuitem"
+      | "menuitemcheckbox"
+      | "menuitemradio"
       | "meter"
       | "navigation"
+      | "none"
+      | "note"
       | "option"
+      | "paragraph"
+      | "presentation"
       | "progressbar"
       | "radio"
-      | "search"
+      | "radiogroup"
       | "region"
       | "row"
       | "rowgroup"
       | "rowheader"
+      | "search"
       | "separator"
       | "searchbox"
       | "slider"
       | "spinbutton"
-      | "term"
       | "status"
       | "switch"
+      | "tab"
       | "table"
+      | "tablist"
+      | "tabpanel"
+      | "term"
       | "textbox"
+      | "timer"
+      | "toolbar"
+      | "tooltip"
+      | "tree"
+      | "treeitem"
+      | "treegrid"
   )
 }
 
@@ -829,6 +892,28 @@ fn parse_aria_role_attr(node: &DomNode) -> Option<ParsedRole> {
   None
 }
 
+fn has_global_aria_attributes(node: &DomNode) -> bool {
+  node.attributes_iter().any(|(name, _)| {
+    let lower = name.to_ascii_lowercase();
+    lower.starts_with("aria-") && lower != "aria-hidden"
+  })
+}
+
+fn should_honor_presentational(node: &DomNode) -> bool {
+  if has_global_aria_attributes(node) {
+    return false;
+  }
+
+  let aria_disabled = parse_bool_attr(node, "aria-disabled").unwrap_or(false);
+  let disabled = aria_disabled
+    || node
+      .get_attribute_ref("disabled")
+      .map(|v| !v.trim().is_empty())
+      .unwrap_or(false);
+
+  !compute_focusable(node, None, disabled)
+}
+
 fn compute_role(
   node: &StyledNode,
   ancestors: &[&DomNode],
@@ -837,10 +922,15 @@ fn compute_role(
   let dom_node = &node.node;
 
   if let Some(parsed) = parse_aria_role_attr(dom_node) {
-    return match parsed {
-      ParsedRole::Explicit(role) => (Some(role), false, true),
-      ParsedRole::Presentational => (None, true, true),
-    };
+    match parsed {
+      ParsedRole::Explicit(role) => return (Some(role), false, true),
+      ParsedRole::Presentational => {
+        if should_honor_presentational(dom_node) {
+          return (None, true, true);
+        }
+        // Otherwise, ignore and fall back to implicit role inference.
+      }
+    }
   }
 
   if !is_html_element(dom_node) {
@@ -863,10 +953,14 @@ fn compute_role(
     "input" => input_role(dom_node),
     "textarea" => Some("textbox".to_string()),
     "select" => Some(select_role(dom_node)),
+    "datalist" => Some("listbox".to_string()),
+    "optgroup" => Some("group".to_string()),
     "option" => Some("option".to_string()),
     "img" => Some("img".to_string()),
+    "figcaption" => Some("caption".to_string()),
     "figure" => Some("figure".to_string()),
     "ul" | "ol" | "menu" => Some("list".to_string()),
+    "menuitem" => Some("menuitem".to_string()),
     "li" => Some("listitem".to_string()),
     "dl" => Some("list".to_string()),
     "dt" => Some("term".to_string()),
@@ -890,6 +984,7 @@ fn compute_role(
       }
     }
     "nav" => Some("navigation".to_string()),
+    "details" => Some("group".to_string()),
     "header" => {
       if has_landmark_ancestor(ancestors) {
         None
@@ -910,6 +1005,8 @@ fn compute_role(
     "section" => Some("region".to_string()),
     "dialog" => Some("dialog".to_string()),
     "hr" => Some("separator".to_string()),
+    "math" => Some("math".to_string()),
+    "p" => Some("paragraph".to_string()),
     "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => Some("heading".to_string()),
     _ => None,
   };
@@ -1036,98 +1133,38 @@ fn role_allows_name_from_content(role: Option<&str>, tag: Option<&str>) -> bool 
   true
 }
 
+/// Compute the accessible name per the W3C Accessible Name and Description
+/// Computation algorithm (https://www.w3.org/TR/accname-1.2/#computation).
 fn compute_name(
   node: &StyledNode,
   ctx: &BuildContext,
   role: Option<&str>,
-  allow_visible_text: bool,
+  allow_name_from_content: bool,
 ) -> Option<String> {
   let mut visited = HashSet::new();
-  compute_name_internal(node, ctx, role, allow_visible_text, &mut visited)
-}
-
-fn compute_name_internal(
-  node: &StyledNode,
-  ctx: &BuildContext,
-  role: Option<&str>,
-  allow_visible_text: bool,
-  visited: &mut HashSet<usize>,
-) -> Option<String> {
-  let tag = node.node.tag_name();
-  let lowercase_tag = tag.map(|t| t.to_ascii_lowercase());
-
-  if !visited.insert(node.node_id) {
-    return None;
-  }
-
-  if let Some(labelled) = referenced_text_attr(node, ctx, "aria-labelledby", visited, true) {
-    return Some(labelled);
-  }
-
-  if let Some(label) = node.node.get_attribute_ref("aria-label") {
-    let norm = normalize_whitespace(label);
-    if !norm.is_empty() {
-      return Some(norm);
-    }
-  }
-
-  if let Some(label) = label_association_name(node, ctx, visited, false) {
-    return Some(label);
-  }
-
-  if let Some(placeholder) = placeholder_as_name(node) {
-    return Some(placeholder);
-  }
-
-  if allow_visible_text {
-    if let Some(native) = native_name_from_html(node, ctx, visited, false) {
-      if !native.is_empty() {
-        return Some(native);
-      }
-    }
-
-    if let Some(specific) = role_specific_name(node, ctx, role) {
-      if !specific.is_empty() {
-        return Some(specific);
-      }
-    }
-  }
-
-  if let Some(title) = node.node.get_attribute_ref("title") {
-    let norm = normalize_whitespace(title);
-    if !norm.is_empty() {
-      return Some(norm);
-    }
-  }
-
-  if allow_visible_text
-    && role_allows_name_from_content(role, lowercase_tag.as_deref())
-    && allows_visible_text_name(tag, role, false)
-  {
-    let text = ctx.visible_text(node);
-    if !text.is_empty() {
-      return Some(text);
-    }
-  }
-
-  None
+  ctx.text_alternative(
+    node,
+    &mut visited,
+    TextAlternativeMode::Visible,
+    Some(allow_name_from_content),
+  )
 }
 
 fn native_name_from_html<'a>(
   node: &'a StyledNode,
   ctx: &BuildContext<'a>,
   visited: &mut HashSet<usize>,
-  include_hidden: bool,
+  mode: TextAlternativeMode,
 ) -> Option<String> {
   let tag = node.node.tag_name().map(|t| t.to_ascii_lowercase())?;
 
   match tag.as_str() {
-    "fieldset" => first_child_with_tag(node, ctx, "legend", false, include_hidden)
-      .and_then(|legend| ctx.text_alternative(legend, visited, include_hidden)),
-    "figure" => first_child_with_tag(node, ctx, "figcaption", true, include_hidden)
-      .and_then(|caption| ctx.text_alternative(caption, visited, include_hidden)),
-    "table" => first_child_with_tag(node, ctx, "caption", true, include_hidden)
-      .and_then(|caption| ctx.text_alternative(caption, visited, include_hidden)),
+    "fieldset" => first_child_with_tag(node, ctx, "legend", false, mode)
+      .and_then(|legend| ctx.text_alternative(legend, visited, mode, None)),
+    "figure" => first_child_with_tag(node, ctx, "figcaption", true, mode)
+      .and_then(|caption| ctx.text_alternative(caption, visited, mode, None)),
+    "table" => first_child_with_tag(node, ctx, "caption", true, mode)
+      .and_then(|caption| ctx.text_alternative(caption, visited, mode, None)),
     _ => None,
   }
 }
@@ -1137,10 +1174,10 @@ fn first_child_with_tag<'a>(
   ctx: &BuildContext<'a>,
   tag: &str,
   require_visible: bool,
-  include_hidden: bool,
+  mode: TextAlternativeMode,
 ) -> Option<&'a StyledNode> {
   for child in ctx.composed_children(node) {
-    if require_visible && ctx.is_hidden_for_mode(child, include_hidden) {
+    if require_visible && ctx.is_hidden_for_mode(child, mode) {
       continue;
     }
 
@@ -1157,14 +1194,14 @@ fn first_child_with_tag<'a>(
   None
 }
 
-fn allows_visible_text_name(tag: Option<&str>, role: Option<&str>, allow_legend: bool) -> bool {
+fn allows_visible_text_name(tag: Option<&str>, role: Option<&str>) -> bool {
   let tag_blocked = tag
     .map(|t| {
       let lower = t.to_ascii_lowercase();
       matches!(
         lower.as_str(),
         "fieldset" | "figure" | "table" | "dialog" | "select"
-      ) || (!allow_legend && lower == "legend")
+      )
     })
     .unwrap_or(false);
 
@@ -1186,13 +1223,122 @@ fn allows_visible_text_name(tag: Option<&str>, role: Option<&str>, allow_legend:
   true
 }
 
+fn control_value_text(node: &StyledNode, ctx: &BuildContext) -> Option<String> {
+  let tag = node.node.tag_name()?.to_ascii_lowercase();
+  match tag.as_str() {
+    "input" => {
+      let input_type = node
+        .node
+        .get_attribute_ref("type")
+        .map(|t| t.to_ascii_lowercase())
+        .unwrap_or_else(|| "text".to_string());
+      if input_type == "hidden" {
+        return None;
+      }
+      Some(
+        node
+          .node
+          .get_attribute_ref("value")
+          .map(|v| v.to_string())
+          .unwrap_or_default(),
+      )
+    }
+    "textarea" => {
+      let mut combined = String::new();
+      for child in ctx.composed_children(node) {
+        if ctx.is_hidden(child) {
+          continue;
+        }
+        if let DomNodeType::Text { content } = &child.node.node_type {
+          combined.push_str(content);
+        }
+      }
+      Some(combined)
+    }
+    "select" => selected_option_text(node, ctx),
+    _ => None,
+  }
+}
+
+fn selected_option_text(node: &StyledNode, ctx: &BuildContext) -> Option<String> {
+  let explicit = find_selected_option_text(node, false, ctx);
+  if explicit.is_some() {
+    return explicit;
+  }
+
+  let multiple = node.node.get_attribute_ref("multiple").is_some();
+  if multiple {
+    return None;
+  }
+
+  first_enabled_option_text(node, false, ctx)
+}
+
+fn find_selected_option_text(
+  node: &StyledNode,
+  optgroup_disabled: bool,
+  ctx: &BuildContext,
+) -> Option<String> {
+  let tag = node.node.tag_name().map(|t| t.to_ascii_lowercase());
+  let is_option = tag.as_deref() == Some("option");
+
+  let option_disabled = node.node.get_attribute_ref("disabled").is_some();
+  let next_optgroup_disabled =
+    optgroup_disabled || (tag.as_deref() == Some("optgroup") && option_disabled);
+
+  if is_option
+    && node.node.get_attribute_ref("selected").is_some()
+    && !(option_disabled || optgroup_disabled)
+    && !ctx.is_hidden(node)
+  {
+    return Some(option_text(node, ctx));
+  }
+
+  for child in ctx.composed_children(node) {
+    if let Some(val) = find_selected_option_text(child, next_optgroup_disabled, ctx) {
+      return Some(val);
+    }
+  }
+  None
+}
+
+fn first_enabled_option_text(
+  node: &StyledNode,
+  optgroup_disabled: bool,
+  ctx: &BuildContext,
+) -> Option<String> {
+  let tag = node.node.tag_name().map(|t| t.to_ascii_lowercase());
+  let is_option = tag.as_deref() == Some("option");
+
+  let option_disabled = node.node.get_attribute_ref("disabled").is_some();
+  let next_optgroup_disabled =
+    optgroup_disabled || (tag.as_deref() == Some("optgroup") && option_disabled);
+
+  if is_option && !(option_disabled || optgroup_disabled) && !ctx.is_hidden(node) {
+    return Some(option_text(node, ctx));
+  }
+
+  for child in ctx.composed_children(node) {
+    if let Some(val) = first_enabled_option_text(child, next_optgroup_disabled, ctx) {
+      return Some(val);
+    }
+  }
+
+  None
+}
+
+fn option_text(node: &StyledNode, ctx: &BuildContext) -> String {
+  let mut visited = HashSet::new();
+  ctx.subtree_text(node, &mut visited, TextAlternativeMode::Visible)
+}
+
 /// Use placeholder text as a fallback accessible name for text-entry controls.
 ///
 /// HTML-AAM and major browsers expose the `placeholder` attribute as the name
 /// when an `<input>`/`<textarea>` has no explicit label. We mirror that behavior
 /// (after ARIA and `<label>` sources) so unlabeled text fields remain
 /// discoverable to assistive tech.
-fn placeholder_as_name(node: &StyledNode) -> Option<String> {
+fn placeholder_as_name(node: &StyledNode, ctx: &BuildContext) -> Option<String> {
   let tag = node.node.tag_name()?.to_ascii_lowercase();
   let is_textbox_like = match tag.as_str() {
     "textarea" => true,
@@ -1217,6 +1363,13 @@ fn placeholder_as_name(node: &StyledNode) -> Option<String> {
     return None;
   }
 
+  if control_value_text(node, ctx)
+    .map(|v| !normalize_whitespace(&v).is_empty())
+    .unwrap_or(false)
+  {
+    return None;
+  }
+
   let placeholder = node.node.get_attribute_ref("placeholder")?;
   let norm = normalize_whitespace(placeholder);
   if norm.is_empty() {
@@ -1226,21 +1379,31 @@ fn placeholder_as_name(node: &StyledNode) -> Option<String> {
   }
 }
 
-fn referenced_text_attr(
-  node: &StyledNode,
-  ctx: &BuildContext,
-  attr: &str,
-  visited: &mut HashSet<usize>,
-  include_hidden: bool,
-) -> Option<String> {
-  let Some(attr_value) = node.node.get_attribute_ref(attr) else {
-    return None;
-  };
+fn alt_applies(tag: Option<&str>, role: Option<&str>, node: &DomNode) -> bool {
+  if role == Some("img") {
+    return true;
+  }
 
+  match tag.map(|t| t.to_ascii_lowercase()) {
+    Some(tag) if tag == "img" || tag == "area" => true,
+    Some(tag) if tag == "input" => node
+      .get_attribute_ref("type")
+      .map(|t| t.eq_ignore_ascii_case("image"))
+      .unwrap_or(false),
+    _ => false,
+  }
+}
+
+fn referenced_text_attr(
+  ctx: &BuildContext,
+  attr_value: &str,
+  visited: &mut HashSet<usize>,
+  mode: TextAlternativeMode,
+) -> String {
   let mut parts = Vec::new();
   for id in attr_value.split_whitespace() {
     if let Some(target) = ctx.node_for_id(id) {
-      if let Some(text) = ctx.text_alternative(target, visited, include_hidden) {
+      if let Some(text) = ctx.text_alternative(target, visited, mode, None) {
         if !text.is_empty() {
           parts.push(text);
         }
@@ -1248,18 +1411,13 @@ fn referenced_text_attr(
     }
   }
 
-  if parts.is_empty() {
-    None
-  } else {
-    Some(normalize_whitespace(&parts.join(" ")))
-  }
+  normalize_whitespace(&parts.join(" "))
 }
 
 fn label_association_name(
   node: &StyledNode,
   ctx: &BuildContext,
   visited: &mut HashSet<usize>,
-  include_hidden: bool,
 ) -> Option<String> {
   if !is_labelable(&node.node) {
     return None;
@@ -1272,7 +1430,9 @@ fn label_association_name(
   let mut parts = Vec::new();
   for label_id in label_ids {
     if let Some(label_node) = ctx.node_by_id(*label_id) {
-      if let Some(text) = ctx.text_alternative(label_node, visited, include_hidden) {
+      if let Some(text) =
+        ctx.text_alternative(label_node, visited, TextAlternativeMode::Referenced, None)
+      {
         if !text.is_empty() {
           parts.push(text);
         }
@@ -1291,15 +1451,17 @@ fn first_visible_child_text(
   node: &StyledNode,
   ctx: &BuildContext,
   tag_name: &str,
+  visited: &mut HashSet<usize>,
+  mode: TextAlternativeMode,
 ) -> Option<String> {
-  for child in &node.children {
+  for child in ctx.composed_children(node) {
     if child
       .node
       .tag_name()
       .map(|t| t.eq_ignore_ascii_case(tag_name))
       .unwrap_or(false)
     {
-      let text = ctx.visible_text(child);
+      let text = ctx.subtree_text(child, visited, mode);
       if !text.is_empty() {
         return Some(text);
       }
@@ -1309,7 +1471,13 @@ fn first_visible_child_text(
   None
 }
 
-fn role_specific_name(node: &StyledNode, ctx: &BuildContext, role: Option<&str>) -> Option<String> {
+fn role_specific_name(
+  node: &StyledNode,
+  ctx: &BuildContext,
+  role: Option<&str>,
+  visited: &mut HashSet<usize>,
+  mode: TextAlternativeMode,
+) -> Option<String> {
   let tag = node
     .node
     .tag_name()
@@ -1352,7 +1520,7 @@ fn role_specific_name(node: &StyledNode, ctx: &BuildContext, role: Option<&str>)
       None
     }
     "button" => {
-      let text = ctx.visible_text(node);
+      let text = ctx.subtree_text(node, visited, mode);
       if !text.is_empty() {
         Some(text)
       } else {
@@ -1363,43 +1531,40 @@ fn role_specific_name(node: &StyledNode, ctx: &BuildContext, role: Option<&str>)
       }
     }
     "option" => {
-      let text = ctx.visible_text(node);
+      let text = ctx.subtree_text(node, visited, mode);
       if text.is_empty() {
         None
       } else {
         Some(text)
       }
     }
-    "fieldset" => {
-      let legend = node.children.iter().find(|child| {
+    "fieldset" => ctx
+      .composed_children(node)
+      .into_iter()
+      .find(|child| {
         child
           .node
           .tag_name()
           .map(|t| t.eq_ignore_ascii_case("legend"))
           .unwrap_or(false)
-      });
-
-      match legend {
-        Some(legend_node) => {
-          if ctx.is_hidden(legend_node) {
+      })
+      .and_then(|legend| {
+        if ctx.is_hidden_for_mode(legend, mode) {
+          None
+        } else {
+          let text = ctx.subtree_text(legend, visited, mode);
+          if text.is_empty() {
             None
           } else {
-            let text = ctx.visible_text(legend_node);
-            if text.is_empty() {
-              None
-            } else {
-              Some(text)
-            }
+            Some(text)
           }
         }
-        None => None,
-      }
-    }
-    "table" => first_visible_child_text(node, ctx, "caption"),
-    "figure" => first_visible_child_text(node, ctx, "figcaption"),
+      }),
+    "table" => first_visible_child_text(node, ctx, "caption", visited, mode),
+    "figure" => first_visible_child_text(node, ctx, "figcaption", visited, mode),
     _ => {
       if role == Some("heading") {
-        let text = ctx.visible_text(node);
+        let text = ctx.subtree_text(node, visited, mode);
         if !text.is_empty() {
           return Some(text);
         }
@@ -1413,11 +1578,16 @@ fn fallback_name_for_role(
   role: Option<&str>,
   node: &StyledNode,
   ctx: &BuildContext,
-  _element_ref: &ElementRef,
 ) -> Option<String> {
   match role {
+    Some("textbox") | Some("searchbox") | Some("combobox") | Some("listbox") => {
+      control_value_text(node, ctx)
+        .map(|v| normalize_whitespace(&v))
+        .filter(|v| !v.is_empty())
+    }
     Some("option") => {
-      let text = ctx.visible_text(node);
+      let mut visited = HashSet::new();
+      let text = ctx.subtree_text(node, &mut visited, TextAlternativeMode::Visible);
       if text.is_empty() {
         None
       } else {
@@ -1458,8 +1628,16 @@ fn compute_description(node: &StyledNode, ctx: &BuildContext) -> Option<String> 
   let mut parts = Vec::new();
   let mut visited = HashSet::new();
 
-  if let Some(desc) = referenced_text_attr(node, ctx, "aria-describedby", &mut visited, true) {
-    parts.push(desc);
+  if let Some(desc_attr) = node.node.get_attribute_ref("aria-describedby") {
+    let desc = referenced_text_attr(
+      ctx,
+      desc_attr,
+      &mut visited,
+      TextAlternativeMode::Referenced,
+    );
+    if !desc.is_empty() {
+      parts.push(desc);
+    }
   }
 
   if let Some(description) = node.node.get_attribute_ref("aria-description") {
@@ -1537,7 +1715,8 @@ fn compute_value(
       meter_value(&node.node)
     }
     Some("option") => {
-      let text = ctx.visible_text(node);
+      let mut visited = HashSet::new();
+      let text = ctx.subtree_text(node, &mut visited, TextAlternativeMode::Visible);
       if text.is_empty() {
         None
       } else {
