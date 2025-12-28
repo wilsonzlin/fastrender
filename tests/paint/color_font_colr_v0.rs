@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 
-use fastrender::paint::display_list::{DisplayItem, DisplayList, FontId, GlyphInstance, TextItem};
+use fastrender::paint::display_list::{DisplayItem, DisplayList, GlyphInstance, TextItem};
 use fastrender::paint::display_list_renderer::DisplayListRenderer;
 use fastrender::style::color::Rgba;
 use fastrender::text::font_db::FontDatabase;
@@ -59,6 +59,7 @@ fn text_item_from_run(run: &ShapedRun, origin: Point, text_color: Rgba) -> TextI
     shadows: Vec::new(),
     font_size: run.font_size,
     advance_width: run.advance,
+<<<<<<< HEAD
     font_id: Some(FontId {
       family: run.font.family.clone(),
       weight: run.font.weight.value(),
@@ -66,6 +67,15 @@ fn text_item_from_run(run: &ShapedRun, origin: Point, text_color: Rgba) -> TextI
       stretch: run.font.stretch,
     }),
     variations: run.variations.iter().copied().collect(),
+=======
+    font: Some(run.font.clone()),
+    variations: run
+      .variations
+      .iter()
+      .copied()
+      .map(FontVariation::from)
+      .collect(),
+>>>>>>> 8ddee26 (fix: keep shaped font bytes in display items)
     synthetic_bold: run.synthetic_bold,
     synthetic_oblique: run.synthetic_oblique,
     emphasis: None,

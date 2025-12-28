@@ -1,10 +1,11 @@
 use fastrender::geometry::Point;
-use fastrender::paint::display_list::{DisplayItem, DisplayList, FontId, GlyphInstance, TextItem};
+use fastrender::paint::display_list::{DisplayItem, DisplayList, GlyphInstance, TextItem};
 use fastrender::paint::display_list_renderer::DisplayListRenderer;
 use fastrender::style::types::FontVariationSetting;
 use fastrender::text::font_db::FontDatabase;
 use fastrender::text::font_loader::FontContext;
 use fastrender::text::pipeline::{ShapedRun, ShapingPipeline};
+use fastrender::text::variations::FontVariation;
 use fastrender::{ComputedStyle, Rgba, TextRasterizer};
 use rustybuzz::ttf_parser::Tag;
 use std::sync::Arc;
@@ -82,18 +83,19 @@ fn text_item_from_run(run: &ShapedRun, origin: Point) -> TextItem {
     origin,
     glyphs,
     color: Rgba::BLACK,
+    palette_index: run.palette_index,
     shadows: Vec::new(),
     font_size: run.font_size,
     advance_width: run.advance,
-    font_id: Some(FontId {
-      family: run.font.family.clone(),
-      weight: run.font.weight.value(),
-      style: run.font.style,
-      stretch: run.font.stretch,
-    }),
+    font: Some(run.font.clone()),
     synthetic_bold: run.synthetic_bold,
     synthetic_oblique: run.synthetic_oblique,
-    variations: run.variations.clone(),
+    variations: run
+      .variations
+      .iter()
+      .copied()
+      .map(FontVariation::from)
+      .collect(),
     emphasis: None,
     decorations: Vec::new(),
   }

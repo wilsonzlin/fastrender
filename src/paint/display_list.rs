@@ -60,8 +60,7 @@ use crate::style::types::ResolvedTextDecoration;
 use crate::style::types::TextEmphasisPosition;
 use crate::style::types::TextEmphasisStyle;
 use crate::style::types::TransformStyle;
-use crate::text::font_db::FontStretch;
-use crate::text::font_db::FontStyle;
+use crate::text::font_db::LoadedFont;
 use crate::text::variations::FontVariation;
 use std::fmt;
 use std::sync::Arc;
@@ -592,8 +591,8 @@ pub struct TextItem {
   /// Total advance width of the text run
   pub advance_width: f32,
 
-  /// Font identifier (for looking up font data)
-  pub font_id: Option<FontId>,
+  /// Exact font bytes used for shaping.
+  pub font: Option<Arc<LoadedFont>>,
 
   /// Active variation coordinates for this run.
   pub variations: Vec<FontVariation>,
@@ -638,12 +637,12 @@ pub struct EmphasisMark {
 #[derive(Debug, Clone)]
 pub struct EmphasisText {
   pub glyphs: Vec<GlyphInstance>,
-  pub font_id: Option<FontId>,
-  pub variations: Vec<FontVariation>,
+  pub font: Option<Arc<LoadedFont>>,
   pub font_size: f32,
   pub width: f32,
   pub height: f32,
   pub baseline_offset: f32,
+  pub variations: Vec<FontVariation>,
   pub palette_index: u16,
 }
 
@@ -665,22 +664,6 @@ pub struct TextShadowItem {
   pub offset: Point,
   pub blur_radius: f32,
   pub color: Rgba,
-}
-
-/// Font identifier for looking up font data
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct FontId {
-  /// Font family name
-  pub family: String,
-
-  /// Font weight (100-900)
-  pub weight: u16,
-
-  /// Font style (normal/italic/oblique)
-  pub style: FontStyle,
-
-  /// Font stretch (percentage of normal width)
-  pub stretch: FontStretch,
 }
 
 /// A resolved text decoration set to paint over a fragment.
@@ -781,8 +764,9 @@ pub struct ListMarkerItem {
   /// Total advance width for the marker run
   pub advance_width: f32,
 
-  /// Resolved font id for glyph lookup
-  pub font_id: Option<FontId>,
+  /// Exact font bytes used for shaping.
+  pub font: Option<Arc<LoadedFont>>,
+
   /// Variation coordinates applied during shaping.
   pub variations: Vec<FontVariation>,
 
