@@ -1332,6 +1332,15 @@ pub enum SupportsCondition {
   False,
 }
 
+/// Cascade layer modifier attached to an @import rule.
+#[derive(Debug, Clone)]
+pub enum ImportLayer {
+  /// Anonymous layer (equivalent to `@layer { ... }`).
+  Anonymous,
+  /// Named layer path, potentially dotted (e.g., `foo.bar`).
+  Named(Vec<String>),
+}
+
 /// A @import rule targeting another stylesheet
 #[derive(Debug, Clone)]
 pub struct ImportRule {
@@ -1339,6 +1348,10 @@ pub struct ImportRule {
   pub href: String,
   /// Optional list of media queries that gate the import
   pub media: Vec<MediaQuery>,
+  /// Optional cascade layer modifier.
+  pub layer: Option<ImportLayer>,
+  /// Optional @supports condition gating the import.
+  pub supports: Option<SupportsCondition>,
 }
 
 /// A single CSS style rule (selectors + declarations)
@@ -1602,6 +1615,12 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
         }));
       }
       CssRule::Import(import) => {
+        if let Some(condition) = &import.supports {
+          if !condition.matches() {
+            continue;
+          }
+        }
+
         let media_matches = import.media.is_empty()
           || media_ctx.evaluate_list_with_cache(&import.media, cache.as_deref_mut());
         if !media_matches {
@@ -1626,6 +1645,7 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
           Ok(css_text) => {
             seen.insert(resolved_href.clone());
             if let Ok(sheet) = crate::css::parser::parse_stylesheet(&css_text) {
+              let mut resolved_children = Vec::new();
               resolve_rules(
                 &sheet.rules,
                 loader,
@@ -1633,8 +1653,26 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
                 media_ctx,
                 cache.as_deref_mut(),
                 seen,
-                out,
+                &mut resolved_children,
               );
+
+              if let Some(layer) = &import.layer {
+                let layer_rule = match layer {
+                  ImportLayer::Anonymous => LayerRule {
+                    names: Vec::new(),
+                    rules: resolved_children,
+                    anonymous: true,
+                  },
+                  ImportLayer::Named(path) => LayerRule {
+                    names: vec![path.clone()],
+                    rules: resolved_children,
+                    anonymous: false,
+                  },
+                };
+                out.push(CssRule::Layer(layer_rule));
+              } else {
+                out.extend(resolved_children);
+              }
             }
           }
           Err(_) => {

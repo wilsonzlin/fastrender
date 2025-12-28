@@ -21,6 +21,7 @@ use super::types::FontFaceSource;
 use super::types::FontFaceStyle;
 use super::types::FontFaceUrlSource;
 use super::types::FontSourceFormat;
+use super::types::ImportLayer;
 use super::types::ImportRule;
 use super::types::Keyframe;
 use super::types::KeyframesRule;
@@ -226,7 +227,9 @@ fn parse_import_rule<'i, 't>(
       parser.parse_nested_block(|p| {
         p.skip_whitespace();
         match p.next_including_whitespace() {
-          Ok(Token::QuotedString(s)) | Ok(Token::Ident(s)) => Ok(s.to_string()),
+          Ok(Token::QuotedString(s)) | Ok(Token::Ident(s)) | Ok(Token::UnquotedUrl(s)) => {
+            Ok(s.to_string())
+          }
           _ => Err(p.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
             "expected url".into(),
           ))),
@@ -237,29 +240,151 @@ fn parse_import_rule<'i, 't>(
     _ => return Ok(None),
   };
 
-  // Parse optional media list until semicolon or block start (best-effort; unknown tokens are ignored).
-  let mut media_queries = Vec::new();
-  let mut media_tokens = String::new();
+  // Capture the remaining prelude up to the semicolon or block.
+  let prelude_start = parser.position();
   while let Ok(token) = parser.next_including_whitespace() {
     match token {
       Token::Semicolon | Token::CurlyBracketBlock => break,
-      Token::WhiteSpace(ws) => media_tokens.push_str(ws),
-      other => media_tokens.push_str(&other.to_css_string()),
+      _ => {}
     }
   }
-  if !media_tokens.trim().is_empty() {
-    if let Ok(list) = MediaQuery::parse_list(&media_tokens) {
-      media_queries = list;
-    }
-  }
+  let prelude = parser.slice_from(prelude_start);
+  let prelude = prelude.trim_end_matches(|c: char| c == ';' || c.is_whitespace());
 
-  // Skip until semicolon
-  // (already consumed above)
+  let (layer, supports, media_queries) = match parse_import_modifiers_and_media(prelude) {
+    Some(parts) => parts,
+    None => return Ok(None),
+  };
 
   Ok(Some(CssRule::Import(ImportRule {
     href,
     media: media_queries,
+    layer,
+    supports,
   })))
+}
+
+fn parse_import_modifiers_and_media(
+  prelude: &str,
+) -> Option<(
+  Option<ImportLayer>,
+  Option<SupportsCondition>,
+  Vec<MediaQuery>,
+)> {
+  let mut input = ParserInput::new(prelude.trim());
+  let mut parser = Parser::new(&mut input);
+
+  let mut layer: Option<ImportLayer> = None;
+  let mut supports: Option<SupportsCondition> = None;
+  let mut media_start = parser.position();
+
+  while !parser.is_exhausted() {
+    parser.skip_whitespace();
+    media_start = parser.position();
+
+    if let Ok(parsed_layer) = parser.try_parse(parse_import_layer_modifier) {
+      if layer.is_some() {
+        return None;
+      }
+      layer = Some(parsed_layer);
+      media_start = parser.position();
+      continue;
+    }
+
+    if let Ok(condition) = parser.try_parse(parse_import_supports_modifier) {
+      if supports.is_some() {
+        return None;
+      }
+      supports = Some(condition);
+      media_start = parser.position();
+      continue;
+    }
+
+    break;
+  }
+
+  let media_tokens = parser.slice_from(media_start).trim();
+  let media = if media_tokens.is_empty() {
+    Vec::new()
+  } else {
+    MediaQuery::parse_list(media_tokens).ok()?
+  };
+
+  Some((layer, supports, media))
+}
+
+fn parse_import_layer_modifier<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> std::result::Result<ImportLayer, ParseError<'i, SelectorParseErrorKind<'i>>> {
+  if parser
+    .try_parse(|p| p.expect_ident_matching("layer"))
+    .is_ok()
+  {
+    return Ok(ImportLayer::Anonymous);
+  }
+
+  parser.expect_function_matching("layer")?;
+  parser.parse_nested_block(|nested| {
+    let names = parse_import_layer_name(nested)?;
+    Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(ImportLayer::Named(names))
+  })
+}
+
+fn parse_import_layer_name<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> std::result::Result<Vec<String>, ParseError<'i, SelectorParseErrorKind<'i>>> {
+  let mut components = Vec::new();
+  loop {
+    parser.skip_whitespace();
+    match parser.next_including_whitespace() {
+      Ok(Token::Ident(id)) => components.push(id.to_string()),
+      _ => {
+        return Err(
+          parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
+            "invalid layer name".into(),
+          )),
+        )
+      }
+    }
+
+    parser.skip_whitespace();
+    let state = parser.state();
+    if let Ok(Token::Delim('.')) = parser.next_including_whitespace() {
+      continue;
+    }
+    parser.reset(&state);
+    break;
+  }
+
+  parser.skip_whitespace();
+  if components.is_empty() || !parser.is_exhausted() {
+    return Err(
+      parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
+        "invalid layer name".into(),
+      )),
+    );
+  }
+
+  Ok(components)
+}
+
+fn parse_import_supports_modifier<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> std::result::Result<SupportsCondition, ParseError<'i, SelectorParseErrorKind<'i>>> {
+  parser.expect_function_matching("supports")?;
+  parser.parse_nested_block(|nested| {
+    let condition = parse_supports_condition(nested).map_err(|_| {
+      nested.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
+        "invalid supports condition".into(),
+      ))
+    })?;
+    nested.skip_whitespace();
+    if nested.is_exhausted() {
+      Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(condition)
+    } else {
+      Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(SupportsCondition::False)
+    }
+  })
 }
 
 /// Parse a @media rule
