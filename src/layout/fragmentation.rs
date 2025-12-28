@@ -238,6 +238,24 @@ pub fn resolve_fragmentation_boundaries_with_context(
   boundaries
 }
 
+/// Resolves fragmentation boundaries while honoring the provided writing mode axes.
+///
+/// For the common horizontal-tb writing mode this defers to the primary pagination algorithm; other
+/// writing modes currently reuse the same block-axis interpretation, which matches the existing
+/// fragment geometry returned by layout.
+pub fn resolve_fragmentation_boundaries_with_axes(
+  root: &FragmentNode,
+  fragmentainer_size: f32,
+  context: FragmentationContext,
+  axes: FragmentAxes,
+) -> Vec<f32> {
+  if axes.block_axis() == PhysicalAxis::Y && axes.block_positive() {
+    return resolve_fragmentation_boundaries_with_context(root, fragmentainer_size, context);
+  }
+
+  resolve_fragmentation_boundaries_with_context(root, fragmentainer_size, context)
+}
+
 /// Splits a fragment tree into multiple fragmentainer roots based on the given options.
 ///
 /// The returned fragments retain the original tree structure but are clipped to the
@@ -254,12 +272,8 @@ pub fn fragment_tree(root: &FragmentNode, options: &FragmentationOptions) -> Vec
   } else {
     FragmentationContext::Page
   };
-
-  let boundaries = resolve_fragmentation_boundaries_with_context(
-    root,
-    options.fragmentainer_size,
-    context,
-  );
+  let boundaries =
+    resolve_fragmentation_boundaries_with_context(root, options.fragmentainer_size, context);
   if boundaries.len() < 2 {
     return vec![root.clone()];
   }
@@ -457,8 +471,6 @@ pub(crate) fn clip_node(
   Some(cloned)
 }
 
-<<<<<<< HEAD
-=======
 /// Axis-aware wrapper around [`clip_node`]. The fragmentation algorithm currently operates in
 /// physical block progression; for the common horizontal-tb writing mode this defers to the
 /// primary implementation and otherwise falls back to the same logic.
@@ -499,7 +511,6 @@ pub(crate) fn clip_node_with_axes(
   )
 }
 
->>>>>>> 6922fdc (Respect break-inside avoid for pages and columns)
 fn clone_without_children(node: &FragmentNode) -> FragmentNode {
   FragmentNode {
     bounds: node.bounds,
@@ -899,6 +910,14 @@ pub(crate) fn collect_forced_boundaries(
   node: &FragmentNode,
   abs_start: f32,
 ) -> Vec<ForcedBoundary> {
+  collect_forced_boundaries_with_axes(node, abs_start, FragmentAxes::default())
+}
+
+pub(crate) fn collect_forced_boundaries_with_axes(
+  node: &FragmentNode,
+  abs_start: f32,
+  axes: FragmentAxes,
+) -> Vec<ForcedBoundary> {
   fn is_forced_page_break(between: BreakBetween) -> bool {
     matches!(
       between,
@@ -924,10 +943,12 @@ pub(crate) fn collect_forced_boundaries(
     abs_start: f32,
     forced: &mut Vec<ForcedBoundary>,
     default_style: &ComputedStyle,
+    axes: FragmentAxes,
   ) {
+    let node_block_size = axes.block_size(&node.bounds);
     for (idx, child) in node.children.iter().enumerate() {
-      let child_abs_start = abs_start + child.bounds.y();
-      let child_abs_end = child_abs_start + child.bounds.height();
+      let child_abs_start = abs_start + axes.block_start(&child.bounds, node_block_size);
+      let child_abs_end = child_abs_start + axes.block_size(&child.bounds);
       let child_style = child
         .style
         .as_ref()
@@ -957,7 +978,7 @@ pub(crate) fn collect_forced_boundaries(
             candidate = child_abs_end;
           }
           if let Some(next_child) = node.children.get(idx + 1) {
-            let next_start = abs_start + next_child.bounds.y();
+            let next_start = abs_start + axes.block_start(&next_child.bounds, node_block_size);
             candidate = candidate.min(next_start);
           }
           boundary = candidate;
@@ -969,13 +990,13 @@ pub(crate) fn collect_forced_boundaries(
         });
       }
 
-      collect(child, child_abs_start, forced, default_style);
+      collect(child, child_abs_start, forced, default_style, axes);
     }
   }
 
   let default_style = default_style();
   let mut boundaries = Vec::new();
-  collect(node, abs_start, &mut boundaries, default_style);
+  collect(node, abs_start, &mut boundaries, default_style, axes);
   boundaries
 }
 
@@ -1213,19 +1234,6 @@ pub(crate) fn collect_atomic_ranges(
   context: FragmentationContext,
   fragmentainer_size: Option<f32>,
 ) {
-<<<<<<< HEAD
-  let abs_end = abs_start + node.bounds.height();
-  if node
-    .style
-    .as_ref()
-    .is_some_and(|style| style.float.is_floating())
-  {
-    ranges.push(AtomicRange {
-      start: abs_start,
-      end: abs_end,
-    });
-  }
-=======
   collect_atomic_ranges_with_axes(
     node,
     abs_start,
@@ -1245,14 +1253,9 @@ pub(crate) fn collect_atomic_ranges_with_axes(
   fragmentainer_size: Option<f32>,
 ) {
   collect_atomic_range_for_node(node, abs_start, axes, ranges, context, fragmentainer_size);
->>>>>>> 6922fdc (Respect break-inside avoid for pages and columns)
 
   let node_block_size = axes.block_size(&node.bounds);
   for child in &node.children {
-<<<<<<< HEAD
-    let child_abs_start = abs_start + child.bounds.y();
-    collect_atomic_ranges(child, child_abs_start, ranges);
-=======
     let child_abs_start = abs_start + axes.block_start(&child.bounds, node_block_size);
     collect_atomic_ranges_with_axes(
       child,
@@ -1262,7 +1265,6 @@ pub(crate) fn collect_atomic_ranges_with_axes(
       context,
       fragmentainer_size,
     );
->>>>>>> 6922fdc (Respect break-inside avoid for pages and columns)
   }
 }
 

@@ -1947,9 +1947,8 @@ impl BlockFormattingContext {
           max_fit = 1;
         }
         let count = specified_count.min(max_fit).max(1);
-        let used_width = ((available_inline - gap * (count.saturating_sub(1) as f32))
-          / count as f32)
-          .max(0.0);
+        let used_width =
+          ((available_inline - gap * (count.saturating_sub(1) as f32)) / count as f32).max(0.0);
         return (count, used_width, gap);
       }
 

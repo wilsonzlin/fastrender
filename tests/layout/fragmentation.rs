@@ -296,10 +296,7 @@ fn column_break_hints_follow_column_context() {
     Arc::new(first_style),
   );
   let second = FragmentNode::new_block(Rect::from_xywh(0.0, 20.0, 50.0, 20.0), vec![]);
-  let root = FragmentNode::new_block(
-    Rect::from_xywh(0.0, 0.0, 50.0, 40.0),
-    vec![first, second],
-  );
+  let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 50.0, 40.0), vec![first, second]);
 
   let options = FragmentationOptions::new(80.0).with_columns(2, 0.0);
   let fragments = fragment_tree(&root, &options);

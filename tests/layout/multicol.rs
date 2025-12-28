@@ -105,11 +105,7 @@ fn layout_multicol_fragment(
 
   let mut child_style = ComputedStyle::default();
   child_style.height = Some(Length::px(20.0));
-  let child = BoxNode::new_block(
-    Arc::new(child_style),
-    FormattingContextType::Block,
-    vec![],
-  );
+  let child = BoxNode::new_block(Arc::new(child_style), FormattingContextType::Block, vec![]);
 
   let mut container =
     BoxNode::new_block(container_style, FormattingContextType::Block, vec![child]);
@@ -117,7 +113,10 @@ fn layout_multicol_fragment(
 
   let fc = BlockFormattingContext::new();
   let fragment = fc
-    .layout(&container, &LayoutConstraints::definite_width(container_width))
+    .layout(
+      &container,
+      &LayoutConstraints::definite_width(container_width),
+    )
     .expect("layout");
 
   (fragment, container.id)

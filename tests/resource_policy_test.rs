@@ -119,8 +119,14 @@ fn blocks_cached_mixed_content_images() {
   let png_bytes = tiny_png();
 
   let fetcher = MockFetcher::default()
-    .with_html(http_doc_url, &format!(r#"<!doctype html><img src="{image_url}">"#))
-    .with_html(https_doc_url, &format!(r#"<!doctype html><img src="{image_url}">"#))
+    .with_html(
+      http_doc_url,
+      &format!(r#"<!doctype html><img src="{image_url}">"#),
+    )
+    .with_html(
+      https_doc_url,
+      &format!(r#"<!doctype html><img src="{image_url}">"#),
+    )
     .with_bytes(image_url, png_bytes, Some("image/png"));
 
   let fetcher = Arc::new(fetcher) as Arc<dyn ResourceFetcher>;
@@ -154,8 +160,14 @@ fn blocks_cached_file_images_in_http_documents() {
   let file_url = format!("file://{}", temp.path().join("image.png").display());
 
   let fetcher = MockFetcher::default()
-    .with_html(&file_doc_url, &format!(r#"<!doctype html><img src="{file_url}">"#))
-    .with_html(http_doc_url, &format!(r#"<!doctype html><img src="{file_url}">"#))
+    .with_html(
+      &file_doc_url,
+      &format!(r#"<!doctype html><img src="{file_url}">"#),
+    )
+    .with_html(
+      http_doc_url,
+      &format!(r#"<!doctype html><img src="{file_url}">"#),
+    )
     .with_bytes(&file_url, tiny_png(), Some("image/png"));
 
   let fetcher = Arc::new(fetcher) as Arc<dyn ResourceFetcher>;
