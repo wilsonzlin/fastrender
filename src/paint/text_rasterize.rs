@@ -449,7 +449,7 @@ fn rotation_transform(
   Some(Transform::from_row(cos, sin, -sin, cos, tx, ty))
 }
 
-fn concat_transforms(a: Transform, b: Transform) -> Transform {
+pub(crate) fn concat_transforms(a: Transform, b: Transform) -> Transform {
   Transform::from_row(
     a.sx * b.sx + a.kx * b.ky,
     a.ky * b.sx + a.sy * b.ky,
@@ -462,9 +462,9 @@ fn concat_transforms(a: Transform, b: Transform) -> Transform {
 
 fn color_glyph_transform(skew: f32, glyph_x: f32, glyph_y: f32, left: f32, top: f32) -> Transform {
   // Color glyph rasters are already in device pixels with a Y-down origin, so we
-  // only need to add the synthetic oblique shear in X.
-  let transform = Transform::from_row(1.0, 0.0, skew, 1.0, glyph_x, glyph_y);
-  concat_transforms(transform, Transform::from_translate(left, top))
+  // only need to add the synthetic oblique shear in X and translate to the glyph
+  // origin without snapping to integers.
+  Transform::from_row(1.0, 0.0, -skew, 1.0, glyph_x + left, glyph_y + top)
 }
 
 // ============================================================================
@@ -700,7 +700,7 @@ impl TextRasterizer {
           font_size,
           palette_index,
           color_for_glyph,
-          synthetic_oblique,
+          0.0,
           variations,
         );
         if let Some(ref rendered) = color_glyph {
@@ -709,7 +709,8 @@ impl TextRasterizer {
       }
 
       if let Some(color_image) = color_glyph {
-        if glyph_opacity > 0.0 {
+        let combined_opacity = (glyph_opacity * state.opacity).clamp(0.0, 1.0);
+        if combined_opacity > 0.0 {
           let mut transform = color_glyph_transform(
             synthetic_oblique,
             glyph_x,
@@ -720,7 +721,15 @@ impl TextRasterizer {
           if let Some(rotation) = rotation {
             transform = concat_transforms(rotation, transform);
           }
-          draw_color_glyph(pixmap, &color_image, transform, state, glyph_opacity);
+          transform = concat_transforms(state.transform, transform);
+          draw_color_glyph(
+            pixmap,
+            &color_image,
+            transform,
+            combined_opacity,
+            state.blend_mode,
+            state.clip_mask,
+          );
         }
       } else if let Some(cached) =
         self
@@ -1051,14 +1060,9 @@ impl TextRasterizer {
     let mut glyph = self.color_cache.get(&color_key);
 
     if glyph.is_none() {
-      glyph = self.color_renderer.render(
-        font,
-        glyph_id,
-        font_size,
-        palette_index,
-        color,
-        synthetic_oblique,
-      );
+      glyph = self
+        .color_renderer
+        .render(font, glyph_id, font_size, palette_index, color, 0.0);
       if let Some(ref rendered) = glyph {
         self.color_cache.insert(color_key, rendered.clone());
       }
@@ -1071,16 +1075,16 @@ impl TextRasterizer {
 fn draw_color_glyph(
   target: &mut Pixmap,
   glyph: &ColorGlyphRaster,
-  transform: Transform,
-  state: TextRenderState<'_>,
-  glyph_opacity: f32,
+  base_transform: Transform,
+  opacity: f32,
+  blend_mode: SkiaBlendMode,
+  clip_mask: Option<&Mask>,
 ) {
   let mut paint = PixmapPaint::default();
-  paint.opacity = (state.opacity * glyph_opacity).clamp(0.0, 1.0);
-  paint.blend_mode = state.blend_mode;
-  let transform = concat_transforms(state.transform, transform);
+  paint.opacity = opacity.clamp(0.0, 1.0);
+  paint.blend_mode = blend_mode;
   let pixmap_ref = glyph.image.as_ref().as_ref();
-  target.draw_pixmap(0, 0, pixmap_ref, &paint, transform, state.clip_mask);
+  target.draw_pixmap(0, 0, pixmap_ref, &paint, base_transform, clip_mask);
 }
 
 // ============================================================================

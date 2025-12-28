@@ -7,9 +7,9 @@
 #[path = "../ref/mod.rs"]
 mod r#ref;
 
-use fastrender::text::color_fonts::ColorFontRenderer;
+use fastrender::text::color_fonts::{ColorFontRenderer, ColorGlyphRaster};
 use fastrender::text::font_db::{FontStretch, FontStyle, FontWeight, LoadedFont};
-use fastrender::text::font_instance::FontInstance;
+use fastrender::text::font_instance::{glyph_transform, FontInstance};
 use fastrender::text::font_loader::FontContext;
 use fastrender::text::pipeline::Direction;
 use fastrender::text::pipeline::GlyphPosition;
@@ -23,9 +23,11 @@ use fastrender::TextRasterizer;
 use r#ref::compare::{compare_images, load_png, CompareConfig};
 use rustybuzz::Variation;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tiny_skia::Paint;
 use tiny_skia::Pixmap;
+use tiny_skia::Transform;
 use ttf_parser::GlyphId;
 use ttf_parser::Tag;
 
@@ -175,6 +177,125 @@ fn single_glyph_run_with_variations(
   let mut run = single_glyph_run(font, glyph_id, font_size, synthetic_oblique);
   run.variations = variations;
   run
+}
+
+fn get_color_test_font() -> Option<LoadedFont> {
+  let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fonts/ColorTestCOLR.ttf");
+  let bytes = std::fs::read(path).ok()?;
+  Some(LoadedFont {
+    data: Arc::new(bytes),
+    index: 0,
+    family: "ColorTestCOLR".into(),
+    weight: FontWeight::NORMAL,
+    style: FontStyle::Normal,
+    stretch: FontStretch::Normal,
+  })
+}
+
+fn rotation_matrix(rotation: RunRotation, origin_x: f32, origin_y: f32) -> Option<Transform> {
+  let angle = match rotation {
+    RunRotation::Ccw90 => -90.0_f32.to_radians(),
+    RunRotation::Cw90 => 90.0_f32.to_radians(),
+    RunRotation::None => return None,
+  };
+
+  let (sin, cos) = angle.sin_cos();
+  let tx = origin_x - origin_x * cos + origin_y * sin;
+  let ty = origin_y - origin_x * sin - origin_y * cos;
+  Some(Transform::from_row(cos, sin, -sin, cos, tx, ty))
+}
+
+fn concat_transforms(a: Transform, b: Transform) -> Transform {
+  Transform::from_row(
+    a.sx * b.sx + a.kx * b.ky,
+    a.ky * b.sx + a.sy * b.ky,
+    a.sx * b.kx + a.kx * b.sy,
+    a.ky * b.kx + a.sy * b.sy,
+    a.sx * b.tx + a.kx * b.ty + a.tx,
+    a.ky * b.tx + a.sy * b.ty + a.ty,
+  )
+}
+
+fn color_transform(
+  glyph: &ColorGlyphRaster,
+  glyph_x: f32,
+  glyph_y: f32,
+  skew: f32,
+  rotation: Option<Transform>,
+) -> Transform {
+  let mut transform = Transform::from_row(
+    1.0,
+    0.0,
+    -skew,
+    1.0,
+    glyph_x + glyph.left,
+    glyph_y + glyph.top,
+  );
+  if let Some(rotation) = rotation {
+    transform = concat_transforms(rotation, transform);
+  }
+  transform
+}
+
+fn transformed_bounds(transform: Transform, width: u32, height: u32) -> (i32, i32, i32, i32) {
+  let corners = [
+    (0.0, 0.0),
+    (width as f32, 0.0),
+    (0.0, height as f32),
+    (width as f32, height as f32),
+  ];
+  let mut min_x = f32::MAX;
+  let mut min_y = f32::MAX;
+  let mut max_x = f32::MIN;
+  let mut max_y = f32::MIN;
+  for (x, y) in corners {
+    let tx = transform.sx * x + transform.kx * y + transform.tx;
+    let ty = transform.ky * x + transform.sy * y + transform.ty;
+    min_x = min_x.min(tx);
+    min_y = min_y.min(ty);
+    max_x = max_x.max(tx);
+    max_y = max_y.max(ty);
+  }
+
+  (
+    min_x.floor() as i32,
+    max_x.ceil() as i32 - 1,
+    min_y.floor() as i32,
+    max_y.ceil() as i32 - 1,
+  )
+}
+
+fn assert_bounds_close(actual: (u32, u32, u32, u32), expected: (i32, i32, i32, i32)) {
+  let (ax0, ax1, ay0, ay1) = (
+    actual.0 as i32,
+    actual.1 as i32,
+    actual.2 as i32,
+    actual.3 as i32,
+  );
+  assert!(
+    (ax0 - expected.0).abs() <= 1,
+    "min x differs: actual {}, expected {}",
+    ax0,
+    expected.0
+  );
+  assert!(
+    (ax1 - expected.1).abs() <= 1,
+    "max x differs: actual {}, expected {}",
+    ax1,
+    expected.1
+  );
+  assert!(
+    (ay0 - expected.2).abs() <= 1,
+    "min y differs: actual {}, expected {}",
+    ay0,
+    expected.2
+  );
+  assert!(
+    (ay1 - expected.3).abs() <= 1,
+    "max y differs: actual {}, expected {}",
+    ay1,
+    expected.3
+  );
 }
 
 // ============================================================================
@@ -486,6 +607,192 @@ fn synthetic_oblique_slants_svg_color_glyphs() {
   assert!(
     bottom_left > top_left,
     "positive synthetic oblique should slant SVG glyphs to the right"
+  );
+}
+
+#[test]
+fn color_glyph_rasters_follow_outline_transforms() {
+  let font = match get_color_test_font() {
+    Some(f) => Arc::new(f),
+    None => return,
+  };
+
+  let face = match font.as_ttf_face() {
+    Ok(face) => face,
+    Err(_) => return,
+  };
+
+  let glyph_id = match face.glyph_index('A') {
+    Some(id) => id.0 as u32,
+    None => return,
+  };
+
+  let font_size = 32.0;
+  let synthetic_oblique = 0.3;
+  let x_offset = 1.5;
+  let y_offset = -0.75;
+  let units_per_em = face.units_per_em() as f32;
+  let scale = font_size / units_per_em;
+  let advance = face
+    .glyph_hor_advance(GlyphId(glyph_id as u16))
+    .map(|a| a as f32 * scale)
+    .unwrap_or(font_size);
+  let glyph_pos = GlyphPosition {
+    glyph_id,
+    cluster: 0,
+    x_offset,
+    y_offset,
+    x_advance: advance,
+    y_advance: 0.0,
+  };
+  let origin_x = 24.4;
+  let origin_y = 48.8;
+  let glyph_x = origin_x + glyph_pos.x_offset;
+  let glyph_y = origin_y + glyph_pos.y_offset;
+  let variations: Vec<Variation> = Vec::new();
+  let instance = FontInstance::new(&font, &variations).expect("font instance");
+  let text_color = Rgba::BLACK;
+  let color_raster = ColorFontRenderer::new()
+    .render(
+      &font,
+      &instance,
+      glyph_id,
+      font_size,
+      0,
+      text_color,
+      0.0,
+      &variations,
+    )
+    .expect("color glyph raster");
+  let expected = transformed_bounds(
+    color_transform(
+      &color_raster,
+      glyph_x,
+      glyph_y,
+      synthetic_oblique,
+      rotation_matrix(RunRotation::None, origin_x, origin_y),
+    ),
+    color_raster.image.width(),
+    color_raster.image.height(),
+  );
+
+  let mut run = ShapedRun {
+    text: "A".to_string(),
+    start: 0,
+    end: 1,
+    glyphs: vec![glyph_pos],
+    direction: Direction::LeftToRight,
+    level: 0,
+    advance,
+    font: Arc::clone(&font),
+    font_size,
+    baseline_shift: 0.0,
+    language: None,
+    synthetic_bold: 0.0,
+    synthetic_oblique,
+    rotation: RunRotation::None,
+    palette_index: 0,
+    variations: variations.clone(),
+    scale: 1.0,
+  };
+
+  let mut rasterizer = TextRasterizer::new();
+  let mut pixmap = create_test_pixmap(200, 200);
+  rasterizer
+    .render_shaped_run(&run, origin_x, origin_y, text_color, &mut pixmap)
+    .unwrap();
+
+  let actual = painted_bounds(&pixmap).expect("color glyph should be drawn");
+  assert_bounds_close(actual, expected);
+
+  let outline_path = instance
+    .glyph_outline(glyph_id)
+    .and_then(|outline| outline.path)
+    .expect("color font should provide outlines for comparison");
+  let mut outline_paint = Paint::default();
+  outline_paint.set_color_rgba8(0, 0, 0, 255);
+  outline_paint.anti_alias = true;
+  let render_outline_bounds = |rotation: RunRotation, width: u32, height: u32| {
+    let mut outline_pixmap = create_test_pixmap(width, height);
+    let mut outline_transform = glyph_transform(scale, synthetic_oblique, glyph_x, glyph_y);
+    if let Some(rotation) = rotation_matrix(rotation, origin_x, origin_y) {
+      outline_transform = concat_transforms(rotation, outline_transform);
+    }
+    outline_pixmap.fill_path(
+      &outline_path,
+      &outline_paint,
+      tiny_skia::FillRule::Winding,
+      outline_transform,
+      None,
+    );
+    painted_bounds(&outline_pixmap).expect("outline glyph should be drawn")
+  };
+
+  let outline_bounds = render_outline_bounds(RunRotation::None, 200, 200);
+  assert_bounds_close(
+    actual,
+    (
+      outline_bounds.0 as i32,
+      outline_bounds.1 as i32,
+      outline_bounds.2 as i32,
+      outline_bounds.3 as i32,
+    ),
+  );
+
+  let mut rotated = run.clone();
+  rotated.rotation = RunRotation::Cw90;
+  let rotated_expected = transformed_bounds(
+    color_transform(
+      &color_raster,
+      glyph_x,
+      glyph_y,
+      synthetic_oblique,
+      rotation_matrix(rotated.rotation, origin_x, origin_y),
+    ),
+    color_raster.image.width(),
+    color_raster.image.height(),
+  );
+
+  let mut pixmap_rotated = create_test_pixmap(220, 220);
+  rasterizer
+    .render_shaped_run(
+      &rotated,
+      origin_x,
+      origin_y,
+      text_color,
+      &mut pixmap_rotated,
+    )
+    .unwrap();
+  let rotated_bounds = painted_bounds(&pixmap_rotated).expect("rotated color glyph should paint");
+  assert_bounds_close(rotated_bounds, rotated_expected);
+
+  let rotated_outline_bounds = render_outline_bounds(rotated.rotation, 220, 220);
+  assert_bounds_close(
+    rotated_bounds,
+    (
+      rotated_outline_bounds.0 as i32,
+      rotated_outline_bounds.1 as i32,
+      rotated_outline_bounds.2 as i32,
+      rotated_outline_bounds.3 as i32,
+    ),
+  );
+
+  let base_dims = (actual.1 - actual.0, actual.3 - actual.2);
+  let rotated_dims = (
+    rotated_bounds.1 - rotated_bounds.0,
+    rotated_bounds.3 - rotated_bounds.2,
+  );
+  assert!(
+    (rotated_dims.0 as i32 - base_dims.1 as i32).abs() <= 2,
+    "rotation should swap glyph span horizontally: {:?} vs {:?}",
+    rotated_dims,
+    base_dims
+  );
+  assert!(
+    (rotated_dims.1 as i32 - base_dims.0 as i32).abs() <= 2,
+    "rotation should swap glyph span vertically: {:?} vs {:?}",
+    rotated_dims,
+    base_dims
   );
 }
 

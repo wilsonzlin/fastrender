@@ -52,7 +52,9 @@ use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::geometry::Size;
 use crate::paint::clip_path::ResolvedClipPath;
-use crate::paint::text_rasterize::{GlyphCacheStats, TextRasterizer, TextRenderState};
+use crate::paint::text_rasterize::{
+  concat_transforms, GlyphCacheStats, TextRasterizer, TextRenderState,
+};
 use crate::paint::text_shadow::PathBounds;
 use crate::style::color::Rgba;
 use crate::text::color_fonts::ColorGlyphRaster;
@@ -1065,16 +1067,14 @@ impl Canvas {
     let mut paint = PixmapPaint::default();
     paint.opacity = combined_opacity;
     paint.blend_mode = self.current_state.blend_mode;
-    let dx = (position.x + glyph.left).round() as i32;
-    let dy = (position.y + glyph.top).round() as i32;
-    let transform = self
-      .current_state
-      .transform
-      .post_concat(glyph_transform.unwrap_or_else(Transform::identity));
+    let translation = Transform::from_translate(position.x + glyph.left, position.y + glyph.top);
+    let mut transform = glyph_transform.unwrap_or_else(Transform::identity);
+    transform = concat_transforms(transform, translation);
+    transform = concat_transforms(self.current_state.transform, transform);
     let clip = self.current_state.clip_mask.clone();
     self.pixmap.draw_pixmap(
-      dx,
-      dy,
+      0,
+      0,
       glyph.image.as_ref().as_ref(),
       &paint,
       transform,
