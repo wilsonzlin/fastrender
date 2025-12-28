@@ -8838,7 +8838,9 @@ fn find_matching_rules<'a>(
 
     let spec = indexed
       .prelude_specificity
-      .saturating_add(best_arg_specificity);
+      .saturating_add(best_arg_specificity)
+      // ::slotted() is a pseudo-element and contributes element-level specificity.
+      .saturating_add(1);
     if let Some(pos) = scratch.match_index.get(indexed.rule_idx) {
       if spec > matches[pos].specificity {
         matches[pos].specificity = spec;
