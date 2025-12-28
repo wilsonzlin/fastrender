@@ -55,6 +55,17 @@ pub fn apply_rustybuzz_variations(face: &mut Face<'_>, variations: &[Variation])
   apply_variations_to_face(face, &mapped);
 }
 
+/// Converts [`FontVariation`] records to rustybuzz variation coordinates.
+pub fn to_rustybuzz_variations(variations: &[FontVariation]) -> Vec<Variation> {
+  variations
+    .iter()
+    .map(|v| Variation {
+      tag: v.tag,
+      value: v.value,
+    })
+    .collect()
+}
+
 const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
 const FNV_PRIME: u64 = 0x100000001b3;
 

@@ -56,9 +56,7 @@ use crate::paint::text_shadow::PathBounds;
 use crate::style::color::Rgba;
 use crate::text::font_db::LoadedFont;
 use crate::text::pipeline::GlyphPosition;
-use crate::text::pipeline::ShapedRun;
-use crate::text::variations::FontVariation;
-use rustybuzz::Variation;
+use crate::text::variations::{to_rustybuzz_variations, FontVariation};
 use tiny_skia::BlendMode as SkiaBlendMode;
 use tiny_skia::FillRule;
 use tiny_skia::IntSize;
@@ -899,26 +897,22 @@ impl Canvas {
     font: &LoadedFont,
     font_size: f32,
     synthetic_oblique: f32,
-    rotation: Option<Transform>,
     variations: &[FontVariation],
+    rotation: Option<Transform>,
   ) -> Result<(Vec<tiny_skia::Path>, PathBounds)> {
-    let variation_coords: Vec<Variation> = variations
-      .iter()
-      .map(|v| Variation {
-        tag: v.tag,
-        value: v.value,
-      })
-      .collect();
-    let paths = self.text_rasterizer.positioned_glyph_paths(
-      glyphs,
-      font,
-      font_size,
-      position.x,
-      position.y,
-      synthetic_oblique,
-      rotation,
-      &variation_coords,
-    )?;
+    let hb_variations = to_rustybuzz_variations(variations);
+    let paths = self
+      .text_rasterizer
+      .positioned_glyph_paths_with_variations(
+        glyphs,
+        font,
+        font_size,
+        position.x,
+        position.y,
+        synthetic_oblique,
+        rotation,
+        &hb_variations,
+      )?;
     let mut bounds = PathBounds::new();
     for path in &paths {
       bounds.include(&path.bounds());
@@ -938,8 +932,6 @@ impl Canvas {
   /// * `font` - Font containing glyph outlines
   /// * `font_size` - Font size in pixels
   /// * `color` - Text color
-  /// * `palette_index` - CPAL palette selection for color fonts
-  /// * `variations` - Font variation coordinates applied when shaping
   ///
   /// # Examples
   ///
@@ -956,27 +948,9 @@ impl Canvas {
   ///   Rgba::BLACK,
   ///   run.synthetic_bold,
   ///   run.synthetic_oblique,
-  ///   run.palette_index,
-  ///   &run.variations,
+  ///   &[],
   /// );
   /// ```
-  pub fn draw_shaped_run(&mut self, run: &ShapedRun, position: Point, color: Rgba) {
-    if run.glyphs.is_empty() || (color.a == 0.0 && self.current_state.opacity == 0.0) {
-      return;
-    }
-
-    let clip_mask = self.current_state.clip_mask.clone();
-    let state = self.current_text_state(clip_mask.as_ref());
-    let _ = self.text_rasterizer.render_shaped_run_with_state(
-      run,
-      position.x,
-      position.y,
-      color,
-      &mut self.pixmap,
-      state,
-    );
-  }
-
   pub fn draw_text(
     &mut self,
     position: Point,
@@ -986,25 +960,21 @@ impl Canvas {
     color: Rgba,
     synthetic_bold: f32,
     synthetic_oblique: f32,
-    palette_index: u16,
     variations: &[FontVariation],
   ) {
     if glyphs.is_empty() || (color.a == 0.0 && self.current_state.opacity == 0.0) {
       return;
     }
 
-    let clip_mask = self.current_state.clip_mask.clone();
-    let state = self.current_text_state(clip_mask.as_ref());
+    let hb_variations = to_rustybuzz_variations(variations);
+    let state = TextRenderState {
+      transform: self.current_state.transform,
+      clip_mask: self.current_state.clip_mask.as_ref(),
+      opacity: self.current_state.opacity,
+      blend_mode: self.current_state.blend_mode,
+    };
 
-    let variation_coords: Vec<Variation> = variations
-      .iter()
-      .map(|v| Variation {
-        tag: v.tag,
-        value: v.value,
-      })
-      .collect();
-
-    let _ = self.text_rasterizer.render_glyphs_with_state(
+    let _ = self.text_rasterizer.render_glyphs_with_variations(
       glyphs,
       font,
       font_size,
@@ -1013,8 +983,7 @@ impl Canvas {
       color,
       synthetic_bold,
       synthetic_oblique,
-      palette_index,
-      &variation_coords,
+      &hb_variations,
       None,
       state,
       &mut self.pixmap,
@@ -1156,15 +1125,6 @@ impl Canvas {
     let max_y = p1.y.max(p2.y).max(p3.y).max(p4.y);
 
     Rect::from_xywh(min_x, min_y, max_x - min_x, max_y - min_y)
-  }
-
-  fn current_text_state<'a>(&self, clip_mask: Option<&'a Mask>) -> TextRenderState<'a> {
-    TextRenderState {
-      transform: self.current_state.transform,
-      clip_mask,
-      opacity: self.current_state.opacity,
-      blend_mode: self.current_state.blend_mode,
-    }
   }
 
   fn build_clip_mask(&self, rect: Rect, radii: BorderRadii) -> Option<Mask> {
