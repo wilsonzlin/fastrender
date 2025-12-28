@@ -124,7 +124,7 @@ use crate::tree::box_tree::ForeignObjectInfo;
 use crate::tree::box_tree::ReplacedBox;
 use crate::tree::box_tree::ReplacedType;
 use crate::tree::box_tree::SvgContent;
-use crate::tree::box_tree::{FormControl, FormControlKind};
+use crate::tree::box_tree::{FormControl, FormControlKind, TextControlKind};
 use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
 use crate::tree::fragment_tree::FragmentTree;
@@ -734,8 +734,14 @@ impl Painter {
           let line_height =
             compute_line_height_with_metrics_viewport(style, metrics.as_ref(), Some(viewport));
           let size = match &control.control {
-            FormControlKind::Text { size_attr, .. } => {
-              let cols = size_attr.unwrap_or(20) as f32;
+            FormControlKind::Text {
+              size_attr, kind, ..
+            } => {
+              let default_cols = match kind {
+                TextControlKind::Date | TextControlKind::Number => 20,
+                _ => 20,
+              } as f32;
+              let cols = size_attr.unwrap_or(default_cols as u32) as f32;
               Size::new(char_width * cols.max(1.0), line_height)
             }
             FormControlKind::TextArea { rows, cols, .. } => {
@@ -759,7 +765,11 @@ impl Painter {
               Size::new(edge, edge)
             }
             FormControlKind::Range { .. } => Size::new(char_width * 12.0, line_height.max(12.0)),
-            FormControlKind::Unknown { .. } => Size::new(char_width * 10.0, line_height),
+            FormControlKind::Color { .. } => Size::new(
+              (line_height * 2.0).max(char_width * 6.0),
+              line_height.max(16.0_f32.min(line_height * 1.2)),
+            ),
+            FormControlKind::Unknown { .. } => Size::new(char_width * 12.0, line_height),
           };
           replaced_box.intrinsic_size = Some(size);
         }
@@ -5174,7 +5184,15 @@ impl Painter {
       return true;
     }
 
-    let accent = Self::resolved_accent_color(style);
+    let mut accent = Self::resolved_accent_color(style);
+    if control.invalid {
+      accent = Rgba {
+        r: 212,
+        g: 43,
+        b: 43,
+        a: 1.0,
+      };
+    }
     let muted_accent = if control.disabled {
       accent.with_alpha((accent.a * 0.7).clamp(0.0, 1.0))
     } else {
@@ -5188,34 +5206,148 @@ impl Painter {
         (rect.height() - 2.0 * inset).max(0.0),
       )
     };
+    let highlight = if control.invalid {
+      Some(muted_accent.with_alpha((muted_accent.a * 0.25).max(0.18)))
+    } else if control.focus_visible {
+      Some(muted_accent.with_alpha((muted_accent.a * 0.22).max(0.14)))
+    } else if control.focused {
+      Some(muted_accent.with_alpha((muted_accent.a * 0.16).max(0.1)))
+    } else if control.required {
+      Some(muted_accent.with_alpha(0.08))
+    } else {
+      None
+    };
+    if let Some(tint) = highlight {
+      let rect = inset_rect(content_rect, 1.0);
+      let radii = BorderRadii::uniform((rect.height().min(rect.width()) / 6.0).max(2.0));
+      let _ = fill_rounded_rect(
+        &mut self.pixmap,
+        rect.x(),
+        rect.y(),
+        rect.width(),
+        rect.height(),
+        &radii,
+        tint,
+      );
+    }
 
     match &control.control {
       FormControlKind::Text {
-        value, placeholder, ..
+        value,
+        placeholder,
+        kind,
+        ..
       } => {
         let value_trimmed = value.trim();
-        let (text, color) = if !value_trimmed.is_empty() {
-          (value_trimmed, style.color)
-        } else if let Some(ph) = placeholder.as_deref() {
-          (ph.trim(), style.color.with_alpha(0.6))
-        } else {
-          return true;
+        let base_color = if control.invalid { accent } else { style.color };
+        let placeholder_color = base_color.with_alpha(0.6);
+        let mut generated: Option<String> = None;
+        let (text, color) = match kind {
+          TextControlKind::Password => {
+            if !value_trimmed.is_empty() {
+              let mask_len = value_trimmed.chars().count().clamp(3, 50);
+              generated = Some("•".repeat(mask_len));
+              (generated.as_deref().unwrap(), base_color)
+            } else if let Some(ph) = placeholder.as_deref() {
+              (ph.trim(), placeholder_color)
+            } else {
+              return true;
+            }
+          }
+          TextControlKind::Number => {
+            if !value_trimmed.is_empty() {
+              (value_trimmed, base_color)
+            } else if let Some(ph) = placeholder.as_deref() {
+              (ph.trim(), placeholder_color)
+            } else {
+              return true;
+            }
+          }
+          TextControlKind::Date => {
+            if !value_trimmed.is_empty() {
+              (value_trimmed, base_color)
+            } else if let Some(ph) = placeholder.as_deref() {
+              (ph.trim(), placeholder_color)
+            } else {
+              ("yyyy-mm-dd", placeholder_color)
+            }
+          }
+          TextControlKind::Plain => {
+            if !value_trimmed.is_empty() {
+              (value_trimmed, base_color)
+            } else if let Some(ph) = placeholder.as_deref() {
+              (ph.trim(), placeholder_color)
+            } else {
+              return true;
+            }
+          }
         };
 
         let mut text_style = style.clone();
         text_style.color = color;
-        let rect = inset_rect(content_rect, 2.0);
+        let mut rect = inset_rect(content_rect, 2.0);
+        let mut affordance_space = 0.0;
+        match kind {
+          TextControlKind::Number => affordance_space = 14.0,
+          TextControlKind::Date => affordance_space = 12.0,
+          _ => {}
+        }
+        if affordance_space > 0.0 {
+          rect = Rect::from_xywh(
+            rect.x(),
+            rect.y(),
+            (rect.width() - affordance_space).max(0.0),
+            rect.height(),
+          );
+        }
         let _ = self.paint_alt_text(text, &text_style, rect);
+        if affordance_space > 0.0 {
+          let mut affordance_style = style.clone();
+          affordance_style.color = muted_accent;
+          let affordance_rect = Rect::from_xywh(
+            rect.x() + rect.width(),
+            rect.y(),
+            affordance_space,
+            rect.height(),
+          );
+          match kind {
+            TextControlKind::Number => {
+              let half = affordance_rect.height() / 2.0;
+              let upper = Rect::from_xywh(
+                affordance_rect.x(),
+                affordance_rect.y(),
+                affordance_rect.width(),
+                half,
+              );
+              let lower = Rect::from_xywh(
+                affordance_rect.x(),
+                affordance_rect.y() + half,
+                affordance_rect.width(),
+                affordance_rect.height() - half,
+              );
+              let _ = self.paint_alt_text("▲", &affordance_style, upper);
+              let _ = self.paint_alt_text("▼", &affordance_style, lower);
+            }
+            TextControlKind::Date => {
+              let _ = self.paint_alt_text("▾", &affordance_style, affordance_rect);
+            }
+            _ => {}
+          }
+        }
         true
       }
       FormControlKind::TextArea { value, .. } => {
         if value.is_empty() {
           return true;
         }
-        let rect = inset_rect(content_rect, 2.0);
+        let mut rect = inset_rect(content_rect, 2.0);
+        let mut text_style = style.clone();
+        if control.invalid {
+          text_style.color = accent;
+        }
         let metrics = self.resolve_scaled_metrics(style);
         let line_height = compute_line_height_with_metrics_viewport(
-          style,
+          &text_style,
           metrics.as_ref(),
           Some(Size::new(self.css_width, self.css_height)),
         );
@@ -5230,7 +5362,7 @@ impl Painter {
             rect.width(),
             (rect.height() - (y - rect.y())).max(0.0),
           );
-          let _ = self.paint_alt_text(line.trim_end(), style, line_rect);
+          let _ = self.paint_alt_text(line.trim_end(), &text_style, line_rect);
           y += line_height;
         }
         true
@@ -5242,16 +5374,20 @@ impl Painter {
         } else {
           14.0
         };
+        let mut select_style = style.clone();
+        if control.invalid {
+          select_style.color = accent;
+        }
         let text_rect = Rect::from_xywh(
           rect.x(),
           rect.y(),
           (rect.width() - arrow_space).max(0.0),
           rect.height(),
         );
-        let _ = self.paint_alt_text(label, style, text_rect);
+        let _ = self.paint_alt_text(label, &select_style, text_rect);
 
         if arrow_space > 0.0 {
-          let mut arrow_style = style.clone();
+          let mut arrow_style = select_style;
           arrow_style.color = muted_accent;
           let arrow_rect = Rect::from_xywh(
             rect.x() + rect.width() - arrow_space,
@@ -5268,7 +5404,12 @@ impl Painter {
           return true;
         }
 
-        let label_rect = if let Some(size) = self.measure_alt_text(label, style) {
+        let mut button_style = style.clone();
+        if control.invalid {
+          button_style.color = accent;
+        }
+
+        let label_rect = if let Some(size) = self.measure_alt_text(label, &button_style) {
           let start_x = content_rect.x() + ((content_rect.width() - size.width).max(0.0) / 2.0);
           Rect::from_xywh(
             start_x,
@@ -5279,17 +5420,27 @@ impl Painter {
         } else {
           content_rect
         };
-        let _ = self.paint_alt_text(label, style, label_rect);
+        let _ = self.paint_alt_text(label, &button_style, label_rect);
         true
       }
-      FormControlKind::Checkbox { is_radio, checked } => {
-        if !*checked || matches!(control.appearance, Appearance::None) {
+      FormControlKind::Checkbox {
+        is_radio,
+        checked,
+        indeterminate,
+      } => {
+        if (!*checked && !*indeterminate) || matches!(control.appearance, Appearance::None) {
           return true;
         }
         let mut mark_style = style.clone();
         mark_style.color = muted_accent;
         let rect = inset_rect(content_rect, 2.0);
-        let glyph = if *is_radio { "●" } else { "✓" };
+        let glyph = if *is_radio {
+          "●"
+        } else if *indeterminate {
+          "−"
+        } else {
+          "✓"
+        };
         let _ = self.paint_alt_text(glyph, &mark_style, rect);
         true
       }
@@ -5340,16 +5491,56 @@ impl Painter {
         }
         true
       }
+      FormControlKind::Color { value, raw } => {
+        let rect = inset_rect(content_rect, 3.0);
+        let radii = BorderRadii::uniform((rect.height().min(rect.width()) / 5.0).max(2.0));
+        let _ = fill_rounded_rect(
+          &mut self.pixmap,
+          rect.x(),
+          rect.y(),
+          rect.width(),
+          rect.height(),
+          &radii,
+          *value,
+        );
+        let luminance =
+          (0.299 * value.r as f32 + 0.587 * value.g as f32 + 0.114 * value.b as f32) / 255.0;
+        let text_color = if luminance > 0.5 {
+          Rgba {
+            r: 24,
+            g: 24,
+            b: 24,
+            a: 1.0,
+          }
+        } else {
+          Rgba {
+            r: 245,
+            g: 245,
+            b: 245,
+            a: 1.0,
+          }
+        };
+        let mut text_style = style.clone();
+        text_style.color = text_color;
+        let label = raw
+          .clone()
+          .unwrap_or_else(|| format!("#{:02X}{:02X}{:02X}", value.r, value.g, value.b));
+        let _ = self.paint_alt_text(&label, &text_style, rect);
+        true
+      }
       FormControlKind::Unknown { label } => {
         if let Some(text) = label {
           let rect = inset_rect(content_rect, 2.0);
-          let _ = self.paint_alt_text(text, style, rect);
+          let mut unknown_style = style.clone();
+          if control.invalid {
+            unknown_style.color = accent;
+          }
+          let _ = self.paint_alt_text(text, &unknown_style, rect);
         }
         true
       }
     }
   }
-
   fn render_iframe_srcdoc(
     &self,
     html: &str,

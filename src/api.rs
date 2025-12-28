@@ -150,7 +150,6 @@ use crate::tree::box_generation::BoxGenerationOptions;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::box_tree::BoxTree;
 use crate::tree::box_tree::BoxType;
-use crate::tree::box_tree::FormControlKind;
 use crate::tree::box_tree::MarkerContent;
 use crate::tree::box_tree::ReplacedBox;
 use crate::tree::box_tree::ReplacedType;
@@ -158,6 +157,7 @@ use crate::tree::box_tree::ReplacedType;
 use crate::tree::box_tree::SrcsetCandidate;
 #[cfg(test)]
 use crate::tree::box_tree::SrcsetDescriptor;
+use crate::tree::box_tree::{FormControlKind, TextControlKind};
 use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
 use crate::tree::fragment_tree::FragmentTree;
@@ -6184,8 +6184,14 @@ impl FastRender {
           );
 
           let size = match &control.control {
-            FormControlKind::Text { size_attr, .. } => {
-              let cols = size_attr.unwrap_or(20) as f32;
+            FormControlKind::Text {
+              size_attr, kind, ..
+            } => {
+              let default_cols = match kind {
+                TextControlKind::Date | TextControlKind::Number => 20,
+                _ => 20,
+              } as f32;
+              let cols = size_attr.unwrap_or(default_cols as u32) as f32;
               Size::new(char_width * cols.max(1.0), line_height)
             }
             FormControlKind::TextArea { rows, cols, .. } => {
@@ -6209,7 +6215,11 @@ impl FastRender {
               Size::new(edge, edge)
             }
             FormControlKind::Range { .. } => Size::new(char_width * 12.0, line_height.max(12.0)),
-            FormControlKind::Unknown { .. } => Size::new(char_width * 10.0, line_height),
+            FormControlKind::Color { .. } => Size::new(
+              (line_height * 2.0).max(char_width * 6.0),
+              line_height.max(16.0_f32.min(line_height * 1.2)),
+            ),
+            FormControlKind::Unknown { .. } => Size::new(char_width * 12.0, line_height),
           };
 
           replaced_box.intrinsic_size = Some(size);

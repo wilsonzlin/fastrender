@@ -30,6 +30,11 @@
       height: 50px;
     }
 
+    textarea.control.intrinsic {
+      width: auto;
+      height: auto;
+    }
+
     select.control {
       min-width: 150px;
     }
@@ -41,6 +46,7 @@
     <input class="control" placeholder="placeholder" data-fastr-focus="true">
     <input class="control" type="checkbox">
     <input class="control" type="checkbox" checked>
+    <input class="control" type="checkbox" indeterminate="true">
     <input class="control" type="radio">
     <input class="control" type="radio" checked>
   </div>
@@ -60,6 +66,27 @@
     <input class="control" type="range" min="0" max="10" value="7">
     <input class="control appearance-none" placeholder="Custom">
     <input class="control" disabled value="Disabled">
+    <input class="control" type="color" value="not-a-color" disabled>
+  </div>
+  <div class="row">
+    <input class="control" type="password" value="secret">
+    <input class="control" type="number" value="12" data-fastr-focus-visible="true">
+    <input class="control" type="date" required>
+    <input class="control" type="color" value="#3366cc">
+    <input class="control" required value="Required">
+  </div>
+  <div class="row">
+    <input class="control" size="5" placeholder="size=5">
+    <input class="control" type="foo" placeholder="Mystery" data-fastr-focus-visible="true">
+    <input class="control" type="color" value="notacolor" required>
+    <textarea class="control intrinsic" rows="4" cols="12">rows/cols</textarea>
+  </div>
+  <div class="row">
+    <input class="control" type="datetime-local">
+    <input class="control" type="month">
+    <input class="control" type="week">
+    <input class="control" type="time">
+    <input class="control" type="number" size="6" placeholder="size=6">
   </div>
 </body>
 </html>

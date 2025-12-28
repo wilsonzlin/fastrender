@@ -140,6 +140,7 @@ use crate::text::pipeline::ShapingPipeline;
 use crate::tree::box_tree::FormControl;
 use crate::tree::box_tree::FormControlKind;
 use crate::tree::box_tree::ReplacedType;
+use crate::tree::box_tree::TextControlKind;
 use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
 use crate::tree::fragment_tree::FragmentTree;
@@ -4257,7 +4258,15 @@ impl DisplayListBuilder {
       return false;
     };
 
-    let accent = Self::resolved_accent_color(style);
+    let mut accent = Self::resolved_accent_color(style);
+    if control.invalid {
+      accent = Rgba {
+        r: 212,
+        g: 43,
+        b: 43,
+        a: 1.0,
+      };
+    }
     let muted_accent = if control.disabled {
       accent.with_alpha((accent.a * 0.7).clamp(0.0, 1.0))
     } else {
@@ -4273,23 +4282,131 @@ impl DisplayListBuilder {
       )
     };
 
+    let highlight = if control.invalid {
+      Some(muted_accent.with_alpha((muted_accent.a * 0.25).max(0.18)))
+    } else if control.focus_visible {
+      Some(muted_accent.with_alpha((muted_accent.a * 0.22).max(0.14)))
+    } else if control.focused {
+      Some(muted_accent.with_alpha((muted_accent.a * 0.16).max(0.1)))
+    } else if control.required {
+      Some(muted_accent.with_alpha(0.08))
+    } else {
+      None
+    };
+    if let Some(tint) = highlight {
+      let rect = inset_rect(rect, 1.0);
+      self
+        .list
+        .push(DisplayItem::FillRoundedRect(FillRoundedRectItem {
+          rect,
+          color: tint,
+          radii: BorderRadii::uniform((rect.height().min(rect.width()) / 6.0).max(2.0)),
+        }));
+    }
+
     match &control.control {
       FormControlKind::Text {
-        value, placeholder, ..
+        value,
+        placeholder,
+        kind,
+        ..
       } => {
         let value_trimmed = value.trim();
-        let (text, color) = if !value_trimmed.is_empty() {
-          (value_trimmed, style.color)
-        } else if let Some(ph) = placeholder.as_deref() {
-          (ph.trim(), style.color.with_alpha(0.6))
-        } else {
-          return true;
+        let base_color = if control.invalid { accent } else { style.color };
+        let placeholder_color = base_color.with_alpha(0.6);
+        let mut generated: Option<String> = None;
+        let (text, color) = match kind {
+          TextControlKind::Password => {
+            if !value_trimmed.is_empty() {
+              let mask_len = value_trimmed.chars().count().clamp(3, 50);
+              generated = Some("•".repeat(mask_len));
+              (generated.as_deref().unwrap(), base_color)
+            } else if let Some(ph) = placeholder.as_deref() {
+              (ph.trim(), placeholder_color)
+            } else {
+              return true;
+            }
+          }
+          TextControlKind::Number => {
+            if !value_trimmed.is_empty() {
+              (value_trimmed, base_color)
+            } else if let Some(ph) = placeholder.as_deref() {
+              (ph.trim(), placeholder_color)
+            } else {
+              return true;
+            }
+          }
+          TextControlKind::Date => {
+            if !value_trimmed.is_empty() {
+              (value_trimmed, base_color)
+            } else if let Some(ph) = placeholder.as_deref() {
+              (ph.trim(), placeholder_color)
+            } else {
+              ("yyyy-mm-dd", placeholder_color)
+            }
+          }
+          TextControlKind::Plain => {
+            if !value_trimmed.is_empty() {
+              (value_trimmed, base_color)
+            } else if let Some(ph) = placeholder.as_deref() {
+              (ph.trim(), placeholder_color)
+            } else {
+              return true;
+            }
+          }
         };
 
         let mut text_style = style.clone();
         text_style.color = color;
-        let rect = inset_rect(rect, 2.0);
+        let mut rect = inset_rect(rect, 2.0);
+        let mut affordance_space = 0.0;
+        match kind {
+          TextControlKind::Number => affordance_space = 14.0,
+          TextControlKind::Date => affordance_space = 12.0,
+          _ => {}
+        }
+        if affordance_space > 0.0 {
+          rect = Rect::from_xywh(
+            rect.x(),
+            rect.y(),
+            (rect.width() - affordance_space).max(0.0),
+            rect.height(),
+          );
+        }
         let _ = self.emit_text_with_style(text, Some(&text_style), rect);
+        if affordance_space > 0.0 {
+          let mut affordance_style = style.clone();
+          affordance_style.color = muted_accent;
+          let affordance_rect = Rect::from_xywh(
+            rect.x() + rect.width(),
+            rect.y(),
+            affordance_space,
+            rect.height(),
+          );
+          match kind {
+            TextControlKind::Number => {
+              let half = affordance_rect.height() / 2.0;
+              let upper = Rect::from_xywh(
+                affordance_rect.x(),
+                affordance_rect.y(),
+                affordance_rect.width(),
+                half,
+              );
+              let lower = Rect::from_xywh(
+                affordance_rect.x(),
+                affordance_rect.y() + half,
+                affordance_rect.width(),
+                affordance_rect.height() - half,
+              );
+              let _ = self.emit_text_with_style("▲", Some(&affordance_style), upper);
+              let _ = self.emit_text_with_style("▼", Some(&affordance_style), lower);
+            }
+            TextControlKind::Date => {
+              let _ = self.emit_text_with_style("▾", Some(&affordance_style), affordance_rect);
+            }
+            _ => {}
+          }
+        }
         true
       }
       FormControlKind::TextArea { value, .. } => {
@@ -4297,8 +4414,12 @@ impl DisplayListBuilder {
           return true;
         }
         let rect = inset_rect(rect, 2.0);
+        let mut text_style = style.clone();
+        if control.invalid {
+          text_style.color = accent;
+        }
         let line_height = compute_line_height_with_metrics_viewport(
-          style,
+          &text_style,
           None,
           self.viewport.map(|(w, h)| Size::new(w, h)),
         );
@@ -4308,7 +4429,7 @@ impl DisplayListBuilder {
             break;
           }
           let line_rect = Rect::from_xywh(rect.x(), y, rect.width(), rect.height());
-          let _ = self.emit_text_with_style(line.trim_end(), Some(style), line_rect);
+          let _ = self.emit_text_with_style(line.trim_end(), Some(&text_style), line_rect);
           y += line_height;
         }
         true
@@ -4320,16 +4441,20 @@ impl DisplayListBuilder {
         } else {
           14.0
         };
+        let mut select_style = style.clone();
+        if control.invalid {
+          select_style.color = accent;
+        }
         let text_rect = Rect::from_xywh(
           rect.x(),
           rect.y(),
           (rect.width() - arrow_space).max(0.0),
           rect.height(),
         );
-        let _ = self.emit_text_with_style(label, Some(style), text_rect);
+        let _ = self.emit_text_with_style(label, Some(&select_style), text_rect);
 
         if arrow_space > 0.0 {
-          let mut arrow_style = style.clone();
+          let mut arrow_style = select_style;
           arrow_style.color = muted_accent;
           let arrow_rect = Rect::from_xywh(
             rect.x() + rect.width() - arrow_space,
@@ -4346,16 +4471,30 @@ impl DisplayListBuilder {
           return true;
         }
         let rect = inset_rect(rect, 2.0);
-        let _ = self.emit_text_with_style(label, Some(style), rect);
+        let mut button_style = style.clone();
+        if control.invalid {
+          button_style.color = accent;
+        }
+        let _ = self.emit_text_with_style(label, Some(&button_style), rect);
         true
       }
-      FormControlKind::Checkbox { is_radio, checked } => {
-        if !*checked || matches!(control.appearance, Appearance::None) {
+      FormControlKind::Checkbox {
+        is_radio,
+        checked,
+        indeterminate,
+      } => {
+        if (!*checked && !*indeterminate) || matches!(control.appearance, Appearance::None) {
           return true;
         }
         let mut mark_style = style.clone();
         mark_style.color = muted_accent;
-        let glyph = if *is_radio { "●" } else { "✓" };
+        let glyph = if *is_radio {
+          "●"
+        } else if *indeterminate {
+          "−"
+        } else {
+          "✓"
+        };
         let rect = inset_rect(rect, 2.0);
         let _ = self.emit_text_with_style(glyph, Some(&mark_style), rect);
         true
@@ -4395,10 +4534,48 @@ impl DisplayListBuilder {
           }));
         true
       }
+      FormControlKind::Color { value, raw } => {
+        let rect = inset_rect(rect, 3.0);
+        self
+          .list
+          .push(DisplayItem::FillRoundedRect(FillRoundedRectItem {
+            rect,
+            color: *value,
+            radii: BorderRadii::uniform((rect.height().min(rect.width()) / 5.0).max(2.0)),
+          }));
+        let luminance =
+          (0.299 * value.r as f32 + 0.587 * value.g as f32 + 0.114 * value.b as f32) / 255.0;
+        let text_color = if luminance > 0.5 {
+          Rgba {
+            r: 24,
+            g: 24,
+            b: 24,
+            a: 1.0,
+          }
+        } else {
+          Rgba {
+            r: 245,
+            g: 245,
+            b: 245,
+            a: 1.0,
+          }
+        };
+        let mut text_style = style.clone();
+        text_style.color = text_color;
+        let label = raw
+          .clone()
+          .unwrap_or_else(|| format!("#{:02X}{:02X}{:02X}", value.r, value.g, value.b));
+        let _ = self.emit_text_with_style(&label, Some(&text_style), rect);
+        true
+      }
       FormControlKind::Unknown { label } => {
         if let Some(text) = label {
           let rect = inset_rect(rect, 2.0);
-          let _ = self.emit_text_with_style(text, Some(style), rect);
+          let mut unknown_style = style.clone();
+          if control.invalid {
+            unknown_style.color = accent;
+          }
+          let _ = self.emit_text_with_style(text, Some(&unknown_style), rect);
         }
         true
       }

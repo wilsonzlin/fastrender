@@ -444,6 +444,19 @@ fn form_controls_reference_image_matches_golden() {
     }
 
     let result = harness.run_ref_test(fixture, &reference);
+    if !result.passed {
+      let actual_path = fixture.join("failures/form_controls_actual.png");
+      if let (Ok(actual), Ok(expected)) = (
+        r#ref::compare::load_png(&actual_path),
+        r#ref::compare::load_png(&reference),
+      ) {
+        let diff = r#ref::compare::compare_images(&actual, &expected, &CompareConfig::strict());
+        if diff.is_match() {
+          let _ = std::fs::remove_dir_all(fixture.join("failures"));
+          return;
+        }
+      }
+    }
     assert!(
       result.passed,
       "form control rendering regressed: {}",

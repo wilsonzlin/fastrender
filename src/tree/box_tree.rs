@@ -102,6 +102,14 @@ pub struct FormControl {
   pub appearance: Appearance,
   /// Whether the control is disabled
   pub disabled: bool,
+  /// Whether the control is focused (data-fastr-focus hint)
+  pub focused: bool,
+  /// Whether the control is focus-visible (data-fastr-focus-visible hint)
+  pub focus_visible: bool,
+  /// Whether the control is marked as required
+  pub required: bool,
+  /// Whether the control currently fails HTML constraint validation
+  pub invalid: bool,
 }
 
 /// Specific form control kinds
@@ -115,6 +123,8 @@ pub enum FormControlKind {
     placeholder: Option<String>,
     /// Optional size attribute hint for intrinsic width
     size_attr: Option<u32>,
+    /// What kind of text control to render
+    kind: TextControlKind,
   },
   /// Multiline control (<textarea>)
   TextArea {
@@ -140,6 +150,8 @@ pub enum FormControlKind {
     is_radio: bool,
     /// Current checked state
     checked: bool,
+    /// Whether the control is explicitly indeterminate (checkbox only)
+    indeterminate: bool,
   },
   /// Range control (<input type=range>)
   Range {
@@ -150,8 +162,28 @@ pub enum FormControlKind {
     /// Maximum value (default 100)
     max: Option<f32>,
   },
+  /// Color input (<input type=color>)
+  Color {
+    /// Resolved color value (defaults to black)
+    value: crate::style::color::Rgba,
+    /// Raw value attribute for fallback text
+    raw: Option<String>,
+  },
   /// Fallback for unknown input types
   Unknown { label: Option<String> },
+}
+
+/// Specific text-like controls that share sizing and placeholder rendering.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TextControlKind {
+  /// Default text-like input
+  Plain,
+  /// Password input (masked)
+  Password,
+  /// Numeric input without custom range painting
+  Number,
+  /// Date-like input that renders a simple date placeholder
+  Date,
 }
 
 /// A replaced element box
