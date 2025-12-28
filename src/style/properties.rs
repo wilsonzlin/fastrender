@@ -3911,10 +3911,16 @@ pub fn apply_declaration_with_base(
 ) {
   // Handle CSS Custom Properties (--*)
   if decl.property.starts_with("--") {
-    // Preserve the raw custom property value verbatim.
-    styles
-      .custom_properties
-      .insert(decl.property.clone(), decl.raw_value.clone());
+    if let Ok(mut value) = styles
+      .custom_property_registry
+      .parse_value(&decl.property, decl.raw_value.trim())
+    {
+      // Preserve author-provided serialization for round-tripping even when typed.
+      value.value = decl.raw_value.clone();
+      styles
+        .custom_properties
+        .insert(decl.property.clone(), value);
+    }
     return;
   }
 
@@ -3982,11 +3988,13 @@ pub fn apply_declaration_with_base(
       let prev_unicode_bidi = styles.unicode_bidi;
       // Custom properties are excluded from `all` per the cascade spec.
       let prev_custom_properties = styles.custom_properties.clone();
+      let prev_custom_property_registry = styles.custom_property_registry.clone();
       let next_order = styles.logical.next_order_value();
 
       *styles = source.clone();
       styles.direction = prev_direction;
       styles.unicode_bidi = prev_unicode_bidi;
+      styles.custom_property_registry = prev_custom_property_registry;
       styles.custom_properties = prev_custom_properties;
       styles.logical.reset();
       set_all_logical_orders(&mut styles.logical, order, next_order);
@@ -12690,7 +12698,10 @@ mod tests {
     );
 
     assert_eq!(
-      styles.custom_properties.get("--x").map(String::as_str),
+      styles
+        .custom_properties
+        .get("--x")
+        .map(|v| v.value.as_str()),
       Some("10px")
     );
     assert_eq!(styles.color, Rgba::BLACK);
@@ -12723,7 +12734,10 @@ mod tests {
     );
 
     assert_eq!(
-      styles.custom_properties.get("--x").map(String::as_str),
+      styles
+        .custom_properties
+        .get("--x")
+        .map(|v| v.value.as_str()),
       Some("10px")
     );
     assert_eq!(styles.color, Rgba::BLACK);

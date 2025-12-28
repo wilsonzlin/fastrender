@@ -3,6 +3,7 @@
 use arbitrary::Arbitrary;
 use fastrender::css::properties::parse_property_value;
 use fastrender::css::types::PropertyValue;
+use fastrender::style::values::CustomPropertyValue;
 use fastrender::style::var_resolution::{
   resolve_var, resolve_var_for_property, resolve_var_with_depth,
 };
@@ -78,7 +79,7 @@ fn pick_calc_property(seed_a: &str, seed_b: &str) -> &'static str {
   CALC_PROPERTIES[idx]
 }
 
-fn build_custom_properties(entries: Vec<(String, String)>) -> HashMap<String, String> {
+fn build_custom_properties(entries: Vec<(String, String)>) -> HashMap<String, CustomPropertyValue> {
   let mut map = HashMap::new();
   for (name, value) in entries.into_iter().take(16) {
     let key = if name.trim_start().starts_with("--") {
@@ -88,7 +89,9 @@ fn build_custom_properties(entries: Vec<(String, String)>) -> HashMap<String, St
     };
 
     let val = truncate_str(&value);
-    map.entry(key).or_insert(val);
+    map
+      .entry(key)
+      .or_insert_with(|| CustomPropertyValue::new(val.clone(), None));
   }
   map
 }

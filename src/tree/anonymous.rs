@@ -647,6 +647,7 @@ pub(crate) fn inherited_style(parent: &ComputedStyle) -> ComputedStyle {
   style.cursor = parent.cursor;
   style.cursor_images = parent.cursor_images.clone();
   style.color = parent.color;
+  style.custom_property_registry = parent.custom_property_registry.clone();
   style.custom_properties = parent.custom_properties.clone();
   style
 }

@@ -34,6 +34,7 @@ use crate::dom::SlotAssignment;
 use crate::geometry::Size;
 use crate::render_control::RenderDeadline;
 use crate::style::color::Rgba;
+use crate::style::custom_properties::CustomPropertyRegistry;
 use crate::style::defaults::get_default_styles_for_element;
 use crate::style::defaults::parse_color_attribute;
 use crate::style::defaults::parse_dimension_attribute;
@@ -1735,6 +1736,28 @@ pub fn apply_styles_with_media_target_and_imports_cached_with_deadline(
     fallback_document_rules_in_shadow_scopes: true,
   };
 
+  let custom_property_registry = {
+    let mut registry = CustomPropertyRegistry::default();
+    let mut register_rules = |sheet: &StyleSheet, cache: Option<&mut MediaQueryCache>| {
+      let rules = if let Some(cache) = cache {
+        sheet.collect_property_rules_with_cache(media_ctx, Some(cache))
+      } else {
+        sheet.collect_property_rules(media_ctx)
+      };
+      for rule in rules {
+        registry.register(rule);
+      }
+    };
+
+    register_rules(&ua_stylesheet, media_cache.as_deref_mut());
+    register_rules(&author_sheet, media_cache.as_deref_mut());
+    for (_host, _shadow_root_id, sheet) in &shadow_sheets {
+      register_rules(sheet, media_cache.as_deref_mut());
+    }
+
+    std::sync::Arc::new(registry)
+  };
+
   let counter_styles = {
     let mut registry = crate::style::counter_styles::CounterStyleRegistry::with_builtins();
 
@@ -1781,8 +1804,12 @@ pub fn apply_styles_with_media_target_and_imports_cached_with_deadline(
 
   let mut base_styles = ComputedStyle::default();
   base_styles.counter_styles = counter_styles.clone();
+  base_styles.custom_property_registry = custom_property_registry.clone();
+  base_styles.custom_properties = custom_property_registry.initial_values();
   let mut base_ua_styles = ComputedStyle::default();
   base_ua_styles.counter_styles = counter_styles;
+  base_ua_styles.custom_property_registry = custom_property_registry.clone();
+  base_ua_styles.custom_properties = custom_property_registry.initial_values();
 
   let styled = with_target_fragment(target_fragment, || {
     with_image_set_dpr(media_ctx.device_pixel_ratio, || {
@@ -2086,6 +2113,28 @@ pub fn apply_style_set_with_media_target_and_imports_cached_with_deadline(
     fallback_document_rules_in_shadow_scopes: false,
   };
 
+  let custom_property_registry = {
+    let mut registry = CustomPropertyRegistry::default();
+    let mut register_rules = |sheet: &StyleSheet, cache: Option<&mut MediaQueryCache>| {
+      let rules = if let Some(cache) = cache {
+        sheet.collect_property_rules_with_cache(media_ctx, Some(cache))
+      } else {
+        sheet.collect_property_rules(media_ctx)
+      };
+      for rule in rules {
+        registry.register(rule);
+      }
+    };
+
+    register_rules(&ua_stylesheet, media_cache.as_deref_mut());
+    register_rules(&document_sheet, media_cache.as_deref_mut());
+    for (_host, sheet) in &shadow_sheets {
+      register_rules(sheet, media_cache.as_deref_mut());
+    }
+
+    std::sync::Arc::new(registry)
+  };
+
   let counter_styles = {
     let mut registry = crate::style::counter_styles::CounterStyleRegistry::with_builtins();
 
@@ -2132,8 +2181,12 @@ pub fn apply_style_set_with_media_target_and_imports_cached_with_deadline(
 
   let mut base_styles = ComputedStyle::default();
   base_styles.counter_styles = counter_styles.clone();
+  base_styles.custom_property_registry = custom_property_registry.clone();
+  base_styles.custom_properties = custom_property_registry.initial_values();
   let mut base_ua_styles = ComputedStyle::default();
   base_ua_styles.counter_styles = counter_styles;
+  base_ua_styles.custom_property_registry = custom_property_registry.clone();
+  base_ua_styles.custom_properties = custom_property_registry.initial_values();
 
   let styled = with_target_fragment(target_fragment, || {
     with_image_set_dpr(media_ctx.device_pixel_ratio, || {
@@ -3480,8 +3533,35 @@ pub(crate) fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle)
   // Color inherits
   styles.color = parent.color;
 
-  // CSS Custom Properties inherit
-  styles.custom_properties = parent.custom_properties.clone();
+  // CSS Custom Properties inherit according to registration.
+  styles.custom_property_registry = parent.custom_property_registry.clone();
+  let mut custom_properties = HashMap::new();
+  for (name, value) in &parent.custom_properties {
+    if styles
+      .custom_property_registry
+      .inherits(name)
+      .unwrap_or(true)
+    {
+      custom_properties.insert(name.clone(), value.clone());
+    }
+  }
+  for (name, rule) in styles.custom_property_registry.iter() {
+    if !rule.inherits {
+      if let Some(initial) = &rule.initial_value {
+        custom_properties
+          .entry(name.clone())
+          .or_insert_with(|| initial.clone());
+      }
+      continue;
+    }
+    if custom_properties.contains_key(name) {
+      continue;
+    }
+    if let Some(initial) = &rule.initial_value {
+      custom_properties.insert(name.clone(), initial.clone());
+    }
+  }
+  styles.custom_properties = custom_properties;
 }
 
 /// Resolves line-height lengths to absolute pixels using computed font sizes and viewport metrics.
@@ -3636,7 +3716,7 @@ mod tests {
   use crate::style::types::WillChange;
   use crate::style::types::WillChangeHint;
   use crate::style::types::WritingMode;
-  use crate::style::values::Length;
+  use crate::style::values::{CustomPropertyTypedValue, Length};
   use crate::style::ComputedStyle;
   use crate::style::CursorKeyword;
   use crate::style::OutlineStyle;
@@ -3867,6 +3947,76 @@ mod tests {
     let child = styled.children.first().expect("child");
     assert_eq!(child.styles.color, ComputedStyle::default().color);
     assert_ne!(child.styles.color, styled.styles.color);
+  }
+
+  #[test]
+  fn registered_custom_property_with_inherits_false_uses_initial_value() {
+    let dom = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("id".to_string(), "parent".to_string())],
+      },
+      children: vec![DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "div".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: vec![("id".to_string(), "child".to_string())],
+        },
+        children: vec![],
+      }],
+    };
+    let stylesheet = parse_stylesheet(
+      r#"
+        @property --accent {
+          syntax: "<color>";
+          inherits: false;
+          initial-value: red;
+        }
+        #parent { --accent: blue; }
+        #child { color: var(--accent); }
+      "#,
+    )
+    .unwrap();
+
+    let styled = apply_styles(&dom, &stylesheet);
+    let child = styled.children.first().expect("child");
+    assert_eq!(child.styles.color, Rgba::rgb(255, 0, 0));
+    if let Some(value) = child.styles.custom_properties.get("--accent") {
+      assert_eq!(value.value, "red");
+      assert!(matches!(
+        value.typed,
+        Some(CustomPropertyTypedValue::Color(_))
+      ));
+    } else {
+      panic!("missing registered custom property on child");
+    }
+  }
+
+  #[test]
+  fn invalid_registered_custom_property_value_reverts_to_initial() {
+    let dom = element_with_id_and_class("target", "", None);
+    let stylesheet = parse_stylesheet(
+      r#"
+        @property --len {
+          syntax: "<length>";
+          initial-value: 5px;
+        }
+        #target { --len: red; width: var(--len); }
+      "#,
+    )
+    .unwrap();
+
+    let styled = apply_styles(&dom, &stylesheet);
+    assert_eq!(styled.styles.width, Some(Length::px(5.0)));
+    assert_eq!(
+      styled
+        .styles
+        .custom_properties
+        .get("--len")
+        .map(|v| v.value.as_str()),
+      Some("5px")
+    );
   }
 
   #[test]

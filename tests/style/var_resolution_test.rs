@@ -10,6 +10,7 @@
 
 use fastrender::css::types::Declaration;
 use fastrender::style::properties::apply_declaration;
+use fastrender::style::values::CustomPropertyValue;
 use fastrender::style::values::LengthUnit;
 use fastrender::style::var_resolution::contains_var;
 use fastrender::style::var_resolution::extract_var_references;
@@ -24,10 +25,10 @@ use fastrender::PropertyValue;
 use std::collections::HashMap;
 
 /// Helper function to create a custom properties map from pairs
-fn make_props(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+fn make_props(pairs: &[(&str, &str)]) -> HashMap<String, CustomPropertyValue> {
   pairs
     .iter()
-    .map(|(k, v)| (k.to_string(), v.to_string()))
+    .map(|(k, v)| (k.to_string(), CustomPropertyValue::new(*v, None)))
     .collect()
 }
 

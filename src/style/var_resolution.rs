@@ -6,6 +6,7 @@
 
 use crate::css::properties::{parse_length, parse_property_value};
 use crate::css::types::PropertyValue;
+use crate::style::values::CustomPropertyValue;
 use cssparser::ParseError;
 use cssparser::ParseErrorKind;
 use cssparser::Parser;
@@ -68,7 +69,7 @@ impl VarResolutionResult {
 #[allow(clippy::implicit_hasher)]
 pub fn resolve_var(
   value: &PropertyValue,
-  custom_properties: &HashMap<String, String>,
+  custom_properties: &HashMap<String, CustomPropertyValue>,
 ) -> PropertyValue {
   match resolve_var_recursive(value, custom_properties, 0, "") {
     VarResolutionResult::Resolved { value, .. } => *value,
@@ -84,7 +85,7 @@ pub fn resolve_var(
 #[allow(clippy::implicit_hasher)]
 pub fn resolve_var_for_property(
   value: &PropertyValue,
-  custom_properties: &HashMap<String, String>,
+  custom_properties: &HashMap<String, CustomPropertyValue>,
   property_name: &str,
 ) -> VarResolutionResult {
   resolve_var_recursive(value, custom_properties, 0, property_name)
@@ -97,7 +98,7 @@ pub fn resolve_var_for_property(
 #[allow(clippy::implicit_hasher)]
 pub fn resolve_var_with_depth(
   value: &PropertyValue,
-  custom_properties: &HashMap<String, String>,
+  custom_properties: &HashMap<String, CustomPropertyValue>,
   depth: usize,
 ) -> PropertyValue {
   match resolve_var_recursive(value, custom_properties, depth, "") {
@@ -109,7 +110,7 @@ pub fn resolve_var_with_depth(
 /// Internal recursive implementation of var() resolution
 fn resolve_var_recursive(
   value: &PropertyValue,
-  custom_properties: &HashMap<String, String>,
+  custom_properties: &HashMap<String, CustomPropertyValue>,
   depth: usize,
   property_name: &str,
 ) -> VarResolutionResult {
@@ -131,7 +132,7 @@ fn resolve_var_recursive(
 
 fn resolve_from_string(
   raw: &str,
-  custom_properties: &HashMap<String, String>,
+  custom_properties: &HashMap<String, CustomPropertyValue>,
   depth: usize,
   property_name: &str,
 ) -> VarResolutionResult {
@@ -153,7 +154,7 @@ fn resolve_from_string(
 
 fn resolve_value_tokens(
   value: &str,
-  custom_properties: &HashMap<String, String>,
+  custom_properties: &HashMap<String, CustomPropertyValue>,
   stack: &mut Vec<String>,
   depth: usize,
 ) -> Result<Vec<String>, VarResolutionResult> {
@@ -168,7 +169,7 @@ fn resolve_value_tokens(
 
 fn resolve_tokens_from_parser<'i, 't>(
   parser: &mut Parser<'i, 't>,
-  custom_properties: &HashMap<String, String>,
+  custom_properties: &HashMap<String, CustomPropertyValue>,
   stack: &mut Vec<String>,
   depth: usize,
 ) -> Result<Vec<String>, VarResolutionResult> {
@@ -243,7 +244,7 @@ fn map_nested_result<'i>(
 
 fn parse_var_function<'i, 't>(
   parser: &mut Parser<'i, 't>,
-  custom_properties: &HashMap<String, String>,
+  custom_properties: &HashMap<String, CustomPropertyValue>,
   stack: &mut Vec<String>,
   depth: usize,
 ) -> Result<Vec<String>, VarResolutionResult> {
@@ -306,7 +307,7 @@ fn parse_var_function_arguments<'i, 't>(
 fn resolve_variable_reference(
   name: &str,
   fallback: Option<&str>,
-  custom_properties: &HashMap<String, String>,
+  custom_properties: &HashMap<String, CustomPropertyValue>,
   stack: &mut Vec<String>,
   depth: usize,
 ) -> Result<Vec<String>, VarResolutionResult> {
@@ -320,7 +321,7 @@ fn resolve_variable_reference(
 
   if let Some(value) = custom_properties.get(name) {
     stack.push(name.to_string());
-    let result = resolve_value_tokens(value, custom_properties, stack, depth + 1);
+    let result = resolve_value_tokens(&value.value, custom_properties, stack, depth + 1);
     stack.pop();
     return result;
   }
@@ -466,13 +467,14 @@ pub fn is_valid_custom_property_name(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::style::values::CustomPropertyValue;
   use crate::style::values::Length;
   use crate::style::values::LengthUnit;
 
-  fn make_props(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+  fn make_props(pairs: &[(&str, &str)]) -> HashMap<String, CustomPropertyValue> {
     pairs
       .iter()
-      .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+      .map(|(k, v)| ((*k).to_string(), CustomPropertyValue::new(*v, None)))
       .collect()
   }
 

@@ -1215,3 +1215,118 @@ impl fmt::Display for LengthOrAuto {
     }
   }
 }
+
+// ============================================================================
+// Custom property registration and typed values
+// ============================================================================
+
+/// Supported syntaxes for registered custom properties.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CustomPropertySyntax {
+  Length,
+  Number,
+  Percentage,
+  Color,
+  Angle,
+  Universal,
+}
+
+/// Parsed typed value for a registered custom property.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CustomPropertyTypedValue {
+  Length(Length),
+  Number(f32),
+  Percentage(f32),
+  Color(crate::style::color::Color),
+  Angle(f32),
+}
+
+impl CustomPropertyTypedValue {
+  /// Serializes the typed value back to CSS text.
+  pub fn to_css(&self) -> String {
+    match self {
+      CustomPropertyTypedValue::Length(len) => len.to_string(),
+      CustomPropertyTypedValue::Number(n) => {
+        if n.fract() == 0.0 {
+          format!("{n:.0}")
+        } else {
+          n.to_string()
+        }
+      }
+      CustomPropertyTypedValue::Percentage(p) => format!("{p}%"),
+      CustomPropertyTypedValue::Color(c) => c.to_string(),
+      CustomPropertyTypedValue::Angle(deg) => {
+        if deg.fract() == 0.0 {
+          format!("{deg:.0}deg")
+        } else {
+          format!("{deg}deg")
+        }
+      }
+    }
+  }
+}
+
+/// Stored value for a custom property, optionally carrying a parsed typed value
+/// when the property is registered.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CustomPropertyValue {
+  pub value: String,
+  pub typed: Option<CustomPropertyTypedValue>,
+}
+
+impl CustomPropertyValue {
+  pub fn new(value: impl Into<String>, typed: Option<CustomPropertyTypedValue>) -> Self {
+    Self {
+      value: value.into(),
+      typed,
+    }
+  }
+}
+
+impl CustomPropertySyntax {
+  /// Parses a syntax descriptor such as `<length>` or `*`.
+  pub fn parse(s: &str) -> Option<Self> {
+    match s.trim().to_ascii_lowercase().as_str() {
+      "<length>" => Some(CustomPropertySyntax::Length),
+      "<number>" => Some(CustomPropertySyntax::Number),
+      "<percentage>" => Some(CustomPropertySyntax::Percentage),
+      "<color>" => Some(CustomPropertySyntax::Color),
+      "<angle>" => Some(CustomPropertySyntax::Angle),
+      "*" => Some(CustomPropertySyntax::Universal),
+      _ => None,
+    }
+  }
+
+  /// Attempts to parse a value string according to this syntax.
+  pub fn parse_value(&self, value: &str) -> Option<CustomPropertyTypedValue> {
+    match self {
+      CustomPropertySyntax::Length => {
+        crate::css::properties::parse_length(value.trim()).map(CustomPropertyTypedValue::Length)
+      }
+      CustomPropertySyntax::Number => value
+        .trim()
+        .parse()
+        .ok()
+        .map(CustomPropertyTypedValue::Number),
+      CustomPropertySyntax::Percentage => {
+        let trimmed = value.trim();
+        if let Some(percent) = trimmed.strip_suffix('%') {
+          percent
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .map(CustomPropertyTypedValue::Percentage)
+        } else {
+          None
+        }
+      }
+      CustomPropertySyntax::Color => crate::style::color::Color::parse(value.trim())
+        .ok()
+        .map(CustomPropertyTypedValue::Color),
+      CustomPropertySyntax::Angle => {
+        crate::css::parser::parse_angle_token(value.trim()).map(CustomPropertyTypedValue::Angle)
+      }
+      CustomPropertySyntax::Universal => None,
+    }
+  }
+}

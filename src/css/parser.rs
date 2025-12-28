@@ -32,6 +32,7 @@ use super::types::PageMarginRule;
 use super::types::PagePseudoClass;
 use super::types::PageRule;
 use super::types::PageSelector;
+use super::types::PropertyRule;
 use super::types::ScopeRule;
 use super::types::StyleRule;
 use super::types::StyleSheet;
@@ -41,6 +42,7 @@ use crate::dom::{DomNode, DomNodeType, HTML_NAMESPACE};
 use crate::error::Result;
 use crate::style::counter_styles::{CounterStyleRule, CounterSystem, SpeakAs};
 use crate::style::media::MediaQuery;
+use crate::style::values::{CustomPropertySyntax, CustomPropertyValue};
 use cssparser::ParseError;
 use cssparser::Parser;
 use cssparser::ParserInput;
@@ -196,6 +198,7 @@ fn parse_rule<'i, 't>(
         "counter-style" => parse_counter_style_rule(p),
         "font-face" => parse_font_face_rule(p),
         "keyframes" | "-webkit-keyframes" => parse_keyframes_rule(p, css_source),
+        "property" => parse_property_rule(p),
         _ => {
           skip_at_rule(p);
           Ok(None)
@@ -1842,6 +1845,104 @@ fn parse_single_keyframe<'i, 't>(
       Err(_) => return Ok(None),
     }
   }
+}
+
+/// Parse a @property rule registering a custom property.
+fn parse_property_rule<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
+  parser.skip_whitespace();
+  let name = match parser.next_including_whitespace() {
+    Ok(Token::Ident(id)) => id.to_string(),
+    _ => {
+      skip_at_rule(parser);
+      return Ok(None);
+    }
+  };
+
+  if !name.starts_with("--") {
+    skip_at_rule(parser);
+    return Ok(None);
+  }
+
+  parser.expect_curly_bracket_block()?;
+
+  let mut syntax: Option<CustomPropertySyntax> = None;
+  let mut inherits: Option<bool> = None;
+  let mut initial_raw: Option<String> = None;
+
+  parser.parse_nested_block(|nested| {
+    while !nested.is_exhausted() {
+      nested.skip_whitespace();
+      if nested.is_exhausted() {
+        break;
+      }
+      let ident = match nested.next_including_whitespace() {
+        Ok(Token::Ident(id)) => id.to_string(),
+        Ok(Token::Semicolon) => continue,
+        Ok(_) => {
+          skip_to_semicolon(nested);
+          continue;
+        }
+        Err(_) => break,
+      };
+
+      nested.skip_whitespace();
+      if nested.try_parse(|p| p.expect_colon()).is_err() {
+        skip_to_semicolon(nested);
+        continue;
+      }
+      let start = nested.position();
+      skip_to_semicolon(nested);
+      let raw = nested.slice_from(start);
+      let value = raw.trim().trim_end_matches(';').trim();
+
+      match ident.as_str() {
+        "syntax" => {
+          let trimmed = value.trim_matches(|c| c == '"' || c == '\'');
+          syntax = CustomPropertySyntax::parse(trimmed);
+        }
+        "inherits" => {
+          let lower = value.to_ascii_lowercase();
+          inherits = match lower.as_str() {
+            "true" => Some(true),
+            "false" => Some(false),
+            _ => None,
+          };
+        }
+        "initial-value" => {
+          initial_raw = Some(value.to_string());
+        }
+        _ => {}
+      }
+    }
+    Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(())
+  })?;
+
+  let Some(syntax) = syntax else {
+    return Ok(None);
+  };
+  let inherits = inherits.unwrap_or(true);
+  let initial_value = if let Some(raw) = initial_raw {
+    if raw.is_empty() && !matches!(syntax, CustomPropertySyntax::Universal) {
+      None
+    } else {
+      let parsed = syntax.parse_value(&raw);
+      if parsed.is_none() && !matches!(syntax, CustomPropertySyntax::Universal) {
+        return Ok(None);
+      }
+      Some(CustomPropertyValue::new(raw, parsed))
+    }
+  } else {
+    None
+  };
+
+  Ok(Some(CssRule::Property(PropertyRule {
+    name,
+    syntax,
+    inherits,
+    initial_value,
+  })))
 }
 
 fn parse_font_face_family(value: &str) -> Option<String> {
@@ -3658,8 +3759,15 @@ mod tests {
     "#;
     let dom = crate::dom::parse_html(html).unwrap();
     let sources = extract_scoped_css_sources(&dom);
-    assert!(sources.document.is_empty(), "document styles should remain empty");
-    assert_eq!(sources.shadows.len(), 1, "expected styles scoped to a shadow root");
+    assert!(
+      sources.document.is_empty(),
+      "document styles should remain empty"
+    );
+    assert_eq!(
+      sources.shadows.len(),
+      1,
+      "expected styles scoped to a shadow root"
+    );
     let (_, shadow_sources) = sources.shadows.iter().next().unwrap();
     assert_eq!(shadow_sources.len(), 1);
     match &shadow_sources[0] {

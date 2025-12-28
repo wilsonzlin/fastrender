@@ -12,6 +12,8 @@ use crate::style::counter_styles::CounterStyleRule;
 use crate::style::media::MediaContext;
 use crate::style::media::MediaQuery;
 use crate::style::media::MediaQueryCache;
+use crate::style::values::CustomPropertySyntax;
+use crate::style::values::CustomPropertyValue;
 use crate::style::values::Length;
 use cssparser::ParseError;
 use cssparser::Parser;
@@ -412,6 +414,59 @@ impl StyleSheet {
     result
   }
 
+  /// Collects @property rules that apply to the current media context.
+  pub fn collect_property_rules(&self, media_ctx: &MediaContext) -> Vec<PropertyRule> {
+    self.collect_property_rules_with_cache(media_ctx, None)
+  }
+
+  /// Collects @property rules using an optional media-query cache.
+  pub fn collect_property_rules_with_cache(
+    &self,
+    media_ctx: &MediaContext,
+    mut cache: Option<&mut MediaQueryCache>,
+  ) -> Vec<PropertyRule> {
+    fn walk(
+      rules: &[CssRule],
+      media_ctx: &MediaContext,
+      cache: Option<&mut MediaQueryCache>,
+      out: &mut Vec<PropertyRule>,
+    ) {
+      let mut cache = cache;
+      for rule in rules {
+        match rule {
+          CssRule::Property(p) => out.push(p.clone()),
+          CssRule::Media(media) => {
+            if media_ctx.evaluate_list_with_cache(&media.queries, cache.as_deref_mut()) {
+              walk(&media.rules, media_ctx, cache.as_deref_mut(), out);
+            }
+          }
+          CssRule::Supports(supports) => {
+            if supports.condition.matches() {
+              walk(&supports.rules, media_ctx, cache.as_deref_mut(), out);
+            }
+          }
+          CssRule::Layer(layer) => walk(&layer.rules, media_ctx, cache.as_deref_mut(), out),
+          CssRule::Style(style) => walk(&style.nested_rules, media_ctx, cache.as_deref_mut(), out),
+          CssRule::Container(container) => {
+            if media_ctx.evaluate_list_with_cache(&container.query_list, cache.as_deref_mut()) {
+              walk(&container.rules, media_ctx, cache.as_deref_mut(), out);
+            }
+          }
+          CssRule::Scope(scope) => walk(&scope.rules, media_ctx, cache.as_deref_mut(), out),
+          CssRule::Page(_)
+          | CssRule::CounterStyle(_)
+          | CssRule::Import(_)
+          | CssRule::FontFace(_)
+          | CssRule::Keyframes(_) => {}
+        }
+      }
+    }
+
+    let mut out = Vec::new();
+    walk(&self.rules, media_ctx, cache.as_deref_mut(), &mut out);
+    out
+  }
+
   /// Resolve @import rules by fetching external stylesheets and inlining their rules.
   ///
   /// Imports are processed in order; only imports whose media lists match the provided
@@ -482,7 +537,8 @@ impl StyleSheet {
           | CssRule::CounterStyle(_)
           | CssRule::Import(_)
           | CssRule::FontFace(_)
-          | CssRule::Keyframes(_) => {}
+          | CssRule::Keyframes(_)
+          | CssRule::Property(_) => {}
         }
       }
       false
@@ -585,6 +641,7 @@ fn collect_rules_recursive<'a>(
         // Imports are resolved before collection; nothing to add here.
       }
       CssRule::Keyframes(_) => {}
+      CssRule::Property(_) => {}
       CssRule::Layer(layer_rule) => {
         if layer_rule.rules.is_empty() {
           for name in &layer_rule.names {
@@ -740,6 +797,7 @@ fn collect_page_rules_recursive<'a>(
       CssRule::Container(_) => {}
       CssRule::Keyframes(_) | CssRule::CounterStyle(_) => {}
       CssRule::Style(_) | CssRule::Import(_) | CssRule::FontFace(_) => {}
+      CssRule::Property(_) => {}
       CssRule::Scope(scope_rule) => {
         collect_page_rules_recursive(
           &scope_rule.rules,
@@ -796,6 +854,7 @@ fn collect_font_faces_recursive(
       }
       CssRule::Style(_) | CssRule::Import(_) => {}
       CssRule::Keyframes(_) => {}
+      CssRule::Property(_) => {}
       CssRule::Scope(scope_rule) => {
         collect_font_faces_recursive(&scope_rule.rules, media_ctx, cache.as_deref_mut(), out);
       }
@@ -836,6 +895,7 @@ fn collect_keyframes_recursive(
       }
       CssRule::Page(_) | CssRule::CounterStyle(_) => {}
       CssRule::Style(_) | CssRule::Import(_) | CssRule::FontFace(_) => {}
+      CssRule::Property(_) => {}
       CssRule::Scope(scope_rule) => {
         collect_keyframes_recursive(&scope_rule.rules, media_ctx, cache.as_deref_mut(), out);
       }
@@ -964,6 +1024,7 @@ fn collect_counter_styles_recursive<'a>(
       CssRule::Page(_) => {}
       CssRule::FontFace(_) => {}
       CssRule::Keyframes(_) => {}
+      CssRule::Property(_) => {}
     }
   }
 }
@@ -1251,6 +1312,8 @@ pub enum CssRule {
   Keyframes(KeyframesRule),
   /// A @scope rule limiting descendant styles to a subtree.
   Scope(ScopeRule),
+  /// A @property rule registering a custom property.
+  Property(PropertyRule),
 }
 
 /// A @media rule containing conditional rules
@@ -1352,6 +1415,19 @@ pub struct ImportRule {
   pub layer: Option<ImportLayer>,
   /// Optional @supports condition gating the import.
   pub supports: Option<SupportsCondition>,
+}
+
+/// A @property rule registering a custom property.
+#[derive(Debug, Clone)]
+pub struct PropertyRule {
+  /// Registered custom property name (must start with `--`).
+  pub name: String,
+  /// Value syntax descriptor.
+  pub syntax: CustomPropertySyntax,
+  /// Whether the property inherits by default.
+  pub inherits: bool,
+  /// Optional initial value validated against the syntax.
+  pub initial_value: Option<CustomPropertyValue>,
 }
 
 /// A single CSS style rule (selectors + declarations)
@@ -1679,6 +1755,9 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
             // Per spec, failed imports are ignored.
           }
         }
+      }
+      CssRule::Property(property) => {
+        out.push(CssRule::Property(property.clone()));
       }
     }
   }
