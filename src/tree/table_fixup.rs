@@ -54,6 +54,7 @@
 use crate::error::Result;
 use crate::style::display::Display;
 use crate::style::display::FormattingContextType;
+use crate::style::types::CaptionSide;
 use crate::style::ComputedStyle;
 use crate::tree::anonymous::inherited_style;
 use crate::tree::box_tree::AnonymousBox;
@@ -268,7 +269,7 @@ impl TableStructureFixer {
   }
 
   /// Creates an anonymous table wrapper
-  fn create_anonymous_wrapper(table: BoxNode, parent_style: &ComputedStyle) -> BoxNode {
+  fn create_anonymous_wrapper(children: Vec<BoxNode>, parent_style: &ComputedStyle) -> BoxNode {
     let style = Self::inherited_table_style(parent_style, Display::Block);
 
     BoxNode {
@@ -277,7 +278,7 @@ impl TableStructureFixer {
       box_type: BoxType::Anonymous(AnonymousBox {
         anonymous_type: AnonymousType::TableWrapper,
       }),
-      children: vec![table],
+      children,
       id: 0,
       debug_info: None,
       styled_node_id: None,
@@ -513,17 +514,36 @@ impl TableStructureFixer {
   /// Creates table wrapper if needed
   ///
   /// CSS 2.1: Tables with captions need a wrapper box
-  fn create_wrapper_if_needed(table: BoxNode) -> BoxNode {
-    // Check if table has any captions
-    let has_caption = table.children.iter().any(|c| Self::is_table_caption(c));
+  fn create_wrapper_if_needed(mut table: BoxNode) -> BoxNode {
+    let parent_style = table.style.clone();
+    let mut top_captions = Vec::new();
+    let mut bottom_captions = Vec::new();
+    let mut grid_children = Vec::new();
 
-    if has_caption {
-      // Create wrapper containing table and captions
-      let parent_style = table.style.clone();
-      Self::create_anonymous_wrapper(table, &parent_style)
-    } else {
-      table
+    for child in std::mem::take(&mut table.children) {
+      if Self::is_table_caption(&child) {
+        match child.style.caption_side {
+          CaptionSide::Top => top_captions.push(child),
+          CaptionSide::Bottom => bottom_captions.push(child),
+        }
+      } else {
+        grid_children.push(child);
+      }
     }
+
+    if top_captions.is_empty() && bottom_captions.is_empty() {
+      table.children = grid_children;
+      return table;
+    }
+
+    table.children = grid_children;
+
+    let mut wrapper_children = Vec::new();
+    wrapper_children.extend(top_captions);
+    wrapper_children.push(table);
+    wrapper_children.extend(bottom_captions);
+
+    Self::create_anonymous_wrapper(wrapper_children, &parent_style)
   }
 
   // ==================== Utility Methods ====================
@@ -891,8 +911,13 @@ mod tests {
         anonymous_type: AnonymousType::TableWrapper
       })
     ));
-    assert_eq!(fixed.children.len(), 1);
-    assert!(TableStructureFixer::is_table_box(&fixed.children[0]));
+    assert_eq!(fixed.children.len(), 2);
+    assert!(TableStructureFixer::is_table_caption(&fixed.children[0]));
+    assert!(TableStructureFixer::is_table_box(&fixed.children[1]));
+    assert!(fixed.children[1]
+      .children
+      .iter()
+      .all(|child| !TableStructureFixer::is_table_caption(child)));
   }
 
   #[test]
@@ -1076,6 +1101,13 @@ mod tests {
         anonymous_type: AnonymousType::TableWrapper
       })
     ));
+    assert_eq!(fixed.children.len(), 2);
+    assert!(TableStructureFixer::is_table_caption(&fixed.children[0]));
+    assert!(TableStructureFixer::is_table_box(&fixed.children[1]));
+    assert!(fixed.children[1]
+      .children
+      .iter()
+      .all(|child| !TableStructureFixer::is_table_caption(child)));
   }
 
   #[test]

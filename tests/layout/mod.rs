@@ -30,6 +30,7 @@ mod subgrid;
 mod table_anonymous_inheritance;
 mod table_columns_test;
 mod table_fixup_integration;
+mod table_fixup_wrapper;
 mod table_fragmentation;
 mod taffy_usage_guards;
 mod test_absolute;
