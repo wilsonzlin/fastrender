@@ -1130,12 +1130,28 @@ pub fn render_glyph(
   color: Rgba,
   pixmap: &mut Pixmap,
 ) -> Result<f32> {
+  render_glyph_with_variations(font, glyph_id, font_size, x, y, color, &[], pixmap)
+}
+
+/// Renders a single glyph to a pixmap (standalone function) with variation coordinates.
+pub fn render_glyph_with_variations(
+  font: &LoadedFont,
+  glyph_id: u32,
+  font_size: f32,
+  x: f32,
+  y: f32,
+  color: Rgba,
+  variations: &[Variation],
+  pixmap: &mut Pixmap,
+) -> Result<f32> {
   // Parse font
-  let face = font
+  let mut face = font
     .as_ttf_face()
     .map_err(|_| RenderError::RasterizationFailed {
       reason: format!("Failed to parse font: {}", font.family),
     })?;
+
+  apply_rustybuzz_variations(&mut face, variations);
 
   // Calculate scale
   let units_per_em = face.units_per_em() as f32;
@@ -1179,11 +1195,23 @@ pub fn render_glyph(
 ///
 /// Returns the distance to move the cursor after this glyph.
 pub fn glyph_advance(font: &LoadedFont, glyph_id: u32, font_size: f32) -> Result<f32> {
-  let face = font
+  glyph_advance_with_variations(font, glyph_id, font_size, &[])
+}
+
+/// Gets the horizontal advance for a glyph with variation coordinates.
+pub fn glyph_advance_with_variations(
+  font: &LoadedFont,
+  glyph_id: u32,
+  font_size: f32,
+  variations: &[Variation],
+) -> Result<f32> {
+  let mut face = font
     .as_ttf_face()
     .map_err(|_| RenderError::RasterizationFailed {
       reason: format!("Failed to parse font: {}", font.family),
     })?;
+
+  apply_rustybuzz_variations(&mut face, variations);
 
   let units_per_em = face.units_per_em() as f32;
   let scale = font_size / units_per_em;
@@ -1216,7 +1244,8 @@ mod tests {
 
   fn load_variable_font() -> LoadedFont {
     let mut db = FontDatabase::empty();
-    let data = include_bytes!("../../tests/fixtures/fonts/Inter-Variable.ttf").to_vec();
+    let data =
+      include_bytes!("../../tests/fixtures/fonts/VariableTestFont-AmstelvarAlpha.ttf").to_vec();
     db.load_font_data(data)
       .expect("variable font fixture should load");
     let face = db.faces().next().expect("fixture font missing face");
@@ -1463,6 +1492,94 @@ mod tests {
     assert!(light.data().iter().any(|b| *b != 0));
     assert!(bold.data().iter().any(|b| *b != 0));
     assert_ne!(light.data(), bold.data());
+  }
+
+  #[test]
+  fn glyph_advance_with_variations_reflects_hvar() {
+    let font = load_variable_font();
+    let mut face = font.as_ttf_face().unwrap();
+    let glyph_id = face
+      .glyph_index('A')
+      .map(|g| g.0 as u32)
+      .expect("variable font should have glyph for A");
+    let wght = face
+      .variation_axes()
+      .find(|axis| axis.tag == Tag::from_bytes(b"wght"))
+      .expect("variable font should expose wght axis");
+
+    let light = Variation {
+      tag: wght.tag,
+      value: wght.min_value,
+    };
+    let bold = Variation {
+      tag: wght.tag,
+      value: wght.max_value,
+    };
+
+    let light_advance = glyph_advance_with_variations(&font, glyph_id, 48.0, &[light]).unwrap();
+    let bold_advance = glyph_advance_with_variations(&font, glyph_id, 48.0, &[bold]).unwrap();
+
+    assert!(
+      (light_advance - bold_advance).abs() > 0.01,
+      "variations should influence advances ({} vs {})",
+      light_advance,
+      bold_advance
+    );
+  }
+
+  #[test]
+  fn render_glyph_with_variations_renders_selected_instance() {
+    let font = load_variable_font();
+    let face = font.as_ttf_face().unwrap();
+    let glyph_id = face
+      .glyph_index('A')
+      .map(|g| g.0 as u32)
+      .expect("variable font should have glyph for A");
+    let wght = face
+      .variation_axes()
+      .find(|axis| axis.tag == Tag::from_bytes(b"wght"))
+      .expect("variable font should expose wght axis");
+
+    let light = Variation {
+      tag: wght.tag,
+      value: wght.min_value,
+    };
+    let bold = Variation {
+      tag: wght.tag,
+      value: wght.max_value,
+    };
+
+    let mut light_pixmap = Pixmap::new(200, 200).unwrap();
+    light_pixmap.fill(Color::TRANSPARENT);
+    render_glyph_with_variations(
+      &font,
+      glyph_id,
+      64.0,
+      40.0,
+      140.0,
+      Rgba::BLACK,
+      &[light],
+      &mut light_pixmap,
+    )
+    .unwrap();
+
+    let mut bold_pixmap = Pixmap::new(200, 200).unwrap();
+    bold_pixmap.fill(Color::TRANSPARENT);
+    render_glyph_with_variations(
+      &font,
+      glyph_id,
+      64.0,
+      40.0,
+      140.0,
+      Rgba::BLACK,
+      &[bold],
+      &mut bold_pixmap,
+    )
+    .unwrap();
+
+    assert!(light_pixmap.data().iter().any(|b| *b != 0));
+    assert!(bold_pixmap.data().iter().any(|b| *b != 0));
+    assert_ne!(light_pixmap.data(), bold_pixmap.data());
   }
 
   #[test]
