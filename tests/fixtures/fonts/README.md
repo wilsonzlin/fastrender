@@ -147,3 +147,4 @@ so CI and tests can run in fully hermetic environments without relying on platfo
 - **Source:** Generated in-repo with `fontTools.fontBuilder` for deterministic variable font testing.
 - **License:** Created specifically for FastRender tests; no third-party assets or licensing obligations.
 - **Glyphs / axes:** Minimal `A` glyph with a `wght` axis (100–900, default 400) that widens at heavier weights to validate variation application.
+- **Usage:** Exercised by `painter_applies_variable_font_variations` to ensure the painter applies variation coordinates consistently with shaping.
