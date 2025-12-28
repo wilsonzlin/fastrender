@@ -966,6 +966,41 @@ impl TextRasterizer {
   pub fn reset_cache_stats(&mut self) {
     self.cache.reset_stats();
   }
+
+  /// Returns a cached or freshly rendered color glyph raster for the given glyph.
+  ///
+  /// This reuses the shared color glyph cache so callers (e.g. shadow rendering) can
+  /// obtain the glyph alpha mask without triggering redundant rasterization work.
+  pub fn get_color_glyph(
+    &mut self,
+    font: &LoadedFont,
+    glyph_id: u32,
+    font_size: f32,
+    palette_index: u16,
+    variations: &[Variation],
+    color: Rgba,
+    synthetic_oblique: f32,
+  ) -> Option<ColorGlyphRaster> {
+    let color_key =
+      ColorGlyphCacheKey::new(font, glyph_id, font_size, palette_index, variations, color);
+    let mut glyph = self.color_cache.get(&color_key);
+
+    if glyph.is_none() {
+      glyph = self.color_renderer.render(
+        font,
+        glyph_id,
+        font_size,
+        palette_index,
+        color,
+        synthetic_oblique,
+      );
+      if let Some(ref rendered) = glyph {
+        self.color_cache.insert(color_key, rendered.clone());
+      }
+    }
+
+    glyph
+  }
 }
 
 fn draw_color_glyph(

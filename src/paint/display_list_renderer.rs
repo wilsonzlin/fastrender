@@ -59,6 +59,7 @@ use crate::paint::projective_warp::warp_pixmap;
 use crate::paint::rasterize::fill_rounded_rect;
 use crate::paint::rasterize::render_box_shadow;
 use crate::paint::rasterize::BoxShadow;
+use crate::paint::text_rasterize::TextRasterizer;
 use crate::paint::text_shadow::PathBounds;
 use crate::paint::transform3d::backface_is_hidden;
 use crate::style::color::Rgba;
@@ -88,6 +89,7 @@ use crate::style::types::TransformStyle;
 use crate::style::values::Length;
 #[cfg(test)]
 use crate::style::ComputedStyle;
+use crate::text::color_fonts::ColorGlyphRaster;
 use crate::text::font_db::FontStretch;
 use crate::text::font_db::FontStyle as DbFontStyle;
 use crate::text::font_db::LoadedFont;
@@ -1089,6 +1091,7 @@ fn invert((r, g, b): (u8, u8, u8), amount: f32) -> (u8, u8, u8) {
 pub struct DisplayListRenderer {
   canvas: Canvas,
   font_ctx: FontContext,
+  text_rasterizer: TextRasterizer,
   stacking_layers: Vec<StackingRecord>,
   blend_stack: Vec<Option<BlendMode>>,
   scale: f32,
@@ -1151,6 +1154,12 @@ struct SceneItem {
 enum SceneItemSource {
   Segment(Vec<DisplayItem>),
   FlattenedSubtree(StackingNode),
+}
+
+struct GlyphShadowSource {
+  path: Option<tiny_skia::Path>,
+  color_glyph: Option<ColorGlyphRaster>,
+  origin: Point,
 }
 
 fn parse_stacking_node(items: &[DisplayItem], start: usize) -> Option<(StackingNode, usize)> {
@@ -1565,6 +1574,7 @@ impl DisplayListRenderer {
     Ok(Self {
       canvas: Canvas::new(device_w, device_h, background)?,
       font_ctx,
+      text_rasterizer: TextRasterizer::new(),
       stacking_layers: Vec::new(),
       blend_stack: Vec::new(),
       scale,
@@ -3612,9 +3622,13 @@ impl DisplayListRenderer {
       }
     };
 
-    let (paths, bounds) = self.glyph_paths(&face, item);
-    if !item.shadows.is_empty() && !paths.is_empty() && bounds.is_valid() {
-      self.render_text_shadows(&paths, &bounds, item);
+    let (glyphs, bounds) = if item.shadows.is_empty() {
+      (Vec::new(), PathBounds::new())
+    } else {
+      self.glyph_shadow_sources(&face, &font, item)
+    };
+    if !glyphs.is_empty() && bounds.is_valid() {
+      self.render_text_shadows(&glyphs, &bounds, item);
     }
 
     let glyphs: Vec<GlyphPosition> = item
@@ -3909,33 +3923,69 @@ impl DisplayListRenderer {
     Ok(())
   }
 
-  fn glyph_paths(
-    &self,
+  fn glyph_shadow_sources(
+    &mut self,
     face: &ttf_parser::Face<'_>,
+    font: &LoadedFont,
     item: &TextItem,
-  ) -> (Vec<tiny_skia::Path>, PathBounds) {
+  ) -> (Vec<GlyphShadowSource>, PathBounds) {
     let units_per_em = face.units_per_em() as f32;
     let scale = item.font_size / units_per_em;
-    let mut paths = Vec::with_capacity(item.glyphs.len());
+    let mut glyphs = Vec::with_capacity(item.glyphs.len());
     let mut bounds = PathBounds::new();
 
     for glyph in &item.glyphs {
-      let x = item.origin.x + glyph.offset.x;
-      let y = item.origin.y + glyph.offset.y;
-      if let Some(path) = Self::build_glyph_path(
-        face,
-        glyph.glyph_id as u16,
-        x,
-        y,
-        scale,
+      let origin = Point::new(
+        item.origin.x + glyph.offset.x,
+        item.origin.y + glyph.offset.y,
+      );
+      let color_glyph = self.text_rasterizer.get_color_glyph(
+        font,
+        glyph.glyph_id,
+        item.font_size,
+        0,
+        &[],
+        item.color,
         item.synthetic_oblique,
-      ) {
-        bounds.include(&path.bounds());
-        paths.push(path);
+      );
+      let mut path = None;
+      if color_glyph.is_none() {
+        if let Some(p) = Self::build_glyph_path(
+          face,
+          glyph.glyph_id as u16,
+          origin.x,
+          origin.y,
+          scale,
+          item.synthetic_oblique,
+        ) {
+          bounds.include(&p.bounds());
+          path = Some(p);
+        }
       }
+
+      if let Some(ref color) = color_glyph {
+        if let Some(rect) = tiny_skia::Rect::from_xywh(
+          origin.x + color.left,
+          origin.y + color.top,
+          color.image.width() as f32,
+          color.image.height() as f32,
+        ) {
+          bounds.include(&rect);
+        }
+      }
+
+      if path.is_none() && color_glyph.is_none() {
+        continue;
+      }
+
+      glyphs.push(GlyphShadowSource {
+        path,
+        color_glyph,
+        origin,
+      });
     }
 
-    (paths, bounds)
+    (glyphs, bounds)
   }
 
   fn build_glyph_path(
@@ -4010,10 +4060,13 @@ impl DisplayListRenderer {
 
   fn render_text_shadows(
     &mut self,
-    paths: &[tiny_skia::Path],
+    glyphs: &[GlyphShadowSource],
     bounds: &PathBounds,
     item: &TextItem,
   ) {
+    if glyphs.is_empty() {
+      return;
+    }
     let opacity = self.canvas.opacity().clamp(0.0, 1.0);
     for shadow in &item.shadows {
       let blur_margin = (shadow.blur_radius.abs() * 3.0).ceil();
@@ -4045,8 +4098,22 @@ impl DisplayListRenderer {
       let translate_x = -bounds.min_x + blur_margin;
       let translate_y = -bounds.min_y + blur_margin;
       let transform = Transform::from_translate(translate_x, translate_y);
-      for path in paths {
-        shadow_pixmap.fill_path(path, &paint, tiny_skia::FillRule::EvenOdd, transform, None);
+      for glyph in glyphs {
+        if let Some(color) = &glyph.color_glyph {
+          self.draw_color_shadow(
+            &mut shadow_pixmap,
+            color,
+            glyph.origin,
+            translate_x,
+            translate_y,
+            shadow.color,
+            opacity,
+          );
+          continue;
+        }
+        if let Some(path) = glyph.path.as_ref() {
+          shadow_pixmap.fill_path(path, &paint, tiny_skia::FillRule::EvenOdd, transform, None);
+        }
       }
 
       if shadow.blur_radius > 0.0 {
@@ -4075,6 +4142,67 @@ impl DisplayListRenderer {
         clip.as_ref(),
       );
     }
+  }
+
+  fn draw_color_shadow(
+    &self,
+    target: &mut Pixmap,
+    glyph: &ColorGlyphRaster,
+    origin: Point,
+    translate_x: f32,
+    translate_y: f32,
+    shadow_color: Rgba,
+    opacity: f32,
+  ) {
+    let width = glyph.image.width();
+    let height = glyph.image.height();
+    if width == 0 || height == 0 {
+      return;
+    }
+
+    let alpha_scale = (shadow_color.a * opacity).clamp(0.0, 1.0);
+    if alpha_scale <= 0.0 {
+      return;
+    }
+
+    let mut data = Vec::with_capacity((width * height * 4) as usize);
+    for pixel in glyph.image.data().chunks_exact(4) {
+      let glyph_alpha = pixel[3] as f32 / 255.0;
+      let final_alpha = glyph_alpha * alpha_scale;
+      let final_a_u8 = (final_alpha * 255.0).round().clamp(0.0, 255.0) as u8;
+      let premul = |c: u8| (c as f32 * final_alpha).round().clamp(0.0, 255.0) as u8;
+      data.push(premul(shadow_color.b));
+      data.push(premul(shadow_color.g));
+      data.push(premul(shadow_color.r));
+      data.push(final_a_u8);
+    }
+
+    let Some(size) = IntSize::from_wh(width, height) else {
+      return;
+    };
+    let Some(tinted) = Pixmap::from_vec(data, size) else {
+      return;
+    };
+
+    let draw_x = origin.x + glyph.left + translate_x;
+    let draw_y = origin.y + glyph.top + translate_y;
+    let dest_x = draw_x.floor() as i32;
+    let dest_y = draw_y.floor() as i32;
+    let frac_x = draw_x - dest_x as f32;
+    let frac_y = draw_y - dest_y as f32;
+
+    let mut paint = tiny_skia::PixmapPaint::default();
+    paint.opacity = 1.0;
+    paint.blend_mode = tiny_skia::BlendMode::SourceOver;
+
+    target.draw_pixmap(
+      dest_x,
+      dest_y,
+      tinted.as_ref(),
+      &paint,
+      Transform::from_translate(frac_x, frac_y),
+      None,
+    );
   }
 
   fn render_emphasis(&mut self, emphasis: &TextEmphasis) -> Result<()> {
@@ -6726,7 +6854,7 @@ mod tests {
       decorations: Vec::new(),
     }));
 
-    let renderer = DisplayListRenderer::new_scaled(80, 40, Rgba::WHITE, font_ctx, 2.0)
+    let mut renderer = DisplayListRenderer::new_scaled(80, 40, Rgba::WHITE, font_ctx, 2.0)
       .expect("renderer with scale");
     let text_item = match &list.items()[0] {
       DisplayItem::Text(t) => t,
@@ -6738,7 +6866,7 @@ mod tests {
       "shadow offset should scale with DPR (expected ~4, got {})",
       scaled_item.shadows[0].offset.x
     );
-    let (_paths, bounds) = renderer.glyph_paths(&face, &scaled_item);
+    let (_glyphs, bounds) = renderer.glyph_shadow_sources(&face, &font, &scaled_item);
     let shadow = &scaled_item.shadows[0];
     let shadow_min_x = bounds.min_x + shadow.offset.x;
     let shadow_max_x = bounds.max_x + shadow.offset.x;
@@ -6818,7 +6946,7 @@ mod tests {
       decorations: Vec::new(),
     }));
 
-    let renderer = DisplayListRenderer::new_scaled(80, 40, Rgba::WHITE, font_ctx.clone(), 2.0)
+    let mut renderer = DisplayListRenderer::new_scaled(80, 40, Rgba::WHITE, font_ctx.clone(), 2.0)
       .expect("renderer with scale");
     let text_item = match &list.items()[0] {
       DisplayItem::Text(t) => t,
@@ -6830,7 +6958,7 @@ mod tests {
       "blur radius should scale with DPR (expected ~8, got {})",
       scaled_item.shadows[0].blur_radius
     );
-    let (_paths, bounds) = renderer.glyph_paths(&face, &scaled_item);
+    let (_glyphs, bounds) = renderer.glyph_shadow_sources(&face, &font, &scaled_item);
     let shadow = &scaled_item.shadows[0];
     let blur_margin = (shadow.blur_radius.abs() * 3.0).ceil();
     let shadow_min_x = bounds.min_x + shadow.offset.x - blur_margin;

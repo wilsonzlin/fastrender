@@ -4,7 +4,9 @@ use base64::Engine;
 use fastrender::css::types::BoxShadow;
 use fastrender::css::types::ColorStop;
 use fastrender::css::types::Transform as CssTransform;
+use fastrender::geometry::Point;
 use fastrender::geometry::Rect;
+use fastrender::image_compare::{compare_images as compare_rgba_images, decode_png, CompareConfig};
 use fastrender::image_loader::ImageCache;
 use fastrender::paint::display_list::BlendMode;
 use fastrender::paint::display_list::BorderRadii;
@@ -15,6 +17,8 @@ use fastrender::paint::display_list::DecorationStroke;
 use fastrender::paint::display_list::DisplayItem;
 use fastrender::paint::display_list::DisplayList;
 use fastrender::paint::display_list::FillRectItem;
+use fastrender::paint::display_list::FontId;
+use fastrender::paint::display_list::GlyphInstance;
 use fastrender::paint::display_list::ImageData;
 use fastrender::paint::display_list::MaskReferenceRects;
 use fastrender::paint::display_list::OutlineItem;
@@ -24,6 +28,8 @@ use fastrender::paint::display_list::ResolvedMaskImage;
 use fastrender::paint::display_list::ResolvedMaskLayer;
 use fastrender::paint::display_list::StackingContextItem;
 use fastrender::paint::display_list::TextDecorationItem;
+use fastrender::paint::display_list::TextItem;
+use fastrender::paint::display_list::TextShadowItem;
 use fastrender::paint::display_list::Transform3D;
 use fastrender::paint::display_list_builder::DisplayListBuilder;
 use fastrender::paint::display_list_renderer::DisplayListRenderer;
@@ -58,6 +64,9 @@ use fastrender::style::types::ShapeRadius;
 use fastrender::style::types::TextDecorationStyle;
 use fastrender::style::types::TransformStyle;
 use fastrender::style::values::Length;
+use fastrender::text::font_db::FontConfig;
+use fastrender::text::font_db::FontStretch;
+use fastrender::text::font_db::FontStyle as DbFontStyle;
 use fastrender::text::font_loader::FontContext;
 use fastrender::tree::fragment_tree::FragmentNode;
 use fastrender::tree::fragment_tree::FragmentSliceInfo;
@@ -67,6 +76,8 @@ use image::codecs::png::PngEncoder;
 use image::ExtendedColorType;
 use image::ImageEncoder;
 use image::RgbaImage;
+use std::fs;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tiny_skia::FillRule as SkFillRule;
 use tiny_skia::Pixmap;
@@ -1590,6 +1601,36 @@ fn bbox_for_color(
   }
 }
 
+fn pixmap_to_rgba(pixmap: &Pixmap) -> RgbaImage {
+  let width = pixmap.width();
+  let height = pixmap.height();
+  let mut rgba = RgbaImage::new(width, height);
+
+  for (dst, src) in rgba
+    .as_mut()
+    .chunks_exact_mut(4)
+    .zip(pixmap.data().chunks_exact(4))
+  {
+    let b = src[0];
+    let g = src[1];
+    let r = src[2];
+    let a = src[3];
+
+    if a == 0 {
+      dst.copy_from_slice(&[0, 0, 0, 0]);
+      continue;
+    }
+
+    let alpha = a as f32 / 255.0;
+    dst[0] = ((r as f32 / alpha).min(255.0)) as u8;
+    dst[1] = ((g as f32 / alpha).min(255.0)) as u8;
+    dst[2] = ((b as f32 / alpha).min(255.0)) as u8;
+    dst[3] = a;
+  }
+
+  rgba
+}
+
 #[test]
 fn marker_text_shadow_is_rendered_in_display_list() {
   let mut style = ComputedStyle::default();
@@ -1641,6 +1682,83 @@ fn marker_text_shadow_is_rendered_in_display_list() {
   assert!(
     shadow_bbox.1.abs_diff(glyph_bbox.1) <= 2,
     "shadow should stay vertically aligned with the marker glyph"
+  );
+}
+
+#[test]
+fn color_glyph_shadow_matches_golden() {
+  let font_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fonts");
+  let font_config = FontConfig::default()
+    .with_system_fonts(false)
+    .with_bundled_fonts(false)
+    .add_font_dir(font_dir);
+  let font_ctx = FontContext::with_config(font_config);
+
+  let families = vec!["ColorTestCOLR".to_string()];
+  let font = font_ctx
+    .get_font_full(&families, 400, DbFontStyle::Normal, FontStretch::Normal)
+    .expect("color font available");
+  let face = font.as_ttf_face().expect("color font face");
+  let glyph_id = face.glyph_index('A').expect("glyph A");
+  let units_per_em = face.units_per_em() as f32;
+  let font_size = 64.0;
+  let advance = face.glyph_hor_advance(glyph_id).unwrap_or(0) as f32 * (font_size / units_per_em);
+
+  let text = TextItem {
+    origin: Point::new(20.0, 96.0),
+    glyphs: vec![GlyphInstance {
+      glyph_id: glyph_id.0 as u32,
+      offset: Point::new(0.0, 0.0),
+      advance,
+    }],
+    color: Rgba::WHITE,
+    shadows: vec![TextShadowItem {
+      offset: Point::new(10.0, 10.0),
+      blur_radius: 6.0,
+      color: Rgba::from_rgba8(0, 0, 0, 255),
+    }],
+    font_size,
+    advance_width: advance,
+    font_id: Some(FontId {
+      family: "ColorTestCOLR".to_string(),
+      weight: 400,
+      style: DbFontStyle::Normal,
+      stretch: FontStretch::Normal,
+    }),
+    synthetic_bold: 0.0,
+    synthetic_oblique: 0.0,
+    emphasis: None,
+    decorations: Vec::new(),
+  };
+
+  let mut list = DisplayList::new();
+  list.push(DisplayItem::Text(text));
+
+  let pixmap = DisplayListRenderer::new(150, 150, Rgba::WHITE, font_ctx)
+    .expect("renderer")
+    .render(&list)
+    .expect("render");
+
+  let golden_path =
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden/color_glyph_shadow.png");
+  if !golden_path.exists() {
+    pixmap
+      .save_png(&golden_path)
+      .expect("write missing golden image");
+    panic!(
+      "Golden image missing, created at {}. Re-run tests.",
+      golden_path.display()
+    );
+  }
+
+  let golden_bytes = fs::read(&golden_path).expect("read golden image");
+  let golden = decode_png(&golden_bytes).expect("decode golden image");
+  let actual = pixmap_to_rgba(&pixmap);
+  let diff = compare_rgba_images(&actual, &golden, &CompareConfig::strict());
+  assert!(
+    diff.is_match(),
+    "color glyph shadow should match golden: {}",
+    diff.summary()
   );
 }
 
