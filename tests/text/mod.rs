@@ -19,4 +19,5 @@ mod pipeline_test;
 mod script_test;
 mod shaper_test;
 mod svg_color_font_test;
+mod svg_glyph_safety_test;
 mod web_font_display;
