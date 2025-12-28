@@ -286,3 +286,54 @@ fn exportparts_renaming_hides_original_name_in_containing_scope() {
   assert_eq!(inner.styles.color, baseline_color);
   assert_ne!(inner.styles.color, Rgba::rgb(200, 10, 20));
 }
+
+#[test]
+fn document_host_part_selector_does_not_apply() {
+  let html = r#"
+    <x-host id="host">
+      <template shadowroot="open">
+        <span id="label" part="label">Hello</span>
+      </template>
+    </x-host>
+  "#;
+
+  let dom = parse_html(html).expect("parsed html");
+  let media = MediaContext::screen(800.0, 600.0);
+
+  let empty_style_set = StyleSet {
+    document: StyleSheet::new(),
+    shadows: HashMap::new(),
+  };
+  let baseline = apply_style_set_with_media_target_and_imports(
+    &dom,
+    &empty_style_set,
+    &media,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+  );
+  let baseline_color = find_by_id(&baseline, "label")
+    .expect("shadow element")
+    .styles
+    .color;
+
+  let stylesheet =
+    parse_stylesheet(":host::part(label) { color: rgb(1, 2, 3); }").expect("stylesheet");
+  let style_set = StyleSet {
+    document: stylesheet,
+    shadows: HashMap::new(),
+  };
+  let styled = apply_style_set_with_media_target_and_imports(
+    &dom, &style_set, &media, None, None, None, None, None, None,
+  );
+  let label = find_by_id(&styled, "label").expect("shadow element");
+
+  assert_eq!(
+    label.styles.color, baseline_color,
+    "document-scoped :host must not style parts inside a shadow tree"
+  );
+  assert_ne!(label.styles.color, Rgba::rgb(1, 2, 3));
+}

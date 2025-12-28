@@ -2799,6 +2799,7 @@ fn match_part_rules<'a>(
             if !name_set.contains(info.required.as_str()) {
               continue;
             }
+            // allow_shadow_host prevents document-scope ::part selectors from exposing :host context.
             let part_matches = find_pseudo_element_rules(
               host,
               rules,
