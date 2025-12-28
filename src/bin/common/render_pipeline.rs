@@ -271,7 +271,6 @@ pub fn log_diagnostics(diagnostics: &RenderDiagnostics, mut log: impl FnMut(&str
       fetch_error.url, fetch_error.message
     ));
   }
-
 }
 
 /// Format an error, optionally including its source chain.

@@ -7,6 +7,7 @@ use fastrender::text::font_db::{FontStretch, FontStyle, FontWeight, LoadedFont};
 use fastrender::text::font_instance::FontInstance;
 use image::RgbaImage;
 use r#ref::compare::{compare_images, load_png, CompareConfig};
+use rustybuzz::Variation;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tiny_skia::Pixmap;
@@ -39,9 +40,9 @@ fn pixmap_to_rgba_image(pixmap: &Pixmap) -> RgbaImage {
     .chunks_exact_mut(4)
     .zip(pixmap.data().chunks_exact(4))
   {
-    let b = src[0];
+    let r = src[0];
     let g = src[1];
-    let r = src[2];
+    let b = src[2];
     let a = src[3];
 
     if a == 0 {
@@ -66,7 +67,8 @@ fn render_glyph(
 ) -> fastrender::text::color_fonts::ColorGlyphRaster {
   let face = font.as_ttf_face().unwrap();
   let gid = face.glyph_index('G').unwrap();
-  let instance = FontInstance::new(font, &[]).unwrap();
+  let variations: Vec<Variation> = Vec::new();
+  let instance = FontInstance::new(font, &variations).unwrap();
 
   ColorFontRenderer::new()
     .render(
@@ -78,7 +80,7 @@ fn render_glyph(
       &[],
       text_color,
       0.0,
-      &[],
+      &variations,
       None,
     )
     .expect("expected color glyph")
@@ -134,7 +136,8 @@ fn malformed_colrv1_table_falls_back() {
   };
   let face = corrupted.as_ttf_face().unwrap();
   let gid = face.glyph_index('G').unwrap();
-  let instance = FontInstance::new(&corrupted, &[]).unwrap();
+  let variations: Vec<Variation> = Vec::new();
+  let instance = FontInstance::new(&corrupted, &variations).unwrap();
   let rendered = ColorFontRenderer::new().render(
     &corrupted,
     &instance,
@@ -144,7 +147,7 @@ fn malformed_colrv1_table_falls_back() {
     &[],
     Rgba::BLACK,
     0.0,
-    &[],
+    &variations,
     None,
   );
   assert!(rendered.is_none(), "malformed COLR should not render");

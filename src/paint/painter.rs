@@ -65,9 +65,9 @@ use crate::paint::text_shadow::PathBounds;
 use crate::paint::text_shadow::ResolvedTextShadow;
 use crate::paint::transform_resolver::{backface_is_hidden, resolve_transform3d};
 use crate::render_control::check_active;
-use crate::scroll::ScrollState;
 use crate::resource::origin_from_url;
 use crate::resource::ResourceFetcher;
+use crate::scroll::ScrollState;
 #[cfg(test)]
 use crate::style::color::Color;
 use crate::style::color::Rgba;
@@ -95,6 +95,8 @@ use crate::style::types::Direction;
 use crate::style::types::FilterColor;
 use crate::style::types::FilterFunction;
 use crate::style::types::FontStyle as CssFontStyle;
+#[cfg(test)]
+use crate::style::types::FontWeight;
 use crate::style::types::ImageOrientation;
 use crate::style::types::ImageRendering;
 use crate::style::types::MaskClip;
@@ -109,6 +111,8 @@ use crate::style::types::TextDecorationLine;
 use crate::style::types::TextDecorationSkipInk;
 use crate::style::types::TextDecorationStyle;
 use crate::style::types::TextDecorationThickness;
+#[cfg(test)]
+use crate::style::types::TransformBox;
 use crate::style::types::WritingMode;
 use crate::style::values::Length;
 use crate::style::values::LengthUnit;
@@ -117,8 +121,12 @@ use crate::text::font_db::FontStretch;
 use crate::text::font_db::FontStyle;
 use crate::text::font_db::ScaledMetrics;
 use crate::text::font_loader::FontContext;
+#[cfg(test)]
+use crate::text::pipeline::Direction as TextDirection;
 use crate::text::pipeline::ShapedRun;
 use crate::text::pipeline::ShapingPipeline;
+#[cfg(test)]
+use crate::text::RunRotation;
 use crate::tree;
 use crate::tree::box_tree::ForeignObjectInfo;
 use crate::tree::box_tree::ReplacedBox;
@@ -128,6 +136,8 @@ use crate::tree::box_tree::{FormControl, FormControlKind, TextControlKind};
 use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
 use crate::tree::fragment_tree::FragmentTree;
+#[cfg(test)]
+use crate::FontDatabase;
 use base64::Engine;
 use encoding_rs::Encoding;
 use image::codecs::png::PngEncoder;
@@ -138,6 +148,8 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::Write as _;
+#[cfg(test)]
+use std::fs;
 use std::io::Read;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -10546,6 +10558,71 @@ mod tests {
   }
 
   #[test]
+  fn decoration_metrics_handle_variable_font_variations() {
+    let painter = Painter::new(10, 10, Rgba::WHITE).expect("painter");
+    let mut style = ComputedStyle::default();
+    style.font_size = 14.0;
+
+    let font_bytes = Arc::new(include_bytes!("../../tests/fonts/RobotoFlex-VF.ttf").to_vec());
+    let font = Arc::new(crate::text::font_db::LoadedFont {
+      data: font_bytes.clone(),
+      index: 0,
+      family: "Roboto Flex".to_string(),
+      weight: crate::text::font_db::FontWeight::NORMAL,
+      style: crate::text::font_db::FontStyle::Normal,
+      stretch: crate::text::font_db::FontStretch::Normal,
+    });
+
+    let variations = vec![
+      rustybuzz::Variation {
+        tag: ttf_parser::Tag::from_bytes(b"wght"),
+        value: 720.0,
+      },
+      rustybuzz::Variation {
+        tag: ttf_parser::Tag::from_bytes(b"wdth"),
+        value: 95.0,
+      },
+    ];
+
+    let run = ShapedRun {
+      text: "x".to_string(),
+      start: 0,
+      end: 1,
+      glyphs: Vec::new(),
+      direction: TextDirection::LeftToRight,
+      level: 0,
+      advance: 0.0,
+      font: font.clone(),
+      font_size: style.font_size,
+      baseline_shift: 0.0,
+      language: None,
+      synthetic_bold: 0.0,
+      synthetic_oblique: 0.0,
+      rotation: RunRotation::None,
+      palette_index: 0,
+      palette_overrides: Arc::new(Vec::new()),
+      palette_override_hash: 0,
+      variations: variations.clone(),
+      scale: 1.0,
+    };
+
+    let metrics = painter
+      .decoration_metrics(Some(&[run]), &style)
+      .expect("metrics");
+
+    let coords: Vec<_> = variations.iter().map(|v| (v.tag, v.value)).collect();
+    let font_metrics =
+      crate::text::font_db::FontMetrics::from_data_with_variations(&font.data, font.index, &coords)
+        .expect("font metrics");
+    let scale = style.font_size / font_metrics.units_per_em as f32;
+    let expected_underline_pos = font_metrics.underline_position as f32 * scale;
+    let expected_underline_thickness = (font_metrics.underline_thickness as f32 * scale).max(1.0);
+
+    assert!((metrics.underline_pos - expected_underline_pos).abs() < 0.0001);
+    assert!((metrics.underline_thickness - expected_underline_thickness).abs() < 0.0001);
+  }
+
+  #[test]
   fn text_shadow_offsets_are_painted() {
     let mut style = ComputedStyle::default();
     style.color = Rgba::BLACK;
@@ -13732,6 +13809,225 @@ mod tests {
       next_tile.red() > next_tile.blue(),
       "second tile should repeat starting red, got {:?}",
       next_tile
+    );
+  }
+
+  #[test]
+  fn painter_applies_variable_font_variations() {
+    let font_bytes = match fs::read("tests/fixtures/fonts/TestVar.ttf") {
+      Ok(bytes) => bytes,
+      Err(_) => return,
+    };
+    let mut db = FontDatabase::empty();
+    db.load_font_data(font_bytes).expect("load variable font");
+    let font_ctx = FontContext::with_database(Arc::new(db));
+
+    let mut base_style = ComputedStyle::default();
+    base_style.font_family = vec!["TestVar".to_string()];
+    base_style.font_size = 96.0;
+
+    let mut light_style = base_style.clone();
+    light_style.font_weight = FontWeight::Number(100);
+    let mut heavy_style = base_style;
+    heavy_style.font_weight = FontWeight::Number(900);
+
+    let pipeline = ShapingPipeline::new();
+    let light_run = pipeline
+      .shape("A", &light_style, &font_ctx)
+      .expect("shape light run");
+    let heavy_run = pipeline
+      .shape("A", &heavy_style, &font_ctx)
+      .expect("shape heavy run");
+    if light_run.is_empty() || heavy_run.is_empty() {
+      return;
+    }
+
+    let render_run = |run: &ShapedRun| {
+      let mut painter =
+        Painter::with_resources(200, 150, Rgba::WHITE, font_ctx.clone(), ImageCache::new())
+          .expect("painter");
+      painter.paint_shaped_run(run, 40.0, 110.0, Rgba::BLACK, None);
+      painter.pixmap
+    };
+
+    let light_pixmap = render_run(&light_run[0]);
+    let heavy_pixmap = render_run(&heavy_run[0]);
+
+    let light_box = bounding_box_for_color(&light_pixmap, |c| c.3 > 0).expect("light glyph paints");
+    let heavy_box = bounding_box_for_color(&heavy_pixmap, |c| c.3 > 0).expect("heavy glyph paints");
+
+    let light_width = light_box.2 - light_box.0;
+    let heavy_width = heavy_box.2 - heavy_box.0;
+    assert!(
+      heavy_width > light_width,
+      "heavier variation should widen glyph (light width {}, heavy width {})",
+      light_width,
+      heavy_width
+    );
+  }
+
+  #[test]
+  fn underline_skip_ink_uses_variable_font_bounds() {
+    let font_bytes = match fs::read("tests/fixtures/fonts/TestVar.ttf") {
+      Ok(bytes) => bytes,
+      Err(_) => return,
+    };
+    let mut db = FontDatabase::empty();
+    db.load_font_data(font_bytes).expect("load variable font");
+    let font_ctx = FontContext::with_database(Arc::new(db));
+
+    let mut base_style = ComputedStyle::default();
+    base_style.font_family = vec!["TestVar".to_string()];
+    base_style.font_size = 64.0;
+
+    let mut light_style = base_style.clone();
+    light_style.font_weight = FontWeight::Number(100);
+    let mut heavy_style = base_style;
+    heavy_style.font_weight = FontWeight::Number(900);
+
+    let pipeline = ShapingPipeline::new();
+    let light_runs = match pipeline.shape("A", &light_style, &font_ctx) {
+      Ok(runs) => runs,
+      Err(_) => return,
+    };
+    let heavy_runs = match pipeline.shape("A", &heavy_style, &font_ctx) {
+      Ok(runs) => runs,
+      Err(_) => return,
+    };
+    if light_runs.is_empty() || heavy_runs.is_empty() {
+      return;
+    }
+
+    let light_bounds =
+      collect_underline_exclusions(&light_runs, 0.0, 0.0, -1000.0, 1000.0, true, 1.0);
+    let heavy_bounds =
+      collect_underline_exclusions(&heavy_runs, 0.0, 0.0, -1000.0, 1000.0, true, 1.0);
+    if light_bounds.is_empty() || heavy_bounds.is_empty() {
+      return;
+    }
+
+    let light_width = light_bounds[0].1 - light_bounds[0].0;
+    let heavy_width = heavy_bounds[0].1 - heavy_bounds[0].0;
+    assert!(
+      heavy_width > light_width,
+      "skip-ink bounds should reflect variations (light {}, heavy {})",
+      light_width,
+      heavy_width
+    );
+  }
+
+  #[test]
+  fn painter_applies_variable_font_variations_vertical_runs() {
+    let font_bytes = match fs::read("tests/fixtures/fonts/TestVar.ttf") {
+      Ok(bytes) => bytes,
+      Err(_) => return,
+    };
+    let mut db = FontDatabase::empty();
+    db.load_font_data(font_bytes).expect("load variable font");
+    let font_ctx = FontContext::with_database(Arc::new(db));
+
+    let mut base_style = ComputedStyle::default();
+    base_style.font_family = vec!["TestVar".to_string()];
+    base_style.font_size = 96.0;
+
+    let mut light_style = base_style.clone();
+    light_style.font_weight = FontWeight::Number(100);
+    let mut heavy_style = base_style;
+    heavy_style.font_weight = FontWeight::Number(900);
+
+    let pipeline = ShapingPipeline::new();
+    let light_runs = match pipeline.shape("A", &light_style, &font_ctx) {
+      Ok(runs) => runs,
+      Err(_) => return,
+    };
+    let heavy_runs = match pipeline.shape("A", &heavy_style, &font_ctx) {
+      Ok(runs) => runs,
+      Err(_) => return,
+    };
+    if light_runs.is_empty() || heavy_runs.is_empty() {
+      return;
+    }
+
+    let render_vertical = |run: &ShapedRun| {
+      let mut painter =
+        Painter::with_resources(200, 200, Rgba::WHITE, font_ctx.clone(), ImageCache::new())
+          .expect("painter");
+      painter.paint_shaped_run_vertical(run, 40.0, 120.0, Rgba::BLACK, None);
+      painter.pixmap
+    };
+
+    let light_pixmap = render_vertical(&light_runs[0]);
+    let heavy_pixmap = render_vertical(&heavy_runs[0]);
+
+    let light_box = bounding_box_for_color(&light_pixmap, |c| c.3 > 0).expect("light glyph paints");
+    let heavy_box = bounding_box_for_color(&heavy_pixmap, |c| c.3 > 0).expect("heavy glyph paints");
+
+    let light_area = (light_box.2 - light_box.0) * (light_box.3 - light_box.1);
+    let heavy_area = (heavy_box.2 - heavy_box.0) * (heavy_box.3 - heavy_box.1);
+    assert!(
+      heavy_area > light_area,
+      "vertical runs should expand with heavier variations (light area {}, heavy area {})",
+      light_area,
+      heavy_area
+    );
+  }
+
+  #[test]
+  fn emphasis_string_applies_variable_font_variations() {
+    let font_bytes = match fs::read("tests/fixtures/fonts/TestVar.ttf") {
+      Ok(bytes) => bytes,
+      Err(_) => return,
+    };
+    let mut db = FontDatabase::empty();
+    db.load_font_data(font_bytes).expect("load variable font");
+    let font_ctx = FontContext::with_database(Arc::new(db));
+
+    let mut base_style = ComputedStyle::default();
+    base_style.font_family = vec!["TestVar".to_string()];
+    base_style.font_size = 64.0;
+    base_style.text_emphasis_style = crate::style::types::TextEmphasisStyle::String("A".into());
+    base_style.text_emphasis_color = Some(Rgba::BLACK);
+    base_style.color = Rgba::BLACK;
+
+    let mut light_style = base_style.clone();
+    light_style.font_weight = FontWeight::Number(100);
+    let mut heavy_style = base_style;
+    heavy_style.font_weight = FontWeight::Number(900);
+
+    let pipeline = ShapingPipeline::new();
+    let light_runs = match pipeline.shape("A", &light_style, &font_ctx) {
+      Ok(runs) => runs,
+      Err(_) => return,
+    };
+    let heavy_runs = match pipeline.shape("A", &heavy_style, &font_ctx) {
+      Ok(runs) => runs,
+      Err(_) => return,
+    };
+    if light_runs.is_empty() || heavy_runs.is_empty() {
+      return;
+    }
+
+    let render_emphasis = |style: &ComputedStyle, runs: &[ShapedRun]| {
+      let mut painter =
+        Painter::with_resources(200, 200, Rgba::WHITE, font_ctx.clone(), ImageCache::new())
+          .expect("painter");
+      painter.paint_text_emphasis(style, Some(runs), 60.0, 120.0, false);
+      painter.pixmap
+    };
+
+    let light_pixmap = render_emphasis(&light_style, &light_runs);
+    let heavy_pixmap = render_emphasis(&heavy_style, &heavy_runs);
+
+    let light_box = bounding_box_for_color(&light_pixmap, |c| c.3 > 0).expect("light mark paints");
+    let heavy_box = bounding_box_for_color(&heavy_pixmap, |c| c.3 > 0).expect("heavy mark paints");
+
+    let light_width = light_box.2 - light_box.0;
+    let heavy_width = heavy_box.2 - heavy_box.0;
+    assert!(
+      heavy_width > light_width,
+      "string emphasis marks should widen with heavier variations (light width {}, heavy width {})",
+      light_width,
+      heavy_width
     );
   }
 

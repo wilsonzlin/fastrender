@@ -24,6 +24,7 @@ use crate::style::content::{
 use crate::style::display::{Display, FormattingContextType};
 use crate::style::page::{resolve_page_style, PageSide, ResolvedPageStyle};
 use crate::style::position::Position;
+use crate::style::types::Direction;
 use crate::style::types::WritingMode;
 use crate::style::{block_axis_is_horizontal, ComputedStyle};
 use crate::text::font_loader::FontContext;
@@ -259,13 +260,19 @@ pub fn paginate_fragment_tree(
   let base_forced = base_layout.forced_boundaries.clone();
   let base_root = base_layout.root.clone();
 
-  let base_axes = {
-    let default_style = ComputedStyle::default();
-    let style = base_root.style.as_deref().unwrap_or(&default_style);
-    FragmentAxes::from_writing_mode_and_direction(style.writing_mode, style.direction)
-  };
-  let mut string_set_events = collect_string_set_events(&base_root, box_tree, base_axes);
-  string_set_events.sort_by(|a, b| a.abs_block.partial_cmp(&b.abs_block).unwrap_or(Ordering::Equal));
+  let axes = base_root
+    .style
+    .as_ref()
+    .map(|s| FragmentAxes::from_writing_mode_and_direction(s.writing_mode, s.direction))
+    .unwrap_or_else(|| {
+      FragmentAxes::from_writing_mode_and_direction(WritingMode::HorizontalTb, Direction::Ltr)
+    });
+  let mut string_set_events = collect_string_set_events(&base_root, box_tree, axes);
+  string_set_events.sort_by(|a, b| {
+    a.abs_block
+      .partial_cmp(&b.abs_block)
+      .unwrap_or(Ordering::Equal)
+  });
   let mut string_event_idx = 0usize;
   let mut string_set_carry: HashMap<String, String> = HashMap::new();
 

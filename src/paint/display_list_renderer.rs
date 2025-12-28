@@ -87,12 +87,15 @@ use crate::style::types::TextEmphasisShape;
 use crate::style::types::TextEmphasisStyle;
 use crate::style::types::TransformStyle;
 use crate::style::values::Length;
+#[cfg(test)]
+use crate::style::ComputedStyle;
 use crate::text::font_db::FontStretch;
 use crate::text::font_db::FontStyle as DbFontStyle;
 use crate::text::font_db::LoadedFont;
+use crate::text::font_instance::{glyph_transform, FontInstance};
 use crate::text::font_loader::FontContext;
-use crate::text::pipeline::GlyphPosition;
 use rayon::prelude::*;
+use rustybuzz::Variation as HbVariation;
 use std::time::Duration;
 use std::time::Instant;
 use tiny_skia::BlendMode as SkiaBlendMode;
@@ -1489,6 +1492,7 @@ impl DisplayListRenderer {
     scaled.origin = self.ds_point(item.origin);
     scaled.font_size = self.ds_len(item.font_size);
     scaled.advance_width = self.ds_len(item.advance_width);
+    scaled.palette_index = item.palette_index;
     scaled.synthetic_bold = self.ds_len(item.synthetic_bold);
     scaled.glyphs = item
       .glyphs
@@ -1522,6 +1526,7 @@ impl DisplayListRenderer {
       if let Some(text) = &e.text {
         let mut t = text.clone();
         t.font_size = self.ds_len(t.font_size);
+        t.font_id = text.font_id.clone();
         t.glyphs = t
           .glyphs
           .into_iter()
@@ -1547,26 +1552,25 @@ impl DisplayListRenderer {
       shadows: item.shadows.clone(),
       font_size: item.font_size,
       advance_width: item.advance_width,
-      font_id: item.font_id.clone(),
       font: item.font.clone(),
+      font_id: item.font_id.clone(),
       variations: item.variations.clone(),
       synthetic_bold: item.synthetic_bold,
       synthetic_oblique: item.synthetic_oblique,
       emphasis: item.emphasis.clone(),
       decorations: Vec::new(),
-      ..Default::default()
     };
     let scaled = self.scale_text_item(&text_equiv);
     ListMarkerItem {
       origin: scaled.origin,
       glyphs: scaled.glyphs,
       color: scaled.color,
+      palette_index: scaled.palette_index,
       shadows: scaled.shadows,
       font_size: scaled.font_size,
       advance_width: scaled.advance_width,
-      font_id: scaled.font_id,
-      palette_index: scaled.palette_index,
       font: scaled.font,
+      font_id: scaled.font_id,
       variations: scaled.variations,
       synthetic_bold: scaled.synthetic_bold,
       synthetic_oblique: scaled.synthetic_oblique,
@@ -3927,7 +3931,12 @@ impl DisplayListRenderer {
   }
 
   fn render_text(&mut self, item: &TextItem) -> Result<()> {
-    let Some(font) = self.resolve_font(item.font_id.as_ref()) else {
+    let Some(font) = item
+      .font
+      .as_deref()
+      .cloned()
+      .or_else(|| self.resolve_font(item.font_id.as_ref()))
+    else {
       return Err(
         RenderError::RasterizationFailed {
           reason: "Unable to resolve font for display list text".into(),
@@ -3936,39 +3945,14 @@ impl DisplayListRenderer {
       );
     };
 
-    let face = match font.as_ttf_face() {
-      Ok(f) => f,
-      Err(_) => {
-        return Err(
-          RenderError::RasterizationFailed {
-            reason: "Unable to parse font face for text shadows".into(),
-          }
-          .into(),
-        )
-      }
-    };
-
-    let (paths, bounds) = self.glyph_paths(&face, item);
+    let (paths, bounds) = self.glyph_paths(&font, item);
     if !item.shadows.is_empty() && !paths.is_empty() && bounds.is_valid() {
       self.render_text_shadows(&paths, &bounds, item);
     }
 
-    let glyphs: Vec<GlyphPosition> = item
-      .glyphs
-      .iter()
-      .map(|g| GlyphPosition {
-        glyph_id: g.glyph_id,
-        cluster: 0,
-        x_offset: g.offset.x,
-        y_offset: g.offset.y,
-        x_advance: g.advance,
-        y_advance: 0.0,
-      })
-      .collect();
-
     self.canvas.draw_text(
       item.origin,
-      &glyphs,
+      &item.glyphs,
       &font,
       item.font_size,
       item.color,
@@ -3997,14 +3981,13 @@ impl DisplayListRenderer {
       shadows: item.shadows.clone(),
       font_size: item.font_size,
       advance_width: item.advance_width,
-      font_id: item.font_id.clone(),
       font: item.font.clone(),
+      font_id: item.font_id.clone(),
       variations: item.variations.clone(),
       synthetic_bold: item.synthetic_bold,
       synthetic_oblique: item.synthetic_oblique,
       emphasis: item.emphasis.clone(),
       decorations: Vec::new(),
-      ..Default::default()
     };
     self.render_text(&text)
   }
@@ -4251,12 +4234,22 @@ impl DisplayListRenderer {
     Ok(())
   }
 
-  fn glyph_paths(
-    &self,
-    face: &ttf_parser::Face<'_>,
-    item: &TextItem,
-  ) -> (Vec<tiny_skia::Path>, PathBounds) {
-    let units_per_em = face.units_per_em() as f32;
+  fn glyph_paths(&self, font: &LoadedFont, item: &TextItem) -> (Vec<tiny_skia::Path>, PathBounds) {
+    let hb_variations: Vec<HbVariation> = item
+      .variations
+      .iter()
+      .map(|v| HbVariation {
+        tag: v.tag,
+        value: v.value(),
+      })
+      .collect();
+    let Some(instance) = FontInstance::new(font, &hb_variations) else {
+      return (Vec::new(), PathBounds::new());
+    };
+    let units_per_em = instance.units_per_em();
+    if units_per_em == 0.0 {
+      return (Vec::new(), PathBounds::new());
+    }
     let scale = item.font_size / units_per_em;
     let mut paths = Vec::with_capacity(item.glyphs.len());
     let mut bounds = PathBounds::new();
@@ -4265,8 +4258,8 @@ impl DisplayListRenderer {
       let x = item.origin.x + glyph.offset.x;
       let y = item.origin.y + glyph.offset.y;
       if let Some(path) = Self::build_glyph_path(
-        face,
-        glyph.glyph_id as u16,
+        &instance,
+        glyph.glyph_id,
         x,
         y,
         scale,
@@ -4281,73 +4274,17 @@ impl DisplayListRenderer {
   }
 
   fn build_glyph_path(
-    face: &ttf_parser::Face<'_>,
-    glyph_id: u16,
+    instance: &FontInstance,
+    glyph_id: u32,
     x: f32,
     baseline_y: f32,
     scale: f32,
     synthetic_oblique: f32,
   ) -> Option<tiny_skia::Path> {
-    use ttf_parser::OutlineBuilder;
-
-    struct PathConverter {
-      builder: PathBuilder,
-      scale: f32,
-      x: f32,
-      y: f32,
-      skew: f32,
-    }
-
-    impl OutlineBuilder for PathConverter {
-      fn move_to(&mut self, px: f32, py: f32) {
-        self.builder.move_to(
-          self.x + (px + self.skew * py) * self.scale,
-          self.y - py * self.scale,
-        );
-      }
-
-      fn line_to(&mut self, px: f32, py: f32) {
-        self.builder.line_to(
-          self.x + (px + self.skew * py) * self.scale,
-          self.y - py * self.scale,
-        );
-      }
-
-      fn quad_to(&mut self, x1: f32, y1: f32, px: f32, py: f32) {
-        self.builder.quad_to(
-          self.x + (x1 + self.skew * y1) * self.scale,
-          self.y - y1 * self.scale,
-          self.x + (px + self.skew * py) * self.scale,
-          self.y - py * self.scale,
-        );
-      }
-
-      fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, px: f32, py: f32) {
-        self.builder.cubic_to(
-          self.x + (x1 + self.skew * y1) * self.scale,
-          self.y - y1 * self.scale,
-          self.x + (x2 + self.skew * y2) * self.scale,
-          self.y - y2 * self.scale,
-          self.x + (px + self.skew * py) * self.scale,
-          self.y - py * self.scale,
-        );
-      }
-
-      fn close(&mut self) {
-        self.builder.close();
-      }
-    }
-
-    let mut converter = PathConverter {
-      builder: PathBuilder::new(),
-      scale,
-      x,
-      y: baseline_y,
-      skew: synthetic_oblique,
-    };
-
-    face.outline_glyph(ttf_parser::GlyphId(glyph_id), &mut converter)?;
-    converter.builder.finish()
+    let outline = instance.glyph_outline(glyph_id)?;
+    let path = outline.path?;
+    let transform = glyph_transform(scale, synthetic_oblique, x, baseline_y);
+    path.transform(transform)
   }
 
   fn render_text_shadows(
@@ -4427,23 +4364,14 @@ impl DisplayListRenderer {
     let inline_vertical = emphasis.inline_vertical;
     if let TextEmphasisStyle::String(_) = emphasis.style {
       if let Some(text) = &emphasis.text {
-        let font = self.resolve_font(text.font_id.as_ref()).ok_or_else(|| {
-          RenderError::RasterizationFailed {
+        let font = text
+          .font
+          .as_deref()
+          .cloned()
+          .or_else(|| self.resolve_font(text.font_id.as_ref()))
+          .ok_or_else(|| RenderError::RasterizationFailed {
             reason: "Unable to resolve font for emphasis string".into(),
-          }
-        })?;
-        let glyphs: Vec<GlyphPosition> = text
-          .glyphs
-          .iter()
-          .map(|g| GlyphPosition {
-            glyph_id: g.glyph_id,
-            cluster: 0,
-            x_offset: g.offset.x,
-            y_offset: g.offset.y,
-            x_advance: g.advance,
-            y_advance: 0.0,
-          })
-          .collect();
+          })?;
         for mark in &emphasis.marks {
           let mark_origin = if inline_vertical {
             Point::new(
@@ -4458,7 +4386,7 @@ impl DisplayListRenderer {
           };
           self.canvas.draw_text(
             mark_origin,
-            &glyphs,
+            &text.glyphs,
             &font,
             text.font_size,
             emphasis.color,
@@ -4751,39 +4679,14 @@ impl DisplayListRenderer {
   }
 
   fn resolve_font(&self, font_id: Option<&FontId>) -> Option<LoadedFont> {
-    let mut families = Vec::new();
-    let (weight, italic, oblique, stretch) = match font_id {
-      Some(id) => {
-        families.push(id.family.clone());
-        (
-          id.weight,
-          matches!(id.style, DbFontStyle::Italic),
-          matches!(id.style, DbFontStyle::Oblique),
-          id.stretch,
-        )
-      }
-      None => (400, false, false, FontStretch::Normal),
-    };
-
-    if families.is_empty() {
-      families.push("sans-serif".to_string());
+    if let Some(id) = font_id {
+      self
+        .font_ctx
+        .get_font_by_id(*id)
+        .or_else(|| self.font_ctx.get_sans_serif())
+    } else {
+      self.font_ctx.get_sans_serif()
     }
-
-    self
-      .font_ctx
-      .get_font_full(
-        &families,
-        weight,
-        if italic {
-          DbFontStyle::Italic
-        } else if oblique {
-          DbFontStyle::Oblique
-        } else {
-          DbFontStyle::Normal
-        },
-        stretch,
-      )
-      .or_else(|| self.font_ctx.get_sans_serif())
   }
 
   fn image_to_pixmap(&self, item: &ImageItem) -> Option<Pixmap> {
@@ -6995,13 +6898,8 @@ mod tests {
       }],
       font_size: 20.0,
       advance_width: 14.0,
-      font_id: Some(FontId {
-        family: font.family.clone(),
-        weight: font.weight.value(),
-        style: font.style,
-        stretch: font.stretch,
-      }),
       font: Some(Arc::new(font.clone())),
+      font_id: None,
       variations: Vec::new(),
       synthetic_bold: 0.0,
       synthetic_oblique: 0.0,
@@ -7062,13 +6960,8 @@ mod tests {
       }],
       font_size: 20.0,
       advance_width: 14.0,
-      font_id: Some(FontId {
-        family: font.family.clone(),
-        weight: font.weight.value(),
-        style: font.style,
-        stretch: font.stretch,
-      }),
       font: Some(Arc::new(font.clone())),
+      font_id: None,
       variations: Vec::new(),
       synthetic_bold: 0.0,
       synthetic_oblique: 0.0,
@@ -7088,7 +6981,7 @@ mod tests {
       "shadow offset should scale with DPR (expected ~4, got {})",
       scaled_item.shadows[0].offset.x
     );
-    let (_paths, bounds) = renderer.glyph_paths(&face, &scaled_item);
+    let (_paths, bounds) = renderer.glyph_paths(&font, &scaled_item);
     let shadow = &scaled_item.shadows[0];
     let shadow_min_x = bounds.min_x + shadow.offset.x;
     let shadow_max_x = bounds.max_x + shadow.offset.x;
@@ -7157,13 +7050,8 @@ mod tests {
       }],
       font_size: 20.0,
       advance_width: 14.0,
-      font_id: Some(FontId {
-        family: font.family.clone(),
-        weight: font.weight.value(),
-        style: font.style,
-        stretch: font.stretch,
-      }),
       font: Some(Arc::new(font.clone())),
+      font_id: None,
       variations: Vec::new(),
       synthetic_bold: 0.0,
       synthetic_oblique: 0.0,
@@ -7183,7 +7071,7 @@ mod tests {
       "blur radius should scale with DPR (expected ~8, got {})",
       scaled_item.shadows[0].blur_radius
     );
-    let (_paths, bounds) = renderer.glyph_paths(&face, &scaled_item);
+    let (_paths, bounds) = renderer.glyph_paths(&font, &scaled_item);
     let shadow = &scaled_item.shadows[0];
     let blur_margin = (shadow.blur_radius.abs() * 3.0).ceil();
     let shadow_min_x = bounds.min_x + shadow.offset.x - blur_margin;
@@ -7232,13 +7120,8 @@ mod tests {
       }],
       font_size: 20.0,
       advance_width: 14.0,
-      font_id: Some(FontId {
-        family: font.family.clone(),
-        weight: font.weight.value(),
-        style: font.style,
-        stretch: font.stretch,
-      }),
       font: Some(Arc::new(font.clone())),
+      font_id: None,
       variations: Vec::new(),
       synthetic_bold: 0.0,
       synthetic_oblique: 0.0,
@@ -7281,8 +7164,8 @@ mod tests {
       shadows: vec![],
       font_size: 16.0,
       advance_width: 0.0,
-      font_id: None,
       font: None,
+      font_id: None,
       variations: Vec::new(),
       synthetic_bold: 0.0,
       synthetic_oblique: 0.0,

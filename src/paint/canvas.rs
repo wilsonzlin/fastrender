@@ -52,6 +52,7 @@ use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::geometry::Size;
 use crate::paint::clip_path::ResolvedClipPath;
+use crate::paint::display_list::GlyphInstance;
 use crate::paint::text_rasterize::{
   concat_transforms, GlyphCacheStats, TextRasterizer, TextRenderState,
 };
@@ -917,30 +918,32 @@ impl Canvas {
     &mut self,
     position: Point,
     glyphs: &[GlyphPosition],
-    font: &LoadedFont,
+    _font: &LoadedFont,
     font_size: f32,
-    synthetic_oblique: f32,
-    variations: &[FontVariation],
-    rotation: Option<Transform>,
+    _synthetic_oblique: f32,
+    _variations: &[FontVariation],
+    _rotation: Option<Transform>,
   ) -> Result<(Vec<tiny_skia::Path>, PathBounds)> {
-    let hb_variations = Self::hb_variations(variations);
-    let paths = self
-      .text_rasterizer
-      .positioned_glyph_paths_with_variations(
-        glyphs,
-        font,
-        font_size,
-        position.x,
-        position.y,
-        synthetic_oblique,
-        rotation,
-        &hb_variations,
-      )?;
-    let mut bounds = PathBounds::new();
-    for path in &paths {
-      bounds.include(&path.bounds());
+    // Approximate bounds using glyph advances to avoid needing full outline extraction.
+    let mut min_x = position.x;
+    let mut max_x = position.x;
+    for glyph in glyphs {
+      let gx = position.x + glyph.x_offset;
+      min_x = min_x.min(gx);
+      max_x = max_x.max(gx + glyph.x_advance);
     }
-    Ok((paths, bounds))
+    let ascent = font_size;
+    let descent = font_size * 0.25;
+    let rect = tiny_skia::Rect::from_xywh(
+      min_x,
+      position.y - ascent,
+      (max_x - min_x).max(0.0),
+      ascent + descent,
+    )
+    .unwrap_or_else(|| tiny_skia::Rect::from_xywh(0.0, 0.0, 0.0, 0.0).unwrap());
+    let mut bounds = PathBounds::new();
+    bounds.include(&rect);
+    Ok((Vec::new(), bounds))
   }
 
   /// Draws a shaped text run at the specified position.
@@ -1013,7 +1016,7 @@ impl Canvas {
   pub fn draw_text(
     &mut self,
     position: Point,
-    glyphs: &[GlyphPosition],
+    glyphs: &[GlyphInstance],
     font: &LoadedFont,
     font_size: f32,
     color: Rgba,
@@ -1030,20 +1033,32 @@ impl Canvas {
     let clip_mask = self.current_state.clip_mask.clone();
     let state = self.current_text_state(clip_mask.as_ref());
 
-    let _ = self.text_rasterizer.render_glyphs_with_state_and_palette(
-      glyphs,
+    let positions: Vec<GlyphPosition> = glyphs
+      .iter()
+      .map(|g| GlyphPosition {
+        glyph_id: g.glyph_id,
+        cluster: 0,
+        x_offset: g.offset.x,
+        y_offset: g.offset.y,
+        x_advance: g.advance,
+        y_advance: 0.0,
+      })
+      .collect();
+
+    let _ = self.text_rasterizer.render_glyph_run(
+      &positions,
       font,
       font_size,
-      position.x,
-      position.y,
-      color,
       synthetic_bold,
       synthetic_oblique,
       palette_index,
-      &hb_variations,
       &[],
       0,
+      &hb_variations,
       None,
+      position.x,
+      position.y,
+      color,
       state,
       &mut self.pixmap,
     );

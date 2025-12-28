@@ -300,14 +300,11 @@ impl FormattingContextFactory {
         )
         .with_parallelism(self.parallelism),
       ),
-      FormattingContextType::Grid => Box::new(
-        GridFormattingContext::with_viewport_and_cb(
-          self.viewport_size,
-          self.nearest_positioned_cb,
-          self.font_context.clone(),
-        )
-        .with_parallelism(self.parallelism),
-      ),
+      FormattingContextType::Grid => Box::new(GridFormattingContext::with_viewport_and_cb(
+        self.viewport_size,
+        self.nearest_positioned_cb,
+        self.font_context.clone(),
+      )),
       FormattingContextType::Table => Box::new(TableFormattingContext::with_factory(self.clone())),
     }
   }

@@ -76,15 +76,19 @@ fn font_palette_selects_cpal_palettes_and_renders() {
     .first()
     .map(|g| g.glyph_id)
     .expect("glyph id");
+  let normal_instance =
+    FontInstance::new(&normal_run.font, &normal_run.variations).expect("normal instance");
+  let dark_instance =
+    FontInstance::new(&dark_run.font, &dark_run.variations).expect("dark instance");
 
   let normal_raster = renderer
     .render(
       &normal_run.font,
-      &FontInstance::new(&normal_run.font, &normal_run.variations).expect("normal instance"),
+      &normal_instance,
       glyph_id,
       normal_run.font_size,
       normal_run.palette_index,
-      normal_run.palette_overrides.as_ref(),
+      &[],
       Rgba::BLACK,
       normal_run.synthetic_oblique,
       &normal_run.variations,
@@ -94,11 +98,11 @@ fn font_palette_selects_cpal_palettes_and_renders() {
   let dark_raster = renderer
     .render(
       &dark_run.font,
-      &FontInstance::new(&dark_run.font, &dark_run.variations).expect("dark instance"),
+      &dark_instance,
       glyph_id,
       dark_run.font_size,
       dark_run.palette_index,
-      dark_run.palette_overrides.as_ref(),
+      &[],
       Rgba::BLACK,
       dark_run.synthetic_oblique,
       &dark_run.variations,

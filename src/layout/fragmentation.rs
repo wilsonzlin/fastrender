@@ -1030,7 +1030,7 @@ pub(crate) fn normalize_fragment_margins_with_axes(
   fragment: &mut FragmentNode,
   is_first_fragment: bool,
   is_last_fragment: bool,
-  _block_size: f32,
+  _fragment_block_size: f32,
   axes: FragmentAxes,
 ) {
   let axis = axis_from_fragment_axes(axes);

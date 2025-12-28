@@ -40,13 +40,14 @@ fn get_test_font() -> Option<fastrender::text::font_db::LoadedFont> {
   ctx.get_sans_serif()
 }
 
-const VAR_FONT: &[u8] = include_bytes!("../fixtures/fonts/AmstelvarAlpha-VF.ttf");
+// Use a known-good variable font fixture; some older test assets were corrupt HTML downloads.
+const VAR_FONT: &[u8] = include_bytes!("../fonts/RobotoFlex-VF.ttf");
 
 fn variable_font() -> LoadedFont {
   LoadedFont {
     data: Arc::new(VAR_FONT.to_vec()),
     index: 0,
-    family: "AmstelvarAlpha".to_string(),
+    family: "Roboto Flex".to_string(),
     weight: FontWeight::NORMAL,
     style: FontStyle::Normal,
     stretch: FontStretch::Normal,
@@ -392,16 +393,7 @@ fn glyph_cache_keys_include_variations() {
     value: 900.0,
   };
   rasterizer
-    .positioned_glyph_paths(
-      &glyphs,
-      &font,
-      16.0,
-      0.0,
-      0.0,
-      0.0,
-      None,
-      &[bold_variation],
-    )
+    .positioned_glyph_paths(&glyphs, &font, 16.0, 0.0, 0.0, 0.0, None, &[bold_variation])
     .expect("varied glyph path");
   let stats = rasterizer.cache_stats();
   assert_eq!(
@@ -411,16 +403,7 @@ fn glyph_cache_keys_include_variations() {
   assert_eq!(stats.hits, 0);
 
   rasterizer
-    .positioned_glyph_paths(
-      &glyphs,
-      &font,
-      16.0,
-      0.0,
-      0.0,
-      0.0,
-      None,
-      &[bold_variation],
-    )
+    .positioned_glyph_paths(&glyphs, &font, 16.0, 0.0, 0.0, 0.0, None, &[bold_variation])
     .expect("cached varied glyph path");
   let stats = rasterizer.cache_stats();
   assert_eq!(stats.misses, 2);
@@ -447,19 +430,19 @@ fn positioned_paths_use_variations_for_variable_fonts() {
     .positioned_glyph_paths(&glyphs, &font, 48.0, 0.0, 0.0, 0.0, None, &[])
     .expect("default outlines");
   let varied_paths = rasterizer
-      .positioned_glyph_paths(
-        &glyphs,
-        &font,
-        48.0,
-        0.0,
-        0.0,
-        0.0,
-        None,
-        &[Variation {
-          tag: Tag::from_bytes(b"wght"),
-          value: 900.0,
-        }],
-      )
+    .positioned_glyph_paths(
+      &glyphs,
+      &font,
+      48.0,
+      0.0,
+      0.0,
+      0.0,
+      None,
+      &[Variation {
+        tag: Tag::from_bytes(b"wght"),
+        value: 900.0,
+      }],
+    )
     .expect("varied outlines");
 
   assert_eq!(default_paths.len(), 1);
@@ -676,13 +659,13 @@ fn color_glyph_rasters_follow_outline_transforms() {
     .render(
       &font,
       &instance,
-    glyph_id,
-    font_size,
-    0,
-    &[],
-    text_color,
-    0.0,
-    &variations,
+      glyph_id,
+      font_size,
+      0,
+      &[],
+      text_color,
+      0.0,
+      &variations,
       None,
     )
     .expect("color glyph raster");
@@ -1545,11 +1528,11 @@ fn test_vertical_rendering_extents() {
 
   assert!(
     v_height > h_height,
-    "vertical text should extend along the y axis"
+    "vertical text should extend along the y axis (vertical height {v_height}, horizontal height {h_height})"
   );
   assert!(
     v_width < h_width,
-    "vertical text should occupy less horizontal span than horizontal text"
+    "vertical text should occupy less horizontal span than horizontal text (vertical width {v_width}, horizontal width {h_width})"
   );
 }
 

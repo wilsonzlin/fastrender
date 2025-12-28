@@ -22,8 +22,8 @@ fn load_variable_font() -> Option<LoadedFont> {
 
 fn axis_extremes(font: &LoadedFont, tag: [u8; 4]) -> Option<(Variation, Variation)> {
   let mut face = font.as_ttf_face().ok()?;
-  let axes: Vec<_> = face.variation_axes().into_iter().collect();
-  let axis = axes
+  let axis = face
+    .variation_axes()
     .into_iter()
     .find(|axis| axis.tag == Tag::from_bytes(&tag))?;
 

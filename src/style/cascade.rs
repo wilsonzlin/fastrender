@@ -655,6 +655,12 @@ fn tree_scope_prefix_for_node(dom_maps: &DomMaps, node_id: usize) -> u32 {
     .unwrap_or(DOCUMENT_TREE_SCOPE_PREFIX)
 }
 
+fn containing_scope_host_id(dom_maps: &DomMaps, node: &DomNode) -> Option<usize> {
+  let node_id = dom_maps.id_map.get(&(node as *const DomNode)).copied()?;
+  let shadow_root = dom_maps.containing_shadow_root(node_id)?;
+  dom_maps.shadow_hosts.get(&shadow_root).copied()
+}
+
 /// Simple index over the rightmost compound selector to prune rule matching.
 struct IndexedSelector<'a> {
   rule_idx: usize,
@@ -1487,6 +1493,17 @@ struct MatchedDeclaration<'a> {
 const INLINE_SPECIFICITY: u32 = 1 << 30;
 const INLINE_RULE_ORDER: usize = usize::MAX / 2;
 
+/// Starting-style snapshots for an element and its pseudos.
+#[derive(Debug, Default, Clone)]
+pub struct StartingStyleSet {
+  pub base: Option<Box<ComputedStyle>>,
+  pub before: Option<Box<ComputedStyle>>,
+  pub after: Option<Box<ComputedStyle>>,
+  pub marker: Option<Box<ComputedStyle>>,
+  pub first_line: Option<Box<ComputedStyle>>,
+  pub first_letter: Option<Box<ComputedStyle>>,
+}
+
 /// A styled DOM node with computed CSS styles
 #[derive(Debug, Clone)]
 pub struct StyledNode {
@@ -1494,7 +1511,7 @@ pub struct StyledNode {
   pub node_id: usize,
   pub node: DomNode,
   pub styles: ComputedStyle,
-  /// Starting-style snapshots for transitions and animation sampling.
+  /// Starting-style snapshots populated when @starting-style rules are present.
   pub starting_styles: StartingStyleSet,
   /// Styles for ::before pseudo-element (if content is set)
   pub before_styles: Option<Box<ComputedStyle>>,
@@ -1511,15 +1528,6 @@ pub struct StyledNode {
   /// Slotted light DOM node ids assigned to this <slot> element.
   pub slotted_node_ids: Vec<usize>,
   pub children: Vec<StyledNode>,
-}
-
-/// Snapshot of starting styles for an element and its pseudos.
-#[derive(Debug, Clone, Default)]
-pub struct StartingStyleSet {
-  pub base: Option<Box<ComputedStyle>>,
-  pub before: Option<Box<ComputedStyle>>,
-  pub after: Option<Box<ComputedStyle>>,
-  pub marker: Option<Box<ComputedStyle>>,
 }
 
 fn count_styled_nodes(node: &StyledNode) -> usize {
@@ -1568,7 +1576,8 @@ impl ContainerQueryContext {
         _ => container.block_size,
       };
       ctx.base_font_size = container.font_size;
-      if !ctx.evaluate(&condition.query) {
+      let matches_query = ctx.evaluate(&condition.query);
+      if !matches_query {
         return false;
       }
     }
@@ -2899,10 +2908,6 @@ fn exported_part_names(
   Some(exported)
 }
 
-fn containing_scope_host_id(dom_maps: &DomMaps, host: &DomNode) -> Option<usize> {
-  dom_maps.id_map.get(&(host as *const DomNode)).copied()
-}
-
 fn match_part_rules<'a>(
   node: &DomNode,
   ancestors: &[&DomNode],
@@ -2999,6 +3004,7 @@ fn match_part_rules<'a>(
           if !name_set.contains(info.required.as_str()) {
             continue;
           }
+          // allow_shadow_host prevents document-scope ::part selectors from exposing :host context.
           let part_matches = find_pseudo_element_rules(
             host,
             rules,
@@ -3048,7 +3054,7 @@ fn collect_matching_rules<'a>(
   slot_assignment: &SlotAssignment,
 ) -> Vec<MatchedRule<'a>> {
   let current_shadow = dom_maps.containing_shadow_root(node_id);
-  let slot_map_for_host = |host_id: usize| -> Option<&SlotAssignmentMap<'a>> {
+  let slot_map_for_host = |host_id: usize| -> Option<&SlotAssignmentMap> {
     dom_maps
       .shadow_hosts
       .iter()
@@ -3971,7 +3977,9 @@ pub(crate) fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle)
       continue;
     }
     if let Some(initial) = &rule.initial_value {
-      styles.custom_properties.insert(name.clone(), initial.clone());
+      styles
+        .custom_properties
+        .insert(name.clone(), initial.clone());
     } else {
       styles.custom_properties.remove(name);
     }

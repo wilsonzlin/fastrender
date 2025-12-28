@@ -1,5 +1,4 @@
-use fastrender::resource::{CachingFetcher, CachingFetcherConfig, HttpFetcher};
-use fastrender::ResourceFetcher;
+use fastrender::resource::{CachingFetcher, CachingFetcherConfig, HttpFetcher, ResourceFetcher};
 use httpdate::fmt_http_date;
 use std::io;
 use std::io::Read;
@@ -119,9 +118,9 @@ fn etag_revalidation_uses_validators() {
   };
   let addr = listener.local_addr().unwrap();
   let hits = Arc::new(AtomicUsize::new(0));
+  let hits_server = Arc::clone(&hits);
   let captured_requests = Arc::new(Mutex::new(Vec::new()));
   let captured_requests_thread = Arc::clone(&captured_requests);
-  let hits_server = Arc::clone(&hits);
   let handle = spawn_server(listener, 3, move |count, req, stream| {
     hits_server.fetch_add(1, Ordering::SeqCst);
     captured_requests_thread.lock().unwrap().push(req.clone());

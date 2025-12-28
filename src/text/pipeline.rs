@@ -49,14 +49,17 @@
 //! - HarfBuzz documentation: <https://harfbuzz.github.io/>
 //! - rustybuzz documentation: <https://docs.rs/rustybuzz/>
 
+use crate::css::types::FontPaletteBase;
 use crate::error::Result;
 use crate::error::TextError;
+use crate::style::color::Rgba;
+use crate::style::font_palette::resolve_font_palette_for_font;
 use crate::style::types::Direction as CssDirection;
 use crate::style::types::EastAsianVariant;
 use crate::style::types::EastAsianWidth;
-use crate::style::types::FontPalette;
 use crate::style::types::FontKerning;
 use crate::style::types::FontLanguageOverride;
+use crate::style::types::FontPalette;
 use crate::style::types::FontSizeAdjust;
 use crate::style::types::FontStyle as CssFontStyle;
 use crate::style::types::FontVariant;
@@ -66,17 +69,14 @@ use crate::style::types::FontVariantPosition;
 use crate::style::types::NumericFigure;
 use crate::style::types::NumericFraction;
 use crate::style::types::NumericSpacing;
-use crate::style::color::Rgba;
-use crate::style::font_palette::resolve_font_palette_for_font;
 use crate::style::ComputedStyle;
+use crate::text::color_fonts::select_cpal_palette;
 use crate::text::emoji;
 use crate::text::font_db::FontDatabase;
 use crate::text::font_db::FontStretch as DbFontStretch;
 use crate::text::font_db::FontStyle;
 use crate::text::font_db::LoadedFont;
 use crate::text::font_loader::FontContext;
-use crate::css::types::FontPaletteBase;
-use crate::text::color_fonts::select_cpal_palette;
 use lru::LruCache;
 use rustybuzz::Direction as HbDirection;
 use rustybuzz::Face;
@@ -2830,11 +2830,14 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
       .and_then(|s| s.chars().next())
       .is_some_and(is_bidi_control_char);
 
-    let inline_advance_raw = if run.vertical {
+    let mut inline_advance_raw = if run.vertical {
       pos.y_advance
     } else {
       pos.x_advance
     };
+    if run.vertical && inline_advance_raw == 0 {
+      inline_advance_raw = pos.x_advance;
+    }
     let cross_advance_raw = if run.vertical {
       pos.x_advance
     } else {
@@ -2850,7 +2853,10 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
     } else {
       pos.y_offset
     };
-    let inline_advance = inline_advance_raw as f32 * scale;
+    let mut inline_advance = inline_advance_raw as f32 * scale;
+    if run.vertical {
+      inline_advance = inline_advance.abs();
+    }
     let cross_advance = cross_advance_raw as f32 * scale;
     if !is_bidi_control {
       let x_offset = inline_offset_raw as f32 * scale;
@@ -2887,7 +2893,7 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
     language,
     synthetic_bold: run.synthetic_bold,
     synthetic_oblique: run.synthetic_oblique,
-    rotation: RunRotation::None,
+    rotation: run.rotation,
     palette_index: run.palette_index,
     palette_overrides: Arc::clone(&run.palette_overrides),
     palette_override_hash: run.palette_override_hash,

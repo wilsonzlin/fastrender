@@ -34,18 +34,18 @@ use super::types::PageMarginRule;
 use super::types::PagePseudoClass;
 use super::types::PageRule;
 use super::types::PageSelector;
+use super::types::PropertyRule;
+use super::types::PropertyValue;
 use super::types::ScopeRule;
 use super::types::StartingStyleRule;
 use super::types::StyleRule;
 use super::types::StyleSheet;
 use super::types::SupportsCondition;
 use super::types::SupportsRule;
-use super::types::PropertyValue;
 use crate::dom::{DomNode, DomNodeType};
 use crate::error::Result;
 use crate::style::color::Color;
 use crate::style::counter_styles::{CounterStyleRule, CounterSystem, SpeakAs};
-use super::types::PropertyRule;
 use crate::style::media::MediaQuery;
 use crate::style::values::{CustomPropertySyntax, CustomPropertyValue};
 use crate::style::var_resolution::is_valid_custom_property_name;
@@ -1458,9 +1458,8 @@ fn parse_font_palette_values_rule<'i, 't>(
     parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent("expected {".into()))
   })?;
 
-  let rule = parser.parse_nested_block(|nested| {
-    parse_font_palette_descriptors(nested, name.trim(), css_source)
-  })?;
+  let rule = parser
+    .parse_nested_block(|nested| parse_font_palette_descriptors(nested, name.trim(), css_source))?;
   Ok(rule.map(CssRule::FontPaletteValues))
 }
 
@@ -3083,6 +3082,9 @@ pub fn extract_css_sources(dom: &DomNode) -> Vec<ScopedStylesheetSource> {
             }),
           });
         }
+      } else if tag.eq_ignore_ascii_case("template") {
+        // Template contents are inert in the light DOM and should not contribute styles.
+        return;
       }
     }
 

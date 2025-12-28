@@ -42,6 +42,7 @@ use crate::text::font_db::FontStyle;
 use crate::text::font_db::FontWeight;
 use crate::text::font_db::LoadedFont;
 use crate::text::font_db::ScaledMetrics;
+use crate::text::font_fallback::FontId;
 use crate::text::pipeline::DEFAULT_OBLIQUE_ANGLE_DEG;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
@@ -550,6 +551,11 @@ impl FontContext {
     !self.db.is_empty()
   }
 
+  /// Retrieves a font by its identifier.
+  pub fn get_font_by_id(&self, id: FontId) -> Option<LoadedFont> {
+    self.db.load_font(id.inner())
+  }
+
   /// Set the active resource context used for remote font fetching.
   pub fn set_resource_context(&mut self, context: Option<ResourceContext>) {
     self.resource_context = context;
@@ -941,19 +947,14 @@ impl FontContext {
       let should_block = display_block > Duration::ZERO && policy_deadline.is_some();
       let job_id = started_count;
       let block_deadline = if let Some(policy_deadline) = policy_deadline {
-        if should_block {
-          let face_deadline = Instant::now() + display_block;
-          Some(policy_deadline.min(face_deadline))
-        } else {
-          None
-        }
+        should_block.then_some(policy_deadline.min(Instant::now() + display_block))
       } else {
         None
       };
       if let Some(deadline) = block_deadline {
         blocking_jobs.push((job_id, deadline, family.clone(), face.display));
       }
-      let done_tx = block_deadline.is_some().then(|| block_tx.clone());
+      let done_tx: Option<mpsc::Sender<usize>> = block_deadline.is_some().then(|| block_tx.clone());
       started_count += 1;
       let ctx = self.clone();
       let events = Arc::clone(&events);

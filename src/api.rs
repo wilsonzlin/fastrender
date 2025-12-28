@@ -116,15 +116,21 @@ use crate::paint::painter::paint_tree_display_list_with_resources_scaled_offset;
 use crate::paint::painter::paint_tree_with_resources_scaled_offset;
 use crate::paint::painter::paint_tree_with_resources_scaled_offset_with_trace;
 use crate::paint::painter::PaintBackend;
-use crate::scroll::ScrollState;
 use crate::render_control::{CancelCallback, DeadlineGuard, RenderDeadline};
 use crate::resource::CachingFetcherConfig;
 use crate::resource::{
   origin_from_url, CachingFetcher, DocumentOrigin, HttpFetcher, PolicyError, ResourceAccessPolicy,
   ResourceFetcher, ResourcePolicy,
 };
+use crate::scroll::ScrollState;
 use crate::style::cascade::apply_style_set_with_media_target_and_imports_cached;
 use crate::style::cascade::apply_style_set_with_media_target_and_imports_cached_with_deadline;
+#[cfg(test)]
+use crate::style::cascade::apply_styles_with_media_target_and_imports;
+#[cfg(test)]
+use crate::style::cascade::apply_styles_with_media_target_and_imports_cached;
+#[cfg(test)]
+use crate::style::cascade::apply_styles_with_media_target_and_imports_cached_with_deadline;
 use crate::style::cascade::ContainerQueryContext;
 use crate::style::cascade::ContainerQueryInfo;
 use crate::style::cascade::StyledNode;
@@ -393,9 +399,10 @@ pub struct FastRenderConfig {
 
   /// Block mixed HTTP subresources when the document is HTTPS.
   pub block_mixed_content: bool,
-  /// Restrict subresources to the document origin unless explicitly allowed.
+  /// Restrict subresource loads to the document origin (plus allowlist) when true.
   pub same_origin_subresources: bool,
-  /// Allowlisted origins when same-origin subresource blocking is enabled.
+
+  /// Additional origins allowed when [`same_origin_subresources`] is enabled.
   pub allowed_subresource_origins: Vec<DocumentOrigin>,
 
   /// Compatibility profile controlling opt-in site-specific behaviors.
@@ -536,15 +543,15 @@ impl FastRenderBuilder {
     self
   }
 
-  /// Restrict subresource loads to the document origin unless explicitly allowed.
+  /// Restrict subresource loads to the document origin (plus any allowlisted origins).
   pub fn same_origin_subresources(mut self, enabled: bool) -> Self {
     self.config.same_origin_subresources = enabled;
     self
   }
 
-  /// Allow specific origins to load subresources when enforcing same-origin.
-  pub fn allowed_subresource_origins(mut self, allowed: Vec<DocumentOrigin>) -> Self {
-    self.config.allowed_subresource_origins = allowed;
+  /// Allow additional origins when restricting subresource loads to the document origin.
+  pub fn allowed_subresource_origins(mut self, origins: Vec<DocumentOrigin>) -> Self {
+    self.config.allowed_subresource_origins = origins;
     self
   }
 
@@ -654,6 +661,8 @@ pub struct RenderOptions {
   pub viewport: Option<(u32, u32)>,
   /// Optional device pixel ratio override for media queries and image selection.
   pub device_pixel_ratio: Option<f32>,
+  /// Optional animation timestamp used to sample time-based effects during painting.
+  pub animation_time: Option<Duration>,
   /// Controls structured diagnostics capture for this render.
   pub diagnostics_level: DiagnosticsLevel,
   /// Media type used for evaluating media queries.
@@ -682,8 +691,6 @@ pub struct RenderOptions {
   pub runtime_toggles: Option<Arc<RuntimeToggles>>,
   /// Optional override for display-list paint parallelism.
   pub paint_parallelism: Option<PaintParallelism>,
-  /// Optional animation sample time applied during painting.
-  pub animation_time: Option<Duration>,
 }
 
 impl Default for RenderOptions {
@@ -691,6 +698,7 @@ impl Default for RenderOptions {
     Self {
       viewport: None,
       device_pixel_ratio: None,
+      animation_time: None,
       diagnostics_level: DiagnosticsLevel::None,
       media_type: MediaType::Screen,
       scroll_x: 0.0,
@@ -705,7 +713,6 @@ impl Default for RenderOptions {
       trace_output: None,
       runtime_toggles: None,
       paint_parallelism: None,
-      animation_time: None,
     }
   }
 }
@@ -715,6 +722,7 @@ impl std::fmt::Debug for RenderOptions {
     f.debug_struct("RenderOptions")
       .field("viewport", &self.viewport)
       .field("device_pixel_ratio", &self.device_pixel_ratio)
+      .field("animation_time", &self.animation_time)
       .field("diagnostics_level", &self.diagnostics_level)
       .field("media_type", &self.media_type)
       .field("scroll_x", &self.scroll_x)
@@ -735,7 +743,6 @@ impl std::fmt::Debug for RenderOptions {
         &self.runtime_toggles.as_ref().map(|_| "<toggles>"),
       )
       .field("paint_parallelism", &self.paint_parallelism)
-      .field("animation_time", &self.animation_time)
       .finish()
   }
 }
@@ -758,6 +765,12 @@ impl RenderOptions {
     self
   }
 
+  /// Sample animations at the given timestamp.
+  pub fn with_animation_time(mut self, time: Duration) -> Self {
+    self.animation_time = Some(time);
+    self
+  }
+
   /// Override the device pixel ratio for this render.
   pub fn with_device_pixel_ratio(mut self, dpr: f32) -> Self {
     self.device_pixel_ratio = Some(dpr);
@@ -767,12 +780,6 @@ impl RenderOptions {
   /// Override the media type used for media queries.
   pub fn with_media_type(mut self, media_type: MediaType) -> Self {
     self.media_type = media_type;
-    self
-  }
-
-  /// Sample animations at a specific timestamp during rendering.
-  pub fn with_animation_time(mut self, time: Duration) -> Self {
-    self.animation_time = Some(time);
     self
   }
 
@@ -862,6 +869,8 @@ pub struct RenderDiagnostics {
   pub document_error: Option<String>,
   /// Stage at which rendering timed out, when allow_partial is used.
   pub timeout_stage: Option<RenderStage>,
+  /// Stage at which rendering encountered a failure but still produced output.
+  pub failure_stage: Option<RenderStage>,
   /// Optional structured statistics gathered during rendering.
   pub stats: Option<RenderStats>,
 }
@@ -875,6 +884,9 @@ impl RenderDiagnostics {
   /// Record a failed fetch using structured error information.
   pub fn record_error(&mut self, kind: ResourceKind, url: impl Into<String>, error: &Error) {
     let url = url.into();
+    if let Some(stage) = failure_stage_for_resource(kind) {
+      self.note_failure_stage(stage);
+    }
     self
       .fetch_errors
       .push(ResourceFetchError::from_error(kind, url, error));
@@ -887,14 +899,50 @@ impl RenderDiagnostics {
     url: impl Into<String>,
     message: impl Into<String>,
   ) {
-    self
-      .fetch_errors
-      .push(ResourceFetchError::new(kind, url, message));
+    self.record_message_with_final(kind, url, None, message);
+  }
+
+  /// Record a failed fetch with an optional final URL after redirects.
+  pub fn record_message_with_final(
+    &mut self,
+    kind: ResourceKind,
+    url: impl Into<String>,
+    final_url: Option<&str>,
+    message: impl Into<String>,
+  ) {
+    let mut entry = ResourceFetchError::new(kind, url, message);
+    if let Some(final_url) = final_url {
+      entry.final_url = Some(final_url.to_string());
+    }
+    if entry.final_url.is_none() {
+      entry.final_url = Some(entry.url.clone());
+    }
+    if let Some(stage) = failure_stage_for_resource(kind) {
+      self.note_failure_stage(stage);
+    }
+    self.fetch_errors.push(entry);
   }
 
   /// Mark a document-level fetch failure.
   pub fn set_document_error(&mut self, message: impl Into<String>) {
     self.document_error = Some(message.into());
+  }
+
+  /// Record the first failure stage observed during rendering.
+  pub fn note_failure_stage(&mut self, stage: RenderStage) {
+    if self.failure_stage.is_none() {
+      self.failure_stage = Some(stage);
+    }
+  }
+}
+
+fn failure_stage_for_resource(kind: ResourceKind) -> Option<RenderStage> {
+  match kind {
+    ResourceKind::Document => Some(RenderStage::DomParse),
+    ResourceKind::Stylesheet => Some(RenderStage::Css),
+    ResourceKind::Font => Some(RenderStage::Css),
+    ResourceKind::Image => Some(RenderStage::Paint),
+    ResourceKind::Other => None,
   }
 }
 
@@ -921,6 +969,19 @@ impl SharedRenderDiagnostics {
   pub fn record_error(&self, kind: ResourceKind, url: impl Into<String>, error: &Error) {
     if let Ok(mut guard) = self.inner.lock() {
       guard.record_error(kind, url, error);
+    }
+  }
+
+  /// Record a failed fetch with an optional final URL after redirects.
+  pub fn record_with_final(
+    &self,
+    kind: ResourceKind,
+    url: impl Into<String>,
+    final_url: Option<&str>,
+    message: impl Into<String>,
+  ) {
+    if let Ok(mut guard) = self.inner.lock() {
+      guard.record_message_with_final(kind, url, final_url, message);
     }
   }
 
@@ -1070,11 +1131,7 @@ impl ResourceContext {
             {
               return Err(err);
             }
-            let mut entry = ResourceFetchError::new(kind, url, err.reason.clone());
-            entry.final_url = final_url
-              .map(|u| u.to_string())
-              .or_else(|| Some(url.to_string()));
-            guard.fetch_errors.push(entry);
+            guard.record_message_with_final(kind, url, final_url, err.reason.clone());
           }
         }
         Err(err)
@@ -1151,6 +1208,7 @@ pub struct PreparedDocument {
   page_zoom: f32,
   background_color: Rgba,
   default_scroll: ScrollState,
+  default_animation_time: Option<Duration>,
   font_context: FontContext,
   image_cache: ImageCache,
   paint_parallelism: PaintParallelism,
@@ -1264,6 +1322,7 @@ impl PreparedDocument {
       .scroll
       .clone()
       .unwrap_or_else(|| self.default_scroll.clone());
+    let animation_time = options.animation_time.or(self.default_animation_time);
     paint_fragment_tree_with_state(
       self.fragment_tree.clone(),
       scroll_state,
@@ -1272,8 +1331,8 @@ impl PreparedDocument {
       &self.font_context,
       &self.image_cache,
       paint_scale,
-      options.animation_time,
       self.paint_parallelism,
+      animation_time,
     )
   }
 
@@ -1361,6 +1420,11 @@ impl PreparedDocument {
 
   /// Returns the scroll offsets supplied when preparing the document.
   pub fn default_scroll(&self) -> ScrollState {
+    self.default_scroll.clone()
+  }
+
+  /// Returns the prepared scroll state supplied during preparation.
+  pub fn default_scroll_state(&self) -> ScrollState {
     self.default_scroll.clone()
   }
 }
@@ -1825,15 +1889,15 @@ impl FastRenderConfig {
     self
   }
 
-  /// Restrict subresource loads to the document origin.
+  /// Restrict subresource loads to the document origin unless allowlisted.
   pub fn with_same_origin_subresources(mut self, enabled: bool) -> Self {
     self.same_origin_subresources = enabled;
     self
   }
 
-  /// Allow specific origins when enforcing same-origin subresource loading.
-  pub fn with_allowed_subresource_origins(mut self, allowed: Vec<DocumentOrigin>) -> Self {
-    self.allowed_subresource_origins = allowed;
+  /// Allow additional origins when blocking cross-origin subresources.
+  pub fn with_allowed_subresource_origins(mut self, origins: Vec<DocumentOrigin>) -> Self {
+    self.allowed_subresource_origins = origins;
     self
   }
 
@@ -2507,14 +2571,14 @@ impl FastRender {
 
 fn paint_fragment_tree_with_state(
   mut fragment_tree: FragmentTree,
-  mut scroll_state: ScrollState,
+  scroll_state: ScrollState,
   viewport_override: Option<Size>,
   background: Rgba,
   font_context: &FontContext,
   image_cache: &ImageCache,
   device_pixel_ratio: f32,
-  animation_time: Option<Duration>,
   paint_parallelism: PaintParallelism,
+  animation_time: Option<Duration>,
 ) -> Result<Pixmap> {
   let expand_full_page = std::env::var("FASTR_FULL_PAGE")
     .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
@@ -2522,7 +2586,8 @@ fn paint_fragment_tree_with_state(
 
   let viewport_size = viewport_override.unwrap_or_else(|| fragment_tree.viewport_size());
   let scroll_result = crate::scroll::apply_scroll_snap(&mut fragment_tree, &scroll_state);
-  scroll_state = scroll_result.state;
+  crate::scroll::apply_scroll_offsets(&mut fragment_tree, &scroll_result.state);
+  let scroll_state = scroll_result.state;
   let scroll = scroll_state.viewport;
 
   animation::apply_animations(&mut fragment_tree, &scroll_state, animation_time);
@@ -2532,8 +2597,8 @@ fn paint_fragment_tree_with_state(
     font_context,
     &mut fragment_tree.root,
     viewport_rect,
-    scroll_state.viewport,
-    scroll_state.viewport,
+    scroll,
+    scroll,
     &scroll_state,
     viewport_size,
   );
@@ -2542,8 +2607,8 @@ fn paint_fragment_tree_with_state(
       font_context,
       root,
       viewport_rect,
-      scroll_state.viewport,
-      scroll_state.viewport,
+      scroll,
+      scroll,
       &scroll_state,
       viewport_size,
     );
@@ -2694,17 +2759,15 @@ impl FastRender {
       dom_compat_mode: config.dom_compat_mode,
       compat_profile: config.compat_profile,
       fragmentation: config.fragmentation,
-      resource_policy: {
-        let mut policy = ResourceAccessPolicy::default();
-        policy.document_origin = config
+      resource_policy: ResourceAccessPolicy {
+        document_origin: config
           .base_url
           .as_ref()
-          .and_then(|url| origin_from_url(url));
-        policy.allow_file_from_http = config.allow_file_from_http;
-        policy.block_mixed_content = config.block_mixed_content;
-        policy.same_origin_only = config.same_origin_subresources;
-        policy.allowed_origins = config.allowed_subresource_origins.clone();
-        policy
+          .and_then(|url| origin_from_url(url)),
+        allow_file_from_http: config.allow_file_from_http,
+        block_mixed_content: config.block_mixed_content,
+        same_origin_only: config.same_origin_subresources,
+        allowed_origins: config.allowed_subresource_origins.clone(),
       },
       resource_context: None,
       max_iframe_depth: config.max_iframe_depth,
@@ -3067,6 +3130,7 @@ impl FastRender {
       options.scroll_y,
       options.element_scroll_offsets.clone(),
       options.media_type,
+      options.animation_time,
       fit_canvas_to_content,
       options.capture_accessibility,
       deadline,
@@ -3074,7 +3138,6 @@ impl FastRender {
       stats,
       paint_parallelism,
       trace,
-      options.animation_time,
     );
     self.pop_resource_context(prev_self, prev_image, prev_font);
     let result = match result {
@@ -3090,6 +3153,7 @@ impl FastRender {
             if let Some(diag) = &self.diagnostics {
               if let Ok(mut guard) = diag.lock() {
                 guard.timeout_stage = Some(stage);
+                guard.note_failure_stage(stage);
               }
             }
             let pixmap = self.render_error_overlay(width, height)?;
@@ -3122,8 +3186,9 @@ impl FastRender {
     height: u32,
     scroll_x: f32,
     scroll_y: f32,
-    element_scrolls: HashMap<usize, Point>,
+    element_scroll_offsets: HashMap<usize, Point>,
     media_type: MediaType,
+    animation_time: Option<Duration>,
     fit_canvas_to_content: bool,
     capture_accessibility: bool,
     deadline: Option<&RenderDeadline>,
@@ -3131,7 +3196,6 @@ impl FastRender {
     mut stats: Option<&mut RenderStatsRecorder>,
     paint_parallelism: PaintParallelism,
     trace: &TraceHandle,
-    animation_time: Option<Duration>,
   ) -> Result<RenderOutputs> {
     // Validate dimensions
     if width == 0 || height == 0 {
@@ -3400,8 +3464,10 @@ impl FastRender {
       let env_fit_canvas = toggles.truthy("FASTR_FULL_PAGE");
       let fit_canvas = fit_canvas_to_content || env_fit_canvas;
       let viewport_size = layout_viewport;
-      let mut scroll_state =
-        crate::scroll::ScrollState::from_parts(Point::new(scroll_x, scroll_y), element_scrolls);
+      let mut scroll_state = crate::scroll::ScrollState::from_parts(
+        Point::new(scroll_x, scroll_y),
+        element_scroll_offsets,
+      );
       let scroll_result = crate::scroll::apply_scroll_snap(&mut fragment_tree, &scroll_state);
       scroll_state = scroll_result.state;
       let scroll = scroll_state.viewport;
@@ -3716,6 +3782,7 @@ impl FastRender {
         Point::new(options.scroll_x, options.scroll_y),
         options.element_scroll_offsets.clone(),
       ),
+      default_animation_time: options.animation_time,
       font_context: self.font_context.clone(),
       image_cache: self.image_cache.clone(),
       paint_parallelism,
@@ -4153,7 +4220,7 @@ impl FastRender {
       let html_with_css = {
         let _span = trace_handle.span("css_inline", "style");
         let mut guard = diagnostics.lock().unwrap();
-        match self.inline_stylesheets(
+        let inlined = match self.inline_stylesheets(
           html,
           &base_url,
           options.media_type,
@@ -4167,6 +4234,7 @@ impl FastRender {
             if options.allow_partial {
               if let RenderError::Timeout { stage, .. } = &err {
                 guard.timeout_stage = Some(*stage);
+                guard.note_failure_stage(*stage);
                 let diagnostics = guard.clone();
                 let pixmap = self.render_error_overlay(width, height)?;
                 return Ok(RenderReport {
@@ -4179,7 +4247,17 @@ impl FastRender {
             }
             return Err(Error::Render(err));
           }
+        };
+        if options.allow_partial
+          && guard.failure_stage.is_none()
+          && guard
+            .fetch_errors
+            .iter()
+            .any(|entry| entry.kind == ResourceKind::Stylesheet)
+        {
+          guard.note_failure_stage(RenderStage::Css);
         }
+        inlined
       };
       let mut captured = RenderArtifacts::new(artifacts);
       let outputs = self.render_html_with_options_internal_with_deadline(
@@ -6080,6 +6158,18 @@ impl FastRender {
       }
       match fetcher.fetch(&css_url) {
         Ok(res) => {
+          if let Some(ctx) = resource_context {
+            if ctx
+              .check_allowed_with_final(
+                ResourceKind::Stylesheet,
+                &css_url,
+                res.final_url.as_deref(),
+              )
+              .is_err()
+            {
+              continue;
+            }
+          }
           let css_text = decode_css_bytes(&res.bytes, res.content_type.as_deref());
           let rewritten = absolutize_css_urls(&css_text, &css_url);
           let mut import_diags: Vec<(String, String)> = Vec::new();
@@ -6098,7 +6188,21 @@ impl FastRender {
                 }
               }
               match fetcher.fetch(u) {
-                Ok(res) => Ok(decode_css_bytes(&res.bytes, res.content_type.as_deref())),
+                Ok(res) => {
+                  if let Some(ctx) = resource_context {
+                    if let Err(err) = ctx.check_allowed_with_final(
+                      ResourceKind::Stylesheet,
+                      u,
+                      res.final_url.as_deref(),
+                    ) {
+                      return Err(Error::Resource(ResourceError::new(
+                        u.to_string(),
+                        err.reason,
+                      )));
+                    }
+                  }
+                  Ok(decode_css_bytes(&res.bytes, res.content_type.as_deref()))
+                }
                 Err(err) => {
                   diagnostics.record_error(ResourceKind::Stylesheet, u, &err);
                   Err(err)
@@ -8322,6 +8426,7 @@ pub(crate) fn render_html_with_shared_resources(
       0.0,
       HashMap::new(),
       MediaType::Screen,
+      None,
       false,
       false,
       None,
@@ -8329,7 +8434,6 @@ pub(crate) fn render_html_with_shared_resources(
       None,
       renderer.paint_parallelism,
       &trace,
-      None,
     )
   })
   .map(|out| out.pixmap)

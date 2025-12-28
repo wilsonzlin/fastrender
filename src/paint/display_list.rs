@@ -62,7 +62,7 @@ use crate::style::types::TextEmphasisPosition;
 use crate::style::types::TextEmphasisStyle;
 use crate::style::types::TransformStyle;
 use crate::text::font_db::LoadedFont;
-use crate::text::font_db::{FontStretch, FontStyle};
+pub use crate::text::font_fallback::FontId;
 use std::fmt;
 use std::sync::Arc;
 use tiny_skia::FilterQuality;
@@ -71,15 +71,6 @@ use ttf_parser::Tag;
 // ============================================================================
 // Display Item Types
 // ============================================================================
-
-/// Identifier for resolving fonts during painting.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct FontId {
-  pub family: String,
-  pub weight: u16,
-  pub style: FontStyle,
-  pub stretch: FontStretch,
-}
 
 /// A single display item representing a paint operation
 ///
@@ -622,7 +613,7 @@ impl FontVariation {
 ///
 /// Represents shaped text ready for rendering. The glyphs have already
 /// been positioned by the text shaping system.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct TextItem {
   /// Position to draw text (baseline origin)
   pub origin: Point,
@@ -645,13 +636,13 @@ pub struct TextItem {
   /// Total advance width of the text run
   pub advance_width: f32,
 
-  /// Identifier for resolving the font in paint-time contexts.
-  pub font_id: Option<FontId>,
-
   /// Exact font bytes used for shaping. Carrying the resolved font keeps rasterization
   /// consistent even if the font database changes between list construction and rendering.
   /// Renderers may fall back to a generic sans-serif when absent.
   pub font: Option<Arc<LoadedFont>>,
+
+  /// Identifier for resolving fonts via fallback chains.
+  pub font_id: Option<FontId>,
 
   /// Active variation coordinates for this run.
   pub variations: Vec<FontVariation>,
@@ -693,7 +684,7 @@ pub struct EmphasisMark {
 }
 
 /// Shaped emphasis string glyphs (for string emphasis styles).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct EmphasisText {
   pub glyphs: Vec<GlyphInstance>,
   pub font: Option<Arc<LoadedFont>>,
@@ -801,7 +792,7 @@ pub fn list_marker_bounds(item: &ListMarkerItem) -> Rect {
 }
 
 /// List marker paint item
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ListMarkerItem {
   /// Origin in CSS px (baseline-aligned)
   pub origin: Point,
@@ -824,12 +815,12 @@ pub struct ListMarkerItem {
   /// Total advance width for the marker run
   pub advance_width: f32,
 
-  /// Identifier for resolving the marker font.
-  pub font_id: Option<FontId>,
-
   /// Exact font bytes used for shaping. When not provided, renderers may choose a generic
   /// fallback to keep markers visible.
   pub font: Option<Arc<LoadedFont>>,
+
+  /// Identifier for resolving fonts via fallback chains.
+  pub font_id: Option<FontId>,
 
   /// Active variation coordinates for this run.
   pub variations: Vec<FontVariation>,

@@ -1,3 +1,4 @@
+use fastrender::paint::display_list::{FontVariation as DlFontVariation, GlyphInstance};
 use fastrender::{
   Canvas, FontDatabase, FontStyleDb, FontWeightDb, GlyphPosition, LoadedFont, Point, Rect, Rgba,
 };
@@ -38,20 +39,29 @@ fn glyphs_for_char(font: &LoadedFont, ch: char, font_size: f32) -> Vec<GlyphPosi
 fn caches_glyph_outlines_between_draws() {
   let font = load_subset_font();
   let glyphs = glyphs_for_char(&font, 'A', 24.0);
+  let instances: Vec<GlyphInstance> = glyphs
+    .iter()
+    .map(|g| GlyphInstance {
+      glyph_id: g.glyph_id,
+      offset: Point::new(g.x_offset, g.y_offset),
+      advance: g.x_advance,
+    })
+    .collect();
+  let variations: Vec<DlFontVariation> = Vec::new();
 
   let mut canvas = Canvas::new(64, 64, Rgba::WHITE).expect("canvas");
   assert_eq!(canvas.text_cache_stats().hits, 0);
 
   canvas.draw_text(
     Point::new(5.0, 40.0),
-    &glyphs,
+    &instances,
     &font,
     24.0,
     Rgba::BLACK,
     0.0,
     0.0,
     0,
-    &[],
+    &variations,
   );
   let first = canvas.text_cache_stats();
   assert_eq!(first.hits, 0);
@@ -59,14 +69,14 @@ fn caches_glyph_outlines_between_draws() {
 
   canvas.draw_text(
     Point::new(5.0, 40.0),
-    &glyphs,
+    &instances,
     &font,
     24.0,
     Rgba::BLACK,
     0.0,
     0.0,
     0,
-    &[],
+    &variations,
   );
   let second = canvas.text_cache_stats();
   assert!(
@@ -80,19 +90,28 @@ fn caches_glyph_outlines_between_draws() {
 fn respects_clip_mask_for_text() {
   let font = load_subset_font();
   let glyphs = glyphs_for_char(&font, 'W', 20.0);
+  let instances: Vec<GlyphInstance> = glyphs
+    .iter()
+    .map(|g| GlyphInstance {
+      glyph_id: g.glyph_id,
+      offset: Point::new(g.x_offset, g.y_offset),
+      advance: g.x_advance,
+    })
+    .collect();
+  let variations: Vec<DlFontVariation> = Vec::new();
 
   let mut canvas = Canvas::new(80, 50, Rgba::WHITE).expect("canvas");
   canvas.set_clip(Rect::from_xywh(0.0, 0.0, 5.0, 50.0));
   canvas.draw_text(
     Point::new(0.0, 30.0),
-    &glyphs,
+    &instances,
     &font,
     20.0,
     Rgba::BLACK,
     0.0,
     0.0,
     0,
-    &[],
+    &variations,
   );
 
   let pixmap = canvas.into_pixmap();

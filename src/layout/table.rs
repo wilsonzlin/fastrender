@@ -5072,13 +5072,7 @@ impl FormattingContext for TableFormattingContext {
       });
 
     for laid in laid_out_cells {
-      let LaidOutCell {
-        cell,
-        fragment: mut fragment,
-        vertical_align,
-        baseline,
-        height,
-      } = laid;
+      let cell = &laid.cell;
       // Compute horizontal position
       let x = if structure.border_collapse == BorderCollapse::Collapse {
         col_offsets.get(cell.col).copied().unwrap_or(0.0)
@@ -5106,13 +5100,13 @@ impl FormattingContext for TableFormattingContext {
           + v_spacing * cell.rowspan.saturating_sub(1) as f32
       };
 
-      let (y_offset, aligned_baseline) = match vertical_align {
+      let (y_offset, aligned_baseline) = match laid.vertical_align {
         VerticalAlign::Top => (0.0, None),
-        VerticalAlign::Bottom => ((spanned_height - height).max(0.0), None),
-        VerticalAlign::Middle => (((spanned_height - height) / 2.0).max(0.0), None),
+        VerticalAlign::Bottom => ((spanned_height - laid.height).max(0.0), None),
+        VerticalAlign::Middle => (((spanned_height - laid.height) / 2.0).max(0.0), None),
         _ => {
-          let raw_baseline = baseline.unwrap_or(height);
-          let baseline = if raw_baseline >= height && spanned_height > height {
+          let raw_baseline = laid.baseline.unwrap_or(laid.height);
+          let baseline = if raw_baseline >= laid.height && spanned_height > laid.height {
             spanned_height
           } else {
             raw_baseline
@@ -5149,6 +5143,7 @@ impl FormattingContext for TableFormattingContext {
       };
 
       let base_y = row_offsets.get(row_start).copied().unwrap_or(0.0);
+      let mut fragment = laid.fragment;
       // Position the cell box at the start of its row span and give it the full spanned height so
       // backgrounds and borders cover the row. Vertical-align is applied to the cell contents by
       // shifting children inside the cell.

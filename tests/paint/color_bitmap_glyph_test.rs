@@ -4,6 +4,7 @@ use fastrender::text::font_db::{FontStretch, FontStyle, FontWeight, LoadedFont};
 use fastrender::text::font_instance::FontInstance;
 use fastrender::text::pipeline::GlyphPosition;
 use fastrender::{Rgba, TextRasterizer};
+use rustybuzz::Variation;
 use std::sync::Arc;
 use tiny_skia::{Color, Pixmap};
 
@@ -34,7 +35,8 @@ fn renders_sbix_jpeg_bitmap_glyph() {
   }];
 
   let mut color_renderer = ColorFontRenderer::new();
-  let instance = FontInstance::new(&font, &[]).expect("font instance for bitmap font");
+  let variations: Vec<Variation> = Vec::new();
+  let instance = FontInstance::new(&font, &variations).expect("font instance");
   let color_glyph = color_renderer
     .render(
       &font,
@@ -45,7 +47,7 @@ fn renders_sbix_jpeg_bitmap_glyph() {
       &[],
       Rgba::BLUE,
       0.0,
-      &[],
+      &variations,
       None,
     )
     .expect("color renderer should produce a bitmap glyph for the sbix strike");
