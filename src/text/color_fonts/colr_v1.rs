@@ -982,7 +982,10 @@ fn resolve_color(color: Rgba, alpha: F2Dot14) -> Color {
 
 fn resolve_palette_color(idx: u16, palette: &[Rgba], text_color: Rgba) -> Rgba {
   if idx == 0xFFFF {
-    return text_color;
+    return Rgba {
+      a: 1.0,
+      ..text_color
+    };
   }
   palette.get(idx as usize).copied().unwrap_or(text_color)
 }

@@ -55,6 +55,7 @@ use crate::paint::clip_path::ResolvedClipPath;
 use crate::paint::text_rasterize::{GlyphCacheStats, TextRasterizer, TextRenderState};
 use crate::paint::text_shadow::PathBounds;
 use crate::style::color::Rgba;
+use crate::text::color_fonts::ColorGlyphRaster;
 use crate::text::font_db::LoadedFont;
 use crate::text::pipeline::{GlyphPosition, ShapedRun};
 use rustybuzz::Variation as HbVariation;
@@ -1041,6 +1042,43 @@ impl Canvas {
       None,
       state,
       &mut self.pixmap,
+    );
+  }
+
+  /// Draws a pre-rasterized color glyph pixmap.
+  ///
+  /// The provided `glyph_opacity` is multiplied by the current canvas state
+  /// opacity so color glyphs participate in CSS opacity the same way outline
+  /// fills do.
+  pub fn draw_color_glyph(
+    &mut self,
+    position: Point,
+    glyph: &ColorGlyphRaster,
+    glyph_opacity: f32,
+    glyph_transform: Option<Transform>,
+  ) {
+    let combined_opacity = (glyph_opacity * self.current_state.opacity).clamp(0.0, 1.0);
+    if combined_opacity == 0.0 {
+      return;
+    }
+
+    let mut paint = PixmapPaint::default();
+    paint.opacity = combined_opacity;
+    paint.blend_mode = self.current_state.blend_mode;
+    let dx = (position.x + glyph.left).round() as i32;
+    let dy = (position.y + glyph.top).round() as i32;
+    let transform = self
+      .current_state
+      .transform
+      .post_concat(glyph_transform.unwrap_or_else(Transform::identity));
+    let clip = self.current_state.clip_mask.clone();
+    self.pixmap.draw_pixmap(
+      dx,
+      dy,
+      glyph.image.as_ref().as_ref(),
+      &paint,
+      transform,
+      clip.as_ref(),
     );
   }
 

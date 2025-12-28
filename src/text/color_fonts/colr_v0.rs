@@ -106,7 +106,12 @@ fn parse_layer_records(
 
 fn resolve_layer_color(idx: u16, palette: &[Rgba], text_color: Rgba) -> Rgba {
   if idx == 0xFFFF {
-    return text_color;
+    // currentColor paints pick up text/ancestor opacity at draw time. Keep the
+    // cached raster opaque so global alpha is only applied once.
+    return Rgba {
+      a: 1.0,
+      ..text_color
+    };
   }
   palette.get(idx as usize).copied().unwrap_or(text_color)
 }

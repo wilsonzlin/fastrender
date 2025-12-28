@@ -351,6 +351,9 @@ struct ColorGlyphCacheKey {
   font_size_hundredths: u32,
   palette_index: u16,
   variation_hash: u64,
+  /// RGB signature of the text color. Alpha is applied at draw time so it is
+  /// intentionally excluded to keep cached rasters reusable across opacity
+  /// changes while still differentiating currentColor layers by hue.
   color_signature: u32,
 }
 
@@ -370,7 +373,7 @@ impl ColorGlyphCacheKey {
       font_size_hundredths: (font_size * 100.0) as u32,
       palette_index,
       variation_hash: variation_hash(variations),
-      color_signature: rgba_signature(color),
+      color_signature: rgb_signature(color),
     }
   }
 }
@@ -405,11 +408,8 @@ impl ColorGlyphCache {
   }
 }
 
-fn rgba_signature(color: Rgba) -> u32 {
-  ((color.r as u32) << 24)
-    | ((color.g as u32) << 16)
-    | ((color.b as u32) << 8)
-    | color.alpha_u8() as u32
+fn rgb_signature(color: Rgba) -> u32 {
+  ((color.r as u32) << 16) | ((color.g as u32) << 8) | color.b as u32
 }
 
 fn quantize_skew(skew: f32) -> i32 {
@@ -677,13 +677,18 @@ impl TextRasterizer {
       let glyph_x = cursor_x + glyph.x_offset;
       let glyph_y = baseline_y + cursor_y + glyph.y_offset;
 
+      // Strip CSS alpha from the cached raster and apply it once at draw time so
+      // palette layers (including currentColor paints) pick up text/ancestor opacity
+      // without double-multiplying.
+      let glyph_opacity = color.a.clamp(0.0, 1.0);
+      let color_for_glyph = Rgba { a: 1.0, ..color };
       let color_key = ColorGlyphCacheKey::new(
         font,
         glyph.glyph_id,
         font_size,
         palette_index,
         variations,
-        color,
+        color_for_glyph,
       );
 
       let mut color_glyph = self.color_cache.get(&color_key);
@@ -694,7 +699,7 @@ impl TextRasterizer {
           glyph.glyph_id,
           font_size,
           palette_index,
-          color,
+          color_for_glyph,
           synthetic_oblique,
           variations,
         );
@@ -704,17 +709,19 @@ impl TextRasterizer {
       }
 
       if let Some(color_image) = color_glyph {
-        let mut transform = color_glyph_transform(
-          synthetic_oblique,
-          glyph_x,
-          glyph_y,
-          color_image.left,
-          color_image.top,
-        );
-        if let Some(rotation) = rotation {
-          transform = concat_transforms(rotation, transform);
+        if glyph_opacity > 0.0 {
+          let mut transform = color_glyph_transform(
+            synthetic_oblique,
+            glyph_x,
+            glyph_y,
+            color_image.left,
+            color_image.top,
+          );
+          if let Some(rotation) = rotation {
+            transform = concat_transforms(rotation, transform);
+          }
+          draw_color_glyph(pixmap, &color_image, transform, state, glyph_opacity);
         }
-        draw_color_glyph(pixmap, &color_image, transform, state);
       } else if let Some(cached) =
         self
           .cache
@@ -874,6 +881,40 @@ impl TextRasterizer {
     )
   }
 
+  /// Backwards-compatible wrapper that accepts explicit palette/variation parameters.
+  pub fn render_glyphs_with_state_and_palette(
+    &mut self,
+    glyphs: &[GlyphPosition],
+    font: &LoadedFont,
+    font_size: f32,
+    x: f32,
+    baseline_y: f32,
+    color: Rgba,
+    synthetic_bold: f32,
+    synthetic_oblique: f32,
+    palette_index: u16,
+    variations: &[Variation],
+    rotation: Option<Transform>,
+    state: TextRenderState<'_>,
+    pixmap: &mut Pixmap,
+  ) -> Result<f32> {
+    self.render_glyphs_with_state(
+      glyphs,
+      font,
+      font_size,
+      x,
+      baseline_y,
+      color,
+      synthetic_bold,
+      synthetic_oblique,
+      palette_index,
+      variations,
+      rotation,
+      state,
+      pixmap,
+    )
+  }
+
   /// Returns positioned glyph paths for the provided run using the outline cache.
   pub fn positioned_glyph_paths(
     &mut self,
@@ -930,6 +971,30 @@ impl TextRasterizer {
     }
 
     Ok(paths)
+  }
+
+  /// Backwards-compatible wrapper that accepts rustybuzz variations explicitly.
+  pub fn positioned_glyph_paths_with_variations(
+    &mut self,
+    glyphs: &[GlyphPosition],
+    font: &LoadedFont,
+    font_size: f32,
+    x: f32,
+    baseline_y: f32,
+    synthetic_oblique: f32,
+    rotation: Option<Transform>,
+    variations: &[Variation],
+  ) -> Result<Vec<Path>> {
+    self.positioned_glyph_paths(
+      glyphs,
+      font,
+      font_size,
+      x,
+      baseline_y,
+      synthetic_oblique,
+      rotation,
+      variations,
+    )
   }
 
   /// Clears the glyph cache.
@@ -1008,9 +1073,10 @@ fn draw_color_glyph(
   glyph: &ColorGlyphRaster,
   transform: Transform,
   state: TextRenderState<'_>,
+  glyph_opacity: f32,
 ) {
   let mut paint = PixmapPaint::default();
-  paint.opacity = state.opacity.clamp(0.0, 1.0);
+  paint.opacity = (state.opacity * glyph_opacity).clamp(0.0, 1.0);
   paint.blend_mode = state.blend_mode;
   let transform = concat_transforms(state.transform, transform);
   let pixmap_ref = glyph.image.as_ref().as_ref();
