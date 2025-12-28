@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use fastrender::api::RenderOptions;
 use fastrender::geometry::{Point, Rect, Size};
 use fastrender::paint::painter::paint_tree_display_list_with_resources_scaled_offset;
 use fastrender::scroll::ScrollState;
@@ -8,8 +9,21 @@ use fastrender::style::color::Rgba;
 use fastrender::style::types::Overflow;
 use fastrender::style::ComputedStyle;
 use fastrender::text::font_loader::FontContext;
+use fastrender::tree::box_tree::BoxNode;
 use fastrender::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
 use fastrender::{FastRender, Length, Position};
+
+fn box_id_by_element_id(node: &BoxNode, target_id: &str) -> Option<usize> {
+  if let Some(debug) = node.debug_info.as_ref() {
+    if debug.id.as_deref() == Some(target_id) {
+      return Some(node.id);
+    }
+  }
+  node
+    .children
+    .iter()
+    .find_map(|child| box_id_by_element_id(child, target_id))
+}
 
 #[test]
 fn element_scroll_translates_descendants() {
@@ -130,5 +144,136 @@ fn sticky_offsets_use_element_scroll_containers() {
   assert!(
     (scroller.children[1].bounds.y() - 100.0).abs() < 0.01,
     "non-sticky siblings should retain their original positions"
+  );
+}
+
+#[test]
+fn nested_scroller_offsets_flow_from_render_options() {
+  let html = r#"
+    <style>
+      body { margin: 0; }
+      #outer { width: 80px; height: 60px; overflow: scroll; background: white; }
+      #spacer { height: 40px; background: rgb(0, 0, 255); }
+      #inner { width: 80px; height: 60px; overflow: scroll; }
+      #first { height: 60px; background: rgb(255, 0, 0); }
+      #second { height: 60px; background: rgb(0, 255, 0); }
+    </style>
+    <div id=\"outer\">
+      <div id=\"spacer\"></div>
+      <div id=\"inner\">
+        <div id=\"first\"></div>
+        <div id=\"second\"></div>
+      </div>
+    </div>
+  "#;
+
+  let mut renderer = FastRender::new().expect("renderer");
+  let base_options = RenderOptions::new().with_viewport(80, 60);
+  let prepared = renderer
+    .prepare_html(html, base_options.clone())
+    .expect("prepare html");
+  let outer_id = box_id_by_element_id(&prepared.box_tree().root, "outer").expect("outer box id");
+  let inner_id = box_id_by_element_id(&prepared.box_tree().root, "inner").expect("inner box id");
+
+  let scrolls = HashMap::from([
+    (outer_id, Point::new(0.0, 40.0)),
+    (inner_id, Point::new(0.0, 60.0)),
+  ]);
+
+  let baseline = renderer
+    .render_html_with_options(html, base_options.clone())
+    .expect("baseline render");
+  let base_pixel = baseline.pixel(5, 5).expect("baseline pixel");
+  assert_eq!(
+    (base_pixel.red(), base_pixel.green(), base_pixel.blue()),
+    (0, 0, 255),
+    "without element scroll offsets the spacer should cover the viewport"
+  );
+
+  let scrolled = renderer
+    .render_html_with_options(
+      html,
+      base_options
+        .clone()
+        .with_element_scroll_offsets(scrolls.clone()),
+    )
+    .expect("scrolled render");
+  let scrolled_pixel = scrolled.pixel(5, 5).expect("scrolled pixel");
+  assert_eq!(
+    (
+      scrolled_pixel.red(),
+      scrolled_pixel.green(),
+      scrolled_pixel.blue()
+    ),
+    (0, 255, 0),
+    "element scroll offsets should reveal the second inner block inside nested scrollers"
+  );
+
+  let prepared_scrolled = renderer
+    .prepare_html(html, base_options.with_element_scroll_offsets(scrolls))
+    .expect("prepare with scrolls");
+  let prepared_pixmap = prepared_scrolled.paint_default().expect("paint default");
+  let prepared_pixel = prepared_pixmap.pixel(5, 5).expect("prepared pixel");
+  assert_eq!(
+    (
+      prepared_pixel.red(),
+      prepared_pixel.green(),
+      prepared_pixel.blue()
+    ),
+    (0, 255, 0),
+    "prepared documents should retain element scroll offsets when painting"
+  );
+}
+
+#[test]
+fn sticky_in_scroller_honors_element_scroll_offsets() {
+  let html = r#"
+    <style>
+      body { margin: 0; }
+      #scroller { width: 80px; height: 50px; overflow: scroll; }
+      #sticky { position: sticky; top: 0; height: 20px; background: rgb(255, 0, 0); }
+      #filler { height: 100px; background: rgb(0, 255, 0); }
+    </style>
+    <div id=\"scroller\">
+      <div id=\"sticky\"></div>
+      <div id=\"filler\"></div>
+    </div>
+  "#;
+
+  let mut renderer = FastRender::new().expect("renderer");
+  let options = RenderOptions::new().with_viewport(80, 50);
+  let prepared = renderer
+    .prepare_html(html, options.clone())
+    .expect("prepare sticky html");
+  let scroller_id =
+    box_id_by_element_id(&prepared.box_tree().root, "scroller").expect("scroller box id");
+
+  let scrolls = HashMap::from([(scroller_id, Point::new(0.0, 30.0))]);
+  let pixmap = renderer
+    .render_html_with_options(html, options.with_element_scroll_offsets(scrolls))
+    .expect("render with scroll");
+
+  let top_pixel = pixmap.pixel(5, 5).expect("top pixel");
+  assert_eq!(
+    (
+      top_pixel.red(),
+      top_pixel.green(),
+      top_pixel.blue(),
+      top_pixel.alpha()
+    ),
+    (255, 0, 0, 255),
+    "sticky element should remain pinned when the scroll offset is supplied via render options"
+  );
+
+  let below_sticky = pixmap.pixel(5, 30).expect("below sticky pixel");
+  assert_eq!(
+    (
+      below_sticky.red(),
+      below_sticky.green(),
+      below_sticky.blue(),
+      below_sticky.alpha()
+    ),
+    (0, 255, 0, 255),
+    "content below the sticky header should still scroll into view"
   );
 }

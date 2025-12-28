@@ -1151,13 +1151,15 @@ impl PreparedDocument {
     self.paint_with_element_scrolls(
       scroll_x,
       scroll_y,
-      HashMap::new(),
+      self.default_element_scrolls.clone(),
       viewport_override,
       background_override,
     )
   }
 
   /// Paints using explicit scroll offsets for both the viewport and element scroll containers.
+  ///
+  /// Any provided element offsets override the defaults captured when the document was prepared.
   pub fn paint_with_element_scrolls(
     &self,
     scroll_x: f32,
@@ -1166,7 +1168,9 @@ impl PreparedDocument {
     viewport_override: Option<(u32, u32)>,
     background_override: Option<Rgba>,
   ) -> Result<Pixmap> {
-    let scroll_state = ScrollState::from_parts(Point::new(scroll_x, scroll_y), element_scrolls);
+    let mut merged = self.default_element_scrolls.clone();
+    merged.extend(element_scrolls);
+    let scroll_state = ScrollState::from_parts(Point::new(scroll_x, scroll_y), merged);
     self.paint_with_scroll_state(scroll_state, viewport_override, background_override)
   }
 
