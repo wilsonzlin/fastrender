@@ -80,14 +80,11 @@ fn mask_shorthand_parses_position_size_and_repeat() {
 
   let layer = &find_first(&styled, "div").expect("div").styles.mask_layers[0];
   assert!(matches!(layer.image, Some(BackgroundImage::Url(ref url)) if url == "a"));
-  if let BackgroundPosition::Position { x, y } = &layer.position {
-    assert!((x.alignment - 0.5).abs() < 1e-6);
-    assert_eq!(x.offset, Length::percent(0.0));
-    assert!((y.alignment - 0.5).abs() < 1e-6);
-    assert_eq!(y.offset, Length::percent(0.0));
-  } else {
-    panic!("expected position for mask shorthand");
-  }
+  let BackgroundPosition::Position { x, y } = &layer.position;
+  assert!((x.alignment - 0.5).abs() < 1e-6);
+  assert_eq!(x.offset, Length::percent(0.0));
+  assert!((y.alignment - 0.5).abs() < 1e-6);
+  assert_eq!(y.offset, Length::percent(0.0));
   assert_eq!(
     layer.size,
     BackgroundSize::Keyword(BackgroundSizeKeyword::Contain)

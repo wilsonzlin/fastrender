@@ -60,7 +60,7 @@ fn non_inheriting_property_resets_to_initial_value() {
     .custom_properties
     .get("--size")
     .expect("root value");
-  match parent_value.typed {
+  match &parent_value.typed {
     Some(CustomPropertyTypedValue::Length(len)) => {
       assert_eq!(len.value, 5.0);
       assert_eq!(len.unit, LengthUnit::Px);
@@ -73,7 +73,7 @@ fn non_inheriting_property_resets_to_initial_value() {
     .custom_properties
     .get("--size")
     .expect("child value");
-  match child_value.typed {
+  match &child_value.typed {
     Some(CustomPropertyTypedValue::Length(len)) => {
       assert_eq!(len.value, 10.0);
       assert_eq!(len.unit, LengthUnit::Px);

@@ -125,9 +125,6 @@ use crate::resource::{
 };
 use crate::style::cascade::apply_style_set_with_media_target_and_imports_cached;
 use crate::style::cascade::apply_style_set_with_media_target_and_imports_cached_with_deadline;
-use crate::style::cascade::apply_styles_with_media_target_and_imports;
-use crate::style::cascade::apply_styles_with_media_target_and_imports_cached;
-use crate::style::cascade::apply_styles_with_media_target_and_imports_cached_with_deadline;
 use crate::style::cascade::ContainerQueryContext;
 use crate::style::cascade::ContainerQueryInfo;
 use crate::style::cascade::StyledNode;
@@ -8342,6 +8339,7 @@ pub(crate) fn render_html_with_shared_resources(
 mod tests {
   use super::*;
   use crate::css::parser::extract_css;
+  use crate::css::types::StyleSheet;
   use crate::dom::DomNodeType;
   use crate::layout::contexts::inline::line_builder::TextItem;
   use crate::layout::engine::LayoutConfig;
@@ -8349,6 +8347,10 @@ mod tests {
   use crate::layout::formatting_context::intrinsic_cache_clear;
   use crate::resource::FetchedResource;
   use crate::style::cascade::StyledNode;
+  use crate::style::cascade::apply_style_set_with_media_target_and_imports_cached;
+  use crate::style::cascade::ContainerQueryContext;
+  use crate::style::media::MediaContext;
+  use crate::style::style_set::StyleSet;
   use crate::style::types::{
     BackgroundImage, ImageResolution, ScrollSnapAlign, ScrollSnapAxis, ScrollSnapStop,
     ScrollSnapStrictness, WritingMode,
@@ -8359,7 +8361,7 @@ mod tests {
   use crate::ComputedStyle;
   use crate::Rect;
   use base64::Engine;
-  use std::collections::HashMap;
+  use std::collections::{HashMap, HashSet};
   use std::io;
   use std::sync::Arc;
 
@@ -8391,6 +8393,32 @@ mod tests {
           ))
         })
     }
+  }
+
+  fn apply_styles_with_media_target_and_imports(
+    dom: &DomNode,
+    stylesheet: &StyleSheet,
+    media_ctx: &MediaContext,
+    target_fragment: Option<&str>,
+    import_loader: Option<&dyn CssImportLoader>,
+    base_url: Option<&str>,
+    container_ctx: Option<&ContainerQueryContext>,
+    container_scope: Option<&HashSet<usize>>,
+    reuse_map: Option<&HashMap<usize, *const StyledNode>>,
+  ) -> StyledNode {
+    let style_set = StyleSet::from_document(stylesheet.clone());
+    apply_style_set_with_media_target_and_imports_cached(
+      dom,
+      &style_set,
+      media_ctx,
+      target_fragment,
+      import_loader,
+      base_url,
+      container_ctx,
+      container_scope,
+      reuse_map,
+      None,
+    )
   }
 
   fn snap_viewport(tree: &mut FragmentTree, scroll: Point) -> Point {
@@ -8944,6 +8972,7 @@ mod tests {
         "#;
     let dom = renderer.parse_html(html).unwrap();
     let stylesheet = extract_css(&dom).unwrap();
+    let style_set = StyleSet::from_document(stylesheet.clone());
     assert!(
       stylesheet
         .rules
@@ -8954,13 +8983,14 @@ mod tests {
     let media_ctx = MediaContext::screen(800.0, 600.0);
     let collected = stylesheet.collect_style_rules(&media_ctx);
     eprintln!("collected rules={}", collected.len());
-    let styled = apply_styles_with_media_target_and_imports(
+    let styled = apply_style_set_with_media_target_and_imports_cached(
       &dom,
-      &stylesheet,
+      &style_set,
       &media_ctx,
       None,
       None,
       None::<&str>,
+      None,
       None,
       None,
       None,
@@ -8989,14 +9019,15 @@ mod tests {
       info.container_type,
       cq_ctx.containers.keys().collect::<Vec<_>>()
     );
-    let styled_with_containers = apply_styles_with_media_target_and_imports(
+    let styled_with_containers = apply_style_set_with_media_target_and_imports_cached(
       &dom,
-      &stylesheet,
+      &style_set,
       &media_ctx,
       None,
       None,
       None::<&str>,
       Some(&cq_ctx),
+      None,
       None,
       None,
     );
@@ -10119,9 +10150,10 @@ mod tests {
       .with_env_overrides();
     let mut media_query_cache = MediaQueryCache::default();
     let stylesheet = renderer.collect_document_stylesheet(&dom, &media_ctx, &mut media_query_cache);
-    let styled = apply_styles_with_media_target_and_imports_cached(
+    let style_set = StyleSet::from_document(stylesheet.clone());
+    let styled = apply_style_set_with_media_target_and_imports_cached(
       &dom,
-      &stylesheet,
+      &style_set,
       &media_ctx,
       None,
       None,

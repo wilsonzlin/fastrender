@@ -63,7 +63,6 @@ use crate::style::ComputedStyle;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
-use rayon::prelude::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;

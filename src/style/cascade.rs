@@ -2460,7 +2460,7 @@ pub fn apply_style_set_with_media_target_and_imports_cached_with_deadline(
     };
     register_collected(&mut registry, author_properties);
 
-    for (_host, _shadow_root_id, sheet) in &shadow_sheets {
+    for (_host, sheet) in &shadow_sheets {
       let shadow_properties = if let Some(cache) = media_cache.as_deref_mut() {
         sheet.collect_property_rules_with_cache(media_ctx, Some(cache))
       } else {

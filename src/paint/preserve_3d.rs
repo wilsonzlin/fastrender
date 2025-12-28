@@ -6,10 +6,10 @@
 //! still sorting planes by depth when possible.
 
 use crate::geometry::Rect;
-use crate::paint::display_list::{
-  DisplayItem, DisplayList, StackingContextItem, Transform2D, Transform3D,
-};
+use crate::paint::display_list::{DisplayItem, DisplayList, StackingContextItem, Transform3D};
 use crate::style::types::{BackfaceVisibility, TransformStyle};
+#[cfg(test)]
+use crate::paint::display_list::Transform2D;
 use std::cmp::Ordering;
 use std::sync::OnceLock;
 

@@ -264,7 +264,6 @@ pub(crate) fn parse_sizes_length(value: &str) -> Option<Length> {
 // StyledNode-based Box Generation (for real DOM/style pipeline)
 // ============================================================================
 
-use crate::style::cascade::StartingStyleSet;
 use crate::style::cascade::StyledNode;
 
 /// Options that control how the box tree is generated from styled DOM.
@@ -2460,6 +2459,7 @@ mod tests {
   use crate::dom::HTML_NAMESPACE;
   use crate::geometry::Size;
   use crate::style;
+  use crate::style::cascade::StartingStyleSet;
   use crate::style::counter_styles::{CounterStyleRegistry, CounterStyleRule, CounterSystem};
   use crate::style::counters::CounterSet;
   use crate::tree::box_tree::FormControl;

@@ -1318,7 +1318,7 @@ impl ResourceFetcher for HttpFetcher {
   }
 }
 
-fn parse_http_cache_policy(headers: &http::HeaderMap) -> Option<HttpCachePolicy> {
+fn parse_http_cache_policy(headers: &HeaderMap) -> Option<HttpCachePolicy> {
   let mut policy = HttpCachePolicy::default();
   if let Some(value) = headers.get("cache-control").and_then(|h| h.to_str().ok()) {
     for directive in value.split(',') {
