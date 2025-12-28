@@ -2472,6 +2472,7 @@ fn match_part_rules<'a>(
           selector_caches,
           scratch,
           host_ancestors,
+          None,
           pseudo,
         );
         for rule in part_matches {
@@ -8179,7 +8180,7 @@ fn find_matching_rules<'a>(
   container_ctx: Option<&ContainerQueryContext>,
   dom_maps: &DomMaps,
   slot_assignment: &SlotAssignment,
-  slot_map: Option<&crate::css::selectors::SlotAssignmentMap<'_>>,
+  slot_map: Option<&'a crate::css::selectors::SlotAssignmentMap<'a>>,
 ) -> Vec<MatchedRule<'a>> {
   if !node.is_element() {
     return Vec::new();
@@ -8335,7 +8336,7 @@ fn find_pseudo_element_rules<'a>(
   selector_caches: &mut SelectorCaches,
   scratch: &mut CascadeScratch,
   ancestors: &[&DomNode],
-  slot_map: Option<&SlotAssignmentMap<'_>>,
+  slot_map: Option<&'a SlotAssignmentMap<'a>>,
   pseudo: &PseudoElement,
 ) -> Vec<MatchedRule<'a>> {
   if !node.is_element() {

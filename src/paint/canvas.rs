@@ -955,7 +955,7 @@ impl Canvas {
     color: Rgba,
     synthetic_bold: f32,
     synthetic_oblique: f32,
-    variations: &[FontVariation],
+    _variations: &[FontVariation],
   ) {
     if glyphs.is_empty() || (color.a == 0.0 && self.current_state.opacity == 0.0) {
       return;

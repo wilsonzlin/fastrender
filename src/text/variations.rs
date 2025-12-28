@@ -28,7 +28,7 @@ pub fn apply_variations_to_face(face: &mut Face<'_>, variations: &[FontVariation
     return;
   }
 
-  let axes: Vec<_> = face.variation_axes().collect();
+  let axes: Vec<_> = face.variation_axes().into_iter().collect();
   if axes.is_empty() {
     return;
   }
