@@ -3259,17 +3259,30 @@ mod tests {
   }
 
   #[test]
-  fn supports_selector_list_fails_when_any_selector_unsupported() {
-    // A selector list that contains an unsupported selector should cause the whole selector()
-    // feature query to evaluate to false per the spec.
-    let css = r"@supports selector(div, span:unknown-pseudo) { .skip { color: red; } }";
+  fn supports_selector_list_is_forgiving() {
+    // A selector list inside selector() is forgiving; a supported selector keeps the query true
+    // even if other entries fail to parse.
+    let css = r"@supports selector(div, span:unknown-pseudo) { .ok { color: red; } }";
+    let stylesheet = parse_stylesheet(css).unwrap();
+    let media = crate::style::media::MediaContext::screen(800.0, 600.0);
+    let rules = stylesheet.collect_style_rules(&media);
+    assert_eq!(
+      rules.len(),
+      1,
+      "supported selector in list should enable nested rules"
+    );
+  }
+
+  #[test]
+  fn supports_selector_list_fails_when_all_unsupported() {
+    let css = r"@supports selector(:unknown-pseudo, :also-unknown) { .skip { color: red; } }";
     let stylesheet = parse_stylesheet(css).unwrap();
     let media = crate::style::media::MediaContext::screen(800.0, 600.0);
     let rules = stylesheet.collect_style_rules(&media);
     assert_eq!(
       rules.len(),
       0,
-      "any unsupported selector in list should disable nested rules"
+      "selector() should fail when no selectors in the list are supported"
     );
   }
 

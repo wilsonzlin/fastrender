@@ -13,9 +13,11 @@ use crate::style::media::MediaContext;
 use crate::style::media::MediaQuery;
 use crate::style::media::MediaQueryCache;
 use crate::style::values::Length;
+use cssparser::ParseError;
 use cssparser::Parser;
 use cssparser::ParserInput;
 use cssparser::ToCss;
+use cssparser::Token;
 use selectors::parser::SelectorList;
 use std::fmt;
 
@@ -987,19 +989,98 @@ impl SupportsCondition {
 
 /// Determines whether a selector list is supported for @supports selector() queries.
 ///
-/// The selector is considered supported when it parses successfully with the engine's selector
-/// grammar. Selectors that fail to parse evaluate to false.
+/// The selector list uses forgiving parsing: if any selector in the list parses successfully with
+/// the engine's selector grammar, the overall condition is considered true.
 fn supports_selector_is_valid(selector_list: &str) -> bool {
+  for selector in split_selector_list(selector_list) {
+    let mut input = ParserInput::new(&selector);
+    let mut parser = Parser::new(&mut input);
+    if SelectorList::parse(
+      &PseudoClassParser,
+      &mut parser,
+      selectors::parser::ParseRelative::No,
+    )
+    .is_ok()
+    {
+      return true;
+    }
+  }
+
+  false
+}
+
+fn split_selector_list(selector_list: &str) -> Vec<String> {
   let mut input = ParserInput::new(selector_list);
   let mut parser = Parser::new(&mut input);
-  match SelectorList::parse(
-    &PseudoClassParser,
-    &mut parser,
-    selectors::parser::ParseRelative::No,
-  ) {
-    Ok(_) => true,
-    Err(_) => false,
+  let mut parts = Vec::new();
+  let mut segment_start = parser.position();
+
+  while !parser.is_exhausted() {
+    let token = match parser.next_including_whitespace() {
+      Ok(token) => token,
+      Err(_) => break,
+    };
+
+    match token {
+      Token::Comma => {
+        let raw = parser.slice_from(segment_start);
+        if let Some(stripped) = raw.strip_suffix(',') {
+          let trimmed = stripped.trim();
+          if !trimmed.is_empty() {
+            parts.push(trimmed.to_string());
+          }
+        }
+        segment_start = parser.position();
+      }
+      Token::Function(_)
+      | Token::ParenthesisBlock
+      | Token::SquareBracketBlock
+      | Token::CurlyBracketBlock => {
+        if parser
+          .parse_nested_block(consume_nested_tokens_for_selector_split)
+          .is_err()
+        {
+          break;
+        }
+      }
+      _ => {}
+    }
   }
+
+  let tail = parser.slice_from(segment_start).trim();
+  if !tail.is_empty() {
+    parts.push(tail.to_string());
+  }
+
+  parts
+}
+
+fn consume_nested_tokens_for_selector_split<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> Result<(), ParseError<'i, ()>> {
+  while !parser.is_exhausted() {
+    let token = match parser.next_including_whitespace() {
+      Ok(token) => token,
+      Err(_) => break,
+    };
+
+    match token {
+      Token::Function(_)
+      | Token::ParenthesisBlock
+      | Token::SquareBracketBlock
+      | Token::CurlyBracketBlock => {
+        if parser
+          .parse_nested_block(consume_nested_tokens_for_selector_split)
+          .is_err()
+        {
+          break;
+        }
+      }
+      _ => {}
+    }
+  }
+
+  Ok(())
 }
 
 #[cfg(test)]
@@ -1022,15 +1103,33 @@ mod tests {
   }
 
   #[test]
-  fn supports_selector_handles_invalid_selector_list() {
+  fn supports_selector_is_forgiving_for_selector_list() {
     let cond = SupportsCondition::Selector("div:unknown-pseudo, span".into());
     assert!(
-      !cond.matches(),
-      "selector() should fail when any selector in the list is unsupported"
+      cond.matches(),
+      "selector() should match when at least one selector in the list is supported"
     );
 
     let cond = SupportsCondition::Selector("div + span".into());
     assert!(cond.matches(), "supported selector list should be accepted");
+  }
+
+  #[test]
+  fn supports_selector_fails_when_no_selectors_supported() {
+    let cond = SupportsCondition::Selector(":unknown-pseudo, :also-unknown".into());
+    assert!(
+      !cond.matches(),
+      "selector() should fail when no selectors in the list are supported"
+    );
+  }
+
+  #[test]
+  fn supports_selector_respects_nested_commas() {
+    let cond = SupportsCondition::Selector(":is(.ok, .also-ok), :unknown-pseudo".into());
+    assert!(
+      cond.matches(),
+      "commas inside functional pseudos should not split the selector list for selector()"
+    );
   }
 
   #[test]
