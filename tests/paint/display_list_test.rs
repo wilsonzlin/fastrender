@@ -877,6 +877,7 @@ fn test_text_item() {
       },
     ],
     color: Rgba::BLACK,
+    palette_index: 0,
     shadows: Vec::new(),
     font_size: 16.0,
     advance_width: 22.0,
@@ -928,7 +929,7 @@ fn sideways_writing_mode_emits_vertical_text_and_decorations() {
     synthetic_bold: 0.0,
     synthetic_oblique: 0.0,
     rotation: RunRotation::None,
-    palette_index: 0,
+    palette_index: 1,
     variations: Vec::new(),
     scale: 1.0,
   };
@@ -957,6 +958,7 @@ fn sideways_writing_mode_emits_vertical_text_and_decorations() {
     .expect("expected text item");
 
   assert_eq!(text_item.glyphs.len(), 1);
+  assert_eq!(text_item.palette_index, 1);
   let glyph = &text_item.glyphs[0];
   assert_eq!(glyph.offset.x, 0.0);
   assert_eq!(glyph.offset.y, 5.0);
@@ -1673,6 +1675,7 @@ fn test_complex_display_list() {
     origin: Point::new(120.0, 150.0),
     glyphs: vec![],
     color: Rgba::BLACK,
+    palette_index: 0,
     shadows: Vec::new(),
     font_size: 16.0,
     advance_width: 100.0,

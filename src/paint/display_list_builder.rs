@@ -2369,6 +2369,7 @@ impl DisplayListBuilder {
               origin,
               glyphs,
               color,
+              palette_index: 0,
               shadows: shadows.clone(),
               font_size,
               advance_width,
@@ -2384,6 +2385,7 @@ impl DisplayListBuilder {
               origin,
               glyphs,
               color,
+              palette_index: 0,
               shadows: shadows.clone(),
               font_size,
               advance_width,
@@ -3463,6 +3465,7 @@ impl DisplayListBuilder {
         origin: Point::new(origin_x, baseline_y),
         glyphs,
         color,
+        palette_index: run.palette_index,
         shadows: shadows.to_vec(),
         font_size: run.font_size,
         advance_width: run.advance,
@@ -3509,6 +3512,7 @@ impl DisplayListBuilder {
         origin: Point::new(block_baseline, inline_start),
         glyphs,
         color,
+        palette_index: run.palette_index,
         shadows: shadows.to_vec(),
         font_size: run.font_size,
         advance_width: run.advance,
@@ -3555,6 +3559,7 @@ impl DisplayListBuilder {
         glyphs,
         font_size: run.font_size,
         color,
+        palette_index: run.palette_index,
         shadows: shadows.to_vec(),
         advance_width: run.advance,
         font_id: Some(font_id),
@@ -3600,6 +3605,7 @@ impl DisplayListBuilder {
         glyphs,
         font_size: run.font_size,
         color,
+        palette_index: run.palette_index,
         shadows: shadows.to_vec(),
         advance_width: run.advance,
         font_id: Some(font_id),
@@ -4165,6 +4171,7 @@ impl DisplayListBuilder {
               .copied()
               .map(FontVariation::from)
               .collect();
+            let mark_palette_index = mark_runs.first().map(|r| r.palette_index).unwrap_or(0);
             let mut glyphs = Vec::new();
             let mut width = 0.0;
             let mut ascent: f32 = 0.0;
@@ -4214,6 +4221,9 @@ impl DisplayListBuilder {
               height: ascent + descent,
               baseline_offset: ascent,
               variations: mark_variations,
+              palette_index: mark_palette_index,
+              variations: mark_variations,
+              palette_index: mark_palette_index,
             })
           }
           _ => None,
@@ -4538,6 +4548,7 @@ impl DisplayListBuilder {
       origin,
       glyphs,
       color,
+      palette_index: 0,
       shadows,
       font_size,
       advance_width,

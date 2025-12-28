@@ -580,6 +580,9 @@ pub struct TextItem {
   /// Text color
   pub color: Rgba,
 
+  /// Selected CPAL palette index for color fonts.
+  pub palette_index: u16,
+
   /// Shadows to paint before the fill
   pub shadows: Vec<TextShadowItem>,
 
@@ -641,6 +644,7 @@ pub struct EmphasisText {
   pub height: f32,
   pub baseline_offset: f32,
   pub variations: Vec<FontVariation>,
+  pub palette_index: u16,
 }
 
 /// Resolved emphasis data for a text run.
@@ -764,6 +768,9 @@ pub struct ListMarkerItem {
 
   /// Text color
   pub color: Rgba,
+
+  /// Selected CPAL palette index for color fonts.
+  pub palette_index: u16,
 
   /// Text shadows applied to the marker
   pub shadows: Vec<TextShadowItem>,

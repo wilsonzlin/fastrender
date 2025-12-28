@@ -1483,6 +1483,7 @@ impl DisplayListRenderer {
       origin: item.origin,
       glyphs: item.glyphs.clone(),
       color: item.color,
+      palette_index: item.palette_index,
       shadows: item.shadows.clone(),
       font_size: item.font_size,
       advance_width: item.advance_width,
@@ -1498,6 +1499,7 @@ impl DisplayListRenderer {
       origin: scaled.origin,
       glyphs: scaled.glyphs,
       color: scaled.color,
+      palette_index: scaled.palette_index,
       shadows: scaled.shadows,
       font_size: scaled.font_size,
       advance_width: scaled.advance_width,
@@ -3628,6 +3630,7 @@ impl DisplayListRenderer {
       item.color,
       item.synthetic_bold,
       item.synthetic_oblique,
+      item.palette_index,
       &item.variations,
     );
     if let Some(emphasis) = &item.emphasis {
@@ -3646,6 +3649,7 @@ impl DisplayListRenderer {
       origin: item.origin,
       glyphs: item.glyphs.clone(),
       color: item.color,
+      palette_index: item.palette_index,
       shadows: item.shadows.clone(),
       font_size: item.font_size,
       advance_width: item.advance_width,
@@ -4056,6 +4060,7 @@ impl DisplayListRenderer {
             emphasis.color,
             0.0,
             0.0,
+            text.palette_index,
             &text.variations,
           );
         }
@@ -5540,7 +5545,9 @@ mod tests {
   use crate::style::values::Length;
   use crate::style::values::LengthUnit;
   use crate::style::ComputedStyle;
+  use crate::text::font_db::FontDatabase;
   use crate::tree::fragment_tree::FragmentNode;
+  use std::collections::HashMap;
   use std::sync::Arc;
 
   fn pixel(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
@@ -6578,6 +6585,7 @@ mod tests {
         advance: 14.0,
       }],
       color: Rgba::BLACK,
+      palette_index: 0,
       shadows: vec![TextShadowItem {
         offset: Point::new(4.0, 0.0),
         blur_radius: 0.0,
@@ -6643,6 +6651,7 @@ mod tests {
         advance: 14.0,
       }],
       color: Rgba::BLACK,
+      palette_index: 0,
       shadows: vec![TextShadowItem {
         offset: Point::new(2.0, 0.0),
         blur_radius: 0.0,
@@ -6738,6 +6747,7 @@ mod tests {
         advance: 14.0,
       }],
       color: Rgba::BLACK,
+      palette_index: 0,
       shadows: vec![TextShadowItem {
         offset: Point::new(0.0, 0.0),
         blur_radius: 4.0,
@@ -6813,6 +6823,7 @@ mod tests {
         advance: 14.0,
       }],
       color: Rgba::BLACK,
+      palette_index: 0,
       shadows: vec![TextShadowItem {
         offset: Point::new(10.0, 20.0), // percent(50%) + em(1.0) resolved against font size 20px
         blur_radius: 0.0,
@@ -6858,12 +6869,112 @@ mod tests {
   }
 
   #[test]
+  fn text_palette_selection_affects_color_glyphs() {
+    let mut db = FontDatabase::empty();
+    let Ok(font_data) = std::fs::read("tests/fonts/ColorTestCOLR.ttf") else {
+      return;
+    };
+    if db.load_font_data(font_data).is_err() {
+      return;
+    }
+    let font_ctx = FontContext::with_database(Arc::new(db));
+    let family = "ColorTestCOLR".to_string();
+    let Some(font) = font_ctx.get_font_full(
+      &[family.clone()],
+      400,
+      DbFontStyle::Normal,
+      FontStretch::Normal,
+    ) else {
+      return;
+    };
+    let Ok(face) = font.as_ttf_face() else {
+      return;
+    };
+    let Some(glyph_id) = face.glyph_index('A') else {
+      return;
+    };
+    let units_per_em = face.units_per_em() as f32;
+    if units_per_em == 0.0 {
+      return;
+    }
+    let font_size = 32.0;
+    let advance = face.glyph_hor_advance(glyph_id).unwrap_or(0) as f32 * font_size / units_per_em;
+    let glyphs = vec![GlyphInstance {
+      glyph_id: glyph_id.0 as u32,
+      offset: Point::new(0.0, 0.0),
+      advance,
+    }];
+    let font_id = FontId {
+      family,
+      weight: font.weight.value(),
+      style: font.style,
+      stretch: font.stretch,
+    };
+
+    let render_with_palette = |palette_index: u16, font_ctx: FontContext| {
+      let mut list = DisplayList::new();
+      list.push(DisplayItem::Text(TextItem {
+        origin: Point::new(10.0, 50.0),
+        glyphs: glyphs.clone(),
+        color: Rgba::BLACK,
+        palette_index,
+        shadows: Vec::new(),
+        font_size,
+        advance_width: advance,
+        font_id: Some(font_id.clone()),
+        synthetic_bold: 0.0,
+        synthetic_oblique: 0.0,
+        emphasis: None,
+        decorations: Vec::new(),
+      }));
+      DisplayListRenderer::new(80, 80, Rgba::WHITE, font_ctx)
+        .expect("renderer")
+        .render(&list)
+        .expect("rendered")
+    };
+
+    let pix0 = render_with_palette(0, font_ctx.clone());
+    let pix1 = render_with_palette(1, font_ctx);
+    assert_ne!(
+      pix0.data(),
+      pix1.data(),
+      "palette index should affect rasterization"
+    );
+
+    let dominant_color = |pix: &Pixmap| -> Option<(u8, u8, u8, u8)> {
+      let mut counts: HashMap<(u8, u8, u8, u8), usize> = HashMap::new();
+      for px in pix.data().chunks_exact(4) {
+        if px[3] == 0 {
+          continue;
+        }
+        let key = (px[0], px[1], px[2], px[3]);
+        if key == (255, 255, 255, 255) {
+          continue;
+        }
+        *counts.entry(key).or_insert(0) += 1;
+      }
+      counts
+        .into_iter()
+        .max_by_key(|(_, count)| *count)
+        .map(|(color, _)| color)
+    };
+
+    let primary0 = dominant_color(&pix0).expect("palette 0 glyph color");
+    let primary1 = dominant_color(&pix1).expect("palette 1 glyph color");
+    assert_ne!(
+      primary0, primary1,
+      "palettes should produce different primary colors"
+    );
+  }
+
+  #[test]
   fn renders_text_emphasis_marks() {
     let mut list = DisplayList::new();
     list.push(DisplayItem::Text(TextItem {
       origin: Point::new(20.0, 30.0),
       glyphs: Vec::new(),
       color: Rgba::BLACK,
+      palette_index: 0,
       shadows: vec![],
       font_size: 16.0,
       advance_width: 0.0,

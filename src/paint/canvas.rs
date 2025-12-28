@@ -927,6 +927,8 @@ impl Canvas {
   /// * `font` - Font containing glyph outlines
   /// * `font_size` - Font size in pixels
   /// * `color` - Text color
+  /// * `palette_index` - CPAL palette selection for color fonts
+  /// * `variations` - Font variation coordinates applied when shaping
   ///
   /// # Examples
   ///
@@ -943,7 +945,8 @@ impl Canvas {
   ///   Rgba::BLACK,
   ///   run.synthetic_bold,
   ///   run.synthetic_oblique,
-  ///   &[],
+  ///   run.palette_index,
+  ///   &run.variations,
   /// );
   /// ```
   pub fn draw_text(
@@ -955,7 +958,8 @@ impl Canvas {
     color: Rgba,
     synthetic_bold: f32,
     synthetic_oblique: f32,
-    _variations: &[FontVariation],
+    palette_index: u16,
+    variations: &[FontVariation],
   ) {
     if glyphs.is_empty() || (color.a == 0.0 && self.current_state.opacity == 0.0) {
       return;
@@ -977,6 +981,8 @@ impl Canvas {
       color,
       synthetic_bold,
       synthetic_oblique,
+      palette_index,
+      variations,
       None,
       state,
       &mut self.pixmap,

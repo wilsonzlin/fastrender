@@ -7,6 +7,7 @@ use fastrender::paint::display_list_renderer::DisplayListRenderer;
 use fastrender::style::color::Rgba;
 use fastrender::text::font_db::FontDatabase;
 use fastrender::text::pipeline::{Direction, ShapedRun, ShapingPipeline};
+use fastrender::text::variations::FontVariation;
 use fastrender::{ComputedStyle, FontContext, Point};
 
 fn load_color_font_context() -> (FontContext, String) {
@@ -54,6 +55,7 @@ fn text_item_from_run(run: &ShapedRun, origin: Point, text_color: Rgba) -> TextI
     origin,
     glyphs,
     color: text_color,
+    palette_index: run.palette_index,
     shadows: Vec::new(),
     font_size: run.font_size,
     advance_width: run.advance,
@@ -63,6 +65,12 @@ fn text_item_from_run(run: &ShapedRun, origin: Point, text_color: Rgba) -> TextI
       style: run.font.style,
       stretch: run.font.stretch,
     }),
+    variations: run
+      .variations
+      .iter()
+      .copied()
+      .map(FontVariation::from)
+      .collect(),
     synthetic_bold: run.synthetic_bold,
     synthetic_oblique: run.synthetic_oblique,
     emphasis: None,
