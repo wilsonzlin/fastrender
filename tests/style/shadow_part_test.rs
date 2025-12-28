@@ -1,9 +1,13 @@
 use fastrender::css::parser::parse_stylesheet;
 use fastrender::css::types::StyleSheet;
 use fastrender::dom::parse_html;
-use fastrender::style::cascade::{apply_style_set_with_media_target_and_imports, StyledNode};
+use fastrender::style::cascade::{
+  apply_style_set_with_media_target_and_imports, apply_styles_with_media_target_and_imports,
+  StyledNode,
+};
 use fastrender::style::media::MediaContext;
 use fastrender::style::style_set::StyleSet;
+use fastrender::style::values::Length;
 use fastrender::Rgba;
 use std::collections::HashMap;
 
@@ -118,4 +122,48 @@ fn exportparts_chain_maps_part_names() {
   let label = find_by_id(&styled, "inner-label").expect("inner part");
 
   assert_eq!(label.styles.color, Rgba::rgb(10, 20, 30));
+}
+
+#[test]
+fn nested_shadow_roots_resolve_part_order_stably() {
+  let html = r#"
+    <x-outer id="outer">
+      <template shadowroot="open">
+        <style>
+          .inner::part(label) {
+            color: rgb(1, 2, 3);
+            border-top: 7px solid rgb(1, 2, 3);
+          }
+        </style>
+        <x-inner id="inner" class="inner">
+          <template shadowroot="open">
+            <style>
+              .target {
+                color: rgb(4, 5, 6);
+              }
+            </style>
+            <span id="part" class="target" part="label">Inner</span>
+          </template>
+        </x-inner>
+      </template>
+    </x-outer>
+  "#;
+
+  let dom = parse_html(html).expect("parsed html");
+  let media = MediaContext::screen(800.0, 600.0);
+  let styled = apply_styles_with_media_target_and_imports(
+    &dom,
+    &StyleSheet::new(),
+    &media,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+  );
+  let part = find_by_id(&styled, "part").expect("shadow part");
+
+  assert_eq!(part.styles.border_top_width, Length::px(7.0));
+  assert_eq!(part.styles.color, Rgba::rgb(4, 5, 6));
 }
