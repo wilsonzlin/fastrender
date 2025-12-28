@@ -2929,6 +2929,12 @@ fn shaping_style_hash(style: &ComputedStyle) -> u64 {
     }
   }
 
+  // Palette overrides can resolve currentColor, so cache entries must vary with text color.
+  style.color.r.hash(&mut hasher);
+  style.color.g.hash(&mut hasher);
+  style.color.b.hash(&mut hasher);
+  style.color.a.to_bits().hash(&mut hasher);
+
   std::mem::discriminant(&style.font_variant).hash(&mut hasher);
   std::mem::discriminant(&style.font_variant_caps).hash(&mut hasher);
   std::mem::discriminant(&style.font_variant_emoji).hash(&mut hasher);
