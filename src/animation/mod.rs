@@ -47,7 +47,6 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 use std::mem::discriminant;
 use std::sync::Arc;
-use std::time::Duration;
 
 use crate::style::color::Rgba;
 
