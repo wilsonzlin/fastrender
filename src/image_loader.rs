@@ -1278,11 +1278,8 @@ impl ImageCache {
       }
     };
     if let Some(ctx) = &self.resource_context {
-      if let Err(err) = ctx.check_allowed_with_final(
-        ResourceKind::Image,
-        resolved_url,
-        resource.final_url.as_deref(),
-      ) {
+      let policy_url = resource.final_url.as_deref().unwrap_or(resolved_url);
+      if let Err(err) = ctx.check_allowed(ResourceKind::Image, policy_url) {
         let blocked = Error::Image(ImageError::LoadFailed {
           url: resolved_url.to_string(),
           reason: err.reason,
@@ -1409,11 +1406,8 @@ impl ImageCache {
       }
     };
     if let Some(ctx) = &self.resource_context {
-      if let Err(err) = ctx.check_allowed_with_final(
-        ResourceKind::Image,
-        resolved_url,
-        resource.final_url.as_deref(),
-      ) {
+      let policy_url = resource.final_url.as_deref().unwrap_or(resolved_url);
+      if let Err(err) = ctx.check_allowed(ResourceKind::Image, policy_url) {
         let blocked = Error::Image(ImageError::LoadFailed {
           url: resolved_url.to_string(),
           reason: err.reason,

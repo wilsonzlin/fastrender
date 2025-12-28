@@ -6,6 +6,7 @@
 //! wiring a full animation engine.
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use crate::css::types::{Keyframe, KeyframesRule};
 use crate::debug::runtime;

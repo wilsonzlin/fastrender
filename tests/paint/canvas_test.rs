@@ -6,14 +6,12 @@
 use fastrender::geometry::Point;
 use fastrender::geometry::Rect;
 use fastrender::image_compare::{compare_images, decode_png, encode_png, CompareConfig};
-use fastrender::paint::display_list::{
-  BorderRadius, FontVariation as DlFontVariation, GlyphInstance,
-};
+use fastrender::paint::display_list::BorderRadius;
+use fastrender::paint::display_list::FontVariation;
 use fastrender::style::types::FontPalette;
 use fastrender::text::color_fonts::ColorFontRenderer;
 use fastrender::text::font_db::FontDatabase;
 use fastrender::text::font_instance::FontInstance;
-use fastrender::text::variations::FontVariation;
 use fastrender::BlendMode;
 use fastrender::BorderRadii;
 use fastrender::Canvas;
@@ -530,22 +528,14 @@ fn test_draw_text_with_glyphs() {
   let variations: Vec<_> = run
     .variations
     .iter()
-    .map(|v| DlFontVariation::new(v.tag, v.value))
-    .collect();
-  let glyphs: Vec<GlyphInstance> = run
-    .glyphs
-    .iter()
-    .map(|g| GlyphInstance {
-      glyph_id: g.glyph_id,
-      offset: Point::new(g.x_offset, g.y_offset),
-      advance: g.x_advance,
-    })
+    .copied()
+    .map(FontVariation::from)
     .collect();
 
   // Draw the glyphs
   canvas.draw_text(
     Point::new(10.0, 30.0),
-    &glyphs,
+    &run.glyphs,
     &run.font,
     run.font_size,
     Rgba::BLACK,
@@ -580,20 +570,12 @@ fn test_draw_text_colored() {
   let variations: Vec<_> = run
     .variations
     .iter()
-    .map(|v| DlFontVariation::new(v.tag, v.value))
-    .collect();
-  let glyphs: Vec<GlyphInstance> = run
-    .glyphs
-    .iter()
-    .map(|g| GlyphInstance {
-      glyph_id: g.glyph_id,
-      offset: Point::new(g.x_offset, g.y_offset),
-      advance: g.x_advance,
-    })
+    .copied()
+    .map(FontVariation::from)
     .collect();
   canvas.draw_text(
     Point::new(10.0, 35.0),
-    &glyphs,
+    &run.glyphs,
     &run.font,
     run.font_size,
     Rgba::rgb(255, 0, 0),
@@ -630,20 +612,12 @@ fn test_draw_text_with_opacity() {
   let variations: Vec<_> = run
     .variations
     .iter()
-    .map(|v| DlFontVariation::new(v.tag, v.value))
-    .collect();
-  let glyphs: Vec<GlyphInstance> = run
-    .glyphs
-    .iter()
-    .map(|g| GlyphInstance {
-      glyph_id: g.glyph_id,
-      offset: Point::new(g.x_offset, g.y_offset),
-      advance: g.x_advance,
-    })
+    .copied()
+    .map(FontVariation::from)
     .collect();
   canvas.draw_text(
     Point::new(10.0, 35.0),
-    &glyphs,
+    &run.glyphs,
     &run.font,
     run.font_size,
     Rgba::BLACK,
@@ -677,22 +651,14 @@ fn canvas_renders_color_fonts() {
   let variations: Vec<_> = run
     .variations
     .iter()
-    .map(|v| DlFontVariation::new(v.tag, v.value))
-    .collect();
-  let glyphs: Vec<GlyphInstance> = run
-    .glyphs
-    .iter()
-    .map(|g| GlyphInstance {
-      glyph_id: g.glyph_id,
-      offset: Point::new(g.x_offset, g.y_offset),
-      advance: g.x_advance,
-    })
+    .copied()
+    .map(FontVariation::from)
     .collect();
 
   let mut canvas = Canvas::new(64, 64, Rgba::WHITE).unwrap();
   canvas.draw_text(
     Point::new(12.0, 48.0),
-    &glyphs,
+    &run.glyphs,
     &run.font,
     run.font_size * run.scale,
     Rgba::BLACK,
@@ -762,7 +728,7 @@ fn canvas_respects_font_palette() {
       palette_glyph.glyph_id,
       palette_run.font_size,
       palette_run.palette_index,
-      &[],
+      palette_run.palette_overrides.as_ref(),
       Rgba::BLACK,
       palette_run.synthetic_oblique,
       &palette_run.variations,
@@ -813,7 +779,7 @@ fn canvas_respects_font_palette() {
       normal_glyph.glyph_id,
       normal_run.font_size,
       normal_run.palette_index,
-      &[],
+      normal_run.palette_overrides.as_ref(),
       Rgba::BLACK,
       normal_run.synthetic_oblique,
       &normal_run.variations,

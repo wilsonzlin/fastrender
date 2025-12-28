@@ -40,14 +40,13 @@ fn get_test_font() -> Option<fastrender::text::font_db::LoadedFont> {
   ctx.get_sans_serif()
 }
 
-// Use a known-good variable font fixture; some older test assets were corrupt HTML downloads.
-const VAR_FONT: &[u8] = include_bytes!("../fonts/RobotoFlex-VF.ttf");
+const VAR_FONT: &[u8] = include_bytes!("../fixtures/fonts/AmstelvarAlpha-VF.ttf");
 
 fn variable_font() -> LoadedFont {
   LoadedFont {
     data: Arc::new(VAR_FONT.to_vec()),
     index: 0,
-    family: "Roboto Flex".to_string(),
+    family: "AmstelvarAlpha".to_string(),
     weight: FontWeight::NORMAL,
     style: FontStyle::Normal,
     stretch: FontStretch::Normal,
@@ -1528,11 +1527,11 @@ fn test_vertical_rendering_extents() {
 
   assert!(
     v_height > h_height,
-    "vertical text should extend along the y axis (vertical height {v_height}, horizontal height {h_height})"
+    "vertical text should extend along the y axis"
   );
   assert!(
     v_width < h_width,
-    "vertical text should occupy less horizontal span than horizontal text (vertical width {v_width}, horizontal width {h_width})"
+    "vertical text should occupy less horizontal span than horizontal text"
   );
 }
 

@@ -172,7 +172,7 @@ fn svg_node_has_external_reference(node: &roxmltree::Node<'_, '_>) -> bool {
 
 fn svg_href_value<'a>(node: &'a roxmltree::Node<'a, 'a>) -> Option<&'a str> {
   for attr in node.attributes() {
-    if attr.name().eq_ignore_ascii_case("href") {
+    if attr.name().to_string().eq_ignore_ascii_case("href") {
       return Some(attr.value());
     }
   }

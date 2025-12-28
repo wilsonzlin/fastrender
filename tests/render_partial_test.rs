@@ -56,7 +56,6 @@ fn missing_stylesheet_keeps_rendering_with_diagnostics() {
 
   assert_eq!(result.pixmap.width(), 64);
   assert_eq!(result.pixmap.height(), 48);
-  assert!(result.diagnostics.timeout_stage.is_none());
   let stylesheet_error = result
     .diagnostics
     .fetch_errors

@@ -470,6 +470,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   let engine = LayoutEngine::with_font_context(layout_config, renderer.font_context().clone());
   let fragment_tree = engine.layout_tree(&box_tree)?;
   let scroll_offset = Point::new(-args.scroll_x, -args.scroll_y);
+  let scroll_state = ScrollState::with_viewport(Point::new(args.scroll_x, args.scroll_y));
   let mut box_debug: HashMap<usize, String> = HashMap::new();
   collect_box_debug(&box_tree.root, &mut box_debug);
   let mut box_styles: HashMap<usize, std::sync::Arc<ComputedStyle>> = HashMap::new();
@@ -2070,6 +2071,10 @@ fn absolute_rect(
   );
   let next_offset = if include_base { offset } else { abs.origin };
   (abs, next_offset)
+}
+
+fn element_scroll(_fragment: &FragmentNode, _scroll: &ScrollState) -> Point {
+  Point::ZERO
 }
 
 fn collect_fragments_abs<'a>(

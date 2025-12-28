@@ -10,10 +10,9 @@ use crate::compat::CompatProfile;
 use crate::debug::runtime;
 use crate::dom::DomNode;
 use crate::dom::DomNodeType;
-use crate::dom::ElementRef;
 use crate::dom::SVG_NAMESPACE;
 use crate::geometry::Size;
-use crate::style::color::Rgba;
+use crate::style::cascade::StartingStyleSet;
 use crate::style::computed::Visibility;
 use crate::style::content::ContentContext;
 use crate::style::content::ContentItem;
@@ -22,7 +21,6 @@ use crate::style::content::CounterStyle;
 use crate::style::counter_styles::CounterStyleName;
 use crate::style::counters::CounterManager;
 use crate::style::counters::CounterSet;
-use crate::style::defaults::parse_color_attribute;
 use crate::style::display::Display;
 use crate::style::display::FormattingContextType;
 use crate::style::media::MediaQuery;
@@ -52,9 +50,7 @@ use crate::tree::box_tree::SizesList;
 use crate::tree::box_tree::SrcsetCandidate;
 use crate::tree::box_tree::SrcsetDescriptor;
 use crate::tree::box_tree::SvgContent;
-use crate::tree::box_tree::TextControlKind;
 use crate::tree::debug::DebugInfo;
-use crate::tree::table_fixup::TableStructureFixer;
 use cssparser::Parser;
 use cssparser::ParserInput;
 use cssparser::Token;
@@ -372,9 +368,6 @@ pub fn generate_box_tree_with_anonymous_fixup_with_options(
 ) -> BoxTree {
   let root = build_box_tree_root(styled, options);
   let fixed_root = AnonymousBoxCreator::fixup_tree(root);
-  let fixed_root = TableStructureFixer::fixup_tree_internals(fixed_root).unwrap_or_else(|err| {
-    panic!("table structure fixup failed: {err}");
-  });
   BoxTree::new(fixed_root)
 }
 
@@ -2092,36 +2085,6 @@ fn create_form_control_replaced(styled: &StyledNode) -> Option<FormControl> {
   }
 
   let disabled = styled.node.get_attribute("disabled").is_some();
-  let inert = styled.node.get_attribute("inert").is_some()
-    || styled
-      .node
-      .get_attribute("data-fastr-inert")
-      .map(|v| v.eq_ignore_ascii_case("true"))
-      .unwrap_or(false);
-  let focus_flag = styled
-    .node
-    .get_attribute("data-fastr-focus")
-    .map(|v| v.eq_ignore_ascii_case("true"))
-    .unwrap_or(false);
-  let focus_visible_flag = styled
-    .node
-    .get_attribute("data-fastr-focus-visible")
-    .map(|v| v.eq_ignore_ascii_case("true"))
-    .unwrap_or(false);
-  let mut focused = (focus_flag || focus_visible_flag) && !inert;
-  let mut focus_visible = focus_visible_flag && !inert;
-  if !focused {
-    focus_visible = false;
-  }
-  if disabled {
-    focused = false;
-    focus_visible = false;
-  }
-  let element_ref = ElementRef::new(&styled.node);
-  let required = element_ref.accessibility_required() && !disabled;
-  let mut invalid = element_ref.accessibility_supports_validation()
-    && !element_ref.accessibility_is_valid()
-    && !disabled;
 
   match tag.as_str() {
     "input" => {
@@ -2139,21 +2102,10 @@ fn create_form_control_replaced(styled: &StyledNode) -> Option<FormControl> {
         "checkbox" => FormControlKind::Checkbox {
           is_radio: false,
           checked: styled.node.get_attribute("checked").is_some(),
-          indeterminate: styled
-            .node
-            .get_attribute("indeterminate")
-            .map(|v| v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false)
-            || styled
-              .node
-              .get_attribute("aria-checked")
-              .map(|v| v.eq_ignore_ascii_case("mixed"))
-              .unwrap_or(false),
         },
         "radio" => FormControlKind::Checkbox {
           is_radio: true,
           checked: styled.node.get_attribute("checked").is_some(),
-          indeterminate: false,
         },
         "button" | "submit" | "reset" => FormControlKind::Button {
           label: input_label(&styled.node, &input_type),
@@ -2163,97 +2115,23 @@ fn create_form_control_replaced(styled: &StyledNode) -> Option<FormControl> {
           min: parse_f32_attr(&styled.node, "min"),
           max: parse_f32_attr(&styled.node, "max"),
         },
-        "color" => {
-          let raw_value = styled.node.get_attribute("value").filter(|v| !v.is_empty());
-          let parsed = raw_value.as_ref().and_then(|v| parse_color_attribute(v));
-          let color_value = parsed.unwrap_or(Rgba {
-            r: 0,
-            g: 0,
-            b: 0,
-            a: 1.0,
-          });
-          if raw_value.is_some() && parsed.is_none() && !disabled {
-            invalid = true;
-          }
-          FormControlKind::Color {
-            value: color_value,
-            raw: raw_value,
-          }
-        }
-        _ => {
-          let size_attr = styled
-            .node
-            .get_attribute("size")
-            .and_then(|s| s.parse::<u32>().ok());
-          let raw_placeholder = styled
+        _ => FormControlKind::Text {
+          value: styled.node.get_attribute("value").unwrap_or_default(),
+          placeholder: styled
             .node
             .get_attribute("placeholder")
-            .filter(|p| !p.is_empty());
-          let mut placeholder = raw_placeholder.clone();
-          let value = styled.node.get_attribute("value").unwrap_or_default();
-
-          let kind = match input_type.as_str() {
-            "password" => TextControlKind::Password,
-            "number" => TextControlKind::Number,
-            "date" => {
-              placeholder.get_or_insert_with(|| "yyyy-mm-dd".to_string());
-              TextControlKind::Date
-            }
-            "datetime-local" => {
-              placeholder.get_or_insert_with(|| "yyyy-mm-dd hh:mm".to_string());
-              TextControlKind::Date
-            }
-            "month" => {
-              placeholder.get_or_insert_with(|| "yyyy-mm".to_string());
-              TextControlKind::Date
-            }
-            "week" => {
-              placeholder.get_or_insert_with(|| "yyyy-Www".to_string());
-              TextControlKind::Date
-            }
-            "time" => {
-              placeholder.get_or_insert_with(|| "hh:mm".to_string());
-              TextControlKind::Date
-            }
-            "text" | "search" | "url" | "tel" | "email" | "" => TextControlKind::Plain,
-            other => {
-              let label = if let Some(val) = raw_placeholder {
-                Some(val)
-              } else if let Some(val) = styled.node.get_attribute("value").filter(|v| !v.is_empty())
-              {
-                Some(val)
-              } else {
-                Some(other.to_ascii_uppercase())
-              };
-              return Some(FormControl {
-                control: FormControlKind::Unknown { label },
-                appearance,
-                disabled,
-                focused,
-                focus_visible,
-                required,
-                invalid,
-              });
-            }
-          };
-
-          FormControlKind::Text {
-            value,
-            placeholder,
-            size_attr,
-            kind,
-          }
-        }
+            .filter(|p| !p.is_empty()),
+          size_attr: styled
+            .node
+            .get_attribute("size")
+            .and_then(|s| s.parse::<u32>().ok()),
+        },
       };
 
       Some(FormControl {
         control,
         appearance,
         disabled,
-        focused,
-        focus_visible,
-        required,
-        invalid,
       })
     }
     "textarea" => Some(FormControl {
@@ -2270,10 +2148,6 @@ fn create_form_control_replaced(styled: &StyledNode) -> Option<FormControl> {
       },
       appearance,
       disabled,
-      focused,
-      focus_visible,
-      required,
-      invalid,
     }),
     "select" => {
       let label = select_label(&styled.node).unwrap_or_else(|| "Select".to_string());
@@ -2284,10 +2158,6 @@ fn create_form_control_replaced(styled: &StyledNode) -> Option<FormControl> {
         },
         appearance,
         disabled,
-        focused,
-        focus_visible,
-        required,
-        invalid,
       })
     }
     "button" => Some(FormControl {
@@ -2296,10 +2166,6 @@ fn create_form_control_replaced(styled: &StyledNode) -> Option<FormControl> {
       },
       appearance,
       disabled,
-      focused,
-      focus_visible,
-      required,
-      invalid,
     }),
     _ => None,
   }
@@ -2459,14 +2325,12 @@ mod tests {
   use crate::dom::HTML_NAMESPACE;
   use crate::geometry::Size;
   use crate::style;
-  use crate::style::cascade::StartingStyleSet;
   use crate::style::counter_styles::{CounterStyleRegistry, CounterStyleRule, CounterSystem};
   use crate::style::counters::CounterSet;
   use crate::tree::box_tree::FormControl;
   use crate::tree::box_tree::FormControlKind;
   use crate::tree::box_tree::MarkerContent;
   use crate::tree::box_tree::ReplacedType;
-  use crate::tree::box_tree::TextControlKind;
 
   fn default_style() -> Arc<ComputedStyle> {
     Arc::new(ComputedStyle::default())
@@ -2671,8 +2535,7 @@ mod tests {
       ReplacedType::FormControl(FormControl {
         control: FormControlKind::Checkbox {
           is_radio: false,
-          checked: true,
-          ..
+          checked: true
         },
         ..
       })
@@ -2685,185 +2548,6 @@ mod tests {
         ..
       }) if label == "One"
     )));
-  }
-
-  #[test]
-  fn new_form_control_input_types_are_identified() {
-    let html = "<html><body>
-      <input type=\"password\" value=\"abc\">
-      <input type=\"number\" value=\"5\" data-fastr-focus=\"true\" data-fastr-focus-visible=\"true\">
-      <input type=\"color\" value=\"#00ff00\">
-      <input type=\"color\" value=\"not-a-color\" disabled>
-      <input type=\"date\" required>
-      <input type=\"datetime-local\">
-      <input type=\"month\">
-      <input type=\"week\">
-      <input type=\"time\">
-      <input type=\"number\" size=\"7\" placeholder=\"sized number\">
-      <input type=\"checkbox\" indeterminate=\"true\">
-      <input type=\"foo\" placeholder=\"mystery\" data-fastr-focus-visible=\"true\">
-      <input size=\"5\" value=\"sized\">
-      <textarea rows=\"4\" cols=\"10\">hi</textarea>
-    </body></html>";
-    let dom = crate::dom::parse_html(html).expect("parse");
-    let styled = crate::style::cascade::apply_styles(&dom, &crate::css::types::StyleSheet::new());
-    let box_tree = generate_box_tree(&styled);
-
-    fn collect_controls(node: &BoxNode, out: &mut Vec<FormControl>) {
-      if let BoxType::Replaced(repl) = &node.box_type {
-        if let ReplacedType::FormControl(control) = &repl.replaced_type {
-          out.push(control.clone());
-        }
-      }
-      for child in &node.children {
-        collect_controls(child, out);
-      }
-    }
-
-    let mut controls = Vec::new();
-    collect_controls(&box_tree.root, &mut controls);
-
-    assert!(
-      controls.iter().any(|c| matches!(
-        &c.control,
-        FormControlKind::Text {
-          kind: TextControlKind::Password,
-          ..
-        }
-      )),
-      "password input should map to password text control"
-    );
-    assert!(
-      controls.iter().any(|c| matches!(
-        &c.control,
-        FormControlKind::Text {
-          kind: TextControlKind::Number,
-          value,
-          ..
-        } if value == "5"
-      ) && c.focus_visible),
-      "number input should be recognized and keep focus-visible hint"
-    );
-    assert!(
-      controls
-        .iter()
-        .any(|c| matches!(&c.control, FormControlKind::Color { .. })),
-      "color input should generate a color control"
-    );
-    assert!(
-      controls.iter().any(|c| {
-        matches!(
-          &c.control,
-          FormControlKind::Color { raw, .. } if raw.as_deref() == Some("not-a-color")
-        ) && c.disabled
-          && !c.invalid
-      }),
-      "disabled color inputs with invalid values should stay valid for painting"
-    );
-    assert!(
-      controls.iter().any(|c| matches!(
-        &c.control,
-        FormControlKind::Text {
-          kind: TextControlKind::Date,
-          ..
-        }
-      ) && c.required
-        && c.invalid),
-      "required date input without value should be marked invalid"
-    );
-    assert!(
-      controls.iter().any(|c| matches!(
-        &c.control,
-        FormControlKind::Text {
-          kind: TextControlKind::Date,
-          placeholder,
-          ..
-        } if placeholder.as_deref() == Some("yyyy-mm-dd hh:mm")
-      )),
-      "datetime-local inputs should synthesize a datetime placeholder"
-    );
-    assert!(
-      controls.iter().any(|c| matches!(
-        &c.control,
-        FormControlKind::Text {
-          kind: TextControlKind::Date,
-          placeholder,
-          ..
-        } if placeholder.as_deref() == Some("yyyy-mm")
-      )),
-      "month inputs should synthesize a month placeholder"
-    );
-    assert!(
-      controls.iter().any(|c| matches!(
-        &c.control,
-        FormControlKind::Text {
-          kind: TextControlKind::Date,
-          placeholder,
-          ..
-        } if placeholder.as_deref() == Some("yyyy-Www")
-      )),
-      "week inputs should synthesize a week placeholder"
-    );
-    assert!(
-      controls.iter().any(|c| matches!(
-        &c.control,
-        FormControlKind::Text {
-          kind: TextControlKind::Date,
-          placeholder,
-          ..
-        } if placeholder.as_deref() == Some("hh:mm")
-      )),
-      "time inputs should synthesize a time placeholder"
-    );
-    assert!(
-      controls.iter().any(|c| matches!(
-        &c.control,
-        FormControlKind::Checkbox {
-          indeterminate: true,
-          ..
-        }
-      )),
-      "indeterminate checkbox should be captured"
-    );
-    assert!(
-      controls
-        .iter()
-        .any(|c| matches!(&c.control, FormControlKind::Unknown { label }
-        if label.as_deref() == Some("mystery"))
-          && c.focus_visible
-          && c.focused),
-      "unknown types should fall back to labeled control and keep focus-visible hint"
-    );
-    assert!(
-      controls.iter().any(|c| matches!(
-        &c.control,
-        FormControlKind::Text {
-          size_attr: Some(5),
-          kind: TextControlKind::Plain,
-          ..
-        }
-      )),
-      "size attribute should be preserved on text-like inputs"
-    );
-    assert!(
-      controls.iter().any(|c| matches!(
-        &c.control,
-        FormControlKind::Text {
-          size_attr: Some(7),
-          kind: TextControlKind::Number,
-          placeholder,
-          ..
-        } if placeholder.as_deref() == Some("sized number")
-      )),
-      "number inputs should keep size hints and placeholder text"
-    );
-    assert!(
-      controls.iter().any(|c| matches!(
-        &c.control,
-        FormControlKind::TextArea { rows, cols, .. } if rows == &Some(4) && cols == &Some(10)
-      )),
-      "rows/cols should be captured on textarea for intrinsic sizing"
-    );
   }
 
   #[test]

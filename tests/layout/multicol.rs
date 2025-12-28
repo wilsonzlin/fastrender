@@ -114,7 +114,7 @@ fn collect_line_positions(fragment: &FragmentNode, origin: (f32, f32), out: &mut
 fn layout_multicol_fragment(
   container_width: f32,
   column_gap: f32,
-  column_count: i32,
+  column_count: u32,
   column_width: f32,
 ) -> (FragmentNode, usize) {
   let mut container_style = ComputedStyle::default();

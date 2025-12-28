@@ -49,21 +49,7 @@ pub fn build_render_configs(surface: &RenderSurface) -> RenderConfigBundle {
     .with_device_pixel_ratio(surface.dpr)
     .with_meta_viewport(surface.apply_meta_viewport)
     .with_allow_file_from_http(surface.allow_file_from_http)
-    .with_block_mixed_content(surface.block_mixed_content)
-    .with_same_origin_subresources(surface.same_origin_subresources);
-  if !surface.allowed_subresource_origins.is_empty() {
-    let mut allowed = Vec::new();
-    for origin in &surface.allowed_subresource_origins {
-      if let Some(parsed) = origin_from_url(origin) {
-        allowed.push(parsed);
-      } else {
-        eprintln!("Warning: ignoring invalid origin '{}'", origin);
-      }
-    }
-    if !allowed.is_empty() {
-      config = config.with_allowed_subresource_origins(allowed);
-    }
-  }
+    .with_block_mixed_content(surface.block_mixed_content);
   if let Some(base_url) = &surface.base_url {
     config = config.with_base_url(base_url.clone());
   }

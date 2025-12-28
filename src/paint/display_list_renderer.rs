@@ -87,12 +87,13 @@ use crate::style::types::TextEmphasisShape;
 use crate::style::types::TextEmphasisStyle;
 use crate::style::types::TransformStyle;
 use crate::style::values::Length;
-use crate::text::font_db::FontStretch;
-use crate::text::font_db::FontStyle as DbFontStyle;
+#[cfg(test)]
+use crate::style::ComputedStyle;
 use crate::text::font_db::LoadedFont;
 use crate::text::font_loader::FontContext;
 use crate::text::pipeline::GlyphPosition;
 use rayon::prelude::*;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 use tiny_skia::BlendMode as SkiaBlendMode;
@@ -1543,18 +1544,16 @@ impl DisplayListRenderer {
       origin: item.origin,
       glyphs: item.glyphs.clone(),
       color: item.color,
-      palette_index: item.palette_index,
       shadows: item.shadows.clone(),
+      palette_index: item.palette_index,
       font_size: item.font_size,
       advance_width: item.advance_width,
-      font_id: item.font_id.clone(),
       font: item.font.clone(),
       variations: item.variations.clone(),
       synthetic_bold: item.synthetic_bold,
       synthetic_oblique: item.synthetic_oblique,
       emphasis: item.emphasis.clone(),
       decorations: Vec::new(),
-      ..Default::default()
     };
     let scaled = self.scale_text_item(&text_equiv);
     ListMarkerItem {
@@ -1564,9 +1563,8 @@ impl DisplayListRenderer {
       shadows: scaled.shadows,
       font_size: scaled.font_size,
       advance_width: scaled.advance_width,
-      font_id: scaled.font_id,
-      palette_index: scaled.palette_index,
       font: scaled.font,
+      palette_index: scaled.palette_index,
       variations: scaled.variations,
       synthetic_bold: scaled.synthetic_bold,
       synthetic_oblique: scaled.synthetic_oblique,
@@ -3927,7 +3925,7 @@ impl DisplayListRenderer {
   }
 
   fn render_text(&mut self, item: &TextItem) -> Result<()> {
-    let Some(font) = self.resolve_font(item.font_id.as_ref()) else {
+    let Some(font) = self.resolve_font(item.font.as_ref()) else {
       return Err(
         RenderError::RasterizationFailed {
           reason: "Unable to resolve font for display list text".into(),
@@ -3993,18 +3991,16 @@ impl DisplayListRenderer {
       origin: item.origin,
       glyphs: item.glyphs.clone(),
       color: item.color,
-      palette_index: item.palette_index,
       shadows: item.shadows.clone(),
+      palette_index: item.palette_index,
       font_size: item.font_size,
       advance_width: item.advance_width,
-      font_id: item.font_id.clone(),
       font: item.font.clone(),
       variations: item.variations.clone(),
       synthetic_bold: item.synthetic_bold,
       synthetic_oblique: item.synthetic_oblique,
       emphasis: item.emphasis.clone(),
       decorations: Vec::new(),
-      ..Default::default()
     };
     self.render_text(&text)
   }
@@ -4427,7 +4423,7 @@ impl DisplayListRenderer {
     let inline_vertical = emphasis.inline_vertical;
     if let TextEmphasisStyle::String(_) = emphasis.style {
       if let Some(text) = &emphasis.text {
-        let font = self.resolve_font(text.font_id.as_ref()).ok_or_else(|| {
+        let font = self.resolve_font(text.font.as_ref()).ok_or_else(|| {
           RenderError::RasterizationFailed {
             reason: "Unable to resolve font for emphasis string".into(),
           }
@@ -4750,40 +4746,12 @@ impl DisplayListRenderer {
     }
   }
 
-  fn resolve_font(&self, font_id: Option<&FontId>) -> Option<LoadedFont> {
-    let mut families = Vec::new();
-    let (weight, italic, oblique, stretch) = match font_id {
-      Some(id) => {
-        families.push(id.family.clone());
-        (
-          id.weight,
-          matches!(id.style, DbFontStyle::Italic),
-          matches!(id.style, DbFontStyle::Oblique),
-          id.stretch,
-        )
-      }
-      None => (400, false, false, FontStretch::Normal),
-    };
-
-    if families.is_empty() {
-      families.push("sans-serif".to_string());
+  fn resolve_font(&self, font: Option<&Arc<LoadedFont>>) -> Option<LoadedFont> {
+    if let Some(f) = font {
+      return Some((**f).clone());
     }
 
-    self
-      .font_ctx
-      .get_font_full(
-        &families,
-        weight,
-        if italic {
-          DbFontStyle::Italic
-        } else if oblique {
-          DbFontStyle::Oblique
-        } else {
-          DbFontStyle::Normal
-        },
-        stretch,
-      )
-      .or_else(|| self.font_ctx.get_sans_serif())
+    self.font_ctx.get_sans_serif()
   }
 
   fn image_to_pixmap(&self, item: &ImageItem) -> Option<Pixmap> {
@@ -6987,20 +6955,14 @@ mod tests {
         advance: 14.0,
       }],
       color: Rgba::BLACK,
-      palette_index: 0,
       shadows: vec![TextShadowItem {
         offset: Point::new(4.0, 0.0),
         blur_radius: 0.0,
         color: Rgba::from_rgba8(255, 0, 0, 255),
       }],
+      palette_index: 0,
       font_size: 20.0,
       advance_width: 14.0,
-      font_id: Some(FontId {
-        family: font.family.clone(),
-        weight: font.weight.value(),
-        style: font.style,
-        stretch: font.stretch,
-      }),
       font: Some(Arc::new(font.clone())),
       variations: Vec::new(),
       synthetic_bold: 0.0,
@@ -7054,20 +7016,14 @@ mod tests {
         advance: 14.0,
       }],
       color: Rgba::BLACK,
-      palette_index: 0,
       shadows: vec![TextShadowItem {
         offset: Point::new(2.0, 0.0),
         blur_radius: 0.0,
         color: Rgba::from_rgba8(255, 0, 0, 255),
       }],
+      palette_index: 0,
       font_size: 20.0,
       advance_width: 14.0,
-      font_id: Some(FontId {
-        family: font.family.clone(),
-        weight: font.weight.value(),
-        style: font.style,
-        stretch: font.stretch,
-      }),
       font: Some(Arc::new(font.clone())),
       variations: Vec::new(),
       synthetic_bold: 0.0,
@@ -7149,20 +7105,14 @@ mod tests {
         advance: 14.0,
       }],
       color: Rgba::BLACK,
-      palette_index: 0,
       shadows: vec![TextShadowItem {
         offset: Point::new(0.0, 0.0),
         blur_radius: 4.0,
         color: Rgba::from_rgba8(255, 0, 0, 255),
       }],
+      palette_index: 0,
       font_size: 20.0,
       advance_width: 14.0,
-      font_id: Some(FontId {
-        family: font.family.clone(),
-        weight: font.weight.value(),
-        style: font.style,
-        stretch: font.stretch,
-      }),
       font: Some(Arc::new(font.clone())),
       variations: Vec::new(),
       synthetic_bold: 0.0,
@@ -7224,20 +7174,14 @@ mod tests {
         advance: 14.0,
       }],
       color: Rgba::BLACK,
-      palette_index: 0,
       shadows: vec![TextShadowItem {
         offset: Point::new(10.0, 20.0), // percent(50%) + em(1.0) resolved against font size 20px
         blur_radius: 0.0,
         color: Rgba::from_rgba8(255, 0, 0, 255),
       }],
+      palette_index: 0,
       font_size: 20.0,
       advance_width: 14.0,
-      font_id: Some(FontId {
-        family: font.family.clone(),
-        weight: font.weight.value(),
-        style: font.style,
-        stretch: font.stretch,
-      }),
       font: Some(Arc::new(font.clone())),
       variations: Vec::new(),
       synthetic_bold: 0.0,
@@ -7277,11 +7221,10 @@ mod tests {
       origin: Point::new(20.0, 30.0),
       glyphs: Vec::new(),
       color: Rgba::BLACK,
-      palette_index: 0,
       shadows: vec![],
+      palette_index: 0,
       font_size: 16.0,
       advance_width: 0.0,
-      font_id: None,
       font: None,
       variations: Vec::new(),
       synthetic_bold: 0.0,

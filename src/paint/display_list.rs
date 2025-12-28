@@ -609,6 +609,18 @@ impl FontVariation {
   }
 }
 
+impl From<crate::text::variations::FontVariation> for FontVariation {
+  fn from(v: crate::text::variations::FontVariation) -> Self {
+    FontVariation::new(v.tag, v.value)
+  }
+}
+
+impl From<rustybuzz::Variation> for FontVariation {
+  fn from(v: rustybuzz::Variation) -> Self {
+    FontVariation::new(v.tag, v.value)
+  }
+}
+
 /// Draw a text run
 ///
 /// Represents shaped text ready for rendering. The glyphs have already

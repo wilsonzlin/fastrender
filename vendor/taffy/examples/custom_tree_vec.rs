@@ -302,6 +302,14 @@ impl taffy::LayoutGridContainer for Tree {
   fn get_grid_child_style(&self, child_node_id: NodeId) -> Self::GridItemStyle<'_> {
     &self.node_from_id(child_node_id).style
   }
+
+  fn clone_grid_container_style(&self, node_id: NodeId) -> Style<Self::CustomIdent> {
+    self.node_from_id(node_id).style.clone()
+  }
+
+  fn clone_grid_child_style(&self, child_node_id: NodeId) -> Style<Self::CustomIdent> {
+    self.node_from_id(child_node_id).style.clone()
+  }
 }
 
 impl taffy::RoundTree for Tree {

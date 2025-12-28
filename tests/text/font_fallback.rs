@@ -588,7 +588,7 @@ fn fallback_chain_matches_pipeline_for_emoji_when_available() {
   let mut style = ComputedStyle::default();
   style.font_family = vec!["sans-serif".to_string()];
   style.font_variant_emoji = FontVariantEmoji::Emoji;
-  let mut chain = FallbackChain::new()
+  let chain = FallbackChain::new()
     .add_generic(GenericFamily::Emoji)
     .add_generic(GenericFamily::SansSerif);
 
