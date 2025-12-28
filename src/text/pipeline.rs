@@ -1303,14 +1303,7 @@ fn assign_fonts_internal(
   font_generation: u64,
 ) -> Result<Vec<FontRun>> {
   let features = collect_opentype_features(style);
-  let authored_variations: Vec<Variation> = style
-    .font_variation_settings
-    .iter()
-    .map(|v| Variation {
-      tag: Tag::from_bytes(&v.tag),
-      value: v.value,
-    })
-    .collect();
+  let authored_variations = authored_variations_from_style(style);
   let preferred_aspect = preferred_font_aspect(style, font_context);
   let (font_style, requested_oblique) = match style.font_style {
     CssFontStyle::Normal => (FontStyle::Normal, None),
@@ -1485,6 +1478,17 @@ fn assign_fonts_internal(
   }
 
   Ok(font_runs)
+}
+
+pub(crate) fn authored_variations_from_style(style: &ComputedStyle) -> Vec<Variation> {
+  style
+    .font_variation_settings
+    .iter()
+    .map(|v| Variation {
+      tag: Tag::from_bytes(&v.tag),
+      value: v.value,
+    })
+    .collect()
 }
 
 fn is_vertical_typographic_mode(mode: crate::style::types::WritingMode) -> bool {
@@ -2452,6 +2456,88 @@ fn resolve_font_for_cluster(
   picker.finish()
 }
 
+pub(crate) fn collect_variations_for_face(
+  face: &ttf_parser::Face<'_>,
+  style: &ComputedStyle,
+  font_size: f32,
+  authored_variations: &[Variation],
+) -> Vec<Variation> {
+  let mut variations = authored_variations.to_vec();
+  let axes: Vec<_> = face.variation_axes().into_iter().collect();
+  if axes.is_empty() {
+    return variations;
+  }
+
+  let mut set_tags: HashSet<Tag> = variations.iter().map(|v| v.tag).collect();
+  let wght_tag = Tag::from_bytes(b"wght");
+  let wdth_tag = Tag::from_bytes(b"wdth");
+  let opsz_tag = Tag::from_bytes(b"opsz");
+  let ital_tag = Tag::from_bytes(b"ital");
+  let slnt_tag = Tag::from_bytes(b"slnt");
+  let has_slnt_axis = axes.iter().any(|a| a.tag == slnt_tag);
+  let has_ital_axis = axes.iter().any(|a| a.tag == ital_tag);
+  let slnt_angle = match style.font_style {
+    CssFontStyle::Oblique(angle) => Some(angle.unwrap_or(DEFAULT_OBLIQUE_ANGLE_DEG)),
+    CssFontStyle::Italic if !has_ital_axis => Some(DEFAULT_OBLIQUE_ANGLE_DEG),
+    _ => None,
+  };
+  let ital_needed = matches!(style.font_style, CssFontStyle::Italic)
+    || (matches!(style.font_style, CssFontStyle::Oblique(_)) && !has_slnt_axis);
+
+  for axis in axes {
+    if axis.tag == wght_tag && !set_tags.contains(&wght_tag) {
+      variations.push(Variation {
+        tag: wght_tag,
+        value: style.font_weight.to_u16() as f32,
+      });
+      set_tags.insert(wght_tag);
+    } else if axis.tag == wdth_tag && !set_tags.contains(&wdth_tag) {
+      variations.push(Variation {
+        tag: wdth_tag,
+        value: style.font_stretch.to_percentage(),
+      });
+      set_tags.insert(wdth_tag);
+    } else if axis.tag == opsz_tag
+      && !set_tags.contains(&opsz_tag)
+      && matches!(
+        style.font_optical_sizing,
+        crate::style::types::FontOpticalSizing::Auto
+      )
+    {
+      variations.push(Variation {
+        tag: opsz_tag,
+        value: font_size,
+      });
+      set_tags.insert(opsz_tag);
+    } else if axis.tag == slnt_tag && !set_tags.contains(&slnt_tag) {
+      if let Some(angle) = slnt_angle {
+        let slnt_value = (-angle).clamp(axis.min_value, axis.max_value);
+        variations.push(Variation {
+          tag: slnt_tag,
+          value: slnt_value,
+        });
+        set_tags.insert(slnt_tag);
+      }
+    } else if axis.tag == ital_tag && !set_tags.contains(&ital_tag) {
+      if ital_needed {
+        variations.push(Variation {
+          tag: ital_tag,
+          value: 1.0,
+        });
+        set_tags.insert(ital_tag);
+      } else if matches!(style.font_style, CssFontStyle::Normal) {
+        variations.push(Variation {
+          tag: ital_tag,
+          value: 0.0,
+        });
+        set_tags.insert(ital_tag);
+      }
+    }
+  }
+
+  variations
+}
+
 #[allow(clippy::too_many_arguments)]
 fn push_font_run(
   out: &mut Vec<FontRun>,
@@ -2469,78 +2555,11 @@ fn push_font_run(
   _font_context: &FontContext,
 ) {
   let segment_text = &run.text[start..end];
-  let mut variations = authored_variations.to_vec();
-  if let Ok(face) = font.as_ttf_face() {
-    let axes: Vec<_> = face.variation_axes().into_iter().collect();
-    if !axes.is_empty() {
-      let mut set_tags: HashSet<Tag> = variations.iter().map(|v| v.tag).collect();
-      let wght_tag = Tag::from_bytes(b"wght");
-      let wdth_tag = Tag::from_bytes(b"wdth");
-      let opsz_tag = Tag::from_bytes(b"opsz");
-      let ital_tag = Tag::from_bytes(b"ital");
-      let slnt_tag = Tag::from_bytes(b"slnt");
-      let has_slnt_axis = axes.iter().any(|a| a.tag == slnt_tag);
-      let has_ital_axis = axes.iter().any(|a| a.tag == ital_tag);
-      let slnt_angle = match style.font_style {
-        CssFontStyle::Oblique(angle) => Some(angle.unwrap_or(DEFAULT_OBLIQUE_ANGLE_DEG)),
-        CssFontStyle::Italic if !has_ital_axis => Some(DEFAULT_OBLIQUE_ANGLE_DEG),
-        _ => None,
-      };
-      let ital_needed = matches!(style.font_style, CssFontStyle::Italic)
-        || (matches!(style.font_style, CssFontStyle::Oblique(_)) && !has_slnt_axis);
-
-      for axis in axes {
-        if axis.tag == wght_tag && !set_tags.contains(&wght_tag) {
-          variations.push(Variation {
-            tag: wght_tag,
-            value: style.font_weight.to_u16() as f32,
-          });
-          set_tags.insert(wght_tag);
-        } else if axis.tag == wdth_tag && !set_tags.contains(&wdth_tag) {
-          variations.push(Variation {
-            tag: wdth_tag,
-            value: style.font_stretch.to_percentage(),
-          });
-          set_tags.insert(wdth_tag);
-        } else if axis.tag == opsz_tag
-          && !set_tags.contains(&opsz_tag)
-          && matches!(
-            style.font_optical_sizing,
-            crate::style::types::FontOpticalSizing::Auto
-          )
-        {
-          variations.push(Variation {
-            tag: opsz_tag,
-            value: font_size,
-          });
-          set_tags.insert(opsz_tag);
-        } else if axis.tag == slnt_tag && !set_tags.contains(&slnt_tag) {
-          if let Some(angle) = slnt_angle {
-            let slnt_value = (-angle).clamp(axis.min_value, axis.max_value);
-            variations.push(Variation {
-              tag: slnt_tag,
-              value: slnt_value,
-            });
-            set_tags.insert(slnt_tag);
-          }
-        } else if axis.tag == ital_tag && !set_tags.contains(&ital_tag) {
-          if ital_needed {
-            variations.push(Variation {
-              tag: ital_tag,
-              value: 1.0,
-            });
-            set_tags.insert(ital_tag);
-          } else if matches!(style.font_style, CssFontStyle::Normal) {
-            variations.push(Variation {
-              tag: ital_tag,
-              value: 0.0,
-            });
-            set_tags.insert(ital_tag);
-          }
-        }
-      }
-    }
-  }
+  let variations = font
+    .as_ttf_face()
+    .ok()
+    .map(|face| collect_variations_for_face(&face, style, font_size, authored_variations))
+    .unwrap_or_else(|| authored_variations.to_vec());
 
   let language = match &style.font_language_override {
     FontLanguageOverride::Normal => style.language.clone(),

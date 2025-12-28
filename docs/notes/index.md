@@ -8,4 +8,4 @@ Small, durable writeups that explain “why/how” decisions that are worth keep
 - [dom-compatibility.md](dom-compatibility.md) — DOM parsing compatibility mode for JS-managed class flips.
 - [dependency-locking.md](dependency-locking.md) — lockfile policy for deterministic builds and CI caching.
 - [custom-properties-api.md](custom-properties-api.md) — canonical storage and resolution for CSS custom properties.
-- [custom-properties-api.md](custom-properties-api.md) — canonical storage and resolution for CSS custom properties.
+- [variable-font-decoration-metrics.md](variable-font-decoration-metrics.md) — variation-aware underline/strike metrics and current fixture coverage.

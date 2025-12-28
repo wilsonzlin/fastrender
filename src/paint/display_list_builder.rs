@@ -3828,8 +3828,19 @@ impl DisplayListBuilder {
     style: &ComputedStyle,
   ) -> Option<DecorationMetrics> {
     let mut metrics_source = runs.and_then(|rs| {
-      rs.iter()
-        .find_map(|run| run.font.metrics().ok().map(|m| (m, run.font_size)))
+      rs.iter().find_map(|run| {
+        let coords: Vec<_> = run.variations.iter().map(|v| (v.tag, v.value)).collect();
+        let metrics = if coords.is_empty() {
+          run.font.metrics()
+        } else {
+          run
+            .font
+            .metrics_with_variations(&coords)
+            .or_else(|_| run.font.metrics())
+        }
+        .ok()?;
+        Some((metrics, run.font_size))
+      })
     });
 
     if metrics_source.is_none() {
@@ -3852,7 +3863,34 @@ impl DisplayListBuilder {
           stretch,
         )
         .or_else(|| self.font_ctx.get_sans_serif())
-        .and_then(|font| font.metrics().ok().map(|m| (m, style.font_size)));
+        .and_then(|font| {
+          let coords = font
+            .as_ttf_face()
+            .ok()
+            .map(|face| {
+              let authored = crate::text::pipeline::authored_variations_from_style(style);
+              let variations = crate::text::pipeline::collect_variations_for_face(
+                &face,
+                style,
+                style.font_size,
+                &authored,
+              );
+              variations
+                .iter()
+                .map(|v| (v.tag, v.value))
+                .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+          if coords.is_empty() {
+            font.metrics().ok().map(|m| (m, style.font_size))
+          } else {
+            font
+              .metrics_with_variations(&coords)
+              .or_else(|_| font.metrics())
+              .ok()
+              .map(|m| (m, style.font_size))
+          }
+        });
     }
 
     if let Some((metrics, size)) = metrics_source {

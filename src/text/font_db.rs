@@ -48,6 +48,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::sync::RwLock;
+use ttf_parser::Tag;
 
 #[cfg(debug_assertions)]
 use std::cell::Cell;
@@ -572,6 +573,11 @@ impl LoadedFont {
   /// ```
   pub fn metrics(&self) -> Result<FontMetrics> {
     FontMetrics::from_font(self)
+  }
+
+  /// Extract font metrics using the provided variation coordinates.
+  pub fn metrics_with_variations(&self, variations: &[(Tag, f32)]) -> Result<FontMetrics> {
+    FontMetrics::from_font_with_variations(self, variations)
   }
 
   /// Get ttf-parser Face for advanced operations
@@ -1422,6 +1428,67 @@ unsafe impl Sync for FontDatabase {}
 // Font Metrics
 // ============================================================================
 
+#[inline]
+fn parse_face_for_metrics<'a>(data: &'a [u8], index: u32) -> Result<ttf_parser::Face<'a>> {
+  parse_face_with_counter(data, index).map_err(|e| FontError::LoadFailed {
+    family: String::new(),
+    reason: format!("Failed to parse font: {:?}", e),
+  })
+}
+
+#[inline]
+fn apply_face_variations(face: &mut ttf_parser::Face<'_>, variations: &[(Tag, f32)]) -> bool {
+  let mut applied = false;
+  for (tag, value) in variations.iter().copied() {
+    if face.set_variation(tag, value).is_some() {
+      applied = true;
+    }
+  }
+  applied
+}
+
+fn extract_metrics(face: &ttf_parser::Face) -> Result<FontMetrics> {
+  let units_per_em = face.units_per_em();
+  let ascent = face.ascender();
+  let descent = face.descender();
+  let line_gap = face.line_gap();
+
+  // CSS spec: line-height = ascent - descent + line-gap
+  let line_height = ascent - descent + line_gap;
+
+  let x_height = face.x_height();
+  let cap_height = face.capital_height();
+
+  // Underline metrics
+  let (underline_position, underline_thickness) = face
+    .underline_metrics()
+    .map(|m| (m.position, m.thickness))
+    .unwrap_or((-(units_per_em as i16) / 10, (units_per_em as i16) / 20));
+
+  // Strikeout metrics
+  let (strikeout_position, strikeout_thickness) = face
+    .strikeout_metrics()
+    .map(|m| (Some(m.position), Some(m.thickness)))
+    .unwrap_or((None, None));
+
+  Ok(FontMetrics {
+    units_per_em,
+    ascent,
+    descent,
+    line_gap,
+    line_height,
+    x_height,
+    cap_height,
+    underline_position,
+    underline_thickness,
+    strikeout_position,
+    strikeout_thickness,
+    is_bold: face.is_bold(),
+    is_italic: face.is_italic(),
+    is_monospace: face.is_monospaced(),
+  })
+}
+
 /// Font metrics in font units
 ///
 /// Contains dimensional information extracted from font tables.
@@ -1487,57 +1554,47 @@ impl FontMetrics {
     Self::from_data(&font.data, font.index)
   }
 
+  /// Extract metrics from a loaded font with specific variation coordinates.
+  pub fn from_font_with_variations(font: &LoadedFont, variations: &[(Tag, f32)]) -> Result<Self> {
+    Self::from_data_with_variations(&font.data, font.index, variations)
+  }
+
   /// Extract metrics from font data
   pub fn from_data(data: &[u8], index: u32) -> Result<Self> {
-    let face = parse_face_with_counter(data, index).map_err(|e| FontError::LoadFailed {
-      family: String::new(),
-      reason: format!("Failed to parse font: {:?}", e),
-    })?;
+    let face = parse_face_for_metrics(data, index)?;
+    Self::from_face(&face)
+  }
 
+  /// Extract metrics from font data applying variation coordinates when provided.
+  pub fn from_data_with_variations(
+    data: &[u8],
+    index: u32,
+    variations: &[(Tag, f32)],
+  ) -> Result<Self> {
+    let mut face = parse_face_for_metrics(data, index)?;
+    if !variations.is_empty() {
+      apply_face_variations(&mut face, variations);
+    }
     Self::from_face(&face)
   }
 
   /// Extract metrics from ttf-parser Face
   pub fn from_face(face: &ttf_parser::Face) -> Result<Self> {
-    let units_per_em = face.units_per_em();
-    let ascent = face.ascender();
-    let descent = face.descender();
-    let line_gap = face.line_gap();
+    extract_metrics(face)
+  }
 
-    // CSS spec: line-height = ascent - descent + line-gap
-    let line_height = ascent - descent + line_gap;
+  /// Extract metrics from ttf-parser Face with variation coordinates applied.
+  pub fn from_face_with_variations(
+    face: &ttf_parser::Face,
+    variations: &[(Tag, f32)],
+  ) -> Result<Self> {
+    if variations.is_empty() {
+      return Self::from_face(face);
+    }
 
-    let x_height = face.x_height();
-    let cap_height = face.capital_height();
-
-    // Underline metrics
-    let (underline_position, underline_thickness) = face
-      .underline_metrics()
-      .map(|m| (m.position, m.thickness))
-      .unwrap_or((-(units_per_em as i16) / 10, (units_per_em as i16) / 20));
-
-    // Strikeout metrics
-    let (strikeout_position, strikeout_thickness) = face
-      .strikeout_metrics()
-      .map(|m| (Some(m.position), Some(m.thickness)))
-      .unwrap_or((None, None));
-
-    Ok(Self {
-      units_per_em,
-      ascent,
-      descent,
-      line_gap,
-      line_height,
-      x_height,
-      cap_height,
-      underline_position,
-      underline_thickness,
-      strikeout_position,
-      strikeout_thickness,
-      is_bold: face.is_bold(),
-      is_italic: face.is_italic(),
-      is_monospace: face.is_monospaced(),
-    })
+    let mut face = face.clone();
+    apply_face_variations(&mut face, variations);
+    extract_metrics(&face)
   }
 
   /// Scale metrics to pixel size
@@ -2025,6 +2082,39 @@ mod tests {
       // Verify we can access the face
       assert!(face.units_per_em() > 0);
     }
+  }
+
+  #[test]
+  fn variable_font_metrics_apply_variations_without_panic() {
+    let data = include_bytes!("../../tests/fonts/RobotoFlex-VF.ttf");
+    let mut face = parse_face_for_metrics(data, 0).expect("Roboto Flex should parse");
+    assert!(face.is_variable());
+    assert!(!face.has_non_default_variation_coordinates());
+
+    let coords = [
+      (Tag::from_bytes(b"wght"), 720.0),
+      (Tag::from_bytes(b"wdth"), 95.0),
+    ];
+    let applied = apply_face_variations(&mut face, &coords);
+    assert!(
+      applied,
+      "Expected at least one variation axis to be applied"
+    );
+    assert!(face.has_non_default_variation_coordinates());
+    assert!(face.variation_coordinates().iter().any(|c| c.get() != 0));
+
+    let metrics_from_face = FontMetrics::from_face(&face).unwrap();
+    let metrics_with_vars = FontMetrics::from_face_with_variations(&face, &coords).unwrap();
+    assert_eq!(
+      metrics_from_face.underline_position,
+      metrics_with_vars.underline_position
+    );
+
+    let metrics_from_data = FontMetrics::from_data_with_variations(data, 0, &coords).unwrap();
+    assert_eq!(
+      metrics_with_vars.underline_thickness,
+      metrics_from_data.underline_thickness
+    );
   }
 
   #[test]

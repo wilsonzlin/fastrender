@@ -5988,8 +5988,19 @@ impl Painter {
     style: &ComputedStyle,
   ) -> Option<DecorationMetrics> {
     let mut metrics_source = runs.and_then(|rs| {
-      rs.iter()
-        .find_map(|run| run.font.metrics().ok().map(|m| (m, run.font_size)))
+      rs.iter().find_map(|run| {
+        let coords: Vec<_> = run.variations.iter().map(|v| (v.tag, v.value)).collect();
+        let metrics = if coords.is_empty() {
+          run.font.metrics()
+        } else {
+          run
+            .font
+            .metrics_with_variations(&coords)
+            .or_else(|_| run.font.metrics())
+        }
+        .ok()?;
+        Some((metrics, run.font_size))
+      })
     });
 
     if metrics_source.is_none() {
@@ -6012,7 +6023,34 @@ impl Painter {
           stretch,
         )
         .or_else(|| self.font_ctx.get_sans_serif())
-        .and_then(|font| font.metrics().ok().map(|m| (m, style.font_size)));
+        .and_then(|font| {
+          let coords = font
+            .as_ttf_face()
+            .ok()
+            .map(|face| {
+              let authored = crate::text::pipeline::authored_variations_from_style(style);
+              let variations = crate::text::pipeline::collect_variations_for_face(
+                &face,
+                style,
+                style.font_size,
+                &authored,
+              );
+              variations
+                .iter()
+                .map(|v| (v.tag, v.value))
+                .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+          if coords.is_empty() {
+            font.metrics().ok().map(|m| (m, style.font_size))
+          } else {
+            font
+              .metrics_with_variations(&coords)
+              .or_else(|_| font.metrics())
+              .ok()
+              .map(|m| (m, style.font_size))
+          }
+        });
     }
 
     if let Some((metrics, size)) = metrics_source {
@@ -10113,6 +10151,69 @@ mod tests {
     let style = ComputedStyle::default();
     let metrics = painter.decoration_metrics(None, &style);
     assert!(metrics.is_some());
+  }
+
+  #[test]
+  fn decoration_metrics_handle_variable_font_variations() {
+    let painter = Painter::new(10, 10, Rgba::WHITE).expect("painter");
+    let mut style = ComputedStyle::default();
+    style.font_size = 14.0;
+
+    let font_bytes = Arc::new(include_bytes!("../../tests/fonts/RobotoFlex-VF.ttf").to_vec());
+    let font = Arc::new(crate::text::font_db::LoadedFont {
+      data: font_bytes.clone(),
+      index: 0,
+      family: "Roboto Flex".to_string(),
+      weight: crate::text::font_db::FontWeight::NORMAL,
+      style: crate::text::font_db::FontStyle::Normal,
+      stretch: crate::text::font_db::FontStretch::Normal,
+    });
+
+    let variations = vec![
+      rustybuzz::Variation {
+        tag: ttf_parser::Tag::from_bytes(b"wght"),
+        value: 720.0,
+      },
+      rustybuzz::Variation {
+        tag: ttf_parser::Tag::from_bytes(b"wdth"),
+        value: 95.0,
+      },
+    ];
+
+    let run = ShapedRun {
+      text: "x".to_string(),
+      start: 0,
+      end: 1,
+      glyphs: Vec::new(),
+      direction: Direction::LeftToRight,
+      level: 0,
+      advance: 0.0,
+      font: font.clone(),
+      font_size: style.font_size,
+      baseline_shift: 0.0,
+      language: None,
+      synthetic_bold: 0.0,
+      synthetic_oblique: 0.0,
+      rotation: RunRotation::None,
+      palette_index: 0,
+      variations: variations.clone(),
+      scale: 1.0,
+    };
+
+    let metrics = painter
+      .decoration_metrics(Some(&[run]), &style)
+      .expect("metrics");
+
+    let coords: Vec<_> = variations.iter().map(|v| (v.tag, v.value)).collect();
+    let font_metrics =
+      crate::text::font_db::FontMetrics::from_data_with_variations(&font.data, font.index, &coords)
+        .expect("font metrics");
+    let scale = style.font_size / font_metrics.units_per_em as f32;
+    let expected_underline_pos = font_metrics.underline_position as f32 * scale;
+    let expected_underline_thickness = (font_metrics.underline_thickness as f32 * scale).max(1.0);
+
+    assert!((metrics.underline_pos - expected_underline_pos).abs() < 0.0001);
+    assert!((metrics.underline_thickness - expected_underline_thickness).abs() < 0.0001);
   }
 
   #[test]
