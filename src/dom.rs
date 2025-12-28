@@ -835,6 +835,66 @@ pub(crate) fn parse_exportparts(value: &str) -> Vec<(String, String)> {
   mappings
 }
 
+fn parse_finite_number(value: &str) -> Option<f64> {
+  value.trim().parse::<f64>().ok().filter(|v| v.is_finite())
+}
+
+fn format_number(mut value: f64) -> String {
+  if value == -0.0 {
+    value = 0.0;
+  }
+  let mut s = value.to_string();
+  if s.contains('.') {
+    while s.ends_with('0') {
+      s.pop();
+    }
+    if s.ends_with('.') {
+      s.pop();
+    }
+  }
+  s
+}
+
+fn input_range_bounds(node: &DomNode) -> Option<(f64, f64)> {
+  if !matches!(node.tag_name(), Some(tag) if tag.eq_ignore_ascii_case("input")) {
+    return None;
+  }
+
+  let input_type = node
+    .get_attribute_ref("type")
+    .map(|t| t.to_ascii_lowercase())
+    .unwrap_or_else(|| "text".to_string());
+  if input_type != "range" {
+    return None;
+  }
+
+  let min = node
+    .get_attribute_ref("min")
+    .and_then(parse_finite_number)
+    .unwrap_or(0.0);
+  let max = node
+    .get_attribute_ref("max")
+    .and_then(parse_finite_number)
+    .unwrap_or(100.0);
+
+  // The HTML value sanitization algorithm collapses invalid ranges. When max < min, treat max as
+  // min so downstream clamping produces a usable value instead of marking the control invalid.
+  let clamped_max = if max < min { min } else { max };
+  Some((min, clamped_max))
+}
+
+fn input_range_value(node: &DomNode) -> Option<f64> {
+  let (min, max) = input_range_bounds(node)?;
+
+  // TODO: Align to the step attribute like browsers once step support is implemented.
+  let resolved = node
+    .get_attribute_ref("value")
+    .and_then(parse_finite_number)
+    .unwrap_or_else(|| (min + max) / 2.0);
+
+  Some(resolved.clamp(min, max))
+}
+
 /// Wrapper for DomNode that implements Element trait for selector matching
 /// This wrapper carries context needed for matching (parent, siblings)
 #[derive(Debug, Clone, Copy)]
@@ -1404,6 +1464,9 @@ impl<'a> ElementRef<'a> {
       return self.select_value();
     }
     if tag == "input" {
+      if let Some(value) = input_range_value(self.node) {
+        return Some(format_number(value));
+      }
       return Some(
         self
           .node
@@ -1541,6 +1604,12 @@ impl<'a> ElementRef<'a> {
       .unwrap_or_else(|| "text".to_string());
     if !matches!(input_type.as_str(), "number" | "range") {
       return None;
+    }
+
+    if input_type == "range" {
+      let (min, max) = input_range_bounds(self.node)?;
+      let value = input_range_value(self.node)?;
+      return Some(value >= min && value <= max);
     }
 
     let value = self
@@ -3770,6 +3839,47 @@ mod tests {
     let child = &fieldset.children[0];
     assert!(!matches(child, &ancestors, &PseudoClass::Required));
     assert!(!matches(child, &ancestors, &PseudoClass::Optional));
+  }
+
+  #[test]
+  fn range_inputs_match_in_range_by_default() {
+    let input = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "input".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![
+          ("type".to_string(), "range".to_string()),
+          ("min".to_string(), "0".to_string()),
+          ("max".to_string(), "10".to_string()),
+        ],
+      },
+      children: vec![],
+    };
+
+    assert!(matches(&input, &[], &PseudoClass::InRange));
+    assert!(!matches(&input, &[], &PseudoClass::OutOfRange));
+  }
+
+  #[test]
+  fn range_values_are_clamped_before_range_state_checks() {
+    let input = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "input".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![
+          ("type".to_string(), "range".to_string()),
+          ("min".to_string(), "0".to_string()),
+          ("max".to_string(), "10".to_string()),
+          ("value".to_string(), "20".to_string()),
+        ],
+      },
+      children: vec![],
+    };
+
+    // The HTML value sanitization algorithm clamps the current value into the [min, max] range,
+    // so this remains in-range despite the authored value being too high.
+    assert!(matches(&input, &[], &PseudoClass::InRange));
+    assert!(!matches(&input, &[], &PseudoClass::OutOfRange));
   }
 
   #[test]

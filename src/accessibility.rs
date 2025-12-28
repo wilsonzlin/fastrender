@@ -1309,6 +1309,8 @@ fn compute_value(
         return Some(value);
       }
 
+      // Fall back to the resolved control value (e.g., range inputs expose their sanitized slider
+      // position even when no explicit value is authored).
       element_ref
         .accessibility_value()
         .filter(|v| !v.is_empty())
