@@ -394,7 +394,7 @@ const KNOWN_PAGE_PROPERTIES: &[&str] = &[
   "trim",
 ];
 
-fn is_known_style_property(property: &str) -> bool {
+pub(crate) fn is_known_style_property(property: &str) -> bool {
   KNOWN_STYLE_PROPERTIES.contains(&property)
 }
 
@@ -768,7 +768,7 @@ fn parse_number_component(parser: &mut Parser) -> Result<f32, ()> {
   calc_component_to_number(component).ok_or(())
 }
 
-fn is_global_keyword_str(value: &str) -> bool {
+pub(crate) fn is_global_keyword_str(value: &str) -> bool {
   value.eq_ignore_ascii_case("inherit")
     || value.eq_ignore_ascii_case("initial")
     || value.eq_ignore_ascii_case("unset")

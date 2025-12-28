@@ -39,6 +39,7 @@ mod shadow_host_selectors_test;
 mod shadow_part_test;
 mod shadow_slotted_test;
 mod string_set_test;
+mod supports_declaration_css_wide_and_var_test;
 mod supports_rule_test;
 mod supports_selector_test;
 mod supports_writing_mode_test;
