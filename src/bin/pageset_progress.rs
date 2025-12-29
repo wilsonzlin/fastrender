@@ -579,13 +579,8 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
           progress.status = ProgressStatus::Timeout;
           progress.notes = format!("timeout at {stage} after {elapsed:?}");
           progress.hotspot = match stage {
-<<<<<<< HEAD
-            RenderStage::DomParse | RenderStage::Css => "css",
-            RenderStage::Cascade => "cascade",
-=======
             RenderStage::DomParse => "fetch",
             RenderStage::Css | RenderStage::Cascade => "css",
->>>>>>> e5565f5 (feat: add sweep float context with profiling)
             RenderStage::Layout => "layout",
             RenderStage::Paint => "paint",
           }
@@ -1192,11 +1187,7 @@ fn run(args: RunArgs) -> io::Result<()> {
   println!();
 
   let overall_start = Instant::now();
-
-<<<<<<< HEAD
-=======
   let queue = std::collections::VecDeque::from(items.clone());
->>>>>>> e5565f5 (feat: add sweep float context with profiling)
   run_queue(
     &exe,
     &args,

@@ -4693,8 +4693,8 @@ mod tests {
       .first()
       .map(|(name, _)| name.clone())
       .expect("Roboto Flex has a family name");
-    let face = ttf_parser::Face::parse(ROBOTO_FLEX, face_info.index)
-      .expect("parse Roboto Flex face");
+    let face =
+      ttf_parser::Face::parse(ROBOTO_FLEX, face_info.index).expect("parse Roboto Flex face");
     let axes: Vec<_> = face.variation_axes().into_iter().collect();
     let wght_tag = Tag::from_bytes(b"wght");
     let wdth_tag = Tag::from_bytes(b"wdth");
@@ -4746,15 +4746,12 @@ mod tests {
       .map(|v| v.value)
       .expect("auto variations should include opsz when optical sizing is auto");
 
-    let expected_wght = (style.font_weight.to_u16() as f32).clamp(
-      wght_axis.min_value,
-      wght_axis.max_value,
-    );
-    let expected_wdth =
-      style
-        .font_stretch
-        .to_percentage()
-        .clamp(wdth_axis.min_value, wdth_axis.max_value);
+    let expected_wght =
+      (style.font_weight.to_u16() as f32).clamp(wght_axis.min_value, wght_axis.max_value);
+    let expected_wdth = style
+      .font_stretch
+      .to_percentage()
+      .clamp(wdth_axis.min_value, wdth_axis.max_value);
     let expected_opsz = style
       .font_size
       .clamp(opsz_axis.min_value, opsz_axis.max_value);

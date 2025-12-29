@@ -2980,7 +2980,8 @@ mod tests {
     let ctx = FontContext::empty();
     let with_none =
       parse_math_from_html("<math><mmultiscripts><mi>x</mi><none/><none/></mmultiscripts></math>");
-    let without_none = parse_math_from_html("<math><mmultiscripts><mi>x</mi></mmultiscripts></math>");
+    let without_none =
+      parse_math_from_html("<math><mmultiscripts><mi>x</mi></mmultiscripts></math>");
     let with_layout = layout_mathml(&with_none, &style, &ctx);
     let without_layout = layout_mathml(&without_none, &style, &ctx);
     assert!(

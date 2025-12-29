@@ -1366,10 +1366,8 @@ mod tests {
       Some(f) => f,
       None => return,
     };
-    let Some(glyph_id) = face_cache::with_face(&font, |face| {
-      face.glyph_index('A').map(|g| g.0 as u32)
-    })
-    .flatten()
+    let Some(glyph_id) =
+      face_cache::with_face(&font, |face| face.glyph_index('A').map(|g| g.0 as u32)).flatten()
     else {
       return;
     };

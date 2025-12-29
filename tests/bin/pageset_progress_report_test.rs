@@ -8,11 +8,7 @@ fn fixtures_dir() -> PathBuf {
 #[test]
 fn pageset_progress_report_outputs_summary() {
   let output = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
-    .args([
-      "report",
-      "--progress-dir",
-      fixtures_dir().to_str().unwrap(),
-    ])
+    .args(["report", "--progress-dir", fixtures_dir().to_str().unwrap()])
     .output()
     .expect("run pageset_progress report");
   assert!(output.status.success(), "expected success for report");
@@ -34,9 +30,9 @@ fn pageset_progress_report_outputs_summary() {
   assert!(stdout.contains("Top-slow hotspots (top 4):"));
   assert!(stdout.contains("layout: 3"));
   assert!(stdout.contains("Stage timings (ok pages with timings: 2):"));
-  assert!(stdout.contains(
-    "totals_ms: fetch=55.00 css=110.00 cascade=220.00 layout=3040.00 paint=545.00"
-  ));
+  assert!(
+    stdout.contains("totals_ms: fetch=55.00 css=110.00 cascade=220.00 layout=3040.00 paint=545.00")
+  );
 }
 
 #[test]
