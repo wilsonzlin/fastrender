@@ -64,6 +64,8 @@ const PROGRESS_NOTE_MAX_CHARS: usize = 240;
 // Cap quoted excerpts (e.g., parse/shaping text payloads) before the overall limit.
 const PROGRESS_NOTE_QUOTED_EXCERPT_MAX_CHARS: usize = 120;
 const PROGRESS_NOTE_ELLIPSIS: char = '…';
+// Allow a small buffer past the cooperative render timeout for per-request fetch deadlines.
+const FETCH_TIMEOUT_SLACK_MS: u64 = 100;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -404,6 +406,10 @@ struct WorkerArgs {
   #[command(flatten)]
   layout_parallel: LayoutParallelArgs,
 
+  /// Hard per-page timeout in seconds (used for fetch budgeting)
+  #[arg(long, default_value_t = 5)]
+  timeout: u64,
+
   /// Cooperative timeout handed to the renderer in milliseconds (0 disables)
   #[arg(long)]
   soft_timeout_ms: Option<u64>,
@@ -523,6 +529,16 @@ fn compute_trace_hard_timeout(
 ) -> Duration {
   let secs = trace_timeout_override.unwrap_or_else(|| main_timeout_secs.saturating_mul(2));
   Duration::from_secs(secs)
+}
+
+fn compute_fetch_timeout(hard_timeout: Duration, soft_timeout_ms: Option<u64>) -> Duration {
+  if let Some(ms) = soft_timeout_ms {
+    if ms > 0 {
+      let with_slack = ms.saturating_add(FETCH_TIMEOUT_SLACK_MS);
+      return Duration::from_millis(with_slack).min(hard_timeout);
+    }
+  }
+  hard_timeout
 }
 
 fn normalize_hotspot(h: &str) -> String {
@@ -995,6 +1011,9 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     url = parsed.to_string();
   }
 
+  let hard_timeout = Duration::from_secs(args.timeout);
+  let fetch_timeout = compute_fetch_timeout(hard_timeout, args.soft_timeout_ms);
+
   log.push_str(&format!("=== {} ===\n", args.stem));
   log.push_str(&format!("Cache: {}\n", args.cache_path.display()));
   log.push_str(&format!("URL: {}\n", url));
@@ -1025,8 +1044,20 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     log.push_str(&format!("Content-Type: {ct}\n"));
   }
   log.push_str(&format!("HTML bytes: {}\n", cached.byte_len));
+  let soft_timeout_desc = match args.soft_timeout_ms {
+    Some(0) => "disabled".to_string(),
+    Some(ms) => format!("{ms}ms"),
+    None => "unset".to_string(),
+  };
+  log.push_str(&format!(
+    "Timeouts: hard={}s, soft={}, fetch={}ms\n",
+    args.timeout,
+    soft_timeout_desc,
+    fetch_timeout.as_millis()
+  ));
 
   let http = HttpFetcher::new()
+    .with_timeout(fetch_timeout)
     .with_user_agent(args.user_agent.clone())
     .with_accept_language(args.accept_language.clone());
   let honor_http_freshness = cfg!(feature = "disk_cache") && !args.no_http_freshness;
@@ -2257,6 +2288,7 @@ fn spawn_worker(
   item: &WorkItem,
   diagnostics: DiagnosticsArg,
   soft_timeout_ms: Option<u64>,
+  hard_timeout: Duration,
 ) -> io::Result<Child> {
   let mut cmd = Command::new(exe);
   cmd
@@ -2278,7 +2310,9 @@ fn spawn_worker(
     .arg("--accept-language")
     .arg(&args.accept_language)
     .arg("--diagnostics")
-    .arg(format!("{:?}", diagnostics).to_ascii_lowercase());
+    .arg(format!("{:?}", diagnostics).to_ascii_lowercase())
+    .arg("--timeout")
+    .arg(hard_timeout.as_secs().to_string());
 
   if args.no_http_freshness {
     cmd.arg("--no-http-freshness");
@@ -2360,7 +2394,7 @@ fn run_queue(
       let Some(item) = queue.pop_front() else {
         break;
       };
-      let child = spawn_worker(exe, args, &item, diagnostics, soft_timeout_ms)?;
+      let child = spawn_worker(exe, args, &item, diagnostics, soft_timeout_ms, hard_timeout)?;
       running.push(RunningChild {
         item,
         started: Instant::now(),
@@ -3192,6 +3226,23 @@ mod tests {
   fn trace_timeout_respects_override() {
     let hard = compute_trace_hard_timeout(5, Some(7));
     assert_eq!(hard, Duration::from_secs(7));
+  }
+
+  #[test]
+  fn fetch_timeout_uses_soft_timeout_with_slack_and_cap() {
+    let hard = Duration::from_secs(5);
+    assert_eq!(
+      compute_fetch_timeout(hard, Some(1000)),
+      Duration::from_millis(1100)
+    );
+    assert_eq!(compute_fetch_timeout(hard, Some(4950)), hard);
+  }
+
+  #[test]
+  fn fetch_timeout_falls_back_when_soft_timeout_disabled_or_missing() {
+    let hard = Duration::from_secs(2);
+    assert_eq!(compute_fetch_timeout(hard, None), hard);
+    assert_eq!(compute_fetch_timeout(hard, Some(0)), hard);
   }
 }
 
