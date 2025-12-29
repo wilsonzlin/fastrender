@@ -978,6 +978,7 @@ fn clone_without_children(node: &FragmentNode) -> FragmentNode {
     block_metadata: node.block_metadata.clone(),
     logical_override: node.logical_override,
     content: node.content.clone(),
+    table_borders: node.table_borders.clone(),
     baseline: node.baseline,
     children: Arc::new(Vec::new()),
     style: node.style.clone(),

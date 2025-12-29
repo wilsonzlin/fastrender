@@ -40,6 +40,8 @@ use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::geometry::Size;
 use crate::scroll::ScrollMetadata;
+use crate::style::color::Rgba;
+use crate::style::types::BorderStyle;
 use crate::style::ComputedStyle;
 use crate::text::pipeline::ShapedRun;
 use crate::tree::box_tree::{BoxNode, BoxTree, ReplacedType};
@@ -168,6 +170,84 @@ impl FragmentContent {
   }
 }
 
+/// Resolved border segment for collapsed-border tables.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CollapsedBorderSegment {
+  pub width: f32,
+  pub style: BorderStyle,
+  pub color: Rgba,
+}
+
+impl CollapsedBorderSegment {
+  pub fn none() -> Self {
+    Self {
+      width: 0.0,
+      style: BorderStyle::None,
+      color: Rgba::TRANSPARENT,
+    }
+  }
+
+  pub fn is_visible(&self) -> bool {
+    self.width > 0.0 && !matches!(self.style, BorderStyle::None | BorderStyle::Hidden)
+  }
+}
+
+/// Compact paint-time representation of a table's collapsed borders.
+#[derive(Debug, Clone)]
+pub struct TableCollapsedBorders {
+  pub column_count: usize,
+  pub row_count: usize,
+  pub column_line_positions: Vec<f32>,
+  pub row_line_positions: Vec<f32>,
+  pub vertical_borders: Vec<CollapsedBorderSegment>,
+  pub horizontal_borders: Vec<CollapsedBorderSegment>,
+  pub corner_borders: Vec<CollapsedBorderSegment>,
+  pub vertical_line_base: Vec<f32>,
+  pub horizontal_line_base: Vec<f32>,
+  /// Bounds covering all collapsed border strokes (relative to the table fragment origin).
+  pub paint_bounds: Rect,
+}
+
+impl TableCollapsedBorders {
+  #[inline]
+  pub fn vertical_segment(&self, column: usize, row: usize) -> Option<CollapsedBorderSegment> {
+    if row >= self.row_count || column > self.column_count {
+      return None;
+    }
+    let idx = column.checked_mul(self.row_count)?.checked_add(row)?;
+    self.vertical_borders.get(idx).copied()
+  }
+
+  #[inline]
+  pub fn horizontal_segment(&self, row: usize, column: usize) -> Option<CollapsedBorderSegment> {
+    if column >= self.column_count || row > self.row_count {
+      return None;
+    }
+    let idx = row.checked_mul(self.column_count)?.checked_add(column)?;
+    self.horizontal_borders.get(idx).copied()
+  }
+
+  #[inline]
+  pub fn corner(&self, row: usize, column: usize) -> Option<CollapsedBorderSegment> {
+    if column > self.column_count || row > self.row_count {
+      return None;
+    }
+    let stride = self.column_count + 1;
+    let idx = row.checked_mul(stride)?.checked_add(column)?;
+    self.corner_borders.get(idx).copied()
+  }
+
+  #[inline]
+  pub fn vertical_line_width(&self, index: usize) -> f32 {
+    *self.vertical_line_base.get(index).unwrap_or(&0.0)
+  }
+
+  #[inline]
+  pub fn horizontal_line_width(&self, index: usize) -> f32 {
+    *self.horizontal_line_base.get(index).unwrap_or(&0.0)
+  }
+}
+
 /// Identifies the fragmentainer (page/column) a fragment belongs to.
 ///
 /// Pagination yields distinct pages (`page_index`), while multi-column layout can further
@@ -283,6 +363,9 @@ pub struct FragmentNode {
   /// The content type of this fragment
   pub content: FragmentContent,
 
+  /// Optional collapsed border data for tables.
+  pub table_borders: Option<Arc<TableCollapsedBorders>>,
+
   /// Optional baseline offset from the fragment's top edge.
   ///
   /// Useful for fragments that need to participate in baseline alignment
@@ -385,6 +468,7 @@ impl FragmentNode {
       block_metadata: None,
       logical_override: None,
       content,
+      table_borders: None,
       baseline: None,
       children: Arc::new(children),
       style: None,
@@ -413,6 +497,7 @@ impl FragmentNode {
       block_metadata: None,
       logical_override: None,
       content,
+      table_borders: None,
       baseline: None,
       children: Arc::new(children),
       style: Some(style),
@@ -668,6 +753,9 @@ impl FragmentNode {
   /// ```
   pub fn bounding_box(&self) -> Rect {
     let mut bbox = Rect::from_xywh(0.0, 0.0, self.bounds.width(), self.bounds.height());
+    if let Some(borders) = &self.table_borders {
+      bbox = bbox.union(borders.paint_bounds);
+    }
     for child in self.children.iter() {
       bbox = bbox.union(child.bounding_box());
     }
@@ -684,6 +772,12 @@ impl FragmentNode {
   /// Computes a bounding box using logical bounds for this fragment and descendants.
   pub fn logical_bounding_box(&self) -> Rect {
     let mut bbox = self.logical_bounds();
+    if let Some(borders) = &self.table_borders {
+      bbox = bbox.union(borders.paint_bounds.translate(Point::new(
+        self.logical_bounds().x(),
+        self.logical_bounds().y(),
+      )));
+    }
     for child in self.children.iter() {
       let child_bbox = child.logical_bounding_box();
       bbox = bbox.union(child_bbox.translate(Point::new(
@@ -758,6 +852,7 @@ impl FragmentNode {
       block_metadata: self.block_metadata.clone(),
       logical_override: self.logical_override.map(|r| r.translate(offset)),
       content,
+      table_borders: self.table_borders.clone(),
       baseline: self.baseline,
       children: Arc::new(
         self
@@ -898,6 +993,7 @@ impl FragmentNode {
       block_metadata: self.block_metadata.clone(),
       logical_override: self.logical_override,
       content: self.content.clone(),
+      table_borders: self.table_borders.clone(),
       baseline: self.baseline,
       children: Arc::new(Vec::new()),
       style: self.style.clone(),
@@ -936,6 +1032,7 @@ impl FragmentNode {
       block_metadata: self.block_metadata.clone(),
       logical_override: self.logical_override,
       content,
+      table_borders: self.table_borders.clone(),
       baseline: self.baseline,
       children: Arc::new(self.children.iter().map(FragmentNode::deep_clone).collect()),
       style: self.style.clone(),

@@ -47,6 +47,7 @@ use crate::paint::display_list::ResolvedMask;
 use crate::paint::display_list::ResolvedMaskImage;
 use crate::paint::display_list::StackingContextItem;
 use crate::paint::display_list::StrokeRectItem;
+use crate::paint::display_list::TableCollapsedBordersItem;
 use crate::paint::display_list::TextEmphasis;
 use crate::paint::display_list::TextItem;
 use crate::paint::display_list::TextShadowItem;
@@ -3774,6 +3775,173 @@ impl DisplayListRenderer {
     );
   }
 
+  fn render_table_collapsed_borders(&mut self, item: &TableCollapsedBordersItem) {
+    let zero_side = BorderSide {
+      width: 0.0,
+      style: CssBorderStyle::None,
+      color: Rgba::TRANSPARENT,
+    };
+
+    let column_lines = &item.borders.column_line_positions;
+    let row_lines = &item.borders.row_line_positions;
+
+    for col_idx in 0..=item.borders.column_count {
+      let base_x = item.origin.x + column_lines.get(col_idx).copied().unwrap_or(0.0);
+      let base_edge_width = item.borders.vertical_line_width(col_idx);
+      for row_idx in 0..item.borders.row_count {
+        let Some(border) = item.borders.vertical_segment(col_idx, row_idx) else {
+          continue;
+        };
+        if !border.is_visible() {
+          continue;
+        }
+        let is_left_edge = col_idx == 0;
+        let is_right_edge = col_idx == item.borders.column_count;
+        let baseline_edge = if is_left_edge || is_right_edge {
+          base_edge_width
+        } else {
+          border.width
+        };
+        let inside = if is_left_edge || is_right_edge {
+          (border.width.min(baseline_edge)) * 0.5
+        } else {
+          border.width * 0.5
+        };
+        let x = if is_left_edge {
+          base_x - (border.width - inside)
+        } else {
+          base_x - inside
+        };
+        let row_start = item.origin.y + row_lines.get(row_idx).copied().unwrap_or(0.0);
+        let row_end = item.origin.y + row_lines.get(row_idx + 1).copied().unwrap_or(row_start);
+        let corner_top = item
+          .borders
+          .corner(row_idx, col_idx)
+          .map(|c| c.width * 0.5)
+          .unwrap_or(0.0);
+        let corner_bottom = item
+          .borders
+          .corner(row_idx + 1, col_idx)
+          .map(|c| c.width * 0.5)
+          .unwrap_or(0.0);
+        let y_start = row_start + corner_top;
+        let y_end = row_end - corner_bottom;
+        let height = (y_end - y_start).max(0.0);
+        if height <= 0.0 {
+          continue;
+        }
+        let border_item = BorderItem {
+          rect: Rect::from_xywh(x, y_start, border.width, height),
+          top: zero_side.clone(),
+          right: zero_side.clone(),
+          bottom: zero_side.clone(),
+          left: BorderSide {
+            width: border.width,
+            style: border.style,
+            color: border.color,
+          },
+          image: None,
+          radii: BorderRadii::ZERO,
+        };
+        self.render_border(&border_item);
+      }
+    }
+
+    for row_idx in 0..=item.borders.row_count {
+      let base_y = item.origin.y + row_lines.get(row_idx).copied().unwrap_or(0.0);
+      let base_edge_width = item.borders.horizontal_line_width(row_idx);
+      for col_idx in 0..item.borders.column_count {
+        let Some(border) = item.borders.horizontal_segment(row_idx, col_idx) else {
+          continue;
+        };
+        if !border.is_visible() {
+          continue;
+        }
+        let is_top_edge = row_idx == 0;
+        let is_bottom_edge = row_idx == item.borders.row_count;
+        let baseline_edge = if is_top_edge || is_bottom_edge {
+          base_edge_width
+        } else {
+          border.width
+        };
+        let inside = if is_top_edge || is_bottom_edge {
+          (border.width.min(baseline_edge)) * 0.5
+        } else {
+          border.width * 0.5
+        };
+        let y = if is_top_edge {
+          base_y - (border.width - inside)
+        } else {
+          base_y - inside
+        };
+        let col_start = item.origin.x + column_lines.get(col_idx).copied().unwrap_or(0.0);
+        let col_end = item.origin.x + column_lines.get(col_idx + 1).copied().unwrap_or(col_start);
+        let corner_left = item
+          .borders
+          .corner(row_idx, col_idx)
+          .map(|c| c.width * 0.5)
+          .unwrap_or(0.0);
+        let corner_right = item
+          .borders
+          .corner(row_idx, col_idx + 1)
+          .map(|c| c.width * 0.5)
+          .unwrap_or(0.0);
+        let x_start = col_start + corner_left;
+        let x_end = col_end - corner_right;
+        let width = (x_end - x_start).max(0.0);
+        if width <= 0.0 {
+          continue;
+        }
+        let border_item = BorderItem {
+          rect: Rect::from_xywh(x_start, y, width, border.width),
+          top: BorderSide {
+            width: border.width,
+            style: border.style,
+            color: border.color,
+          },
+          right: zero_side.clone(),
+          bottom: zero_side.clone(),
+          left: zero_side.clone(),
+          image: None,
+          radii: BorderRadii::ZERO,
+        };
+        self.render_border(&border_item);
+      }
+    }
+
+    for r in 0..=item.borders.row_count {
+      for c in 0..=item.borders.column_count {
+        let Some(corner) = item.borders.corner(r, c) else {
+          continue;
+        };
+        if !corner.is_visible() {
+          continue;
+        }
+        let x = item.origin.x + column_lines.get(c).copied().unwrap_or(0.0) - corner.width * 0.5;
+        let y = item.origin.y + row_lines.get(r).copied().unwrap_or(0.0) - corner.width * 0.5;
+        let rect = Rect::from_xywh(x, y, corner.width, corner.width);
+        if !corner.color.is_transparent() {
+          self.canvas.draw_rect(self.ds_rect(rect), corner.color);
+        }
+        let side = BorderSide {
+          width: corner.width,
+          style: corner.style,
+          color: corner.color,
+        };
+        let border_item = BorderItem {
+          rect,
+          top: side.clone(),
+          right: side.clone(),
+          bottom: side.clone(),
+          left: side,
+          image: None,
+          radii: BorderRadii::ZERO,
+        };
+        self.render_border(&border_item);
+      }
+    }
+  }
+
   fn render_item(&mut self, item: &DisplayItem) -> Result<()> {
     if self.culled_depth > 0 {
       match item {
@@ -3825,6 +3993,7 @@ impl DisplayListRenderer {
       DisplayItem::RadialGradient(item) => self.render_radial_gradient(item),
       DisplayItem::ConicGradient(item) => self.render_conic_gradient(item),
       DisplayItem::Border(item) => self.render_border(item),
+      DisplayItem::TableCollapsedBorders(item) => self.render_table_collapsed_borders(item),
       DisplayItem::TextDecoration(item) => {
         let scaled = self.scale_decoration_item(item);
         self.render_text_decoration(&scaled)?;

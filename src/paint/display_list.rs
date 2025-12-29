@@ -63,6 +63,7 @@ use crate::style::types::TextEmphasisStyle;
 use crate::style::types::TransformStyle;
 use crate::text::font_db::LoadedFont;
 pub use crate::text::font_fallback::FontId;
+use crate::tree::fragment_tree::TableCollapsedBorders;
 use std::fmt;
 use std::sync::Arc;
 use tiny_skia::FilterQuality;
@@ -116,6 +117,9 @@ pub enum DisplayItem {
 
   /// Draw CSS borders with per-side styles
   Border(Box<BorderItem>),
+
+  /// Paint all collapsed borders for a table.
+  TableCollapsedBorders(TableCollapsedBordersItem),
 
   /// Draw text decorations for an inline fragment
   TextDecoration(TextDecorationItem),
@@ -192,6 +196,7 @@ impl DisplayItem {
           .max(item.left.width);
         Some(item.rect.inflate(max_w * 0.5))
       }
+      DisplayItem::TableCollapsedBorders(item) => Some(item.bounds),
       DisplayItem::ListMarker(item) => Some(list_marker_bounds(item)),
       DisplayItem::PushClip(item) => Some(match &item.shape {
         ClipShape::Rect { rect, .. } => *rect,
@@ -1136,6 +1141,17 @@ pub struct BorderItem {
 
   /// Border corner radii (currently informational)
   pub radii: BorderRadii,
+}
+
+/// Collapsed-border paint primitive for a table.
+#[derive(Debug, Clone)]
+pub struct TableCollapsedBordersItem {
+  /// Origin of the table fragment in absolute coordinates.
+  pub origin: Point,
+  /// Bounds covering the collapsed strokes in absolute coordinates.
+  pub bounds: Rect,
+  /// Resolved collapsed border segments.
+  pub borders: Arc<TableCollapsedBorders>,
 }
 
 /// One border side definition.

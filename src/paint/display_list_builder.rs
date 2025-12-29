@@ -79,6 +79,7 @@ use crate::paint::display_list::ResolvedMaskLayer;
 use crate::paint::display_list::StackingContextItem;
 use crate::paint::display_list::StrokeRectItem;
 use crate::paint::display_list::StrokeRoundedRectItem;
+use crate::paint::display_list::TableCollapsedBordersItem;
 use crate::paint::display_list::TextDecorationItem;
 use crate::paint::display_list::TextEmphasis;
 use crate::paint::display_list::TextItem;
@@ -617,6 +618,26 @@ impl DisplayListBuilder {
       }
     }
 
+    if let Some(table_borders) = fragment.table_borders.as_ref() {
+      let origin = absolute_rect.origin;
+      let bounds = table_borders.paint_bounds.translate(origin);
+      let has_visible_borders = table_borders
+        .vertical_borders
+        .iter()
+        .chain(table_borders.horizontal_borders.iter())
+        .chain(table_borders.corner_borders.iter())
+        .any(|b| b.is_visible());
+      if has_visible_borders {
+        self.list.push(DisplayItem::TableCollapsedBorders(
+          TableCollapsedBordersItem {
+            origin,
+            bounds,
+            borders: table_borders.clone(),
+          },
+        ));
+      }
+    }
+
     for _ in 0..pushed_clips {
       self.list.push(DisplayItem::PopClip);
     }
@@ -701,6 +722,26 @@ impl DisplayListBuilder {
     );
     for child in fragment.children.iter() {
       self.build_fragment_with_clips(child, child_offset, clips);
+    }
+
+    if let Some(table_borders) = fragment.table_borders.as_ref() {
+      let origin = absolute_rect.origin;
+      let bounds = table_borders.paint_bounds.translate(origin);
+      let has_visible_borders = table_borders
+        .vertical_borders
+        .iter()
+        .chain(table_borders.horizontal_borders.iter())
+        .chain(table_borders.corner_borders.iter())
+        .any(|b| b.is_visible());
+      if has_visible_borders {
+        self.list.push(DisplayItem::TableCollapsedBorders(
+          TableCollapsedBordersItem {
+            origin,
+            bounds,
+            borders: table_borders.clone(),
+          },
+        ));
+      }
     }
 
     // Pop clip

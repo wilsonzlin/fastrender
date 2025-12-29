@@ -843,6 +843,13 @@ fn snapshot_display_item(item_id: usize, item: &DisplayItem) -> DisplayItemSnaps
         "radii": snapshot_radii(border.radii),
       })),
     ),
+    DisplayItem::TableCollapsedBorders(borders) => (
+      "table_collapsed_borders".to_string(),
+      Some(serde_json::json!({
+        "rows": borders.borders.row_count,
+        "columns": borders.borders.column_count,
+      })),
+    ),
     DisplayItem::TextDecoration(dec) => (
       "text_decoration".to_string(),
       Some(snapshot_text_decoration(dec)),

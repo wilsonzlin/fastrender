@@ -1238,6 +1238,7 @@ fn display_item_name(item: &DisplayItem) -> &'static str {
     DisplayItem::RadialGradient(_) => "radial_gradient",
     DisplayItem::ConicGradient(_) => "conic_gradient",
     DisplayItem::Border(_) => "border",
+    DisplayItem::TableCollapsedBorders(_) => "table_collapsed_borders",
     DisplayItem::TextDecoration(_) => "text_decoration",
     DisplayItem::PushClip(_) => "push_clip",
     DisplayItem::PopClip => "pop_clip",

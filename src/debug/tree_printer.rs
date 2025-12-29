@@ -934,6 +934,11 @@ fn display_item_value(item: &DisplayItem) -> Value {
       ("left", border_side_value(&it.left)),
       ("has_image", Value::from(it.image.is_some())),
     ]),
+    DisplayItem::TableCollapsedBorders(it) => map_from_pairs(vec![
+      ("type", Value::String("TableCollapsedBorders".into())),
+      ("rows", Value::from(it.borders.row_count as u64)),
+      ("columns", Value::from(it.borders.column_count as u64)),
+    ]),
     DisplayItem::TextDecoration(it) => map_from_pairs(vec![
       ("type", Value::String("TextDecoration".into())),
       ("rect", rect_value(it.bounds, None)),

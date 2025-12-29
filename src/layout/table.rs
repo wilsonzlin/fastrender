@@ -70,6 +70,7 @@ use crate::tree::box_tree::BoxType;
 use crate::tree::box_tree::MarkerContent;
 use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
+use crate::tree::fragment_tree::TableCollapsedBorders;
 use crate::tree::table_fixup::TableStructureFixer;
 use crate::{render_control::active_deadline, render_control::with_deadline};
 use rayon::prelude::*;
@@ -2101,22 +2102,7 @@ fn spanning_baseline_allocation(
   (clamped_baseline, bottom_here.min(cell_height))
 }
 
-#[derive(Debug, Clone, Copy)]
-struct ResolvedBorder {
-  width: f32,
-  style: BorderStyle,
-  color: Rgba,
-}
-
-impl ResolvedBorder {
-  fn none() -> Self {
-    Self {
-      width: 0.0,
-      style: BorderStyle::None,
-      color: Rgba::TRANSPARENT,
-    }
-  }
-}
+type ResolvedBorder = crate::tree::fragment_tree::CollapsedBorderSegment;
 
 #[derive(Debug, Clone)]
 pub struct CollapsedBorders {
@@ -2820,6 +2806,63 @@ pub fn compute_collapsed_borders_for_test(
   structure: &TableStructure,
 ) -> CollapsedBorders {
   compute_collapsed_borders(table_box, structure)
+}
+
+fn build_table_collapsed_borders_metadata(
+  structure: &TableStructure,
+  collapsed_borders: &CollapsedBorders,
+  column_line_pos: &[f32],
+  row_line_pos: &[f32],
+  vertical_line_max: &[f32],
+  horizontal_line_max: &[f32],
+) -> TableCollapsedBorders {
+  let mut vertical_borders = Vec::with_capacity((structure.column_count + 1) * structure.row_count);
+  for column in &collapsed_borders.vertical {
+    vertical_borders.extend(column.iter().copied());
+  }
+
+  let mut horizontal_borders =
+    Vec::with_capacity((structure.row_count + 1) * structure.column_count);
+  for row in &collapsed_borders.horizontal {
+    horizontal_borders.extend(row.iter().copied());
+  }
+
+  let mut corner_borders =
+    Vec::with_capacity((structure.row_count + 1) * (structure.column_count + 1));
+  for row in &collapsed_borders.corners {
+    corner_borders.extend(row.iter().copied());
+  }
+
+  let max_corner_half = corner_borders
+    .iter()
+    .map(|c| c.width * 0.5)
+    .fold(0.0f32, f32::max);
+  let min_x = column_line_pos.first().copied().unwrap_or(0.0)
+    - (vertical_line_max.first().copied().unwrap_or(0.0) * 0.5).max(max_corner_half);
+  let max_x = column_line_pos.last().copied().unwrap_or(0.0)
+    + (vertical_line_max.last().copied().unwrap_or(0.0) * 0.5).max(max_corner_half);
+  let min_y = row_line_pos.first().copied().unwrap_or(0.0)
+    - (horizontal_line_max.first().copied().unwrap_or(0.0) * 0.5).max(max_corner_half);
+  let max_y = row_line_pos.last().copied().unwrap_or(0.0)
+    + (horizontal_line_max.last().copied().unwrap_or(0.0) * 0.5).max(max_corner_half);
+
+  TableCollapsedBorders {
+    column_count: structure.column_count,
+    row_count: structure.row_count,
+    column_line_positions: column_line_pos.to_vec(),
+    row_line_positions: row_line_pos.to_vec(),
+    vertical_borders,
+    horizontal_borders,
+    corner_borders,
+    vertical_line_base: vertical_line_max.to_vec(),
+    horizontal_line_base: horizontal_line_max.to_vec(),
+    paint_bounds: Rect::from_xywh(
+      min_x,
+      min_y,
+      (max_x - min_x).max(0.0),
+      (max_y - min_y).max(0.0),
+    ),
+  }
 }
 
 fn find_first_baseline(fragment: &FragmentNode, parent_offset: f32) -> Option<f32> {
@@ -5183,6 +5226,32 @@ impl FormattingContext for TableFormattingContext {
 
     let mut stripped_border_cache: HashMap<usize, Arc<ComputedStyle>> = HashMap::new();
 
+    let table_collapsed_borders = if structure.border_collapse == BorderCollapse::Collapse {
+      Some(Arc::new(build_table_collapsed_borders_metadata(
+        &structure,
+        &collapsed_borders,
+        &column_line_pos,
+        &row_line_pos,
+        &vertical_line_max,
+        &horizontal_line_max,
+      )))
+    } else {
+      None
+    };
+
+    let content_origin_x = if structure.border_collapse == BorderCollapse::Collapse {
+      col_offsets.first().copied().unwrap_or(pad_left)
+        - vertical_line_max.first().copied().unwrap_or(0.0) * 0.5
+    } else {
+      border_left + pad_left
+    };
+    let content_origin_y = if structure.border_collapse == BorderCollapse::Collapse {
+      row_offsets.first().copied().unwrap_or(pad_top)
+        - horizontal_line_max.first().copied().unwrap_or(0.0) * 0.5
+    } else {
+      border_top + pad_top
+    };
+
     // Column group and column backgrounds precede row backgrounds/cells.
     let mut column_styles: Vec<Option<Arc<ComputedStyle>>> = vec![None; structure.column_count];
     let mut column_groups: Vec<(usize, usize, Arc<ComputedStyle>)> = Vec::new();
@@ -5548,303 +5617,6 @@ impl FormattingContext for TableFormattingContext {
     }
     let table_bounds = Rect::from_xywh(0.0, 0.0, total_width.max(0.0), total_height);
 
-    if let Some(collapsed_borders) = collapsed_borders.as_ref() {
-      #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-      enum BorderFragmentOrientation {
-        Vertical,
-        Horizontal,
-        Corner,
-      }
-
-      #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-      struct BorderColorKey {
-        r: u8,
-        g: u8,
-        b: u8,
-        a_bits: u32,
-      }
-
-      impl From<Rgba> for BorderColorKey {
-        fn from(color: Rgba) -> Self {
-          Self {
-            r: color.r,
-            g: color.g,
-            b: color.b,
-            a_bits: color.a.to_bits(),
-          }
-        }
-      }
-
-      #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-      struct BorderStyleKey {
-        orientation: BorderFragmentOrientation,
-        quantized_width: i32,
-        style: u8,
-        color: BorderColorKey,
-      }
-
-      const BORDER_WIDTH_QUANTIZATION: f32 = 64.0;
-
-      impl BorderStyleKey {
-        fn new(
-          color: Rgba,
-          width: f32,
-          style: BorderStyle,
-          orientation: BorderFragmentOrientation,
-        ) -> Self {
-          Self {
-            orientation,
-            quantized_width: (width * BORDER_WIDTH_QUANTIZATION).round() as i32,
-            style: match style {
-              BorderStyle::None => 0,
-              BorderStyle::Hidden => 1,
-              BorderStyle::Solid => 2,
-              BorderStyle::Dashed => 3,
-              BorderStyle::Dotted => 4,
-              BorderStyle::Double => 5,
-              BorderStyle::Groove => 6,
-              BorderStyle::Ridge => 7,
-              BorderStyle::Inset => 8,
-              BorderStyle::Outset => 9,
-            },
-            color: color.into(),
-          }
-        }
-      }
-
-      let mut border_style_cache: HashMap<BorderStyleKey, Arc<crate::style::ComputedStyle>> =
-        HashMap::new();
-
-      let mut cached_border_style = |color: Rgba,
-                                     width: f32,
-                                     border_style: BorderStyle,
-                                     orientation: BorderFragmentOrientation|
-       -> Arc<crate::style::ComputedStyle> {
-        let key = BorderStyleKey::new(color, width, border_style, orientation);
-        if let Some(existing) = border_style_cache.get(&key) {
-          return existing.clone();
-        }
-
-        let mut style = crate::style::ComputedStyle::default();
-        style.display = Display::Block;
-        match orientation {
-          BorderFragmentOrientation::Vertical => {
-            style.border_left_width = Length::px(width);
-            style.border_right_width = Length::px(0.0);
-            style.border_top_width = Length::px(0.0);
-            style.border_bottom_width = Length::px(0.0);
-            style.border_left_color = color;
-            style.border_right_color = color;
-            style.border_top_color = color;
-            style.border_bottom_color = color;
-            style.border_left_style = border_style;
-            style.border_right_style = BorderStyle::None;
-            style.border_top_style = BorderStyle::None;
-            style.border_bottom_style = BorderStyle::None;
-          }
-          BorderFragmentOrientation::Horizontal => {
-            style.border_left_width = Length::px(0.0);
-            style.border_right_width = Length::px(0.0);
-            style.border_top_width = Length::px(width);
-            style.border_bottom_width = Length::px(0.0);
-            style.border_left_color = color;
-            style.border_right_color = color;
-            style.border_top_color = color;
-            style.border_bottom_color = color;
-            style.border_left_style = BorderStyle::None;
-            style.border_right_style = BorderStyle::None;
-            style.border_top_style = border_style;
-            style.border_bottom_style = BorderStyle::None;
-          }
-          BorderFragmentOrientation::Corner => {
-            style.background_color = color;
-            style.border_left_width = Length::px(width);
-            style.border_right_width = Length::px(width);
-            style.border_top_width = Length::px(width);
-            style.border_bottom_width = Length::px(width);
-            style.border_left_color = color;
-            style.border_right_color = color;
-            style.border_top_color = color;
-            style.border_bottom_color = color;
-            style.border_left_style = border_style;
-            style.border_right_style = border_style;
-            style.border_top_style = border_style;
-            style.border_bottom_style = border_style;
-          }
-        }
-
-        let arc = Arc::new(style);
-        border_style_cache.insert(key, arc.clone());
-        arc
-      };
-
-      // Vertical grid lines: border before column 0, between columns, after last column.
-      for col_idx in 0..collapsed_borders.vertical.len() {
-        let base_x = column_line_pos.get(col_idx).copied().unwrap_or(0.0);
-        for row_idx in 0..structure.row_count {
-          let border = &collapsed_borders.vertical[col_idx][row_idx];
-          if border.width <= 0.0 || matches!(border.style, BorderStyle::None | BorderStyle::Hidden)
-          {
-            continue;
-          }
-          let is_left_edge = col_idx == 0;
-          let is_right_edge = col_idx == structure.column_count;
-          let base_edge_width = if is_left_edge {
-            vertical_line_max.first().copied().unwrap_or(border.width)
-          } else if is_right_edge {
-            vertical_line_max
-              .get(structure.column_count)
-              .copied()
-              .unwrap_or(border.width)
-          } else {
-            border.width
-          };
-          // Per CSS 2.2 §17.6.2, only the first row sets the table’s outer border
-          // thickness; any excess on later rows spills into the margin. Keep the
-          // interior portion capped at half the baseline edge width and push any
-          // extra outward.
-          let inside = if is_left_edge || is_right_edge {
-            (border.width.min(base_edge_width)) * 0.5
-          } else {
-            border.width * 0.5
-          };
-          let x = if is_left_edge {
-            base_x - (border.width - inside)
-          } else {
-            base_x - inside
-          };
-          let row_start = row_line_pos.get(row_idx).copied().unwrap_or(0.0);
-          let row_end = row_line_pos.get(row_idx + 1).copied().unwrap_or(row_start);
-          let corner_top = collapsed_borders
-            .corners
-            .get(row_idx)
-            .and_then(|row| row.get(col_idx))
-            .map(|c| c.width * 0.5)
-            .unwrap_or(0.0);
-          let corner_bottom = collapsed_borders
-            .corners
-            .get(row_idx + 1)
-            .and_then(|row| row.get(col_idx))
-            .map(|c| c.width * 0.5)
-            .unwrap_or(0.0);
-          let y_start = row_start + corner_top;
-          let y_end = row_end - corner_bottom;
-          let height = (y_end - y_start).max(0.0);
-          let rect = Rect::from_xywh(x, y_start, border.width, height);
-          let style = cached_border_style(
-            border.color,
-            border.width,
-            border.style,
-            BorderFragmentOrientation::Vertical,
-          );
-          fragments.push(FragmentNode::new_with_style(
-            rect,
-            FragmentContent::Block { box_id: None },
-            vec![],
-            style,
-          ));
-        }
-      }
-
-      // Horizontal grid lines: border before row 0, between rows, after last row.
-      for row_idx in 0..collapsed_borders.horizontal.len() {
-        let base_y = row_line_pos.get(row_idx).copied().unwrap_or(0.0);
-        for col_idx in 0..structure.column_count {
-          let border = &collapsed_borders.horizontal[row_idx][col_idx];
-          if border.width <= 0.0 || matches!(border.style, BorderStyle::None | BorderStyle::Hidden)
-          {
-            continue;
-          }
-          let is_top_edge = row_idx == 0;
-          let is_bottom_edge = row_idx == structure.row_count;
-          let base_edge_width = if is_top_edge {
-            horizontal_line_max.first().copied().unwrap_or(border.width)
-          } else if is_bottom_edge {
-            horizontal_line_max
-              .get(structure.row_count)
-              .copied()
-              .unwrap_or(border.width)
-          } else {
-            border.width
-          };
-          // Top/bottom edges: keep the interior half no thicker than the baseline edge width;
-          // any excess is pushed outward (into the margin).
-          let inside = if is_top_edge || is_bottom_edge {
-            (border.width.min(base_edge_width)) * 0.5
-          } else {
-            border.width * 0.5
-          };
-          let y = if is_top_edge {
-            base_y - (border.width - inside)
-          } else {
-            base_y - inside
-          };
-          let col_start = column_line_pos.get(col_idx).copied().unwrap_or(0.0);
-          let col_end = column_line_pos
-            .get(col_idx + 1)
-            .copied()
-            .unwrap_or(col_start);
-          let corner_left = collapsed_borders
-            .corners
-            .get(row_idx)
-            .and_then(|row| row.get(col_idx))
-            .map(|c| c.width * 0.5)
-            .unwrap_or(0.0);
-          let corner_right = collapsed_borders
-            .corners
-            .get(row_idx)
-            .and_then(|row| row.get(col_idx + 1))
-            .map(|c| c.width * 0.5)
-            .unwrap_or(0.0);
-          let x_start = col_start + corner_left;
-          let x_end = col_end - corner_right;
-          let width = (x_end - x_start).max(0.0);
-          let rect = Rect::from_xywh(x_start, y, width, border.width);
-          let style = cached_border_style(
-            border.color,
-            border.width,
-            border.style,
-            BorderFragmentOrientation::Horizontal,
-          );
-          fragments.push(FragmentNode::new_with_style(
-            rect,
-            FragmentContent::Block { box_id: None },
-            vec![],
-            style,
-          ));
-        }
-      }
-
-      // Corner joins
-      for r in 0..=structure.row_count {
-        for c in 0..=structure.column_count {
-          let corner = &collapsed_borders.corners[r][c];
-          if corner.width <= 0.0 || matches!(corner.style, BorderStyle::None | BorderStyle::Hidden)
-          {
-            continue;
-          }
-          let x = column_line_pos.get(c).copied().unwrap_or(0.0) - corner.width * 0.5;
-          let y = row_line_pos.get(r).copied().unwrap_or(0.0) - corner.width * 0.5;
-          let rect = Rect::from_xywh(x, y, corner.width, corner.width);
-          // Fill the corner square with the winning border color and also assign the
-          // winning border style/width on all edges so dashed/dotted/double corners
-          // retain their paint semantics while the center stays filled to avoid gaps.
-          let style = cached_border_style(
-            corner.color,
-            corner.width,
-            corner.style,
-            BorderFragmentOrientation::Corner,
-          );
-          fragments.push(FragmentNode::new_with_style(
-            rect,
-            FragmentContent::Block { box_id: None },
-            vec![],
-            style,
-          ));
-        }
-      }
-    }
-
     let mut table_style = (*table_box.style).clone();
     if structure.border_collapse == BorderCollapse::Collapse {
       table_style.border_top_width = crate::style::values::Length::px(0.0);
@@ -5862,6 +5634,7 @@ impl FormattingContext for TableFormattingContext {
         Arc::new(table_style),
       );
       fragment.baseline = baseline_offset;
+      fragment.table_borders = table_collapsed_borders.clone();
       if !running_children.is_empty() {
         let snapshot_constraints = LayoutConstraints::new(
           AvailableSpace::Definite(table_bounds.width().max(0.0)),
@@ -5923,6 +5696,7 @@ impl FormattingContext for TableFormattingContext {
       Arc::new(table_style),
     );
     table_fragment.baseline = baseline_offset;
+    table_fragment.table_borders = table_collapsed_borders.clone();
 
     // Layout captions relative to the table's width.
     let mut wrapper_children = Vec::new();
