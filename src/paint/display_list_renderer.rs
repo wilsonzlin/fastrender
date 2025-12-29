@@ -94,6 +94,7 @@ use crate::text::color_fonts::ColorFontRenderer;
 use crate::text::font_db::LoadedFont;
 use crate::text::font_loader::FontContext;
 use rayon::prelude::*;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -928,6 +929,180 @@ fn apply_drop_shadow(
 }
 
 fn apply_spread(pixmap: &mut Pixmap, spread: f32) {
+  // Run a separable square dilation/erosion with sliding-window extrema to avoid
+  // the quadratic neighborhood scan.
+  let radius = spread.abs().ceil() as i32;
+  if radius <= 0 || spread == 0.0 {
+    return;
+  }
+  let width = pixmap.width() as usize;
+  let height = pixmap.height() as usize;
+  if width == 0 || height == 0 {
+    return;
+  }
+  let expand = spread > 0.0;
+  let radius = radius as usize;
+  let len = width * height;
+
+  let source = pixmap.clone();
+  let source_channels: Vec<[u8; 4]> = source
+    .pixels()
+    .iter()
+    .map(|p| [p.red(), p.green(), p.blue(), p.alpha()])
+    .collect();
+
+  let mut horizontal = vec![[0u8; 4]; len];
+  apply_spread_horizontal(
+    &source_channels,
+    &mut horizontal,
+    width,
+    height,
+    radius,
+    expand,
+  );
+
+  // Transpose so the vertical pass can reuse the horizontal sliding window.
+  let mut transposed = vec![[0u8; 4]; len];
+  transpose_channels(&horizontal, width, height, &mut transposed);
+
+  // Reuse the horizontal buffer to store the vertical pass output.
+  apply_spread_horizontal(
+    &transposed,
+    &mut horizontal,
+    height,
+    width,
+    radius,
+    expand,
+  );
+
+  let dst = pixmap.pixels_mut();
+  write_transposed_to_pixmap(&horizontal, width, height, dst);
+}
+
+fn apply_spread_horizontal(
+  src: &[[u8; 4]],
+  dst: &mut [[u8; 4]],
+  width: usize,
+  height: usize,
+  radius: usize,
+  expand: bool,
+) {
+  debug_assert_eq!(src.len(), width * height);
+  debug_assert_eq!(dst.len(), width * height);
+  if radius == 0 {
+    dst.copy_from_slice(src);
+    return;
+  }
+  let window_size = radius * 2 + 1;
+  let extended_len = width + radius * 2;
+
+  dst
+    .par_chunks_mut(width)
+    .enumerate()
+    .for_each(|(y, dst_row)| {
+      let row_start = y * width;
+      let mut queues = [
+        VecDeque::with_capacity(window_size),
+        VecDeque::with_capacity(window_size),
+        VecDeque::with_capacity(window_size),
+        VecDeque::with_capacity(window_size),
+      ];
+
+      for j in 0..extended_len {
+        let src_x = if j < radius {
+          0
+        } else if j >= radius + width {
+          width - 1
+        } else {
+          j - radius
+        };
+        let idx = row_start + src_x;
+        let value = src[idx];
+
+        for (channel, queue) in queues.iter_mut().enumerate() {
+          if expand {
+            while let Some(&(_, v)) = queue.back() {
+              if v >= value[channel] {
+                break;
+              }
+              queue.pop_back();
+            }
+          } else {
+            while let Some(&(_, v)) = queue.back() {
+              if v <= value[channel] {
+                break;
+              }
+              queue.pop_back();
+            }
+          }
+          queue.push_back((j, value[channel]));
+        }
+
+        if j >= window_size {
+          let expire = j - window_size;
+          for queue in queues.iter_mut() {
+            while let Some(&(idx, _)) = queue.front() {
+              if idx <= expire {
+                queue.pop_front();
+              } else {
+                break;
+              }
+            }
+          }
+        }
+
+        if j + 1 >= window_size {
+          let out_x = j + 1 - window_size;
+          let mut out = [0u8; 4];
+          for (channel, queue) in queues.iter().enumerate() {
+            out[channel] = queue.front().map(|(_, v)| *v).unwrap_or(0);
+          }
+          dst_row[out_x] = out;
+        }
+      }
+    });
+}
+
+fn transpose_channels(
+  src: &[[u8; 4]],
+  width: usize,
+  height: usize,
+  dst: &mut [[u8; 4]],
+) {
+  debug_assert_eq!(src.len(), width * height);
+  debug_assert_eq!(dst.len(), width * height);
+  for y in 0..height {
+    let row_start = y * width;
+    for x in 0..width {
+      dst[x * height + y] = src[row_start + x];
+    }
+  }
+}
+
+fn write_transposed_to_pixmap(
+  src: &[[u8; 4]],
+  width: usize,
+  height: usize,
+  dst: &mut [PremultipliedColorU8],
+) {
+  debug_assert_eq!(src.len(), width * height);
+  debug_assert_eq!(dst.len(), width * height);
+  for y in 0..height {
+    for x in 0..width {
+      let channels = src[x * height + y];
+      dst[y * width + x] = PremultipliedColorU8::from_rgba(
+        channels[0],
+        channels[1],
+        channels[2],
+        channels[3],
+      )
+      .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+    }
+  }
+}
+
+#[cfg(test)]
+fn apply_spread_slow_reference(pixmap: &mut Pixmap, spread: f32) {
   let radius = spread.abs().ceil() as i32;
   if radius <= 0 || spread == 0.0 {
     return;
@@ -7973,5 +8148,54 @@ mod tests {
       "opacity should apply once across the group"
     );
     assert_eq!(single, (255, 128, 128, 255));
+  }
+
+  fn generate_spread_test_pixmap(width: u32, height: u32, seed: u32) -> Pixmap {
+    let mut pixmap = Pixmap::new(width, height).unwrap();
+    let pixels = pixmap.pixels_mut();
+    for y in 0..height {
+      for x in 0..width {
+        let idx = (y * width + x) as usize;
+        let base = seed
+          .wrapping_add(idx as u32 * 37)
+          .wrapping_add(x * 17)
+          .wrapping_add(y * 23);
+        let r = (base % 256) as u8;
+        let g = ((base * 3 + 7) % 256) as u8;
+        let b = ((base * 5 + 11) % 256) as u8;
+        let a = ((base * 7 + 13) % 256) as u8;
+        pixels[idx] =
+          PremultipliedColorU8::from_rgba(r, g, b, a).unwrap_or(PremultipliedColorU8::TRANSPARENT);
+      }
+    }
+    pixmap
+  }
+
+  #[test]
+  fn apply_spread_matches_reference() {
+    let cases = [
+      (2, 3, vec![4.0, -4.0]),
+      (3, 3, vec![1.0, -1.0, 2.0, -2.5]),
+      (5, 4, vec![3.0, -3.5, 1.5]),
+    ];
+
+    for (width, height, spreads) in cases {
+      let base = generate_spread_test_pixmap(width, height, width + height);
+      for spread in spreads {
+        let mut fast = base.clone();
+        apply_spread(&mut fast, spread);
+
+        let mut reference = base.clone();
+        apply_spread_slow_reference(&mut reference, spread);
+
+        assert_eq!(
+          fast.data(),
+          reference.data(),
+          "spread {spread} on {}x{}",
+          width,
+          height
+        );
+      }
+    }
   }
 }
