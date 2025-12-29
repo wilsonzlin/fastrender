@@ -377,8 +377,9 @@ struct RowGroupConstraints {
   max_height: Option<SpecifiedHeight>,
 }
 
-fn distribute_rowspan_targets(
-  targets: &[usize],
+fn distribute_rowspan_targets_range(
+  start: usize,
+  end: usize,
   row_heights: &mut [f32],
   rows: &[RowInfo],
   remaining: f32,
@@ -386,13 +387,21 @@ fn distribute_rowspan_targets(
   row_floor: &dyn Fn(usize, f32) -> f32,
   combine: &dyn Fn(f32, f32) -> f32,
 ) {
-  if targets.is_empty() || remaining <= 0.0 {
+  if remaining <= 0.0 {
     return;
   }
 
-  let mut weights = Vec::with_capacity(targets.len());
-  let mut caps = Vec::with_capacity(targets.len());
-  for &idx in targets {
+  let span_end = end.min(row_heights.len()).min(rows.len());
+  let span_start = start.min(span_end);
+  if span_start >= span_end {
+    return;
+  }
+  let span_len = span_end - span_start;
+
+  let mut weights = Vec::with_capacity(span_len);
+  let mut caps = Vec::with_capacity(span_len);
+  let mut total_weight = 0.0;
+  for idx in span_start..span_end {
     let current = *row_heights.get(idx).unwrap_or(&0.0);
     let base = row_floor(idx, current);
     let (_, max_opt) = resolve_row_min_max(&rows[idx], percent_base);
@@ -402,24 +411,19 @@ fn distribute_rowspan_targets(
       Some(_) => 0.0,
       None => 1.0, // Uncapped rows share spanning contributions evenly.
     };
+    total_weight += weight;
     weights.push(weight);
     caps.push(headroom);
   }
 
-  let mut total_weight: f32 = weights.iter().sum();
   if total_weight <= 0.0 {
-    total_weight = targets.len() as f32;
+    total_weight = span_len as f32;
     weights.fill(1.0);
   }
 
-  let mut shares = vec![0.0; targets.len()];
+  let mut shares = vec![0.0; span_len];
   let mut allocated = 0.0;
-  for (((share, weight), cap), _) in shares
-    .iter_mut()
-    .zip(weights.iter())
-    .zip(caps.iter())
-    .zip(targets.iter())
-  {
+  for ((share, weight), cap) in shares.iter_mut().zip(weights.iter()).zip(caps.iter()) {
     let mut portion = if total_weight > 0.0 {
       remaining * (*weight / total_weight)
     } else {
@@ -434,51 +438,43 @@ fn distribute_rowspan_targets(
 
   let leftover = (remaining - allocated).max(0.0);
   if leftover > 0.01 {
-    let mut flexible = Vec::new();
-    for (idx, cap) in caps.iter().enumerate() {
-      let cap_left = cap
-        .map(|c| (c - shares[idx]).max(0.0))
-        .unwrap_or(f32::INFINITY);
-      if cap_left > 0.0 {
-        flexible.push((idx, cap_left));
+    let mut finite_sum = 0.0;
+    let mut unbounded = 0usize;
+    for (cap, share) in caps.iter().zip(shares.iter()) {
+      let cap_left = cap.map(|c| (c - *share).max(0.0)).unwrap_or(f32::INFINITY);
+      if cap_left <= 0.0 {
+        continue;
+      }
+      if cap_left.is_finite() {
+        finite_sum += cap_left;
+      } else {
+        unbounded += 1;
       }
     }
 
-    if !flexible.is_empty() {
-      let finite_sum: f32 = flexible
-        .iter()
-        .filter_map(|(_, cap_left)| {
-          if *cap_left == f32::INFINITY {
-            None
-          } else {
-            Some(*cap_left)
-          }
-        })
-        .sum();
-      let unbounded: Vec<_> = flexible
-        .iter()
-        .filter(|(_, cap_left)| *cap_left == f32::INFINITY)
-        .collect();
-
-      if finite_sum > 0.0 {
-        for (idx, cap_left) in flexible {
-          if cap_left == f32::INFINITY {
-            continue;
-          }
-          let extra = leftover * (cap_left / finite_sum);
-          shares[idx] += extra.min(cap_left);
+    if finite_sum > 0.0 {
+      for (cap, share) in caps.iter().zip(shares.iter_mut()) {
+        let cap_left = cap.map(|c| (c - *share).max(0.0)).unwrap_or(f32::INFINITY);
+        if cap_left <= 0.0 || !cap_left.is_finite() {
+          continue;
         }
-      } else if !unbounded.is_empty() {
-        let per = leftover / unbounded.len() as f32;
-        for (idx_ref, _) in unbounded {
-          shares[*idx_ref] += per;
+        let extra = leftover * (cap_left / finite_sum);
+        *share += extra.min(cap_left);
+      }
+    } else if unbounded > 0 {
+      let per = leftover / unbounded as f32;
+      for (cap, share) in caps.iter().zip(shares.iter_mut()) {
+        let cap_left = cap.map(|c| (c - *share).max(0.0)).unwrap_or(f32::INFINITY);
+        if cap_left.is_infinite() && cap_left > 0.0 {
+          *share += per;
         }
       }
     }
   }
 
-  for (target_idx, share) in targets.iter().zip(shares.iter()) {
-    if let Some(slot) = row_heights.get_mut(*target_idx) {
+  for (offset, share) in shares.iter().enumerate() {
+    let target_idx = span_start + offset;
+    if let Some(slot) = row_heights.get_mut(target_idx) {
       *slot = combine(*slot, *share);
     }
   }
@@ -4666,17 +4662,14 @@ impl FormattingContext for TableFormattingContext {
         let span_end = (laid.cell.row + laid.cell.rowspan).min(structure.row_count);
         let spacing_total = v_spacing * (laid.cell.rowspan.saturating_sub(1) as f32);
         let span_height = (laid.height - spacing_total).max(0.0);
-        let targets: Vec<usize> = (span_start..span_end).collect();
-        let current_total: f32 = row_heights
-          .get(span_start..span_end)
-          .map(|slice| slice.iter().sum())
-          .unwrap_or(0.0);
+        let current_total: f32 = row_heights[span_start..span_end].iter().sum();
         let remaining = (span_height - current_total).max(0.0);
-        if remaining > 0.0 && !targets.is_empty() {
+        if remaining > 0.0 && span_start < span_end {
           let percent_base = percent_height_base;
           let row_floor_fn = |idx: usize, _current: f32| -> f32 { row_floor(idx, 0.0) };
-          distribute_rowspan_targets(
-            &targets,
+          distribute_rowspan_targets_range(
+            span_start,
+            span_end,
             &mut row_heights,
             &structure.rows,
             remaining,
@@ -11360,6 +11353,203 @@ mod tests {
       structure.rows[1].computed_height >= 79.0,
       "remaining spanning height should flow to uncapped rows"
     );
+  }
+
+  fn distribute_rowspan_targets_vec(
+    targets: &[usize],
+    row_heights: &mut [f32],
+    rows: &[RowInfo],
+    remaining: f32,
+    percent_base: Option<f32>,
+    row_floor: &dyn Fn(usize, f32) -> f32,
+    combine: &dyn Fn(f32, f32) -> f32,
+  ) {
+    if targets.is_empty() || remaining <= 0.0 {
+      return;
+    }
+
+    let mut weights = Vec::with_capacity(targets.len());
+    let mut caps = Vec::with_capacity(targets.len());
+    for &idx in targets {
+      let current = *row_heights.get(idx).unwrap_or(&0.0);
+      let base = row_floor(idx, current);
+      let (_, max_opt) = resolve_row_min_max(&rows[idx], percent_base);
+      let headroom = max_opt.map(|m| (m - base).max(0.0));
+      let weight = match headroom {
+        Some(h) if h > 0.0 => h,
+        Some(_) => 0.0,
+        None => 1.0, // Uncapped rows share spanning contributions evenly.
+      };
+      weights.push(weight);
+      caps.push(headroom);
+    }
+
+    let mut total_weight: f32 = weights.iter().sum();
+    if total_weight <= 0.0 {
+      total_weight = targets.len() as f32;
+      weights.fill(1.0);
+    }
+
+    let mut shares = vec![0.0; targets.len()];
+    let mut allocated = 0.0;
+    for (((share, weight), cap), _) in shares
+      .iter_mut()
+      .zip(weights.iter())
+      .zip(caps.iter())
+      .zip(targets.iter())
+    {
+      let mut portion = if total_weight > 0.0 {
+        remaining * (*weight / total_weight)
+      } else {
+        0.0
+      };
+      if let Some(c) = cap {
+        portion = portion.min(*c);
+      }
+      *share = portion;
+      allocated += portion;
+    }
+
+    let leftover = (remaining - allocated).max(0.0);
+    if leftover > 0.01 {
+      let mut flexible = Vec::new();
+      for (idx, cap) in caps.iter().enumerate() {
+        let cap_left = cap
+          .map(|c| (c - shares[idx]).max(0.0))
+          .unwrap_or(f32::INFINITY);
+        if cap_left > 0.0 {
+          flexible.push((idx, cap_left));
+        }
+      }
+
+      if !flexible.is_empty() {
+        let finite_sum: f32 = flexible
+          .iter()
+          .filter_map(|(_, cap_left)| {
+            if *cap_left == f32::INFINITY {
+              None
+            } else {
+              Some(*cap_left)
+            }
+          })
+          .sum();
+        let unbounded: Vec<_> = flexible
+          .iter()
+          .filter(|(_, cap_left)| *cap_left == f32::INFINITY)
+          .collect();
+
+        if finite_sum > 0.0 {
+          for (idx, cap_left) in flexible {
+            if cap_left == f32::INFINITY {
+              continue;
+            }
+            let extra = leftover * (cap_left / finite_sum);
+            shares[idx] += extra.min(cap_left);
+          }
+        } else if !unbounded.is_empty() {
+          let per = leftover / unbounded.len() as f32;
+          for (idx_ref, _) in unbounded {
+            shares[*idx_ref] += per;
+          }
+        }
+      }
+    }
+
+    for (target_idx, share) in targets.iter().zip(shares.iter()) {
+      if let Some(slot) = row_heights.get_mut(*target_idx) {
+        *slot = combine(*slot, *share);
+      }
+    }
+  }
+
+  #[test]
+  fn rowspan_range_distribution_matches_vec_baseline() {
+    let mut rows: Vec<RowInfo> = (0..4).map(RowInfo::new).collect();
+    rows[0].min_height = 10.0;
+    rows[0].author_max_height = Some(SpecifiedHeight::Fixed(50.0));
+    rows[1].min_height = 15.0;
+    rows[2].min_height = 20.0;
+    rows[2].author_max_height = Some(SpecifiedHeight::Fixed(60.0));
+    rows[3].min_height = 12.0;
+    rows[3].author_max_height = Some(SpecifiedHeight::Fixed(80.0));
+
+    let percent_base = None;
+    let row_floor = |idx: usize, current: f32| -> f32 {
+      let row = &rows[idx];
+      let mut floor = current;
+      if let Some((Some(min_len), _)) = Some(resolve_row_min_max(row, percent_base)) {
+        floor = floor.max(min_len);
+      }
+      if let Some(spec) = row.specified_height {
+        match spec {
+          SpecifiedHeight::Fixed(h) => floor = floor.max(h),
+          SpecifiedHeight::Percent(pct) => {
+            if let Some(base) = percent_base {
+              floor = floor.max((pct / 100.0) * base);
+            }
+          }
+          SpecifiedHeight::Auto => {}
+        }
+      }
+      floor
+    };
+    let row_floor_fn = |idx: usize, _current: f32| -> f32 { row_floor(idx, 0.0) };
+    let combine = |current: f32, share: f32| current + share;
+
+    let spans = vec![
+      (0usize, 3usize, 140.0),
+      (1usize, 3usize, 180.0),
+      (0usize, 4usize, 260.0),
+    ];
+    let v_spacing = 0.0f32;
+
+    let mut range_heights: Vec<f32> = rows.iter().map(|r| r.min_height).collect();
+    let mut vec_heights = range_heights.clone();
+
+    for (start, span_len, cell_height) in spans {
+      let end = (start + span_len).min(rows.len());
+      if end <= start {
+        continue;
+      }
+      let span_height = (cell_height - v_spacing * span_len.saturating_sub(1) as f32).max(0.0);
+
+      let current_total_range: f32 = range_heights[start..end].iter().sum();
+      let remaining_range = (span_height - current_total_range).max(0.0);
+      distribute_rowspan_targets_range(
+        start,
+        end,
+        &mut range_heights,
+        &rows,
+        remaining_range,
+        percent_base,
+        &row_floor_fn,
+        &combine,
+      );
+
+      let current_total_vec: f32 = vec_heights[start..end].iter().sum();
+      let remaining_vec = (span_height - current_total_vec).max(0.0);
+      let targets: Vec<usize> = (start..end).collect();
+      distribute_rowspan_targets_vec(
+        &targets,
+        &mut vec_heights,
+        &rows,
+        remaining_vec,
+        percent_base,
+        &row_floor_fn,
+        &combine,
+      );
+    }
+
+    assert_eq!(range_heights.len(), vec_heights.len());
+    for (idx, (range_h, vec_h)) in range_heights.iter().zip(vec_heights.iter()).enumerate() {
+      assert!(
+        (range_h - vec_h).abs() < 0.01,
+        "row {} height diverged: range {:.2} vs vec {:.2}",
+        idx,
+        range_h,
+        vec_h
+      );
+    }
   }
 
   #[test]
