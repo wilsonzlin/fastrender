@@ -3,7 +3,6 @@
 //! Enabled via the `disk_cache` crate feature.
 
 use super::CacheAction;
-use super::CachePlan;
 use super::CachedHttpMetadata;
 use super::CachedSnapshot;
 use super::CachingFetcher;
@@ -11,13 +10,17 @@ use super::CachingFetcherConfig;
 use super::FetchedResource;
 use super::HttpCachePolicy;
 use super::ResourceFetcher;
+use crate::error::Error;
 use crate::Result;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
+use std::thread;
 use std::time::Duration;
+use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -38,11 +41,53 @@ impl Default for DiskCacheConfig {
   }
 }
 
+const LOCK_STALE_AFTER: Duration = Duration::from_secs(30);
+const LOCK_WAIT_TIMEOUT: Duration = Duration::from_millis(500);
+const LOCK_RETRY_DELAY: Duration = Duration::from_millis(10);
+
 #[derive(Debug, Clone)]
 pub struct DiskCachingFetcher<F: ResourceFetcher> {
   memory: CachingFetcher<F>,
   cache_dir: PathBuf,
   disk_config: DiskCacheConfig,
+}
+
+struct EntryLock {
+  path: PathBuf,
+}
+
+impl Drop for EntryLock {
+  fn drop(&mut self) {
+    let _ = fs::remove_file(&self.path);
+  }
+}
+
+fn append_suffix(path: &Path, suffix: &str) -> PathBuf {
+  let mut name = path.as_os_str().to_owned();
+  name.push(suffix);
+  PathBuf::from(name)
+}
+
+fn tmp_path(path: &Path) -> PathBuf {
+  append_suffix(path, ".tmp")
+}
+
+fn lock_path_for(data_path: &Path) -> PathBuf {
+  append_suffix(data_path, ".lock")
+}
+
+fn lock_age_from_metadata(meta: &fs::Metadata) -> Option<Duration> {
+  meta
+    .modified()
+    .or_else(|_| meta.created())
+    .ok()
+    .and_then(|time| SystemTime::now().duration_since(time).ok())
+}
+
+fn lock_age(lock_path: &Path) -> Option<Duration> {
+  fs::metadata(lock_path)
+    .ok()
+    .and_then(|meta| lock_age_from_metadata(&meta))
 }
 
 impl<F: ResourceFetcher> DiskCachingFetcher<F> {
@@ -91,23 +136,91 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     meta_path
   }
 
+  fn lock_is_active(&self, data_path: &Path) -> bool {
+    let lock_path = lock_path_for(data_path);
+    match fs::metadata(&lock_path) {
+      Ok(meta) => {
+        if let Some(age) = lock_age_from_metadata(&meta) {
+          if age > LOCK_STALE_AFTER {
+            let _ = fs::remove_file(&lock_path);
+            return false;
+          }
+        }
+        true
+      }
+      Err(err) => err.kind() != ErrorKind::NotFound,
+    }
+  }
+
+  fn acquire_lock(&self, data_path: &Path) -> Option<EntryLock> {
+    let lock_path = lock_path_for(data_path);
+    let deadline = Instant::now() + LOCK_WAIT_TIMEOUT;
+
+    loop {
+      match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&lock_path)
+      {
+        Ok(_) => return Some(EntryLock { path: lock_path }),
+        Err(err) if err.kind() == ErrorKind::AlreadyExists => {
+          if let Some(age) = lock_age(&lock_path) {
+            if age > LOCK_STALE_AFTER {
+              let _ = fs::remove_file(&lock_path);
+              continue;
+            }
+          }
+
+          if Instant::now() >= deadline {
+            return None;
+          }
+
+          thread::sleep(LOCK_RETRY_DELAY);
+        }
+        Err(_) => return None,
+      }
+    }
+  }
+
+  fn remove_entry_if_unlocked(&self, data_path: &Path, meta_path: &Path) {
+    if !self.lock_is_active(data_path) {
+      let _ = self.remove_entry(data_path, meta_path);
+    }
+  }
+
   fn read_disk_entry(&self, url: &str) -> Option<CachedSnapshot> {
     let data_path = self.data_path(url);
     let meta_path = self.meta_path_for_data(&data_path);
 
+    if self.lock_is_active(&data_path) {
+      return None;
+    }
+
     let meta_bytes = fs::read(&meta_path).ok()?;
-    let meta: StoredMetadata = serde_json::from_slice(&meta_bytes).ok()?;
+    let meta: StoredMetadata = match serde_json::from_slice(&meta_bytes) {
+      Ok(meta) => meta,
+      Err(_) => {
+        self.remove_entry_if_unlocked(&data_path, &meta_path);
+        return None;
+      }
+    };
 
     if let Some(max_age) = self.disk_config.max_age {
       if now_seconds().saturating_sub(meta.stored_at) > max_age.as_secs() {
-        let _ = self.remove_entry(&data_path, &meta_path);
+        self.remove_entry_if_unlocked(&data_path, &meta_path);
         return None;
       }
     }
 
-    let bytes = fs::read(&data_path).ok()?;
+    let bytes = match fs::read(&data_path) {
+      Ok(bytes) => bytes,
+      Err(_) => {
+        self.remove_entry_if_unlocked(&data_path, &meta_path);
+        return None;
+      }
+    };
     if bytes.is_empty() || meta.len != bytes.len() {
-      let _ = self.remove_entry(&data_path, &meta_path);
+      self.remove_entry_if_unlocked(&data_path, &meta_path);
       return None;
     }
 
@@ -157,6 +270,10 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       let _ = fs::create_dir_all(parent);
     }
 
+    let Some(_lock) = self.acquire_lock(&data_path) else {
+      return;
+    };
+
     let stored_at = now_seconds();
     let stored_time = UNIX_EPOCH
       .checked_add(Duration::from_secs(stored_at))
@@ -180,9 +297,9 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       return;
     }
 
-    if fs::write(&data_path, &resource.bytes).is_err() {
-      return;
-    }
+    let meta_path = self.meta_path_for_data(&data_path);
+    let data_tmp = tmp_path(&data_path);
+    let meta_tmp = tmp_path(&meta_path);
 
     let meta = StoredMetadata {
       url: url.to_string(),
@@ -201,9 +318,34 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
         .and_then(StoredCacheMetadata::from_http),
     };
 
-    let meta_path = self.meta_path_for_data(&data_path);
-    if let Ok(serialized) = serde_json::to_vec(&meta) {
-      let _ = fs::write(&meta_path, &serialized);
+    if fs::write(&data_tmp, &resource.bytes).is_err() {
+      let _ = fs::remove_file(&data_tmp);
+      let _ = fs::remove_file(&meta_tmp);
+      return;
+    }
+
+    let Ok(serialized) = serde_json::to_vec(&meta) else {
+      let _ = fs::remove_file(&data_tmp);
+      let _ = fs::remove_file(&meta_tmp);
+      return;
+    };
+
+    if fs::write(&meta_tmp, &serialized).is_err() {
+      let _ = fs::remove_file(&data_tmp);
+      let _ = fs::remove_file(&meta_tmp);
+      return;
+    }
+
+    if fs::rename(&data_tmp, &data_path).is_err() {
+      let _ = fs::remove_file(&data_tmp);
+      let _ = fs::remove_file(&meta_tmp);
+      return;
+    }
+
+    if fs::rename(&meta_tmp, &meta_path).is_err() {
+      let _ = fs::remove_file(&meta_tmp);
+      let _ = self.remove_entry(&data_path, &meta_path);
+      return;
     }
 
     self.enforce_disk_limits();
@@ -212,6 +354,8 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
   fn remove_entry(&self, data_path: &Path, meta_path: &Path) -> Result<()> {
     let _ = fs::remove_file(data_path);
     let _ = fs::remove_file(meta_path);
+    let _ = fs::remove_file(tmp_path(data_path));
+    let _ = fs::remove_file(tmp_path(meta_path));
     Ok(())
   }
 
@@ -233,6 +377,10 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
           .map(|ext| ext == "bin")
           != Some(true)
         {
+          continue;
+        }
+
+        if self.lock_is_active(&path) {
           continue;
         }
 
@@ -259,6 +407,9 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
         break;
       }
       let meta_path = self.meta_path_for_data(&path);
+      if self.lock_is_active(&path) {
+        continue;
+      }
       let _ = self.remove_entry(&path, &meta_path);
       total = total.saturating_sub(size);
     }
@@ -511,12 +662,12 @@ fn secs_to_system_time(secs: u64) -> Option<SystemTime> {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::error::Error;
   use std::collections::VecDeque;
   use std::sync::atomic::AtomicUsize;
   use std::sync::atomic::Ordering;
   use std::sync::Arc;
   use std::sync::Mutex;
+  use std::thread;
 
   #[derive(Clone)]
   struct CountingFetcher {
@@ -667,5 +818,104 @@ mod tests {
     let meta: StoredMetadata = serde_json::from_slice(&meta_bytes).expect("valid meta");
     assert_eq!(meta.etag.as_deref(), Some("etag2"));
     assert_eq!(meta.last_modified.as_deref(), Some("lm2"));
+  }
+
+  #[test]
+  fn removes_corrupted_entries_on_read() {
+    let tmp = tempfile::tempdir().unwrap();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let fetcher = CountingFetcher { count: counter };
+    let disk = DiskCachingFetcher::new(fetcher, tmp.path());
+    let url = "https://example.com/corrupted";
+
+    let mut resource =
+      FetchedResource::new(b"complete-body".to_vec(), Some("text/plain".to_string()));
+    resource.final_url = Some(url.to_string());
+    disk.persist_resource(url, &resource, None, None, None);
+
+    let data_path = disk.data_path(url);
+    let meta_path = disk.meta_path_for_data(&data_path);
+    assert!(data_path.exists());
+    assert!(meta_path.exists());
+
+    fs::write(&data_path, b"tiny").unwrap();
+
+    let snapshot = disk.read_disk_entry(url);
+    assert!(snapshot.is_none(), "corrupted entry should be discarded");
+    assert!(!data_path.exists());
+    assert!(!meta_path.exists());
+  }
+
+  #[test]
+  fn ignores_temporary_files_during_reads() {
+    let tmp = tempfile::tempdir().unwrap();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let fetcher = CountingFetcher {
+      count: Arc::clone(&counter),
+    };
+    let disk = DiskCachingFetcher::new(fetcher, tmp.path());
+    let url = "https://example.com/tmp-files";
+
+    let mut resource = FetchedResource::new(b"persistent".to_vec(), Some("text/plain".to_string()));
+    resource.final_url = Some(url.to_string());
+    disk.persist_resource(url, &resource, None, None, None);
+
+    let data_path = disk.data_path(url);
+    let meta_path = disk.meta_path_for_data(&data_path);
+    fs::write(tmp_path(&data_path), b"junk").unwrap();
+    fs::write(tmp_path(&meta_path), b"junk").unwrap();
+
+    let snapshot = disk.read_disk_entry(url).expect("entry should be readable");
+    let cached = snapshot
+      .value
+      .as_result()
+      .expect("resource should deserialize");
+    assert_eq!(cached.bytes, b"persistent");
+    assert_eq!(cached.content_type.as_deref(), Some("text/plain"));
+  }
+
+  #[test]
+  fn concurrent_persists_keep_entry_valid() {
+    let tmp = tempfile::tempdir().unwrap();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let fetcher = CountingFetcher {
+      count: Arc::clone(&counter),
+    };
+    let disk = Arc::new(DiskCachingFetcher::new(fetcher, tmp.path()));
+    let url = "https://example.com/concurrent";
+    let bodies: Vec<Vec<u8>> = vec![
+      b"first".to_vec(),
+      b"second-version".to_vec(),
+      b"third-version-with-more-bytes".to_vec(),
+    ];
+
+    let mut handles = Vec::new();
+    for body in bodies.clone() {
+      let disk = Arc::clone(&disk);
+      let url = url.to_string();
+      handles.push(thread::spawn(move || {
+        let mut resource = FetchedResource::new(body, Some("text/plain".to_string()));
+        resource.final_url = Some(url.clone());
+        disk.persist_resource(&url, &resource, None, None, None);
+      }));
+    }
+
+    for handle in handles {
+      handle.join().expect("thread should not panic");
+    }
+
+    let snapshot = disk
+      .read_disk_entry(url)
+      .expect("entry should be present after concurrent persists");
+    let resource = snapshot
+      .value
+      .as_result()
+      .expect("resource should deserialize");
+    assert!(
+      bodies.iter().any(|b| *b == resource.bytes),
+      "final entry should match one of the persisted bodies"
+    );
+    assert_eq!(resource.content_type.as_deref(), Some("text/plain"));
+    assert_eq!(resource.final_url.as_deref(), Some(url));
   }
 }
