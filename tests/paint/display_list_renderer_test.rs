@@ -1705,6 +1705,7 @@ fn color_glyph_shadow_matches_golden() {
 
   let text = TextItem {
     origin: Point::new(20.0, 96.0),
+    cached_bounds: None,
     glyphs: vec![GlyphInstance {
       glyph_id: glyph_id.0 as u32,
       offset: Point::new(0.0, 0.0),

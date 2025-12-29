@@ -84,6 +84,7 @@ use crate::paint::display_list::TextEmphasis;
 use crate::paint::display_list::TextItem;
 use crate::paint::display_list::TextShadowItem;
 use crate::paint::display_list::Transform3D;
+use crate::paint::display_list::{list_marker_bounds, text_bounds};
 use crate::paint::object_fit::compute_object_fit;
 use crate::paint::object_fit::default_object_position;
 use crate::paint::stacking::Layer6Item;
@@ -2405,7 +2406,7 @@ impl DisplayListBuilder {
           };
 
           if *is_marker {
-            self.list.push(DisplayItem::ListMarker(ListMarkerItem {
+            let mut item = ListMarkerItem {
               origin,
               glyphs,
               color,
@@ -2413,9 +2414,11 @@ impl DisplayListBuilder {
               font_size,
               advance_width,
               ..Default::default()
-            }));
+            };
+            item.cached_bounds = Some(list_marker_bounds(&item));
+            self.list.push(DisplayItem::ListMarker(item));
           } else {
-            self.list.push(DisplayItem::Text(TextItem {
+            let mut item = TextItem {
               origin,
               glyphs,
               color,
@@ -2424,7 +2427,9 @@ impl DisplayListBuilder {
               advance_width,
               decorations: Vec::new(),
               ..Default::default()
-            }));
+            };
+            item.cached_bounds = Some(text_bounds(&item));
+            self.list.push(DisplayItem::Text(item));
           }
         }
 
@@ -3494,7 +3499,7 @@ impl DisplayListBuilder {
         .map(|v| FontVariation::new(v.tag, v.value))
         .collect();
 
-      self.list.push(DisplayItem::Text(TextItem {
+      let mut item = TextItem {
         origin: Point::new(origin_x, baseline_y),
         glyphs,
         color,
@@ -3509,7 +3514,10 @@ impl DisplayListBuilder {
         synthetic_oblique: run.synthetic_oblique,
         emphasis,
         decorations: Vec::new(),
-      }));
+        ..Default::default()
+      };
+      item.cached_bounds = Some(text_bounds(&item));
+      self.list.push(DisplayItem::Text(item));
 
       pen_x += run.advance;
     }
@@ -3542,7 +3550,7 @@ impl DisplayListBuilder {
         .map(|v| FontVariation::new(v.tag, v.value))
         .collect();
 
-      self.list.push(DisplayItem::Text(TextItem {
+      let mut item = TextItem {
         origin: Point::new(block_baseline, inline_start),
         glyphs,
         color,
@@ -3557,7 +3565,10 @@ impl DisplayListBuilder {
         synthetic_oblique: run.synthetic_oblique,
         emphasis,
         decorations: Vec::new(),
-      }));
+        ..Default::default()
+      };
+      item.cached_bounds = Some(text_bounds(&item));
+      self.list.push(DisplayItem::Text(item));
 
       pen_inline += run.advance;
     }
@@ -3589,7 +3600,7 @@ impl DisplayListBuilder {
         .iter()
         .map(|v| FontVariation::new(v.tag, v.value))
         .collect();
-      self.list.push(DisplayItem::ListMarker(ListMarkerItem {
+      let mut item = ListMarkerItem {
         origin: Point::new(origin_x, baseline_y),
         glyphs,
         font_size: run.font_size,
@@ -3604,7 +3615,10 @@ impl DisplayListBuilder {
         synthetic_oblique: run.synthetic_oblique,
         emphasis,
         background: None,
-      }));
+        ..Default::default()
+      };
+      item.cached_bounds = Some(list_marker_bounds(&item));
+      self.list.push(DisplayItem::ListMarker(item));
 
       pen_x += run.advance;
     }
@@ -3636,7 +3650,7 @@ impl DisplayListBuilder {
         .iter()
         .map(|v| FontVariation::new(v.tag, v.value))
         .collect();
-      self.list.push(DisplayItem::ListMarker(ListMarkerItem {
+      let mut item = ListMarkerItem {
         origin: Point::new(block_baseline, inline_start),
         glyphs,
         font_size: run.font_size,
@@ -3651,7 +3665,10 @@ impl DisplayListBuilder {
         synthetic_oblique: run.synthetic_oblique,
         emphasis,
         background: None,
-      }));
+        ..Default::default()
+      };
+      item.cached_bounds = Some(list_marker_bounds(&item));
+      self.list.push(DisplayItem::ListMarker(item));
 
       pen_inline += run.advance;
     }
@@ -4694,7 +4711,7 @@ impl DisplayListBuilder {
       .collect();
     let advance_width = text.len() as f32 * char_width;
 
-    self.list.push(DisplayItem::Text(TextItem {
+    let mut item = TextItem {
       origin,
       glyphs,
       color,
@@ -4703,7 +4720,9 @@ impl DisplayListBuilder {
       advance_width,
       decorations: Vec::new(),
       ..Default::default()
-    }));
+    };
+    item.cached_bounds = Some(text_bounds(&item));
+    self.list.push(DisplayItem::Text(item));
     true
   }
 

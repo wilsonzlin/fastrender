@@ -1836,12 +1836,14 @@ impl DisplayListRenderer {
       }
       scaled.emphasis = Some(e);
     }
+    scaled.cached_bounds = item.cached_bounds.map(|bounds| self.ds_rect(bounds));
     scaled
   }
 
   fn scale_list_marker_item(&self, item: &ListMarkerItem) -> ListMarkerItem {
     let text_equiv = TextItem {
       origin: item.origin,
+      cached_bounds: item.cached_bounds,
       glyphs: item.glyphs.clone(),
       color: item.color,
       palette_index: item.palette_index,
@@ -1855,11 +1857,11 @@ impl DisplayListRenderer {
       synthetic_oblique: item.synthetic_oblique,
       emphasis: item.emphasis.clone(),
       decorations: Vec::new(),
-      ..Default::default()
     };
     let scaled = self.scale_text_item(&text_equiv);
     ListMarkerItem {
       origin: scaled.origin,
+      cached_bounds: scaled.cached_bounds,
       glyphs: scaled.glyphs,
       color: scaled.color,
       shadows: scaled.shadows,
@@ -4310,6 +4312,7 @@ impl DisplayListRenderer {
 
     let text = TextItem {
       origin: item.origin,
+      cached_bounds: item.cached_bounds,
       glyphs: item.glyphs.clone(),
       color: item.color,
       palette_index: item.palette_index,
@@ -4323,7 +4326,6 @@ impl DisplayListRenderer {
       synthetic_oblique: item.synthetic_oblique,
       emphasis: item.emphasis.clone(),
       decorations: Vec::new(),
-      ..Default::default()
     };
     self.render_text(&text)
   }
@@ -7315,6 +7317,7 @@ mod tests {
     let mut list = DisplayList::new();
     list.push(DisplayItem::Text(TextItem {
       origin: Point::new(10.0, 24.0),
+      cached_bounds: None,
       glyphs: vec![GlyphInstance {
         glyph_id: glyph_id.0 as u32,
         offset: Point::new(0.0, 0.0),
@@ -7377,6 +7380,7 @@ mod tests {
     let mut list = DisplayList::new();
     list.push(DisplayItem::Text(TextItem {
       origin: Point::new(10.0, 24.0),
+      cached_bounds: None,
       glyphs: vec![GlyphInstance {
         glyph_id: glyph_id.0 as u32,
         offset: Point::new(0.0, 0.0),
@@ -7467,6 +7471,7 @@ mod tests {
     let mut list = DisplayList::new();
     list.push(DisplayItem::Text(TextItem {
       origin: Point::new(10.0, 24.0),
+      cached_bounds: None,
       glyphs: vec![GlyphInstance {
         glyph_id: glyph_id.0 as u32,
         offset: Point::new(0.0, 0.0),
@@ -7537,6 +7542,7 @@ mod tests {
     let mut list = DisplayList::new();
     list.push(DisplayItem::Text(TextItem {
       origin: Point::new(0.0, 20.0),
+      cached_bounds: None,
       glyphs: vec![GlyphInstance {
         glyph_id: glyph_id.0 as u32,
         offset: Point::new(0.0, 0.0),
@@ -7589,6 +7595,7 @@ mod tests {
     let mut list = DisplayList::new();
     list.push(DisplayItem::Text(TextItem {
       origin: Point::new(20.0, 30.0),
+      cached_bounds: None,
       glyphs: Vec::new(),
       color: Rgba::BLACK,
       palette_index: 0,

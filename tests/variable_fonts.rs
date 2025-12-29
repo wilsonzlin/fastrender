@@ -1,6 +1,7 @@
 use fastrender::geometry::Point;
 use fastrender::paint::display_list::{
-  DisplayItem, DisplayList, FontVariation, GlyphInstance, ListMarkerItem, TextItem,
+  list_marker_bounds, text_bounds, DisplayItem, DisplayList, FontVariation, GlyphInstance,
+  ListMarkerItem, TextItem,
 };
 use fastrender::paint::display_list_renderer::DisplayListRenderer;
 use fastrender::style::types::FontVariationSetting;
@@ -87,8 +88,9 @@ fn text_item_from_run(run: &ShapedRun, origin: Point) -> TextItem {
     .collect();
   variations.sort_by_key(|v| v.tag);
 
-  TextItem {
+  let mut item = TextItem {
     origin,
+    cached_bounds: None,
     glyphs,
     color: Rgba::BLACK,
     palette_index: run.palette_index,
@@ -102,13 +104,16 @@ fn text_item_from_run(run: &ShapedRun, origin: Point) -> TextItem {
     variations,
     emphasis: None,
     decorations: Vec::new(),
-  }
+  };
+  item.cached_bounds = Some(text_bounds(&item));
+  item
 }
 
 fn list_marker_from_run(run: &ShapedRun, origin: Point) -> ListMarkerItem {
   let text = text_item_from_run(run, origin);
-  ListMarkerItem {
+  let mut marker = ListMarkerItem {
     origin: text.origin,
+    cached_bounds: text.cached_bounds,
     glyphs: text.glyphs,
     color: text.color,
     palette_index: text.palette_index,
@@ -122,7 +127,9 @@ fn list_marker_from_run(run: &ShapedRun, origin: Point) -> ListMarkerItem {
     synthetic_oblique: text.synthetic_oblique,
     emphasis: text.emphasis,
     background: None,
-  }
+  };
+  marker.cached_bounds = Some(list_marker_bounds(&marker));
+  marker
 }
 
 fn render_display_list(font_ctx: &FontContext, run: &ShapedRun) -> Pixmap {

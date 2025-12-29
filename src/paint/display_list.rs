@@ -630,6 +630,9 @@ pub struct TextItem {
   /// Position to draw text (baseline origin)
   pub origin: Point,
 
+  /// Cached conservative bounds in CSS px.
+  pub cached_bounds: Option<Rect>,
+
   /// Glyph instances with positions
   pub glyphs: Vec<GlyphInstance>,
 
@@ -680,6 +683,7 @@ impl Default for TextItem {
   fn default() -> Self {
     Self {
       origin: Point::new(0.0, 0.0),
+      cached_bounds: None,
       glyphs: Vec::new(),
       color: Rgba::default(),
       palette_index: 0,
@@ -784,44 +788,52 @@ pub struct DecorationStroke {
   pub segments: Option<Vec<(f32, f32)>>,
 }
 
-/// Conservative bounds for a text item using glyph offsets and font size.
-pub fn text_bounds(item: &TextItem) -> Rect {
-  let mut min_x = item.origin.x;
-  let mut max_x = item.origin.x + item.advance_width;
-  for glyph in &item.glyphs {
-    let gx = item.origin.x + glyph.offset.x;
+fn conservative_glyph_run_bounds(
+  origin: Point,
+  glyphs: &[GlyphInstance],
+  advance_width: f32,
+  font_size: f32,
+) -> Rect {
+  let mut min_x = origin.x;
+  let mut max_x = origin.x + advance_width;
+  for glyph in glyphs {
+    let gx = origin.x + glyph.offset.x;
     min_x = min_x.min(gx);
     max_x = max_x.max(gx + glyph.advance);
   }
   // Assume glyph outlines extend roughly one font-size above the baseline and a quarter below.
-  let ascent = item.font_size;
-  let descent = item.font_size * 0.25;
+  let ascent = font_size;
+  let descent = font_size * 0.25;
   Rect::from_xywh(
     min_x,
-    item.origin.y - ascent,
+    origin.y - ascent,
     (max_x - min_x).max(0.0),
     ascent + descent,
   )
 }
 
+/// Conservative bounds for a text item using glyph offsets and font size.
+pub fn text_bounds(item: &TextItem) -> Rect {
+  item.cached_bounds.unwrap_or_else(|| {
+    conservative_glyph_run_bounds(
+      item.origin,
+      &item.glyphs,
+      item.advance_width,
+      item.font_size,
+    )
+  })
+}
+
 /// Conservative bounds for a list marker item.
 pub fn list_marker_bounds(item: &ListMarkerItem) -> Rect {
-  let mut min_x = item.origin.x;
-  let mut max_x = item.origin.x + item.advance_width;
-  for glyph in &item.glyphs {
-    let gx = item.origin.x + glyph.offset.x;
-    min_x = min_x.min(gx);
-    max_x = max_x.max(gx + glyph.advance);
-  }
-
-  let ascent = item.font_size;
-  let descent = item.font_size * 0.25;
-  Rect::from_xywh(
-    min_x,
-    item.origin.y - ascent,
-    (max_x - min_x).max(0.0),
-    ascent + descent,
-  )
+  item.cached_bounds.unwrap_or_else(|| {
+    conservative_glyph_run_bounds(
+      item.origin,
+      &item.glyphs,
+      item.advance_width,
+      item.font_size,
+    )
+  })
 }
 
 /// List marker paint item
@@ -829,6 +841,9 @@ pub fn list_marker_bounds(item: &ListMarkerItem) -> Rect {
 pub struct ListMarkerItem {
   /// Origin in CSS px (baseline-aligned)
   pub origin: Point,
+
+  /// Cached conservative bounds in CSS px.
+  pub cached_bounds: Option<Rect>,
 
   /// Shaped glyphs for the marker text
   pub glyphs: Vec<GlyphInstance>,
@@ -875,6 +890,7 @@ impl Default for ListMarkerItem {
   fn default() -> Self {
     Self {
       origin: Point::new(0.0, 0.0),
+      cached_bounds: None,
       glyphs: Vec::new(),
       color: Rgba::default(),
       palette_index: 0,
@@ -2450,6 +2466,45 @@ mod tests {
     // Max Y: max(10+50, 30+40) = max(60, 70) = 70
     assert_eq!(bounds.width(), 120.0); // 130 - 10
     assert_eq!(bounds.height(), 60.0); // 70 - 10
+  }
+
+  #[test]
+  fn text_bounds_match_cached_and_uncached() {
+    let mut uncached = TextItem {
+      origin: Point::new(10.0, 20.0),
+      cached_bounds: None,
+      glyphs: vec![
+        GlyphInstance {
+          glyph_id: 1,
+          offset: Point::new(-2.0, 0.0),
+          advance: 4.0,
+        },
+        GlyphInstance {
+          glyph_id: 2,
+          offset: Point::new(2.0, 0.0),
+          advance: 6.0,
+        },
+      ],
+      color: Rgba::BLACK,
+      palette_index: 0,
+      shadows: Vec::new(),
+      font_size: 12.0,
+      advance_width: 20.0,
+      font: None,
+      font_id: None,
+      variations: Vec::new(),
+      synthetic_bold: 0.0,
+      synthetic_oblique: 0.0,
+      emphasis: None,
+      decorations: Vec::new(),
+    };
+    let expected = text_bounds(&uncached);
+    let mut cached = uncached.clone();
+    cached.cached_bounds = Some(expected);
+
+    assert_eq!(text_bounds(&cached), expected);
+    assert_eq!(DisplayItem::Text(cached.clone()).bounds(), Some(expected));
+    assert_eq!(DisplayItem::Text(uncached).bounds(), Some(expected));
   }
 
   #[test]

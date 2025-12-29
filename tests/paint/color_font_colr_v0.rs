@@ -61,6 +61,7 @@ fn text_item_from_run(run: &ShapedRun, origin: Point, text_color: Rgba) -> TextI
 
   TextItem {
     origin,
+    cached_bounds: None,
     glyphs,
     color: text_color,
     palette_index: run.palette_index,

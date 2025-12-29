@@ -865,6 +865,7 @@ fn test_text_item() {
 
   list.push(DisplayItem::Text(TextItem {
     origin: Point::new(100.0, 200.0),
+    cached_bounds: None,
     glyphs: vec![
       GlyphInstance {
         glyph_id: 72, // 'H'
@@ -1678,6 +1679,7 @@ fn test_complex_display_list() {
   // Text
   list.push(DisplayItem::Text(TextItem {
     origin: Point::new(120.0, 150.0),
+    cached_bounds: None,
     glyphs: vec![],
     color: Rgba::BLACK,
     palette_index: 0,

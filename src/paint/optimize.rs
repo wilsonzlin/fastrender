@@ -1266,9 +1266,9 @@ pub fn optimize_with_stats(list: DisplayList, viewport: Rect) -> (DisplayList, O
 mod tests {
   use super::*;
   use crate::paint::display_list::{
-    BorderRadii, ClipItem, ClipShape, ImageData, MaskReferenceRects, OpacityItem, ResolvedFilter,
-    ResolvedMask, ResolvedMaskImage, ResolvedMaskLayer, StackingContextItem, Transform3D,
-    TransformItem,
+    text_bounds, BorderRadii, ClipItem, ClipShape, GlyphInstance, ImageData, MaskReferenceRects,
+    OpacityItem, ResolvedFilter, ResolvedMask, ResolvedMaskImage, ResolvedMaskLayer,
+    StackingContextItem, TextItem, Transform3D, TransformItem,
   };
   use crate::paint::filter_outset::filter_outset;
   use crate::style::color::Rgba;
@@ -1373,6 +1373,47 @@ mod tests {
 
     assert_eq!(stats.culled_count, 1);
     assert_eq!(optimized.len(), 2);
+  }
+
+  #[test]
+  fn dense_text_near_edge_not_culled_with_cached_bounds() {
+    let glyphs: Vec<GlyphInstance> = (0..200)
+      .map(|i| GlyphInstance {
+        glyph_id: i as u32,
+        offset: Point::new(-70.0 + i as f32 * 2.0, 0.0),
+        advance: 2.0,
+      })
+      .collect();
+    let mut text = TextItem {
+      origin: Point::new(150.0, 50.0),
+      cached_bounds: None,
+      glyphs,
+      color: Rgba::BLACK,
+      palette_index: 0,
+      shadows: Vec::new(),
+      font_size: 20.0,
+      advance_width: 400.0,
+      font: None,
+      font_id: None,
+      variations: Vec::new(),
+      synthetic_bold: 0.0,
+      synthetic_oblique: 0.0,
+      emphasis: None,
+      decorations: Vec::new(),
+    };
+    let bounds = text_bounds(&text);
+    text.cached_bounds = Some(bounds);
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::Text(text));
+
+    let viewport = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
+    let (optimized, stats) = optimize_with_stats(list, viewport);
+
+    assert_eq!(stats.culled_count, 0);
+    assert!(
+      matches!(optimized.items(), [DisplayItem::Text(_)]),
+      "text near viewport edge should be retained"
+    );
   }
 
   #[test]

@@ -62,6 +62,7 @@ fn make_stroke_rect(x: f32, y: f32, w: f32, h: f32, color: Rgba, width: f32) -> 
 fn make_text(x: f32, y: f32, color: Rgba) -> DisplayItem {
   DisplayItem::Text(TextItem {
     origin: Point::new(x, y),
+    cached_bounds: None,
     glyphs: vec![],
     color,
     palette_index: 0,
