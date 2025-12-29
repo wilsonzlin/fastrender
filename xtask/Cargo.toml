@@ -10,3 +10,4 @@ clap = { version = "4", features = ["derive"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 url = "2.5"
 walkdir = "2.5"
+tempfile = "3.10"

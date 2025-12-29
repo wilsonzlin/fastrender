@@ -3384,6 +3384,7 @@ dependencies = [
  "anyhow",
  "clap",
  "image",
+ "tempfile",
  "url",
  "walkdir",
 ]

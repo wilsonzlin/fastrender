@@ -18,6 +18,7 @@ fn help_lists_commands() {
       && stdout.contains("update-goldens")
       && stdout.contains("diff-renders")
       && stdout.contains("pageset")
+      && stdout.contains("pageset-diff")
       && stdout.contains("perf-smoke"),
     "help output should mention available subcommands; got:\n{stdout}"
   );

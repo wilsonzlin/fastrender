@@ -4,6 +4,7 @@ use image::{Rgba, RgbaImage};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use tempfile::TempDir;
 use url::Url;
 use walkdir::WalkDir;
 
@@ -15,6 +16,7 @@ fn main() -> Result<()> {
     Commands::UpdateGoldens(args) => run_update_goldens(args),
     Commands::RenderPage(args) => run_render_page(args),
     Commands::Pageset(args) => run_pageset(args),
+    Commands::PagesetDiff(args) => run_pageset_diff(args),
     Commands::DiffRenders(args) => run_diff_renders(args),
     Commands::PerfSmoke(args) => run_perf_smoke(args),
   }
@@ -42,6 +44,8 @@ enum Commands {
   RenderPage(RenderPageArgs),
   /// Fetch pages and update the committed pageset scoreboard (`progress/pages/*.json`)
   Pageset(PagesetArgs),
+  /// Refresh the pageset scoreboard and compare against a baseline
+  PagesetDiff(PagesetDiffArgs),
   /// Compare two render outputs and write visual diffs
   DiffRenders(DiffRendersArgs),
   /// Run the offline perf smoke harness over a curated fixture set
@@ -87,6 +91,28 @@ fn default_jobs() -> usize {
   std::thread::available_parallelism()
     .map(|n| n.get())
     .unwrap_or(1)
+}
+
+#[derive(Args)]
+struct PagesetDiffArgs {
+  /// Skip running `cargo xtask pageset` before comparing progress files
+  #[arg(long)]
+  no_run: bool,
+
+  /// Baseline progress directory (defaults to extracting progress/pages from a git ref)
+  #[arg(long)]
+  baseline: Option<PathBuf>,
+
+  /// Git ref to read `progress/pages` from when building the baseline (defaults to HEAD)
+  #[arg(long)]
+  baseline_ref: Option<String>,
+
+  /// Exit non-zero when regressions are detected relative to the baseline
+  #[arg(long)]
+  fail_on_regression: bool,
+
+  #[command(flatten)]
+  pageset: PagesetArgs,
 }
 
 #[derive(Args)]
@@ -407,6 +433,117 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
   run_command(cmd)?;
 
   Ok(())
+}
+
+fn run_pageset_diff(args: PagesetDiffArgs) -> Result<()> {
+  if args.baseline.is_some() && args.baseline_ref.is_some() {
+    bail!("provide at most one of --baseline and --baseline-ref");
+  }
+
+  if !args.no_run {
+    run_pageset(args.pageset)?;
+  }
+
+  let progress_dir = PathBuf::from("progress/pages");
+  if !progress_dir.is_dir() {
+    bail!(
+      "progress directory {} is missing; run pageset first or point to the correct directory",
+      progress_dir.display()
+    );
+  }
+
+  let mut baseline_temp: Option<TempDir> = None;
+  let baseline_dir = if let Some(dir) = args.baseline {
+    if !dir.is_dir() {
+      bail!("baseline directory {} does not exist", dir.display());
+    }
+    dir
+  } else {
+    let baseline_ref = args.baseline_ref.unwrap_or_else(|| "HEAD".to_string());
+    let (tempdir, dir) = extract_progress_from_ref(&baseline_ref)?;
+    println!(
+      "Using baseline progress from {baseline_ref} (extracted to {}).",
+      dir.display()
+    );
+    baseline_temp = Some(tempdir);
+    dir
+  };
+
+  println!(
+    "Comparing {} against baseline {}...",
+    progress_dir.display(),
+    baseline_dir.display()
+  );
+
+  let mut cmd = Command::new("cargo");
+  cmd
+    .arg("run")
+    .arg("--release")
+    .args(["--bin", "pageset_progress"])
+    .arg("--")
+    .arg("report")
+    .arg("--progress-dir")
+    .arg(&progress_dir)
+    .arg("--compare")
+    .arg(&baseline_dir);
+  if args.fail_on_regression {
+    cmd.arg("--fail-on-regression");
+  }
+
+  run_command(cmd)?;
+  drop(baseline_temp);
+  Ok(())
+}
+
+fn extract_progress_from_ref(reference: &str) -> Result<(TempDir, PathBuf)> {
+  let list = Command::new("git")
+    .args(["ls-tree", "-r", "--name-only", reference, "progress/pages"])
+    .output()
+    .with_context(|| format!("list progress/pages at {reference}"))?;
+  if !list.status.success() {
+    bail!(
+      "git ls-tree failed for {reference}: {}",
+      String::from_utf8_lossy(&list.stderr)
+    );
+  }
+
+  let paths = String::from_utf8(list.stdout).context("decode git ls-tree output")?;
+  let files: Vec<&str> = paths
+    .lines()
+    .map(str::trim)
+    .filter(|line| !line.is_empty())
+    .collect();
+  if files.is_empty() {
+    bail!("no progress/pages files found at {reference}");
+  }
+
+  let tempdir = tempfile::tempdir().context("create temp directory for baseline progress")?;
+  let baseline_root = tempdir.path().join("progress/pages");
+
+  for path in files {
+    let relative = Path::new(path)
+      .strip_prefix("progress/pages")
+      .with_context(|| format!("unexpected path outside progress/pages: {path}"))?;
+    let object = format!("{reference}:{path}");
+    let contents = Command::new("git")
+      .args(["show", &object])
+      .output()
+      .with_context(|| format!("read {object}"))?;
+    if !contents.status.success() {
+      bail!(
+        "git show {object} failed: {}",
+        String::from_utf8_lossy(&contents.stderr)
+      );
+    }
+
+    let dest = baseline_root.join(relative);
+    if let Some(parent) = dest.parent() {
+      fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    }
+    fs::write(&dest, contents.stdout).with_context(|| format!("write {}", dest.display()))?;
+  }
+
+  Ok((tempdir, baseline_root))
 }
 
 fn disk_cache_enabled(cli_disk_cache_enabled: bool) -> bool {
