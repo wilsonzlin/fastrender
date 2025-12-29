@@ -13,7 +13,7 @@
 mod common;
 
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
-use common::args::{parse_shard, ResourceAccessArgs};
+use common::args::{parse_shard, LayoutParallelArgs, ResourceAccessArgs};
 use common::render_pipeline::{
   build_render_configs, follow_client_redirects, format_error_with_chain, read_cached_document,
   render_document, RenderConfigBundle, RenderSurface,
@@ -177,6 +177,9 @@ struct RunArgs {
   #[command(flatten)]
   resource_access: ResourceAccessArgs,
 
+  #[command(flatten)]
+  layout_parallel: LayoutParallelArgs,
+
   /// Render only listed pages (comma-separated cache stems)
   #[arg(long, value_delimiter = ',')]
   pages: Option<Vec<String>>,
@@ -305,6 +308,9 @@ struct WorkerArgs {
 
   #[command(flatten)]
   resource_access: ResourceAccessArgs,
+
+  #[command(flatten)]
+  layout_parallel: LayoutParallelArgs,
 
   /// Cooperative timeout handed to the renderer in milliseconds (0 disables)
   #[arg(long)]
@@ -708,6 +714,7 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     same_origin_subresources: args.resource_access.same_origin_subresources,
     allowed_subresource_origins: args.resource_access.allow_subresource_origin.clone(),
     trace_output: None,
+    layout_parallelism: args.layout_parallel.parallelism(),
   });
 
   options.diagnostics_level = args.diagnostics.to_level();
@@ -1521,6 +1528,17 @@ fn spawn_worker(
   }
   for origin in &args.resource_access.allow_subresource_origin {
     cmd.arg("--allow-subresource-origin").arg(origin);
+  }
+  if args.layout_parallel.layout_parallel {
+    cmd.arg("--layout-parallel");
+    cmd
+      .arg("--layout-parallel-min-fanout")
+      .arg(args.layout_parallel.layout_parallel_min_fanout.to_string());
+    if let Some(max_threads) = args.layout_parallel.layout_parallel_max_threads {
+      cmd
+        .arg("--layout-parallel-max-threads")
+        .arg(max_threads.to_string());
+    }
   }
   if let Some(ms) = soft_timeout_ms {
     cmd.arg("--soft-timeout-ms").arg(ms.to_string());

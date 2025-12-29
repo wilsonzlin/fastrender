@@ -2156,7 +2156,10 @@ impl FormattingContext for FlexFormattingContext {
       box_node
         .children
         .par_iter()
-        .map(compute_child_contribution)
+        .map(|child| {
+          crate::layout::engine::debug_record_parallel_work();
+          compute_child_contribution(child)
+        })
         .collect::<Result<Vec<_>, _>>()?
     } else {
       box_node

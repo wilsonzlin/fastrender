@@ -1,5 +1,6 @@
 use clap::{Args, ValueEnum};
 use fastrender::image_output::OutputFormat;
+use fastrender::layout::engine::LayoutParallelism;
 use fastrender::style::media::MediaType;
 
 #[derive(Debug, Clone, Args)]
@@ -115,6 +116,34 @@ pub struct AllowPartialArgs {
   /// Return placeholder output when the document fetch fails
   #[arg(long)]
   pub allow_partial: bool,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct LayoutParallelArgs {
+  /// Enable layout fan-out across independent subtrees
+  #[arg(long)]
+  pub layout_parallel: bool,
+
+  /// Minimum independent siblings before spawning layout threads
+  #[arg(long, default_value_t = 8, value_name = "N")]
+  pub layout_parallel_min_fanout: usize,
+
+  /// Maximum rayon worker threads used for layout fan-out
+  #[arg(long, value_name = "N")]
+  pub layout_parallel_max_threads: Option<usize>,
+}
+
+impl LayoutParallelArgs {
+  pub fn parallelism(&self) -> Option<LayoutParallelism> {
+    if !self.layout_parallel {
+      return None;
+    }
+    Some(
+      LayoutParallelism::enabled(self.layout_parallel_min_fanout)
+        .with_min_fanout(self.layout_parallel_min_fanout)
+        .with_max_threads(self.layout_parallel_max_threads),
+    )
+  }
 }
 
 #[derive(Debug, Clone, Args)]

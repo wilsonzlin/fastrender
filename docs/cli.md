@@ -49,6 +49,7 @@ Pageset wrappers enable the disk-backed subresource cache by default, persisting
 - Optional outputs:
   - `--diagnostics-json` writes `fetches/renders/<page>.diagnostics.json` containing status, timing, and `RenderDiagnostics`.
   - `--dump-intermediate {summary|full}` emits per-page summaries or full JSON dumps of DOM/styled/box/fragment/display-list stages (use `--only-failures` to gate large artifacts on errors); `full` also writes a combined `fetches/renders/<page>.snapshot.json` pipeline snapshot.
+  - `--layout-parallel` enables rayon fan-out during layout; adjust `--layout-parallel-min-fanout` and `--layout-parallel-max-threads` to control when/how many worker threads are used. This helps on very large DOMs with wide sibling fan-out; defaults stay serial to preserve baseline timings.
 
 ## `fetch_and_render`
 
@@ -56,6 +57,7 @@ Pageset wrappers enable the disk-backed subresource cache by default, persisting
 - Entry: `src/bin/fetch_and_render.rs`
 - Run: `cargo run --release --bin fetch_and_render -- --help`
 - Security defaults mirror the library: `file://` subresources are blocked for HTTP(S) documents. Use `--allow-file-from-http` to override during local testing, `--block-mixed-content` to forbid HTTP under HTTPS, and `--same-origin-subresources` (plus optional `--allow-subresource-origin`) to block cross-origin CSS/images/fonts when rendering untrusted pages.
+- Performance: pass `--layout-parallel` (with optional `--layout-parallel-min-fanout` / `--layout-parallel-max-threads`) to fan out layout across rayon threads on very large, independent subtrees. Default is off to match serial layout behavior.
 
 ## `bundle_page`
 
@@ -142,3 +144,4 @@ Pageset wrappers enable the disk-backed subresource cache by default, persisting
   - `target/pageset/logs/<stem>.stderr.log` — worker stdout/stderr, including panic
     backtraces and a note if the parent kills the process on timeout (not committed)
   - Optional traces: `--trace-failures` / `--trace-slow-ms <ms>` rerun targeted pages with Chrome tracing enabled; tune trace rerun budgets with `--trace-timeout` (defaults to `timeout * 2`), `--trace-soft-timeout-ms`, and `--trace-jobs` (defaults to 1 to avoid contention). Traces land in `target/pageset/traces/<stem>.json` with rerun progress under `target/pageset/trace-progress/<stem>.json` and logs at `target/pageset/logs/<stem>.trace.log`.
+  - Workers accept `--layout-parallel` (plus `--layout-parallel-min-fanout` / `--layout-parallel-max-threads`) to fan out layout on wide DOMs when chasing wall-time regressions; defaults remain serial.

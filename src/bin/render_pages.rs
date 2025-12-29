@@ -7,7 +7,7 @@
 mod common;
 
 use clap::{ArgAction, Parser, ValueEnum};
-use common::args::ResourceAccessArgs;
+use common::args::{LayoutParallelArgs, ResourceAccessArgs};
 use common::render_pipeline::{
   build_render_configs, follow_client_redirects, format_error_with_chain, log_diagnostics,
   read_cached_document, render_document_with_artifacts, RenderConfigBundle, RenderSurface,
@@ -149,6 +149,9 @@ struct Args {
 
   #[command(flatten)]
   resource_access: ResourceAccessArgs,
+
+  #[command(flatten)]
+  layout_parallel: LayoutParallelArgs,
 
   /// Enable per-stage timing logs
   #[arg(long)]
@@ -433,6 +436,7 @@ fn main() {
     same_origin_subresources: args.resource_access.same_origin_subresources,
     allowed_subresource_origins: args.resource_access.allow_subresource_origin.clone(),
     trace_output: None,
+    layout_parallelism: args.layout_parallel.parallelism(),
   });
 
   let render_pool = FastRenderPool::with_config(

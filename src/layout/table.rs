@@ -4505,7 +4505,10 @@ impl FormattingContext for TableFormattingContext {
           .cells
           .par_iter()
           .enumerate()
-          .map(|(idx, cell)| (idx, layout_single_cell(cell)))
+          .map(|(idx, cell)| {
+            crate::layout::engine::debug_record_parallel_work();
+            (idx, layout_single_cell(cell))
+          })
           .collect::<Vec<_>>();
         outcomes.sort_by_key(|(idx, _)| *idx);
 

@@ -12,8 +12,8 @@ mod common;
 
 use clap::{ArgAction, Parser};
 use common::args::{
-  AllowPartialArgs, BaseUrlArgs, MediaArgs, OutputFormatArgs, ResourceAccessArgs, TimeoutArgs,
-  ViewportArgs,
+  AllowPartialArgs, BaseUrlArgs, LayoutParallelArgs, MediaArgs, OutputFormatArgs,
+  ResourceAccessArgs, TimeoutArgs, ViewportArgs,
 };
 use common::media_prefs::MediaPreferences;
 use common::render_pipeline::{
@@ -107,6 +107,8 @@ struct Args {
   /// Disable serving fresh cached HTTP responses without revalidation
   #[arg(long, action = ArgAction::SetTrue)]
   no_http_freshness: bool,
+  #[command(flatten)]
+  layout_parallel: LayoutParallelArgs,
 
   /// Expand render target to full content size
   #[arg(long)]
@@ -240,6 +242,7 @@ fn try_main(args: Args) -> Result<()> {
     same_origin_subresources: args.resource_access.same_origin_subresources,
     allowed_subresource_origins: args.resource_access.allow_subresource_origin.clone(),
     trace_output: args.trace_out.clone(),
+    layout_parallelism: args.layout_parallel.parallelism(),
   });
 
   let http = build_http_fetcher(&args.user_agent, &args.accept_language, timeout_secs);

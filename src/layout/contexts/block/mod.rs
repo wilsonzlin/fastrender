@@ -951,6 +951,7 @@ impl BlockFormattingContext {
       .par_iter()
       .enumerate()
       .map(|(idx, child)| {
+        crate::layout::engine::debug_record_parallel_work();
         let mut margin_ctx = MarginCollapseContext::new();
         let (fragment, _) = self.layout_block_child(
           parent,

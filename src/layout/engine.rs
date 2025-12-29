@@ -38,9 +38,9 @@ use crate::tree::fragment_tree::FragmentNode;
 use crate::tree::fragment_tree::FragmentTree;
 use rayon::ThreadPool;
 use rayon::ThreadPoolBuilder;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
+use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 /// Parallel layout configuration
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,6 +88,61 @@ impl LayoutParallelism {
 impl Default for LayoutParallelism {
   fn default() -> Self {
     LayoutParallelism::disabled()
+  }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct LayoutParallelDebugCounters {
+  /// Number of layout work items processed in parallel contexts.
+  pub work_items: usize,
+  /// Number of distinct rayon worker threads observed.
+  pub worker_threads: usize,
+}
+
+static LAYOUT_PARALLEL_DEBUG_ENABLED: AtomicBool = AtomicBool::new(false);
+static LAYOUT_PARALLEL_DEBUG_WORK_ITEMS: AtomicUsize = AtomicUsize::new(0);
+static LAYOUT_PARALLEL_DEBUG_THREADS: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
+
+/// Enable or disable debug counters for layout parallelism.
+///
+/// Counters are reset whenever this is called.
+pub fn enable_layout_parallel_debug_counters(enable: bool) {
+  LAYOUT_PARALLEL_DEBUG_ENABLED.store(enable, Ordering::Relaxed);
+  reset_layout_parallel_debug_counters();
+}
+
+/// Reset parallel layout debug counters without changing enablement.
+pub fn reset_layout_parallel_debug_counters() {
+  LAYOUT_PARALLEL_DEBUG_WORK_ITEMS.store(0, Ordering::Relaxed);
+  if let Some(lock) = LAYOUT_PARALLEL_DEBUG_THREADS.get() {
+    if let Ok(mut threads) = lock.lock() {
+      threads.clear();
+    }
+  }
+}
+
+/// Snapshot current debug counters for layout fan-out.
+pub fn layout_parallel_debug_counters() -> LayoutParallelDebugCounters {
+  let worker_threads = LAYOUT_PARALLEL_DEBUG_THREADS
+    .get()
+    .and_then(|lock| lock.lock().ok().map(|threads| threads.len()))
+    .unwrap_or(0);
+  LayoutParallelDebugCounters {
+    work_items: LAYOUT_PARALLEL_DEBUG_WORK_ITEMS.load(Ordering::Relaxed),
+    worker_threads,
+  }
+}
+
+pub(crate) fn debug_record_parallel_work() {
+  if !LAYOUT_PARALLEL_DEBUG_ENABLED.load(Ordering::Relaxed) {
+    return;
+  }
+  LAYOUT_PARALLEL_DEBUG_WORK_ITEMS.fetch_add(1, Ordering::Relaxed);
+  if let Some(idx) = rayon::current_thread_index() {
+    let threads = LAYOUT_PARALLEL_DEBUG_THREADS.get_or_init(|| Mutex::new(HashSet::new()));
+    if let Ok(mut set) = threads.lock() {
+      set.insert(idx);
+    }
   }
 }
 

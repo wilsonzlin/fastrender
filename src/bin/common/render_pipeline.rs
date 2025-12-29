@@ -11,7 +11,7 @@ use fastrender::resource::{
   origin_from_url, parse_cached_html_meta, FetchedResource, HttpFetcher, ResourceFetcher,
 };
 use fastrender::style::media::MediaType;
-use fastrender::{Error, Result};
+use fastrender::{Error, LayoutParallelism, Result};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -40,6 +40,7 @@ pub struct RenderSurface {
   pub same_origin_subresources: bool,
   pub allowed_subresource_origins: Vec<String>,
   pub trace_output: Option<PathBuf>,
+  pub layout_parallelism: Option<LayoutParallelism>,
 }
 
 /// Construct render configuration objects from CLI settings.
@@ -62,6 +63,11 @@ pub fn build_render_configs(surface: &RenderSurface) -> RenderConfigBundle {
     .with_stylesheet_limit(surface.css_limit)
     .allow_partial(surface.allow_partial);
   options.trace_output = surface.trace_output.clone();
+
+  if let Some(parallelism) = surface.layout_parallelism {
+    config = config.with_layout_parallelism(parallelism);
+    options = options.with_layout_parallelism(parallelism);
+  }
 
   RenderConfigBundle { config, options }
 }

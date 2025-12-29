@@ -96,6 +96,7 @@ use crate::layout::contexts::inline::line_builder::TextItem;
 use crate::layout::contexts::positioned::ContainingBlock;
 use crate::layout::engine::LayoutConfig;
 use crate::layout::engine::LayoutEngine;
+use crate::layout::engine::LayoutParallelism;
 use crate::layout::flex_profile::flex_profile_enabled;
 use crate::layout::flex_profile::log_flex_profile;
 use crate::layout::flex_profile::reset_flex_profile;
@@ -334,6 +335,9 @@ pub struct FastRender {
 
   /// Parallel paint configuration for the display-list renderer.
   paint_parallelism: PaintParallelism,
+
+  /// Parallel layout configuration for fan-out across independent subtrees.
+  layout_parallelism: LayoutParallelism,
 }
 
 impl std::fmt::Debug for FastRender {
@@ -352,6 +356,7 @@ impl std::fmt::Debug for FastRender {
       .field("resource_policy", &self.resource_policy)
       .field("max_iframe_depth", &self.max_iframe_depth)
       .field("paint_parallelism", &self.paint_parallelism)
+      .field("layout_parallelism", &self.layout_parallelism)
       .finish_non_exhaustive()
   }
 }
@@ -429,6 +434,9 @@ pub struct FastRenderConfig {
 
   /// Parallel paint configuration for the display-list renderer.
   pub paint_parallelism: PaintParallelism,
+
+  /// Parallel layout configuration for fan-out across independent subtrees.
+  pub layout_parallelism: LayoutParallelism,
 }
 
 impl Default for FastRenderConfig {
@@ -454,6 +462,7 @@ impl Default for FastRenderConfig {
       font_config: FontConfig::default(),
       runtime_toggles: Arc::new(RuntimeToggles::from_env()),
       paint_parallelism: PaintParallelism::default(),
+      layout_parallelism: LayoutParallelism::default(),
     }
   }
 }
@@ -707,6 +716,8 @@ pub struct RenderOptions {
   pub runtime_toggles: Option<Arc<RuntimeToggles>>,
   /// Optional override for display-list paint parallelism.
   pub paint_parallelism: Option<PaintParallelism>,
+  /// Optional override for layout fan-out parallelism.
+  pub layout_parallelism: Option<LayoutParallelism>,
 }
 
 impl Default for RenderOptions {
@@ -729,6 +740,7 @@ impl Default for RenderOptions {
       trace_output: None,
       runtime_toggles: None,
       paint_parallelism: None,
+      layout_parallelism: None,
     }
   }
 }
@@ -759,6 +771,7 @@ impl std::fmt::Debug for RenderOptions {
         &self.runtime_toggles.as_ref().map(|_| "<toggles>"),
       )
       .field("paint_parallelism", &self.paint_parallelism)
+      .field("layout_parallelism", &self.layout_parallelism)
       .finish()
   }
 }
@@ -872,6 +885,12 @@ impl RenderOptions {
   /// Override the display-list paint parallelism configuration for this render.
   pub fn with_paint_parallelism(mut self, parallelism: PaintParallelism) -> Self {
     self.paint_parallelism = Some(parallelism);
+    self
+  }
+
+  /// Override layout fan-out configuration for this render.
+  pub fn with_layout_parallelism(mut self, parallelism: LayoutParallelism) -> Self {
+    self.layout_parallelism = Some(parallelism);
     self
   }
 }
@@ -1984,6 +2003,12 @@ impl FastRenderConfig {
     self.paint_parallelism = parallelism;
     self
   }
+
+  /// Configures layout fan-out across independent subtrees.
+  pub fn with_layout_parallelism(mut self, parallelism: LayoutParallelism) -> Self {
+    self.layout_parallelism = parallelism;
+    self
+  }
 }
 
 /// Configuration for [`FastRenderPool`].
@@ -2763,6 +2788,7 @@ impl FastRender {
     ))
     .with_identifier("api");
     layout_config.fragmentation = config.fragmentation;
+    layout_config.parallelism = config.layout_parallelism;
     let layout_engine = LayoutEngine::with_font_context(layout_config, font_context.clone());
     let image_cache = build_image_cache(&config.base_url, Arc::clone(&fetcher), image_cache_config);
 
@@ -2797,6 +2823,7 @@ impl FastRender {
       max_iframe_depth: config.max_iframe_depth,
       runtime_toggles: config.runtime_toggles.clone(),
       paint_parallelism: config.paint_parallelism,
+      layout_parallelism: config.layout_parallelism,
     })
   }
 
@@ -2900,6 +2927,12 @@ impl FastRender {
 
   fn resolve_paint_parallelism(&self, options: &RenderOptions) -> PaintParallelism {
     options.paint_parallelism.unwrap_or(self.paint_parallelism)
+  }
+
+  fn resolve_layout_parallelism(&self, options: &RenderOptions) -> LayoutParallelism {
+    options
+      .layout_parallelism
+      .unwrap_or(self.layout_parallelism)
   }
 
   /// Renders HTML/CSS to a pixmap
@@ -3131,6 +3164,7 @@ impl FastRender {
       .unwrap_or((self.default_width, self.default_height));
     let original_dpr = self.device_pixel_ratio;
     let paint_parallelism = self.resolve_paint_parallelism(&options);
+    let layout_parallelism = self.resolve_layout_parallelism(&options);
     if let Some(dpr) = options.device_pixel_ratio {
       self.device_pixel_ratio = dpr;
     }
@@ -3161,6 +3195,7 @@ impl FastRender {
       artifacts,
       stats,
       paint_parallelism,
+      layout_parallelism,
       trace,
     );
     self.pop_resource_context(prev_self, prev_image, prev_font);
@@ -3219,6 +3254,7 @@ impl FastRender {
     mut artifacts: Option<&mut RenderArtifacts>,
     mut stats: Option<&mut RenderStatsRecorder>,
     paint_parallelism: PaintParallelism,
+    layout_parallelism: LayoutParallelism,
     trace: &TraceHandle,
   ) -> Result<RenderOutputs> {
     // Validate dimensions
@@ -3286,6 +3322,7 @@ impl FastRender {
         },
         deadline,
         trace,
+        layout_parallelism,
       )?;
       if let Some(rec) = stats.as_deref_mut() {
         RenderStatsRecorder::record_ms(&mut rec.stats.timings.layout_ms, layout_timer);
@@ -3618,6 +3655,7 @@ impl FastRender {
     let layout_width = resolved_viewport.layout_viewport.width.max(1.0).round() as u32;
     let layout_height = resolved_viewport.layout_viewport.height.max(1.0).round() as u32;
     let paint_parallelism = self.resolve_paint_parallelism(&options);
+    let layout_parallelism = self.resolve_layout_parallelism(&options);
 
     let previous_dpr = self.device_pixel_ratio;
     let artifacts_result = (|| -> Result<LayoutArtifacts> {
@@ -3635,6 +3673,7 @@ impl FastRender {
         },
         None,
         &trace,
+        layout_parallelism,
       )
     })();
 
@@ -5003,6 +5042,7 @@ impl FastRender {
       LayoutDocumentOptions::default(),
       None,
       &trace,
+      self.layout_parallelism,
     )?;
     let LayoutArtifacts {
       dom,
@@ -5031,7 +5071,14 @@ impl FastRender {
   ) -> Result<FragmentTree> {
     let trace = TraceHandle::disabled();
     let artifacts = self.layout_document_for_media_with_artifacts(
-      dom, width, height, media_type, options, deadline, &trace,
+      dom,
+      width,
+      height,
+      media_type,
+      options,
+      deadline,
+      &trace,
+      self.layout_parallelism,
     )?;
     Ok(artifacts.fragment_tree)
   }
@@ -5046,6 +5093,7 @@ impl FastRender {
     options: LayoutDocumentOptions,
     deadline: Option<&RenderDeadline>,
     trace: &TraceHandle,
+    layout_parallelism: LayoutParallelism,
   ) -> Result<LayoutArtifacts> {
     let _deadline_guard = DeadlineGuard::install(deadline);
     let toggles = runtime::runtime_toggles();
@@ -5379,6 +5427,7 @@ impl FastRender {
     let mut config = LayoutConfig::for_viewport(layout_viewport);
     config.fragmentation = manual_fragmentation;
     config.enable_cache = !toggles.truthy("FASTR_DISABLE_LAYOUT_CACHE");
+    config.parallelism = layout_parallelism;
     let enable_layout_cache = config.enable_cache;
     self.layout_engine = LayoutEngine::with_font_context(config, self.font_context.clone());
     intrinsic_cache_clear();
@@ -5762,6 +5811,7 @@ impl FastRender {
       LayoutDocumentOptions::default(),
       None,
       &trace,
+      self.layout_parallelism,
     )?;
 
     crate::debug::inspect::inspect(
@@ -5943,6 +5993,7 @@ impl FastRender {
     let mut config = self.layout_engine.config().clone();
     config.initial_containing_block.width = self.default_width as f32;
     config.initial_containing_block.height = self.default_height as f32;
+    config.parallelism = self.layout_parallelism;
     self.layout_engine = LayoutEngine::with_font_context(config, font_context);
   }
 
@@ -8475,6 +8526,7 @@ pub(crate) fn render_html_with_shared_resources(
     max_iframe_depth,
     runtime_toggles: runtime::runtime_toggles(),
     paint_parallelism: PaintParallelism::default(),
+    layout_parallelism: LayoutParallelism::default(),
   };
 
   renderer
@@ -8500,6 +8552,7 @@ pub(crate) fn render_html_with_shared_resources(
       None,
       None,
       renderer.paint_parallelism,
+      renderer.layout_parallelism,
       &trace,
     )
   })
@@ -9170,6 +9223,7 @@ mod tests {
 
     let config = LayoutConfig::for_viewport(Size::new(800.0, 600.0));
     renderer.layout_engine = LayoutEngine::with_font_context(config, renderer.font_context.clone());
+    renderer.layout_parallelism = config.parallelism;
     let box_gen_options = renderer.box_generation_options();
     let mut box_tree =
       crate::tree::box_generation::generate_box_tree_with_anonymous_fixup_with_options(
@@ -9258,6 +9312,7 @@ mod tests {
 
     let config = LayoutConfig::for_viewport(Size::new(800.0, 600.0));
     renderer.layout_engine = LayoutEngine::with_font_context(config, renderer.font_context.clone());
+    renderer.layout_parallelism = config.parallelism;
     let box_gen_options = renderer.box_generation_options();
     let mut box_tree =
       crate::tree::box_generation::generate_box_tree_with_anonymous_fixup_with_options(
@@ -9322,6 +9377,7 @@ mod tests {
 
     let config = LayoutConfig::for_viewport(Size::new(800.0, 600.0));
     renderer.layout_engine = LayoutEngine::with_font_context(config, renderer.font_context.clone());
+    renderer.layout_parallelism = config.parallelism;
     let box_gen_options = renderer.box_generation_options();
     let mut box_tree =
       crate::tree::box_generation::generate_box_tree_with_anonymous_fixup_with_options(
@@ -9379,6 +9435,7 @@ mod tests {
 
     let config = LayoutConfig::for_viewport(Size::new(800.0, 600.0));
     renderer.layout_engine = LayoutEngine::with_font_context(config, renderer.font_context.clone());
+    renderer.layout_parallelism = config.parallelism;
     let box_gen_options = renderer.box_generation_options();
     let mut box_tree =
       crate::tree::box_generation::generate_box_tree_with_anonymous_fixup_with_options(
@@ -9436,6 +9493,7 @@ mod tests {
 
     let config = LayoutConfig::for_viewport(Size::new(800.0, 600.0));
     renderer.layout_engine = LayoutEngine::with_font_context(config, renderer.font_context.clone());
+    renderer.layout_parallelism = config.parallelism;
     let box_gen_options = renderer.box_generation_options();
     let mut box_tree =
       crate::tree::box_generation::generate_box_tree_with_anonymous_fixup_with_options(
@@ -9494,6 +9552,7 @@ mod tests {
 
     let config = LayoutConfig::for_viewport(Size::new(800.0, 600.0));
     renderer.layout_engine = LayoutEngine::with_font_context(config, renderer.font_context.clone());
+    renderer.layout_parallelism = config.parallelism;
     let box_gen_options = renderer.box_generation_options();
     let mut box_tree =
       crate::tree::box_generation::generate_box_tree_with_anonymous_fixup_with_options(

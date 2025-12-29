@@ -252,6 +252,7 @@ fn fetch_bundle(args: FetchArgs) -> Result<()> {
     same_origin_subresources: render.same_origin_subresources,
     allowed_subresource_origins: render.allowed_subresource_origins.clone(),
     trace_output: None,
+    layout_parallelism: None,
   });
   let fetcher: Arc<dyn ResourceFetcher> = Arc::new(recording.clone());
   let mut renderer = build_renderer_with_fetcher(config, fetcher)?;
@@ -324,6 +325,7 @@ fn render_bundle(args: RenderArgs) -> Result<()> {
     same_origin_subresources: render.same_origin_subresources,
     allowed_subresource_origins: render.allowed_subresource_origins.clone(),
     trace_output: None,
+    layout_parallelism: None,
   });
 
   let fetcher: Arc<dyn ResourceFetcher> = Arc::new(BundledFetcher::new(bundle));
