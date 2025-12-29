@@ -175,6 +175,33 @@ so CI and tests can run in fully hermetic environments without relying on platfo
   PY
   ```
 
+### `colrv1-sweep-test.ttf`
+- **Source:** Generated in-repo with [FontTools](https://github.com/fonttools/fonttools) v4.61.1.
+- **License:** CC0 / Public Domain.
+- **Glyphs:** U+0047 (`G`), U+0048 (`H`), and U+0049 (`I`) all reference a shared `rect`
+  outline via `PaintGlyph`, each filled with a COLR v1 `PaintSweepGradient` using a different
+  `ColorLine.Extend` mode (PAD, REPEAT, REFLECT).
+- **Features exercised:** Sweep gradients with a non-trivial center (500, 400), start angle
+  0.125 and end angle 1.625 (half-turn units), and a 3-stop palette-backed `ColorLine` to make
+  extend-mode differences obvious. CPAL v1 provides a single 3-color palette.
+- **Regeneration:** From the repository root:
+  ```bash
+  python tests/fixtures/fonts/generate_colrv1_sweep_fonts.py
+  ```
+
+### `colrv1-var-sweep-test.ttf`
+- **Source:** Generated in-repo with [FontTools](https://github.com/fonttools/fonttools) v4.61.1.
+- **License:** CC0 / Public Domain.
+- **Glyphs / variation:** U+0041 (`A`) references `rect` via `PaintGlyph`, filled by a
+  `PaintVarSweepGradient`. A single `wght` axis (0–1, default 0) drives a VarStore delta that
+  adds +0.5 to `endAngle` at `wght=1` and shifts the middle color stop's offset (+0.1) and alpha
+  (-0.2), using `VarIndexBase` slots for the sweep parameters and color stop fields. CPAL v1
+  carries a 3-color palette.
+- **Regeneration:** Generated alongside `colrv1-sweep-test.ttf`:
+  ```bash
+  python tests/fixtures/fonts/generate_colrv1_sweep_fonts.py
+  ```
+
 ### `PaletteTestCOLRv1.ttf`
 - **Source:** Existing COLR v1 palette test fixture included with the FastRender test suite.
 - **License:** Not specified in the font metadata; used only for automated tests.
