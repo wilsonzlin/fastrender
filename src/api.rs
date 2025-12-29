@@ -4354,101 +4354,152 @@ impl FastRender {
     &mut self,
     html: &str,
     base_hint: &str,
-    options: RenderOptions,
+    mut options: RenderOptions,
     artifacts: RenderArtifactRequest,
   ) -> Result<RenderReport> {
-    let trace = TraceSession::from_options(Some(&options));
-    let trace_handle = trace.handle();
-    let _root_span = trace_handle.span("render", "pipeline");
-
-    let had_sink = self.diagnostics.is_some();
-    let diagnostics = if let Some(existing) = &self.diagnostics {
-      Arc::clone(existing)
-    } else {
-      let diag = Arc::new(Mutex::new(RenderDiagnostics::default()));
-      self.set_diagnostics_sink(Some(Arc::clone(&diag)));
-      diag
-    };
-    let base_url = infer_base_url(html, base_hint).into_owned();
-    self.set_base_url(base_url.clone());
-    let deadline = RenderDeadline::new(options.timeout, options.cancel_callback.clone());
-    let (width, height) = options
-      .viewport
-      .unwrap_or((self.default_width, self.default_height));
-    let shared_diagnostics = Some(SharedRenderDiagnostics {
-      inner: Arc::clone(&diagnostics),
-    });
-    let context = Some(self.build_resource_context(Some(&base_url), shared_diagnostics));
-    let (prev_self, prev_image, prev_font) = self.push_resource_context(context);
-    let result = (|| -> Result<RenderReport> {
-      let html_with_css = {
-        let _span = trace_handle.span("css_inline", "style");
-        let _deadline_guard = DeadlineGuard::install(Some(&deadline));
-        let mut guard = diagnostics.lock().unwrap();
-        let inlined = match self.inline_stylesheets(
-          html,
-          &base_url,
-          options.media_type,
-          options.css_limit,
-          &mut guard,
-          Some(&deadline),
-          None,
-        ) {
-          Ok(inlined) => inlined,
-          Err(err) => {
-            if options.allow_partial {
-              if let RenderError::Timeout { stage, .. } = &err {
-                guard.timeout_stage = Some(*stage);
-                guard.note_failure_stage(*stage);
-                let diagnostics = guard.clone();
-                let pixmap = self.render_error_overlay(width, height)?;
-                return Ok(RenderReport {
-                  pixmap,
-                  accessibility: None,
-                  diagnostics,
-                  artifacts: RenderArtifacts::new(artifacts),
-                });
-              }
-            }
-            return Err(Error::Render(err));
-          }
-        };
-        if options.allow_partial
-          && guard.failure_stage.is_none()
-          && guard
-            .fetch_errors
-            .iter()
-            .any(|entry| entry.kind == ResourceKind::Stylesheet)
-        {
-          guard.note_failure_stage(RenderStage::Css);
+    let toggles = self.resolve_runtime_toggles(&options);
+    runtime::with_runtime_toggles(toggles, || {
+      if matches!(options.diagnostics_level, DiagnosticsLevel::None) {
+        let env_level = diagnostics_level_from_env();
+        if !matches!(env_level, DiagnosticsLevel::None) {
+          options.diagnostics_level = env_level;
         }
-        inlined
+      }
+      let diagnostics_level = options.diagnostics_level;
+      let mut stats_recorder = (!matches!(diagnostics_level, DiagnosticsLevel::None))
+        .then(|| RenderStatsRecorder::new(diagnostics_level));
+      let restore_cascade_profile = if matches!(diagnostics_level, DiagnosticsLevel::Verbose) {
+        Some(crate::style::cascade::cascade_profile_enabled())
+      } else {
+        None
       };
-      let mut captured = RenderArtifacts::new(artifacts);
-      let outputs = self.render_html_with_options_internal_with_deadline(
-        &html_with_css,
-        options,
-        Some(&mut captured),
-        Some(&deadline),
-        None,
-        trace_handle,
-      )?;
-      let diagnostics = diagnostics.lock().unwrap().clone();
+      if let Some(stats) = stats_recorder.as_mut() {
+        crate::image_loader::enable_image_cache_diagnostics();
+        crate::paint::painter::enable_paint_diagnostics();
+        crate::text::pipeline::enable_text_diagnostics();
+        intrinsic_cache_reset_counters();
+        crate::layout::formatting_context::layout_cache_reset_counters();
+        if stats.verbose() {
+          crate::style::cascade::set_cascade_profile_enabled(true);
+          crate::style::cascade::reset_cascade_profile();
+        }
+      }
 
-      Ok(RenderReport {
-        pixmap: outputs.pixmap,
-        accessibility: outputs.accessibility,
-        diagnostics,
-        artifacts: captured,
-      })
-    })();
-    self.pop_resource_context(prev_self, prev_image, prev_font);
+      let trace = TraceSession::from_options(Some(&options));
+      let trace_handle = trace.handle();
+      let _root_span = trace_handle.span("render", "pipeline");
 
-    if !had_sink {
-      self.set_diagnostics_sink(None);
-    }
-    drop(_root_span);
-    trace.finalize(result)
+      let had_sink = self.diagnostics.is_some();
+      let diagnostics = if let Some(existing) = &self.diagnostics {
+        Arc::clone(existing)
+      } else {
+        let diag = Arc::new(Mutex::new(RenderDiagnostics::default()));
+        self.set_diagnostics_sink(Some(Arc::clone(&diag)));
+        diag
+      };
+      let base_url = infer_base_url(html, base_hint).into_owned();
+      self.set_base_url(base_url.clone());
+      let deadline = RenderDeadline::new(options.timeout, options.cancel_callback.clone());
+      let (width, height) = options
+        .viewport
+        .unwrap_or((self.default_width, self.default_height));
+      let shared_diagnostics = Some(SharedRenderDiagnostics {
+        inner: Arc::clone(&diagnostics),
+      });
+      let context = Some(self.build_resource_context(Some(&base_url), shared_diagnostics));
+      let (prev_self, prev_image, prev_font) = self.push_resource_context(context);
+      let mut result = (|| -> Result<RenderReport> {
+        let html_with_css = {
+          let _span = trace_handle.span("css_inline", "style");
+          let _deadline_guard = DeadlineGuard::install(Some(&deadline));
+          let mut guard = diagnostics.lock().unwrap();
+          let inlined = match self.inline_stylesheets(
+            html,
+            &base_url,
+            options.media_type,
+            options.css_limit,
+            &mut guard,
+            Some(&deadline),
+            stats_recorder.as_mut(),
+          ) {
+            Ok(inlined) => inlined,
+            Err(err) => {
+              if options.allow_partial {
+                if let RenderError::Timeout { stage, .. } = &err {
+                  guard.timeout_stage = Some(*stage);
+                  guard.note_failure_stage(*stage);
+                  let diagnostics = guard.clone();
+                  let pixmap = self.render_error_overlay(width, height)?;
+                  return Ok(RenderReport {
+                    pixmap,
+                    accessibility: None,
+                    diagnostics,
+                    artifacts: RenderArtifacts::new(artifacts),
+                  });
+                }
+              }
+              return Err(Error::Render(err));
+            }
+          };
+          if options.allow_partial
+            && guard.failure_stage.is_none()
+            && guard
+              .fetch_errors
+              .iter()
+              .any(|entry| entry.kind == ResourceKind::Stylesheet)
+          {
+            guard.note_failure_stage(RenderStage::Css);
+          }
+          inlined
+        };
+        let mut captured = RenderArtifacts::new(artifacts);
+        let outputs = self.render_html_with_options_internal_with_deadline(
+          &html_with_css,
+          options,
+          Some(&mut captured),
+          Some(&deadline),
+          stats_recorder.as_mut(),
+          trace_handle,
+        )?;
+        let diagnostics = diagnostics.lock().unwrap().clone();
+
+        Ok(RenderReport {
+          pixmap: outputs.pixmap,
+          accessibility: outputs.accessibility,
+          diagnostics,
+          artifacts: captured,
+        })
+      })();
+      self.pop_resource_context(prev_self, prev_image, prev_font);
+
+      if !had_sink {
+        self.set_diagnostics_sink(None);
+      }
+
+      if let Some(recorder) = stats_recorder {
+        match result.as_mut() {
+          Ok(report) => {
+            let mut stats = recorder.finish();
+            merge_text_diagnostics(&mut stats);
+            merge_image_cache_diagnostics(&mut stats);
+            if let Ok(mut guard) = diagnostics.lock() {
+              guard.stats = Some(stats.clone());
+            }
+            report.diagnostics.stats = Some(stats);
+          }
+          Err(_) => {
+            let _ = crate::image_loader::take_image_cache_diagnostics();
+            let _ = crate::paint::painter::take_paint_diagnostics();
+            let _ = crate::text::pipeline::take_text_diagnostics();
+          }
+        }
+      }
+      if let Some(previous) = restore_cascade_profile {
+        crate::style::cascade::set_cascade_profile_enabled(previous);
+      }
+      drop(_root_span);
+      trace.finalize(result)
+    })
   }
 
   /// Generate a debug snapshot of the full rendering pipeline for an HTML string.
@@ -6364,141 +6415,146 @@ impl FastRender {
     mut stats: Option<&mut RenderStatsRecorder>,
   ) -> std::result::Result<String, RenderError> {
     let inlining_start = stats.as_deref().and_then(|rec| rec.timer());
-    check_css_deadline(deadline)?;
-    let mut css_links = extract_css_links(html, base_url, media_type)?;
-    if let Some(limit) = css_limit {
-      if css_links.len() > limit {
-        css_links.truncate(limit);
-      }
-    }
-    let mut seen: HashSet<String> = css_links.iter().cloned().collect();
-    for extra in extract_embedded_css_urls(html, base_url)? {
-      if seen.insert(extra.clone()) {
-        css_links.push(extra);
-      }
-    }
-
-    let mut combined_css = String::new();
-    let mut import_state = InlineImportState::new();
-
-    for css_url in css_links {
+    let result = (|| {
       check_css_deadline(deadline)?;
-      import_state.register_stylesheet(css_url.clone());
-      if let Some(rec) = stats.as_deref_mut() {
-        rec.record_fetch(ResourceKind::Stylesheet);
-      }
-      if let Some(ctx) = resource_context {
-        if let Err(err) = ctx.policy.allows(&css_url) {
-          diagnostics.record_message(ResourceKind::Stylesheet, &css_url, err.reason);
-          continue;
+      let mut css_links = extract_css_links(html, base_url, media_type)?;
+      if let Some(limit) = css_limit {
+        if css_links.len() > limit {
+          css_links.truncate(limit);
         }
       }
-      check_css_deadline(deadline)?;
-      match fetcher.fetch(&css_url) {
-        Ok(res) => {
-          check_css_deadline(deadline)?;
-          if let Some(ctx) = resource_context {
-            if ctx
-              .check_allowed_with_final(
-                ResourceKind::Stylesheet,
-                &css_url,
-                res.final_url.as_deref(),
-              )
-              .is_err()
-            {
-              continue;
-            }
+      let mut seen: HashSet<String> = css_links.iter().cloned().collect();
+      for extra in extract_embedded_css_urls(html, base_url)? {
+        if seen.insert(extra.clone()) {
+          css_links.push(extra);
+        }
+      }
+
+      let mut combined_css = String::new();
+      let mut import_state = InlineImportState::new();
+
+      for css_url in css_links {
+        check_css_deadline(deadline)?;
+        import_state.register_stylesheet(css_url.clone());
+        if let Some(rec) = stats.as_deref_mut() {
+          rec.record_fetch(ResourceKind::Stylesheet);
+        }
+        if let Some(ctx) = resource_context {
+          if let Err(err) = ctx.policy.allows(&css_url) {
+            diagnostics.record_message(ResourceKind::Stylesheet, &css_url, err.reason);
+            continue;
           }
-          let css_text = decode_css_bytes(&res.bytes, res.content_type.as_deref());
-          check_css_deadline(deadline)?;
-          let rewritten = absolutize_css_urls(&css_text, &css_url)?;
-          check_css_deadline(deadline)?;
-          let mut import_diags: Vec<(String, String)> = Vec::new();
-          let inlined = {
-            let mut import_fetch = |u: &str| -> Result<String> {
-              check_css_deadline(deadline).map_err(Error::Render)?;
-              if let Some(rec) = stats.as_deref_mut() {
-                rec.record_fetch(ResourceKind::Stylesheet);
-              }
-              if let Some(ctx) = resource_context {
-                if let Err(err) = ctx.policy.allows(u) {
-                  diagnostics.record_message(ResourceKind::Stylesheet, u, &err.reason);
-                  return Err(Error::Resource(ResourceError::new(
-                    u.to_string(),
-                    err.reason,
-                  )));
-                }
-              }
-              match fetcher.fetch(u) {
-                Ok(res) => {
-                  check_css_deadline(deadline).map_err(Error::Render)?;
-                  if let Some(ctx) = resource_context {
-                    if let Err(err) = ctx.check_allowed_with_final(
-                      ResourceKind::Stylesheet,
-                      u,
-                      res.final_url.as_deref(),
-                    ) {
-                      return Err(Error::Resource(ResourceError::new(
-                        u.to_string(),
-                        err.reason,
-                      )));
-                    }
-                  }
-                  check_css_deadline(deadline).map_err(Error::Render)?;
-                  Ok(decode_css_bytes(&res.bytes, res.content_type.as_deref()))
-                }
-                Err(Error::Render(RenderError::Timeout { stage, elapsed })) => {
-                  return Err(Error::Render(RenderError::Timeout { stage, elapsed }));
-                }
-                Err(err) => {
-                  diagnostics.record_error(ResourceKind::Stylesheet, u, &err);
-                  Err(err)
-                }
-              }
-            };
-
-            let mut import_diag = |url: &str, reason: &str| {
-              import_diags.push((url.to_string(), reason.to_string()));
-            };
-
-            let inlined = inline_imports_with_diagnostics(
-              &rewritten,
-              &css_url,
-              &mut import_fetch,
-              &mut import_state,
-              &mut import_diag,
-              deadline,
-            )?;
+        }
+        check_css_deadline(deadline)?;
+        match fetcher.fetch(&css_url) {
+          Ok(res) => {
             check_css_deadline(deadline)?;
-            inlined
-          };
-          for (url, reason) in import_diags.drain(..) {
-            diagnostics.record_message(ResourceKind::Stylesheet, &url, &reason);
-          }
-          combined_css.push_str(&inlined);
-          combined_css.push('\n');
-          check_css_deadline(deadline)?;
-        }
-        Err(Error::Render(RenderError::Timeout { stage, elapsed })) => {
-          return Err(RenderError::Timeout { stage, elapsed });
-        }
-        Err(err) => diagnostics.record_error(ResourceKind::Stylesheet, &css_url, &err),
-      }
-    }
+            if let Some(ctx) = resource_context {
+              if ctx
+                .check_allowed_with_final(
+                  ResourceKind::Stylesheet,
+                  &css_url,
+                  res.final_url.as_deref(),
+                )
+                .is_err()
+              {
+                continue;
+              }
+            }
+            let css_text = decode_css_bytes(&res.bytes, res.content_type.as_deref());
+            check_css_deadline(deadline)?;
+            let rewritten = absolutize_css_urls(&css_text, &css_url)?;
+            check_css_deadline(deadline)?;
+            let mut import_diags: Vec<(String, String)> = Vec::new();
+            let inlined = {
+              let mut import_fetch = |u: &str| -> Result<String> {
+                check_css_deadline(deadline).map_err(Error::Render)?;
+                if let Some(rec) = stats.as_deref_mut() {
+                  rec.record_fetch(ResourceKind::Stylesheet);
+                }
+                if let Some(ctx) = resource_context {
+                  if let Err(err) = ctx.policy.allows(u) {
+                    diagnostics.record_message(ResourceKind::Stylesheet, u, &err.reason);
+                    return Err(Error::Resource(ResourceError::new(
+                      u.to_string(),
+                      err.reason,
+                    )));
+                  }
+                }
+                match fetcher.fetch(u) {
+                  Ok(res) => {
+                    check_css_deadline(deadline).map_err(Error::Render)?;
+                    if let Some(ctx) = resource_context {
+                      if let Err(err) = ctx.check_allowed_with_final(
+                        ResourceKind::Stylesheet,
+                        u,
+                        res.final_url.as_deref(),
+                      ) {
+                        return Err(Error::Resource(ResourceError::new(
+                          u.to_string(),
+                          err.reason,
+                        )));
+                      }
+                    }
+                    check_css_deadline(deadline).map_err(Error::Render)?;
+                    Ok(decode_css_bytes(&res.bytes, res.content_type.as_deref()))
+                  }
+                  Err(Error::Render(RenderError::Timeout { stage, elapsed })) => {
+                    return Err(Error::Render(RenderError::Timeout { stage, elapsed }));
+                  }
+                  Err(err) => {
+                    diagnostics.record_error(ResourceKind::Stylesheet, u, &err);
+                    Err(err)
+                  }
+                }
+              };
 
-    check_css_deadline(deadline)?;
-    let output = if combined_css.is_empty() {
-      html.to_string()
-    } else {
+              let mut import_diag = |url: &str, reason: &str| {
+                import_diags.push((url.to_string(), reason.to_string()));
+              };
+
+              let inlined = inline_imports_with_diagnostics(
+                &rewritten,
+                &css_url,
+                &mut import_fetch,
+                &mut import_state,
+                &mut import_diag,
+                deadline,
+              )?;
+              check_css_deadline(deadline)?;
+              inlined
+            };
+            for (url, reason) in import_diags.drain(..) {
+              diagnostics.record_message(ResourceKind::Stylesheet, &url, &reason);
+            }
+            combined_css.push_str(&inlined);
+            combined_css.push('\n');
+            check_css_deadline(deadline)?;
+          }
+          Err(Error::Render(RenderError::Timeout { stage, elapsed })) => {
+            return Err(RenderError::Timeout { stage, elapsed });
+          }
+          Err(err) => diagnostics.record_error(ResourceKind::Stylesheet, &css_url, &err),
+        }
+      }
+
       check_css_deadline(deadline)?;
-      let injected = inject_css_into_html(html, &combined_css);
-      check_css_deadline(deadline)?;
-      injected
-    };
+      let output = if combined_css.is_empty() {
+        html.to_string()
+      } else {
+        check_css_deadline(deadline)?;
+        let injected = inject_css_into_html(html, &combined_css);
+        check_css_deadline(deadline)?;
+        injected
+      };
+      Ok(output)
+    })();
+
     if let Some(rec) = stats.as_deref_mut() {
       RenderStatsRecorder::record_ms(&mut rec.stats.timings.css_inlining_ms, inlining_start);
     }
-    Ok(output)
+
+    result
   }
 
   /// Populate intrinsic sizes for replaced elements (e.g., images) using the image cache.
