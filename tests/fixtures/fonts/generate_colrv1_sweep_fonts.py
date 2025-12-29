@@ -21,6 +21,11 @@ def f2dot14(value: float) -> int:
     return int(round(value * (1 << 14)))
 
 
+def half_turns_to_degrees(value: float) -> float:
+    """COLRv1 sweep angles are encoded as biased degrees."""
+    return value * 180.0
+
+
 def rect_glyph(x0: int, y0: int, x1: int, y1: int):
     pen = TTGlyphPen(None)
     pen.moveTo((x0, y0))
@@ -100,8 +105,8 @@ def build_static_sweep_font(path: Path) -> None:
             "ColorLine": {**color_line, "Extend": extend},
             "centerX": 500,
             "centerY": 400,
-            "startAngle": 0.125,
-            "endAngle": 1.625,
+            "startAngle": half_turns_to_degrees(0.125),
+            "endAngle": half_turns_to_degrees(1.625),
         }
         return {"Format": PaintFormat.PaintGlyph, "Glyph": "rect", "Paint": gradient}
 
@@ -187,8 +192,8 @@ def build_variable_sweep_font(path: Path) -> None:
         },
         "centerX": 480,
         "centerY": 420,
-        "startAngle": 0.2,
-        "endAngle": 1.4,
+        "startAngle": half_turns_to_degrees(0.2),
+        "endAngle": half_turns_to_degrees(1.4),
         "VarIndexBase": 0,
     }
 
