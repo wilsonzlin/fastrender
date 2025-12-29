@@ -7,7 +7,8 @@ FastRender supports a subset of OpenType color glyph formats. This note captures
 - [`TextRasterizer`](../../src/paint/text_rasterize.rs) is the only renderer that consults [`ColorFontRenderer`](../../src/text/color_fonts/mod.rs). `render_shaped_run` tries, in order:
   1. CBDT/CBLC or sbix bitmaps decoded as PNG (`glyph_raster_image`); other bitmap encodings are skipped.
   2. SVG-in-OT glyphs rendered with `resvg`/`usvg`, scaled from the font's units-per-em to the requested size.
-  3. COLR/CPAL v0 layered outlines filled with palette colors (0xFFFF resolves to the resolved text color).
+  3. COLR v1 paint graphs (`text/color_fonts/colr_v1.rs`) with solid/gradient brushes, transforms, and composite modes. Var* paints and VarColorLine stops honor run variations; sweep gradients are unimplemented and trigger a fallback.
+  4. COLR/CPAL v0 layered outlines filled with palette colors (0xFFFF resolves to the resolved text color).
 
   When none of these apply, glyphs fall back to monochrome outlines tinted with the text color. Per-run rotation is applied; additional transforms, opacity, or shadow effects must be applied by the caller around the destination pixmap.
 
@@ -19,6 +20,13 @@ FastRender supports a subset of OpenType color glyph formats. This note captures
 - CPAL parsing/selection lives in [`text/color_fonts/cpal.rs`](../../src/text/color_fonts/cpal.rs) (re-exported via [`text::cpal`](../../src/text/cpal.rs)). `select_cpal_palette` respects CPAL v1 `paletteTypes` bits for light/dark palettes and clamps indices to the available count. `parse_cpal_palette` returns palette colors and optional palette type metadata.
 - Override colors are applied to COLR v0/v1 rendering; missing entries and palette indices of 0xFFFF resolve to the resolved text color. CPAL palette labels are not consulted yet.
 
+## COLR v1 coverage and variations
+
+- COLR v1 paints are parsed with `read_fonts` and rendered by [`text/color_fonts/colr_v1.rs`](../../src/text/color_fonts/colr_v1.rs), reusing the CPAL palette + per-run overrides and any per-glyph clip boxes to bound the raster.
+- Supported paints include `PaintColrLayers`/`PaintColrGlyph`, `PaintGlyph` filled by `PaintSolid`/`PaintVarSolid`, linear/radial gradients (and their Var* counterparts) with PAD/REPEAT/REFLECT extends, transform nodes (translate/scale/rotate/skew, including around-center and Var* forms), and `PaintComposite` with blend modes mapped to tiny-skia equivalents.
+- `PaintSweepGradient`/`PaintVarSweepGradient` are not implemented; encountering them aborts COLR rendering so the glyph falls back to monochrome outlines.
+- Shaped-run variations (`rustybuzz::Variation`) are applied before color rasterization: they are set on the `ttf_parser` face for outlines, and `read_fonts` resolves Var* paints/`VarColorLine` stops against the same normalized coords via the COLR `ItemVariationStore`. The `colrv1-var-test.ttf` fixtures cover gradient endpoint + stop adjustments at `wght=1`, and color glyph cache keys include variations to keep instances distinct.
+
 ## Transforms, opacity, and shadows
 
 - `TextRasterizer` composites color glyph pixmaps with SourceOver blending and optional run rotation. It does not synthesize text shadows or decorations; those must be layered by the caller if needed.
@@ -26,8 +34,7 @@ FastRender supports a subset of OpenType color glyph formats. This note captures
 
 ## Limitations
 
-- COLR v1 paint graphs (gradients, transforms, composite modes) are not implemented; COLR v1 glyphs fall back to outline rendering.
+- Sweep gradients (including VarSweep) are unimplemented; COLR v1 glyphs using them fall back to monochrome outlines.
 - Palette selection is fixed to CPAL palette 0; CSS palette overrides (`font-palette`, `@font-palette-values`, `override-colors`) are not supported.
 - Bitmap glyphs only decode PNG data from CBDT/CBLC or sbix; JPEG/TIFF/BMP sbix entries are skipped.
 - SVG glyphs are rendered from the embedded document only; external resources and palette overrides are not loaded.
-- Color glyph rendering does not apply variable-font variation settings when building color layers or bitmaps.
