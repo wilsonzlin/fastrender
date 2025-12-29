@@ -15,9 +15,9 @@ use crate::text::font_db::LoadedFont;
 use crate::text::font_instance::FontInstance;
 use crate::text::variations::apply_rustybuzz_variations;
 use limits::GlyphRasterLimits;
+use lru::LruCache;
 use rustybuzz::Variation;
-use std::collections::HashMap;
-use std::collections::VecDeque;
+use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
 pub use bitmap::render_bitmap_glyph;
@@ -154,10 +154,14 @@ struct ColorFontCaches {
 impl ColorFontCaches {
   fn new() -> Self {
     Self {
-      palette_cache: LruCache::new(64),
-      colr_v0_headers: LruCache::new(64),
-      colr_v0_base_glyphs: LruCache::new(1024),
+      palette_cache: LruCache::new(Self::cap(64)),
+      colr_v0_headers: LruCache::new(Self::cap(64)),
+      colr_v0_base_glyphs: LruCache::new(Self::cap(1024)),
     }
+  }
+
+  fn cap(size: usize) -> NonZeroUsize {
+    NonZeroUsize::new(size.max(1)).unwrap()
   }
 
   fn palette(
@@ -170,23 +174,24 @@ impl ColorFontCaches {
       font: font_key,
       palette_index,
     };
-    self
-      .palette_cache
-      .get_or_insert_with(key, || {
-        let palette = face
-          .raw_face()
-          .table(ttf_parser::Tag::from_bytes(b"CPAL"))
-          .and_then(|data| cpal::parse_cpal_palette(data, palette_index).map(Arc::new));
-        Some(palette)
-      })
-      .and_then(|palette| palette)
+    if let Some(palette) = self.palette_cache.get(&key) {
+      return palette.clone();
+    }
+    let palette = face
+      .raw_face()
+      .table(ttf_parser::Tag::from_bytes(b"CPAL"))
+      .and_then(|data| cpal::parse_cpal_palette(data, palette_index).map(Arc::new));
+    self.palette_cache.put(key, palette.clone());
+    palette
   }
 
   fn colr_v0_header(&mut self, font_key: FontKey, data: &[u8]) -> Option<colr_v0::ColrV0Header> {
-    self
-      .colr_v0_headers
-      .get_or_insert_with(font_key, || Some(colr_v0::parse_colr_header(data)))
-      .flatten()
+    if let Some(header) = self.colr_v0_headers.get(&font_key) {
+      return *header;
+    }
+    let header = colr_v0::parse_colr_header(data);
+    self.colr_v0_headers.put(font_key, header);
+    header
   }
 
   fn colr_v0_base_record(
@@ -195,10 +200,12 @@ impl ColorFontCaches {
     data: &[u8],
     header: colr_v0::ColrV0Header,
   ) -> Option<Option<colr_v0::BaseGlyphRecord>> {
-    self.colr_v0_base_glyphs.get_or_insert_with(key, || {
-      // Cache negative lookups too so repeated attempts avoid rescans.
-      Some(colr_v0::find_base_glyph(data, header, key.glyph_id))
-    })
+    if let Some(record) = self.colr_v0_base_glyphs.get(&key) {
+      return Some(*record);
+    }
+    let record = colr_v0::find_base_glyph(data, header, key.glyph_id);
+    self.colr_v0_base_glyphs.put(key, record);
+    Some(record)
   }
 }
 
@@ -206,99 +213,6 @@ impl ColorFontCaches {
 struct PaletteCacheKey {
   font: FontKey,
   palette_index: u16,
-}
-
-#[derive(Debug)]
-struct CacheEntry<V> {
-  value: V,
-  last_used: u64,
-}
-
-/// Lightweight, bounded LRU cache used by color font parsing.
-#[derive(Debug)]
-struct LruCache<K, V> {
-  entries: HashMap<K, CacheEntry<V>>,
-  usage: VecDeque<(K, u64)>,
-  capacity: usize,
-  generation: u64,
-}
-
-impl<K, V> LruCache<K, V>
-where
-  K: Eq + std::hash::Hash + Copy,
-  V: Clone,
-{
-  fn new(capacity: usize) -> Self {
-    let capacity = capacity.max(1);
-    Self {
-      entries: HashMap::with_capacity(capacity.min(128)),
-      usage: VecDeque::new(),
-      capacity,
-      generation: 0,
-    }
-  }
-
-  fn get(&mut self, key: &K) -> Option<V> {
-    let generation = self.bump_generation();
-    let result = self.entries.get_mut(key).map(|entry| {
-      entry.last_used = generation;
-      entry.value.clone()
-    });
-
-    if result.is_some() {
-      self.usage.push_back((*key, generation));
-      self.evict_if_needed();
-    }
-
-    result
-  }
-
-  fn insert(&mut self, key: K, value: V) -> V {
-    let generation = self.bump_generation();
-    self.entries.insert(
-      key,
-      CacheEntry {
-        value: value.clone(),
-        last_used: generation,
-      },
-    );
-    self.usage.push_back((key, generation));
-    self.evict_if_needed();
-    value
-  }
-
-  fn get_or_insert_with<F>(&mut self, key: K, build: F) -> Option<V>
-  where
-    F: FnOnce() -> Option<V>,
-  {
-    if let Some(v) = self.get(&key) {
-      return Some(v);
-    }
-    let value = build()?;
-    Some(self.insert(key, value))
-  }
-
-  fn bump_generation(&mut self) -> u64 {
-    self.generation = self.generation.wrapping_add(1);
-    self.generation
-  }
-
-  fn evict_if_needed(&mut self) {
-    while self.entries.len() > self.capacity {
-      if let Some((key, generation)) = self.usage.pop_front() {
-        let should_remove = self
-          .entries
-          .get(&key)
-          .map(|entry| entry.last_used == generation)
-          .unwrap_or(false);
-        if should_remove {
-          self.entries.remove(&key);
-        }
-      } else {
-        break;
-      }
-    }
-  }
 }
 
 // ----------------------------------------------------------------------------
@@ -318,4 +232,21 @@ fn read_u24(data: &[u8], offset: usize) -> Option<u32> {
 fn read_u32(data: &[u8], offset: usize) -> Option<u32> {
   let bytes = data.get(offset..offset + 4)?;
   Some(u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn lru_cache_hits_do_not_grow_unbounded() {
+    let mut cache: LruCache<u32, u32> = LruCache::new(NonZeroUsize::new(2).unwrap());
+    cache.put(1, 42);
+
+    for _ in 0..10_000 {
+      assert_eq!(cache.get(&1), Some(&42));
+    }
+
+    assert_eq!(cache.len(), 1);
+  }
 }
