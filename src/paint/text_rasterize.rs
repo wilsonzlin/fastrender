@@ -64,6 +64,7 @@ use rustybuzz::Variation;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::sync::Mutex;
 use tiny_skia::BlendMode as SkiaBlendMode;
 use tiny_skia::FillRule;
 use tiny_skia::Mask;
@@ -443,7 +444,7 @@ impl ColorGlyphCacheKey {
 }
 
 #[derive(Debug, Default)]
-struct ColorGlyphCache {
+pub(crate) struct ColorGlyphCache {
   glyphs: HashMap<ColorGlyphCacheKey, ColorGlyphRaster>,
   max_size: usize,
 }
@@ -588,7 +589,7 @@ pub struct TextRasterizer {
   /// Glyph path cache
   cache: GlyphCache,
   /// Color glyph cache
-  color_cache: ColorGlyphCache,
+  color_cache: Arc<Mutex<ColorGlyphCache>>,
   /// Renderer for color glyph formats
   color_renderer: ColorFontRenderer,
 }
@@ -598,7 +599,7 @@ impl TextRasterizer {
   pub fn new() -> Self {
     Self {
       cache: GlyphCache::new(),
-      color_cache: ColorGlyphCache::new(),
+      color_cache: Arc::new(Mutex::new(ColorGlyphCache::new())),
       color_renderer: ColorFontRenderer::new(),
     }
   }
@@ -607,8 +608,23 @@ impl TextRasterizer {
   pub fn with_cache_capacity(capacity: usize) -> Self {
     Self {
       cache: GlyphCache::with_capacity(capacity),
-      color_cache: ColorGlyphCache::new(),
+      color_cache: Arc::new(Mutex::new(ColorGlyphCache::new())),
       color_renderer: ColorFontRenderer::new(),
+    }
+  }
+
+  /// Creates a rasterizer that reuses the provided color glyph cache and renderer.
+  ///
+  /// Sharing the color cache lets callers avoid re-rasterizing color glyphs across canvases
+  /// (e.g., display-list tiles) while still keeping outline caches local to each rasterizer.
+  pub fn with_color_resources(
+    color_renderer: ColorFontRenderer,
+    color_cache: Arc<Mutex<ColorGlyphCache>>,
+  ) -> Self {
+    Self {
+      cache: GlyphCache::new(),
+      color_cache,
+      color_renderer,
     }
   }
 
@@ -760,7 +776,11 @@ impl TextRasterizer {
         palette_override_hash,
       );
 
-      let mut color_glyph = self.color_cache.get(&color_key);
+      let mut color_glyph = self
+        .color_cache
+        .lock()
+        .ok()
+        .and_then(|cache| cache.get(&color_key));
       if color_glyph.is_none() {
         color_glyph = self.color_renderer.render(
           font,
@@ -775,7 +795,9 @@ impl TextRasterizer {
           Some((pixmap.width(), pixmap.height())),
         );
         if let Some(ref rendered) = color_glyph {
-          self.color_cache.insert(color_key, rendered.clone());
+          if let Ok(mut cache) = self.color_cache.lock() {
+            cache.insert(color_key, rendered.clone());
+          }
         }
       }
 
@@ -1084,7 +1106,9 @@ impl TextRasterizer {
   /// Call this when fonts are unloaded or memory pressure is high.
   pub fn clear_cache(&mut self) {
     self.cache.clear();
-    self.color_cache.clear();
+    if let Ok(mut cache) = self.color_cache.lock() {
+      cache.clear();
+    }
   }
 
   /// Sets the maximum number of cached glyph outlines.
@@ -1100,7 +1124,12 @@ impl TextRasterizer {
   /// Returns the number of cached glyph paths.
   #[inline]
   pub fn cache_size(&self) -> usize {
-    self.cache.len() + self.color_cache.glyphs.len()
+    let color_len = self
+      .color_cache
+      .lock()
+      .map(|cache| cache.glyphs.len())
+      .unwrap_or(0);
+    self.cache.len() + color_len
   }
 
   /// Returns glyph cache statistics (hits/misses/evictions).
@@ -1140,7 +1169,11 @@ impl TextRasterizer {
       color,
       palette_override_hash,
     );
-    let mut glyph = self.color_cache.get(&color_key);
+    let mut glyph = self
+      .color_cache
+      .lock()
+      .ok()
+      .and_then(|cache| cache.get(&color_key));
 
     if glyph.is_none() {
       glyph = self.color_renderer.render(
@@ -1156,7 +1189,9 @@ impl TextRasterizer {
         None,
       );
       if let Some(ref rendered) = glyph {
-        self.color_cache.insert(color_key, rendered.clone());
+        if let Ok(mut cache) = self.color_cache.lock() {
+          cache.insert(color_key, rendered.clone());
+        }
       }
     }
 

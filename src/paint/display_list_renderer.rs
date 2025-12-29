@@ -60,6 +60,8 @@ use crate::paint::projective_warp::warp_pixmap;
 use crate::paint::rasterize::fill_rounded_rect;
 use crate::paint::rasterize::render_box_shadow;
 use crate::paint::rasterize::BoxShadow;
+use crate::paint::text_rasterize::ColorGlyphCache;
+use crate::paint::text_rasterize::TextRasterizer;
 use crate::paint::text_shadow::PathBounds;
 use crate::paint::transform3d::backface_is_hidden;
 use crate::style::color::Rgba;
@@ -87,10 +89,12 @@ use crate::style::types::TextEmphasisShape;
 use crate::style::types::TextEmphasisStyle;
 use crate::style::types::TransformStyle;
 use crate::style::values::Length;
+use crate::text::color_fonts::ColorFontRenderer;
 use crate::text::font_db::LoadedFont;
 use crate::text::font_loader::FontContext;
 use rayon::prelude::*;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 use std::time::Instant;
 use tiny_skia::BlendMode as SkiaBlendMode;
@@ -1135,6 +1139,8 @@ pub struct RenderReport {
 pub struct DisplayListRenderer {
   canvas: Canvas,
   font_ctx: FontContext,
+  color_cache: Arc<Mutex<ColorGlyphCache>>,
+  color_renderer: ColorFontRenderer,
   stacking_layers: Vec<StackingRecord>,
   blend_stack: Vec<Option<BlendMode>>,
   scale: f32,
@@ -1630,19 +1636,17 @@ impl DisplayListRenderer {
     };
     let device_w = ((width as f32) * scale).round().max(1.0) as u32;
     let device_h = ((height as f32) * scale).round().max(1.0) as u32;
-    Ok(Self {
-      canvas: Canvas::new(device_w, device_h, background)?,
-      font_ctx,
-      stacking_layers: Vec::new(),
-      blend_stack: Vec::new(),
-      scale,
-      transform_stack: vec![Transform3D::identity()],
-      perspective_stack: vec![Transform3D::identity()],
-      culled_depth: 0,
-      preserve_3d_disabled: false,
+    let color_renderer = ColorFontRenderer::new();
+    let color_cache = Arc::new(Mutex::new(ColorGlyphCache::new()));
+    Self::new_with_text_state(
+      device_w,
+      device_h,
       background,
-      paint_parallelism: PaintParallelism::disabled(),
-    })
+      font_ctx,
+      scale,
+      color_renderer,
+      color_cache,
+    )
   }
 
   /// Configure parallel painting.
@@ -1656,21 +1660,32 @@ impl DisplayListRenderer {
     self.paint_parallelism = parallelism;
   }
 
-  fn new_with_device_size(
+  fn new_with_text_state(
     device_width: u32,
     device_height: u32,
     background: Rgba,
     font_ctx: FontContext,
     scale: f32,
+    color_renderer: ColorFontRenderer,
+    color_cache: Arc<Mutex<ColorGlyphCache>>,
   ) -> Result<Self> {
     let scale = if scale.is_finite() && scale > 0.0 {
       scale
     } else {
       1.0
     };
+    let text_rasterizer =
+      TextRasterizer::with_color_resources(color_renderer.clone(), color_cache.clone());
     Ok(Self {
-      canvas: Canvas::new(device_width.max(1), device_height.max(1), background)?,
+      canvas: Canvas::new_with_text_rasterizer(
+        device_width.max(1),
+        device_height.max(1),
+        background,
+        text_rasterizer,
+      )?,
       font_ctx,
+      color_cache,
+      color_renderer,
       stacking_layers: Vec::new(),
       blend_stack: Vec::new(),
       scale,
@@ -3176,16 +3191,20 @@ impl DisplayListRenderer {
     let scale = self.scale;
     let background = self.background;
     let preserve_3d_disabled = self.preserve_3d_disabled;
+    let color_renderer = self.color_renderer.clone();
+    let color_cache = self.color_cache.clone();
 
     let results: Result<Vec<(TileWork, Pixmap)>> = tiles
       .into_par_iter()
       .map(|work| {
-        let mut renderer = DisplayListRenderer::new_with_device_size(
+        let mut renderer = DisplayListRenderer::new_with_text_state(
           work.render_w,
           work.render_h,
           background,
           font_ctx.clone(),
           scale,
+          color_renderer.clone(),
+          color_cache.clone(),
         )?;
         renderer.preserve_3d_disabled = preserve_3d_disabled;
         renderer.paint_parallelism = PaintParallelism::disabled();

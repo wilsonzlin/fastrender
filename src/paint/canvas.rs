@@ -205,6 +205,16 @@ impl Canvas {
   /// assert_eq!(canvas.height(), 600);
   /// ```
   pub fn new(width: u32, height: u32, background: Rgba) -> Result<Self> {
+    Self::new_with_text_rasterizer(width, height, background, TextRasterizer::new())
+  }
+
+  /// Creates a new canvas with an explicit text rasterizer (shared caches, etc.).
+  pub fn new_with_text_rasterizer(
+    width: u32,
+    height: u32,
+    background: Rgba,
+    text_rasterizer: TextRasterizer,
+  ) -> Result<Self> {
     let pixmap = Pixmap::new(width, height).ok_or_else(|| RenderError::InvalidParameters {
       message: format!("Failed to create canvas {}x{}", width, height),
     })?;
@@ -214,7 +224,7 @@ impl Canvas {
       state_stack: Vec::new(),
       layer_stack: Vec::new(),
       current_state: CanvasState::new(),
-      text_rasterizer: TextRasterizer::new(),
+      text_rasterizer,
     };
 
     // Fill with background color

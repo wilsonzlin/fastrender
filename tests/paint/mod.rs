@@ -3,14 +3,17 @@
 mod util;
 
 mod avif_test;
+mod backend_parity;
 mod backface_culling_test;
 mod canvas_test;
 mod color_bitmap_glyph_test;
 mod color_font_colr_v0;
+mod color_font_helpers;
 mod color_font_test;
 mod color_mix_display_list_test;
 mod color_mix_polar_display_list_test;
 mod contain_paint;
+mod display_list_color_fonts_test;
 mod display_list_paint_multi_root;
 mod display_list_regressions;
 mod display_list_renderer_test;

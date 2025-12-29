@@ -11,7 +11,7 @@ FastRender supports a subset of OpenType color glyph formats. This note captures
 
   When none of these apply, glyphs fall back to monochrome outlines tinted with the text color. Per-run rotation is applied; additional transforms, opacity, or shadow effects must be applied by the caller around the destination pixmap.
 
-- The display list path ([`display_list_renderer`](../../src/paint/display_list_renderer.rs) → [`canvas`](../../src/paint/canvas.rs)) renders text from outlines only. Color tables are ignored there, so color fonts appear as monochrome outlines, but shadows/decorations are still derived from the shaped geometry.
+- The display list path ([`display_list_renderer`](../../src/paint/display_list_renderer.rs) → [`canvas`](../../src/paint/canvas.rs)) now reuses `TextRasterizer` and `ColorFontRenderer` when drawing text items. Color glyph rasters are cached and shared across display-list tiles so bitmap/SVG/COLR fonts render with the same palette/currentColor behavior as the legacy path.
 
 ## Palette handling
 
