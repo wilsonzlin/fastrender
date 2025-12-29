@@ -20,3 +20,6 @@ mod pageset_progress_worker_timeout_test;
 mod perf_smoke_output_test;
 mod render_pages_diagnostics_test;
 mod render_pages_exit_test;
+mod render_pages_in_process_panic_test;
+mod render_pages_panic_worker_test;
+mod render_pages_worker_timeout_test;

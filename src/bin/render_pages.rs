@@ -6,11 +6,17 @@
 
 mod common;
 
-use clap::{ArgAction, Parser, ValueEnum};
-use common::args::{CompatArgs, LayoutParallelArgs, ResourceAccessArgs};
+use clap::{ArgAction, Args as ClapArgs, Parser, Subcommand, ValueEnum};
+use common::args::{
+  parse_bool_preference, parse_color_scheme, parse_contrast, parse_shard, parse_viewport,
+  CompatArgs, LayoutParallelArgs, ResourceAccessArgs,
+};
 use common::render_pipeline::{
-  build_render_configs, follow_client_redirects, format_error_with_chain, log_diagnostics,
-  read_cached_document, render_document_with_artifacts, RenderConfigBundle, RenderSurface,
+  append_timeout_stderr_note, apply_test_render_delay, apply_worker_common_args,
+  build_http_fetcher, build_render_configs, compute_soft_timeout_ms, configure_worker_stdio,
+  follow_client_redirects, format_error_with_chain, format_exit_status, log_diagnostics,
+  read_cached_document, render_document_with_artifacts, summarize_exit_status, ExitStatusSummary,
+  RenderConfigBundle, RenderSurface, WorkerCommonArgs,
 };
 use fastrender::api::{FastRenderPool, FastRenderPoolConfig};
 use fastrender::debug::runtime::RuntimeToggles;
@@ -27,7 +33,6 @@ use fastrender::resource::CachingFetcherConfig;
 use fastrender::resource::DiskCacheConfig;
 #[cfg(feature = "disk_cache")]
 use fastrender::resource::DiskCachingFetcher;
-use fastrender::resource::HttpFetcher;
 use fastrender::resource::ResourceFetcher;
 use fastrender::resource::DEFAULT_ACCEPT_LANGUAGE;
 use fastrender::resource::DEFAULT_USER_AGENT;
@@ -40,12 +45,15 @@ use fastrender::{
   snapshot_pipeline, BoxTree, DisplayList, FragmentTree, PipelineSnapshot, RenderArtifactRequest,
   RenderArtifacts,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json;
+use std::collections::{HashMap, VecDeque};
 use std::fmt::Write;
 use std::fs;
+use std::io;
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command};
 use std::sync::mpsc::channel;
 use std::sync::mpsc::RecvTimeoutError;
 use std::sync::Arc;
@@ -78,14 +86,37 @@ impl DumpMode {
 /// Render all cached pages in parallel
 #[derive(Parser, Debug)]
 #[command(name = "render_pages", version, about)]
+struct Cli {
+  #[command(flatten)]
+  args: Args,
+
+  #[command(subcommand)]
+  command: Option<CliCommand>,
+}
+
+#[derive(Subcommand, Debug)]
+enum CliCommand {
+  #[command(hide = true)]
+  Worker(WorkerArgs),
+}
+
+#[derive(ClapArgs, Debug, Clone)]
 struct Args {
-  /// Number of parallel renders
+  /// Number of parallel renders/workers
   #[arg(long, short, default_value_t = num_cpus::get())]
   jobs: usize,
 
-  /// Per-page timeout in seconds
+  /// Hard per-page timeout in seconds
+  #[arg(long, default_value_t = 5)]
+  timeout: u64,
+
+  /// Cooperative timeout handed to the renderer in milliseconds (0 disables)
   #[arg(long)]
-  timeout: Option<u64>,
+  soft_timeout_ms: Option<u64>,
+
+  /// Run renders in-process instead of separate worker processes
+  #[arg(long)]
+  in_process: bool,
 
   /// Viewport size as WxH (e.g., 1200x800)
   #[arg(long, value_parser = parse_viewport, default_value = "1200x800")]
@@ -181,70 +212,22 @@ struct Args {
   filter_pages: Vec<String>,
 }
 
-fn parse_viewport(s: &str) -> Result<(u32, u32), String> {
-  let parts: Vec<&str> = s.split('x').collect();
-  if parts.len() != 2 {
-    return Err("viewport must be WxH (e.g., 1200x800)".to_string());
-  }
-  let w = parts[0].parse::<u32>().map_err(|_| "invalid width")?;
-  let h = parts[1].parse::<u32>().map_err(|_| "invalid height")?;
-  if w == 0 || h == 0 {
-    return Err("width and height must be > 0".to_string());
-  }
-  Ok((w, h))
-}
+#[derive(ClapArgs, Debug, Clone)]
+struct WorkerArgs {
+  #[command(flatten)]
+  args: Args,
 
-fn parse_bool_preference(s: &str) -> Result<bool, String> {
-  let v = s.trim().to_ascii_lowercase();
-  if matches!(
-    v.as_str(),
-    "1" | "true" | "yes" | "on" | "reduce" | "reduced" | "prefer"
-  ) {
-    return Ok(true);
-  }
-  if matches!(
-    v.as_str(),
-    "0" | "false" | "no" | "off" | "none" | "no-preference"
-  ) {
-    return Ok(false);
-  }
-  Err(format!("invalid value: {s}"))
-}
+  /// Cached HTML path (from fetches/html/*.html)
+  #[arg(long)]
+  cache_path: PathBuf,
 
-fn parse_contrast(s: &str) -> Result<String, String> {
-  let v = s.trim().to_ascii_lowercase();
-  match v.as_str() {
-    "more" | "high" | "less" | "low" | "custom" | "forced" | "no-preference" => Ok(v),
-    _ => Err(format!("invalid contrast value: {s}")),
-  }
-}
+  /// Page stem (used only for logging)
+  #[arg(long)]
+  stem: String,
 
-fn parse_color_scheme(s: &str) -> Result<String, String> {
-  let v = s.trim().to_ascii_lowercase();
-  match v.as_str() {
-    "light" | "dark" | "no-preference" => Ok(v),
-    _ => Err(format!("invalid color scheme: {s}")),
-  }
-}
-
-fn parse_shard(s: &str) -> Result<(usize, usize), String> {
-  let parts: Vec<&str> = s.split('/').collect();
-  if parts.len() != 2 {
-    return Err("shard must be index/total (e.g., 0/4)".to_string());
-  }
-  let index = parts[0]
-    .parse::<usize>()
-    .map_err(|_| "invalid shard index".to_string())?;
-  let total = parts[1]
-    .parse::<usize>()
-    .map_err(|_| "invalid shard total".to_string())?;
-  if total == 0 {
-    return Err("shard total must be > 0".to_string());
-  }
-  if index >= total {
-    return Err("shard index must be < total".to_string());
-  }
-  Ok((index, total))
+  /// Original cached stem (before normalization)
+  #[arg(long)]
+  cache_stem: String,
 }
 
 struct PageResult {
@@ -265,6 +248,63 @@ enum Status {
   Ok,
   Crash(String),
   Error(String),
+  Timeout(String),
+}
+
+#[derive(Clone)]
+struct RenderShared {
+  render_pool: FastRenderPool,
+  fetcher: Arc<dyn ResourceFetcher>,
+  base_options: fastrender::api::RenderOptions,
+  artifact_request: RenderArtifactRequest,
+  dump_mode: DumpMode,
+  only_failures: bool,
+  diagnostics_json: bool,
+  verbose: bool,
+  viewport: (u32, u32),
+  user_agent: String,
+  timeout_secs: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct WorkerResult {
+  status: String,
+  message: Option<String>,
+  time_ms: u128,
+  png_size: Option<usize>,
+}
+
+impl WorkerResult {
+  fn from_page_result(result: &PageResult) -> Self {
+    Self {
+      status: status_label(&result.status).to_string(),
+      message: status_error(&result.status).map(str::to_string),
+      time_ms: result.time_ms,
+      png_size: result.size,
+    }
+  }
+
+  fn into_page_result(self, name: String) -> PageResult {
+    let status = match self.status.as_str() {
+      "ok" => Status::Ok,
+      "crash" => Status::Crash(self.message.unwrap_or_else(|| "crash".to_string())),
+      "timeout" => Status::Timeout(self.message.unwrap_or_else(|| "timeout".to_string())),
+      "error" => Status::Error(self.message.unwrap_or_else(|| "error".to_string())),
+      other => Status::Error(format!("unknown status {other}")),
+    };
+    PageResult {
+      name,
+      status,
+      time_ms: self.time_ms,
+      size: self.png_size,
+    }
+  }
+}
+
+struct RunningChild {
+  entry: CachedEntry,
+  started: Instant,
+  child: Child,
 }
 
 struct RenderOutcome {
@@ -278,14 +318,41 @@ fn main() {
     eprintln!("FASTR_LAYOUT_PROFILE enabled: layout timings will be logged");
   }
 
-  let args = Args::parse();
+  let cli = Cli::parse();
+
+  if let Some(CliCommand::Worker(worker_args)) = cli.command {
+    if let Err(err) = worker_main(worker_args) {
+      eprintln!("worker failed: {err}");
+      std::process::exit(1);
+    }
+    return;
+  }
+
+  if let Err(err) = run(cli.args) {
+    eprintln!("{err}");
+    std::process::exit(1);
+  }
+}
+
+fn run(args: Args) -> io::Result<()> {
+  if args.jobs == 0 {
+    eprintln!("jobs must be > 0");
+    std::process::exit(2);
+  }
+  if args.timeout == 0 {
+    eprintln!("timeout must be > 0");
+    std::process::exit(2);
+  }
 
   // Build page filter from --pages and positional args
   let page_filter = {
-    let mut all_pages: Vec<String> = args.pages.unwrap_or_default();
+    let mut all_pages: Vec<String> = args.pages.clone().unwrap_or_default();
     all_pages.extend(args.filter_pages.clone());
     PagesetFilter::from_inputs(&all_pages)
   };
+
+  let hard_timeout = Duration::from_secs(args.timeout);
+  let soft_timeout_ms = compute_soft_timeout_ms(hard_timeout, args.soft_timeout_ms);
 
   if args.timings {
     std::env::set_var("FASTR_RENDER_TIMINGS", "1");
@@ -321,10 +388,170 @@ fn main() {
   }
 
   // Create directories
-  fs::create_dir_all(RENDER_DIR).expect("create render dir");
-  fs::create_dir_all(ASSET_DIR).expect("create asset dir");
+  fs::create_dir_all(RENDER_DIR)?;
+  fs::create_dir_all(ASSET_DIR)?;
 
-  // Find all cached HTML files
+  let entries = collect_entries(&args, page_filter);
+  if entries.is_empty() {
+    eprintln!(
+      "No cached pages in {}. Run fetch_pages first.",
+      CACHE_HTML_DIR
+    );
+    std::process::exit(1);
+  }
+
+  println!(
+    "Rendering {} pages ({} parallel)...",
+    entries.len(),
+    args.jobs
+  );
+  println!(
+    "User-Agent: {}",
+    normalize_user_agent_for_log(&args.user_agent)
+  );
+  println!("Accept-Language: {}", args.accept_language);
+  if let Some((index, total)) = args.shard {
+    println!("Shard: {}/{}", index, total);
+  }
+  if args.in_process {
+    println!("Mode: in-process (no worker isolation)");
+  } else {
+    println!("Mode: per-page worker isolation");
+  }
+  println!();
+
+  let start = Instant::now();
+  let results = if args.in_process {
+    run_in_process(&args, &entries, soft_timeout_ms)?
+  } else {
+    run_workers(&args, entries.clone(), hard_timeout, soft_timeout_ms)?
+  };
+
+  let total_elapsed = start.elapsed();
+  let mut results = results;
+  results.sort_by(|a, b| a.name.cmp(&b.name));
+
+  // Count results
+  let pass = results
+    .iter()
+    .filter(|r| matches!(r.status, Status::Ok))
+    .count();
+  let timeout = results
+    .iter()
+    .filter(|r| matches!(r.status, Status::Timeout(_)))
+    .count();
+  let crash = results
+    .iter()
+    .filter(|r| matches!(r.status, Status::Crash(_)))
+    .count();
+  let error = results
+    .iter()
+    .filter(|r| matches!(r.status, Status::Error(_)))
+    .count();
+
+  // Write summary log
+  let summary_path = PathBuf::from(RENDER_DIR).join("_summary.log");
+  let mut summary = String::new();
+  summary.push_str("=== Render Summary ===\n");
+  let _ = writeln!(
+    summary,
+    "Date: {}",
+    chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+  );
+  let _ = writeln!(summary, "Total time: {:.1}s", total_elapsed.as_secs_f64());
+  let _ = writeln!(
+    summary,
+    "Pages: {} total, {} pass, {} timeout, {} crash, {} error\n",
+    results.len(),
+    pass,
+    timeout,
+    crash,
+    error
+  );
+
+  let _ = writeln!(
+    summary,
+    "{:<40} {:>8} {:>10} STATUS",
+    "PAGE", "TIME", "SIZE"
+  );
+  let _ = writeln!(summary, "{}", "-".repeat(75));
+
+  for r in &results {
+    let status_str = match &r.status {
+      Status::Ok => "OK".to_string(),
+      Status::Crash(msg) => format!("CRASH: {}", msg.chars().take(30).collect::<String>()),
+      Status::Error(msg) => format!("ERROR: {}", msg.chars().take(30).collect::<String>()),
+      Status::Timeout(msg) => format!("TIMEOUT: {}", msg.chars().take(30).collect::<String>()),
+    };
+    let size_str = r
+      .size
+      .map(|s| format!("{}b", s))
+      .unwrap_or_else(|| "-".to_string());
+    let _ = writeln!(
+      summary,
+      "{:<40} {:>6}ms {:>10} {}",
+      r.name, r.time_ms, size_str, status_str
+    );
+  }
+
+  let _ = writeln!(summary, "\n{}", "-".repeat(75));
+  let _ = writeln!(summary, "Total: {:.1}s", total_elapsed.as_secs_f64());
+
+  let _ = fs::write(&summary_path, &summary);
+
+  // Print summary
+  println!();
+  println!(
+    "Done in {:.1}s: ✓{} pass, ⏱{} timeout, ✗{} crash, ✗{} error",
+    total_elapsed.as_secs_f64(),
+    pass,
+    timeout,
+    crash,
+    error
+  );
+  println!();
+  println!("Renders: {}/", RENDER_DIR);
+  println!("Summary: {}", summary_path.display());
+  println!("Logs:    {}/<page>.log", RENDER_DIR);
+  println!();
+  println!("Inspect: open {}/*.png", RENDER_DIR);
+
+  if timeout > 0 || crash > 0 || error > 0 {
+    std::process::exit(1);
+  }
+
+  Ok(())
+}
+
+fn log_path_for(stem: &str) -> PathBuf {
+  PathBuf::from(RENDER_DIR).join(format!("{stem}.log"))
+}
+
+fn diagnostics_path_for(stem: &str) -> PathBuf {
+  PathBuf::from(RENDER_DIR).join(format!("{stem}.diagnostics.json"))
+}
+
+fn result_path_for(stem: &str) -> PathBuf {
+  PathBuf::from(RENDER_DIR).join(format!("{stem}.result.json"))
+}
+
+fn stderr_path_for(stem: &str) -> PathBuf {
+  PathBuf::from(RENDER_DIR).join(format!("{stem}.stderr.log"))
+}
+
+fn output_path_for(stem: &str) -> PathBuf {
+  PathBuf::from(RENDER_DIR).join(format!("{stem}.png"))
+}
+
+fn panic_to_string(panic: Box<dyn std::any::Any + Send + 'static>) -> String {
+  panic
+    .downcast_ref::<&str>()
+    .map(|s| s.to_string())
+    .or_else(|| panic.downcast_ref::<String>().cloned())
+    .unwrap_or_else(|| "unknown panic".to_string())
+}
+
+fn collect_entries(args: &Args, page_filter: Option<PagesetFilter>) -> Vec<CachedEntry> {
   let mut entries: Vec<CachedEntry> = match fs::read_dir(CACHE_HTML_DIR) {
     Ok(dir) => dir
       .filter_map(|e| e.ok().map(|e| e.path()))
@@ -352,6 +579,35 @@ fn main() {
     }
   };
 
+  let mut stem_to_paths: HashMap<String, Vec<PathBuf>> = HashMap::new();
+  for entry in &entries {
+    stem_to_paths
+      .entry(entry.stem.clone())
+      .or_default()
+      .push(entry.path.clone());
+  }
+
+  let duplicates: Vec<_> = stem_to_paths
+    .into_iter()
+    .filter(|(_, paths)| paths.len() > 1)
+    .collect();
+  if !duplicates.is_empty() {
+    eprintln!("Cached HTML stems collide after normalization:");
+    for (stem, paths) in duplicates {
+      let joined = paths
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+      eprintln!("  {stem}: {joined}");
+    }
+    eprintln!(
+      "Clean stale files in {} or re-run fetch_pages --refresh.",
+      CACHE_HTML_DIR
+    );
+    std::process::exit(1);
+  }
+
   entries.sort_by(|a, b| a.cache_stem.cmp(&b.cache_stem));
 
   if let Some((index, total)) = args.shard {
@@ -363,18 +619,18 @@ fn main() {
       .collect();
   }
 
-  if entries.is_empty() {
-    eprintln!(
-      "No cached pages in {}. Run fetch_pages first.",
-      CACHE_HTML_DIR
-    );
-    std::process::exit(1);
-  }
+  entries
+}
 
+fn build_render_shared(
+  args: &Args,
+  pool_size: usize,
+  render_timeout_secs: Option<u64>,
+  fetch_timeout_secs: Option<u64>,
+  soft_timeout_ms: Option<u64>,
+) -> RenderShared {
   // Create shared caching fetcher
-  let http = HttpFetcher::new()
-    .with_user_agent(args.user_agent.clone())
-    .with_accept_language(args.accept_language.clone());
+  let http = build_http_fetcher(&args.user_agent, &args.accept_language, fetch_timeout_secs);
   let honor_http_freshness = cfg!(feature = "disk_cache") && !args.no_http_freshness;
   let memory_config = CachingFetcherConfig {
     honor_http_cache_freshness: honor_http_freshness,
@@ -391,8 +647,10 @@ fn main() {
   let fetcher: Arc<dyn ResourceFetcher> =
     Arc::new(CachingFetcher::with_config(http, memory_config));
 
-  let (viewport_w, viewport_h) = args.viewport;
-  let RenderConfigBundle { config, options } = build_render_configs(&RenderSurface {
+  let RenderConfigBundle {
+    config,
+    mut options,
+  } = build_render_configs(&RenderSurface {
     viewport: args.viewport,
     scroll_x: args.scroll_x,
     scroll_y: args.scroll_y,
@@ -413,30 +671,334 @@ fn main() {
     dom_compat_mode: args.compat.dom_compat_mode(),
   });
 
+  if let Some(ms) = soft_timeout_ms {
+    if ms > 0 {
+      options.timeout = Some(Duration::from_millis(ms));
+    }
+  }
+
   let render_pool = FastRenderPool::with_config(
     FastRenderPoolConfig::new()
       .with_renderer_config(config.clone())
       .with_fetcher(Arc::clone(&fetcher))
-      .with_pool_size(args.jobs),
+      .with_pool_size(pool_size),
   )
   .expect("create render pool");
 
-  println!(
-    "Rendering {} pages ({} parallel)...",
-    entries.len(),
-    args.jobs
-  );
-  println!(
-    "User-Agent: {}",
-    normalize_user_agent_for_log(&args.user_agent)
-  );
-  println!("Accept-Language: {}", args.accept_language);
-  if let Some((index, total)) = args.shard {
-    println!("Shard: {}/{}", index, total);
+  RenderShared {
+    render_pool,
+    fetcher,
+    base_options: options,
+    artifact_request: args.dump_intermediate.artifact_request(),
+    dump_mode: args.dump_intermediate,
+    only_failures: args.only_failures,
+    diagnostics_json: args.diagnostics_json,
+    verbose: args.verbose,
+    viewport: args.viewport,
+    user_agent: args.user_agent.clone(),
+    timeout_secs: render_timeout_secs,
   }
-  println!();
+}
 
-  let start = Instant::now();
+fn should_panic_for_test(stem: &str) -> bool {
+  // Test hook: panic within the render worker when the configured stem matches.
+  match std::env::var("FASTR_TEST_RENDER_PANIC_STEM") {
+    Ok(value) => value
+      .split(',')
+      .map(|v| v.trim())
+      .any(|candidate| candidate == stem),
+    Err(_) => false,
+  }
+}
+
+fn render_panic_result(
+  shared: &RenderShared,
+  entry: &CachedEntry,
+  started: Instant,
+  message: String,
+) -> PageResult {
+  let time_ms = started.elapsed().as_millis();
+  let mut log = format!(
+    "=== {} ===\nStatus: CRASH\nPanic: {}\nTime: {}ms\n",
+    entry.stem, message, time_ms
+  );
+  let _ = fs::write(log_path_for(&entry.stem), &log);
+  if shared.diagnostics_json {
+    let diag = DiagnosticsFile {
+      page: entry.stem.clone(),
+      status: "crash".to_string(),
+      error: Some(message.clone()),
+      time_ms,
+      png_size: None,
+      diagnostics: fastrender::RenderDiagnostics::default(),
+      summary: None,
+    };
+    write_stage_json(diagnostics_path_for(&entry.stem), &diag, &mut log);
+    let _ = fs::write(log_path_for(&entry.stem), &log);
+  }
+  PageResult {
+    name: entry.stem.clone(),
+    status: Status::Crash(message),
+    time_ms,
+    size: None,
+  }
+}
+
+fn render_entry(shared: &RenderShared, entry: &CachedEntry) -> PageResult {
+  let started = Instant::now();
+  apply_test_render_delay(Some(&entry.stem));
+  let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+    if should_panic_for_test(&entry.stem) {
+      panic!("FASTR_TEST_RENDER_PANIC_STEM triggered for {}", entry.stem);
+    }
+    render_entry_inner(shared, entry)
+  }));
+  match result {
+    Ok(res) => res,
+    Err(panic) => render_panic_result(shared, entry, started, panic_to_string(panic)),
+  }
+}
+
+fn render_entry_inner(shared: &RenderShared, entry: &CachedEntry) -> PageResult {
+  let name = entry.stem.clone();
+  let path = entry.path.clone();
+  let output_path = output_path_for(&name);
+  let log_path = log_path_for(&name);
+
+  let page_start = Instant::now();
+  let mut log = String::new();
+
+  let _ = writeln!(log, "=== {} ===", name);
+  let _ = writeln!(log, "Stem: {}", entry.cache_stem);
+  let _ = writeln!(log, "Source: {}", path.display());
+  let _ = writeln!(log, "Output: {}", output_path.display());
+  let _ = writeln!(
+    log,
+    "User-Agent: {}\n",
+    normalize_user_agent_for_log(&shared.user_agent)
+  );
+
+  let cached = match read_cached_document(&path) {
+    Ok(doc) => doc,
+    Err(e) => {
+      let msg = format_error_with_chain(&e, shared.verbose);
+      let _ = writeln!(log, "Read error: {}", msg);
+      let _ = fs::write(&log_path, &log);
+      return PageResult {
+        name,
+        status: Status::Error(format!("read: {}", msg)),
+        time_ms: 0,
+        size: None,
+      };
+    }
+  };
+
+  let _ = writeln!(log, "HTML bytes: {}", cached.byte_len);
+  if let Some(ct) = &cached.content_type {
+    let _ = writeln!(log, "Content-Type: {}", ct);
+  }
+  let _ = writeln!(log, "Viewport: {}x{}", shared.viewport.0, shared.viewport.1);
+  let _ = writeln!(log, "Scroll-X: {}px", shared.base_options.scroll_x);
+  let _ = writeln!(log, "Scroll-Y: {}px", shared.base_options.scroll_y);
+
+  let mut doc = cached.document;
+  let _ = writeln!(log, "Resource base: {}", doc.base_url);
+
+  doc = follow_client_redirects(shared.fetcher.as_ref(), doc, |line| {
+    let _ = writeln!(log, "{line}");
+  });
+
+  let _ = writeln!(log, "Final resource base: {}", doc.base_url);
+
+  let worker_name = name.clone();
+  let mut render_opts = shared.base_options.clone();
+  let has_page_rule = doc.html.to_ascii_lowercase().contains("@page");
+  if has_page_rule {
+    render_opts.fit_canvas_to_content = Some(true);
+    let _ = writeln!(log, "Detected @page rule; fitting canvas to content");
+  }
+  let doc_for_render = doc.clone();
+  let render_request = shared.artifact_request;
+
+  let run_render = {
+    let render_pool = shared.render_pool.clone();
+    let verbose = shared.verbose;
+    let timeout_secs = shared.timeout_secs;
+    move || -> Result<RenderOutcome, Status> {
+      let render_work = move || -> Result<RenderOutcome, fastrender::Error> {
+        let report = render_pool.with_renderer(|renderer| {
+          render_document_with_artifacts(renderer, doc_for_render, &render_opts, render_request)
+        })?;
+        let png = encode_image(&report.pixmap, OutputFormat::Png)?;
+        Ok(RenderOutcome {
+          png,
+          diagnostics: report.diagnostics,
+          artifacts: report.artifacts,
+        })
+      };
+
+      let (tx, rx) = channel();
+      thread::Builder::new()
+        .name(format!("render-pages-worker-{worker_name}"))
+        .stack_size(RENDER_STACK_SIZE)
+        .spawn(move || {
+          let result = std::panic::catch_unwind(AssertUnwindSafe(render_work));
+          let _ = tx.send(result);
+        })
+        .expect("spawn render worker");
+
+      if let Some(secs) = timeout_secs {
+        match rx.recv_timeout(Duration::from_secs(secs)) {
+          Ok(Ok(outcome)) => {
+            outcome.map_err(|e| Status::Error(format_error_with_chain(&e, verbose)))
+          }
+          Ok(Err(panic)) => Err(Status::Crash(panic_to_string(panic))),
+          Err(RecvTimeoutError::Timeout) => {
+            Err(Status::Timeout(format!("render timed out after {}s", secs)))
+          }
+          Err(RecvTimeoutError::Disconnected) => {
+            Err(Status::Crash("render worker disconnected".to_string()))
+          }
+        }
+      } else {
+        match rx.recv() {
+          Ok(Ok(outcome)) => {
+            outcome.map_err(|e| Status::Error(format_error_with_chain(&e, verbose)))
+          }
+          Ok(Err(panic)) => Err(Status::Crash(panic_to_string(panic))),
+          Err(_) => Err(Status::Crash("render worker disconnected".to_string())),
+        }
+      }
+    }
+  };
+
+  let result = run_render();
+
+  let elapsed = page_start.elapsed();
+  let time_ms = elapsed.as_millis();
+
+  let mut captured_artifacts: Option<RenderArtifacts> = None;
+  let mut diagnostics = fastrender::RenderDiagnostics::default();
+
+  let (status, size) = match result {
+    Ok(outcome) => {
+      diagnostics = outcome.diagnostics;
+      log_diagnostics(&diagnostics, |line| {
+        let _ = writeln!(log, "{line}");
+      });
+
+      let size = outcome.png.len();
+      let _ = writeln!(log, "PNG size: {} bytes", size);
+      let _ = writeln!(log, "Time: {}ms", time_ms);
+      log.push_str("Status: OK\n");
+
+      if let Err(e) = fs::write(&output_path, &outcome.png) {
+        let _ = writeln!(log, "Write error: {}", e);
+        (Status::Error(format!("write: {}", e)), None)
+      } else {
+        println!("✓ {} ({}b, {}ms)", name, size, time_ms);
+        captured_artifacts = Some(outcome.artifacts);
+        (Status::Ok, Some(size))
+      }
+    }
+    Err(status) => match status {
+      Status::Error(msg) => {
+        let _ = writeln!(log, "Time: {}ms", time_ms);
+        log.push_str("Status: ERROR\n");
+        let _ = writeln!(log, "Error: {}", msg);
+        println!("✗ {} ERROR: {} ({}ms)", name, msg, time_ms);
+        (Status::Error(msg), None)
+      }
+      Status::Crash(msg) => {
+        let _ = writeln!(log, "Time: {}ms", time_ms);
+        log.push_str("Status: CRASH\n");
+        let _ = writeln!(log, "Panic: {}", msg);
+
+        let short: String = msg.chars().take(50).collect();
+        println!("✗ {} CRASH: {} ({}ms)", name, short, time_ms);
+        (Status::Crash(msg), None)
+      }
+      Status::Timeout(msg) => {
+        let _ = writeln!(log, "Time: {}ms", time_ms);
+        log.push_str("Status: TIMEOUT\n");
+        let _ = writeln!(log, "Timeout: {}", msg);
+        println!("✗ {} TIMEOUT: {} ({}ms)", name, msg, time_ms);
+        (Status::Timeout(msg), None)
+      }
+      Status::Ok => (Status::Error("unexpected ok status".to_string()), None),
+    },
+  };
+
+  let should_dump =
+    shared.dump_mode != DumpMode::None && (!shared.only_failures || !matches!(status, Status::Ok));
+
+  let summary = captured_artifacts.as_ref().map(build_intermediate_summary);
+
+  if shared.diagnostics_json {
+    let diag_path = diagnostics_path_for(&name);
+    let diag_report = DiagnosticsFile {
+      page: name.clone(),
+      status: status_label(&status).to_string(),
+      error: status_error(&status).map(str::to_string),
+      time_ms,
+      png_size: size,
+      diagnostics: diagnostics.clone(),
+      summary: summary.clone(),
+    };
+    write_stage_json(diag_path, &diag_report, &mut log);
+  }
+
+  if should_dump {
+    if let Some(artifacts) = captured_artifacts.as_ref() {
+      match shared.dump_mode {
+        DumpMode::None => {}
+        DumpMode::Summary => {
+          if let Some(summary) = summary.as_ref() {
+            let summary_path =
+              PathBuf::from(RENDER_DIR).join(format!("{}.intermediate.json", name));
+            write_stage_json(summary_path, summary, &mut log);
+          } else {
+            let _ = writeln!(log, "Summary requested but no artifacts captured");
+          }
+        }
+        DumpMode::Full => {
+          if let Some(summary) = summary.as_ref() {
+            let summary_path =
+              PathBuf::from(RENDER_DIR).join(format!("{}.intermediate.json", name));
+            write_stage_json(summary_path, summary, &mut log);
+          }
+          write_full_artifacts(Path::new(RENDER_DIR), &name, artifacts, &mut log);
+          write_pipeline_snapshot(Path::new(RENDER_DIR), &name, artifacts, &mut log);
+        }
+      }
+    } else {
+      let _ = writeln!(log, "Artifacts requested but not captured for {}", name);
+    }
+  }
+
+  // Write per-page log
+  let _ = fs::write(&log_path, &log);
+
+  PageResult {
+    name,
+    status,
+    time_ms,
+    size,
+  }
+}
+
+fn run_in_process(
+  args: &Args,
+  entries: &[CachedEntry],
+  soft_timeout_ms: Option<u64>,
+) -> io::Result<Vec<PageResult>> {
+  let shared = build_render_shared(
+    args,
+    args.jobs,
+    Some(args.timeout),
+    Some(args.timeout),
+    soft_timeout_ms,
+  );
   let results: Mutex<Vec<PageResult>> = Mutex::new(Vec::new());
 
   // Use a thread pool with limited concurrency
@@ -445,333 +1007,291 @@ fn main() {
     .build()
     .expect("create thread pool");
 
-  let timeout_secs = args.timeout;
-  let dump_mode = args.dump_intermediate;
-  let only_failures = args.only_failures;
-  let diagnostics_json = args.diagnostics_json;
-  let artifact_request = dump_mode.artifact_request();
-
   thread_pool.scope(|s| {
-    for entry in &entries {
-      let results = &results;
+    for entry in entries {
+      let shared = shared.clone();
       let entry = entry.clone();
-      let fetcher = Arc::clone(&fetcher);
-      let user_agent = args.user_agent.clone();
-      let options = options.clone();
-      let render_pool = render_pool.clone();
-      let verbose = args.verbose;
-
+      let results = &results;
       s.spawn(move |_| {
-        let name = entry.cache_stem.clone();
-        let path = entry.path.clone();
-        let output_path = PathBuf::from(RENDER_DIR).join(format!("{}.png", name));
-        let log_path = PathBuf::from(RENDER_DIR).join(format!("{}.log", name));
-
-        let page_start = Instant::now();
-        let mut log = String::new();
-
-        let _ = writeln!(log, "=== {} ===", name);
-        let _ = writeln!(log, "Stem: {}", entry.stem);
-        let _ = writeln!(log, "Source: {}", path.display());
-        let _ = writeln!(log, "Output: {}", output_path.display());
-        let _ = writeln!(
-          log,
-          "User-Agent: {}\n",
-          normalize_user_agent_for_log(&user_agent)
-        );
-
-        let cached = match read_cached_document(&path) {
-          Ok(doc) => doc,
-          Err(e) => {
-            let msg = format_error_with_chain(&e, verbose);
-            let _ = writeln!(log, "Read error: {}", msg);
-            let _ = fs::write(&log_path, &log);
-            results.lock().unwrap().push(PageResult {
-              name,
-              status: Status::Error(format!("read: {}", msg)),
-              time_ms: 0,
-              size: None,
-            });
-            return;
-          }
-        };
-
-        let _ = writeln!(log, "HTML bytes: {}", cached.byte_len);
-        if let Some(ct) = &cached.content_type {
-          let _ = writeln!(log, "Content-Type: {}", ct);
-        }
-        let _ = writeln!(log, "Viewport: {}x{}", viewport_w, viewport_h);
-        let _ = writeln!(log, "Scroll-X: {}px", options.scroll_x);
-        let _ = writeln!(log, "Scroll-Y: {}px", options.scroll_y);
-
-        let mut doc = cached.document;
-        let _ = writeln!(log, "Resource base: {}", doc.base_url);
-
-        doc = follow_client_redirects(fetcher.as_ref(), doc, |line| {
-          let _ = writeln!(log, "{line}");
-        });
-
-        let _ = writeln!(log, "Final resource base: {}", doc.base_url);
-
-        let worker_name = name.clone();
-        let mut render_opts = options.clone();
-        let has_page_rule = doc.html.to_ascii_lowercase().contains("@page");
-        if has_page_rule {
-          render_opts.fit_canvas_to_content = Some(true);
-          let _ = writeln!(log, "Detected @page rule; fitting canvas to content");
-        }
-        let doc_for_render = doc.clone();
-        let render_request = artifact_request;
-        let panic_to_string = |panic: Box<dyn std::any::Any + Send + 'static>| -> String {
-          panic
-            .downcast_ref::<&str>()
-            .map(|s| s.to_string())
-            .or_else(|| panic.downcast_ref::<String>().cloned())
-            .unwrap_or_else(|| "unknown panic".to_string())
-        };
-
-        let run_render = move || -> Result<RenderOutcome, Status> {
-          let render_work = move || -> Result<RenderOutcome, fastrender::Error> {
-            let report = render_pool.with_renderer(|renderer| {
-              render_document_with_artifacts(renderer, doc_for_render, &render_opts, render_request)
-            })?;
-            let png = encode_image(&report.pixmap, OutputFormat::Png)?;
-            Ok(RenderOutcome {
-              png,
-              diagnostics: report.diagnostics,
-              artifacts: report.artifacts,
-            })
-          };
-
-          let (tx, rx) = channel();
-          thread::Builder::new()
-            .name(format!("render-pages-worker-{worker_name}"))
-            .stack_size(RENDER_STACK_SIZE)
-            .spawn(move || {
-              let result = std::panic::catch_unwind(AssertUnwindSafe(render_work));
-              let _ = tx.send(result);
-            })
-            .expect("spawn render worker");
-
-          if let Some(secs) = timeout_secs {
-            match rx.recv_timeout(Duration::from_secs(secs)) {
-              Ok(Ok(outcome)) => {
-                outcome.map_err(|e| Status::Error(format_error_with_chain(&e, verbose)))
-              }
-              Ok(Err(panic)) => Err(Status::Crash(panic_to_string(panic))),
-              Err(RecvTimeoutError::Timeout) => {
-                Err(Status::Crash(format!("render timed out after {}s", secs)))
-              }
-              Err(RecvTimeoutError::Disconnected) => {
-                Err(Status::Crash("render worker disconnected".to_string()))
-              }
-            }
-          } else {
-            match rx.recv() {
-              Ok(Ok(outcome)) => {
-                outcome.map_err(|e| Status::Error(format_error_with_chain(&e, verbose)))
-              }
-              Ok(Err(panic)) => Err(Status::Crash(panic_to_string(panic))),
-              Err(_) => Err(Status::Crash("render worker disconnected".to_string())),
-            }
-          }
-        };
-
-        let result = run_render();
-
-        let elapsed = page_start.elapsed();
-        let time_ms = elapsed.as_millis();
-
-        let mut captured_artifacts: Option<RenderArtifacts> = None;
-        let mut diagnostics = fastrender::RenderDiagnostics::default();
-
-        let (status, size) = match result {
-          Ok(outcome) => {
-            diagnostics = outcome.diagnostics;
-            log_diagnostics(&diagnostics, |line| {
-              let _ = writeln!(log, "{line}");
-            });
-
-            let size = outcome.png.len();
-            let _ = writeln!(log, "PNG size: {} bytes", size);
-            let _ = writeln!(log, "Time: {}ms", time_ms);
-            log.push_str("Status: OK\n");
-
-            if let Err(e) = fs::write(&output_path, &outcome.png) {
-              let _ = writeln!(log, "Write error: {}", e);
-              (Status::Error(format!("write: {}", e)), None)
-            } else {
-              println!("✓ {} ({}b, {}ms)", name, size, time_ms);
-              captured_artifacts = Some(outcome.artifacts);
-              (Status::Ok, Some(size))
-            }
-          }
-          Err(status) => match status {
-            Status::Error(msg) => {
-              let _ = writeln!(log, "Time: {}ms", time_ms);
-              log.push_str("Status: ERROR\n");
-              let _ = writeln!(log, "Error: {}", msg);
-              println!("✗ {} ERROR: {} ({}ms)", name, msg, time_ms);
-              (Status::Error(msg), None)
-            }
-            Status::Crash(msg) => {
-              let _ = writeln!(log, "Time: {}ms", time_ms);
-              log.push_str("Status: CRASH\n");
-              let _ = writeln!(log, "Panic: {}", msg);
-
-              let short: String = msg.chars().take(50).collect();
-              println!("✗ {} CRASH: {} ({}ms)", name, short, time_ms);
-              (Status::Crash(msg), None)
-            }
-            Status::Ok => (Status::Error("unexpected ok status".to_string()), None),
-          },
-        };
-
-        let should_dump =
-          dump_mode != DumpMode::None && (!only_failures || !matches!(status, Status::Ok));
-
-        let summary = captured_artifacts.as_ref().map(build_intermediate_summary);
-
-        if diagnostics_json {
-          let diag_path = PathBuf::from(RENDER_DIR).join(format!("{}.diagnostics.json", name));
-          let diag_report = DiagnosticsFile {
-            page: name.clone(),
-            status: status_label(&status).to_string(),
-            error: status_error(&status).map(str::to_string),
-            time_ms,
-            png_size: size,
-            diagnostics: diagnostics.clone(),
-            summary: summary.clone(),
-          };
-          write_stage_json(diag_path, &diag_report, &mut log);
-        }
-
-        if should_dump {
-          if let Some(artifacts) = captured_artifacts.as_ref() {
-            match dump_mode {
-              DumpMode::None => {}
-              DumpMode::Summary => {
-                if let Some(summary) = summary.as_ref() {
-                  let summary_path =
-                    PathBuf::from(RENDER_DIR).join(format!("{}.intermediate.json", name));
-                  write_stage_json(summary_path, summary, &mut log);
-                } else {
-                  let _ = writeln!(log, "Summary requested but no artifacts captured");
-                }
-              }
-              DumpMode::Full => {
-                if let Some(summary) = summary.as_ref() {
-                  let summary_path =
-                    PathBuf::from(RENDER_DIR).join(format!("{}.intermediate.json", name));
-                  write_stage_json(summary_path, summary, &mut log);
-                }
-                write_full_artifacts(Path::new(RENDER_DIR), &name, artifacts, &mut log);
-                write_pipeline_snapshot(Path::new(RENDER_DIR), &name, artifacts, &mut log);
-              }
-            }
-          } else {
-            let _ = writeln!(log, "Artifacts requested but not captured for {}", name);
-          }
-        }
-
-        // Write per-page log
-        let _ = fs::write(&log_path, &log);
-
-        results.lock().unwrap().push(PageResult {
-          name,
-          status,
-          time_ms,
-          size,
-        });
+        let result = render_entry(&shared, &entry);
+        results.lock().unwrap().push(result);
       });
     }
   });
 
-  let total_elapsed = start.elapsed();
   let mut results = results.into_inner().unwrap();
   results.sort_by(|a, b| a.name.cmp(&b.name));
+  Ok(results)
+}
 
-  // Count results
-  let pass = results
-    .iter()
-    .filter(|r| matches!(r.status, Status::Ok))
-    .count();
-  let crash = results
-    .iter()
-    .filter(|r| matches!(r.status, Status::Crash(_)))
-    .count();
-  let error = results
-    .iter()
-    .filter(|r| matches!(r.status, Status::Error(_)))
-    .count();
+fn spawn_worker(
+  exe: &Path,
+  args: &Args,
+  entry: &CachedEntry,
+  soft_timeout_ms: Option<u64>,
+) -> io::Result<Child> {
+  let mut cmd = Command::new(exe);
+  cmd
+    .arg("worker")
+    .arg("--cache-path")
+    .arg(&entry.path)
+    .arg("--stem")
+    .arg(&entry.stem)
+    .arg("--cache-stem")
+    .arg(&entry.cache_stem);
 
-  // Write summary log
-  let summary_path = PathBuf::from(RENDER_DIR).join("_summary.log");
-  let mut summary = String::new();
-  summary.push_str("=== Render Summary ===\n");
-  let _ = writeln!(
-    summary,
-    "Date: {}",
-    chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+  apply_worker_common_args(
+    &mut cmd,
+    &WorkerCommonArgs {
+      timeout: args.timeout,
+      soft_timeout_ms,
+      viewport: args.viewport,
+      dpr: args.dpr,
+      scroll: Some((args.scroll_x, args.scroll_y)),
+      user_agent: &args.user_agent,
+      accept_language: &args.accept_language,
+      no_http_freshness: args.no_http_freshness,
+      css_limit: args.css_limit,
+      resource_access: &args.resource_access,
+      layout_parallel: &args.layout_parallel,
+      compat: &args.compat,
+    },
   );
-  let _ = writeln!(summary, "Total time: {:.1}s", total_elapsed.as_secs_f64());
-  let _ = writeln!(
-    summary,
-    "Pages: {} total, {} pass, {} crash, {} error\n",
-    results.len(),
-    pass,
-    crash,
-    error
-  );
+  if args.diagnostics_json {
+    cmd.arg("--diagnostics-json");
+  }
+  if args.dump_intermediate != DumpMode::None {
+    cmd
+      .arg("--dump-intermediate")
+      .arg(format!("{:?}", args.dump_intermediate).to_ascii_lowercase());
+  }
+  if args.only_failures {
+    cmd.arg("--only-failures");
+  }
+  if args.verbose {
+    cmd.arg("--verbose");
+  }
+  if args.timings {
+    cmd.arg("--timings");
+  }
 
-  let _ = writeln!(
-    summary,
-    "{:<40} {:>8} {:>10} STATUS",
-    "PAGE", "TIME", "SIZE"
-  );
-  let _ = writeln!(summary, "{}", "-".repeat(75));
+  configure_worker_stdio(&mut cmd, &stderr_path_for(&entry.stem))?;
 
-  for r in &results {
-    let status_str = match &r.status {
-      Status::Ok => "OK".to_string(),
-      Status::Crash(msg) => format!("CRASH: {}", msg.chars().take(30).collect::<String>()),
-      Status::Error(msg) => format!("ERROR: {}", msg.chars().take(30).collect::<String>()),
+  cmd.spawn()
+}
+
+fn read_worker_result(stem: &str) -> Option<PageResult> {
+  let path = result_path_for(stem);
+  let raw = fs::read_to_string(&path).ok()?;
+  let parsed: WorkerResult = serde_json::from_str(&raw).ok()?;
+  Some(parsed.into_page_result(stem.to_string()))
+}
+
+fn write_worker_result(stem: &str, result: &PageResult) -> io::Result<()> {
+  let path = result_path_for(stem);
+  if let Some(parent) = path.parent() {
+    if !parent.as_os_str().is_empty() {
+      fs::create_dir_all(parent)?;
+    }
+  }
+  let json = serde_json::to_string(&WorkerResult::from_page_result(result))
+    .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+  fs::write(path, json)
+}
+
+fn synthesize_worker_failure_note(summary: ExitStatusSummary) -> String {
+  format!(
+    "worker exited (exit {}) without writing results",
+    format_exit_status(summary)
+  )
+}
+
+fn write_timeout_artifacts(stem: &str, message: &str, elapsed: Duration, diagnostics_json: bool) {
+  let mut log = format!(
+    "=== {stem} ===\nStatus: TIMEOUT\nKilled after {:.2}s\n{message}\n",
+    elapsed.as_secs_f64()
+  );
+  let _ = fs::write(log_path_for(stem), &log);
+  if diagnostics_json {
+    let diag = DiagnosticsFile {
+      page: stem.to_string(),
+      status: "timeout".to_string(),
+      error: Some(message.to_string()),
+      time_ms: elapsed.as_millis(),
+      png_size: None,
+      diagnostics: fastrender::RenderDiagnostics::default(),
+      summary: None,
     };
-    let size_str = r
-      .size
-      .map(|s| format!("{}b", s))
-      .unwrap_or_else(|| "-".to_string());
-    let _ = writeln!(
-      summary,
-      "{:<40} {:>6}ms {:>10} {}",
-      r.name, r.time_ms, size_str, status_str
-    );
+    write_stage_json(diagnostics_path_for(stem), &diag, &mut log);
+    let _ = fs::write(log_path_for(stem), &log);
+  }
+}
+
+fn print_page_status(result: &PageResult) {
+  match &result.status {
+    Status::Ok => {
+      if let Some(size) = result.size {
+        println!("✓ {} ({}b, {}ms)", result.name, size, result.time_ms);
+      } else {
+        println!("✓ {} ({}ms)", result.name, result.time_ms);
+      }
+    }
+    Status::Error(msg) => {
+      println!("✗ {} ERROR: {} ({}ms)", result.name, msg, result.time_ms);
+    }
+    Status::Crash(msg) => {
+      let short: String = msg.chars().take(50).collect();
+      println!("✗ {} CRASH: {} ({}ms)", result.name, short, result.time_ms);
+    }
+    Status::Timeout(msg) => {
+      println!("✗ {} TIMEOUT: {} ({}ms)", result.name, msg, result.time_ms);
+    }
+  }
+}
+
+fn run_workers(
+  args: &Args,
+  entries: Vec<CachedEntry>,
+  hard_timeout: Duration,
+  soft_timeout_ms: Option<u64>,
+) -> io::Result<Vec<PageResult>> {
+  let exe = std::env::current_exe()?;
+  let mut queue: VecDeque<CachedEntry> = VecDeque::from(entries);
+  let mut running: Vec<RunningChild> = Vec::new();
+  let mut results: Vec<PageResult> = Vec::new();
+
+  while !queue.is_empty() || !running.is_empty() {
+    while running.len() < args.jobs {
+      let Some(entry) = queue.pop_front() else {
+        break;
+      };
+      let _ = fs::remove_file(result_path_for(&entry.stem));
+      let _ = fs::remove_file(stderr_path_for(&entry.stem));
+      let child = spawn_worker(&exe, args, &entry, soft_timeout_ms)?;
+      running.push(RunningChild {
+        entry,
+        started: Instant::now(),
+        child,
+      });
+    }
+
+    let mut i = 0usize;
+    while i < running.len() {
+      let elapsed = running[i].started.elapsed();
+      let timed_out = elapsed >= hard_timeout;
+
+      if timed_out {
+        let mut entry = running.swap_remove(i);
+        let _ = entry.child.kill();
+        let _ = entry.child.wait();
+        append_timeout_stderr_note(&stderr_path_for(&entry.entry.stem), elapsed);
+        let message = format!("hard timeout after {:.2}s", hard_timeout.as_secs_f64());
+        write_timeout_artifacts(&entry.entry.stem, &message, elapsed, args.diagnostics_json);
+        let result = PageResult {
+          name: entry.entry.stem.clone(),
+          status: Status::Timeout(message),
+          time_ms: elapsed.as_millis(),
+          size: None,
+        };
+        print_page_status(&result);
+        results.push(result);
+        continue;
+      }
+
+      match running[i].child.try_wait() {
+        Ok(Some(status)) => {
+          let entry = running.swap_remove(i);
+          if let Some(result) = read_worker_result(&entry.entry.stem) {
+            print_page_status(&result);
+            results.push(result);
+          } else {
+            let summary = summarize_exit_status(&status);
+            let message = synthesize_worker_failure_note(summary);
+            let time_ms = entry.started.elapsed().as_millis();
+            let mut log = format!("=== {} ===\nStatus: CRASH\n{}\n", entry.entry.stem, message);
+            let _ = fs::write(log_path_for(&entry.entry.stem), &log);
+            if args.diagnostics_json {
+              let diag = DiagnosticsFile {
+                page: entry.entry.stem.clone(),
+                status: "crash".to_string(),
+                error: Some(message.clone()),
+                time_ms,
+                png_size: None,
+                diagnostics: fastrender::RenderDiagnostics::default(),
+                summary: None,
+              };
+              write_stage_json(diagnostics_path_for(&entry.entry.stem), &diag, &mut log);
+              let _ = fs::write(log_path_for(&entry.entry.stem), &log);
+            }
+            let result = PageResult {
+              name: entry.entry.stem.clone(),
+              status: Status::Crash(message),
+              time_ms,
+              size: None,
+            };
+            print_page_status(&result);
+            results.push(result);
+          }
+        }
+        Ok(None) => {
+          i += 1;
+        }
+        Err(_) => {
+          let entry = running.swap_remove(i);
+          let message = "worker try_wait failed".to_string();
+          let time_ms = entry.started.elapsed().as_millis();
+          let mut log = format!("=== {} ===\nStatus: CRASH\n{}\n", entry.entry.stem, message);
+          let _ = fs::write(log_path_for(&entry.entry.stem), &log);
+          if args.diagnostics_json {
+            let diag = DiagnosticsFile {
+              page: entry.entry.stem.clone(),
+              status: "crash".to_string(),
+              error: Some(message.clone()),
+              time_ms,
+              png_size: None,
+              diagnostics: fastrender::RenderDiagnostics::default(),
+              summary: None,
+            };
+            write_stage_json(diagnostics_path_for(&entry.entry.stem), &diag, &mut log);
+            let _ = fs::write(log_path_for(&entry.entry.stem), &log);
+          }
+          let result = PageResult {
+            name: entry.entry.stem.clone(),
+            status: Status::Crash(message),
+            time_ms,
+            size: None,
+          };
+          print_page_status(&result);
+          results.push(result);
+        }
+      }
+    }
+
+    std::thread::sleep(Duration::from_millis(20));
   }
 
-  let _ = writeln!(summary, "\n{}", "-".repeat(75));
-  let _ = writeln!(summary, "Total: {:.1}s", total_elapsed.as_secs_f64());
+  results.sort_by(|a, b| a.name.cmp(&b.name));
+  Ok(results)
+}
 
-  let _ = fs::write(&summary_path, &summary);
+fn worker_main(worker_args: WorkerArgs) -> io::Result<()> {
+  let args = worker_args.args;
+  let entry = CachedEntry {
+    path: worker_args.cache_path,
+    stem: worker_args.stem,
+    cache_stem: worker_args.cache_stem,
+  };
 
-  // Print summary
-  println!();
-  println!(
-    "Done in {:.1}s: ✓{} pass, ✗{} crash, ✗{} error",
-    total_elapsed.as_secs_f64(),
-    pass,
-    crash,
-    error
-  );
-  println!();
-  println!("Renders: {}/", RENDER_DIR);
-  println!("Summary: {}", summary_path.display());
-  println!("Logs:    {}/<page>.log", RENDER_DIR);
-  println!();
-  println!("Inspect: open {}/*.png", RENDER_DIR);
+  let hard_timeout = Duration::from_secs(args.timeout);
+  let soft_timeout_ms = compute_soft_timeout_ms(hard_timeout, args.soft_timeout_ms);
+  let shared = build_render_shared(&args, 1, None, Some(args.timeout), soft_timeout_ms);
 
-  if crash > 0 || error > 0 {
-    std::process::exit(1);
-  }
+  fs::create_dir_all(RENDER_DIR)?;
+  let _ = fs::create_dir_all(ASSET_DIR);
+
+  let page_result = render_entry(&shared, &entry);
+
+  write_worker_result(&entry.stem, &page_result)
 }
 
 const TEXT_PREVIEW: usize = 160;
@@ -870,12 +1390,13 @@ fn status_label(status: &Status) -> &'static str {
     Status::Ok => "ok",
     Status::Crash(_) => "crash",
     Status::Error(_) => "error",
+    Status::Timeout(_) => "timeout",
   }
 }
 
 fn status_error(status: &Status) -> Option<&str> {
   match status {
-    Status::Crash(msg) | Status::Error(msg) => Some(msg.as_str()),
+    Status::Crash(msg) | Status::Error(msg) | Status::Timeout(msg) => Some(msg.as_str()),
     Status::Ok => None,
   }
 }

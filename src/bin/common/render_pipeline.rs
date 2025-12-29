@@ -1,5 +1,6 @@
 //! Shared helpers for CLI render binaries.
 
+use super::args::{CompatArgs, LayoutParallelArgs, ResourceAccessArgs};
 use fastrender::api::{
   FastRender, FastRenderConfig, RenderArtifactRequest, RenderDiagnostics, RenderOptions,
   RenderReport, RenderResult, ResourceKind,
@@ -13,7 +14,12 @@ use fastrender::resource::{parse_cached_html_meta, FetchedResource, HttpFetcher,
 use fastrender::style::media::MediaType;
 use fastrender::text::font_db::FontConfig;
 use fastrender::{Error, LayoutParallelism, Result};
+use std::fs::{self, File, OpenOptions};
+use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
+use std::process::{Command, ExitStatus, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -326,4 +332,186 @@ pub fn build_renderer_with_fetcher(
   fetcher: Arc<dyn ResourceFetcher>,
 ) -> Result<FastRender> {
   FastRender::with_config_and_fetcher(config, Some(fetcher))
+}
+
+/// Compute a cooperative timeout for the renderer given a hard timeout budget.
+pub fn compute_soft_timeout_ms(hard_timeout: Duration, override_ms: Option<u64>) -> Option<u64> {
+  if let Some(ms) = override_ms {
+    return Some(ms);
+  }
+  let ms = hard_timeout.as_millis();
+  if ms <= 250 {
+    None
+  } else {
+    Some((ms - 250) as u64)
+  }
+}
+
+/// Test-only hook to simulate slow renders for timeout coverage.
+///
+/// When `FASTR_TEST_RENDER_DELAY_MS` is set, workers sleep for that duration.
+/// If `FASTR_TEST_RENDER_DELAY_STEM` is also set, the delay is applied only to
+/// matching stems (comma-separated).
+pub fn apply_test_render_delay(stem: Option<&str>) {
+  let Some(delay_ms) = std::env::var("FASTR_TEST_RENDER_DELAY_MS")
+    .ok()
+    .and_then(|v| v.parse::<u64>().ok())
+  else {
+    return;
+  };
+  if let Some(filter) = std::env::var("FASTR_TEST_RENDER_DELAY_STEM").ok() {
+    let Some(stem) = stem else { return };
+    if !filter
+      .split(',')
+      .map(|s| s.trim())
+      .any(|candidate| candidate == stem)
+    {
+      return;
+    }
+  }
+  std::thread::sleep(Duration::from_millis(delay_ms));
+}
+
+/// Lightweight summary of a process exit status (code + optional signal).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExitStatusSummary {
+  pub code: Option<i32>,
+  pub signal: Option<i32>,
+}
+
+/// Extract a platform-agnostic summary from an ExitStatus.
+pub fn summarize_exit_status(status: &ExitStatus) -> ExitStatusSummary {
+  ExitStatusSummary {
+    code: status.code(),
+    signal: {
+      #[cfg(unix)]
+      {
+        status.signal()
+      }
+      #[cfg(not(unix))]
+      {
+        None
+      }
+    },
+  }
+}
+
+/// Human-readable formatting for ExitStatusSummary.
+pub fn format_exit_status(status: ExitStatusSummary) -> String {
+  match (status.code, status.signal) {
+    (Some(code), Some(signal)) => format!("code {code} (signal {signal})"),
+    (Some(code), None) => format!("code {code}"),
+    (None, Some(signal)) => format!("signal {signal}"),
+    (None, None) => "unknown status".to_string(),
+  }
+}
+
+/// Append a timeout note into the provided stderr path (best-effort).
+pub fn append_timeout_stderr_note(stderr_path: &Path, elapsed: Duration) {
+  if let Ok(mut file) = OpenOptions::new()
+    .create(true)
+    .append(true)
+    .open(stderr_path)
+  {
+    let _ = writeln!(
+      file,
+      "parent killed worker after {:.2}s hard timeout",
+      elapsed.as_secs_f64()
+    );
+  }
+}
+
+/// Redirect worker stdout/stderr to a shared per-page log file.
+pub fn configure_worker_stdio(cmd: &mut Command, stderr_path: &Path) -> std::io::Result<()> {
+  if let Some(parent) = stderr_path.parent() {
+    if !parent.as_os_str().is_empty() {
+      fs::create_dir_all(parent)?;
+    }
+  }
+  let stderr_file = File::create(stderr_path)?;
+  let stdout_file = stderr_file.try_clone()?;
+  cmd
+    .stdin(Stdio::null())
+    .stdout(Stdio::from(stdout_file))
+    .stderr(Stdio::from(stderr_file));
+  Ok(())
+}
+
+/// Common CLI flags for worker subcommands across render binaries.
+#[derive(Debug)]
+pub struct WorkerCommonArgs<'a> {
+  pub timeout: u64,
+  pub soft_timeout_ms: Option<u64>,
+  pub viewport: (u32, u32),
+  pub dpr: f32,
+  pub scroll: Option<(f32, f32)>,
+  pub user_agent: &'a str,
+  pub accept_language: &'a str,
+  pub no_http_freshness: bool,
+  pub css_limit: Option<usize>,
+  pub resource_access: &'a ResourceAccessArgs,
+  pub layout_parallel: &'a LayoutParallelArgs,
+  pub compat: &'a CompatArgs,
+}
+
+/// Apply common worker args to a worker command, keeping CLI parity between binaries.
+pub fn apply_worker_common_args(cmd: &mut Command, args: &WorkerCommonArgs<'_>) {
+  cmd
+    .arg("--timeout")
+    .arg(args.timeout.to_string())
+    .arg("--viewport")
+    .arg(format!("{}x{}", args.viewport.0, args.viewport.1))
+    .arg("--dpr")
+    .arg(args.dpr.to_string())
+    .arg("--user-agent")
+    .arg(args.user_agent)
+    .arg("--accept-language")
+    .arg(args.accept_language);
+
+  if let Some((scroll_x, scroll_y)) = args.scroll {
+    cmd
+      .arg("--scroll-x")
+      .arg(scroll_x.to_string())
+      .arg("--scroll-y")
+      .arg(scroll_y.to_string());
+  }
+
+  if let Some(ms) = args.soft_timeout_ms {
+    cmd.arg("--soft-timeout-ms").arg(ms.to_string());
+  }
+  if args.no_http_freshness {
+    cmd.arg("--no-http-freshness");
+  }
+  if let Some(limit) = args.css_limit {
+    cmd.arg("--css-limit").arg(limit.to_string());
+  }
+  if args.resource_access.allow_file_from_http {
+    cmd.arg("--allow-file-from-http");
+  }
+  if args.resource_access.block_mixed_content {
+    cmd.arg("--block-mixed-content");
+  }
+  if args.resource_access.same_origin_subresources {
+    cmd.arg("--same-origin-subresources");
+  }
+  for origin in &args.resource_access.allow_subresource_origin {
+    cmd.arg("--allow-subresource-origin").arg(origin);
+  }
+  if args.layout_parallel.layout_parallel {
+    cmd.arg("--layout-parallel");
+    cmd
+      .arg("--layout-parallel-min-fanout")
+      .arg(args.layout_parallel.layout_parallel_min_fanout.to_string());
+    if let Some(max_threads) = args.layout_parallel.layout_parallel_max_threads {
+      cmd
+        .arg("--layout-parallel-max-threads")
+        .arg(max_threads.to_string());
+    }
+  }
+  if let Some(profile) = args.compat.compat_profile_arg() {
+    cmd.arg("--compat-profile").arg(profile.as_str());
+  }
+  if let Some(mode) = args.compat.dom_compat_arg() {
+    cmd.arg("--dom-compat").arg(mode.as_str());
+  }
 }
