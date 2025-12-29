@@ -6,7 +6,8 @@ use crate::text::font_instance::{glyph_transform, FontInstance};
 use read_fonts::tables::colr::{
   ClipBox, ColorLine, Colr, CompositeMode, Extend, Paint, PaintId, VarColorLine,
 };
-use read_fonts::types::{F2Dot14, Fixed, GlyphId};
+use read_fonts::tables::variations::{DeltaSetIndex, FloatItemDeltaTarget};
+use read_fonts::types::{F2Dot14, FWord, Fixed, GlyphId};
 use read_fonts::{FontRef, TableProvider};
 #[cfg(test)]
 use std::cell::Cell;
@@ -92,6 +93,7 @@ pub fn render_colr_glyph(
   overrides: &[(u16, Rgba)],
   text_color: Rgba,
   synthetic_oblique: f32,
+  normalized_coords: &[f32],
   limits: &GlyphRasterLimits,
   caches: &Arc<Mutex<ColorFontCaches>>,
 ) -> Option<ColorGlyphRaster> {
@@ -139,7 +141,7 @@ pub fn render_colr_glyph(
     .v1_clip_box(GlyphId::from(glyph_id.0 as u32))
     .ok()
     .flatten()
-    .and_then(|clip| build_clip_path(clip, base_transform));
+    .and_then(|clip| build_clip_path(clip, &colr, normalized_coords, base_transform));
 
   let mut commands = Vec::new();
   let mut seen = HashSet::new();
@@ -1469,7 +1471,44 @@ fn build_outline(
   path.transform(transform)
 }
 
-fn build_clip_path(clip: ClipBox<'_>, base_transform: Transform) -> Option<Path> {
+fn clip_box_value(
+  base: FWord,
+  colr: &Colr<'_>,
+  var_index_base: u32,
+  offset: u32,
+  normalized_coords: &[F2Dot14],
+) -> f32 {
+  let value = base.to_i16() as f32;
+  if normalized_coords.is_empty() {
+    return value;
+  }
+  let Some(Ok(item_variation_store)) = colr.item_variation_store() else {
+    return value;
+  };
+
+  let mapped_index = match colr.var_index_map() {
+    Some(Ok(map)) => map.get(var_index_base + offset).ok(),
+    Some(Err(_)) => None,
+    None => Some(DeltaSetIndex {
+      outer: ((var_index_base + offset) >> 16) as u16,
+      inner: (var_index_base + offset) as u16,
+    }),
+  };
+  let Some(mapped_index) = mapped_index else {
+    return value;
+  };
+  let Ok(delta) = item_variation_store.compute_float_delta(mapped_index, normalized_coords) else {
+    return value;
+  };
+  base.apply_float_delta(delta)
+}
+
+fn build_clip_path(
+  clip: ClipBox<'_>,
+  colr: &Colr<'_>,
+  normalized_coords: &[f32],
+  base_transform: Transform,
+) -> Option<Path> {
   let rect = match clip {
     ClipBox::Format1(b) => Rect::from_ltrb(
       b.x_min().to_i16() as f32,
@@ -1477,12 +1516,18 @@ fn build_clip_path(clip: ClipBox<'_>, base_transform: Transform) -> Option<Path>
       b.x_max().to_i16() as f32,
       b.y_max().to_i16() as f32,
     )?,
-    ClipBox::Format2(b) => Rect::from_ltrb(
-      b.x_min().to_i16() as f32,
-      b.y_min().to_i16() as f32,
-      b.x_max().to_i16() as f32,
-      b.y_max().to_i16() as f32,
-    )?,
+    ClipBox::Format2(b) => {
+      let var_index_base = b.var_index_base();
+      let coords: Vec<F2Dot14> = normalized_coords
+        .iter()
+        .map(|coord| F2Dot14::from_f32(*coord))
+        .collect();
+      let x_min = clip_box_value(b.x_min(), colr, var_index_base, 0, &coords);
+      let y_min = clip_box_value(b.y_min(), colr, var_index_base, 1, &coords);
+      let x_max = clip_box_value(b.x_max(), colr, var_index_base, 2, &coords);
+      let y_max = clip_box_value(b.y_max(), colr, var_index_base, 3, &coords);
+      Rect::from_ltrb(x_min, y_min, x_max, y_max)?
+    }
   };
   let mut builder = PathBuilder::new();
   let points = [

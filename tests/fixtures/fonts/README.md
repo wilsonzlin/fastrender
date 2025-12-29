@@ -200,6 +200,18 @@ so CI and tests can run in fully hermetic environments without relying on platfo
   python tests/fixtures/fonts/generate_colrv1_var_outline_font.py
   ```
 
+### `colrv1-var-clip-test.ttf`
+- **Source:** Generated in-repo with [FontTools](https://github.com/fonttools/fonttools) v4.61.1.
+- **License:** CC0 / Public Domain.
+- **Glyphs / variation:** Maps `A` to a solid-filled rectangle via a COLRv1 `PaintGlyph`. A
+  `ClipList` entry uses `ClipBoxFormat2` with a `varIndexBase` covering four coordinates; only
+  `yMax` has a delta (+200) at `wght=1` so the clip expands vertically with weight while the paint
+  and outline stay static.
+- **Regeneration:** From the repository root:
+  ```bash
+  python tests/fixtures/fonts/generate_colrv1_var_clip_font.py
+  ```
+
 ### `colrv1-sweep-test.ttf`
 - **Source:** Generated in-repo with [FontTools](https://github.com/fonttools/fonttools) v4.61.1.
 - **License:** CC0 / Public Domain.

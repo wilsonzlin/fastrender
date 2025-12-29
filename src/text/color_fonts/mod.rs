@@ -14,7 +14,7 @@ use crate::text::face_cache;
 use crate::text::font_db::LoadedFont;
 use crate::text::font_instance::FontInstance;
 use crate::text::otvar::item_variation_store::{parse_colr_v1_var_store, ColrVarStoreTables};
-use crate::text::variations::apply_rustybuzz_variations;
+use crate::text::variations::{apply_rustybuzz_variations, normalized_coords};
 use limits::GlyphRasterLimits;
 use lru::LruCache;
 use rustybuzz::Variation;
@@ -73,6 +73,7 @@ impl ColorFontRenderer {
     target_size: Option<(u32, u32)>,
   ) -> Option<ColorGlyphRaster> {
     let cached_face = face_cache::get_ttf_face(font)?;
+    let normalized_coords = normalized_coords(cached_face.face(), variations);
     let mut face = cached_face.clone_face();
     apply_rustybuzz_variations(&mut face, variations);
     let gid = ttf_parser::GlyphId(glyph_id as u16);
@@ -101,6 +102,7 @@ impl ColorFontRenderer {
       palette_overrides,
       text_color,
       synthetic_oblique,
+      &normalized_coords.ordered,
       &limits,
       &self.caches,
     ) {

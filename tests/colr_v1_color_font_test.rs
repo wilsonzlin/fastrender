@@ -16,6 +16,10 @@ fn fixtures_path() -> PathBuf {
     .join("fixtures")
 }
 
+fn test_glyph_id(face: &ttf_parser::Face<'_>) -> Option<ttf_parser::GlyphId> {
+  face.glyph_index('A').or_else(|| face.glyph_index('G'))
+}
+
 fn load_test_font() -> LoadedFont {
   let data = std::fs::read(fixtures_path().join("fonts/colrv1-test.ttf")).unwrap();
   LoadedFont {
@@ -36,7 +40,7 @@ fn render_glyph(
   variations: &[Variation],
 ) -> fastrender::text::color_fonts::ColorGlyphRaster {
   let face = font.as_ttf_face().unwrap();
-  let gid = face.glyph_index('A').unwrap();
+  let gid = test_glyph_id(&face).expect("test glyph should be present");
   let instance = FontInstance::new(font, variations).unwrap();
 
   ColorFontRenderer::new()
@@ -105,7 +109,7 @@ fn malformed_colrv1_table_falls_back() {
   let instance =
     FontInstance::new(&corrupted, &[]).expect("corrupted COLR font should still parse instance");
   let face = corrupted.as_ttf_face().unwrap();
-  let gid = face.glyph_index('A').unwrap();
+  let gid = test_glyph_id(&face).expect("corrupted COLR glyph should still be addressable");
   let rendered = ColorFontRenderer::new().render(
     &corrupted,
     &instance,
@@ -134,6 +138,19 @@ fn load_variable_test_font() -> LoadedFont {
   }
 }
 
+fn load_variable_clip_font() -> LoadedFont {
+  let data = std::fs::read(fixtures_path().join("fonts/colrv1-var-clip-test.ttf")).unwrap();
+  LoadedFont {
+    id: None,
+    data: Arc::new(data),
+    index: 0,
+    family: "ColrV1VarClipTest".into(),
+    weight: FontWeight::NORMAL,
+    style: FontStyle::Normal,
+    stretch: FontStretch::Normal,
+  }
+}
+
 #[test]
 fn variable_colrv1_changes_with_variations() {
   let font = load_variable_test_font();
@@ -155,6 +172,35 @@ fn variable_colrv1_changes_with_variations() {
   assert!(
     !diff.is_match(),
     "variable render should differ between instances"
+  );
+}
+
+#[test]
+fn variable_clip_box_adjusts_bounds() {
+  let font = load_variable_clip_font();
+  let text_color = Rgba::from_rgba8(20, 40, 200, 255);
+  let base = render_glyph(&font, 0, text_color, &[]);
+  let varied = render_glyph(
+    &font,
+    0,
+    text_color,
+    &[Variation {
+      tag: Tag::from_bytes(b"wght"),
+      value: 1.0,
+    }],
+  );
+
+  assert!(
+    varied.image.height() > base.image.height(),
+    "variable clip box should expand raster height: base={} varied={}",
+    base.image.height(),
+    varied.image.height()
+  );
+
+  let diff = compare_images(&base.image, &varied.image, &CompareConfig::strict());
+  assert!(
+    !diff.is_match(),
+    "clip variation should change rendered pixels"
   );
 }
 
