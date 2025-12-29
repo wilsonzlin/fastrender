@@ -165,9 +165,10 @@ mod tests {
     let Some(font) = ctx.get_sans_serif() else {
       return;
     };
-    let Ok(mut face) = font.as_ttf_face() else {
+    let Ok(cached_face) = font.as_cached_face() else {
       return;
     };
+    let mut face = cached_face.clone_face();
     let Some(glyph) = face.glyph_index('A') else {
       return;
     };

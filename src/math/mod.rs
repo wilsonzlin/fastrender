@@ -1010,7 +1010,8 @@ impl MathLayoutContext {
     glyph_id: u16,
     font_size: f32,
   ) -> Option<MathLayout> {
-    let face = font.as_ttf_face().ok()?;
+    let face = crate::text::face_cache::get_ttf_face(&font)?;
+    let face = face.face();
     let glyph = ttf_parser::GlyphId(glyph_id);
     let metrics = font.metrics().ok()?.scale(font_size);
     let bbox = face.glyph_bounding_box(glyph);

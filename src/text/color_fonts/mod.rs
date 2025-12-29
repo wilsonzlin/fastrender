@@ -10,6 +10,7 @@ mod limits;
 mod svg;
 
 use crate::style::color::Rgba;
+use crate::text::face_cache;
 use crate::text::font_db::LoadedFont;
 use crate::text::font_instance::FontInstance;
 use crate::text::variations::apply_rustybuzz_variations;
@@ -69,7 +70,8 @@ impl ColorFontRenderer {
     variations: &[Variation],
     target_size: Option<(u32, u32)>,
   ) -> Option<ColorGlyphRaster> {
-    let mut face = font.as_ttf_face().ok()?;
+    let cached_face = face_cache::get_ttf_face(font)?;
+    let mut face = cached_face.clone_face();
     apply_rustybuzz_variations(&mut face, variations);
     let gid = ttf_parser::GlyphId(glyph_id as u16);
     let font_key = FontKey::new(font);

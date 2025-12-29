@@ -6239,20 +6239,22 @@ impl Painter {
         .or_else(|| self.font_ctx.get_sans_serif())
         .and_then(|font| {
           let coords = font
-            .as_ttf_face()
+            .as_cached_face()
             .ok()
-            .map(|face| {
+            .and_then(|face| {
               let authored = crate::text::pipeline::authored_variations_from_style(style);
               let variations = crate::text::pipeline::collect_variations_for_face(
-                &face,
+                face.face(),
                 style,
                 style.font_size,
                 &authored,
               );
-              variations
-                .iter()
-                .map(|v| (v.tag, v.value))
-                .collect::<Vec<_>>()
+              Some(
+                variations
+                  .iter()
+                  .map(|v| (v.tag, v.value))
+                  .collect::<Vec<_>>(),
+              )
             })
             .unwrap_or_default();
           if coords.is_empty() {
@@ -7493,10 +7495,10 @@ fn collect_underline_exclusions(
 
   let mut pen_x = line_start * device_scale;
   for run in runs {
-    let face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
-      Ok(f) => f,
-      Err(_) => continue,
+    let Some(face) = crate::text::face_cache::get_ttf_face(&run.font) else {
+      continue;
     };
+    let face = face.face();
     let units_per_em = face.units_per_em() as f32;
     if units_per_em == 0.0 {
       continue;
@@ -7548,10 +7550,10 @@ fn collect_underline_exclusions_vertical(
 
   let mut pen_inline = inline_start * device_scale;
   for run in runs {
-    let face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
-      Ok(f) => f,
-      Err(_) => continue,
+    let Some(face) = crate::text::face_cache::get_ttf_face(&run.font) else {
+      continue;
     };
+    let face = face.face();
     let units_per_em = face.units_per_em() as f32;
     if units_per_em == 0.0 {
       continue;

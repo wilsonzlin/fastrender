@@ -1,3 +1,4 @@
+use crate::text::face_cache::{self, CachedFace};
 use crate::text::font_db::LoadedFont;
 use rustybuzz::Variation;
 use skrifa::instance::{Location, LocationRef, Size};
@@ -6,6 +7,7 @@ use skrifa::{FontRef, GlyphId, MetadataProvider, Tag};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 use tiny_skia::{Path, PathBuilder, Rect, Transform};
 use ttf_parser::GlyphId as ParserGlyphId;
 
@@ -163,7 +165,7 @@ pub struct FontInstance<'a> {
 }
 
 enum FontBackend<'a> {
-  Ttf(ttf_parser::Face<'a>),
+  Ttf(Arc<CachedFace>),
   Skrifa {
     font: FontRef<'a>,
     location: Location,
@@ -172,11 +174,13 @@ enum FontBackend<'a> {
 
 impl<'a> FontInstance<'a> {
   pub fn new(font: &'a LoadedFont, variations: &[Variation]) -> Option<Self> {
-    let face = font.as_ttf_face().ok()?;
+    let cached_face = face_cache::get_ttf_face(font)?;
+    let face = cached_face.face();
     let units_per_em = face.units_per_em() as f32;
     let variation_hash = variation_hash(variations);
+    let is_variable = face.is_variable();
 
-    if face.is_variable() {
+    if is_variable {
       if let Ok(font_ref) = FontRef::from_index(&font.data, font.index) {
         let location = font_ref.axes().location(variations_to_settings(variations));
         return Some(Self {
@@ -195,7 +199,7 @@ impl<'a> FontInstance<'a> {
       units_per_em,
       variation_hash,
       is_variable: false,
-      backend: FontBackend::Ttf(face),
+      backend: FontBackend::Ttf(cached_face),
     })
   }
 
@@ -216,7 +220,7 @@ impl<'a> FontInstance<'a> {
 
   pub fn glyph_outline(&self, glyph_id: u32) -> Option<GlyphOutline> {
     match &self.backend {
-      FontBackend::Ttf(face) => build_ttf_outline(face, glyph_id),
+      FontBackend::Ttf(face) => build_ttf_outline(face.face(), glyph_id),
       FontBackend::Skrifa { font, location } => build_skrifa_outline(font, location, glyph_id),
     }
   }

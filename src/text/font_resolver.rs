@@ -8,7 +8,6 @@ use crate::text::font_db::LoadedFont;
 use crate::text::font_fallback::FamilyEntry;
 use fontdb::Family;
 use fontdb::ID;
-use ttf_parser::Face as ParserFace;
 
 #[derive(Clone, Debug)]
 pub(crate) struct ResolvedFont {
@@ -309,11 +308,10 @@ fn font_supports_all_chars(font: &LoadedFont, chars: &[char]) -> bool {
     return true;
   }
 
-  let face = match ParserFace::parse(&font.data, font.index) {
-    Ok(face) => face,
-    Err(_) => return false,
+  let Some(face) = crate::text::face_cache::get_ttf_face(font) else {
+    return false;
   };
-  chars.iter().all(|c| face.glyph_index(*c).is_some())
+  chars.iter().all(|c| face.has_glyph(*c))
 }
 
 #[allow(clippy::cognitive_complexity)]

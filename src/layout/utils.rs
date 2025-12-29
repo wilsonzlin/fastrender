@@ -330,7 +330,8 @@ fn resolve_font_relative_length_with_params(
       let scaled = metrics.scale(used_size);
       x_height = scaled.x_height;
     }
-    if let Ok(face) = font.as_ttf_face() {
+    if let Some(face) = crate::text::face_cache::get_ttf_face(&font) {
+      let face = face.face();
       if let Some(advance) = face
         .glyph_index('0')
         .and_then(|g| face.glyph_hor_advance(g))

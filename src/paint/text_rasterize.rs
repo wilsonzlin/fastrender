@@ -1266,6 +1266,7 @@ pub fn glyph_advance(font: &LoadedFont, glyph_id: u32, font_size: f32) -> Result
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::text::face_cache;
   use crate::text::font_loader::FontContext;
 
   fn get_test_font() -> Option<LoadedFont> {
@@ -1356,6 +1357,37 @@ mod tests {
     let advance = glyph_advance(&font, glyph_id, 16.0);
     assert!(advance.is_ok());
     assert!(advance.unwrap() > 0.0);
+  }
+
+  #[cfg(debug_assertions)]
+  #[test]
+  fn render_glyph_reuses_cached_face() {
+    let font = match get_test_font() {
+      Some(f) => f,
+      None => return,
+    };
+    let Some(glyph_id) = face_cache::with_face(&font, |face| {
+      face.glyph_index('A').map(|g| g.0 as u32)
+    })
+    .flatten()
+    else {
+      return;
+    };
+
+    let mut pixmap = Pixmap::new(64, 64).unwrap();
+    pixmap.fill(tiny_skia::Color::WHITE);
+
+    let _guard = face_cache::FaceParseCountGuard::start();
+    for _ in 0..3 {
+      if render_glyph(&font, glyph_id, 16.0, 0.0, 32.0, Rgba::BLACK, &mut pixmap).is_err() {
+        return;
+      }
+    }
+
+    assert!(
+      face_cache::face_parse_count() <= 1,
+      "rasterizing repeated glyphs should not reparse faces"
+    );
   }
 
   #[test]

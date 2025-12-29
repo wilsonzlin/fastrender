@@ -4759,10 +4759,10 @@ fn collect_underline_exclusions(
 
   let mut pen_x = line_start;
   for run in runs {
-    let face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
-      Ok(f) => f,
-      Err(_) => continue,
+    let Some(face) = crate::text::face_cache::get_ttf_face(&run.font) else {
+      continue;
     };
+    let face = face.face();
     let units_per_em = face.units_per_em() as f32;
     if units_per_em == 0.0 {
       continue;
@@ -4810,10 +4810,10 @@ fn collect_underline_exclusions_vertical(
   let mut pen_inline = inline_start;
 
   for run in runs {
-    let face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
-      Ok(f) => f,
-      Err(_) => continue,
+    let Some(face) = crate::text::face_cache::get_ttf_face(&run.font) else {
+      continue;
     };
+    let face = face.face();
     let units_per_em = face.units_per_em() as f32;
     if units_per_em == 0.0 {
       continue;
@@ -4935,6 +4935,9 @@ mod tests {
   use crate::style::values::Length;
   use crate::style::values::LengthUnit;
   use crate::style::ComputedStyle;
+  use crate::text::face_cache;
+  use crate::text::font_loader::FontContext;
+  use crate::text::pipeline::ShapingPipeline;
   use crate::tree::box_tree::ReplacedType;
   use base64::engine::general_purpose;
   use base64::Engine as _;
@@ -6876,6 +6879,34 @@ mod tests {
       DisplayListBuilder::resolve_background_offset(pos, 100.0, 100.0, 0.0, 0.0, 16.0, 16.0, None);
     assert!((x - 0.0).abs() < 0.01);
     assert!((y - 0.0).abs() < 0.01);
+  }
+
+  #[cfg(debug_assertions)]
+  #[test]
+  fn underline_exclusions_reuse_cached_faces() {
+    let ctx = FontContext::new();
+    let mut style = ComputedStyle::default();
+    style.font_family = vec!["sans-serif".to_string()];
+    style.font_size = 14.0;
+    let pipeline = ShapingPipeline::new();
+
+    let runs = match pipeline.shape("underline cache check", &style, &ctx) {
+      Ok(runs) => runs,
+      Err(_) => return,
+    };
+    if runs.is_empty() {
+      return;
+    }
+
+    let _guard = face_cache::FaceParseCountGuard::start();
+    for _ in 0..3 {
+      let _ = collect_underline_exclusions(&runs, 0.0, 0.0, -2.0, 2.0, false);
+    }
+
+    assert!(
+      face_cache::face_parse_count() <= 1,
+      "underline exclusions should reuse cached faces"
+    );
   }
 
   #[test]

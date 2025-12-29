@@ -90,7 +90,6 @@ use std::num::NonZeroUsize;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::Mutex;
-use ttf_parser::Face as ParserFace;
 use ttf_parser::Tag;
 use unicode_bidi::BidiInfo;
 use unicode_bidi::Level;
@@ -1278,10 +1277,10 @@ fn font_supports_all_chars(font: &LoadedFont, chars: &[char]) -> bool {
   if chars.is_empty() {
     return true;
   }
-  let Ok(face) = font.as_ttf_face() else {
+  let Some(face) = crate::text::face_cache::get_ttf_face(font) else {
     return false;
   };
-  chars.iter().all(|c| face.glyph_index(*c).is_some())
+  chars.iter().all(|c| face.has_glyph(*c))
 }
 
 /// Assigns fonts to itemized runs.
@@ -1646,7 +1645,7 @@ fn compute_synthetic_styles(style: &ComputedStyle, font: &LoadedFont) -> (f32, f
       return (synthetic_bold, synthetic_oblique);
     };
 
-    let (has_slnt_axis, has_ital_axis) = if let Ok(face) = font.as_ttf_face() {
+    let (has_slnt_axis, has_ital_axis) = crate::text::face_cache::with_face(font, |face| {
       let mut has_slnt = false;
       let mut has_ital = false;
       for axis in face.variation_axes() {
@@ -1657,9 +1656,8 @@ fn compute_synthetic_styles(style: &ComputedStyle, font: &LoadedFont) -> (f32, f
         }
       }
       (has_slnt, has_ital)
-    } else {
-      (false, false)
-    };
+    })
+    .unwrap_or((false, false));
 
     let variation_covers_slant = match style.font_style {
       CssFontStyle::Oblique(_) => has_slnt_axis || has_ital_axis,
@@ -1676,14 +1674,14 @@ fn compute_synthetic_styles(style: &ComputedStyle, font: &LoadedFont) -> (f32, f
 }
 
 fn font_has_axis(font: &LoadedFont, tag: [u8; 4]) -> bool {
-  if let Ok(face) = font.as_ttf_face() {
+  crate::text::face_cache::with_face(font, |face| {
     let target = Tag::from_bytes(&tag);
-    return face
+    face
       .variation_axes()
       .into_iter()
-      .any(|axis| axis.tag == target);
-  }
-  false
+      .any(|axis| axis.tag == target)
+  })
+  .unwrap_or(false)
 }
 
 fn synthetic_position_adjustment(
@@ -1736,7 +1734,8 @@ fn os2_position_metrics(
   base_font_size: f32,
   position: crate::style::types::FontVariantPosition,
 ) -> Option<(f32, f32)> {
-  let face = ParserFace::parse(&font.data, font.index).ok()?;
+  let face = crate::text::face_cache::get_ttf_face(font)?;
+  let face = face.face();
   let os2 = face.tables().os2?;
   let units = face.units_per_em() as f32;
 
@@ -2570,11 +2569,10 @@ fn push_font_run(
   _font_context: &FontContext,
 ) {
   let segment_text = &run.text[start..end];
-  let variations = font
-    .as_ttf_face()
-    .ok()
-    .map(|face| collect_variations_for_face(&face, style, font_size, authored_variations))
-    .unwrap_or_else(|| authored_variations.to_vec());
+  let variations = crate::text::face_cache::with_face(&font, |face| {
+    collect_variations_for_face(face, style, font_size, authored_variations)
+  })
+  .unwrap_or_else(|| authored_variations.to_vec());
 
   let resolved_palette = resolve_font_palette_for_font(
     &style.font_palette,
@@ -2614,11 +2612,7 @@ fn push_font_run(
 }
 
 fn select_palette_index(font: &LoadedFont, base: FontPaletteBase) -> u16 {
-  font
-    .as_ttf_face()
-    .ok()
-    .map(|face| select_cpal_palette(&face, base))
-    .unwrap_or(0)
+  crate::text::face_cache::with_face(font, |face| select_cpal_palette(face, base)).unwrap_or(0)
 }
 
 // ============================================================================
@@ -4597,7 +4591,7 @@ mod tests {
   #[test]
   fn face_parse_counts_stop_scaling_with_length() {
     let ctx = FontContext::new();
-    let _guard = crate::text::font_db::FaceParseCountGuard::start();
+    let _guard = crate::text::face_cache::FaceParseCountGuard::start();
 
     let mut style = ComputedStyle::default();
     style.font_family = vec!["sans-serif".to_string()];
@@ -4609,12 +4603,12 @@ mod tests {
     if pipeline.shape(&short, &style, &ctx).is_err() {
       return;
     }
-    let short_count = crate::text::font_db::face_parse_count();
+    let short_count = crate::text::face_cache::face_parse_count();
 
     if pipeline.shape(&long, &style, &ctx).is_err() {
       return;
     }
-    let long_count = crate::text::font_db::face_parse_count();
+    let long_count = crate::text::face_cache::face_parse_count();
 
     assert!(
       long_count.saturating_sub(short_count) < 10,

@@ -3934,19 +3934,13 @@ impl DisplayListRenderer {
       );
     };
 
-    let face = match font.as_ttf_face() {
-      Ok(f) => f,
-      Err(_) => {
-        return Err(
-          RenderError::RasterizationFailed {
-            reason: "Unable to parse font face for text shadows".into(),
-          }
-          .into(),
-        )
+    let face = crate::text::face_cache::get_ttf_face(&font).ok_or_else(|| {
+      RenderError::RasterizationFailed {
+        reason: "Unable to parse font face for text shadows".into(),
       }
-    };
+    })?;
 
-    let (paths, bounds) = self.glyph_paths(&face, item);
+    let (paths, bounds) = self.glyph_paths(face.face(), item);
     if !item.shadows.is_empty() && !paths.is_empty() && bounds.is_valid() {
       self.render_text_shadows(&paths, &bounds, item);
     }

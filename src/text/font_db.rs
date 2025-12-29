@@ -51,10 +51,11 @@ use std::sync::OnceLock;
 use std::sync::RwLock;
 use ttf_parser::Tag;
 
+use crate::text::face_cache::{self, CachedFace};
+
 #[cfg(debug_assertions)]
-use std::cell::Cell;
-#[cfg(debug_assertions)]
-use std::sync::atomic::{AtomicU64, Ordering};
+pub use crate::text::face_cache::FaceParseCountGuard;
+pub use crate::text::face_cache::{face_parse_count, reset_face_parse_counter_for_tests};
 
 const GLYPH_COVERAGE_CACHE_SIZE: usize = 128;
 const BUNDLED_FONTS: &[(&str, &[u8])] = &[(
@@ -169,101 +170,12 @@ fn shared_system_fontdb() -> Arc<FontDbDatabase> {
   }))
 }
 
-#[cfg(debug_assertions)]
-static FACE_PARSE_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-#[cfg(debug_assertions)]
-thread_local! {
-  static TEST_FACE_PARSE_COUNTING_ENABLED: Cell<bool> = Cell::new(false);
-  static TEST_FACE_PARSE_COUNTER: Cell<u64> = Cell::new(0);
-}
-
-#[inline]
-fn record_face_parse() {
-  #[cfg(debug_assertions)]
-  {
-    if std::env::var("FASTRENDER_COUNT_FACE_PARSE").is_ok() {
-      FACE_PARSE_COUNTER.fetch_add(1, Ordering::Relaxed);
-    }
-    TEST_FACE_PARSE_COUNTING_ENABLED.with(|enabled| {
-      if enabled.get() {
-        TEST_FACE_PARSE_COUNTER.with(|counter| counter.set(counter.get().saturating_add(1)));
-      }
-    });
-  }
-}
-
-#[cfg(debug_assertions)]
-pub(crate) struct FaceParseCountGuard {
-  _private: (),
-}
-
-#[cfg(debug_assertions)]
-impl FaceParseCountGuard {
-  pub(crate) fn start() -> Self {
-    TEST_FACE_PARSE_COUNTER.with(|counter| counter.set(0));
-    TEST_FACE_PARSE_COUNTING_ENABLED.with(|enabled| enabled.set(true));
-    Self { _private: () }
-  }
-}
-
-#[cfg(debug_assertions)]
-impl Drop for FaceParseCountGuard {
-  fn drop(&mut self) {
-    TEST_FACE_PARSE_COUNTING_ENABLED.with(|enabled| enabled.set(false));
-  }
-}
-
-#[cfg(debug_assertions)]
-pub(crate) fn face_parse_count() -> u64 {
-  TEST_FACE_PARSE_COUNTER.with(|counter| counter.get())
-}
-
-#[cfg(not(debug_assertions))]
-#[allow(dead_code)]
-pub(crate) fn face_parse_count() -> u64 {
-  0
-}
-
-#[cfg(debug_assertions)]
-pub(crate) fn reset_face_parse_counter_for_tests() {
-  TEST_FACE_PARSE_COUNTER.with(|counter| counter.set(0));
-}
-
-#[cfg(not(debug_assertions))]
-#[allow(dead_code)]
-pub(crate) fn reset_face_parse_counter_for_tests() {}
-
 #[inline]
 fn parse_face_with_counter<'a>(
   data: &'a [u8],
   index: u32,
 ) -> std::result::Result<ttf_parser::Face<'a>, ttf_parser::FaceParsingError> {
-  record_face_parse();
   ttf_parser::Face::parse(data, index)
-}
-
-#[derive(Clone)]
-struct CachedFace {
-  data: Arc<Vec<u8>>,
-  face: ttf_parser::Face<'static>,
-}
-
-impl CachedFace {
-  fn parse(
-    data: Arc<Vec<u8>>,
-    index: u32,
-  ) -> std::result::Result<Self, ttf_parser::FaceParsingError> {
-    // SAFETY: the Arc keeps the font data alive for the lifetime of the cached face.
-    let static_data: &'static [u8] = unsafe { std::mem::transmute::<&[u8], &'static [u8]>(&*data) };
-    let face = parse_face_with_counter(static_data, index)?;
-    Ok(Self { data, face })
-  }
-
-  #[inline]
-  fn has_glyph(&self, c: char) -> bool {
-    self.face.glyph_index(c).is_some()
-  }
 }
 
 #[derive(Clone)]
@@ -583,6 +495,20 @@ impl LoadedFont {
     FontMetrics::from_font_with_variations(self, variations)
   }
 
+  /// Returns a cached parsed face for reuse across shaping and paint.
+  ///
+  /// Callers that only need to borrow the face temporarily should prefer
+  /// [`crate::text::face_cache::with_face`] to avoid cloning the Arc.
+  pub fn as_cached_face(&self) -> Result<Arc<CachedFace>> {
+    face_cache::get_ttf_face(self).ok_or_else(|| {
+      FontError::LoadFailed {
+        family: self.family.clone(),
+        reason: "Failed to parse font".to_string(),
+      }
+      .into()
+    })
+  }
+
   /// Get ttf-parser Face for advanced operations
   ///
   /// Returns a parsed font face for accessing glyph data, kerning, etc.
@@ -599,15 +525,16 @@ impl LoadedFont {
 
 /// Returns true if the font advertises an OpenType GSUB feature with the given tag.
 pub fn font_has_feature(font: &LoadedFont, tag: [u8; 4]) -> bool {
-  if let Ok(face) = parse_face_with_counter(&font.data, font.index) {
+  face_cache::with_face(font, |face| {
     if let Some(gsub) = face.tables().gsub {
       return gsub
         .features
         .index(ttf_parser::Tag::from_bytes(&tag))
         .is_some();
     }
-  }
-  false
+    false
+  })
+  .unwrap_or(false)
 }
 
 fn face_has_color_tables(face: &ttf_parser::Face<'_>) -> bool {
@@ -1300,9 +1227,7 @@ impl FontDatabase {
     let data = self.get_or_load_font_data(id)?;
 
     self.glyph_coverage.get_or_put(id, || {
-      CachedFace::parse(Arc::clone(&data), face_info.index)
-        .ok()
-        .map(Arc::new)
+      face_cache::get_ttf_face_with_data(&data, face_info.index)
     })
   }
 
@@ -1334,7 +1259,7 @@ impl FontDatabase {
   pub fn is_color_capable_font(&self, id: ID) -> Option<bool> {
     self
       .cached_face(id)
-      .map(|face| face_has_color_tables(&face.face))
+      .map(|face| face_has_color_tables(face.face()))
   }
 
   pub(crate) fn family_name_is_emoji_font(name: &str) -> bool {
