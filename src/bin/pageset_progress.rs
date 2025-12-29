@@ -294,6 +294,15 @@ fn normalize_hotspot(h: &str) -> String {
   }
 }
 
+fn is_hotspot_unset(h: &str) -> bool {
+  let trimmed = h.trim();
+  trimmed.is_empty() || trimmed.eq_ignore_ascii_case("unknown")
+}
+
+fn is_manual_field_unset(value: &str) -> bool {
+  value.trim().is_empty()
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct PageProgress {
   url: String,
@@ -332,14 +341,16 @@ impl PageProgress {
     } else if !prev.notes.trim().is_empty() {
       self.notes = prev.notes;
     }
-    if !prev.hotspot.trim().is_empty() && self.hotspot.trim().is_empty() {
+    if !is_hotspot_unset(&prev.hotspot) && is_hotspot_unset(&self.hotspot) {
       self.hotspot = prev.hotspot;
     }
-    if !prev.last_good_commit.trim().is_empty() && self.last_good_commit.trim().is_empty() {
+    if !is_manual_field_unset(&prev.last_good_commit)
+      && is_manual_field_unset(&self.last_good_commit)
+    {
       self.last_good_commit = prev.last_good_commit;
     }
-    if !prev.last_regression_commit.trim().is_empty()
-      && self.last_regression_commit.trim().is_empty()
+    if !is_manual_field_unset(&prev.last_regression_commit)
+      && is_manual_field_unset(&self.last_regression_commit)
     {
       self.last_regression_commit = prev.last_regression_commit;
     }
@@ -429,6 +440,16 @@ fn guess_hotspot(buckets: &StageBuckets) -> &'static str {
   best.0
 }
 
+fn hotspot_from_timeout_stage(stage: RenderStage) -> &'static str {
+  match stage {
+    RenderStage::DomParse => "fetch",
+    RenderStage::Css => "css",
+    RenderStage::Cascade => "cascade",
+    RenderStage::Layout => "layout",
+    RenderStage::Paint => "paint",
+  }
+}
+
 fn render_worker(args: WorkerArgs) -> io::Result<()> {
   let started = Instant::now();
   let mut log = String::new();
@@ -440,7 +461,7 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     Err(e) => {
       let msg = format_error_with_chain(&e, args.verbose);
       log.push_str(&format!("Read error: {msg}\n"));
-      let mut progress = PageProgress::new(args.cache_path.display().to_string());
+      let mut progress = PageProgress::new(url_hint_from_cache_path(&args.cache_path));
       progress.status = ProgressStatus::Error;
       progress.notes = format!("read: {msg}");
       progress.hotspot = "fetch".to_string();
@@ -578,13 +599,7 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
         fastrender::Error::Render(RenderError::Timeout { stage, elapsed }) => {
           progress.status = ProgressStatus::Timeout;
           progress.notes = format!("timeout at {stage} after {elapsed:?}");
-          progress.hotspot = match stage {
-            RenderStage::DomParse => "fetch",
-            RenderStage::Css | RenderStage::Cascade => "css",
-            RenderStage::Layout => "layout",
-            RenderStage::Paint => "paint",
-          }
-          .to_string();
+          progress.hotspot = hotspot_from_timeout_stage(*stage).to_string();
         }
         _ => {
           progress.status = ProgressStatus::Error;
@@ -1308,6 +1323,32 @@ fn worker(args: WorkerArgs) -> io::Result<()> {
       }
       Ok(())
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn merge_keeps_previous_hotspot_when_new_is_unknown() {
+    let previous = PageProgress {
+      url: "https://example.com".to_string(),
+      hotspot: "layout".to_string(),
+      ..PageProgress::default()
+    };
+    let new_progress = PageProgress {
+      url: previous.url.clone(),
+      hotspot: "unknown".to_string(),
+      ..PageProgress::default()
+    };
+    let merged = new_progress.merge_preserving_manual(Some(previous));
+    assert_eq!(merged.hotspot, "layout");
+  }
+
+  #[test]
+  fn timeout_cascade_maps_to_cascade_hotspot() {
+    assert_eq!(hotspot_from_timeout_stage(RenderStage::Cascade), "cascade");
   }
 }
 
