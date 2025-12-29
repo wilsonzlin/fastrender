@@ -201,8 +201,9 @@ struct DrawCommand {
 enum Brush {
   Solid(Color),
   LinearGradient {
-    start: Point,
-    end: Point,
+    p0: Point,
+    p1: Point,
+    p2: Point,
     stops: Vec<GradientStop>,
     spread: SpreadMode,
   },
@@ -616,19 +617,25 @@ impl<'a, 'b> Renderer<'a, 'b> {
       Paint::LinearGradient(gradient) => {
         let color_line = gradient.color_line().ok()?;
         let (spread, stops) = resolve_color_line(color_line, self.palette, self.text_color)?;
-        let start = map_point(
+        let p0 = map_point(
           gradient.x0().to_i16() as f32,
           gradient.y0().to_i16() as f32,
           combined,
         );
-        let end = map_point(
+        let p1 = map_point(
           gradient.x1().to_i16() as f32,
           gradient.y1().to_i16() as f32,
           combined,
         );
+        let p2 = map_point(
+          gradient.x2().to_i16() as f32,
+          gradient.y2().to_i16() as f32,
+          combined,
+        );
         Some(Brush::LinearGradient {
-          start,
-          end,
+          p0,
+          p1,
+          p2,
           stops,
           spread,
         })
@@ -636,19 +643,25 @@ impl<'a, 'b> Renderer<'a, 'b> {
       Paint::VarLinearGradient(gradient) => {
         let color_line = gradient.color_line().ok()?;
         let (spread, stops) = resolve_var_color_line(color_line, self.palette, self.text_color)?;
-        let start = map_point(
+        let p0 = map_point(
           gradient.x0().to_i16() as f32,
           gradient.y0().to_i16() as f32,
           combined,
         );
-        let end = map_point(
+        let p1 = map_point(
           gradient.x1().to_i16() as f32,
           gradient.y1().to_i16() as f32,
           combined,
         );
+        let p2 = map_point(
+          gradient.x2().to_i16() as f32,
+          gradient.y2().to_i16() as f32,
+          combined,
+        );
         Some(Brush::LinearGradient {
-          start,
-          end,
+          p0,
+          p1,
+          p2,
           stops,
           spread,
         })
@@ -900,18 +913,38 @@ fn brush_to_paint(brush: &Brush, offset_x: f32, offset_y: f32) -> Option<SkiaPai
       paint.shader = tiny_skia::Shader::SolidColor(*color);
     }
     Brush::LinearGradient {
-      start,
-      end,
+      p0,
+      p1,
+      p2,
       stops,
       spread,
     } => {
-      let shader = tiny_skia::LinearGradient::new(
-        Point::from_xy(start.x - offset_x, start.y - offset_y),
-        Point::from_xy(end.x - offset_x, end.y - offset_y),
-        stops.clone(),
-        *spread,
-        Transform::identity(),
-      )?;
+      let v1 = Point::from_xy(p1.x - p0.x, p1.y - p0.y);
+      let v2 = Point::from_xy(p2.x - p0.x, p2.y - p0.y);
+      // COLRv1 maps a linear gradient through three control points. Define the gradient
+      // in canonical shader space (start=(0, 0), end=(1, 0)) and use a local transform
+      // to span the parallelogram P(u, v) = P0 + u*(P1-P0) + v*(P2-P0), offset into the
+      // glyph's raster origin.
+      let mut start = Point::from_xy(0.0, 0.0);
+      let mut end = Point::from_xy(1.0, 0.0);
+      let mut transform = Transform::from_row(
+        v1.x,
+        v1.y,
+        v2.x,
+        v2.y,
+        p0.x - offset_x,
+        p0.y - offset_y,
+      );
+
+      if transform.invert().is_none() {
+        // Degenerate basis; fall back to the simple start/end mapping used previously.
+        start = Point::from_xy(p0.x - offset_x, p0.y - offset_y);
+        end = Point::from_xy(p1.x - p0.x + start.x, p1.y - p0.y + start.y);
+        transform = Transform::identity();
+      }
+
+      let shader =
+        tiny_skia::LinearGradient::new(start, end, stops.clone(), *spread, transform)?;
       paint.shader = shader;
     }
     Brush::RadialGradient {

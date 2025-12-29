@@ -175,6 +175,19 @@ so CI and tests can run in fully hermetic environments without relying on platfo
   PY
   ```
 
+### `colrv1-linear-shear.ttf`
+- **Source:** Generated in-repo with [FontTools](https://github.com/fonttools/fonttools) v4.61.1 (no upstream binary).
+- **License:** CC0 / Public Domain.
+- **Glyphs:** U+0047 (`G`) references a `rect` outline filled via `PaintGlyph` with a COLR v1
+  `PaintLinearGradient` whose third point (`x2`/`y2`) shears the gradient axis to form a
+  parallelogram mapping.
+- **Features exercised:** 3-stop palette-backed linear gradient that visibly depends on the
+  non-orthogonal third control point.
+- **Regeneration:** From the repository root:
+  ```bash
+  python tests/fixtures/fonts/generate_colrv1_linear_shear_font.py
+  ```
+
 ### `colrv1-sweep-test.ttf`
 - **Source:** Generated in-repo with [FontTools](https://github.com/fonttools/fonttools) v4.61.1.
 - **License:** CC0 / Public Domain.
