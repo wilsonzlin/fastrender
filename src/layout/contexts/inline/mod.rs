@@ -768,7 +768,7 @@ impl InlineFormattingContext {
                 if matches!(node.box_type, BoxType::Text(_)) {
                   total += 1;
                 }
-                for child in &node.children {
+                for child in node.children.iter() {
                   total += text_desc(child);
                 }
                 total
@@ -974,7 +974,7 @@ impl InlineFormattingContext {
                 if matches!(node.box_type, BoxType::Text(_)) {
                   total += 1;
                 }
-                for child in &node.children {
+                for child in node.children.iter() {
                   total += text_desc(child);
                 }
                 total
@@ -983,7 +983,7 @@ impl InlineFormattingContext {
                 match &node.box_type {
                   BoxType::Text(t) => Some(truncate_text(&t.text, 40)),
                   _ => {
-                    for child in &node.children {
+                    for child in node.children.iter() {
                       if let Some(found) = first_text(child) {
                         return Some(found);
                       }
@@ -1116,7 +1116,7 @@ impl InlineFormattingContext {
           if matches!(node.box_type, BoxType::Text(_)) {
             total += 1;
           }
-          for child in &node.children {
+          for child in node.children.iter() {
             total += text_descendants(child);
           }
           total
@@ -1459,7 +1459,7 @@ impl InlineFormattingContext {
                 if matches!(node.box_type, BoxType::Text(_)) {
                   total += 1;
                 }
-                for child in &node.children {
+                for child in node.children.iter() {
                   total += text_desc(child);
                 }
                 total
@@ -1468,7 +1468,7 @@ impl InlineFormattingContext {
                 match &node.box_type {
                   BoxType::Text(t) => Some(truncate_text(&t.text, 40)),
                   _ => {
-                    for child in &node.children {
+                    for child in node.children.iter() {
                       if let Some(found) = first_text(child) {
                         return Some(found);
                       }
@@ -1654,7 +1654,7 @@ impl InlineFormattingContext {
                 if matches!(node.box_type, BoxType::Text(_)) {
                   total += 1;
                 }
-                for child in &node.children {
+                for child in node.children.iter() {
                   total += text_desc(child);
                 }
                 total
@@ -1663,7 +1663,7 @@ impl InlineFormattingContext {
                 match &node.box_type {
                   BoxType::Text(t) => Some(truncate_text(&t.text, 40)),
                   _ => {
-                    for child in &node.children {
+                    for child in node.children.iter() {
                       if let Some(found) = first_text(child) {
                         return Some(found);
                       }
@@ -7120,7 +7120,7 @@ impl InlineFormattingContext {
                 node.style.display,
                 node.children.len()
               );
-              for child in &node.children {
+              for child in node.children.iter() {
                 dump_inline_tree(child, depth + 1);
               }
             }
@@ -7133,7 +7133,7 @@ impl InlineFormattingContext {
         if matches!(node.box_type, BoxType::Text(_)) {
           total += 1;
         }
-        for child in &node.children {
+        for child in node.children.iter() {
           total += count_text_nodes(child);
         }
         total
@@ -8030,7 +8030,7 @@ impl InlineFormattingContext {
       fragment.bounds.height(),
       fragment.bounds.width(),
     );
-    for child in &mut fragment.children {
+    for child in fragment.children_mut() {
       Self::rotate_fragment_ccw(child, max_x);
     }
   }
@@ -8043,7 +8043,7 @@ impl InlineFormattingContext {
       fragment.bounds.height(),
       fragment.bounds.width(),
     );
-    for child in &mut fragment.children {
+    for child in fragment.children_mut() {
       Self::rotate_fragment_cw(child, max_x);
     }
   }
@@ -8618,7 +8618,7 @@ fn collect_logical_text_for_direction(node: &BoxNode, out: &mut String) {
     _ => out.push(OBJECT_REPLACEMENT),
   }
 
-  for child in &node.children {
+  for child in node.children.iter() {
     collect_logical_text_for_direction(child, out);
   }
 }
@@ -9226,7 +9226,7 @@ mod tests {
         }
         _ => {}
       }
-      for child in &node.children {
+      for child in node.children.iter() {
         stack.push(child);
       }
     }
@@ -9258,7 +9258,7 @@ mod tests {
         }
         _ => {}
       }
-      for child in &node.children {
+      for child in node.children.iter() {
         stack.push(child);
       }
     }
@@ -9274,7 +9274,7 @@ mod tests {
       {
         return Some(node.bounds.x());
       }
-      for child in &node.children {
+      for child in node.children.iter() {
         stack.push(child);
       }
     }
@@ -9335,7 +9335,7 @@ mod tests {
         }
         _ => {}
       }
-      for child in &node.children {
+      for child in node.children.iter() {
         stack.push(child);
       }
     }
@@ -9425,7 +9425,7 @@ mod tests {
         }
         _ => {}
       }
-      for child in &node.children {
+      for child in node.children.iter() {
         stack.push(child);
       }
     }
@@ -9493,7 +9493,7 @@ mod tests {
         }
         texts.push(text.clone());
       }
-      for child in &node.children {
+      for child in node.children.iter() {
         stack.push(child);
       }
     }
@@ -9646,7 +9646,7 @@ mod tests {
     let line = fragment.children.first().expect("line fragment");
     let mut marker_bounds = None;
     let mut text_bounds = None;
-    for child in &line.children {
+    for child in line.children.iter() {
       match child.content {
         FragmentContent::Text {
           is_marker: true, ..
@@ -9721,7 +9721,7 @@ mod tests {
         }
         _ => {}
       }
-      for child in &node.children {
+      for child in node.children.iter() {
         stack.push(child);
       }
     }
@@ -9784,7 +9784,7 @@ mod tests {
         }
         _ => {}
       }
-      for child in &node.children {
+      for child in node.children.iter() {
         stack.push(child);
       }
     }
@@ -10210,7 +10210,7 @@ mod tests {
       {
         compressed.push(runs.iter().any(|r| (r.scale - 1.0).abs() > 1e-6));
       }
-      for child in &node.children {
+      for child in node.children.iter() {
         collect_text_compression(child, compressed);
       }
     }
@@ -12500,7 +12500,7 @@ mod tests {
       if matches!(node.content, FragmentContent::Line { .. }) {
         out.push(node);
       }
-      for child in &node.children {
+      for child in node.children.iter() {
         collect_lines(child, out);
       }
     }
@@ -14542,7 +14542,7 @@ mod tests {
       fragment.children.len() >= 2,
       "should wrap into multiple lines"
     );
-    for line in &fragment.children {
+    for line in fragment.children.iter() {
       let first_child = line.children.first().expect("text fragment");
       assert!(
         first_child.bounds.x() >= 7.0,
@@ -15061,7 +15061,7 @@ mod tests {
         match &node.content {
           FragmentContent::Text { text, .. } => out.push_str(text),
           _ => {
-            for child in &node.children {
+            for child in node.children.iter() {
               gather_text(child, out);
             }
           }

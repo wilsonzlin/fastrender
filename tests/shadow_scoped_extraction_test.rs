@@ -19,7 +19,7 @@ fn element_path_by_id(root: &DomNode, id: &str) -> Option<Vec<usize>> {
     }
 
     let mut child_index = 0;
-    for child in &node.children {
+    for child in node.children.iter() {
       let contributes = node_contributes_to_scope_path(child);
       if contributes {
         path.push(child_index);

@@ -26,7 +26,7 @@ pub(super) fn serialized_inline_svg(html: &str, width: f32, height: f32) -> Opti
         return Some(content.clone());
       }
     }
-    for child in &node.children {
+    for child in node.children.iter() {
       if let Some(content) = find_svg(child) {
         return Some(content);
       }

@@ -26,7 +26,7 @@ pub fn find_base_href(dom: &DomNode) -> Option<String> {
         return None;
       }
     }
-    for child in &node.children {
+    for child in node.children.iter() {
       if let Some(head) = find_head(child) {
         return Some(head);
       }
@@ -51,7 +51,7 @@ pub fn find_base_href(dom: &DomNode) -> Option<String> {
         }
       }
     }
-    for child in &node.children {
+    for child in node.children.iter() {
       if let Some(found) = find_base(child) {
         return Some(found);
       }

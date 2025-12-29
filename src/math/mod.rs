@@ -355,7 +355,7 @@ fn collect_text(node: &DomNode, out: &mut String) {
     | DomNodeType::Slot { .. }
     | DomNodeType::Document { .. }
     | DomNodeType::ShadowRoot { .. } => {
-      for child in &node.children {
+      for child in node.children.iter() {
         collect_text(child, out);
       }
     }
@@ -596,7 +596,7 @@ pub fn parse_mathml(node: &DomNode) -> Option<MathNode> {
         "annotation" | "annotation-xml" => None,
         "semantics" => {
           let mut first_child = None;
-          for child in &node.children {
+          for child in node.children.iter() {
             match &child.node_type {
               DomNodeType::Element { tag_name, .. } => {
                 if is_annotation_tag(&tag_name.to_ascii_lowercase()) {
@@ -842,7 +842,7 @@ pub fn parse_mathml(node: &DomNode) -> Option<MathNode> {
           let table_row_aligns = parse_row_align_list(node.get_attribute_ref("rowalign"));
           let table_col_aligns = parse_column_align_list(node.get_attribute_ref("columnalign"));
           let mut rows = Vec::new();
-          for child in &node.children {
+          for child in node.children.iter() {
             let Some(tag) = child.tag_name() else {
               continue;
             };

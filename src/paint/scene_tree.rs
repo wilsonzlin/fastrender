@@ -142,7 +142,7 @@ fn collect_scene_items_inner(
   paint_order: &mut u32,
   items: &mut Vec<SceneItem>,
 ) {
-  for child in &node.children {
+  for child in node.children.iter() {
     match child {
       NodeChild::PrimitiveRun(run) => {
         if run.is_empty() {

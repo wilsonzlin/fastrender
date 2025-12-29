@@ -13,7 +13,7 @@ fn find_by_id<'a>(node: &'a AccessibilityNode, id: &str) -> Option<&'a Accessibi
   if node.id.as_deref() == Some(id) {
     return Some(node);
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     if let Some(found) = find_by_id(child, id) {
       return Some(found);
     }

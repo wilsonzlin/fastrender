@@ -37,7 +37,7 @@ fn extract_text(node: &BoxNode) -> String {
   if let Some(t) = node.text() {
     text.push_str(t);
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     text.push_str(&extract_text(child));
   }
   text

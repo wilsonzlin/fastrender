@@ -11,7 +11,7 @@ fn find_svg_content(node: &BoxNode) -> Option<SvgContent> {
       return Some(content.clone());
     }
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     if let Some(found) = find_svg_content(child) {
       return Some(found);
     }

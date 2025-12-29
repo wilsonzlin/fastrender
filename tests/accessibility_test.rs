@@ -7,7 +7,7 @@ fn find_by_id<'a>(node: &'a AccessibilityNode, id: &str) -> Option<&'a Accessibi
   if node.id.as_deref() == Some(id) {
     return Some(node);
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     if let Some(found) = find_by_id(child, id) {
       return Some(found);
     }
@@ -23,7 +23,7 @@ fn collect_by_role<'a>(
   if node.role == role {
     out.push(node);
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     collect_by_role(child, role, out);
   }
 }
@@ -33,7 +33,7 @@ fn count_by_id(node: &AccessibilityNode, id: &str) -> usize {
   if node.id.as_deref() == Some(id) {
     count += 1;
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     count += count_by_id(child, id);
   }
   count
@@ -43,7 +43,7 @@ fn find_path<'a>(node: &'a AccessibilityNode, id: &str) -> Option<Vec<&'a Access
   if node.id.as_deref() == Some(id) {
     return Some(vec![node]);
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     if let Some(mut path) = find_path(child, id) {
       path.insert(0, node);
       return Some(path);

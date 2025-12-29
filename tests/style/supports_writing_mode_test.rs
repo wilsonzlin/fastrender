@@ -12,7 +12,7 @@ fn first_div(node: &StyledNode) -> Option<&StyledNode> {
   if node.node.tag_name() == Some("div") {
     return Some(node);
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     if let Some(found) = first_div(child) {
       return Some(found);
     }

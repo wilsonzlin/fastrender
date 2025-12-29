@@ -21,7 +21,7 @@ fn collect_replaced_tag_names(node: &BoxNode, out: &mut Vec<String>) {
     }
   }
 
-  for child in &node.children {
+  for child in node.children.iter() {
     collect_replaced_tag_names(child, out);
   }
 }

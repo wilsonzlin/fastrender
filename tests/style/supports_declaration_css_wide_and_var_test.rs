@@ -7,7 +7,7 @@ fn find_by_id<'a>(node: &'a StyledNode, id: &str) -> Option<&'a StyledNode> {
   if node.node.get_attribute_ref("id") == Some(id) {
     return Some(node);
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     if let Some(found) = find_by_id(child, id) {
       return Some(found);
     }

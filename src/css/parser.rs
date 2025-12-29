@@ -3522,7 +3522,7 @@ pub fn extract_css_sources(dom: &DomNode) -> Vec<ScopedStylesheetSource> {
       }
       if tag.eq_ignore_ascii_case("style") {
         let mut css = String::new();
-        for child in &node.children {
+        for child in node.children.iter() {
           if let Some(text) = child.text_content() {
             css.push_str(text);
           }
@@ -3561,7 +3561,7 @@ pub fn extract_css_sources(dom: &DomNode) -> Vec<ScopedStylesheetSource> {
     }
 
     let mut child_index = 0;
-    for child in &node.children {
+    for child in node.children.iter() {
       let mut child_scope = scope.clone();
       if matches!(child.node_type, DomNodeType::ShadowRoot { .. }) {
         child_scope = CssTreeScope::ShadowRoot {
@@ -3611,7 +3611,7 @@ pub fn extract_scoped_css_sources(dom: &DomNode) -> ScopedStylesheetSources {
 
       if tag.eq_ignore_ascii_case("style") {
         let mut css = String::new();
-        for child in &node.children {
+        for child in node.children.iter() {
           if let Some(text) = child.text_content() {
             css.push_str(text);
           }
@@ -3643,7 +3643,7 @@ pub fn extract_scoped_css_sources(dom: &DomNode) -> ScopedStylesheetSources {
       return;
     }
 
-    for child in &node.children {
+    for child in node.children.iter() {
       let child_scope = match child.node_type {
         DomNodeType::ShadowRoot { .. } => Some(node_id),
         _ => scope,
@@ -3674,7 +3674,7 @@ pub fn extract_css(dom: &DomNode) -> Result<StyleSheet> {
     }
     if let Some(tag) = node.tag_name() {
       if tag == "style" {
-        for child in &node.children {
+        for child in node.children.iter() {
           if let Some(text) = child.text_content() {
             css_content.push_str(text);
             css_content.push('\n');
@@ -3682,7 +3682,7 @@ pub fn extract_css(dom: &DomNode) -> Result<StyleSheet> {
         }
       }
     }
-    for child in &node.children {
+    for child in node.children.iter() {
       walk(child, css_content);
     }
   }

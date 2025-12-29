@@ -161,7 +161,7 @@ pub fn accessibility_tree_json(root: &StyledNode) -> serde_json::Value {
 
 fn build_styled_lookup<'a>(node: &'a StyledNode, out: &mut HashMap<usize, &'a StyledNode>) {
   out.insert(node.node_id, node);
-  for child in &node.children {
+  for child in node.children.iter() {
     build_styled_lookup(child, out);
   }
 }
@@ -550,7 +550,7 @@ fn compute_hidden_and_ids(
     }
   }
 
-  for child in &node.children {
+  for child in node.children.iter() {
     compute_hidden_and_ids(child, is_hidden, is_aria_hidden, hidden, aria_hidden, ids);
   }
 }
@@ -570,7 +570,7 @@ fn collect_labels(
     node: &'a StyledNode,
     aria_hidden: &HashMap<usize, bool>,
   ) -> Option<&'a StyledNode> {
-    for child in &node.children {
+    for child in node.children.iter() {
       if is_hidden(child, aria_hidden) {
         continue;
       }
@@ -618,7 +618,7 @@ fn collect_labels(
       }
     }
 
-    for child in &node.children {
+    for child in node.children.iter() {
       walk_dom(child, aria_hidden, ids, lookup, labels);
     }
   }

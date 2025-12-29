@@ -12,7 +12,7 @@ fn find_tag(node: &StyledNode, tag: &str) -> Option<StyledNode> {
       return Some(node.clone());
     }
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     if let Some(found) = find_tag(child, tag) {
       return Some(found);
     }

@@ -257,7 +257,7 @@ pub fn build_selector_bloom_map(root: &DomNode) -> Option<SelectorBloomMap> {
       add_selector_bloom_hashes(node, &mut |hash| summary.insert_hash(hash));
     }
 
-    for child in &node.children {
+    for child in node.children.iter() {
       let child_summary = if matches!(child.node_type, DomNodeType::ShadowRoot { .. }) {
         walk(child, map);
         None
@@ -600,7 +600,7 @@ fn collect_slot_names(node: &DomNode, out: &mut HashSet<String>) {
     );
   }
 
-  for child in &node.children {
+  for child in node.children.iter() {
     collect_slot_names(child, out);
   }
 }
@@ -672,7 +672,7 @@ fn fill_slot_assignments(
     }
   }
 
-  for child in &node.children {
+  for child in node.children.iter() {
     fill_slot_assignments(
       child,
       shadow_root_id,
@@ -687,7 +687,7 @@ fn fill_slot_assignments(
 fn enumerate_node_ids(node: &DomNode, next: &mut usize, map: &mut HashMap<*const DomNode, usize>) {
   map.insert(node as *const DomNode, *next);
   *next += 1;
-  for child in &node.children {
+  for child in node.children.iter() {
     enumerate_node_ids(child, next, map);
   }
 }
@@ -741,7 +741,7 @@ pub fn compute_slot_assignment(root: &DomNode) -> SlotAssignment {
       }
     }
 
-    for child in &node.children {
+    for child in node.children.iter() {
       walk(child, Some(node), ids, out);
     }
   }
@@ -815,7 +815,7 @@ pub fn compute_part_export_map_with_ids(
         }
       }
 
-      for child in &node.children {
+      for child in node.children.iter() {
         if matches!(child.node_type, DomNodeType::ShadowRoot { .. }) {
           // Nested shadow contents are only exposed via exportparts on the host.
           continue;
@@ -845,7 +845,7 @@ pub fn compute_part_export_map_with_ids(
     if node.is_shadow_host() {
       collect_for_host(node, ids, map);
     }
-    for child in &node.children {
+    for child in node.children.iter() {
       traverse(child, ids, map);
     }
   }
@@ -2128,7 +2128,7 @@ impl<'a> ElementRef<'a> {
       }
 
       ancestors.push(node);
-      for child in &node.children {
+      for child in node.children.iter() {
         if let Some(res) = traverse(child, ancestors, target) {
           ancestors.pop();
           return Some(res);
@@ -2333,7 +2333,7 @@ impl<'a> ElementRef<'a> {
 /// newline that HTML ignores when contents start with a line break (common with formatted markup).
 fn textarea_value(node: &DomNode) -> String {
   let mut value = String::new();
-  for child in &node.children {
+  for child in node.children.iter() {
     if let DomNodeType::Text { content } = &child.node_type {
       value.push_str(content);
     }
@@ -2433,7 +2433,7 @@ fn collect_selected_option_values(node: &DomNode, optgroup_disabled: bool, out: 
     out.push(option_value_from_node(node));
   }
 
-  for child in &node.children {
+  for child in node.children.iter() {
     collect_selected_option_values(child, next_optgroup_disabled, out);
   }
 }
@@ -2453,7 +2453,7 @@ fn find_selected_option_value(node: &DomNode, optgroup_disabled: bool) -> Option
     return Some(option_value_from_node(node));
   }
 
-  for child in &node.children {
+  for child in node.children.iter() {
     if let Some(val) = find_selected_option_value(child, next_optgroup_disabled) {
       return Some(val);
     }
@@ -2473,7 +2473,7 @@ fn first_enabled_option<'a>(node: &'a DomNode, optgroup_disabled: bool) -> Optio
     return Some(node);
   }
 
-  for child in &node.children {
+  for child in node.children.iter() {
     if let Some(opt) = first_enabled_option(child, next_optgroup_disabled) {
       return Some(opt);
     }
@@ -3299,7 +3299,7 @@ fn in_shadow_tree(ancestors: &[&DomNode]) -> bool {
 }
 
 fn for_each_assigned_slot_child<'a, F: FnMut(&'a DomNode)>(node: &'a DomNode, f: &mut F) {
-  for child in &node.children {
+  for child in node.children.iter() {
     match &child.node_type {
       DomNodeType::Slot { assigned: true, .. } => {
         for assigned_child in child.children.iter().filter(|c| c.is_element()) {
@@ -3513,7 +3513,7 @@ mod tests {
         return Some(node);
       }
     }
-    for child in &node.children {
+    for child in node.children.iter() {
       if let Some(found) = find_element_by_id(child, id) {
         return Some(found);
       }
@@ -3981,14 +3981,14 @@ mod tests {
   fn collect_wbr_texts(node: &DomNode, out: &mut Vec<String>) {
     if let DomNodeType::Element { tag_name, .. } = &node.node_type {
       if tag_name.eq_ignore_ascii_case("wbr") {
-        for child in &node.children {
+        for child in node.children.iter() {
           if let DomNodeType::Text { content } = &child.node_type {
             out.push(content.clone());
           }
         }
       }
     }
-    for child in &node.children {
+    for child in node.children.iter() {
       collect_wbr_texts(child, out);
     }
   }

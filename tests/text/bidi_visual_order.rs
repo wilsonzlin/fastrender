@@ -20,7 +20,7 @@ fn collect_text_with_x(
     if let fastrender::tree::fragment_tree::FragmentContent::Text { text, .. } = &node.content {
       out.push((text.to_string(), node.bounds.x()));
     }
-    for child in &node.children {
+    for child in node.children.iter() {
       stack.push(child);
     }
   }

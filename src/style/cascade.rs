@@ -490,7 +490,7 @@ fn collect_shadow_stylesheets(
     }
     if let Some(tag) = node.tag_name() {
       if tag.eq_ignore_ascii_case("style") {
-        for child in &node.children {
+        for child in node.children.iter() {
           if let Some(text) = child.text_content() {
             out.push_str(text);
             out.push('\n');
@@ -498,7 +498,7 @@ fn collect_shadow_stylesheets(
         }
       }
     }
-    for child in &node.children {
+    for child in node.children.iter() {
       gather_styles(child, root_ptr, out);
     }
   }
@@ -522,7 +522,7 @@ fn collect_shadow_stylesheets(
         }
       }
     }
-    for child in &node.children {
+    for child in node.children.iter() {
       walk(child, ids, out)?;
     }
     Ok(())
@@ -640,7 +640,7 @@ impl DomMaps {
           exportparts_map.insert(id, mapping);
         }
       }
-      for child in &node.children {
+      for child in node.children.iter() {
         walk(
           child,
           Some(id),
@@ -4229,7 +4229,7 @@ fn apply_styles_internal_with_ancestors<'a>(
   ancestors.push(node);
   ancestor_ids.push(node_id);
   let parent_is_shadow_root = matches!(node.node_type, DomNodeType::ShadowRoot { .. });
-  for child in &node.children {
+  for child in node.children.iter() {
     let child_reuse = reuse_counter.as_deref_mut();
     let child_scope = match (parent_is_shadow_root, &child.node_type) {
       (true, _) => scope_host,

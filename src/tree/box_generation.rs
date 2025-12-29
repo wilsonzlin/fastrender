@@ -423,7 +423,7 @@ fn collect_document_css(styled: &StyledNode, deadline_counter: &mut usize) -> Re
         return Ok(());
       }
       if tag.eq_ignore_ascii_case("style") {
-        for child in &node.children {
+        for child in node.children.iter() {
           if let Some(text) = child.node.text_content() {
             out.push_str(text);
             out.push('\n');
@@ -432,7 +432,7 @@ fn collect_document_css(styled: &StyledNode, deadline_counter: &mut usize) -> Re
       }
     }
 
-    for child in &node.children {
+    for child in node.children.iter() {
       walk(child, out, deadline_counter)?;
     }
     Ok(())
@@ -454,7 +454,7 @@ fn build_styled_lookup<'a>(
     RenderStage::Cascade,
   )?;
   out.insert(node.node_id, node);
-  for child in &node.children {
+  for child in node.children.iter() {
     build_styled_lookup(child, out, deadline_counter)?;
   }
   Ok(())
@@ -574,7 +574,7 @@ fn collect_picture_source_map(
       out.insert(img_id, sources);
     }
 
-    for child in &node.children {
+    for child in node.children.iter() {
       walk(child, out, deadline_counter)?;
     }
     Ok(())
@@ -608,7 +608,7 @@ fn serialize_dom_subtree(node: &crate::dom::DomNode) -> String {
         out.push('"');
       }
       out.push('>');
-      for child in &node.children {
+      for child in node.children.iter() {
         out.push_str(&serialize_dom_subtree(child));
       }
       out.push_str("</slot>");
@@ -631,7 +631,7 @@ fn serialize_dom_subtree(node: &crate::dom::DomNode) -> String {
         out.push('"');
       }
       out.push('>');
-      for child in &node.children {
+      for child in node.children.iter() {
         out.push_str(&serialize_dom_subtree(child));
       }
       out.push_str("</");
@@ -908,7 +908,7 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
           return true;
         }
       }
-      for child in &node.children {
+      for child in node.children.iter() {
         stack.push(child);
       }
     }
@@ -1987,7 +1987,7 @@ fn apply_counter_properties_from_style(styled: &StyledNode, counters: &mut Count
 /// Count immediate list items belonging to this list, ignoring nested lists.
 fn list_item_count(styled: &StyledNode) -> usize {
   fn walk(node: &StyledNode, in_nested_list: bool, acc: &mut usize) {
-    for child in &node.children {
+    for child in node.children.iter() {
       let tag = child.node.tag_name().map(|t| t.to_ascii_lowercase());
       let is_list = matches!(
         tag.as_deref(),
@@ -2053,7 +2053,7 @@ fn find_selected_option_label(node: &DomNode, optgroup_disabled: bool) -> Option
 
   let next_optgroup_disabled =
     optgroup_disabled || (is_optgroup && node.get_attribute("disabled").is_some());
-  for child in &node.children {
+  for child in node.children.iter() {
     if let Some(val) = find_selected_option_label(child, next_optgroup_disabled) {
       return Some(val);
     }
@@ -2080,7 +2080,7 @@ fn first_enabled_option_label(node: &DomNode, optgroup_disabled: bool) -> Option
 
   let next_optgroup_disabled =
     optgroup_disabled || (is_optgroup && node.get_attribute("disabled").is_some());
-  for child in &node.children {
+  for child in node.children.iter() {
     if let Some(val) = first_enabled_option_label(child, next_optgroup_disabled) {
       return Some(val);
     }
@@ -2639,7 +2639,7 @@ mod tests {
           out.push(repl.clone());
         }
       }
-      for child in &node.children {
+      for child in node.children.iter() {
         find_audio(child, out);
       }
     }
@@ -2670,7 +2670,7 @@ mod tests {
           count += 1;
         }
       }
-      for child in &node.children {
+      for child in node.children.iter() {
         count += count_object_replacements(child);
       }
       count
@@ -2680,7 +2680,7 @@ mod tests {
       if let BoxType::Text(text) = &node.box_type {
         out.push(text.text.clone());
       }
-      for child in &node.children {
+      for child in node.children.iter() {
         collect_text(child, out);
       }
     }
@@ -2719,7 +2719,7 @@ mod tests {
           out.push(repl.replaced_type.clone());
         }
       }
-      for child in &node.children {
+      for child in node.children.iter() {
         collect_controls(child, out);
       }
     }
@@ -2777,7 +2777,7 @@ mod tests {
           out.push(control.clone());
         }
       }
-      for child in &node.children {
+      for child in node.children.iter() {
         collect_controls(child, out);
       }
     }
@@ -2943,7 +2943,7 @@ mod tests {
           count += 1;
         }
       }
-      for child in &node.children {
+      for child in node.children.iter() {
         count += count_replaced(child);
       }
       count
@@ -4547,7 +4547,7 @@ mod tests {
           return Some(repl);
         }
       }
-      for child in &node.children {
+      for child in node.children.iter() {
         if let Some(found) = find_svg(child) {
           return Some(found);
         }

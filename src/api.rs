@@ -5296,7 +5296,7 @@ impl FastRender {
             return Some(node);
           }
         }
-        for child in &node.children {
+        for child in node.children.iter() {
           if let Some(node) = find_body_node(child) {
             return Some(node);
           }
@@ -5390,7 +5390,7 @@ impl FastRender {
     if timings_enabled {
       fn count_boxes(node: &BoxNode, count: &mut usize) {
         *count += 1;
-        for child in &node.children {
+        for child in node.children.iter() {
           count_boxes(child, count);
         }
       }
@@ -5405,7 +5405,7 @@ impl FastRender {
         if matches!(node.box_type, BoxType::Text(_)) {
           *text += 1;
         }
-        for child in &node.children {
+        for child in node.children.iter() {
           count_box_kinds(child, total, text);
         }
       }
@@ -5435,7 +5435,7 @@ impl FastRender {
             truncate(&t.text, 80)
           );
         }
-        for child in &node.children {
+        for child in node.children.iter() {
           dump_text_nodes(child);
         }
       }
@@ -5494,7 +5494,7 @@ impl FastRender {
             );
           }
         }
-        for child in &node.children {
+        for child in node.children.iter() {
           dump_box_tree(child, depth + 1);
         }
       }
@@ -7994,7 +7994,7 @@ fn styled_fingerprint_map(root: &StyledNode) -> HashMap<usize, u64> {
     if let Some(marker) = &node.marker_styles {
       out.insert(base | 3, style_layout_fingerprint(marker));
     }
-    for child in &node.children {
+    for child in node.children.iter() {
       walk(child, out);
     }
   }
@@ -8038,7 +8038,7 @@ fn collect_fragment_sizes(fragment: &FragmentNode, sizes: &mut HashMap<usize, (f
 
 fn collect_box_nodes<'a>(node: &'a BoxNode, map: &mut HashMap<usize, &'a BoxNode>) {
   map.insert(node.id, node);
-  for child in &node.children {
+  for child in node.children.iter() {
     collect_box_nodes(child, map);
   }
 }
@@ -8056,7 +8056,7 @@ fn styled_style_map(root: &StyledNode) -> HashMap<usize, Arc<ComputedStyle>> {
     if let Some(marker) = &node.marker_styles {
       out.insert(base | 3, Arc::new(marker.as_ref().clone()));
     }
-    for child in &node.children {
+    for child in node.children.iter() {
       walk(child, out);
     }
   }
@@ -8100,7 +8100,7 @@ fn styled_summary_map(root: &StyledNode) -> HashMap<usize, String> {
 
   fn walk(node: &StyledNode, out: &mut HashMap<usize, String>) {
     out.insert(node.node_id, summary(node));
-    for child in &node.children {
+    for child in node.children.iter() {
       walk(child, out);
     }
   }
@@ -8422,7 +8422,7 @@ fn build_container_scope(styled: &StyledNode, ctx: &ContainerQueryContext) -> Ha
   ) -> bool {
     let is_container = containers.contains_key(&node.node_id);
     let mut subtree_has_container = is_container;
-    for child in &node.children {
+    for child in node.children.iter() {
       if mark(
         child,
         containers,
@@ -8819,7 +8819,7 @@ mod tests {
       if node.node.get_attribute("id").as_deref() == Some(id) {
         return true;
       }
-      for child in &node.children {
+      for child in node.children.iter() {
         trail.push(node.node_id);
         if helper(child, id, trail) {
           return true;
@@ -8851,7 +8851,7 @@ mod tests {
       vec![],
       Arc::new(sticky_style),
     );
-    root.children.push(sticky);
+    root.children_mut().push(sticky);
 
     renderer.apply_sticky_offsets(
       &mut root,
@@ -10209,7 +10209,7 @@ mod tests {
       vec![],
       Arc::new(item_style),
     );
-    container.children.push(child);
+    container.children_mut().push(child);
 
     let mut tree = FragmentTree::with_viewport(container, Size::new(100.0, 100.0));
 

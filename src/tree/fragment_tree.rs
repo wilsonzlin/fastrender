@@ -269,7 +269,7 @@ pub enum FragmentContent {
     /// Carrying shaped runs from layout allows painting to reuse the exact
     /// glyph positions and fonts chosen during layout instead of reshaping
     /// with potentially different fallback results.
-    shaped: Option<Arc<[ShapedRun]>>,
+    shaped: Option<Arc<Vec<ShapedRun>>>,
 
     /// True when this fragment represents a list marker (::marker)
     is_marker: bool,
@@ -793,11 +793,11 @@ impl FragmentNode {
   /// assert!(fragment.content.is_text());
   /// assert_eq!(fragment.content.text(), Some("Hello"));
   /// ```
-  pub fn new_text(bounds: Rect, text: String, baseline_offset: f32) -> Self {
+  pub fn new_text(bounds: Rect, text: impl Into<Arc<str>>, baseline_offset: f32) -> Self {
     Self::new(
       bounds,
       FragmentContent::Text {
-        text: Arc::from(text),
+        text: text.into(),
         box_id: None,
         baseline_offset,
         shaped: None,
@@ -810,14 +810,14 @@ impl FragmentNode {
   /// Creates a new text fragment with style
   pub fn new_text_styled(
     bounds: Rect,
-    text: String,
+    text: impl Into<Arc<str>>,
     baseline_offset: f32,
     style: Arc<ComputedStyle>,
   ) -> Self {
     Self::new_with_style(
       bounds,
       FragmentContent::Text {
-        text: Arc::from(text),
+        text: text.into(),
         box_id: None,
         baseline_offset,
         shaped: None,
@@ -831,18 +831,18 @@ impl FragmentNode {
   /// Creates a new text fragment with pre-shaped runs and style
   pub fn new_text_shaped(
     bounds: Rect,
-    text: String,
+    text: impl Into<Arc<str>>,
     baseline_offset: f32,
-    shaped: Vec<ShapedRun>,
+    shaped: impl Into<Arc<Vec<ShapedRun>>>,
     style: Arc<ComputedStyle>,
   ) -> Self {
     Self::new_with_style(
       bounds,
       FragmentContent::Text {
-        text: Arc::from(text),
+        text: text.into(),
         box_id: None,
         baseline_offset,
-        shaped: Some(Arc::from(shaped)),
+        shaped: Some(shaped.into()),
         is_marker: false,
       },
       vec![],
@@ -1427,7 +1427,7 @@ impl FragmentTree {
       if let Some(start) = &node.starting_style {
         out.insert(node.id, start.clone());
       }
-      for child in &node.children {
+      for child in node.children.iter() {
         collect(child, out);
       }
     }
@@ -1469,6 +1469,8 @@ impl fmt::Display for FragmentTree {
 mod tests {
   use super::*;
   use crate::layout::fragmentation::{fragment_tree as split_fragment_tree, FragmentationOptions};
+  use crate::style::ComputedStyle;
+  use crate::text::pipeline::ShapedRun;
   use std::sync::Arc;
 
   // Constructor tests
@@ -1864,7 +1866,7 @@ mod tests {
     assert!(!block.is_replaced());
 
     let text = FragmentContent::Text {
-      text: Arc::from("test"),
+      text: "test".into(),
       box_id: None,
       baseline_offset: 0.0,
       shaped: None,
@@ -1872,6 +1874,39 @@ mod tests {
     };
     assert!(text.is_text());
     assert_eq!(text.text(), Some("test"));
+  }
+
+  #[test]
+  fn text_fragment_clone_shares_payloads() {
+    let fragment = FragmentNode::new_text_shaped(
+      Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+      "abc",
+      4.0,
+      Arc::new(Vec::<ShapedRun>::new()),
+      Arc::new(ComputedStyle::default()),
+    );
+    let cloned = fragment.clone();
+
+    if let (
+      FragmentContent::Text {
+        text: a_text,
+        shaped: a_shaped,
+        ..
+      },
+      FragmentContent::Text {
+        text: b_text,
+        shaped: b_shaped,
+        ..
+      },
+    ) = (&fragment.content, &cloned.content)
+    {
+      assert!(Arc::ptr_eq(a_text, b_text));
+      let a_runs = a_shaped.as_ref().expect("original shaped runs");
+      let b_runs = b_shaped.as_ref().expect("cloned shaped runs");
+      assert!(Arc::ptr_eq(a_runs, b_runs));
+    } else {
+      panic!("expected text fragments");
+    }
   }
 
   #[test]

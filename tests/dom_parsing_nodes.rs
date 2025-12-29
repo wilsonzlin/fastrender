@@ -2,7 +2,7 @@ use fastrender::dom::{parse_html, DomNode, DomNodeType};
 
 fn count_document_nodes(node: &DomNode) -> usize {
   let mut count = matches!(node.node_type, DomNodeType::Document { .. }) as usize;
-  for child in &node.children {
+  for child in node.children.iter() {
     count += count_document_nodes(child);
   }
   count

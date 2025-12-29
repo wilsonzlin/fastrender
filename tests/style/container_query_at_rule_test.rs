@@ -18,7 +18,7 @@ fn find_dom_by_id<'a>(node: &'a DomNode, id: &str) -> Option<&'a DomNode> {
   {
     return Some(node);
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     if let Some(found) = find_dom_by_id(child, id) {
       return Some(found);
     }
@@ -34,7 +34,7 @@ fn find_by_id<'a>(node: &'a StyledNode, id: &str) -> Option<&'a StyledNode> {
   {
     return Some(node);
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     if let Some(found) = find_by_id(child, id) {
       return Some(found);
     }

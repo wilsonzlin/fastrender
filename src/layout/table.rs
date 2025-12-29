@@ -9077,7 +9077,7 @@ mod tests {
       {
         widths.push(node.bounds.width());
       }
-      for child in &node.children {
+      for child in node.children.iter() {
         collect_cell_widths(child, widths);
       }
     }
@@ -12058,7 +12058,7 @@ mod tests {
         }
         _ => {}
       }
-      for child in &frag.children {
+      for child in frag.children.iter() {
         if let Some(found) = find_fragment_by_box_id(child, target) {
           return Some(found);
         }

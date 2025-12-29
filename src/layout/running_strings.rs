@@ -52,7 +52,7 @@ pub fn collect_string_set_events(
 
 fn collect_box_styles(node: &BoxNode, out: &mut HashMap<usize, Arc<crate::style::ComputedStyle>>) {
   out.insert(node.id, node.style.clone());
-  for child in &node.children {
+  for child in node.children.iter() {
     collect_box_styles(child, out);
   }
 }
@@ -64,7 +64,7 @@ fn collect_box_parents(node: &BoxNode, parent: Option<usize>, out: &mut HashMap<
     }
   }
   let next_parent = if node.id != 0 { Some(node.id) } else { parent };
-  for child in &node.children {
+  for child in node.children.iter() {
     collect_box_parents(child, next_parent, out);
   }
 }
@@ -81,7 +81,7 @@ fn collect_box_text(node: &BoxNode, out: &mut HashMap<usize, String>) -> String 
     _ => {}
   }
 
-  for child in &node.children {
+  for child in node.children.iter() {
     text.push_str(&collect_box_text(child, out));
   }
 

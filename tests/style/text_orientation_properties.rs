@@ -17,7 +17,7 @@ fn first_node(html: &str, css: &str) -> StyledNode {
         return Some(node.clone());
       }
     }
-    for child in &node.children {
+    for child in node.children.iter() {
       if let Some(found) = find_div(child) {
         return Some(found);
       }

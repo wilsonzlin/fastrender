@@ -18,7 +18,7 @@ fn find_by_id<'a>(
   {
     return Some(node);
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     if let Some(found) = find_by_id(child, id) {
       return Some(found);
     }

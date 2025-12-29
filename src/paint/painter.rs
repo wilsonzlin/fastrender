@@ -451,7 +451,7 @@ enum DisplayCommand {
     rect: Rect,
     baseline_offset: f32,
     text: Arc<str>,
-    runs: Option<Arc<[ShapedRun]>>,
+    runs: Option<Arc<Vec<ShapedRun>>>,
     style: Arc<ComputedStyle>,
   },
   Replaced {
@@ -2113,12 +2113,11 @@ impl Painter {
         let text_total_start = text_profile_enabled.then(Instant::now);
         let shape_start = text_profile_enabled.then(Instant::now);
         let color = style.color;
-        let shaped_runs: Option<Arc<[ShapedRun]>> = runs.clone().or_else(|| {
-          self
-            .shaper
+        let shaped_runs: Option<Arc<Vec<ShapedRun>>> = runs.clone().or_else(|| {
+          self.shaper
             .shape(&text, &style, &self.font_ctx)
             .ok()
-            .map(Arc::from)
+            .map(Arc::new)
         });
         let shape_ms = shape_start
           .map(|start| start.elapsed().as_secs_f64() * 1000.0)
@@ -2172,7 +2171,7 @@ impl Painter {
         }
         self.paint_text_decoration(
           &style,
-          shaped_runs.as_deref(),
+          shaped_runs.as_deref().map(Vec::as_slice),
           inline_start,
           block_baseline,
           inline_len,
@@ -2180,7 +2179,7 @@ impl Painter {
         );
         self.paint_text_emphasis(
           &style,
-          shaped_runs.as_deref(),
+          shaped_runs.as_deref().map(Vec::as_slice),
           inline_start,
           block_baseline,
           inline_vertical,

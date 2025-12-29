@@ -33,7 +33,7 @@ fn find_scroll_container_id(node: &FragmentNode) -> Option<usize> {
       return Some(id);
     }
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     if let Some(id) = find_scroll_container_id(child) {
       return Some(id);
     }

@@ -40,7 +40,7 @@ fn collect_divs<'a>(node: &'a StyledNode, out: &mut Vec<&'a StyledNode>) {
       out.push(node);
     }
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     collect_divs(child, out);
   }
 }
@@ -74,7 +74,7 @@ fn first_div(styled: &StyledNode) -> StyledNode {
         return Some(node.clone());
       }
     }
-    for child in &node.children {
+    for child in node.children.iter() {
       if let Some(found) = find(child) {
         return Some(found);
       }

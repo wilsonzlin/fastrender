@@ -11,7 +11,7 @@ fn find_inline_svg(node: &BoxNode) -> Option<&ReplacedBox> {
       return Some(replaced);
     }
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     if let Some(found) = find_inline_svg(child) {
       return Some(found);
     }

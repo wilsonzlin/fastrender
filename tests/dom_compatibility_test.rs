@@ -5,7 +5,7 @@ fn find_element<'a>(node: &'a DomNode, tag: &str) -> Option<&'a DomNode> {
     return Some(node);
   }
 
-  for child in &node.children {
+  for child in node.children.iter() {
     if let Some(found) = find_element(child, tag) {
       return Some(found);
     }
@@ -30,7 +30,7 @@ fn collect_slots<'a>(node: &'a DomNode, out: &mut Vec<&'a DomNode>) {
     out.push(node);
   }
 
-  for child in &node.children {
+  for child in node.children.iter() {
     collect_slots(child, out);
   }
 }
@@ -62,7 +62,7 @@ fn collect_text(node: &DomNode, texts: &mut Vec<String>) {
     texts.push(content.clone());
   }
 
-  for child in &node.children {
+  for child in node.children.iter() {
     collect_text(child, texts);
   }
 }

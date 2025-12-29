@@ -7,7 +7,7 @@ fn find_by_id<'a>(node: &'a DomNode, id: &str) -> Option<&'a DomNode> {
   if node.get_attribute_ref("id") == Some(id) {
     return Some(node);
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     if let Some(found) = find_by_id(child, id) {
       return Some(found);
     }
@@ -37,7 +37,7 @@ fn build_id_lookup<'a>(
   if let Some(id) = ids.get(&(node as *const DomNode)) {
     out.insert(*id, node);
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     build_id_lookup(child, ids, out);
   }
 }

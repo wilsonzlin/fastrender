@@ -25,7 +25,7 @@ fn find_by_tag<'a>(node: &'a StyledNode, tag: &str) -> Option<&'a StyledNode> {
       return Some(node);
     }
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     if let Some(found) = find_by_tag(child, tag) {
       return Some(found);
     }

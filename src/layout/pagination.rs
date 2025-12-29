@@ -1203,13 +1203,12 @@ mod tests {
     running_style.display = Display::Block;
     running_style.running_position = Some("header".to_string());
 
-    let text_child =
-      FragmentNode::new_text(Rect::from_xywh(5.0, 6.0, 20.0, 4.0), "Header".into(), 3.0);
+    let text_child = FragmentNode::new_text(Rect::from_xywh(5.0, 6.0, 20.0, 4.0), "Header", 3.0);
     let anchor_snapshot = FragmentNode::new_block(
       Rect::from_xywh(2.0, 2.0, 5.0, 2.0),
       vec![FragmentNode::new_text(
         Rect::from_xywh(1.0, 1.0, 3.0, 1.0),
-        "Anchor".into(),
+        "Anchor",
         0.0,
       )],
     );
