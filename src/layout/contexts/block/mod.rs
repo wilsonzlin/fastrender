@@ -61,7 +61,7 @@ use crate::layout::utils::content_size_from_box_sizing;
 use crate::layout::utils::resolve_length_with_percentage;
 use crate::layout::utils::resolve_length_with_percentage_metrics;
 use crate::layout::utils::resolve_scrollbar_width;
-use crate::render_control::{active_deadline, check_active, with_deadline};
+use crate::render_control::{active_deadline, check_active, check_active_periodic, with_deadline};
 use crate::style::block_axis_is_horizontal;
 use crate::style::block_axis_positive;
 use crate::style::display::Display;
@@ -1208,6 +1208,7 @@ impl BlockFormattingContext {
     constraints: &LayoutConstraints,
     nearest_positioned_cb: &ContainingBlock,
   ) -> Result<(Vec<FragmentNode>, f32, Vec<PositionedCandidate>), LayoutError> {
+    let mut deadline_counter = 0usize;
     let toggles = crate::debug::runtime::runtime_toggles();
     let inline_is_horizontal = inline_axis_is_horizontal(parent.style.writing_mode);
     let inline_space = if inline_is_horizontal {
@@ -1423,7 +1424,8 @@ impl BlockFormattingContext {
                                current_y: &mut f32,
                                content_height: &mut f32,
                                margin_ctx: &mut MarginCollapseContext,
-                               float_ctx_ref: &mut FloatContext|
+                               float_ctx_ref: &mut FloatContext,
+                               deadline_counter: &mut usize|
      -> Result<(), LayoutError> {
       if buffer.is_empty() {
         return Ok(());
@@ -1439,6 +1441,11 @@ impl BlockFormattingContext {
       });
       if has_block || all_whitespace {
         for child in buffer.drain(..) {
+          if let Err(RenderError::Timeout { elapsed, .. }) =
+            check_active_periodic(deadline_counter, 16, RenderStage::Layout)
+          {
+            return Err(LayoutError::Timeout { elapsed });
+          }
           let pending_margin = margin_ctx.consume_pending();
           *current_y += pending_margin;
           let (fragment, next_y) = self.layout_block_child(
@@ -1519,6 +1526,11 @@ impl BlockFormattingContext {
       return result;
     }
     for (child_idx, child) in parent.children.iter().enumerate() {
+      if let Err(RenderError::Timeout { elapsed, .. }) =
+        check_active_periodic(&mut deadline_counter, 16, RenderStage::Layout)
+      {
+        return Err(LayoutError::Timeout { elapsed });
+      }
       if progress_ms > 0 {
         if let Some(cap) = total_cap {
           let current = total_counter.load(std::sync::atomic::Ordering::Relaxed);
@@ -1695,6 +1707,7 @@ impl BlockFormattingContext {
           &mut content_height,
           &mut margin_ctx,
           &mut float_ctx,
+          &mut deadline_counter,
         )?;
 
         // Apply any pending collapsed margin before placing the float
@@ -1899,6 +1912,7 @@ impl BlockFormattingContext {
           &mut content_height,
           &mut margin_ctx,
           &mut float_ctx,
+          &mut deadline_counter,
         )?;
 
         // Apply clearance for in-flow blocks against floats
@@ -1996,6 +2010,7 @@ impl BlockFormattingContext {
             &mut content_height,
             &mut margin_ctx,
             &mut float_ctx,
+            &mut deadline_counter,
           )?;
           let (fragment, next_y) = self.layout_block_child(
             parent,
@@ -2033,6 +2048,7 @@ impl BlockFormattingContext {
       &mut content_height,
       &mut margin_ctx,
       &mut float_ctx,
+      &mut deadline_counter,
     )?;
 
     // Resolve any trailing margins
@@ -2171,6 +2187,7 @@ impl BlockFormattingContext {
     available_height: AvailableSpace,
     nearest_positioned_cb: &ContainingBlock,
   ) -> Result<(Vec<FragmentNode>, f32, Vec<PositionedCandidate>, f32), LayoutError> {
+    let mut deadline_counter = 0usize;
     if children.is_empty() {
       return Ok((Vec::new(), 0.0, Vec::new(), 0.0));
     }
@@ -2313,6 +2330,11 @@ impl BlockFormattingContext {
     let mut fragments = Vec::new();
     let mut fragment_heights = vec![0.0f32; fragment_count];
     for (index, window) in boundaries.windows(2).enumerate() {
+      if let Err(RenderError::Timeout { elapsed, .. }) =
+        check_active_periodic(&mut deadline_counter, 32, RenderStage::Layout)
+      {
+        return Err(LayoutError::Timeout { elapsed });
+      }
       let start = window[0];
       let end = window[1];
       if end <= start {
@@ -2367,6 +2389,11 @@ impl BlockFormattingContext {
 
     let mut positioned_children = Vec::new();
     for mut positioned in flow_positioned {
+      if let Err(RenderError::Timeout { elapsed, .. }) =
+        check_active_periodic(&mut deadline_counter, 32, RenderStage::Layout)
+      {
+        return Err(LayoutError::Timeout { elapsed });
+      }
       if let Some(pos) = positioned.static_position {
         if fragment_count > 0 && !boundaries.is_empty() {
           let block_coord = if axis.block_is_horizontal {
@@ -2412,6 +2439,11 @@ impl BlockFormattingContext {
     };
     let mut set_heights = vec![0.0f32; set_count];
     for (idx, height) in fragment_heights.iter().copied().enumerate() {
+      if let Err(RenderError::Timeout { elapsed, .. }) =
+        check_active_periodic(&mut deadline_counter, 64, RenderStage::Layout)
+      {
+        return Err(LayoutError::Timeout { elapsed });
+      }
       let set = idx / column_count;
       if set < set_heights.len() {
         set_heights[set] = set_heights[set].max(height);
@@ -2422,6 +2454,11 @@ impl BlockFormattingContext {
       let last_set = set_count - 1;
       let mut bottom = 0.0f32;
       for (idx, height) in fragment_heights.iter().copied().enumerate() {
+        if let Err(RenderError::Timeout { elapsed, .. }) =
+          check_active_periodic(&mut deadline_counter, 64, RenderStage::Layout)
+        {
+          return Err(LayoutError::Timeout { elapsed });
+        }
         if idx / column_count == last_set {
           bottom = bottom.max(last_set as f32 * column_height + height);
         }
@@ -2515,8 +2552,14 @@ impl BlockFormattingContext {
     let mut physical_offset = 0.0;
     let mut logical_offset = 0.0;
     let mut idx = 0;
+    let mut deadline_counter = 0usize;
 
     while idx < parent.children.len() {
+      if let Err(RenderError::Timeout { elapsed, .. }) =
+        check_active_periodic(&mut deadline_counter, 16, RenderStage::Layout)
+      {
+        return Err(LayoutError::Timeout { elapsed });
+      }
       let next_span = parent.children[idx..]
         .iter()
         .position(|c| c.style.column_span == ColumnSpan::All)

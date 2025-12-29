@@ -26,7 +26,12 @@
 //! - CSS Tables Module Level 3: <https://www.w3.org/TR/css-tables-3/>
 //! - CSS 2.1 Section 17.5: <https://www.w3.org/TR/CSS21/tables.html#width-layout>
 
+use crate::error::{RenderError, RenderStage};
+use crate::layout::formatting_context::LayoutError;
+use crate::render_control::check_active_periodic;
+use std::cell::Cell;
 use std::fmt;
+use std::time::Duration;
 
 /// Constraints for a single table column
 ///
@@ -379,6 +384,9 @@ pub struct ColumnDistributor {
 
   /// Minimum column width (for empty columns)
   min_column_width: f32,
+
+  /// Recorded layout timeout, if any checks exceeded the render deadline.
+  timeout_elapsed: Cell<Option<Duration>>,
 }
 
 impl ColumnDistributor {
@@ -399,6 +407,7 @@ impl ColumnDistributor {
     Self {
       mode,
       min_column_width: 0.0,
+      timeout_elapsed: Cell::new(None),
     }
   }
 
@@ -417,6 +426,33 @@ impl ColumnDistributor {
   pub fn with_min_column_width(mut self, width: f32) -> Self {
     self.min_column_width = width;
     self
+  }
+
+  fn record_timeout(&self, elapsed: Duration) {
+    let existing = self.timeout_elapsed.get();
+    if existing.map_or(true, |current| elapsed < current) {
+      self.timeout_elapsed.set(Some(elapsed));
+    }
+  }
+
+  pub fn take_timeout_error(&self) -> Option<LayoutError> {
+    self
+      .timeout_elapsed
+      .take()
+      .map(|elapsed| LayoutError::Timeout { elapsed })
+  }
+
+  fn check_deadline(&self, counter: &mut usize) -> bool {
+    if self.timeout_elapsed.get().is_some() {
+      return true;
+    }
+    if let Err(RenderError::Timeout { elapsed, .. }) =
+      check_active_periodic(counter, 64, RenderStage::Layout)
+    {
+      self.record_timeout(elapsed);
+      return true;
+    }
+    false
   }
 
   /// Distributes available width across columns
@@ -476,6 +512,7 @@ impl ColumnDistributor {
     columns: &[ColumnConstraints],
     available_width: f32,
   ) -> ColumnWidthDistributionResult {
+    let mut deadline_counter = 0usize;
     let mut widths = vec![0.0; columns.len()];
     let mut remaining_width = available_width;
     let mut flexible_indices = Vec::new();
@@ -483,6 +520,9 @@ impl ColumnDistributor {
 
     // Phase 1: Apply fixed widths
     for (i, col) in columns.iter().enumerate() {
+      if self.check_deadline(&mut deadline_counter) {
+        return ColumnWidthDistributionResult::new(vec![]);
+      }
       if let Some(fixed) = col.fixed_width {
         let mut width = fixed.max(col.min_width).max(self.min_column_width);
         if col.has_max_cap && col.max_width.is_finite() {
@@ -500,6 +540,9 @@ impl ColumnDistributor {
     // Phase 2: Allocate percentage columns. Percentages are relative to the table width and
     // can overrun the available width; the table expands when columns over-commit.
     for (idx, pct) in percent_indices {
+      if self.check_deadline(&mut deadline_counter) {
+        return ColumnWidthDistributionResult::new(vec![]);
+      }
       let col = &columns[idx];
       let raw = (pct / 100.0) * available_width;
       let mut width = raw.max(col.min_width).max(self.min_column_width);
@@ -516,6 +559,9 @@ impl ColumnDistributor {
       if remaining_width > 0.0 {
         let per_column = remaining_width / flexible_indices.len() as f32;
         for (i, col) in columns.iter().enumerate() {
+          if self.check_deadline(&mut deadline_counter) {
+            return ColumnWidthDistributionResult::new(vec![]);
+          }
           if col.fixed_width.is_none() && col.percentage.is_none() {
             widths[i] = per_column
               .max(col.min_width)
@@ -525,6 +571,9 @@ impl ColumnDistributor {
         }
       } else {
         for &idx in &flexible_indices {
+          if self.check_deadline(&mut deadline_counter) {
+            return ColumnWidthDistributionResult::new(vec![]);
+          }
           let col = &columns[idx];
           widths[idx] = col
             .min_width
@@ -566,6 +615,10 @@ impl ColumnDistributor {
     columns: &[ColumnConstraints],
     available_width: f32,
   ) -> ColumnWidthDistributionResult {
+    let mut deadline_counter = 0usize;
+    if self.check_deadline(&mut deadline_counter) {
+      return ColumnWidthDistributionResult::new(vec![]);
+    }
     // Step 1: Compute sum of min and max widths
     let total_min: f32 = columns
       .iter()
@@ -611,19 +664,27 @@ impl ColumnDistributor {
 
   /// Distribute at minimum widths
   fn distribute_at_minimum(&self, columns: &[ColumnConstraints]) -> ColumnWidthDistributionResult {
-    let widths: Vec<f32> = columns
-      .iter()
-      .map(|c| c.min_width.max(self.min_column_width))
-      .collect();
+    let mut widths = Vec::with_capacity(columns.len());
+    let mut deadline_counter = 0usize;
+    for col in columns {
+      if self.check_deadline(&mut deadline_counter) {
+        return ColumnWidthDistributionResult::new(Vec::new());
+      }
+      widths.push(col.min_width.max(self.min_column_width));
+    }
     ColumnWidthDistributionResult::new(widths)
   }
 
   /// Distribute at maximum widths
   fn distribute_at_maximum(&self, columns: &[ColumnConstraints]) -> ColumnWidthDistributionResult {
-    let widths: Vec<f32> = columns
-      .iter()
-      .map(|c| c.max_width.max(self.min_column_width))
-      .collect();
+    let mut widths = Vec::with_capacity(columns.len());
+    let mut deadline_counter = 0usize;
+    for col in columns {
+      if self.check_deadline(&mut deadline_counter) {
+        return ColumnWidthDistributionResult::new(Vec::new());
+      }
+      widths.push(col.max_width.max(self.min_column_width));
+    }
     ColumnWidthDistributionResult::new(widths)
   }
 
@@ -633,10 +694,14 @@ impl ColumnDistributor {
     columns: &[ColumnConstraints],
     available_width: f32,
   ) -> ColumnWidthDistributionResult {
-    let widths: Vec<f32> = columns
-      .iter()
-      .map(|c| c.min_width.max(self.min_column_width))
-      .collect();
+    let mut widths = Vec::with_capacity(columns.len());
+    let mut deadline_counter = 0usize;
+    for col in columns {
+      if self.check_deadline(&mut deadline_counter) {
+        return ColumnWidthDistributionResult::new(Vec::new());
+      }
+      widths.push(col.min_width.max(self.min_column_width));
+    }
     let total_min: f32 = widths.iter().sum();
 
     ColumnWidthDistributionResult {
@@ -655,6 +720,7 @@ impl ColumnDistributor {
     _total_min: f32,
     _total_max: f32,
   ) -> ColumnWidthDistributionResult {
+    let mut deadline_counter = 0usize;
     // First pass: Apply fixed and percentage widths
     let mut widths = vec![0.0; columns.len()];
     let mut remaining_width = available_width;
@@ -662,6 +728,9 @@ impl ColumnDistributor {
     let mut percent_indices = Vec::new();
 
     for (i, col) in columns.iter().enumerate() {
+      if self.check_deadline(&mut deadline_counter) {
+        return ColumnWidthDistributionResult::new(vec![]);
+      }
       if let Some(fixed) = col.fixed_width {
         let width = fixed.max(col.min_width).max(self.min_column_width);
         widths[i] = width;
@@ -677,6 +746,9 @@ impl ColumnDistributor {
     // remaining budget; over-constraint is reported to the caller instead of scaling them down.
     if !percent_indices.is_empty() {
       for (idx, pct) in percent_indices {
+        if self.check_deadline(&mut deadline_counter) {
+          return ColumnWidthDistributionResult::new(vec![]);
+        }
         let col = &columns[idx];
         let raw = (pct / 100.0) * available_width;
         let min_bound = col.min_width.max(self.min_column_width);
@@ -694,7 +766,16 @@ impl ColumnDistributor {
 
     // Second pass: Distribute to flexible columns
     if !flexible_indices.is_empty() {
-      self.distribute_to_flexible(columns, &mut widths, &flexible_indices, remaining_width);
+      self.distribute_to_flexible(
+        columns,
+        &mut widths,
+        &flexible_indices,
+        remaining_width,
+        &mut deadline_counter,
+      );
+      if self.timeout_elapsed.get().is_some() {
+        return ColumnWidthDistributionResult::new(vec![]);
+      }
     }
 
     let total: f32 = widths.iter().sum();
@@ -719,28 +800,39 @@ impl ColumnDistributor {
     widths: &mut [f32],
     flexible_indices: &[usize],
     remaining_width: f32,
+    deadline_counter: &mut usize,
   ) {
+    if self.check_deadline(deadline_counter) {
+      return;
+    }
     if flexible_indices.is_empty() || remaining_width <= 0.0 {
       // Assign minimums to flexible columns
       for &i in flexible_indices {
+        if self.check_deadline(deadline_counter) {
+          return;
+        }
         widths[i] = columns[i].min_width.max(self.min_column_width);
       }
       return;
     }
 
     // Compute flexibility for proportional distribution
-    let flexible_min: f32 = flexible_indices
-      .iter()
-      .map(|&i| columns[i].min_width.max(self.min_column_width))
-      .sum();
-    let flexible_max: f32 = flexible_indices
-      .iter()
-      .map(|&i| columns[i].max_width.max(self.min_column_width))
-      .sum();
+    let mut flexible_min = 0.0;
+    let mut flexible_max = 0.0;
+    for &i in flexible_indices {
+      if self.check_deadline(deadline_counter) {
+        return;
+      }
+      flexible_min += columns[i].min_width.max(self.min_column_width);
+      flexible_max += columns[i].max_width.max(self.min_column_width);
+    }
 
     if remaining_width >= flexible_max {
       // Enough space for all flexible columns at max
       for &i in flexible_indices {
+        if self.check_deadline(deadline_counter) {
+          return;
+        }
         widths[i] = columns[i].max_width.max(self.min_column_width);
       }
       return;
@@ -749,6 +841,9 @@ impl ColumnDistributor {
     if remaining_width <= flexible_min {
       // Not enough for minimums - keep mins and let caller mark over-constraint.
       for &i in flexible_indices {
+        if self.check_deadline(deadline_counter) {
+          return;
+        }
         widths[i] = columns[i].min_width.max(self.min_column_width);
       }
       return;
@@ -776,6 +871,9 @@ impl ColumnDistributor {
     // unbounded columns.
     if finite_flex_total > 0.0 {
       for &i in flexible_indices {
+        if self.check_deadline(deadline_counter) {
+          return;
+        }
         let range = columns[i].flexibility_range();
         if !range.is_finite() {
           continue;
@@ -794,12 +892,18 @@ impl ColumnDistributor {
       if !infinite_indices.is_empty() {
         let per = remaining_excess / infinite_indices.len() as f32;
         for idx in infinite_indices {
+          if self.check_deadline(deadline_counter) {
+            return;
+          }
           widths[idx] += per;
         }
       } else if finite_flex_total == 0.0 {
         // No range information at all (min == max for every column); split evenly.
         let per_column = remaining_width / flexible_indices.len() as f32;
         for &i in flexible_indices {
+          if self.check_deadline(deadline_counter) {
+            return;
+          }
           widths[i] = per_column;
         }
       }

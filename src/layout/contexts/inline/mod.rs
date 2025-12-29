@@ -65,7 +65,7 @@ use crate::layout::utils::border_size_from_box_sizing;
 use crate::layout::utils::compute_replaced_size;
 use crate::layout::utils::resolve_font_relative_length;
 use crate::layout::utils::resolve_length_with_percentage_metrics;
-use crate::render_control::check_active;
+use crate::render_control::{check_active, check_active_periodic};
 use crate::style::display::Display;
 use crate::style::display::FormattingContextType;
 use crate::style::types::Direction;
@@ -465,6 +465,7 @@ impl InlineFormattingContext {
     let mut pending_space: Option<PendingSpace> = None;
     let mut segments = Vec::new();
     let mut current_items: Vec<InlineItem> = Vec::new();
+    let mut deadline_counter = 0usize;
 
     let combinable_indices: Vec<usize> = box_node
       .children
@@ -487,6 +488,11 @@ impl InlineFormattingContext {
     let last_combinable = combinable_indices.last().copied();
 
     for (idx, child) in box_node.children.iter().enumerate() {
+      if let Err(RenderError::Timeout { elapsed, .. }) =
+        check_active_periodic(&mut deadline_counter, 32, RenderStage::Layout)
+      {
+        return Err(LayoutError::Timeout { elapsed });
+      }
       if let Some(space) = pending_space.take() {
         let space_item = self.create_collapsed_space_item(&space.style, space.allow_soft_wrap)?;
         current_items.push(space_item);
@@ -1132,6 +1138,7 @@ impl InlineFormattingContext {
       }
     }
     let mut items = Vec::new();
+    let mut deadline_counter = 0usize;
 
     let combinable_indices: Vec<usize> = box_node
       .children
@@ -1154,6 +1161,11 @@ impl InlineFormattingContext {
     let last_combinable = combinable_indices.last().copied();
 
     for (idx, child) in box_node.children.iter().enumerate() {
+      if let Err(RenderError::Timeout { elapsed, .. }) =
+        check_active_periodic(&mut deadline_counter, 32, RenderStage::Layout)
+      {
+        return Err(LayoutError::Timeout { elapsed });
+      }
       if let Some(space) = pending_space.take() {
         let space_item = self.create_collapsed_space_item(&space.style, space.allow_soft_wrap)?;
         items.push(space_item);
@@ -7363,6 +7375,7 @@ impl InlineFormattingContext {
     let mut local_float_ctx: Option<FloatContext> = None;
     let mut flow_order: Vec<FlowChunk> = Vec::new();
     let mut block_run_max_width: f32 = 0.0;
+    let mut deadline_counter = 0usize;
 
     let flush_pending = |pending: &mut Vec<InlineItem>,
                          use_first_line_width: &mut bool,
@@ -7430,9 +7443,19 @@ impl InlineFormattingContext {
     };
 
     for segment in segments {
+      if let Err(RenderError::Timeout { elapsed, .. }) =
+        check_active_periodic(&mut deadline_counter, 16, RenderStage::Layout)
+      {
+        return Err(LayoutError::Timeout { elapsed });
+      }
       match segment {
         InlineFlowSegment::InlineItems(seg_items) => {
           for item in seg_items {
+            if let Err(RenderError::Timeout { elapsed, .. }) =
+              check_active_periodic(&mut deadline_counter, 16, RenderStage::Layout)
+            {
+              return Err(LayoutError::Timeout { elapsed });
+            }
             if let InlineItem::Floating(floating) = item {
               if float_ctx.is_none() && local_float_ctx.is_none() {
                 local_float_ctx = Some(FloatContext::new(available_inline.max(0.0)));
@@ -7737,6 +7760,11 @@ impl InlineFormattingContext {
 
     let mut merged_children = Vec::new();
     for chunk in flow_order {
+      if let Err(RenderError::Timeout { elapsed, .. }) =
+        check_active_periodic(&mut deadline_counter, 32, RenderStage::Layout)
+      {
+        return Err(LayoutError::Timeout { elapsed });
+      }
       match chunk {
         FlowChunk::Inline { start, end } => {
           merged_children.extend(line_fragments[start..end].iter().cloned());
@@ -7757,6 +7785,11 @@ impl InlineFormattingContext {
     // Create containing fragment
     if block_shift.abs() > f32::EPSILON {
       for child in &mut merged_children {
+        if let Err(RenderError::Timeout { elapsed, .. }) =
+          check_active_periodic(&mut deadline_counter, 32, RenderStage::Layout)
+        {
+          return Err(LayoutError::Timeout { elapsed });
+        }
         *child = child.translate_subtree_absolute(Point::new(block_shift, 0.0));
       }
     }

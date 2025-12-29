@@ -27,6 +27,7 @@
 //! - HTML 5.2 Section 4.9: Tabular data
 
 use crate::debug::runtime;
+use crate::error::{RenderError, RenderStage};
 use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::layout::absolute_positioning::resolve_positioned_style;
@@ -72,12 +73,24 @@ use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
 use crate::tree::fragment_tree::TableCollapsedBorders;
 use crate::tree::table_fixup::TableStructureFixer;
-use crate::{render_control::active_deadline, render_control::with_deadline};
+use crate::{
+  render_control::active_deadline, render_control::check_active_periodic,
+  render_control::with_deadline,
+};
 use rayon::prelude::*;
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+
+fn check_layout_deadline(counter: &mut usize) -> Result<(), LayoutError> {
+  if let Err(RenderError::Timeout { elapsed, .. }) =
+    check_active_periodic(counter, 64, RenderStage::Layout)
+  {
+    return Err(LayoutError::Timeout { elapsed });
+  }
+  Ok(())
+}
 
 // ============================================================================
 // Table Structure Types
@@ -4131,6 +4144,7 @@ impl FormattingContext for TableFormattingContext {
     constraints: &LayoutConstraints,
   ) -> Result<FragmentNode, LayoutError> {
     let _profile = layout_timer(LayoutKind::Table);
+    let mut deadline_counter = 0usize;
     let has_running_children_for_cache = box_node
       .children
       .iter()
@@ -4151,6 +4165,7 @@ impl FormattingContext for TableFormattingContext {
     let mut positioned_children: Vec<&BoxNode> = Vec::new();
     let mut running_children: Vec<(usize, &BoxNode)> = Vec::new();
     for (child_idx, child) in table_box.children.iter().enumerate() {
+      check_layout_deadline(&mut deadline_counter)?;
       if child.style.running_position.is_some() {
         running_children.push((child_idx, child));
         continue;
@@ -4215,6 +4230,7 @@ impl FormattingContext for TableFormattingContext {
       vec![None; max_source_row + 1]
     };
     for row in &structure.rows {
+      check_layout_deadline(&mut deadline_counter)?;
       if row.source_index >= source_row_to_visible.len() {
         source_row_to_visible.resize(row.source_index + 1, None);
       }
@@ -4233,6 +4249,7 @@ impl FormattingContext for TableFormattingContext {
       vec![None; max_source_col + 1]
     };
     for col in &structure.columns {
+      check_layout_deadline(&mut deadline_counter)?;
       if col.source_index >= source_col_to_visible.len() {
         source_col_to_visible.resize(col.source_index + 1, None);
       }
@@ -4243,6 +4260,7 @@ impl FormattingContext for TableFormattingContext {
       self.collect_row_group_constraints(table_box, &source_row_to_visible);
     let mut row_to_group: Vec<Option<usize>> = vec![None; structure.row_count];
     for (idx, group) in row_group_constraints.iter().enumerate() {
+      check_layout_deadline(&mut deadline_counter)?;
       for row in group.start..group.end {
         if let Some(slot) = row_to_group.get_mut(row) {
           *slot = Some(idx);
@@ -4592,6 +4610,9 @@ impl FormattingContext for TableFormattingContext {
     }
     let distributor = ColumnDistributor::new(mode).with_min_column_width(0.0);
     let distribution = distributor.distribute(&column_constraints, available_content);
+    if let Some(err) = distributor.take_timeout_error() {
+      return Err(err);
+    }
     let mut col_widths = if distribution.widths.len() == structure.column_count {
       distribution.widths
     } else {
@@ -4686,6 +4707,7 @@ impl FormattingContext for TableFormattingContext {
     let mut col_prefix = Vec::with_capacity(col_widths.len() + 1);
     col_prefix.push(0.0);
     for width in &col_widths {
+      check_layout_deadline(&mut deadline_counter)?;
       let next = col_prefix.last().copied().unwrap_or(0.0) + *width;
       col_prefix.push(next);
     }
@@ -4787,6 +4809,7 @@ impl FormattingContext for TableFormattingContext {
     let mut laid_out_cells = Vec::new();
     let mut failed_cells = 0usize;
     for outcome in outcomes {
+      check_layout_deadline(&mut deadline_counter)?;
       match outcome {
         CellOutcome::Success(cell) => laid_out_cells.push(cell),
         CellOutcome::Failed => failed_cells += 1,
@@ -4797,6 +4820,7 @@ impl FormattingContext for TableFormattingContext {
     // Compute row heights, accounting for rowspans and vertical spacing.
     let mut row_heights = vec![0.0f32; structure.row_count];
     for (idx, row) in structure.rows.iter().enumerate() {
+      check_layout_deadline(&mut deadline_counter)?;
       if let Some(slot) = row_heights.get_mut(idx) {
         *slot = row.min_height.max(*slot);
       }
