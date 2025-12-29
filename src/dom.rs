@@ -1202,13 +1202,37 @@ fn input_range_bounds(node: &DomNode) -> Option<(f64, f64)> {
 fn input_range_value(node: &DomNode) -> Option<f64> {
   let (min, max) = input_range_bounds(node)?;
 
-  // TODO: Align to the step attribute like browsers once step support is implemented.
   let resolved = node
     .get_attribute_ref("value")
     .and_then(parse_finite_number)
     .unwrap_or_else(|| (min + max) / 2.0);
 
-  Some(resolved.clamp(min, max))
+  let clamped = resolved.clamp(min, max);
+
+  let step_attr = node.get_attribute_ref("step");
+  if matches!(step_attr, Some(step) if step.trim().eq_ignore_ascii_case("any")) {
+    return Some(clamped);
+  }
+
+  let step = step_attr
+    .and_then(parse_finite_number)
+    .filter(|step| *step > 0.0)
+    .unwrap_or(1.0);
+
+  // The allowed value step base for range inputs is the minimum value (defaulting to zero).
+  let step_base = min;
+  let steps_to_value = ((clamped - step_base) / step).round();
+  let mut aligned = step_base + steps_to_value * step;
+
+  let max_aligned = step_base + ((max - step_base) / step).floor() * step;
+  if aligned > max_aligned {
+    aligned = max_aligned;
+  }
+  if aligned < step_base {
+    aligned = step_base;
+  }
+
+  Some(aligned.clamp(min, max))
 }
 
 /// Wrapper for DomNode that implements Element trait for selector matching
