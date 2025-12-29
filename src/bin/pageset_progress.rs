@@ -513,7 +513,7 @@ impl From<ProgressStatusArg> for ProgressStatus {
   }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 struct StageBuckets {
   fetch: f64,
   css: f64,
@@ -971,6 +971,10 @@ fn sync(args: SyncArgs) -> io::Result<()> {
   Ok(())
 }
 
+/// Collapse detailed render diagnostics timings into coarse stage buckets used by progress JSON.
+///
+/// - Text shaping is grouped under `layout` because glyph positioning is part of line building.
+/// - Text rasterization and final encode time are grouped under `paint` to capture rendering/output costs.
 fn buckets_from_diagnostics(diag: &RenderDiagnostics) -> StageBuckets {
   let Some(stats) = diag.stats.as_ref() else {
     return StageBuckets::default();
@@ -979,10 +983,12 @@ fn buckets_from_diagnostics(diag: &RenderDiagnostics) -> StageBuckets {
   let fetch = t.html_decode_ms.unwrap_or(0.0) + t.dom_parse_ms.unwrap_or(0.0);
   let css = t.css_inlining_ms.unwrap_or(0.0) + t.css_parse_ms.unwrap_or(0.0);
   let cascade = t.cascade_ms.unwrap_or(0.0) + t.box_tree_ms.unwrap_or(0.0);
-  let layout = t.layout_ms.unwrap_or(0.0);
+  let layout = t.layout_ms.unwrap_or(0.0) + t.text_shape_ms.unwrap_or(0.0);
   let paint = t.paint_build_ms.unwrap_or(0.0)
     + t.paint_optimize_ms.unwrap_or(0.0)
-    + t.paint_rasterize_ms.unwrap_or(0.0);
+    + t.paint_rasterize_ms.unwrap_or(0.0)
+    + t.text_rasterize_ms.unwrap_or(0.0)
+    + t.encode_ms.unwrap_or(0.0);
   StageBuckets {
     fetch,
     css,
@@ -1212,6 +1218,9 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
       progress.status = ProgressStatus::Ok;
       progress.stages_ms = buckets_from_diagnostics(&result.diagnostics);
       apply_diagnostics_to_progress(&mut progress, &result.diagnostics);
+      if result.diagnostics.stats.is_none() {
+        log.push_str("Render stats unavailable; stages_ms left at 0ms.\n");
+      }
       progress.hotspot = guess_hotspot(&progress.stages_ms).to_string();
       progress.diagnostics = result
         .diagnostics
@@ -1317,12 +1326,21 @@ fn append_stage_summary(log: &mut String, diagnostics: &RenderDiagnostics) {
   log.push_str(&format!("  cascade: {}\n", fmt(t.cascade_ms)));
   log.push_str(&format!("  box_tree: {}\n", fmt(t.box_tree_ms)));
   log.push_str(&format!("  layout: {}\n", fmt(t.layout_ms)));
+  log.push_str(&format!(
+    "  text_shape: {}\n",
+    fmt(t.text_shape_ms)
+  ));
   log.push_str(&format!("  paint_build: {}\n", fmt(t.paint_build_ms)));
   log.push_str(&format!("  paint_optimize: {}\n", fmt(t.paint_optimize_ms)));
   log.push_str(&format!(
     "  paint_rasterize: {}\n",
     fmt(t.paint_rasterize_ms)
   ));
+  log.push_str(&format!(
+    "  text_rasterize: {}\n",
+    fmt(t.text_rasterize_ms)
+  ));
+  log.push_str(&format!("  encode: {}\n", fmt(t.encode_ms)));
 }
 
 fn panic_to_string(panic: Box<dyn std::any::Any + Send + 'static>) -> String {
@@ -3008,6 +3026,7 @@ fn worker(args: WorkerArgs) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use fastrender::api::RenderStageTimings;
   use std::collections::HashSet;
   use std::fs;
   use std::io;
@@ -3086,6 +3105,51 @@ mod tests {
       .filter_map(|e| e.ok())
       .collect();
     assert_eq!(remaining.len(), 1);
+  }
+
+  #[test]
+  fn buckets_from_diagnostics_include_text_and_encode_timings() {
+    let timings = RenderStageTimings {
+      html_decode_ms: Some(1.0),
+      dom_parse_ms: Some(2.0),
+      css_inlining_ms: Some(3.0),
+      css_parse_ms: Some(4.0),
+      cascade_ms: Some(5.0),
+      box_tree_ms: Some(6.0),
+      layout_ms: Some(7.0),
+      text_shape_ms: Some(8.0),
+      paint_build_ms: Some(9.0),
+      paint_optimize_ms: Some(10.0),
+      paint_rasterize_ms: Some(11.0),
+      text_rasterize_ms: Some(12.0),
+      encode_ms: Some(13.0),
+      ..RenderStageTimings::default()
+    };
+    let diag = RenderDiagnostics {
+      stats: Some(RenderStats {
+        timings,
+        ..RenderStats::default()
+      }),
+      ..RenderDiagnostics::default()
+    };
+    let buckets = buckets_from_diagnostics(&diag);
+    assert_eq!(buckets.fetch, 3.0);
+    assert_eq!(buckets.css, 7.0);
+    assert_eq!(buckets.cascade, 11.0);
+    assert_eq!(buckets.layout, 15.0);
+    assert_eq!(buckets.paint, 55.0);
+  }
+
+  #[test]
+  fn hotspot_inference_prefers_largest_bucket() {
+    let buckets = StageBuckets {
+      fetch: 5.0,
+      css: 1.0,
+      cascade: 2.0,
+      layout: 3.0,
+      paint: 4.0,
+    };
+    assert_eq!(guess_hotspot(&buckets), "fetch");
   }
 
   #[test]
