@@ -38,7 +38,7 @@ use crate::layout::formatting_context::layout_cache_store;
 use crate::layout::formatting_context::FormattingContext;
 use crate::layout::formatting_context::IntrinsicSizingMode;
 use crate::layout::formatting_context::LayoutError;
-use crate::layout::fragment_clone_profile::{self, CloneSite, CloneStats};
+use crate::layout::fragment_clone_profile::{self, CloneSite};
 use crate::layout::profile::layout_timer;
 use crate::layout::profile::LayoutKind;
 use crate::layout::taffy_integration::{record_taffy_invocation, TaffyAdapterKind};
@@ -184,36 +184,6 @@ fn record_measure_layout_call() {
 
 #[cfg(not(test))]
 fn record_measure_layout_call() {}
-
-fn count_fragment_stats(fragment: &FragmentNode, stats: &mut CloneStats) {
-  stats.nodes += 1;
-  match &fragment.content {
-    FragmentContent::Text { text, shaped, .. } => {
-      stats.text_fragments += 1;
-      stats.text_bytes += text.len() as u64;
-      if shaped.is_some() {
-        stats.shaped_texts += 1;
-      }
-    }
-    FragmentContent::RunningAnchor { snapshot, .. } => {
-      count_fragment_stats(snapshot, stats);
-    }
-    _ => {}
-  }
-  for child in fragment.children.iter() {
-    count_fragment_stats(child, stats);
-  }
-}
-
-fn record_fragment_clone(site: CloneSite, fragment: &FragmentNode) {
-  if !fragment_clone_profile::fragment_clone_profile_enabled() {
-    return;
-  }
-  let mut stats = CloneStats::default();
-  count_fragment_stats(fragment, &mut stats);
-  fragment_clone_profile::record_fragment_clone(site, &stats);
-}
-
 fn constraints_from_taffy(
   viewport_size: crate::geometry::Size,
   known: taffy::geometry::Size<Option<f32>>,
@@ -1296,6 +1266,22 @@ impl GridFormattingContext {
     }
   }
 
+  fn take_matching_measured_fragment(
+    measured_fragments: &Rc<RefCell<HashMap<MeasureKey, FragmentNode>>>,
+    keys: &[MeasureKey],
+    width: f32,
+    height: f32,
+  ) -> Option<FragmentNode> {
+    let mut measured = measured_fragments.borrow_mut();
+    let matched_key = keys.iter().copied().find(|key| {
+      measured.get(key).map_or(false, |fragment| {
+        (fragment.bounds.width() - width).abs() < 0.1
+          && (fragment.bounds.height() - height).abs() < 0.1
+      })
+    })?;
+    measured.remove(&matched_key)
+  }
+
   /// Converts Taffy layout results to FragmentNode tree
   fn convert_to_fragments(
     &self,
@@ -1303,7 +1289,7 @@ impl GridFormattingContext {
     node_id: TaffyNodeId,
     root_id: TaffyNodeId,
     constraints: &LayoutConstraints,
-    measured_fragments: &HashMap<MeasureKey, FragmentNode>,
+    measured_fragments: &Rc<RefCell<HashMap<MeasureKey, FragmentNode>>>,
     measured_node_keys: &HashMap<TaffyNodeId, Vec<MeasureKey>>,
     positioned_children: &HashMap<TaffyNodeId, Vec<BoxNode>>,
   ) -> Result<FragmentNode, LayoutError> {
@@ -1368,21 +1354,19 @@ impl GridFormattingContext {
       }
 
       if let Some(keys) = measured_node_keys.get(&node_id) {
-        for key in keys {
-          if let Some(measured) = measured_fragments.get(key) {
-            if (measured.bounds.width() - bounds.width()).abs() < 0.1
-              && (measured.bounds.height() - bounds.height()).abs() < 0.1
-            {
-              record_fragment_clone(CloneSite::GridMeasureReuse, measured);
-              let mut reused = measured.clone();
-              debug_assert!(
-                reused.bounds.x().abs() < 0.01 && reused.bounds.y().abs() < 0.01,
-                "measured fragments should be normalized to the origin",
-              );
-              translate_fragment_tree(&mut reused, Point::new(bounds.x(), bounds.y()));
-              return Ok(reused);
-            }
-          }
+        if let Some(mut reused) = Self::take_matching_measured_fragment(
+          measured_fragments,
+          keys,
+          bounds.width(),
+          bounds.height(),
+        ) {
+          fragment_clone_profile::record_fragment_reuse_without_clone(CloneSite::GridMeasureReuse);
+          debug_assert!(
+            reused.bounds.x().abs() < 0.01 && reused.bounds.y().abs() < 0.01,
+            "measured fragments should be normalized to the origin",
+          );
+          translate_fragment_tree(&mut reused, Point::new(bounds.x(), bounds.y()));
+          return Ok(reused);
         }
       }
 
@@ -2726,7 +2710,6 @@ impl FormattingContext for GridFormattingContext {
       )
       .map_err(|e| LayoutError::MissingContext(format!("Taffy compute error: {:?}", e)))?;
 
-    let measured_fragments = measured_fragments.borrow();
     let measured_node_keys = measured_node_keys.borrow();
 
     if let Some(start) = grid_trace_start {
@@ -3035,6 +3018,7 @@ impl FormattingContext for GridFormattingContext {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::debug::runtime;
   use crate::style::display::FormattingContextType;
   use crate::style::types::AlignItems;
   use crate::style::types::AspectRatio;
@@ -3043,6 +3027,7 @@ mod tests {
   use crate::style::types::Overflow;
   use crate::style::types::ScrollbarWidth;
   use crate::style::types::WritingMode;
+  use std::collections::HashMap;
   use std::sync::Arc;
 
   fn make_grid_style() -> Arc<ComputedStyle> {
@@ -3355,6 +3340,228 @@ mod tests {
     let fragment = fc.layout(&grid, &constraints).unwrap();
 
     assert_eq!(fragment.children.len(), 3);
+  }
+
+  #[test]
+  fn measured_fragments_are_reused_without_cloning() {
+    runtime::with_runtime_toggles(
+      Arc::new(runtime::RuntimeToggles::from_map(HashMap::from([(
+        "FASTR_PROFILE_FRAGMENT_CLONES".to_string(),
+        "1".to_string(),
+      )]))),
+      || {
+        fragment_clone_profile::reset_fragment_clone_profile();
+
+        let fc = GridFormattingContext::new();
+
+        let mut item_style = ComputedStyle::default();
+        item_style.font_size = 12.0;
+        item_style.grid_column_start = 2;
+        let item_style = Arc::new(item_style);
+        let text_child = BoxNode::new_text(item_style.clone(), "reuse-me".to_string());
+        let mut item = BoxNode::new_block(
+          item_style.clone(),
+          FormattingContextType::Inline,
+          vec![text_child],
+        );
+        item.id = 2;
+
+        let mut grid_style = ComputedStyle::default();
+        grid_style.display = CssDisplay::Grid;
+        grid_style.grid_template_columns =
+          vec![GridTrack::Length(Length::px(50.0)), GridTrack::Auto];
+        let grid_style = Arc::new(grid_style);
+        let mut grid = BoxNode::new_block(grid_style, FormattingContextType::Grid, vec![item]);
+        grid.id = 1;
+
+        let constraints = LayoutConstraints::definite(180.0, 100.0);
+
+        let mut taffy: TaffyTree<*const BoxNode> = TaffyTree::new();
+        let mut positioned_children_map: HashMap<TaffyNodeId, Vec<BoxNode>> = HashMap::new();
+        let in_flow_children: Vec<&BoxNode> = grid.children.iter().collect();
+        let root_id = fc
+          .build_taffy_tree_children(
+            &mut taffy,
+            &grid,
+            &in_flow_children,
+            &mut positioned_children_map,
+          )
+          .expect("build taffy tree");
+
+        let measure_cache: Rc<RefCell<HashMap<MeasureKey, taffy::geometry::Size<f32>>>> =
+          Rc::new(RefCell::new(HashMap::new()));
+        let measured_fragments: Rc<RefCell<HashMap<MeasureKey, FragmentNode>>> =
+          Rc::new(RefCell::new(HashMap::new()));
+        let measured_node_keys: Rc<RefCell<HashMap<TaffyNodeId, Vec<MeasureKey>>>> =
+          Rc::new(RefCell::new(HashMap::new()));
+
+        let available_space = taffy::geometry::Size {
+          width: taffy::style::AvailableSpace::Definite(constraints.width().unwrap()),
+          height: taffy::style::AvailableSpace::Definite(constraints.height().unwrap()),
+        };
+
+        let factory = crate::layout::contexts::factory::FormattingContextFactory::
+          with_font_context_viewport_and_cb(
+            fc.font_context.clone(),
+            fc.viewport_size,
+            fc.nearest_positioned_cb,
+          );
+        let viewport_size = fc.viewport_size;
+        let parent_inline_base = constraints.inline_percentage_base;
+        let cache = measure_cache.clone();
+        let measured = measured_fragments.clone();
+        let measured_keys = measured_node_keys.clone();
+        let this = fc.clone();
+        taffy
+          .compute_layout_with_measure(
+            root_id,
+            available_space,
+            move |known_dimensions,
+                  available_space,
+                  node_id,
+                  node_context,
+                  _style: &taffy::style::Style| {
+              if node_id == root_id {
+                let fallback_size =
+                  |known: Option<f32>, avail_dim: taffy::style::AvailableSpace| {
+                    known.unwrap_or(match avail_dim {
+                      taffy::style::AvailableSpace::Definite(v) => v,
+                      _ => 0.0,
+                    })
+                  };
+                return taffy::geometry::Size {
+                  width: fallback_size(known_dimensions.width, available_space.width),
+                  height: fallback_size(known_dimensions.height, available_space.height),
+                };
+              }
+
+              let Some(node_ptr) = node_context.as_ref().map(|p| **p) else {
+                return taffy::geometry::Size::ZERO;
+              };
+              let box_node = unsafe { &*node_ptr };
+
+              let key = MeasureKey::new(node_ptr, known_dimensions, available_space);
+              if let Some(size) = cache.borrow().get(&key) {
+                return *size;
+              }
+              let fc_type = box_node
+                .formatting_context()
+                .unwrap_or(FormattingContextType::Block);
+              let fc = factory.create(fc_type);
+
+              let mut child_constraints = constraints_from_taffy(
+                viewport_size,
+                known_dimensions,
+                available_space,
+                parent_inline_base,
+              );
+
+              let mut fragment = match fc.layout(box_node, &child_constraints) {
+                Ok(fragment) => fragment,
+                Err(_) => return taffy::geometry::Size::ZERO,
+              };
+              let percentage_base = match available_space.width {
+                taffy::style::AvailableSpace::Definite(w) => w,
+                _ => child_constraints
+                  .width()
+                  .unwrap_or_else(|| fragment.bounds.width()),
+              };
+              fragment.content = FragmentContent::Block {
+                box_id: Some(box_node.id),
+              };
+              fragment.style = Some(box_node.style.clone());
+              let content_size = this.content_box_size(&fragment, &box_node.style, percentage_base);
+              let size = taffy::geometry::Size {
+                width: content_size.width.max(0.0),
+                height: content_size.height.max(0.0),
+              };
+              measured_keys
+                .borrow_mut()
+                .entry(node_id)
+                .or_default()
+                .push(key);
+              measured.borrow_mut().insert(key, fragment);
+              cache.borrow_mut().insert(key, size);
+              size
+            },
+          )
+          .expect("taffy layout");
+
+        let child_id = *taffy.children(root_id).unwrap().first().unwrap();
+        let child_layout = taffy.layout(child_id).unwrap();
+        let measured_node_keys = measured_node_keys.borrow();
+        let before_len = measured_fragments.borrow().len();
+        assert!(before_len > 0, "expected measured fragments to be recorded");
+        let matched_key = measured_node_keys
+          .get(&child_id)
+          .and_then(|keys| {
+            let measured = measured_fragments.borrow();
+            keys.iter().copied().find(|key| {
+              measured.get(key).map_or(false, |fragment| {
+                (fragment.bounds.width() - child_layout.size.width).abs() < 0.1
+                  && (fragment.bounds.height() - child_layout.size.height).abs() < 0.1
+              })
+            })
+          })
+          .expect("matching measured fragment should exist");
+
+        let mut fragment = fc
+          .convert_to_fragments(
+            &taffy,
+            root_id,
+            root_id,
+            &constraints,
+            &measured_fragments,
+            &measured_node_keys,
+            &positioned_children_map,
+          )
+          .expect("convert fragments");
+
+        let measured_after = measured_fragments.borrow();
+        assert!(
+          !measured_after.contains_key(&matched_key),
+          "reused fragments should be removed from the cache"
+        );
+        assert!(
+          measured_after.len() < before_len,
+          "reusing a fragment should reduce the cache size"
+        );
+        assert_eq!(fragment.children.len(), 1);
+        let child_fragment = fragment.children.pop().unwrap();
+        match child_fragment.content {
+          FragmentContent::Block { box_id } => assert_eq!(box_id, Some(2)),
+          other => panic!("unexpected fragment content: {other:?}"),
+        }
+        assert!(child_fragment.style.is_some());
+        assert!(
+          (child_fragment.bounds.x() - child_layout.location.x).abs() < 0.01,
+          "expected translated x to match layout"
+        );
+        assert!(
+          (child_fragment.bounds.y() - child_layout.location.y).abs() < 0.01,
+          "expected translated y to match layout"
+        );
+
+        fn has_text(node: &FragmentNode) -> bool {
+          if matches!(node.content, FragmentContent::Text { .. }) {
+            return true;
+          }
+          node.children.iter().any(has_text)
+        }
+        assert!(has_text(&child_fragment));
+
+        let stats = fragment_clone_profile::fragment_clone_profile_stats();
+        assert_eq!(
+          stats.grid_measure_reuse.nodes, 0,
+          "reuse should not record cloned nodes"
+        );
+        assert!(
+          stats.grid_measure_reuse.events > 0,
+          "reuse should be recorded when clone profiling is enabled"
+        );
+        fragment_clone_profile::reset_fragment_clone_profile();
+      },
+    );
   }
 
   // Test 5: Grid with explicit columns
