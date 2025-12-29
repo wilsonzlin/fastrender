@@ -33,6 +33,7 @@ use crate::geometry::Rect;
 use crate::geometry::Size;
 use crate::layout::constraints::AvailableSpace as CrateAvailableSpace;
 use crate::layout::constraints::LayoutConstraints;
+use crate::layout::formatting_context::intrinsic_cache_epoch;
 use crate::layout::formatting_context::layout_cache_lookup;
 use crate::layout::formatting_context::layout_cache_store;
 use crate::layout::formatting_context::FormattingContext;
@@ -41,7 +42,12 @@ use crate::layout::formatting_context::LayoutError;
 use crate::layout::fragment_clone_profile::{self, CloneSite};
 use crate::layout::profile::layout_timer;
 use crate::layout::profile::LayoutKind;
-use crate::layout::taffy_integration::{record_taffy_invocation, TaffyAdapterKind};
+use crate::layout::taffy_integration::{
+  record_taffy_invocation, record_taffy_node_cache_hit, record_taffy_node_cache_miss,
+  record_taffy_style_cache_hit, record_taffy_style_cache_miss, taffy_constraint_key,
+  CachedTaffyTemplate, SendSyncStyle, TaffyAdapterKind, TaffyNodeCache, TaffyNodeCacheKey,
+  DEFAULT_TAFFY_CACHE_LIMIT,
+};
 use crate::layout::utils::resolve_length_with_percentage_metrics;
 use crate::layout::utils::resolve_scrollbar_width;
 use crate::render_control::check_active;
@@ -257,6 +263,7 @@ pub struct GridFormattingContext {
   viewport_size: crate::geometry::Size,
   font_context: crate::text::font_loader::FontContext,
   nearest_positioned_cb: crate::layout::contexts::positioned::ContainingBlock,
+  taffy_cache: std::sync::Arc<crate::layout::taffy_integration::TaffyNodeCache>,
 }
 
 impl GridFormattingContext {
@@ -359,10 +366,25 @@ impl GridFormattingContext {
     nearest_positioned_cb: crate::layout::contexts::positioned::ContainingBlock,
     font_context: crate::text::font_loader::FontContext,
   ) -> Self {
+    Self::with_viewport_cb_and_cache(
+      viewport_size,
+      nearest_positioned_cb,
+      font_context,
+      std::sync::Arc::new(TaffyNodeCache::new(DEFAULT_TAFFY_CACHE_LIMIT)),
+    )
+  }
+
+  pub fn with_viewport_cb_and_cache(
+    viewport_size: crate::geometry::Size,
+    nearest_positioned_cb: crate::layout::contexts::positioned::ContainingBlock,
+    font_context: crate::text::font_loader::FontContext,
+    taffy_cache: std::sync::Arc<crate::layout::taffy_integration::TaffyNodeCache>,
+  ) -> Self {
     Self {
       viewport_size,
       font_context,
       nearest_positioned_cb,
+      taffy_cache,
     }
   }
 
@@ -435,10 +457,17 @@ impl GridFormattingContext {
     &self,
     taffy: &mut TaffyTree<*const BoxNode>,
     box_node: &BoxNode,
+    constraints: &LayoutConstraints,
     positioned_children: &mut HashMap<TaffyNodeId, Vec<BoxNode>>,
   ) -> Result<TaffyNodeId, LayoutError> {
     let root_children: Vec<&BoxNode> = box_node.children.iter().collect();
-    self.build_taffy_tree_children(taffy, box_node, &root_children, positioned_children)
+    self.build_taffy_tree_children(
+      taffy,
+      box_node,
+      &root_children,
+      constraints,
+      positioned_children,
+    )
   }
 
   /// Builds a Taffy tree using an explicit slice of root children (used to exclude out-of-flow boxes).
@@ -447,8 +476,97 @@ impl GridFormattingContext {
     taffy: &mut TaffyTree<*const BoxNode>,
     box_node: &BoxNode,
     root_children: &[&BoxNode],
+    constraints: &LayoutConstraints,
     positioned_children: &mut HashMap<TaffyNodeId, Vec<BoxNode>>,
   ) -> Result<TaffyNodeId, LayoutError> {
+    let mut in_flow_children: Vec<&BoxNode> = Vec::new();
+    let mut positioned: Vec<BoxNode> = Vec::new();
+    for child in root_children {
+      match child.style.position {
+        crate::style::position::Position::Absolute | crate::style::position::Position::Fixed => {
+          positioned.push((*child).clone())
+        }
+        _ => in_flow_children.push(*child),
+      }
+    }
+
+    let has_subgrid = box_node.style.grid_row_subgrid || box_node.style.grid_column_subgrid;
+    let child_has_subgrid = in_flow_children
+      .iter()
+      .any(|child| child.style.grid_row_subgrid || child.style.grid_column_subgrid);
+
+    if !has_subgrid && !child_has_subgrid {
+      let child_fingerprint = grid_child_fingerprint(&in_flow_children);
+      let cache_key = TaffyNodeCacheKey::new(
+        TaffyAdapterKind::Grid,
+        box_node.id,
+        std::sync::Arc::as_ptr(&box_node.style) as usize,
+        child_fingerprint,
+        taffy_constraint_key(constraints, self.viewport_size),
+        intrinsic_cache_epoch(),
+        self.viewport_size,
+      );
+      let cached = self.taffy_cache.get(&cache_key);
+      let template: std::sync::Arc<CachedTaffyTemplate> = if let Some(template) = cached {
+        record_taffy_node_cache_hit(TaffyAdapterKind::Grid, template.node_count());
+        record_taffy_style_cache_hit(TaffyAdapterKind::Grid, template.node_count());
+        template
+      } else {
+        let mut child_styles = Vec::with_capacity(in_flow_children.len());
+        for child in in_flow_children.iter() {
+          child_styles.push(std::sync::Arc::new(SendSyncStyle(self.convert_style(
+            &child.style,
+            Some(&box_node.style),
+            false,
+            false,
+          ))));
+        }
+        let simple_grid = self.is_simple_grid(&box_node.style, &in_flow_children);
+        let root_style = std::sync::Arc::new(SendSyncStyle(self.convert_style(
+          &box_node.style,
+          None,
+          simple_grid,
+          true,
+        )));
+        let template = std::sync::Arc::new(CachedTaffyTemplate {
+          root_style,
+          child_styles,
+        });
+        self.taffy_cache.insert(cache_key, template.clone());
+        record_taffy_node_cache_miss(TaffyAdapterKind::Grid, template.node_count());
+        record_taffy_style_cache_miss(TaffyAdapterKind::Grid, template.node_count());
+        template
+      };
+
+      let mut taffy_children = Vec::with_capacity(in_flow_children.len());
+      for (child_style, child) in template.child_styles.iter().zip(in_flow_children.iter()) {
+        let node = taffy
+          .new_leaf_with_context(child_style.0.clone(), *child as *const BoxNode)
+          .map_err(|e| LayoutError::MissingContext(format!("Taffy error: {:?}", e)))?;
+        taffy_children.push(node);
+      }
+
+      let node_id = if taffy_children.is_empty() {
+        taffy
+          .new_leaf_with_context(template.root_style.0.clone(), box_node as *const BoxNode)
+          .map_err(|e| LayoutError::MissingContext(format!("Taffy error: {:?}", e)))?
+      } else {
+        let node_id = taffy
+          .new_with_children(template.root_style.0.clone(), &taffy_children)
+          .map_err(|e| LayoutError::MissingContext(format!("Taffy error: {:?}", e)))?;
+        taffy
+          .set_node_context(node_id, Some(box_node as *const BoxNode))
+          .map_err(|e| LayoutError::MissingContext(format!("Taffy error: {:?}", e)))?;
+        node_id
+      };
+
+      if !positioned.is_empty() {
+        positioned_children.insert(node_id, positioned);
+      }
+
+      return Ok(node_id);
+    }
+
     self.build_taffy_tree_inner(
       taffy,
       box_node,
@@ -1893,7 +2011,19 @@ impl GridFormattingContext {
 
     let mut taffy: TaffyTree<*const BoxNode> = TaffyTree::new();
     let mut positioned_children: HashMap<TaffyNodeId, Vec<BoxNode>> = HashMap::new();
-    let root_id = self.build_taffy_tree(&mut taffy, box_node, &mut positioned_children)?;
+    let intrinsic_constraints = LayoutConstraints::new(
+      match mode {
+        IntrinsicSizingMode::MinContent => CrateAvailableSpace::MinContent,
+        IntrinsicSizingMode::MaxContent => CrateAvailableSpace::MaxContent,
+      },
+      CrateAvailableSpace::Indefinite,
+    );
+    let root_id = self.build_taffy_tree(
+      &mut taffy,
+      box_node,
+      &intrinsic_constraints,
+      &mut positioned_children,
+    )?;
 
     // Use appropriate available space for intrinsic sizing
     let available_space = match mode {
@@ -2145,6 +2275,17 @@ impl GridFormattingContext {
     measure_cache.borrow_mut().insert(key, size);
     size
   }
+}
+
+fn grid_child_fingerprint(children: &[&BoxNode]) -> u64 {
+  use std::hash::Hasher;
+  let mut h = std::collections::hash_map::DefaultHasher::new();
+  h.write_usize(children.len());
+  for child in children {
+    h.write_usize(child.id);
+    h.write_usize(std::sync::Arc::as_ptr(&child.style) as usize);
+  }
+  h.finish()
 }
 
 fn translate_fragment_tree(fragment: &mut FragmentNode, delta: Point) {
@@ -2515,6 +2656,7 @@ impl FormattingContext for GridFormattingContext {
       &mut taffy,
       box_node,
       &in_flow_children,
+      constraints,
       &mut positioned_children_map,
     )?;
     if !positioned_children.is_empty() {
@@ -3281,8 +3423,14 @@ mod tests {
     parent.children.push(child2);
 
     let gc = GridFormattingContext::new();
+    let constraints = LayoutConstraints::definite(800.0, 600.0);
     let _root_id = gc
-      .build_taffy_tree(&mut TaffyTree::new(), &parent, &mut HashMap::new())
+      .build_taffy_tree(
+        &mut TaffyTree::new(),
+        &parent,
+        &constraints,
+        &mut HashMap::new(),
+      )
       .expect("grid conversion");
     // If the fast path is taken, the parent container style should have been converted to block.
     let taffy_style = gc.convert_style(&parent.style, None, true, true);
@@ -3389,6 +3537,7 @@ mod tests {
             &mut taffy,
             &grid,
             &in_flow_children,
+            &constraints,
             &mut positioned_children_map,
           )
           .expect("build taffy tree");

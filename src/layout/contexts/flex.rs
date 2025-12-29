@@ -42,6 +42,7 @@ use crate::layout::flex_profile::record_node_measure_store;
 use crate::layout::flex_profile::DimState;
 use crate::layout::flex_profile::{self};
 use crate::layout::formatting_context::count_flex_intrinsic_call;
+use crate::layout::formatting_context::intrinsic_cache_epoch;
 use crate::layout::formatting_context::intrinsic_cache_lookup;
 use crate::layout::formatting_context::intrinsic_cache_store;
 use crate::layout::formatting_context::layout_cache_lookup;
@@ -52,7 +53,12 @@ use crate::layout::formatting_context::LayoutError;
 use crate::layout::fragment_clone_profile::{self, CloneSite};
 use crate::layout::profile::layout_timer;
 use crate::layout::profile::LayoutKind;
-use crate::layout::taffy_integration::{record_taffy_invocation, TaffyAdapterKind};
+use crate::layout::taffy_integration::{
+  record_taffy_invocation, record_taffy_node_cache_hit, record_taffy_node_cache_miss,
+  record_taffy_style_cache_hit, record_taffy_style_cache_miss, taffy_constraint_key,
+  CachedTaffyTemplate, SendSyncStyle, TaffyAdapterKind, TaffyNodeCacheKey,
+  DEFAULT_TAFFY_CACHE_LIMIT,
+};
 use crate::layout::utils::resolve_length_with_percentage_metrics;
 use crate::layout::utils::resolve_scrollbar_width;
 use crate::render_control::{active_deadline, check_active, with_deadline};
@@ -241,6 +247,7 @@ pub struct FlexFormattingContext {
   parallelism: LayoutParallelism,
   measured_fragments: Arc<ShardedFlexCache>,
   layout_fragments: Arc<ShardedFlexCache>,
+  taffy_cache: Arc<crate::layout::taffy_integration::TaffyNodeCache>,
 }
 
 const MAX_MEASURE_CACHE_PER_NODE: usize = 256;
@@ -276,12 +283,20 @@ impl FlexFormattingContext {
     measured_fragments: Arc<ShardedFlexCache>,
     layout_fragments: Arc<ShardedFlexCache>,
   ) -> Self {
+    let flex_taffy_cache = Arc::new(crate::layout::taffy_integration::TaffyNodeCache::new(
+      DEFAULT_TAFFY_CACHE_LIMIT,
+    ));
+    let grid_taffy_cache = Arc::new(crate::layout::taffy_integration::TaffyNodeCache::new(
+      DEFAULT_TAFFY_CACHE_LIMIT,
+    ));
     let factory = FormattingContextFactory::with_font_context_viewport_cb_and_cache(
       font_context.clone(),
       viewport_size,
       nearest_positioned_cb,
       measured_fragments.clone(),
       layout_fragments.clone(),
+      flex_taffy_cache.clone(),
+      grid_taffy_cache,
     );
     Self {
       factory,
@@ -291,6 +306,7 @@ impl FlexFormattingContext {
       parallelism: LayoutParallelism::default(),
       measured_fragments,
       layout_fragments,
+      taffy_cache: flex_taffy_cache,
     }
   }
 
@@ -301,6 +317,7 @@ impl FlexFormattingContext {
     let measured_fragments = factory.flex_measure_cache();
     let layout_fragments = factory.flex_layout_cache();
     let parallelism = factory.parallelism();
+    let taffy_cache = factory.flex_taffy_cache();
     Self {
       factory,
       viewport_size,
@@ -309,12 +326,14 @@ impl FlexFormattingContext {
       parallelism,
       measured_fragments,
       layout_fragments,
+      taffy_cache,
     }
   }
 
   pub fn with_parallelism(mut self, parallelism: LayoutParallelism) -> Self {
     self.parallelism = parallelism;
     self.factory = self.factory.clone().with_parallelism(parallelism);
+    self.taffy_cache = self.factory.flex_taffy_cache();
     self
   }
 
@@ -470,6 +489,7 @@ impl FormattingContext for FlexFormattingContext {
       &mut taffy_tree,
       box_node,
       &in_flow_children,
+      &constraints,
       &mut node_map,
     )?;
     flex_profile::record_build_time(build_timer);
@@ -2510,6 +2530,16 @@ fn layout_cache_key(
   Some((w, h))
 }
 
+fn flex_child_fingerprint(children: &[&BoxNode]) -> u64 {
+  let mut h = DefaultHasher::new();
+  h.write_usize(children.len());
+  for child in children {
+    h.write_usize(child.id);
+    h.write_usize(std::sync::Arc::as_ptr(&child.style) as usize);
+  }
+  h.finish()
+}
+
 impl FlexFormattingContext {
   /// Builds a Taffy tree from a BoxNode tree
   ///
@@ -2519,9 +2549,11 @@ impl FlexFormattingContext {
     &self,
     taffy_tree: &mut TaffyTree<*const BoxNode>,
     box_node: &BoxNode,
+    constraints: &LayoutConstraints,
     node_map: &mut HashMap<*const BoxNode, NodeId>,
   ) -> Result<NodeId, LayoutError> {
-    self.build_taffy_tree_inner(taffy_tree, box_node, node_map, true, None, None)
+    let children: Vec<&BoxNode> = box_node.children.iter().collect();
+    self.build_taffy_tree_children(taffy_tree, box_node, &children, constraints, node_map)
   }
 
   /// Builds a Taffy tree from a BoxNode tree using an explicit set of root children
@@ -2531,19 +2563,72 @@ impl FlexFormattingContext {
     taffy_tree: &mut TaffyTree<*const BoxNode>,
     box_node: &BoxNode,
     root_children: &[&BoxNode],
+    constraints: &LayoutConstraints,
     node_map: &mut HashMap<*const BoxNode, NodeId>,
   ) -> Result<NodeId, LayoutError> {
-    self.build_taffy_tree_inner(
-      taffy_tree,
-      box_node,
-      node_map,
-      true,
-      None,
-      Some(root_children),
-    )
+    let child_fingerprint = flex_child_fingerprint(root_children);
+    let cache_key = TaffyNodeCacheKey::new(
+      TaffyAdapterKind::Flex,
+      box_node.id,
+      std::sync::Arc::as_ptr(&box_node.style) as usize,
+      child_fingerprint,
+      taffy_constraint_key(constraints, self.viewport_size),
+      intrinsic_cache_epoch(),
+      self.viewport_size,
+    );
+    let cached = self.taffy_cache.get(&cache_key);
+    let template: std::sync::Arc<CachedTaffyTemplate> = if let Some(template) = cached {
+      record_taffy_node_cache_hit(TaffyAdapterKind::Flex, template.node_count());
+      record_taffy_style_cache_hit(TaffyAdapterKind::Flex, template.node_count());
+      template
+    } else {
+      let mut child_styles = Vec::with_capacity(root_children.len());
+      for child in root_children {
+        child_styles.push(std::sync::Arc::new(SendSyncStyle(
+          self.computed_style_to_taffy(child, false, Some(&box_node.style)),
+        )));
+      }
+      let root_style = std::sync::Arc::new(SendSyncStyle(
+        self.computed_style_to_taffy(box_node, true, None),
+      ));
+      let template = std::sync::Arc::new(CachedTaffyTemplate {
+        root_style,
+        child_styles,
+      });
+      self.taffy_cache.insert(cache_key, template.clone());
+      record_taffy_node_cache_miss(TaffyAdapterKind::Flex, template.node_count());
+      record_taffy_style_cache_miss(TaffyAdapterKind::Flex, template.node_count());
+      template
+    };
+
+    let mut taffy_children = Vec::with_capacity(root_children.len());
+    for (child_style, child) in template.child_styles.iter().zip(root_children.iter()) {
+      let node = taffy_tree
+        .new_leaf_with_context(child_style.0.clone(), *child as *const BoxNode)
+        .map_err(|e| {
+          LayoutError::MissingContext(format!("Failed to create Taffy leaf: {:?}", e))
+        })?;
+      node_map.insert(*child as *const BoxNode, node);
+      taffy_children.push(node);
+    }
+
+    let taffy_node = if taffy_children.is_empty() {
+      taffy_tree
+        .new_leaf(template.root_style.0.clone())
+        .map_err(|e| LayoutError::MissingContext(format!("Failed to create Taffy leaf: {:?}", e)))?
+    } else {
+      taffy_tree
+        .new_with_children(template.root_style.0.clone(), &taffy_children)
+        .map_err(|e| LayoutError::MissingContext(format!("Failed to create Taffy node: {:?}", e)))?
+    };
+
+    node_map.insert(box_node as *const BoxNode, taffy_node);
+
+    Ok(taffy_node)
   }
 
   /// Internal tree builder that tracks whether we're at the root
+  #[allow(dead_code)]
   fn build_taffy_tree_inner(
     &self,
     taffy_tree: &mut TaffyTree<*const BoxNode>,
@@ -4369,7 +4454,7 @@ impl FlexFormattingContext {
     &self,
     box_node: &BoxNode,
     fragment: &FragmentNode,
-    in_flow_children: &[&BoxNode],
+    _in_flow_children: &[&BoxNode],
     positioned: &[PositionedCandidate],
     padding_origin: Point,
   ) -> Result<HashMap<usize, Point>, LayoutError> {

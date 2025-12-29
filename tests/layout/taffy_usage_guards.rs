@@ -74,3 +74,77 @@ fn tables_do_not_invoke_taffy() {
     );
   });
 }
+
+#[test]
+fn taffy_reuses_cached_nodes_for_repeated_layouts() {
+  reset_taffy_counters();
+
+  let mut flex_style = ComputedStyle::default();
+  flex_style.display = Display::Flex;
+  let mut flex_children = Vec::new();
+  for idx in 0..64 {
+    let mut child = BoxNode::new_block(
+      Arc::new(ComputedStyle::default()),
+      FormattingContextType::Block,
+      vec![],
+    );
+    child.id = idx + 1;
+    flex_children.push(child);
+  }
+  let mut flex_root = BoxNode::new_block(
+    Arc::new(flex_style),
+    FormattingContextType::Flex,
+    flex_children,
+  );
+  flex_root.id = 10_000;
+
+  let mut grid_style = ComputedStyle::default();
+  grid_style.display = Display::Grid;
+  let mut grid_children = Vec::new();
+  for idx in 0..48 {
+    let mut child = BoxNode::new_block(
+      Arc::new(ComputedStyle::default()),
+      FormattingContextType::Block,
+      vec![],
+    );
+    child.id = 20_000 + idx;
+    grid_children.push(child);
+  }
+  let mut grid_root = BoxNode::new_block(
+    Arc::new(grid_style),
+    FormattingContextType::Grid,
+    grid_children,
+  );
+  grid_root.id = 30_000;
+
+  let factory = FormattingContextFactory::new();
+  let constraints = LayoutConstraints::definite(1024.0, 768.0);
+
+  let flex_fc = factory.create(FormattingContextType::Flex);
+  flex_fc.layout(&flex_root, &constraints).unwrap();
+  let after_first_flex = taffy_counters();
+  flex_fc.layout(&flex_root, &constraints).unwrap();
+  let after_second_flex = taffy_counters();
+  assert!(
+    after_second_flex.flex_nodes_reused > after_first_flex.flex_nodes_reused,
+    "flex layouts should reuse cached Taffy templates across passes"
+  );
+  assert!(
+    after_second_flex.flex_style_cache_hits > after_first_flex.flex_style_cache_hits,
+    "flex style cache hits should increase on subsequent layouts"
+  );
+
+  let grid_fc = factory.create(FormattingContextType::Grid);
+  grid_fc.layout(&grid_root, &constraints).unwrap();
+  let after_first_grid = taffy_counters();
+  grid_fc.layout(&grid_root, &constraints).unwrap();
+  let after_second_grid = taffy_counters();
+  assert!(
+    after_second_grid.grid_nodes_reused > after_first_grid.grid_nodes_reused,
+    "grid layouts should reuse cached Taffy templates across passes"
+  );
+  assert!(
+    after_second_grid.grid_style_cache_hits > after_first_grid.grid_style_cache_hits,
+    "grid style cache hits should increase on subsequent layouts"
+  );
+}

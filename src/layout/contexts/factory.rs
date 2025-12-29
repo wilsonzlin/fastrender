@@ -30,6 +30,7 @@ use crate::layout::engine::LayoutParallelism;
 use crate::layout::formatting_context::FormattingContext;
 use crate::layout::formatting_context::LayoutError;
 use crate::layout::table::TableFormattingContext;
+use crate::layout::taffy_integration::{TaffyNodeCache, DEFAULT_TAFFY_CACHE_LIMIT};
 use crate::style::display::FormattingContextType;
 use crate::text::font_loader::FontContext;
 use crate::text::pipeline::ShapingPipeline;
@@ -89,6 +90,8 @@ pub struct FormattingContextFactory {
   nearest_positioned_cb: ContainingBlock,
   flex_measure_cache: std::sync::Arc<ShardedFlexCache>,
   flex_layout_cache: std::sync::Arc<ShardedFlexCache>,
+  flex_taffy_cache: std::sync::Arc<TaffyNodeCache>,
+  grid_taffy_cache: std::sync::Arc<TaffyNodeCache>,
   shaping_pipeline: crate::text::pipeline::ShapingPipeline,
   parallelism: LayoutParallelism,
   cached_contexts: Arc<CachedFormattingContexts>,
@@ -126,10 +129,11 @@ impl FormattingContextFactory {
   }
 
   fn grid_context(&self) -> GridFormattingContext {
-    GridFormattingContext::with_viewport_and_cb(
+    GridFormattingContext::with_viewport_cb_and_cache(
       self.viewport_size,
       self.nearest_positioned_cb,
       self.font_context.clone(),
+      self.grid_taffy_cache.clone(),
     )
   }
 
@@ -184,15 +188,19 @@ impl FormattingContextFactory {
       nearest_positioned_cb,
       std::sync::Arc::new(ShardedFlexCache::new_measure()),
       std::sync::Arc::new(ShardedFlexCache::new_layout()),
+      std::sync::Arc::new(TaffyNodeCache::new(DEFAULT_TAFFY_CACHE_LIMIT)),
+      std::sync::Arc::new(TaffyNodeCache::new(DEFAULT_TAFFY_CACHE_LIMIT)),
     )
   }
 
-  pub fn with_font_context_viewport_cb_and_cache(
+  pub(crate) fn with_font_context_viewport_cb_and_cache(
     font_context: FontContext,
     viewport_size: crate::geometry::Size,
     nearest_positioned_cb: ContainingBlock,
     flex_measure_cache: std::sync::Arc<ShardedFlexCache>,
     flex_layout_cache: std::sync::Arc<ShardedFlexCache>,
+    flex_taffy_cache: std::sync::Arc<TaffyNodeCache>,
+    grid_taffy_cache: std::sync::Arc<TaffyNodeCache>,
   ) -> Self {
     Self {
       font_context,
@@ -200,6 +208,8 @@ impl FormattingContextFactory {
       nearest_positioned_cb,
       flex_measure_cache,
       flex_layout_cache,
+      flex_taffy_cache,
+      grid_taffy_cache,
       shaping_pipeline: ShapingPipeline::new(),
       parallelism: LayoutParallelism::default(),
       cached_contexts: CachedFormattingContexts::fresh(),
@@ -234,6 +244,14 @@ impl FormattingContextFactory {
     self.flex_layout_cache.clone()
   }
 
+  pub(crate) fn flex_taffy_cache(&self) -> std::sync::Arc<TaffyNodeCache> {
+    self.flex_taffy_cache.clone()
+  }
+
+  pub(crate) fn grid_taffy_cache(&self) -> std::sync::Arc<TaffyNodeCache> {
+    self.grid_taffy_cache.clone()
+  }
+
   pub(crate) fn shaping_cache_size(&self) -> usize {
     self.shaping_pipeline.cache_len()
   }
@@ -242,6 +260,8 @@ impl FormattingContextFactory {
   pub fn reset_caches(&self) {
     self.flex_measure_cache.clear();
     self.flex_layout_cache.clear();
+    self.flex_taffy_cache.clear();
+    self.grid_taffy_cache.clear();
     self.shaping_pipeline.clear_cache();
   }
 

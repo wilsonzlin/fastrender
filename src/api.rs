@@ -1601,6 +1601,10 @@ pub struct LayoutDiagnostics {
   pub layout_cache_evictions: Option<usize>,
   pub layout_cache_clones: Option<usize>,
   pub flex_cache_clones: Option<usize>,
+  pub taffy_nodes_built: Option<usize>,
+  pub taffy_nodes_reused: Option<usize>,
+  pub taffy_style_cache_hits: Option<usize>,
+  pub taffy_style_cache_misses: Option<usize>,
   pub fragment_deep_clones: Option<usize>,
   pub fragment_traversed: Option<usize>,
 }
@@ -1684,6 +1688,9 @@ struct RenderStatsRecorder {
 
 impl RenderStatsRecorder {
   fn new(level: DiagnosticsLevel) -> Self {
+    if level != DiagnosticsLevel::None {
+      crate::layout::taffy_integration::reset_taffy_counters();
+    }
     Self {
       level,
       stats: RenderStats::default(),
@@ -3421,6 +3428,15 @@ impl FastRender {
         rec.stats.layout.layout_cache_clones = Some(cache_clones);
         rec.stats.layout.flex_cache_clones =
           Some(crate::layout::flex_profile::layout_cache_clone_count() as usize);
+        let taffy = crate::layout::taffy_integration::taffy_counters();
+        rec.stats.layout.taffy_nodes_built =
+          Some((taffy.flex_nodes_built + taffy.grid_nodes_built) as usize);
+        rec.stats.layout.taffy_nodes_reused =
+          Some((taffy.flex_nodes_reused + taffy.grid_nodes_reused) as usize);
+        rec.stats.layout.taffy_style_cache_hits =
+          Some((taffy.flex_style_cache_hits + taffy.grid_style_cache_hits) as usize);
+        rec.stats.layout.taffy_style_cache_misses =
+          Some((taffy.flex_style_cache_misses + taffy.grid_style_cache_misses) as usize);
         let fragment_metrics = crate::tree::fragment_tree::fragment_instrumentation_counters();
         rec.stats.layout.fragment_deep_clones = Some(fragment_metrics.deep_clones);
         rec.stats.layout.fragment_traversed = Some(fragment_metrics.traversed_nodes);
