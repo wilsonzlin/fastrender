@@ -23,6 +23,8 @@ use fastrender::{
 
 pub const BLOCK_SIMPLE_HTML: &str = include_str!("../tests/fixtures/html/block_simple.html");
 pub const FLEX_HTML: &str = include_str!("../tests/fixtures/html/flex_grow_shrink.html");
+pub const FLEX_POSITIONED_HTML: &str =
+  include_str!("../tests/fixtures/html/flex_positioned_children.html");
 pub const GRID_HTML: &str = include_str!("../tests/fixtures/html/grid_template.html");
 pub const TABLE_HTML: &str = include_str!("../tests/fixtures/html/table_span.html");
 pub const TABLE_LARGE_ROWSPAN_HTML: &str =

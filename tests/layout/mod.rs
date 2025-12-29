@@ -7,6 +7,7 @@ mod aria_hidden_layout;
 mod first_line_first_letter_integration_test;
 mod flex_alignment_order_test;
 mod flex_box_sizing_test;
+mod flex_positioned_relayout;
 mod float_shrink_to_min;
 mod fragmentation;
 mod fragmentation_widows_orphans;

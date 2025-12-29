@@ -420,7 +420,7 @@ impl FormattingContext for FlexFormattingContext {
     let viewport_size = self.viewport_size;
     let nearest_positioned_cb = self.nearest_positioned_cb;
     let measured_fragments = self.measured_fragments.clone();
-    let factory = FormattingContextFactory::with_font_context_viewport_cb_and_cache(
+    let base_factory = FormattingContextFactory::with_font_context_viewport_cb_and_cache(
       self.font_context.clone(),
       viewport_size,
       nearest_positioned_cb,
@@ -428,6 +428,7 @@ impl FormattingContext for FlexFormattingContext {
       self.layout_fragments.clone(),
     )
     .with_parallelism(self.parallelism);
+    let factory = base_factory.clone();
     let this = self.clone();
     let mut pass_cache: HashMap<
       u64,
@@ -1812,6 +1813,7 @@ impl FormattingContext for FlexFormattingContext {
 
     // Phase 4: Position out-of-flow abs/fixed children against this flex container.
     if !positioned_children.is_empty() {
+      let positioned_factory = base_factory.clone();
       let abs = AbsoluteLayout::with_font_context(self.font_context.clone());
       let padding_left = self.resolve_length_for_width(
         box_node.style.padding_left,
@@ -1891,13 +1893,6 @@ impl FormattingContext for FlexFormattingContext {
           _ => cb_for_absolute,
         };
 
-        let factory = crate::layout::contexts::factory::FormattingContextFactory::with_font_context_viewport_and_cb(
-          self.font_context.clone(),
-          self.viewport_size,
-          cb,
-        )
-        .with_parallelism(self.parallelism);
-
         // Layout child as static to obtain intrinsic size.
         let mut layout_child = child.clone();
         let mut style = (*layout_child.style).clone();
@@ -1906,12 +1901,14 @@ impl FormattingContext for FlexFormattingContext {
         style.right = None;
         style.bottom = None;
         style.left = None;
+        // Keep a distinct style Arc so cache keys that hash the style fingerprint do not share
+        // entries with the real positioned variant.
         layout_child.style = Arc::new(style);
 
         let fc_type = layout_child
           .formatting_context()
           .unwrap_or(crate::style::display::FormattingContextType::Block);
-        let fc = factory.create(fc_type);
+        let fc = positioned_factory.with_positioned_cb(cb).create(fc_type);
         let child_constraints = LayoutConstraints::new(
           CrateAvailableSpace::Definite(padding_rect.size.width),
           block_base
@@ -1996,17 +1993,13 @@ impl FormattingContext for FlexFormattingContext {
         let needs_relayout = (result.size.width - child_fragment.bounds.width()).abs() > 0.01
           || (result.size.height - child_fragment.bounds.height()).abs() > 0.01;
         if needs_relayout {
-          let factory = crate::layout::contexts::factory::FormattingContextFactory::with_font_context_viewport_and_cb(
-            self.font_context.clone(),
-            self.viewport_size,
-            candidate.cb,
-          )
-          .with_parallelism(self.parallelism);
           let fc_type = candidate
             .layout_child
             .formatting_context()
             .unwrap_or(crate::style::display::FormattingContextType::Block);
-          let fc = factory.create(fc_type);
+          let fc = positioned_factory
+            .with_positioned_cb(candidate.cb)
+            .create(fc_type);
           let relayout_constraints = LayoutConstraints::new(
             CrateAvailableSpace::Definite(result.size.width),
             CrateAvailableSpace::Definite(result.size.height),
@@ -2039,12 +2032,7 @@ impl FormattingContext for FlexFormattingContext {
         id_to_bounds.entry(box_id).or_insert(child.bounds);
       }
 
-      let snapshot_factory = FormattingContextFactory::with_font_context_viewport_and_cb(
-        self.font_context.clone(),
-        self.viewport_size,
-        self.nearest_positioned_cb,
-      )
-      .with_parallelism(self.parallelism);
+      let snapshot_factory = base_factory.clone();
       for (order, (running_idx, running_child)) in running_children.into_iter().enumerate() {
         let Some(name) = running_child.style.running_position.clone() else {
           continue;

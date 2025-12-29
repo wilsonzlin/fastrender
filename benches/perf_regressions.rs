@@ -113,9 +113,21 @@ fn bench_layout_flex(c: &mut Criterion) {
   let box_tree = common::box_tree_from_styled(&styled);
   let font_ctx = common::fixed_font_context();
   let engine = common::layout_engine(viewport, &font_ctx);
+  let positioned_dom = common::parse_dom(common::FLEX_POSITIONED_HTML);
+  let positioned_sheet = common::stylesheet_for_dom(&positioned_dom, &media);
+  let positioned_styled = common::cascade(&positioned_dom, &positioned_sheet, &media);
+  let positioned_box_tree = common::box_tree_from_styled(&positioned_styled);
+  let positioned_engine = common::layout_engine(viewport, &font_ctx);
 
   group.bench_function("flex_grow_shrink", |b| {
     b.iter(|| engine.layout_tree(black_box(&box_tree)).unwrap())
+  });
+  group.bench_function("flex_positioned_children", |b| {
+    b.iter(|| {
+      positioned_engine
+        .layout_tree(black_box(&positioned_box_tree))
+        .unwrap()
+    })
   });
 
   group.finish();

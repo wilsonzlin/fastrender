@@ -1,0 +1,55 @@
+<!doctype html>
+<meta charset="utf-8">
+<style>
+  body {
+    margin: 0;
+  }
+  .flex {
+    display: flex;
+    position: relative;
+    width: 960px;
+    height: 720px;
+    padding: 16px;
+    gap: 8px;
+  }
+  .item {
+    padding: 4px 6px;
+    font: 16px/20px sans-serif;
+    border: 1px solid #ccc;
+    background: #f8f8f8;
+  }
+  .abs {
+    position: absolute;
+    left: 96px;
+    right: 196px;
+  }
+  .fixed {
+    position: fixed;
+    left: 72px;
+    right: 220px;
+  }
+</style>
+<div class="flex">
+  <div class="item abs" style="top: 0px;">Positioned content that shrinks after absolute sizing is resolved.</div>
+  <div class="item fixed" style="top: 32px;">Fixed item that shares layout caches and is repeatedly remeasured.</div>
+  <div class="item abs" style="top: 64px;">Another absolutely positioned element with text long enough to wrap when its width shrinks.</div>
+  <div class="item fixed" style="top: 96px;">More fixed content to stress positioned layout cache reuse across siblings.</div>
+  <div class="item abs" style="top: 128px;">Absolute item with inset sizing that forces intrinsic relayout under flex.</div>
+  <div class="item fixed" style="top: 160px;">Fixed positioned item with similar text to exercise shaping cache reuse.</div>
+  <div class="item abs" style="top: 192px;">Relayout-heavy positioned child inside a flex container.</div>
+  <div class="item fixed" style="top: 224px;">Another fixed item that should wrap inside the available width.</div>
+  <div class="item abs" style="top: 256px;">Absolute positioning with both left and right set keeps this text narrow.</div>
+  <div class="item fixed" style="top: 288px;">Fixed positioned sibling to keep the cache hot for shaped text.</div>
+  <div class="item abs" style="top: 320px;">More absolute content that becomes narrower after insets are applied.</div>
+  <div class="item fixed" style="top: 352px;">Fixed positioned content with enough words to require wrapping.</div>
+  <div class="item abs" style="top: 384px;">Absolute item with long wrapping content to trigger intrinsic sizing.</div>
+  <div class="item fixed" style="top: 416px;">Fixed content matching the absolute sibling to share shaping caches.</div>
+  <div class="item abs" style="top: 448px;">Positioned text reused across runs to validate stable fragments.</div>
+  <div class="item fixed" style="top: 480px;">Fixed text reused to keep positioned cache paths active.</div>
+  <div class="item abs" style="top: 512px;">Absolute element packed with text to drive relayout for many nodes.</div>
+  <div class="item fixed" style="top: 544px;">Fixed element with similar text to keep intrinsic sizing in play.</div>
+  <div class="item abs" style="top: 576px;">Another absolute positioned item with wrapping text content.</div>
+  <div class="item fixed" style="top: 608px;">Fixed positioned sibling that should reuse shared layout caches.</div>
+  <div class="item abs" style="top: 640px;">Abs positioned element that exercises the phase 4 relayout path.</div>
+  <div class="item fixed" style="top: 672px;">Fixed positioned element that rides along the same cache hot path.</div>
+</div>
