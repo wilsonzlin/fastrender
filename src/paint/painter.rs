@@ -1031,10 +1031,10 @@ impl Painter {
       text_shape_cache: Arc::new(Mutex::new(HashMap::new())),
       trace: TraceHandle::disabled(),
       scroll_state: ScrollState::default(),
+      max_iframe_depth: crate::api::DEFAULT_MAX_IFRAME_DEPTH,
       gradient_cache: GradientLutCache::default(),
       gradient_stats: GradientStats::default(),
       diagnostics_enabled: paint_diagnostics_enabled(),
-      max_iframe_depth: crate::api::DEFAULT_MAX_IFRAME_DEPTH,
     })
   }
 
