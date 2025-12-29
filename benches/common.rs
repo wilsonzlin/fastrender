@@ -25,6 +25,10 @@ pub const BLOCK_SIMPLE_HTML: &str = include_str!("../tests/fixtures/html/block_s
 pub const FLEX_HTML: &str = include_str!("../tests/fixtures/html/flex_grow_shrink.html");
 pub const GRID_HTML: &str = include_str!("../tests/fixtures/html/grid_template.html");
 pub const TABLE_HTML: &str = include_str!("../tests/fixtures/html/table_span.html");
+pub const TABLE_LARGE_ROWSPAN_HTML: &str =
+  include_str!("../tests/fixtures/html/table_large_rowspan.html");
+pub const TABLE_COLLAPSE_LARGE_HTML: &str =
+  include_str!("../tests/fixtures/html/table_collapse_large.html");
 pub const FORM_CONTROLS_HTML: &str = include_str!("../tests/fixtures/html/form_controls.html");
 
 pub const SMALL_VIEWPORT: (u32, u32) = (800, 600);

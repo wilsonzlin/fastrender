@@ -157,6 +157,39 @@ fn bench_layout_table(c: &mut Criterion) {
   group.finish();
 }
 
+fn bench_layout_table_stress(c: &mut Criterion) {
+  let mut group = c.benchmark_group("bench_layout_table_stress");
+  let viewport = (1400, 1200);
+  let media = common::media_context(viewport);
+  let font_ctx = common::fixed_font_context();
+
+  {
+    let dom = common::parse_dom(common::TABLE_LARGE_ROWSPAN_HTML);
+    let sheet = common::stylesheet_for_dom(&dom, &media);
+    let styled = common::cascade(&dom, &sheet, &media);
+    let box_tree = common::box_tree_from_styled(&styled);
+    let engine = common::layout_engine(viewport, &font_ctx);
+
+    group.bench_function("table_large_rowspan", |b| {
+      b.iter(|| engine.layout_tree(black_box(&box_tree)).unwrap())
+    });
+  }
+
+  {
+    let dom = common::parse_dom(common::TABLE_COLLAPSE_LARGE_HTML);
+    let sheet = common::stylesheet_for_dom(&dom, &media);
+    let styled = common::cascade(&dom, &sheet, &media);
+    let box_tree = common::box_tree_from_styled(&styled);
+    let engine = common::layout_engine(viewport, &font_ctx);
+
+    group.bench_function("table_collapse_large", |b| {
+      b.iter(|| engine.layout_tree(black_box(&box_tree)).unwrap())
+    });
+  }
+
+  group.finish();
+}
+
 fn bench_paint_display_list_build(c: &mut Criterion) {
   let mut group = c.benchmark_group("bench_paint_display_list_build");
   let viewport = common::REALISTIC_VIEWPORT;
@@ -253,6 +286,7 @@ criterion_group!(
     bench_layout_flex,
     bench_layout_grid,
     bench_layout_table,
+    bench_layout_table_stress,
     bench_paint_display_list_build,
     bench_paint_optimize,
     bench_paint_rasterize,
