@@ -696,6 +696,24 @@ impl DebugConfig {
         .and_then(|v| v.parse().ok())
         .or(Some(8)),
     );
+    config.insert_usize(
+      "FASTR_LAYOUT_PARALLEL_MIN_FANOUT",
+      raw
+        .get("FASTR_LAYOUT_PARALLEL_MIN_FANOUT")
+        .and_then(|v| v.parse().ok()),
+    );
+    config.insert_usize(
+      "FASTR_LAYOUT_PARALLEL_MAX_THREADS",
+      raw
+        .get("FASTR_LAYOUT_PARALLEL_MAX_THREADS")
+        .and_then(|v| v.parse().ok()),
+    );
+    config.insert_usize(
+      "FASTR_LAYOUT_PARALLEL_MIN_NODES",
+      raw
+        .get("FASTR_LAYOUT_PARALLEL_MIN_NODES")
+        .and_then(|v| v.parse().ok()),
+    );
 
     config.insert_strings(
       "FASTR_DUMP_FRAGMENT",

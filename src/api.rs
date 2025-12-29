@@ -95,9 +95,15 @@ use crate::layout::absolute_positioning::resolve_positioned_style;
 use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics_viewport;
 use crate::layout::contexts::inline::line_builder::TextItem;
 use crate::layout::contexts::positioned::ContainingBlock;
+use crate::layout::engine::enable_layout_parallel_debug_counters;
+use crate::layout::engine::layout_parallel_debug_counters;
+use crate::layout::engine::layout_parallelism_workload;
 use crate::layout::engine::LayoutConfig;
 use crate::layout::engine::LayoutEngine;
+use crate::layout::engine::LayoutParallelDebugCounters;
 use crate::layout::engine::LayoutParallelism;
+use crate::layout::engine::LayoutParallelismMode;
+use crate::layout::engine::DEFAULT_LAYOUT_MIN_FANOUT;
 use crate::layout::flex_profile::flex_profile_enabled;
 use crate::layout::flex_profile::log_flex_profile;
 use crate::layout::flex_profile::reset_flex_profile;
@@ -921,6 +927,19 @@ impl RenderOptions {
   }
 }
 
+/// Layout parallelism diagnostics recorded for a render.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct LayoutParallelismDiagnostics {
+  pub mode: LayoutParallelismMode,
+  pub min_fanout: usize,
+  pub max_threads: Option<usize>,
+  pub auto_min_nodes: Option<usize>,
+  pub node_count: usize,
+  pub engaged: bool,
+  pub worker_threads: usize,
+  pub work_items: usize,
+}
+
 /// Diagnostics collected during rendering.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct RenderDiagnostics {
@@ -934,6 +953,9 @@ pub struct RenderDiagnostics {
   pub failure_stage: Option<RenderStage>,
   /// Optional structured statistics gathered during rendering.
   pub stats: Option<RenderStats>,
+  /// Layout parallelism decision and observed worker usage.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub layout_parallelism: Option<LayoutParallelismDiagnostics>,
 }
 
 impl RenderDiagnostics {
@@ -3065,9 +3087,39 @@ impl FastRender {
   }
 
   fn resolve_layout_parallelism(&self, options: &RenderOptions) -> LayoutParallelism {
-    options
+    let toggles = runtime::runtime_toggles();
+    let min_fanout_override = toggles.usize("FASTR_LAYOUT_PARALLEL_MIN_FANOUT");
+    let max_threads_override = toggles.usize("FASTR_LAYOUT_PARALLEL_MAX_THREADS");
+    let min_nodes_override = toggles.usize("FASTR_LAYOUT_PARALLEL_MIN_NODES");
+    let mut parallelism = options
       .layout_parallelism
-      .unwrap_or(self.layout_parallelism)
+      .unwrap_or(self.layout_parallelism);
+    if let Some(mode) = toggles.get("FASTR_LAYOUT_PARALLEL") {
+      let normalized = mode.trim().to_ascii_lowercase();
+      let fallback_fanout = min_fanout_override.unwrap_or_else(|| {
+        if parallelism.min_fanout == usize::MAX {
+          DEFAULT_LAYOUT_MIN_FANOUT
+        } else {
+          parallelism.min_fanout
+        }
+      });
+      parallelism = match normalized.as_str() {
+        "1" | "true" | "on" => LayoutParallelism::enabled(fallback_fanout),
+        "auto" => LayoutParallelism::auto(fallback_fanout),
+        "0" | "false" | "off" => LayoutParallelism::disabled().with_min_fanout(fallback_fanout),
+        _ => parallelism,
+      };
+    }
+    if let Some(fanout) = min_fanout_override {
+      parallelism = parallelism.with_min_fanout(fanout);
+    }
+    if let Some(max_threads) = max_threads_override {
+      parallelism = parallelism.with_max_threads(Some(max_threads));
+    }
+    if let Some(min_nodes) = min_nodes_override {
+      parallelism = parallelism.with_auto_min_nodes(min_nodes);
+    }
+    parallelism
   }
 
   /// Renders HTML/CSS to a pixmap
@@ -5679,6 +5731,52 @@ impl FastRender {
       dump_box_tree(&box_tree.root, 0);
     }
 
+    let parallel_workload = layout_parallelism_workload(&box_tree, layout_parallelism.min_fanout);
+    let resolved_parallelism = layout_parallelism.resolve_for_workload(parallel_workload);
+    let work_items = parallel_workload.work_items();
+    let estimated_workers = resolved_parallelism.estimated_workers_for_workload(&parallel_workload);
+    let mut parallelism_diag = LayoutParallelismDiagnostics {
+      mode: resolved_parallelism.mode,
+      min_fanout: resolved_parallelism.min_fanout,
+      max_threads: resolved_parallelism.max_threads,
+      auto_min_nodes: matches!(resolved_parallelism.mode, LayoutParallelismMode::Auto)
+        .then_some(resolved_parallelism.auto_min_nodes),
+      node_count: parallel_workload.nodes,
+      engaged: resolved_parallelism.is_active()
+        && work_items >= resolved_parallelism.min_fanout
+        && estimated_workers > 1,
+      worker_threads: estimated_workers.max(1),
+      work_items,
+    };
+    let store_parallelism_diag =
+      !matches!(resolved_parallelism.mode, LayoutParallelismMode::Disabled);
+    let capture_parallel_counters =
+      store_parallelism_diag && toggles.truthy("FASTR_LAYOUT_PARALLEL_DEBUG");
+    struct ParallelCounterGuard(bool);
+    impl Drop for ParallelCounterGuard {
+      fn drop(&mut self) {
+        if self.0 {
+          enable_layout_parallel_debug_counters(false);
+        }
+      }
+    }
+    let _parallel_counter_guard = ParallelCounterGuard(capture_parallel_counters);
+    if capture_parallel_counters {
+      enable_layout_parallel_debug_counters(true);
+    }
+    let parallelism_counters_start = if store_parallelism_diag {
+      layout_parallel_debug_counters()
+    } else {
+      LayoutParallelDebugCounters::default()
+    };
+    if store_parallelism_diag {
+      if let Some(diag) = &self.diagnostics {
+        if let Ok(mut guard) = diag.lock() {
+          guard.layout_parallelism = Some(parallelism_diag.clone());
+        }
+      }
+    }
+
     // Update layout engine config for this viewport.
     //
     // Enable the layout result cache by default. This significantly reduces repeated layout
@@ -5687,7 +5785,7 @@ impl FastRender {
     let mut config = LayoutConfig::for_viewport(layout_viewport);
     config.fragmentation = manual_fragmentation;
     config.enable_cache = !toggles.truthy("FASTR_DISABLE_LAYOUT_CACHE");
-    config.parallelism = layout_parallelism;
+    config.parallelism = resolved_parallelism;
     let enable_layout_cache = config.enable_cache;
     self.layout_engine = LayoutEngine::with_font_context(config, self.font_context.clone());
     intrinsic_cache_clear();
@@ -5978,6 +6076,30 @@ impl FastRender {
       }
       if fragment_clone_profile {
         log_fragment_clone_profile();
+      }
+    }
+
+    if store_parallelism_diag {
+      let counters = layout_parallel_debug_counters();
+      let worker_threads = if counters.worker_threads > parallelism_counters_start.worker_threads {
+        counters.worker_threads - parallelism_counters_start.worker_threads
+      } else if counters.worker_threads > 0 {
+        counters.worker_threads
+      } else {
+        parallelism_diag.worker_threads
+      };
+      parallelism_diag.worker_threads = parallelism_diag.worker_threads.max(worker_threads).max(1);
+      let measured_work_items = counters
+        .work_items
+        .saturating_sub(parallelism_counters_start.work_items);
+      if measured_work_items > 0 {
+        parallelism_diag.work_items = measured_work_items;
+        parallelism_diag.engaged = true;
+      }
+      if let Some(diag) = &self.diagnostics {
+        if let Ok(mut guard) = diag.lock() {
+          guard.layout_parallelism = Some(parallelism_diag.clone());
+        }
       }
     }
 

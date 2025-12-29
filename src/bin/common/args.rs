@@ -3,6 +3,7 @@ use fastrender::compat::CompatProfile;
 use fastrender::dom::DomCompatibilityMode;
 use fastrender::image_output::OutputFormat;
 use fastrender::layout::engine::LayoutParallelism;
+use fastrender::layout::engine::DEFAULT_LAYOUT_MIN_FANOUT;
 use fastrender::style::media::MediaType;
 
 #[derive(Debug, Clone, Args)]
@@ -196,31 +197,52 @@ pub struct AllowPartialArgs {
   pub allow_partial: bool,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
+pub enum LayoutParallelModeArg {
+  Off,
+  On,
+  Auto,
+}
+
 #[derive(Debug, Clone, Args)]
 pub struct LayoutParallelArgs {
-  /// Enable layout fan-out across independent subtrees
-  #[arg(long)]
-  pub layout_parallel: bool,
+  /// Layout fan-out mode (off|on|auto)
+  #[arg(
+    long,
+    value_enum,
+    default_value_t = LayoutParallelModeArg::Off,
+    default_missing_value = "on",
+    num_args = 0..=1
+  )]
+  pub layout_parallel: LayoutParallelModeArg,
 
   /// Minimum independent siblings before spawning layout threads
-  #[arg(long, default_value_t = 8, value_name = "N")]
+  #[arg(long, default_value_t = DEFAULT_LAYOUT_MIN_FANOUT, value_name = "N")]
   pub layout_parallel_min_fanout: usize,
 
   /// Maximum rayon worker threads used for layout fan-out
   #[arg(long, value_name = "N")]
   pub layout_parallel_max_threads: Option<usize>,
+
+  /// Minimum box nodes before auto layout fan-out engages
+  #[arg(long, value_name = "N")]
+  pub layout_parallel_auto_min_nodes: Option<usize>,
 }
 
 impl LayoutParallelArgs {
   pub fn parallelism(&self) -> Option<LayoutParallelism> {
-    if !self.layout_parallel {
-      return None;
+    let mut parallelism = match self.layout_parallel {
+      LayoutParallelModeArg::Off => return None,
+      LayoutParallelModeArg::On => LayoutParallelism::enabled(self.layout_parallel_min_fanout),
+      LayoutParallelModeArg::Auto => LayoutParallelism::auto(self.layout_parallel_min_fanout),
+    };
+    parallelism = parallelism
+      .with_min_fanout(self.layout_parallel_min_fanout)
+      .with_max_threads(self.layout_parallel_max_threads);
+    if let Some(min_nodes) = self.layout_parallel_auto_min_nodes {
+      parallelism = parallelism.with_auto_min_nodes(min_nodes);
     }
-    Some(
-      LayoutParallelism::enabled(self.layout_parallel_min_fanout)
-        .with_min_fanout(self.layout_parallel_min_fanout)
-        .with_max_threads(self.layout_parallel_max_threads),
-    )
+    Some(parallelism)
   }
 }
 

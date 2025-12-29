@@ -14,12 +14,13 @@ mod common;
 
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 use common::args::{
-  parse_shard, CompatArgs, CompatProfileArg, DomCompatArg, LayoutParallelArgs, ResourceAccessArgs,
+  parse_shard, CompatArgs, CompatProfileArg, DomCompatArg, LayoutParallelArgs,
+  LayoutParallelModeArg, ResourceAccessArgs,
 };
 use common::render_pipeline::{
-  build_render_configs, follow_client_redirects, format_error_with_chain, read_cached_document,
-  render_document, render_document_with_artifacts, PreparedDocument, RenderConfigBundle,
-  RenderSurface,
+  build_render_configs, follow_client_redirects, format_error_with_chain, log_layout_parallelism,
+  read_cached_document, render_document, render_document_with_artifacts, PreparedDocument,
+  RenderConfigBundle, RenderSurface,
 };
 use fastrender::api::{
   CascadeDiagnostics, DiagnosticsLevel, LayoutDiagnostics, PaintDiagnostics, RenderArtifactRequest,
@@ -1370,6 +1371,10 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
       log.push_str("Status: OK\n");
       append_fetch_error_summary(&mut log, &result.diagnostics);
       append_stage_summary(&mut log, &result.diagnostics);
+      log_layout_parallelism(&result.diagnostics, |line| {
+        log.push_str(line);
+        log.push('\n');
+      });
     }
     Ok(Err(err)) => {
       match &err {
@@ -2953,8 +2958,16 @@ fn spawn_worker(
   for origin in &args.resource_access.allow_subresource_origin {
     cmd.arg("--allow-subresource-origin").arg(origin);
   }
-  if args.layout_parallel.layout_parallel {
-    cmd.arg("--layout-parallel");
+  match args.layout_parallel.layout_parallel {
+    LayoutParallelModeArg::Off => {}
+    LayoutParallelModeArg::On => {
+      cmd.arg("--layout-parallel").arg("on");
+    }
+    LayoutParallelModeArg::Auto => {
+      cmd.arg("--layout-parallel").arg("auto");
+    }
+  }
+  if args.layout_parallel.layout_parallel != LayoutParallelModeArg::Off {
     cmd
       .arg("--layout-parallel-min-fanout")
       .arg(args.layout_parallel.layout_parallel_min_fanout.to_string());
@@ -2962,6 +2975,11 @@ fn spawn_worker(
       cmd
         .arg("--layout-parallel-max-threads")
         .arg(max_threads.to_string());
+    }
+    if let Some(min_nodes) = args.layout_parallel.layout_parallel_auto_min_nodes {
+      cmd
+        .arg("--layout-parallel-auto-min-nodes")
+        .arg(min_nodes.to_string());
     }
   }
   if let Some(profile) = args.compat.compat_profile_arg() {
@@ -3696,9 +3714,10 @@ mod tests {
         allow_subresource_origin: Vec::new(),
       },
       layout_parallel: LayoutParallelArgs {
-        layout_parallel: false,
+        layout_parallel: LayoutParallelModeArg::Off,
         layout_parallel_min_fanout: 8,
         layout_parallel_max_threads: None,
+        layout_parallel_auto_min_nodes: None,
       },
       compat: CompatArgs::default(),
       pages: None,

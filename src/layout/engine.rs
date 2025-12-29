@@ -38,35 +38,115 @@ use crate::tree::fragment_tree::FragmentNode;
 use crate::tree::fragment_tree::FragmentTree;
 use rayon::ThreadPool;
 use rayon::ThreadPoolBuilder;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
+/// Default minimum sibling fan-out before spawning layout tasks.
+pub const DEFAULT_LAYOUT_MIN_FANOUT: usize = 8;
+/// Minimum box tree size before auto parallelism engages.
+pub const DEFAULT_LAYOUT_AUTO_MIN_NODES: usize = 512;
+
+/// Summary of layout fan-out opportunities for a box tree.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LayoutParallelismWorkload {
+  /// Total number of box nodes in the tree.
+  pub nodes: usize,
+  /// Maximum immediate child count observed on a node.
+  pub max_fanout: usize,
+  /// Total children under nodes that meet the configured fan-out threshold.
+  pub parallel_children: usize,
+}
+
+impl LayoutParallelismWorkload {
+  /// Number of immediate children that could be processed in parallel.
+  ///
+  /// This treats each eligible sibling group as independent work items and caps activation logic
+  /// based on the widest fan-out observed so we don't rely solely on a single hotspot.
+  pub fn work_items(&self) -> usize {
+    self.parallel_children.max(self.max_fanout)
+  }
+}
+
+/// Estimate layout fan-out based on the tree structure and configured sibling threshold.
+pub fn layout_parallelism_workload(
+  box_tree: &BoxTree,
+  min_fanout: usize,
+) -> LayoutParallelismWorkload {
+  let mut workload = LayoutParallelismWorkload::default();
+  fn walk(node: &BoxNode, min_fanout: usize, workload: &mut LayoutParallelismWorkload) {
+    workload.nodes += 1;
+    let child_len = node.children.len();
+    workload.max_fanout = workload.max_fanout.max(child_len);
+    if child_len >= min_fanout {
+      workload.parallel_children += child_len;
+    }
+    for child in &node.children {
+      walk(child, min_fanout, workload);
+    }
+  }
+  walk(&box_tree.root, min_fanout, &mut workload);
+  workload
+}
+
+/// Parallel layout mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LayoutParallelismMode {
+  Disabled,
+  Enabled,
+  Auto,
+}
+
+impl Default for LayoutParallelismMode {
+  fn default() -> Self {
+    LayoutParallelismMode::Disabled
+  }
+}
+
 /// Parallel layout configuration
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LayoutParallelism {
-  /// Whether layout fan-out is enabled for independent subtrees.
-  pub enabled: bool,
+  /// How layout fan-out should be applied.
+  pub mode: LayoutParallelismMode,
   /// Optional ceiling on rayon worker count when fan-out is enabled.
   pub max_threads: Option<usize>,
   /// Minimum number of independent work items before spawning.
   pub min_fanout: usize,
+  /// Minimum total box nodes required before auto parallelism engages.
+  pub auto_min_nodes: usize,
+  /// Whether auto parallelism decided to fan out for the current workload.
+  auto_activated: bool,
 }
 
 impl LayoutParallelism {
   pub fn disabled() -> Self {
     Self {
-      enabled: false,
+      mode: LayoutParallelismMode::Disabled,
       max_threads: None,
-      min_fanout: usize::MAX,
+      min_fanout: DEFAULT_LAYOUT_MIN_FANOUT,
+      auto_min_nodes: DEFAULT_LAYOUT_AUTO_MIN_NODES,
+      auto_activated: false,
     }
   }
 
   pub fn enabled(min_fanout: usize) -> Self {
     Self {
-      enabled: true,
+      mode: LayoutParallelismMode::Enabled,
       max_threads: None,
       min_fanout: min_fanout.max(1),
+      auto_min_nodes: DEFAULT_LAYOUT_AUTO_MIN_NODES,
+      auto_activated: true,
+    }
+  }
+
+  pub fn auto(min_fanout: usize) -> Self {
+    Self {
+      mode: LayoutParallelismMode::Auto,
+      max_threads: None,
+      min_fanout: min_fanout.max(1),
+      auto_min_nodes: DEFAULT_LAYOUT_AUTO_MIN_NODES,
+      auto_activated: false,
     }
   }
 
@@ -80,8 +160,75 @@ impl LayoutParallelism {
     self
   }
 
+  pub fn with_auto_min_nodes(mut self, min_nodes: usize) -> Self {
+    self.auto_min_nodes = min_nodes.max(1);
+    self
+  }
+
+  /// Estimate how many rayon workers could receive useful work for the given workload.
+  ///
+  /// This caps the worker count by the available fan-out so logs/diagnostics can report
+  /// meaningful parallelism rather than the raw pool size.
+  pub fn estimated_workers_for_workload(&self, workload: &LayoutParallelismWorkload) -> usize {
+    if !self.is_active() {
+      return 1;
+    }
+    let available = self.expected_workers();
+    let task_capacity = workload.work_items().max(1);
+    available.min(task_capacity)
+  }
+
   pub fn should_parallelize(&self, work_items: usize) -> bool {
-    self.enabled && work_items >= self.min_fanout && rayon::current_num_threads() > 1
+    self.is_active() && work_items >= self.min_fanout && rayon::current_num_threads() > 1
+  }
+
+  pub fn is_active(&self) -> bool {
+    match self.mode {
+      LayoutParallelismMode::Disabled => false,
+      LayoutParallelismMode::Enabled => true,
+      LayoutParallelismMode::Auto => self.auto_activated,
+    }
+  }
+
+  pub fn resolve_for_workload(&self, workload: LayoutParallelismWorkload) -> Self {
+    match self.mode {
+      LayoutParallelismMode::Disabled => Self {
+        auto_activated: false,
+        ..*self
+      },
+      LayoutParallelismMode::Enabled => Self {
+        auto_activated: true,
+        ..*self
+      },
+      LayoutParallelismMode::Auto => {
+        let available_threads = self
+          .max_threads
+          .unwrap_or_else(rayon::current_num_threads)
+          .max(1);
+        let work_items = workload.work_items().max(1);
+        let threshold = self
+          .auto_min_nodes
+          .max(self.min_fanout.saturating_mul(self.min_fanout));
+        let has_parallel_work = work_items >= self.min_fanout;
+        let useful_threads = available_threads.min(work_items);
+        let activated =
+          useful_threads > 1 && workload.nodes >= threshold && has_parallel_work;
+        Self {
+          auto_activated: activated,
+          ..*self
+        }
+      }
+    }
+  }
+
+  pub fn expected_workers(&self) -> usize {
+    if !self.is_active() {
+      return 1;
+    }
+    self
+      .max_threads
+      .unwrap_or_else(rayon::current_num_threads)
+      .max(1)
   }
 }
 
@@ -436,16 +583,12 @@ impl LayoutEngine {
       config.initial_containing_block,
     )
     .with_parallelism(config.parallelism);
-    let parallel_pool = if config.parallelism.enabled {
-      config
-        .parallelism
-        .max_threads
-        .filter(|threads| *threads > 1)
-        .and_then(|threads| ThreadPoolBuilder::new().num_threads(threads).build().ok())
-        .map(Arc::new)
-    } else {
-      None
-    };
+    let parallel_pool = config
+      .parallelism
+      .max_threads
+      .filter(|threads| *threads > 1)
+      .and_then(|threads| ThreadPoolBuilder::new().num_threads(threads).build().ok())
+      .map(Arc::new);
     Self {
       config,
       factory,
@@ -565,11 +708,16 @@ impl LayoutEngine {
     reset_caches: bool,
     trace: Option<&TraceHandle>,
   ) -> Result<FragmentTree, LayoutError> {
-    self.run_in_pool(|| self.layout_tree_inner(box_tree, reset_caches, trace))
+    let (_parallelism, _workload, parallel_pool, factory) =
+      self.resolve_parallelism_for_tree(box_tree);
+    self.run_in_pool(parallel_pool.as_deref(), || {
+      self.layout_tree_inner(&factory, box_tree, reset_caches, trace)
+    })
   }
 
   fn layout_tree_inner(
     &self,
+    factory: &FormattingContextFactory,
     box_tree: &BoxTree,
     reset_caches: bool,
     trace: Option<&TraceHandle>,
@@ -594,7 +742,7 @@ impl LayoutEngine {
 
     if reset_for_run {
       // Reset any per-run caches so a fresh layout starts from a clean slate.
-      self.factory.reset_caches();
+      factory.reset_caches();
     }
 
     // Create root constraints from initial containing block, preferring explicit
@@ -645,7 +793,8 @@ impl LayoutEngine {
     let constraints = LayoutConstraints::definite(constraint_width, constraint_height);
 
     // Layout the root box
-    let root_fragment = self.layout_subtree_internal(&box_tree.root, &constraints, trace)?;
+    let root_fragment =
+      self.layout_subtree_internal(factory, &box_tree.root, &constraints, trace)?;
 
     if let Some(options) = &self.config.fragmentation {
       let fragments = fragmentation::fragment_tree(&root_fragment, options)?;
@@ -660,12 +809,40 @@ impl LayoutEngine {
     }
   }
 
-  fn run_in_pool<T: Send>(&self, f: impl FnOnce() -> T + Send) -> T {
-    if let Some(pool) = &self.parallel_pool {
+  fn run_in_pool<T: Send>(&self, pool: Option<&ThreadPool>, f: impl FnOnce() -> T + Send) -> T {
+    if let Some(pool) = pool {
       pool.install(f)
     } else {
       f()
     }
+  }
+
+  fn resolve_parallelism_for_tree(
+    &self,
+    box_tree: &BoxTree,
+  ) -> (
+    LayoutParallelism,
+    LayoutParallelismWorkload,
+    Option<Arc<ThreadPool>>,
+    FormattingContextFactory,
+  ) {
+    let workload = layout_parallelism_workload(box_tree, self.config.parallelism.min_fanout);
+    let parallelism = self.config.parallelism.resolve_for_workload(workload);
+    let factory = self.factory.clone().with_parallelism(parallelism);
+    let parallel_pool = if parallelism.is_active() {
+      if let Some(pool) = &self.parallel_pool {
+        Some(pool.clone())
+      } else {
+        parallelism
+          .max_threads
+          .filter(|threads| *threads > 1)
+          .and_then(|threads| ThreadPoolBuilder::new().num_threads(threads).build().ok())
+          .map(Arc::new)
+      }
+    } else {
+      None
+    };
+    (parallelism, workload, parallel_pool, factory)
   }
 
   /// Performs layout on a subtree rooted at a box node
@@ -721,11 +898,12 @@ impl LayoutEngine {
     if let Err(RenderError::Timeout { elapsed, .. }) = check_active(RenderStage::Layout) {
       return Err(LayoutError::Timeout { elapsed });
     }
-    self.layout_subtree_internal(box_node, constraints, None)
+    self.layout_subtree_internal(&self.factory, box_node, constraints, None)
   }
 
   fn layout_subtree_internal(
     &self,
+    factory: &FormattingContextFactory,
     box_node: &BoxNode,
     constraints: &LayoutConstraints,
     trace: Option<&TraceHandle>,
@@ -741,7 +919,7 @@ impl LayoutEngine {
     })?;
 
     // Create the appropriate formatting context via factory
-    let fc = self.factory.create(fc_type);
+    let fc = factory.create(fc_type);
 
     // Optional slow-layout logging for debugging large pages.
     let slow_threshold_ms = runtime::runtime_toggles().u128("FASTR_LOG_SLOW_LAYOUT_MS");

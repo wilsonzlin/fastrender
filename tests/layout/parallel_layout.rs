@@ -1,5 +1,9 @@
 use fastrender::render_control::RenderDeadline;
 use fastrender::snapshot_fragment_tree;
+use fastrender::layout::engine::{
+  enable_layout_parallel_debug_counters, layout_parallel_debug_counters,
+  reset_layout_parallel_debug_counters, DEFAULT_LAYOUT_MIN_FANOUT,
+};
 use fastrender::style::display::Display;
 use fastrender::style::position::Position;
 use fastrender::style::values::Length;
@@ -521,4 +525,31 @@ fn parallel_layout_respects_deadline() {
     LayoutError::Timeout { .. } => {}
     other => panic!("expected timeout, got {other:?}"),
   }
+}
+
+#[test]
+fn auto_parallel_layout_spawns_workers() {
+  let box_tree = build_block_stack(1024);
+  let viewport = Size::new(1200.0, 900.0);
+  let threads = num_cpus::get().max(2);
+  let parallelism = LayoutParallelism::auto(DEFAULT_LAYOUT_MIN_FANOUT)
+    .with_max_threads(Some(threads));
+  let config = LayoutConfig::for_viewport(viewport).with_parallelism(parallelism);
+  let engine = LayoutEngine::with_font_context(config, FontContext::new());
+
+  enable_layout_parallel_debug_counters(true);
+  reset_layout_parallel_debug_counters();
+  let _ = engine.layout_tree(&box_tree).expect("auto parallel layout");
+  let counters = layout_parallel_debug_counters();
+  enable_layout_parallel_debug_counters(false);
+  reset_layout_parallel_debug_counters();
+
+  assert!(
+    counters.worker_threads > 1,
+    "expected auto parallel layout to use multiple workers, counters={counters:?}"
+  );
+  assert!(
+    counters.work_items > 0,
+    "expected auto parallel layout to record parallel work"
+  );
 }

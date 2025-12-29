@@ -237,6 +237,27 @@ pub fn render_document_with_artifacts(
 }
 
 /// Log render diagnostics in a consistent human-readable format.
+pub fn log_layout_parallelism(diagnostics: &RenderDiagnostics, mut log: impl FnMut(&str)) {
+  if let Some(layout) = &diagnostics.layout_parallelism {
+    let mode = format!("{:?}", layout.mode).to_ascii_lowercase();
+    let mut line = format!(
+      "Layout parallelism: mode={mode} engaged={} nodes={} min_fanout={} workers={} work_items={}",
+      layout.engaged,
+      layout.node_count,
+      layout.min_fanout,
+      layout.worker_threads,
+      layout.work_items
+    );
+    if let Some(max_threads) = layout.max_threads {
+      line.push_str(&format!(" max_threads={max_threads}"));
+    }
+    if let Some(min_nodes) = layout.auto_min_nodes {
+      line.push_str(&format!(" auto_min_nodes={min_nodes}"));
+    }
+    log(&line);
+  }
+}
+
 pub fn log_diagnostics(diagnostics: &RenderDiagnostics, mut log: impl FnMut(&str)) {
   if let Some(err) = &diagnostics.document_error {
     log(&format!("Document error: {err}"));
@@ -245,6 +266,8 @@ pub fn log_diagnostics(diagnostics: &RenderDiagnostics, mut log: impl FnMut(&str
   if let Some(stage) = diagnostics.timeout_stage {
     log(&format!("Timed out during {stage}"));
   }
+
+  log_layout_parallelism(diagnostics, &mut log);
 
   for fetch_error in &diagnostics.fetch_errors {
     let kind = match fetch_error.kind {
