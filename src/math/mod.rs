@@ -539,6 +539,10 @@ fn parse_children(node: &DomNode) -> Vec<MathNode> {
   node.children.iter().filter_map(parse_mathml).collect()
 }
 
+fn is_annotation_tag(tag: &str) -> bool {
+  matches!(tag, "annotation" | "annotation-xml")
+}
+
 fn parse_scripts(children: &[DomNode]) -> Vec<(Option<MathNode>, Option<MathNode>)> {
   let mut pairs = Vec::new();
   let mut idx = 0;
@@ -589,6 +593,28 @@ pub fn parse_mathml(node: &DomNode) -> Option<MathNode> {
       let tag = tag_name.to_ascii_lowercase();
       let in_math_ns = namespace == MATHML_NAMESPACE;
       match tag.as_str() {
+        "annotation" | "annotation-xml" => None,
+        "semantics" => {
+          let mut first_child = None;
+          for child in &node.children {
+            match &child.node_type {
+              DomNodeType::Element { tag_name, .. } => {
+                if is_annotation_tag(&tag_name.to_ascii_lowercase()) {
+                  continue;
+                }
+              }
+              DomNodeType::Text { content } => {
+                if content.trim().is_empty() {
+                  continue;
+                }
+              }
+              _ => {}
+            }
+            first_child = Some(child);
+            break;
+          }
+          first_child.and_then(parse_mathml)
+        }
         "math" if in_math_ns || namespace.is_empty() => {
           let display = node
             .get_attribute_ref("display")
@@ -632,6 +658,7 @@ pub fn parse_mathml(node: &DomNode) -> Option<MathNode> {
           overrides: parse_mstyle_overrides(node),
           children: parse_children(node),
         }),
+        "merror" => wrap_row_or_single(parse_children(node)),
         "mfrac" => {
           let mut children = parse_children(node).into_iter();
           let num = children.next().unwrap_or_else(empty_text_node);
@@ -2865,6 +2892,66 @@ mod tests {
     };
     assert_eq!(text, "x");
     assert!(matches!(variant, Some(MathVariant::Normal)));
+  }
+
+  #[test]
+  fn semantics_ignores_annotation_children() {
+    let markup = r#"<math>
+        <semantics>
+          <mrow><mi>x</mi><mo>=</mo><mn>1</mn></mrow>
+          <annotation encoding="application/x-tex">x=1</annotation>
+          <annotation-xml encoding="application/mathml+xml"><mi>y</mi></annotation-xml>
+        </semantics>
+      </math>"#;
+    let parsed = parse_math_from_html(markup);
+    let MathNode::Math { children, .. } = parsed else {
+      panic!("expected math root");
+    };
+    assert_eq!(
+      children.len(),
+      1,
+      "only presentation child should be parsed"
+    );
+    let row_children = match &children[0] {
+      MathNode::Row(children) => children,
+      other => panic!("expected row child, got {:?}", other),
+    };
+    assert_eq!(
+      row_children.len(),
+      3,
+      "annotation content should be skipped"
+    );
+    assert!(
+      !row_children
+        .iter()
+        .any(|child| { matches!(child, MathNode::Text { text, .. } if text.contains("x=1")) }),
+      "annotation text should not appear in parsed output",
+    );
+    let dom = crate::dom::parse_html(markup).expect("dom");
+    let semantics_node = find_math_element(&dom)
+      .and_then(|math| {
+        math.children.iter().find(|child| {
+          child
+            .tag_name()
+            .map(|t| t.eq_ignore_ascii_case("semantics"))
+            .unwrap_or(false)
+        })
+      })
+      .expect("semantics element");
+    let annotation_node = semantics_node
+      .children
+      .iter()
+      .find(|child| {
+        child
+          .tag_name()
+          .map(|t| t.eq_ignore_ascii_case("annotation"))
+          .unwrap_or(false)
+      })
+      .expect("annotation child");
+    assert!(
+      parse_mathml(annotation_node).is_none(),
+      "annotation nodes should be ignored entirely"
+    );
   }
 
   #[test]

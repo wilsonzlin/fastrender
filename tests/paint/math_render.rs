@@ -119,6 +119,23 @@ fn math_stretchy_ops_match_golden() {
   });
 }
 
+#[test]
+fn math_semantics_annotations_ignored_match_golden() {
+  with_stack(|| {
+    let mut renderer = FastRender::new().expect("renderer");
+    let html = std::fs::read_to_string(fixture_path("math_semantics_wikipedia_like"))
+      .expect("load math_semantics_wikipedia_like");
+    let png = renderer
+      .render_to_png(&html, 240, 160)
+      .expect("render math semantics");
+    compare_golden(
+      "math_semantics_wikipedia_like",
+      &png,
+      &CompareConfig::lenient(),
+    );
+  });
+}
+
 fn fixture_path(name: &str) -> PathBuf {
   PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/html/{}.html", name))
 }
