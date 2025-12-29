@@ -266,6 +266,12 @@ fn svg_pixmap_key(
   }
 }
 
+fn inline_svg_cache_key(svg_content: &str) -> String {
+  let mut hasher = DefaultHasher::new();
+  svg_content.hash(&mut hasher);
+  format!("inline-svg:{:016x}:{}", hasher.finish(), svg_content.len())
+}
+
 fn svg_parse_fill_color(value: &str) -> Option<Rgba> {
   let trimmed = value.trim();
   if trimmed.is_empty() {
@@ -1774,15 +1780,21 @@ impl ImageCache {
     }
   }
 
-  /// Render raw SVG content to an image (uncached).
+  /// Render raw SVG content to an image, caching by content hash.
   pub fn render_svg(&self, svg_content: &str) -> Result<Arc<CachedImage>> {
     record_image_cache_request();
+    let cache_key = inline_svg_cache_key(svg_content);
+    if let Some(image) = self.get_cached(&cache_key) {
+      self.enforce_svg_resource_policy(svg_content, "inline-svg")?;
+      record_image_cache_hit();
+      return Ok(image);
+    }
     record_image_cache_miss();
     let decode_timer = Instant::now();
     let (img, intrinsic_ratio, aspect_ratio_none) = self.render_svg_to_image(svg_content)?;
     let svg_content = Arc::<str>::from(svg_content);
     record_image_decode_ms(decode_timer.elapsed().as_secs_f64() * 1000.0);
-    Ok(Arc::new(CachedImage {
+    let cached = Arc::new(CachedImage {
       image: Arc::new(img),
       orientation: None,
       resolution: None,
@@ -1790,7 +1802,9 @@ impl ImageCache {
       intrinsic_ratio,
       aspect_ratio_none,
       svg_content: Some(svg_content),
-    }))
+    });
+    self.insert_cached_image(&cache_key, Arc::clone(&cached));
+    Ok(cached)
   }
 
   pub(crate) fn render_svg_pixmap_at_size(
