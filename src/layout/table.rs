@@ -1939,9 +1939,14 @@ impl Default for TableStructure {
 }
 
 fn resolve_border_spacing_length(length: &crate::style::values::Length, font_size: f32) -> f32 {
-  let resolved = length
-    .resolve_with_context(None, f32::NAN, f32::NAN, font_size, font_size)
-    .unwrap_or(0.0);
+  let resolved = if length.unit.is_absolute() {
+    Some(length.to_px())
+  } else {
+    // Border spacing should resolve for absolute and font-relative values even when viewport
+    // dimensions are unavailable; treat percentage/viewport-based spacing as zero in that case.
+    length.resolve_with_context(Some(0.0), 0.0, 0.0, font_size, font_size)
+  }
+  .unwrap_or(0.0);
 
   resolved.max(0.0)
 }
@@ -5115,6 +5120,7 @@ impl FormattingContext for TableFormattingContext {
     let mut row_line_pos = Vec::new();
     let mut row_offsets = Vec::with_capacity(structure.row_count);
     let mut col_offsets = Vec::with_capacity(structure.column_count);
+    let mut row_prefix_heights: Option<Vec<f32>> = None;
 
     // Collapsed borders place border strokes on grid lines, with half of the outer
     // borders inside the table box and half potentially spilling into the margin
@@ -5215,6 +5221,14 @@ impl FormattingContext for TableFormattingContext {
             x += width + h_spacing;
           }
 
+          let mut prefix = Vec::with_capacity(row_metrics.len().saturating_add(1));
+          prefix.push(0.0);
+          for row in &row_metrics {
+            let next = prefix.last().copied().unwrap_or(0.0) + row.height + v_spacing;
+            prefix.push(next);
+          }
+          row_prefix_heights = Some(prefix);
+
           let width = if col_widths.is_empty() {
             available_content
           } else {
@@ -5248,19 +5262,6 @@ impl FormattingContext for TableFormattingContext {
         &horizontal_line_max,
       ))
     });
-
-    let content_origin_x = if structure.border_collapse == BorderCollapse::Collapse {
-      col_offsets.first().copied().unwrap_or(pad_left)
-        - vertical_line_max.first().copied().unwrap_or(0.0) * 0.5
-    } else {
-      border_left + pad_left
-    };
-    let content_origin_y = if structure.border_collapse == BorderCollapse::Collapse {
-      row_offsets.first().copied().unwrap_or(pad_top)
-        - horizontal_line_max.first().copied().unwrap_or(0.0) * 0.5
-    } else {
-      border_top + pad_top
-    };
 
     // Column group and column backgrounds precede row backgrounds/cells.
     let mut column_styles: Vec<Option<Arc<ComputedStyle>>> = vec![None; structure.column_count];
@@ -5476,10 +5477,37 @@ impl FormattingContext for TableFormattingContext {
       ));
     }
 
-    // Position cell fragments with vertical alignment within their row block
+    // Position cell fragments with vertical alignment within their row block.
+    // Preserve row/column traversal order (CSS 2.1 row baseline rules) without moving fragments.
     let row_metric_heights: Vec<f32> = row_metrics.iter().map(|r| r.height).collect();
-    // Ensure baseline selection follows row/column order (CSS 2.1 row baseline rules).
-    laid_out_cells.sort_by_key(|c| (c.cell.row, c.cell.col));
+    // Cells are collected from TableStructure in row-major order; preserve that order per row to
+    // keep paint order stable without shuffling the fragments themselves.
+    let mut cells_by_row: Vec<Vec<usize>> = vec![Vec::new(); structure.row_count];
+    let mut fallback_indices = Vec::new();
+    for (idx, laid) in laid_out_cells.iter().enumerate() {
+      if let Some(bucket) = cells_by_row.get_mut(laid.cell.row) {
+        bucket.push(idx);
+      } else {
+        fallback_indices.push(idx);
+      }
+    }
+    if cfg!(debug_assertions) {
+      for bucket in &cells_by_row {
+        let mut last_col = None;
+        for &idx in bucket {
+          let col = laid_out_cells[idx].cell.col;
+          if let Some(prev) = last_col {
+            debug_assert!(prev <= col, "cells in a row should appear in column order");
+          }
+          last_col = Some(col);
+        }
+      }
+    }
+    let placement_order = cells_by_row
+      .into_iter()
+      .flatten()
+      .chain(fallback_indices.into_iter())
+      .collect::<Vec<_>>();
 
     // Compute table baseline per CSS 2.1: the baseline of the first row that has a
     // baseline-aligned, non-rowspanning cell; otherwise the bottom content edge of the first row.
@@ -5496,20 +5524,20 @@ impl FormattingContext for TableFormattingContext {
         }
       });
 
-    for laid in laid_out_cells {
+    let mut laid_out_cells: Vec<Option<LaidOutCell>> =
+      laid_out_cells.into_iter().map(Some).collect();
+
+    for idx in placement_order {
+      let Some(mut laid) = laid_out_cells.get_mut(idx).and_then(Option::take) else {
+        continue;
+      };
       let cell = &laid.cell;
       // Compute horizontal position
-      let x = if structure.border_collapse == BorderCollapse::Collapse {
-        col_offsets.get(cell.col).copied().unwrap_or(0.0)
-      } else {
-        content_origin_x
-          + h_spacing
-          + col_widths
-            .iter()
-            .take(cell.col)
-            .map(|w| w + h_spacing)
-            .sum::<f32>()
-      };
+      let base_x = col_offsets
+        .get(cell.col)
+        .copied()
+        .unwrap_or(content_origin_x);
+      let x = base_x;
 
       let row_start = cell.row;
       let span_end = (cell.row + cell.rowspan).min(row_metrics.len());
@@ -5517,6 +5545,10 @@ impl FormattingContext for TableFormattingContext {
         let start = row_line_pos.get(row_start).copied().unwrap_or(0.0);
         let end = row_line_pos.get(span_end).copied().unwrap_or(start);
         (end - start).max(0.0)
+      } else if let Some(prefix) = &row_prefix_heights {
+        let start = prefix.get(row_start).copied().unwrap_or(0.0);
+        let end = prefix.get(span_end).copied().unwrap_or(start);
+        (end - start - v_spacing).max(0.0)
       } else {
         row_metrics[row_start..span_end]
           .iter()
@@ -14100,6 +14132,235 @@ mod tests {
       offset.abs() < 0.5,
       "row vertical-align should place content at top (offset {:.2})",
       offset
+    );
+  }
+
+  #[test]
+  fn cell_positions_and_spanned_heights_remain_stable() {
+    let mut base_cell_style = ComputedStyle::default();
+    base_cell_style.display = Display::TableCell;
+    base_cell_style.padding_left = Length::px(0.0);
+    base_cell_style.padding_right = Length::px(0.0);
+    base_cell_style.padding_top = Length::px(0.0);
+    base_cell_style.padding_bottom = Length::px(0.0);
+
+    let cell = |mut style: ComputedStyle,
+                color: Rgba,
+                width: f32,
+                height: f32,
+                colspan: usize,
+                rowspan: usize| {
+      style.background_color = color;
+      style.width = Some(Length::px(width));
+      style.height = Some(Length::px(height));
+      BoxNode::new_block(Arc::new(style), FormattingContextType::Block, vec![]).with_debug_info(
+        DebugInfo::new(Some("td".to_string()), None, vec![]).with_spans(colspan, rowspan),
+      )
+    };
+
+    let mut row_style = ComputedStyle::default();
+    row_style.display = Display::TableRow;
+    row_style.height = Some(Length::px(18.0));
+    let row1 = BoxNode::new_block(
+      Arc::new(row_style.clone()),
+      FormattingContextType::Block,
+      vec![
+        cell(base_cell_style.clone(), Rgba::RED, 40.0, 14.0, 2, 1),
+        cell(base_cell_style.clone(), Rgba::GREEN, 30.0, 10.0, 1, 1),
+      ],
+    );
+
+    row_style.height = Some(Length::px(22.0));
+    let row2 = BoxNode::new_block(
+      Arc::new(row_style.clone()),
+      FormattingContextType::Block,
+      vec![
+        cell(base_cell_style.clone(), Rgba::BLUE, 25.0, 18.0, 1, 2),
+        cell(
+          base_cell_style.clone(),
+          Rgba::new(255, 165, 0, 1.0),
+          20.0,
+          12.0,
+          1,
+          1,
+        ),
+        cell(
+          base_cell_style.clone(),
+          Rgba::new(128, 0, 128, 1.0),
+          15.0,
+          8.0,
+          1,
+          1,
+        ),
+      ],
+    );
+
+    row_style.height = Some(Length::px(24.0));
+    let row3 = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![
+        cell(
+          base_cell_style.clone(),
+          Rgba::new(0, 128, 128, 1.0),
+          22.0,
+          10.0,
+          1,
+          1,
+        ),
+        cell(
+          base_cell_style,
+          Rgba::new(128, 128, 0, 1.0),
+          18.0,
+          14.0,
+          1,
+          1,
+        ),
+      ],
+    );
+
+    let mut table_style = ComputedStyle::default();
+    table_style.display = Display::Table;
+    table_style.border_spacing_horizontal = Length::px(6.0);
+    table_style.border_spacing_vertical = Length::px(4.0);
+    table_style.border_collapse = BorderCollapse::Separate;
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row1, row2, row3],
+    );
+    let style_h_spacing = table.style.border_spacing_horizontal.to_px();
+    let style_v_spacing = table.style.border_spacing_vertical.to_px();
+    assert!(
+      (style_h_spacing - 6.0).abs() < f32::EPSILON,
+      "table style horizontal spacing unexpected: {}",
+      style_h_spacing
+    );
+    assert!(
+      (style_v_spacing - 4.0).abs() < f32::EPSILON,
+      "table style vertical spacing unexpected: {}",
+      style_v_spacing
+    );
+    let resolved_spacing = resolve_border_spacing(&table.style);
+    assert!(
+      (resolved_spacing.0 - 6.0).abs() < f32::EPSILON
+        && (resolved_spacing.1 - 4.0).abs() < f32::EPSILON,
+      "resolved spacing unexpected: {:?}",
+      resolved_spacing
+    );
+    let structure = TableStructure::from_box_tree(&table);
+    assert_eq!(
+      structure.border_collapse,
+      BorderCollapse::Separate,
+      "test must exercise the separated border model"
+    );
+    assert!(
+      (structure.border_spacing.0 - 6.0).abs() < f32::EPSILON
+        && (structure.border_spacing.1 - 4.0).abs() < f32::EPSILON,
+      "unexpected border spacing values in structure: {:?}",
+      structure.border_spacing
+    );
+
+    let tfc = TableFormattingContext::new();
+    let fragment = tfc
+      .layout(&table, &LayoutConstraints::definite_width(200.0))
+      .expect("table layout");
+
+    let cells: Vec<&FragmentNode> = fragment
+      .children
+      .iter()
+      .filter(|f| {
+        f.style
+          .as_ref()
+          .map(|s| s.display == Display::TableCell)
+          .unwrap_or(false)
+      })
+      .collect();
+    assert_eq!(cells.len(), 7, "expected fragments for all table cells");
+
+    let red_color = Rgba::RED;
+    let green_color = Rgba::GREEN;
+    let blue_color = Rgba::BLUE;
+    let orange_color = Rgba::new(255, 165, 0, 1.0);
+    let purple_color = Rgba::new(128, 0, 128, 1.0);
+    let teal_color = Rgba::new(0, 128, 128, 1.0);
+    let olive_color = Rgba::new(128, 128, 0, 1.0);
+    let match_color = |style: &ComputedStyle, target: &Rgba| {
+      let c = style.background_color;
+      c.r == target.r && c.g == target.g && c.b == target.b && (c.a - target.a).abs() < f32::EPSILON
+    };
+    let find_cell = |target: &Rgba| -> &FragmentNode {
+      cells
+        .iter()
+        .copied()
+        .find(|f| {
+          f.style
+            .as_ref()
+            .map(|s| match_color(s, target))
+            .unwrap_or(false)
+        })
+        .unwrap_or_else(|| panic!("missing cell with distinct background color"))
+    };
+
+    let red = find_cell(&red_color);
+    let green = find_cell(&green_color);
+    let blue = find_cell(&blue_color);
+    let orange = find_cell(&orange_color);
+    let purple = find_cell(&purple_color);
+    let teal = find_cell(&teal_color);
+    let olive = find_cell(&olive_color);
+    let tolerance = 0.1;
+
+    let col1_width = blue.bounds.width();
+    let col2_width = orange.bounds.width();
+    let col3_width = purple.bounds.width();
+    assert!(
+      (col3_width - olive.bounds.width()).abs() < tolerance,
+      "column widths should be consistent across rows"
+    );
+
+    let delta_12 = orange.bounds.x() - blue.bounds.x();
+    assert!(
+      (delta_12 - (col1_width + 6.0)).abs() < tolerance,
+      "column 2 should start after column 1 width + spacing (got {:.2}, expected {:.2}; col1 {:.2})",
+      delta_12,
+      col1_width + 6.0,
+      col1_width
+    );
+    let delta_23 = purple.bounds.x() - orange.bounds.x();
+    assert!(
+      (delta_23 - (col2_width + 6.0)).abs() < tolerance,
+      "column 3 should start after column 2 width + spacing (got {:.2}, expected {:.2})",
+      delta_23,
+      col2_width + 6.0
+    );
+    let green_start_expected = red.bounds.x() + col1_width + col2_width + 12.0;
+    assert!(
+      (green.bounds.x() - green_start_expected).abs() < tolerance,
+      "colspan start should match cumulative widths (got {:.2}, expected {:.2})",
+      green.bounds.x(),
+      green_start_expected
+    );
+
+    let row2_height = orange.bounds.height();
+    let row3_height = teal.bounds.height();
+    let expected_span_height = row2_height + row3_height + 4.0;
+    assert!(
+      (blue.bounds.height() - expected_span_height).abs() < tolerance,
+      "rowspanning cell height should equal covered rows + spacing (got {:.2}, expected {:.2})",
+      blue.bounds.height(),
+      expected_span_height
+    );
+
+    let baseline = fragment
+      .baseline
+      .expect("table baseline should be computed");
+    let expected_baseline = red.bounds.y() + red.bounds.height();
+    assert!(
+      (baseline - expected_baseline).abs() < tolerance,
+      "table baseline should align with first row's baseline (got {:.2}, expected {:.2})",
+      baseline,
+      expected_baseline
     );
   }
 

@@ -30,6 +30,7 @@ mod sideways_lr_regressions;
 mod sticky_nested;
 mod subgrid;
 mod table_anonymous_inheritance;
+mod table_cell_placement;
 mod table_collapsed_borders;
 mod table_columns_test;
 mod table_empty_cells;
