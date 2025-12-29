@@ -5,6 +5,7 @@
 //! fetched CSS into an HTML document. They are shared by the developer
 //! tooling binaries so cached pages can be rendered with their real styles.
 
+use crate::css::parser::{rel_list_contains_stylesheet, tokenize_rel_list};
 use crate::debug::runtime;
 use crate::error::{RenderError, RenderStage, Result};
 use crate::render_control::RenderDeadline;
@@ -917,16 +918,22 @@ pub fn extract_css_links(
     let abs_start = pos + link_start;
     if let Some(link_end) = lower[abs_start..].find('>') {
       let link_tag = &html[abs_start..=abs_start + link_end];
-      let link_tag_lower = link_tag.to_lowercase();
+      let attrs = parse_tag_attributes(link_tag);
+      let rel_tokens = attrs
+        .get("rel")
+        .map(|rel| tokenize_rel_list(rel))
+        .unwrap_or_default();
+      let is_stylesheet = !rel_tokens.is_empty() && rel_list_contains_stylesheet(&rel_tokens);
 
-      if link_tag_lower.contains("stylesheet") {
+      if is_stylesheet {
+        let link_tag_lower = link_tag.to_lowercase();
         if debug {
           eprintln!("[css] found <link>: {}", link_tag);
         }
         let mut allowed = true;
 
-        if let Some(media) = extract_attr_value(link_tag, "media") {
-          allowed = media_attr_allows_target(&media, media_type);
+        if let Some(media) = attrs.get("media") {
+          allowed = media_attr_allows_target(media, media_type);
           if debug {
             eprintln!(
               "[css] media attr: {} (target={:?}, allow={})",
@@ -945,8 +952,8 @@ pub fn extract_css_links(
             );
           }
         }
-        if let Some(href) = extract_attr_value(link_tag, "href") {
-          let href = normalize_scheme_slashes(&href);
+        if let Some(href) = attrs.get("href") {
+          let href = normalize_scheme_slashes(href);
           if let Some(full_url) = resolve_href(base_url, &href) {
             if allowed {
               css_urls.push(full_url);
@@ -1561,6 +1568,25 @@ mod tests {
         "https://example.com/styles/b.css".to_string(),
       ]
     );
+  }
+
+  #[test]
+  fn ignores_non_stylesheet_links_even_with_stylesheet_in_hrefs() {
+    let html = r#"
+            <link rel=icon href="/foo/stylesheet-logo.png">
+            <link rel=icon data-kind="stylesheet icon">
+        "#;
+    let urls = extract_css_links(html, "https://example.com/app/page.html", MediaType::Screen);
+    assert!(urls.is_empty());
+  }
+
+  #[test]
+  fn extracts_alternate_stylesheet_hrefs() {
+    let html = r#"
+            <link rel="alternate stylesheet" href="/styles/alt.css">
+        "#;
+    let urls = extract_css_links(html, "https://example.com/app/page.html", MediaType::Screen);
+    assert_eq!(urls, vec!["https://example.com/styles/alt.css".to_string()]);
   }
 
   #[test]
