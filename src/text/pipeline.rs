@@ -2764,7 +2764,11 @@ fn map_hb_position(
   if vertical && inline_advance_raw == 0 {
     inline_advance_raw = pos.x_advance;
   }
-  let cross_advance_raw = if vertical { pos.x_advance } else { pos.y_advance };
+  let cross_advance_raw = if vertical {
+    pos.x_advance
+  } else {
+    pos.y_advance
+  };
   let inline_offset_raw = if vertical { pos.y_offset } else { pos.x_offset };
   let cross_offset_raw = if vertical { pos.x_offset } else { pos.y_offset };
 
@@ -4081,7 +4085,10 @@ mod tests {
     let (x_offset, y_offset, x_advance, y_advance) = map_hb_position(false, 1.5, 2.0, &pos);
 
     assert_eq!(x_offset, 4.0, "x offset should use x_offset with scale");
-    assert_eq!(y_offset, -6.5, "baseline shift applies to y offset in horizontal mode");
+    assert_eq!(
+      y_offset, -6.5,
+      "baseline shift applies to y offset in horizontal mode"
+    );
     assert_eq!(x_advance, 20.0, "x advance scales inline axis");
     assert_eq!(y_advance, 6.0, "y advance scales cross axis");
   }
@@ -4095,7 +4102,10 @@ mod tests {
     pos.y_offset = -3;
     let (x_offset, y_offset, x_advance, y_advance) = map_hb_position(true, 2.0, 1.0, &pos);
 
-    assert_eq!(x_offset, 9.0, "baseline shift should move the cross axis (x) for vertical text");
+    assert_eq!(
+      x_offset, 9.0,
+      "baseline shift should move the cross axis (x) for vertical text"
+    );
     assert_eq!(y_offset, -3.0, "inline offset should come from y_offset");
     assert_eq!(x_advance, 10.0, "cross advance maps to x advance");
     assert_eq!(y_advance, 20.0, "inline advance uses absolute y_advance");
@@ -4110,10 +4120,16 @@ mod tests {
     pos.y_offset = 2;
     let (x_offset, y_offset, x_advance, y_advance) = map_hb_position(true, 5.0, 1.0, &pos);
 
-    assert_eq!(x_offset, 6.0, "baseline shift should still apply to x offset in vertical mode");
+    assert_eq!(
+      x_offset, 6.0,
+      "baseline shift should still apply to x offset in vertical mode"
+    );
     assert_eq!(y_offset, 2.0, "inline offset stays on the inline axis");
     assert_eq!(x_advance, -15.0, "x advance uses the cross axis advance");
-    assert_eq!(y_advance, 15.0, "inline advance falls back to x_advance and is absolute");
+    assert_eq!(
+      y_advance, 15.0,
+      "inline advance falls back to x_advance and is absolute"
+    );
   }
 
   #[test]

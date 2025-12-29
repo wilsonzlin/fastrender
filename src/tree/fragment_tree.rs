@@ -1263,7 +1263,7 @@ mod tests {
     root.children = vec![child_first_fragment, child_second_fragment];
 
     let options = FragmentationOptions::new(60.0).with_gap(10.0);
-    let fragments = split_fragment_tree(&root, &options);
+    let fragments = split_fragment_tree(&root, &options).expect("split fragments");
     assert_eq!(fragments.len(), 2);
 
     assert_eq!(fragments[0].bounds.y(), 0.0);

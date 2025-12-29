@@ -1,5 +1,6 @@
 use fastrender::css::loader::{
   absolutize_css_urls, infer_base_url, inline_imports_with_diagnostics, resolve_href,
+  InlineImportState,
 };
 
 #[test]
@@ -112,7 +113,7 @@ fn infer_base_url_preserves_file_like_base_href_without_trailing_slash() {
 
 #[test]
 fn inline_imports_resolves_urls_relative_to_imported_sheet() {
-  let mut seen = std::collections::HashSet::new();
+  let mut state = InlineImportState::new();
   let mut fetch = |url: &str| -> fastrender::error::Result<String> {
     assert_eq!(url, "https://example.com/styles/imports/inner.css");
     Ok("body { background: url(\"./img/bg.png\"); }".to_string())
@@ -124,7 +125,7 @@ fn inline_imports_resolves_urls_relative_to_imported_sheet() {
     "@import \"imports/inner.css\";",
     "https://example.com/styles/main.css",
     &mut fetch,
-    &mut seen,
+    &mut state,
     &mut diag,
     None,
   )
@@ -139,8 +140,8 @@ fn inline_imports_resolves_urls_relative_to_imported_sheet() {
 
 #[test]
 fn inline_imports_reports_cycles() {
-  let mut seen = std::collections::HashSet::new();
-  seen.insert("https://example.com/main.css".to_string());
+  let mut state = InlineImportState::new();
+  state.register_stylesheet("https://example.com/main.css");
   let mut diagnostics = Vec::new();
   let mut diag = |url: &str, reason: &str| diagnostics.push((url.to_string(), reason.to_string()));
 
@@ -148,7 +149,7 @@ fn inline_imports_reports_cycles() {
     "@import url(\"main.css\");",
     "https://example.com/main.css",
     &mut |_url| -> fastrender::error::Result<String> { unreachable!("cycle should short-circuit") },
-    &mut seen,
+    &mut state,
     &mut diag,
     None,
   )
@@ -158,7 +159,8 @@ fn inline_imports_reports_cycles() {
   assert!(
     diagnostics
       .iter()
-      .any(|(url, reason)| url == "https://example.com/main.css" && reason.contains("cycle")),
-    "cycle diagnostics should be reported"
+      .any(|(url, reason)| url == "https://example.com/main.css" && reason.contains("cyclic")),
+    "cycle diagnostics should be reported: {:?}",
+    diagnostics
   );
 }

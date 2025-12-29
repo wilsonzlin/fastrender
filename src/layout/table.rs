@@ -4867,7 +4867,7 @@ impl FormattingContext for TableFormattingContext {
     // Border-collapse adjustments
     let collapsed_borders: Option<CollapsedBorders> =
       if structure.border_collapse == BorderCollapse::Collapse {
-        Some(compute_collapsed_borders(table_box, &structure))
+        Some(compute_collapsed_borders(&table_box, &structure))
       } else {
         None
       };

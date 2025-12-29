@@ -9,8 +9,8 @@
 
 use std::sync::OnceLock;
 
-use crate::geometry::{Point, Rect};
 use crate::error::RenderStage;
+use crate::geometry::{Point, Rect};
 use crate::layout::axis::{FragmentAxes, PhysicalAxis};
 use crate::layout::formatting_context::LayoutError;
 use crate::render_control::check_active;

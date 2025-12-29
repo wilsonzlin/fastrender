@@ -6,7 +6,10 @@ pub use crate::text::color_fonts::{
 };
 
 /// Parse a CPAL palette from a font face using the canonical color-font parser.
-pub fn parse_cpal_palette(face: &ttf_parser::Face<'_>, palette_index: u16) -> Option<ParsedPalette> {
+pub fn parse_cpal_palette(
+  face: &ttf_parser::Face<'_>,
+  palette_index: u16,
+) -> Option<ParsedPalette> {
   face
     .raw_face()
     .table(ttf_parser::Tag::from_bytes(b"CPAL"))
