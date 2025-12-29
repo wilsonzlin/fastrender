@@ -21,6 +21,7 @@ use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
 pub use bitmap::render_bitmap_glyph;
+pub use bitmap::MAX_SBIX_GLYPH_BYTES;
 pub use cpal::{parse_cpal_palette, select_cpal_palette, ParsedPalette};
 pub use svg::render_svg_glyph;
 pub use svg::sanitize_svg_glyph_for_tests;
