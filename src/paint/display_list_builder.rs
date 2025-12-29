@@ -87,9 +87,11 @@ use crate::paint::display_list::TextItem;
 use crate::paint::display_list::TextShadowItem;
 use crate::paint::display_list::Transform3D;
 use crate::paint::display_list::{list_marker_bounds, text_bounds};
+use crate::paint::display_list_renderer::PaintParallelism;
 use crate::paint::iframe::{render_iframe_src, render_iframe_srcdoc};
 use crate::paint::object_fit::compute_object_fit;
 use crate::paint::object_fit::default_object_position;
+use crate::paint::painter::{paint_diagnostics_enabled, with_paint_diagnostics};
 use crate::paint::stacking::Layer6Item;
 use crate::paint::stacking::StackingContext;
 use crate::paint::svg_filter::SvgFilterResolver;
@@ -151,7 +153,10 @@ use crate::tree::fragment_tree::FragmentTree;
 use lru::LruCache;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::thread::ThreadId;
+use std::time::{Duration, Instant};
 use tiny_skia::Pixmap;
 
 /// Builder that converts a fragment tree to a display list
@@ -171,6 +176,10 @@ pub struct DisplayListBuilder {
   device_pixel_ratio: f32,
   parallel_enabled: bool,
   parallel_min: usize,
+  parallel_root_min: usize,
+  parallel_min_explicit: bool,
+  parallel_stats: Option<Arc<ParallelStats>>,
+  estimated_fragments: Option<usize>,
   scroll_state: ScrollState,
   max_iframe_depth: usize,
 }
@@ -191,13 +200,74 @@ struct ImageKey {
   device_pixel_ratio_bits: u32,
 }
 
-fn parallel_config_from_env() -> (bool, usize) {
+#[derive(Default)]
+struct ParallelStats {
+  tasks: AtomicUsize,
+  parallel_ns: AtomicU64,
+  serial_ns: AtomicU64,
+  threads: Mutex<HashSet<ThreadId>>,
+}
+
+#[derive(Default, Clone, Copy)]
+struct ParallelStatsSnapshot {
+  tasks: usize,
+  threads: usize,
+  parallel_ns: u64,
+  serial_ns: u64,
+}
+
+struct ParallelPlan {
+  chunk_size: usize,
+}
+
+impl ParallelStats {
+  fn record_parallel<I>(&self, tasks: usize, elapsed: Duration, threads: I)
+  where
+    I: IntoIterator<Item = ThreadId>,
+  {
+    self.tasks.fetch_add(tasks, Ordering::Relaxed);
+    self.parallel_ns.fetch_add(
+      elapsed.as_nanos().min(u64::MAX as u128) as u64,
+      Ordering::Relaxed,
+    );
+    if let Ok(mut guard) = self.threads.lock() {
+      for id in threads {
+        guard.insert(id);
+      }
+    }
+  }
+
+  fn record_serial(&self, elapsed: Duration) {
+    self.serial_ns.fetch_add(
+      elapsed.as_nanos().min(u64::MAX as u128) as u64,
+      Ordering::Relaxed,
+    );
+  }
+
+  fn snapshot(&self) -> ParallelStatsSnapshot {
+    let threads = self.threads.lock().map(|set| set.len()).unwrap_or(0);
+    ParallelStatsSnapshot {
+      tasks: self.tasks.load(Ordering::Relaxed),
+      threads,
+      parallel_ns: self.parallel_ns.load(Ordering::Relaxed),
+      serial_ns: self.serial_ns.load(Ordering::Relaxed),
+    }
+  }
+}
+
+fn parallel_config_from_env() -> (bool, usize, bool) {
   let toggles = runtime::runtime_toggles();
   let enabled = toggles.truthy_with_default("FASTR_DISPLAY_LIST_PARALLEL", true);
-  let min = toggles
-    .usize_with_default("FASTR_DISPLAY_LIST_PARALLEL_MIN", 32)
-    .max(1);
-  (enabled, min)
+  let (min, explicit_min) = match std::env::var("FASTR_DISPLAY_LIST_PARALLEL_MIN") {
+    Ok(raw) => (raw.parse::<usize>().unwrap_or(32).max(1), true),
+    Err(_) => (
+      toggles
+        .usize_with_default("FASTR_DISPLAY_LIST_PARALLEL_MIN", 32)
+        .max(1),
+      false,
+    ),
+  };
+  (enabled, min, explicit_min)
 }
 
 impl DisplayListBuilder {
@@ -236,7 +306,12 @@ impl DisplayListBuilder {
 
   /// Creates a new display list builder
   pub fn new() -> Self {
-    let (parallel_enabled, parallel_min) = parallel_config_from_env();
+    let (parallel_enabled, parallel_min, parallel_min_explicit) = parallel_config_from_env();
+    let parallel_root_min = if parallel_min_explicit {
+      parallel_min
+    } else {
+      parallel_min.saturating_mul(4)
+    };
     Self {
       list: DisplayList::new(),
       image_cache: Some(ImageCache::new()),
@@ -248,6 +323,10 @@ impl DisplayListBuilder {
       device_pixel_ratio: 1.0,
       parallel_enabled,
       parallel_min,
+      parallel_root_min,
+      parallel_min_explicit,
+      parallel_stats: paint_diagnostics_enabled().then(|| Arc::new(ParallelStats::default())),
+      estimated_fragments: None,
       scroll_state: ScrollState::default(),
       max_iframe_depth: DEFAULT_MAX_IFRAME_DEPTH,
     }
@@ -255,7 +334,12 @@ impl DisplayListBuilder {
 
   /// Creates a display list builder backed by an image cache to rasterize replaced images.
   pub fn with_image_cache(image_cache: ImageCache) -> Self {
-    let (parallel_enabled, parallel_min) = parallel_config_from_env();
+    let (parallel_enabled, parallel_min, parallel_min_explicit) = parallel_config_from_env();
+    let parallel_root_min = if parallel_min_explicit {
+      parallel_min
+    } else {
+      parallel_min.saturating_mul(4)
+    };
     Self {
       list: DisplayList::new(),
       image_cache: Some(image_cache),
@@ -267,6 +351,10 @@ impl DisplayListBuilder {
       device_pixel_ratio: 1.0,
       parallel_enabled,
       parallel_min,
+      parallel_root_min,
+      parallel_min_explicit,
+      parallel_stats: paint_diagnostics_enabled().then(|| Arc::new(ParallelStats::default())),
+      estimated_fragments: None,
       scroll_state: ScrollState::default(),
       max_iframe_depth: DEFAULT_MAX_IFRAME_DEPTH,
     }
@@ -343,13 +431,33 @@ impl DisplayListBuilder {
     self
   }
 
+  /// Applies parallelism tuning shared with the display list renderer.
+  pub fn with_parallelism(mut self, parallelism: &PaintParallelism) -> Self {
+    self.set_parallelism(parallelism);
+    self
+  }
+
+  /// Updates parallelism tuning in place.
+  pub fn set_parallelism(&mut self, parallelism: &PaintParallelism) {
+    if !self.parallel_min_explicit {
+      self.parallel_min = parallelism.build_chunk_size.max(1);
+    }
+    if !self.parallel_min_explicit {
+      self.parallel_root_min = parallelism
+        .min_build_fragments
+        .max(self.parallel_min.saturating_mul(2));
+    }
+    self.estimated_fragments = None;
+  }
+
   /// Builds a display list from a fragment tree root
   pub fn build(mut self, root: &FragmentNode) -> DisplayList {
     if self.viewport.is_none() {
       self.viewport = Some((root.bounds.width(), root.bounds.height()));
     }
+    self.estimate_from_roots(std::iter::once(root));
     self.build_fragment(root, Point::ZERO);
-    self.list
+    self.finish()
   }
 
   /// Builds a display list from a FragmentTree
@@ -358,10 +466,11 @@ impl DisplayListBuilder {
       let viewport = tree.viewport_size();
       self.viewport = Some((viewport.width, viewport.height));
     }
+    self.estimate_from_tree(tree);
     for root in std::iter::once(&tree.root).chain(tree.additional_fragments.iter()) {
       self.build_fragment(root, Point::ZERO);
     }
-    self.list
+    self.finish()
   }
 
   /// Builds a stacking-context-aware display list from a `FragmentTree`.
@@ -371,6 +480,7 @@ impl DisplayListBuilder {
       self.viewport = Some((viewport.width, viewport.height));
     }
 
+    self.estimate_from_tree(tree);
     let svg_roots: Vec<&FragmentNode> = std::iter::once(&tree.root)
       .chain(tree.additional_fragments.iter())
       .collect();
@@ -386,7 +496,7 @@ impl DisplayListBuilder {
       self.build_stacking_context(context, Point::ZERO, true, &mut svg_filters);
     }
 
-    self.list
+    self.finish()
   }
 
   /// Builds a display list from a stacking context tree (respecting z-order).
@@ -396,6 +506,7 @@ impl DisplayListBuilder {
     }
     let mut svg_roots = Vec::new();
     Self::collect_stacking_fragments(stacking, &mut svg_roots);
+    self.estimate_from_roots(svg_roots.iter().copied());
     let image_cache = self.image_cache.clone();
     let mut svg_filters = SvgFilterResolver::new(
       self.svg_filter_defs.clone(),
@@ -403,7 +514,7 @@ impl DisplayListBuilder {
       image_cache.as_ref(),
     );
     self.build_stacking_context(stacking, Point::ZERO, true, &mut svg_filters);
-    self.list
+    self.finish()
   }
 
   /// Builds a display list by first constructing a stacking context tree from the fragment tree.
@@ -411,6 +522,7 @@ impl DisplayListBuilder {
     if self.viewport.is_none() {
       self.viewport = Some((root.bounds.width(), root.bounds.height()));
     }
+    self.estimate_from_roots(std::iter::once(root));
     let stacking = crate::paint::stacking::build_stacking_tree_from_fragment_tree(root);
     let image_cache = self.image_cache.clone();
     let mut svg_filters = SvgFilterResolver::new(
@@ -419,7 +531,7 @@ impl DisplayListBuilder {
       image_cache.as_ref(),
     );
     self.build_stacking_context(&stacking, Point::ZERO, true, &mut svg_filters);
-    self.list
+    self.finish()
   }
 
   /// Builds a display list by first constructing a stacking context tree from the fragment tree
@@ -432,6 +544,7 @@ impl DisplayListBuilder {
     if self.viewport.is_none() {
       self.viewport = Some((root.bounds.width(), root.bounds.height()));
     }
+    self.estimate_from_roots(std::iter::once(root));
     let stacking = crate::paint::stacking::build_stacking_tree_from_fragment_tree(root);
     let mut svg_roots = Vec::new();
     Self::collect_stacking_fragments(&stacking, &mut svg_roots);
@@ -442,7 +555,7 @@ impl DisplayListBuilder {
       image_cache.as_ref(),
     );
     self.build_stacking_context(&stacking, offset, true, &mut svg_filters);
-    self.list
+    self.finish()
   }
 
   /// Builds a display list from multiple stacking context roots.
@@ -456,6 +569,7 @@ impl DisplayListBuilder {
     for stacking in stackings {
       Self::collect_stacking_fragments(stacking, &mut svg_roots);
     }
+    self.estimate_from_roots(svg_roots.iter().copied());
     let image_cache = self.image_cache.clone();
     let mut svg_filters = SvgFilterResolver::new(
       self.svg_filter_defs.clone(),
@@ -465,7 +579,7 @@ impl DisplayListBuilder {
     for stacking in stackings {
       self.build_stacking_context(stacking, Point::ZERO, true, &mut svg_filters);
     }
-    self.list
+    self.finish()
   }
 
   /// Builds a display list by first constructing stacking context trees from a fragment tree.
@@ -480,6 +594,7 @@ impl DisplayListBuilder {
       .or_else(|| self.svg_filter_defs.clone());
     self.svg_filter_defs = defs;
     let stackings = crate::paint::stacking::build_stacking_tree_from_tree(tree);
+    self.estimate_from_tree(tree);
     self.build_from_stacking_contexts(&stackings)
   }
 
@@ -491,8 +606,9 @@ impl DisplayListBuilder {
     root: &FragmentNode,
     clips: &HashSet<Option<usize>>,
   ) -> DisplayList {
+    self.estimate_from_roots(std::iter::once(root));
     self.build_fragment_with_clips(root, Point::ZERO, clips);
-    self.list
+    self.finish()
   }
 
   fn collect_stacking_fragments<'a>(context: &'a StackingContext, out: &mut Vec<&'a FragmentNode>) {
@@ -509,6 +625,31 @@ impl DisplayListBuilder {
     for child in &context.children {
       Self::collect_stacking_fragments(child, out);
     }
+  }
+
+  fn estimate_from_roots<'a>(&mut self, roots: impl IntoIterator<Item = &'a FragmentNode>) {
+    if self.estimated_fragments.is_some() {
+      return;
+    }
+    let mut stack: Vec<&FragmentNode> = roots.into_iter().collect();
+    let mut count = 0;
+    while let Some(fragment) = stack.pop() {
+      count += 1;
+      if let FragmentContent::RunningAnchor { snapshot, .. } = &fragment.content {
+        stack.push(snapshot);
+      }
+      for child in fragment.children.iter() {
+        stack.push(child);
+      }
+    }
+    self.estimated_fragments = Some(count);
+  }
+
+  fn estimate_from_tree(&mut self, tree: &FragmentTree) {
+    if self.estimated_fragments.is_some() {
+      return;
+    }
+    self.estimated_fragments = Some(tree.fragment_count());
   }
 
   /// Recursively builds display items for a fragment
@@ -2280,25 +2421,40 @@ impl DisplayListBuilder {
   }
 
   fn emit_fragment_list(&mut self, fragments: &[FragmentNode], offset: Point) {
-    if self.should_parallelize(fragments.len()) {
-      let mut partials: Vec<(usize, DisplayList)> = fragments
-        .par_iter()
+    if let Some(plan) = self.plan_parallel(fragments.len()) {
+      let start = self.parallel_stats.as_ref().map(|_| Instant::now());
+      let mut partials: Vec<(usize, DisplayList, ThreadId)> = fragments
+        .par_chunks(plan.chunk_size)
         .enumerate()
-        .map(|(idx, fragment)| {
+        .map(|(chunk_idx, chunk)| {
+          let chunk_offset = chunk_idx * plan.chunk_size;
           let mut builder = self.fork();
-          builder.build_fragment(fragment, offset);
-          (idx, builder.list)
+          for fragment in chunk {
+            builder.build_fragment(fragment, offset);
+          }
+          (chunk_offset, builder.list, std::thread::current().id())
         })
         .collect();
-      partials.sort_by_key(|(idx, _)| *idx);
-      for (_, list) in partials {
+      if let (Some(stats), Some(start)) = (self.parallel_stats.as_ref(), start) {
+        stats.record_parallel(
+          partials.len(),
+          start.elapsed(),
+          partials.iter().map(|(_, _, thread)| *thread),
+        );
+      }
+      partials.sort_by_key(|(idx, _, _)| *idx);
+      for (_, list, _) in partials {
         self.list.append(list);
       }
       return;
     }
 
+    let serial_start = self.parallel_stats.as_ref().map(|_| Instant::now());
     for fragment in fragments {
       self.build_fragment(fragment, offset);
+    }
+    if let (Some(stats), Some(start)) = (self.parallel_stats.as_ref(), serial_start) {
+      stats.record_serial(start.elapsed());
     }
   }
 
@@ -2308,30 +2464,42 @@ impl DisplayListBuilder {
     offset: Point,
     suppress_opacity: bool,
   ) {
-    if self.should_parallelize(fragments.len()) {
+    if let Some(plan) = self.plan_parallel(fragments.len()) {
+      let start = self.parallel_stats.as_ref().map(|_| Instant::now());
       let deadline = active_deadline();
-      let mut partials: Vec<(usize, DisplayList)> = fragments
-        .par_iter()
+      let mut partials: Vec<(usize, DisplayList, ThreadId)> = fragments
+        .par_chunks(plan.chunk_size)
         .enumerate()
-        .map(|(idx, fragment)| {
+        .map(|(chunk_idx, chunk)| {
+          let chunk_offset = chunk_idx * plan.chunk_size;
           with_deadline(deadline.as_ref(), || {
             let mut builder = self.fork();
-            if suppress_opacity {
-              builder.build_fragment_internal(fragment, offset, false, true);
-            } else {
-              builder.build_fragment_shallow(fragment, offset);
+            for fragment in chunk {
+              if suppress_opacity {
+                builder.build_fragment_internal(fragment, offset, false, true);
+              } else {
+                builder.build_fragment_shallow(fragment, offset);
+              }
             }
-            (idx, builder.list)
+            (chunk_offset, builder.list, std::thread::current().id())
           })
         })
         .collect();
-      partials.sort_by_key(|(idx, _)| *idx);
-      for (_, list) in partials {
+      if let (Some(stats), Some(start)) = (self.parallel_stats.as_ref(), start) {
+        stats.record_parallel(
+          partials.len(),
+          start.elapsed(),
+          partials.iter().map(|(_, _, thread)| *thread),
+        );
+      }
+      partials.sort_by_key(|(idx, _, _)| *idx);
+      for (_, list, _) in partials {
         self.list.append(list);
       }
       return;
     }
 
+    let serial_start = self.parallel_stats.as_ref().map(|_| Instant::now());
     for fragment in fragments {
       if suppress_opacity {
         self.build_fragment_internal(fragment, offset, false, true);
@@ -2339,10 +2507,58 @@ impl DisplayListBuilder {
         self.build_fragment_shallow(fragment, offset);
       }
     }
+    if let (Some(stats), Some(start)) = (self.parallel_stats.as_ref(), serial_start) {
+      stats.record_serial(start.elapsed());
+    }
   }
 
-  fn should_parallelize(&self, len: usize) -> bool {
-    self.parallel_enabled && len >= self.parallel_min && rayon::current_num_threads() > 1
+  fn plan_parallel(&self, len: usize) -> Option<ParallelPlan> {
+    let threads = rayon::current_num_threads().max(1);
+    if !self.parallel_enabled || len < self.parallel_min || threads <= 1 {
+      return None;
+    }
+    let total = self.estimated_fragments.unwrap_or(len);
+    let root_threshold = if self.parallel_min_explicit {
+      self.parallel_root_min
+    } else {
+      self
+        .parallel_root_min
+        .max(self.parallel_min.saturating_mul(threads))
+    };
+    if total < root_threshold {
+      return None;
+    }
+    let max_tasks = threads.saturating_mul(4).max(2);
+    let estimated_tasks = (total / self.parallel_min).max(1);
+    let target_tasks = estimated_tasks.clamp(2, max_tasks);
+    let chunk_size = ((len + target_tasks - 1) / target_tasks).max(self.parallel_min);
+    if len <= chunk_size {
+      return None;
+    }
+    Some(ParallelPlan { chunk_size })
+  }
+
+  fn record_parallel_diagnostics(&self) {
+    let Some(stats) = &self.parallel_stats else {
+      return;
+    };
+    let snapshot = stats.snapshot();
+    if snapshot.tasks == 0 && snapshot.parallel_ns == 0 && snapshot.serial_ns == 0 {
+      return;
+    }
+    with_paint_diagnostics(|diag| {
+      diag.parallel_tasks += snapshot.tasks;
+      diag.parallel_threads = diag.parallel_threads.max(snapshot.threads);
+      diag.parallel_ms += snapshot.parallel_ns as f64 / 1_000_000.0;
+      diag.serial_ms += snapshot.serial_ns as f64 / 1_000_000.0;
+    });
+  }
+
+  fn finish(self) -> DisplayList {
+    if paint_diagnostics_enabled() {
+      self.record_parallel_diagnostics();
+    }
+    self.list
   }
 
   fn fork(&self) -> DisplayListBuilder {
@@ -2357,6 +2573,10 @@ impl DisplayListBuilder {
       device_pixel_ratio: self.device_pixel_ratio,
       parallel_enabled: self.parallel_enabled,
       parallel_min: self.parallel_min,
+      parallel_root_min: self.parallel_root_min,
+      parallel_min_explicit: self.parallel_min_explicit,
+      parallel_stats: self.parallel_stats.clone(),
+      estimated_fragments: self.estimated_fragments,
       scroll_state: self.scroll_state.clone(),
       max_iframe_depth: self.max_iframe_depth,
     }

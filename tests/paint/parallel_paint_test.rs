@@ -62,6 +62,11 @@ fn parallel_paint_matches_serial_output() {
     enabled: true,
     tile_size: 32,
     log_timing: false,
+    min_display_items: 1,
+    min_tiles: 1,
+    min_build_fragments: 1,
+    build_chunk_size: 1,
+    ..PaintParallelism::default()
   };
   let report = DisplayListRenderer::new(128, 128, Rgba::WHITE, font_ctx)
     .unwrap()
@@ -104,6 +109,11 @@ fn thick_strokes_survive_tiling() {
     enabled: true,
     tile_size: 24,
     log_timing: false,
+    min_display_items: 1,
+    min_tiles: 1,
+    min_build_fragments: 1,
+    build_chunk_size: 1,
+    ..PaintParallelism::default()
   };
   let report = DisplayListRenderer::new(112, 112, Rgba::WHITE, font_ctx)
     .unwrap()
@@ -175,6 +185,11 @@ fn clip_transform_and_stacking_context_match_serial_output() {
     enabled: true,
     tile_size: 24,
     log_timing: false,
+    min_display_items: 1,
+    min_tiles: 1,
+    min_build_fragments: 1,
+    build_chunk_size: 1,
+    ..PaintParallelism::default()
   };
   let report = DisplayListRenderer::new(96, 96, Rgba::WHITE, font_ctx)
     .unwrap()
@@ -222,6 +237,11 @@ fn backdrop_filters_trigger_serial_fallback() {
     enabled: true,
     tile_size: 24,
     log_timing: false,
+    min_display_items: 1,
+    min_tiles: 1,
+    min_build_fragments: 1,
+    build_chunk_size: 1,
+    ..PaintParallelism::default()
   };
   let report = DisplayListRenderer::new(96, 96, Rgba::WHITE, font_ctx)
     .unwrap()
@@ -244,6 +264,11 @@ fn parallel_paint_respects_deadline() {
     enabled: true,
     tile_size: 16,
     log_timing: false,
+    min_display_items: 1,
+    min_tiles: 1,
+    min_build_fragments: 1,
+    build_chunk_size: 1,
+    ..PaintParallelism::default()
   };
   let renderer = DisplayListRenderer::new(128, 128, Rgba::WHITE, FontContext::new())
     .unwrap()

@@ -34,7 +34,7 @@ use fastrender::paint::display_list::TextItem;
 use fastrender::paint::display_list::TextShadowItem;
 use fastrender::paint::display_list::Transform3D;
 use fastrender::paint::display_list_builder::DisplayListBuilder;
-use fastrender::paint::display_list_renderer::DisplayListRenderer;
+use fastrender::paint::display_list_renderer::{DisplayListRenderer, PaintParallelism};
 use fastrender::paint::painter::scale_pixmap_for_dpr;
 use fastrender::style::color::Color;
 use fastrender::style::types::BackfaceVisibility;
@@ -81,6 +81,7 @@ use image::RgbaImage;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tiny_skia::FillRule as SkFillRule;
 use tiny_skia::Pixmap;
 
@@ -3646,4 +3647,57 @@ fn box_decoration_break_clone_paints_each_fragment() {
     (0, 0, 0, 255),
     "bottom border paints on last fragment"
   );
+}
+
+#[test]
+fn parallel_renderer_uses_multiple_threads_on_large_list() {
+  let mut list = DisplayList::new();
+  for y in 0..20 {
+    for x in 0..20 {
+      let idx = (y * 20 + x) as u8;
+      list.push(DisplayItem::FillRect(FillRectItem {
+        rect: Rect::from_xywh((x * 10) as f32, (y * 10) as f32, 8.0, 8.0),
+        color: Rgba::new(idx.wrapping_mul(3), idx.wrapping_mul(5), 120, 1.0),
+      }));
+    }
+  }
+
+  let font_ctx = FontContext::new();
+  let serial = DisplayListRenderer::new(512, 512, Rgba::WHITE, font_ctx.clone())
+    .unwrap()
+    .render(&list)
+    .expect("serial render");
+
+  let parallelism = PaintParallelism {
+    tile_size: 64,
+    ..PaintParallelism::adaptive()
+  };
+  let report = DisplayListRenderer::new(512, 512, Rgba::WHITE, font_ctx)
+    .unwrap()
+    .with_parallelism(parallelism)
+    .render_with_report(&list)
+    .expect("parallel render");
+
+  assert!(
+    report.parallel_used,
+    "parallel renderer should tile large scenes"
+  );
+  assert!(
+    report.parallel_threads > 1,
+    "expected multiple threads to render tiles (got {})",
+    report.parallel_threads
+  );
+  assert!(
+    report.parallel_tasks > 1,
+    "expected multiple tiles to be rendered in parallel"
+  );
+  assert!(
+    report.parallel_duration > Duration::ZERO,
+    "parallel render should record elapsed time"
+  );
+  assert!(
+    report.serial_duration < report.duration,
+    "serial overhead should be captured separately"
+  );
+  assert_eq!(serial.data(), report.pixmap.data());
 }

@@ -231,6 +231,10 @@ pub struct PaintDiagnosticsSummary {
   pub raster_ms: f64,
   pub gradient_ms: f64,
   pub gradient_pixels: u64,
+  pub parallel_tasks: usize,
+  pub parallel_threads: usize,
+  pub parallel_ms: f64,
+  pub serial_ms: f64,
 }
 
 thread_local! {
@@ -1176,6 +1180,8 @@ impl Painter {
       with_paint_diagnostics(|diag| {
         diag.build_ms = build_ms;
         diag.command_count = count;
+        diag.serial_ms += build_ms;
+        diag.parallel_threads = diag.parallel_threads.max(1);
       });
     }
     if dump_stack_enabled() {
@@ -1364,6 +1370,8 @@ impl Painter {
       let raster_ms = start.elapsed().as_secs_f64() * 1000.0;
       with_paint_diagnostics(|diag| {
         diag.raster_ms = raster_ms;
+        diag.serial_ms += raster_ms;
+        diag.parallel_threads = diag.parallel_threads.max(1);
         if diag.command_count == 0 {
           diag.command_count = command_len;
         }
@@ -1374,6 +1382,7 @@ impl Painter {
       with_paint_diagnostics(|diag| {
         diag.gradient_ms = self.gradient_stats.millis();
         diag.gradient_pixels = self.gradient_stats.pixels;
+        diag.parallel_threads = diag.parallel_threads.max(1);
         if diag.command_count == 0 {
           diag.command_count = command_len;
         }
@@ -9709,6 +9718,7 @@ pub fn paint_tree_display_list_with_resources_scaled_offset_depth(
     .with_svg_filter_defs(tree.svg_filter_defs.clone())
     .with_scroll_state(scroll_state.clone())
     .with_device_pixel_ratio(scale)
+    .with_parallelism(&paint_parallelism)
     .with_max_iframe_depth(max_iframe_depth)
     .with_viewport_size(viewport.width, viewport.height)
     .build_with_stacking_tree_offset(&tree.root, offset);
@@ -9718,6 +9728,7 @@ pub fn paint_tree_display_list_with_resources_scaled_offset_depth(
       .with_svg_filter_defs(tree.svg_filter_defs.clone())
       .with_scroll_state(scroll_state.clone())
       .with_device_pixel_ratio(scale)
+      .with_parallelism(&paint_parallelism)
       .with_max_iframe_depth(max_iframe_depth)
       .with_viewport_size(viewport.width, viewport.height)
       .build_with_stacking_tree_offset(extra, offset);
@@ -9737,6 +9748,10 @@ pub fn paint_tree_display_list_with_resources_scaled_offset_depth(
       diag.command_count = optimized.len();
       diag.gradient_ms = report.gradient_stats.millis();
       diag.gradient_pixels = report.gradient_stats.pixels;
+      diag.parallel_tasks += report.parallel_tasks;
+      diag.parallel_threads = diag.parallel_threads.max(report.parallel_threads);
+      diag.parallel_ms += report.parallel_duration.as_secs_f64() * 1000.0;
+      diag.serial_ms += report.serial_duration.as_secs_f64() * 1000.0;
     });
   }
   Ok(report.pixmap)

@@ -78,6 +78,7 @@ These are emitted by the paint pipeline:
 
 - `FASTR_DISPLAY_LIST_PARALLEL=0|1` – enable/disable Rayon fan-out while building display lists (default enabled).
 - `FASTR_DISPLAY_LIST_PARALLEL_MIN=<N>` – fragment-count threshold before the builder fans out (default 32).
+- `FASTR_PAINT_PARALLEL=0|1` – enable/disable tiled parallel rasterization when painting display lists (default enabled with adaptive thresholds).
 
 ## Media query overrides
 

@@ -101,12 +101,13 @@ use crate::text::font_db::LoadedFont;
 use crate::text::font_loader::FontContext;
 use crate::text::pipeline::{record_text_rasterize, text_diagnostics_timer};
 use rayon::prelude::*;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::thread::ThreadId;
 use std::time::Duration;
 use std::time::Instant;
 use tiny_skia::BlendMode as SkiaBlendMode;
@@ -1306,8 +1307,10 @@ fn invert((r, g, b): (u8, u8, u8), amount: f32) -> (u8, u8, u8) {
 
 /// Configuration for parallel display list painting.
 ///
-/// Parallel painting is off by default to preserve strict raster ordering. When
-/// enabled, the renderer splits the target pixmap into tiles and paints them in
+/// Parallel painting is enabled by default with adaptive thresholds to avoid
+/// oversubscribing small pages. Use [`PaintParallelism::disabled`] to force
+/// serial painting. When enabled, the renderer splits the target pixmap into
+/// tiles and paints them in
 /// parallel, compositing the results back in paint order. The renderer
 /// automatically falls back to serial rendering when it encounters effects that
 /// depend on full-canvas backdrops (e.g., backdrop-filter).
@@ -1319,21 +1322,46 @@ pub struct PaintParallelism {
   pub tile_size: u32,
   /// Emit timing information when rendering.
   pub log_timing: bool,
+  /// Minimum display items required before parallelizing rasterization.
+  pub min_display_items: usize,
+  /// Minimum number of tiles before switching to parallel rasterization.
+  pub min_tiles: usize,
+  /// Minimum fragment count before parallel display list building is attempted.
+  pub min_build_fragments: usize,
+  /// Target batch size when fan-out building the display list.
+  pub build_chunk_size: usize,
 }
 
 impl PaintParallelism {
+  /// Enable parallel painting with conservative defaults and adaptive thresholds.
+  pub fn adaptive() -> Self {
+    Self {
+      enabled: true,
+      tile_size: 256,
+      log_timing: false,
+      min_display_items: 128,
+      min_tiles: 4,
+      min_build_fragments: 128,
+      build_chunk_size: 32,
+    }
+  }
+
   pub fn disabled() -> Self {
     Self {
       enabled: false,
       tile_size: 256,
       log_timing: false,
+      min_display_items: 128,
+      min_tiles: 4,
+      min_build_fragments: 128,
+      build_chunk_size: 32,
     }
   }
 }
 
 impl Default for PaintParallelism {
   fn default() -> Self {
-    Self::disabled()
+    Self::adaptive()
   }
 }
 
@@ -1351,6 +1379,14 @@ pub struct RenderReport {
   pub fallback_reason: Option<String>,
   /// Gradient rasterization statistics collected during the render.
   pub gradient_stats: GradientStats,
+  /// Number of parallel tasks spawned during rasterization.
+  pub parallel_tasks: usize,
+  /// Unique threads observed while painting.
+  pub parallel_threads: usize,
+  /// Wall-clock time spent in the parallel raster path.
+  pub parallel_duration: Duration,
+  /// Wall-clock time spent painting serially.
+  pub serial_duration: Duration,
 }
 
 #[derive(Clone, Copy)]
@@ -3317,19 +3353,19 @@ impl DisplayListRenderer {
     let start = Instant::now();
     let mut fallback_reason = None;
 
-    let parallel_requested = self.paint_parallelism.enabled && self.paint_parallelism.tile_size > 0;
-    let parallel_supported = parallel_requested
-      && (self.canvas.width() > self.paint_parallelism.tile_size
-        || self.canvas.height() > self.paint_parallelism.tile_size)
-      && !self.has_backdrop_sensitive_effects(list.items(), &mut fallback_reason);
+    let tile_estimate = self.estimated_tile_count();
+    let parallel_supported =
+      self.should_render_parallel(&list, tile_estimate, &mut fallback_reason);
 
     if parallel_supported {
-      let (pixmap, tiles) = self.render_parallel(&list)?;
+      let (pixmap, tiles, threads_used, parallel_duration) = self.render_parallel(&list)?;
       let duration = start.elapsed();
+      let serial_duration = duration.saturating_sub(parallel_duration);
       if self.paint_parallelism.log_timing {
         eprintln!(
-          "paint_parallel tiles={} tile_size={} duration_ms={:.2}",
+          "paint_parallel tiles={} threads={} tile_size={} duration_ms={:.2}",
           tiles,
+          threads_used,
           self.paint_parallelism.tile_size,
           duration.as_secs_f64() * 1000.0
         );
@@ -3341,17 +3377,26 @@ impl DisplayListRenderer {
         duration,
         fallback_reason,
         gradient_stats: self.gradient_stats,
+        parallel_tasks: tiles,
+        parallel_threads: threads_used,
+        parallel_duration,
+        serial_duration,
       });
     }
 
     self.render_slice(list.items())?;
+    let serial_duration = start.elapsed();
     Ok(RenderReport {
       pixmap: self.canvas.into_pixmap(),
       parallel_used: false,
       tiles: 1,
-      duration: start.elapsed(),
+      duration: serial_duration,
       fallback_reason,
       gradient_stats: self.gradient_stats,
+      parallel_tasks: 0,
+      parallel_threads: 1,
+      parallel_duration: Duration::ZERO,
+      serial_duration,
     })
   }
 
@@ -3401,6 +3446,66 @@ impl DisplayListRenderer {
       }
     }
     false
+  }
+
+  fn estimated_tile_count(&self) -> usize {
+    let tile = self.paint_parallelism.tile_size.max(1);
+    let tiles_x = (self.canvas.width() + tile - 1) / tile;
+    let tiles_y = (self.canvas.height() + tile - 1) / tile;
+    tiles_x.saturating_mul(tiles_y) as usize
+  }
+
+  fn should_render_parallel(
+    &self,
+    list: &DisplayList,
+    tile_estimate: usize,
+    fallback_reason: &mut Option<String>,
+  ) -> bool {
+    if !self.paint_parallelism.enabled || self.paint_parallelism.tile_size == 0 {
+      *fallback_reason = Some("parallel painting disabled".to_string());
+      return false;
+    }
+
+    let threads = rayon::current_num_threads().max(1);
+    if threads <= 1 {
+      *fallback_reason = Some("rayon pool is single-threaded".to_string());
+      return false;
+    }
+
+    if tile_estimate < self.paint_parallelism.min_tiles {
+      *fallback_reason = Some("tile count below parallel threshold".to_string());
+      return false;
+    }
+
+    if self.canvas.width() <= self.paint_parallelism.tile_size
+      && self.canvas.height() <= self.paint_parallelism.tile_size
+    {
+      *fallback_reason = Some("viewport smaller than tile size".to_string());
+      return false;
+    }
+
+    if self.has_backdrop_sensitive_effects(list.items(), fallback_reason) {
+      return false;
+    }
+
+    let task_capacity = threads.min(tile_estimate.max(1)).max(1);
+    let work_estimate = list.len().saturating_mul(tile_estimate.max(1));
+    let base_work = self
+      .paint_parallelism
+      .min_display_items
+      .saturating_mul(self.paint_parallelism.min_tiles.max(1));
+    let scaled_work = self
+      .paint_parallelism
+      .min_display_items
+      .saturating_mul(task_capacity);
+    let work_threshold = base_work.max(scaled_work);
+
+    if work_estimate < work_threshold {
+      *fallback_reason = Some("estimated paint work below parallel threshold".to_string());
+      return false;
+    }
+
+    true
   }
 
   fn max_effect_padding(&self, items: &[DisplayItem]) -> f32 {
@@ -3526,7 +3631,8 @@ impl DisplayListRenderer {
     }
   }
 
-  fn render_parallel(&mut self, list: &DisplayList) -> Result<(Pixmap, usize)> {
+  fn render_parallel(&mut self, list: &DisplayList) -> Result<(Pixmap, usize, usize, Duration)> {
+    let start = Instant::now();
     let tiles = self.build_tiles(list);
     self.canvas.clear(self.background);
 
@@ -3538,7 +3644,7 @@ impl DisplayListRenderer {
     let color_cache = self.color_cache.clone();
 
     let deadline = active_deadline();
-    let results: Result<Vec<(TileWork<'_>, Pixmap, GradientStats)>> = tiles
+    let results: Result<Vec<(TileWork<'_>, Pixmap, GradientStats, ThreadId)>> = tiles
       .into_par_iter()
       .map(|work| {
         with_deadline(deadline.as_ref(), || {
@@ -3563,22 +3669,31 @@ impl DisplayListRenderer {
           }
           renderer.render_slice(&work.list)?;
           let stats = renderer.gradient_stats;
-          Ok((work, renderer.canvas.into_pixmap(), stats))
+          Ok((
+            work,
+            renderer.canvas.into_pixmap(),
+            stats,
+            std::thread::current().id(),
+          ))
         })
       })
       .collect();
 
     let results = results?;
     let tile_count = results.len();
+    let mut thread_set = HashSet::new();
     let mut tile_stats = GradientStats::default();
-    for (work, pixmap, stats) in results {
+    for (work, pixmap, stats, thread) in results {
+      thread_set.insert(thread);
       tile_stats.merge(&stats);
       self.blit_tile(&work, &pixmap);
     }
     self.gradient_stats.merge(&tile_stats);
+    let parallel_duration = start.elapsed();
+    let threads_used = thread_set.len().max(1);
 
     let pixmap = self.canvas.pixmap().clone();
-    Ok((pixmap, tile_count))
+    Ok((pixmap, tile_count, threads_used, parallel_duration))
   }
 
   fn render_slice<T>(&mut self, items: &T) -> Result<()>

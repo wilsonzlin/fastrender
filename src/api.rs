@@ -449,6 +449,12 @@ pub struct FastRenderConfig {
 
 impl Default for FastRenderConfig {
   fn default() -> Self {
+    let runtime_toggles = Arc::new(RuntimeToggles::from_env());
+    let paint_parallelism = if runtime_toggles.truthy_with_default("FASTR_PAINT_PARALLEL", true) {
+      PaintParallelism::default()
+    } else {
+      PaintParallelism::disabled()
+    };
     Self {
       background_color: Rgba::WHITE,
       default_width: 800,
@@ -468,8 +474,8 @@ impl Default for FastRenderConfig {
       fragmentation: None,
       fit_canvas_to_content: false,
       font_config: FontConfig::default(),
-      runtime_toggles: Arc::new(RuntimeToggles::from_env()),
-      paint_parallelism: PaintParallelism::default(),
+      runtime_toggles: runtime_toggles.clone(),
+      paint_parallelism,
       layout_parallelism: LayoutParallelism::default(),
     }
   }
@@ -1628,6 +1634,10 @@ pub struct PaintDiagnostics {
   pub merged_items: Option<usize>,
   pub gradient_ms: Option<f64>,
   pub gradient_pixels: Option<u64>,
+  pub parallel_tasks: Option<usize>,
+  pub parallel_threads: Option<usize>,
+  pub parallel_ms: Option<f64>,
+  pub serial_ms: Option<f64>,
 }
 
 /// Resource loading counters.
@@ -3707,6 +3717,10 @@ impl FastRender {
           rec.stats.paint.display_items = Some(diag.command_count);
           rec.stats.paint.gradient_ms = Some(diag.gradient_ms);
           rec.stats.paint.gradient_pixels = Some(diag.gradient_pixels);
+          rec.stats.paint.parallel_tasks = Some(diag.parallel_tasks);
+          rec.stats.paint.parallel_threads = Some(diag.parallel_threads);
+          rec.stats.paint.parallel_ms = Some(diag.parallel_ms);
+          rec.stats.paint.serial_ms = Some(diag.serial_ms);
         }
       }
 

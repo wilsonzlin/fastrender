@@ -24,6 +24,11 @@ fn display_list_parallel_reports_text_metrics() {
         enabled: true,
         tile_size: 32,
         log_timing: false,
+        min_display_items: 1,
+        min_tiles: 1,
+        min_build_fragments: 1,
+        build_chunk_size: 1,
+        ..PaintParallelism::default()
       });
 
     let result = renderer
