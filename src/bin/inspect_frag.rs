@@ -11,6 +11,7 @@ use fastrender::css::loader::extract_embedded_css_urls;
 use fastrender::css::loader::infer_base_url;
 use fastrender::css::loader::inject_css_into_html;
 use fastrender::css::loader::inline_imports;
+use fastrender::css::loader::InlineImportState;
 use fastrender::css::parser::extract_css;
 use fastrender::dom::DomNodeType;
 use fastrender::dom::{self};
@@ -175,9 +176,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_user_agent(args.user_agent.clone())
         .with_accept_language(args.accept_language.clone());
       let mut combined_css = String::new();
-      let mut seen_imports = HashSet::new();
+      let mut import_state = InlineImportState::new();
       for link in css_links {
-        seen_imports.insert(link.clone());
+        import_state.register_stylesheet(link.clone());
         match fetcher.fetch(&link) {
           Ok(res) => {
             let css_text = decode_css_bytes(&res.bytes, res.content_type.as_deref());
@@ -192,7 +193,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
               &rewritten,
               &link,
               &mut import_fetch,
-              &mut seen_imports,
+              &mut import_state,
               None,
             ) {
               Ok(inlined) => combined_css.push_str(&inlined),

@@ -12,7 +12,6 @@ use cssparser::{Parser, ParserInput, Token};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
-use std::hash::BuildHasher;
 use std::path::Path;
 use url::Url;
 
@@ -338,7 +337,10 @@ pub fn absolutize_css_urls(css: &str, base_url: &str) -> String {
 }
 
 fn parse_import_target(rule: &str) -> Option<(String, String)> {
-  let after_at = rule.strip_prefix("@import")?.trim_start();
+  let after_at = rule
+    .get(..7)
+    .filter(|prefix| prefix.eq_ignore_ascii_case("@import"))?;
+  let after_at = rule[after_at.len()..].trim_start();
   let (target, rest) = if let Some(inner) = after_at.strip_prefix("url(") {
     let close = inner.find(')')?;
     let url_part = &inner[..close].trim();
@@ -367,16 +369,34 @@ fn parse_import_target(rule: &str) -> Option<(String, String)> {
 
 const MAX_INLINE_IMPORTS: usize = 64;
 
+/// Tracks recursion state and cached inlined content for `@import` processing.
+#[derive(Default)]
+pub struct InlineImportState {
+  stack: Vec<String>,
+  seen: HashSet<String>,
+  cache: HashMap<String, String>,
+}
+
+impl InlineImportState {
+  pub fn new() -> Self {
+    Self::default()
+  }
+
+  pub fn register_stylesheet(&mut self, url: impl Into<String>) {
+    self.seen.insert(url.into());
+  }
+}
+
 /// Inline `@import` rules by fetching their targets recursively.
 ///
 /// All fetched stylesheets have their `url(...)` references rewritten against the
 /// stylesheet URL before inlining, so relative asset references continue to work
 /// once the CSS is embedded in the document.
-pub fn inline_imports<S: BuildHasher, F>(
+pub fn inline_imports<F>(
   css: &str,
   base_url: &str,
   fetch: &mut F,
-  seen: &mut HashSet<String, S>,
+  state: &mut InlineImportState,
   deadline: Option<&RenderDeadline>,
 ) -> std::result::Result<String, RenderError>
 where
@@ -386,7 +406,7 @@ where
     css,
     base_url,
     fetch,
-    seen,
+    state,
     &mut |_url, _reason| {},
     deadline,
   )
@@ -395,11 +415,29 @@ where
 /// Inline `@import` rules with diagnostics about cycles and cutoffs.
 ///
 /// This variant mirrors [`inline_imports`] but surfaces skipped imports to the caller.
-pub fn inline_imports_with_diagnostics<S: BuildHasher, F, D>(
+pub fn inline_imports_with_diagnostics<F, D>(
   css: &str,
   base_url: &str,
   fetch: &mut F,
-  seen: &mut HashSet<String, S>,
+  state: &mut InlineImportState,
+  diagnostics: &mut D,
+  deadline: Option<&RenderDeadline>,
+) -> std::result::Result<String, RenderError>
+where
+  F: FnMut(&str) -> Result<String>,
+  D: FnMut(&str, &str),
+{
+  state.stack.push(base_url.to_string());
+  let result = inline_imports_inner(css, base_url, fetch, state, diagnostics, deadline);
+  state.stack.pop();
+  result
+}
+
+fn inline_imports_inner<F, D>(
+  css: &str,
+  base_url: &str,
+  fetch: &mut F,
+  state: &mut InlineImportState,
   diagnostics: &mut D,
   deadline: Option<&RenderDeadline>,
 ) -> std::result::Result<String, RenderError>
@@ -416,7 +454,7 @@ where
   }
 
   let mut out = String::with_capacity(css.len());
-  let mut state = State::Normal;
+  let mut parser_state = State::Normal;
   let bytes = css.as_bytes();
   let mut i = 0usize;
   let mut last_emit = 0usize;
@@ -427,20 +465,20 @@ where
         limit.check(RenderStage::Css)?;
       }
     }
-    match state {
+    match parser_state {
       State::Normal => {
         if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
-          state = State::Comment;
+          parser_state = State::Comment;
           i += 2;
           continue;
         }
         if bytes[i] == b'\'' {
-          state = State::Single;
+          parser_state = State::Single;
           i += 1;
           continue;
         }
         if bytes[i] == b'"' {
-          state = State::Double;
+          parser_state = State::Double;
           i += 1;
           continue;
         }
@@ -493,31 +531,42 @@ where
             let rule = css[i..j].trim();
             if let Some((target, media)) = parse_import_target(rule) {
               if let Some(resolved) = resolve_href(base_url, &target) {
-                if seen.len() >= MAX_INLINE_IMPORTS {
+                if state.seen.len() >= MAX_INLINE_IMPORTS {
                   diagnostics(&resolved, "import limit reached");
                   out.push_str(&css[last_emit..]);
                   return Ok(out);
                 }
                 out.push_str(&css[last_emit..i]);
-                if seen.insert(resolved.clone()) {
-                  if let Ok(fetched) = fetch(&resolved) {
-                    let rewritten = absolutize_css_urls(&fetched, &resolved);
-                    let inlined = inline_imports_with_diagnostics(
-                      &rewritten,
-                      &resolved,
-                      fetch,
-                      seen,
-                      diagnostics,
-                      deadline,
-                    )?;
+                if state.stack.contains(&resolved) {
+                  diagnostics(&resolved, "skipping cyclic @import");
+                } else {
+                  let mut inlined: Option<String> = None;
+                  if let Some(cached) = state.cache.get(&resolved) {
+                    inlined = Some(cached.clone());
+                  } else {
+                    state.seen.insert(resolved.clone());
+                    if let Ok(fetched) = fetch(&resolved) {
+                      let rewritten = absolutize_css_urls(&fetched, &resolved);
+                      let nested = inline_imports_with_diagnostics(
+                        &rewritten,
+                        &resolved,
+                        fetch,
+                        state,
+                        diagnostics,
+                        deadline,
+                      )?;
+                      state.cache.insert(resolved.clone(), nested.clone());
+                      inlined = Some(nested);
+                    }
+                  }
+
+                  if let Some(inlined) = inlined {
                     if media.is_empty() || media.eq_ignore_ascii_case("all") {
                       out.push_str(&inlined);
                     } else {
                       let _ = write!(out, "@media {} {{\n{}\n}}\n", media, inlined);
                     }
                   }
-                } else {
-                  diagnostics(&resolved, "skipping cyclic @import");
                 }
                 last_emit = j;
                 i = j;
@@ -535,7 +584,7 @@ where
           continue;
         }
         if bytes[i] == b'\'' {
-          state = State::Normal;
+          parser_state = State::Normal;
         }
         i += 1;
       }
@@ -545,13 +594,13 @@ where
           continue;
         }
         if bytes[i] == b'"' {
-          state = State::Normal;
+          parser_state = State::Normal;
         }
         i += 1;
       }
       State::Comment => {
         if bytes[i] == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
-          state = State::Normal;
+          parser_state = State::Normal;
           i += 2;
         } else {
           i += 1;
@@ -1358,7 +1407,7 @@ mod tests {
 
   #[test]
   fn inline_imports_flattens_nested_imports() {
-    let mut seen = HashSet::new();
+    let mut state = InlineImportState::new();
     let css = "@import \"nested.css\";\nbody { color: black; }";
     let mut fetched = |url: &str| -> Result<String> {
       if url.ends_with("nested.css") {
@@ -1371,7 +1420,7 @@ mod tests {
       css,
       "https://example.com/main.css",
       &mut fetched,
-      &mut seen,
+      &mut state,
       None,
     )
     .unwrap();
@@ -1412,6 +1461,72 @@ mod tests {
     let style_tag = format!("<style>{css}</style>");
     assert_eq!(injected.matches(&style_tag).count(), 1);
     assert_eq!(injected.replace(&style_tag, ""), html);
+  }
+
+  #[test]
+  fn inline_imports_handles_uppercase_at_keyword() {
+    let mut state = InlineImportState::new();
+    let css = "@IMPORT url(\"nested.css\");\nbody { color: black; }";
+    let mut fetched = |url: &str| -> Result<String> {
+      assert_eq!(url, "https://example.com/nested.css");
+      Ok("p { color: blue; }".to_string())
+    };
+    let out = inline_imports(
+      css,
+      "https://example.com/main.css",
+      &mut fetched,
+      &mut state,
+      None,
+    )
+    .unwrap();
+    assert!(out.contains("p { color: blue; }"));
+    assert!(out.contains("body { color: black; }"));
+  }
+
+  #[test]
+  fn inline_imports_preserves_media_wrappers_for_duplicates() {
+    let mut state = InlineImportState::new();
+    let css = "@import url(\"shared.css\") screen;\n@import url(\"shared.css\") print;";
+    let mut fetched = |_url: &str| -> Result<String> { Ok("p { color: green; }".to_string()) };
+    let out = inline_imports(
+      css,
+      "https://example.com/main.css",
+      &mut fetched,
+      &mut state,
+      None,
+    )
+    .unwrap();
+    assert!(out.contains("@media screen"));
+    assert!(out.contains("@media print"));
+    assert_eq!(out.matches("p { color: green; }").count(), 2);
+  }
+
+  #[test]
+  fn inline_imports_reports_cycles() {
+    let mut state = InlineImportState::new();
+    let mut fetched = |url: &str| -> Result<String> {
+      if url.ends_with("a.css") {
+        Ok("@import \"b.css\";\nbody { color: red; }".to_string())
+      } else {
+        Ok("@import \"a.css\";".to_string())
+      }
+    };
+    let mut diags: Vec<(String, String)> = Vec::new();
+    let mut record = |url: &str, reason: &str| {
+      diags.push((url.to_string(), reason.to_string()));
+    };
+    let out = inline_imports_with_diagnostics(
+      "@import \"a.css\";",
+      "https://example.com/root.css",
+      &mut fetched,
+      &mut state,
+      &mut record,
+      None,
+    )
+    .unwrap();
+    assert!(out.contains("body { color: red; }"));
+    assert!(diags.iter().any(|(_, reason)| reason.contains("cyclic")));
+  }
   }
 
   #[test]

@@ -63,7 +63,7 @@ use crate::compat::CompatProfile;
 use crate::css::encoding::decode_css_bytes;
 use crate::css::loader::{
   absolutize_css_urls, extract_css_links, extract_embedded_css_urls, infer_base_url,
-  inject_css_into_html, inline_imports_with_diagnostics, resolve_href_with_base,
+  inject_css_into_html, inline_imports_with_diagnostics, resolve_href_with_base, InlineImportState,
 };
 use crate::css::parser::{
   extract_css_sources, extract_scoped_css_sources, parse_stylesheet, rel_list_contains_stylesheet,
@@ -6206,10 +6206,10 @@ impl FastRender {
     }
 
     let mut combined_css = String::new();
-    let mut seen_imports = HashSet::new();
+    let mut import_state = InlineImportState::new();
 
     for css_url in css_links {
-      seen_imports.insert(css_url.clone());
+      import_state.register_stylesheet(css_url.clone());
       if let Some(rec) = stats.as_deref_mut() {
         rec.record_fetch(ResourceKind::Stylesheet);
       }
@@ -6281,7 +6281,7 @@ impl FastRender {
               &rewritten,
               &css_url,
               &mut import_fetch,
-              &mut seen_imports,
+              &mut import_state,
               &mut import_diag,
               deadline,
             )?
@@ -10290,6 +10290,42 @@ mod tests {
 
     let color = text_color_for(&tree, "Order Test").unwrap();
     assert_eq!(color, Rgba::rgb(20, 40, 60));
+  }
+
+  #[test]
+  fn inline_stylesheets_preserves_duplicate_import_media_queries() {
+    let base_url = "https://example.com/page.html";
+    let fetcher = MapFetcher::default()
+      .with_entry(
+        "https://example.com/main.css",
+        "@import url(\"shared.css\") screen;\n@import url(\"shared.css\") print;",
+      )
+      .with_entry(
+        "https://example.com/shared.css",
+        "p { color: rgb(1, 2, 3); }",
+      );
+
+    let mut diagnostics = RenderDiagnostics::default();
+    let html = r#"
+      <link rel="stylesheet" href="main.css">
+      <p>Imports</p>
+    "#;
+    let output = FastRender::inline_stylesheets_for_html_with_context(
+      &fetcher,
+      html,
+      base_url,
+      MediaType::Screen,
+      None,
+      None,
+      &mut diagnostics,
+      None,
+      None,
+    )
+    .expect("inlined styles");
+
+    assert!(output.contains("@media screen"));
+    assert!(output.contains("@media print"));
+    assert_eq!(output.matches("p { color: rgb(1, 2, 3); }").count(), 2);
   }
 
   #[test]
