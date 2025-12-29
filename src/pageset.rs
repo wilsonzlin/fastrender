@@ -6,6 +6,7 @@
 //! consistent.
 
 use crate::resource::normalize_page_name;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 /// Cached HTML directory used by `fetch_pages` and consumers.
@@ -186,6 +187,28 @@ pub fn pageset_stem(url_or_stem: &str) -> Option<String> {
 /// Path to the cached HTML for a given canonical stem.
 pub fn cache_html_path(stem: &str) -> PathBuf {
   PathBuf::from(CACHE_HTML_DIR).join(format!("{stem}.html"))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PagesetEntry {
+  pub url: &'static str,
+  pub stem: String,
+}
+
+/// Canonical, deduped pageset entries sorted by stem.
+pub fn pageset_entries() -> Vec<PagesetEntry> {
+  let mut deduped: BTreeMap<String, &'static str> = BTreeMap::new();
+  for &url in PAGESET_URLS {
+    let Some(stem) = pageset_stem(url) else {
+      continue;
+    };
+    deduped.entry(stem).or_insert(url);
+  }
+
+  deduped
+    .into_iter()
+    .map(|(stem, url)| PagesetEntry { url, stem })
+    .collect()
 }
 
 #[cfg(test)]

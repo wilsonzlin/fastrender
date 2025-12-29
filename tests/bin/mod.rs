@@ -10,5 +10,6 @@ mod file_stylesheet_parity;
 mod inspect_frag_help_test;
 mod pageset_progress_help_test;
 mod pageset_progress_report_test;
+mod pageset_progress_sync_test;
 mod render_pages_diagnostics_test;
 mod render_pages_exit_test;

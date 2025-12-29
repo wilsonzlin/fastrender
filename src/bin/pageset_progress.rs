@@ -20,7 +20,7 @@ use common::render_pipeline::{
 };
 use fastrender::api::{DiagnosticsLevel, RenderDiagnostics, ResourceKind};
 use fastrender::error::{RenderError, RenderStage};
-use fastrender::pageset::{pageset_stem, CACHE_HTML_DIR};
+use fastrender::pageset::{pageset_entries, pageset_stem, CACHE_HTML_DIR};
 use fastrender::resource::normalize_user_agent_for_log;
 use fastrender::resource::parse_cached_html_meta;
 #[cfg(not(feature = "disk_cache"))]
@@ -35,7 +35,7 @@ use fastrender::resource::ResourceFetcher;
 use fastrender::resource::DEFAULT_ACCEPT_LANGUAGE;
 use fastrender::resource::DEFAULT_USER_AGENT;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -66,6 +66,8 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum CommandKind {
+  /// Ensure `progress/pages/*.json` exists for every page in the pageset.
+  Sync(SyncArgs),
   /// Render cached pages and update `progress/pages/*.json`.
   Run(RunArgs),
   /// Summarize existing `progress/pages/*.json` artifacts.
@@ -89,6 +91,21 @@ impl DiagnosticsArg {
       DiagnosticsArg::Verbose => DiagnosticsLevel::Verbose,
     }
   }
+}
+
+#[derive(Args, Debug)]
+struct SyncArgs {
+  /// Directory to write committed progress artifacts into
+  #[arg(long, default_value = DEFAULT_PROGRESS_DIR)]
+  progress_dir: PathBuf,
+
+  /// Directory containing cached HTML (used to flag missing caches)
+  #[arg(long, default_value = CACHE_HTML_DIR)]
+  html_dir: PathBuf,
+
+  /// Remove progress files that are no longer part of the pageset
+  #[arg(long)]
+  prune: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, ValueEnum)]
@@ -583,6 +600,89 @@ fn write_progress(path: &Path, progress: &PageProgress) -> io::Result<()> {
   let json = serde_json::to_string_pretty(progress)
     .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
   fs::write(path, format!("{json}\n"))
+}
+
+fn prune_stale_progress(progress_dir: &Path, keep: &BTreeSet<String>) -> io::Result<usize> {
+  let mut pruned = 0usize;
+  for entry in fs::read_dir(progress_dir)? {
+    let entry = entry?;
+    if entry.file_type()?.is_dir() {
+      continue;
+    }
+    let path = entry.path();
+    if path.extension().and_then(|e| e.to_str()) != Some("json") {
+      continue;
+    }
+    let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+      continue;
+    };
+    if keep.contains(stem) {
+      continue;
+    }
+    fs::remove_file(path)?;
+    pruned += 1;
+  }
+  Ok(pruned)
+}
+
+fn sync(args: SyncArgs) -> io::Result<()> {
+  fs::create_dir_all(&args.progress_dir)?;
+
+  let mut stems: BTreeSet<String> = BTreeSet::new();
+  let mut created = 0usize;
+  let mut updated = 0usize;
+
+  for entry in pageset_entries() {
+    let progress_path = args.progress_dir.join(format!("{}.json", entry.stem));
+    let cache_path = args.html_dir.join(format!("{}.html", entry.stem));
+    let cache_exists = cache_path.exists();
+
+    let previous = read_progress(&progress_path);
+    let mut progress = if let Some(ref prev) = previous {
+      prev.clone()
+    } else {
+      created += 1;
+      let mut new_progress = PageProgress::new(entry.url.to_string());
+      new_progress.notes = "not run".to_string();
+      new_progress
+    };
+
+    progress.url = entry.url.to_string();
+
+    if !cache_exists {
+      progress.status = ProgressStatus::Error;
+      if is_hotspot_unset(&progress.hotspot) {
+        progress.hotspot = "fetch".to_string();
+      }
+      if progress.notes.trim().is_empty() || previous.is_none() {
+        progress.notes = "missing cache".to_string();
+      }
+      progress.total_ms = None;
+      progress.stages_ms = StageBuckets::default();
+    }
+
+    stems.insert(entry.stem.clone());
+    write_progress(&progress_path, &progress)?;
+    if previous.is_some() {
+      updated += 1;
+    }
+  }
+
+  let pruned = if args.prune {
+    prune_stale_progress(&args.progress_dir, &stems)?
+  } else {
+    0
+  };
+
+  println!(
+    "Synced {} pages (created {}, updated {}, pruned {})",
+    stems.len(),
+    created,
+    updated,
+    pruned
+  );
+
+  Ok(())
 }
 
 fn buckets_from_diagnostics(diag: &RenderDiagnostics) -> StageBuckets {
@@ -2319,6 +2419,7 @@ mod tests {
 fn main() -> io::Result<()> {
   let cli = Cli::parse();
   match cli.command {
+    CommandKind::Sync(args) => sync(args),
     CommandKind::Run(args) => run(args),
     CommandKind::Report(args) => report(args),
     CommandKind::Worker(args) => worker(args),

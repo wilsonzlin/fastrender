@@ -131,6 +131,7 @@ Pageset wrappers enable the disk-backed subresource cache by default, persisting
 - Run:
   - Help: `cargo run --release --bin pageset_progress -- run --help`
   - Typical: `cargo run --release --bin pageset_progress -- run --timeout 5`
+- Sync: `cargo run --release --bin pageset_progress -- sync [--prune] [--html-dir fetches/html --progress-dir progress/pages]` bootstraps one JSON per pageset URL without needing any caches. `--prune` removes stale progress files for URLs no longer in the list.
 - Progress filenames use the canonical stem from `pageset_stem` (strip scheme + leading `www.`); `--pages` filters accept either the URL or the normalized stem. If you have older `fetches/html` entries with `www.` prefixes in the filename, re-run `fetch_pages` so progress filenames line up.
 - Triage reruns (reuse existing `progress/pages/*.json` instead of typing stems):
   - `--from-progress <dir>` enables selection from saved progress files (default intersection of filters, use `--union` to OR them).
