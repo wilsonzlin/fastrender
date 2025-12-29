@@ -6,10 +6,14 @@ FastRender ships a few small binaries/examples intended for internal debugging a
 
 These are optional wrappers for the most common loops:
 
-- Pageset loop (fetch → progress JSON): `scripts/pageset.sh` (defaults to `--features disk_cache`; set `DISK_CACHE=0` or pass `--no-disk-cache` to opt out)
+- Pageset loop (fetch → progress JSON): `scripts/pageset.sh` (defaults to `--features disk_cache`; set `DISK_CACHE=0` or `NO_DISK_CACHE=1` or pass `--no-disk-cache` to opt out)
 - Profile one page with samply (saves profile + prints summary): `scripts/profile_samply.sh <stem>` (builds `pageset_progress` with `disk_cache`)
 - Profile one page with perf: `scripts/profile_perf.sh <stem>` (builds `pageset_progress` with `disk_cache`)
 - Summarize a saved samply profile: `scripts/samply_summary.py <profile.json.gz>`
+
+Pageset wrappers enable the disk-backed subresource cache by default, persisting assets under
+`fetches/assets/` for repeatable/offline runs. Set `NO_DISK_CACHE=1` or `DISK_CACHE=0` (or pass
+`--no-disk-cache` to the wrappers) to force in-memory-only fetches.
 
 ## `cargo xtask`
 
@@ -104,8 +108,8 @@ These are optional wrappers for the most common loops:
 - Replay with `bundle_page render <bundle> --out out.png` to render strictly from the bundle with zero network calls.
 - For larger batch workflows, offline captures are also available via the existing on-disk caches:
   - `fetch_pages` writes HTML under `fetches/html/` and a `*.html.meta` sidecar with the original content-type and final URL.
-  - `render_pages` and `fetch_and_render` use the shared disk-backed fetcher (when built with `--features disk_cache`) for subresources, writing into `fetches/assets/`. The pageset wrappers (`cargo xtask pageset`, `scripts/pageset.sh`, and the profiling scripts) enable this feature by default so repeated runs hit disk instead of the network. Use `--no-disk-cache`/`DISK_CACHE=0` if you need to force fresh fetches; new URLs will still fail offline.
-- Asset fetches in library code go through [`fastrender::resource::CachingFetcher`] in-memory by default, or [`fastrender::resource::DiskCachingFetcher`] behind the optional `disk_cache` feature.
+  - `render_pages` and `fetch_and_render` use the shared disk-backed fetcher (when built with `--features disk_cache`; enabled by default in `scripts/pageset.sh`, `cargo xtask pageset`, and the profiling scripts) for subresources, writing into `fetches/assets/`. After one online render, you can re-run against the same caches without network access (new URLs will still fail). Use `--no-disk-cache`, `DISK_CACHE=0`, or `NO_DISK_CACHE=1` to opt out.
+  - Asset fetches in library code go through [`fastrender::resource::CachingFetcher`] in-memory by default, or [`fastrender::resource::DiskCachingFetcher`] behind the optional `disk_cache` feature.
 
 ## Diagnostics
 

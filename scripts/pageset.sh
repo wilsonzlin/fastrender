@@ -5,12 +5,16 @@ set -euo pipefail
 #   fetch_pages -> pageset_progress
 #
 # Environment overrides:
-#   JOBS=8 FETCH_TIMEOUT=30 RENDER_TIMEOUT=5 DISK_CACHE=0
+#   JOBS=8 FETCH_TIMEOUT=30 RENDER_TIMEOUT=5 DISK_CACHE=0 NO_DISK_CACHE=1
 
 JOBS="${JOBS:-$(nproc)}"
 FETCH_TIMEOUT="${FETCH_TIMEOUT:-30}"
 RENDER_TIMEOUT="${RENDER_TIMEOUT:-5}"
 USE_DISK_CACHE="${DISK_CACHE:-1}"
+
+if [[ -n "${NO_DISK_CACHE:-}" ]]; then
+  USE_DISK_CACHE=0
+fi
 
 ARGS=()
 PARSE_FLAGS=1

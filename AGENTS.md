@@ -18,6 +18,8 @@ Or (same thing, via the preferred wrapper):
 cargo xtask pageset
 ```
 
+Pageset wrappers enable the disk-backed subresource cache (writes to `fetches/assets/`) by default for faster, repeatable runs. Set `NO_DISK_CACHE=1` or `DISK_CACHE=0` (or pass `--no-disk-cache`) to fall back to in-memory fetch caching.
+
 **Profile one page (terminal-only; writes a profile file + prints a summary):**
 
 ```bash

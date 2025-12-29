@@ -74,7 +74,7 @@ struct PagesetArgs {
   #[arg(long)]
   no_fetch: bool,
 
-  /// Disable the disk-backed cache (on by default for reproducible runs)
+  /// Disable the disk-backed cache (defaults on; see NO_DISK_CACHE/DISK_CACHE)
   #[arg(long = "no-disk-cache", default_value_t = true, action = ArgAction::SetFalse)]
   disk_cache: bool,
 
@@ -339,20 +339,29 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
   let pages_arg = args.pages.as_ref().map(|pages| pages.join(","));
   let shard_arg = args.shard.map(|(index, total)| format!("{index}/{total}"));
 
-  // `fetch_pages` and `pageset_progress` should use the same features so the cache
-  // directory layout and fetch behavior stay consistent across runs.
-  let mut cargo_features = Vec::new();
-  if args.disk_cache {
-    cargo_features.extend(["--features", "disk_cache"]);
+  let disk_cache_enabled = disk_cache_enabled(args.disk_cache);
+  let disk_cache_status = if disk_cache_enabled {
+    "enabled"
+  } else {
+    "disabled"
+  };
+  if disk_cache_enabled {
+    println!(
+      "Disk cache enabled (persisting subresources under fetches/assets/). \
+       Set NO_DISK_CACHE=1, DISK_CACHE=0, or --no-disk-cache to disable."
+    );
+  } else {
+    println!(
+      "Disk cache disabled (NO_DISK_CACHE/DISK_CACHE/--no-disk-cache); subresources will be refetched each run."
+    );
   }
-  let disk_cache_status = if args.disk_cache { "enabled" } else { "disabled" };
 
   if !args.no_fetch {
     let mut cmd = Command::new("cargo");
     cmd
       .arg("run")
       .arg("--release")
-      .args(&cargo_features)
+      .apply_disk_cache_feature(disk_cache_enabled)
       .args(["--bin", "fetch_pages"])
       .arg("--")
       .arg("--jobs")
@@ -376,7 +385,7 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
   cmd
     .arg("run")
     .arg("--release")
-    .args(&cargo_features)
+    .apply_disk_cache_feature(disk_cache_enabled)
     .args(["--bin", "pageset_progress"])
     .arg("--")
     .arg("run")
@@ -398,6 +407,36 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
   run_command(cmd)?;
 
   Ok(())
+}
+
+fn disk_cache_enabled(cli_disk_cache_enabled: bool) -> bool {
+  if !cli_disk_cache_enabled {
+    return false;
+  }
+
+  if std::env::var("NO_DISK_CACHE")
+    .map(|value| !value.is_empty())
+    .unwrap_or(false)
+  {
+    return false;
+  }
+
+  std::env::var("DISK_CACHE")
+    .map(|value| value != "0")
+    .unwrap_or(true)
+}
+
+trait DiskCacheFeatureExt {
+  fn apply_disk_cache_feature(&mut self, enabled: bool) -> &mut Command;
+}
+
+impl DiskCacheFeatureExt for Command {
+  fn apply_disk_cache_feature(&mut self, enabled: bool) -> &mut Command {
+    if enabled {
+      self.args(["--features", "disk_cache"]);
+    }
+    self
+  }
 }
 
 fn run_render_page(args: RenderPageArgs) -> Result<()> {
