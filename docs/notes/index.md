@@ -10,3 +10,4 @@ Small, durable writeups that explain “why/how” decisions that are worth keep
 - [custom-properties-api.md](custom-properties-api.md) — canonical storage and resolution for CSS custom properties.
 - [variable-font-decoration-metrics.md](variable-font-decoration-metrics.md) — variation-aware underline/strike metrics and current fixture coverage.
 - [http-agent-pooling.md](http-agent-pooling.md) — shared `ureq::Agent` connection pooling for cheaper resource fetches.
+- [bundled-fonts.md](bundled-fonts.md) — policy for keeping bundled font coverage deterministic and small.

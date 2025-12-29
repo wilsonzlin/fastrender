@@ -66,8 +66,8 @@ fn generic_fallback_uses_text_font_when_emoji_bundled() {
 
   let font = db.load_font(primary).expect("load primary font");
   assert!(
-    font.family.to_lowercase().contains("dejavu"),
-    "text generic should continue using bundled text face"
+    font.family.to_lowercase().contains("noto sans"),
+    "text generic should continue using the bundled text face"
   );
   assert!(db.has_glyph(primary, 'A'));
 }

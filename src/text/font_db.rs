@@ -58,14 +58,71 @@ pub use crate::text::face_cache::FaceParseCountGuard;
 pub use crate::text::face_cache::{face_parse_count, reset_face_parse_counter_for_tests};
 
 const GLYPH_COVERAGE_CACHE_SIZE: usize = 128;
-const BUNDLED_FONTS: &[(&str, &[u8])] = &[(
-  "DejaVu Sans",
-  include_bytes!("../../tests/fixtures/fonts/DejaVuSans-subset.ttf"),
-)];
-const BUNDLED_EMOJI_FONTS: &[(&str, &[u8])] = &[(
-  "FastRender Emoji",
-  include_bytes!("../../tests/fixtures/fonts/FastRenderEmoji.ttf"),
-)];
+#[derive(Clone, Copy)]
+struct BundledFont {
+  name: &'static str,
+  data: &'static [u8],
+}
+
+// Ordered from general text to narrower script fallbacks so generic families stay stable.
+const BUNDLED_FONTS: &[BundledFont] = &[
+  BundledFont {
+    name: "Noto Sans",
+    data: include_bytes!("../../tests/fixtures/fonts/NotoSans-subset.ttf"),
+  },
+  BundledFont {
+    name: "Noto Serif",
+    data: include_bytes!("../../tests/fixtures/fonts/NotoSerif-subset.ttf"),
+  },
+  BundledFont {
+    name: "Noto Sans Mono",
+    data: include_bytes!("../../tests/fixtures/fonts/NotoSansMono-subset.ttf"),
+  },
+  BundledFont {
+    name: "Noto Sans Arabic",
+    data: include_bytes!("../../tests/fixtures/fonts/NotoSansArabic-subset.ttf"),
+  },
+  BundledFont {
+    name: "Noto Sans Devanagari",
+    data: include_bytes!("../../tests/fixtures/fonts/NotoSansDevanagari-subset.ttf"),
+  },
+  BundledFont {
+    name: "Noto Sans Bengali",
+    data: include_bytes!("../../tests/fixtures/fonts/NotoSansBengali-subset.ttf"),
+  },
+  BundledFont {
+    name: "Noto Sans SC",
+    data: include_bytes!("../../tests/fixtures/fonts/NotoSansSC-subset.ttf"),
+  },
+  BundledFont {
+    name: "Noto Sans JP",
+    data: include_bytes!("../../tests/fixtures/fonts/NotoSansJP-subset.ttf"),
+  },
+  BundledFont {
+    name: "Noto Sans KR",
+    data: include_bytes!("../../tests/fixtures/fonts/NotoSansKR-subset.ttf"),
+  },
+  BundledFont {
+    name: "Noto Sans Symbols",
+    data: include_bytes!("../../tests/fixtures/fonts/NotoSansSymbols-subset.ttf"),
+  },
+  BundledFont {
+    name: "Noto Sans Symbols 2",
+    data: include_bytes!("../../tests/fixtures/fonts/NotoSansSymbols2-subset.ttf"),
+  },
+  BundledFont {
+    name: "STIX Two Math",
+    data: include_bytes!("../../tests/fixtures/fonts/STIXTwoMath-Regular.otf"),
+  },
+  BundledFont {
+    name: "DejaVu Sans",
+    data: include_bytes!("../../tests/fixtures/fonts/DejaVuSans-subset.ttf"),
+  },
+];
+const BUNDLED_EMOJI_FONTS: &[BundledFont] = &[BundledFont {
+  name: "FastRender Emoji",
+  data: include_bytes!("../../tests/fixtures/fonts/FastRenderEmoji.ttf"),
+}];
 
 fn env_flag(var: &str) -> Option<bool> {
   std::env::var(var).ok().map(|v| {
@@ -878,16 +935,16 @@ impl FontDatabase {
   }
 
   fn load_bundled_fonts(&mut self) {
-    for (name, data) in BUNDLED_FONTS {
-      if let Err(err) = self.load_font_data(data.to_vec()) {
-        eprintln!("failed to load bundled font {}: {:?}", name, err);
+    for font in BUNDLED_FONTS {
+      if let Err(err) = self.load_font_data(font.data.to_vec()) {
+        eprintln!("failed to load bundled font {}: {:?}", font.name, err);
       }
     }
 
     if should_load_bundled_emoji_fonts() {
-      for (name, data) in BUNDLED_EMOJI_FONTS {
-        if let Err(err) = self.load_font_data(data.to_vec()) {
-          eprintln!("failed to load bundled emoji font {}: {:?}", name, err);
+      for font in BUNDLED_EMOJI_FONTS {
+        if let Err(err) = self.load_font_data(font.data.to_vec()) {
+          eprintln!("failed to load bundled emoji font {}: {:?}", font.name, err);
         }
       }
     }

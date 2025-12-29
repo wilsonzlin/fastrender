@@ -1,9 +1,29 @@
 ## Font fixtures
 
-This directory contains self-contained fixtures for deterministic rendering tests. The fonts
-documented below are generated in-repo and released into the public domain (CC0) so they can
-be safely checked in alongside their regeneration scripts. They live under `tests/fixtures/fonts`
-so CI and tests can run in fully hermetic environments without relying on platform fonts.
+This directory contains self-contained fixtures for deterministic rendering tests. Most fonts
+are generated in-repo; the rest are subsetted from upstream OFL families so they can be safely
+checked in alongside their regeneration scripts. They live under `tests/fixtures/fonts` so CI
+and tests can run in fully hermetic environments without relying on platform fonts.
+
+### Bundled text/script coverage (Noto subsets + math)
+- **Sources:** [Noto Sans families](https://github.com/google/fonts/tree/main/ofl) (OFL, see `Noto-LICENSE-OFL.txt`),
+  [STIX Math v2.0.0](https://github.com/stipub/stixfonts) (OFL, see `STIXTwoMath-OFL.txt`),
+  and `FastRenderEmoji.ttf` (CC0) for color emoji.
+- **Regeneration:** `python tests/fixtures/fonts/generate_bundled_noto_subsets.py` (pins deterministic timestamps and
+  instantiates the CJK faces at `wght=400` before subsetting).
+- **Coverage:**
+  - `NotoSans-subset.ttf` / `NotoSerif-subset.ttf`: Basic + Extended Latin, combining marks, Greek, Cyrillic, and
+    punctuation (U+2000–206F) for bundled serif/sans fallbacks.
+  - `NotoSansMono-subset.ttf`: ASCII, punctuation, arrows, and box-drawing glyphs for monospace fallback.
+  - `NotoSansArabic-subset.ttf`: Arabic + Supplement/Extended ranges, presentation forms, and ZWNJ/ZWJ.
+  - `NotoSansDevanagari-subset.ttf`: Devanagari + Vedic extensions with joiners.
+  - `NotoSansBengali-subset.ttf`: Bengali + joiners.
+  - `NotoSansSC-subset.ttf` / `NotoSansJP-subset.ttf` / `NotoSansKR-subset.ttf`: Simplified/Traditional Han, kana, and
+    Hangul subsets sized for common UI text.
+  - `NotoSansSymbols-subset.ttf` / `NotoSansSymbols2-subset.ttf`: UI arrows, checkmarks, stars, alerts, and related
+    symbol glyphs used by fallback chains.
+  - `STIXTwoMath-Regular.otf`: Math operators and alphanumeric symbols preserved with the `MATH` table intact so math
+    layout has a bundled fallback in hermetic runs.
 
 ### `colrv1-test.ttf`
 - **Source:** Generated in-repo with [FontTools](https://github.com/fonttools/fonttools) v4.61.1 (no upstream binary).
