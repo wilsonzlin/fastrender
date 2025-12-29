@@ -1967,18 +1967,18 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
   #[cfg(feature = "disk_cache")]
   pub(crate) fn prime_cache_with_snapshot(&self, url: &str, snapshot: CachedSnapshot) -> String {
     let final_url = match &snapshot.value {
-      CacheValue::Resource(res) => res.final_url.as_deref(),
+      CacheValue::Resource(res) => res.final_url.clone(),
       CacheValue::Error(_) => None,
     };
     self.cache_entry(
       url,
       CacheEntry {
-        etag: snapshot.etag,
-        last_modified: snapshot.last_modified,
-        http_cache: snapshot.http_cache,
+        etag: snapshot.etag.clone(),
+        last_modified: snapshot.last_modified.clone(),
+        http_cache: snapshot.http_cache.clone(),
         value: snapshot.value,
       },
-      final_url,
+      final_url.as_deref(),
     )
   }
 

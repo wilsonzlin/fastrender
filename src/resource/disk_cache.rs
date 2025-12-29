@@ -171,7 +171,9 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
   }
 
   fn alias_path(&self, url: &str) -> PathBuf {
-    self.cache_dir.join(format!("{}.alias", Self::cache_key(url)))
+    self
+      .cache_dir
+      .join(format!("{}.alias", Self::cache_key(url)))
   }
 
   fn lock_is_active(&self, data_path: &Path) -> bool {
@@ -299,13 +301,9 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       self.remove_entry_if_unlocked(key, data_path, meta_path);
       return None;
     }
-    self.index.backfill_if_missing(
-      key,
-      meta.stored_at,
-      meta.len as u64,
-      data_path,
-      meta_path,
-    );
+    self
+      .index
+      .backfill_if_missing(key, meta.stored_at, meta.len as u64, data_path, meta_path);
 
     let mut resource = FetchedResource::with_final_url(
       bytes,
@@ -1210,7 +1208,7 @@ mod tests {
     fs::write(tmp_path(&data_path), b"junk").unwrap();
     fs::write(tmp_path(&meta_path), b"junk").unwrap();
 
-    let snapshot = disk.read_disk_entry(url).expect("entry should be readable");
+    let (_, snapshot) = disk.read_disk_entry(url).expect("entry should be readable");
     let cached = snapshot
       .value
       .as_result()
@@ -1249,7 +1247,7 @@ mod tests {
       handle.join().expect("thread should not panic");
     }
 
-    let snapshot = disk
+    let (_, snapshot) = disk
       .read_disk_entry(url)
       .expect("entry should be present after concurrent persists");
     let resource = snapshot
