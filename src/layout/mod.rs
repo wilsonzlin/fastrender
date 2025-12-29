@@ -57,6 +57,7 @@ pub mod contexts;
 
 // Optional layout profiling
 pub mod flex_profile;
+pub mod fragment_clone_profile;
 pub mod profile;
 
 // Debug-only guardrails for Taffy usage

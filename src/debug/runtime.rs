@@ -279,6 +279,10 @@ impl DebugConfig {
       truthy(raw.get("FASTR_FLEX_PROFILE"), false),
     );
     config.insert_bool(
+      "FASTR_PROFILE_FRAGMENT_CLONES",
+      truthy(raw.get("FASTR_PROFILE_FRAGMENT_CLONES"), false),
+    );
+    config.insert_bool(
       "FASTR_FLEX_PROFILE_HIST",
       truthy(raw.get("FASTR_FLEX_PROFILE_HIST"), false),
     );

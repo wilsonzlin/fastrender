@@ -105,6 +105,9 @@ use crate::layout::formatting_context::intrinsic_cache_reset_counters;
 use crate::layout::formatting_context::intrinsic_cache_stats;
 use crate::layout::formatting_context::set_fragmentainer_block_size_hint;
 use crate::layout::formatting_context::LayoutError as FormattingLayoutError;
+use crate::layout::fragment_clone_profile::{
+  fragment_clone_profile_enabled, log_fragment_clone_profile, reset_fragment_clone_profile,
+};
 use crate::layout::fragmentation::FragmentationOptions;
 use crate::layout::pagination::{paginate_fragment_tree_with_options, PaginateOptions};
 use crate::layout::profile::layout_profile_enabled;
@@ -5475,6 +5478,10 @@ impl FastRender {
     if flex_profile {
       reset_flex_profile();
     }
+    let fragment_clone_profile = fragment_clone_profile_enabled();
+    if fragment_clone_profile {
+      reset_fragment_clone_profile();
+    }
 
     let mut layout_start = stage_start;
 
@@ -5696,6 +5703,9 @@ impl FastRender {
           if flex_profile {
             reset_flex_profile();
           }
+          if fragment_clone_profile {
+            reset_fragment_clone_profile();
+          }
 
           let _fragmentainer_hint = if page_rules.is_empty() {
             None
@@ -5730,6 +5740,9 @@ impl FastRender {
       }
       if flex_profile {
         log_flex_profile(now - start);
+      }
+      if fragment_clone_profile {
+        log_fragment_clone_profile();
       }
     }
 
