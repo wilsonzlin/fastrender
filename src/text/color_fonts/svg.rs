@@ -1,37 +1,167 @@
 use super::limits::{log_glyph_limit, round_dimension, GlyphRasterLimits};
-use super::ColorGlyphRaster;
+use super::{ColorFontCaches, ColorGlyphRaster, FontKey, SvgCacheKey};
 use crate::style::color::Rgba;
 use crate::svg::{svg_root_view_box, svg_view_box_root_transform, SvgViewBox};
 use regex::Regex;
 use roxmltree::Document;
 use std::ops::Range;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use tiny_skia::{Pixmap, Transform};
 
 pub const MAX_SVG_GLYPH_BYTES: usize = 256 * 1024;
 const MAX_SVG_GLYPH_NODES: usize = 10_000;
 const MAX_SVG_GLYPH_DATA_URL_BYTES: usize = 32 * 1024;
 
+#[derive(Clone)]
+pub(super) struct ParsedSvgGlyph {
+  pub tree: resvg::usvg::Tree,
+  pub view_box: SvgViewBox,
+  pub source_width: f32,
+  pub source_height: f32,
+  pub root_transform: Transform,
+}
+
+fn svg_color_signature(color: Rgba) -> u32 {
+  ((color.alpha_u8() as u32) << 24)
+    | ((color.r as u32) << 16)
+    | ((color.g as u32) << 8)
+    | color.b as u32
+}
+
 /// Render SVG-in-OpenType glyphs.
 pub fn render_svg_glyph(
   face: &ttf_parser::Face<'_>,
+  font_key: FontKey,
   glyph_id: ttf_parser::GlyphId,
   font_size: f32,
   text_color: Rgba,
   limits: &GlyphRasterLimits,
+  caches: &Arc<Mutex<ColorFontCaches>>,
 ) -> Option<ColorGlyphRaster> {
+  let key = SvgCacheKey::new(font_key, glyph_id.0, svg_color_signature(text_color));
+  let cached = {
+    let mut caches = caches.lock().ok()?;
+    caches.svg_glyph(key)
+  }
+  .flatten();
+  let parsed = if let Some(glyph) = cached {
+    glyph
+  } else {
+    let parsed = parse_svg_glyph(face, glyph_id, text_color);
+    if let Ok(mut caches) = caches.lock() {
+      caches.put_svg_glyph(key, parsed.clone());
+    }
+    parsed?
+  };
+  rasterize_parsed_svg(
+    &parsed,
+    glyph_id.0 as u32,
+    font_size,
+    face.units_per_em() as f32,
+    limits,
+  )
+}
+
+pub(super) fn parse_svg_glyph(
+  face: &ttf_parser::Face<'_>,
+  glyph_id: ttf_parser::GlyphId,
+  text_color: Rgba,
+) -> Option<Arc<ParsedSvgGlyph>> {
   let svg_doc = face.glyph_svg_image(glyph_id)?;
   let svg_str = sanitize_svg_glyph(svg_doc.data)?;
   let svg_with_color = preprocess_svg_markup(svg_str, text_color);
-  let units_per_em = face.units_per_em() as f32;
+  let markup = svg_with_color.as_deref().unwrap_or(svg_str);
 
-  rasterize_svg_with_metrics(
-    svg_with_color.as_deref().unwrap_or(svg_str),
-    glyph_id.0 as u32,
-    font_size,
-    units_per_em,
-    limits,
+  let mut options = resvg::usvg::Options::default();
+  options.resources_dir = None;
+  let tree = resvg::usvg::Tree::from_str(markup, &options).ok()?;
+  let size = tree.size();
+  let source_width = size.width() as f32;
+  let source_height = size.height() as f32;
+  if source_width <= 0.0 || source_height <= 0.0 {
+    return None;
+  }
+
+  let view_box = svg_root_view_box(markup).unwrap_or(SvgViewBox {
+    min_x: 0.0,
+    min_y: 0.0,
+    width: source_width,
+    height: source_height,
+  });
+  if view_box.width <= 0.0 || view_box.height <= 0.0 {
+    return None;
+  }
+
+  let root_transform = svg_view_box_root_transform(
+    markup,
+    source_width,
+    source_height,
+    view_box.width,
+    view_box.height,
   )
+  .unwrap_or_else(|| {
+    Transform::from_scale(
+      view_box.width / source_width,
+      view_box.height / source_height,
+    )
+  });
+
+  Some(Arc::new(ParsedSvgGlyph {
+    tree,
+    view_box,
+    source_width,
+    source_height,
+    root_transform,
+  }))
+}
+
+pub(super) fn rasterize_parsed_svg(
+  parsed: &Arc<ParsedSvgGlyph>,
+  glyph_id: u32,
+  font_size: f32,
+  units_per_em: f32,
+  limits: &GlyphRasterLimits,
+) -> Option<ColorGlyphRaster> {
+  if units_per_em <= 0.0 {
+    return None;
+  }
+
+  let scale = font_size / units_per_em;
+  if !scale.is_finite() || scale <= 0.0 || !font_size.is_finite() {
+    return None;
+  }
+
+  let width = round_dimension(parsed.view_box.width * scale)?;
+  let height = round_dimension(parsed.view_box.height * scale)?;
+  if let Err(err) = limits.validate(width, height) {
+    log_glyph_limit("svg", glyph_id, &err);
+    return None;
+  }
+
+  let mut pixmap = Pixmap::new(width, height)?;
+  let max_y = parsed.view_box.min_y + parsed.view_box.height;
+  let glyph_transform = Transform::from_row(
+    scale,
+    0.0,
+    0.0,
+    -scale,
+    -parsed.view_box.min_x * scale,
+    max_y * scale,
+  );
+  let transform = concat_transforms(glyph_transform, parsed.root_transform);
+
+  resvg::render(&parsed.tree, transform, &mut pixmap.as_mut());
+
+  let top = -max_y * scale;
+  if !top.is_finite() {
+    return None;
+  }
+
+  Some(ColorGlyphRaster {
+    image: Arc::new(pixmap),
+    left: parsed.view_box.min_x * scale,
+    top,
+  })
 }
 
 fn rasterize_svg_with_metrics(

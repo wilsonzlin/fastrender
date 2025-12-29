@@ -125,7 +125,7 @@ use crate::text::font_loader::FontContext;
 use crate::text::pipeline::Direction as TextDirection;
 use crate::text::pipeline::ShapedRun;
 use crate::text::pipeline::ShapingPipeline;
-use crate::text::pipeline::{record_text_rasterize, text_diagnostics_enabled};
+use crate::text::pipeline::{record_text_rasterize, text_diagnostics_enabled, TextCacheStats};
 #[cfg(test)]
 use crate::text::RunRotation;
 use crate::tree;
@@ -4670,7 +4670,12 @@ impl Painter {
       );
     }
     if diag_enabled {
-      record_text_rasterize(raster_timer, 0);
+      record_text_rasterize(
+        raster_timer,
+        0,
+        TextCacheStats::default(),
+        TextCacheStats::default(),
+      );
     }
   }
 
@@ -4799,7 +4804,12 @@ impl Painter {
       );
     }
     if diag_enabled {
-      record_text_rasterize(raster_timer, 0);
+      record_text_rasterize(
+        raster_timer,
+        0,
+        TextCacheStats::default(),
+        TextCacheStats::default(),
+      );
     }
   }
 

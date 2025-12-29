@@ -30,6 +30,8 @@ fn display_list_parallel_reports_text_metrics() {
         build_chunk_size: 1,
         ..PaintParallelism::default()
       });
+    let warmed_options = options.clone();
+    let third_options = options.clone();
 
     let result = renderer
       .render_html_with_diagnostics("<p>display list text</p>", options)
@@ -48,11 +50,47 @@ fn display_list_parallel_reports_text_metrics() {
       .timings
       .text_rasterize_ms
       .expect("text raster time should be recorded");
+    let first_hits = stats.counts.glyph_cache_hits.unwrap_or(0);
+    let first_misses = stats.counts.glyph_cache_misses.unwrap_or(0);
 
     assert!(shape_ms > 0.0);
     assert!(raster_ms > 0.0);
     assert!(stats.counts.shaped_runs.unwrap_or(0) > 0);
     assert!(stats.counts.glyphs.unwrap_or(0) > 0);
+
+    let warmed = renderer
+      .render_html_with_diagnostics("<p>display list text</p>", warmed_options)
+      .expect("second render should succeed");
+    let warmed_stats = warmed
+      .diagnostics
+      .stats
+      .as_ref()
+      .expect("stats should be present on second render");
+    let warmed_hits = warmed_stats.counts.glyph_cache_hits.unwrap_or(0);
+    assert!(
+      warmed_hits > first_hits,
+      "expected glyph cache hits to increase after warming"
+    );
+    assert!(
+      warmed_stats.counts.glyph_cache_misses.unwrap_or(0) <= first_misses,
+      "glyph cache misses should not grow after warming"
+    );
+    let third = renderer
+      .render_html_with_diagnostics("<p>display list text</p>", third_options)
+      .expect("third render should succeed");
+    let third_stats = third
+      .diagnostics
+      .stats
+      .as_ref()
+      .expect("stats should be present on third render");
+    assert!(
+      third_stats.counts.glyph_cache_hits.unwrap_or(0) >= warmed_hits,
+      "cache hits should continue accumulating with reuse"
+    );
+    assert!(
+      third_stats.counts.glyph_cache_bytes.unwrap_or_default() > 0,
+      "cache bytes should be tracked after repeated renders"
+    );
   });
 }
 

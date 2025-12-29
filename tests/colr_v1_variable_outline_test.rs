@@ -46,6 +46,7 @@ fn render_glyph(
       64.0,
       0,
       &[],
+      0,
       text_color,
       0.0,
       variations,

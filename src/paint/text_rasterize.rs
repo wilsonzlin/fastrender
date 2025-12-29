@@ -59,13 +59,16 @@ use crate::text::font_instance::{
   glyph_transform, variation_hash, FontInstance, GlyphOutlineMetrics,
 };
 use crate::text::pipeline::{
-  record_text_rasterize, text_diagnostics_timer, GlyphPosition, ShapedRun,
+  record_text_rasterize, text_diagnostics_timer, GlyphPosition, ShapedRun, TextCacheStats,
 };
+use lru::LruCache;
 use rustybuzz::Variation;
 use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 use tiny_skia::BlendMode as SkiaBlendMode;
 use tiny_skia::FillRule;
 use tiny_skia::Mask;
@@ -74,6 +77,9 @@ use tiny_skia::Path;
 use tiny_skia::Pixmap;
 use tiny_skia::PixmapPaint;
 use tiny_skia::Transform;
+
+const DEFAULT_GLYPH_CACHE_BYTES: usize = 32 * 1024 * 1024;
+const SCALE_QUANTIZATION: f32 = 512.0;
 
 /// Computes the advance width of a glyph with the given variation settings applied.
 pub fn glyph_advance_with_variations(
@@ -152,6 +158,8 @@ struct GlyphCacheKey {
   font_index: u32,
   /// Glyph ID within the font
   glyph_id: u32,
+  /// Quantized scale applied to the outline
+  scale_key: u32,
   /// Quantized synthetic skew (tan(angle) * 1e4)
   skew_units: i32,
   /// Hash of variation coordinates applied to the face.
@@ -159,11 +167,12 @@ struct GlyphCacheKey {
 }
 
 impl GlyphCacheKey {
-  fn new(font: &LoadedFont, glyph_id: u32, skew: f32, variation_hash: u64) -> Self {
+  fn new(font: &LoadedFont, glyph_id: u32, scale: f32, skew: f32, variation_hash: u64) -> Self {
     Self {
       font_ptr: Arc::as_ptr(&font.data) as usize,
       font_index: font.index,
       glyph_id,
+      scale_key: quantize_scale(scale),
       skew_units: quantize_skew(skew),
       variation_hash,
     }
@@ -178,7 +187,7 @@ impl GlyphCacheKey {
 #[derive(Debug, Clone)]
 struct CachedGlyph {
   /// The rendered path, or None if the glyph has no outline
-  path: Option<Path>,
+  path: Option<Arc<Path>>,
   /// Horizontal advance for this glyph
   advance: f32,
   /// LRU timestamp (monotonic counter)
@@ -196,6 +205,19 @@ pub struct GlyphCacheStats {
   pub misses: u64,
   /// Number of entries evicted by the cache policy
   pub evictions: u64,
+  /// Current estimated bytes stored in the cache
+  pub bytes: usize,
+}
+
+impl GlyphCacheStats {
+  fn delta_from(&self, baseline: &GlyphCacheStats) -> GlyphCacheStats {
+    GlyphCacheStats {
+      hits: self.hits.saturating_sub(baseline.hits),
+      misses: self.misses.saturating_sub(baseline.misses),
+      evictions: self.evictions.saturating_sub(baseline.evictions),
+      bytes: self.bytes,
+    }
+  }
 }
 
 /// Cache for rendered glyph paths.
@@ -219,6 +241,8 @@ pub struct GlyphCache {
   max_bytes: Option<usize>,
   /// Current estimated memory used by cached paths
   current_bytes: usize,
+  /// Peak observed memory usage to report in diagnostics
+  peak_bytes: usize,
   /// Monotonic counter used for LRU
   generation: u64,
   /// Cache hit count (for profiling)
@@ -242,9 +266,10 @@ impl GlyphCache {
     Self {
       glyphs: HashMap::new(),
       max_size,
-      max_bytes: None,
+      max_bytes: Some(DEFAULT_GLYPH_CACHE_BYTES),
       usage_queue: VecDeque::new(),
       current_bytes: 0,
+      peak_bytes: 0,
       generation: 0,
       hits: 0,
       misses: 0,
@@ -258,9 +283,10 @@ impl GlyphCache {
     Self {
       glyphs: HashMap::with_capacity(max_size.min(256)),
       max_size,
-      max_bytes: None,
+      max_bytes: Some(DEFAULT_GLYPH_CACHE_BYTES),
       usage_queue: VecDeque::new(),
       current_bytes: 0,
+      peak_bytes: 0,
       generation: 0,
       hits: 0,
       misses: 0,
@@ -277,6 +303,7 @@ impl GlyphCache {
       max_bytes,
       usage_queue: VecDeque::new(),
       current_bytes: 0,
+      peak_bytes: 0,
       generation: 0,
       hits: 0,
       misses: 0,
@@ -302,9 +329,10 @@ impl GlyphCache {
     font: &LoadedFont,
     instance: &FontInstance,
     glyph_id: u32,
+    scale: f32,
     skew: f32,
   ) -> Option<&CachedGlyph> {
-    let key = GlyphCacheKey::new(font, glyph_id, skew, instance.variation_hash());
+    let key = GlyphCacheKey::new(font, glyph_id, scale, skew, instance.variation_hash());
     let generation = self.bump_generation();
 
     if let Some(entry) = self.glyphs.get_mut(&key) {
@@ -315,6 +343,7 @@ impl GlyphCache {
       let mut cached = self.build_glyph_path(instance, glyph_id)?;
       cached.last_used = generation;
       self.current_bytes = self.current_bytes.saturating_add(cached.estimated_size);
+      self.peak_bytes = self.peak_bytes.max(self.current_bytes);
       self.glyphs.insert(key, cached);
     }
 
@@ -334,7 +363,7 @@ impl GlyphCache {
     };
 
     Some(CachedGlyph {
-      path: outline.path,
+      path: outline.path.map(Arc::new),
       advance: outline.advance,
       last_used: 0,
       estimated_size,
@@ -358,6 +387,7 @@ impl GlyphCache {
     self.glyphs.clear();
     self.usage_queue.clear();
     self.current_bytes = 0;
+    self.peak_bytes = 0;
   }
 
   /// Returns cache statistics (hits, misses, evictions).
@@ -366,6 +396,7 @@ impl GlyphCache {
       hits: self.hits,
       misses: self.misses,
       evictions: self.evictions,
+      bytes: self.current_bytes.max(self.peak_bytes),
     }
   }
 
@@ -374,6 +405,7 @@ impl GlyphCache {
     self.hits = 0;
     self.misses = 0;
     self.evictions = 0;
+    self.peak_bytes = self.current_bytes;
   }
 
   /// Bumps the generation counter used for LRU ordering.
@@ -419,6 +451,8 @@ struct ColorGlyphCacheKey {
   /// changes while still differentiating currentColor layers by hue.
   color_signature: u32,
   palette_override_hash: u64,
+  synthetic_oblique_units: i32,
+  transform_signature: u64,
 }
 
 impl ColorGlyphCacheKey {
@@ -430,6 +464,8 @@ impl ColorGlyphCacheKey {
     variations: &[Variation],
     color: Rgba,
     palette_override_hash: u64,
+    synthetic_oblique: f32,
+    transform_signature: u64,
   ) -> Self {
     Self {
       font_ptr: Arc::as_ptr(&font.data) as usize,
@@ -440,37 +476,110 @@ impl ColorGlyphCacheKey {
       variation_hash: variation_hash(variations),
       color_signature: rgb_signature(color),
       palette_override_hash,
+      synthetic_oblique_units: quantize_skew(synthetic_oblique),
+      transform_signature,
     }
   }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct ColorGlyphCache {
-  glyphs: HashMap<ColorGlyphCacheKey, ColorGlyphRaster>,
+  glyphs: LruCache<ColorGlyphCacheKey, ColorGlyphRaster>,
   max_size: usize,
+  max_bytes: usize,
+  current_bytes: usize,
+  peak_bytes: usize,
+  hits: u64,
+  misses: u64,
+  evictions: u64,
+}
+
+impl Default for ColorGlyphCache {
+  fn default() -> Self {
+    Self::new()
+  }
 }
 
 impl ColorGlyphCache {
   pub(crate) fn new() -> Self {
+    let max_size = 512;
+    let max_bytes = 16 * 1024 * 1024;
     Self {
-      glyphs: HashMap::new(),
-      max_size: 512,
+      glyphs: LruCache::new(NonZeroUsize::new(max_size).unwrap()),
+      max_size,
+      max_bytes,
+      current_bytes: 0,
+      peak_bytes: 0,
+      hits: 0,
+      misses: 0,
+      evictions: 0,
     }
   }
 
-  fn get(&self, key: &ColorGlyphCacheKey) -> Option<ColorGlyphRaster> {
-    self.glyphs.get(key).cloned()
+  fn get(&mut self, key: &ColorGlyphCacheKey) -> Option<ColorGlyphRaster> {
+    if let Some(value) = self.glyphs.get(key).cloned() {
+      self.hits += 1;
+      return Some(value);
+    }
+    self.misses += 1;
+    None
   }
 
   fn insert(&mut self, key: ColorGlyphCacheKey, value: ColorGlyphRaster) {
-    if self.glyphs.len() >= self.max_size {
-      self.glyphs.clear();
+    let glyph_bytes = color_glyph_size(&value);
+    self.current_bytes = self.current_bytes.saturating_add(glyph_bytes);
+    self.peak_bytes = self.peak_bytes.max(self.current_bytes);
+    self.glyphs.put(key, value);
+    self.evict_if_needed();
+  }
+
+  fn stats(&self) -> GlyphCacheStats {
+    GlyphCacheStats {
+      hits: self.hits,
+      misses: self.misses,
+      evictions: self.evictions,
+      bytes: self.current_bytes.max(self.peak_bytes),
     }
-    self.glyphs.insert(key, value);
+  }
+
+  fn reset_stats(&mut self) {
+    self.hits = 0;
+    self.misses = 0;
+    self.evictions = 0;
+    self.peak_bytes = self.current_bytes;
+  }
+
+  fn evict_if_needed(&mut self) {
+    while self.glyphs.len() > self.max_size || self.current_bytes > self.max_bytes {
+      if let Some((_key, value)) = self.glyphs.pop_lru() {
+        self.current_bytes = self.current_bytes.saturating_sub(color_glyph_size(&value));
+        self.evictions += 1;
+      } else {
+        break;
+      }
+    }
   }
 
   fn clear(&mut self) {
     self.glyphs.clear();
+    self.current_bytes = 0;
+    self.peak_bytes = 0;
+    self.hits = 0;
+    self.misses = 0;
+    self.evictions = 0;
+  }
+
+  fn set_max_size(&mut self, max_size: usize) {
+    self.max_size = max_size.max(1);
+    self.glyphs = LruCache::new(NonZeroUsize::new(self.max_size).unwrap());
+    self.current_bytes = 0;
+    self.peak_bytes = 0;
+    self.evictions = 0;
+  }
+
+  fn set_max_bytes(&mut self, max_bytes: usize) {
+    self.max_bytes = max_bytes.max(1024 * 1024);
+    self.evict_if_needed();
   }
 }
 
@@ -478,13 +587,46 @@ fn rgb_signature(color: Rgba) -> u32 {
   ((color.r as u32) << 16) | ((color.g as u32) << 8) | color.b as u32
 }
 
+fn quantize_scale(scale: f32) -> u32 {
+  if !scale.is_finite() || scale <= 0.0 {
+    return 0;
+  }
+  let scaled = (scale * SCALE_QUANTIZATION).round();
+  scaled.clamp(1.0, u32::MAX as f32).trunc() as u32
+}
+
 fn quantize_skew(skew: f32) -> i32 {
   if !skew.is_finite() {
     return 0;
   }
 
+  if skew.abs() < 1e-4 {
+    return 0;
+  }
+
   let scaled = (skew * 10_000.0).round();
   scaled.clamp(i32::MIN as f32, i32::MAX as f32).trunc() as i32
+}
+
+fn transform_scale_components(transform: Transform) -> (f32, f32) {
+  let scale_x = (transform.sx * transform.sx + transform.ky * transform.ky).sqrt();
+  let scale_y = (transform.kx * transform.kx + transform.sy * transform.sy).sqrt();
+  (scale_x, scale_y)
+}
+
+fn quantize_transform(transform: Transform) -> u64 {
+  let (sx, sy) = transform_scale_components(transform);
+  let sx_key = quantize_scale(sx.max(0.0));
+  let sy_key = quantize_scale(sy.max(0.0));
+  ((sx_key as u64) << 32) | sy_key as u64
+}
+
+fn color_glyph_size(glyph: &ColorGlyphRaster) -> usize {
+  glyph
+    .image
+    .data()
+    .len()
+    .saturating_add(std::mem::size_of::<ColorGlyphRaster>())
 }
 
 fn estimate_glyph_size(metrics: &GlyphOutlineMetrics) -> usize {
@@ -531,6 +673,31 @@ fn color_glyph_transform(skew: f32, glyph_x: f32, glyph_y: f32, left: f32, top: 
   // only need to add the synthetic oblique shear in X and translate to the glyph
   // origin without snapping to integers.
   Transform::from_row(1.0, 0.0, -skew, 1.0, glyph_x + left, glyph_y + top)
+}
+
+fn cache_transform_signature(state: Transform, rotation: Option<Transform>) -> u64 {
+  let mut transform = rotation.unwrap_or_else(Transform::identity);
+  transform = concat_transforms(state, transform);
+  quantize_transform(transform)
+}
+
+pub(crate) fn shared_glyph_cache() -> Arc<Mutex<GlyphCache>> {
+  static CACHE: OnceLock<Arc<Mutex<GlyphCache>>> = OnceLock::new();
+  CACHE
+    .get_or_init(|| Arc::new(Mutex::new(GlyphCache::new())))
+    .clone()
+}
+
+pub(crate) fn shared_color_cache() -> Arc<Mutex<ColorGlyphCache>> {
+  static CACHE: OnceLock<Arc<Mutex<ColorGlyphCache>>> = OnceLock::new();
+  CACHE
+    .get_or_init(|| Arc::new(Mutex::new(ColorGlyphCache::new())))
+    .clone()
+}
+
+pub(crate) fn shared_color_renderer() -> ColorFontRenderer {
+  static RENDERER: OnceLock<ColorFontRenderer> = OnceLock::new();
+  RENDERER.get_or_init(ColorFontRenderer::new).clone()
 }
 
 // ============================================================================
@@ -588,7 +755,7 @@ impl<'a> Default for TextRenderState<'a> {
 #[derive(Debug, Default)]
 pub struct TextRasterizer {
   /// Glyph path cache
-  cache: GlyphCache,
+  cache: Arc<Mutex<GlyphCache>>,
   /// Color glyph cache
   color_cache: Arc<Mutex<ColorGlyphCache>>,
   /// Renderer for color glyph formats
@@ -598,20 +765,20 @@ pub struct TextRasterizer {
 impl TextRasterizer {
   /// Creates a new text rasterizer.
   pub fn new() -> Self {
-    Self {
-      cache: GlyphCache::new(),
-      color_cache: Arc::new(Mutex::new(ColorGlyphCache::new())),
-      color_renderer: ColorFontRenderer::new(),
-    }
+    Self::with_caches(
+      Arc::new(Mutex::new(GlyphCache::new())),
+      ColorFontRenderer::new(),
+      Arc::new(Mutex::new(ColorGlyphCache::new())),
+    )
   }
 
   /// Creates a rasterizer with custom cache capacity.
   pub fn with_cache_capacity(capacity: usize) -> Self {
-    Self {
-      cache: GlyphCache::with_capacity(capacity),
-      color_cache: Arc::new(Mutex::new(ColorGlyphCache::new())),
-      color_renderer: ColorFontRenderer::new(),
-    }
+    Self::with_caches(
+      Arc::new(Mutex::new(GlyphCache::with_capacity(capacity))),
+      ColorFontRenderer::new(),
+      Arc::new(Mutex::new(ColorGlyphCache::new())),
+    )
   }
 
   /// Creates a rasterizer that reuses the provided color glyph cache and renderer.
@@ -622,8 +789,29 @@ impl TextRasterizer {
     color_renderer: ColorFontRenderer,
     color_cache: Arc<Mutex<ColorGlyphCache>>,
   ) -> Self {
+    Self::with_caches(
+      Arc::new(Mutex::new(GlyphCache::new())),
+      color_renderer,
+      color_cache,
+    )
+  }
+
+  /// Builds a rasterizer backed by shared caches to keep repeated renders warm.
+  pub fn with_shared_caches() -> Self {
+    Self::with_caches(
+      shared_glyph_cache(),
+      shared_color_renderer(),
+      shared_color_cache(),
+    )
+  }
+
+  pub(crate) fn with_caches(
+    cache: Arc<Mutex<GlyphCache>>,
+    color_renderer: ColorFontRenderer,
+    color_cache: Arc<Mutex<ColorGlyphCache>>,
+  ) -> Self {
     Self {
-      cache: GlyphCache::new(),
+      cache,
       color_cache,
       color_renderer,
     }
@@ -727,6 +915,22 @@ impl TextRasterizer {
     let raster_timer = text_diagnostics_timer();
     let diag_enabled = raster_timer.is_some();
     let mut color_glyph_rasters = 0usize;
+    let (outline_before, color_before) = if diag_enabled {
+      (
+        self
+          .cache
+          .lock()
+          .map(|cache| cache.stats())
+          .unwrap_or_default(),
+        self
+          .color_cache
+          .lock()
+          .map(|cache| cache.stats())
+          .unwrap_or_default(),
+      )
+    } else {
+      (GlyphCacheStats::default(), GlyphCacheStats::default())
+    };
 
     // Create paint with text color
     let mut paint = Paint::default();
@@ -759,6 +963,7 @@ impl TextRasterizer {
     let scale = font_size / units_per_em;
     let mut cursor_x = x;
     let mut cursor_y = 0.0_f32;
+    let transform_signature = cache_transform_signature(state.transform, rotation);
 
     // Render each glyph
     for glyph in glyphs {
@@ -779,13 +984,15 @@ impl TextRasterizer {
         variations,
         color_for_glyph,
         palette_override_hash,
+        synthetic_oblique,
+        transform_signature,
       );
 
       let mut color_glyph = self
         .color_cache
         .lock()
         .ok()
-        .and_then(|cache| cache.get(&color_key));
+        .and_then(|mut cache| cache.get(&color_key));
       if color_glyph.is_none() {
         color_glyph = self.color_renderer.render(
           font,
@@ -794,6 +1001,7 @@ impl TextRasterizer {
           font_size,
           palette_index,
           palette_overrides,
+          palette_override_hash,
           color_for_glyph,
           0.0,
           variations,
@@ -832,12 +1040,15 @@ impl TextRasterizer {
             state.clip_mask,
           );
         }
-      } else if let Some(cached) =
-        self
-          .cache
-          .get_or_build(font, &instance, glyph.glyph_id, synthetic_oblique)
-      {
-        if let Some(path) = cached.path.as_ref() {
+      } else {
+        let cached_path = if let Ok(mut cache) = self.cache.lock() {
+          cache
+            .get_or_build(font, &instance, glyph.glyph_id, scale, synthetic_oblique)
+            .and_then(|glyph| glyph.path.clone())
+        } else {
+          None
+        };
+        if let Some(path) = cached_path {
           let mut transform = glyph_transform(scale, synthetic_oblique, glyph_x, glyph_y);
           if let Some(rotation) = rotation {
             transform = concat_transforms(rotation, transform);
@@ -845,13 +1056,19 @@ impl TextRasterizer {
           transform = concat_transforms(state.transform, transform);
 
           // Render the path
-          pixmap.fill_path(&path, &paint, FillRule::Winding, transform, state.clip_mask);
+          pixmap.fill_path(
+            path.as_ref(),
+            &paint,
+            FillRule::Winding,
+            transform,
+            state.clip_mask,
+          );
           if synthetic_bold > 0.0 {
             let mut stroke = tiny_skia::Stroke::default();
             stroke.width = synthetic_bold * 2.0;
             stroke.line_join = tiny_skia::LineJoin::Round;
             stroke.line_cap = tiny_skia::LineCap::Round;
-            pixmap.stroke_path(&path, &paint, &stroke, transform, state.clip_mask);
+            pixmap.stroke_path(path.as_ref(), &paint, &stroke, transform, state.clip_mask);
           }
         }
       }
@@ -862,7 +1079,41 @@ impl TextRasterizer {
     }
 
     if diag_enabled {
-      record_text_rasterize(raster_timer, color_glyph_rasters);
+      let outline_after = self
+        .cache
+        .lock()
+        .map(|cache| cache.stats())
+        .unwrap_or_default();
+      let color_after = self
+        .color_cache
+        .lock()
+        .map(|cache| cache.stats())
+        .unwrap_or_default();
+      let outline_delta = outline_after.delta_from(&outline_before);
+      let color_delta = color_after.delta_from(&color_before);
+      record_text_rasterize(
+        raster_timer,
+        color_glyph_rasters,
+        TextCacheStats {
+          hits: outline_delta.hits,
+          misses: outline_delta.misses,
+          evictions: outline_delta.evictions,
+          bytes: outline_after.bytes,
+        },
+        TextCacheStats {
+          hits: color_delta.hits,
+          misses: color_delta.misses,
+          evictions: color_delta.evictions,
+          bytes: color_after.bytes,
+        },
+      );
+    } else {
+      record_text_rasterize(
+        raster_timer,
+        color_glyph_rasters,
+        TextCacheStats::default(),
+        TextCacheStats::default(),
+      );
     }
 
     let advance = if cursor_y.abs() > (cursor_x - x).abs() {
@@ -1066,19 +1317,20 @@ impl TextRasterizer {
     for glyph in glyphs {
       let glyph_x = cursor_x + glyph.x_offset;
       let glyph_y = baseline_y + cursor_y + glyph.y_offset;
-      if let Some(cached) =
-        self
-          .cache
-          .get_or_build(font, &instance, glyph.glyph_id, synthetic_oblique)
-      {
-        if let Some(path) = cached.path.as_ref() {
-          let mut transform = glyph_transform(scale, synthetic_oblique, glyph_x, glyph_y);
-          if let Some(rotation) = rotation {
-            transform = concat_transforms(rotation, transform);
-          }
-          if let Some(transformed) = path.clone().transform(transform) {
-            paths.push(transformed);
-          }
+      let cached_path = if let Ok(mut cache) = self.cache.lock() {
+        cache
+          .get_or_build(font, &instance, glyph.glyph_id, scale, synthetic_oblique)
+          .and_then(|glyph| glyph.path.clone())
+      } else {
+        None
+      };
+      if let Some(path) = cached_path {
+        let mut transform = glyph_transform(scale, synthetic_oblique, glyph_x, glyph_y);
+        if let Some(rotation) = rotation {
+          transform = concat_transforms(rotation, transform);
+        }
+        if let Some(transformed) = path.as_ref().clone().transform(transform) {
+          paths.push(transformed);
         }
       }
 
@@ -1117,7 +1369,9 @@ impl TextRasterizer {
   ///
   /// Call this when fonts are unloaded or memory pressure is high.
   pub fn clear_cache(&mut self) {
-    self.cache.clear();
+    if let Ok(mut cache) = self.cache.lock() {
+      cache.clear();
+    }
     if let Ok(mut cache) = self.color_cache.lock() {
       cache.clear();
     }
@@ -1125,34 +1379,62 @@ impl TextRasterizer {
 
   /// Sets the maximum number of cached glyph outlines.
   pub fn set_cache_capacity(&mut self, max_glyphs: usize) {
-    self.cache.set_max_size(max_glyphs);
+    if let Ok(mut cache) = self.cache.lock() {
+      cache.set_max_size(max_glyphs);
+    }
   }
 
   /// Sets an optional memory budget (in bytes) for cached outlines.
   pub fn set_cache_memory_budget(&mut self, max_bytes: Option<usize>) {
-    self.cache.set_max_bytes(max_bytes);
+    if let Ok(mut cache) = self.cache.lock() {
+      cache.set_max_bytes(max_bytes);
+    }
+    if let (Some(bytes), Ok(mut cache)) = (max_bytes, self.color_cache.lock()) {
+      cache.set_max_bytes(bytes);
+    }
   }
 
   /// Returns the number of cached glyph paths.
   #[inline]
   pub fn cache_size(&self) -> usize {
+    let outline_len = self.cache.lock().map(|cache| cache.len()).unwrap_or(0);
     let color_len = self
       .color_cache
       .lock()
       .map(|cache| cache.glyphs.len())
       .unwrap_or(0);
-    self.cache.len() + color_len
+    outline_len + color_len
   }
 
   /// Returns glyph cache statistics (hits/misses/evictions).
   #[inline]
   pub fn cache_stats(&self) -> GlyphCacheStats {
-    self.cache.stats()
+    let outlines = self
+      .cache
+      .lock()
+      .map(|cache| cache.stats())
+      .unwrap_or_default();
+    let color = self
+      .color_cache
+      .lock()
+      .map(|cache| cache.stats())
+      .unwrap_or_default();
+    GlyphCacheStats {
+      hits: outlines.hits + color.hits,
+      misses: outlines.misses + color.misses,
+      evictions: outlines.evictions + color.evictions,
+      bytes: outlines.bytes.saturating_add(color.bytes),
+    }
   }
 
   /// Resets cache statistics without dropping cached outlines.
   pub fn reset_cache_stats(&mut self) {
-    self.cache.reset_stats();
+    if let Ok(mut cache) = self.cache.lock() {
+      cache.reset_stats();
+    }
+    if let Ok(mut cache) = self.color_cache.lock() {
+      cache.reset_stats();
+    }
   }
 
   /// Returns a cached or freshly rendered color glyph raster for the given glyph.
@@ -1180,12 +1462,14 @@ impl TextRasterizer {
       variations,
       color,
       palette_override_hash,
+      synthetic_oblique,
+      cache_transform_signature(Transform::identity(), None),
     );
     let mut glyph = self
       .color_cache
       .lock()
       .ok()
-      .and_then(|cache| cache.get(&color_key));
+      .and_then(|mut cache| cache.get(&color_key));
 
     if glyph.is_none() {
       glyph = self.color_renderer.render(
@@ -1195,6 +1479,7 @@ impl TextRasterizer {
         font_size,
         palette_index,
         palette_overrides,
+        palette_override_hash,
         color,
         0.0,
         variations,
@@ -1494,10 +1779,10 @@ mod tests {
     let variations: &[Variation] = &[];
     let var_hash = variation_hash(variations);
 
-    let key1 = GlyphCacheKey::new(&font, 65, 0.0, var_hash);
-    let key2 = GlyphCacheKey::new(&font, 65, 0.0, var_hash);
-    let key3 = GlyphCacheKey::new(&font, 66, 0.0, var_hash);
-    let key4 = GlyphCacheKey::new(&font, 65, 0.25, var_hash);
+    let key1 = GlyphCacheKey::new(&font, 65, 1.0, 0.0, var_hash);
+    let key2 = GlyphCacheKey::new(&font, 65, 1.0, 0.0, var_hash);
+    let key3 = GlyphCacheKey::new(&font, 66, 1.0, 0.0, var_hash);
+    let key4 = GlyphCacheKey::new(&font, 65, 1.0, 0.25, var_hash);
 
     // Same font, glyph, and size should be equal
     assert_eq!(key1, key2);
@@ -1525,17 +1810,23 @@ mod tests {
     let variations: &[Variation] = &[];
     let instance = FontInstance::new(&font, variations).unwrap();
 
-    assert!(cache.get_or_build(&font, &instance, glyph_a, 0.0).is_some());
+    assert!(cache
+      .get_or_build(&font, &instance, glyph_a, 1.0, 0.0)
+      .is_some());
     let stats = cache.stats();
     assert_eq!(stats.misses, 1);
     assert_eq!(stats.hits, 0);
 
-    assert!(cache.get_or_build(&font, &instance, glyph_a, 0.0).is_some());
+    assert!(cache
+      .get_or_build(&font, &instance, glyph_a, 1.0, 0.0)
+      .is_some());
     let stats = cache.stats();
     assert_eq!(stats.hits, 1);
 
     // Insert another glyph to trigger eviction
-    assert!(cache.get_or_build(&font, &instance, glyph_b, 0.0).is_some());
+    assert!(cache
+      .get_or_build(&font, &instance, glyph_b, 1.0, 0.0)
+      .is_some());
     let stats = cache.stats();
     assert!(stats.evictions >= 1);
     assert!(cache.len() <= 1);

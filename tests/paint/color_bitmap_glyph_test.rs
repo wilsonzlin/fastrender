@@ -46,6 +46,7 @@ fn renders_sbix_jpeg_bitmap_glyph() {
       font_size,
       0,
       &[],
+      0,
       Rgba::BLUE,
       0.0,
       &variations,

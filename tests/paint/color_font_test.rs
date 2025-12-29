@@ -132,3 +132,29 @@ fn svg_glyph_uses_current_color() {
   let rendered = render_to_png(&run, Rgba::new(200, 30, 30, 0.8), 120, 120, 10.0, 90.0);
   compare_with_golden("svg_color_glyph_red", &rendered);
 }
+
+#[test]
+fn cached_colr_v1_matches_uncached_render() {
+  let font = load_fixture_font("colrv1-test.ttf");
+  let run = shaped_run(&font, 'G', 96.0, 0);
+
+  let mut rasterizer = TextRasterizer::new();
+  let mut first = Pixmap::new(180, 180).expect("pixmap");
+  first.fill(tiny_skia::Color::WHITE);
+  rasterizer
+    .render_shaped_run(&run, 20.0, 150.0, Rgba::BLACK, &mut first)
+    .expect("first render");
+  let first_png = first.encode_png().expect("encode first png");
+
+  let mut second = Pixmap::new(180, 180).expect("pixmap");
+  second.fill(tiny_skia::Color::WHITE);
+  rasterizer
+    .render_shaped_run(&run, 20.0, 150.0, Rgba::BLACK, &mut second)
+    .expect("second render");
+  let second_png = second.encode_png().expect("encode second png");
+
+  assert_eq!(
+    first_png, second_png,
+    "cached color glyphs should match initial render"
+  );
+}

@@ -25,6 +25,71 @@ use tiny_skia::{
 const RASTER_PAD: f32 = 1.0;
 
 #[derive(Clone)]
+pub(super) struct ColrV1RasterPlan {
+  pub commands: Arc<Vec<DrawCommand>>,
+  pub clip_path: Option<Arc<Path>>,
+  pub bounds: (f32, f32, f32, f32),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(super) struct PaintCacheKey {
+  pub font: FontKey,
+  pub glyph_id: u16,
+  pub font_size_key: u32,
+  pub palette_index: u16,
+  pub palette_override_hash: u64,
+  pub variation_hash: u64,
+  pub color_signature: u32,
+  pub synthetic_oblique_key: i32,
+}
+
+impl PaintCacheKey {
+  pub fn new(
+    font: FontKey,
+    glyph_id: u16,
+    font_size: f32,
+    palette_index: u16,
+    palette_override_hash: u64,
+    text_color: Rgba,
+    synthetic_oblique: f32,
+    variation_hash: u64,
+  ) -> Self {
+    Self {
+      font,
+      glyph_id,
+      font_size_key: quantize_scale(font_size),
+      palette_index,
+      palette_override_hash,
+      variation_hash,
+      color_signature: color_signature(text_color),
+      synthetic_oblique_key: quantize_skew(synthetic_oblique),
+    }
+  }
+}
+
+fn quantize_scale(value: f32) -> u32 {
+  if !value.is_finite() || value <= 0.0 {
+    return 0;
+  }
+  (value * 100.0).round().clamp(0.0, u32::MAX as f32).trunc() as u32
+}
+
+fn quantize_skew(skew: f32) -> i32 {
+  if !skew.is_finite() {
+    return 0;
+  }
+  let scaled = (skew * 10_000.0).round();
+  scaled.clamp(i32::MIN as f32, i32::MAX as f32).trunc() as i32
+}
+
+fn color_signature(color: Rgba) -> u32 {
+  ((color.alpha_u8() as u32) << 24)
+    | ((color.r as u32) << 16)
+    | ((color.g as u32) << 8)
+    | color.b as u32
+}
+
+#[derive(Clone)]
 pub(super) struct ColrV1CacheEntry {
   data: Arc<Vec<u8>>,
   #[allow(dead_code)]
@@ -94,6 +159,7 @@ pub fn render_colr_glyph(
   font_size: f32,
   palette_index: u16,
   overrides: &[(u16, Rgba)],
+  palette_override_hash: u64,
   text_color: Rgba,
   synthetic_oblique: f32,
   normalized_coords: &[f32],
@@ -111,25 +177,6 @@ pub fn render_colr_glyph(
     let _ = caches.colr_v1_var_store(font_key, face);
   }
 
-  let (paint, paint_id) = {
-    let key = BaseGlyphCacheKey::new(font_key, glyph_id.0);
-    let mut caches = caches.lock().ok()?;
-    caches.colr_v1_base_glyph(key, colr_entry.as_ref())?
-  }?;
-
-  let palette = {
-    let mut caches = caches.lock().ok()?;
-    caches
-      .palette(font_key, face, palette_index)
-      .unwrap_or_else(|| Arc::new(cpal::ParsedPalette::default()))
-  };
-  let mut palette_colors = palette.colors.clone();
-  for (idx, color) in overrides {
-    if let Some(slot) = palette_colors.get_mut(*idx as usize) {
-      *slot = *color;
-    }
-  }
-
   let units_per_em = instance.units_per_em();
   if units_per_em <= 0.0 || !units_per_em.is_finite() || !font_size.is_finite() {
     return None;
@@ -138,78 +185,130 @@ pub fn render_colr_glyph(
   if !scale.is_finite() {
     return None;
   }
-  let base_transform = glyph_transform(scale, synthetic_oblique, 0.0, 0.0);
-  let variations = {
-    let coords: Vec<F2Dot14> = normalized_coords
-      .iter()
-      .copied()
-      .map(F2Dot14::from_f32)
-      .collect();
-    VariationInfo::new(colr.clone(), &coords)
-  };
-
-  let clip_path = colr
-    .v1_clip_box(GlyphId::from(glyph_id.0 as u32))
-    .ok()
-    .flatten()
-    .and_then(|clip| build_clip_path(clip, &colr, normalized_coords, base_transform));
-
-  let mut commands = Vec::new();
-  let mut seen = HashSet::new();
-  let renderer = Renderer {
-    instance,
-    palette: &palette_colors,
-    text_color,
-    base_transform,
-    colr_entry: Arc::clone(&colr_entry),
-    caches: Arc::clone(caches),
+  let cache_key = PaintCacheKey::new(
     font_key,
-    variations,
+    glyph_id.0,
+    font_size,
+    palette_index,
+    palette_override_hash,
+    text_color,
+    synthetic_oblique,
+    instance.variation_hash(),
+  );
+
+  let cached_plan = {
+    let mut caches = caches.lock().ok()?;
+    caches.colr_v1_plan(cache_key)
   };
 
-  renderer.walk_paint(
-    paint,
-    paint_id,
-    Transform::identity(),
-    BlendMode::SourceOver,
-    &mut commands,
-    &mut seen,
-  )?;
+  let plan = if let Some(plan) = cached_plan {
+    plan
+  } else {
+    let (paint, paint_id) = {
+      let key = BaseGlyphCacheKey::new(font_key, glyph_id.0);
+      let mut caches = caches.lock().ok()?;
+      caches.colr_v1_base_glyph(key, colr_entry.as_ref())?
+    }?;
 
-  if commands.is_empty() {
-    return None;
-  }
+    let palette = {
+      let mut caches = caches.lock().ok()?;
+      caches
+        .palette(font_key, face, palette_index)
+        .unwrap_or_else(|| Arc::new(cpal::ParsedPalette::default()))
+    };
+    let mut palette_colors = palette.colors.clone();
+    for (idx, color) in overrides {
+      if let Some(slot) = palette_colors.get_mut(*idx as usize) {
+        *slot = *color;
+      }
+    }
 
-  let (min_x, min_y, max_x, max_y) = raster_bounds(&commands, clip_path.as_ref(), RASTER_PAD)?;
+    let base_transform = glyph_transform(scale, synthetic_oblique, 0.0, 0.0);
+    let variations = {
+      let coords: Vec<F2Dot14> = normalized_coords
+        .iter()
+        .copied()
+        .map(F2Dot14::from_f32)
+        .collect();
+      VariationInfo::new(colr.clone(), &coords)
+    };
+
+    let clip_path = colr
+      .v1_clip_box(GlyphId::from(glyph_id.0 as u32))
+      .ok()
+      .flatten()
+      .and_then(|clip| build_clip_path(clip, &colr, normalized_coords, base_transform));
+
+    let mut commands = Vec::new();
+    let mut seen = HashSet::new();
+    let renderer = Renderer {
+      instance,
+      palette: &palette_colors,
+      text_color,
+      base_transform,
+      colr_entry: Arc::clone(&colr_entry),
+      caches: Arc::clone(caches),
+      font_key,
+      variations,
+    };
+
+    renderer.walk_paint(
+      paint,
+      paint_id,
+      Transform::identity(),
+      BlendMode::SourceOver,
+      &mut commands,
+      &mut seen,
+    )?;
+
+    if commands.is_empty() {
+      return None;
+    }
+
+    let bounds = raster_bounds(&commands, clip_path.as_ref(), RASTER_PAD)?;
+    let plan = Arc::new(ColrV1RasterPlan {
+      commands: Arc::new(commands),
+      clip_path: clip_path.map(Arc::new),
+      bounds,
+    });
+    if let Ok(mut caches) = caches.lock() {
+      caches.put_colr_v1_plan(cache_key, plan.clone());
+    }
+    plan
+  };
+
+  rasterize_plan(&plan, limits, glyph_id.0 as u32)
+}
+
+fn rasterize_plan(
+  plan: &ColrV1RasterPlan,
+  limits: &GlyphRasterLimits,
+  glyph_id: u32,
+) -> Option<ColorGlyphRaster> {
+  let (min_x, min_y, max_x, max_y) = plan.bounds;
 
   let width = round_dimension(max_x - min_x)?;
   let height = round_dimension(max_y - min_y)?;
   if let Err(err) = limits.validate(width, height) {
-    log_glyph_limit("colr", glyph_id.0 as u32, &err);
+    log_glyph_limit("colr", glyph_id, &err);
     return None;
   }
   let mut pixmap = Pixmap::new(width, height)?;
 
-  let clip_mask = clip_path
-    .as_ref()
+  let clip_mask = plan
+    .clip_path
+    .as_deref()
     .and_then(|clip| build_clip_mask(clip, width, height, min_x, min_y));
   let clip_ref = clip_mask.as_ref();
   let translate = Transform::from_translate(-min_x, -min_y);
 
-  for command in commands {
+  for command in plan.commands.iter() {
     match &command.brush {
       Brush::SweepGradient { .. } => {
-        render_sweep_gradient(&command, &mut pixmap, min_x, min_y, translate, clip_ref)?;
+        render_sweep_gradient(command, &mut pixmap, min_x, min_y, translate, clip_ref)?;
       }
       Brush::RadialGradient { .. } => {
-        render_two_circle_radial_gradient(
-          &command,
-          &mut pixmap,
-          min_x,
-          min_y,
-          translate,
-          clip_ref,
-        )?;
+        render_two_circle_radial_gradient(command, &mut pixmap, min_x, min_y, translate, clip_ref)?;
       }
       _ => {
         let mut paint = brush_to_paint(&command.brush, min_x, min_y)?;
@@ -1908,6 +2007,7 @@ mod tests {
             64.0,
             0,
             &[],
+            0,
             text_color,
             0.0,
             &[],
@@ -1925,6 +2025,7 @@ mod tests {
         64.0,
         1,
         &[],
+        0,
         text_color,
         0.0,
         &[],
@@ -1939,6 +2040,7 @@ mod tests {
         64.0,
         0,
         &[],
+        0,
         text_color,
         0.0,
         &[],

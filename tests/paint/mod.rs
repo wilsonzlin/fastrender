@@ -7,6 +7,7 @@ mod backend_parity;
 mod backface_culling_test;
 mod canvas_test;
 mod color_bitmap_glyph_test;
+mod color_font_cache_regression;
 mod color_font_colr_v0;
 mod color_font_helpers;
 mod color_font_test;

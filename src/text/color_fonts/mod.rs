@@ -19,7 +19,7 @@ use limits::GlyphRasterLimits;
 use lru::LruCache;
 use rustybuzz::Variation;
 use std::num::NonZeroUsize;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 pub use bitmap::render_bitmap_glyph;
 pub use bitmap::MAX_SBIX_GLYPH_BYTES;
@@ -54,8 +54,12 @@ impl Default for ColorFontRenderer {
 impl ColorFontRenderer {
   pub fn new() -> Self {
     Self {
-      caches: Arc::new(Mutex::new(ColorFontCaches::new())),
+      caches: shared_color_font_caches(),
     }
+  }
+
+  pub fn with_caches(caches: Arc<Mutex<ColorFontCaches>>) -> Self {
+    Self { caches }
   }
 
   /// Attempts to rasterize a color glyph for the given font and glyph id.
@@ -67,6 +71,7 @@ impl ColorFontRenderer {
     font_size: f32,
     palette_index: u16,
     palette_overrides: &[(u16, Rgba)],
+    palette_override_hash: u64,
     text_color: Rgba,
     synthetic_oblique: f32,
     variations: &[Variation],
@@ -86,7 +91,15 @@ impl ColorFontRenderer {
     }
 
     // SVG-in-OT
-    if let Some(svg) = svg::render_svg_glyph(&face, gid, font_size, text_color, &limits) {
+    if let Some(svg) = svg::render_svg_glyph(
+      &face,
+      font_key,
+      gid,
+      font_size,
+      text_color,
+      &limits,
+      &self.caches,
+    ) {
       return Some(svg);
     }
 
@@ -100,6 +113,7 @@ impl ColorFontRenderer {
       font_size,
       palette_index,
       palette_overrides,
+      palette_override_hash,
       text_color,
       synthetic_oblique,
       &normalized_coords.ordered,
@@ -157,6 +171,8 @@ struct ColorFontCaches {
   colr_v1_fonts: LruCache<FontKey, Option<Arc<colr_v1::ColrV1CacheEntry>>>,
   colr_v1_base_glyphs: LruCache<colr_v1::BaseGlyphCacheKey, colr_v1::BaseGlyphCacheValue>,
   colr_v1_var_store: LruCache<FontKey, Option<ColrVarStoreTables>>,
+  colr_v1_plans: LruCache<colr_v1::PaintCacheKey, Arc<colr_v1::ColrV1RasterPlan>>,
+  svg_glyphs: LruCache<SvgCacheKey, Option<Arc<svg::ParsedSvgGlyph>>>,
 }
 
 impl ColorFontCaches {
@@ -168,6 +184,8 @@ impl ColorFontCaches {
       colr_v1_fonts: LruCache::new(Self::cap(64)),
       colr_v1_base_glyphs: LruCache::new(Self::cap(1024)),
       colr_v1_var_store: LruCache::new(Self::cap(64)),
+      colr_v1_plans: LruCache::new(Self::cap(512)),
+      svg_glyphs: LruCache::new(Self::cap(256)),
     }
   }
 
@@ -257,12 +275,59 @@ impl ColorFontCaches {
     self.colr_v1_var_store.put(font_key, parsed.clone());
     parsed
   }
+
+  fn colr_v1_plan(
+    &mut self,
+    key: colr_v1::PaintCacheKey,
+  ) -> Option<Arc<colr_v1::ColrV1RasterPlan>> {
+    self.colr_v1_plans.get(&key).cloned()
+  }
+
+  fn put_colr_v1_plan(
+    &mut self,
+    key: colr_v1::PaintCacheKey,
+    plan: Arc<colr_v1::ColrV1RasterPlan>,
+  ) {
+    self.colr_v1_plans.put(key, plan);
+  }
+
+  fn svg_glyph(&mut self, key: SvgCacheKey) -> Option<Option<Arc<svg::ParsedSvgGlyph>>> {
+    self.svg_glyphs.get(&key).cloned()
+  }
+
+  fn put_svg_glyph(&mut self, key: SvgCacheKey, value: Option<Arc<svg::ParsedSvgGlyph>>) {
+    self.svg_glyphs.put(key, value);
+  }
+}
+
+fn shared_color_font_caches() -> Arc<Mutex<ColorFontCaches>> {
+  static CACHES: OnceLock<Arc<Mutex<ColorFontCaches>>> = OnceLock::new();
+  CACHES
+    .get_or_init(|| Arc::new(Mutex::new(ColorFontCaches::new())))
+    .clone()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct PaletteCacheKey {
   font: FontKey,
   palette_index: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct SvgCacheKey {
+  font: FontKey,
+  glyph_id: u16,
+  color_signature: u32,
+}
+
+impl SvgCacheKey {
+  fn new(font: FontKey, glyph_id: u16, color_signature: u32) -> Self {
+    Self {
+      font,
+      glyph_id,
+      color_signature,
+    }
+  }
 }
 
 // ----------------------------------------------------------------------------

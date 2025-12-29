@@ -42,6 +42,7 @@ fn render_glyph(font: &LoadedFont, ch: char) -> ColorGlyphRaster {
       64.0,
       0,
       &[],
+      0,
       Rgba::BLACK,
       0.0,
       &[],

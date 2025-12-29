@@ -113,6 +113,14 @@ const FONT_RESOLUTION_CACHE_SIZE: usize = 2048;
 #[cfg(any(test, debug_assertions))]
 static SHAPE_FONT_RUN_INVOCATIONS: AtomicUsize = AtomicUsize::new(0);
 
+#[derive(Debug, Default, Clone, Copy)]
+pub struct TextCacheStats {
+  pub hits: u64,
+  pub misses: u64,
+  pub evictions: u64,
+  pub bytes: usize,
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct TextDiagnostics {
   pub shape_ms: f64,
@@ -125,6 +133,8 @@ pub struct TextDiagnostics {
   pub fallback_cache_misses: usize,
   pub last_resort_fallbacks: usize,
   pub last_resort_samples: Vec<String>,
+  pub glyph_cache: TextCacheStats,
+  pub color_glyph_cache: TextCacheStats,
 }
 
 static TEXT_DIAGNOSTICS: OnceLock<Mutex<TextDiagnostics>> = OnceLock::new();
@@ -237,6 +247,7 @@ pub(crate) fn record_text_shape(start: Option<Instant>, shaped_runs: usize, glyp
   }
 }
 
+<<<<<<< HEAD
 pub(crate) fn record_text_coverage(start: Option<Instant>) {
   if let Some(start) = start {
     let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
@@ -266,8 +277,19 @@ pub(crate) fn record_fallback_cache_stats_delta(
   });
 }
 
-pub(crate) fn record_text_rasterize(start: Option<Instant>, color_glyph_rasters: usize) {
-  if start.is_none() && color_glyph_rasters == 0 {
+pub(crate) fn record_text_rasterize(
+  start: Option<Instant>,
+  color_glyph_rasters: usize,
+  cache: TextCacheStats,
+  color_cache: TextCacheStats,
+) {
+  if start.is_none()
+    && color_glyph_rasters == 0
+    && cache.hits == 0
+    && cache.misses == 0
+    && color_cache.hits == 0
+    && color_cache.misses == 0
+  {
     return;
   }
   with_text_diagnostics(|diag| {
@@ -275,6 +297,14 @@ pub(crate) fn record_text_rasterize(start: Option<Instant>, color_glyph_rasters:
       diag.rasterize_ms += start.elapsed().as_secs_f64() * 1000.0;
     }
     diag.color_glyph_rasters += color_glyph_rasters;
+    diag.glyph_cache.hits += cache.hits;
+    diag.glyph_cache.misses += cache.misses;
+    diag.glyph_cache.evictions += cache.evictions;
+    diag.glyph_cache.bytes = diag.glyph_cache.bytes.max(cache.bytes);
+    diag.color_glyph_cache.hits += color_cache.hits;
+    diag.color_glyph_cache.misses += color_cache.misses;
+    diag.color_glyph_cache.evictions += color_cache.evictions;
+    diag.color_glyph_cache.bytes = diag.color_glyph_cache.bytes.max(color_cache.bytes);
   });
 }
 

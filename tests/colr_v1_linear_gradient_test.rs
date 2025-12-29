@@ -43,6 +43,7 @@ fn render_sheared_glyph(font: &LoadedFont) -> ColorGlyphRaster {
       64.0,
       0,
       &[],
+      0,
       Rgba::BLACK,
       0.0,
       &[],

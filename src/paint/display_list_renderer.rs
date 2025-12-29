@@ -66,8 +66,10 @@ use crate::paint::projective_warp::{warp_pixmap_cached, WarpCache, WarpedPixmap}
 use crate::paint::rasterize::fill_rounded_rect;
 use crate::paint::rasterize::render_box_shadow;
 use crate::paint::rasterize::BoxShadow;
-use crate::paint::text_rasterize::ColorGlyphCache;
-use crate::paint::text_rasterize::TextRasterizer;
+use crate::paint::text_rasterize::{
+  shared_color_cache, shared_color_renderer, shared_glyph_cache, ColorGlyphCache, GlyphCache,
+  TextRasterizer,
+};
 use crate::paint::text_shadow::PathBounds;
 use crate::paint::transform3d::backface_is_hidden;
 use crate::render_control::{active_deadline, check_active, with_deadline};
@@ -99,7 +101,7 @@ use crate::style::values::Length;
 use crate::text::color_fonts::ColorFontRenderer;
 use crate::text::font_db::LoadedFont;
 use crate::text::font_loader::FontContext;
-use crate::text::pipeline::{record_text_rasterize, text_diagnostics_timer};
+use crate::text::pipeline::{record_text_rasterize, text_diagnostics_timer, TextCacheStats};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
@@ -1423,6 +1425,7 @@ pub struct DisplayListRenderer {
   font_ctx: FontContext,
   color_cache: Arc<Mutex<ColorGlyphCache>>,
   color_renderer: ColorFontRenderer,
+  glyph_cache: Arc<Mutex<GlyphCache>>,
   stacking_layers: Vec<StackingRecord>,
   blend_stack: Vec<Option<BlendMode>>,
   scale: f32,
@@ -1960,8 +1963,9 @@ impl DisplayListRenderer {
     };
     let device_w = ((width as f32) * scale).round().max(1.0) as u32;
     let device_h = ((height as f32) * scale).round().max(1.0) as u32;
-    let color_renderer = ColorFontRenderer::new();
-    let color_cache = Arc::new(Mutex::new(ColorGlyphCache::new()));
+    let color_renderer = shared_color_renderer();
+    let color_cache = shared_color_cache();
+    let glyph_cache = shared_glyph_cache();
     Self::new_with_text_state(
       device_w,
       device_h,
@@ -1970,6 +1974,7 @@ impl DisplayListRenderer {
       scale,
       color_renderer,
       color_cache,
+      glyph_cache,
     )
   }
 
@@ -1992,14 +1997,18 @@ impl DisplayListRenderer {
     scale: f32,
     color_renderer: ColorFontRenderer,
     color_cache: Arc<Mutex<ColorGlyphCache>>,
+    glyph_cache: Arc<Mutex<GlyphCache>>,
   ) -> Result<Self> {
     let scale = if scale.is_finite() && scale > 0.0 {
       scale
     } else {
       1.0
     };
-    let text_rasterizer =
-      TextRasterizer::with_color_resources(color_renderer.clone(), color_cache.clone());
+    let text_rasterizer = TextRasterizer::with_caches(
+      glyph_cache.clone(),
+      color_renderer.clone(),
+      color_cache.clone(),
+    );
     Ok(Self {
       canvas: Canvas::new_with_text_rasterizer(
         device_width.max(1),
@@ -2010,6 +2019,7 @@ impl DisplayListRenderer {
       font_ctx,
       color_cache,
       color_renderer,
+      glyph_cache,
       stacking_layers: Vec::new(),
       blend_stack: Vec::new(),
       scale,
@@ -3636,6 +3646,7 @@ impl DisplayListRenderer {
     let preserve_3d_disabled = self.preserve_3d_disabled;
     let color_renderer = self.color_renderer.clone();
     let color_cache = self.color_cache.clone();
+    let glyph_cache = self.glyph_cache.clone();
 
     let deadline = active_deadline();
     let results: Result<Vec<(TileWork<'_>, Pixmap, GradientStats, ThreadId)>> = tiles
@@ -3651,6 +3662,7 @@ impl DisplayListRenderer {
             scale,
             color_renderer.clone(),
             color_cache.clone(),
+            glyph_cache.clone(),
           )?;
           renderer.preserve_3d_disabled = preserve_3d_disabled;
           renderer.paint_parallelism = PaintParallelism::disabled();
@@ -4609,7 +4621,12 @@ impl DisplayListRenderer {
       self.render_text_shadows(&paths, &bounds, item);
     }
     if text_timer.is_some() {
-      record_text_rasterize(text_timer, 0);
+      record_text_rasterize(
+        text_timer,
+        0,
+        TextCacheStats::default(),
+        TextCacheStats::default(),
+      );
     }
 
     self.canvas.draw_text(
