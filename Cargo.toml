@@ -11,7 +11,7 @@ members = ["xtask"]
 resolver = "2"
 
 [features]
-default = []
+default = ["preserve3d_warp"]
 box_generation_demo = []
 disk_cache = ["sha2"]
 preserve3d_warp = []

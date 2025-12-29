@@ -45,6 +45,19 @@ impl Homography {
   ///
   /// Returns `None` if the points are degenerate (no unique solution).
   pub fn from_quad_to_quad(src: [Point; 4], dst: [Point; 4]) -> Option<Self> {
+    const MIN_AREA: f32 = 1e-3;
+    if !src
+      .iter()
+      .chain(dst.iter())
+      .all(|p| p.x.is_finite() && p.y.is_finite())
+    {
+      return None;
+    }
+    let src_area = quad_area(&src);
+    let dst_area = quad_area(&dst);
+    if src_area.abs() < MIN_AREA || dst_area.abs() < MIN_AREA {
+      return None;
+    }
     // Solve A * x = b where x = [a b c d e f g h]^T and the matrix is:
     // [x y 1 0 0 0 -x*X -y*X] [a]   [X]
     // [0 0 0 x y 1 -x*Y -y*Y] [b] = [Y]
@@ -129,6 +142,11 @@ impl Homography {
     a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g)
   }
 
+  /// Returns true if all coefficients are finite.
+  pub fn is_finite(&self) -> bool {
+    self.m.iter().all(|v| v.is_finite())
+  }
+
   /// Returns true if the homography is invertible.
   pub fn is_invertible(&self) -> bool {
     let det = self.determinant();
@@ -202,6 +220,9 @@ impl Homography {
   ///
   /// Returns `None` if any corner maps to an invalid point (e.g. w ≈ 0).
   pub fn map_rect_aabb(&self, rect: Rect) -> Option<Rect> {
+    if !self.is_finite() {
+      return None;
+    }
     let corners = [
       rect.origin,
       Point::new(rect.max_x(), rect.min_y()),
@@ -294,6 +315,16 @@ fn solve_8x8(mut a: [[f32; 8]; 8], mut b: [f32; 8]) -> Option<[f32; 8]> {
   } else {
     None
   }
+}
+
+fn quad_area(points: &[Point; 4]) -> f32 {
+  let mut area = 0.0;
+  for i in 0..4 {
+    let p0 = points[i];
+    let p1 = points[(i + 1) % 4];
+    area += p0.x * p1.y - p1.x * p0.y;
+  }
+  0.5 * area
 }
 
 pub fn quad_bounds(points: &[Point; 4]) -> Rect {

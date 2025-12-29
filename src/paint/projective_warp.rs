@@ -1,6 +1,10 @@
-use crate::paint::homography::Homography;
+use crate::geometry::Point;
+use crate::paint::homography::{quad_bounds, Homography};
 use crate::render_control::{active_deadline, with_deadline};
+use lru::LruCache;
 use rayon::prelude::*;
+use std::num::NonZeroUsize;
+use std::sync::Arc;
 use tiny_skia::Mask;
 use tiny_skia::Pixmap;
 use tiny_skia::PremultipliedColorU8;
@@ -10,7 +14,86 @@ pub struct WarpedPixmap {
   pub offset: (i32, i32),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct WarpCacheKey {
+  src_id: usize,
+  src_dims: (u32, u32),
+  homography: [u32; 9],
+  dst_quad: [u32; 8],
+  target: (u32, u32),
+  clip: Option<(usize, u32, u32)>,
+}
+
+pub struct WarpCache {
+  lru: LruCache<WarpCacheKey, Arc<WarpedPixmap>>,
+}
+
+impl WarpCache {
+  pub fn new(capacity: usize) -> Self {
+    let cap = NonZeroUsize::new(capacity).unwrap_or_else(|| NonZeroUsize::new(1).unwrap());
+    Self {
+      lru: LruCache::new(cap),
+    }
+  }
+
+  pub fn get_or_insert(
+    &mut self,
+    key: WarpCacheKey,
+    build: impl FnOnce() -> Option<WarpedPixmap>,
+  ) -> Option<Arc<WarpedPixmap>> {
+    if let Some(existing) = self.lru.get(&key) {
+      return Some(existing.clone());
+    }
+    let Some(new) = build() else {
+      return None;
+    };
+    let arc = Arc::new(new);
+    self.lru.put(key, arc.clone());
+    Some(arc)
+  }
+}
+
 const PARALLEL_THRESHOLD: u32 = 2048;
+
+pub fn warp_cache_key(
+  src: &Pixmap,
+  homography: &Homography,
+  dst_quad: &[(f32, f32); 4],
+  target_size: (u32, u32),
+  clip: Option<&Mask>,
+) -> Option<WarpCacheKey> {
+  if !homography.is_finite() {
+    return None;
+  }
+  let mut homography_bits = [0u32; 9];
+  for (out, v) in homography_bits.iter_mut().zip(homography.m.iter()) {
+    if !v.is_finite() {
+      return None;
+    }
+    *out = v.to_bits();
+  }
+
+  if dst_quad
+    .iter()
+    .any(|(x, y)| !x.is_finite() || !y.is_finite())
+  {
+    return None;
+  }
+  let mut quad_bits = [0u32; 8];
+  for (i, (x, y)) in dst_quad.iter().enumerate() {
+    quad_bits[i * 2] = x.to_bits();
+    quad_bits[i * 2 + 1] = y.to_bits();
+  }
+
+  Some(WarpCacheKey {
+    src_id: src.pixels().as_ptr() as usize,
+    src_dims: (src.width(), src.height()),
+    homography: homography_bits,
+    dst_quad: quad_bits,
+    target: target_size,
+    clip: clip.map(|mask| (mask.data().as_ptr() as usize, mask.width(), mask.height())),
+  })
+}
 
 pub fn warp_pixmap(
   src: &Pixmap,
@@ -19,35 +102,45 @@ pub fn warp_pixmap(
   target_size: (u32, u32),
   clip: Option<&Mask>,
 ) -> Option<WarpedPixmap> {
+  if target_size.0 == 0 || target_size.1 == 0 {
+    return None;
+  }
+  if src.width() == 0 || src.height() == 0 {
+    return None;
+  }
+  if !homography.is_finite() {
+    return None;
+  }
+  if dst_quad
+    .iter()
+    .any(|(x, y)| !x.is_finite() || !y.is_finite())
+  {
+    return None;
+  }
+  if quad_area(dst_quad).abs() < 1e-3 {
+    return None;
+  }
   let inv = homography.inverse()?;
+  let dst_points: [Point; 4] = dst_quad.map(|(x, y)| Point::new(x, y));
+  let bounds = quad_bounds(&dst_points);
+  if bounds.width() <= 0.0
+    || bounds.height() <= 0.0
+    || !bounds.x().is_finite()
+    || !bounds.y().is_finite()
+  {
+    return None;
+  }
+
   let (target_w, target_h) = target_size;
-  if target_w == 0 || target_h == 0 {
-    return None;
-  }
-
-  let mut min_x = f32::INFINITY;
-  let mut max_x = f32::NEG_INFINITY;
-  let mut min_y = f32::INFINITY;
-  let mut max_y = f32::NEG_INFINITY;
-  for (x, y) in dst_quad {
-    min_x = min_x.min(*x);
-    max_x = max_x.max(*x);
-    min_y = min_y.min(*y);
-    max_y = max_y.max(*y);
-  }
-  if !min_x.is_finite() || !max_x.is_finite() || !min_y.is_finite() || !max_y.is_finite() {
-    return None;
-  }
-
   let mask_w = clip.map(|m| m.width()).unwrap_or(target_w);
   let mask_h = clip.map(|m| m.height()).unwrap_or(target_h);
   let bound_w = target_w.min(mask_w);
   let bound_h = target_h.min(mask_h);
 
-  let mut min_x_i = min_x.floor() as i32;
-  let mut max_x_i = max_x.ceil() as i32;
-  let mut min_y_i = min_y.floor() as i32;
-  let mut max_y_i = max_y.ceil() as i32;
+  let mut min_x_i = bounds.min_x().floor() as i32;
+  let mut max_x_i = bounds.max_x().ceil() as i32;
+  let mut min_y_i = bounds.min_y().floor() as i32;
+  let mut max_y_i = bounds.max_y().ceil() as i32;
   min_x_i = min_x_i.clamp(0, bound_w as i32);
   max_x_i = max_x_i.clamp(0, bound_w as i32);
   min_y_i = min_y_i.clamp(0, bound_h as i32);
@@ -61,9 +154,6 @@ pub fn warp_pixmap(
 
   let src_w = src.width() as i32;
   let src_h = src.height() as i32;
-  if src_w == 0 || src_h == 0 {
-    return None;
-  }
 
   let mut output = Pixmap::new(width, height)?;
   let clip_data = clip.map(|m| (m.data(), m.width() as usize, m.height() as usize));
@@ -131,6 +221,34 @@ pub fn warp_pixmap(
     pixmap: output,
     offset: (min_x_i, min_y_i),
   })
+}
+
+pub fn warp_pixmap_cached(
+  cache: Option<&mut WarpCache>,
+  src: &Pixmap,
+  homography: &Homography,
+  dst_quad: &[(f32, f32); 4],
+  target_size: (u32, u32),
+  clip: Option<&Mask>,
+) -> Option<Arc<WarpedPixmap>> {
+  if let Some(cache) = cache {
+    if let Some(key) = warp_cache_key(src, homography, dst_quad, target_size, clip) {
+      return cache.get_or_insert(key, || {
+        warp_pixmap(src, homography, dst_quad, target_size, clip)
+      });
+    }
+  }
+  warp_pixmap(src, homography, dst_quad, target_size, clip).map(Arc::new)
+}
+
+fn quad_area(quad: &[(f32, f32); 4]) -> f32 {
+  let mut area = 0.0;
+  for i in 0..4 {
+    let (x0, y0) = quad[i];
+    let (x1, y1) = quad[(i + 1) % 4];
+    area += x0 * y1 - x1 * y0;
+  }
+  0.5 * area
 }
 
 fn point_in_quad(p: (f32, f32), quad: &[(f32, f32); 4]) -> bool {

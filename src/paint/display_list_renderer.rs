@@ -56,7 +56,7 @@ use crate::paint::filter_outset::filter_outset;
 use crate::paint::filter_outset::filter_outset_with_bounds;
 use crate::paint::homography::Homography;
 use crate::paint::optimize::DisplayListOptimizer;
-use crate::paint::projective_warp::warp_pixmap;
+use crate::paint::projective_warp::{warp_pixmap_cached, WarpCache, WarpedPixmap};
 use crate::paint::rasterize::fill_rounded_rect;
 use crate::paint::rasterize::render_box_shadow;
 use crate::paint::rasterize::BoxShadow;
@@ -1354,6 +1354,7 @@ impl Hash for ImageKey {
 }
 
 /// Renders a display list into a pixmap using the provided font context.
+const WARP_CACHE_CAPACITY: usize = 8;
 pub struct DisplayListRenderer {
   canvas: Canvas,
   font_ctx: FontContext,
@@ -1371,6 +1372,7 @@ pub struct DisplayListRenderer {
   image_cache: HashMap<ImageKey, Arc<Pixmap>>,
   #[cfg(test)]
   image_cache_misses: Arc<AtomicUsize>,
+  warp_cache: WarpCache,
 }
 
 #[derive(Debug)]
@@ -1951,6 +1953,7 @@ impl DisplayListRenderer {
       image_cache: HashMap::new(),
       #[cfg(test)]
       image_cache_misses: Arc::new(AtomicUsize::new(0)),
+      warp_cache: WarpCache::new(WARP_CACHE_CAPACITY),
     })
   }
 
@@ -3620,6 +3623,24 @@ impl DisplayListRenderer {
     Ok(Some(pixmap))
   }
 
+  fn projective_warp(
+    &mut self,
+    pixmap: &Pixmap,
+    homography: &Homography,
+    dst_quad: &[(f32, f32); 4],
+  ) -> Option<Arc<WarpedPixmap>> {
+    let target_size = (self.canvas.width(), self.canvas.height());
+    let clip = self.canvas.clip_mask();
+    warp_pixmap_cached(
+      Some(&mut self.warp_cache),
+      pixmap,
+      homography,
+      dst_quad,
+      target_size,
+      clip,
+    )
+  }
+
   fn warp_pixmap(&mut self, pixmap: &Pixmap, transform: &Transform3D) {
     let mut paint = PixmapPaint::default();
     paint.blend_mode = self.canvas.blend_mode();
@@ -3678,15 +3699,7 @@ impl DisplayListRenderer {
     let warped = valid
       .then(|| Homography::from_quad_to_quad(src_quad, dst_quad_points))
       .flatten()
-      .and_then(|h| {
-        warp_pixmap(
-          pixmap,
-          &h,
-          &dst_quad,
-          (self.canvas.width(), self.canvas.height()),
-          self.canvas.clip_mask(),
-        )
-      });
+      .and_then(|h| self.projective_warp(pixmap, &h, &dst_quad));
 
     if let Some(warped) = warped {
       self.canvas.pixmap_mut().draw_pixmap(
@@ -4099,15 +4112,7 @@ impl DisplayListRenderer {
             let warped = valid
               .then(|| Homography::from_quad_to_quad(src_quad, dst_quad_points))
               .flatten()
-              .and_then(|homography| {
-                warp_pixmap(
-                  &layer,
-                  &homography,
-                  &dst_quad,
-                  (self.canvas.width(), self.canvas.height()),
-                  self.canvas.clip_mask(),
-                )
-              });
+              .and_then(|homography| self.projective_warp(&layer, &homography, &dst_quad));
 
             if let Some(warped) = warped {
               if let Some(mode) = record.manual_blend {

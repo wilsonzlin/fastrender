@@ -40,6 +40,7 @@ These are emitted by the paint pipeline:
 - `FASTR_LOG_IMAGE_FAIL=1` – log failed image loads/placeholders.
 - `FASTR_PRESERVE3D_DEBUG=1` – log preserve-3d classification/fallback decisions.
 - `FASTR_PRESERVE3D_DISABLE_WARP=1` – force preserve-3d to fall back to affine flattening (projective warping is enabled by default).
+- `FASTR_PRESERVE3D_WARP=1` – opt into the warp path when building without the default `preserve3d_warp` feature.
 
 ## Debug dumps (layout / fragments)
 

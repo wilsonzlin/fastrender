@@ -57,6 +57,24 @@ fn preserve3d_degenerate_transform_renders() {
   list.push(DisplayItem::PopStackingContext);
   list.push(DisplayItem::PopStackingContext);
 
+  let composed = fastrender::paint::preserve_3d::composite_preserve_3d(&list);
+  let mut saw_affine_fallback = false;
+  for item in composed.items() {
+    if let DisplayItem::PushStackingContext(ctx) = item {
+      if ctx.transform_style == TransformStyle::Preserve3d {
+        if let Some(transform) = ctx.transform {
+          if transform.to_2d().is_some() {
+            saw_affine_fallback = true;
+          }
+        }
+      }
+    }
+  }
+  assert!(
+    saw_affine_fallback,
+    "degenerate preserve-3d transforms should fall back to affine approximation even when warp is enabled"
+  );
+
   let renderer = DisplayListRenderer::new(16, 16, Rgba::WHITE, FontContext::new()).unwrap();
   renderer.render(&list).unwrap();
 }

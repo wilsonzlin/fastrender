@@ -19,15 +19,18 @@ Key points:
 
 ## Preserve-3D fallback
 
-Projective warping is not always available. The preserve-3d compositor now
-classifies each stacking context transform and falls back deterministically:
+Projective warping is enabled by default (via the `preserve3d_warp` feature) and
+can be disabled with `FASTR_PRESERVE3D_DISABLE_WARP=1`. When the warp path is
+unavailable or unstable, the compositor falls back deterministically:
 
-- Perspective transforms are approximated to 2D when warping is unavailable.
+- Stable perspective transforms are warped; otherwise they are approximated to
+  2D.
 - Depth sorting still runs for `transform-style: preserve-3d` when all child
   depths are stable; otherwise it falls back to the authored paint order
   (equivalent to `transform-style: flat`).
-- Degenerate projections (non-finite or `w≈0` when projecting plane corners)
-  force flat ordering but still honour backface-visibility where possible.
+- Degenerate projections (non-finite, `w≈0`, or behind the camera) force flat
+  ordering but still honour backface-visibility where possible.
 
 Set `FASTR_PRESERVE3D_DEBUG=1` to log the chosen path per item while debugging
-real pages.
+real pages. If you build without default features, set `FASTR_PRESERVE3D_WARP=1`
+to opt back into projective warping.

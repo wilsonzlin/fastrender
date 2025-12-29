@@ -73,9 +73,13 @@ fn env_flag(name: &str) -> bool {
 
 fn default_options() -> Preserve3dOptions {
   static OPTIONS: OnceLock<Preserve3dOptions> = OnceLock::new();
-  *OPTIONS.get_or_init(|| Preserve3dOptions {
-    warp_available: env_flag("FASTR_PRESERVE3D_WARP"),
-    diagnostics: env_flag("FASTR_PRESERVE3D_DEBUG"),
+  *OPTIONS.get_or_init(|| {
+    let warp_disabled = env_flag("FASTR_PRESERVE3D_DISABLE_WARP");
+    let warp_enabled = cfg!(feature = "preserve3d_warp") || env_flag("FASTR_PRESERVE3D_WARP");
+    Preserve3dOptions {
+      warp_available: warp_enabled && !warp_disabled,
+      diagnostics: env_flag("FASTR_PRESERVE3D_DEBUG"),
+    }
   })
 }
 
@@ -236,14 +240,16 @@ fn compose_fragments(
         } else {
           evaluate_depth(&depth_transform, item.bounds)
         };
-        let fallback =
-          if options.warp_available && matches!(classification, TransformKind::Perspective3D) {
-            FallbackPath::Warp
-          } else if depth.is_none() {
-            FallbackPath::FlatOrder
-          } else {
-            FallbackPath::Approximate2d
-          };
+        let fallback = if options.warp_available
+          && matches!(classification, TransformKind::Perspective3D)
+          && depth.is_some()
+        {
+          FallbackPath::Warp
+        } else if depth.is_none() {
+          FallbackPath::FlatOrder
+        } else {
+          FallbackPath::Approximate2d
+        };
 
         let render_transform = match fallback {
           FallbackPath::Warp => local_transform,
@@ -253,8 +259,12 @@ fn compose_fragments(
               .unwrap_or_else(|| local_transform.approximate_2d()),
           ),
         };
-        let effective_world_render = parent_world_render.multiply(&render_transform);
-        let effective_world_depth = parent_world_depth.multiply(&local_transform);
+        let mut effective_world_render = parent_world_render.multiply(&render_transform);
+        let mut effective_world_depth = parent_world_depth.multiply(&local_transform);
+        if let Some(perspective) = item.child_perspective.as_ref() {
+          effective_world_render = effective_world_render.multiply(perspective);
+          effective_world_depth = effective_world_depth.multiply(perspective);
+        }
         let composed_children = compose_fragments(
           children,
           effective_world_render,
@@ -334,7 +344,7 @@ fn evaluate_depth(transform: &Transform3D, bounds: Rect) -> Option<f32> {
     bounds.y() + bounds.height() * 0.5,
   );
   let (_tx, _ty, tz, tw) = transform.transform_point(center.0, center.1, 0.0);
-  if !tz.is_finite() || !tw.is_finite() || tw.abs() < 1e-3 {
+  if !tz.is_finite() || !tw.is_finite() || tw.abs() < Transform3D::MIN_PROJECTIVE_W || tw < 0.0 {
     return None;
   }
   Some(tz / tw)
@@ -346,7 +356,6 @@ fn has_perspective(transform: &Transform3D) -> bool {
 }
 
 fn is_degenerate_projection(transform: &Transform3D, bounds: Rect) -> bool {
-  const EPS_W: f32 = 1e-3;
   let corners = [
     (bounds.min_x(), bounds.min_y()),
     (bounds.max_x(), bounds.min_y()),
@@ -359,7 +368,7 @@ fn is_degenerate_projection(transform: &Transform3D, bounds: Rect) -> bool {
     if !tx.is_finite() || !ty.is_finite() || !tz.is_finite() || !tw.is_finite() {
       return true;
     }
-    if tw.abs() < EPS_W {
+    if tw.abs() < Transform3D::MIN_PROJECTIVE_W || tw < 0.0 {
       return true;
     }
   }
