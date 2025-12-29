@@ -83,6 +83,7 @@ pub mod emoji;
 pub mod hyphenation;
 pub mod justify;
 pub mod line_break;
+pub mod otvar;
 pub mod pipeline;
 pub mod segmentation;
 pub mod variations;
