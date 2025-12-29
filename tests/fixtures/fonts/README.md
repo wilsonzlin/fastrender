@@ -188,6 +188,18 @@ so CI and tests can run in fully hermetic environments without relying on platfo
   python tests/fixtures/fonts/generate_colrv1_linear_shear_font.py
   ```
 
+### `colrv1-var-outline-test.ttf`
+- **Source:** Generated in-repo with [FontTools](https://github.com/fonttools/fonttools) v4.61.1.
+- **License:** CC0 / Public Domain.
+- **Glyphs / variation:** U+0041 (`A`) maps to a COLR v1 `PaintGlyph` that fills the `outline`
+  glyph with a solid palette color. A single `wght` axis (0–1, default 0) drives `gvar` deltas
+  that push the right edge and angled segment outward while nudging the left inset, changing the
+  base outline itself rather than paint parameters.
+- **Regeneration:** From the repository root:
+  ```bash
+  python tests/fixtures/fonts/generate_colrv1_var_outline_font.py
+  ```
+
 ### `colrv1-sweep-test.ttf`
 - **Source:** Generated in-repo with [FontTools](https://github.com/fonttools/fonttools) v4.61.1.
 - **License:** CC0 / Public Domain.

@@ -2,6 +2,7 @@ use super::limits::{log_glyph_limit, round_dimension, GlyphRasterLimits};
 use super::{cpal, ColorFontCaches, ColorGlyphRaster, FontKey};
 use crate::style::color::Rgba;
 use crate::text::font_db::LoadedFont;
+use crate::text::font_instance::{glyph_transform, FontInstance};
 use read_fonts::tables::colr::{
   ClipBox, ColorLine, Colr, CompositeMode, Extend, Paint, PaintId, VarColorLine,
 };
@@ -80,6 +81,7 @@ impl ColrV1CacheEntry {
 /// Render a COLRv1 paint graph for the given glyph.
 pub fn render_colr_glyph(
   font: &LoadedFont,
+  instance: &FontInstance,
   face: &ttf_parser::Face<'_>,
   font_key: FontKey,
   glyph_id: ttf_parser::GlyphId,
@@ -116,7 +118,7 @@ pub fn render_colr_glyph(
     }
   }
 
-  let units_per_em = face.units_per_em() as f32;
+  let units_per_em = instance.units_per_em();
   if units_per_em <= 0.0 || !units_per_em.is_finite() || !font_size.is_finite() {
     return None;
   }
@@ -124,7 +126,7 @@ pub fn render_colr_glyph(
   if !scale.is_finite() {
     return None;
   }
-  let base_transform = Transform::from_row(scale, 0.0, synthetic_oblique * scale, -scale, 0.0, 0.0);
+  let base_transform = glyph_transform(scale, synthetic_oblique, 0.0, 0.0);
 
   let clip_path = colr
     .v1_clip_box(GlyphId::from(glyph_id.0 as u32))
@@ -135,7 +137,7 @@ pub fn render_colr_glyph(
   let mut commands = Vec::new();
   let mut seen = HashSet::new();
   let renderer = Renderer {
-    face,
+    instance,
     palette: &palette_colors,
     text_color,
     base_transform,
@@ -248,7 +250,7 @@ fn raster_bounds(
 }
 
 struct Renderer<'a, 'p> {
-  face: &'a ttf_parser::Face<'a>,
+  instance: &'a FontInstance<'a>,
   palette: &'p [Rgba],
   text_color: Rgba,
   base_transform: Transform,
@@ -324,9 +326,10 @@ impl<'a, 'p> Renderer<'a, 'p> {
       }
       Paint::Glyph(paint_glyph) => {
         let child = paint_glyph.paint().ok()?;
-        let brush = self.resolve_brush(child, self.base_transform.pre_concat(design_transform))?;
+        let combined = design_to_device_transform(design_transform, self.base_transform);
+        let brush = self.resolve_brush(child, combined)?;
         let path = build_outline(
-          self.face,
+          self.instance,
           paint_glyph.glyph_id().to_u16(),
           design_transform,
           self.base_transform,
@@ -980,6 +983,15 @@ impl<'a, 'p> Renderer<'a, 'p> {
   }
 }
 
+/// Apply COLR design-space transforms before mapping from font design units (Y-up) into device
+/// space (Y-down) using the base font transform (scale + synthetic oblique + flip).
+#[inline]
+fn design_to_device_transform(design_transform: Transform, base_transform: Transform) -> Transform {
+  // Matrices are left-multiplied, so pre-concatenating the design-space transform ensures glyph
+  // space → COLR paint transform → font-to-device transform in that order.
+  base_transform.pre_concat(design_transform)
+}
+
 fn brush_to_paint(brush: &Brush, offset_x: f32, offset_y: f32) -> Option<SkiaPaint<'static>> {
   let mut paint = SkiaPaint::default();
   match brush {
@@ -1446,15 +1458,14 @@ fn map_blend_mode(mode: CompositeMode) -> Option<BlendMode> {
 }
 
 fn build_outline(
-  face: &ttf_parser::Face<'_>,
+  instance: &FontInstance<'_>,
   glyph_id: u16,
   design_transform: Transform,
   base: Transform,
 ) -> Option<Path> {
-  let mut builder = GlyphOutlineBuilder::with_flip(1.0, 0.0, 0.0, 0.0, false);
-  face.outline_glyph(ttf_parser::GlyphId(glyph_id), &mut builder)?;
-  let path = builder.finish()?;
-  let transform = base.pre_concat(design_transform);
+  let outline = instance.glyph_outline(glyph_id as u32)?;
+  let path = outline.path?;
+  let transform = design_to_device_transform(design_transform, base);
   path.transform(transform)
 }
 
@@ -1513,89 +1524,6 @@ fn fixed_to_f32(value: Fixed) -> f32 {
 
 fn paint_identity(paint: &Paint<'_>) -> PaintId {
   paint.offset_data().as_ref().as_ptr() as usize + paint.format() as usize
-}
-
-/// Outline builder reused for COLR layers.
-struct GlyphOutlineBuilder {
-  builder: PathBuilder,
-  scale: f32,
-  skew: f32,
-  x_offset: f32,
-  y_offset: f32,
-  flip_y: bool,
-}
-
-impl GlyphOutlineBuilder {
-  fn new(scale: f32, skew: f32, x_offset: f32, y_offset: f32) -> Self {
-    Self::with_flip(scale, skew, x_offset, y_offset, true)
-  }
-
-  fn with_flip(scale: f32, skew: f32, x_offset: f32, y_offset: f32, flip_y: bool) -> Self {
-    Self {
-      builder: PathBuilder::new(),
-      scale,
-      skew,
-      x_offset,
-      y_offset,
-      flip_y,
-    }
-  }
-
-  #[inline]
-  fn transform_x(&self, x: f32, y: f32) -> f32 {
-    (x + self.skew * y) * self.scale + self.x_offset
-  }
-
-  #[inline]
-  fn transform_y(&self, y: f32) -> f32 {
-    if self.flip_y {
-      self.y_offset - (y * self.scale)
-    } else {
-      self.y_offset + (y * self.scale)
-    }
-  }
-
-  fn finish(self) -> Option<Path> {
-    self.builder.finish()
-  }
-}
-
-impl ttf_parser::OutlineBuilder for GlyphOutlineBuilder {
-  fn move_to(&mut self, x: f32, y: f32) {
-    self
-      .builder
-      .move_to(self.transform_x(x, y), self.transform_y(y));
-  }
-
-  fn line_to(&mut self, x: f32, y: f32) {
-    self
-      .builder
-      .line_to(self.transform_x(x, y), self.transform_y(y));
-  }
-
-  fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
-    self.builder.quad_to(
-      self.transform_x(x1, y1),
-      self.transform_y(y1),
-      self.transform_x(x, y),
-      self.transform_y(y),
-    );
-  }
-
-  fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
-    self.builder.cubic_to(
-      self.transform_x(x1, y1),
-      self.transform_y(y1),
-      self.transform_x(x2, y2),
-      self.transform_y(y2),
-      self.transform_x(x, y),
-      self.transform_y(y),
-    );
-  }
-
-  fn close(&mut self) {
-    self.builder.close();
-  }
 }
 
 #[cfg(test)]

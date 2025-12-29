@@ -91,6 +91,7 @@ impl ColorFontRenderer {
     // COLR v1 paint graphs
     if let Some(colr) = colr_v1::render_colr_glyph(
       font,
+      instance,
       &face,
       font_key,
       gid,
