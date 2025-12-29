@@ -1,4 +1,4 @@
-use fastrender::resource::{CachingFetcher, CachingFetcherConfig, HttpFetcher};
+use fastrender::resource::{CachingFetcher, CachingFetcherConfig, HttpFetcher, ResourcePolicy};
 use fastrender::ResourceFetcher;
 use httpdate::fmt_http_date;
 use std::io;
@@ -79,6 +79,20 @@ fn caching_fetcher() -> CachingFetcher<HttpFetcher> {
   )
 }
 
+fn caching_fetcher_with_policy(policy: ResourcePolicy) -> CachingFetcher<HttpFetcher> {
+  let config = CachingFetcherConfig {
+    honor_http_cache_freshness: true,
+    ..Default::default()
+  };
+  CachingFetcher::with_config(
+    HttpFetcher::new()
+      .with_timeout(Duration::from_secs(2))
+      .with_policy(policy.clone()),
+    config,
+  )
+  .with_policy(policy)
+}
+
 #[test]
 fn cache_control_max_age_skips_revalidation() {
   let Some(listener) = try_bind_localhost("cache_control_max_age_skips_revalidation") else {
@@ -122,7 +136,7 @@ fn etag_revalidation_uses_validators() {
   let hits_thread = Arc::clone(&hits);
   let captured_requests = Arc::new(Mutex::new(Vec::new()));
   let captured_requests_thread = Arc::clone(&captured_requests);
-  let handle = spawn_server(listener, 3, move |count, req, stream| {
+  let handle = spawn_server(listener, 2, move |count, req, stream| {
     hits_thread.fetch_add(1, Ordering::SeqCst);
     captured_requests_thread.lock().unwrap().push(req.clone());
     let request = String::from_utf8_lossy(&req).to_lowercase();
@@ -169,6 +183,56 @@ fn etag_revalidation_uses_validators() {
   assert_eq!(hits.load(Ordering::SeqCst), 3);
   let requests = captured_requests.lock().unwrap();
   assert!(requests.len() >= 2);
+}
+
+#[test]
+fn revalidation_uses_budget_without_double_counting() {
+  let Some(listener) = try_bind_localhost("revalidation_uses_budget_without_double_counting")
+  else {
+    return;
+  };
+  let addr = listener.local_addr().unwrap();
+  let handle = spawn_server(listener, 2, move |count, req, stream| {
+    let request = String::from_utf8_lossy(&req).to_lowercase();
+    let body = b"hit";
+    match count {
+      1 => {
+        let response = format!(
+          "HTTP/1.1 200 OK\r\nCache-Control: max-age=0\r\nETag: \"budget\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+          body.len()
+        );
+        let _ = stream.write_all(response.as_bytes());
+        let _ = stream.write_all(body);
+      }
+      _ => {
+        assert!(
+          request.contains("if-none-match: \"budget\""),
+          "revalidation request should carry ETag: {request}"
+        );
+        let response = "HTTP/1.1 304 Not Modified\r\nCache-Control: max-age=0\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        let _ = stream.write_all(response.as_bytes());
+      }
+    }
+  });
+
+  let policy = ResourcePolicy::default().with_total_bytes_budget(Some(6));
+  let fetcher = caching_fetcher_with_policy(policy);
+  let url = format!("http://{}/budget", addr);
+  let first = fetcher.fetch(&url).expect("initial fetch");
+  assert_eq!(first.bytes, b"hit");
+
+  let second = fetcher.fetch(&url).expect("revalidated fetch");
+  assert_eq!(second.bytes, b"hit");
+
+  let err = fetcher
+    .fetch(&url)
+    .expect_err("budget exhausted after cached hits");
+  assert!(
+    err.to_string().contains("budget"),
+    "unexpected error: {err:?}"
+  );
+
+  handle.join().unwrap();
 }
 
 #[test]

@@ -998,7 +998,7 @@ impl<T: ResourceFetcher + ?Sized> ResourceFetcher for Arc<T> {
 /// Clones share an internal `ureq::Agent` so connections and TLS state can be reused.
 ///
 /// # Example
-/// 
+///
 /// ```rust,no_run
 /// use fastrender::resource::HttpFetcher;
 /// use std::time::Duration;
@@ -1532,6 +1532,18 @@ fn record_cache_miss() {
   });
 }
 
+/// Reserve bytes against a configured policy for a resource being returned to a caller.
+///
+/// The same [`ResourcePolicy`] can be shared across fetchers and caches; clones share the
+/// underlying [`ResourceBudget`], so cached hits and cloned results are accounted for even when
+/// they avoid network I/O.
+fn reserve_policy_bytes(policy: &Option<ResourcePolicy>, resource: &FetchedResource) -> Result<()> {
+  if let Some(policy) = policy {
+    policy.reserve_budget(resource.bytes.len())?;
+  }
+  Ok(())
+}
+
 struct CacheState {
   lru: LruCache<String, CacheEntry>,
   current_bytes: usize,
@@ -1661,7 +1673,8 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
     self
   }
 
-  /// Apply a resource policy. When set, disallowed URLs are rejected before consulting the cache.
+  /// Apply a resource policy. When set, disallowed URLs are rejected before consulting the cache
+  /// and total byte budgets are enforced for cached responses returned to callers.
   pub fn with_policy(mut self, policy: ResourcePolicy) -> Self {
     self.policy = Some(policy);
     self
@@ -1880,13 +1893,21 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
     if let CacheAction::UseCached = plan.action {
       if let Some(snapshot) = plan.cached.as_ref() {
         record_cache_fresh_hit();
-        return snapshot.value.as_result();
+        let result = snapshot.value.as_result();
+        if let Ok(ref res) = result {
+          reserve_policy_bytes(&self.policy, res)?;
+        }
+        return result;
       }
     }
 
     let (flight, is_owner) = self.join_inflight(url);
     if !is_owner {
-      return flight.wait();
+      let result = flight.wait();
+      if let Ok(ref res) = result {
+        reserve_policy_bytes(&self.policy, res)?;
+      }
+      return result;
     }
 
     let validators = match &plan.action {
@@ -1902,9 +1923,7 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
       None => self.inner.fetch(url),
     };
 
-    let mut shared: Option<SharedResult> = None;
-
-    let result = match fetch_result {
+    let (mut result, charge_budget) = match fetch_result {
       Ok(res) => {
         if res.is_not_modified() {
           if let Some(snapshot) = plan.cached.as_ref() {
@@ -1945,16 +1964,16 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
               }
             }
             record_cache_revalidated_hit();
-            shared = value
-              .as_ref()
-              .ok()
-              .map(|v| SharedResult::Success(v.clone()));
-            value
+            let is_ok = value.is_ok();
+            (value, is_ok)
           } else {
-            Err(Error::Resource(
-              ResourceError::new(url.to_string(), "received 304 without cached entry")
-                .with_final_url(url.to_string()),
-            ))
+            (
+              Err(Error::Resource(
+                ResourceError::new(url.to_string(), "received 304 without cached entry")
+                  .with_final_url(url.to_string()),
+              )),
+              false,
+            )
           }
         } else {
           let stored_at = SystemTime::now();
@@ -1969,17 +1988,14 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
             self.remove_cached(url);
           }
           record_cache_miss();
-          shared = Some(SharedResult::Success(res.clone()));
-          Ok(res)
+          (Ok(res), false)
         }
       }
       Err(err) => {
         if let Some(snapshot) = plan.cached.as_ref() {
           let fallback = snapshot.value.as_result();
-          if let Ok(ok) = &fallback {
-            shared = Some(SharedResult::Success(ok.clone()));
-          }
-          fallback
+          let is_ok = fallback.is_ok();
+          (fallback, is_ok)
         } else {
           if self.config.cache_errors {
             self.insert_cache(
@@ -1992,17 +2008,23 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
               },
             );
           }
-          shared = Some(SharedResult::Error(err.clone()));
-          Err(err)
+          (Err(err), false)
         }
       }
     };
 
-    // Ensure waiters are released even if we returned cached content on error.
-    let notify = shared.unwrap_or_else(|| match &result {
+    if charge_budget {
+      if let Ok(ref res) = result {
+        if let Err(err) = reserve_policy_bytes(&self.policy, res) {
+          result = Err(err);
+        }
+      }
+    }
+
+    let notify = match &result {
       Ok(res) => SharedResult::Success(res.clone()),
       Err(err) => SharedResult::Error(err.clone()),
-    });
+    };
     self.finish_inflight(url, &flight, notify);
 
     result
@@ -2743,6 +2765,25 @@ mod tests {
     let err = fetcher
       .fetch("data:text/plain,def")
       .expect_err("budget should be exhausted");
+    assert!(
+      err.to_string().contains("budget"),
+      "unexpected error: {err:?}"
+    );
+  }
+
+  #[test]
+  fn caching_fetcher_counts_cached_hits_against_budget() {
+    let policy = ResourcePolicy::default().with_total_bytes_budget(Some(5));
+    let fetcher =
+      CachingFetcher::new(HttpFetcher::new().with_policy(policy.clone())).with_policy(policy);
+    let url = "data:text/plain,abcd";
+
+    let first = fetcher.fetch(url).expect("first fetch within budget");
+    assert_eq!(first.bytes, b"abcd");
+
+    let err = fetcher
+      .fetch(url)
+      .expect_err("cached fetch should honor total budget");
     assert!(
       err.to_string().contains("budget"),
       "unexpected error: {err:?}"

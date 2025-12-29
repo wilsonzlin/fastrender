@@ -10,6 +10,7 @@ use super::CachingFetcherConfig;
 use super::FetchedResource;
 use super::HttpCachePolicy;
 use super::ResourceFetcher;
+use super::ResourcePolicy;
 use crate::error::Error;
 use crate::Result;
 use serde::{Deserialize, Serialize};
@@ -56,6 +57,7 @@ pub struct DiskCachingFetcher<F: ResourceFetcher> {
   cache_dir: PathBuf,
   disk_config: DiskCacheConfig,
   index: DiskCacheIndex,
+  policy: Option<ResourcePolicy>,
 }
 
 struct EntryLock {
@@ -119,7 +121,18 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       cache_dir,
       disk_config,
       index,
+      policy: None,
     }
+  }
+
+  /// Apply a resource policy to both the in-memory and disk cache layers.
+  ///
+  /// URL allow/deny rules are enforced before reading from disk, and total byte budgets are
+  /// reserved when cached entries are returned to callers.
+  pub fn with_policy(mut self, policy: ResourcePolicy) -> Self {
+    self.memory = self.memory.with_policy(policy.clone());
+    self.policy = Some(policy);
+    self
   }
 
   fn should_skip_disk(&self, url: &str) -> bool {
@@ -372,12 +385,18 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       return;
     }
 
+    self.index.record_insert(
+      &key,
+      stored_at,
+      resource.bytes.len() as u64,
+      &data_path,
+      &meta_path,
+    );
     self
       .index
-      .record_insert(&key, stored_at, resource.bytes.len() as u64, &data_path, &meta_path);
-    self
-      .index
-      .evict_if_needed(self.disk_config.max_bytes, |path| !self.lock_is_active(path));
+      .evict_if_needed(self.disk_config.max_bytes, |path| {
+        !self.lock_is_active(path)
+      });
   }
 
   fn remove_entry(&self, key: &str, data_path: &Path, meta_path: &Path) -> Result<()> {
@@ -395,6 +414,10 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
 
 impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
   fn fetch(&self, url: &str) -> Result<FetchedResource> {
+    if let Some(policy) = &self.policy {
+      policy.ensure_url_allowed(url)?;
+    }
+
     let disk_snapshot = self.read_disk_entry(url);
     if let Some(ref snapshot) = disk_snapshot {
       self.memory.prime_cache_with_snapshot(url, snapshot.clone());
@@ -409,13 +432,21 @@ impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
     if let CacheAction::UseCached = plan.action {
       if let Some(snapshot) = plan.cached.as_ref() {
         super::record_cache_fresh_hit();
-        return snapshot.value.as_result();
+        let result = snapshot.value.as_result();
+        if let Ok(ref res) = result {
+          super::reserve_policy_bytes(&self.policy, res)?;
+        }
+        return result;
       }
     }
 
     let (flight, is_owner) = self.memory.join_inflight(url);
     if !is_owner {
-      return flight.wait();
+      let result = flight.wait();
+      if let Ok(ref res) = result {
+        super::reserve_policy_bytes(&self.policy, res)?;
+      }
+      return result;
     }
 
     let validators = match &plan.action {
@@ -436,9 +467,7 @@ impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
       None => self.memory.inner.fetch(url),
     };
 
-    let mut shared: Option<super::SharedResult> = None;
-
-    let result = match fetch_result {
+    let (mut result, charge_budget) = match fetch_result {
       Ok(res) => {
         if res.is_not_modified() {
           if let Some(snapshot) = plan.cached.as_ref() {
@@ -485,15 +514,15 @@ impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
               }
             }
             super::record_cache_revalidated_hit();
-            shared = value
-              .as_ref()
-              .ok()
-              .map(|v| super::SharedResult::Success(v.clone()));
-            value
+            let is_ok = value.is_ok();
+            (value, is_ok)
           } else {
-            Err(Error::Other(
-              "Received 304 without cached entry".to_string(),
-            ))
+            (
+              Err(Error::Other(
+                "Received 304 without cached entry".to_string(),
+              )),
+              false,
+            )
           }
         } else {
           let stored_at = SystemTime::now();
@@ -526,17 +555,14 @@ impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
             );
           }
           super::record_cache_miss();
-          shared = Some(super::SharedResult::Success(res.clone()));
-          Ok(res)
+          (Ok(res), false)
         }
       }
       Err(err) => {
         if let Some(snapshot) = plan.cached.as_ref() {
           let fallback = snapshot.value.as_result();
-          if let Ok(ok) = &fallback {
-            shared = Some(super::SharedResult::Success(ok.clone()));
-          }
-          fallback
+          let is_ok = fallback.is_ok();
+          (fallback, is_ok)
         } else {
           if self.memory.config.cache_errors {
             self.memory.insert_cache(
@@ -549,16 +575,23 @@ impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
               },
             );
           }
-          shared = Some(super::SharedResult::Error(err.clone()));
-          Err(err)
+          (Err(err), false)
         }
       }
     };
 
-    let notify = shared.unwrap_or_else(|| match &result {
+    if charge_budget {
+      if let Ok(ref res) = result {
+        if let Err(err) = super::reserve_policy_bytes(&self.policy, res) {
+          result = Err(err);
+        }
+      }
+    }
+
+    let notify = match &result {
       Ok(res) => super::SharedResult::Success(res.clone()),
       Err(err) => super::SharedResult::Error(err.clone()),
-    });
+    };
     self.memory.finish_inflight(url, &flight, notify);
 
     result
@@ -639,13 +672,29 @@ fn secs_to_system_time(secs: u64) -> Option<SystemTime> {
 
 #[cfg(test)]
 mod tests {
+  use super::super::{HttpFetcher, ResourcePolicy};
   use super::*;
   use std::collections::VecDeque;
   use std::fs;
+  use std::io;
+  use std::io::{Read, Write};
+  use std::net::TcpListener;
   use std::sync::atomic::AtomicUsize;
   use std::sync::atomic::Ordering;
   use std::sync::Arc;
   use std::sync::Mutex;
+  use std::thread;
+
+  fn try_bind_localhost(context: &str) -> Option<TcpListener> {
+    match TcpListener::bind("127.0.0.1:0") {
+      Ok(listener) => Some(listener),
+      Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+        eprintln!("skipping {context}: cannot bind localhost in this environment: {err}");
+        None
+      }
+      Err(err) => panic!("bind {context}: {err}"),
+    }
+  }
 
   #[derive(Clone)]
   struct CountingFetcher {
@@ -700,6 +749,49 @@ mod tests {
     assert_eq!(counter.load(Ordering::SeqCst), 1, "should hit disk cache");
     assert_eq!(second.content_type.as_deref(), Some("text/plain"));
     assert_eq!(second.final_url.as_deref(), Some(url));
+  }
+
+  #[test]
+  fn disk_cache_hits_respect_budget() {
+    let Some(listener) = try_bind_localhost("disk_cache_hits_respect_budget") else {
+      return;
+    };
+    let addr = listener.local_addr().unwrap();
+    let body = b"disk";
+    let handle = thread::spawn(move || {
+      if let Some(stream) = listener.incoming().next() {
+        let mut stream = stream.unwrap();
+        let mut buf = [0u8; 512];
+        let _ = stream.read(&mut buf);
+        let response = format!(
+          "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n",
+          body.len()
+        );
+        let _ = stream.write_all(response.as_bytes());
+        let _ = stream.write_all(body);
+      }
+    });
+
+    let tmp = tempfile::tempdir().unwrap();
+    let policy = ResourcePolicy::default().with_total_bytes_budget(Some(5));
+    let url = format!("http://{}/resource", addr);
+    let first_fetcher =
+      DiskCachingFetcher::new(HttpFetcher::new().with_policy(policy.clone()), tmp.path())
+        .with_policy(policy.clone());
+    let first = first_fetcher.fetch(&url).expect("first fetch");
+    assert_eq!(first.bytes, body);
+    handle.join().unwrap();
+
+    let second_fetcher =
+      DiskCachingFetcher::new(HttpFetcher::new().with_policy(policy.clone()), tmp.path())
+        .with_policy(policy);
+    let err = second_fetcher
+      .fetch(&url)
+      .expect_err("budget should block disk cache hit");
+    assert!(
+      err.to_string().contains("budget"),
+      "unexpected error: {err:?}"
+    );
   }
 
   #[derive(Clone, Debug)]
@@ -907,9 +999,7 @@ mod tests {
   fn removes_corrupted_entries_on_read() {
     let tmp = tempfile::tempdir().unwrap();
     let counter = Arc::new(AtomicUsize::new(0));
-    let fetcher = CountingFetcher {
-      count: counter,
-    };
+    let fetcher = CountingFetcher { count: counter };
     let disk = DiskCachingFetcher::new(fetcher, tmp.path());
     let url = "https://example.com/corrupted";
 

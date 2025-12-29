@@ -2701,10 +2701,11 @@ fn resolve_fetcher(
   }
 
   if let Some(cache) = config.resource_cache {
-    Arc::new(CachingFetcher::with_config(
-      HttpFetcher::new().with_policy(config.resource_policy.clone()),
-      cache,
-    ))
+    let policy = config.resource_policy.clone();
+    Arc::new(
+      CachingFetcher::with_config(HttpFetcher::new().with_policy(policy.clone()), cache)
+        .with_policy(policy),
+    )
   } else {
     Arc::new(HttpFetcher::new().with_policy(config.resource_policy.clone()))
   }
