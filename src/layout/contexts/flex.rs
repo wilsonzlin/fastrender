@@ -1347,7 +1347,6 @@ impl FormattingContext for FlexFormattingContext {
                         let entry = pass_cache.entry(cache_key).or_default();
                         if let Entry::Vacant(e) = entry.entry(key) {
                             e.insert((stored_size, normalized_fragment.clone()));
-                            *pass_stores.entry(cache_key).or_insert(0) += 1;
                             record_node_measure_store(measure_box.id);
                         }
                     }

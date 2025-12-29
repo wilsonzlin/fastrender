@@ -98,12 +98,9 @@ impl ShardedFlexCache {
   ) -> Option<(Size, Arc<FragmentNode>)> {
     let shard_idx = self.shard_index(node_key);
     let result = self.shards.get(shard_idx).and_then(|shard| {
-      shard
-        .map
-        .read()
-        .ok()
-        .and_then(|map| map.get(&node_key))
-        .and_then(|entry| find_cached_fragment(entry, target_size))
+      let guard = shard.map.read().ok()?;
+      let entry = guard.get(&node_key)?;
+      find_cached_fragment(entry, target_size)
     });
     self.record_lookup(shard_idx, result.is_some());
     result

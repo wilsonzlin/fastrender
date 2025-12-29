@@ -228,26 +228,13 @@ impl FormattingContextFactory {
 
   pub(crate) fn flex_measure_cache(
     &self,
-  ) -> std::sync::Arc<std::sync::Mutex<crate::layout::contexts::flex::FlexMeasureCache>> {
+  ) -> std::sync::Arc<ShardedFlexCache> {
     self.flex_measure_cache.clone()
   }
 
   pub(crate) fn flex_layout_cache(
     &self,
-  ) -> std::sync::Arc<
-    std::sync::Mutex<
-      std::collections::HashMap<
-        u64,
-        std::collections::HashMap<
-          (Option<u32>, Option<u32>),
-          (
-            crate::geometry::Size,
-            std::sync::Arc<crate::tree::fragment_tree::FragmentNode>,
-          ),
-        >,
-      >,
-    >,
-  > {
+  ) -> std::sync::Arc<ShardedFlexCache> {
     self.flex_layout_cache.clone()
   }
 
