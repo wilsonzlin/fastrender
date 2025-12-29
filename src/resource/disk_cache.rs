@@ -24,6 +24,10 @@ use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+#[path = "disk_cache_index.rs"]
+mod disk_cache_index;
+use disk_cache_index::DiskCacheIndex;
+
 #[derive(Debug, Clone)]
 pub struct DiskCacheConfig {
   /// Maximum total bytes to keep on disk. `0` disables eviction.
@@ -50,6 +54,7 @@ pub struct DiskCachingFetcher<F: ResourceFetcher> {
   memory: CachingFetcher<F>,
   cache_dir: PathBuf,
   disk_config: DiskCacheConfig,
+  index: DiskCacheIndex,
 }
 
 struct EntryLock {
@@ -108,10 +113,12 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
   ) -> Self {
     let cache_dir = cache_dir.into();
     let _ = fs::create_dir_all(&cache_dir);
+    let index = DiskCacheIndex::new(cache_dir.clone());
     Self {
       memory: CachingFetcher::with_config(inner, memory_config),
       cache_dir,
       disk_config,
+      index,
     }
   }
 
@@ -182,13 +189,16 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     }
   }
 
-  fn remove_entry_if_unlocked(&self, data_path: &Path, meta_path: &Path) {
+  fn remove_entry_if_unlocked(&self, key: &str, data_path: &Path, meta_path: &Path) {
     if !self.lock_is_active(data_path) {
-      let _ = self.remove_entry(data_path, meta_path);
+      let _ = self.remove_entry(key, data_path, meta_path);
     }
   }
 
   fn read_disk_entry(&self, url: &str) -> Option<CachedSnapshot> {
+    self.index.refresh();
+
+    let key = Self::cache_key(url);
     let data_path = self.data_path(url);
     let meta_path = self.meta_path_for_data(&data_path);
 
@@ -196,18 +206,24 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       return None;
     }
 
-    let meta_bytes = fs::read(&meta_path).ok()?;
+    let meta_bytes = match fs::read(&meta_path) {
+      Ok(bytes) => bytes,
+      Err(_) => {
+        self.remove_entry_if_unlocked(&key, &data_path, &meta_path);
+        return None;
+      }
+    };
     let meta: StoredMetadata = match serde_json::from_slice(&meta_bytes) {
       Ok(meta) => meta,
       Err(_) => {
-        self.remove_entry_if_unlocked(&data_path, &meta_path);
+        self.remove_entry_if_unlocked(&key, &data_path, &meta_path);
         return None;
       }
     };
 
     if let Some(max_age) = self.disk_config.max_age {
       if now_seconds().saturating_sub(meta.stored_at) > max_age.as_secs() {
-        self.remove_entry_if_unlocked(&data_path, &meta_path);
+        self.remove_entry_if_unlocked(&key, &data_path, &meta_path);
         return None;
       }
     }
@@ -215,14 +231,21 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     let bytes = match fs::read(&data_path) {
       Ok(bytes) => bytes,
       Err(_) => {
-        self.remove_entry_if_unlocked(&data_path, &meta_path);
+        self.remove_entry_if_unlocked(&key, &data_path, &meta_path);
         return None;
       }
     };
     if bytes.is_empty() || meta.len != bytes.len() {
-      self.remove_entry_if_unlocked(&data_path, &meta_path);
+      self.remove_entry_if_unlocked(&key, &data_path, &meta_path);
       return None;
     }
+    self.index.backfill_if_missing(
+      &key,
+      meta.stored_at,
+      meta.len as u64,
+      &data_path,
+      &meta_path,
+    );
 
     let mut resource = FetchedResource::with_final_url(
       bytes,
@@ -265,6 +288,7 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       return;
     }
 
+    let key = Self::cache_key(url);
     let data_path = self.data_path(url);
     if let Some(parent) = data_path.parent() {
       let _ = fs::create_dir_all(parent);
@@ -293,7 +317,7 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
         .unwrap_or(false)
     {
       let meta_path = self.meta_path_for_data(&data_path);
-      let _ = self.remove_entry(&data_path, &meta_path);
+      let _ = self.remove_entry(&key, &data_path, &meta_path);
       return;
     }
 
@@ -344,75 +368,28 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
 
     if fs::rename(&meta_tmp, &meta_path).is_err() {
       let _ = fs::remove_file(&meta_tmp);
-      let _ = self.remove_entry(&data_path, &meta_path);
+      let _ = self.remove_entry(&key, &data_path, &meta_path);
       return;
     }
 
-    self.enforce_disk_limits();
+    self
+      .index
+      .record_insert(&key, stored_at, resource.bytes.len() as u64, &data_path, &meta_path);
+    self
+      .index
+      .evict_if_needed(self.disk_config.max_bytes, |path| !self.lock_is_active(path));
   }
 
-  fn remove_entry(&self, data_path: &Path, meta_path: &Path) -> Result<()> {
-    let _ = fs::remove_file(data_path);
-    let _ = fs::remove_file(meta_path);
+  fn remove_entry(&self, key: &str, data_path: &Path, meta_path: &Path) -> Result<()> {
+    self.index.record_removal(key, data_path, meta_path);
     let _ = fs::remove_file(tmp_path(data_path));
     let _ = fs::remove_file(tmp_path(meta_path));
     Ok(())
   }
 
-  fn enforce_disk_limits(&self) {
-    let max_bytes = self.disk_config.max_bytes;
-    if max_bytes == 0 {
-      return;
-    }
-
-    let mut entries: Vec<(u64, u64, PathBuf)> = Vec::new();
-    let mut total: u64 = 0;
-
-    if let Ok(read_dir) = fs::read_dir(&self.cache_dir) {
-      for entry in read_dir.flatten() {
-        let path = entry.path();
-        if path
-          .extension()
-          .and_then(|e| e.to_str())
-          .map(|ext| ext == "bin")
-          != Some(true)
-        {
-          continue;
-        }
-
-        if self.lock_is_active(&path) {
-          continue;
-        }
-
-        let meta_path = self.meta_path_for_data(&path);
-        let Ok(meta_bytes) = fs::read(&meta_path) else {
-          let _ = self.remove_entry(&path, &meta_path);
-          continue;
-        };
-        let Ok(meta) = serde_json::from_slice::<StoredMetadata>(&meta_bytes) else {
-          let _ = self.remove_entry(&path, &meta_path);
-          continue;
-        };
-
-        let size = meta.len as u64;
-        entries.push((meta.stored_at, size, path));
-        total = total.saturating_add(size);
-      }
-    }
-
-    entries.sort_by_key(|(stored_at, _, _)| *stored_at);
-
-    for (_, size, path) in entries {
-      if total <= max_bytes {
-        break;
-      }
-      let meta_path = self.meta_path_for_data(&path);
-      if self.lock_is_active(&path) {
-        continue;
-      }
-      let _ = self.remove_entry(&path, &meta_path);
-      total = total.saturating_sub(size);
-    }
+  #[cfg(test)]
+  fn debug_index_stats(&self) -> disk_cache_index::DebugStats {
+    self.index.debug_stats()
   }
 }
 
@@ -427,6 +404,7 @@ impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
     let plan = self
       .memory
       .plan_cache_use(url, cached.clone(), self.disk_config.max_age);
+    let cache_key = Self::cache_key(url);
 
     if let CacheAction::UseCached = plan.action {
       if let Some(snapshot) = plan.cached.as_ref() {
@@ -503,7 +481,7 @@ impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
                 self.memory.remove_cached(url);
                 let data_path = self.data_path(url);
                 let meta_path = self.meta_path_for_data(&data_path);
-                let _ = self.remove_entry(&data_path, &meta_path);
+                let _ = self.remove_entry(&cache_key, &data_path, &meta_path);
               }
             }
             super::record_cache_revalidated_hit();
@@ -530,7 +508,7 @@ impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
             self.memory.remove_cached(url);
             let data_path = self.data_path(url);
             let meta_path = self.meta_path_for_data(&data_path);
-            let _ = self.remove_entry(&data_path, &meta_path);
+            let _ = self.remove_entry(&cache_key, &data_path, &meta_path);
           }
           if let Some(snapshot) = self.memory.cached_snapshot(url) {
             self.persist_snapshot(url, &snapshot);
@@ -588,7 +566,7 @@ impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct StoredMetadata {
+pub(super) struct StoredMetadata {
   url: String,
   content_type: Option<String>,
   etag: Option<String>,
@@ -600,7 +578,7 @@ struct StoredMetadata {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-struct StoredCacheMetadata {
+pub(super) struct StoredCacheMetadata {
   stored_at: u64,
   max_age: Option<u64>,
   expires: Option<u64>,
@@ -663,11 +641,11 @@ fn secs_to_system_time(secs: u64) -> Option<SystemTime> {
 mod tests {
   use super::*;
   use std::collections::VecDeque;
+  use std::fs;
   use std::sync::atomic::AtomicUsize;
   use std::sync::atomic::Ordering;
   use std::sync::Arc;
   use std::sync::Mutex;
-  use std::thread;
 
   #[derive(Clone)]
   struct CountingFetcher {
@@ -678,6 +656,22 @@ mod tests {
     fn fetch(&self, url: &str) -> Result<FetchedResource> {
       self.count.fetch_add(1, Ordering::SeqCst);
       let mut resource = FetchedResource::new(b"hello".to_vec(), Some("text/plain".to_string()));
+      resource.final_url = Some(url.to_string());
+      Ok(resource)
+    }
+  }
+
+  #[derive(Clone)]
+  struct SizedFetcher {
+    count: Arc<AtomicUsize>,
+    size: usize,
+  }
+
+  impl ResourceFetcher for SizedFetcher {
+    fn fetch(&self, url: &str) -> Result<FetchedResource> {
+      self.count.fetch_add(1, Ordering::SeqCst);
+      let mut resource =
+        FetchedResource::new(vec![b'x'; self.size], Some("text/plain".to_string()));
       resource.final_url = Some(url.to_string());
       Ok(resource)
     }
@@ -821,10 +815,97 @@ mod tests {
   }
 
   #[test]
+  fn evicts_without_full_scans_per_write() {
+    let tmp = tempfile::tempdir().unwrap();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let fetcher = SizedFetcher {
+      count: Arc::clone(&counter),
+      size: 32,
+    };
+    let disk = DiskCachingFetcher::with_configs(
+      fetcher,
+      tmp.path(),
+      CachingFetcherConfig::default(),
+      DiskCacheConfig {
+        max_bytes: 96,
+        max_age: None,
+      },
+    );
+
+    for i in 0..8 {
+      let url = format!("https://example.com/resource/{i}");
+      let res = disk.fetch(&url).expect("fetch");
+      assert_eq!(res.bytes.len(), 32);
+    }
+
+    let stats = disk.debug_index_stats();
+    assert_eq!(
+      stats.rebuilds, 1,
+      "index should only rebuild once instead of scanning on every persist"
+    );
+
+    let bin_files = fs::read_dir(tmp.path())
+      .unwrap()
+      .flatten()
+      .filter(|entry| {
+        entry
+          .path()
+          .extension()
+          .and_then(|ext| ext.to_str())
+          .map(|ext| ext == "bin")
+          == Some(true)
+      })
+      .count();
+    assert!(
+      bin_files < 8,
+      "eviction should have removed older entries once the budget was exceeded"
+    );
+    assert!(
+      (bin_files as u64) * 32 <= 96,
+      "remaining entries should fit within the configured byte budget"
+    );
+  }
+
+  #[test]
+  fn rebuild_cleans_corrupt_or_partial_entries() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dangling_data = tmp.path().join("dangling.bin");
+    let dangling_meta = tmp.path().join("dangling.bin.meta");
+    fs::write(&dangling_data, b"garbage").unwrap();
+    // Missing metadata should be cleaned up.
+    assert!(!dangling_meta.exists());
+
+    let corrupt_data = tmp.path().join("corrupt.bin");
+    let corrupt_meta = tmp.path().join("corrupt.bin.meta");
+    fs::write(&corrupt_data, b"12345").unwrap();
+    fs::write(&corrupt_meta, b"{not json").unwrap();
+
+    let counter = Arc::new(AtomicUsize::new(0));
+    let fetcher = CountingFetcher {
+      count: Arc::clone(&counter),
+    };
+    let disk = DiskCachingFetcher::new(fetcher, tmp.path());
+    let url = "https://example.com/real";
+    let res = disk.fetch(url).expect("fetch after rebuilding index");
+    assert_eq!(res.bytes, b"hello");
+
+    assert!(
+      !dangling_data.exists(),
+      "dangling entries without metadata should be removed"
+    );
+    assert!(
+      !corrupt_data.exists() && !corrupt_meta.exists(),
+      "corrupt metadata entries should be purged during rebuild"
+    );
+  }
+
+  #[test]
   fn removes_corrupted_entries_on_read() {
     let tmp = tempfile::tempdir().unwrap();
     let counter = Arc::new(AtomicUsize::new(0));
-    let fetcher = CountingFetcher { count: counter };
+    let fetcher = CountingFetcher {
+      count: counter,
+    };
     let disk = DiskCachingFetcher::new(fetcher, tmp.path());
     let url = "https://example.com/corrupted";
 
