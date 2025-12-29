@@ -21,6 +21,7 @@ use selectors::attr::AttrSelectorOperation;
 use selectors::attr::CaseSensitivity;
 use selectors::matching::matches_selector;
 use selectors::matching::MatchingContext;
+use selectors::matching::QuirksMode;
 use selectors::parser::RelativeSelector;
 use selectors::relative_selector::cache::RelativeSelectorCachedMatch;
 use selectors::Element;
@@ -937,6 +938,17 @@ impl DomNode {
   /// Check if this element has a specific ID
   pub fn has_id(&self, id: &str) -> bool {
     self.get_attribute_ref("id") == Some(id)
+  }
+
+  /// Return the document quirks mode determined during parsing.
+  ///
+  /// DOM parsing currently does not capture DOCTYPE information, so this
+  /// defaults to `NoQuirks` until document metadata is plumbed through.
+  pub fn document_quirks_mode(&self) -> QuirksMode {
+    match &self.node_type {
+      DomNodeType::Document => QuirksMode::NoQuirks,
+      _ => QuirksMode::NoQuirks,
+    }
   }
 }
 

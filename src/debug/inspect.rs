@@ -171,6 +171,11 @@ pub fn inspect(
   };
   let mut selector_caches = SelectorCaches::default();
   selector_caches.set_epoch(next_selector_cache_epoch());
+  let quirks_mode = styled_root.node.document_quirks_mode();
+  debug_assert!(
+    matches!(&styled_root.node.node_type, DomNodeType::Document),
+    "inspect expects the styled root to be a document node"
+  );
 
   let mut results = Vec::new();
   let mut ancestors: Vec<&DomNode> = Vec::new();
@@ -196,7 +201,13 @@ pub fn inspect(
           false
         } else {
           let selectors = selectors.as_ref().expect("selector query parsed above");
-          node_matches_selector(node, &ancestors, selectors, &mut selector_caches)
+          node_matches_selector(
+            node,
+            &ancestors,
+            selectors,
+            quirks_mode,
+            &mut selector_caches,
+          )
         }
       }
     };
@@ -250,6 +261,7 @@ fn node_matches_selector(
   node: &DomNode,
   ancestors: &[&DomNode],
   selectors: &SelectorList<FastRenderSelectorImpl>,
+  quirks_mode: QuirksMode,
   caches: &mut SelectorCaches,
 ) -> bool {
   if !node.is_element() {
@@ -261,7 +273,7 @@ fn node_matches_selector(
     MatchingMode::Normal,
     None,
     caches,
-    QuirksMode::NoQuirks,
+    quirks_mode,
     NeedsSelectorFlags::No,
     MatchingForInvalidation::No,
   );
