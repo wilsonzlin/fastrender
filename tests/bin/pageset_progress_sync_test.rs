@@ -95,6 +95,14 @@ fn pageset_progress_sync_marks_missing_cache_as_error() {
     Some(&Value::String("fetch".into())),
     "missing caches should be treated as fetch issues"
   );
+  assert!(
+    updated.get("failure_stage").is_some_and(Value::is_null),
+    "placeholder entries should not claim failure stages"
+  );
+  assert!(
+    updated.get("timeout_stage").is_some_and(Value::is_null),
+    "placeholder entries should not claim timeout stages"
+  );
   assert_eq!(
     updated.get("url"),
     Some(&Value::String(target.url.to_string())),

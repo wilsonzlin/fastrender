@@ -449,6 +449,40 @@ enum ProgressStatus {
   Error,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ProgressStage {
+  DomParse,
+  Css,
+  Cascade,
+  Layout,
+  Paint,
+}
+
+impl ProgressStage {
+  fn as_str(&self) -> &'static str {
+    match self {
+      ProgressStage::DomParse => "dom_parse",
+      ProgressStage::Css => "css",
+      ProgressStage::Cascade => "cascade",
+      ProgressStage::Layout => "layout",
+      ProgressStage::Paint => "paint",
+    }
+  }
+}
+
+impl From<RenderStage> for ProgressStage {
+  fn from(stage: RenderStage) -> Self {
+    match stage {
+      RenderStage::DomParse => ProgressStage::DomParse,
+      RenderStage::Css => ProgressStage::Css,
+      RenderStage::Cascade => ProgressStage::Cascade,
+      RenderStage::Layout => ProgressStage::Layout,
+      RenderStage::Paint => ProgressStage::Paint,
+    }
+  }
+}
+
 impl ProgressStatus {
   fn as_str(&self) -> &'static str {
     match self {
@@ -627,6 +661,8 @@ pub(crate) struct PageProgress {
   stages_ms: StageBuckets,
   notes: String,
   hotspot: String,
+  failure_stage: Option<ProgressStage>,
+  timeout_stage: Option<ProgressStage>,
   last_good_commit: String,
   last_regression_commit: String,
 }
@@ -640,6 +676,8 @@ impl PageProgress {
       stages_ms: StageBuckets::default(),
       notes: String::new(),
       hotspot: String::new(),
+      failure_stage: None,
+      timeout_stage: None,
       last_good_commit: String::new(),
       last_regression_commit: String::new(),
     }
@@ -907,6 +945,8 @@ fn sync(args: SyncArgs) -> io::Result<()> {
       }
       progress.total_ms = None;
       progress.stages_ms = StageBuckets::default();
+      progress.failure_stage = None;
+      progress.timeout_stage = None;
     }
 
     stems.insert(entry.stem.clone());
@@ -970,7 +1010,7 @@ fn guess_hotspot(buckets: &StageBuckets) -> &'static str {
   best.0
 }
 
-fn hotspot_from_timeout_stage(stage: RenderStage) -> &'static str {
+pub(crate) fn hotspot_from_timeout_stage(stage: RenderStage) -> &'static str {
   match stage {
     RenderStage::DomParse => "fetch",
     RenderStage::Css => "css",
@@ -978,6 +1018,25 @@ fn hotspot_from_timeout_stage(stage: RenderStage) -> &'static str {
     RenderStage::Layout => "layout",
     RenderStage::Paint => "paint",
   }
+}
+
+pub(crate) fn apply_diagnostics_to_progress(
+  progress: &mut PageProgress,
+  diagnostics: &RenderDiagnostics,
+) {
+  progress.failure_stage = diagnostics.failure_stage.map(ProgressStage::from);
+  progress.timeout_stage = diagnostics.timeout_stage.map(ProgressStage::from);
+}
+
+pub(crate) fn populate_timeout_progress(
+  progress: &mut PageProgress,
+  stage: RenderStage,
+  elapsed: Duration,
+) {
+  progress.status = ProgressStatus::Timeout;
+  progress.notes = format!("timeout at {stage} after {elapsed:?}");
+  progress.hotspot = hotspot_from_timeout_stage(stage).to_string();
+  progress.timeout_stage = Some(stage.into());
 }
 
 fn render_worker(args: WorkerArgs) -> io::Result<()> {
@@ -1154,6 +1213,7 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     Ok(Ok(result)) => {
       progress.status = ProgressStatus::Ok;
       progress.stages_ms = buckets_from_diagnostics(&result.diagnostics);
+      apply_diagnostics_to_progress(&mut progress, &result.diagnostics);
       progress.hotspot = guess_hotspot(&progress.stages_ms).to_string();
       log.push_str("Status: OK\n");
       append_fetch_error_summary(&mut log, &result.diagnostics);
@@ -1162,9 +1222,7 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     Ok(Err(err)) => {
       match &err {
         fastrender::Error::Render(RenderError::Timeout { stage, elapsed }) => {
-          progress.status = ProgressStatus::Timeout;
-          progress.notes = format!("timeout at {stage} after {elapsed:?}");
-          progress.hotspot = hotspot_from_timeout_stage(*stage).to_string();
+          populate_timeout_progress(&mut progress, *stage, *elapsed);
         }
         _ => {
           progress.status = ProgressStatus::Error;
@@ -1998,6 +2056,30 @@ fn report(args: ReportArgs) -> io::Result<()> {
   } else {
     for (hotspot, count) in failure_hotspots {
       println!("  {hotspot}: {count}");
+    }
+  }
+  println!();
+
+  let mut failure_stages: BTreeMap<String, usize> = BTreeMap::new();
+  for entry in progresses.iter().filter(|p| {
+    matches!(
+      p.progress.status,
+      ProgressStatus::Timeout | ProgressStatus::Panic | ProgressStatus::Error
+    )
+  }) {
+    let stage = entry
+      .progress
+      .timeout_stage
+      .or(entry.progress.failure_stage);
+    let label = stage.map(|s| s.as_str()).unwrap_or("unknown");
+    *failure_stages.entry(label.to_string()).or_default() += 1;
+  }
+  println!("Failure stages (timeout/panic/error):");
+  if failure_stages.is_empty() {
+    println!("  (none)");
+  } else {
+    for (stage, count) in failure_stages {
+      println!("  {stage}: {count}");
     }
   }
   println!();

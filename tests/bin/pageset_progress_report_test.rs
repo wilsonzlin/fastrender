@@ -62,6 +62,8 @@ fn pageset_progress_report_outputs_summary() {
   assert!(stdout.contains("Failure hotspots (timeout/panic/error):"));
   assert!(stdout.contains("layout: 1"));
   assert!(stdout.contains("unknown: 1"));
+  assert!(stdout.contains("Failure stages (timeout/panic/error):"));
+  assert!(stdout.contains("unknown: 2"));
   assert!(stdout.contains("Top-slow hotspots (top 4):"));
   assert!(stdout.contains("layout: 3"));
   assert!(stdout.contains("Stage timings (ok pages with timings: 2):"));

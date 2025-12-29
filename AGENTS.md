@@ -119,6 +119,8 @@ Each file should be tiny (no huge logs, no raw HTML):
   "stages_ms": { "fetch": 0.0, "css": 0.0, "cascade": 0.0, "layout": 0.0, "paint": 0.0 },
   "notes": "short, durable explanation of current blocker",
   "hotspot": "cascade|layout|paint|fetch|decode|unknown",
+  "failure_stage": "dom_parse|css|cascade|layout|paint|null",
+  "timeout_stage": "dom_parse|css|cascade|layout|paint|null",
   "last_good_commit": "abcdef0",
   "last_regression_commit": "1234567"
 }
@@ -129,6 +131,10 @@ Rules:
 - **Don’t hand-author these files**. They are written by tooling. If the schema needs to change, change the code first.
 - If you must edit anything by hand, keep it to durable human fields like `notes` / `last_*` (the runner should preserve them).
 - Don’t commit machine-local paths, enormous traces, or blobs.
+
+`failure_stage` and `timeout_stage` expose the renderer’s structured diagnostics for triage
+without scraping notes. They remain `null` in placeholders or when the renderer doesn’t report a
+stage (e.g., hard-killed workers).
 
 ## How to spend time (priority order)
 
