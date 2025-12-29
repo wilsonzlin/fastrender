@@ -44,6 +44,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 #[cfg(unix)]
@@ -472,6 +473,31 @@ struct StageBuckets {
   paint: f64,
 }
 
+pub(crate) fn current_git_sha() -> Option<String> {
+  static GIT_SHA: OnceLock<Option<String>> = OnceLock::new();
+  GIT_SHA
+    .get_or_init(|| {
+      if let Ok(output) = Command::new("git").arg("rev-parse").arg("HEAD").output() {
+        if output.status.success() {
+          let sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
+          if !sha.is_empty() {
+            return Some(sha);
+          }
+        }
+      }
+      for key in ["GITHUB_SHA", "FASTR_GIT_SHA"] {
+        if let Ok(val) = std::env::var(key) {
+          let trimmed = val.trim();
+          if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+          }
+        }
+      }
+      None
+    })
+    .clone()
+}
+
 fn compute_soft_timeout_ms(hard_timeout: Duration, override_ms: Option<u64>) -> Option<u64> {
   if let Some(ms) = override_ms {
     return Some(ms);
@@ -515,7 +541,7 @@ fn normalize_hotspot_filter(h: &str) -> String {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct PageProgress {
+pub(crate) struct PageProgress {
   url: String,
   status: ProgressStatus,
   total_ms: Option<f64>,
@@ -527,7 +553,7 @@ struct PageProgress {
 }
 
 impl PageProgress {
-  fn new(url: String) -> Self {
+  pub(crate) fn new(url: String) -> Self {
     Self {
       url,
       status: ProgressStatus::Error,
@@ -540,7 +566,14 @@ impl PageProgress {
     }
   }
 
-  fn merge_preserving_manual(mut self, previous: Option<PageProgress>) -> Self {
+  pub(crate) fn merge_preserving_manual(
+    mut self,
+    previous: Option<PageProgress>,
+    current_sha: Option<&str>,
+  ) -> Self {
+    if let Some(sha) = current_sha {
+      self.update_commit_markers(previous.as_ref(), sha);
+    }
     let Some(prev) = previous else {
       return self;
     };
@@ -566,6 +599,36 @@ impl PageProgress {
       self.last_regression_commit = prev.last_regression_commit;
     }
     self
+  }
+
+  fn update_commit_markers(&mut self, previous: Option<&PageProgress>, current_sha: &str) {
+    if current_sha.trim().is_empty() {
+      return;
+    }
+    if let Some(prev) = previous {
+      match (prev.status, self.status) {
+        (ProgressStatus::Ok, new_status) if new_status != ProgressStatus::Ok => {
+          if is_manual_field_unset(&self.last_regression_commit)
+            && is_manual_field_unset(&prev.last_regression_commit)
+          {
+            self.last_regression_commit = current_sha.to_string();
+          }
+        }
+        (prev_status, ProgressStatus::Ok) if prev_status != ProgressStatus::Ok => {
+          self.last_good_commit = current_sha.to_string();
+        }
+        (ProgressStatus::Ok, ProgressStatus::Ok) => {
+          if is_manual_field_unset(&self.last_good_commit)
+            && is_manual_field_unset(&prev.last_good_commit)
+          {
+            self.last_good_commit = current_sha.to_string();
+          }
+        }
+        _ => {}
+      }
+    } else if self.status == ProgressStatus::Ok && is_manual_field_unset(&self.last_good_commit) {
+      self.last_good_commit = current_sha.to_string();
+    }
   }
 }
 
@@ -817,6 +880,7 @@ fn hotspot_from_timeout_stage(stage: RenderStage) -> &'static str {
 fn render_worker(args: WorkerArgs) -> io::Result<()> {
   let started = Instant::now();
   let mut log = String::new();
+  let current_sha = current_git_sha();
 
   let progress_before = read_progress(&args.progress_path);
 
@@ -829,7 +893,7 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
       progress.status = ProgressStatus::Error;
       progress.notes = format!("read: {msg}");
       progress.hotspot = "fetch".to_string();
-      let progress = progress.merge_preserving_manual(progress_before);
+      let progress = progress.merge_preserving_manual(progress_before, current_sha.as_deref());
       let _ = write_progress(&args.progress_path, &progress);
       if let Some(path) = &args.log_path {
         let _ = write_text_file(path, &log);
@@ -934,7 +998,7 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
         progress.status = ProgressStatus::Error;
         progress.notes = format!("renderer init: {msg}");
         progress.hotspot = "unknown".to_string();
-        let progress = progress.merge_preserving_manual(progress_before);
+        let progress = progress.merge_preserving_manual(progress_before, current_sha.as_deref());
         let _ = write_progress(&args.progress_path, &progress);
         if let Some(path) = &args.log_path {
           let _ = write_text_file(path, &log);
@@ -1018,7 +1082,7 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     progress.hotspot = guess_hotspot(&progress.stages_ms).to_string();
   }
 
-  let progress = progress.merge_preserving_manual(progress_before);
+  let progress = progress.merge_preserving_manual(progress_before, current_sha.as_deref());
   let _ = write_progress(&args.progress_path, &progress);
 
   if let Some(path) = &args.log_path {
@@ -2209,6 +2273,7 @@ fn run_queue(
   jobs: usize,
 ) -> io::Result<()> {
   let mut running: Vec<RunningChild> = Vec::new();
+  let current_sha = current_git_sha();
 
   while !queue.is_empty() || !running.is_empty() {
     while running.len() < jobs {
@@ -2240,7 +2305,7 @@ fn run_queue(
         progress.total_ms = Some(hard_timeout.as_secs_f64() * 1000.0);
         progress.notes = format!("hard timeout after {:.2}s", hard_timeout.as_secs_f64());
         progress.hotspot = "unknown".to_string();
-        let progress = progress.merge_preserving_manual(previous);
+        let progress = progress.merge_preserving_manual(previous, current_sha.as_deref());
         let _ = write_progress(&entry.item.progress_path, &progress);
 
         let _ = write_text_file(
@@ -2286,7 +2351,7 @@ fn run_queue(
             let note = synthesize_missing_progress_note(exit_summary);
             progress.notes = note.clone();
             progress.hotspot = "unknown".to_string();
-            let mut progress = progress.merge_preserving_manual(previous);
+            let mut progress = progress.merge_preserving_manual(previous, current_sha.as_deref());
             ensure_note_includes(&mut progress, &note);
             let _ = write_progress(&entry.item.progress_path, &progress);
             eprintln!(
@@ -2313,7 +2378,7 @@ fn run_queue(
           progress.total_ms = Some(entry.started.elapsed().as_secs_f64() * 1000.0);
           progress.notes = "worker try_wait failed".to_string();
           progress.hotspot = "unknown".to_string();
-          let progress = progress.merge_preserving_manual(previous);
+          let progress = progress.merge_preserving_manual(previous, current_sha.as_deref());
           let _ = write_progress(&entry.item.progress_path, &progress);
           eprintln!("PANIC {} (try_wait failed)", entry.item.stem);
           if let Some(trace_out) = &entry.item.trace_out {
@@ -2672,6 +2737,7 @@ fn worker(args: WorkerArgs) -> io::Result<()> {
   let cache_path = args.cache_path.clone();
   let verbose = args.verbose;
   let started = Instant::now();
+  let current_sha = current_git_sha();
 
   let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render_worker(args)));
   match result {
@@ -2684,7 +2750,7 @@ fn worker(args: WorkerArgs) -> io::Result<()> {
       progress.total_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
       progress.notes = panic_to_string(panic);
       progress.hotspot = "unknown".to_string();
-      let progress = progress.merge_preserving_manual(previous);
+      let progress = progress.merge_preserving_manual(previous, current_sha.as_deref());
       let _ = write_progress(&progress_path, &progress);
       if let Some(path) = &log_path {
         let _ = write_text_file(
@@ -2864,7 +2930,7 @@ mod tests {
       hotspot: "unknown".to_string(),
       ..PageProgress::default()
     };
-    let merged = new_progress.merge_preserving_manual(Some(previous));
+    let merged = new_progress.merge_preserving_manual(Some(previous), None);
     assert_eq!(merged.hotspot, "layout");
   }
 
@@ -2881,7 +2947,7 @@ mod tests {
       last_regression_commit: "def5678".to_string(),
       ..PageProgress::default()
     };
-    let merged = PageProgress::default().merge_preserving_manual(Some(previous));
+    let merged = PageProgress::default().merge_preserving_manual(Some(previous), None);
     assert_eq!(merged.last_good_commit, "abc1234");
     assert_eq!(merged.last_regression_commit, "def5678");
   }
