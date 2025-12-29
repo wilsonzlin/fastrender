@@ -29,6 +29,7 @@ use image::DynamicImage;
 use image::GenericImageView;
 use image::ImageDecoder;
 use image::ImageFormat;
+use image::ImageReader;
 use image::RgbaImage;
 use roxmltree::Document;
 use std::cell::RefCell;
@@ -37,7 +38,7 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::hash::Hash;
 use std::hash::Hasher;
-use std::io::Cursor;
+use std::io::{self, BufRead, Cursor, Read, Seek, SeekFrom};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::Condvar;
@@ -96,6 +97,54 @@ fn record_image_cache_miss() {
 }
 
 const IMAGE_DECODE_DEADLINE_STRIDE: usize = 8192;
+
+struct DeadlineCursor<'a> {
+  inner: Cursor<&'a [u8]>,
+  deadline_counter: usize,
+}
+
+impl<'a> DeadlineCursor<'a> {
+  fn new(bytes: &'a [u8]) -> Self {
+    Self {
+      inner: Cursor::new(bytes),
+      deadline_counter: 0,
+    }
+  }
+
+  fn check_deadline(&mut self) -> io::Result<()> {
+    check_active_periodic(
+      &mut self.deadline_counter,
+      IMAGE_DECODE_DEADLINE_STRIDE,
+      RenderStage::Paint,
+    )
+    .map_err(|err| io::Error::new(io::ErrorKind::Other, err))
+  }
+}
+
+impl<'a> Read for DeadlineCursor<'a> {
+  fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+    self.check_deadline()?;
+    self.inner.read(buf)
+  }
+}
+
+impl<'a> BufRead for DeadlineCursor<'a> {
+  fn fill_buf(&mut self) -> io::Result<&[u8]> {
+    self.check_deadline()?;
+    self.inner.fill_buf()
+  }
+
+  fn consume(&mut self, amt: usize) {
+    self.inner.consume(amt);
+  }
+}
+
+impl<'a> Seek for DeadlineCursor<'a> {
+  fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+    self.check_deadline()?;
+    self.inner.seek(pos)
+  }
+}
 
 enum AvifDecodeError {
   Timeout(RenderError),
@@ -159,7 +208,10 @@ fn multiply_alpha(mut color: Rgba, alpha: f32) -> Rgba {
   color
 }
 
-fn build_tiny_skia_path_from_svg_path_data(data: &str) -> Option<tiny_skia::Path> {
+fn build_tiny_skia_path_from_svg_path_data(
+  data: &str,
+  deadline_counter: &mut usize,
+) -> std::result::Result<Option<tiny_skia::Path>, RenderError> {
   use svgtypes::PathParser;
   use svgtypes::PathSegment;
   use tiny_skia::PathBuilder;
@@ -171,7 +223,15 @@ fn build_tiny_skia_path_from_svg_path_data(data: &str) -> Option<tiny_skia::Path
   let mut last_quad_ctrl: Option<(f32, f32)> = None;
 
   for segment in PathParser::from(data) {
-    let seg = segment.ok()?;
+    check_active_periodic(
+      deadline_counter,
+      IMAGE_DECODE_DEADLINE_STRIDE,
+      RenderStage::Paint,
+    )?;
+    let seg = match segment {
+      Ok(seg) => seg,
+      Err(_) => return Ok(None),
+    };
     match seg {
       PathSegment::MoveTo { abs, x, y } => {
         let (nx, ny) = if abs {
@@ -332,7 +392,7 @@ fn build_tiny_skia_path_from_svg_path_data(data: &str) -> Option<tiny_skia::Path
     }
   }
 
-  pb.finish()
+  Ok(pb.finish())
 }
 
 fn arc_to_cubic_beziers(
@@ -475,27 +535,42 @@ fn try_render_simple_svg_pixmap(
   svg_content: &str,
   render_width: u32,
   render_height: u32,
-) -> Option<tiny_skia::Pixmap> {
+) -> std::result::Result<Option<tiny_skia::Pixmap>, RenderError> {
   use tiny_skia::FillRule;
   use tiny_skia::Paint;
   use tiny_skia::Pixmap;
 
   if render_width == 0 || render_height == 0 {
-    return None;
+    return Ok(None);
   }
 
-  let doc = Document::parse(svg_content).ok()?;
+  let mut deadline_counter = 0usize;
+  check_active_periodic(
+    &mut deadline_counter,
+    IMAGE_DECODE_DEADLINE_STRIDE,
+    RenderStage::Paint,
+  )?;
+
+  let doc = match Document::parse(svg_content) {
+    Ok(doc) => doc,
+    Err(_) => return Ok(None),
+  };
   let root = doc.root_element();
   let has_view_box_attr = root.attribute("viewBox").is_some();
   if !root.tag_name().name().eq_ignore_ascii_case("svg") {
-    return None;
+    return Ok(None);
   }
 
   for node in root.descendants().filter(|n| n.is_element()) {
+    check_active_periodic(
+      &mut deadline_counter,
+      IMAGE_DECODE_DEADLINE_STRIDE,
+      RenderStage::Paint,
+    )?;
     let name = node.tag_name().name();
     let allowed = matches!(name, "svg" | "g" | "path" | "title" | "desc" | "metadata");
     if !allowed {
-      return None;
+      return Ok(None);
     }
     if node.attribute("transform").is_some()
       || node.attribute("filter").is_some()
@@ -503,17 +578,17 @@ fn try_render_simple_svg_pixmap(
       || node.attribute("clip-path").is_some()
       || node.attribute("style").is_some()
     {
-      return None;
+      return Ok(None);
     }
     if name.eq_ignore_ascii_case("path") {
       if node.attribute("d").is_none() {
-        return None;
+        return Ok(None);
       }
       if node
         .attribute("stroke")
         .is_some_and(|v| !v.trim().eq_ignore_ascii_case("none"))
       {
-        return None;
+        return Ok(None);
       }
       if node.attribute("stroke-width").is_some()
         || node.attribute("stroke-linecap").is_some()
@@ -522,7 +597,7 @@ fn try_render_simple_svg_pixmap(
         || node.attribute("stroke-dasharray").is_some()
         || node.attribute("stroke-dashoffset").is_some()
       {
-        return None;
+        return Ok(None);
       }
     }
   }
@@ -551,7 +626,7 @@ fn try_render_simple_svg_pixmap(
     && view_box.width > 0.0
     && view_box.height > 0.0)
   {
-    return None;
+    return Ok(None);
   }
 
   let mut preserve = SvgPreserveAspectRatio::parse(root.attribute("preserveAspectRatio"));
@@ -567,17 +642,33 @@ fn try_render_simple_svg_pixmap(
     render_height as f32,
   );
 
-  let mut pixmap = Pixmap::new(render_width, render_height)?;
+  let mut pixmap = match Pixmap::new(render_width, render_height) {
+    Some(pixmap) => pixmap,
+    None => return Ok(None),
+  };
   for node in root.descendants().filter(|n| n.is_element()) {
+    check_active_periodic(
+      &mut deadline_counter,
+      IMAGE_DECODE_DEADLINE_STRIDE,
+      RenderStage::Paint,
+    )?;
     if !node.tag_name().name().eq_ignore_ascii_case("path") {
       continue;
     }
-    let d = node.attribute("d")?;
-    let path = build_tiny_skia_path_from_svg_path_data(d)?;
+    let Some(d) = node.attribute("d") else {
+      return Ok(None);
+    };
+    let path = match build_tiny_skia_path_from_svg_path_data(d, &mut deadline_counter)? {
+      Some(path) => path,
+      None => return Ok(None),
+    };
 
     let fill = node.attribute("fill");
     let mut color = match fill {
-      Some(v) => svg_parse_fill_color(v)?,
+      Some(v) => match svg_parse_fill_color(v) {
+        Some(color) => color,
+        None => return Ok(None),
+      },
       None => Rgba::new(0, 0, 0, 1.0),
     };
     if color.a <= 0.0 {
@@ -599,7 +690,7 @@ fn try_render_simple_svg_pixmap(
       None => FillRule::Winding,
       Some(v) if v.eq_ignore_ascii_case("nonzero") => FillRule::Winding,
       Some(v) if v.eq_ignore_ascii_case("evenodd") => FillRule::EvenOdd,
-      Some(_) => return None,
+      Some(_) => return Ok(None),
     };
 
     let mut paint = Paint::default();
@@ -608,7 +699,7 @@ fn try_render_simple_svg_pixmap(
     pixmap.fill_path(&path, &paint, fill_rule, transform, None);
   }
 
-  Some(pixmap)
+  Ok(Some(pixmap))
 }
 
 // ============================================================================
@@ -1556,7 +1647,7 @@ impl ImageCache {
       }
     }
 
-    if let Some(pixmap) = try_render_simple_svg_pixmap(svg_content, render_width, render_height) {
+    if let Some(pixmap) = try_render_simple_svg_pixmap(svg_content, render_width, render_height)? {
       let pixmap = Arc::new(pixmap);
       if let Ok(mut cache) = self.svg_pixmap_cache.lock() {
         cache.insert(key, Arc::clone(&pixmap));
@@ -1848,9 +1939,15 @@ impl ImageCache {
     if let Some(format) = format_from_content_type {
       if format != ImageFormat::Avif {
         check_active(RenderStage::Paint).map_err(Error::Render)?;
-        match image::load_from_memory_with_format(bytes, format) {
+        match Self::decode_with_format(bytes, format) {
           Ok(img) => return self.finish_bitmap_decode(img, url),
-          Err(err) => last_error = Some(self.decode_error(url, err)),
+          Err(err) => {
+            let mapped = self.decode_error(url, err);
+            if let Error::Render(_) = mapped {
+              return Err(mapped);
+            }
+            last_error = Some(mapped);
+          }
         }
       }
     }
@@ -1858,17 +1955,30 @@ impl ImageCache {
     if let Some(format) = sniffed_format {
       if Some(format) != format_from_content_type && format != ImageFormat::Avif {
         check_active(RenderStage::Paint).map_err(Error::Render)?;
-        match image::load_from_memory_with_format(bytes, format) {
+        match Self::decode_with_format(bytes, format) {
           Ok(img) => return self.finish_bitmap_decode(img, url),
-          Err(err) => last_error = Some(self.decode_error(url, err)),
+          Err(err) => {
+            let mapped = self.decode_error(url, err);
+            if let Error::Render(_) = mapped {
+              return Err(mapped);
+            }
+            last_error = Some(mapped);
+          }
         }
       }
     }
 
     check_active(RenderStage::Paint).map_err(Error::Render)?;
-    match image::load_from_memory(bytes) {
+    match Self::decode_with_guess(bytes) {
       Ok(img) => self.finish_bitmap_decode(img, url),
-      Err(err) => Err(last_error.unwrap_or_else(|| self.decode_error(url, err))),
+      Err(err) => {
+        let mapped = self.decode_error(url, err);
+        if let Error::Render(_) = mapped {
+          Err(mapped)
+        } else {
+          Err(last_error.unwrap_or(mapped))
+        }
+      }
     }
   }
 
@@ -1889,7 +1999,25 @@ impl ImageCache {
     image::guess_format(bytes).ok()
   }
 
+  fn decode_with_format(bytes: &[u8], format: ImageFormat) -> image::ImageResult<DynamicImage> {
+    ImageReader::with_format(DeadlineCursor::new(bytes), format).decode()
+  }
+
+  fn decode_with_guess(bytes: &[u8]) -> image::ImageResult<DynamicImage> {
+    ImageReader::new(DeadlineCursor::new(bytes))
+      .with_guessed_format()?
+      .decode()
+  }
+
   fn decode_error(&self, url: &str, err: image::ImageError) -> Error {
+    if let image::ImageError::IoError(io_err) = &err {
+      if let Some(render_err) = io_err
+        .get_ref()
+        .and_then(|source| source.downcast_ref::<RenderError>())
+      {
+        return Error::Render(render_err.clone());
+      }
+    }
     Error::Image(ImageError::DecodeFailed {
       url: url.to_string(),
       reason: err.to_string(),
