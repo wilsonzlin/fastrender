@@ -6,7 +6,10 @@ use arbitrary::Unstructured;
 use fastrender::style::color::Rgba;
 use fastrender::text::color_fonts::ColorFontRenderer;
 use fastrender::text::font_db::{FontStretch, FontStyle, FontWeight, LoadedFont};
+use fastrender::text::font_instance::FontInstance;
 use libfuzzer_sys::fuzz_target;
+use rustybuzz::Variation;
+use ttf_parser::Tag;
 
 const MIN_FONT_SIZE: f32 = 1.0;
 const MAX_FONT_SIZE: f32 = 128.0;
@@ -40,6 +43,7 @@ fn make_font(data: &[u8]) -> LoadedFont {
   };
 
   LoadedFont {
+    id: None,
     data: Arc::new(clamped.to_vec()),
     index: 0,
     family: "fuzz-font".to_string(),
@@ -47,6 +51,83 @@ fn make_font(data: &[u8]) -> LoadedFont {
     style: FontStyle::Normal,
     stretch: FontStretch::Normal,
   }
+}
+
+#[derive(Clone, Copy)]
+struct AxisRange {
+  tag: Tag,
+  min: f32,
+  default: f32,
+  max: f32,
+}
+
+fn variation_axes(font: &LoadedFont) -> Vec<AxisRange> {
+  if let Ok(face) = ttf_parser::Face::parse(font.data.as_slice(), font.index) {
+    return face
+      .variation_axes()
+      .into_iter()
+      .map(|axis| AxisRange {
+        tag: axis.tag,
+        min: axis.min_value,
+        default: axis.def_value,
+        max: axis.max_value,
+      })
+      .collect();
+  }
+  Vec::new()
+}
+
+fn sanitize_variation_value(raw: f32) -> f32 {
+  if raw.is_finite() {
+    raw.clamp(-1000.0, 1000.0)
+  } else {
+    0.0
+  }
+}
+
+fn pick_axis_value(unstructured: &mut Unstructured, axis: AxisRange, raw: f32) -> f32 {
+  let clamped = sanitize_variation_value(raw).clamp(axis.min, axis.max);
+  let candidates = [axis.min, axis.max, axis.default, clamped];
+  *unstructured.choose(&candidates).unwrap_or(&clamped)
+}
+
+fn build_variation(
+  unstructured: &mut Unstructured,
+  axes: &[AxisRange],
+) -> Option<Variation> {
+  let mut axis = None;
+  let tag = if axes.is_empty() {
+    let bytes = unstructured.arbitrary::<[u8; 4]>().ok()?;
+    Tag::from_bytes(&bytes)
+  } else if let Ok(chosen) = unstructured.choose(axes) {
+    axis = Some(*chosen);
+    chosen.tag
+  } else {
+    let bytes = unstructured.arbitrary::<[u8; 4]>().ok()?;
+    let tag = Tag::from_bytes(&bytes);
+    axis = axes.iter().copied().find(|a| a.tag == tag);
+    tag
+  };
+
+  let raw_value = unstructured.arbitrary::<f32>().unwrap_or(0.0);
+  let value = axis
+    .map(|axis| pick_axis_value(unstructured, axis, raw_value))
+    .unwrap_or_else(|| sanitize_variation_value(raw_value));
+
+  Some(Variation { tag, value })
+}
+
+fn build_variations(font: &LoadedFont) -> Vec<Variation> {
+  let axes = variation_axes(font);
+  let mut unstructured = Unstructured::new(font.data.as_slice());
+  let count: u8 = unstructured.int_in_range(0..=4).unwrap_or(0);
+  let mut variations = Vec::with_capacity(count as usize);
+  for _ in 0..count {
+    if let Some(var) = build_variation(&mut unstructured, &axes) {
+      variations.push(var);
+    }
+  }
+  variations
 }
 
 fuzz_target!(|data: &[u8]| {
@@ -80,6 +161,11 @@ fuzz_target!(|data: &[u8]| {
   };
 
   let font = make_font(font_data);
+  let variations = build_variations(&font);
+  let instance = match FontInstance::new(&font, &variations) {
+    Some(instance) => instance,
+    None => return,
+  };
   let renderer = ColorFontRenderer::new();
   let text_color = Rgba::from_rgba8(
     color_bytes[0],
@@ -90,10 +176,14 @@ fuzz_target!(|data: &[u8]| {
 
   let _ = renderer.render(
     &font,
+    &instance,
     glyph_id,
     font_size,
     palette_index,
+    &[],
     text_color,
     synthetic_oblique,
+    &variations,
+    None,
   );
 });

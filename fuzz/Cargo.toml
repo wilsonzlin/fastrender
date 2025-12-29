@@ -11,6 +11,8 @@ cargo-fuzz = true
 arbitrary = { version = "1", features = ["derive"] }
 fastrender = { path = ".." }
 libfuzzer-sys = "0.4"
+rustybuzz = "0.20"
+ttf-parser = "0.25"
 
 [workspace]
 members = ["."]
