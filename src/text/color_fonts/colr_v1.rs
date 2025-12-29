@@ -1014,15 +1014,64 @@ fn render_sweep_gradient_command(
   }
 
   let mut gradient = Pixmap::new(crop_width, crop_height)?;
-  let pixels = gradient.pixels_mut();
   let mask_data = path_mask.data();
-  let transparent = PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap();
+  let mask_stride = path_mask.width() as usize;
   let inv = *inv_transform;
 
+  if command.blend_mode == BlendMode::SourceOver {
+    let dest_stride = dest.width() as usize;
+    let dest_start_x = (crop_left - glyph_left) as usize;
+    let dest_start_y = (crop_top - glyph_top) as usize;
+    let dest_pixels = dest.pixels_mut();
+    for y in 0..crop_height as usize {
+      let row_offset = y * mask_stride;
+      let dest_row = (dest_start_y + y) * dest_stride + dest_start_x;
+      for x in 0..mask_stride {
+        let coverage = mask_data[row_offset + x];
+        if coverage == 0 {
+          continue;
+        }
+        let mut point = Point::from_xy(crop_left + x as f32 + 0.5, crop_top + y as f32 + 0.5);
+        if let Some(transform) = inv {
+          transform.map_point(&mut point);
+        }
+        let mut angle = (point.y - center.y).atan2(point.x - center.x).to_degrees();
+        angle = if sweep >= 0.0 {
+          (angle - start_angle).rem_euclid(360.0)
+        } else {
+          -((start_angle - angle).rem_euclid(360.0))
+        };
+        let pos = apply_spread(angle / sweep, *spread);
+        let color = sample_sweep_color(stops, pos);
+        let alpha = (color.a * (coverage as f32 / 255.0)).clamp(0.0, 1.0);
+        let src_a = (alpha * 255.0).round().clamp(0.0, 255.0) as u8;
+        if src_a == 0 {
+          continue;
+        }
+        let inv_a = 255 - src_a as u32;
+        let src_r = ((color.r as u32 * src_a as u32) + 127) / 255;
+        let src_g = ((color.g as u32 * src_a as u32) + 127) / 255;
+        let src_b = ((color.b as u32 * src_a as u32) + 127) / 255;
+        let dst_idx = dest_row + x;
+        let dst_px = dest_pixels[dst_idx];
+        let out_a = (src_a as u32 + ((dst_px.alpha() as u32 * inv_a + 127) / 255)).min(255) as u8;
+        let out_r = (src_r + ((dst_px.red() as u32 * inv_a + 127) / 255)).min(255) as u8;
+        let out_g = (src_g + ((dst_px.green() as u32 * inv_a + 127) / 255)).min(255) as u8;
+        let out_b = (src_b + ((dst_px.blue() as u32 * inv_a + 127) / 255)).min(255) as u8;
+        dest_pixels[dst_idx] = PremultipliedColorU8::from_rgba(out_r, out_g, out_b, out_a)
+          .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+      }
+    }
+    return Some(());
+  }
+
+  let mut pixels = gradient.pixels_mut();
+  let transparent = PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap();
+
   for y in 0..crop_height as usize {
-    for x in 0..crop_width as usize {
-      let idx = y * crop_width as usize + x;
-      let coverage = mask_data[idx];
+    let row_offset = y * mask_stride;
+    for x in 0..mask_stride {
+      let coverage = mask_data[row_offset + x];
       if coverage == 0 {
         continue;
       }
@@ -1039,7 +1088,7 @@ fn render_sweep_gradient_command(
       let pos = apply_spread(angle / sweep, *spread);
       let color = sample_sweep_color(stops, pos);
       let alpha = (color.a * (coverage as f32 / 255.0)).clamp(0.0, 1.0);
-      pixels[idx] = PremultipliedColorU8::from_rgba(
+      pixels[row_offset + x] = PremultipliedColorU8::from_rgba(
         color.r,
         color.g,
         color.b,
