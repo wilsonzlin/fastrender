@@ -65,6 +65,36 @@ enum Commands {
   PerfSmoke(PerfSmokeArgs),
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+enum CompatProfileFlag {
+  Standards,
+  Site,
+}
+
+impl CompatProfileFlag {
+  fn as_str(self) -> &'static str {
+    match self {
+      CompatProfileFlag::Standards => "standards",
+      CompatProfileFlag::Site => "site",
+    }
+  }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+enum DomCompatFlag {
+  Standard,
+  Compat,
+}
+
+impl DomCompatFlag {
+  fn as_str(self) -> &'static str {
+    match self {
+      DomCompatFlag::Standard => "standard",
+      DomCompatFlag::Compat => "compat",
+    }
+  }
+}
+
 #[derive(Args)]
 struct PagesetArgs {
   /// Number of parallel fetch/render jobs
@@ -94,6 +124,14 @@ struct PagesetArgs {
   /// Disable the disk-backed cache (defaults on; see NO_DISK_CACHE/DISK_CACHE)
   #[arg(long = "no-disk-cache", default_value_t = true, action = ArgAction::SetFalse)]
   disk_cache: bool,
+
+  /// Opt into site-specific compatibility behaviors (defaults to spec-only)
+  #[arg(long, value_enum)]
+  compat_profile: Option<CompatProfileFlag>,
+
+  /// Apply DOM compatibility mutations (defaults to standard/spec)
+  #[arg(long, value_enum)]
+  dom_compat: Option<DomCompatFlag>,
 
   /// Extra arguments forwarded to `pageset_progress run` (use `--` before these)
   #[arg(last = true)]
@@ -438,6 +476,12 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
   }
   if let Some(shard) = &shard_arg {
     cmd.arg("--shard").arg(shard);
+  }
+  if let Some(profile) = args.compat_profile {
+    cmd.arg("--compat-profile").arg(profile.as_str());
+  }
+  if let Some(mode) = args.dom_compat {
+    cmd.arg("--dom-compat").arg(mode.as_str());
   }
   cmd.args(&args.extra);
   println!(

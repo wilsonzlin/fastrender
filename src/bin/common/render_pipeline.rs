@@ -4,12 +4,12 @@ use fastrender::api::{
   FastRender, FastRenderConfig, RenderArtifactRequest, RenderDiagnostics, RenderOptions,
   RenderReport, RenderResult, ResourceKind,
 };
+use fastrender::compat::CompatProfile;
 use fastrender::css::loader::{infer_base_url, resolve_href};
+use fastrender::dom::DomCompatibilityMode;
 use fastrender::html::encoding::decode_html_bytes;
 use fastrender::html::meta_refresh::{extract_js_location_redirect, extract_meta_refresh_url};
-use fastrender::resource::{
-  origin_from_url, parse_cached_html_meta, FetchedResource, HttpFetcher, ResourceFetcher,
-};
+use fastrender::resource::{parse_cached_html_meta, FetchedResource, HttpFetcher, ResourceFetcher};
 use fastrender::style::media::MediaType;
 use fastrender::text::font_db::FontConfig;
 use fastrender::{Error, LayoutParallelism, Result};
@@ -43,6 +43,8 @@ pub struct RenderSurface {
   pub trace_output: Option<PathBuf>,
   pub layout_parallelism: Option<LayoutParallelism>,
   pub font_config: Option<FontConfig>,
+  pub compat_profile: CompatProfile,
+  pub dom_compat_mode: DomCompatibilityMode,
 }
 
 /// Construct render configuration objects from CLI settings.
@@ -52,7 +54,9 @@ pub fn build_render_configs(surface: &RenderSurface) -> RenderConfigBundle {
     .with_device_pixel_ratio(surface.dpr)
     .with_meta_viewport(surface.apply_meta_viewport)
     .with_allow_file_from_http(surface.allow_file_from_http)
-    .with_block_mixed_content(surface.block_mixed_content);
+    .with_block_mixed_content(surface.block_mixed_content)
+    .compat_profile(surface.compat_profile)
+    .with_dom_compat_mode(surface.dom_compat_mode);
   if let Some(base_url) = &surface.base_url {
     config = config.with_base_url(base_url.clone());
   }

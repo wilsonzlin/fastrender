@@ -5,8 +5,10 @@
 //! needed for internal captures, it should be isolated behind a
 //! `CompatProfile` so the default pipeline remains clean.
 
+use serde::{Deserialize, Serialize};
+
 /// Rendering compatibility profile.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CompatProfile {
   /// Spec-only behavior; no site-specific heuristics are applied.
   Standards,

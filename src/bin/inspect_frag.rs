@@ -1,7 +1,7 @@
 mod common;
 
 use clap::Parser;
-use common::args::{parse_viewport, MediaPreferenceArgs};
+use common::args::{parse_viewport, CompatArgs, MediaPreferenceArgs};
 use common::media_prefs::MediaPreferences;
 use fastrender::api::FastRender;
 use fastrender::css::encoding::decode_css_bytes;
@@ -71,6 +71,9 @@ struct Args {
 
   #[command(flatten)]
   media_prefs: MediaPreferenceArgs,
+
+  #[command(flatten)]
+  compat: CompatArgs,
 
   /// Override the User-Agent header
   #[arg(long, default_value = DEFAULT_USER_AGENT)]
@@ -149,7 +152,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
   }
 
-  let mut renderer = FastRender::builder().device_pixel_ratio(args.dpr).build()?;
+  let mut renderer = FastRender::builder()
+    .device_pixel_ratio(args.dpr)
+    .compat_mode(args.compat.compat_profile())
+    .dom_compatibility_mode(args.compat.dom_compat_mode())
+    .build()?;
   renderer.set_base_url(resource_base.clone());
 
   if let Ok(val) = env::var("FASTR_TRACE_BOXES") {

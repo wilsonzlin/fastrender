@@ -10,6 +10,9 @@ When a static render needs to mirror those initializations, enable compatibility
 - `FastRenderConfig::with_dom_compat_mode(DomCompatibilityMode::Compatibility)` for the
   high-level API
 - `DomParseOptions::compatibility()` when calling `dom::parse_html_with_options`
+- CLIs: pass `--dom-compat compat` (and optionally `--compat-profile site`) to
+  `fetch_and_render`, `render_pages`, `pageset_progress` (run/worker),
+  `bundle_page` (fetch/render), or `inspect_frag`.
 
 Compatibility mode applies a small, generic set of mutations:
 

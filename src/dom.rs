@@ -27,6 +27,7 @@ use selectors::parser::RelativeSelector;
 use selectors::relative_selector::cache::RelativeSelectorCachedMatch;
 use selectors::Element;
 use selectors::OpaqueElement;
+use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -48,7 +49,7 @@ const RELATIVE_SELECTOR_DEADLINE_STRIDE: usize = 64;
 const NTH_DEADLINE_STRIDE: usize = 64;
 
 /// Controls whether non-standard DOM compatibility mutations are applied while parsing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DomCompatibilityMode {
   /// Parse the DOM without any FastRender-specific mutations.
   Standard,

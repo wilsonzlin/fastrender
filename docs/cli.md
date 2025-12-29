@@ -2,6 +2,8 @@
 
 FastRender ships a few small binaries/examples intended for internal debugging and regression work. Prefer `--help` output for the source of truth. Shared flag schemas for viewport/DPR, media type and preferences, output formats, timeouts, and base URL overrides live in [`src/bin/common/args.rs`](../src/bin/common/args.rs).
 
+Compatibility toggles are **opt-in** across the render CLIs. Pass `--compat-profile site` to enable site-specific hacks and `--dom-compat compat` to apply DOM class flips; both default to spec-only behavior. `cargo xtask pageset` and the shell wrappers leave these off unless you explicitly provide the flags so pageset triage can choose when to enable them.
+
 ## Convenience scripts (terminal-friendly)
 
 These are optional wrappers for the most common loops:
@@ -24,6 +26,7 @@ Pageset wrappers enable the disk-backed subresource cache by default, persisting
 - Refresh goldens: `cargo xtask update-goldens [all|fixtures|reference|wpt]` (sets the appropriate `UPDATE_*` env vars)
 - Pageset scoreboard (disk-backed cache on by default for reproducible runs; bundled fonts by default): `cargo xtask pageset [--pages example.com,news.ycombinator.com] [--shard 0/4] [--no-fetch] [--no-disk-cache] [-- <pageset_progress args...>]`
   - Sharded example: `cargo xtask pageset --shard 0/4` (applies to both fetch + render; add `--no-fetch` to reuse cached pages)
+  - Forward compatibility gates when needed: `--compat-profile site` and/or `--dom-compat compat` are passed through to `pageset_progress run` but remain off by default.
 - Pageset diff: `cargo xtask pageset-diff [--baseline <dir>|--baseline-ref <git-ref>] [--no-run] [--fail-on-regression]` (extracts `progress/pages` from the chosen git ref by default and compares it to the freshly updated scoreboard)
 - Render one page: `cargo xtask render-page --url https://example.com --output out.png [--viewport 1200x800 --dpr 1.0 --full-page]`
 - Diff renders: `cargo xtask diff-renders --before fetches/renders/baseline --after fetches/renders/new [--output target/render-diffs]`
@@ -134,6 +137,9 @@ Pageset wrappers enable the disk-backed subresource cache by default, persisting
 - Run:
   - Help: `cargo run --release --bin pageset_progress -- run --help`
   - Typical: `cargo run --release --bin pageset_progress -- run --timeout 5`
+  - Compatibility (opt-in only): `--compat-profile site` enables site-specific hacks and
+    `--dom-compat compat` applies DOM class flips. Defaults stay spec-only; `cargo xtask
+    pageset` forwards the flags only when you provide them.
 - Fonts: pass `--bundled-fonts` to skip system font discovery (default in the pageset wrappers) or
   `--font-dir <path>` to load fonts from a specific directory without hitting host fonts.
 - Sync: `cargo run --release --bin pageset_progress -- sync [--prune] [--html-dir fetches/html --progress-dir progress/pages]` bootstraps one JSON per pageset URL without needing any caches. `--prune` removes stale progress files for URLs no longer in the list. Stems are collision-aware (`example.com--deadbeef` when needed) to keep cache and progress filenames unique.

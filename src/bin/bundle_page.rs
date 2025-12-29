@@ -4,6 +4,7 @@
 mod common;
 
 use clap::{ArgAction, Args, Parser, Subcommand};
+use common::args::CompatArgs;
 use common::render_pipeline::{
   build_http_fetcher, build_render_configs, build_renderer_with_fetcher, decode_html_resource,
   render_document, RenderConfigBundle, RenderSurface,
@@ -81,6 +82,9 @@ struct FetchArgs {
   /// Allow additional origins when blocking cross-origin subresources (repeatable).
   #[arg(long, value_name = "ORIGIN")]
   allow_subresource_origin: Vec<String>,
+
+  #[command(flatten)]
+  compat: CompatArgs,
 }
 
 #[derive(Args, Debug)]
@@ -123,6 +127,9 @@ struct RenderArgs {
   /// Allow additional origins when blocking cross-origin subresources (repeatable).
   #[arg(long, value_name = "ORIGIN")]
   allow_subresource_origin: Vec<String>,
+
+  #[command(flatten)]
+  compat: CompatArgs,
 }
 
 #[derive(Clone)]
@@ -226,6 +233,8 @@ fn fetch_bundle(args: FetchArgs) -> Result<()> {
     full_page: args.full_page,
     same_origin_subresources: args.same_origin_subresources,
     allowed_subresource_origins: args.allow_subresource_origin.clone(),
+    compat_profile: args.compat.compat_profile(),
+    dom_compat_mode: args.compat.dom_compat_mode(),
   };
   apply_full_page_env(render.full_page);
 
@@ -254,6 +263,8 @@ fn fetch_bundle(args: FetchArgs) -> Result<()> {
     trace_output: None,
     layout_parallelism: None,
     font_config: None,
+    compat_profile: render.compat_profile,
+    dom_compat_mode: render.dom_compat_mode,
   });
   let fetcher: Arc<dyn ResourceFetcher> = Arc::new(recording.clone());
   let mut renderer = build_renderer_with_fetcher(config, fetcher)?;
@@ -309,6 +320,12 @@ fn render_bundle(args: RenderArgs) -> Result<()> {
   if !args.allow_subresource_origin.is_empty() {
     render.allowed_subresource_origins = args.allow_subresource_origin.clone();
   }
+  if let Some(profile) = args.compat.compat_profile_arg() {
+    render.compat_profile = profile.as_profile();
+  }
+  if let Some(mode) = args.compat.dom_compat_arg() {
+    render.dom_compat_mode = mode.as_mode();
+  }
   apply_full_page_env(render.full_page);
 
   let RenderConfigBundle { config, options } = build_render_configs(&RenderSurface {
@@ -328,6 +345,8 @@ fn render_bundle(args: RenderArgs) -> Result<()> {
     trace_output: None,
     layout_parallelism: None,
     font_config: None,
+    compat_profile: render.compat_profile,
+    dom_compat_mode: render.dom_compat_mode,
   });
 
   let fetcher: Arc<dyn ResourceFetcher> = Arc::new(BundledFetcher::new(bundle));

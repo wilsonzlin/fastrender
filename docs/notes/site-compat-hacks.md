@@ -10,6 +10,10 @@ Enable the hacks with either of the following:
 - `FastRender::builder().with_site_compat_hacks()`
 - `BoxGenerationOptions::with_compat_profile(CompatProfile::SiteCompatibility)` (for
   direct box-generation tests)
+- Render-focused CLIs expose the same gate via `--compat-profile site` (with optional
+  `--dom-compat compat` for DOM mutations) on `fetch_and_render`, `render_pages`,
+  `pageset_progress` (run/worker), `bundle_page` (fetch/render), and `inspect_frag`.
+  Defaults remain spec-only until explicitly set.
 
 When enabled, the box-generation stage applies two targeted behaviors used by
 internal page captures:

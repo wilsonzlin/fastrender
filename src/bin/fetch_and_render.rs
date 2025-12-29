@@ -12,7 +12,7 @@ mod common;
 
 use clap::{ArgAction, Parser};
 use common::args::{
-  AllowPartialArgs, BaseUrlArgs, LayoutParallelArgs, MediaArgs, OutputFormatArgs,
+  AllowPartialArgs, BaseUrlArgs, CompatArgs, LayoutParallelArgs, MediaArgs, OutputFormatArgs,
   ResourceAccessArgs, TimeoutArgs, ViewportArgs,
 };
 use common::media_prefs::MediaPreferences;
@@ -103,6 +103,9 @@ struct Args {
 
   #[command(flatten)]
   resource_access: ResourceAccessArgs,
+
+  #[command(flatten)]
+  compat: CompatArgs,
 
   /// Disable serving fresh cached HTTP responses without revalidation
   #[arg(long, action = ArgAction::SetTrue)]
@@ -244,6 +247,8 @@ fn try_main(args: Args) -> Result<()> {
     trace_output: args.trace_out.clone(),
     layout_parallelism: args.layout_parallel.parallelism(),
     font_config: None,
+    compat_profile: args.compat.compat_profile(),
+    dom_compat_mode: args.compat.dom_compat_mode(),
   });
 
   let http = build_http_fetcher(&args.user_agent, &args.accept_language, timeout_secs);

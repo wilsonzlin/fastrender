@@ -1,4 +1,6 @@
 use clap::{Args, ValueEnum};
+use fastrender::compat::CompatProfile;
+use fastrender::dom::DomCompatibilityMode;
 use fastrender::image_output::OutputFormat;
 use fastrender::layout::engine::LayoutParallelism;
 use fastrender::style::media::MediaType;
@@ -42,6 +44,82 @@ pub struct MediaArgs {
 impl MediaArgs {
   pub fn media_type(&self) -> MediaType {
     self.media.as_media_type()
+  }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
+pub enum CompatProfileArg {
+  Standards,
+  Site,
+}
+
+impl CompatProfileArg {
+  pub fn as_profile(self) -> CompatProfile {
+    match self {
+      CompatProfileArg::Standards => CompatProfile::Standards,
+      CompatProfileArg::Site => CompatProfile::SiteCompatibility,
+    }
+  }
+
+  pub fn as_str(self) -> &'static str {
+    match self {
+      CompatProfileArg::Standards => "standards",
+      CompatProfileArg::Site => "site",
+    }
+  }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
+pub enum DomCompatArg {
+  Standard,
+  Compat,
+}
+
+impl DomCompatArg {
+  pub fn as_mode(self) -> DomCompatibilityMode {
+    match self {
+      DomCompatArg::Standard => DomCompatibilityMode::Standard,
+      DomCompatArg::Compat => DomCompatibilityMode::Compatibility,
+    }
+  }
+
+  pub fn as_str(self) -> &'static str {
+    match self {
+      DomCompatArg::Standard => "standard",
+      DomCompatArg::Compat => "compat",
+    }
+  }
+}
+
+#[derive(Debug, Clone, Args, Default)]
+pub struct CompatArgs {
+  /// Compatibility profile (defaults to spec-only standards mode)
+  #[arg(long = "compat-profile", value_enum)]
+  pub compat_profile: Option<CompatProfileArg>,
+
+  /// Apply DOM compatibility mutations after parsing (default: standard/spec)
+  #[arg(long = "dom-compat", value_enum)]
+  pub dom_compat: Option<DomCompatArg>,
+}
+
+impl CompatArgs {
+  pub fn compat_profile(&self) -> CompatProfile {
+    self
+      .compat_profile
+      .unwrap_or(CompatProfileArg::Standards)
+      .as_profile()
+  }
+
+  pub fn dom_compat_mode(&self) -> DomCompatibilityMode {
+    self.dom_compat.unwrap_or(DomCompatArg::Standard).as_mode()
+  }
+
+  pub fn compat_profile_arg(&self) -> Option<CompatProfileArg> {
+    self.compat_profile
+  }
+
+  pub fn dom_compat_arg(&self) -> Option<DomCompatArg> {
+    self.dom_compat
   }
 }
 

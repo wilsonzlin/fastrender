@@ -13,7 +13,9 @@
 mod common;
 
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
-use common::args::{parse_shard, LayoutParallelArgs, ResourceAccessArgs};
+use common::args::{
+  parse_shard, CompatArgs, CompatProfileArg, DomCompatArg, LayoutParallelArgs, ResourceAccessArgs,
+};
 use common::render_pipeline::{
   build_render_configs, follow_client_redirects, format_error_with_chain, read_cached_document,
   render_document, RenderConfigBundle, RenderSurface,
@@ -252,6 +254,9 @@ struct RunArgs {
   #[command(flatten)]
   layout_parallel: LayoutParallelArgs,
 
+  #[command(flatten)]
+  compat: CompatArgs,
+
   /// Render only listed pages (comma-separated cache stems)
   #[arg(long, value_delimiter = ',')]
   pages: Option<Vec<String>>,
@@ -407,6 +412,9 @@ struct WorkerArgs {
 
   #[command(flatten)]
   layout_parallel: LayoutParallelArgs,
+
+  #[command(flatten)]
+  compat: CompatArgs,
 
   /// Hard per-page timeout in seconds (used for fetch budgeting)
   #[arg(long, default_value_t = 5)]
@@ -1090,6 +1098,18 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     args.viewport.0, args.viewport.1
   ));
   log.push_str(&format!("DPR: {}\n", args.dpr));
+  let compat_profile = args
+    .compat
+    .compat_profile_arg()
+    .unwrap_or(CompatProfileArg::Standards)
+    .as_str();
+  let dom_compat = args
+    .compat
+    .dom_compat_arg()
+    .unwrap_or(DomCompatArg::Standard)
+    .as_str();
+  log.push_str(&format!("Compat profile: {compat_profile}\n"));
+  log.push_str(&format!("DOM compat: {dom_compat}\n"));
   if args.fonts.bundled_fonts {
     log.push_str("Fonts: bundled fixtures\n");
   }
@@ -1157,6 +1177,8 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     trace_output: None,
     layout_parallelism: args.layout_parallel.parallelism(),
     font_config: args.fonts.to_font_config(),
+    compat_profile: args.compat.compat_profile(),
+    dom_compat_mode: args.compat.dom_compat_mode(),
   });
 
   options.diagnostics_level = args.diagnostics.to_level();
@@ -2473,6 +2495,12 @@ fn spawn_worker(
         .arg("--layout-parallel-max-threads")
         .arg(max_threads.to_string());
     }
+  }
+  if let Some(profile) = args.compat.compat_profile_arg() {
+    cmd.arg("--compat-profile").arg(profile.as_str());
+  }
+  if let Some(mode) = args.compat.dom_compat_arg() {
+    cmd.arg("--dom-compat").arg(mode.as_str());
   }
   if let Some(ms) = soft_timeout_ms {
     cmd.arg("--soft-timeout-ms").arg(ms.to_string());

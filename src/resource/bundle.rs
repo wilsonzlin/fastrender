@@ -1,3 +1,5 @@
+use crate::compat::CompatProfile;
+use crate::dom::DomCompatibilityMode;
 use crate::error::{Error, Result};
 use crate::resource::{FetchedResource, ResourceFetcher};
 use serde::{Deserialize, Serialize};
@@ -25,6 +27,10 @@ pub struct BundleRenderConfig {
   pub same_origin_subresources: bool,
   #[serde(default)]
   pub allowed_subresource_origins: Vec<String>,
+  #[serde(default)]
+  pub compat_profile: CompatProfile,
+  #[serde(default)]
+  pub dom_compat_mode: DomCompatibilityMode,
 }
 
 /// Metadata describing the bundled document.
