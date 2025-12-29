@@ -1350,6 +1350,19 @@ mod tests {
   fn timeout_cascade_maps_to_cascade_hotspot() {
     assert_eq!(hotspot_from_timeout_stage(RenderStage::Cascade), "cascade");
   }
+
+  #[test]
+  fn merge_preserves_manual_commits_when_new_is_empty() {
+    let previous = PageProgress {
+      url: "https://example.com".to_string(),
+      last_good_commit: "abc1234".to_string(),
+      last_regression_commit: "def5678".to_string(),
+      ..PageProgress::default()
+    };
+    let merged = PageProgress::default().merge_preserving_manual(Some(previous));
+    assert_eq!(merged.last_good_commit, "abc1234");
+    assert_eq!(merged.last_regression_commit, "def5678");
+  }
 }
 
 fn main() -> io::Result<()> {
