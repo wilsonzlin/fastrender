@@ -2,6 +2,15 @@
 
 FastRender ships a few small binaries/examples intended for internal debugging and regression work. Prefer `--help` output for the source of truth. Shared flag schemas for viewport/DPR, media type and preferences, output formats, timeouts, and base URL overrides live in [`src/bin/common/args.rs`](../src/bin/common/args.rs).
 
+## Convenience scripts (terminal-friendly)
+
+These are optional wrappers for the most common loops:
+
+- Pageset loop (fetch → progress JSON): `scripts/pageset.sh`
+- Profile one page with samply (saves profile + prints summary): `scripts/profile_samply.sh <stem>`
+- Profile one page with perf: `scripts/profile_perf.sh <stem>`
+- Summarize a saved samply profile: `scripts/samply_summary.py <profile.json.gz>`
+
 ## `cargo xtask`
 
 `cargo xtask` is the preferred entry point for common workflows; it wraps the binaries below but keeps them usable directly.
@@ -9,6 +18,7 @@ FastRender ships a few small binaries/examples intended for internal debugging a
 - Help: `cargo xtask --help`
 - Tests: `cargo xtask test [core|style|fixtures|wpt|all]`
 - Refresh goldens: `cargo xtask update-goldens [all|fixtures|reference|wpt]` (sets the appropriate `UPDATE_*` env vars)
+- Pageset scoreboard: `cargo xtask pageset [--no-fetch] [-- <pageset_progress args...>]`
 - Render one page: `cargo xtask render-page --url https://example.com --output out.png [--viewport 1200x800 --dpr 1.0 --full-page]`
 - Diff renders: `cargo xtask diff-renders --before fetches/renders/baseline --after fetches/renders/new [--output target/render-diffs]`
 
@@ -93,3 +103,16 @@ FastRender ships a few small binaries/examples intended for internal debugging a
 - The library API exposes structured diagnostics via `render_url_with_options` returning `RenderResult { pixmap, accessibility, diagnostics }`. Set `RenderOptions::allow_partial(true)` to receive a placeholder image and a `document_error` string when the root fetch fails; subresource fetch errors are collected in `diagnostics.fetch_errors` with status codes, final URLs, and any cache validators observed.
 - `render_pages` can emit structured reports via `--diagnostics-json` (per-page) plus `--dump-intermediate` for summaries or full intermediate dumps.
 - The shipped binaries print a concise diagnostics summary (including status/final URL). Pass `--verbose` to `fetch_and_render` or `render_pages` to include full error chains when something fails.
+
+## `pageset_progress`
+
+- Purpose: **update the committed pageset scoreboard** under `progress/pages/*.json`.
+- Entry: `src/bin/pageset_progress.rs`
+- Run:
+  - Help: `cargo run --release --bin pageset_progress -- run --help`
+  - Typical: `cargo run --release --bin pageset_progress -- run --timeout 5`
+- Safety: uses **panic containment** (per-page worker process) and a **hard timeout** (kills runaway workers) so one broken page cannot stall the whole run.
+- Outputs:
+  - `progress/pages/<stem>.json` — small, committed per-page progress artifact
+  - `target/pageset/logs/<stem>.log` — per-page log (not committed)
+  - Optional traces: `--trace-failures` / `--trace-slow-ms <ms>` → `target/pageset/traces/<stem>.json` (not committed)

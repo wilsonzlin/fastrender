@@ -1,7 +1,7 @@
 //! Meta refresh parsing utilities.
 //!
 //! Provides a lightweight extractor for `<meta http-equiv="refresh">` URLs so
-//! callers can follow non-JS redirects commonly used as `<noscript>` fallbacks.
+//! callers can follow scriptless redirects commonly used as `<noscript>` fallbacks.
 
 /// Parses the first `<meta http-equiv="refresh">` URL in the provided HTML.
 ///

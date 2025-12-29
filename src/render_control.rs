@@ -120,3 +120,30 @@ pub fn check_active(stage: RenderStage) -> Result<(), RenderError> {
     }
   })
 }
+
+/// Periodically check against any active deadline stored for the current thread.
+///
+/// This is a low-friction helper for hot loops: call it with a local counter and a stride
+/// to amortize deadline checks while still making `RenderOptions::timeout` effective.
+///
+/// Example:
+/// ```rust,no_run
+/// # use fastrender::error::RenderStage;
+/// # let mut counter = 0usize;
+/// fastrender::render_control::check_active_periodic(&mut counter, 1024, RenderStage::Layout)?;
+/// # Ok::<(), fastrender::error::RenderError>(())
+/// ```
+pub fn check_active_periodic(
+  counter: &mut usize,
+  stride: usize,
+  stage: RenderStage,
+) -> Result<(), RenderError> {
+  if stride == 0 {
+    return Ok(());
+  }
+  *counter = counter.wrapping_add(1);
+  if *counter % stride == 0 {
+    check_active(stage)?;
+  }
+  Ok(())
+}

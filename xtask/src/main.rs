@@ -14,6 +14,7 @@ fn main() -> Result<()> {
     Commands::Test(args) => run_tests(args),
     Commands::UpdateGoldens(args) => run_update_goldens(args),
     Commands::RenderPage(args) => run_render_page(args),
+    Commands::Pageset(args) => run_pageset(args),
     Commands::DiffRenders(args) => run_diff_renders(args),
   }
 }
@@ -38,8 +39,39 @@ enum Commands {
   UpdateGoldens(UpdateGoldensArgs),
   /// Render a single page via the fetch_and_render binary
   RenderPage(RenderPageArgs),
+  /// Fetch pages and update the committed pageset scoreboard (`progress/pages/*.json`)
+  Pageset(PagesetArgs),
   /// Compare two render outputs and write visual diffs
   DiffRenders(DiffRendersArgs),
+}
+
+#[derive(Args)]
+struct PagesetArgs {
+  /// Number of parallel fetch/render jobs
+  #[arg(long, short, default_value_t = default_jobs())]
+  jobs: usize,
+
+  /// Timeout for network fetches (seconds)
+  #[arg(long, default_value_t = 30)]
+  fetch_timeout: u64,
+
+  /// Hard per-page render timeout (seconds)
+  #[arg(long, default_value_t = 5)]
+  render_timeout: u64,
+
+  /// Skip fetching and only update progress from the existing cache
+  #[arg(long)]
+  no_fetch: bool,
+
+  /// Extra arguments forwarded to `pageset_progress run` (use `--` before these)
+  #[arg(last = true)]
+  extra: Vec<String>,
+}
+
+fn default_jobs() -> usize {
+  std::thread::available_parallelism()
+    .map(|n| n.get())
+    .unwrap_or(1)
 }
 
 #[derive(Args)]
@@ -253,6 +285,42 @@ fn run_update_goldens(args: UpdateGoldensArgs) -> Result<()> {
     println!("Updating {suite:?} goldens...");
     run_command(cmd)?;
   }
+
+  Ok(())
+}
+
+fn run_pageset(args: PagesetArgs) -> Result<()> {
+  if args.jobs == 0 {
+    bail!("jobs must be > 0");
+  }
+
+  if !args.no_fetch {
+    let mut cmd = Command::new("cargo");
+    cmd.arg("run")
+      .arg("--release")
+      .args(["--bin", "fetch_pages"])
+      .arg("--")
+      .arg("--jobs")
+      .arg(args.jobs.to_string())
+      .arg("--timeout")
+      .arg(args.fetch_timeout.to_string());
+    println!("Updating cached pages...");
+    run_command(cmd)?;
+  }
+
+  let mut cmd = Command::new("cargo");
+  cmd.arg("run")
+    .arg("--release")
+    .args(["--bin", "pageset_progress"])
+    .arg("--")
+    .arg("run")
+    .arg("--jobs")
+    .arg(args.jobs.to_string())
+    .arg("--timeout")
+    .arg(args.render_timeout.to_string());
+  cmd.args(&args.extra);
+  println!("Updating progress/pages scoreboard...");
+  run_command(cmd)?;
 
   Ok(())
 }

@@ -6,6 +6,7 @@ If a document can’t be kept accurate, delete it and replace it with something 
 
 ## Start here
 
+- Agent workflow & mindset: [`AGENTS.md`](../AGENTS.md)
 - Running the renderer: [running.md](running.md)
 - CLI tools & workflows: [cli.md](cli.md)
 - Library API: [api.md](api.md)
@@ -13,7 +14,9 @@ If a document can’t be kept accurate, delete it and replace it with something 
 - Conformance targets & support matrix: [conformance.md](conformance.md)
 - Debugging renders: [debugging.md](debugging.md)
 - Profiling & perf logging: [perf-logging.md](perf-logging.md)
+- Profiling on Linux (perf/samply/flamegraph): [profiling-linux.md](profiling-linux.md)
 - Runtime environment variables: [env-vars.md](env-vars.md)
+- Instrumentation patterns: [instrumentation.md](instrumentation.md)
 - Testing: [testing.md](testing.md)
 - Vendoring / dependency patches: [vendoring.md](vendoring.md)
 - CSS loading & URL resolution: [css-loading.md](css-loading.md)

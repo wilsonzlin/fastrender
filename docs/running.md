@@ -8,10 +8,24 @@ Use the `xtask` wrapper for common local loops:
 
 - Test: `cargo xtask test [core|style|fixtures|wpt|all]` (default: `core`)
 - Refresh goldens: `cargo xtask update-goldens [all|fixtures|reference|wpt]`
+- Update pageset scoreboard: `cargo xtask pageset`
 - Render a page: `cargo xtask render-page --url https://example.com --output out.png`
 - Diff renders: `cargo xtask diff-renders --before fetches/renders/baseline --after fetches/renders/new`
 
 `cargo xtask --help` and per-subcommand help describe available flags and defaults. All commands run offline unless you explicitly pass a network URL to `render-page`.
+
+## Pageset scoreboard loop (recommended)
+
+This repo’s “always-on” loop is to keep the committed pageset scoreboard up to date:
+
+- One file per page under `progress/pages/<stem>.json`
+- Written by `pageset_progress` (do not hand-author)
+
+Terminal-friendly wrapper:
+
+```bash
+scripts/pageset.sh
+```
 
 ## Build & test
 
