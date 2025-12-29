@@ -5,6 +5,7 @@
 use super::types::CssString;
 use crate::dom::AssignedSlot;
 use crate::dom::DomNode;
+use crate::error::RenderError;
 use cssparser::ParseError;
 use cssparser::Parser;
 use cssparser::ToCss;
@@ -42,6 +43,8 @@ pub struct ShadowMatchData<'a> {
   pub slot_map: Option<&'a SlotAssignmentMap<'a>>,
   /// Exported part mappings for resolving ::part() across shadow boundaries.
   pub part_export_map: Option<&'a PartExportMap>,
+  /// Deferred error from deadline checks performed during selector matching.
+  pub deadline_error: Option<RenderError>,
 }
 
 impl<'a> ShadowMatchData<'a> {
@@ -64,6 +67,12 @@ impl<'a> ShadowMatchData<'a> {
   pub fn with_part_export_map(mut self, part_export_map: Option<&'a PartExportMap>) -> Self {
     self.part_export_map = part_export_map;
     self
+  }
+
+  pub fn record_deadline_error(&mut self, err: RenderError) {
+    if self.deadline_error.is_none() {
+      self.deadline_error = Some(err);
+    }
   }
 }
 

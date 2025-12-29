@@ -141,9 +141,11 @@ pub fn check_active_periodic(
   if stride == 0 {
     return Ok(());
   }
-  *counter = counter.wrapping_add(1);
-  if *counter % stride == 0 {
-    check_active(stage)?;
-  }
-  Ok(())
+  ACTIVE_DEADLINE.with(|active| -> Result<(), RenderError> {
+    if let Some(deadline) = active.borrow().as_ref() {
+      deadline.check_periodic(counter, stride, stage)
+    } else {
+      Ok(())
+    }
+  })
 }

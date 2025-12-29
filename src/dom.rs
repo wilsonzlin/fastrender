@@ -7,7 +7,9 @@ use crate::css::selectors::TextDirection;
 use crate::css::types::CssString;
 use crate::error::Error;
 use crate::error::ParseError;
+use crate::error::RenderStage;
 use crate::error::Result;
+use crate::render_control::check_active_periodic;
 use html5ever::parse_document;
 use html5ever::tendril::TendrilSink;
 use html5ever::tree_builder::TreeBuilderOpts;
@@ -38,6 +40,9 @@ use unicode_bidi::bidi_class;
 pub const HTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
 pub const SVG_NAMESPACE: &str = "http://www.w3.org/2000/svg";
 pub const MATHML_NAMESPACE: &str = "http://www.w3.org/1998/Math/MathML";
+
+const RELATIVE_SELECTOR_DEADLINE_STRIDE: usize = 64;
+const NTH_DEADLINE_STRIDE: usize = 64;
 
 /// Controls whether non-standard DOM compatibility mutations are applied while parsing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1250,11 +1255,23 @@ impl<'a> ElementRef<'a> {
   }
 
   /// Find index of this element among sibling elements and the total number of element siblings.
-  fn element_index_and_len(&self) -> Option<(usize, usize)> {
+  fn element_index_and_len(
+    &self,
+    context: &mut selectors::matching::MatchingContext<FastRenderSelectorImpl>,
+  ) -> Option<(usize, usize)> {
     let parent = self.parent?;
     let mut index = None;
     let mut len = 0usize;
+    let mut deadline_counter = 0usize;
     for child in parent.children.iter() {
+      if let Err(err) = check_active_periodic(
+        &mut deadline_counter,
+        NTH_DEADLINE_STRIDE,
+        RenderStage::Cascade,
+      ) {
+        context.extra_data.record_deadline_error(err);
+        return None;
+      }
       if !child.is_element() {
         continue;
       }
@@ -1267,8 +1284,11 @@ impl<'a> ElementRef<'a> {
   }
 
   /// Find index of this element among siblings
-  fn element_index(&self) -> Option<usize> {
-    self.element_index_and_len().map(|(idx, _)| idx)
+  fn element_index(
+    &self,
+    context: &mut selectors::matching::MatchingContext<FastRenderSelectorImpl>,
+  ) -> Option<usize> {
+    self.element_index_and_len(context).map(|(idx, _)| idx)
   }
 
   fn is_html_element(&self) -> bool {
@@ -1291,14 +1311,27 @@ impl<'a> ElementRef<'a> {
   }
 
   /// Position (index, total) among siblings filtered by a predicate.
-  fn position_in_siblings<F>(&self, predicate: F) -> Option<(usize, usize)>
+  fn position_in_siblings<F>(
+    &self,
+    predicate: F,
+    context: &mut selectors::matching::MatchingContext<FastRenderSelectorImpl>,
+  ) -> Option<(usize, usize)>
   where
     F: Fn(&DomNode) -> bool,
   {
     let parent = self.parent?;
     let mut index = None;
     let mut len = 0usize;
+    let mut deadline_counter = 0usize;
     for child in parent.children.iter() {
+      if let Err(err) = check_active_periodic(
+        &mut deadline_counter,
+        NTH_DEADLINE_STRIDE,
+        RenderStage::Cascade,
+      ) {
+        context.extra_data.record_deadline_error(err);
+        return None;
+      }
       if !child.is_element() || !predicate(child) {
         continue;
       }
@@ -1311,25 +1344,31 @@ impl<'a> ElementRef<'a> {
   }
 
   /// Position among siblings of the same element type (case-insensitive).
-  fn position_in_type(&self) -> Option<(usize, usize)> {
+  fn position_in_type(
+    &self,
+    context: &mut selectors::matching::MatchingContext<FastRenderSelectorImpl>,
+  ) -> Option<(usize, usize)> {
     let tag = self.node.tag_name()?;
     let namespace = self.node.namespace();
     let is_html = self.is_html_element();
-    self.position_in_siblings(|sibling| {
-      if sibling.namespace() != namespace {
-        return false;
-      }
-      sibling
-        .tag_name()
-        .map(|name| {
-          if is_html {
-            name.eq_ignore_ascii_case(tag)
-          } else {
-            name == tag
-          }
-        })
-        .unwrap_or(false)
-    })
+    self.position_in_siblings(
+      |sibling| {
+        if sibling.namespace() != namespace {
+          return false;
+        }
+        sibling
+          .tag_name()
+          .map(|name| {
+            if is_html {
+              name.eq_ignore_ascii_case(tag)
+            } else {
+              name == tag
+            }
+          })
+          .unwrap_or(false)
+      },
+      context,
+    )
   }
 
   fn position_in_selector_list(
@@ -1341,8 +1380,17 @@ impl<'a> ElementRef<'a> {
     context.nest(|context| {
       let mut index = None;
       let mut len = 0usize;
+      let mut deadline_counter = 0usize;
 
       for child in parent.children.iter() {
+        if let Err(err) = check_active_periodic(
+          &mut deadline_counter,
+          NTH_DEADLINE_STRIDE,
+          RenderStage::Cascade,
+        ) {
+          context.extra_data.record_deadline_error(err);
+          return None;
+        }
         if !child.is_element() {
           continue;
         }
@@ -1352,6 +1400,9 @@ impl<'a> ElementRef<'a> {
           .slice()
           .iter()
           .any(|selector| matches_selector(selector, 0, None, &child_ref, context));
+        if context.extra_data.deadline_error.is_some() {
+          return None;
+        }
         if !matches {
           continue;
         }
@@ -2514,13 +2565,13 @@ impl<'a> Element for ElementRef<'a> {
             .map(|t| t.eq_ignore_ascii_case("html"))
             .unwrap_or(false)
       }
-      PseudoClass::FirstChild => self.element_index() == Some(0),
+      PseudoClass::FirstChild => self.element_index(_context) == Some(0),
       PseudoClass::LastChild => self
-        .element_index_and_len()
+        .element_index_and_len(_context)
         .map(|(idx, len)| idx == len.saturating_sub(1))
         .unwrap_or(false),
       PseudoClass::OnlyChild => self
-        .element_index_and_len()
+        .element_index_and_len(_context)
         .map(|(_, len)| len == 1)
         .unwrap_or(false),
       PseudoClass::NthChild(a, b, of) => match of {
@@ -2529,7 +2580,7 @@ impl<'a> Element for ElementRef<'a> {
           .map(|(index, _)| matches_an_plus_b(*a, *b, (index + 1) as i32))
           .unwrap_or(false),
         None => self
-          .element_index()
+          .element_index(_context)
           .map(|index| matches_an_plus_b(*a, *b, (index + 1) as i32))
           .unwrap_or(false),
       },
@@ -2542,7 +2593,7 @@ impl<'a> Element for ElementRef<'a> {
           })
           .unwrap_or(false),
         None => self
-          .element_index_and_len()
+          .element_index_and_len(_context)
           .map(|(index, len)| {
             let n = (len - index) as i32;
             matches_an_plus_b(*a, *b, n)
@@ -2550,23 +2601,23 @@ impl<'a> Element for ElementRef<'a> {
           .unwrap_or(false),
       },
       PseudoClass::FirstOfType => self
-        .position_in_type()
+        .position_in_type(_context)
         .map(|(index, _)| index == 0)
         .unwrap_or(false),
       PseudoClass::LastOfType => self
-        .position_in_type()
+        .position_in_type(_context)
         .map(|(index, len)| index == len.saturating_sub(1))
         .unwrap_or(false),
       PseudoClass::OnlyOfType => self
-        .position_in_type()
+        .position_in_type(_context)
         .map(|(_, len)| len == 1)
         .unwrap_or(false),
       PseudoClass::NthOfType(a, b) => self
-        .position_in_type()
+        .position_in_type(_context)
         .map(|(index, _)| matches_an_plus_b(*a, *b, (index + 1) as i32))
         .unwrap_or(false),
       PseudoClass::NthLastOfType(a, b) => self
-        .position_in_type()
+        .position_in_type(_context)
         .map(|(index, len)| {
           let n = (len - index) as i32;
           matches_an_plus_b(*a, *b, n)
@@ -2919,8 +2970,17 @@ fn matches_has_relative(
   context.nest_for_relative_selector(anchor.opaque(), |ctx| {
     ctx.nest_for_scope(Some(anchor.opaque()), |ctx| {
       let mut ancestors = RelativeSelectorAncestorStack::new(anchor.all_ancestors);
+      let mut deadline_counter = 0usize;
 
       for selector in selectors.iter() {
+        if let Err(err) = check_active_periodic(
+          &mut deadline_counter,
+          RELATIVE_SELECTOR_DEADLINE_STRIDE,
+          RenderStage::Cascade,
+        ) {
+          ctx.extra_data.record_deadline_error(err);
+          return false;
+        }
         if let Some(cached) = ctx
           .selector_caches
           .relative_selector
@@ -2938,6 +2998,9 @@ fn matches_has_relative(
             .relative_selector_filter_map
             .fast_reject(anchor, selector, ctx.quirks_mode())
         {
+          if ctx.extra_data.deadline_error.is_some() {
+            return false;
+          }
           ctx.selector_caches.relative_selector.add(
             anchor.opaque(),
             selector,
@@ -2946,9 +3009,19 @@ fn matches_has_relative(
           continue;
         }
 
-        let matched = match_relative_selector(selector, anchor.node, &mut ancestors, ctx);
+        let matched = match_relative_selector(
+          selector,
+          anchor.node,
+          &mut ancestors,
+          ctx,
+          &mut deadline_counter,
+        );
         debug_assert_eq!(ancestors.len(), ancestors.baseline_len());
         ancestors.reset();
+
+        if ctx.extra_data.deadline_error.is_some() {
+          return false;
+        }
 
         ctx.selector_caches.relative_selector.add(
           anchor.opaque(),
@@ -2980,16 +3053,23 @@ fn match_relative_selector<'a>(
   anchor: &'a DomNode,
   ancestors: &mut RelativeSelectorAncestorStack<'a>,
   context: &mut MatchingContext<FastRenderSelectorImpl>,
+  deadline_counter: &mut usize,
 ) -> bool {
   if !anchor.is_element() {
     return false;
   }
 
   if selector.match_hint.is_descendant_direction() {
-    return match_relative_selector_descendants(selector, anchor, ancestors, context);
+    return match_relative_selector_descendants(
+      selector,
+      anchor,
+      ancestors,
+      context,
+      deadline_counter,
+    );
   }
 
-  match_relative_selector_siblings(selector, anchor, ancestors, context)
+  match_relative_selector_siblings(selector, anchor, ancestors, context, deadline_counter)
 }
 
 fn in_shadow_tree(ancestors: &[&DomNode]) -> bool {
@@ -3040,14 +3120,27 @@ fn match_relative_selector_descendants<'a>(
   anchor: &'a DomNode,
   ancestors: &mut RelativeSelectorAncestorStack<'a>,
   context: &mut MatchingContext<FastRenderSelectorImpl>,
+  deadline_counter: &mut usize,
 ) -> bool {
   ancestors.with_pushed(anchor, |ancestors| {
     for child in anchor.children.iter().filter(|c| c.is_element()) {
+      if let Err(err) = check_active_periodic(
+        deadline_counter,
+        RELATIVE_SELECTOR_DEADLINE_STRIDE,
+        RenderStage::Cascade,
+      ) {
+        context.extra_data.record_deadline_error(err);
+        return false;
+      }
       let child_ref = ElementRef::with_ancestors(child, ancestors.as_slice())
         .with_slot_map(context.extra_data.slot_map);
       let mut matched = matches_selector(&selector.selector, 0, None, &child_ref, context);
+      if context.extra_data.deadline_error.is_some() {
+        return false;
+      }
       if !matched && selector.match_hint.is_subtree() {
-        matched = match_relative_selector_subtree(selector, child, ancestors, context);
+        matched =
+          match_relative_selector_subtree(selector, child, ancestors, context, deadline_counter);
       }
       if matched {
         return true;
@@ -3062,6 +3155,7 @@ fn match_relative_selector_siblings<'a>(
   anchor: &'a DomNode,
   ancestors: &mut RelativeSelectorAncestorStack<'a>,
   context: &mut MatchingContext<FastRenderSelectorImpl>,
+  deadline_counter: &mut usize,
 ) -> bool {
   let parent = match ancestors.parent() {
     Some(p) => p,
@@ -3070,6 +3164,14 @@ fn match_relative_selector_siblings<'a>(
 
   let mut seen_anchor = false;
   for sibling in parent.children.iter().filter(|c| c.is_element()) {
+    if let Err(err) = check_active_periodic(
+      deadline_counter,
+      RELATIVE_SELECTOR_DEADLINE_STRIDE,
+      RenderStage::Cascade,
+    ) {
+      context.extra_data.record_deadline_error(err);
+      return false;
+    }
     if ptr::eq(sibling, anchor) {
       seen_anchor = true;
       continue;
@@ -3081,10 +3183,13 @@ fn match_relative_selector_siblings<'a>(
     let sibling_ref = ElementRef::with_ancestors(sibling, ancestors.as_slice())
       .with_slot_map(context.extra_data.slot_map);
     let matched = if selector.match_hint.is_subtree() {
-      match_relative_selector_subtree(selector, sibling, ancestors, context)
+      match_relative_selector_subtree(selector, sibling, ancestors, context, deadline_counter)
     } else {
       matches_selector(&selector.selector, 0, None, &sibling_ref, context)
     };
+    if context.extra_data.deadline_error.is_some() {
+      return false;
+    }
 
     if matched {
       return true;
@@ -3103,17 +3208,29 @@ fn match_relative_selector_subtree<'a>(
   node: &'a DomNode,
   ancestors: &mut RelativeSelectorAncestorStack<'a>,
   context: &mut MatchingContext<FastRenderSelectorImpl>,
+  deadline_counter: &mut usize,
 ) -> bool {
   debug_assert!(selector.match_hint.is_subtree());
 
   ancestors.with_pushed(node, |ancestors| {
     for child in node.children.iter().filter(|c| c.is_element()) {
+      if let Err(err) = check_active_periodic(
+        deadline_counter,
+        RELATIVE_SELECTOR_DEADLINE_STRIDE,
+        RenderStage::Cascade,
+      ) {
+        context.extra_data.record_deadline_error(err);
+        return false;
+      }
       let child_ref = ElementRef::with_ancestors(child, ancestors.as_slice())
         .with_slot_map(context.extra_data.slot_map);
       if matches_selector(&selector.selector, 0, None, &child_ref, context) {
+        if context.extra_data.deadline_error.is_some() {
+          return false;
+        }
         return true;
       }
-      if match_relative_selector_subtree(selector, child, ancestors, context) {
+      if match_relative_selector_subtree(selector, child, ancestors, context, deadline_counter) {
         return true;
       }
     }

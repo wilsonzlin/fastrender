@@ -36,6 +36,7 @@ use crate::dom::DomNodeType;
 use crate::dom::ElementRef;
 use crate::dom::SlotAssignment;
 use crate::geometry::Size;
+use crate::render_control::check_active_periodic;
 use crate::render_control::RenderDeadline;
 use crate::style::color::{Color, Rgba};
 use crate::style::custom_properties::CustomPropertyRegistry;
@@ -94,6 +95,9 @@ static UA_STYLESHEET: OnceLock<StyleSheet> = OnceLock::new();
 static CASCADE_PROFILE_NODES: AtomicU64 = AtomicU64::new(0);
 static CASCADE_PROFILE_RULE_CANDIDATES: AtomicU64 = AtomicU64::new(0);
 static CASCADE_PROFILE_RULE_MATCHES: AtomicU64 = AtomicU64::new(0);
+
+const CASCADE_NODE_DEADLINE_STRIDE: usize = 1024;
+const CASCADE_SELECTOR_DEADLINE_STRIDE: usize = 64;
 
 fn is_root_element(ancestors: &[&DomNode]) -> bool {
   ancestors.is_empty()
@@ -3367,7 +3371,7 @@ fn collect_matching_rules<'a>(
   container_ctx: Option<&ContainerQueryContext>,
   dom_maps: &DomMaps,
   slot_assignment: &SlotAssignment,
-) -> Vec<MatchedRule<'a>> {
+) -> Result<Vec<MatchedRule<'a>>, RenderError> {
   let current_shadow = dom_maps.containing_shadow_root(node_id);
   let slot_map_for_host = |host_id: usize| -> Option<&SlotAssignmentMap<'a>> {
     dom_maps
@@ -3396,7 +3400,7 @@ fn collect_matching_rules<'a>(
     slot_assignment,
     current_slot_map,
     false,
-  );
+  )?;
 
   if let Some((base, allow_shadow_host)) = scope_rule_index_with_shadow_host(scopes, scope_host) {
     let base_slot_map = match scope_host {
@@ -3416,7 +3420,7 @@ fn collect_matching_rules<'a>(
       slot_assignment,
       base_slot_map,
       allow_shadow_host,
-    ));
+    )?);
   }
 
   // Legacy compatibility: older cascade entrypoints treated shadow DOM like regular DOM, so
@@ -3438,7 +3442,7 @@ fn collect_matching_rules<'a>(
           slot_assignment,
           current_slot_map,
           false,
-        ));
+        )?);
       }
     }
   }
@@ -3458,7 +3462,7 @@ fn collect_matching_rules<'a>(
       slot_assignment,
       host_slot_map,
       true,
-    ));
+    )?);
   }
 
   // Shadow `::slotted(...)` rules apply to light-DOM nodes assigned to slots.
@@ -3478,7 +3482,7 @@ fn collect_matching_rules<'a>(
           slot_assignment,
           scopes.slot_maps.get(&slot.shadow_root_id),
           true,
-        ));
+        )?);
       }
     }
   }
@@ -3494,7 +3498,7 @@ fn collect_matching_rules<'a>(
     current_slot_map,
   ));
 
-  matches
+  Ok(matches)
 }
 
 fn collect_pseudo_matching_rules<'a>(
@@ -3604,7 +3608,7 @@ fn compute_base_styles<'a>(
   dom_maps: &DomMaps,
   slot_assignment: &SlotAssignment,
   include_starting_style: bool,
-) -> NodeBaseStyles {
+) -> Result<NodeBaseStyles, RenderError> {
   if !node.is_element() {
     let mut ua_styles = get_default_styles_for_element(node);
     inherit_styles(&mut ua_styles, parent_ua_styles);
@@ -3631,12 +3635,12 @@ fn compute_base_styles<'a>(
     resolve_line_height_length(&mut styles, viewport);
     resolve_absolute_lengths(&mut ua_styles, current_ua_root_font_size, viewport);
     resolve_absolute_lengths(&mut styles, current_root_font_size, viewport);
-    return NodeBaseStyles {
+    return Ok(NodeBaseStyles {
       styles,
       ua_styles,
       current_root_font_size,
       current_ua_root_font_size,
-    };
+    });
   }
 
   let mut ua_styles = get_default_styles_for_element(node);
@@ -3653,7 +3657,7 @@ fn compute_base_styles<'a>(
     container_ctx,
     dom_maps,
     slot_assignment,
-  );
+  )?;
   matching_rules.extend(ua_default_rules(node, parent_styles.direction));
   if include_starting_style {
     prioritize_starting_style_rules(&mut matching_rules);
@@ -3808,12 +3812,12 @@ fn compute_base_styles<'a>(
   }
   styles.top_layer = top_layer_kind(node);
 
-  NodeBaseStyles {
+  Ok(NodeBaseStyles {
     styles,
     ua_styles,
     current_root_font_size,
     current_ua_root_font_size,
-  }
+  })
 }
 
 fn apply_styles_internal(
@@ -3841,6 +3845,7 @@ fn apply_styles_internal(
   has_starting_styles: bool,
 ) -> Result<StyledNode, RenderError> {
   let mut ancestors: Vec<&DomNode> = Vec::new();
+  let mut deadline_counter: usize = 0;
   let styled = apply_styles_internal_with_ancestors(
     node,
     rule_scopes,
@@ -3863,6 +3868,7 @@ fn apply_styles_internal(
     reuse_counter,
     dom_maps,
     slot_assignment,
+    &mut deadline_counter,
     deadline,
     has_starting_styles,
   )?;
@@ -4095,6 +4101,7 @@ fn apply_styles_internal_with_ancestors<'a>(
   reuse_counter: Option<&mut usize>,
   dom_maps: &DomMaps,
   slot_assignment: &SlotAssignment,
+  deadline_counter: &mut usize,
   deadline: Option<&RenderDeadline>,
   has_starting_styles: bool,
 ) -> Result<Box<StyledNode>, RenderError> {
@@ -4103,9 +4110,11 @@ fn apply_styles_internal_with_ancestors<'a>(
   let node_id = *node_counter;
   *node_counter += 1;
   if let Some(deadline) = deadline {
-    if deadline.is_enabled() && node_id % 64 == 0 {
-      deadline.check(RenderStage::Cascade)?;
-    }
+    deadline.check_periodic(
+      deadline_counter,
+      CASCADE_NODE_DEADLINE_STRIDE,
+      RenderStage::Cascade,
+    )?;
   }
 
   let mut reuse_counter = reuse_counter;
@@ -4141,7 +4150,7 @@ fn apply_styles_internal_with_ancestors<'a>(
     dom_maps,
     slot_assignment,
     false,
-  );
+  )?;
   let mut starting_base = if has_starting_styles {
     let start_parent_styles = parent_starting_styles.unwrap_or(parent_styles);
     let start_root_font_size = parent_starting_styles
@@ -4166,7 +4175,7 @@ fn apply_styles_internal_with_ancestors<'a>(
       dom_maps,
       slot_assignment,
       true,
-    ))
+    )?)
   } else {
     None
   };
@@ -4205,6 +4214,7 @@ fn apply_styles_internal_with_ancestors<'a>(
       child_reuse,
       dom_maps,
       slot_assignment,
+      deadline_counter,
       deadline,
       has_starting_styles,
     )?;
@@ -9249,6 +9259,16 @@ fn resolve_scopes<'a>(
     ancestors: ancestors_for_root,
   })
 }
+
+fn take_matching_error(
+  context: &mut MatchingContext<FastRenderSelectorImpl>,
+) -> Result<(), RenderError> {
+  if let Some(err) = context.extra_data.deadline_error.take() {
+    Err(err)
+  } else {
+    Ok(())
+  }
+}
 fn find_matching_rules<'a>(
   node: &DomNode,
   rules: &'a RuleIndex<'a>,
@@ -9262,9 +9282,9 @@ fn find_matching_rules<'a>(
   slot_assignment: &SlotAssignment,
   slot_map: Option<&'a SlotAssignmentMap<'a>>,
   allow_shadow_host: bool,
-) -> Vec<MatchedRule<'a>> {
+) -> Result<Vec<MatchedRule<'a>>, RenderError> {
   if !node.is_element() {
-    return Vec::new();
+    return Ok(Vec::new());
   }
   let assigned_slot = slot_assignment.node_to_slot.get(&node_id);
   let current_shadow = dom_maps.containing_shadow_root(node_id);
@@ -9279,9 +9299,10 @@ fn find_matching_rules<'a>(
   }
   if candidates.is_empty() && slotted_candidates.is_empty() {
     scratch.match_index.reset();
-    return Vec::new();
+    return Ok(Vec::new());
   }
   let mut matches: Vec<MatchedRule<'a>> = Vec::new();
+  let mut deadline_counter = 0usize;
 
   // Build ElementRef chain with proper parent links
   let element_ref = build_element_ref_chain(node, ancestors, slot_map);
@@ -9306,6 +9327,7 @@ fn find_matching_rules<'a>(
     shadow_host: None,
     slot_map,
     part_export_map: None,
+    deadline_error: None,
   };
 
   let mut scoped_rule_idx: Option<usize> = None;
@@ -9328,6 +9350,11 @@ fn find_matching_rules<'a>(
 
   for &selector_idx in candidates.iter() {
     let indexed = &rules.selectors[selector_idx];
+    check_active_periodic(
+      &mut deadline_counter,
+      CASCADE_SELECTOR_DEADLINE_STRIDE,
+      RenderStage::Cascade,
+    )?;
     if let Some(pos) = scratch.match_index.get(indexed.rule_idx) {
       if indexed.specificity <= matches[pos].specificity {
         continue;
@@ -9347,6 +9374,7 @@ fn find_matching_rules<'a>(
       } else {
         resolve_scopes(node, ancestors, &rule.scopes, &mut context).map(Some)
       };
+      take_matching_error(&mut context)?;
       scoped_rule_idx = Some(indexed.rule_idx);
       scoped_match = resolved.clone();
       resolved
@@ -9369,6 +9397,7 @@ fn find_matching_rules<'a>(
         matches_selector(selector, 0, None, &element_ref, ctx)
       })
     };
+    take_matching_error(&mut context)?;
 
     if allow_shadow_host && !selector_matches && selector_contains_host_context(selector) {
       selector_matches =
@@ -9377,6 +9406,7 @@ fn find_matching_rules<'a>(
             matches_selector(selector, 0, None, &element_ref, ctx)
           })
         });
+      take_matching_error(&mut context)?;
     }
 
     if selector_matches {
@@ -9409,6 +9439,11 @@ fn find_matching_rules<'a>(
 
   for &selector_idx in slotted_candidates.iter() {
     let indexed = &rules.slotted_selectors[selector_idx];
+    check_active_periodic(
+      &mut deadline_counter,
+      CASCADE_SELECTOR_DEADLINE_STRIDE,
+      RenderStage::Cascade,
+    )?;
     let rule = &rules.rules[indexed.rule_idx];
     if !scope_allows(&rule.scope, true) {
       continue;
@@ -9422,6 +9457,7 @@ fn find_matching_rules<'a>(
       } else {
         resolve_scopes(node, ancestors, &rule.scopes, &mut context).map(Some)
       };
+      take_matching_error(&mut context)?;
       scoped_rule_idx = Some(indexed.rule_idx);
       scoped_match = resolved.clone();
       resolved
@@ -9480,6 +9516,7 @@ fn find_matching_rules<'a>(
           })
         },
       );
+      take_matching_error(&mut context)?;
     } else {
       match_with_shadow_host(
         allow_shadow_host,
@@ -9494,6 +9531,7 @@ fn find_matching_rules<'a>(
           }
         },
       );
+      take_matching_error(&mut context)?;
     }
 
     let Some(best_arg_specificity) = best_arg_specificity else {
@@ -9531,6 +9569,7 @@ fn find_matching_rules<'a>(
           |ctx| matches_selector(prelude, 0, None, &slot_ref, ctx),
         )
       };
+      take_matching_error(&mut context)?;
       if !slot_matches {
         continue;
       }
@@ -9575,7 +9614,9 @@ fn find_matching_rules<'a>(
     );
   }
 
-  matches
+  take_matching_error(&mut context)?;
+
+  Ok(matches)
 }
 
 /// Find rules that match an element with a specific pseudo-element
@@ -9634,6 +9675,7 @@ fn find_pseudo_element_rules<'a>(
     shadow_host: None,
     slot_map,
     part_export_map: None,
+    deadline_error: None,
   };
 
   let mut scoped_rule_idx: Option<usize> = None;
