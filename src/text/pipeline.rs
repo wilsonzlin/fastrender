@@ -2790,12 +2790,14 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
   #[cfg(any(test, debug_assertions))]
   SHAPE_FONT_RUN_INVOCATIONS.fetch_add(1, Ordering::Relaxed);
 
-  // Create rustybuzz face from font data
-  let mut rb_face =
-    Face::from_slice(&run.font.data, run.font.index).ok_or_else(|| TextError::ShapingFailed {
+  // Create rustybuzz face from cached font data to avoid reparsing per run.
+  let cached_face = crate::text::face_cache::get_rustybuzz_face(&run.font).ok_or_else(|| {
+    TextError::ShapingFailed {
       text: run.text.clone(),
       reason: "Failed to create HarfBuzz face".to_string(),
-    })?;
+    }
+  })?;
+  let mut rb_face = cached_face.clone_face();
   if !run.variations.is_empty() {
     rb_face.set_variations(&run.variations);
   }
@@ -4956,6 +4958,67 @@ mod tests {
       "face parse count should not scale with text length ({} -> {})",
       short_count,
       long_count
+    );
+  }
+
+  #[cfg(debug_assertions)]
+  #[test]
+  fn rustybuzz_faces_are_cached_across_runs() {
+    let font_data = match fs::read("tests/fonts/ColorTestCOLR.ttf") {
+      Ok(data) => data,
+      Err(_) => return,
+    };
+
+    let mut db = FontDatabase::empty();
+    if db.load_font_data(font_data).is_err() {
+      return;
+    }
+    let ctx = FontContext::with_database(Arc::new(db));
+
+    let mut style = ComputedStyle::default();
+    style.font_family = vec!["ColorTestCOLR".to_string()];
+    style.font_size = 16.0;
+
+    let pipeline = ShapingPipeline::new();
+    let _guard = crate::text::face_cache::RustybuzzFaceParseCountGuard::start();
+
+    let first = match pipeline.shape("A", &style, &ctx) {
+      Ok(runs) => runs,
+      Err(_) => return,
+    };
+    if first.is_empty() {
+      return;
+    }
+    assert!(
+      first
+        .iter()
+        .all(|run| run.font.family == "ColorTestCOLR"),
+      "shaping should use the loaded ColorTestCOLR font"
+    );
+    let first_count = crate::text::face_cache::rustybuzz_face_parse_count();
+    assert_eq!(
+      first_count, 1,
+      "expected exactly one rustybuzz face parse for first shape"
+    );
+
+    let second = match pipeline.shape("B", &style, &ctx) {
+      Ok(runs) => runs,
+      Err(_) => return,
+    };
+    if second.is_empty() {
+      return;
+    }
+    assert!(
+      second
+        .iter()
+        .all(|run| run.font.family == "ColorTestCOLR"),
+      "subsequent shaping should keep using the cached color font"
+    );
+
+    let second_count = crate::text::face_cache::rustybuzz_face_parse_count();
+    assert_eq!(
+      second_count, first_count,
+      "rustybuzz face should be cached between shaping runs"
     );
   }
 

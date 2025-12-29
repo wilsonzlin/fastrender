@@ -1,5 +1,6 @@
 use crate::text::font_db::LoadedFont;
 use lru::LruCache;
+use rustybuzz::Face as RbFace;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -13,6 +14,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// The cache is keyed by the underlying Arc pointer + font index, so different
 /// handles to the same font bytes share entries.
 const FACE_CACHE_SIZE: usize = 256;
+const RUSTYBUZZ_FACE_CACHE_SIZE: usize = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct FaceCacheKey {
@@ -65,6 +67,35 @@ impl CachedFace {
   }
 }
 
+#[derive(Clone)]
+pub struct CachedRustybuzzFace {
+  data: Arc<Vec<u8>>,
+  face: Arc<RbFace<'static>>,
+}
+
+impl CachedRustybuzzFace {
+  fn parse(data: Arc<Vec<u8>>, index: u32) -> Option<Self> {
+    // SAFETY: the Arc keeps the font data alive for the lifetime of the cached face.
+    let static_data: &'static [u8] = unsafe { std::mem::transmute::<&[u8], &'static [u8]>(&*data) };
+    record_rustybuzz_face_parse();
+    let face = RbFace::from_slice(static_data, index)?;
+    Some(Self {
+      data,
+      face: Arc::new(face),
+    })
+  }
+
+  #[inline]
+  pub fn face(&self) -> Arc<RbFace<'static>> {
+    Arc::clone(&self.face)
+  }
+
+  #[inline]
+  pub fn clone_face(&self) -> RbFace<'static> {
+    (*self.face).clone()
+  }
+}
+
 /// Global parsed face cache guarded by a single mutex.
 ///
 /// LRU operations require mutable access, so we use a coarse lock but keep
@@ -104,9 +135,53 @@ impl FaceCache {
   }
 }
 
+/// Global rustybuzz face cache guarded by a single mutex.
+///
+/// Shares the same keying and eviction strategy as the ttf-parser cache to
+/// avoid reparsing HarfBuzz faces for each shaping run.
+#[derive(Clone)]
+struct RustybuzzFaceCache {
+  inner: Arc<Mutex<LruCache<FaceCacheKey, Arc<CachedRustybuzzFace>>>>,
+}
+
+impl RustybuzzFaceCache {
+  fn new(capacity: usize) -> Self {
+    let cap = NonZeroUsize::new(capacity.max(1)).unwrap();
+    Self {
+      inner: Arc::new(Mutex::new(LruCache::new(cap))),
+    }
+  }
+
+  fn get_or_parse(&self, data: Arc<Vec<u8>>, index: u32) -> Option<Arc<CachedRustybuzzFace>> {
+    let key = FaceCacheKey::new(&data, index);
+
+    if let Ok(mut cache) = self.inner.lock() {
+      if let Some(face) = cache.get(&key) {
+        return Some(face.clone());
+      }
+    }
+
+    let parsed = Arc::new(CachedRustybuzzFace::parse(data, index)?);
+
+    if let Ok(mut cache) = self.inner.lock() {
+      if let Some(face) = cache.get(&key) {
+        return Some(face.clone());
+      }
+      cache.put(key, parsed.clone());
+    }
+
+    Some(parsed)
+  }
+}
+
 fn shared_face_cache() -> &'static FaceCache {
   static FACE_CACHE: OnceLock<FaceCache> = OnceLock::new();
   FACE_CACHE.get_or_init(|| FaceCache::new(FACE_CACHE_SIZE))
+}
+
+fn shared_rustybuzz_face_cache() -> &'static RustybuzzFaceCache {
+  static FACE_CACHE: OnceLock<RustybuzzFaceCache> = OnceLock::new();
+  FACE_CACHE.get_or_init(|| RustybuzzFaceCache::new(RUSTYBUZZ_FACE_CACHE_SIZE))
 }
 
 /// Returns a cached parsed face for a loaded font, parsing and inserting it on-demand.
@@ -121,6 +196,21 @@ pub fn get_ttf_face_with_data(data: &Arc<Vec<u8>>, index: u32) -> Option<Arc<Cac
   shared_face_cache().get_or_parse(Arc::clone(data), index)
 }
 
+/// Returns a cached rustybuzz face for a loaded font, parsing and inserting it on-demand.
+#[inline]
+pub fn get_rustybuzz_face(font: &LoadedFont) -> Option<Arc<CachedRustybuzzFace>> {
+  shared_rustybuzz_face_cache().get_or_parse(Arc::clone(&font.data), font.index)
+}
+
+/// Returns a cached rustybuzz face for arbitrary font data backed by an Arc.
+#[inline]
+pub fn get_rustybuzz_face_with_data(
+  data: &Arc<Vec<u8>>,
+  index: u32,
+) -> Option<Arc<CachedRustybuzzFace>> {
+  shared_rustybuzz_face_cache().get_or_parse(Arc::clone(data), index)
+}
+
 /// Convenience wrapper that avoids cloning the cached face when only a borrow is needed.
 #[inline]
 pub fn with_face<T, F: FnOnce(&ttf_parser::Face<'static>) -> T>(
@@ -133,11 +223,15 @@ pub fn with_face<T, F: FnOnce(&ttf_parser::Face<'static>) -> T>(
 
 #[cfg(debug_assertions)]
 static FACE_PARSE_COUNTER: AtomicU64 = AtomicU64::new(0);
+#[cfg(debug_assertions)]
+static RUSTYBUZZ_FACE_PARSE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[cfg(debug_assertions)]
 thread_local! {
   static TEST_FACE_PARSE_COUNTING_ENABLED: Cell<bool> = Cell::new(false);
   static TEST_FACE_PARSE_COUNTER: Cell<u64> = Cell::new(0);
+  static TEST_RUSTYBUZZ_FACE_PARSE_COUNTING_ENABLED: Cell<bool> = Cell::new(false);
+  static TEST_RUSTYBUZZ_FACE_PARSE_COUNTER: Cell<u64> = Cell::new(0);
 }
 
 #[inline]
@@ -150,6 +244,22 @@ fn record_face_parse() {
     TEST_FACE_PARSE_COUNTING_ENABLED.with(|enabled| {
       if enabled.get() {
         TEST_FACE_PARSE_COUNTER.with(|counter| counter.set(counter.get().saturating_add(1)));
+      }
+    });
+  }
+}
+
+#[inline]
+fn record_rustybuzz_face_parse() {
+  #[cfg(debug_assertions)]
+  {
+    if std::env::var("FASTRENDER_COUNT_RUSTYBUZZ_FACE_PARSE").is_ok() {
+      RUSTYBUZZ_FACE_PARSE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    }
+    TEST_RUSTYBUZZ_FACE_PARSE_COUNTING_ENABLED.with(|enabled| {
+      if enabled.get() {
+        TEST_RUSTYBUZZ_FACE_PARSE_COUNTER
+          .with(|counter| counter.set(counter.get().saturating_add(1)));
       }
     });
   }
@@ -177,6 +287,27 @@ impl Drop for FaceParseCountGuard {
 }
 
 #[cfg(debug_assertions)]
+pub struct RustybuzzFaceParseCountGuard {
+  _private: (),
+}
+
+#[cfg(debug_assertions)]
+impl RustybuzzFaceParseCountGuard {
+  pub fn start() -> Self {
+    TEST_RUSTYBUZZ_FACE_PARSE_COUNTER.with(|counter| counter.set(0));
+    TEST_RUSTYBUZZ_FACE_PARSE_COUNTING_ENABLED.with(|enabled| enabled.set(true));
+    Self { _private: () }
+  }
+}
+
+#[cfg(debug_assertions)]
+impl Drop for RustybuzzFaceParseCountGuard {
+  fn drop(&mut self) {
+    TEST_RUSTYBUZZ_FACE_PARSE_COUNTING_ENABLED.with(|enabled| enabled.set(false));
+  }
+}
+
+#[cfg(debug_assertions)]
 pub fn face_parse_count() -> u64 {
   TEST_FACE_PARSE_COUNTER.with(|counter| counter.get())
 }
@@ -187,9 +318,27 @@ pub fn face_parse_count() -> u64 {
 }
 
 #[cfg(debug_assertions)]
+pub fn rustybuzz_face_parse_count() -> u64 {
+  TEST_RUSTYBUZZ_FACE_PARSE_COUNTER.with(|counter| counter.get())
+}
+
+#[cfg(not(debug_assertions))]
+pub fn rustybuzz_face_parse_count() -> u64 {
+  0
+}
+
+#[cfg(debug_assertions)]
 pub fn reset_face_parse_counter_for_tests() {
   TEST_FACE_PARSE_COUNTER.with(|counter| counter.set(0));
 }
 
 #[cfg(not(debug_assertions))]
 pub fn reset_face_parse_counter_for_tests() {}
+
+#[cfg(debug_assertions)]
+pub fn reset_rustybuzz_face_parse_counter_for_tests() {
+  TEST_RUSTYBUZZ_FACE_PARSE_COUNTER.with(|counter| counter.set(0));
+}
+
+#[cfg(not(debug_assertions))]
+pub fn reset_rustybuzz_face_parse_counter_for_tests() {}
