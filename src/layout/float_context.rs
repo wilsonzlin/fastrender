@@ -38,16 +38,19 @@
 //! - CSS 2.1 Section 9.5.2: <https://www.w3.org/TR/CSS21/visuren.html#propdef-clear>
 
 use crate::debug::runtime;
+use crate::error::{LayoutError, RenderError, RenderStage};
 use crate::geometry::Rect;
 use crate::layout::float_shape::FloatShape;
+use crate::render_control::check_active_periodic;
 use crate::style::float::Clear;
 use crate::style::float::Float;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::cmp::{Ordering, Reverse};
 use std::collections::BinaryHeap;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering as AtomicOrdering;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Side on which a float is placed
 ///
@@ -257,6 +260,14 @@ fn profile_count_boundary_step(delta: u64) {
   }
 }
 
+fn clamp_positive_finite(value: f32) -> f32 {
+  if value.is_finite() && value > 0.0 {
+    value
+  } else {
+    0.0
+  }
+}
+
 pub fn reset_float_profile_counters() {
   FLOAT_WIDTH_QUERIES.store(0, AtomicOrdering::Relaxed);
   FLOAT_RANGE_QUERIES.store(0, AtomicOrdering::Relaxed);
@@ -329,6 +340,9 @@ pub struct FloatContext {
   /// Sweep state used to answer monotonic Y queries efficiently.
   sweep_state: RefCell<FloatSweepState>,
 
+  /// Recorded timeout if any float queries exceed the layout deadline.
+  timeout_elapsed: Cell<Option<Duration>>,
+
   /// Current Y position for float placement
   /// This tracks the "float ceiling" - the lowest point we've processed
   current_y: f32,
@@ -357,6 +371,7 @@ impl FloatContext {
       float_map: Vec::new(),
       events: Vec::new(),
       sweep_state: RefCell::new(FloatSweepState::new(0)),
+      timeout_elapsed: Cell::new(None),
       current_y: 0.0,
     }
   }
@@ -368,6 +383,21 @@ impl FloatContext {
 
   fn reset_sweep_state(&mut self) {
     self.sweep_state = RefCell::new(FloatSweepState::new(self.float_map.len()));
+  }
+
+  fn record_timeout(&self, elapsed: Duration) {
+    let existing = self.timeout_elapsed.get();
+    if existing.map_or(true, |current| elapsed < current) {
+      self.timeout_elapsed.set(Some(elapsed));
+    }
+  }
+
+  /// Returns and clears the recorded timeout, if any.
+  pub fn take_timeout_error(&self) -> Option<LayoutError> {
+    self
+      .timeout_elapsed
+      .take()
+      .map(|elapsed| LayoutError::Timeout { elapsed })
   }
 
   fn float_info(&self, id: usize) -> &FloatInfo {
@@ -546,6 +576,64 @@ impl FloatContext {
     (left_edge, right_edge)
   }
 
+  fn edges_in_range_min_width_with_state(
+    &self,
+    state: &mut FloatSweepState,
+    start: f32,
+    end: f32,
+  ) -> (f32, f32, f32) {
+    debug_assert!(
+      start >= state.current_y || state.current_y == f32::NEG_INFINITY,
+      "float sweep queries must advance monotonically"
+    );
+    self.advance_sweep_to(start, state);
+
+    let mut counter = 0usize;
+    let mut scan_start = start;
+    let mut best_left = 0.0f32;
+    let mut best_right = self.containing_block_width;
+    let mut best_width = best_right - best_left;
+    let mut next_boundary = self
+      .next_float_boundary_after_internal(&*state, start)
+      .min(end);
+
+    loop {
+      if let Err(RenderError::Timeout { elapsed, .. }) =
+        check_active_periodic(&mut counter, 256, RenderStage::Layout)
+      {
+        self.record_timeout(elapsed);
+        break;
+      }
+
+      let boundary = self
+        .next_float_boundary_after_internal(&*state, scan_start)
+        .min(end);
+      let (left_edge, right_edge) = self.edges_in_range_with_state(state, scan_start, boundary);
+      let width = (right_edge - left_edge).max(0.0);
+      if width < best_width - f32::EPSILON
+        || (width - best_width).abs() < f32::EPSILON && left_edge > best_left
+      {
+        best_left = left_edge;
+        best_right = right_edge;
+        best_width = width;
+        next_boundary = boundary;
+      }
+
+      if boundary >= end || !boundary.is_finite() || boundary <= scan_start {
+        break;
+      }
+      scan_start = boundary;
+      self.advance_sweep_to(scan_start, state);
+    }
+
+    (best_left, best_right, next_boundary)
+  }
+
+  fn edges_in_range_min_width(&self, start: f32, end: f32) -> (f32, f32, f32) {
+    let mut state = self.ensure_sweep_state(start);
+    self.edges_in_range_min_width_with_state(&mut state, start, end)
+  }
+
   fn next_event_y(&self, state: &FloatSweepState) -> f32 {
     self
       .events
@@ -629,6 +717,8 @@ impl FloatContext {
   /// * `width` - Width of the float's margin box
   /// * `height` - Height of the float's margin box
   pub fn add_float_at(&mut self, side: FloatSide, x: f32, y: f32, width: f32, height: f32) {
+    let width = clamp_positive_finite(width);
+    let height = clamp_positive_finite(height);
     let float_info = FloatInfo::new(side, Rect::from_xywh(x, y, width, height));
     self.add_float(float_info);
   }
@@ -643,6 +733,8 @@ impl FloatContext {
     height: f32,
     shape: Option<FloatShape>,
   ) {
+    let width = clamp_positive_finite(width);
+    let height = clamp_positive_finite(height);
     let float_info = FloatInfo::new_with_shape(
       side,
       Rect::from_xywh(x, y, width, height),
@@ -754,39 +846,9 @@ impl FloatContext {
   /// constrained position within the range.
   pub fn available_width_in_range(&self, y_start: f32, y_end: f32) -> (f32, f32) {
     profile_count_range_query();
-    if y_end <= y_start {
-      let mut state = self.ensure_sweep_state(y_start);
-      self.advance_sweep_to(y_start, &mut state);
-      let (left_edge, right_edge) = self.edges_at_with_state(&mut state, y_start);
-      return (left_edge, (right_edge - left_edge).max(0.0));
-    }
-
-    let mut state = self.ensure_sweep_state(y_start);
-    self.advance_sweep_to(y_start, &mut state);
-
-    let mut scan_start = y_start;
-    let mut best_left = 0.0;
-    let mut best_width = self.containing_block_width;
-
-    loop {
-      let next_boundary = self
-        .next_float_boundary_after_internal(&*state, scan_start)
-        .min(y_end);
-      let (left_edge, right_edge) =
-        self.edges_in_range_with_state(&mut state, scan_start, next_boundary);
-      let width = (right_edge - left_edge).max(0.0);
-      if width < best_width || (width - best_width).abs() < f32::EPSILON {
-        best_width = width;
-        best_left = left_edge;
-      }
-      if next_boundary >= y_end || next_boundary <= scan_start {
-        break;
-      }
-      scan_start = next_boundary;
-      self.advance_sweep_to(scan_start, &mut state);
-    }
-
-    (best_left, best_width)
+    let end = if y_end > y_start { y_end } else { y_start };
+    let (left_edge, right_edge, _) = self.edges_in_range_min_width(y_start, end);
+    (left_edge, (right_edge - left_edge).max(0.0))
   }
 
   /// Returns the next Y coordinate after `y` where float-induced available
@@ -797,8 +859,22 @@ impl FloatContext {
   pub fn next_float_boundary_after(&self, y: f32) -> f32 {
     let mut state = self.ensure_sweep_state(y);
     self.advance_sweep_to(y, &mut state);
-    let next = self.next_float_boundary_after_internal(&*state, y);
-    if next.is_finite() {
+    let mut next = self.next_float_boundary_after_internal(&*state, y);
+    if next <= y {
+      let mut event_cursor = state.event_cursor;
+      while let Some(event) = self.events.get(event_cursor) {
+        if event.y > y {
+          next = next.min(event.y);
+          break;
+        }
+        event_cursor += 1;
+      }
+      let shape_next = self.next_shape_boundary_after(&*state, y + f32::EPSILON);
+      if shape_next > y {
+        next = next.min(shape_next);
+      }
+    }
+    if next.is_finite() && next > y {
       next
     } else {
       y
@@ -929,38 +1005,56 @@ impl FloatContext {
     height: f32,
     min_y: f32,
   ) -> (f32, f32) {
-    // Start at the minimum Y position
     let mut y = min_y;
+    let target_width = clamp_positive_finite(width);
+    let target_height = clamp_positive_finite(height);
+    let mut state = self.ensure_sweep_state(y);
+    let mut deadline_counter = 0usize;
+    let mut last_left = 0.0f32;
+    let mut last_width = self.containing_block_width;
 
     loop {
-      let (left_edge, available_width) = self.available_width_in_range(y, y + height);
+      if let Err(RenderError::Timeout { elapsed, .. }) =
+        check_active_periodic(&mut deadline_counter, 128, RenderStage::Layout)
+      {
+        self.record_timeout(elapsed);
+        break;
+      }
 
-      // Check if the float fits at this Y position
-      if width <= available_width {
-        // It fits! Compute X position based on side
+      self.advance_sweep_to(y, &mut state);
+      let range_end = y + target_height;
+      let (left_edge, right_edge, next_boundary) =
+        self.edges_in_range_min_width_with_state(&mut state, y, range_end);
+      let available_width = (right_edge - left_edge).max(0.0);
+
+      last_left = left_edge;
+      last_width = available_width;
+
+      if target_width <= available_width {
         let x = match side {
           FloatSide::Left => left_edge,
-          FloatSide::Right => left_edge + available_width - width,
+          FloatSide::Right => left_edge + available_width - target_width,
         };
         return (x, y);
       }
 
-      // Doesn't fit - move to the next "band" where a float ends
-      let next_y = self.next_float_boundary_after(y);
-
-      if next_y <= y {
-        // No more floats to clear, force fit at current position
-        // This handles edge cases where the float is wider than available space
-        let (left_edge, available_width) = self.available_width_in_range(y, y + height);
+      let mut candidate_y = next_boundary;
+      if !candidate_y.is_finite() || candidate_y <= y {
         let x = match side {
-          FloatSide::Left => left_edge,
-          FloatSide::Right => (left_edge + available_width - width).max(left_edge),
+          FloatSide::Left => last_left,
+          FloatSide::Right => (last_left + last_width - target_width).max(last_left),
         };
         return (x, y);
       }
 
-      y = next_y;
+      y = candidate_y;
     }
+
+    let x = match side {
+      FloatSide::Left => last_left,
+      FloatSide::Right => (last_left + last_width - target_width).max(last_left),
+    };
+    (x, y)
   }
 
   /// Get the bottom of all floats (the Y where all floats end)
@@ -991,6 +1085,8 @@ impl FloatContext {
   ///
   /// True if a box of the given size would fit at position y.
   pub fn fits_at(&self, y: f32, width: f32, height: f32) -> bool {
+    let width = clamp_positive_finite(width);
+    let height = clamp_positive_finite(height);
     let (_, available_width) = self.available_width_in_range(y, y + height);
     available_width >= width
   }
@@ -1008,19 +1104,36 @@ impl FloatContext {
   /// The Y position where the box can be placed.
   pub fn find_fit(&self, width: f32, height: f32, min_y: f32) -> f32 {
     let mut y = min_y;
+    let target_width = clamp_positive_finite(width);
+    let target_height = clamp_positive_finite(height);
+    let mut state = self.ensure_sweep_state(y);
+    let mut deadline_counter = 0usize;
 
     loop {
-      if self.fits_at(y, width, height) {
+      if let Err(RenderError::Timeout { elapsed, .. }) =
+        check_active_periodic(&mut deadline_counter, 128, RenderStage::Layout)
+      {
+        self.record_timeout(elapsed);
+        break;
+      }
+
+      self.advance_sweep_to(y, &mut state);
+      let range_end = y + target_height;
+      let (left_edge, right_edge, next_boundary) =
+        self.edges_in_range_min_width_with_state(&mut state, y, range_end);
+      let available_width = (right_edge - left_edge).max(0.0);
+
+      if available_width >= target_width {
         return y;
       }
 
-      let next_y = self.next_float_boundary_after(y);
-      if next_y <= y {
-        // No more floats to check
-        return y;
+      if !next_boundary.is_finite() || next_boundary <= y {
+        break;
       }
-      y = next_y;
+      y = next_boundary;
     }
+
+    y
   }
 
   /// Clear all floats from the context
@@ -1032,6 +1145,7 @@ impl FloatContext {
     self.float_map.clear();
     self.events.clear();
     self.reset_sweep_state();
+    self.timeout_elapsed.set(None);
   }
 
   /// Clone the context with a new containing block width
@@ -1553,6 +1667,52 @@ mod tests {
     assert!(
       stats.boundary_steps <= 210,
       "boundary steps should scale with float events, got {}",
+      stats.boundary_steps
+    );
+  }
+
+  #[test]
+  fn dense_float_stack_find_fit_progresses() {
+    let mut ctx = FloatContext::new(100.0);
+    for i in 0..100 {
+      let y = i as f32;
+      if i % 2 == 0 {
+        ctx.add_float_at(FloatSide::Left, 0.0, y, 50.0, 1.0);
+      } else {
+        ctx.add_float_at(FloatSide::Right, 50.0, y, 50.0, 1.0);
+      }
+    }
+
+    assert_eq!(ctx.find_fit(10.0, 1.0, 0.0), 100.0);
+    let (x, y) = ctx.compute_float_position(FloatSide::Left, 10.0, 1.0, 0.0);
+    assert_eq!(y, 100.0);
+    assert_eq!(x, 0.0);
+  }
+
+  #[test]
+  fn range_queries_reuse_sweep_state_for_dense_boundaries() {
+    let mut toggles = HashMap::new();
+    toggles.insert("FASTR_LAYOUT_PROFILE".to_string(), "1".to_string());
+    let toggles = RuntimeToggles::from_map(toggles);
+    let stats = with_runtime_toggles(Arc::new(toggles), || {
+      reset_float_profile_counters();
+      let mut ctx = FloatContext::new(200.0);
+      for i in 0..500 {
+        let y = i as f32;
+        ctx.add_float_at(FloatSide::Left, 0.0, y, 100.0, 1.0);
+        ctx.add_float_at(FloatSide::Right, 100.0, y, 100.0, 1.0);
+      }
+
+      for i in 0..500 {
+        let start = i as f32;
+        let _ = ctx.available_width_in_range(start, start + 1.0);
+      }
+      float_profile_stats()
+    });
+
+    assert!(
+      stats.boundary_steps <= 2500,
+      "range queries should sweep floats once, got {}",
       stats.boundary_steps
     );
   }

@@ -7966,6 +7966,12 @@ impl InlineFormattingContext {
       }
     }
 
+    if let Some(ctx) = float_ctx.as_deref_mut() {
+      if let Some(err) = ctx.take_timeout_error() {
+        return Err(err);
+      }
+    }
+
     Ok(FragmentNode::new_block(bounds, merged_children))
   }
 }

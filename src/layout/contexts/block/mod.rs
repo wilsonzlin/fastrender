@@ -2061,6 +2061,10 @@ impl BlockFormattingContext {
       .map(|f| f.bottom())
       .fold(content_height, f32::max);
 
+    if let Some(err) = float_ctx.take_timeout_error() {
+      return Err(err);
+    }
+
     Ok((fragments, float_bottom, positioned_children))
   }
 
