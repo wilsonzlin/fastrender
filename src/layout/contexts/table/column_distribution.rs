@@ -26,7 +26,6 @@
 //! - CSS Tables Module Level 3: <https://www.w3.org/TR/css-tables-3/>
 //! - CSS 2.1 Section 17.5: <https://www.w3.org/TR/CSS21/tables.html#width-layout>
 
-<<<<<<< ours
 use crate::error::{RenderError, RenderStage};
 use crate::layout::formatting_context::LayoutError;
 use crate::render_control::check_active_periodic;
@@ -885,26 +884,6 @@ impl ColumnDistributor {
         widths[i] = columns[i].min_width.max(self.min_column_width);
       }
 
-<<<<<<< ours
-    // Any leftover space goes to unbounded columns; divide evenly to keep the result stable.
-    if remaining_excess > 0.0 {
-      if !infinite_indices.is_empty() {
-        let per = remaining_excess / infinite_indices.len() as f32;
-        for idx in infinite_indices {
-          if self.check_deadline(deadline_counter) {
-            return;
-          }
-          widths[idx] += per;
-        }
-      } else if finite_flex_total == 0.0 {
-        // No range information at all (min == max for every column); split evenly.
-        let per_column = remaining_width / flexible_indices.len() as f32;
-        for &i in flexible_indices {
-          if self.check_deadline(deadline_counter) {
-            return;
-          }
-          widths[i] = per_column;
-=======
       let mut remaining_excess = excess;
 
       // First, allocate to columns with finite headroom proportionally to their range, capped at
@@ -912,6 +891,9 @@ impl ColumnDistributor {
       // unbounded columns.
       if finite_flex_total > 0.0 {
         for &i in flexible_indices {
+          if self.check_deadline(deadline_counter) {
+            return;
+          }
           let range = columns[i].flexibility_range();
           if !range.is_finite() {
             continue;
@@ -921,7 +903,6 @@ impl ColumnDistributor {
           widths[i] =
             (columns[i].min_width.max(self.min_column_width) + clamped).min(columns[i].max_width);
           remaining_excess -= clamped;
->>>>>>> theirs
         }
         remaining_excess = remaining_excess.max(0.0);
       }
@@ -931,12 +912,18 @@ impl ColumnDistributor {
         if !scratch.infinite_indices.is_empty() {
           let per = remaining_excess / scratch.infinite_indices.len() as f32;
           for idx in scratch.infinite_indices.drain(..) {
+            if self.check_deadline(deadline_counter) {
+              return;
+            }
             widths[idx] += per;
           }
         } else if finite_flex_total == 0.0 {
           // No range information at all (min == max for every column); split evenly.
           let per_column = remaining_width / flexible_indices.len() as f32;
           for &i in flexible_indices {
+            if self.check_deadline(deadline_counter) {
+              return;
+            }
             widths[i] = per_column;
           }
         }
