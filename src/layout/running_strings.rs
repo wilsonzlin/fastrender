@@ -149,7 +149,7 @@ fn collect_string_set_events_inner(
     }
   }
 
-  for child in node.children.iter() {
+  for child in node.children() {
     collect_string_set_events_inner(
       child,
       start,
@@ -199,7 +199,93 @@ fn collect_text(node: &FragmentNode, out: &mut String) {
   if let FragmentContent::Text { text, .. } = &node.content {
     out.push_str(text);
   }
-  for child in node.children.iter() {
+  for child in node.children() {
     collect_text(child, out);
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::geometry::Rect;
+  use crate::layout::axis::FragmentAxes;
+  use crate::style::content::{StringSetAssignment, StringSetValue};
+  use crate::style::display::FormattingContextType;
+  use crate::style::ComputedStyle;
+  use crate::tree::box_tree::{BoxNode, BoxTree};
+  use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
+  use std::sync::Arc;
+
+  #[test]
+  fn collect_string_set_events_traverses_descendants() {
+    let mut string_set_style = ComputedStyle::default();
+    string_set_style.string_set = vec![StringSetAssignment {
+      name: "chapter".into(),
+      value: StringSetValue::Content,
+    }];
+
+    let text_box = BoxNode::new_text(Arc::new(ComputedStyle::default()), "Box Value".into());
+    let box_with_string_set = BoxNode::new_block(
+      Arc::new(string_set_style),
+      FormattingContextType::Block,
+      vec![text_box],
+    );
+    let root_box = BoxNode::new_block(
+      Arc::new(ComputedStyle::default()),
+      FormattingContextType::Block,
+      vec![box_with_string_set],
+    );
+    let box_tree = BoxTree::new(root_box);
+
+    let string_set_box = &box_tree.root.children[0];
+    let string_set_text_box = &string_set_box.children[0];
+
+    let text_fragment = FragmentNode::new(
+      Rect::from_xywh(0.0, 0.0, 10.0, 5.0),
+      FragmentContent::Text {
+        text: "Box Value".into(),
+        box_id: Some(string_set_text_box.id),
+        baseline_offset: 0.0,
+        shaped: None,
+        is_marker: false,
+      },
+      vec![],
+    );
+    let child_fragment = FragmentNode::new_block_with_id(
+      Rect::from_xywh(0.0, 5.0, 10.0, 10.0),
+      string_set_box.id,
+      vec![text_fragment],
+    );
+
+    let mut inline_style = ComputedStyle::default();
+    inline_style.string_set = vec![StringSetAssignment {
+      name: "note".into(),
+      value: StringSetValue::Content,
+    }];
+    let inline_text = FragmentNode::new_text(
+      Rect::from_xywh(0.0, 0.0, 10.0, 5.0),
+      "Inline fallback".into(),
+      0.0,
+    );
+    let mut inline_fragment =
+      FragmentNode::new_inline(Rect::from_xywh(0.0, 20.0, 10.0, 5.0), 0, vec![inline_text]);
+    inline_fragment.style = Some(Arc::new(inline_style));
+
+    let root_fragment = FragmentNode::new_block_with_id(
+      Rect::from_xywh(0.0, 0.0, 10.0, 40.0),
+      box_tree.root.id,
+      vec![child_fragment, inline_fragment],
+    );
+
+    let events = collect_string_set_events(&root_fragment, &box_tree, FragmentAxes::default());
+
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].name, "chapter");
+    assert_eq!(events[0].value, "Box Value");
+    assert!((events[0].abs_block - 5.0).abs() < 0.001);
+
+    assert_eq!(events[1].name, "note");
+    assert_eq!(events[1].value, "Inline fallback");
+    assert!((events[1].abs_block - 20.0).abs() < 0.001);
   }
 }
