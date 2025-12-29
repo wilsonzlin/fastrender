@@ -12,6 +12,7 @@ use crate::error::Result;
 use crate::render_control::check_active_periodic;
 use html5ever::parse_document;
 use html5ever::tendril::TendrilSink;
+use html5ever::tree_builder::QuirksMode as HtmlQuirksMode;
 use html5ever::tree_builder::TreeBuilderOpts;
 use html5ever::ParseOpts;
 use markup5ever_rcdom::Handle;
@@ -19,6 +20,7 @@ use markup5ever_rcdom::NodeData;
 use markup5ever_rcdom::RcDom;
 use selectors::attr::AttrSelectorOperation;
 use selectors::attr::CaseSensitivity;
+use selectors::context::QuirksMode;
 use selectors::matching::matches_selector;
 use selectors::matching::MatchingContext;
 use selectors::matching::QuirksMode;
@@ -119,7 +121,9 @@ pub struct AssignedSlot {
 
 #[derive(Debug, Clone)]
 pub enum DomNodeType {
-  Document,
+  Document {
+    quirks_mode: QuirksMode,
+  },
   ShadowRoot {
     mode: ShadowRootMode,
     delegates_focus: bool,
@@ -368,7 +372,7 @@ pub fn resolve_first_strong_direction(node: &DomNode) -> Option<TextDirection> {
           stack.push(child);
         }
       }
-      DomNodeType::ShadowRoot { .. } | DomNodeType::Document => {
+      DomNodeType::ShadowRoot { .. } | DomNodeType::Document { .. } => {
         for child in &current.children {
           stack.push(child);
         }
@@ -446,7 +450,7 @@ pub fn collect_text_codepoints(node: &DomNode) -> Vec<u32> {
           stack.push((child, suppress_children));
         }
       }
-      DomNodeType::ShadowRoot { .. } | DomNodeType::Document => {
+      DomNodeType::ShadowRoot { .. } | DomNodeType::Document { .. } => {
         for child in &current.children {
           stack.push((child, false));
         }
@@ -461,6 +465,14 @@ pub fn collect_text_codepoints(node: &DomNode) -> Vec<u32> {
 
 pub fn parse_html(html: &str) -> Result<DomNode> {
   parse_html_with_options(html, DomParseOptions::default())
+}
+
+fn map_quirks_mode(mode: HtmlQuirksMode) -> QuirksMode {
+  match mode {
+    HtmlQuirksMode::Quirks => QuirksMode::Quirks,
+    HtmlQuirksMode::LimitedQuirks => QuirksMode::LimitedQuirks,
+    HtmlQuirksMode::NoQuirks => QuirksMode::NoQuirks,
+  }
 }
 
 /// Parse HTML with explicit parsing options (e.g., DOM compatibility mode).
@@ -483,7 +495,10 @@ pub fn parse_html_with_options(html: &str, options: DomParseOptions) -> Result<D
       })
     })?;
 
-  let mut root = convert_handle_to_node(&dom.document).expect("DOM must have a document root node");
+  let quirks_mode = map_quirks_mode(dom.quirks_mode.get());
+
+  let mut root =
+    convert_handle_to_node(&dom.document, quirks_mode).expect("DOM must have a document root node");
   attach_shadow_roots(&mut root);
 
   if matches!(
@@ -897,9 +912,11 @@ fn apply_dom_compatibility_mutations(node: &mut DomNode) {
   }
 }
 
-fn convert_handle_to_node(handle: &Handle) -> Option<DomNode> {
+fn convert_handle_to_node(handle: &Handle, document_quirks_mode: QuirksMode) -> Option<DomNode> {
   let node_type = match &handle.data {
-    NodeData::Document => DomNodeType::Document,
+    NodeData::Document => DomNodeType::Document {
+      quirks_mode: document_quirks_mode,
+    },
     NodeData::Element { name, attrs, .. } => {
       let tag_name = name.local.to_string();
       let namespace = name.ns.to_string();
@@ -946,7 +963,7 @@ fn convert_handle_to_node(handle: &Handle) -> Option<DomNode> {
             .children
             .borrow()
             .iter()
-            .filter_map(convert_handle_to_node)
+            .filter_map(|child| convert_handle_to_node(child, document_quirks_mode))
             .collect(),
           None => Vec::new(),
         }
@@ -955,7 +972,7 @@ fn convert_handle_to_node(handle: &Handle) -> Option<DomNode> {
           .children
           .borrow()
           .iter()
-          .filter_map(convert_handle_to_node)
+          .filter_map(|child| convert_handle_to_node(child, document_quirks_mode))
           .collect::<Vec<_>>()
       }
     }
@@ -963,7 +980,7 @@ fn convert_handle_to_node(handle: &Handle) -> Option<DomNode> {
       .children
       .borrow()
       .iter()
-      .filter_map(convert_handle_to_node)
+      .filter_map(|child| convert_handle_to_node(child, document_quirks_mode))
       .collect(),
     _ => Vec::new(),
   };
@@ -1020,6 +1037,13 @@ impl DomNode {
       DomNodeType::Element { namespace, .. } => Some(namespace),
       DomNodeType::Slot { namespace, .. } => Some(namespace),
       _ => None,
+    }
+  }
+
+  pub fn document_quirks_mode(&self) -> QuirksMode {
+    match &self.node_type {
+      DomNodeType::Document { quirks_mode } => *quirks_mode,
+      _ => QuirksMode::NoQuirks,
     }
   }
 
@@ -1412,7 +1436,7 @@ impl<'a> ElementRef<'a> {
     match node.node_type {
       DomNodeType::Text { .. } => true,
       DomNodeType::Element { .. } | DomNodeType::Slot { .. } => true,
-      DomNodeType::ShadowRoot { .. } | DomNodeType::Document => {
+      DomNodeType::ShadowRoot { .. } | DomNodeType::Document { .. } => {
         node.children.iter().any(Self::subtree_has_content)
       }
     }
@@ -3446,11 +3470,11 @@ mod tests {
   use super::*;
   use crate::css::selectors::PseudoClassParser;
   use cssparser::{Parser, ParserInput};
+  use selectors::context::QuirksMode;
   use selectors::matching::MatchingContext;
   use selectors::matching::MatchingForInvalidation;
   use selectors::matching::MatchingMode;
   use selectors::matching::NeedsSelectorFlags;
-  use selectors::matching::QuirksMode;
   use selectors::matching::SelectorCaches;
   use selectors::parser::ParseRelative;
   use selectors::parser::Selector;
@@ -3509,6 +3533,26 @@ mod tests {
       return true;
     }
     node.children.iter().any(contains_shadow_root)
+  }
+
+  #[test]
+  fn document_quirks_mode_defaults_to_no_quirks_with_doctype() {
+    let dom = parse_html("<!doctype html><html><body></body></html>").expect("parse html");
+    assert_eq!(
+      dom.document_quirks_mode(),
+      QuirksMode::NoQuirks,
+      "HTML5 doctype should produce no-quirks mode"
+    );
+  }
+
+  #[test]
+  fn document_quirks_mode_enters_quirks_without_doctype() {
+    let dom = parse_html("<html><body></body></html>").expect("parse html");
+    assert_eq!(
+      dom.document_quirks_mode(),
+      QuirksMode::Quirks,
+      "missing doctype should trigger quirks mode"
+    );
   }
 
   #[test]
@@ -3694,7 +3738,9 @@ mod tests {
   #[test]
   fn root_element_has_no_element_parent() {
     let document = DomNode {
-      node_type: DomNodeType::Document,
+      node_type: DomNodeType::Document {
+        quirks_mode: QuirksMode::NoQuirks,
+      },
       children: vec![element("html", vec![element("body", vec![])])],
     };
 
@@ -3769,7 +3815,9 @@ mod tests {
     let body = element("body", vec![host]);
     let html = element("html", vec![body]);
     let document = DomNode {
-      node_type: DomNodeType::Document,
+      node_type: DomNodeType::Document {
+        quirks_mode: QuirksMode::NoQuirks,
+      },
       children: vec![html],
     };
 
@@ -3841,7 +3889,9 @@ mod tests {
   #[test]
   fn scope_matches_document_root_without_anchor() {
     let document = DomNode {
-      node_type: DomNodeType::Document,
+      node_type: DomNodeType::Document {
+        quirks_mode: QuirksMode::NoQuirks,
+      },
       children: vec![element("html", vec![element("body", vec![])])],
     };
 

@@ -24,7 +24,7 @@ pub fn get_default_styles_for_element(node: &DomNode) -> ComputedStyle {
   let mut styles = ComputedStyle::default();
 
   // Handle Document/shadow root node types - they act as containers only.
-  if matches!(node.node_type, DomNodeType::Document) {
+  if matches!(node.node_type, DomNodeType::Document { .. }) {
     styles.display = Display::Block;
     return styles;
   }

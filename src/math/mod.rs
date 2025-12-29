@@ -353,7 +353,7 @@ fn collect_text(node: &DomNode, out: &mut String) {
     DomNodeType::Text { content } => out.push_str(content),
     DomNodeType::Element { .. }
     | DomNodeType::Slot { .. }
-    | DomNodeType::Document
+    | DomNodeType::Document { .. }
     | DomNodeType::ShadowRoot { .. } => {
       for child in &node.children {
         collect_text(child, out);
@@ -582,7 +582,7 @@ pub fn parse_mathml(node: &DomNode) -> Option<MathNode> {
         })
       }
     }
-    DomNodeType::Slot { .. } | DomNodeType::ShadowRoot { .. } | DomNodeType::Document => {
+    DomNodeType::Slot { .. } | DomNodeType::ShadowRoot { .. } | DomNodeType::Document { .. } => {
       wrap_row_or_single(parse_children(node))
     }
     DomNodeType::Element {

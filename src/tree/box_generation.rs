@@ -597,7 +597,9 @@ fn serialize_dom_subtree(node: &crate::dom::DomNode) -> String {
       out.push('>');
       out
     }
-    crate::dom::DomNodeType::Document => node.children.iter().map(serialize_dom_subtree).collect(),
+    crate::dom::DomNodeType::Document { .. } => {
+      node.children.iter().map(serialize_dom_subtree).collect()
+    }
   }
 }
 
@@ -607,7 +609,7 @@ fn serialize_node_with_namespaces(
   out: &mut String,
 ) {
   match &styled.node.node_type {
-    crate::dom::DomNodeType::Document | crate::dom::DomNodeType::ShadowRoot { .. } => {
+    crate::dom::DomNodeType::Document { .. } | crate::dom::DomNodeType::ShadowRoot { .. } => {
       for child in &styled.children {
         serialize_node_with_namespaces(child, inherited_xmlns, out);
       }
@@ -1040,7 +1042,7 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
     foreign_objects: &mut Vec<ForeignObjectInfo>,
   ) {
     match &styled.node.node_type {
-      crate::dom::DomNodeType::Document | crate::dom::DomNodeType::ShadowRoot { .. } => {
+      crate::dom::DomNodeType::Document { .. } | crate::dom::DomNodeType::ShadowRoot { .. } => {
         for child in &styled.children {
           serialize_node(
             child,

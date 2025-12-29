@@ -798,7 +798,10 @@ impl TreeJsonExporter {
         ("type", Value::String("text".into())),
         ("text", Value::String(truncate(content, 120))),
       ]),
-      DomNodeType::Document => map_from_pairs(vec![("type", Value::String("document".into()))]),
+      DomNodeType::Document { quirks_mode } => map_from_pairs(vec![
+        ("type", Value::String("document".into())),
+        ("quirks_mode", Value::String(format!("{:?}", quirks_mode))),
+      ]),
       DomNodeType::ShadowRoot { .. } => {
         map_from_pairs(vec![("type", Value::String("shadow_root".into()))])
       }
@@ -834,7 +837,10 @@ impl TreeJsonExporter {
         ("type", Value::String("text".into())),
         ("text", Value::String(truncate(content, 200))),
       ],
-      DomNodeType::Document => vec![("type", Value::String("document".into()))],
+      DomNodeType::Document { quirks_mode } => vec![
+        ("type", Value::String("document".into())),
+        ("quirks_mode", Value::String(format!("{:?}", quirks_mode))),
+      ],
     };
 
     let children: Vec<Value> = node

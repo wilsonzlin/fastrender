@@ -3360,7 +3360,7 @@ pub fn extract_css_sources(dom: &DomNode) -> Vec<ScopedStylesheetSource> {
   fn contributes_to_scope_path(node: &DomNode) -> bool {
     !matches!(
       node.node_type,
-      DomNodeType::Text { .. } | DomNodeType::Document
+      DomNodeType::Text { .. } | DomNodeType::Document { .. }
     )
   }
 

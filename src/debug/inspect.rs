@@ -173,7 +173,7 @@ pub fn inspect(
   selector_caches.set_epoch(next_selector_cache_epoch());
   let quirks_mode = styled_root.node.document_quirks_mode();
   debug_assert!(
-    matches!(&styled_root.node.node_type, DomNodeType::Document),
+    matches!(&styled_root.node.node_type, DomNodeType::Document { .. }),
     "inspect expects the styled root to be a document node"
   );
 
@@ -205,8 +205,8 @@ pub fn inspect(
             node,
             &ancestors,
             selectors,
-            quirks_mode,
             &mut selector_caches,
+            quirks_mode,
           )
         }
       }
@@ -261,8 +261,8 @@ fn node_matches_selector(
   node: &DomNode,
   ancestors: &[&DomNode],
   selectors: &SelectorList<FastRenderSelectorImpl>,
-  quirks_mode: QuirksMode,
   caches: &mut SelectorCaches,
+  quirks_mode: QuirksMode,
 ) -> bool {
   if !node.is_element() {
     return false;
@@ -409,7 +409,7 @@ fn node_snapshot(node_id: usize, dom: &DomNode, ancestors: &[&DomNode]) -> NodeS
 
 fn dom_selector(node: &DomNode) -> String {
   let mut selector = match &node.node_type {
-    DomNodeType::Document => "document".to_string(),
+    DomNodeType::Document { .. } => "document".to_string(),
     DomNodeType::ShadowRoot { .. } => "shadow-root".to_string(),
     DomNodeType::Text { .. } => "#text".to_string(),
     _ => node.tag_name().unwrap_or("#element").to_string(),

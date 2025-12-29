@@ -1054,7 +1054,7 @@ fn write_pipeline_snapshot(base: &Path, name: &str, artifacts: &RenderArtifacts,
 
 fn serialize_dom(node: &DomNode) -> SerializableDomNode {
   let (kind, namespace, tag, attributes, text) = match &node.node_type {
-    DomNodeType::Document => ("document".to_string(), None, None, None, None),
+    DomNodeType::Document { .. } => ("document".to_string(), None, None, None, None),
     DomNodeType::ShadowRoot { .. } => ("shadow-root".to_string(), None, None, None, None),
     DomNodeType::Slot {
       namespace,

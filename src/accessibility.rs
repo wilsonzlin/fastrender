@@ -315,7 +315,7 @@ impl<'a> BuildContext<'a> {
 
     match &node.node.node_type {
       DomNodeType::Text { content } => Some(normalize_whitespace(content)),
-      DomNodeType::Document | DomNodeType::ShadowRoot { .. } => {
+      DomNodeType::Document { .. } | DomNodeType::ShadowRoot { .. } => {
         Some(self.subtree_text(node, visited, mode))
       }
       DomNodeType::Element { .. } | DomNodeType::Slot { .. } => {
@@ -412,7 +412,7 @@ fn build_nodes<'a>(
 
   match node.node.node_type {
     DomNodeType::Text { .. } => Vec::new(),
-    DomNodeType::Document | DomNodeType::ShadowRoot { .. } => {
+    DomNodeType::Document { .. } | DomNodeType::ShadowRoot { .. } => {
       let mut children = Vec::new();
       ancestors.push(&node.node);
       styled_ancestors.push(node);

@@ -332,7 +332,7 @@ fn snapshot_dom_node(node: &DomNode, next: &mut usize) -> DomNodeSnapshot {
   let node_id = *next;
   *next += 1;
   let kind = match &node.node_type {
-    DomNodeType::Document => DomNodeKindSnapshot::Document,
+    DomNodeType::Document { .. } => DomNodeKindSnapshot::Document,
     DomNodeType::ShadowRoot { mode, .. } => DomNodeKindSnapshot::ShadowRoot {
       mode: format!("{mode:?}"),
     },
@@ -402,7 +402,7 @@ fn snapshot_styled_node(node: &StyledNode) -> StyledNodeSnapshot {
 
 fn summarize_dom_node(node: &DomNode) -> DomNodeSummary {
   match &node.node_type {
-    DomNodeType::Document => DomNodeSummary::Document,
+    DomNodeType::Document { .. } => DomNodeSummary::Document,
     DomNodeType::ShadowRoot { mode, .. } => DomNodeSummary::ShadowRoot {
       mode: format!("{mode:?}"),
     },

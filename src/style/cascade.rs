@@ -105,7 +105,7 @@ const CASCADE_SELECTOR_DEADLINE_STRIDE: usize = 64;
 
 fn is_root_element(ancestors: &[&DomNode]) -> bool {
   ancestors.is_empty()
-    || (ancestors.len() == 1 && matches!(ancestors[0].node_type, DomNodeType::Document))
+    || (ancestors.len() == 1 && matches!(ancestors[0].node_type, DomNodeType::Document { .. }))
 }
 static CASCADE_PROFILE_FIND_TIME_NS: AtomicU64 = AtomicU64::new(0);
 static CASCADE_PROFILE_DECL_TIME_NS: AtomicU64 = AtomicU64::new(0);
@@ -849,6 +849,7 @@ struct RuleScopes<'a> {
   host_rules: HashMap<usize, RuleIndex<'a>>,
   slot_maps: HashMap<usize, SlotAssignmentMap<'a>>,
   fallback_document_rules_in_shadow_scopes: bool,
+  quirks_mode: QuirksMode,
 }
 
 struct MatchIndex {
@@ -2123,6 +2124,7 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
     host_rules: shadow_host_indices,
     slot_maps,
     fallback_document_rules_in_shadow_scopes: true,
+    quirks_mode: dom.document_quirks_mode(),
   };
 
   let counter_styles = {
@@ -2664,6 +2666,7 @@ fn apply_style_set_with_media_target_and_imports_cached_with_deadline_impl(
     host_rules: shadow_host_indices,
     slot_maps,
     fallback_document_rules_in_shadow_scopes: false,
+    quirks_mode: dom.document_quirks_mode(),
   };
 
   let counter_styles = {
@@ -3354,6 +3357,7 @@ fn match_part_rules<'a>(
             dom_maps.selector_blooms(),
             &info.pseudo,
             allow_shadow_host,
+            scopes.quirks_mode,
           );
           for rule in part_matches {
             if let Some(pos) = matched_by_order.get(&rule.order).copied() {
@@ -3417,6 +3421,7 @@ fn collect_matching_rules<'a>(
     slot_assignment,
     current_slot_map,
     false,
+    scopes.quirks_mode,
   )?;
 
   if let Some((base, allow_shadow_host)) = scope_rule_index_with_shadow_host(scopes, scope_host) {
@@ -3437,6 +3442,7 @@ fn collect_matching_rules<'a>(
       slot_assignment,
       base_slot_map,
       allow_shadow_host,
+      scopes.quirks_mode,
     )?);
   }
 
@@ -3459,6 +3465,7 @@ fn collect_matching_rules<'a>(
           slot_assignment,
           current_slot_map,
           false,
+          scopes.quirks_mode,
         )?);
       }
     }
@@ -3479,6 +3486,7 @@ fn collect_matching_rules<'a>(
       slot_assignment,
       host_slot_map,
       true,
+      scopes.quirks_mode,
     )?);
   }
 
@@ -3499,6 +3507,7 @@ fn collect_matching_rules<'a>(
           slot_assignment,
           scopes.slot_maps.get(&slot.shadow_root_id),
           true,
+          scopes.quirks_mode,
         )?);
       }
     }
@@ -3558,6 +3567,7 @@ fn collect_pseudo_matching_rules<'a>(
     dom_maps.selector_blooms(),
     pseudo,
     false,
+    scopes.quirks_mode,
   );
 
   if let Some((base, allow_shadow_host)) = scope_rule_index_with_shadow_host(scopes, scope_host) {
@@ -3571,6 +3581,7 @@ fn collect_pseudo_matching_rules<'a>(
       dom_maps.selector_blooms(),
       pseudo,
       allow_shadow_host,
+      scopes.quirks_mode,
     ));
   }
 
@@ -3587,6 +3598,7 @@ fn collect_pseudo_matching_rules<'a>(
           dom_maps.selector_blooms(),
           pseudo,
           false,
+          scopes.quirks_mode,
         ));
       }
     }
@@ -3603,6 +3615,7 @@ fn collect_pseudo_matching_rules<'a>(
       dom_maps.selector_blooms(),
       pseudo,
       true,
+      scopes.quirks_mode,
     ));
   }
 
@@ -5069,7 +5082,9 @@ mod tests {
   #[test]
   fn text_nodes_inherit_styles_without_matching() {
     let dom = DomNode {
-      node_type: DomNodeType::Document,
+      node_type: DomNodeType::Document {
+        quirks_mode: QuirksMode::NoQuirks,
+      },
       children: vec![DomNode {
         node_type: DomNodeType::Element {
           tag_name: "div".to_string(),
@@ -8658,6 +8673,7 @@ mod tests {
       None,
       &PseudoElement::Marker,
       false,
+      QuirksMode::NoQuirks,
     );
     assert_eq!(
       marker_matches.len(),
@@ -9306,6 +9322,7 @@ fn find_matching_rules<'a>(
   slot_assignment: &SlotAssignment,
   slot_map: Option<&'a SlotAssignmentMap<'a>>,
   allow_shadow_host: bool,
+  quirks_mode: QuirksMode,
 ) -> Result<Vec<MatchedRule<'a>>, RenderError> {
   if !node.is_element() {
     return Ok(Vec::new());
@@ -9343,7 +9360,7 @@ fn find_matching_rules<'a>(
     selector_caches,
     VisitedHandlingMode::AllLinksVisitedAndUnvisited,
     IncludeStartingStyle::No,
-    QuirksMode::NoQuirks,
+    quirks_mode,
     selectors::matching::NeedsSelectorFlags::No,
     selectors::matching::MatchingForInvalidation::No,
   );
@@ -9655,6 +9672,7 @@ fn find_pseudo_element_rules<'a>(
   selector_blooms: Option<&SelectorBloomMap>,
   pseudo: &PseudoElement,
   allow_shadow_host: bool,
+  quirks_mode: QuirksMode,
 ) -> Vec<MatchedRule<'a>> {
   if !node.is_element() {
     return Vec::new();
@@ -9693,7 +9711,7 @@ fn find_pseudo_element_rules<'a>(
     MatchingMode::ForStatelessPseudoElement,
     None,
     selector_caches,
-    QuirksMode::NoQuirks,
+    quirks_mode,
     selectors::matching::NeedsSelectorFlags::No,
     selectors::matching::MatchingForInvalidation::No,
   );
