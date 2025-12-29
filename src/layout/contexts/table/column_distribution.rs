@@ -1002,79 +1002,78 @@ pub fn distribute_spanning_cell_width(
     let mut scratch = scratch_cell.borrow_mut();
     let indices = &mut scratch.indices;
 
-    let distribute_min =
-      |cols: &mut [ColumnConstraints], indices: &[usize], need: f32| -> f32 {
-        if indices.is_empty() || need <= 0.0 {
-          return need;
-        }
-        let mut remaining = need;
+    let distribute_min = |cols: &mut [ColumnConstraints], indices: &[usize], need: f32| -> f32 {
+      if indices.is_empty() || need <= 0.0 {
+        return need;
+      }
+      let mut remaining = need;
 
-        let mut total_headroom = 0.0;
-        let mut infinite = 0usize;
+      let mut total_headroom = 0.0;
+      let mut infinite = 0usize;
+      for &i in indices {
+        let headroom = (cols[i].max_width - cols[i].min_width).max(0.0);
+        if headroom.is_finite() {
+          if headroom > 0.0 {
+            total_headroom += headroom;
+          }
+        } else {
+          infinite += 1;
+        }
+      }
+
+      if total_headroom > 0.0 && remaining.is_finite() {
+        let mut distributed = 0.0;
         for &i in indices {
           let headroom = (cols[i].max_width - cols[i].min_width).max(0.0);
-          if headroom.is_finite() {
-            if headroom > 0.0 {
-              total_headroom += headroom;
+          if headroom.is_finite() && headroom > 0.0 {
+            let share = remaining * (headroom / total_headroom);
+            let delta = share.min(headroom);
+            cols[i].min_width += delta;
+            if cols[i].max_width < cols[i].min_width {
+              cols[i].max_width = cols[i].min_width;
             }
-          } else {
-            infinite += 1;
+            distributed += delta;
           }
         }
+        remaining = (remaining - distributed).max(0.0);
+      }
 
-        if total_headroom > 0.0 && remaining.is_finite() {
-          let mut distributed = 0.0;
+      if remaining > 0.0 {
+        if infinite > 0 {
+          let per = remaining / infinite as f32;
           for &i in indices {
             let headroom = (cols[i].max_width - cols[i].min_width).max(0.0);
-            if headroom.is_finite() && headroom > 0.0 {
-              let share = remaining * (headroom / total_headroom);
-              let delta = share.min(headroom);
+            if !headroom.is_finite() {
+              cols[i].min_width += per;
+              if cols[i].max_width < cols[i].min_width {
+                cols[i].max_width = cols[i].min_width;
+              }
+            }
+          }
+          remaining = 0.0;
+        } else {
+          let mut total_weight = 0.0;
+          for &i in indices {
+            total_weight += cols[i].min_width.max(1.0);
+          }
+          if total_weight > 0.0 {
+            let mut distributed = 0.0;
+            for &i in indices {
+              let weight = cols[i].min_width.max(1.0);
+              let delta = remaining * (weight / total_weight);
               cols[i].min_width += delta;
               if cols[i].max_width < cols[i].min_width {
                 cols[i].max_width = cols[i].min_width;
               }
               distributed += delta;
             }
-          }
-          remaining = (remaining - distributed).max(0.0);
-        }
-
-        if remaining > 0.0 {
-          if infinite > 0 {
-            let per = remaining / infinite as f32;
-            for &i in indices {
-              let headroom = (cols[i].max_width - cols[i].min_width).max(0.0);
-              if !headroom.is_finite() {
-                cols[i].min_width += per;
-                if cols[i].max_width < cols[i].min_width {
-                  cols[i].max_width = cols[i].min_width;
-                }
-              }
-            }
-            remaining = 0.0;
-          } else {
-            let mut total_weight = 0.0;
-            for &i in indices {
-              total_weight += cols[i].min_width.max(1.0);
-            }
-            if total_weight > 0.0 {
-              let mut distributed = 0.0;
-              for &i in indices {
-                let weight = cols[i].min_width.max(1.0);
-                let delta = remaining * (weight / total_weight);
-                cols[i].min_width += delta;
-                if cols[i].max_width < cols[i].min_width {
-                  cols[i].max_width = cols[i].min_width;
-                }
-                distributed += delta;
-              }
-              remaining = (remaining - distributed).max(0.0);
-            }
+            remaining = (remaining - distributed).max(0.0);
           }
         }
+      }
 
-        remaining
-      };
+      remaining
+    };
 
     let current_min_sum: f32 = spanned.iter().map(|c| c.min_width).sum();
     if required_min > current_min_sum {
