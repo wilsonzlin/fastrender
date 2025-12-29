@@ -1925,18 +1925,36 @@ impl FormattingContext for FlexFormattingContext {
 
         let positioned_style =
           resolve_positioned_style(&child.style, &cb, self.viewport_size, &self.font_context);
-        let preferred_min_inline = fc
-          .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
-          .ok();
-        let preferred_inline = fc
-          .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent)
-          .ok();
-        let preferred_min_block = fc
-          .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent)
-          .ok();
-        let preferred_block = fc
-          .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent)
-          .ok();
+        let needs_inline_intrinsics = positioned_style.width.is_auto()
+          && (positioned_style.left.is_auto()
+            || positioned_style.right.is_auto()
+            || child.is_replaced());
+        let needs_block_intrinsics = positioned_style.height.is_auto()
+          && (positioned_style.top.is_auto() || positioned_style.bottom.is_auto());
+        let preferred_min_inline = if needs_inline_intrinsics {
+          fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
+            .ok()
+        } else {
+          None
+        };
+        let preferred_inline = if needs_inline_intrinsics {
+          fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent)
+            .ok()
+        } else {
+          None
+        };
+        let preferred_min_block = if needs_block_intrinsics {
+          fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent)
+            .ok()
+        } else {
+          None
+        };
+        let preferred_block = if needs_block_intrinsics {
+          fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent)
+            .ok()
+        } else {
+          None
+        };
 
         positioned_candidates.push(PositionedCandidate {
           child: child.clone(),
@@ -1978,6 +1996,31 @@ impl FormattingContext for FlexFormattingContext {
         input.preferred_block_size = candidate.preferred_block;
         let result = abs.layout_absolute(&input, &candidate.cb)?;
         let mut child_fragment = candidate.fragment;
+        let needs_relayout = (result.size.width - child_fragment.bounds.width()).abs() > 0.01
+          || (result.size.height - child_fragment.bounds.height()).abs() > 0.01;
+        if needs_relayout {
+          let factory = crate::layout::contexts::factory::FormattingContextFactory::with_font_context_viewport_and_cb(
+            self.font_context.clone(),
+            self.viewport_size,
+            candidate.cb,
+          )
+          .with_parallelism(self.parallelism);
+          let fc_type = candidate
+            .layout_child
+            .formatting_context()
+            .unwrap_or(crate::style::display::FormattingContextType::Block);
+          let fc = factory.create(fc_type);
+          let relayout_constraints = LayoutConstraints::new(
+            CrateAvailableSpace::Definite(result.size.width),
+            CrateAvailableSpace::Definite(result.size.height),
+          );
+          let mut relayout_child = candidate.layout_child.clone();
+          let mut relayout_style = (*relayout_child.style).clone();
+          relayout_style.width = Some(Length::px(result.size.width));
+          relayout_style.height = Some(Length::px(result.size.height));
+          relayout_child.style = Arc::new(relayout_style);
+          child_fragment = fc.layout(&relayout_child, &relayout_constraints)?;
+        }
         child_fragment.bounds = Rect::new(result.position, result.size);
         child_fragment.style = Some(candidate.child.style.clone());
         fragment.children.push(child_fragment);

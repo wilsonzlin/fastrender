@@ -14,6 +14,7 @@ use fastrender::geometry::Rect;
 use fastrender::geometry::Size;
 use fastrender::layout::contexts::block::BlockFormattingContext;
 use fastrender::layout::contexts::flex::FlexFormattingContext;
+use fastrender::layout::contexts::grid::GridFormattingContext;
 use fastrender::layout::contexts::inline::InlineFormattingContext;
 use fastrender::paint::stacking::build_stacking_tree_from_fragment_tree;
 use fastrender::paint::stacking::StackingContextReason;
@@ -25,6 +26,7 @@ use fastrender::ComputedStyle;
 use fastrender::ContainingBlock;
 use fastrender::Display;
 use fastrender::FormattingContext;
+use fastrender::FragmentContent;
 use fastrender::FragmentNode;
 use fastrender::LayoutConstraints;
 use fastrender::Length;
@@ -58,6 +60,50 @@ fn create_containing_block(width: f32, height: f32) -> ContainingBlock {
 
 fn create_containing_block_at(x: f32, y: f32, width: f32, height: f32) -> ContainingBlock {
   ContainingBlock::new(Rect::from_xywh(x, y, width, height))
+}
+
+fn find_fragment_by_box_id<'a>(
+  fragment: &'a FragmentNode,
+  box_id: usize,
+) -> Option<&'a FragmentNode> {
+  let mut stack = vec![fragment];
+  while let Some(node) = stack.pop() {
+    let matches_id = match &node.content {
+      FragmentContent::Block { box_id: Some(id) }
+      | FragmentContent::Inline {
+        box_id: Some(id), ..
+      }
+      | FragmentContent::Text {
+        box_id: Some(id), ..
+      }
+      | FragmentContent::Replaced {
+        box_id: Some(id), ..
+      } => *id == box_id,
+      _ => false,
+    };
+    if matches_id {
+      return Some(node);
+    }
+    for child in &node.children {
+      stack.push(child);
+    }
+  }
+  None
+}
+
+fn count_line_fragments(fragment: &FragmentNode) -> usize {
+  fragment
+    .iter_fragments()
+    .filter(|f| matches!(f.content, FragmentContent::Line { .. }))
+    .count()
+}
+
+fn max_text_right(fragment: &FragmentNode) -> f32 {
+  fragment
+    .iter_fragments()
+    .filter(|f| matches!(f.content, FragmentContent::Text { .. }))
+    .map(|f| f.bounds.max_x())
+    .fold(fragment.bounds.max_x(), f32::max)
 }
 
 // ============================================================================
@@ -249,6 +295,193 @@ fn absolute_static_position_in_empty_inline_respects_padding_once() {
     (abs_fragment.bounds.y() - 4.0).abs() < 0.1,
     "static position should start at padding-top; got {}",
     abs_fragment.bounds.y()
+  );
+}
+
+#[test]
+fn absolute_inline_child_reflows_to_used_width() {
+  let mut container_style = ComputedStyle::default();
+  container_style.display = Display::Inline;
+  container_style.position = Position::Relative;
+  container_style.width = Some(Length::px(200.0));
+
+  let mut abs_style = ComputedStyle::default();
+  abs_style.position = Position::Absolute;
+  abs_style.left = Some(Length::px(70.0));
+  abs_style.right = Some(Length::px(70.0));
+  abs_style.font_size = 10.0;
+  let abs_style = Arc::new(abs_style);
+
+  let mut text_style = ComputedStyle::default();
+  text_style.font_size = 10.0;
+  let text_style = Arc::new(text_style);
+
+  let abs_id = 1usize;
+  let text = BoxNode::new_text(
+    text_style,
+    "Positioned text should wrap correctly".to_string(),
+  );
+  let mut abs_child =
+    BoxNode::new_block(abs_style.clone(), FormattingContextType::Inline, vec![text]);
+  abs_child.id = abs_id;
+
+  let mut container = BoxNode::new_block(
+    Arc::new(container_style),
+    FormattingContextType::Inline,
+    vec![abs_child],
+  );
+  container.id = 10;
+
+  let constraints = LayoutConstraints::definite_width(200.0);
+  let fragment = InlineFormattingContext::new()
+    .layout(&container, &constraints)
+    .expect("inline layout");
+
+  let abs_fragment = find_fragment_by_box_id(&fragment, abs_id).expect("abs fragment present");
+  assert!(
+    (abs_fragment.bounds.width() - 60.0).abs() < 0.5,
+    "used width should subtract insets (got {:.1})",
+    abs_fragment.bounds.width()
+  );
+  let line_count = count_line_fragments(abs_fragment);
+  assert!(
+    line_count >= 2,
+    "positioned inline child should wrap when used width shrinks (lines={line_count})"
+  );
+  let text_right = max_text_right(abs_fragment);
+  assert!(
+    text_right <= abs_fragment.bounds.max_x() + 0.5,
+    "text should not overflow used width (max_x {:.1} > {:.1})",
+    text_right,
+    abs_fragment.bounds.max_x()
+  );
+}
+
+#[test]
+fn absolute_flex_child_reflows_to_used_width() {
+  let mut container_style = ComputedStyle::default();
+  container_style.display = Display::Flex;
+  container_style.position = Position::Relative;
+  container_style.width = Some(Length::px(240.0));
+
+  let mut filler_style = ComputedStyle::default();
+  filler_style.display = Display::Block;
+  filler_style.height = Some(Length::px(10.0));
+  let filler = BoxNode::new_block(Arc::new(filler_style), FormattingContextType::Block, vec![]);
+
+  let mut abs_style = ComputedStyle::default();
+  abs_style.position = Position::Absolute;
+  abs_style.left = Some(Length::px(60.0));
+  abs_style.right = Some(Length::px(60.0));
+  abs_style.font_size = 10.0;
+  let abs_style = Arc::new(abs_style);
+
+  let mut text_style = ComputedStyle::default();
+  text_style.font_size = 10.0;
+  let text_style = Arc::new(text_style);
+
+  let abs_id = 2usize;
+  let text = BoxNode::new_text(
+    text_style,
+    "Positioned text should wrap correctly".to_string(),
+  );
+  let mut abs_child =
+    BoxNode::new_block(abs_style.clone(), FormattingContextType::Inline, vec![text]);
+  abs_child.id = abs_id;
+
+  let mut container = BoxNode::new_block(
+    Arc::new(container_style),
+    FormattingContextType::Flex,
+    vec![filler, abs_child],
+  );
+  container.id = 11;
+
+  let constraints = LayoutConstraints::definite(240.0, 200.0);
+  let fragment = FlexFormattingContext::new()
+    .layout(&container, &constraints)
+    .expect("flex layout");
+
+  let abs_fragment = find_fragment_by_box_id(&fragment, abs_id).expect("abs fragment present");
+  assert!(
+    (abs_fragment.bounds.width() - 120.0).abs() < 0.5,
+    "used width should subtract left/right insets (got {:.1})",
+    abs_fragment.bounds.width()
+  );
+  let line_count = count_line_fragments(abs_fragment);
+  assert!(
+    line_count >= 2,
+    "positioned flex child should wrap when used width shrinks (lines={line_count})"
+  );
+  let text_right = max_text_right(abs_fragment);
+  assert!(
+    text_right <= abs_fragment.bounds.max_x() + 0.5,
+    "text should not overflow used width (max_x {:.1} > {:.1})",
+    text_right,
+    abs_fragment.bounds.max_x()
+  );
+}
+
+#[test]
+fn absolute_grid_child_reflows_to_used_width() {
+  let mut container_style = ComputedStyle::default();
+  container_style.display = Display::Grid;
+  container_style.position = Position::Relative;
+  container_style.width = Some(Length::px(240.0));
+
+  let mut filler_style = ComputedStyle::default();
+  filler_style.display = Display::Block;
+  filler_style.height = Some(Length::px(10.0));
+  let filler = BoxNode::new_block(Arc::new(filler_style), FormattingContextType::Block, vec![]);
+
+  let mut abs_style = ComputedStyle::default();
+  abs_style.position = Position::Absolute;
+  abs_style.left = Some(Length::px(60.0));
+  abs_style.right = Some(Length::px(60.0));
+  abs_style.font_size = 10.0;
+  let abs_style = Arc::new(abs_style);
+
+  let mut text_style = ComputedStyle::default();
+  text_style.font_size = 10.0;
+  let text_style = Arc::new(text_style);
+
+  let abs_id = 3usize;
+  let text = BoxNode::new_text(
+    text_style,
+    "Positioned text should wrap correctly".to_string(),
+  );
+  let mut abs_child =
+    BoxNode::new_block(abs_style.clone(), FormattingContextType::Inline, vec![text]);
+  abs_child.id = abs_id;
+
+  let mut container = BoxNode::new_block(
+    Arc::new(container_style),
+    FormattingContextType::Grid,
+    vec![filler, abs_child],
+  );
+  container.id = 12;
+
+  let constraints = LayoutConstraints::definite(240.0, 200.0);
+  let fragment = GridFormattingContext::new()
+    .layout(&container, &constraints)
+    .expect("grid layout");
+
+  let abs_fragment = find_fragment_by_box_id(&fragment, abs_id).expect("abs fragment present");
+  assert!(
+    (abs_fragment.bounds.width() - 120.0).abs() < 0.5,
+    "used width should subtract left/right insets (got {:.1})",
+    abs_fragment.bounds.width()
+  );
+  let line_count = count_line_fragments(abs_fragment);
+  assert!(
+    line_count >= 2,
+    "positioned grid child should wrap when used width shrinks (lines={line_count})"
+  );
+  let text_right = max_text_right(abs_fragment);
+  assert!(
+    text_right <= abs_fragment.bounds.max_x() + 0.5,
+    "text should not overflow used width (max_x {:.1} > {:.1})",
+    text_right,
+    abs_fragment.bounds.max_x()
   );
 }
 

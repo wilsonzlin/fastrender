@@ -1458,18 +1458,36 @@ impl GridFormattingContext {
       // Static position resolves to where the element would be in flow; use the
       // content origin here since AbsoluteLayout adds padding/border.
       let static_pos = crate::geometry::Point::ZERO;
-      let preferred_min_inline = fc
-        .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
-        .ok();
-      let preferred_inline = fc
-        .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent)
-        .ok();
-      let preferred_min_block = fc
-        .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent)
-        .ok();
-      let preferred_block = fc
-        .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent)
-        .ok();
+      let needs_inline_intrinsics = positioned_style.width.is_auto()
+        && (positioned_style.left.is_auto()
+          || positioned_style.right.is_auto()
+          || child.is_replaced());
+      let needs_block_intrinsics = positioned_style.height.is_auto()
+        && (positioned_style.top.is_auto() || positioned_style.bottom.is_auto());
+      let preferred_min_inline = if needs_inline_intrinsics {
+        fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
+          .ok()
+      } else {
+        None
+      };
+      let preferred_inline = if needs_inline_intrinsics {
+        fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent)
+          .ok()
+      } else {
+        None
+      };
+      let preferred_min_block = if needs_block_intrinsics {
+        fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent)
+          .ok()
+      } else {
+        None
+      };
+      let preferred_block = if needs_block_intrinsics {
+        fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent)
+          .ok()
+      } else {
+        None
+      };
 
       let mut input = crate::layout::absolute_positioning::AbsoluteLayoutInput::new(
         positioned_style,
@@ -1482,7 +1500,22 @@ impl GridFormattingContext {
       input.preferred_min_block_size = preferred_min_block;
       input.preferred_block_size = preferred_block;
       let result = abs.layout_absolute(&input, &cb)?;
+      let needs_relayout = (result.size.width - child_fragment.bounds.width()).abs() > 0.01
+        || (result.size.height - child_fragment.bounds.height()).abs() > 0.01;
+      if needs_relayout {
+        let relayout_constraints = LayoutConstraints::new(
+          CrateAvailableSpace::Definite(result.size.width),
+          CrateAvailableSpace::Definite(result.size.height),
+        );
+        let mut relayout_child = layout_child.clone();
+        let mut relayout_style = (*relayout_child.style).clone();
+        relayout_style.width = Some(Length::px(result.size.width));
+        relayout_style.height = Some(Length::px(result.size.height));
+        relayout_child.style = Arc::new(relayout_style);
+        child_fragment = fc.layout(&relayout_child, &relayout_constraints)?;
+      }
       child_fragment.bounds = crate::geometry::Rect::new(result.position, result.size);
+      child_fragment.style = Some(child.style.clone());
       fragments.push(child_fragment);
     }
 
@@ -2731,18 +2764,36 @@ impl FormattingContext for GridFormattingContext {
           .get(&child.id)
           .copied()
           .unwrap_or(crate::geometry::Point::ZERO);
-        let preferred_min_inline = fc
-          .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
-          .ok();
-        let preferred_inline = fc
-          .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent)
-          .ok();
-        let preferred_min_block = fc
-          .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent)
-          .ok();
-        let preferred_block = fc
-          .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent)
-          .ok();
+        let needs_inline_intrinsics = positioned_style.width.is_auto()
+          && (positioned_style.left.is_auto()
+            || positioned_style.right.is_auto()
+            || child.is_replaced());
+        let needs_block_intrinsics = positioned_style.height.is_auto()
+          && (positioned_style.top.is_auto() || positioned_style.bottom.is_auto());
+        let preferred_min_inline = if needs_inline_intrinsics {
+          fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
+            .ok()
+        } else {
+          None
+        };
+        let preferred_inline = if needs_inline_intrinsics {
+          fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent)
+            .ok()
+        } else {
+          None
+        };
+        let preferred_min_block = if needs_block_intrinsics {
+          fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent)
+            .ok()
+        } else {
+          None
+        };
+        let preferred_block = if needs_block_intrinsics {
+          fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent)
+            .ok()
+        } else {
+          None
+        };
 
         let mut input = crate::layout::absolute_positioning::AbsoluteLayoutInput::new(
           positioned_style,
@@ -2755,7 +2806,22 @@ impl FormattingContext for GridFormattingContext {
         input.preferred_min_block_size = preferred_min_block;
         input.preferred_block_size = preferred_block;
         let result = abs.layout_absolute(&input, &cb)?;
+        let needs_relayout = (result.size.width - child_fragment.bounds.width()).abs() > 0.01
+          || (result.size.height - child_fragment.bounds.height()).abs() > 0.01;
+        if needs_relayout {
+          let relayout_constraints = LayoutConstraints::new(
+            CrateAvailableSpace::Definite(result.size.width),
+            CrateAvailableSpace::Definite(result.size.height),
+          );
+          let mut relayout_child = layout_child.clone();
+          let mut relayout_style = (*relayout_child.style).clone();
+          relayout_style.width = Some(Length::px(result.size.width));
+          relayout_style.height = Some(Length::px(result.size.height));
+          relayout_child.style = Arc::new(relayout_style);
+          child_fragment = fc.layout(&relayout_child, &relayout_constraints)?;
+        }
         child_fragment.bounds = crate::geometry::Rect::new(result.position, result.size);
+        child_fragment.style = Some(child.style.clone());
         fragment.children.push(child_fragment);
       }
     }
