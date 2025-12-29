@@ -150,6 +150,9 @@ struct ColorFontCaches {
   palette_cache: LruCache<PaletteCacheKey, Option<Arc<cpal::ParsedPalette>>>,
   colr_v0_headers: LruCache<FontKey, Option<colr_v0::ColrV0Header>>,
   colr_v0_base_glyphs: LruCache<colr_v0::BaseGlyphCacheKey, Option<colr_v0::BaseGlyphRecord>>,
+  colr_v1_fonts: LruCache<FontKey, Option<Arc<colr_v1::ColrV1CacheEntry>>>,
+  colr_v1_base_glyphs:
+    LruCache<colr_v1::BaseGlyphCacheKey, colr_v1::BaseGlyphCacheValue>,
 }
 
 impl ColorFontCaches {
@@ -158,6 +161,8 @@ impl ColorFontCaches {
       palette_cache: LruCache::new(Self::cap(64)),
       colr_v0_headers: LruCache::new(Self::cap(64)),
       colr_v0_base_glyphs: LruCache::new(Self::cap(1024)),
+      colr_v1_fonts: LruCache::new(Self::cap(64)),
+      colr_v1_base_glyphs: LruCache::new(Self::cap(1024)),
     }
   }
 
@@ -207,6 +212,32 @@ impl ColorFontCaches {
     let record = colr_v0::find_base_glyph(data, header, key.glyph_id);
     self.colr_v0_base_glyphs.put(key, record);
     Some(record)
+  }
+
+  fn colr_v1_font(
+    &mut self,
+    font_key: FontKey,
+    font: &LoadedFont,
+  ) -> Option<Arc<colr_v1::ColrV1CacheEntry>> {
+    if let Some(entry) = self.colr_v1_fonts.get(&font_key) {
+      return entry.clone();
+    }
+    let entry = colr_v1::ColrV1CacheEntry::parse(font);
+    self.colr_v1_fonts.put(font_key, entry.clone());
+    entry
+  }
+
+  fn colr_v1_base_glyph(
+    &mut self,
+    key: colr_v1::BaseGlyphCacheKey,
+    entry: &colr_v1::ColrV1CacheEntry,
+  ) -> Option<Option<colr_v1::CachedBaseGlyph>> {
+    if let Some(glyph) = self.colr_v1_base_glyphs.get(&key) {
+      return Some(glyph.as_ref().map(|(_, glyph)| glyph.clone()));
+    }
+    let glyph = entry.base_glyph(key.glyph_id);
+    self.colr_v1_base_glyphs.put(key, glyph.clone());
+    Some(glyph.map(|(_, glyph)| glyph))
   }
 }
 

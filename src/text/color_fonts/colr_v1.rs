@@ -8,6 +8,9 @@ use read_fonts::tables::colr::{
 use read_fonts::types::{F2Dot14, Fixed, GlyphId};
 use read_fonts::{FontRef, TableProvider};
 use std::collections::HashSet;
+#[cfg(test)]
+use std::cell::Cell;
+use std::mem;
 use std::sync::{Arc, Mutex};
 use tiny_skia::{
   BlendMode, Color, FillRule, GradientStop, Mask, Paint as SkiaPaint, Path, PathBuilder, Pixmap,
@@ -15,6 +18,64 @@ use tiny_skia::{
 };
 
 const RASTER_PAD: f32 = 1.0;
+
+#[derive(Clone)]
+pub(super) struct ColrV1CacheEntry {
+  data: Arc<Vec<u8>>,
+  #[allow(dead_code)]
+  font_ref: FontRef<'static>,
+  pub colr: Colr<'static>,
+}
+
+impl std::fmt::Debug for ColrV1CacheEntry {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f
+      .debug_struct("ColrV1CacheEntry")
+      .field("data_len", &self.data.len())
+      .finish()
+  }
+}
+
+pub(super) type CachedBaseGlyph = (Paint<'static>, PaintId);
+pub(super) type BaseGlyphCacheValue = Option<(Arc<Vec<u8>>, CachedBaseGlyph)>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(super) struct BaseGlyphCacheKey {
+  pub font: FontKey,
+  pub glyph_id: u16,
+}
+
+impl BaseGlyphCacheKey {
+  pub fn new(font: FontKey, glyph_id: u16) -> Self {
+    Self { font, glyph_id }
+  }
+}
+
+impl ColrV1CacheEntry {
+  pub fn parse(font: &LoadedFont) -> Option<Arc<Self>> {
+    let data = Arc::clone(&font.data);
+    // SAFETY: the Arc keeps the font data alive for the lifetime of the cached entry.
+    let static_data: &'static [u8] =
+      unsafe { mem::transmute::<&[u8], &'static [u8]>(&*data) };
+    record_font_ref_parse();
+    let font_ref = FontRef::from_index(static_data, font.index).ok()?;
+    record_colr_table_access();
+    let colr = font_ref.colr().ok()?;
+    if colr.version() != 1 {
+      return None;
+    }
+    Some(Arc::new(Self { data, font_ref, colr }))
+  }
+
+  pub fn base_glyph(&self, glyph_id: u16) -> BaseGlyphCacheValue {
+    self
+      .colr
+      .v1_base_glyph(GlyphId::from(glyph_id as u32))
+      .ok()
+      .flatten()
+      .map(|(paint, id)| (Arc::clone(&self.data), (paint, id)))
+  }
+}
 
 /// Render a COLRv1 paint graph for the given glyph.
 pub fn render_colr_glyph(
@@ -30,15 +91,17 @@ pub fn render_colr_glyph(
   limits: &GlyphRasterLimits,
   caches: &Arc<Mutex<ColorFontCaches>>,
 ) -> Option<ColorGlyphRaster> {
-  let font_ref = FontRef::from_index(font.data.as_slice(), font.index).ok()?;
-  let colr = font_ref.colr().ok()?;
-  if colr.version() != 1 {
-    return None;
-  }
+  let colr_entry = {
+    let mut caches = caches.lock().ok()?;
+    caches.colr_v1_font(font_key, font)?
+  };
+  let colr = &colr_entry.colr;
 
-  let (paint, paint_id) = colr
-    .v1_base_glyph(GlyphId::from(glyph_id.0 as u32))
-    .ok()??;
+  let (paint, paint_id) = {
+    let key = BaseGlyphCacheKey::new(font_key, glyph_id.0);
+    let mut caches = caches.lock().ok()?;
+    caches.colr_v1_base_glyph(key, colr_entry.as_ref())?
+  }?;
 
   let palette = {
     let mut caches = caches.lock().ok()?;
@@ -73,10 +136,12 @@ pub fn render_colr_glyph(
   let mut seen = HashSet::new();
   let renderer = Renderer {
     face,
-    colr: &colr,
     palette: &palette_colors,
     text_color,
     base_transform,
+    colr_entry: Arc::clone(&colr_entry),
+    caches: Arc::clone(caches),
+    font_key,
   };
 
   renderer.walk_paint(
@@ -182,12 +247,14 @@ fn raster_bounds(
   Some((min_x, min_y, max_x, max_y))
 }
 
-struct Renderer<'a, 'b> {
+struct Renderer<'a, 'p> {
   face: &'a ttf_parser::Face<'a>,
-  colr: &'b Colr<'a>,
-  palette: &'b [Rgba],
+  palette: &'p [Rgba],
   text_color: Rgba,
   base_transform: Transform,
+  colr_entry: Arc<ColrV1CacheEntry>,
+  caches: Arc<Mutex<ColorFontCaches>>,
+  font_key: FontKey,
 }
 
 #[derive(Clone)]
@@ -230,7 +297,7 @@ struct SweepGradientStop {
   color: Rgba,
 }
 
-impl<'a, 'b> Renderer<'a, 'b> {
+impl<'a, 'p> Renderer<'a, 'p> {
   fn walk_paint(
     &self,
     paint: Paint<'a>,
@@ -244,12 +311,13 @@ impl<'a, 'b> Renderer<'a, 'b> {
       return None;
     }
 
+    let colr = &self.colr_entry.colr;
     let result = match paint {
       Paint::ColrLayers(layer) => {
         let start = layer.first_layer_index() as usize;
         let count = layer.num_layers() as usize;
         for idx in start..start + count {
-          let (layer_paint, id) = self.colr.v1_layer(idx).ok()?;
+          let (layer_paint, id) = colr.v1_layer(idx).ok()?;
           self.walk_paint(layer_paint, id, design_transform, blend, commands, stack)?;
         }
         Some(())
@@ -272,7 +340,7 @@ impl<'a, 'b> Renderer<'a, 'b> {
       }
       Paint::ColrGlyph(colr) => {
         let glyph = GlyphId::from(colr.glyph_id().to_u16() as u32);
-        let (child_paint, id) = self.colr.v1_base_glyph(glyph).ok()??;
+        let (child_paint, id) = self.cached_base_glyph(glyph)?;
         self.walk_paint(child_paint, id, design_transform, blend, commands, stack)
       }
       Paint::Transform(paint_transform) => {
@@ -898,11 +966,17 @@ impl<'a, 'b> Renderer<'a, 'b> {
       Paint::Composite(composite) => self.resolve_brush(composite.source_paint().ok()?, combined),
       Paint::ColrGlyph(colr) => {
         let glyph = GlyphId::from(colr.glyph_id().to_u16() as u32);
-        let (paint, _) = self.colr.v1_base_glyph(glyph).ok()??;
+        let (paint, _) = self.cached_base_glyph(glyph)?;
         self.resolve_brush(paint, combined)
       }
       Paint::ColrLayers(_) => None,
     }
+  }
+
+  fn cached_base_glyph(&self, glyph: GlyphId) -> Option<(Paint<'static>, PaintId)> {
+    let key = BaseGlyphCacheKey::new(self.font_key, glyph.to_u32() as u16);
+    let mut caches = self.caches.lock().ok()?;
+    caches.colr_v1_base_glyph(key, self.colr_entry.as_ref())?
   }
 }
 
@@ -1525,9 +1599,82 @@ impl ttf_parser::OutlineBuilder for GlyphOutlineBuilder {
 }
 
 #[cfg(test)]
+thread_local! {
+  static TEST_PARSE_COUNTING_ENABLED: Cell<bool> = Cell::new(false);
+  static TEST_FONT_REF_PARSE_COUNT: Cell<u64> = Cell::new(0);
+  static TEST_COLR_ACCESS_COUNT: Cell<u64> = Cell::new(0);
+}
+
+#[cfg(test)]
+#[inline]
+fn record_font_ref_parse() {
+  TEST_PARSE_COUNTING_ENABLED.with(|enabled| {
+    if enabled.get() {
+      TEST_FONT_REF_PARSE_COUNT.with(|count| count.set(count.get().saturating_add(1)));
+    }
+  });
+}
+
+#[cfg(test)]
+#[inline]
+fn record_colr_table_access() {
+  TEST_PARSE_COUNTING_ENABLED.with(|enabled| {
+    if enabled.get() {
+      TEST_COLR_ACCESS_COUNT.with(|count| count.set(count.get().saturating_add(1)));
+    }
+  });
+}
+
+#[cfg(test)]
+pub(super) struct ColrV1ParseCountGuard {
+  _private: (),
+}
+
+#[cfg(test)]
+impl ColrV1ParseCountGuard {
+  pub fn start() -> Self {
+    TEST_FONT_REF_PARSE_COUNT.with(|count| count.set(0));
+    TEST_COLR_ACCESS_COUNT.with(|count| count.set(0));
+    TEST_PARSE_COUNTING_ENABLED.with(|enabled| enabled.set(true));
+    Self { _private: () }
+  }
+}
+
+#[cfg(test)]
+impl Drop for ColrV1ParseCountGuard {
+  fn drop(&mut self) {
+    TEST_PARSE_COUNTING_ENABLED.with(|enabled| enabled.set(false));
+  }
+}
+
+#[cfg(test)]
+pub(super) fn colr_v1_parse_counts() -> (u64, u64) {
+  (
+    TEST_FONT_REF_PARSE_COUNT.with(|count| count.get()),
+    TEST_COLR_ACCESS_COUNT.with(|count| count.get()),
+  )
+}
+
+#[cfg(not(test))]
+#[inline]
+fn record_font_ref_parse() {}
+
+#[cfg(not(test))]
+#[inline]
+fn record_colr_table_access() {}
+
+#[cfg(test)]
 mod tests {
-  use super::{raster_bounds, Brush, DrawCommand, RASTER_PAD};
+  use super::{
+    colr_v1_parse_counts, raster_bounds, ColrV1ParseCountGuard, Brush, DrawCommand, RASTER_PAD,
+  };
+  use crate::style::color::Rgba;
+  use crate::text::color_fonts::ColorFontRenderer;
+  use crate::text::font_db::{FontStretch, FontStyle, FontWeight, LoadedFont};
+  use crate::text::font_instance::FontInstance;
   use tiny_skia::{BlendMode, Color, Path, PathBuilder};
+  use std::path::PathBuf;
+  use std::sync::Arc;
 
   fn rect_path(left: f32, top: f32, right: f32, bottom: f32) -> Path {
     let mut builder = PathBuilder::new();
@@ -1572,5 +1719,87 @@ mod tests {
       raster_bounds(&commands, Some(&disjoint_clip), RASTER_PAD).is_none(),
       "clip should cull non-overlapping paints"
     );
+  }
+
+  fn fixtures_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+      .join("tests")
+      .join("fixtures")
+  }
+
+  fn load_test_font() -> LoadedFont {
+    let data = std::fs::read(fixtures_path().join("fonts/colrv1-test.ttf"))
+      .expect("failed to read COLRv1 test font");
+    LoadedFont {
+      id: None,
+      data: Arc::new(data),
+      index: 0,
+      family: "ColrV1Test".into(),
+      weight: FontWeight::NORMAL,
+      style: FontStyle::Normal,
+      stretch: FontStretch::Normal,
+    }
+  }
+
+  #[test]
+  fn colr_v1_table_parsing_is_cached_per_font() {
+    let _guard = ColrV1ParseCountGuard::start();
+    let font = load_test_font();
+    let renderer = ColorFontRenderer::new();
+    let face = font.as_ttf_face().unwrap();
+    let instance = FontInstance::new(&font, &[]).expect("font instance");
+    let text_color = Rgba::from_rgba8(10, 20, 30, 255);
+
+    let renderable_gid = (0..face.number_of_glyphs())
+      .find(|gid| {
+        renderer
+          .render(
+            &font,
+            &instance,
+            *gid as u32,
+            64.0,
+            0,
+            &[],
+            text_color,
+            0.0,
+            &[],
+            None,
+          )
+          .is_some()
+      })
+      .expect("font should contain a COLRv1 glyph");
+
+    renderer
+      .render(
+        &font,
+        &instance,
+        renderable_gid as u32,
+        64.0,
+        1,
+        &[],
+        text_color,
+        0.0,
+        &[],
+        None,
+      )
+      .expect("palette render");
+    renderer
+      .render(
+        &font,
+        &instance,
+        renderable_gid as u32,
+        64.0,
+        0,
+        &[],
+        text_color,
+        0.0,
+        &[],
+        None,
+      )
+      .expect("cached render");
+
+    let (font_ref_parses, colr_accesses) = colr_v1_parse_counts();
+    assert_eq!(font_ref_parses, 1, "FontRef::from_index should be cached");
+    assert_eq!(colr_accesses, 1, "COLR table lookup should be cached");
   }
 }
