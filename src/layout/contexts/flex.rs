@@ -117,6 +117,44 @@ fn normalize_fragment_origin(fragment: &mut FragmentNode) {
 }
 
 #[derive(Clone)]
+struct CachedFragmentTemplate {
+  template: Arc<FragmentNode>,
+}
+
+impl CachedFragmentTemplate {
+  fn new(template: Arc<FragmentNode>) -> Self {
+    Self { template }
+  }
+
+  fn fragment(&self) -> &FragmentNode {
+    &self.template
+  }
+
+  fn place(&self, bounds: Rect) -> PlacedFragment {
+    PlacedFragment::new(self.template.clone(), bounds)
+  }
+}
+
+#[derive(Clone)]
+struct PlacedFragment {
+  bounds: Rect,
+  template: Arc<FragmentNode>,
+}
+
+impl PlacedFragment {
+  fn new(template: Arc<FragmentNode>, bounds: Rect) -> Self {
+    Self { bounds, template }
+  }
+
+  fn materialize(&self) -> FragmentNode {
+    let mut cloned = (*self.template).clone();
+    cloned.bounds = self.bounds;
+    flex_profile::record_fragment_materialize();
+    cloned
+  }
+}
+
+#[derive(Clone)]
 struct PositionedCandidate {
   child: BoxNode,
   layout_child: BoxNode,
@@ -3008,15 +3046,15 @@ impl FlexFormattingContext {
         let needs_intrinsic_main = (main_axis_is_row && raw_layout_width <= eps)
           || (!main_axis_is_row && raw_layout_height <= eps);
 
-        let mut reused = None;
+        let mut reused: Option<PlacedFragment> = None;
         if !needs_intrinsic_main {
           if let Some((stored_size, frag)) = measured_fragments.find_fragment(
             flex_cache_key(child_box),
             Size::new(target_width, target_height),
           ) {
             record_fragment_clone(CloneSite::FlexMeasureReuse, frag.as_ref());
-            let mut cloned = (*frag).clone();
-            let intrinsic_size = Self::fragment_subtree_size(&cloned);
+            let template = CachedFragmentTemplate::new(frag);
+            let intrinsic_size = Self::fragment_subtree_size(template.fragment());
             let mut resolved_width = layout_width;
             let mut resolved_height = layout_height;
             if resolved_width <= eps && intrinsic_size.width > eps {
@@ -3165,17 +3203,17 @@ impl FlexFormattingContext {
                                     child_box.style.max_width
                                 );
             }
-            cloned.bounds = Rect::new(
+            let bounds = Rect::new(
               Point::new(origin_x, origin_y),
               Size::new(resolved_width, resolved_height),
             );
-            reused = Some(cloned);
+            reused = Some(template.place(bounds));
           }
         }
 
         let mut final_fragment: Option<FragmentNode> = None;
         if let Some(child_fragment) = reused {
-          final_fragment = Some(child_fragment);
+          final_fragment = Some(child_fragment.materialize());
         } else if let crate::tree::box_tree::BoxType::Replaced(replaced_box) = &child_box.box_type {
           let bounds = Rect::new(
             Point::new(child_loc_x, child_loc_y),
@@ -4868,12 +4906,13 @@ mod tests {
   #[test]
   fn flex_cache_key_avoids_selector_allocations() {
     let style = Arc::new(ComputedStyle::default());
-    let node =
-      BoxNode::new_block(style, FormattingContextType::Block, vec![]).with_debug_info(DebugInfo::new(
+    let node = BoxNode::new_block(style, FormattingContextType::Block, vec![]).with_debug_info(
+      DebugInfo::new(
         Some("div".to_string()),
         Some("carousel".to_string()),
         vec!["item".to_string(), "active".to_string()],
-      ));
+      ),
+    );
     let (_key, selector_calls) = track_to_selector_calls(|| super::flex_cache_key(&node));
     assert_eq!(
       selector_calls, 0,
