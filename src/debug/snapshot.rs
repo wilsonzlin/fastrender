@@ -7,6 +7,7 @@ use crate::style::values::Length;
 use crate::style::ComputedStyle;
 use crate::tree::box_tree::{BoxNode, BoxTree, BoxType, MarkerContent, ReplacedType};
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
+use selectors::context::QuirksMode;
 use serde::{Deserialize, Serialize};
 
 /// Schema version for all snapshot types.
@@ -17,6 +18,41 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum SchemaVersion {
   V1,
+}
+
+/// Document quirks mode snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum QuirksModeSnapshot {
+  NoQuirks,
+  LimitedQuirks,
+  Quirks,
+}
+
+impl Default for QuirksModeSnapshot {
+  fn default() -> Self {
+    QuirksModeSnapshot::NoQuirks
+  }
+}
+
+impl From<QuirksMode> for QuirksModeSnapshot {
+  fn from(mode: QuirksMode) -> Self {
+    match mode {
+      QuirksMode::Quirks => QuirksModeSnapshot::Quirks,
+      QuirksMode::LimitedQuirks => QuirksModeSnapshot::LimitedQuirks,
+      QuirksMode::NoQuirks => QuirksModeSnapshot::NoQuirks,
+    }
+  }
+}
+
+impl QuirksModeSnapshot {
+  pub fn as_str(&self) -> &'static str {
+    match self {
+      QuirksModeSnapshot::NoQuirks => "no_quirks",
+      QuirksModeSnapshot::LimitedQuirks => "limited_quirks",
+      QuirksModeSnapshot::Quirks => "quirks",
+    }
+  }
 }
 
 impl SchemaVersion {
@@ -43,6 +79,8 @@ impl SchemaVersion {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DomSnapshot {
   pub schema_version: SchemaVersion,
+  #[serde(default)]
+  pub quirks_mode: QuirksModeSnapshot,
   pub root: DomNodeSnapshot,
 }
 
@@ -324,6 +362,7 @@ pub fn snapshot_dom(dom: &DomNode) -> DomSnapshot {
   let mut next = 1usize;
   DomSnapshot {
     schema_version: SchemaVersion::current(),
+    quirks_mode: QuirksModeSnapshot::from(dom.document_quirks_mode()),
     root: snapshot_dom_node(dom, &mut next),
   }
 }

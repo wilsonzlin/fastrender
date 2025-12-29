@@ -14,6 +14,7 @@ use common::render_pipeline::{
 };
 use fastrender::api::{FastRenderPool, FastRenderPoolConfig};
 use fastrender::debug::runtime::RuntimeToggles;
+use fastrender::debug::snapshot::QuirksModeSnapshot;
 use fastrender::dom::{DomNode, DomNodeType};
 use fastrender::image_output::encode_image;
 use fastrender::pageset::{pageset_stem, CACHE_HTML_DIR};
@@ -833,6 +834,8 @@ struct SerializableDomNode {
   tag: Option<String>,
   attributes: Option<Vec<(String, String)>>,
   text: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  quirks_mode: Option<String>,
   children: Vec<SerializableDomNode>,
 }
 
@@ -1055,9 +1058,16 @@ fn write_pipeline_snapshot(base: &Path, name: &str, artifacts: &RenderArtifacts,
 }
 
 fn serialize_dom(node: &DomNode) -> SerializableDomNode {
-  let (kind, namespace, tag, attributes, text) = match &node.node_type {
-    DomNodeType::Document { .. } => ("document".to_string(), None, None, None, None),
-    DomNodeType::ShadowRoot { .. } => ("shadow-root".to_string(), None, None, None, None),
+  let (kind, namespace, tag, attributes, text, quirks_mode) = match &node.node_type {
+    DomNodeType::Document { quirks_mode } => (
+      "document".to_string(),
+      None,
+      None,
+      None,
+      None,
+      Some(QuirksModeSnapshot::from(*quirks_mode).as_str().to_string()),
+    ),
+    DomNodeType::ShadowRoot { .. } => ("shadow-root".to_string(), None, None, None, None, None),
     DomNodeType::Slot {
       namespace,
       attributes,
@@ -1067,6 +1077,7 @@ fn serialize_dom(node: &DomNode) -> SerializableDomNode {
       Some(namespace.clone()),
       None,
       Some(attributes.clone()),
+      None,
       None,
     ),
     DomNodeType::Element {
@@ -1079,6 +1090,7 @@ fn serialize_dom(node: &DomNode) -> SerializableDomNode {
       Some(tag_name.clone()),
       Some(attributes.clone()),
       None,
+      None,
     ),
     DomNodeType::Text { content } => (
       "text".to_string(),
@@ -1086,6 +1098,7 @@ fn serialize_dom(node: &DomNode) -> SerializableDomNode {
       None,
       None,
       Some(truncate_text(content, TEXT_PREVIEW)),
+      None,
     ),
   };
 
@@ -1095,6 +1108,7 @@ fn serialize_dom(node: &DomNode) -> SerializableDomNode {
     tag,
     attributes,
     text,
+    quirks_mode,
     children: node.children.iter().map(serialize_dom).collect(),
   }
 }

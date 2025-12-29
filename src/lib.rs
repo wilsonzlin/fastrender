@@ -246,8 +246,8 @@ pub use css::types::Transform;
 pub use debug::snapshot::{
   snapshot_box_tree, snapshot_dom, snapshot_fragment_tree, snapshot_pipeline, snapshot_styled,
   BoxNodeSnapshot, BoxTreeSnapshot, DisplayItemSnapshot, DisplayListSnapshot, DomNodeSnapshot,
-  DomSnapshot, FragmentNodeSnapshot, FragmentTreeSnapshot, PipelineSnapshot, SchemaVersion,
-  StyledNodeSnapshot, StyledSnapshot,
+  DomSnapshot, FragmentNodeSnapshot, FragmentTreeSnapshot, PipelineSnapshot, QuirksModeSnapshot,
+  SchemaVersion, StyledNodeSnapshot, StyledSnapshot,
 };
 pub use debug::tree_printer::{
   ColorMode, DiffMode, DotExporter, EnhancedTreePrinter, JsonExportConfig, PrintConfig, TreeDiff,

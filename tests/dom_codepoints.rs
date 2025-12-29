@@ -1,7 +1,7 @@
 use fastrender::dom;
 use fastrender::dom::DomNode;
 use fastrender::dom::DomNodeType;
-use selectors::matching::QuirksMode;
+use selectors::context::QuirksMode;
 
 fn text_node(content: &str) -> DomNode {
   DomNode {

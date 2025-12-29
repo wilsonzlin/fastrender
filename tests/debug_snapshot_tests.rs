@@ -1,5 +1,5 @@
 use fastrender::css::types::StyleSheet;
-use fastrender::debug::snapshot::snapshot_pipeline;
+use fastrender::debug::snapshot::{snapshot_dom, snapshot_pipeline, QuirksModeSnapshot};
 use fastrender::dom;
 use fastrender::geometry::Size;
 use fastrender::layout::engine::{LayoutConfig, LayoutEngine};
@@ -70,4 +70,22 @@ fn pipeline_snapshot_matches_fixture() {
     Ok(()) => {}
     Err(panic) => std::panic::resume_unwind(panic),
   }
+}
+
+#[test]
+fn dom_snapshot_records_no_quirks_for_doctype() {
+  let dom = dom::parse_html("<!doctype html><html><body></body></html>").expect("parse html");
+  let snapshot = snapshot_dom(&dom);
+  assert_eq!(snapshot.quirks_mode, QuirksModeSnapshot::NoQuirks);
+  let json = serde_json::to_value(&snapshot).expect("serialize snapshot");
+  assert_eq!(json["quirks_mode"], "no_quirks");
+}
+
+#[test]
+fn dom_snapshot_records_quirks_without_doctype() {
+  let dom = dom::parse_html("<html><body></body></html>").expect("parse html");
+  let snapshot = snapshot_dom(&dom);
+  assert_eq!(snapshot.quirks_mode, QuirksModeSnapshot::Quirks);
+  let json = serde_json::to_value(&snapshot).expect("serialize snapshot");
+  assert_eq!(json["quirks_mode"], "quirks");
 }

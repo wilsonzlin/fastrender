@@ -2,6 +2,7 @@
   "schema_version": "v1",
   "dom": {
     "schema_version": "v1",
+    "quirks_mode": "no_quirks",
     "root": {
       "node_id": 1,
       "kind": {
