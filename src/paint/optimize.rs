@@ -231,13 +231,6 @@ impl DisplayListOptimizer {
       match item {
         DisplayItem::PushTransform(t) => {
           transform_stack.push(transform_state.clone());
-          if !clip_stack.is_empty() {
-            for clip in &mut clip_stack {
-              clip.can_cull = false;
-            }
-            refresh_context_clipping(&mut context_stack, &clip_stack);
-          }
-
           let mapping = Self::transform_mapping(&t.transform);
           transform_state.current = transform_state.current.multiply(&mapping);
           include_item = true;
@@ -575,8 +568,7 @@ impl DisplayListOptimizer {
   }
 
   fn is_noop_stacking_context(item: &StackingContextItem) -> bool {
-    !item.creates_stacking_context
-      && item.child_perspective.is_none()
+    item.child_perspective.is_none()
       && item.transform.is_none()
       && item.filters.is_empty()
       && item.backdrop_filters.is_empty()
@@ -610,15 +602,6 @@ impl DisplayListOptimizer {
       match &item {
         DisplayItem::PushTransform(t) => {
           transform_stack.push(transform_state.clone());
-          if !clip_stack.is_empty() {
-            // A transform within a clip scope can reposition descendants; be conservative and avoid
-            // culling based solely on the clip's initial bounds.
-            for clip in &mut clip_stack {
-              clip.can_cull = false;
-            }
-            refresh_context_clipping(&mut context_stack, &clip_stack);
-          }
-
           let mapping = Self::transform_mapping(&t.transform);
           transform_state.current = transform_state.current.multiply(&mapping);
           include_item = true;

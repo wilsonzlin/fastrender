@@ -5110,8 +5110,8 @@ mod tests {
     let mut child_style = ComputedStyle::default();
     child_style.display = Display::Block;
     child_style.position = Position::Relative;
-    child_style.left = LengthOrAuto::px(9.0);
-    child_style.top = LengthOrAuto::px(11.0);
+    child_style.left = Some(Length::px(9.0));
+    child_style.top = Some(Length::px(11.0));
     child_style.width = Some(Length::px(40.0));
     child_style.height = Some(Length::px(20.0));
     let grandchild = BoxNode::new_block(
