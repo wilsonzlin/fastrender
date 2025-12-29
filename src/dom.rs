@@ -3679,7 +3679,9 @@ mod tests {
   #[test]
   fn collect_text_codepoints_skips_template_contents() {
     let dom = DomNode {
-      node_type: DomNodeType::Document,
+      node_type: DomNodeType::Document {
+        quirks_mode: QuirksMode::NoQuirks,
+      },
       children: vec![
         element("div", vec![text("abc")]),
         DomNode {

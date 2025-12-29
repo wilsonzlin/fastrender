@@ -9296,7 +9296,8 @@ mod tests {
     let first_container_id = styled_node_id_by_id(&styled, "container").expect("container id");
 
     let config = LayoutConfig::for_viewport(Size::new(800.0, 600.0));
-    renderer.layout_engine = LayoutEngine::with_font_context(config, renderer.font_context.clone());
+    renderer.layout_engine =
+      LayoutEngine::with_font_context(config.clone(), renderer.font_context.clone());
     renderer.layout_parallelism = config.parallelism;
     let box_gen_options = renderer.box_generation_options();
     let mut box_tree =
@@ -9385,7 +9386,8 @@ mod tests {
     );
 
     let config = LayoutConfig::for_viewport(Size::new(800.0, 600.0));
-    renderer.layout_engine = LayoutEngine::with_font_context(config, renderer.font_context.clone());
+    renderer.layout_engine =
+      LayoutEngine::with_font_context(config.clone(), renderer.font_context.clone());
     renderer.layout_parallelism = config.parallelism;
     let box_gen_options = renderer.box_generation_options();
     let mut box_tree =
@@ -9450,7 +9452,8 @@ mod tests {
     );
 
     let config = LayoutConfig::for_viewport(Size::new(800.0, 600.0));
-    renderer.layout_engine = LayoutEngine::with_font_context(config, renderer.font_context.clone());
+    renderer.layout_engine =
+      LayoutEngine::with_font_context(config.clone(), renderer.font_context.clone());
     renderer.layout_parallelism = config.parallelism;
     let box_gen_options = renderer.box_generation_options();
     let mut box_tree =
@@ -9508,7 +9511,8 @@ mod tests {
     );
 
     let config = LayoutConfig::for_viewport(Size::new(800.0, 600.0));
-    renderer.layout_engine = LayoutEngine::with_font_context(config, renderer.font_context.clone());
+    renderer.layout_engine =
+      LayoutEngine::with_font_context(config.clone(), renderer.font_context.clone());
     renderer.layout_parallelism = config.parallelism;
     let box_gen_options = renderer.box_generation_options();
     let mut box_tree =
@@ -9566,7 +9570,8 @@ mod tests {
     );
 
     let config = LayoutConfig::for_viewport(Size::new(800.0, 600.0));
-    renderer.layout_engine = LayoutEngine::with_font_context(config, renderer.font_context.clone());
+    renderer.layout_engine =
+      LayoutEngine::with_font_context(config.clone(), renderer.font_context.clone());
     renderer.layout_parallelism = config.parallelism;
     let box_gen_options = renderer.box_generation_options();
     let mut box_tree =
@@ -9625,7 +9630,8 @@ mod tests {
     );
 
     let config = LayoutConfig::for_viewport(Size::new(800.0, 600.0));
-    renderer.layout_engine = LayoutEngine::with_font_context(config, renderer.font_context.clone());
+    renderer.layout_engine =
+      LayoutEngine::with_font_context(config.clone(), renderer.font_context.clone());
     renderer.layout_parallelism = config.parallelism;
     let box_gen_options = renderer.box_generation_options();
     let mut box_tree =
