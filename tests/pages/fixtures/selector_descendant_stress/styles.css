@@ -1,0 +1,330 @@
+.masthead {
+  margin-bottom: 18px;
+}
+
+.eyebrow {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--subtle);
+  margin: 0;
+}
+
+.board {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 14px;
+  align-items: start;
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.08), rgba(217, 70, 239, 0.05));
+}
+
+.filters {
+  display: grid;
+  gap: 12px;
+}
+
+.filters .filter-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.filters .filter-list li {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: linear-gradient(180deg, #fff, #f8faff);
+}
+
+.filters .filter-list li.active,
+.filters .filter-list li:has(.status.good) {
+  border-color: rgba(37, 99, 235, 0.3);
+  box-shadow: 0 6px 14px rgba(37, 99, 235, 0.1);
+}
+
+.filters .filter-list li.quiet {
+  background: #f8fafc;
+  color: var(--subtle);
+}
+
+.filters .filter-list li .dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: linear-gradient(180deg, #22c55e, #16a34a);
+  margin-top: 6px;
+  box-shadow: 0 0 0 6px rgba(34, 197, 94, 0.12);
+}
+
+.filters .filter-list li.quiet .dot {
+  background: #94a3b8;
+  box-shadow: none;
+}
+
+.filters .filter-list li .label strong {
+  color: #0f172a;
+}
+
+.filters .filter-list li .label .muted {
+  font-size: 12px;
+}
+
+.filters .legend {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.chip-primary {
+  background: rgba(37, 99, 235, 0.12);
+  color: #1d4ed8;
+}
+
+.chip-ghost {
+  border: 1px dashed rgba(37, 99, 235, 0.3);
+  color: #1d4ed8;
+}
+
+.chip-accent {
+  background: rgba(217, 70, 239, 0.1);
+  color: #be123c;
+}
+
+.content {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.tree .header,
+.audit .audit-head,
+.pipeline .pipeline-head {
+  margin-bottom: 12px;
+}
+
+.tree .branches {
+  display: grid;
+  gap: 10px;
+}
+
+.tree .branch {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  background: linear-gradient(180deg, #ffffff, #f8fbff);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.06);
+}
+
+.tree .branch:has(.status.warn) {
+  box-shadow: 0 10px 22px rgba(250, 204, 21, 0.2);
+}
+
+.tree .branch.critical {
+  border-color: rgba(239, 68, 68, 0.4);
+  background: linear-gradient(180deg, rgba(248, 113, 113, 0.08), #fff);
+}
+
+.branch-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.leaves {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.leaf {
+  border: 1px dashed rgba(37, 99, 235, 0.2);
+  padding: 8px;
+  border-radius: 10px;
+  display: grid;
+  gap: 6px;
+}
+
+.leaf.pinned {
+  background: rgba(37, 99, 235, 0.06);
+  border-style: solid;
+}
+
+.leaf .meta {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-weight: 700;
+}
+
+.leaf .meta .label {
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--subtle);
+}
+
+.leaf .meta .value {
+  color: #0f172a;
+}
+
+.leaf .notes p {
+  margin: 0;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: lowercase;
+}
+
+.status.danger {
+  background: rgba(239, 68, 68, 0.12);
+  color: #b91c1c;
+}
+
+.status.warn {
+  background: rgba(234, 179, 8, 0.12);
+  color: #92400e;
+}
+
+.status.good {
+  background: rgba(34, 197, 94, 0.12);
+  color: #166534;
+}
+
+.audit .rows {
+  display: grid;
+  gap: 10px;
+}
+
+.audit .row {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.audit .row:has(.status.danger) {
+  border-color: rgba(239, 68, 68, 0.5);
+  background: linear-gradient(180deg, rgba(254, 226, 226, 0.6), #fff);
+  box-shadow: 0 10px 22px rgba(239, 68, 68, 0.1);
+}
+
+.audit .row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.audit .items {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.audit .items li {
+  display: grid;
+  grid-template-columns: 100px 1fr;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.audit .items li .label {
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: rgba(37, 99, 235, 0.08);
+  color: #1d4ed8;
+  font-weight: 700;
+}
+
+.pipeline .stage-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+}
+
+.pipeline .stage {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+  background: linear-gradient(180deg, #fff, #f8fafc);
+}
+
+.pipeline .stage:has(.tick.active + .tick.active) {
+  border-color: rgba(37, 99, 235, 0.35);
+  box-shadow: 0 10px 22px rgba(37, 99, 235, 0.12);
+}
+
+.pipeline .stage.overdue:has(.tick.active) {
+  background: linear-gradient(180deg, rgba(234, 179, 8, 0.16), #fff);
+}
+
+.pipeline .stage-header {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 8px;
+}
+
+.badge {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.1);
+  color: #1d4ed8;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.timeline {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(60px, 1fr));
+  gap: 6px;
+}
+
+.timeline .tick {
+  padding: 8px 6px;
+  border-radius: 10px;
+  text-align: center;
+  background: #f8fafc;
+  border: 1px dashed rgba(148, 163, 184, 0.6);
+  color: var(--subtle);
+}
+
+.timeline .tick.active {
+  background: linear-gradient(180deg, #2563eb, #1d4ed8);
+  color: #fff;
+  border: none;
+  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.3);
+}
+
+.timeline.condensed {
+  grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+}

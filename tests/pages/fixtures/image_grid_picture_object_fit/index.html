@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Picture object-fit grid</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="card masthead">
+      <div>
+        <span class="pill">Images</span>
+        <h1>Object-fit + srcset</h1>
+        <p class="muted">
+          Grid mixes cover/contain fills, art-directed picture sources, and 1x/2x srcsets, all using local assets.
+        </p>
+      </div>
+      <p class="muted">Matches pageset patterns where image decoding + sizing were hotspots.</p>
+    </header>
+
+    <div class="gallery">
+      <figure class="tile wide">
+        <picture>
+          <source media="(min-width: 900px)" srcset="../assets/images/gallery-forest.png 1x, ../assets/images/gallery-forest@2x.png 2x" />
+          <source media="(min-width: 600px)" srcset="../assets/images/gallery-canyon.png 1x, ../assets/images/gallery-canyon@2x.png 2x" />
+          <img
+            src="../assets/images/gallery-aurora.png"
+            srcset="../assets/images/gallery-aurora.png 1x, ../assets/images/gallery-aurora@2x.png 2x"
+            alt="Aurora"
+          />
+        </picture>
+        <figcaption>cover</figcaption>
+      </figure>
+
+      <figure class="tile tall">
+        <picture>
+          <source media="(min-width: 840px)" srcset="../assets/images/gallery-tall.png" />
+          <img
+            src="../assets/images/gallery-tall.png"
+            srcset="../assets/images/gallery-tall.png 1x"
+            alt="Tall"
+          />
+        </picture>
+        <figcaption>object-fit: contain</figcaption>
+      </figure>
+
+      <figure class="tile square">
+        <picture>
+          <source media="(min-width: 720px)" srcset="../assets/images/gallery-square.png" />
+          <img
+            src="../assets/images/gallery-square.png"
+            srcset="../assets/images/gallery-square.png 1x"
+            alt="Square"
+          />
+        </picture>
+        <figcaption>object-fit: cover</figcaption>
+      </figure>
+
+      <figure class="tile wide">
+        <picture>
+          <source media="(min-width: 900px)" srcset="../assets/images/gallery-canyon.png 1x, ../assets/images/gallery-canyon@2x.png 2x" />
+          <img
+            src="../assets/images/gallery-canyon.png"
+            srcset="../assets/images/gallery-canyon.png 1x, ../assets/images/gallery-canyon@2x.png 2x"
+            alt="Canyon"
+          />
+        </picture>
+        <figcaption>object-position</figcaption>
+      </figure>
+
+      <figure class="tile poster">
+        <picture>
+          <source media="(min-width: 780px)" srcset="../assets/images/gallery-aurora.png 1x, ../assets/images/gallery-aurora@2x.png 2x" />
+          <img
+            src="../assets/images/gallery-aurora.png"
+            srcset="../assets/images/gallery-aurora.png 1x, ../assets/images/gallery-aurora@2x.png 2x"
+            alt="Aurora poster"
+          />
+        </picture>
+        <figcaption>contain + padding-box</figcaption>
+      </figure>
+
+      <figure class="tile">
+        <picture>
+          <source media="(min-width: 720px)" srcset="../assets/images/gallery-forest.png 1x, ../assets/images/gallery-forest@2x.png 2x" />
+          <img
+            src="../assets/images/gallery-forest.png"
+            srcset="../assets/images/gallery-forest.png 1x, ../assets/images/gallery-forest@2x.png 2x"
+            alt="Forest"
+          />
+        </picture>
+        <figcaption>fill</figcaption>
+      </figure>
+    </div>
+  </body>
+</html>

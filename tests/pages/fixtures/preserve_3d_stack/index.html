@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Preserve 3D stack</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header>
+      <span class="pill">Transforms</span>
+      <h1>Preserve-3d card stack</h1>
+      <p class="muted">Perspective, nested preserve-3d, and backface visibility on multiple cards.</p>
+    </header>
+
+    <section class="stage">
+      <div class="deck">
+        <div class="card3d tilt">
+          <div class="face front">Front</div>
+          <div class="face back">Back</div>
+        </div>
+        <div class="card3d rotate">
+          <div class="face front">Rotate</div>
+          <div class="face back">Hidden</div>
+        </div>
+        <div class="card3d lift">
+          <div class="face front">Layer</div>
+          <div class="face back">Depth</div>
+        </div>
+      </div>
+      <div class="note card">
+        <h2>Why another fixture?</h2>
+        <p>
+          Captured failures involved card faces poking through or disappearing when nested transform
+          contexts were combined with perspective. This scene keeps transform-style: preserve-3d,
+          backface-visibility, and stacking interactions local.
+        </p>
+      </div>
+    </section>
+  </body>
+</html>

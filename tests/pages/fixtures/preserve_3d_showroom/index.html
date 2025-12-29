@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Preserve-3D showroom</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="showroom">
+    <header class="masthead card">
+      <div>
+        <span class="pill">3D</span>
+        <h1>Preserve-3D showroom</h1>
+        <p class="muted">
+          Stacked cards with perspective, translated layers, and backface visibility mimic dashboard
+          showcases that stress GPU ordering.
+        </p>
+      </div>
+      <div class="legend">
+        <span class="chip chip-primary">preserve-3d</span>
+        <span class="chip chip-ghost">backface</span>
+        <span class="chip chip-accent">perspective</span>
+      </div>
+    </header>
+
+    <section class="card scene">
+      <div class="rig">
+        <div class="column">
+          <p class="eyebrow">Stack</p>
+          <div class="stack">
+            <div class="card3d layer-a">
+              <div class="face front">front</div>
+              <div class="face back">back</div>
+            </div>
+            <div class="card3d layer-b">
+              <div class="face front">front</div>
+              <div class="face back">back</div>
+            </div>
+            <div class="card3d layer-c">
+              <div class="face front">front</div>
+              <div class="face back">back</div>
+            </div>
+          </div>
+        </div>
+        <div class="column">
+          <p class="eyebrow">Cube</p>
+          <div class="cube">
+            <div class="cube-face front">A</div>
+            <div class="cube-face back">B</div>
+            <div class="cube-face left">C</div>
+            <div class="cube-face right">D</div>
+            <div class="cube-face top">E</div>
+            <div class="cube-face bottom">F</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </body>
+</html>

@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Form controls states</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="form-page">
+    <header class="masthead">
+      <span class="pill">Forms</span>
+      <div>
+        <h1>Default vs appearance: none controls</h1>
+        <p class="muted">
+          A mixed form page surfaces default UA form styling alongside appearance: none overrides for
+          range, select, and checkbox controls.
+        </p>
+      </div>
+    </header>
+
+    <main class="grid">
+      <section class="card column">
+        <p class="eyebrow">Default</p>
+        <h2>System controls</h2>
+        <label class="field">
+          Range
+          <input type="range" min="0" max="100" value="32" />
+        </label>
+        <label class="field">
+          Select
+          <select>
+            <option>Production</option>
+            <option selected>Staging</option>
+            <option>Dev</option>
+          </select>
+        </label>
+        <label class="check">
+          <input type="checkbox" checked />
+          <span>Enable feature flags</span>
+        </label>
+      </section>
+
+      <section class="card column custom">
+        <p class="eyebrow">Customized</p>
+        <h2>Appearance none</h2>
+        <label class="field">
+          Range
+          <input class="range-custom" type="range" min="0" max="100" value="72" />
+        </label>
+        <label class="field">
+          Select
+          <select class="select-custom">
+            <option>Production</option>
+            <option>Staging</option>
+            <option selected>Dev</option>
+          </select>
+        </label>
+        <div class="checklist">
+          <label class="toggle">
+            <input type="checkbox" class="switch" checked />
+            <span class="track"></span>
+            <span class="label">Tracing</span>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" class="switch" />
+            <span class="track"></span>
+            <span class="label">Animations</span>
+          </label>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

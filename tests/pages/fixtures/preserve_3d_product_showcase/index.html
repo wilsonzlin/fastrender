@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Preserve 3D product showcase</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="space">
+    <header class="card masthead">
+      <div>
+        <span class="pill">preserve-3d</span>
+        <h1>Stacked product cards</h1>
+        <p class="muted">Perspective, backface-visibility, and nested transforms echo pageset 3D hotspots.</p>
+      </div>
+      <p class="muted">Flip card uses preserve-3d so both faces render correctly.</p>
+    </header>
+
+    <div class="scene">
+      <div class="stack">
+        <div class="plate card">
+          <p class="eyebrow">Tier</p>
+          <h2>Starter</h2>
+          <p class="muted">translateZ lifts the plate off the ground plane.</p>
+        </div>
+        <div class="plate card elevated">
+          <p class="eyebrow">Tier</p>
+          <h2>Growth</h2>
+          <p class="muted">Rotated layers expose preserve-3d depth.</p>
+        </div>
+        <div class="plate card tilted">
+          <p class="eyebrow">Tier</p>
+          <h2>Enterprise</h2>
+          <p class="muted">backface-visibility hidden prevents mirrored text.</p>
+        </div>
+      </div>
+
+      <div class="flip">
+        <div class="card3d">
+          <div class="face front card">
+            <p class="eyebrow">Front</p>
+            <h2>RotateY</h2>
+            <p class="muted">Front face</p>
+          </div>
+          <div class="face back card">
+            <p class="eyebrow">Back</p>
+            <h2>Reverse</h2>
+            <p class="muted">Hidden until flipped</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

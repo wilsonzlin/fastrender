@@ -1,0 +1,101 @@
+header {
+  margin-bottom: 12px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 14px;
+}
+
+.vertical {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  background: linear-gradient(180deg, #0f172a, #111827);
+  color: #e5e7eb;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  letter-spacing: 0.04em;
+}
+
+.vertical .label {
+  font-size: 12px;
+  color: #cbd5e1;
+}
+
+.vertical .story {
+  margin-top: 10px;
+  display: grid;
+  gap: 12px;
+}
+
+.vertical ruby {
+  ruby-position: over;
+  ruby-align: center;
+}
+
+.vertical rt {
+  font-size: 12px;
+  color: #cbd5e1;
+}
+
+.vertical .tcy {
+  text-combine-upright: all;
+  font-weight: 700;
+}
+
+.vertical .small {
+  font-size: 12px;
+  color: #cbd5e1;
+}
+
+.horizontal {
+  display: grid;
+  gap: 10px;
+}
+
+.horizontal ruby {
+  ruby-position: under;
+}
+
+.horizontal rt {
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.horizontal .tcy {
+  text-combine-upright: all;
+  background: rgba(37, 99, 235, 0.12);
+  padding: 2px 4px;
+  border-radius: 4px;
+  font-weight: 700;
+}
+
+.upright {
+  writing-mode: vertical-rl;
+  text-orientation: upright;
+  display: inline-block;
+  padding: 4px;
+  background: rgba(79, 70, 229, 0.12);
+  border-radius: 4px;
+}
+
+.ruby-block {
+  display: inline-flex;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.04);
+}
+
+.ruby-block ruby {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  font-weight: 700;
+}
+
+.ruby-block rt {
+  color: #0ea5e9;
+}

@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Form controls showcase</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="form-showcase">
+    <header class="masthead">
+      <span class="pill">UI hotspot</span>
+      <h1>Native vs appearance-none controls</h1>
+      <p class="muted">
+        Range, select, and checkbox widgets rendered both default and fully custom to catch form
+        regressions seen in captures.
+      </p>
+    </header>
+
+    <section class="control-grid">
+      <div class="card column native">
+        <div class="column-head">
+          <p class="eyebrow">Defaults</p>
+          <h2>Native rendering</h2>
+        </div>
+        <div class="field">
+          <label for="native-select">Default select</label>
+          <select id="native-select">
+            <option>us-east-1</option>
+            <option selected>eu-west-1</option>
+            <option>ap-southeast-1</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="native-range">Default range</label>
+          <input id="native-range" type="range" min="0" max="100" value="48" />
+        </div>
+        <div class="checks">
+          <label><input type="checkbox" checked /> Email alerts</label>
+          <label><input type="checkbox" /> Weekly digest</label>
+        </div>
+      </div>
+
+      <div class="card column custom">
+        <div class="column-head">
+          <p class="eyebrow">Custom</p>
+          <h2>Appearance none</h2>
+        </div>
+        <div class="field">
+          <label for="custom-select">Styled select</label>
+          <div class="select-wrap">
+            <select id="custom-select" class="select">
+              <option>us-east-1</option>
+              <option selected>eu-west-1</option>
+              <option>ap-southeast-1</option>
+            </select>
+            <span class="chevron">⌄</span>
+          </div>
+        </div>
+        <div class="field">
+          <label for="custom-range">Styled range</label>
+          <input id="custom-range" class="range" type="range" min="0" max="100" value="32" />
+          <p class="muted hint">appearance: none on both track + thumb</p>
+        </div>
+        <div class="checks toggles">
+          <label>
+            <input class="toggle" type="checkbox" checked />
+            <span>Maintenance lock</span>
+          </label>
+          <label>
+            <input class="toggle" type="checkbox" />
+            <span>Safe mode</span>
+          </label>
+        </div>
+      </div>
+    </section>
+  </body>
+</html>

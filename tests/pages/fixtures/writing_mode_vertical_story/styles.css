@@ -1,0 +1,102 @@
+body.vertical {
+  background: linear-gradient(135deg, #f8fafc, #eef2ff 50%, #e0f2fe);
+}
+
+.masthead {
+  margin-bottom: 14px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 14px;
+}
+
+.panel.vertical-panel {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  letter-spacing: 0.04em;
+  min-height: 320px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(248, 250, 252, 0.92));
+}
+
+.panel h2 {
+  margin: 6px 0 10px;
+}
+
+.panel p,
+.panel ul {
+  margin: 0;
+}
+
+.panel .lede {
+  margin-top: 6px;
+  font-weight: 600;
+  line-height: 1.6;
+}
+
+.panel .body {
+  margin-top: 10px;
+  line-height: 1.7;
+}
+
+.ruby,
+ruby {
+  ruby-position: over;
+}
+
+ruby rt {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.upright,
+span.upright {
+  writing-mode: vertical-rl;
+  text-combine-upright: all;
+  font-weight: 800;
+  padding: 0 2px;
+  border-radius: 6px;
+  background: rgba(37, 99, 235, 0.08);
+  color: #1d4ed8;
+}
+
+.vertical-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.vertical-list li {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px;
+  align-items: start;
+  border: 1px dashed rgba(148, 163, 184, 0.5);
+  border-radius: 10px;
+  padding: 6px;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.vertical-list .tag {
+  padding: 4px 6px;
+  border-radius: 8px;
+  background: rgba(99, 102, 241, 0.14);
+  color: #312e81;
+  font-weight: 700;
+}
+
+.vertical-list .text {
+  line-height: 1.6;
+}
+
+@media (max-width: 900px) {
+  .masthead {
+    flex-direction: column;
+  }
+}

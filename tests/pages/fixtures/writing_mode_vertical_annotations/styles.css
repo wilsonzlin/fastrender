@@ -1,0 +1,129 @@
+body.writing-lab {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.masthead {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.legend {
+  display: inline-flex;
+  gap: 8px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+.chip-primary {
+  background: rgba(37, 99, 235, 0.12);
+  color: #1d4ed8;
+  border: 1px solid rgba(37, 99, 235, 0.2);
+}
+
+.chip-ghost {
+  background: rgba(148, 163, 184, 0.16);
+  color: #334155;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+}
+
+.chip-accent {
+  background: rgba(217, 70, 239, 0.12);
+  color: #a21caf;
+  border: 1px solid rgba(217, 70, 239, 0.3);
+}
+
+.columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.vertical {
+  position: relative;
+  padding-left: 36px;
+  background: linear-gradient(90deg, rgba(14, 116, 144, 0.08), rgba(14, 165, 233, 0.08));
+}
+
+.vertical h2 {
+  margin-bottom: 12px;
+}
+
+.vertical .flow {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  line-height: 1.7;
+  letter-spacing: 0.06em;
+}
+
+.vertical .flow.note {
+  margin-top: 12px;
+  color: #0f172a;
+}
+
+.vertical .tcy {
+  text-combine-upright: all;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  padding: 2px 3px;
+  border-radius: 4px;
+  background: rgba(59, 130, 246, 0.18);
+}
+
+.vertical ruby {
+  ruby-position: over;
+  ruby-align: start;
+}
+
+.vertical rt {
+  font-size: 12px;
+  color: #2563eb;
+}
+
+.vertical .side-annotations {
+  position: absolute;
+  left: 12px;
+  top: 70px;
+  width: 120px;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  font-size: 12px;
+  color: #0f172a;
+}
+
+.vertical .side-annotations p + p {
+  margin-top: 12px;
+  border-top: 1px dashed rgba(15, 23, 42, 0.2);
+  padding-top: 12px;
+}
+
+.horizontal header {
+  margin-bottom: 8px;
+}
+
+.horizontal .bullet {
+  list-style: square;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 12px;
+  color: #475569;
+}

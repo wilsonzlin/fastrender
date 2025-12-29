@@ -1,0 +1,114 @@
+.masthead {
+  margin-bottom: 14px;
+}
+
+.eyebrow {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--subtle);
+  margin: 0;
+}
+
+.vertical-board {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.column {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: linear-gradient(180deg, #fff, #f8fafc);
+}
+
+.column.tate {
+  writing-mode: vertical-rl;
+  text-orientation: upright;
+  display: grid;
+  gap: 12px;
+  align-content: space-between;
+}
+
+.column.tate .line {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  border: 1px dashed rgba(37, 99, 235, 0.3);
+  padding: 10px;
+  border-radius: 10px;
+  background: rgba(37, 99, 235, 0.04);
+}
+
+.column.tate .line.alt {
+  background: rgba(217, 70, 239, 0.05);
+  border-color: rgba(217, 70, 239, 0.3);
+}
+
+.column.tate .line.dense {
+  gap: 10px;
+}
+
+.column.horizontal {
+  display: grid;
+  gap: 10px;
+}
+
+.combine {
+  text-combine-upright: all;
+  font-weight: 800;
+  padding: 2px 4px;
+  border-radius: 6px;
+  background: rgba(37, 99, 235, 0.12);
+}
+
+.mute-note {
+  color: var(--subtle);
+  padding: 2px 4px;
+  background: #f8fafc;
+  border-radius: 4px;
+}
+
+ruby {
+  font-size: 18px;
+  line-height: 1.4;
+}
+
+rt {
+  font-size: 11px;
+  color: #1d4ed8;
+}
+
+.legend {
+  display: inline-flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.chip-ghost {
+  border: 1px dashed rgba(37, 99, 235, 0.4);
+  color: #1d4ed8;
+}
+
+.chip-primary {
+  background: rgba(37, 99, 235, 0.08);
+  color: #1d4ed8;
+}
+
+.chip-accent {
+  background: rgba(217, 70, 239, 0.12);
+  color: #be123c;
+}

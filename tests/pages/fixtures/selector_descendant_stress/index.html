@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Selector descendant stress</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="selector-stress">
+    <header class="masthead">
+      <span class="pill">Cascade hotspot</span>
+      <h1>Selector descendant stress</h1>
+      <p class="muted">
+        Deep DOM, descendant chains, and :has() highlight the cascade walkers that go hot in captures.
+      </p>
+    </header>
+
+    <section class="card board">
+      <aside class="filters">
+        <p class="eyebrow">Filters</p>
+        <h2>Stacked toggles</h2>
+        <ul class="filter-list">
+          <li class="active">
+            <span class="dot"></span>
+            <div class="label">
+              <strong>Production</strong>
+              <p class="muted">Matches .board .filters .filter-list li.active > .label strong</p>
+            </div>
+          </li>
+          <li>
+            <span class="dot"></span>
+            <div class="label">
+              <strong>Preview</strong>
+              <p class="muted">Descendant spans share muted color</p>
+            </div>
+          </li>
+          <li class="quiet">
+            <span class="dot"></span>
+            <div class="label">
+              <strong>Archived</strong>
+              <p class="muted">:not(.active) to trigger rule walker</p>
+            </div>
+          </li>
+        </ul>
+        <div class="legend">
+          <span class="chip chip-ghost">:has()</span>
+          <span class="chip chip-primary">descendant</span>
+          <span class="chip chip-accent">nth-child</span>
+        </div>
+      </aside>
+
+      <div class="content">
+        <div class="tree card">
+          <div class="header">
+            <p class="eyebrow">Deep tree</p>
+            <h3>Nested branches</h3>
+            <p class="muted">Multiple generations trigger descendant chains and :has() for flagged items.</p>
+          </div>
+          <div class="branches">
+            <div class="branch critical">
+              <div class="branch-head">
+                <div>
+                  <p class="eyebrow">Branch 1</p>
+                  <strong>Legacy stack</strong>
+                </div>
+                <div class="status danger">blocked</div>
+              </div>
+              <ul class="leaves">
+                <li class="leaf">
+                  <div class="meta">
+                    <span class="label">path</span>
+                    <span class="value">/regional/core</span>
+                  </div>
+                  <div class="notes">
+                    <p class="muted">selector depth 4</p>
+                    <p class="muted">uses :not(.quiet) for spacing</p>
+                  </div>
+                </li>
+                <li class="leaf pinned">
+                  <div class="meta">
+                    <span class="label">pinned</span>
+                    <span class="value">/regional/alerts</span>
+                  </div>
+                  <div class="notes">
+                    <p class="muted">child branch styled via .branch .leaf.pinned .muted</p>
+                    <p class="muted">descendants share fonts</p>
+                  </div>
+                </li>
+              </ul>
+            </div>
+            <div class="branch alt">
+              <div class="branch-head">
+                <div>
+                  <p class="eyebrow">Branch 2</p>
+                  <strong>Service mesh</strong>
+                </div>
+                <div class="status warn">watch</div>
+              </div>
+              <ul class="leaves">
+                <li class="leaf">
+                  <div class="meta">
+                    <span class="label">path</span>
+                    <span class="value">/mesh/frontend</span>
+                  </div>
+                  <div class="notes">
+                    <p class="muted">descendant combinators applied twice</p>
+                  </div>
+                </li>
+                <li class="leaf">
+                  <div class="meta">
+                    <span class="label">path</span>
+                    <span class="value combine">/mesh/api</span>
+                  </div>
+                  <div class="notes">
+                    <p class="muted">:has(.status.good) lights up parent</p>
+                  </div>
+                  <div class="status good">ready</div>
+                </li>
+              </ul>
+            </div>
+          </div>
+        </div>
+
+        <div class="audit card">
+          <div class="audit-head">
+            <div>
+              <p class="eyebrow">Checks</p>
+              <h3>Descendant grid</h3>
+            </div>
+            <p class="muted">Rows with .status.danger trigger :has() selectors while siblings test adjacency.</p>
+          </div>
+          <div class="rows">
+            <div class="row flagged">
+              <div class="row-head">
+                <div>
+                  <p class="eyebrow">Row 1</p>
+                  <strong>Render budgets</strong>
+                </div>
+                <div class="status danger">hot</div>
+              </div>
+              <ul class="items">
+                <li>
+                  <span class="label">descendant</span>
+                  <p class="muted">.row.flagged .items li p.muted</p>
+                </li>
+                <li>
+                  <span class="label">chain</span>
+                  <p class="muted">:has(.status.danger) cascades border</p>
+                </li>
+              </ul>
+            </div>
+            <div class="row ok">
+              <div class="row-head">
+                <div>
+                  <p class="eyebrow">Row 2</p>
+                  <strong>Subgrid</strong>
+                </div>
+                <div class="status good">stable</div>
+              </div>
+              <ul class="items">
+                <li>
+                  <span class="label">:nth-child</span>
+                  <p class="muted">Second item uses nth-child selectors</p>
+                </li>
+                <li>
+                  <span class="label">descendants</span>
+                  <p class="muted">List items share grouped selectors</p>
+                </li>
+              </ul>
+            </div>
+            <div class="row watch">
+              <div class="row-head">
+                <div>
+                  <p class="eyebrow">Row 3</p>
+                  <strong>Mask pipeline</strong>
+                </div>
+                <div class="status warn">watch</div>
+              </div>
+              <ul class="items">
+                <li>
+                  <span class="label">:has()</span>
+                  <p class="muted">Parent picks up when children carry .status.warn</p>
+                </li>
+                <li>
+                  <span class="label">depth</span>
+                  <p class="muted">Descendant combinator depth mirrors captures</p>
+                </li>
+              </ul>
+            </div>
+          </div>
+        </div>
+
+        <div class="pipeline card">
+          <div class="pipeline-head">
+            <div>
+              <p class="eyebrow">Stages</p>
+              <h3>Cascade paths</h3>
+            </div>
+            <p class="muted">Stacked descendant selectors across multiple layers and sibling combinations.</p>
+          </div>
+          <div class="stage-grid">
+            <div class="stage">
+              <div class="stage-header">
+                <span class="badge">capture</span>
+                <div>
+                  <strong>Fetch</strong>
+                  <p class="muted">.stage .muted inherits spacing</p>
+                </div>
+              </div>
+              <div class="timeline">
+                <div class="tick active"><span>dns</span></div>
+                <div class="tick"><span>tls</span></div>
+                <div class="tick"><span>cache</span></div>
+              </div>
+            </div>
+            <div class="stage overdue">
+              <div class="stage-header">
+                <span class="badge">cascade</span>
+                <div>
+                  <strong>Style resolution</strong>
+                  <p class="muted">:has(.tick.active) modifies parent background</p>
+                </div>
+              </div>
+              <div class="timeline">
+                <div class="tick active"><span>match</span></div>
+                <div class="tick active"><span>compute</span></div>
+                <div class="tick"><span>finalize</span></div>
+              </div>
+            </div>
+            <div class="stage">
+              <div class="stage-header">
+                <span class="badge">layout</span>
+                <div>
+                  <strong>Flow</strong>
+                  <p class="muted">Descendant grid + last-child selectors</p>
+                </div>
+              </div>
+              <div class="timeline condensed">
+                <div class="tick"><span>intrinsic</span></div>
+                <div class="tick active"><span>place</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </body>
+</html>

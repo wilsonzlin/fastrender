@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Table span layout</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="table-span">
+    <header class="masthead">
+      <span class="pill">Table layout</span>
+      <h1>Colgroup, colspans, and mixed widths</h1>
+      <p class="muted">
+        Regression fixture for large tables mixing fixed/auto widths, rowspans, and colspans on headers
+        and body rows.
+      </p>
+    </header>
+
+    <section class="card">
+      <div class="table-head">
+        <div>
+          <p class="eyebrow">Allocations</p>
+          <h2>Infrastructure capacity</h2>
+        </div>
+        <p class="muted">
+          Uses colgroup width hints plus table-layout:auto to mirror enterprise dashboards and reporting
+          sheets.
+        </p>
+      </div>
+
+      <table class="matrix">
+        <caption>Regional capacity with rowspans</caption>
+        <colgroup>
+          <col class="col-label" />
+          <col class="col-owner" />
+          <col span="2" class="col-compact" />
+          <col class="col-fixed" />
+          <col class="col-wide" />
+        </colgroup>
+        <thead>
+          <tr>
+            <th rowspan="2" scope="col">Segment</th>
+            <th rowspan="2" scope="col">Owner</th>
+            <th colspan="2" scope="colgroup">Quarter 1</th>
+            <th colspan="2" scope="colgroup">Quarter 2</th>
+          </tr>
+          <tr>
+            <th scope="col" class="number">Budget</th>
+            <th scope="col">Headcount</th>
+            <th scope="col" class="number">Budget</th>
+            <th scope="col">Headcount</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th rowspan="2" scope="rowgroup">North</th>
+            <th scope="row">Operations</th>
+            <td class="number" colspan="2">$2.1M</td>
+            <td class="number">$2.4M</td>
+            <td class="number">58</td>
+          </tr>
+          <tr>
+            <th scope="row">Product</th>
+            <td class="number">$1.2M</td>
+            <td class="number">24</td>
+            <td class="number">$1.4M</td>
+            <td class="number">28</td>
+          </tr>
+          <tr>
+            <th rowspan="2" scope="rowgroup">EU</th>
+            <th scope="row">Operations</th>
+            <td class="number">$1.6M</td>
+            <td class="number">30</td>
+            <td class="number">$1.7M</td>
+            <td class="number">32</td>
+          </tr>
+          <tr>
+            <th scope="row">Product</th>
+            <td class="number" colspan="2">$1.1M</td>
+            <td class="number">$1.3M</td>
+            <td class="number">26</td>
+          </tr>
+          <tr>
+            <th rowspan="2" scope="rowgroup">APAC</th>
+            <th scope="row">Operations</th>
+            <td class="number">$980K</td>
+            <td class="number">18</td>
+            <td class="number">$1.05M</td>
+            <td class="number">20</td>
+          </tr>
+          <tr>
+            <th scope="row">Product</th>
+            <td class="number">$1.0M</td>
+            <td class="number">22</td>
+            <td class="number">$1.1M</td>
+            <td class="number">24</td>
+          </tr>
+          <tr>
+            <th colspan="2" scope="row">Shared services</th>
+            <td class="number" colspan="3">$1.2M</td>
+            <td class="note">Usage-based chargeback</td>
+          </tr>
+        </tbody>
+        <tfoot>
+          <tr>
+            <th colspan="2" scope="row">Total</th>
+            <td class="number">$6.9M</td>
+            <td class="number">152</td>
+            <td class="number">$7.55M</td>
+            <td class="number">162</td>
+          </tr>
+        </tfoot>
+      </table>
+    </section>
+  </body>
+</html>

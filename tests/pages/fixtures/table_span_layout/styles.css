@@ -1,0 +1,119 @@
+.masthead {
+  margin-bottom: 16px;
+}
+
+.eyebrow {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--subtle);
+  margin: 0;
+}
+
+.table-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.matrix {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  table-layout: auto;
+}
+
+.matrix caption {
+  text-align: left;
+  padding: 12px;
+  font-weight: 700;
+  background: linear-gradient(90deg, rgba(37, 99, 235, 0.06), rgba(37, 99, 235, 0.12));
+}
+
+.matrix thead th {
+  background: linear-gradient(180deg, #f8fafc, #e5edff);
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  color: #0f172a;
+}
+
+.matrix thead tr:first-child th {
+  text-align: center;
+}
+
+.matrix tbody th,
+.matrix tfoot th {
+  background: #f8fafc;
+  color: #0f172a;
+  text-align: left;
+}
+
+.matrix td,
+.matrix th {
+  padding: 10px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.matrix tbody tr:nth-child(odd) td {
+  background: rgba(15, 23, 42, 0.01);
+}
+
+.matrix tbody tr:nth-child(even) td {
+  background: rgba(37, 99, 235, 0.02);
+}
+
+.matrix tbody tr:last-child td,
+.matrix tbody tr:last-child th {
+  border-bottom: 1px solid var(--border);
+}
+
+.matrix tfoot td,
+.matrix tfoot th {
+  font-weight: 800;
+  background: linear-gradient(180deg, #f1f5f9, #e2e8f0);
+}
+
+.matrix th[scope="rowgroup"] {
+  border-right: 2px solid rgba(37, 99, 235, 0.3);
+}
+
+.matrix th[scope="row"] {
+  font-weight: 700;
+}
+
+.matrix td.number {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.matrix .note {
+  color: var(--subtle);
+  font-style: italic;
+}
+
+.col-label {
+  width: 160px;
+}
+
+.col-owner {
+  width: 130px;
+}
+
+.col-compact {
+  width: 110px;
+}
+
+.col-fixed {
+  width: 140px;
+}
+
+.col-wide {
+  width: 180px;
+}

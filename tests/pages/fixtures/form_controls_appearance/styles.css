@@ -1,0 +1,153 @@
+header {
+  margin-bottom: 14px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.field {
+  display: grid;
+  gap: 6px;
+}
+
+label {
+  font-weight: 600;
+  color: #0f172a;
+}
+
+section.card {
+  display: grid;
+  gap: 12px;
+}
+
+select,
+input[type="range"] {
+  width: 100%;
+}
+
+.checks {
+  display: grid;
+  gap: 8px;
+}
+
+.checks label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.custom {
+  background: linear-gradient(180deg, rgba(37, 99, 235, 0.04), rgba(255, 255, 255, 0.8));
+  border: 1px solid rgba(37, 99, 235, 0.24);
+}
+
+.range-custom {
+  appearance: none;
+  height: 12px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #2563eb, #22d3ee);
+  outline: none;
+  border: 1px solid rgba(37, 99, 235, 0.3);
+}
+
+.range-custom::-webkit-slider-thumb {
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid #2563eb;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.35);
+}
+
+.range-custom::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid #2563eb;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.35);
+}
+
+.select-custom {
+  appearance: none;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(37, 99, 235, 0.4);
+  background: linear-gradient(180deg, #fff, #eef2ff);
+  font-weight: 600;
+  position: relative;
+}
+
+.select-custom:focus {
+  outline: 2px solid rgba(37, 99, 235, 0.4);
+}
+
+.box {
+  padding: 6px 8px;
+  border-radius: 10px;
+  border: 1px dashed rgba(37, 99, 235, 0.4);
+  background: rgba(37, 99, 235, 0.08);
+}
+
+.check-custom {
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: 1px solid rgba(37, 99, 235, 0.8);
+  background: #fff;
+  position: relative;
+}
+
+.check-custom:checked {
+  background: linear-gradient(180deg, #2563eb, #4f46e5);
+  box-shadow: inset 0 0 0 3px #fff;
+}
+
+.switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.switch .track {
+  width: 42px;
+  height: 22px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.5);
+  transition: background 0.2s ease;
+}
+
+.switch .thumb {
+  position: absolute;
+  left: 8px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2);
+  transition: transform 0.2s ease;
+}
+
+.switch .toggle {
+  appearance: none;
+  position: absolute;
+  inset: 0;
+  cursor: pointer;
+}
+
+.switch .toggle:checked + .track {
+  background: linear-gradient(90deg, #22c55e, #16a34a);
+}
+
+.switch .toggle:checked + .track + .thumb {
+  transform: translateX(18px);
+}

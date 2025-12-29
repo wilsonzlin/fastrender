@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Filter and backdrop layers</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="filter-layers">
+    <header class="masthead">
+      <span class="pill">Filter hotspot</span>
+      <h1>Backdrop blur, masks, and drop-shadows</h1>
+      <p class="muted">
+        Exercises blur, clip-path, mask-image, and multiple stacked filter primitives similar to the
+        captures that blow up paint time.
+      </p>
+    </header>
+
+    <section class="scene card">
+      <div class="glow"></div>
+      <div class="panel glass">
+        <p class="eyebrow">Backdrop</p>
+        <h2>Frosted glass</h2>
+        <p class="muted">backdrop-filter: blur(14px) saturate(1.1); on a translucent overlay.</p>
+      </div>
+
+      <div class="panel mask">
+        <div class="mask-preview"></div>
+        <div class="mask-notes">
+          <p class="eyebrow">Mask and clip-path</p>
+          <p class="muted">mask-image with drop-shadow and polygon clip-path edges.</p>
+        </div>
+      </div>
+
+      <div class="panel shadow">
+        <p class="eyebrow">Drop-shadow</p>
+        <h3>Layered glow</h3>
+        <div class="orb"></div>
+        <p class="muted">
+          Combines filter: drop-shadow + blur and inset box-shadow to mirror neon cards from dashboards.
+        </p>
+      </div>
+    </section>
+  </body>
+</html>

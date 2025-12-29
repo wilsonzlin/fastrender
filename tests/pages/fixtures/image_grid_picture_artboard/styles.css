@@ -1,0 +1,79 @@
+.masthead {
+  margin-bottom: 14px;
+}
+
+.eyebrow {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--subtle);
+  margin: 0;
+}
+
+.gallery {
+  background: linear-gradient(180deg, rgba(37, 99, 235, 0.04), #fff);
+}
+
+.gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.tile {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  background: #fff;
+  box-shadow: 0 8px 14px rgba(15, 23, 42, 0.08);
+  display: grid;
+  grid-auto-rows: auto 1fr;
+}
+
+.tile.wide {
+  grid-column: span 2;
+}
+
+.tile.tall .frame {
+  height: 260px;
+}
+
+.frame {
+  position: relative;
+  height: 180px;
+  background: #0f172a;
+  overflow: hidden;
+}
+
+.frame picture,
+.frame img {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.frame.cover img {
+  object-fit: cover;
+  object-position: center;
+}
+
+.frame.contain img {
+  object-fit: contain;
+  object-position: center;
+  padding: 12px;
+  background: #0b1224;
+}
+
+.frame.soft {
+  background: radial-gradient(circle at 20% 20%, rgba(37, 99, 235, 0.14), rgba(15, 23, 42, 0.9));
+}
+
+.tile figcaption {
+  padding: 12px;
+  display: grid;
+  gap: 6px;
+}
+
+.tile strong {
+  color: #0f172a;
+}

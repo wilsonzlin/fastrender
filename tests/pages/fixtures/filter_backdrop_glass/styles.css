@@ -1,0 +1,167 @@
+body.filter-scene {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.masthead {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.scene {
+  position: relative;
+  overflow: hidden;
+  min-height: 520px;
+  background: radial-gradient(circle at 20% 20%, #c084fc, transparent 40%),
+    radial-gradient(circle at 80% 30%, #60a5fa, transparent 45%),
+    radial-gradient(circle at 40% 80%, #22d3ee, transparent 35%),
+    linear-gradient(145deg, #0f172a, #1f2937);
+}
+
+.ink {
+  position: absolute;
+  inset: 0;
+  background-image: url("../assets/images/texture.png");
+  opacity: 0.5;
+  mix-blend-mode: screen;
+}
+
+.halo {
+  position: absolute;
+  filter: blur(64px) drop-shadow(0 12px 22px rgba(0, 0, 0, 0.25));
+  border-radius: 50%;
+}
+
+.halo.one {
+  width: 240px;
+  height: 240px;
+  top: 40px;
+  left: 60px;
+  background: rgba(59, 130, 246, 0.45);
+}
+
+.halo.two {
+  width: 280px;
+  height: 280px;
+  bottom: 30px;
+  right: 30px;
+  background: rgba(217, 70, 239, 0.42);
+}
+
+.glass {
+  position: relative;
+  max-width: 420px;
+  margin: 48px;
+  padding: 24px;
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.08));
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(18px) saturate(130%);
+  color: #0b1224;
+}
+
+.glass::after {
+  content: "";
+  position: absolute;
+  inset: 8px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  pointer-events: none;
+}
+
+.glass-header {
+  margin-bottom: 10px;
+}
+
+.glass .chips {
+  display: inline-flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  background: rgba(255, 255, 255, 0.32);
+  color: #0f172a;
+  backdrop-filter: blur(3px);
+}
+
+.chip-primary {
+  border: 1px solid rgba(37, 99, 235, 0.5);
+}
+
+.chip-ghost {
+  border: 1px solid rgba(148, 163, 184, 0.5);
+}
+
+.chip-accent {
+  border: 1px solid rgba(217, 70, 239, 0.5);
+}
+
+.floating {
+  position: absolute;
+  inset: 40px;
+  pointer-events: none;
+}
+
+.shape {
+  position: absolute;
+  border-radius: 18px;
+  box-shadow: 0 18px 32px rgba(0, 0, 0, 0.28);
+}
+
+.shape.blur {
+  top: 40px;
+  right: 60px;
+  width: 220px;
+  height: 220px;
+  background: linear-gradient(180deg, rgba(16, 185, 129, 0.6), rgba(236, 72, 153, 0.5));
+  filter: blur(24px) saturate(130%) drop-shadow(0 12px 22px rgba(0, 0, 0, 0.25));
+}
+
+.shape.clipped {
+  bottom: 28px;
+  left: 44px;
+  width: 260px;
+  height: 180px;
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.45), rgba(13, 148, 136, 0.6));
+  clip-path: polygon(6% 12%, 92% 8%, 84% 80%, 12% 92%);
+  filter: drop-shadow(0 18px 28px rgba(0, 0, 0, 0.32));
+}
+
+.mask-card {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 260px;
+  padding: 16px;
+  border-radius: 18px;
+  color: #0f172a;
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.82), rgba(255, 255, 255, 0.58));
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  mask-image: url("../assets/images/mask.png");
+  mask-size: cover;
+  mask-repeat: no-repeat;
+  filter: drop-shadow(0 12px 28px rgba(0, 0, 0, 0.3));
+  clip-path: polygon(6% 8%, 94% 12%, 90% 90%, 10% 88%);
+}
+
+.mask-card .eyebrow {
+  color: #0f172a;
+}
+
+.mask-card p {
+  margin: 4px 0 0;
+}

@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Preserve 3D layers</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="scene-3d">
+    <header class="masthead">
+      <span class="pill">3D</span>
+      <div>
+        <h1>Preserve-3d stacks with perspective</h1>
+        <p class="muted">
+          Perspective, backface-visibility, and nested preserve-3d containers mirror the transforms
+          seen in page captures.
+        </p>
+      </div>
+    </header>
+
+    <main class="card stage">
+      <div class="stage-head">
+        <div>
+          <p class="eyebrow">3D board</p>
+          <h2>Layered panels</h2>
+        </div>
+        <div class="legend">
+          <span class="chip chip-primary">preserve-3d</span>
+          <span class="chip chip-ghost">perspective</span>
+          <span class="chip chip-accent">backface</span>
+        </div>
+      </div>
+
+      <div class="stage-grid">
+        <div class="stack">
+          <div class="plate base">
+            <p class="eyebrow">base</p>
+            <strong>Stage</strong>
+          </div>
+          <div class="plate middle">
+            <p class="eyebrow">middle</p>
+            <strong>Shadow</strong>
+          </div>
+          <div class="plate top">
+            <p class="eyebrow">top</p>
+            <strong>Highlight</strong>
+          </div>
+        </div>
+
+        <div class="cube">
+          <div class="panel front">
+            <p class="eyebrow">front</p>
+            <strong>Backface hidden</strong>
+          </div>
+          <div class="panel back">
+            <p class="eyebrow">back</p>
+            <strong>Flipped side</strong>
+          </div>
+          <div class="panel left">
+            <p class="eyebrow">left</p>
+            <strong>Layer A</strong>
+          </div>
+          <div class="panel right">
+            <p class="eyebrow">right</p>
+            <strong>Layer B</strong>
+          </div>
+        </div>
+      </div>
+    </main>
+  </body>
+</html>

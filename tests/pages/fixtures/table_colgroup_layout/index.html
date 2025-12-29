@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Colgroup table layout</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="masthead">
+      <span class="pill">Tables</span>
+      <h1>Colgroup heavy schedule</h1>
+      <p class="muted">
+        Mixed fixed/auto widths, colgroups, and rowspans model the wide operational tables that hit
+        table layout slow paths.
+      </p>
+    </header>
+
+    <section class="card">
+      <table class="schedule">
+        <caption>Production matrix</caption>
+        <colgroup>
+          <col class="plant" />
+          <col class="line" />
+          <col class="metric target" />
+          <col class="metric actual" />
+          <col class="status-col" />
+          <col class="note" />
+        </colgroup>
+        <thead>
+          <tr>
+            <th rowspan="2">Plant</th>
+            <th rowspan="2">Line</th>
+            <th colspan="2">Throughput (units/hr)</th>
+            <th rowspan="2">Status</th>
+            <th rowspan="2">Notes</th>
+          </tr>
+          <tr>
+            <th>Target</th>
+            <th>Actual</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th rowspan="3">Seattle</th>
+            <td>A</td>
+            <td class="numeric">520</td>
+            <td class="numeric">505</td>
+            <td rowspan="2" class="status ok">On track</td>
+            <td rowspan="2" class="note">col + rowspan combo</td>
+          </tr>
+          <tr>
+            <td>B</td>
+            <td class="numeric">480</td>
+            <td class="numeric">472</td>
+          </tr>
+          <tr>
+            <td>C</td>
+            <td class="numeric">450</td>
+            <td class="numeric">438</td>
+            <td class="status warn">Watch</td>
+            <td class="note">auto width fallback</td>
+          </tr>
+          <tr>
+            <th rowspan="2">Berlin</th>
+            <td>D</td>
+            <td class="numeric">610</td>
+            <td class="numeric">588</td>
+            <td class="status danger">Paused</td>
+            <td class="note">rowspan neighbors</td>
+          </tr>
+          <tr>
+            <td colspan="2" class="numeric span">colspan on metrics</td>
+            <td class="status neutral">Investigating</td>
+            <td class="note">mixed widths</td>
+          </tr>
+          <tr>
+            <th rowspan="2">Osaka</th>
+            <td>E</td>
+            <td class="numeric">700</td>
+            <td class="numeric">702</td>
+            <td class="status ok">Ahead</td>
+            <td class="note">auto</td>
+          </tr>
+          <tr>
+            <td>F</td>
+            <td class="numeric">660</td>
+            <td class="numeric">645</td>
+            <td class="status warn">Tuning</td>
+            <td class="note">rtl mix</td>
+          </tr>
+        </tbody>
+        <tfoot>
+          <tr>
+            <th colspan="2">Totals</th>
+            <td class="numeric">3,420</td>
+            <td class="numeric">3,350</td>
+            <td colspan="2" class="summary">colgroup balanced across auto/fixed</td>
+          </tr>
+        </tfoot>
+      </table>
+    </section>
+  </body>
+</html>

@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Backdrop and filter masking</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="filter-backdrop">
+    <header class="masthead">
+      <span class="pill">Paint hotspot</span>
+      <h1>Backdrop blur + masks</h1>
+      <p class="muted">
+        Blurs, drop-shadows, clip-path, and mask-image stack the filter primitives that routinely
+        trigger paint slowdowns.
+      </p>
+    </header>
+
+    <section class="scene">
+      <div class="panel glass">
+        <div class="panel-head">
+          <p class="eyebrow">Backdrop-filter</p>
+          <h2>Frosted controls</h2>
+        </div>
+        <p class="muted">
+          Translucent layers sitting above a textured backdrop. Buttons reuse drop-shadows with
+          varying radii.
+        </p>
+        <div class="controls">
+          <button class="btn primary">Confirm</button>
+          <button class="btn ghost">Schedule</button>
+          <button class="btn faint">Archive</button>
+        </div>
+      </div>
+
+      <div class="panel masked">
+        <div class="panel-head">
+          <p class="eyebrow">Mask + filter</p>
+          <h2>Cutout poster</h2>
+        </div>
+        <figure class="cutout">
+          <img src="../assets/images/pattern.png" alt="pattern" />
+        </figure>
+        <p class="muted">
+          The mask image combines with a clip-path to produce the diagonal edge seen in captures.
+          Additional drop-shadows stack on top.
+        </p>
+      </div>
+
+      <div class="panel shadow">
+        <div class="panel-head">
+          <p class="eyebrow">Clip-path</p>
+          <h2>Glass shards</h2>
+        </div>
+        <div class="shards">
+          <div class="shard shard-a">
+            <p class="muted">drop-shadow + blur</p>
+          </div>
+          <div class="shard shard-b">
+            <p class="muted">polygon clip</p>
+          </div>
+          <div class="shard shard-c">
+            <p class="muted">backface hidden</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </body>
+</html>

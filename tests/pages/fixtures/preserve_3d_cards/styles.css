@@ -1,0 +1,99 @@
+body.preserve-3d-cards {
+  padding: 26px;
+  background: linear-gradient(180deg, #0f172a 0%, #0b1327 100%);
+  color: #e5e7eb;
+}
+
+.scene {
+  perspective: 1200px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+}
+
+.card3d {
+  position: relative;
+  height: 220px;
+  transform-style: preserve-3d;
+  border-radius: 16px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.35);
+  background: radial-gradient(circle at 20% 20%, rgba(37, 99, 235, 0.18), transparent 60%),
+    rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.card3d.front {
+  transform: rotateY(-18deg) rotateX(6deg) translateZ(20px);
+}
+
+.card3d.flipped {
+  transform: rotateY(188deg) rotateX(4deg) translateZ(10px);
+}
+
+.card3d.layered {
+  transform: rotateY(-12deg) rotateX(10deg) translateZ(30px);
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.face {
+  position: absolute;
+  inset: 0;
+  padding: 16px;
+  border-radius: 16px;
+  backface-visibility: hidden;
+  transform-style: preserve-3d;
+  display: grid;
+  gap: 10px;
+}
+
+.face-front {
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.22), rgba(14, 165, 233, 0.12));
+  border: 1px solid rgba(37, 99, 235, 0.32);
+}
+
+.face-back {
+  background: linear-gradient(135deg, rgba(217, 70, 239, 0.18), rgba(236, 72, 153, 0.16));
+  border: 1px solid rgba(217, 70, 239, 0.32);
+  transform: rotateY(180deg) translateZ(2px);
+}
+
+.layer {
+  position: absolute;
+  left: 24px;
+  right: 24px;
+  height: 80px;
+  border-radius: 14px;
+  padding: 12px;
+  backface-visibility: hidden;
+  display: grid;
+  gap: 6px;
+  align-content: center;
+  color: #0f172a;
+  font-weight: 800;
+}
+
+.depth-1 {
+  background: rgba(255, 255, 255, 0.9);
+  transform: translateZ(30px) rotateY(-4deg);
+}
+
+.depth-2 {
+  background: rgba(96, 165, 250, 0.9);
+  transform: translateZ(60px) rotateY(3deg);
+  box-shadow: 0 12px 26px rgba(37, 99, 235, 0.4);
+}
+
+.depth-3 {
+  background: rgba(217, 70, 239, 0.9);
+  transform: translateZ(90px) rotateY(-6deg);
+  box-shadow: 0 14px 30px rgba(217, 70, 239, 0.45);
+}
+
+.eyebrow {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #cbd5e1;
+}

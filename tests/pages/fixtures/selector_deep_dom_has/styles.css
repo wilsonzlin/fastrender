@@ -1,0 +1,339 @@
+body.selector-lab {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.masthead {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 380px 1fr;
+  gap: 18px;
+}
+
+.matrix-head,
+.audit-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.matrix .legend {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.chip-primary {
+  background: rgba(37, 99, 235, 0.14);
+  color: var(--accent);
+}
+
+.chip-ghost {
+  background: rgba(107, 114, 128, 0.14);
+  color: #111827;
+}
+
+.chip-accent {
+  background: rgba(217, 70, 239, 0.14);
+  color: var(--accent-2);
+}
+
+.matrix-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.branch {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.9), #f9fafb);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+}
+
+.branch .row.head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  padding-bottom: 12px;
+  border-bottom: 1px dashed var(--border);
+}
+
+.branch .row .muted {
+  color: var(--subtle);
+  font-size: 13px;
+}
+
+.branch .status {
+  align-self: flex-start;
+}
+
+.branch .leaf {
+  margin-top: 12px;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px dashed var(--border);
+  display: grid;
+  gap: 8px;
+}
+
+.branch .leaf .title {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.branch .leaf .meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.branch .leaf .tag {
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  border: 1px solid var(--border);
+  background: #fff;
+  color: #0f172a;
+}
+
+.branch .leaf .tag + .tag {
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.12);
+}
+
+.branch .leaf .tag-ghost {
+  color: var(--subtle);
+}
+
+.branch .leaf .tag-accent {
+  border-color: rgba(37, 99, 235, 0.35);
+  color: var(--accent);
+}
+
+.branch .leaf .tag-warn {
+  border-color: rgba(234, 179, 8, 0.35);
+  background: rgba(254, 240, 138, 0.35);
+}
+
+.branch .leaf .children {
+  display: grid;
+  gap: 10px;
+}
+
+.branch .leaf .child {
+  display: flex;
+  justify-content: space-between;
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+
+.branch .leaf .child .eyebrow {
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  margin-bottom: 4px;
+  color: var(--subtle);
+}
+
+.branch .leaf .child .status {
+  align-self: center;
+}
+
+.branch .leaf .child.flagged strong {
+  color: #b91c1c;
+}
+
+.branch .leaf .child.flagged .status {
+  background: rgba(239, 68, 68, 0.12);
+  color: #b91c1c;
+}
+
+.branch .leaf .child.focus strong {
+  color: var(--accent);
+}
+
+.branch .leaf .child.focus .status {
+  background: rgba(37, 99, 235, 0.14);
+  color: var(--accent);
+}
+
+.branch .leaf .child.pinned {
+  box-shadow: inset 0 0 0 1px rgba(16, 185, 129, 0.3);
+}
+
+.branch.critical {
+  border-color: rgba(239, 68, 68, 0.35);
+}
+
+.branch.critical .row {
+  background: linear-gradient(90deg, rgba(239, 68, 68, 0.08), transparent);
+}
+
+.branch:has(.status.danger) {
+  box-shadow: 0 10px 36px rgba(239, 68, 68, 0.18);
+}
+
+.branch .leaf.hot .status {
+  background: rgba(234, 179, 8, 0.14);
+  color: #b45309;
+}
+
+.branch .leaf.pinned .title strong::after {
+  content: " • pinned";
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.branch .leaf.stacked .children .child + .child {
+  margin-top: 6px;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-weight: 700;
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+}
+
+.status.danger {
+  background: rgba(239, 68, 68, 0.12);
+  color: #b91c1c;
+}
+
+.status.warn {
+  background: rgba(234, 179, 8, 0.12);
+  color: #b45309;
+}
+
+.status.good {
+  background: rgba(16, 185, 129, 0.12);
+  color: #047857;
+}
+
+.status.neutral {
+  background: rgba(59, 130, 246, 0.12);
+  color: #1d4ed8;
+}
+
+.audit {
+  display: grid;
+  gap: 12px;
+}
+
+.audit-stream {
+  display: grid;
+  gap: 12px;
+}
+
+.audit-stream .entry {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  background: #fff;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.06);
+}
+
+.audit-stream .entry header {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.audit-stream .entry header .muted strong {
+  color: #0f172a;
+}
+
+.audit-stream .entry .notes {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.audit-stream .entry .notes li {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 10px;
+  padding: 10px;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px dashed #e2e8f0;
+}
+
+.audit-stream .entry .notes li:not(:first-child) {
+  background: #eef2ff;
+}
+
+.audit-stream .entry .notes li .label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 8px;
+  border-radius: 10px;
+  background: rgba(37, 99, 235, 0.12);
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.audit-stream .entry:has(.status.danger) {
+  border-color: rgba(239, 68, 68, 0.28);
+  background: linear-gradient(180deg, rgba(254, 242, 242, 0.7), #fff);
+}
+
+.audit-stream .entry.ok header .status {
+  background: rgba(16, 185, 129, 0.12);
+  color: #047857;
+}
+
+.audit-stream .entry.watch header .status {
+  background: rgba(234, 179, 8, 0.12);
+  color: #b45309;
+}
+
+.audit-stream .entry.watch .notes li:nth-child(odd) .muted {
+  color: #1f2937;
+}
+
+.audit-stream .entry .notes li .muted strong {
+  color: #0f172a;
+}
+
+.audit-stream .entry .notes li :where(.label, p) {
+  letter-spacing: 0.01em;
+}
+
+@media (max-width: 900px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+}

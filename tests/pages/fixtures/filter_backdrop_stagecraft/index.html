@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Filter + backdrop stagecraft</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="stage">
+    <header class="card masthead">
+      <div>
+        <span class="pill">Backdrop + clip</span>
+        <h1>Stagecraft</h1>
+        <p class="muted">
+          Combines blur, drop-shadow, clip-path, and mask-image overlays to match filter/backdrop heavy captures.
+        </p>
+      </div>
+      <p class="muted">All assets are local; filters stack and overlap to stress paint ordering.</p>
+    </header>
+
+    <div class="canvas card">
+      <div class="background"></div>
+      <div class="glass card">
+        <p class="eyebrow">Glass</p>
+        <h2>Frosted overlay</h2>
+        <p class="muted">backdrop-filter blur + saturation on top of textured image.</p>
+        <div class="chips">
+          <span class="chip">blur(16px)</span>
+          <span class="chip">drop-shadow</span>
+          <span class="chip">clip-path</span>
+        </div>
+      </div>
+
+      <div class="panel shadow">
+        <div>
+          <p class="eyebrow">Mask + shadow</p>
+          <h3>Offset spotlight</h3>
+          <p class="muted">mask-image + drop-shadow stack to stress filter pipeline ordering.</p>
+        </div>
+      </div>
+
+      <div class="spotlight">
+        <div class="shape glow"></div>
+        <div class="shape mask"></div>
+        <div class="label card">
+          <p class="eyebrow">Clip</p>
+          <strong>Diagonal clipped layer</strong>
+          <p class="muted">clip-path polygon + backdrop-filter</p>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Complex table layout</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header>
+      <span class="pill">Tables</span>
+      <h1>Colgroup + spans</h1>
+      <p class="muted">
+        Recreates the mixed fixed/auto widths and layered headers that hit table performance and span
+        handling in the pageset.
+      </p>
+    </header>
+
+    <section class="card">
+      <div class="table-shell">
+        <div class="table-header">
+          <div>
+            <p class="muted">Region summary</p>
+            <h2>Availability matrix</h2>
+          </div>
+          <div class="note muted">col, colgroup, rowspans, and colspans all applied together.</div>
+        </div>
+
+        <table class="matrix">
+          <caption>Snapshot of a multi-level operations table</caption>
+          <colgroup>
+            <col class="region" style="width: 150px" />
+            <col class="owner" style="width: 180px" />
+            <col class="auto" />
+            <col span="2" class="fixed" style="width: 120px" />
+            <col class="auto" />
+          </colgroup>
+          <thead>
+            <tr>
+              <th rowspan="2">Region</th>
+              <th rowspan="2">Lead</th>
+              <th colspan="2">Capacity</th>
+              <th colspan="2">QoS</th>
+            </tr>
+            <tr class="subhead">
+              <th>Primary</th>
+              <th>Overflow</th>
+              <th>Latency</th>
+              <th>Uptime</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th rowspan="3" scope="rowgroup">North</th>
+              <td class="owner">A. Lee</td>
+              <td>98%</td>
+              <td>76%</td>
+              <td class="warn">144ms</td>
+              <td>99.2%</td>
+            </tr>
+            <tr>
+              <td class="owner">M. Holt</td>
+              <td colspan="2" class="spaned">
+                <div class="bar">
+                  <span style="width: 62%"></span>
+                </div>
+                <span class="muted">Shared compute</span>
+              </td>
+              <td>122ms</td>
+              <td rowspan="2" class="highlight">99.6%</td>
+            </tr>
+            <tr>
+              <td class="owner">I. Chau</td>
+              <td>84%</td>
+              <td>38%</td>
+              <td class="warn">168ms</td>
+            </tr>
+            <tr class="divider-row">
+              <td colspan="6"></td>
+            </tr>
+            <tr>
+              <th rowspan="2" scope="rowgroup">Central</th>
+              <td class="owner">T. Pillai</td>
+              <td colspan="2" class="spaned">
+                <div class="bar alt">
+                  <span style="width: 78%"></span>
+                </div>
+                <span class="muted">Pinned capacity</span>
+              </td>
+              <td>98ms</td>
+              <td>99.8%</td>
+            </tr>
+            <tr>
+              <td class="owner">L. Silva</td>
+              <td>66%</td>
+              <td>14%</td>
+              <td class="warn">202ms</td>
+              <td class="warn">98.7%</td>
+            </tr>
+            <tr class="divider-row">
+              <td colspan="6"></td>
+            </tr>
+            <tr>
+              <th rowspan="2" scope="rowgroup">Edge</th>
+              <td class="owner">K. Reyes</td>
+              <td>58%</td>
+              <td rowspan="2" class="muted center">n/a</td>
+              <td>112ms</td>
+              <td>99.0%</td>
+            </tr>
+            <tr>
+              <td class="owner">A. Tane</td>
+              <td colspan="2" class="spaned">
+                <div class="bar alt">
+                  <span style="width: 44%"></span>
+                </div>
+                <span class="muted">Burst-only edge</span>
+              </td>
+              <td class="warn">210ms</td>
+            </tr>
+          </tbody>
+          <tfoot>
+            <tr>
+              <th scope="row" colspan="2">Total</th>
+              <td>82%</td>
+              <td>43%</td>
+              <td>156ms</td>
+              <td>99.2%</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </section>
+  </body>
+</html>

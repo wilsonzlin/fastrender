@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Colgroup span matrix</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="table-page">
+    <header class="masthead">
+      <span class="pill">Table layout</span>
+      <div>
+        <h1>Colgroup matrix with spans</h1>
+        <p class="muted">
+          Mixed fixed and auto widths, col/colgroup sizing, rowspans, and colspans exercise table
+          layout hotspots.
+        </p>
+      </div>
+    </header>
+
+    <main class="card table-shell">
+      <div class="table-head">
+        <div>
+          <p class="eyebrow">Capacity planning</p>
+          <h2>Quarterly allocation</h2>
+        </div>
+        <div class="legend">
+          <span class="chip chip-primary">colgroup</span>
+          <span class="chip chip-ghost">rowspan</span>
+          <span class="chip chip-accent">colspan</span>
+        </div>
+      </div>
+
+      <div class="table-wrapper">
+        <table class="matrix">
+          <colgroup>
+            <col class="col-region" />
+            <col class="col-metric fixed" span="2" />
+            <col class="col-trend" />
+            <col class="col-notes" />
+          </colgroup>
+          <thead>
+            <tr>
+              <th rowspan="2">Region</th>
+              <th colspan="2">Plan</th>
+              <th rowspan="2">Trend</th>
+              <th rowspan="2">Notes</th>
+            </tr>
+            <tr>
+              <th>Committed</th>
+              <th>Actual</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th rowspan="2">North</th>
+              <td class="metric good">120</td>
+              <td class="metric warn">110</td>
+              <td rowspan="2" class="trend up">↗ steady</td>
+              <td class="notes" rowspan="2">
+                <p>Edge cache is holding steady; ops rotating replicas weekly.</p>
+                <p class="muted">Mixes fixed + auto widths.</p>
+              </td>
+            </tr>
+            <tr>
+              <td class="metric span" colspan="2">rollover → 36</td>
+            </tr>
+            <tr class="divider">
+              <td colspan="5"></td>
+            </tr>
+            <tr>
+              <th rowspan="2">West</th>
+              <td class="metric neutral">98</td>
+              <td class="metric good">104</td>
+              <td rowspan="2" class="trend flat">→ balanced</td>
+              <td class="notes" rowspan="2">
+                <p>Shared rack with finance sandbox.</p>
+                <p class="muted">colgroup widths keep chart even.</p>
+              </td>
+            </tr>
+            <tr>
+              <td class="metric auto" colspan="2">+ multi-tenant headroom</td>
+            </tr>
+            <tr class="divider">
+              <td colspan="5"></td>
+            </tr>
+            <tr>
+              <th rowspan="2">EMEA</th>
+              <td class="metric warn">86</td>
+              <td class="metric danger">72</td>
+              <td rowspan="2" class="trend down">↘ lagging</td>
+              <td class="notes" rowspan="2">
+                <p>Rowspans and alternating fills replicate financial dashboards.</p>
+              </td>
+            </tr>
+            <tr>
+              <td class="metric span" colspan="2">capacity drain &amp; audit</td>
+            </tr>
+          </tbody>
+          <tfoot>
+            <tr>
+              <th>Total</th>
+              <td colspan="2" class="metric summary">534</td>
+              <td class="trend flat">→</td>
+              <td class="notes muted">col + colgroup mix sets final widths.</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </main>
+  </body>
+</html>

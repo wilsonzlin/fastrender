@@ -1,0 +1,94 @@
+body.writing-mode-ruby {
+  padding: 26px;
+  background: linear-gradient(180deg, #f8fafc 0%, #e0f2fe 100%);
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 14px;
+}
+
+.vertical {
+  writing-mode: vertical-rl;
+  text-orientation: upright;
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.12), rgba(37, 99, 235, 0.08));
+  border: 1px solid rgba(37, 99, 235, 0.2);
+  box-shadow: 0 14px 26px rgba(37, 99, 235, 0.15);
+  padding: 16px;
+  display: grid;
+  gap: 10px;
+}
+
+.vertical.alt {
+  background: linear-gradient(135deg, rgba(217, 70, 239, 0.08), rgba(99, 102, 241, 0.12));
+  border-color: rgba(217, 70, 239, 0.22);
+}
+
+.vertical h2 {
+  font-size: 18px;
+  display: inline-flex;
+  gap: 10px;
+}
+
+.story {
+  line-height: 1.8;
+  letter-spacing: 0.02em;
+  font-size: 15px;
+}
+
+.tcy {
+  text-combine-upright: all;
+  padding: 4px 6px;
+  border-radius: 8px;
+  background: rgba(37, 99, 235, 0.12);
+  font-weight: 800;
+}
+
+.vertical.alt .tcy {
+  background: rgba(217, 70, 239, 0.16);
+}
+
+ruby {
+  ruby-position: over;
+}
+
+rt {
+  font-size: 12px;
+  color: #1d4ed8;
+  padding: 2px 4px;
+  border-radius: 6px;
+  background: rgba(37, 99, 235, 0.12);
+}
+
+.note {
+  font-size: 13px;
+}
+
+.horizontal {
+  padding: 16px;
+  background: #fff;
+  border-radius: 14px;
+  border: 1px solid #d6d9df;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+  display: grid;
+  gap: 10px;
+}
+
+.paragraph,
+.inline-ruby {
+  line-height: 1.6;
+  font-size: 16px;
+}
+
+.inline-ruby {
+  padding: 10px;
+  border-radius: 10px;
+  background: rgba(37, 99, 235, 0.06);
+  border: 1px solid rgba(37, 99, 235, 0.12);
+}
+
+.inline-ruby .tcy {
+  background: rgba(217, 70, 239, 0.12);
+}

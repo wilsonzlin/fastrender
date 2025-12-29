@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Selector depth and :has()</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="selector-lab">
+    <header class="masthead">
+      <span class="pill">Cascade hotspot</span>
+      <div>
+        <h1>Deep DOM selector matrix</h1>
+        <p class="muted">
+          Chains of descendant selectors, grouped classes, and :has() rules mirror the slow cascades
+          we see in captures.
+        </p>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="card matrix">
+        <div class="matrix-head">
+          <div>
+            <p class="eyebrow">Selector walk</p>
+            <h2>Hierarchy</h2>
+          </div>
+          <div class="legend">
+            <span class="chip chip-primary">descendant</span>
+            <span class="chip chip-accent">:has()</span>
+            <span class="chip chip-ghost">grouped</span>
+          </div>
+        </div>
+
+        <div class="matrix-grid">
+          <div class="branch critical">
+            <div class="row head">
+              <div>
+                <p class="eyebrow">root</p>
+                <strong>Ingress pipeline</strong>
+                <p class="muted">.branch.critical .row .muted</p>
+              </div>
+              <div class="status danger">blocked</div>
+            </div>
+            <div class="leaf hot pinned">
+              <div class="title">
+                <span class="muted">tier</span>
+                <strong>Beta region</strong>
+              </div>
+              <div class="meta">
+                <span class="tag tag-warn">warm</span>
+                <span class="tag tag-neutral">drift</span>
+                <span class="tag tag-accent">rollout</span>
+              </div>
+              <div class="children">
+                <div class="child">
+                  <p class="eyebrow">child</p>
+                  <strong>Cache priming</strong>
+                  <div class="status warn">watch</div>
+                </div>
+                <div class="child focus">
+                  <p class="eyebrow">child</p>
+                  <strong>Pinned shard</strong>
+                  <div class="status good">ok</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="branch">
+            <div class="row head alt">
+              <div>
+                <p class="eyebrow">root</p>
+                <strong>Edge cache</strong>
+                <p class="muted">.branch .row.alt strong + .muted</p>
+              </div>
+              <div class="status neutral">steady</div>
+            </div>
+            <div class="leaf stacked">
+              <div class="title">
+                <span class="muted">tier</span>
+                <strong>Canary</strong>
+              </div>
+              <div class="meta">
+                <span class="tag tag-neutral">gray</span>
+                <span class="tag tag-ghost">:where()</span>
+              </div>
+              <div class="children">
+                <div class="child pinned">
+                  <p class="eyebrow">child</p>
+                  <strong>Geo pinned</strong>
+                  <div class="status neutral">ready</div>
+                </div>
+                <div class="child flagged">
+                  <p class="eyebrow">child</p>
+                  <strong>Fallback</strong>
+                  <div class="status danger">degraded</div>
+                </div>
+                <div class="child">
+                  <p class="eyebrow">child</p>
+                  <strong>Replication</strong>
+                  <div class="status good">synced</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card audit">
+        <div class="audit-head">
+          <div>
+            <p class="eyebrow">Descendant audit</p>
+            <h2>Rules firing</h2>
+          </div>
+          <p class="muted">
+            Nested lists, grouped classes, and :has() matches hit the selector engine and trigger
+            paints.
+          </p>
+        </div>
+
+        <div class="audit-stream">
+          <article class="entry">
+            <header>
+              <div>
+                <p class="eyebrow">layer 1</p>
+                <strong>Slow :has() branches</strong>
+                <p class="muted">.entry:has(.status.danger) styles parent chain.</p>
+              </div>
+              <div class="status danger">alert</div>
+            </header>
+            <ul class="notes">
+              <li>
+                <span class="label">descendant</span>
+                <p class="muted">.entry .notes li:not(:first-child) cascades spacing.</p>
+              </li>
+              <li>
+                <span class="label">grouped</span>
+                <p class="muted">.notes li :where(.label, strong) share accent ink.</p>
+              </li>
+            </ul>
+          </article>
+
+          <article class="entry ok">
+            <header>
+              <div>
+                <p class="eyebrow">layer 2</p>
+                <strong>Descendant stacks</strong>
+                <p class="muted">Grouped selectors test shared declarations.</p>
+              </div>
+              <div class="status good">clean</div>
+            </header>
+            <ul class="notes">
+              <li>
+                <span class="label">pills</span>
+                <p class="muted">.entry.ok .notes .label + p enforces adjacency.</p>
+              </li>
+              <li>
+                <span class="label">depth</span>
+                <p class="muted">.entry .notes li .muted strong matches deep text.</p>
+              </li>
+            </ul>
+          </article>
+
+          <article class="entry watch">
+            <header>
+              <div>
+                <p class="eyebrow">layer 3</p>
+                <strong>Sibling walk</strong>
+                <p class="muted">:not(.ok) rules meet :nth-child spacing.</p>
+              </div>
+              <div class="status warn">watch</div>
+            </header>
+            <ul class="notes">
+              <li>
+                <span class="label">specificity</span>
+                <p class="muted">combines class, element, descendant selectors.</p>
+              </li>
+              <li>
+                <span class="label">:nth-child</span>
+                <p class="muted">odd rows re-style muted captions.</p>
+              </li>
+            </ul>
+          </article>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

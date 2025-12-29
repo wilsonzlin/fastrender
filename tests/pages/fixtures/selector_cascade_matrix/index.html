@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Selector cascade matrix</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="cascade-page">
+    <header class="masthead">
+      <span class="pill">Cascade hotspot</span>
+      <h1>Selector cascade matrix</h1>
+      <p class="muted">
+        Descendant-heavy selectors, :has() parents, and nested class matching mirror slow rule
+        walkers seen in captures.
+      </p>
+    </header>
+
+    <section class="card controls">
+      <div class="control">
+        <p class="eyebrow">Filters</p>
+        <div class="filter-row">
+          <label class="toggle">
+            <input type="checkbox" checked />
+            <span>Show flagged</span>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" checked />
+            <span>Include nested</span>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" />
+            <span>Muted lanes</span>
+          </label>
+        </div>
+      </div>
+      <div class="control legend">
+        <span class="chip chip-hot">:has()</span>
+        <span class="chip chip-depth">descendant</span>
+        <span class="chip chip-nth">nth-child</span>
+      </div>
+    </section>
+
+    <section class="matrix">
+      <article class="bundle card critical">
+        <header class="bundle-header">
+          <div>
+            <p class="eyebrow">Ingress</p>
+            <h2>Edge delivery</h2>
+          </div>
+          <div class="status-row">
+            <span class="status danger">degraded</span>
+            <span class="tag">rollout</span>
+            <span class="tag ghost">cdn</span>
+          </div>
+        </header>
+        <div class="lanes">
+          <div class="lane">
+            <div class="lane-head">
+              <p class="muted">parsing</p>
+              <strong>Normalization</strong>
+            </div>
+            <ul class="items">
+              <li class="item flagged">
+                <div class="title">
+                  <span class="muted">.bundle .lane .item .title</span>
+                  <strong>HTML cleanup</strong>
+                </div>
+                <div class="meta">
+                  <span class="status warn">slow</span>
+                  <span class="badge">depth: 6</span>
+                  <span class="badge ghost">descendant</span>
+                </div>
+                <ul class="detail-list">
+                  <li>
+                    <span class="muted">selector chain</span>
+                    <strong>body.cascade-page .item.flagged strong</strong>
+                  </li>
+                  <li class="quiet">
+                    <span class="muted">:has()</span>
+                    <strong>parent highlights when children warn</strong>
+                  </li>
+                </ul>
+              </li>
+              <li class="item ok">
+                <div class="title">
+                  <span class="muted">nth-child variant</span>
+                  <strong>Compression</strong>
+                </div>
+                <div class="meta">
+                  <span class="status good">ready</span>
+                  <span class="badge">depth: 5</span>
+                </div>
+              </li>
+            </ul>
+          </div>
+          <div class="lane muted">
+            <div class="lane-head">
+              <p class="muted">routing</p>
+              <strong>Edge map</strong>
+            </div>
+            <ul class="items">
+              <li class="item watch">
+                <div class="title">
+                  <span class="muted">sibling + descendant</span>
+                  <strong>POP health</strong>
+                </div>
+                <div class="meta">
+                  <span class="status warn">watch</span>
+                  <span class="badge ghost">:where()</span>
+                  <span class="badge">depth: 4</span>
+                </div>
+              </li>
+              <li class="item ok nested">
+                <div class="title">
+                  <span class="muted">:not(.flagged)</span>
+                  <strong>Fallback</strong>
+                </div>
+                <div class="meta">
+                  <span class="status neutral">idle</span>
+                  <span class="badge">desc chain</span>
+                </div>
+                <div class="children">
+                  <div class="child">
+                    <p class="muted">child depth</p>
+                    <strong>geo filter</strong>
+                  </div>
+                  <div class="child pinned">
+                    <p class="muted">pinned</p>
+                    <strong>hand-tuned</strong>
+                  </div>
+                </div>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </article>
+
+      <article class="bundle card">
+        <header class="bundle-header">
+          <div>
+            <p class="eyebrow">Pipeline</p>
+            <h2>Style cascade</h2>
+          </div>
+          <div class="status-row">
+            <span class="status good">stable</span>
+            <span class="tag ghost">selectors</span>
+            <span class="tag">typography</span>
+          </div>
+        </header>
+        <div class="lanes">
+          <div class="lane">
+            <div class="lane-head">
+              <p class="muted">matching</p>
+              <strong>Rule walker</strong>
+            </div>
+            <ul class="items">
+              <li class="item ok">
+                <div class="title">
+                  <span class="muted">class + descendant</span>
+                  <strong>utility</strong>
+                </div>
+                <div class="meta">
+                  <span class="status good">cached</span>
+                  <span class="badge ghost">:where()</span>
+                  <span class="badge">depth: 7</span>
+                </div>
+              </li>
+              <li class="item flagged">
+                <div class="title">
+                  <span class="muted">:has(.status.good)</span>
+                  <strong>grid subtrees</strong>
+                </div>
+                <div class="meta">
+                  <span class="status warn">warm</span>
+                  <span class="badge">desc chain</span>
+                </div>
+                <ul class="detail-list">
+                  <li>
+                    <span class="muted">grouped selectors</span>
+                    <strong>.lane .item.flagged :where(.badge, .status)</strong>
+                  </li>
+                  <li>
+                    <span class="muted">mix</span>
+                    <strong>:is(.good, .warn) child matching</strong>
+                  </li>
+                </ul>
+              </li>
+            </ul>
+          </div>
+          <div class="lane">
+            <div class="lane-head">
+              <p class="muted">layout</p>
+              <strong>Slotting</strong>
+            </div>
+            <ul class="items">
+              <li class="item ok">
+                <div class="title">
+                  <span class="muted">desc chain</span>
+                  <strong>slots</strong>
+                </div>
+                <div class="meta">
+                  <span class="status neutral">steady</span>
+                  <span class="badge">depth: 3</span>
+                </div>
+              </li>
+              <li class="item quiet">
+                <div class="title">
+                  <span class="muted">cascade</span>
+                  <strong>variants</strong>
+                </div>
+                <div class="meta">
+                  <span class="status neutral">muted</span>
+                  <span class="badge ghost">inherit</span>
+                </div>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </article>
+
+      <article class="bundle card">
+        <header class="bundle-header">
+          <div>
+            <p class="eyebrow">Diagnostics</p>
+            <h2>Audit queue</h2>
+          </div>
+          <div class="status-row">
+            <span class="status warn">pending</span>
+            <span class="tag ghost">:has()</span>
+            <span class="tag">audit</span>
+          </div>
+        </header>
+        <div class="lanes">
+          <div class="lane">
+            <div class="lane-head">
+              <p class="muted">events</p>
+              <strong>Logs</strong>
+            </div>
+            <ul class="items">
+              <li class="item watch">
+                <div class="title">
+                  <span class="muted">deep chain</span>
+                  <strong>cluster trace</strong>
+                </div>
+                <div class="meta">
+                  <span class="status warn">watch</span>
+                  <span class="badge ghost">descendant</span>
+                </div>
+              </li>
+              <li class="item ok nested">
+                <div class="title">
+                  <span class="muted">:has(.status.warn)</span>
+                  <strong>backpressure</strong>
+                </div>
+                <div class="meta">
+                  <span class="status danger">queueing</span>
+                  <span class="badge">depth: 5</span>
+                </div>
+                <ul class="detail-list">
+                  <li>
+                    <span class="muted">:nth-child</span>
+                    <strong>alternating backgrounds</strong>
+                  </li>
+                  <li>
+                    <span class="muted">grouped</span>
+                    <strong>:is(.warn, .danger) badge colors</strong>
+                  </li>
+                </ul>
+              </li>
+            </ul>
+          </div>
+          <div class="lane muted">
+            <div class="lane-head">
+              <p class="muted">slow path</p>
+              <strong>legacy</strong>
+            </div>
+            <ul class="items">
+              <li class="item quiet">
+                <div class="title">
+                  <span class="muted">desc chain</span>
+                  <strong>fallback</strong>
+                </div>
+                <div class="meta">
+                  <span class="status neutral">idle</span>
+                  <span class="badge ghost">muted</span>
+                </div>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </article>
+    </section>
+  </body>
+</html>

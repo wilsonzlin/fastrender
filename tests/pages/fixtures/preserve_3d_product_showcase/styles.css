@@ -1,0 +1,111 @@
+body.space {
+  background: radial-gradient(circle at 12% 18%, rgba(59, 130, 246, 0.16), transparent 40%),
+    radial-gradient(circle at 80% 30%, rgba(16, 185, 129, 0.16), transparent 45%),
+    linear-gradient(135deg, #f8fafc, #eef2ff);
+}
+
+.masthead {
+  margin-bottom: 14px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.scene {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+  perspective: 1200px;
+}
+
+.stack {
+  position: relative;
+  height: 360px;
+  transform-style: preserve-3d;
+}
+
+.plate {
+  position: absolute;
+  width: 220px;
+  height: 140px;
+  transform-style: preserve-3d;
+  backface-visibility: hidden;
+}
+
+.plate:nth-child(1) {
+  top: 32px;
+  left: 10px;
+  transform: translateZ(18px) rotateY(-6deg);
+}
+
+.plate:nth-child(2) {
+  top: 120px;
+  left: 40px;
+  transform: translateZ(44px) rotateX(10deg) rotateY(-14deg);
+  box-shadow: 0 30px 50px rgba(37, 99, 235, 0.15);
+}
+
+.plate:nth-child(3) {
+  top: 200px;
+  left: 80px;
+  transform: translateZ(72px) rotateX(-8deg) rotateY(12deg);
+  box-shadow: 0 34px 60px rgba(15, 23, 42, 0.2);
+}
+
+.elevated {
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(14, 165, 233, 0.1));
+}
+
+.tilted {
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.12), rgba(16, 185, 129, 0.12));
+}
+
+.flip {
+  position: relative;
+  height: 360px;
+  display: grid;
+  place-items: center;
+  perspective: 1200px;
+}
+
+.card3d {
+  width: 220px;
+  height: 160px;
+  position: relative;
+  transform-style: preserve-3d;
+  transform: rotateY(-16deg) translateZ(60px);
+  transition: transform 0.6s ease;
+}
+
+.card3d:hover {
+  transform: rotateY(164deg) translateZ(60px);
+}
+
+.face {
+  position: absolute;
+  inset: 0;
+  border-radius: 14px;
+  backface-visibility: hidden;
+  border: 1px solid var(--border);
+}
+
+.face.front {
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.96), rgba(248, 250, 252, 0.92));
+}
+
+.face.back {
+  background: linear-gradient(200deg, rgba(37, 99, 235, 0.12), rgba(79, 70, 229, 0.12));
+  transform: rotateY(180deg) translateZ(2px);
+  color: #1e3a8a;
+}
+
+@media (max-width: 960px) {
+  .masthead {
+    flex-direction: column;
+  }
+
+  .stack,
+  .flip {
+    height: 320px;
+  }
+}

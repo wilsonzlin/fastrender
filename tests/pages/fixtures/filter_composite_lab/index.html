@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Filter composite lab</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="hero">
+      <span class="pill">Filters</span>
+      <h1>Backdrop + clip-path + mask</h1>
+      <p class="muted">
+        Layered blurs, drop-shadows, and masks mirror the paint-heavy overlays from captures without
+        fetching remote assets.
+      </p>
+    </header>
+
+    <section class="canvas">
+      <div class="background texture"></div>
+      <div class="background gradient"></div>
+
+      <div class="orb"></div>
+      <div class="orb small"></div>
+
+      <div class="glass card">
+        <p class="eyebrow">backdrop-filter</p>
+        <h2>Frosted shell</h2>
+        <p class="muted">
+          Blurs the noisy texture while preserving the underlying saturation. Backdrop-filter layers
+          stack with clip-path on the edges.
+        </p>
+        <div class="chips">
+          <span class="chip">blur(16px)</span>
+          <span class="chip">drop-shadow</span>
+          <span class="chip">saturate(1.2)</span>
+        </div>
+      </div>
+
+      <div class="mask-card card">
+        <div class="mask-visual"></div>
+        <div class="mask-copy">
+          <p class="eyebrow">mask-image</p>
+          <h3>Cut out highlight</h3>
+          <p class="muted">mask-image + clip-path polygon to stress SVG mask handling.</p>
+        </div>
+      </div>
+
+      <div class="floating tag">
+        <strong>Clip-path</strong>
+        <p class="muted">Polygon edges + blur + shadows</p>
+      </div>
+    </section>
+  </body>
+</html>

@@ -1,0 +1,92 @@
+.stage {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 16px;
+  align-items: center;
+}
+
+.deck {
+  position: relative;
+  height: 360px;
+  perspective: 900px;
+  background: radial-gradient(circle at 30% 30%, rgba(59, 130, 246, 0.12), transparent 30%),
+    radial-gradient(circle at 70% 70%, rgba(236, 72, 153, 0.1), transparent 28%),
+    linear-gradient(180deg, rgba(15, 23, 42, 0.9), rgba(15, 23, 42, 0.7));
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 16px 38px rgba(15, 23, 42, 0.36);
+  overflow: hidden;
+}
+
+.card3d {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 220px;
+  height: 140px;
+  transform-style: preserve-3d;
+  transform-origin: center;
+}
+
+.card3d .face {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: #0f172a;
+  backface-visibility: hidden;
+  overflow: hidden;
+}
+
+.card3d .face.front {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.92), rgba(226, 232, 240, 0.92));
+  border: 1px solid rgba(148, 163, 184, 0.55);
+  box-shadow: 0 14px 28px rgba(15, 23, 42, 0.22);
+}
+
+.card3d .face.back {
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.8), rgba(14, 165, 233, 0.8));
+  border: 1px solid rgba(59, 130, 246, 0.5);
+  color: #0b1220;
+  transform: rotateY(180deg);
+  box-shadow: inset 0 0 24px rgba(15, 23, 42, 0.28);
+}
+
+.card3d.tilt {
+  transform: translate(-60%, -56%) rotateY(-18deg) rotateX(12deg);
+}
+
+.card3d.rotate {
+  transform: translate(-30%, -30%) rotateY(24deg) rotateX(8deg);
+}
+
+.card3d.rotate .face.front {
+  background: linear-gradient(135deg, rgba(217, 70, 239, 0.85), rgba(56, 189, 248, 0.85));
+}
+
+.card3d.lift {
+  transform: translate(-40%, -10%) rotateY(-12deg) rotateX(-10deg);
+}
+
+.card3d.lift .face.front {
+  background: linear-gradient(135deg, rgba(248, 250, 252, 0.96), rgba(255, 255, 255, 0.92));
+  border-style: dashed;
+}
+
+.card3d.lift::after {
+  content: "";
+  position: absolute;
+  inset: -8px;
+  border-radius: 14px;
+  border: 1px dashed rgba(148, 163, 184, 0.35);
+  transform: translateZ(16px);
+  pointer-events: none;
+}
+
+.note {
+  display: grid;
+  gap: 8px;
+}

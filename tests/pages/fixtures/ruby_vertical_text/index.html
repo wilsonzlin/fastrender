@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Vertical ruby text</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header>
+      <span class="pill">Writing modes</span>
+      <h1>Vertical rhythm with ruby</h1>
+      <p class="muted">Combines vertical-rl text, ruby annotations, and text-combine-upright.</p>
+    </header>
+
+    <div class="grid">
+      <section class="card vertical">
+        <div class="label">縦書き</div>
+        <div class="story">
+          <p>
+            <ruby>東京<rt>とうきょう</rt></ruby>の<ruby>市場<rt>いちば</rt></ruby>は
+            <span class="tcy">2024</span> 年も活発です。
+          </p>
+          <p>
+            <ruby>路面<rt>ろめん</rt></ruby>に<ruby>描<rt>えが</rt></ruby>かれた
+            <span class="small">案内</span>は
+            <ruby>観光客<rt>かんこうきゃく</rt></ruby>にも<ruby>優<rt>やさ</rt></ruby>しい。
+          </p>
+          <p>
+            <ruby>東西<rt>とうざい</rt></ruby>へ<ruby>流<rt>なが</rt></ruby>れる風を感じつつ、
+            <span class="tcy">12</span>本の<ruby>路線<rt>ろせん</rt></ruby>が交わる。
+          </p>
+        </div>
+      </section>
+
+      <section class="card horizontal">
+        <h2>Inline ruby</h2>
+        <p>
+          <ruby>注釈<rt>ちゅうしゃく</rt></ruby>と
+          <ruby>数字<rt>すうじ</rt></ruby>の並びは
+          <span class="tcy">03</span>-<span class="tcy">12</span>
+          のような電話番号にも使われます。
+        </p>
+        <p>
+          Sideways <span class="upright">UPRIGHT</span> segments keep
+          <span class="tcy">2023</span> compact while ruby stays aligned to the baseline.
+        </p>
+        <div class="ruby-block">
+          <ruby class="pillar">
+            雨<rt>あめ</rt>
+          </ruby>
+          <ruby class="pillar">
+            音<rt>おと</rt>
+          </ruby>
+          <ruby class="pillar">
+            読<rt>よ</rt>
+          </ruby>
+          <ruby class="pillar">
+            本<rt>ほん</rt>
+          </ruby>
+        </div>
+      </section>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Selector dashboard with :has()</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="selector-has">
+    <header class="masthead">
+      <span class="pill">Cascade hotspot</span>
+      <h1>Selector inspection dashboard</h1>
+      <p class="muted">
+        Deep descendant chains, grouped classes, and :has() state checks mimic the feeds that blow up
+        walker time in captures.
+      </p>
+    </header>
+
+    <main class="layout">
+      <section class="card board">
+        <div class="board-head">
+          <div>
+            <p class="eyebrow">Service board</p>
+            <h2>Streaming pipeline</h2>
+          </div>
+          <div class="legend">
+            <span class="chip chip-primary">descendant</span>
+            <span class="chip chip-ghost">grouped</span>
+            <span class="chip chip-accent">:has()</span>
+          </div>
+        </div>
+
+        <div class="columns">
+          <div class="column lane critical">
+            <p class="eyebrow">lane</p>
+            <h3>Critical path</h3>
+            <ul class="tickets">
+              <li class="ticket flagged">
+                <div class="meta">
+                  <div class="stack">
+                    <p class="muted">.lane.critical .ticket.flagged strong</p>
+                    <strong>Edge cache cold</strong>
+                  </div>
+                  <div class="status danger">degraded</div>
+                </div>
+                <div class="stack notes">
+                  <div class="note">
+                    <p class="muted">descendant chain in checklist</p>
+                    <ul class="tags">
+                      <li class="tag">selector depth</li>
+                      <li class="tag">nth-child</li>
+                      <li class="tag">:has()</li>
+                    </ul>
+                  </div>
+                  <div class="checklist">
+                    <label class="check-item">
+                      <input type="checkbox" checked />
+                      <span>rollout paused</span>
+                    </label>
+                    <label class="check-item">
+                      <input type="checkbox" />
+                      <span>override purge</span>
+                    </label>
+                  </div>
+                </div>
+              </li>
+              <li class="ticket">
+                <div class="meta">
+                  <div class="stack">
+                    <p class="muted">descendant selectors</p>
+                    <strong>Origin headers</strong>
+                  </div>
+                  <div class="status warn">investigate</div>
+                </div>
+                <div class="stack notes">
+                  <div class="note quiet">
+                    <p class="muted">:not(.flagged) branch</p>
+                    <p>
+                      <span class="label">headers</span>
+                      <span class="label ghost">cache</span>
+                    </p>
+                  </div>
+                  <div class="note">
+                    <p class="muted">nth-child applies alternating fill</p>
+                  </div>
+                </div>
+              </li>
+            </ul>
+          </div>
+
+          <div class="column lane">
+            <p class="eyebrow">lane</p>
+            <h3>Edge nodes</h3>
+            <ul class="tickets">
+              <li class="ticket flagged">
+                <div class="meta">
+                  <div class="stack">
+                    <p class="muted">grouped selectors</p>
+                    <strong>TLS rotation</strong>
+                  </div>
+                  <div class="status neutral">queued</div>
+                </div>
+                <div class="stack notes">
+                  <div class="note">
+                    <p class="muted">descendant chain hits :has() parent</p>
+                    <ul class="tags">
+                      <li class="tag">cert</li>
+                      <li class="tag">rotation</li>
+                      <li class="tag">ops</li>
+                    </ul>
+                  </div>
+                  <div class="note">
+                    <p>
+                      <strong class="eyebrow">owner</strong>
+                      <span class="muted">security</span>
+                    </p>
+                  </div>
+                </div>
+              </li>
+              <li class="ticket quiet">
+                <div class="meta">
+                  <div class="stack">
+                    <p class="muted">.ticket.quiet .status</p>
+                    <strong>Regional drains</strong>
+                  </div>
+                  <div class="status good">ok</div>
+                </div>
+                <div class="stack notes">
+                  <div class="note">
+                    <p class="muted">descendants trigger :where() merges</p>
+                  </div>
+                  <div class="note quiet">
+                    <p class="muted">= same selectors reused in other lanes</p>
+                  </div>
+                </div>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="card audit">
+        <div class="audit-head">
+          <div>
+            <p class="eyebrow">Rule walkers</p>
+            <h2>Checklist traversal</h2>
+          </div>
+          <p class="muted">
+            Each row uses descendant chains, group selectors, and the parent reacts with :has() when
+            status badges flip.
+          </p>
+        </div>
+
+        <div class="audit-grid">
+          <article class="entry">
+            <div class="entry-head">
+              <div>
+                <p class="eyebrow">row 1</p>
+                <strong>Incident runbook</strong>
+                <p class="muted">:has(.status.danger) cascades down to badge</p>
+              </div>
+              <div class="status danger">blocked</div>
+            </div>
+            <ul class="list">
+              <li>
+                <span class="label">dependency</span>
+                <span class="muted">selector chain goes 4 levels deep</span>
+              </li>
+              <li>
+                <span class="label">owner</span>
+                <span class="muted">.entry .list li:not(:first-child)</span>
+              </li>
+            </ul>
+          </article>
+
+          <article class="entry watch">
+            <div class="entry-head">
+              <div>
+                <p class="eyebrow">row 2</p>
+                <strong>Config drift</strong>
+                <p class="muted">Descendant combinators merge with :where()</p>
+              </div>
+              <div class="status warn">watch</div>
+            </div>
+            <ul class="list">
+              <li>
+                <span class="label">rollout</span>
+                <span class="muted">grouped selectors share specificity</span>
+              </li>
+              <li>
+                <span class="label">:has()</span>
+                <span class="muted">row inherits accent when child shows warn</span>
+              </li>
+            </ul>
+          </article>
+
+          <article class="entry ok">
+            <div class="entry-head">
+              <div>
+                <p class="eyebrow">row 3</p>
+                <strong>Fallback policy</strong>
+                <p class="muted">:where(.label, .status) shares styles</p>
+              </div>
+              <div class="status good">healthy</div>
+            </div>
+            <ul class="list">
+              <li>
+                <span class="label">scope</span>
+                <span class="muted">descendants keep spacing via nth-child</span>
+              </li>
+              <li>
+                <span class="label">audit</span>
+                <span class="muted">:not(.watch) branch stays neutral</span>
+              </li>
+            </ul>
+          </article>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

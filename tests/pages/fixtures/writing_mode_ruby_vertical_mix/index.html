@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Writing mode vertical mix</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="vertical-mix">
+    <header class="masthead">
+      <span class="pill">Writing modes</span>
+      <h1>Vertical text, ruby, and text-combine-upright</h1>
+      <p class="muted">Exercises vertical-rl/lr, ruby annotations, and upright numeric combine cases.</p>
+    </header>
+
+    <section class="card vertical-board">
+      <div class="column tate">
+        <p class="eyebrow">縦書き</p>
+        <div class="line">
+          <ruby>東京<rt>Tokyo</rt></ruby>
+          <span class="combine">2024</span>
+          <ruby>駅<rt>Station</rt></ruby>
+          <span class="mute-note">快速</span>
+        </div>
+        <div class="line alt">
+          <ruby>山手<rt>Yamanote</rt></ruby>
+          <span class="combine">08</span>
+          <ruby>線<rt>Line</rt></ruby>
+          <span class="mute-note">環状</span>
+        </div>
+      </div>
+
+      <div class="column tate alt">
+        <p class="eyebrow">縦中横</p>
+        <div class="line dense">
+          <ruby>雨<rt>Ame</rt></ruby>
+          <span class="combine">13</span>
+          <ruby>日<rt>Day</rt></ruby>
+          <span class="combine">37℃</span>
+          <ruby>暑<rt>Hot</rt></ruby>
+        </div>
+        <div class="line dense">
+          <ruby>北<rt>North</rt></ruby>
+          <span class="combine">02</span>
+          <ruby>風<rt>Wind</rt></ruby>
+          <span class="mute-note">弱</span>
+        </div>
+      </div>
+
+      <div class="column horizontal">
+        <p class="eyebrow">Horizontal ruby</p>
+        <p class="muted">
+          A horizontal summary mixes <ruby>漢<rt>Kan</rt></ruby>
+          <ruby>字<rt>ji</rt></ruby>
+          with English words and <span class="combine">42</span> inline counts.
+        </p>
+        <div class="legend">
+          <span class="chip chip-ghost">ruby</span>
+          <span class="chip chip-primary">writing-mode</span>
+          <span class="chip chip-accent">text-combine-upright</span>
+        </div>
+      </div>
+    </section>
+  </body>
+</html>

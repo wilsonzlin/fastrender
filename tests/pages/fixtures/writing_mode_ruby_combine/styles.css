@@ -1,0 +1,100 @@
+body.writing-page {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.masthead {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+  align-items: stretch;
+}
+
+.column {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), #eef2ff);
+  border: 1px solid var(--border);
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.08);
+}
+
+.column .vertical {
+  display: flex;
+  gap: 8px;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  line-height: 1.6;
+}
+
+.column .vertical .line {
+  background: #fff;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px dashed #cbd5e1;
+}
+
+.column .vertical .line.emphasis {
+  background: #f8fafc;
+}
+
+.column .vertical .line + .line {
+  margin-right: 10px;
+}
+
+.column.alt .vertical {
+  background: linear-gradient(180deg, #f8fafc, #e2e8f0);
+  padding: 12px;
+  border-radius: 12px;
+}
+
+.column.alt .vertical .line {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+}
+
+.vertical ruby {
+  ruby-position: inter-character;
+  font-size: 16px;
+}
+
+.vertical rt {
+  font-size: 12px;
+  color: var(--subtle);
+  letter-spacing: 0.1em;
+}
+
+.upright {
+  text-orientation: upright;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.year {
+  display: inline-block;
+  text-combine-upright: all;
+  padding: 2px 6px;
+  background: rgba(37, 99, 235, 0.12);
+  border-radius: 8px;
+  border: 1px solid rgba(37, 99, 235, 0.35);
+  font-weight: 700;
+}
+
+.note {
+  display: grid;
+  gap: 10px;
+}
+
+.note code {
+  background: #0f172a;
+  color: #f8fafc;
+  padding: 2px 6px;
+  border-radius: 6px;
+}

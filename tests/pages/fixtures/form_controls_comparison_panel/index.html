@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Form controls comparison</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="card masthead">
+      <div>
+        <span class="pill">Forms</span>
+        <h1>Default vs custom controls</h1>
+        <p class="muted">Showcases range, selects, checkboxes, and appearance none styling differences.</p>
+      </div>
+      <p class="muted">Checkboxes use accent-color on the left and custom drawn boxes on the right.</p>
+    </header>
+
+    <div class="forms">
+      <section class="card form native">
+        <h2>Native controls</h2>
+        <label class="field">
+          <span>Volume</span>
+          <input type="range" min="0" max="100" value="60" />
+        </label>
+        <label class="field">
+          <span>Region</span>
+          <select>
+            <option>us-east</option>
+            <option>eu-west</option>
+            <option>ap-south</option>
+          </select>
+        </label>
+        <label class="field checkbox">
+          <input type="checkbox" checked />
+          <div>
+            <strong>Use defaults</strong>
+            <p class="muted">native appearance and accent-color only</p>
+          </div>
+        </label>
+      </section>
+
+      <section class="card form custom">
+        <h2>Custom appearance: none</h2>
+        <label class="field">
+          <span>Volume</span>
+          <div class="range-shell">
+            <input class="range" type="range" min="0" max="100" value="35" />
+            <div class="range-track">
+              <div class="range-fill" style="width: 35%"></div>
+            </div>
+          </div>
+        </label>
+        <label class="field">
+          <span>Region</span>
+          <div class="select-shell">
+            <select class="custom-select">
+              <option>us-east</option>
+              <option selected>eu-west</option>
+              <option>ap-south</option>
+            </select>
+            <span aria-hidden="true" class="chevron">▾</span>
+          </div>
+        </label>
+        <label class="field checkbox">
+          <input class="custom-checkbox" type="checkbox" checked />
+          <div>
+            <strong>Custom check</strong>
+            <p class="muted">appearance: none with manual check styling</p>
+          </div>
+        </label>
+        <label class="field checkbox">
+          <input class="custom-switch" type="checkbox" />
+          <div>
+            <strong>Toggle</strong>
+            <p class="muted">pseudo track / thumb replace default checkbox</p>
+          </div>
+        </label>
+      </section>
+    </div>
+  </body>
+</html>

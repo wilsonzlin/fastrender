@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Selector incident console</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="console">
+    <header class="masthead card">
+      <div>
+        <span class="pill">Cascade + :has()</span>
+        <h1>Incident console</h1>
+        <p class="muted">
+          Deep descendant selectors, grouped class chains, and :has() highlight critical entries to mimic
+          capture hot paths.
+        </p>
+      </div>
+      <div class="legend">
+        <span class="chip chip-critical">:has(.status.critical)</span>
+        <span class="chip chip-warn">descendants</span>
+        <span class="chip chip-neutral">grouped</span>
+      </div>
+    </header>
+
+    <div class="layout">
+      <aside class="filters card">
+        <div class="section">
+          <h2>Segments</h2>
+          <ul class="filter-list">
+            <li class="active">
+              <div class="row">
+                <span class="dot"></span>
+                <div>
+                  <strong>Production</strong>
+                  <p class="muted">.filter-list .active > .row strong</p>
+                </div>
+                <span class="count">128</span>
+              </div>
+              <ul class="chips">
+                <li class="chip">edge</li>
+                <li class="chip">ingress</li>
+                <li class="chip">public</li>
+              </ul>
+            </li>
+            <li>
+              <div class="row">
+                <span class="dot alt"></span>
+                <div>
+                  <strong>Staging</strong>
+                  <p class="muted">descendant combinator depth 3</p>
+                </div>
+                <span class="count muted">54</span>
+              </div>
+              <ul class="chips">
+                <li class="chip">api</li>
+                <li class="chip">batch</li>
+              </ul>
+            </li>
+            <li class="quiet">
+              <div class="row">
+                <span class="dot quiet"></span>
+                <div>
+                  <strong>Archived</strong>
+                  <p class="muted">:not(.active) styles inherited</p>
+                </div>
+                <span class="count muted">18</span>
+              </div>
+              <ul class="chips">
+                <li class="chip">legacy</li>
+              </ul>
+            </li>
+          </ul>
+        </div>
+
+        <div class="section">
+          <h2>Signals</h2>
+          <div class="stack">
+            <div class="stack-row">
+              <div>
+                <p class="eyebrow">SLI</p>
+                <strong>Latency</strong>
+                <p class="muted">.stack-row strong + p</p>
+              </div>
+              <span class="badge good">ok</span>
+            </div>
+            <div class="stack-row warn">
+              <div>
+                <p class="eyebrow">SLI</p>
+                <strong>Error budget</strong>
+                <p class="muted">descendant chain + :where()</p>
+              </div>
+              <span class="badge warn">watch</span>
+            </div>
+            <div class="stack-row hot">
+              <div>
+                <p class="eyebrow">SLI</p>
+                <strong>Traffic</strong>
+                <p class="muted">tests :not(.quiet) cascade</p>
+              </div>
+              <span class="badge danger">hot</span>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <main class="content">
+        <section class="panel card">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Descendant matching</p>
+              <h2>Incidents</h2>
+            </div>
+            <div class="legend">
+              <span class="chip chip-critical">critical</span>
+              <span class="chip chip-warn">degraded</span>
+              <span class="chip chip-neutral">stable</span>
+            </div>
+          </div>
+
+          <div class="incident-grid">
+            <article class="incident critical">
+              <header class="incident-head">
+                <div>
+                  <p class="eyebrow">#2487</p>
+                  <strong>Ingress saturation</strong>
+                  <p class="muted">Selector depth hits five nodes.</p>
+                </div>
+                <div class="status-row">
+                  <span class="status critical">critical</span>
+                  <span class="status active">active</span>
+                </div>
+              </header>
+              <ul class="checks">
+                <li>
+                  <div class="label">
+                    <span class="dot tiny"></span>
+                    <strong>edge clusters</strong>
+                  </div>
+                  <p class="muted">.incident .checks li p.muted inherits color</p>
+                </li>
+                <li>
+                  <div class="label">
+                    <span class="dot tiny alt"></span>
+                    <strong>tls handshake</strong>
+                  </div>
+                  <p class="muted">:where(.label strong, .status) grouped</p>
+                </li>
+              </ul>
+            </article>
+
+            <article class="incident recovering">
+              <header class="incident-head">
+                <div>
+                  <p class="eyebrow">#2482</p>
+                  <strong>Job backlog</strong>
+                  <p class="muted">:has() used on parent containers.</p>
+                </div>
+                <div class="status-row">
+                  <span class="status warn">degraded</span>
+                  <span class="status muted">triage</span>
+                </div>
+              </header>
+              <ul class="checks">
+                <li>
+                  <div class="label">
+                    <span class="dot tiny"></span>
+                    <strong>queue depth</strong>
+                  </div>
+                  <p class="muted">descendant selectors hit nested spans.</p>
+                </li>
+                <li>
+                  <div class="label">
+                    <span class="dot tiny alt"></span>
+                    <strong>priority lanes</strong>
+                  </div>
+                  <p class="muted">.incident.recovering .label strong styles apply.</p>
+                </li>
+              </ul>
+            </article>
+
+            <article class="incident stable">
+              <header class="incident-head">
+                <div>
+                  <p class="eyebrow">#2470</p>
+                  <strong>Dashboard drift</strong>
+                  <p class="muted">Classes combine with descendant chain.</p>
+                </div>
+                <div class="status-row">
+                  <span class="status good">stable</span>
+                  <span class="status muted">watch</span>
+                </div>
+              </header>
+              <ul class="checks">
+                <li>
+                  <div class="label">
+                    <span class="dot tiny"></span>
+                    <strong>layout</strong>
+                  </div>
+                  <p class="muted">:not(:first-child) margins adjust spacing.</p>
+                </li>
+                <li>
+                  <div class="label">
+                    <span class="dot tiny alt"></span>
+                    <strong>css cache</strong>
+                  </div>
+                  <p class="muted">Grouped selectors set surface color.</p>
+                </li>
+              </ul>
+            </article>
+          </div>
+        </section>
+
+        <section class="timeline card">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">:has() walk</p>
+              <h2>Playbook timeline</h2>
+            </div>
+            <p class="muted">
+              Steps style their parents when a nested badge flips between warn/critical, forcing selector walks in
+              both directions.
+            </p>
+          </div>
+
+          <ol class="steps">
+            <li class="step">
+              <div class="meta">
+                <p class="eyebrow">00:02</p>
+                <strong>Pager triggered</strong>
+              </div>
+              <span class="badge warn">notify</span>
+              <p class="muted">.step:has(.badge.warn) is tinted amber.</p>
+            </li>
+            <li class="step critical">
+              <div class="meta">
+                <p class="eyebrow">00:08</p>
+                <strong>Traffic shifted</strong>
+              </div>
+              <span class="badge critical">shift</span>
+              <p class="muted">:has(.badge.critical) increases border emphasis.</p>
+            </li>
+            <li class="step">
+              <div class="meta">
+                <p class="eyebrow">00:14</p>
+                <strong>Cache purge</strong>
+              </div>
+              <span class="badge good">steady</span>
+              <p class="muted">descendant combinators drive spacing + color.</p>
+            </li>
+          </ol>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>

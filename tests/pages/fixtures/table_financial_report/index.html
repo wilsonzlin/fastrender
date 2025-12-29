@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Financial report table</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="card intro">
+      <div>
+        <span class="pill">Table spans</span>
+        <h1>Regional financial report</h1>
+        <p class="muted">
+          Exercises colgroup widths, mixed spans, and auto/fixed cells seen in pageset table regressions.
+        </p>
+      </div>
+      <p class="muted">Rowspan + colspans enforce native table layout instead of flex fallbacks.</p>
+    </header>
+
+    <table class="report" aria-label="regional breakdown">
+      <caption>Quarterly mix of products by region</caption>
+      <colgroup>
+        <col class="col-product" />
+        <col class="col-region" />
+      </colgroup>
+      <colgroup>
+        <col class="col-quarter fixed" />
+        <col class="col-quarter" />
+        <col class="col-quarter fixed" />
+        <col class="col-total" />
+      </colgroup>
+      <thead>
+        <tr>
+          <th rowspan="2" scope="col">Product line</th>
+          <th rowspan="2" scope="col">Region</th>
+          <th colspan="2" scope="colgroup">Pipeline</th>
+          <th colspan="2" scope="colgroup">Actuals</th>
+        </tr>
+        <tr>
+          <th scope="col">Q1</th>
+          <th scope="col">Q2</th>
+          <th scope="col">Q3</th>
+          <th scope="col">Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th rowspan="2" scope="rowgroup">Platform</th>
+          <td class="region">NA / EU</td>
+          <td>$420k</td>
+          <td>$470k</td>
+          <td>$510k</td>
+          <td class="total strong">$1.40m</td>
+        </tr>
+        <tr>
+          <td class="region">APAC</td>
+          <td>$120k</td>
+          <td>$150k</td>
+          <td>$190k</td>
+          <td class="total">$460k</td>
+        </tr>
+        <tr>
+          <th rowspan="2" scope="rowgroup">Edge CDN</th>
+          <td class="region">Global</td>
+          <td colspan="2" class="highlight">$620k (aggregation spans two quarters)</td>
+          <td>$310k</td>
+          <td class="total strong">$930k</td>
+        </tr>
+        <tr>
+          <td class="region">LatAm</td>
+          <td>$90k</td>
+          <td>$110k</td>
+          <td>$120k</td>
+          <td class="total">$320k</td>
+        </tr>
+        <tr>
+          <th scope="row">Docs platform</th>
+          <td class="region">EU</td>
+          <td>$96k</td>
+          <td>$104k</td>
+          <td>$111k</td>
+          <td class="total">$311k</td>
+        </tr>
+      </tbody>
+      <tfoot>
+        <tr>
+          <th scope="row" colspan="2">Weighted totals</th>
+          <td>$726k</td>
+          <td>$834k</td>
+          <td>$1.12m</td>
+          <td class="total strong">$2.68m</td>
+        </tr>
+      </tfoot>
+    </table>
+  </body>
+</html>

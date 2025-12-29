@@ -1,0 +1,100 @@
+.masthead {
+  margin-bottom: 16px;
+}
+
+.eyebrow {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--subtle);
+  margin: 0;
+}
+
+.scene {
+  position: relative;
+  min-height: 360px;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+  align-items: stretch;
+  background: radial-gradient(circle at 20% 20%, rgba(37, 99, 235, 0.18), transparent 45%),
+    radial-gradient(circle at 70% 60%, rgba(217, 70, 239, 0.12), transparent 52%),
+    url("../assets/images/pattern.png");
+  background-size: cover;
+}
+
+.scene .glow {
+  position: absolute;
+  inset: -20%;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.32), transparent 50%);
+  filter: blur(30px);
+  z-index: 0;
+}
+
+.panel {
+  position: relative;
+  z-index: 1;
+  border-radius: 14px;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  box-shadow: 0 20px 40px rgba(15, 23, 42, 0.2);
+  color: #0f172a;
+}
+
+.panel h2,
+.panel h3 {
+  margin-bottom: 6px;
+}
+
+.panel .muted {
+  color: #334155;
+}
+
+.panel.glass {
+  background: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(14px) saturate(1.1);
+  box-shadow: 0 14px 28px rgba(37, 99, 235, 0.18);
+}
+
+.panel.mask {
+  background: linear-gradient(160deg, rgba(37, 99, 235, 0.12), rgba(217, 70, 239, 0.18));
+  border-style: dashed;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 12px;
+  align-items: center;
+}
+
+.mask-preview {
+  width: 160px;
+  height: 160px;
+  background: linear-gradient(135deg, #2563eb, #d946ef);
+  mask-image: url("../assets/images/mask.png");
+  mask-size: cover;
+  mask-repeat: no-repeat;
+  filter: drop-shadow(0 18px 22px rgba(37, 99, 235, 0.3));
+  clip-path: polygon(12% 0%, 100% 6%, 90% 100%, 0% 94%);
+}
+
+.mask-notes {
+  display: grid;
+  gap: 6px;
+}
+
+.panel.shadow {
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.6), rgba(15, 23, 42, 0.8));
+  color: #e2e8f0;
+  border-color: rgba(148, 163, 184, 0.6);
+}
+
+.orb {
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 30% 30%, #fef3c7, #fb7185 50%, #2563eb 100%);
+  margin: 10px 0;
+  filter: drop-shadow(0 18px 36px rgba(251, 113, 133, 0.35)) blur(1px);
+  box-shadow: inset 0 0 18px rgba(255, 255, 255, 0.5);
+  clip-path: polygon(8% 0%, 92% 14%, 86% 88%, 6% 100%);
+}

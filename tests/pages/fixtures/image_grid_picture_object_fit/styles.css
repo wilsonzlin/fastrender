@@ -1,0 +1,71 @@
+.masthead {
+  margin-bottom: 14px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.tile {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 8px;
+  display: grid;
+  gap: 6px;
+  box-shadow: 0 10px 20px rgba(15, 23, 42, 0.06);
+}
+
+.tile picture,
+.tile img {
+  width: 100%;
+  height: 180px;
+  border-radius: 8px;
+}
+
+.tile picture {
+  display: block;
+  overflow: hidden;
+  background: linear-gradient(120deg, #e0f2fe, #eef2ff);
+}
+
+.tile img {
+  object-fit: cover;
+}
+
+.tile.tall img {
+  object-fit: contain;
+  padding: 10px;
+  background: #0f172a;
+}
+
+.tile.poster img {
+  object-fit: contain;
+  object-position: center top;
+  padding: 12px;
+  background: linear-gradient(180deg, #0f172a, #1f2937);
+}
+
+.tile.wide img {
+  object-position: center 40%;
+}
+
+.tile.square img {
+  object-position: center;
+}
+
+.tile figcaption {
+  font-weight: 700;
+  color: #0f172a;
+}
+
+@media (max-width: 900px) {
+  .masthead {
+    flex-direction: column;
+  }
+}

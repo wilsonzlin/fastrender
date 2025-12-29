@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Picture + srcset grid</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="masthead">
+      <span class="pill">Images</span>
+      <h1>Object-fit grid with picture/srcset</h1>
+      <p class="muted">
+        Local PNGs with 1x/2x variants and mixed object-fit values mirror the gallery-like captures
+        that stress decoding and sizing.
+      </p>
+    </header>
+
+    <section class="card gallery">
+      <div class="grid">
+        <figure class="tile tall">
+          <picture>
+            <source srcset="../assets/images/gallery-aurora@2x.png 2x, ../assets/images/gallery-aurora.png 1x" />
+            <img src="../assets/images/gallery-aurora.png" alt="Aurora" loading="lazy" />
+          </picture>
+          <figcaption>object-fit: cover</figcaption>
+        </figure>
+        <figure class="tile wide">
+          <picture>
+            <source srcset="../assets/images/gallery-canyon@2x.png 2x, ../assets/images/gallery-canyon.png 1x" />
+            <img src="../assets/images/gallery-canyon.png" alt="Canyon" loading="lazy" />
+          </picture>
+          <figcaption>cover + srcset</figcaption>
+        </figure>
+        <figure class="tile square contain">
+          <picture>
+            <source srcset="../assets/images/gallery-square.png 1x" />
+            <img src="../assets/images/gallery-square.png" alt="Square" loading="lazy" />
+          </picture>
+          <figcaption>object-fit: contain</figcaption>
+        </figure>
+        <figure class="tile">
+          <picture>
+            <source srcset="../assets/images/gallery-forest@2x.png 2x, ../assets/images/gallery-forest.png 1x" />
+            <img src="../assets/images/gallery-forest.png" alt="Forest" loading="lazy" />
+          </picture>
+          <figcaption>cover</figcaption>
+        </figure>
+        <figure class="tile portrait">
+          <picture>
+            <source srcset="../assets/images/gallery-tall.png 1x" />
+            <img src="../assets/images/gallery-tall.png" alt="Tall" loading="lazy" />
+          </picture>
+          <figcaption>contain, tall asset</figcaption>
+        </figure>
+        <figure class="tile">
+          <picture>
+            <source srcset="../assets/images/gallery-aurora@2x.png 2x, ../assets/images/gallery-aurora.png 1x" />
+            <img src="../assets/images/gallery-aurora.png" alt="Aurora repeat" loading="lazy" />
+          </picture>
+          <figcaption>cover repeat</figcaption>
+        </figure>
+      </div>
+    </section>
+  </body>
+</html>

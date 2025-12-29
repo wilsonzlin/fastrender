@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Image grid object-fit</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header>
+      <span class="pill">Images</span>
+      <h1>Object-fit grid</h1>
+      <p class="muted">
+        Uses local picture/srcset sources and object-fit variations to mirror the card grids in the
+        pageset.
+      </p>
+    </header>
+
+    <div class="grid">
+      <article class="card photo">
+        <picture>
+          <source
+            srcset="
+              ../assets/images/gallery-aurora@2x.png 2x,
+              ../assets/images/gallery-aurora.png 1x
+            "
+            media="(min-width: 800px)"
+          />
+          <img src="../assets/images/gallery-aurora.png" alt="Aurora" />
+        </picture>
+        <div class="meta">
+          <strong>Cover</strong>
+          <p class="muted">object-fit: cover; tall viewport</p>
+        </div>
+      </article>
+
+      <article class="card photo contain">
+        <picture>
+          <source srcset="../assets/images/gallery-canyon@2x.png 2x" media="(min-width: 900px)" />
+          <img src="../assets/images/gallery-canyon.png" alt="Canyon" />
+        </picture>
+        <div class="meta">
+          <strong>Contain</strong>
+          <p class="muted">object-fit: contain; padded background</p>
+        </div>
+      </article>
+
+      <article class="card photo">
+        <img src="../assets/images/gallery-forest.png" srcset="../assets/images/gallery-forest@2x.png 2x" alt="Forest" />
+        <div class="meta">
+          <strong>2x density</strong>
+          <p class="muted">srcset for DPR while sizing to column</p>
+        </div>
+      </article>
+
+      <article class="card photo square">
+        <img src="../assets/images/gallery-square.png" alt="Square" />
+        <div class="meta">
+          <strong>Contain square</strong>
+          <p class="muted">Fits inside rounded frame</p>
+        </div>
+      </article>
+
+      <article class="card photo tall">
+        <img src="../assets/images/gallery-tall.png" alt="Tall building" />
+        <div class="meta">
+          <strong>Tall cover</strong>
+          <p class="muted">Crops tall image with cover fit</p>
+        </div>
+      </article>
+    </div>
+  </body>
+</html>

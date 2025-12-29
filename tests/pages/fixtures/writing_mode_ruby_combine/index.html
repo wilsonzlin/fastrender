@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Vertical writing + ruby</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="writing-page">
+    <header class="masthead">
+      <span class="pill">Writing mode</span>
+      <div>
+        <h1>Vertical ruby with text-combine-upright</h1>
+        <p class="muted">
+          Vertical-rl flow mixes ruby annotations, inline upright numbers, and sideways words to
+          cover writing-mode layout cases.
+        </p>
+      </div>
+    </header>
+
+    <main class="grid">
+      <section class="card column">
+        <p class="eyebrow">縦書き vertical-rl</p>
+        <div class="vertical">
+          <p class="line">
+            <ruby>東京<rt>とうきょう</rt></ruby> <span class="year">2024</span> の
+            <ruby>案内<rt>ガイド</rt></ruby>を準備しました。
+          </p>
+          <p class="line emphasis">
+            <ruby>文章<rt>もん</rt></ruby>の中で
+            <span class="upright">API</span> や <span class="year">07</span> の
+            <ruby>日付<rt>ひづけ</rt></ruby>を組み合わせています。
+          </p>
+        </div>
+      </section>
+
+      <section class="card column alt">
+        <p class="eyebrow">縦書き with ruby blocks</p>
+        <div class="vertical alt-flow">
+          <p class="line">
+            <ruby>電車<rt>でんしゃ</rt></ruby>は
+            <ruby>午前<rt>ごぜん</rt></ruby><span class="year">09</span>時に出発します。
+          </p>
+          <p class="line">
+            <span class="upright narrow">JR</span> の
+            <ruby>路線<rt>ろせん</rt></ruby>は
+            <span class="upright">Suica</span> で <span class="year">10</span> 分以内。
+          </p>
+        </div>
+      </section>
+
+      <section class="card note">
+        <p class="eyebrow">Horizontal mix</p>
+        <p>
+          The block above forces vertical text, ruby layout, and text-combine-upright digits. This
+          card keeps a horizontal writing-mode to contrast inline ruby rendering.
+        </p>
+        <p class="muted">
+          Ruby fallback uses <code>rp</code> for browsers without ruby support.
+        </p>
+      </section>
+    </main>
+  </body>
+</html>

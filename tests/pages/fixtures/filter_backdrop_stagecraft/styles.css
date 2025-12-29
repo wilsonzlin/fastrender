@@ -1,0 +1,134 @@
+body.stage {
+  background: radial-gradient(circle at 10% 10%, #dbeafe, #eef2ff 40%, #f8fafc);
+}
+
+.masthead {
+  margin-bottom: 14px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.canvas {
+  position: relative;
+  min-height: 560px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: linear-gradient(120deg, rgba(59, 130, 246, 0.14), rgba(16, 185, 129, 0.08));
+}
+
+.canvas .background {
+  position: absolute;
+  inset: 0;
+  background-image: url("../assets/images/pattern.png"), linear-gradient(160deg, rgba(15, 23, 42, 0.75), rgba(30, 64, 175, 0.6));
+  background-size: 180px 180px, cover;
+  background-position: center;
+  filter: blur(2px) saturate(1.1);
+}
+
+.canvas .glass {
+  position: absolute;
+  top: 32px;
+  left: 32px;
+  width: 320px;
+  padding: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.18);
+  color: #0f172a;
+  box-shadow: 0 20px 40px rgba(15, 23, 42, 0.28);
+  backdrop-filter: blur(18px) saturate(1.2);
+}
+
+.canvas .glass .chips {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.canvas .glass .chip {
+  background: rgba(59, 130, 246, 0.18);
+  color: #1e3a8a;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-weight: 700;
+}
+
+.panel.shadow {
+  position: absolute;
+  right: 30px;
+  bottom: 40px;
+  width: 260px;
+  padding: 16px;
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.92), rgba(241, 245, 249, 0.92));
+  border-radius: 18px;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  filter: drop-shadow(0 18px 38px rgba(2, 6, 23, 0.18));
+}
+
+.spotlight {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.shape {
+  position: absolute;
+  width: 360px;
+  height: 360px;
+  border-radius: 32px;
+}
+
+.shape.glow {
+  top: 80px;
+  right: 20px;
+  background: radial-gradient(circle at 20% 20%, rgba(59, 130, 246, 0.7), transparent 60%),
+    radial-gradient(circle at 80% 60%, rgba(16, 185, 129, 0.55), transparent 65%);
+  filter: blur(20px) saturate(1.2);
+  transform: rotate(-8deg);
+}
+
+.shape.mask {
+  top: 140px;
+  left: 120px;
+  background: linear-gradient(120deg, rgba(255, 255, 255, 0.82), rgba(224, 231, 255, 0.92));
+  mask-image: url("../assets/images/mask.png");
+  mask-size: 140% 140%;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  filter: drop-shadow(0 24px 40px rgba(15, 23, 42, 0.22));
+  backdrop-filter: blur(8px) saturate(1.05);
+}
+
+.label.card {
+  position: absolute;
+  bottom: 26px;
+  left: 22px;
+  width: 280px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  border-radius: 14px;
+  clip-path: polygon(0 0, 86% 0, 100% 24%, 100% 100%, 0 100%);
+  box-shadow: 0 16px 30px rgba(15, 23, 42, 0.2);
+  backdrop-filter: blur(12px);
+}
+
+.label.card strong {
+  display: block;
+  margin-top: 4px;
+}
+
+.label.card .muted {
+  margin-top: 4px;
+}
+
+@media (max-width: 1040px) {
+  .masthead {
+    flex-direction: column;
+  }
+
+  .canvas {
+    min-height: 520px;
+  }
+}

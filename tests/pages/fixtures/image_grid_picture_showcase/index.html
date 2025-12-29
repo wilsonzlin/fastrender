@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Image grid picture showcase</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="image-grid">
+    <header class="masthead card">
+      <div>
+        <span class="pill">Images</span>
+        <h1>Picture + object-fit grid</h1>
+        <p class="muted">
+          Responsive picture elements with srcset and varying aspect ratios mirror the gallery pages
+          that frequently hit decoding and layout hot paths.
+        </p>
+      </div>
+      <div class="legend">
+        <span class="chip chip-primary">picture</span>
+        <span class="chip chip-ghost">srcset</span>
+        <span class="chip chip-accent">object-fit</span>
+      </div>
+    </header>
+
+    <section class="card gallery">
+      <figure class="tile tall">
+        <picture>
+          <source
+            media="(min-width: 900px)"
+            srcset="../assets/images/gallery-tall.png, ../assets/images/gallery-tall.png 2x"
+          />
+          <source
+            media="(min-width: 500px)"
+            srcset="../assets/images/gallery-forest@2x.png 2x, ../assets/images/gallery-forest.png"
+          />
+          <img src="../assets/images/gallery-forest.png" alt="Forest" />
+        </picture>
+        <figcaption>
+          <p class="eyebrow">Tall</p>
+          <strong>Forest watchtower</strong>
+          <span class="muted">object-fit: cover</span>
+        </figcaption>
+      </figure>
+      <figure class="tile wide">
+        <picture>
+          <source
+            media="(min-width: 800px)"
+            srcset="../assets/images/gallery-canyon@2x.png 2x, ../assets/images/gallery-canyon.png"
+          />
+          <img src="../assets/images/gallery-canyon.png" alt="Canyon" />
+        </picture>
+        <figcaption>
+          <p class="eyebrow">Wide</p>
+          <strong>Canyon ridge</strong>
+          <span class="muted">responsive srcset</span>
+        </figcaption>
+      </figure>
+      <figure class="tile square">
+        <picture>
+          <source srcset="../assets/images/gallery-square.png" media="(min-width: 480px)" />
+          <img src="../assets/images/gallery-aurora.png" alt="Square aurora" />
+        </picture>
+        <figcaption>
+          <p class="eyebrow">Square</p>
+          <strong>Aurora grid</strong>
+          <span class="muted">object-fit center</span>
+        </figcaption>
+      </figure>
+      <figure class="tile poster">
+        <picture>
+          <source
+            media="(min-width: 900px)"
+            srcset="../assets/images/gallery-aurora@2x.png 2x, ../assets/images/gallery-aurora.png"
+          />
+          <img src="../assets/images/gallery-aurora.png" alt="Aurora" />
+        </picture>
+        <figcaption>
+          <p class="eyebrow">Poster</p>
+          <strong>Lights above</strong>
+          <span class="muted">cover + overlay</span>
+        </figcaption>
+      </figure>
+      <figure class="tile highlight">
+        <picture>
+          <source
+            media="(min-width: 720px)"
+            srcset="../assets/images/gallery-canyon@2x.png 2x, ../assets/images/gallery-canyon.png"
+          />
+          <img src="../assets/images/gallery-canyon.png" alt="Highlight" />
+        </picture>
+        <figcaption>
+          <p class="eyebrow">Feature</p>
+          <strong>Layered art direction</strong>
+          <span class="muted">picture fallback</span>
+        </figcaption>
+      </figure>
+    </section>
+  </body>
+</html>

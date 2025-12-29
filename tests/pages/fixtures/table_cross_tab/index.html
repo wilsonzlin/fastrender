@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Cross tabulated table</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="table-cross-tab">
+    <header class="masthead">
+      <span class="pill">Layout hotspot</span>
+      <h1>Cross tabulation with spans</h1>
+      <p class="muted">
+        Mixed fixed/auto widths, colgroups, and rowspans mimic the financial dashboards that hit
+        table algorithm edge cases.
+      </p>
+    </header>
+
+    <section class="card sheet">
+      <div class="sheet-head">
+        <div>
+          <p class="eyebrow">Operational report</p>
+          <h2>Region + device performance</h2>
+        </div>
+        <div class="legend">
+          <span class="chip chip-primary">colgroup</span>
+          <span class="chip chip-ghost">rowspan</span>
+          <span class="chip chip-accent">mixed widths</span>
+        </div>
+      </div>
+
+      <table>
+        <caption>
+          Blend of auto and constrained columns. Totals row uses colspan; headers stack with rowspan.
+        </caption>
+        <colgroup>
+          <col class="col-region" />
+          <col class="col-segment" />
+          <col class="col-traffic" span="2" />
+          <col class="col-conversion" span="2" />
+          <col class="col-sla" />
+        </colgroup>
+        <thead>
+          <tr>
+            <th rowspan="2" class="sticky">Region</th>
+            <th rowspan="2">Segment</th>
+            <th colspan="2">Traffic</th>
+            <th colspan="2">Conversion</th>
+            <th rowspan="2">SLA</th>
+          </tr>
+          <tr>
+            <th>Visits</th>
+            <th>Avg. time</th>
+            <th>Signups</th>
+            <th>Rate</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th rowspan="3">Americas</th>
+            <td class="label">Retail</td>
+            <td class="num">1.24M</td>
+            <td class="num muted">02:41</td>
+            <td class="num">54,210</td>
+            <td class="num good">4.4%</td>
+            <td class="sla warn">82%</td>
+          </tr>
+          <tr>
+            <td class="label">Enterprise</td>
+            <td class="num">870k</td>
+            <td class="num muted">03:02</td>
+            <td class="num">32,120</td>
+            <td class="num warn">3.1%</td>
+            <td class="sla good">94%</td>
+          </tr>
+          <tr>
+            <td class="label hybrid" colspan="2">
+              Hybrid cloud
+              <span class="muted">colspan merges traffic cells</span>
+            </td>
+            <td class="num">18,320</td>
+            <td class="num">2.8%</td>
+            <td class="sla neutral">88%</td>
+          </tr>
+
+          <tr class="divider-row">
+            <td colspan="7">—</td>
+          </tr>
+
+          <tr>
+            <th rowspan="2">EMEA</th>
+            <td class="label">Publishing</td>
+            <td class="num">420k</td>
+            <td class="num muted">04:10</td>
+            <td class="num">12,580</td>
+            <td class="num warn">2.9%</td>
+            <td class="sla warn">80%</td>
+          </tr>
+          <tr>
+            <td class="label emphasis">Gov / Edu</td>
+            <td class="num">158k</td>
+            <td class="num muted">06:22</td>
+            <td class="num">5,901</td>
+            <td class="num neutral">3.7%</td>
+            <td class="sla good">96%</td>
+          </tr>
+
+          <tr>
+            <th rowspan="2">APAC</th>
+            <td class="label">Consumer</td>
+            <td class="num">690k</td>
+            <td class="num muted">02:18</td>
+            <td class="num">21,304</td>
+            <td class="num good">4.9%</td>
+            <td class="sla good">98%</td>
+          </tr>
+          <tr>
+            <td class="label">Enterprise</td>
+            <td class="num">240k</td>
+            <td class="num muted">03:35</td>
+            <td class="num">10,142</td>
+            <td class="num good">4.2%</td>
+            <td class="sla neutral">89%</td>
+          </tr>
+        </tbody>
+        <tfoot>
+          <tr>
+            <th colspan="2" class="label subtotal">Total</th>
+            <td class="num strong">3.62M</td>
+            <td class="num muted strong">03:16</td>
+            <td class="num strong">136,577</td>
+            <td class="num strong">4.0%</td>
+            <td class="sla strong">92%</td>
+          </tr>
+        </tfoot>
+      </table>
+    </section>
+  </body>
+</html>

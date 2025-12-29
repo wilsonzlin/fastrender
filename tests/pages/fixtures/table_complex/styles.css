@@ -1,0 +1,136 @@
+header {
+  margin-bottom: 14px;
+}
+
+.table-shell {
+  display: grid;
+  gap: 12px;
+}
+
+.table-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.note {
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px dashed var(--border);
+  background: rgba(15, 23, 42, 0.04);
+}
+
+table.matrix {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+}
+
+table.matrix caption {
+  caption-side: bottom;
+  padding: 10px 12px;
+  color: #475569;
+  text-align: left;
+}
+
+table.matrix th,
+table.matrix td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  text-align: left;
+}
+
+table.matrix thead th {
+  background: linear-gradient(180deg, #eef2ff, #e0e7ff);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+table.matrix th:last-child,
+table.matrix td:last-child {
+  border-right: none;
+}
+
+table.matrix tbody tr:last-child td,
+table.matrix tfoot th,
+table.matrix tfoot td {
+  border-bottom: none;
+}
+
+table.matrix tbody tr:nth-child(2n + 1) td {
+  background: rgba(248, 250, 252, 0.7);
+}
+
+table.matrix tbody th[scope="rowgroup"] {
+  background: rgba(99, 102, 241, 0.06);
+  font-weight: 700;
+}
+
+table.matrix tfoot {
+  background: rgba(37, 99, 235, 0.04);
+}
+
+.matrix .owner {
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.matrix .warn {
+  color: #b45309;
+  font-weight: 700;
+}
+
+.matrix .highlight {
+  color: #15803d;
+  font-weight: 700;
+}
+
+.matrix .spaned {
+  display: grid;
+  gap: 6px;
+}
+
+.bar {
+  position: relative;
+  height: 10px;
+  background: rgba(37, 99, 235, 0.12);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.bar span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #2563eb, #22d3ee);
+}
+
+.bar.alt {
+  background: rgba(16, 185, 129, 0.12);
+}
+
+.bar.alt span {
+  background: linear-gradient(90deg, #10b981, #22c55e);
+}
+
+.divider-row td {
+  padding: 0;
+  background: linear-gradient(90deg, transparent, rgba(148, 163, 184, 0.4), transparent);
+  border-bottom: none;
+}
+
+.matrix .center {
+  text-align: center;
+  color: #94a3b8;
+}
+
+.matrix thead .subhead th {
+  font-weight: 600;
+  font-size: 13px;
+}

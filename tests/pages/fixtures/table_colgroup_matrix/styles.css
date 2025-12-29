@@ -1,0 +1,196 @@
+body.table-page {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.masthead {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.table-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.table-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.chip-primary {
+  background: rgba(37, 99, 235, 0.14);
+  color: var(--accent);
+}
+
+.chip-ghost {
+  background: rgba(107, 114, 128, 0.14);
+  color: #111827;
+}
+
+.chip-accent {
+  background: rgba(217, 70, 239, 0.14);
+  color: var(--accent-2);
+}
+
+.table-wrapper {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+}
+
+.matrix {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+}
+
+.matrix col.col-region {
+  width: 180px;
+}
+
+.matrix col.col-metric.fixed {
+  width: 110px;
+}
+
+.matrix col.col-trend {
+  width: 140px;
+}
+
+.matrix col.col-notes {
+  width: auto;
+}
+
+.matrix thead th {
+  background: linear-gradient(180deg, #f8fafc, #e5e7eb);
+  color: #0f172a;
+  font-weight: 700;
+  text-align: left;
+  padding: 12px;
+  border-bottom: 2px solid #cbd5e1;
+}
+
+.matrix tbody th,
+.matrix tbody td,
+.matrix tfoot th,
+.matrix tfoot td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #e5e7eb;
+  vertical-align: top;
+}
+
+.matrix tbody th {
+  background: #f8fafc;
+}
+
+.matrix tbody tr:nth-child(odd):not(.divider) td {
+  background: #fdfdfd;
+}
+
+.matrix tbody tr.divider td {
+  padding: 0;
+  border: none;
+  height: 12px;
+}
+
+.matrix tbody tr.divider td::after {
+  content: "";
+  display: block;
+  height: 1px;
+  margin: 0 12px;
+  background: linear-gradient(90deg, transparent, #d1d5db, transparent);
+}
+
+.matrix .metric {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  text-align: right;
+}
+
+.matrix .metric.good {
+  color: #047857;
+}
+
+.matrix .metric.neutral {
+  color: #1d4ed8;
+}
+
+.matrix .metric.warn {
+  color: #b45309;
+}
+
+.matrix .metric.danger {
+  color: #b91c1c;
+}
+
+.matrix .metric.span {
+  text-align: center;
+  background: #f8fafc;
+  border: 1px dashed #d1d5db;
+}
+
+.matrix .metric.auto {
+  background: rgba(37, 99, 235, 0.08);
+  color: #1d4ed8;
+}
+
+.matrix .trend {
+  text-align: center;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.matrix .trend.up {
+  color: #047857;
+}
+
+.matrix .trend.down {
+  color: #b91c1c;
+}
+
+.matrix .trend.flat {
+  color: #475569;
+}
+
+.matrix .notes {
+  color: #0f172a;
+  line-height: 1.5;
+}
+
+.matrix .notes .muted {
+  color: var(--subtle);
+}
+
+.matrix tfoot {
+  background: #f8fafc;
+  font-weight: 700;
+}
+
+.matrix tfoot .summary {
+  text-align: center;
+  background: rgba(16, 185, 129, 0.12);
+  color: #047857;
+}
+
+@media (max-width: 900px) {
+  .table-wrapper {
+    overflow-x: auto;
+  }
+}

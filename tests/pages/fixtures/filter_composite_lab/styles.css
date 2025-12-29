@@ -1,0 +1,143 @@
+.hero {
+  margin-bottom: 12px;
+}
+
+.canvas {
+  position: relative;
+  min-height: 520px;
+  overflow: hidden;
+  border-radius: 18px;
+  border: 1px solid var(--border);
+  background: radial-gradient(circle at 20% 20%, rgba(59, 130, 246, 0.08), transparent 30%),
+    radial-gradient(circle at 80% 26%, rgba(236, 72, 153, 0.08), transparent 28%),
+    #0f172a;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 16px 36px rgba(15, 23, 42, 0.4);
+}
+
+.background.texture {
+  position: absolute;
+  inset: 0;
+  background: url("../assets/images/texture.png");
+  opacity: 0.4;
+  filter: grayscale(0.4) contrast(1.2);
+}
+
+.background.gradient {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 30% 60%, rgba(59, 130, 246, 0.18), transparent 30%),
+    radial-gradient(circle at 66% 40%, rgba(217, 70, 239, 0.24), transparent 25%),
+    linear-gradient(120deg, rgba(14, 165, 233, 0.14), rgba(34, 211, 238, 0.06));
+  mix-blend-mode: screen;
+}
+
+.orb {
+  position: absolute;
+  width: 220px;
+  height: 220px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.8), rgba(59, 130, 246, 0.6));
+  top: 30%;
+  left: 16%;
+  filter: blur(28px) drop-shadow(0 30px 60px rgba(59, 130, 246, 0.38));
+  opacity: 0.8;
+}
+
+.orb.small {
+  width: 140px;
+  height: 140px;
+  top: 12%;
+  right: 12%;
+  left: auto;
+  background: radial-gradient(circle at 40% 40%, rgba(255, 255, 255, 0.7), rgba(236, 72, 153, 0.7));
+  filter: blur(18px) drop-shadow(0 20px 44px rgba(236, 72, 153, 0.32));
+}
+
+.glass {
+  position: absolute;
+  top: 18%;
+  left: 10%;
+  width: 340px;
+  backdrop-filter: blur(16px) saturate(1.2);
+  background: rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.32);
+  border-radius: 14px;
+  box-shadow: 0 20px 60px rgba(15, 23, 42, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.45);
+  clip-path: polygon(0 0, 100% 8%, 92% 100%, 0 92%);
+}
+
+.glass .chips {
+  display: inline-flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.chip {
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  font-weight: 700;
+}
+
+.mask-card {
+  position: absolute;
+  right: 10%;
+  bottom: 12%;
+  width: 360px;
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  gap: 12px;
+  padding: 14px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(15, 23, 42, 0.2));
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 16px;
+  backdrop-filter: blur(10px) saturate(1.15);
+  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.26);
+}
+
+.mask-visual {
+  position: relative;
+  aspect-ratio: 1;
+  background: linear-gradient(135deg, rgba(56, 189, 248, 0.6), rgba(236, 72, 153, 0.6));
+  border-radius: 14px;
+  mask-image: url("../assets/images/mask.png");
+  mask-size: cover;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-image: url("../assets/images/mask.png");
+  -webkit-mask-size: cover;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  filter: drop-shadow(0 12px 24px rgba(15, 23, 42, 0.5));
+  clip-path: polygon(6% 10%, 100% 0%, 92% 92%, 0% 100%);
+}
+
+.mask-copy h3 {
+  margin-bottom: 4px;
+}
+
+.floating.tag {
+  position: absolute;
+  top: 12%;
+  right: 24%;
+  padding: 12px 16px;
+  border-radius: 14px;
+  background: rgba(15, 23, 42, 0.78);
+  color: #e2e8f0;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  filter: drop-shadow(0 16px 30px rgba(0, 0, 0, 0.4)) blur(0.2px);
+  backdrop-filter: blur(12px) saturate(1.2);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+.floating.tag::before {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border: 1px dashed rgba(226, 232, 240, 0.3);
+  border-radius: 14px;
+  pointer-events: none;
+  mix-blend-mode: screen;
+}

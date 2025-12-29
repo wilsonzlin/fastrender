@@ -1,0 +1,117 @@
+body {
+  background: radial-gradient(circle at 10% 10%, rgba(59, 130, 246, 0.15), transparent 26%),
+    radial-gradient(circle at 80% 0%, rgba(217, 70, 239, 0.16), transparent 32%),
+    #0f172a;
+  color: #e2e8f0;
+}
+
+.hero {
+  margin-bottom: 18px;
+  color: #e2e8f0;
+}
+
+.scene {
+  position: relative;
+  border-radius: 18px;
+  overflow: hidden;
+  padding: 24px;
+  min-height: 520px;
+  background: linear-gradient(135deg, rgba(15, 23, 42, 0.8), rgba(30, 41, 59, 0.9));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.35);
+}
+
+.background-tiles {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  filter: blur(1px);
+}
+
+.background-tiles .tile {
+  background-image: url("../assets/images/pattern.png");
+  background-size: 180px;
+  opacity: 0.25;
+  mix-blend-mode: soft-light;
+}
+
+.glass {
+  position: absolute;
+  top: 42px;
+  left: 42px;
+  width: 360px;
+  backdrop-filter: blur(12px) saturate(130%);
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: #e5e7eb;
+  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.35);
+}
+
+.chip-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.chip {
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  background: rgba(255, 255, 255, 0.1);
+  color: #e5e7eb;
+  font-weight: 700;
+}
+
+.panel.shadowed {
+  position: absolute;
+  right: 38px;
+  bottom: 42px;
+  width: 320px;
+  height: 220px;
+  border-radius: 18px;
+  overflow: hidden;
+  background: linear-gradient(160deg, rgba(14, 165, 233, 0.14), rgba(219, 39, 119, 0.16));
+  filter: drop-shadow(0 18px 28px rgba(0, 0, 0, 0.32));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.panel.shadowed .mask {
+  position: absolute;
+  inset: -40px -10px auto auto;
+  width: 200px;
+  height: 260px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.35), rgba(255, 255, 255, 0));
+  mask-image: url("../assets/images/mask.png");
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  opacity: 0.4;
+}
+
+.panel.shadowed .content {
+  position: absolute;
+  bottom: 18px;
+  left: 18px;
+  right: 18px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #0f172a;
+  clip-path: polygon(0 0, 92% 0, 100% 18%, 100% 100%, 0 100%);
+  backdrop-filter: blur(3px);
+}
+
+.floating.badge {
+  position: absolute;
+  top: 48%;
+  left: 52%;
+  transform: translate(-50%, -50%) rotate(-6deg);
+  padding: 14px 18px;
+  border-radius: 14px;
+  background: rgba(14, 165, 233, 0.18);
+  color: #0b172a;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.38);
+  filter: drop-shadow(0 12px 24px rgba(14, 165, 233, 0.4));
+  backdrop-filter: blur(8px) saturate(140%);
+}

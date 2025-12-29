@@ -1,0 +1,139 @@
+.masthead {
+  margin-bottom: 14px;
+}
+
+.schedule {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(248, 250, 252, 0.96));
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.12);
+}
+
+.schedule caption {
+  caption-side: top;
+  text-align: left;
+  font-weight: 700;
+  padding: 10px 12px;
+  color: #0f172a;
+}
+
+.schedule col.plant {
+  width: 140px;
+  background: rgba(59, 130, 246, 0.04);
+}
+
+.schedule col.line {
+  width: 90px;
+}
+
+.schedule col.metric.target {
+  width: 150px;
+}
+
+.schedule col.metric.actual {
+  width: 150px;
+}
+
+.schedule col.status-col {
+  width: 140px;
+  background: rgba(16, 185, 129, 0.06);
+}
+
+.schedule col.note {
+  width: auto;
+}
+
+.schedule thead th {
+  background: linear-gradient(180deg, rgba(37, 99, 235, 0.08), rgba(59, 130, 246, 0.12));
+  color: #0f172a;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.schedule th,
+.schedule td {
+  border: 1px solid var(--border);
+  padding: 10px 12px;
+  text-align: left;
+  vertical-align: middle;
+  word-break: keep-all;
+}
+
+.schedule tbody th {
+  background: rgba(37, 99, 235, 0.05);
+}
+
+.schedule tbody tr:nth-child(odd) td {
+  background: rgba(248, 250, 252, 0.8);
+}
+
+.schedule tbody tr:nth-child(even) td {
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.schedule .numeric {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.schedule .numeric.span {
+  text-align: center;
+  font-weight: 600;
+  color: var(--subtle);
+}
+
+.schedule .status {
+  display: inline-flex;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  background: rgba(148, 163, 184, 0.14);
+}
+
+.schedule .status.ok {
+  color: #15803d;
+  background: rgba(34, 197, 94, 0.18);
+  border-color: rgba(34, 197, 94, 0.32);
+}
+
+.schedule .status.warn {
+  color: #b45309;
+  background: rgba(234, 179, 8, 0.2);
+  border-color: rgba(234, 179, 8, 0.4);
+}
+
+.schedule .status.danger {
+  color: #b91c1c;
+  background: rgba(248, 113, 113, 0.2);
+  border-color: rgba(248, 113, 113, 0.4);
+}
+
+.schedule .status.neutral {
+  color: #0f172a;
+}
+
+.schedule .note {
+  color: var(--subtle);
+  font-style: italic;
+}
+
+.schedule tfoot th,
+.schedule tfoot td {
+  background: rgba(59, 130, 246, 0.06);
+  font-weight: 700;
+}
+
+.schedule tfoot .summary {
+  text-align: center;
+  color: #0ea5e9;
+  letter-spacing: 0.01em;
+}

@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Form controls custom vs default</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="form-lab">
+    <header class="masthead">
+      <span class="pill">Forms</span>
+      <h1>Default vs appearance: none controls</h1>
+      <p class="muted">
+        Side-by-side default form controls and appearance-none custom styling for range, selects,
+        checkboxes, and toggles.
+      </p>
+    </header>
+
+    <div class="form-grid">
+      <section class="card column default">
+        <h2>Browser defaults</h2>
+        <div class="field">
+          <label for="range-default">Range input</label>
+          <input id="range-default" type="range" min="0" max="100" value="70" />
+          <p class="muted">Unstyled track and thumb to contrast custom styling.</p>
+        </div>
+        <div class="field">
+          <label for="select-default">Select element</label>
+          <select id="select-default">
+            <option>Tokyo</option>
+            <option selected>Osaka</option>
+            <option>Sapporo</option>
+          </select>
+          <p class="muted">Default arrow and focus rings.</p>
+        </div>
+        <div class="field checks">
+          <label><input type="checkbox" checked /> Receive alerts</label>
+          <label><input type="checkbox" /> Send weekly digest</label>
+        </div>
+      </section>
+
+      <section class="card column custom">
+        <h2>Appearance none</h2>
+        <div class="field">
+          <label for="range-custom">Styled range</label>
+          <input id="range-custom" class="range" type="range" min="0" max="100" value="30" />
+          <p class="muted">
+            Custom track, rounded thumb, and accent shadows using appearance: none vendor pseudo
+            fallbacks.
+          </p>
+        </div>
+        <div class="field">
+          <label for="select-custom">Custom select</label>
+          <div class="select-wrap">
+            <select id="select-custom" class="select">
+              <option>Edge</option>
+              <option selected>Chrome</option>
+              <option>Safari</option>
+            </select>
+            <span class="chevron">⌄</span>
+          </div>
+          <p class="muted">Override arrow with pseudo chevron.</p>
+        </div>
+        <div class="field checks">
+          <label>
+            <input class="check" type="checkbox" checked />
+            <span class="label">Custom checkbox</span>
+          </label>
+          <label class="toggle">
+            <input class="switch" type="checkbox" checked />
+            <span class="track"><span class="thumb"></span></span>
+            <span class="label">Toggle control</span>
+          </label>
+        </div>
+      </section>
+    </div>
+  </body>
+</html>

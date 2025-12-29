@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Preserve 3D perspective grid</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="preserve-3d">
+    <header class="masthead">
+      <span class="pill">Transforms</span>
+      <h1>Preserve-3d cards with perspective</h1>
+      <p class="muted">
+        Exercises preserve-3d stacking, perspective, and backface-visibility to mirror the flip cards
+        seen in pageset captures.
+      </p>
+    </header>
+
+    <section class="card perspective">
+      <div class="scene">
+        <div class="card3d tilt-left">
+          <p class="eyebrow">Stacked</p>
+          <h3>Left rail</h3>
+          <p class="muted">RotateY(-16deg) with translateZ depth and shadow.</p>
+        </div>
+        <div class="card3d tilt-right">
+          <p class="eyebrow">Stacked</p>
+          <h3>Right rail</h3>
+          <p class="muted">RotateY(18deg) showing layered face with preserve-3d.</p>
+        </div>
+        <div class="flip-card">
+          <div class="face front">
+            <p class="eyebrow">Front face</p>
+            <h3>Backface hidden</h3>
+            <p class="muted">Front surface rotated inside a preserve-3d wrapper.</p>
+          </div>
+          <div class="face back">
+            <p class="eyebrow">Back face</p>
+            <h3>Reverse</h3>
+            <p class="muted">Shows off backface-visibility: hidden vs visible layers.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </body>
+</html>

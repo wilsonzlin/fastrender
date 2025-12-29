@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Writing mode annotations</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="writing-lab">
+    <header class="masthead card">
+      <div>
+        <span class="pill">Vertical text</span>
+        <h1>Annotated story column</h1>
+        <p class="muted">
+          Vertical-rl flow, ruby annotations, and text-combine-upright blocks mirror the mixed
+          writing-mode captures found in East-Asian layouts.
+        </p>
+      </div>
+      <div class="legend">
+        <span class="chip chip-primary">writing-mode</span>
+        <span class="chip chip-ghost">ruby</span>
+        <span class="chip chip-accent">tcy</span>
+      </div>
+    </header>
+
+    <div class="columns">
+      <section class="card vertical">
+        <p class="eyebrow">縦書き</p>
+        <h2>縦組みの物語</h2>
+        <p class="flow">
+          <ruby>灯<rt>とう</rt></ruby>りを抜けると、<span class="tcy">2025</span>年の
+          <ruby>夜<rt>よる</rt></ruby>が静かに
+          <ruby>流<rt>なが</rt></ruby>れていた。<span class="inline-ruby"
+            ><ruby>音<rt>おと</rt></ruby>は遠く、</span
+          >
+          <ruby>言葉<rt>ことば</rt></ruby>だけが肩を並べて歩く。
+        </p>
+        <p class="flow note">
+          <ruby>読者<rt>どくしゃ</rt></ruby>は
+          <ruby>小径<rt>こみち</rt></ruby>を進み、<span class="tcy">07</span> の刻みに気づく。
+          <ruby>行<rt>ぎょう</rt></ruby>の
+          <ruby>端<rt>はし</rt></ruby>には
+          <ruby>注釈<rt>ちゅうしゃく</rt></ruby>が寄り添い、文章全体を包み込む。
+        </p>
+        <div class="side-annotations">
+          <p>
+            <ruby>注<rt>ちゅう</rt></ruby>:
+            <span class="tcy">3</span> 行目は text-combine-upright の挙動を確認するための短い数字。
+          </p>
+          <p>
+            <ruby>備考<rt>びこう</rt></ruby>:
+            <ruby>縦中横<rt>たてちゅうよこ</rt></ruby> と
+            <ruby>ルビ<rt>るび</rt></ruby> の重なりはページセットのホットスポット。
+          </p>
+        </div>
+      </section>
+
+      <section class="card horizontal">
+        <header>
+          <p class="eyebrow">Notes</p>
+          <h2>Mixed directions</h2>
+        </header>
+        <p class="muted">
+          Horizontal text wraps alongside vertical ruby blocks to ensure inline baseline alignment
+          stays stable when mixing directions.
+        </p>
+        <ul class="bullet">
+          <li>
+            <span>Vertical column uses writing-mode: vertical-rl with upright numerics.</span>
+          </li>
+          <li>
+            <span>Ruby pairs sit above glyphs while annotations align through line-height.</span>
+          </li>
+          <li>
+            <span>
+              text-combine-upright compacts multi-digit numbers inside otherwise vertical lines.
+            </span>
+          </li>
+          <li>
+            <span>Side notes float to the left to mimic margin notes in books.</span>
+          </li>
+        </ul>
+      </section>
+    </div>
+  </body>
+</html>

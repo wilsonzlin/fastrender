@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Filter + backdrop atrium</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="filter-atrium">
+    <header class="masthead card">
+      <div>
+        <span class="pill">Filters</span>
+        <h1>Backdrop atrium</h1>
+        <p class="muted">
+          Layered blur, drop-shadow, clip-path, and masked gradients mirror the paint heavy scenes
+          seen in production captures.
+        </p>
+      </div>
+      <div class="legend">
+        <span class="chip chip-primary">backdrop-filter</span>
+        <span class="chip chip-ghost">clip-path</span>
+        <span class="chip chip-accent">mask</span>
+      </div>
+    </header>
+
+    <section class="scene">
+      <div class="bg-grid"></div>
+      <div class="orb orb-left"></div>
+      <div class="orb orb-right"></div>
+
+      <div class="glass card">
+        <div class="glass-header">
+          <div>
+            <p class="eyebrow">layered glass</p>
+            <h2>Stagecraft</h2>
+          </div>
+          <span class="status good">composited</span>
+        </div>
+        <p class="muted">
+          A translucent shell with blurred backdrop, drop shadows, and masked edges stresses filter
+          composition and clip correctness.
+        </p>
+        <div class="chips">
+          <span class="chip chip-primary">blur(18px)</span>
+          <span class="chip chip-ghost">drop-shadow</span>
+          <span class="chip chip-accent">mask-image</span>
+        </div>
+        <div class="panels">
+          <div class="panel masked card">
+            <p class="eyebrow">masked gradient</p>
+            <h3>Left rail</h3>
+            <p class="muted">
+              The clipped gradient uses mask-image with a PNG edge to recreate the irregular shapes
+              found in hero cards.
+            </p>
+          </div>
+          <div class="panel backdrop card">
+            <p class="eyebrow">backdrop</p>
+            <h3>Glass overlay</h3>
+            <p class="muted">
+              Backdrop blur combines with inner shadows and a polygon clip-path to drive overdraw and
+              layering.
+            </p>
+          </div>
+          <div class="panel outline card">
+            <p class="eyebrow">drop shadow</p>
+            <h3>Right rail</h3>
+            <p class="muted">
+              Multiple drop-shadows and a subtle hue-rotate filter simulate elevated surfaces over a
+              noisy background.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </body>
+</html>

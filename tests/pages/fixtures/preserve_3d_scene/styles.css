@@ -1,0 +1,138 @@
+body {
+  background: radial-gradient(circle at 18% 24%, rgba(59, 130, 246, 0.16), transparent 26%),
+    #0f172a;
+  color: #e5e7eb;
+}
+
+header {
+  margin-bottom: 14px;
+}
+
+.stage {
+  display: grid;
+  grid-template-columns: 1.6fr 1fr;
+  gap: 14px;
+  align-items: stretch;
+}
+
+.scene {
+  position: relative;
+  height: 460px;
+  border-radius: 18px;
+  background: linear-gradient(145deg, #111827, #0b1221);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+  perspective: 900px;
+}
+
+.scene::before,
+.scene::after {
+  content: "";
+  position: absolute;
+  width: 260px;
+  height: 260px;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.6;
+}
+
+.scene::before {
+  background: rgba(37, 99, 235, 0.7);
+  top: -60px;
+  left: -40px;
+}
+
+.scene::after {
+  background: rgba(236, 72, 153, 0.6);
+  bottom: -40px;
+  right: -40px;
+}
+
+.cube {
+  position: absolute;
+  top: 50%;
+  left: 38%;
+  width: 140px;
+  height: 140px;
+  transform-style: preserve-3d;
+  transform: translate(-50%, -50%) rotateX(-22deg) rotateY(32deg);
+  animation: spin 12s infinite linear;
+}
+
+.face {
+  position: absolute;
+  width: 140px;
+  height: 140px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: #cbd5e1;
+  backface-visibility: hidden;
+}
+
+.face.front {
+  transform: translateZ(70px);
+}
+
+.face.back {
+  transform: rotateY(180deg) translateZ(70px);
+  background: rgba(59, 130, 246, 0.24);
+}
+
+.face.right {
+  transform: rotateY(90deg) translateZ(70px);
+  background: rgba(16, 185, 129, 0.22);
+}
+
+.face.left {
+  transform: rotateY(-90deg) translateZ(70px);
+  background: rgba(217, 70, 239, 0.22);
+}
+
+.face.top {
+  transform: rotateX(90deg) translateZ(70px);
+  background: rgba(251, 191, 36, 0.22);
+}
+
+.face.bottom {
+  transform: rotateX(-90deg) translateZ(70px);
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.card[aria-hidden="true"] {
+  position: absolute;
+  right: 26px;
+  bottom: 24px;
+  width: 220px;
+  height: 140px;
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0));
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.35);
+  transform: translateZ(120px) rotateY(-14deg) rotateX(6deg);
+  transform-style: preserve-3d;
+  backface-visibility: hidden;
+}
+
+@keyframes spin {
+  0% {
+    transform: translate(-50%, -50%) rotateX(-22deg) rotateY(32deg);
+  }
+  50% {
+    transform: translate(-50%, -50%) rotateX(22deg) rotateY(212deg);
+  }
+  100% {
+    transform: translate(-50%, -50%) rotateX(-22deg) rotateY(392deg);
+  }
+}
+
+.note.card {
+  background: #fff;
+  color: var(--ink);
+  border: 1px solid var(--border);
+  box-shadow: 0 14px 36px rgba(15, 23, 42, 0.18);
+}

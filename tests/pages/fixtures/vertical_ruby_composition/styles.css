@@ -1,0 +1,71 @@
+.masthead {
+  margin-bottom: 14px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+}
+
+.panel {
+  min-height: 320px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(248, 250, 252, 0.9));
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.16);
+}
+
+.panel.alt {
+  background: linear-gradient(180deg, rgba(59, 130, 246, 0.08), rgba(255, 255, 255, 0.94));
+  border-color: rgba(59, 130, 246, 0.28);
+}
+
+.panel.annotations {
+  background: linear-gradient(180deg, rgba(14, 165, 233, 0.08), rgba(255, 255, 255, 0.95));
+  border-color: rgba(14, 165, 233, 0.28);
+}
+
+.vertical-line {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  line-height: 1.9;
+  font-size: 24px;
+  padding: 12px;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.02);
+}
+
+.vertical-line ruby {
+  font-size: 24px;
+  ruby-position: over;
+  ruby-align: center;
+}
+
+.vertical-line ruby rt {
+  font-size: 12px;
+  color: #4b5563;
+}
+
+.vertical-line ruby.long rt {
+  letter-spacing: 0.08em;
+}
+
+.vertical-line.numbers {
+  text-orientation: upright;
+}
+
+.combine {
+  text-combine-upright: all;
+  font-variant-numeric: tabular-nums;
+  padding: 2px 4px;
+  border-radius: 6px;
+  background: rgba(37, 99, 235, 0.16);
+  border: 1px solid rgba(37, 99, 235, 0.24);
+}
+
+.panel .eyebrow {
+  writing-mode: horizontal-tb;
+  margin-bottom: 10px;
+  display: inline-block;
+}

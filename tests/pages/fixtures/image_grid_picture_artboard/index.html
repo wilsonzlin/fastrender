@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Image grid picture artboard</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="image-grid">
+    <header class="masthead">
+      <span class="pill">Images</span>
+      <h1>Picture/srcset object-fit grid</h1>
+      <p class="muted">
+        Local assets through picture + srcset with mixed aspect ratios and object-fit cover/contain to
+        mirror responsive galleries in captures.
+      </p>
+    </header>
+
+    <section class="card gallery">
+      <div class="gallery-grid">
+        <figure class="tile wide">
+          <div class="frame cover">
+            <picture>
+              <source
+                media="(min-width: 960px)"
+                srcset="
+                  ../assets/images/gallery-aurora.png   1x,
+                  ../assets/images/gallery-aurora@2x.png 2x
+                "
+              />
+              <source
+                media="(min-width: 640px)"
+                srcset="
+                  ../assets/images/gallery-forest.png   1x,
+                  ../assets/images/gallery-forest@2x.png 2x
+                "
+              />
+              <img src="../assets/images/gallery-aurora.png" alt="Aurora" />
+            </picture>
+          </div>
+          <figcaption>
+            <p class="eyebrow">Hero</p>
+            <strong>High latitude lights</strong>
+            <p class="muted">object-fit: cover; picture selects based on viewport</p>
+          </figcaption>
+        </figure>
+
+        <figure class="tile">
+          <div class="frame contain">
+            <picture>
+              <source
+                media="(min-width: 900px)"
+                srcset="
+                  ../assets/images/gallery-square.png 1x,
+                  ../assets/images/gallery-square.png 2x
+                "
+              />
+              <img src="../assets/images/gallery-square.png" alt="Square" />
+            </picture>
+          </div>
+          <figcaption>
+            <p class="eyebrow">Square</p>
+            <strong>Contain fit</strong>
+            <p class="muted">Centered artboard with contain fit</p>
+          </figcaption>
+        </figure>
+
+        <figure class="tile tall">
+          <div class="frame cover">
+            <picture>
+              <source
+                media="(min-width: 800px)"
+                srcset="
+                  ../assets/images/gallery-tall.png 1x,
+                  ../assets/images/gallery-tall.png 2x
+                "
+              />
+              <img src="../assets/images/gallery-tall.png" alt="Tall canyon" />
+            </picture>
+          </div>
+          <figcaption>
+            <p class="eyebrow">Portrait</p>
+            <strong>Object-position center</strong>
+            <p class="muted">Tall image anchored center with object-fit: cover</p>
+          </figcaption>
+        </figure>
+
+        <figure class="tile">
+          <div class="frame cover">
+            <picture>
+              <source
+                media="(min-width: 780px)"
+                srcset="
+                  ../assets/images/gallery-canyon.png   1x,
+                  ../assets/images/gallery-canyon@2x.png 2x
+                "
+              />
+              <img src="../assets/images/gallery-canyon.png" alt="Canyon" />
+            </picture>
+          </div>
+          <figcaption>
+            <p class="eyebrow">Landscape</p>
+            <strong>Canyon ridge</strong>
+            <p class="muted">Covers area with focal center</p>
+          </figcaption>
+        </figure>
+
+        <figure class="tile">
+          <div class="frame contain soft">
+            <picture>
+              <source
+                media="(min-width: 700px)"
+                srcset="
+                  ../assets/images/gallery-forest.png   1x,
+                  ../assets/images/gallery-forest@2x.png 2x
+                "
+              />
+              <img src="../assets/images/gallery-forest.png" alt="Forest" />
+            </picture>
+          </div>
+          <figcaption>
+            <p class="eyebrow">Retina</p>
+            <strong>Forest srcset</strong>
+            <p class="muted">Uses @2x source on high DPI</p>
+          </figcaption>
+        </figure>
+      </div>
+    </section>
+  </body>
+</html>

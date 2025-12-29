@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Preserve 3D</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header>
+      <span class="pill">Transforms</span>
+      <h1>Preserve-3d stage</h1>
+      <p class="muted">Covers perspective, nested 3D transforms, and backface-visibility rules.</p>
+    </header>
+
+    <section class="stage">
+      <div class="scene">
+        <div class="cube">
+          <div class="face front">front</div>
+          <div class="face back">back</div>
+          <div class="face left">left</div>
+          <div class="face right">right</div>
+          <div class="face top">top</div>
+          <div class="face bottom">bottom</div>
+        </div>
+        <div class="card" aria-hidden="true"></div>
+      </div>
+      <div class="note card">
+        <h2>Why include?</h2>
+        <p>
+          Recent captures showed regressions in transform-style: preserve-3d handling where faces
+          folded or disappeared. This fixture keeps backface-visibility and perspective coverage
+          local.
+        </p>
+      </div>
+    </section>
+  </body>
+</html>

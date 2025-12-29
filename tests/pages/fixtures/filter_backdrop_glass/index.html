@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Backdrop and filter stack</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="filter-scene">
+    <header class="masthead">
+      <span class="pill">Filter hotspot</span>
+      <div>
+        <h1>Backdrop blur + drop-shadow + masks</h1>
+        <p class="muted">
+          Backdrop-filter glass, filter drop-shadows, clip-path wedges, and masked cards stress paint
+          stacking and caching.
+        </p>
+      </div>
+    </header>
+
+    <main class="scene card">
+      <div class="ink">
+        <div class="halo one"></div>
+        <div class="halo two"></div>
+      </div>
+
+      <div class="glass">
+        <div class="glass-header">
+          <p class="eyebrow">Frosted layers</p>
+          <h2>Backdrop + blur</h2>
+        </div>
+        <p>
+          Backdrop blur overlays sit above noisy gradients to reproduce heavy filter compositions
+          from dashboards.
+        </p>
+        <div class="chips">
+          <span class="chip chip-primary">backdrop-filter</span>
+          <span class="chip chip-ghost">filter blur</span>
+          <span class="chip chip-accent">drop-shadow</span>
+        </div>
+      </div>
+
+      <div class="floating">
+        <div class="shape blur"></div>
+        <div class="shape clipped"></div>
+        <div class="mask-card">
+          <div>
+            <p class="eyebrow">Mask</p>
+            <strong>Image mask</strong>
+          </div>
+          <p class="muted">mask-image + clip-path polygon overlays.</p>
+        </div>
+      </div>
+    </main>
+  </body>
+</html>

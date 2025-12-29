@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Vertical story</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="vertical">
+    <header class="card masthead">
+      <div>
+        <span class="pill">Writing-mode</span>
+        <h1>Vertical story with ruby</h1>
+        <p class="muted">Mix of upright numbers, ruby annotations, and vertical text used by CJK pages.</p>
+      </div>
+      <p class="muted">text-combine-upright keeps IDs compact, ruby lays out reading hints.</p>
+    </header>
+
+    <div class="columns">
+      <section class="panel card vertical-panel">
+        <p class="eyebrow">縦書き</p>
+        <h2>街の便り</h2>
+        <p class="lede">
+          <ruby>駅前<rt>えきまえ</rt></ruby>の桜が<span class="upright">2024</span>年も鮮やかに咲き、
+          <ruby>祭<rt>まつり</rt></ruby>の準備が進んでいます。
+        </p>
+        <p class="body">
+          見物客は<ruby>古<rt>ふる</rt></ruby>い通りを歩きながら、
+          <ruby>茶屋<rt>ちゃや</rt></ruby>で休憩し、
+          <ruby>灯<rt>あか</rt></ruby>りがともる頃には
+          <span class="upright">15</span>本の提灯が並びます。
+        </p>
+      </section>
+
+      <section class="panel card">
+        <p class="eyebrow">Horizontal</p>
+        <h2>Latin fallback</h2>
+        <p class="muted">
+          Adjacent Latin section keeps writing-mode: horizontal-tb while sharing ruby styling rules to match mixed
+          documents.
+        </p>
+        <p>
+          Upright numbers <span class="upright">11</span><span class="upright">7</span> pair with normal text and
+          <ruby>annotations<rt>notes</rt></ruby> to stress inline formatting in both directions.
+        </p>
+      </section>
+
+      <section class="panel card vertical-panel">
+        <p class="eyebrow">縦中横</p>
+        <h2>風景の記録</h2>
+        <ul class="vertical-list">
+          <li>
+            <span class="tag">朝</span>
+            <span class="text">川沿いに<span class="upright">30</span>分の散歩</span>
+          </li>
+          <li>
+            <span class="tag">昼</span>
+            <span class="text">
+              <ruby>市場<rt>いちば</rt></ruby>で新鮮な果物を買い、
+              <ruby>屋台<rt>やたい</rt></ruby>で軽食
+            </span>
+          </li>
+          <li>
+            <span class="tag">夜</span>
+            <span class="text">港の灯りと風を楽しむ</span>
+          </li>
+        </ul>
+      </section>
+    </div>
+  </body>
+</html>

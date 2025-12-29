@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Responsive image grid</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="image-grid-srcset">
+    <header class="masthead">
+      <span class="pill">Image hotspot</span>
+      <h1>Object-fit with srcset/picture</h1>
+      <p class="muted">
+        Local assets with 1x/2x pairs exercise srcset selection while object-fit mixes cover and
+        contain sizing.
+      </p>
+    </header>
+
+    <section class="gallery">
+      <figure class="tile aspect-4-3">
+        <picture>
+          <source
+            srcset="../assets/images/gallery-aurora@2x.png 2x, ../assets/images/gallery-aurora.png 1x"
+            media="(min-width: 720px)"
+          />
+          <img src="../assets/images/gallery-aurora.png" alt="Aurora" loading="lazy" />
+        </picture>
+        <figcaption>
+          <span class="eyebrow">cover</span>
+          <strong>Mountain aurora</strong>
+        </figcaption>
+      </figure>
+
+      <figure class="tile aspect-1-1 contain">
+        <picture>
+          <source
+            srcset="../assets/images/gallery-square.png"
+            media="(min-width: 820px)"
+          />
+          <img src="../assets/images/gallery-square.png" alt="Square" loading="lazy" />
+        </picture>
+        <figcaption>
+          <span class="eyebrow">contain</span>
+          <strong>Square album art</strong>
+        </figcaption>
+      </figure>
+
+      <figure class="tile aspect-3-4">
+        <picture>
+          <source
+            srcset="../assets/images/gallery-canyon@2x.png 2x, ../assets/images/gallery-canyon.png 1x"
+            media="(min-width: 720px)"
+          />
+          <img src="../assets/images/gallery-canyon.png" alt="Canyon" loading="lazy" />
+        </picture>
+        <figcaption>
+          <span class="eyebrow">cover</span>
+          <strong>Sandstone canyon</strong>
+        </figcaption>
+      </figure>
+
+      <figure class="tile aspect-4-3 contain">
+        <picture>
+          <source
+            srcset="../assets/images/gallery-tall.png"
+            media="(min-width: 680px)"
+          />
+          <img src="../assets/images/gallery-tall.png" alt="Tall render" loading="lazy" />
+        </picture>
+        <figcaption>
+          <span class="eyebrow">contain</span>
+          <strong>Illustration preview</strong>
+        </figcaption>
+      </figure>
+
+      <figure class="tile aspect-4-3">
+        <picture>
+          <source
+            srcset="../assets/images/gallery-forest@2x.png 2x, ../assets/images/gallery-forest.png 1x"
+            media="(min-width: 720px)"
+          />
+          <img src="../assets/images/gallery-forest.png" alt="Forest" loading="lazy" />
+        </picture>
+        <figcaption>
+          <span class="eyebrow">cover</span>
+          <strong>Foggy forest</strong>
+        </figcaption>
+      </figure>
+
+      <figure class="tile aspect-16-9">
+        <picture>
+          <source
+            srcset="../assets/images/gallery-aurora@2x.png 2x, ../assets/images/gallery-aurora.png 1x"
+            media="(min-width: 880px)"
+          />
+          <img src="../assets/images/gallery-aurora.png" alt="Aurora wide" loading="lazy" />
+        </picture>
+        <figcaption>
+          <span class="eyebrow">cover</span>
+          <strong>Wide hero</strong>
+        </figcaption>
+      </figure>
+    </section>
+  </body>
+</html>

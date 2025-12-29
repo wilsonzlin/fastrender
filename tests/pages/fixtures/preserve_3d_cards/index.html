@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Preserve 3D cards</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="preserve-3d-cards">
+    <header class="masthead">
+      <span class="pill">Transform hotspot</span>
+      <h1>Preserve-3d stack</h1>
+      <p class="muted">
+        Perspective, nested preserve-3d, and backface-visibility match the carousel and card flips
+        that stress paint.
+      </p>
+    </header>
+
+    <section class="scene">
+      <div class="card3d front">
+        <div class="face face-front">
+          <p class="eyebrow">Front</p>
+          <h2>Metrics</h2>
+          <p class="muted">rotateY(-18deg) preserve-3d</p>
+        </div>
+        <div class="face face-back">
+          <p class="eyebrow">Backface</p>
+          <h2>Hidden copy</h2>
+        </div>
+      </div>
+
+      <div class="card3d flipped">
+        <div class="face face-front">
+          <p class="eyebrow">Front</p>
+          <h2>Disabled</h2>
+        </div>
+        <div class="face face-back">
+          <p class="eyebrow">Back</p>
+          <h2>Backface shown</h2>
+          <p class="muted">backface-visibility: hidden</p>
+        </div>
+      </div>
+
+      <div class="card3d layered">
+        <div class="layer depth-1">
+          <p class="eyebrow">Layer</p>
+          <h2>translateZ(30px)</h2>
+        </div>
+        <div class="layer depth-2">
+          <p class="eyebrow">Layer</p>
+          <h2>translateZ(60px)</h2>
+        </div>
+        <div class="layer depth-3">
+          <p class="eyebrow">Layer</p>
+          <h2>translateZ(90px)</h2>
+        </div>
+      </div>
+    </section>
+  </body>
+</html>

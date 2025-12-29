@@ -1,0 +1,177 @@
+body.showroom {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.masthead {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.legend {
+  display: inline-flex;
+  gap: 8px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+.chip-primary {
+  background: rgba(37, 99, 235, 0.12);
+  color: #1d4ed8;
+  border: 1px solid rgba(37, 99, 235, 0.2);
+}
+
+.chip-ghost {
+  background: rgba(148, 163, 184, 0.16);
+  color: #334155;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+}
+
+.chip-accent {
+  background: rgba(217, 70, 239, 0.12);
+  color: #a21caf;
+  border: 1px solid rgba(217, 70, 239, 0.3);
+}
+
+.scene {
+  background: radial-gradient(circle at 20% 20%, rgba(59, 130, 246, 0.15), transparent 40%),
+    radial-gradient(circle at 80% 40%, rgba(16, 185, 129, 0.12), transparent 45%),
+    linear-gradient(135deg, #0f172a, #111827 60%, #0b1120);
+  color: #e2e8f0;
+  perspective: 1200px;
+  min-height: 380px;
+}
+
+.rig {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.column {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.stack {
+  display: flex;
+  gap: 12px;
+  transform-style: preserve-3d;
+  perspective: 900px;
+  align-items: center;
+  justify-content: center;
+}
+
+.card3d {
+  width: 140px;
+  height: 200px;
+  position: relative;
+  transform-style: preserve-3d;
+  backface-visibility: hidden;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.26);
+}
+
+.card3d .face {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  color: #0f172a;
+  backface-visibility: hidden;
+  border-radius: 12px;
+}
+
+.card3d .face.front {
+  background: linear-gradient(180deg, #a5b4fc, #60a5fa);
+  transform: translateZ(14px);
+}
+
+.card3d .face.back {
+  background: linear-gradient(180deg, #fef3c7, #fb7185);
+  transform: rotateY(180deg) translateZ(14px);
+  color: #831843;
+}
+
+.layer-a {
+  transform: rotateY(-18deg) rotateX(6deg) translateZ(20px);
+}
+
+.layer-b {
+  transform: rotateY(8deg) rotateX(6deg) translateZ(0);
+}
+
+.layer-c {
+  transform: rotateY(18deg) rotateX(-4deg) translateZ(-20px);
+}
+
+.cube {
+  position: relative;
+  width: 180px;
+  height: 180px;
+  margin: 0 auto;
+  transform-style: preserve-3d;
+  transform: rotateX(-20deg) rotateY(30deg);
+}
+
+.cube-face {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 32px;
+  color: #0f172a;
+  backface-visibility: hidden;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-radius: 14px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.22);
+}
+
+.cube-face.front {
+  background: rgba(59, 130, 246, 0.9);
+  transform: translateZ(90px);
+}
+
+.cube-face.back {
+  background: rgba(248, 113, 113, 0.9);
+  transform: rotateY(180deg) translateZ(90px);
+}
+
+.cube-face.left {
+  background: rgba(56, 189, 248, 0.9);
+  transform: rotateY(-90deg) translateZ(90px);
+}
+
+.cube-face.right {
+  background: rgba(34, 197, 94, 0.9);
+  transform: rotateY(90deg) translateZ(90px);
+}
+
+.cube-face.top {
+  background: rgba(248, 180, 0, 0.9);
+  transform: rotateX(90deg) translateZ(90px);
+}
+
+.cube-face.bottom {
+  background: rgba(167, 139, 250, 0.9);
+  transform: rotateX(-90deg) translateZ(90px);
+}

@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Vertical ruby composition</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="masthead">
+      <span class="pill">Writing modes</span>
+      <h1>Vertical text + ruby + text-combine</h1>
+      <p class="muted">
+        Exercises writing-mode vertical-rl, ruby annotation placement, and text-combine-upright for
+        numbers in a mixed vertical layout.
+      </p>
+    </header>
+
+    <section class="grid">
+      <div class="panel card">
+        <p class="eyebrow">vertical-rl</p>
+        <div class="vertical-line">
+          <ruby>
+            <rb>風</rb>
+            <rt>kaze</rt>
+          </ruby>
+          が
+          <ruby>
+            <rb>山</rb>
+            <rt>yama</rt>
+          </ruby>
+          を
+          <ruby>
+            <rb>越</rb>
+            <rt>ko</rt>
+          </ruby>
+          え
+          <ruby class="long">
+            <rb>海</rb>
+            <rt>umi</rt>
+          </ruby>
+          に
+          <ruby>
+            <rb>届</rb>
+            <rt>toda</rt>
+          </ruby>
+          く。
+        </div>
+      </div>
+
+      <div class="panel card alt">
+        <p class="eyebrow">text-combine-upright</p>
+        <div class="vertical-line numbers">
+          <span class="combine">2024</span>年
+          <span class="combine">17</span>件
+          <span class="combine">08</span>時
+          <ruby>
+            <rb>雨</rb>
+            <rt>ame</rt>
+          </ruby>
+          の
+          <ruby>
+            <rb>確</rb>
+            <rt>kaku</rt>
+          </ruby>
+          率
+          <span class="combine">60%</span>
+          。
+        </div>
+      </div>
+
+      <div class="panel card annotations">
+        <p class="eyebrow">ruby in mixed flow</p>
+        <div class="vertical-line">
+          <ruby>
+            <rb>縦</rb>
+            <rt>vertical</rt>
+          </ruby>
+          の
+          <ruby>
+            <rb>紙</rb>
+            <rt>page</rt>
+          </ruby>
+          に
+          <ruby>
+            <rb>数</rb>
+            <rt>nums</rt>
+          </ruby>
+          を
+          <span class="combine">123</span>
+          <ruby>
+            <rb>重</rb>
+            <rt>stack</rt>
+          </ruby>
+          ねる。
+        </div>
+      </div>
+    </section>
+  </body>
+</html>

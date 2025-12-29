@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Selector heavy document</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="selector-page">
+    <header class="masthead">
+      <span class="pill">Cascade hotspot</span>
+      <h1>Selector-dense layout</h1>
+      <p class="muted">
+        Descendant chains, grouped classes, and :has() rules matching nested states mimic the
+        slow selectors seen in captures.
+      </p>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar card">
+        <div class="sidebar-section">
+          <h2>Filters</h2>
+          <ul class="filter-list">
+            <li class="active">
+              <span class="dot"></span>
+              <div>
+                <strong>Operational</strong>
+                <p class="muted">Matches .filter-list .active > div strong</p>
+              </div>
+            </li>
+            <li>
+              <span class="dot"></span>
+              <div>
+                <strong>Pending</strong>
+                <p class="muted">Sibling combinations keep specificity realistic.</p>
+              </div>
+            </li>
+            <li class="quiet">
+              <span class="dot"></span>
+              <div>
+                <strong>Muted</strong>
+                <p class="muted">:not(.active) styles cascade down three levels.</p>
+              </div>
+            </li>
+          </ul>
+        </div>
+
+        <div class="sidebar-section stacked">
+          <h2>Signals</h2>
+          <div class="stack">
+            <div class="row">
+              <span class="badge">cold</span>
+              <span class="muted">.stack .row span + span</span>
+            </div>
+            <div class="row warn">
+              <span class="badge">warm</span>
+              <span class="muted">applies background from descendant chain</span>
+            </div>
+            <div class="row hot">
+              <span class="badge">hot</span>
+              <span class="muted">tests :where() grouping with multiple classes</span>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <main class="content">
+        <section class="card panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Rule walkers</p>
+              <h2>Deep tree</h2>
+            </div>
+            <div class="legend">
+              <span class="chip chip-primary">:has()</span>
+              <span class="chip chip-ghost">descendant</span>
+              <span class="chip chip-accent">:nth-child</span>
+            </div>
+          </div>
+          <div class="deep-tree">
+            <div class="layer">
+              <div class="node highlight">
+                <div class="label">
+                  <span class="muted">.layer .node .label</span>
+                  <strong>Viewport overlay</strong>
+                </div>
+                <div class="meta">
+                  <span class="status good">ready</span>
+                  <span class="status neutral">synced</span>
+                </div>
+              </div>
+              <div class="node nested critical">
+                <div class="label">
+                  <span class="muted">descendant combinator</span>
+                  <strong>Legacy badge chain</strong>
+                </div>
+                <div class="meta">
+                  <span class="status danger">blocked</span>
+                  <span class="status neutral">slow</span>
+                </div>
+                <div class="children">
+                  <div class="child">
+                    <span class="muted">child branch</span>
+                    <strong>selector depth: 4</strong>
+                  </div>
+                  <div class="child pinned">
+                    <span class="muted">sticky</span>
+                    <strong>pinned entry</strong>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="layer alt">
+              <div class="node">
+                <div class="label">
+                  <span class="muted">.deep-tree .layer.alt .node</span>
+                  <strong>Fallback coverage</strong>
+                </div>
+                <div class="meta">
+                  <span class="status neutral">ok</span>
+                  <span class="status warn">watch</span>
+                </div>
+              </div>
+              <div class="node merged">
+                <div class="label">
+                  <span class="muted">.node.merged > .label strong</span>
+                  <strong>Hover state</strong>
+                </div>
+                <div class="meta">
+                  <span class="status good">shipped</span>
+                  <span class="status warn">regressions</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="card audit">
+          <div class="audit-header">
+            <div>
+              <p class="eyebrow">Descendant matching</p>
+              <h2>Checklist</h2>
+            </div>
+            <p class="muted">
+              Each entry triggers nested selectors, pseudo-classes, and :has() detection on status chips.
+            </p>
+          </div>
+          <div class="audit-grid">
+            <article class="entry flagged">
+              <div class="entry-head">
+                <div>
+                  <p class="eyebrow">row 1</p>
+                  <strong>Cache busting</strong>
+                  <p class="muted">Affects .entry.flagged .muted ordering.</p>
+                </div>
+                <div class="status danger">blocked</div>
+              </div>
+              <ul class="notes">
+                <li>
+                  <span class="label">selectors</span>
+                  <p class="muted">.entry .notes li:not(:first-child) toggles spacing.</p>
+                </li>
+                <li>
+                  <span class="label">descendants</span>
+                  <p class="muted">.entry.flagged :where(.label, strong) shares accent.</p>
+                </li>
+              </ul>
+            </article>
+            <article class="entry ok">
+              <div class="entry-head">
+                <div>
+                  <p class="eyebrow">row 2</p>
+                  <strong>Print CSS</strong>
+                  <p class="muted">Multiple status badges share grouped selectors.</p>
+                </div>
+                <div class="status good">green</div>
+              </div>
+              <ul class="notes">
+                <li>
+                  <span class="label">:has()</span>
+                  <p class="muted">Parents react when descendants include .status.good.</p>
+                </li>
+                <li>
+                  <span class="label">position</span>
+                  <p class="muted">Combines child selectors with nth-child for spacing.</p>
+                </li>
+              </ul>
+            </article>
+            <article class="entry watch">
+              <div class="entry-head">
+                <div>
+                  <p class="eyebrow">row 3</p>
+                  <strong>Mask pipeline</strong>
+                  <p class="muted">descendant combinators meet :not(.flagged).</p>
+                </div>
+                <div class="status warn">watch</div>
+              </div>
+              <ul class="notes">
+                <li>
+                  <span class="label">:nth-child</span>
+                  <p class="muted">Alternating rows styled with nth-child selectors.</p>
+                </li>
+                <li>
+                  <span class="label">deep</span>
+                  <p class="muted">Badges rely on .audit-grid article.watch > .entry-head .status.</p>
+                </li>
+              </ul>
+            </article>
+          </div>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>

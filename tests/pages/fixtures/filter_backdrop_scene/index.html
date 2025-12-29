@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Filter and backdrop</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="hero">
+      <span class="pill">Filters</span>
+      <h1>Backdrop + clip-path</h1>
+      <p class="muted">
+        Blur, drop-shadow, clipping, and mask-image effects layered over a noisy scene exercise the
+        paint pipeline without network IO.
+      </p>
+    </header>
+
+    <section class="scene">
+      <div class="background-tiles">
+        <div class="tile"></div>
+        <div class="tile"></div>
+        <div class="tile"></div>
+        <div class="tile"></div>
+      </div>
+
+      <div class="glass card">
+        <p class="eyebrow">backdrop-filter</p>
+        <h2>Frosted overlay</h2>
+        <p class="muted">
+          Positioned above the textured grid with blur and saturation. Drop-shadows come from both
+          filters and box-shadows.
+        </p>
+        <div class="chip-row">
+          <span class="chip">blur(12px)</span>
+          <span class="chip">drop-shadow</span>
+          <span class="chip">mask-image</span>
+        </div>
+      </div>
+
+      <div class="panel shadowed">
+        <div class="mask"></div>
+        <div class="content">
+          <strong>Masked panel</strong>
+          <p class="muted">Clip-path polygon and mask image combine on this block.</p>
+        </div>
+      </div>
+
+      <div class="floating badge">
+        <span class="muted">drop-shadow</span>
+        <strong>Hover cards</strong>
+        <p class="muted">Paints filter stack on absolutely positioned elements.</p>
+      </div>
+    </section>
+  </body>
+</html>

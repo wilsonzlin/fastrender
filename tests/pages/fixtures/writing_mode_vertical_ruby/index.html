@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Vertical writing + ruby</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="writing-mode-ruby">
+    <header class="masthead">
+      <span class="pill">Text/layout hotspot</span>
+      <h1>Vertical stories with ruby</h1>
+      <p class="muted">
+        writing-mode, ruby annotation, and text-combine-upright mirror the pageset captures with
+        rotated columns.
+      </p>
+    </header>
+
+    <main class="layout">
+      <section class="card vertical">
+        <div class="eyebrow">縦書き</div>
+        <h2>夜空の記録 <span class="tcy">2024</span></h2>
+        <p class="muted note">
+          text-combine-upright keeps the year readable while ruby spreads annotation between glyphs.
+        </p>
+        <p class="story">
+          <ruby>夜<rt>よる</rt></ruby>の<ruby>街<rt>まち</rt></ruby>を
+          <ruby>渡<rt>わた</rt></ruby>り
+          <ruby>歩<rt>ある</rt></ruby>く<ruby>旅人<rt>たびびと</rt></ruby>は、
+          <ruby>灯<rt>あか</rt></ruby>りの
+          <ruby>粒<rt>つぶ</rt></ruby>を
+          <ruby>集<rt>あつ</rt></ruby>めて
+          <ruby>記録<rt>きろく</rt></ruby>
+          <span class="tcy">7</span>
+          <ruby>枚<rt>まい</rt></ruby>の
+          <ruby>紙<rt>かみ</rt></ruby>に
+          <ruby>書<rt>か</rt></ruby>き
+          <ruby>留<rt>と</rt></ruby>めた。
+        </p>
+      </section>
+
+      <section class="card vertical alt">
+        <div class="eyebrow">注釈</div>
+        <h2>風の便り <span class="tcy">03</span></h2>
+        <p class="story">
+          <ruby>北<rt>きた</rt></ruby>の
+          <ruby>風<rt>かぜ</rt></ruby>が
+          <ruby>南<rt>みなみ</rt></ruby>の
+          <ruby>森<rt>もり</rt></ruby>へと
+          <ruby>便<rt>たよ</rt></ruby>りを
+          <ruby>運<rt>はこ</rt></ruby>ぶ。
+          <span class="tcy">15</span>
+          <ruby>分<rt>ふん</rt></ruby>の
+          <ruby>遅<rt>おく</rt></ruby>れで
+          <ruby>着<rt>つ</rt></ruby>いた
+          <ruby>手紙<rt>てがみ</rt></ruby>には、
+          <ruby>星<rt>ほし</rt></ruby>の
+          <ruby>話<rt>はなし</rt></ruby>と
+          <ruby>古<rt>ふる</rt></ruby>い
+          <ruby>詩<rt>し</rt></ruby>が
+          <ruby>添<rt>そ</rt></ruby>えられていた。
+        </p>
+      </section>
+
+      <section class="card horizontal">
+        <div class="eyebrow">Mixed flows</div>
+        <h2>Horizontal annotation</h2>
+        <p class="muted">
+          Vertical cards sit alongside a horizontal block with ruby and upright digits to match mixed
+          writing modes.
+        </p>
+        <p class="paragraph">
+          <ruby>山<rt>やま</rt></ruby>の
+          <ruby>向<rt>む</rt></ruby>こうで
+          <span class="tcy">2</span> つの
+          <ruby>川<rt>かわ</rt></ruby>が
+          <ruby>合<rt>あ</rt></ruby>わさり、<ruby>静<rt>しず</rt></ruby>かな
+          <ruby>湖<rt>みずうみ</rt></ruby>を
+          つくった。
+        </p>
+        <div class="inline-ruby">
+          <ruby>調<rt>しら</rt></ruby>べ
+          <ruby>歌<rt>うた</rt></ruby>を
+          <ruby>重<rt>かさ</rt></ruby>ねる
+          <span class="tcy">4</span>
+          <ruby>人<rt>にん</rt></ruby>の
+          <ruby>奏者<rt>そうしゃ</rt></ruby>。
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

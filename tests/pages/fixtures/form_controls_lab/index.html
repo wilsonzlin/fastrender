@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Form controls lab</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="controls-lab">
+    <header class="masthead card">
+      <div>
+        <span class="pill">Forms</span>
+        <h1>Control lab</h1>
+        <p class="muted">
+          Default controls next to custom appearance: none variants stress styling across ranges,
+          selects, and checkboxes.
+        </p>
+      </div>
+      <div class="legend">
+        <span class="chip chip-primary">range</span>
+        <span class="chip chip-ghost">select</span>
+        <span class="chip chip-accent">checkbox</span>
+      </div>
+    </header>
+
+    <div class="grid">
+      <section class="card column">
+        <h2>Default</h2>
+        <label class="row">
+          <span>Range input</span>
+          <input type="range" min="0" max="100" value="64" />
+        </label>
+        <label class="row">
+          <span>Select menu</span>
+          <select>
+            <option>Edge cache</option>
+            <option>Rendering</option>
+            <option>Data</option>
+          </select>
+        </label>
+        <label class="row checkbox">
+          <input type="checkbox" checked />
+          <span>Notify on failures</span>
+        </label>
+      </section>
+
+      <section class="card column custom">
+        <h2>Custom (appearance: none)</h2>
+        <label class="row">
+          <span>Range input</span>
+          <input class="range-custom" type="range" min="0" max="100" value="32" />
+        </label>
+        <label class="row">
+          <span>Select menu</span>
+          <select class="select-custom">
+            <option>Edge cache</option>
+            <option>Rendering</option>
+            <option selected>Data</option>
+          </select>
+        </label>
+        <label class="row checkbox">
+          <input class="check-custom" type="checkbox" checked />
+          <span>Notify on failures</span>
+        </label>
+        <label class="row checkbox">
+          <input class="check-custom" type="checkbox" />
+          <span>Auto restart</span>
+        </label>
+      </section>
+    </div>
+  </body>
+</html>

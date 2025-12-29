@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Custom form controls</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header>
+      <span class="pill">Forms</span>
+      <h1>Default vs appearance none</h1>
+      <p class="muted">
+        Mirrors captures with mixed UA styling and bespoke controls: ranges, selects, and checkboxes
+        side by side.
+      </p>
+    </header>
+
+    <div class="grid">
+      <section class="card">
+        <h2>Defaults</h2>
+        <div class="field">
+          <label for="default-range">Range</label>
+          <input id="default-range" type="range" min="0" max="100" value="32" />
+        </div>
+        <div class="field">
+          <label for="default-select">Select</label>
+          <select id="default-select">
+            <option>Standard</option>
+            <option>Balanced</option>
+            <option>Minimal</option>
+          </select>
+        </div>
+        <div class="checks">
+          <label><input type="checkbox" checked /> Alerts</label>
+          <label><input type="checkbox" /> Weekly digest</label>
+        </div>
+      </section>
+
+      <section class="card custom">
+        <h2>Appearance none</h2>
+        <div class="field">
+          <label for="custom-range">Range</label>
+          <input id="custom-range" class="range-custom" type="range" min="0" max="100" value="72" />
+        </div>
+        <div class="field">
+          <label for="custom-select">Select</label>
+          <select id="custom-select" class="select-custom">
+            <option>Compact</option>
+            <option>Dense</option>
+            <option>Fluid</option>
+          </select>
+        </div>
+        <div class="checks">
+          <label class="box">
+            <input type="checkbox" class="check-custom" checked />
+            <span class="label">Custom checkbox</span>
+          </label>
+          <label class="switch">
+            <input type="checkbox" class="toggle" checked />
+            <span class="track"></span>
+            <span class="thumb"></span>
+            <span class="label">Toggle</span>
+          </label>
+        </div>
+      </section>
+    </div>
+  </body>
+</html>

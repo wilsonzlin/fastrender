@@ -1,0 +1,80 @@
+body.image-grid-srcset {
+  padding: 26px;
+}
+
+.gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.tile {
+  position: relative;
+  border-radius: 14px;
+  overflow: hidden;
+  background: #0f172a;
+  border: 1px solid #d6d9df;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+}
+
+.tile picture {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.tile img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.tile.contain img {
+  object-fit: contain;
+  background: #fff;
+}
+
+.aspect-4-3 {
+  aspect-ratio: 4 / 3;
+}
+
+.aspect-3-4 {
+  aspect-ratio: 3 / 4;
+}
+
+.aspect-1-1 {
+  aspect-ratio: 1;
+}
+
+.aspect-16-9 {
+  aspect-ratio: 16 / 9;
+}
+
+figcaption {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  right: 12px;
+  padding: 10px;
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.06), rgba(0, 0, 0, 0.45));
+  color: #fff;
+  display: grid;
+  gap: 4px;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35);
+}
+
+figcaption .eyebrow {
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.tile:nth-child(odd) figcaption {
+  background: linear-gradient(180deg, rgba(37, 99, 235, 0.08), rgba(15, 23, 42, 0.75));
+}
+
+.tile.contain figcaption {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.85));
+  color: #0f172a;
+}

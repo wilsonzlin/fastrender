@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Form controls range/select</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="masthead">
+      <span class="pill">Forms</span>
+      <h1>Controls: native vs appearance:none</h1>
+      <p class="muted">Ranges, selects, and checkboxes side-by-side to catch styling regressions.</p>
+    </header>
+
+    <section class="card form-grid">
+      <div class="column">
+        <h2>Native controls</h2>
+        <div class="field">
+          <label for="range-native">Volume</label>
+          <input id="range-native" type="range" min="0" max="100" value="42" />
+        </div>
+        <div class="field">
+          <label for="select-native">Region</label>
+          <select id="select-native">
+            <option>us-east</option>
+            <option selected>eu-central</option>
+            <option>ap-northeast</option>
+          </select>
+        </div>
+        <div class="checks">
+          <label>
+            <input type="checkbox" checked />
+            <span>Persistent</span>
+          </label>
+          <label>
+            <input type="checkbox" />
+            <span>Ephemeral</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="column custom">
+        <h2>Custom appearance</h2>
+        <div class="field">
+          <label for="range-custom">Volume</label>
+          <input id="range-custom" class="range" type="range" min="0" max="100" value="42" />
+        </div>
+        <div class="field">
+          <label for="select-custom">Region</label>
+          <div class="select-wrap">
+            <select id="select-custom" class="select">
+              <option>us-east</option>
+              <option selected>eu-central</option>
+              <option>ap-northeast</option>
+            </select>
+            <span class="chevron" aria-hidden="true">▾</span>
+          </div>
+        </div>
+        <div class="checks">
+          <label class="box">
+            <input type="checkbox" class="check" checked />
+            <span>Persistent</span>
+          </label>
+          <label class="box">
+            <input type="checkbox" class="check" />
+            <span>Ephemeral</span>
+          </label>
+        </div>
+      </div>
+    </section>
+  </body>
+</html>

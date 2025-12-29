@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Selector labyrinth dashboard</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="selector-lab">
+    <header class="masthead card">
+      <div>
+        <span class="pill">Cascade hotspot</span>
+        <h1>Selector labyrinth dashboard</h1>
+        <p class="muted">
+          Deep descendant chains, grouped classes, and :has() driven state boxes mirror the selectors
+          that light up pageset profiles.
+        </p>
+      </div>
+      <div class="legend">
+        <span class="chip chip-primary">:has()</span>
+        <span class="chip chip-ghost">descendant</span>
+        <span class="chip chip-accent">stateful</span>
+      </div>
+    </header>
+
+    <div class="layout">
+      <aside class="pane card">
+        <h2>Live incidents</h2>
+        <ul class="incident-list">
+          <li class="critical">
+            <div class="row">
+              <div class="dot"></div>
+              <div class="meta">
+                <strong>Edge cache</strong>
+                <p class="muted">.incident-list li.critical > .meta strong</p>
+              </div>
+              <span class="status danger">blocked</span>
+            </div>
+            <ul class="tags">
+              <li class="tag hot">routing</li>
+              <li class="tag muted">cdn</li>
+            </ul>
+          </li>
+          <li class="warn">
+            <div class="row">
+              <div class="dot"></div>
+              <div class="meta">
+                <strong>Config drift</strong>
+                <p class="muted">.incident-list li .meta p + p nesting</p>
+              </div>
+              <span class="status warn">watch</span>
+            </div>
+            <ul class="tags">
+              <li class="tag muted">infra</li>
+              <li class="tag warm">deployment</li>
+            </ul>
+          </li>
+          <li class="quiet">
+            <div class="row">
+              <div class="dot"></div>
+              <div class="meta">
+                <strong>Slow reports</strong>
+                <p class="muted">descendant selectors for passive rows</p>
+              </div>
+              <span class="status neutral">observing</span>
+            </div>
+            <ul class="tags">
+              <li class="tag muted">analytics</li>
+              <li class="tag muted">batch</li>
+            </ul>
+          </li>
+        </ul>
+      </aside>
+
+      <main class="board">
+        <section class="card matrix">
+          <header class="matrix-header">
+            <div>
+              <p class="eyebrow">Descendant walkers</p>
+              <h2>Checklist matrix</h2>
+            </div>
+            <p class="muted">
+              Each cell mixes descendant combinators, nth-child spacing, and :has() to reflect heavy
+              selector matching.
+            </p>
+          </header>
+          <div class="lanes">
+            <div class="lane depth">
+              <div class="lane-head">
+                <p class="eyebrow">lane 1</p>
+                <div class="chips">
+                  <span class="chip chip-ghost">deep</span>
+                  <span class="chip chip-primary">hot</span>
+                </div>
+              </div>
+              <div class="node cluster">
+                <div class="title">
+                  <span class="muted">.lane .node .title strong</span>
+                  <strong>Cache invalidation</strong>
+                </div>
+                <div class="details">
+                  <div class="status-row">
+                    <span class="status danger">blocked</span>
+                    <span class="status neutral">owner: ops</span>
+                  </div>
+                  <ul class="checklist">
+                    <li>
+                      <span class="label">descendants</span>
+                      <p>
+                        .node.cluster ul.checklist li:not(:first-child) adds spacing and pseudo
+                        borders.
+                      </p>
+                    </li>
+                    <li>
+                      <span class="label">:has()</span>
+                      <p>Containers respond when children contain .status.danger.</p>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+              <div class="node nested">
+                <div class="title">
+                  <span class="muted">.nested .title</span>
+                  <strong>Audit log gaps</strong>
+                </div>
+                <div class="details">
+                  <div class="status-row">
+                    <span class="status warn">watch</span>
+                    <span class="status neutral">owner: secops</span>
+                  </div>
+                  <ul class="checklist">
+                    <li>
+                      <span class="label">grouped</span>
+                      <p>Multiple class selectors stack with :where() to keep specificity low.</p>
+                    </li>
+                    <li>
+                      <span class="label">descendant</span>
+                      <p>.lane.depth .node .status + .status targets adjacent chips.</p>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+            <div class="lane overlays">
+              <div class="lane-head">
+                <p class="eyebrow">lane 2</p>
+                <div class="chips">
+                  <span class="chip chip-accent">overlay</span>
+                  <span class="chip chip-ghost">counters</span>
+                </div>
+              </div>
+              <div class="node">
+                <div class="title">
+                  <span class="muted">.node .title strong</span>
+                  <strong>Async workers</strong>
+                </div>
+                <div class="details">
+                  <div class="status-row">
+                    <span class="status good">healthy</span>
+                    <span class="status neutral">owner: runtime</span>
+                  </div>
+                  <div class="timeline">
+                    <div class="event">
+                      <p class="eyebrow">08:00</p>
+                      <div>
+                        <strong>Queue depth</strong>
+                        <p class="muted">
+                          .timeline .event p + div strong chain hits descendent selectors.
+                        </p>
+                      </div>
+                    </div>
+                    <div class="event">
+                      <p class="eyebrow">09:15</p>
+                      <div>
+                        <strong>Throttle</strong>
+                        <p class="muted">
+                          .event:not(:first-child) edges combine with nth-child to mimic console
+                          panels.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="node shadow">
+                <div class="title">
+                  <span class="muted">:has(.status.danger)</span>
+                  <strong>Rollout guard</strong>
+                </div>
+                <div class="details">
+                  <div class="status-row">
+                    <span class="status danger">paused</span>
+                    <span class="status neutral">owner: deploy</span>
+                  </div>
+                  <ul class="checklist">
+                    <li>
+                      <span class="label">backfill</span>
+                      <p>descendant combinators and :has() highlight expensive matching.</p>
+                    </li>
+                    <li>
+                      <span class="label">overrides</span>
+                      <p class="muted">Chained selectors cascade background to child pills.</p>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="card audit">
+          <header class="audit-header">
+            <div>
+              <p class="eyebrow">Selector stacks</p>
+              <h2>Policy board</h2>
+            </div>
+            <p class="muted">
+              Dense descendant selectors across nested articles and lists stress the cascade walker.
+            </p>
+          </header>
+          <div class="policy-grid">
+            <article class="policy">
+              <header>
+                <p class="eyebrow">policy 01</p>
+                <h3>Regional routing</h3>
+                <span class="status warn">beta</span>
+              </header>
+              <ul class="rules">
+                <li>
+                  <span class="label">selector depth</span>
+                  <p class="muted">
+                    .policy .rules li span.label + p adds padding and text styles via descendants.
+                  </p>
+                </li>
+                <li>
+                  <span class="label">has-child</span>
+                  <p class="muted">:has(.status.warn) toggles border color.</p>
+                </li>
+              </ul>
+            </article>
+            <article class="policy flagged">
+              <header>
+                <p class="eyebrow">policy 02</p>
+                <h3>Service credits</h3>
+                <span class="status danger">incident</span>
+              </header>
+              <ul class="rules">
+                <li>
+                  <span class="label">descendant</span>
+                  <p class="muted">
+                    .policy.flagged .rules li:not(:first-child) triggers top borders and spacing.
+                  </p>
+                </li>
+                <li>
+                  <span class="label">cross rules</span>
+                  <p class="muted">Nested spans and strong tags share grouped selectors.</p>
+                </li>
+              </ul>
+            </article>
+            <article class="policy ok">
+              <header>
+                <p class="eyebrow">policy 03</p>
+                <h3>Certificate renewals</h3>
+                <span class="status good">passing</span>
+              </header>
+              <ul class="rules">
+                <li>
+                  <span class="label">descendant</span>
+                  <p class="muted">
+                    .policy.ok header .status + .status applies pill spacing to stacked chips.
+                  </p>
+                </li>
+                <li>
+                  <span class="label">bubbles</span>
+                  <p class="muted">:where(.label, .status) demonstrates cheap specificity.</p>
+                </li>
+              </ul>
+            </article>
+          </div>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>

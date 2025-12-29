@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Responsive picture grid</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="image-grid">
+    <header class="masthead">
+      <span class="pill">Images</span>
+      <div>
+        <h1>Object-fit + srcset picture board</h1>
+        <p class="muted">
+          A masonry-like grid that mixes <code>picture</code> sources, srcset densities, and various
+          object-fit modes using local assets only.
+        </p>
+      </div>
+    </header>
+
+    <main class="card gallery">
+      <div class="grid">
+        <figure class="item tall">
+          <picture>
+            <source
+              media="(min-width: 900px)"
+              srcset="../assets/images/gallery-aurora@2x.png 2x, ../assets/images/gallery-aurora.png 1x"
+            />
+            <img
+              src="../assets/images/gallery-aurora.png"
+              srcset="../assets/images/gallery-aurora@2x.png 2x"
+              class="thumb cover"
+              alt="Aurora"
+            />
+          </picture>
+          <figcaption>
+            <span class="label">cover</span>
+            Aurora cover crop with srcset.
+          </figcaption>
+        </figure>
+
+        <figure class="item wide">
+          <picture>
+            <source
+              media="(max-width: 640px)"
+              srcset="../assets/images/gallery-canyon.png 1x"
+            />
+            <source
+              media="(min-width: 641px)"
+              srcset="../assets/images/gallery-canyon@2x.png 2x, ../assets/images/gallery-canyon.png 1x"
+            />
+            <img
+              src="../assets/images/gallery-canyon.png"
+              srcset="../assets/images/gallery-canyon@2x.png 2x"
+              class="thumb contain"
+              alt="Canyon"
+            />
+          </picture>
+          <figcaption>
+            <span class="label">contain</span>
+            Canyon letterboxing keeps full frame visible.
+          </figcaption>
+        </figure>
+
+        <figure class="item square">
+          <picture>
+            <source
+              srcset="../assets/images/gallery-square.png"
+              media="(min-width: 0px)"
+            />
+            <img
+              src="../assets/images/gallery-square.png"
+              class="thumb cover"
+              alt="Square"
+            />
+          </picture>
+          <figcaption>
+            <span class="label">square</span>
+            Object-fit cover on a 1:1 asset.
+          </figcaption>
+        </figure>
+
+        <figure class="item tall">
+          <picture>
+            <source
+              media="(min-width: 900px)"
+              srcset="../assets/images/gallery-forest@2x.png 2x, ../assets/images/gallery-forest.png 1x"
+            />
+            <img
+              src="../assets/images/gallery-forest.png"
+              srcset="../assets/images/gallery-forest@2x.png 2x"
+              class="thumb cover focus-top"
+              alt="Forest"
+            />
+          </picture>
+          <figcaption>
+            <span class="label">object-position</span>
+            Top focus on a tall portrait.
+          </figcaption>
+        </figure>
+
+        <figure class="item wide">
+          <picture>
+            <source
+              srcset="../assets/images/gallery-tall.png"
+              media="(min-width: 0px)"
+            />
+            <img
+              src="../assets/images/gallery-tall.png"
+              class="thumb contain"
+              alt="Tall"
+            />
+          </picture>
+          <figcaption>
+            <span class="label">contain</span>
+            Tall asset contained inside a landscape frame.
+          </figcaption>
+        </figure>
+      </div>
+    </main>
+  </body>
+</html>

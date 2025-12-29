@@ -1,0 +1,83 @@
+.masthead {
+  margin-bottom: 16px;
+}
+
+.eyebrow {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--subtle);
+  margin: 0;
+}
+
+.perspective {
+  perspective: 1200px;
+  background: linear-gradient(120deg, rgba(37, 99, 235, 0.08), rgba(15, 23, 42, 0.08));
+}
+
+.scene {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+  transform-style: preserve-3d;
+}
+
+.card3d {
+  position: relative;
+  padding: 16px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #fff, #f8fafc);
+  border: 1px solid var(--border);
+  box-shadow: 0 18px 30px rgba(15, 23, 42, 0.12);
+  transform-style: preserve-3d;
+  backface-visibility: hidden;
+}
+
+.card3d::after {
+  content: "";
+  position: absolute;
+  inset: 6px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.1), transparent 40%);
+  transform: translateZ(-20px);
+  pointer-events: none;
+}
+
+.tilt-left {
+  transform: rotateY(-16deg) translateZ(40px) translateX(-12px);
+}
+
+.tilt-right {
+  transform: rotateY(18deg) translateZ(50px) translateX(16px);
+}
+
+.flip-card {
+  position: relative;
+  height: 220px;
+  transform-style: preserve-3d;
+  transform: rotateY(-14deg) translateZ(30px);
+}
+
+.flip-card .face {
+  position: absolute;
+  inset: 0;
+  padding: 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(37, 99, 235, 0.35);
+  display: grid;
+  gap: 6px;
+  backface-visibility: hidden;
+}
+
+.flip-card .front {
+  background: linear-gradient(180deg, rgba(37, 99, 235, 0.1), #fff);
+  box-shadow: 0 16px 26px rgba(37, 99, 235, 0.2);
+  transform: translateZ(30px);
+}
+
+.flip-card .back {
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.9), rgba(37, 99, 235, 0.3));
+  color: #e2e8f0;
+  transform: rotateY(180deg) translateZ(30px);
+  border-color: rgba(255, 255, 255, 0.3);
+}
