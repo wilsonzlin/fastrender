@@ -52,3 +52,8 @@ FASTR_RENDER_TIMINGS=1 FASTR_LOG_FRAG_BOUNDS=1 \
 - `pageset_progress run --trace-failures` or `--trace-slow-ms <ms>` re-runs targeted pages with Chrome tracing enabled. Traces are written to `target/pageset/traces/<stem>.json`, and rerun progress/logs live under `target/pageset/trace-progress/` and `target/pageset/logs/*.trace.log`.
 - Trace reruns default to more generous budgets: `--trace-timeout` defaults to `timeout * 2`, `--trace-soft-timeout-ms` defaults to the trace timeout minus a 250ms buffer, and `--trace-jobs` defaults to 1 to keep captures stable. Increase the trace timeouts instead of the main ones if the extra tracing overhead trips the hard kill.
 - To inspect a trace locally, open Chrome and navigate to `chrome://tracing` then load the JSON, or drag the file into https://ui.perfetto.dev/. `pageset_progress report --include-trace` lists the stems and paths of traces that were collected.
+
+## Pipeline dumps from `pageset_progress`
+
+- `pageset_progress run --dump-failures summary` writes pipeline snapshots for failing pages under `target/pageset/dumps/<stem>/`. Use `--dump-slow-ms <ms> --dump-slow <summary|full>` to capture slow-but-OK pages.
+- Dumps default to `--dump-timeout timeout*2` with a soft timeout 250ms earlier; bump the dump timeout instead of the main timeout when captures need extra headroom.

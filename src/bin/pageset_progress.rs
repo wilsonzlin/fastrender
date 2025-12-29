@@ -18,12 +18,14 @@ use common::args::{
 };
 use common::render_pipeline::{
   build_render_configs, follow_client_redirects, format_error_with_chain, read_cached_document,
-  render_document, RenderConfigBundle, RenderSurface,
+  render_document, render_document_with_artifacts, PreparedDocument, RenderConfigBundle,
+  RenderSurface,
 };
 use fastrender::api::{
-  CascadeDiagnostics, DiagnosticsLevel, LayoutDiagnostics, PaintDiagnostics, RenderCounts,
-  RenderDiagnostics, RenderStats, ResourceDiagnostics, ResourceKind,
+  CascadeDiagnostics, DiagnosticsLevel, LayoutDiagnostics, PaintDiagnostics, RenderArtifactRequest,
+  RenderArtifacts, RenderCounts, RenderDiagnostics, RenderStats, ResourceDiagnostics, ResourceKind,
 };
+use fastrender::debug::snapshot;
 use fastrender::error::{RenderError, RenderStage};
 use fastrender::pageset::{
   pageset_entries, pageset_stem, PagesetEntry, PagesetFilter, CACHE_HTML_DIR,
@@ -61,6 +63,7 @@ const DEFAULT_PROGRESS_DIR: &str = "progress/pages";
 const DEFAULT_LOG_DIR: &str = "target/pageset/logs";
 const DEFAULT_TRACE_DIR: &str = "target/pageset/traces";
 const DEFAULT_TRACE_PROGRESS_DIR: &str = "target/pageset/trace-progress";
+const DEFAULT_DUMP_DIR: &str = "target/pageset/dumps";
 // Treat traces smaller than this as likely incomplete/partial.
 const MIN_TRACE_BYTES: u64 = 4096;
 // Keep progress notes compact; the full error chain lives in the per-page log file.
@@ -99,6 +102,36 @@ enum DiagnosticsArg {
   None,
   Basic,
   Verbose,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum DumpLevel {
+  Summary,
+  Full,
+}
+
+impl DumpLevel {
+  fn as_str(&self) -> &'static str {
+    match self {
+      DumpLevel::Summary => "summary",
+      DumpLevel::Full => "full",
+    }
+  }
+
+  fn to_request(self) -> RenderArtifactRequest {
+    match self {
+      DumpLevel::Summary => RenderArtifactRequest::summary(),
+      DumpLevel::Full => RenderArtifactRequest::full(),
+    }
+  }
+
+  fn combine(current: Option<Self>, next: Self) -> Self {
+    match (current, next) {
+      (Some(DumpLevel::Full), _) | (_, DumpLevel::Full) => DumpLevel::Full,
+      (Some(DumpLevel::Summary), _) => DumpLevel::Summary,
+      (None, level) => level,
+    }
+  }
 }
 
 impl DiagnosticsArg {
@@ -305,6 +338,30 @@ struct RunArgs {
   #[arg(long, default_value = DEFAULT_TRACE_PROGRESS_DIR)]
   trace_progress_dir: PathBuf,
 
+  /// Capture pipeline dumps for failing pages (summary|full)
+  #[arg(long, value_enum)]
+  dump_failures: Option<DumpLevel>,
+
+  /// Capture pipeline dumps for pages slower than this (ms)
+  #[arg(long, value_name = "MS", requires = "dump_slow")]
+  dump_slow_ms: Option<f64>,
+
+  /// Dump detail level for slow pages (summary|full)
+  #[arg(long, value_enum, requires = "dump_slow_ms")]
+  dump_slow: Option<DumpLevel>,
+
+  /// Directory to write pipeline dumps into (not committed)
+  #[arg(long, default_value = DEFAULT_DUMP_DIR)]
+  dump_dir: PathBuf,
+
+  /// Hard timeout in seconds for dump reruns (defaults to timeout * 2)
+  #[arg(long)]
+  dump_timeout: Option<u64>,
+
+  /// Cooperative timeout in milliseconds for dump reruns (0 disables; defaults based on dump-timeout)
+  #[arg(long)]
+  dump_soft_timeout_ms: Option<u64>,
+
   /// Diagnostics capture level for the main run (none|basic|verbose)
   #[arg(long, value_enum, default_value_t = DiagnosticsArg::Basic)]
   diagnostics: DiagnosticsArg,
@@ -435,6 +492,30 @@ struct WorkerArgs {
   /// Print full error chains in logs and progress files
   #[arg(long)]
   verbose: bool,
+
+  /// Capture pipeline dumps for failing pages (summary|full)
+  #[arg(long, value_enum)]
+  dump_failures: Option<DumpLevel>,
+
+  /// Capture pipeline dumps for pages slower than this (ms)
+  #[arg(long, value_name = "MS", requires = "dump_slow")]
+  dump_slow_ms: Option<f64>,
+
+  /// Dump detail level for slow pages (summary|full)
+  #[arg(long, value_enum, requires = "dump_slow_ms")]
+  dump_slow: Option<DumpLevel>,
+
+  /// Directory to write pipeline dumps into (not committed)
+  #[arg(long, default_value = DEFAULT_DUMP_DIR)]
+  dump_dir: PathBuf,
+
+  /// Hard timeout in seconds for dump reruns (defaults to timeout * 2)
+  #[arg(long, default_value_t = 10)]
+  dump_timeout: u64,
+
+  /// Cooperative timeout in milliseconds for dump reruns (0 disables; defaults based on dump-timeout)
+  #[arg(long)]
+  dump_soft_timeout_ms: Option<u64>,
 }
 
 fn parse_viewport(s: &str) -> Result<(u32, u32), String> {
@@ -1139,6 +1220,11 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     fetch_timeout.as_millis()
   ));
 
+  let dump_soft_timeout_ms = compute_soft_timeout_ms(
+    Duration::from_secs(args.dump_timeout),
+    args.dump_soft_timeout_ms,
+  );
+
   let http = HttpFetcher::new()
     .with_timeout(fetch_timeout)
     .with_user_agent(args.user_agent.clone())
@@ -1157,10 +1243,7 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     std::sync::Arc::new(CachingFetcher::with_config(http, memory_config));
   let renderer_fetcher = std::sync::Arc::clone(&fetcher);
 
-  let RenderConfigBundle {
-    config,
-    mut options,
-  } = build_render_configs(&RenderSurface {
+  let render_surface = RenderSurface {
     viewport: args.viewport,
     scroll_x: 0.0,
     scroll_y: 0.0,
@@ -1179,7 +1262,12 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     font_config: args.fonts.to_font_config(),
     compat_profile: args.compat.compat_profile(),
     dom_compat_mode: args.compat.dom_compat_mode(),
-  });
+  };
+
+  let RenderConfigBundle {
+    config,
+    mut options,
+  } = build_render_configs(&render_surface);
 
   options.diagnostics_level = args.diagnostics.to_level();
   if let Some(ms) = args.soft_timeout_ms {
@@ -1218,6 +1306,7 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     log.push('\n');
   });
   log.push_str(&format!("Final resource base: {}\n", doc.base_url));
+  let dump_doc = doc.clone();
 
   // Keep parity with render_pages: fit canvas when @page is detected.
   let has_page_rule = doc.html.to_ascii_lowercase().contains("@page");
@@ -1290,6 +1379,24 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     progress.hotspot = guess_hotspot(&progress.stages_ms).to_string();
   }
 
+  if let Some(level) = dump_level_for_progress(&args, &progress) {
+    log.push_str(&format!(
+      "Capturing {} dump for {}...\n",
+      level.as_str(),
+      progress.status.as_str()
+    ));
+    capture_dump_for_page(
+      level,
+      &args,
+      &render_surface,
+      &fetcher,
+      &dump_doc,
+      has_page_rule,
+      dump_soft_timeout_ms,
+      &mut log,
+    );
+  }
+
   let progress = progress.merge_preserving_manual(progress_before, current_sha.as_deref());
   let _ = write_progress(&args.progress_path, &progress);
 
@@ -1348,20 +1455,14 @@ fn append_stage_summary(log: &mut String, diagnostics: &RenderDiagnostics) {
   log.push_str(&format!("  cascade: {}\n", fmt(t.cascade_ms)));
   log.push_str(&format!("  box_tree: {}\n", fmt(t.box_tree_ms)));
   log.push_str(&format!("  layout: {}\n", fmt(t.layout_ms)));
-  log.push_str(&format!(
-    "  text_shape: {}\n",
-    fmt(t.text_shape_ms)
-  ));
+  log.push_str(&format!("  text_shape: {}\n", fmt(t.text_shape_ms)));
   log.push_str(&format!("  paint_build: {}\n", fmt(t.paint_build_ms)));
   log.push_str(&format!("  paint_optimize: {}\n", fmt(t.paint_optimize_ms)));
   log.push_str(&format!(
     "  paint_rasterize: {}\n",
     fmt(t.paint_rasterize_ms)
   ));
-  log.push_str(&format!(
-    "  text_rasterize: {}\n",
-    fmt(t.text_rasterize_ms)
-  ));
+  log.push_str(&format!("  text_rasterize: {}\n", fmt(t.text_rasterize_ms)));
   log.push_str(&format!("  encode: {}\n", fmt(t.encode_ms)));
 }
 
@@ -1407,6 +1508,139 @@ fn trace_issue_message(trace_path: &Path, reason: Option<&str>) -> Option<String
 
 fn write_text_file(path: &Path, contents: &str) -> io::Result<()> {
   atomic_write(path, contents.as_bytes())
+}
+
+fn write_json_file(path: &Path, value: &impl Serialize) -> io::Result<()> {
+  if let Some(parent) = path.parent() {
+    if !parent.as_os_str().is_empty() {
+      fs::create_dir_all(parent)?;
+    }
+  }
+  let json = serde_json::to_string_pretty(value)
+    .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+  fs::write(path, format!("{json}\n"))
+}
+
+fn write_pipeline_dumps(
+  level: DumpLevel,
+  stem: &str,
+  dump_dir: &Path,
+  artifacts: &RenderArtifacts,
+  log: &mut String,
+) -> io::Result<()> {
+  let Some(dom) = artifacts.dom.as_ref() else {
+    log.push_str("Dump skipped: missing DOM artifact\n");
+    return Ok(());
+  };
+  let Some(styled) = artifacts.styled_tree.as_ref() else {
+    log.push_str("Dump skipped: missing styled tree\n");
+    return Ok(());
+  };
+  let Some(box_tree) = artifacts.box_tree.as_ref() else {
+    log.push_str("Dump skipped: missing box tree\n");
+    return Ok(());
+  };
+  let Some(fragment_tree) = artifacts.fragment_tree.as_ref() else {
+    log.push_str("Dump skipped: missing fragment tree\n");
+    return Ok(());
+  };
+  let Some(display_list) = artifacts.display_list.as_ref() else {
+    log.push_str("Dump skipped: missing display list\n");
+    return Ok(());
+  };
+
+  let base_dir = dump_dir.join(stem);
+  fs::create_dir_all(&base_dir)?;
+  let snapshot = snapshot::snapshot_pipeline(dom, styled, box_tree, fragment_tree, display_list);
+  write_json_file(&base_dir.join("snapshot.json"), &snapshot)?;
+  if level == DumpLevel::Full {
+    write_json_file(&base_dir.join("dom.json"), &snapshot::snapshot_dom(dom))?;
+    write_json_file(
+      &base_dir.join("styled.json"),
+      &snapshot::snapshot_styled(styled),
+    )?;
+    write_json_file(
+      &base_dir.join("box_tree.json"),
+      &snapshot::snapshot_box_tree(box_tree),
+    )?;
+    write_json_file(
+      &base_dir.join("fragment_tree.json"),
+      &snapshot::snapshot_fragment_tree(fragment_tree),
+    )?;
+    write_json_file(
+      &base_dir.join("display_list.json"),
+      &snapshot::snapshot_display_list(display_list),
+    )?;
+  }
+  Ok(())
+}
+
+fn capture_dump_for_page(
+  level: DumpLevel,
+  args: &WorkerArgs,
+  render_surface: &RenderSurface,
+  fetcher: &std::sync::Arc<dyn ResourceFetcher>,
+  doc: &PreparedDocument,
+  has_page_rule: bool,
+  dump_soft_timeout_ms: Option<u64>,
+  log: &mut String,
+) {
+  let RenderConfigBundle {
+    config,
+    mut options,
+  } = build_render_configs(render_surface);
+  options.diagnostics_level = DiagnosticsLevel::Verbose;
+  if let Some(ms) = dump_soft_timeout_ms {
+    if ms > 0 {
+      options.timeout = Some(Duration::from_millis(ms));
+    }
+  }
+  if has_page_rule {
+    options.fit_canvas_to_content = Some(true);
+  }
+
+  let mut renderer = match common::render_pipeline::build_renderer_with_fetcher(
+    config,
+    std::sync::Arc::clone(fetcher),
+  ) {
+    Ok(r) => r,
+    Err(e) => {
+      let msg = format_error_with_chain(&e, args.verbose);
+      log.push_str(&format!("Dump renderer init error: {msg}\n"));
+      return;
+    }
+  };
+
+  let dump_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    render_document_with_artifacts(&mut renderer, doc.clone(), &options, level.to_request())
+  }));
+
+  match dump_result {
+    Ok(Ok(report)) => {
+      if let Err(err) =
+        write_pipeline_dumps(level, &args.stem, &args.dump_dir, &report.artifacts, log)
+      {
+        log.push_str(&format!(
+          "Dump write error: {}\n",
+          format_error_with_chain(&err, args.verbose)
+        ));
+      } else {
+        log.push_str(&format!(
+          "Dump written to {}\n",
+          args.dump_dir.join(&args.stem).display()
+        ));
+      }
+    }
+    Ok(Err(err)) => {
+      log.push_str(&format!(
+        "Dump render error: {}\n",
+        format_error_with_chain(&err, args.verbose)
+      ));
+    }
+    Err(panic) => {
+      log.push_str(&format!("Dump render panic: {}\n", panic_to_string(panic)));
+    }
+  }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2389,6 +2623,35 @@ struct WorkItem {
   trace_out: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone)]
+struct DumpSettings {
+  failures: Option<DumpLevel>,
+  slow: Option<DumpLevel>,
+  slow_ms: Option<f64>,
+  dir: PathBuf,
+  timeout_secs: u64,
+  soft_timeout_ms: Option<u64>,
+}
+
+fn dump_level_for_progress(args: &WorkerArgs, progress: &PageProgress) -> Option<DumpLevel> {
+  let mut level: Option<DumpLevel> = None;
+  if let Some(fail_level) = args.dump_failures {
+    if progress.status != ProgressStatus::Ok {
+      level = Some(DumpLevel::combine(level, fail_level));
+    }
+  }
+  if let Some(threshold_ms) = args.dump_slow_ms {
+    if let Some(total_ms) = progress.total_ms {
+      if total_ms > threshold_ms {
+        if let Some(slow_level) = args.dump_slow {
+          level = Some(DumpLevel::combine(level, slow_level));
+        }
+      }
+    }
+  }
+  level
+}
+
 fn collect_cached_html_paths() -> io::Result<BTreeMap<String, PathBuf>> {
   let mut entries: BTreeMap<String, PathBuf> = BTreeMap::new();
   for entry in fs::read_dir(CACHE_HTML_DIR)
@@ -2446,7 +2709,8 @@ fn spawn_worker(
   item: &WorkItem,
   diagnostics: DiagnosticsArg,
   soft_timeout_ms: Option<u64>,
-  hard_timeout: Duration,
+  worker_timeout: Duration,
+  dump: Option<&DumpSettings>,
 ) -> io::Result<Child> {
   let mut cmd = Command::new(exe);
   cmd
@@ -2470,7 +2734,7 @@ fn spawn_worker(
     .arg("--diagnostics")
     .arg(format!("{:?}", diagnostics).to_ascii_lowercase())
     .arg("--timeout")
-    .arg(hard_timeout.as_secs().to_string());
+    .arg(worker_timeout.as_secs().to_string());
 
   if args.no_http_freshness {
     cmd.arg("--no-http-freshness");
@@ -2522,6 +2786,24 @@ fn spawn_worker(
   if let Some(path) = &item.trace_out {
     cmd.arg("--trace-out").arg(path);
   }
+  if let Some(dump_settings) = dump {
+    if let Some(level) = dump_settings.failures {
+      cmd.arg("--dump-failures").arg(level.as_str());
+    }
+    if let Some(ms) = dump_settings.slow_ms {
+      cmd.arg("--dump-slow-ms").arg(format!("{ms}"));
+    }
+    if let Some(level) = dump_settings.slow {
+      cmd.arg("--dump-slow").arg(level.as_str());
+    }
+    cmd.arg("--dump-dir").arg(&dump_settings.dir);
+    cmd
+      .arg("--dump-timeout")
+      .arg(dump_settings.timeout_secs.to_string());
+    if let Some(ms) = dump_settings.soft_timeout_ms {
+      cmd.arg("--dump-soft-timeout-ms").arg(ms.to_string());
+    }
+  }
 
   if let Some(parent) = item.stderr_path.parent() {
     if !parent.as_os_str().is_empty() {
@@ -2545,10 +2827,12 @@ fn run_queue(
   exe: &Path,
   args: &RunArgs,
   mut queue: std::collections::VecDeque<WorkItem>,
-  hard_timeout: Duration,
+  worker_timeout: Duration,
+  kill_timeout: Duration,
   soft_timeout_ms: Option<u64>,
   diagnostics: DiagnosticsArg,
   jobs: usize,
+  dump: Option<&DumpSettings>,
 ) -> io::Result<()> {
   let mut running: Vec<RunningChild> = Vec::new();
   let current_sha = current_git_sha();
@@ -2558,7 +2842,15 @@ fn run_queue(
       let Some(item) = queue.pop_front() else {
         break;
       };
-      let child = spawn_worker(exe, args, &item, diagnostics, soft_timeout_ms, hard_timeout)?;
+      let child = spawn_worker(
+        exe,
+        args,
+        &item,
+        diagnostics,
+        soft_timeout_ms,
+        worker_timeout,
+        dump,
+      )?;
       running.push(RunningChild {
         item,
         started: Instant::now(),
@@ -2569,7 +2861,7 @@ fn run_queue(
     let mut i = 0usize;
     while i < running.len() {
       let elapsed = running[i].started.elapsed();
-      let timed_out = elapsed >= hard_timeout;
+      let timed_out = elapsed >= kill_timeout;
 
       if timed_out {
         let mut entry = running.swap_remove(i);
@@ -2580,8 +2872,8 @@ fn run_queue(
         let previous = read_progress(&entry.item.progress_path);
         let mut progress = PageProgress::new(entry.item.url.clone());
         progress.status = ProgressStatus::Timeout;
-        progress.total_ms = Some(hard_timeout.as_secs_f64() * 1000.0);
-        progress.notes = format!("hard timeout after {:.2}s", hard_timeout.as_secs_f64());
+        progress.total_ms = Some(kill_timeout.as_secs_f64() * 1000.0);
+        progress.notes = format!("hard timeout after {:.2}s", kill_timeout.as_secs_f64());
         progress.hotspot = "unknown".to_string();
         let progress = progress.merge_preserving_manual(previous, current_sha.as_deref());
         let _ = write_progress(&entry.item.progress_path, &progress);
@@ -2591,7 +2883,7 @@ fn run_queue(
           &format!(
             "=== {} ===\nStatus: TIMEOUT\nKilled after {:.2}s\n",
             entry.item.cache_stem,
-            hard_timeout.as_secs_f64()
+            kill_timeout.as_secs_f64()
           ),
         );
 
@@ -2695,12 +2987,27 @@ fn run(args: RunArgs) -> io::Result<()> {
     eprintln!("trace-timeout must be > 0 when set");
     std::process::exit(2);
   }
+  if matches!(args.dump_timeout, Some(0)) {
+    eprintln!("dump-timeout must be > 0 when set");
+    std::process::exit(2);
+  }
 
   let hard_timeout = Duration::from_secs(args.timeout);
   let soft_timeout_ms = compute_soft_timeout_ms(hard_timeout, args.soft_timeout_ms);
   let trace_hard_timeout = compute_trace_hard_timeout(args.timeout, args.trace_timeout);
   let trace_soft_timeout_ms =
     compute_soft_timeout_ms(trace_hard_timeout, args.trace_soft_timeout_ms);
+  let dumps_enabled = args.dump_failures.is_some() || args.dump_slow.is_some();
+  let dump_timeout_secs = args
+    .dump_timeout
+    .unwrap_or_else(|| args.timeout.saturating_mul(2));
+  let dump_hard_timeout = Duration::from_secs(dump_timeout_secs);
+  let dump_soft_timeout_ms = compute_soft_timeout_ms(dump_hard_timeout, args.dump_soft_timeout_ms);
+  let worker_hard_timeout = if dumps_enabled {
+    hard_timeout + dump_hard_timeout
+  } else {
+    hard_timeout
+  };
 
   fs::create_dir_all(&args.progress_dir)?;
   fs::create_dir_all(&args.log_dir)?;
@@ -2712,6 +3019,9 @@ fn run(args: RunArgs) -> io::Result<()> {
   {
     // Ensure disk-backed cache is available before spawning workers.
     fs::create_dir_all(ASSET_DIR)?;
+  }
+  if dumps_enabled {
+    fs::create_dir_all(&args.dump_dir)?;
   }
 
   let page_filter = args
@@ -2898,12 +3208,24 @@ fn run(args: RunArgs) -> io::Result<()> {
       })
       .collect();
   }
+  let dump_settings = if dumps_enabled {
+    Some(DumpSettings {
+      failures: args.dump_failures,
+      slow: args.dump_slow,
+      slow_ms: args.dump_slow_ms,
+      dir: args.dump_dir.clone(),
+      timeout_secs: dump_timeout_secs,
+      soft_timeout_ms: dump_soft_timeout_ms,
+    })
+  } else {
+    None
+  };
   let exe = std::env::current_exe()?;
   println!(
     "Pageset progress: {} pages ({} parallel), hard timeout {}s",
     items.len(),
     args.jobs,
-    args.timeout
+    worker_hard_timeout.as_secs()
   );
   println!(
     "User-Agent: {}",
@@ -2932,9 +3254,11 @@ fn run(args: RunArgs) -> io::Result<()> {
     &args,
     queue,
     hard_timeout,
+    worker_hard_timeout,
     soft_timeout_ms,
     args.diagnostics,
     args.jobs,
+    dump_settings.as_ref(),
   )?;
 
   // Summary counters based on produced progress files (main run only).
@@ -3010,9 +3334,11 @@ fn run(args: RunArgs) -> io::Result<()> {
         &args,
         trace_queue,
         trace_hard_timeout,
+        trace_hard_timeout,
         trace_soft_timeout_ms,
         DiagnosticsArg::Verbose,
         args.trace_jobs,
+        None,
       )?;
     }
   }
