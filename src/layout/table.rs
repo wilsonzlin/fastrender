@@ -1912,11 +1912,29 @@ pub struct CollapsedBorders {
   corners: Vec<Vec<ResolvedBorder>>,
 }
 
+#[cfg(test)]
+thread_local! {
+  static COLLAPSED_BORDER_COMPUTE_COUNT: std::cell::Cell<usize> =
+    std::cell::Cell::new(0);
+}
+
+#[cfg(test)]
+fn reset_collapsed_border_compute_count() {
+  COLLAPSED_BORDER_COMPUTE_COUNT.with(|c| c.set(0));
+}
+
+#[cfg(test)]
+fn collapsed_border_compute_count() -> usize {
+  COLLAPSED_BORDER_COMPUTE_COUNT.with(|c| c.get())
+}
+
 /// Resolve the border widths for a table in collapsed border model.
 /// Returns resolved borders for vertical and horizontal grid lines.
 /// Lengths: vertical = columns + 1, horizontal = rows + 1.
 #[allow(clippy::cognitive_complexity)]
 fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) -> CollapsedBorders {
+  #[cfg(test)]
+  COLLAPSED_BORDER_COMPUTE_COUNT.with(|c| c.set(c.get() + 1));
   #[derive(Clone, Copy)]
   enum BorderOrigin {
     Table,
@@ -4822,46 +4840,15 @@ impl FormattingContext for TableFormattingContext {
     }
 
     // Border-collapse adjustments
-    let collapsed_borders = if structure.border_collapse == BorderCollapse::Collapse {
-      compute_collapsed_borders(&table_box, &structure)
-    } else {
-      CollapsedBorders {
-        vertical: vec![
-          vec![ResolvedBorder::none(); structure.row_count];
-          structure.column_count + 1
-        ],
-        horizontal: vec![
-          vec![ResolvedBorder::none(); structure.column_count];
-          structure.row_count + 1
-        ],
-        corners: vec![
-          vec![ResolvedBorder::none(); structure.column_count + 1];
-          structure.row_count + 1
-        ],
-      }
-    };
+    let collapsed_borders: Option<CollapsedBorders> =
+      if structure.border_collapse == BorderCollapse::Collapse {
+        Some(compute_collapsed_borders(&table_box, &structure))
+      } else {
+        None
+      };
 
     let mut vertical_line_max: Vec<f32> = Vec::with_capacity(structure.column_count + 1);
-    for (idx, segments) in collapsed_borders.vertical.iter().enumerate() {
-      let width = if idx == 0 || idx == structure.column_count {
-        // Table left/right border widths are based on the first row's collapsed border
-        // (CSS 2.2 §17.6.2), with any excess in later rows spilling into the margin.
-        if structure.row_count > 0 {
-          segments.first().map(|b| b.width).unwrap_or(0.0)
-        } else {
-          0.0
-        }
-      } else {
-        segments.iter().map(|b| b.width).fold(0.0, f32::max)
-      };
-      vertical_line_max.push(width);
-    }
-    let horizontal_line_max: Vec<f32> = collapsed_borders
-      .horizontal
-      .iter()
-      .map(|segments| segments.iter().map(|b| b.width).fold(0.0, f32::max))
-      .collect();
-
+    let mut horizontal_line_max: Vec<f32> = Vec::with_capacity(structure.row_count + 1);
     let mut column_line_pos = Vec::new();
     let mut row_line_pos = Vec::new();
     let mut row_offsets = Vec::with_capacity(structure.row_count);
@@ -4872,99 +4859,120 @@ impl FormattingContext for TableFormattingContext {
     // area (CSS 2.2 §17.6.2). Compute line centers and cell start offsets from the
     // resolved line widths so that the table width/height include only half of the
     // outer collapsed borders.
-    let (content_width, content_height) = if structure.border_collapse == BorderCollapse::Collapse {
-      let (cols, starts, collapsed_width) =
-        collapsed_line_positions(&col_widths, &vertical_line_max, pad_left, pad_right);
-      column_line_pos = cols;
-      col_offsets = starts;
+    let (content_width, content_height, content_origin_x, content_origin_y) =
+      match collapsed_borders.as_ref() {
+        Some(collapsed_borders) => {
+          for (idx, segments) in collapsed_borders.vertical.iter().enumerate() {
+            let width = if idx == 0 || idx == structure.column_count {
+              // Table left/right border widths are based on the first row's collapsed border
+              // (CSS 2.2 §17.6.2), with any excess in later rows spilling into the margin.
+              if structure.row_count > 0 {
+                segments.first().map(|b| b.width).unwrap_or(0.0)
+              } else {
+                0.0
+              }
+            } else {
+              segments.iter().map(|b| b.width).fold(0.0, f32::max)
+            };
+            vertical_line_max.push(width);
+          }
+          horizontal_line_max = collapsed_borders
+            .horizontal
+            .iter()
+            .map(|segments| segments.iter().map(|b| b.width).fold(0.0, f32::max))
+            .collect();
 
-      let row_heights: Vec<f32> = row_metrics.iter().map(|r| r.height).collect();
-      let (rows, starts, collapsed_height) =
-        collapsed_line_positions(&row_heights, &horizontal_line_max, pad_top, pad_bottom);
-      row_line_pos = rows;
-      row_offsets = starts;
+          let (cols, starts, collapsed_width) =
+            collapsed_line_positions(&col_widths, &vertical_line_max, pad_left, pad_right);
+          column_line_pos = cols;
+          col_offsets = starts;
 
-      (collapsed_width, collapsed_height)
-    } else {
-      let content_origin_y = border_top + pad_top;
-      let mut y = content_origin_y + v_spacing * 0.5;
+          let row_heights: Vec<f32> = row_metrics.iter().map(|r| r.height).collect();
+          let (rows, starts, collapsed_height) =
+            collapsed_line_positions(&row_heights, &horizontal_line_max, pad_top, pad_bottom);
+          row_line_pos = rows;
+          row_offsets = starts;
 
-      if dump {
-        let preview: String = row_metrics
-          .iter()
-          .take(8)
-          .map(|r| format!("{:.2}", r.height))
-          .collect::<Vec<_>>()
-          .join(", ");
-        eprintln!(
-          "  row heights (first {} of {}): {}",
-          row_metrics.len().min(8),
-          row_metrics.len(),
-          preview
-        );
-      }
+          let content_origin_x = col_offsets.first().copied().unwrap_or(pad_left)
+            - vertical_line_max.first().copied().unwrap_or(0.0) * 0.5;
+          let content_origin_y = row_offsets.first().copied().unwrap_or(pad_top)
+            - horizontal_line_max.first().copied().unwrap_or(0.0) * 0.5;
 
-      for row in &row_metrics {
-        row_offsets.push(y);
-        y += row.height;
-        y += v_spacing;
-      }
+          (
+            collapsed_width,
+            collapsed_height,
+            content_origin_x,
+            content_origin_y,
+          )
+        }
+        None => {
+          let content_origin_y = border_top + pad_top;
+          let mut y = content_origin_y + v_spacing * 0.5;
 
-      if dump {
-        let preview: String = row_offsets
-          .iter()
-          .take(8)
-          .map(|offset| format!("{:.2}", offset))
-          .collect::<Vec<_>>()
-          .join(", ");
-        eprintln!(
-          "  row offsets (first {} of {}): {}",
-          row_offsets.len().min(8),
-          row_offsets.len(),
-          preview
-        );
-      }
+          if dump {
+            let preview: String = row_metrics
+              .iter()
+              .take(8)
+              .map(|r| format!("{:.2}", r.height))
+              .collect::<Vec<_>>()
+              .join(", ");
+            eprintln!(
+              "  row heights (first {} of {}): {}",
+              row_metrics.len().min(8),
+              row_metrics.len(),
+              preview
+            );
+          }
 
-      // Precompute column offsets for positioning in the separated model.
-      let start_x = border_left + pad_left;
-      let mut x = start_x + h_spacing * 0.5;
-      for width in col_widths.iter().take(structure.column_count) {
-        col_offsets.push(x);
-        x += width + h_spacing;
-      }
+          for row in &row_metrics {
+            row_offsets.push(y);
+            y += row.height;
+            y += v_spacing;
+          }
 
-      let width = if col_widths.is_empty() {
-        available_content
-      } else {
-        let total_spacing = h_spacing * structure.column_count as f32;
-        col_widths.iter().sum::<f32>() + total_spacing
+          if dump {
+            let preview: String = row_offsets
+              .iter()
+              .take(8)
+              .map(|offset| format!("{:.2}", offset))
+              .collect::<Vec<_>>()
+              .join(", ");
+            eprintln!(
+              "  row offsets (first {} of {}): {}",
+              row_offsets.len().min(8),
+              row_offsets.len(),
+              preview
+            );
+          }
+
+          // Precompute column offsets for positioning in the separated model.
+          let start_x = border_left + pad_left;
+          let mut x = start_x + h_spacing * 0.5;
+          for width in col_widths.iter().take(structure.column_count) {
+            col_offsets.push(x);
+            x += width + h_spacing;
+          }
+
+          let width = if col_widths.is_empty() {
+            available_content
+          } else {
+            let total_spacing = h_spacing * structure.column_count as f32;
+            col_widths.iter().sum::<f32>() + total_spacing
+          };
+          let height = if structure.row_count > 0 {
+            row_offsets
+              .last()
+              .map(|start| {
+                start + row_metrics.last().map(|r| r.height).unwrap_or(0.0) + v_spacing * 0.5
+              })
+              .unwrap_or(0.0)
+              - content_origin_y
+          } else {
+            0.0
+          };
+          (width, height, start_x, content_origin_y)
+        }
       };
-      let height = if structure.row_count > 0 {
-        row_offsets
-          .last()
-          .map(|start| {
-            start + row_metrics.last().map(|r| r.height).unwrap_or(0.0) + v_spacing * 0.5
-          })
-          .unwrap_or(0.0)
-          - content_origin_y
-      } else {
-        0.0
-      };
-      (width, height)
-    };
-
-    let content_origin_x = if structure.border_collapse == BorderCollapse::Collapse {
-      col_offsets.first().copied().unwrap_or(pad_left)
-        - vertical_line_max.first().copied().unwrap_or(0.0) * 0.5
-    } else {
-      border_left + pad_left
-    };
-    let content_origin_y = if structure.border_collapse == BorderCollapse::Collapse {
-      row_offsets.first().copied().unwrap_or(pad_top)
-        - horizontal_line_max.first().copied().unwrap_or(0.0) * 0.5
-    } else {
-      border_top + pad_top
-    };
 
     // Column group and column backgrounds precede row backgrounds/cells.
     let mut column_styles: Vec<Option<Arc<ComputedStyle>>> = vec![None; structure.column_count];
@@ -5316,7 +5324,7 @@ impl FormattingContext for TableFormattingContext {
     }
     let table_bounds = Rect::from_xywh(0.0, 0.0, total_width.max(0.0), total_height);
 
-    if structure.border_collapse == BorderCollapse::Collapse {
+    if let Some(collapsed_borders) = collapsed_borders.as_ref() {
       let make_border_style = |color: Rgba,
                                left: f32,
                                right: f32,
@@ -12174,6 +12182,56 @@ mod tests {
     assert!(
       fragment.bounds.width() < 6.0,
       "table width should be bounded by the first row's border"
+    );
+  }
+
+  #[test]
+  fn separate_tables_skip_collapsed_border_computation() {
+    reset_collapsed_border_compute_count();
+
+    let mut table_style = ComputedStyle::default();
+    table_style.display = Display::Table;
+    table_style.border_collapse = BorderCollapse::Separate;
+    table_style.border_spacing_horizontal = Length::px(1.0);
+    table_style.border_spacing_vertical = Length::px(1.0);
+
+    let mut row_style = ComputedStyle::default();
+    row_style.display = Display::TableRow;
+    let row_style = Arc::new(row_style);
+
+    let mut cell_style = ComputedStyle::default();
+    cell_style.display = Display::TableCell;
+    let cell_style = Arc::new(cell_style);
+
+    let mut rows = Vec::new();
+    for _ in 0..50 {
+      let mut cells = Vec::new();
+      for _ in 0..50 {
+        cells.push(BoxNode::new_block(
+          cell_style.clone(),
+          FormattingContextType::Block,
+          vec![],
+        ));
+      }
+      rows.push(BoxNode::new_block(
+        row_style.clone(),
+        FormattingContextType::Block,
+        cells,
+      ));
+    }
+
+    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, rows);
+
+    let tfc = TableFormattingContext::new();
+    let constraints = LayoutConstraints::definite_width(800.0);
+    tfc
+      .layout(&table, &constraints)
+      .expect("separate table layout");
+
+    assert_eq!(
+      collapsed_border_compute_count(),
+      0,
+      "separate tables should not resolve collapsed borders"
     );
   }
 
