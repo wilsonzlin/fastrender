@@ -869,6 +869,41 @@ impl FragmentNode {
   pub fn children(&self) -> impl Iterator<Item = &FragmentNode> {
     self.children.iter()
   }
+
+  /// Returns a slice of direct children.
+  pub fn children_ref(&self) -> &[FragmentNode] {
+    &self.children
+  }
+
+  /// Returns mutable access to this fragment's children.
+  pub fn children_mut(&mut self) -> &mut Vec<FragmentNode> {
+    &mut self.children
+  }
+
+  /// Creates a shallow clone of this fragment without cloning children.
+  ///
+  /// This is useful when callers need to rebuild the child list (e.g., during
+  /// fragmentation) without incurring an unnecessary deep clone of the existing
+  /// subtree.
+  pub(crate) fn clone_without_children(&self) -> Self {
+    Self {
+      bounds: self.bounds,
+      block_metadata: self.block_metadata.clone(),
+      logical_override: self.logical_override,
+      content: self.content.clone(),
+      baseline: self.baseline,
+      children: Vec::new(),
+      style: self.style.clone(),
+      starting_style: self.starting_style.clone(),
+      fragment_index: self.fragment_index,
+      fragment_count: self.fragment_count,
+      fragmentainer_index: self.fragmentainer_index,
+      fragmentainer: self.fragmentainer,
+      slice_info: self.slice_info,
+      scroll_overflow: self.scroll_overflow,
+      fragmentation: self.fragmentation.clone(),
+    }
+  }
 }
 
 /// Metadata describing nested fragmentation contexts (e.g., multi-column containers).
