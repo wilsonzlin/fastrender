@@ -46,7 +46,9 @@ cargo xtask perf-smoke [--top 5] [--output target/perf-smoke.json]
 
 The command renders the HTML under `tests/pages/fixtures/*`, captures `DiagnosticsLevel::Basic`
 stats, and writes `target/perf-smoke.json` with per-fixture stage timings/counters plus aggregate
-wall-clock totals. Compare against a saved baseline to flag obvious regressions:
+wall-clock totals. The JSON includes `stage_ms` buckets (`fetch`, `css`, `cascade`, `layout`,
+`paint`) derived from `RenderStats` so regressions can be attributed to a single pipeline stage.
+Compare against a saved baseline to flag obvious regressions:
 
 ```
 cargo xtask perf-smoke --baseline ../baseline/perf-smoke.json --threshold 0.05

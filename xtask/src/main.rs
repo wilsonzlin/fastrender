@@ -590,7 +590,7 @@ impl DiskCacheFeatureExt for Command {
   }
 }
 
-const PERF_SMOKE_REPORT_VERSION: u32 = 1;
+const PERF_SMOKE_REPORT_VERSION: u32 = 2;
 
 #[derive(Clone, Copy)]
 struct PerfFixture {
@@ -724,12 +724,85 @@ struct PerfSmokeReport {
   fixtures: Vec<FixtureReport>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct StageBreakdown {
+  #[serde(default)]
+  fetch: f64,
+  #[serde(default)]
+  css: f64,
+  #[serde(default)]
+  cascade: f64,
+  #[serde(default)]
+  layout: f64,
+  #[serde(default)]
+  paint: f64,
+}
+
+impl StageBreakdown {
+  fn from_timings(timings: &RenderStageTimings) -> Self {
+    Self {
+      fetch: round_ms(sum_stage(&[timings.html_decode_ms, timings.dom_parse_ms])),
+      css: round_ms(sum_stage(&[timings.css_inlining_ms, timings.css_parse_ms])),
+      cascade: round_ms(sum_stage(&[timings.cascade_ms, timings.box_tree_ms])),
+      layout: round_ms(sum_stage(&[timings.layout_ms])),
+      paint: round_ms(sum_stage(&[
+        timings.paint_build_ms,
+        timings.paint_optimize_ms,
+        timings.paint_rasterize_ms,
+      ])),
+    }
+  }
+
+  fn add_assign(&mut self, other: &StageBreakdown) {
+    self.fetch += other.fetch;
+    self.css += other.css;
+    self.cascade += other.cascade;
+    self.layout += other.layout;
+    self.paint += other.paint;
+  }
+
+  fn entries(&self) -> [(&'static str, f64); 5] {
+    [
+      ("fetch", self.fetch),
+      ("css", self.css),
+      ("cascade", self.cascade),
+      ("layout", self.layout),
+      ("paint", self.paint),
+    ]
+  }
+
+  fn rounded(&self) -> Self {
+    Self {
+      fetch: round_ms(self.fetch),
+      css: round_ms(self.css),
+      cascade: round_ms(self.cascade),
+      layout: round_ms(self.layout),
+      paint: round_ms(self.paint),
+    }
+  }
+}
+
+fn round_ms(value: f64) -> f64 {
+  let rounded = (value * 1000.0).round() / 1000.0;
+  if rounded == 0.0 {
+    0.0
+  } else {
+    rounded
+  }
+}
+
+fn sum_stage(values: &[Option<f64>]) -> f64 {
+  values.iter().flatten().sum()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PerfSmokeTotals {
   fixtures: usize,
   wall_time_ms: f64,
   render_wall_time_ms: f64,
   stage_time_ms: RenderStageTimings,
+  #[serde(default)]
+  stage_ms: StageBreakdown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -743,6 +816,8 @@ struct FixtureReport {
   media: String,
   wall_time_ms: f64,
   stage_total_ms: Option<f64>,
+  #[serde(default)]
+  stage_ms: StageBreakdown,
   stats: SerializableRenderStats,
 }
 
@@ -789,6 +864,7 @@ fn run_perf_smoke(args: PerfSmokeArgs) -> Result<()> {
   let mut fixtures = Vec::new();
   let mut render_wall_time_ms = 0.0f64;
   let mut stage_totals = RenderStageTimings::default();
+  let mut stage_buckets = StageBreakdown::default();
 
   for fixture in PERF_FIXTURES {
     let html_path = fixtures_dir.join(fixture.html);
@@ -819,13 +895,16 @@ fn run_perf_smoke(args: PerfSmokeArgs) -> Result<()> {
         .stats
         .ok_or_else(|| anyhow!("RenderStats missing for {id}"))?;
       let stage_total_ms = sum_timings(&stats.timings);
+      let stage_ms = StageBreakdown::from_timings(&stats.timings);
       accumulate_timings(&mut stage_totals, &stats.timings);
+      stage_buckets.add_assign(&stage_ms);
 
       fixtures.push(FixtureReport::from_components(
         fixture,
         shot,
         wall_time_ms,
         stage_total_ms,
+        stage_ms,
         stats,
       ));
     }
@@ -838,6 +917,7 @@ fn run_perf_smoke(args: PerfSmokeArgs) -> Result<()> {
       wall_time_ms: run_start.elapsed().as_secs_f64() * 1000.0,
       render_wall_time_ms,
       stage_time_ms: stage_totals,
+      stage_ms: stage_buckets.rounded(),
     },
     fixtures,
   };
@@ -1032,6 +1112,13 @@ fn compare_baseline(
         ));
       }
     }
+    collect_stage_regressions(
+      &fixture.id,
+      &fixture.stage_ms,
+      &base.stage_ms,
+      threshold,
+      &mut regressions,
+    );
   }
 
   if let Some(delta) = percent_change(
@@ -1048,6 +1135,14 @@ fn compare_baseline(
     }
   }
 
+  collect_stage_regressions(
+    "overall",
+    &current.totals.stage_ms,
+    &baseline.totals.stage_ms,
+    threshold,
+    &mut regressions,
+  );
+
   Ok(regressions)
 }
 
@@ -1056,6 +1151,37 @@ fn percent_change(current: f64, baseline: f64) -> Option<f64> {
     return (current > 0.0).then_some(f64::INFINITY);
   }
   Some((current - baseline) / baseline)
+}
+
+fn collect_stage_regressions(
+  prefix: &str,
+  current: &StageBreakdown,
+  baseline: &StageBreakdown,
+  threshold: f64,
+  regressions: &mut Vec<String>,
+) {
+  for (stage, current_value) in current.entries() {
+    let baseline_value = baseline
+      .entries()
+      .iter()
+      .find_map(|(label, value)| (*label == stage).then_some(*value))
+      .unwrap_or(0.0);
+    if baseline_value <= 0.0 {
+      continue;
+    }
+    if let Some(delta) = percent_change(current_value, baseline_value) {
+      if delta > threshold {
+        regressions.push(format!(
+          "{} {}: +{:.2}% ({:.2}ms -> {:.2}ms)",
+          prefix,
+          stage,
+          delta * 100.0,
+          baseline_value,
+          current_value
+        ));
+      }
+    }
+  }
 }
 
 fn print_top_fixtures(report: &PerfSmokeReport, count: usize) {
@@ -1089,6 +1215,7 @@ impl FixtureReport {
     shot: &PerfShot,
     wall_time_ms: f64,
     stage_total_ms: Option<f64>,
+    stage_ms: StageBreakdown,
     stats: RenderStats,
   ) -> Self {
     Self {
@@ -1101,6 +1228,7 @@ impl FixtureReport {
       media: media_label(shot.media).to_string(),
       wall_time_ms,
       stage_total_ms,
+      stage_ms,
       stats: stats.into(),
     }
   }

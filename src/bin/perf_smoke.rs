@@ -2,6 +2,7 @@ use clap::Parser;
 use fastrender::api::{DiagnosticsLevel, FastRender, RenderOptions};
 use fastrender::image_output::OutputFormat;
 use fastrender::style::media::MediaType;
+use fastrender::{FontConfig, ResourcePolicy};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
@@ -23,6 +24,10 @@ struct Args {
   /// Optional baseline JSON to compare against
   #[arg(long)]
   baseline: Option<PathBuf>,
+
+  /// Only run the listed fixtures (comma-separated)
+  #[arg(long, value_delimiter = ',')]
+  fixtures: Option<Vec<String>>,
 
   /// Relative regression threshold (0.05 = 5%)
   #[arg(long, default_value_t = 0.05)]
@@ -93,6 +98,52 @@ const PERF_FIXTURES: &[FixtureSpec] = &[
     media: MediaType::Print,
   },
 ];
+
+const PERF_SMOKE_SCHEMA_VERSION: u32 = 2;
+
+#[derive(Clone, Serialize, Deserialize, Default)]
+struct StageBreakdown {
+  #[serde(default)]
+  fetch: f64,
+  #[serde(default)]
+  css: f64,
+  #[serde(default)]
+  cascade: f64,
+  #[serde(default)]
+  layout: f64,
+  #[serde(default)]
+  paint: f64,
+}
+
+impl StageBreakdown {
+  fn entries(&self) -> [(&'static str, f64); 5] {
+    [
+      ("fetch", self.fetch),
+      ("css", self.css),
+      ("cascade", self.cascade),
+      ("layout", self.layout),
+      ("paint", self.paint),
+    ]
+  }
+
+  fn add_assign(&mut self, other: &StageBreakdown) {
+    self.fetch += other.fetch;
+    self.css += other.css;
+    self.cascade += other.cascade;
+    self.layout += other.layout;
+    self.paint += other.paint;
+  }
+
+  fn rounded(&self) -> Self {
+    Self {
+      fetch: round_ms(self.fetch),
+      css: round_ms(self.css),
+      cascade: round_ms(self.cascade),
+      layout: round_ms(self.layout),
+      paint: round_ms(self.paint),
+    }
+  }
+}
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 struct StageTimingsSummary {
@@ -180,6 +231,8 @@ struct FixtureSummary {
   path: String,
   viewport: ViewportSummary,
   total_ms: f64,
+  #[serde(default)]
+  stage_ms: StageBreakdown,
   timings_ms: StageTimingsSummary,
   counts: CountsSummary,
   paint: PaintSummary,
@@ -190,6 +243,8 @@ struct PerfSmokeSummary {
   schema_version: u32,
   fixtures: Vec<FixtureSummary>,
   total_ms: f64,
+  #[serde(default)]
+  stage_ms: StageBreakdown,
 }
 
 struct Regression {
@@ -218,21 +273,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   } else {
     None
   };
+  if let Some(base) = baseline.as_ref() {
+    if base.schema_version != PERF_SMOKE_SCHEMA_VERSION {
+      return Err(
+        format!(
+          "baseline schema_version {} does not match current schema_version {}",
+          base.schema_version, PERF_SMOKE_SCHEMA_VERSION
+        )
+        .into(),
+      );
+    }
+  }
   if args.fail_on_regression && baseline.is_none() {
     return Err("--fail-on-regression requires --baseline".into());
   }
 
+  let selected = select_fixtures(args.fixtures.as_ref())?;
   let mut fixtures = Vec::new();
-  for spec in PERF_FIXTURES {
-    fixtures.push(run_fixture(spec)?);
+  let mut stage_totals = StageBreakdown::default();
+  for spec in selected {
+    let fixture = run_fixture(spec)?;
+    stage_totals.add_assign(&fixture.stage_ms);
+    fixtures.push(fixture);
   }
   fixtures.sort_by(|a, b| a.name.cmp(&b.name));
   let total_ms = round_ms(fixtures.iter().map(|f| f.total_ms).sum::<f64>());
 
   let summary = PerfSmokeSummary {
-    schema_version: 1,
+    schema_version: PERF_SMOKE_SCHEMA_VERSION,
     fixtures,
     total_ms,
+    stage_ms: stage_totals.rounded(),
   };
 
   if let Some(parent) = args.output.parent() {
@@ -280,10 +351,17 @@ fn run_fixture(spec: &FixtureSpec) -> Result<FixtureSummary, Box<dyn std::error:
   let html = fs::read_to_string(&html_path)?;
   let base_url = base_url_for(&html_path)?;
 
+  let policy = ResourcePolicy::default()
+    .allow_http(false)
+    .allow_https(false)
+    .allow_file(true)
+    .allow_data(true);
   let mut renderer = FastRender::builder()
     .viewport_size(spec.viewport.0, spec.viewport.1)
     .device_pixel_ratio(spec.dpr)
     .base_url(base_url.clone())
+    .font_sources(FontConfig::bundled_only())
+    .resource_policy(policy)
     .build()?;
 
   let options = RenderOptions::new()
@@ -311,6 +389,7 @@ fn run_fixture(spec: &FixtureSpec) -> Result<FixtureSummary, Box<dyn std::error:
       media: media_label(spec.media).to_string(),
     },
     total_ms,
+    stage_ms: stage_breakdown_from_stats(&stats),
     timings_ms: timings_from_stats(&stats),
     counts: counts_from_stats(&stats),
     paint: paint_from_stats(&stats),
@@ -354,6 +433,21 @@ fn timings_from_stats(stats: &fastrender::RenderStats) -> StageTimingsSummary {
   }
 }
 
+fn stage_breakdown_from_stats(stats: &fastrender::RenderStats) -> StageBreakdown {
+  let t = &stats.timings;
+  StageBreakdown {
+    fetch: round_ms(sum_timings(&[t.html_decode_ms, t.dom_parse_ms])),
+    css: round_ms(sum_timings(&[t.css_inlining_ms, t.css_parse_ms])),
+    cascade: round_ms(sum_timings(&[t.cascade_ms, t.box_tree_ms])),
+    layout: round_ms(sum_timings(&[t.layout_ms])),
+    paint: round_ms(sum_timings(&[
+      t.paint_build_ms,
+      t.paint_optimize_ms,
+      t.paint_rasterize_ms,
+    ])),
+  }
+}
+
 fn counts_from_stats(stats: &fastrender::RenderStats) -> CountsSummary {
   CountsSummary {
     dom_nodes: stats.counts.dom_nodes.unwrap_or(0) as u64,
@@ -379,7 +473,16 @@ fn round_opt(value: Option<f64>) -> f64 {
 }
 
 fn round_ms(value: f64) -> f64 {
-  (value * 1000.0).round() / 1000.0
+  let rounded = (value * 1000.0).round() / 1000.0;
+  if rounded == 0.0 {
+    0.0
+  } else {
+    rounded
+  }
+}
+
+fn sum_timings(values: &[Option<f64>]) -> f64 {
+  values.iter().flatten().sum()
 }
 
 fn read_summary(path: &Path) -> Result<PerfSmokeSummary, Box<dyn std::error::Error>> {
@@ -431,6 +534,24 @@ fn find_regressions(
           }
         }
       }
+      for (label, value) in fixture.stage_ms.entries() {
+        let base_value =
+          base
+            .stage_ms
+            .entries()
+            .iter()
+            .find_map(|(l, v)| if *l == label { Some(*v) } else { None });
+        if let Some(base_value) = base_value {
+          if base_value > 0.0 && is_regression(base_value, value, threshold) {
+            regressions.push(Regression {
+              fixture: fixture.name.clone(),
+              metric: RegressionMetric::Stage(label),
+              baseline: base_value,
+              latest: value,
+            });
+          }
+        }
+      }
     }
   }
 
@@ -461,4 +582,39 @@ impl Regression {
       RegressionMetric::Stage(label) => label,
     }
   }
+}
+
+fn select_fixtures<'a>(
+  filter: Option<&Vec<String>>,
+) -> Result<Vec<&'a FixtureSpec>, Box<dyn std::error::Error>> {
+  let mut fixtures: Vec<&FixtureSpec> = PERF_FIXTURES.iter().collect();
+  if let Some(filter) = filter {
+    if filter.is_empty() {
+      return Err("at least one fixture name must be provided to --fixtures".into());
+    }
+    let wanted: Vec<String> = filter
+      .iter()
+      .map(|name| name.trim().to_ascii_lowercase())
+      .filter(|name| !name.is_empty())
+      .collect();
+    if wanted.is_empty() {
+      return Err("at least one non-empty fixture name must be provided to --fixtures".into());
+    }
+    fixtures.retain(|spec| wanted.contains(&spec.name.to_ascii_lowercase()));
+    if fixtures.is_empty() {
+      let available = PERF_FIXTURES
+        .iter()
+        .map(|f| f.name)
+        .collect::<Vec<_>>()
+        .join(", ");
+      return Err(
+        format!(
+          "no fixtures matched {:?}; available fixtures: {available}",
+          filter
+        )
+        .into(),
+      );
+    }
+  }
+  Ok(fixtures)
 }
