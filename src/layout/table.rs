@@ -3456,6 +3456,16 @@ impl TableFormattingContext {
       };
       let width_decl = cell_box.style.width.as_ref();
       let width_is_percent = matches!(width_decl.map(|w| w.unit), Some(LengthUnit::Percent));
+      let width_padding = if matches!(mode, DistributionMode::Fixed) {
+        match structure.border_collapse {
+          BorderCollapse::Separate => {
+            horizontal_padding_and_borders(&cell_box.style, percent_base)
+          }
+          BorderCollapse::Collapse => horizontal_padding(&cell_box.style, percent_base),
+        }
+      } else {
+        0.0
+      };
       let (mut min_w, mut max_w) = match mode {
         DistributionMode::Fixed => (0.0, f32::INFINITY), // content is ignored in fixed layout
         DistributionMode::Auto => {
@@ -3463,32 +3473,34 @@ impl TableFormattingContext {
         }
       };
       let mut has_max_cap = false;
-      // Apply min-width/max-width from the cell itself. Percentages only participate when the
-      // table width is definite per CSS 2.1 §10.4 (percentage on width/min/max). Clamp max to
-      // remain ≥ min so constraints stay sane.
-      if let Some(min_len) = cell_box
-        .style
-        .min_width
-        .as_ref()
-        .and_then(|len| resolve_length_against(len, cell_box.style.font_size, percent_base))
-      {
-        min_w = min_w.max(min_len);
-        max_w = max_w.max(min_w);
-      }
-      if let Some(max_len) = cell_box
-        .style
-        .max_width
-        .as_ref()
-        .and_then(|len| resolve_length_against(len, cell_box.style.font_size, percent_base))
-      {
-        let cap = max_len.max(min_w);
-        max_w = if max_w.is_finite() {
-          max_w.min(cap)
-        } else {
-          cap
-        };
-        max_w = max_w.max(min_w);
-        has_max_cap = true;
+      if mode == DistributionMode::Auto {
+        // Apply min-width/max-width from the cell itself. Percentages only participate when the
+        // table width is definite per CSS 2.1 §10.4 (percentage on width/min/max). Clamp max to
+        // remain ≥ min so constraints stay sane.
+        if let Some(min_len) = cell_box
+          .style
+          .min_width
+          .as_ref()
+          .and_then(|len| resolve_length_against(len, cell_box.style.font_size, percent_base))
+        {
+          min_w = min_w.max(min_len);
+          max_w = max_w.max(min_w);
+        }
+        if let Some(max_len) = cell_box
+          .style
+          .max_width
+          .as_ref()
+          .and_then(|len| resolve_length_against(len, cell_box.style.font_size, percent_base))
+        {
+          let cap = max_len.max(min_w);
+          max_w = if max_w.is_finite() {
+            max_w.min(cap)
+          } else {
+            cap
+          };
+          max_w = max_w.max(min_w);
+          has_max_cap = true;
+        }
       }
       let effective_max = if has_max_cap { max_w } else { f32::INFINITY };
       let specified_width = cell_box
@@ -3498,13 +3510,13 @@ impl TableFormattingContext {
         .and_then(|width| match width.unit {
           LengthUnit::Percent => percent_base.map(|base| {
             crate::layout::utils::clamp_with_order(
-              (width.value / 100.0) * base,
+              (width.value / 100.0) * base + width_padding,
               min_w,
               effective_max,
             )
           }),
           _ => Some(crate::layout::utils::clamp_with_order(
-            width.to_px(),
+            width.to_px() + width_padding,
             min_w,
             effective_max,
           )),
@@ -3521,8 +3533,13 @@ impl TableFormattingContext {
             LengthUnit::Percent if percent_base.is_some() => {
               let col = &mut constraints[cell.col];
               col.set_percentage(width.value);
-              col.min_width = col.min_width.max(min_w);
-              col.max_width = col.max_width.max(max_w);
+              if let Some(px) = specified_width {
+                col.min_width = col.min_width.max(px);
+                col.max_width = col.max_width.max(px);
+              } else {
+                col.min_width = col.min_width.max(min_w);
+                col.max_width = col.max_width.max(max_w);
+              }
               if has_max_cap {
                 col.has_max_cap = true;
               }
@@ -3534,11 +3551,18 @@ impl TableFormattingContext {
               col.max_width = col.max_width.max(max_w);
             }
             _ => {
-              let px = crate::layout::utils::clamp_with_order(width.to_px(), min_w, effective_max);
+              let px = specified_width.unwrap_or_else(|| {
+                crate::layout::utils::clamp_with_order(
+                  width.to_px() + width_padding,
+                  min_w,
+                  effective_max,
+                )
+              });
               let col = &mut constraints[cell.col];
               col.fixed_width = Some(px);
               col.min_width = col.min_width.max(min_w);
-              col.max_width = col.max_width.max(px.max(max_w));
+              let target_max = if max_w.is_finite() { px.max(max_w) } else { px };
+              col.max_width = col.max_width.max(target_max);
               if has_max_cap {
                 col.has_max_cap = true;
               }
@@ -5714,6 +5738,35 @@ impl FormattingContext for TableFormattingContext {
     let table_box = TableStructureFixer::fixup_table_internals(box_node.clone())
       .unwrap_or_else(|err| panic!("table structure fixup failed: {err}"));
     let structure = TableStructure::from_box_tree(&table_box);
+    let spacing = structure.total_horizontal_spacing();
+    let font_size = table_box.style.font_size;
+    let authored_width = table_box
+      .style
+      .width
+      .as_ref()
+      .and_then(|len| resolve_length_against(len, font_size, None));
+    let resolve_abs_no_pct = |l: &crate::style::values::Length| match l.unit {
+      LengthUnit::Percent => 0.0,
+      _ if l.unit.is_absolute() => l.to_px(),
+      _ => l.value,
+    };
+    let padding_h_base =
+      resolve_abs_no_pct(&table_box.style.padding_left) + resolve_abs_no_pct(&table_box.style.padding_right);
+    let border_h_base =
+      resolve_abs_no_pct(&table_box.style.border_left_width) + resolve_abs_no_pct(&table_box.style.border_right_width);
+    let edge_consumption = if structure.border_collapse == BorderCollapse::Collapse {
+      0.0
+    } else {
+      padding_h_base + border_h_base
+    };
+    let percent_base = authored_width.map(|w| (w - spacing - edge_consumption).max(0.0));
+    let distribution_mode = if structure.is_fixed_layout {
+      // Fixed layout tables should not require scanning every cell. When no definite width basis
+      // exists (auto widths or intrinsic contexts), percentages are normalized away to keep sizing stable.
+      DistributionMode::Fixed
+    } else {
+      DistributionMode::Auto
+    };
     let mut column_constraints: Vec<ColumnConstraints> = (0..structure.column_count)
       .map(|_| ColumnConstraints::new(0.0, 0.0))
       .collect();
@@ -5721,16 +5774,18 @@ impl FormattingContext for TableFormattingContext {
       &table_box,
       &structure,
       &mut column_constraints,
-      DistributionMode::Auto,
-      None,
+      distribution_mode,
+      percent_base,
     );
+    self.normalize_percentage_constraints(&mut column_constraints, percent_base);
 
-    let spacing = structure.total_horizontal_spacing();
     let edges = if structure.border_collapse == BorderCollapse::Collapse {
       0.0
     } else {
       let resolve_abs = |l: &crate::style::values::Length| match l.unit {
-        LengthUnit::Percent => 0.0,
+        LengthUnit::Percent => percent_base
+          .map(|base| (l.value / 100.0) * base)
+          .unwrap_or(0.0),
         _ if l.unit.is_absolute() => l.to_px(),
         _ => l.value,
       };
@@ -5739,14 +5794,39 @@ impl FormattingContext for TableFormattingContext {
         + resolve_abs(&table_box.style.border_left_width)
         + resolve_abs(&table_box.style.border_right_width)
     };
-    let base = match mode {
-      IntrinsicSizingMode::MinContent => {
-        column_constraints.iter().map(|c| c.min_width).sum::<f32>() + spacing + edges
-      }
-      IntrinsicSizingMode::MaxContent => {
-        column_constraints.iter().map(|c| c.max_width).sum::<f32>() + spacing + edges
-      }
+    let min_sum: f32 = column_constraints.iter().map(|c| c.min_width).sum();
+    let raw_max_sum: f32 = column_constraints.iter().map(|c| c.max_width).sum();
+    let max_sum = if raw_max_sum.is_finite() {
+      raw_max_sum
+    } else {
+      column_constraints
+        .iter()
+        .map(|c| {
+          if c.max_width.is_finite() {
+            c.max_width
+          } else if let Some(fixed) = c.fixed_width {
+            fixed
+          } else if let (Some(pct), Some(base)) = (c.percentage, percent_base) {
+            (pct / 100.0) * base
+          } else {
+            c.min_width
+          }
+        })
+        .sum()
     };
+    let mut base_columns = match mode {
+      IntrinsicSizingMode::MinContent => min_sum,
+      IntrinsicSizingMode::MaxContent => max_sum,
+    };
+    if !base_columns.is_finite() {
+      base_columns = if min_sum.is_finite() { min_sum } else { 0.0 };
+    }
+    if distribution_mode == DistributionMode::Fixed {
+      if let Some(base) = percent_base {
+        base_columns = base_columns.max(base);
+      }
+    }
+    let base = base_columns + spacing + edges;
     let log_ids = runtime::runtime_toggles()
       .usize_list("FASTR_LOG_INTRINSIC_IDS")
       .unwrap_or_default();
@@ -12423,6 +12503,102 @@ mod tests {
       "column span width should expand intrinsic min width; got {}",
       min
     );
+  }
+
+  #[test]
+  fn intrinsic_fixed_layout_uses_first_row_only() {
+    let mut table_style = ComputedStyle::default();
+    table_style.display = Display::Table;
+    table_style.table_layout = TableLayout::Fixed;
+    table_style.border_spacing_horizontal = Length::px(0.0);
+    table_style.border_spacing_vertical = Length::px(0.0);
+
+    let mut row_style = ComputedStyle::default();
+    row_style.display = Display::TableRow;
+
+    let mut narrow_cell_style = ComputedStyle::default();
+    narrow_cell_style.display = Display::TableCell;
+    narrow_cell_style.width = Some(Length::px(20.0));
+
+    let first_row = BoxNode::new_block(
+      Arc::new(row_style.clone()),
+      FormattingContextType::Block,
+      vec![
+        BoxNode::new_block(
+          Arc::new(narrow_cell_style.clone()),
+          FormattingContextType::Block,
+          vec![],
+        ),
+        BoxNode::new_block(Arc::new(narrow_cell_style), FormattingContextType::Block, vec![]),
+      ],
+    );
+
+    let mut wide_cell_style = ComputedStyle::default();
+    wide_cell_style.display = Display::TableCell;
+    wide_cell_style.width = Some(Length::px(1000.0));
+
+    let second_row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![
+        BoxNode::new_block(
+          Arc::new(wide_cell_style.clone()),
+          FormattingContextType::Block,
+          vec![],
+        ),
+        BoxNode::new_block(Arc::new(wide_cell_style), FormattingContextType::Block, vec![]),
+      ],
+    );
+
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![first_row, second_row],
+    );
+    let tfc = TableFormattingContext::new();
+
+    let width = tfc
+      .compute_intrinsic_inline_size(&table, IntrinsicSizingMode::MaxContent)
+      .expect("intrinsic width");
+    assert!(
+      width < 200.0,
+      "fixed-layout intrinsic sizing should ignore later rows; got {}",
+      width
+    );
+  }
+
+  #[test]
+  fn intrinsic_fixed_layout_without_width_is_finite() {
+    let mut table_style = ComputedStyle::default();
+    table_style.display = Display::Table;
+    table_style.table_layout = TableLayout::Fixed;
+    table_style.border_spacing_horizontal = Length::px(0.0);
+    table_style.border_spacing_vertical = Length::px(0.0);
+
+    let mut row_style = ComputedStyle::default();
+    row_style.display = Display::TableRow;
+
+    let mut cell_style = ComputedStyle::default();
+    cell_style.display = Display::TableCell;
+
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![])],
+    );
+
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
+    let tfc = TableFormattingContext::new();
+    let width = tfc
+      .compute_intrinsic_inline_size(&table, IntrinsicSizingMode::MaxContent)
+      .expect("intrinsic width");
+
+    assert!(width.is_finite());
+    assert!(width >= 0.0);
   }
 
   // -------------------------------------------------------------------------
