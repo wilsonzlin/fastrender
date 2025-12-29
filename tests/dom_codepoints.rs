@@ -1,6 +1,7 @@
 use fastrender::dom;
 use fastrender::dom::DomNode;
 use fastrender::dom::DomNodeType;
+use selectors::matching::QuirksMode;
 
 fn text_node(content: &str) -> DomNode {
   DomNode {
@@ -35,7 +36,9 @@ fn collect_text_codepoints_skips_hidden_and_inert() {
     vec![text_node("C")],
   );
   let root = DomNode {
-    node_type: DomNodeType::Document,
+    node_type: DomNodeType::Document {
+      quirks_mode: QuirksMode::NoQuirks,
+    },
     children: vec![visible, hidden, inert],
   };
 

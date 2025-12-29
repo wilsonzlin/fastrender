@@ -1,7 +1,7 @@
 use fastrender::dom::{parse_html, DomNode, DomNodeType};
 
 fn count_document_nodes(node: &DomNode) -> usize {
-  let mut count = matches!(node.node_type, DomNodeType::Document) as usize;
+  let mut count = matches!(node.node_type, DomNodeType::Document { .. }) as usize;
   for child in &node.children {
     count += count_document_nodes(child);
   }
@@ -13,7 +13,7 @@ fn omits_non_content_nodes_from_dom_tree() {
   let html = "<!doctype html><!--before--><html><head><!--head comment--></head><body><!--body comment--><div>text</div></body></html>";
   let dom = parse_html(html).expect("parse html");
 
-  assert!(matches!(dom.node_type, DomNodeType::Document));
+  assert!(matches!(dom.node_type, DomNodeType::Document { .. }));
   assert_eq!(
     count_document_nodes(&dom),
     1,
@@ -35,7 +35,7 @@ fn omits_non_content_nodes_from_dom_tree() {
     html_element
       .children
       .iter()
-      .all(|child| !matches!(child.node_type, DomNodeType::Document)),
+      .all(|child| !matches!(child.node_type, DomNodeType::Document { .. })),
     "html element children should not contain document nodes"
   );
 }
