@@ -38,6 +38,7 @@ use fastrender::resource::ResourceFetcher;
 use fastrender::resource::DEFAULT_ACCEPT_LANGUAGE;
 use fastrender::resource::DEFAULT_USER_AGENT;
 use fastrender::text::font_db::FontConfig;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
@@ -57,6 +58,11 @@ const DEFAULT_TRACE_DIR: &str = "target/pageset/traces";
 const DEFAULT_TRACE_PROGRESS_DIR: &str = "target/pageset/trace-progress";
 // Treat traces smaller than this as likely incomplete/partial.
 const MIN_TRACE_BYTES: u64 = 4096;
+// Keep progress notes compact; the full error chain lives in the per-page log file.
+const PROGRESS_NOTE_MAX_CHARS: usize = 240;
+// Cap quoted excerpts (e.g., parse/shaping text payloads) before the overall limit.
+const PROGRESS_NOTE_QUOTED_EXCERPT_MAX_CHARS: usize = 120;
+const PROGRESS_NOTE_ELLIPSIS: char = '…';
 
 #[derive(Parser, Debug)]
 #[command(
@@ -540,6 +546,62 @@ fn normalize_hotspot_filter(h: &str) -> String {
   normalize_hotspot(h).to_ascii_lowercase()
 }
 
+fn elide_shaping_excerpt(note: &str) -> String {
+  if !note.contains("ShapingFailed") {
+    return note.to_string();
+  }
+  let text_marker = "text:";
+  let reason_marker = ", reason:";
+  let Some(text_start) = note.find(text_marker) else {
+    return note.to_string();
+  };
+  let Some(reason_rel) = note[text_start..].find(reason_marker) else {
+    return note.to_string();
+  };
+  let reason_idx = text_start + reason_rel;
+  let mut shortened = String::with_capacity(note.len());
+  shortened.push_str(&note[..text_start + text_marker.len()]);
+  shortened.push_str(" <omitted>");
+  shortened.push_str(&note[reason_idx..]);
+  shortened
+}
+
+fn truncate_long_quoted_segments(note: &str, max_segment_chars: usize) -> String {
+  if !note.contains('"') {
+    return note.to_string();
+  }
+  static QUOTED_RE: OnceLock<Regex> = OnceLock::new();
+  let re =
+    QUOTED_RE.get_or_init(|| Regex::new(r#""([^"]*)""#).expect("quoted segment regex compiles"));
+  re.replace_all(note, |caps: &regex::Captures| {
+    let segment = &caps[1];
+    if segment.chars().count() <= max_segment_chars {
+      caps[0].to_string()
+    } else {
+      let mut truncated: String = segment.chars().take(max_segment_chars).collect();
+      truncated.push(PROGRESS_NOTE_ELLIPSIS);
+      format!("\"{truncated}\"")
+    }
+  })
+  .into_owned()
+}
+
+fn cap_note_length(note: &str, max_chars: usize) -> String {
+  if note.chars().count() <= max_chars || max_chars == 0 {
+    return note.to_string();
+  }
+  let mut truncated: String = note.chars().take(max_chars.saturating_sub(1)).collect();
+  truncated.push(PROGRESS_NOTE_ELLIPSIS);
+  truncated
+}
+
+pub(crate) fn normalize_progress_note(note: &str) -> String {
+  let mut normalized = note.to_string();
+  normalized = elide_shaping_excerpt(&normalized);
+  normalized = truncate_long_quoted_segments(&normalized, PROGRESS_NOTE_QUOTED_EXCERPT_MAX_CHARS);
+  cap_note_length(&normalized, PROGRESS_NOTE_MAX_CHARS)
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct PageProgress {
   url: String,
@@ -742,7 +804,9 @@ fn write_progress(path: &Path, progress: &PageProgress) -> io::Result<()> {
       fs::create_dir_all(parent)?;
     }
   }
-  let json = serde_json::to_string_pretty(progress)
+  let mut normalized = progress.clone();
+  normalized.notes = normalize_progress_note(&normalized.notes);
+  let json = serde_json::to_string_pretty(&normalized)
     .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
   fs::write(path, format!("{json}\n"))
 }
@@ -2916,6 +2980,42 @@ mod tests {
       "warnings: {:?}",
       outcome.warnings
     );
+  }
+
+  #[test]
+  fn shaping_notes_elide_text_and_keep_reason() {
+    let long_text = "garbled".repeat(80);
+    let note = format!(
+      "[paint] Invalid paint parameters: Layout failed: MissingContext(\"Shaping failed (fonts=8): \
+       Text(ShapingFailed {{ text: \\\"{long_text}\\\", reason: \\\"No suitable font found for \
+       cluster ꧟\\\\u{{333}}\\\" }})\")"
+    );
+
+    let normalized = normalize_progress_note(&note);
+
+    assert!(normalized.contains("ShapingFailed"));
+    assert!(normalized.contains("text: <omitted>"));
+    assert!(normalized.contains("No suitable font found for cluster"));
+    assert!(!normalized.contains(&long_text));
+    assert!(normalized.chars().count() <= PROGRESS_NOTE_MAX_CHARS);
+  }
+
+  #[test]
+  fn generic_notes_are_capped_and_preserved() {
+    let mut note = "generic failure: ".to_string();
+    while note.chars().count() <= PROGRESS_NOTE_MAX_CHARS {
+      note.push_str("more detail; ");
+    }
+
+    let normalized = normalize_progress_note(&note);
+    let expected_prefix: String = note
+      .chars()
+      .take(PROGRESS_NOTE_MAX_CHARS.saturating_sub(1))
+      .collect();
+
+    assert_eq!(normalized.chars().count(), PROGRESS_NOTE_MAX_CHARS);
+    assert!(normalized.starts_with(&expected_prefix));
+    assert!(normalized.ends_with(PROGRESS_NOTE_ELLIPSIS));
   }
 
   #[test]
