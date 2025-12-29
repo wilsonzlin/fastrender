@@ -875,12 +875,9 @@ impl BlockFormattingContext {
     });
     if let Some(info) = column_info {
       fragment.fragmentation = Some(info.clone());
-      fragment.logical_override = Some(Rect::from_xywh(
-        fragment.bounds.x(),
-        fragment.bounds.y(),
-        fragment.bounds.width(),
-        info.flow_height,
-      ));
+      // Keep logical bounds aligned with the physical multi-column fragment geometry so
+      // pagination uses the clipped height rather than the unfragmented flow height.
+      fragment.logical_override = Some(fragment.bounds);
     }
 
     // Push bottom margin for next collapse
@@ -3404,12 +3401,9 @@ impl FormattingContext for BlockFormattingContext {
     );
     if let Some(info) = column_info {
       fragment.fragmentation = Some(info.clone());
-      fragment.logical_override = Some(Rect::from_xywh(
-        fragment.bounds.x(),
-        fragment.bounds.y(),
-        fragment.bounds.width(),
-        info.flow_height,
-      ));
+      // Keep logical bounds aligned with the physical multi-column fragment geometry so
+      // pagination uses the clipped height rather than the unfragmented flow height.
+      fragment.logical_override = Some(fragment.bounds);
     }
 
     // Apply relative positioning after normal flow layout (CSS 2.1 §9.4.3).

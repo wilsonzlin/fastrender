@@ -414,6 +414,46 @@ fn page_name_change_forces_page_boundary() {
 }
 
 #[test]
+fn multicol_pagination_uses_physical_height() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          @page { size: 200px 200px; margin: 0; }
+          body { margin: 0; }
+          .multi { column-count: 2; column-gap: 0; }
+          .section { height: 150px; }
+        </style>
+      </head>
+      <body>
+        <div class="multi">
+          <div class="section">First</div>
+          <div class="section">Second</div>
+          <div class="section">Third</div>
+        </div>
+      </body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let tree = renderer.layout_document(&dom, 200, 200).unwrap();
+  let page_roots = pages(&tree);
+
+  assert_eq!(
+    page_roots.len(),
+    2,
+    "multi-column flow should not produce a trailing blank page"
+  );
+
+  let second_page = page_roots[1];
+  assert!(
+    find_text(second_page, "Third").is_some(),
+    "content from the final column set should render on the second page"
+  );
+}
+
+#[test]
 fn margin_box_content_is_positioned_in_margins() {
   let html = r#"
     <html>
