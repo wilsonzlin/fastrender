@@ -6101,7 +6101,7 @@ mod tests {
     {
       cells.push(fragment);
     }
-    for child in &fragment.children {
+    for child in fragment.children.iter() {
       collect_table_cell_fragments(child, cells);
     }
   }
@@ -6224,7 +6224,7 @@ mod tests {
     if let FragmentContent::RunningAnchor { name, .. } = &fragment.content {
       names.push(name.clone());
     }
-    for child in &fragment.children {
+    for child in fragment.children.iter() {
       collect_running_anchor_names(child, names);
     }
   }
@@ -6238,7 +6238,7 @@ mod tests {
     {
       out.push(fragment);
     }
-    for child in &fragment.children {
+    for child in fragment.children.iter() {
       collect_positioned_fragments(child, out);
     }
   }

@@ -1,11 +1,7 @@
 use fastrender::dom;
 use fastrender::dom::DomNode;
 use fastrender::dom::DomNodeType;
-<<<<<<< HEAD
 use selectors::context::QuirksMode;
-=======
-use selectors::context::QuirksMode;
->>>>>>> e44f0c5 (feat: enforce CSS timeouts during parsing and imports)
 
 fn text_node(content: &str) -> DomNode {
   DomNode {
