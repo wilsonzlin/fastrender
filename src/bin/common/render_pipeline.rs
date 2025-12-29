@@ -1,6 +1,6 @@
 //! Shared helpers for CLI render binaries.
 
-use super::args::{CompatArgs, LayoutParallelArgs, ResourceAccessArgs};
+use super::args::{CompatArgs, LayoutParallelArgs, LayoutParallelModeArg, ResourceAccessArgs};
 use fastrender::api::{
   FastRender, FastRenderConfig, RenderArtifactRequest, RenderDiagnostics, RenderOptions,
   RenderReport, RenderResult, ResourceKind,
@@ -497,8 +497,16 @@ pub fn apply_worker_common_args(cmd: &mut Command, args: &WorkerCommonArgs<'_>) 
   for origin in &args.resource_access.allow_subresource_origin {
     cmd.arg("--allow-subresource-origin").arg(origin);
   }
-  if args.layout_parallel.layout_parallel {
-    cmd.arg("--layout-parallel");
+  match args.layout_parallel.layout_parallel {
+    LayoutParallelModeArg::Off => {}
+    LayoutParallelModeArg::On => {
+      cmd.arg("--layout-parallel").arg("on");
+    }
+    LayoutParallelModeArg::Auto => {
+      cmd.arg("--layout-parallel").arg("auto");
+    }
+  }
+  if args.layout_parallel.layout_parallel != LayoutParallelModeArg::Off {
     cmd
       .arg("--layout-parallel-min-fanout")
       .arg(args.layout_parallel.layout_parallel_min_fanout.to_string());
@@ -506,6 +514,11 @@ pub fn apply_worker_common_args(cmd: &mut Command, args: &WorkerCommonArgs<'_>) 
       cmd
         .arg("--layout-parallel-max-threads")
         .arg(max_threads.to_string());
+    }
+    if let Some(min_nodes) = args.layout_parallel.layout_parallel_auto_min_nodes {
+      cmd
+        .arg("--layout-parallel-auto-min-nodes")
+        .arg(min_nodes.to_string());
     }
   }
   if let Some(profile) = args.compat.compat_profile_arg() {
