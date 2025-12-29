@@ -1,16 +1,98 @@
 {
-  "url": "https://howtogeek.com/",
-  "status": "error",
-  "total_ms": 399.661486,
+  "url": "https://cdn.adsninja.ca/",
+  "status": "ok",
+  "total_ms": 44.251148,
   "stages_ms": {
-    "fetch": 0.0,
-    "css": 0.0,
+    "fetch": 0.099232,
+    "css": 0.01265,
     "cascade": 0.0,
-    "layout": 0.0,
-    "paint": 0.0
+    "layout": 4.513324,
+    "paint": 1.452191
   },
-  "notes": "[paint] Invalid paint parameters: Layout failed: MissingContext(\"Shaping failed (fonts=8): Text(ShapingFailed { text: \\\"\\\\u{70f}['(\\\", reason: \\\"No suitable font found for cluster \\\\u{70f}[\\\" })\")",
-  "hotspot": "unknown",
-  "last_good_commit": "",
-  "last_regression_commit": ""
+  "notes": "",
+  "hotspot": "layout",
+  "failure_stage": null,
+  "timeout_stage": null,
+  "last_good_commit": "833aa788ed1a7102190a18ae8eae4a0af8876bc4",
+  "last_regression_commit": "",
+  "diagnostics": {
+    "stats": {
+      "timings": {
+        "html_decode_ms": null,
+        "dom_parse_ms": 0.099232,
+        "css_inlining_ms": 0.01265,
+        "css_parse_ms": null,
+        "cascade_ms": null,
+        "box_tree_ms": null,
+        "layout_ms": 4.324998,
+        "text_fallback_ms": 0.13161199999999998,
+        "text_shape_ms": 0.188326,
+        "paint_build_ms": 0.044621,
+        "paint_optimize_ms": null,
+        "paint_rasterize_ms": 1.020621,
+        "text_rasterize_ms": 0.386949,
+        "encode_ms": null
+      },
+      "counts": {
+        "dom_nodes": 16,
+        "styled_nodes": 16,
+        "box_nodes": 19,
+        "fragments": 19,
+        "shaped_runs": 4,
+        "glyphs": 36,
+        "color_glyph_rasters": 0,
+        "fallback_cache_hits": 2,
+        "fallback_cache_misses": 32
+      },
+      "cascade": {
+        "nodes": null,
+        "rule_candidates": null,
+        "rule_matches": null,
+        "selector_time_ms": null,
+        "declaration_time_ms": null,
+        "pseudo_time_ms": null,
+        "has_evals": null,
+        "has_cache_hits": null,
+        "has_prunes": null,
+        "has_bloom_prunes": null,
+        "has_filter_prunes": null,
+        "has_evaluated": null
+      },
+      "layout": {
+        "intrinsic_lookups": 0,
+        "intrinsic_hits": 0,
+        "intrinsic_stores": 0,
+        "block_intrinsic": 0,
+        "flex_intrinsic": 0,
+        "inline_intrinsic": 0,
+        "layout_cache_lookups": 0,
+        "layout_cache_hits": 0,
+        "layout_cache_stores": 0,
+        "layout_cache_evictions": 0,
+        "layout_cache_clones": 0,
+        "flex_cache_clones": 0,
+        "taffy_nodes_built": 0,
+        "taffy_nodes_reused": 0,
+        "taffy_style_cache_hits": 0,
+        "taffy_style_cache_misses": 0,
+        "fragment_deep_clones": 0,
+        "fragment_traversed": 0
+      },
+      "paint": {
+        "display_items": 5,
+        "optimized_items": null,
+        "culled_items": null,
+        "transparent_removed": null,
+        "noop_removed": null,
+        "merged_items": null,
+        "gradient_ms": 0.0,
+        "gradient_pixels": 0
+      },
+      "resources": {
+        "fetch_counts": {},
+        "image_cache_hits": 0,
+        "image_cache_misses": 0
+      }
+    }
+  }
 }

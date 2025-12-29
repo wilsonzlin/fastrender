@@ -11,6 +11,8 @@
   },
   "notes": "timeout at css after 4.761287492s",
   "hotspot": "css",
+  "failure_stage": null,
+  "timeout_stage": null,
   "last_good_commit": "",
   "last_regression_commit": ""
 }

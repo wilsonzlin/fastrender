@@ -1,16 +1,101 @@
 {
-  "url": "https://python.org/",
+  "url": "https://www.python.org/",
   "status": "ok",
-  "total_ms": 3074.354315,
+  "total_ms": 4594.7331,
   "stages_ms": {
-    "fetch": 0.0,
-    "css": 0.0,
+    "fetch": 3.516952,
+    "css": 2173.5657279999996,
     "cascade": 0.0,
-    "layout": 0.0,
-    "paint": 0.0
+    "layout": 1424.0027,
+    "paint": 947.467279
   },
   "notes": "",
-  "hotspot": "unknown",
-  "last_good_commit": "",
-  "last_regression_commit": ""
+  "hotspot": "css",
+  "failure_stage": null,
+  "timeout_stage": null,
+  "last_good_commit": "833aa788ed1a7102190a18ae8eae4a0af8876bc4",
+  "last_regression_commit": "",
+  "diagnostics": {
+    "stats": {
+      "timings": {
+        "html_decode_ms": null,
+        "dom_parse_ms": 3.516952,
+        "css_inlining_ms": 2173.5657279999996,
+        "css_parse_ms": null,
+        "cascade_ms": null,
+        "box_tree_ms": null,
+        "layout_ms": 1417.364513,
+        "text_fallback_ms": 19.354301000000024,
+        "text_shape_ms": 6.638187000000003,
+        "paint_build_ms": 0.8990279999999999,
+        "paint_optimize_ms": null,
+        "paint_rasterize_ms": 935.1937879999999,
+        "text_rasterize_ms": 11.374463000000002,
+        "encode_ms": null
+      },
+      "counts": {
+        "dom_nodes": 1558,
+        "styled_nodes": 1558,
+        "box_nodes": 1542,
+        "fragments": 1472,
+        "shaped_runs": 595,
+        "glyphs": 8812,
+        "color_glyph_rasters": 0,
+        "fallback_cache_hits": 3295,
+        "fallback_cache_misses": 5096
+      },
+      "cascade": {
+        "nodes": null,
+        "rule_candidates": null,
+        "rule_matches": null,
+        "selector_time_ms": null,
+        "declaration_time_ms": null,
+        "pseudo_time_ms": null,
+        "has_evals": null,
+        "has_cache_hits": null,
+        "has_prunes": null,
+        "has_bloom_prunes": null,
+        "has_filter_prunes": null,
+        "has_evaluated": null
+      },
+      "layout": {
+        "intrinsic_lookups": 166,
+        "intrinsic_hits": 36,
+        "intrinsic_stores": 130,
+        "block_intrinsic": 166,
+        "flex_intrinsic": 0,
+        "inline_intrinsic": 102,
+        "layout_cache_lookups": 29,
+        "layout_cache_hits": 6,
+        "layout_cache_stores": 23,
+        "layout_cache_evictions": 0,
+        "layout_cache_clones": 6,
+        "flex_cache_clones": 0,
+        "taffy_nodes_built": 0,
+        "taffy_nodes_reused": 0,
+        "taffy_style_cache_hits": 0,
+        "taffy_style_cache_misses": 0,
+        "fragment_deep_clones": 0,
+        "fragment_traversed": 0
+      },
+      "paint": {
+        "display_items": 311,
+        "optimized_items": null,
+        "culled_items": null,
+        "transparent_removed": null,
+        "noop_removed": null,
+        "merged_items": null,
+        "gradient_ms": 114.312488,
+        "gradient_pixels": 4530176
+      },
+      "resources": {
+        "fetch_counts": {
+          "Stylesheet": 3,
+          "Image": 1
+        },
+        "image_cache_hits": 0,
+        "image_cache_misses": 1
+      }
+    }
+  }
 }

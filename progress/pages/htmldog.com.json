@@ -1,7 +1,7 @@
 {
   "url": "https://htmldog.com/",
-  "status": "ok",
-  "total_ms": 1723.239312,
+  "status": "timeout",
+  "total_ms": 4800.72357,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,
@@ -9,8 +9,10 @@
     "layout": 0.0,
     "paint": 0.0
   },
-  "notes": "",
-  "hotspot": "unknown",
+  "notes": "timeout at layout after 4.750035427s",
+  "hotspot": "layout",
+  "failure_stage": null,
+  "timeout_stage": "layout",
   "last_good_commit": "",
-  "last_regression_commit": ""
+  "last_regression_commit": "833aa788ed1a7102190a18ae8eae4a0af8876bc4"
 }

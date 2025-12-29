@@ -11,6 +11,8 @@
   },
   "notes": "timeout at layout after 4.874342085s",
   "hotspot": "layout",
+  "failure_stage": null,
+  "timeout_stage": null,
   "last_good_commit": "",
   "last_regression_commit": ""
 }

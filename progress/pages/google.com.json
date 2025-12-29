@@ -1,7 +1,7 @@
 {
-  "url": "https://google.com/",
-  "status": "error",
-  "total_ms": 202.277074,
+  "url": "https://www.google.com/",
+  "status": "timeout",
+  "total_ms": 4816.985651,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,
@@ -9,8 +9,10 @@
     "layout": 0.0,
     "paint": 0.0
   },
-  "notes": "[paint] Invalid paint parameters: Layout failed: MissingContext(\"Shaping failed (fonts=8): Text(ShapingFailed { text: \\\"㛬\\\\u{faa}�-�)�\\\", reason: \\\"No suitable font found for cluster 㛬\\\\u{faa}\\\" })\")",
-  "hotspot": "unknown",
-  "last_good_commit": "",
-  "last_regression_commit": ""
+  "notes": "timeout at layout after 4.751963121s",
+  "hotspot": "layout",
+  "failure_stage": null,
+  "timeout_stage": "layout",
+  "last_good_commit": "833aa788ed1a7102190a18ae8eae4a0af8876bc4",
+  "last_regression_commit": "725d8be6ad0695e8b178bcc904ae8f93bb745f34"
 }

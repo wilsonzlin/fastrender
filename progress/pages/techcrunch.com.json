@@ -1,7 +1,7 @@
 {
-  "url": "https://techcrunch.com/",
-  "status": "error",
-  "total_ms": 208.740714,
+  "url": "https://techcrunch.com",
+  "status": "timeout",
+  "total_ms": 5000.0,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,
@@ -9,8 +9,10 @@
     "layout": 0.0,
     "paint": 0.0
   },
-  "notes": "[paint] Invalid paint parameters: Layout failed: MissingContext(\"Shaping failed (fonts=8): Text(ShapingFailed { text: \\\"r�o~J5�=�W�oO@4���.�D^4S�2��\\\\u{12}�=6T�2�r�oO��\\\\u{1f}�F\\\\u{3}��\\\\u{4}�C��9�\\\\u{7f}�ǹ��,����:\\\\u{17}\\\\u{1f}� fd�q���|���\\\\u{7f}��p\\\\u{5}d�:\\\\u{1b}�;�Q���V�����ns\\\\u{7f}?��B��t6m,��it�h�NN��\\\\u{1}�� ��Fk��n|�H[�꧟\\\\u{333}rj���w}���U��y:��zy|��`-.h�'�����2C_s\\\\u{7f}�?^�\\\\u{13}\\\\u{1f}\\\\u{309}�?�\\\\u{1e}\\\", reason: \\\"No suitable font found for cluster ꧟\\\\u{333}\\\" })\")",
-  "hotspot": "unknown",
+  "notes": "[paint] Invalid paint parameters: Layout failed: MissingContext(\"Shaping failed (fonts=8): Text(ShapingFailed { text: <omitted>, reason: \\\"No suitable font found for cluster ꧟\\\\u{333}\\\" })\")",
+  "hotspot": "css",
+  "failure_stage": null,
+  "timeout_stage": null,
   "last_good_commit": "",
   "last_regression_commit": ""
 }

@@ -1,16 +1,98 @@
 {
-  "url": "https://wsj.com/",
+  "url": "https://www.wsj.com/",
   "status": "ok",
-  "total_ms": 31.343029,
+  "total_ms": 47.3248,
   "stages_ms": {
-    "fetch": 0.0,
-    "css": 0.0,
+    "fetch": 0.179644,
+    "css": 0.036411,
     "cascade": 0.0,
-    "layout": 0.0,
-    "paint": 0.0
+    "layout": 6.536153,
+    "paint": 1.93126
   },
   "notes": "",
-  "hotspot": "unknown",
-  "last_good_commit": "",
-  "last_regression_commit": ""
+  "hotspot": "layout",
+  "failure_stage": null,
+  "timeout_stage": null,
+  "last_good_commit": "833aa788ed1a7102190a18ae8eae4a0af8876bc4",
+  "last_regression_commit": "",
+  "diagnostics": {
+    "stats": {
+      "timings": {
+        "html_decode_ms": null,
+        "dom_parse_ms": 0.179644,
+        "css_inlining_ms": 0.036411,
+        "css_parse_ms": null,
+        "cascade_ms": null,
+        "box_tree_ms": null,
+        "layout_ms": 6.317339,
+        "text_fallback_ms": 0.230185,
+        "text_shape_ms": 0.218814,
+        "paint_build_ms": 0.029750000000000002,
+        "paint_optimize_ms": null,
+        "paint_rasterize_ms": 1.193905,
+        "text_rasterize_ms": 0.707605,
+        "encode_ms": null
+      },
+      "counts": {
+        "dom_nodes": 13,
+        "styled_nodes": 13,
+        "box_nodes": 6,
+        "fragments": 8,
+        "shaped_runs": 2,
+        "glyphs": 86,
+        "color_glyph_rasters": 0,
+        "fallback_cache_hits": 26,
+        "fallback_cache_misses": 34
+      },
+      "cascade": {
+        "nodes": null,
+        "rule_candidates": null,
+        "rule_matches": null,
+        "selector_time_ms": null,
+        "declaration_time_ms": null,
+        "pseudo_time_ms": null,
+        "has_evals": null,
+        "has_cache_hits": null,
+        "has_prunes": null,
+        "has_bloom_prunes": null,
+        "has_filter_prunes": null,
+        "has_evaluated": null
+      },
+      "layout": {
+        "intrinsic_lookups": 0,
+        "intrinsic_hits": 0,
+        "intrinsic_stores": 0,
+        "block_intrinsic": 0,
+        "flex_intrinsic": 0,
+        "inline_intrinsic": 0,
+        "layout_cache_lookups": 0,
+        "layout_cache_hits": 0,
+        "layout_cache_stores": 0,
+        "layout_cache_evictions": 0,
+        "layout_cache_clones": 0,
+        "flex_cache_clones": 0,
+        "taffy_nodes_built": 0,
+        "taffy_nodes_reused": 0,
+        "taffy_style_cache_hits": 0,
+        "taffy_style_cache_misses": 0,
+        "fragment_deep_clones": 0,
+        "fragment_traversed": 0
+      },
+      "paint": {
+        "display_items": 3,
+        "optimized_items": null,
+        "culled_items": null,
+        "transparent_removed": null,
+        "noop_removed": null,
+        "merged_items": null,
+        "gradient_ms": 0.0,
+        "gradient_pixels": 0
+      },
+      "resources": {
+        "fetch_counts": {},
+        "image_cache_hits": 0,
+        "image_cache_misses": 0
+      }
+    }
+  }
 }

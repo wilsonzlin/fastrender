@@ -1,16 +1,100 @@
 {
-  "url": "https://quora.com/",
-  "status": "error",
-  "total_ms": 60.81941,
+  "url": "https://www.quora.com/",
+  "status": "ok",
+  "total_ms": 2232.572206,
   "stages_ms": {
-    "fetch": 0.0,
-    "css": 0.0,
+    "fetch": 0.10982299999999999,
+    "css": 0.022901,
     "cascade": 0.0,
-    "layout": 0.0,
-    "paint": 0.0
+    "layout": 5.630241999999999,
+    "paint": 2181.425977
   },
-  "notes": "[paint] Invalid paint parameters: Layout failed: MissingContext(\"Shaping failed (fonts=8): Text(ShapingFailed { text: \\\"Y�9\\\\u{f}�_oq8��b;��d\\\\u{7f}oM�� �\\\\u{4}C�5A���B��m�\\\\u{e}�\\\\u{8}\\\\u{5}\\\\u{3}��n��\\\\u{18}�� ��%j�E)�U��G�D�(Ľ/\\\\u{18}�f��R�Y�;�\\\\u{f}�f��f�~S�O\\\\u{6},��u�M�oM����6%�⮰\\\\u{7aa}�b�3`aY,,2j�XJ��E��Ȑ�\\\\u{17}k��b)�°�Ȱ�\\\\\\\\��j������\\\\u{16}���L)�\\\\\\\\��lǄ�� '��\\\\u{16};+�o\\\\u{7}M�\\\\\\\"#�� �@�������𱍚)�z)�FI\\\\u{1e}\\\", reason: \\\"No suitable font found for cluster ⮰\\\\u{7aa}\\\" })\")",
-  "hotspot": "unknown",
-  "last_good_commit": "",
-  "last_regression_commit": ""
+  "notes": "",
+  "hotspot": "paint",
+  "failure_stage": null,
+  "timeout_stage": null,
+  "last_good_commit": "833aa788ed1a7102190a18ae8eae4a0af8876bc4",
+  "last_regression_commit": "",
+  "diagnostics": {
+    "stats": {
+      "timings": {
+        "html_decode_ms": null,
+        "dom_parse_ms": 0.10982299999999999,
+        "css_inlining_ms": 0.022901,
+        "css_parse_ms": null,
+        "cascade_ms": null,
+        "box_tree_ms": null,
+        "layout_ms": 5.3026469999999994,
+        "text_fallback_ms": 0.40001,
+        "text_shape_ms": 0.32759499999999997,
+        "paint_build_ms": 0.02638,
+        "paint_optimize_ms": null,
+        "paint_rasterize_ms": 2180.854596,
+        "text_rasterize_ms": 0.5450010000000001,
+        "encode_ms": null
+      },
+      "counts": {
+        "dom_nodes": 21,
+        "styled_nodes": 21,
+        "box_nodes": 9,
+        "fragments": 12,
+        "shaped_runs": 8,
+        "glyphs": 328,
+        "color_glyph_rasters": 0,
+        "fallback_cache_hits": 105,
+        "fallback_cache_misses": 200
+      },
+      "cascade": {
+        "nodes": null,
+        "rule_candidates": null,
+        "rule_matches": null,
+        "selector_time_ms": null,
+        "declaration_time_ms": null,
+        "pseudo_time_ms": null,
+        "has_evals": null,
+        "has_cache_hits": null,
+        "has_prunes": null,
+        "has_bloom_prunes": null,
+        "has_filter_prunes": null,
+        "has_evaluated": null
+      },
+      "layout": {
+        "intrinsic_lookups": 10,
+        "intrinsic_hits": 3,
+        "intrinsic_stores": 7,
+        "block_intrinsic": 9,
+        "flex_intrinsic": 1,
+        "inline_intrinsic": 2,
+        "layout_cache_lookups": 1,
+        "layout_cache_hits": 0,
+        "layout_cache_stores": 1,
+        "layout_cache_evictions": 0,
+        "layout_cache_clones": 0,
+        "flex_cache_clones": 0,
+        "taffy_nodes_built": 0,
+        "taffy_nodes_reused": 0,
+        "taffy_style_cache_hits": 0,
+        "taffy_style_cache_misses": 0,
+        "fragment_deep_clones": 0,
+        "fragment_traversed": 0
+      },
+      "paint": {
+        "display_items": 4,
+        "optimized_items": null,
+        "culled_items": null,
+        "transparent_removed": null,
+        "noop_removed": null,
+        "merged_items": null,
+        "gradient_ms": 0.0,
+        "gradient_pixels": 0
+      },
+      "resources": {
+        "fetch_counts": {
+          "Image": 1
+        },
+        "image_cache_hits": 0,
+        "image_cache_misses": 1
+      }
+    }
+  }
 }

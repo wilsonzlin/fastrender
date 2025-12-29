@@ -1,16 +1,101 @@
 {
-  "url": "https://amazon.com/data-",
+  "url": "https://www.amazon.com/",
   "status": "ok",
-  "total_ms": 2598.844721,
+  "total_ms": 4451.8163700000005,
   "stages_ms": {
-    "fetch": 0.0,
-    "css": 0.0,
+    "fetch": 0.718384,
+    "css": 2262.529383,
     "cascade": 0.0,
-    "layout": 0.0,
-    "paint": 0.0
+    "layout": 1548.0457250000002,
+    "paint": 619.2726980000001
   },
   "notes": "",
-  "hotspot": "unknown",
-  "last_good_commit": "",
-  "last_regression_commit": ""
+  "hotspot": "css",
+  "failure_stage": null,
+  "timeout_stage": null,
+  "last_good_commit": "833aa788ed1a7102190a18ae8eae4a0af8876bc4",
+  "last_regression_commit": "",
+  "diagnostics": {
+    "stats": {
+      "timings": {
+        "html_decode_ms": null,
+        "dom_parse_ms": 0.718384,
+        "css_inlining_ms": 2262.529383,
+        "css_parse_ms": null,
+        "cascade_ms": null,
+        "box_tree_ms": null,
+        "layout_ms": 1547.587236,
+        "text_fallback_ms": 0.6762640000000001,
+        "text_shape_ms": 0.458489,
+        "paint_build_ms": 0.100312,
+        "paint_optimize_ms": null,
+        "paint_rasterize_ms": 618.1905250000001,
+        "text_rasterize_ms": 0.9818610000000001,
+        "encode_ms": null
+      },
+      "counts": {
+        "dom_nodes": 113,
+        "styled_nodes": 113,
+        "box_nodes": 132,
+        "fragments": 82,
+        "shaped_runs": 13,
+        "glyphs": 274,
+        "color_glyph_rasters": 0,
+        "fallback_cache_hits": 109,
+        "fallback_cache_misses": 146
+      },
+      "cascade": {
+        "nodes": null,
+        "rule_candidates": null,
+        "rule_matches": null,
+        "selector_time_ms": null,
+        "declaration_time_ms": null,
+        "pseudo_time_ms": null,
+        "has_evals": null,
+        "has_cache_hits": null,
+        "has_prunes": null,
+        "has_bloom_prunes": null,
+        "has_filter_prunes": null,
+        "has_evaluated": null
+      },
+      "layout": {
+        "intrinsic_lookups": 24,
+        "intrinsic_hits": 2,
+        "intrinsic_stores": 22,
+        "block_intrinsic": 24,
+        "flex_intrinsic": 0,
+        "inline_intrinsic": 8,
+        "layout_cache_lookups": 7,
+        "layout_cache_hits": 0,
+        "layout_cache_stores": 7,
+        "layout_cache_evictions": 0,
+        "layout_cache_clones": 0,
+        "flex_cache_clones": 0,
+        "taffy_nodes_built": 0,
+        "taffy_nodes_reused": 0,
+        "taffy_style_cache_hits": 0,
+        "taffy_style_cache_misses": 0,
+        "fragment_deep_clones": 0,
+        "fragment_traversed": 0
+      },
+      "paint": {
+        "display_items": 21,
+        "optimized_items": null,
+        "culled_items": null,
+        "transparent_removed": null,
+        "noop_removed": null,
+        "merged_items": null,
+        "gradient_ms": 1.658453,
+        "gradient_pixels": 61326
+      },
+      "resources": {
+        "fetch_counts": {
+          "Stylesheet": 1,
+          "Image": 2
+        },
+        "image_cache_hits": 2,
+        "image_cache_misses": 2
+      }
+    }
+  }
 }

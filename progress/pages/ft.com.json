@@ -10,7 +10,9 @@
     "paint": 0.0
   },
   "notes": "timeout at paint after 4.896615347s",
-  "hotspot": "paint",
+  "hotspot": "css",
+  "failure_stage": null,
+  "timeout_stage": null,
   "last_good_commit": "",
   "last_regression_commit": ""
 }

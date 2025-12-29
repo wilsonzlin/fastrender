@@ -1,7 +1,7 @@
 {
-  "url": "https://openbsd.org/",
-  "status": "ok",
-  "total_ms": 1645.8047439999998,
+  "url": "https://www.openbsd.org/",
+  "status": "timeout",
+  "total_ms": 4879.159852,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,
@@ -9,8 +9,10 @@
     "layout": 0.0,
     "paint": 0.0
   },
-  "notes": "",
-  "hotspot": "unknown",
-  "last_good_commit": "",
-  "last_regression_commit": ""
+  "notes": "timeout at paint after 4.826306539s",
+  "hotspot": "paint",
+  "failure_stage": null,
+  "timeout_stage": "paint",
+  "last_good_commit": "833aa788ed1a7102190a18ae8eae4a0af8876bc4",
+  "last_regression_commit": "725d8be6ad0695e8b178bcc904ae8f93bb745f34"
 }

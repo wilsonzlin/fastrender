@@ -1,16 +1,100 @@
 {
-  "url": "https://bloomberg.com/",
+  "url": "https://www.bloomberg.com/",
   "status": "ok",
-  "total_ms": 96.652887,
+  "total_ms": 2235.820491,
   "stages_ms": {
-    "fetch": 0.0,
-    "css": 0.0,
+    "fetch": 0.206314,
+    "css": 0.03183,
     "cascade": 0.0,
-    "layout": 0.0,
-    "paint": 0.0
+    "layout": 15.358946,
+    "paint": 2193.350309
   },
   "notes": "",
-  "hotspot": "unknown",
-  "last_good_commit": "",
-  "last_regression_commit": ""
+  "hotspot": "paint",
+  "failure_stage": null,
+  "timeout_stage": null,
+  "last_good_commit": "833aa788ed1a7102190a18ae8eae4a0af8876bc4",
+  "last_regression_commit": "",
+  "diagnostics": {
+    "stats": {
+      "timings": {
+        "html_decode_ms": null,
+        "dom_parse_ms": 0.206314,
+        "css_inlining_ms": 0.03183,
+        "css_parse_ms": null,
+        "cascade_ms": null,
+        "box_tree_ms": null,
+        "layout_ms": 14.360251,
+        "text_fallback_ms": 2.2990769999999996,
+        "text_shape_ms": 0.998695,
+        "paint_build_ms": 0.100922,
+        "paint_optimize_ms": null,
+        "paint_rasterize_ms": 2188.219416,
+        "text_rasterize_ms": 5.029971000000001,
+        "encode_ms": null
+      },
+      "counts": {
+        "dom_nodes": 90,
+        "styled_nodes": 90,
+        "box_nodes": 114,
+        "fragments": 114,
+        "shaped_runs": 52,
+        "glyphs": 1438,
+        "color_glyph_rasters": 0,
+        "fallback_cache_hits": 676,
+        "fallback_cache_misses": 582
+      },
+      "cascade": {
+        "nodes": null,
+        "rule_candidates": null,
+        "rule_matches": null,
+        "selector_time_ms": null,
+        "declaration_time_ms": null,
+        "pseudo_time_ms": null,
+        "has_evals": null,
+        "has_cache_hits": null,
+        "has_prunes": null,
+        "has_bloom_prunes": null,
+        "has_filter_prunes": null,
+        "has_evaluated": null
+      },
+      "layout": {
+        "intrinsic_lookups": 6,
+        "intrinsic_hits": 0,
+        "intrinsic_stores": 6,
+        "block_intrinsic": 6,
+        "flex_intrinsic": 0,
+        "inline_intrinsic": 4,
+        "layout_cache_lookups": 1,
+        "layout_cache_hits": 0,
+        "layout_cache_stores": 1,
+        "layout_cache_evictions": 0,
+        "layout_cache_clones": 0,
+        "flex_cache_clones": 0,
+        "taffy_nodes_built": 0,
+        "taffy_nodes_reused": 0,
+        "taffy_style_cache_hits": 0,
+        "taffy_style_cache_misses": 0,
+        "fragment_deep_clones": 0,
+        "fragment_traversed": 0
+      },
+      "paint": {
+        "display_items": 34,
+        "optimized_items": null,
+        "culled_items": null,
+        "transparent_removed": null,
+        "noop_removed": null,
+        "merged_items": null,
+        "gradient_ms": 0.0,
+        "gradient_pixels": 0
+      },
+      "resources": {
+        "fetch_counts": {
+          "Image": 1
+        },
+        "image_cache_hits": 0,
+        "image_cache_misses": 1
+      }
+    }
+  }
 }

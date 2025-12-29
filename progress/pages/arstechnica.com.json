@@ -1,7 +1,7 @@
 {
-  "url": "https://arstechnica.com/classic-preview/",
-  "status": "ok",
-  "total_ms": 1758.596032,
+  "url": "https://arstechnica.com",
+  "status": "timeout",
+  "total_ms": 5000.0,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,
@@ -9,8 +9,10 @@
     "layout": 0.0,
     "paint": 0.0
   },
-  "notes": "",
-  "hotspot": "unknown",
-  "last_good_commit": "",
-  "last_regression_commit": ""
+  "notes": "hard timeout after 5.00s",
+  "hotspot": "css",
+  "failure_stage": null,
+  "timeout_stage": null,
+  "last_good_commit": "833aa788ed1a7102190a18ae8eae4a0af8876bc4",
+  "last_regression_commit": "725d8be6ad0695e8b178bcc904ae8f93bb745f34"
 }

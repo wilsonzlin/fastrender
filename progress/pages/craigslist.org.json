@@ -1,16 +1,98 @@
 {
-  "url": "https://craigslist.org/",
+  "url": "https://frederick.craigslist.org/",
   "status": "ok",
-  "total_ms": 368.79102800000004,
+  "total_ms": 428.89145299999996,
   "stages_ms": {
-    "fetch": 0.0,
-    "css": 0.0,
+    "fetch": 3.289546,
+    "css": 0.339587,
     "cascade": 0.0,
-    "layout": 0.0,
-    "paint": 0.0
+    "layout": 350.16942,
+    "paint": 43.318344
   },
   "notes": "",
-  "hotspot": "unknown",
-  "last_good_commit": "",
-  "last_regression_commit": ""
+  "hotspot": "layout",
+  "failure_stage": null,
+  "timeout_stage": null,
+  "last_good_commit": "833aa788ed1a7102190a18ae8eae4a0af8876bc4",
+  "last_regression_commit": "",
+  "diagnostics": {
+    "stats": {
+      "timings": {
+        "html_decode_ms": null,
+        "dom_parse_ms": 3.289546,
+        "css_inlining_ms": 0.339587,
+        "css_parse_ms": null,
+        "cascade_ms": null,
+        "box_tree_ms": null,
+        "layout_ms": 333.559418,
+        "text_fallback_ms": 15.231957999999992,
+        "text_shape_ms": 16.610002000000016,
+        "paint_build_ms": 5.603114000000001,
+        "paint_optimize_ms": null,
+        "paint_rasterize_ms": 21.973546,
+        "text_rasterize_ms": 15.741684000000001,
+        "encode_ms": null
+      },
+      "counts": {
+        "dom_nodes": 2700,
+        "styled_nodes": 2700,
+        "box_nodes": 4496,
+        "fragments": 4215,
+        "shaped_runs": 1859,
+        "glyphs": 10181,
+        "color_glyph_rasters": 0,
+        "fallback_cache_hits": 1198,
+        "fallback_cache_misses": 8108
+      },
+      "cascade": {
+        "nodes": null,
+        "rule_candidates": null,
+        "rule_matches": null,
+        "selector_time_ms": null,
+        "declaration_time_ms": null,
+        "pseudo_time_ms": null,
+        "has_evals": null,
+        "has_cache_hits": null,
+        "has_prunes": null,
+        "has_bloom_prunes": null,
+        "has_filter_prunes": null,
+        "has_evaluated": null
+      },
+      "layout": {
+        "intrinsic_lookups": 337,
+        "intrinsic_hits": 37,
+        "intrinsic_stores": 300,
+        "block_intrinsic": 320,
+        "flex_intrinsic": 17,
+        "inline_intrinsic": 180,
+        "layout_cache_lookups": 39,
+        "layout_cache_hits": 0,
+        "layout_cache_stores": 39,
+        "layout_cache_evictions": 1,
+        "layout_cache_clones": 0,
+        "flex_cache_clones": 0,
+        "taffy_nodes_built": 0,
+        "taffy_nodes_reused": 0,
+        "taffy_style_cache_hits": 0,
+        "taffy_style_cache_misses": 0,
+        "fragment_deep_clones": 0,
+        "fragment_traversed": 0
+      },
+      "paint": {
+        "display_items": 901,
+        "optimized_items": null,
+        "culled_items": null,
+        "transparent_removed": null,
+        "noop_removed": null,
+        "merged_items": null,
+        "gradient_ms": 0.0,
+        "gradient_pixels": 0
+      },
+      "resources": {
+        "fetch_counts": {},
+        "image_cache_hits": 0,
+        "image_cache_misses": 0
+      }
+    }
+  }
 }

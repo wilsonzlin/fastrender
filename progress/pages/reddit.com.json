@@ -1,16 +1,100 @@
 {
-  "url": "https://reddit.com/",
+  "url": "https://www.reddit.com/",
   "status": "ok",
-  "total_ms": 90.432023,
+  "total_ms": 2853.7262299999998,
   "stages_ms": {
-    "fetch": 0.0,
-    "css": 0.0,
+    "fetch": 0.5791219999999999,
+    "css": 0.768575,
     "cascade": 0.0,
-    "layout": 0.0,
-    "paint": 0.0
+    "layout": 2784.9305940000004,
+    "paint": 13.450801000000002
   },
   "notes": "",
-  "hotspot": "unknown",
-  "last_good_commit": "",
-  "last_regression_commit": ""
+  "hotspot": "layout",
+  "failure_stage": null,
+  "timeout_stage": null,
+  "last_good_commit": "833aa788ed1a7102190a18ae8eae4a0af8876bc4",
+  "last_regression_commit": "",
+  "diagnostics": {
+    "stats": {
+      "timings": {
+        "html_decode_ms": null,
+        "dom_parse_ms": 0.5791219999999999,
+        "css_inlining_ms": 0.768575,
+        "css_parse_ms": null,
+        "cascade_ms": null,
+        "box_tree_ms": null,
+        "layout_ms": 2782.954364,
+        "text_fallback_ms": 16.01381600000001,
+        "text_shape_ms": 1.9762299999999997,
+        "paint_build_ms": 0.092631,
+        "paint_optimize_ms": null,
+        "paint_rasterize_ms": 10.920861,
+        "text_rasterize_ms": 2.437309,
+        "encode_ms": null
+      },
+      "counts": {
+        "dom_nodes": 30,
+        "styled_nodes": 30,
+        "box_nodes": 32,
+        "fragments": 41,
+        "shaped_runs": 45,
+        "glyphs": 1922,
+        "color_glyph_rasters": 0,
+        "fallback_cache_hits": 1230,
+        "fallback_cache_misses": 688
+      },
+      "cascade": {
+        "nodes": null,
+        "rule_candidates": null,
+        "rule_matches": null,
+        "selector_time_ms": null,
+        "declaration_time_ms": null,
+        "pseudo_time_ms": null,
+        "has_evals": null,
+        "has_cache_hits": null,
+        "has_prunes": null,
+        "has_bloom_prunes": null,
+        "has_filter_prunes": null,
+        "has_evaluated": null
+      },
+      "layout": {
+        "intrinsic_lookups": 114,
+        "intrinsic_hits": 59,
+        "intrinsic_stores": 55,
+        "block_intrinsic": 54,
+        "flex_intrinsic": 60,
+        "inline_intrinsic": 19,
+        "layout_cache_lookups": 25,
+        "layout_cache_hits": 2,
+        "layout_cache_stores": 23,
+        "layout_cache_evictions": 8,
+        "layout_cache_clones": 2,
+        "flex_cache_clones": 0,
+        "taffy_nodes_built": 0,
+        "taffy_nodes_reused": 0,
+        "taffy_style_cache_hits": 0,
+        "taffy_style_cache_misses": 0,
+        "fragment_deep_clones": 0,
+        "fragment_traversed": 0
+      },
+      "paint": {
+        "display_items": 13,
+        "optimized_items": null,
+        "culled_items": null,
+        "transparent_removed": null,
+        "noop_removed": null,
+        "merged_items": null,
+        "gradient_ms": 0.0,
+        "gradient_pixels": 0
+      },
+      "resources": {
+        "fetch_counts": {
+          "Image": 1
+        },
+        "image_cache_hits": 1,
+        "image_cache_misses": 1
+      }
+    }
+  }
 }

@@ -11,6 +11,8 @@
   },
   "notes": "hard timeout after 5.00s",
   "hotspot": "paint",
+  "failure_stage": null,
+  "timeout_stage": null,
   "last_good_commit": "",
   "last_regression_commit": ""
 }

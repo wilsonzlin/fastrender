@@ -1,16 +1,101 @@
 {
-  "url": "https://alibaba.com/offer.alibaba.com",
+  "url": "https://error.alibaba.com/error404.htm",
   "status": "ok",
-  "total_ms": 1005.0436540000001,
+  "total_ms": 4500.556299000001,
   "stages_ms": {
-    "fetch": 0.0,
-    "css": 0.0,
+    "fetch": 2.50507,
+    "css": 591.955803,
     "cascade": 0.0,
-    "layout": 0.0,
-    "paint": 0.0
+    "layout": 710.96864,
+    "paint": 905.579217
   },
   "notes": "",
-  "hotspot": "unknown",
-  "last_good_commit": "",
-  "last_regression_commit": ""
+  "hotspot": "paint",
+  "failure_stage": null,
+  "timeout_stage": null,
+  "last_good_commit": "833aa788ed1a7102190a18ae8eae4a0af8876bc4",
+  "last_regression_commit": "",
+  "diagnostics": {
+    "stats": {
+      "timings": {
+        "html_decode_ms": null,
+        "dom_parse_ms": 2.50507,
+        "css_inlining_ms": 591.955803,
+        "css_parse_ms": null,
+        "cascade_ms": null,
+        "box_tree_ms": null,
+        "layout_ms": 708.092069,
+        "text_fallback_ms": 25.277418000000004,
+        "text_shape_ms": 2.8765709999999984,
+        "paint_build_ms": 0.268245,
+        "paint_optimize_ms": null,
+        "paint_rasterize_ms": 903.816752,
+        "text_rasterize_ms": 1.4942199999999994,
+        "encode_ms": null
+      },
+      "counts": {
+        "dom_nodes": 414,
+        "styled_nodes": 414,
+        "box_nodes": 364,
+        "fragments": 244,
+        "shaped_runs": 160,
+        "glyphs": 2072,
+        "color_glyph_rasters": 0,
+        "fallback_cache_hits": 480,
+        "fallback_cache_misses": 2060
+      },
+      "cascade": {
+        "nodes": null,
+        "rule_candidates": null,
+        "rule_matches": null,
+        "selector_time_ms": null,
+        "declaration_time_ms": null,
+        "pseudo_time_ms": null,
+        "has_evals": null,
+        "has_cache_hits": null,
+        "has_prunes": null,
+        "has_bloom_prunes": null,
+        "has_filter_prunes": null,
+        "has_evaluated": null
+      },
+      "layout": {
+        "intrinsic_lookups": 842,
+        "intrinsic_hits": 430,
+        "intrinsic_stores": 412,
+        "block_intrinsic": 598,
+        "flex_intrinsic": 244,
+        "inline_intrinsic": 328,
+        "layout_cache_lookups": 66,
+        "layout_cache_hits": 0,
+        "layout_cache_stores": 46,
+        "layout_cache_evictions": 4,
+        "layout_cache_clones": 0,
+        "flex_cache_clones": 0,
+        "taffy_nodes_built": 0,
+        "taffy_nodes_reused": 0,
+        "taffy_style_cache_hits": 0,
+        "taffy_style_cache_misses": 0,
+        "fragment_deep_clones": 0,
+        "fragment_traversed": 0
+      },
+      "paint": {
+        "display_items": 31,
+        "optimized_items": null,
+        "culled_items": null,
+        "transparent_removed": null,
+        "noop_removed": null,
+        "merged_items": null,
+        "gradient_ms": 0.0,
+        "gradient_pixels": 0
+      },
+      "resources": {
+        "fetch_counts": {
+          "Image": 1,
+          "Stylesheet": 3
+        },
+        "image_cache_hits": 1,
+        "image_cache_misses": 1
+      }
+    }
+  }
 }

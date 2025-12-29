@@ -1,16 +1,101 @@
 {
-  "url": "https://netflix.com/",
+  "url": "https://www.netflix.com/",
   "status": "ok",
-  "total_ms": 1630.074427,
+  "total_ms": 3805.511385,
   "stages_ms": {
-    "fetch": 0.0,
-    "css": 0.0,
+    "fetch": 6.4436409999999995,
+    "css": 2153.3964690000003,
     "cascade": 0.0,
-    "layout": 0.0,
-    "paint": 0.0
+    "layout": 608.095058,
+    "paint": 958.5628320000001
   },
   "notes": "",
-  "hotspot": "unknown",
-  "last_good_commit": "",
-  "last_regression_commit": ""
+  "hotspot": "css",
+  "failure_stage": null,
+  "timeout_stage": null,
+  "last_good_commit": "833aa788ed1a7102190a18ae8eae4a0af8876bc4",
+  "last_regression_commit": "",
+  "diagnostics": {
+    "stats": {
+      "timings": {
+        "html_decode_ms": null,
+        "dom_parse_ms": 6.4436409999999995,
+        "css_inlining_ms": 2153.3964690000003,
+        "css_parse_ms": null,
+        "cascade_ms": null,
+        "box_tree_ms": null,
+        "layout_ms": 578.607342,
+        "text_fallback_ms": 160.59383599999998,
+        "text_shape_ms": 29.48771599999998,
+        "paint_build_ms": 0.5579820000000001,
+        "paint_optimize_ms": null,
+        "paint_rasterize_ms": 953.359067,
+        "text_rasterize_ms": 4.645782999999999,
+        "encode_ms": null
+      },
+      "counts": {
+        "dom_nodes": 1133,
+        "styled_nodes": 1133,
+        "box_nodes": 452,
+        "fragments": 748,
+        "shaped_runs": 1381,
+        "glyphs": 36104,
+        "color_glyph_rasters": 0,
+        "fallback_cache_hits": 19617,
+        "fallback_cache_misses": 18136
+      },
+      "cascade": {
+        "nodes": null,
+        "rule_candidates": null,
+        "rule_matches": null,
+        "selector_time_ms": null,
+        "declaration_time_ms": null,
+        "pseudo_time_ms": null,
+        "has_evals": null,
+        "has_cache_hits": null,
+        "has_prunes": null,
+        "has_bloom_prunes": null,
+        "has_filter_prunes": null,
+        "has_evaluated": null
+      },
+      "layout": {
+        "intrinsic_lookups": 2893,
+        "intrinsic_hits": 1872,
+        "intrinsic_stores": 1021,
+        "block_intrinsic": 1315,
+        "flex_intrinsic": 1578,
+        "inline_intrinsic": 391,
+        "layout_cache_lookups": 798,
+        "layout_cache_hits": 136,
+        "layout_cache_stores": 623,
+        "layout_cache_evictions": 165,
+        "layout_cache_clones": 136,
+        "flex_cache_clones": 0,
+        "taffy_nodes_built": 0,
+        "taffy_nodes_reused": 0,
+        "taffy_style_cache_hits": 0,
+        "taffy_style_cache_misses": 0,
+        "fragment_deep_clones": 0,
+        "fragment_traversed": 0
+      },
+      "paint": {
+        "display_items": 113,
+        "optimized_items": null,
+        "culled_items": null,
+        "transparent_removed": null,
+        "noop_removed": null,
+        "merged_items": null,
+        "gradient_ms": 12.622565,
+        "gradient_pixels": 488980
+      },
+      "resources": {
+        "fetch_counts": {
+          "Stylesheet": 1,
+          "Image": 1
+        },
+        "image_cache_hits": 0,
+        "image_cache_misses": 1
+      }
+    }
+  }
 }
