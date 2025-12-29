@@ -829,6 +829,14 @@ pub struct FetchedResource {
   pub cache_policy: Option<HttpCachePolicy>,
 }
 
+/// Parsed metadata stored alongside cached HTML documents.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CachedHtmlMetadata {
+  pub content_type: Option<String>,
+  pub url: Option<String>,
+  pub status: Option<u16>,
+}
+
 impl FetchedResource {
   /// Create a new FetchedResource
   pub fn new(bytes: Vec<u8>, content_type: Option<String>) -> Self {
@@ -896,33 +904,44 @@ impl FetchedResource {
 /// Parses cached HTML metadata sidecars.
 ///
 /// Supports the legacy format where the meta file contains only the content-type
-/// string, and a key/value format where lines are prefixed with `content-type:`
-/// and `url:`. Returns `(content_type, url)`.
-pub fn parse_cached_html_meta(meta: &str) -> (Option<String>, Option<String>) {
+/// string, and a key/value format where lines are prefixed with `content-type:`,
+/// `status:`, and `url:`.
+pub fn parse_cached_html_meta(meta: &str) -> CachedHtmlMetadata {
   let trimmed = meta.trim();
   if trimmed.is_empty() {
-    return (None, None);
+    return CachedHtmlMetadata::default();
   }
 
-  let mut content_type: Option<String> = None;
-  let mut url: Option<String> = None;
+  let mut parsed = CachedHtmlMetadata::default();
 
   for line in meta.lines() {
     let mut parts = line.splitn(2, ':');
     let key = parts.next().map(|s| s.trim().to_ascii_lowercase());
     let value = parts.next().map(|s| s.trim());
     match (key.as_deref(), value) {
-      (Some("content-type"), Some(v)) if !v.is_empty() => content_type = Some(v.to_string()),
-      (Some("url"), Some(v)) if !v.is_empty() => url = Some(v.to_string()),
+      (Some("content-type"), Some(v)) if !v.is_empty() => parsed.content_type = Some(v.to_string()),
+      (Some("url"), Some(v)) if !v.is_empty() => parsed.url = Some(v.to_string()),
+      (Some("status"), Some(v)) => {
+        if let Ok(code) = v.parse::<u16>() {
+          parsed.status = Some(code);
+        }
+      }
       _ => {}
     }
   }
 
-  if content_type.is_none() && url.is_none() && !trimmed.contains('\n') {
-    return (Some(trimmed.to_string()), None);
+  if parsed.content_type.is_none()
+    && parsed.url.is_none()
+    && parsed.status.is_none()
+    && !trimmed.contains('\n')
+  {
+    return CachedHtmlMetadata {
+      content_type: Some(trimmed.to_string()),
+      ..CachedHtmlMetadata::default()
+    };
   }
 
-  (content_type, url)
+  parsed
 }
 
 // ============================================================================
@@ -2476,17 +2495,31 @@ mod tests {
 
   #[test]
   fn parse_cached_meta_supports_legacy_content_type() {
-    let (ct, url) = parse_cached_html_meta("text/html; charset=utf-8");
-    assert_eq!(ct.as_deref(), Some("text/html; charset=utf-8"));
-    assert_eq!(url, None);
+    let meta = parse_cached_html_meta("text/html; charset=utf-8");
+    assert_eq!(
+      meta.content_type.as_deref(),
+      Some("text/html; charset=utf-8")
+    );
+    assert_eq!(meta.url, None);
+    assert_eq!(meta.status, None);
   }
 
   #[test]
   fn parse_cached_meta_reads_key_value_lines() {
     let meta = "content-type: text/html\nurl: https://example.com/page\n";
-    let (ct, url) = parse_cached_html_meta(meta);
-    assert_eq!(ct.as_deref(), Some("text/html"));
-    assert_eq!(url.as_deref(), Some("https://example.com/page"));
+    let parsed = parse_cached_html_meta(meta);
+    assert_eq!(parsed.content_type.as_deref(), Some("text/html"));
+    assert_eq!(parsed.url.as_deref(), Some("https://example.com/page"));
+    assert_eq!(parsed.status, None);
+  }
+
+  #[test]
+  fn parse_cached_meta_reads_status_code() {
+    let meta = "content-type: text/html\nstatus: 302\nurl: https://example.com/page\n";
+    let parsed = parse_cached_html_meta(meta);
+    assert_eq!(parsed.content_type.as_deref(), Some("text/html"));
+    assert_eq!(parsed.url.as_deref(), Some("https://example.com/page"));
+    assert_eq!(parsed.status, Some(302));
   }
 
   #[test]

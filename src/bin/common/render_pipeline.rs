@@ -133,17 +133,20 @@ pub fn read_cached_document(path: &Path) -> Result<CachedDocument> {
     meta_path.set_extension("meta");
   }
   let meta = std::fs::read_to_string(&meta_path).ok();
-  let (content_type, source_url) = meta
+  let parsed_meta = meta
     .as_deref()
     .map(parse_cached_html_meta)
-    .unwrap_or((None, None));
+    .unwrap_or_default();
 
-  let base_hint = source_url.unwrap_or_else(|| format!("file://{}", path.display()));
-  let html = decode_html_bytes(&bytes, content_type.as_deref());
+  let base_hint = parsed_meta
+    .url
+    .clone()
+    .unwrap_or_else(|| format!("file://{}", path.display()));
+  let html = decode_html_bytes(&bytes, parsed_meta.content_type.as_deref());
 
   Ok(CachedDocument {
     document: PreparedDocument::new(html, base_hint),
-    content_type,
+    content_type: parsed_meta.content_type,
     byte_len: bytes.len(),
   })
 }

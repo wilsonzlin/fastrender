@@ -10,8 +10,8 @@ use fastrender::html::encoding::decode_html_bytes;
 use fastrender::html::meta_refresh::extract_js_location_redirect;
 use fastrender::html::meta_refresh::extract_meta_refresh_url;
 use fastrender::pageset::{cache_html_path, pageset_stem, CACHE_HTML_DIR, PAGESET_URLS};
+use fastrender::resource::FetchedResource;
 use fastrender::resource::HttpFetcher;
-use fastrender::resource::ResourceFetcher;
 use fastrender::resource::DEFAULT_ACCEPT_LANGUAGE;
 use fastrender::resource::DEFAULT_USER_AGENT;
 use rayon::ThreadPoolBuilder;
@@ -162,6 +162,7 @@ fn write_cached_html(
   bytes: &[u8],
   content_type: Option<&str>,
   source_url: Option<&str>,
+  status: Option<u16>,
 ) -> std::io::Result<()> {
   if let Some(parent) = cache_path.parent() {
     std::fs::create_dir_all(parent)?;
@@ -175,6 +176,9 @@ fn write_cached_html(
     if !ct.is_empty() {
       let _ = writeln!(meta, "content-type: {}", ct);
     }
+  }
+  if let Some(status) = status {
+    let _ = writeln!(meta, "status: {}", status);
   }
   if let Some(url) = source_url {
     if !url.trim().is_empty() {
@@ -196,34 +200,34 @@ fn fetch_page(
   timeout: Duration,
   user_agent: &str,
   accept_language: &str,
-) -> Result<(Vec<u8>, Option<String>, String), String> {
+) -> Result<FetchedResource, String> {
   let fetcher = HttpFetcher::default()
     .with_timeout(timeout)
     .with_user_agent(user_agent.to_string())
     .with_accept_language(accept_language.to_string());
 
-  let mut current_url = url.to_string();
-
-  let fetch = |target: &str| -> Result<(Vec<u8>, Option<String>, String), String> {
-    let res = fetcher.fetch(target).map_err(|e| e.to_string())?;
+  let fetch = |target: &str| -> Result<(FetchedResource, String), String> {
+    let mut res = fetcher.fetch(target).map_err(|e| e.to_string())?;
     if res.bytes.is_empty() {
       return Err("empty response body".to_string());
     }
-    Ok((res.bytes, res.content_type, target.to_string()))
+    let canonical_url = res.final_url.clone().unwrap_or_else(|| target.to_string());
+    res.final_url.get_or_insert_with(|| canonical_url.clone());
+    Ok((res, canonical_url))
   };
 
-  let mut res = fetch(url)?;
+  let (mut res, mut current_url) = fetch(url)?;
 
   // Follow a single meta refresh (common for noscript fallbacks)
-  let mut html = decode_html_bytes(&res.0, res.1.as_deref());
+  let mut html = decode_html_bytes(&res.bytes, res.content_type.as_deref());
   if let Some(refresh) = extract_meta_refresh_url(&html) {
     if let Ok(base) = Url::parse(&current_url) {
       if let Ok(next) = base.join(&refresh) {
         match fetch(next.as_str()) {
-          Ok(next_res) => {
+          Ok((next_res, next_url)) => {
             res = next_res;
-            current_url = next.to_string();
-            html = decode_html_bytes(&res.0, res.1.as_deref());
+            current_url = next_url;
+            html = decode_html_bytes(&res.bytes, res.content_type.as_deref());
           }
           Err(e) => eprintln!(
             "Warning: meta refresh fetch failed: {} (keeping original)",
@@ -239,9 +243,9 @@ fn fetch_page(
     if let Ok(base) = Url::parse(&current_url) {
       if let Ok(next) = base.join(&js_redirect) {
         match fetch(next.as_str()) {
-          Ok(next_res) => {
+          Ok((next_res, next_url)) => {
             res = next_res;
-            current_url = next.to_string();
+            current_url = next_url;
           }
           Err(e) => eprintln!(
             "Warning: js redirect fetch failed: {} (keeping original)",
@@ -252,7 +256,8 @@ fn fetch_page(
     }
   }
 
-  Ok((res.0, res.1, current_url))
+  res.final_url.get_or_insert(current_url);
+  Ok(res)
 }
 
 fn main() {
@@ -358,12 +363,14 @@ fn main() {
           None
         };
         match fetch_page(entry.url, timeout, &user_agent, &accept_language) {
-          Ok((bytes, content_type, source_url)) => {
+          Ok(res) => {
+            let canonical_url = res.final_url.as_deref().unwrap_or(entry.url);
             if write_cached_html(
               &cache_path,
-              &bytes,
-              content_type.as_deref(),
-              Some(&source_url),
+              &res.bytes,
+              res.content_type.as_deref(),
+              Some(canonical_url),
+              res.status,
             )
             .is_ok()
             {
@@ -371,11 +378,11 @@ fn main() {
                 println!(
                   "✓ {} ({}b, {}ms)",
                   entry.url,
-                  bytes.len(),
+                  res.bytes.len(),
                   start.elapsed().as_millis()
                 );
               } else {
-                println!("✓ {} ({}b)", entry.url, bytes.len());
+                println!("✓ {} ({}b)", entry.url, res.bytes.len());
               }
               success.fetch_add(1, Ordering::Relaxed);
               return;
@@ -601,6 +608,7 @@ mod tests {
       b"hello",
       Some("text/html; charset=utf-8"),
       Some("https://example.com/page"),
+      Some(200),
     )
     .expect("write ok");
 
@@ -611,6 +619,7 @@ mod tests {
     let meta = std::fs::read_to_string(meta_path).expect("meta read");
     assert!(meta.contains("content-type: text/html; charset=utf-8"));
     assert!(meta.contains("url: https://example.com/page"));
+    assert!(meta.contains("status: 200"));
   }
 
   #[test]
@@ -624,7 +633,7 @@ mod tests {
     std::fs::write(&cache_path, "stale").unwrap();
     std::fs::write(&meta_path, "old").unwrap();
 
-    write_cached_html(&cache_path, b"hello", None, None).expect("write ok");
+    write_cached_html(&cache_path, b"hello", None, None, None).expect("write ok");
 
     let html = std::fs::read_to_string(&cache_path).expect("html read");
     assert_eq!(html, "hello");
@@ -632,6 +641,77 @@ mod tests {
       !meta_path.exists(),
       "meta should be removed when content type absent"
     );
+  }
+
+  #[test]
+  fn write_cached_meta_records_final_redirect_target() {
+    use std::io::Read;
+    use std::io::Write;
+
+    let Some(listener) = try_bind_localhost("write_cached_meta_records_final_redirect_target")
+    else {
+      return;
+    };
+    let addr = listener.local_addr().unwrap();
+
+    let handle = std::thread::spawn(move || {
+      let mut iter = listener.incoming();
+
+      // Initial response redirects to /final.
+      if let Some(stream) = iter.next() {
+        let mut stream = stream.unwrap();
+        let _ = stream.read(&mut [0u8; 1024]);
+        let headers = format!(
+          "HTTP/1.1 302 Found\r\nLocation: http://{}/final\r\nContent-Length: 0\r\n\r\n",
+          addr
+        );
+        let _ = stream.write_all(headers.as_bytes());
+      }
+
+      // Final response serves the content.
+      if let Some(stream) = iter.next() {
+        let mut stream = stream.unwrap();
+        let _ = stream.read(&mut [0u8; 1024]);
+        let body = b"redirected body";
+        let headers = format!(
+          "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n",
+          body.len()
+        );
+        let _ = stream.write_all(headers.as_bytes());
+        let _ = stream.write_all(body);
+      }
+    });
+
+    let url = format!("http://{}/start", addr);
+    let res = fetch_page(
+      &url,
+      Duration::from_secs(5),
+      DEFAULT_USER_AGENT,
+      DEFAULT_ACCEPT_LANGUAGE,
+    )
+    .expect("fetch succeeds");
+    handle.join().unwrap();
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let cache_path = dir.path().join("page.html");
+    write_cached_html(
+      &cache_path,
+      &res.bytes,
+      res.content_type.as_deref(),
+      res.final_url.as_deref(),
+      res.status,
+    )
+    .expect("write cached");
+
+    let meta = std::fs::read_to_string(cache_path.with_extension("html.meta")).expect("meta read");
+    let final_url = format!("http://{}/final", addr);
+    assert!(
+      meta.contains(&format!("url: {}", final_url)),
+      "meta should record final redirect target, got:\n{}",
+      meta
+    );
+    assert!(meta.contains("status: 200"), "meta should record status");
+    assert_eq!(res.final_url.as_deref(), Some(final_url.as_str()));
   }
 
   #[test]
@@ -694,7 +774,7 @@ mod tests {
     });
 
     let url = format!("http://{}/", addr);
-    let (bytes, _ct, final_url) = fetch_page(
+    let res = fetch_page(
       &url,
       Duration::from_secs(5),
       DEFAULT_USER_AGENT,
@@ -703,8 +783,8 @@ mod tests {
     .expect("fetch succeeds");
     handle.join().unwrap();
 
-    assert_eq!(bytes, b"ok");
-    assert_eq!(final_url, url);
+    assert_eq!(res.bytes, b"ok");
+    assert_eq!(res.final_url.as_deref(), Some(url.as_str()));
   }
 
   #[test]
@@ -755,7 +835,7 @@ mod tests {
     });
 
     let url = format!("http://{}/", addr);
-    let (bytes, content_type, final_url) = fetch_page(
+    let res = fetch_page(
       &url,
       Duration::from_secs(5),
       DEFAULT_USER_AGENT,
@@ -764,9 +844,10 @@ mod tests {
     .expect("fetch succeeds");
     handle.join().unwrap();
 
-    assert_eq!(bytes, b"refreshed");
-    assert_eq!(content_type.as_deref(), Some("text/plain"));
-    assert_eq!(final_url, format!("http://{}/next", addr));
+    let expected_final = format!("http://{}/next", addr);
+    assert_eq!(res.bytes, b"refreshed");
+    assert_eq!(res.content_type.as_deref(), Some("text/plain"));
+    assert_eq!(res.final_url.as_deref(), Some(expected_final.as_str()));
   }
 
   #[test]
@@ -817,7 +898,7 @@ mod tests {
     });
 
     let url = format!("http://{}/", addr);
-    let (bytes, content_type, final_url) = fetch_page(
+    let res = fetch_page(
       &url,
       Duration::from_secs(5),
       DEFAULT_USER_AGENT,
@@ -826,9 +907,10 @@ mod tests {
     .expect("fetch succeeds");
     handle.join().unwrap();
 
-    assert_eq!(bytes, b"redirected");
-    assert_eq!(content_type.as_deref(), Some("text/plain"));
-    assert_eq!(final_url, format!("http://{}/js", addr));
+    let expected_final = format!("http://{}/js", addr);
+    assert_eq!(res.bytes, b"redirected");
+    assert_eq!(res.content_type.as_deref(), Some("text/plain"));
+    assert_eq!(res.final_url.as_deref(), Some(expected_final.as_str()));
   }
 
   #[test]
@@ -877,7 +959,7 @@ mod tests {
     });
 
     let url = format!("http://{}/", addr);
-    let (bytes, content_type, final_url) = fetch_page(
+    let res = fetch_page(
       &url,
       Duration::from_secs(5),
       DEFAULT_USER_AGENT,
@@ -886,8 +968,11 @@ mod tests {
     .expect("fetch succeeds");
     handle.join().unwrap();
 
-    assert_eq!(bytes, b"<script>window.location.href='/missing'</script>");
-    assert_eq!(content_type.as_deref(), Some("text/html"));
-    assert_eq!(final_url, url);
+    assert_eq!(
+      res.bytes,
+      b"<script>window.location.href='/missing'</script>"
+    );
+    assert_eq!(res.content_type.as_deref(), Some("text/html"));
+    assert_eq!(res.final_url.as_deref(), Some(url.as_str()));
   }
 }

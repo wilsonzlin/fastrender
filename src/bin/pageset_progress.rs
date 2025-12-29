@@ -444,11 +444,13 @@ fn url_hint_from_cache_path(cache_path: &Path) -> String {
     meta_path.set_extension("meta");
   }
   let meta = fs::read_to_string(&meta_path).ok();
-  let (_, url) = meta
+  let parsed_meta = meta
     .as_deref()
     .map(parse_cached_html_meta)
-    .unwrap_or((None, None));
-  url.unwrap_or_else(|| format!("file://{}", cache_path.display()))
+    .unwrap_or_default();
+  parsed_meta
+    .url
+    .unwrap_or_else(|| format!("file://{}", cache_path.display()))
 }
 
 fn write_progress(path: &Path, progress: &PageProgress) -> io::Result<()> {
