@@ -1,13 +1,47 @@
+use std::sync::Arc;
 use std::time::Duration;
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
+use fastrender::geometry::Rect;
+use fastrender::layout::fragmentation::{fragment_tree, FragmentationOptions};
+use fastrender::style::display::Display;
+use fastrender::tree::fragment_tree::FragmentNode;
 use fastrender::{
-  geometry::Rect,
-  layout::fragmentation::{fragment_tree, FragmentationOptions},
-  tree::fragment_tree::FragmentNode,
+  BoxNode, BoxTree, ComputedStyle, FormattingContextType, LayoutConfig, LayoutEngine, Size,
 };
 
 mod common;
+
+const FLEX_TEXT: &str =
+  "FastRender should reuse shaped text for repeated carousels instead of reshaping every item.";
+
+fn flex_text_tree(item_count: usize) -> BoxTree {
+  let mut flex_style = ComputedStyle::default();
+  flex_style.display = Display::Flex;
+  let flex_style = Arc::new(flex_style);
+  let block_style = Arc::new(ComputedStyle::default());
+  let inline_style = Arc::new(ComputedStyle::default());
+  let text_style = Arc::new(ComputedStyle::default());
+
+  let mut children = Vec::with_capacity(item_count);
+  for idx in 0..item_count {
+    let text = format!("Item {}: {} {}", idx, FLEX_TEXT, FLEX_TEXT);
+    let text_node = BoxNode::new_text(text_style.clone(), text);
+    let inline = BoxNode::new_block(
+      inline_style.clone(),
+      FormattingContextType::Inline,
+      vec![text_node],
+    );
+    children.push(BoxNode::new_block(
+      block_style.clone(),
+      FormattingContextType::Block,
+      vec![inline],
+    ));
+  }
+
+  let root = BoxNode::new_block(flex_style, FormattingContextType::Flex, children);
+  BoxTree::new(root)
+}
 
 fn perf_criterion() -> Criterion {
   Criterion::default()
@@ -133,6 +167,33 @@ fn bench_layout_flex(c: &mut Criterion) {
         .layout_tree(black_box(&positioned_box_tree))
         .unwrap()
     })
+  });
+
+  group.finish();
+}
+
+fn bench_layout_flex_cached_text(c: &mut Criterion) {
+  let mut group = c.benchmark_group("bench_layout_flex_cached_text");
+  let viewport = common::REALISTIC_VIEWPORT;
+  let font_ctx = common::fixed_font_context();
+  let mut config = LayoutConfig::for_viewport(Size::new(viewport.0 as f32, viewport.1 as f32));
+  config.enable_cache = true;
+  let engine = LayoutEngine::with_font_context(config, font_ctx);
+  let box_tree = flex_text_tree(48);
+
+  group.bench_function("cached_second_pass", |b| {
+    b.iter_batched(
+      || {
+        engine.layout_tree(&box_tree).expect("seed flex layout");
+      },
+      |_| {
+        engine
+          .layout_tree_reuse_caches(&box_tree)
+          .expect("cached flex layout");
+        black_box(engine.shaping_cache_size());
+      },
+      BatchSize::SmallInput,
+    )
   });
 
   group.finish();
@@ -331,6 +392,7 @@ criterion_group!(
     bench_box_generation,
     bench_layout_block,
     bench_layout_flex,
+    bench_layout_flex_cached_text,
     bench_layout_grid,
     bench_layout_table,
     bench_layout_table_stress,

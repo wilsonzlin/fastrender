@@ -187,6 +187,8 @@ enum Axis {
 /// ```
 #[derive(Clone)]
 pub struct FlexFormattingContext {
+  /// Shared factory used to create child formatting contexts without losing shared caches.
+  factory: FormattingContextFactory,
   /// Viewport size used for resolving viewport-relative units inside Taffy conversion.
   viewport_size: Size,
   font_context: FontContext,
@@ -238,7 +240,15 @@ impl FlexFormattingContext {
       >,
     >,
   ) -> Self {
+    let factory = FormattingContextFactory::with_font_context_viewport_cb_and_cache(
+      font_context.clone(),
+      viewport_size,
+      nearest_positioned_cb,
+      measured_fragments.clone(),
+      layout_fragments.clone(),
+    );
     Self {
+      factory,
       viewport_size,
       font_context,
       nearest_positioned_cb,
@@ -248,9 +258,36 @@ impl FlexFormattingContext {
     }
   }
 
+  pub(crate) fn with_factory(factory: FormattingContextFactory) -> Self {
+    let viewport_size = factory.viewport_size();
+    let nearest_positioned_cb = factory.nearest_positioned_cb();
+    let font_context = factory.font_context().clone();
+    let measured_fragments = factory.flex_measure_cache();
+    let layout_fragments = factory.flex_layout_cache();
+    let parallelism = factory.parallelism();
+    Self {
+      factory,
+      viewport_size,
+      font_context,
+      nearest_positioned_cb,
+      parallelism,
+      measured_fragments,
+      layout_fragments,
+    }
+  }
+
   pub fn with_parallelism(mut self, parallelism: LayoutParallelism) -> Self {
     self.parallelism = parallelism;
+    self.factory = self.factory.clone().with_parallelism(parallelism);
     self
+  }
+
+  fn child_factory(&self) -> FormattingContextFactory {
+    self.factory.clone()
+  }
+
+  fn child_factory_for_cb(&self, cb: ContainingBlock) -> FormattingContextFactory {
+    self.factory.with_positioned_cb(cb)
   }
 }
 
@@ -420,14 +457,7 @@ impl FormattingContext for FlexFormattingContext {
     let viewport_size = self.viewport_size;
     let nearest_positioned_cb = self.nearest_positioned_cb;
     let measured_fragments = self.measured_fragments.clone();
-    let base_factory = FormattingContextFactory::with_font_context_viewport_cb_and_cache(
-      self.font_context.clone(),
-      viewport_size,
-      nearest_positioned_cb,
-      measured_fragments.clone(),
-      self.layout_fragments.clone(),
-    )
-    .with_parallelism(self.parallelism);
+    let base_factory = self.child_factory();
     let factory = base_factory.clone();
     let flex_item_block_fc: Arc<dyn FormattingContext> = Arc::new(
       BlockFormattingContext::for_flex_item_with_font_context_viewport_and_cb(
@@ -2116,14 +2146,7 @@ impl FormattingContext for FlexFormattingContext {
     // Approximate intrinsic inline size from flex items per CSS flexbox intrinsic sizing rules:
     // - Row axis: sum of item min/max-content contributions
     // - Column axis: max of item contributions
-    let factory = Arc::new(
-      FormattingContextFactory::with_font_context_viewport_and_cb(
-        self.font_context.clone(),
-        self.viewport_size,
-        self.nearest_positioned_cb,
-      )
-      .with_parallelism(self.parallelism),
-    );
+    let factory = Arc::new(self.child_factory());
     let is_row_axis = matches!(
       style.flex_direction,
       FlexDirection::Row | FlexDirection::RowReverse
@@ -2916,13 +2939,7 @@ impl FlexFormattingContext {
     // This preserves the fully laid-out fragment trees (text, inline content) instead of
     // reconstructing empty boxes from the cached measure results.
     let mut children: Vec<FragmentNode>;
-    let factory =
-      crate::layout::contexts::factory::FormattingContextFactory::with_font_context_viewport_and_cb(
-        self.font_context.clone(),
-        self.viewport_size,
-        self.nearest_positioned_cb,
-      )
-      .with_parallelism(self.parallelism);
+    let factory = self.child_factory();
     let measured_fragments = self.measured_fragments.clone();
     let main_axis_is_row = matches!(
       box_node.style.flex_direction,

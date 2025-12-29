@@ -8,8 +8,10 @@ use fastrender::geometry::Rect;
 use fastrender::style::display::Display;
 use fastrender::style::float::Float;
 use fastrender::style::values::Length;
+use fastrender::text::font_loader::FontContext;
 #[allow(unused_imports)]
 use fastrender::BoxNode;
+use fastrender::BoxTree;
 use fastrender::ComputedStyle;
 use fastrender::FormattingContext;
 use fastrender::FormattingContextFactory;
@@ -18,7 +20,10 @@ use fastrender::FormattingContextType;
 #[allow(unused_imports)]
 use fastrender::FragmentNode;
 use fastrender::IntrinsicSizingMode;
+use fastrender::LayoutConfig;
 use fastrender::LayoutConstraints;
+use fastrender::LayoutEngine;
+use fastrender::Size;
 use std::sync::Arc;
 
 // =============================================================================
@@ -745,6 +750,46 @@ fn test_child_fragments_are_preserved() {
       fc_type
     );
   }
+}
+
+// =============================================================================
+// Cache / performance regressions
+// =============================================================================
+
+#[test]
+fn flex_shaping_cache_survives_cached_runs() {
+  let mut children = Vec::new();
+  for idx in 0..24 {
+    let text = format!(
+      "Carousel card {}: FastRender should reuse shaped text instead of recreating it.",
+      idx
+    );
+    let inline = create_inline_fc_box(vec![create_text_box(&text)]);
+    children.push(create_block_box(vec![inline]));
+  }
+  let flex_root = create_flex_box(children);
+  let tree = BoxTree::new(flex_root);
+  let mut config = LayoutConfig::for_viewport(Size::new(1200.0, 900.0));
+  config.enable_cache = true;
+  let engine = LayoutEngine::with_font_context(config, FontContext::new());
+
+  let _ = engine
+    .layout_tree_reuse_caches(&tree)
+    .expect("first layout");
+  let first_cache_entries = engine.shaping_cache_size();
+  assert!(
+    first_cache_entries > 0,
+    "text shaping cache should be populated after first layout"
+  );
+
+  let _ = engine
+    .layout_tree_reuse_caches(&tree)
+    .expect("second cached layout");
+  let second_cache_entries = engine.shaping_cache_size();
+  assert!(
+    second_cache_entries >= first_cache_entries,
+    "shaping cache should be retained between cached layouts"
+  );
 }
 
 // =============================================================================

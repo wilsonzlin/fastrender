@@ -404,6 +404,10 @@ impl LayoutEngine {
     Self::new(LayoutConfig::default())
   }
 
+  pub fn shaping_cache_size(&self) -> usize {
+    self.factory.shaping_cache_size()
+  }
+
   /// Performs layout on an entire box tree
   ///
   /// This is the main entry point for layout. It takes a box tree

@@ -3288,9 +3288,14 @@ impl ShapingPipeline {
     self.cache.stats()
   }
 
-  #[cfg(any(test, debug_assertions))]
-  fn cache_len(&self) -> usize {
-    self.cache.len()
+  /// Returns the number of cached shaped runs currently stored.
+  pub fn cache_len(&self) -> usize {
+    self
+      .cache
+      .entries
+      .lock()
+      .map(|cache| cache.len())
+      .unwrap_or(0)
   }
 
   /// Shapes text into positioned glyphs.

@@ -135,14 +135,7 @@ impl FormattingContextFactory {
   }
 
   fn flex_context(&self) -> FlexFormattingContext {
-    FlexFormattingContext::with_viewport_and_cb(
-      self.viewport_size,
-      self.nearest_positioned_cb,
-      self.font_context.clone(),
-      self.flex_measure_cache.clone(),
-      self.flex_layout_cache.clone(),
-    )
-    .with_parallelism(self.parallelism)
+    FlexFormattingContext::with_factory(self.clone())
   }
 
   fn grid_context(&self) -> GridFormattingContext {
@@ -261,6 +254,35 @@ impl FormattingContextFactory {
   /// Returns the active layout parallelism configuration.
   pub fn parallelism(&self) -> LayoutParallelism {
     self.parallelism
+  }
+
+  pub(crate) fn flex_measure_cache(
+    &self,
+  ) -> std::sync::Arc<std::sync::Mutex<crate::layout::contexts::flex::FlexMeasureCache>> {
+    self.flex_measure_cache.clone()
+  }
+
+  pub(crate) fn flex_layout_cache(
+    &self,
+  ) -> std::sync::Arc<
+    std::sync::Mutex<
+      std::collections::HashMap<
+        u64,
+        std::collections::HashMap<
+          (Option<u32>, Option<u32>),
+          (
+            crate::geometry::Size,
+            std::sync::Arc<crate::tree::fragment_tree::FragmentNode>,
+          ),
+        >,
+      >,
+    >,
+  > {
+    self.flex_layout_cache.clone()
+  }
+
+  pub(crate) fn shaping_cache_size(&self) -> usize {
+    self.shaping_pipeline.cache_len()
   }
 
   /// Clears any shared caches held by formatting contexts.
