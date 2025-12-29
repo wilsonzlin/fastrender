@@ -2024,7 +2024,7 @@ impl DisplayListRenderer {
       culled_depth: 0,
       preserve_3d_disabled: false,
       background,
-      paint_parallelism: PaintParallelism::disabled(),
+      paint_parallelism: PaintParallelism::default(),
       image_cache: HashMap::new(),
       #[cfg(test)]
       image_cache_misses: Arc::new(AtomicUsize::new(0)),
