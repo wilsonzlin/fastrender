@@ -23,6 +23,8 @@
 //! ```
 
 use crate::error::{Error, ImageError, ResourceError, Result};
+use brotli::Decompressor;
+use flate2::read::{DeflateDecoder, GzDecoder, ZlibDecoder};
 use http::HeaderMap;
 use httpdate::parse_http_date;
 use lru::LruCache;
@@ -30,7 +32,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::convert::TryFrom;
-use std::io;
+use std::io::{self, Cursor, Read};
 use std::path::Path;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -389,6 +391,9 @@ pub const DEFAULT_USER_AGENT: &str =
 
 /// Default Accept-Language header value
 pub const DEFAULT_ACCEPT_LANGUAGE: &str = "en-US,en;q=0.9";
+
+/// Content-Encoding algorithms this fetcher can decode.
+const SUPPORTED_ACCEPT_ENCODING: &str = "gzip, deflate, br";
 
 /// Allowed URL schemes for resource fetching.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1122,9 +1127,9 @@ impl HttpFetcher {
     let agent = &self.agent;
     for _ in 0..self.policy.max_redirects {
       self.policy.ensure_url_allowed(&current)?;
-      let allowed_limit = self.policy.allowed_response_limit()? as u64;
+      let allowed_limit = self.policy.allowed_response_limit()?;
 
-      let accept_encoding_value = accept_encoding.unwrap_or("gzip, deflate, br");
+      let accept_encoding_value = accept_encoding.unwrap_or(SUPPORTED_ACCEPT_ENCODING);
       let mut request = agent
         .get(&current)
         .header("User-Agent", &self.user_agent)
@@ -1168,6 +1173,7 @@ impl HttpFetcher {
         }
       }
 
+      let encodings = parse_content_encodings(response.headers());
       let content_type = response
         .headers()
         .get("content-type")
@@ -1184,24 +1190,67 @@ impl HttpFetcher {
         .and_then(|h| h.to_str().ok())
         .map(|s| s.to_string());
       let cache_policy = parse_http_cache_policy(response.headers());
+      let final_url = response.get_uri().to_string();
 
       let body_result = response
         .body_mut()
         .with_config()
-        .limit(allowed_limit)
+        .limit(allowed_limit as u64)
         .read_to_vec()
         .map_err(|e| e.into_io());
 
       match body_result {
         Ok(bytes) => {
+          let bytes = match decode_content_encodings(bytes, &encodings, allowed_limit) {
+            Ok(decoded) => decoded,
+            Err(ContentDecodeError::DecompressionFailed { .. }) if accept_encoding.is_none() => {
+              return self.fetch_http_with_accept(&current, Some("identity"), validators);
+            }
+            Err(err) => {
+              let err =
+                err.into_resource_error(current.clone(), status.as_u16(), final_url.clone());
+              return Err(Error::Resource(err));
+            }
+          };
+
           if bytes.is_empty() && status.as_u16() != 304 {
             let err = ResourceError::new(current.clone(), "empty HTTP response body")
               .with_status(status.as_u16())
-              .with_final_url(response.get_uri().to_string());
+              .with_final_url(final_url.clone());
             return Err(Error::Resource(err));
           }
+
+          if bytes.len() > allowed_limit {
+            if let Some(remaining) = self.policy.remaining_budget() {
+              if bytes.len() > remaining {
+                let err = ResourceError::new(
+                  current.clone(),
+                  format!(
+                    "total bytes budget exceeded ({} > {} bytes remaining)",
+                    bytes.len(),
+                    remaining
+                  ),
+                )
+                .with_status(status.as_u16())
+                .with_final_url(final_url.clone());
+                return Err(Error::Resource(err));
+              }
+            }
+
+            let err = ResourceError::new(
+              current.clone(),
+              format!(
+                "response too large ({} > {} bytes)",
+                bytes.len(),
+                allowed_limit
+              ),
+            )
+            .with_status(status.as_u16())
+            .with_final_url(final_url.clone());
+            return Err(Error::Resource(err));
+          }
+
           self.policy.reserve_budget(bytes.len())?;
-          let final_url = response.get_uri().to_string();
           let mut resource = FetchedResource::with_final_url(bytes, content_type, Some(final_url));
           resource.status = Some(status.as_u16());
           resource.etag = etag;
@@ -1209,13 +1258,10 @@ impl HttpFetcher {
           resource.cache_policy = cache_policy;
           return Ok(resource);
         }
-        Err(err) if accept_encoding.is_none() && is_decompression_error(&err) => {
-          return self.fetch_http_with_accept(&current, Some("identity"), validators);
-        }
         Err(err) => {
           let err = ResourceError::new(current.clone(), err.to_string())
             .with_status(status.as_u16())
-            .with_final_url(response.get_uri().to_string())
+            .with_final_url(final_url)
             .with_source(err);
           return Err(Error::Resource(err));
         }
@@ -2160,14 +2206,138 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
   }
 }
 
-fn is_decompression_error(err: &io::Error) -> bool {
-  if let Some(inner) = err.get_ref() {
-    if let Some(ureq_err) = inner.downcast_ref::<ureq::Error>() {
-      return matches!(ureq_err, ureq::Error::Decompress(_, _));
+fn parse_content_encodings(headers: &HeaderMap) -> Vec<String> {
+  headers
+    .get_all("content-encoding")
+    .iter()
+    .filter_map(|h| h.to_str().ok())
+    .flat_map(|value| value.split(','))
+    .map(|value| value.trim().to_ascii_lowercase())
+    .filter(|value| !value.is_empty())
+    .collect()
+}
+
+#[derive(Debug)]
+enum ContentDecodeError {
+  UnsupportedEncoding(String),
+  DecompressionFailed { encoding: String, source: io::Error },
+  SizeLimitExceeded { decoded: usize, limit: usize },
+}
+
+impl std::fmt::Display for ContentDecodeError {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      Self::UnsupportedEncoding(encoding) => write!(f, "unsupported content encoding: {encoding}"),
+      Self::DecompressionFailed { encoding, source } => {
+        write!(f, "{encoding} decompression failed: {source}")
+      }
+      Self::SizeLimitExceeded { decoded, limit } => write!(
+        f,
+        "decoded body exceeds limit ({} > {} bytes)",
+        decoded, limit
+      ),
     }
   }
+}
 
-  err.to_string().contains("decompression failed")
+impl ContentDecodeError {
+  fn into_resource_error(self, url: String, status: u16, final_url: String) -> ResourceError {
+    let mut err = ResourceError::new(url, self.to_string())
+      .with_status(status)
+      .with_final_url(final_url);
+    if let Self::DecompressionFailed { source, .. } = self {
+      err = err.with_source(source);
+    }
+    err
+  }
+}
+
+fn decode_content_encodings(
+  body: Vec<u8>,
+  encodings: &[String],
+  limit: usize,
+) -> std::result::Result<Vec<u8>, ContentDecodeError> {
+  if encodings.is_empty() {
+    ensure_within_limit(body.len(), limit)?;
+    return Ok(body);
+  }
+
+  let mut decoded = body;
+  for encoding in encodings.iter().rev() {
+    decoded = decode_single_encoding(encoding, &decoded, limit)?;
+  }
+
+  Ok(decoded)
+}
+
+fn decode_single_encoding(
+  encoding: &str,
+  input: &[u8],
+  limit: usize,
+) -> std::result::Result<Vec<u8>, ContentDecodeError> {
+  match encoding {
+    "" | "identity" => {
+      ensure_within_limit(input.len(), limit)?;
+      Ok(input.to_vec())
+    }
+    "gzip" => decode_with_reader("gzip", GzDecoder::new(Cursor::new(input)), limit),
+    "deflate" => decode_deflate(input, limit),
+    "br" => decode_with_reader("br", Decompressor::new(Cursor::new(input), 4096), limit),
+    other => Err(ContentDecodeError::UnsupportedEncoding(other.to_string())),
+  }
+}
+
+fn decode_deflate(input: &[u8], limit: usize) -> std::result::Result<Vec<u8>, ContentDecodeError> {
+  match decode_with_reader("deflate", ZlibDecoder::new(Cursor::new(input)), limit) {
+    Ok(decoded) => Ok(decoded),
+    Err(ContentDecodeError::DecompressionFailed { .. }) => {
+      decode_with_reader("deflate", DeflateDecoder::new(Cursor::new(input)), limit)
+    }
+    Err(err) => Err(err),
+  }
+}
+
+fn decode_with_reader<R: Read>(
+  encoding: &str,
+  mut reader: R,
+  limit: usize,
+) -> std::result::Result<Vec<u8>, ContentDecodeError> {
+  let mut decoded = Vec::new();
+  let mut buf = [0u8; 8192];
+
+  loop {
+    let read = reader
+      .read(&mut buf)
+      .map_err(|source| ContentDecodeError::DecompressionFailed {
+        encoding: encoding.to_string(),
+        source,
+      })?;
+    if read == 0 {
+      break;
+    }
+
+    let next_len = decoded.len().saturating_add(read);
+    if next_len > limit {
+      return Err(ContentDecodeError::SizeLimitExceeded {
+        decoded: next_len,
+        limit,
+      });
+    }
+
+    decoded.extend_from_slice(&buf[..read]);
+  }
+
+  Ok(decoded)
+}
+
+fn ensure_within_limit(len: usize, limit: usize) -> std::result::Result<(), ContentDecodeError> {
+  if len > limit {
+    return Err(ContentDecodeError::SizeLimitExceeded {
+      decoded: len,
+      limit,
+    });
+  }
+  Ok(())
 }
 
 // ============================================================================
@@ -2222,6 +2392,9 @@ fn decode_data_url(url: &str) -> Result<FetchedResource> {
 mod tests {
   use super::data_url;
   use super::*;
+  use brotli::CompressorWriter;
+  use flate2::write::GzEncoder;
+  use flate2::Compression;
   use std::collections::VecDeque;
   use std::io;
   use std::io::Read;
@@ -3053,6 +3226,79 @@ mod tests {
   }
 
   #[test]
+  fn fetch_http_decodes_brotli_body() {
+    let Some(listener) = try_bind_localhost("fetch_http_decodes_brotli_body") else {
+      return;
+    };
+    let addr = listener.local_addr().unwrap();
+
+    let handle = std::thread::spawn(move || {
+      if let Some(stream) = listener.incoming().next() {
+        let mut stream = stream.unwrap();
+        let mut buf = [0u8; 1024];
+        let _ = stream.read(&mut buf);
+
+        let body = b"hello brotli";
+        let mut compressed = Vec::new();
+        {
+          let mut writer = CompressorWriter::new(&mut compressed, 4096, 5, 22);
+          writer.write_all(body).unwrap();
+          writer.flush().unwrap();
+        }
+
+        let headers = format!(
+          "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Encoding: br\r\nContent-Length: {}\r\n\r\n",
+          compressed.len()
+        );
+        let _ = stream.write_all(headers.as_bytes());
+        let _ = stream.write_all(&compressed);
+      }
+    });
+
+    let fetcher = HttpFetcher::new().with_timeout(Duration::from_secs(2));
+    let url = format!("http://{}", addr);
+    let res = fetcher.fetch(&url).expect("brotli fetch");
+    handle.join().unwrap();
+
+    assert_eq!(res.bytes, b"hello brotli");
+  }
+
+  #[test]
+  fn fetch_http_decodes_gzip_body() {
+    let Some(listener) = try_bind_localhost("fetch_http_decodes_gzip_body") else {
+      return;
+    };
+    let addr = listener.local_addr().unwrap();
+
+    let handle = std::thread::spawn(move || {
+      if let Some(stream) = listener.incoming().next() {
+        let mut stream = stream.unwrap();
+        let mut buf = [0u8; 1024];
+        let _ = stream.read(&mut buf);
+
+        let body = b"hello gzip";
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(body).unwrap();
+        let compressed = encoder.finish().unwrap();
+
+        let headers = format!(
+          "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\n\r\n",
+          compressed.len()
+        );
+        let _ = stream.write_all(headers.as_bytes());
+        let _ = stream.write_all(&compressed);
+      }
+    });
+
+    let fetcher = HttpFetcher::new().with_timeout(Duration::from_secs(2));
+    let url = format!("http://{}", addr);
+    let res = fetcher.fetch(&url).expect("gzip fetch");
+    handle.join().unwrap();
+
+    assert_eq!(res.bytes, b"hello gzip");
+  }
+
+  #[test]
   fn fetch_http_retries_on_bad_gzip() {
     use std::io::Read;
     use std::io::Write;
@@ -3119,6 +3365,77 @@ mod tests {
     let url = format!("http://{}", addr);
     let resource = fetcher.fetch(&url).unwrap();
     assert_eq!(resource.bytes, b"hello world");
+
+    handle.join().unwrap();
+  }
+
+  #[test]
+  fn fetch_http_retries_on_bad_brotli() {
+    use std::io::Read;
+    use std::io::Write;
+    use std::thread;
+    use std::time::Duration;
+    use std::time::Instant;
+
+    let Some(listener) = try_bind_localhost("fetch_http_retries_on_bad_brotli") else {
+      return;
+    };
+    let addr = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+
+    let handle = thread::spawn(move || {
+      let mut handled = 0;
+      let start = Instant::now();
+      while handled < 2 && start.elapsed() < Duration::from_secs(5) {
+        match listener.accept() {
+          Ok((mut stream, _)) => {
+            let mut buf = [0u8; 1024];
+            let mut req = Vec::new();
+            loop {
+              match stream.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                  req.extend_from_slice(&buf[..n]);
+                  if req.windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                  }
+                }
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                  thread::sleep(Duration::from_millis(10));
+                  continue;
+                }
+                Err(_) => break,
+              }
+            }
+
+            let req_str = String::from_utf8_lossy(&req).to_lowercase();
+            let body = b"hello brotli";
+            let encoding_header = if req_str.contains("accept-encoding: identity") {
+              ""
+            } else {
+              "Content-Encoding: br\r\n"
+            };
+            let response = format!(
+              "HTTP/1.1 200 OK\r\n{}Content-Length: {}\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n",
+              encoding_header,
+              body.len()
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+            stream.write_all(body).unwrap();
+            handled += 1;
+          }
+          Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+            thread::sleep(Duration::from_millis(10));
+          }
+          Err(_) => break,
+        }
+      }
+    });
+
+    let fetcher = HttpFetcher::new().with_timeout(Duration::from_secs(2));
+    let url = format!("http://{}", addr);
+    let resource = fetcher.fetch(&url).unwrap();
+    assert_eq!(resource.bytes, b"hello brotli");
 
     handle.join().unwrap();
   }

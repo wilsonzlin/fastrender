@@ -313,6 +313,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "brotli"
+version = "6.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "74f7971dbd9326d58187408ab83117d8ac1bb9c17b085fdacd1cf2f598719b6b"
+dependencies = [
+ "alloc-no-stdlib",
+ "alloc-stdlib",
+ "brotli-decompressor 4.0.3",
+]
+
+[[package]]
+name = "brotli-decompressor"
+version = "4.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a334ef7c9e23abf0ce748e8cd309037da93e606ad52eb372e4ce327a0dcfbdfd"
+dependencies = [
+ "alloc-no-stdlib",
+ "alloc-stdlib",
+]
+
+[[package]]
 name = "brotli-decompressor"
 version = "5.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -799,12 +820,14 @@ dependencies = [
  "avif-decode",
  "avif-parse",
  "base64",
+ "brotli",
  "chrono",
  "clap",
  "criterion",
  "csscolorparser",
  "cssparser",
  "encoding_rs",
+ "flate2",
  "fontdb 0.23.0",
  "glob",
  "html5ever",
@@ -2853,7 +2876,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d39cb1dbab692d82a977c0392ffac19e188bd9186a9f32806f0aaa859d75585a"
 dependencies = [
  "base64",
- "flate2",
  "log",
  "percent-encoding",
  "rustls",
@@ -3323,7 +3345,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "088845d3772b9624d010137410e44bbdbf60a13ecf39338b7617723c29eb4afd"
 dependencies = [
  "arrayvec",
- "brotli-decompressor",
+ "brotli-decompressor 5.0.0",
  "bytes",
  "flate2",
  "font-types 0.9.0",
