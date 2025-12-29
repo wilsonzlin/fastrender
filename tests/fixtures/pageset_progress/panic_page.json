@@ -1,0 +1,16 @@
+{
+  "url": "https://panic.test/",
+  "status": "panic",
+  "total_ms": 3100.0,
+  "stages_ms": {
+    "fetch": 0.0,
+    "css": 0.0,
+    "cascade": 0.0,
+    "layout": 0.0,
+    "paint": 0.0
+  },
+  "notes": "panic",
+  "hotspot": "",
+  "last_good_commit": "",
+  "last_regression_commit": ""
+}

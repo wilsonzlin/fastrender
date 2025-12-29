@@ -32,7 +32,7 @@ use fastrender::resource::ResourceFetcher;
 use fastrender::resource::DEFAULT_ACCEPT_LANGUAGE;
 use fastrender::resource::DEFAULT_USER_AGENT;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -61,6 +61,8 @@ struct Cli {
 enum CommandKind {
   /// Render cached pages and update `progress/pages/*.json`.
   Run(RunArgs),
+  /// Summarize existing `progress/pages/*.json` artifacts.
+  Report(ReportArgs),
   #[command(hide = true)]
   Worker(WorkerArgs),
 }
@@ -163,6 +165,21 @@ struct RunArgs {
 }
 
 #[derive(Args, Debug)]
+struct ReportArgs {
+  /// Directory containing `progress/pages/*.json`
+  #[arg(long, default_value = DEFAULT_PROGRESS_DIR)]
+  progress_dir: PathBuf,
+
+  /// Number of slowest pages to list
+  #[arg(long, default_value_t = 10)]
+  top: usize,
+
+  /// Exit non-zero when any page timed out or panicked
+  #[arg(long)]
+  fail_on_bad: bool,
+}
+
+#[derive(Args, Debug)]
 struct WorkerArgs {
   /// Cached HTML path (from fetches/html/*.html)
   #[arg(long)]
@@ -242,6 +259,23 @@ enum ProgressStatus {
   Error,
 }
 
+impl ProgressStatus {
+  fn as_str(&self) -> &'static str {
+    match self {
+      ProgressStatus::Ok => "ok",
+      ProgressStatus::Timeout => "timeout",
+      ProgressStatus::Panic => "panic",
+      ProgressStatus::Error => "error",
+    }
+  }
+}
+
+impl Default for ProgressStatus {
+  fn default() -> Self {
+    ProgressStatus::Error
+  }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct StageBuckets {
   fetch: f64,
@@ -249,6 +283,15 @@ struct StageBuckets {
   cascade: f64,
   layout: f64,
   paint: f64,
+}
+
+fn normalize_hotspot(h: &str) -> String {
+  let trimmed = h.trim();
+  if trimmed.is_empty() {
+    "unknown".to_string()
+  } else {
+    trimmed.to_string()
+  }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -307,6 +350,20 @@ impl PageProgress {
 fn read_progress(path: &Path) -> Option<PageProgress> {
   let raw = fs::read_to_string(path).ok()?;
   serde_json::from_str::<PageProgress>(&raw).ok()
+}
+
+#[derive(Debug)]
+struct LoadedProgress {
+  stem: String,
+  progress: PageProgress,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct StatusCounts {
+  ok: usize,
+  timeout: usize,
+  panic: usize,
+  error: usize,
 }
 
 fn url_hint_from_cache_path(cache_path: &Path) -> String {
@@ -409,7 +466,10 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     normalize_user_agent_for_log(&args.user_agent)
   ));
   log.push_str(&format!("Accept-Language: {}\n", args.accept_language));
-  log.push_str(&format!("Viewport: {}x{}\n", args.viewport.0, args.viewport.1));
+  log.push_str(&format!(
+    "Viewport: {}x{}\n",
+    args.viewport.0, args.viewport.1
+  ));
   log.push_str(&format!("DPR: {}\n", args.dpr));
   if let Some(ct) = &cached.content_type {
     log.push_str(&format!("Content-Type: {ct}\n"));
@@ -431,7 +491,10 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
   ));
   let renderer_fetcher = std::sync::Arc::clone(&fetcher);
 
-  let RenderConfigBundle { config, mut options } = build_render_configs(&RenderSurface {
+  let RenderConfigBundle {
+    config,
+    mut options,
+  } = build_render_configs(&RenderSurface {
     viewport: args.viewport,
     scroll_x: 0.0,
     scroll_y: 0.0,
@@ -458,23 +521,24 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     options.trace_output = Some(path.clone());
   }
 
-  let mut renderer = match common::render_pipeline::build_renderer_with_fetcher(config, renderer_fetcher) {
-    Ok(r) => r,
-    Err(e) => {
-      let msg = format_error_with_chain(&e, args.verbose);
-      log.push_str(&format!("Renderer init error: {msg}\n"));
-      let mut progress = PageProgress::new(url);
-      progress.status = ProgressStatus::Error;
-      progress.notes = format!("renderer init: {msg}");
-      progress.hotspot = "unknown".to_string();
-      let progress = progress.merge_preserving_manual(progress_before);
-      let _ = write_progress(&args.progress_path, &progress);
-      if let Some(path) = &args.log_path {
-        let _ = write_text_file(path, &log);
+  let mut renderer =
+    match common::render_pipeline::build_renderer_with_fetcher(config, renderer_fetcher) {
+      Ok(r) => r,
+      Err(e) => {
+        let msg = format_error_with_chain(&e, args.verbose);
+        log.push_str(&format!("Renderer init error: {msg}\n"));
+        let mut progress = PageProgress::new(url);
+        progress.status = ProgressStatus::Error;
+        progress.notes = format!("renderer init: {msg}");
+        progress.hotspot = "unknown".to_string();
+        let progress = progress.merge_preserving_manual(progress_before);
+        let _ = write_progress(&args.progress_path, &progress);
+        if let Some(path) = &args.log_path {
+          let _ = write_text_file(path, &log);
+        }
+        return Ok(());
       }
-      return Ok(());
-    }
-  };
+    };
 
   let mut doc = cached.document;
   log.push_str(&format!("Resource base: {}\n", doc.base_url));
@@ -515,11 +579,10 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
           progress.status = ProgressStatus::Timeout;
           progress.notes = format!("timeout at {stage} after {elapsed:?}");
           progress.hotspot = match stage {
-            RenderStage::Parse | RenderStage::Style => "css",
+            RenderStage::DomParse | RenderStage::Css => "css",
+            RenderStage::Cascade => "cascade",
             RenderStage::Layout => "layout",
             RenderStage::Paint => "paint",
-            RenderStage::Resource => "fetch",
-            RenderStage::Other => "unknown",
           }
           .to_string();
         }
@@ -531,7 +594,10 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
       }
 
       log.push_str(&format!("Status: {:?}\n", progress.status));
-      log.push_str(&format!("Error: {}\n", format_error_with_chain(&err, args.verbose)));
+      log.push_str(&format!(
+        "Error: {}\n",
+        format_error_with_chain(&err, args.verbose)
+      ));
     }
     Err(panic) => {
       progress.status = ProgressStatus::Panic;
@@ -595,10 +661,7 @@ fn append_fetch_error_summary(log: &mut String, diagnostics: &RenderDiagnostics)
     } else {
       format!(" ({})", meta.join(", "))
     };
-    log.push_str(&format!(
-      "- {kind}: {}{meta}: {}\n",
-      err.url, err.message
-    ));
+    log.push_str(&format!("- {kind}: {}{meta}: {}\n", err.url, err.message));
   }
 }
 
@@ -617,10 +680,7 @@ fn append_stage_summary(log: &mut String, diagnostics: &RenderDiagnostics) {
   log.push_str(&format!("  box_tree: {}\n", fmt(t.box_tree_ms)));
   log.push_str(&format!("  layout: {}\n", fmt(t.layout_ms)));
   log.push_str(&format!("  paint_build: {}\n", fmt(t.paint_build_ms)));
-  log.push_str(&format!(
-    "  paint_optimize: {}\n",
-    fmt(t.paint_optimize_ms)
-  ));
+  log.push_str(&format!("  paint_optimize: {}\n", fmt(t.paint_optimize_ms)));
   log.push_str(&format!(
     "  paint_rasterize: {}\n",
     fmt(t.paint_rasterize_ms)
@@ -642,6 +702,199 @@ fn write_text_file(path: &Path, contents: &str) -> io::Result<()> {
     }
   }
   fs::write(path, contents)
+}
+
+fn add_stage_buckets(into: &mut StageBuckets, from: &StageBuckets) {
+  into.fetch += from.fetch;
+  into.css += from.css;
+  into.cascade += from.cascade;
+  into.layout += from.layout;
+  into.paint += from.paint;
+}
+
+fn divide_stage_buckets(total: &StageBuckets, divisor: f64) -> StageBuckets {
+  if divisor == 0.0 {
+    return StageBuckets::default();
+  }
+  StageBuckets {
+    fetch: total.fetch / divisor,
+    css: total.css / divisor,
+    cascade: total.cascade / divisor,
+    layout: total.layout / divisor,
+    paint: total.paint / divisor,
+  }
+}
+
+fn read_progress_dir(dir: &Path) -> io::Result<Vec<LoadedProgress>> {
+  let mut files: Vec<PathBuf> = fs::read_dir(dir)
+    .map_err(|e| io::Error::new(e.kind(), format!("{}: {}", dir.display(), e)))?
+    .filter_map(|entry| entry.ok().map(|e| e.path()))
+    .filter(|path| path.extension().map(|ext| ext == "json").unwrap_or(false))
+    .collect();
+
+  files.sort();
+
+  if files.is_empty() {
+    return Err(io::Error::new(
+      io::ErrorKind::NotFound,
+      format!("no progress files found in {}", dir.display()),
+    ));
+  }
+
+  let mut progresses = Vec::new();
+  for path in files {
+    let contents = fs::read_to_string(&path).map_err(|e| {
+      io::Error::new(
+        e.kind(),
+        format!("failed to read {}: {}", path.display(), e),
+      )
+    })?;
+    let progress: PageProgress = serde_json::from_str(&contents).map_err(|e| {
+      io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("failed to parse {}: {}", path.display(), e),
+      )
+    })?;
+    let stem = path
+      .file_stem()
+      .map(|s| s.to_string_lossy().to_string())
+      .unwrap_or_else(|| path.display().to_string());
+    progresses.push(LoadedProgress { stem, progress });
+  }
+  Ok(progresses)
+}
+
+fn summarize_status(progresses: &[LoadedProgress]) -> StatusCounts {
+  let mut counts = StatusCounts::default();
+  for entry in progresses {
+    match entry.progress.status {
+      ProgressStatus::Ok => counts.ok += 1,
+      ProgressStatus::Timeout => counts.timeout += 1,
+      ProgressStatus::Panic => counts.panic += 1,
+      ProgressStatus::Error => counts.error += 1,
+    }
+  }
+  counts
+}
+
+fn report(args: ReportArgs) -> io::Result<()> {
+  let progresses = read_progress_dir(&args.progress_dir)?;
+  let total_pages = progresses.len();
+  let status_counts = summarize_status(&progresses);
+
+  println!("Status counts ({total_pages} pages):");
+  println!("  ok: {}", status_counts.ok);
+  println!("  timeout: {}", status_counts.timeout);
+  println!("  panic: {}", status_counts.panic);
+  println!("  error: {}", status_counts.error);
+  println!();
+
+  let mut timed: Vec<&LoadedProgress> = progresses
+    .iter()
+    .filter(|p| p.progress.total_ms.is_some())
+    .collect();
+  timed.sort_by(|a, b| {
+    let a_total = a.progress.total_ms.unwrap_or(0.0);
+    let b_total = b.progress.total_ms.unwrap_or(0.0);
+    b_total
+      .total_cmp(&a_total)
+      .then_with(|| a.stem.cmp(&b.stem))
+  });
+
+  let timed_count = timed.len();
+  let top_n = args.top.min(timed_count);
+  println!("Slowest pages (top {top_n} of {timed_count} with timings):");
+  if top_n == 0 {
+    println!("  (none)");
+  } else {
+    for (idx, entry) in timed.iter().take(top_n).enumerate() {
+      let total_ms = entry.progress.total_ms.unwrap_or(0.0);
+      println!(
+        "  {}. {} ({}, hotspot={}) total={total_ms:.2}ms url={}",
+        idx + 1,
+        entry.stem,
+        entry.progress.status.as_str(),
+        normalize_hotspot(&entry.progress.hotspot),
+        entry.progress.url
+      );
+    }
+  }
+  println!();
+
+  let mut failure_hotspots: BTreeMap<String, usize> = BTreeMap::new();
+  for entry in progresses.iter().filter(|p| {
+    matches!(
+      p.progress.status,
+      ProgressStatus::Timeout | ProgressStatus::Panic | ProgressStatus::Error
+    )
+  }) {
+    let hotspot = normalize_hotspot(&entry.progress.hotspot);
+    *failure_hotspots.entry(hotspot).or_default() += 1;
+  }
+  println!("Failure hotspots (timeout/panic/error):");
+  if failure_hotspots.is_empty() {
+    println!("  (none)");
+  } else {
+    for (hotspot, count) in failure_hotspots {
+      println!("  {hotspot}: {count}");
+    }
+  }
+  println!();
+
+  println!("Top-slow hotspots (top {top_n}):");
+  if top_n == 0 {
+    println!("  (none)");
+  } else {
+    let mut slow_hotspots: BTreeMap<String, usize> = BTreeMap::new();
+    for entry in timed.iter().take(top_n) {
+      let hotspot = normalize_hotspot(&entry.progress.hotspot);
+      *slow_hotspots.entry(hotspot).or_default() += 1;
+    }
+    for (hotspot, count) in slow_hotspots {
+      println!("  {hotspot}: {count}");
+    }
+  }
+  println!();
+
+  let mut stage_total = StageBuckets::default();
+  let mut stage_count = 0usize;
+  for entry in &progresses {
+    if entry.progress.total_ms.is_none() {
+      continue;
+    }
+    if entry.progress.status != ProgressStatus::Ok {
+      continue;
+    }
+    stage_count += 1;
+    add_stage_buckets(&mut stage_total, &entry.progress.stages_ms);
+  }
+  if stage_count > 0 {
+    let stage_mean = divide_stage_buckets(&stage_total, stage_count as f64);
+    println!("Stage timings (ok pages with timings: {stage_count}):");
+    println!(
+      "  totals_ms: fetch={:.2} css={:.2} cascade={:.2} layout={:.2} paint={:.2}",
+      stage_total.fetch,
+      stage_total.css,
+      stage_total.cascade,
+      stage_total.layout,
+      stage_total.paint
+    );
+    println!(
+      "  means_ms:  fetch={:.2} css={:.2} cascade={:.2} layout={:.2} paint={:.2}",
+      stage_mean.fetch, stage_mean.css, stage_mean.cascade, stage_mean.layout, stage_mean.paint
+    );
+    println!();
+  }
+
+  if args.fail_on_bad && (status_counts.timeout > 0 || status_counts.panic > 0) {
+    eprintln!(
+      "Failing due to {} timeout(s) and {} panic(s).",
+      status_counts.timeout, status_counts.panic
+    );
+    std::process::exit(1);
+  }
+
+  Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -669,7 +922,8 @@ fn spawn_worker(
   soft_timeout_ms: Option<u64>,
 ) -> io::Result<Child> {
   let mut cmd = Command::new(exe);
-  cmd.arg("worker")
+  cmd
+    .arg("worker")
     .arg("--cache-path")
     .arg(&item.cache_path)
     .arg("--stem")
@@ -715,7 +969,8 @@ fn spawn_worker(
   }
 
   // Keep worker I/O deterministic: all logs go to the log file, stdout is unused.
-  cmd.stdin(Stdio::null())
+  cmd
+    .stdin(Stdio::null())
     .stdout(Stdio::null())
     .stderr(Stdio::null());
 
@@ -854,7 +1109,7 @@ fn run(args: RunArgs) -> io::Result<()> {
 
   let filter: Option<HashSet<String>> = args.pages.as_ref().map(|v| {
     v.iter()
-      .map(|s| normalize_page_name(s))
+      .filter_map(|s| normalize_page_name(s))
       .collect::<HashSet<_>>()
   });
 
@@ -866,7 +1121,9 @@ fn run(args: RunArgs) -> io::Result<()> {
         if let Some(ref filter) = filter {
           if let Some(stem_os) = path.file_stem() {
             if let Some(stem) = stem_os.to_str() {
-              return filter.contains(&normalize_page_name(stem));
+              if let Some(normalized) = normalize_page_name(stem) {
+                return filter.contains(&normalized);
+              }
             }
           }
           false
@@ -913,6 +1170,7 @@ fn run(args: RunArgs) -> io::Result<()> {
     .collect();
 
   let exe = std::env::current_exe()?;
+  let queue = std::collections::VecDeque::from(items.clone());
 
   println!(
     "Pageset progress: {} pages ({} parallel), hard timeout {}s",
@@ -930,8 +1188,14 @@ fn run(args: RunArgs) -> io::Result<()> {
 
   let overall_start = Instant::now();
 
-  let queue = std::collections::VecDeque::from(items.clone());
-  run_queue(&exe, &args, queue, hard_timeout, soft_timeout_ms, args.diagnostics)?;
+  run_queue(
+    &exe,
+    &args,
+    queue,
+    hard_timeout,
+    soft_timeout_ms,
+    args.diagnostics,
+  )?;
 
   // Summary counters based on produced progress files (main run only).
   let mut ok = 0usize;
@@ -964,7 +1228,9 @@ fn run(args: RunArgs) -> io::Result<()> {
           .trace_slow_ms
           .and_then(|threshold| p.total_ms.map(|ms| ms > threshold))
           .unwrap_or(false),
-        ProgressStatus::Timeout | ProgressStatus::Panic | ProgressStatus::Error => args.trace_failures,
+        ProgressStatus::Timeout | ProgressStatus::Panic | ProgressStatus::Error => {
+          args.trace_failures
+        }
       };
       if !needs_trace {
         continue;
@@ -981,7 +1247,11 @@ fn run(args: RunArgs) -> io::Result<()> {
       });
     }
     if !trace_items.is_empty() {
-      println!("Tracing {} pages (writing to {})...", trace_items.len(), args.trace_dir.display());
+      println!(
+        "Tracing {} pages (writing to {})...",
+        trace_items.len(),
+        args.trace_dir.display()
+      );
       let trace_queue = std::collections::VecDeque::from(trace_items);
       run_queue(
         &exe,
@@ -1045,6 +1315,7 @@ fn main() -> io::Result<()> {
   let cli = Cli::parse();
   match cli.command {
     CommandKind::Run(args) => run(args),
+    CommandKind::Report(args) => report(args),
     CommandKind::Worker(args) => worker(args),
   }
 }

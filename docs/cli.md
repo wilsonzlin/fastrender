@@ -111,6 +111,7 @@ These are optional wrappers for the most common loops:
 - Run:
   - Help: `cargo run --release --bin pageset_progress -- run --help`
   - Typical: `cargo run --release --bin pageset_progress -- run --timeout 5`
+- Report: `cargo run --release --bin pageset_progress -- report [--progress-dir progress/pages --top 10 --fail-on-bad]` prints status counts, slowest pages, and hotspot histograms for the saved progress files.
 - Safety: uses **panic containment** (per-page worker process) and a **hard timeout** (kills runaway workers) so one broken page cannot stall the whole run.
 - Outputs:
   - `progress/pages/<stem>.json` — small, committed per-page progress artifact

@@ -1,0 +1,16 @@
+{
+  "url": "https://slow.test/",
+  "status": "ok",
+  "total_ms": 4200.0,
+  "stages_ms": {
+    "fetch": 50.0,
+    "css": 100.0,
+    "cascade": 200.0,
+    "layout": 3000.0,
+    "paint": 500.0
+  },
+  "notes": "",
+  "hotspot": "layout",
+  "last_good_commit": "",
+  "last_regression_commit": ""
+}

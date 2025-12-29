@@ -1,0 +1,16 @@
+{
+  "url": "https://fast.test/",
+  "status": "ok",
+  "total_ms": 120.0,
+  "stages_ms": {
+    "fetch": 5.0,
+    "css": 10.0,
+    "cascade": 20.0,
+    "layout": 40.0,
+    "paint": 45.0
+  },
+  "notes": "",
+  "hotspot": "layout",
+  "last_good_commit": "",
+  "last_regression_commit": ""
+}
