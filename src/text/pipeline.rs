@@ -2495,15 +2495,20 @@ pub(crate) fn collect_variations_for_face(
 
   for axis in axes {
     if axis.tag == wght_tag && !set_tags.contains(&wght_tag) {
+      let wght_value = (style.font_weight.to_u16() as f32).clamp(axis.min_value, axis.max_value);
       variations.push(Variation {
         tag: wght_tag,
-        value: style.font_weight.to_u16() as f32,
+        value: wght_value,
       });
       set_tags.insert(wght_tag);
     } else if axis.tag == wdth_tag && !set_tags.contains(&wdth_tag) {
+      let wdth_value = style
+        .font_stretch
+        .to_percentage()
+        .clamp(axis.min_value, axis.max_value);
       variations.push(Variation {
         tag: wdth_tag,
-        value: style.font_stretch.to_percentage(),
+        value: wdth_value,
       });
       set_tags.insert(wdth_tag);
     } else if axis.tag == opsz_tag
@@ -2513,9 +2518,10 @@ pub(crate) fn collect_variations_for_face(
         crate::style::types::FontOpticalSizing::Auto
       )
     {
+      let opsz_value = font_size.clamp(axis.min_value, axis.max_value);
       variations.push(Variation {
         tag: opsz_tag,
-        value: font_size,
+        value: opsz_value,
       });
       set_tags.insert(opsz_tag);
     } else if axis.tag == slnt_tag && !set_tags.contains(&slnt_tag) {
@@ -4671,6 +4677,105 @@ mod tests {
     assert!(
       (wide_adv - narrow_adv) > 1.0,
       "wdth axis should produce a noticeable difference"
+    );
+  }
+
+  #[test]
+  fn auto_variations_clamp_to_axis_bounds() {
+    const ROBOTO_FLEX: &[u8] = include_bytes!("../../tests/fonts/RobotoFlex-VF.ttf");
+
+    let mut db = FontDatabase::empty();
+    db.load_font_data(ROBOTO_FLEX.to_vec())
+      .expect("load Roboto Flex fixture");
+    let ctx = FontContext::with_database(Arc::new(db));
+
+    let face_info = ctx
+      .database()
+      .faces()
+      .next()
+      .expect("Roboto Flex face is available");
+    let family = face_info
+      .families
+      .first()
+      .map(|(name, _)| name.clone())
+      .expect("Roboto Flex has a family name");
+    let face = ttf_parser::Face::parse(ROBOTO_FLEX, face_info.index)
+      .expect("parse Roboto Flex face");
+    let axes: Vec<_> = face.variation_axes().into_iter().collect();
+    let wght_tag = Tag::from_bytes(b"wght");
+    let wdth_tag = Tag::from_bytes(b"wdth");
+    let opsz_tag = Tag::from_bytes(b"opsz");
+    let wght_axis = axes
+      .iter()
+      .find(|a| a.tag == wght_tag)
+      .expect("Roboto Flex exposes wght axis");
+    let wdth_axis = axes
+      .iter()
+      .find(|a| a.tag == wdth_tag)
+      .expect("Roboto Flex exposes wdth axis");
+    let opsz_axis = axes
+      .iter()
+      .find(|a| a.tag == opsz_tag)
+      .expect("Roboto Flex exposes opsz axis");
+
+    let mut style = ComputedStyle::default();
+    style.font_family = vec![family.clone()];
+    style.font_weight = FontWeight::Number(1);
+    style.font_stretch = FontStretch::from_percentage(200.0);
+    style.font_size = opsz_axis.max_value + 1000.0;
+    style.font_optical_sizing = crate::style::types::FontOpticalSizing::Auto;
+
+    let runs = ShapingPipeline::new()
+      .shape("RobotoFlex", &style, &ctx)
+      .expect("shape with Roboto Flex fixture");
+    assert!(
+      !runs.is_empty(),
+      "fixture font should shape test string without fallback"
+    );
+    let run = &runs[0];
+    assert_eq!(run.font.family, family);
+    let variations = &run.variations;
+
+    let wght_value = variations
+      .iter()
+      .find(|v| v.tag == wght_tag)
+      .map(|v| v.value)
+      .expect("auto variations should include wght");
+    let wdth_value = variations
+      .iter()
+      .find(|v| v.tag == wdth_tag)
+      .map(|v| v.value)
+      .expect("auto variations should include wdth");
+    let opsz_value = variations
+      .iter()
+      .find(|v| v.tag == opsz_tag)
+      .map(|v| v.value)
+      .expect("auto variations should include opsz when optical sizing is auto");
+
+    let expected_wght = (style.font_weight.to_u16() as f32).clamp(
+      wght_axis.min_value,
+      wght_axis.max_value,
+    );
+    let expected_wdth =
+      style
+        .font_stretch
+        .to_percentage()
+        .clamp(wdth_axis.min_value, wdth_axis.max_value);
+    let expected_opsz = style
+      .font_size
+      .clamp(opsz_axis.min_value, opsz_axis.max_value);
+
+    assert!(
+      (wght_value - expected_wght).abs() < 0.001,
+      "wght axis should clamp to font bounds (expected {expected_wght}, got {wght_value})"
+    );
+    assert!(
+      (wdth_value - expected_wdth).abs() < 0.001,
+      "wdth axis should clamp to font bounds (expected {expected_wdth}, got {wdth_value})"
+    );
+    assert!(
+      (opsz_value - expected_opsz).abs() < 0.001,
+      "opsz axis should clamp to font bounds (expected {expected_opsz}, got {opsz_value})"
     );
   }
 
