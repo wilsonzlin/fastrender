@@ -693,7 +693,9 @@ impl FragmentNode {
   ///
   /// Offsets are applied in the coordinate space of the containing fragment.
   /// Child fragments remain in their existing local coordinate space; this
-  /// preserves relative positioning within the subtree.
+  /// preserves relative positioning within the subtree. This returns a new
+  /// fragment and clones the full subtree; when shifting an owned fragment,
+  /// prefer [`translate_root_in_place`] to avoid the extra clone.
   ///
   /// # Examples
   ///
@@ -711,30 +713,25 @@ impl FragmentNode {
   /// assert_eq!(translated.bounds.y(), 30.0);
   /// ```
   pub fn translate(&self, offset: Point) -> Self {
-    let content = match &self.content {
-      FragmentContent::RunningAnchor { name, snapshot } => FragmentContent::RunningAnchor {
-        name: name.clone(),
-        snapshot: Box::new(snapshot.translate(offset)),
-      },
-      other => other.clone(),
-    };
+    let mut translated = self.clone();
+    translated.translate_root_in_place(offset);
+    translated
+  }
 
-    Self {
-      bounds: self.bounds.translate(offset),
-      block_metadata: self.block_metadata.clone(),
-      logical_override: self.logical_override.map(|r| r.translate(offset)),
-      content,
-      baseline: self.baseline,
-      children: self.children.clone(),
-      style: self.style.clone(),
-      starting_style: None,
-      fragment_index: self.fragment_index,
-      fragment_count: self.fragment_count,
-      fragmentainer_index: self.fragmentainer_index,
-      fragmentainer: self.fragmentainer,
-      slice_info: self.slice_info,
-      scroll_overflow: self.scroll_overflow,
-      fragmentation: self.fragmentation.clone(),
+  /// Translates this fragment's absolute position in place.
+  ///
+  /// This updates the fragment's own bounds and logical override (if present) without cloning or
+  /// touching children, preserving their local coordinate space. When the fragment represents a
+  /// running anchor, its snapshot is translated recursively to match the root movement. Starting
+  /// style snapshots are cleared to mirror [`translate`]'s cloning semantics.
+  pub fn translate_root_in_place(&mut self, offset: Point) {
+    self.bounds = self.bounds.translate(offset);
+    if let Some(logical) = self.logical_override {
+      self.logical_override = Some(logical.translate(offset));
+    }
+    self.starting_style = None;
+    if let FragmentContent::RunningAnchor { snapshot, .. } = &mut self.content {
+      snapshot.translate_root_in_place(offset);
     }
   }
 
@@ -1247,6 +1244,45 @@ mod tests {
     assert_eq!(translated.bounds.y(), 50.0);
     assert_eq!(translated.children[0].bounds.x(), 60.0);
     assert_eq!(translated.children[0].bounds.y(), 60.0);
+  }
+
+  #[test]
+  fn test_fragmentation_keeps_children_and_translates_running_anchor_snapshot() {
+    let snapshot_child = FragmentNode::new_block(Rect::from_xywh(3.0, 4.0, 2.0, 2.0), Vec::new());
+    let snapshot =
+      FragmentNode::new_block(Rect::from_xywh(5.0, 5.0, 10.0, 10.0), vec![snapshot_child]);
+    let mut root = FragmentNode::new_running_anchor(
+      Rect::from_xywh(0.0, 0.0, 20.0, 120.0),
+      "running".to_string(),
+      snapshot,
+    );
+    let child_first_fragment =
+      FragmentNode::new_block(Rect::from_xywh(0.0, 10.0, 5.0, 5.0), Vec::new());
+    let child_second_fragment =
+      FragmentNode::new_block(Rect::from_xywh(0.0, 70.0, 5.0, 5.0), Vec::new());
+    root.children = vec![child_first_fragment, child_second_fragment];
+
+    let options = FragmentationOptions::new(60.0).with_gap(10.0);
+    let fragments = split_fragment_tree(&root, &options);
+    assert_eq!(fragments.len(), 2);
+
+    assert_eq!(fragments[0].bounds.y(), 0.0);
+    assert_eq!(fragments[1].bounds.y(), 70.0);
+
+    assert_eq!(fragments[0].children.len(), 1);
+    assert_eq!(fragments[0].children[0].bounds.y(), 10.0);
+
+    let second = &fragments[1];
+    assert_eq!(second.children.len(), 1);
+    assert_eq!(second.children[0].bounds.y(), 10.0);
+
+    if let FragmentContent::RunningAnchor { snapshot, .. } = &second.content {
+      assert_eq!(snapshot.bounds.y(), 75.0);
+      assert_eq!(snapshot.children.len(), 1);
+      assert_eq!(snapshot.children[0].bounds.y(), 4.0);
+    } else {
+      panic!("second fragment should remain a running anchor");
+    }
   }
 
   // Hit testing tests

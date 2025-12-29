@@ -1,6 +1,11 @@
 use std::time::Duration;
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use fastrender::{
+  geometry::Rect,
+  layout::fragmentation::{fragment_tree, FragmentationOptions},
+  tree::fragment_tree::FragmentNode,
+};
 
 mod common;
 
@@ -202,6 +207,36 @@ fn bench_layout_table_stress(c: &mut Criterion) {
   group.finish();
 }
 
+fn bench_fragmentation_many_pages(c: &mut Criterion) {
+  let mut group = c.benchmark_group("bench_fragmentation");
+  let blocks_per_fragment = 8;
+  let block_height = 40.0;
+  let page_count = 64;
+  let fragmentainer_size = blocks_per_fragment as f32 * block_height;
+  let root = tall_fragment_tree(page_count * blocks_per_fragment, block_height, 600.0);
+  let options = FragmentationOptions::new(fragmentainer_size).with_gap(8.0);
+
+  group.bench_function("tall_stack", |b| {
+    b.iter(|| black_box(fragment_tree(black_box(&root), black_box(&options))))
+  });
+
+  group.finish();
+}
+
+fn tall_fragment_tree(block_count: usize, block_height: f32, inline_size: f32) -> FragmentNode {
+  let mut children = Vec::with_capacity(block_count);
+  let mut y = 0.0;
+  for _ in 0..block_count {
+    children.push(FragmentNode::new_block(
+      Rect::from_xywh(0.0, y, inline_size, block_height),
+      Vec::new(),
+    ));
+    y += block_height;
+  }
+
+  FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, inline_size, y), children)
+}
+
 fn bench_paint_display_list_build(c: &mut Criterion) {
   let mut group = c.benchmark_group("bench_paint_display_list_build");
   let viewport = common::REALISTIC_VIEWPORT;
@@ -299,6 +334,7 @@ criterion_group!(
     bench_layout_grid,
     bench_layout_table,
     bench_layout_table_stress,
+    bench_fragmentation_many_pages,
     bench_paint_display_list_build,
     bench_paint_optimize,
     bench_paint_rasterize,

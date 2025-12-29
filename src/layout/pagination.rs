@@ -751,7 +751,8 @@ fn collect_running_elements_for_page(root: &FragmentNode) -> HashMap<String, Vec
       strip_running_anchor_fragments(&mut snapshot);
       clear_running_position(&mut snapshot);
       let offset = Point::new(-snapshot.bounds.x(), -snapshot.bounds.y());
-      snapshots.push(snapshot.translate(offset));
+      snapshot.translate_root_in_place(offset);
+      snapshots.push(snapshot);
     }
     out.insert(name, snapshots);
   }

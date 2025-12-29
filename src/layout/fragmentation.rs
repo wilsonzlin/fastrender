@@ -748,8 +748,8 @@ pub fn fragment_tree(
       } else {
         offset.y += row_offset;
       }
-      let translated = clipped.translate(offset);
-      fragments.push(translated);
+      clipped.translate_root_in_place(offset);
+      fragments.push(clipped);
     }
   }
 
