@@ -872,11 +872,6 @@ impl FragmentNode {
     FragmentIterator::new(vec![self])
   }
 
-  /// Returns an iterator over direct children
-  pub fn children(&self) -> impl Iterator<Item = &FragmentNode> {
-    self.children.iter()
-  }
-
   /// Returns a slice of direct children.
   pub fn children_ref(&self) -> &[FragmentNode] {
     self.children.as_ref()
@@ -885,6 +880,11 @@ impl FragmentNode {
   /// Returns mutable access to this fragment's children.
   pub fn children_mut(&mut self) -> &mut Vec<FragmentNode> {
     Arc::make_mut(&mut self.children)
+  }
+
+  /// Returns an iterator over direct children
+  pub fn children(&self) -> impl Iterator<Item = &FragmentNode> {
+    self.children.iter()
   }
 
   /// Creates a shallow clone of this fragment without cloning children.

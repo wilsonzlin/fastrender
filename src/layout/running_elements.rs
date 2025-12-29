@@ -175,7 +175,7 @@ fn collect_running_element_occurrences(
     _ => {}
   }
 
-  for child in node.children.iter() {
+  for child in node.children() {
     collect_running_element_occurrences(
       child,
       abs_origin,
@@ -196,15 +196,16 @@ fn clean_running_snapshot(node: &mut FragmentNode) {
 }
 
 fn strip_running_anchor_fragments(node: &mut FragmentNode) {
-  let mut kept: Vec<FragmentNode> = Vec::with_capacity(node.children.len());
-  for mut child in node.children_mut().drain(..) {
+  let children = node.children_mut();
+  let mut kept: Vec<FragmentNode> = Vec::with_capacity(children.len());
+  for mut child in children.drain(..) {
     if matches!(child.content, FragmentContent::RunningAnchor { .. }) {
       continue;
     }
     strip_running_anchor_fragments(&mut child);
     kept.push(child);
   }
-  node.set_children(kept);
+  *children = kept;
 }
 
 fn clear_running_position(node: &mut FragmentNode) {
@@ -215,7 +216,7 @@ fn clear_running_position(node: &mut FragmentNode) {
       node.style = Some(Arc::new(owned));
     }
   }
-  for child in node.children_mut() {
+  for child in node.children_mut().iter_mut() {
     clear_running_position(child);
   }
 }
@@ -235,7 +236,60 @@ fn translate_fragment(node: &mut FragmentNode, dx: f32, dy: f32) {
       logical.height(),
     ));
   }
-  for child in node.children_mut() {
+  for child in node.children_mut().iter_mut() {
     translate_fragment(child, dx, dy);
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::geometry::Rect;
+  use crate::style::ComputedStyle;
+
+  #[test]
+  fn clean_running_snapshot_strips_and_normalizes() {
+    let mut root_style = ComputedStyle::default();
+    root_style.running_position = Some("root".into());
+    let root_style = Arc::new(root_style);
+
+    let mut child_style = ComputedStyle::default();
+    child_style.running_position = Some("child".into());
+    let child_style = Arc::new(child_style);
+
+    let anchor_snapshot = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 5.0, 5.0), Vec::new());
+    let anchor = FragmentNode::new_running_anchor(
+      Rect::from_xywh(1.0, 1.0, 2.0, 2.0),
+      "anchor".to_string(),
+      anchor_snapshot,
+    );
+    let child = FragmentNode::new_block_styled(
+      Rect::from_xywh(4.0, 6.0, 10.0, 10.0),
+      Vec::new(),
+      child_style,
+    );
+
+    let mut root = FragmentNode::new_block_styled(
+      Rect::from_xywh(10.0, 20.0, 30.0, 30.0),
+      vec![anchor, child],
+      root_style,
+    );
+
+    clean_running_snapshot(&mut root);
+
+    assert!(!root
+      .iter_fragments()
+      .any(|frag| matches!(frag.content, FragmentContent::RunningAnchor { .. })));
+
+    assert!(root.iter_fragments().all(|frag| {
+      frag
+        .style
+        .as_deref()
+        .map_or(true, |style| style.running_position.is_none())
+    }));
+
+    let logical = root.logical_bounds();
+    assert!(logical.x().abs() < EPSILON);
+    assert!(logical.y().abs() < EPSILON);
   }
 }
