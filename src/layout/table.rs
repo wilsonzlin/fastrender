@@ -3929,18 +3929,18 @@ impl FormattingContext for TableFormattingContext {
     let normalized_table = self.normalize_table_root(box_node);
     let table_box = normalized_table.as_ref();
     let dump = runtime::runtime_toggles().truthy("FASTR_DUMP_TABLE");
-    let mut positioned_children: Vec<BoxNode> = Vec::new();
-    let mut running_children: Vec<(usize, BoxNode)> = Vec::new();
+    let mut positioned_children: Vec<&BoxNode> = Vec::new();
+    let mut running_children: Vec<(usize, &BoxNode)> = Vec::new();
     for (child_idx, child) in table_box.children.iter().enumerate() {
       if child.style.running_position.is_some() {
-        running_children.push((child_idx, child.clone()));
+        running_children.push((child_idx, child));
         continue;
       }
       if matches!(
         child.style.position,
         crate::style::position::Position::Absolute | crate::style::position::Position::Fixed
       ) {
-        positioned_children.push(child.clone());
+        positioned_children.push(child);
       }
     }
     let has_running_children = !running_children.is_empty();
@@ -4167,7 +4167,7 @@ impl FormattingContext for TableFormattingContext {
           return Ok(());
         }
         let abs = AbsoluteLayout::with_font_context(self.factory.font_context().clone());
-        for child in &positioned_children {
+        for child in positioned_children.iter().copied() {
           let original_style = child.style.clone();
           let mut layout_child = child.clone();
           let mut style = (*layout_child.style).clone();
@@ -4238,7 +4238,7 @@ impl FormattingContext for TableFormattingContext {
           AvailableSpace::Definite(width.max(0.0)),
           AvailableSpace::Indefinite,
         );
-        for (order, (_, running_child)) in running_children.iter().enumerate() {
+        for (order, (_, running_child)) in running_children.iter().copied().enumerate() {
           let Some(name) = running_child.style.running_position.clone() else {
             continue;
           };
@@ -5600,7 +5600,7 @@ impl FormattingContext for TableFormattingContext {
           AvailableSpace::Definite(table_bounds.width().max(0.0)),
           AvailableSpace::Indefinite,
         );
-        for (order, (_, running_child)) in running_children.iter().enumerate() {
+        for (order, (_, running_child)) in running_children.iter().copied().enumerate() {
           let Some(name) = running_child.style.running_position.clone() else {
             continue;
           };
@@ -5740,12 +5740,11 @@ impl FormattingContext for TableFormattingContext {
         AvailableSpace::Indefinite,
       );
 
-      for (order, (idx, running_child)) in running_children.iter().enumerate() {
+      for (order, (idx, running_child)) in running_children.iter().copied().enumerate() {
         let Some(name) = running_child.style.running_position.clone() else {
           continue;
         };
 
-        let idx = *idx;
         let mut anchor_y = offset_y;
         for sibling in table_box.children.iter().skip(idx.saturating_add(1)) {
           if sibling.style.running_position.is_some() {
@@ -6151,6 +6150,29 @@ mod tests {
       }
     }
     None
+  }
+
+  fn collect_running_anchor_names(fragment: &FragmentNode, names: &mut Vec<String>) {
+    if let FragmentContent::RunningAnchor { name, .. } = &fragment.content {
+      names.push(name.clone());
+    }
+    for child in &fragment.children {
+      collect_running_anchor_names(child, names);
+    }
+  }
+
+  fn collect_positioned_fragments<'a>(fragment: &'a FragmentNode, out: &mut Vec<&'a FragmentNode>) {
+    if fragment
+      .style
+      .as_ref()
+      .map(|s| matches!(s.position, Position::Absolute | Position::Fixed))
+      .unwrap_or(false)
+    {
+      out.push(fragment);
+    }
+    for child in &fragment.children {
+      collect_positioned_fragments(child, out);
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -13328,6 +13350,93 @@ mod tests {
     let fragment = result.unwrap();
     assert!(fragment.bounds.width() > 0.0);
     assert!(fragment.bounds.height() > 0.0);
+  }
+
+  #[test]
+  fn running_and_positioned_children_are_preserved() {
+    let mut table_style = ComputedStyle::default();
+    table_style.display = Display::Table;
+    table_style.border_spacing_horizontal = Length::px(0.0);
+    table_style.border_spacing_vertical = Length::px(0.0);
+
+    let mut caption_style = ComputedStyle::default();
+    caption_style.display = Display::TableCaption;
+    caption_style.caption_side = CaptionSide::Top;
+    caption_style.height = Some(Length::px(4.0));
+    let caption = BoxNode::new_block(
+      Arc::new(caption_style),
+      FormattingContextType::Block,
+      vec![],
+    );
+
+    let mut row_style = ComputedStyle::default();
+    row_style.display = Display::TableRow;
+
+    let mut cell_style = ComputedStyle::default();
+    cell_style.display = Display::TableCell;
+    cell_style.width = Some(Length::px(20.0));
+    cell_style.height = Some(Length::px(10.0));
+    let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell],
+    );
+
+    let mut running_style = ComputedStyle::default();
+    running_style.display = Display::Block;
+    running_style.running_position = Some("header".to_string());
+    running_style.width = Some(Length::px(5.0));
+    running_style.height = Some(Length::px(5.0));
+    let running = BoxNode::new_block(
+      Arc::new(running_style),
+      FormattingContextType::Block,
+      vec![],
+    );
+
+    let mut positioned_style = ComputedStyle::default();
+    positioned_style.display = Display::Block;
+    positioned_style.position = Position::Absolute;
+    positioned_style.width = Some(Length::px(7.0));
+    positioned_style.height = Some(Length::px(3.0));
+    let positioned = BoxNode::new_block(
+      Arc::new(positioned_style),
+      FormattingContextType::Block,
+      vec![],
+    );
+
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![running, caption, row, positioned],
+    );
+
+    let tfc = TableFormattingContext::new();
+    let fragment = tfc
+      .layout(&table, &LayoutConstraints::definite_width(100.0))
+      .expect("table layout");
+
+    let mut anchors = Vec::new();
+    collect_running_anchor_names(&fragment, &mut anchors);
+    assert!(
+      anchors.iter().any(|name| name == "header"),
+      "running element should produce a running anchor"
+    );
+
+    let mut positioned_fragments = Vec::new();
+    collect_positioned_fragments(&fragment, &mut positioned_fragments);
+    assert_eq!(
+      positioned_fragments.len(),
+      1,
+      "absolute-positioned child should be laid out"
+    );
+    assert!(
+      positioned_fragments
+        .first()
+        .map(|f| f.bounds.width() > 0.0 && f.bounds.height() > 0.0)
+        .unwrap_or(false),
+      "positioned child should have non-zero size"
+    );
   }
 
   #[test]
