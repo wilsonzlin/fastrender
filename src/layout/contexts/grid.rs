@@ -65,6 +65,8 @@ use crate::tree::fragment_tree::FragmentNode;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use taffy::geometry::Line;
 use taffy::prelude::TaffyFitContent;
@@ -92,6 +94,8 @@ use taffy::tree::NodeId as TaffyNodeId;
 use taffy::tree::TaffyTree;
 use taffy::DetailedGridTracksInfo;
 
+const MAX_MEASURED_KEYS_PER_NODE: usize = 12;
+
 #[derive(Clone, Copy)]
 enum Axis {
   Horizontal,
@@ -115,6 +119,28 @@ struct MeasureKey {
 }
 
 impl MeasureKey {
+  fn quantize(val: f32) -> f32 {
+    let abs = val.abs();
+    let step = if abs > 4096.0 {
+      64.0
+    } else if abs > 2048.0 {
+      32.0
+    } else if abs > 1024.0 {
+      16.0
+    } else if abs > 512.0 {
+      8.0
+    } else if abs > 256.0 {
+      4.0
+    } else {
+      2.0
+    };
+    (val / step).round() * step
+  }
+
+  fn quantize_to_bits(val: f32) -> u32 {
+    Self::quantize(val).to_bits()
+  }
+
   fn new(
     node_ptr: *const BoxNode,
     known_dimensions: taffy::geometry::Size<Option<f32>>,
@@ -122,7 +148,9 @@ impl MeasureKey {
   ) -> Self {
     fn avail_key(space: taffy::style::AvailableSpace) -> MeasureAvailKey {
       match space {
-        taffy::style::AvailableSpace::Definite(v) => MeasureAvailKey::Definite(v.to_bits()),
+        taffy::style::AvailableSpace::Definite(v) => {
+          MeasureAvailKey::Definite(MeasureKey::quantize_to_bits(v))
+        }
         taffy::style::AvailableSpace::MinContent => MeasureAvailKey::MinContent,
         taffy::style::AvailableSpace::MaxContent => MeasureAvailKey::MaxContent,
       }
@@ -130,13 +158,31 @@ impl MeasureKey {
 
     Self {
       node_ptr: node_ptr as usize,
-      known_width: known_dimensions.width.map(|v| v.to_bits()),
-      known_height: known_dimensions.height.map(|v| v.to_bits()),
+      known_width: known_dimensions.width.map(Self::quantize_to_bits),
+      known_height: known_dimensions.height.map(Self::quantize_to_bits),
       available_width: avail_key(available_space.width),
       available_height: avail_key(available_space.height),
     }
   }
 }
+
+fn push_measured_key(keys: &mut Vec<MeasureKey>, key: MeasureKey) {
+  if keys.len() >= MAX_MEASURED_KEYS_PER_NODE {
+    keys.remove(0);
+  }
+  keys.push(key);
+}
+
+#[cfg(test)]
+static GRID_MEASURE_LAYOUT_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(test)]
+fn record_measure_layout_call() {
+  GRID_MEASURE_LAYOUT_CALLS.fetch_add(1, Ordering::Relaxed);
+}
+
+#[cfg(not(test))]
+fn record_measure_layout_call() {}
 
 fn constraints_from_taffy(
   viewport_size: crate::geometry::Size,
@@ -1440,7 +1486,7 @@ impl GridFormattingContext {
       let fc_type = layout_child
         .formatting_context()
         .unwrap_or(crate::style::display::FormattingContextType::Block);
-      let fc = factory.create(fc_type);
+      let fc = factory.get(fc_type);
       let child_constraints = LayoutConstraints::new(
         CrateAvailableSpace::Definite(padding_rect.size.width),
         block_base
@@ -1905,6 +1951,144 @@ impl GridFormattingContext {
 
     Ok(layout.size.width)
   }
+
+  #[allow(clippy::too_many_arguments)]
+  fn measure_grid_item(
+    &self,
+    node_ptr: *const BoxNode,
+    node_id: TaffyNodeId,
+    known_dimensions: taffy::geometry::Size<Option<f32>>,
+    available_space: taffy::geometry::Size<taffy::style::AvailableSpace>,
+    parent_inline_base: Option<f32>,
+    container_justify_items: AlignItems,
+    factory: &crate::layout::contexts::factory::FormattingContextFactory,
+    measure_cache: &Rc<RefCell<HashMap<MeasureKey, taffy::geometry::Size<f32>>>>,
+    measured_fragments: &Rc<RefCell<HashMap<MeasureKey, FragmentNode>>>,
+    measured_node_keys: &Rc<RefCell<HashMap<TaffyNodeId, Vec<MeasureKey>>>>,
+  ) -> taffy::geometry::Size<f32> {
+    let box_node = unsafe { &*node_ptr };
+    let fallback_size = |known: Option<f32>, avail_dim: taffy::style::AvailableSpace| {
+      known.unwrap_or(match avail_dim {
+        taffy::style::AvailableSpace::Definite(v) => v,
+        _ => 0.0,
+      })
+    };
+
+    let key = MeasureKey::new(node_ptr, known_dimensions, available_space);
+    if let Some(size) = measure_cache.borrow().get(&key) {
+      return *size;
+    }
+    let fc_type = box_node
+      .formatting_context()
+      .unwrap_or(FormattingContextType::Block);
+    let fc = factory.get(fc_type);
+
+    // Taffy frequently probes min/max-content sizes during track sizing.
+    // Avoid running full layout for these probes; use intrinsic sizing APIs instead.
+    if known_dimensions.width.is_none() {
+      let intrinsic_mode = match available_space.width {
+        taffy::style::AvailableSpace::MinContent => Some(IntrinsicSizingMode::MinContent),
+        taffy::style::AvailableSpace::MaxContent => Some(IntrinsicSizingMode::MaxContent),
+        _ => None,
+      };
+      if let Some(mode) = intrinsic_mode {
+        let border_width = fc
+          .compute_intrinsic_inline_size(box_node, mode)
+          .unwrap_or(0.0);
+        let percentage_base = match available_space.width {
+          taffy::style::AvailableSpace::Definite(w) => w,
+          _ => parent_inline_base.unwrap_or(0.0),
+        };
+        let padding_left = self.resolve_length_for_width(
+          box_node.style.padding_left,
+          percentage_base,
+          &box_node.style,
+        );
+        let padding_right = self.resolve_length_for_width(
+          box_node.style.padding_right,
+          percentage_base,
+          &box_node.style,
+        );
+        let border_left = self.resolve_length_for_width(
+          box_node.style.border_left_width,
+          percentage_base,
+          &box_node.style,
+        );
+        let border_right = self.resolve_length_for_width(
+          box_node.style.border_right_width,
+          percentage_base,
+          &box_node.style,
+        );
+        let edges_inline = padding_left + padding_right + border_left + border_right;
+        let width = (border_width - edges_inline).max(0.0);
+        let size = taffy::geometry::Size {
+          width,
+          height: fallback_size(known_dimensions.height, available_space.height).max(0.0),
+        };
+        measure_cache.borrow_mut().insert(key, size);
+        return size;
+      }
+    }
+
+    let mut constraints = constraints_from_taffy(
+      self.viewport_size,
+      known_dimensions,
+      available_space,
+      parent_inline_base,
+    );
+
+    if known_dimensions.width.is_none()
+      && matches!(
+        available_space.width,
+        taffy::style::AvailableSpace::Definite(_)
+      )
+      && box_node.style.width.is_none()
+    {
+      if let taffy::style::AvailableSpace::Definite(area_width) = available_space.width {
+        let justify = box_node
+          .style
+          .justify_self
+          .unwrap_or(container_justify_items);
+        if justify != AlignItems::Stretch {
+          if let Ok(intrinsic_width) =
+            fc.compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MaxContent)
+          {
+            let used_width = intrinsic_width.min(area_width);
+            constraints.available_width = CrateAvailableSpace::Definite(used_width);
+            constraints.inline_percentage_base = Some(area_width);
+          }
+        }
+      }
+    }
+
+    record_measure_layout_call();
+    let mut fragment = match fc.layout(box_node, &constraints) {
+      Ok(fragment) => fragment,
+      Err(_) => return taffy::geometry::Size::ZERO,
+    };
+    let percentage_base = match available_space.width {
+      taffy::style::AvailableSpace::Definite(w) => w,
+      _ => constraints
+        .width()
+        .unwrap_or_else(|| fragment.bounds.width()),
+    };
+    fragment.content = FragmentContent::Block {
+      box_id: Some(box_node.id),
+    };
+    fragment.style = Some(box_node.style.clone());
+    let content_size = self.content_box_size(&fragment, &box_node.style, percentage_base);
+    let size = taffy::geometry::Size {
+      width: content_size.width.max(0.0),
+      height: content_size.height.max(0.0),
+    };
+    push_measured_key(
+      measured_node_keys.borrow_mut().entry(node_id).or_default(),
+      key,
+    );
+    measured_fragments.borrow_mut().insert(key, fragment);
+    measure_cache.borrow_mut().insert(key, size);
+    size
+  }
 }
 
 fn translate_fragment_tree(fragment: &mut FragmentNode, delta: Point) {
@@ -2339,7 +2523,6 @@ impl FormattingContext for GridFormattingContext {
               self.viewport_size,
               self.nearest_positioned_cb,
             );
-          let viewport_size = self.viewport_size;
           let parent_inline_base = constraints.inline_percentage_base;
           let container_justify_items = box_node.style.justify_items;
           let cache = measure_cache.clone();
@@ -2423,117 +2606,18 @@ impl FormattingContext for GridFormattingContext {
             let Some(node_ptr) = node_context.as_ref().map(|p| **p) else {
               return taffy::geometry::Size::ZERO;
             };
-            let box_node = unsafe { &*node_ptr };
-
-            let key = MeasureKey::new(node_ptr, known_dimensions, available_space);
-            if let Some(size) = cache.borrow().get(&key) {
-              return *size;
-            }
-            let fc_type = box_node
-              .formatting_context()
-              .unwrap_or(FormattingContextType::Block);
-            let fc = factory.get(fc_type);
-
-            // Taffy frequently probes min/max-content sizes during track sizing.
-            // Avoid running full layout for these probes; use intrinsic sizing APIs instead.
-            if known_dimensions.width.is_none() {
-              let intrinsic_mode = match available_space.width {
-                taffy::style::AvailableSpace::MinContent => Some(IntrinsicSizingMode::MinContent),
-                taffy::style::AvailableSpace::MaxContent => Some(IntrinsicSizingMode::MaxContent),
-                _ => None,
-              };
-              if let Some(mode) = intrinsic_mode {
-                let border_width = fc.compute_intrinsic_inline_size(box_node, mode).unwrap_or(0.0);
-                let percentage_base = match available_space.width {
-                  taffy::style::AvailableSpace::Definite(w) => w,
-                  _ => parent_inline_base.unwrap_or(0.0),
-                };
-                let padding_left = this.resolve_length_for_width(
-                  box_node.style.padding_left,
-                  percentage_base,
-                  &box_node.style,
-                );
-                let padding_right = this.resolve_length_for_width(
-                  box_node.style.padding_right,
-                  percentage_base,
-                  &box_node.style,
-                );
-                let border_left = this.resolve_length_for_width(
-                  box_node.style.border_left_width,
-                  percentage_base,
-                  &box_node.style,
-                );
-                let border_right = this.resolve_length_for_width(
-                  box_node.style.border_right_width,
-                  percentage_base,
-                  &box_node.style,
-                );
-                let edges_inline = padding_left + padding_right + border_left + border_right;
-                let width = (border_width - edges_inline).max(0.0);
-                let size = taffy::geometry::Size {
-                  width,
-                  height: fallback_size(known_dimensions.height, available_space.height).max(0.0),
-                };
-                cache.borrow_mut().insert(key, size);
-                return size;
-              }
-            }
-
-            let mut constraints = constraints_from_taffy(
-              viewport_size,
+            this.measure_grid_item(
+              node_ptr,
+              node_id,
               known_dimensions,
               available_space,
               parent_inline_base,
-            );
-
-            if known_dimensions.width.is_none()
-              && matches!(
-                available_space.width,
-                taffy::style::AvailableSpace::Definite(_)
-              )
-              && box_node.style.width.is_none()
-            {
-              if let taffy::style::AvailableSpace::Definite(area_width) = available_space.width {
-                let justify = box_node.style.justify_self.unwrap_or(container_justify_items);
-                if justify != AlignItems::Stretch {
-                  if let Ok(intrinsic_width) = fc
-                    .compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MaxContent)
-                  {
-                    let used_width = intrinsic_width.min(area_width);
-                    constraints.available_width = CrateAvailableSpace::Definite(used_width);
-                    constraints.inline_percentage_base = Some(area_width);
-                  }
-                }
-              }
-            }
-
-            let mut fragment = match fc.layout(box_node, &constraints) {
-              Ok(fragment) => fragment,
-              Err(_) => return taffy::geometry::Size::ZERO,
-            };
-            let percentage_base = match available_space.width {
-              taffy::style::AvailableSpace::Definite(w) => w,
-              _ => constraints
-                .width()
-                .unwrap_or_else(|| fragment.bounds.width()),
-            };
-            fragment.content = FragmentContent::Block {
-              box_id: Some(box_node.id),
-            };
-            fragment.style = Some(box_node.style.clone());
-            let content_size = this.content_box_size(&fragment, &box_node.style, percentage_base);
-            let size = taffy::geometry::Size {
-              width: content_size.width.max(0.0),
-              height: content_size.height.max(0.0),
-            };
-            measured_keys
-              .borrow_mut()
-              .entry(node_id)
-              .or_default()
-              .push(key);
-            measured.borrow_mut().insert(key, fragment);
-            cache.borrow_mut().insert(key, size);
-            size
+              container_justify_items,
+              &factory,
+              &cache,
+              &measured,
+              &measured_keys,
+            )
           }
         },
       )
@@ -2743,7 +2827,7 @@ impl FormattingContext for GridFormattingContext {
         let fc_type = layout_child
           .formatting_context()
           .unwrap_or(crate::style::display::FormattingContextType::Block);
-        let fc = factory.create(fc_type);
+        let fc = factory.get(fc_type);
         let child_constraints = LayoutConstraints::new(
           CrateAvailableSpace::Definite(padding_rect.size.width),
           block_base
@@ -2882,6 +2966,184 @@ mod tests {
     let style = Arc::new(style);
     let text_child = BoxNode::new_text(style.clone(), text.to_string());
     BoxNode::new_block(style, FormattingContextType::Inline, vec![text_child])
+  }
+
+  #[test]
+  fn measure_key_quantizes_definite_sizes() {
+    use taffy::style::AvailableSpace;
+
+    let node = BoxNode::new_block(make_item_style(), FormattingContextType::Block, vec![]);
+    let ptr = &node as *const _;
+    let known_a = taffy::geometry::Size {
+      width: Some(300.3),
+      height: Some(150.7),
+    };
+    let avail_a = taffy::geometry::Size {
+      width: AvailableSpace::Definite(500.2),
+      height: AvailableSpace::Definite(600.4),
+    };
+    let known_b = taffy::geometry::Size {
+      width: Some(300.6),
+      height: Some(150.4),
+    };
+    let avail_b = taffy::geometry::Size {
+      width: AvailableSpace::Definite(500.6),
+      height: AvailableSpace::Definite(600.2),
+    };
+
+    let key_a = MeasureKey::new(ptr, known_a, avail_a);
+    let key_b = MeasureKey::new(ptr, known_b, avail_b);
+    assert_eq!(
+      key_a, key_b,
+      "near-identical definite sizes should quantize to the same key"
+    );
+
+    let min_key = MeasureKey::new(
+      ptr,
+      known_a,
+      taffy::geometry::Size {
+        width: AvailableSpace::MinContent,
+        height: avail_a.height,
+      },
+    );
+    let max_key = MeasureKey::new(
+      ptr,
+      known_a,
+      taffy::geometry::Size {
+        width: AvailableSpace::MaxContent,
+        height: avail_a.height,
+      },
+    );
+    assert_ne!(min_key.available_width, max_key.available_width);
+  }
+
+  #[test]
+  fn measured_node_keys_are_capped_per_node() {
+    use taffy::style::AvailableSpace;
+
+    let gc = GridFormattingContext::new();
+    let factory =
+      crate::layout::contexts::factory::FormattingContextFactory::with_font_context_viewport_and_cb(
+        gc.font_context.clone(),
+        gc.viewport_size,
+        gc.nearest_positioned_cb,
+      );
+    let measure_cache: Rc<RefCell<HashMap<MeasureKey, taffy::geometry::Size<f32>>>> =
+      Rc::new(RefCell::new(HashMap::new()));
+    let measured_fragments: Rc<RefCell<HashMap<MeasureKey, FragmentNode>>> =
+      Rc::new(RefCell::new(HashMap::new()));
+    let measured_node_keys: Rc<RefCell<HashMap<TaffyNodeId, Vec<MeasureKey>>>> =
+      Rc::new(RefCell::new(HashMap::new()));
+
+    let node = BoxNode::new_block(make_item_style(), FormattingContextType::Block, vec![]);
+    let node_ptr = &node as *const _;
+    let node_id = TaffyNodeId::from(1u64);
+    let known = taffy::geometry::Size {
+      width: None,
+      height: None,
+    };
+
+    for i in 0..(MAX_MEASURED_KEYS_PER_NODE + 5) {
+      let avail = taffy::geometry::Size {
+        width: AvailableSpace::Definite(20.0 + (i as f32 * 10.0)),
+        height: AvailableSpace::Definite(40.0 + (i as f32 * 5.0)),
+      };
+      let _ = gc.measure_grid_item(
+        node_ptr,
+        node_id,
+        known,
+        avail,
+        None,
+        AlignItems::Stretch,
+        &factory,
+        &measure_cache,
+        &measured_fragments,
+        &measured_node_keys,
+      );
+    }
+
+    let keys = measured_node_keys.borrow();
+    let node_keys = keys.get(&node_id).expect("measured keys");
+    assert!(
+      node_keys.len() <= MAX_MEASURED_KEYS_PER_NODE,
+      "measured keys should be capped per node"
+    );
+    let first_key = MeasureKey::new(
+      node_ptr,
+      known,
+      taffy::geometry::Size {
+        width: AvailableSpace::Definite(20.0),
+        height: AvailableSpace::Definite(40.0),
+      },
+    );
+    assert!(
+      !node_keys.contains(&first_key),
+      "oldest measured keys should be evicted when exceeding the cap"
+    );
+  }
+
+  #[test]
+  fn grid_measure_quantization_limits_layout_calls() {
+    use std::sync::atomic::Ordering;
+    use taffy::style::AvailableSpace;
+
+    let gc = GridFormattingContext::new();
+    let factory =
+      crate::layout::contexts::factory::FormattingContextFactory::with_font_context_viewport_and_cb(
+        gc.font_context.clone(),
+        gc.viewport_size,
+        gc.nearest_positioned_cb,
+      );
+    let measure_cache: Rc<RefCell<HashMap<MeasureKey, taffy::geometry::Size<f32>>>> =
+      Rc::new(RefCell::new(HashMap::new()));
+    let measured_fragments: Rc<RefCell<HashMap<MeasureKey, FragmentNode>>> =
+      Rc::new(RefCell::new(HashMap::new()));
+    let measured_node_keys: Rc<RefCell<HashMap<TaffyNodeId, Vec<MeasureKey>>>> =
+      Rc::new(RefCell::new(HashMap::new()));
+
+    GRID_MEASURE_LAYOUT_CALLS.store(0, Ordering::SeqCst);
+
+    let known = taffy::geometry::Size {
+      width: None,
+      height: None,
+    };
+    let widths = [300.2, 300.6, 300.1, 300.8, 300.4];
+    let heights = [150.7, 150.4, 150.9];
+
+    let nodes: Vec<BoxNode> = (0..12)
+      .map(|_| BoxNode::new_block(make_item_style(), FormattingContextType::Block, vec![]))
+      .collect();
+
+    for (i, node) in nodes.iter().enumerate() {
+      let node_id = TaffyNodeId::from((i + 1) as u64);
+      let node_ptr = node as *const _;
+      for width in widths {
+        for height in heights {
+          let avail = taffy::geometry::Size {
+            width: AvailableSpace::Definite(width + (i as f32 * 0.01)),
+            height: AvailableSpace::Definite(height),
+          };
+          let _ = gc.measure_grid_item(
+            node_ptr,
+            node_id,
+            known,
+            avail,
+            None,
+            AlignItems::Stretch,
+            &factory,
+            &measure_cache,
+            &measured_fragments,
+            &measured_node_keys,
+          );
+        }
+      }
+    }
+
+    let calls = GRID_MEASURE_LAYOUT_CALLS.load(Ordering::SeqCst);
+    assert!(
+      calls > 0 && calls <= nodes.len() * 3,
+      "quantized keys should coalesce near-identical probes (calls={calls})"
+    );
   }
 
   #[test]
