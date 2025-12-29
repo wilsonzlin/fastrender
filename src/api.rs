@@ -1153,13 +1153,7 @@ impl ResourceContext {
     kind: ResourceKind,
     url: &str,
   ) -> std::result::Result<(), PolicyError> {
-    match self.policy.allows(url) {
-      Ok(()) => Ok(()),
-      Err(err) => {
-        self.record_violation(kind, url, None, err.reason.clone());
-        Err(err)
-      }
-    }
+    self.check_allowed_with_final(kind, url, None)
   }
 
   /// Evaluate whether a URL (and final URL after redirects) is allowed by policy.
@@ -1169,7 +1163,11 @@ impl ResourceContext {
     url: &str,
     final_url: Option<&str>,
   ) -> std::result::Result<(), PolicyError> {
-    match self.policy.allows_with_final(url, final_url) {
+    let allowed = match kind {
+      ResourceKind::Document => self.policy.allows_document_with_final(url, final_url),
+      _ => self.policy.allows_with_final(url, final_url),
+    };
+    match allowed {
       Ok(()) => Ok(()),
       Err(err) => {
         self.record_violation(kind, url, final_url, err.reason.clone());

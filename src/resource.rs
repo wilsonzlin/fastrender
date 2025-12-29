@@ -184,11 +184,35 @@ impl ResourceAccessPolicy {
     self.allows_with_final(target_url, None)
   }
 
+  /// Check whether a document URL is allowed under this policy, ignoring same-origin restrictions.
+  pub fn allows_document(&self, target_url: &str) -> std::result::Result<(), PolicyError> {
+    self.allows_document_with_final(target_url, None)
+  }
+
   /// Check whether a subresource URL is allowed, considering any final URL after redirects.
   pub fn allows_with_final(
     &self,
     target_url: &str,
     final_url: Option<&str>,
+  ) -> std::result::Result<(), PolicyError> {
+    self.allows_internal(target_url, final_url, self.same_origin_only)
+  }
+
+  /// Check whether a document URL is allowed, considering any final URL after redirects, while
+  /// skipping same-origin enforcement.
+  pub fn allows_document_with_final(
+    &self,
+    target_url: &str,
+    final_url: Option<&str>,
+  ) -> std::result::Result<(), PolicyError> {
+    self.allows_internal(target_url, final_url, false)
+  }
+
+  fn allows_internal(
+    &self,
+    target_url: &str,
+    final_url: Option<&str>,
+    enforce_same_origin: bool,
   ) -> std::result::Result<(), PolicyError> {
     let Some(origin) = &self.document_origin else {
       return Ok(());
@@ -198,7 +222,7 @@ impl ResourceAccessPolicy {
     let parsed = match Url::parse(effective_url) {
       Ok(parsed) => parsed,
       Err(_) => {
-        if self.same_origin_only
+        if enforce_same_origin
           && (effective_url.starts_with("http://") || effective_url.starts_with("https://"))
         {
           return Err(PolicyError {
@@ -210,7 +234,7 @@ impl ResourceAccessPolicy {
     };
 
     let target_origin = DocumentOrigin::from_parsed_url(&parsed);
-    if target_origin.is_http_like() && target_origin.host().is_none() && self.same_origin_only {
+    if target_origin.is_http_like() && target_origin.host().is_none() && enforce_same_origin {
       return Err(PolicyError {
         reason: format!("Blocked subresource with missing host: {effective_url}"),
       });
@@ -235,7 +259,7 @@ impl ResourceAccessPolicy {
       });
     }
 
-    if !self.same_origin_only {
+    if !enforce_same_origin {
       return Ok(());
     }
 
