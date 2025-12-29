@@ -377,6 +377,18 @@ impl DebugConfig {
       raw.contains_key("FASTR_LOG_CSS_LINKS"),
     );
     config.insert_bool(
+      "FASTR_FETCH_PRELOAD_STYLESHEETS",
+      truthy(raw.get("FASTR_FETCH_PRELOAD_STYLESHEETS"), true),
+    );
+    config.insert_bool(
+      "FASTR_FETCH_MODULEPRELOAD_STYLESHEETS",
+      truthy(raw.get("FASTR_FETCH_MODULEPRELOAD_STYLESHEETS"), false),
+    );
+    config.insert_bool(
+      "FASTR_FETCH_ALTERNATE_STYLESHEETS",
+      truthy(raw.get("FASTR_FETCH_ALTERNATE_STYLESHEETS"), true),
+    );
+    config.insert_bool(
       "FASTR_TRACE_GRID_LAYOUT",
       truthy(raw.get("FASTR_TRACE_GRID_LAYOUT"), false),
     );

@@ -909,7 +909,14 @@ pub fn extract_css_links(
   media_type: crate::style::media::MediaType,
 ) -> Vec<String> {
   let mut css_urls = Vec::new();
-  let debug = runtime::runtime_toggles().truthy("FASTR_LOG_CSS_LINKS");
+  let toggles = runtime::runtime_toggles();
+  let debug = toggles.truthy("FASTR_LOG_CSS_LINKS");
+  let preload_stylesheets_enabled =
+    toggles.truthy_with_default("FASTR_FETCH_PRELOAD_STYLESHEETS", true);
+  let modulepreload_stylesheets_enabled =
+    toggles.truthy_with_default("FASTR_FETCH_MODULEPRELOAD_STYLESHEETS", false);
+  let alternate_stylesheets_enabled =
+    toggles.truthy_with_default("FASTR_FETCH_ALTERNATE_STYLESHEETS", true);
 
   let lower = html.to_lowercase();
   let mut pos = 0;
@@ -923,10 +930,39 @@ pub fn extract_css_links(
         .get("rel")
         .map(|rel| tokenize_rel_list(rel))
         .unwrap_or_default();
-      let is_stylesheet = !rel_tokens.is_empty() && rel_list_contains_stylesheet(&rel_tokens);
+      let rel_has_stylesheet = rel_list_contains_stylesheet(&rel_tokens);
+      let rel_has_alternate = rel_tokens.iter().any(|t| t.eq_ignore_ascii_case("alternate"));
+      let rel_has_preload = rel_tokens.iter().any(|t| t.eq_ignore_ascii_case("preload"));
+      let rel_has_modulepreload =
+        rel_tokens.iter().any(|t| t.eq_ignore_ascii_case("modulepreload"));
 
-      if is_stylesheet {
-        let link_tag_lower = link_tag.to_lowercase();
+      let as_style = attrs
+        .get("as")
+        .map(|v| v.trim().eq_ignore_ascii_case("style"))
+        .unwrap_or(false);
+
+      let mut is_stylesheet_link =
+        rel_has_stylesheet && (alternate_stylesheets_enabled || !rel_has_alternate);
+
+      if !is_stylesheet_link && preload_stylesheets_enabled && rel_has_preload && as_style {
+        is_stylesheet_link = true;
+      }
+
+      if !is_stylesheet_link
+        && modulepreload_stylesheets_enabled
+        && rel_has_modulepreload
+        && as_style
+      {
+        is_stylesheet_link = true;
+      }
+
+      let link_tag_lower = link_tag.to_lowercase();
+
+      if !is_stylesheet_link && rel_tokens.is_empty() && link_tag_lower.contains("stylesheet") {
+        is_stylesheet_link = true;
+      }
+
+      if is_stylesheet_link {
         if debug {
           eprintln!("[css] found <link>: {}", link_tag);
         }
@@ -1386,7 +1422,10 @@ pub fn infer_base_url<'a>(html: &'a str, input_url: &'a str) -> Cow<'a, str> {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::debug::runtime::{self, RuntimeToggles};
   use crate::style::media::MediaType;
+  use std::collections::HashMap;
+  use std::sync::Arc;
   use tempfile;
 
   #[test]
@@ -1756,11 +1795,95 @@ mod tests {
   }
 
   #[test]
+  fn includes_preload_style_links() {
+    let html = r#"
+            <link rel=preload as=style href=/a.css>
+        "#;
+    let toggles = RuntimeToggles::from_map(HashMap::from([(
+      "FASTR_FETCH_PRELOAD_STYLESHEETS".to_string(),
+      "1".to_string(),
+    )]));
+    let urls = runtime::with_runtime_toggles(Arc::new(toggles), || {
+      extract_css_links(html, "https://example.com/", MediaType::Screen)
+    });
+    assert_eq!(urls, vec!["https://example.com/a.css".to_string()]);
+  }
+
+  #[test]
+  fn ignores_non_style_preloads() {
+    let html = r#"
+            <link rel=preload as=font href=/a.css>
+        "#;
+    let urls = extract_css_links(html, "https://example.com/", MediaType::Screen);
+    assert!(urls.is_empty());
+  }
+
+  #[test]
+  fn preload_style_links_can_be_disabled() {
+    let html = r#"
+            <link rel=preload as=style href=/a.css>
+        "#;
+    let toggles = RuntimeToggles::from_map(HashMap::from([(
+      "FASTR_FETCH_PRELOAD_STYLESHEETS".to_string(),
+      "0".to_string(),
+    )]));
+    let urls = runtime::with_runtime_toggles(Arc::new(toggles), || {
+      extract_css_links(html, "https://example.com/", MediaType::Screen)
+    });
+    assert!(urls.is_empty());
+  }
+
+  #[test]
+  fn modulepreload_style_links_are_opt_in() {
+    let html = r#"
+            <link rel=modulepreload as=style href=/a.css>
+        "#;
+    let disabled = RuntimeToggles::from_map(HashMap::from([(
+      "FASTR_FETCH_MODULEPRELOAD_STYLESHEETS".to_string(),
+      "0".to_string(),
+    )]));
+    let default_urls = runtime::with_runtime_toggles(Arc::new(disabled), || {
+      extract_css_links(html, "https://example.com/", MediaType::Screen)
+    });
+    assert!(default_urls.is_empty());
+
+    let enabled = RuntimeToggles::from_map(HashMap::from([(
+      "FASTR_FETCH_MODULEPRELOAD_STYLESHEETS".to_string(),
+      "1".to_string(),
+    )]));
+    let enabled_urls = runtime::with_runtime_toggles(Arc::new(enabled), || {
+      extract_css_links(html, "https://example.com/", MediaType::Screen)
+    });
+    assert_eq!(enabled_urls, vec!["https://example.com/a.css".to_string()]);
+  }
+
+  #[test]
   fn dedupes_stylesheet_links_preserving_order() {
     let html = r#"
             <link rel="stylesheet" href="/a.css">
             <link rel="stylesheet" href="/b.css">
             <link rel="stylesheet" href="/a.css">
+        "#;
+    let urls = extract_css_links(
+      html,
+      "https://example.com/app/index.html",
+      MediaType::Screen,
+    );
+    assert_eq!(
+      urls,
+      vec![
+        "https://example.com/a.css".to_string(),
+        "https://example.com/b.css".to_string(),
+      ]
+    );
+  }
+
+  #[test]
+  fn dedupes_preload_and_stylesheet_preserving_order() {
+    let html = r#"
+            <link rel=preload as=style href="/a.css">
+            <link rel="stylesheet" href="/a.css">
+            <link rel="stylesheet" href="/b.css">
         "#;
     let urls = extract_css_links(
       html,
