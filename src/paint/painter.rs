@@ -123,6 +123,7 @@ use crate::text::font_loader::FontContext;
 use crate::text::pipeline::Direction as TextDirection;
 use crate::text::pipeline::ShapedRun;
 use crate::text::pipeline::ShapingPipeline;
+use crate::text::pipeline::{record_text_rasterize, text_diagnostics_enabled};
 #[cfg(test)]
 use crate::text::RunRotation;
 use crate::tree;
@@ -4508,6 +4509,8 @@ impl Painter {
     if units_per_em == 0.0 {
       return;
     }
+    let diag_enabled = text_diagnostics_enabled();
+    let raster_timer = diag_enabled.then(Instant::now);
     let mut scale = run.font_size / units_per_em;
     scale *= run.scale * self.scale;
 
@@ -4622,6 +4625,9 @@ impl Painter {
         None,
       );
     }
+    if diag_enabled {
+      record_text_rasterize(raster_timer, 0);
+    }
   }
 
   fn paint_shaped_run_vertical(
@@ -4642,6 +4648,8 @@ impl Painter {
     if units_per_em == 0.0 {
       return;
     }
+    let diag_enabled = text_diagnostics_enabled();
+    let raster_timer = diag_enabled.then(Instant::now);
     let mut scale = run.font_size / units_per_em;
     scale *= run.scale * self.scale;
 
@@ -4745,6 +4753,9 @@ impl Painter {
         Transform::identity(),
         None,
       );
+    }
+    if diag_enabled {
+      record_text_rasterize(raster_timer, 0);
     }
   }
 

@@ -79,7 +79,6 @@ use crate::text::font_db::LoadedFont;
 use crate::text::font_loader::FontContext;
 use lru::LruCache;
 use rustybuzz::Direction as HbDirection;
-use rustybuzz::Face;
 use rustybuzz::Feature;
 use rustybuzz::Language as HbLanguage;
 use rustybuzz::UnicodeBuffer;
@@ -88,10 +87,13 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 use std::num::NonZeroUsize;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(any(test, debug_assertions))]
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::OnceLock;
+use std::time::Instant;
 use ttf_parser::Tag;
 use unicode_bidi::BidiInfo;
 use unicode_bidi::Level;
@@ -103,9 +105,80 @@ use unicode_vo::Orientation as VerticalOrientation;
 pub(crate) const DEFAULT_OBLIQUE_ANGLE_DEG: f32 = 14.0;
 const SHAPING_CACHE_CAPACITY: usize = 2048;
 const FONT_RESOLUTION_CACHE_SIZE: usize = 2048;
-
 #[cfg(any(test, debug_assertions))]
 static SHAPE_FONT_RUN_INVOCATIONS: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Debug, Default, Clone)]
+pub struct TextDiagnostics {
+  pub shape_ms: f64,
+  pub rasterize_ms: f64,
+  pub shaped_runs: usize,
+  pub glyphs: usize,
+  pub color_glyph_rasters: usize,
+}
+
+static TEXT_DIAGNOSTICS: OnceLock<Mutex<TextDiagnostics>> = OnceLock::new();
+static TEXT_DIAGNOSTICS_ENABLED: AtomicBool = AtomicBool::new(false);
+
+fn diagnostics_cell() -> &'static Mutex<TextDiagnostics> {
+  TEXT_DIAGNOSTICS.get_or_init(|| Mutex::new(TextDiagnostics::default()))
+}
+
+pub(crate) fn enable_text_diagnostics() {
+  TEXT_DIAGNOSTICS_ENABLED.store(true, Ordering::Release);
+  if let Ok(mut diag) = diagnostics_cell().lock() {
+    *diag = TextDiagnostics::default();
+  }
+}
+
+pub(crate) fn take_text_diagnostics() -> Option<TextDiagnostics> {
+  if !TEXT_DIAGNOSTICS_ENABLED.swap(false, Ordering::AcqRel) {
+    return None;
+  }
+
+  diagnostics_cell().lock().ok().map(|diag| diag.clone())
+}
+
+pub(crate) fn text_diagnostics_enabled() -> bool {
+  TEXT_DIAGNOSTICS_ENABLED.load(Ordering::Acquire)
+}
+
+pub(crate) fn text_diagnostics_timer() -> Option<Instant> {
+  text_diagnostics_enabled().then(Instant::now)
+}
+
+fn with_text_diagnostics(f: impl FnOnce(&mut TextDiagnostics)) {
+  if !TEXT_DIAGNOSTICS_ENABLED.load(Ordering::Acquire) {
+    return;
+  }
+
+  if let Ok(mut diag) = diagnostics_cell().lock() {
+    f(&mut diag);
+  }
+}
+
+pub(crate) fn record_text_shape(start: Option<Instant>, shaped_runs: usize, glyphs: usize) {
+  if let Some(start) = start {
+    let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+    with_text_diagnostics(|diag| {
+      diag.shape_ms += elapsed_ms;
+      diag.shaped_runs += shaped_runs;
+      diag.glyphs += glyphs;
+    });
+  }
+}
+
+pub(crate) fn record_text_rasterize(start: Option<Instant>, color_glyph_rasters: usize) {
+  if start.is_none() && color_glyph_rasters == 0 {
+    return;
+  }
+  with_text_diagnostics(|diag| {
+    if let Some(start) = start {
+      diag.rasterize_ms += start.elapsed().as_secs_f64() * 1000.0;
+    }
+    diag.color_glyph_rasters += color_glyph_rasters;
+  });
+}
 
 // ============================================================================
 // Core Types
@@ -3347,6 +3420,8 @@ impl ShapingPipeline {
       return Ok(Vec::new());
     }
 
+    let diag_timer = text_diagnostics_timer();
+
     if matches!(style.font_variant, FontVariant::SmallCaps)
       || matches!(
         style.font_variant_caps,
@@ -3367,7 +3442,12 @@ impl ShapingPipeline {
       font_generation,
     };
     if let Some(cached) = self.cache.get(&cache_key) {
-      return Ok(cached.as_ref().clone());
+      let shaped_runs = cached.as_ref().clone();
+      if let Some(start) = diag_timer {
+        let glyphs: usize = shaped_runs.iter().map(|run| run.glyphs.len()).sum();
+        record_text_shape(Some(start), shaped_runs.len(), glyphs);
+      }
+      return Ok(shaped_runs);
     }
 
     // Step 1: Bidi analysis
@@ -3433,6 +3513,11 @@ impl ShapingPipeline {
     }
 
     self.cache.insert(cache_key, Arc::new(shaped_runs.clone()));
+
+    if let Some(start) = diag_timer {
+      let glyphs: usize = shaped_runs.iter().map(|run| run.glyphs.len()).sum();
+      record_text_shape(Some(start), shaped_runs.len(), glyphs);
+    }
 
     Ok(shaped_runs)
   }

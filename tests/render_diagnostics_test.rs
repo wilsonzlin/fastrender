@@ -112,6 +112,39 @@ fn partial_render_returns_placeholder_with_diagnostics_on_document_failure() {
 }
 
 #[test]
+fn diagnostics_include_text_metrics() {
+  run_with_large_stack(|| {
+    let mut renderer = FastRender::new().unwrap();
+    let options = RenderOptions::new()
+      .with_viewport(64, 48)
+      .with_diagnostics_level(DiagnosticsLevel::Basic);
+    let result = renderer
+      .render_html_with_diagnostics("<p>text metrics</p>", options)
+      .expect("render should succeed");
+
+    let stats = result
+      .diagnostics
+      .stats
+      .as_ref()
+      .expect("stats should be populated");
+    let text_shape = stats
+      .timings
+      .text_shape_ms
+      .expect("text shaping time should be present");
+    let text_raster = stats
+      .timings
+      .text_rasterize_ms
+      .expect("text rasterization time should be present");
+
+    assert!(text_shape > 0.0);
+    assert!(text_raster > 0.0);
+    assert!(stats.counts.shaped_runs.unwrap_or(0) > 0);
+    assert!(stats.counts.glyphs.unwrap_or(0) > 0);
+    assert!(stats.counts.color_glyph_rasters.is_some());
+  });
+}
+
+#[test]
 fn stylesheet_fetch_failure_is_recorded_without_stopping_render() {
   run_with_large_stack(|| {
     let doc_url = "https://example.test/page.html";

@@ -93,6 +93,7 @@ use crate::style::values::Length;
 use crate::text::color_fonts::ColorFontRenderer;
 use crate::text::font_db::LoadedFont;
 use crate::text::font_loader::FontContext;
+use crate::text::pipeline::{record_text_rasterize, text_diagnostics_timer};
 use rayon::prelude::*;
 use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
@@ -4282,9 +4283,13 @@ impl DisplayListRenderer {
       }
     })?;
 
+    let text_timer = text_diagnostics_timer();
     let (paths, bounds) = self.glyph_paths(face.face(), item);
     if !item.shadows.is_empty() && !paths.is_empty() && bounds.is_valid() {
       self.render_text_shadows(&paths, &bounds, item);
+    }
+    if text_timer.is_some() {
+      record_text_rasterize(text_timer, 0);
     }
 
     self.canvas.draw_text(

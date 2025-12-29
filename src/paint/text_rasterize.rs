@@ -58,8 +58,7 @@ use crate::text::font_db::LoadedFont;
 use crate::text::font_instance::{
   glyph_transform, variation_hash, FontInstance, GlyphOutlineMetrics,
 };
-use crate::text::pipeline::GlyphPosition;
-use crate::text::pipeline::ShapedRun;
+use crate::text::pipeline::{record_text_rasterize, text_diagnostics_timer, GlyphPosition, ShapedRun};
 use rustybuzz::Variation;
 use std::collections::HashMap;
 use std::collections::VecDeque;
@@ -723,6 +722,10 @@ impl TextRasterizer {
     state: TextRenderState<'_>,
     pixmap: &mut Pixmap,
   ) -> Result<f32> {
+    let raster_timer = text_diagnostics_timer();
+    let diag_enabled = raster_timer.is_some();
+    let mut color_glyph_rasters = 0usize;
+
     // Create paint with text color
     let mut paint = Paint::default();
     let opacity = state.opacity.clamp(0.0, 1.0);
@@ -804,6 +807,9 @@ impl TextRasterizer {
       if let Some(color_image) = color_glyph {
         let combined_opacity = (glyph_opacity * state.opacity).clamp(0.0, 1.0);
         if combined_opacity > 0.0 {
+          if diag_enabled {
+            color_glyph_rasters += 1;
+          }
           let mut transform = color_glyph_transform(
             synthetic_oblique,
             glyph_x,
@@ -851,6 +857,10 @@ impl TextRasterizer {
       // Advance cursor (x_offset is already applied, x_advance is the main movement)
       cursor_x += glyph.x_advance;
       cursor_y += glyph.y_advance;
+    }
+
+    if diag_enabled {
+      record_text_rasterize(raster_timer, color_glyph_rasters);
     }
 
     let advance = if cursor_y.abs() > (cursor_x - x).abs() {

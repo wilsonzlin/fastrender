@@ -1542,9 +1542,11 @@ pub struct RenderStageTimings {
   pub cascade_ms: Option<f64>,
   pub box_tree_ms: Option<f64>,
   pub layout_ms: Option<f64>,
+  pub text_shape_ms: Option<f64>,
   pub paint_build_ms: Option<f64>,
   pub paint_optimize_ms: Option<f64>,
   pub paint_rasterize_ms: Option<f64>,
+  pub text_rasterize_ms: Option<f64>,
   pub encode_ms: Option<f64>,
 }
 
@@ -1555,6 +1557,9 @@ pub struct RenderCounts {
   pub styled_nodes: Option<usize>,
   pub box_nodes: Option<usize>,
   pub fragments: Option<usize>,
+  pub shaped_runs: Option<usize>,
+  pub glyphs: Option<usize>,
+  pub color_glyph_rasters: Option<usize>,
 }
 
 /// Cascade selector matching statistics.
@@ -1639,6 +1644,16 @@ fn merge_image_cache_diagnostics(stats: &mut RenderStats) {
         .entry(ResourceKind::Image)
         .or_default() += image_stats.cache_misses;
     }
+  }
+}
+
+fn merge_text_diagnostics(stats: &mut RenderStats) {
+  if let Some(text) = crate::text::pipeline::take_text_diagnostics() {
+    stats.timings.text_shape_ms = Some(text.shape_ms);
+    stats.timings.text_rasterize_ms = Some(text.rasterize_ms);
+    stats.counts.shaped_runs = Some(text.shaped_runs);
+    stats.counts.glyphs = Some(text.glyphs);
+    stats.counts.color_glyph_rasters = Some(text.color_glyph_rasters);
   }
 }
 
@@ -3071,6 +3086,7 @@ impl FastRender {
     if stats_recorder.is_some() {
       crate::image_loader::enable_image_cache_diagnostics();
       crate::paint::painter::enable_paint_diagnostics();
+      crate::text::pipeline::enable_text_diagnostics();
       intrinsic_cache_reset_counters();
       crate::layout::formatting_context::layout_cache_reset_counters();
       if matches!(diagnostics_level, DiagnosticsLevel::Verbose) {
@@ -3091,6 +3107,7 @@ impl FastRender {
         if stats_recorder.is_some() {
           let _ = crate::image_loader::take_image_cache_diagnostics();
           let _ = crate::paint::painter::take_paint_diagnostics();
+          let _ = crate::text::pipeline::take_text_diagnostics();
         }
         if let Some(previous) = restore_cascade_profile {
           crate::style::cascade::set_cascade_profile_enabled(previous);
@@ -3101,6 +3118,7 @@ impl FastRender {
 
     if let Some(recorder) = stats_recorder {
       let mut stats = recorder.finish();
+      merge_text_diagnostics(&mut stats);
       merge_image_cache_diagnostics(&mut stats);
       if let Ok(mut guard) = diagnostics.lock() {
         guard.stats = Some(stats);
@@ -4015,6 +4033,7 @@ impl FastRender {
     if let Some(stats) = stats_recorder.as_mut() {
       crate::image_loader::enable_image_cache_diagnostics();
       crate::paint::painter::enable_paint_diagnostics();
+      crate::text::pipeline::enable_text_diagnostics();
       intrinsic_cache_reset_counters();
       crate::layout::formatting_context::layout_cache_reset_counters();
       if stats.verbose() {
@@ -4040,6 +4059,7 @@ impl FastRender {
               guard.document_error = Some(e.to_string());
               if let Some(recorder) = stats_recorder.take() {
                 let mut stats = recorder.finish();
+                merge_text_diagnostics(&mut stats);
                 merge_image_cache_diagnostics(&mut stats);
                 let _ = crate::paint::painter::take_paint_diagnostics();
                 guard.stats = Some(stats);
@@ -4076,6 +4096,7 @@ impl FastRender {
       )?;
       if let Some(recorder) = stats_recorder.take() {
         let mut stats = recorder.finish();
+        merge_text_diagnostics(&mut stats);
         merge_image_cache_diagnostics(&mut stats);
         if let Ok(mut guard) = diagnostics.lock() {
           guard.stats = Some(stats);
@@ -4092,6 +4113,7 @@ impl FastRender {
     if result.is_err() && stats_recorder.is_some() {
       let _ = crate::image_loader::take_image_cache_diagnostics();
       let _ = crate::paint::painter::take_paint_diagnostics();
+      let _ = crate::text::pipeline::take_text_diagnostics();
     }
     drop(_root_span);
     trace.finalize(result)
@@ -4171,6 +4193,7 @@ impl FastRender {
     if stats.is_none() && local_recorder.is_some() {
       crate::image_loader::enable_image_cache_diagnostics();
       crate::paint::painter::enable_paint_diagnostics();
+      crate::text::pipeline::enable_text_diagnostics();
       intrinsic_cache_reset_counters();
       crate::layout::formatting_context::layout_cache_reset_counters();
     }
@@ -4225,6 +4248,7 @@ impl FastRender {
               if local_recorder.is_some() {
                 let _ = crate::image_loader::take_image_cache_diagnostics();
                 let _ = crate::paint::painter::take_paint_diagnostics();
+                let _ = crate::text::pipeline::take_text_diagnostics();
               }
               let pixmap = self.render_error_overlay(width, height)?;
               return Ok(RenderReport {
@@ -4242,6 +4266,7 @@ impl FastRender {
           if local_recorder.is_some() {
             let _ = crate::image_loader::take_image_cache_diagnostics();
             let _ = crate::paint::painter::take_paint_diagnostics();
+            let _ = crate::text::pipeline::take_text_diagnostics();
           }
           return Err(Error::Render(err));
         }
@@ -4265,6 +4290,7 @@ impl FastRender {
         if local_recorder.is_some() {
           let _ = crate::image_loader::take_image_cache_diagnostics();
           let _ = crate::paint::painter::take_paint_diagnostics();
+          let _ = crate::text::pipeline::take_text_diagnostics();
         }
         return Err(err);
       }
@@ -4279,6 +4305,7 @@ impl FastRender {
     };
     if let Some(recorder) = local_recorder {
       let mut finished = recorder.finish();
+      merge_text_diagnostics(&mut finished);
       merge_image_cache_diagnostics(&mut finished);
       report.diagnostics.stats = Some(finished);
     }
