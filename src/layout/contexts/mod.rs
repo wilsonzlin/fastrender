@@ -12,6 +12,7 @@
 pub mod block;
 pub mod factory;
 pub mod flex;
+pub mod flex_cache;
 pub mod grid;
 pub mod inline;
 pub mod node_ref;

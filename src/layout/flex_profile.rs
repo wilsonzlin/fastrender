@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::OnceLock;
+use std::sync::RwLock;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -33,6 +34,49 @@ static COMPUTE_TIME_NS: AtomicU64 = AtomicU64::new(0);
 static CONVERT_TIME_NS: AtomicU64 = AtomicU64::new(0);
 static LAYOUT_CACHE_HITS: AtomicU64 = AtomicU64::new(0);
 static LAYOUT_CACHE_STORES: AtomicU64 = AtomicU64::new(0);
+static MEASURE_SHARD_STATS: OnceLock<RwLock<CacheShardStats>> = OnceLock::new();
+static LAYOUT_SHARD_STATS: OnceLock<RwLock<CacheShardStats>> = OnceLock::new();
+
+#[derive(Clone, Copy, Debug)]
+pub enum CacheKind {
+  Measure,
+  Layout,
+}
+
+#[derive(Default)]
+struct CacheShardStats {
+  hits: Vec<AtomicU64>,
+  misses: Vec<AtomicU64>,
+}
+
+impl CacheShardStats {
+  fn new(count: usize) -> Self {
+    Self {
+      hits: (0..count).map(|_| AtomicU64::new(0)).collect(),
+      misses: (0..count).map(|_| AtomicU64::new(0)).collect(),
+    }
+  }
+
+  fn ensure_len(&mut self, count: usize) {
+    if self.hits.len() >= count {
+      return;
+    }
+    let additional = count - self.hits.len();
+    self.hits.extend((0..additional).map(|_| AtomicU64::new(0)));
+    self
+      .misses
+      .extend((0..additional).map(|_| AtomicU64::new(0)));
+  }
+
+  fn clear(&mut self) {
+    for hit in &self.hits {
+      hit.store(0, Ordering::Relaxed);
+    }
+    for miss in &self.misses {
+      miss.store(0, Ordering::Relaxed);
+    }
+  }
+}
 
 #[derive(Default, Clone)]
 struct NodeStats {
@@ -83,6 +127,66 @@ pub fn flex_profile_enabled() -> bool {
   enabled()
 }
 
+pub fn ensure_cache_shards(kind: CacheKind, count: usize) {
+  if !enabled() {
+    return;
+  }
+  let target_len = count.max(1);
+  let store = match kind {
+    CacheKind::Measure => {
+      MEASURE_SHARD_STATS.get_or_init(|| RwLock::new(CacheShardStats::new(target_len)))
+    }
+    CacheKind::Layout => {
+      LAYOUT_SHARD_STATS.get_or_init(|| RwLock::new(CacheShardStats::new(target_len)))
+    }
+  };
+  if let Ok(mut guard) = store.write() {
+    guard.ensure_len(target_len);
+  }
+}
+
+pub fn record_cache_shard_lookup(kind: CacheKind, shard_idx: usize, hit: bool) {
+  if !enabled() {
+    return;
+  }
+  ensure_cache_shards(kind, shard_idx + 1);
+  let store = match kind {
+    CacheKind::Measure => MEASURE_SHARD_STATS.get(),
+    CacheKind::Layout => LAYOUT_SHARD_STATS.get(),
+  };
+  if let Some(lock) = store {
+    if let Ok(guard) = lock.read() {
+      if shard_idx < guard.hits.len() {
+        let counter = if hit {
+          &guard.hits[shard_idx]
+        } else {
+          &guard.misses[shard_idx]
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+      }
+    }
+  }
+}
+
+pub fn cache_shard_stats(kind: CacheKind) -> Option<Vec<(u64, u64)>> {
+  if !enabled() {
+    return None;
+  }
+  let store = match kind {
+    CacheKind::Measure => MEASURE_SHARD_STATS.get()?,
+    CacheKind::Layout => LAYOUT_SHARD_STATS.get()?,
+  };
+  let guard = store.read().ok()?;
+  Some(
+    guard
+      .hits
+      .iter()
+      .zip(guard.misses.iter())
+      .map(|(hit, miss)| (hit.load(Ordering::Relaxed), miss.load(Ordering::Relaxed)))
+      .collect(),
+  )
+}
+
 pub fn reset_flex_profile() {
   MEASURE_LOOKUPS.store(0, Ordering::Relaxed);
   MEASURE_HITS.store(0, Ordering::Relaxed);
@@ -122,6 +226,16 @@ pub fn reset_flex_profile() {
   LAYOUT_CACHE_HITS.store(0, Ordering::Relaxed);
   LAYOUT_CACHE_STORES.store(0, Ordering::Relaxed);
   PROGRESS_NEXT.store(0, Ordering::Relaxed);
+  if let Some(lock) = MEASURE_SHARD_STATS.get() {
+    if let Ok(mut guard) = lock.write() {
+      guard.clear();
+    }
+  }
+  if let Some(lock) = LAYOUT_SHARD_STATS.get() {
+    if let Ok(mut guard) = lock.write() {
+      guard.clear();
+    }
+  }
 }
 
 fn maybe_log_progress(current: u64) {
@@ -359,6 +473,8 @@ pub fn log_flex_profile(total: Duration) {
   let measure_unique = MEASURE_UNIQUE_KEYS.load(Ordering::Relaxed);
   let layout_hits = LAYOUT_CACHE_HITS.load(Ordering::Relaxed);
   let layout_stores = LAYOUT_CACHE_STORES.load(Ordering::Relaxed);
+  let measure_shards = cache_shard_stats(CacheKind::Measure);
+  let layout_shards = cache_shard_stats(CacheKind::Layout);
   let measure_ms = MEASURE_TIME_NS.load(Ordering::Relaxed) as f64 / 1_000_000.0;
   let build_ms = BUILD_TIME_NS.load(Ordering::Relaxed) as f64 / 1_000_000.0;
   let compute_ms = COMPUTE_TIME_NS.load(Ordering::Relaxed) as f64 / 1_000_000.0;
@@ -382,6 +498,18 @@ pub fn log_flex_profile(total: Duration) {
       }
     })
     .collect();
+  let shard_totals = |stats: &Option<Vec<(u64, u64)>>| -> (u64, u64) {
+    stats
+      .as_ref()
+      .map(|entries| {
+        entries.iter().fold((0, 0), |(hit_acc, miss_acc), (h, m)| {
+          (hit_acc + h, miss_acc + m)
+        })
+      })
+      .unwrap_or((0, 0))
+  };
+  let (measure_shard_hits, measure_shard_misses) = shard_totals(&measure_shards);
+  let (layout_shard_hits, layout_shard_misses) = shard_totals(&layout_shards);
   if enabled {
     eprintln!(
             "flex profile: total_ms={:.2} build_ms={:.2} compute_ms={:.2} convert_ms={:.2} measure_ms={:.2} lookups={} hits={} hit_rate={:.2}% stores={} unique_keys={} layout_cache_hits={} layout_cache_stores={} buckets=[kw/kh:{} kw/dh:{} kw/oh:{} dw/kh:{} dw/dh:{} dw/oh:{} ow/kh:{} ow/dh:{} ow/oh:{}] bucket_hits=[kw/kh:{} kw/dh:{} kw/oh:{} dw/kh:{} dw/dh:{} dw/oh:{} ow/kh:{} ow/dh:{} ow/oh:{}] bucket_hit_rate%=[kw/kh:{:.1} kw/dh:{:.1} kw/oh:{:.1} dw/kh:{:.1} dw/dh:{:.1} dw/oh:{:.1} ow/kh:{:.1} ow/dh:{:.1} ow/oh:{:.1}]",
@@ -429,6 +557,12 @@ pub fn log_flex_profile(total: Duration) {
             bucket_rates.get(7).copied().unwrap_or(0.0),
             bucket_rates.get(8).copied().unwrap_or(0.0)
         );
+    if measure_shard_hits + measure_shard_misses + layout_shard_hits + layout_shard_misses > 0 {
+      eprintln!(
+        "flex cache shards: measure_hits={} measure_misses={} layout_hits={} layout_misses={}",
+        measure_shard_hits, measure_shard_misses, layout_shard_hits, layout_shard_misses
+      );
+    }
   }
 
   if histogram_enabled() {

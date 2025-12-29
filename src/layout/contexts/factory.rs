@@ -22,6 +22,7 @@
 
 use crate::layout::contexts::block::BlockFormattingContext;
 use crate::layout::contexts::flex::FlexFormattingContext;
+use crate::layout::contexts::flex_cache::ShardedFlexCache;
 use crate::layout::contexts::grid::GridFormattingContext;
 use crate::layout::contexts::inline::InlineFormattingContext;
 use crate::layout::contexts::positioned::ContainingBlock;
@@ -86,22 +87,8 @@ pub struct FormattingContextFactory {
   font_context: FontContext,
   viewport_size: crate::geometry::Size,
   nearest_positioned_cb: ContainingBlock,
-  flex_measure_cache:
-    std::sync::Arc<std::sync::Mutex<crate::layout::contexts::flex::FlexMeasureCache>>,
-  flex_layout_cache: std::sync::Arc<
-    std::sync::Mutex<
-      std::collections::HashMap<
-        u64,
-        std::collections::HashMap<
-          (Option<u32>, Option<u32>),
-          (
-            crate::geometry::Size,
-            std::sync::Arc<crate::tree::fragment_tree::FragmentNode>,
-          ),
-        >,
-      >,
-    >,
-  >,
+  flex_measure_cache: std::sync::Arc<ShardedFlexCache>,
+  flex_layout_cache: std::sync::Arc<ShardedFlexCache>,
   shaping_pipeline: crate::text::pipeline::ShapingPipeline,
   parallelism: LayoutParallelism,
   cached_contexts: Arc<CachedFormattingContexts>,
@@ -195,10 +182,8 @@ impl FormattingContextFactory {
       font_context,
       viewport_size,
       nearest_positioned_cb,
-      std::sync::Arc::new(std::sync::Mutex::new(
-        crate::layout::contexts::flex::FlexMeasureCache::new(),
-      )),
-      std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+      std::sync::Arc::new(ShardedFlexCache::new_measure()),
+      std::sync::Arc::new(ShardedFlexCache::new_layout()),
     )
   }
 
@@ -206,23 +191,8 @@ impl FormattingContextFactory {
     font_context: FontContext,
     viewport_size: crate::geometry::Size,
     nearest_positioned_cb: ContainingBlock,
-    flex_measure_cache: std::sync::Arc<
-      std::sync::Mutex<crate::layout::contexts::flex::FlexMeasureCache>,
-    >,
-    flex_layout_cache: std::sync::Arc<
-      std::sync::Mutex<
-        std::collections::HashMap<
-          u64,
-          std::collections::HashMap<
-            (Option<u32>, Option<u32>),
-            (
-              crate::geometry::Size,
-              std::sync::Arc<crate::tree::fragment_tree::FragmentNode>,
-            ),
-          >,
-        >,
-      >,
-    >,
+    flex_measure_cache: std::sync::Arc<ShardedFlexCache>,
+    flex_layout_cache: std::sync::Arc<ShardedFlexCache>,
   ) -> Self {
     Self {
       font_context,
@@ -287,12 +257,8 @@ impl FormattingContextFactory {
 
   /// Clears any shared caches held by formatting contexts.
   pub fn reset_caches(&self) {
-    if let Ok(mut cache) = self.flex_measure_cache.lock() {
-      cache.clear();
-    }
-    if let Ok(mut cache) = self.flex_layout_cache.lock() {
-      cache.clear();
-    }
+    self.flex_measure_cache.clear();
+    self.flex_layout_cache.clear();
     self.shaping_pipeline.clear_cache();
   }
 

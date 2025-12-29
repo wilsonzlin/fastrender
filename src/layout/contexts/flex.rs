@@ -32,6 +32,7 @@ use crate::layout::constraints::AvailableSpace as CrateAvailableSpace;
 use crate::layout::constraints::LayoutConstraints;
 use crate::layout::contexts::block::BlockFormattingContext;
 use crate::layout::contexts::factory::FormattingContextFactory;
+use crate::layout::contexts::flex_cache::{find_layout_cache_fragment, ShardedFlexCache};
 use crate::layout::contexts::positioned::ContainingBlock;
 use crate::layout::engine::LayoutParallelism;
 use crate::layout::flex_profile::record_node_measure_hit;
@@ -194,14 +195,9 @@ pub struct FlexFormattingContext {
   font_context: FontContext,
   nearest_positioned_cb: ContainingBlock,
   parallelism: LayoutParallelism,
-  measured_fragments: Arc<Mutex<FlexMeasureCache>>,
-  layout_fragments: Arc<
-    Mutex<HashMap<u64, HashMap<(Option<u32>, Option<u32>), (Size, std::sync::Arc<FragmentNode>)>>>,
-  >,
+  measured_fragments: Arc<ShardedFlexCache>,
+  layout_fragments: Arc<ShardedFlexCache>,
 }
-
-pub(crate) type FlexMeasureCache =
-  HashMap<u64, HashMap<(Option<u32>, Option<u32>), (Size, std::sync::Arc<FragmentNode>)>>;
 
 const MAX_MEASURE_CACHE_PER_NODE: usize = 256;
 const MAX_LAYOUT_CACHE_PER_NODE: usize = 128;
@@ -214,8 +210,8 @@ impl FlexFormattingContext {
       viewport,
       ContainingBlock::viewport(viewport),
       FontContext::new(),
-      Arc::new(Mutex::new(HashMap::new())),
-      Arc::new(Mutex::new(HashMap::new())),
+      Arc::new(ShardedFlexCache::new_measure()),
+      Arc::new(ShardedFlexCache::new_layout()),
     )
   }
 
@@ -224,8 +220,8 @@ impl FlexFormattingContext {
       viewport_size,
       ContainingBlock::viewport(viewport_size),
       FontContext::new(),
-      Arc::new(Mutex::new(HashMap::new())),
-      Arc::new(Mutex::new(HashMap::new())),
+      Arc::new(ShardedFlexCache::new_measure()),
+      Arc::new(ShardedFlexCache::new_layout()),
     )
   }
 
@@ -233,12 +229,8 @@ impl FlexFormattingContext {
     viewport_size: Size,
     nearest_positioned_cb: ContainingBlock,
     font_context: FontContext,
-    measured_fragments: Arc<Mutex<FlexMeasureCache>>,
-    layout_fragments: Arc<
-      Mutex<
-        HashMap<u64, HashMap<(Option<u32>, Option<u32>), (Size, std::sync::Arc<FragmentNode>)>>,
-      >,
-    >,
+    measured_fragments: Arc<ShardedFlexCache>,
+    layout_fragments: Arc<ShardedFlexCache>,
   ) -> Self {
     let factory = FormattingContextFactory::with_font_context_viewport_cb_and_cache(
       font_context.clone(),
@@ -371,27 +363,24 @@ impl FormattingContext for FlexFormattingContext {
 
     let _trace_text_ids = trace_flex_text_ids();
     if let Some((cache_key, key)) = layout_cache_entry {
-      if let Ok(mut cache) = self.layout_fragments.lock() {
-        if let Some((_, fragment)) = cache.get(&cache_key).and_then(|m| m.get(&key)).cloned() {
-          flex_profile::record_layout_cache_hit();
-          return Ok((*fragment).clone());
-        }
-        // Fall back to a tolerance-based lookup when the quantized key differs slightly.
-        if let Some(entry) = cache.get(&cache_key) {
-          let target_w = constraints.width().unwrap_or(self.viewport_size.width);
-          let target_h = constraints.height().unwrap_or(self.viewport_size.height);
-          if let Some((stored_size, fragment)) =
-            find_layout_cache_fragment(entry, Size::new(target_w.max(0.0), target_h.max(0.0)))
-          {
-            // Seed the exact key for faster hits next time.
-            let cached = cache.entry(cache_key).or_default();
-            cached
-              .entry(key)
-              .or_insert_with(|| (stored_size, std::sync::Arc::clone(&fragment)));
-            flex_profile::record_layout_cache_hit();
-            return Ok((*fragment).clone());
-          }
-        }
+      if let Some((_, fragment)) = self.layout_fragments.get(cache_key, &key) {
+        flex_profile::record_layout_cache_hit();
+        return Ok((*fragment).clone());
+      }
+      let target_w = constraints.width().unwrap_or(self.viewport_size.width);
+      let target_h = constraints.height().unwrap_or(self.viewport_size.height);
+      if let Some((stored_size, fragment)) = self
+        .layout_fragments
+        .find_fragment(cache_key, Size::new(target_w.max(0.0), target_h.max(0.0)))
+      {
+        self.layout_fragments.insert(
+          cache_key,
+          key,
+          (stored_size, std::sync::Arc::clone(&fragment)),
+          MAX_LAYOUT_CACHE_PER_NODE,
+        );
+        flex_profile::record_layout_cache_hit();
+        return Ok((*fragment).clone());
       }
     }
 
@@ -994,44 +983,40 @@ impl FormattingContext for FlexFormattingContext {
                             };
                         }
                     }
-                    if let Ok(mut cache) = measured_fragments.lock() {
-                        if let Some((size, frag)) = cache.get(&cache_key).and_then(|m| m.get(&key)).cloned() {
-                            pass_cache
-                                .entry(cache_key)
-                                .or_default()
-                                .entry(key)
-                                .or_insert_with(|| (size, std::sync::Arc::clone(&frag)));
-                            record_node_measure_hit(measure_box.id);
-                            flex_profile::record_measure_hit();
-                            flex_profile::record_measure_time(measure_timer);
-                            return taffy::geometry::Size { width: size.width, height: size.height };
-                        }
-                        // Try a tolerance-based match when the exact key misses so quantized probes
-                        // can reuse earlier measurements without re-laying out the subtree.
-                        let target_w = fallback_size(known_dimensions.width, avail.width);
-                        let target_h = fallback_size(known_dimensions.height, avail.height);
-                        if let Some(entry) = cache.get(&cache_key) {
-                            if let Some((stored_size, frag)) =
-                                find_layout_cache_fragment(entry, Size::new(target_w, target_h))
-                            {
-                                record_node_measure_hit(measure_box.id);
-                                flex_profile::record_measure_hit();
-                                flex_profile::record_measure_time(measure_timer);
-                                let cached = cache.entry(cache_key).or_default();
-                                cached
-                                    .entry(key)
-                                    .or_insert_with(|| (stored_size, std::sync::Arc::clone(&frag)));
-                                pass_cache
-                                    .entry(cache_key)
-                                    .or_default()
-                                    .entry(key)
-                                    .or_insert_with(|| (stored_size, std::sync::Arc::clone(&frag)));
-                                return taffy::geometry::Size {
-                                    width: stored_size.width,
-                                    height: stored_size.height,
-                                };
-                            }
-                        }
+                    if let Some((size, frag)) = measured_fragments.get(cache_key, &key) {
+                        pass_cache
+                            .entry(cache_key)
+                            .or_default()
+                            .entry(key)
+                            .or_insert_with(|| (size, std::sync::Arc::clone(&frag)));
+                        record_node_measure_hit(measure_box.id);
+                        flex_profile::record_measure_hit();
+                        flex_profile::record_measure_time(measure_timer);
+                        return taffy::geometry::Size { width: size.width, height: size.height };
+                    }
+                    let target_w = fallback_size(known_dimensions.width, avail.width);
+                    let target_h = fallback_size(known_dimensions.height, avail.height);
+                    if let Some((stored_size, frag)) =
+                        measured_fragments.find_fragment(cache_key, Size::new(target_w, target_h))
+                    {
+                        record_node_measure_hit(measure_box.id);
+                        flex_profile::record_measure_hit();
+                        flex_profile::record_measure_time(measure_timer);
+                        measured_fragments.insert(
+                            cache_key,
+                            key,
+                            (stored_size, std::sync::Arc::clone(&frag)),
+                            MAX_MEASURE_CACHE_PER_NODE,
+                        );
+                        pass_cache
+                            .entry(cache_key)
+                            .or_default()
+                            .entry(key)
+                            .or_insert_with(|| (stored_size, std::sync::Arc::clone(&frag)));
+                        return taffy::geometry::Size {
+                            width: stored_size.width,
+                            height: stored_size.height,
+                        };
                     }
                     let fc_type = measure_box.formatting_context().unwrap_or(FormattingContextType::Block);
                     // For auto flex-basis + auto width items, prefer intrinsic max-content sizing
@@ -1347,29 +1332,22 @@ impl FormattingContext for FlexFormattingContext {
 
                     let normalized_fragment = std::sync::Arc::new(normalize_fragment_origin(&fragment));
 
-                    if let Ok(mut map) = measured_fragments.lock() {
-                        let entry = map.entry(cache_key).or_default();
-                        if entry.len() >= MAX_MEASURE_CACHE_PER_NODE {
-                            if let Some(first_key) = entry.keys().next().copied() {
-                                entry.remove(&first_key);
-                            }
-                        }
-                        if let Entry::Vacant(e) = entry.entry(key) {
-                            let stored_size =
-                                Size::new(content_size.width.max(0.0), content_size.height.max(0.0));
-                            e.insert((stored_size, normalized_fragment.clone()));
-                            flex_profile::record_measure_store(true);
-                            record_node_measure_store(measure_box.id);
-                        } else {
-                            flex_profile::record_measure_store(false);
-                        }
+                    let stored_size = Size::new(content_size.width.max(0.0), content_size.height.max(0.0));
+                    let inserted = measured_fragments.insert(
+                        cache_key,
+                        key,
+                        (stored_size, normalized_fragment.clone()),
+                        MAX_MEASURE_CACHE_PER_NODE,
+                    );
+                    flex_profile::record_measure_store(inserted);
+                    if inserted {
+                        record_node_measure_store(measure_box.id);
                     }
                     if let Some(_ptr) = node_ptr {
                         let entry = pass_cache.entry(cache_key).or_default();
                         if let Entry::Vacant(e) = entry.entry(key) {
-                            let stored_size =
-                                Size::new(content_size.width.max(0.0), content_size.height.max(0.0));
                             e.insert((stored_size, normalized_fragment.clone()));
+                            *pass_stores.entry(cache_key).or_insert(0) += 1;
                             record_node_measure_store(measure_box.id);
                         }
                     }
@@ -1826,19 +1804,14 @@ impl FormattingContext for FlexFormattingContext {
 
     if !disable_cache {
       if let Some((cache_key, key)) = layout_cache_entry {
-        if let Ok(mut cache) = self.layout_fragments.lock() {
-          let entry = cache.entry(cache_key).or_default();
-          if entry.len() >= MAX_LAYOUT_CACHE_PER_NODE {
-            if let Some(first_key) = entry.keys().next().copied() {
-              entry.remove(&first_key);
-            }
-          }
-          let size = fragment.bounds.size;
-          entry
-            .entry(key)
-            .or_insert_with(|| (size, std::sync::Arc::new(fragment.clone())));
-          flex_profile::record_layout_cache_store();
-        }
+        let size = fragment.bounds.size;
+        self.layout_fragments.insert(
+          cache_key,
+          key,
+          (size, std::sync::Arc::new(fragment.clone())),
+          MAX_LAYOUT_CACHE_PER_NODE,
+        );
+        flex_profile::record_layout_cache_store();
       }
     }
 
@@ -2458,65 +2431,6 @@ fn layout_cache_key(
   Some((w, h))
 }
 
-fn cache_tolerances(target_size: Size) -> (f32, f32) {
-  let band = |v: f32| -> f32 {
-    if v > 4096.0 {
-      32.0
-    } else if v > 2048.0 {
-      16.0
-    } else if v > 1024.0 {
-      8.0
-    } else if v > 512.0 {
-      6.0
-    } else {
-      4.0
-    }
-  };
-
-  // Ensure we never accept exact zero tolerances (which would disable reuse) and clamp to a
-  // small minimum for small probes to still allow merging nearly identical sizes.
-  let min_eps = 1.0;
-
-  // Bias tolerance slightly toward the larger axis so extremely wide/tall probes coalesce more.
-  let eps_w = f32::max(
-    f32::max(band(target_size.width), band(target_size.height) * 0.75),
-    min_eps,
-  );
-  let eps_h = f32::max(
-    f32::max(band(target_size.height), band(target_size.width) * 0.5),
-    min_eps,
-  );
-
-  (eps_w, eps_h)
-}
-
-fn find_layout_cache_fragment(
-  cache: &HashMap<(Option<u32>, Option<u32>), (Size, std::sync::Arc<FragmentNode>)>,
-  target_size: Size,
-) -> Option<(Size, std::sync::Arc<FragmentNode>)> {
-  let mut best: Option<(Size, std::sync::Arc<FragmentNode>)> = None;
-  let mut best_score = f32::MAX;
-  // Allow small deltas so quantized sizes can still reuse a prior layout. Loosen tolerance
-  // for very large targets (wide carousels) to merge near-identical probes that differ by
-  // a handful of pixels while keeping smaller layouts precise.
-  let (eps_w, eps_h) = cache_tolerances(target_size);
-  for (size, frag) in cache.values() {
-    if !size.width.is_finite() || !size.height.is_finite() {
-      continue;
-    }
-    let dw = (size.width - target_size.width).abs();
-    let dh = (size.height - target_size.height).abs();
-    if dw <= eps_w && dh <= eps_h {
-      let score = dw + dh;
-      if score < best_score {
-        best_score = score;
-        best = Some((*size, frag.clone()));
-      }
-    }
-  }
-  best
-}
-
 impl FlexFormattingContext {
   /// Builds a Taffy tree from a BoxNode tree
   ///
@@ -2847,56 +2761,6 @@ impl FlexFormattingContext {
     node_map: &HashMap<*const BoxNode, NodeId>,
     constraints: &LayoutConstraints,
   ) -> Result<FragmentNode, LayoutError> {
-    fn accumulate_bounds(node: &FragmentNode, offset: Point, min: &mut Point, max: &mut Point) {
-      let abs = Rect::from_xywh(
-        node.bounds.x() + offset.x,
-        node.bounds.y() + offset.y,
-        node.bounds.width(),
-        node.bounds.height(),
-      );
-      min.x = min.x.min(abs.x());
-      min.y = min.y.min(abs.y());
-      max.x = max.x.max(abs.max_x());
-      max.y = max.y.max(abs.max_y());
-      let next = Point::new(offset.x + node.bounds.x(), offset.y + node.bounds.y());
-      for child in &node.children {
-        accumulate_bounds(child, next, min, max);
-      }
-    }
-
-    fn fragment_subtree_size(node: &FragmentNode) -> Size {
-      let mut min = Point::new(0.0, 0.0);
-      let mut max = Point::new(0.0, 0.0);
-      accumulate_bounds(node, Point::ZERO, &mut min, &mut max);
-      Size::new((max.x - min.x).max(0.0), (max.y - min.y).max(0.0))
-    }
-
-    fn find_cached_fragment(
-      cache: &HashMap<(Option<u32>, Option<u32>), (Size, std::sync::Arc<FragmentNode>)>,
-      target_size: Size,
-    ) -> Option<(Size, std::sync::Arc<FragmentNode>)> {
-      let mut best = None;
-      let mut best_score = f32::MAX;
-      let (eps_w, eps_h) = cache_tolerances(target_size);
-      // Match cached fragments within a tolerance so quantized measurements (2–8px)
-      // can be reused without relayout.
-      for (size, frag) in cache.values() {
-        if !size.width.is_finite() || !size.height.is_finite() {
-          continue;
-        }
-        let dw = (size.width - target_size.width).abs();
-        let dh = (size.height - target_size.height).abs();
-        if dw <= eps_w && dh <= eps_h {
-          let score = dw + dh;
-          if score < best_score {
-            best_score = score;
-            best = Some((*size, frag.clone()));
-          }
-        }
-      }
-      best
-    }
-
     // Get layout from Taffy
     let layout = taffy_tree
       .layout(taffy_node)
@@ -3085,169 +2949,165 @@ impl FlexFormattingContext {
 
         let mut reused = None;
         if !needs_intrinsic_main {
-          if let Ok(cache) = measured_fragments.lock() {
-            if let Some(entry) = cache.get(&flex_cache_key(child_box)) {
-              if let Some((stored_size, frag)) =
-                find_cached_fragment(entry, Size::new(target_width, target_height))
-              {
-                let mut cloned = (*frag).clone();
-                let intrinsic_size = fragment_subtree_size(&cloned);
-                let mut resolved_width = layout_width;
-                let mut resolved_height = layout_height;
-                if resolved_width <= eps && intrinsic_size.width > eps {
-                  resolved_width = intrinsic_size.width;
-                }
-                if resolved_height <= eps && intrinsic_size.height > eps {
-                  resolved_height = intrinsic_size.height;
-                }
-                if resolved_width <= eps {
-                  resolved_width = stored_size.width.max(resolved_width);
-                }
-                if resolved_height <= eps {
-                  resolved_height = stored_size.height.max(resolved_height);
-                }
-                if resolved_width <= eps {
-                  resolved_width = target_width;
-                }
-                if resolved_height <= eps {
-                  resolved_height = target_height;
-                }
-                if rect.width().is_finite() && rect.width() > 0.0 {
-                  resolved_width = resolved_width.min(rect.width());
-                }
-                if rect.height().is_finite() && rect.height() > 0.0 {
-                  resolved_height = resolved_height.min(rect.height());
-                }
-                let mut origin_x = child_loc_x;
-                let mut origin_y = child_loc_y;
-                if main_axis_is_row && rect.height().is_finite() {
-                  let limit = rect.height().max(1.0) * 5.0;
-                  if origin_y.abs() > limit {
-                    origin_y = rect.origin.y;
-                  }
-                }
-                if resolved_width <= eps && main_axis_is_row {
-                  manual_row_positions = true;
-                }
-                if resolved_height <= eps && !main_axis_is_row {
-                  manual_col_positions = true;
-                }
-                if allow_overflow_fallback
-                  && main_axis_is_row
-                  && rect_w.is_finite()
-                  && rect_w > wrap_eps
-                {
-                  let runaway = child_loc_x.abs() > rect_w * 2.0;
-                  if runaway {
+          if let Some((stored_size, frag)) = measured_fragments.find_fragment(
+            flex_cache_key(child_box),
+            Size::new(target_width, target_height),
+          ) {
+            let mut cloned = (*frag).clone();
+            let intrinsic_size = Self::fragment_subtree_size(&cloned);
+            let mut resolved_width = layout_width;
+            let mut resolved_height = layout_height;
+            if resolved_width <= eps && intrinsic_size.width > eps {
+              resolved_width = intrinsic_size.width;
+            }
+            if resolved_height <= eps && intrinsic_size.height > eps {
+              resolved_height = intrinsic_size.height;
+            }
+            if resolved_width <= eps {
+              resolved_width = stored_size.width.max(resolved_width);
+            }
+            if resolved_height <= eps {
+              resolved_height = stored_size.height.max(resolved_height);
+            }
+            if resolved_width <= eps {
+              resolved_width = target_width;
+            }
+            if resolved_height <= eps {
+              resolved_height = target_height;
+            }
+            if rect.width().is_finite() && rect.width() > 0.0 {
+              resolved_width = resolved_width.min(rect.width());
+            }
+            if rect.height().is_finite() && rect.height() > 0.0 {
+              resolved_height = resolved_height.min(rect.height());
+            }
+            let mut origin_x = child_loc_x;
+            let mut origin_y = child_loc_y;
+            if main_axis_is_row && rect.height().is_finite() {
+              let limit = rect.height().max(1.0) * 5.0;
+              if origin_y.abs() > limit {
+                origin_y = rect.origin.y;
+              }
+            }
+            if resolved_width <= eps && main_axis_is_row {
+              manual_row_positions = true;
+            }
+            if resolved_height <= eps && !main_axis_is_row {
+              manual_col_positions = true;
+            }
+            if allow_overflow_fallback
+              && main_axis_is_row
+              && rect_w.is_finite()
+              && rect_w > wrap_eps
+            {
+              let runaway = child_loc_x.abs() > rect_w * 2.0;
+              if runaway {
+                manual_row_positions = true;
+                fallback_cursor_x = rect.origin.x;
+              }
+            }
+            if main_axis_is_row {
+              let same_row = last_layout_y
+                .map(|prev_y| (child_loc_y - prev_y).abs() < wrap_eps)
+                .unwrap_or(true);
+              if same_row {
+                if allow_overflow_fallback {
+                  if child_loc_x > rect.width() + wrap_eps {
                     manual_row_positions = true;
                     fallback_cursor_x = rect.origin.x;
                   }
+                  if child_loc_x < rect.origin.x - rect.width().abs().max(wrap_eps) {
+                    manual_row_positions = true;
+                    fallback_cursor_x = rect.origin.x;
+                  }
+                  if let Some(prev) = last_layout_x {
+                    if child_loc_x <= prev + 0.1 {
+                      manual_row_positions = true;
+                    }
+                  }
                 }
-                if main_axis_is_row {
-                  let same_row = last_layout_y
-                    .map(|prev_y| (child_loc_y - prev_y).abs() < wrap_eps)
-                    .unwrap_or(true);
-                  if same_row {
-                    if allow_overflow_fallback {
-                      if child_loc_x > rect.width() + wrap_eps {
-                        manual_row_positions = true;
-                        fallback_cursor_x = rect.origin.x;
-                      }
-                      if child_loc_x < rect.origin.x - rect.width().abs().max(wrap_eps) {
-                        manual_row_positions = true;
-                        fallback_cursor_x = rect.origin.x;
-                      }
-                      if let Some(prev) = last_layout_x {
-                        if child_loc_x <= prev + 0.1 {
-                          manual_row_positions = true;
-                        }
-                      }
-                    }
-                    if last_layout_x.is_none() && !manual_row_positions {
-                      fallback_cursor_x = child_loc_x;
-                    }
-                  } else {
-                    manual_row_positions = false;
-                    fallback_cursor_x = child_loc_x;
-                  }
-                  let use_manual_row = allow_overflow_fallback && manual_row_positions;
-                  if use_manual_row {
-                    let cap_base = if rect.width().is_finite() && rect.width() > wrap_eps {
-                      rect.width()
-                    } else {
-                      self.viewport_size.width
-                    };
-                    let cap = cap_base.max(wrap_eps) * 2.0 + rect.origin.x;
-                    if fallback_cursor_x + resolved_width > cap {
-                      fallback_cursor_x = rect.origin.x;
-                      last_layout_x = None;
-                    }
-                  }
-                  if use_manual_row {
-                    origin_x = fallback_cursor_x;
-                    fallback_cursor_x += resolved_width;
-                  } else {
-                    fallback_cursor_x = child_loc_x + resolved_width;
-                    last_layout_x = Some(child_loc_x);
-                    last_layout_y = Some(child_loc_y);
-                  }
+                if last_layout_x.is_none() && !manual_row_positions {
+                  fallback_cursor_x = child_loc_x;
+                }
+              } else {
+                manual_row_positions = false;
+                fallback_cursor_x = child_loc_x;
+              }
+              let use_manual_row = allow_overflow_fallback && manual_row_positions;
+              if use_manual_row {
+                let cap_base = if rect.width().is_finite() && rect.width() > wrap_eps {
+                  rect.width()
                 } else {
-                  if let Some(prev) = last_layout_y {
-                    if child_loc_y <= prev + 0.1 {
-                      manual_col_positions = true;
-                    }
-                  } else {
-                    fallback_cursor_y = child_loc_y;
-                  }
-                  if manual_col_positions {
-                    origin_y = fallback_cursor_y;
-                    fallback_cursor_y += resolved_height;
-                  } else {
-                    fallback_cursor_y = child_loc_y + resolved_height;
-                    last_layout_y = Some(child_loc_y);
-                  }
+                  self.viewport_size.width
+                };
+                let cap = cap_base.max(wrap_eps) * 2.0 + rect.origin.x;
+                if fallback_cursor_x + resolved_width > cap {
+                  fallback_cursor_x = rect.origin.x;
+                  last_layout_x = None;
                 }
-                let log_child_ids = toggles
-                  .usize_list("FASTR_LOG_FLEX_CHILD_IDS")
-                  .unwrap_or_default();
-                let log_child = !log_child_ids.is_empty()
-                  && (log_child_ids.contains(&child_box.id)
-                    || log_child_ids.contains(&box_node.id));
-                if log_child {
-                  let selector = child_box
-                    .debug_info
-                    .as_ref()
-                    .map(|d| d.to_selector())
-                    .unwrap_or_else(|| "<anon>".to_string());
-                  eprintln!(
-                                        "[flex-child-reuse] parent_id={} child_id={} selector={} layout=({:.2},{:.2}) loc=({:.2},{:.2}) resolved=({:.2},{:.2}) rect_w={:.2} manual_row={} cursor_x={:.2} flex=({:.2},{:.2},{:?}) width={:?} min_w={:?} max_w={:?}",
-                                        box_node.id,
-                                        child_box.id,
-                                        selector,
-                                        layout_width,
-                                        layout_height,
-                                        child_loc_x,
-                                        child_loc_y,
-                                        resolved_width,
-                                        resolved_height,
-                                        rect.width(),
-                                        manual_row_positions,
-                                        fallback_cursor_x,
-                                        child_box.style.flex_grow,
-                                        child_box.style.flex_shrink,
-                                        child_box.style.flex_basis,
-                                        child_box.style.width,
-                                        child_box.style.min_width,
-                                        child_box.style.max_width
-                                    );
+              }
+              if use_manual_row {
+                origin_x = fallback_cursor_x;
+                fallback_cursor_x += resolved_width;
+              } else {
+                fallback_cursor_x = child_loc_x + resolved_width;
+                last_layout_x = Some(child_loc_x);
+                last_layout_y = Some(child_loc_y);
+              }
+            } else {
+              if let Some(prev) = last_layout_y {
+                if child_loc_y <= prev + 0.1 {
+                  manual_col_positions = true;
                 }
-                cloned.bounds = Rect::new(
-                  Point::new(origin_x, origin_y),
-                  Size::new(resolved_width, resolved_height),
-                );
-                reused = Some(cloned);
+              } else {
+                fallback_cursor_y = child_loc_y;
+              }
+              if manual_col_positions {
+                origin_y = fallback_cursor_y;
+                fallback_cursor_y += resolved_height;
+              } else {
+                fallback_cursor_y = child_loc_y + resolved_height;
+                last_layout_y = Some(child_loc_y);
               }
             }
+            let log_child_ids = toggles
+              .usize_list("FASTR_LOG_FLEX_CHILD_IDS")
+              .unwrap_or_default();
+            let log_child = !log_child_ids.is_empty()
+              && (log_child_ids.contains(&child_box.id) || log_child_ids.contains(&box_node.id));
+            if log_child {
+              let selector = child_box
+                .debug_info
+                .as_ref()
+                .map(|d| d.to_selector())
+                .unwrap_or_else(|| "<anon>".to_string());
+              eprintln!(
+                                    "[flex-child-reuse] parent_id={} child_id={} selector={} layout=({:.2},{:.2}) loc=({:.2},{:.2}) resolved=({:.2},{:.2}) rect_w={:.2} manual_row={} cursor_x={:.2} flex=({:.2},{:.2},{:?}) width={:?} min_w={:?} max_w={:?}",
+                                    box_node.id,
+                                    child_box.id,
+                                    selector,
+                                    layout_width,
+                                    layout_height,
+                                    child_loc_x,
+                                    child_loc_y,
+                                    resolved_width,
+                                    resolved_height,
+                                    rect.width(),
+                                    manual_row_positions,
+                                    fallback_cursor_x,
+                                    child_box.style.flex_grow,
+                                    child_box.style.flex_shrink,
+                                    child_box.style.flex_basis,
+                                    child_box.style.width,
+                                    child_box.style.min_width,
+                                    child_box.style.max_width
+                                );
+            }
+            cloned.bounds = Rect::new(
+              Point::new(origin_x, origin_y),
+              Size::new(resolved_width, resolved_height),
+            );
+            reused = Some(cloned);
           }
         }
 
@@ -3339,7 +3199,7 @@ impl FlexFormattingContext {
             selector_for_profile.as_deref(),
             node_timer,
           );
-          let intrinsic_size = fragment_subtree_size(&child_fragment);
+          let intrinsic_size = Self::fragment_subtree_size(&child_fragment);
 
           if !trace_flex_text_ids().is_empty() && trace_flex_text_ids().contains(&child_box.id) {
             let mut text_count = 0;
@@ -3396,7 +3256,7 @@ impl FlexFormattingContext {
               .and_then(|_| child_box.debug_info.as_ref().map(|d| d.to_selector()));
             if let Ok(mut mc_fragment) = fc.layout(&layout_child, &mc_constraints) {
               flex_profile::record_node_layout(child_box.id, mc_selector.as_deref(), mc_timer);
-              let mut mc_size = fragment_subtree_size(&mc_fragment);
+              let mut mc_size = Self::fragment_subtree_size(&mc_fragment);
               if rect.width().is_finite() && rect.width() > 0.0 {
                 mc_size.width = mc_size.width.min(rect.width());
               }
@@ -5138,8 +4998,8 @@ mod tests {
       viewport,
       cb,
       FontContext::new(),
-      std::sync::Arc::new(std::sync::Mutex::new(FlexMeasureCache::new())),
-      std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+      std::sync::Arc::new(ShardedFlexCache::new_measure()),
+      std::sync::Arc::new(ShardedFlexCache::new_layout()),
     );
     let constraints = LayoutConstraints::definite(100.0, 100.0);
     let fragment = fc.layout(&container, &constraints).unwrap();
@@ -5963,5 +5823,69 @@ mod tests {
       fc.length_option_to_dimension(None, &style),
       Dimension::auto()
     );
+  }
+
+  #[test]
+  fn sharded_flex_cache_supports_parallel_layouts() {
+    use crate::debug::runtime::{set_runtime_toggles, RuntimeToggles};
+    let mut toggles = std::collections::HashMap::new();
+    toggles.insert("FASTR_FLEX_PROFILE".to_string(), "1".to_string());
+    let guard = set_runtime_toggles(std::sync::Arc::new(RuntimeToggles::from_map(toggles)));
+
+    let measure_cache = Arc::new(ShardedFlexCache::new_measure());
+    let layout_cache = Arc::new(ShardedFlexCache::new_layout());
+    let viewport = Size::new(640.0, 480.0);
+    let fc = FlexFormattingContext::with_viewport_and_cb(
+      viewport,
+      ContainingBlock::viewport(viewport),
+      FontContext::new(),
+      measure_cache.clone(),
+      layout_cache.clone(),
+    )
+    .with_parallelism(LayoutParallelism::enabled(1));
+
+    let item = |w, h| {
+      BoxNode::new_block(
+        create_item_style(w, h),
+        FormattingContextType::Block,
+        vec![],
+      )
+    };
+    let container = BoxNode::new_block(
+      create_flex_style(),
+      FormattingContextType::Flex,
+      vec![item(40.0, 20.0), item(60.0, 24.0), item(30.0, 18.0)],
+    );
+    let constraints = LayoutConstraints::definite(300.0, 200.0);
+
+    let expected = fc.layout(&container, &constraints).unwrap();
+    let expected_size = expected.bounds.size;
+    let shared_fc = Arc::new(fc);
+
+    let results: Vec<Size> = (0..24)
+      .into_par_iter()
+      .map(|_| {
+        shared_fc
+          .layout(&container, &constraints)
+          .map(|frag| frag.bounds.size)
+          .unwrap()
+      })
+      .collect();
+    for size in results {
+      assert_eq!(size.width, expected_size.width);
+      assert_eq!(size.height, expected_size.height);
+    }
+
+    let layout_stats = layout_cache.shard_stats();
+    let layout_hits: u64 = layout_stats.iter().map(|s| s.hits).sum();
+    let layout_misses: u64 = layout_stats.iter().map(|s| s.misses).sum();
+    assert!(layout_hits > 0, "layout cache should record shard hits");
+    assert!(layout_misses > 0, "layout cache should record shard misses");
+
+    let measure_stats = measure_cache.shard_stats();
+    let measure_lookups: u64 = measure_stats.iter().map(|s| s.hits + s.misses).sum();
+    assert!(measure_lookups > 0, "measure cache should see lookups");
+
+    drop(guard);
   }
 }
