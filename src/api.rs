@@ -1659,6 +1659,8 @@ pub struct ResourceDiagnostics {
   pub fetch_counts: HashMap<ResourceKind, usize>,
   pub image_cache_hits: Option<usize>,
   pub image_cache_misses: Option<usize>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub image_decode_ms: Option<f64>,
 }
 
 /// Structured report describing a render.
@@ -1688,6 +1690,7 @@ fn merge_image_cache_diagnostics(stats: &mut RenderStats) {
   if let Some(image_stats) = crate::image_loader::take_image_cache_diagnostics() {
     stats.resources.image_cache_hits = Some(image_stats.cache_hits);
     stats.resources.image_cache_misses = Some(image_stats.cache_misses);
+    stats.resources.image_decode_ms = Some(image_stats.decode_ms);
     if image_stats.cache_misses > 0 {
       *stats
         .resources
@@ -2208,10 +2211,11 @@ struct PoolState {
 struct SharedPoolResources {
   config: FastRenderConfig,
   font_cache: FontCacheConfig,
-  image_cache: ImageCacheConfig,
+  image_cache_config: ImageCacheConfig,
   fetcher: Arc<dyn ResourceFetcher>,
   font_db: Arc<FontDbDatabase>,
   pool_size: usize,
+  image_cache: ImageCache,
 }
 
 impl SharedPoolResources {
@@ -2221,12 +2225,14 @@ impl SharedPoolResources {
       Arc::clone(&self.fetcher),
       self.font_cache,
     );
-    FastRender::from_parts(
+    let mut renderer = FastRender::from_parts(
       self.config.clone(),
       Arc::clone(&self.fetcher),
       font_context,
-      self.image_cache,
-    )
+      self.image_cache_config,
+    )?;
+    renderer.image_cache = self.image_cache.clone();
+    Ok(renderer)
   }
 }
 
@@ -2238,16 +2244,26 @@ impl FastRenderPool {
 
   /// Create a new pool using the provided configuration.
   pub fn with_config(config: FastRenderPoolConfig) -> Result<Self> {
-    let pool_size = config.pool_size.max(1);
-    let fetcher = resolve_fetcher(&config.renderer, config.fetcher);
+    let FastRenderPoolConfig {
+      renderer,
+      pool_size,
+      font_cache,
+      image_cache,
+      fetcher,
+    } = config;
+    let pool_size = pool_size.max(1);
+    let fetcher = resolve_fetcher(&renderer, fetcher);
+    let shared_image_cache =
+      build_image_cache(&renderer.base_url, Arc::clone(&fetcher), image_cache);
     let inner = PoolInner {
       shared: Arc::new(SharedPoolResources {
-        config: config.renderer,
-        font_cache: config.font_cache,
-        image_cache: config.image_cache,
+        config: renderer,
+        font_cache,
+        image_cache_config: image_cache,
         fetcher,
         font_db: FontDatabase::shared_system_db(),
         pool_size,
+        image_cache: shared_image_cache,
       }),
       state: Mutex::new(PoolState {
         idle: Vec::with_capacity(pool_size),
@@ -4356,16 +4372,18 @@ impl FastRender {
           if options.allow_partial {
             if let RenderError::Timeout { stage, .. } = &err {
               guard.timeout_stage = Some(*stage);
+              guard.note_failure_stage(*stage);
               let diagnostics = guard.clone();
+              let pixmap = self.render_error_overlay(width, height)?;
+              if let Some(recorder) = local_recorder.take() {
+                let mut stats = recorder.finish();
+                merge_text_diagnostics(&mut stats);
+                merge_image_cache_diagnostics(&mut stats);
+                guard.stats = Some(stats);
+              }
               if !had_sink {
                 self.set_diagnostics_sink(None);
               }
-              if local_recorder.is_some() {
-                let _ = crate::image_loader::take_image_cache_diagnostics();
-                let _ = crate::paint::painter::take_paint_diagnostics();
-                let _ = crate::text::pipeline::take_text_diagnostics();
-              }
-              let pixmap = self.render_error_overlay(width, height)?;
               return Ok(RenderReport {
                 pixmap,
                 accessibility: None,
@@ -4462,7 +4480,7 @@ impl FastRender {
       let diagnostics_level = options.diagnostics_level;
       let mut stats_recorder = (!matches!(diagnostics_level, DiagnosticsLevel::None))
         .then(|| RenderStatsRecorder::new(diagnostics_level));
-      let restore_cascade_profile = if matches!(diagnostics_level, DiagnosticsLevel::Verbose) {
+      let restore_cascade_profile = if stats_recorder.as_ref().is_some_and(|rec| rec.verbose()) {
         Some(crate::style::cascade::cascade_profile_enabled())
       } else {
         None
@@ -4502,8 +4520,9 @@ impl FastRender {
       });
       let context = Some(self.build_resource_context(Some(&base_url), shared_diagnostics));
       let (prev_self, prev_image, prev_font) = self.push_resource_context(context);
+
       let mut result = (|| -> Result<RenderReport> {
-        let html_to_render = {
+        let html_with_css = {
           let _span = trace_handle.span("css_inline", "style");
           let _deadline_guard = DeadlineGuard::install(Some(&deadline));
           let mut guard = diagnostics.lock().unwrap();
@@ -4550,9 +4569,10 @@ impl FastRender {
             }
           }
         };
+
         let mut captured = RenderArtifacts::new(artifacts);
         let outputs = self.render_html_with_options_internal_with_deadline(
-          &html_to_render,
+          &html_with_css,
           options,
           Some(&mut captured),
           Some(&deadline),
@@ -4569,10 +4589,6 @@ impl FastRender {
         })
       })();
       self.pop_resource_context(prev_self, prev_image, prev_font);
-
-      if !had_sink {
-        self.set_diagnostics_sink(None);
-      }
 
       if let Some(recorder) = stats_recorder {
         match result.as_mut() {
@@ -4592,6 +4608,10 @@ impl FastRender {
           }
         }
       }
+
+      if !had_sink {
+        self.set_diagnostics_sink(None);
+      }
       if let Some(previous) = restore_cascade_profile {
         crate::style::cascade::set_cascade_profile_enabled(previous);
       }
@@ -4599,7 +4619,6 @@ impl FastRender {
       trace.finalize(result)
     })
   }
-
   /// Generate a debug snapshot of the full rendering pipeline for an HTML string.
   pub fn snapshot_pipeline(
     &mut self,

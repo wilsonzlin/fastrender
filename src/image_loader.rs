@@ -31,7 +31,9 @@ use image::ImageDecoder;
 use image::ImageFormat;
 use image::ImageReader;
 use image::RgbaImage;
+use lru::LruCache;
 use roxmltree::Document;
+use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
@@ -56,6 +58,7 @@ pub struct ImageCacheDiagnostics {
   pub requests: usize,
   pub cache_hits: usize,
   pub cache_misses: usize,
+  pub decode_ms: f64,
 }
 
 thread_local! {
@@ -92,6 +95,17 @@ fn record_image_cache_miss() {
   IMAGE_CACHE_DIAGNOSTICS.with(|cell| {
     if let Some(stats) = cell.borrow_mut().as_mut() {
       stats.cache_misses += 1;
+    }
+  });
+}
+
+fn record_image_decode_ms(duration_ms: f64) {
+  if !duration_ms.is_finite() || duration_ms <= 0.0 {
+    return;
+  }
+  IMAGE_CACHE_DIAGNOSTICS.with(|cell| {
+    if let Some(stats) = cell.borrow_mut().as_mut() {
+      stats.decode_ms += duration_ms;
     }
   });
 }
@@ -157,22 +171,98 @@ impl From<RenderError> for AvifDecodeError {
   }
 }
 
+impl From<image::ImageError> for AvifDecodeError {
+  fn from(err: image::ImageError) -> Self {
+    Self::Image(err)
+  }
+}
+
+#[derive(Clone)]
+struct CacheEntry<V> {
+  value: V,
+  bytes: usize,
+}
+
+struct SizedLruCache<K, V> {
+  inner: LruCache<K, CacheEntry<V>>,
+  max_entries: Option<usize>,
+  max_bytes: Option<usize>,
+  current_bytes: usize,
+}
+
+impl<K: Eq + Hash, V> SizedLruCache<K, V> {
+  fn new(max_entries: usize, max_bytes: usize) -> Self {
+    Self {
+      inner: LruCache::unbounded(),
+      max_entries: (max_entries > 0).then_some(max_entries),
+      max_bytes: (max_bytes > 0).then_some(max_bytes),
+      current_bytes: 0,
+    }
+  }
+
+  fn get_cloned<Q>(&mut self, key: &Q) -> Option<V>
+  where
+    V: Clone,
+    K: Borrow<Q>,
+    Q: Hash + Eq + ?Sized,
+  {
+    self.inner.get(key).map(|entry| entry.value.clone())
+  }
+
+  fn insert(&mut self, key: K, value: V, bytes: usize) {
+    if let Some(entry) = self.inner.pop(&key) {
+      self.current_bytes = self.current_bytes.saturating_sub(entry.bytes);
+    }
+    self.inner.put(key, CacheEntry { value, bytes });
+    self.current_bytes = self.current_bytes.saturating_add(bytes);
+    self.evict_if_needed();
+  }
+
+  fn evict_if_needed(&mut self) {
+    while self
+      .max_entries
+      .is_some_and(|limit| self.inner.len() > limit)
+      || self
+        .max_bytes
+        .is_some_and(|limit| self.current_bytes > limit)
+    {
+      if let Some((_key, entry)) = self.inner.pop_lru() {
+        self.current_bytes = self.current_bytes.saturating_sub(entry.bytes);
+      } else {
+        break;
+      }
+    }
+  }
+}
+
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 struct SvgPixmapKey {
   hash: u64,
+  url_hash: u64,
   len: usize,
   width: u32,
   height: u32,
+  device_pixel_ratio_bits: u32,
 }
 
-fn svg_pixmap_key(svg_content: &str, width: u32, height: u32) -> SvgPixmapKey {
-  let mut hasher = DefaultHasher::new();
-  svg_content.hash(&mut hasher);
+fn svg_pixmap_key(
+  svg_content: &str,
+  url: &str,
+  device_pixel_ratio: f32,
+  width: u32,
+  height: u32,
+) -> SvgPixmapKey {
+  let mut content_hasher = DefaultHasher::new();
+  svg_content.hash(&mut content_hasher);
+  let mut url_hasher = DefaultHasher::new();
+  url.hash(&mut url_hasher);
   SvgPixmapKey {
-    hash: hasher.finish(),
+    hash: content_hasher.finish(),
+    url_hash: url_hasher.finish(),
     len: svg_content.len(),
     width,
     height,
+    device_pixel_ratio_bits: device_pixel_ratio.to_bits(),
   }
 }
 
@@ -720,6 +810,8 @@ pub struct CachedImage {
   /// True when the resource explicitly disables aspect-ratio preservation (e.g., SVG
   /// `preserveAspectRatio="none"`).
   pub aspect_ratio_none: bool,
+  /// Raw SVG markup when the image originated from a vector source.
+  pub svg_content: Option<Arc<str>>,
 }
 
 impl CachedImage {
@@ -894,6 +986,14 @@ pub struct ImageCacheConfig {
   pub max_decoded_pixels: u64,
   /// Maximum allowed width or height for a decoded image. `0` disables the limit.
   pub max_decoded_dimension: u32,
+  /// Maximum number of decoded images kept in memory (`0` disables eviction by count).
+  pub max_cached_images: usize,
+  /// Maximum estimated bytes of decoded images kept in memory (`0` disables eviction by size).
+  pub max_cached_image_bytes: usize,
+  /// Maximum number of rasterized SVG pixmaps kept in memory (`0` disables eviction by count).
+  pub max_cached_svg_pixmaps: usize,
+  /// Maximum estimated bytes of cached SVG pixmaps (`0` disables eviction by size).
+  pub max_cached_svg_bytes: usize,
 }
 
 impl Default for ImageCacheConfig {
@@ -901,6 +1001,10 @@ impl Default for ImageCacheConfig {
     Self {
       max_decoded_pixels: 100_000_000,
       max_decoded_dimension: 32768,
+      max_cached_images: 256,
+      max_cached_image_bytes: 256 * 1024 * 1024,
+      max_cached_svg_pixmaps: 128,
+      max_cached_svg_bytes: 128 * 1024 * 1024,
     }
   }
 }
@@ -917,6 +1021,26 @@ impl ImageCacheConfig {
 
   pub fn with_max_decoded_dimension(mut self, max: u32) -> Self {
     self.max_decoded_dimension = max;
+    self
+  }
+
+  pub fn with_max_cached_images(mut self, max: usize) -> Self {
+    self.max_cached_images = max;
+    self
+  }
+
+  pub fn with_max_cached_image_bytes(mut self, max: usize) -> Self {
+    self.max_cached_image_bytes = max;
+    self
+  }
+
+  pub fn with_max_cached_svg_pixmaps(mut self, max: usize) -> Self {
+    self.max_cached_svg_pixmaps = max;
+    self
+  }
+
+  pub fn with_max_cached_svg_bytes(mut self, max: usize) -> Self {
+    self.max_cached_svg_bytes = max;
     self
   }
 }
@@ -1032,7 +1156,7 @@ impl ProbeInFlight {
 /// ```
 pub struct ImageCache {
   /// In-memory cache of decoded images (keyed by resolved URL)
-  cache: Arc<Mutex<HashMap<String, Arc<CachedImage>>>>,
+  cache: Arc<Mutex<SizedLruCache<String, Arc<CachedImage>>>>,
   /// In-flight decodes keyed by resolved URL to de-duplicate concurrent loads.
   in_flight: Arc<Mutex<HashMap<String, Arc<DecodeInFlight>>>>,
   /// In-memory cache of probed metadata (keyed by resolved URL).
@@ -1042,7 +1166,7 @@ pub struct ImageCache {
   /// In-flight probes keyed by resolved URL to de-duplicate concurrent metadata loads.
   meta_in_flight: Arc<Mutex<HashMap<String, Arc<ProbeInFlight>>>>,
   /// In-memory cache of rendered inline SVG pixmaps keyed by (hash, size).
-  svg_pixmap_cache: Arc<Mutex<HashMap<SvgPixmapKey, Arc<tiny_skia::Pixmap>>>>,
+  svg_pixmap_cache: Arc<Mutex<SizedLruCache<SvgPixmapKey, Arc<tiny_skia::Pixmap>>>>,
   /// Base URL for resolving relative image sources
   base_url: Option<String>,
   /// Resource fetcher for loading bytes from URLs
@@ -1123,12 +1247,18 @@ impl ImageCache {
     config: ImageCacheConfig,
   ) -> Self {
     Self {
-      cache: Arc::new(Mutex::new(HashMap::new())),
+      cache: Arc::new(Mutex::new(SizedLruCache::new(
+        config.max_cached_images,
+        config.max_cached_image_bytes,
+      ))),
       in_flight: Arc::new(Mutex::new(HashMap::new())),
       meta_cache: Arc::new(Mutex::new(HashMap::new())),
       raw_cache: Arc::new(Mutex::new(HashMap::new())),
       meta_in_flight: Arc::new(Mutex::new(HashMap::new())),
-      svg_pixmap_cache: Arc::new(Mutex::new(HashMap::new())),
+      svg_pixmap_cache: Arc::new(Mutex::new(SizedLruCache::new(
+        config.max_cached_svg_pixmaps,
+        config.max_cached_svg_bytes,
+      ))),
       base_url,
       fetcher,
       config,
@@ -1287,7 +1417,7 @@ impl ImageCache {
       .cache
       .lock()
       .ok()
-      .and_then(|cache| cache.get(resolved_url).cloned())
+      .and_then(|mut cache| cache.get_cloned(resolved_url))
   }
 
   fn get_cached_meta(&self, resolved_url: &str) -> Option<Arc<CachedImageMetadata>> {
@@ -1304,6 +1434,32 @@ impl ImageCache {
       .lock()
       .ok()
       .and_then(|mut cache| cache.remove(resolved_url))
+  }
+
+  fn insert_cached_image(&self, resolved_url: &str, image: Arc<CachedImage>) {
+    let mut bytes = Self::estimate_image_bytes(&image.image);
+    if let Some(svg) = &image.svg_content {
+      bytes = bytes.saturating_add(svg.len());
+    }
+    if let Ok(mut cache) = self.cache.lock() {
+      cache.insert(resolved_url.to_string(), image, bytes);
+    }
+  }
+
+  fn insert_svg_pixmap(&self, key: SvgPixmapKey, pixmap: Arc<tiny_skia::Pixmap>) {
+    let bytes = pixmap.data().len();
+    if let Ok(mut cache) = self.svg_pixmap_cache.lock() {
+      cache.insert(key, pixmap, bytes);
+    }
+  }
+
+  fn estimate_image_bytes(image: &DynamicImage) -> usize {
+    let (width, height) = image.dimensions();
+    let pixels = usize::try_from(width)
+      .unwrap_or(0)
+      .saturating_mul(usize::try_from(height).unwrap_or(0));
+    let bpp = usize::from(image.color().bytes_per_pixel()).max(1);
+    pixels.saturating_mul(bpp)
   }
 
   fn record_image_error(&self, url: &str, error: &Error) {
@@ -1391,8 +1547,9 @@ impl ImageCache {
       }
     }
     let fetch_ms = fetch_start.map(|s| s.elapsed().as_secs_f64() * 1000.0);
-    let decode_start = profile_enabled.then(Instant::now);
-    let (img, orientation, resolution, is_vector, intrinsic_ratio, aspect_ratio_none) =
+    let decode_timer = Instant::now();
+    let decode_start = profile_enabled.then_some(decode_timer);
+    let (img, orientation, resolution, is_vector, intrinsic_ratio, aspect_ratio_none, svg_content) =
       match self.decode_resource(&resource, resolved_url) {
         Ok(decoded) => decoded,
         Err(err) => {
@@ -1400,7 +1557,9 @@ impl ImageCache {
           return Err(err);
         }
       };
-    let decode_ms = decode_start.map(|s| s.elapsed().as_secs_f64() * 1000.0);
+    let decode_ms_value = decode_timer.elapsed().as_secs_f64() * 1000.0;
+    let decode_ms = decode_start.map(|_| decode_ms_value);
+    record_image_decode_ms(decode_ms_value);
 
     let img_arc = Arc::new(CachedImage {
       image: Arc::new(img),
@@ -1409,11 +1568,10 @@ impl ImageCache {
       is_vector,
       intrinsic_ratio,
       aspect_ratio_none,
+      svg_content,
     });
 
-    if let Ok(mut cache) = self.cache.lock() {
-      cache.insert(resolved_url.to_string(), Arc::clone(&img_arc));
-    }
+    self.insert_cached_image(resolved_url, Arc::clone(&img_arc));
 
     if let (Some(threshold_ms), Some(total_start)) = (threshold_ms, total_start) {
       let total_ms = total_start.elapsed().as_secs_f64() * 1000.0;
@@ -1450,10 +1608,13 @@ impl ImageCache {
     let threshold_ms = image_profile_threshold_ms();
     let profile_enabled = threshold_ms.is_some();
     let total_start = profile_enabled.then(Instant::now);
-    let decode_start = profile_enabled.then(Instant::now);
-    let (img, orientation, resolution, is_vector, intrinsic_ratio, aspect_ratio_none) =
+    let decode_timer = Instant::now();
+    let decode_start = profile_enabled.then_some(decode_timer);
+    let (img, orientation, resolution, is_vector, intrinsic_ratio, aspect_ratio_none, svg_content) =
       self.decode_resource(resource, resolved_url)?;
-    let decode_ms = decode_start.map(|s| s.elapsed().as_secs_f64() * 1000.0);
+    let decode_ms_value = decode_timer.elapsed().as_secs_f64() * 1000.0;
+    let decode_ms = decode_start.map(|_| decode_ms_value);
+    record_image_decode_ms(decode_ms_value);
 
     let img_arc = Arc::new(CachedImage {
       image: Arc::new(img),
@@ -1462,11 +1623,10 @@ impl ImageCache {
       is_vector,
       intrinsic_ratio,
       aspect_ratio_none,
+      svg_content,
     });
 
-    if let Ok(mut cache) = self.cache.lock() {
-      cache.insert(resolved_url.to_string(), Arc::clone(&img_arc));
-    }
+    self.insert_cached_image(resolved_url, Arc::clone(&img_arc));
 
     if let (Some(threshold_ms), Some(total_start)) = (threshold_ms, total_start) {
       let total_ms = total_start.elapsed().as_secs_f64() * 1000.0;
@@ -1616,7 +1776,12 @@ impl ImageCache {
 
   /// Render raw SVG content to an image (uncached).
   pub fn render_svg(&self, svg_content: &str) -> Result<Arc<CachedImage>> {
+    record_image_cache_request();
+    record_image_cache_miss();
+    let decode_timer = Instant::now();
     let (img, intrinsic_ratio, aspect_ratio_none) = self.render_svg_to_image(svg_content)?;
+    let svg_content = Arc::<str>::from(svg_content);
+    record_image_decode_ms(decode_timer.elapsed().as_secs_f64() * 1000.0);
     Ok(Arc::new(CachedImage {
       image: Arc::new(img),
       orientation: None,
@@ -1624,6 +1789,7 @@ impl ImageCache {
       is_vector: true,
       intrinsic_ratio,
       aspect_ratio_none,
+      svg_content: Some(svg_content),
     }))
   }
 
@@ -1633,6 +1799,7 @@ impl ImageCache {
     render_width: u32,
     render_height: u32,
     url: &str,
+    device_pixel_ratio: f32,
   ) -> Result<Arc<tiny_skia::Pixmap>> {
     use resvg::usvg;
 
@@ -1640,18 +1807,30 @@ impl ImageCache {
     self.enforce_decode_limits(render_width, render_height, url)?;
     check_active(RenderStage::Paint).map_err(Error::Render)?;
 
-    let key = svg_pixmap_key(svg_content, render_width, render_height);
-    if let Ok(cache) = self.svg_pixmap_cache.lock() {
-      if let Some(cached) = cache.get(&key) {
-        return Ok(Arc::clone(cached));
+    let key = svg_pixmap_key(
+      svg_content,
+      url,
+      device_pixel_ratio,
+      render_width,
+      render_height,
+    );
+    record_image_cache_request();
+    if let Ok(mut cache) = self.svg_pixmap_cache.lock() {
+      if let Some(cached) = cache.get_cloned(&key) {
+        record_image_cache_hit();
+        return Ok(cached);
       }
     }
 
-    if let Some(pixmap) = try_render_simple_svg_pixmap(svg_content, render_width, render_height)? {
+    record_image_cache_miss();
+    let render_timer = Instant::now();
+
+    if let Some(pixmap) =
+      try_render_simple_svg_pixmap(svg_content, render_width, render_height)?
+    {
       let pixmap = Arc::new(pixmap);
-      if let Ok(mut cache) = self.svg_pixmap_cache.lock() {
-        cache.insert(key, Arc::clone(&pixmap));
-      }
+      record_image_decode_ms(render_timer.elapsed().as_secs_f64() * 1000.0);
+      self.insert_svg_pixmap(key, Arc::clone(&pixmap));
       return Ok(pixmap);
     }
 
@@ -1660,9 +1839,8 @@ impl ImageCache {
       if parsed.scheme() == "file" {
         if let Ok(path) = parsed.to_file_path() {
           if let Some(dir) = path.parent() {
-            options.resources_dir = std::fs::canonicalize(dir)
-              .ok()
-              .or_else(|| Some(dir.to_path_buf()));
+            options.resources_dir =
+              std::fs::canonicalize(dir).ok().or_else(|| Some(dir.to_path_buf()));
           }
         }
       }
@@ -1710,9 +1888,8 @@ impl ImageCache {
     check_active(RenderStage::Paint).map_err(Error::Render)?;
 
     let pixmap = Arc::new(pixmap);
-    if let Ok(mut cache) = self.svg_pixmap_cache.lock() {
-      cache.insert(key, Arc::clone(&pixmap));
-    }
+    record_image_decode_ms(render_timer.elapsed().as_secs_f64() * 1000.0);
+    self.insert_svg_pixmap(key, Arc::clone(&pixmap));
 
     Ok(pixmap)
   }
@@ -1785,6 +1962,7 @@ impl ImageCache {
     bool,
     Option<f32>,
     bool,
+    Option<Arc<str>>,
   )> {
     let bytes = &resource.bytes;
     let content_type = resource.content_type.as_deref();
@@ -1807,16 +1985,16 @@ impl ImageCache {
           reason: format!("SVG not valid UTF-8: {}", e),
         })
       })?;
-      return self
-        .render_svg_to_image_with_url(content, url)
-        .map(|(img, ratio, aspect_none)| (img, None, None, true, ratio, aspect_none));
+      let svg_content: Arc<str> = Arc::from(content);
+      let (img, ratio, aspect_none) = self.render_svg_to_image_with_url(&svg_content, url)?;
+      return Ok((img, None, None, true, ratio, aspect_none, Some(svg_content)));
     }
 
     // Regular image - extract EXIF metadata and decode
     let (orientation, resolution) = Self::exif_metadata(bytes);
     self
       .decode_bitmap(bytes, content_type, url)
-      .map(|img| (img, orientation, resolution, false, None, false))
+      .map(|img| (img, orientation, resolution, false, None, false, None))
   }
 
   fn probe_resource(&self, resource: &FetchedResource, url: &str) -> Result<CachedImageMetadata> {
@@ -2577,7 +2755,7 @@ mod tests {
     let svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='red'/></svg>";
 
     let pixmap = cache
-      .render_svg_pixmap_at_size(svg, 200, 100, "test://svg")
+      .render_svg_pixmap_at_size(svg, 200, 100, "test://svg", 1.0)
       .expect("render svg");
 
     let left = pixmap.pixel(10, 50).expect("left padding");
@@ -2596,7 +2774,7 @@ mod tests {
     let svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' preserveAspectRatio='none'><rect width='100' height='100' fill='red'/></svg>";
 
     let pixmap = cache
-      .render_svg_pixmap_at_size(svg, 200, 100, "test://svg")
+      .render_svg_pixmap_at_size(svg, 200, 100, "test://svg", 1.0)
       .expect("render svg");
 
     let left = pixmap.pixel(10, 50).expect("left pixel");
@@ -2612,7 +2790,7 @@ mod tests {
     let svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' preserveAspectRatio='xMinYMin meet'><rect width='100' height='100' fill='red'/></svg>";
 
     let pixmap = cache
-      .render_svg_pixmap_at_size(svg, 200, 100, "test://svg")
+      .render_svg_pixmap_at_size(svg, 200, 100, "test://svg", 1.0)
       .expect("render svg");
 
     let left = pixmap.pixel(10, 50).expect("left pixel");
@@ -2628,7 +2806,7 @@ mod tests {
     let svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' preserveAspectRatio='xMidYMid slice'><circle cx='50' cy='50' r='50' fill='red'/></svg>";
 
     let pixmap = cache
-      .render_svg_pixmap_at_size(svg, 200, 100, "test://svg")
+      .render_svg_pixmap_at_size(svg, 200, 100, "test://svg", 1.0)
       .expect("render svg");
 
     let left = pixmap.pixel(10, 50).expect("left pixel");
@@ -2686,7 +2864,7 @@ mod tests {
     </svg>";
 
     let pixmap = cache
-      .render_svg_pixmap_at_size(svg, 200, 100, "test://fast-path")
+      .render_svg_pixmap_at_size(svg, 200, 100, "test://fast-path", 1.0)
       .expect("rendered pixmap");
     let pixel = pixmap.pixel(10, 50).expect("pixel");
 

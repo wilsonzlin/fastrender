@@ -1,8 +1,11 @@
+use fastrender::api::{DiagnosticsLevel, FastRender, RenderOptions};
 use fastrender::error::ImageError;
 use fastrender::image_loader::{CachedImage, ImageCache, ImageCacheConfig};
 use fastrender::resource::{FetchedResource, ResourceFetcher};
 use fastrender::Result;
 use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
+use std::fs;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
@@ -115,4 +118,121 @@ fn rejects_image_exceeding_limits() {
     }
     other => panic!("unexpected error: {other:?}"),
   }
+}
+
+#[test]
+fn repeated_renders_hit_image_cache() {
+  let mut renderer = FastRender::new().expect("renderer");
+  let mut fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+  fixture.push("tests/fixtures/bundle_page/page.html");
+  let url = format!("file://{}", fixture.to_string_lossy());
+
+  let options = RenderOptions::new()
+    .with_viewport(320, 240)
+    .with_diagnostics_level(DiagnosticsLevel::Basic);
+
+  let first = renderer
+    .render_url_with_options(&url, options.clone())
+    .expect("first render");
+  let stats1 = first
+    .diagnostics
+    .stats
+    .as_ref()
+    .expect("first stats should be recorded");
+  let hits1 = stats1.resources.image_cache_hits.unwrap_or(0);
+  let misses1 = stats1.resources.image_cache_misses.unwrap_or(0);
+  let decode1 = stats1.resources.image_decode_ms.unwrap_or(0.0);
+
+  let second = renderer
+    .render_url_with_options(&url, options)
+    .expect("second render");
+  let stats2 = second
+    .diagnostics
+    .stats
+    .as_ref()
+    .expect("second stats should be recorded");
+  let hits2 = stats2.resources.image_cache_hits.unwrap_or(0);
+  let misses2 = stats2.resources.image_cache_misses.unwrap_or(0);
+  let decode2 = stats2.resources.image_decode_ms.unwrap_or(0.0);
+
+  assert!(
+    hits2 > hits1,
+    "expected second render to reuse decoded images ({} -> {})",
+    hits1,
+    hits2
+  );
+  assert!(
+    misses2 <= misses1,
+    "expected cache misses to stay flat or fall ({} -> {})",
+    misses1,
+    misses2
+  );
+  assert!(
+    decode2 <= decode1,
+    "expected second render to avoid extra decoding ({} -> {})",
+    decode1,
+    decode2
+  );
+  assert!(
+    misses2 < misses1,
+    "expected fewer cache misses after warming ({} -> {})",
+    misses1,
+    misses2
+  );
+}
+
+#[test]
+fn stylesheet_inlining_reports_cache_usage() {
+  let mut renderer = FastRender::new().expect("renderer");
+  let mut fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+  fixture.push("tests/fixtures/bundle_page/page.html");
+  let base = format!("file://{}", fixture.to_string_lossy());
+  let html = fs::read_to_string(&fixture).expect("load html");
+
+  let options = RenderOptions::new()
+    .with_viewport(320, 240)
+    .with_diagnostics_level(DiagnosticsLevel::Basic);
+
+  let first = renderer
+    .render_html_with_stylesheets(&html, &base, options.clone())
+    .expect("first render");
+  let stats1 = first
+    .diagnostics
+    .stats
+    .as_ref()
+    .expect("first stats should be recorded");
+  let hits1 = stats1.resources.image_cache_hits.unwrap_or(0);
+  let misses1 = stats1.resources.image_cache_misses.unwrap_or(0);
+  let decode1 = stats1.resources.image_decode_ms.unwrap_or(0.0);
+
+  let second = renderer
+    .render_html_with_stylesheets(&html, &base, options)
+    .expect("second render");
+  let stats2 = second
+    .diagnostics
+    .stats
+    .as_ref()
+    .expect("second stats should be recorded");
+  let hits2 = stats2.resources.image_cache_hits.unwrap_or(0);
+  let misses2 = stats2.resources.image_cache_misses.unwrap_or(0);
+  let decode2 = stats2.resources.image_decode_ms.unwrap_or(0.0);
+
+  assert!(
+    hits2 > hits1,
+    "expected second render to reuse decoded images ({} -> {})",
+    hits1,
+    hits2
+  );
+  assert!(
+    misses2 <= misses1,
+    "expected cache misses to stay flat or fall ({} -> {})",
+    misses1,
+    misses2
+  );
+  assert!(
+    decode2 <= decode1,
+    "expected stylesheet render to avoid extra decoding ({} -> {})",
+    decode1,
+    decode2
+  );
 }

@@ -5713,20 +5713,20 @@ impl Painter {
       return false;
     }
 
+    let resolved_src = self.image_cache.resolve_url(src.url);
     if let Some(limit) = trace_image_paint_limit() {
       let idx = TRACE_IMAGE_PAINT_COUNT.fetch_add(1, Ordering::Relaxed);
       if idx < limit {
-        let resolved = self.image_cache.resolve_url(src.url);
         eprintln!(
           "[image-paint] #{idx} src={} resolved={} rect=({:.1},{:.1},{:.1},{:.1})",
-          src.url, resolved, x, y, width, height
+          src.url, resolved_src, x, y, width, height
         );
       }
     }
 
     let log_image_fail = runtime::runtime_toggles().truthy("FASTR_LOG_IMAGE_FAIL");
 
-    let image = match self.image_cache.load(src.url) {
+    let image = match self.image_cache.load(&resolved_src) {
       Ok(img) => img,
       Err(e) => {
         if log_image_fail {
@@ -5783,15 +5783,6 @@ impl Painter {
       return false;
     };
 
-    let pixmap = match Self::dynamic_image_to_pixmap(&image, orientation) {
-      Some(pixmap) => pixmap,
-      None => {
-        if log_image_fail {
-          eprintln!("[image-load-fail] src={} stage=pixmap", src.url);
-        }
-        return false;
-      }
-    };
     let fit = style.map(|s| s.object_fit).unwrap_or(ObjectFit::Fill);
     let pos = style
       .map(|s| s.object_position)
@@ -5809,6 +5800,56 @@ impl Painter {
     ) {
       Some(v) => v,
       None => return false,
+    };
+
+    let dest_x_device = self.device_length(dest_x);
+    let dest_y_device = self.device_length(dest_y);
+    let dest_w_device = self.device_length(dest_w);
+    let dest_h_device = self.device_length(dest_h);
+
+    if image.is_vector {
+      if let Some(svg) = &image.svg_content {
+        let render_w = dest_w_device.ceil().max(1.0) as u32;
+        let render_h = dest_h_device.ceil().max(1.0) as u32;
+        if render_w > 0 && render_h > 0 {
+          if let Ok(pixmap) = self.image_cache.render_svg_pixmap_at_size(
+            svg,
+            render_w,
+            render_h,
+            &resolved_src,
+            self.scale,
+          ) {
+            let scale_x = dest_w_device / render_w as f32;
+            let scale_y = dest_h_device / render_h as f32;
+            if scale_x.is_finite() && scale_y.is_finite() {
+              let mut paint = PixmapPaint::default();
+              paint.quality = Self::filter_quality_for_image(style);
+              let transform = Transform::from_row(
+                scale_x,
+                0.0,
+                0.0,
+                scale_y,
+                self.device_length(x) + dest_x_device,
+                self.device_length(y) + dest_y_device,
+              );
+              self
+                .pixmap
+                .draw_pixmap(0, 0, pixmap.as_ref().as_ref(), &paint, transform, None);
+              return true;
+            }
+          }
+        }
+      }
+    }
+
+    let pixmap = match Self::dynamic_image_to_pixmap(&image, orientation) {
+      Some(pixmap) => pixmap,
+      None => {
+        if log_image_fail {
+          eprintln!("[image-load-fail] src={} stage=pixmap", src.url);
+        }
+        return false;
+      }
     };
 
     if matches!(
@@ -5943,14 +5984,16 @@ impl Painter {
 
       let render_w = dest_w_device.ceil().max(1.0) as u32;
       let render_h = dest_h_device.ceil().max(1.0) as u32;
-      let pixmap =
-        match self
-          .image_cache
-          .render_svg_pixmap_at_size(content, render_w, render_h, "inline-svg")
-        {
-          Ok(pixmap) => pixmap,
-          Err(_) => return false,
-        };
+      let pixmap = match self.image_cache.render_svg_pixmap_at_size(
+        content,
+        render_w,
+        render_h,
+        "inline-svg",
+        self.scale,
+      ) {
+        Ok(pixmap) => pixmap,
+        Err(_) => return false,
+      };
 
       let scale_x = dest_w_device / render_w as f32;
       let scale_y = dest_h_device / render_h as f32;
