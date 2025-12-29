@@ -46,7 +46,8 @@ use super::types::StyleSheet;
 use super::types::SupportsCondition;
 use super::types::SupportsRule;
 use crate::dom::{DomNode, DomNodeType, HTML_NAMESPACE};
-use crate::error::Result;
+use crate::error::{Error, RenderError, RenderStage, Result};
+use crate::render_control::{check_active, check_active_periodic};
 use crate::style::color::Color;
 use crate::style::counter_styles::{CounterStyleRule, CounterSystem, SpeakAs};
 use crate::style::media::MediaQuery;
@@ -59,7 +60,61 @@ use cssparser::ToCss;
 use cssparser::Token;
 use selectors::parser::SelectorList;
 use selectors::parser::SelectorParseErrorKind;
+use std::cell::RefCell;
 use std::collections::HashMap;
+
+const CSS_DEADLINE_STRIDE: usize = 64;
+
+thread_local! {
+  static CSS_PARSE_DEADLINE: RefCell<CssParseDeadline> = RefCell::new(CssParseDeadline::new());
+}
+
+#[derive(Default)]
+struct CssParseDeadline {
+  counter: usize,
+  error: Option<RenderError>,
+}
+
+impl CssParseDeadline {
+  fn new() -> Self {
+    Self {
+      counter: 0,
+      error: None,
+    }
+  }
+}
+
+fn reset_css_deadline_state() {
+  CSS_PARSE_DEADLINE.with(|state| {
+    *state.borrow_mut() = CssParseDeadline::new();
+  });
+}
+
+fn css_deadline_allows_progress() -> bool {
+  CSS_PARSE_DEADLINE.with(|state| {
+    let mut state = state.borrow_mut();
+    if state.error.is_some() {
+      return false;
+    }
+    if state.counter == 0 {
+      if let Err(err) = check_active(RenderStage::Css) {
+        state.error = Some(err);
+        return false;
+      }
+    }
+    if let Err(err) =
+      check_active_periodic(&mut state.counter, CSS_DEADLINE_STRIDE, RenderStage::Css)
+    {
+      state.error = Some(err);
+      return false;
+    }
+    true
+  })
+}
+
+fn take_css_deadline_error() -> Option<RenderError> {
+  CSS_PARSE_DEADLINE.with(|state| state.borrow_mut().error.take())
+}
 
 // ============================================================================
 // Main parsing functions
@@ -73,7 +128,7 @@ use std::collections::HashMap;
 /// Errors are silently ignored for backward compatibility. Use
 /// [`parse_stylesheet_with_errors`] to capture parse errors.
 pub fn parse_stylesheet(css: &str) -> Result<StyleSheet> {
-  let result = parse_stylesheet_collecting_errors(css);
+  let result = parse_stylesheet_collecting_errors(css)?;
   Ok(result.stylesheet)
 }
 
@@ -81,6 +136,8 @@ pub fn parse_stylesheet(css: &str) -> Result<StyleSheet> {
 ///
 /// This parser attempts error recovery, so even if errors are present,
 /// the returned stylesheet may contain valid rules.
+/// When a render deadline is active, this will return a [`RenderError::Timeout`]
+/// if parsing work exceeds the allowed budget.
 ///
 /// # Example
 ///
@@ -98,19 +155,24 @@ pub fn parse_stylesheet(css: &str) -> Result<StyleSheet> {
 /// // The stylesheet still contains the valid rules
 /// assert!(result.stylesheet.rules.len() > 0);
 /// ```
-pub fn parse_stylesheet_with_errors(css: &str) -> CssParseResult {
+pub fn parse_stylesheet_with_errors(css: &str) -> Result<CssParseResult> {
   parse_stylesheet_collecting_errors(css)
 }
 
 /// Internal function that does the actual parsing with error collection
-fn parse_stylesheet_collecting_errors(css: &str) -> CssParseResult {
+fn parse_stylesheet_collecting_errors(css: &str) -> Result<CssParseResult> {
+  reset_css_deadline_state();
   let mut input = ParserInput::new(css);
   let mut parser = Parser::new(&mut input);
   let mut errors = Vec::new();
 
   let rules = parse_rule_list_collecting(&mut parser, &mut errors, None, css);
 
-  CssParseResult::with_errors(StyleSheet { rules }, errors)
+  if let Some(err) = take_css_deadline_error() {
+    return Err(Error::Render(err));
+  }
+
+  Ok(CssParseResult::with_errors(StyleSheet { rules }, errors))
 }
 
 /// Parse a list of CSS rules, collecting errors
@@ -123,6 +185,9 @@ fn parse_rule_list_collecting<'i, 't>(
   let mut rules = Vec::new();
 
   while !parser.is_exhausted() {
+    if !css_deadline_allows_progress() {
+      break;
+    }
     parser.skip_whitespace();
     if parser.is_exhausted() {
       break;
@@ -168,6 +233,9 @@ fn parse_rule_list_with_context<'i, 't>(
 /// Recover from a parse error by skipping to the next rule
 fn recover_from_error<'i, 't>(parser: &mut Parser<'i, 't>) {
   while !parser.is_exhausted() {
+    if !css_deadline_allows_progress() {
+      break;
+    }
     match parser.next() {
       Ok(Token::CurlyBracketBlock) => {
         let _: std::result::Result<(), ParseError<()>> = parser.parse_nested_block(|_| Ok(()));
@@ -257,6 +325,9 @@ fn parse_import_rule<'i, 't>(
   // Capture the remaining prelude up to the semicolon or block.
   let prelude_start = parser.position();
   while let Ok(token) = parser.next_including_whitespace() {
+    if !css_deadline_allows_progress() {
+      break;
+    }
     match token {
       Token::Semicolon | Token::CurlyBracketBlock => break,
       _ => {}
@@ -293,6 +364,9 @@ fn parse_import_modifiers_and_media(
   let mut media_start = parser.position();
 
   while !parser.is_exhausted() {
+    if !css_deadline_allows_progress() {
+      break;
+    }
     parser.skip_whitespace();
     media_start = parser.position();
 
@@ -411,6 +485,9 @@ fn parse_media_rule<'i, 't>(
   let start = parser.position();
   parser.parse_until_before(cssparser::Delimiter::CurlyBracketBlock, |parser| {
     while !parser.is_exhausted() {
+      if !css_deadline_allows_progress() {
+        break;
+      }
       let _ = parser.next_including_whitespace()?;
     }
     Ok(())
@@ -449,6 +526,9 @@ fn parse_container_rule<'i, 't>(
   let start = parser.position();
   parser.parse_until_before(cssparser::Delimiter::CurlyBracketBlock, |parser| {
     while !parser.is_exhausted() {
+      if !css_deadline_allows_progress() {
+        break;
+      }
       let _ = parser.next_including_whitespace()?;
     }
     Ok(())
@@ -624,6 +704,9 @@ fn stringify_nested_tokens<'i, 't, E>(
 ) -> std::result::Result<String, ParseError<'i, E>> {
   let mut parts = Vec::new();
   while !parser.is_exhausted() {
+    if !css_deadline_allows_progress() {
+      break;
+    }
     let token = parser.next_including_whitespace()?;
     match token {
       Token::WhiteSpace(ws) => parts.push((*ws).to_string()),
@@ -837,6 +920,9 @@ fn parse_supports_rule<'i, 't>(
   let start = parser.position();
   parser.parse_until_before(cssparser::Delimiter::CurlyBracketBlock, |parser| {
     while !parser.is_exhausted() {
+      if !css_deadline_allows_progress() {
+        break;
+      }
       let _ = parser.next_including_whitespace()?;
     }
     Ok(())
@@ -1021,6 +1107,9 @@ fn consume_nested_tokens<'i, 't, E>(
   parser: &mut Parser<'i, 't>,
 ) -> std::result::Result<(), ParseError<'i, E>> {
   while !parser.is_exhausted() {
+    if !css_deadline_allows_progress() {
+      break;
+    }
     let token = parser.next_including_whitespace()?;
     match token {
       Token::CurlyBracketBlock
@@ -1398,6 +1487,9 @@ fn parse_page_block<'i, 't>(
   let mut margin_rules = Vec::new();
 
   while !parser.is_exhausted() {
+    if !css_deadline_allows_progress() {
+      break;
+    }
     parser.skip_whitespace();
     if parser.is_exhausted() {
       break;
@@ -1476,6 +1568,9 @@ fn parse_font_face_descriptors<'i, 't>(
   let mut face = FontFaceRule::default();
 
   while !parser.is_exhausted() {
+    if !css_deadline_allows_progress() {
+      break;
+    }
     parser.skip_whitespace();
     if parser.is_exhausted() {
       break;
@@ -1497,6 +1592,9 @@ fn parse_font_face_descriptors<'i, 't>(
     let value_start = parser.position();
     let mut important = false;
     loop {
+      if !css_deadline_allows_progress() {
+        break;
+      }
       match parser.next() {
         Ok(Token::Semicolon) | Err(_) => break,
         Ok(Token::Delim('!')) => {
@@ -1622,6 +1720,9 @@ fn parse_counter_style_descriptors<'i, 't>(
   let mut rule = CounterStyleRule::new(name);
 
   while !parser.is_exhausted() {
+    if !css_deadline_allows_progress() {
+      break;
+    }
     parser.skip_whitespace();
     if parser.is_exhausted() {
       break;
@@ -1762,6 +1863,9 @@ fn parse_font_palette_descriptors<'i, 't>(
   let mut rule = FontPaletteValuesRule::new(name.to_ascii_lowercase());
 
   while !parser.is_exhausted() {
+    if !css_deadline_allows_progress() {
+      break;
+    }
     parser.skip_whitespace();
     if parser.is_exhausted() {
       break;
@@ -1783,6 +1887,9 @@ fn parse_font_palette_descriptors<'i, 't>(
     let value_start = parser.position();
     let mut important = false;
     loop {
+      if !css_deadline_allows_progress() {
+        break;
+      }
       match parser.next() {
         Ok(Token::Semicolon) | Err(_) => break,
         Ok(Token::Delim('!')) => {
@@ -1993,6 +2100,9 @@ fn parse_property_descriptors<'i, 't>(
   let mut initial_value: Option<CustomPropertyValue> = None;
 
   while !parser.is_exhausted() {
+    if !css_deadline_allows_progress() {
+      break;
+    }
     parser.skip_whitespace();
     if parser.is_exhausted() {
       break;
@@ -2013,6 +2123,9 @@ fn parse_property_descriptors<'i, 't>(
 
     let value_start = parser.position();
     while let Ok(token) = parser.next_including_whitespace() {
+      if !css_deadline_allows_progress() {
+        break;
+      }
       if matches!(token, Token::Semicolon) {
         break;
       }
@@ -2157,6 +2270,9 @@ fn parse_symbols_descriptor(value: &str) -> Option<Vec<String>> {
   let mut parser = Parser::new(&mut input);
   let mut symbols = Vec::new();
   while !parser.is_exhausted() {
+    if !css_deadline_allows_progress() {
+      break;
+    }
     parser.skip_whitespace();
     if let Ok(token) = parser.next_including_whitespace() {
       if matches!(token, Token::Comma | Token::Semicolon | Token::Delim('/')) {
@@ -2180,6 +2296,9 @@ fn parse_additive_symbols_descriptor(value: &str) -> Option<Vec<(i32, String)>> 
   let mut items = Vec::new();
 
   while !parser.is_exhausted() {
+    if !css_deadline_allows_progress() {
+      break;
+    }
     parser.skip_whitespace();
     let weight = match parser.next_including_whitespace() {
       Ok(Token::Number {
@@ -2302,6 +2421,9 @@ fn parse_keyframe_list<'i, 't>(
 ) -> std::result::Result<Vec<Keyframe>, ParseError<'i, SelectorParseErrorKind<'i>>> {
   let mut frames = Vec::new();
   while !parser.is_exhausted() {
+    if !css_deadline_allows_progress() {
+      break;
+    }
     parser.skip_whitespace();
     if parser.is_exhausted() {
       break;
@@ -2327,6 +2449,9 @@ fn parse_single_keyframe<'i, 't>(
   let mut offsets: Vec<f32> = Vec::new();
 
   loop {
+    if !css_deadline_allows_progress() {
+      break Ok(None);
+    }
     match parser.next_including_whitespace() {
       Ok(Token::Percentage { unit_value, .. }) => offsets.push(unit_value.clamp(0.0, 1.0)),
       Ok(Token::Ident(id)) => match id.to_ascii_lowercase().as_str() {
@@ -2499,6 +2624,9 @@ fn parse_font_face_src(value: &str) -> Vec<FontFaceSource> {
   let mut sources = Vec::new();
 
   while !parser.is_exhausted() {
+    if !css_deadline_allows_progress() {
+      break;
+    }
     parser.skip_whitespace();
     if parser.is_exhausted() {
       break;
@@ -2547,6 +2675,9 @@ fn parse_font_face_src_item<'i, 't>(parser: &mut Parser<'i, 't>) -> Option<FontF
 fn parse_format_hints<'i, 't>(parser: &mut Parser<'i, 't>) -> Vec<FontSourceFormat> {
   let mut hints = Vec::new();
   loop {
+    if !css_deadline_allows_progress() {
+      break;
+    }
     let state = parser.state();
     parser.skip_whitespace();
     let Ok(token) = parser.next_including_whitespace() else {
@@ -2572,6 +2703,9 @@ fn parse_format_list<'i, 't>(
 ) -> std::result::Result<Vec<FontSourceFormat>, ParseError<'i, SelectorParseErrorKind<'i>>> {
   let mut hints = Vec::new();
   while !parser.is_exhausted() {
+    if !css_deadline_allows_progress() {
+      break;
+    }
     parser.skip_whitespace();
     match parser.next_including_whitespace() {
       Ok(Token::QuotedString(s)) | Ok(Token::Ident(s)) => {
@@ -2587,6 +2721,9 @@ fn parse_format_list<'i, 't>(
 
 fn consume_until_comma<'i, 't>(parser: &mut Parser<'i, 't>) {
   loop {
+    if !css_deadline_allows_progress() {
+      break;
+    }
     match parser.next_including_whitespace() {
       Ok(Token::Comma) | Err(_) => break,
       _ => continue,
@@ -2893,6 +3030,9 @@ fn parse_style_block<'i, 't>(
   let mut nested_rules = Vec::new();
 
   while !parser.is_exhausted() {
+    if !css_deadline_allows_progress() {
+      break;
+    }
     parser.skip_whitespace();
     if parser.is_exhausted() {
       break;
@@ -2935,6 +3075,9 @@ fn parse_style_rule<'i, 't>(
       cssparser::Delimiter::CurlyBracketBlock | cssparser::Delimiter::Semicolon,
       |parser| {
         while !parser.is_exhausted() {
+          if !css_deadline_allows_progress() {
+            break;
+          }
           let _ = parser.next_including_whitespace()?;
         }
         Ok(())
@@ -3017,6 +3160,9 @@ fn parse_nest_rule<'i, 't>(
   let start = parser.position();
   parser.parse_until_before(cssparser::Delimiter::CurlyBracketBlock, |parser| {
     while !parser.is_exhausted() {
+      if !css_deadline_allows_progress() {
+        break;
+      }
       let _ = parser.next_including_whitespace()?;
     }
     Ok(())
@@ -3598,7 +3744,7 @@ mod tests {
   #[test]
   fn css_parse_error_reports_snippet() {
     let css = "body { color: }\n";
-    let result = parse_stylesheet_with_errors(css);
+    let result = parse_stylesheet_with_errors(css).unwrap();
     assert!(result.has_errors());
     let err = &result.errors[0];
     let msg = err.to_string();
@@ -3611,7 +3757,7 @@ mod tests {
   #[test]
   fn nested_rule_errors_are_reported() {
     let css = "body { color: red; }\n@media (max-width: 600px) {\n  .bad {\n    color: ;\n  }\n}\n";
-    let result = parse_stylesheet_with_errors(css);
+    let result = parse_stylesheet_with_errors(css).unwrap();
     assert!(
       !result.errors.is_empty(),
       "expected nested parse errors to be collected"
@@ -3721,7 +3867,9 @@ mod tests {
         "#;
     let sheet = parse_stylesheet(css).unwrap();
     let media_ctx = crate::style::media::MediaContext::screen(800.0, 600.0);
-    let resolved = sheet.resolve_imports(&Loader, Some("https://example.com/page.css"), &media_ctx);
+    let resolved = sheet
+      .resolve_imports(&Loader, Some("https://example.com/page.css"), &media_ctx)
+      .unwrap();
     assert_eq!(resolved.rules.len(), 2);
     assert!(matches!(resolved.rules[0], CssRule::Style(_)));
     assert!(matches!(resolved.rules[1], CssRule::Style(_)));
@@ -3857,7 +4005,7 @@ mod tests {
   #[test]
   fn supports_rule_applies_when_feature_supported() {
     let css = r"@supports (display: grid) { .ok { color: red; } }";
-    let result = parse_stylesheet_with_errors(css);
+    let result = parse_stylesheet_with_errors(css).unwrap();
     assert_eq!(result.error_count(), 0, "parse errors: {:?}", result.errors);
     let stylesheet = result.stylesheet;
     assert_eq!(stylesheet.rules.len(), 1);

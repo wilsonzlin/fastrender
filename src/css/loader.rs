@@ -8,7 +8,7 @@
 use crate::css::parser::{rel_list_contains_stylesheet, tokenize_rel_list};
 use crate::debug::runtime;
 use crate::error::{RenderError, RenderStage, Result};
-use crate::render_control::RenderDeadline;
+use crate::render_control::{check_active, check_active_periodic, RenderDeadline};
 use cssparser::{Parser, ParserInput, Token};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
@@ -186,7 +186,7 @@ fn normalize_embedded_css_candidate(candidate: &str) -> Option<String> {
 ///
 /// This walks cssparser tokens so only real `url` tokens are rewritten (including nested
 /// `url()` calls inside other functions/blocks). Strings and comments are preserved verbatim.
-pub fn absolutize_css_urls(css: &str, base_url: &str) -> String {
+pub fn absolutize_css_urls(css: &str, base_url: &str) -> std::result::Result<String, RenderError> {
   fn escape_url_for_css(url: &str) -> String {
     let mut escaped = String::with_capacity(url.len());
     for ch in url.chars() {
@@ -206,7 +206,8 @@ pub fn absolutize_css_urls(css: &str, base_url: &str) -> String {
     parser: &mut Parser<'i, 't>,
     base_url: &str,
     capacity_hint: usize,
-  ) -> String {
+    deadline_counter: &mut usize,
+  ) -> std::result::Result<String, RenderError> {
     let mut out = if capacity_hint > 0 {
       String::with_capacity(capacity_hint)
     } else {
@@ -214,7 +215,9 @@ pub fn absolutize_css_urls(css: &str, base_url: &str) -> String {
     };
     let mut last_emitted = parser.position();
 
+    check_active(RenderStage::Css)?;
     while !parser.is_exhausted() {
+      check_active_periodic(deadline_counter, 256, RenderStage::Css)?;
       let token_start = parser.position();
       let token = match parser.next_including_whitespace_and_comments() {
         Ok(t) => t,
@@ -287,9 +290,16 @@ pub fn absolutize_css_urls(css: &str, base_url: &str) -> String {
         | Token::ParenthesisBlock
         | Token::SquareBracketBlock
         | Token::CurlyBracketBlock => {
+          let mut nested_error: Option<RenderError> = None;
           let parse_result = parser.parse_nested_block(|nested| {
             let start = nested.position();
-            let rewritten = rewrite_urls_in_parser(nested, base_url, 0);
+            let rewritten = match rewrite_urls_in_parser(nested, base_url, 0, deadline_counter) {
+              Ok(r) => r,
+              Err(err) => {
+                nested_error = Some(err);
+                return Err(nested.new_custom_error(()));
+              }
+            };
             let original = nested.slice_from(start);
             let changed = rewritten != original;
             Ok::<_, cssparser::ParseError<'i, ()>>((rewritten, original.len(), changed))
@@ -300,6 +310,9 @@ pub fn absolutize_css_urls(css: &str, base_url: &str) -> String {
           let prefix_len = chunk.len().saturating_sub(block_text.len());
           out.push_str(&chunk[..prefix_len]);
 
+          if let Some(err) = nested_error {
+            return Err(err);
+          }
           if let Ok((inner_rewritten, inner_len, changed)) = parse_result {
             const CLOSING_LEN: usize = 1;
             if !changed {
@@ -329,12 +342,13 @@ pub fn absolutize_css_urls(css: &str, base_url: &str) -> String {
     }
 
     out.push_str(parser.slice_from(last_emitted));
-    out
+    Ok(out)
   }
 
   let mut input = ParserInput::new(css);
   let mut parser = Parser::new(&mut input);
-  rewrite_urls_in_parser(&mut parser, base_url, css.len())
+  let mut deadline_counter = 0usize;
+  rewrite_urls_in_parser(&mut parser, base_url, css.len(), &mut deadline_counter)
 }
 
 fn parse_import_target(rule: &str) -> Option<(String, String)> {
@@ -459,12 +473,18 @@ where
   let bytes = css.as_bytes();
   let mut i = 0usize;
   let mut last_emit = 0usize;
+  let mut active_deadline_counter = 0usize;
+  let mut explicit_deadline_counter = 0usize;
+
+  check_active(RenderStage::Css)?;
+  if let Some(limit) = deadline {
+    limit.check(RenderStage::Css)?;
+  }
 
   while i < bytes.len() {
+    check_active_periodic(&mut active_deadline_counter, 512, RenderStage::Css)?;
     if let Some(limit) = deadline {
-      if i % 2048 == 0 {
-        limit.check(RenderStage::Css)?;
-      }
+      limit.check_periodic(&mut explicit_deadline_counter, 512, RenderStage::Css)?;
     }
     match parser_state {
       State::Normal => {
@@ -547,7 +567,7 @@ where
                   } else {
                     state.seen.insert(resolved.clone());
                     if let Ok(fetched) = fetch(&resolved) {
-                      let rewritten = absolutize_css_urls(&fetched, &resolved);
+                      let rewritten = absolutize_css_urls(&fetched, &resolved)?;
                       let nested = inline_imports_with_diagnostics(
                         &rewritten,
                         &resolved,
@@ -907,7 +927,7 @@ pub fn extract_css_links(
   html: &str,
   base_url: &str,
   media_type: crate::style::media::MediaType,
-) -> Vec<String> {
+) -> std::result::Result<Vec<String>, RenderError> {
   let mut css_urls = Vec::new();
   let toggles = runtime::runtime_toggles();
   let debug = toggles.truthy("FASTR_LOG_CSS_LINKS");
@@ -920,8 +940,10 @@ pub fn extract_css_links(
 
   let lower = html.to_lowercase();
   let mut pos = 0;
+  let mut deadline_counter = 0usize;
 
   while let Some(link_start) = lower[pos..].find("<link") {
+    check_active_periodic(&mut deadline_counter, 1, RenderStage::Css)?;
     let abs_start = pos + link_start;
     if let Some(link_end) = lower[abs_start..].find('>') {
       let link_tag = &html[abs_start..=abs_start + link_end];
@@ -1007,7 +1029,7 @@ pub fn extract_css_links(
     }
   }
 
-  dedupe_links_preserving_order(css_urls)
+  Ok(dedupe_links_preserving_order(css_urls))
 }
 
 fn media_attr_allows_target(value: &str, target: crate::style::media::MediaType) -> bool {
@@ -1074,13 +1096,18 @@ fn media_flags_allow_target(
 /// like a CSS URL (ends with `.css`, possibly with a query string) and try to
 /// resolve and fetch it as a stylesheet.
 #[allow(clippy::cognitive_complexity)]
-pub fn extract_embedded_css_urls(html: &str, base_url: &str) -> Vec<String> {
+pub fn extract_embedded_css_urls(
+  html: &str,
+  base_url: &str,
+) -> std::result::Result<Vec<String>, RenderError> {
   let mut urls = Vec::new();
   let mut seen = HashSet::new();
   let bytes = html.as_bytes();
   let mut idx = 0;
+  let mut deadline_counter = 0usize;
 
   while let Some(pos) = memchr::memmem::find(&bytes[idx..], b".css") {
+    check_active_periodic(&mut deadline_counter, 1, RenderStage::Css)?;
     let abs_pos = idx + pos;
 
     let mut start = abs_pos;
@@ -1204,6 +1231,7 @@ pub fn extract_embedded_css_urls(html: &str, base_url: &str) -> Vec<String> {
   let lower = html.to_lowercase();
   let mut pos = 0;
   while let Some(hit) = lower[pos..].find("cssurl") {
+    check_active_periodic(&mut deadline_counter, 1, RenderStage::Css)?;
     let abs = pos + hit;
     let slice = &html[abs..];
     if let Some(colon) = slice.find(':') {
@@ -1233,7 +1261,7 @@ pub fn extract_embedded_css_urls(html: &str, base_url: &str) -> Vec<String> {
     pos = abs + 6;
   }
 
-  urls
+  Ok(urls)
 }
 
 /// Deduplicate a list while preserving the order of first occurrence.
@@ -1450,7 +1478,7 @@ mod tests {
   #[test]
   fn absolutizes_css_urls_rewrites_urls() {
     let css = "body { background: url(\"images/bg.png\"); }";
-    let out = absolutize_css_urls(css, "https://example.com/styles/main.css");
+    let out = absolutize_css_urls(css, "https://example.com/styles/main.css").unwrap();
     assert!(out.contains("https://example.com/styles/images/bg.png"));
   }
 
@@ -1588,7 +1616,8 @@ mod tests {
       html,
       "https://example.com/app/index.html",
       MediaType::Screen,
-    );
+    )
+    .unwrap();
     assert_eq!(urls.len(), 2);
     assert!(urls.contains(&"https://example.com/styles/a.css".to_string()));
     assert!(urls.contains(&"https://example.com/app/b.css".to_string()));
@@ -1601,7 +1630,8 @@ mod tests {
             <link rel=stylesheet href=/styles/print.css media=print>
             <link rel=stylesheet href=/styles/b.css media=all>
         "#;
-    let urls = extract_css_links(html, "https://example.com/app/page.html", MediaType::Screen);
+    let urls =
+      extract_css_links(html, "https://example.com/app/page.html", MediaType::Screen).unwrap();
     assert_eq!(
       urls,
       vec![
@@ -1617,7 +1647,8 @@ mod tests {
             <link rel=icon href="/foo/stylesheet-logo.png">
             <link rel=icon data-kind="stylesheet icon">
         "#;
-    let urls = extract_css_links(html, "https://example.com/app/page.html", MediaType::Screen);
+    let urls =
+      extract_css_links(html, "https://example.com/app/page.html", MediaType::Screen).unwrap();
     assert!(urls.is_empty());
   }
 
@@ -1626,7 +1657,8 @@ mod tests {
     let html = r#"
             <link rel="alternate stylesheet" href="/styles/alt.css">
         "#;
-    let urls = extract_css_links(html, "https://example.com/app/page.html", MediaType::Screen);
+    let urls =
+      extract_css_links(html, "https://example.com/app/page.html", MediaType::Screen).unwrap();
     assert_eq!(urls, vec!["https://example.com/styles/alt.css".to_string()]);
   }
 
@@ -1640,7 +1672,7 @@ mod tests {
       "0".to_string(),
     )]));
     let urls = runtime::with_runtime_toggles(Arc::new(toggles), || {
-      extract_css_links(html, "https://example.com/app/page.html", MediaType::Screen)
+      extract_css_links(html, "https://example.com/app/page.html", MediaType::Screen).unwrap()
     });
     assert!(urls.is_empty());
   }
@@ -1650,7 +1682,7 @@ mod tests {
     let html = r#"
             <link rel="stylesheet" href="https://cdn.example.com/app.css?foo=bar\u0026baz=qux">
         "#;
-    let urls = extract_css_links(html, "https://example.com/", MediaType::Screen);
+    let urls = extract_css_links(html, "https://example.com/", MediaType::Screen).unwrap();
     assert_eq!(
       urls,
       vec!["https://cdn.example.com/app.css?foo=bar&baz=qux".to_string()]
@@ -1663,7 +1695,7 @@ mod tests {
             <script>var cssUrl="assets/site.css?v=1";</script>
             <style>@import url("/shared/base.css");</style>
         "#;
-    let urls = extract_embedded_css_urls(html, "https://example.com/app/");
+    let urls = extract_embedded_css_urls(html, "https://example.com/app/").unwrap();
     assert!(urls.contains(&"https://example.com/app/assets/site.css?v=1".to_string()));
     assert!(urls.contains(&"https://example.com/shared/base.css".to_string()));
   }
@@ -1676,7 +1708,7 @@ mod tests {
                 var url = "https://cdn.example.com/styles/main.css\\\"/\u003c";
             </script>
         "#;
-    let urls = extract_embedded_css_urls(html, "https://example.com/");
+    let urls = extract_embedded_css_urls(html, "https://example.com/").unwrap();
     assert_eq!(
       urls,
       vec!["https://cdn.example.com/styles/main.css".to_string()]
@@ -1690,7 +1722,7 @@ mod tests {
             <link rel="stylesheet" href="https://&/#47;&#47;cdn.example.com&#47;other.css">
             <link rel="stylesheet" href="https:////cdn.example.com////more.css">
         "#;
-    let urls = extract_css_links(html, "https://example.com/", MediaType::Screen);
+    let urls = extract_css_links(html, "https://example.com/", MediaType::Screen).unwrap();
     assert_eq!(
       urls,
       vec![
@@ -1706,7 +1738,7 @@ mod tests {
     let html = r#"
             <link rel="stylesheet" href="//cdn.example.com/app.css">
         "#;
-    let urls = extract_css_links(html, "https://example.com/page", MediaType::Screen);
+    let urls = extract_css_links(html, "https://example.com/page", MediaType::Screen).unwrap();
     assert_eq!(urls, vec!["https://cdn.example.com/app.css".to_string()]);
 
     let resolved = resolve_href("https://example.com/page", "//cdn.example.com/app.css");
@@ -1723,7 +1755,7 @@ mod tests {
             <link rel="stylesheet" media="print, screen" href="https://cdn.example.com/both.css">
             <link rel="stylesheet" media="screen" href="https://cdn.example.com/screen.css">
         "#;
-    let urls = extract_css_links(html, "https://example.com/", MediaType::Screen);
+    let urls = extract_css_links(html, "https://example.com/", MediaType::Screen).unwrap();
     assert_eq!(
       urls,
       vec![
@@ -1740,7 +1772,7 @@ mod tests {
                 window.css = "https:\\/\\/cdn.example.com\\/app.css\\"";
             </script>
         "#;
-    let urls = extract_embedded_css_urls(html, "https://example.com/");
+    let urls = extract_embedded_css_urls(html, "https://example.com/").unwrap();
     assert_eq!(urls, vec!["https://cdn.example.com/app.css".to_string()]);
   }
 
@@ -1752,7 +1784,7 @@ mod tests {
             body { color: black; }
             </style>
         ";
-    let urls = extract_embedded_css_urls(html, "https://example.com/");
+    let urls = extract_embedded_css_urls(html, "https://example.com/").unwrap();
     assert!(urls.is_empty());
   }
 
@@ -1763,7 +1795,7 @@ mod tests {
                 const css = "https://cdn.example.com/app.css?foo=bar\\u0026baz=qux";
             </script>
         "#;
-    let urls = extract_embedded_css_urls(html, "https://example.com/");
+    let urls = extract_embedded_css_urls(html, "https://example.com/").unwrap();
     assert_eq!(
       urls,
       vec!["https://cdn.example.com/app.css?foo=bar&baz=qux".to_string()]
@@ -1775,7 +1807,7 @@ mod tests {
     let html = r#"
             <link rel="stylesheet" media="print" href="https://cdn.example.com/print.css">
         "#;
-    let urls = extract_embedded_css_urls(html, "https://example.com/");
+    let urls = extract_embedded_css_urls(html, "https://example.com/").unwrap();
     assert!(urls.is_empty());
   }
 
@@ -1787,7 +1819,7 @@ mod tests {
                 const other = "https:////cdn.example.com////more.css";
             </script>
         "#;
-    let urls = extract_embedded_css_urls(html, "https://example.com/");
+    let urls = extract_embedded_css_urls(html, "https://example.com/").unwrap();
     assert_eq!(
       urls,
       vec![
@@ -1804,7 +1836,7 @@ mod tests {
                 /* sourceURL=https://example.com/assets/style.css */
             </script>
         ";
-    let urls = extract_embedded_css_urls(html, "https://example.com/");
+    let urls = extract_embedded_css_urls(html, "https://example.com/").unwrap();
     assert_eq!(
       urls,
       vec!["https://example.com/assets/style.css".to_string()]
@@ -1821,7 +1853,7 @@ mod tests {
       "1".to_string(),
     )]));
     let urls = runtime::with_runtime_toggles(Arc::new(toggles), || {
-      extract_css_links(html, "https://example.com/", MediaType::Screen)
+      extract_css_links(html, "https://example.com/", MediaType::Screen).unwrap()
     });
     assert_eq!(urls, vec!["https://example.com/a.css".to_string()]);
   }
@@ -1831,7 +1863,7 @@ mod tests {
     let html = r#"
             <link rel=preload as=font href=/a.css>
         "#;
-    let urls = extract_css_links(html, "https://example.com/", MediaType::Screen);
+    let urls = extract_css_links(html, "https://example.com/", MediaType::Screen).unwrap();
     assert!(urls.is_empty());
   }
 
@@ -1845,7 +1877,7 @@ mod tests {
       "0".to_string(),
     )]));
     let urls = runtime::with_runtime_toggles(Arc::new(toggles), || {
-      extract_css_links(html, "https://example.com/", MediaType::Screen)
+      extract_css_links(html, "https://example.com/", MediaType::Screen).unwrap()
     });
     assert!(urls.is_empty());
   }
@@ -1860,7 +1892,7 @@ mod tests {
       "0".to_string(),
     )]));
     let default_urls = runtime::with_runtime_toggles(Arc::new(disabled), || {
-      extract_css_links(html, "https://example.com/", MediaType::Screen)
+      extract_css_links(html, "https://example.com/", MediaType::Screen).unwrap()
     });
     assert!(default_urls.is_empty());
 
@@ -1869,7 +1901,7 @@ mod tests {
       "1".to_string(),
     )]));
     let enabled_urls = runtime::with_runtime_toggles(Arc::new(enabled), || {
-      extract_css_links(html, "https://example.com/", MediaType::Screen)
+      extract_css_links(html, "https://example.com/", MediaType::Screen).unwrap()
     });
     assert_eq!(enabled_urls, vec!["https://example.com/a.css".to_string()]);
   }
@@ -1885,7 +1917,8 @@ mod tests {
       html,
       "https://example.com/app/index.html",
       MediaType::Screen,
-    );
+    )
+    .unwrap();
     assert_eq!(
       urls,
       vec![
@@ -1906,7 +1939,8 @@ mod tests {
       html,
       "https://example.com/app/index.html",
       MediaType::Screen,
-    );
+    )
+    .unwrap();
     assert_eq!(
       urls,
       vec![
@@ -1926,7 +1960,7 @@ mod tests {
                 const cls = '.css-15ru6p1{font-size:inherit;font-weight:normal;}'
             </script>
         ";
-    let urls = extract_embedded_css_urls(html, "https://example.com/");
+    let urls = extract_embedded_css_urls(html, "https://example.com/").unwrap();
     assert!(urls.is_empty());
   }
 
@@ -1937,7 +1971,7 @@ mod tests {
                 const bogus = ">%3E.css-v2kfba%7Bheight:100%;width:100%;%7D%3C/style";
             </script>
         "#;
-    let urls = extract_embedded_css_urls(html, "https://example.com/");
+    let urls = extract_embedded_css_urls(html, "https://example.com/").unwrap();
     assert!(urls.is_empty());
   }
 
@@ -1946,7 +1980,7 @@ mod tests {
     let html = r#"
             <link rel="stylesheet" media="print" href="/print.css">
         "#;
-    let urls = extract_css_links(html, "https://example.com/", MediaType::Screen);
+    let urls = extract_css_links(html, "https://example.com/", MediaType::Screen).unwrap();
     assert!(urls.is_empty());
   }
 
@@ -1955,7 +1989,7 @@ mod tests {
     let html = r#"
             <link rel=stylesheet media=print href=/print.css>
         "#;
-    let urls = extract_css_links(html, "https://example.com/", MediaType::Screen);
+    let urls = extract_css_links(html, "https://example.com/", MediaType::Screen).unwrap();
     assert!(urls.is_empty());
   }
 

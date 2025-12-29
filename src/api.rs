@@ -4553,7 +4553,7 @@ impl FastRender {
     dom: &DomNode,
     media_ctx: &MediaContext,
     media_query_cache: &mut MediaQueryCache,
-  ) -> StyleSet {
+  ) -> Result<StyleSet> {
     let scoped_sources = extract_scoped_css_sources(dom);
     let fetcher = Arc::clone(&self.fetcher);
     let resource_context = self.resource_context.as_ref();
@@ -4565,7 +4565,7 @@ impl FastRender {
 
     let collect_from_sources = |sources: &[StylesheetSource],
                                 cache: &mut MediaQueryCache|
-     -> StyleSheet {
+     -> Result<StyleSheet> {
       let mut combined_rules = Vec::new();
 
       for source in sources {
@@ -4581,15 +4581,14 @@ impl FastRender {
               continue;
             }
 
-            if let Ok(sheet) = parse_stylesheet(&inline.css) {
-              let resolved = sheet.resolve_imports_with_cache(
-                &inline_loader,
-                self.base_url.as_deref(),
-                media_ctx,
-                Some(cache),
-              );
-              combined_rules.extend(resolved.rules);
-            }
+            let sheet = parse_stylesheet(&inline.css)?;
+            let resolved = sheet.resolve_imports_with_cache(
+              &inline_loader,
+              self.base_url.as_deref(),
+              media_ctx,
+              Some(cache),
+            )?;
+            combined_rules.extend(resolved.rules);
           }
           StylesheetSource::External(link) => {
             if link.disabled
@@ -4635,22 +4634,21 @@ impl FastRender {
                 }
                 let mut css_text =
                   decode_css_bytes(&resource.bytes, resource.content_type.as_deref());
-                css_text = absolutize_css_urls(&css_text, &stylesheet_url);
+                css_text = absolutize_css_urls(&css_text, &stylesheet_url)?;
 
-                if let Ok(sheet) = parse_stylesheet(&css_text) {
-                  let loader = CssImportFetcher::new(
-                    Some(stylesheet_url.clone()),
-                    Arc::clone(&fetcher),
-                    resource_context.cloned(),
-                  );
-                  let resolved = sheet.resolve_imports_with_cache(
-                    &loader,
-                    Some(&stylesheet_url),
-                    media_ctx,
-                    Some(cache),
-                  );
-                  combined_rules.extend(resolved.rules);
-                }
+                let sheet = parse_stylesheet(&css_text)?;
+                let loader = CssImportFetcher::new(
+                  Some(stylesheet_url.clone()),
+                  Arc::clone(&fetcher),
+                  resource_context.cloned(),
+                );
+                let resolved = sheet.resolve_imports_with_cache(
+                  &loader,
+                  Some(&stylesheet_url),
+                  media_ctx,
+                  Some(cache),
+                )?;
+                combined_rules.extend(resolved.rules);
               }
               Err(err) => {
                 // Per spec, stylesheet loads are best-effort. On failure, continue.
@@ -4666,18 +4664,18 @@ impl FastRender {
         }
       }
 
-      StyleSheet {
+      Ok(StyleSheet {
         rules: combined_rules,
-      }
+      })
     };
 
-    let document = collect_from_sources(&scoped_sources.document, media_query_cache);
+    let document = collect_from_sources(&scoped_sources.document, media_query_cache)?;
     let mut shadows = HashMap::new();
     for (host, sources) in scoped_sources.shadows {
-      shadows.insert(host, collect_from_sources(&sources, media_query_cache));
+      shadows.insert(host, collect_from_sources(&sources, media_query_cache)?);
     }
 
-    StyleSet { document, shadows }
+    Ok(StyleSet { document, shadows })
   }
 
   fn collect_document_stylesheet(
@@ -4685,7 +4683,7 @@ impl FastRender {
     dom: &DomNode,
     media_ctx: &MediaContext,
     media_query_cache: &mut MediaQueryCache,
-  ) -> StyleSheet {
+  ) -> Result<StyleSheet> {
     let mut combined_rules = Vec::new();
     let sources = extract_css_sources(dom);
     let fetcher = Arc::clone(&self.fetcher);
@@ -4713,15 +4711,14 @@ impl FastRender {
             continue;
           }
 
-          if let Ok(sheet) = parse_stylesheet(&inline.css) {
-            let resolved = sheet.resolve_imports_with_cache(
-              &inline_loader,
-              self.base_url.as_deref(),
-              media_ctx,
-              Some(media_query_cache),
-            );
-            combined_rules.extend(resolved.rules);
-          }
+          let sheet = parse_stylesheet(&inline.css)?;
+          let resolved = sheet.resolve_imports_with_cache(
+            &inline_loader,
+            self.base_url.as_deref(),
+            media_ctx,
+            Some(media_query_cache),
+          )?;
+          combined_rules.extend(resolved.rules);
         }
         StylesheetSource::External(link) => {
           if link.disabled
@@ -4767,22 +4764,21 @@ impl FastRender {
               }
               let mut css_text =
                 decode_css_bytes(&resource.bytes, resource.content_type.as_deref());
-              css_text = absolutize_css_urls(&css_text, &stylesheet_url);
+              css_text = absolutize_css_urls(&css_text, &stylesheet_url)?;
 
-              if let Ok(sheet) = parse_stylesheet(&css_text) {
-                let loader = CssImportFetcher::new(
-                  Some(stylesheet_url.clone()),
-                  Arc::clone(&fetcher),
-                  resource_context.cloned(),
-                );
-                let resolved = sheet.resolve_imports_with_cache(
-                  &loader,
-                  Some(&stylesheet_url),
-                  media_ctx,
-                  Some(media_query_cache),
-                );
-                combined_rules.extend(resolved.rules);
-              }
+              let sheet = parse_stylesheet(&css_text)?;
+              let loader = CssImportFetcher::new(
+                Some(stylesheet_url.clone()),
+                Arc::clone(&fetcher),
+                resource_context.cloned(),
+              );
+              let resolved = sheet.resolve_imports_with_cache(
+                &loader,
+                Some(&stylesheet_url),
+                media_ctx,
+                Some(media_query_cache),
+              )?;
+              combined_rules.extend(resolved.rules);
             }
             Err(err) => {
               // Per spec, stylesheet loads are best-effort. On failure, continue.
@@ -4798,9 +4794,9 @@ impl FastRender {
       }
     }
 
-    StyleSheet {
+    Ok(StyleSheet {
       rules: combined_rules,
-    }
+    })
   }
 
   fn stylesheet_type_is_css(type_attr: Option<&str>) -> bool {
@@ -4899,7 +4895,7 @@ impl FastRender {
     .with_env_overrides();
     let mut media_query_cache = MediaQueryCache::default();
     let style_set =
-      self.collect_document_style_set(&dom_with_state, &media_ctx, &mut media_query_cache);
+      self.collect_document_style_set(&dom_with_state, &media_ctx, &mut media_query_cache)?;
     // Style and accessibility tree construction are deeply recursive. Run them on a larger-stack
     // helper thread to avoid stack overflows on debug builds and on documents with deep nesting.
     let result = std::thread::scope(|scope| {
@@ -5162,7 +5158,7 @@ impl FastRender {
     let mut media_query_cache = MediaQueryCache::default();
     let style_set = {
       let _span = trace.span("css_parse", "style");
-      self.collect_document_style_set(&dom_with_state, &media_ctx, &mut media_query_cache)
+      self.collect_document_style_set(&dom_with_state, &media_ctx, &mut media_query_cache)?
     };
     let mut stylesheet = style_set.document.clone();
     for sheet in style_set.shadows.values() {
@@ -6299,14 +6295,14 @@ impl FastRender {
     mut stats: Option<&mut RenderStatsRecorder>,
   ) -> std::result::Result<String, RenderError> {
     let inlining_start = stats.as_deref().and_then(|rec| rec.timer());
-    let mut css_links = extract_css_links(html, base_url, media_type);
+    let mut css_links = extract_css_links(html, base_url, media_type)?;
     if let Some(limit) = css_limit {
       if css_links.len() > limit {
         css_links.truncate(limit);
       }
     }
     let mut seen: HashSet<String> = css_links.iter().cloned().collect();
-    for extra in extract_embedded_css_urls(html, base_url) {
+    for extra in extract_embedded_css_urls(html, base_url)? {
       if seen.insert(extra.clone()) {
         css_links.push(extra);
       }
@@ -6341,7 +6337,7 @@ impl FastRender {
             }
           }
           let css_text = decode_css_bytes(&res.bytes, res.content_type.as_deref());
-          let rewritten = absolutize_css_urls(&css_text, &css_url);
+          let rewritten = absolutize_css_urls(&css_text, &css_url)?;
           let mut import_diags: Vec<(String, String)> = Vec::new();
           let inlined = {
             let mut import_fetch = |u: &str| -> Result<String> {
@@ -7113,7 +7109,7 @@ impl CssImportLoader for CssImportFetcher {
 
     // Decode CSS bytes with charset handling
     let decoded = decode_css_bytes(&resource.bytes, resource.content_type.as_deref());
-    Ok(absolutize_css_urls(&decoded, &resolved))
+    Ok(absolutize_css_urls(&decoded, &resolved)?)
   }
 }
 
@@ -9296,9 +9292,8 @@ mod tests {
     let first_container_id = styled_node_id_by_id(&styled, "container").expect("container id");
 
     let config = LayoutConfig::for_viewport(Size::new(800.0, 600.0));
-    renderer.layout_engine =
-      LayoutEngine::with_font_context(config.clone(), renderer.font_context.clone());
     renderer.layout_parallelism = config.parallelism;
+    renderer.layout_engine = LayoutEngine::with_font_context(config, renderer.font_context.clone());
     let box_gen_options = renderer.box_generation_options();
     let mut box_tree =
       crate::tree::box_generation::generate_box_tree_with_anonymous_fixup_with_options(
@@ -9387,9 +9382,8 @@ mod tests {
     );
 
     let config = LayoutConfig::for_viewport(Size::new(800.0, 600.0));
-    renderer.layout_engine =
-      LayoutEngine::with_font_context(config.clone(), renderer.font_context.clone());
     renderer.layout_parallelism = config.parallelism;
+    renderer.layout_engine = LayoutEngine::with_font_context(config, renderer.font_context.clone());
     let box_gen_options = renderer.box_generation_options();
     let mut box_tree =
       crate::tree::box_generation::generate_box_tree_with_anonymous_fixup_with_options(
@@ -9454,9 +9448,8 @@ mod tests {
     );
 
     let config = LayoutConfig::for_viewport(Size::new(800.0, 600.0));
-    renderer.layout_engine =
-      LayoutEngine::with_font_context(config.clone(), renderer.font_context.clone());
     renderer.layout_parallelism = config.parallelism;
+    renderer.layout_engine = LayoutEngine::with_font_context(config, renderer.font_context.clone());
     let box_gen_options = renderer.box_generation_options();
     let mut box_tree =
       crate::tree::box_generation::generate_box_tree_with_anonymous_fixup_with_options(
@@ -9514,9 +9507,8 @@ mod tests {
     );
 
     let config = LayoutConfig::for_viewport(Size::new(800.0, 600.0));
-    renderer.layout_engine =
-      LayoutEngine::with_font_context(config.clone(), renderer.font_context.clone());
     renderer.layout_parallelism = config.parallelism;
+    renderer.layout_engine = LayoutEngine::with_font_context(config, renderer.font_context.clone());
     let box_gen_options = renderer.box_generation_options();
     let mut box_tree =
       crate::tree::box_generation::generate_box_tree_with_anonymous_fixup_with_options(
@@ -9574,9 +9566,8 @@ mod tests {
     );
 
     let config = LayoutConfig::for_viewport(Size::new(800.0, 600.0));
-    renderer.layout_engine =
-      LayoutEngine::with_font_context(config.clone(), renderer.font_context.clone());
     renderer.layout_parallelism = config.parallelism;
+    renderer.layout_engine = LayoutEngine::with_font_context(config, renderer.font_context.clone());
     let box_gen_options = renderer.box_generation_options();
     let mut box_tree =
       crate::tree::box_generation::generate_box_tree_with_anonymous_fixup_with_options(
@@ -9635,9 +9626,8 @@ mod tests {
     );
 
     let config = LayoutConfig::for_viewport(Size::new(800.0, 600.0));
-    renderer.layout_engine =
-      LayoutEngine::with_font_context(config.clone(), renderer.font_context.clone());
     renderer.layout_parallelism = config.parallelism;
+    renderer.layout_engine = LayoutEngine::with_font_context(config, renderer.font_context.clone());
     let box_gen_options = renderer.box_generation_options();
     let mut box_tree =
       crate::tree::box_generation::generate_box_tree_with_anonymous_fixup_with_options(
@@ -10501,7 +10491,9 @@ mod tests {
       .with_device_pixel_ratio(renderer.device_pixel_ratio)
       .with_env_overrides();
     let mut media_query_cache = MediaQueryCache::default();
-    let stylesheet = renderer.collect_document_stylesheet(&dom, &media_ctx, &mut media_query_cache);
+    let stylesheet = renderer
+      .collect_document_stylesheet(&dom, &media_ctx, &mut media_query_cache)
+      .unwrap();
     let style_set = StyleSet::from_document(stylesheet.clone());
     let styled = apply_style_set_with_media_target_and_imports_cached(
       &dom,

@@ -6,6 +6,8 @@ use super::selectors::FastRenderSelectorImpl;
 use super::selectors::PseudoClassParser;
 use super::supports;
 use crate::css::loader::resolve_href_with_base;
+use crate::error::{Error, RenderError, RenderStage};
+use crate::render_control::check_active_periodic;
 use crate::style::color::Color;
 use crate::style::color::Rgba;
 use crate::style::counter_styles::CounterStyleRule;
@@ -508,7 +510,7 @@ impl StyleSheet {
     loader: &L,
     base_url: Option<&str>,
     media_ctx: &MediaContext,
-  ) -> Self {
+  ) -> std::result::Result<Self, RenderError> {
     self.resolve_imports_with_cache(loader, base_url, media_ctx, None)
   }
 
@@ -519,9 +521,10 @@ impl StyleSheet {
     base_url: Option<&str>,
     media_ctx: &MediaContext,
     cache: Option<&mut MediaQueryCache>,
-  ) -> Self {
+  ) -> std::result::Result<Self, RenderError> {
     let mut resolved = Vec::new();
     let mut seen = std::collections::HashSet::new();
+    let mut deadline_counter = 0usize;
     resolve_rules(
       &self.rules,
       loader,
@@ -530,8 +533,9 @@ impl StyleSheet {
       cache,
       &mut seen,
       &mut resolved,
-    );
-    StyleSheet { rules: resolved }
+      &mut deadline_counter,
+    )?;
+    Ok(StyleSheet { rules: resolved })
   }
 
   /// Returns true if the stylesheet (or any nested blocks) contains @container rules.
@@ -1434,16 +1438,6 @@ fn collect_property_rules_recursive<'a>(
       CssRule::Keyframes(_) => {}
       CssRule::FontPaletteValues(_) => {}
       CssRule::CounterStyle(_) => {}
-      CssRule::StartingStyle(starting_rule) => {
-        collect_property_rules_recursive(
-          &starting_rule.rules,
-          media_ctx,
-          cache.as_deref_mut(),
-          registry,
-          current_layer,
-          out,
-        );
-      }
     }
   }
 }
@@ -2077,13 +2071,15 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
   cache: Option<&mut MediaQueryCache>,
   seen: &mut std::collections::HashSet<String>,
   out: &mut Vec<CssRule>,
-) {
+  deadline_counter: &mut usize,
+) -> std::result::Result<(), RenderError> {
   const MAX_RESOLVED_IMPORTS: usize = 128;
 
   // Keep a mutable binding so nested calls can borrow the cache mutably via as_deref_mut().
   let mut cache = cache;
 
   for rule in rules {
+    check_active_periodic(deadline_counter, 1, RenderStage::Css)?;
     match rule {
       CssRule::Style(_)
       | CssRule::Media(_)
@@ -2102,7 +2098,8 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
           cache.as_deref_mut(),
           seen,
           &mut resolved_children,
-        );
+          deadline_counter,
+        )?;
         out.push(CssRule::Container(ContainerRule {
           name: container_rule.name.clone(),
           query_list: container_rule.query_list.clone(),
@@ -2119,7 +2116,8 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
           cache.as_deref_mut(),
           seen,
           &mut resolved_children,
-        );
+          deadline_counter,
+        )?;
         out.push(CssRule::Supports(SupportsRule {
           condition: supports_rule.condition.clone(),
           rules: resolved_children,
@@ -2138,7 +2136,8 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
           cache.as_deref_mut(),
           seen,
           &mut resolved_children,
-        );
+          deadline_counter,
+        )?;
         out.push(CssRule::Scope(ScopeRule {
           start: scope_rule.start.clone(),
           end: scope_rule.end.clone(),
@@ -2155,7 +2154,8 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
           cache.as_deref_mut(),
           seen,
           &mut resolved_children,
-        );
+          deadline_counter,
+        )?;
         out.push(CssRule::Layer(LayerRule {
           names: layer_rule.names.clone(),
           rules: resolved_children,
@@ -2172,7 +2172,8 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
           cache.as_deref_mut(),
           seen,
           &mut resolved_children,
-        );
+          deadline_counter,
+        )?;
         out.push(CssRule::StartingStyle(StartingStyleRule {
           rules: resolved_children,
         }));
@@ -2207,35 +2208,39 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
         match loader.load(&resolved_href) {
           Ok(css_text) => {
             seen.insert(resolved_href.clone());
-            if let Ok(sheet) = crate::css::parser::parse_stylesheet(&css_text) {
-              let mut resolved_children = Vec::new();
-              resolve_rules(
-                &sheet.rules,
-                loader,
-                Some(&resolved_href),
-                media_ctx,
-                cache.as_deref_mut(),
-                seen,
-                &mut resolved_children,
-              );
+            let sheet = match crate::css::parser::parse_stylesheet(&css_text) {
+              Ok(sheet) => sheet,
+              Err(Error::Render(err)) => return Err(err),
+              Err(_) => continue,
+            };
+            let mut resolved_children = Vec::new();
+            resolve_rules(
+              &sheet.rules,
+              loader,
+              Some(&resolved_href),
+              media_ctx,
+              cache.as_deref_mut(),
+              seen,
+              &mut resolved_children,
+              deadline_counter,
+            )?;
 
-              if let Some(layer) = &import.layer {
-                let layer_rule = match layer {
-                  ImportLayer::Anonymous => LayerRule {
-                    names: Vec::new(),
-                    rules: resolved_children,
-                    anonymous: true,
-                  },
-                  ImportLayer::Named(path) => LayerRule {
-                    names: vec![path.clone()],
-                    rules: resolved_children,
-                    anonymous: false,
-                  },
-                };
-                out.push(CssRule::Layer(layer_rule));
-              } else {
-                out.extend(resolved_children);
-              }
+            if let Some(layer) = &import.layer {
+              let layer_rule = match layer {
+                ImportLayer::Anonymous => LayerRule {
+                  names: Vec::new(),
+                  rules: resolved_children,
+                  anonymous: true,
+                },
+                ImportLayer::Named(path) => LayerRule {
+                  names: vec![path.clone()],
+                  rules: resolved_children,
+                  anonymous: false,
+                },
+              };
+              out.push(CssRule::Layer(layer_rule));
+            } else {
+              out.extend(resolved_children);
             }
           }
           Err(_) => {
@@ -2245,6 +2250,8 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
       }
     }
   }
+
+  Ok(())
 }
 
 #[derive(Debug, Default, Clone)]

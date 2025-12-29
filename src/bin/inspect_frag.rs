@@ -164,9 +164,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
     .unwrap_or(true);
   if fetch_css {
-    let mut css_links = extract_css_links(&html, &resource_base, MediaType::Screen);
+    let mut css_links = extract_css_links(&html, &resource_base, MediaType::Screen)?;
     let mut seen_links: HashSet<String> = css_links.iter().cloned().collect();
-    for extra in extract_embedded_css_urls(&html, &resource_base) {
+    for extra in extract_embedded_css_urls(&html, &resource_base)? {
       if seen_links.insert(extra.clone()) {
         css_links.push(extra);
       }
@@ -182,7 +182,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         match fetcher.fetch(&link) {
           Ok(res) => {
             let css_text = decode_css_bytes(&res.bytes, res.content_type.as_deref());
-            let rewritten = absolutize_css_urls(&css_text, &link);
+            let rewritten = absolutize_css_urls(&css_text, &link)?;
             let fetcher_for_imports = fetcher.clone();
             let mut import_fetch = move |u: &str| {
               fetcher_for_imports

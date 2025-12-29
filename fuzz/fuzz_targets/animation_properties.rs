@@ -187,7 +187,10 @@ fn build_animation_css(input: &AnimationCase) -> (String, String) {
 
 fuzz_target!(|input: AnimationCase| {
   let (css, name) = build_animation_css(&input);
-  let parsed = parse_stylesheet_with_errors(&css);
+  let parsed = match parse_stylesheet_with_errors(&css) {
+    Ok(parsed) => parsed,
+    Err(_) => return,
+  };
 
   // Use a stable, small DOM so selector matching/cascade stays bounded.
   let dom = dom::parse_html("<div id=\"target\"></div>").unwrap_or_else(|_| dom::DomNode {

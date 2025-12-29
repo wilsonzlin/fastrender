@@ -2787,6 +2787,7 @@ mod tests {
     LoadedProgress {
       stem: stem.to_string(),
       progress,
+      stats: None,
     }
   }
 

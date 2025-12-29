@@ -60,7 +60,9 @@ fn find_by_id<'a>(node: &'a StyledNode, id: &str) -> Option<&'a StyledNode> {
 fn styled_target(css: &str, loader: &MapImportLoader) -> StyledNode {
   let media = MediaContext::screen(800.0, 600.0);
   let stylesheet = parse_stylesheet(css).unwrap();
-  let resolved = stylesheet.resolve_imports(loader, Some(BASE_URL), &media);
+  let resolved = stylesheet
+    .resolve_imports(loader, Some(BASE_URL), &media)
+    .unwrap();
   let dom = dom::parse_html(r#"<div id="t"></div>"#).unwrap();
   let styled = apply_styles_with_media(&dom, &resolved, &media);
   find_by_id(&styled, "t")

@@ -39,6 +39,7 @@ use crate::dom::DomNodeType;
 use crate::dom::ElementRef;
 use crate::dom::SelectorBloomMap;
 use crate::dom::SlotAssignment;
+use crate::error::Error;
 use crate::geometry::Size;
 use crate::render_control::check_active_periodic;
 use crate::render_control::RenderDeadline;
@@ -480,7 +481,7 @@ fn apply_color_scheme_palette(
 fn collect_shadow_stylesheets(
   root: &DomNode,
   ids: &HashMap<*const DomNode, usize>,
-) -> HashMap<usize, StyleSheet> {
+) -> Result<HashMap<usize, StyleSheet>, RenderError> {
   fn gather_styles(node: &DomNode, root_ptr: *const DomNode, out: &mut String) {
     if let DomNodeType::ShadowRoot { .. } = node.node_type {
       if (node as *const DomNode) != root_ptr {
@@ -506,26 +507,30 @@ fn collect_shadow_stylesheets(
     node: &DomNode,
     ids: &HashMap<*const DomNode, usize>,
     out: &mut HashMap<usize, StyleSheet>,
-  ) {
+  ) -> Result<(), RenderError> {
     if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
       let mut css = String::new();
       gather_styles(node, node as *const DomNode, &mut css);
       if !css.is_empty() {
-        if let Ok(sheet) = parse_stylesheet(&css) {
-          if let Some(id) = ids.get(&(node as *const DomNode)) {
-            out.insert(*id, sheet);
-          }
+        let sheet = match parse_stylesheet(&css) {
+          Ok(sheet) => sheet,
+          Err(Error::Render(err)) => return Err(err),
+          Err(_) => StyleSheet::new(),
+        };
+        if let Some(id) = ids.get(&(node as *const DomNode)) {
+          out.insert(*id, sheet);
         }
       }
     }
     for child in &node.children {
-      walk(child, ids, out);
+      walk(child, ids, out)?;
     }
+    Ok(())
   }
 
   let mut out = HashMap::new();
-  walk(root, ids, &mut out);
-  out
+  walk(root, ids, &mut out)?;
+  Ok(out)
 }
 
 fn record_node_visit(node: &DomNode) {
@@ -1976,13 +1981,18 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
 
   // Resolve imports if a loader is provided
   let author_sheet = if let Some(loader) = import_loader {
-    stylesheet.resolve_imports_with_cache(loader, base_url, media_ctx, media_cache.as_deref_mut())
+    stylesheet.resolve_imports_with_cache(
+      loader,
+      base_url,
+      media_ctx,
+      media_cache.as_deref_mut(),
+    )?
   } else {
     stylesheet.clone()
   };
 
   let dom_maps = DomMaps::new(dom);
-  let shadow_stylesheets = collect_shadow_stylesheets(dom, &dom_maps.id_map);
+  let shadow_stylesheets = collect_shadow_stylesheets(dom, &dom_maps.id_map)?;
   let slot_assignment = compute_slot_assignment(dom);
   let slot_maps = build_slot_maps(&slot_assignment, &dom_maps);
 
@@ -2014,7 +2024,7 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
         continue;
       };
       let resolved = if let Some(loader) = import_loader {
-        sheet.resolve_imports_with_cache(loader, base_url, media_ctx, media_cache.as_deref_mut())
+        sheet.resolve_imports_with_cache(loader, base_url, media_ctx, media_cache.as_deref_mut())?
       } else {
         sheet
       };
@@ -2509,11 +2519,11 @@ fn apply_style_set_with_media_target_and_imports_cached_with_deadline_impl(
   let resolve_imports = |sheet: &StyleSheet,
                          loader: Option<&dyn CssImportLoader>,
                          cache: Option<&mut MediaQueryCache>|
-   -> StyleSheet {
+   -> Result<StyleSheet, RenderError> {
     if let Some(loader) = loader {
       sheet.resolve_imports_with_cache(loader, base_url, media_ctx, cache)
     } else {
-      sheet.clone()
+      Ok(sheet.clone())
     }
   };
 
@@ -2532,7 +2542,7 @@ fn apply_style_set_with_media_target_and_imports_cached_with_deadline_impl(
     &style_set.document,
     import_loader,
     media_cache.as_deref_mut(),
-  );
+  )?;
   let document_rules = filter_starting_rules(
     if let Some(cache) = media_cache.as_deref_mut() {
       document_sheet.collect_style_rules_with_cache(media_ctx, Some(cache))
@@ -2548,7 +2558,7 @@ fn apply_style_set_with_media_target_and_imports_cached_with_deadline_impl(
     let mut shadow_entries: Vec<_> = style_set.shadows.iter().collect();
     shadow_entries.sort_by_key(|(host, _)| *host);
     for (host, sheet) in shadow_entries {
-      let resolved = resolve_imports(sheet, import_loader, media_cache.as_deref_mut());
+      let resolved = resolve_imports(sheet, import_loader, media_cache.as_deref_mut())?;
       shadow_sheets.push((*host, Box::new(resolved)));
     }
   }

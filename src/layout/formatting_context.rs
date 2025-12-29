@@ -1384,8 +1384,7 @@ mod tests {
     );
     LAYOUT_RESULT_CACHE.with(|cache| assert_eq!(cache.borrow().len(), 1));
 
-    let base_style = flow_root_style();
-    let mut style = (*base_style).clone();
+    let mut style = flow_root_style().as_ref().clone();
     style.margin_left = Some(Length::px(10.0));
     let mut changed_node = BoxNode::new_block(Arc::new(style), fc_type, vec![]);
     changed_node.id = node.id;

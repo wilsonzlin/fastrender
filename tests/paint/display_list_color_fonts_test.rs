@@ -1,6 +1,6 @@
-use crate::color_font_helpers::{
-  load_fixture_font, non_white_colors, render_backends_for_run, shaped_run,
-};
+mod color_font_helpers;
+
+use color_font_helpers::{load_fixture_font, non_white_colors, render_backends_for_run, shaped_run};
 use fastrender::style::color::Rgba;
 
 #[test]
