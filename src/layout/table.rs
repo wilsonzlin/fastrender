@@ -1835,6 +1835,33 @@ fn horizontal_padding(style: &crate::style::ComputedStyle, percent_base: Option<
   resolve_abs(&style.padding_left) + resolve_abs(&style.padding_right)
 }
 
+/// Collects table row boxes in DOM/source order, matching `CellInfo::source_row`.
+///
+/// Running-position children are skipped to stay consistent with the table structure analysis.
+fn collect_source_rows<'a>(table_box: &'a BoxNode) -> Vec<&'a BoxNode> {
+  let mut rows = Vec::new();
+  for child in table_box
+    .children
+    .iter()
+    .filter(|child| child.style.running_position.is_none())
+  {
+    match TableStructure::get_table_element_type(child) {
+      TableElementType::RowGroup
+      | TableElementType::HeaderGroup
+      | TableElementType::FooterGroup => {
+        for row_child in &child.children {
+          if TableStructure::get_table_element_type(row_child) == TableElementType::Row {
+            rows.push(row_child);
+          }
+        }
+      }
+      TableElementType::Row => rows.push(child),
+      _ => {}
+    }
+  }
+  rows
+}
+
 /// Computes the grid line centers and item start offsets for the collapsed border model.
 /// Line widths are centered on the grid lines; outer lines contribute half their width to
 /// the measured extent so the remaining half may spill into the table's margin area
@@ -2465,66 +2492,70 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
   }
 
   // Cells
-  let tfc = TableFormattingContext::new();
+  let source_rows = collect_source_rows(table_box);
   for cell in &structure.cells {
-    if let Some(cell_box) = tfc.get_cell_box(table_box, cell) {
-      // In the collapsed border model the `empty-cells` property has no effect (CSS 2.1 §17.6.1),
-      // so even visually empty cells participate in border conflict resolution.
-      let style = &cell_box.style;
-      let start_col = cell.col;
-      let end_col = (cell.col + cell.colspan).min(structure.column_count);
-      let start_row = cell.row;
-      let end_row = (cell.row + cell.rowspan).min(structure.row_count);
+    let Some(row) = source_rows.get(cell.source_row) else {
+      continue;
+    };
+    let Some(cell_box) = row.children.get(cell.box_index) else {
+      continue;
+    };
+    // In the collapsed border model the `empty-cells` property has no effect (CSS 2.1 §17.6.1),
+    // so even visually empty cells participate in border conflict resolution.
+    let style = &cell_box.style;
+    let start_col = cell.col;
+    let end_col = (cell.col + cell.colspan).min(structure.column_count);
+    let start_row = cell.row;
+    let end_row = (cell.row + cell.rowspan).min(structure.row_count);
 
-      apply_vertical(
-        start_col,
-        start_row,
-        end_row,
-        style.border_left_style,
-        &style.border_left_width,
-        &style.border_left_color,
-        BorderOrigin::Cell,
-        cell.index as u32,
-        cell.row,
-        cell.col,
-      );
-      apply_vertical(
-        end_col,
-        start_row,
-        end_row,
-        style.border_right_style,
-        &style.border_right_width,
-        &style.border_right_color,
-        BorderOrigin::Cell,
-        cell.index as u32,
-        cell.row,
-        cell.col,
-      );
-      apply_horizontal(
-        start_row,
-        start_col,
-        end_col,
-        style.border_top_style,
-        &style.border_top_width,
-        &style.border_top_color,
-        BorderOrigin::Cell,
-        cell.index as u32,
-        cell.row,
-        cell.col,
-      );
-      apply_horizontal(
-        end_row,
-        start_col,
-        end_col,
-        style.border_bottom_style,
-        &style.border_bottom_width,
-        &style.border_bottom_color,
-        BorderOrigin::Cell,
-        cell.index as u32,
-        cell.row,
-        cell.col,
-      );
-    }
+    apply_vertical(
+      start_col,
+      start_row,
+      end_row,
+      style.border_left_style,
+      &style.border_left_width,
+      &style.border_left_color,
+      BorderOrigin::Cell,
+      cell.index as u32,
+      cell.row,
+      cell.col,
+    );
+    apply_vertical(
+      end_col,
+      start_row,
+      end_row,
+      style.border_right_style,
+      &style.border_right_width,
+      &style.border_right_color,
+      BorderOrigin::Cell,
+      cell.index as u32,
+      cell.row,
+      cell.col,
+    );
+    apply_horizontal(
+      start_row,
+      start_col,
+      end_col,
+      style.border_top_style,
+      &style.border_top_width,
+      &style.border_top_color,
+      BorderOrigin::Cell,
+      cell.index as u32,
+      cell.row,
+      cell.col,
+    );
+    apply_horizontal(
+      end_row,
+      start_col,
+      end_col,
+      style.border_bottom_style,
+      &style.border_bottom_width,
+      &style.border_bottom_color,
+      BorderOrigin::Cell,
+      cell.index as u32,
+      cell.row,
+      cell.col,
+    );
   }
 
   let candidate_to_resolved = |candidate: BorderCandidate| {
@@ -3521,12 +3552,16 @@ impl TableFormattingContext {
     mode: DistributionMode,
     percent_base: Option<f32>,
   ) {
+    let source_rows = collect_source_rows(table_box);
     for cell in &structure.cells {
       if matches!(mode, DistributionMode::Fixed) && cell.row > 0 {
         // Fixed layout only inspects the first row.
         continue;
       }
-      let Some(cell_box) = self.get_cell_box(table_box, cell) else {
+      let Some(row) = source_rows.get(cell.source_row) else {
+        continue;
+      };
+      let Some(cell_box) = row.children.get(cell.box_index) else {
         continue;
       };
       let width_decl = cell_box.style.width.as_ref();
@@ -3777,37 +3812,6 @@ impl TableFormattingContext {
     }
   }
 
-  /// Gets the box node for a cell
-  fn get_cell_box<'a>(&self, table_box: &'a BoxNode, cell: &CellInfo) -> Option<&'a BoxNode> {
-    let mut row_idx = 0;
-    for child in table_box
-      .children
-      .iter()
-      .filter(|child| child.style.running_position.is_none())
-    {
-      match TableStructure::get_table_element_type(child) {
-        TableElementType::RowGroup
-        | TableElementType::HeaderGroup
-        | TableElementType::FooterGroup => {
-          for row_child in &child.children {
-            if row_idx == cell.source_row {
-              return row_child.children.get(cell.box_index);
-            }
-            row_idx += 1;
-          }
-        }
-        TableElementType::Row => {
-          if row_idx == cell.source_row {
-            return child.children.get(cell.box_index);
-          }
-          row_idx += 1;
-        }
-        _ => {}
-      }
-    }
-    None
-  }
-
   fn collect_row_group_constraints(
     &self,
     table_box: &BoxNode,
@@ -3996,6 +4000,8 @@ impl FormattingContext for TableFormattingContext {
         }
       }
     }
+
+    let source_rows = collect_source_rows(&table_box);
 
     let containing_width = match constraints.available_width {
       AvailableSpace::Definite(w) => Some(w),
@@ -4455,39 +4461,41 @@ impl FormattingContext for TableFormattingContext {
         );
       }
 
-      if let Some(cell_box) = self.get_cell_box(&table_box, cell) {
-        let row_vertical_align = structure.rows.get(cell.row).and_then(|r| r.vertical_align);
-        let effective_vertical_align = if cell_box.style.vertical_align_specified {
-          cell_box.style.vertical_align
-        } else {
-          row_vertical_align.unwrap_or(cell_box.style.vertical_align)
-        };
-        match self.layout_cell(cell_box, width, structure.border_collapse) {
-          Ok(fragment) => {
-            if dump {
-              let b = fragment.bounds;
-              eprintln!(
-                "    cell fragment raw bounds: x={:.2} y={:.2} w={:.2} h={:.2}",
-                b.x(),
-                b.y(),
-                b.width(),
-                b.height()
-              );
-            }
-            let height = fragment.bounds.height();
-            let baseline = cell_baseline(&fragment);
-            CellOutcome::Success(LaidOutCell {
-              cell: cell.clone(),
-              fragment,
-              vertical_align: effective_vertical_align,
-              baseline,
-              height,
-            })
-          }
-          Err(_) => CellOutcome::Failed,
-        }
+      let Some(row) = source_rows.get(cell.source_row) else {
+        return CellOutcome::Missing;
+      };
+      let Some(cell_box) = row.children.get(cell.box_index) else {
+        return CellOutcome::Missing;
+      };
+      let row_vertical_align = structure.rows.get(cell.row).and_then(|r| r.vertical_align);
+      let effective_vertical_align = if cell_box.style.vertical_align_specified {
+        cell_box.style.vertical_align
       } else {
-        CellOutcome::Missing
+        row_vertical_align.unwrap_or(cell_box.style.vertical_align)
+      };
+      match self.layout_cell(cell_box, width, structure.border_collapse) {
+        Ok(fragment) => {
+          if dump {
+            let b = fragment.bounds;
+            eprintln!(
+              "    cell fragment raw bounds: x={:.2} y={:.2} w={:.2} h={:.2}",
+              b.x(),
+              b.y(),
+              b.width(),
+              b.height()
+            );
+          }
+          let height = fragment.bounds.height();
+          let baseline = cell_baseline(&fragment);
+          CellOutcome::Success(LaidOutCell {
+            cell: cell.clone(),
+            fragment,
+            vertical_align: effective_vertical_align,
+            baseline,
+            height,
+          })
+        }
+        Err(_) => CellOutcome::Failed,
       }
     };
 
@@ -6398,6 +6406,228 @@ mod tests {
     );
   }
 
+  #[cfg(test)]
+  fn legacy_get_cell_box<'a>(table_box: &'a BoxNode, cell: &CellInfo) -> Option<&'a BoxNode> {
+    let mut row_idx = 0;
+    for child in table_box
+      .children
+      .iter()
+      .filter(|child| child.style.running_position.is_none())
+    {
+      match TableStructure::get_table_element_type(child) {
+        TableElementType::RowGroup
+        | TableElementType::HeaderGroup
+        | TableElementType::FooterGroup => {
+          for row_child in &child.children {
+            if row_idx == cell.source_row {
+              return row_child.children.get(cell.box_index);
+            }
+            row_idx += 1;
+          }
+        }
+        TableElementType::Row => {
+          if row_idx == cell.source_row {
+            return child.children.get(cell.box_index);
+          }
+          row_idx += 1;
+        }
+        _ => {}
+      }
+    }
+    None
+  }
+
+  #[test]
+  fn source_row_lookup_matches_legacy_scan() {
+    let mut table_style = ComputedStyle::default();
+    table_style.display = Display::Table;
+
+    let mut header_group_style = ComputedStyle::default();
+    header_group_style.display = Display::TableHeaderGroup;
+    let mut body_group_style = ComputedStyle::default();
+    body_group_style.display = Display::TableRowGroup;
+    let mut footer_group_style = ComputedStyle::default();
+    footer_group_style.display = Display::TableFooterGroup;
+
+    let mut row_style = ComputedStyle::default();
+    row_style.display = Display::TableRow;
+
+    let mut cell_style = ComputedStyle::default();
+    cell_style.display = Display::TableCell;
+    let make_cell = || {
+      BoxNode::new_block(
+        Arc::new(cell_style.clone()),
+        FormattingContextType::Block,
+        vec![],
+      )
+    };
+
+    let header_row = BoxNode::new_block(
+      Arc::new(row_style.clone()),
+      FormattingContextType::Block,
+      vec![make_cell(), make_cell()],
+    );
+    let direct_row = BoxNode::new_block(
+      Arc::new(row_style.clone()),
+      FormattingContextType::Block,
+      vec![make_cell(), make_cell(), make_cell()],
+    );
+    let body_row = BoxNode::new_block(
+      Arc::new(row_style.clone()),
+      FormattingContextType::Block,
+      vec![make_cell()],
+    );
+    let footer_row = BoxNode::new_block(
+      Arc::new(row_style.clone()),
+      FormattingContextType::Block,
+      vec![make_cell(), make_cell()],
+    );
+
+    let header_group = BoxNode::new_block(
+      Arc::new(header_group_style),
+      FormattingContextType::Block,
+      vec![header_row],
+    );
+    let body_group = BoxNode::new_block(
+      Arc::new(body_group_style),
+      FormattingContextType::Block,
+      vec![body_row],
+    );
+    let footer_group = BoxNode::new_block(
+      Arc::new(footer_group_style),
+      FormattingContextType::Block,
+      vec![footer_row],
+    );
+
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![header_group, direct_row, body_group, footer_group],
+    );
+
+    let structure = TableStructure::from_box_tree(&table);
+    let source_rows = collect_source_rows(&table);
+    for cell in &structure.cells {
+      let legacy = legacy_get_cell_box(&table, cell);
+      let indexed = source_rows
+        .get(cell.source_row)
+        .and_then(|row| row.children.get(cell.box_index));
+      assert!(
+        legacy.is_some(),
+        "legacy lookup missing for cell idx {} (row {}, col {})",
+        cell.index,
+        cell.row,
+        cell.col
+      );
+      assert!(
+        indexed.is_some(),
+        "indexed lookup missing for cell idx {} (source row {}, box idx {})",
+        cell.index,
+        cell.source_row,
+        cell.box_index
+      );
+      let legacy = legacy.unwrap();
+      let indexed = indexed.unwrap();
+      assert!(
+        std::ptr::eq(legacy, indexed),
+        "lookup mismatch for cell idx {} (source row {}, box idx {}): legacy id {} vs indexed id {}",
+        cell.index,
+        cell.source_row,
+        cell.box_index,
+        legacy.id,
+        indexed.id
+      );
+    }
+  }
+
+  #[test]
+  fn source_row_lookup_respects_header_footer_reorder() {
+    let mut table_style = ComputedStyle::default();
+    table_style.display = Display::Table;
+
+    let mut header_group_style = ComputedStyle::default();
+    header_group_style.display = Display::TableHeaderGroup;
+    let mut body_group_style = ComputedStyle::default();
+    body_group_style.display = Display::TableRowGroup;
+    let mut footer_group_style = ComputedStyle::default();
+    footer_group_style.display = Display::TableFooterGroup;
+
+    let mut row_style = ComputedStyle::default();
+    row_style.display = Display::TableRow;
+
+    let mut cell_style = ComputedStyle::default();
+    cell_style.display = Display::TableCell;
+    let make_cell = || {
+      BoxNode::new_block(
+        Arc::new(cell_style.clone()),
+        FormattingContextType::Block,
+        vec![],
+      )
+    };
+
+    let footer_row = BoxNode::new_block(
+      Arc::new(row_style.clone()),
+      FormattingContextType::Block,
+      vec![make_cell()],
+    );
+    let body_row = BoxNode::new_block(
+      Arc::new(row_style.clone()),
+      FormattingContextType::Block,
+      vec![make_cell(), make_cell()],
+    );
+    let header_row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![make_cell()],
+    );
+
+    let footer_group = BoxNode::new_block(
+      Arc::new(footer_group_style),
+      FormattingContextType::Block,
+      vec![footer_row],
+    );
+    let body_group = BoxNode::new_block(
+      Arc::new(body_group_style),
+      FormattingContextType::Block,
+      vec![body_row],
+    );
+    let header_group = BoxNode::new_block(
+      Arc::new(header_group_style),
+      FormattingContextType::Block,
+      vec![header_row],
+    );
+
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![footer_group, body_group, header_group],
+    );
+
+    let structure = TableStructure::from_box_tree(&table);
+    assert!(
+      structure
+        .cells
+        .iter()
+        .any(|cell| cell.source_row != cell.row),
+      "row reordering should change cell row indices"
+    );
+    let source_rows = collect_source_rows(&table);
+    for cell in &structure.cells {
+      let legacy = legacy_get_cell_box(&table, cell).expect("legacy lookup");
+      let indexed = source_rows
+        .get(cell.source_row)
+        .and_then(|row| row.children.get(cell.box_index))
+        .expect("indexed lookup");
+      assert!(
+        std::ptr::eq(legacy, indexed),
+        "reordered table lookup mismatch for cell {} (source row {}, box idx {})",
+        cell.index,
+        cell.source_row,
+        cell.box_index
+      );
+    }
+  }
+
   #[test]
   fn empty_cells_hide_keeps_column_min_width() {
     let mut table_style = ComputedStyle::default();
@@ -6581,8 +6811,10 @@ mod tests {
       .map(|_| ColumnConstraints::new(0.0, 0.0))
       .collect();
     let tfc = TableFormattingContext::new();
-    let span_box = tfc
-      .get_cell_box(&table, &structure.cells[0])
+    let source_rows = collect_source_rows(&table);
+    let span_box = source_rows
+      .get(structure.cells[0].source_row)
+      .and_then(|row| row.children.get(structure.cells[0].box_index))
       .expect("span cell");
     let (span_min, span_max) =
       tfc.measure_cell_intrinsic_widths(span_box, structure.border_collapse, percent_base);
