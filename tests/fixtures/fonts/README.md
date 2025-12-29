@@ -212,6 +212,34 @@ so CI and tests can run in fully hermetic environments without relying on platfo
   python tests/fixtures/fonts/generate_colrv1_var_clip_font.py
   ```
 
+### `colrv1-gvar-test.ttf`
+- **Source:** Derived in-repo from `TestVar.ttf` by adding COLR/CPAL tables with [FontTools](https://github.com/fonttools/fonttools) v4.61.1.
+- **License:** Created specifically for FastRender tests; no third-party assets or licensing obligations.
+- **Glyphs / variation:** Reuses `TestVar`'s single glyph `a` mapped to U+0041 (`A`). The inherited `wght`
+  axis (100–900, default 400) drives `gvar` deltas that widen the outline at higher weights. COLR v1 paints
+  the glyph with a solid palette color so variation effects come solely from outline changes.
+- **Regeneration:** From the repository root:
+  ```bash
+  python - <<'PY'
+  from fontTools.ttLib import TTFont
+  from fontTools.colorLib.builder import buildCOLR, buildCPAL
+  from fontTools.ttLib.tables.otTables import PaintFormat
+  import pathlib
+
+  base = pathlib.Path('tests/fixtures/fonts')
+  font = TTFont(base / 'TestVar.ttf')
+  palette = [
+      (0.1, 0.65, 0.9, 1.0),
+      (0.85, 0.25, 0.25, 1.0),
+  ]
+  font['CPAL'] = buildCPAL([palette])
+  solid = {'Format': PaintFormat.PaintSolid, 'PaletteIndex': 0, 'Alpha': 1.0}
+  paint = {'Format': PaintFormat.PaintGlyph, 'Glyph': 'a', 'Paint': solid}
+  font['COLR'] = buildCOLR({'a': paint}, version=1, glyphMap=font.getReverseGlyphMap())
+  font.save(base / 'colrv1-gvar-test.ttf')
+  PY
+  ```
+
 ### `colrv1-sweep-test.ttf`
 - **Source:** Generated in-repo with [FontTools](https://github.com/fonttools/fonttools) v4.61.1.
 - **License:** CC0 / Public Domain.

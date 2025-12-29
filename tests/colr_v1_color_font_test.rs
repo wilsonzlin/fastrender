@@ -4,11 +4,15 @@ use fastrender::style::color::Rgba;
 use fastrender::text::color_fonts::ColorFontRenderer;
 use fastrender::text::font_db::{FontStretch, FontStyle, FontWeight, LoadedFont};
 use fastrender::text::font_instance::FontInstance;
-use r#ref::compare::{compare_images, load_png, CompareConfig};
+use fastrender::image_compare::encode_png;
+use image::RgbaImage;
+use r#ref::compare::{compare_images, load_png_from_bytes, CompareConfig};
 use rustybuzz::Variation;
+use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use ttf_parser::Tag;
+use tiny_skia::Pixmap;
 
 fn fixtures_path() -> PathBuf {
   PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -16,8 +20,11 @@ fn fixtures_path() -> PathBuf {
     .join("fixtures")
 }
 
-fn test_glyph_id(face: &ttf_parser::Face<'_>) -> Option<ttf_parser::GlyphId> {
-  face.glyph_index('A').or_else(|| face.glyph_index('G'))
+fn test_glyph_id(face: &ttf_parser::Face<'_>) -> ttf_parser::GlyphId {
+  face
+    .glyph_index('A')
+    .or_else(|| face.glyph_index('G'))
+    .expect("test glyph not found")
 }
 
 fn load_test_font() -> LoadedFont {
@@ -40,7 +47,7 @@ fn render_glyph(
   variations: &[Variation],
 ) -> fastrender::text::color_fonts::ColorGlyphRaster {
   let face = font.as_ttf_face().unwrap();
-  let gid = test_glyph_id(&face).expect("test glyph should be present");
+  let gid = test_glyph_id(&face);
   let instance = FontInstance::new(font, variations).unwrap();
 
   ColorFontRenderer::new()
@@ -60,22 +67,107 @@ fn render_glyph(
 }
 
 fn save_or_compare(name: &str, raster: &fastrender::text::color_fonts::ColorGlyphRaster) {
-  let path = fixtures_path().join("golden").join(name);
-  if std::env::var("UPDATE_GOLDEN").is_ok() {
-    raster
-      .image
-      .save_png(&path)
-      .expect("failed to write golden");
+  let actual_bytes = encode_png(&pixmap_to_rgba_image(&raster.image)).expect("encode actual png");
+  if let Ok(dir) = std::env::var("SAVE_ACTUAL") {
+    let mut path = PathBuf::from(dir);
+    let _ = fs::create_dir_all(&path);
+    path.push(name);
+    fs::write(&path, &actual_bytes).expect("failed to write actual render");
   }
 
-  let golden = load_png(&path).expect("missing golden image; set UPDATE_GOLDEN=1 to create");
-  let diff = compare_images(&raster.image, &golden, &CompareConfig::strict());
+  let path = fixtures_path().join("golden").join(name);
+  if std::env::var("UPDATE_GOLDEN").is_ok() {
+    fs::write(&path, &actual_bytes).expect("failed to write golden");
+
+    return;
+  }
+
+  let golden_bytes =
+    fs::read(&path).expect("missing golden image; set UPDATE_GOLDEN=1 to create");
+  if golden_bytes == actual_bytes {
+    return;
+  }
+  let golden = load_png_from_bytes(&golden_bytes).expect("failed to decode golden png");
+  let actual = load_png_from_bytes(&actual_bytes).expect("failed to decode actual png");
+  if std::env::var("SAVE_ACTUAL").is_ok() {
+    let differing = actual
+      .data()
+      .iter()
+      .zip(golden.data().iter())
+      .filter(|(a, b)| a != b)
+      .count();
+    println!(
+      "debug: comparing '{}' ({} bytes differ)",
+      name, differing
+    );
+  }
+  let diff = compare_images(&actual, &golden, &CompareConfig::strict());
   assert!(
     diff.is_match(),
     "rendered image {} did not match golden: {:?}",
     name,
     diff.statistics
   );
+}
+
+fn pixmap_to_rgba_image(pixmap: &tiny_skia::Pixmap) -> RgbaImage {
+  let width = pixmap.width();
+  let height = pixmap.height();
+  let mut rgba = RgbaImage::new(width, height);
+
+  for (dst, src) in rgba
+    .as_mut()
+    .chunks_exact_mut(4)
+    .zip(pixmap.data().chunks_exact(4))
+  {
+    let r = src[0];
+    let g = src[1];
+    let b = src[2];
+    let a = src[3];
+
+    if a == 0 {
+      dst.copy_from_slice(&[0, 0, 0, 0]);
+      continue;
+    }
+
+    let alpha = a as f32 / 255.0;
+    dst[0] = ((r as f32 / alpha).min(255.0)) as u8;
+    dst[1] = ((g as f32 / alpha).min(255.0)) as u8;
+    dst[2] = ((b as f32 / alpha).min(255.0)) as u8;
+    dst[3] = a;
+  }
+
+  rgba
+}
+
+fn painted_bounds(pixmap: &Pixmap) -> Option<(u32, u32, u32, u32)> {
+  let width = pixmap.width();
+  let height = pixmap.height();
+  let data = pixmap.data();
+  let mut min_x = width;
+  let mut min_y = height;
+  let mut max_x = 0;
+  let mut max_y = 0;
+  let mut found = false;
+
+  for y in 0..height {
+    for x in 0..width {
+      let idx = ((y * width + x) as usize) * 4 + 3;
+      if data[idx] != 0 {
+        found = true;
+        min_x = min_x.min(x);
+        min_y = min_y.min(y);
+        max_x = max_x.max(x);
+        max_y = max_y.max(y);
+      }
+    }
+  }
+
+  if !found {
+    return None;
+  }
+
+  Some((min_x, min_y, max_x + 1, max_y + 1))
 }
 
 #[test]
@@ -109,7 +201,7 @@ fn malformed_colrv1_table_falls_back() {
   let instance =
     FontInstance::new(&corrupted, &[]).expect("corrupted COLR font should still parse instance");
   let face = corrupted.as_ttf_face().unwrap();
-  let gid = test_glyph_id(&face).expect("corrupted COLR glyph should still be addressable");
+  let gid = test_glyph_id(&face);
   let rendered = ColorFontRenderer::new().render(
     &corrupted,
     &instance,
@@ -145,6 +237,19 @@ fn load_variable_clip_font() -> LoadedFont {
     data: Arc::new(data),
     index: 0,
     family: "ColrV1VarClipTest".into(),
+    weight: FontWeight::NORMAL,
+    style: FontStyle::Normal,
+    stretch: FontStretch::Normal,
+  }
+}
+
+fn load_gvar_test_font() -> LoadedFont {
+  let data = std::fs::read(fixtures_path().join("fonts/colrv1-gvar-test.ttf")).unwrap();
+  LoadedFont {
+    id: None,
+    data: Arc::new(data),
+    index: 0,
+    family: "ColrV1GvarTest".into(),
     weight: FontWeight::NORMAL,
     style: FontStyle::Normal,
     stretch: FontStretch::Normal,
@@ -202,6 +307,33 @@ fn variable_clip_box_adjusts_bounds() {
     !diff.is_match(),
     "clip variation should change rendered pixels"
   );
+}
+
+#[test]
+fn variable_colrv1_applies_gvar_outlines() {
+  let font = load_gvar_test_font();
+  let text_color = Rgba::from_rgba8(25, 180, 230, 255);
+  let base = render_glyph(&font, 0, text_color, &[]);
+  let varied = render_glyph(
+    &font,
+    0,
+    text_color,
+    &[Variation {
+      tag: Tag::from_bytes(b"wght"),
+      value: 900.0,
+    }],
+  );
+  let diff = compare_images(&base.image, &varied.image, &CompareConfig::strict());
+  assert!(
+    !diff.is_match(),
+    "gvar-driven COLRv1 outlines should differ between variation instances"
+  );
+
+  let base_bounds = painted_bounds(&base.image).expect("base gvar glyph should paint");
+  let varied_bounds = painted_bounds(&varied.image).expect("varied gvar glyph should paint");
+  assert_eq!(base_bounds, (1, 1, 8, 46), "unexpected base glyph bounds");
+  assert_eq!(varied_bounds, (1, 1, 24, 46), "unexpected varied glyph bounds");
+  assert_ne!(base_bounds, varied_bounds, "variation should affect outline bounds");
 }
 
 fn find_table(data: &[u8], tag: &[u8; 4]) -> Option<(usize, usize)> {

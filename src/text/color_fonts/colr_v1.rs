@@ -6,7 +6,9 @@ use crate::text::font_instance::{glyph_transform, FontInstance};
 use read_fonts::tables::colr::{
   ClipBox, ColorLine, Colr, CompositeMode, Extend, Paint, PaintId, VarColorLine,
 };
-use read_fonts::tables::variations::{DeltaSetIndex, FloatItemDeltaTarget};
+use read_fonts::tables::variations::{
+  DeltaSetIndex, DeltaSetIndexMap, FloatItemDeltaTarget, ItemVariationStore,
+};
 use read_fonts::types::{F2Dot14, FWord, Fixed, GlyphId};
 use read_fonts::{FontRef, TableProvider};
 #[cfg(test)]
@@ -137,6 +139,14 @@ pub fn render_colr_glyph(
     return None;
   }
   let base_transform = glyph_transform(scale, synthetic_oblique, 0.0, 0.0);
+  let variations = {
+    let coords: Vec<F2Dot14> = normalized_coords
+      .iter()
+      .copied()
+      .map(F2Dot14::from_f32)
+      .collect();
+    VariationInfo::new(colr.clone(), &coords)
+  };
 
   let clip_path = colr
     .v1_clip_box(GlyphId::from(glyph_id.0 as u32))
@@ -154,6 +164,7 @@ pub fn render_colr_glyph(
     colr_entry: Arc::clone(&colr_entry),
     caches: Arc::clone(caches),
     font_key,
+    variations,
   };
 
   renderer.walk_paint(
@@ -260,6 +271,56 @@ fn raster_bounds(
   Some((min_x, min_y, max_x, max_y))
 }
 
+struct VariationInfo<'a> {
+  coords: Vec<F2Dot14>,
+  var_index_map: Option<DeltaSetIndexMap<'a>>,
+  item_variation_store: ItemVariationStore<'a>,
+}
+
+impl<'a> VariationInfo<'a> {
+  fn new(colr: Colr<'a>, coords: &[F2Dot14]) -> Option<Self> {
+    if coords.is_empty() {
+      return None;
+    }
+    let item_variation_store = colr.item_variation_store()?.ok()?;
+    let var_index_map = colr.var_index_map().and_then(|map| map.ok());
+    Some(Self {
+      coords: coords.to_vec(),
+      var_index_map,
+      item_variation_store,
+    })
+  }
+
+  fn delta(&self, var_index: u32) -> f32 {
+    let index = self
+      .var_index_map
+      .as_ref()
+      .and_then(|map| map.get(var_index).ok())
+      .unwrap_or_else(|| DeltaSetIndex {
+        outer: (var_index >> 16) as u16,
+        inner: (var_index & 0xFFFF) as u16,
+      });
+    self
+      .item_variation_store
+      .compute_delta(index, &self.coords)
+      .ok()
+      .map(|delta| delta as f32)
+      .unwrap_or(0.0)
+  }
+
+  fn fword(&self, base: i16, var_index: u32) -> f32 {
+    base as f32 + self.delta(var_index)
+  }
+
+  fn ufword(&self, base: u16, var_index: u32) -> f32 {
+    base as f32 + self.delta(var_index)
+  }
+
+  fn f2dot14(&self, base: F2Dot14, var_index: u32) -> f32 {
+    base.to_f32() + self.delta(var_index) / 16384.0
+  }
+}
+
 struct Renderer<'a, 'p> {
   instance: &'a FontInstance<'a>,
   palette: &'p [Rgba],
@@ -268,6 +329,7 @@ struct Renderer<'a, 'p> {
   colr_entry: Arc<ColrV1CacheEntry>,
   caches: Arc<Mutex<ColorFontCaches>>,
   font_key: FontKey,
+  variations: Option<VariationInfo<'static>>,
 }
 
 #[derive(Clone)]
@@ -311,6 +373,22 @@ struct ColorStop {
 }
 
 impl<'a, 'p> Renderer<'a, 'p> {
+  fn vary_fword(&self, value: i16, var_index_base: u32, offset: u32) -> f32 {
+    self
+      .variations
+      .as_ref()
+      .map(|variation| variation.fword(value, var_index_base + offset))
+      .unwrap_or(value as f32)
+  }
+
+  fn vary_ufword(&self, value: u16, var_index_base: u32, offset: u32) -> f32 {
+    self
+      .variations
+      .as_ref()
+      .map(|variation| variation.ufword(value, var_index_base + offset))
+      .unwrap_or(value as f32)
+  }
+
   fn walk_paint(
     &self,
     paint: Paint<'a>,
@@ -724,20 +802,26 @@ impl<'a, 'p> Renderer<'a, 'p> {
       }
       Paint::VarLinearGradient(gradient) => {
         let color_line = gradient.color_line().ok()?;
-        let (spread, stops) = resolve_var_color_line(color_line, self.palette, self.text_color)?;
+        let (spread, stops) = resolve_var_color_line(
+          color_line,
+          self.palette,
+          self.text_color,
+          self.variations.as_ref(),
+        )?;
+        let var_index = gradient.var_index_base();
         let p0 = map_point(
-          gradient.x0().to_i16() as f32,
-          gradient.y0().to_i16() as f32,
+          self.vary_fword(gradient.x0().to_i16(), var_index, 0),
+          self.vary_fword(gradient.y0().to_i16(), var_index, 1),
           combined,
         );
         let p1 = map_point(
-          gradient.x1().to_i16() as f32,
-          gradient.y1().to_i16() as f32,
+          self.vary_fword(gradient.x1().to_i16(), var_index, 2),
+          self.vary_fword(gradient.y1().to_i16(), var_index, 3),
           combined,
         );
         let p2 = map_point(
-          gradient.x2().to_i16() as f32,
-          gradient.y2().to_i16() as f32,
+          self.vary_fword(gradient.x2().to_i16(), var_index, 4),
+          self.vary_fword(gradient.y2().to_i16(), var_index, 5),
           combined,
         );
         Some(Brush::LinearGradient {
@@ -773,19 +857,25 @@ impl<'a, 'p> Renderer<'a, 'p> {
       }
       Paint::VarRadialGradient(radial) => {
         let color_line = radial.color_line().ok()?;
-        let (spread, stops) = resolve_var_color_line(color_line, self.palette, self.text_color)?;
+        let (spread, stops) = resolve_var_color_line(
+          color_line,
+          self.palette,
+          self.text_color,
+          self.variations.as_ref(),
+        )?;
+        let var_index = radial.var_index_base();
         let c0 = map_point(
-          radial.x0().to_i16() as f32,
-          radial.y0().to_i16() as f32,
+          self.vary_fword(radial.x0().to_i16(), var_index, 0),
+          self.vary_fword(radial.y0().to_i16(), var_index, 1),
           combined,
         );
         let c1 = map_point(
-          radial.x1().to_i16() as f32,
-          radial.y1().to_i16() as f32,
+          self.vary_fword(radial.x1().to_i16(), var_index, 3),
+          self.vary_fword(radial.y1().to_i16(), var_index, 4),
           combined,
         );
-        let r0 = fixed_to_f32(radial.radius0().to_fixed());
-        let r1 = fixed_to_f32(radial.radius1().to_fixed());
+        let r0 = self.vary_ufword(radial.radius0().to_u16(), var_index, 2);
+        let r1 = self.vary_ufword(radial.radius1().to_u16(), var_index, 5);
         Some(Brush::RadialGradient {
           start: c0,
           end: c1,
@@ -811,8 +901,12 @@ impl<'a, 'p> Renderer<'a, 'p> {
       }
       Paint::VarSweepGradient(sweep) => {
         let color_line = sweep.color_line().ok()?;
-        let (spread, stops) =
-          resolve_var_color_line_rgba(color_line, self.palette, self.text_color)?;
+        let (spread, stops) = resolve_var_color_line_rgba(
+          color_line,
+          self.palette,
+          self.text_color,
+          self.variations.as_ref(),
+        )?;
         Some(Brush::SweepGradient {
           center: Point::from_xy(
             sweep.center_x().to_i16() as f32,
@@ -1190,6 +1284,7 @@ fn resolve_var_color_line(
   line: VarColorLine<'_>,
   palette: &[Rgba],
   text_color: Rgba,
+  variations: Option<&VariationInfo<'_>>,
 ) -> Option<(SpreadMode, Vec<GradientStop>)> {
   let spread = match map_spread(line.extend()) {
     Some(s) => s,
@@ -1197,12 +1292,18 @@ fn resolve_var_color_line(
   };
   let mut stops = Vec::with_capacity(line.num_stops() as usize);
   for stop in line.color_stops() {
+    let var_index = stop.var_index_base();
+    let offset = variations
+      .as_ref()
+      .map(|variation| variation.f2dot14(stop.stop_offset(), var_index))
+      .unwrap_or_else(|| stop.stop_offset().to_f32());
+    let alpha = variations
+      .as_ref()
+      .map(|variation| F2Dot14::from_f32(variation.f2dot14(stop.alpha(), var_index + 1)))
+      .unwrap_or_else(|| stop.alpha());
     stops.push(GradientStop::new(
-      stop.stop_offset().to_f32(),
-      resolve_color(
-        resolve_palette_color(stop.palette_index(), palette, text_color),
-        stop.alpha(),
-      ),
+      offset,
+      resolve_color(resolve_palette_color(stop.palette_index(), palette, text_color), alpha),
     ));
   }
   Some((spread, stops))
@@ -1231,6 +1332,7 @@ fn resolve_var_color_line_rgba(
   line: VarColorLine<'_>,
   palette: &[Rgba],
   text_color: Rgba,
+  variations: Option<&VariationInfo<'_>>,
 ) -> Option<(SpreadMode, Vec<ColorStop>)> {
   let spread = match map_spread(line.extend()) {
     Some(s) => s,
@@ -1238,9 +1340,18 @@ fn resolve_var_color_line_rgba(
   };
   let mut stops = Vec::with_capacity(line.num_stops() as usize);
   for stop in line.color_stops() {
+    let var_index = stop.var_index_base();
+    let offset = variations
+      .as_ref()
+      .map(|variation| variation.f2dot14(stop.stop_offset(), var_index))
+      .unwrap_or_else(|| stop.stop_offset().to_f32());
+    let alpha = variations
+      .as_ref()
+      .map(|variation| F2Dot14::from_f32(variation.f2dot14(stop.alpha(), var_index + 1)))
+      .unwrap_or_else(|| stop.alpha());
     stops.push(ColorStop {
-      offset: stop.stop_offset().to_f32(),
-      color: resolve_rgba_color(stop.palette_index(), stop.alpha(), palette, text_color),
+      offset,
+      color: resolve_rgba_color(stop.palette_index(), alpha, palette, text_color),
     });
   }
   Some((spread, stops))
