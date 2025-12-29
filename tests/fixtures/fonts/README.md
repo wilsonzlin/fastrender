@@ -217,7 +217,10 @@ so CI and tests can run in fully hermetic environments without relying on platfo
 - **License:** CC0 / Public Domain.
 - **Glyphs:** U+0047 (`G`), U+0048 (`H`), and U+0049 (`I`) all reference a shared `rect`
   outline via `PaintGlyph`, each filled with a COLR v1 `PaintSweepGradient` using a different
-  `ColorLine.Extend` mode (PAD, REPEAT, REFLECT).
+  `ColorLine.Extend` mode (PAD, REPEAT, REFLECT). U+004A (`J`) reuses the PAD sweep gradient but
+  wraps it in a translate → scale → `PaintTransform` chain (scaleX=1.08, scaleY=0.92, dx=42,
+  dy=-48, then xx=0.88, yx=0.33, xy=-0.27, yy=1.02, dx=32, dy=-36) to exercise accumulation of
+  COLRv1 transforms for sweep gradients.
 - **Features exercised:** Sweep gradients with a non-trivial center (500, 400), start angle
   0.125 and end angle 1.625 (half-turn units), and a 3-stop palette-backed `ColorLine` to make
   extend-mode differences obvious. CPAL v1 provides a single 3-color palette.

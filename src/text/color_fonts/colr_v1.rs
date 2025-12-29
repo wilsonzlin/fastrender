@@ -12,6 +12,7 @@ use read_fonts::{FontRef, TableProvider};
 #[cfg(test)]
 use std::cell::Cell;
 use std::collections::HashSet;
+use std::f32::consts::PI;
 use std::mem;
 use std::sync::{Arc, Mutex};
 use tiny_skia::{
@@ -185,20 +186,15 @@ pub fn render_colr_glyph(
   let translate = Transform::from_translate(-min_x, -min_y);
 
   for command in commands {
-    if matches!(command.brush, Brush::SweepGradient { .. }) {
-      render_sweep_gradient_command(&mut pixmap, &command, min_x, min_y, clip_ref)?;
-    } else {
-      let mut paint = brush_to_paint(&command.brush, min_x, min_y)?;
-      paint.blend_mode = command.blend_mode;
-      paint.anti_alias = true;
-      pixmap.fill_path(
-        &command.path,
-        &paint,
-        FillRule::Winding,
-        translate,
-        clip_ref,
-      );
+    if let Brush::SweepGradient { .. } = command.brush {
+      render_sweep_gradient(&command, &mut pixmap, min_x, min_y, translate, clip_ref)?;
+      continue;
     }
+
+    let mut paint = brush_to_paint(&command.brush, min_x, min_y)?;
+    paint.blend_mode = command.blend_mode;
+    paint.anti_alias = true;
+    pixmap.fill_path(&command.path, &paint, FillRule::Winding, translate, clip_ref);
   }
 
   Some(ColorGlyphRaster {
@@ -296,14 +292,14 @@ enum Brush {
     center: Point,
     start_angle: f32,
     end_angle: f32,
-    stops: Vec<SweepGradientStop>,
+    stops: Vec<ColorStop>,
     spread: SpreadMode,
-    inv_transform: Option<Transform>,
+    transform: Transform,
   },
 }
 
 #[derive(Clone)]
-struct SweepGradientStop {
+struct ColorStop {
   offset: f32,
   color: Rgba,
 }
@@ -794,35 +790,34 @@ impl<'a, 'p> Renderer<'a, 'p> {
       }
       Paint::SweepGradient(sweep) => {
         let color_line = sweep.color_line().ok()?;
-        let (spread, stops) = resolve_color_line_stops(color_line, self.palette, self.text_color)?;
-        let center = Point::from_xy(
-          sweep.center_x().to_i16() as f32,
-          sweep.center_y().to_i16() as f32,
-        );
+        let (spread, stops) =
+          resolve_color_line_rgba(color_line, self.palette, self.text_color)?;
         Some(Brush::SweepGradient {
-          center,
-          start_angle: sweep.start_angle().to_f32(),
-          end_angle: sweep.end_angle().to_f32(),
+          center: Point::from_xy(
+            sweep.center_x().to_i16() as f32,
+            sweep.center_y().to_i16() as f32,
+          ),
+          start_angle: biased_angle_half_turns(sweep.start_angle()),
+          end_angle: biased_angle_half_turns(sweep.end_angle()),
           stops,
           spread,
-          inv_transform: combined.invert(),
+          transform: combined,
         })
       }
       Paint::VarSweepGradient(sweep) => {
         let color_line = sweep.color_line().ok()?;
         let (spread, stops) =
-          resolve_var_color_line_stops(color_line, self.palette, self.text_color)?;
-        let center = Point::from_xy(
-          sweep.center_x().to_i16() as f32,
-          sweep.center_y().to_i16() as f32,
-        );
+          resolve_var_color_line_rgba(color_line, self.palette, self.text_color)?;
         Some(Brush::SweepGradient {
-          center,
-          start_angle: sweep.start_angle().to_f32(),
-          end_angle: sweep.end_angle().to_f32(),
+          center: Point::from_xy(
+            sweep.center_x().to_i16() as f32,
+            sweep.center_y().to_i16() as f32,
+          ),
+          start_angle: biased_angle_half_turns(sweep.start_angle()),
+          end_angle: biased_angle_half_turns(sweep.end_angle()),
           stops,
           spread,
-          inv_transform: combined.invert(),
+          transform: combined,
         })
       }
       Paint::Glyph(paint_glyph) => {
@@ -1057,12 +1052,13 @@ fn brush_to_paint(brush: &Brush, offset_x: f32, offset_y: f32) -> Option<SkiaPai
   Some(paint)
 }
 
-fn render_sweep_gradient_command(
-  dest: &mut Pixmap,
+fn render_sweep_gradient(
   command: &DrawCommand,
-  glyph_left: f32,
-  glyph_top: f32,
-  clip_mask: Option<&Mask>,
+  target: &mut Pixmap,
+  min_x: f32,
+  min_y: f32,
+  translate: Transform,
+  clip: Option<&Mask>,
 ) -> Option<()> {
   let Brush::SweepGradient {
     center,
@@ -1070,223 +1066,93 @@ fn render_sweep_gradient_command(
     end_angle,
     stops,
     spread,
-    inv_transform,
-    ..
+    transform,
   } = &command.brush
   else {
-    return Some(());
+    return None;
   };
 
-  let sweep = end_angle - start_angle;
-  if !sweep.is_finite() || sweep.abs() < 1e-6 {
+  if stops.is_empty() {
     return Some(());
   }
 
-  let glyph_bounds = Rect::from_ltrb(
-    glyph_left,
-    glyph_top,
-    glyph_left + dest.width() as f32,
-    glyph_top + dest.height() as f32,
-  )?;
-  let path_bounds = command.path.bounds();
-  let left = glyph_bounds.left().max(path_bounds.left());
-  let top = glyph_bounds.top().max(path_bounds.top());
-  let right = glyph_bounds.right().min(path_bounds.right());
-  let bottom = glyph_bounds.bottom().min(path_bounds.bottom());
-  if left >= right || top >= bottom {
-    return Some(());
+  let span = end_angle - start_angle;
+  if span.abs() <= f32::EPSILON {
+    return None;
   }
+  let inv_span = 1.0 / span;
+  let inv_transform = transform.invert()?;
 
-  let crop_left = left.floor();
-  let crop_top = top.floor();
-  let crop_right = right.ceil();
-  let crop_bottom = bottom.ceil();
-  let crop_width = round_dimension(crop_right - crop_left)?;
-  let crop_height = round_dimension(crop_bottom - crop_top)?;
-  if crop_width == 0 || crop_height == 0 {
-    return Some(());
-  }
+  let width = target.width();
+  let height = target.height();
+  let mut mask = Mask::new(width, height)?;
+  mask.fill_path(&command.path, FillRule::Winding, true, translate);
 
-  let mut path_mask = Mask::new(crop_width, crop_height)?;
-  let mask_translate = Transform::from_translate(-crop_left, -crop_top);
-  path_mask.fill_path(&command.path, FillRule::Winding, true, mask_translate);
-
-  if let Some(clip) = clip_mask {
-    let origin_x = glyph_left as i32;
-    let origin_y = glyph_top as i32;
-    let clip_stride = clip.width() as usize;
-    let mask_stride = path_mask.width() as usize;
-    let clip_data = clip.data();
-    let mask_data = path_mask.data_mut();
-    for y in 0..crop_height as usize {
-      let clip_row = (crop_top as i32 - origin_y) as usize + y;
-      let clip_offset = clip_row * clip_stride + (crop_left as i32 - origin_x) as usize;
-      let mask_offset = y * mask_stride;
-      for x in 0..mask_stride {
-        let clip_val = clip_data[clip_offset + x] as u16;
-        let cov = mask_data[mask_offset + x] as u16;
-        mask_data[mask_offset + x] = ((cov * clip_val + 127) / 255) as u8;
-      }
+  if let Some(clip_mask) = clip {
+    for (coverage, clip_coverage) in mask.data_mut().iter_mut().zip(clip_mask.data()) {
+      let combined = (*coverage as u16 * *clip_coverage as u16 + 127) / 255;
+      *coverage = combined as u8;
     }
   }
 
-  if !path_mask.data().iter().any(|v| *v != 0) {
+  if mask.data().iter().all(|v| *v == 0) {
     return Some(());
   }
 
-  let mut gradient = Pixmap::new(crop_width, crop_height)?;
-  let mask_data = path_mask.data();
-  let mask_stride = path_mask.width() as usize;
-  let inv = *inv_transform;
-
-  if command.blend_mode == BlendMode::SourceOver {
-    let dest_stride = dest.width() as usize;
-    let dest_start_x = (crop_left - glyph_left) as usize;
-    let dest_start_y = (crop_top - glyph_top) as usize;
-    let dest_pixels = dest.pixels_mut();
-    for y in 0..crop_height as usize {
-      let row_offset = y * mask_stride;
-      let dest_row = (dest_start_y + y) * dest_stride + dest_start_x;
-      for x in 0..mask_stride {
-        let coverage = mask_data[row_offset + x];
-        if coverage == 0 {
-          continue;
-        }
-        let mut point = Point::from_xy(crop_left + x as f32 + 0.5, crop_top + y as f32 + 0.5);
-        if let Some(transform) = inv {
-          transform.map_point(&mut point);
-        }
-        let mut angle = (point.y - center.y).atan2(point.x - center.x).to_degrees();
-        angle = if sweep >= 0.0 {
-          (angle - start_angle).rem_euclid(360.0)
-        } else {
-          -((start_angle - angle).rem_euclid(360.0))
-        };
-        let pos = apply_spread(angle / sweep, *spread);
-        let color = sample_sweep_color(stops, pos);
-        let alpha = (color.a * (coverage as f32 / 255.0)).clamp(0.0, 1.0);
-        let src_a = (alpha * 255.0).round().clamp(0.0, 255.0) as u8;
-        if src_a == 0 {
-          continue;
-        }
-        let inv_a = 255 - src_a as u32;
-        let src_r = ((color.r as u32 * src_a as u32) + 127) / 255;
-        let src_g = ((color.g as u32 * src_a as u32) + 127) / 255;
-        let src_b = ((color.b as u32 * src_a as u32) + 127) / 255;
-        let dst_idx = dest_row + x;
-        let dst_px = dest_pixels[dst_idx];
-        let out_a = (src_a as u32 + ((dst_px.alpha() as u32 * inv_a + 127) / 255)).min(255) as u8;
-        let out_r = (src_r + ((dst_px.red() as u32 * inv_a + 127) / 255)).min(255) as u8;
-        let out_g = (src_g + ((dst_px.green() as u32 * inv_a + 127) / 255)).min(255) as u8;
-        let out_b = (src_b + ((dst_px.blue() as u32 * inv_a + 127) / 255)).min(255) as u8;
-        dest_pixels[dst_idx] = PremultipliedColorU8::from_rgba(out_r, out_g, out_b, out_a)
-          .unwrap_or(PremultipliedColorU8::TRANSPARENT);
-      }
-    }
-    return Some(());
-  }
-
-  let mut pixels = gradient.pixels_mut();
-  let transparent = PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap();
-
-  for y in 0..crop_height as usize {
-    let row_offset = y * mask_stride;
-    for x in 0..mask_stride {
-      let coverage = mask_data[row_offset + x];
+  let mut layer = Pixmap::new(width, height)?;
+  let mask_data = mask.data();
+  let layer_data = layer.pixels_mut();
+  let start = *start_angle;
+  for y in 0..height {
+    for x in 0..width {
+      let idx = (y * width + x) as usize;
+      let coverage = mask_data[idx];
       if coverage == 0 {
         continue;
       }
-      let mut point = Point::from_xy(crop_left + x as f32 + 0.5, crop_top + y as f32 + 0.5);
-      if let Some(transform) = inv {
-        transform.map_point(&mut point);
-      }
-      let mut angle = (point.y - center.y).atan2(point.x - center.x).to_degrees();
-      angle = if sweep >= 0.0 {
-        (angle - start_angle).rem_euclid(360.0)
-      } else {
-        -((start_angle - angle).rem_euclid(360.0))
-      };
-      let pos = apply_spread(angle / sweep, *spread);
-      let color = sample_sweep_color(stops, pos);
+
+      let world_x = min_x + x as f32 + 0.5;
+      let world_y = min_y + y as f32 + 0.5;
+      let mut point = Point::from_xy(world_x, world_y);
+      inv_transform.map_point(&mut point);
+
+      let dx = point.x - center.x;
+      let dy = point.y - center.y;
+      let angle = dy.atan2(dx) / PI;
+      let aligned = (angle - start).rem_euclid(2.0) + start;
+      let mut t = (aligned - start) * inv_span;
+      t = apply_spread_mode(t, *spread);
+
+      let color = sample_color_stops(stops, t);
       let alpha = (color.a * (coverage as f32 / 255.0)).clamp(0.0, 1.0);
-      pixels[row_offset + x] = PremultipliedColorU8::from_rgba(
-        color.r,
-        color.g,
-        color.b,
-        (alpha * 255.0).round().clamp(0.0, 255.0) as u8,
-      )
-      .unwrap_or(transparent);
+      if alpha <= 0.0 {
+        continue;
+      }
+      let pm_a = (alpha * 255.0).round().clamp(0.0, 255.0) as u8;
+      let pm_r = ((color.r as f32) * alpha).round().clamp(0.0, 255.0) as u8;
+      let pm_g = ((color.g as f32) * alpha).round().clamp(0.0, 255.0) as u8;
+      let pm_b = ((color.b as f32) * alpha).round().clamp(0.0, 255.0) as u8;
+      layer_data[idx] =
+        PremultipliedColorU8::from_rgba(pm_r, pm_g, pm_b, pm_a)
+          .unwrap_or(PremultipliedColorU8::TRANSPARENT);
     }
   }
 
-  let mut paint = PixmapPaint::default();
-  paint.blend_mode = command.blend_mode;
-  let dest_x = (crop_left - glyph_left) as i32;
-  let dest_y = (crop_top - glyph_top) as i32;
-  dest.draw_pixmap(
-    dest_x,
-    dest_y,
-    gradient.as_ref(),
+  let paint = PixmapPaint {
+    opacity: 1.0,
+    blend_mode: command.blend_mode,
+    ..Default::default()
+  };
+  target.draw_pixmap(
+    0,
+    0,
+    layer.as_ref(),
     &paint,
     Transform::identity(),
     None,
   );
 
   Some(())
-}
-
-fn apply_spread(mut t: f32, spread: SpreadMode) -> f32 {
-  match spread {
-    SpreadMode::Pad => t.clamp(0.0, 1.0),
-    SpreadMode::Repeat => t.rem_euclid(1.0),
-    SpreadMode::Reflect => {
-      t = t.rem_euclid(2.0);
-      if t > 1.0 {
-        2.0 - t
-      } else {
-        t
-      }
-    }
-  }
-}
-
-fn sample_sweep_color(stops: &[SweepGradientStop], pos: f32) -> Rgba {
-  if stops.is_empty() {
-    return Rgba::TRANSPARENT;
-  }
-  if stops.len() == 1 {
-    return stops[0].color;
-  }
-  if pos <= stops[0].offset {
-    return stops[0].color;
-  }
-  if pos >= stops.last().unwrap().offset {
-    return stops.last().unwrap().color;
-  }
-  for window in stops.windows(2) {
-    let s0 = &window[0];
-    let s1 = &window[1];
-    if pos < s0.offset {
-      return s0.color;
-    }
-    if pos <= s1.offset || (s1.offset - s0.offset).abs() < f32::EPSILON {
-      let span = (s1.offset - s0.offset).max(1e-6);
-      let frac = ((pos - s0.offset) / span).clamp(0.0, 1.0);
-      return Rgba {
-        r: ((1.0 - frac) * s0.color.r as f32 + frac * s1.color.r as f32)
-          .round()
-          .clamp(0.0, 255.0) as u8,
-        g: ((1.0 - frac) * s0.color.g as f32 + frac * s1.color.g as f32)
-          .round()
-          .clamp(0.0, 255.0) as u8,
-        b: ((1.0 - frac) * s0.color.b as f32 + frac * s1.color.b as f32)
-          .round()
-          .clamp(0.0, 255.0) as u8,
-        a: (1.0 - frac) * s0.color.a + frac * s1.color.a,
-      };
-    }
-  }
-  stops.last().unwrap().color
 }
 
 fn resolve_color(color: Rgba, alpha: F2Dot14) -> Color {
@@ -1345,46 +1211,58 @@ fn resolve_var_color_line(
   Some((spread, stops))
 }
 
-fn resolve_color_line_stops(
+fn resolve_color_line_rgba(
   line: ColorLine<'_>,
   palette: &[Rgba],
   text_color: Rgba,
-) -> Option<(SpreadMode, Vec<SweepGradientStop>)> {
+) -> Option<(SpreadMode, Vec<ColorStop>)> {
   let spread = match map_spread(line.extend()) {
     Some(s) => s,
     None => return None,
   };
   let mut stops = Vec::with_capacity(line.num_stops() as usize);
   for stop in line.color_stops() {
-    let mut color = resolve_palette_color(stop.palette_index(), palette, text_color);
-    color.a = (color.a * stop.alpha().to_f32()).clamp(0.0, 1.0);
-    stops.push(SweepGradientStop {
+    stops.push(ColorStop {
       offset: stop.stop_offset().to_f32(),
-      color,
+      color: resolve_rgba_color(stop.palette_index(), stop.alpha(), palette, text_color),
     });
   }
   Some((spread, stops))
 }
 
-fn resolve_var_color_line_stops(
+fn resolve_var_color_line_rgba(
   line: VarColorLine<'_>,
   palette: &[Rgba],
   text_color: Rgba,
-) -> Option<(SpreadMode, Vec<SweepGradientStop>)> {
+) -> Option<(SpreadMode, Vec<ColorStop>)> {
   let spread = match map_spread(line.extend()) {
     Some(s) => s,
     None => return None,
   };
   let mut stops = Vec::with_capacity(line.num_stops() as usize);
   for stop in line.color_stops() {
-    let mut color = resolve_palette_color(stop.palette_index(), palette, text_color);
-    color.a = (color.a * stop.alpha().to_f32()).clamp(0.0, 1.0);
-    stops.push(SweepGradientStop {
+    stops.push(ColorStop {
       offset: stop.stop_offset().to_f32(),
-      color,
+      color: resolve_rgba_color(stop.palette_index(), stop.alpha(), palette, text_color),
     });
   }
   Some((spread, stops))
+}
+
+fn resolve_rgba_color(
+  palette_index: u16,
+  alpha: F2Dot14,
+  palette: &[Rgba],
+  text_color: Rgba,
+) -> Rgba {
+  let mut base = resolve_palette_color(palette_index, palette, text_color);
+  base.a = (base.a * alpha.to_f32()).clamp(0.0, 1.0);
+  base
+}
+
+fn biased_angle_half_turns(angle: F2Dot14) -> f32 {
+  // Sweep gradients encode start/end angles with a +1.0 bias to allow 360° values.
+  angle.to_f32() + 1.0
 }
 
 fn rotate_degrees(angle: F2Dot14) -> f32 {
@@ -1423,6 +1301,58 @@ fn map_spread(extend: Extend) -> Option<SpreadMode> {
     Extend::Reflect => Some(SpreadMode::Reflect),
     Extend::Unknown => None,
   }
+}
+
+fn apply_spread_mode(mut t: f32, spread: SpreadMode) -> f32 {
+  match spread {
+    SpreadMode::Pad => t.clamp(0.0, 1.0),
+    SpreadMode::Repeat => t.rem_euclid(1.0),
+    SpreadMode::Reflect => {
+      t = t.rem_euclid(2.0);
+      if t > 1.0 {
+        2.0 - t
+      } else {
+        t
+      }
+    }
+  }
+}
+
+fn sample_color_stops(stops: &[ColorStop], position: f32) -> Rgba {
+  if stops.is_empty() {
+    return Rgba::TRANSPARENT;
+  }
+  if stops.len() == 1 {
+    return stops[0].color;
+  }
+
+  let first = &stops[0];
+  if position <= first.offset {
+    return first.color;
+  }
+  for pair in stops.windows(2) {
+    let (start, end) = (&pair[0], &pair[1]);
+    if position < start.offset {
+      return start.color;
+    }
+    if position <= end.offset || (end.offset - start.offset).abs() < f32::EPSILON {
+      let span = (end.offset - start.offset).max(1e-6);
+      let frac = ((position - start.offset) / span).clamp(0.0, 1.0);
+      return Rgba {
+        r: lerp_channel(start.color.r, end.color.r, frac),
+        g: lerp_channel(start.color.g, end.color.g, frac),
+        b: lerp_channel(start.color.b, end.color.b, frac),
+        a: start.color.a + (end.color.a - start.color.a) * frac,
+      };
+    }
+  }
+  stops.last().map(|stop| stop.color).unwrap_or(Rgba::TRANSPARENT)
+}
+
+fn lerp_channel(start: u8, end: u8, t: f32) -> u8 {
+  ((1.0 - t) * start as f32 + t * end as f32)
+    .round()
+    .clamp(0.0, 255.0) as u8
 }
 
 fn map_blend_mode(mode: CompositeMode) -> Option<BlendMode> {

@@ -57,12 +57,13 @@ def setup_basic_tables(fb: FontBuilder, glyphs: Dict[str, object]) -> None:
 
 def build_static_sweep_font(path: Path) -> None:
     fb = FontBuilder(UNITS_PER_EM, isTTF=True)
-    glyph_order = [".notdef", "rect", "pad", "repeat", "reflect"]
+    glyph_order = [".notdef", "rect", "pad", "repeat", "reflect", "transform"]
     fb.setupGlyphOrder(glyph_order)
     fb.setupCharacterMap({
         ord("G"): "pad",
         ord("H"): "repeat",
         ord("I"): "reflect",
+        ord("J"): "transform",
     })
 
     glyphs = {
@@ -71,6 +72,7 @@ def build_static_sweep_font(path: Path) -> None:
         "pad": rect_glyph(100, 0, 900, 800),
         "repeat": rect_glyph(100, 0, 900, 800),
         "reflect": rect_glyph(100, 0, 900, 800),
+        "transform": rect_glyph(100, 0, 900, 800),
     }
     setup_basic_tables(fb, glyphs)
     fb.setupNameTable({
@@ -99,8 +101,8 @@ def build_static_sweep_font(path: Path) -> None:
         ],
     }
 
-    def sweep_paint(extend: ExtendMode):
-        gradient = {
+    def sweep_gradient(extend: ExtendMode):
+        return {
             "Format": PaintFormat.PaintSweepGradient,
             "ColorLine": {**color_line, "Extend": extend},
             "centerX": 500,
@@ -108,13 +110,43 @@ def build_static_sweep_font(path: Path) -> None:
             "startAngle": half_turns_to_degrees(0.125),
             "endAngle": half_turns_to_degrees(1.625),
         }
-        return {"Format": PaintFormat.PaintGlyph, "Glyph": "rect", "Paint": gradient}
+
+    def sweep_paint(extend: ExtendMode):
+        return {"Format": PaintFormat.PaintGlyph, "Glyph": "rect", "Paint": sweep_gradient(extend)}
+
+    transformed_gradient = {
+        "Format": PaintFormat.PaintTransform,
+        "Paint": {
+            "Format": PaintFormat.PaintTranslate,
+            "Paint": {
+                "Format": PaintFormat.PaintScale,
+                "Paint": sweep_gradient(ExtendMode.PAD),
+                "scaleX": 1.08,
+                "scaleY": 0.92,
+            },
+            "dx": 42.0,
+            "dy": -48.0,
+        },
+        "Transform": {
+            "xx": 0.88,
+            "yx": 0.33,
+            "xy": -0.27,
+            "yy": 1.02,
+            "dx": 32.0,
+            "dy": -36.0,
+        },
+    }
 
     fb.font["COLR"] = buildCOLR(
         {
             "pad": sweep_paint(ExtendMode.PAD),
             "repeat": sweep_paint(ExtendMode.REPEAT),
             "reflect": sweep_paint(ExtendMode.REFLECT),
+            "transform": {
+                "Format": PaintFormat.PaintGlyph,
+                "Glyph": "rect",
+                "Paint": transformed_gradient,
+            },
         },
         version=1,
         glyphMap=fb.font.getReverseGlyphMap(),
