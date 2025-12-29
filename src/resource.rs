@@ -995,9 +995,10 @@ impl<T: ResourceFetcher + ?Sized> ResourceFetcher for Arc<T> {
 ///
 /// Fetches resources over HTTP/HTTPS with configurable timeouts and user agent.
 /// Also handles `file://` URLs and `data:` URLs.
+/// Clones share an internal `ureq::Agent` so connections and TLS state can be reused.
 ///
 /// # Example
-///
+/// 
 /// ```rust,no_run
 /// use fastrender::resource::HttpFetcher;
 /// use std::time::Duration;
@@ -1006,11 +1007,12 @@ impl<T: ResourceFetcher + ?Sized> ResourceFetcher for Arc<T> {
 ///     .with_timeout(Duration::from_secs(60))
 ///     .with_user_agent("MyApp/1.0");
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct HttpFetcher {
   user_agent: String,
   accept_language: String,
   policy: ResourcePolicy,
+  agent: Arc<ureq::Agent>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1019,7 +1021,29 @@ struct HttpCacheValidators<'a> {
   last_modified: Option<&'a str>,
 }
 
+impl std::fmt::Debug for HttpFetcher {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("HttpFetcher")
+      .field("user_agent", &self.user_agent)
+      .field("accept_language", &self.accept_language)
+      .field("policy", &self.policy)
+      .finish()
+  }
+}
+
 impl HttpFetcher {
+  fn build_agent(policy: &ResourcePolicy) -> Arc<ureq::Agent> {
+    let config = ureq::Agent::config_builder()
+      .http_status_as_error(false)
+      .timeout_global(Some(policy.request_timeout))
+      .build();
+    Arc::new(config.into())
+  }
+
+  fn rebuild_agent(&mut self) {
+    self.agent = Self::build_agent(&self.policy);
+  }
+
   /// Create a new HttpFetcher with default settings
   pub fn new() -> Self {
     Self::default()
@@ -1028,6 +1052,7 @@ impl HttpFetcher {
   /// Set the request timeout
   pub fn with_timeout(mut self, timeout: Duration) -> Self {
     self.policy.request_timeout = timeout;
+    self.rebuild_agent();
     self
   }
 
@@ -1052,6 +1077,7 @@ impl HttpFetcher {
   /// Apply a complete resource policy.
   pub fn with_policy(mut self, policy: ResourcePolicy) -> Self {
     self.policy = policy;
+    self.rebuild_agent();
     self
   }
 
@@ -1072,14 +1098,9 @@ impl HttpFetcher {
     accept_encoding: Option<&str>,
     validators: Option<HttpCacheValidators<'_>>,
   ) -> Result<FetchedResource> {
-    let config = ureq::Agent::config_builder()
-      .http_status_as_error(false)
-      .timeout_global(Some(self.policy.request_timeout))
-      .build();
-    let agent: ureq::Agent = config.into();
-
     let mut current = url.to_string();
     let mut validators = validators;
+    let agent = &self.agent;
     for _ in 0..self.policy.max_redirects {
       self.policy.ensure_url_allowed(&current)?;
       let allowed_limit = self.policy.allowed_response_limit()? as u64;
@@ -1279,10 +1300,12 @@ impl HttpFetcher {
 
 impl Default for HttpFetcher {
   fn default() -> Self {
+    let policy = ResourcePolicy::default();
     Self {
       user_agent: DEFAULT_USER_AGENT.to_string(),
       accept_language: DEFAULT_ACCEPT_LANGUAGE.to_string(),
-      policy: ResourcePolicy::default(),
+      agent: Self::build_agent(&policy),
+      policy,
     }
   }
 }
@@ -2552,6 +2575,37 @@ mod tests {
     assert_eq!(fetcher.policy.request_timeout, Duration::from_secs(60));
     assert_eq!(fetcher.user_agent, "Test/1.0");
     assert_eq!(fetcher.policy.max_response_bytes, 1024);
+  }
+
+  #[test]
+  fn http_fetcher_rebuilds_agent_and_shares_across_clones() {
+    let fetcher = HttpFetcher::new();
+    let original_agent = Arc::clone(&fetcher.agent);
+
+    let cloned = fetcher.clone();
+    assert_eq!(Arc::as_ptr(&original_agent), Arc::as_ptr(&cloned.agent));
+
+    let updated = fetcher.with_timeout(Duration::from_millis(50));
+    assert_ne!(Arc::as_ptr(&original_agent), Arc::as_ptr(&updated.agent));
+    assert_eq!(updated.policy.request_timeout, Duration::from_millis(50));
+
+    let updated_clone = updated.clone();
+    assert_eq!(
+      Arc::as_ptr(&updated.agent),
+      Arc::as_ptr(&updated_clone.agent)
+    );
+
+    let updated_agent = Arc::clone(&updated.agent);
+    let policy = ResourcePolicy::default().with_request_timeout(Duration::from_millis(75));
+    let rebuilt = updated.with_policy(policy);
+    assert_eq!(rebuilt.policy.request_timeout, Duration::from_millis(75));
+    assert_ne!(Arc::as_ptr(&updated_agent), Arc::as_ptr(&rebuilt.agent));
+  }
+
+  #[test]
+  fn http_fetcher_is_send_and_sync() {
+    fn assert_bounds<T: Send + Sync>() {}
+    assert_bounds::<HttpFetcher>();
   }
 
   #[test]
