@@ -1152,13 +1152,13 @@ pub fn dedupe_links_preserving_order(mut links: Vec<String>) -> Vec<String> {
 pub fn inject_css_into_html(html: &str, css: &str) -> String {
   let style_tag = format!("<style>{css}</style>");
 
-  if let Some(head_end) = html.find("</head>") {
+  if let Some(head_end) = find_tag_case_insensitive(html, "head", true) {
     let mut result = String::with_capacity(html.len() + style_tag.len());
     result.push_str(&html[..head_end]);
     result.push_str(&style_tag);
     result.push_str(&html[head_end..]);
     result
-  } else if let Some(body_start) = html.find("<body") {
+  } else if let Some(body_start) = find_tag_case_insensitive(html, "body", false) {
     let mut result = String::with_capacity(html.len() + style_tag.len());
     result.push_str(&html[..body_start]);
     result.push_str(&style_tag);
@@ -1167,6 +1167,63 @@ pub fn inject_css_into_html(html: &str, css: &str) -> String {
   } else {
     format!("{style_tag}{html}")
   }
+}
+
+fn find_tag_case_insensitive(html: &str, tag: &str, closing: bool) -> Option<usize> {
+  debug_assert!(tag.as_bytes().iter().all(|b| !b.is_ascii_uppercase()));
+
+  let bytes = html.as_bytes();
+  let tag_bytes = tag.as_bytes();
+  let mut search_from = 0;
+
+  while search_from < bytes.len() {
+    let rel = bytes[search_from..].iter().position(|b| *b == b'<')?;
+    let start = search_from + rel;
+    let mut pos = start + 1;
+
+    while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
+      pos += 1;
+    }
+
+    if closing {
+      if pos >= bytes.len() || bytes[pos] != b'/' {
+        search_from = start + 1;
+        continue;
+      }
+      pos += 1;
+      while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
+        pos += 1;
+      }
+    }
+
+    if pos + tag_bytes.len() > bytes.len() {
+      break;
+    }
+
+    let mut matched = true;
+    for (idx, expected) in tag_bytes.iter().enumerate() {
+      if bytes[pos + idx].to_ascii_lowercase() != *expected {
+        matched = false;
+        break;
+      }
+    }
+
+    if matched {
+      let after = pos + tag_bytes.len();
+      if after >= bytes.len() {
+        return Some(start);
+      }
+
+      let next = bytes[after];
+      if next == b'>' || next == b'/' || next.is_ascii_whitespace() {
+        return Some(start);
+      }
+    }
+
+    search_from = start + 1;
+  }
+
+  None
 }
 
 /// Infer a reasonable base URL for the document.
@@ -1323,6 +1380,38 @@ mod tests {
     }
     assert!(out.contains("p { margin: 0; }"));
     assert!(out.contains("body { color: black; }"));
+  }
+
+  #[test]
+  fn injects_before_uppercase_head_close() {
+    let html = "<html><HEAD><title>Test</title></HEAD   ><body></body></html>";
+    let css = "body { color: red; }";
+    let injected = inject_css_into_html(html, css);
+    assert_eq!(
+      injected,
+      "<html><HEAD><title>Test</title><style>body { color: red; }</style></HEAD   ><body></body></html>"
+    );
+  }
+
+  #[test]
+  fn injects_before_body_with_attributes() {
+    let html = "<html><BODY class=\"main\" data-flag=\"1\">Content</BODY></html>";
+    let css = "body { background: blue; }";
+    let injected = inject_css_into_html(html, css);
+    assert_eq!(
+      injected,
+      "<html><style>body { background: blue; }</style><BODY class=\"main\" data-flag=\"1\">Content</BODY></html>"
+    );
+  }
+
+  #[test]
+  fn inject_css_only_adds_style_block() {
+    let html = "<!doctype html>\n<body>\n  <p>unchanged</p>\n</body>";
+    let css = "p { margin: 0; }";
+    let injected = inject_css_into_html(html, css);
+    let style_tag = format!("<style>{css}</style>");
+    assert_eq!(injected.matches(&style_tag).count(), 1);
+    assert_eq!(injected.replace(&style_tag, ""), html);
   }
 
   #[test]
