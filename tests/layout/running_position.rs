@@ -151,7 +151,8 @@ fn inline_running_position_does_not_flow_text() {
         None
       }
     })
-    .collect::<String>();
+    .collect::<Vec<_>>()
+    .join("");
 
   assert!(flow_texts.contains("Before"));
   assert!(flow_texts.contains("After"));

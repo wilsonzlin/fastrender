@@ -205,7 +205,7 @@ fn strip_running_anchor_fragments(node: &mut FragmentNode) {
     strip_running_anchor_fragments(&mut child);
     kept.push(child);
   }
-  *children = kept;
+  *children = kept.into();
 }
 
 fn clear_running_position(node: &mut FragmentNode) {

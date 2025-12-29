@@ -1,4 +1,5 @@
 use crate::debug::runtime;
+use crate::tree::fragment_tree::FragmentNode;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Default, Clone, Copy)]
@@ -20,6 +21,7 @@ pub struct CloneSiteStats {
 
 #[derive(Default, Clone, Copy)]
 pub struct FragmentCloneProfileStats {
+  pub layout_cache_hit: CloneSiteStats,
   pub flex_layout_cache_hit: CloneSiteStats,
   pub flex_measure_reuse: CloneSiteStats,
   pub grid_measure_reuse: CloneSiteStats,
@@ -27,13 +29,15 @@ pub struct FragmentCloneProfileStats {
 
 #[derive(Clone, Copy)]
 pub enum CloneSite {
+  LayoutCacheHit,
   FlexLayoutCacheHit,
   FlexMeasureReuse,
   GridMeasureReuse,
 }
 
 impl CloneSite {
-  const ALL: [CloneSite; 3] = [
+  const ALL: [CloneSite; 4] = [
+    CloneSite::LayoutCacheHit,
     CloneSite::FlexLayoutCacheHit,
     CloneSite::FlexMeasureReuse,
     CloneSite::GridMeasureReuse,
@@ -41,6 +45,7 @@ impl CloneSite {
 
   fn name(self) -> &'static str {
     match self {
+      CloneSite::LayoutCacheHit => "layout_cache_hit",
       CloneSite::FlexLayoutCacheHit => "flex_layout_cache_hit",
       CloneSite::FlexMeasureReuse => "flex_measure_reuse",
       CloneSite::GridMeasureReuse => "grid_measure_reuse",
@@ -86,6 +91,7 @@ impl Counters {
   }
 }
 
+static LAYOUT_CACHE_COUNTERS: Counters = Counters::new();
 static FLEX_LAYOUT_COUNTERS: Counters = Counters::new();
 static FLEX_MEASURE_COUNTERS: Counters = Counters::new();
 static GRID_MEASURE_COUNTERS: Counters = Counters::new();
@@ -100,6 +106,7 @@ pub fn fragment_clone_profile_enabled() -> bool {
 
 fn counters_for_site(site: CloneSite) -> &'static Counters {
   match site {
+    CloneSite::LayoutCacheHit => &LAYOUT_CACHE_COUNTERS,
     CloneSite::FlexLayoutCacheHit => &FLEX_LAYOUT_COUNTERS,
     CloneSite::FlexMeasureReuse => &FLEX_MEASURE_COUNTERS,
     CloneSite::GridMeasureReuse => &GRID_MEASURE_COUNTERS,
@@ -113,6 +120,40 @@ pub fn reset_fragment_clone_profile() {
   for site in CloneSite::ALL {
     counters_for_site(site).reset();
   }
+}
+
+fn count_fragment_stats(fragment: &FragmentNode, stats: &mut CloneStats) {
+  stats.nodes += 1;
+  match &fragment.content {
+    crate::tree::fragment_tree::FragmentContent::Text { text, shaped, .. } => {
+      stats.text_fragments += 1;
+      stats.text_bytes += text.len() as u64;
+      if shaped.is_some() {
+        stats.shaped_texts += 1;
+      }
+    }
+    crate::tree::fragment_tree::FragmentContent::RunningAnchor { snapshot, .. } => {
+      count_fragment_stats(snapshot, stats);
+    }
+    _ => {}
+  }
+  for child in &fragment.children {
+    count_fragment_stats(child, stats);
+  }
+}
+
+pub fn collect_fragment_clone_stats(fragment: &FragmentNode) -> CloneStats {
+  let mut stats = CloneStats::default();
+  count_fragment_stats(fragment, &mut stats);
+  stats
+}
+
+pub fn record_fragment_clone_from_fragment(site: CloneSite, fragment: &FragmentNode) {
+  if !enabled() {
+    return;
+  }
+  let stats = collect_fragment_clone_stats(fragment);
+  record_fragment_clone(site, &stats);
 }
 
 pub fn record_fragment_clone(site: CloneSite, stats: &CloneStats) {
@@ -147,6 +188,7 @@ pub fn fragment_clone_profile_stats() -> FragmentCloneProfileStats {
     return FragmentCloneProfileStats::default();
   }
   FragmentCloneProfileStats {
+    layout_cache_hit: counters_for_site(CloneSite::LayoutCacheHit).snapshot(),
     flex_layout_cache_hit: counters_for_site(CloneSite::FlexLayoutCacheHit).snapshot(),
     flex_measure_reuse: counters_for_site(CloneSite::FlexMeasureReuse).snapshot(),
     grid_measure_reuse: counters_for_site(CloneSite::GridMeasureReuse).snapshot(),
@@ -158,41 +200,33 @@ pub fn log_fragment_clone_profile() {
     return;
   }
   let stats = fragment_clone_profile_stats();
-  let total_events = stats.flex_layout_cache_hit.events
-    + stats.flex_measure_reuse.events
-    + stats.grid_measure_reuse.events;
-  let total_nodes = stats.flex_layout_cache_hit.nodes
-    + stats.flex_measure_reuse.nodes
-    + stats.grid_measure_reuse.nodes;
-  let total_texts = stats.flex_layout_cache_hit.text_fragments
-    + stats.flex_measure_reuse.text_fragments
-    + stats.grid_measure_reuse.text_fragments;
-  let total_text_bytes = stats.flex_layout_cache_hit.text_bytes
-    + stats.flex_measure_reuse.text_bytes
-    + stats.grid_measure_reuse.text_bytes;
-  let total_shaped = stats.flex_layout_cache_hit.shaped_texts
-    + stats.flex_measure_reuse.shaped_texts
-    + stats.grid_measure_reuse.shaped_texts;
-
-  let site_parts = [
+  let sites = [
+    (CloneSite::LayoutCacheHit, stats.layout_cache_hit),
     (CloneSite::FlexLayoutCacheHit, stats.flex_layout_cache_hit),
     (CloneSite::FlexMeasureReuse, stats.flex_measure_reuse),
     (CloneSite::GridMeasureReuse, stats.grid_measure_reuse),
-  ]
-  .iter()
-  .map(|(site, s)| {
-    format!(
-      "{}: events={} nodes={} text_frags={} text_bytes={} shaped_texts={}",
-      site.name(),
-      s.events,
-      s.nodes,
-      s.text_fragments,
-      s.text_bytes,
-      s.shaped_texts
-    )
-  })
-  .collect::<Vec<_>>()
-  .join(" | ");
+  ];
+  let total_events = sites.iter().map(|(_, s)| s.events).sum::<u64>();
+  let total_nodes = sites.iter().map(|(_, s)| s.nodes).sum::<u64>();
+  let total_texts = sites.iter().map(|(_, s)| s.text_fragments).sum::<u64>();
+  let total_text_bytes = sites.iter().map(|(_, s)| s.text_bytes).sum::<u64>();
+  let total_shaped = sites.iter().map(|(_, s)| s.shaped_texts).sum::<u64>();
+
+  let site_parts = sites
+    .iter()
+    .map(|(site, s)| {
+      format!(
+        "{}: events={} nodes={} text_frags={} text_bytes={} shaped_texts={}",
+        site.name(),
+        s.events,
+        s.nodes,
+        s.text_fragments,
+        s.text_bytes,
+        s.shaped_texts
+      )
+    })
+    .collect::<Vec<_>>()
+    .join(" | ");
 
   eprintln!(
     "fragment clone profile (FASTR_PROFILE_FRAGMENT_CLONES=1): total_events={} total_nodes={} total_text_frags={} total_text_bytes={} shaped_texts={} | {}",

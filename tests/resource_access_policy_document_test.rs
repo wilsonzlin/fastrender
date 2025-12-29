@@ -12,6 +12,7 @@ fn iframe_documents_ignore_same_origin_subresource_policy() {
   let ctx = ResourceContext {
     policy,
     diagnostics: None,
+    iframe_depth_remaining: None,
   };
 
   assert!(

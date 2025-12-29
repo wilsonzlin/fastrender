@@ -2289,7 +2289,7 @@ impl BlockFormattingContext {
     }
     if column_height <= 0.0 {
       return Ok((
-        Arc::try_unwrap(flow_root.children).unwrap_or_else(|arc| (*arc).clone()),
+        flow_root.children.to_vec(),
         flow_height,
         flow_positioned,
         flow_height,
@@ -2300,7 +2300,7 @@ impl BlockFormattingContext {
     let fragment_count = boundaries.len().saturating_sub(1);
     if fragment_count == 0 {
       return Ok((
-        Arc::try_unwrap(flow_root.children).unwrap_or_else(|arc| (*arc).clone()),
+        flow_root.children.to_vec(),
         flow_height,
         flow_positioned,
         flow_height,
@@ -2354,7 +2354,7 @@ impl BlockFormattingContext {
           offset.y += row_offset;
         }
         fragment_heights[index] = axis.block_size(&clipped.bounds);
-        let mut children = Arc::try_unwrap(clipped.children).unwrap_or_else(|arc| (*arc).clone());
+        let mut children: Vec<_> = clipped.children.into_iter().collect();
         for child in &mut children {
           child.bounds = child.bounds.translate(offset);
           if let Some(logical) = child.logical_override {
@@ -3705,23 +3705,23 @@ fn convert_fragment_axes(
     fragment.bounds = Rect::from_xywh(phys_x, phys_y, block_size, inline_size);
     let child_inline = inline_size;
     let child_block = block_size;
-    let mapped_children: Vec<_> = Arc::try_unwrap(fragment.children)
-      .unwrap_or_else(|arc| (*arc).clone())
+    let mapped_children: Vec<_> = fragment
+      .children
       .into_iter()
       .map(|c| convert_fragment_axes(c, child_inline, child_block, style_wm, dir))
       .collect();
-    fragment.children = Arc::new(mapped_children);
+    fragment.children = mapped_children.into();
     fragment
   } else {
     // Keep axes; only recurse.
     let child_inline = inline_size;
     let child_block = block_size;
-    let mapped_children: Vec<_> = Arc::try_unwrap(fragment.children)
-      .unwrap_or_else(|arc| (*arc).clone())
+    let mapped_children: Vec<_> = fragment
+      .children
       .into_iter()
       .map(|c| convert_fragment_axes(c, child_inline, child_block, style_wm, dir))
       .collect();
-    fragment.children = Arc::new(mapped_children);
+    fragment.children = mapped_children.into();
     fragment
   }
 }

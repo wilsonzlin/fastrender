@@ -7,7 +7,7 @@
 //! out of layout is treated as flow order; this module decides where to break and
 //! clones the appropriate fragment subtrees for each fragmentainer.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
 use crate::error::RenderStage;
 use crate::geometry::{Point, Rect};
@@ -19,7 +19,7 @@ use crate::style::page::PageSide;
 use crate::style::types::{BreakBetween, BreakInside, Direction, WritingMode};
 use crate::style::{block_axis_is_horizontal, block_axis_positive, ComputedStyle};
 use crate::tree::fragment_tree::{
-  FragmentContent, FragmentNode, FragmentSliceInfo, FragmentainerPath,
+  FragmentChildren, FragmentContent, FragmentNode, FragmentSliceInfo, FragmentainerPath,
 };
 
 /// The fragmentation context determines how break hints are interpreted.
@@ -919,7 +919,7 @@ pub(crate) fn clip_node(
   }
 
   for child in node.children.iter() {
-    match clip_node(
+    if let Some(child_clipped) = clip_node(
       child,
       axis,
       fragment_start,
@@ -932,8 +932,7 @@ pub(crate) fn clip_node(
       fragment_count,
       context,
     )? {
-      Some(child_clipped) => Arc::make_mut(&mut cloned.children).push(child_clipped),
-      None => {}
+      cloned.children_mut().push(child_clipped);
     }
   }
 
@@ -981,7 +980,7 @@ fn clone_without_children(node: &FragmentNode) -> FragmentNode {
     content: node.content.clone(),
     table_borders: node.table_borders.clone(),
     baseline: node.baseline,
-    children: Arc::new(Vec::new()),
+    children: FragmentChildren::default(),
     style: node.style.clone(),
     starting_style: node.starting_style.clone(),
     fragment_index: node.fragment_index,
@@ -1082,7 +1081,7 @@ fn inject_table_headers_and_footers(
       offset += end - start;
     }
     max_block_extent = max_block_extent.max(offset);
-    Arc::make_mut(&mut clipped.children).splice(0..0, clones);
+    clipped.children_mut().splice(0..0, clones);
   }
 
   if !footers.is_empty() && (!has_footer || fragment_index + 1 < fragment_count) {
@@ -1127,7 +1126,7 @@ fn inject_table_headers_and_footers(
       }
     }
     max_block_extent = max_block_extent.max(footer_offset);
-    Arc::make_mut(&mut clipped.children).extend(clones);
+    clipped.children_mut().extend(clones);
   }
 
   let children_block_end = clipped

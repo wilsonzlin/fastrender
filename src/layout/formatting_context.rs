@@ -34,6 +34,7 @@
 use crate::debug::runtime;
 use crate::geometry::Size;
 use crate::layout::constraints::LayoutConstraints;
+use crate::layout::fragment_clone_profile::{self, CloneSite};
 use crate::layout::fragmentation::FragmentationOptions;
 use crate::style::display::FormattingContextType;
 use crate::style::float::Float;
@@ -272,6 +273,7 @@ thread_local! {
   static LAYOUT_CACHE_STORES: Cell<usize> = const { Cell::new(0) };
   static LAYOUT_CACHE_EVICTIONS: Cell<usize> = const { Cell::new(0) };
   static LAYOUT_CACHE_ENTRY_LIMIT: Cell<Option<usize>> = const { Cell::new(None) };
+  static LAYOUT_CACHE_CLONE_RETURNS: Cell<usize> = const { Cell::new(0) };
 }
 
 fn pack_viewport_size(size: Size) -> u64 {
@@ -707,6 +709,7 @@ pub(crate) fn layout_cache_reset_counters() {
   LAYOUT_CACHE_EVICTIONS.with(|counter| counter.set(0));
   let epoch = LAYOUT_CACHE_EPOCH.with(|cell| cell.get());
   subgrid_cache_use_epoch(epoch, true);
+  LAYOUT_CACHE_CLONE_RETURNS.with(|counter| counter.set(0));
 }
 
 /// Configures the layout cache epoch and run-scoped parameters.
@@ -774,6 +777,11 @@ pub(crate) fn layout_cache_lookup(
 
   if let Some(fragment) = result {
     LAYOUT_CACHE_HITS.with(|counter| counter.set(counter.get() + 1));
+    LAYOUT_CACHE_CLONE_RETURNS.with(|counter| counter.set(counter.get() + 1));
+    fragment_clone_profile::record_fragment_clone_from_fragment(
+      CloneSite::LayoutCacheHit,
+      fragment.as_ref(),
+    );
     return Some((*fragment).clone());
   }
   None
@@ -815,12 +823,13 @@ pub(crate) fn layout_cache_store(
   LAYOUT_CACHE_STORES.with(|counter| counter.set(counter.get() + 1));
 }
 
-pub(crate) fn layout_cache_stats() -> (usize, usize, usize, usize) {
+pub(crate) fn layout_cache_stats() -> (usize, usize, usize, usize, usize) {
   (
     LAYOUT_CACHE_LOOKUPS.with(|counter| counter.get()),
     LAYOUT_CACHE_HITS.with(|counter| counter.get()),
     LAYOUT_CACHE_STORES.with(|counter| counter.get()),
     LAYOUT_CACHE_EVICTIONS.with(|counter| counter.get()),
+    LAYOUT_CACHE_CLONE_RETURNS.with(|counter| counter.get()),
   )
 }
 
@@ -1356,7 +1365,7 @@ mod tests {
     let hit = layout_cache_lookup(&node, fc_type, &constraints, viewport);
     assert!(hit.is_some());
 
-    let (lookups, hits, stores, evictions) = layout_cache_stats();
+    let (lookups, hits, stores, evictions, _clones) = layout_cache_stats();
     assert_eq!(lookups, 2);
     assert_eq!(hits, 1);
     assert_eq!(stores, 1);
@@ -1403,7 +1412,7 @@ mod tests {
     let updated = layout_cache_lookup(&changed_node, fc_type, &constraints, viewport).unwrap();
     assert_eq!(updated.bounds.width(), 60.0);
 
-    let (lookups, hits, stores, evictions) = layout_cache_stats();
+    let (lookups, hits, stores, evictions, _clones) = layout_cache_stats();
     assert_eq!(lookups, 2);
     assert_eq!(hits, 1);
     assert_eq!(stores, 2);
@@ -1434,7 +1443,7 @@ mod tests {
     assert!(layout_cache_lookup(&node, fc_type, &constraints, viewport).is_none());
     LAYOUT_RESULT_CACHE.with(|cache| assert!(cache.borrow().is_empty()));
 
-    let (lookups, hits, stores, evictions) = layout_cache_stats();
+    let (lookups, hits, stores, evictions, _clones) = layout_cache_stats();
     assert_eq!(lookups, 1);
     assert_eq!(hits, 0);
     assert_eq!(stores, 1);

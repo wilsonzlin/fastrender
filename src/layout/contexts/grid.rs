@@ -184,6 +184,11 @@ fn record_measure_layout_call() {
 
 #[cfg(not(test))]
 fn record_measure_layout_call() {}
+
+fn record_fragment_clone(site: CloneSite, fragment: &FragmentNode) {
+  fragment_clone_profile::record_fragment_clone_from_fragment(site, fragment);
+}
+
 fn constraints_from_taffy(
   viewport_size: crate::geometry::Size,
   known: taffy::geometry::Size<Option<f32>>,

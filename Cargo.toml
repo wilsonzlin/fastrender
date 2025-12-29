@@ -96,6 +96,10 @@ harness = false
 name = "layout_parallel"
 harness = false
 
+[[bench]]
+name = "fragment_clone"
+harness = false
+
 [profile.release]
 opt-level = 3
 lto = true

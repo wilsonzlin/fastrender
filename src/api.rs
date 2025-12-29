@@ -168,8 +168,12 @@ use crate::tree::box_tree::SrcsetCandidate;
 use crate::tree::box_tree::SrcsetDescriptor;
 use crate::tree::box_tree::{FormControlKind, TextControlKind};
 use crate::tree::fragment_tree::FragmentContent;
+use crate::tree::fragment_tree::FragmentInstrumentationGuard;
 use crate::tree::fragment_tree::FragmentNode;
 use crate::tree::fragment_tree::FragmentTree;
+use crate::tree::fragment_tree::{
+  enable_fragment_instrumentation, reset_fragment_instrumentation_counters,
+};
 use fontdb::Database as FontDbDatabase;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
@@ -1589,6 +1593,10 @@ pub struct LayoutDiagnostics {
   pub layout_cache_hits: Option<usize>,
   pub layout_cache_stores: Option<usize>,
   pub layout_cache_evictions: Option<usize>,
+  pub layout_cache_clones: Option<usize>,
+  pub flex_cache_clones: Option<usize>,
+  pub fragment_deep_clones: Option<usize>,
+  pub fragment_traversed: Option<usize>,
 }
 
 /// Paint pipeline statistics.
@@ -3395,12 +3403,18 @@ impl FastRender {
         rec.stats.layout.flex_intrinsic = Some(flex_calls);
         rec.stats.layout.inline_intrinsic = Some(inline_calls);
 
-        let (cache_lookups, cache_hits, cache_stores, cache_evictions) =
+        let (cache_lookups, cache_hits, cache_stores, cache_evictions, cache_clones) =
           crate::layout::formatting_context::layout_cache_stats();
         rec.stats.layout.layout_cache_lookups = Some(cache_lookups);
         rec.stats.layout.layout_cache_hits = Some(cache_hits);
         rec.stats.layout.layout_cache_stores = Some(cache_stores);
         rec.stats.layout.layout_cache_evictions = Some(cache_evictions);
+        rec.stats.layout.layout_cache_clones = Some(cache_clones);
+        rec.stats.layout.flex_cache_clones =
+          Some(crate::layout::flex_profile::layout_cache_clone_count() as usize);
+        let fragment_metrics = crate::tree::fragment_tree::fragment_instrumentation_counters();
+        rec.stats.layout.fragment_deep_clones = Some(fragment_metrics.deep_clones);
+        rec.stats.layout.fragment_traversed = Some(fragment_metrics.traversed_nodes);
 
         if rec.verbose() {
           let profile = crate::style::cascade::capture_cascade_profile();
@@ -5504,6 +5518,14 @@ impl FastRender {
     if report_intrinsic {
       intrinsic_cache_reset_counters();
     }
+    let _fragment_metrics_guard: Option<FragmentInstrumentationGuard> =
+      report_layout_cache.then(|| {
+        reset_fragment_instrumentation_counters();
+        enable_fragment_instrumentation(true)
+      });
+    if report_layout_cache {
+      crate::layout::flex_profile::reset_layout_cache_clones();
+    }
     let layout_profile = layout_profile_enabled();
     if layout_profile {
       reset_layout_profile();
@@ -5837,8 +5859,15 @@ impl FastRender {
     if report_layout_cache {
       let stats = self.layout_engine.stats();
       eprintln!(
-        "layout_cache hits={} misses={} total_passes={}",
-        stats.cache_hits, stats.cache_misses, stats.total_layouts
+        "layout_cache hits={} misses={} clones={} flex_clones={} evictions={} deep_clones={} traversed_nodes={} total_passes={}",
+        stats.layout_cache_hits,
+        stats.layout_cache_misses,
+        stats.layout_cache_clones,
+        stats.flex_cache_clones,
+        stats.layout_cache_evictions,
+        stats.fragment_deep_clones,
+        stats.fragment_traversed,
+        stats.total_layouts
       );
     }
 

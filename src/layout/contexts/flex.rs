@@ -49,7 +49,7 @@ use crate::layout::formatting_context::layout_cache_store;
 use crate::layout::formatting_context::FormattingContext;
 use crate::layout::formatting_context::IntrinsicSizingMode;
 use crate::layout::formatting_context::LayoutError;
-use crate::layout::fragment_clone_profile::{self, CloneSite, CloneStats};
+use crate::layout::fragment_clone_profile::{self, CloneSite};
 use crate::layout::profile::layout_timer;
 use crate::layout::profile::LayoutKind;
 use crate::layout::taffy_integration::{record_taffy_invocation, TaffyAdapterKind};
@@ -96,6 +96,7 @@ use taffy::style::Overflow as TaffyOverflow;
 use taffy::TaffyTree;
 
 fn translate_fragment_tree(fragment: &mut FragmentNode, delta: Point) {
+  crate::tree::fragment_tree::record_fragment_traversal(1);
   fragment.bounds = Rect::new(
     Point::new(fragment.bounds.x() + delta.x, fragment.bounds.y() + delta.y),
     fragment.bounds.size,
@@ -176,33 +177,8 @@ fn trace_flex_text_ids() -> Vec<usize> {
     .unwrap_or_default()
 }
 
-fn count_fragment_stats(fragment: &FragmentNode, stats: &mut CloneStats) {
-  stats.nodes += 1;
-  match &fragment.content {
-    FragmentContent::Text { text, shaped, .. } => {
-      stats.text_fragments += 1;
-      stats.text_bytes += text.len() as u64;
-      if shaped.is_some() {
-        stats.shaped_texts += 1;
-      }
-    }
-    FragmentContent::RunningAnchor { snapshot, .. } => {
-      count_fragment_stats(snapshot, stats);
-    }
-    _ => {}
-  }
-  for child in fragment.children.iter() {
-    count_fragment_stats(child, stats);
-  }
-}
-
 fn record_fragment_clone(site: CloneSite, fragment: &FragmentNode) {
-  if !fragment_clone_profile::fragment_clone_profile_enabled() {
-    return;
-  }
-  let mut stats = CloneStats::default();
-  count_fragment_stats(fragment, &mut stats);
-  fragment_clone_profile::record_fragment_clone(site, &stats);
+  fragment_clone_profile::record_fragment_clone_from_fragment(site, fragment);
 }
 
 fn fragment_first_baseline(fragment: &FragmentNode) -> Option<f32> {
@@ -433,6 +409,7 @@ impl FormattingContext for FlexFormattingContext {
     if let Some((cache_key, key)) = layout_cache_entry {
       if let Some((_, fragment)) = self.layout_fragments.get(cache_key, &key) {
         flex_profile::record_layout_cache_hit();
+        flex_profile::record_layout_cache_clone();
         record_fragment_clone(CloneSite::FlexLayoutCacheHit, fragment.as_ref());
         return Ok((*fragment).clone());
       }
@@ -449,6 +426,7 @@ impl FormattingContext for FlexFormattingContext {
           MAX_LAYOUT_CACHE_PER_NODE,
         );
         flex_profile::record_layout_cache_hit();
+        flex_profile::record_layout_cache_clone();
         record_fragment_clone(CloneSite::FlexLayoutCacheHit, fragment.as_ref());
         return Ok((*fragment).clone());
       }

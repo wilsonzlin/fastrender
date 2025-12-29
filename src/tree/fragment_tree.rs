@@ -34,6 +34,27 @@
 //! assert_eq!(fragment.bounds.x(), 10.0);
 //! assert!(fragment.contains_point(Point::new(50.0, 30.0)));
 //! ```
+//!
+//! # Structural sharing
+//!
+//! Fragment trees clone via structural sharing: child vectors are wrapped in an `Arc` and cloned
+//! by reference. Mutations must go through `children_mut()` (or `&mut fragment.children`), which
+//! triggers copy-on-write and preserves immutability for cached subtrees. Use `deep_clone()` when
+//! a fully-owned copy of a fragment subtree is required.
+//!
+//! # Structural sharing invariants
+//!
+//! - Fragment nodes are treated as immutable once produced by layout. Cached subtrees may be reused
+//!   across formatting context cache hits, so mutations must always go through `children_mut()` to
+//!   trigger copy-on-write when a shared child slice is still referenced elsewhere.
+//! - `clone()` is intentionally shallow and should remain effectively O(1) without heap allocations;
+//!   use [`deep_clone`](FragmentNode::deep_clone) when a call site needs to detach the entire
+//!   subtree for mutation.
+//! - When adding new mutation sites, prefer `FragmentNode::clone_without_children` and
+//!   `FragmentNode::set_children` to avoid accidentally deep-cloning child lists.
+//! - Fragment clone instrumentation (`FASTR_PROFILE_FRAGMENT_CLONES=1`) records deep clone events and
+//!   traversal counts when translation routines walk subtrees. Enable it when validating structural
+//!   sharing or cache reuse.
 
 use crate::css::types::KeyframesRule;
 use crate::geometry::Point;
@@ -47,7 +68,159 @@ use crate::text::pipeline::ShapedRun;
 use crate::tree::box_tree::{BoxNode, BoxTree, ReplacedType};
 use std::collections::HashMap;
 use std::fmt;
+use std::ops::{Deref, DerefMut};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+
+static FRAGMENT_DEEP_CLONES: AtomicUsize = AtomicUsize::new(0);
+static FRAGMENT_TRAVERSAL_NODES: AtomicUsize = AtomicUsize::new(0);
+static FRAGMENT_INSTRUMENTATION_ENABLED: AtomicBool = AtomicBool::new(false);
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FragmentInstrumentationCounters {
+  pub deep_clones: usize,
+  pub traversed_nodes: usize,
+}
+
+pub fn reset_fragment_instrumentation_counters() {
+  FRAGMENT_DEEP_CLONES.store(0, Ordering::Relaxed);
+  FRAGMENT_TRAVERSAL_NODES.store(0, Ordering::Relaxed);
+}
+
+pub fn fragment_instrumentation_counters() -> FragmentInstrumentationCounters {
+  FragmentInstrumentationCounters {
+    deep_clones: FRAGMENT_DEEP_CLONES.load(Ordering::Relaxed),
+    traversed_nodes: FRAGMENT_TRAVERSAL_NODES.load(Ordering::Relaxed),
+  }
+}
+
+pub fn set_fragment_instrumentation_enabled(enabled: bool) {
+  FRAGMENT_INSTRUMENTATION_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+pub(crate) fn fragment_instrumentation_enabled() -> bool {
+  FRAGMENT_INSTRUMENTATION_ENABLED.load(Ordering::Relaxed)
+}
+
+pub(crate) fn record_fragment_traversal(nodes: usize) {
+  if FRAGMENT_INSTRUMENTATION_ENABLED.load(Ordering::Relaxed) && nodes > 0 {
+    FRAGMENT_TRAVERSAL_NODES.fetch_add(nodes, Ordering::Relaxed);
+  }
+}
+
+fn record_deep_clone() {
+  if FRAGMENT_INSTRUMENTATION_ENABLED.load(Ordering::Relaxed) {
+    FRAGMENT_DEEP_CLONES.fetch_add(1, Ordering::Relaxed);
+  }
+}
+
+pub struct FragmentInstrumentationGuard {
+  previous: bool,
+}
+
+impl Drop for FragmentInstrumentationGuard {
+  fn drop(&mut self) {
+    set_fragment_instrumentation_enabled(self.previous);
+  }
+}
+
+pub fn enable_fragment_instrumentation(enabled: bool) -> FragmentInstrumentationGuard {
+  let previous = FRAGMENT_INSTRUMENTATION_ENABLED.swap(enabled, Ordering::Relaxed);
+  FragmentInstrumentationGuard { previous }
+}
+
+/// Shared, copy-on-write fragment children storage.
+///
+/// Fragment nodes clone cheaply by sharing their children vectors through an `Arc`. Mutable access
+/// uses [`Arc::make_mut`], so call sites can mutate through `&mut FragmentChildren` (or the
+/// convenience [`FragmentNode::children_mut`] helper) without risking aliasing.
+#[derive(Debug, Clone, Default)]
+pub struct FragmentChildren(Arc<Vec<FragmentNode>>);
+
+impl FragmentChildren {
+  pub fn new(children: Vec<FragmentNode>) -> Self {
+    Self(Arc::new(children))
+  }
+
+  /// Returns the number of strong references pointing at this child slice.
+  pub fn strong_count(&self) -> usize {
+    Arc::strong_count(&self.0)
+  }
+
+  /// Returns true when two child lists point to the same allocation.
+  pub fn ptr_eq(&self, other: &Self) -> bool {
+    Arc::ptr_eq(&self.0, &other.0)
+  }
+
+  /// Produces a deep clone of all descendants, breaking any structural sharing.
+  pub fn deep_clone(&self) -> Self {
+    Self(Arc::new(
+      self.iter().map(FragmentNode::deep_clone).collect(),
+    ))
+  }
+
+  /// Returns a shallow clone of the underlying vector.
+  pub fn to_vec(&self) -> Vec<FragmentNode> {
+    self.iter().cloned().collect()
+  }
+}
+
+impl From<Vec<FragmentNode>> for FragmentChildren {
+  fn from(children: Vec<FragmentNode>) -> Self {
+    Self::new(children)
+  }
+}
+
+impl Deref for FragmentChildren {
+  type Target = Vec<FragmentNode>;
+
+  fn deref(&self) -> &Self::Target {
+    &self.0
+  }
+}
+
+impl DerefMut for FragmentChildren {
+  fn deref_mut(&mut self) -> &mut Self::Target {
+    Arc::make_mut(&mut self.0)
+  }
+}
+
+impl<'a> IntoIterator for &'a FragmentChildren {
+  type Item = &'a FragmentNode;
+  type IntoIter = std::slice::Iter<'a, FragmentNode>;
+
+  fn into_iter(self) -> Self::IntoIter {
+    self.0.iter()
+  }
+}
+
+impl<'a> IntoIterator for &'a mut FragmentChildren {
+  type Item = &'a mut FragmentNode;
+  type IntoIter = std::slice::IterMut<'a, FragmentNode>;
+
+  fn into_iter(self) -> Self::IntoIter {
+    let vec = Arc::make_mut(&mut self.0);
+    vec.iter_mut()
+  }
+}
+
+impl IntoIterator for FragmentChildren {
+  type Item = FragmentNode;
+  type IntoIter = std::vec::IntoIter<FragmentNode>;
+
+  fn into_iter(self) -> Self::IntoIter {
+    match Arc::try_unwrap(self.0) {
+      Ok(vec) => vec.into_iter(),
+      Err(shared) => (*shared).clone().into_iter(),
+    }
+  }
+}
+
+impl FromIterator<FragmentNode> for FragmentChildren {
+  fn from_iter<T: IntoIterator<Item = FragmentNode>>(iter: T) -> Self {
+    Self::new(iter.into_iter().collect())
+  }
+}
 
 /// Content type of a fragment
 ///
@@ -382,7 +555,7 @@ pub struct FragmentNode {
   /// For block fragments: block and line children
   /// For line fragments: inline and text children
   /// For inline/text/replaced: typically empty
-  pub children: Arc<Vec<FragmentNode>>,
+  pub children: FragmentChildren,
 
   /// Computed style for painting
   ///
@@ -470,7 +643,7 @@ impl FragmentNode {
       content,
       table_borders: None,
       baseline: None,
-      children: Arc::new(children),
+      children: children.into(),
       style: None,
       starting_style: None,
       fragment_index: 0,
@@ -499,7 +672,7 @@ impl FragmentNode {
       content,
       table_borders: None,
       baseline: None,
-      children: Arc::new(children),
+      children: children.into(),
       style: Some(style),
       starting_style: None,
       fragment_index: 0,
@@ -840,6 +1013,7 @@ impl FragmentNode {
   /// subtree. Use sparingly; most callers should prefer [`translate`], which
   /// keeps child coordinates relative to their parent.
   pub fn translate_subtree_absolute(&self, offset: Point) -> Self {
+    record_fragment_traversal(self.node_count());
     let content = match &self.content {
       FragmentContent::RunningAnchor { name, snapshot } => FragmentContent::RunningAnchor {
         name: name.clone(),
@@ -854,13 +1028,12 @@ impl FragmentNode {
       content,
       table_borders: self.table_borders.clone(),
       baseline: self.baseline,
-      children: Arc::new(
-        self
-          .children
-          .iter()
-          .map(|child| child.translate_subtree_absolute(offset))
-          .collect(),
-      ),
+      children: self
+        .children
+        .iter()
+        .map(|child| child.translate_subtree_absolute(offset))
+        .collect::<Vec<_>>()
+        .into(),
       style: self.style.clone(),
       starting_style: None,
       fragment_index: self.fragment_index,
@@ -972,9 +1145,9 @@ impl FragmentNode {
     self.children.as_ref()
   }
 
-  /// Returns mutable access to this fragment's children.
-  pub fn children_mut(&mut self) -> &mut Vec<FragmentNode> {
-    Arc::make_mut(&mut self.children)
+  /// Returns a mutable handle to the children, triggering copy-on-write when shared.
+  pub fn children_mut(&mut self) -> &mut FragmentChildren {
+    &mut self.children
   }
 
   /// Returns an iterator over direct children
@@ -995,7 +1168,7 @@ impl FragmentNode {
       content: self.content.clone(),
       table_borders: self.table_borders.clone(),
       baseline: self.baseline,
-      children: Arc::new(Vec::new()),
+      children: FragmentChildren::default(),
       style: self.style.clone(),
       starting_style: self.starting_style.clone(),
       fragment_index: self.fragment_index,
@@ -1010,7 +1183,7 @@ impl FragmentNode {
 
   /// Replaces the current children vector.
   pub fn set_children(&mut self, children: Vec<FragmentNode>) {
-    self.children = Arc::new(children);
+    self.children = children.into();
   }
 
   /// Recursively clones this fragment and its descendants, ensuring unique child storage.
@@ -1019,6 +1192,7 @@ impl FragmentNode {
   /// painting. Use this when a caller needs to mutate the cloned tree without affecting other
   /// sharers.
   pub fn deep_clone(&self) -> Self {
+    record_deep_clone();
     let content = match &self.content {
       FragmentContent::RunningAnchor { name, snapshot } => FragmentContent::RunningAnchor {
         name: name.clone(),
@@ -1034,7 +1208,7 @@ impl FragmentNode {
       content,
       table_borders: self.table_borders.clone(),
       baseline: self.baseline,
-      children: Arc::new(self.children.iter().map(FragmentNode::deep_clone).collect()),
+      children: self.children.deep_clone(),
       style: self.style.clone(),
       starting_style: self.starting_style.clone(),
       fragment_index: self.fragment_index,
@@ -1045,6 +1219,20 @@ impl FragmentNode {
       scroll_overflow: self.scroll_overflow,
       fragmentation: self.fragmentation.clone(),
     }
+  }
+
+  /// Counts the total number of nodes in this subtree, including nested running anchors.
+  pub fn node_count(&self) -> usize {
+    let anchor_count = match &self.content {
+      FragmentContent::RunningAnchor { snapshot, .. } => snapshot.node_count(),
+      _ => 0,
+    };
+    1 + anchor_count
+      + self
+        .children
+        .iter()
+        .map(FragmentNode::node_count)
+        .sum::<usize>()
   }
 }
 
@@ -1614,7 +1802,7 @@ mod tests {
     let parent = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), vec![child]);
 
     let clone = parent.clone();
-    assert_eq!(Arc::strong_count(&parent.children), 2);
+    assert_eq!(parent.children.strong_count(), 2);
     assert_eq!(clone.children.len(), 1);
   }
 
@@ -1624,8 +1812,8 @@ mod tests {
     let parent = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), vec![child]);
 
     let mut clone = parent.deep_clone();
-    assert_eq!(Arc::strong_count(&parent.children), 1);
-    assert_eq!(Arc::strong_count(&clone.children), 1);
+    assert_eq!(parent.children.strong_count(), 1);
+    assert_eq!(clone.children.strong_count(), 1);
 
     clone.children_mut()[0].bounds = clone.children[0].bounds.translate(Point::new(5.0, 0.0));
     assert_ne!(clone.children[0].bounds.x(), parent.children[0].bounds.x());
@@ -1708,6 +1896,26 @@ mod tests {
     );
 
     assert_eq!(parent.children().count(), 2);
+  }
+
+  #[test]
+  fn test_fragment_clone_shares_children() {
+    let child = FragmentNode::new_text(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), "a".into(), 8.0);
+    let parent = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), vec![child]);
+
+    let cloned = parent.clone();
+    assert!(parent.children.ptr_eq(&cloned.children));
+    assert_eq!(parent.children.strong_count(), 2);
+  }
+
+  #[test]
+  fn test_fragment_deep_clone_breaks_sharing() {
+    let child = FragmentNode::new_text(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), "a".into(), 8.0);
+    let parent = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), vec![child]);
+
+    let cloned = parent.deep_clone();
+    assert!(!parent.children.ptr_eq(&cloned.children));
+    assert_eq!(parent.children.len(), cloned.children.len());
   }
 
   #[test]

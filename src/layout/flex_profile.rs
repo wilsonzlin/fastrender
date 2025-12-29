@@ -1,4 +1,5 @@
 use crate::debug::runtime;
+use crate::tree::fragment_tree::fragment_instrumentation_enabled;
 use std::collections::HashMap;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -34,6 +35,7 @@ static COMPUTE_TIME_NS: AtomicU64 = AtomicU64::new(0);
 static CONVERT_TIME_NS: AtomicU64 = AtomicU64::new(0);
 static LAYOUT_CACHE_HITS: AtomicU64 = AtomicU64::new(0);
 static LAYOUT_CACHE_STORES: AtomicU64 = AtomicU64::new(0);
+static LAYOUT_CACHE_CLONES: AtomicU64 = AtomicU64::new(0);
 static MATERIALIZE_COUNT: AtomicU64 = AtomicU64::new(0);
 static MEASURE_SHARD_STATS: OnceLock<RwLock<CacheShardStats>> = OnceLock::new();
 static LAYOUT_SHARD_STATS: OnceLock<RwLock<CacheShardStats>> = OnceLock::new();
@@ -226,6 +228,7 @@ pub fn reset_flex_profile() {
   CONVERT_TIME_NS.store(0, Ordering::Relaxed);
   LAYOUT_CACHE_HITS.store(0, Ordering::Relaxed);
   LAYOUT_CACHE_STORES.store(0, Ordering::Relaxed);
+  LAYOUT_CACHE_CLONES.store(0, Ordering::Relaxed);
   MATERIALIZE_COUNT.store(0, Ordering::Relaxed);
   PROGRESS_NEXT.store(0, Ordering::Relaxed);
   if let Some(lock) = MEASURE_SHARD_STATS.get() {
@@ -304,12 +307,25 @@ pub fn record_layout_cache_store() {
   }
 }
 
+pub fn record_layout_cache_clone() {
+  if enabled() || fragment_instrumentation_enabled() {
+    LAYOUT_CACHE_CLONES.fetch_add(1, Ordering::Relaxed);
+  }
+}
+
+pub fn layout_cache_clone_count() -> u64 {
+  LAYOUT_CACHE_CLONES.load(Ordering::Relaxed)
+}
+
+pub fn reset_layout_cache_clones() {
+  LAYOUT_CACHE_CLONES.store(0, Ordering::Relaxed);
+}
+
 pub fn record_fragment_materialize() {
   if enabled() {
     MATERIALIZE_COUNT.fetch_add(1, Ordering::Relaxed);
   }
 }
-
 #[derive(Copy, Clone)]
 pub enum DimState {
   Known,
@@ -481,6 +497,7 @@ pub fn log_flex_profile(total: Duration) {
   let measure_unique = MEASURE_UNIQUE_KEYS.load(Ordering::Relaxed);
   let layout_hits = LAYOUT_CACHE_HITS.load(Ordering::Relaxed);
   let layout_stores = LAYOUT_CACHE_STORES.load(Ordering::Relaxed);
+  let layout_clones = LAYOUT_CACHE_CLONES.load(Ordering::Relaxed);
   let materialize_count = MATERIALIZE_COUNT.load(Ordering::Relaxed);
   let measure_shards = cache_shard_stats(CacheKind::Measure);
   let layout_shards = cache_shard_stats(CacheKind::Layout);
@@ -521,7 +538,7 @@ pub fn log_flex_profile(total: Duration) {
   let (layout_shard_hits, layout_shard_misses) = shard_totals(&layout_shards);
   if enabled {
     eprintln!(
-            "flex profile: total_ms={:.2} build_ms={:.2} compute_ms={:.2} convert_ms={:.2} measure_ms={:.2} lookups={} hits={} hit_rate={:.2}% stores={} unique_keys={} layout_cache_hits={} layout_cache_stores={} materializations={} buckets=[kw/kh:{} kw/dh:{} kw/oh:{} dw/kh:{} dw/dh:{} dw/oh:{} ow/kh:{} ow/dh:{} ow/oh:{}] bucket_hits=[kw/kh:{} kw/dh:{} kw/oh:{} dw/kh:{} dw/dh:{} dw/oh:{} ow/kh:{} ow/dh:{} ow/oh:{}] bucket_hit_rate%=[kw/kh:{:.1} kw/dh:{:.1} kw/oh:{:.1} dw/kh:{:.1} dw/dh:{:.1} dw/oh:{:.1} ow/kh:{:.1} ow/dh:{:.1} ow/oh:{:.1}]",
+            "flex profile: total_ms={:.2} build_ms={:.2} compute_ms={:.2} convert_ms={:.2} measure_ms={:.2} lookups={} hits={} hit_rate={:.2}% stores={} unique_keys={} layout_cache_hits={} layout_cache_stores={} layout_cache_clones={} materializations={} buckets=[kw/kh:{} kw/dh:{} kw/oh:{} dw/kh:{} dw/dh:{} dw/oh:{} ow/kh:{} ow/dh:{} ow/oh:{}] bucket_hits=[kw/kh:{} kw/dh:{} kw/oh:{} dw/kh:{} dw/dh:{} dw/oh:{} ow/kh:{} ow/dh:{} ow/oh:{}] bucket_hit_rate%=[kw/kh:{:.1} kw/dh:{:.1} kw/oh:{:.1} dw/kh:{:.1} dw/dh:{:.1} dw/oh:{:.1} ow/kh:{:.1} ow/dh:{:.1} ow/oh:{:.1}]",
             total.as_secs_f64() * 1000.0,
             build_ms,
             compute_ms,
@@ -538,6 +555,7 @@ pub fn log_flex_profile(total: Duration) {
             measure_unique,
             layout_hits,
             layout_stores,
+            layout_clones,
             materialize_count,
             buckets.first().copied().unwrap_or(0),
             buckets.get(1).copied().unwrap_or(0),
@@ -574,7 +592,6 @@ pub fn log_flex_profile(total: Duration) {
       );
     }
   }
-
   if histogram_enabled() {
     if let Some(map) = HISTOGRAM.get() {
       if let Ok(guard) = map.lock() {

@@ -14886,7 +14886,7 @@ mod tests {
       .find(|child| {
         matches!(
           child.content,
-          FragmentContent::Text { ref text, .. } if text == "Hello "
+          FragmentContent::Text { ref text, .. } if text.as_ref() == "Hello "
         )
       })
       .expect("hello fragment");

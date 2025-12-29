@@ -19,7 +19,7 @@ fn marker_paints_after_background() {
   let marker = FragmentNode::new_with_style(
     Rect::from_xywh(0.0, 0.0, 20.0, 20.0),
     FragmentContent::Text {
-      text: "•".to_string(),
+      text: "•".to_string().into(),
       box_id: None,
       baseline_offset: 16.0,
       shaped: None,

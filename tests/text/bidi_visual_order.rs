@@ -18,7 +18,7 @@ fn collect_text_with_x(
   let mut stack = vec![fragment];
   while let Some(node) = stack.pop() {
     if let fastrender::tree::fragment_tree::FragmentContent::Text { text, .. } = &node.content {
-      out.push((text.clone(), node.bounds.x()));
+      out.push((text.to_string(), node.bounds.x()));
     }
     for child in &node.children {
       stack.push(child);

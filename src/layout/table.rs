@@ -6257,7 +6257,7 @@ mod tests {
 
   fn collect_running_anchor_names(fragment: &FragmentNode, names: &mut Vec<String>) {
     if let FragmentContent::RunningAnchor { name, .. } = &fragment.content {
-      names.push(name.clone());
+      names.push(name.to_string());
     }
     for child in fragment.children.iter() {
       collect_running_anchor_names(child, names);
@@ -7579,6 +7579,7 @@ mod tests {
     let mut constraints: Vec<ColumnConstraints> = (0..structure.column_count)
       .map(|_| ColumnConstraints::new(0.0, 0.0))
       .collect();
+    let style_overrides = StyleOverrideCache::default();
     let tfc = TableFormattingContext::new();
     tfc.populate_column_constraints(
       &table,
@@ -7586,6 +7587,7 @@ mod tests {
       &mut constraints,
       DistributionMode::Auto,
       None,
+      &style_overrides,
     );
 
     let flex_expected = 100.0;

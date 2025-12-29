@@ -26,7 +26,7 @@ fn marker_shadow_respects_opacity() {
   let marker = FragmentNode::new_with_style(
     Rect::from_xywh(10.0, 10.0, 10.0, 10.0),
     FragmentContent::Text {
-      text: "•".to_string(),
+      text: "•".to_string().into(),
       box_id: None,
       baseline_offset: 10.0,
       shaped: None,

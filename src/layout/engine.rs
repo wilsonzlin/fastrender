@@ -308,6 +308,18 @@ pub struct LayoutStats {
   /// Number of cached entries evicted during this run.
   pub layout_cache_evictions: usize,
 
+  /// Number of cached fragments cloned from the thread-local layout cache.
+  pub layout_cache_clones: usize,
+
+  /// Number of cached fragments cloned from flex layout caches.
+  pub flex_cache_clones: usize,
+
+  /// Number of explicit deep fragment clones requested.
+  pub fragment_deep_clones: usize,
+
+  /// Total fragment nodes walked during translation/normalization instrumentation.
+  pub fragment_traversed: usize,
+
   /// Total number of layout operations performed
   pub total_layouts: usize,
 }
@@ -565,12 +577,20 @@ impl LayoutEngine {
     if let Err(RenderError::Timeout { elapsed, .. }) = check_active(RenderStage::Layout) {
       return Err(LayoutError::Timeout { elapsed });
     }
+    crate::tree::fragment_tree::reset_fragment_instrumentation_counters();
+    let instrument_fragments =
+      crate::layout::fragment_clone_profile::fragment_clone_profile_enabled();
+    let _fragment_instrumentation_guard = instrument_fragments
+      .then(|| crate::tree::fragment_tree::enable_fragment_instrumentation(true));
     let use_cache = self.config.enable_cache;
     let reset_for_run = reset_caches || !use_cache;
 
     let epoch = self.cache.start_run(reset_for_run);
     layout_cache_use_epoch(epoch, use_cache, reset_for_run, self.config.fragmentation);
     intrinsic_cache_use_epoch(epoch, reset_for_run);
+    if reset_for_run {
+      crate::layout::flex_profile::reset_layout_cache_clones();
+    }
 
     if reset_for_run {
       // Reset any per-run caches so a fresh layout starts from a clean slate.
@@ -817,19 +837,25 @@ impl LayoutEngine {
 
   /// Returns statistics about layout operations
   ///
-  /// Cache hit/miss counts reflect intrinsic sizing cache usage while
-  /// `total_layouts` reports how many layout passes have been executed.
+  /// Cache hit/miss counts reflect intrinsic sizing cache usage while the layout cache fields and
+  /// clone counters track subtree reuse. `total_layouts` reports how many layout passes have been
+  /// executed.
   pub fn stats(&self) -> LayoutStats {
     let (lookups, hits, _, _, _, _) = crate::layout::formatting_context::intrinsic_cache_stats();
     let cache_misses = lookups.saturating_sub(hits);
-    let (layout_lookups, layout_hits, _, evictions) = layout_cache_stats();
+    let (layout_lookups, layout_hits, _, evictions, layout_clones) = layout_cache_stats();
     let layout_cache_misses = layout_lookups.saturating_sub(layout_hits);
+    let fragment_metrics = crate::tree::fragment_tree::fragment_instrumentation_counters();
     LayoutStats {
       cache_hits: hits,
       cache_misses,
       layout_cache_hits: layout_hits,
       layout_cache_misses,
       layout_cache_evictions: evictions,
+      layout_cache_clones: layout_clones,
+      flex_cache_clones: crate::layout::flex_profile::layout_cache_clone_count() as usize,
+      fragment_deep_clones: fragment_metrics.deep_clones,
+      fragment_traversed: fragment_metrics.traversed_nodes,
       total_layouts: self.cache.run_count(),
     }
   }
