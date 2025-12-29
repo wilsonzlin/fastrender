@@ -18,10 +18,10 @@ fi
 export CARGO_PROFILE_RELEASE_DEBUG=1
 export CARGO_PROFILE_RELEASE_STRIP=none
 
-cargo build --release --bin pageset_progress
+FEATURE_ARGS=(--features disk_cache)
+cargo build --release "${FEATURE_ARGS[@]}" --bin pageset_progress
 
 perf record -F 99 --call-graph dwarf -- \
   target/release/pageset_progress run --jobs 1 --pages "${PAGE_STEM}" "$@"
 
 echo "Run: perf report"
-

@@ -16,7 +16,27 @@ fn help_lists_commands() {
   assert!(
     stdout.contains("render-page")
       && stdout.contains("update-goldens")
-      && stdout.contains("diff-renders"),
+      && stdout.contains("diff-renders")
+      && stdout.contains("pageset"),
     "help output should mention available subcommands; got:\n{stdout}"
+  );
+}
+
+#[test]
+fn pageset_help_mentions_disk_cache_flag() {
+  let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    .args(["pageset", "--help"])
+    .output()
+    .expect("run cargo xtask pageset --help");
+
+  assert!(
+    output.status.success(),
+    "pageset help should exit successfully"
+  );
+
+  let stdout = String::from_utf8_lossy(&output.stdout);
+  assert!(
+    stdout.contains("--no-disk-cache"),
+    "pageset help should mention the disk cache opt-out; got:\n{stdout}"
   );
 }

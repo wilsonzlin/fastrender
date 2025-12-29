@@ -1,5 +1,5 @@
 use anyhow::{anyhow, bail, Context, Result};
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 use image::{Rgba, RgbaImage};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -62,6 +62,10 @@ struct PagesetArgs {
   /// Skip fetching and only update progress from the existing cache
   #[arg(long)]
   no_fetch: bool,
+
+  /// Disable the disk-backed cache (on by default for reproducible runs)
+  #[arg(long = "no-disk-cache", default_value_t = true, action = ArgAction::SetFalse)]
+  disk_cache: bool,
 
   /// Extra arguments forwarded to `pageset_progress run` (use `--` before these)
   #[arg(last = true)]
@@ -294,18 +298,30 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
     bail!("jobs must be > 0");
   }
 
+  // `fetch_pages` and `pageset_progress` should use the same features so the cache
+  // directory layout and fetch behavior stay consistent across runs.
+  let mut cargo_features = Vec::new();
+  if args.disk_cache {
+    cargo_features.extend(["--features", "disk_cache"]);
+  }
+  let disk_cache_status = if args.disk_cache { "enabled" } else { "disabled" };
+
   if !args.no_fetch {
     let mut cmd = Command::new("cargo");
     cmd
       .arg("run")
       .arg("--release")
+      .args(&cargo_features)
       .args(["--bin", "fetch_pages"])
       .arg("--")
       .arg("--jobs")
       .arg(args.jobs.to_string())
       .arg("--timeout")
       .arg(args.fetch_timeout.to_string());
-    println!("Updating cached pages...");
+    println!(
+      "Updating cached pages (jobs={}, timeout={}s, disk_cache={})...",
+      args.jobs, args.fetch_timeout, disk_cache_status
+    );
     run_command(cmd)?;
   }
 
@@ -313,6 +329,7 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
   cmd
     .arg("run")
     .arg("--release")
+    .args(&cargo_features)
     .args(["--bin", "pageset_progress"])
     .arg("--")
     .arg("run")
@@ -321,7 +338,10 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
     .arg("--timeout")
     .arg(args.render_timeout.to_string());
   cmd.args(&args.extra);
-  println!("Updating progress/pages scoreboard...");
+  println!(
+    "Updating progress/pages scoreboard (jobs={}, hard timeout={}s, disk_cache={})...",
+    args.jobs, args.render_timeout, disk_cache_status
+  );
   run_command(cmd)?;
 
   Ok(())

@@ -6,6 +6,8 @@ FastRender has many internal debug/profiling toggles controlled via environment 
 - `fetch_and_render`
 - `inspect_frag`
 
+Pageset wrappers (`cargo xtask pageset`, `scripts/pageset.sh`, and the profiling scripts) enable the `disk_cache` cargo feature by default to reuse cached assets; set `DISK_CACHE=0` when invoking the scripts to opt out and force fresh fetches.
+
 The rendering pipeline parses the environment once into a typed [`RuntimeToggles`](../src/debug/runtime.rs) structure. Library callers can override these values without mutating the process environment by constructing a `RuntimeToggles` instance and supplying it via `FastRender::builder().runtime_toggles(...)` or `RenderOptions::with_runtime_toggles(...)`.
 
 ## Commonly useful

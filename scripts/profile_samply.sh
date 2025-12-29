@@ -24,7 +24,8 @@ export CARGO_PROFILE_RELEASE_DEBUG=1
 export CARGO_PROFILE_RELEASE_STRIP=none
 export RUSTFLAGS="${RUSTFLAGS:--C force-frame-pointers=yes}"
 
-cargo build --release --bin pageset_progress
+FEATURE_ARGS=(--features disk_cache)
+cargo build --release "${FEATURE_ARGS[@]}" --bin pageset_progress
 
 samply record --save-only --no-open -o "${OUT_FILE}" -- \
   target/release/pageset_progress run --jobs 1 --pages "${PAGE_STEM}" "$@"
@@ -37,4 +38,3 @@ if command -v python3 >/dev/null 2>&1; then
   echo "Summary (terminal-friendly):"
   python3 scripts/samply_summary.py "${OUT_FILE}" --top 25 || true
 fi
-

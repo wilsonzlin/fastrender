@@ -33,6 +33,7 @@ See unit tests in `src/css/loader.rs` for edge-case coverage.
 - Fetches performed by the CLI and library default to [`fastrender::resource::CachingFetcher`], an in-memory LRU with single-flight semantics to avoid duplicate concurrent requests.
 - When built with the optional `disk_cache` feature, subresource fetches can be wrapped in [`fastrender::resource::DiskCachingFetcher`], which persists bytes plus minimal metadata (content-type, validators, final URL) under `fetches/assets/`.
 - Cached HTTP responses are revalidated with `ETag`/`Last-Modified` when present; a `304 Not Modified` response refreshes the cached validators without dropping the stored bytes.
+- Pageset-oriented wrappers (`cargo xtask pageset`, `scripts/pageset.sh`, `scripts/profile_*`) enable `disk_cache` by default so subsequent runs avoid refetching the same subresources and stay reproducible; pass `--no-disk-cache`/`DISK_CACHE=0` to force cold fetches.
 
 Stylesheet fetches are best-effort: failures (network errors, blocked by `ResourcePolicy`, invalid
 `@import` targets, etc.) are skipped while recording an entry in `RenderDiagnostics.fetch_errors`
