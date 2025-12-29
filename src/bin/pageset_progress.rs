@@ -1334,7 +1334,11 @@ fn read_progress_dir_allow_empty(dir: &Path) -> io::Result<Vec<LoadedProgress>> 
       .file_stem()
       .map(|s| s.to_string_lossy().to_string())
       .unwrap_or_else(|| path.display().to_string());
-    progresses.push(LoadedProgress { stem, progress });
+    progresses.push(LoadedProgress {
+      stem,
+      progress,
+      stats: None,
+    });
   }
   Ok(progresses)
 }
@@ -1379,7 +1383,11 @@ fn read_progress_dir_tolerant(dir: &Path) -> ProgressLoadOutcome {
           .file_stem()
           .map(|s| s.to_string_lossy().to_string())
           .unwrap_or_else(|| path.display().to_string());
-        outcome.progresses.push(LoadedProgress { stem, progress });
+        outcome.progresses.push(LoadedProgress {
+          stem,
+          progress,
+          stats: None,
+        });
       }
       Err(err) => {
         outcome.warnings.push(format!(
