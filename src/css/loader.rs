@@ -1573,7 +1573,6 @@ mod tests {
     assert!(out.contains("body { color: red; }"));
     assert!(diags.iter().any(|(_, reason)| reason.contains("cyclic")));
   }
-  }
 
   #[test]
   fn extracts_stylesheet_hrefs_with_resolution() {
