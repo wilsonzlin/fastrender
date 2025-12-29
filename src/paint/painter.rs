@@ -199,6 +199,8 @@ pub struct Painter {
   trace: TraceHandle,
   /// Scroll offsets for viewport and element scroll containers.
   scroll_state: ScrollState,
+  /// Remaining iframe nesting depth allowed for this document.
+  max_iframe_depth: usize,
 }
 
 #[derive(Default)]
@@ -1020,6 +1022,7 @@ impl Painter {
       text_shape_cache: Arc::new(Mutex::new(HashMap::new())),
       trace: TraceHandle::disabled(),
       scroll_state: ScrollState::default(),
+      max_iframe_depth: crate::api::DEFAULT_MAX_IFRAME_DEPTH,
     })
   }
 
@@ -1032,6 +1035,11 @@ impl Painter {
   /// Attach a scroll state used for translating scroll container contents during paint.
   fn with_scroll_state(mut self, scroll_state: ScrollState) -> Self {
     self.scroll_state = scroll_state;
+    self
+  }
+
+  fn with_max_iframe_depth(mut self, max_iframe_depth: usize) -> Self {
+    self.max_iframe_depth = max_iframe_depth;
     self
   }
 
@@ -2417,6 +2425,7 @@ impl Painter {
           text_shape_cache: Arc::clone(&self.text_shape_cache),
           trace: self.trace.clone(),
           scroll_state: self.scroll_state.clone(),
+          max_iframe_depth: self.max_iframe_depth,
         };
         let paint_unclipped_start = profile_enabled.then(Instant::now);
         for cmd in unclipped {
@@ -2443,6 +2452,7 @@ impl Painter {
             text_shape_cache: Arc::clone(&self.text_shape_cache),
             trace: self.trace.clone(),
             scroll_state: self.scroll_state.clone(),
+            max_iframe_depth: self.max_iframe_depth,
           };
           let paint_clipped_start = profile_enabled.then(Instant::now);
           for cmd in clipped {
@@ -2552,6 +2562,7 @@ impl Painter {
             text_shape_cache: Arc::clone(&self.text_shape_cache),
             trace: self.trace.clone(),
             scroll_state: self.scroll_state.clone(),
+            max_iframe_depth: self.max_iframe_depth,
           };
           let outline_start = profile_enabled.then(Instant::now);
           for cmd in outline_commands {
@@ -5193,7 +5204,7 @@ impl Painter {
       1.0,
       policy,
       context,
-      crate::api::DEFAULT_MAX_IFRAME_DEPTH,
+      self.max_iframe_depth,
     )
     .ok()?;
 
@@ -5586,6 +5597,13 @@ impl Painter {
       return None;
     }
 
+    if self.max_iframe_depth == 0 {
+      let device_width = ((width as f32) * self.scale).round().max(1.0) as u32;
+      let device_height = ((height as f32) * self.scale).round().max(1.0) as u32;
+      return Pixmap::new(device_width, device_height);
+    }
+    let nested_depth = self.max_iframe_depth.saturating_sub(1);
+
     let background = style.map(|s| s.background_color).unwrap_or(Rgba::WHITE);
     let base_url = self.image_cache.base_url();
     let mut image_cache = self.image_cache.clone();
@@ -5609,7 +5627,7 @@ impl Painter {
       self.scale,
       policy,
       context,
-      crate::api::DEFAULT_MAX_IFRAME_DEPTH,
+      nested_depth,
     )
     .ok()
   }
@@ -5628,6 +5646,13 @@ impl Painter {
     if width == 0 || height == 0 {
       return None;
     }
+
+    if self.max_iframe_depth == 0 {
+      let device_width = ((width as f32) * self.scale).round().max(1.0) as u32;
+      let device_height = ((height as f32) * self.scale).round().max(1.0) as u32;
+      return Pixmap::new(device_width, device_height);
+    }
+    let nested_depth = self.max_iframe_depth.saturating_sub(1);
 
     let context = self.image_cache.resource_context();
     let resolved = self.image_cache.resolve_url(src);
@@ -5694,7 +5719,7 @@ impl Painter {
       self.scale,
       policy,
       nested_context,
-      crate::api::DEFAULT_MAX_IFRAME_DEPTH,
+      nested_depth,
     )
     .ok()
   }
@@ -9751,10 +9776,12 @@ fn legacy_paint_tree_with_resources_scaled_offset(
   scale: f32,
   offset: Point,
   scroll_state: &ScrollState,
+  max_iframe_depth: usize,
   trace: TraceHandle,
 ) -> Result<Pixmap> {
   let painter =
     Painter::with_resources_scaled(width, height, background, font_ctx, image_cache, scale)?
+      .with_max_iframe_depth(max_iframe_depth)
       .with_scroll_state(scroll_state.clone())
       .with_trace(trace);
   painter.paint_with_offset(tree, offset)
@@ -9893,6 +9920,36 @@ pub fn paint_tree_with_resources_scaled_offset_backend(
   scroll_state: &ScrollState,
   backend: PaintBackend,
 ) -> Result<Pixmap> {
+  paint_tree_with_resources_scaled_offset_backend_with_iframe_depth(
+    tree,
+    width,
+    height,
+    background,
+    font_ctx,
+    image_cache,
+    scale,
+    offset,
+    paint_parallelism,
+    scroll_state,
+    backend,
+    crate::api::DEFAULT_MAX_IFRAME_DEPTH,
+  )
+}
+
+pub(crate) fn paint_tree_with_resources_scaled_offset_backend_with_iframe_depth(
+  tree: &FragmentTree,
+  width: u32,
+  height: u32,
+  background: Rgba,
+  font_ctx: FontContext,
+  image_cache: ImageCache,
+  scale: f32,
+  offset: Point,
+  paint_parallelism: PaintParallelism,
+  scroll_state: &ScrollState,
+  backend: PaintBackend,
+  max_iframe_depth: usize,
+) -> Result<Pixmap> {
   match backend {
     PaintBackend::Legacy => legacy_paint_tree_with_resources_scaled_offset(
       tree,
@@ -9904,6 +9961,7 @@ pub fn paint_tree_with_resources_scaled_offset_backend(
       scale,
       offset,
       scroll_state,
+      max_iframe_depth,
       TraceHandle::disabled(),
     ),
     PaintBackend::DisplayList => paint_tree_display_list_with_resources_scaled_offset(
@@ -10000,6 +10058,7 @@ pub(crate) fn paint_tree_with_resources_scaled_offset_with_trace(
   offset: Point,
   paint_parallelism: PaintParallelism,
   scroll_state: &ScrollState,
+  max_iframe_depth: usize,
   trace: TraceHandle,
 ) -> Result<Pixmap> {
   legacy_paint_tree_with_resources_scaled_offset(
@@ -10012,6 +10071,7 @@ pub(crate) fn paint_tree_with_resources_scaled_offset_with_trace(
     scale,
     offset,
     scroll_state,
+    max_iframe_depth,
     trace,
   )
 }
@@ -14137,6 +14197,57 @@ mod tests {
     assert_eq!(snap_upscale(5.0, 2.0), Some((4.0, 0.5)));
     assert_eq!(snap_upscale(2.0, 2.0), None);
     assert_eq!(snap_upscale(1.0, 3.0), None);
+  }
+
+  #[test]
+  fn iframe_srcdoc_respects_max_depth() {
+    let inner = "<style>html, body { margin: 0; padding: 0; background: rgb(255, 0, 0); }</style>";
+    let outer = format!(
+      r#"
+        <style>
+          html, body {{ margin: 0; padding: 0; background: rgb(0, 255, 0); }}
+          iframe {{ border: 0; width: 100%; height: 100%; display: block; }}
+        </style>
+        <iframe srcdoc='{inner}'></iframe>
+      "#,
+      inner = inner
+    );
+
+    let fragment = FragmentNode::new_with_style(
+      Rect::from_xywh(0.0, 0.0, 8.0, 8.0),
+      FragmentContent::Replaced {
+        box_id: None,
+        replaced_type: ReplacedType::Iframe {
+          src: String::new(),
+          srcdoc: Some(outer),
+        },
+      },
+      vec![],
+      Arc::new(ComputedStyle::default()),
+    );
+    let tree = FragmentTree::new(fragment);
+
+    let blocked = Painter::new(8, 8, Rgba::WHITE)
+      .expect("painter")
+      .with_max_iframe_depth(1)
+      .paint(&tree)
+      .expect("paint");
+    let blocked_pixel = blocked.pixel(4, 4).unwrap();
+    assert!(
+      blocked_pixel.green() > blocked_pixel.red(),
+      "inner iframe should be blocked when depth is exhausted"
+    );
+
+    let allowed = Painter::new(8, 8, Rgba::WHITE)
+      .expect("painter")
+      .with_max_iframe_depth(2)
+      .paint(&tree)
+      .expect("paint");
+    let allowed_pixel = allowed.pixel(4, 4).unwrap();
+    assert!(
+      allowed_pixel.red() > allowed_pixel.green(),
+      "inner iframe should render when depth permits"
+    );
   }
 
   #[test]

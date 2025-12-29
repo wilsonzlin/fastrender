@@ -114,7 +114,7 @@ use crate::paint::display_list_builder::DisplayListBuilder;
 use crate::paint::display_list_renderer::PaintParallelism;
 use crate::paint::painter::paint_backend_from_env;
 use crate::paint::painter::paint_tree_display_list_with_resources_scaled_offset;
-use crate::paint::painter::paint_tree_with_resources_scaled_offset;
+use crate::paint::painter::paint_tree_with_resources_scaled_offset_backend_with_iframe_depth;
 use crate::paint::painter::paint_tree_with_resources_scaled_offset_with_trace;
 use crate::paint::painter::PaintBackend;
 use crate::render_control::{CancelCallback, DeadlineGuard, RenderDeadline};
@@ -1241,6 +1241,7 @@ pub struct PreparedDocument {
   animation_time: Option<f32>,
   font_context: FontContext,
   image_cache: ImageCache,
+  max_iframe_depth: usize,
   paint_parallelism: PaintParallelism,
 }
 
@@ -1363,6 +1364,7 @@ impl PreparedDocument {
       paint_scale,
       animation_time,
       self.paint_parallelism,
+      self.max_iframe_depth,
     )
   }
 
@@ -2615,6 +2617,7 @@ fn paint_fragment_tree_with_state(
   device_pixel_ratio: f32,
   animation_time: Option<f32>,
   paint_parallelism: PaintParallelism,
+  max_iframe_depth: usize,
 ) -> Result<Pixmap> {
   let expand_full_page = std::env::var("FASTR_FULL_PAGE")
     .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
@@ -2666,7 +2669,7 @@ fn paint_fragment_tree_with_state(
   };
 
   let offset = Point::new(-scroll.x, -scroll.y);
-  paint_tree_with_resources_scaled_offset(
+  paint_tree_with_resources_scaled_offset_backend_with_iframe_depth(
     &fragment_tree,
     target_width,
     target_height,
@@ -2677,6 +2680,8 @@ fn paint_fragment_tree_with_state(
     offset,
     paint_parallelism,
     &scroll_state,
+    paint_backend_from_env(),
+    max_iframe_depth,
   )
 }
 
@@ -3857,6 +3862,7 @@ impl FastRender {
       animation_time: options.animation_time,
       font_context: self.font_context.clone(),
       image_cache: self.image_cache.clone(),
+      max_iframe_depth: self.max_iframe_depth,
       paint_parallelism,
     })
   }
@@ -5855,7 +5861,7 @@ impl FastRender {
     let (target_width, target_height) =
       self.resolve_canvas_size(fragment_tree, width, height, fit_canvas);
 
-    paint_tree_with_resources_scaled_offset(
+    paint_tree_with_resources_scaled_offset_backend_with_iframe_depth(
       fragment_tree,
       target_width,
       target_height,
@@ -5866,6 +5872,8 @@ impl FastRender {
       Point::ZERO,
       self.paint_parallelism,
       &ScrollState::default(),
+      paint_backend_from_env(),
+      self.max_iframe_depth,
     )
   }
 
@@ -5915,6 +5923,7 @@ impl FastRender {
         offset,
         paint_parallelism,
         scroll_state,
+        self.max_iframe_depth,
         trace.clone(),
       ),
       PaintBackend::DisplayList => paint_tree_display_list_with_resources_scaled_offset(
@@ -10442,6 +10451,55 @@ mod tests {
     };
 
     assert_eq!(url, "https://example.com/app/images/bg.png");
+  }
+
+  #[test]
+  fn fast_render_config_limits_iframe_depth() {
+    let inner = "<style>html, body { margin: 0; padding: 0; background: rgb(255, 0, 0); }</style>";
+    let outer = format!(
+      r#"
+        <style>
+          html, body {{ margin: 0; padding: 0; background: rgb(0, 255, 0); }}
+          iframe {{ border: 0; width: 100%; height: 100%; display: block; }}
+        </style>
+        <iframe srcdoc='{inner}'></iframe>
+      "#,
+      inner = inner
+    );
+    let html = format!(
+      r#"
+        <style>
+          html, body {{ margin: 0; padding: 0; }}
+          iframe {{ border: 0; width: 100%; height: 100%; display: block; }}
+        </style>
+        <iframe srcdoc="{outer}"></iframe>
+      "#,
+      outer = outer
+    );
+
+    let mut shallow = FastRender::with_config(FastRenderConfig {
+      max_iframe_depth: 1,
+      ..FastRenderConfig::default()
+    })
+    .unwrap();
+    let shallow = shallow.render_html(&html, 8, 8).unwrap();
+    let shallow_pixel = shallow.pixel(4, 4).unwrap();
+    assert!(
+      shallow_pixel.green() > shallow_pixel.red(),
+      "inner iframe should be blocked when max depth is 1"
+    );
+
+    let mut deep = FastRender::with_config(FastRenderConfig {
+      max_iframe_depth: 2,
+      ..FastRenderConfig::default()
+    })
+    .unwrap();
+    let deep = deep.render_html(&html, 8, 8).unwrap();
+    let deep_pixel = deep.pixel(4, 4).unwrap();
+    assert!(
+      deep_pixel.red() > deep_pixel.green(),
+      "inner iframe should render when max depth allows"
+    );
   }
 
   #[test]
