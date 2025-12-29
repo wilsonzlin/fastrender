@@ -1,6 +1,6 @@
 use crate::geometry::{Point, Rect};
 use crate::image_loader::ImageCache;
-use crate::paint::blur::apply_gaussian_blur_anisotropic;
+use crate::paint::blur::{alpha_bounds, apply_gaussian_blur_anisotropic};
 use crate::render_control::{active_deadline, with_deadline};
 use crate::style::color;
 use crate::tree::box_tree::ReplacedType;
@@ -2885,24 +2885,49 @@ fn drop_shadow_pixmap(
   color_interpolation_filters: ColorInterpolationFilters,
   filter_region: Rect,
 ) -> FilterResult {
-  let mut tinted = input.pixmap.clone();
-  for px in tinted.pixels_mut() {
-    let alpha = px.alpha() as f32 / 255.0 * opacity * color.a;
-    let premul = |v: u8| {
-      ((v as f32 / 255.0) * alpha * 255.0)
-        .round()
-        .clamp(0.0, 255.0) as u8
-    };
-    *px = PremultipliedColorU8::from_rgba(
-      premul(color.r),
-      premul(color.g),
-      premul(color.b),
-      (alpha * 255.0) as u8,
-    )
-    .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+  let Some((min_x, min_y, bounds_w, bounds_h)) = alpha_bounds(&input.pixmap) else {
+    return input;
+  };
+  let blur_pad_x = (stddev.0.abs() * 3.0).ceil() as u32;
+  let blur_pad_y = (stddev.1.abs() * 3.0).ceil() as u32;
+
+  let mut shadow = match Pixmap::new(bounds_w + blur_pad_x * 2, bounds_h + blur_pad_y * 2) {
+    Some(p) => p,
+    None => return input,
+  };
+
+  {
+    let src = input.pixmap.pixels();
+    let src_stride = input.pixmap.width() as usize;
+    let dst_stride = shadow.width() as usize;
+    let dst = shadow.pixels_mut();
+    for y in 0..bounds_h as usize {
+      let src_row = (min_y as usize + y) * src_stride;
+      let dst_row = (blur_pad_y as usize + y) * dst_stride;
+      for x in 0..bounds_w as usize {
+        let src_px = src[src_row + min_x as usize + x];
+        let alpha = src_px.alpha() as f32 / 255.0 * opacity * color.a;
+        let dst_idx = dst_row + blur_pad_x as usize + x;
+        if alpha == 0.0 {
+          dst[dst_idx] = PremultipliedColorU8::TRANSPARENT;
+          continue;
+        }
+        let premul = |v: u8| {
+          ((v as f32 / 255.0) * alpha * 255.0)
+            .round()
+            .clamp(0.0, 255.0) as u8
+        };
+        dst[dst_idx] = PremultipliedColorU8::from_rgba(
+          premul(color.r),
+          premul(color.g),
+          premul(color.b),
+          (alpha * 255.0).round().clamp(0.0, 255.0) as u8,
+        )
+        .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+      }
+    }
   }
 
-  let mut shadow = tinted.clone();
   if stddev.0 != 0.0 || stddev.1 != 0.0 {
     let use_linear = matches!(
       color_interpolation_filters,
@@ -2917,10 +2942,21 @@ fn drop_shadow_pixmap(
     }
   }
 
-  let mut out = offset_pixmap(shadow, dx, dy);
+  let mut out = match Pixmap::new(input.pixmap.width(), input.pixmap.height()) {
+    Some(p) => p,
+    None => return input,
+  };
 
   let mut paint = PixmapPaint::default();
   paint.blend_mode = tiny_skia::BlendMode::SourceOver;
+  out.draw_pixmap(
+    min_x as i32 - blur_pad_x as i32,
+    min_y as i32 - blur_pad_y as i32,
+    shadow.as_ref(),
+    &paint,
+    Transform::from_translate(dx, dy),
+    None,
+  );
   out.draw_pixmap(
     0,
     0,

@@ -181,6 +181,38 @@ fn backdrop_filter_uses_unpremultiplied_channels() {
 }
 
 #[test]
+fn drop_shadow_blur_matches_between_backends() {
+  let html = r#"
+    <!doctype html>
+    <style>
+      body { margin: 0; background: transparent; }
+      #target {
+        position: absolute;
+        left: 16px;
+        top: 16px;
+        width: 4px;
+        height: 4px;
+        background: rgba(255, 255, 255, 1);
+        filter: drop-shadow(6px 4px 6px rgba(20, 40, 80, 0.6));
+      }
+    </style>
+    <div id="target"></div>
+  "#;
+
+  let legacy = render_with_backend(html, 64, 64, Rgba::TRANSPARENT, PaintBackend::Legacy);
+  let display = render_with_backend(html, 64, 64, Rgba::TRANSPARENT, PaintBackend::DisplayList);
+
+  assert_eq!(
+    legacy.data(),
+    display.data(),
+    "blurred drop shadow should match legacy backend"
+  );
+
+  let corner_alpha = display.pixels()[0].alpha();
+  assert_eq!(corner_alpha, 0, "shadow should not bleed to canvas edges");
+}
+
+#[test]
 fn drop_shadow_spread_preserves_color_ratio() {
   let html = r#"
     <!doctype html>

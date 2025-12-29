@@ -5,7 +5,7 @@
 //! pixels. They are used by both the legacy painter and the display list
 //! renderer to keep filter behavior in sync.
 
-use crate::paint::blur::apply_gaussian_blur;
+use crate::paint::blur::{alpha_bounds, apply_gaussian_blur};
 use crate::render_control::{active_deadline, with_deadline};
 use crate::style::color::Rgba;
 use rayon::prelude::*;
@@ -237,32 +237,47 @@ pub(crate) fn apply_drop_shadow(
   }
 
   let source = pixmap.clone();
-  let mut shadow = match Pixmap::new(source.width(), source.height()) {
+  let Some((min_x, min_y, bounds_w, bounds_h)) = alpha_bounds(&source) else {
+    return;
+  };
+  let blur_pad = (blur_radius.abs() * 3.0).ceil() as u32;
+  let spread_pad = spread.max(0.0).ceil() as u32;
+  let pad = blur_pad + spread_pad;
+
+  let mut shadow = match Pixmap::new(bounds_w + pad * 2, bounds_h + pad * 2) {
     Some(p) => p,
     None => return,
   };
 
   {
     let src = source.pixels();
+    let src_stride = source.width() as usize;
+    let dst_stride = shadow.width() as usize;
     let dst = shadow.pixels_mut();
-    for (src_px, dst_px) in src.iter().zip(dst.iter_mut()) {
-      let alpha = src_px.alpha() as f32 / 255.0;
-      if alpha == 0.0 {
-        *dst_px = PremultipliedColorU8::TRANSPARENT;
-        continue;
+    for y in 0..bounds_h as usize {
+      let src_row = (min_y as usize + y) * src_stride;
+      let dst_row = (pad as usize + y) * dst_stride;
+      for x in 0..bounds_w as usize {
+        let src_px = src[src_row + min_x as usize + x];
+        let alpha = src_px.alpha() as f32 / 255.0;
+        let dst_idx = dst_row + pad as usize + x;
+        if alpha == 0.0 {
+          dst[dst_idx] = PremultipliedColorU8::TRANSPARENT;
+          continue;
+        }
+        let total_alpha = (color.a * alpha).clamp(0.0, 1.0);
+        let r = (color.r as f32 / 255.0) * total_alpha;
+        let g = (color.g as f32 / 255.0) * total_alpha;
+        let b = (color.b as f32 / 255.0) * total_alpha;
+        let a = total_alpha * 255.0;
+        dst[dst_idx] = PremultipliedColorU8::from_rgba(
+          (r * 255.0).round() as u8,
+          (g * 255.0).round() as u8,
+          (b * 255.0).round() as u8,
+          a.round().clamp(0.0, 255.0) as u8,
+        )
+        .unwrap_or(PremultipliedColorU8::TRANSPARENT);
       }
-      let total_alpha = (color.a * alpha).clamp(0.0, 1.0);
-      let r = (color.r as f32 / 255.0) * total_alpha;
-      let g = (color.g as f32 / 255.0) * total_alpha;
-      let b = (color.b as f32 / 255.0) * total_alpha;
-      let a = total_alpha * 255.0;
-      *dst_px = PremultipliedColorU8::from_rgba(
-        (r * 255.0).round() as u8,
-        (g * 255.0).round() as u8,
-        (b * 255.0).round() as u8,
-        a.round().clamp(0.0, 255.0) as u8,
-      )
-      .unwrap_or(PremultipliedColorU8::TRANSPARENT);
     }
   }
 
@@ -279,11 +294,13 @@ pub(crate) fn apply_drop_shadow(
     None => return,
   };
 
+  let dest_x = min_x as i32 - pad as i32;
+  let dest_y = min_y as i32 - pad as i32;
   let mut paint = PixmapPaint::default();
   paint.blend_mode = SkiaBlendMode::SourceOver;
   result.draw_pixmap(
-    0,
-    0,
+    dest_x,
+    dest_y,
     shadow.as_ref(),
     &paint,
     Transform::from_translate(offset_x, offset_y),

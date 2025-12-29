@@ -1,8 +1,151 @@
 use crate::debug::runtime;
+use crate::error::RenderStage;
+use crate::render_control::check_active_periodic;
+use lru::LruCache;
+use std::cell::RefCell;
 use tiny_skia::Pixmap;
 
 const FAST_GAUSS_THRESHOLD_SIGMA: f32 = 4.0;
 
+#[derive(Default)]
+struct BlurScratch {
+  ping: Vec<u8>,
+  pong: Vec<u8>,
+}
+
+impl BlurScratch {
+  fn ensure_len(&mut self, len: usize) {
+    if self.ping.len() < len {
+      self.ping.resize(len, 0);
+    }
+    if self.pong.len() < len {
+      self.pong.resize(len, 0);
+    }
+  }
+
+  fn split(&mut self, len: usize) -> (&mut [u8], &mut [u8]) {
+    self.ensure_len(len);
+    let ping = &mut self.ping[..len];
+    let pong = &mut self.pong[..len];
+    (ping, pong)
+  }
+}
+
+thread_local! {
+  static BLUR_SCRATCH: RefCell<BlurScratch> = RefCell::new(BlurScratch::default());
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub(crate) struct BlurCacheKey {
+  width: u32,
+  height: u32,
+  radius_bits: u32,
+  fingerprint: u64,
+}
+
+impl BlurCacheKey {
+  pub(crate) fn new(radius: f32, pixmap: &Pixmap) -> Option<Self> {
+    let radius = radius.abs();
+    if radius == 0.0 || pixmap.width() == 0 || pixmap.height() == 0 {
+      return None;
+    }
+    Some(Self {
+      width: pixmap.width(),
+      height: pixmap.height(),
+      radius_bits: radius.to_bits(),
+      fingerprint: pixel_fingerprint(pixmap.data()),
+    })
+  }
+}
+
+pub(crate) struct BlurCache {
+  lru: LruCache<BlurCacheKey, Pixmap>,
+  capacity: usize,
+}
+
+impl BlurCache {
+  pub(crate) fn new(capacity: usize) -> Self {
+    Self {
+      lru: LruCache::unbounded(),
+      capacity,
+    }
+  }
+
+  pub(crate) fn get(&mut self, key: &BlurCacheKey) -> Option<Pixmap> {
+    self.lru.get(key).map(Clone::clone)
+  }
+
+  pub(crate) fn put(&mut self, key: BlurCacheKey, pixmap: &Pixmap) {
+    self.lru.put(key, pixmap.clone());
+    while self.lru.len() > self.capacity {
+      let _ = self.lru.pop_lru();
+    }
+  }
+}
+
+impl Default for BlurCache {
+  fn default() -> Self {
+    Self::new(32)
+  }
+}
+
+#[inline]
+fn blur_deadline_exceeded(counter: &mut usize) -> bool {
+  check_active_periodic(counter, 2048, RenderStage::Paint).is_err()
+}
+
+pub(crate) fn pixel_fingerprint(data: &[u8]) -> u64 {
+  const PRIME: u64 = 0x9E37_79B1_85EB_CA87;
+  let mut hash = (data.len() as u64).wrapping_mul(PRIME);
+  let mut chunks = data.chunks_exact(8);
+  for chunk in &mut chunks {
+    let mut buf = [0u8; 8];
+    buf.copy_from_slice(chunk);
+    hash ^= u64::from_le_bytes(buf).wrapping_mul(PRIME).rotate_left(7);
+  }
+  let rem = chunks.remainder();
+  if !rem.is_empty() {
+    let mut buf = [0u8; 8];
+    buf[..rem.len()].copy_from_slice(rem);
+    hash ^= u64::from_le_bytes(buf).wrapping_mul(PRIME).rotate_left(11);
+  }
+  hash
+}
+
+pub(crate) fn alpha_bounds(pixmap: &Pixmap) -> Option<(u32, u32, u32, u32)> {
+  let width = pixmap.width() as usize;
+  let height = pixmap.height() as usize;
+  if width == 0 || height == 0 {
+    return None;
+  }
+  let mut min_x = width;
+  let mut min_y = height;
+  let mut max_x = 0usize;
+  let mut max_y = 0usize;
+  let data = pixmap.data();
+  for y in 0..height {
+    let row = &data[y * width * 4..(y + 1) * width * 4];
+    for x in 0..width {
+      if row[x * 4 + 3] != 0 {
+        min_x = min_x.min(x);
+        min_y = min_y.min(y);
+        max_x = max_x.max(x);
+        max_y = max_y.max(y);
+      }
+    }
+  }
+  if min_x > max_x || min_y > max_y {
+    return None;
+  }
+  Some((
+    min_x as u32,
+    min_y as u32,
+    (max_x - min_x + 1) as u32,
+    (max_y - min_y + 1) as u32,
+  ))
+}
+
+#[allow(dead_code)]
 pub(crate) fn gaussian_kernel(sigma: f32) -> (Vec<f32>, usize) {
   let sigma = sigma.abs();
   let radius = (sigma * 3.0).ceil() as usize;
@@ -86,67 +229,78 @@ fn gaussian_convolve_premultiplied(pixmap: &mut Pixmap, sigma: f32) {
   }
 
   let len = width * height * 4;
-  let mut tmp = pixmap.data().to_vec();
-  let mut buf = vec![0u8; len];
+  BLUR_SCRATCH.with(|scratch| {
+    let mut scratch = scratch.borrow_mut();
+    let (src, buf) = scratch.split(len);
+    src[..len].copy_from_slice(pixmap.data());
+    let mut deadline_counter = 0usize;
 
-  // Horizontal pass: tmp -> buf
-  for y in 0..height {
-    let row_start = y * width * 4;
-    for x in 0..width {
-      let mut acc_r: i32 = 0;
-      let mut acc_g: i32 = 0;
-      let mut acc_b: i32 = 0;
-      let mut acc_a: i32 = 0;
-      for (i, &w) in kernel.iter().enumerate() {
-        let offset = i as isize - radius as isize;
-        let cx = (x as isize + offset).clamp(0, width as isize - 1) as usize;
-        let idx = row_start + cx * 4;
-        acc_r += w * tmp[idx] as i32;
-        acc_g += w * tmp[idx + 1] as i32;
-        acc_b += w * tmp[idx + 2] as i32;
-        acc_a += w * tmp[idx + 3] as i32;
+    // Horizontal pass: src -> buf
+    for y in 0..height {
+      if blur_deadline_exceeded(&mut deadline_counter) {
+        pixmap.data_mut().copy_from_slice(src);
+        return;
       }
-      let out_idx = row_start + x * 4;
-      let a = ((acc_a + scale / 2) / scale).clamp(0, 255);
-      let r = (acc_r + scale / 2) / scale;
-      let g = (acc_g + scale / 2) / scale;
-      let b = (acc_b + scale / 2) / scale;
-      buf[out_idx] = clamp_channel_to_alpha(r, a);
-      buf[out_idx + 1] = clamp_channel_to_alpha(g, a);
-      buf[out_idx + 2] = clamp_channel_to_alpha(b, a);
-      buf[out_idx + 3] = a as u8;
-    }
-  }
-
-  // Vertical pass: buf -> tmp (reuse tmp storage)
-  for y in 0..height {
-    for x in 0..width {
-      let mut acc_r: i32 = 0;
-      let mut acc_g: i32 = 0;
-      let mut acc_b: i32 = 0;
-      let mut acc_a: i32 = 0;
-      for (i, &w) in kernel.iter().enumerate() {
-        let offset = i as isize - radius as isize;
-        let cy = (y as isize + offset).clamp(0, height as isize - 1) as usize;
-        let idx = (cy * width + x) * 4;
-        acc_r += w * buf[idx] as i32;
-        acc_g += w * buf[idx + 1] as i32;
-        acc_b += w * buf[idx + 2] as i32;
-        acc_a += w * buf[idx + 3] as i32;
+      let row_start = y * width * 4;
+      for x in 0..width {
+        let mut acc_r: i32 = 0;
+        let mut acc_g: i32 = 0;
+        let mut acc_b: i32 = 0;
+        let mut acc_a: i32 = 0;
+        for (i, &w) in kernel.iter().enumerate() {
+          let offset = i as isize - radius as isize;
+          let cx = (x as isize + offset).clamp(0, width as isize - 1) as usize;
+          let idx = row_start + cx * 4;
+          acc_r += w * src[idx] as i32;
+          acc_g += w * src[idx + 1] as i32;
+          acc_b += w * src[idx + 2] as i32;
+          acc_a += w * src[idx + 3] as i32;
+        }
+        let out_idx = row_start + x * 4;
+        let a = ((acc_a + scale / 2) / scale).clamp(0, 255);
+        let r = (acc_r + scale / 2) / scale;
+        let g = (acc_g + scale / 2) / scale;
+        let b = (acc_b + scale / 2) / scale;
+        buf[out_idx] = clamp_channel_to_alpha(r, a);
+        buf[out_idx + 1] = clamp_channel_to_alpha(g, a);
+        buf[out_idx + 2] = clamp_channel_to_alpha(b, a);
+        buf[out_idx + 3] = a as u8;
       }
-      let out_idx = (y * width + x) * 4;
-      let a = ((acc_a + scale / 2) / scale).clamp(0, 255);
-      let r = (acc_r + scale / 2) / scale;
-      let g = (acc_g + scale / 2) / scale;
-      let b = (acc_b + scale / 2) / scale;
-      tmp[out_idx] = clamp_channel_to_alpha(r, a);
-      tmp[out_idx + 1] = clamp_channel_to_alpha(g, a);
-      tmp[out_idx + 2] = clamp_channel_to_alpha(b, a);
-      tmp[out_idx + 3] = a as u8;
     }
-  }
 
-  pixmap.data_mut().copy_from_slice(&tmp);
+    // Vertical pass: buf -> pixmap data
+    let dst = pixmap.data_mut();
+    for y in 0..height {
+      if blur_deadline_exceeded(&mut deadline_counter) {
+        dst.copy_from_slice(src);
+        return;
+      }
+      for x in 0..width {
+        let mut acc_r: i32 = 0;
+        let mut acc_g: i32 = 0;
+        let mut acc_b: i32 = 0;
+        let mut acc_a: i32 = 0;
+        for (i, &w) in kernel.iter().enumerate() {
+          let offset = i as isize - radius as isize;
+          let cy = (y as isize + offset).clamp(0, height as isize - 1) as usize;
+          let idx = (cy * width + x) * 4;
+          acc_r += w * buf[idx] as i32;
+          acc_g += w * buf[idx + 1] as i32;
+          acc_b += w * buf[idx + 2] as i32;
+          acc_a += w * buf[idx + 3] as i32;
+        }
+        let out_idx = (y * width + x) * 4;
+        let a = ((acc_a + scale / 2) / scale).clamp(0, 255);
+        let r = (acc_r + scale / 2) / scale;
+        let g = (acc_g + scale / 2) / scale;
+        let b = (acc_b + scale / 2) / scale;
+        dst[out_idx] = clamp_channel_to_alpha(r, a);
+        dst[out_idx + 1] = clamp_channel_to_alpha(g, a);
+        dst[out_idx + 2] = clamp_channel_to_alpha(b, a);
+        dst[out_idx + 3] = a as u8;
+      }
+    }
+  });
 }
 
 fn box_sizes_for_gauss(sigma: f32, n: usize) -> [usize; 3] {
@@ -175,14 +329,24 @@ fn box_sizes_for_gauss(sigma: f32, n: usize) -> [usize; 3] {
   sizes
 }
 
-fn box_blur_h(src: &[u8], dst: &mut [u8], width: usize, height: usize, radius: usize) {
+fn box_blur_h(
+  src: &[u8],
+  dst: &mut [u8],
+  width: usize,
+  height: usize,
+  radius: usize,
+  deadline_counter: &mut usize,
+) -> bool {
   if radius == 0 {
     dst.copy_from_slice(src);
-    return;
+    return false;
   }
   let window = (radius * 2 + 1) as i32;
   let half = window / 2;
   for y in 0..height {
+    if blur_deadline_exceeded(deadline_counter) {
+      return true;
+    }
     let row_start = y * width * 4;
     let mut sum_r: i32 = 0;
     let mut sum_g: i32 = 0;
@@ -218,16 +382,27 @@ fn box_blur_h(src: &[u8], dst: &mut [u8], width: usize, height: usize, radius: u
       sum_a += src[add_idx + 3] as i32 - src[rem_idx + 3] as i32;
     }
   }
+  false
 }
 
-fn box_blur_v(src: &[u8], dst: &mut [u8], width: usize, height: usize, radius: usize) {
+fn box_blur_v(
+  src: &[u8],
+  dst: &mut [u8],
+  width: usize,
+  height: usize,
+  radius: usize,
+  deadline_counter: &mut usize,
+) -> bool {
   if radius == 0 {
     dst.copy_from_slice(src);
-    return;
+    return false;
   }
   let window = (radius * 2 + 1) as i32;
   let half = window / 2;
   for x in 0..width {
+    if blur_deadline_exceeded(deadline_counter) {
+      return true;
+    }
     let mut sum_r: i32 = 0;
     let mut sum_g: i32 = 0;
     let mut sum_b: i32 = 0;
@@ -262,6 +437,7 @@ fn box_blur_v(src: &[u8], dst: &mut [u8], width: usize, height: usize, radius: u
       sum_a += src[add_idx + 3] as i32 - src[rem_idx + 3] as i32;
     }
   }
+  false
 }
 
 fn gaussian_blur_box_approx(pixmap: &mut Pixmap, sigma: f32) {
@@ -275,23 +451,44 @@ fn gaussian_blur_box_approx(pixmap: &mut Pixmap, sigma: f32) {
     return;
   }
   let len = width * height * 4;
-  let mut a = pixmap.data().to_vec();
-  let mut b = vec![0u8; len];
-
-  let sizes = box_sizes_for_gauss(sigma, 3);
-  for size in sizes {
-    let radius = size.saturating_sub(1) / 2;
-    if radius == 0 {
-      continue;
+  BLUR_SCRATCH.with(|scratch| {
+    let mut scratch = scratch.borrow_mut();
+    let (a, b) = scratch.split(len);
+    a[..len].copy_from_slice(pixmap.data());
+    let sizes = box_sizes_for_gauss(sigma, 3);
+    let mut deadline_counter = 0usize;
+    for size in sizes {
+      let radius = size.saturating_sub(1) / 2;
+      if radius == 0 {
+        continue;
+      }
+      if box_blur_h(
+        &a[..len],
+        &mut b[..len],
+        width,
+        height,
+        radius,
+        &mut deadline_counter,
+      ) {
+        return;
+      }
+      if box_blur_v(
+        &b[..len],
+        &mut a[..len],
+        width,
+        height,
+        radius,
+        &mut deadline_counter,
+      ) {
+        return;
+      }
     }
-    box_blur_h(&a, &mut b, width, height, radius);
-    box_blur_v(&b, &mut a, width, height, radius);
-  }
 
-  pixmap.data_mut().copy_from_slice(&a);
+    pixmap.data_mut().copy_from_slice(&a[..len]);
+  });
 }
 
-pub(crate) fn apply_gaussian_blur(pixmap: &mut Pixmap, sigma: f32) {
+pub fn apply_gaussian_blur(pixmap: &mut Pixmap, sigma: f32) {
   let sigma = sigma.abs();
   let radius = (sigma * 3.0).ceil() as usize;
   if radius == 0 {
@@ -299,99 +496,10 @@ pub(crate) fn apply_gaussian_blur(pixmap: &mut Pixmap, sigma: f32) {
   }
 
   let fast_enabled = runtime::runtime_toggles().truthy("FASTR_FAST_BLUR");
-  if fast_enabled {
-    if sigma <= FAST_GAUSS_THRESHOLD_SIGMA {
-      gaussian_convolve_premultiplied(pixmap, sigma);
-    } else {
-      gaussian_blur_box_approx(pixmap, sigma);
-    }
-    return;
-  }
-
-  let (kernel, radius) = gaussian_kernel(sigma);
-  if kernel.is_empty() {
-    return;
-  }
-
-  let width = pixmap.width() as usize;
-  let height = pixmap.height() as usize;
-  if width == 0 || height == 0 {
-    return;
-  }
-
-  let src: Vec<[f32; 4]> = pixmap
-    .pixels()
-    .iter()
-    .map(|p| {
-      [
-        p.red() as f32 / 255.0,
-        p.green() as f32 / 255.0,
-        p.blue() as f32 / 255.0,
-        p.alpha() as f32 / 255.0,
-      ]
-    })
-    .collect();
-
-  let mut temp = vec![[0.0; 4]; src.len()];
-  let mut dst = vec![[0.0; 4]; src.len()];
-
-  // Horizontal pass
-  for y in 0..height {
-    for x in 0..width {
-      let mut accum = [0.0; 4];
-      let mut weight_sum = 0.0;
-      for (i, weight) in kernel.iter().enumerate() {
-        let offset = i as isize - radius as isize;
-        let cx = (x as isize + offset).clamp(0, width as isize - 1) as usize;
-        let sample = src[y * width + cx];
-        accum[0] += sample[0] * weight;
-        accum[1] += sample[1] * weight;
-        accum[2] += sample[2] * weight;
-        accum[3] += sample[3] * weight;
-        weight_sum += weight;
-      }
-      let idx = y * width + x;
-      temp[idx] = [
-        accum[0] / weight_sum,
-        accum[1] / weight_sum,
-        accum[2] / weight_sum,
-        accum[3] / weight_sum,
-      ];
-    }
-  }
-
-  // Vertical pass
-  for y in 0..height {
-    for x in 0..width {
-      let mut accum = [0.0; 4];
-      let mut weight_sum = 0.0;
-      for (i, weight) in kernel.iter().enumerate() {
-        let offset = i as isize - radius as isize;
-        let cy = (y as isize + offset).clamp(0, height as isize - 1) as usize;
-        let sample = temp[cy * width + x];
-        accum[0] += sample[0] * weight;
-        accum[1] += sample[1] * weight;
-        accum[2] += sample[2] * weight;
-        accum[3] += sample[3] * weight;
-        weight_sum += weight;
-      }
-      let idx = y * width + x;
-      dst[idx] = [
-        accum[0] / weight_sum,
-        accum[1] / weight_sum,
-        accum[2] / weight_sum,
-        accum[3] / weight_sum,
-      ];
-    }
-  }
-
-  for (src_px, vals) in pixmap.pixels_mut().iter_mut().zip(dst.iter()) {
-    let r = (vals[0] * 255.0).round().clamp(0.0, 255.0) as u8;
-    let g = (vals[1] * 255.0).round().clamp(0.0, 255.0) as u8;
-    let b = (vals[2] * 255.0).round().clamp(0.0, 255.0) as u8;
-    let a = (vals[3] * 255.0).round().clamp(0.0, 255.0) as u8;
-    *src_px = tiny_skia::PremultipliedColorU8::from_rgba(r, g, b, a)
-      .unwrap_or(tiny_skia::PremultipliedColorU8::TRANSPARENT);
+  if fast_enabled || sigma <= FAST_GAUSS_THRESHOLD_SIGMA {
+    gaussian_convolve_premultiplied(pixmap, sigma);
+  } else {
+    gaussian_blur_box_approx(pixmap, sigma);
   }
 }
 
@@ -413,92 +521,98 @@ pub(crate) fn apply_gaussian_blur_anisotropic(pixmap: &mut Pixmap, sigma_x: f32,
     return;
   }
 
-  let (kernel_x, radius_x) = gaussian_kernel(sigma_x);
-  let (kernel_y, radius_y) = gaussian_kernel(sigma_y);
+  let (kernel_x, radius_x, scale_x) = gaussian_kernel_fixed(sigma_x);
+  let (kernel_y, radius_y, scale_y) = gaussian_kernel_fixed(sigma_y);
   if (radius_x == 0 || kernel_x.is_empty()) && (radius_y == 0 || kernel_y.is_empty()) {
     return;
   }
 
-  let src: Vec<[f32; 4]> = pixmap
-    .pixels()
-    .iter()
-    .map(|p| {
-      [
-        p.red() as f32 / 255.0,
-        p.green() as f32 / 255.0,
-        p.blue() as f32 / 255.0,
-        p.alpha() as f32 / 255.0,
-      ]
-    })
-    .collect();
+  let len = width * height * 4;
+  BLUR_SCRATCH.with(|scratch| {
+    let mut scratch = scratch.borrow_mut();
+    let (src, tmp) = scratch.split(len);
+    src[..len].copy_from_slice(pixmap.data());
+    let mut deadline_counter = 0usize;
 
-  let mut temp = vec![[0.0; 4]; src.len()];
-  let mut dst = vec![[0.0; 4]; src.len()];
-
-  if radius_x == 0 || kernel_x.is_empty() {
-    temp.copy_from_slice(&src);
-  } else {
-    for y in 0..height {
-      for x in 0..width {
-        let mut accum = [0.0; 4];
-        let mut weight_sum = 0.0;
-        for (i, weight) in kernel_x.iter().enumerate() {
-          let offset = i as isize - radius_x as isize;
-          let cx = (x as isize + offset).clamp(0, width as isize - 1) as usize;
-          let sample = src[y * width + cx];
-          accum[0] += sample[0] * weight;
-          accum[1] += sample[1] * weight;
-          accum[2] += sample[2] * weight;
-          accum[3] += sample[3] * weight;
-          weight_sum += weight;
+    // Horizontal pass (if needed): src -> tmp, otherwise copy
+    if radius_x == 0 || kernel_x.is_empty() {
+      tmp[..len].copy_from_slice(src);
+    } else {
+      for y in 0..height {
+        if blur_deadline_exceeded(&mut deadline_counter) {
+          pixmap.data_mut().copy_from_slice(src);
+          return;
         }
-        let idx = y * width + x;
-        temp[idx] = [
-          accum[0] / weight_sum,
-          accum[1] / weight_sum,
-          accum[2] / weight_sum,
-          accum[3] / weight_sum,
-        ];
+        let row_start = y * width * 4;
+        for x in 0..width {
+          let mut acc_r: i32 = 0;
+          let mut acc_g: i32 = 0;
+          let mut acc_b: i32 = 0;
+          let mut acc_a: i32 = 0;
+          for (i, &w) in kernel_x.iter().enumerate() {
+            let offset = i as isize - radius_x as isize;
+            let cx = (x as isize + offset).clamp(0, width as isize - 1) as usize;
+            let idx = row_start + cx * 4;
+            acc_r += w * src[idx] as i32;
+            acc_g += w * src[idx + 1] as i32;
+            acc_b += w * src[idx + 2] as i32;
+            acc_a += w * src[idx + 3] as i32;
+          }
+          let out_idx = row_start + x * 4;
+          let a = ((acc_a + scale_x / 2) / scale_x).clamp(0, 255);
+          let r = (acc_r + scale_x / 2) / scale_x;
+          let g = (acc_g + scale_x / 2) / scale_x;
+          let b = (acc_b + scale_x / 2) / scale_x;
+          tmp[out_idx] = clamp_channel_to_alpha(r, a);
+          tmp[out_idx + 1] = clamp_channel_to_alpha(g, a);
+          tmp[out_idx + 2] = clamp_channel_to_alpha(b, a);
+          tmp[out_idx + 3] = a as u8;
+        }
       }
     }
-  }
 
-  if radius_y == 0 || kernel_y.is_empty() {
-    dst.copy_from_slice(&temp);
-  } else {
+    // Vertical pass (if needed): tmp/src -> pixmap
+    let src_for_y = if radius_x == 0 || kernel_x.is_empty() {
+      &src[..len]
+    } else {
+      &tmp[..len]
+    };
+    let dst = pixmap.data_mut();
+    if radius_y == 0 || kernel_y.is_empty() {
+      dst.copy_from_slice(src_for_y);
+      return;
+    }
     for y in 0..height {
+      if blur_deadline_exceeded(&mut deadline_counter) {
+        dst.copy_from_slice(src);
+        return;
+      }
       for x in 0..width {
-        let mut accum = [0.0; 4];
-        let mut weight_sum = 0.0;
-        for (i, weight) in kernel_y.iter().enumerate() {
+        let mut acc_r: i32 = 0;
+        let mut acc_g: i32 = 0;
+        let mut acc_b: i32 = 0;
+        let mut acc_a: i32 = 0;
+        for (i, &w) in kernel_y.iter().enumerate() {
           let offset = i as isize - radius_y as isize;
           let cy = (y as isize + offset).clamp(0, height as isize - 1) as usize;
-          let sample = temp[cy * width + x];
-          accum[0] += sample[0] * weight;
-          accum[1] += sample[1] * weight;
-          accum[2] += sample[2] * weight;
-          accum[3] += sample[3] * weight;
-          weight_sum += weight;
+          let idx = (cy * width + x) * 4;
+          acc_r += w * src_for_y[idx] as i32;
+          acc_g += w * src_for_y[idx + 1] as i32;
+          acc_b += w * src_for_y[idx + 2] as i32;
+          acc_a += w * src_for_y[idx + 3] as i32;
         }
-        let idx = y * width + x;
-        dst[idx] = [
-          accum[0] / weight_sum,
-          accum[1] / weight_sum,
-          accum[2] / weight_sum,
-          accum[3] / weight_sum,
-        ];
+        let out_idx = (y * width + x) * 4;
+        let a = ((acc_a + scale_y / 2) / scale_y).clamp(0, 255);
+        let r = (acc_r + scale_y / 2) / scale_y;
+        let g = (acc_g + scale_y / 2) / scale_y;
+        let b = (acc_b + scale_y / 2) / scale_y;
+        dst[out_idx] = clamp_channel_to_alpha(r, a);
+        dst[out_idx + 1] = clamp_channel_to_alpha(g, a);
+        dst[out_idx + 2] = clamp_channel_to_alpha(b, a);
+        dst[out_idx + 3] = a as u8;
       }
     }
-  }
-
-  for (src_px, vals) in pixmap.pixels_mut().iter_mut().zip(dst.iter()) {
-    let r = (vals[0] * 255.0).round().clamp(0.0, 255.0) as u8;
-    let g = (vals[1] * 255.0).round().clamp(0.0, 255.0) as u8;
-    let b = (vals[2] * 255.0).round().clamp(0.0, 255.0) as u8;
-    let a = (vals[3] * 255.0).round().clamp(0.0, 255.0) as u8;
-    *src_px = tiny_skia::PremultipliedColorU8::from_rgba(r, g, b, a)
-      .unwrap_or(tiny_skia::PremultipliedColorU8::TRANSPARENT);
-  }
+  });
 }
 
 #[cfg(test)]

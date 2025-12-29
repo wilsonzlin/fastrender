@@ -22,6 +22,7 @@ use criterion::Criterion;
 use fastrender::build_stacking_tree;
 use fastrender::geometry::Point;
 use fastrender::geometry::Rect;
+use fastrender::paint::blur::apply_gaussian_blur;
 use fastrender::paint::display_list::BorderRadius;
 use fastrender::paint::display_list::ClipShape;
 use fastrender::paint::display_list_builder::DisplayListBuilder;
@@ -45,6 +46,7 @@ use fastrender::OptimizationConfig;
 use fastrender::StrokeRectItem;
 use fastrender::TextRasterizer;
 use tiny_skia::Pixmap;
+use tiny_skia::PremultipliedColorU8;
 
 // ============================================================================
 // Helper Functions
@@ -777,6 +779,31 @@ fn bench_parallel_display_list_raster(c: &mut Criterion) {
   group.finish();
 }
 
+fn bench_filter_blur(c: &mut Criterion) {
+  let mut group = c.benchmark_group("filters_blur");
+  let mut base = Pixmap::new(512, 512).expect("pixmap");
+  {
+    let pixels = base.pixels_mut();
+    let color = PremultipliedColorU8::from_rgba(200, 80, 60, 255).unwrap();
+    let width = base.width() as usize;
+    for y in 180..332 {
+      let row = y as usize * width;
+      for x in 180..332 {
+        pixels[row + x] = color;
+      }
+    }
+  }
+
+  group.bench_function("gaussian_blur_512_r8", |b| {
+    b.iter(|| {
+      let mut pixmap = base.clone();
+      apply_gaussian_blur(&mut pixmap, 8.0);
+      black_box(pixmap);
+    })
+  });
+  group.finish();
+}
+
 // ============================================================================
 // Criterion Groups and Main
 // ============================================================================
@@ -793,6 +820,7 @@ criterion_group!(
   bench_paint_stress_tests,
   bench_parallel_display_list_raster,
   bench_text_rasterizer_cache,
+  bench_filter_blur,
 );
 
 criterion_main!(benches);
