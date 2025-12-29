@@ -13,6 +13,7 @@ use crate::style::color::Rgba;
 use crate::text::face_cache;
 use crate::text::font_db::LoadedFont;
 use crate::text::font_instance::FontInstance;
+use crate::text::otvar::item_variation_store::{parse_colr_v1_var_store, ColrVarStoreTables};
 use crate::text::variations::apply_rustybuzz_variations;
 use limits::GlyphRasterLimits;
 use lru::LruCache;
@@ -152,8 +153,8 @@ struct ColorFontCaches {
   colr_v0_headers: LruCache<FontKey, Option<colr_v0::ColrV0Header>>,
   colr_v0_base_glyphs: LruCache<colr_v0::BaseGlyphCacheKey, Option<colr_v0::BaseGlyphRecord>>,
   colr_v1_fonts: LruCache<FontKey, Option<Arc<colr_v1::ColrV1CacheEntry>>>,
-  colr_v1_base_glyphs:
-    LruCache<colr_v1::BaseGlyphCacheKey, colr_v1::BaseGlyphCacheValue>,
+  colr_v1_base_glyphs: LruCache<colr_v1::BaseGlyphCacheKey, colr_v1::BaseGlyphCacheValue>,
+  colr_v1_var_store: LruCache<FontKey, Option<ColrVarStoreTables>>,
 }
 
 impl ColorFontCaches {
@@ -164,6 +165,7 @@ impl ColorFontCaches {
       colr_v0_base_glyphs: LruCache::new(Self::cap(1024)),
       colr_v1_fonts: LruCache::new(Self::cap(64)),
       colr_v1_base_glyphs: LruCache::new(Self::cap(1024)),
+      colr_v1_var_store: LruCache::new(Self::cap(64)),
     }
   }
 
@@ -239,6 +241,19 @@ impl ColorFontCaches {
     let glyph = entry.base_glyph(key.glyph_id);
     self.colr_v1_base_glyphs.put(key, glyph.clone());
     Some(glyph.map(|(_, glyph)| glyph))
+  }
+
+  fn colr_v1_var_store(
+    &mut self,
+    font_key: FontKey,
+    face: &ttf_parser::Face<'_>,
+  ) -> Option<ColrVarStoreTables> {
+    if let Some(parsed) = self.colr_v1_var_store.get(&font_key) {
+      return parsed.clone();
+    }
+    let parsed = parse_colr_v1_var_store(face).ok().flatten();
+    self.colr_v1_var_store.put(font_key, parsed.clone());
+    parsed
   }
 }
 

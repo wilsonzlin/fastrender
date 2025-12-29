@@ -560,4 +560,22 @@ mod tests {
       .expect("delta");
     assert!((delta - 8192.0).abs() < f32::EPSILON);
   }
+
+  #[test]
+  fn parses_var_store_via_face_fallback() {
+    let path = fixtures_path().join("colrv1-var-test.ttf");
+    let data = std::fs::read(path).expect("font bytes");
+    let face = ttf_parser::Face::parse(&data, 0).expect("face");
+    let parsed = parse_colr_v1_var_store(&face)
+      .expect("var store parse")
+      .expect("var store present");
+    assert_eq!(parsed.header.item_var_store_offset, 93);
+    assert!(parsed.var_index_map.is_none());
+
+    let store = parsed
+      .item_variation_store
+      .expect("item variation store missing");
+    assert_eq!(store.item_variation_data.len(), 1);
+    assert_eq!(store.item_variation_data[0].delta_sets[3], vec![200]);
+  }
 }

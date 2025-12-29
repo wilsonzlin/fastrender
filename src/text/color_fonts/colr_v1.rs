@@ -8,9 +8,9 @@ use read_fonts::tables::colr::{
 };
 use read_fonts::types::{F2Dot14, Fixed, GlyphId};
 use read_fonts::{FontRef, TableProvider};
-use std::collections::HashSet;
 #[cfg(test)]
 use std::cell::Cell;
+use std::collections::HashSet;
 use std::mem;
 use std::sync::{Arc, Mutex};
 use tiny_skia::{
@@ -30,8 +30,7 @@ pub(super) struct ColrV1CacheEntry {
 
 impl std::fmt::Debug for ColrV1CacheEntry {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    f
-      .debug_struct("ColrV1CacheEntry")
+    f.debug_struct("ColrV1CacheEntry")
       .field("data_len", &self.data.len())
       .finish()
   }
@@ -56,8 +55,7 @@ impl ColrV1CacheEntry {
   pub fn parse(font: &LoadedFont) -> Option<Arc<Self>> {
     let data = Arc::clone(&font.data);
     // SAFETY: the Arc keeps the font data alive for the lifetime of the cached entry.
-    let static_data: &'static [u8] =
-      unsafe { mem::transmute::<&[u8], &'static [u8]>(&*data) };
+    let static_data: &'static [u8] = unsafe { mem::transmute::<&[u8], &'static [u8]>(&*data) };
     record_font_ref_parse();
     let font_ref = FontRef::from_index(static_data, font.index).ok()?;
     record_colr_table_access();
@@ -65,7 +63,11 @@ impl ColrV1CacheEntry {
     if colr.version() != 1 {
       return None;
     }
-    Some(Arc::new(Self { data, font_ref, colr }))
+    Some(Arc::new(Self {
+      data,
+      font_ref,
+      colr,
+    }))
   }
 
   pub fn base_glyph(&self, glyph_id: u16) -> BaseGlyphCacheValue {
@@ -98,6 +100,11 @@ pub fn render_colr_glyph(
     caches.colr_v1_font(font_key, font)?
   };
   let colr = &colr_entry.colr;
+
+  {
+    let mut caches = caches.lock().ok()?;
+    let _ = caches.colr_v1_var_store(font_key, face);
+  }
 
   let (paint, paint_id) = {
     let key = BaseGlyphCacheKey::new(font_key, glyph_id.0);
@@ -1013,14 +1020,8 @@ fn brush_to_paint(brush: &Brush, offset_x: f32, offset_y: f32) -> Option<SkiaPai
       // glyph's raster origin.
       let mut start = Point::from_xy(0.0, 0.0);
       let mut end = Point::from_xy(1.0, 0.0);
-      let mut transform = Transform::from_row(
-        v1.x,
-        v1.y,
-        v2.x,
-        v2.y,
-        p0.x - offset_x,
-        p0.y - offset_y,
-      );
+      let mut transform =
+        Transform::from_row(v1.x, v1.y, v2.x, v2.y, p0.x - offset_x, p0.y - offset_y);
 
       if transform.invert().is_none() {
         // Degenerate basis; fall back to the simple start/end mapping used previously.
@@ -1029,8 +1030,7 @@ fn brush_to_paint(brush: &Brush, offset_x: f32, offset_y: f32) -> Option<SkiaPai
         transform = Transform::identity();
       }
 
-      let shader =
-        tiny_skia::LinearGradient::new(start, end, stops.clone(), *spread, transform)?;
+      let shader = tiny_skia::LinearGradient::new(start, end, stops.clone(), *spread, transform)?;
       paint.shader = shader;
     }
     Brush::RadialGradient {
@@ -1594,15 +1594,15 @@ fn record_colr_table_access() {}
 #[cfg(test)]
 mod tests {
   use super::{
-    colr_v1_parse_counts, raster_bounds, ColrV1ParseCountGuard, Brush, DrawCommand, RASTER_PAD,
+    colr_v1_parse_counts, raster_bounds, Brush, ColrV1ParseCountGuard, DrawCommand, RASTER_PAD,
   };
   use crate::style::color::Rgba;
   use crate::text::color_fonts::ColorFontRenderer;
   use crate::text::font_db::{FontStretch, FontStyle, FontWeight, LoadedFont};
   use crate::text::font_instance::FontInstance;
-  use tiny_skia::{BlendMode, Color, Path, PathBuilder};
   use std::path::PathBuf;
   use std::sync::Arc;
+  use tiny_skia::{BlendMode, Color, Path, PathBuilder};
 
   fn rect_path(left: f32, top: f32, right: f32, bottom: f32) -> Path {
     let mut builder = PathBuilder::new();
