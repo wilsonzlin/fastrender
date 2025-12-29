@@ -951,11 +951,12 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
   let cached = match read_cached_document(&args.cache_path) {
     Ok(doc) => doc,
     Err(e) => {
-      let msg = format_error_with_chain(&e, args.verbose);
-      log.push_str(&format!("Read error: {msg}\n"));
+      let log_msg = format_error_with_chain(&e, true);
+      let note_msg = format_error_with_chain(&e, args.verbose);
+      log.push_str(&format!("Read error: {log_msg}\n"));
       let mut progress = PageProgress::new(url_hint_from_cache_path(&args.cache_path));
       progress.status = ProgressStatus::Error;
-      progress.notes = format!("read: {msg}");
+      progress.notes = format!("read: {note_msg}");
       progress.hotspot = "fetch".to_string();
       let progress = progress.merge_preserving_manual(progress_before, current_sha.as_deref());
       let _ = write_progress(&args.progress_path, &progress);
@@ -1055,11 +1056,12 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     match common::render_pipeline::build_renderer_with_fetcher(config, renderer_fetcher) {
       Ok(r) => r,
       Err(e) => {
-        let msg = format_error_with_chain(&e, args.verbose);
-        log.push_str(&format!("Renderer init error: {msg}\n"));
+        let log_msg = format_error_with_chain(&e, true);
+        let note_msg = format_error_with_chain(&e, args.verbose);
+        log.push_str(&format!("Renderer init error: {log_msg}\n"));
         let mut progress = PageProgress::new(url);
         progress.status = ProgressStatus::Error;
-        progress.notes = format!("renderer init: {msg}");
+        progress.notes = format!("renderer init: {note_msg}");
         progress.hotspot = "unknown".to_string();
         let progress = progress.merge_preserving_manual(progress_before, current_sha.as_deref());
         let _ = write_progress(&args.progress_path, &progress);
@@ -1118,10 +1120,7 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
       }
 
       log.push_str(&format!("Status: {:?}\n", progress.status));
-      log.push_str(&format!(
-        "Error: {}\n",
-        format_error_with_chain(&err, args.verbose)
-      ));
+      log.push_str(&format!("Error: {}\n", format_error_with_chain(&err, true)));
     }
     Err(panic) => {
       progress.status = ProgressStatus::Panic;
