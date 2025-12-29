@@ -368,6 +368,16 @@ fn parse_shadow_root_definition(template: &DomNode) -> Option<(ShadowRootMode, b
 
 fn attach_shadow_roots(node: &mut DomNode) {
   for child in &mut node.children {
+    let is_inert_template = matches!(
+      child.tag_name(),
+      Some(tag) if tag.eq_ignore_ascii_case("template")
+    ) && matches!(
+      child.namespace(),
+      Some(ns) if ns.is_empty() || ns == HTML_NAMESPACE
+    ) && parse_shadow_root_definition(child).is_none();
+    if is_inert_template {
+      continue;
+    }
     attach_shadow_roots(child);
   }
 
@@ -3172,6 +3182,13 @@ mod tests {
     None
   }
 
+  fn contains_shadow_root(node: &DomNode) -> bool {
+    if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
+      return true;
+    }
+    node.children.iter().any(contains_shadow_root)
+  }
+
   #[test]
   fn declarative_shadow_dom_only_attaches_first_template() {
     let html = "<div id='host'><template shadowroot='open'><p id='first'>first</p></template><template shadowroot='closed'><p id='second'>second</p></template><p id='light'>light</p></div>";
@@ -3255,6 +3272,39 @@ mod tests {
       }
       other => panic!("expected element node, got {:?}", other),
     }
+  }
+
+  #[test]
+  fn declarative_shadow_dom_skips_in_inert_template() {
+    let html = "<template><div id='host'><template shadowroot='open'><p id='shadow'>shadow</p></template></div></template>";
+    let dom = parse_html(html).expect("parse html");
+
+    find_element_by_id(&dom, "host").expect("host element inside template content");
+    assert!(
+      !contains_shadow_root(&dom),
+      "shadow roots should not attach inside inert template contents"
+    );
+  }
+
+  #[test]
+  fn declarative_shadow_dom_attaches_outside_inert_template() {
+    let html =
+      "<div id='host'><template shadowroot='open'><p id='shadow'>shadow</p></template></div>";
+    let dom = parse_html(html).expect("parse html");
+
+    let host = find_element_by_id(&dom, "host").expect("host element");
+    let shadow_root = host
+      .children
+      .iter()
+      .find(|child| matches!(child.node_type, DomNodeType::ShadowRoot { .. }))
+      .expect("shadow root attached when not in an inert template");
+    assert!(
+      shadow_root
+        .children
+        .iter()
+        .any(|child| child.get_attribute_ref("id") == Some("shadow")),
+      "shadow root should include children from the declarative template"
+    );
   }
 
   fn matches(node: &DomNode, ancestors: &[&DomNode], pseudo: &PseudoClass) -> bool {
