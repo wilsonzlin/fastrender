@@ -35,8 +35,18 @@ use crate::tree::box_tree::BoxType;
 use crate::tree::box_tree::MarkerContent;
 use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
+#[cfg(test)]
+use std::cell::Cell;
 use std::fmt;
 use std::fmt::Write as _;
+use std::hash::Hash;
+use std::hash::Hasher;
+
+#[cfg(test)]
+thread_local! {
+  static TRACK_TO_SELECTOR: Cell<bool> = const { Cell::new(false) };
+  static TO_SELECTOR_CALLS: Cell<usize> = const { Cell::new(0) };
+}
 
 /// Debug information linking a box to its source DOM element
 ///
@@ -195,6 +205,25 @@ impl DebugInfo {
     self
   }
 
+  /// Hashes a small subset of the selector components without allocating.
+  ///
+  /// This is intended for cache keys in hot paths where formatting the full selector would incur
+  /// heap allocations. Tag name, ID, and a prefix of the class list are included to keep repeated
+  /// component templates distinct without depending on formatted strings.
+  pub(crate) fn hash_components(&self, hasher: &mut impl Hasher) {
+    const MAX_HASHED_CLASSES: usize = 3;
+
+    self.tag_name.hash(hasher);
+    self.id.hash(hasher);
+
+    let hashed_len = self.classes.len().min(MAX_HASHED_CLASSES);
+    hashed_len.hash(hasher);
+    for class in self.classes.iter().take(MAX_HASHED_CLASSES) {
+      class.hash(hasher);
+    }
+    (self.classes.len() > MAX_HASHED_CLASSES).hash(hasher);
+  }
+
   /// Formats as a CSS selector-like string
   ///
   /// Format: `tag#id.class1.class2`
@@ -213,6 +242,13 @@ impl DebugInfo {
   /// assert_eq!(info.to_selector(), "div#header.navbar.fixed");
   /// ```
   pub fn to_selector(&self) -> String {
+    #[cfg(test)]
+    TRACK_TO_SELECTOR.with(|enabled| {
+      if enabled.get() {
+        TO_SELECTOR_CALLS.with(|calls| calls.set(calls.get() + 1));
+      }
+    });
+
     let mut result = String::new();
 
     // Add tag name
@@ -276,6 +312,24 @@ impl fmt::Display for DebugInfo {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     write!(f, "{}", self.to_selector())
   }
+}
+
+#[cfg(test)]
+pub(crate) fn track_to_selector_calls<F: FnOnce() -> R, R>(f: F) -> (R, usize) {
+  struct Guard;
+  impl Drop for Guard {
+    fn drop(&mut self) {
+      TRACK_TO_SELECTOR.with(|enabled| enabled.set(false));
+    }
+  }
+
+  TRACK_TO_SELECTOR.with(|enabled| enabled.set(true));
+  TO_SELECTOR_CALLS.with(|calls| calls.set(0));
+  let guard = Guard;
+  let result = f();
+  let calls = TO_SELECTOR_CALLS.with(|calls| calls.get());
+  drop(guard);
+  (result, calls)
 }
 
 /// Pretty-prints tree structures for debugging

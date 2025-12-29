@@ -2424,10 +2424,9 @@ fn flex_cache_key(box_node: &BoxNode) -> u64 {
   let fingerprint = flex_style_fingerprint(&box_node.style);
   fingerprint.hash(&mut h);
   // Incorporate a simplified key for common carousel templates to merge otherwise identical
-  // repeated items. Using debug_info selector avoids deep tree hashing while keeping keys
-  // distinct across component types.
-  if let Some(sel) = box_node.debug_info.as_ref().map(|d| d.to_selector()) {
-    sel.hash(&mut h);
+  // repeated items without formatting selectors (which allocates).
+  if let Some(debug) = &box_node.debug_info {
+    debug.hash_components(&mut h);
   }
   h.finish()
 }
@@ -4746,6 +4745,7 @@ mod tests {
   use crate::style::types::ScrollbarWidth;
   use crate::style::values::Length;
   use crate::tree::box_tree::ReplacedType;
+  use crate::tree::debug::{track_to_selector_calls, DebugInfo};
   use std::sync::Arc;
 
   fn create_flex_style() -> Arc<ComputedStyle> {
@@ -4836,6 +4836,22 @@ mod tests {
       super::flex_cache_key(&a),
       super::flex_cache_key(&b),
       "anonymous boxes must not share flex cache keys"
+    );
+  }
+
+  #[test]
+  fn flex_cache_key_avoids_selector_allocations() {
+    let style = Arc::new(ComputedStyle::default());
+    let node =
+      BoxNode::new_block(style, FormattingContextType::Block, vec![]).with_debug_info(DebugInfo::new(
+        Some("div".to_string()),
+        Some("carousel".to_string()),
+        vec!["item".to_string(), "active".to_string()],
+      ));
+    let (_key, selector_calls) = track_to_selector_calls(|| super::flex_cache_key(&node));
+    assert_eq!(
+      selector_calls, 0,
+      "flex cache key should not format debug selectors"
     );
   }
 
