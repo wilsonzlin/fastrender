@@ -5,6 +5,10 @@ fn fixtures_dir() -> PathBuf {
   PathBuf::from("tests/fixtures/pageset_progress")
 }
 
+fn stats_fixtures_dir() -> PathBuf {
+  PathBuf::from("tests/fixtures/pageset_progress_stats")
+}
+
 #[test]
 fn pageset_progress_report_outputs_summary() {
   let output = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
@@ -33,6 +37,36 @@ fn pageset_progress_report_outputs_summary() {
   assert!(
     stdout.contains("totals_ms: fetch=55.00 css=110.00 cascade=220.00 layout=3040.00 paint=545.00")
   );
+}
+
+#[test]
+fn pageset_progress_report_outputs_stats_when_verbose() {
+  let output = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .args([
+      "report",
+      "--progress-dir",
+      stats_fixtures_dir().to_str().unwrap(),
+      "--top",
+      "1",
+      "--verbose-stats",
+    ])
+    .output()
+    .expect("run pageset_progress report --verbose-stats");
+  assert!(output.status.success(), "expected success for report");
+
+  let stdout = String::from_utf8(output.stdout).expect("stdout is utf-8");
+  assert!(stdout.contains("Slowest pages (top 1 of 1 with timings):"));
+  assert!(stdout.contains("stats:"));
+  assert!(stdout.contains("nodes: dom=1200 styled=1100 boxes=900 fragments=1500"));
+  assert!(stdout.contains(
+    "cascade: nodes=1100 candidates=6000 matches=2000 selector=320.50ms declaration=210.25ms"
+  ));
+  assert!(stdout.contains(
+    "layout: layout_cache lookups=450 hits=300 stores=120 evictions=10 | intrinsic lookups=50 hits=20"
+  ));
+  assert!(stdout.contains("paint: display_items=800 optimized_items=500 culled_items=120"));
+  assert!(stdout
+    .contains("resources: fetches doc=1 css=4 img=6 font=2 other=0 | image_cache hits=5 misses=3"));
 }
 
 #[test]

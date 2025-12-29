@@ -18,7 +18,10 @@ use common::render_pipeline::{
   build_render_configs, follow_client_redirects, format_error_with_chain, read_cached_document,
   render_document, RenderConfigBundle, RenderSurface,
 };
-use fastrender::api::{DiagnosticsLevel, RenderDiagnostics, ResourceKind};
+use fastrender::api::{
+  CascadeDiagnostics, DiagnosticsLevel, LayoutDiagnostics, PaintDiagnostics, RenderCounts,
+  RenderDiagnostics, RenderStats, ResourceDiagnostics, ResourceKind,
+};
 use fastrender::error::{RenderError, RenderStage};
 use fastrender::pageset::{pageset_entries, pageset_stem, CACHE_HTML_DIR};
 use fastrender::resource::normalize_user_agent_for_log;
@@ -279,6 +282,10 @@ struct ReportArgs {
   /// Directory containing Chrome trace JSON (not committed)
   #[arg(long, default_value = DEFAULT_TRACE_DIR)]
   trace_dir: PathBuf,
+
+  /// Print structured stats for the listed pages when present
+  #[arg(long = "verbose-stats", visible_alias = "show-counts")]
+  verbose_stats: bool,
 }
 
 #[derive(Args, Debug)]
@@ -511,6 +518,21 @@ fn read_progress(path: &Path) -> Option<PageProgress> {
 struct LoadedProgress {
   stem: String,
   progress: PageProgress,
+  stats: Option<RenderStats>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ProgressDiagnostics {
+  #[serde(default)]
+  stats: Option<RenderStats>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProgressWithDiagnostics {
+  #[serde(flatten)]
+  progress: PageProgress,
+  #[serde(default)]
+  diagnostics: ProgressDiagnostics,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -1154,7 +1176,7 @@ fn read_progress_dir(dir: &Path) -> io::Result<Vec<LoadedProgress>> {
         format!("failed to read {}: {}", path.display(), e),
       )
     })?;
-    let progress: PageProgress = serde_json::from_str(&contents).map_err(|e| {
+    let progress: ProgressWithDiagnostics = serde_json::from_str(&contents).map_err(|e| {
       io::Error::new(
         io::ErrorKind::InvalidData,
         format!("failed to parse {}: {}", path.display(), e),
@@ -1164,7 +1186,11 @@ fn read_progress_dir(dir: &Path) -> io::Result<Vec<LoadedProgress>> {
       .file_stem()
       .map(|s| s.to_string_lossy().to_string())
       .unwrap_or_else(|| path.display().to_string());
-    progresses.push(LoadedProgress { stem, progress });
+    progresses.push(LoadedProgress {
+      stem,
+      progress: progress.progress,
+      stats: progress.diagnostics.stats,
+    });
   }
   Ok(progresses)
 }
@@ -1360,6 +1386,164 @@ fn summarize_status(progresses: &[LoadedProgress]) -> StatusCounts {
   counts
 }
 
+fn push_opt_usize(parts: &mut Vec<String>, label: &str, value: Option<usize>) {
+  if let Some(v) = value {
+    parts.push(format!("{label}={v}"));
+  }
+}
+
+fn push_opt_u64(parts: &mut Vec<String>, label: &str, value: Option<u64>) {
+  if let Some(v) = value {
+    parts.push(format!("{label}={v}"));
+  }
+}
+
+fn push_opt_ms(parts: &mut Vec<String>, label: &str, value: Option<f64>) {
+  if let Some(v) = value {
+    parts.push(format!("{label}={v:.2}ms", v = v));
+  }
+}
+
+fn nodes_summary(counts: &RenderCounts) -> Option<String> {
+  let mut parts = Vec::new();
+  push_opt_usize(&mut parts, "dom", counts.dom_nodes);
+  push_opt_usize(&mut parts, "styled", counts.styled_nodes);
+  push_opt_usize(&mut parts, "boxes", counts.box_nodes);
+  push_opt_usize(&mut parts, "fragments", counts.fragments);
+  if parts.is_empty() {
+    None
+  } else {
+    Some(parts.join(" "))
+  }
+}
+
+fn cascade_summary(cascade: &CascadeDiagnostics) -> Option<String> {
+  let mut parts = Vec::new();
+  push_opt_u64(&mut parts, "nodes", cascade.nodes);
+  push_opt_u64(&mut parts, "candidates", cascade.rule_candidates);
+  push_opt_u64(&mut parts, "matches", cascade.rule_matches);
+  push_opt_ms(&mut parts, "selector", cascade.selector_time_ms);
+  push_opt_ms(&mut parts, "declaration", cascade.declaration_time_ms);
+  if parts.is_empty() {
+    None
+  } else {
+    Some(parts.join(" "))
+  }
+}
+
+fn layout_summary(layout: &LayoutDiagnostics) -> Option<String> {
+  let mut parts = Vec::new();
+  let mut cache_parts = Vec::new();
+  push_opt_usize(&mut cache_parts, "lookups", layout.layout_cache_lookups);
+  push_opt_usize(&mut cache_parts, "hits", layout.layout_cache_hits);
+  push_opt_usize(&mut cache_parts, "stores", layout.layout_cache_stores);
+  push_opt_usize(&mut cache_parts, "evictions", layout.layout_cache_evictions);
+  if !cache_parts.is_empty() {
+    parts.push(format!("layout_cache {}", cache_parts.join(" ")));
+  }
+
+  let mut intrinsic_parts = Vec::new();
+  push_opt_usize(&mut intrinsic_parts, "lookups", layout.intrinsic_lookups);
+  push_opt_usize(&mut intrinsic_parts, "hits", layout.intrinsic_hits);
+  if !intrinsic_parts.is_empty() {
+    parts.push(format!("intrinsic {}", intrinsic_parts.join(" ")));
+  }
+
+  if parts.is_empty() {
+    None
+  } else {
+    Some(parts.join(" | "))
+  }
+}
+
+fn paint_summary(paint: &PaintDiagnostics) -> Option<String> {
+  let mut parts = Vec::new();
+  push_opt_usize(&mut parts, "display_items", paint.display_items);
+  push_opt_usize(&mut parts, "optimized_items", paint.optimized_items);
+  push_opt_usize(&mut parts, "culled_items", paint.culled_items);
+  if parts.is_empty() {
+    None
+  } else {
+    Some(parts.join(" "))
+  }
+}
+
+fn resources_summary(resources: &ResourceDiagnostics) -> Option<String> {
+  let mut parts = Vec::new();
+  let doc = *resources
+    .fetch_counts
+    .get(&ResourceKind::Document)
+    .unwrap_or(&0);
+  let css = *resources
+    .fetch_counts
+    .get(&ResourceKind::Stylesheet)
+    .unwrap_or(&0);
+  let img = *resources
+    .fetch_counts
+    .get(&ResourceKind::Image)
+    .unwrap_or(&0);
+  let font = *resources
+    .fetch_counts
+    .get(&ResourceKind::Font)
+    .unwrap_or(&0);
+  let other = *resources
+    .fetch_counts
+    .get(&ResourceKind::Other)
+    .unwrap_or(&0);
+  if doc + css + img + font + other > 0 {
+    parts.push(format!(
+      "fetches doc={doc} css={css} img={img} font={font} other={other}"
+    ));
+  }
+
+  let mut cache_parts = Vec::new();
+  if let Some(hits) = resources.image_cache_hits {
+    cache_parts.push(format!("hits={hits}"));
+  }
+  if let Some(misses) = resources.image_cache_misses {
+    cache_parts.push(format!("misses={misses}"));
+  }
+  if !cache_parts.is_empty() {
+    parts.push(format!("image_cache {}", cache_parts.join(" ")));
+  }
+
+  if parts.is_empty() {
+    None
+  } else {
+    Some(parts.join(" | "))
+  }
+}
+
+fn print_render_stats(stats: &RenderStats, indent: &str) -> bool {
+  let mut lines: Vec<(&str, String)> = Vec::new();
+
+  if let Some(nodes) = nodes_summary(&stats.counts) {
+    lines.push(("nodes", nodes));
+  }
+  if let Some(cascade) = cascade_summary(&stats.cascade) {
+    lines.push(("cascade", cascade));
+  }
+  if let Some(layout) = layout_summary(&stats.layout) {
+    lines.push(("layout", layout));
+  }
+  if let Some(paint) = paint_summary(&stats.paint) {
+    lines.push(("paint", paint));
+  }
+  if let Some(resources) = resources_summary(&stats.resources) {
+    lines.push(("resources", resources));
+  }
+
+  if lines.is_empty() {
+    return false;
+  }
+
+  println!("{indent}stats:");
+  for (label, line) in lines {
+    println!("{indent}  {label}: {line}");
+  }
+  true
+}
+
 fn report(args: ReportArgs) -> io::Result<()> {
   let progresses = read_progress_dir(&args.progress_dir)?;
   let total_pages = progresses.len();
@@ -1400,6 +1584,15 @@ fn report(args: ReportArgs) -> io::Result<()> {
         normalize_hotspot(&entry.progress.hotspot),
         entry.progress.url
       );
+      if args.verbose_stats {
+        if let Some(stats) = &entry.stats {
+          if !print_render_stats(stats, "      ") {
+            println!("      stats: (present but empty)");
+          }
+        } else {
+          println!("      stats: (not captured in progress file)");
+        }
+      }
     }
   }
   println!();

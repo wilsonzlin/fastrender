@@ -1,0 +1,58 @@
+{
+  "url": "https://stats.test/",
+  "status": "ok",
+  "total_ms": 1800.0,
+  "stages_ms": {
+    "fetch": 100.0,
+    "css": 200.0,
+    "cascade": 400.0,
+    "layout": 800.0,
+    "paint": 300.0
+  },
+  "notes": "",
+  "hotspot": "cascade",
+  "last_good_commit": "",
+  "last_regression_commit": "",
+  "diagnostics": {
+    "stats": {
+      "timings": {},
+      "counts": {
+        "dom_nodes": 1200,
+        "styled_nodes": 1100,
+        "box_nodes": 900,
+        "fragments": 1500
+      },
+      "cascade": {
+        "nodes": 1100,
+        "rule_candidates": 6000,
+        "rule_matches": 2000,
+        "selector_time_ms": 320.5,
+        "declaration_time_ms": 210.25
+      },
+      "layout": {
+        "layout_cache_lookups": 450,
+        "layout_cache_hits": 300,
+        "layout_cache_stores": 120,
+        "layout_cache_evictions": 10,
+        "intrinsic_lookups": 50,
+        "intrinsic_hits": 20
+      },
+      "paint": {
+        "display_items": 800,
+        "optimized_items": 500,
+        "culled_items": 120
+      },
+      "resources": {
+        "fetch_counts": {
+          "Document": 1,
+          "Stylesheet": 4,
+          "Image": 6,
+          "Font": 2,
+          "Other": 0
+        },
+        "image_cache_hits": 5,
+        "image_cache_misses": 3
+      }
+    }
+  }
+}
