@@ -1,7 +1,7 @@
 {
   "url": "https://gitlab.com/",
   "status": "ok",
-  "total_ms": 1020.8307580000001,
+  "total_ms": 413.660906,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

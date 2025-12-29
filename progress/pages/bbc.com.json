@@ -9,8 +9,8 @@
     "layout": 0.0,
     "paint": 0.0
   },
-  "notes": "timeout at layout after 4.751408079s",
-  "hotspot": "unknown",
+  "notes": "timeout at layout after 4.750533444s",
+  "hotspot": "layout",
   "last_good_commit": "",
   "last_regression_commit": ""
 }

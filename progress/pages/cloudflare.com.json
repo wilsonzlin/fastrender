@@ -1,7 +1,7 @@
 {
   "url": "https://cloudflare.com/",
   "status": "error",
-  "total_ms": 807.4581119999999,
+  "total_ms": 94.043193,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,
@@ -9,7 +9,7 @@
     "layout": 0.0,
     "paint": 0.0
   },
-  "notes": "[paint] Invalid paint parameters: Layout failed: MissingContext(\"Shaping failed (fonts=8): Text(ShapingFailed { text: \\\"쯈\\\\u{365}�\\\", reason: \\\"No suitable font found for cluster 쯈\\\\u{365}\\\" })\")",
+  "notes": "[paint] Invalid paint parameters: Layout failed: MissingContext(\"Shaping failed (fonts=8): Text(ShapingFailed { text: \\\"犧\\\\u{345}\\\\u{14}�\\\", reason: \\\"No suitable font found for cluster 犧\\\\u{345}\\\" })\")",
   "hotspot": "unknown",
   "last_good_commit": "",
   "last_regression_commit": ""

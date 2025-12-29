@@ -1,7 +1,7 @@
 {
   "url": "https://hbr.org/",
   "status": "ok",
-  "total_ms": 1614.008471,
+  "total_ms": 2492.936712,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

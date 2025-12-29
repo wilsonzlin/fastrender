@@ -1,7 +1,7 @@
 {
   "url": "https://netflix.com/",
   "status": "ok",
-  "total_ms": 1722.4670529999999,
+  "total_ms": 1630.074427,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

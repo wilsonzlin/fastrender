@@ -1,7 +1,7 @@
 {
   "url": "https://weather.com/",
   "status": "ok",
-  "total_ms": 2693.952146,
+  "total_ms": 2949.6662420000002,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

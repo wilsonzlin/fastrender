@@ -1,7 +1,7 @@
 {
   "url": "https://ndtv.com/",
   "status": "ok",
-  "total_ms": 566.773205,
+  "total_ms": 14.170873,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

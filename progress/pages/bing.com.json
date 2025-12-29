@@ -1,7 +1,7 @@
 {
   "url": "https://bing.com/",
   "status": "ok",
-  "total_ms": 1162.585957,
+  "total_ms": 688.136807,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

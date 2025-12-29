@@ -1,7 +1,7 @@
 {
   "url": "https://quora.com/",
-  "status": "ok",
-  "total_ms": 641.275629,
+  "status": "error",
+  "total_ms": 60.81941,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,
@@ -9,7 +9,7 @@
     "layout": 0.0,
     "paint": 0.0
   },
-  "notes": "",
+  "notes": "[paint] Invalid paint parameters: Layout failed: MissingContext(\"Shaping failed (fonts=8): Text(ShapingFailed { text: \\\"Y�9\\\\u{f}�_oq8��b;��d\\\\u{7f}oM�� �\\\\u{4}C�5A���B��m�\\\\u{e}�\\\\u{8}\\\\u{5}\\\\u{3}��n��\\\\u{18}�� ��%j�E)�U��G�D�(Ľ/\\\\u{18}�f��R�Y�;�\\\\u{f}�f��f�~S�O\\\\u{6},��u�M�oM����6%�⮰\\\\u{7aa}�b�3`aY,,2j�XJ��E��Ȑ�\\\\u{17}k��b)�°�Ȱ�\\\\\\\\��j������\\\\u{16}���L)�\\\\\\\\��lǄ�� '��\\\\u{16};+�o\\\\u{7}M�\\\\\\\"#�� �@�������𱍚)�z)�FI\\\\u{1e}\\\", reason: \\\"No suitable font found for cluster ⮰\\\\u{7aa}\\\" })\")",
   "hotspot": "unknown",
   "last_good_commit": "",
   "last_regression_commit": ""

@@ -1,7 +1,7 @@
 {
   "url": "https://economist.com/",
   "status": "error",
-  "total_ms": 678.5416560000001,
+  "total_ms": 175.551501,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,
@@ -9,7 +9,7 @@
     "layout": 0.0,
     "paint": 0.0
   },
-  "notes": "[paint] Invalid paint parameters: Layout failed: MissingContext(\"Shaping failed (fonts=8): Text(ShapingFailed { text: \\\"\\\\u{70f}ܤ\\\", reason: \\\"No suitable font found for cluster \\\\u{70f}ܤ\\\" })\")",
+  "notes": "[paint] Invalid paint parameters: Layout failed: MissingContext(\"Shaping failed (fonts=8): Text(ShapingFailed { text: \\\"\\\\u{f486}\\\\u{302}\\\\u{6}\\\", reason: \\\"No suitable font found for cluster \\\\u{f486}\\\\u{302}\\\" })\")",
   "hotspot": "unknown",
   "last_good_commit": "",
   "last_regression_commit": ""

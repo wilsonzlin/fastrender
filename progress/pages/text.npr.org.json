@@ -1,7 +1,7 @@
 {
   "url": "https://text.npr.org/",
   "status": "ok",
-  "total_ms": 586.824787,
+  "total_ms": 48.029805,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

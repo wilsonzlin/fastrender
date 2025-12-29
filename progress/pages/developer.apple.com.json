@@ -1,7 +1,7 @@
 {
   "url": "https://developer.apple.com/",
   "status": "ok",
-  "total_ms": 3573.854975,
+  "total_ms": 3292.384297,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

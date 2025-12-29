@@ -1,7 +1,7 @@
 {
   "url": "https://nbcnews.com/",
   "status": "error",
-  "total_ms": 732.7761830000001,
+  "total_ms": 149.012257,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,
@@ -9,7 +9,7 @@
     "layout": 0.0,
     "paint": 0.0
   },
-  "notes": "[paint] Invalid paint parameters: Layout failed: MissingContext(\"Shaping failed (fonts=8): Text(ShapingFailed { text: \\\"\\\\u{70f}��= ���\\\", reason: \\\"No suitable font found for cluster \\\\u{70f}�\\\" })\")",
+  "notes": "[paint] Invalid paint parameters: Layout failed: MissingContext(\"Shaping failed (fonts=8): Text(ShapingFailed { text: \\\"ٸ\\\\u{6e1}\\\", reason: \\\"No suitable font found for cluster ٸ\\\\u{6e1}\\\" })\")",
   "hotspot": "unknown",
   "last_good_commit": "",
   "last_regression_commit": ""

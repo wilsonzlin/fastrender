@@ -1,7 +1,7 @@
 {
   "url": "https://msnbc.com/",
   "status": "error",
-  "total_ms": 593.912144,
+  "total_ms": 36.786950999999995,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

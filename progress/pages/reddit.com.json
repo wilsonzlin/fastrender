@@ -1,7 +1,7 @@
 {
   "url": "https://reddit.com/",
   "status": "ok",
-  "total_ms": 625.399842,
+  "total_ms": 90.432023,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

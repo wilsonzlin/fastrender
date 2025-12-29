@@ -1,7 +1,7 @@
 {
   "url": "https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_multicol_layout/Using_multi-column_layouts",
   "status": "ok",
-  "total_ms": 1262.171137,
+  "total_ms": 1043.936692,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

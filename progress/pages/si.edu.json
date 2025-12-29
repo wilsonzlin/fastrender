@@ -1,7 +1,7 @@
 {
   "url": "https://si.edu/",
-  "status": "error",
-  "total_ms": 627.288601,
+  "status": "ok",
+  "total_ms": 184.22271600000002,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,
@@ -9,7 +9,7 @@
     "layout": 0.0,
     "paint": 0.0
   },
-  "notes": "[paint] Invalid paint parameters: Layout failed: MissingContext(\"Shaping failed (fonts=8): Text(ShapingFailed { text: \\\"\\\\u{65f}\\\\u{65b}\\\\u{16};�\\\", reason: \\\"No suitable font found for cluster \\\\u{65f}\\\\u{65b}\\\" })\")",
+  "notes": "",
   "hotspot": "unknown",
   "last_good_commit": "",
   "last_regression_commit": ""

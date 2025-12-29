@@ -1,7 +1,7 @@
 {
   "url": "https://facebook.com/",
   "status": "ok",
-  "total_ms": 608.476783,
+  "total_ms": 25.63963,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

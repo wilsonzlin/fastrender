@@ -1,7 +1,7 @@
 {
   "url": "https://twitter.com/",
   "status": "ok",
-  "total_ms": 567.391957,
+  "total_ms": 40.645621,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

@@ -1,7 +1,7 @@
 {
   "url": "https://weibo.cn/",
   "status": "ok",
-  "total_ms": 1068.569906,
+  "total_ms": 597.855375,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

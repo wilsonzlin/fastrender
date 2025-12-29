@@ -1,7 +1,7 @@
 {
   "url": "https://etsy.com/",
   "status": "ok",
-  "total_ms": 575.600466,
+  "total_ms": 10.526107999999999,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

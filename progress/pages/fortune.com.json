@@ -9,8 +9,8 @@
     "layout": 0.0,
     "paint": 0.0
   },
-  "notes": "[paint] Invalid paint parameters: Layout failed: Timeout { elapsed: 4.756860653s }",
-  "hotspot": "unknown",
+  "notes": "timeout at layout after 4.874342085s",
+  "hotspot": "layout",
   "last_good_commit": "",
   "last_regression_commit": ""
 }

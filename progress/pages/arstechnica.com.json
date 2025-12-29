@@ -1,7 +1,7 @@
 {
   "url": "https://arstechnica.com/classic-preview/",
-  "status": "timeout",
-  "total_ms": 5000.0,
+  "status": "ok",
+  "total_ms": 1758.596032,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,
@@ -9,7 +9,7 @@
     "layout": 0.0,
     "paint": 0.0
   },
-  "notes": "timeout at cascade after 5.291677534s",
+  "notes": "",
   "hotspot": "unknown",
   "last_good_commit": "",
   "last_regression_commit": ""

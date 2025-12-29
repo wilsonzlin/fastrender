@@ -1,7 +1,7 @@
 {
   "url": "https://shopify.com/",
-  "status": "ok",
-  "total_ms": 1573.138386,
+  "status": "error",
+  "total_ms": 239.43264,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,
@@ -9,7 +9,7 @@
     "layout": 0.0,
     "paint": 0.0
   },
-  "notes": "",
+  "notes": "[paint] Invalid paint parameters: Layout failed: MissingContext(\"Shaping failed (fonts=8): Text(ShapingFailed { text: \\\"އ\\\\u{7a7}އ\\\\u{7a7}އ\\\\u{7a7}އ\\\", reason: \\\"No suitable font found for cluster އ\\\\u{7a7}\\\" })\")",
   "hotspot": "unknown",
   "last_good_commit": "",
   "last_regression_commit": ""

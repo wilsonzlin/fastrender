@@ -1,7 +1,7 @@
 {
   "url": "https://berkeley.edu/",
   "status": "ok",
-  "total_ms": 906.5835330000001,
+  "total_ms": 188.717839,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

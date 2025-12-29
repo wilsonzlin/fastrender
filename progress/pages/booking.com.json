@@ -1,0 +1,16 @@
+{
+  "url": "https://booking.com/",
+  "status": "error",
+  "total_ms": null,
+  "stages_ms": {
+    "fetch": 0.0,
+    "css": 0.0,
+    "cascade": 0.0,
+    "layout": 0.0,
+    "paint": 0.0
+  },
+  "notes": "fetch failed: [resource] https://booking.com/ (status 202): empty HTTP response body",
+  "hotspot": "fetch",
+  "last_good_commit": "",
+  "last_regression_commit": ""
+}

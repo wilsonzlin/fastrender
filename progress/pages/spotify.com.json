@@ -1,7 +1,7 @@
 {
   "url": "https://spotify.com/",
   "status": "ok",
-  "total_ms": 638.630935,
+  "total_ms": 566.1736080000001,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

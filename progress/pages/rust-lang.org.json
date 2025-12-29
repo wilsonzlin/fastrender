@@ -1,7 +1,7 @@
 {
   "url": "https://rust-lang.org/",
   "status": "ok",
-  "total_ms": 1564.720603,
+  "total_ms": 1772.837784,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

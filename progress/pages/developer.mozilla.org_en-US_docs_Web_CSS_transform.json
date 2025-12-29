@@ -1,7 +1,7 @@
 {
   "url": "https://developer.mozilla.org/en-US/docs/Web/CSS/transform",
   "status": "ok",
-  "total_ms": 941.387641,
+  "total_ms": 351.820326,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

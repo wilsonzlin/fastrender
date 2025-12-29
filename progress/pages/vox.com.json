@@ -1,7 +1,7 @@
 {
   "url": "https://vox.com/",
   "status": "ok",
-  "total_ms": 1153.0959540000001,
+  "total_ms": 602.581873,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

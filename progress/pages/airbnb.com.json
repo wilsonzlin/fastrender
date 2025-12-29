@@ -9,8 +9,8 @@
     "layout": 0.0,
     "paint": 0.0
   },
-  "notes": "timeout at cascade after 4.957894567s",
-  "hotspot": "unknown",
+  "notes": "timeout at cascade after 4.799769149s",
+  "hotspot": "cascade",
   "last_good_commit": "",
   "last_regression_commit": ""
 }

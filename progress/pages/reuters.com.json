@@ -1,7 +1,7 @@
 {
   "url": "https://reuters.com/",
   "status": "ok",
-  "total_ms": 561.9302349999999,
+  "total_ms": 32.904672000000005,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

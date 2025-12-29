@@ -1,7 +1,7 @@
 {
   "url": "https://news.ycombinator.com/",
   "status": "ok",
-  "total_ms": 1972.936251,
+  "total_ms": 990.255783,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

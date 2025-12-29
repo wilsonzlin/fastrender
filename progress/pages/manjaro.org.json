@@ -1,7 +1,7 @@
 {
   "url": "https://manjaro.org/",
-  "status": "ok",
-  "total_ms": 931.356694,
+  "status": "error",
+  "total_ms": 117.645543,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,
@@ -9,7 +9,7 @@
     "layout": 0.0,
     "paint": 0.0
   },
-  "notes": "",
+  "notes": "[paint] Invalid paint parameters: Layout failed: MissingContext(\"Shaping failed (fonts=8): Text(ShapingFailed { text: \\\"\\\\u{5f5}\\\\u{34e}\\\", reason: \\\"No suitable font found for cluster \\\\u{5f5}\\\\u{34e}\\\" })\")",
   "hotspot": "unknown",
   "last_good_commit": "",
   "last_regression_commit": ""

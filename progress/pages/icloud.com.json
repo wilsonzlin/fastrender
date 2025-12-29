@@ -1,7 +1,7 @@
 {
   "url": "https://icloud.com/",
   "status": "ok",
-  "total_ms": 655.675326,
+  "total_ms": 96.985146,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

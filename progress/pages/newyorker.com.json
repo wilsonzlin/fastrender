@@ -1,7 +1,7 @@
 {
   "url": "https://newyorker.com/",
   "status": "error",
-  "total_ms": 734.154802,
+  "total_ms": 243.05239500000002,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

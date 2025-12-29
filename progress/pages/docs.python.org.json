@@ -1,7 +1,7 @@
 {
   "url": "https://docs.python.org/",
   "status": "ok",
-  "total_ms": 1153.0958819999998,
+  "total_ms": 953.558963,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

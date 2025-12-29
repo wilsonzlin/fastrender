@@ -1,0 +1,16 @@
+{
+  "url": "https://washingtonpost.com/",
+  "status": "error",
+  "total_ms": null,
+  "stages_ms": {
+    "fetch": 0.0,
+    "css": 0.0,
+    "cascade": 0.0,
+    "layout": 0.0,
+    "paint": 0.0
+  },
+  "notes": "fetch failed: [resource] https://washingtonpost.com: timeout: global",
+  "hotspot": "fetch",
+  "last_good_commit": "",
+  "last_regression_commit": ""
+}

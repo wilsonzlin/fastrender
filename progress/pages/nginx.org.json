@@ -1,7 +1,7 @@
 {
   "url": "https://nginx.org/",
   "status": "ok",
-  "total_ms": 1004.3550180000001,
+  "total_ms": 398.899613,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

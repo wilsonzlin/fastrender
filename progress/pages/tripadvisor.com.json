@@ -1,7 +1,7 @@
 {
   "url": "https://tripadvisor.com/",
   "status": "ok",
-  "total_ms": 555.544154,
+  "total_ms": 27.935039,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

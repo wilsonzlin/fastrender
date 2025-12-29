@@ -1,7 +1,7 @@
 {
   "url": "https://fast.com/",
   "status": "ok",
-  "total_ms": 754.063712,
+  "total_ms": 390.936106,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

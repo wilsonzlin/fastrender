@@ -1,7 +1,7 @@
 {
   "url": "https://bloomberg.com/",
   "status": "ok",
-  "total_ms": 599.4114069999999,
+  "total_ms": 96.652887,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

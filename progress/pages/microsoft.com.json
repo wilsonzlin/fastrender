@@ -1,7 +1,7 @@
 {
   "url": "https://microsoft.com/",
   "status": "ok",
-  "total_ms": 1150.6175919999998,
+  "total_ms": 1456.349694,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

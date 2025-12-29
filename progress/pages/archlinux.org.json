@@ -1,7 +1,7 @@
 {
-  "url": "https://www.openstreetmap.org/",
+  "url": "https://archlinux.org/",
   "status": "ok",
-  "total_ms": 647.722322,
+  "total_ms": 1961.139956,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

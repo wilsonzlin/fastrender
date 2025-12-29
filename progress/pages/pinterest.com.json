@@ -1,7 +1,7 @@
 {
   "url": "https://pinterest.com/",
   "status": "error",
-  "total_ms": 580.7143219999999,
+  "total_ms": 307.549541,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,
@@ -9,7 +9,7 @@
     "layout": 0.0,
     "paint": 0.0
   },
-  "notes": "[paint] Invalid paint parameters: Layout failed: MissingContext(\"Shaping failed (fonts=8): Text(ShapingFailed { text: \\\"濊\\\\u{30f}��`�4��\\\", reason: \\\"No suitable font found for cluster 濊\\\\u{30f}\\\" })\")",
+  "notes": "[paint] Invalid paint parameters: Layout failed: MissingContext(\"Shaping failed (fonts=8): Text(ShapingFailed { text: \\\"\\\\u{659}\\\\u{65d}��\\\", reason: \\\"No suitable font found for cluster \\\\u{659}\\\\u{65d}\\\" })\")",
   "hotspot": "unknown",
   "last_good_commit": "",
   "last_regression_commit": ""

@@ -1,7 +1,7 @@
 {
   "url": "https://newsweek.com/",
   "status": "error",
-  "total_ms": 687.817188,
+  "total_ms": 115.304569,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

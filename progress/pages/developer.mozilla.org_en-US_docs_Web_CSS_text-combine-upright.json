@@ -1,7 +1,7 @@
 {
   "url": "https://developer.mozilla.org/en-US/docs/Web/CSS/text-combine-upright",
   "status": "ok",
-  "total_ms": 894.158408,
+  "total_ms": 330.859093,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

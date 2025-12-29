@@ -9,8 +9,8 @@
     "layout": 0.0,
     "paint": 0.0
   },
-  "notes": "timeout at paint after 4.762313314s",
-  "hotspot": "unknown",
+  "notes": "timeout at css after 4.804384352s",
+  "hotspot": "css",
   "last_good_commit": "",
   "last_regression_commit": ""
 }

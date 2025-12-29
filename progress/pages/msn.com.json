@@ -1,7 +1,7 @@
 {
   "url": "https://msn.com/",
   "status": "ok",
-  "total_ms": 618.706864,
+  "total_ms": 137.33175,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

@@ -1,7 +1,7 @@
 {
   "url": "https://vogue.com/",
   "status": "error",
-  "total_ms": 640.009953,
+  "total_ms": 132.059696,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

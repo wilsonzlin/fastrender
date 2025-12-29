@@ -1,7 +1,7 @@
 {
   "url": "https://lite.cnn.com/",
   "status": "error",
-  "total_ms": 602.653924,
+  "total_ms": 47.601694,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

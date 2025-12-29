@@ -1,7 +1,7 @@
 {
   "url": "https://openbsd.org/",
   "status": "ok",
-  "total_ms": 2807.743409,
+  "total_ms": 1645.8047439999998,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

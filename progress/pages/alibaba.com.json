@@ -1,7 +1,7 @@
 {
   "url": "https://alibaba.com/offer.alibaba.com",
   "status": "ok",
-  "total_ms": 3356.334397,
+  "total_ms": 1005.0436540000001,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

@@ -1,7 +1,7 @@
 {
   "url": "https://example.org/",
   "status": "ok",
-  "total_ms": 581.5910090000001,
+  "total_ms": 14.797986000000002,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

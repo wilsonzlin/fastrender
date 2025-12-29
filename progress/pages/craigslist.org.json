@@ -1,7 +1,7 @@
 {
   "url": "https://craigslist.org/",
   "status": "ok",
-  "total_ms": 924.012413,
+  "total_ms": 368.79102800000004,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

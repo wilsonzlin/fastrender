@@ -1,7 +1,7 @@
 {
   "url": "https://theverge.com/",
   "status": "error",
-  "total_ms": 702.445479,
+  "total_ms": 121.816064,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

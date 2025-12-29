@@ -1,7 +1,7 @@
 {
   "url": "https://lobste.rs/",
   "status": "ok",
-  "total_ms": 2398.675791,
+  "total_ms": 2167.199244,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

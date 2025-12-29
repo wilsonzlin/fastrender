@@ -1,7 +1,7 @@
 {
   "url": "https://wired.com/",
   "status": "error",
-  "total_ms": 771.263016,
+  "total_ms": 268.297118,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

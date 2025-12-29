@@ -1,7 +1,7 @@
 {
   "url": "https://xkcd.com/",
   "status": "ok",
-  "total_ms": 610.944814,
+  "total_ms": 56.848098,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

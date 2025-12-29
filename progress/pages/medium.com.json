@@ -1,7 +1,7 @@
 {
   "url": "https://medium.com/",
   "status": "ok",
-  "total_ms": 853.262026,
+  "total_ms": 351.38200800000004,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

@@ -1,7 +1,7 @@
 {
   "url": "https://linkedin.com/",
   "status": "ok",
-  "total_ms": 893.375591,
+  "total_ms": 477.374433,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

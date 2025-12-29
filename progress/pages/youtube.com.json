@@ -1,7 +1,7 @@
 {
   "url": "https://youtube.com/",
   "status": "ok",
-  "total_ms": 1573.333291,
+  "total_ms": 1038.632506,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

@@ -1,7 +1,7 @@
 {
-  "url": "https://w3.org/",
+  "url": "https://www.w3.org/",
   "status": "ok",
-  "total_ms": 716.198652,
+  "total_ms": 146.27564,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

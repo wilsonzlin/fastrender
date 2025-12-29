@@ -1,7 +1,7 @@
 {
   "url": "https://iana.org/",
   "status": "ok",
-  "total_ms": 617.467109,
+  "total_ms": 53.65484,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

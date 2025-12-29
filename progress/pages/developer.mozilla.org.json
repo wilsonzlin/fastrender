@@ -1,7 +1,7 @@
 {
   "url": "https://developer.mozilla.org/",
   "status": "ok",
-  "total_ms": 775.3723219999999,
+  "total_ms": 184.85601400000002,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

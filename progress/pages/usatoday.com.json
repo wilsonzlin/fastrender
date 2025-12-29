@@ -1,7 +1,7 @@
 {
   "url": "https://usatoday.com/",
   "status": "error",
-  "total_ms": 750.11476,
+  "total_ms": 235.14009099999998,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,
@@ -9,7 +9,7 @@
     "layout": 0.0,
     "paint": 0.0
   },
-  "notes": "[paint] Invalid paint parameters: Layout failed: MissingContext(\"Shaping failed (fonts=8): Text(ShapingFailed { text: \\\"ވ\\\\u{319}\\\", reason: \\\"No suitable font found for cluster ވ\\\\u{319}\\\" })\")",
+  "notes": "[paint] Invalid paint parameters: Layout failed: MissingContext(\"Shaping failed (fonts=8): Text(ShapingFailed { text: \\\"軖\\\\u{340}\\\", reason: \\\"No suitable font found for cluster 軖\\\\u{340}\\\" })\")",
   "hotspot": "unknown",
   "last_good_commit": "",
   "last_regression_commit": ""

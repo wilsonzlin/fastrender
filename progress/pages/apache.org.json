@@ -1,7 +1,7 @@
 {
-  "url": "https://apache.org/",
-  "status": "ok",
-  "total_ms": 2442.057507,
+  "url": "https://apache.org",
+  "status": "timeout",
+  "total_ms": 5000.0,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,
@@ -9,7 +9,7 @@
     "layout": 0.0,
     "paint": 0.0
   },
-  "notes": "",
+  "notes": "hard timeout after 5.00s",
   "hotspot": "unknown",
   "last_good_commit": "",
   "last_regression_commit": ""

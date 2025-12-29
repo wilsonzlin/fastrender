@@ -1,7 +1,7 @@
 {
   "url": "https://cnn.com",
   "status": "panic",
-  "total_ms": 1084.883792,
+  "total_ms": 219.564275,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,
@@ -9,7 +9,7 @@
     "layout": 0.0,
     "paint": 0.0
   },
-  "notes": "worker exited without writing progress",
+  "notes": "worker exited (exit signal 6) without writing progress",
   "hotspot": "unknown",
   "last_good_commit": "",
   "last_regression_commit": ""

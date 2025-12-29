@@ -1,7 +1,7 @@
 {
   "url": "https://discord.com/",
   "status": "ok",
-  "total_ms": 827.045586,
+  "total_ms": 245.77853299999998,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,
