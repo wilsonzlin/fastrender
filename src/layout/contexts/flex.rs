@@ -433,8 +433,6 @@ impl FormattingContext for FlexFormattingContext {
       u64,
       HashMap<(Option<u32>, Option<u32>), (Size, std::sync::Arc<FragmentNode>)>,
     > = HashMap::new();
-    let mut pass_stores: HashMap<u64, usize> = HashMap::new();
-    let mut pass_hits: HashMap<u64, usize> = HashMap::new();
     let compute_timer = flex_profile::timer();
     let log_root = toggles.truthy("FASTR_LOG_FLEX_ROOT");
     if log_root {
@@ -934,7 +932,6 @@ impl FormattingContext for FlexFormattingContext {
                         flex_profile::record_measure_hit();
                         flex_profile::record_measure_bucket_hit(w_state, h_state);
                         flex_profile::record_measure_time(measure_timer);
-                        *pass_hits.entry(cache_key).or_insert(0) += 1;
                         return taffy::geometry::Size { width: size.width, height: size.height };
                     }
                     if let Some(entry) = pass_cache.get(&cache_key) {
@@ -1335,15 +1332,15 @@ impl FormattingContext for FlexFormattingContext {
                             flex_profile::record_measure_store(false);
                         }
                     }
-                        if let Some(_ptr) = node_ptr {
-                            let entry = pass_cache.entry(cache_key).or_default();
-                            if let Entry::Vacant(e) = entry.entry(key) {
-                                let stored_size = Size::new(content_size.width.max(0.0), content_size.height.max(0.0));
-                                e.insert((stored_size, normalized_fragment.clone()));
-                                *pass_stores.entry(cache_key).or_insert(0) += 1;
-                                record_node_measure_store(measure_box.id);
-                            }
+                    if let Some(_ptr) = node_ptr {
+                        let entry = pass_cache.entry(cache_key).or_default();
+                        if let Entry::Vacant(e) = entry.entry(key) {
+                            let stored_size =
+                                Size::new(content_size.width.max(0.0), content_size.height.max(0.0));
+                            e.insert((stored_size, normalized_fragment.clone()));
+                            record_node_measure_store(measure_box.id);
                         }
+                    }
 
                     let size = taffy::geometry::Size {
                         width: content_size.width.max(0.0),
