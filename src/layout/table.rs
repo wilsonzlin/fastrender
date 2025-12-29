@@ -71,6 +71,7 @@ use crate::tree::box_tree::MarkerContent;
 use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
 use crate::tree::table_fixup::TableStructureFixer;
+use crate::{render_control::active_deadline, render_control::with_deadline};
 use rayon::prelude::*;
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -4515,13 +4516,16 @@ impl FormattingContext for TableFormattingContext {
 
     let (mut laid_out_cells, mut failed_cells) =
       if self.parallelism.should_parallelize(structure.cells.len()) && !dump {
+        let deadline = active_deadline();
         let mut outcomes = structure
           .cells
           .par_iter()
           .enumerate()
           .map(|(idx, cell)| {
-            crate::layout::engine::debug_record_parallel_work();
-            (idx, layout_single_cell(cell))
+            with_deadline(deadline.as_ref(), || {
+              crate::layout::engine::debug_record_parallel_work();
+              (idx, layout_single_cell(cell))
+            })
           })
           .collect::<Vec<_>>();
         outcomes.sort_by_key(|(idx, _)| *idx);

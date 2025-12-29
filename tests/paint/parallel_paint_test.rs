@@ -1,12 +1,30 @@
+use fastrender::error::{Error, RenderError, RenderStage};
 use fastrender::paint::display_list::{
   BlendMode, BoxShadowItem, ClipItem, ClipShape, DisplayItem, DisplayList, FillRectItem,
   ResolvedFilter, StackingContextItem, StrokeRectItem, StrokeRoundedRectItem, Transform3D,
   TransformItem,
 };
 use fastrender::paint::display_list_renderer::{DisplayListRenderer, PaintParallelism};
+use fastrender::render_control::{DeadlineGuard, RenderDeadline};
 use fastrender::style::types::{BackfaceVisibility, TransformStyle};
 use fastrender::text::font_loader::FontContext;
 use fastrender::{BorderRadii, Point, Rect, Rgba};
+use std::time::Duration;
+
+struct EnvGuard(&'static str);
+
+impl EnvGuard {
+  fn set(key: &'static str, value: &str) -> Self {
+    std::env::set_var(key, value);
+    Self(key)
+  }
+}
+
+impl Drop for EnvGuard {
+  fn drop(&mut self) {
+    std::env::remove_var(self.0);
+  }
+}
 
 fn basic_list() -> DisplayList {
   let mut list = DisplayList::new();
@@ -216,4 +234,28 @@ fn backdrop_filters_trigger_serial_fallback() {
     "backdrop filters should disable parallel painting"
   );
   assert_eq!(serial.data(), report.pixmap.data());
+}
+
+#[test]
+fn parallel_paint_respects_deadline() {
+  let _delay_guard = EnvGuard::set("FASTR_TEST_RENDER_DELAY_MS", "20");
+  let deadline = RenderDeadline::new(Some(Duration::from_millis(1)), None);
+  let parallelism = PaintParallelism {
+    enabled: true,
+    tile_size: 16,
+    log_timing: false,
+  };
+  let renderer = DisplayListRenderer::new(128, 128, Rgba::WHITE, FontContext::new())
+    .unwrap()
+    .with_parallelism(parallelism);
+
+  let err = {
+    let _guard = DeadlineGuard::install(Some(&deadline));
+    renderer.render(&basic_list()).unwrap_err()
+  };
+
+  match err {
+    Error::Render(RenderError::Timeout { stage, .. }) => assert_eq!(stage, RenderStage::Paint),
+    other => panic!("expected paint timeout, got {other:?}"),
+  }
 }

@@ -6,6 +6,7 @@
 //! renderer to keep filter behavior in sync.
 
 use crate::paint::blur::apply_gaussian_blur;
+use crate::render_control::{active_deadline, with_deadline};
 use crate::style::color::Rgba;
 use rayon::prelude::*;
 use tiny_skia::BlendMode as SkiaBlendMode;
@@ -19,9 +20,10 @@ where
 {
   let pixels = pixmap.pixels_mut();
   if pixels.len() > COLOR_FILTER_PARALLEL_THRESHOLD {
+    let deadline = active_deadline();
     pixels
       .par_iter_mut()
-      .for_each(|px| apply_color_filter_to_pixel(px, &f));
+      .for_each(|px| with_deadline(deadline.as_ref(), || apply_color_filter_to_pixel(px, &f)));
   } else {
     for px in pixels.iter_mut() {
       if std::env::var("DEBUG_FILTER_PIXEL").is_ok() {

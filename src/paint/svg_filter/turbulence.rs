@@ -1,4 +1,5 @@
 use crate::geometry::Rect;
+use crate::render_control::{active_deadline, with_deadline};
 use rayon::prelude::*;
 use tiny_skia::{Pixmap, PremultipliedColorU8};
 
@@ -75,6 +76,7 @@ pub(super) fn render_turbulence(
   let stitch_width = region.width.saturating_sub(1).max(1);
   let stitch_height = region.height.saturating_sub(1).max(1);
 
+  let deadline = active_deadline();
   pixmap
     .pixels_mut()
     .par_chunks_mut(row_len)
@@ -82,49 +84,51 @@ pub(super) fn render_turbulence(
     .skip(region.y as usize)
     .take(region.height as usize)
     .for_each(|(y, row)| {
-      let y_coord = (y - region.y as usize) as f32;
-      let row_slice = &mut row[start_x..end_x];
-      for (x_offset, px) in row_slice.iter_mut().enumerate() {
-        let x_coord = x_offset as f32;
-        let mut freq_x = base_freq_x;
-        let mut freq_y = base_freq_y;
-        let mut amplitude = 1.0;
-        let mut value = 0.0;
+      with_deadline(deadline.as_ref(), || {
+        let y_coord = (y - region.y as usize) as f32;
+        let row_slice = &mut row[start_x..end_x];
+        for (x_offset, px) in row_slice.iter_mut().enumerate() {
+          let x_coord = x_offset as f32;
+          let mut freq_x = base_freq_x;
+          let mut freq_y = base_freq_y;
+          let mut amplitude = 1.0;
+          let mut value = 0.0;
 
-        for _ in 0..octaves {
-          let (freq_x_adj, wrap_x) = adjust_frequency(freq_x, stitch_width, stitch_tiles);
-          let (freq_y_adj, wrap_y) = adjust_frequency(freq_y, stitch_height, stitch_tiles);
-          let noise = if freq_x_adj == 0.0 && freq_y_adj == 0.0 {
-            0.0
+          for _ in 0..octaves {
+            let (freq_x_adj, wrap_x) = adjust_frequency(freq_x, stitch_width, stitch_tiles);
+            let (freq_y_adj, wrap_y) = adjust_frequency(freq_y, stitch_height, stitch_tiles);
+            let noise = if freq_x_adj == 0.0 && freq_y_adj == 0.0 {
+              0.0
+            } else {
+              perlin(
+                x_coord * freq_x_adj,
+                y_coord * freq_y_adj,
+                &perm_table,
+                wrap_x,
+                wrap_y,
+              )
+            };
+            let noise = match kind {
+              TurbulenceType::FractalNoise => noise,
+              TurbulenceType::Turbulence => noise.abs(),
+            };
+            value += noise * amplitude;
+            freq_x *= 2.0;
+            freq_y *= 2.0;
+            amplitude *= 0.5;
+          }
+
+          let normalized = if normalization > 0.0 {
+            value / normalization
           } else {
-            perlin(
-              x_coord * freq_x_adj,
-              y_coord * freq_y_adj,
-              &perm_table,
-              wrap_x,
-              wrap_y,
-            )
+            0.0
           };
-          let noise = match kind {
-            TurbulenceType::FractalNoise => noise,
-            TurbulenceType::Turbulence => noise.abs(),
-          };
-          value += noise * amplitude;
-          freq_x *= 2.0;
-          freq_y *= 2.0;
-          amplitude *= 0.5;
+          let mapped = (normalized * 0.5 + 0.5).clamp(0.0, 1.0);
+          let byte = (mapped * 255.0).round().clamp(0.0, 255.0) as u8;
+          *px = PremultipliedColorU8::from_rgba(byte, byte, byte, 255)
+            .unwrap_or(PremultipliedColorU8::TRANSPARENT);
         }
-
-        let normalized = if normalization > 0.0 {
-          value / normalization
-        } else {
-          0.0
-        };
-        let mapped = (normalized * 0.5 + 0.5).clamp(0.0, 1.0);
-        let byte = (mapped * 255.0).round().clamp(0.0, 255.0) as u8;
-        *px = PremultipliedColorU8::from_rgba(byte, byte, byte, 255)
-          .unwrap_or(PremultipliedColorU8::TRANSPARENT);
-      }
+      });
     });
 
   Some(pixmap)

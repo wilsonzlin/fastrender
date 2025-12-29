@@ -1,6 +1,7 @@
 use crate::geometry::{Point, Rect};
 use crate::image_loader::ImageCache;
 use crate::paint::blur::apply_gaussian_blur_anisotropic;
+use crate::render_control::{active_deadline, with_deadline};
 use crate::style::color;
 use crate::tree::box_tree::ReplacedType;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
@@ -2517,54 +2518,57 @@ fn apply_diffuse_lighting(
   let light = light.clone();
   let width = input.pixmap.width() as usize;
 
+  let deadline = active_deadline();
   out
     .pixels_mut()
     .par_iter_mut()
     .enumerate()
     .for_each(|(idx, dst)| {
-      let y = (idx / width) as u32;
-      let x = (idx % width) as u32;
-      let css_x = origin_x + x as f32 * inv_scale_x;
-      let css_y = origin_y + y as f32 * inv_scale_y;
-      let alpha = sample_alpha_at(&input.pixmap, css_x, css_y, css_bbox, scale_x, scale_y);
-      if alpha <= 0.0 {
-        *dst = PremultipliedColorU8::TRANSPARENT;
-        return;
-      }
-      let normal = surface_normal(
-        &input.pixmap,
-        css_x,
-        css_y,
-        css_bbox,
-        scale_x,
-        scale_y,
-        surface_scale,
-        kernel_unit,
-      );
-      let height = sample_height_at(
-        &input.pixmap,
-        css_x,
-        css_y,
-        css_bbox,
-        scale_x,
-        scale_y,
-        surface_scale,
-      );
-      let (light_dir, light_factor) =
-        compute_light_direction(filter, css_bbox, &light, (css_x, css_y, height));
-      let n_dot_l = dot3(normal, light_dir).max(0.0);
-      let intensity = n_dot_l * diffuse_constant * light_factor;
-      let color_scale = (intensity * base_color.a * alpha).clamp(0.0, 1.0);
-      let out_alpha = color_scale;
-      *dst = pack_color(
-        UnpremultipliedColor {
-          r: base_color.r * color_scale,
-          g: base_color.g * color_scale,
-          b: base_color.b * color_scale,
-          a: out_alpha,
-        },
-        color_interpolation_filters,
-      );
+      with_deadline(deadline.as_ref(), || {
+        let y = (idx / width) as u32;
+        let x = (idx % width) as u32;
+        let css_x = origin_x + x as f32 * inv_scale_x;
+        let css_y = origin_y + y as f32 * inv_scale_y;
+        let alpha = sample_alpha_at(&input.pixmap, css_x, css_y, css_bbox, scale_x, scale_y);
+        if alpha <= 0.0 {
+          *dst = PremultipliedColorU8::TRANSPARENT;
+          return;
+        }
+        let normal = surface_normal(
+          &input.pixmap,
+          css_x,
+          css_y,
+          css_bbox,
+          scale_x,
+          scale_y,
+          surface_scale,
+          kernel_unit,
+        );
+        let height = sample_height_at(
+          &input.pixmap,
+          css_x,
+          css_y,
+          css_bbox,
+          scale_x,
+          scale_y,
+          surface_scale,
+        );
+        let (light_dir, light_factor) =
+          compute_light_direction(filter, css_bbox, &light, (css_x, css_y, height));
+        let n_dot_l = dot3(normal, light_dir).max(0.0);
+        let intensity = n_dot_l * diffuse_constant * light_factor;
+        let color_scale = (intensity * base_color.a * alpha).clamp(0.0, 1.0);
+        let out_alpha = color_scale;
+        *dst = pack_color(
+          UnpremultipliedColor {
+            r: base_color.r * color_scale,
+            g: base_color.g * color_scale,
+            b: base_color.b * color_scale,
+            a: out_alpha,
+          },
+          color_interpolation_filters,
+        );
+      });
     });
 
   Some(FilterResult::new(out, input.region, filter_region))
@@ -2611,64 +2615,67 @@ fn apply_specular_lighting(
   let width = input.pixmap.width() as usize;
   let exponent = specular_exponent.clamp(0.0, 128.0);
 
+  let deadline = active_deadline();
   out
     .pixels_mut()
     .par_iter_mut()
     .enumerate()
     .for_each(|(idx, dst)| {
-      let y = (idx / width) as u32;
-      let x = (idx % width) as u32;
-      let css_x = origin_x + x as f32 * inv_scale_x;
-      let css_y = origin_y + y as f32 * inv_scale_y;
-      let alpha = sample_alpha_at(&input.pixmap, css_x, css_y, css_bbox, scale_x, scale_y);
-      if alpha <= 0.0 {
-        *dst = PremultipliedColorU8::TRANSPARENT;
-        return;
-      }
-      let normal = surface_normal(
-        &input.pixmap,
-        css_x,
-        css_y,
-        css_bbox,
-        scale_x,
-        scale_y,
-        surface_scale,
-        kernel_unit,
-      );
-      let height = sample_height_at(
-        &input.pixmap,
-        css_x,
-        css_y,
-        css_bbox,
-        scale_x,
-        scale_y,
-        surface_scale,
-      );
-      let (light_dir, light_factor) =
-        compute_light_direction(filter, css_bbox, &light, (css_x, css_y, height));
-      let n_dot_l = dot3(normal, light_dir).max(0.0);
-      if n_dot_l <= 0.0 || light_factor <= 0.0 {
-        *dst = PremultipliedColorU8::TRANSPARENT;
-        return;
-      }
-      let reflect = normalize3(
-        2.0 * n_dot_l * normal.0 - light_dir.0,
-        2.0 * n_dot_l * normal.1 - light_dir.1,
-        2.0 * n_dot_l * normal.2 - light_dir.2,
-      );
-      let spec_angle = reflect.2.max(0.0).powf(exponent);
-      let intensity = specular_constant * spec_angle * light_factor;
-      let color_scale = (intensity * base_color.a * alpha).clamp(0.0, 1.0);
-      let out_alpha = color_scale;
-      *dst = pack_color(
-        UnpremultipliedColor {
-          r: base_color.r * color_scale,
-          g: base_color.g * color_scale,
-          b: base_color.b * color_scale,
-          a: out_alpha,
-        },
-        color_interpolation_filters,
-      );
+      with_deadline(deadline.as_ref(), || {
+        let y = (idx / width) as u32;
+        let x = (idx % width) as u32;
+        let css_x = origin_x + x as f32 * inv_scale_x;
+        let css_y = origin_y + y as f32 * inv_scale_y;
+        let alpha = sample_alpha_at(&input.pixmap, css_x, css_y, css_bbox, scale_x, scale_y);
+        if alpha <= 0.0 {
+          *dst = PremultipliedColorU8::TRANSPARENT;
+          return;
+        }
+        let normal = surface_normal(
+          &input.pixmap,
+          css_x,
+          css_y,
+          css_bbox,
+          scale_x,
+          scale_y,
+          surface_scale,
+          kernel_unit,
+        );
+        let height = sample_height_at(
+          &input.pixmap,
+          css_x,
+          css_y,
+          css_bbox,
+          scale_x,
+          scale_y,
+          surface_scale,
+        );
+        let (light_dir, light_factor) =
+          compute_light_direction(filter, css_bbox, &light, (css_x, css_y, height));
+        let n_dot_l = dot3(normal, light_dir).max(0.0);
+        if n_dot_l <= 0.0 || light_factor <= 0.0 {
+          *dst = PremultipliedColorU8::TRANSPARENT;
+          return;
+        }
+        let reflect = normalize3(
+          2.0 * n_dot_l * normal.0 - light_dir.0,
+          2.0 * n_dot_l * normal.1 - light_dir.1,
+          2.0 * n_dot_l * normal.2 - light_dir.2,
+        );
+        let spec_angle = reflect.2.max(0.0).powf(exponent);
+        let intensity = specular_constant * spec_angle * light_factor;
+        let color_scale = (intensity * base_color.a * alpha).clamp(0.0, 1.0);
+        let out_alpha = color_scale;
+        *dst = pack_color(
+          UnpremultipliedColor {
+            r: base_color.r * color_scale,
+            g: base_color.g * color_scale,
+            b: base_color.b * color_scale,
+            a: out_alpha,
+          },
+          color_interpolation_filters,
+        );
+      });
     });
 
   Some(FilterResult::new(out, input.region, filter_region))
@@ -3281,63 +3288,66 @@ fn apply_convolve_matrix(
     return out;
   }
 
+  let deadline = active_deadline();
   dst_pixels
     .par_iter_mut()
     .enumerate()
     .for_each(|(idx, dst_px)| {
-      let y = (idx / width) as i32;
-      let x = (idx % width) as i32;
-      if x < sub_min_x || x >= sub_max_x || y < sub_min_y || y >= sub_max_y {
-        return;
-      }
-      let preserved_alpha = if preserve_alpha {
-        src_pixels[idx].alpha() as f32 / 255.0
-      } else {
-        0.0
-      };
+      with_deadline(deadline.as_ref(), || {
+        let y = (idx / width) as i32;
+        let x = (idx % width) as i32;
+        if x < sub_min_x || x >= sub_max_x || y < sub_min_y || y >= sub_max_y {
+          return;
+        }
+        let preserved_alpha = if preserve_alpha {
+          src_pixels[idx].alpha() as f32 / 255.0
+        } else {
+          0.0
+        };
 
-      let mut sum_r = 0.0;
-      let mut sum_g = 0.0;
-      let mut sum_b = 0.0;
-      let mut sum_a = 0.0;
+        let mut sum_r = 0.0;
+        let mut sum_g = 0.0;
+        let mut sum_b = 0.0;
+        let mut sum_a = 0.0;
 
-      for (ky, row) in kernel_rows.iter().enumerate() {
-        let sy = y + ky as i32 - target_y;
-        for (kx, weight) in row.iter().enumerate() {
-          if *weight == 0.0 {
-            continue;
-          }
-          let sx = x + kx as i32 - target_x;
-          if let Some(px) = sample_pixel(src_pixels, sx, sy, width_i32, height_i32, edge_mode) {
-            let (r, g, b, a) = unpremultiply(px);
-            sum_r += r * weight;
-            sum_g += g * weight;
-            sum_b += b * weight;
-            sum_a += a * weight;
+        for (ky, row) in kernel_rows.iter().enumerate() {
+          let sy = y + ky as i32 - target_y;
+          for (kx, weight) in row.iter().enumerate() {
+            if *weight == 0.0 {
+              continue;
+            }
+            let sx = x + kx as i32 - target_x;
+            if let Some(px) = sample_pixel(src_pixels, sx, sy, width_i32, height_i32, edge_mode) {
+              let (r, g, b, a) = unpremultiply(px);
+              sum_r += r * weight;
+              sum_g += g * weight;
+              sum_b += b * weight;
+              sum_a += a * weight;
+            }
           }
         }
-      }
 
-      let r = sum_r / divisor + bias;
-      let g = sum_g / divisor + bias;
-      let b = sum_b / divisor + bias;
-      let a = sum_a / divisor + bias;
-      let clamp = |v: f32| v.clamp(0.0, 1.0);
-      let out_alpha = if preserve_alpha {
-        preserved_alpha
-      } else {
-        clamp(a)
-      };
-      let to_channel =
-        |v: f32, alpha: f32| (clamp(v) * alpha * 255.0).round().clamp(0.0, 255.0) as u8;
-      let a_byte = (out_alpha * 255.0).round().clamp(0.0, 255.0) as u8;
-      *dst_px = PremultipliedColorU8::from_rgba(
-        to_channel(r, out_alpha),
-        to_channel(g, out_alpha),
-        to_channel(b, out_alpha),
-        a_byte,
-      )
-      .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+        let r = sum_r / divisor + bias;
+        let g = sum_g / divisor + bias;
+        let b = sum_b / divisor + bias;
+        let a = sum_a / divisor + bias;
+        let clamp = |v: f32| v.clamp(0.0, 1.0);
+        let out_alpha = if preserve_alpha {
+          preserved_alpha
+        } else {
+          clamp(a)
+        };
+        let to_channel =
+          |v: f32, alpha: f32| (clamp(v) * alpha * 255.0).round().clamp(0.0, 255.0) as u8;
+        let a_byte = (out_alpha * 255.0).round().clamp(0.0, 255.0) as u8;
+        *dst_px = PremultipliedColorU8::from_rgba(
+          to_channel(r, out_alpha),
+          to_channel(g, out_alpha),
+          to_channel(b, out_alpha),
+          a_byte,
+        )
+        .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+      });
     });
 
   out
@@ -3404,37 +3414,40 @@ fn apply_morphology(pixmap: &mut Pixmap, radius: (f32, f32), op: MorphologyOp) {
   let dst = pixmap.pixels_mut();
   let row_len = width as usize;
 
+  let deadline = active_deadline();
   dst.par_iter_mut().enumerate().for_each(|(idx, dst_px)| {
-    let y = (idx / row_len) as i32;
-    let x = (idx % row_len) as i32;
-    let mut agg = match op {
-      MorphologyOp::Dilate => [0u8; 4],
-      MorphologyOp::Erode => [255u8; 4],
-    };
-    for dy in -ry..=ry {
-      for dx in -rx..=rx {
-        let ny = (y + dy).clamp(0, height - 1);
-        let nx = (x + dx).clamp(0, width - 1);
-        let sample_idx = (ny as usize) * row_len + nx as usize;
-        let px = src[sample_idx];
-        match op {
-          MorphologyOp::Dilate => {
-            agg[0] = agg[0].max(px.red());
-            agg[1] = agg[1].max(px.green());
-            agg[2] = agg[2].max(px.blue());
-            agg[3] = agg[3].max(px.alpha());
-          }
-          MorphologyOp::Erode => {
-            agg[0] = agg[0].min(px.red());
-            agg[1] = agg[1].min(px.green());
-            agg[2] = agg[2].min(px.blue());
-            agg[3] = agg[3].min(px.alpha());
+    with_deadline(deadline.as_ref(), || {
+      let y = (idx / row_len) as i32;
+      let x = (idx % row_len) as i32;
+      let mut agg = match op {
+        MorphologyOp::Dilate => [0u8; 4],
+        MorphologyOp::Erode => [255u8; 4],
+      };
+      for dy in -ry..=ry {
+        for dx in -rx..=rx {
+          let ny = (y + dy).clamp(0, height - 1);
+          let nx = (x + dx).clamp(0, width - 1);
+          let sample_idx = (ny as usize) * row_len + nx as usize;
+          let px = src[sample_idx];
+          match op {
+            MorphologyOp::Dilate => {
+              agg[0] = agg[0].max(px.red());
+              agg[1] = agg[1].max(px.green());
+              agg[2] = agg[2].max(px.blue());
+              agg[3] = agg[3].max(px.alpha());
+            }
+            MorphologyOp::Erode => {
+              agg[0] = agg[0].min(px.red());
+              agg[1] = agg[1].min(px.green());
+              agg[2] = agg[2].min(px.blue());
+              agg[3] = agg[3].min(px.alpha());
+            }
           }
         }
       }
-    }
-    *dst_px = PremultipliedColorU8::from_rgba(agg[0], agg[1], agg[2], agg[3])
-      .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+      *dst_px = PremultipliedColorU8::from_rgba(agg[0], agg[1], agg[2], agg[3])
+        .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+    });
   });
 }
 

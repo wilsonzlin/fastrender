@@ -149,3 +149,14 @@ pub fn check_active_periodic(
     }
   })
 }
+
+/// Returns the currently installed deadline for this thread, if any.
+pub fn active_deadline() -> Option<RenderDeadline> {
+  ACTIVE_DEADLINE.with(|active| active.borrow().clone())
+}
+
+/// Installs `deadline` for the duration of the provided closure.
+pub fn with_deadline<T>(deadline: Option<&RenderDeadline>, f: impl FnOnce() -> T) -> T {
+  let _guard = DeadlineGuard::install(deadline);
+  f()
+}

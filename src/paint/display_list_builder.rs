@@ -92,6 +92,7 @@ use crate::paint::svg_filter::SvgFilterResolver;
 use crate::paint::text_shadow::resolve_text_shadows;
 use crate::paint::transform3d::backface_is_hidden;
 use crate::paint::transform_resolver::ResolvedTransforms;
+use crate::render_control::{active_deadline, with_deadline};
 use crate::scroll::ScrollState;
 use crate::style::block_axis_is_horizontal;
 use crate::style::block_axis_positive;
@@ -2223,17 +2224,20 @@ impl DisplayListBuilder {
     suppress_opacity: bool,
   ) {
     if self.should_parallelize(fragments.len()) {
+      let deadline = active_deadline();
       let mut partials: Vec<(usize, DisplayList)> = fragments
         .par_iter()
         .enumerate()
         .map(|(idx, fragment)| {
-          let mut builder = self.fork();
-          if suppress_opacity {
-            builder.build_fragment_internal(fragment, offset, false, true);
-          } else {
-            builder.build_fragment_shallow(fragment, offset);
-          }
-          (idx, builder.list)
+          with_deadline(deadline.as_ref(), || {
+            let mut builder = self.fork();
+            if suppress_opacity {
+              builder.build_fragment_internal(fragment, offset, false, true);
+            } else {
+              builder.build_fragment_shallow(fragment, offset);
+            }
+            (idx, builder.list)
+          })
         })
         .collect();
       partials.sort_by_key(|(idx, _)| *idx);

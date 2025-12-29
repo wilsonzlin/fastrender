@@ -52,7 +52,7 @@ use crate::layout::profile::LayoutKind;
 use crate::layout::taffy_integration::{record_taffy_invocation, TaffyAdapterKind};
 use crate::layout::utils::resolve_length_with_percentage_metrics;
 use crate::layout::utils::resolve_scrollbar_width;
-use crate::render_control::check_active;
+use crate::render_control::{active_deadline, check_active, with_deadline};
 use crate::style::display::Display;
 use crate::style::display::FormattingContextType;
 use crate::style::position::Position;
@@ -2152,12 +2152,15 @@ impl FormattingContext for FlexFormattingContext {
     };
 
     let contributions = if self.parallelism.should_parallelize(box_node.children.len()) {
+      let deadline = active_deadline();
       box_node
         .children
         .par_iter()
         .map(|child| {
-          crate::layout::engine::debug_record_parallel_work();
-          compute_child_contribution(child)
+          with_deadline(deadline.as_ref(), || {
+            crate::layout::engine::debug_record_parallel_work();
+            compute_child_contribution(child)
+          })
         })
         .collect::<Result<Vec<_>, _>>()?
     } else {

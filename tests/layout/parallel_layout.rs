@@ -1,3 +1,4 @@
+use fastrender::render_control::RenderDeadline;
 use fastrender::snapshot_fragment_tree;
 use fastrender::style::display::Display;
 use fastrender::style::position::Position;
@@ -5,10 +6,26 @@ use fastrender::style::values::Length;
 use fastrender::style::ComputedStyle;
 use fastrender::text::font_loader::FontContext;
 use fastrender::{
-  BoxNode, BoxTree, FormattingContextType, FragmentNodeSnapshot, FragmentTreeSnapshot,
-  LayoutConfig, LayoutEngine, LayoutParallelism, Size,
+  error::LayoutError, BoxNode, BoxTree, FormattingContextType, FragmentNodeSnapshot,
+  FragmentTreeSnapshot, LayoutConfig, LayoutEngine, LayoutParallelism, Size,
 };
 use std::sync::Arc;
+use std::time::Duration;
+
+struct EnvGuard(&'static str);
+
+impl EnvGuard {
+  fn set(key: &'static str, value: &str) -> Self {
+    std::env::set_var(key, value);
+    Self(key)
+  }
+}
+
+impl Drop for EnvGuard {
+  fn drop(&mut self) {
+    std::env::remove_var(self.0);
+  }
+}
 
 fn approx(a: f32, b: f32) -> bool {
   (a - b).abs() < 0.001
@@ -485,5 +502,23 @@ fn parallel_layout_is_reproducible() {
   assert_eq!(parallel_first, parallel_second);
   if let Some(diff) = diff_trees(&serial_snapshot, &parallel_first) {
     panic!("serial vs parallel diff: {diff}");
+  }
+}
+
+#[test]
+fn parallel_layout_respects_deadline() {
+  let _delay_guard = EnvGuard::set("FASTR_TEST_RENDER_DELAY_MS", "20");
+  let parallelism = LayoutParallelism::enabled(1).with_max_threads(Some(4));
+  let config = LayoutConfig::for_viewport(Size::new(800.0, 600.0)).with_parallelism(parallelism);
+  let engine = LayoutEngine::with_font_context(config, FontContext::new());
+  let box_tree = build_block_stack(48);
+  let deadline = RenderDeadline::new(Some(Duration::from_millis(1)), None);
+
+  let err = engine
+    .layout_tree_with_deadline(&box_tree, Some(&deadline))
+    .unwrap_err();
+  match err {
+    LayoutError::Timeout { .. } => {}
+    other => panic!("expected timeout, got {other:?}"),
   }
 }

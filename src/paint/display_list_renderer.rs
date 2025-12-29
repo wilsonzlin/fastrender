@@ -7,8 +7,7 @@
 use crate::css::types::ColorStop;
 use crate::css::types::RadialGradientShape;
 use crate::css::types::RadialGradientSize;
-use crate::error::RenderError;
-use crate::error::Result;
+use crate::error::{Error, RenderError, RenderStage, Result};
 use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::paint::blur::apply_gaussian_blur;
@@ -65,6 +64,7 @@ use crate::paint::text_rasterize::ColorGlyphCache;
 use crate::paint::text_rasterize::TextRasterizer;
 use crate::paint::text_shadow::PathBounds;
 use crate::paint::transform3d::backface_is_hidden;
+use crate::render_control::{active_deadline, check_active, with_deadline};
 use crate::style::color::Rgba;
 use crate::style::types::BackfaceVisibility;
 use crate::style::types::BackgroundImage;
@@ -1118,31 +1118,34 @@ fn apply_spread_slow_reference(pixmap: &mut Pixmap, spread: f32) {
   let dst = pixmap.pixels_mut();
   let row_len = width as usize;
 
+  let deadline = active_deadline();
   dst.par_iter_mut().enumerate().for_each(|(idx, dst_px)| {
-    let y = (idx / row_len) as i32;
-    let x = (idx % row_len) as i32;
-    let mut agg = if expand { [0u8; 4] } else { [255u8; 4] };
-    for dy in -radius..=radius {
-      for dx in -radius..=radius {
-        let ny = (y + dy).clamp(0, height - 1);
-        let nx = (x + dx).clamp(0, width - 1);
-        let sample_idx = (ny as usize) * row_len + nx as usize;
-        let px = src[sample_idx];
-        if expand {
-          agg[0] = agg[0].max(px.red());
-          agg[1] = agg[1].max(px.green());
-          agg[2] = agg[2].max(px.blue());
-          agg[3] = agg[3].max(px.alpha());
-        } else {
-          agg[0] = agg[0].min(px.red());
-          agg[1] = agg[1].min(px.green());
-          agg[2] = agg[2].min(px.blue());
-          agg[3] = agg[3].min(px.alpha());
+    with_deadline(deadline.as_ref(), || {
+      let y = (idx / row_len) as i32;
+      let x = (idx % row_len) as i32;
+      let mut agg = if expand { [0u8; 4] } else { [255u8; 4] };
+      for dy in -radius..=radius {
+        for dx in -radius..=radius {
+          let ny = (y + dy).clamp(0, height - 1);
+          let nx = (x + dx).clamp(0, width - 1);
+          let sample_idx = (ny as usize) * row_len + nx as usize;
+          let px = src[sample_idx];
+          if expand {
+            agg[0] = agg[0].max(px.red());
+            agg[1] = agg[1].max(px.green());
+            agg[2] = agg[2].max(px.blue());
+            agg[3] = agg[3].max(px.alpha());
+          } else {
+            agg[0] = agg[0].min(px.red());
+            agg[1] = agg[1].min(px.green());
+            agg[2] = agg[2].min(px.blue());
+            agg[3] = agg[3].min(px.alpha());
+          }
         }
       }
-    }
-    *dst_px = PremultipliedColorU8::from_rgba(agg[0], agg[1], agg[2], agg[3])
-      .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+      *dst_px = PremultipliedColorU8::from_rgba(agg[0], agg[1], agg[2], agg[3])
+        .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+    });
   });
 }
 
@@ -1153,18 +1156,21 @@ fn apply_color_filter(
   let pixels = pixmap.pixels_mut();
   let threshold = 2048;
   if pixels.len() > threshold {
+    let deadline = active_deadline();
     pixels.par_iter_mut().for_each(|pixel| {
-      let a = pixel.alpha() as f32 / 255.0;
-      let (c, a2) = f((pixel.red(), pixel.green(), pixel.blue()), a);
-      let final_a = (a2 * 255.0).round().clamp(0.0, 255.0) as u8;
-      let premultiply = |v: u8| ((v as f32 * a2).round().clamp(0.0, 255.0)) as u8;
-      *pixel = tiny_skia::PremultipliedColorU8::from_rgba(
-        premultiply(c.0),
-        premultiply(c.1),
-        premultiply(c.2),
-        final_a,
-      )
-      .unwrap_or_else(|| tiny_skia::PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap());
+      with_deadline(deadline.as_ref(), || {
+        let a = pixel.alpha() as f32 / 255.0;
+        let (c, a2) = f((pixel.red(), pixel.green(), pixel.blue()), a);
+        let final_a = (a2 * 255.0).round().clamp(0.0, 255.0) as u8;
+        let premultiply = |v: u8| ((v as f32 * a2).round().clamp(0.0, 255.0)) as u8;
+        *pixel = tiny_skia::PremultipliedColorU8::from_rgba(
+          premultiply(c.0),
+          premultiply(c.1),
+          premultiply(c.2),
+          final_a,
+        )
+        .unwrap_or_else(|| tiny_skia::PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap());
+      });
     });
   } else {
     for pixel in pixels.iter_mut() {
@@ -3226,6 +3232,7 @@ impl DisplayListRenderer {
   /// Renders the display list and returns timing/parallelism metadata.
   pub fn render_with_report(mut self, list: &DisplayList) -> Result<RenderReport> {
     let list = crate::paint::preserve_3d::composite_preserve_3d(list);
+    check_active(RenderStage::Paint).map_err(Error::Render)?;
     let start = Instant::now();
     let mut fallback_reason = None;
 
@@ -3446,27 +3453,31 @@ impl DisplayListRenderer {
     let color_renderer = self.color_renderer.clone();
     let color_cache = self.color_cache.clone();
 
+    let deadline = active_deadline();
     let results: Result<Vec<(TileWork<'_>, Pixmap)>> = tiles
       .into_par_iter()
       .map(|work| {
-        let mut renderer = DisplayListRenderer::new_with_text_state(
-          work.render_w,
-          work.render_h,
-          background,
-          font_ctx.clone(),
-          scale,
-          color_renderer.clone(),
-          color_cache.clone(),
-        )?;
-        renderer.preserve_3d_disabled = preserve_3d_disabled;
-        renderer.paint_parallelism = PaintParallelism::disabled();
-        if work.render_x > 0 || work.render_y > 0 {
-          renderer
-            .canvas
-            .translate(-(work.render_x as f32), -(work.render_y as f32));
-        }
-        renderer.render_slice(&work.list)?;
-        Ok((work, renderer.canvas.into_pixmap()))
+        with_deadline(deadline.as_ref(), || {
+          check_active(RenderStage::Paint).map_err(Error::Render)?;
+          let mut renderer = DisplayListRenderer::new_with_text_state(
+            work.render_w,
+            work.render_h,
+            background,
+            font_ctx.clone(),
+            scale,
+            color_renderer.clone(),
+            color_cache.clone(),
+          )?;
+          renderer.preserve_3d_disabled = preserve_3d_disabled;
+          renderer.paint_parallelism = PaintParallelism::disabled();
+          if work.render_x > 0 || work.render_y > 0 {
+            renderer
+              .canvas
+              .translate(-(work.render_x as f32), -(work.render_y as f32));
+          }
+          renderer.render_slice(&work.list)?;
+          Ok((work, renderer.canvas.into_pixmap()))
+        })
       })
       .collect();
 
@@ -3484,6 +3495,7 @@ impl DisplayListRenderer {
   where
     T: DisplayItemSource + ?Sized,
   {
+    check_active(RenderStage::Paint).map_err(Error::Render)?;
     let mut idx = 0;
     while idx < items.len() {
       let item = items

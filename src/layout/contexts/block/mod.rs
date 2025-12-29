@@ -61,7 +61,7 @@ use crate::layout::utils::content_size_from_box_sizing;
 use crate::layout::utils::resolve_length_with_percentage;
 use crate::layout::utils::resolve_length_with_percentage_metrics;
 use crate::layout::utils::resolve_scrollbar_width;
-use crate::render_control::check_active;
+use crate::render_control::{active_deadline, check_active, with_deadline};
 use crate::style::block_axis_is_horizontal;
 use crate::style::block_axis_positive;
 use crate::style::display::Display;
@@ -946,26 +946,31 @@ impl BlockFormattingContext {
       return None;
     }
 
+    let deadline = active_deadline();
     let parallel_results = parent
       .children
       .par_iter()
       .enumerate()
       .map(|(idx, child)| {
-        crate::layout::engine::debug_record_parallel_work();
-        let mut margin_ctx = MarginCollapseContext::new();
-        let (fragment, _) = self.layout_block_child(
-          parent,
-          child,
-          containing_width,
-          constraints,
-          &mut margin_ctx,
-          0.0,
-          nearest_positioned_cb,
-        )?;
-        let meta = fragment.block_metadata.clone().ok_or_else(|| {
-          LayoutError::MissingContext("Block fragment missing metadata for parallel layout".into())
-        })?;
-        Ok((idx, fragment, meta))
+        with_deadline(deadline.as_ref(), || {
+          crate::layout::engine::debug_record_parallel_work();
+          let mut margin_ctx = MarginCollapseContext::new();
+          let (fragment, _) = self.layout_block_child(
+            parent,
+            child,
+            containing_width,
+            constraints,
+            &mut margin_ctx,
+            0.0,
+            nearest_positioned_cb,
+          )?;
+          let meta = fragment.block_metadata.clone().ok_or_else(|| {
+            LayoutError::MissingContext(
+              "Block fragment missing metadata for parallel layout".into(),
+            )
+          })?;
+          Ok((idx, fragment, meta))
+        })
       })
       .collect::<Result<Vec<_>, LayoutError>>();
 

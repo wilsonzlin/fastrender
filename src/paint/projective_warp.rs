@@ -1,4 +1,5 @@
 use crate::paint::homography::Homography;
+use crate::render_control::{active_deadline, with_deadline};
 use rayon::prelude::*;
 use tiny_skia::Mask;
 use tiny_skia::Pixmap;
@@ -114,11 +115,12 @@ pub fn warp_pixmap(
   };
 
   if area > PARALLEL_THRESHOLD {
+    let deadline = active_deadline();
     output
       .pixels_mut()
       .par_chunks_mut(width as usize)
       .enumerate()
-      .for_each(|(row_idx, row)| process_row(row_idx, row));
+      .for_each(|(row_idx, row)| with_deadline(deadline.as_ref(), || process_row(row_idx, row)));
   } else {
     for (row_idx, row) in output.pixels_mut().chunks_mut(width as usize).enumerate() {
       process_row(row_idx, row);
