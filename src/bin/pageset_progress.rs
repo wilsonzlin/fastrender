@@ -510,8 +510,8 @@ struct WorkerArgs {
   dump_dir: PathBuf,
 
   /// Hard timeout in seconds for dump reruns (defaults to timeout * 2)
-  #[arg(long, default_value_t = 10)]
-  dump_timeout: u64,
+  #[arg(long)]
+  dump_timeout: Option<u64>,
 
   /// Cooperative timeout in milliseconds for dump reruns (0 disables; defaults based on dump-timeout)
   #[arg(long)]
@@ -1220,10 +1220,23 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     fetch_timeout.as_millis()
   ));
 
+  let dump_timeout_secs = args
+    .dump_timeout
+    .filter(|secs| *secs > 0)
+    .unwrap_or_else(|| args.timeout.saturating_mul(2));
   let dump_soft_timeout_ms = compute_soft_timeout_ms(
-    Duration::from_secs(args.dump_timeout),
+    Duration::from_secs(dump_timeout_secs),
     args.dump_soft_timeout_ms,
   );
+  let dump_soft_desc = match dump_soft_timeout_ms {
+    Some(0) => "disabled".to_string(),
+    Some(ms) => format!("{ms}ms"),
+    None => "unset".to_string(),
+  };
+  log.push_str(&format!(
+    "Dump timeouts: hard={}s, soft={dump_soft_desc}\n",
+    dump_timeout_secs
+  ));
 
   let http = HttpFetcher::new()
     .with_timeout(fetch_timeout)
@@ -1527,52 +1540,106 @@ fn write_pipeline_dumps(
   dump_dir: &Path,
   artifacts: &RenderArtifacts,
   log: &mut String,
-) -> io::Result<()> {
-  let Some(dom) = artifacts.dom.as_ref() else {
-    log.push_str("Dump skipped: missing DOM artifact\n");
-    return Ok(());
-  };
-  let Some(styled) = artifacts.styled_tree.as_ref() else {
-    log.push_str("Dump skipped: missing styled tree\n");
-    return Ok(());
-  };
-  let Some(box_tree) = artifacts.box_tree.as_ref() else {
-    log.push_str("Dump skipped: missing box tree\n");
-    return Ok(());
-  };
-  let Some(fragment_tree) = artifacts.fragment_tree.as_ref() else {
-    log.push_str("Dump skipped: missing fragment tree\n");
-    return Ok(());
-  };
-  let Some(display_list) = artifacts.display_list.as_ref() else {
-    log.push_str("Dump skipped: missing display list\n");
-    return Ok(());
-  };
-
+) -> io::Result<bool> {
   let base_dir = dump_dir.join(stem);
   fs::create_dir_all(&base_dir)?;
-  let snapshot = snapshot::snapshot_pipeline(dom, styled, box_tree, fragment_tree, display_list);
-  write_json_file(&base_dir.join("snapshot.json"), &snapshot)?;
-  if level == DumpLevel::Full {
-    write_json_file(&base_dir.join("dom.json"), &snapshot::snapshot_dom(dom))?;
-    write_json_file(
-      &base_dir.join("styled.json"),
-      &snapshot::snapshot_styled(styled),
-    )?;
-    write_json_file(
-      &base_dir.join("box_tree.json"),
-      &snapshot::snapshot_box_tree(box_tree),
-    )?;
-    write_json_file(
-      &base_dir.join("fragment_tree.json"),
-      &snapshot::snapshot_fragment_tree(fragment_tree),
-    )?;
-    write_json_file(
-      &base_dir.join("display_list.json"),
-      &snapshot::snapshot_display_list(display_list),
-    )?;
+
+  let dom = artifacts.dom.as_ref();
+  let styled = artifacts.styled_tree.as_ref();
+  let box_tree = artifacts.box_tree.as_ref();
+  let fragment_tree = artifacts.fragment_tree.as_ref();
+  let display_list = artifacts.display_list.as_ref();
+
+  let have_all = dom.is_some()
+    && styled.is_some()
+    && box_tree.is_some()
+    && fragment_tree.is_some()
+    && display_list.is_some();
+  let mut wrote_any = false;
+
+  if have_all {
+    let snapshot = snapshot::snapshot_pipeline(
+      dom.expect("snapshot precondition"),
+      styled.expect("snapshot precondition"),
+      box_tree.expect("snapshot precondition"),
+      fragment_tree.expect("snapshot precondition"),
+      display_list.expect("snapshot precondition"),
+    );
+    write_json_file(&base_dir.join("snapshot.json"), &snapshot)?;
+    wrote_any = true;
+  } else {
+    let mut missing = Vec::new();
+    if dom.is_none() {
+      missing.push("dom");
+    }
+    if styled.is_none() {
+      missing.push("styled");
+    }
+    if box_tree.is_none() {
+      missing.push("box_tree");
+    }
+    if fragment_tree.is_none() {
+      missing.push("fragment_tree");
+    }
+    if display_list.is_none() {
+      missing.push("display_list");
+    }
+    log.push_str(&format!(
+      "Dump artifacts missing {}; writing partial dumps when available\n",
+      missing.join(", ")
+    ));
   }
-  Ok(())
+
+  let should_write_parts = level == DumpLevel::Full || !have_all;
+  if should_write_parts {
+    if let Some(dom) = dom {
+      write_json_file(&base_dir.join("dom.json"), &snapshot::snapshot_dom(dom))?;
+      wrote_any = true;
+    } else {
+      log.push_str("Dump skipped: missing DOM artifact\n");
+    }
+    if let Some(styled) = styled {
+      write_json_file(
+        &base_dir.join("styled.json"),
+        &snapshot::snapshot_styled(styled),
+      )?;
+      wrote_any = true;
+    } else {
+      log.push_str("Dump skipped: missing styled tree\n");
+    }
+    if let Some(box_tree) = box_tree {
+      write_json_file(
+        &base_dir.join("box_tree.json"),
+        &snapshot::snapshot_box_tree(box_tree),
+      )?;
+      wrote_any = true;
+    } else {
+      log.push_str("Dump skipped: missing box tree\n");
+    }
+    if let Some(fragment_tree) = fragment_tree {
+      write_json_file(
+        &base_dir.join("fragment_tree.json"),
+        &snapshot::snapshot_fragment_tree(fragment_tree),
+      )?;
+      wrote_any = true;
+    } else {
+      log.push_str("Dump skipped: missing fragment tree\n");
+    }
+    if let Some(display_list) = display_list {
+      write_json_file(
+        &base_dir.join("display_list.json"),
+        &snapshot::snapshot_display_list(display_list),
+      )?;
+      wrote_any = true;
+    } else {
+      log.push_str("Dump skipped: missing display list\n");
+    }
+  }
+
+  if !wrote_any {
+    log.push_str("Dump skipped: no artifacts were captured\n");
+  }
+  Ok(wrote_any)
 }
 
 fn capture_dump_for_page(
@@ -1617,18 +1684,20 @@ fn capture_dump_for_page(
 
   match dump_result {
     Ok(Ok(report)) => {
-      if let Err(err) =
-        write_pipeline_dumps(level, &args.stem, &args.dump_dir, &report.artifacts, log)
-      {
-        log.push_str(&format!(
-          "Dump write error: {}\n",
-          format_error_with_chain(&err, args.verbose)
-        ));
-      } else {
-        log.push_str(&format!(
-          "Dump written to {}\n",
-          args.dump_dir.join(&args.stem).display()
-        ));
+      match write_pipeline_dumps(level, &args.stem, &args.dump_dir, &report.artifacts, log) {
+        Ok(true) => {
+          log.push_str(&format!(
+            "Dump written to {}\n",
+            args.dump_dir.join(&args.stem).display()
+          ));
+        }
+        Ok(false) => {}
+        Err(err) => {
+          log.push_str(&format!(
+            "Dump write error: {}\n",
+            format_error_with_chain(&err, args.verbose)
+          ));
+        }
       }
     }
     Ok(Err(err)) => {
