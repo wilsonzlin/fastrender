@@ -3539,11 +3539,11 @@ impl TableFormattingContext {
     cell_box: &BoxNode,
     border_collapse: BorderCollapse,
     percent_base: Option<f32>,
+    cell_bfc: &BlockFormattingContext,
   ) -> (f32, f32) {
     let fc_type = cell_box
       .formatting_context()
-      .unwrap_or(crate::style::display::FormattingContextType::Block);
-    let fc = self.factory.create(fc_type);
+      .unwrap_or(FormattingContextType::Block);
 
     // Measure intrinsic content widths without the cell's own padding/borders; we'll add them once below.
     let mut stripped_cell = cell_box.clone();
@@ -3554,12 +3554,21 @@ impl TableFormattingContext {
     stripped_style.border_right_width = Length::px(0.0);
     stripped_cell.style = Arc::new(stripped_style);
 
-    let mut min = fc
-      .compute_intrinsic_inline_size(&stripped_cell, IntrinsicSizingMode::MinContent)
-      .unwrap_or(0.0);
-    let mut max = fc
-      .compute_intrinsic_inline_size(&stripped_cell, IntrinsicSizingMode::MaxContent)
-      .unwrap_or(min);
+    let measure_with_fc = |fc: &dyn FormattingContext| -> (f32, f32) {
+      let min = fc
+        .compute_intrinsic_inline_size(&stripped_cell, IntrinsicSizingMode::MinContent)
+        .unwrap_or(0.0);
+      let max = fc
+        .compute_intrinsic_inline_size(&stripped_cell, IntrinsicSizingMode::MaxContent)
+        .unwrap_or(min);
+      (min, max)
+    };
+    let (mut min, mut max) = if fc_type == FormattingContextType::Block {
+      measure_with_fc(cell_bfc)
+    } else {
+      let fc = self.factory.create(fc_type);
+      measure_with_fc(fc.as_ref())
+    };
 
     // Add horizontal padding (and borders in separate model) to intrinsic widths
     let style = &cell_box.style;
@@ -3586,6 +3595,11 @@ impl TableFormattingContext {
     percent_base: Option<f32>,
   ) {
     let source_rows = collect_source_rows(table_box);
+    let cell_bfc = BlockFormattingContext::with_font_context_and_viewport(
+      self.factory.font_context().clone(),
+      self.factory.viewport_size(),
+    )
+    .with_parallelism(self.parallelism);
     for cell in &structure.cells {
       if matches!(mode, DistributionMode::Fixed) && cell.row > 0 {
         // Fixed layout only inspects the first row.
@@ -3609,9 +3623,12 @@ impl TableFormattingContext {
       };
       let (mut min_w, mut max_w) = match mode {
         DistributionMode::Fixed => (0.0, f32::INFINITY), // content is ignored in fixed layout
-        DistributionMode::Auto => {
-          self.measure_cell_intrinsic_widths(cell_box, structure.border_collapse, percent_base)
-        }
+        DistributionMode::Auto => self.measure_cell_intrinsic_widths(
+          cell_box,
+          structure.border_collapse,
+          percent_base,
+          &cell_bfc,
+        ),
       };
       let mut has_max_cap = false;
       if mode == DistributionMode::Auto {
@@ -6001,6 +6018,7 @@ mod tests {
   use crate::style::types::BorderStyle;
   use crate::style::types::CaptionSide;
   use crate::style::types::Direction;
+  use crate::style::types::GridTrack;
   use crate::style::types::TableLayout;
   use crate::style::types::VerticalAlign;
   use crate::style::values::CalcLength;
@@ -7126,12 +7144,21 @@ mod tests {
       .collect();
     let tfc = TableFormattingContext::new();
     let source_rows = collect_source_rows(&table);
+    let cell_bfc = BlockFormattingContext::with_font_context_and_viewport(
+      tfc.factory.font_context().clone(),
+      tfc.factory.viewport_size(),
+    )
+    .with_parallelism(tfc.parallelism);
     let span_box = source_rows
       .get(structure.cells[0].source_row)
       .and_then(|row| row.children.get(structure.cells[0].box_index))
       .expect("span cell");
-    let (span_min, span_max) =
-      tfc.measure_cell_intrinsic_widths(span_box, structure.border_collapse, percent_base);
+    let (span_min, span_max) = tfc.measure_cell_intrinsic_widths(
+      span_box,
+      structure.border_collapse,
+      percent_base,
+      &cell_bfc,
+    );
     let resolved_width = span_box
       .style
       .width
@@ -7306,6 +7333,129 @@ mod tests {
       min < 1.0,
       "percentage min-width should be ignored without a definite base (got {:.2})",
       min
+    );
+  }
+
+  #[test]
+  fn nested_flex_and_grid_cells_affect_intrinsic_widths() {
+    let mut flex_child_a_style = ComputedStyle::default();
+    flex_child_a_style.display = Display::Block;
+    flex_child_a_style.width = Some(Length::px(40.0));
+    let flex_child_a = BoxNode::new_block(
+      Arc::new(flex_child_a_style),
+      FormattingContextType::Block,
+      vec![],
+    );
+    let mut flex_child_b_style = ComputedStyle::default();
+    flex_child_b_style.display = Display::Block;
+    flex_child_b_style.width = Some(Length::px(60.0));
+    let flex_child_b = BoxNode::new_block(
+      Arc::new(flex_child_b_style),
+      FormattingContextType::Block,
+      vec![],
+    );
+    let mut flex_style = ComputedStyle::default();
+    flex_style.display = Display::Flex;
+    let flex_container = BoxNode::new_block(
+      Arc::new(flex_style),
+      FormattingContextType::Flex,
+      vec![flex_child_a, flex_child_b],
+    );
+
+    let mut flex_cell_style = ComputedStyle::default();
+    flex_cell_style.display = Display::TableCell;
+    let flex_cell = BoxNode::new_block(
+      Arc::new(flex_cell_style),
+      FormattingContextType::Block,
+      vec![flex_container],
+    );
+
+    let mut grid_item_a_style = ComputedStyle::default();
+    grid_item_a_style.display = Display::Block;
+    grid_item_a_style.width = Some(Length::px(70.0));
+    let grid_item_a = BoxNode::new_block(
+      Arc::new(grid_item_a_style),
+      FormattingContextType::Block,
+      vec![],
+    );
+    let mut grid_item_b_style = ComputedStyle::default();
+    grid_item_b_style.display = Display::Block;
+    grid_item_b_style.width = Some(Length::px(50.0));
+    let grid_item_b = BoxNode::new_block(
+      Arc::new(grid_item_b_style),
+      FormattingContextType::Block,
+      vec![],
+    );
+    let mut grid_style = ComputedStyle::default();
+    grid_style.display = Display::Grid;
+    grid_style.grid_template_columns = vec![
+      GridTrack::Length(Length::px(70.0)),
+      GridTrack::Length(Length::px(50.0)),
+    ];
+    let grid_container = BoxNode::new_block(
+      Arc::new(grid_style),
+      FormattingContextType::Grid,
+      vec![grid_item_a, grid_item_b],
+    );
+
+    let mut grid_cell_style = ComputedStyle::default();
+    grid_cell_style.display = Display::TableCell;
+    let grid_cell = BoxNode::new_block(
+      Arc::new(grid_cell_style),
+      FormattingContextType::Block,
+      vec![grid_container],
+    );
+
+    let mut row_style = ComputedStyle::default();
+    row_style.display = Display::TableRow;
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![flex_cell, grid_cell],
+    );
+
+    let mut table_style = ComputedStyle::default();
+    table_style.display = Display::Table;
+    table_style.border_spacing_horizontal = Length::px(0.0);
+    table_style.border_spacing_vertical = Length::px(0.0);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
+
+    let structure = TableStructure::from_box_tree(&table);
+    let mut constraints: Vec<ColumnConstraints> = (0..structure.column_count)
+      .map(|_| ColumnConstraints::new(0.0, 0.0))
+      .collect();
+    let tfc = TableFormattingContext::new();
+    tfc.populate_column_constraints(
+      &table,
+      &structure,
+      &mut constraints,
+      DistributionMode::Auto,
+      None,
+    );
+
+    let flex_expected = 100.0;
+    let grid_expected = 120.0;
+    assert!(
+      (constraints[0].min_width - flex_expected).abs() < 0.5,
+      "flex contents should set intrinsic column minimum (expected ~{flex_expected}, got {:?})",
+      constraints
+    );
+    assert!(
+      (constraints[1].min_width - grid_expected).abs() < 0.5,
+      "grid contents should set intrinsic column minimum (expected ~{grid_expected}, got {:?})",
+      constraints
+    );
+    assert!(
+      constraints[0].max_width.is_finite()
+        && constraints[1].max_width.is_finite()
+        && constraints[0].max_width >= constraints[0].min_width
+        && constraints[1].max_width >= constraints[1].min_width,
+      "intrinsic measurement should yield finite per-column maxima: {:?}",
+      constraints
     );
   }
 
