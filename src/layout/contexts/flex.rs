@@ -109,13 +109,11 @@ fn translate_fragment_tree(fragment: &mut FragmentNode, delta: Point) {
   }
 }
 
-fn normalize_fragment_origin(fragment: &FragmentNode) -> FragmentNode {
-  let mut normalized = fragment.clone();
-  let origin = normalized.bounds.origin;
+fn normalize_fragment_origin(fragment: &mut FragmentNode) {
+  let origin = fragment.bounds.origin;
   if origin.x != 0.0 || origin.y != 0.0 {
-    translate_fragment_tree(&mut normalized, Point::new(-origin.x, -origin.y));
+    translate_fragment_tree(fragment, Point::new(-origin.x, -origin.y));
   }
-  normalized
 }
 
 #[derive(Clone)]
@@ -1185,10 +1183,10 @@ impl FormattingContext for FlexFormattingContext {
                     let selector_for_profile = node_timer
                         .as_ref()
                         .and_then(|_| measure_box.debug_info.as_ref().map(|d| d.to_selector()));
-                    let fragment = match fc.layout(measure_box, &constraints) {
-                        Ok(f) => {
-                            flex_profile::record_node_layout(
-                                measure_box.id,
+                    let mut fragment = match fc.layout(measure_box, &constraints) {
+                         Ok(f) => {
+                             flex_profile::record_node_layout(
+                                 measure_box.id,
                                 selector_for_profile.as_deref(),
                                 node_timer,
                             );
@@ -1320,10 +1318,10 @@ impl FormattingContext for FlexFormattingContext {
                         );
                     }
 
-                    if !log_measure_ids.is_empty() && log_measure_ids.contains(&measure_box.id) {
-                        let seq = LOG_MEASURE_COUNTS
-                            .get_or_init(|| Mutex::new(HashMap::new()))
-                            .lock()
+                     if !log_measure_ids.is_empty() && log_measure_ids.contains(&measure_box.id) {
+                         let seq = LOG_MEASURE_COUNTS
+                             .get_or_init(|| Mutex::new(HashMap::new()))
+                             .lock()
                             .ok()
                             .and_then(|mut counts| {
                                 let entry = counts.entry(measure_box.id).or_insert(0);
@@ -1358,29 +1356,56 @@ impl FormattingContext for FlexFormattingContext {
                                 max_w_bound,
                                 max_h_bound,
                                 intrinsic_inline_hint,
-                            );
-                        }
-                    }
+                             );
+                         }
+                     }
 
-                    let normalized_fragment = std::sync::Arc::new(normalize_fragment_origin(&fragment));
+                    let stored_size =
+                      Size::new(content_size.width.max(0.0), content_size.height.max(0.0));
+                    let pass_entry_vacant = node_ptr.is_some()
+                      && !pass_cache
+                        .get(&cache_key)
+                        .map(|entry| entry.contains_key(&key))
+                        .unwrap_or(false);
+                    let mut fragment = Some(fragment);
+                    let mut normalized_fragment: Option<std::sync::Arc<FragmentNode>> = None;
+                    let mut normalize_for_cache = |fragment: &mut Option<FragmentNode>,
+                                                   normalized_fragment: &mut Option<
+                        std::sync::Arc<FragmentNode>,
+                      >| {
+                        normalized_fragment
+                          .get_or_insert_with(|| {
+                            let mut fragment = fragment.take().expect("fragment already normalized");
+                            normalize_fragment_origin(&mut fragment);
+                            std::sync::Arc::new(fragment)
+                          })
+                          .clone()
+                      };
 
-                    let stored_size = Size::new(content_size.width.max(0.0), content_size.height.max(0.0));
-                    let inserted = measured_fragments.insert(
+                    if measured_fragments.get(cache_key, &key).is_none() {
+                      let normalized_fragment =
+                        normalize_for_cache(&mut fragment, &mut normalized_fragment);
+                      let inserted = measured_fragments.insert(
                         cache_key,
                         key,
-                        (stored_size, normalized_fragment.clone()),
+                        (stored_size, normalized_fragment),
                         MAX_MEASURE_CACHE_PER_NODE,
-                    );
-                    flex_profile::record_measure_store(inserted);
-                    if inserted {
+                      );
+                      flex_profile::record_measure_store(inserted);
+                      if inserted {
                         record_node_measure_store(measure_box.id);
+                      }
+                    } else {
+                      flex_profile::record_measure_store(false);
                     }
-                    if let Some(_ptr) = node_ptr {
-                        let entry = pass_cache.entry(cache_key).or_default();
-                        if let Entry::Vacant(e) = entry.entry(key) {
-                            e.insert((stored_size, normalized_fragment.clone()));
-                            record_node_measure_store(measure_box.id);
-                        }
+                    if pass_entry_vacant {
+                      let entry = pass_cache.entry(cache_key).or_default();
+                      if let Entry::Vacant(e) = entry.entry(key) {
+                        let normalized_fragment =
+                          normalize_for_cache(&mut fragment, &mut normalized_fragment);
+                        e.insert((stored_size, normalized_fragment));
+                        record_node_measure_store(measure_box.id);
+                      }
                     }
 
                     let size = taffy::geometry::Size {
@@ -4744,6 +4769,7 @@ mod tests {
   use crate::style::types::Overflow;
   use crate::style::types::ScrollbarWidth;
   use crate::style::values::Length;
+  use crate::style::values::LengthOrAuto;
   use crate::tree::box_tree::ReplacedType;
   use crate::tree::debug::{track_to_selector_calls, DebugInfo};
   use std::sync::Arc;
@@ -4977,6 +5003,91 @@ mod tests {
       false,
     );
     assert_eq!(key_a.0, key_c.0);
+  }
+
+  #[test]
+  fn measured_fragments_normalize_and_reuse_fragments() {
+    let measured_fragments = Arc::new(ShardedFlexCache::new_measure());
+    let layout_fragments = Arc::new(ShardedFlexCache::new_layout());
+    let viewport = Size::new(200.0, 200.0);
+    let mut fc = FlexFormattingContext::with_viewport_and_cb(
+      viewport,
+      ContainingBlock::viewport(viewport),
+      FontContext::new(),
+      measured_fragments.clone(),
+      layout_fragments.clone(),
+    );
+
+    let mut child_style = ComputedStyle::default();
+    child_style.display = Display::Block;
+    child_style.position = Position::Relative;
+    child_style.left = LengthOrAuto::px(9.0);
+    child_style.top = LengthOrAuto::px(11.0);
+    child_style.width = Some(Length::px(40.0));
+    child_style.height = Some(Length::px(20.0));
+    let grandchild = BoxNode::new_block(
+      Arc::new(ComputedStyle::default()),
+      FormattingContextType::Block,
+      vec![],
+    );
+    let mut child = BoxNode::new_block(
+      Arc::new(child_style),
+      FormattingContextType::Block,
+      vec![grandchild],
+    );
+    child.id = 2;
+
+    let mut container_style = ComputedStyle::default();
+    container_style.display = Display::Flex;
+    container_style.flex_direction = FlexDirection::Row;
+    container_style.width = Some(Length::px(120.0));
+    container_style.height = Some(Length::px(60.0));
+    let mut container = BoxNode::new_block(
+      Arc::new(container_style),
+      FormattingContextType::Flex,
+      vec![child.clone()],
+    );
+    container.id = 1;
+
+    let constraints = LayoutConstraints::definite(120.0, 60.0);
+    let first_fragment = fc.layout(&container, &constraints).unwrap();
+    let first_child = &first_fragment.children[0];
+    assert!(
+      first_child.bounds.x() != 0.0 || first_child.bounds.y() != 0.0,
+      "relative positioning should offset the measured fragment"
+    );
+    let expected_origin = first_child.bounds.origin;
+
+    let cache_key = flex_cache_key(&child);
+    let cached = measured_fragments.find_fragment(
+      cache_key,
+      Size::new(first_child.bounds.width(), first_child.bounds.height()),
+    );
+    let (_stored_size, cached_fragment) = cached.expect("child fragment cached");
+    assert_eq!(cached_fragment.bounds.origin, Point::new(0.0, 0.0));
+
+    let shard_hits_before: u64 = measured_fragments
+      .shard_stats()
+      .into_iter()
+      .map(|s| s.hits)
+      .sum();
+
+    // Avoid layout cache hits so reuse flows through the measured fragment cache.
+    layout_fragments.clear();
+
+    let second_fragment = fc.layout(&container, &constraints).unwrap();
+    let second_child = &second_fragment.children[0];
+    let shard_hits_after: u64 = measured_fragments
+      .shard_stats()
+      .into_iter()
+      .map(|s| s.hits)
+      .sum();
+
+    assert!(
+      shard_hits_after > shard_hits_before,
+      "measurement cache should be hit on reuse"
+    );
+    assert_eq!(second_child.bounds.origin, expected_origin);
   }
 
   #[test]
