@@ -54,7 +54,7 @@ cargo xtask perf-smoke [--top 5] [--output target/perf_smoke.json] \
 
 ## Pipeline benchmarks (Criterion)
 
-Run `cargo bench --bench perf_regressions` to exercise each stage of the rendering pipeline with fixed fixtures and bundled fonts (`tests/fixtures/fonts/DejaVuSans-subset.*`):
+Run `cargo bench --bench perf_regressions -- --noplot` to exercise each stage of the rendering pipeline with fixed fixtures and bundled fonts (`tests/fixtures/fonts/DejaVuSans-subset.*`):
 
 - `bench_parse_dom`
 - `bench_css_parse`
@@ -71,12 +71,38 @@ Outputs are written under `target/criterion/<bench>/new/estimates.json` and do n
 Use the helper to flag regressions between two Criterion output trees:
 
 ```
-cargo run --bin bench_compare \
-  -- --baseline ../baseline/criterion --new target/criterion \
-  --regression-threshold 0.05 --metric mean
+cargo run --release --bin bench_compare \
+  -- --baseline ../baseline/target/criterion --new target/criterion \
+  --regression-threshold 0.05 --metric median
 ```
 
-`--metric` accepts `mean` or `median`; `--regression-threshold` is a relative delta (e.g., 0.05 = 5%). A non-zero exit status indicates regressions suitable for CI gating.
+`--metric` accepts `mean` or `median`; `--regression-threshold` is a relative delta (e.g., 0.05 = 5%). CI uses `median` to cut down noise. A non-zero exit status indicates regressions suitable for gating.
+
+### Automated regression checks
+
+Nightly at 06:00 UTC (and on `workflow_dispatch`), `.github/workflows/perf.yml` runs the pipeline benchmarks with `cargo bench --bench perf_regressions --locked -- --noplot`, uploads `target/criterion` as the `criterion-output` artifact, and downloads the most recent successful artifact from `main`. It then runs:
+
+```
+cargo run --release --bin bench_compare \
+  -- --baseline baseline/target/criterion --new target/criterion \
+  --regression-threshold 0.05 --metric median
+```
+
+The comparison output is attached to the job summary, and regressions over 5% fail the workflow.
+
+### Reproducing the CI diff locally
+
+1. Generate a fresh set of measurements: `cargo bench --bench perf_regressions -- --noplot`.
+2. Download the latest `criterion-output` artifact from the "Performance regression" workflow so it sits under `baseline/target/criterion` (for example, `gh run download --workflow perf.yml --branch main --name criterion-output --dir baseline`).
+3. Compare against your local run with the same thresholds CI uses:
+
+```
+cargo run --release --bin bench_compare \
+  -- --baseline baseline/target/criterion --new target/criterion \
+  --regression-threshold 0.05 --metric median
+```
+
+If the command exits non-zero, the benches listed in its output regressed beyond the configured threshold.
 
 ## Microbenchmarks
 

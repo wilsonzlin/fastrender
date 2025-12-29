@@ -1,0 +1,109 @@
+name: Performance regression
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  REGRESSION_THRESHOLD: "0.05"
+  REGRESSION_METRIC: median
+
+jobs:
+  perf-regressions:
+    name: Criterion perf regressions
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: perf-cargo-registry-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: perf-cargo-index-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache target directory
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: perf-cargo-target-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run perf regression benches
+        run: cargo bench --bench perf_regressions --locked -- --noplot
+
+      - name: Upload Criterion output
+        uses: actions/upload-artifact@v4
+        with:
+          name: criterion-output
+          path: target/criterion
+          if-no-files-found: error
+
+      - name: Download previous baseline
+        id: download_baseline
+        uses: dawidd6/action-download-artifact@v3
+        continue-on-error: true
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          workflow: perf.yml
+          workflow_conclusion: success
+          branch: main
+          name: criterion-output
+          path: baseline
+
+      - name: Locate baseline measurements
+        if: steps.download_baseline.outcome == 'success'
+        run: |
+          set -e
+          if [ -d baseline/target/criterion ]; then
+            echo "BASELINE_DIR=baseline/target/criterion" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          match=$(find baseline -type d -path "*/target/criterion" | head -n 1 || true)
+          if [ -z "$match" ]; then
+            echo "Downloaded artifact did not contain target/criterion" >&2
+            exit 1
+          fi
+          echo "BASELINE_DIR=$match" >> "$GITHUB_ENV"
+          echo "Using baseline directory at $match"
+
+      - name: Compare against baseline
+        if: steps.download_baseline.outcome == 'success'
+        run: |
+          set -o pipefail
+          cargo run --release --bin bench_compare -- \
+            --baseline "${BASELINE_DIR}" \
+            --new target/criterion \
+            --regression-threshold "${REGRESSION_THRESHOLD}" \
+            --metric "${REGRESSION_METRIC}" | tee bench_compare_report.txt
+          status=${PIPESTATUS[0]}
+          {
+            echo "## Criterion regression check"
+            echo
+            echo '```'
+            cat bench_compare_report.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $status
+
+      - name: Baseline unavailable
+        if: steps.download_baseline.outcome != 'success'
+        run: |
+          echo "Previous perf benchmark artifact not found; skipping regression gate."
+          {
+            echo "## Criterion regression check"
+            echo
+            echo "No prior baseline artifact was available from main."
+            echo "The uploaded Criterion output from this run will serve as the next baseline."
+          } >> "$GITHUB_STEP_SUMMARY"
