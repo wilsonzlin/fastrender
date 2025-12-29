@@ -18,7 +18,8 @@ These are optional wrappers for the most common loops:
 - Help: `cargo xtask --help`
 - Tests: `cargo xtask test [core|style|fixtures|wpt|all]`
 - Refresh goldens: `cargo xtask update-goldens [all|fixtures|reference|wpt]` (sets the appropriate `UPDATE_*` env vars)
-- Pageset scoreboard (disk-backed cache on by default for reproducible runs): `cargo xtask pageset [--no-fetch] [--no-disk-cache] [-- <pageset_progress args...>]`
+- Pageset scoreboard (disk-backed cache on by default for reproducible runs): `cargo xtask pageset [--pages example.com,news.ycombinator.com] [--shard 0/4] [--no-fetch] [--no-disk-cache] [-- <pageset_progress args...>]`
+  - Sharded example: `cargo xtask pageset --shard 0/4` (applies to both fetch + render; add `--no-fetch` to reuse cached pages)
 - Render one page: `cargo xtask render-page --url https://example.com --output out.png [--viewport 1200x800 --dpr 1.0 --full-page]`
 - Diff renders: `cargo xtask diff-renders --before fetches/renders/baseline --after fetches/renders/new [--output target/render-diffs]`
 

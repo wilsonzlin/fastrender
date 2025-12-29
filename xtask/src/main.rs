@@ -59,6 +59,14 @@ struct PagesetArgs {
   #[arg(long, default_value_t = 5)]
   render_timeout: u64,
 
+  /// Fetch/render only listed pages (comma-separated URLs or cache stems)
+  #[arg(long, value_delimiter = ',')]
+  pages: Option<Vec<String>>,
+
+  /// Process only a deterministic shard of the page set (index/total, 0-based)
+  #[arg(long, value_parser = parse_shard)]
+  shard: Option<(usize, usize)>,
+
   /// Skip fetching and only update progress from the existing cache
   #[arg(long)]
   no_fetch: bool,
@@ -298,6 +306,9 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
     bail!("jobs must be > 0");
   }
 
+  let pages_arg = args.pages.as_ref().map(|pages| pages.join(","));
+  let shard_arg = args.shard.map(|(index, total)| format!("{index}/{total}"));
+
   // `fetch_pages` and `pageset_progress` should use the same features so the cache
   // directory layout and fetch behavior stay consistent across runs.
   let mut cargo_features = Vec::new();
@@ -318,6 +329,12 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
       .arg(args.jobs.to_string())
       .arg("--timeout")
       .arg(args.fetch_timeout.to_string());
+    if let Some(pages) = &pages_arg {
+      cmd.arg("--pages").arg(pages);
+    }
+    if let Some(shard) = &shard_arg {
+      cmd.arg("--shard").arg(shard);
+    }
     println!(
       "Updating cached pages (jobs={}, timeout={}s, disk_cache={})...",
       args.jobs, args.fetch_timeout, disk_cache_status
@@ -337,6 +354,12 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
     .arg(args.jobs.to_string())
     .arg("--timeout")
     .arg(args.render_timeout.to_string());
+  if let Some(pages) = &pages_arg {
+    cmd.arg("--pages").arg(pages);
+  }
+  if let Some(shard) = &shard_arg {
+    cmd.arg("--shard").arg(shard);
+  }
   cmd.args(&args.extra);
   println!(
     "Updating progress/pages scoreboard (jobs={}, hard timeout={}s, disk_cache={})...",
@@ -541,6 +564,26 @@ fn parse_viewport(raw: &str) -> Result<(u32, u32)> {
   }
 
   Ok((width, height))
+}
+
+fn parse_shard(s: &str) -> Result<(usize, usize), String> {
+  let parts: Vec<&str> = s.split('/').collect();
+  if parts.len() != 2 {
+    return Err("shard must be index/total (e.g., 0/4)".to_string());
+  }
+  let index = parts[0]
+    .parse::<usize>()
+    .map_err(|_| "invalid shard index".to_string())?;
+  let total = parts[1]
+    .parse::<usize>()
+    .map_err(|_| "invalid shard total".to_string())?;
+  if total == 0 {
+    return Err("shard total must be > 0".to_string());
+  }
+  if index >= total {
+    return Err("shard index must be < total".to_string());
+  }
+  Ok((index, total))
 }
 
 fn run_command(mut cmd: Command) -> Result<()> {
