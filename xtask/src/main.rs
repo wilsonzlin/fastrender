@@ -296,7 +296,8 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
 
   if !args.no_fetch {
     let mut cmd = Command::new("cargo");
-    cmd.arg("run")
+    cmd
+      .arg("run")
       .arg("--release")
       .args(["--bin", "fetch_pages"])
       .arg("--")
@@ -309,7 +310,8 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
   }
 
   let mut cmd = Command::new("cargo");
-  cmd.arg("run")
+  cmd
+    .arg("run")
     .arg("--release")
     .args(["--bin", "pageset_progress"])
     .arg("--")

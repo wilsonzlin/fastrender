@@ -1714,8 +1714,7 @@ impl BlockFormattingContext {
               self.viewport_size,
             )
           })
-          .unwrap_or(0.0)
-          .max(0.0);
+          .unwrap_or(0.0);
         let margin_right = child
           .style
           .margin_right
@@ -1729,8 +1728,7 @@ impl BlockFormattingContext {
               self.viewport_size,
             )
           })
-          .unwrap_or(0.0)
-          .max(0.0);
+          .unwrap_or(0.0);
         let horizontal_edges = horizontal_padding_and_borders(
           &child.style,
           percentage_base,
@@ -1833,16 +1831,14 @@ impl BlockFormattingContext {
           containing_width,
           &self.font_context,
           self.viewport_size,
-        )
-        .max(0.0);
+        );
         let margin_bottom = resolve_margin_side(
           &child.style,
           block_sides.1,
           containing_width,
           &self.font_context,
           self.viewport_size,
-        )
-        .max(0.0);
+        );
         let box_width = used_border_box;
         let float_height = margin_top + fragment.bounds.height() + margin_bottom;
 
@@ -4485,6 +4481,66 @@ mod tests {
     assert!(
       line.bounds.x() >= 79.9,
       "line should start after the float; got x={}",
+      line.bounds.x()
+    );
+  }
+
+  #[test]
+  fn float_negative_margin_reduces_blocked_width() {
+    let bfc = BlockFormattingContext::new();
+
+    let mut float_style = ComputedStyle::default();
+    float_style.display = Display::Block;
+    float_style.float = Float::Left;
+    float_style.width = Some(Length::px(60.0));
+    float_style.height = Some(Length::px(20.0));
+    float_style.margin_left = Some(Length::px(-20.0));
+    let float_node =
+      BoxNode::new_block(Arc::new(float_style), FormattingContextType::Block, vec![]);
+
+    let text = BoxNode::new_text(default_style(), "text".to_string());
+    let root = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![float_node, BoxNode::new_inline(default_style(), vec![text])],
+    );
+    let constraints = LayoutConstraints::definite(200.0, 200.0);
+
+    let fragment = bfc.layout(&root, &constraints).unwrap();
+
+    fn find_line(fragment: &FragmentNode) -> Option<&FragmentNode> {
+      if matches!(fragment.content, FragmentContent::Line { .. }) {
+        return Some(fragment);
+      }
+      for child in &fragment.children {
+        if let Some(line) = find_line(child) {
+          return Some(line);
+        }
+      }
+      None
+    }
+
+    let float_fragment = fragment
+      .children
+      .iter()
+      .find(|child| {
+        child
+          .style
+          .as_ref()
+          .map(|s| s.float.is_floating())
+          .unwrap_or(false)
+      })
+      .expect("float fragment");
+    assert!(
+      float_fragment.bounds.x() < 0.0,
+      "negative margin should shift float left; got {}",
+      float_fragment.bounds.x()
+    );
+
+    let line = find_line(&fragment).expect("line fragment");
+    assert!(
+      (line.bounds.x() - 40.0).abs() < 1.0,
+      "line should start after the reduced margin box; got {}",
       line.bounds.x()
     );
   }

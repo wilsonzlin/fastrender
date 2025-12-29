@@ -63,6 +63,25 @@ impl FloatShape {
   pub fn bottom(&self) -> f32 {
     self.start_y + self.spans.len() as f32
   }
+
+  /// Returns the next Y coordinate after `y` where the sampled span changes.
+  ///
+  /// This is used by float layout to find the next vertical boundary that could
+  /// alter available inline space when a `shape-outside` float is active.
+  pub fn next_change_after(&self, y: f32) -> Option<f32> {
+    if self.spans.is_empty() {
+      return None;
+    }
+    let mut idx = ((y - self.start_y).floor() as isize + 1).max(0) as usize;
+    let current = self.span_at(y);
+    while idx < self.spans.len() {
+      if self.spans[idx] != current {
+        return Some(self.start_y + idx as f32);
+      }
+      idx += 1;
+    }
+    None
+  }
 }
 
 /// Resolve the float shape for `shape-outside`.

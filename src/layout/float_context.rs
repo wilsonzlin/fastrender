@@ -37,10 +37,16 @@
 //! - CSS 2.1 Section 9.5.1: <https://www.w3.org/TR/CSS21/visuren.html#float-position>
 //! - CSS 2.1 Section 9.5.2: <https://www.w3.org/TR/CSS21/visuren.html#propdef-clear>
 
+use crate::debug::runtime;
 use crate::geometry::Rect;
 use crate::layout::float_shape::FloatShape;
 use crate::style::float::Clear;
 use crate::style::float::Float;
+use std::cell::RefCell;
+use std::cmp::{Ordering, Reverse};
+use std::collections::BinaryHeap;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering as AtomicOrdering;
 use std::sync::Arc;
 
 /// Side on which a float is placed
@@ -148,6 +154,123 @@ impl FloatInfo {
   }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct FloatRef {
+  side: FloatSide,
+  index: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FloatKey(f32);
+
+impl PartialEq for FloatKey {
+  fn eq(&self, other: &Self) -> bool {
+    self.0.to_bits() == other.0.to_bits()
+  }
+}
+
+impl Eq for FloatKey {}
+
+impl PartialOrd for FloatKey {
+  fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+    self
+      .0
+      .partial_cmp(&other.0)
+      .or_else(|| Some(Ordering::Equal))
+  }
+}
+
+impl Ord for FloatKey {
+  fn cmp(&self, other: &Self) -> Ordering {
+    self.partial_cmp(other).unwrap_or(Ordering::Equal)
+  }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FloatEventKind {
+  Start,
+  End,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FloatEvent {
+  y: f32,
+  kind: FloatEventKind,
+  float_id: usize,
+}
+
+#[derive(Debug, Clone)]
+struct FloatSweepState {
+  current_y: f32,
+  event_cursor: usize,
+  active: Vec<bool>,
+  active_left: BinaryHeap<(FloatKey, usize)>,
+  active_right: BinaryHeap<(Reverse<FloatKey>, usize)>,
+  active_shape_left: Vec<usize>,
+  active_shape_right: Vec<usize>,
+}
+
+impl FloatSweepState {
+  fn new(float_count: usize) -> Self {
+    Self {
+      current_y: f32::NEG_INFINITY,
+      event_cursor: 0,
+      active: vec![false; float_count],
+      active_left: BinaryHeap::new(),
+      active_right: BinaryHeap::new(),
+      active_shape_left: Vec::new(),
+      active_shape_right: Vec::new(),
+    }
+  }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FloatProfileStats {
+  pub width_queries: u64,
+  pub range_queries: u64,
+  pub boundary_steps: u64,
+}
+
+static FLOAT_WIDTH_QUERIES: AtomicU64 = AtomicU64::new(0);
+static FLOAT_RANGE_QUERIES: AtomicU64 = AtomicU64::new(0);
+static FLOAT_BOUNDARY_STEPS: AtomicU64 = AtomicU64::new(0);
+
+fn profile_enabled() -> bool {
+  runtime::runtime_toggles().truthy("FASTR_LAYOUT_PROFILE")
+}
+
+fn profile_count_width_query() {
+  if profile_enabled() {
+    FLOAT_WIDTH_QUERIES.fetch_add(1, AtomicOrdering::Relaxed);
+  }
+}
+
+fn profile_count_range_query() {
+  if profile_enabled() {
+    FLOAT_RANGE_QUERIES.fetch_add(1, AtomicOrdering::Relaxed);
+  }
+}
+
+fn profile_count_boundary_step(delta: u64) {
+  if profile_enabled() {
+    FLOAT_BOUNDARY_STEPS.fetch_add(delta, AtomicOrdering::Relaxed);
+  }
+}
+
+pub fn reset_float_profile_counters() {
+  FLOAT_WIDTH_QUERIES.store(0, AtomicOrdering::Relaxed);
+  FLOAT_RANGE_QUERIES.store(0, AtomicOrdering::Relaxed);
+  FLOAT_BOUNDARY_STEPS.store(0, AtomicOrdering::Relaxed);
+}
+
+pub fn float_profile_stats() -> FloatProfileStats {
+  FloatProfileStats {
+    width_queries: FLOAT_WIDTH_QUERIES.load(AtomicOrdering::Relaxed),
+    range_queries: FLOAT_RANGE_QUERIES.load(AtomicOrdering::Relaxed),
+    boundary_steps: FLOAT_BOUNDARY_STEPS.load(AtomicOrdering::Relaxed),
+  }
+}
+
 /// Float context for managing floats within a block formatting context
 ///
 /// A FloatContext is created for each block formatting context (BFC) and
@@ -191,11 +314,20 @@ pub struct FloatContext {
   /// Width of the containing block
   containing_block_width: f32,
 
-  /// List of left floats, sorted by top edge
+  /// List of left floats, in insertion order
   left_floats: Vec<FloatInfo>,
 
-  /// List of right floats, sorted by top edge
+  /// List of right floats, in insertion order
   right_floats: Vec<FloatInfo>,
+
+  /// Map from float id -> backing storage (left/right vector + index).
+  float_map: Vec<FloatRef>,
+
+  /// Sorted list of float start/end events for sweep queries.
+  events: Vec<FloatEvent>,
+
+  /// Sweep state used to answer monotonic Y queries efficiently.
+  sweep_state: RefCell<FloatSweepState>,
 
   /// Current Y position for float placement
   /// This tracks the "float ceiling" - the lowest point we've processed
@@ -222,6 +354,9 @@ impl FloatContext {
       containing_block_width,
       left_floats: Vec::new(),
       right_floats: Vec::new(),
+      float_map: Vec::new(),
+      events: Vec::new(),
+      sweep_state: RefCell::new(FloatSweepState::new(0)),
       current_y: 0.0,
     }
   }
@@ -229,6 +364,218 @@ impl FloatContext {
   /// Returns the containing block width
   pub fn containing_block_width(&self) -> f32 {
     self.containing_block_width
+  }
+
+  fn reset_sweep_state(&mut self) {
+    self.sweep_state = RefCell::new(FloatSweepState::new(self.float_map.len()));
+  }
+
+  fn float_info(&self, id: usize) -> &FloatInfo {
+    let FloatRef { side, index } = self.float_map[id];
+    match side {
+      FloatSide::Left => &self.left_floats[index],
+      FloatSide::Right => &self.right_floats[index],
+    }
+  }
+
+  fn sort_events(&mut self) {
+    self.events.sort_by(
+      |a, b| match a.y.partial_cmp(&b.y).unwrap_or(Ordering::Equal) {
+        Ordering::Equal => match (a.kind, b.kind) {
+          (FloatEventKind::Start, FloatEventKind::End) => Ordering::Less,
+          (FloatEventKind::End, FloatEventKind::Start) => Ordering::Greater,
+          _ => a.float_id.cmp(&b.float_id),
+        },
+        other => other,
+      },
+    );
+  }
+
+  fn ensure_sweep_state(&self, y: f32) -> std::cell::RefMut<FloatSweepState> {
+    let mut state = self.sweep_state.borrow_mut();
+    if y < state.current_y {
+      *state = FloatSweepState::new(self.float_map.len());
+    }
+    state
+  }
+
+  fn apply_event(&self, event: &FloatEvent, state: &mut FloatSweepState) {
+    let float = self.float_info(event.float_id);
+    match event.kind {
+      FloatEventKind::Start => {
+        state.active[event.float_id] = true;
+        match float.side {
+          FloatSide::Left => {
+            if float.shape.is_some() {
+              state.active_shape_left.push(event.float_id);
+            } else {
+              state
+                .active_left
+                .push((FloatKey(float.right_edge()), event.float_id));
+            }
+          }
+          FloatSide::Right => {
+            if float.shape.is_some() {
+              state.active_shape_right.push(event.float_id);
+            } else {
+              state
+                .active_right
+                .push((Reverse(FloatKey(float.left_edge())), event.float_id));
+            }
+          }
+        }
+      }
+      FloatEventKind::End => {
+        state.active[event.float_id] = false;
+        if float.shape.is_some() {
+          match float.side {
+            FloatSide::Left => {
+              state
+                .active_shape_left
+                .retain(|id| *id != event.float_id && state.active[*id]);
+            }
+            FloatSide::Right => {
+              state
+                .active_shape_right
+                .retain(|id| *id != event.float_id && state.active[*id]);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  fn prune_heaps(&self, state: &mut FloatSweepState) {
+    while let Some(&(_, id)) = state.active_left.peek() {
+      if state.active[id] {
+        break;
+      }
+      state.active_left.pop();
+    }
+    while let Some(&(Reverse(_), id)) = state.active_right.peek() {
+      if state.active[id] {
+        break;
+      }
+      state.active_right.pop();
+    }
+  }
+
+  fn advance_sweep_to(&self, target_y: f32, state: &mut FloatSweepState) {
+    if target_y < state.current_y {
+      *state = FloatSweepState::new(self.float_map.len());
+    }
+    let mut steps = 0;
+    while let Some(event) = self.events.get(state.event_cursor) {
+      if event.y > target_y {
+        break;
+      }
+      self.apply_event(event, state);
+      state.event_cursor += 1;
+      steps += 1;
+    }
+    if steps > 0 {
+      profile_count_boundary_step(steps as u64);
+    }
+    state.current_y = target_y;
+    self.prune_heaps(state);
+  }
+
+  fn rect_edges(&self, state: &mut FloatSweepState) -> (f32, f32) {
+    self.prune_heaps(state);
+    let left_edge = state
+      .active_left
+      .peek()
+      .map(|(edge, _)| edge.0)
+      .unwrap_or(0.0);
+    let right_edge = state
+      .active_right
+      .peek()
+      .map(|(Reverse(edge), _)| edge.0)
+      .unwrap_or(self.containing_block_width);
+    (left_edge, right_edge)
+  }
+
+  fn edges_at_with_state(&self, state: &mut FloatSweepState, y: f32) -> (f32, f32) {
+    let (mut left_edge, mut right_edge) = self.rect_edges(state);
+    if !state.active_shape_left.is_empty() {
+      for id in state.active_shape_left.iter().copied() {
+        if let Some(shape) = self.float_info(id).shape.as_ref() {
+          if let Some((_min_x, max_x)) = shape.span_at(y) {
+            left_edge = left_edge.max(max_x);
+          }
+        }
+      }
+    }
+    if !state.active_shape_right.is_empty() {
+      for id in state.active_shape_right.iter().copied() {
+        if let Some(shape) = self.float_info(id).shape.as_ref() {
+          if let Some((min_x, _max_x)) = shape.span_at(y) {
+            right_edge = right_edge.min(min_x);
+          }
+        }
+      }
+    }
+    (left_edge, right_edge)
+  }
+
+  fn edges_in_range_with_state(
+    &self,
+    state: &mut FloatSweepState,
+    start: f32,
+    end: f32,
+  ) -> (f32, f32) {
+    let (mut left_edge, mut right_edge) = self.rect_edges(state);
+    if !state.active_shape_left.is_empty() {
+      for id in state.active_shape_left.iter().copied() {
+        if let Some(shape) = self.float_info(id).shape.as_ref() {
+          if let Some((_min_x, max_x)) = shape.span_in_range(start, end) {
+            left_edge = left_edge.max(max_x);
+          }
+        }
+      }
+    }
+    if !state.active_shape_right.is_empty() {
+      for id in state.active_shape_right.iter().copied() {
+        if let Some(shape) = self.float_info(id).shape.as_ref() {
+          if let Some((min_x, _max_x)) = shape.span_in_range(start, end) {
+            right_edge = right_edge.min(min_x);
+          }
+        }
+      }
+    }
+    (left_edge, right_edge)
+  }
+
+  fn next_event_y(&self, state: &FloatSweepState) -> f32 {
+    self
+      .events
+      .get(state.event_cursor)
+      .map(|e| e.y)
+      .unwrap_or(f32::INFINITY)
+  }
+
+  fn next_shape_boundary_after(&self, state: &FloatSweepState, y: f32) -> f32 {
+    let mut next = f32::INFINITY;
+    for id in state
+      .active_shape_left
+      .iter()
+      .chain(state.active_shape_right.iter())
+    {
+      if let Some(shape) = self.float_info(*id).shape.as_ref() {
+        if let Some(change) = shape.next_change_after(y) {
+          if change > y {
+            next = next.min(change);
+          }
+        }
+      }
+    }
+    next
+  }
+
+  fn next_float_boundary_after_internal(&self, state: &FloatSweepState, y: f32) -> f32 {
+    self
+      .next_event_y(state)
+      .min(self.next_shape_boundary_after(state, y))
   }
 
   /// Returns the current Y position
@@ -250,12 +597,12 @@ impl FloatContext {
 
   /// Returns true if there are no floats
   pub fn is_empty(&self) -> bool {
-    self.left_floats.is_empty() && self.right_floats.is_empty()
+    self.float_map.is_empty()
   }
 
   /// Returns the total number of floats
   pub fn float_count(&self) -> usize {
-    self.left_floats.len() + self.right_floats.len()
+    self.float_map.len()
   }
 
   /// Returns all left floats
@@ -306,39 +653,44 @@ impl FloatContext {
 
   /// Add a float with the given FloatInfo
   pub fn add_float(&mut self, float_info: FloatInfo) {
-    match float_info.side {
-      FloatSide::Left => {
-        self.left_floats.push(float_info);
-        // Keep sorted by top edge for efficient queries
-        self
-          .left_floats
-          .sort_by(|a, b| a.top().partial_cmp(&b.top()).unwrap());
-      }
-      FloatSide::Right => {
-        self.right_floats.push(float_info);
-        self
-          .right_floats
-          .sort_by(|a, b| a.top().partial_cmp(&b.top()).unwrap());
-      }
-    }
+    let (storage, side) = match float_info.side {
+      FloatSide::Left => (&mut self.left_floats, FloatSide::Left),
+      FloatSide::Right => (&mut self.right_floats, FloatSide::Right),
+    };
+    let index = storage.len();
+    storage.push(float_info);
+
+    let id = self.float_map.len();
+    self.float_map.push(FloatRef { side, index });
+
+    let float = self.float_info(id);
+    let (start_y, end_y) = if float.bottom() < float.top() {
+      (float.bottom(), float.top())
+    } else {
+      (float.top(), float.bottom())
+    };
+    self.events.push(FloatEvent {
+      y: start_y,
+      kind: FloatEventKind::Start,
+      float_id: id,
+    });
+    self.events.push(FloatEvent {
+      y: end_y,
+      kind: FloatEventKind::End,
+      float_id: id,
+    });
+    self.sort_events();
+    self.reset_sweep_state();
   }
 
   /// Get the left edge at a given Y position (accounting for left floats)
   ///
   /// Returns the X coordinate where content can start at the given Y.
   pub fn left_edge_at_y(&self, y: f32) -> f32 {
-    let mut left_edge: f32 = 0.0;
-
-    for float in &self.left_floats {
-      if let Some(shape) = float.shape.as_ref() {
-        if let Some((_min_x, max_x)) = shape.span_at(y) {
-          left_edge = left_edge.max(max_x);
-        }
-      } else if float.contains_y(y) {
-        left_edge = left_edge.max(float.right_edge());
-      }
-    }
-
+    profile_count_width_query();
+    let mut state = self.ensure_sweep_state(y);
+    self.advance_sweep_to(y, &mut state);
+    let (left_edge, _) = self.edges_at_with_state(&mut state, y);
     left_edge
   }
 
@@ -346,18 +698,10 @@ impl FloatContext {
   ///
   /// Returns the X coordinate where content must end at the given Y.
   pub fn right_edge_at_y(&self, y: f32) -> f32 {
-    let mut right_edge = self.containing_block_width;
-
-    for float in &self.right_floats {
-      if let Some(shape) = float.shape.as_ref() {
-        if let Some((min_x, _max_x)) = shape.span_at(y) {
-          right_edge = right_edge.min(min_x);
-        }
-      } else if float.contains_y(y) {
-        right_edge = right_edge.min(float.left_edge());
-      }
-    }
-
+    profile_count_width_query();
+    let mut state = self.ensure_sweep_state(y);
+    self.advance_sweep_to(y, &mut state);
+    let (_, right_edge) = self.edges_at_with_state(&mut state, y);
     right_edge
   }
 
@@ -385,8 +729,10 @@ impl FloatContext {
   /// assert_eq!(width, 400.0); // 800 - 200 - 200
   /// ```
   pub fn available_width_at_y(&self, y: f32) -> (f32, f32) {
-    let left_edge = self.left_edge_at_y(y);
-    let right_edge = self.right_edge_at_y(y);
+    profile_count_width_query();
+    let mut state = self.ensure_sweep_state(y);
+    self.advance_sweep_to(y, &mut state);
+    let (left_edge, right_edge) = self.edges_at_with_state(&mut state, y);
     let available_width = (right_edge - left_edge).max(0.0);
     (left_edge, available_width)
   }
@@ -407,33 +753,56 @@ impl FloatContext {
   /// A tuple of (left_edge, available_width) representing the most
   /// constrained position within the range.
   pub fn available_width_in_range(&self, y_start: f32, y_end: f32) -> (f32, f32) {
-    let mut max_left_edge: f32 = 0.0;
-    let mut min_right_edge = self.containing_block_width;
-
-    // Check all left floats that overlap this range
-    for float in &self.left_floats {
-      if let Some(shape) = float.shape.as_ref() {
-        if let Some((_min_x, max_x)) = shape.span_in_range(y_start, y_end) {
-          max_left_edge = max_left_edge.max(max_x);
-        }
-      } else if float.overlaps_y_range(y_start, y_end) {
-        max_left_edge = max_left_edge.max(float.right_edge());
-      }
+    profile_count_range_query();
+    if y_end <= y_start {
+      let mut state = self.ensure_sweep_state(y_start);
+      self.advance_sweep_to(y_start, &mut state);
+      let (left_edge, right_edge) = self.edges_at_with_state(&mut state, y_start);
+      return (left_edge, (right_edge - left_edge).max(0.0));
     }
 
-    // Check all right floats that overlap this range
-    for float in &self.right_floats {
-      if let Some(shape) = float.shape.as_ref() {
-        if let Some((min_x, _max_x)) = shape.span_in_range(y_start, y_end) {
-          min_right_edge = min_right_edge.min(min_x);
-        }
-      } else if float.overlaps_y_range(y_start, y_end) {
-        min_right_edge = min_right_edge.min(float.left_edge());
+    let mut state = self.ensure_sweep_state(y_start);
+    self.advance_sweep_to(y_start, &mut state);
+
+    let mut scan_start = y_start;
+    let mut best_left = 0.0;
+    let mut best_width = self.containing_block_width;
+
+    loop {
+      let next_boundary = self
+        .next_float_boundary_after_internal(&*state, scan_start)
+        .min(y_end);
+      let (left_edge, right_edge) =
+        self.edges_in_range_with_state(&mut state, scan_start, next_boundary);
+      let width = (right_edge - left_edge).max(0.0);
+      if width < best_width || (width - best_width).abs() < f32::EPSILON {
+        best_width = width;
+        best_left = left_edge;
       }
+      if next_boundary >= y_end || next_boundary <= scan_start {
+        break;
+      }
+      scan_start = next_boundary;
+      self.advance_sweep_to(scan_start, &mut state);
     }
 
-    let available_width = (min_right_edge - max_left_edge).max(0.0);
-    (max_left_edge, available_width)
+    (best_left, best_width)
+  }
+
+  /// Returns the next Y coordinate after `y` where float-induced available
+  /// width might change.
+  ///
+  /// This is the minimum of the next float entering/leaving the sweep or the
+  /// next `shape-outside` span change for active shapes.
+  pub fn next_float_boundary_after(&self, y: f32) -> f32 {
+    let mut state = self.ensure_sweep_state(y);
+    self.advance_sweep_to(y, &mut state);
+    let next = self.next_float_boundary_after_internal(&*state, y);
+    if next.is_finite() {
+      next
+    } else {
+      y
+    }
   }
 
   /// Compute the clearance needed for an element with the given clear value
@@ -478,8 +847,10 @@ impl FloatContext {
     if clear.clears_left() {
       for float in &self.left_floats {
         // We need to clear floats that start at or before our position
-        if float.top() <= y {
-          clear_y = clear_y.max(float.bottom());
+        let top = float.top().min(float.bottom());
+        let bottom = float.top().max(float.bottom());
+        if top <= y {
+          clear_y = clear_y.max(bottom);
         }
       }
     }
@@ -487,8 +858,10 @@ impl FloatContext {
     // Find the bottom of all right floats that we need to clear
     if clear.clears_right() {
       for float in &self.right_floats {
-        if float.top() <= y {
-          clear_y = clear_y.max(float.bottom());
+        let top = float.top().min(float.bottom());
+        let bottom = float.top().max(float.bottom());
+        if top <= y {
+          clear_y = clear_y.max(bottom);
         }
       }
     }
@@ -573,7 +946,7 @@ impl FloatContext {
       }
 
       // Doesn't fit - move to the next "band" where a float ends
-      let next_y = self.next_float_bottom_after(y);
+      let next_y = self.next_float_boundary_after(y);
 
       if next_y <= y {
         // No more floats to clear, force fit at current position
@@ -590,28 +963,6 @@ impl FloatContext {
     }
   }
 
-  /// Find the bottom of the next float that ends after the given Y
-  ///
-  /// Returns the Y position where available width might change due to
-  /// a float ending. Returns the input Y if no more floats.
-  fn next_float_bottom_after(&self, y: f32) -> f32 {
-    let mut next_y = f32::MAX;
-
-    for float in self.left_floats.iter().chain(self.right_floats.iter()) {
-      let bottom = float.bottom();
-      // We want the smallest bottom that is greater than y
-      if bottom > y && bottom < next_y {
-        next_y = bottom;
-      }
-    }
-
-    if next_y == f32::MAX {
-      y // No more floats
-    } else {
-      next_y
-    }
-  }
-
   /// Get the bottom of all floats (the Y where all floats end)
   ///
   /// This is useful for determining the minimum height of a BFC that
@@ -622,11 +973,9 @@ impl FloatContext {
   /// The maximum bottom edge of all floats, or 0 if there are no floats.
   pub fn floats_bottom(&self) -> f32 {
     let mut bottom = 0.0f32;
-
-    for float in self.left_floats.iter().chain(self.right_floats.iter()) {
-      bottom = bottom.max(float.bottom());
+    for id in 0..self.float_map.len() {
+      bottom = bottom.max(self.float_info(id).bottom());
     }
-
     bottom
   }
 
@@ -665,7 +1014,7 @@ impl FloatContext {
         return y;
       }
 
-      let next_y = self.next_float_bottom_after(y);
+      let next_y = self.next_float_boundary_after(y);
       if next_y <= y {
         // No more floats to check
         return y;
@@ -680,18 +1029,16 @@ impl FloatContext {
   pub fn clear_all(&mut self) {
     self.left_floats.clear();
     self.right_floats.clear();
+    self.float_map.clear();
+    self.events.clear();
+    self.reset_sweep_state();
   }
 
   /// Clone the context with a new containing block width
   ///
   /// Useful when creating a nested BFC with different width.
   pub fn with_width(&self, new_width: f32) -> Self {
-    Self {
-      containing_block_width: new_width,
-      left_floats: Vec::new(),
-      right_floats: Vec::new(),
-      current_y: 0.0,
-    }
+    FloatContext::new(new_width)
   }
 }
 
@@ -704,6 +1051,9 @@ impl Default for FloatContext {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::debug::runtime::{with_runtime_toggles, RuntimeToggles};
+  use std::collections::HashMap;
+  use std::sync::Arc;
 
   // ==================== FloatInfo Tests ====================
 
@@ -1178,5 +1528,32 @@ mod tests {
     assert_eq!(left_edge, 200.0);
     assert_eq!(inner.containing_block_width(), 600.0);
     assert!(inner.is_empty());
+  }
+
+  #[test]
+  fn float_sweep_counts_events_instead_of_rescanning() {
+    let mut toggles = HashMap::new();
+    toggles.insert("FASTR_LAYOUT_PROFILE".to_string(), "1".to_string());
+    let toggles = RuntimeToggles::from_map(toggles);
+    let stats = with_runtime_toggles(Arc::new(toggles), || {
+      reset_float_profile_counters();
+      let mut ctx = FloatContext::new(200.0);
+      for i in 0..100 {
+        ctx.add_float_at(FloatSide::Left, 0.0, i as f32 * 5.0, 20.0, 5.0);
+      }
+
+      for y in 0..500 {
+        let _ = ctx.available_width_at_y(y as f32);
+      }
+      float_profile_stats()
+    });
+
+    assert_eq!(stats.range_queries, 0);
+    assert_eq!(stats.width_queries, 500);
+    assert!(
+      stats.boundary_steps <= 210,
+      "boundary steps should scale with float events, got {}",
+      stats.boundary_steps
+    );
   }
 }

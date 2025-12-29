@@ -1,4 +1,5 @@
 use crate::debug::runtime;
+use crate::layout::float_context::{float_profile_stats, reset_float_profile_counters};
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -72,6 +73,7 @@ pub fn reset_layout_profile() {
   for entry in CALLS.iter() {
     entry.store(0, Ordering::Relaxed);
   }
+  reset_float_profile_counters();
 }
 
 pub fn start_timer(kind: LayoutKind) -> Option<(LayoutKind, Instant)> {
@@ -134,6 +136,16 @@ pub fn log_layout_profile(total: Duration) {
         if calls > 0 { time / calls as f64 } else { 0.0 }
       ));
     }
+  }
+  let float_stats = float_profile_stats();
+  if float_stats.width_queries > 0
+    || float_stats.range_queries > 0
+    || float_stats.boundary_steps > 0
+  {
+    parts.push(format!(
+      "float_width_queries={} float_range_queries={} float_boundaries={}",
+      float_stats.width_queries, float_stats.range_queries, float_stats.boundary_steps
+    ));
   }
   eprintln!(
     "layout profile (inclusive): total_ms={:.2} {}",

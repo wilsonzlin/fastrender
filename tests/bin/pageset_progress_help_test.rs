@@ -17,4 +17,3 @@ fn pageset_progress_run_help_exits_success() {
     .expect("run pageset_progress run --help");
   assert!(status.success(), "expected success for run --help");
 }
-

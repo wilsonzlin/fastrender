@@ -284,7 +284,7 @@ impl<'a> InlineFloatIntegration<'a> {
         }
 
         // Find the next position where width might change
-        let next_y = self.next_float_boundary(y);
+        let next_y = self.float_ctx.next_float_boundary_after(y);
         if next_y <= y {
           // No more float boundaries, return current position
           return LineSpace::new(y, left_edge, width);
@@ -343,33 +343,6 @@ impl<'a> InlineFloatIntegration<'a> {
   /// Returns the X coordinate where content must end.
   pub fn right_edge_at(&self, y: f32) -> f32 {
     self.float_ctx.right_edge_at_y(y)
-  }
-
-  /// Returns the next Y position where available width might change
-  ///
-  /// This is useful for knowing when to re-check line width during
-  /// line breaking.
-  fn next_float_boundary(&self, y: f32) -> f32 {
-    let mut next_y = f32::MAX;
-
-    // Find the next float bottom that is greater than y
-    for float in self
-      .float_ctx
-      .left_floats()
-      .iter()
-      .chain(self.float_ctx.right_floats().iter())
-    {
-      let bottom = float.bottom();
-      if bottom > y && bottom < next_y {
-        next_y = bottom;
-      }
-    }
-
-    if next_y == f32::MAX {
-      y // No more boundaries
-    } else {
-      next_y
-    }
   }
 
   /// Returns the Y position where all floats end
@@ -452,7 +425,7 @@ impl<'a> InlineFloatIntegrationMut<'a> {
           return LineSpace::new(y, left_edge, width);
         }
 
-        let next_y = self.floats_bottom();
+        let next_y = self.float_ctx.next_float_boundary_after(y);
         if next_y <= y {
           return LineSpace::new(y, left_edge, width);
         }
@@ -615,20 +588,15 @@ impl<'a> Iterator for LineSpaceIterator<'a> {
     let space = LineSpace::new(self.current_y, left_edge, width);
 
     // Find the next position where width might change
-    let mut next_y = self.end_y;
-    for float in self
+    let next_y = self
       .float_ctx
-      .left_floats()
-      .iter()
-      .chain(self.float_ctx.right_floats().iter())
-    {
-      let bottom = float.bottom();
-      if bottom > self.current_y && bottom < next_y {
-        next_y = bottom;
-      }
-    }
-
-    self.current_y = next_y;
+      .next_float_boundary_after(self.current_y)
+      .min(self.end_y);
+    self.current_y = if next_y <= self.current_y {
+      self.end_y
+    } else {
+      next_y
+    };
 
     Some(space)
   }
@@ -960,15 +928,17 @@ mod tests {
 
     let spaces: Vec<_> = line_spaces(&ctx, 0.0, 200.0).collect();
 
-    // Should have boundaries at 0, 100, 150
-    assert_eq!(spaces.len(), 3);
+    // Should have boundaries at 0, 50, 100, 150
+    assert_eq!(spaces.len(), 4);
 
     // 0-100: left float only
     assert_eq!(spaces[0].y, 0.0);
+    // 50-100: both floats
+    assert_eq!(spaces[1].y, 50.0);
     // 100-150: right float only (left float ended)
-    assert_eq!(spaces[1].y, 100.0);
+    assert_eq!(spaces[2].y, 100.0);
     // 150-200: no floats
-    assert_eq!(spaces[2].y, 150.0);
+    assert_eq!(spaces[3].y, 150.0);
   }
 
   // ==================== Complex Scenario Tests ====================
