@@ -81,3 +81,30 @@ fn format_flag_changes_default_extension() {
     "default output should follow requested format extension"
   );
 }
+
+#[cfg(feature = "disk_cache")]
+#[test]
+fn disk_cache_directory_is_created_when_missing() {
+  let tmp = tempfile::TempDir::new().expect("tempdir");
+  let (url, _) = write_simple_html(&tmp);
+  let asset_dir = tmp.path().join("fetches/assets");
+  assert!(
+    !asset_dir.exists(),
+    "asset cache directory should start absent in a fresh tempdir"
+  );
+
+  let status = Command::new(env!("CARGO_BIN_EXE_fetch_and_render"))
+    .arg(&url)
+    .current_dir(tmp.path())
+    .status()
+    .expect("run fetch_and_render");
+
+  assert!(
+    status.success(),
+    "fetch_and_render should succeed for local file with disk cache enabled"
+  );
+  assert!(
+    asset_dir.is_dir(),
+    "disk cache directory should be created even when unused"
+  );
+}

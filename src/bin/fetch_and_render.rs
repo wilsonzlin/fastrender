@@ -212,6 +212,12 @@ fn try_main(args: Args) -> Result<()> {
 
   let timeout_secs = args.timeout.seconds(Some(0));
 
+  #[cfg(feature = "disk_cache")]
+  {
+    // Keep parity with render_pages/pageset_progress: ensure disk cache is ready up front.
+    std::fs::create_dir_all(ASSET_CACHE_DIR)?;
+  }
+
   let RenderConfigBundle { config, options } = build_render_configs(&RenderSurface {
     viewport: (width, height),
     scroll_x,

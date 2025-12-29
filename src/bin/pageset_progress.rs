@@ -1400,6 +1400,11 @@ fn run(args: RunArgs) -> io::Result<()> {
     fs::create_dir_all(&args.trace_dir)?;
     fs::create_dir_all(&args.trace_progress_dir)?;
   }
+  #[cfg(feature = "disk_cache")]
+  {
+    // Ensure disk-backed cache is available before spawning workers.
+    fs::create_dir_all(ASSET_DIR)?;
+  }
 
   let filter: Option<HashSet<String>> = args.pages.as_ref().map(|v| {
     v.iter()
