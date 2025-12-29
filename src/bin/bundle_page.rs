@@ -21,8 +21,9 @@ use fastrender::resource::{
 };
 use fastrender::style::media::MediaType;
 use fastrender::{OutputFormat, Result};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{hash_map::DefaultHasher, BTreeMap, HashMap};
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -586,6 +587,14 @@ fn safe_stem(url: &str) -> String {
   let mut stem = url_to_filename(url);
   if stem.is_empty() {
     stem = "resource".to_string();
+  }
+  const MAX_STEM_LEN: usize = 120;
+  if stem.len() > MAX_STEM_LEN {
+    let mut hasher = DefaultHasher::new();
+    stem.hash(&mut hasher);
+    let hash = format!("{:016x}", hasher.finish());
+    let keep = MAX_STEM_LEN.saturating_sub(hash.len() + 1);
+    stem = format!("{}_{hash}", &stem[..keep]);
   }
   stem
 }

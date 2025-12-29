@@ -1,0 +1,1 @@
+.Globe{position:absolute;left:0;top:0;width:100%;height:100%;display:flex;justify-content:flex-end}@media (prefers-reduced-motion:no-preference){.Globe{cursor:grab}.is-globe-dragging .Globe{cursor:grabbing}}.Globe--isAngled{transform:skewY(6deg);transform-origin:100% 0}

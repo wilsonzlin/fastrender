@@ -238,13 +238,7 @@ impl DecodedImageCache {
     if let Some(entry) = self.inner.pop(&key) {
       self.current_bytes = self.current_bytes.saturating_sub(entry.bytes);
     }
-    self.inner.put(
-      key,
-      CachedImageEntry {
-        image,
-        bytes,
-      },
-    );
+    self.inner.put(key, CachedImageEntry { image, bytes });
     self.current_bytes = self.current_bytes.saturating_add(bytes);
     self.evict_if_needed();
   }

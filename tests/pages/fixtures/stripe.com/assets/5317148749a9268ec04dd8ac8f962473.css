@@ -1,0 +1,1 @@
+.GraphicFormFieldList{display:grid;gap:var(--formFieldGap) 0}.GraphicFormFieldList__label{display:block;margin-bottom:var(--formFieldListLabelMarginBottom);font:var(--fontWeightSemibold) var(--formFieldListLabelFontSize)/1.846153846 var(--fontFamily);letter-spacing:.2px;color:var(--formFieldLabelColor)}

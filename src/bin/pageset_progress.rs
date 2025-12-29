@@ -3551,7 +3551,9 @@ fn run(args: RunArgs) -> io::Result<()> {
         stderr_path: args
           .log_dir
           .join(format!("{}.trace.stderr.log", item.cache_stem)),
-        stage_path: args.log_dir.join(format!("{}.trace.stage", item.cache_stem)),
+        stage_path: args
+          .log_dir
+          .join(format!("{}.trace.stage", item.cache_stem)),
         trace_out: Some(trace_out),
       });
     }

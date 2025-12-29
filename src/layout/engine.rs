@@ -211,8 +211,7 @@ impl LayoutParallelism {
           .max(self.min_fanout.saturating_mul(self.min_fanout));
         let has_parallel_work = work_items >= self.min_fanout;
         let useful_threads = available_threads.min(work_items);
-        let activated =
-          useful_threads > 1 && workload.nodes >= threshold && has_parallel_work;
+        let activated = useful_threads > 1 && workload.nodes >= threshold && has_parallel_work;
         Self {
           auto_activated: activated,
           ..*self

@@ -334,6 +334,12 @@ and tests can run in fully hermetic environments without relying on platform fon
 - **License:** Bitstream Vera/DejaVu fonts license.
 - **Notes:** Used as the primary text face for bundled rendering.
 
+### `NotoSansArabic-Regular.ttf` / `NotoSansDevanagari-Regular.ttf`
+- **Source:** <https://github.com/google/fonts> (`ofl/notosansarabic` and `ofl/notosansdevanagari`).
+- **License:** SIL Open Font License 1.1 (see `Noto-OFL.txt`).
+- **Notes:** Bundled as additional fallback coverage for Arabic and Devanagari scripts to keep CI renders
+  deterministic when system fonts are disabled.
+
 ## Variable font fixtures
 
 - **Font:** AmstelvarAlpha (variable)

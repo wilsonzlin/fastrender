@@ -85,6 +85,12 @@ jobs:
       - name: Run doc tests
         run: cargo test --doc --all-features --verbose
 
+      - name: Pageset timeout perf smoke (release, offline fixtures)
+        if: matrix.os == 'ubuntu-latest' && matrix.rust == 'stable'
+        run: |
+          set -o pipefail
+          cargo run --release --bin perf_smoke -- --suite pageset-timeouts --top 5 --output target/perf_smoke_pageset_timeouts.json | tee target/perf_smoke_pageset_timeouts.log
+
   # ===========================================================================
   # MSRV Job - Verify minimum supported Rust version
   # ===========================================================================

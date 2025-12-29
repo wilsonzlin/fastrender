@@ -95,16 +95,14 @@ fn auto_parallel_layout_engages_on_wide_html() {
   }
   html.push_str("</body>");
 
-  let mut renderer = FastRender::with_config(
-    FastRenderConfig::new().with_default_viewport(1200, 2400),
-  )
-  .expect("renderer");
+  let mut renderer =
+    FastRender::with_config(FastRenderConfig::new().with_default_viewport(1200, 2400))
+      .expect("renderer");
 
   enable_layout_parallel_debug_counters(true);
   reset_layout_parallel_debug_counters();
-  let options = RenderOptions::new().with_layout_parallelism(LayoutParallelism::auto(
-    DEFAULT_LAYOUT_MIN_FANOUT,
-  ));
+  let options = RenderOptions::new()
+    .with_layout_parallelism(LayoutParallelism::auto(DEFAULT_LAYOUT_MIN_FANOUT));
   let _ = renderer
     .render_html_with_stylesheets_report(
       &html,

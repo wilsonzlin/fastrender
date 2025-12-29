@@ -1839,9 +1839,7 @@ impl ImageCache {
     record_image_cache_miss();
     let render_timer = Instant::now();
 
-    if let Some(pixmap) =
-      try_render_simple_svg_pixmap(svg_content, render_width, render_height)?
-    {
+    if let Some(pixmap) = try_render_simple_svg_pixmap(svg_content, render_width, render_height)? {
       let pixmap = Arc::new(pixmap);
       record_image_decode_ms(render_timer.elapsed().as_secs_f64() * 1000.0);
       self.insert_svg_pixmap(key, Arc::clone(&pixmap));
@@ -1853,8 +1851,9 @@ impl ImageCache {
       if parsed.scheme() == "file" {
         if let Ok(path) = parsed.to_file_path() {
           if let Some(dir) = path.parent() {
-            options.resources_dir =
-              std::fs::canonicalize(dir).ok().or_else(|| Some(dir.to_path_buf()));
+            options.resources_dir = std::fs::canonicalize(dir)
+              .ok()
+              .or_else(|| Some(dir.to_path_buf()));
           }
         }
       }

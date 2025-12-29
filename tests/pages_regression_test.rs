@@ -1,13 +1,16 @@
 mod r#ref;
 
+use fastrender::api::DiagnosticsLevel;
 use fastrender::image_output::{encode_image, OutputFormat};
 use fastrender::style::media::MediaType;
-use fastrender::{FastRender, RenderOptions};
+use fastrender::{FastRender, FontConfig, RenderOptions, RenderStageTimings, ResourcePolicy};
 use r#ref::image_compare::{compare_config_from_env, compare_pngs, CompareEnvVars};
 use r#ref::CompareConfig;
+use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread;
+use std::time::Instant;
 use url::Url;
 
 #[derive(Clone, Copy)]
@@ -502,5 +505,199 @@ fn page_fixtures_present() {
   for fixture in PAGE_FIXTURES {
     let path = fixtures_dir().join(fixture.html);
     assert!(path.exists(), "Fixture HTML missing: {}", path.display());
+  }
+}
+
+mod pageset_timeouts {
+  use super::*;
+
+  const MANIFEST_VERSION: u32 = 1;
+  const DEFAULT_BUDGET_MS: f64 = 5000.0;
+  // Captures the current highest pageset timeouts (per progress/pages/*.json) along with a
+  // paint-heavy case to keep hotspot coverage for offline perf/regression tracking.
+  const TIMEOUT_MANIFEST: &str = include_str!("pages/pageset_timeouts.json");
+
+  #[derive(Deserialize)]
+  struct TimeoutManifest {
+    schema_version: u32,
+    #[serde(default)]
+    default_budget_ms: Option<f64>,
+    fixtures: Vec<TimeoutFixture>,
+  }
+
+  #[derive(Deserialize)]
+  struct TimeoutFixture {
+    name: String,
+    viewport: [u32; 2],
+    dpr: f32,
+    media: String,
+    #[serde(default)]
+    budget_ms: Option<f64>,
+  }
+
+  struct TimeoutRun {
+    name: String,
+    elapsed_ms: f64,
+    budget_ms: f64,
+    timings: RenderStageTimings,
+  }
+
+  #[test]
+  fn pageset_timeouts_render_under_budget() {
+    if cfg!(debug_assertions) && std::env::var_os("PAGESET_TIMEOUTS_IN_DEBUG").is_none() {
+      eprintln!(
+        "Skipping pageset timeout fixtures in debug (set PAGESET_TIMEOUTS_IN_DEBUG=1 to run)."
+      );
+      return;
+    }
+
+    let manifest = load_manifest().expect("failed to parse pageset timeout manifest");
+    let default_budget_ms = manifest.default_budget_ms.unwrap_or(DEFAULT_BUDGET_MS);
+    let global_budget = budget_override_from_env();
+
+    thread::Builder::new()
+      .stack_size(64 * 1024 * 1024)
+      .spawn(move || {
+        if std::env::var_os("FASTR_USE_BUNDLED_FONTS").is_none() {
+          std::env::set_var("FASTR_USE_BUNDLED_FONTS", "1");
+        }
+
+        for fixture in &manifest.fixtures {
+          let run = render_timeout_fixture(fixture, default_budget_ms, global_budget)
+            .unwrap_or_else(|e| panic!("Failed to render {}: {}", fixture.name, e));
+          assert!(
+            run.elapsed_ms <= run.budget_ms,
+            "Fixture {} exceeded budget ({:.1}ms > {:.1}ms). Timings: {}",
+            run.name,
+            run.elapsed_ms,
+            run.budget_ms,
+            summarize_timings(&run.timings),
+          );
+        }
+      })
+      .unwrap()
+      .join()
+      .unwrap();
+  }
+
+  fn load_manifest() -> Result<TimeoutManifest, String> {
+    let manifest: TimeoutManifest =
+      serde_json::from_str(TIMEOUT_MANIFEST).map_err(|e| format!("invalid manifest: {e}"))?;
+    if manifest.schema_version != MANIFEST_VERSION {
+      return Err(format!(
+        "unexpected manifest schema_version {}, expected {}",
+        manifest.schema_version, MANIFEST_VERSION
+      ));
+    }
+    Ok(manifest)
+  }
+
+  fn render_timeout_fixture(
+    fixture: &TimeoutFixture,
+    default_budget_ms: f64,
+    global_budget_ms: Option<f64>,
+  ) -> Result<TimeoutRun, String> {
+    if fixture.viewport.len() != 2 {
+      return Err(format!(
+        "fixture {} viewport must have exactly two entries",
+        fixture.name
+      ));
+    }
+
+    let html_path = fixtures_dir().join(&fixture.name).join("index.html");
+    let html = fs::read_to_string(&html_path)
+      .map_err(|e| format!("failed to read {}: {}", html_path.display(), e))?;
+    let base_url = base_url_for(&html_path)?;
+    let media = media_from_label(&fixture.media)?;
+
+    let policy = ResourcePolicy::default()
+      .allow_http(false)
+      .allow_https(false)
+      .allow_file(true)
+      .allow_data(true);
+
+    let mut renderer = FastRender::builder()
+      .viewport_size(fixture.viewport[0], fixture.viewport[1])
+      .device_pixel_ratio(fixture.dpr)
+      .base_url(base_url.clone())
+      .font_sources(FontConfig::bundled_only())
+      .resource_policy(policy)
+      .build()
+      .map_err(|e| format!("failed to build renderer for {}: {:?}", fixture.name, e))?;
+
+    let options = RenderOptions::new()
+      .with_viewport(fixture.viewport[0], fixture.viewport[1])
+      .with_device_pixel_ratio(fixture.dpr)
+      .with_media_type(media)
+      .with_diagnostics_level(DiagnosticsLevel::Basic);
+
+    let budget_ms = global_budget_ms
+      .or(fixture.budget_ms)
+      .unwrap_or(default_budget_ms);
+
+    let start = Instant::now();
+    let rendered = renderer
+      .render_html_with_diagnostics(&html, options)
+      .map_err(|e| format!("render failed for {}: {:?}", fixture.name, e))?;
+    let (_, diagnostics) = rendered
+      .encode(OutputFormat::Png)
+      .map_err(|e| format!("encode failed for {}: {:?}", fixture.name, e))?;
+    let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+
+    let stats = diagnostics.stats.ok_or_else(|| {
+      format!(
+        "diagnostics missing stats for {}; expected DiagnosticsLevel::Basic",
+        fixture.name
+      )
+    })?;
+
+    Ok(TimeoutRun {
+      name: fixture.name.clone(),
+      elapsed_ms,
+      budget_ms,
+      timings: stats.timings,
+    })
+  }
+
+  fn summarize_timings(timings: &RenderStageTimings) -> String {
+    let mut parts = Vec::new();
+    for (label, value) in stage_entries(timings) {
+      if value > 0.0 {
+        parts.push(format!("{label}={value:.1}ms"));
+      }
+    }
+    parts.join(", ")
+  }
+
+  fn stage_entries(timings: &RenderStageTimings) -> [(&'static str, f64); 11] {
+    [
+      ("html_decode", timings.html_decode_ms.unwrap_or(0.0)),
+      ("dom_parse", timings.dom_parse_ms.unwrap_or(0.0)),
+      ("css_inlining", timings.css_inlining_ms.unwrap_or(0.0)),
+      ("css_parse", timings.css_parse_ms.unwrap_or(0.0)),
+      ("cascade", timings.cascade_ms.unwrap_or(0.0)),
+      ("box_tree", timings.box_tree_ms.unwrap_or(0.0)),
+      ("layout", timings.layout_ms.unwrap_or(0.0)),
+      ("paint_build", timings.paint_build_ms.unwrap_or(0.0)),
+      ("paint_optimize", timings.paint_optimize_ms.unwrap_or(0.0)),
+      ("paint_rasterize", timings.paint_rasterize_ms.unwrap_or(0.0)),
+      ("encode", timings.encode_ms.unwrap_or(0.0)),
+    ]
+  }
+
+  fn media_from_label(label: &str) -> Result<MediaType, String> {
+    match label.to_ascii_lowercase().as_str() {
+      "all" => Ok(MediaType::All),
+      "screen" => Ok(MediaType::Screen),
+      "print" => Ok(MediaType::Print),
+      "speech" => Ok(MediaType::Speech),
+      other => Err(format!("unsupported media type \"{other}\"")),
+    }
+  }
+
+  fn budget_override_from_env() -> Option<f64> {
+    std::env::var("PAGESET_TIMEOUT_BUDGET_MS")
+      .ok()
+      .and_then(|value| value.parse::<f64>().ok())
   }
 }

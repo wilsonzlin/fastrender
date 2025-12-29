@@ -1,18 +1,40 @@
-use clap::Parser;
+use clap::{ArgAction, Parser, ValueEnum};
 use fastrender::api::{DiagnosticsLevel, FastRender, RenderOptions};
 use fastrender::image_output::OutputFormat;
 use fastrender::style::media::MediaType;
 use fastrender::{FontConfig, ResourcePolicy};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use url::Url;
 
 #[derive(Parser)]
 #[command(about = "Offline perf smoke test for a small set of fixtures")]
 struct Args {
+  /// Which fixture suite to run (core/pageset-timeouts/all)
+  #[arg(long, value_enum, default_value_t = Suite::Core)]
+  suite: Suite,
+
+  /// Only run fixtures matching these names (comma-separated)
+  #[arg(long, value_delimiter = ',')]
+  only: Option<Vec<String>>,
+
+  /// Backwards-compatible alias for --only
+  #[arg(long, value_delimiter = ',', hide = true)]
+  fixtures: Option<Vec<String>>,
+
+  /// Run each fixture in its own process to keep memory bounded
+  #[arg(long, action = ArgAction::SetTrue)]
+  isolate: bool,
+
+  /// Disable per-fixture isolation (used by the orchestrating parent process)
+  #[arg(long, action = ArgAction::SetTrue, hide = true)]
+  no_isolate: bool,
+
   /// Print the slowest N fixtures to stderr
   #[arg(long)]
   top: Option<usize>,
@@ -25,10 +47,6 @@ struct Args {
   #[arg(long)]
   baseline: Option<PathBuf>,
 
-  /// Only run the listed fixtures (comma-separated)
-  #[arg(long, value_delimiter = ',')]
-  fixtures: Option<Vec<String>>,
-
   /// Relative regression threshold (0.05 = 5%)
   #[arg(long, default_value_t = 0.05)]
   threshold: f64,
@@ -38,68 +56,98 @@ struct Args {
   fail_on_regression: bool,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, ValueEnum)]
+enum Suite {
+  Core,
+  PagesetTimeouts,
+  All,
+}
+
+#[derive(Clone)]
 struct FixtureSpec {
-  name: &'static str,
-  path: &'static str,
+  name: String,
+  path: String,
   viewport: (u32, u32),
   dpr: f32,
   media: MediaType,
+  budget_ms: Option<f64>,
 }
 
-const PERF_FIXTURES: &[FixtureSpec] = &[
-  FixtureSpec {
-    name: "flex_dashboard",
-    path: "tests/pages/fixtures/flex_dashboard/index.html",
-    viewport: (1040, 1240),
-    dpr: 1.0,
-    media: MediaType::Screen,
-  },
-  FixtureSpec {
-    name: "grid_news",
-    path: "tests/pages/fixtures/grid_news/index.html",
-    viewport: (1040, 1240),
-    dpr: 1.0,
-    media: MediaType::Screen,
-  },
-  FixtureSpec {
-    name: "multicol_article",
-    path: "tests/pages/fixtures/multicol_article/index.html",
-    viewport: (1040, 1240),
-    dpr: 1.0,
-    media: MediaType::Screen,
-  },
-  FixtureSpec {
-    name: "table_financial",
-    path: "tests/pages/fixtures/table_financial/index.html",
-    viewport: (1040, 1240),
-    dpr: 1.0,
-    media: MediaType::Screen,
-  },
-  FixtureSpec {
-    name: "subgrid_showcase",
-    path: "tests/pages/fixtures/subgrid_showcase/index.html",
-    viewport: (1040, 1240),
-    dpr: 1.0,
-    media: MediaType::Screen,
-  },
-  FixtureSpec {
-    name: "mask_filter_showcase",
-    path: "tests/pages/fixtures/mask_filter_showcase/index.html",
-    viewport: (1040, 1240),
-    dpr: 1.0,
-    media: MediaType::Screen,
-  },
-  FixtureSpec {
-    name: "paginated_report_print",
-    path: "tests/pages/fixtures/paginated_report/index.html",
-    viewport: (920, 1180),
-    dpr: 1.0,
-    media: MediaType::Print,
-  },
+type CoreFixture = (&'static str, &'static str, (u32, u32), f32, MediaType);
+
+const CORE_FIXTURES: &[CoreFixture] = &[
+  (
+    "flex_dashboard",
+    "tests/pages/fixtures/flex_dashboard/index.html",
+    (1040, 1240),
+    1.0,
+    MediaType::Screen,
+  ),
+  (
+    "grid_news",
+    "tests/pages/fixtures/grid_news/index.html",
+    (1040, 1240),
+    1.0,
+    MediaType::Screen,
+  ),
+  (
+    "multicol_article",
+    "tests/pages/fixtures/multicol_article/index.html",
+    (1040, 1240),
+    1.0,
+    MediaType::Screen,
+  ),
+  (
+    "table_financial",
+    "tests/pages/fixtures/table_financial/index.html",
+    (1040, 1240),
+    1.0,
+    MediaType::Screen,
+  ),
+  (
+    "subgrid_showcase",
+    "tests/pages/fixtures/subgrid_showcase/index.html",
+    (1040, 1240),
+    1.0,
+    MediaType::Screen,
+  ),
+  (
+    "mask_filter_showcase",
+    "tests/pages/fixtures/mask_filter_showcase/index.html",
+    (1040, 1240),
+    1.0,
+    MediaType::Screen,
+  ),
+  (
+    "paginated_report_print",
+    "tests/pages/fixtures/paginated_report/index.html",
+    (920, 1180),
+    1.0,
+    MediaType::Print,
+  ),
 ];
 
 const PERF_SMOKE_SCHEMA_VERSION: u32 = 2;
+const PAGESET_TIMEOUT_MANIFEST_VERSION: u32 = 1;
+const PAGESET_TIMEOUT_MANIFEST: &str = include_str!("../../tests/pages/pageset_timeouts.json");
+
+#[derive(Deserialize)]
+struct PagesetTimeoutManifest {
+  schema_version: u32,
+  #[serde(default)]
+  default_budget_ms: Option<f64>,
+  fixtures: Vec<PagesetTimeoutFixture>,
+}
+
+#[derive(Deserialize)]
+struct PagesetTimeoutFixture {
+  name: String,
+  viewport: [u32; 2],
+  dpr: f32,
+  media: String,
+  #[serde(default)]
+  budget_ms: Option<f64>,
+}
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 struct StageBreakdown {
@@ -231,6 +279,8 @@ struct FixtureSummary {
   path: String,
   viewport: ViewportSummary,
   total_ms: f64,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  budget_ms: Option<f64>,
   #[serde(default)]
   stage_ms: StageBreakdown,
   timings_ms: StageTimingsSummary,
@@ -268,6 +318,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::env::set_var("FASTR_USE_BUNDLED_FONTS", "1");
   }
 
+  let filters = args.only.as_ref().or(args.fixtures.as_ref());
+  let auto_isolate = matches!(args.suite, Suite::PagesetTimeouts);
+  let isolate = if args.no_isolate {
+    false
+  } else {
+    args.isolate || auto_isolate
+  };
+
   let baseline = if let Some(path) = args.baseline.as_ref() {
     Some(read_summary(path)?)
   } else {
@@ -288,11 +346,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     return Err("--fail-on-regression requires --baseline".into());
   }
 
-  let selected = select_fixtures(args.fixtures.as_ref())?;
+  let mut specs = fixture_specs_for_suite(args.suite)?;
+  specs = filter_specs(specs, filters)?;
+  if specs.is_empty() {
+    return Err("no fixtures selected to run".into());
+  }
+
+  if isolate {
+    let label = filters
+      .map(|names| names.join(","))
+      .filter(|names| !names.is_empty())
+      .unwrap_or_else(|| "full suite".to_string());
+    eprintln!("Running {} fixtures in isolation ({})", specs.len(), label);
+  }
+
   let mut fixtures = Vec::new();
   let mut stage_totals = StageBreakdown::default();
-  for spec in selected {
-    let fixture = run_fixture(spec)?;
+  for spec in &specs {
+    let fixture = if isolate {
+      run_fixture_isolated(spec, &args)?
+    } else {
+      run_fixture(spec)?
+    };
     stage_totals.add_assign(&fixture.stage_ms);
     fixtures.push(fixture);
   }
@@ -315,8 +390,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   fs::write(&args.output, &json)?;
   println!("{json}");
 
+  let sorted_by_total = sorted_by_total(&summary.fixtures);
   if let Some(top) = args.top {
-    print_top(&summary, top);
+    print_top(&sorted_by_total, top);
+    print_stage_breakdown(&sorted_by_total, top);
+  } else {
+    print_stage_breakdown(&sorted_by_total, sorted_by_total.len());
   }
 
   if let Some(baseline) = baseline {
@@ -345,9 +424,190 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   Ok(())
 }
 
+fn fixture_specs_for_suite(suite: Suite) -> Result<Vec<FixtureSpec>, Box<dyn std::error::Error>> {
+  let mut specs = match suite {
+    Suite::Core => core_fixture_specs(),
+    Suite::PagesetTimeouts => Vec::new(),
+    Suite::All => core_fixture_specs(),
+  };
+
+  if matches!(suite, Suite::PagesetTimeouts | Suite::All) {
+    specs.extend(pageset_timeout_fixture_specs()?);
+  }
+
+  Ok(specs)
+}
+
+fn core_fixture_specs() -> Vec<FixtureSpec> {
+  CORE_FIXTURES
+    .iter()
+    .map(|(name, path, viewport, dpr, media)| FixtureSpec {
+      name: (*name).to_string(),
+      path: (*path).to_string(),
+      viewport: *viewport,
+      dpr: *dpr,
+      media: *media,
+      budget_ms: None,
+    })
+    .collect()
+}
+
+fn pageset_timeout_fixture_specs() -> Result<Vec<FixtureSpec>, Box<dyn std::error::Error>> {
+  let manifest: PagesetTimeoutManifest = serde_json::from_str(PAGESET_TIMEOUT_MANIFEST)?;
+  if manifest.schema_version != PAGESET_TIMEOUT_MANIFEST_VERSION {
+    return Err(
+      format!(
+        "pageset timeout manifest version {} does not match expected {}",
+        manifest.schema_version, PAGESET_TIMEOUT_MANIFEST_VERSION
+      )
+      .into(),
+    );
+  }
+
+  let default_budget = manifest.default_budget_ms;
+  let mut specs = Vec::new();
+  for fixture in manifest.fixtures {
+    if fixture.viewport.len() != 2 {
+      return Err(
+        format!(
+          "fixture {} has invalid viewport {:?}",
+          fixture.name, fixture.viewport
+        )
+        .into(),
+      );
+    }
+    specs.push(FixtureSpec {
+      name: fixture.name.clone(),
+      path: format!("tests/pages/fixtures/{}/index.html", fixture.name),
+      viewport: (fixture.viewport[0], fixture.viewport[1]),
+      dpr: fixture.dpr,
+      media: media_from_label(&fixture.media)?,
+      budget_ms: fixture.budget_ms.or(default_budget),
+    });
+  }
+
+  Ok(specs)
+}
+
+fn filter_specs(
+  specs: Vec<FixtureSpec>,
+  only: Option<&Vec<String>>,
+) -> Result<Vec<FixtureSpec>, Box<dyn std::error::Error>> {
+  let Some(only) = only else {
+    return Ok(specs);
+  };
+
+  let wanted: HashSet<String> = only.iter().map(|name| name.to_ascii_lowercase()).collect();
+  let filtered: Vec<FixtureSpec> = specs
+    .into_iter()
+    .filter(|spec| wanted.contains(&spec.name.to_ascii_lowercase()))
+    .collect();
+
+  if filtered.is_empty() {
+    return Err(format!("no fixtures matched --only={}", only.join(",")).into());
+  }
+
+  Ok(filtered)
+}
+
+fn suite_cli_value(suite: Suite) -> &'static str {
+  match suite {
+    Suite::Core => "core",
+    Suite::PagesetTimeouts => "pageset-timeouts",
+    Suite::All => "all",
+  }
+}
+
+fn temp_summary_path(spec: &FixtureSpec) -> PathBuf {
+  let timestamp = SystemTime::now()
+    .duration_since(UNIX_EPOCH)
+    .unwrap_or_default()
+    .as_millis();
+  std::env::temp_dir().join(format!(
+    "perf_smoke_{}_{}_{}.json",
+    spec.name.replace(['/', '\\'], "_"),
+    std::process::id(),
+    timestamp
+  ))
+}
+
+fn run_fixture_isolated(
+  spec: &FixtureSpec,
+  args: &Args,
+) -> Result<FixtureSummary, Box<dyn std::error::Error>> {
+  let summary_path = temp_summary_path(spec);
+  let mut cmd = Command::new(std::env::current_exe()?);
+  cmd
+    .arg("--suite")
+    .arg(suite_cli_value(args.suite))
+    .arg("--output")
+    .arg(&summary_path)
+    .arg("--only")
+    .arg(&spec.name)
+    .arg("--no-isolate");
+  if let Some(top) = args.top {
+    cmd.arg("--top").arg(top.to_string());
+  }
+  cmd.stdout(Stdio::null());
+
+  let timeout_ms = spec
+    .budget_ms
+    .map(|ms| ms * 2.0)
+    .unwrap_or(10_000.0)
+    .max(1_000.0);
+  let mut child = cmd.spawn()?;
+  let timeout = Duration::from_millis(timeout_ms.ceil() as u64);
+  let start = Instant::now();
+  loop {
+    if let Some(status) = child.try_wait()? {
+      if !status.success() {
+        return Err(
+          format!(
+            "isolated perf_smoke run failed for {} (status: {})",
+            spec.name, status
+          )
+          .into(),
+        );
+      }
+      break;
+    }
+
+    if start.elapsed() >= timeout {
+      let _ = child.kill();
+      let _ = child.wait();
+      let _ = fs::remove_file(&summary_path);
+      return Err(
+        format!(
+          "isolated perf_smoke run for {} exceeded timeout ({:.1}ms)",
+          spec.name, timeout_ms
+        )
+        .into(),
+      );
+    }
+
+    thread::sleep(Duration::from_millis(50));
+  }
+
+  let summary = read_summary(&summary_path)?;
+  let mut fixtures = summary.fixtures;
+  let _ = fs::remove_file(&summary_path);
+  if fixtures.len() != 1 {
+    return Err(
+      format!(
+        "isolated perf_smoke run for {} returned {} fixtures",
+        spec.name,
+        fixtures.len()
+      )
+      .into(),
+    );
+  }
+
+  Ok(fixtures.remove(0))
+}
+
 fn run_fixture(spec: &FixtureSpec) -> Result<FixtureSummary, Box<dyn std::error::Error>> {
   let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-  let html_path = root.join(spec.path);
+  let html_path = root.join(&spec.path);
   let html = fs::read_to_string(&html_path)?;
   let base_url = base_url_for(&html_path)?;
 
@@ -380,8 +640,8 @@ fn run_fixture(spec: &FixtureSpec) -> Result<FixtureSummary, Box<dyn std::error:
     .ok_or("diagnostics missing stats; expected DiagnosticsLevel::Basic")?;
 
   Ok(FixtureSummary {
-    name: spec.name.to_string(),
-    path: spec.path.to_string(),
+    name: spec.name.clone(),
+    path: spec.path.clone(),
     viewport: ViewportSummary {
       width: spec.viewport.0,
       height: spec.viewport.1,
@@ -389,6 +649,7 @@ fn run_fixture(spec: &FixtureSpec) -> Result<FixtureSummary, Box<dyn std::error:
       media: media_label(spec.media).to_string(),
     },
     total_ms,
+    budget_ms: spec.budget_ms,
     stage_ms: stage_breakdown_from_stats(&stats),
     timings_ms: timings_from_stats(&stats),
     counts: counts_from_stats(&stats),
@@ -402,6 +663,16 @@ fn media_label(media: MediaType) -> &'static str {
     MediaType::Print => "print",
     MediaType::Speech => "speech",
     MediaType::All => "all",
+  }
+}
+
+fn media_from_label(label: &str) -> Result<MediaType, Box<dyn std::error::Error>> {
+  match label.to_ascii_lowercase().as_str() {
+    "screen" => Ok(MediaType::Screen),
+    "print" => Ok(MediaType::Print),
+    "speech" => Ok(MediaType::Speech),
+    "all" => Ok(MediaType::All),
+    other => Err(format!("unsupported media type {other}").into()),
   }
 }
 
@@ -514,15 +785,11 @@ fn find_regressions(
       }
       for (label, value) in fixture.timings_ms.entries() {
         let base_value =
-          base.timings_ms.entries().iter().find_map(
-            |(l, v)| {
-              if *l == label {
-                Some(*v)
-              } else {
-                None
-              }
-            },
-          );
+          base
+            .timings_ms
+            .entries()
+            .iter()
+            .find_map(|(l, v)| if *l == label { Some(*v) } else { None });
         if let Some(base_value) = base_value {
           if base_value > 0.0 && is_regression(base_value, value, threshold) {
             regressions.push(Regression {
@@ -562,13 +829,61 @@ fn is_regression(baseline: f64, latest: f64, threshold: f64) -> bool {
   ((latest - baseline) / baseline) > threshold
 }
 
-fn print_top(summary: &PerfSmokeSummary, count: usize) {
-  let mut fixtures = summary.fixtures.clone();
-  fixtures.sort_by(|a, b| b.total_ms.partial_cmp(&a.total_ms).unwrap());
-  eprintln!("Slowest {} fixtures:", count.min(fixtures.len()));
-  for fixture in fixtures.into_iter().take(count) {
-    eprintln!("  {:>8.3} ms  {}", fixture.total_ms, fixture.name);
+fn print_top(fixtures: &[FixtureSummary], count: usize) {
+  let count = count.min(fixtures.len());
+  if count == 0 {
+    return;
   }
+  eprintln!("Slowest {} fixtures:", count);
+  for fixture in fixtures.iter().take(count) {
+    let budget = format_budget(fixture.budget_ms);
+    eprintln!("  {:>8.3} ms{}  {}", fixture.total_ms, budget, fixture.name);
+  }
+}
+
+fn sorted_by_total(fixtures: &[FixtureSummary]) -> Vec<FixtureSummary> {
+  let mut sorted = fixtures.to_vec();
+  sorted.sort_by(|a, b| b.total_ms.partial_cmp(&a.total_ms).unwrap());
+  sorted
+}
+
+fn print_stage_breakdown(fixtures: &[FixtureSummary], count: usize) {
+  let count = count.min(fixtures.len());
+  if count == 0 {
+    return;
+  }
+  eprintln!("Stage timings ({} slowest fixtures):", count);
+  for fixture in fixtures.iter().take(count) {
+    let budget = format_budget(fixture.budget_ms);
+    eprintln!(
+      "  {:>8.3} ms{}  {:<25} {}",
+      fixture.total_ms,
+      budget,
+      fixture.name,
+      format_stage_breakdown(&fixture.timings_ms)
+    );
+  }
+}
+
+fn format_stage_breakdown(timings: &StageTimingsSummary) -> String {
+  let parts: Vec<String> = timings
+    .entries()
+    .iter()
+    .filter_map(|(label, value)| {
+      if *value > 0.0 {
+        Some(format!("{label}={value:.3}"))
+      } else {
+        None
+      }
+    })
+    .collect();
+  parts.join(", ")
+}
+
+fn format_budget(budget_ms: Option<f64>) -> String {
+  budget_ms
+    .map(|budget| format!(" (budget {:.0} ms)", budget))
+    .unwrap_or_default()
 }
 
 impl Regression {
@@ -582,39 +897,4 @@ impl Regression {
       RegressionMetric::Stage(label) => label,
     }
   }
-}
-
-fn select_fixtures<'a>(
-  filter: Option<&Vec<String>>,
-) -> Result<Vec<&'a FixtureSpec>, Box<dyn std::error::Error>> {
-  let mut fixtures: Vec<&FixtureSpec> = PERF_FIXTURES.iter().collect();
-  if let Some(filter) = filter {
-    if filter.is_empty() {
-      return Err("at least one fixture name must be provided to --fixtures".into());
-    }
-    let wanted: Vec<String> = filter
-      .iter()
-      .map(|name| name.trim().to_ascii_lowercase())
-      .filter(|name| !name.is_empty())
-      .collect();
-    if wanted.is_empty() {
-      return Err("at least one non-empty fixture name must be provided to --fixtures".into());
-    }
-    fixtures.retain(|spec| wanted.contains(&spec.name.to_ascii_lowercase()));
-    if fixtures.is_empty() {
-      let available = PERF_FIXTURES
-        .iter()
-        .map(|f| f.name)
-        .collect::<Vec<_>>()
-        .join(", ");
-      return Err(
-        format!(
-          "no fixtures matched {:?}; available fixtures: {available}",
-          filter
-        )
-        .into(),
-      );
-    }
-  }
-  Ok(fixtures)
 }

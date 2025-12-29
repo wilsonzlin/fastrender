@@ -1,0 +1,1955 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>The Rust Programming Language Blog</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta name="description" content="Empowering everyone to build reliable and efficient software.">
+     <!-- Twitter card -->
+     <meta name="twitter:card" content="summary">
+     <meta name="twitter:site" content="@rustlang">
+     <meta name="twitter:creator" content="@rustlang">
+     <meta name="twitter:title" content="The Rust Programming Language Blog">
+     <meta name="twitter:description" content="Empowering everyone to build reliable and efficient software.">
+    <meta name="twitter:image" content=".">
+    
+    <!-- Facebook OpenGraph -->
+    <meta property="og:title" content="The Rust Programming Language Blog" />
+    <meta property="og:description" content="Empowering everyone to build reliable and efficient software.">
+    <meta property="og:image" content="." />
+    <meta property="og:type" content="website" />
+    <meta property="og:locale" content="en_US" />
+    
+    <!-- styles -->
+    <link rel="stylesheet" href="assets/c3ab18330f0222c2573ebd286738f746.css"/>
+    <link rel="stylesheet" href="assets/d2630342fbb294d03d9b4d16d6cbe106.css"/>
+    <link rel="stylesheet" href="assets/489a1c38ff03eba64a22071b1e3fe959.css"/>
+    <link rel="stylesheet" href="assets/69eccdf453f002e1e17ba500f2ef362a.css"/>
+    <link rel="stylesheet" type="text/css" id="syntax-theme" />
+    
+    <!-- stylesheet for user agents without js -->
+    <noscript>
+        <link rel="stylesheet" href="assets/94e28a541760d737ee30275198afabc9.css">
+        <link rel="stylesheet" type="text/css" href="assets/b8a3c30599e7c81651466fe53440d36c.css" media="(prefers-color-scheme: dark)" />
+        <link rel="stylesheet" type="text/css" href="assets/d0cf991a6765d7d293b98917f832ac0f.css" media="(prefers-color-scheme: light)" />
+    </noscript>
+    
+    <!-- favicon -->
+    <link rel="apple-touch-icon" sizes="180x180" href="assets/missing_0f015dcdbe540bfd138c12a8ad7810ba.bin">
+    <link rel="icon" type="image/png" sizes="16x16" href="assets/missing_6c12b8319a099266ff4648845ad74c2d.bin">
+    <link rel="icon" type="image/png" sizes="32x32" href="assets/missing_41e27d178a25bbbe33c4a60e3f69bfec.bin">
+    <link rel="icon" type="image/svg+xml" href="assets/missing_77af3943f608eb3dfebfb94dc7ec0446.bin">
+    <link rel="manifest" href="assets/missing_d06a8f065e3cf8c9d157b598d61dd5ff.bin">
+    <link rel="mask-icon" href="assets/missing_19804e6bba30d4c75cde5a68b0273523.bin" color="#5bbad5">
+    <meta name="msapplication-TileColor" content="#00aba9">
+    <meta name="theme-color" content="#ffffff">
+    
+     <!-- atom -->
+     <link type="application/atom+xml" rel="alternate" href="assets/missing_9e793ab07bccdce3cdab1c1596154ef9.bin" title="Rust Blog" />
+    
+    <!-- theme switcher -->
+    <script src="assets/missing_fcc48911fbca25ce4b1100f034fe363f.bin"></script>
+  </head>
+  <body>
+    <nav class="flex flex-row justify-center justify-end-l items-center flex-wrap ph2 pl3-ns pr4-ns">
+      <div class="brand flex-auto w-100 w-auto-l self-start tc tl-l">
+        <a href="assets/missing_9c64e8e3fcd844d4e26e652aec3b178d.bin">
+          <img class="v-mid ml0-l rust-logo" alt="" src="assets/6d6e0fd29e2015bec5ca9bdbdc11ede1.svg">
+          <span class="dib ml1 ml0-l">Rust Blog</span>
+        </a>
+      </div>
+    
+      <ul class="nav list w-100 w-auto-l flex flex-none flex-row flex-wrap justify-center justify-end-l items-center pv2 ph0 ph4-ns">
+        <li class="tc pv2 ph2 ph4-ns flex-20-s"><a href="assets/missing_0a6e6cc20c9ad8d6e91cb53f89a46e67.bin">Rust</a></li>
+        <li class="tc pv2 ph2 ph4-ns flex-20-s"><a href="assets/missing_798daaff2c45136627219a7cf851834e.bin">Install</a></li>
+        <li class="tc pv2 ph2 ph4-ns flex-20-s"><a href="assets/missing_23c499007623b6c80ecf72ae559ca16e.bin">Learn</a></li>
+        <li class="tc pv2 ph2 ph4-ns flex-20-s"><a href="assets/missing_9a8b4b8afdfcf87ed2cd24d183e7b9ea.bin">Tools</a></li>
+        <li class="tc pv2 ph2 ph4-ns flex-20-s"><a href="assets/missing_6fe1f38ddf9267f39d14ffd7cf8e7ddb.bin">Governance</a></li>
+        <li class="tc pv2 ph2 ph4-ns flex-20-s"><a href="assets/missing_bb1c4949e6298a9a4d4c9fa2e825a197.bin">Community</a></li>
+        <button class="theme-icon" onclick="dropdown();">🖌
+          <ul id="theme-choice">
+            <li class="theme-item" onclick="changeThemeTo('light');">Light</li>
+            <li class="theme-item" onclick="changeThemeTo('dark');">Dark</li>
+            <li class="theme-item" onclick="changeThemeTo('system');">System</li>
+          </ul>
+        </button>
+        <script src="assets/missing_c2303d9a2ae60a2cc9b05136c615128a.bin"></script>
+      </ul>
+    </nav><header class="mt3 mt0-ns mb4-ns">
+  <div class="container flex flex-column flex-row-l justify-between-l">
+    <div class="mw6-l">
+      <p>This is the <b>main Rust blog</b>. <a href="assets/missing_3ffc614c1841868d6c27b85cd6e65baf.bin">Rust teams</a> use this blog to announce major developments in the world of Rust.</p>
+    </div>
+  </div>    
+  <div class="container flex flex-column flex-row-l justify-between-l">
+    <div class="mw8-l">
+      <p>
+      <b>See also:</b>
+      
+        <a href="assets/missing_f15128191ee7ebd7639873973f411f49.bin">the &quot;Inside Rust&quot; blog</a>,
+        <a href="assets/missing_d8936d19ed7c17af2e72f6d716e6203f.bin">release announcements</a></p>
+    </div>
+  </div>
+</header>
+
+<section id="posts" class="posts">
+   <div class="w-100 mw-none ph3 mw8-m mw9-l center f3">
+
+    <table class="post-list collapse w-100 f2-l f2-m f3-s">
+      <tr>
+        <td class="bn"></td>
+        <td class="bn"><h3 class="f0-l f1-m f2-s mt4 mb0">Posts in 2025</h3></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Dec.&nbsp;19</td>
+        <td class="bn"><a href="assets/missing_e42a055af8592364d93d38b322b73adc.bin">What do people love about Rust?</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Dec.&nbsp;16</td>
+        <td class="bn"><a href="assets/missing_a9a930aa6f66f1d7b77d7bf21f61bd49.bin">Project goals update — November 2025</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Dec.&nbsp;11</td>
+        <td class="bn"><a href="assets/missing_8861c297d6bf5956c588f3a7ba8e79ce.bin">Announcing Rust 1.92.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Dec.&nbsp;8</td>
+        <td class="bn"><a href="assets/missing_8486da9c16b391e3e59ba33b7273f758.bin">Making it easier to sponsor Rust contributors</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Dec.&nbsp;5</td>
+        <td class="bn"><a href="assets/missing_381cc66a6b935566037fad88e81715b1.bin">crates.io: Malicious crates finch-rust and sha-rust</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Dec.&nbsp;5</td>
+        <td class="bn"><a href="assets/missing_aac2e21c5b0bb27e9f1d6674253d6ed7.bin">Updating Rust&#x27;s Linux musl targets to 1.2.5</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Dec.&nbsp;3</td>
+        <td class="bn"><a href="assets/missing_f7a55d4b0ad233adf401fadfc75ea87f.bin">Lessons learned from the Rust Vision Doc process</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Dec.&nbsp;3</td>
+        <td class="bn"><a href="assets/missing_458657913e9a398269d5125cee75a223.bin">crates.io: Malicious crates evm-units and uniswap-utils</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Nov.&nbsp;25</td>
+        <td class="bn"><a href="assets/missing_2e9cb9915f928e556829f8aacbf96446.bin">Interview with Jan David Nose</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Nov.&nbsp;20</td>
+        <td class="bn"><a href="assets/missing_a9f89f36e124ee0882962e14fd527431.bin">Switching to Rust&#x27;s own mangling scheme on nightly</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Nov.&nbsp;19</td>
+        <td class="bn"><a href="assets/missing_deaaedda355cdd1f2fa8e94ba2bd41b3.bin">Project goals update — October 2025</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Nov.&nbsp;19</td>
+        <td class="bn"><a href="assets/missing_272cb1f0263f0585c95c02aefcbf6268.bin">Project goals update — September 2025</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Nov.&nbsp;18</td>
+        <td class="bn"><a href="assets/missing_2d315c277842ac8d2c9169e17677e206.bin">Google Summer of Code 2025 results</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Nov.&nbsp;17</td>
+        <td class="bn"><a href="assets/missing_2bd2439ccb21d252561359a4d3dbf8da.bin">Launching the 2025 State of Rust Survey</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Nov.&nbsp;10</td>
+        <td class="bn"><a href="assets/missing_b4c5c3cd5580ef4353dc13c078efd355.bin">Announcing Rust 1.91.1</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Oct.&nbsp;30</td>
+        <td class="bn"><a href="assets/missing_d23a7aec7a8db5434db94433c3107d30.bin">Announcing Rust 1.91.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Oct.&nbsp;28</td>
+        <td class="bn"><a href="assets/missing_43558b3620e3cb0959e8c5fad4dcf41c.bin">Project goals for 2025H2</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Oct.&nbsp;16</td>
+        <td class="bn"><a href="assets/missing_0c530d545e89c04ea30958c8a188306e.bin">docs.rs: changed default targets</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Oct.&nbsp;15</td>
+        <td class="bn"><a href="assets/missing_cf05e7b1f66a0340c9b4f119f492460b.bin">Announcing the New Rust Project Directors</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Sept.&nbsp;24</td>
+        <td class="bn"><a href="assets/missing_24dd2b331b50805ad071f5f94605beb1.bin">crates.io: Malicious crates faster_log and async_println</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Sept.&nbsp;18</td>
+        <td class="bn"><a href="assets/missing_655fa5123ca02e17292c94566dcecb34.bin">Announcing Rust 1.90.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Sept.&nbsp;12</td>
+        <td class="bn"><a href="assets/missing_014b99a362939b22b96ee8b275b132af.bin">crates.io phishing campaign</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Sept.&nbsp;10</td>
+        <td class="bn"><a href="assets/missing_c43718d6bf6c0a87f54dd7d548b516c6.bin">Rust compiler performance survey 2025 results</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Sept.&nbsp;3</td>
+        <td class="bn"><a href="assets/missing_160a02bac65f66b4fb05cf2cf17bda58.bin">Welcoming the Rust Innovation Lab</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Sept.&nbsp;1</td>
+        <td class="bn"><a href="assets/missing_59261a66f495a73e08e99ef54ffda380.bin">Faster linking times with 1.90.0 stable on Linux using the LLD linker</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Aug.&nbsp;19</td>
+        <td class="bn"><a href="assets/missing_248877e0376c99b532e9e6df07054968.bin">Demoting x86_64-apple-darwin to Tier 2 with host tools</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Aug.&nbsp;7</td>
+        <td class="bn"><a href="assets/missing_f9abb4983d0157098cc004f3c4c9807c.bin">Announcing Rust 1.89.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Aug.&nbsp;5</td>
+        <td class="bn"><a href="assets/missing_907c538de534709dbc04661fb5b2670f.bin">Project goals update — July 2025</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">July&nbsp;11</td>
+        <td class="bn"><a href="assets/missing_2a6be02105e518264447242f048d4b8a.bin">crates.io: development update</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">July&nbsp;3</td>
+        <td class="bn"><a href="assets/missing_1f67f4ec7810bdcc1d9b46c11c709db8.bin">Stabilizing naked functions</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">June&nbsp;26</td>
+        <td class="bn"><a href="assets/missing_7d232b353bcc122440755c35147bc833.bin">Announcing Rust 1.88.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">June&nbsp;20</td>
+        <td class="bn"><a href="assets/missing_38e67399baf8bedf8c4b1a1568b4fdd1.bin">May Project Goals Update</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">June&nbsp;16</td>
+        <td class="bn"><a href="assets/missing_424fabf2e3c8a1db442865aa7d3f6c8c.bin">Rust compiler performance survey 2025</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;26</td>
+        <td class="bn"><a href="assets/missing_7a219d61a0046aeb29c8d8d7fb6dfc17.bin">Demoting i686-pc-windows-gnu to Tier 2</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;26</td>
+        <td class="bn"><a href="assets/missing_a0b882f363ba8921c7c34984538ee1ba.bin">April Project Goals Update</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;15</td>
+        <td class="bn"><a href="assets/missing_0283a749d92cd5156f349ad0f931747b.bin">Announcing Rust 1.87.0 and ten years of Rust!</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;8</td>
+        <td class="bn"><a href="assets/missing_5fb57ba137cc63cf3e2b22cdf23cf7e1.bin">Announcing Google Summer of Code 2025 selected projects</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;5</td>
+        <td class="bn"><a href="assets/missing_bb1659cdefd26f7474d5ab12af52fffd.bin">Announcing rustup 1.28.2</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Apr.&nbsp;11</td>
+        <td class="bn"><a href="assets/missing_959783f9ed1dacd8db7206eb24429fba.bin">crates.io security incident: improperly stored session cookies</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Apr.&nbsp;8</td>
+        <td class="bn"><a href="assets/missing_5f554ba2d29b1348ce501aaacdb4eaef.bin">March Project Goals Update</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Apr.&nbsp;4</td>
+        <td class="bn"><a href="assets/missing_8a9159d2406cc7afa0b0f3b29355d03f.bin">Help us create a vision for Rust&#x27;s future</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Apr.&nbsp;4</td>
+        <td class="bn"><a href="assets/missing_b11a1c3bcbcc21d6481fc10c9dcf5205.bin">C ABI Changes for &#x60;wasm32-unknown-unknown&#x60;</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Apr.&nbsp;3</td>
+        <td class="bn"><a href="assets/missing_aae3ab823b4fdbd5e099ce08ce6b9dc7.bin">Announcing Rust 1.86.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Mar.&nbsp;26</td>
+        <td class="bn"><a href="assets/missing_d645c6a51d44c7afdcd3391204bd7c40.bin">Adopting the FLS</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Mar.&nbsp;18</td>
+        <td class="bn"><a href="assets/missing_6461ac8c21375b6310f7b81d1faf71a3.bin">Announcing Rust 1.85.1</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Mar.&nbsp;4</td>
+        <td class="bn"><a href="assets/missing_5d020e268afcc029fd70f7334a3ca6c6.bin">Announcing rustup 1.28.1</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Mar.&nbsp;3</td>
+        <td class="bn"><a href="assets/missing_20800ce56ef51ebdb7ccd08796c19d71.bin">Rust participates in Google Summer of Code 2025</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Mar.&nbsp;3</td>
+        <td class="bn"><a href="assets/missing_3550fa22ce8aece16dac24c3a5e9721b.bin">February Project Goals Update</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Mar.&nbsp;2</td>
+        <td class="bn"><a href="assets/missing_3a5776c0a792ba4097a334cc43e90c0c.bin">Announcing Rustup 1.28.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Feb.&nbsp;20</td>
+        <td class="bn"><a href="assets/missing_8a432269a0dadeb344b03464812748cc.bin">Announcing Rust 1.85.0 and Rust 2024</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Feb.&nbsp;13</td>
+        <td class="bn"><a href="assets/missing_3e57abe8d9e861a6746db232895821c6.bin">2024 State of Rust Survey Results</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Feb.&nbsp;5</td>
+        <td class="bn"><a href="assets/missing_f916d28f193a977db44dcdd5e0b6f638.bin">crates.io: development update</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Jan.&nbsp;30</td>
+        <td class="bn"><a href="assets/missing_211898cc087c52e43031855531d9e0b4.bin">Announcing Rust 1.84.1</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Jan.&nbsp;23</td>
+        <td class="bn"><a href="assets/missing_6e357d7cd905333d3baf14d7019288f3.bin">December Project Goals Update</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Jan.&nbsp;22</td>
+        <td class="bn"><a href="assets/missing_a8f44e3cd14814f866ecfada9f286004.bin">Rust 2024 in beta channel</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Jan.&nbsp;9</td>
+        <td class="bn"><a href="assets/missing_95c7a6701827df56aa3be87019499c39.bin">Announcing Rust 1.84.0</a></td>
+      </tr>
+      <tr>
+        <td class="bn"></td>
+        <td class="bn"><h3 class="f0-l f1-m f2-s mt4 mb0">Posts in 2024</h3></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Dec.&nbsp;16</td>
+        <td class="bn"><a href="assets/missing_f67db8c9a7682deba1f1197789fba97d.bin">November project goals update</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Dec.&nbsp;5</td>
+        <td class="bn"><a href="assets/missing_5b646b9958c2ea3cd96079f0c9d32f8d.bin">Launching the 2024 State of Rust Survey</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Nov.&nbsp;28</td>
+        <td class="bn"><a href="assets/missing_65e1c5b5502a5c816be1681c8242be02.bin">Announcing Rust 1.83.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Nov.&nbsp;27</td>
+        <td class="bn"><a href="assets/missing_d52ad8a12175f441b347e8c78c41af82.bin">Rust 2024 call for testing</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Nov.&nbsp;26</td>
+        <td class="bn"><a href="assets/missing_ede8bc1cbf6bd7bb5f3ae7ad4be7c282.bin">The wasm32-wasip2 Target Has Reached Tier 2 Support</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Nov.&nbsp;7</td>
+        <td class="bn"><a href="assets/missing_65a053ba02be43e851c1fea71547ce68.bin">Google Summer of Code 2024 results</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Nov.&nbsp;7</td>
+        <td class="bn"><a href="assets/missing_12f58868b23a183404210c08037f5b3b.bin">gccrs: An alternative compiler for Rust</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Nov.&nbsp;6</td>
+        <td class="bn"><a href="assets/missing_1736ee12fb0b905993f127bc812ec100.bin">Next Steps on the Rust Trademark Policy</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Oct.&nbsp;31</td>
+        <td class="bn"><a href="assets/missing_814b558a196482b90d68201c29f4bf56.bin">October project goals update</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Oct.&nbsp;17</td>
+        <td class="bn"><a href="assets/missing_39ca4af9befa052404a444fa124128a5.bin">Announcing Rust 1.82.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Sept.&nbsp;24</td>
+        <td class="bn"><a href="assets/missing_15a1c41a0a08d6bcc8d1fcd02a70fe99.bin">WebAssembly targets: change in default target-features</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Sept.&nbsp;23</td>
+        <td class="bn"><a href="assets/missing_3d6194868a21d481c2f34751e5aee635.bin">September Project Goals Update</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Sept.&nbsp;5</td>
+        <td class="bn"><a href="assets/missing_912086fc5221b8bf857d16145d5bc0fe.bin">Changes to &#x60;impl Trait&#x60; in Rust 2024</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Sept.&nbsp;5</td>
+        <td class="bn"><a href="assets/missing_14ed1284f5c44996da0164236a0bd70d.bin">Announcing Rust 1.81.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Sept.&nbsp;4</td>
+        <td class="bn"><a href="assets/missing_a39b770cc1841a94991f6b2f1b16c2c6.bin">Security advisory for the standard library (CVE-2024-43402)</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Aug.&nbsp;26</td>
+        <td class="bn"><a href="assets/missing_bebcf6f9b0d5d0b0aa0144c553b5e911.bin">2024 Leadership Council Survey</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Aug.&nbsp;12</td>
+        <td class="bn"><a href="assets/missing_608e0f796e60adaf41ddabb69d843c38.bin">Rust Project goals for 2024</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Aug.&nbsp;8</td>
+        <td class="bn"><a href="assets/missing_a244b4fd82a9acd3a9a8413c838c4ccd.bin">Announcing Rust 1.80.1</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">July&nbsp;29</td>
+        <td class="bn"><a href="assets/missing_03972be20b317074c77289d0e1895196.bin">crates.io: development update</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">July&nbsp;25</td>
+        <td class="bn"><a href="assets/missing_259f200b76da7d624398d549324f454b.bin">Announcing Rust 1.80.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">June&nbsp;26</td>
+        <td class="bn"><a href="assets/missing_13575550254d11a0b18691aeb76290ba.bin">Types Team Update and Roadmap</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">June&nbsp;13</td>
+        <td class="bn"><a href="assets/missing_d500ba64d0b9424f53e626c02296b76e.bin">Announcing Rust 1.79.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;17</td>
+        <td class="bn"><a href="assets/missing_01de64296a5003f658f054dd7ddbc002.bin">Faster linking times on nightly on Linux using &#x60;rust-lld&#x60;</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;7</td>
+        <td class="bn"><a href="assets/missing_e6fd50f4d027477f1afdb36ea035230a.bin">Rust participates in OSPP 2024</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;6</td>
+        <td class="bn"><a href="assets/missing_f4b38cd144c3390b4a7acc168c78551a.bin">Automatic checking of cfgs at compile-time</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;6</td>
+        <td class="bn"><a href="assets/missing_189e6bbeb18c534c42904b8ddc185b8a.bin">Announcing Rustup 1.27.1</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;2</td>
+        <td class="bn"><a href="assets/missing_809e019c3fbd6e94d13d50c5521f8566.bin">Announcing Rust 1.78.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;1</td>
+        <td class="bn"><a href="assets/missing_08e54ea3ba424f0ab6fbfa2eda146dcb.bin">Announcing Google Summer of Code 2024 selected projects</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Apr.&nbsp;9</td>
+        <td class="bn"><a href="assets/missing_3d4dd2ba7fd5b14cc3006cef36f86879.bin">Changes to Rust&#x27;s WASI targets</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Apr.&nbsp;9</td>
+        <td class="bn"><a href="assets/missing_80e2a4c7167655731c75c83aa0bdae47.bin">Security advisory for the standard library (CVE-2024-24576)</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Apr.&nbsp;9</td>
+        <td class="bn"><a href="assets/missing_f39439f1a47a1f03cb915aed880b49a4.bin">Announcing Rust 1.77.2</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Mar.&nbsp;30</td>
+        <td class="bn"><a href="assets/missing_243dd9b734bf1c74fa61263b37ea15af.bin">Changes to &#x60;u128&#x60;/&#x60;i128&#x60; layout in 1.77 and 1.78</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Mar.&nbsp;28</td>
+        <td class="bn"><a href="assets/missing_ffbc7dc3e73962deb69a24d1aefc51cc.bin">Announcing Rust 1.77.1</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Mar.&nbsp;21</td>
+        <td class="bn"><a href="assets/missing_aa4a4014232fcb015e191c4207b3a706.bin">Announcing Rust 1.77.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Mar.&nbsp;11</td>
+        <td class="bn"><a href="assets/missing_f036c96a6a040d971b18961800d2232c.bin">crates.io: Download changes</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Mar.&nbsp;11</td>
+        <td class="bn"><a href="assets/missing_bda703ffb500df26f3b6e0a5940c7e8e.bin">Announcing Rustup 1.27.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Feb.&nbsp;28</td>
+        <td class="bn"><a href="assets/missing_511074642920be999b380ac7cc371a4f.bin">Clippy: Deprecating &#x60;feature &#x3D; &quot;cargo-clippy&quot;&#x60;</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Feb.&nbsp;26</td>
+        <td class="bn"><a href="assets/missing_8a74004fd80ec28768d6e2c693e69af4.bin">Updated baseline standards for Windows targets</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Feb.&nbsp;21</td>
+        <td class="bn"><a href="assets/missing_9bf16f54e452f7dd87cb3e4c12db7861.bin">Rust participates in Google Summer of Code 2024</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Feb.&nbsp;19</td>
+        <td class="bn"><a href="assets/missing_d80d40fd484b1fd6ef7976f31cfea7b8.bin">2023 Annual Rust Survey Results</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Feb.&nbsp;8</td>
+        <td class="bn"><a href="assets/missing_97e5ccfe901faad45772219fc2044e84.bin">Announcing Rust 1.76.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Feb.&nbsp;6</td>
+        <td class="bn"><a href="assets/missing_27293ce256f13efe508c724aa2092179.bin">crates.io: API status code changes</a></td>
+      </tr>
+      <tr>
+        <td class="bn"></td>
+        <td class="bn"><h3 class="f0-l f1-m f2-s mt4 mb0">Posts in 2023</h3></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Dec.&nbsp;28</td>
+        <td class="bn"><a href="assets/missing_96fb734ad54f227bbbfaf9ac1d43f7e3.bin">Announcing Rust 1.75.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Dec.&nbsp;21</td>
+        <td class="bn"><a href="assets/missing_e6d1154ab6df2229da0774530059a6c3.bin">Announcing &#x60;async fn&#x60; and return-position &#x60;impl Trait&#x60; in traits</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Dec.&nbsp;18</td>
+        <td class="bn"><a href="assets/missing_878994d1cae7b06a2240e7bf0dffa091.bin">Launching the 2023 State of Rust Survey</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Dec.&nbsp;15</td>
+        <td class="bn"><a href="assets/missing_1b1a1fbe32ed1900f16e058408d3a8d9.bin">A Call for Proposals for the Rust 2024 Edition</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Dec.&nbsp;11</td>
+        <td class="bn"><a href="assets/missing_43944096b30ea1b81aed0e47133a69b9.bin">Cargo cache cleaning</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Dec.&nbsp;7</td>
+        <td class="bn"><a href="assets/missing_f256f867e3094b285c09354c5c56ed0f.bin">Announcing Rust 1.74.1</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Nov.&nbsp;16</td>
+        <td class="bn"><a href="assets/missing_290cda4a00c8eb839678b4af1211bf50.bin">Announcing Rust 1.74.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Nov.&nbsp;9</td>
+        <td class="bn"><a href="assets/missing_89e3e56594dde33fb8c7daebf560dacc.bin">Faster compilation with the parallel front-end in nightly</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Oct.&nbsp;27</td>
+        <td class="bn"><a href="assets/missing_e031cfbb2743c80f0f305f9c6f793ee9.bin">crates.io: Dropping support for non-canonical downloads</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Oct.&nbsp;26</td>
+        <td class="bn"><a href="assets/missing_b4f4eb6b24b7de875eb1adc6397e7863.bin">A tale of broken badges and 23,000 features</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Oct.&nbsp;19</td>
+        <td class="bn"><a href="assets/missing_5530376d9f575a7e7acbf6d5a0a34b65.bin">Announcing the New Rust Project Directors</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Oct.&nbsp;5</td>
+        <td class="bn"><a href="assets/missing_a2cd1f4c1726e88ce05bf78ca8844aa0.bin">Announcing Rust 1.73.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Sept.&nbsp;25</td>
+        <td class="bn"><a href="assets/missing_d0de2af622e59d7b948c3849ee7386ed.bin">Increasing the minimum supported Apple platform versions</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Sept.&nbsp;22</td>
+        <td class="bn"><a href="assets/missing_90921d77518a97d9e12e29681636b4a9.bin">crates.io Policy Update RFC</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Sept.&nbsp;19</td>
+        <td class="bn"><a href="assets/missing_7d9695f28577e73827fd3957465f3e04.bin">Announcing Rust 1.72.1</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Aug.&nbsp;30</td>
+        <td class="bn"><a href="assets/missing_99499ba8eb9117d8c572d991217518f0.bin">Electing New Project Directors</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Aug.&nbsp;29</td>
+        <td class="bn"><a href="assets/missing_59efcd965cd06cae37da11e56b06f469.bin">Change in Guidance on Committing Lockfiles</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Aug.&nbsp;24</td>
+        <td class="bn"><a href="assets/missing_fc3eb772e2be34d943adc03c9636e555.bin">Announcing Rust 1.72.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Aug.&nbsp;7</td>
+        <td class="bn"><a href="assets/missing_0ef1d49b6b2d053f4d6fe9c6457860b5.bin">2022 Annual Rust Survey Results</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Aug.&nbsp;3</td>
+        <td class="bn"><a href="assets/missing_cc99135e4ba20a99bb4350d9998e55aa.bin">Security advisory for Cargo (CVE-2023-38497)</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Aug.&nbsp;3</td>
+        <td class="bn"><a href="assets/missing_71b8423f3b8e75ab1bd2f0cf6f899a0b.bin">Announcing Rust 1.71.1</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">July&nbsp;13</td>
+        <td class="bn"><a href="assets/missing_f6494de4e650dea05cf9a3f241050eb5.bin">Announcing Rust 1.71.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">July&nbsp;5</td>
+        <td class="bn"><a href="assets/missing_a2f597866e63a097959dedf30c105f1b.bin">Announcing regex 1.9</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">July&nbsp;1</td>
+        <td class="bn"><a href="assets/missing_c493fc50c3450ab956901925a738647e.bin">Rustfmt support for let-else statements</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">June&nbsp;23</td>
+        <td class="bn"><a href="assets/missing_1d181fa1833ddd25cef69ad93b4c854c.bin">Improved API tokens for crates.io</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">June&nbsp;20</td>
+        <td class="bn"><a href="assets/missing_e0b0897c53cdcb2bb9e284d1942e301f.bin">Introducing the Rust Leadership Council</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">June&nbsp;1</td>
+        <td class="bn"><a href="assets/missing_5b472c7362cd8ffdbf7846acc7ffda4c.bin">Announcing Rust 1.70.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;29</td>
+        <td class="bn"><a href="assets/missing_8ff1e81dd722b7d2980613d9e613e515.bin">On the RustConf keynote</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;9</td>
+        <td class="bn"><a href="assets/missing_a519da691117bcfcb892f89f40ad1870.bin">Updating Rust&#x27;s Linux musl targets</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Apr.&nbsp;25</td>
+        <td class="bn"><a href="assets/missing_e725e68527e3671631520a00ba04af2c.bin">Announcing Rustup 1.26.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Apr.&nbsp;20</td>
+        <td class="bn"><a href="assets/missing_c3203dc6a28f2ebe57159e9125eb1665.bin">Announcing Rust 1.69.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Mar.&nbsp;28</td>
+        <td class="bn"><a href="assets/missing_a28a7113607075cda8c233fad8b77ac1.bin">Announcing Rust 1.68.2</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Mar.&nbsp;23</td>
+        <td class="bn"><a href="assets/missing_9c6759e765ea9d1cc72f155d7ee10275.bin">Announcing Rust 1.68.1</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Mar.&nbsp;9</td>
+        <td class="bn"><a href="assets/missing_90afc5f8c08bea80299b5ea391398c9c.bin">Announcing Rust 1.68.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Feb.&nbsp;9</td>
+        <td class="bn"><a href="assets/missing_fa2b0e4328477ebcc555472e35c0ecbe.bin">Announcing Rust 1.67.1</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Feb.&nbsp;1</td>
+        <td class="bn"><a href="assets/missing_1ff9b63d2a2d27fca556106a37bee2ad.bin">Announcing Rustup 1.25.2</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Jan.&nbsp;26</td>
+        <td class="bn"><a href="assets/missing_45c34e7886f3caf1c981696ed3d764a4.bin">Announcing Rust 1.67.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Jan.&nbsp;20</td>
+        <td class="bn"><a href="assets/missing_a7142766161a9dbe4cc6b05c070011c3.bin">Officially announcing the types team</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Jan.&nbsp;10</td>
+        <td class="bn"><a href="assets/missing_91d016cc2321129c908d75e2cdd7561a.bin">Security advisory for Cargo (CVE-2022-46176)</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Jan.&nbsp;10</td>
+        <td class="bn"><a href="assets/missing_a406e33bec72119803abcce630565b33.bin">Announcing Rust 1.66.1</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Jan.&nbsp;9</td>
+        <td class="bn"><a href="assets/missing_773f98653eea9f12355897d480a25b50.bin">Updating the Android NDK in Rust 1.68</a></td>
+      </tr>
+      <tr>
+        <td class="bn"></td>
+        <td class="bn"><h3 class="f0-l f1-m f2-s mt4 mb0">Posts in 2022</h3></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Dec.&nbsp;15</td>
+        <td class="bn"><a href="assets/missing_152ef9584df21beb0a3c3e3facbc71b7.bin">Announcing Rust 1.66.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Dec.&nbsp;5</td>
+        <td class="bn"><a href="assets/missing_d045e2424f4bebe59a944d1dcb933241.bin">Launching the 2022 State of Rust Survey</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Nov.&nbsp;3</td>
+        <td class="bn"><a href="assets/missing_6981d25d175d2407a44634dd2775e087.bin">Announcing Rust 1.65.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Oct.&nbsp;28</td>
+        <td class="bn"><a href="assets/missing_8d708d26c8e90caa65d08e8e4e98d86f.bin">Generic associated types to be stable in Rust 1.65</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Sept.&nbsp;22</td>
+        <td class="bn"><a href="assets/missing_ba1cf70e9b9b05285e73420c002c0b66.bin">Announcing Rust 1.64.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Sept.&nbsp;15</td>
+        <td class="bn"><a href="assets/missing_e6d8ed90105afe60a29f4d87eb3972c4.bin">Const Eval (Un)Safety Rules</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Sept.&nbsp;14</td>
+        <td class="bn"><a href="assets/missing_14548a779913b6f5c3a7016e3036951f.bin">Security advisories for Cargo (CVE-2022-36113, CVE-2022-36114)</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Aug.&nbsp;11</td>
+        <td class="bn"><a href="assets/missing_fb58c24a3058d39e2033ab0eba1f806e.bin">Announcing Rust 1.63.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Aug.&nbsp;5</td>
+        <td class="bn"><a href="assets/missing_9b254ae693e9c9a343e42340b3168848.bin">Non-lexical lifetimes (NLL) fully stable</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Aug.&nbsp;1</td>
+        <td class="bn"><a href="assets/missing_9703dc5c6229407aab05b6661d003325.bin">Increasing the glibc and Linux kernel requirements</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">July&nbsp;19</td>
+        <td class="bn"><a href="assets/missing_c3d6a175ecd0851ba36144add0e5b790.bin">Announcing Rust 1.62.1</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">July&nbsp;12</td>
+        <td class="bn"><a href="assets/missing_194fd95ffbf9bcbbc77ec989e68f3f95.bin">Changes in the Core Team</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">July&nbsp;12</td>
+        <td class="bn"><a href="assets/missing_2f943ec5426599aa52c4de619ba0b2dd.bin">Announcing Rustup 1.25.1</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">July&nbsp;11</td>
+        <td class="bn"><a href="assets/missing_6e9686504fb9cb758283261cc1ddbbf4.bin">Announcing Rustup 1.25.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">July&nbsp;1</td>
+        <td class="bn"><a href="assets/missing_ce3fa982bc0f67cb76e5f920f2455c52.bin">RLS Deprecation</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">June&nbsp;30</td>
+        <td class="bn"><a href="assets/missing_e415f61128320f4580b5be3daac3873c.bin">Announcing Rust 1.62.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">June&nbsp;28</td>
+        <td class="bn"><a href="assets/missing_eb85f1bdd4db5184dbd13297e744b34b.bin">Announcing The RustConf PostConf UnConf</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">June&nbsp;22</td>
+        <td class="bn"><a href="assets/missing_32ac98549e44a1910a209d7a414dcaac.bin">Call for testing: Cargo sparse-registry</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;19</td>
+        <td class="bn"><a href="assets/missing_443b4173f4a141badf03979fe06b11b0.bin">Announcing Rust 1.61.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;10</td>
+        <td class="bn"><a href="assets/missing_7f13ca4b8c6e80f4d70f4bd77183da67.bin">Security advisory: malicious crate rustdecimal</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Apr.&nbsp;7</td>
+        <td class="bn"><a href="assets/missing_b96f2051db42289dec0f1e0c450862d1.bin">Announcing Rust 1.60.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Mar.&nbsp;8</td>
+        <td class="bn"><a href="assets/missing_c5ee49c92ce6f298e698d990d706d67c.bin">Security advisory for the regex crate (CVE-2022-24713)</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Feb.&nbsp;24</td>
+        <td class="bn"><a href="assets/missing_976843e4a7ddee2172deb6aafa9a3a9e.bin">Announcing Rust 1.59.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Feb.&nbsp;21</td>
+        <td class="bn"><a href="assets/missing_9b68e4efa950f7f6a6792a7ab2e0d0d3.bin">rust-analyzer joins the Rust organization!</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Feb.&nbsp;15</td>
+        <td class="bn"><a href="assets/missing_acb962b3eccff5ea2fc6b11c7256ee0d.bin">Rust Survey 2021 Results</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Feb.&nbsp;14</td>
+        <td class="bn"><a href="assets/missing_5d0608581c54e34793b66ce823b6f155.bin">Crates.io Index Snapshot Branches Moving</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Jan.&nbsp;31</td>
+        <td class="bn"><a href="assets/missing_caf9c2935afb84a6f2660ada8fb230e2.bin">Changes in the Core Team</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Jan.&nbsp;20</td>
+        <td class="bn"><a href="assets/missing_3b2b7989df52db51035f6e76249d6fb0.bin">Security advisory for the standard library (CVE-2022-21658)</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Jan.&nbsp;20</td>
+        <td class="bn"><a href="assets/missing_fad5c16d2211d1d25471f5b307d38630.bin">Announcing Rust 1.58.1</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Jan.&nbsp;13</td>
+        <td class="bn"><a href="assets/missing_f702b1ead8830757d8d025838d153e42.bin">Announcing Rust 1.58.0</a></td>
+      </tr>
+      <tr>
+        <td class="bn"></td>
+        <td class="bn"><h3 class="f0-l f1-m f2-s mt4 mb0">Posts in 2021</h3></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Dec.&nbsp;8</td>
+        <td class="bn"><a href="assets/missing_cba0e0a64e80e35149936cdd24fdf1c6.bin">Launching the 2021 State of Rust Survey</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Dec.&nbsp;2</td>
+        <td class="bn"><a href="assets/missing_8dc0e4f1b926f8dce0902e57f4f025db.bin">Announcing Rust 1.57.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Nov.&nbsp;1</td>
+        <td class="bn"><a href="assets/missing_c30fecb0943c286fe384af5dbb7f5928.bin">Security advisory for rustc (CVE-2021-42574)</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Nov.&nbsp;1</td>
+        <td class="bn"><a href="assets/missing_54ecb80bd6a6d4dd7bd998e4827127ec.bin">Announcing Rust 1.56.1</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Oct.&nbsp;21</td>
+        <td class="bn"><a href="assets/missing_b93fd5bdd832504d11999b4c2467a526.bin">Announcing Rust 1.56.0 and Rust 2021</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Sept.&nbsp;27</td>
+        <td class="bn"><a href="assets/missing_efa126fa0fc0931578a06e44711f88d0.bin">Core team membership updates</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Sept.&nbsp;9</td>
+        <td class="bn"><a href="assets/missing_263838dc487d5f8ac26e65f89cb231f2.bin">Announcing Rust 1.55.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Aug.&nbsp;3</td>
+        <td class="bn"><a href="assets/missing_02209fc09b414725c3067438dd882146.bin">The push for GATs stabilization</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">July&nbsp;29</td>
+        <td class="bn"><a href="assets/missing_f51227389e656dcf7e9e0b8c51c8918f.bin">Announcing Rust 1.54.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">July&nbsp;21</td>
+        <td class="bn"><a href="assets/missing_3b4b9379c4292ca4917b768e2735da71.bin">Rust 2021 public testing period</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">June&nbsp;17</td>
+        <td class="bn"><a href="assets/missing_86b25c55bc661ce3bdb3bb3d72528b27.bin">Announcing Rust 1.53.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">June&nbsp;8</td>
+        <td class="bn"><a href="assets/missing_d9d6b28b8f08f709cf6b17329a006686.bin">Announcing Rustup 1.24.3</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;17</td>
+        <td class="bn"><a href="assets/missing_354ab95d9ab9d8d2b842431b26d46ae6.bin">Announcing Rustup 1.24.2</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;15</td>
+        <td class="bn"><a href="assets/missing_a8ac86001ca92fba4c7ccba963c511e4.bin">Six Years of Rust</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;11</td>
+        <td class="bn"><a href="assets/missing_fdbf1ec1bf420d13aa43625bef0b1d92.bin">The Plan for the Rust 2021 Edition</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;10</td>
+        <td class="bn"><a href="assets/missing_f2b33e816048bb4ae245b7fec171f15c.bin">Announcing Rust 1.52.1</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;6</td>
+        <td class="bn"><a href="assets/missing_db51358bd837e7c3d661c65158813c92.bin">Announcing Rust 1.52.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Apr.&nbsp;29</td>
+        <td class="bn"><a href="assets/missing_4e8a73df689b2e6f52a5abc816d78c43.bin">Announcing Rustup 1.24.1</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Apr.&nbsp;27</td>
+        <td class="bn"><a href="assets/missing_fc0e7269de6f2b6df69eb2235aefa895.bin">Announcing Rustup 1.24.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Apr.&nbsp;14</td>
+        <td class="bn"><a href="assets/missing_3c22a11028228290dee2d621ab20bed9.bin">Brainstorming Async Rust&#x27;s Shiny Future</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Mar.&nbsp;25</td>
+        <td class="bn"><a href="assets/missing_edc775855462a5aa58fedb85f3dd1347.bin">Announcing Rust 1.51.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Mar.&nbsp;18</td>
+        <td class="bn"><a href="assets/missing_272bddde32937a4a975debf4666dc738.bin">Building a shared vision for Async Rust</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Feb.&nbsp;26</td>
+        <td class="bn"><a href="assets/missing_bbf94b8a83e74a15417caac01e765dca.bin">Const generics MVP hits beta!</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Feb.&nbsp;11</td>
+        <td class="bn"><a href="assets/missing_767f5c7d8927780a3c8cbf55c256ab24.bin">Announcing Rust 1.50.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Jan.&nbsp;4</td>
+        <td class="bn"><a href="assets/missing_e66845864e3bca0040e5ec152d147530.bin">mdBook security advisory</a></td>
+      </tr>
+      <tr>
+        <td class="bn"></td>
+        <td class="bn"><h3 class="f0-l f1-m f2-s mt4 mb0">Posts in 2020</h3></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Dec.&nbsp;31</td>
+        <td class="bn"><a href="assets/missing_0643f4de153656f77bcc149606b10e13.bin">Announcing Rust 1.49.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Dec.&nbsp;16</td>
+        <td class="bn"><a href="assets/missing_3b398552c78db30be89b27650f503aa7.bin">Rust Survey 2020 Results</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Dec.&nbsp;14</td>
+        <td class="bn"><a href="assets/missing_5ec8ecd632ec9aa85c2530d2f98536f4.bin">Next steps for the Foundation Conversation</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Dec.&nbsp;11</td>
+        <td class="bn"><a href="assets/missing_05d0ad27b1dcab88ee64e541cd1a0b9a.bin">Launching the Lock Poisoning Survey</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Dec.&nbsp;7</td>
+        <td class="bn"><a href="assets/missing_5ce07132ce7cb6350f73103703934289.bin">The Foundation Conversation</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Nov.&nbsp;27</td>
+        <td class="bn"><a href="assets/missing_d13df0325e19ef0285c44a8a099f5fa7.bin">Announcing Rustup 1.23.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Nov.&nbsp;19</td>
+        <td class="bn"><a href="assets/missing_028d740d557bfff64f7406e2b22acf62.bin">Announcing Rust 1.48.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Oct.&nbsp;20</td>
+        <td class="bn"><a href="assets/missing_d23bec1e76dd7e9b1156d650d56cbc22.bin">Marking issues as regressions</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Oct.&nbsp;8</td>
+        <td class="bn"><a href="assets/missing_9fe90eb37938a06dd656e3a3df62cdbd.bin">Announcing Rust 1.47.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Sept.&nbsp;21</td>
+        <td class="bn"><a href="assets/missing_f0cd95ec41a825483d2654537ca04087.bin">Call for 2021 Roadmap Blogs Ending Soon</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Sept.&nbsp;14</td>
+        <td class="bn"><a href="assets/missing_42cdd46383e13868df71834003aa7776.bin">A call for contributors from the WG-prioritization team</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Sept.&nbsp;10</td>
+        <td class="bn"><a href="assets/missing_507a7ce683bc791804578c3cbf9c3042.bin">Launching the 2020 State of Rust Survey</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Sept.&nbsp;3</td>
+        <td class="bn"><a href="assets/missing_c8df42f2ad21f872cd8bc9cf6d9f9a8f.bin">Planning the 2021 Roadmap</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Aug.&nbsp;27</td>
+        <td class="bn"><a href="assets/missing_f41f2cad5c8db159d685a3bbae71556f.bin">Announcing Rust 1.46.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Aug.&nbsp;18</td>
+        <td class="bn"><a href="assets/missing_2b28445876bc2342249b32fa284d7a3b.bin">Laying the foundation for Rust&#x27;s future</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Aug.&nbsp;3</td>
+        <td class="bn"><a href="assets/missing_024d98d5f0524fa9e6fbe10d7625ab94.bin">Announcing Rust 1.45.2</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">July&nbsp;30</td>
+        <td class="bn"><a href="assets/missing_ee011634a884a8953e0b9ce611a364ac.bin">Announcing Rust 1.45.1</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">July&nbsp;16</td>
+        <td class="bn"><a href="assets/missing_e7908c4fffaf891947d65da5a5201c4a.bin">Announcing Rust 1.45.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">July&nbsp;14</td>
+        <td class="bn"><a href="assets/missing_0dd04f15ea619c2dbed13ff7c4a6ff6c.bin">crates.io security advisory</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">July&nbsp;8</td>
+        <td class="bn"><a href="assets/missing_76fbd1a041195a8fa869ac7e308c8a33.bin">Announcing Rustup 1.22.1</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">July&nbsp;6</td>
+        <td class="bn"><a href="assets/missing_adfd142fec3c884bdfcd80083c69ca65.bin">Announcing Rustup 1.22.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">June&nbsp;18</td>
+        <td class="bn"><a href="assets/missing_e2782a949b4ba996bbcb28bc70303d18.bin">Announcing Rust 1.44.1</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">June&nbsp;10</td>
+        <td class="bn"><a href="assets/missing_4b27c3436e17f17fb84370431c4269c9.bin">2020 Event Lineup - Update</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">June&nbsp;4</td>
+        <td class="bn"><a href="assets/missing_d786176b47c60b50433ee3f09ee362c1.bin">Announcing Rust 1.44.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;15</td>
+        <td class="bn"><a href="assets/missing_e9dea25b142df529d996e40091cefe1e.bin">Five Years of Rust</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;7</td>
+        <td class="bn"><a href="assets/missing_5c0b6117fec5ecc0c3c073f116d4cf35.bin">Announcing Rust 1.43.1</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Apr.&nbsp;23</td>
+        <td class="bn"><a href="assets/missing_61d69e745545afb89b7f118526e936f7.bin">Announcing Rust 1.43.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Apr.&nbsp;17</td>
+        <td class="bn"><a href="assets/missing_e441993541f49b0ab878781df61766ea.bin">Rust Survey 2019 Results</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Mar.&nbsp;15</td>
+        <td class="bn"><a href="assets/missing_b7d74a5d643371a6a1efd5ae85ce510c.bin">docs.rs now allows you to choose your build targets</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Mar.&nbsp;12</td>
+        <td class="bn"><a href="assets/missing_398e16c1802763fef7c98332e09c7913.bin">Announcing Rust 1.42.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Mar.&nbsp;10</td>
+        <td class="bn"><a href="assets/missing_03ed97e86803f73def584ebd9f7721e4.bin">The 2020 RustConf CFP is Now Open!</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Feb.&nbsp;27</td>
+        <td class="bn"><a href="assets/missing_35ef5604e56443a34488b4bcc8cb388a.bin">Announcing Rust 1.41.1</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Jan.&nbsp;31</td>
+        <td class="bn"><a href="assets/missing_733d63440b10bc48aa7a18a1951f0ee7.bin">The 2020 Rust Event Lineup</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Jan.&nbsp;30</td>
+        <td class="bn"><a href="assets/missing_368f64a648579ef7e7a719614e188211.bin">Announcing Rust 1.41.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Jan.&nbsp;3</td>
+        <td class="bn"><a href="assets/missing_bd55228d94058bdfd907dbbabae1edab.bin">Reducing support for 32-bit Apple targets</a></td>
+      </tr>
+      <tr>
+        <td class="bn"></td>
+        <td class="bn"><h3 class="f0-l f1-m f2-s mt4 mb0">Posts in 2019</h3></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Dec.&nbsp;19</td>
+        <td class="bn"><a href="assets/missing_7ffef0a5b8db17795df2eeea341edd8f.bin">Announcing Rust 1.40.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Dec.&nbsp;3</td>
+        <td class="bn"><a href="assets/missing_5f7380cd9f221fb295133c1ab37421cf.bin">Launching the 2019 State of Rust Survey</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Nov.&nbsp;7</td>
+        <td class="bn"><a href="assets/missing_0346948dd3dc82a88f47ef2cf1055611.bin">Announcing Rust 1.39.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Nov.&nbsp;7</td>
+        <td class="bn"><a href="assets/missing_5ec4253db396291ded27eeb6db299f5f.bin">Async-await on stable Rust!</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Nov.&nbsp;1</td>
+        <td class="bn"><a href="assets/missing_d4d2c8b60888d41b4665f21ede9a618f.bin">Completing the transition to the new borrow checker</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Oct.&nbsp;29</td>
+        <td class="bn"><a href="assets/missing_f4a2c16127feba74624d2c87799d3383.bin">A call for blogs 2020</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Oct.&nbsp;15</td>
+        <td class="bn"><a href="assets/missing_58aef4ae757f9f04253135fc26c0d72a.bin">Announcing Rustup 1.20.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Oct.&nbsp;3</td>
+        <td class="bn"><a href="assets/missing_f21150f80816f17aae9117a7d563a88d.bin">Announcing the Inside Rust blog</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Sept.&nbsp;30</td>
+        <td class="bn"><a href="assets/missing_2fe888fc2dedeaedcda52bb2946d23fe.bin">Security advisory for Cargo</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Sept.&nbsp;30</td>
+        <td class="bn"><a href="assets/missing_ae3585e801f2aea31636380163854fbd.bin">Async-await hits beta!</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Sept.&nbsp;26</td>
+        <td class="bn"><a href="assets/missing_e46254706c197a5785de7698519811e6.bin">Announcing Rust 1.38.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Sept.&nbsp;18</td>
+        <td class="bn"><a href="assets/missing_4668efc00b90bfa8d900c05f2acf1ecb.bin">Upcoming docs.rs changes</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Aug.&nbsp;15</td>
+        <td class="bn"><a href="assets/missing_16e9f84aa90fe48ba012f100c4bf83ea.bin">Announcing Rust 1.37.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">July&nbsp;4</td>
+        <td class="bn"><a href="assets/missing_1fdbc7f9d3a59636bbe82ca51118efbf.bin">Announcing Rust 1.36.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">June&nbsp;3</td>
+        <td class="bn"><a href="assets/missing_9bd7da22ee5ef62d3b5a892c35386603.bin">The Governance WG is going public</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;23</td>
+        <td class="bn"><a href="assets/missing_3e810669c8986cacdc42d842d7c5565e.bin">Announcing Rust 1.35.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;20</td>
+        <td class="bn"><a href="assets/missing_0054187f4ca6d96c16b85e7057e1154e.bin">The 2019 Rust Event Lineup</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;15</td>
+        <td class="bn"><a href="assets/missing_1e8b87ab4ce69421086793ba3a572c6d.bin">4 years of Rust</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;14</td>
+        <td class="bn"><a href="assets/missing_48ab762df5739773a432d4eab37f11d0.bin">Announcing Rust 1.34.2</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;13</td>
+        <td class="bn"><a href="assets/missing_bd1be18973af6bd6c2fe01ce21c5e8f8.bin">Security advisory for the standard library</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Apr.&nbsp;26</td>
+        <td class="bn"><a href="assets/missing_513f96da70c6934018141d0aad35b537.bin">Mozilla IRC Sunset and the Rust Channel</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Apr.&nbsp;25</td>
+        <td class="bn"><a href="assets/missing_ff35a37ff5f9266074afcf2301346801.bin">Announcing Rust 1.34.1</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Apr.&nbsp;23</td>
+        <td class="bn"><a href="assets/missing_a4ec618cf65e7c7dc47c6bf6c6c66456.bin">Rust&#x27;s 2019 roadmap</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Apr.&nbsp;11</td>
+        <td class="bn"><a href="assets/missing_6058f0936a308e755ba7e13fe69c6576.bin">Announcing Rust 1.34.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Feb.&nbsp;28</td>
+        <td class="bn"><a href="assets/missing_7115712b4fd8f647c7e6a72e47a0550e.bin">Announcing Rust 1.33.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Feb.&nbsp;22</td>
+        <td class="bn"><a href="assets/missing_23e9b9424f681d35b1a9db2b15c078e5.bin">Changes in the core team</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Jan.&nbsp;17</td>
+        <td class="bn"><a href="assets/missing_99700be5fe75db444987659cc5554bc6.bin">Announcing Rust 1.32.0</a></td>
+      </tr>
+      <tr>
+        <td class="bn"></td>
+        <td class="bn"><h3 class="f0-l f1-m f2-s mt4 mb0">Posts in 2018</h3></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Dec.&nbsp;21</td>
+        <td class="bn"><a href="assets/missing_562bf914f0dbe938908c2b6db26ef08d.bin">Procedural Macros in Rust 2018</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Dec.&nbsp;20</td>
+        <td class="bn"><a href="assets/missing_a1133d0ec336b981a85d4f223bf9f30f.bin">Announcing Rust 1.31.1</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Dec.&nbsp;17</td>
+        <td class="bn"><a href="assets/missing_c4521a7d46996d8fa597db930a0f6c7b.bin">Tools in the 2018 edition</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Dec.&nbsp;6</td>
+        <td class="bn"><a href="assets/missing_e65d33465a7fff8dc0a37db02695530a.bin">A call for Rust 2019 Roadmap blog posts</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Dec.&nbsp;6</td>
+        <td class="bn"><a href="assets/missing_8b33d3fd3b801d16b2481124a7f60aaf.bin">Announcing Rust 1.31 and Rust 2018</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Nov.&nbsp;29</td>
+        <td class="bn"><a href="assets/missing_d8f7d5dbd88ef1e89b667ab5133b1091.bin">A new look for rust-lang.org</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Nov.&nbsp;27</td>
+        <td class="bn"><a href="assets/missing_1bda13becac2b9f40df9e686daf06b05.bin">Rust Survey 2018 Results</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Nov.&nbsp;8</td>
+        <td class="bn"><a href="assets/missing_1eeedf29389500c969ae1de0e2ce22ea.bin">Announcing Rust 1.30.1</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Oct.&nbsp;30</td>
+        <td class="bn"><a href="assets/missing_33610921edd7df64ef5bb340b7ed1389.bin">Help test Rust 2018</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Oct.&nbsp;25</td>
+        <td class="bn"><a href="assets/missing_0af24a7b2bbcd429e40c544353228fd0.bin">Announcing Rust 1.30</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Oct.&nbsp;19</td>
+        <td class="bn"><a href="assets/missing_05adfdfbae541165b296b549078e71ba.bin">Update on the October 15, 2018 incident on crates.io</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Oct.&nbsp;12</td>
+        <td class="bn"><a href="assets/missing_cf561bd70581546d3522c7b50f12dc65.bin">Announcing Rust 1.29.2</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Sept.&nbsp;25</td>
+        <td class="bn"><a href="assets/missing_f095530664c990f9164f738b982c9ecc.bin">Announcing Rust 1.29.1</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Sept.&nbsp;21</td>
+        <td class="bn"><a href="assets/missing_9bacb8ba48088414fa87fdfad4d27982.bin">Security advisory for the standard library</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Sept.&nbsp;13</td>
+        <td class="bn"><a href="assets/missing_cf289a5fb96b9e7e02c82a03bbb147ed.bin">Announcing Rust 1.29</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Aug.&nbsp;8</td>
+        <td class="bn"><a href="assets/missing_066f55f34ae433396a45810e6fdad54f.bin">Launching the 2018 State of Rust Survey</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Aug.&nbsp;2</td>
+        <td class="bn"><a href="assets/missing_ac4f5c83892b0f9feab736ea5bfecd26.bin">Announcing Rust 1.28</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">July&nbsp;27</td>
+        <td class="bn"><a href="assets/missing_4b955f741cbb1fa83a1e8862ccb608ca.bin">What is Rust 2018?</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">July&nbsp;20</td>
+        <td class="bn"><a href="assets/missing_9f28d64206b0dac5626c7cd8b44912ab.bin">Announcing Rust 1.27.2</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">July&nbsp;10</td>
+        <td class="bn"><a href="assets/missing_3bc05621727a0b9f70f2e881668aafb3.bin">Announcing Rust 1.27.1</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">July&nbsp;6</td>
+        <td class="bn"><a href="assets/missing_8342aa68c9522c50213c38872fd74c6f.bin">Security Advisory for rustdoc</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">June&nbsp;21</td>
+        <td class="bn"><a href="assets/missing_3d359b1d6f28ec829f743e645b498213.bin">Announcing Rust 1.27</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">June&nbsp;5</td>
+        <td class="bn"><a href="assets/missing_e8784b8b580965737e0cfc0172415a24.bin">Announcing Rust 1.26.2</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;29</td>
+        <td class="bn"><a href="assets/missing_f7b68e51070a121cddc6d2690e445c0b.bin">Announcing Rust 1.26.1</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;15</td>
+        <td class="bn"><a href="assets/missing_0fa1661d59233bee31edd5c3aa7a7a0b.bin">Rust turns three</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;10</td>
+        <td class="bn"><a href="assets/missing_c7de9dd53f16477c9f07917a06c61fe9.bin">Announcing Rust 1.26</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Apr.&nbsp;6</td>
+        <td class="bn"><a href="assets/missing_91764549e3811b8281185087cfc87aba.bin">The Rust Team All Hands in Berlin: a Recap</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Apr.&nbsp;2</td>
+        <td class="bn"><a href="assets/missing_8e4b1f0ac7ef50124e7441b84787a2e8.bin">Increasing Rust’s Reach 2018</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Mar.&nbsp;29</td>
+        <td class="bn"><a href="assets/missing_a69a28e821c6a27903ad165ef4df2bf8.bin">Announcing Rust 1.25</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Mar.&nbsp;12</td>
+        <td class="bn"><a href="assets/missing_0869d0b9f58ca9f68d9ea88c7bb7bcc5.bin">Rust&#x27;s 2018 roadmap</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Mar.&nbsp;1</td>
+        <td class="bn"><a href="assets/missing_b868b47f685e3acde050fb59ae4475dd.bin">Announcing Rust 1.24.1</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Feb.&nbsp;15</td>
+        <td class="bn"><a href="assets/missing_4b8435797d12b05310d14f07ded3e03c.bin">Announcing Rust 1.24</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Jan.&nbsp;31</td>
+        <td class="bn"><a href="assets/missing_b62999f87d5d731ea1912c4ba3f73334.bin">The 2018 Rust Event Lineup</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Jan.&nbsp;4</td>
+        <td class="bn"><a href="assets/missing_77839bd9199a449a8ebd307ba836b546.bin">Announcing Rust 1.23</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Jan.&nbsp;3</td>
+        <td class="bn"><a href="assets/missing_87d8a21b6d949b00c6ef939271d64b63.bin">New Year&#x27;s Rust: A Call for Community Blogposts</a></td>
+      </tr>
+      <tr>
+        <td class="bn"></td>
+        <td class="bn"><h3 class="f0-l f1-m f2-s mt4 mb0">Posts in 2017</h3></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Dec.&nbsp;21</td>
+        <td class="bn"><a href="assets/missing_701a88faf3d5fb3651d6bcbe7cebe9c6.bin">Rust in 2017: what we achieved</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Nov.&nbsp;22</td>
+        <td class="bn"><a href="assets/missing_514948483d96f9b0d8661764c5e530b8.bin">Announcing Rust 1.22 (and 1.22.1)</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Nov.&nbsp;14</td>
+        <td class="bn"><a href="assets/missing_f50a41a8e324c0fa14dc4c929cf7950b.bin">Fearless Concurrency in Firefox Quantum</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Oct.&nbsp;12</td>
+        <td class="bn"><a href="assets/missing_0e78456fe266122cea5e4601371fb520.bin">Announcing Rust 1.21</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Sept.&nbsp;18</td>
+        <td class="bn"><a href="assets/missing_de1c0fc8b7757f6b2c62ab985dcf2508.bin">impl Future for Rust</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Sept.&nbsp;5</td>
+        <td class="bn"><a href="assets/missing_8e5c0594d9b6fdbd8a246b1fcd4be4bc.bin">Rust 2017 Survey Results</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Aug.&nbsp;31</td>
+        <td class="bn"><a href="assets/missing_6d1f6c1c6b132477846c91b14c74f4b8.bin">Announcing Rust 1.20</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">July&nbsp;20</td>
+        <td class="bn"><a href="assets/missing_476c5a3e7b5389219bef30287a0dc7b8.bin">Announcing Rust 1.19</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">July&nbsp;18</td>
+        <td class="bn"><a href="assets/missing_6a28b69f786b52b92ae01c6836396a6e.bin">The 2017 Rust Conference Lineup</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">July&nbsp;5</td>
+        <td class="bn"><a href="assets/missing_afa7fa13685435c59de4210a32f1f87a.bin">Rust&#x27;s 2017 roadmap, six months in</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">June&nbsp;27</td>
+        <td class="bn"><a href="assets/missing_54a359c2507afea5f5023c40a2ec261d.bin">Increasing Rust’s Reach</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">June&nbsp;8</td>
+        <td class="bn"><a href="assets/missing_02e05d95db67d8c3683f28e009e59b29.bin">Announcing Rust 1.18</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;15</td>
+        <td class="bn"><a href="assets/missing_7ed11b761644ecbfc60eee2ccd482cdf.bin">Two years of Rust</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;5</td>
+        <td class="bn"><a href="assets/missing_5f3927b213ff37fc2de3f4140116c26b.bin">The Rust Libz Blitz</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;3</td>
+        <td class="bn"><a href="assets/missing_484a5c6394aa365796d8bd7c6268cd06.bin">Launching the 2017 State of Rust Survey</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Apr.&nbsp;27</td>
+        <td class="bn"><a href="assets/missing_d552badf4fb452ecddf0b591a5bd8a11.bin">Announcing Rust 1.17</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Mar.&nbsp;16</td>
+        <td class="bn"><a href="assets/missing_2c3748692591ebd52c51c0acbc73f62c.bin">Announcing Rust 1.16</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Mar.&nbsp;2</td>
+        <td class="bn"><a href="assets/missing_f46df4c4b7b6380d5107f77b0f01125d.bin">Rust&#x27;s language ergonomics initiative</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Feb.&nbsp;9</td>
+        <td class="bn"><a href="assets/missing_3e87c64ab837f67b44896981162bf395.bin">Announcing Rust 1.15.1</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Feb.&nbsp;6</td>
+        <td class="bn"><a href="assets/missing_baa68869245ec05e39626f28a65bdde2.bin">Rust&#x27;s 2017 roadmap</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Feb.&nbsp;2</td>
+        <td class="bn"><a href="assets/missing_b16dbe106e21a3b22ad6250a30f5e381.bin">Announcing Rust 1.15</a></td>
+      </tr>
+      <tr>
+        <td class="bn"></td>
+        <td class="bn"><h3 class="f0-l f1-m f2-s mt4 mb0">Posts in 2016</h3></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Dec.&nbsp;22</td>
+        <td class="bn"><a href="assets/missing_ba1da4c980bed2cceae07908a70bcea0.bin">Announcing Rust 1.14</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Dec.&nbsp;15</td>
+        <td class="bn"><a href="assets/missing_d14861b41ae480d64d286f942d074253.bin">Announcing the First Underhanded Rust Contest</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Nov.&nbsp;10</td>
+        <td class="bn"><a href="assets/missing_2a4cd2ee63083e7b33d2d11afc21e8ad.bin">Announcing Rust 1.13</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Oct.&nbsp;20</td>
+        <td class="bn"><a href="assets/missing_cd8daae5976a09747cd55ed99a229f71.bin">Announcing Rust 1.12.1</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Sept.&nbsp;29</td>
+        <td class="bn"><a href="assets/missing_08f93918c429b18c5e467d34cff21704.bin">Announcing Rust 1.12</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Sept.&nbsp;8</td>
+        <td class="bn"><a href="assets/missing_3acbe91fbbbfae82182f49ff54c66d57.bin">Incremental Compilation</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Aug.&nbsp;18</td>
+        <td class="bn"><a href="assets/missing_0c510e796dbbb89afd784534ea2d97e1.bin">Announcing Rust 1.11</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Aug.&nbsp;10</td>
+        <td class="bn"><a href="assets/missing_6cc2e3628208eca3a27114d20c85e6e4.bin">Shape of errors to come</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">July&nbsp;25</td>
+        <td class="bn"><a href="assets/missing_f8e10cee52e0e32feac0380d55555108.bin">The 2016 Rust Conference Lineup</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">July&nbsp;7</td>
+        <td class="bn"><a href="assets/missing_d1b744007267b56ea2163212c80ad1a2.bin">Announcing Rust 1.10</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">June&nbsp;30</td>
+        <td class="bn"><a href="assets/missing_9d770949b3dae47f44080823d73bb334.bin">State of Rust Survey 2016</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;26</td>
+        <td class="bn"><a href="assets/missing_da4330fb3c74dd9d8f43348e1dab52b3.bin">Announcing Rust 1.9</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;16</td>
+        <td class="bn"><a href="assets/missing_348f5b91a22c2e9d2f196d14c7320ad2.bin">One year of Rust</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;13</td>
+        <td class="bn"><a href="assets/missing_b5091355d4aeaf0bfedbae5b059a4a05.bin">Taking Rust everywhere with rustup</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;9</td>
+        <td class="bn"><a href="assets/missing_d073d56f729eba8efc9114ab75cd6068.bin">Launching the 2016 State of Rust Survey</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;5</td>
+        <td class="bn"><a href="assets/missing_45c6fe1bc8eb888c9ca47bf6dd404855.bin">Cargo: predictable dependency management</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Apr.&nbsp;19</td>
+        <td class="bn"><a href="assets/missing_209eb421bd3d4c86df8fb4e385bf4a99.bin">Introducing MIR</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Apr.&nbsp;14</td>
+        <td class="bn"><a href="assets/missing_7059154979135cfc9197a3f1b9a6f631.bin">Announcing Rust 1.8</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Mar.&nbsp;2</td>
+        <td class="bn"><a href="assets/missing_4b6510b9a5469a20cfe3e4d1ed2ad300.bin">Announcing Rust 1.7</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Jan.&nbsp;21</td>
+        <td class="bn"><a href="assets/missing_da367b257f369cfec5b64c55b142350a.bin">Announcing Rust 1.6</a></td>
+      </tr>
+      <tr>
+        <td class="bn"></td>
+        <td class="bn"><h3 class="f0-l f1-m f2-s mt4 mb0">Posts in 2015</h3></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Dec.&nbsp;10</td>
+        <td class="bn"><a href="assets/missing_49c1f89c8659c074952a9335d7a827bc.bin">Announcing Rust 1.5</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Oct.&nbsp;29</td>
+        <td class="bn"><a href="assets/missing_94cc6511ed12a4e5a2b0557022a11226.bin">Announcing Rust 1.4</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Sept.&nbsp;17</td>
+        <td class="bn"><a href="assets/missing_158b9a06d7351ab547104c7bd514f97d.bin">Announcing Rust 1.3</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Aug.&nbsp;14</td>
+        <td class="bn"><a href="assets/missing_50be29f5903f5db9bb9160ebc2a70121.bin">Rust in 2016</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Aug.&nbsp;6</td>
+        <td class="bn"><a href="assets/missing_c39bc2e5be0b89bc3aaf865537a2b3c8.bin">Announcing Rust 1.2</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">June&nbsp;25</td>
+        <td class="bn"><a href="assets/missing_2ca600fae54034fe1c5ab51ac208b171.bin">Rust 1.1 stable, the Community Subteam, and RustCamp</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;15</td>
+        <td class="bn"><a href="assets/missing_ddb1dfba2491ef73d2ff6f4ff8732dec.bin">Announcing Rust 1.0</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">May&nbsp;11</td>
+        <td class="bn"><a href="assets/missing_2af9e7c8c2ae51d933d1ce8e6b984c51.bin">Abstraction without overhead: traits in Rust</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Apr.&nbsp;24</td>
+        <td class="bn"><a href="assets/missing_ad5be123c5c1e5c57e793057a4769396.bin">Rust Once, Run Everywhere</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Apr.&nbsp;17</td>
+        <td class="bn"><a href="assets/missing_71784645c05dec9c49880061fba6c26e.bin">Mixing matching, mutation, and moves in Rust</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Apr.&nbsp;10</td>
+        <td class="bn"><a href="assets/missing_63ec5345eccfb2bc24afbc1fa2512597.bin">Fearless Concurrency with Rust</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Apr.&nbsp;3</td>
+        <td class="bn"><a href="assets/missing_12d1d20230bceb18199d81185a99ff91.bin">Announcing Rust 1.0 Beta</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Feb.&nbsp;20</td>
+        <td class="bn"><a href="assets/missing_215351fb10cda686b50c96598612f95e.bin">Announcing Rust 1.0.0.alpha.2</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Feb.&nbsp;13</td>
+        <td class="bn"><a href="assets/missing_1ec13d66dd9b3c6555fa364ffca67789.bin">Rust 1.0: status report and final timeline</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Jan.&nbsp;9</td>
+        <td class="bn"><a href="assets/missing_a611c07079d743be538dd6d9317f93cb.bin">Announcing Rust 1.0 Alpha</a></td>
+      </tr>
+      <tr>
+        <td class="bn"></td>
+        <td class="bn"><h3 class="f0-l f1-m f2-s mt4 mb0">Posts in 2014</h3></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Dec.&nbsp;12</td>
+        <td class="bn"><a href="assets/missing_e71c6cb4e57460e48a0d5f8a6249fdbe.bin">Yehuda Katz and Steve Klabnik are joining the Rust Core Team</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Dec.&nbsp;12</td>
+        <td class="bn"><a href="assets/missing_225a820dc1a693838697acc71c9ed946.bin">Rust 1.0: Scheduling the trains</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Nov.&nbsp;20</td>
+        <td class="bn"><a href="assets/missing_f24513a60bfecc12629defd1bc7779a2.bin">Cargo: Rust&#x27;s community crate host</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Oct.&nbsp;30</td>
+        <td class="bn"><a href="assets/missing_2312def68fa45cdfea2fda8b098473af.bin">Stability as a Deliverable</a></td>
+      </tr>
+      
+      <tr>
+        <td class="tr o-60 pr4 pr5-l bn">Sept.&nbsp;15</td>
+        <td class="bn"><a href="assets/missing_fe54c57e47265793459f24b93b67d85a.bin">Road to Rust 1.0</a></td>
+      </tr>
+    </table>
+
+  </div>
+</section>
+    <footer class="footer">
+      <div class="w-100 mw-none ph3 mw8-m mw9-l center f3">
+        <div class="row">
+          <div class="four columns mt3 mt0-l" id="get-help">
+            <h4>Get help!</h4>
+            <ul>
+              <li><a href="assets/missing_1c96d51abd8481c66a8218ea9be87ca0.bin" target="_blank" rel="noopener">Documentation</a></li>
+              <li><a href="mailto:core-team@rust-lang.org">Contact the Rust Team</a></li>
+            </ul>
+          </div>
+          <div class="four columns mt3 mt0-l">
+            <h4>Terms and policies</h4>
+            <ul>
+              <li><a href="assets/missing_2fdfdffd6f1115e8e9e664f5b34abf97.bin">Code of Conduct</a></li>
+              <li><a href="assets/missing_c61da53ad6a27d6557b6635cbdb66e51.bin">Licenses</a></li>
+              <li><a href="assets/missing_6d048724c9e69fbe2a4c5a6df36e80d8.bin">Logo Policy and Media Guide</a></li>
+              <li><a href="assets/missing_5bfe89f194d887686b7d93fc3c6d06e7.bin">Security Disclosures</a></li>
+              <li><a href="assets/missing_6211428c681e58dd86324c59a9f3a400.bin">All Policies</a></li>
+            </ul>
+          </div>
+          <div class="four columns mt3 mt0-l">
+            <h4>Social</h4>
+            <div class="flex flex-row flex-wrap">
+              <a rel="me" href="assets/missing_bf40947e661e7d625771f4f5bfec4f1e.bin" target="_blank" rel="noopener"><img src="assets/b1205f541c2bdbee0a7301357a3590fb.svg" alt="Mastodon"/></a>
+              <a rel="me" href="assets/missing_bb188d9665a9093532886281a56a0c52.bin" target="_blank" rel="noopener"><img src="assets/75a200e5b7881ff798f3603c662e4cd4.svg" alt="Bluesky"/></a>
+              <a href="assets/missing_16e273610193c2d4440f471197e78324.bin" target="_blank" rel="noopener"><img style="padding-top: 6px; padding-bottom:6px" src="assets/1bc71f844b8d8dab91b172d20ac1a7f3.svg" alt="YouTube"/></a>
+              <a href="assets/missing_fc16b2033d948da008f449cfdc298038.bin" target="_blank" rel="noopener"><img src="assets/abb27c65b2c9421706cb65af308f24e7.svg" alt="Discord"/></a>
+              <a href="assets/missing_eea1f959863325945490d654319fd874.bin" target="_blank" rel="noopener"><img src="assets/66f93ea7c14fef5393f5fcbb352f1511.svg" alt="GitHub"/></a>
+            </div>
+            <h4 class="mt4 mb3">RSS</h4>
+            <ul>
+              <li><a href="assets/missing_9e793ab07bccdce3cdab1c1596154ef9.bin">Main Blog</a></li>
+              <li><a href="assets/missing_9ad210c99c05cbf5bd4488104c0d4eba.bin">"Inside Rust" Blog</a></li>
+            </ul>
+          </div>
+    
+        </div>
+        <div class="attribution">
+          Maintained by the Rust Team. See a typo?
+          <a href="assets/missing_c801d94e5f608012cb0d9cb2b232a9b0.bin" target="_blank" rel="noopener">Send a fix here</a>!
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>
