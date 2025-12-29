@@ -1040,9 +1040,14 @@ impl DomNode {
   }
 
   pub fn document_quirks_mode(&self) -> QuirksMode {
-    match &self.node_type {
-      DomNodeType::Document { quirks_mode } => *quirks_mode,
-      _ => QuirksMode::NoQuirks,
+    if let DomNodeType::Document { quirks_mode } = &self.node_type {
+      *quirks_mode
+    } else {
+      debug_assert!(
+        false,
+        "document_quirks_mode called on non-document node; defaulting to NoQuirks"
+      );
+      QuirksMode::NoQuirks
     }
   }
 
