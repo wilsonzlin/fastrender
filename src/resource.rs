@@ -2072,9 +2072,11 @@ mod tests {
   use super::data_url;
   use super::*;
   use std::collections::VecDeque;
+  use std::io;
   use std::io::Read;
   use std::io::Write;
   use std::net::TcpListener;
+  use std::net::TcpStream;
   use std::sync::atomic::AtomicUsize;
   use std::sync::atomic::Ordering;
   use std::sync::Arc;
@@ -2556,6 +2558,91 @@ mod tests {
       "missing header: {}",
       req
     );
+  }
+
+  #[test]
+  fn http_fetcher_reuses_keep_alive_connections() {
+    let Some(listener) = try_bind_localhost("http_fetcher_reuses_keep_alive_connections") else {
+      return;
+    };
+    let addr = listener.local_addr().unwrap();
+
+    let handle = thread::spawn(move || {
+      let mut conn_count = 0;
+      let mut handled = 0;
+
+      while handled < 2 {
+        let (mut stream, _) = listener.accept().unwrap();
+        conn_count += 1;
+        stream
+          .set_read_timeout(Some(Duration::from_millis(500)))
+          .unwrap();
+
+        loop {
+          match read_http_request(&mut stream) {
+            Ok(Some(_)) => {
+              let body = b"pong";
+              let headers = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n",
+                body.len()
+              );
+              stream.write_all(headers.as_bytes()).unwrap();
+              stream.write_all(body).unwrap();
+              handled += 1;
+              if handled >= 2 {
+                return conn_count;
+              }
+            }
+            Ok(None) => break,
+            Err(_) => break,
+          }
+        }
+      }
+
+      conn_count
+    });
+
+    let fetcher = HttpFetcher::new().with_timeout(Duration::from_secs(2));
+    let url = format!("http://{}/", addr);
+    fetcher.fetch(&url).expect("first fetch");
+    fetcher.fetch(&url).expect("second fetch");
+
+    let conn_count = handle.join().unwrap();
+    assert_eq!(
+      conn_count, 1,
+      "expected keep-alive reuse across fetches (got {conn_count})"
+    );
+  }
+
+  fn read_http_request(stream: &mut TcpStream) -> io::Result<Option<Vec<u8>>> {
+    let mut buf = [0u8; 1024];
+    let mut request = Vec::new();
+    loop {
+      match stream.read(&mut buf) {
+        Ok(0) => return Ok(None),
+        Ok(n) => {
+          request.extend_from_slice(&buf[..n]);
+          if request.windows(4).any(|w| w == b"\r\n\r\n") {
+            return Ok(Some(request));
+          }
+        }
+        Err(ref e)
+          if matches!(
+            e.kind(),
+            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+          ) =>
+        {
+          if request.is_empty() {
+            return Ok(None);
+          }
+          return Err(io::Error::new(
+            e.kind(),
+            "incomplete HTTP request before timeout",
+          ));
+        }
+        Err(e) => return Err(e),
+      }
+    }
   }
 
   #[test]
