@@ -126,6 +126,8 @@ Each file should be tiny (no huge logs, no raw HTML):
 }
 ```
 
+When diagnostics are enabled, the runner may also attach `diagnostics.stats` (the structured `RenderStats` summary: timings, counts, cascade/layout/paint/resources) for successful renders so `pageset_progress report --verbose-stats` stays useful. Keep it tiny — no raw logs or traces.
+
 Rules:
 - Keep key ordering stable and formatting consistent.
 - **Don’t hand-author these files**. They are written by tooling. If the schema needs to change, change the code first.

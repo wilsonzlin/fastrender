@@ -665,6 +665,8 @@ pub(crate) struct PageProgress {
   timeout_stage: Option<ProgressStage>,
   last_good_commit: String,
   last_regression_commit: String,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  diagnostics: Option<ProgressDiagnostics>,
 }
 
 impl PageProgress {
@@ -680,6 +682,7 @@ impl PageProgress {
       timeout_stage: None,
       last_good_commit: String::new(),
       last_regression_commit: String::new(),
+      diagnostics: None,
     }
   }
 
@@ -761,18 +764,10 @@ struct LoadedProgress {
   stats: Option<RenderStats>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 struct ProgressDiagnostics {
   #[serde(default)]
   stats: Option<RenderStats>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ProgressWithDiagnostics {
-  #[serde(flatten)]
-  progress: PageProgress,
-  #[serde(default)]
-  diagnostics: ProgressDiagnostics,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -947,6 +942,7 @@ fn sync(args: SyncArgs) -> io::Result<()> {
       progress.stages_ms = StageBuckets::default();
       progress.failure_stage = None;
       progress.timeout_stage = None;
+      progress.diagnostics = None;
     }
 
     stems.insert(entry.stem.clone());
@@ -1215,6 +1211,11 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
       progress.stages_ms = buckets_from_diagnostics(&result.diagnostics);
       apply_diagnostics_to_progress(&mut progress, &result.diagnostics);
       progress.hotspot = guess_hotspot(&progress.stages_ms).to_string();
+      progress.diagnostics = result
+        .diagnostics
+        .stats
+        .clone()
+        .map(|stats| ProgressDiagnostics { stats: Some(stats) });
       log.push_str("Status: OK\n");
       append_fetch_error_summary(&mut log, &result.diagnostics);
       append_stage_summary(&mut log, &result.diagnostics);
@@ -1518,7 +1519,7 @@ fn read_progress_dir(dir: &Path) -> io::Result<Vec<LoadedProgress>> {
         format!("failed to read {}: {}", path.display(), e),
       )
     })?;
-    let progress: ProgressWithDiagnostics = serde_json::from_str(&contents).map_err(|e| {
+    let progress: PageProgress = serde_json::from_str(&contents).map_err(|e| {
       io::Error::new(
         io::ErrorKind::InvalidData,
         format!("failed to parse {}: {}", path.display(), e),
@@ -1528,10 +1529,14 @@ fn read_progress_dir(dir: &Path) -> io::Result<Vec<LoadedProgress>> {
       .file_stem()
       .map(|s| s.to_string_lossy().to_string())
       .unwrap_or_else(|| path.display().to_string());
+    let stats = progress
+      .diagnostics
+      .as_ref()
+      .and_then(|diag| diag.stats.clone());
     progresses.push(LoadedProgress {
       stem,
-      progress: progress.progress,
-      stats: progress.diagnostics.stats,
+      progress,
+      stats,
     });
   }
   Ok(progresses)
@@ -1567,10 +1572,14 @@ fn read_progress_dir_allow_empty(dir: &Path) -> io::Result<Vec<LoadedProgress>> 
       .file_stem()
       .map(|s| s.to_string_lossy().to_string())
       .unwrap_or_else(|| path.display().to_string());
+    let stats = progress
+      .diagnostics
+      .as_ref()
+      .and_then(|diag| diag.stats.clone());
     progresses.push(LoadedProgress {
       stem,
       progress,
-      stats: None,
+      stats,
     });
   }
   Ok(progresses)
@@ -1616,10 +1625,14 @@ fn read_progress_dir_tolerant(dir: &Path) -> ProgressLoadOutcome {
           .file_stem()
           .map(|s| s.to_string_lossy().to_string())
           .unwrap_or_else(|| path.display().to_string());
+        let stats = progress
+          .diagnostics
+          .as_ref()
+          .and_then(|diag| diag.stats.clone());
         outcome.progresses.push(LoadedProgress {
           stem,
           progress,
-          stats: None,
+          stats,
         });
       }
       Err(err) => {
