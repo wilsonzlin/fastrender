@@ -3795,6 +3795,7 @@ impl TableFormattingContext {
     cell_box: &BoxNode,
     cell_width: f32,
     border_collapse: BorderCollapse,
+    cell_bfc: &BlockFormattingContext,
   ) -> Result<FragmentNode, LayoutError> {
     let hide_empty = border_collapse == BorderCollapse::Separate
       && cell_box.style.empty_cells == EmptyCells::Hide
@@ -3826,11 +3827,6 @@ impl TableFormattingContext {
       cloned.style = std::sync::Arc::new(style);
     }
 
-    let bfc = BlockFormattingContext::with_font_context_and_viewport(
-      self.factory.font_context().clone(),
-      self.factory.viewport_size(),
-    )
-    .with_parallelism(self.parallelism);
     let constraints = LayoutConstraints::definite_width(cell_width.max(0.0));
     if matches!(border_collapse, BorderCollapse::Collapse) {
       let mut style = (*cloned.style).clone();
@@ -3839,9 +3835,9 @@ impl TableFormattingContext {
       style.border_top_width = crate::style::values::Length::px(0.0);
       style.border_bottom_width = crate::style::values::Length::px(0.0);
       cloned.style = std::sync::Arc::new(style);
-      bfc.layout(&cloned, &constraints)
+      cell_bfc.layout(&cloned, &constraints)
     } else {
-      bfc.layout(&cloned, &constraints)
+      cell_bfc.layout(&cloned, &constraints)
     }
   }
 
@@ -4464,9 +4460,20 @@ impl FormattingContext for TableFormattingContext {
       );
     }
 
-    let mut fragments = Vec::new();
     let h_spacing = structure.border_spacing.0;
     let v_spacing = structure.border_spacing.1;
+    let mut col_prefix = Vec::with_capacity(col_widths.len() + 1);
+    col_prefix.push(0.0);
+    for width in &col_widths {
+      let next = col_prefix.last().copied().unwrap_or(0.0) + *width;
+      col_prefix.push(next);
+    }
+    let cell_bfc = BlockFormattingContext::with_font_context_and_viewport(
+      self.factory.font_context().clone(),
+      self.factory.viewport_size(),
+    )
+    .with_parallelism(self.parallelism);
+    let mut fragments = Vec::new();
 
     struct LaidOutCell {
       cell: CellInfo,
@@ -4484,9 +4491,11 @@ impl FormattingContext for TableFormattingContext {
     }
 
     let layout_single_cell = |cell: &CellInfo| -> CellOutcome {
-      let span_end = (cell.col + cell.colspan).min(col_widths.len());
-      let width: f32 = col_widths[cell.col..span_end].iter().sum::<f32>()
-        + h_spacing * (cell.colspan.saturating_sub(1) as f32);
+      let max_prefix_idx = col_prefix.len().saturating_sub(1);
+      let start = cell.col.min(max_prefix_idx);
+      let span_end = (cell.col + cell.colspan).min(max_prefix_idx);
+      let sum_cols = col_prefix[span_end] - col_prefix[start];
+      let width = sum_cols + h_spacing * (cell.colspan.saturating_sub(1) as f32);
       if dump {
         eprintln!(
           "  cell r{} c{} span={} width={:.2} min={:.2} max={:.2}",
@@ -4506,7 +4515,7 @@ impl FormattingContext for TableFormattingContext {
       } else {
         row_vertical_align.unwrap_or(cell_box.style.vertical_align)
       };
-      match self.layout_cell(cell_box, width, structure.border_collapse) {
+      match self.layout_cell(cell_box, width, structure.border_collapse, &cell_bfc) {
         Ok(fragment) => {
           if dump {
             let b = fragment.bounds;
@@ -4532,44 +4541,31 @@ impl FormattingContext for TableFormattingContext {
       }
     };
 
-    let (mut laid_out_cells, mut failed_cells) =
+    let outcomes: Vec<CellOutcome> =
       if self.parallelism.should_parallelize(structure.cells.len()) && !dump {
         let deadline = active_deadline();
-        let mut outcomes = structure
+        structure
           .cells
           .par_iter()
-          .enumerate()
-          .map(|(idx, cell)| {
+          .map(|cell| {
             with_deadline(deadline.as_ref(), || {
               crate::layout::engine::debug_record_parallel_work();
-              (idx, layout_single_cell(cell))
+              layout_single_cell(cell)
             })
           })
-          .collect::<Vec<_>>();
-        outcomes.sort_by_key(|(idx, _)| *idx);
-
-        let mut laid_out_cells = Vec::new();
-        let mut failed = 0usize;
-        for (_, outcome) in outcomes {
-          match outcome {
-            CellOutcome::Success(cell) => laid_out_cells.push(cell),
-            CellOutcome::Failed => failed += 1,
-            CellOutcome::Missing => {}
-          }
-        }
-        (laid_out_cells, failed)
+          .collect()
       } else {
-        let mut laid_out_cells = Vec::new();
-        let mut failed = 0usize;
-        for cell in &structure.cells {
-          match layout_single_cell(cell) {
-            CellOutcome::Success(cell) => laid_out_cells.push(cell),
-            CellOutcome::Failed => failed += 1,
-            CellOutcome::Missing => {}
-          }
-        }
-        (laid_out_cells, failed)
+        structure.cells.iter().map(layout_single_cell).collect()
       };
+    let mut laid_out_cells = Vec::new();
+    let mut failed_cells = 0usize;
+    for outcome in outcomes {
+      match outcome {
+        CellOutcome::Success(cell) => laid_out_cells.push(cell),
+        CellOutcome::Failed => failed_cells += 1,
+        CellOutcome::Missing => {}
+      }
+    }
 
     // Compute row heights, accounting for rowspans and vertical spacing.
     let mut row_heights = vec![0.0f32; structure.row_count];
@@ -12744,6 +12740,113 @@ mod tests {
     assert!(
       row1_height > 15.0,
       "row 1 should retain a meaningful share of the spanning cell: {row1_height}"
+    );
+  }
+
+  #[test]
+  fn colspan_cell_widths_follow_column_sums_and_order() {
+    let mut table_style = ComputedStyle::default();
+    table_style.display = Display::Table;
+    table_style.border_collapse = BorderCollapse::Separate;
+    table_style.border_spacing_horizontal = Length::px(6.0);
+    table_style.border_spacing_vertical = Length::px(0.0);
+
+    let mut row_style = ComputedStyle::default();
+    row_style.display = Display::TableRow;
+
+    let mut cell_style = ComputedStyle::default();
+    cell_style.display = Display::TableCell;
+    cell_style.width = Some(Length::px(20.0));
+
+    let row0 = BoxNode::new_block(
+      Arc::new(row_style.clone()),
+      FormattingContextType::Block,
+      vec![
+        BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![]),
+        BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![]),
+        BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![]),
+      ],
+    );
+
+    let spanning_cell = BoxNode::new_block(
+      Arc::new(cell_style.clone()),
+      FormattingContextType::Block,
+      vec![],
+    )
+    .with_debug_info(DebugInfo::new(Some("td".to_string()), None, vec![]).with_spans(2, 1));
+    let trailing_cell =
+      BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+    let row1 = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![spanning_cell, trailing_cell],
+    );
+
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row0, row1],
+    );
+    let tree = BoxTree::new(table);
+    let table = &tree.root;
+
+    let structure = TableStructure::from_box_tree(table);
+    assert_eq!(structure.column_count, 3);
+    let h_spacing = structure.border_spacing.0;
+
+    let row0 = &table.children[0];
+    let col0_id = row0.children[0].id;
+    let col1_id = row0.children[1].id;
+    let col2_id = row0.children[2].id;
+    let span_id = table.children[1].children[0].id;
+    let trailing_id = table.children[1].children[1].id;
+
+    let tfc = TableFormattingContext::new();
+    let fragment = tfc
+      .layout(table, &LayoutConstraints::definite_width(240.0))
+      .expect("table layout");
+
+    let cell_fragments: Vec<&FragmentNode> = fragment
+      .children
+      .iter()
+      .filter(|f| {
+        f.style
+          .as_ref()
+          .map(|s| matches!(s.display, Display::TableCell))
+          .unwrap_or(false)
+      })
+      .collect();
+    assert_eq!(cell_fragments.len(), 5);
+
+    let ids: Vec<Option<usize>> = cell_fragments
+      .iter()
+      .map(|f| match f.content {
+        FragmentContent::Block { box_id } => box_id,
+        _ => None,
+      })
+      .collect();
+    assert_eq!(
+      ids,
+      vec![Some(col0_id), Some(col1_id), Some(col2_id), Some(span_id), Some(trailing_id)]
+    );
+
+    let col0_width = cell_fragments[0].bounds.width();
+    let col1_width = cell_fragments[1].bounds.width();
+    let col2_width = cell_fragments[2].bounds.width();
+    let span_width = cell_fragments[3].bounds.width();
+    let trailing_width = cell_fragments[4].bounds.width();
+    let expected_span = col0_width + col1_width + h_spacing;
+    assert!(
+      (span_width - expected_span).abs() < 0.01,
+      "spanning cell width should equal summed columns plus spacing (expected {:.2}, got {:.2})",
+      expected_span,
+      span_width
+    );
+    assert!(
+      (trailing_width - col2_width).abs() < 0.01,
+      "non-spanning cell should retain its column width (expected {:.2}, got {:.2})",
+      col2_width,
+      trailing_width
     );
   }
 
