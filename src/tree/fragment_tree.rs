@@ -1935,7 +1935,11 @@ mod tests {
 
   #[test]
   fn test_fragment_clone_shares_children() {
-    let child = FragmentNode::new_text(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), "a".into(), 8.0);
+    let child = FragmentNode::new_text(
+      Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+      Arc::<str>::from("a"),
+      8.0,
+    );
     let parent = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), vec![child]);
 
     let cloned = parent.clone();
@@ -1945,7 +1949,11 @@ mod tests {
 
   #[test]
   fn test_fragment_deep_clone_breaks_sharing() {
-    let child = FragmentNode::new_text(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), "a".into(), 8.0);
+    let child = FragmentNode::new_text(
+      Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+      Arc::<str>::from("a"),
+      8.0,
+    );
     let parent = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), vec![child]);
 
     let cloned = parent.deep_clone();

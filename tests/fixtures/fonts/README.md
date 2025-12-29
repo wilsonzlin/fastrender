@@ -188,6 +188,19 @@ so CI and tests can run in fully hermetic environments without relying on platfo
   python tests/fixtures/fonts/generate_colrv1_linear_shear_font.py
   ```
 
+### `colrv1-radial-two-circle.ttf`
+- **Source:** Generated in-repo with [FontTools](https://github.com/fonttools/fonttools) v4.61.1.
+- **License:** CC0 / Public Domain.
+- **Glyphs:** U+0052 (`R`) fills the `rect` outline via `PaintGlyph` with a COLR v1
+  `PaintRadialGradient` using two distinct circles: `(x0=260, y0=320, r0=140)` and
+  `(x1=720, y1=420, r1=420)`.
+- **Features exercised:** Radial gradient with a non-zero inner radius and offset centers, plus a
+  3-stop palette-backed `ColorLine` to make the two-circle definition visible.
+- **Regeneration:** From the repository root:
+  ```bash
+  python tests/fixtures/fonts/generate_colrv1_radial_two_circle_font.py
+  ```
+
 ### `colrv1-var-outline-test.ttf`
 - **Source:** Generated in-repo with [FontTools](https://github.com/fonttools/fonttools) v4.61.1.
 - **License:** CC0 / Public Domain.

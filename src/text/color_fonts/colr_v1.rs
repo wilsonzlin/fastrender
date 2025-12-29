@@ -197,21 +197,33 @@ pub fn render_colr_glyph(
   let translate = Transform::from_translate(-min_x, -min_y);
 
   for command in commands {
-    if let Brush::SweepGradient { .. } = command.brush {
-      render_sweep_gradient(&command, &mut pixmap, min_x, min_y, translate, clip_ref)?;
-      continue;
+    match &command.brush {
+      Brush::SweepGradient { .. } => {
+        render_sweep_gradient(&command, &mut pixmap, min_x, min_y, translate, clip_ref)?;
+      }
+      Brush::RadialGradient { .. } => {
+        render_two_circle_radial_gradient(
+          &command,
+          &mut pixmap,
+          min_x,
+          min_y,
+          translate,
+          clip_ref,
+        )?;
+      }
+      _ => {
+        let mut paint = brush_to_paint(&command.brush, min_x, min_y)?;
+        paint.blend_mode = command.blend_mode;
+        paint.anti_alias = true;
+        pixmap.fill_path(
+          &command.path,
+          &paint,
+          FillRule::Winding,
+          translate,
+          clip_ref,
+        );
+      }
     }
-
-    let mut paint = brush_to_paint(&command.brush, min_x, min_y)?;
-    paint.blend_mode = command.blend_mode;
-    paint.anti_alias = true;
-    pixmap.fill_path(
-      &command.path,
-      &paint,
-      FillRule::Winding,
-      translate,
-      clip_ref,
-    );
   }
 
   Some(ColorGlyphRaster {
@@ -350,11 +362,13 @@ enum Brush {
     spread: SpreadMode,
   },
   RadialGradient {
-    start: Point,
-    end: Point,
-    radius: f32,
-    stops: Vec<GradientStop>,
+    c0: Point,
+    r0: f32,
+    c1: Point,
+    r1: f32,
+    stops: Vec<ColorStop>,
     spread: SpreadMode,
+    transform: Transform,
   },
   SweepGradient {
     center: Point,
@@ -370,6 +384,26 @@ enum Brush {
 struct ColorStop {
   offset: f32,
   color: Rgba,
+}
+
+impl ResolvedColorLine {
+  fn new(spread: SpreadMode, stops: Vec<ColorStop>) -> Self {
+    let gradient_stops = stops
+      .iter()
+      .map(|stop| GradientStop::new(stop.offset, color_from_rgba(stop.color)))
+      .collect();
+    Self {
+      spread,
+      stops,
+      gradient_stops,
+    }
+  }
+}
+
+struct ResolvedColorLine {
+  spread: SpreadMode,
+  stops: Vec<ColorStop>,
+  gradient_stops: Vec<GradientStop>,
 }
 
 impl<'a, 'p> Renderer<'a, 'p> {
@@ -776,7 +810,7 @@ impl<'a, 'p> Renderer<'a, 'p> {
       ))),
       Paint::LinearGradient(gradient) => {
         let color_line = gradient.color_line().ok()?;
-        let (spread, stops) = resolve_color_line(color_line, self.palette, self.text_color)?;
+        let resolved = resolve_color_line(color_line, self.palette, self.text_color)?;
         let p0 = map_point(
           gradient.x0().to_i16() as f32,
           gradient.y0().to_i16() as f32,
@@ -796,13 +830,13 @@ impl<'a, 'p> Renderer<'a, 'p> {
           p0,
           p1,
           p2,
-          stops,
-          spread,
+          stops: resolved.gradient_stops,
+          spread: resolved.spread,
         })
       }
       Paint::VarLinearGradient(gradient) => {
         let color_line = gradient.color_line().ok()?;
-        let (spread, stops) = resolve_var_color_line(
+        let resolved = resolve_var_color_line(
           color_line,
           self.palette,
           self.text_color,
@@ -828,60 +862,48 @@ impl<'a, 'p> Renderer<'a, 'p> {
           p0,
           p1,
           p2,
-          stops,
-          spread,
+          stops: resolved.gradient_stops,
+          spread: resolved.spread,
         })
       }
       Paint::RadialGradient(radial) => {
         let color_line = radial.color_line().ok()?;
-        let (spread, stops) = resolve_color_line(color_line, self.palette, self.text_color)?;
-        let c0 = map_point(
-          radial.x0().to_i16() as f32,
-          radial.y0().to_i16() as f32,
-          combined,
-        );
-        let c1 = map_point(
-          radial.x1().to_i16() as f32,
-          radial.y1().to_i16() as f32,
-          combined,
-        );
-        let r0 = fixed_to_f32(radial.radius0().to_fixed());
-        let r1 = fixed_to_f32(radial.radius1().to_fixed());
+        let resolved = resolve_color_line(color_line, self.palette, self.text_color)?;
         Some(Brush::RadialGradient {
-          start: c0,
-          end: c1,
-          radius: (r1 - r0).max(0.0) * combined.sx.hypot(combined.ky),
-          stops,
-          spread,
+          c0: Point::from_xy(radial.x0().to_i16() as f32, radial.y0().to_i16() as f32),
+          r0: fixed_to_f32(radial.radius0().to_fixed()),
+          c1: Point::from_xy(radial.x1().to_i16() as f32, radial.y1().to_i16() as f32),
+          r1: fixed_to_f32(radial.radius1().to_fixed()),
+          stops: resolved.stops,
+          spread: resolved.spread,
+          transform: combined,
         })
       }
       Paint::VarRadialGradient(radial) => {
         let color_line = radial.color_line().ok()?;
-        let (spread, stops) = resolve_var_color_line(
+        let resolved = resolve_var_color_line(
           color_line,
           self.palette,
           self.text_color,
           self.variations.as_ref(),
         )?;
         let var_index = radial.var_index_base();
-        let c0 = map_point(
+        let c0 = Point::from_xy(
           self.vary_fword(radial.x0().to_i16(), var_index, 0),
           self.vary_fword(radial.y0().to_i16(), var_index, 1),
-          combined,
         );
-        let c1 = map_point(
+        let c1 = Point::from_xy(
           self.vary_fword(radial.x1().to_i16(), var_index, 3),
           self.vary_fword(radial.y1().to_i16(), var_index, 4),
-          combined,
         );
-        let r0 = self.vary_ufword(radial.radius0().to_u16(), var_index, 2);
-        let r1 = self.vary_ufword(radial.radius1().to_u16(), var_index, 5);
         Some(Brush::RadialGradient {
-          start: c0,
-          end: c1,
-          radius: (r1 - r0).max(0.0) * combined.sx.hypot(combined.ky),
-          stops,
-          spread,
+          c0,
+          r0: self.vary_ufword(radial.radius0().to_u16(), var_index, 2),
+          c1,
+          r1: self.vary_ufword(radial.radius1().to_u16(), var_index, 5),
+          stops: resolved.stops,
+          spread: resolved.spread,
+          transform: combined,
         })
       }
       Paint::SweepGradient(sweep) => {
@@ -1129,26 +1151,99 @@ fn brush_to_paint(brush: &Brush, offset_x: f32, offset_y: f32) -> Option<SkiaPai
       let shader = tiny_skia::LinearGradient::new(start, end, stops.clone(), *spread, transform)?;
       paint.shader = shader;
     }
-    Brush::RadialGradient {
-      start,
-      end,
-      radius,
-      stops,
-      spread,
-    } => {
-      let shader = tiny_skia::RadialGradient::new(
-        Point::from_xy(start.x - offset_x, start.y - offset_y),
-        Point::from_xy(end.x - offset_x, end.y - offset_y),
-        *radius,
-        stops.clone(),
-        *spread,
-        Transform::identity(),
-      )?;
-      paint.shader = shader;
-    }
+    Brush::RadialGradient { .. } => return None,
     Brush::SweepGradient { .. } => return None,
   }
   Some(paint)
+}
+
+fn render_two_circle_radial_gradient(
+  command: &DrawCommand,
+  target: &mut Pixmap,
+  min_x: f32,
+  min_y: f32,
+  translate: Transform,
+  clip: Option<&Mask>,
+) -> Option<()> {
+  let Brush::RadialGradient {
+    c0,
+    r0,
+    c1,
+    r1,
+    stops,
+    spread,
+    transform,
+  } = &command.brush
+  else {
+    return None;
+  };
+
+  if stops.is_empty() {
+    return Some(());
+  }
+
+  let inv_transform = transform.invert()?;
+
+  let width = target.width();
+  let height = target.height();
+  let mut mask = Mask::new(width, height)?;
+  mask.fill_path(&command.path, FillRule::Winding, true, translate);
+
+  if let Some(clip_mask) = clip {
+    for (coverage, clip_coverage) in mask.data_mut().iter_mut().zip(clip_mask.data()) {
+      let combined = (*coverage as u16 * *clip_coverage as u16 + 127) / 255;
+      *coverage = combined as u8;
+    }
+  }
+
+  if mask.data().iter().all(|v| *v == 0) {
+    return Some(());
+  }
+
+  let mut layer = Pixmap::new(width, height)?;
+  let mask_data = mask.data();
+  let layer_data = layer.pixels_mut();
+  for y in 0..height {
+    let world_y = min_y + y as f32 + 0.5;
+    for x in 0..width {
+      let idx = (y * width + x) as usize;
+      let coverage = mask_data[idx];
+      if coverage == 0 {
+        continue;
+      }
+
+      let world_x = min_x + x as f32 + 0.5;
+      let mut point = Point::from_xy(world_x, world_y);
+      inv_transform.map_point(&mut point);
+
+      let mut t = match solve_two_circle_t(point, *c0, *r0, *c1, *r1) {
+        Some(value) if value.is_finite() => value,
+        _ => continue,
+      };
+      t = apply_spread_mode(t, *spread);
+
+      let color = sample_color_stops(stops, t);
+      let alpha = (color.a * (coverage as f32 / 255.0)).clamp(0.0, 1.0);
+      if alpha <= 0.0 {
+        continue;
+      }
+      let pm_a = (alpha * 255.0).round().clamp(0.0, 255.0) as u8;
+      let pm_r = ((color.r as f32) * alpha).round().clamp(0.0, 255.0) as u8;
+      let pm_g = ((color.g as f32) * alpha).round().clamp(0.0, 255.0) as u8;
+      let pm_b = ((color.b as f32) * alpha).round().clamp(0.0, 255.0) as u8;
+      layer_data[idx] = PremultipliedColorU8::from_rgba(pm_r, pm_g, pm_b, pm_a)
+        .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+    }
+  }
+
+  let paint = PixmapPaint {
+    opacity: 1.0,
+    blend_mode: command.blend_mode,
+    ..Default::default()
+  };
+  target.draw_pixmap(0, 0, layer.as_ref(), &paint, Transform::identity(), None);
+
+  Some(())
 }
 
 fn render_sweep_gradient(
@@ -1246,6 +1341,48 @@ fn render_sweep_gradient(
   Some(())
 }
 
+fn solve_two_circle_t(point: Point, c0: Point, r0: f32, c1: Point, r1: f32) -> Option<f32> {
+  // Solve |P - (C0 + t*(C1-C0))| = r0 + t*(r1-r0) for t, i.e. find the
+  // parameter where the point lies on the circle interpolated between C0/r0 and
+  // C1/r1.
+  let dx = c1.x - c0.x;
+  let dy = c1.y - c0.y;
+  let dr = r1 - r0;
+  let px = point.x - c0.x;
+  let py = point.y - c0.y;
+
+  let a = dx * dx + dy * dy - dr * dr;
+  let b = -2.0 * (px * dx + py * dy + r0 * dr);
+  let c = px * px + py * py - r0 * r0;
+
+  if a.abs() < 1e-6 {
+    if b.abs() < 1e-6 {
+      return None;
+    }
+    return Some(-c / b);
+  }
+
+  let disc = (b * b - 4.0 * a * c).max(0.0);
+  let sqrt_disc = disc.sqrt();
+  let denom = 2.0 * a;
+  if denom.abs() < 1e-6 {
+    return None;
+  }
+  let t0 = (-b - sqrt_disc) / denom;
+  let t1 = (-b + sqrt_disc) / denom;
+  let t = if t0.abs() <= t1.abs() { t0 } else { t1 };
+  Some(t)
+}
+
+fn color_from_rgba(color: Rgba) -> Color {
+  Color::from_rgba8(
+    color.r,
+    color.g,
+    color.b,
+    (color.a * 255.0).round().clamp(0.0, 255.0) as u8,
+  )
+}
+
 fn resolve_color(color: Rgba, alpha: F2Dot14) -> Color {
   let a = (color.a * alpha.to_f32()).clamp(0.0, 1.0);
   Color::from_rgba8(color.r, color.g, color.b, (a * 255.0).round() as u8)
@@ -1262,22 +1399,19 @@ fn resolve_color_line(
   line: ColorLine<'_>,
   palette: &[Rgba],
   text_color: Rgba,
-) -> Option<(SpreadMode, Vec<GradientStop>)> {
+) -> Option<ResolvedColorLine> {
   let spread = match map_spread(line.extend()) {
     Some(s) => s,
     None => return None,
   };
   let mut stops = Vec::with_capacity(line.num_stops() as usize);
   for stop in line.color_stops() {
-    stops.push(GradientStop::new(
-      stop.stop_offset().to_f32(),
-      resolve_color(
-        resolve_palette_color(stop.palette_index(), palette, text_color),
-        stop.alpha(),
-      ),
-    ));
+    stops.push(ColorStop {
+      offset: stop.stop_offset().to_f32(),
+      color: resolve_rgba_color(stop.palette_index(), stop.alpha(), palette, text_color),
+    });
   }
-  Some((spread, stops))
+  Some(ResolvedColorLine::new(spread, stops))
 }
 
 fn resolve_var_color_line(
@@ -1285,7 +1419,7 @@ fn resolve_var_color_line(
   palette: &[Rgba],
   text_color: Rgba,
   variations: Option<&VariationInfo<'_>>,
-) -> Option<(SpreadMode, Vec<GradientStop>)> {
+) -> Option<ResolvedColorLine> {
   let spread = match map_spread(line.extend()) {
     Some(s) => s,
     None => return None,
@@ -1301,12 +1435,12 @@ fn resolve_var_color_line(
       .as_ref()
       .map(|variation| F2Dot14::from_f32(variation.f2dot14(stop.alpha(), var_index + 1)))
       .unwrap_or_else(|| stop.alpha());
-    stops.push(GradientStop::new(
+    stops.push(ColorStop {
       offset,
-      resolve_color(resolve_palette_color(stop.palette_index(), palette, text_color), alpha),
-    ));
+      color: resolve_rgba_color(stop.palette_index(), alpha, palette, text_color),
+    });
   }
-  Some((spread, stops))
+  Some(ResolvedColorLine::new(spread, stops))
 }
 
 fn resolve_color_line_rgba(

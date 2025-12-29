@@ -264,7 +264,7 @@ mod tests {
     }];
     let inline_text = FragmentNode::new_text(
       Rect::from_xywh(0.0, 0.0, 10.0, 5.0),
-      "Inline fallback".into(),
+      Arc::<str>::from("Inline fallback"),
       0.0,
     );
     let mut inline_fragment =

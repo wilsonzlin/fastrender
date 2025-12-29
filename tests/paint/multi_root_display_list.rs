@@ -12,7 +12,7 @@ fn display_lists_include_additional_fragment_roots() {
 
   let root_text = FragmentNode::new_text_styled(
     Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
-    "root".into(),
+    Arc::<str>::from("root"),
     0.0,
     text_style.clone(),
   );
@@ -20,7 +20,7 @@ fn display_lists_include_additional_fragment_roots() {
 
   let extra_text = FragmentNode::new_text_styled(
     Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
-    "extra".into(),
+    Arc::<str>::from("extra"),
     0.0,
     text_style,
   );
