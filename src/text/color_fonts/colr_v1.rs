@@ -14,6 +14,8 @@ use tiny_skia::{
   Point, Rect, SpreadMode, Transform,
 };
 
+const RASTER_PAD: f32 = 1.0;
+
 /// Render a COLRv1 paint graph for the given glyph.
 pub fn render_colr_glyph(
   font: &LoadedFont,
@@ -90,42 +92,7 @@ pub fn render_colr_glyph(
     return None;
   }
 
-  let mut min_x = f32::MAX;
-  let mut min_y = f32::MAX;
-  let mut max_x = f32::MIN;
-  let mut max_y = f32::MIN;
-
-  for command in &commands {
-    let bounds = command.path.bounds();
-    min_x = min_x.min(bounds.left());
-    min_y = min_y.min(bounds.top());
-    max_x = max_x.max(bounds.right());
-    max_y = max_y.max(bounds.bottom());
-  }
-
-  if let Some(clip) = &clip_path {
-    let bounds = clip.bounds();
-    min_x = min_x.min(bounds.left());
-    min_y = min_y.min(bounds.top());
-    max_x = max_x.max(bounds.right());
-    max_y = max_y.max(bounds.bottom());
-  }
-
-  if !min_x.is_finite()
-    || !min_y.is_finite()
-    || !max_x.is_finite()
-    || !max_y.is_finite()
-    || min_x >= max_x
-    || min_y >= max_y
-  {
-    return None;
-  }
-
-  let pad = 1.0;
-  min_x = (min_x - pad).floor();
-  min_y = (min_y - pad).floor();
-  max_x = (max_x + pad).ceil();
-  max_y = (max_y + pad).ceil();
+  let (min_x, min_y, max_x, max_y) = raster_bounds(&commands, clip_path.as_ref(), RASTER_PAD)?;
 
   let width = round_dimension(max_x - min_x)?;
   let height = round_dimension(max_y - min_y)?;
@@ -159,6 +126,56 @@ pub fn render_colr_glyph(
     left: min_x,
     top: min_y,
   })
+}
+
+/// Compute padded raster bounds from painted commands, intersecting them with a clip path if
+/// present so generous base glyph clips don't force oversize pixmaps.
+fn raster_bounds(
+  commands: &[DrawCommand],
+  clip_path: Option<&Path>,
+  pad: f32,
+) -> Option<(f32, f32, f32, f32)> {
+  if commands.is_empty() {
+    return None;
+  }
+
+  let mut min_x = f32::MAX;
+  let mut min_y = f32::MAX;
+  let mut max_x = f32::MIN;
+  let mut max_y = f32::MIN;
+
+  for command in commands {
+    let bounds = command.path.bounds();
+    min_x = min_x.min(bounds.left());
+    min_y = min_y.min(bounds.top());
+    max_x = max_x.max(bounds.right());
+    max_y = max_y.max(bounds.bottom());
+  }
+
+  if let Some(clip) = clip_path {
+    let bounds = clip.bounds();
+    min_x = min_x.max(bounds.left());
+    min_y = min_y.max(bounds.top());
+    max_x = max_x.min(bounds.right());
+    max_y = max_y.min(bounds.bottom());
+  }
+
+  if !min_x.is_finite()
+    || !min_y.is_finite()
+    || !max_x.is_finite()
+    || !max_y.is_finite()
+    || min_x >= max_x
+    || min_y >= max_y
+  {
+    return None;
+  }
+
+  let min_x = (min_x - pad).floor();
+  let min_y = (min_y - pad).floor();
+  let max_x = (max_x + pad).ceil();
+  let max_y = (max_y + pad).ceil();
+
+  Some((min_x, min_y, max_x, max_y))
 }
 
 struct Renderer<'a, 'b> {
@@ -1146,5 +1163,56 @@ impl ttf_parser::OutlineBuilder for GlyphOutlineBuilder {
 
   fn close(&mut self) {
     self.builder.close();
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::{raster_bounds, Brush, DrawCommand, RASTER_PAD};
+  use tiny_skia::{BlendMode, Color, Path, PathBuilder};
+
+  fn rect_path(left: f32, top: f32, right: f32, bottom: f32) -> Path {
+    let mut builder = PathBuilder::new();
+    builder.move_to(left, top);
+    builder.line_to(right, top);
+    builder.line_to(right, bottom);
+    builder.line_to(left, bottom);
+    builder.close();
+    builder.finish().unwrap()
+  }
+
+  #[test]
+  fn clip_bounds_intersection_limits_allocation() {
+    let commands = vec![DrawCommand {
+      path: rect_path(10.0, 10.0, 20.0, 20.0),
+      brush: Brush::Solid(Color::from_rgba8(0, 0, 0, 255)),
+      blend_mode: BlendMode::SourceOver,
+    }];
+    let large_clip = rect_path(-1000.0, -1000.0, 1000.0, 1000.0);
+
+    let (min_x, min_y, max_x, max_y) =
+      raster_bounds(&commands, Some(&large_clip), RASTER_PAD).expect("bounds");
+
+    assert_eq!(min_x, 9.0);
+    assert_eq!(min_y, 9.0);
+    assert_eq!(max_x, 21.0);
+    assert_eq!(max_y, 21.0);
+    assert_eq!(max_x - min_x, 12.0);
+    assert_eq!(max_y - min_y, 12.0);
+  }
+
+  #[test]
+  fn clip_bounds_without_overlap_returns_none() {
+    let commands = vec![DrawCommand {
+      path: rect_path(0.0, 0.0, 5.0, 5.0),
+      brush: Brush::Solid(Color::from_rgba8(0, 0, 0, 255)),
+      blend_mode: BlendMode::SourceOver,
+    }];
+    let disjoint_clip = rect_path(10.0, 10.0, 15.0, 15.0);
+
+    assert!(
+      raster_bounds(&commands, Some(&disjoint_clip), RASTER_PAD).is_none(),
+      "clip should cull non-overlapping paints"
+    );
   }
 }
