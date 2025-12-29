@@ -22,8 +22,8 @@
 //! # }
 //! ```
 
-use crate::error::{Error, ImageError, ResourceError, Result};
-use crate::render_control;
+use crate::error::{Error, ImageError, RenderError, RenderStage, ResourceError, Result};
+use crate::render_control::{self, check_active_periodic};
 use brotli::Decompressor;
 use flate2::read::{DeflateDecoder, GzDecoder, ZlibDecoder};
 use http::HeaderMap;
@@ -422,6 +422,9 @@ const SUPPORTED_ACCEPT_ENCODING: &str = "gzip, deflate, br";
 
 /// Slack applied to deadline-derived HTTP timeouts to allow minor scheduling jitter.
 const RENDER_DEADLINE_TIMEOUT_SLACK: Duration = Duration::from_millis(50);
+
+/// Stride for cooperative deadline checks while decoding compressed bodies.
+const CONTENT_DECODE_DEADLINE_STRIDE: usize = 16;
 
 /// Allowed URL schemes for resource fetching.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1245,6 +1248,7 @@ impl HttpFetcher {
         .get("content-type")
         .and_then(|h| h.to_str().ok())
         .map(|s| s.to_string());
+      let decode_stage = decode_stage_for_content_type(content_type.as_deref());
       let etag = response
         .headers()
         .get("etag")
@@ -1267,7 +1271,8 @@ impl HttpFetcher {
 
       match body_result {
         Ok(bytes) => {
-          let bytes = match decode_content_encodings(bytes, &encodings, allowed_limit) {
+          let bytes = match decode_content_encodings(bytes, &encodings, allowed_limit, decode_stage)
+          {
             Ok(decoded) => decoded,
             Err(ContentDecodeError::DecompressionFailed { .. }) if accept_encoding.is_none() => {
               return self.fetch_http_with_accept(&current, Some("identity"), validators);
@@ -2283,11 +2288,37 @@ fn parse_content_encodings(headers: &HeaderMap) -> Vec<String> {
     .collect()
 }
 
+fn decode_stage_for_content_type(content_type: Option<&str>) -> RenderStage {
+  let mime = content_type
+    .and_then(|ct| ct.split(';').next())
+    .map(|ct| ct.trim().to_ascii_lowercase())
+    .unwrap_or_else(String::new);
+
+  if mime.contains("text/css") || mime.contains("font/") {
+    return RenderStage::Css;
+  }
+  if mime.contains("html") {
+    return RenderStage::DomParse;
+  }
+  RenderStage::Paint
+}
+
 #[derive(Debug)]
 enum ContentDecodeError {
   UnsupportedEncoding(String),
-  DecompressionFailed { encoding: String, source: io::Error },
-  SizeLimitExceeded { decoded: usize, limit: usize },
+  DecompressionFailed {
+    encoding: String,
+    source: io::Error,
+  },
+  SizeLimitExceeded {
+    decoded: usize,
+    limit: usize,
+  },
+  DeadlineExceeded {
+    encoding: String,
+    stage: RenderStage,
+    elapsed: Duration,
+  },
 }
 
 impl std::fmt::Display for ContentDecodeError {
@@ -2301,6 +2332,14 @@ impl std::fmt::Display for ContentDecodeError {
         f,
         "decoded body exceeds limit ({} > {} bytes)",
         decoded, limit
+      ),
+      Self::DeadlineExceeded {
+        encoding,
+        stage,
+        elapsed,
+      } => write!(
+        f,
+        "rendering timed out during {stage} while decompressing {encoding} after {elapsed:?}"
       ),
     }
   }
@@ -2322,6 +2361,7 @@ fn decode_content_encodings(
   body: Vec<u8>,
   encodings: &[String],
   limit: usize,
+  stage: RenderStage,
 ) -> std::result::Result<Vec<u8>, ContentDecodeError> {
   if encodings.is_empty() {
     ensure_within_limit(body.len(), limit)?;
@@ -2330,7 +2370,7 @@ fn decode_content_encodings(
 
   let mut decoded = body;
   for encoding in encodings.iter().rev() {
-    decoded = decode_single_encoding(encoding, &decoded, limit)?;
+    decoded = decode_single_encoding(encoding, &decoded, limit, stage)?;
   }
 
   Ok(decoded)
@@ -2340,25 +2380,43 @@ fn decode_single_encoding(
   encoding: &str,
   input: &[u8],
   limit: usize,
+  stage: RenderStage,
 ) -> std::result::Result<Vec<u8>, ContentDecodeError> {
   match encoding {
     "" | "identity" => {
       ensure_within_limit(input.len(), limit)?;
       Ok(input.to_vec())
     }
-    "gzip" => decode_with_reader("gzip", GzDecoder::new(Cursor::new(input)), limit),
-    "deflate" => decode_deflate(input, limit),
-    "br" => decode_with_reader("br", Decompressor::new(Cursor::new(input), 4096), limit),
+    "gzip" => decode_with_reader("gzip", GzDecoder::new(Cursor::new(input)), limit, stage),
+    "deflate" => decode_deflate(input, limit, stage),
+    "br" => decode_with_reader(
+      "br",
+      Decompressor::new(Cursor::new(input), 4096),
+      limit,
+      stage,
+    ),
     other => Err(ContentDecodeError::UnsupportedEncoding(other.to_string())),
   }
 }
 
-fn decode_deflate(input: &[u8], limit: usize) -> std::result::Result<Vec<u8>, ContentDecodeError> {
-  match decode_with_reader("deflate", ZlibDecoder::new(Cursor::new(input)), limit) {
+fn decode_deflate(
+  input: &[u8],
+  limit: usize,
+  stage: RenderStage,
+) -> std::result::Result<Vec<u8>, ContentDecodeError> {
+  match decode_with_reader(
+    "deflate",
+    ZlibDecoder::new(Cursor::new(input)),
+    limit,
+    stage,
+  ) {
     Ok(decoded) => Ok(decoded),
-    Err(ContentDecodeError::DecompressionFailed { .. }) => {
-      decode_with_reader("deflate", DeflateDecoder::new(Cursor::new(input)), limit)
-    }
+    Err(ContentDecodeError::DecompressionFailed { .. }) => decode_with_reader(
+      "deflate",
+      DeflateDecoder::new(Cursor::new(input)),
+      limit,
+      stage,
+    ),
     Err(err) => Err(err),
   }
 }
@@ -2367,11 +2425,28 @@ fn decode_with_reader<R: Read>(
   encoding: &str,
   mut reader: R,
   limit: usize,
+  stage: RenderStage,
 ) -> std::result::Result<Vec<u8>, ContentDecodeError> {
   let mut decoded = Vec::new();
   let mut buf = [0u8; 8192];
+  let mut deadline_counter = 0usize;
 
   loop {
+    if let Err(err) =
+      check_active_periodic(&mut deadline_counter, CONTENT_DECODE_DEADLINE_STRIDE, stage)
+    {
+      if let RenderError::Timeout { stage, elapsed } = err {
+        return Err(ContentDecodeError::DeadlineExceeded {
+          encoding: encoding.to_string(),
+          stage,
+          elapsed,
+        });
+      }
+      return Err(ContentDecodeError::DecompressionFailed {
+        encoding: encoding.to_string(),
+        source: io::Error::new(io::ErrorKind::Other, err.to_string()),
+      });
+    }
     let read = reader
       .read(&mut buf)
       .map_err(|source| ContentDecodeError::DecompressionFailed {

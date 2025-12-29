@@ -5,10 +5,8 @@
 
 use crate::api::{RenderDiagnostics, ResourceContext, ResourceKind};
 use crate::debug::runtime;
-use crate::error::Error;
-use crate::error::ImageError;
-use crate::error::RenderError;
-use crate::error::Result;
+use crate::error::{Error, ImageError, RenderError, RenderStage, Result};
+use crate::render_control::{check_active, check_active_periodic};
 use crate::resource::CachingFetcher;
 use crate::resource::CachingFetcherConfig;
 use crate::resource::FetchedResource;
@@ -95,6 +93,19 @@ fn record_image_cache_miss() {
       stats.cache_misses += 1;
     }
   });
+}
+
+const IMAGE_DECODE_DEADLINE_STRIDE: usize = 8192;
+
+enum AvifDecodeError {
+  Timeout(RenderError),
+  Image(image::ImageError),
+}
+
+impl From<RenderError> for AvifDecodeError {
+  fn from(err: RenderError) -> Self {
+    Self::Timeout(err)
+  }
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
@@ -1536,6 +1547,7 @@ impl ImageCache {
 
     self.enforce_svg_resource_policy(svg_content, url)?;
     self.enforce_decode_limits(render_width, render_height, url)?;
+    check_active(RenderStage::Paint).map_err(Error::Render)?;
 
     let key = svg_pixmap_key(svg_content, render_width, render_height);
     if let Ok(cache) = self.svg_pixmap_cache.lock() {
@@ -1602,7 +1614,9 @@ impl ImageCache {
         tiny_skia::Transform::from_scale(scale_x, scale_y)
       }
     };
+    check_active(RenderStage::Paint).map_err(Error::Render)?;
     resvg::render(&tree, transform, &mut pixmap.as_mut());
+    check_active(RenderStage::Paint).map_err(Error::Render)?;
 
     let pixmap = Arc::new(pixmap);
     if let Ok(mut cache) = self.svg_pixmap_cache.lock() {
@@ -1683,6 +1697,7 @@ impl ImageCache {
   )> {
     let bytes = &resource.bytes;
     let content_type = resource.content_type.as_deref();
+    check_active(RenderStage::Paint).map_err(Error::Render)?;
 
     // Check if this is SVG
     let mime_is_svg = content_type
@@ -1810,6 +1825,7 @@ impl ImageCache {
     content_type: Option<&str>,
     url: &str,
   ) -> Result<DynamicImage> {
+    check_active(RenderStage::Paint).map_err(Error::Render)?;
     let format_from_content_type = Self::format_from_content_type(content_type);
     let sniffed_format = Self::sniff_image_format(bytes);
     if let Some((width, height)) =
@@ -1817,38 +1833,42 @@ impl ImageCache {
     {
       self.enforce_decode_limits(width, height, url)?;
     }
-    let mut last_error: Option<image::ImageError> = None;
+    let mut last_error: Option<Error> = None;
 
     if matches!(format_from_content_type, Some(ImageFormat::Avif))
       || matches!(sniffed_format, Some(ImageFormat::Avif))
     {
       match Self::decode_avif(bytes) {
         Ok(img) => return self.finish_bitmap_decode(img, url),
-        Err(err) => last_error = Some(err),
+        Err(AvifDecodeError::Timeout(err)) => return Err(Error::Render(err)),
+        Err(AvifDecodeError::Image(err)) => last_error = Some(self.decode_error(url, err)),
       }
     }
 
     if let Some(format) = format_from_content_type {
       if format != ImageFormat::Avif {
+        check_active(RenderStage::Paint).map_err(Error::Render)?;
         match image::load_from_memory_with_format(bytes, format) {
           Ok(img) => return self.finish_bitmap_decode(img, url),
-          Err(err) => last_error = Some(err),
+          Err(err) => last_error = Some(self.decode_error(url, err)),
         }
       }
     }
 
     if let Some(format) = sniffed_format {
       if Some(format) != format_from_content_type && format != ImageFormat::Avif {
+        check_active(RenderStage::Paint).map_err(Error::Render)?;
         match image::load_from_memory_with_format(bytes, format) {
           Ok(img) => return self.finish_bitmap_decode(img, url),
-          Err(err) => last_error = Some(err),
+          Err(err) => last_error = Some(self.decode_error(url, err)),
         }
       }
     }
 
+    check_active(RenderStage::Paint).map_err(Error::Render)?;
     match image::load_from_memory(bytes) {
       Ok(img) => self.finish_bitmap_decode(img, url),
-      Err(err) => Err(self.decode_error(url, last_error.unwrap_or(err))),
+      Err(err) => Err(last_error.unwrap_or_else(|| self.decode_error(url, err))),
     }
   }
 
@@ -1940,26 +1960,43 @@ impl ImageCache {
     Ok(())
   }
 
-  fn decode_avif(bytes: &[u8]) -> std::result::Result<DynamicImage, image::ImageError> {
-    let decoder = AvifDecoder::from_avif(bytes).map_err(|err| Self::avif_error(err))?;
-    let image = decoder.to_image().map_err(|err| Self::avif_error(err))?;
-    Self::avif_image_to_dynamic(image)
+  fn decode_avif(bytes: &[u8]) -> std::result::Result<DynamicImage, AvifDecodeError> {
+    check_active(RenderStage::Paint).map_err(AvifDecodeError::from)?;
+    let decoder =
+      AvifDecoder::from_avif(bytes).map_err(|err| AvifDecodeError::Image(Self::avif_error(err)))?;
+    check_active(RenderStage::Paint).map_err(AvifDecodeError::from)?;
+    let image = decoder
+      .to_image()
+      .map_err(|err| AvifDecodeError::Image(Self::avif_error(err)))?;
+    let mut deadline_counter = 0usize;
+    check_active(RenderStage::Paint).map_err(AvifDecodeError::from)?;
+    Self::avif_image_to_dynamic(image, &mut deadline_counter)
   }
 
   fn avif_image_to_dynamic(
     image: AvifImage,
-  ) -> std::result::Result<DynamicImage, image::ImageError> {
+    deadline_counter: &mut usize,
+  ) -> std::result::Result<DynamicImage, AvifDecodeError> {
     let dimension_error = || {
-      image::ImageError::Parameter(image::error::ParameterError::from_kind(
-        image::error::ParameterErrorKind::DimensionMismatch,
+      AvifDecodeError::Image(image::ImageError::Parameter(
+        image::error::ParameterError::from_kind(
+          image::error::ParameterErrorKind::DimensionMismatch,
+        ),
       ))
     };
 
     match image {
       AvifImage::Rgb8(img) => {
-        let (width, height) = Self::avif_dimensions(img.width(), img.height())?;
+        let (width, height) =
+          Self::avif_dimensions(img.width(), img.height()).map_err(AvifDecodeError::Image)?;
         let mut buf = Vec::with_capacity(width as usize * height as usize * 3);
         for px in img.buf() {
+          check_active_periodic(
+            deadline_counter,
+            IMAGE_DECODE_DEADLINE_STRIDE,
+            RenderStage::Paint,
+          )
+          .map_err(AvifDecodeError::from)?;
           buf.extend_from_slice(&[px.r, px.g, px.b]);
         }
         image::RgbImage::from_vec(width, height, buf)
@@ -1967,9 +2004,16 @@ impl ImageCache {
           .ok_or_else(dimension_error)
       }
       AvifImage::Rgb16(img) => {
-        let (width, height) = Self::avif_dimensions(img.width(), img.height())?;
+        let (width, height) =
+          Self::avif_dimensions(img.width(), img.height()).map_err(AvifDecodeError::Image)?;
         let mut buf = Vec::with_capacity(width as usize * height as usize * 3);
         for px in img.buf() {
+          check_active_periodic(
+            deadline_counter,
+            IMAGE_DECODE_DEADLINE_STRIDE,
+            RenderStage::Paint,
+          )
+          .map_err(AvifDecodeError::from)?;
           buf.extend_from_slice(&[px.r, px.g, px.b]);
         }
         image::ImageBuffer::from_vec(width, height, buf)
@@ -1977,9 +2021,16 @@ impl ImageCache {
           .ok_or_else(dimension_error)
       }
       AvifImage::Rgba8(img) => {
-        let (width, height) = Self::avif_dimensions(img.width(), img.height())?;
+        let (width, height) =
+          Self::avif_dimensions(img.width(), img.height()).map_err(AvifDecodeError::Image)?;
         let mut buf = Vec::with_capacity(width as usize * height as usize * 4);
         for px in img.buf() {
+          check_active_periodic(
+            deadline_counter,
+            IMAGE_DECODE_DEADLINE_STRIDE,
+            RenderStage::Paint,
+          )
+          .map_err(AvifDecodeError::from)?;
           buf.extend_from_slice(&[px.r, px.g, px.b, px.a]);
         }
         image::RgbaImage::from_vec(width, height, buf)
@@ -1987,9 +2038,16 @@ impl ImageCache {
           .ok_or_else(dimension_error)
       }
       AvifImage::Rgba16(img) => {
-        let (width, height) = Self::avif_dimensions(img.width(), img.height())?;
+        let (width, height) =
+          Self::avif_dimensions(img.width(), img.height()).map_err(AvifDecodeError::Image)?;
         let mut buf = Vec::with_capacity(width as usize * height as usize * 4);
         for px in img.buf() {
+          check_active_periodic(
+            deadline_counter,
+            IMAGE_DECODE_DEADLINE_STRIDE,
+            RenderStage::Paint,
+          )
+          .map_err(AvifDecodeError::from)?;
           buf.extend_from_slice(&[px.r, px.g, px.b, px.a]);
         }
         image::ImageBuffer::from_vec(width, height, buf)
@@ -1997,9 +2055,16 @@ impl ImageCache {
           .ok_or_else(dimension_error)
       }
       AvifImage::Gray8(img) => {
-        let (width, height) = Self::avif_dimensions(img.width(), img.height())?;
+        let (width, height) =
+          Self::avif_dimensions(img.width(), img.height()).map_err(AvifDecodeError::Image)?;
         let mut buf = Vec::with_capacity(width as usize * height as usize);
         for px in img.buf() {
+          check_active_periodic(
+            deadline_counter,
+            IMAGE_DECODE_DEADLINE_STRIDE,
+            RenderStage::Paint,
+          )
+          .map_err(AvifDecodeError::from)?;
           buf.push(px.value());
         }
         image::ImageBuffer::from_vec(width, height, buf)
@@ -2007,9 +2072,16 @@ impl ImageCache {
           .ok_or_else(dimension_error)
       }
       AvifImage::Gray16(img) => {
-        let (width, height) = Self::avif_dimensions(img.width(), img.height())?;
+        let (width, height) =
+          Self::avif_dimensions(img.width(), img.height()).map_err(AvifDecodeError::Image)?;
         let mut buf = Vec::with_capacity(width as usize * height as usize);
         for px in img.buf() {
+          check_active_periodic(
+            deadline_counter,
+            IMAGE_DECODE_DEADLINE_STRIDE,
+            RenderStage::Paint,
+          )
+          .map_err(AvifDecodeError::from)?;
           buf.push(px.value());
         }
         image::ImageBuffer::from_vec(width, height, buf)
@@ -2160,6 +2232,7 @@ impl ImageCache {
     const DEFAULT_WIDTH: f32 = 300.0;
     const DEFAULT_HEIGHT: f32 = 150.0;
 
+    check_active(RenderStage::Paint).map_err(Error::Render)?;
     let (meta_width, meta_height, meta_ratio, aspect_ratio_none) =
       svg_intrinsic_metadata(svg_content).unwrap_or((None, None, None, false));
 
@@ -2213,6 +2286,7 @@ impl ImageCache {
     let render_height = target_height.max(1.0).round() as u32;
 
     self.enforce_decode_limits(render_width, render_height, url)?;
+    check_active(RenderStage::Paint).map_err(Error::Render)?;
 
     // Render SVG to pixmap, scaling to the target intrinsic dimensions when needed
     let mut pixmap = tiny_skia::Pixmap::new(render_width, render_height).ok_or(Error::Render(
@@ -2235,7 +2309,9 @@ impl ImageCache {
       let translate_y = (render_height_f - source_height * scale) * 0.5;
       tiny_skia::Transform::from_row(scale, 0.0, 0.0, scale, translate_x, translate_y)
     };
+    check_active(RenderStage::Paint).map_err(Error::Render)?;
     resvg::render(&tree, transform, &mut pixmap.as_mut());
+    check_active(RenderStage::Paint).map_err(Error::Render)?;
 
     // Convert pixmap to image
     let rgba_data = pixmap.take();
