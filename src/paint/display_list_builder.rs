@@ -2756,7 +2756,7 @@ impl DisplayListBuilder {
       fragment
     };
 
-    for child in &html.children {
+    for child in html.children.iter() {
       if let Some(style) = child.style.clone() {
         if Self::has_paintable_background(&style) {
           return Some(style);
