@@ -3628,6 +3628,35 @@ fn reorder_runs(runs: &mut [ShapedRun], paragraphs: &[ParagraphBoundary]) {
 // Cluster Mapping
 // ============================================================================
 
+#[cfg(test)]
+static CLUSTER_MAP_CHAR_ITERATIONS: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(test)]
+#[inline]
+fn reset_cluster_map_char_iterations() {
+  CLUSTER_MAP_CHAR_ITERATIONS.store(0, Ordering::Relaxed);
+}
+
+#[cfg(not(test))]
+#[inline]
+fn reset_cluster_map_char_iterations() {}
+
+#[cfg(test)]
+#[inline]
+fn record_cluster_map_char_iteration() {
+  CLUSTER_MAP_CHAR_ITERATIONS.fetch_add(1, Ordering::Relaxed);
+}
+
+#[cfg(not(test))]
+#[inline]
+fn record_cluster_map_char_iteration() {}
+
+#[cfg(test)]
+#[inline]
+fn cluster_map_char_iterations() -> usize {
+  CLUSTER_MAP_CHAR_ITERATIONS.load(Ordering::Relaxed)
+}
+
 /// Maps between character positions and glyph positions.
 ///
 /// Needed for hit testing, selection, and cursor positioning.
@@ -3642,7 +3671,15 @@ pub struct ClusterMap {
 impl ClusterMap {
   /// Builds a cluster map from a shaped run.
   pub fn from_shaped_run(run: &ShapedRun) -> Self {
-    let char_count = run.text.chars().count();
+    reset_cluster_map_char_iterations();
+
+    let mut char_offsets = Vec::new();
+    for (byte_idx, _) in run.text.char_indices() {
+      record_cluster_map_char_iteration();
+      char_offsets.push(byte_idx);
+    }
+
+    let char_count = char_offsets.len();
     let glyph_count = run.glyphs.len();
 
     let mut char_to_glyph = vec![0; char_count];
@@ -3650,16 +3687,8 @@ impl ClusterMap {
 
     // Build glyph to char mapping from cluster info
     for (glyph_idx, glyph) in run.glyphs.iter().enumerate() {
-      // Find the character index for this cluster
-      let mut char_idx = 0;
-      let mut byte_idx = 0;
-      for ch in run.text.chars() {
-        if byte_idx >= glyph.cluster as usize {
-          break;
-        }
-        byte_idx += ch.len_utf8();
-        char_idx += 1;
-      }
+      let cluster = glyph.cluster as usize;
+      let char_idx = char_offsets.partition_point(|&offset| offset < cluster);
       glyph_to_char[glyph_idx] = char_idx.min(char_count.saturating_sub(1));
     }
 
@@ -3902,6 +3931,76 @@ mod tests {
 
     assert!(a_level.is_ltr(), "latin char should be LTR");
     assert!(hebrew_level.is_rtl(), "hebrew char should be RTL");
+  }
+
+  #[test]
+  fn cluster_map_construction_is_linear() {
+    let char_count = 10_000;
+    let text: String = "a".repeat(char_count);
+    let text_len = text.len();
+    let glyphs: Vec<GlyphPosition> = (0..char_count)
+      .map(|i| GlyphPosition {
+        glyph_id: i as u32,
+        cluster: i as u32,
+        x_offset: 0.0,
+        y_offset: 0.0,
+        x_advance: 1.0,
+        y_advance: 0.0,
+      })
+      .collect();
+
+    let run = ShapedRun {
+      text,
+      start: 0,
+      end: text_len,
+      glyphs,
+      direction: Direction::LeftToRight,
+      level: 0,
+      advance: char_count as f32,
+      font: Arc::new(LoadedFont {
+        id: None,
+        family: "Test".to_string(),
+        data: Arc::new(Vec::new()),
+        index: 0,
+        weight: DbFontWeight::NORMAL,
+        style: DbFontStyle::Normal,
+        stretch: DbFontStretch::Normal,
+      }),
+      font_size: 16.0,
+      baseline_shift: 0.0,
+      language: None,
+      synthetic_bold: 0.0,
+      synthetic_oblique: 0.0,
+      rotation: RunRotation::None,
+      palette_index: 0,
+      palette_overrides: Arc::new(Vec::new()),
+      palette_override_hash: 0,
+      variations: Vec::new(),
+      scale: 1.0,
+    };
+
+    reset_cluster_map_char_iterations();
+
+    let cluster_map = ClusterMap::from_shaped_run(&run);
+
+    for idx in 0..char_count {
+      assert_eq!(cluster_map.glyph_for_char(idx), Some(idx));
+      assert_eq!(cluster_map.char_for_glyph(idx), Some(idx));
+    }
+
+    let iterations = cluster_map_char_iterations();
+    assert!(
+      iterations >= char_count,
+      "expected to scan at least {} characters, got {}",
+      char_count,
+      iterations
+    );
+    assert!(
+      iterations <= char_count + 1,
+      "expected to scan characters once, got {} iterations for {} chars",
+      iterations,
+      char_count
+    );
   }
 
   #[test]
