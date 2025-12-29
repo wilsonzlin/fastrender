@@ -35,6 +35,23 @@ These env vars are read in the rendering binaries (`render_pages`, `fetch_and_re
 
 All profiling logs are best run in release builds to reflect real performance.
 
+## Perf smoke runner (offline, deterministic)
+
+For a quick, network-free perf sanity check, use the curated fixture harness:
+
+```
+cargo xtask perf-smoke [--top 5] [--output target/perf_smoke.json] \
+  [--baseline path/to/baseline.json --threshold 0.05 --fail-on-regression]
+```
+
+- Renders a fixed set of `tests/pages/fixtures/*` HTML files in **release** using bundled fonts (`FASTR_USE_BUNDLED_FONTS=1`).
+- Emits a stable JSON summary per fixture (printed to stdout and written to the output path) with:
+  - `total_ms`
+  - `timings_ms` (html_decode/dom_parse/css_inlining/css_parse/cascade/box_tree/layout/paint_build/paint_optimize/paint_rasterize/encode)
+  - `counts` (dom_nodes/styled_nodes/box_nodes/fragments)
+  - `paint` diagnostics (display_items/optimized_items/culled_items/transparent_removed/noop_removed/merged_items)
+- `--top N` prints the slowest fixtures; `--baseline` + `--fail-on-regression` gates on relative stage regressions.
+
 ## Pipeline benchmarks (Criterion)
 
 Run `cargo bench --bench perf_regressions` to exercise each stage of the rendering pipeline with fixed fixtures and bundled fonts (`tests/fixtures/fonts/DejaVuSans-subset.*`):

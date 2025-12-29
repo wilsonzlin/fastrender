@@ -22,6 +22,7 @@ These are optional wrappers for the most common loops:
   - Sharded example: `cargo xtask pageset --shard 0/4` (applies to both fetch + render; add `--no-fetch` to reuse cached pages)
 - Render one page: `cargo xtask render-page --url https://example.com --output out.png [--viewport 1200x800 --dpr 1.0 --full-page]`
 - Diff renders: `cargo xtask diff-renders --before fetches/renders/baseline --after fetches/renders/new [--output target/render-diffs]`
+- Perf smoke: `cargo xtask perf-smoke [--top 5 --baseline baseline.json --fail-on-regression]` (offline fixtures, bundled fonts, JSON summary at `target/perf_smoke.json`)
 
 `render-page` wraps `fetch_and_render` in release mode by default (add `--debug` to keep a debug build).
 

@@ -16,6 +16,7 @@ fn main() -> Result<()> {
     Commands::RenderPage(args) => run_render_page(args),
     Commands::Pageset(args) => run_pageset(args),
     Commands::DiffRenders(args) => run_diff_renders(args),
+    Commands::PerfSmoke(args) => run_perf_smoke(args),
   }
 }
 
@@ -43,6 +44,8 @@ enum Commands {
   Pageset(PagesetArgs),
   /// Compare two render outputs and write visual diffs
   DiffRenders(DiffRendersArgs),
+  /// Run the offline perf smoke harness over a curated fixture set
+  PerfSmoke(PerfSmokeArgs),
 }
 
 #[derive(Args)]
@@ -194,6 +197,33 @@ struct DiffRendersArgs {
   /// Per-channel tolerance (0 = exact match, 5-10 to ignore tiny AA differences)
   #[arg(long, default_value_t = 0)]
   threshold: u8,
+}
+
+#[derive(Args)]
+struct PerfSmokeArgs {
+  /// Print the slowest N fixtures
+  #[arg(long)]
+  top: Option<usize>,
+
+  /// Fail when any stage regresses past the threshold compared to the baseline JSON
+  #[arg(long)]
+  fail_on_regression: bool,
+
+  /// Baseline JSON path for regression detection
+  #[arg(long)]
+  baseline: Option<PathBuf>,
+
+  /// Where to write the latest JSON summary (also printed to stdout)
+  #[arg(long)]
+  output: Option<PathBuf>,
+
+  /// Relative regression threshold (0.05 = 5%)
+  #[arg(long, default_value_t = 0.05)]
+  threshold: f64,
+
+  /// Run the perf smoke binary in debug mode instead of release
+  #[arg(long)]
+  debug: bool,
 }
 
 struct DiffOutcome {
@@ -523,6 +553,37 @@ fn run_diff_renders(args: DiffRendersArgs) -> Result<()> {
       "Files only in --before (removed renders): {}",
       format_path_list(&missing_in_after)
     );
+  }
+
+  Ok(())
+}
+
+fn run_perf_smoke(args: PerfSmokeArgs) -> Result<()> {
+  let mut cmd = Command::new("cargo");
+  cmd.arg("run").arg("--quiet");
+  if !args.debug {
+    cmd.arg("--release");
+  }
+  cmd.args(["--bin", "perf_smoke", "--"]);
+  if let Some(top) = args.top {
+    cmd.args(["--top", &top.to_string()]);
+  }
+  if args.fail_on_regression {
+    cmd.arg("--fail-on-regression");
+  }
+  if let Some(baseline) = args.baseline.as_ref() {
+    cmd.args(["--baseline", &baseline.to_string_lossy()]);
+  }
+  if let Some(output) = args.output.as_ref() {
+    cmd.args(["--output", &output.to_string_lossy()]);
+  }
+  cmd.args(["--threshold", &args.threshold.to_string()]);
+
+  let status = cmd
+    .status()
+    .with_context(|| format!("failed to run {:?}", cmd.get_program()))?;
+  if !status.success() {
+    bail!("perf_smoke failed with status {status}");
   }
 
   Ok(())
