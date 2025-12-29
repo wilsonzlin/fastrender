@@ -55,3 +55,50 @@ fn inspect_reports_style_and_layout_for_selector() {
     .join()
     .expect("join test thread");
 }
+
+#[test]
+fn inspect_selector_respects_document_quirks_mode() {
+  std::thread::Builder::new()
+    .stack_size(8 * 1024 * 1024)
+    .spawn(|| {
+      let mut renderer = FastRender::new().expect("renderer");
+
+      // Missing doctype triggers quirks mode; class selectors should match ASCII case-insensitively.
+      let quirks_html = "<html><body><div class='item'></div></body></html>";
+      let quirks_dom = renderer.parse_html(quirks_html).expect("parse quirks");
+      let quirks_results = renderer
+        .inspect(
+          &quirks_dom,
+          100,
+          100,
+          InspectQuery::Selector(".ITEM".to_string()),
+        )
+        .expect("quirks inspection");
+      assert_eq!(
+        quirks_results.len(),
+        1,
+        "quirks mode should match case-insensitive classes"
+      );
+
+      // Standards mode keeps class matching case-sensitive.
+      let standards_html = "<!doctype html><html><body><div class='item'></div></body></html>";
+      let standards_dom = renderer
+        .parse_html(standards_html)
+        .expect("parse standards");
+      let standards_results = renderer
+        .inspect(
+          &standards_dom,
+          100,
+          100,
+          InspectQuery::Selector(".ITEM".to_string()),
+        )
+        .expect("standards inspection");
+      assert!(
+        standards_results.is_empty(),
+        "standards mode should keep class matching case-sensitive"
+      );
+    })
+    .expect("spawn test thread")
+    .join()
+    .expect("join test thread");
+}
