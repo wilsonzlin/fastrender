@@ -63,6 +63,7 @@ fn missing_stylesheet_keeps_rendering_with_diagnostics() {
     .find(|entry| entry.kind == ResourceKind::Stylesheet)
     .expect("stylesheet error recorded");
   assert!(stylesheet_error.url.contains("missing.css"));
+  assert_eq!(result.diagnostics.failure_stage, Some(RenderStage::Css));
 }
 
 #[test]
@@ -117,4 +118,36 @@ fn timeouts_produce_overlay_with_stage_info() {
     result.diagnostics.timeout_stage,
     Some(RenderStage::DomParse)
   );
+}
+
+#[test]
+fn invalid_stylesheet_url_records_failure_stage() {
+  let fetcher = Arc::new(AlwaysErrorFetcher::default()) as Arc<dyn ResourceFetcher>;
+  let mut renderer = FastRenderBuilder::new().fetcher(fetcher).build().unwrap();
+  let html = r#"
+    <html>
+      <head>
+        <link rel="stylesheet" href="https://example.invalid/bad.css">
+      </head>
+      <body><p>keep going</p></body>
+    </html>
+  "#;
+
+  let options = RenderOptions::new()
+    .with_viewport(40, 30)
+    .allow_partial(true);
+  let result = renderer
+    .render_html_with_stylesheets(html, "https://example.invalid/", options)
+    .expect("partial render should succeed despite stylesheet errors");
+
+  assert_eq!(result.pixmap.width(), 40);
+  assert_eq!(result.pixmap.height(), 30);
+  assert_eq!(result.diagnostics.failure_stage, Some(RenderStage::Css));
+  let stylesheet_error = result
+    .diagnostics
+    .fetch_errors
+    .iter()
+    .find(|entry| entry.kind == ResourceKind::Stylesheet)
+    .expect("stylesheet fetch error recorded");
+  assert!(stylesheet_error.url.contains("bad.css"));
 }

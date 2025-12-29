@@ -2389,13 +2389,6 @@ fn check_deadline(deadline: Option<&RenderDeadline>, stage: RenderStage) -> Resu
   Ok(())
 }
 
-fn check_css_deadline(deadline: Option<&RenderDeadline>) -> std::result::Result<(), RenderError> {
-  if let Some(limit) = deadline {
-    limit.check(RenderStage::Css)?;
-  }
-  Ok(())
-}
-
 #[cfg(test)]
 mod viewport_resolution_tests {
   use super::*;
@@ -4249,7 +4242,7 @@ impl FastRender {
       .viewport
       .unwrap_or((self.default_width, self.default_height));
 
-    let html_with_css = {
+    let html_to_render = {
       let _span = trace.span("css_inline", "style");
       let mut guard = diagnostics.lock().unwrap();
       match self.inline_stylesheets(
@@ -4261,7 +4254,18 @@ impl FastRender {
         Some(&deadline),
         stats.as_deref_mut(),
       ) {
-        Ok(inlined) => inlined,
+        Ok(inlined) => {
+          if options.allow_partial
+            && guard.failure_stage.is_none()
+            && guard
+              .fetch_errors
+              .iter()
+              .any(|entry| entry.kind == ResourceKind::Stylesheet)
+          {
+            guard.note_failure_stage(RenderStage::Css);
+          }
+          inlined
+        }
         Err(err) => {
           if options.allow_partial {
             if let RenderError::Timeout { stage, .. } = &err {
@@ -4283,23 +4287,27 @@ impl FastRender {
                 artifacts: RenderArtifacts::new(artifacts),
               });
             }
+            guard.note_failure_stage(RenderStage::Css);
+            drop(guard);
+            html
+          } else {
+            drop(guard);
+            if !had_sink {
+              self.set_diagnostics_sink(None);
+            }
+            if local_recorder.is_some() {
+              let _ = crate::image_loader::take_image_cache_diagnostics();
+              let _ = crate::paint::painter::take_paint_diagnostics();
+              let _ = crate::text::pipeline::take_text_diagnostics();
+            }
+            return Err(Error::Render(err));
           }
-          drop(guard);
-          if !had_sink {
-            self.set_diagnostics_sink(None);
-          }
-          if local_recorder.is_some() {
-            let _ = crate::image_loader::take_image_cache_diagnostics();
-            let _ = crate::paint::painter::take_paint_diagnostics();
-            let _ = crate::text::pipeline::take_text_diagnostics();
-          }
-          return Err(Error::Render(err));
         }
       }
     };
     let mut captured = RenderArtifacts::new(artifacts);
     let outputs = self.render_html_with_options_internal_with_deadline(
-      &html_with_css,
+      &html_to_render,
       options,
       Some(&mut captured),
       Some(&deadline),
@@ -4409,11 +4417,11 @@ impl FastRender {
       let context = Some(self.build_resource_context(Some(&base_url), shared_diagnostics));
       let (prev_self, prev_image, prev_font) = self.push_resource_context(context);
       let mut result = (|| -> Result<RenderReport> {
-        let html_with_css = {
+        let html_to_render = {
           let _span = trace_handle.span("css_inline", "style");
           let _deadline_guard = DeadlineGuard::install(Some(&deadline));
           let mut guard = diagnostics.lock().unwrap();
-          let inlined = match self.inline_stylesheets(
+          match self.inline_stylesheets(
             html,
             &base_url,
             options.media_type,
@@ -4422,7 +4430,18 @@ impl FastRender {
             Some(&deadline),
             stats_recorder.as_mut(),
           ) {
-            Ok(inlined) => inlined,
+            Ok(inlined) => {
+              if options.allow_partial
+                && guard.failure_stage.is_none()
+                && guard
+                  .fetch_errors
+                  .iter()
+                  .any(|entry| entry.kind == ResourceKind::Stylesheet)
+              {
+                guard.note_failure_stage(RenderStage::Css);
+              }
+              inlined
+            }
             Err(err) => {
               if options.allow_partial {
                 if let RenderError::Timeout { stage, .. } = &err {
@@ -4437,24 +4456,17 @@ impl FastRender {
                     artifacts: RenderArtifacts::new(artifacts),
                   });
                 }
+                guard.note_failure_stage(RenderStage::Css);
+                html.to_string()
+              } else {
+                return Err(Error::Render(err));
               }
-              return Err(Error::Render(err));
             }
-          };
-          if options.allow_partial
-            && guard.failure_stage.is_none()
-            && guard
-              .fetch_errors
-              .iter()
-              .any(|entry| entry.kind == ResourceKind::Stylesheet)
-          {
-            guard.note_failure_stage(RenderStage::Css);
           }
-          inlined
         };
         let mut captured = RenderArtifacts::new(artifacts);
         let outputs = self.render_html_with_options_internal_with_deadline(
-          &html_with_css,
+          &html_to_render,
           options,
           Some(&mut captured),
           Some(&deadline),
@@ -6415,146 +6427,119 @@ impl FastRender {
     mut stats: Option<&mut RenderStatsRecorder>,
   ) -> std::result::Result<String, RenderError> {
     let inlining_start = stats.as_deref().and_then(|rec| rec.timer());
-    let result = (|| {
-      check_css_deadline(deadline)?;
-      let mut css_links = extract_css_links(html, base_url, media_type)?;
-      if let Some(limit) = css_limit {
-        if css_links.len() > limit {
-          css_links.truncate(limit);
+    let mut css_links = extract_css_links(html, base_url, media_type)?;
+    if let Some(limit) = css_limit {
+      if css_links.len() > limit {
+        css_links.truncate(limit);
+      }
+    }
+    let mut seen: HashSet<String> = css_links.iter().cloned().collect();
+    for extra in extract_embedded_css_urls(html, base_url)? {
+      if seen.insert(extra.clone()) {
+        css_links.push(extra);
+      }
+    }
+
+    let mut combined_css = String::new();
+    let mut import_state = InlineImportState::new();
+
+    for css_url in css_links {
+      import_state.register_stylesheet(css_url.clone());
+      if let Some(rec) = stats.as_deref_mut() {
+        rec.record_fetch(ResourceKind::Stylesheet);
+      }
+      if let Some(ctx) = resource_context {
+        if let Err(err) = ctx.policy.allows(&css_url) {
+          diagnostics.record_message(ResourceKind::Stylesheet, &css_url, err.reason);
+          continue;
         }
       }
-      let mut seen: HashSet<String> = css_links.iter().cloned().collect();
-      for extra in extract_embedded_css_urls(html, base_url)? {
-        if seen.insert(extra.clone()) {
-          css_links.push(extra);
-        }
-      }
-
-      let mut combined_css = String::new();
-      let mut import_state = InlineImportState::new();
-
-      for css_url in css_links {
-        check_css_deadline(deadline)?;
-        import_state.register_stylesheet(css_url.clone());
-        if let Some(rec) = stats.as_deref_mut() {
-          rec.record_fetch(ResourceKind::Stylesheet);
-        }
-        if let Some(ctx) = resource_context {
-          if let Err(err) = ctx.policy.allows(&css_url) {
-            diagnostics.record_message(ResourceKind::Stylesheet, &css_url, err.reason);
-            continue;
-          }
-        }
-        check_css_deadline(deadline)?;
-        match fetcher.fetch(&css_url) {
-          Ok(res) => {
-            check_css_deadline(deadline)?;
-            if let Some(ctx) = resource_context {
-              if ctx
-                .check_allowed_with_final(
-                  ResourceKind::Stylesheet,
-                  &css_url,
-                  res.final_url.as_deref(),
-                )
-                .is_err()
-              {
-                continue;
-              }
-            }
-            let css_text = decode_css_bytes(&res.bytes, res.content_type.as_deref());
-            check_css_deadline(deadline)?;
-            let rewritten = absolutize_css_urls(&css_text, &css_url)?;
-            check_css_deadline(deadline)?;
-            let mut import_diags: Vec<(String, String)> = Vec::new();
-            let inlined = {
-              let mut import_fetch = |u: &str| -> Result<String> {
-                check_css_deadline(deadline).map_err(Error::Render)?;
-                if let Some(rec) = stats.as_deref_mut() {
-                  rec.record_fetch(ResourceKind::Stylesheet);
-                }
-                if let Some(ctx) = resource_context {
-                  if let Err(err) = ctx.policy.allows(u) {
-                    diagnostics.record_message(ResourceKind::Stylesheet, u, &err.reason);
-                    return Err(Error::Resource(ResourceError::new(
-                      u.to_string(),
-                      err.reason,
-                    )));
-                  }
-                }
-                match fetcher.fetch(u) {
-                  Ok(res) => {
-                    check_css_deadline(deadline).map_err(Error::Render)?;
-                    if let Some(ctx) = resource_context {
-                      if let Err(err) = ctx.check_allowed_with_final(
-                        ResourceKind::Stylesheet,
-                        u,
-                        res.final_url.as_deref(),
-                      ) {
-                        return Err(Error::Resource(ResourceError::new(
-                          u.to_string(),
-                          err.reason,
-                        )));
-                      }
-                    }
-                    check_css_deadline(deadline).map_err(Error::Render)?;
-                    Ok(decode_css_bytes(&res.bytes, res.content_type.as_deref()))
-                  }
-                  Err(Error::Render(RenderError::Timeout { stage, elapsed })) => {
-                    return Err(Error::Render(RenderError::Timeout { stage, elapsed }));
-                  }
-                  Err(err) => {
-                    diagnostics.record_error(ResourceKind::Stylesheet, u, &err);
-                    Err(err)
-                  }
-                }
-              };
-
-              let mut import_diag = |url: &str, reason: &str| {
-                import_diags.push((url.to_string(), reason.to_string()));
-              };
-
-              let inlined = inline_imports_with_diagnostics(
-                &rewritten,
+      match fetcher.fetch(&css_url) {
+        Ok(res) => {
+          if let Some(ctx) = resource_context {
+            if ctx
+              .check_allowed_with_final(
+                ResourceKind::Stylesheet,
                 &css_url,
-                &mut import_fetch,
-                &mut import_state,
-                &mut import_diag,
-                deadline,
-              )?;
-              check_css_deadline(deadline)?;
-              inlined
-            };
-            for (url, reason) in import_diags.drain(..) {
-              diagnostics.record_message(ResourceKind::Stylesheet, &url, &reason);
+                res.final_url.as_deref(),
+              )
+              .is_err()
+            {
+              continue;
             }
-            combined_css.push_str(&inlined);
-            combined_css.push('\n');
-            check_css_deadline(deadline)?;
           }
-          Err(Error::Render(RenderError::Timeout { stage, elapsed })) => {
-            return Err(RenderError::Timeout { stage, elapsed });
+          let css_text = decode_css_bytes(&res.bytes, res.content_type.as_deref());
+          let rewritten = absolutize_css_urls(&css_text, &css_url)?;
+          let mut import_diags: Vec<(String, String)> = Vec::new();
+          let inlined = {
+            let mut import_fetch = |u: &str| -> Result<String> {
+              if let Some(rec) = stats.as_deref_mut() {
+                rec.record_fetch(ResourceKind::Stylesheet);
+              }
+              if let Some(ctx) = resource_context {
+                if let Err(err) = ctx.policy.allows(u) {
+                  diagnostics.record_message(ResourceKind::Stylesheet, u, &err.reason);
+                  return Err(Error::Resource(ResourceError::new(
+                    u.to_string(),
+                    err.reason,
+                  )));
+                }
+              }
+              match fetcher.fetch(u) {
+                Ok(res) => {
+                  if let Some(ctx) = resource_context {
+                    if let Err(err) = ctx.check_allowed_with_final(
+                      ResourceKind::Stylesheet,
+                      u,
+                      res.final_url.as_deref(),
+                    ) {
+                      return Err(Error::Resource(ResourceError::new(
+                        u.to_string(),
+                        err.reason,
+                      )));
+                    }
+                  }
+                  Ok(decode_css_bytes(&res.bytes, res.content_type.as_deref()))
+                }
+                Err(err) => {
+                  diagnostics.record_error(ResourceKind::Stylesheet, u, &err);
+                  Err(err)
+                }
+              }
+            };
+
+            let mut import_diag = |url: &str, reason: &str| {
+              import_diags.push((url.to_string(), reason.to_string()));
+            };
+
+            inline_imports_with_diagnostics(
+              &rewritten,
+              &css_url,
+              &mut import_fetch,
+              &mut import_state,
+              &mut import_diag,
+              deadline,
+            )?
+          };
+          for (url, reason) in import_diags.drain(..) {
+            diagnostics.record_message(ResourceKind::Stylesheet, &url, &reason);
           }
-          Err(err) => diagnostics.record_error(ResourceKind::Stylesheet, &css_url, &err),
+          combined_css.push_str(&inlined);
+          combined_css.push('\n');
         }
+        Err(err) => diagnostics.record_error(ResourceKind::Stylesheet, &css_url, &err),
       }
+    }
 
-      check_css_deadline(deadline)?;
-      let output = if combined_css.is_empty() {
-        html.to_string()
-      } else {
-        check_css_deadline(deadline)?;
-        let injected = inject_css_into_html(html, &combined_css);
-        check_css_deadline(deadline)?;
-        injected
-      };
-      Ok(output)
-    })();
-
+    let output = if combined_css.is_empty() {
+      html.to_string()
+    } else {
+      inject_css_into_html(html, &combined_css)
+    };
     if let Some(rec) = stats.as_deref_mut() {
       RenderStatsRecorder::record_ms(&mut rec.stats.timings.css_inlining_ms, inlining_start);
     }
-
-    result
+    Ok(output)
   }
 
   /// Populate intrinsic sizes for replaced elements (e.g., images) using the image cache.
