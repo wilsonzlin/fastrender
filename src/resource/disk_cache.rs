@@ -33,6 +33,7 @@ pub struct DiskCacheConfig {
   /// Maximum total bytes to keep on disk. `0` disables eviction.
   pub max_bytes: u64,
   /// Maximum age for entries before they are treated as stale and re-fetched.
+  /// Also caps HTTP-provided freshness metadata when serving from disk.
   pub max_age: Option<Duration>,
 }
 
@@ -97,12 +98,11 @@ fn lock_age(lock_path: &Path) -> Option<Duration> {
 
 impl<F: ResourceFetcher> DiskCachingFetcher<F> {
   pub fn new(inner: F, cache_dir: impl Into<PathBuf>) -> Self {
-    Self::with_configs(
-      inner,
-      cache_dir,
-      CachingFetcherConfig::default(),
-      DiskCacheConfig::default(),
-    )
+    let memory_config = CachingFetcherConfig {
+      honor_http_cache_freshness: true,
+      ..CachingFetcherConfig::default()
+    };
+    Self::with_configs(inner, cache_dir, memory_config, DiskCacheConfig::default())
   }
 
   pub fn with_configs(
@@ -708,6 +708,7 @@ mod tests {
     body: Vec<u8>,
     etag: Option<String>,
     last_modified: Option<String>,
+    cache_policy: Option<HttpCachePolicy>,
   }
 
   #[derive(Clone, Debug)]
@@ -748,6 +749,7 @@ mod tests {
       resource.status = Some(resp.status);
       resource.etag = resp.etag.clone();
       resource.last_modified = resp.last_modified.clone();
+      resource.cache_policy = resp.cache_policy.clone();
       Ok(resource)
     }
 
@@ -782,12 +784,14 @@ mod tests {
         body: b"cached".to_vec(),
         etag: Some("etag1".to_string()),
         last_modified: Some("lm1".to_string()),
+        cache_policy: None,
       },
       MockResponse {
         status: 304,
         body: Vec::new(),
         etag: Some("etag2".to_string()),
         last_modified: Some("lm2".to_string()),
+        cache_policy: None,
       },
     ]);
 
@@ -998,5 +1002,44 @@ mod tests {
     );
     assert_eq!(resource.content_type.as_deref(), Some("text/plain"));
     assert_eq!(resource.final_url.as_deref(), Some(url));
+  }
+
+  #[test]
+  fn serves_fresh_entries_without_revalidation() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fetcher = ScriptedFetcher::new(vec![
+      MockResponse {
+        status: 200,
+        body: b"cached".to_vec(),
+        etag: Some("etag1".to_string()),
+        last_modified: Some("lm1".to_string()),
+        cache_policy: Some(HttpCachePolicy {
+          max_age: Some(3600),
+          ..Default::default()
+        }),
+      },
+      MockResponse {
+        status: 304,
+        body: Vec::new(),
+        etag: None,
+        last_modified: None,
+        cache_policy: None,
+      },
+    ]);
+
+    let disk = DiskCachingFetcher::new(fetcher.clone(), tmp.path());
+    let url = "https://example.com/fresh";
+
+    let first = disk.fetch(url).expect("initial fetch");
+    assert_eq!(first.bytes, b"cached");
+
+    let second = disk.fetch(url).expect("cached fetch");
+    assert_eq!(second.bytes, b"cached");
+
+    assert_eq!(
+      fetcher.calls().len(),
+      1,
+      "fresh disk entries should be served without revalidation"
+    );
   }
 }

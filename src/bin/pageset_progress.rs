@@ -12,7 +12,7 @@
 
 mod common;
 
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 use common::args::{parse_shard, ResourceAccessArgs};
 use common::render_pipeline::{
   build_render_configs, follow_client_redirects, format_error_with_chain, read_cached_document,
@@ -25,6 +25,9 @@ use fastrender::resource::normalize_user_agent_for_log;
 use fastrender::resource::parse_cached_html_meta;
 #[cfg(not(feature = "disk_cache"))]
 use fastrender::resource::CachingFetcher;
+use fastrender::resource::CachingFetcherConfig;
+#[cfg(feature = "disk_cache")]
+use fastrender::resource::DiskCacheConfig;
 #[cfg(feature = "disk_cache")]
 use fastrender::resource::DiskCachingFetcher;
 use fastrender::resource::HttpFetcher;
@@ -120,6 +123,10 @@ struct RunArgs {
   /// Override the Accept-Language header
   #[arg(long, default_value = DEFAULT_ACCEPT_LANGUAGE)]
   accept_language: String,
+
+  /// Disable serving fresh cached HTTP responses without revalidation
+  #[arg(long, action = ArgAction::SetTrue)]
+  no_http_freshness: bool,
 
   /// Maximum number of external stylesheets to fetch
   #[arg(long)]
@@ -241,6 +248,10 @@ struct WorkerArgs {
   /// Override the Accept-Language header
   #[arg(long)]
   accept_language: String,
+
+  /// Disable serving fresh cached HTTP responses without revalidation
+  #[arg(long, action = ArgAction::SetTrue)]
+  no_http_freshness: bool,
 
   /// Maximum number of external stylesheets to fetch
   #[arg(long)]
@@ -546,19 +557,21 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
   }
   log.push_str(&format!("HTML bytes: {}\n", cached.byte_len));
 
+  let http = HttpFetcher::new()
+    .with_user_agent(args.user_agent.clone())
+    .with_accept_language(args.accept_language.clone());
+  let honor_http_freshness = cfg!(feature = "disk_cache") && !args.no_http_freshness;
+  let memory_config = CachingFetcherConfig {
+    honor_http_cache_freshness: honor_http_freshness,
+    ..CachingFetcherConfig::default()
+  };
   #[cfg(feature = "disk_cache")]
-  let fetcher: std::sync::Arc<dyn ResourceFetcher> = std::sync::Arc::new(DiskCachingFetcher::new(
-    HttpFetcher::new()
-      .with_user_agent(args.user_agent.clone())
-      .with_accept_language(args.accept_language.clone()),
-    ASSET_DIR,
-  ));
+  let fetcher: std::sync::Arc<dyn ResourceFetcher> = std::sync::Arc::new(
+    DiskCachingFetcher::with_configs(http, ASSET_DIR, memory_config, DiskCacheConfig::default()),
+  );
   #[cfg(not(feature = "disk_cache"))]
-  let fetcher: std::sync::Arc<dyn ResourceFetcher> = std::sync::Arc::new(CachingFetcher::new(
-    HttpFetcher::new()
-      .with_user_agent(args.user_agent.clone())
-      .with_accept_language(args.accept_language.clone()),
-  ));
+  let fetcher: std::sync::Arc<dyn ResourceFetcher> =
+    std::sync::Arc::new(CachingFetcher::with_config(http, memory_config));
   let renderer_fetcher = std::sync::Arc::clone(&fetcher);
 
   let RenderConfigBundle {
@@ -1191,6 +1204,9 @@ fn spawn_worker(
     .arg("--diagnostics")
     .arg(format!("{:?}", diagnostics).to_ascii_lowercase());
 
+  if args.no_http_freshness {
+    cmd.arg("--no-http-freshness");
+  }
   if args.verbose {
     cmd.arg("--verbose");
   }

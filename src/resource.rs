@@ -2976,6 +2976,7 @@ mod tests {
     body: Vec<u8>,
     etag: Option<String>,
     last_modified: Option<String>,
+    cache_policy: Option<HttpCachePolicy>,
   }
 
   #[derive(Clone, Debug)]
@@ -3018,6 +3019,7 @@ mod tests {
       resource.status = Some(resp.status);
       resource.etag = resp.etag.clone();
       resource.last_modified = resp.last_modified.clone();
+      resource.cache_policy = resp.cache_policy.clone();
       Ok(resource)
     }
 
@@ -3051,12 +3053,14 @@ mod tests {
         body: b"cached".to_vec(),
         etag: Some("etag1".to_string()),
         last_modified: Some("lm1".to_string()),
+        cache_policy: None,
       },
       MockResponse {
         status: 304,
         body: Vec::new(),
         etag: None,
         last_modified: None,
+        cache_policy: None,
       },
     ]);
 
@@ -3084,18 +3088,21 @@ mod tests {
         body: b"cached".to_vec(),
         etag: Some("etag1".to_string()),
         last_modified: Some("lm1".to_string()),
+        cache_policy: None,
       },
       MockResponse {
         status: 304,
         body: Vec::new(),
         etag: Some("etag2".to_string()),
         last_modified: Some("lm2".to_string()),
+        cache_policy: None,
       },
       MockResponse {
         status: 304,
         body: Vec::new(),
         etag: None,
         last_modified: None,
+        cache_policy: None,
       },
     ]);
 
@@ -3121,5 +3128,136 @@ mod tests {
       "validators should update after 304 with new etag"
     );
     assert_eq!(calls[2].last_modified.as_deref(), Some("lm2"));
+  }
+
+  #[test]
+  fn honors_fresh_cache_control_without_revalidating() {
+    let fetcher = ScriptedFetcher::new(vec![
+      MockResponse {
+        status: 200,
+        body: b"cached".to_vec(),
+        etag: Some("etag1".to_string()),
+        last_modified: Some("lm1".to_string()),
+        cache_policy: Some(HttpCachePolicy {
+          max_age: Some(3600),
+          ..Default::default()
+        }),
+      },
+      MockResponse {
+        status: 304,
+        body: b"stale".to_vec(),
+        etag: None,
+        last_modified: None,
+        cache_policy: None,
+      },
+    ]);
+
+    let cache = CachingFetcher::with_config(
+      fetcher.clone(),
+      CachingFetcherConfig {
+        honor_http_cache_freshness: true,
+        ..CachingFetcherConfig::default()
+      },
+    );
+    let url = "http://example.com/fresh";
+
+    let first = cache.fetch(url).expect("initial fetch");
+    assert_eq!(first.bytes, b"cached");
+
+    let second = cache.fetch(url).expect("cached fetch");
+    assert_eq!(second.bytes, b"cached");
+    assert_eq!(
+      fetcher.calls().len(),
+      1,
+      "fresh cached entries should not be revalidated"
+    );
+  }
+
+  #[test]
+  fn no_cache_policy_triggers_validation_even_when_fresh() {
+    let fetcher = ScriptedFetcher::new(vec![
+      MockResponse {
+        status: 200,
+        body: b"cached".to_vec(),
+        etag: Some("etag1".to_string()),
+        last_modified: Some("lm1".to_string()),
+        cache_policy: Some(HttpCachePolicy {
+          max_age: Some(3600),
+          no_cache: true,
+          ..Default::default()
+        }),
+      },
+      MockResponse {
+        status: 304,
+        body: Vec::new(),
+        etag: None,
+        last_modified: None,
+        cache_policy: None,
+      },
+    ]);
+
+    let cache = CachingFetcher::with_config(
+      fetcher.clone(),
+      CachingFetcherConfig {
+        honor_http_cache_freshness: true,
+        ..CachingFetcherConfig::default()
+      },
+    );
+    let url = "http://example.com/no-cache";
+
+    cache.fetch(url).expect("initial fetch");
+    cache.fetch(url).expect("revalidated fetch");
+
+    let calls = fetcher.calls();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].etag, None);
+    assert_eq!(
+      calls[1].etag.as_deref(),
+      Some("etag1"),
+      "no-cache should still force conditional requests when validators exist"
+    );
+  }
+
+  #[test]
+  fn freshness_cap_limits_http_freshness() {
+    let cache = CachingFetcher::with_config(
+      ScriptedFetcher::new(vec![]),
+      CachingFetcherConfig {
+        honor_http_cache_freshness: true,
+        ..CachingFetcherConfig::default()
+      },
+    );
+
+    let stored_at = SystemTime::now()
+      .checked_sub(Duration::from_secs(2))
+      .unwrap();
+    let http_cache = CachedHttpMetadata {
+      stored_at,
+      max_age: Some(Duration::from_secs(3600)),
+      expires: None,
+      no_cache: false,
+      no_store: false,
+      must_revalidate: false,
+    };
+    let snapshot = CachedSnapshot {
+      value: CacheValue::Resource(FetchedResource::new(
+        b"cached".to_vec(),
+        Some("text/plain".to_string()),
+      )),
+      etag: Some("etag1".to_string()),
+      last_modified: Some("lm1".to_string()),
+      http_cache: Some(http_cache),
+    };
+
+    let plan = cache.plan_cache_use(
+      "http://example.com/capped",
+      Some(snapshot),
+      Some(Duration::from_secs(1)),
+    );
+
+    assert!(
+      matches!(plan.action, CacheAction::Validate { .. }),
+      "freshness cap should force validation even when HTTP max-age is longer"
+    );
   }
 }

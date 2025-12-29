@@ -10,7 +10,7 @@
 
 mod common;
 
-use clap::Parser;
+use clap::{ArgAction, Parser};
 use common::args::{
   AllowPartialArgs, BaseUrlArgs, MediaArgs, OutputFormatArgs, ResourceAccessArgs, TimeoutArgs,
   ViewportArgs,
@@ -27,6 +27,9 @@ use fastrender::resource::normalize_user_agent_for_log;
 use fastrender::resource::url_to_filename;
 #[cfg(not(feature = "disk_cache"))]
 use fastrender::resource::CachingFetcher;
+use fastrender::resource::CachingFetcherConfig;
+#[cfg(feature = "disk_cache")]
+use fastrender::resource::DiskCacheConfig;
 #[cfg(feature = "disk_cache")]
 use fastrender::resource::DiskCachingFetcher;
 use fastrender::resource::ResourceFetcher;
@@ -100,6 +103,10 @@ struct Args {
 
   #[command(flatten)]
   resource_access: ResourceAccessArgs,
+
+  /// Disable serving fresh cached HTTP responses without revalidation
+  #[arg(long, action = ArgAction::SetTrue)]
+  no_http_freshness: bool,
 
   /// Expand render target to full content size
   #[arg(long)]
@@ -236,10 +243,21 @@ fn try_main(args: Args) -> Result<()> {
   });
 
   let http = build_http_fetcher(&args.user_agent, &args.accept_language, timeout_secs);
+  let honor_http_freshness = cfg!(feature = "disk_cache") && !args.no_http_freshness;
+  let memory_config = CachingFetcherConfig {
+    honor_http_cache_freshness: honor_http_freshness,
+    ..CachingFetcherConfig::default()
+  };
   #[cfg(feature = "disk_cache")]
-  let fetcher: Arc<dyn ResourceFetcher> = Arc::new(DiskCachingFetcher::new(http, ASSET_CACHE_DIR));
+  let fetcher: Arc<dyn ResourceFetcher> = Arc::new(DiskCachingFetcher::with_configs(
+    http,
+    ASSET_CACHE_DIR,
+    memory_config,
+    DiskCacheConfig::default(),
+  ));
   #[cfg(not(feature = "disk_cache"))]
-  let fetcher: Arc<dyn ResourceFetcher> = Arc::new(CachingFetcher::new(http));
+  let fetcher: Arc<dyn ResourceFetcher> =
+    Arc::new(CachingFetcher::with_config(http, memory_config));
 
   let render_pool = FastRenderPool::with_config(
     FastRenderPoolConfig::new()

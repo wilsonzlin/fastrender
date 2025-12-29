@@ -6,7 +6,7 @@
 
 mod common;
 
-use clap::{Parser, ValueEnum};
+use clap::{ArgAction, Parser, ValueEnum};
 use common::args::ResourceAccessArgs;
 use common::render_pipeline::{
   build_render_configs, follow_client_redirects, format_error_with_chain, log_diagnostics,
@@ -21,6 +21,9 @@ use fastrender::resource::normalize_page_name;
 use fastrender::resource::normalize_user_agent_for_log;
 #[cfg(not(feature = "disk_cache"))]
 use fastrender::resource::CachingFetcher;
+use fastrender::resource::CachingFetcherConfig;
+#[cfg(feature = "disk_cache")]
+use fastrender::resource::DiskCacheConfig;
 #[cfg(feature = "disk_cache")]
 use fastrender::resource::DiskCachingFetcher;
 use fastrender::resource::HttpFetcher;
@@ -136,6 +139,10 @@ struct Args {
   /// Override the Accept-Language header
   #[arg(long, default_value = DEFAULT_ACCEPT_LANGUAGE)]
   accept_language: String,
+
+  /// Disable serving fresh cached HTTP responses without revalidation
+  #[arg(long, action = ArgAction::SetTrue)]
+  no_http_freshness: bool,
 
   /// Maximum number of external stylesheets to fetch
   #[arg(long)]
@@ -356,19 +363,24 @@ fn main() {
   }
 
   // Create shared caching fetcher
+  let http = HttpFetcher::new()
+    .with_user_agent(args.user_agent.clone())
+    .with_accept_language(args.accept_language.clone());
+  let honor_http_freshness = cfg!(feature = "disk_cache") && !args.no_http_freshness;
+  let memory_config = CachingFetcherConfig {
+    honor_http_cache_freshness: honor_http_freshness,
+    ..CachingFetcherConfig::default()
+  };
   #[cfg(feature = "disk_cache")]
-  let fetcher: Arc<dyn ResourceFetcher> = Arc::new(DiskCachingFetcher::new(
-    HttpFetcher::new()
-      .with_user_agent(args.user_agent.clone())
-      .with_accept_language(args.accept_language.clone()),
+  let fetcher: Arc<dyn ResourceFetcher> = Arc::new(DiskCachingFetcher::with_configs(
+    http,
     ASSET_DIR,
+    memory_config,
+    DiskCacheConfig::default(),
   ));
   #[cfg(not(feature = "disk_cache"))]
-  let fetcher: Arc<dyn ResourceFetcher> = Arc::new(CachingFetcher::new(
-    HttpFetcher::new()
-      .with_user_agent(args.user_agent.clone())
-      .with_accept_language(args.accept_language.clone()),
-  ));
+  let fetcher: Arc<dyn ResourceFetcher> =
+    Arc::new(CachingFetcher::with_config(http, memory_config));
 
   let (viewport_w, viewport_h) = args.viewport;
   let RenderConfigBundle { config, options } = build_render_configs(&RenderSurface {
