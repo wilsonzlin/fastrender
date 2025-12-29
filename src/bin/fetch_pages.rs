@@ -9,14 +9,15 @@ use common::args::{parse_shard, TimeoutArgs};
 use fastrender::html::encoding::decode_html_bytes;
 use fastrender::html::meta_refresh::extract_js_location_redirect;
 use fastrender::html::meta_refresh::extract_meta_refresh_url;
-use fastrender::pageset::{cache_html_path, pageset_stem, CACHE_HTML_DIR, PAGESET_URLS};
+use fastrender::pageset::{
+  cache_html_path, pageset_entries_with_collisions, PagesetEntry, PagesetFilter, CACHE_HTML_DIR,
+};
 use fastrender::resource::FetchedResource;
 use fastrender::resource::HttpFetcher;
 use fastrender::resource::ResourceFetcher;
 use fastrender::resource::DEFAULT_ACCEPT_LANGUAGE;
 use fastrender::resource::DEFAULT_USER_AGENT;
 use rayon::ThreadPoolBuilder;
-use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::fs;
 use std::path::Path;
@@ -67,43 +68,10 @@ struct Args {
   timings: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct PagesetEntry {
-  url: &'static str,
-  stem: String,
-  cache_stem: String,
-}
-
-fn short_hash(input: &str) -> String {
-  let mut hash: u32 = 0x811c9dc5;
-  for byte in input.as_bytes() {
-    hash ^= u32::from(*byte);
-    hash = hash.wrapping_mul(0x01000193);
-  }
-  format!("{hash:08x}")
-}
-
 fn build_pageset_entries(
   allow_collisions: bool,
-) -> Result<(Vec<PagesetEntry>, Vec<(String, Vec<&'static str>)>), String> {
-  let mut normalized = Vec::new();
-  for &url in PAGESET_URLS {
-    let Some(stem) = pageset_stem(url) else {
-      return Err(format!("Invalid pageset URL: {url}"));
-    };
-    normalized.push((url, stem));
-  }
-
-  let mut stem_to_urls: HashMap<String, Vec<&'static str>> = HashMap::new();
-  for (url, stem) in &normalized {
-    stem_to_urls.entry(stem.clone()).or_default().push(*url);
-  }
-
-  let collisions: Vec<_> = stem_to_urls
-    .iter()
-    .filter(|(_, urls)| urls.len() > 1)
-    .map(|(stem, urls)| (stem.clone(), urls.clone()))
-    .collect();
+) -> Result<(Vec<PagesetEntry>, Vec<(String, Vec<String>)>), String> {
+  let (entries, collisions) = pageset_entries_with_collisions();
 
   if !collisions.is_empty() && !allow_collisions {
     let mut msg = String::from("Pageset stem collisions detected:\n");
@@ -114,34 +82,19 @@ fn build_pageset_entries(
     return Err(msg);
   }
 
-  let entries = normalized
-    .into_iter()
-    .map(|(url, stem)| {
-      let cache_stem = match stem_to_urls.get(&stem) {
-        Some(urls) if urls.len() > 1 => format!("{stem}--{}", short_hash(url)),
-        _ => stem.clone(),
-      };
-      PagesetEntry {
-        url,
-        stem,
-        cache_stem,
-      }
-    })
-    .collect();
-
   Ok((entries, collisions))
 }
 
 fn selected_pages(
   entries: &[PagesetEntry],
-  filter: Option<&HashSet<String>>,
+  filter: Option<&PagesetFilter>,
   shard: Option<(usize, usize)>,
 ) -> Vec<PagesetEntry> {
   let filtered: Vec<PagesetEntry> = entries
     .iter()
     .cloned()
     .filter(|entry| match filter {
-      Some(names) => names.contains(&entry.stem),
+      Some(names) => names.matches_entry(entry),
       None => true,
     })
     .collect();
@@ -273,9 +226,10 @@ fn main() {
   };
 
   // Build page filter from --pages
-  let page_filter: Option<HashSet<String>> = args
+  let page_filter = args
     .pages
-    .map(|pages| pages.iter().filter_map(|name| pageset_stem(name)).collect());
+    .as_ref()
+    .and_then(|pages| PagesetFilter::from_inputs(pages));
 
   fs::create_dir_all(CACHE_HTML_DIR).expect("create cache dir");
 
@@ -290,12 +244,7 @@ fn main() {
   }
 
   if let Some(filter) = &page_filter {
-    let matched: HashSet<_> = selected.iter().map(|entry| entry.stem.clone()).collect();
-    let missing: Vec<_> = filter
-      .iter()
-      .filter(|name| !matched.contains(*name))
-      .cloned()
-      .collect();
+    let missing = filter.unmatched(&selected);
     if !missing.is_empty() {
       println!("Warning: unknown pages in filter: {}", missing.join(", "));
     }
@@ -363,9 +312,9 @@ fn main() {
         } else {
           None
         };
-        match fetch_page(entry.url, timeout, &user_agent, &accept_language) {
+        match fetch_page(&entry.url, timeout, &user_agent, &accept_language) {
           Ok(res) => {
-            let canonical_url = res.final_url.as_deref().unwrap_or(entry.url);
+            let canonical_url = res.final_url.as_deref().unwrap_or(&entry.url);
             if write_cached_html(
               &cache_path,
               &res.bytes,
@@ -436,6 +385,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use fastrender::pageset::{pageset_stem, PAGESET_URLS};
   use std::collections::HashSet;
 
   fn try_bind_localhost(context: &str) -> Option<std::net::TcpListener> {
@@ -454,7 +404,7 @@ mod tests {
     let (entries, collisions) = build_pageset_entries(false).expect("pageset ok");
     assert!(collisions.is_empty());
     for entry in entries {
-      assert_eq!(entry.stem, pageset_stem(entry.url).unwrap());
+      assert_eq!(entry.stem, pageset_stem(&entry.url).unwrap());
       assert_eq!(entry.cache_stem, entry.stem);
     }
   }
@@ -465,9 +415,8 @@ mod tests {
 
   #[test]
   fn selected_pages_accepts_trailing_slash_filter() {
-    let mut filter = HashSet::new();
-    // Trailing slash should normalize to the same stem as the canonical URL.
-    filter.insert(pageset_stem("https://example.com/").unwrap());
+    let filter =
+      PagesetFilter::from_inputs(&vec!["https://example.com/".to_string()]).expect("filter");
 
     let selected = selected_pages(&pageset_entries(), Some(&filter), None);
     assert!(selected
@@ -477,9 +426,11 @@ mod tests {
 
   #[test]
   fn selected_pages_respects_filter() {
-    let mut filter = HashSet::new();
-    filter.insert(pageset_stem("https://cnn.com").unwrap());
-    filter.insert(pageset_stem("https://example.com").unwrap());
+    let filter = PagesetFilter::from_inputs(&vec![
+      "https://cnn.com".to_string(),
+      "https://example.com".to_string(),
+    ])
+    .expect("filter");
 
     let selected = selected_pages(&pageset_entries(), Some(&filter), None);
     assert!(selected.iter().any(|entry| entry.url == "https://cnn.com"));
@@ -493,11 +444,11 @@ mod tests {
 
   #[test]
   fn selected_pages_combines_multiple_filters_case_insensitive() {
-    let mut filter = HashSet::new();
-    filter.insert(
-      pageset_stem("HTTPS://DEVELOPER.MOZILLA.ORG/en-US/docs/Web/CSS/text-orientation").unwrap(),
-    );
-    filter.insert(pageset_stem("https://RUST-LANG.ORG").unwrap());
+    let filter = PagesetFilter::from_inputs(&vec![
+      "HTTPS://DEVELOPER.MOZILLA.ORG/en-US/docs/Web/CSS/text-orientation".to_string(),
+      "https://RUST-LANG.ORG".to_string(),
+    ])
+    .expect("filter");
 
     let selected = selected_pages(&pageset_entries(), Some(&filter), None);
     assert_eq!(selected.len(), 2);
@@ -511,9 +462,9 @@ mod tests {
 
   #[test]
   fn selected_pages_respects_leading_www() {
-    let mut filter = HashSet::new();
     // www.openstreetmap.org is in the pageset; normalization should handle the www prefix.
-    filter.insert(pageset_stem("https://www.openstreetmap.org").unwrap());
+    let filter = PagesetFilter::from_inputs(&vec!["https://www.openstreetmap.org".to_string()])
+      .expect("filter");
 
     let selected = selected_pages(&pageset_entries(), Some(&filter), None);
     assert!(selected
@@ -523,11 +474,12 @@ mod tests {
 
   #[test]
   fn selected_pages_deduplicates_filters() {
-    let mut filter = HashSet::new();
     // rust-lang.org is present in the pageset.
-    let stem = pageset_stem("https://rust-lang.org").unwrap();
-    filter.insert(stem.clone());
-    filter.insert(stem);
+    let filter = PagesetFilter::from_inputs(&vec![
+      "https://rust-lang.org".to_string(),
+      "https://rust-lang.org/".to_string(),
+    ])
+    .expect("filter");
 
     let selected = selected_pages(&pageset_entries(), Some(&filter), None);
     assert_eq!(
@@ -566,7 +518,7 @@ mod tests {
     deduped.dedup();
 
     let mut all = selected_pages(&entries, None, None);
-    all.sort_by(|a, b| a.url.cmp(b.url));
+    all.sort_by(|a, b| a.url.cmp(&b.url));
 
     assert_eq!(deduped, all);
   }
@@ -589,9 +541,11 @@ mod tests {
 
   #[test]
   fn filter_accepts_full_urls_and_www() {
-    let mut filter = HashSet::new();
-    filter.insert(pageset_stem("https://www.w3.org").unwrap());
-    filter.insert(pageset_stem("w3.org").unwrap());
+    let filter = PagesetFilter::from_inputs(&vec![
+      "https://www.w3.org".to_string(),
+      "w3.org".to_string(),
+    ])
+    .expect("filter");
     let selected = selected_pages(&pageset_entries(), Some(&filter), None);
     assert_eq!(selected.len(), 1);
     assert!(selected

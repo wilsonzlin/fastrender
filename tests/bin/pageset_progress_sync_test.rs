@@ -4,7 +4,12 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
-fn run_sync(progress_dir: &PathBuf, html_dir: &PathBuf, prune: bool) -> std::process::ExitStatus {
+fn run_sync_with_env(
+  progress_dir: &PathBuf,
+  html_dir: &PathBuf,
+  prune: bool,
+  envs: &[(&str, &str)],
+) -> std::process::ExitStatus {
   let mut cmd = Command::new(env!("CARGO_BIN_EXE_pageset_progress"));
   cmd.args([
     "sync",
@@ -16,7 +21,14 @@ fn run_sync(progress_dir: &PathBuf, html_dir: &PathBuf, prune: bool) -> std::pro
   if prune {
     cmd.arg("--prune");
   }
+  for (key, value) in envs {
+    cmd.env(key, value);
+  }
   cmd.status().expect("run pageset_progress sync")
+}
+
+fn run_sync(progress_dir: &PathBuf, html_dir: &PathBuf, prune: bool) -> std::process::ExitStatus {
+  run_sync_with_env(progress_dir, html_dir, prune, &[])
 }
 
 #[test]
@@ -53,7 +65,7 @@ fn pageset_progress_sync_creates_placeholder_for_each_page() {
 
   let mut expected: Vec<String> = pageset::pageset_entries()
     .into_iter()
-    .map(|entry| entry.stem)
+    .map(|entry| entry.cache_stem)
     .collect();
   expected.sort();
 
@@ -77,7 +89,7 @@ fn pageset_progress_sync_marks_missing_cache_as_error() {
     .into_iter()
     .next()
     .expect("pageset entries exist");
-  let progress_path = progress_dir.join(format!("{}.json", target.stem));
+  let progress_path = progress_dir.join(format!("{}.json", target.cache_stem));
   let updated: Value =
     serde_json::from_str(&fs::read_to_string(&progress_path).unwrap()).expect("json value");
   assert_eq!(
@@ -178,7 +190,7 @@ fn pageset_progress_sync_preserves_manual_fields() {
     .find(|entry| entry.url.contains("example.com"))
     .expect("example.com in pageset");
 
-  let progress_path = progress_dir.join(format!("{}.json", target.stem));
+  let progress_path = progress_dir.join(format!("{}.json", target.cache_stem));
   let original = serde_json::json!({
     "url": "https://old.example.com",
     "status": "ok",
@@ -240,4 +252,53 @@ fn pageset_progress_sync_preserves_manual_fields() {
     })),
     "missing caches should clear stale stage timings"
   );
+}
+
+#[test]
+fn pageset_progress_sync_emits_progress_for_collisions() {
+  let tmp = tempfile::tempdir().expect("temp dir");
+  let progress_dir = tmp.path().join("progress");
+  let html_dir = tmp.path().join("html");
+  fs::create_dir_all(&html_dir).unwrap();
+
+  let urls = vec!["https://collision.test", "http://collision.test/"];
+  let stem = pageset::pageset_stem(urls[0]).expect("stem");
+  let mut expected: Vec<String> = urls
+    .iter()
+    .map(|url| format!("{stem}--{}", pageset::pageset_short_hash(url)))
+    .collect();
+  expected.sort();
+
+  let env_val = urls.join(",");
+  let status = run_sync_with_env(
+    &progress_dir,
+    &html_dir,
+    false,
+    &[("FASTR_PAGESET_URLS", env_val.as_str())],
+  );
+  assert!(status.success(), "sync should succeed");
+
+  let mut stems: Vec<String> = fs::read_dir(&progress_dir)
+    .expect("read progress dir")
+    .filter_map(|entry| {
+      let entry = entry.ok()?;
+      if entry
+        .path()
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|ext| ext != "json")
+        .unwrap_or(true)
+      {
+        return None;
+      }
+      entry
+        .path()
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_string())
+    })
+    .collect();
+  stems.sort();
+
+  assert_eq!(stems, expected);
 }

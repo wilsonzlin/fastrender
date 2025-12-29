@@ -17,7 +17,7 @@ use fastrender::debug::runtime::RuntimeToggles;
 use fastrender::debug::snapshot::QuirksModeSnapshot;
 use fastrender::dom::{DomNode, DomNodeType};
 use fastrender::image_output::encode_image;
-use fastrender::pageset::{pageset_stem, CACHE_HTML_DIR};
+use fastrender::pageset::{pageset_stem, PagesetFilter, CACHE_HTML_DIR};
 use fastrender::paint::display_list::DisplayItem;
 use fastrender::resource::normalize_user_agent_for_log;
 #[cfg(not(feature = "disk_cache"))]
@@ -42,7 +42,6 @@ use fastrender::{
 };
 use serde::Serialize;
 use serde_json;
-use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::fs;
 use std::panic::AssertUnwindSafe;
@@ -256,6 +255,7 @@ struct PageResult {
 struct CachedEntry {
   path: PathBuf,
   stem: String,
+  cache_stem: String,
 }
 
 enum Status {
@@ -278,19 +278,10 @@ fn main() {
   let args = Args::parse();
 
   // Build page filter from --pages and positional args
-  let page_filter: Option<HashSet<String>> = {
+  let page_filter = {
     let mut all_pages: Vec<String> = args.pages.unwrap_or_default();
     all_pages.extend(args.filter_pages.clone());
-    if all_pages.is_empty() {
-      None
-    } else {
-      Some(
-        all_pages
-          .iter()
-          .filter_map(|name| pageset_stem(name))
-          .collect(),
-      )
-    }
+    PagesetFilter::from_inputs(&all_pages)
   };
 
   if args.timings {
@@ -337,13 +328,18 @@ fn main() {
       .filter(|path| path.extension().map(|x| x == "html").unwrap_or(false))
       .filter_map(|path| {
         let stem_os = path.file_stem()?;
-        let stem = pageset_stem(&stem_os.to_string_lossy())?;
+        let cache_stem = stem_os.to_string_lossy().to_string();
+        let stem = pageset_stem(&cache_stem).unwrap_or_else(|| cache_stem.clone());
         if let Some(ref filter) = page_filter {
-          if !filter.contains(&stem) {
+          if !filter.matches_cache_stem(&cache_stem, Some(&stem)) {
             return None;
           }
         }
-        Some(CachedEntry { path, stem })
+        Some(CachedEntry {
+          path,
+          stem,
+          cache_stem,
+        })
       })
       .collect(),
     Err(_) => {
@@ -353,36 +349,7 @@ fn main() {
     }
   };
 
-  let mut stem_to_paths: HashMap<String, Vec<PathBuf>> = HashMap::new();
-  for entry in &entries {
-    stem_to_paths
-      .entry(entry.stem.clone())
-      .or_default()
-      .push(entry.path.clone());
-  }
-
-  let duplicates: Vec<_> = stem_to_paths
-    .into_iter()
-    .filter(|(_, paths)| paths.len() > 1)
-    .collect();
-  if !duplicates.is_empty() {
-    eprintln!("Cached HTML stems collide after normalization:");
-    for (stem, paths) in duplicates {
-      let joined = paths
-        .iter()
-        .map(|p| p.display().to_string())
-        .collect::<Vec<_>>()
-        .join(", ");
-      eprintln!("  {stem}: {joined}");
-    }
-    eprintln!(
-      "Clean stale files in {} or re-run fetch_pages --refresh.",
-      CACHE_HTML_DIR
-    );
-    std::process::exit(1);
-  }
-
-  entries.sort_by(|a, b| a.stem.cmp(&b.stem));
+  entries.sort_by(|a, b| a.cache_stem.cmp(&b.cache_stem));
 
   if let Some((index, total)) = args.shard {
     entries = entries
@@ -490,7 +457,7 @@ fn main() {
       let verbose = args.verbose;
 
       s.spawn(move |_| {
-        let name = entry.stem.clone();
+        let name = entry.cache_stem.clone();
         let path = entry.path.clone();
         let output_path = PathBuf::from(RENDER_DIR).join(format!("{}.png", name));
         let log_path = PathBuf::from(RENDER_DIR).join(format!("{}.log", name));
@@ -499,6 +466,7 @@ fn main() {
         let mut log = String::new();
 
         let _ = writeln!(log, "=== {} ===", name);
+        let _ = writeln!(log, "Stem: {}", entry.stem);
         let _ = writeln!(log, "Source: {}", path.display());
         let _ = writeln!(log, "Output: {}", output_path.display());
         let _ = writeln!(

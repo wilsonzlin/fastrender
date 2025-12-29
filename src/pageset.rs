@@ -6,7 +6,7 @@
 //! consistent.
 
 use crate::resource::normalize_page_name;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 
 /// Cached HTML directory used by `fetch_pages` and consumers.
@@ -178,37 +178,178 @@ fn strip_collision_suffix(raw: &str) -> &str {
   raw
 }
 
-/// Canonical pageset stem for filtering, cache filenames, and progress artifacts.
+fn parse_collision_suffix(raw: &str) -> Option<(&str, &str)> {
+  raw
+    .rsplit_once("--")
+    .filter(|(_, suffix)| suffix.len() == 8 && suffix.chars().all(|c| c.is_ascii_hexdigit()))
+}
+
+/// Canonical pageset stem for filtering and reporting.
 pub fn pageset_stem(url_or_stem: &str) -> Option<String> {
   let trimmed = strip_collision_suffix(url_or_stem.trim());
   normalize_page_name(trimmed)
 }
 
-/// Path to the cached HTML for a given canonical stem.
+/// Deterministic short hash used to disambiguate cache/progress stems for collisions.
+pub fn pageset_short_hash(input: &str) -> String {
+  let mut hash: u32 = 0x811c9dc5;
+  for byte in input.as_bytes() {
+    hash ^= u32::from(*byte);
+    hash = hash.wrapping_mul(0x01000193);
+  }
+  format!("{hash:08x}")
+}
+
+/// Path to the cached HTML for a given cache stem.
 pub fn cache_html_path(stem: &str) -> PathBuf {
   PathBuf::from(CACHE_HTML_DIR).join(format!("{stem}.html"))
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PagesetEntry {
-  pub url: &'static str,
+  pub url: String,
   pub stem: String,
+  pub cache_stem: String,
 }
 
-/// Canonical, deduped pageset entries sorted by stem.
-pub fn pageset_entries() -> Vec<PagesetEntry> {
-  let mut deduped: BTreeMap<String, &'static str> = BTreeMap::new();
-  for &url in PAGESET_URLS {
+fn pageset_urls() -> Vec<String> {
+  if let Ok(raw) = std::env::var("FASTR_PAGESET_URLS") {
+    let urls: Vec<String> = raw
+      .split(',')
+      .map(str::trim)
+      .filter(|u| !u.is_empty())
+      .map(str::to_string)
+      .collect();
+    if !urls.is_empty() {
+      return urls;
+    }
+  }
+  PAGESET_URLS.iter().map(|u| u.to_string()).collect()
+}
+
+fn build_pageset_entries(urls: &[String]) -> (Vec<PagesetEntry>, Vec<(String, Vec<String>)>) {
+  let mut normalized = Vec::new();
+  for url in urls {
     let Some(stem) = pageset_stem(url) else {
       continue;
     };
-    deduped.entry(stem).or_insert(url);
+    normalized.push((url.clone(), stem));
   }
 
-  deduped
-    .into_iter()
-    .map(|(stem, url)| PagesetEntry { url, stem })
-    .collect()
+  let mut stem_to_urls: BTreeMap<String, Vec<String>> = BTreeMap::new();
+  for (url, stem) in &normalized {
+    stem_to_urls
+      .entry(stem.clone())
+      .or_default()
+      .push(url.clone());
+  }
+
+  let collisions: Vec<_> = stem_to_urls
+    .iter()
+    .filter(|(_, urls)| urls.len() > 1)
+    .map(|(stem, urls)| (stem.clone(), urls.clone()))
+    .collect();
+
+  let mut deduped: BTreeMap<String, PagesetEntry> = BTreeMap::new();
+  for (url, stem) in normalized {
+    let cache_stem = match stem_to_urls.get(&stem) {
+      Some(urls) if urls.len() > 1 => format!("{stem}--{}", pageset_short_hash(&url)),
+      _ => stem.clone(),
+    };
+    deduped.insert(
+      cache_stem.clone(),
+      PagesetEntry {
+        url,
+        stem,
+        cache_stem,
+      },
+    );
+  }
+
+  (deduped.into_values().collect(), collisions)
+}
+
+/// Canonical, collision-aware pageset entries sorted by cache stem.
+pub fn pageset_entries_with_collisions() -> (Vec<PagesetEntry>, Vec<(String, Vec<String>)>) {
+  build_pageset_entries(&pageset_urls())
+}
+
+/// Canonical, collision-aware pageset entries sorted by cache stem.
+pub fn pageset_entries() -> Vec<PagesetEntry> {
+  pageset_entries_with_collisions().0
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PagesetFilter {
+  stems: HashSet<String>,
+  cache_stems: HashSet<String>,
+}
+
+impl PagesetFilter {
+  pub fn from_inputs(inputs: &[String]) -> Option<Self> {
+    let mut filter = PagesetFilter::default();
+    for input in inputs {
+      filter.add(input);
+    }
+    if filter.stems.is_empty() && filter.cache_stems.is_empty() {
+      None
+    } else {
+      Some(filter)
+    }
+  }
+
+  fn add(&mut self, raw: &str) {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+      return;
+    }
+
+    if let Some((base, suffix)) = parse_collision_suffix(trimmed) {
+      if let Some(stem) = pageset_stem(base) {
+        self
+          .cache_stems
+          .insert(format!("{stem}--{}", suffix.to_ascii_lowercase()));
+        return;
+      }
+    }
+
+    if let Some(stem) = pageset_stem(trimmed) {
+      self.stems.insert(stem);
+    }
+  }
+
+  pub fn matches_entry(&self, entry: &PagesetEntry) -> bool {
+    self.matches_cache_stem(&entry.cache_stem, Some(&entry.stem))
+  }
+
+  pub fn matches_cache_stem(&self, cache_stem: &str, canonical: Option<&str>) -> bool {
+    if self.cache_stems.contains(cache_stem) {
+      return true;
+    }
+    if let Some(stem) = canonical {
+      if self.stems.contains(stem) {
+        return true;
+      }
+    } else if let Some(stem) = pageset_stem(cache_stem) {
+      if self.stems.contains(&stem) {
+        return true;
+      }
+    }
+    false
+  }
+
+  pub fn unmatched(&self, selected: &[PagesetEntry]) -> Vec<String> {
+    let mut remaining_cache = self.cache_stems.clone();
+    let mut remaining_stems = self.stems.clone();
+    for entry in selected {
+      remaining_cache.remove(&entry.cache_stem);
+      remaining_stems.remove(&entry.stem);
+    }
+    let mut missing: Vec<String> = remaining_cache.into_iter().collect();
+    missing.extend(remaining_stems.into_iter());
+    missing.sort();
+    missing
+  }
 }
 
 #[cfg(test)]
@@ -237,6 +378,21 @@ mod tests {
     let base = pageset_stem("https://rust-lang.org").unwrap();
     let hashed = format!("{base}--deadbeef");
     assert_eq!(pageset_stem(&hashed).as_deref(), Some(base.as_str()));
+  }
+
+  #[test]
+  fn collision_cache_stems_are_unique() {
+    let urls = vec!["https://example.com", "http://example.com/"]
+      .into_iter()
+      .map(str::to_string)
+      .collect::<Vec<_>>();
+    let (entries, collisions) = build_pageset_entries(&urls);
+    assert_eq!(collisions.len(), 1);
+    assert_eq!(collisions[0].0, "example.com");
+    assert_eq!(entries.len(), 2);
+    assert_ne!(entries[0].cache_stem, entries[1].cache_stem);
+    assert_eq!(entries[0].stem, "example.com");
+    assert_eq!(entries[1].stem, "example.com");
   }
 
   #[test]

@@ -23,7 +23,9 @@ use fastrender::api::{
   RenderDiagnostics, RenderStats, ResourceDiagnostics, ResourceKind,
 };
 use fastrender::error::{RenderError, RenderStage};
-use fastrender::pageset::{pageset_entries, pageset_stem, CACHE_HTML_DIR};
+use fastrender::pageset::{
+  pageset_entries, pageset_stem, PagesetEntry, PagesetFilter, CACHE_HTML_DIR,
+};
 use fastrender::resource::normalize_user_agent_for_log;
 use fastrender::resource::parse_cached_html_meta;
 #[cfg(not(feature = "disk_cache"))]
@@ -914,8 +916,8 @@ fn sync(args: SyncArgs) -> io::Result<()> {
   let mut updated = 0usize;
 
   for entry in pageset_entries() {
-    let progress_path = args.progress_dir.join(format!("{}.json", entry.stem));
-    let cache_path = args.html_dir.join(format!("{}.html", entry.stem));
+    let progress_path = args.progress_dir.join(format!("{}.json", entry.cache_stem));
+    let cache_path = args.html_dir.join(format!("{}.html", entry.cache_stem));
     let cache_exists = cache_path.exists();
 
     let previous = read_progress(&progress_path);
@@ -923,12 +925,12 @@ fn sync(args: SyncArgs) -> io::Result<()> {
       prev.clone()
     } else {
       created += 1;
-      let mut new_progress = PageProgress::new(entry.url.to_string());
+      let mut new_progress = PageProgress::new(entry.url.clone());
       new_progress.notes = "not run".to_string();
       new_progress
     };
 
-    progress.url = entry.url.to_string();
+    progress.url = entry.url.clone();
 
     if !cache_exists {
       progress.status = ProgressStatus::Error;
@@ -945,7 +947,7 @@ fn sync(args: SyncArgs) -> io::Result<()> {
       progress.diagnostics = None;
     }
 
-    stems.insert(entry.stem.clone());
+    stems.insert(entry.cache_stem.clone());
     write_progress(&progress_path, &progress)?;
     if previous.is_some() {
       updated += 1;
@@ -2324,6 +2326,7 @@ fn report(args: ReportArgs) -> io::Result<()> {
 #[derive(Debug, Clone)]
 struct WorkItem {
   stem: String,
+  cache_stem: String,
   url: String,
   cache_path: PathBuf,
   progress_path: PathBuf,
@@ -2332,42 +2335,48 @@ struct WorkItem {
   trace_out: Option<PathBuf>,
 }
 
-fn collect_cached_html_paths() -> io::Result<Vec<PathBuf>> {
-  let mut entries: Vec<PathBuf> = fs::read_dir(CACHE_HTML_DIR)
+fn collect_cached_html_paths() -> io::Result<BTreeMap<String, PathBuf>> {
+  let mut entries: BTreeMap<String, PathBuf> = BTreeMap::new();
+  for entry in fs::read_dir(CACHE_HTML_DIR)
     .map_err(|e| io::Error::new(e.kind(), format!("{}: {}", CACHE_HTML_DIR, e)))?
-    .filter_map(|e| e.ok().map(|e| e.path()))
-    .filter(|path| path.extension().map(|x| x == "html").unwrap_or(false))
-    .collect();
-  entries.sort();
+  {
+    let entry = entry?;
+    if entry.file_type()?.is_dir() {
+      continue;
+    }
+    let path = entry.path();
+    if path.extension().map(|x| x == "html").unwrap_or(false) {
+      if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+        entries.insert(stem.to_string(), path);
+      }
+    }
+  }
   Ok(entries)
 }
 
-fn build_cache_index(paths: &[PathBuf]) -> HashMap<String, PathBuf> {
-  let mut index = HashMap::new();
-  for path in paths {
-    let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
-      continue;
-    };
-    if let Some(normalized) = pageset_stem(stem) {
-      index.insert(normalized, path.clone());
-    }
-  }
-  index
-}
-
-fn work_item_from_cache(cache_path: PathBuf, args: &RunArgs) -> Option<WorkItem> {
-  let stem_raw = cache_path.file_stem()?.to_string_lossy().to_string();
-  let stem = pageset_stem(&stem_raw)?;
-  let url = url_hint_from_cache_path(&cache_path);
-  Some(WorkItem {
-    stem: stem.clone(),
+fn work_item_from_cache(
+  cache_stem: &str,
+  cache_path: PathBuf,
+  entry: Option<&PagesetEntry>,
+  args: &RunArgs,
+) -> WorkItem {
+  let url = entry
+    .map(|e| e.url.clone())
+    .unwrap_or_else(|| url_hint_from_cache_path(&cache_path));
+  let stem = entry
+    .map(|e| e.stem.clone())
+    .or_else(|| pageset_stem(cache_stem))
+    .unwrap_or_else(|| cache_stem.to_string());
+  WorkItem {
+    stem,
+    cache_stem: cache_stem.to_string(),
     url,
     cache_path,
-    progress_path: args.progress_dir.join(format!("{stem}.json")),
-    log_path: args.log_dir.join(format!("{stem}.log")),
-    stderr_path: args.log_dir.join(format!("{stem}.stderr.log")),
+    progress_path: args.progress_dir.join(format!("{cache_stem}.json")),
+    log_path: args.log_dir.join(format!("{cache_stem}.log")),
+    stderr_path: args.log_dir.join(format!("{cache_stem}.stderr.log")),
     trace_out: None,
-  })
+  }
 }
 
 #[derive(Debug)]
@@ -2391,7 +2400,7 @@ fn spawn_worker(
     .arg("--cache-path")
     .arg(&item.cache_path)
     .arg("--stem")
-    .arg(&item.stem)
+    .arg(&item.cache_stem)
     .arg("--progress-path")
     .arg(&item.progress_path)
     .arg("--log-path")
@@ -2521,12 +2530,12 @@ fn run_queue(
           &entry.item.log_path,
           &format!(
             "=== {} ===\nStatus: TIMEOUT\nKilled after {:.2}s\n",
-            entry.item.stem,
+            entry.item.cache_stem,
             hard_timeout.as_secs_f64()
           ),
         );
 
-        eprintln!("TIMEOUT {}", entry.item.stem);
+        eprintln!("TIMEOUT {}", entry.item.cache_stem);
         if let Some(trace_out) = &entry.item.trace_out {
           if let Some(msg) = trace_issue_message(
             trace_out,
@@ -2548,7 +2557,7 @@ fn run_queue(
               let short: String = p.notes.chars().take(120).collect();
               eprintln!(
                 "FAIL {} {:?}: {} (exit: {})",
-                entry.item.stem, p.status, short, exit_str
+                entry.item.cache_stem, p.status, short, exit_str
               );
             }
           } else {
@@ -2565,7 +2574,7 @@ fn run_queue(
             let _ = write_progress(&entry.item.progress_path, &progress);
             eprintln!(
               "PANIC {} (no progress written, exit: {})",
-              entry.item.stem, exit_str
+              entry.item.cache_stem, exit_str
             );
           }
           if let Some(trace_out) = &entry.item.trace_out {
@@ -2589,7 +2598,7 @@ fn run_queue(
           progress.hotspot = "unknown".to_string();
           let progress = progress.merge_preserving_manual(previous, current_sha.as_deref());
           let _ = write_progress(&entry.item.progress_path, &progress);
-          eprintln!("PANIC {} (try_wait failed)", entry.item.stem);
+          eprintln!("PANIC {} (try_wait failed)", entry.item.cache_stem);
           if let Some(trace_out) = &entry.item.trace_out {
             if let Some(msg) = trace_issue_message(
               trace_out,
@@ -2645,11 +2654,10 @@ fn run(args: RunArgs) -> io::Result<()> {
     fs::create_dir_all(ASSET_DIR)?;
   }
 
-  let page_filter: Option<HashSet<String>> = args.pages.as_ref().map(|v| {
-    v.iter()
-      .filter_map(|s| pageset_stem(s))
-      .collect::<HashSet<_>>()
-  });
+  let page_filter = args
+    .pages
+    .as_ref()
+    .and_then(|v| PagesetFilter::from_inputs(v));
 
   let cached_paths = match collect_cached_html_paths() {
     Ok(paths) => paths,
@@ -2663,41 +2671,31 @@ fn run(args: RunArgs) -> io::Result<()> {
     std::process::exit(1);
   }
 
-  let mut stem_to_paths: HashMap<String, Vec<PathBuf>> = HashMap::new();
-  for path in &cached_paths {
-    let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
-      continue;
-    };
-    if let Some(normalized) = pageset_stem(stem) {
-      stem_to_paths
-        .entry(normalized)
-        .or_default()
-        .push(path.clone());
-    }
-  }
-
-  let duplicates: Vec<_> = stem_to_paths
-    .into_iter()
-    .filter(|(_, paths)| paths.len() > 1)
+  let pageset_entries = pageset_entries();
+  let pageset_by_cache: HashMap<String, &PagesetEntry> = pageset_entries
+    .iter()
+    .map(|entry| (entry.cache_stem.clone(), entry))
     .collect();
-  if !duplicates.is_empty() {
-    eprintln!("Cached HTML stems collide after normalization:");
-    for (stem, paths) in duplicates {
-      let joined = paths
-        .iter()
-        .map(|p| p.display().to_string())
-        .collect::<Vec<_>>()
-        .join(", ");
-      eprintln!("  {stem}: {joined}");
-    }
-    eprintln!(
-      "Clean stale files in {} or re-run fetch_pages --refresh.",
-      CACHE_HTML_DIR
-    );
-    std::process::exit(1);
+  let mut pageset_by_stem: HashMap<String, Vec<&PagesetEntry>> = HashMap::new();
+  for entry in &pageset_entries {
+    pageset_by_stem
+      .entry(entry.stem.clone())
+      .or_default()
+      .push(entry);
   }
 
-  let cache_index = build_cache_index(&cached_paths);
+  let filter_matches = |cache_stem: &str, entry: Option<&PagesetEntry>| -> bool {
+    match page_filter.as_ref() {
+      Some(filter) => {
+        if let Some(entry) = entry {
+          filter.matches_entry(entry)
+        } else {
+          filter.matches_cache_stem(cache_stem, pageset_stem(cache_stem).as_deref())
+        }
+      }
+      None => true,
+    }
+  };
 
   let mut items: Vec<WorkItem> = Vec::new();
 
@@ -2722,11 +2720,7 @@ fn run(args: RunArgs) -> io::Result<()> {
     if let Some(ref filter) = page_filter {
       stems = stems
         .into_iter()
-        .filter(|stem| {
-          pageset_stem(stem)
-            .map(|normalized| filter.contains(&normalized))
-            .unwrap_or(false)
-        })
+        .filter(|stem| filter.matches_cache_stem(stem, pageset_stem(stem).as_deref()))
         .collect();
     }
 
@@ -2734,18 +2728,51 @@ fn run(args: RunArgs) -> io::Result<()> {
 
     let mut missing_cache: Vec<String> = Vec::new();
     let mut invalid_stems: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
 
     for stem in stems {
+      if seen.contains(&stem) {
+        continue;
+      }
+      if let Some(path) = cached_paths.get(&stem) {
+        if filter_matches(&stem, pageset_by_cache.get(&stem).copied()) {
+          seen.insert(stem.clone());
+          items.push(work_item_from_cache(
+            &stem,
+            path.clone(),
+            pageset_by_cache.get(&stem).copied(),
+            &args,
+          ));
+        }
+        continue;
+      }
       let Some(normalized) = pageset_stem(&stem) else {
         invalid_stems.push(stem);
         continue;
       };
-      let Some(path) = cache_index.get(&normalized) else {
+      let Some(entries) = pageset_by_stem.get(&normalized) else {
         missing_cache.push(stem);
         continue;
       };
-      if let Some(item) = work_item_from_cache(path.clone(), &args) {
-        items.push(item);
+      let mut found = false;
+      for entry in entries {
+        if let Some(path) = cached_paths.get(&entry.cache_stem) {
+          if !filter_matches(&entry.cache_stem, Some(entry)) {
+            continue;
+          }
+          found = true;
+          if seen.insert(entry.cache_stem.clone()) {
+            items.push(work_item_from_cache(
+              &entry.cache_stem,
+              path.clone(),
+              Some(entry),
+              &args,
+            ));
+          }
+        }
+      }
+      if !found {
+        missing_cache.push(stem);
       }
     }
 
@@ -2781,24 +2808,19 @@ fn run(args: RunArgs) -> io::Result<()> {
       }
     );
     for item in &items {
-      println!("  {}", item.stem);
+      println!("  {}", item.cache_stem);
     }
     println!();
   } else {
-    let mut filtered_paths = cached_paths;
+    let mut filtered_paths: Vec<(String, PathBuf)> = cached_paths
+      .iter()
+      .filter(|(stem, _)| filter_matches(stem, pageset_by_cache.get(stem.as_str()).copied()))
+      .map(|(stem, path)| (stem.clone(), path.clone()))
+      .collect();
     if let Some(ref filter) = page_filter {
       filtered_paths = filtered_paths
         .into_iter()
-        .filter(|path| {
-          if let Some(stem_os) = path.file_stem() {
-            if let Some(stem) = stem_os.to_str() {
-              if let Some(normalized) = pageset_stem(stem) {
-                return filter.contains(&normalized);
-              }
-            }
-          }
-          false
-        })
+        .filter(|(stem, _)| filter.matches_cache_stem(stem, pageset_stem(stem).as_deref()))
         .collect();
     }
     filtered_paths = apply_shard_filter(filtered_paths, args.shard);
@@ -2810,7 +2832,10 @@ fn run(args: RunArgs) -> io::Result<()> {
     }
     items = filtered_paths
       .into_iter()
-      .filter_map(|cache_path| work_item_from_cache(cache_path, &args))
+      .filter_map(|(cache_stem, cache_path)| {
+        let entry = pageset_by_cache.get(&cache_stem).copied();
+        Some(work_item_from_cache(&cache_stem, cache_path, entry, &args))
+      })
       .collect();
   }
   let exe = std::env::current_exe()?;
@@ -2890,15 +2915,20 @@ fn run(args: RunArgs) -> io::Result<()> {
       if !needs_trace {
         continue;
       }
-      let trace_out = args.trace_dir.join(format!("{}.json", item.stem));
-      let trace_progress = args.trace_progress_dir.join(format!("{}.json", item.stem));
+      let trace_out = args.trace_dir.join(format!("{}.json", item.cache_stem));
+      let trace_progress = args
+        .trace_progress_dir
+        .join(format!("{}.json", item.cache_stem));
       trace_items.push(WorkItem {
         stem: item.stem.clone(),
+        cache_stem: item.cache_stem.clone(),
         url: item.url.clone(),
         cache_path: item.cache_path.clone(),
         progress_path: trace_progress,
-        log_path: args.log_dir.join(format!("{}.trace.log", item.stem)),
-        stderr_path: args.log_dir.join(format!("{}.trace.stderr.log", item.stem)),
+        log_path: args.log_dir.join(format!("{}.trace.log", item.cache_stem)),
+        stderr_path: args
+          .log_dir
+          .join(format!("{}.trace.stderr.log", item.cache_stem)),
         trace_out: Some(trace_out),
       });
     }
