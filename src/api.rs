@@ -1567,6 +1567,7 @@ pub struct RenderCounts {
   pub color_glyph_rasters: Option<usize>,
   pub fallback_cache_hits: Option<usize>,
   pub fallback_cache_misses: Option<usize>,
+  pub last_resort_font_fallbacks: Option<usize>,
 }
 
 /// Cascade selector matching statistics.
@@ -1677,6 +1678,7 @@ fn merge_text_diagnostics(stats: &mut RenderStats) {
     stats.counts.color_glyph_rasters = Some(text.color_glyph_rasters);
     stats.counts.fallback_cache_hits = Some(text.fallback_cache_hits);
     stats.counts.fallback_cache_misses = Some(text.fallback_cache_misses);
+    stats.counts.last_resort_font_fallbacks = Some(text.last_resort_fallbacks);
   }
 }
 

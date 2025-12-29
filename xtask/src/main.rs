@@ -1826,7 +1826,8 @@ mod tests {
               "glyphs": null,
               "color_glyph_rasters": null,
               "fallback_cache_hits": null,
-              "fallback_cache_misses": null
+              "fallback_cache_misses": null,
+              "last_resort_font_fallbacks": null
             },
             "cascade": {
               "nodes": 10,
@@ -1852,7 +1853,11 @@ mod tests {
               "layout_cache_lookups": null,
               "layout_cache_hits": null,
               "layout_cache_stores": null,
-              "layout_cache_evictions": null
+              "layout_cache_evictions": null,
+              "layout_cache_clones": null,
+              "flex_cache_clones": null,
+              "fragment_deep_clones": null,
+              "fragment_traversed": null
             },
             "paint": {
               "display_items": 8,
@@ -1860,7 +1865,9 @@ mod tests {
               "culled_items": null,
               "transparent_removed": null,
               "noop_removed": null,
-              "merged_items": null
+              "merged_items": null,
+              "gradient_ms": null,
+              "gradient_pixels": null
             },
             "resources": {
               "fetch_counts": { "document": 1, "image": 2 },

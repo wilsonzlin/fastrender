@@ -21,6 +21,7 @@ use fastrender::text::pipeline::RunRotation;
 use fastrender::text::pipeline::Script;
 use fastrender::text::pipeline::ShapingPipeline;
 use fastrender::ComputedStyle;
+use fastrender::FontConfig;
 use fastrender::FontContext;
 
 /// Helper macro to skip test if font shaping fails due to missing fonts
@@ -184,6 +185,30 @@ fn vertical_shaping_uses_vertical_advances() {
   assert!(
     vertical_y_advance > horizontal_y_advance + 0.1,
     "vertical shaping should expose vertical advances for inline progression"
+  );
+}
+
+#[test]
+fn last_resort_font_fallback_shapes_missing_scripts() {
+  let pipeline = ShapingPipeline::new();
+  let font_ctx = FontContext::with_config(FontConfig::bundled_only());
+  let style = ComputedStyle::default();
+
+  let text = "বাংলা العربية 汉字";
+  let runs = pipeline
+    .shape(text, &style, &font_ctx)
+    .expect("shaping should succeed with last-resort fallback");
+  assert!(
+    !runs.is_empty(),
+    "missing coverage should still yield shaped runs"
+  );
+  let glyphs: usize = runs.iter().map(|run| run.glyphs.len()).sum();
+  assert!(glyphs > 0, "fallback shaping should emit glyphs");
+  assert!(
+    runs
+      .iter()
+      .any(|run| run.glyphs.iter().any(|glyph| glyph.glyph_id == 0)),
+    "fallback glyphs should use .notdef when coverage is missing"
   );
 }
 

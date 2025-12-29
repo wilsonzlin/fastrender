@@ -94,9 +94,7 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 use std::num::NonZeroUsize;
 use std::str::FromStr;
-#[cfg(any(test, debug_assertions))]
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
@@ -125,10 +123,16 @@ pub struct TextDiagnostics {
   pub color_glyph_rasters: usize,
   pub fallback_cache_hits: usize,
   pub fallback_cache_misses: usize,
+  pub last_resort_fallbacks: usize,
+  pub last_resort_samples: Vec<String>,
 }
 
 static TEXT_DIAGNOSTICS: OnceLock<Mutex<TextDiagnostics>> = OnceLock::new();
 static TEXT_DIAGNOSTICS_ENABLED: AtomicBool = AtomicBool::new(false);
+static LAST_RESORT_LOGGED: AtomicUsize = AtomicUsize::new(0);
+static SHAPING_FALLBACK_LOGGED: AtomicUsize = AtomicUsize::new(0);
+
+const LAST_RESORT_SAMPLE_LIMIT: usize = 8;
 
 fn diagnostics_cell() -> &'static Mutex<TextDiagnostics> {
   TEXT_DIAGNOSTICS.get_or_init(|| Mutex::new(TextDiagnostics::default()))
@@ -164,6 +168,61 @@ fn with_text_diagnostics(f: impl FnOnce(&mut TextDiagnostics)) {
 
   if let Ok(mut diag) = diagnostics_cell().lock() {
     f(&mut diag);
+  }
+}
+
+fn text_diagnostics_verbose_logging() -> bool {
+  static VERBOSE: OnceLock<bool> = OnceLock::new();
+  *VERBOSE.get_or_init(|| {
+    std::env::var("FASTR_TEXT_DIAGNOSTICS")
+      .map(|value| {
+        let value = value.to_ascii_lowercase();
+        matches!(
+          value.as_str(),
+          "verbose" | "2" | "debug" | "true" | "1" | "on"
+        )
+      })
+      .unwrap_or(false)
+  })
+}
+
+fn format_codepoints_for_log(text: &str) -> String {
+  use std::fmt::Write;
+
+  let mut out = String::new();
+  let mut added = 0usize;
+  for ch in text.chars() {
+    if added >= LAST_RESORT_SAMPLE_LIMIT {
+      out.push_str(" …");
+      break;
+    }
+    if added > 0 {
+      out.push(' ');
+    }
+    let _ = write!(&mut out, "U+{:04X}", ch as u32);
+    added += 1;
+  }
+  out
+}
+
+fn record_last_resort_fallback(cluster_text: &str) {
+  with_text_diagnostics(|diag| {
+    diag.last_resort_fallbacks = diag.last_resort_fallbacks.saturating_add(1);
+    if diag.last_resort_samples.len() < LAST_RESORT_SAMPLE_LIMIT {
+      diag
+        .last_resort_samples
+        .push(format_codepoints_for_log(cluster_text));
+    }
+  });
+
+  if text_diagnostics_verbose_logging() {
+    let idx = LAST_RESORT_LOGGED.fetch_add(1, Ordering::Relaxed);
+    if idx < LAST_RESORT_SAMPLE_LIMIT {
+      eprintln!(
+        "FASTR_TEXT_DIAGNOSTICS: last-resort font fallback for cluster {}",
+        format_codepoints_for_log(cluster_text)
+      );
+    }
   }
 }
 
@@ -1405,6 +1464,33 @@ fn font_supports_all_chars(font: &LoadedFont, chars: &[char]) -> bool {
   chars.iter().all(|c| face.has_glyph(*c))
 }
 
+fn last_resort_font(font_context: &FontContext) -> Option<LoadedFont> {
+  let db = font_context.database();
+  let mut first_any = None;
+  let mut first_non_emoji = None;
+
+  for face in db.faces() {
+    first_any.get_or_insert(face.id);
+    let is_emoji = face
+      .families
+      .iter()
+      .any(|(name, _)| FontDatabase::family_name_is_emoji_font(name));
+    if is_emoji {
+      continue;
+    }
+    if db.has_glyph_cached(face.id, 'A') && db.has_glyph_cached(face.id, 'a') {
+      return db.load_font(face.id);
+    }
+    if first_non_emoji.is_none() {
+      first_non_emoji = Some(face.id);
+    }
+  }
+
+  first_non_emoji
+    .or(first_any)
+    .and_then(|id| db.load_font(id))
+}
+
 /// Assigns fonts to itemized runs.
 ///
 /// Uses the font context to find appropriate fonts for each script,
@@ -1449,6 +1535,17 @@ fn assign_fonts_internal(
   let families_signature = families_signature(&families);
   let oblique_degrees = quantize_oblique_degrees(requested_oblique);
   let weight_value = style.font_weight.to_u16();
+
+  if font_context.is_effectively_empty() {
+    let sample = runs.first().map(|run| run.text.clone()).unwrap_or_default();
+    return Err(
+      TextError::ShapingFailed {
+        text: sample,
+        reason: "Font context has no fonts; enable bundled fonts or system discovery".to_string(),
+      }
+      .into(),
+    );
+  }
 
   let mut font_runs = Vec::new();
   for run in runs {
@@ -1539,13 +1636,28 @@ fn assign_fonts_internal(
         );
       }
 
+      if resolved.is_none() {
+        resolved = last_resort_font(font_context);
+        if resolved.is_some() {
+          record_last_resort_fallback(cluster_text);
+        }
+      }
+
       if let (Some(cache), Some(key)) = (font_cache, cluster_cache_key) {
         cache.insert_cluster(key, resolved.clone());
       }
 
-      let font = resolved.ok_or_else(|| TextError::ShapingFailed {
-        text: run.text.clone(),
-        reason: format!("No suitable font found for cluster {}", cluster_text),
+      let font = resolved.ok_or_else(|| {
+        let reason = if font_context.is_effectively_empty() {
+          "No fonts are available in the font context; enable bundled fonts or system discovery"
+            .to_string()
+        } else {
+          "Font context failed to provide a last-resort font; check font configuration".to_string()
+        };
+        TextError::ShapingFailed {
+          text: run.text.clone(),
+          reason,
+        }
       })?;
       let used_font_size = compute_adjusted_font_size(style, &font, preferred_aspect);
       let (mut synthetic_bold, synthetic_oblique) = compute_synthetic_styles(style, &font);
@@ -2910,6 +3022,71 @@ fn map_hb_position(
   }
 }
 
+fn synthesize_notdef_run(run: &FontRun) -> ShapedRun {
+  let (units_per_em, notdef_advance) = crate::text::face_cache::with_face(&run.font, |face| {
+    (
+      face.units_per_em() as f32,
+      face
+        .glyph_hor_advance(ttf_parser::GlyphId(0))
+        .unwrap_or(face.units_per_em()) as f32,
+    )
+  })
+  .unwrap_or((0.0, 0.0));
+
+  let mut inline_advance = if units_per_em > 0.0 {
+    notdef_advance * (run.font_size / units_per_em)
+  } else {
+    0.0
+  };
+  if !inline_advance.is_finite() || inline_advance <= 0.0 {
+    inline_advance = run.font_size * 0.5;
+  }
+
+  let mut glyphs = Vec::new();
+  let mut advance = 0.0_f32;
+  for (cluster, ch) in run.text.char_indices() {
+    if is_bidi_control_char(ch) {
+      continue;
+    }
+    let (x_offset, y_offset, x_advance, y_advance) = if run.vertical {
+      (run.baseline_shift, 0.0, 0.0, inline_advance)
+    } else {
+      (0.0, run.baseline_shift, inline_advance, 0.0)
+    };
+    glyphs.push(GlyphPosition {
+      glyph_id: 0,
+      cluster: cluster as u32,
+      x_offset,
+      y_offset,
+      x_advance,
+      y_advance,
+    });
+    advance += if run.vertical { y_advance } else { x_advance };
+  }
+
+  ShapedRun {
+    text: run.text.clone(),
+    start: run.start,
+    end: run.end,
+    glyphs,
+    direction: run.direction,
+    level: run.level,
+    advance,
+    font: Arc::clone(&run.font),
+    font_size: run.font_size,
+    baseline_shift: run.baseline_shift,
+    language: None,
+    synthetic_bold: run.synthetic_bold,
+    synthetic_oblique: run.synthetic_oblique,
+    rotation: run.rotation,
+    palette_index: run.palette_index,
+    palette_overrides: Arc::clone(&run.palette_overrides),
+    palette_override_hash: run.palette_override_hash,
+    variations: run.variations.clone(),
+    scale: 1.0,
+  }
+}
+
 /// Shapes a single font run into positioned glyphs.
 fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
   #[cfg(any(test, debug_assertions))]
@@ -3491,7 +3668,22 @@ impl ShapingPipeline {
     let shape_timer = text_diagnostics_timer();
     let mut shaped_runs = Vec::with_capacity(font_runs.len());
     for run in &font_runs {
-      let mut shaped = shape_font_run(run)?;
+      let mut shaped = match shape_font_run(run) {
+        Ok(shaped) => shaped,
+        Err(err) => {
+          if text_diagnostics_verbose_logging() {
+            let idx = SHAPING_FALLBACK_LOGGED.fetch_add(1, Ordering::Relaxed);
+            if idx < LAST_RESORT_SAMPLE_LIMIT {
+              eprintln!(
+                "FASTR_TEXT_DIAGNOSTICS: shaping failed for run {}; using notdef placeholders: {}",
+                format_codepoints_for_log(&run.text),
+                err
+              );
+            }
+          }
+          synthesize_notdef_run(run)
+        }
+      };
       shaped.rotation = run.rotation;
       shaped_runs.push(shaped);
     }
