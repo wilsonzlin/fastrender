@@ -99,6 +99,13 @@ thread_local! {
   static FRAGMENTAINER_BLOCK_SIZE_HINT: Cell<Option<f32>> = Cell::new(None);
 }
 
+thread_local! {
+  /// Subgrid dependency memoization keyed by node id within a cache epoch.
+  static SUBGRID_DEPENDENT_CACHE: RefCell<HashMap<usize, (usize, bool)>> =
+    RefCell::new(HashMap::new());
+  static SUBGRID_CACHE_EPOCH: Cell<usize> = const { Cell::new(0) };
+}
+
 static CACHE_LOOKUPS: AtomicUsize = AtomicUsize::new(0);
 static CACHE_HITS: AtomicUsize = AtomicUsize::new(0);
 static CACHE_STORES: AtomicUsize = AtomicUsize::new(0);
@@ -107,12 +114,28 @@ static BLOCK_INTRINSIC_CALLS: AtomicUsize = AtomicUsize::new(0);
 static FLEX_INTRINSIC_CALLS: AtomicUsize = AtomicUsize::new(0);
 static INLINE_INTRINSIC_CALLS: AtomicUsize = AtomicUsize::new(0);
 
+fn clear_subgrid_cache() {
+  SUBGRID_DEPENDENT_CACHE.with(|cache| cache.borrow_mut().clear());
+}
+
+fn subgrid_cache_use_epoch(epoch: usize, force_clear: bool) {
+  let epoch = epoch.max(1);
+  SUBGRID_CACHE_EPOCH.with(|cell| {
+    let previous = cell.get();
+    if force_clear || previous != epoch {
+      clear_subgrid_cache();
+      cell.set(epoch);
+    }
+  });
+}
+
 fn cache_key(
   node: &BoxNode,
   mode: IntrinsicSizingMode,
+  epoch: usize,
 ) -> Option<(usize, usize, IntrinsicSizingMode)> {
   let id = node.id();
-  if id == 0 || subtree_contains_subgrid(node) {
+  if id == 0 || subtree_contains_subgrid(node, epoch) {
     return None;
   }
   let style_ptr = Arc::as_ptr(&node.style) as usize;
@@ -121,8 +144,8 @@ fn cache_key(
 
 pub(crate) fn intrinsic_cache_lookup(node: &BoxNode, mode: IntrinsicSizingMode) -> Option<f32> {
   CACHE_LOOKUPS.fetch_add(1, Ordering::Relaxed);
-  let key = cache_key(node, mode)?;
   let epoch = CACHE_EPOCH.load(Ordering::Relaxed);
+  let key = cache_key(node, mode, epoch)?;
   let hit = INTRINSIC_INLINE_CACHE.with(|cache| {
     cache
       .borrow()
@@ -137,7 +160,7 @@ pub(crate) fn intrinsic_cache_lookup(node: &BoxNode, mode: IntrinsicSizingMode) 
 
 pub(crate) fn intrinsic_cache_store(node: &BoxNode, mode: IntrinsicSizingMode, value: f32) {
   let epoch = CACHE_EPOCH.load(Ordering::Relaxed);
-  if let Some(key) = cache_key(node, mode) {
+  if let Some(key) = cache_key(node, mode, epoch) {
     INTRINSIC_INLINE_CACHE.with(|cache| {
       cache.borrow_mut().insert(key, (epoch, value));
     });
@@ -147,6 +170,7 @@ pub(crate) fn intrinsic_cache_store(node: &BoxNode, mode: IntrinsicSizingMode, v
 
 pub(crate) fn intrinsic_cache_clear() {
   INTRINSIC_INLINE_CACHE.with(|cache| cache.borrow_mut().clear());
+  clear_subgrid_cache();
 }
 
 /// Sets the active intrinsic cache epoch, clearing stale entries when it changes.
@@ -154,13 +178,17 @@ pub(crate) fn intrinsic_cache_clear() {
 /// Epochs are used instead of raw clears so callers can opt-in to cache reuse (by
 /// reusing the same epoch) or enforce invalidation (by bumping the epoch).
 pub(crate) fn intrinsic_cache_use_epoch(epoch: usize, reset_counters: bool) {
-  let previous = CACHE_EPOCH.swap(epoch.max(1), Ordering::Relaxed);
-  if previous != epoch {
+  let requested_epoch = epoch;
+  let epoch = epoch.max(1);
+  let previous = CACHE_EPOCH.swap(epoch, Ordering::Relaxed);
+  let epoch_changed = previous != requested_epoch;
+  if epoch_changed {
     intrinsic_cache_clear();
   }
   if reset_counters {
     intrinsic_cache_reset_counters();
   }
+  subgrid_cache_use_epoch(epoch, reset_counters || epoch_changed);
 }
 
 /// Returns the currently active epoch for intrinsic sizing caches.
@@ -342,7 +370,30 @@ fn hash_template_areas(areas: &[Vec<Option<String>>], hasher: &mut DefaultHasher
   }
 }
 
-fn subtree_contains_subgrid(node: &BoxNode) -> bool {
+#[cfg(test)]
+thread_local! {
+  static SUBGRID_WALK_COUNT: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+fn increment_subgrid_walk_count() {
+  SUBGRID_WALK_COUNT.with(|counter| counter.set(counter.get() + 1));
+}
+
+#[cfg(test)]
+fn reset_subgrid_walk_count() {
+  SUBGRID_WALK_COUNT.with(|counter| counter.set(0));
+}
+
+#[cfg(test)]
+fn subgrid_walk_count() -> usize {
+  SUBGRID_WALK_COUNT.with(|counter| counter.get())
+}
+
+fn subtree_contains_subgrid_uncached(node: &BoxNode, epoch: usize) -> bool {
+  #[cfg(test)]
+  increment_subgrid_walk_count();
+
   if node.style.grid_row_subgrid
     || node.style.grid_column_subgrid
     || !node.style.subgrid_row_line_names.is_empty()
@@ -350,7 +401,32 @@ fn subtree_contains_subgrid(node: &BoxNode) -> bool {
   {
     return true;
   }
-  node.children.iter().any(subtree_contains_subgrid)
+  node
+    .children
+    .iter()
+    .any(|child| subtree_contains_subgrid(child, epoch))
+}
+
+fn subtree_contains_subgrid(node: &BoxNode, epoch: usize) -> bool {
+  let id = node.id();
+  if id == 0 {
+    return subtree_contains_subgrid_uncached(node, epoch);
+  }
+
+  if let Some(cached) = SUBGRID_DEPENDENT_CACHE.with(|cache| {
+    cache
+      .borrow()
+      .get(&id)
+      .and_then(|(cached_epoch, contains)| (*cached_epoch == epoch).then_some(*contains))
+  }) {
+    return cached;
+  }
+
+  let contains = subtree_contains_subgrid_uncached(node, epoch);
+  SUBGRID_DEPENDENT_CACHE.with(|cache| {
+    cache.borrow_mut().insert(id, (epoch, contains));
+  });
+  contains
 }
 
 fn layout_constraints_hash(constraints: &LayoutConstraints) -> u64 {
@@ -510,6 +586,7 @@ fn layout_cache_key(
   fc_type: FormattingContextType,
   constraints: &LayoutConstraints,
   viewport: Size,
+  epoch: usize,
 ) -> Option<LayoutCacheKey> {
   if !is_layout_cacheable(box_node, fc_type) {
     return None;
@@ -525,7 +602,7 @@ fn layout_cache_key(
     constraints_hash,
     fragmentation_hash,
     viewport_hash: pack_viewport_size(viewport),
-    subgrid_dependent: subtree_contains_subgrid(box_node),
+    subgrid_dependent: subtree_contains_subgrid(box_node, epoch),
   })
 }
 
@@ -560,6 +637,8 @@ pub(crate) fn layout_cache_reset_counters() {
   LAYOUT_CACHE_HITS.with(|counter| counter.set(0));
   LAYOUT_CACHE_STORES.with(|counter| counter.set(0));
   LAYOUT_CACHE_EVICTIONS.with(|counter| counter.set(0));
+  let epoch = LAYOUT_CACHE_EPOCH.with(|cell| cell.get());
+  subgrid_cache_use_epoch(epoch, true);
 }
 
 /// Configures the layout cache epoch and run-scoped parameters.
@@ -578,11 +657,14 @@ pub(crate) fn layout_cache_use_epoch(
   LAYOUT_CACHE_ENABLED.with(|cell| cell.set(enabled));
   LAYOUT_CACHE_FRAGMENTATION.with(|cell| cell.set(fragmentation_fingerprint(fragmentation)));
 
-  if reset_counters || previous != epoch || !enabled {
+  let should_clear = reset_counters || previous != epoch || !enabled;
+  if should_clear {
     layout_cache_reset_counters();
   }
-  if reset_counters || previous != epoch || !enabled {
+  if should_clear {
     layout_cache_clear();
+  } else {
+    subgrid_cache_use_epoch(epoch, false);
   }
 }
 
@@ -593,13 +675,13 @@ pub(crate) fn layout_cache_lookup(
   constraints: &LayoutConstraints,
   viewport: Size,
 ) -> Option<FragmentNode> {
-  let key = layout_cache_key(box_node, fc_type, constraints, viewport)?;
+  let epoch = LAYOUT_CACHE_EPOCH.with(|cell| cell.get());
+  let key = layout_cache_key(box_node, fc_type, constraints, viewport, epoch)?;
   if key.subgrid_dependent {
     evict_cache_entries_for_box(key.box_id);
     return None;
   }
   LAYOUT_CACHE_LOOKUPS.with(|counter| counter.set(counter.get() + 1));
-  let epoch = LAYOUT_CACHE_EPOCH.with(|cell| cell.get());
 
   let result = LAYOUT_RESULT_CACHE.with(|cache| {
     let mut map = cache.borrow_mut();
@@ -631,7 +713,8 @@ pub(crate) fn layout_cache_store(
   fragment: &FragmentNode,
   viewport: Size,
 ) {
-  let key = match layout_cache_key(box_node, fc_type, constraints, viewport) {
+  let epoch = LAYOUT_CACHE_EPOCH.with(|cell| cell.get());
+  let key = match layout_cache_key(box_node, fc_type, constraints, viewport, epoch) {
     Some(k) => k,
     None => return,
   };
@@ -640,7 +723,6 @@ pub(crate) fn layout_cache_store(
     return;
   }
 
-  let epoch = LAYOUT_CACHE_EPOCH.with(|cell| cell.get());
   LAYOUT_RESULT_CACHE.with(|cache| {
     let mut map = cache.borrow_mut();
     // Drop entries for the same box/style from previous epochs to avoid stale reuse when the
@@ -889,6 +971,7 @@ mod tests {
   use crate::geometry::Rect;
   use crate::style::display::FormattingContextType;
   use crate::style::ComputedStyle;
+  use std::sync::atomic::Ordering;
   use std::sync::Arc;
 
   /// Stub formatting context for testing trait requirements
@@ -1046,6 +1129,136 @@ mod tests {
     );
 
     intrinsic_cache_use_epoch(1, true);
+  }
+
+  #[test]
+  fn subgrid_memoization_matches_recursive_and_reuses() {
+    intrinsic_cache_use_epoch(1, true);
+    reset_subgrid_walk_count();
+
+    let mut subgrid_style = ComputedStyle::default();
+    subgrid_style.grid_row_subgrid = true;
+
+    let mut leaf = BoxNode::new_block(
+      Arc::new(subgrid_style),
+      FormattingContextType::Block,
+      vec![],
+    );
+    leaf.id = 3;
+
+    let mut middle = BoxNode::new_block(
+      Arc::new(ComputedStyle::default()),
+      FormattingContextType::Block,
+      vec![leaf],
+    );
+    middle.id = 2;
+
+    let mut root = BoxNode::new_block(
+      Arc::new(ComputedStyle::default()),
+      FormattingContextType::Block,
+      vec![middle],
+    );
+    root.id = 1;
+
+    let epoch = CACHE_EPOCH.load(Ordering::Relaxed);
+    let memoized = subtree_contains_subgrid(&root, epoch);
+    let raw = {
+      fn raw_scan(node: &BoxNode) -> bool {
+        if node.style.grid_row_subgrid
+          || node.style.grid_column_subgrid
+          || !node.style.subgrid_row_line_names.is_empty()
+          || !node.style.subgrid_column_line_names.is_empty()
+        {
+          return true;
+        }
+        node.children.iter().any(raw_scan)
+      }
+      raw_scan(&root)
+    };
+    assert_eq!(memoized, raw);
+    assert_eq!(subgrid_walk_count(), 3);
+
+    reset_subgrid_walk_count();
+    assert_eq!(subtree_contains_subgrid(&root, epoch), memoized);
+    assert_eq!(subgrid_walk_count(), 0);
+  }
+
+  #[test]
+  fn subgrid_memoization_invalidation_on_epoch_change() {
+    intrinsic_cache_use_epoch(7, true);
+
+    let child = BoxNode::new_block(
+      Arc::new(ComputedStyle::default()),
+      FormattingContextType::Block,
+      vec![],
+    );
+    let mut root = BoxNode::new_block(
+      Arc::new(ComputedStyle::default()),
+      FormattingContextType::Block,
+      vec![child],
+    );
+    root.id = 1;
+    root.children[0].id = 2;
+
+    let epoch = CACHE_EPOCH.load(Ordering::Relaxed);
+    reset_subgrid_walk_count();
+    assert!(!subtree_contains_subgrid(&root, epoch));
+    assert_eq!(subgrid_walk_count(), 2);
+
+    let mut new_style = ComputedStyle::default();
+    new_style.grid_column_subgrid = true;
+    root.children[0].style = Arc::new(new_style);
+
+    reset_subgrid_walk_count();
+    assert!(!subtree_contains_subgrid(&root, epoch));
+    assert_eq!(subgrid_walk_count(), 0);
+
+    intrinsic_cache_use_epoch(epoch + 1, false);
+    let new_epoch = CACHE_EPOCH.load(Ordering::Relaxed);
+    reset_subgrid_walk_count();
+    assert!(subtree_contains_subgrid(&root, new_epoch));
+    assert!(subgrid_walk_count() > 0);
+
+    intrinsic_cache_use_epoch(1, true);
+  }
+
+  #[test]
+  fn layout_epoch_clears_subgrid_cache() {
+    layout_cache_use_epoch(9, false, true, None);
+
+    let child = BoxNode::new_block(
+      Arc::new(ComputedStyle::default()),
+      FormattingContextType::Block,
+      vec![],
+    );
+    let mut root = BoxNode::new_block(
+      Arc::new(ComputedStyle::default()),
+      FormattingContextType::Block,
+      vec![child],
+    );
+    root.id = 10;
+    root.children[0].id = 11;
+
+    let epoch = LAYOUT_CACHE_EPOCH.with(|cell| cell.get());
+    reset_subgrid_walk_count();
+    assert!(!subtree_contains_subgrid(&root, epoch));
+    assert_eq!(subgrid_walk_count(), 2);
+
+    let mut subgrid_style = ComputedStyle::default();
+    subgrid_style.grid_row_subgrid = true;
+    root.children[0].style = Arc::new(subgrid_style);
+
+    reset_subgrid_walk_count();
+    assert!(!subtree_contains_subgrid(&root, epoch));
+    assert_eq!(subgrid_walk_count(), 0);
+
+    layout_cache_use_epoch(epoch + 1, false, true, None);
+    let new_epoch = LAYOUT_CACHE_EPOCH.with(|cell| cell.get());
+    reset_subgrid_walk_count();
+    assert!(subtree_contains_subgrid(&root, new_epoch));
+    assert!(subgrid_walk_count() > 0);
+
+    layout_cache_use_epoch(1, false, true, None);
   }
 }
 use std::time::Duration;
