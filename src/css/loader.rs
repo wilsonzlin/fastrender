@@ -931,10 +931,13 @@ pub fn extract_css_links(
         .map(|rel| tokenize_rel_list(rel))
         .unwrap_or_default();
       let rel_has_stylesheet = rel_list_contains_stylesheet(&rel_tokens);
-      let rel_has_alternate = rel_tokens.iter().any(|t| t.eq_ignore_ascii_case("alternate"));
+      let rel_has_alternate = rel_tokens
+        .iter()
+        .any(|t| t.eq_ignore_ascii_case("alternate"));
       let rel_has_preload = rel_tokens.iter().any(|t| t.eq_ignore_ascii_case("preload"));
-      let rel_has_modulepreload =
-        rel_tokens.iter().any(|t| t.eq_ignore_ascii_case("modulepreload"));
+      let rel_has_modulepreload = rel_tokens
+        .iter()
+        .any(|t| t.eq_ignore_ascii_case("modulepreload"));
 
       let as_style = attrs
         .get("as")
@@ -1625,6 +1628,21 @@ mod tests {
         "#;
     let urls = extract_css_links(html, "https://example.com/app/page.html", MediaType::Screen);
     assert_eq!(urls, vec!["https://example.com/styles/alt.css".to_string()]);
+  }
+
+  #[test]
+  fn alternate_stylesheets_can_be_disabled() {
+    let html = r#"
+            <link rel="alternate stylesheet" href="/styles/alt.css">
+        "#;
+    let toggles = RuntimeToggles::from_map(HashMap::from([(
+      "FASTR_FETCH_ALTERNATE_STYLESHEETS".to_string(),
+      "0".to_string(),
+    )]));
+    let urls = runtime::with_runtime_toggles(Arc::new(toggles), || {
+      extract_css_links(html, "https://example.com/app/page.html", MediaType::Screen)
+    });
+    assert!(urls.is_empty());
   }
 
   #[test]
