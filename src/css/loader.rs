@@ -7,7 +7,7 @@
 
 use crate::css::parser::{rel_list_contains_stylesheet, tokenize_rel_list};
 use crate::debug::runtime;
-use crate::error::{RenderError, RenderStage, Result};
+use crate::error::{Error, RenderError, RenderStage, Result};
 use crate::render_control::{check_active, check_active_periodic, RenderDeadline};
 use cssparser::{Parser, ParserInput, Token};
 use std::borrow::Cow;
@@ -566,18 +566,30 @@ where
                     inlined = Some(cached.clone());
                   } else {
                     state.seen.insert(resolved.clone());
-                    if let Ok(fetched) = fetch(&resolved) {
-                      let rewritten = absolutize_css_urls(&fetched, &resolved)?;
-                      let nested = inline_imports_with_diagnostics(
-                        &rewritten,
-                        &resolved,
-                        fetch,
-                        state,
-                        diagnostics,
-                        deadline,
-                      )?;
-                      state.cache.insert(resolved.clone(), nested.clone());
-                      inlined = Some(nested);
+                    if let Some(limit) = deadline {
+                      limit.check(RenderStage::Css)?;
+                    }
+                    match fetch(&resolved) {
+                      Ok(fetched) => {
+                        if let Some(limit) = deadline {
+                          limit.check(RenderStage::Css)?;
+                        }
+                        let rewritten = absolutize_css_urls(&fetched, &resolved)?;
+                        let nested = inline_imports_with_diagnostics(
+                          &rewritten,
+                          &resolved,
+                          fetch,
+                          state,
+                          diagnostics,
+                          deadline,
+                        )?;
+                        state.cache.insert(resolved.clone(), nested.clone());
+                        inlined = Some(nested);
+                      }
+                      Err(Error::Render(RenderError::Timeout { stage, elapsed })) => {
+                        return Err(RenderError::Timeout { stage, elapsed });
+                      }
+                      Err(_) => {}
                     }
                   }
 

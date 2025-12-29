@@ -2389,6 +2389,13 @@ fn check_deadline(deadline: Option<&RenderDeadline>, stage: RenderStage) -> Resu
   Ok(())
 }
 
+fn check_css_deadline(deadline: Option<&RenderDeadline>) -> std::result::Result<(), RenderError> {
+  if let Some(limit) = deadline {
+    limit.check(RenderStage::Css)?;
+  }
+  Ok(())
+}
+
 #[cfg(test)]
 mod viewport_resolution_tests {
   use super::*;
@@ -4376,6 +4383,7 @@ impl FastRender {
     let result = (|| -> Result<RenderReport> {
       let html_with_css = {
         let _span = trace_handle.span("css_inline", "style");
+        let _deadline_guard = DeadlineGuard::install(Some(&deadline));
         let mut guard = diagnostics.lock().unwrap();
         let inlined = match self.inline_stylesheets(
           html,
@@ -6356,6 +6364,7 @@ impl FastRender {
     mut stats: Option<&mut RenderStatsRecorder>,
   ) -> std::result::Result<String, RenderError> {
     let inlining_start = stats.as_deref().and_then(|rec| rec.timer());
+    check_css_deadline(deadline)?;
     let mut css_links = extract_css_links(html, base_url, media_type)?;
     if let Some(limit) = css_limit {
       if css_links.len() > limit {
@@ -6373,6 +6382,7 @@ impl FastRender {
     let mut import_state = InlineImportState::new();
 
     for css_url in css_links {
+      check_css_deadline(deadline)?;
       import_state.register_stylesheet(css_url.clone());
       if let Some(rec) = stats.as_deref_mut() {
         rec.record_fetch(ResourceKind::Stylesheet);
@@ -6383,8 +6393,10 @@ impl FastRender {
           continue;
         }
       }
+      check_css_deadline(deadline)?;
       match fetcher.fetch(&css_url) {
         Ok(res) => {
+          check_css_deadline(deadline)?;
           if let Some(ctx) = resource_context {
             if ctx
               .check_allowed_with_final(
@@ -6398,10 +6410,13 @@ impl FastRender {
             }
           }
           let css_text = decode_css_bytes(&res.bytes, res.content_type.as_deref());
+          check_css_deadline(deadline)?;
           let rewritten = absolutize_css_urls(&css_text, &css_url)?;
+          check_css_deadline(deadline)?;
           let mut import_diags: Vec<(String, String)> = Vec::new();
           let inlined = {
             let mut import_fetch = |u: &str| -> Result<String> {
+              check_css_deadline(deadline).map_err(Error::Render)?;
               if let Some(rec) = stats.as_deref_mut() {
                 rec.record_fetch(ResourceKind::Stylesheet);
               }
@@ -6416,6 +6431,7 @@ impl FastRender {
               }
               match fetcher.fetch(u) {
                 Ok(res) => {
+                  check_css_deadline(deadline).map_err(Error::Render)?;
                   if let Some(ctx) = resource_context {
                     if let Err(err) = ctx.check_allowed_with_final(
                       ResourceKind::Stylesheet,
@@ -6428,7 +6444,11 @@ impl FastRender {
                       )));
                     }
                   }
+                  check_css_deadline(deadline).map_err(Error::Render)?;
                   Ok(decode_css_bytes(&res.bytes, res.content_type.as_deref()))
+                }
+                Err(Error::Render(RenderError::Timeout { stage, elapsed })) => {
+                  return Err(Error::Render(RenderError::Timeout { stage, elapsed }));
                 }
                 Err(err) => {
                   diagnostics.record_error(ResourceKind::Stylesheet, u, &err);
@@ -6441,29 +6461,39 @@ impl FastRender {
               import_diags.push((url.to_string(), reason.to_string()));
             };
 
-            inline_imports_with_diagnostics(
+            let inlined = inline_imports_with_diagnostics(
               &rewritten,
               &css_url,
               &mut import_fetch,
               &mut import_state,
               &mut import_diag,
               deadline,
-            )?
+            )?;
+            check_css_deadline(deadline)?;
+            inlined
           };
           for (url, reason) in import_diags.drain(..) {
             diagnostics.record_message(ResourceKind::Stylesheet, &url, &reason);
           }
           combined_css.push_str(&inlined);
           combined_css.push('\n');
+          check_css_deadline(deadline)?;
+        }
+        Err(Error::Render(RenderError::Timeout { stage, elapsed })) => {
+          return Err(RenderError::Timeout { stage, elapsed });
         }
         Err(err) => diagnostics.record_error(ResourceKind::Stylesheet, &css_url, &err),
       }
     }
 
+    check_css_deadline(deadline)?;
     let output = if combined_css.is_empty() {
       html.to_string()
     } else {
-      inject_css_into_html(html, &combined_css)
+      check_css_deadline(deadline)?;
+      let injected = inject_css_into_html(html, &combined_css);
+      check_css_deadline(deadline)?;
+      injected
     };
     if let Some(rec) = stats.as_deref_mut() {
       RenderStatsRecorder::record_ms(&mut rec.stats.timings.css_inlining_ms, inlining_start);
