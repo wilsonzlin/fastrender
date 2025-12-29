@@ -4,7 +4,7 @@ FastRender supports a subset of OpenType color glyph formats. This note captures
 
 ## Rendering entry points
 
-- [`TextRasterizer`](../../src/paint/text_rasterize.rs) is the only renderer that consults [`ColorFontRenderer`](../../src/text/color_fonts.rs). `render_shaped_run` tries, in order:
+- [`TextRasterizer`](../../src/paint/text_rasterize.rs) is the only renderer that consults [`ColorFontRenderer`](../../src/text/color_fonts/mod.rs). `render_shaped_run` tries, in order:
   1. CBDT/CBLC or sbix bitmaps decoded as PNG (`glyph_raster_image`); other bitmap encodings are skipped.
   2. SVG-in-OT glyphs rendered with `resvg`/`usvg`, scaled from the font's units-per-em to the requested size.
   3. COLR/CPAL v0 layered outlines filled with palette colors (0xFFFF resolves to the resolved text color).
@@ -15,9 +15,9 @@ FastRender supports a subset of OpenType color glyph formats. This note captures
 
 ## Palette handling
 
-- Shaped runs carry a `palette_index` (`text/pipeline.rs`), but CSS `font-palette` / `@font-palette-values` are not parsed, so the index remains 0.
-- [`parse_cpal_palette`](../../src/text/color_fonts.rs) reads CPAL v0/v1 color records and clamps the requested palette to the available count. Palette labels/types (e.g., light/dark) are ignored. Missing entries and 0xFFFF palette indices resolve to the text color.
-- Override colors and named palettes are unsupported; CPAL v1 `paletteTypes`/`paletteLabels` are not consulted.
+- CSS `font-palette` and `@font-palette-values` are parsed and resolved; shaped runs carry a `palette_index` and `palette_overrides` (`text/pipeline.rs`) derived from the active style.
+- CPAL parsing/selection lives in [`text/color_fonts/cpal.rs`](../../src/text/color_fonts/cpal.rs) (re-exported via [`text::cpal`](../../src/text/cpal.rs)). `select_cpal_palette` respects CPAL v1 `paletteTypes` bits for light/dark palettes and clamps indices to the available count. `parse_cpal_palette` returns palette colors and optional palette type metadata.
+- Override colors are applied to COLR v0/v1 rendering; missing entries and palette indices of 0xFFFF resolve to the resolved text color. CPAL palette labels are not consulted yet.
 
 ## Transforms, opacity, and shadows
 

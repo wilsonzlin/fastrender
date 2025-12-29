@@ -21,7 +21,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 pub use bitmap::render_bitmap_glyph;
-pub use cpal::select_cpal_palette;
+pub use cpal::{parse_cpal_palette, select_cpal_palette, ParsedPalette};
 pub use svg::render_svg_glyph;
 pub use svg::sanitize_svg_glyph_for_tests;
 pub use svg::MAX_SVG_GLYPH_BYTES;
