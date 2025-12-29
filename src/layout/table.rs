@@ -1099,6 +1099,7 @@ impl TableStructure {
     let mut row_max_heights: Vec<Option<SpecifiedHeight>> = Vec::new();
     let mut row_visibilities: Vec<Visibility> = Vec::new();
     let mut row_vertical_aligns: Vec<Option<VerticalAlign>> = Vec::new();
+    let mut row_span_remaining: Vec<usize> = Vec::new();
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum RowGroupKind {
       Head,
@@ -1156,7 +1157,7 @@ impl TableStructure {
       }
     }
 
-    for (child_idx, child) in table_box
+    for (_child_idx, child) in table_box
       .children
       .iter()
       .filter(|child| child.style.running_position.is_none())
@@ -1178,7 +1179,7 @@ impl TableStructure {
             None
           };
           // Process rows within the group
-          for (row_child_idx, row_child) in child.children.iter().enumerate() {
+          for row_child in &child.children {
             if matches!(
               Self::get_table_element_type(row_child),
               TableElementType::Row
@@ -1215,12 +1216,13 @@ impl TableStructure {
                 RowGroupKind::Foot => footer_rows.push(current_row),
                 RowGroupKind::Body => body_rows.push(current_row),
               }
-              let row_cells =
-                Self::process_row(row_child, current_row, row_child_idx, &mut structure.grid);
-              for cell in row_cells {
-                max_cols = max_cols.max(cell.1 + cell.3);
-                cell_data.push(cell);
-              }
+              Self::process_row(
+                row_child,
+                current_row,
+                &mut row_span_remaining,
+                &mut max_cols,
+                &mut cell_data,
+              );
               current_row += 1;
             }
           }
@@ -1249,11 +1251,13 @@ impl TableStructure {
           row_min_heights.push(min_h);
           row_max_heights.push(max_h);
           body_rows.push(current_row);
-          let row_cells = Self::process_row(child, current_row, child_idx, &mut structure.grid);
-          for cell in row_cells {
-            max_cols = max_cols.max(cell.1 + cell.3);
-            cell_data.push(cell);
-          }
+          Self::process_row(
+            child,
+            current_row,
+            &mut row_span_remaining,
+            &mut max_cols,
+            &mut cell_data,
+          );
           current_row += 1;
         }
         _ => {}
@@ -1451,7 +1455,9 @@ impl TableStructure {
       // Mark grid cells
       for r in *new_row..(*new_row + *rowspan).min(structure.row_count) {
         for c in *col..(*col + *colspan).min(structure.column_count) {
-          structure.grid[r][c] = Some(idx);
+          if structure.grid[r][c].is_none() {
+            structure.grid[r][c] = Some(idx);
+          }
         }
       }
 
@@ -1619,34 +1625,63 @@ impl TableStructure {
     TableElementType::Unknown
   }
 
-  /// Processes a table row and returns cell information
+  /// Processes a table row and records cell information with collision-aware placement.
   fn process_row(
     row: &BoxNode,
     row_idx: usize,
-    _box_idx: usize,
-    _grid: &mut Vec<Vec<Option<usize>>>,
-  ) -> Vec<(usize, usize, usize, usize, usize)> {
-    let mut cells = Vec::new();
-    let mut col_idx = 0;
+    row_span_remaining: &mut Vec<usize>,
+    max_cols: &mut usize,
+    cell_data: &mut Vec<(usize, usize, usize, usize, usize)>,
+  ) {
+    // Track columns occupied in the current row due to rowspans or earlier cells.
+    let mut occupied: Vec<bool> = row_span_remaining.iter().map(|span| *span > 0).collect();
+    for span in row_span_remaining.iter_mut() {
+      if *span > 0 {
+        *span -= 1;
+      }
+    }
 
     for (cell_idx, cell_child) in row.children.iter().enumerate() {
       if matches!(
         Self::get_table_element_type(cell_child),
         TableElementType::Cell
       ) {
-        // Extract colspan and rowspan from debug info
-        let (colspan, rowspan) = if let Some(ref debug_info) = cell_child.debug_info {
+        // Extract colspan and rowspan from debug info and normalize to at least 1.
+        let (mut colspan, mut rowspan) = if let Some(ref debug_info) = cell_child.debug_info {
           (debug_info.colspan, debug_info.rowspan)
         } else {
           (1, 1)
         };
+        colspan = colspan.max(1);
+        rowspan = rowspan.max(1);
 
-        cells.push((row_idx, col_idx, rowspan, colspan, cell_idx));
-        col_idx += colspan;
+        // Find the first free block of columns that can fit the span.
+        let mut start_col = 0usize;
+        loop {
+          let end_col = start_col + colspan;
+          if end_col > occupied.len() {
+            occupied.resize(end_col, false);
+            row_span_remaining.resize(end_col, 0);
+          }
+          if (start_col..end_col).all(|c| !occupied[c]) {
+            break;
+          }
+          start_col += 1;
+        }
+
+        cell_data.push((row_idx, start_col, rowspan, colspan, cell_idx));
+        *max_cols = (*max_cols).max(start_col + colspan);
+
+        // Mark the covered columns as occupied for this row and future rows.
+        let span_rows = rowspan.saturating_sub(1);
+        for col in start_col..start_col + colspan {
+          occupied[col] = true;
+          if let Some(slot) = row_span_remaining.get_mut(col) {
+            *slot = (*slot).max(span_rows);
+          }
+        }
       }
     }
-
-    cells
   }
 
   /// Gets the cell at a grid position, if any
@@ -8776,6 +8811,213 @@ mod tests {
     let cell = &structure.cells[0];
     assert_eq!(cell.colspan, 1);
     assert_eq!(cell.source_col, 0);
+  }
+
+  #[test]
+  fn rowspan_shifts_following_row_cells() {
+    let mut table_style = ComputedStyle::default();
+    table_style.display = Display::Table;
+    table_style.border_spacing_horizontal = Length::px(0.0);
+    table_style.border_spacing_vertical = Length::px(0.0);
+
+    let mut row_style = ComputedStyle::default();
+    row_style.display = Display::TableRow;
+
+    let mut cell_style = ComputedStyle::default();
+    cell_style.display = Display::TableCell;
+    cell_style.width = Some(Length::px(10.0));
+
+    let spanning_cell = BoxNode::new_block(
+      Arc::new(cell_style.clone()),
+      FormattingContextType::Block,
+      vec![],
+    )
+    .with_debug_info(DebugInfo::new(Some("td".to_string()), None, vec![]).with_spans(1, 2));
+    let first_row_sibling = BoxNode::new_block(
+      Arc::new(cell_style.clone()),
+      FormattingContextType::Block,
+      vec![],
+    )
+    .with_debug_info(DebugInfo::new(Some("td".to_string()), None, vec![]).with_spans(1, 1));
+    let first_row = BoxNode::new_block(
+      Arc::new(row_style.clone()),
+      FormattingContextType::Block,
+      vec![spanning_cell, first_row_sibling],
+    );
+
+    let second_row_cell =
+      BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![])
+        .with_debug_info(DebugInfo::new(Some("td".to_string()), None, vec![]).with_spans(1, 1));
+    let second_row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![second_row_cell],
+    );
+
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![first_row, second_row],
+    );
+
+    let structure = TableStructure::from_box_tree(&table);
+    assert_eq!(structure.row_count, 2);
+    assert_eq!(structure.column_count, 2);
+
+    let spanning = structure
+      .cells
+      .iter()
+      .find(|c| c.source_row == 0 && c.box_index == 0)
+      .expect("spanning cell");
+    let first_row_second = structure
+      .cells
+      .iter()
+      .find(|c| c.source_row == 0 && c.box_index == 1)
+      .expect("sibling cell");
+    let second_row_only = structure
+      .cells
+      .iter()
+      .find(|c| c.source_row == 1 && c.box_index == 0)
+      .expect("second row cell");
+
+    assert_eq!(spanning.col, 0);
+    assert_eq!(spanning.rowspan, 2);
+    assert_eq!(first_row_second.col, 1);
+    assert_eq!(second_row_only.col, 1);
+    assert_eq!(structure.grid[1][0], Some(spanning.index));
+    assert_eq!(structure.grid[1][1], Some(second_row_only.index));
+
+    let tfc = TableFormattingContext::new();
+    let fragment = tfc
+      .layout(&table, &LayoutConstraints::min_content())
+      .expect("table layout");
+    let cell_fragments: Vec<&FragmentNode> = fragment
+      .children
+      .iter()
+      .filter(|f| {
+        f.style
+          .as_ref()
+          .map(|s| matches!(s.display, Display::TableCell))
+          .unwrap_or(false)
+      })
+      .collect();
+    assert_eq!(cell_fragments.len(), 3);
+    let col1_x = cell_fragments[1].bounds.x();
+    let second_row_x = cell_fragments[2].bounds.x();
+    assert!(
+      (col1_x - second_row_x).abs() < 0.1,
+      "second-row cell should be placed in column 1 ({} vs {})",
+      col1_x,
+      second_row_x
+    );
+    assert!(
+      second_row_x > cell_fragments[0].bounds.x(),
+      "rowspanning cell should reserve its column"
+    );
+  }
+
+  #[test]
+  fn rowspan_and_colspan_find_next_free_block() {
+    let mut table_style = ComputedStyle::default();
+    table_style.display = Display::Table;
+    table_style.border_spacing_horizontal = Length::px(0.0);
+    table_style.border_spacing_vertical = Length::px(0.0);
+
+    let mut row_style = ComputedStyle::default();
+    row_style.display = Display::TableRow;
+
+    let mut cell_style = ComputedStyle::default();
+    cell_style.display = Display::TableCell;
+    cell_style.width = Some(Length::px(10.0));
+
+    let top_spanning = BoxNode::new_block(
+      Arc::new(cell_style.clone()),
+      FormattingContextType::Block,
+      vec![],
+    )
+    .with_debug_info(DebugInfo::new(Some("td".to_string()), None, vec![]).with_spans(1, 2));
+    let top_neighbor = BoxNode::new_block(
+      Arc::new(cell_style.clone()),
+      FormattingContextType::Block,
+      vec![],
+    )
+    .with_debug_info(DebugInfo::new(Some("td".to_string()), None, vec![]).with_spans(1, 1));
+    let first_row = BoxNode::new_block(
+      Arc::new(row_style.clone()),
+      FormattingContextType::Block,
+      vec![top_spanning, top_neighbor],
+    );
+
+    let bottom_span =
+      BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![])
+        .with_debug_info(DebugInfo::new(Some("td".to_string()), None, vec![]).with_spans(2, 1));
+    let second_row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![bottom_span],
+    );
+
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![first_row, second_row],
+    );
+
+    let structure = TableStructure::from_box_tree(&table);
+    assert_eq!(structure.row_count, 2);
+    assert_eq!(structure.column_count, 3);
+
+    let spanning = structure
+      .cells
+      .iter()
+      .find(|c| c.source_row == 0 && c.box_index == 0)
+      .expect("top spanning cell");
+    let neighbor = structure
+      .cells
+      .iter()
+      .find(|c| c.source_row == 0 && c.box_index == 1)
+      .expect("top neighbor cell");
+    let spanning_two = structure
+      .cells
+      .iter()
+      .find(|c| c.source_row == 1 && c.box_index == 0)
+      .expect("bottom spanning cell");
+
+    assert_eq!(spanning.col, 0);
+    assert_eq!(neighbor.col, 1);
+    assert_eq!(spanning_two.col, 1);
+    assert_eq!(spanning_two.colspan, 2);
+    assert_eq!(structure.grid[1][0], Some(spanning.index));
+    assert_eq!(structure.grid[1][1], Some(spanning_two.index));
+    assert_eq!(structure.grid[1][2], Some(spanning_two.index));
+
+    let tfc = TableFormattingContext::new();
+    let fragment = tfc
+      .layout(&table, &LayoutConstraints::min_content())
+      .expect("table layout");
+    let cell_fragments: Vec<&FragmentNode> = fragment
+      .children
+      .iter()
+      .filter(|f| {
+        f.style
+          .as_ref()
+          .map(|s| matches!(s.display, Display::TableCell))
+          .unwrap_or(false)
+      })
+      .collect();
+    assert_eq!(cell_fragments.len(), 3);
+    let neighbor_x = cell_fragments[1].bounds.x();
+    let spanning_two_x = cell_fragments[2].bounds.x();
+    assert!(
+      (neighbor_x - spanning_two_x).abs() < 0.1,
+      "colspan cell should start at the next free column ({:.2} vs {:.2})",
+      neighbor_x,
+      spanning_two_x
+    );
+    assert!(
+      spanning_two_x > cell_fragments[0].bounds.x(),
+      "rowspanning cell should keep later spans out of its column"
+    );
   }
 
   #[test]
