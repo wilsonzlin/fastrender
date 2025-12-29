@@ -47,6 +47,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
+use tempfile::NamedTempFile;
 
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
@@ -798,17 +799,39 @@ fn url_hint_from_cache_path(cache_path: &Path) -> String {
     .unwrap_or_else(|| format!("file://{}", cache_path.display()))
 }
 
-fn write_progress(path: &Path, progress: &PageProgress) -> io::Result<()> {
+fn atomic_write_with_hook<F>(path: &Path, contents: &[u8], pre_rename_hook: F) -> io::Result<()>
+where
+  F: FnOnce(&Path) -> io::Result<()>,
+{
   if let Some(parent) = path.parent() {
     if !parent.as_os_str().is_empty() {
       fs::create_dir_all(parent)?;
     }
   }
+  let dir = path
+    .parent()
+    .filter(|p| !p.as_os_str().is_empty())
+    .unwrap_or_else(|| Path::new("."));
+  let mut temp = NamedTempFile::new_in(dir)?;
+  temp.write_all(contents)?;
+  temp.flush()?;
+  temp.as_file_mut().sync_all()?;
+  let temp_path = temp.into_temp_path();
+  pre_rename_hook(temp_path.as_ref())?;
+  temp_path.persist(path).map_err(|e| e.error)
+}
+
+fn atomic_write(path: &Path, contents: &[u8]) -> io::Result<()> {
+  atomic_write_with_hook(path, contents, |_| Ok(()))
+}
+
+fn write_progress(path: &Path, progress: &PageProgress) -> io::Result<()> {
   let mut normalized = progress.clone();
   normalized.notes = normalize_progress_note(&normalized.notes);
   let json = serde_json::to_string_pretty(&normalized)
     .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
-  fs::write(path, format!("{json}\n"))
+  let formatted = format!("{json}\n");
+  atomic_write(path, formatted.as_bytes())
 }
 
 fn prune_stale_progress(progress_dir: &Path, keep: &BTreeSet<String>) -> io::Result<usize> {
@@ -1251,12 +1274,7 @@ fn trace_issue_message(trace_path: &Path, reason: Option<&str>) -> Option<String
 }
 
 fn write_text_file(path: &Path, contents: &str) -> io::Result<()> {
-  if let Some(parent) = path.parent() {
-    if !parent.as_os_str().is_empty() {
-      fs::create_dir_all(parent)?;
-    }
-  }
-  fs::write(path, contents)
+  atomic_write(path, contents.as_bytes())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2833,6 +2851,7 @@ mod tests {
   use super::*;
   use std::collections::HashSet;
   use std::fs;
+  use std::io;
   use std::time::Duration;
   use tempfile::tempdir;
 
@@ -2859,6 +2878,55 @@ mod tests {
       set.insert(*status);
     }
     set
+  }
+
+  #[test]
+  fn write_progress_roundtrips_json_with_newline() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("page.json");
+
+    let mut progress = PageProgress::new("https://example.com/".to_string());
+    progress.status = ProgressStatus::Ok;
+    progress.total_ms = Some(12.5);
+
+    write_progress(&path, &progress).unwrap();
+
+    let contents = fs::read_to_string(&path).unwrap();
+    assert!(
+      contents.ends_with('\n'),
+      "progress file should end with newline: {contents:?}"
+    );
+    let parsed: PageProgress = serde_json::from_str(&contents).unwrap();
+    assert_eq!(parsed.url, progress.url);
+    assert_eq!(parsed.status, progress.status);
+    assert_eq!(parsed.total_ms, progress.total_ms);
+  }
+
+  #[test]
+  fn atomic_write_failure_leaves_original_file() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("page.json");
+
+    let original = "{\"url\":\"https://kept.test/\"}\n";
+    fs::write(&path, original).unwrap();
+
+    let err = atomic_write_with_hook(&path, b"{\"url\":\"https://new.test/\"}\n", |temp_path| {
+      assert!(temp_path.exists());
+      Err(io::Error::new(
+        io::ErrorKind::Other,
+        "fail before rename for test",
+      ))
+    });
+    assert!(err.is_err());
+
+    let contents = fs::read_to_string(&path).unwrap();
+    assert_eq!(contents, original);
+
+    let remaining: Vec<_> = fs::read_dir(dir.path())
+      .unwrap()
+      .filter_map(|e| e.ok())
+      .collect();
+    assert_eq!(remaining.len(), 1);
   }
 
   #[test]
