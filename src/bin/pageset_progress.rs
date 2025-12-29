@@ -48,6 +48,8 @@ const DEFAULT_PROGRESS_DIR: &str = "progress/pages";
 const DEFAULT_LOG_DIR: &str = "target/pageset/logs";
 const DEFAULT_TRACE_DIR: &str = "target/pageset/traces";
 const DEFAULT_TRACE_PROGRESS_DIR: &str = "target/pageset/trace-progress";
+// Treat traces smaller than this as likely incomplete/partial.
+const MIN_TRACE_BYTES: u64 = 4096;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -150,6 +152,18 @@ struct RunArgs {
   #[arg(long)]
   trace_slow_ms: Option<f64>,
 
+  /// Hard timeout for trace reruns in seconds (defaults to timeout * 2)
+  #[arg(long)]
+  trace_timeout: Option<u64>,
+
+  /// Cooperative timeout for trace reruns in milliseconds (0 disables; defaults based on trace-timeout)
+  #[arg(long)]
+  trace_soft_timeout_ms: Option<u64>,
+
+  /// Number of parallel trace workers
+  #[arg(long, default_value_t = 1)]
+  trace_jobs: usize,
+
   /// Directory to write Chrome trace JSON into (not committed)
   #[arg(long, default_value = DEFAULT_TRACE_DIR)]
   trace_dir: PathBuf,
@@ -180,6 +194,18 @@ struct ReportArgs {
   /// Exit non-zero when any page timed out or panicked
   #[arg(long)]
   fail_on_bad: bool,
+
+  /// Include trace reruns when summarizing (if present)
+  #[arg(long)]
+  include_trace: bool,
+
+  /// Directory containing trace rerun progress JSON (not committed)
+  #[arg(long, default_value = DEFAULT_TRACE_PROGRESS_DIR)]
+  trace_progress_dir: PathBuf,
+
+  /// Directory containing Chrome trace JSON (not committed)
+  #[arg(long, default_value = DEFAULT_TRACE_DIR)]
+  trace_dir: PathBuf,
 }
 
 #[derive(Args, Debug)]
@@ -286,6 +312,26 @@ struct StageBuckets {
   cascade: f64,
   layout: f64,
   paint: f64,
+}
+
+fn compute_soft_timeout_ms(hard_timeout: Duration, override_ms: Option<u64>) -> Option<u64> {
+  if let Some(ms) = override_ms {
+    return Some(ms);
+  }
+  let ms = hard_timeout.as_millis();
+  if ms <= 250 {
+    None
+  } else {
+    Some((ms - 250) as u64)
+  }
+}
+
+fn compute_trace_hard_timeout(
+  main_timeout_secs: u64,
+  trace_timeout_override: Option<u64>,
+) -> Duration {
+  let secs = trace_timeout_override.unwrap_or_else(|| main_timeout_secs.saturating_mul(2));
+  Duration::from_secs(secs)
 }
 
 fn normalize_hotspot(h: &str) -> String {
@@ -713,6 +759,38 @@ fn panic_to_string(panic: Box<dyn std::any::Any + Send + 'static>) -> String {
     .unwrap_or_else(|| "unknown panic".to_string())
 }
 
+fn trace_issue_message(trace_path: &Path, reason: Option<&str>) -> Option<String> {
+  let base = match fs::metadata(trace_path) {
+    Ok(meta) => {
+      let size = meta.len();
+      if size < MIN_TRACE_BYTES {
+        format!(
+          "Trace file {} is only {} bytes (likely partial from a crash or kill).",
+          trace_path.display(),
+          size
+        )
+      } else {
+        return None;
+      }
+    }
+    Err(err) if err.kind() == io::ErrorKind::NotFound => format!(
+      "Trace file {} was not written (worker likely crashed or was killed before tracing).",
+      trace_path.display()
+    ),
+    Err(err) => format!(
+      "Trace file {} could not be inspected: {}",
+      trace_path.display(),
+      err
+    ),
+  };
+  let mut message = base;
+  if let Some(reason) = reason {
+    message.push(' ');
+    message.push_str(reason);
+  }
+  Some(message)
+}
+
 fn write_text_file(path: &Path, contents: &str) -> io::Result<()> {
   if let Some(parent) = path.parent() {
     if !parent.as_os_str().is_empty() {
@@ -785,6 +863,16 @@ fn append_timeout_stderr_note(stderr_path: &Path, elapsed: Duration) {
   }
 }
 
+fn append_log_line(path: &Path, line: &str) -> io::Result<()> {
+  if let Some(parent) = path.parent() {
+    if !parent.as_os_str().is_empty() {
+      fs::create_dir_all(parent)?;
+    }
+  }
+  let mut file = OpenOptions::new().append(true).create(true).open(path)?;
+  writeln!(file, "{line}")
+}
+
 fn add_stage_buckets(into: &mut StageBuckets, from: &StageBuckets) {
   into.fetch += from.fetch;
   into.css += from.css;
@@ -821,6 +909,41 @@ fn read_progress_dir(dir: &Path) -> io::Result<Vec<LoadedProgress>> {
       format!("no progress files found in {}", dir.display()),
     ));
   }
+
+  let mut progresses = Vec::new();
+  for path in files {
+    let contents = fs::read_to_string(&path).map_err(|e| {
+      io::Error::new(
+        e.kind(),
+        format!("failed to read {}: {}", path.display(), e),
+      )
+    })?;
+    let progress: PageProgress = serde_json::from_str(&contents).map_err(|e| {
+      io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("failed to parse {}: {}", path.display(), e),
+      )
+    })?;
+    let stem = path
+      .file_stem()
+      .map(|s| s.to_string_lossy().to_string())
+      .unwrap_or_else(|| path.display().to_string());
+    progresses.push(LoadedProgress { stem, progress });
+  }
+  Ok(progresses)
+}
+
+fn read_progress_dir_allow_empty(dir: &Path) -> io::Result<Vec<LoadedProgress>> {
+  if !dir.exists() {
+    return Ok(Vec::new());
+  }
+  let mut files: Vec<PathBuf> = fs::read_dir(dir)
+    .map_err(|e| io::Error::new(e.kind(), format!("{}: {}", dir.display(), e)))?
+    .filter_map(|entry| entry.ok().map(|e| e.path()))
+    .filter(|path| path.extension().map(|ext| ext == "json").unwrap_or(false))
+    .collect();
+
+  files.sort();
 
   let mut progresses = Vec::new();
   for path in files {
@@ -967,6 +1090,49 @@ fn report(args: ReportArgs) -> io::Result<()> {
     println!();
   }
 
+  if args.include_trace {
+    println!(
+      "Trace artifacts (progress: {}, traces: {}):",
+      args.trace_progress_dir.display(),
+      args.trace_dir.display()
+    );
+    let trace_progresses = read_progress_dir_allow_empty(&args.trace_progress_dir)?;
+    if trace_progresses.is_empty() {
+      println!("  (no trace progress files found)");
+    } else {
+      for entry in trace_progresses {
+        let total_ms = entry
+          .progress
+          .total_ms
+          .map(|ms| format!("{ms:.2}ms"))
+          .unwrap_or_else(|| "-".to_string());
+        let trace_path = args.trace_dir.join(format!("{}.json", entry.stem));
+        let trace_status = match fs::metadata(&trace_path) {
+          Ok(meta) => {
+            let size = meta.len();
+            if size < MIN_TRACE_BYTES {
+              format!("{} ({} bytes, likely partial)", trace_path.display(), size)
+            } else {
+              format!("{} ({} bytes)", trace_path.display(), size)
+            }
+          }
+          Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            format!("{} (missing)", trace_path.display())
+          }
+          Err(err) => format!("{} (unreadable: {})", trace_path.display(), err),
+        };
+        println!(
+          "  {}: status={} total={} -> {}",
+          entry.stem,
+          entry.progress.status.as_str(),
+          total_ms,
+          trace_status
+        );
+      }
+    }
+    println!();
+  }
+
   if args.fail_on_bad && (status_counts.timeout > 0 || status_counts.panic > 0) {
     eprintln!(
       "Failing due to {} timeout(s) and {} panic(s).",
@@ -1075,11 +1241,12 @@ fn run_queue(
   hard_timeout: Duration,
   soft_timeout_ms: Option<u64>,
   diagnostics: DiagnosticsArg,
+  jobs: usize,
 ) -> io::Result<()> {
   let mut running: Vec<RunningChild> = Vec::new();
 
   while !queue.is_empty() || !running.is_empty() {
-    while running.len() < args.jobs {
+    while running.len() < jobs {
       let Some(item) = queue.pop_front() else {
         break;
       };
@@ -1121,6 +1288,14 @@ fn run_queue(
         );
 
         eprintln!("TIMEOUT {}", entry.item.stem);
+        if let Some(trace_out) = &entry.item.trace_out {
+          if let Some(msg) = trace_issue_message(
+            trace_out,
+            Some("Trace likely incomplete: worker was killed at the hard timeout."),
+          ) {
+            let _ = append_log_line(&entry.item.log_path, &msg);
+          }
+        }
         continue;
       }
 
@@ -1154,6 +1329,11 @@ fn run_queue(
               entry.item.stem, exit_str
             );
           }
+          if let Some(trace_out) = &entry.item.trace_out {
+            if let Some(msg) = trace_issue_message(trace_out, None) {
+              let _ = append_log_line(&entry.item.log_path, &msg);
+            }
+          }
           continue;
         }
         Ok(None) => {
@@ -1171,6 +1351,14 @@ fn run_queue(
           let progress = progress.merge_preserving_manual(previous);
           let _ = write_progress(&entry.item.progress_path, &progress);
           eprintln!("PANIC {} (try_wait failed)", entry.item.stem);
+          if let Some(trace_out) = &entry.item.trace_out {
+            if let Some(msg) = trace_issue_message(
+              trace_out,
+              Some("Trace likely incomplete because the worker crashed before flushing it."),
+            ) {
+              let _ = append_log_line(&entry.item.log_path, &msg);
+            }
+          }
           continue;
         }
       }
@@ -1191,16 +1379,20 @@ fn run(args: RunArgs) -> io::Result<()> {
     eprintln!("timeout must be > 0 (hard timeout)");
     std::process::exit(2);
   }
+  if args.trace_jobs == 0 {
+    eprintln!("trace-jobs must be > 0");
+    std::process::exit(2);
+  }
+  if matches!(args.trace_timeout, Some(0)) {
+    eprintln!("trace-timeout must be > 0 when set");
+    std::process::exit(2);
+  }
 
   let hard_timeout = Duration::from_secs(args.timeout);
-  let soft_timeout_ms = args.soft_timeout_ms.or_else(|| {
-    let ms = hard_timeout.as_millis();
-    if ms <= 250 {
-      None
-    } else {
-      Some((ms - 250) as u64)
-    }
-  });
+  let soft_timeout_ms = compute_soft_timeout_ms(hard_timeout, args.soft_timeout_ms);
+  let trace_hard_timeout = compute_trace_hard_timeout(args.timeout, args.trace_timeout);
+  let trace_soft_timeout_ms =
+    compute_soft_timeout_ms(trace_hard_timeout, args.trace_soft_timeout_ms);
 
   fs::create_dir_all(&args.progress_dir)?;
   fs::create_dir_all(&args.log_dir)?;
@@ -1298,6 +1490,7 @@ fn run(args: RunArgs) -> io::Result<()> {
     hard_timeout,
     soft_timeout_ms,
     args.diagnostics,
+    args.jobs,
   )?;
 
   // Summary counters based on produced progress files (main run only).
@@ -1351,9 +1544,15 @@ fn run(args: RunArgs) -> io::Result<()> {
       });
     }
     if !trace_items.is_empty() {
+      let soft_trace_desc = trace_soft_timeout_ms
+        .map(|ms| format!("{ms}ms"))
+        .unwrap_or_else(|| "disabled".to_string());
       println!(
-        "Tracing {} pages (writing to {})...",
+        "Tracing {} pages (jobs={}, hard timeout {}s, soft timeout {}) writing to {}...",
         trace_items.len(),
+        args.trace_jobs,
+        trace_hard_timeout.as_secs(),
+        soft_trace_desc,
         args.trace_dir.display()
       );
       let trace_queue = std::collections::VecDeque::from(trace_items);
@@ -1361,9 +1560,10 @@ fn run(args: RunArgs) -> io::Result<()> {
         &exe,
         &args,
         trace_queue,
-        hard_timeout,
-        soft_timeout_ms,
+        trace_hard_timeout,
+        trace_soft_timeout_ms,
         DiagnosticsArg::Verbose,
+        args.trace_jobs,
       )?;
     }
   }
@@ -1418,6 +1618,7 @@ fn worker(args: WorkerArgs) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use std::time::Duration;
 
   #[test]
   fn merge_keeps_previous_hotspot_when_new_is_unknown() {
@@ -1495,6 +1696,37 @@ mod tests {
     ensure_note_includes(&mut progress, note);
     ensure_note_includes(&mut progress, note);
     assert_eq!(progress.notes, note);
+  }
+
+  #[test]
+  fn soft_timeout_defaults_leave_buffer_before_hard_kill() {
+    let hard = Duration::from_secs(5);
+    assert_eq!(compute_soft_timeout_ms(hard, None), Some(4750));
+  }
+
+  #[test]
+  fn soft_timeout_default_disables_when_hard_timeout_short() {
+    let hard = Duration::from_millis(200);
+    assert_eq!(compute_soft_timeout_ms(hard, None), None);
+  }
+
+  #[test]
+  fn soft_timeout_prefers_explicit_override() {
+    let hard = Duration::from_secs(5);
+    assert_eq!(compute_soft_timeout_ms(hard, Some(1234)), Some(1234));
+    assert_eq!(compute_soft_timeout_ms(hard, Some(0)), Some(0));
+  }
+
+  #[test]
+  fn trace_timeout_defaults_to_double() {
+    let hard = compute_trace_hard_timeout(5, None);
+    assert_eq!(hard, Duration::from_secs(10));
+  }
+
+  #[test]
+  fn trace_timeout_respects_override() {
+    let hard = compute_trace_hard_timeout(5, Some(7));
+    assert_eq!(hard, Duration::from_secs(7));
   }
 }
 

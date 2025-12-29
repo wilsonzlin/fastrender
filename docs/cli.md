@@ -125,11 +125,11 @@ Pageset wrappers enable the disk-backed subresource cache by default, persisting
 - Run:
   - Help: `cargo run --release --bin pageset_progress -- run --help`
   - Typical: `cargo run --release --bin pageset_progress -- run --timeout 5`
-- Report: `cargo run --release --bin pageset_progress -- report [--progress-dir progress/pages --top 10 --fail-on-bad]` prints status counts, slowest pages, and hotspot histograms for the saved progress files.
+- Report: `cargo run --release --bin pageset_progress -- report [--progress-dir progress/pages --top 10 --fail-on-bad]` prints status counts, slowest pages, and hotspot histograms for the saved progress files. Add `--include-trace` to list any saved Chrome traces (from `target/pageset/traces/` + `target/pageset/trace-progress/`).
 - Safety: uses **panic containment** (per-page worker process) and a **hard timeout** (kills runaway workers) so one broken page cannot stall the whole run.
 - Outputs:
   - `progress/pages/<stem>.json` — small, committed per-page progress artifact
   - `target/pageset/logs/<stem>.log` — per-page log (not committed)
   - `target/pageset/logs/<stem>.stderr.log` — worker stdout/stderr, including panic
     backtraces and a note if the parent kills the process on timeout (not committed)
-  - Optional traces: `--trace-failures` / `--trace-slow-ms <ms>` → `target/pageset/traces/<stem>.json` (not committed)
+  - Optional traces: `--trace-failures` / `--trace-slow-ms <ms>` rerun targeted pages with Chrome tracing enabled; tune trace rerun budgets with `--trace-timeout` (defaults to `timeout * 2`), `--trace-soft-timeout-ms`, and `--trace-jobs` (defaults to 1 to avoid contention). Traces land in `target/pageset/traces/<stem>.json` with rerun progress under `target/pageset/trace-progress/<stem>.json` and logs at `target/pageset/logs/<stem>.trace.log`.

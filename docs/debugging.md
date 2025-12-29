@@ -46,3 +46,9 @@ Log timings + fragment bounds for a single render:
 FASTR_RENDER_TIMINGS=1 FASTR_LOG_FRAG_BOUNDS=1 \
   cargo run --release --bin fetch_and_render -- https://example.com out.png --timeout 20
 ```
+
+## Chrome/Perfetto traces from `pageset_progress`
+
+- `pageset_progress run --trace-failures` or `--trace-slow-ms <ms>` re-runs targeted pages with Chrome tracing enabled. Traces are written to `target/pageset/traces/<stem>.json`, and rerun progress/logs live under `target/pageset/trace-progress/` and `target/pageset/logs/*.trace.log`.
+- Trace reruns default to more generous budgets: `--trace-timeout` defaults to `timeout * 2`, `--trace-soft-timeout-ms` defaults to the trace timeout minus a 250ms buffer, and `--trace-jobs` defaults to 1 to keep captures stable. Increase the trace timeouts instead of the main ones if the extra tracing overhead trips the hard kill.
+- To inspect a trace locally, open Chrome and navigate to `chrome://tracing` then load the JSON, or drag the file into https://ui.perfetto.dev/. `pageset_progress report --include-trace` lists the stems and paths of traces that were collected.
