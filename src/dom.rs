@@ -364,6 +364,150 @@ impl SelectorBloomSummary {
 
 pub type SelectorBloomMap = HashMap<*const DomNode, SelectorBloomSummary>;
 
+#[derive(Clone, Copy, Debug)]
+pub struct SiblingPosition {
+  pub index: usize,
+  pub len: usize,
+  pub type_index: usize,
+  pub type_len: usize,
+}
+
+#[derive(Debug, Default)]
+pub struct SiblingListCache {
+  _epoch: usize,
+  parents: RefCell<HashMap<*const DomNode, ParentSiblingList>>,
+}
+
+#[derive(Debug, Default)]
+struct ParentSiblingList {
+  positions: HashMap<*const DomNode, SiblingPosition>,
+  elements: Vec<*const DomNode>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct SiblingTypeKey {
+  namespace: String,
+  local_name: String,
+}
+
+impl SiblingListCache {
+  pub fn new(epoch: usize) -> Self {
+    Self {
+      _epoch: epoch,
+      parents: RefCell::new(HashMap::new()),
+    }
+  }
+
+  pub fn position(
+    &self,
+    parent: &DomNode,
+    child: &DomNode,
+    context: &mut selectors::matching::MatchingContext<FastRenderSelectorImpl>,
+  ) -> Option<SiblingPosition> {
+    let parent_ptr = parent as *const DomNode;
+    {
+      let parents = self.parents.borrow();
+      if let Some(entry) = parents.get(&parent_ptr) {
+        if let Some(position) = entry.positions.get(&(child as *const DomNode)) {
+          return Some(*position);
+        }
+      }
+    }
+
+    let entry = build_parent_sibling_list(parent, context)?;
+    let mut parents = self.parents.borrow_mut();
+    let cached = parents.entry(parent_ptr).or_insert(entry);
+    cached.positions.get(&(child as *const DomNode)).copied()
+  }
+
+  pub fn ordered_children(
+    &self,
+    parent: &DomNode,
+    context: &mut selectors::matching::MatchingContext<FastRenderSelectorImpl>,
+  ) -> Option<Vec<*const DomNode>> {
+    let parent_ptr = parent as *const DomNode;
+    {
+      let parents = self.parents.borrow();
+      if let Some(entry) = parents.get(&parent_ptr) {
+        return Some(entry.elements.clone());
+      }
+    }
+
+    let entry = build_parent_sibling_list(parent, context)?;
+    let elements = entry.elements.clone();
+    self.parents.borrow_mut().insert(parent_ptr, entry);
+    Some(elements)
+  }
+}
+
+fn sibling_type_key(node: &DomNode) -> Option<SiblingTypeKey> {
+  let tag = node.tag_name()?;
+  let namespace = node.namespace().unwrap_or("").to_string();
+  let is_html = node_is_html_element(node);
+  let local_name = if is_html {
+    tag.to_ascii_lowercase()
+  } else {
+    tag.to_string()
+  };
+  Some(SiblingTypeKey {
+    namespace,
+    local_name,
+  })
+}
+
+fn build_parent_sibling_list(
+  parent: &DomNode,
+  context: &mut selectors::matching::MatchingContext<FastRenderSelectorImpl>,
+) -> Option<ParentSiblingList> {
+  let mut deadline_counter = 0usize;
+  let mut elements: Vec<(*const DomNode, SiblingTypeKey)> = Vec::new();
+  for child in parent.children.iter() {
+    if let Err(err) = check_active_periodic(
+      &mut deadline_counter,
+      NTH_DEADLINE_STRIDE,
+      RenderStage::Cascade,
+    ) {
+      context.extra_data.record_deadline_error(err);
+      return None;
+    }
+    if !child.is_element() {
+      continue;
+    }
+    let Some(key) = sibling_type_key(child) else {
+      continue;
+    };
+    elements.push((child as *const DomNode, key));
+  }
+
+  let len = elements.len();
+  let mut type_totals: HashMap<SiblingTypeKey, usize> = HashMap::new();
+  for (_, key) in elements.iter() {
+    *type_totals.entry(key.clone()).or_insert(0) += 1;
+  }
+  let mut type_seen: HashMap<SiblingTypeKey, usize> = HashMap::new();
+  let mut positions: HashMap<*const DomNode, SiblingPosition> = HashMap::with_capacity(len);
+  for (idx, (ptr, key)) in elements.iter().enumerate() {
+    let count = type_seen.entry(key.clone()).or_insert(0);
+    let type_index = *count;
+    *count += 1;
+    let type_len = type_totals.get(key).copied().unwrap_or(0);
+    positions.insert(
+      *ptr,
+      SiblingPosition {
+        index: idx,
+        len,
+        type_index,
+        type_len,
+      },
+    );
+  }
+
+  Some(ParentSiblingList {
+    positions,
+    elements: elements.iter().map(|(ptr, _)| *ptr).collect(),
+  })
+}
+
 /// Resolve the first-strong direction within this subtree, skipping script/style contents.
 pub fn resolve_first_strong_direction(node: &DomNode) -> Option<TextDirection> {
   let mut stack = vec![node];
@@ -1484,33 +1628,27 @@ impl<'a> ElementRef<'a> {
     }
   }
 
+  fn sibling_position(
+    &self,
+    context: &mut selectors::matching::MatchingContext<FastRenderSelectorImpl>,
+  ) -> Option<SiblingPosition> {
+    let parent = self.parent?;
+    if let Some(cache) = context.extra_data.sibling_cache {
+      return cache.position(parent, self.node, context);
+    }
+
+    build_parent_sibling_list(parent, context)
+      .and_then(|entry| entry.positions.get(&(self.node as *const DomNode)).copied())
+  }
+
   /// Find index of this element among sibling elements and the total number of element siblings.
   fn element_index_and_len(
     &self,
     context: &mut selectors::matching::MatchingContext<FastRenderSelectorImpl>,
   ) -> Option<(usize, usize)> {
-    let parent = self.parent?;
-    let mut index = None;
-    let mut len = 0usize;
-    let mut deadline_counter = 0usize;
-    for child in parent.children.iter() {
-      if let Err(err) = check_active_periodic(
-        &mut deadline_counter,
-        NTH_DEADLINE_STRIDE,
-        RenderStage::Cascade,
-      ) {
-        context.extra_data.record_deadline_error(err);
-        return None;
-      }
-      if !child.is_element() {
-        continue;
-      }
-      if ptr::eq(child, self.node) {
-        index = Some(len);
-      }
-      len += 1;
-    }
-    index.map(|idx| (idx, len))
+    self
+      .sibling_position(context)
+      .map(|position| (position.index, position.len))
   }
 
   /// Find index of this element among siblings
@@ -1550,10 +1688,22 @@ impl<'a> ElementRef<'a> {
     F: Fn(&DomNode) -> bool,
   {
     let parent = self.parent?;
+    let element_children: Vec<*const DomNode> =
+      if let Some(cache) = context.extra_data.sibling_cache {
+        cache.ordered_children(parent, context)?
+      } else {
+        parent
+          .children
+          .iter()
+          .filter(|c| c.is_element())
+          .map(|c| c as *const DomNode)
+          .collect()
+      };
+
     let mut index = None;
     let mut len = 0usize;
     let mut deadline_counter = 0usize;
-    for child in parent.children.iter() {
+    for child_ptr in element_children {
       if let Err(err) = check_active_periodic(
         &mut deadline_counter,
         NTH_DEADLINE_STRIDE,
@@ -1562,7 +1712,9 @@ impl<'a> ElementRef<'a> {
         context.extra_data.record_deadline_error(err);
         return None;
       }
-      if !child.is_element() || !predicate(child) {
+      // Safety: DOM nodes are immutable during selector matching; pointers come from the DOM tree.
+      let child = unsafe { &*child_ptr };
+      if !predicate(child) {
         continue;
       }
       if ptr::eq(child, self.node) {
@@ -1578,27 +1730,12 @@ impl<'a> ElementRef<'a> {
     &self,
     context: &mut selectors::matching::MatchingContext<FastRenderSelectorImpl>,
   ) -> Option<(usize, usize)> {
-    let tag = self.node.tag_name()?;
-    let namespace = self.node.namespace();
-    let is_html = self.is_html_element();
-    self.position_in_siblings(
-      |sibling| {
-        if sibling.namespace() != namespace {
-          return false;
-        }
-        sibling
-          .tag_name()
-          .map(|name| {
-            if is_html {
-              name.eq_ignore_ascii_case(tag)
-            } else {
-              name == tag
-            }
-          })
-          .unwrap_or(false)
-      },
-      context,
-    )
+    if self.node.tag_name().is_none() {
+      return None;
+    }
+    self
+      .sibling_position(context)
+      .map(|position| (position.type_index, position.type_len))
   }
 
   fn position_in_selector_list(
@@ -3667,7 +3804,9 @@ mod tests {
 
   fn matches(node: &DomNode, ancestors: &[&DomNode], pseudo: &PseudoClass) -> bool {
     let mut caches = SelectorCaches::default();
-    caches.set_epoch(next_selector_cache_epoch());
+    let cache_epoch = next_selector_cache_epoch();
+    caches.set_epoch(cache_epoch);
+    let sibling_cache = SiblingListCache::new(cache_epoch);
     let mut context = MatchingContext::new(
       MatchingMode::Normal,
       None,
@@ -3676,6 +3815,7 @@ mod tests {
       NeedsSelectorFlags::No,
       MatchingForInvalidation::No,
     );
+    context.extra_data = ShadowMatchData::for_document().with_sibling_cache(&sibling_cache);
     let element_ref = ElementRef::with_ancestors(node, ancestors);
     element_ref.match_non_ts_pseudo_class(pseudo, &mut context)
   }
@@ -3801,7 +3941,9 @@ mod tests {
 
   fn selector_matches(element: &ElementRef, selector: &Selector<FastRenderSelectorImpl>) -> bool {
     let mut caches = SelectorCaches::default();
-    caches.set_epoch(next_selector_cache_epoch());
+    let cache_epoch = next_selector_cache_epoch();
+    caches.set_epoch(cache_epoch);
+    let sibling_cache = SiblingListCache::new(cache_epoch);
     let mut context = MatchingContext::new(
       MatchingMode::Normal,
       None,
@@ -3810,6 +3952,7 @@ mod tests {
       NeedsSelectorFlags::No,
       MatchingForInvalidation::No,
     );
+    context.extra_data = ShadowMatchData::for_document().with_sibling_cache(&sibling_cache);
     matches_selector(selector, 0, None, element, &mut context)
   }
 
@@ -3906,7 +4049,9 @@ mod tests {
     let selector = selector_list.slice().first().expect("expected a selector");
 
     let mut caches = SelectorCaches::default();
-    caches.set_epoch(next_selector_cache_epoch());
+    let cache_epoch = next_selector_cache_epoch();
+    caches.set_epoch(cache_epoch);
+    let sibling_cache = SiblingListCache::new(cache_epoch);
     let mut context = MatchingContext::new(
       MatchingMode::Normal,
       None,
@@ -3915,6 +4060,7 @@ mod tests {
       NeedsSelectorFlags::No,
       MatchingForInvalidation::No,
     );
+    context.extra_data = ShadowMatchData::for_document().with_sibling_cache(&sibling_cache);
 
     let html = &document.children[0];
     let body = &html.children[0];
@@ -5718,7 +5864,9 @@ mod tests {
     let node = element("div", vec![]);
     let ancestors: Vec<&DomNode> = vec![];
     let mut caches = SelectorCaches::default();
-    caches.set_epoch(next_selector_cache_epoch());
+    let cache_epoch = next_selector_cache_epoch();
+    caches.set_epoch(cache_epoch);
+    let sibling_cache = SiblingListCache::new(cache_epoch);
     let mut context = MatchingContext::new(
       MatchingMode::ForStatelessPseudoElement,
       None,
@@ -5727,6 +5875,7 @@ mod tests {
       NeedsSelectorFlags::No,
       MatchingForInvalidation::No,
     );
+    context.extra_data = ShadowMatchData::for_document().with_sibling_cache(&sibling_cache);
     let element_ref = ElementRef::with_ancestors(&node, &ancestors);
 
     assert!(element_ref.match_pseudo_element(&PseudoElement::Before, &mut context));

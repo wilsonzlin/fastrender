@@ -40,6 +40,8 @@ use crate::dom::DomNodeType;
 use crate::dom::ElementRef;
 use crate::dom::SelectorBloomMap;
 use crate::dom::SelectorBloomSummary;
+use crate::dom::SiblingListCache;
+use crate::dom::SiblingListCache;
 use crate::dom::SlotAssignment;
 use crate::dom::HTML_NAMESPACE;
 use crate::error::Error;
@@ -2675,7 +2677,9 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
   let styled = with_target_fragment(target_fragment, || {
     with_image_set_dpr(media_ctx.device_pixel_ratio, || {
       let mut selector_caches = SelectorCaches::default();
-      selector_caches.set_epoch(next_selector_cache_epoch());
+      let cache_epoch = next_selector_cache_epoch();
+      selector_caches.set_epoch(cache_epoch);
+      let sibling_cache = SiblingListCache::new(cache_epoch);
       let mut max_rules = rule_scopes
         .ua
         .rules
@@ -2719,6 +2723,7 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
         reuse_counter_opt,
         &dom_maps,
         &slot_assignment,
+        &sibling_cache,
         deadline,
         has_starting_styles,
       )
@@ -3222,7 +3227,9 @@ fn apply_style_set_with_media_target_and_imports_cached_with_deadline_impl(
   let styled = with_target_fragment(target_fragment, || {
     with_image_set_dpr(media_ctx.device_pixel_ratio, || {
       let mut selector_caches = SelectorCaches::default();
-      selector_caches.set_epoch(next_selector_cache_epoch());
+      let cache_epoch = next_selector_cache_epoch();
+      selector_caches.set_epoch(cache_epoch);
+      let sibling_cache = SiblingListCache::new(cache_epoch);
       let mut max_rules = rule_scopes
         .ua
         .rules
@@ -3266,6 +3273,7 @@ fn apply_style_set_with_media_target_and_imports_cached_with_deadline_impl(
         reuse_counter_opt,
         &dom_maps,
         &slot_assignment,
+        &sibling_cache,
         deadline,
         has_starting_styles,
       )
@@ -3654,6 +3662,7 @@ fn match_part_rules<'a>(
   selector_caches: &mut SelectorCaches,
   scratch: &mut CascadeScratch,
   dom_maps: &DomMaps,
+  sibling_cache: &SiblingListCache,
   slot_map_for_host: &dyn Fn(usize) -> Option<&'a SlotAssignmentMap<'a>>,
   current_slot_map: Option<&SlotAssignmentMap<'a>>,
 ) -> Vec<MatchedRule<'a>> {
@@ -3753,6 +3762,7 @@ fn match_part_rules<'a>(
             host_ancestors,
             slot_map,
             dom_maps.selector_blooms(),
+            sibling_cache,
             &info.pseudo,
             allow_shadow_host,
             scopes.quirks_mode,
@@ -3790,6 +3800,7 @@ fn collect_matching_rules<'a>(
   container_ctx: Option<&ContainerQueryContext>,
   dom_maps: &DomMaps,
   slot_assignment: &SlotAssignment,
+  sibling_cache: &SiblingListCache,
 ) -> Result<Vec<MatchedRule<'a>>, RenderError> {
   let current_shadow = dom_maps.containing_shadow_root(node_id);
   let slot_map_for_host = |host_id: usize| -> Option<&SlotAssignmentMap<'a>> {
@@ -3818,6 +3829,7 @@ fn collect_matching_rules<'a>(
     dom_maps,
     slot_assignment,
     current_slot_map,
+    sibling_cache,
     false,
     scopes.quirks_mode,
   )?;
@@ -3839,6 +3851,7 @@ fn collect_matching_rules<'a>(
       dom_maps,
       slot_assignment,
       base_slot_map,
+      sibling_cache,
       allow_shadow_host,
       scopes.quirks_mode,
     )?);
@@ -3862,6 +3875,7 @@ fn collect_matching_rules<'a>(
           dom_maps,
           slot_assignment,
           current_slot_map,
+          sibling_cache,
           false,
           scopes.quirks_mode,
         )?);
@@ -3883,6 +3897,7 @@ fn collect_matching_rules<'a>(
       dom_maps,
       slot_assignment,
       host_slot_map,
+      sibling_cache,
       true,
       scopes.quirks_mode,
     )?);
@@ -3904,6 +3919,7 @@ fn collect_matching_rules<'a>(
           dom_maps,
           slot_assignment,
           scopes.slot_maps.get(&slot.shadow_root_id),
+          sibling_cache,
           true,
           scopes.quirks_mode,
         )?);
@@ -3918,6 +3934,7 @@ fn collect_matching_rules<'a>(
     selector_caches,
     scratch,
     dom_maps,
+    sibling_cache,
     &slot_map_for_host,
     current_slot_map,
   ));
@@ -3934,6 +3951,7 @@ fn collect_pseudo_matching_rules<'a>(
   ancestors: &[&DomNode],
   node_id: usize,
   dom_maps: &DomMaps,
+  sibling_cache: &SiblingListCache,
   pseudo: &PseudoElement,
 ) -> Vec<MatchedRule<'a>> {
   let current_shadow = dom_maps.containing_shadow_root(node_id);
@@ -3963,6 +3981,7 @@ fn collect_pseudo_matching_rules<'a>(
     ancestors,
     current_slot_map,
     dom_maps.selector_blooms(),
+    sibling_cache,
     pseudo,
     false,
     scopes.quirks_mode,
@@ -3977,6 +3996,7 @@ fn collect_pseudo_matching_rules<'a>(
       ancestors,
       base_slot_map,
       dom_maps.selector_blooms(),
+      sibling_cache,
       pseudo,
       allow_shadow_host,
       scopes.quirks_mode,
@@ -3994,6 +4014,7 @@ fn collect_pseudo_matching_rules<'a>(
           ancestors,
           current_slot_map,
           dom_maps.selector_blooms(),
+          sibling_cache,
           pseudo,
           false,
           scopes.quirks_mode,
@@ -4011,6 +4032,7 @@ fn collect_pseudo_matching_rules<'a>(
       ancestors,
       slot_map_for_host(node_id),
       dom_maps.selector_blooms(),
+      sibling_cache,
       pseudo,
       true,
       scopes.quirks_mode,
@@ -4039,6 +4061,7 @@ fn compute_base_styles<'a>(
   container_ctx: Option<&ContainerQueryContext>,
   dom_maps: &DomMaps,
   slot_assignment: &SlotAssignment,
+  sibling_cache: &SiblingListCache,
   include_starting_style: bool,
 ) -> Result<NodeBaseStyles, RenderError> {
   if !node.is_element() {
@@ -4089,6 +4112,7 @@ fn compute_base_styles<'a>(
     container_ctx,
     dom_maps,
     slot_assignment,
+    sibling_cache,
   )?;
   matching_rules.extend(ua_default_rules(node, parent_styles.direction));
   if include_starting_style {
@@ -4273,6 +4297,7 @@ fn apply_styles_internal(
   reuse_counter: Option<&mut usize>,
   dom_maps: &DomMaps,
   slot_assignment: &SlotAssignment,
+  sibling_cache: &SiblingListCache,
   deadline: Option<&RenderDeadline>,
   has_starting_styles: bool,
 ) -> Result<StyledNode, RenderError> {
@@ -4300,6 +4325,7 @@ fn apply_styles_internal(
     reuse_counter,
     dom_maps,
     slot_assignment,
+    sibling_cache,
     &mut deadline_counter,
     deadline,
     has_starting_styles,
@@ -4322,6 +4348,7 @@ fn compute_pseudo_styles(
   ancestors: &[&DomNode],
   node_id: usize,
   dom_maps: &DomMaps,
+  sibling_cache: &SiblingListCache,
   styles: &mut ComputedStyle,
   ua_styles: &ComputedStyle,
   root_font_size: f32,
@@ -4354,6 +4381,7 @@ fn compute_pseudo_styles(
       ancestors,
       node_id,
       dom_maps,
+      sibling_cache,
       styles,
       ua_styles,
       root_font_size,
@@ -4377,6 +4405,7 @@ fn compute_pseudo_styles(
     ancestors,
     node_id,
     dom_maps,
+    sibling_cache,
     styles,
     ua_styles,
     root_font_size,
@@ -4399,6 +4428,7 @@ fn compute_pseudo_styles(
     ancestors,
     node_id,
     dom_maps,
+    sibling_cache,
     base_first_letter_styles,
     base_first_letter_ua_styles,
     root_font_size,
@@ -4418,6 +4448,7 @@ fn compute_pseudo_styles(
         ancestors,
         node_id,
         dom_maps,
+        sibling_cache,
         styles,
         ua_styles,
         root_font_size,
@@ -4441,6 +4472,7 @@ fn compute_pseudo_styles(
         ancestors,
         node_id,
         dom_maps,
+        sibling_cache,
         styles,
         ua_styles,
         root_font_size,
@@ -4462,6 +4494,7 @@ fn compute_pseudo_styles(
     ancestors,
     node_id,
     dom_maps,
+    sibling_cache,
     styles,
     ua_styles,
     root_font_size,
@@ -4533,6 +4566,7 @@ fn apply_styles_internal_with_ancestors<'a>(
   reuse_counter: Option<&mut usize>,
   dom_maps: &DomMaps,
   slot_assignment: &SlotAssignment,
+  sibling_cache: &SiblingListCache,
   deadline_counter: &mut usize,
   deadline: Option<&RenderDeadline>,
   has_starting_styles: bool,
@@ -4581,6 +4615,7 @@ fn apply_styles_internal_with_ancestors<'a>(
     container_ctx,
     dom_maps,
     slot_assignment,
+    sibling_cache,
     false,
   )?;
   let mut starting_base = if has_starting_styles {
@@ -4606,6 +4641,7 @@ fn apply_styles_internal_with_ancestors<'a>(
       container_ctx,
       dom_maps,
       slot_assignment,
+      sibling_cache,
       true,
     )?)
   } else {
@@ -4646,6 +4682,7 @@ fn apply_styles_internal_with_ancestors<'a>(
       child_reuse,
       dom_maps,
       slot_assignment,
+      sibling_cache,
       deadline_counter,
       deadline,
       has_starting_styles,
@@ -4665,6 +4702,7 @@ fn apply_styles_internal_with_ancestors<'a>(
       ancestors.as_slice(),
       node_id,
       dom_maps,
+      sibling_cache,
       &mut base.styles,
       &base.ua_styles,
       base.current_root_font_size,
@@ -4684,6 +4722,7 @@ fn apply_styles_internal_with_ancestors<'a>(
       ancestors.as_slice(),
       node_id,
       dom_maps,
+      sibling_cache,
       &mut start.styles,
       &start.ua_styles,
       start.current_root_font_size,
@@ -9038,7 +9077,9 @@ mod tests {
     let ancestors: Vec<&DomNode> = vec![&dom]; // ul ancestor for the li
     let element_ref = build_element_ref_chain(&dom.children[0], &ancestors, None);
     let mut caches = SelectorCaches::default();
-    caches.set_epoch(next_selector_cache_epoch());
+    let cache_epoch = next_selector_cache_epoch();
+    caches.set_epoch(cache_epoch);
+    let sibling_cache = SiblingListCache::new(cache_epoch);
     let mut context = MatchingContext::new(
       MatchingMode::ForStatelessPseudoElement,
       None,
@@ -9047,7 +9088,7 @@ mod tests {
       selectors::matching::NeedsSelectorFlags::No,
       selectors::matching::MatchingForInvalidation::No,
     );
-    context.extra_data = ShadowMatchData::for_document();
+    context.extra_data = ShadowMatchData::for_document().with_sibling_cache(&sibling_cache);
     let selector = rule_index.rules[0]
       .rule
       .selectors
@@ -9059,7 +9100,9 @@ mod tests {
       "selector should match the originating element"
     );
     let mut caches = SelectorCaches::default();
-    caches.set_epoch(next_selector_cache_epoch());
+    let cache_epoch = next_selector_cache_epoch();
+    caches.set_epoch(cache_epoch);
+    let sibling_cache = SiblingListCache::new(cache_epoch);
     let mut scratch = CascadeScratch::new(rule_index.rules.len());
     let marker_matches = find_pseudo_element_rules(
       &dom.children[0],
@@ -9069,6 +9112,7 @@ mod tests {
       &ancestors,
       None,
       None,
+      &sibling_cache,
       &PseudoElement::Marker,
       false,
       QuirksMode::NoQuirks,
@@ -9719,6 +9763,7 @@ fn find_matching_rules<'a>(
   dom_maps: &DomMaps,
   slot_assignment: &SlotAssignment,
   slot_map: Option<&'a SlotAssignmentMap<'a>>,
+  sibling_cache: &SiblingListCache,
   allow_shadow_host: bool,
   quirks_mode: QuirksMode,
 ) -> Result<Vec<MatchedRule<'a>>, RenderError> {
@@ -9790,6 +9835,7 @@ fn find_matching_rules<'a>(
     part_export_map: None,
     deadline_error: None,
     selector_blooms: dom_maps.selector_blooms(),
+    sibling_cache: Some(sibling_cache),
   };
 
   let mut scoped_rule_idx: Option<usize> = None;
@@ -10093,6 +10139,7 @@ fn find_pseudo_element_rules<'a>(
   ancestors: &[&DomNode],
   slot_map: Option<&SlotAssignmentMap<'a>>,
   selector_blooms: Option<&SelectorBloomMap>,
+  sibling_cache: &SiblingListCache,
   pseudo: &PseudoElement,
   allow_shadow_host: bool,
   quirks_mode: QuirksMode,
@@ -10161,6 +10208,7 @@ fn find_pseudo_element_rules<'a>(
     part_export_map: None,
     deadline_error: None,
     selector_blooms,
+    sibling_cache: Some(sibling_cache),
   };
 
   let mut scoped_rule_idx: Option<usize> = None;
@@ -11049,6 +11097,7 @@ fn compute_pseudo_element_styles(
   ancestors: &[&DomNode],
   node_id: usize,
   dom_maps: &DomMaps,
+  sibling_cache: &SiblingListCache,
   parent_styles: &ComputedStyle,
   ua_parent_styles: &ComputedStyle,
   root_font_size: f32,
@@ -11070,6 +11119,7 @@ fn compute_pseudo_element_styles(
     ancestors,
     node_id,
     dom_maps,
+    sibling_cache,
     pseudo,
   );
   if include_starting_style {
@@ -11211,6 +11261,7 @@ fn compute_first_line_styles(
   ancestors: &[&DomNode],
   node_id: usize,
   dom_maps: &DomMaps,
+  sibling_cache: &SiblingListCache,
   base_styles: &ComputedStyle,
   base_ua_styles: &ComputedStyle,
   root_font_size: f32,
@@ -11231,6 +11282,7 @@ fn compute_first_line_styles(
     ancestors,
     node_id,
     dom_maps,
+    sibling_cache,
     &PseudoElement::FirstLine,
   );
   if include_starting_style {
@@ -11303,6 +11355,7 @@ fn compute_first_letter_styles(
   ancestors: &[&DomNode],
   node_id: usize,
   dom_maps: &DomMaps,
+  sibling_cache: &SiblingListCache,
   base_styles: &ComputedStyle,
   base_ua_styles: &ComputedStyle,
   root_font_size: f32,
@@ -11328,6 +11381,7 @@ fn compute_first_letter_styles(
     ancestors,
     node_id,
     dom_maps,
+    sibling_cache,
     &PseudoElement::FirstLetter,
   );
   if include_starting_style {
@@ -11402,6 +11456,7 @@ fn compute_marker_styles(
   ancestors: &[&DomNode],
   node_id: usize,
   dom_maps: &DomMaps,
+  sibling_cache: &SiblingListCache,
   list_item_styles: &ComputedStyle,
   ua_list_item_styles: &ComputedStyle,
   root_font_size: f32,
@@ -11424,6 +11479,7 @@ fn compute_marker_styles(
         ancestors,
         node_id,
         dom_maps,
+        sibling_cache,
         &PseudoElement::Marker,
       )
     } else {
