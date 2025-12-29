@@ -1006,7 +1006,10 @@ fn cell_emptiness_cache_key(cell: &BoxNode) -> CellEmptinessCacheKey {
   let style_ptr = Arc::as_ptr(&cell.style) as usize;
   let id = cell.id();
   if id != 0 {
-    CellEmptinessCacheKey::Id { id, style: style_ptr }
+    CellEmptinessCacheKey::Id {
+      id,
+      style: style_ptr,
+    }
   } else {
     CellEmptinessCacheKey::Ptr {
       ptr: cell as *const BoxNode as usize,
@@ -5226,64 +5229,74 @@ impl FormattingContext for TableFormattingContext {
       }
     }
 
-    let mut push_column_span_fragment = |
-      fragments: &mut Vec<FragmentNode>,
-      cache: &mut HashMap<usize, Arc<ComputedStyle>>,
-      style: Arc<ComputedStyle>,
-      start: usize,
-      end: usize,
-    | {
-        if start >= end || start >= col_offsets.len() {
-          return;
-        }
-        if !style_paints_background_or_border(&style, false) {
-          return;
-        }
-        let style = strip_borders_cached(&style, cache);
-        let mut x = if structure.border_collapse == BorderCollapse::Collapse {
-          col_offsets.get(start).copied().unwrap_or(0.0)
-            - vertical_line_max.get(start).copied().unwrap_or(0.0)
-        } else {
-          (col_offsets.get(start).copied().unwrap_or(content_origin_x) - h_spacing * 0.5)
-            .max(content_origin_x)
-        };
-        let mut right = if structure.border_collapse == BorderCollapse::Collapse {
-          let base = col_offsets.get(end.saturating_sub(1)).copied().unwrap_or(x)
-            + col_widths
-              .get(end.saturating_sub(1))
-              .copied()
-              .unwrap_or(0.0);
-          base + vertical_line_max.get(end).copied().unwrap_or(0.0)
-        } else {
-          let base = col_offsets.get(end.saturating_sub(1)).copied().unwrap_or(x)
-            + col_widths
-              .get(end.saturating_sub(1))
-              .copied()
-              .unwrap_or(0.0);
-          base + h_spacing * 0.5
-        };
-        let max_x = content_origin_x + content_width;
-        x = x.max(content_origin_x);
-        right = right.min(max_x);
-        let width = (right - x).max(0.0);
-        if width <= 0.0 || content_height <= 0.0 {
-          return;
-        }
-        let rect = Rect::from_xywh(x, content_origin_y, width, content_height);
-        fragments.push(FragmentNode::new_with_style(
-          rect,
-          FragmentContent::Block { box_id: None },
-          Vec::new(),
-          style,
-        ));
+    let mut push_column_span_fragment = |fragments: &mut Vec<FragmentNode>,
+                                         cache: &mut HashMap<usize, Arc<ComputedStyle>>,
+                                         style: Arc<ComputedStyle>,
+                                         start: usize,
+                                         end: usize| {
+      if start >= end || start >= col_offsets.len() {
+        return;
+      }
+      if !style_paints_background_or_border(&style, false) {
+        return;
+      }
+      let style = strip_borders_cached(&style, cache);
+      let mut x = if structure.border_collapse == BorderCollapse::Collapse {
+        col_offsets.get(start).copied().unwrap_or(0.0)
+          - vertical_line_max.get(start).copied().unwrap_or(0.0)
+      } else {
+        (col_offsets.get(start).copied().unwrap_or(content_origin_x) - h_spacing * 0.5)
+          .max(content_origin_x)
       };
+      let mut right = if structure.border_collapse == BorderCollapse::Collapse {
+        let base = col_offsets.get(end.saturating_sub(1)).copied().unwrap_or(x)
+          + col_widths
+            .get(end.saturating_sub(1))
+            .copied()
+            .unwrap_or(0.0);
+        base + vertical_line_max.get(end).copied().unwrap_or(0.0)
+      } else {
+        let base = col_offsets.get(end.saturating_sub(1)).copied().unwrap_or(x)
+          + col_widths
+            .get(end.saturating_sub(1))
+            .copied()
+            .unwrap_or(0.0);
+        base + h_spacing * 0.5
+      };
+      let max_x = content_origin_x + content_width;
+      x = x.max(content_origin_x);
+      right = right.min(max_x);
+      let width = (right - x).max(0.0);
+      if width <= 0.0 || content_height <= 0.0 {
+        return;
+      }
+      let rect = Rect::from_xywh(x, content_origin_y, width, content_height);
+      fragments.push(FragmentNode::new_with_style(
+        rect,
+        FragmentContent::Block { box_id: None },
+        Vec::new(),
+        style,
+      ));
+    };
 
     for (start, end, style) in column_groups {
-      push_column_span_fragment(&mut fragments, &mut stripped_border_cache, style, start, end);
+      push_column_span_fragment(
+        &mut fragments,
+        &mut stripped_border_cache,
+        style,
+        start,
+        end,
+      );
     }
     for (idx, style) in column_styles.into_iter().enumerate() {
       if let Some(style) = style {
-        push_column_span_fragment(&mut fragments, &mut stripped_border_cache, style, idx, idx + 1);
+        push_column_span_fragment(
+          &mut fragments,
+          &mut stripped_border_cache,
+          style,
+          idx,
+          idx + 1,
+        );
       }
     }
 
@@ -5536,31 +5549,133 @@ impl FormattingContext for TableFormattingContext {
     let table_bounds = Rect::from_xywh(0.0, 0.0, total_width.max(0.0), total_height);
 
     if let Some(collapsed_borders) = collapsed_borders.as_ref() {
-      let make_border_style = |color: Rgba,
-                               left: f32,
-                               right: f32,
-                               top: f32,
-                               bottom: f32,
-                               left_style: BorderStyle,
-                               right_style: BorderStyle,
-                               top_style: BorderStyle,
-                               bottom_style: BorderStyle|
+      #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+      enum BorderFragmentOrientation {
+        Vertical,
+        Horizontal,
+        Corner,
+      }
+
+      #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+      struct BorderColorKey {
+        r: u8,
+        g: u8,
+        b: u8,
+        a_bits: u32,
+      }
+
+      impl From<Rgba> for BorderColorKey {
+        fn from(color: Rgba) -> Self {
+          Self {
+            r: color.r,
+            g: color.g,
+            b: color.b,
+            a_bits: color.a.to_bits(),
+          }
+        }
+      }
+
+      #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+      struct BorderStyleKey {
+        orientation: BorderFragmentOrientation,
+        quantized_width: i32,
+        style: u8,
+        color: BorderColorKey,
+      }
+
+      const BORDER_WIDTH_QUANTIZATION: f32 = 64.0;
+
+      impl BorderStyleKey {
+        fn new(
+          color: Rgba,
+          width: f32,
+          style: BorderStyle,
+          orientation: BorderFragmentOrientation,
+        ) -> Self {
+          Self {
+            orientation,
+            quantized_width: (width * BORDER_WIDTH_QUANTIZATION).round() as i32,
+            style: match style {
+              BorderStyle::None => 0,
+              BorderStyle::Hidden => 1,
+              BorderStyle::Solid => 2,
+              BorderStyle::Dashed => 3,
+              BorderStyle::Dotted => 4,
+              BorderStyle::Double => 5,
+              BorderStyle::Groove => 6,
+              BorderStyle::Ridge => 7,
+              BorderStyle::Inset => 8,
+              BorderStyle::Outset => 9,
+            },
+            color: color.into(),
+          }
+        }
+      }
+
+      let mut border_style_cache: HashMap<BorderStyleKey, Arc<crate::style::ComputedStyle>> =
+        HashMap::new();
+
+      let mut cached_border_style = |color: Rgba,
+                                     width: f32,
+                                     border_style: BorderStyle,
+                                     orientation: BorderFragmentOrientation|
        -> Arc<crate::style::ComputedStyle> {
+        let key = BorderStyleKey::new(color, width, border_style, orientation);
+        if let Some(existing) = border_style_cache.get(&key) {
+          return existing.clone();
+        }
+
         let mut style = crate::style::ComputedStyle::default();
         style.display = Display::Block;
-        style.border_left_width = Length::px(left);
-        style.border_right_width = Length::px(right);
-        style.border_top_width = Length::px(top);
-        style.border_bottom_width = Length::px(bottom);
-        style.border_left_color = color;
-        style.border_right_color = color;
-        style.border_top_color = color;
-        style.border_bottom_color = color;
-        style.border_left_style = left_style;
-        style.border_right_style = right_style;
-        style.border_top_style = top_style;
-        style.border_bottom_style = bottom_style;
-        Arc::new(style)
+        match orientation {
+          BorderFragmentOrientation::Vertical => {
+            style.border_left_width = Length::px(width);
+            style.border_right_width = Length::px(0.0);
+            style.border_top_width = Length::px(0.0);
+            style.border_bottom_width = Length::px(0.0);
+            style.border_left_color = color;
+            style.border_right_color = color;
+            style.border_top_color = color;
+            style.border_bottom_color = color;
+            style.border_left_style = border_style;
+            style.border_right_style = BorderStyle::None;
+            style.border_top_style = BorderStyle::None;
+            style.border_bottom_style = BorderStyle::None;
+          }
+          BorderFragmentOrientation::Horizontal => {
+            style.border_left_width = Length::px(0.0);
+            style.border_right_width = Length::px(0.0);
+            style.border_top_width = Length::px(width);
+            style.border_bottom_width = Length::px(0.0);
+            style.border_left_color = color;
+            style.border_right_color = color;
+            style.border_top_color = color;
+            style.border_bottom_color = color;
+            style.border_left_style = BorderStyle::None;
+            style.border_right_style = BorderStyle::None;
+            style.border_top_style = border_style;
+            style.border_bottom_style = BorderStyle::None;
+          }
+          BorderFragmentOrientation::Corner => {
+            style.background_color = color;
+            style.border_left_width = Length::px(width);
+            style.border_right_width = Length::px(width);
+            style.border_top_width = Length::px(width);
+            style.border_bottom_width = Length::px(width);
+            style.border_left_color = color;
+            style.border_right_color = color;
+            style.border_top_color = color;
+            style.border_bottom_color = color;
+            style.border_left_style = border_style;
+            style.border_right_style = border_style;
+            style.border_top_style = border_style;
+            style.border_bottom_style = border_style;
+          }
+        }
+
+        let arc = Arc::new(style);
+        border_style_cache.insert(key, arc.clone());
+        arc
       };
 
       // Vertical grid lines: border before column 0, between columns, after last column.
@@ -5616,16 +5731,11 @@ impl FormattingContext for TableFormattingContext {
           let y_end = row_end - corner_bottom;
           let height = (y_end - y_start).max(0.0);
           let rect = Rect::from_xywh(x, y_start, border.width, height);
-          let style = make_border_style(
+          let style = cached_border_style(
             border.color,
             border.width,
-            0.0,
-            0.0,
-            0.0,
             border.style,
-            BorderStyle::None,
-            BorderStyle::None,
-            BorderStyle::None,
+            BorderFragmentOrientation::Vertical,
           );
           fragments.push(FragmentNode::new_with_style(
             rect,
@@ -5690,16 +5800,11 @@ impl FormattingContext for TableFormattingContext {
           let x_end = col_end - corner_right;
           let width = (x_end - x_start).max(0.0);
           let rect = Rect::from_xywh(x_start, y, width, border.width);
-          let style = make_border_style(
+          let style = cached_border_style(
             border.color,
-            0.0,
-            0.0,
             border.width,
-            0.0,
-            BorderStyle::None,
-            BorderStyle::None,
             border.style,
-            BorderStyle::None,
+            BorderFragmentOrientation::Horizontal,
           );
           fragments.push(FragmentNode::new_with_style(
             rect,
@@ -5724,26 +5829,17 @@ impl FormattingContext for TableFormattingContext {
           // Fill the corner square with the winning border color and also assign the
           // winning border style/width on all edges so dashed/dotted/double corners
           // retain their paint semantics while the center stays filled to avoid gaps.
-          let mut style = crate::style::ComputedStyle::default();
-          style.display = Display::Block;
-          style.background_color = corner.color;
-          style.border_left_width = Length::px(corner.width);
-          style.border_right_width = Length::px(corner.width);
-          style.border_top_width = Length::px(corner.width);
-          style.border_bottom_width = Length::px(corner.width);
-          style.border_left_style = corner.style;
-          style.border_right_style = corner.style;
-          style.border_top_style = corner.style;
-          style.border_bottom_style = corner.style;
-          style.border_left_color = corner.color;
-          style.border_right_color = corner.color;
-          style.border_top_color = corner.color;
-          style.border_bottom_color = corner.color;
+          let style = cached_border_style(
+            corner.color,
+            corner.width,
+            corner.style,
+            BorderFragmentOrientation::Corner,
+          );
           fragments.push(FragmentNode::new_with_style(
             rect,
             FragmentContent::Block { box_id: None },
             vec![],
-            Arc::new(style),
+            style,
           ));
         }
       }
@@ -6364,6 +6460,64 @@ mod tests {
     for child in &fragment.children {
       collect_positioned_fragments(child, out);
     }
+  }
+
+  fn apply_uniform_border(style: &mut ComputedStyle, width: f32, color: Rgba) {
+    style.border_top_style = BorderStyle::Solid;
+    style.border_right_style = BorderStyle::Solid;
+    style.border_bottom_style = BorderStyle::Solid;
+    style.border_left_style = BorderStyle::Solid;
+    style.border_top_width = Length::px(width);
+    style.border_right_width = Length::px(width);
+    style.border_bottom_width = Length::px(width);
+    style.border_left_width = Length::px(width);
+    style.border_top_color = color;
+    style.border_right_color = color;
+    style.border_bottom_color = color;
+    style.border_left_color = color;
+  }
+
+  fn collect_collapsed_border_styles(
+    fragment: &FragmentNode,
+    vertical: &mut Vec<Arc<ComputedStyle>>,
+    horizontal: &mut Vec<Arc<ComputedStyle>>,
+    corners: &mut Vec<Arc<ComputedStyle>>,
+  ) {
+    if let Some(style) = &fragment.style {
+      if matches!(fragment.content, FragmentContent::Block { box_id: None }) {
+        let epsilon = 1e-6;
+        let left = style.border_left_width.value;
+        let right = style.border_right_width.value;
+        let top = style.border_top_width.value;
+        let bottom = style.border_bottom_width.value;
+        let has_left = left > epsilon;
+        let has_right = right > epsilon;
+        let has_top = top > epsilon;
+        let has_bottom = bottom > epsilon;
+        if has_left && !has_right && !has_top && !has_bottom {
+          vertical.push(style.clone());
+        } else if has_top && !has_left && !has_right && !has_bottom {
+          horizontal.push(style.clone());
+        } else if has_left && has_right && has_top && has_bottom {
+          corners.push(style.clone());
+        }
+      }
+    }
+
+    for child in &fragment.children {
+      collect_collapsed_border_styles(child, vertical, horizontal, corners);
+    }
+  }
+
+  fn unique_style_count(styles: &[Arc<ComputedStyle>]) -> usize {
+    let mut uniques: Vec<*const ComputedStyle> = Vec::new();
+    for style in styles {
+      let ptr = Arc::as_ptr(style);
+      if !uniques.iter().any(|existing| *existing == ptr) {
+        uniques.push(ptr);
+      }
+    }
+    uniques.len()
   }
 
   // -------------------------------------------------------------------------
@@ -8506,20 +8660,13 @@ mod tests {
       ));
     }
 
-    let table = BoxNode::new_block(
-      Arc::new(table_style),
-      FormattingContextType::Table,
-      rows,
-    );
+    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, rows);
 
     let fc = TableFormattingContext::with_factory(FormattingContextFactory::new());
     let fragment = fc
       .layout(
         &table,
-        &LayoutConstraints::new(
-          AvailableSpace::Definite(200.0),
-          AvailableSpace::Indefinite,
-        ),
+        &LayoutConstraints::new(AvailableSpace::Definite(200.0), AvailableSpace::Indefinite),
       )
       .expect("layout");
 
@@ -8547,6 +8694,7 @@ mod tests {
   }
 
   #[test]
+
   fn collapsed_table_padding_offsets_content_and_preserves_total_height() {
     let mut table_style = ComputedStyle::default();
     table_style.display = Display::Table;
@@ -13192,9 +13340,21 @@ mod tests {
       Arc::new(row_style.clone()),
       FormattingContextType::Block,
       vec![
-        BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![]),
-        BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![]),
-        BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![]),
+        BoxNode::new_block(
+          Arc::new(cell_style.clone()),
+          FormattingContextType::Block,
+          vec![],
+        ),
+        BoxNode::new_block(
+          Arc::new(cell_style.clone()),
+          FormattingContextType::Block,
+          vec![],
+        ),
+        BoxNode::new_block(
+          Arc::new(cell_style.clone()),
+          FormattingContextType::Block,
+          vec![],
+        ),
       ],
     );
 
@@ -13257,7 +13417,13 @@ mod tests {
       .collect();
     assert_eq!(
       ids,
-      vec![Some(col0_id), Some(col1_id), Some(col2_id), Some(span_id), Some(trailing_id)]
+      vec![
+        Some(col0_id),
+        Some(col1_id),
+        Some(col2_id),
+        Some(span_id),
+        Some(trailing_id)
+      ]
     );
 
     let col0_width = cell_fragments[0].bounds.width();
@@ -13281,6 +13447,7 @@ mod tests {
   }
 
   #[test]
+
   fn test_collapsed_borders_contribute_to_table_bounds() {
     let mut table_style = ComputedStyle::default();
     table_style.display = Display::Table;
@@ -13432,6 +13599,80 @@ mod tests {
     assert!((cell_frag.bounds.y() - 2.0).abs() < 0.51);
     // Table width should include both borders (half inside the bounds) plus the cell.
     assert!(fragment.bounds.width() >= cell_frag.bounds.width() + 6.0);
+  }
+
+  #[test]
+  fn collapsed_border_styles_are_reused() {
+    let mut table_style = ComputedStyle::default();
+    table_style.display = Display::Table;
+    table_style.border_collapse = BorderCollapse::Collapse;
+    apply_uniform_border(&mut table_style, 2.0, Rgba::RED);
+
+    let mut row_style = ComputedStyle::default();
+    row_style.display = Display::TableRow;
+
+    let mut cell_style = ComputedStyle::default();
+    cell_style.display = Display::TableCell;
+    apply_uniform_border(&mut cell_style, 2.0, Rgba::RED);
+
+    let make_cell = || {
+      BoxNode::new_block(
+        Arc::new(cell_style.clone()),
+        FormattingContextType::Block,
+        vec![],
+      )
+    };
+    let row1 = BoxNode::new_block(
+      Arc::new(row_style.clone()),
+      FormattingContextType::Block,
+      vec![make_cell(), make_cell()],
+    );
+    let row2 = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![make_cell(), make_cell()],
+    );
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row1, row2],
+    );
+
+    let tfc = TableFormattingContext::new();
+    let fragment = tfc
+      .layout(&table, &LayoutConstraints::definite_width(80.0))
+      .expect("table layout");
+
+    let mut vertical_styles = Vec::new();
+    let mut horizontal_styles = Vec::new();
+    let mut corner_styles = Vec::new();
+    collect_collapsed_border_styles(
+      &fragment,
+      &mut vertical_styles,
+      &mut horizontal_styles,
+      &mut corner_styles,
+    );
+
+    assert!(
+      vertical_styles.len() > 1 && horizontal_styles.len() > 1 && corner_styles.len() > 1,
+      "expected collapsed border fragments to be present in all orientations"
+    );
+
+    assert_eq!(
+      unique_style_count(&vertical_styles),
+      1,
+      "vertical borders should reuse cached styles"
+    );
+    assert_eq!(
+      unique_style_count(&horizontal_styles),
+      1,
+      "horizontal borders should reuse cached styles"
+    );
+    assert_eq!(
+      unique_style_count(&corner_styles),
+      1,
+      "corner borders should reuse cached styles"
+    );
   }
 
   #[test]
