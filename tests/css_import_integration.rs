@@ -1,5 +1,5 @@
 use fastrender::api::{FastRender, RenderDiagnostics, RenderOptions};
-use fastrender::css::loader::infer_base_url;
+use fastrender::css::loader::{infer_base_url, StylesheetInlineBudget};
 use fastrender::resource::{FetchedResource, ResourceFetcher};
 use fastrender::style::color::Rgba;
 use fastrender::style::media::MediaType;
@@ -128,6 +128,11 @@ fn nested_imports_resolve_against_base_and_stylesheet_urls() {
     )
     .expect("inline stylesheets");
   assert!(
+    html_with_css.contains(deep_image),
+    "inlined CSS should preserve the deepest background URL: {}",
+    html_with_css
+  );
+  assert!(
     diagnostics.fetch_errors.is_empty(),
     "expected stylesheet fetches to succeed: {:?}",
     diagnostics.fetch_errors
@@ -147,11 +152,231 @@ fn nested_imports_resolve_against_base_and_stylesheet_urls() {
   assert!(requests.contains(&colors_url.to_string()));
   assert!(requests.contains(&theme_url.to_string()));
   assert!(
-    requests.contains(&deep_image.to_string()),
-    "url() inside deepest import should resolve relative to that sheet"
-  );
-  assert!(
     requests.contains(&entry_image.to_string()),
     "background image from entry sheet should resolve against base URL and be fetched"
+  );
+}
+
+#[test]
+fn inline_stylesheets_stop_when_byte_budget_exhausted() {
+  let html = r#"<html><head><link rel="stylesheet" href="https://example.com/huge.css"></head><body></body></html>"#;
+  let base_hint = "https://example.com/page.html";
+  let huge_css = "body { color: black; }\n".repeat(150_000);
+
+  let fetcher = RecordingFetcher::new().with(
+    "https://example.com/huge.css",
+    huge_css.as_bytes(),
+    "text/css",
+  );
+  let fetcher: Arc<RecordingFetcher> = Arc::new(fetcher);
+  let fetcher_for_renderer: Arc<dyn ResourceFetcher> = fetcher.clone();
+
+  let mut renderer = FastRender::builder()
+    .fetcher(fetcher_for_renderer)
+    .build()
+    .unwrap();
+
+  let base_url = infer_base_url(html, base_hint).into_owned();
+  renderer.set_base_url(base_url.clone());
+
+  let mut diagnostics = RenderDiagnostics::default();
+  let inlined = renderer
+    .inline_stylesheets_for_document(
+      html,
+      &base_url,
+      MediaType::Screen,
+      None,
+      &mut diagnostics,
+      None,
+    )
+    .expect("inline stylesheets");
+
+  assert_eq!(
+    inlined, html,
+    "stylesheets that exceed the byte budget should be skipped entirely"
+  );
+  assert!(
+    diagnostics
+      .fetch_errors
+      .iter()
+      .any(|err| err.url.ends_with("huge.css") && err.message.contains("byte budget")),
+    "expected diagnostics about hitting the byte budget: {:?}",
+    diagnostics.fetch_errors
+  );
+}
+
+#[test]
+fn inline_stylesheets_apply_global_stylesheet_budget() {
+  let html = r#"<html><head><link rel="stylesheet" href="https://example.com/root.css"><link rel="stylesheet" href="https://example.com/extra.css"></head><body></body></html>"#;
+  let fetcher = RecordingFetcher::new()
+    .with(
+      "https://example.com/root.css",
+      r#"
+        @import "nested.css";
+        @import "nested2.css";
+        .root { color: rgb(1, 1, 1); }
+      "#,
+      "text/css",
+    )
+    .with(
+      "https://example.com/nested.css",
+      ".nested { color: rgb(2, 2, 2); }",
+      "text/css",
+    )
+    .with(
+      "https://example.com/nested2.css",
+      ".nested2 { color: rgb(3, 3, 3); }",
+      "text/css",
+    )
+    .with(
+      "https://example.com/extra.css",
+      ".extra { color: rgb(4, 4, 4); }",
+      "text/css",
+    );
+  let budget = StylesheetInlineBudget::new(2, 2048, 8);
+  let mut diagnostics = RenderDiagnostics::default();
+  let inlined = FastRender::inline_stylesheets_for_html_with_context_with_budget(
+    &fetcher,
+    html,
+    "https://example.com/page.html",
+    MediaType::Screen,
+    None,
+    None,
+    &mut diagnostics,
+    None,
+    None,
+    budget,
+  )
+  .expect("inline stylesheets");
+
+  assert!(
+    inlined.contains(".nested { color: rgb(2, 2, 2); }"),
+    "first import should inline while budget remains: {inlined}"
+  );
+  assert!(
+    !inlined.contains(".nested2"),
+    "imports beyond the stylesheet budget should be skipped: {inlined}"
+  );
+  assert!(
+    !inlined.contains(".extra"),
+    "extra linked stylesheets should be dropped once the budget is exhausted: {inlined}"
+  );
+  assert!(
+    diagnostics
+      .fetch_errors
+      .iter()
+      .any(|err| err.url.ends_with("nested2.css") && err.message.contains("budget")),
+    "expected diagnostics for skipped imports when the stylesheet budget is hit: {:?}",
+    diagnostics.fetch_errors
+  );
+  assert!(
+    diagnostics
+      .fetch_errors
+      .iter()
+      .any(|err| err.url.ends_with("extra.css") && err.message.contains("budget")),
+    "expected diagnostics for skipped links when the stylesheet budget is hit: {:?}",
+    diagnostics.fetch_errors
+  );
+}
+
+#[test]
+fn inline_stylesheets_detect_cycles_and_continue() {
+  let html = r#"<html><head><link rel="stylesheet" href="https://example.com/main.css"></head><body></body></html>"#;
+  let fetcher = RecordingFetcher::new()
+    .with(
+      "https://example.com/main.css",
+      r#"
+        @import "cycle.css";
+        .main { color: rgb(10, 10, 10); }
+      "#,
+      "text/css",
+    )
+    .with(
+      "https://example.com/cycle.css",
+      r#"
+        @import "main.css";
+        .cycle { color: rgb(20, 20, 20); }
+      "#,
+      "text/css",
+    );
+  let mut diagnostics = RenderDiagnostics::default();
+  let inlined = FastRender::inline_stylesheets_for_html_with_context_with_budget(
+    &fetcher,
+    html,
+    "https://example.com/page.html",
+    MediaType::Screen,
+    None,
+    None,
+    &mut diagnostics,
+    None,
+    None,
+    StylesheetInlineBudget::new(8, 4096, 8),
+  )
+  .expect("inline stylesheets");
+
+  assert!(inlined.contains(".cycle { color: rgb(20, 20, 20); }"));
+  assert!(inlined.contains(".main { color: rgb(10, 10, 10); }"));
+  assert!(
+    diagnostics
+      .fetch_errors
+      .iter()
+      .any(|err| err.url.ends_with("main.css") && err.message.contains("cyclic")),
+    "expected cyclic import diagnostics: {:?}",
+    diagnostics.fetch_errors
+  );
+}
+
+#[test]
+fn inline_stylesheets_enforce_import_depth_budget() {
+  let html = r#"<html><head><link rel="stylesheet" href="https://example.com/root.css"></head><body></body></html>"#;
+  let fetcher = RecordingFetcher::new()
+    .with(
+      "https://example.com/root.css",
+      r#"
+        @import "level1.css";
+        .root { color: rgb(1, 1, 1); }
+      "#,
+      "text/css",
+    )
+    .with(
+      "https://example.com/level1.css",
+      r#"
+        @import "level2.css";
+        .level1 { color: rgb(2, 2, 2); }
+      "#,
+      "text/css",
+    )
+    .with(
+      "https://example.com/level2.css",
+      ".level2 { color: rgb(3, 3, 3); }",
+      "text/css",
+    );
+  let mut diagnostics = RenderDiagnostics::default();
+  let inlined = FastRender::inline_stylesheets_for_html_with_context_with_budget(
+    &fetcher,
+    html,
+    "https://example.com/page.html",
+    MediaType::Screen,
+    None,
+    None,
+    &mut diagnostics,
+    None,
+    None,
+    StylesheetInlineBudget::new(8, 4096, 2),
+  )
+  .expect("inline stylesheets");
+
+  assert!(inlined.contains(".level1 { color: rgb(2, 2, 2); }"));
+  assert!(
+    !inlined.contains(".level2"),
+    "imports beyond the depth budget should be skipped: {inlined}"
+  );
+  assert!(
+    diagnostics
+      .fetch_errors
+      .iter()
+      .any(|err| err.url.ends_with("level2.css") && err.message.contains("depth")),
+    "expected diagnostics for hitting the depth budget: {:?}",
+    diagnostics.fetch_errors
   );
 }

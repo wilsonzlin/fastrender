@@ -1,7 +1,8 @@
 use fastrender::css::loader::{
   absolutize_css_urls, infer_base_url, inline_imports_with_diagnostics, resolve_href,
-  InlineImportState,
+  InlineImportState, StylesheetInlineBudget,
 };
+use fastrender::error::Result;
 
 #[test]
 fn absolutize_ignores_comments_and_strings() {
@@ -105,10 +106,10 @@ fn infer_base_url_honors_relative_base_href_with_trailing_slash() {
 fn infer_base_url_preserves_file_like_base_href_without_trailing_slash() {
   let html = r#"<html><head><base href="assets"></head></html>"#;
   let base = infer_base_url(html, "https://example.com/root/page.html").into_owned();
-  assert_eq!(base, "https://example.com/assets");
+  assert_eq!(base, "https://example.com/root/assets");
 
   let resolved = resolve_href(&base, "img/logo.png").expect("resolved asset URL");
-  assert_eq!(resolved, "https://example.com/img/logo.png");
+  assert_eq!(resolved, "https://example.com/root/img/logo.png");
 }
 
 #[test]
@@ -162,5 +163,131 @@ fn inline_imports_reports_cycles() {
       .any(|(url, reason)| url == "https://example.com/main.css" && reason.contains("cyclic")),
     "cycle diagnostics should be reported: {:?}",
     diagnostics
+  );
+}
+
+#[test]
+fn inline_imports_respects_stylesheet_budget() {
+  let mut state = InlineImportState::with_budget(StylesheetInlineBudget::new(2, 1024, 8));
+  let mut fetched = |url: &str| -> Result<String> {
+    if url.ends_with("first.css") {
+      Ok("h1 { color: rgb(1, 2, 3); }".to_string())
+    } else if url.ends_with("second.css") {
+      Ok("p { color: rgb(4, 5, 6); }".to_string())
+    } else {
+      Err(fastrender::error::Error::Io(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "unexpected url",
+      )))
+    }
+  };
+  let mut diags: Vec<(String, String)> = Vec::new();
+  let mut record = |url: &str, reason: &str| diags.push((url.to_string(), reason.to_string()));
+  let out = inline_imports_with_diagnostics(
+    "@import \"first.css\";\n@import \"second.css\";\nbody { color: rgb(7, 8, 9); }",
+    "https://example.com/root.css",
+    &mut fetched,
+    &mut state,
+    &mut record,
+    None,
+  )
+  .unwrap();
+  assert!(
+    out.contains("h1 { color: rgb(1, 2, 3); }"),
+    "first import should inline within budget: {out}"
+  );
+  assert!(
+    !out.contains("p { color: rgb(4, 5, 6); }"),
+    "second import should be skipped once stylesheet budget is exhausted: {out}"
+  );
+  assert!(
+    diags
+      .iter()
+      .any(|(url, reason)| url.ends_with("second.css") && reason.contains("budget")),
+    "expected diagnostics about stylesheet budget cutoff: {:?}",
+    diags
+  );
+}
+
+#[test]
+fn inline_imports_respects_byte_budget() {
+  let mut state = InlineImportState::with_budget(StylesheetInlineBudget::new(8, 64, 8));
+  let big_css = "a { color: blue; }".repeat(8);
+  let mut fetched = |url: &str| -> Result<String> {
+    if url.ends_with("big.css") {
+      Ok(big_css.clone())
+    } else {
+      Ok(String::new())
+    }
+  };
+  let mut diags: Vec<(String, String)> = Vec::new();
+  let mut record = |url: &str, reason: &str| diags.push((url.to_string(), reason.to_string()));
+  let out = inline_imports_with_diagnostics(
+    "@import \"big.css\";\nbody { color: black; }",
+    "https://example.com/root.css",
+    &mut fetched,
+    &mut state,
+    &mut record,
+    None,
+  )
+  .unwrap();
+  assert!(
+    out.contains("body { color: black; }"),
+    "base stylesheet content should remain even when imports are skipped: {out}"
+  );
+  assert!(
+    !out.contains("color: blue"),
+    "large imported stylesheet should be dropped once byte budget is exceeded: {out}"
+  );
+  assert!(
+    diags
+      .iter()
+      .any(|(url, reason)| url.ends_with("big.css") && reason.contains("byte")),
+    "expected diagnostics about byte budget cutoff: {:?}",
+    diags
+  );
+  assert!(
+    out.len() <= 64,
+    "output should not exceed configured byte budget ({}): {}",
+    out.len(),
+    out
+  );
+}
+
+#[test]
+fn inline_imports_respects_depth_budget() {
+  let mut state = InlineImportState::with_budget(StylesheetInlineBudget::new(8, 1024, 2));
+  let mut fetched = |url: &str| -> Result<String> {
+    if url.ends_with("a.css") {
+      Ok("@import \"b.css\";\na { color: red; }".to_string())
+    } else {
+      Ok("b { color: green; }".to_string())
+    }
+  };
+  let mut diags: Vec<(String, String)> = Vec::new();
+  let mut record = |url: &str, reason: &str| diags.push((url.to_string(), reason.to_string()));
+  let out = inline_imports_with_diagnostics(
+    "@import \"a.css\";\nbody { color: black; }",
+    "https://example.com/root.css",
+    &mut fetched,
+    &mut state,
+    &mut record,
+    None,
+  )
+  .unwrap();
+  assert!(
+    out.contains("a { color: red; }"),
+    "first-level import should inline within depth budget: {out}"
+  );
+  assert!(
+    !out.contains("b { color: green; }"),
+    "imports beyond the depth budget should be dropped: {out}"
+  );
+  assert!(
+    diags
+      .iter()
+      .any(|(url, reason)| url.ends_with("b.css") && reason.contains("depth")),
+    "expected diagnostics about depth cutoff: {:?}",
+    diags
   );
 }

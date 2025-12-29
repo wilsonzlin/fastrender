@@ -185,7 +185,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       let mut combined_css = String::new();
       let mut import_state = InlineImportState::new();
       for link in css_links {
-        import_state.register_stylesheet(link.clone());
+        let mut diag = |_url: &str, _reason: &str| {};
+        if !import_state.try_register_stylesheet_with_budget(&link, &mut diag) {
+          continue;
+        }
         match fetcher.fetch(&link) {
           Ok(res) => {
             let css_text = decode_css_bytes(&res.bytes, res.content_type.as_deref());

@@ -7,12 +7,11 @@
 
 use crate::css::parser::{rel_list_contains_stylesheet, tokenize_rel_list};
 use crate::debug::runtime;
-use crate::error::{Error, RenderError, RenderStage, Result};
+use crate::error::{RenderError, RenderStage, Result};
 use crate::render_control::{check_active, check_active_periodic, RenderDeadline};
 use cssparser::{Parser, ParserInput, Token};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
-use std::fmt::Write;
 use std::path::Path;
 use url::Url;
 
@@ -382,23 +381,199 @@ fn parse_import_target(rule: &str) -> Option<(String, String)> {
   Some((target, rest))
 }
 
-const MAX_INLINE_IMPORTS: usize = 64;
+const DEFAULT_MAX_INLINE_STYLESHEETS: usize = 128;
+const DEFAULT_MAX_INLINE_CSS_BYTES: usize = 2 * 1024 * 1024;
+const DEFAULT_MAX_INLINE_IMPORT_DEPTH: usize = 8;
+
+/// Shared budget for stylesheet inlining across `<link>` tags and `@import` chains.
+///
+/// Tracks both resource count and total inlined bytes to bound work on pages with
+/// extremely deep or large import graphs.
+#[derive(Clone, Debug)]
+pub struct StylesheetInlineBudget {
+  max_stylesheets: usize,
+  max_bytes: usize,
+  max_import_depth: usize,
+  used_stylesheets: usize,
+  used_bytes: usize,
+}
+
+impl StylesheetInlineBudget {
+  /// Construct a budget with explicit limits.
+  pub fn new(max_stylesheets: usize, max_bytes: usize, max_import_depth: usize) -> Self {
+    Self {
+      max_stylesheets: max_stylesheets.max(1),
+      max_bytes: max_bytes.max(1),
+      max_import_depth: max_import_depth.max(1),
+      used_stylesheets: 0,
+      used_bytes: 0,
+    }
+  }
+
+  /// Construct a budget using default limits.
+  pub fn default_limits() -> Self {
+    Self::new(
+      DEFAULT_MAX_INLINE_STYLESHEETS,
+      DEFAULT_MAX_INLINE_CSS_BYTES,
+      DEFAULT_MAX_INLINE_IMPORT_DEPTH,
+    )
+  }
+
+  /// Construct a budget using runtime overrides when present.
+  ///
+  /// The following `FASTR_*` toggles are respected:
+  /// - `FASTR_INLINE_MAX_STYLESHEETS`
+  /// - `FASTR_INLINE_MAX_INLINE_CSS_BYTES`
+  /// - `FASTR_INLINE_MAX_INLINE_IMPORT_DEPTH`
+  pub fn from_runtime_toggles() -> Self {
+    let toggles = runtime::runtime_toggles();
+    Self::new(
+      toggles.usize_with_default(
+        "FASTR_INLINE_MAX_STYLESHEETS",
+        DEFAULT_MAX_INLINE_STYLESHEETS,
+      ),
+      toggles.usize_with_default(
+        "FASTR_INLINE_MAX_INLINE_CSS_BYTES",
+        DEFAULT_MAX_INLINE_CSS_BYTES,
+      ),
+      toggles.usize_with_default(
+        "FASTR_INLINE_MAX_INLINE_IMPORT_DEPTH",
+        DEFAULT_MAX_INLINE_IMPORT_DEPTH,
+      ),
+    )
+  }
+
+  pub fn remaining_bytes(&self) -> usize {
+    self.max_bytes.saturating_sub(self.used_bytes)
+  }
+
+  pub fn try_spend_stylesheet<D>(&mut self, url: &str, diagnostics: &mut D) -> bool
+  where
+    D: FnMut(&str, &str),
+  {
+    if self.used_stylesheets >= self.max_stylesheets {
+      diagnostics(
+        url,
+        &format!(
+          "stylesheet budget exhausted (max {} stylesheets)",
+          self.max_stylesheets
+        ),
+      );
+      return false;
+    }
+    self.used_stylesheets += 1;
+    true
+  }
+
+  pub fn try_spend_bytes<D>(&mut self, url: &str, bytes: usize, diagnostics: &mut D) -> bool
+  where
+    D: FnMut(&str, &str),
+  {
+    if bytes == 0 {
+      return true;
+    }
+    let Some(total) = self.used_bytes.checked_add(bytes) else {
+      diagnostics(url, "stylesheet byte budget exhausted");
+      return false;
+    };
+    if total > self.max_bytes {
+      diagnostics(
+        url,
+        &format!(
+          "stylesheet byte budget exhausted (max {} bytes)",
+          self.max_bytes
+        ),
+      );
+      return false;
+    }
+    self.used_bytes = total;
+    true
+  }
+
+  pub fn import_depth_allowed<D>(
+    &self,
+    current_depth: usize,
+    url: &str,
+    diagnostics: &mut D,
+  ) -> bool
+  where
+    D: FnMut(&str, &str),
+  {
+    // current_depth counts the number of stylesheets on the stack. The next import would
+    // increase it by one.
+    if current_depth >= self.max_import_depth {
+      diagnostics(
+        url,
+        &format!("import depth limit reached (max {})", self.max_import_depth),
+      );
+      return false;
+    }
+    true
+  }
+}
+
+impl Default for StylesheetInlineBudget {
+  fn default() -> Self {
+    Self::from_runtime_toggles()
+  }
+}
 
 /// Tracks recursion state and cached inlined content for `@import` processing.
-#[derive(Default)]
+#[derive(Debug)]
 pub struct InlineImportState {
   stack: Vec<String>,
   seen: HashSet<String>,
   cache: HashMap<String, String>,
+  budget: StylesheetInlineBudget,
 }
 
 impl InlineImportState {
   pub fn new() -> Self {
-    Self::default()
+    Self::with_budget(StylesheetInlineBudget::default())
+  }
+
+  pub fn with_budget(budget: StylesheetInlineBudget) -> Self {
+    Self {
+      stack: Vec::new(),
+      seen: HashSet::new(),
+      cache: HashMap::new(),
+      budget,
+    }
   }
 
   pub fn register_stylesheet(&mut self, url: impl Into<String>) {
-    self.seen.insert(url.into());
+    let url = url.into();
+    let mut discard = |_url: &str, _reason: &str| {};
+    let _ = self.try_register_stylesheet_with_budget(&url, &mut discard);
+  }
+
+  pub fn try_register_stylesheet_with_budget<D>(&mut self, url: &str, diagnostics: &mut D) -> bool
+  where
+    D: FnMut(&str, &str),
+  {
+    if self.seen.contains(url) {
+      return true;
+    }
+    if self.budget.try_spend_stylesheet(url, diagnostics) {
+      self.seen.insert(url.to_string());
+      true
+    } else {
+      false
+    }
+  }
+
+  pub fn budget(&self) -> &StylesheetInlineBudget {
+    &self.budget
+  }
+
+  pub fn budget_mut(&mut self) -> &mut StylesheetInlineBudget {
+    &mut self.budget
+  }
+}
+
+impl Default for InlineImportState {
+  fn default() -> Self {
+    Self::new()
   }
 }
 
@@ -442,6 +617,13 @@ where
   F: FnMut(&str) -> Result<String>,
   D: FnMut(&str, &str),
 {
+  if !state.try_register_stylesheet_with_budget(base_url, diagnostics) {
+    return Ok(String::new());
+  }
+  if state.budget.remaining_bytes() == 0 {
+    diagnostics(base_url, "stylesheet byte budget exhausted");
+    return Ok(String::new());
+  }
   state.stack.push(base_url.to_string());
   let result = inline_imports_inner(css, base_url, fetch, state, diagnostics, deadline);
   state.stack.pop();
@@ -460,6 +642,27 @@ where
   F: FnMut(&str) -> Result<String>,
   D: FnMut(&str, &str),
 {
+  fn push_with_budget<D>(
+    out: &mut String,
+    text: &str,
+    url: &str,
+    budget: &mut StylesheetInlineBudget,
+    diagnostics: &mut D,
+  ) -> bool
+  where
+    D: FnMut(&str, &str),
+  {
+    if text.is_empty() {
+      return true;
+    }
+    if budget.try_spend_bytes(url, text.len(), diagnostics) {
+      out.push_str(text);
+      true
+    } else {
+      false
+    }
+  }
+
   #[derive(PartialEq)]
   enum State {
     Normal,
@@ -475,6 +678,7 @@ where
   let mut last_emit = 0usize;
   let mut active_deadline_counter = 0usize;
   let mut explicit_deadline_counter = 0usize;
+  let mut budget_exhausted = state.budget.remaining_bytes() == 0;
 
   check_active(RenderStage::Css)?;
   if let Some(limit) = deadline {
@@ -507,6 +711,10 @@ where
         if bytes[i] == b'@' {
           let remainder = &css[i..];
           if remainder.len() >= 7 && remainder[1..].to_lowercase().starts_with("import") {
+            if budget_exhausted {
+              diagnostics(base_url, "stylesheet byte budget exhausted");
+              break;
+            }
             let mut j = i;
             let mut inner_state = State::Normal;
             while j < bytes.len() {
@@ -552,29 +760,41 @@ where
             let rule = css[i..j].trim();
             if let Some((target, media)) = parse_import_target(rule) {
               if let Some(resolved) = resolve_href(base_url, &target) {
-                if state.seen.len() >= MAX_INLINE_IMPORTS {
-                  diagnostics(&resolved, "import limit reached");
-                  out.push_str(&css[last_emit..]);
-                  return Ok(out);
+                if !push_with_budget(
+                  &mut out,
+                  &css[last_emit..i],
+                  base_url,
+                  &mut state.budget,
+                  diagnostics,
+                ) {
+                  budget_exhausted = true;
+                  break;
                 }
-                out.push_str(&css[last_emit..i]);
+                if !state
+                  .budget
+                  .import_depth_allowed(state.stack.len(), &resolved, diagnostics)
+                {
+                  last_emit = j;
+                  i = j;
+                  continue;
+                }
                 if state.stack.contains(&resolved) {
                   diagnostics(&resolved, "skipping cyclic @import");
                 } else {
                   let mut inlined: Option<String> = None;
-                  if let Some(cached) = state.cache.get(&resolved) {
+                  if !state.try_register_stylesheet_with_budget(&resolved, diagnostics) {
+                    // Count exhausted; skip this import.
+                  } else if state.budget.remaining_bytes() == 0 {
+                    diagnostics(&resolved, "stylesheet byte budget exhausted");
+                    budget_exhausted = true;
+                  } else if let Some(cached) = state.cache.get(&resolved) {
                     inlined = Some(cached.clone());
                   } else {
-                    state.seen.insert(resolved.clone());
-                    if let Some(limit) = deadline {
-                      limit.check(RenderStage::Css)?;
-                    }
-                    match fetch(&resolved) {
-                      Ok(fetched) => {
-                        if let Some(limit) = deadline {
-                          limit.check(RenderStage::Css)?;
-                        }
-                        let rewritten = absolutize_css_urls(&fetched, &resolved)?;
+                    if let Ok(fetched) = fetch(&resolved) {
+                      let rewritten = absolutize_css_urls(&fetched, &resolved)?;
+                      if rewritten.len() > state.budget.remaining_bytes() {
+                        diagnostics(&resolved, "stylesheet byte budget exhausted");
+                      } else {
                         let nested = inline_imports_with_diagnostics(
                           &rewritten,
                           &resolved,
@@ -586,18 +806,23 @@ where
                         state.cache.insert(resolved.clone(), nested.clone());
                         inlined = Some(nested);
                       }
-                      Err(Error::Render(RenderError::Timeout { stage, elapsed })) => {
-                        return Err(RenderError::Timeout { stage, elapsed });
-                      }
-                      Err(_) => {}
                     }
                   }
 
                   if let Some(inlined) = inlined {
-                    if media.is_empty() || media.eq_ignore_ascii_case("all") {
-                      out.push_str(&inlined);
+                    let to_insert = if media.is_empty() || media.eq_ignore_ascii_case("all") {
+                      inlined
                     } else {
-                      let _ = write!(out, "@media {} {{\n{}\n}}\n", media, inlined);
+                      format!("@media {} {{\n{}\n}}\n", media, inlined)
+                    };
+                    if !push_with_budget(
+                      &mut out,
+                      &to_insert,
+                      &resolved,
+                      &mut state.budget,
+                      diagnostics,
+                    ) {
+                      budget_exhausted = true;
                     }
                   }
                 }
@@ -642,7 +867,15 @@ where
     }
   }
 
-  out.push_str(&css[last_emit..]);
+  if !budget_exhausted {
+    let _ = push_with_budget(
+      &mut out,
+      &css[last_emit..],
+      base_url,
+      &mut state.budget,
+      diagnostics,
+    );
+  }
   Ok(out)
 }
 

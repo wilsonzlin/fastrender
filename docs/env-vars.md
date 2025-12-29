@@ -26,6 +26,12 @@ The rendering pipeline parses the environment once into a typed [`RuntimeToggles
 
 - `FASTR_MAX_FOREIGN_OBJECT_CSS_BYTES=<N>` – cap the amount of document-level CSS injected into nested
   `<foreignObject>` HTML renders (default 262_144 bytes).
+- `FASTR_INLINE_MAX_STYLESHEETS=<N>` – maximum number of stylesheets inlined across `<link>`/embedded
+  discovery and `@import` chains (default 128).
+- `FASTR_INLINE_MAX_INLINE_CSS_BYTES=<N>` – total CSS bytes allowed when inlining stylesheets
+  (default 2 MiB).
+- `FASTR_INLINE_MAX_INLINE_IMPORT_DEPTH=<N>` – maximum @import nesting depth during inlining
+  (default 8).
 
 ## Debug dumps (paint / display list)
 

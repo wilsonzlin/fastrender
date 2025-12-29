@@ -64,6 +64,7 @@ use crate::css::encoding::decode_css_bytes;
 use crate::css::loader::{
   absolutize_css_urls, extract_css_links, extract_embedded_css_urls, infer_base_url,
   inject_css_into_html, inline_imports_with_diagnostics, resolve_href_with_base, InlineImportState,
+  StylesheetInlineBudget,
 };
 use crate::css::parser::{
   extract_css_sources, extract_scoped_css_sources, parse_stylesheet, rel_list_contains_stylesheet,
@@ -6375,7 +6376,7 @@ impl FastRender {
     deadline: Option<&RenderDeadline>,
     stats: Option<&mut RenderStatsRecorder>,
   ) -> std::result::Result<String, RenderError> {
-    Self::inline_stylesheets_for_html_with_context(
+    Self::inline_stylesheets_for_html_with_context_with_budget(
       self.fetcher.as_ref(),
       html,
       base_url,
@@ -6385,6 +6386,7 @@ impl FastRender {
       diagnostics,
       deadline,
       stats,
+      StylesheetInlineBudget::default(),
     )
   }
 
@@ -6420,7 +6422,7 @@ impl FastRender {
     diagnostics: &mut RenderDiagnostics,
     deadline: Option<&RenderDeadline>,
   ) -> std::result::Result<String, RenderError> {
-    Self::inline_stylesheets_for_html_with_context(
+    Self::inline_stylesheets_for_html_with_context_with_budget(
       self.fetcher.as_ref(),
       html,
       base_url,
@@ -6430,6 +6432,7 @@ impl FastRender {
       diagnostics,
       deadline,
       None,
+      StylesheetInlineBudget::default(),
     )
   }
 
@@ -6443,7 +6446,7 @@ impl FastRender {
     diagnostics: &mut RenderDiagnostics,
     deadline: Option<&RenderDeadline>,
   ) -> std::result::Result<String, RenderError> {
-    Self::inline_stylesheets_for_html_with_context(
+    Self::inline_stylesheets_for_html_with_context_with_budget(
       fetcher,
       html,
       base_url,
@@ -6453,6 +6456,7 @@ impl FastRender {
       diagnostics,
       deadline,
       None,
+      StylesheetInlineBudget::default(),
     )
   }
 
@@ -6467,6 +6471,33 @@ impl FastRender {
     diagnostics: &mut RenderDiagnostics,
     deadline: Option<&RenderDeadline>,
     mut stats: Option<&mut RenderStatsRecorder>,
+  ) -> std::result::Result<String, RenderError> {
+    Self::inline_stylesheets_for_html_with_context_with_budget(
+      fetcher,
+      html,
+      base_url,
+      media_type,
+      css_limit,
+      resource_context,
+      diagnostics,
+      deadline,
+      stats,
+      StylesheetInlineBudget::default(),
+    )
+  }
+
+  /// Fetch linked stylesheets using an arbitrary fetcher with an explicit resource context and budget.
+  pub fn inline_stylesheets_for_html_with_context_with_budget(
+    fetcher: &dyn ResourceFetcher,
+    html: &str,
+    base_url: &str,
+    media_type: MediaType,
+    css_limit: Option<usize>,
+    resource_context: Option<&ResourceContext>,
+    diagnostics: &mut RenderDiagnostics,
+    deadline: Option<&RenderDeadline>,
+    mut stats: Option<&mut RenderStatsRecorder>,
+    budget: StylesheetInlineBudget,
   ) -> std::result::Result<String, RenderError> {
     let inlining_start = stats.as_deref().and_then(|rec| rec.timer());
     let mut css_links = extract_css_links(html, base_url, media_type)?;
@@ -6483,18 +6514,27 @@ impl FastRender {
     }
 
     let mut combined_css = String::new();
-    let mut import_state = InlineImportState::new();
+    let mut import_state = InlineImportState::with_budget(budget);
 
     for css_url in css_links {
-      import_state.register_stylesheet(css_url.clone());
-      if let Some(rec) = stats.as_deref_mut() {
-        rec.record_fetch(ResourceKind::Stylesheet);
+      let mut budget_diag = |url: &str, reason: &str| {
+        diagnostics.record_message(ResourceKind::Stylesheet, url, reason);
+      };
+      if import_state.budget().remaining_bytes() == 0 {
+        budget_diag(&css_url, "stylesheet byte budget exhausted");
+        break;
+      }
+      if !import_state.try_register_stylesheet_with_budget(&css_url, &mut budget_diag) {
+        break;
       }
       if let Some(ctx) = resource_context {
         if let Err(err) = ctx.policy.allows(&css_url) {
           diagnostics.record_message(ResourceKind::Stylesheet, &css_url, err.reason);
           continue;
         }
+      }
+      if let Some(rec) = stats.as_deref_mut() {
+        rec.record_fetch(ResourceKind::Stylesheet);
       }
       match fetcher.fetch(&css_url) {
         Ok(res) => {
@@ -6567,7 +6607,22 @@ impl FastRender {
             diagnostics.record_message(ResourceKind::Stylesheet, &url, &reason);
           }
           combined_css.push_str(&inlined);
-          combined_css.push('\n');
+          if !inlined.is_empty() {
+            let mut newline_diag = |url: &str, reason: &str| {
+              diagnostics.record_message(ResourceKind::Stylesheet, url, reason);
+            };
+            if import_state
+              .budget_mut()
+              .try_spend_bytes(&css_url, 1, &mut newline_diag)
+            {
+              combined_css.push('\n');
+            } else {
+              break;
+            }
+          }
+          if import_state.budget().remaining_bytes() == 0 {
+            break;
+          }
         }
         Err(err) => diagnostics.record_error(ResourceKind::Stylesheet, &css_url, &err),
       }
