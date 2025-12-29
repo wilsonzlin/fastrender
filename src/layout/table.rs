@@ -3897,6 +3897,7 @@ impl FormattingContext for TableFormattingContext {
     let has_running_children = !running_children.is_empty();
 
     let structure = TableStructure::from_box_tree(&table_box);
+    let cell_count = structure.cells.len();
     if dump {
       let cw = match constraints.available_width {
         AvailableSpace::Definite(w) => format!("{:.2}", w),
@@ -4410,6 +4411,21 @@ impl FormattingContext for TableFormattingContext {
     }
 
     let mut fragments = Vec::new();
+    let row_count = structure.row_count;
+    let column_count = structure.column_count;
+    let collapsed_line_fragments = row_count
+      .saturating_mul(column_count.saturating_add(1))
+      .saturating_add(column_count.saturating_mul(row_count.saturating_add(1)));
+    let collapsed_corner_fragments = row_count
+      .saturating_add(1)
+      .saturating_mul(column_count.saturating_add(1));
+    let fragment_capacity = cell_count
+      .saturating_add(row_count.saturating_mul(2))
+      .saturating_add(column_count.saturating_mul(2))
+      .saturating_add(collapsed_line_fragments)
+      .saturating_add(collapsed_corner_fragments)
+      .saturating_add(16);
+    fragments.reserve(fragment_capacity);
     let h_spacing = structure.border_spacing.0;
     let v_spacing = structure.border_spacing.1;
 
@@ -4475,17 +4491,18 @@ impl FormattingContext for TableFormattingContext {
       }
     };
 
-    let (mut laid_out_cells, mut failed_cells) =
-      if self.parallelism.should_parallelize(structure.cells.len()) && !dump {
-        let mut outcomes = structure
+    let (mut laid_out_cells, failed_cells) =
+      if self.parallelism.should_parallelize(cell_count) && !dump {
+        let mut outcomes = Vec::with_capacity(cell_count);
+        structure
           .cells
           .par_iter()
           .enumerate()
           .map(|(idx, cell)| (idx, layout_single_cell(cell)))
-          .collect::<Vec<_>>();
+          .collect_into_vec(&mut outcomes);
         outcomes.sort_by_key(|(idx, _)| *idx);
 
-        let mut laid_out_cells = Vec::new();
+        let mut laid_out_cells = Vec::with_capacity(cell_count);
         let mut failed = 0usize;
         for (_, outcome) in outcomes {
           match outcome {
@@ -4496,7 +4513,7 @@ impl FormattingContext for TableFormattingContext {
         }
         (laid_out_cells, failed)
       } else {
-        let mut laid_out_cells = Vec::new();
+        let mut laid_out_cells = Vec::with_capacity(cell_count);
         let mut failed = 0usize;
         for cell in &structure.cells {
           match layout_single_cell(cell) {

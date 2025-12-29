@@ -36,6 +36,7 @@ mod table_fixup_box_generation;
 mod table_fixup_integration;
 mod table_fixup_wrapper;
 mod table_fragmentation;
+mod table_large_layout;
 mod taffy_usage_guards;
 mod test_absolute;
 mod test_baseline;
