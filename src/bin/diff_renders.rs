@@ -1,6 +1,8 @@
+mod common;
+
 use clap::Parser;
+use common::report::{display_path, ensure_parent_dir, escape_html, path_for_report};
 use fastrender::image_output::{diff_png, DiffMetrics};
-use pathdiff::diff_paths;
 use serde::Serialize;
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
@@ -458,32 +460,14 @@ fn collect_pngs(dir: &Path) -> Result<HashMap<String, PathBuf>, String> {
 }
 
 fn write_json_report(report: &DiffReport, path: &Path) -> Result<(), String> {
-  if let Some(parent) = path.parent() {
-    if !parent.as_os_str().is_empty() {
-      fs::create_dir_all(parent).map_err(|e| {
-        format!(
-          "failed to create parent directory {}: {e}",
-          parent.display()
-        )
-      })?;
-    }
-  }
+  ensure_parent_dir(path)?;
   let json = serde_json::to_string_pretty(report)
     .map_err(|e| format!("failed to serialize JSON report: {e}"))?;
   fs::write(path, json).map_err(|e| format!("failed to write {}: {e}", path.display()))
 }
 
 fn write_html_report(report: &DiffReport, path: &Path) -> Result<(), String> {
-  if let Some(parent) = path.parent() {
-    if !parent.as_os_str().is_empty() {
-      fs::create_dir_all(parent).map_err(|e| {
-        format!(
-          "failed to create parent directory {}: {e}",
-          parent.display()
-        )
-      })?;
-    }
-  }
+  ensure_parent_dir(path)?;
 
   let mut rows = String::new();
   let mut sorted = report.results.clone();
@@ -644,29 +628,6 @@ fn format_linked_image(label: &str, path: &str) -> String {
     p = escaped,
     l = escape_html(label)
   )
-}
-
-fn escape_html(input: &str) -> String {
-  input
-    .replace('&', "&amp;")
-    .replace('<', "&lt;")
-    .replace('>', "&gt;")
-    .replace('"', "&quot;")
-    .replace('\'', "&#39;")
-}
-
-fn path_for_report(base: &Path, target: &Path) -> String {
-  diff_paths(target, base)
-    .unwrap_or_else(|| target.to_path_buf())
-    .display()
-    .to_string()
-}
-
-fn display_path(path: &Path) -> String {
-  fs::canonicalize(path)
-    .unwrap_or_else(|_| path.to_path_buf())
-    .display()
-    .to_string()
 }
 
 fn normalize_dir(path: &Path) -> Result<PathBuf, String> {

@@ -82,6 +82,14 @@ These are optional wrappers for the most common loops:
 - Tuning: `--tolerance` and `--max-diff-percent` accept the same values as the fixture harness (`FIXTURE_TOLERANCE`, `FIXTURE_MAX_DIFFERENT_PERCENT`, `FIXTURE_FUZZY` env vars are honored when flags are omitted).
 - Supports deterministic sharding with `--shard <index>/<total>` to split large sets across workers.
 
+## `diff_snapshots`
+
+- Purpose: compare pipeline snapshots (`*.snapshot.json`) and highlight stage-level deltas that explain pixel diffs.
+- Entry: `src/bin/diff_snapshots.rs`
+- Run: `cargo run --release --bin diff_snapshots -- --before <dir|file> --after <dir|file>`
+- Matching: directory inputs pair `*.snapshot.json` by stem (same matching rules as `diff_renders`).
+- Outputs: `diff_snapshots.json` and `diff_snapshots.html` summarizing schema versions, per-stage counts, DOM/box/fragment/display list changes, and links to sibling `*.png` renders when present.
+
 ## `dump_a11y`
 
 - Purpose: emit the computed accessibility tree for a document as JSON (without painting).

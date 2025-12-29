@@ -7,13 +7,13 @@ use crate::style::values::Length;
 use crate::style::ComputedStyle;
 use crate::tree::box_tree::{BoxNode, BoxTree, BoxType, MarkerContent, ReplacedType};
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Schema version for all snapshot types.
 ///
 /// Bump this when the JSON structure changes in an incompatible way. Callers can
 /// use this to gate downstream tooling.
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SchemaVersion {
   V1,
@@ -23,17 +23,31 @@ impl SchemaVersion {
   fn current() -> Self {
     SchemaVersion::V1
   }
+
+  /// Numeric major version for compatibility checks.
+  pub fn major(&self) -> u32 {
+    match self {
+      SchemaVersion::V1 => 1,
+    }
+  }
+
+  /// Human-readable label (matches the serialized value).
+  pub fn label(&self) -> &'static str {
+    match self {
+      SchemaVersion::V1 => "v1",
+    }
+  }
 }
 
 /// Snapshot of the parsed DOM tree.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DomSnapshot {
   pub schema_version: SchemaVersion,
   pub root: DomNodeSnapshot,
 }
 
 /// Snapshot of a DOM node.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DomNodeSnapshot {
   pub node_id: usize,
   pub kind: DomNodeKindSnapshot,
@@ -41,7 +55,7 @@ pub struct DomNodeSnapshot {
 }
 
 /// Node kind specific data.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DomNodeKindSnapshot {
   Document,
@@ -63,21 +77,21 @@ pub enum DomNodeKindSnapshot {
 }
 
 /// Attribute key/value pair.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AttributeSnapshot {
   pub name: String,
   pub value: String,
 }
 
 /// Snapshot of a styled DOM tree.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StyledSnapshot {
   pub schema_version: SchemaVersion,
   pub root: StyledNodeSnapshot,
 }
 
 /// Snapshot of a single styled node.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StyledNodeSnapshot {
   pub node_id: usize,
   pub node: DomNodeSummary,
@@ -92,7 +106,7 @@ pub struct StyledNodeSnapshot {
 }
 
 /// Minimal DOM summary for styled/debug snapshots.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DomNodeSummary {
   Document,
@@ -113,7 +127,7 @@ pub enum DomNodeSummary {
 }
 
 /// Snapshot of a computed style with only the most debug-relevant properties.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StyleSnapshot {
   pub display: String,
   pub position: String,
@@ -135,7 +149,7 @@ pub struct StyleSnapshot {
 }
 
 /// Snapshot of four-sided measurements.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct EdgeSnapshot {
   pub top: String,
   pub right: String,
@@ -144,7 +158,7 @@ pub struct EdgeSnapshot {
 }
 
 /// Auto flags for margins.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct EdgeAutoSnapshot {
   pub top: bool,
   pub right: bool,
@@ -153,14 +167,14 @@ pub struct EdgeAutoSnapshot {
 }
 
 /// Snapshot of a box tree.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BoxTreeSnapshot {
   pub schema_version: SchemaVersion,
   pub root: BoxNodeSnapshot,
 }
 
 /// Snapshot of a box node.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BoxNodeSnapshot {
   pub box_id: usize,
   pub kind: BoxKindSnapshot,
@@ -173,13 +187,13 @@ pub struct BoxNodeSnapshot {
 }
 
 /// Snapshot of debug info attached to a box.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DebugInfoSnapshot {
   pub selector: String,
 }
 
 /// Box kind snapshot.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BoxKindSnapshot {
   Block { formatting_context: String },
@@ -191,7 +205,7 @@ pub enum BoxKindSnapshot {
 }
 
 /// Replaced element snapshot.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ReplacedSnapshot {
   Image { src: String, alt: Option<String> },
@@ -208,7 +222,7 @@ pub enum ReplacedSnapshot {
 }
 
 /// Snapshot of a fragment tree.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FragmentTreeSnapshot {
   pub schema_version: SchemaVersion,
   pub viewport: RectSnapshot,
@@ -216,7 +230,7 @@ pub struct FragmentTreeSnapshot {
 }
 
 /// Snapshot of a fragment node.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FragmentNodeSnapshot {
   pub fragment_id: usize,
   pub bounds: RectSnapshot,
@@ -233,7 +247,7 @@ pub struct FragmentNodeSnapshot {
 }
 
 /// Fragment content details.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum FragmentContentSnapshot {
   Block {
@@ -259,14 +273,14 @@ pub enum FragmentContentSnapshot {
 }
 
 /// Snapshot of a display list.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DisplayListSnapshot {
   pub schema_version: SchemaVersion,
   pub items: Vec<DisplayItemSnapshot>,
 }
 
 /// Snapshot of an individual display item.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DisplayItemSnapshot {
   pub item_id: usize,
   pub kind: String,
@@ -277,7 +291,7 @@ pub struct DisplayItemSnapshot {
 }
 
 /// Snapshot of a rectangle.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RectSnapshot {
   pub x: f32,
   pub y: f32,
@@ -286,7 +300,7 @@ pub struct RectSnapshot {
 }
 
 /// Snapshot of a color.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ColorSnapshot {
   pub r: u8,
   pub g: u8,
@@ -295,7 +309,7 @@ pub struct ColorSnapshot {
 }
 
 /// Combined pipeline snapshot for convenience.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PipelineSnapshot {
   pub schema_version: SchemaVersion,
   pub dom: DomSnapshot,
