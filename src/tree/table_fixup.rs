@@ -75,11 +75,9 @@ use std::sync::Arc;
 ///
 /// The fixup algorithm proceeds in multiple phases:
 ///
-/// 1. **Cell-to-Row Fixup**: Ensure all cells are inside rows
+/// 1. **Cell-to-Row Fixup**: Ensure all cells are inside rows and wrap stray row content
 /// 2. **Row-to-Group Fixup**: Ensure all rows are inside row-groups
-/// 3. **Row Content Fixup**: Wrap stray row children in anonymous cells
-/// 4. **Column Inference**: Determine column count from cells
-/// 5. **Wrapper Creation**: Create table wrapper if captions present
+/// 3. **Wrapper Creation**: Create table wrapper if captions present
 ///
 /// Each phase operates on the tree independently, allowing for clean
 /// separation of concerns and easy testing.
@@ -343,11 +341,62 @@ impl TableStructureFixer {
   /// CSS 2.1 Section 17.2.1: "If a row group has cells not in a row,
   /// generate an anonymous row around those cells."
   fn ensure_cells_in_rows(mut table: BoxNode, deadline_counter: &mut usize) -> Result<BoxNode> {
+    if !Self::table_needs_cell_fixup(&table) {
+      return Ok(table);
+    }
+
     let children = std::mem::take(&mut table.children);
     let fixed_children =
       Self::fixup_table_children_for_rows(children, &table.style, deadline_counter)?;
     table.children = fixed_children;
     Ok(table)
+  }
+
+  fn table_needs_cell_fixup(table: &BoxNode) -> bool {
+    Self::table_children_need_cell_fixup(&table.children)
+  }
+
+  fn table_children_need_cell_fixup(children: &[BoxNode]) -> bool {
+    for child in children {
+      if Self::is_table_cell(child) {
+        return true;
+      } else if Self::is_table_row_group(child) {
+        if Self::row_group_needs_cell_fixup(child) {
+          return true;
+        }
+      } else if Self::is_table_row(child) {
+        if Self::row_needs_cell_fixup(child) {
+          return true;
+        }
+      } else if Self::is_table_caption(child)
+        || Self::is_table_column_group(child)
+        || Self::is_table_column(child)
+      {
+        continue;
+      } else {
+        return true;
+      }
+    }
+
+    false
+  }
+
+  fn row_group_needs_cell_fixup(group: &BoxNode) -> bool {
+    for child in &group.children {
+      if Self::is_table_row(child) {
+        if Self::row_needs_cell_fixup(child) {
+          return true;
+        }
+      } else {
+        return true;
+      }
+    }
+
+    false
+  }
+
+  fn row_needs_cell_fixup(row: &BoxNode) -> bool {
+    row.children.iter().any(|child| !Self::is_table_cell(child))
   }
 
   /// Fixes children to ensure cells are in rows
@@ -488,6 +537,10 @@ impl TableStructureFixer {
   /// CSS 2.1 Section 17.2.1: "If a table has rows not in a row group,
   /// generate an anonymous tbody around those rows."
   fn ensure_rows_in_groups(mut table: BoxNode, deadline_counter: &mut usize) -> Result<BoxNode> {
+    if !table.children.iter().any(Self::is_table_row) {
+      return Ok(table);
+    }
+
     let children = std::mem::take(&mut table.children);
     let fixed_children = Self::wrap_loose_rows(children, &table.style, deadline_counter)?;
     table.children = fixed_children;
@@ -540,49 +593,10 @@ impl TableStructureFixer {
     Ok(result)
   }
 
-  // ==================== Column Inference ====================
-
-  /// Infers column structure from cells
-  ///
-  /// CSS tables don't require explicit `<col>` elements - columns
-  /// are inferred from the cells in rows.
-  fn infer_columns(table: BoxNode, deadline_counter: &mut usize) -> Result<BoxNode> {
-    check_active_periodic(
-      deadline_counter,
-      TABLE_FIXUP_DEADLINE_STRIDE,
-      RenderStage::Cascade,
-    )?;
-    // Find all row groups
-    let row_groups: Vec<&BoxNode> = table
-      .children
-      .iter()
-      .filter(|c| Self::is_table_row_group(c))
-      .collect();
-
-    if row_groups.is_empty() {
-      // Empty table is valid
-      return Ok(table);
-    }
-
-    // Find first row
-    let first_row = row_groups.first().and_then(|g| g.children.first());
-
-    if let Some(row) = first_row {
-      // Count columns from first row's cells (accounting for colspan)
-      let col_count = Self::count_columns(row);
-
-      // For an empty first row, that's still valid (zero columns initially)
-      // The table will have zero columns until cells are added
-      if col_count == 0 && !row.children.is_empty() {
-        // Row has children but no columns means children aren't cells
-        // This shouldn't happen after cell fixup, but we handle it gracefully
-      }
-    }
-
-    Ok(table)
-  }
+  // ==================== Column Utilities ====================
 
   /// Counts columns in a row (accounting for colspan)
+  #[cfg(test)]
   fn count_columns(row: &BoxNode) -> usize {
     row
       .children
@@ -624,11 +638,8 @@ impl TableStructureFixer {
     // Step 2: Wrap rows not in row-groups with anonymous tbody
     fixed = Self::ensure_rows_in_groups(fixed, deadline_counter)?;
 
-    // Step 3: Infer column structure
-    fixed = Self::infer_columns(fixed, deadline_counter)?;
-
     if create_wrapper {
-      // Step 4: Create table wrapper if needed (captions)
+      // Step 3: Create table wrapper if needed (captions)
       fixed = Self::create_wrapper_if_needed(fixed, deadline_counter)?;
     }
 
@@ -639,6 +650,10 @@ impl TableStructureFixer {
   ///
   /// CSS 2.1: Tables with captions need a wrapper box
   fn create_wrapper_if_needed(mut table: BoxNode, deadline_counter: &mut usize) -> Result<BoxNode> {
+    if !table.children.iter().any(Self::is_table_caption) {
+      return Ok(table);
+    }
+
     let parent_style = table.style.clone();
     let mut top_captions = Vec::new();
     let mut bottom_captions = Vec::new();
@@ -1135,6 +1150,32 @@ mod tests {
   }
 
   #[test]
+  fn test_create_wrapper_without_caption_preserves_children() {
+    // Ensure the wrapper creation fast path does not reorder or duplicate children
+    let tbody = row_group_box(vec![row_box(vec![cell_box(vec![])])]);
+    let row = row_box(vec![cell_box(vec![])]);
+
+    let table = table_box(vec![tbody, row]);
+    let original_ptrs: Vec<*const BoxNode> = table
+      .children
+      .iter()
+      .map(|child| child as *const _)
+      .collect();
+
+    let mut deadline_counter = 0usize;
+    let fixed =
+      TableStructureFixer::create_wrapper_if_needed(table, &mut deadline_counter).unwrap();
+
+    assert!(TableStructureFixer::is_table_box(&fixed));
+    let fixed_ptrs: Vec<*const BoxNode> = fixed
+      .children
+      .iter()
+      .map(|child| child as *const _)
+      .collect();
+    assert_eq!(original_ptrs, fixed_ptrs);
+  }
+
+  #[test]
   fn test_internals_fixup_leaves_captions_unwrapped() {
     // Internal fixup should not create a table wrapper even if captions exist
     let caption = caption_box(vec![BoxNode::new_text(
@@ -1199,7 +1240,7 @@ mod tests {
     assert_eq!(fixed.children[0].children[0].children.len(), 0);
   }
 
-  // ==================== Column Inference Tests ====================
+  // ==================== Column Counting Tests ====================
 
   #[test]
   fn test_column_count_simple() {
