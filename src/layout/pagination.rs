@@ -1183,3 +1183,87 @@ fn margin_box_bounds(area: PageMarginArea, style: &ResolvedPageStyle) -> Option<
     PageMarginArea::LeftTop => rect(origin_x, origin_y + mt, ml, side_height / 3.0),
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::style::display::Display;
+  use crate::style::ComputedStyle;
+  use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
+  use std::sync::Arc;
+
+  fn contains_running_anchor(node: &FragmentNode) -> bool {
+    matches!(node.content, FragmentContent::RunningAnchor { .. })
+      || node.children.iter().any(contains_running_anchor)
+  }
+
+  #[test]
+  fn running_element_snapshots_are_recentred_without_moving_children() {
+    let mut running_style = ComputedStyle::default();
+    running_style.display = Display::Block;
+    running_style.running_position = Some("header".to_string());
+
+    let text_child =
+      FragmentNode::new_text(Rect::from_xywh(5.0, 6.0, 20.0, 4.0), "Header".into(), 3.0);
+    let anchor_snapshot = FragmentNode::new_block(
+      Rect::from_xywh(2.0, 2.0, 5.0, 2.0),
+      vec![FragmentNode::new_text(
+        Rect::from_xywh(1.0, 1.0, 3.0, 1.0),
+        "Anchor".into(),
+        0.0,
+      )],
+    );
+    let anchor_child = FragmentNode::new_running_anchor(
+      Rect::from_xywh(7.0, 8.0, 3.0, 3.0),
+      "marker".into(),
+      anchor_snapshot,
+    );
+
+    let header_bounds = Rect::from_xywh(30.0, 40.0, 50.0, 10.0);
+    let logical_bounds = Rect::from_xywh(32.0, 42.0, 50.0, 10.0);
+    let mut running_fragment = FragmentNode::new_block_styled(
+      header_bounds,
+      vec![text_child, anchor_child],
+      Arc::new(running_style),
+    );
+    running_fragment.logical_override = Some(logical_bounds);
+
+    let root = FragmentNode::new_block(
+      Rect::from_xywh(0.0, 0.0, 120.0, 200.0),
+      vec![running_fragment],
+    );
+    assert!(
+      contains_running_anchor(&root),
+      "fixture should include a running anchor fragment"
+    );
+
+    let running = collect_running_elements_for_page(&root);
+    let header_snapshots = running
+      .get("header")
+      .expect("running element snapshot collected");
+    assert_eq!(header_snapshots.len(), 1);
+
+    let snapshot = &header_snapshots[0];
+    assert_eq!(snapshot.bounds.x(), 0.0);
+    assert_eq!(snapshot.bounds.y(), 0.0);
+    assert_eq!(snapshot.bounds.width(), header_bounds.width());
+    assert_eq!(snapshot.bounds.height(), header_bounds.height());
+
+    let logical = snapshot
+      .logical_override
+      .expect("logical override should be preserved");
+    assert_eq!(logical.x(), logical_bounds.x() - header_bounds.x());
+    assert_eq!(logical.y(), logical_bounds.y() - header_bounds.y());
+
+    assert_eq!(snapshot.children.len(), 1);
+    let child = &snapshot.children[0];
+    assert!(matches!(child.content, FragmentContent::Text { .. }));
+    assert_eq!(child.bounds.x(), 5.0);
+    assert_eq!(child.bounds.y(), 6.0);
+
+    assert!(
+      !contains_running_anchor(snapshot),
+      "running anchors should be stripped from snapshots"
+    );
+  }
+}

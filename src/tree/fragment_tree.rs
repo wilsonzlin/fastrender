@@ -689,6 +689,20 @@ impl FragmentNode {
     bbox
   }
 
+  /// Translates this fragment's root by the given offset without cloning children.
+  ///
+  /// Offsets are applied to `bounds` and any logical override. If this fragment contains a
+  /// running element snapshot, the captured root is translated as well so callers don't need to
+  /// clone the subtree to adjust its origin. Child fragments keep their existing local
+  /// coordinates.
+  pub fn translate_root_in_place(&mut self, offset: Point) {
+    self.bounds = self.bounds.translate(offset);
+    self.logical_override = self.logical_override.map(|rect| rect.translate(offset));
+    if let FragmentContent::RunningAnchor { snapshot, .. } = &mut self.content {
+      snapshot.translate_root_in_place(offset);
+    }
+  }
+
   /// Translates this fragment's bounds by the given offset.
   ///
   /// Offsets are applied in the coordinate space of the containing fragment.
