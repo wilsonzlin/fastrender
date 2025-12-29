@@ -1438,7 +1438,7 @@ mod tests {
       FragmentNode::new_block(Rect::from_xywh(0.0, 10.0, 5.0, 5.0), Vec::new());
     let child_second_fragment =
       FragmentNode::new_block(Rect::from_xywh(0.0, 70.0, 5.0, 5.0), Vec::new());
-    root.children = vec![child_first_fragment, child_second_fragment];
+    root.set_children(vec![child_first_fragment, child_second_fragment]);
 
     let options = FragmentationOptions::new(60.0).with_gap(10.0);
     let fragments = split_fragment_tree(&root, &options).expect("split fragments");
@@ -1676,7 +1676,7 @@ mod tests {
     assert!(!block.is_replaced());
 
     let text = FragmentContent::Text {
-      text: "test".to_string(),
+      text: Arc::from("test"),
       box_id: None,
       baseline_offset: 0.0,
       shaped: None,

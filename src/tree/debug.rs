@@ -463,7 +463,7 @@ impl TreePrinter {
     };
 
     let child_count = node.children.len();
-    for (i, child) in node.children.iter().enumerate() {
+    for (i, child) in node.children().enumerate() {
       let is_last_child = i == child_count - 1;
       Self::print_fragment_node(child, &child_prefix, is_last_child, output);
     }

@@ -315,7 +315,7 @@ impl EnhancedTreePrinter {
     output.push('\n');
 
     let child_count = fragment.children.len();
-    for (i, child) in fragment.children.iter().enumerate() {
+    for (i, child) in fragment.children().enumerate() {
       let is_last_child = i == child_count - 1;
       let child_prefix = if depth > 0 {
         let ext = if self.config.use_unicode {
@@ -577,7 +577,7 @@ fn export_fragment_recursive(
     let _ = writeln!(output, "  n{} -> n{};", parent, current_id);
   }
 
-  for child in fragment.children.iter() {
+  for child in fragment.children() {
     export_fragment_recursive(child, node_id, Some(current_id), output);
   }
 }
@@ -744,8 +744,7 @@ impl TreeJsonExporter {
       parent_offset.y + fragment.bounds.y(),
     );
     let children: Vec<Value> = fragment
-      .children
-      .iter()
+      .children()
       .map(|child| self.export_fragment_with_offset(child, next_offset))
       .collect();
     entries.push(("children", Value::Array(children)));
