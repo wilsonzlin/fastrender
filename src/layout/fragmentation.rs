@@ -919,7 +919,7 @@ pub(crate) fn clip_node(
   }
 
   for child in node.children.iter() {
-    if let Some(child_clipped) = clip_node(
+    if let Ok(Some(child_clipped)) = clip_node(
       child,
       axis,
       fragment_start,

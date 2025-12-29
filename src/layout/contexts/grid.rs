@@ -200,7 +200,7 @@ fn count_fragment_stats(fragment: &FragmentNode, stats: &mut CloneStats) {
     }
     _ => {}
   }
-  for child in &fragment.children {
+  for child in fragment.children.iter() {
     count_fragment_stats(child, stats);
   }
 }

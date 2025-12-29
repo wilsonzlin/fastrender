@@ -32,7 +32,9 @@ use crate::layout::constraints::AvailableSpace as CrateAvailableSpace;
 use crate::layout::constraints::LayoutConstraints;
 use crate::layout::contexts::block::BlockFormattingContext;
 use crate::layout::contexts::factory::FormattingContextFactory;
-use crate::layout::contexts::flex_cache::{find_layout_cache_fragment, ShardedFlexCache};
+use crate::layout::contexts::flex_cache::{
+  cache_tolerances, find_layout_cache_fragment, ShardedFlexCache,
+};
 use crate::layout::contexts::positioned::ContainingBlock;
 use crate::layout::engine::LayoutParallelism;
 use crate::layout::flex_profile::record_node_measure_hit;
@@ -189,7 +191,7 @@ fn count_fragment_stats(fragment: &FragmentNode, stats: &mut CloneStats) {
     }
     _ => {}
   }
-  for child in &fragment.children {
+  for child in fragment.children.iter() {
     count_fragment_stats(child, stats);
   }
 }

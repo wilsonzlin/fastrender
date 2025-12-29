@@ -439,7 +439,6 @@ fn main() {
     trace_output: None,
     layout_parallelism: args.layout_parallel.parallelism(),
     font_config: None,
-    font_config: None,
   });
 
   let render_pool = FastRenderPool::with_config(

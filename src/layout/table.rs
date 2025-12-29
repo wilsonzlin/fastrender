@@ -8425,7 +8425,7 @@ mod tests {
     {
       return Some(fragment);
     }
-    for child in &fragment.children {
+    for child in fragment.children.iter() {
       if let Some(found) = find_cell_fragment(child) {
         return Some(found);
       }
@@ -12460,7 +12460,7 @@ mod tests {
       {
         bottoms.push(fragment.bounds.y() + fragment.bounds.height());
       }
-      for child in &fragment.children {
+      for child in fragment.children.iter() {
         collect_cell_bottoms(child, bottoms);
       }
     }

@@ -9529,7 +9529,7 @@ mod tests {
         }
         _ => {}
       }
-      for child in &node.children {
+      for child in node.children.iter() {
         stack.push(child);
       }
     }
@@ -9538,9 +9538,9 @@ mod tests {
 
   fn collect_text_fragments(fragment: &FragmentNode, out: &mut Vec<String>) {
     if let FragmentContent::Text { ref text, .. } = fragment.content {
-      out.push(text.clone());
+      out.push(text.to_string());
     }
-    for child in &fragment.children {
+    for child in fragment.children.iter() {
       collect_text_fragments(child, out);
     }
   }
@@ -11507,7 +11507,7 @@ mod tests {
 
     let fragment = ifc.layout(&root, &constraints).unwrap();
     let mut kinds = Vec::new();
-    for child in &fragment.children {
+    for child in fragment.children.iter() {
       kinds.push((
         child.content.is_line(),
         child.content.is_block(),
@@ -11549,7 +11549,7 @@ mod tests {
 
     let fragment = ifc.layout(&root, &constraints).unwrap();
     let mut children = Vec::new();
-    for child in &fragment.children {
+    for child in fragment.children.iter() {
       children.push((
         child.content.is_line(),
         child.content.is_block(),
@@ -11765,7 +11765,7 @@ mod tests {
         if let FragmentContent::Text { text, .. } = &fragment.content {
           out.push_str(text);
         }
-        for child in &fragment.children {
+        for child in fragment.children.iter() {
           collect_text(child, out);
         }
       }
@@ -11775,7 +11775,7 @@ mod tests {
         collect_text(fragment, &mut text);
         out.push(text);
       }
-      for child in &fragment.children {
+      for child in fragment.children.iter() {
         collect_line_texts(child, out);
       }
     }
@@ -12638,9 +12638,9 @@ mod tests {
     let mut stack = vec![node];
     while let Some(fragment) = stack.pop() {
       if let FragmentContent::Text { ref text, .. } = fragment.content {
-        out.push((text.clone(), fragment.bounds.x()));
+        out.push((text.to_string(), fragment.bounds.x()));
       }
-      for child in &fragment.children {
+      for child in fragment.children.iter() {
         stack.push(child);
       }
     }
@@ -13690,7 +13690,7 @@ mod tests {
     let mut float_found = false;
     let mut float_y = 0.0;
     let mut line_found = false;
-    for child in &fragment.children {
+    for child in fragment.children.iter() {
       if let Some(style) = &child.style {
         if style.float.is_floating() {
           float_found = true;
@@ -13738,7 +13738,7 @@ mod tests {
 
     let mut float_y = None;
     let mut line_y = f32::INFINITY;
-    for child in &fragment.children {
+    for child in fragment.children.iter() {
       if let Some(style) = &child.style {
         if style.float.is_floating() {
           float_y = Some(child.bounds.y());

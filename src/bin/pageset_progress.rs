@@ -975,7 +975,6 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     trace_output: None,
     layout_parallelism: args.layout_parallel.parallelism(),
     font_config: args.fonts.to_font_config(),
-    font_config: args.fonts.to_font_config(),
   });
 
   options.diagnostics_level = args.diagnostics.to_level();
