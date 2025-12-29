@@ -1,12 +1,12 @@
 mod r#ref;
 
+use fastrender::image_compare::encode_png;
 use fastrender::style::color::Rgba;
 use fastrender::text::color_fonts::{ColorFontRenderer, ColorGlyphRaster};
 use fastrender::text::font_db::{FontStretch, FontStyle, FontWeight, LoadedFont};
 use fastrender::text::font_instance::FontInstance;
-use r#ref::compare::{compare_images, load_png, load_png_from_bytes, CompareConfig};
-use fastrender::image_compare::encode_png;
 use image::RgbaImage;
+use r#ref::compare::{compare_images, load_png, load_png_from_bytes, CompareConfig};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tiny_skia::Pixmap;
@@ -54,7 +54,8 @@ fn render_sheared_glyph(font: &LoadedFont) -> ColorGlyphRaster {
 fn save_or_compare(name: &str, raster: &ColorGlyphRaster) {
   let path = fixtures_path().join("golden").join(name);
   if std::env::var("UPDATE_GOLDEN").is_ok() {
-    let encoded = encode_png(&pixmap_to_rgba_image(&raster.image)).expect("failed to encode golden");
+    let encoded =
+      encode_png(&pixmap_to_rgba_image(&raster.image)).expect("failed to encode golden");
     std::fs::write(&path, encoded).expect("failed to write golden");
   }
 
@@ -114,7 +115,10 @@ fn sample_pixels(actual: &Pixmap, expected: &Pixmap) -> String {
   let coords = [
     (0, 0),
     (actual.width() / 2, actual.height() / 2),
-    (actual.width().saturating_sub(1), actual.height().saturating_sub(1)),
+    (
+      actual.width().saturating_sub(1),
+      actual.height().saturating_sub(1),
+    ),
   ];
   let mut lines = Vec::new();
   for (x, y) in coords {

@@ -919,7 +919,7 @@ pub(crate) fn clip_node(
   }
 
   for child in node.children.iter() {
-    if let Ok(Some(child_clipped)) = clip_node(
+    match clip_node(
       child,
       axis,
       fragment_start,
@@ -931,8 +931,9 @@ pub(crate) fn clip_node(
       fragment_index,
       fragment_count,
       context,
-    ) {
-      Arc::make_mut(&mut cloned.children).push(child_clipped);
+    )? {
+      Some(child_clipped) => Arc::make_mut(&mut cloned.children).push(child_clipped),
+      None => {}
     }
   }
 

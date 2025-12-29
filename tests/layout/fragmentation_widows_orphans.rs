@@ -51,7 +51,7 @@ fn widows_and_orphans_respected_across_multiple_fragmentainers() {
         .children
         .iter()
         .find_map(|child| match &child.content {
-          FragmentContent::Text { text, .. } => Some(text.clone()),
+          FragmentContent::Text { text, .. } => Some(text.to_string()),
           _ => None,
         })
         .expect("line label");

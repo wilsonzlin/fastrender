@@ -20,12 +20,12 @@ fn collect_text_fragments(node: &FragmentNode, origin: Point, out: &mut Vec<Posi
   let abs_y = origin.y + node.bounds.y();
   if let FragmentContent::Text { text, .. } = &node.content {
     out.push(PositionedText {
-      text: text.clone(),
+      text: text.to_string(),
       x: abs_x,
       y: abs_y,
     });
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     collect_text_fragments(child, Point::new(abs_x, abs_y), out);
   }
 }

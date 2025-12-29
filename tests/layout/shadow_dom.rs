@@ -21,7 +21,7 @@ fn collect_text_fragments(node: &fastrender::FragmentNode, out: &mut Vec<String>
   let mut stack = vec![node];
   while let Some(node) = stack.pop() {
     if let FragmentContent::Text { text, .. } = &node.content {
-      out.push(text.clone());
+      out.push(text.to_string());
     }
     for child in node.children.iter().rev() {
       stack.push(child);

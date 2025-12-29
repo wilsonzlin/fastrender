@@ -55,7 +55,7 @@ fn find_fragment<'a>(fragment: &'a FragmentNode, box_id: usize) -> Option<&'a Fr
   if fragment.box_id() == Some(box_id) {
     return Some(fragment);
   }
-  for child in &fragment.children {
+  for child in fragment.children.iter() {
     if let Some(found) = find_fragment(child, box_id) {
       return Some(found);
     }

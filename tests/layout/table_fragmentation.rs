@@ -28,12 +28,12 @@ fn collect_text_fragments_with_origin(
   let abs_y = origin.1 + node.bounds.y();
   if let FragmentContent::Text { text, .. } = &node.content {
     out.push(TextFragment {
-      text: text.clone(),
+      text: text.to_string(),
       x: abs_x,
       y: abs_y,
     });
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     collect_text_fragments_with_origin(child, (abs_x, abs_y), out);
   }
 }

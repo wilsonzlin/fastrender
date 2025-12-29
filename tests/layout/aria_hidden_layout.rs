@@ -4,9 +4,9 @@ use fastrender::FastRender;
 
 fn collect_text_fragments(fragment: &fastrender::FragmentNode, texts: &mut Vec<String>) {
   if let FragmentContent::Text { text, .. } = &fragment.content {
-    texts.push(text.clone());
+    texts.push(text.to_string());
   }
-  for child in &fragment.children {
+  for child in fragment.children.iter() {
     collect_text_fragments(child, texts);
   }
 }

@@ -10,7 +10,7 @@ fn collect_text_fragments(node: &FragmentNode, out: &mut Vec<String>) {
       out.push(trimmed.to_string());
     }
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     collect_text_fragments(child, out);
   }
 }

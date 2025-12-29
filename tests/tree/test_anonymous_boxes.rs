@@ -26,8 +26,7 @@ fn style_with_display(display: Display) -> Arc<ComputedStyle> {
 }
 
 fn fixup_tree(node: BoxNode) -> BoxNode {
-  fastrender::tree::anonymous::AnonymousBoxCreator::fixup_tree(node)
-    .expect("anonymous box fixup")
+  fastrender::tree::anonymous::AnonymousBoxCreator::fixup_tree(node).expect("anonymous box fixup")
 }
 
 fn subtree_contains_text(node: &BoxNode, needle: &str) -> bool {

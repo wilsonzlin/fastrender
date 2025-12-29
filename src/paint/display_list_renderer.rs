@@ -1012,14 +1012,7 @@ fn apply_spread(pixmap: &mut Pixmap, spread: f32) {
   transpose_channels(&horizontal, width, height, &mut transposed);
 
   // Reuse the horizontal buffer to store the vertical pass output.
-  apply_spread_horizontal(
-    &transposed,
-    &mut horizontal,
-    height,
-    width,
-    radius,
-    expand,
-  );
+  apply_spread_horizontal(&transposed, &mut horizontal, height, width, radius, expand);
 
   let dst = pixmap.pixels_mut();
   write_transposed_to_pixmap(&horizontal, width, height, dst);
@@ -1109,12 +1102,7 @@ fn apply_spread_horizontal(
     });
 }
 
-fn transpose_channels(
-  src: &[[u8; 4]],
-  width: usize,
-  height: usize,
-  dst: &mut [[u8; 4]],
-) {
+fn transpose_channels(src: &[[u8; 4]], width: usize, height: usize, dst: &mut [[u8; 4]]) {
   debug_assert_eq!(src.len(), width * height);
   debug_assert_eq!(dst.len(), width * height);
   for y in 0..height {
@@ -1136,13 +1124,9 @@ fn write_transposed_to_pixmap(
   for y in 0..height {
     for x in 0..width {
       let channels = src[x * height + y];
-      dst[y * width + x] = PremultipliedColorU8::from_rgba(
-        channels[0],
-        channels[1],
-        channels[2],
-        channels[3],
-      )
-      .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+      dst[y * width + x] =
+        PremultipliedColorU8::from_rgba(channels[0], channels[1], channels[2], channels[3])
+          .unwrap_or(PremultipliedColorU8::TRANSPARENT);
     }
   }
 }

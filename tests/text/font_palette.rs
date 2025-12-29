@@ -236,32 +236,31 @@ fn font_palette_overrides_recolor_colr_glyphs() {
   );
 
   let renderer = ColorFontRenderer::new();
-  let render_run =
-    |run: &fastrender::text::pipeline::ShapedRun, text_color: Rgba| -> Vec<u8> {
-      let glyph_id = run
-        .glyphs
-        .first()
-        .map(|g| g.glyph_id)
-        .expect("glyph id for run");
-      let instance = FontInstance::new(&run.font, &run.variations).expect("font instance");
-      renderer
-        .render(
-          &run.font,
-          &instance,
-          glyph_id,
-          run.font_size,
-          run.palette_index,
-          run.palette_overrides.as_ref(),
-          text_color,
-          run.synthetic_oblique,
-          &run.variations,
-          None,
-        )
-        .expect("render color glyph")
-        .image
-        .encode_png()
-        .expect("encode override png")
-    };
+  let render_run = |run: &fastrender::text::pipeline::ShapedRun, text_color: Rgba| -> Vec<u8> {
+    let glyph_id = run
+      .glyphs
+      .first()
+      .map(|g| g.glyph_id)
+      .expect("glyph id for run");
+    let instance = FontInstance::new(&run.font, &run.variations).expect("font instance");
+    renderer
+      .render(
+        &run.font,
+        &instance,
+        glyph_id,
+        run.font_size,
+        run.palette_index,
+        run.palette_overrides.as_ref(),
+        text_color,
+        run.synthetic_oblique,
+        &run.variations,
+        None,
+      )
+      .expect("render color glyph")
+      .image
+      .encode_png()
+      .expect("encode override png")
+  };
 
   let normal_png = render_run(normal_run, base_style.color);
   let override_png_a = render_run(override_run_a, override_style_a.color);

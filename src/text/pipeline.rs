@@ -5091,9 +5091,7 @@ mod tests {
       return;
     }
     assert!(
-      first
-        .iter()
-        .all(|run| run.font.family == "ColorTestCOLR"),
+      first.iter().all(|run| run.font.family == "ColorTestCOLR"),
       "shaping should use the loaded ColorTestCOLR font"
     );
     let first_count = crate::text::face_cache::rustybuzz_face_parse_count();
@@ -5110,9 +5108,7 @@ mod tests {
       return;
     }
     assert!(
-      second
-        .iter()
-        .all(|run| run.font.family == "ColorTestCOLR"),
+      second.iter().all(|run| run.font.family == "ColorTestCOLR"),
       "subsequent shaping should keep using the cached color font"
     );
 

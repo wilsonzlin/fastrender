@@ -29,18 +29,14 @@ fn progress_with_status(
 }
 
 fn last_good_commit(progress: &PageProgress) -> String {
-  serde_json::to_value(progress)
-    .expect("serialize progress")
-    ["last_good_commit"]
+  serde_json::to_value(progress).expect("serialize progress")["last_good_commit"]
     .as_str()
     .unwrap_or("")
     .to_string()
 }
 
 fn last_regression_commit(progress: &PageProgress) -> String {
-  serde_json::to_value(progress)
-    .expect("serialize progress")
-    ["last_regression_commit"]
+  serde_json::to_value(progress).expect("serialize progress")["last_regression_commit"]
     .as_str()
     .unwrap_or("")
     .to_string()

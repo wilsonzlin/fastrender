@@ -16,7 +16,7 @@ fn find_text<'a>(node: &'a FragmentNode, needle: &str) -> Option<&'a FragmentNod
       return Some(node);
     }
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     if let Some(found) = find_text(child, needle) {
       return Some(found);
     }
@@ -48,11 +48,11 @@ fn margin_boxes_contain_text(page: &FragmentNode, needle: &str) -> bool {
 
 fn find_text_eq<'a>(node: &'a FragmentNode, needle: &str) -> Option<&'a FragmentNode> {
   if let FragmentContent::Text { text, .. } = &node.content {
-    if text == needle {
+    if text.as_ref() == needle {
       return Some(node);
     }
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     if let Some(found) = find_text_eq(child, needle) {
       return Some(found);
     }
@@ -72,12 +72,12 @@ fn collect_text_fragments(node: &FragmentNode, origin: (f32, f32), out: &mut Vec
   let abs_y = origin.1 + node.bounds.y();
   if let FragmentContent::Text { text, .. } = &node.content {
     out.push(PositionedText {
-      text: text.clone(),
+      text: text.to_string(),
       x: abs_x,
       y: abs_y,
     });
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     collect_text_fragments(child, (abs_x, abs_y), out);
   }
 }
@@ -107,7 +107,7 @@ fn collect_floats<'a>(node: &'a FragmentNode, out: &mut Vec<&'a FragmentNode>) {
   {
     out.push(node);
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     collect_floats(child, out);
   }
 }
@@ -116,7 +116,7 @@ fn find_text_with_parent<'a>(
   node: &'a FragmentNode,
   needle: &str,
 ) -> Option<(&'a FragmentNode, &'a FragmentNode)> {
-  for child in &node.children {
+  for child in node.children.iter() {
     if let FragmentContent::Text { text, .. } = &child.content {
       if text.contains(needle) {
         return Some((node, child));
@@ -136,7 +136,7 @@ fn find_replaced_image<'a>(node: &'a FragmentNode) -> Option<&'a FragmentNode> {
     }
   }
 
-  for child in &node.children {
+  for child in node.children.iter() {
     if let Some(found) = find_replaced_image(child) {
       return Some(found);
     }
@@ -157,7 +157,7 @@ fn find_fragment_by_background<'a>(
   {
     return Some(node);
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     if let Some(found) = find_fragment_by_background(child, color) {
       return Some(found);
     }
@@ -176,7 +176,7 @@ fn find_fragment_with_background<'a>(
   {
     return Some(node);
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     if let Some(found) = find_fragment_with_background(child, color) {
       return Some(found);
     }
@@ -285,7 +285,7 @@ fn collect_line_widths(node: &FragmentNode, out: &mut Vec<f32>) {
   if let FragmentContent::Line { .. } = node.content {
     out.push(node.bounds.width());
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     collect_line_widths(child, out);
   }
 }
@@ -663,9 +663,9 @@ fn inline_running_element_used_in_margin_box() {
   let mut anchor_names = Vec::new();
   fn collect(node: &FragmentNode, out: &mut Vec<String>) {
     if let FragmentContent::RunningAnchor { name, .. } = &node.content {
-      out.push(name.clone());
+      out.push(name.to_string());
     }
-    for child in &node.children {
+    for child in node.children.iter() {
       collect(child, out);
     }
   }
@@ -1256,7 +1256,7 @@ fn find_text_position(node: &FragmentNode, needle: &str, origin: (f32, f32)) -> 
       return Some(current);
     }
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     if let Some(pos) = find_text_position(child, needle, current) {
       return Some(pos);
     }
@@ -1279,7 +1279,7 @@ where
       return Some(current);
     }
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     if let Some(pos) = find_text_position_matching(child, needle, current, predicate) {
       return Some(pos);
     }
@@ -1678,7 +1678,7 @@ fn floats_defer_to_next_page_and_clear_following_text() {
     {
       out.push(current.1 + node.bounds.height());
     }
-    for child in &node.children {
+    for child in node.children.iter() {
       collect_float_bottoms(child, current, out);
     }
   }

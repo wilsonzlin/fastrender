@@ -13,7 +13,7 @@ fn count_table_cells(node: &FragmentNode) -> usize {
   {
     count += 1;
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     count += count_table_cells(child);
   }
   count
@@ -42,7 +42,7 @@ fn find_cell_fragment_with_text<'a>(
   {
     return Some(node);
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     if let Some(found) = find_cell_fragment_with_text(child, needle) {
       return Some(found);
     }

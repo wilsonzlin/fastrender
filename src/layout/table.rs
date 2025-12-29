@@ -5233,18 +5233,16 @@ impl FormattingContext for TableFormattingContext {
 
     let mut stripped_border_cache: HashMap<usize, Arc<ComputedStyle>> = HashMap::new();
 
-    let table_collapsed_borders = if structure.border_collapse == BorderCollapse::Collapse {
-      Some(Arc::new(build_table_collapsed_borders_metadata(
+    let table_collapsed_borders = collapsed_borders.as_ref().map(|borders| {
+      Arc::new(build_table_collapsed_borders_metadata(
         &structure,
-        &collapsed_borders,
+        borders,
         &column_line_pos,
         &row_line_pos,
         &vertical_line_max,
         &horizontal_line_max,
-      )))
-    } else {
-      None
-    };
+      ))
+    });
 
     let content_origin_x = if structure.border_collapse == BorderCollapse::Collapse {
       col_offsets.first().copied().unwrap_or(pad_left)

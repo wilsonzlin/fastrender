@@ -26,7 +26,7 @@ fn collect_text_spans<'a>(
   while let Some((node, offset_y)) = stack.pop() {
     let current_y = offset_y + node.bounds.y();
     if let FragmentContent::Text { text, .. } = &node.content {
-      out.push((text.as_str(), current_y, current_y + node.bounds.height()));
+      out.push((text.as_ref(), current_y, current_y + node.bounds.height()));
     }
     for child in node.children.iter().rev() {
       stack.push((child, current_y));

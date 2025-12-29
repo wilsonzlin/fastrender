@@ -84,7 +84,7 @@ fn find_fragment_by_box_id<'a>(
     if matches_id {
       return Some(node);
     }
-    for child in &node.children {
+    for child in node.children.iter() {
       stack.push(child);
     }
   }

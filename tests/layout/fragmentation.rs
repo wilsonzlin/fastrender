@@ -63,7 +63,7 @@ fn collect_lines<'a>(fragment: &'a FragmentNode) -> Vec<&'a FragmentNode> {
     if matches!(node.content, FragmentContent::Line { .. }) {
       lines.push(node);
     }
-    for child in &node.children {
+    for child in node.children.iter() {
       stack.push(child);
     }
   }
@@ -79,7 +79,7 @@ fn fragments_with_id<'a>(fragment: &'a FragmentNode, id: usize) -> Vec<&'a Fragm
         out.push(node);
       }
     }
-    for child in &node.children {
+    for child in node.children.iter() {
       stack.push(child);
     }
   }
@@ -798,7 +798,7 @@ fn find_sticky<'a>(node: &'a FragmentNode) -> Option<(Point, &'a FragmentNode)> 
     return Some((abs_pos, node));
   }
 
-  for child in &node.children {
+  for child in node.children.iter() {
     if let Some(found) = find_sticky(child) {
       return Some(found);
     }

@@ -54,11 +54,11 @@ fn running_position_creates_anchor_snapshot() {
   let mut flow_texts = Vec::new();
   for frag in fragment.iter_fragments() {
     if let FragmentContent::Text { text, .. } = &frag.content {
-      flow_texts.push(text.clone());
+      flow_texts.push(text.to_string());
     }
   }
 
-  assert_eq!(flow_texts, vec!["Body"]);
+  assert_eq!(flow_texts, vec!["Body".to_string()]);
 
   let anchor = fragment
     .iter_fragments()
@@ -66,11 +66,11 @@ fn running_position_creates_anchor_snapshot() {
     .expect("running anchor fragment");
 
   if let FragmentContent::RunningAnchor { name, snapshot } = &anchor.content {
-    assert_eq!(name, "banner");
+    assert_eq!(name.as_ref(), "banner");
     let mut snapshot_texts = Vec::new();
     for frag in snapshot.iter_fragments() {
       if let FragmentContent::Text { text, .. } = &frag.content {
-        snapshot_texts.push(text.clone());
+        snapshot_texts.push(text.to_string());
       }
     }
     assert!(
@@ -146,7 +146,7 @@ fn inline_running_position_does_not_flow_text() {
     .iter_fragments()
     .filter_map(|frag| {
       if let FragmentContent::Text { text, .. } = &frag.content {
-        Some(text.clone())
+        Some(text.as_ref())
       } else {
         None
       }
@@ -166,11 +166,11 @@ fn inline_running_position_does_not_flow_text() {
     .expect("running anchor fragment");
 
   if let FragmentContent::RunningAnchor { name, snapshot } = &anchor.content {
-    assert_eq!(name, "note");
+    assert_eq!(name.as_ref(), "note");
     let mut snapshot_texts = Vec::new();
     for frag in snapshot.iter_fragments() {
       if let FragmentContent::Text { text, .. } = &frag.content {
-        snapshot_texts.push(text.clone());
+        snapshot_texts.push(text.to_string());
       }
     }
     assert!(

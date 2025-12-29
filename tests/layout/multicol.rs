@@ -24,7 +24,7 @@ fn find_fragment<'a>(fragment: &'a FragmentNode, id: usize) -> Option<&'a Fragme
       return Some(fragment);
     }
   }
-  for child in &fragment.children {
+  for child in fragment.children.iter() {
     if let Some(found) = find_fragment(child, id) {
       return Some(found);
     }
@@ -42,7 +42,7 @@ fn find_rule_fragment<'a>(fragment: &'a FragmentNode, color: Rgba) -> Option<&'a
   {
     return Some(fragment);
   }
-  for child in &fragment.children {
+  for child in fragment.children.iter() {
     if let Some(found) = find_rule_fragment(child, color) {
       return Some(found);
     }
@@ -62,7 +62,7 @@ fn find_rule_fragment_with_color<'a>(
   {
     return Some(fragment);
   }
-  for child in &fragment.children {
+  for child in fragment.children.iter() {
     if let Some(found) = find_rule_fragment_with_color(child, color) {
       return Some(found);
     }
@@ -77,7 +77,7 @@ fn fragments_with_id<'a>(fragment: &'a FragmentNode, id: usize) -> Vec<&'a Fragm
         out.push(fragment);
       }
     }
-    for child in &fragment.children {
+    for child in fragment.children.iter() {
       walk(child, id, out);
     }
   }
@@ -92,7 +92,7 @@ fn count_lines(fragment: &FragmentNode) -> usize {
   if matches!(fragment.content, FragmentContent::Line { .. }) {
     count += 1;
   }
-  for child in &fragment.children {
+  for child in fragment.children.iter() {
     count += count_lines(child);
   }
   count
@@ -106,7 +106,7 @@ fn collect_line_positions(fragment: &FragmentNode, origin: (f32, f32), out: &mut
   if matches!(fragment.content, FragmentContent::Line { .. }) {
     out.push(current);
   }
-  for child in &fragment.children {
+  for child in fragment.children.iter() {
     collect_line_positions(child, current, out);
   }
 }

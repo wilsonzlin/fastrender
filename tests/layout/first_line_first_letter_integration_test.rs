@@ -35,10 +35,10 @@ fn collect_texts<'a>(fragment: &'a FragmentNode, out: &mut Vec<(&'a str, Rgba)>)
         .as_ref()
         .map(|s| s.color)
         .unwrap_or_else(|| Rgba::BLACK);
-      out.push((text.as_str(), color));
+      out.push((text.as_ref(), color));
     }
   }
-  for child in &fragment.children {
+  for child in fragment.children.iter() {
     collect_texts(child, out);
   }
 }

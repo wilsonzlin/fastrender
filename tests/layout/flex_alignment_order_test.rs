@@ -62,7 +62,7 @@ fn align_self_respects_in_flow_child_order() {
   let mut end_y = None;
   let mut start_y = None;
   let mut debug_children = Vec::new();
-  for child in &fragment.children {
+  for child in fragment.children.iter() {
     let id = match &child.content {
       FragmentContent::Block { box_id }
       | FragmentContent::Inline { box_id, .. }

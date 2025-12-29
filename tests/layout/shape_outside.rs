@@ -53,7 +53,7 @@ fn collect_lines(fragment: &FragmentNode) -> Vec<FragmentNode> {
     if matches!(node.content, FragmentContent::Line { .. }) {
       out.push(node.clone());
     }
-    for child in &node.children {
+    for child in node.children.iter() {
       stack.push(child);
     }
   }

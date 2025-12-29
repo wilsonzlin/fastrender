@@ -17,7 +17,7 @@ fn find_first_line<'a>(
   if matches!(fragment.content, fastrender::FragmentContent::Line { .. }) {
     return Some(fragment);
   }
-  for child in &fragment.children {
+  for child in fragment.children.iter() {
     if let Some(found) = find_first_line(child) {
       return Some(found);
     }
@@ -39,7 +39,7 @@ fn collect_texts<'a>(fragment: &'a fastrender::FragmentNode, out: &mut Vec<(&'a 
       out.push((text.as_str(), color));
     }
   }
-  for child in &fragment.children {
+  for child in fragment.children.iter() {
     collect_texts(child, out);
   }
 }
@@ -48,7 +48,7 @@ fn collect_text_fragments<'a>(fragment: &'a fastrender::FragmentNode, out: &mut 
   if matches!(fragment.content, fastrender::FragmentContent::Text { .. }) {
     out.push(fragment);
   }
-  for child in &fragment.children {
+  for child in fragment.children.iter() {
     collect_text_fragments(child, out);
   }
 }
@@ -65,7 +65,7 @@ fn find_fragment_with_background<'a>(
   {
     return Some(fragment);
   }
-  for child in &fragment.children {
+  for child in fragment.children.iter() {
     if let Some(found) = find_fragment_with_background(child, color) {
       return Some(found);
     }

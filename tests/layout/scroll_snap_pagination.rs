@@ -52,7 +52,7 @@ fn scroll_snap_targets_include_fragment_offsets() {
     if matches!(node.content, FragmentContent::Block { box_id: Some(id) } if id == box_id) {
       return Some(abs.y);
     }
-    for child in &node.children {
+    for child in node.children.iter() {
       if let Some(found) = find_box_id_abs_y(child, abs, box_id) {
         return Some(found);
       }

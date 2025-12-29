@@ -74,7 +74,7 @@ fn find_text_bounds_inner(fragment: &FragmentNode, offset: Point, needle: &str) 
     }
   }
 
-  for child in &fragment.children {
+  for child in fragment.children.iter() {
     if let Some(found) = find_text_bounds_inner(child, origin, needle) {
       return Some(found);
     }
