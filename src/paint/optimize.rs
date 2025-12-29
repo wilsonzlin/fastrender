@@ -598,6 +598,7 @@ impl DisplayListOptimizer {
     for item in items {
       let mut include_item = false;
       let mut transformed_bounds: Option<Rect> = None;
+      let culled_by_clip = clip_stack.last().map(|c| c.can_cull).unwrap_or(false);
 
       match &item {
         DisplayItem::PushTransform(t) => {
@@ -752,6 +753,11 @@ impl DisplayListOptimizer {
           include_item = true;
         }
         _ => {}
+      }
+
+      if culled_by_clip {
+        include_item = false;
+        transformed_bounds = None;
       }
 
       if !include_item {
