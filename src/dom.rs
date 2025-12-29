@@ -195,8 +195,9 @@ pub fn resolve_first_strong_direction(node: &DomNode) -> Option<TextDirection> {
         }
       }
       DomNodeType::Element { tag_name, .. } => {
-        let skip =
-          tag_name.eq_ignore_ascii_case("script") || tag_name.eq_ignore_ascii_case("style");
+        let skip = tag_name.eq_ignore_ascii_case("script")
+          || tag_name.eq_ignore_ascii_case("style")
+          || tag_name.eq_ignore_ascii_case("template");
         if skip {
           continue;
         }
@@ -270,8 +271,9 @@ pub fn collect_text_codepoints(node: &DomNode) -> Vec<u32> {
         attributes,
         ..
       } => {
-        let skip =
-          tag_name.eq_ignore_ascii_case("script") || tag_name.eq_ignore_ascii_case("style");
+        let skip = tag_name.eq_ignore_ascii_case("script")
+          || tag_name.eq_ignore_ascii_case("style")
+          || tag_name.eq_ignore_ascii_case("template");
         if skip {
           continue;
         }
@@ -3322,6 +3324,28 @@ mod tests {
     element_ref.match_non_ts_pseudo_class(pseudo, &mut context)
   }
 
+  #[test]
+  fn collect_text_codepoints_skips_template_contents() {
+    let dom = DomNode {
+      node_type: DomNodeType::Document,
+      children: vec![
+        element("div", vec![text("abc")]),
+        DomNode {
+          node_type: DomNodeType::Element {
+            tag_name: "template".to_string(),
+            namespace: HTML_NAMESPACE.to_string(),
+            attributes: vec![],
+          },
+          children: vec![text("Ωש")],
+        },
+      ],
+    };
+
+    let codepoints = collect_text_codepoints(&dom);
+    let expected: Vec<u32> = vec!['a', 'b', 'c'].into_iter().map(|c| c as u32).collect();
+    assert_eq!(codepoints, expected);
+  }
+
   fn parse_selector(selector: &str) -> Selector<FastRenderSelectorImpl> {
     let mut input = ParserInput::new(selector);
     let mut parser = Parser::new(&mut input);
@@ -3890,6 +3914,30 @@ mod tests {
       &ancestors,
       &PseudoClass::Dir(TextDirection::Rtl)
     ));
+  }
+
+  #[test]
+  fn dir_auto_ignores_template_contents() {
+    let template = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "template".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![],
+      },
+      children: vec![text("שלום")],
+    };
+    let root = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("dir".to_string(), "auto".to_string())],
+      },
+      children: vec![template],
+    };
+
+    assert_eq!(resolve_first_strong_direction(&root), None);
+    assert!(matches(&root, &[], &PseudoClass::Dir(TextDirection::Ltr)));
+    assert!(!matches(&root, &[], &PseudoClass::Dir(TextDirection::Rtl)));
   }
 
   #[test]
