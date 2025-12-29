@@ -37,6 +37,7 @@ use fastrender::resource::HttpFetcher;
 use fastrender::resource::ResourceFetcher;
 use fastrender::resource::DEFAULT_ACCEPT_LANGUAGE;
 use fastrender::resource::DEFAULT_USER_AGENT;
+use fastrender::text::font_db::FontConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
@@ -93,6 +94,41 @@ impl DiagnosticsArg {
       DiagnosticsArg::Basic => DiagnosticsLevel::Basic,
       DiagnosticsArg::Verbose => DiagnosticsLevel::Verbose,
     }
+  }
+}
+
+#[derive(Args, Debug, Clone)]
+struct FontSourceArgs {
+  /// Use bundled font fixtures instead of scanning system fonts
+  #[arg(long)]
+  bundled_fonts: bool,
+
+  /// Additional font directories to load (repeatable)
+  #[arg(long = "font-dir", value_name = "DIR")]
+  font_dir: Vec<PathBuf>,
+}
+
+impl FontSourceArgs {
+  fn to_font_config(&self) -> Option<FontConfig> {
+    if self.bundled_fonts {
+      let mut config = FontConfig::bundled_only();
+      for dir in &self.font_dir {
+        config = config.add_font_dir(dir);
+      }
+      return Some(config);
+    }
+
+    if !self.font_dir.is_empty() {
+      let mut config = FontConfig::new()
+        .with_system_fonts(false)
+        .with_bundled_fonts(false);
+      for dir in &self.font_dir {
+        config = config.add_font_dir(dir);
+      }
+      return Some(config);
+    }
+
+    None
   }
 }
 
@@ -193,6 +229,10 @@ struct RunArgs {
   /// Maximum number of external stylesheets to fetch
   #[arg(long)]
   css_limit: Option<usize>,
+
+  /// Use bundled font fixtures instead of scanning system fonts
+  #[command(flatten)]
+  fonts: FontSourceArgs,
 
   #[command(flatten)]
   resource_access: ResourceAccessArgs,
@@ -346,6 +386,9 @@ struct WorkerArgs {
   /// Maximum number of external stylesheets to fetch
   #[arg(long)]
   css_limit: Option<usize>,
+
+  #[command(flatten)]
+  fonts: FontSourceArgs,
 
   #[command(flatten)]
   resource_access: ResourceAccessArgs,
@@ -813,6 +856,19 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     args.viewport.0, args.viewport.1
   ));
   log.push_str(&format!("DPR: {}\n", args.dpr));
+  if args.fonts.bundled_fonts {
+    log.push_str("Fonts: bundled fixtures\n");
+  }
+  if !args.fonts.font_dir.is_empty() {
+    let dirs = args
+      .fonts
+      .font_dir
+      .iter()
+      .map(|p| p.display().to_string())
+      .collect::<Vec<_>>()
+      .join(", ");
+    log.push_str(&format!("Font dirs: {dirs}\n"));
+  }
   if let Some(ct) = &cached.content_type {
     log.push_str(&format!("Content-Type: {ct}\n"));
   }
@@ -854,6 +910,8 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     allowed_subresource_origins: args.resource_access.allow_subresource_origin.clone(),
     trace_output: None,
     layout_parallelism: args.layout_parallel.parallelism(),
+    font_config: args.fonts.to_font_config(),
+    font_config: args.fonts.to_font_config(),
   });
 
   options.diagnostics_level = args.diagnostics.to_level();
@@ -2073,6 +2131,12 @@ fn spawn_worker(
   if args.no_http_freshness {
     cmd.arg("--no-http-freshness");
   }
+  if args.fonts.bundled_fonts {
+    cmd.arg("--bundled-fonts");
+  }
+  for dir in &args.fonts.font_dir {
+    cmd.arg("--font-dir").arg(dir);
+  }
   if args.verbose {
     cmd.arg("--verbose");
   }
@@ -2479,6 +2543,18 @@ fn run(args: RunArgs) -> io::Result<()> {
     normalize_user_agent_for_log(&args.user_agent)
   );
   println!("Accept-Language: {}", args.accept_language);
+  if args.fonts.bundled_fonts {
+    println!("Fonts: bundled fixtures (system fonts skipped)");
+  } else if !args.fonts.font_dir.is_empty() {
+    let dirs = args
+      .fonts
+      .font_dir
+      .iter()
+      .map(|p| p.display().to_string())
+      .collect::<Vec<_>>()
+      .join(", ");
+    println!("Fonts: {}", dirs);
+  }
   println!("Progress dir: {}", args.progress_dir.display());
   println!();
 

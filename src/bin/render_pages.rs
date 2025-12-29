@@ -437,6 +437,8 @@ fn main() {
     allowed_subresource_origins: args.resource_access.allow_subresource_origin.clone(),
     trace_output: None,
     layout_parallelism: args.layout_parallel.parallelism(),
+    font_config: None,
+    font_config: None,
   });
 
   let render_pool = FastRenderPool::with_config(

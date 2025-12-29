@@ -6,7 +6,7 @@ FastRender ships a few small binaries/examples intended for internal debugging a
 
 These are optional wrappers for the most common loops:
 
-- Pageset loop (fetch → progress JSON): `scripts/pageset.sh` (defaults to `--features disk_cache`; set `DISK_CACHE=0` or `NO_DISK_CACHE=1` or pass `--no-disk-cache` to opt out)
+- Pageset loop (fetch → progress JSON, defaults to bundled fonts): `scripts/pageset.sh` (defaults to `--features disk_cache`; set `DISK_CACHE=0` or `NO_DISK_CACHE=1` or pass `--no-disk-cache` to opt out)
 - Profile one page with samply (saves profile + prints summary): `scripts/profile_samply.sh <stem|--from-progress ...>` (builds `pageset_progress` with `disk_cache`)
 - Profile one page with perf: `scripts/profile_perf.sh <stem|--from-progress ...>` (builds `pageset_progress` with `disk_cache`)
 - Summarize a saved samply profile: `scripts/samply_summary.py <profile.json.gz>`
@@ -22,7 +22,7 @@ Pageset wrappers enable the disk-backed subresource cache by default, persisting
 - Help: `cargo xtask --help`
 - Tests: `cargo xtask test [core|style|fixtures|wpt|all]`
 - Refresh goldens: `cargo xtask update-goldens [all|fixtures|reference|wpt]` (sets the appropriate `UPDATE_*` env vars)
-- Pageset scoreboard (disk-backed cache on by default for reproducible runs): `cargo xtask pageset [--pages example.com,news.ycombinator.com] [--shard 0/4] [--no-fetch] [--no-disk-cache] [-- <pageset_progress args...>]`
+- Pageset scoreboard (disk-backed cache on by default for reproducible runs; bundled fonts by default): `cargo xtask pageset [--pages example.com,news.ycombinator.com] [--shard 0/4] [--no-fetch] [--no-disk-cache] [-- <pageset_progress args...>]`
   - Sharded example: `cargo xtask pageset --shard 0/4` (applies to both fetch + render; add `--no-fetch` to reuse cached pages)
 - Pageset diff: `cargo xtask pageset-diff [--baseline <dir>|--baseline-ref <git-ref>] [--no-run] [--fail-on-regression]` (extracts `progress/pages` from the chosen git ref by default and compares it to the freshly updated scoreboard)
 - Render one page: `cargo xtask render-page --url https://example.com --output out.png [--viewport 1200x800 --dpr 1.0 --full-page]`
@@ -132,6 +132,8 @@ Pageset wrappers enable the disk-backed subresource cache by default, persisting
 - Run:
   - Help: `cargo run --release --bin pageset_progress -- run --help`
   - Typical: `cargo run --release --bin pageset_progress -- run --timeout 5`
+- Fonts: pass `--bundled-fonts` to skip system font discovery (default in the pageset wrappers) or
+  `--font-dir <path>` to load fonts from a specific directory without hitting host fonts.
 - Sync: `cargo run --release --bin pageset_progress -- sync [--prune] [--html-dir fetches/html --progress-dir progress/pages]` bootstraps one JSON per pageset URL without needing any caches. `--prune` removes stale progress files for URLs no longer in the list.
 - Progress filenames use the canonical stem from `pageset_stem` (strip scheme + leading `www.`); `--pages` filters accept either the URL or the normalized stem. If you have older `fetches/html` entries with `www.` prefixes in the filename, re-run `fetch_pages` so progress filenames line up.
 - Triage reruns (reuse existing `progress/pages/*.json` instead of typing stems):

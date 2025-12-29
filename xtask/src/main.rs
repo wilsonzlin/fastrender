@@ -418,7 +418,8 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
     .arg("--jobs")
     .arg(args.jobs.to_string())
     .arg("--timeout")
-    .arg(args.render_timeout.to_string());
+    .arg(args.render_timeout.to_string())
+    .arg("--bundled-fonts");
   if let Some(pages) = &pages_arg {
     cmd.arg("--pages").arg(pages);
   }

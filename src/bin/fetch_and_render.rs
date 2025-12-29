@@ -243,6 +243,8 @@ fn try_main(args: Args) -> Result<()> {
     allowed_subresource_origins: args.resource_access.allow_subresource_origin.clone(),
     trace_output: args.trace_out.clone(),
     layout_parallelism: args.layout_parallel.parallelism(),
+    font_config: None,
+    font_config: None,
   });
 
   let http = build_http_fetcher(&args.user_agent, &args.accept_language, timeout_secs);

@@ -11,6 +11,7 @@ use fastrender::resource::{
   origin_from_url, parse_cached_html_meta, FetchedResource, HttpFetcher, ResourceFetcher,
 };
 use fastrender::style::media::MediaType;
+use fastrender::text::font_db::FontConfig;
 use fastrender::{Error, LayoutParallelism, Result};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -41,6 +42,7 @@ pub struct RenderSurface {
   pub allowed_subresource_origins: Vec<String>,
   pub trace_output: Option<PathBuf>,
   pub layout_parallelism: Option<LayoutParallelism>,
+  pub font_config: Option<FontConfig>,
 }
 
 /// Construct render configuration objects from CLI settings.
@@ -53,6 +55,9 @@ pub fn build_render_configs(surface: &RenderSurface) -> RenderConfigBundle {
     .with_block_mixed_content(surface.block_mixed_content);
   if let Some(base_url) = &surface.base_url {
     config = config.with_base_url(base_url.clone());
+  }
+  if let Some(font_config) = surface.font_config.as_ref() {
+    config = config.with_font_sources(font_config.clone());
   }
 
   let mut options = RenderOptions::new()
