@@ -2431,6 +2431,7 @@ mod tests {
   use std::sync::Barrier;
   use std::sync::Mutex;
   use std::thread;
+  use std::time::Instant;
 
   fn try_bind_localhost(context: &str) -> Option<TcpListener> {
     match TcpListener::bind("127.0.0.1:0") {
@@ -2966,8 +2967,10 @@ mod tests {
 
     let fetcher = HttpFetcher::new().with_timeout(Duration::from_secs(2));
     let url = format!("http://{}/", addr);
-    fetcher.fetch(&url).expect("first fetch");
-    fetcher.fetch(&url).expect("second fetch");
+    let first = fetcher.fetch(&url).expect("first fetch");
+    assert_eq!(first.bytes, b"pong");
+    let second = fetcher.fetch(&url).expect("second fetch");
+    assert_eq!(second.bytes, b"pong");
 
     let conn_count = handle.join().unwrap();
     assert_eq!(

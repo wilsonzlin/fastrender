@@ -80,6 +80,10 @@ tempfile = "3"
 name = "perf_regressions"
 harness = false
 
+[[bench]]
+name = "http_agent_pool"
+harness = false
+
 [[bin]]
 name = "bench_compare"
 path = "tools/bench_compare.rs"
