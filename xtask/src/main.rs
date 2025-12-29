@@ -1793,7 +1793,10 @@ mod tests {
               "pseudo_time_ms": null,
               "has_evals": null,
               "has_cache_hits": null,
-              "has_prunes": null
+              "has_prunes": null,
+              "has_bloom_prunes": null,
+              "has_filter_prunes": null,
+              "has_evaluated": null
             },
             "layout": {
               "intrinsic_lookups": 1,

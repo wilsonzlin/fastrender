@@ -15,7 +15,9 @@ use selectors::parser::Selector;
 use selectors::parser::SelectorImpl;
 use selectors::parser::SelectorList;
 use selectors::parser::SelectorParseErrorKind;
-use selectors::parser::{Combinator, RelativeSelector, RelativeSelectorMatchHint};
+use selectors::parser::{
+  Combinator, RelativeSelector, RelativeSelectorBloomHashes, RelativeSelectorMatchHint,
+};
 use selectors::OpaqueElement;
 use std::collections::HashMap;
 use std::fmt;
@@ -755,7 +757,7 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
   }
 }
 
-fn build_relative_selectors(
+pub(crate) fn build_relative_selectors(
   selector_list: SelectorList<FastRenderSelectorImpl>,
 ) -> Box<[RelativeSelector<FastRenderSelectorImpl>]> {
   selector_list
@@ -785,9 +787,11 @@ fn build_relative_selectors(
         has_child_or_descendants,
         has_adjacent_or_next_siblings,
       );
+      let bloom_hashes = RelativeSelectorBloomHashes::new(selector);
 
       RelativeSelector {
         match_hint,
+        bloom_hashes,
         selector: selector.clone(),
       }
     })
@@ -924,6 +928,8 @@ mod tests {
   use cssparser::ParserInput;
   use cssparser::SourceLocation;
   use cssparser::ToCss;
+  use precomputed_hash::PrecomputedHash;
+  use selectors::context::QuirksMode;
   use selectors::parser::ParseRelative;
   use selectors::parser::Parser as SelectorParser;
 
@@ -1005,6 +1011,38 @@ mod tests {
         .parse_pseudo_element(loc, cssparser::CowRcStr::from("MARKER"))
         .expect("marker pseudo"),
       PseudoElement::Marker
+    );
+  }
+
+  #[test]
+  fn relative_selector_bloom_hashes_are_precomputed() {
+    let mut input = ParserInput::new("span.foo #bar[data-Thing]");
+    let mut parser = Parser::new(&mut input);
+    let list =
+      SelectorList::parse(&PseudoClassParser, &mut parser, ParseRelative::ForHas).expect("parse");
+    let selectors = build_relative_selectors(list);
+    assert_eq!(selectors.len(), 1);
+    let selector = &selectors[0];
+
+    let hash =
+      |value: &str| CssString::from(value).precomputed_hash() & selectors::bloom::BLOOM_HASH_MASK;
+
+    let expected_no_quirks = vec![
+      hash("span"),
+      hash("foo"),
+      hash("bar"),
+      hash("data-Thing"),
+      hash("data-thing"),
+    ];
+    assert_eq!(
+      selector.bloom_hashes.hashes_for_mode(QuirksMode::NoQuirks),
+      expected_no_quirks
+    );
+
+    let expected_quirks = vec![hash("span"), hash("data-Thing"), hash("data-thing")];
+    assert_eq!(
+      selector.bloom_hashes.hashes_for_mode(QuirksMode::Quirks),
+      expected_quirks
     );
   }
 

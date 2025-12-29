@@ -1218,9 +1218,11 @@ impl<Impl: SelectorImpl> Selector<Impl> {
                         return s.clone();
                     }
                     any = true;
+                    let selector = s.selector.replace_parent_selector(parent);
                     RelativeSelector {
                         match_hint: s.match_hint,
-                        selector: s.selector.replace_parent_selector(parent),
+                        bloom_hashes: RelativeSelectorBloomHashes::new(&selector),
+                        selector,
                     }
                 })
                 .collect();
@@ -2021,6 +2023,88 @@ impl RelativeSelectorCombinatorCount {
     }
 }
 
+const RELATIVE_SELECTOR_BLOOM_HASHES_INLINE_CAPACITY: usize = 8;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RelativeSelectorBloomHashes {
+    non_quirks_hashes: SmallVec<[u32; RELATIVE_SELECTOR_BLOOM_HASHES_INLINE_CAPACITY]>,
+    quirks_hashes: SmallVec<[u32; RELATIVE_SELECTOR_BLOOM_HASHES_INLINE_CAPACITY]>,
+}
+
+fn collect_relative_selector_hashes<Impl: SelectorImpl>(
+    selector: &Selector<Impl>,
+    quirks_mode: QuirksMode,
+    out: &mut SmallVec<[u32; RELATIVE_SELECTOR_BLOOM_HASHES_INLINE_CAPACITY]>,
+) {
+    for component in selector.iter_raw_parse_order_from(0) {
+        match component {
+            Component::LocalName(local) => {
+                let hash_source = if local.name == local.lower_name {
+                    &local.name
+                } else {
+                    &local.lower_name
+                };
+                out.push(hash_source.precomputed_hash() & BLOOM_HASH_MASK);
+            },
+            Component::ID(id) => {
+                if !matches!(quirks_mode, QuirksMode::Quirks) {
+                    out.push(id.precomputed_hash() & BLOOM_HASH_MASK);
+                }
+            },
+            Component::Class(class) => {
+                if !matches!(quirks_mode, QuirksMode::Quirks) {
+                    out.push(class.precomputed_hash() & BLOOM_HASH_MASK);
+                }
+            },
+            Component::AttributeInNoNamespaceExists { ref local_name, .. } => {
+                out.push(local_name.precomputed_hash() & BLOOM_HASH_MASK);
+            },
+            Component::AttributeInNoNamespace { ref local_name, .. } => {
+                out.push(local_name.precomputed_hash() & BLOOM_HASH_MASK);
+            },
+            Component::AttributeOther(selector) => {
+                out.push(selector.local_name.precomputed_hash() & BLOOM_HASH_MASK);
+                if selector.local_name != selector.local_name_lower {
+                    out.push(selector.local_name_lower.precomputed_hash() & BLOOM_HASH_MASK);
+                }
+            },
+            Component::Is(list) | Component::Where(list) => {
+                let slice = list.slice();
+                if slice.len() == 1 {
+                    collect_relative_selector_hashes(&slice[0], quirks_mode, out);
+                }
+            },
+            _ => {},
+        }
+        if out.len() >= RELATIVE_SELECTOR_BLOOM_HASHES_INLINE_CAPACITY {
+            break;
+        }
+    }
+}
+
+impl RelativeSelectorBloomHashes {
+    pub fn new<Impl: SelectorImpl>(selector: &Selector<Impl>) -> Self {
+        let mut non_quirks_hashes = SmallVec::new();
+        collect_relative_selector_hashes(selector, QuirksMode::NoQuirks, &mut non_quirks_hashes);
+
+        let mut quirks_hashes = SmallVec::new();
+        collect_relative_selector_hashes(selector, QuirksMode::Quirks, &mut quirks_hashes);
+
+        Self {
+            non_quirks_hashes,
+            quirks_hashes,
+        }
+    }
+
+    #[inline]
+    pub fn hashes_for_mode(&self, quirks_mode: QuirksMode) -> &[u32] {
+        match quirks_mode {
+            QuirksMode::Quirks => &self.quirks_hashes,
+            _ => &self.non_quirks_hashes,
+        }
+    }
+}
+
 /// Storage for a relative selector.
 #[derive(Clone, Eq, PartialEq)]
 #[cfg_attr(feature = "to_shmem", derive(ToShmem))]
@@ -2031,6 +2115,7 @@ pub struct RelativeSelector<Impl: SelectorImpl> {
     /// The selector. Guaranteed to contain `RelativeSelectorAnchor` and the relative combinator in parse order.
     #[cfg_attr(feature = "to_shmem", shmem(field_bound))]
     pub selector: Selector<Impl>,
+    pub bloom_hashes: RelativeSelectorBloomHashes,
 }
 
 bitflags! {
@@ -2097,6 +2182,7 @@ impl<Impl: SelectorImpl> RelativeSelector<Impl> {
                 RelativeSelector {
                     match_hint,
                     selector: selector.clone(),
+                    bloom_hashes: RelativeSelectorBloomHashes::new(selector),
                 }
             })
             .collect()

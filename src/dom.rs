@@ -286,19 +286,43 @@ pub fn build_selector_bloom_map(root: &DomNode) -> Option<SelectorBloomMap> {
 static HAS_EVALS: AtomicU64 = AtomicU64::new(0);
 static HAS_CACHE_HITS: AtomicU64 = AtomicU64::new(0);
 static HAS_PRUNES: AtomicU64 = AtomicU64::new(0);
+static HAS_FILTER_PRUNES: AtomicU64 = AtomicU64::new(0);
+static HAS_RELATIVE_EVALS: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HasCounters {
+  pub evals: u64,
+  pub cache_hits: u64,
+  /// Bloom-summary based prunes plus fast-reject bloom filters.
+  pub prunes: u64,
+  /// Prunes coming from the subtree bloom filters built on demand.
+  pub filter_prunes: u64,
+  /// Relative selector evaluations that were executed after pruning and caching.
+  pub evaluated: u64,
+}
+
+impl HasCounters {
+  pub fn summary_prunes(&self) -> u64 {
+    self.prunes.saturating_sub(self.filter_prunes)
+  }
+}
 
 pub fn reset_has_counters() {
   HAS_EVALS.store(0, Ordering::Relaxed);
   HAS_CACHE_HITS.store(0, Ordering::Relaxed);
   HAS_PRUNES.store(0, Ordering::Relaxed);
+  HAS_FILTER_PRUNES.store(0, Ordering::Relaxed);
+  HAS_RELATIVE_EVALS.store(0, Ordering::Relaxed);
 }
 
-pub fn capture_has_counters() -> (u64, u64, u64) {
-  (
-    HAS_EVALS.load(Ordering::Relaxed),
-    HAS_CACHE_HITS.load(Ordering::Relaxed),
-    HAS_PRUNES.load(Ordering::Relaxed),
-  )
+pub fn capture_has_counters() -> HasCounters {
+  HasCounters {
+    evals: HAS_EVALS.load(Ordering::Relaxed),
+    cache_hits: HAS_CACHE_HITS.load(Ordering::Relaxed),
+    prunes: HAS_PRUNES.load(Ordering::Relaxed),
+    filter_prunes: HAS_FILTER_PRUNES.load(Ordering::Relaxed),
+    evaluated: HAS_RELATIVE_EVALS.load(Ordering::Relaxed),
+  }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -3118,67 +3142,6 @@ impl<'a> RelativeSelectorAncestorStack<'a> {
   }
 }
 
-fn collect_relative_selector_hashes(
-  selector: &RelativeSelector<FastRenderSelectorImpl>,
-  quirks_mode: selectors::matching::QuirksMode,
-  out: &mut Vec<u32>,
-) {
-  fn collect_from_selector(
-    selector: &selectors::parser::Selector<FastRenderSelectorImpl>,
-    quirks_mode: selectors::matching::QuirksMode,
-    out: &mut Vec<u32>,
-  ) {
-    const MAX_HASHES: usize = 8;
-    for component in selector.iter_raw_parse_order_from(0) {
-      match component {
-        selectors::parser::Component::LocalName(local) => {
-          let name = local.name.as_ref();
-          let lower = local.lower_name.as_ref();
-          if name == lower {
-            out.push(selector_bloom_hash(name));
-          } else {
-            out.push(selector_bloom_hash(lower));
-          }
-        }
-        selectors::parser::Component::ID(id) => {
-          if !matches!(quirks_mode, selectors::matching::QuirksMode::Quirks) {
-            out.push(selector_bloom_hash(id.as_ref()));
-          }
-        }
-        selectors::parser::Component::Class(class) => {
-          if !matches!(quirks_mode, selectors::matching::QuirksMode::Quirks) {
-            out.push(selector_bloom_hash(class.as_ref()));
-          }
-        }
-        selectors::parser::Component::AttributeInNoNamespaceExists { ref local_name, .. } => {
-          out.push(selector_bloom_hash(local_name.as_ref()));
-        }
-        selectors::parser::Component::AttributeInNoNamespace { ref local_name, .. } => {
-          out.push(selector_bloom_hash(local_name.as_ref()));
-        }
-        selectors::parser::Component::AttributeOther(selector) => {
-          out.push(selector_bloom_hash(selector.local_name.as_ref()));
-          if selector.local_name != selector.local_name_lower {
-            out.push(selector_bloom_hash(selector.local_name_lower.as_ref()));
-          }
-        }
-        selectors::parser::Component::Is(list) | selectors::parser::Component::Where(list) => {
-          let slice = list.slice();
-          if slice.len() == 1 {
-            collect_from_selector(&slice[0], quirks_mode, out);
-          }
-        }
-        _ => {}
-      }
-      if out.len() >= MAX_HASHES {
-        break;
-      }
-    }
-  }
-
-  collect_from_selector(&selector.selector, quirks_mode, out);
-}
-
 fn matches_has_relative(
   anchor: &ElementRef,
   selectors: &[RelativeSelector<FastRenderSelectorImpl>],
@@ -3221,8 +3184,7 @@ fn matches_has_relative(
         {
           if let Some(map) = ctx.extra_data.selector_blooms {
             if let Some(summary) = map.get(&(anchor.node as *const DomNode)) {
-              let mut hashes: Vec<u32> = Vec::with_capacity(8);
-              collect_relative_selector_hashes(selector, quirks_mode, &mut hashes);
+              let hashes = selector.bloom_hashes.hashes_for_mode(quirks_mode);
               if !hashes.is_empty() && hashes.iter().any(|hash| !summary.contains_hash(*hash)) {
                 HAS_PRUNES.fetch_add(1, Ordering::Relaxed);
                 ctx.selector_caches.relative_selector.add(
@@ -3245,6 +3207,8 @@ fn matches_has_relative(
           if ctx.extra_data.deadline_error.is_some() {
             return false;
           }
+          HAS_PRUNES.fetch_add(1, Ordering::Relaxed);
+          HAS_FILTER_PRUNES.fetch_add(1, Ordering::Relaxed);
           ctx.selector_caches.relative_selector.add(
             anchor.opaque(),
             selector,
@@ -3253,6 +3217,7 @@ fn matches_has_relative(
           continue;
         }
 
+        HAS_RELATIVE_EVALS.fetch_add(1, Ordering::Relaxed);
         let matched = match_relative_selector(
           selector,
           anchor.node,
@@ -3485,7 +3450,9 @@ fn match_relative_selector_subtree<'a>(
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::css::selectors::build_relative_selectors;
   use crate::css::selectors::PseudoClassParser;
+  use crate::css::selectors::ShadowMatchData;
   use cssparser::{Parser, ParserInput};
   use selectors::context::QuirksMode;
   use selectors::matching::MatchingContext;
@@ -3703,6 +3670,90 @@ mod tests {
     );
     let element_ref = ElementRef::with_ancestors(node, ancestors);
     element_ref.match_non_ts_pseudo_class(pseudo, &mut context)
+  }
+
+  #[test]
+  fn bloom_pruning_skips_expensive_evaluations() {
+    reset_has_counters();
+    let dom = element("div", vec![element("span", vec![])]);
+    let bloom_map: SelectorBloomMap = build_selector_bloom_map(&dom).expect("bloom map");
+
+    let mut caches = SelectorCaches::default();
+    caches.set_epoch(next_selector_cache_epoch());
+    let mut context = MatchingContext::new(
+      MatchingMode::Normal,
+      None,
+      &mut caches,
+      QuirksMode::NoQuirks,
+      NeedsSelectorFlags::No,
+      MatchingForInvalidation::No,
+    );
+    context.extra_data = ShadowMatchData::for_document().with_selector_blooms(Some(&bloom_map));
+
+    let mut input = ParserInput::new(".missing");
+    let mut parser = Parser::new(&mut input);
+    let list =
+      SelectorList::parse(&PseudoClassParser, &mut parser, ParseRelative::ForHas).expect("parse");
+    let selectors = build_relative_selectors(list);
+    let anchor = ElementRef::with_ancestors(&dom, &[]);
+
+    assert!(
+      !matches_has_relative(&anchor, &selectors, &mut context),
+      ":has should prune when bloom hash is absent"
+    );
+
+    let counters = capture_has_counters();
+    assert_eq!(counters.prunes, 1);
+    assert_eq!(counters.evaluated, 0);
+  }
+
+  #[test]
+  fn bloom_pruning_preserves_matches() {
+    reset_has_counters();
+    let dom = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".into(),
+        namespace: HTML_NAMESPACE.into(),
+        attributes: vec![],
+      },
+      children: vec![DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "span".into(),
+          namespace: HTML_NAMESPACE.into(),
+          attributes: vec![("class".into(), "foo".into())],
+        },
+        children: vec![],
+      }],
+    };
+    let bloom_map: SelectorBloomMap = build_selector_bloom_map(&dom).expect("bloom map");
+
+    let mut caches = SelectorCaches::default();
+    caches.set_epoch(next_selector_cache_epoch());
+    let mut context = MatchingContext::new(
+      MatchingMode::Normal,
+      None,
+      &mut caches,
+      QuirksMode::NoQuirks,
+      NeedsSelectorFlags::No,
+      MatchingForInvalidation::No,
+    );
+    context.extra_data = ShadowMatchData::for_document().with_selector_blooms(Some(&bloom_map));
+
+    let mut input = ParserInput::new(".foo");
+    let mut parser = Parser::new(&mut input);
+    let list =
+      SelectorList::parse(&PseudoClassParser, &mut parser, ParseRelative::ForHas).expect("parse");
+    let selectors = build_relative_selectors(list);
+    let anchor = ElementRef::with_ancestors(&dom, &[]);
+
+    assert!(
+      matches_has_relative(&anchor, &selectors, &mut context),
+      ":has should still evaluate when hashes are present"
+    );
+
+    let counters = capture_has_counters();
+    assert_eq!(counters.prunes, 0);
+    assert_eq!(counters.evaluated, 1);
   }
 
   #[test]
