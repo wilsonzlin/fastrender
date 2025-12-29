@@ -51,7 +51,7 @@ fn box_id_for_styled(box_node: &BoxNode, styled_id: usize) -> Option<usize> {
   None
 }
 
-  fn find_fragment<'a>(fragment: &'a FragmentNode, box_id: usize) -> Option<&'a FragmentNode> {
+fn find_fragment<'a>(fragment: &'a FragmentNode, box_id: usize) -> Option<&'a FragmentNode> {
   if fragment.box_id() == Some(box_id) {
     return Some(fragment);
   }

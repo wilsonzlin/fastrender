@@ -104,9 +104,31 @@ fn bench_line_break_dense_paragraph(c: &mut Criterion) {
   });
 }
 
+fn bench_shape_fallback_cache(c: &mut Criterion) {
+  let mut style = ComputedStyle::default();
+  style.font_family = vec!["sans-serif".to_string()];
+  style.font_size = 14.0;
+  let ctx = FontContext::new();
+  let pipeline = ShapingPipeline::new();
+  let paragraph =
+    "Wikipedia-like paragraphs repeat glyphs and trigger fallback paths when coverage is missing.";
+  let long_text = paragraph.repeat(8);
+  let variants: Vec<String> = (0..4096).map(|i| format!("{long_text} {i}")).collect();
+
+  c.bench_function("text_shape_fallback_cache", |b| {
+    let mut idx = 0usize;
+    b.iter(|| {
+      let text = &variants[idx % variants.len()];
+      idx = (idx + 1) % variants.len();
+      black_box(pipeline.shape(text, &style, &ctx).ok());
+    });
+  });
+}
+
 criterion_group!(
   text_benches,
   bench_rasterize_cached_faces,
-  bench_line_break_dense_paragraph
+  bench_line_break_dense_paragraph,
+  bench_shape_fallback_cache
 );
 criterion_main!(text_benches);

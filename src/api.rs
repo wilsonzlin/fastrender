@@ -1546,6 +1546,7 @@ pub struct RenderStageTimings {
   pub cascade_ms: Option<f64>,
   pub box_tree_ms: Option<f64>,
   pub layout_ms: Option<f64>,
+  pub text_fallback_ms: Option<f64>,
   pub text_shape_ms: Option<f64>,
   pub paint_build_ms: Option<f64>,
   pub paint_optimize_ms: Option<f64>,
@@ -1564,6 +1565,8 @@ pub struct RenderCounts {
   pub shaped_runs: Option<usize>,
   pub glyphs: Option<usize>,
   pub color_glyph_rasters: Option<usize>,
+  pub fallback_cache_hits: Option<usize>,
+  pub fallback_cache_misses: Option<usize>,
 }
 
 /// Cascade selector matching statistics.
@@ -1659,11 +1662,14 @@ fn merge_image_cache_diagnostics(stats: &mut RenderStats) {
 
 fn merge_text_diagnostics(stats: &mut RenderStats) {
   if let Some(text) = crate::text::pipeline::take_text_diagnostics() {
+    stats.timings.text_fallback_ms = Some(text.coverage_ms);
     stats.timings.text_shape_ms = Some(text.shape_ms);
     stats.timings.text_rasterize_ms = Some(text.rasterize_ms);
     stats.counts.shaped_runs = Some(text.shaped_runs);
     stats.counts.glyphs = Some(text.glyphs);
     stats.counts.color_glyph_rasters = Some(text.color_glyph_rasters);
+    stats.counts.fallback_cache_hits = Some(text.fallback_cache_hits);
+    stats.counts.fallback_cache_misses = Some(text.fallback_cache_misses);
   }
 }
 

@@ -2114,7 +2114,8 @@ impl Painter {
         let shape_start = text_profile_enabled.then(Instant::now);
         let color = style.color;
         let shaped_runs: Option<Arc<Vec<ShapedRun>>> = runs.clone().or_else(|| {
-          self.shaper
+          self
+            .shaper
             .shape(&text, &style, &self.font_ctx)
             .ok()
             .map(Arc::new)

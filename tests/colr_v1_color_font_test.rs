@@ -1,18 +1,18 @@
 mod r#ref;
 
+use fastrender::image_compare::encode_png;
 use fastrender::style::color::Rgba;
 use fastrender::text::color_fonts::ColorFontRenderer;
 use fastrender::text::font_db::{FontStretch, FontStyle, FontWeight, LoadedFont};
 use fastrender::text::font_instance::FontInstance;
-use fastrender::image_compare::encode_png;
 use image::RgbaImage;
 use r#ref::compare::{compare_images, load_png_from_bytes, CompareConfig};
 use rustybuzz::Variation;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
-use ttf_parser::Tag;
 use tiny_skia::Pixmap;
+use ttf_parser::Tag;
 
 fn fixtures_path() -> PathBuf {
   PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -82,8 +82,7 @@ fn save_or_compare(name: &str, raster: &fastrender::text::color_fonts::ColorGlyp
     return;
   }
 
-  let golden_bytes =
-    fs::read(&path).expect("missing golden image; set UPDATE_GOLDEN=1 to create");
+  let golden_bytes = fs::read(&path).expect("missing golden image; set UPDATE_GOLDEN=1 to create");
   if golden_bytes == actual_bytes {
     return;
   }
@@ -96,10 +95,7 @@ fn save_or_compare(name: &str, raster: &fastrender::text::color_fonts::ColorGlyp
       .zip(golden.data().iter())
       .filter(|(a, b)| a != b)
       .count();
-    println!(
-      "debug: comparing '{}' ({} bytes differ)",
-      name, differing
-    );
+    println!("debug: comparing '{}' ({} bytes differ)", name, differing);
   }
   let diff = compare_images(&actual, &golden, &CompareConfig::strict());
   assert!(
@@ -332,8 +328,15 @@ fn variable_colrv1_applies_gvar_outlines() {
   let base_bounds = painted_bounds(&base.image).expect("base gvar glyph should paint");
   let varied_bounds = painted_bounds(&varied.image).expect("varied gvar glyph should paint");
   assert_eq!(base_bounds, (1, 1, 8, 46), "unexpected base glyph bounds");
-  assert_eq!(varied_bounds, (1, 1, 24, 46), "unexpected varied glyph bounds");
-  assert_ne!(base_bounds, varied_bounds, "variation should affect outline bounds");
+  assert_eq!(
+    varied_bounds,
+    (1, 1, 24, 46),
+    "unexpected varied glyph bounds"
+  );
+  assert_ne!(
+    base_bounds, varied_bounds,
+    "variation should affect outline bounds"
+  );
 }
 
 fn find_table(data: &[u8], tag: &[u8; 4]) -> Option<(usize, usize)> {

@@ -1015,9 +1015,12 @@ fn accumulate_timings(target: &mut RenderStageTimings, timings: &RenderStageTimi
   add_timing(&mut target.cascade_ms, timings.cascade_ms);
   add_timing(&mut target.box_tree_ms, timings.box_tree_ms);
   add_timing(&mut target.layout_ms, timings.layout_ms);
+  add_timing(&mut target.text_fallback_ms, timings.text_fallback_ms);
+  add_timing(&mut target.text_shape_ms, timings.text_shape_ms);
   add_timing(&mut target.paint_build_ms, timings.paint_build_ms);
   add_timing(&mut target.paint_optimize_ms, timings.paint_optimize_ms);
   add_timing(&mut target.paint_rasterize_ms, timings.paint_rasterize_ms);
+  add_timing(&mut target.text_rasterize_ms, timings.text_rasterize_ms);
   add_timing(&mut target.encode_ms, timings.encode_ms);
 }
 
@@ -1039,9 +1042,12 @@ fn sum_timings(timings: &RenderStageTimings) -> Option<f64> {
     timings.cascade_ms,
     timings.box_tree_ms,
     timings.layout_ms,
+    timings.text_fallback_ms,
+    timings.text_shape_ms,
     timings.paint_build_ms,
     timings.paint_optimize_ms,
     timings.paint_rasterize_ms,
+    timings.text_rasterize_ms,
     timings.encode_ms,
   ] {
     if let Some(value) = value {
@@ -1691,6 +1697,7 @@ mod tests {
             styled_nodes: Some(3),
             box_nodes: None,
             fragments: Some(5),
+            ..Default::default()
           },
           cascade: fastrender::CascadeDiagnostics {
             nodes: Some(10),
@@ -1729,9 +1736,12 @@ mod tests {
           "cascade_ms": null,
           "box_tree_ms": null,
           "layout_ms": null,
+          "text_fallback_ms": null,
+          "text_shape_ms": null,
           "paint_build_ms": null,
           "paint_optimize_ms": null,
           "paint_rasterize_ms": null,
+          "text_rasterize_ms": null,
           "encode_ms": null
         }
       },
@@ -1755,16 +1765,24 @@ mod tests {
               "cascade_ms": 2.5,
               "box_tree_ms": null,
               "layout_ms": null,
+              "text_fallback_ms": null,
+              "text_shape_ms": null,
               "paint_build_ms": null,
               "paint_optimize_ms": null,
               "paint_rasterize_ms": null,
+              "text_rasterize_ms": null,
               "encode_ms": null
             },
             "counts": {
               "dom_nodes": 4,
               "styled_nodes": 3,
               "box_nodes": null,
-              "fragments": 5
+              "fragments": 5,
+              "shaped_runs": null,
+              "glyphs": null,
+              "color_glyph_rasters": null,
+              "fallback_cache_hits": null,
+              "fallback_cache_misses": null
             },
             "cascade": {
               "nodes": 10,

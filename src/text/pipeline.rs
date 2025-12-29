@@ -76,6 +76,13 @@ use crate::text::font_db::FontDatabase;
 use crate::text::font_db::FontStretch as DbFontStretch;
 use crate::text::font_db::FontStyle;
 use crate::text::font_db::LoadedFont;
+use crate::text::font_fallback::families_signature;
+use crate::text::font_fallback::ClusterFallbackCacheKey;
+use crate::text::font_fallback::EmojiPreference;
+use crate::text::font_fallback::FallbackCache;
+use crate::text::font_fallback::FallbackCacheDescriptor;
+use crate::text::font_fallback::FallbackCacheStatsSnapshot;
+use crate::text::font_fallback::GlyphFallbackCacheKey;
 use crate::text::font_loader::FontContext;
 use lru::LruCache;
 use rustybuzz::Direction as HbDirection;
@@ -111,10 +118,13 @@ static SHAPE_FONT_RUN_INVOCATIONS: AtomicUsize = AtomicUsize::new(0);
 #[derive(Debug, Default, Clone)]
 pub struct TextDiagnostics {
   pub shape_ms: f64,
+  pub coverage_ms: f64,
   pub rasterize_ms: f64,
   pub shaped_runs: usize,
   pub glyphs: usize,
   pub color_glyph_rasters: usize,
+  pub fallback_cache_hits: usize,
+  pub fallback_cache_misses: usize,
 }
 
 static TEXT_DIAGNOSTICS: OnceLock<Mutex<TextDiagnostics>> = OnceLock::new();
@@ -166,6 +176,35 @@ pub(crate) fn record_text_shape(start: Option<Instant>, shaped_runs: usize, glyp
       diag.glyphs += glyphs;
     });
   }
+}
+
+pub(crate) fn record_text_coverage(start: Option<Instant>) {
+  if let Some(start) = start {
+    let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+    with_text_diagnostics(|diag| {
+      diag.coverage_ms += elapsed_ms;
+    });
+  }
+}
+
+pub(crate) fn record_fallback_cache_stats_delta(
+  before: FallbackCacheStatsSnapshot,
+  after: FallbackCacheStatsSnapshot,
+) {
+  with_text_diagnostics(|diag| {
+    let hit_delta = after
+      .cluster_hits
+      .saturating_sub(before.cluster_hits)
+      .saturating_add(after.glyph_hits.saturating_sub(before.glyph_hits));
+    let miss_delta = after
+      .cluster_misses
+      .saturating_sub(before.cluster_misses)
+      .saturating_add(after.glyph_misses.saturating_sub(before.glyph_misses));
+    diag.fallback_cache_hits = diag.fallback_cache_hits.saturating_add(hit_delta as usize);
+    diag.fallback_cache_misses = diag
+      .fallback_cache_misses
+      .saturating_add(miss_delta as usize);
+  });
 }
 
 pub(crate) fn record_text_rasterize(start: Option<Instant>, color_glyph_rasters: usize) {
@@ -1352,6 +1391,10 @@ fn cluster_signature(text: &str) -> u64 {
   hasher.finish()
 }
 
+fn quantize_oblique_degrees(angle: Option<f32>) -> i16 {
+  angle.map(|a| (a * 10.0).round() as i16).unwrap_or(0)
+}
+
 fn font_supports_all_chars(font: &LoadedFont, chars: &[char]) -> bool {
   if chars.is_empty() {
     return true;
@@ -1376,7 +1419,6 @@ pub fn assign_fonts(
     style,
     font_context,
     None,
-    shaping_style_hash(style),
     font_context.font_generation(),
   )
 }
@@ -1385,8 +1427,7 @@ fn assign_fonts_internal(
   runs: &[ItemizedRun],
   style: &ComputedStyle,
   font_context: &FontContext,
-  font_cache: Option<&FontResolverCache>,
-  style_hash: u64,
+  font_cache: Option<&FallbackCache>,
   font_generation: u64,
 ) -> Result<Vec<FontRun>> {
   let features = collect_opentype_features(style);
@@ -1402,6 +1443,12 @@ fn assign_fonts_internal(
   };
   let font_stretch = DbFontStretch::from_percentage(style.font_stretch.to_percentage());
   let families = build_family_entries(style);
+  if let Some(cache) = font_cache {
+    cache.prepare(font_generation);
+  }
+  let families_signature = families_signature(&families);
+  let oblique_degrees = quantize_oblique_degrees(requested_oblique);
+  let weight_value = style.font_weight.to_u16();
 
   let mut font_runs = Vec::new();
   for run in runs {
@@ -1412,13 +1459,23 @@ fn assign_fonts_internal(
       let cluster_text = &run.text[cluster_start..cluster_end];
       let cluster_char_count = cluster_text.chars().count();
       let emoji_pref = cluster_emoji_preference(cluster_text, style.font_variant_emoji);
-      let cluster_cache_key = font_cache.map(|_| ClusterResolverCacheKey {
-        signature: cluster_signature(cluster_text),
-        style_hash,
-        font_generation,
-        emoji_pref,
-      });
       let (base_char, mut relevant_chars) = cluster_base_and_relevant_chars(cluster_text);
+      let require_base_glyph = !is_non_rendering_for_coverage(base_char);
+      let descriptor = font_cache.map(|_| {
+        FallbackCacheDescriptor::new(
+          families_signature,
+          weight_value,
+          font_style,
+          font_stretch,
+          oblique_degrees,
+          emoji_pref,
+          require_base_glyph,
+        )
+      });
+      let cluster_cache_key = descriptor.map(|descriptor| ClusterFallbackCacheKey {
+        descriptor,
+        signature: cluster_signature(cluster_text),
+      });
       if relevant_chars.is_empty()
         && cluster_char_count == 1
         && !is_non_rendering_for_coverage(base_char)
@@ -1435,14 +1492,12 @@ fn assign_fonts_internal(
       let mut skip_resolution = cached_cluster.is_some() && resolved.is_none();
 
       if !skip_resolution && resolved.is_none() && cluster_char_count == 1 {
-        let char_cache_key = font_cache.map(|_| FontResolverCacheKey {
+        let char_cache_key = descriptor.map(|descriptor| GlyphFallbackCacheKey {
+          descriptor,
           ch: base_char,
-          style_hash,
-          font_generation,
-          emoji_pref,
         });
         if let (Some(cache), Some(key)) = (font_cache, char_cache_key.as_ref()) {
-          let cached = cache.get(key);
+          let cached = cache.get_glyph(key);
           skip_resolution = cached.is_some() && cached.as_ref().is_none();
           resolved = cached.flatten();
         }
@@ -1451,7 +1506,7 @@ fn assign_fonts_internal(
           let candidate = resolve_font_for_char(
             base_char,
             &families,
-            style.font_weight.to_u16(),
+            weight_value,
             font_style,
             requested_oblique,
             font_stretch,
@@ -1459,7 +1514,7 @@ fn assign_fonts_internal(
             &mut picker,
           );
           if let (Some(cache), Some(key)) = (font_cache, char_cache_key) {
-            cache.insert(key, candidate.clone());
+            cache.insert_glyph(key, candidate.clone());
           }
           resolved = candidate;
         }
@@ -1475,7 +1530,7 @@ fn assign_fonts_internal(
           base_char,
           &coverage_chars,
           &families,
-          style.font_weight.to_u16(),
+          weight_value,
           font_style,
           requested_oblique,
           font_stretch,
@@ -1978,13 +2033,6 @@ fn font_is_emoji_font(db: &FontDatabase, id: Option<fontdb::ID>, font: &LoadedFo
   }
 
   FontDatabase::family_name_is_emoji_font(&font.family)
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum EmojiPreference {
-  PreferEmoji,
-  AvoidEmoji,
-  Neutral,
 }
 
 #[derive(Default)]
@@ -3017,7 +3065,7 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
 #[derive(Debug, Clone)]
 pub struct ShapingPipeline {
   cache: ShapingCache,
-  font_cache: FontResolverCache,
+  font_cache: FallbackCache,
 }
 
 impl Default for ShapingPipeline {
@@ -3270,81 +3318,12 @@ impl ShapingCache {
   }
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
-struct FontResolverCacheKey {
-  ch: char,
-  style_hash: u64,
-  font_generation: u64,
-  emoji_pref: EmojiPreference,
-}
-
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
-struct ClusterResolverCacheKey {
-  signature: u64,
-  style_hash: u64,
-  font_generation: u64,
-  emoji_pref: EmojiPreference,
-}
-
-#[derive(Clone, Debug)]
-struct FontResolverCache {
-  single: Arc<Mutex<LruCache<FontResolverCacheKey, Option<LoadedFont>>>>,
-  clusters: Arc<Mutex<LruCache<ClusterResolverCacheKey, Option<LoadedFont>>>>,
-}
-
-impl FontResolverCache {
-  fn new(capacity: usize) -> Self {
-    let cap = NonZeroUsize::new(capacity).unwrap_or_else(|| NonZeroUsize::new(1).unwrap());
-    Self {
-      single: Arc::new(Mutex::new(LruCache::new(cap))),
-      clusters: Arc::new(Mutex::new(LruCache::new(cap))),
-    }
-  }
-
-  fn get(&self, key: &FontResolverCacheKey) -> Option<Option<LoadedFont>> {
-    self
-      .single
-      .lock()
-      .ok()
-      .and_then(|mut cache| cache.get(key).cloned())
-  }
-
-  fn get_cluster(&self, key: &ClusterResolverCacheKey) -> Option<Option<LoadedFont>> {
-    self
-      .clusters
-      .lock()
-      .ok()
-      .and_then(|mut cache| cache.get(key).cloned())
-  }
-
-  fn insert(&self, key: FontResolverCacheKey, value: Option<LoadedFont>) {
-    if let Ok(mut cache) = self.single.lock() {
-      cache.put(key, value);
-    }
-  }
-
-  fn insert_cluster(&self, key: ClusterResolverCacheKey, value: Option<LoadedFont>) {
-    if let Ok(mut cache) = self.clusters.lock() {
-      cache.put(key, value);
-    }
-  }
-
-  fn clear(&self) {
-    if let Ok(mut cache) = self.single.lock() {
-      cache.clear();
-    }
-    if let Ok(mut cache) = self.clusters.lock() {
-      cache.clear();
-    }
-  }
-}
-
 impl ShapingPipeline {
   /// Creates a new shaping pipeline.
   pub fn new() -> Self {
     Self {
       cache: ShapingCache::new(SHAPING_CACHE_CAPACITY),
-      font_cache: FontResolverCache::new(FONT_RESOLUTION_CACHE_SIZE),
+      font_cache: FallbackCache::new(FONT_RESOLUTION_CACHE_SIZE),
     }
   }
 
@@ -3352,7 +3331,7 @@ impl ShapingPipeline {
   fn with_cache_capacity_for_test(capacity: usize) -> Self {
     Self {
       cache: ShapingCache::new(capacity),
-      font_cache: FontResolverCache::new(FONT_RESOLUTION_CACHE_SIZE),
+      font_cache: FallbackCache::new(FONT_RESOLUTION_CACHE_SIZE),
     }
   }
 
@@ -3365,6 +3344,11 @@ impl ShapingPipeline {
   #[cfg(any(test, debug_assertions))]
   fn cache_stats(&self) -> ShapingCacheStatsSnapshot {
     self.cache.stats()
+  }
+
+  #[cfg(any(test, debug_assertions))]
+  fn fallback_cache_stats(&self) -> FallbackCacheStatsSnapshot {
+    self.font_cache.stats()
   }
 
   /// Returns the number of cached shaped runs currently stored.
@@ -3420,6 +3404,7 @@ impl ShapingPipeline {
       return Ok(Vec::new());
     }
 
+    let diag_enabled = text_diagnostics_enabled();
     let diag_timer = text_diagnostics_timer();
 
     if matches!(style.font_variant, FontVariant::SmallCaps)
@@ -3449,6 +3434,8 @@ impl ShapingPipeline {
       }
       return Ok(shaped_runs);
     }
+
+    let cache_stats_before = diag_enabled.then(|| self.font_cache.stats());
 
     // Step 1: Bidi analysis
     let mut resolved_base_dir = base_direction.unwrap_or(match style.direction {
@@ -3483,14 +3470,15 @@ impl ShapingPipeline {
     let itemized_runs = split_itemized_runs_by_paragraph(itemized_runs, bidi.paragraphs());
 
     // Step 3: Font matching
+    let coverage_timer = text_diagnostics_timer();
     let font_runs = assign_fonts_internal(
       &itemized_runs,
       style,
       font_context,
       Some(&self.font_cache),
-      style_hash,
       font_generation,
     )?;
+    record_text_coverage(coverage_timer);
 
     // Step 4: Shape each run, applying vertical text-orientation when needed.
     let mut font_runs = font_runs;
@@ -3500,6 +3488,7 @@ impl ShapingPipeline {
       font_runs = apply_sideways_text_orientation(font_runs);
     }
 
+    let shape_timer = text_diagnostics_timer();
     let mut shaped_runs = Vec::with_capacity(font_runs.len());
     for run in &font_runs {
       let mut shaped = shape_font_run(run)?;
@@ -3514,9 +3503,15 @@ impl ShapingPipeline {
 
     self.cache.insert(cache_key, Arc::new(shaped_runs.clone()));
 
-    if let Some(start) = diag_timer {
+    if let Some(start) = shape_timer.or(diag_timer) {
       let glyphs: usize = shaped_runs.iter().map(|run| run.glyphs.len()).sum();
       record_text_shape(Some(start), shaped_runs.len(), glyphs);
+    }
+    if let (Some(before), Some(after)) = (
+      cache_stats_before,
+      diag_enabled.then(|| self.font_cache.stats()),
+    ) {
+      record_fallback_cache_stats_delta(before, after);
     }
 
     Ok(shaped_runs)
@@ -5029,6 +5024,48 @@ mod tests {
     )
     .expect("fallback font");
     assert_ne!(lower.family, "RangeFace");
+  }
+
+  #[test]
+  fn fallback_cache_hits_for_reused_clusters() {
+    let ctx = FontContext::new();
+    let mut style = ComputedStyle::default();
+    style.font_family = vec!["sans-serif".to_string()];
+    style.font_size = 16.0;
+
+    let pipeline = ShapingPipeline::with_cache_capacity_for_test(1);
+
+    let before = pipeline.fallback_cache_stats();
+    let first = match pipeline.shape("cache me please", &style, &ctx) {
+      Ok(runs) => runs,
+      Err(_) => return,
+    };
+    if first.is_empty() {
+      return;
+    }
+    let mid = pipeline.fallback_cache_stats();
+
+    let second = match pipeline.shape("please cache me again", &style, &ctx) {
+      Ok(runs) => runs,
+      Err(_) => return,
+    };
+    if second.is_empty() {
+      return;
+    }
+    let after = pipeline.fallback_cache_stats();
+
+    let miss_delta = (mid.glyph_misses + mid.cluster_misses)
+      .saturating_sub(before.glyph_misses + before.cluster_misses);
+    let hit_delta =
+      (after.glyph_hits + after.cluster_hits).saturating_sub(mid.glyph_hits + mid.cluster_hits);
+    assert!(
+      miss_delta > 0,
+      "first shaping should populate fallback cache"
+    );
+    assert!(
+      hit_delta > 0,
+      "subsequent shaping should reuse fallback cache (hits {hit_delta}, misses {miss_delta})"
+    );
   }
 
   #[cfg(debug_assertions)]

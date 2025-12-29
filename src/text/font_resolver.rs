@@ -5,6 +5,7 @@ use crate::text::font_db::FontStretch as DbFontStretch;
 use crate::text::font_db::FontStyle;
 use crate::text::font_db::GenericFamily;
 use crate::text::font_db::LoadedFont;
+use crate::text::font_fallback::EmojiPreference;
 use crate::text::font_fallback::FamilyEntry;
 use fontdb::Family;
 use fontdb::ID;
@@ -144,13 +145,6 @@ pub(crate) fn font_is_emoji_font(db: &FontDatabase, id: Option<ID>, font: &Loade
   }
 
   FontDatabase::family_name_is_emoji_font(&font.family)
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum EmojiPreference {
-  PreferEmoji,
-  AvoidEmoji,
-  Neutral,
 }
 
 #[derive(Default)]

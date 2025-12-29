@@ -45,9 +45,15 @@ use super::font_db::FontStretch;
 use super::font_db::FontStyle;
 use super::font_db::FontWeight;
 use super::font_db::GenericFamily;
+use super::font_db::LoadedFont;
 use fontdb::Family;
 use fontdb::Query;
 use fontdb::ID;
+use lru::LruCache;
+use std::hash::Hasher;
+use std::num::NonZeroUsize;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 /// Unique identifier for a font face in the database.
 ///
@@ -77,6 +83,247 @@ pub enum FamilyEntry {
   Named(String),
   /// A generic font family (e.g., sans-serif, monospace).
   Generic(GenericFamily),
+}
+
+/// Preference for selecting emoji vs. text fonts for a cluster.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum EmojiPreference {
+  PreferEmoji,
+  AvoidEmoji,
+  Neutral,
+}
+
+fn hash_case_folded<H: Hasher>(mut hasher: H, name: &str) -> u64 {
+  use std::hash::Hash;
+
+  for ch in name.chars() {
+    match ch {
+      // Unicode case folding special-cases
+      '\u{00df}' | '\u{1e9e}' => {
+        's'.hash(&mut hasher);
+        's'.hash(&mut hasher);
+      }
+      '\u{03c2}' => '\u{03c3}'.hash(&mut hasher), // final sigma -> sigma
+      '\u{212a}' => 'k'.hash(&mut hasher),        // Kelvin sign
+      '\u{212b}' => '\u{00e5}'.hash(&mut hasher), // Angstrom sign -> å
+      _ => {
+        for lower in ch.to_lowercase() {
+          lower.hash(&mut hasher);
+        }
+      }
+    }
+  }
+
+  hasher.finish()
+}
+
+pub(crate) fn family_name_signature(name: &str) -> u64 {
+  hash_case_folded(std::collections::hash_map::DefaultHasher::new(), name)
+}
+
+pub(crate) fn families_signature(families: &[FamilyEntry]) -> u64 {
+  use std::hash::Hash;
+  use std::hash::Hasher;
+
+  let mut hasher = std::collections::hash_map::DefaultHasher::new();
+  families.len().hash(&mut hasher);
+  for entry in families {
+    match entry {
+      FamilyEntry::Named(name) => {
+        0u8.hash(&mut hasher);
+        family_name_signature(name).hash(&mut hasher);
+      }
+      FamilyEntry::Generic(generic) => {
+        1u8.hash(&mut hasher);
+        std::mem::discriminant(generic).hash(&mut hasher);
+      }
+    }
+  }
+  hasher.finish()
+}
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub(crate) struct FallbackCacheDescriptor {
+  pub families: u64,
+  pub weight: u16,
+  pub style: FontStyle,
+  pub stretch: FontStretch,
+  pub oblique_degrees: i16,
+  pub emoji_pref: EmojiPreference,
+  pub require_base: bool,
+}
+
+impl FallbackCacheDescriptor {
+  pub(crate) fn new(
+    families: u64,
+    weight: u16,
+    style: FontStyle,
+    stretch: FontStretch,
+    oblique_degrees: i16,
+    emoji_pref: EmojiPreference,
+    require_base: bool,
+  ) -> Self {
+    Self {
+      families,
+      weight,
+      style,
+      stretch,
+      oblique_degrees,
+      emoji_pref,
+      require_base,
+    }
+  }
+}
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub(crate) struct GlyphFallbackCacheKey {
+  pub descriptor: FallbackCacheDescriptor,
+  pub ch: char,
+}
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub(crate) struct ClusterFallbackCacheKey {
+  pub descriptor: FallbackCacheDescriptor,
+  pub signature: u64,
+}
+
+#[derive(Default, Debug)]
+struct FallbackCacheStats {
+  glyph_hits: AtomicU64,
+  glyph_misses: AtomicU64,
+  cluster_hits: AtomicU64,
+  cluster_misses: AtomicU64,
+  clears: AtomicU64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct FallbackCacheStatsSnapshot {
+  pub glyph_hits: u64,
+  pub glyph_misses: u64,
+  pub cluster_hits: u64,
+  pub cluster_misses: u64,
+  pub clears: u64,
+}
+
+impl FallbackCacheStats {
+  fn snapshot(&self) -> FallbackCacheStatsSnapshot {
+    FallbackCacheStatsSnapshot {
+      glyph_hits: self.glyph_hits.load(Ordering::Relaxed),
+      glyph_misses: self.glyph_misses.load(Ordering::Relaxed),
+      cluster_hits: self.cluster_hits.load(Ordering::Relaxed),
+      cluster_misses: self.cluster_misses.load(Ordering::Relaxed),
+      clears: self.clears.load(Ordering::Relaxed),
+    }
+  }
+
+  fn record_glyph(&self, hit: bool) {
+    if hit {
+      self.glyph_hits.fetch_add(1, Ordering::Relaxed);
+    } else {
+      self.glyph_misses.fetch_add(1, Ordering::Relaxed);
+    }
+  }
+
+  fn record_cluster(&self, hit: bool) {
+    if hit {
+      self.cluster_hits.fetch_add(1, Ordering::Relaxed);
+    } else {
+      self.cluster_misses.fetch_add(1, Ordering::Relaxed);
+    }
+  }
+}
+
+#[derive(Debug)]
+pub(crate) struct FallbackCache {
+  glyphs: Arc<Mutex<LruCache<GlyphFallbackCacheKey, Option<LoadedFont>>>>,
+  clusters: Arc<Mutex<LruCache<ClusterFallbackCacheKey, Option<LoadedFont>>>>,
+  last_generation: AtomicU64,
+  stats: Arc<FallbackCacheStats>,
+}
+
+impl Clone for FallbackCache {
+  fn clone(&self) -> Self {
+    Self {
+      glyphs: Arc::clone(&self.glyphs),
+      clusters: Arc::clone(&self.clusters),
+      last_generation: AtomicU64::new(self.last_generation.load(Ordering::Relaxed)),
+      stats: Arc::clone(&self.stats),
+    }
+  }
+}
+
+impl FallbackCache {
+  pub(crate) fn new(capacity: usize) -> Self {
+    let cap = NonZeroUsize::new(capacity.max(1)).unwrap();
+    Self {
+      glyphs: Arc::new(Mutex::new(LruCache::new(cap))),
+      clusters: Arc::new(Mutex::new(LruCache::new(cap))),
+      last_generation: AtomicU64::new(0),
+      stats: Arc::new(FallbackCacheStats::default()),
+    }
+  }
+
+  pub(crate) fn prepare(&self, generation: u64) {
+    let previous = self.last_generation.load(Ordering::Acquire);
+    if previous == generation {
+      return;
+    }
+
+    if let Ok(mut cache) = self.glyphs.lock() {
+      cache.clear();
+    }
+    if let Ok(mut cache) = self.clusters.lock() {
+      cache.clear();
+    }
+    self.last_generation.store(generation, Ordering::Release);
+    self.stats.clears.fetch_add(1, Ordering::Relaxed);
+  }
+
+  pub(crate) fn get_glyph(&self, key: &GlyphFallbackCacheKey) -> Option<Option<LoadedFont>> {
+    let result = self
+      .glyphs
+      .lock()
+      .ok()
+      .and_then(|mut cache| cache.get(key).cloned());
+    self.stats.record_glyph(result.is_some());
+    result
+  }
+
+  pub(crate) fn get_cluster(&self, key: &ClusterFallbackCacheKey) -> Option<Option<LoadedFont>> {
+    let result = self
+      .clusters
+      .lock()
+      .ok()
+      .and_then(|mut cache| cache.get(key).cloned());
+    self.stats.record_cluster(result.is_some());
+    result
+  }
+
+  pub(crate) fn insert_glyph(&self, key: GlyphFallbackCacheKey, value: Option<LoadedFont>) {
+    if let Ok(mut cache) = self.glyphs.lock() {
+      cache.put(key, value);
+    }
+  }
+
+  pub(crate) fn insert_cluster(&self, key: ClusterFallbackCacheKey, value: Option<LoadedFont>) {
+    if let Ok(mut cache) = self.clusters.lock() {
+      cache.put(key, value);
+    }
+  }
+
+  pub(crate) fn clear(&self) {
+    if let Ok(mut cache) = self.glyphs.lock() {
+      cache.clear();
+    }
+    if let Ok(mut cache) = self.clusters.lock() {
+      cache.clear();
+    }
+    self.stats.clears.fetch_add(1, Ordering::Relaxed);
+  }
+
+  pub(crate) fn stats(&self) -> FallbackCacheStatsSnapshot {
+    self.stats.snapshot()
+  }
 }
 
 impl FamilyEntry {
