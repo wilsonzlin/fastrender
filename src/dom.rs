@@ -739,7 +739,10 @@ fn convert_handle_to_node(handle: &Handle) -> Option<DomNode> {
         .map(|attr| (attr.name.local.to_string(), attr.value.to_string()))
         .collect();
 
-      if tag_name.eq_ignore_ascii_case("slot") {
+      let is_html_slot = tag_name.eq_ignore_ascii_case("slot")
+        && (namespace.is_empty() || namespace == HTML_NAMESPACE);
+
+      if is_html_slot {
         DomNodeType::Slot {
           namespace,
           attributes,
@@ -3233,6 +3236,24 @@ mod tests {
         );
       }
       _ => panic!("expected shadow root child"),
+    }
+  }
+
+  #[test]
+  fn slot_in_svg_is_treated_as_element() {
+    let dom = parse_html("<svg><slot id=\"s\"></slot></svg>").expect("parse html");
+
+    let slot = find_element_by_id(&dom, "s").expect("slot element");
+    match &slot.node_type {
+      DomNodeType::Element {
+        namespace,
+        tag_name,
+        ..
+      } => {
+        assert_eq!(namespace, SVG_NAMESPACE, "should retain SVG namespace");
+        assert!(tag_name.eq_ignore_ascii_case("slot"));
+      }
+      other => panic!("expected element node, got {:?}", other),
     }
   }
 
