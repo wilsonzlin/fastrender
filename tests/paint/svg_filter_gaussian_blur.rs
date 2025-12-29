@@ -95,7 +95,7 @@ fn gaussian_blur_resolves_single_value_per_axis_in_object_bbox_units() {
   let opaque = PremultipliedColorU8::from_rgba(255, 255, 255, 255).expect("color");
   draw_rect(&mut pixmap, 45, 20, 10, 10, opaque);
 
-  let filter = SvgFilter {
+  let mut filter = SvgFilter {
     color_interpolation_filters: ColorInterpolationFilters::SRGB,
     steps: vec![FilterStep {
       result: None,
@@ -115,8 +115,8 @@ fn gaussian_blur_resolves_single_value_per_axis_in_object_bbox_units() {
     },
     filter_res: None,
     primitive_units: SvgFilterUnits::ObjectBoundingBox,
+    fingerprint: 0,
   };
-
   apply_svg_filter(&filter, &mut pixmap, 1.0, bbox);
 
   let bounds = opaque_bounds(&pixmap).expect("blurred content should be visible");

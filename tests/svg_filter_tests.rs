@@ -12,7 +12,7 @@ fn pixel(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
 }
 
 fn base_filter(steps: Vec<FilterStep>) -> SvgFilter {
-  SvgFilter {
+  let mut filter = SvgFilter {
     color_interpolation_filters: ColorInterpolationFilters::LinearRGB,
     steps,
     region: SvgFilterRegion {
@@ -24,7 +24,9 @@ fn base_filter(steps: Vec<FilterStep>) -> SvgFilter {
     },
     filter_res: None,
     primitive_units: SvgFilterUnits::UserSpaceOnUse,
-  }
+    fingerprint: 0,
+  };
+  filter
 }
 
 #[test]

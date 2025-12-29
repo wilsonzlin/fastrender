@@ -214,7 +214,7 @@ mod tests {
 
   #[test]
   fn svg_filter_region_expands_outset() {
-    let filter = SvgFilter {
+    let mut filter = SvgFilter {
       color_interpolation_filters: ColorInterpolationFilters::LinearRGB,
       steps: Vec::new(),
       region: SvgFilterRegion {
@@ -226,7 +226,9 @@ mod tests {
       },
       filter_res: None,
       primitive_units: SvgFilterUnits::ObjectBoundingBox,
+      fingerprint: 0,
     };
+    filter.refresh_fingerprint();
     let filters = vec![ResolvedFilter::SvgFilter(Arc::new(filter))];
     let bbox = Rect::from_xywh(10.0, 20.0, 100.0, 50.0);
     let (l, t, r, b) = compute_filter_outset(&filters, bbox, 1.0);

@@ -1,6 +1,8 @@
 use crate::geometry::{Point, Rect};
 use crate::image_loader::ImageCache;
-use crate::paint::blur::{alpha_bounds, apply_gaussian_blur_anisotropic};
+use crate::paint::blur::pixel_fingerprint;
+use crate::paint::blur::{alpha_bounds, apply_gaussian_blur_cached, BlurCache};
+use crate::paint::painter::with_paint_diagnostics;
 use crate::render_control::{active_deadline, with_deadline};
 use crate::style::color;
 use crate::tree::box_tree::ReplacedType;
@@ -9,8 +11,11 @@ use crate::Rgba;
 use lru::LruCache;
 use rayon::prelude::*;
 use roxmltree::Document;
+use std::cell::Cell;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::env;
+use std::hash::{BuildHasherDefault, Hash, Hasher};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
@@ -20,8 +25,10 @@ mod turbulence;
 
 const DEFAULT_FILTER_CACHE_ITEMS: usize = 256;
 const DEFAULT_FILTER_CACHE_BYTES: usize = 4 * 1024 * 1024;
-const ENV_FILTER_CACHE_ITEMS: &str = "FASTR_SVG_FILTER_CACHE_ITEMS";
-const ENV_FILTER_CACHE_BYTES: &str = "FASTR_SVG_FILTER_CACHE_BYTES";
+pub(crate) const ENV_FILTER_CACHE_ITEMS: &str = "FASTR_SVG_FILTER_CACHE_ITEMS";
+pub(crate) const ENV_FILTER_CACHE_BYTES: &str = "FASTR_SVG_FILTER_CACHE_BYTES";
+
+type FilterHasher = BuildHasherDefault<DefaultHasher>;
 
 const MAX_FILTER_RES: u32 = 4096;
 const MAX_TURBULENCE_OCTAVES: u32 = 8;
@@ -33,13 +40,13 @@ fn filter_cache() -> &'static Mutex<FilterCache> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct FilterCacheConfig {
-  max_items: usize,
-  max_bytes: usize,
+pub(crate) struct FilterCacheConfig {
+  pub(crate) max_items: usize,
+  pub(crate) max_bytes: usize,
 }
 
 impl FilterCacheConfig {
-  fn from_env() -> Self {
+  pub(crate) fn from_env() -> Self {
     Self {
       max_items: env_usize(ENV_FILTER_CACHE_ITEMS).unwrap_or(DEFAULT_FILTER_CACHE_ITEMS),
       max_bytes: env_usize(ENV_FILTER_CACHE_BYTES).unwrap_or(DEFAULT_FILTER_CACHE_BYTES),
@@ -47,7 +54,7 @@ impl FilterCacheConfig {
   }
 }
 
-fn env_usize(name: &str) -> Option<usize> {
+pub(crate) fn env_usize(name: &str) -> Option<usize> {
   env::var(name).ok()?.parse::<usize>().ok()
 }
 
@@ -57,7 +64,7 @@ struct CachedFilter {
 }
 
 struct FilterCache {
-  lru: LruCache<String, CachedFilter>,
+  lru: LruCache<String, CachedFilter, FilterHasher>,
   current_bytes: usize,
   config: FilterCacheConfig,
 }
@@ -65,7 +72,7 @@ struct FilterCache {
 impl FilterCache {
   fn new(config: FilterCacheConfig) -> Self {
     Self {
-      lru: LruCache::unbounded(),
+      lru: LruCache::unbounded_with_hasher(FilterHasher::default()),
       current_bytes: 0,
       config,
     }
@@ -122,6 +129,179 @@ fn filter_cache_len() -> usize {
   filter_cache().lock().unwrap().len()
 }
 
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct SvgFilterCacheKey {
+  filter_hash: u64,
+  source_hash: u64,
+  scale_x_bits: u32,
+  scale_y_bits: u32,
+  width: u32,
+  height: u32,
+  bbox: [u32; 4],
+}
+
+impl SvgFilterCacheKey {
+  fn new(
+    filter: &SvgFilter,
+    pixmap: &Pixmap,
+    scale_x: f32,
+    scale_y: f32,
+    bbox: Rect,
+  ) -> Option<Self> {
+    if pixmap.width() == 0 || pixmap.height() == 0 {
+      return None;
+    }
+    Some(Self {
+      filter_hash: svg_filter_fingerprint(filter),
+      source_hash: pixel_fingerprint(pixmap.data()),
+      scale_x_bits: scale_x.to_bits(),
+      scale_y_bits: scale_y.to_bits(),
+      width: pixmap.width(),
+      height: pixmap.height(),
+      bbox: [
+        bbox.x().to_bits(),
+        bbox.y().to_bits(),
+        bbox.width().to_bits(),
+        bbox.height().to_bits(),
+      ],
+    })
+  }
+}
+
+struct CachedResult {
+  pixmap: Pixmap,
+  weight: usize,
+}
+
+struct FilterResultCache {
+  lru: LruCache<SvgFilterCacheKey, CachedResult, FilterHasher>,
+  current_bytes: usize,
+  config: FilterCacheConfig,
+}
+
+impl FilterResultCache {
+  fn new(config: FilterCacheConfig) -> Self {
+    Self {
+      lru: LruCache::unbounded_with_hasher(FilterHasher::default()),
+      current_bytes: 0,
+      config,
+    }
+  }
+
+  fn get(&mut self, key: &SvgFilterCacheKey) -> Option<Pixmap> {
+    let hit = self.lru.get(key).map(|entry| entry.pixmap.clone());
+    if hit.is_some() {
+      record_filter_cache_hit();
+    } else {
+      record_filter_cache_miss();
+    }
+    hit
+  }
+
+  fn insert(&mut self, key: SvgFilterCacheKey, pixmap: &Pixmap) {
+    if self.config.max_items == 0 {
+      return;
+    }
+    let weight = pixmap.data().len();
+    if self.config.max_bytes > 0 && weight > self.config.max_bytes {
+      return;
+    }
+
+    if let Some(existing) = self.lru.peek(&key) {
+      self.current_bytes = self.current_bytes.saturating_sub(existing.weight);
+    }
+
+    self.current_bytes = self.current_bytes.saturating_add(weight);
+    self.lru.put(
+      key,
+      CachedResult {
+        pixmap: pixmap.clone(),
+        weight,
+      },
+    );
+    self.evict();
+  }
+
+  fn evict(&mut self) {
+    while (self.config.max_items > 0 && self.lru.len() > self.config.max_items)
+      || (self.config.max_bytes > 0 && self.current_bytes > self.config.max_bytes)
+    {
+      if let Some((_key, entry)) = self.lru.pop_lru() {
+        self.current_bytes = self.current_bytes.saturating_sub(entry.weight);
+      } else {
+        break;
+      }
+    }
+  }
+}
+
+fn filter_result_cache() -> &'static Mutex<FilterResultCache> {
+  static CACHE: OnceLock<Mutex<FilterResultCache>> = OnceLock::new();
+  CACHE.get_or_init(|| Mutex::new(FilterResultCache::new(FilterCacheConfig::from_env())))
+}
+
+static SVG_BLUR_CACHE: OnceLock<Mutex<BlurCache>> = OnceLock::new();
+
+fn svg_blur_cache() -> &'static Mutex<BlurCache> {
+  SVG_BLUR_CACHE.get_or_init(|| Mutex::new(BlurCache::new(FilterCacheConfig::from_env())))
+}
+
+thread_local! {
+  static SVG_FILTER_DEPTH: Cell<usize> = Cell::new(0);
+}
+
+struct DepthGuard {
+  cell: &'static Cell<usize>,
+}
+
+impl DepthGuard {
+  fn new(cell: &'static Cell<usize>) -> Self {
+    let depth = cell.get().saturating_add(1);
+    cell.set(depth);
+    debug_assert!(
+      depth < 128,
+      "svg filter recursion depth unexpectedly high: {depth}"
+    );
+    Self { cell }
+  }
+}
+
+impl Drop for DepthGuard {
+  fn drop(&mut self) {
+    let depth = self.cell.get();
+    self.cell.set(depth.saturating_sub(1));
+  }
+}
+
+fn svg_filter_depth_guard() -> DepthGuard {
+  SVG_FILTER_DEPTH.with(|cell| {
+    // SAFETY: thread local Cell lives for the duration of the thread.
+    let static_cell: &'static Cell<usize> = unsafe { std::mem::transmute(cell) };
+    DepthGuard::new(static_cell)
+  })
+}
+
+fn with_blur_cache<R, F>(cache: Option<&mut BlurCache>, f: F) -> R
+where
+  F: FnOnce(Option<&mut BlurCache>) -> R,
+{
+  if let Some(cache) = cache {
+    return f(Some(cache));
+  }
+  match svg_blur_cache().lock() {
+    Ok(mut guard) => f(Some(&mut *guard)),
+    Err(_) => f(None),
+  }
+}
+
+fn record_filter_cache_hit() {
+  with_paint_diagnostics(|diag| diag.filter_cache_hits += 1);
+}
+
+fn record_filter_cache_miss() {
+  with_paint_diagnostics(|diag| diag.filter_cache_misses += 1);
+}
+
 #[derive(Clone, Debug)]
 pub struct SvgFilter {
   pub color_interpolation_filters: ColorInterpolationFilters,
@@ -129,6 +309,7 @@ pub struct SvgFilter {
   pub region: SvgFilterRegion,
   pub filter_res: Option<(u32, u32)>,
   pub primitive_units: SvgFilterUnits,
+  pub fingerprint: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -554,6 +735,461 @@ pub enum TransferFn {
   },
 }
 
+fn hash_f32(value: f32, state: &mut impl Hasher) {
+  state.write_u32(value.to_bits());
+}
+
+fn hash_length(len: &SvgLength, state: &mut impl Hasher) {
+  match len {
+    SvgLength::Number(v) => {
+      state.write_u8(0);
+      hash_f32(*v, state);
+    }
+    SvgLength::Percent(v) => {
+      state.write_u8(1);
+      hash_f32(*v, state);
+    }
+  }
+}
+
+fn hash_region(region: &SvgFilterRegion, state: &mut impl Hasher) {
+  hash_length(&region.x, state);
+  hash_length(&region.y, state);
+  hash_length(&region.width, state);
+  hash_length(&region.height, state);
+  match region.units {
+    SvgFilterUnits::ObjectBoundingBox => state.write_u8(0),
+    SvgFilterUnits::UserSpaceOnUse => state.write_u8(1),
+  }
+}
+
+fn hash_filter_input(input: &FilterInput, state: &mut impl Hasher) {
+  match input {
+    FilterInput::SourceGraphic => state.write_u8(0),
+    FilterInput::SourceAlpha => state.write_u8(1),
+    FilterInput::BackgroundImage => state.write_u8(2),
+    FilterInput::BackgroundAlpha => state.write_u8(3),
+    FilterInput::FillPaint => state.write_u8(4),
+    FilterInput::StrokePaint => state.write_u8(5),
+    FilterInput::Reference(name) => {
+      state.write_u8(6);
+      name.hash(state);
+    }
+    FilterInput::Previous => state.write_u8(7),
+  }
+}
+
+fn hash_color_matrix(kind: &ColorMatrixKind, state: &mut impl Hasher) {
+  match kind {
+    ColorMatrixKind::Matrix(values) => {
+      state.write_u8(0);
+      for v in values {
+        hash_f32(*v, state);
+      }
+    }
+    ColorMatrixKind::Saturate(v) => {
+      state.write_u8(1);
+      hash_f32(*v, state);
+    }
+    ColorMatrixKind::HueRotate(v) => {
+      state.write_u8(2);
+      hash_f32(*v, state);
+    }
+    ColorMatrixKind::LuminanceToAlpha => state.write_u8(3),
+  }
+}
+
+fn hash_transfer_fn(tf: &TransferFn, state: &mut impl Hasher) {
+  match tf {
+    TransferFn::Identity => state.write_u8(0),
+    TransferFn::Linear { slope, intercept } => {
+      state.write_u8(1);
+      hash_f32(*slope, state);
+      hash_f32(*intercept, state);
+    }
+    TransferFn::Gamma {
+      amplitude,
+      exponent,
+      offset,
+    } => {
+      state.write_u8(2);
+      hash_f32(*amplitude, state);
+      hash_f32(*exponent, state);
+      hash_f32(*offset, state);
+    }
+    TransferFn::Table { values } => {
+      state.write_u8(3);
+      state.write_usize(values.len());
+      for v in values {
+        hash_f32(*v, state);
+      }
+    }
+    TransferFn::Discrete { values } => {
+      state.write_u8(4);
+      state.write_usize(values.len());
+      for v in values {
+        hash_f32(*v, state);
+      }
+    }
+  }
+}
+
+fn hash_light(light: &LightSource, state: &mut impl Hasher) {
+  match light {
+    LightSource::None => state.write_u8(0),
+    LightSource::Distant { azimuth, elevation } => {
+      state.write_u8(1);
+      hash_f32(*azimuth, state);
+      hash_f32(*elevation, state);
+    }
+    LightSource::Point { x, y, z } => {
+      state.write_u8(2);
+      hash_length(x, state);
+      hash_length(y, state);
+      hash_length(z, state);
+    }
+    LightSource::Spot {
+      x,
+      y,
+      z,
+      points_at,
+      specular_exponent,
+      limiting_cone_angle,
+    } => {
+      state.write_u8(3);
+      hash_length(x, state);
+      hash_length(y, state);
+      hash_length(z, state);
+      hash_length(&points_at.0, state);
+      hash_length(&points_at.1, state);
+      hash_length(&points_at.2, state);
+      hash_f32(*specular_exponent, state);
+      if let Some(angle) = limiting_cone_angle {
+        state.write_u8(1);
+        hash_f32(*angle, state);
+      } else {
+        state.write_u8(0);
+      }
+    }
+  }
+}
+
+fn hash_color(color: &Rgba, state: &mut impl Hasher) {
+  state.write_u8(color.r);
+  state.write_u8(color.g);
+  state.write_u8(color.b);
+  hash_f32(color.a, state);
+}
+
+fn hash_image_primitive(prim: &ImagePrimitive, state: &mut impl Hasher) {
+  state.write_u32(prim.pixmap.width());
+  state.write_u32(prim.pixmap.height());
+  state.write_u64(pixel_fingerprint(prim.pixmap.data()));
+  hash_length(&prim.x, state);
+  hash_length(&prim.y, state);
+  hash_length(&prim.width, state);
+  hash_length(&prim.height, state);
+  match prim.preserve_aspect_ratio {
+    PreserveAspectRatio::None => state.write_u8(0),
+    PreserveAspectRatio::XMidYMidMeet => state.write_u8(1),
+  }
+  match prim.units {
+    SvgCoordinateUnits::ObjectBoundingBox => state.write_u8(0),
+    SvgCoordinateUnits::UserSpaceOnUse => state.write_u8(1),
+  }
+}
+
+fn hash_filter_primitive(prim: &FilterPrimitive, state: &mut impl Hasher) {
+  match prim {
+    FilterPrimitive::Flood { color, opacity } => {
+      state.write_u8(0);
+      hash_color(color, state);
+      hash_f32(*opacity, state);
+    }
+    FilterPrimitive::GaussianBlur { input, std_dev } => {
+      state.write_u8(1);
+      hash_filter_input(input, state);
+      hash_f32(std_dev.0, state);
+      hash_f32(std_dev.1, state);
+    }
+    FilterPrimitive::Offset { input, dx, dy } => {
+      state.write_u8(2);
+      hash_filter_input(input, state);
+      hash_f32(*dx, state);
+      hash_f32(*dy, state);
+    }
+    FilterPrimitive::ColorMatrix { input, kind } => {
+      state.write_u8(3);
+      hash_filter_input(input, state);
+      hash_color_matrix(kind, state);
+    }
+    FilterPrimitive::Composite {
+      input1,
+      input2,
+      operator,
+    } => {
+      state.write_u8(4);
+      hash_filter_input(input1, state);
+      hash_filter_input(input2, state);
+      match operator {
+        CompositeOperator::Over => state.write_u8(0),
+        CompositeOperator::In => state.write_u8(1),
+        CompositeOperator::Out => state.write_u8(2),
+        CompositeOperator::Atop => state.write_u8(3),
+        CompositeOperator::Xor => state.write_u8(4),
+        CompositeOperator::Arithmetic { k1, k2, k3, k4 } => {
+          state.write_u8(5);
+          hash_f32(*k1, state);
+          hash_f32(*k2, state);
+          hash_f32(*k3, state);
+          hash_f32(*k4, state);
+        }
+      }
+    }
+    FilterPrimitive::Merge { inputs } => {
+      state.write_u8(5);
+      state.write_usize(inputs.len());
+      for input in inputs {
+        hash_filter_input(input, state);
+      }
+    }
+    FilterPrimitive::DropShadow {
+      input,
+      dx,
+      dy,
+      std_dev,
+      color,
+      opacity,
+    } => {
+      state.write_u8(6);
+      hash_filter_input(input, state);
+      hash_f32(*dx, state);
+      hash_f32(*dy, state);
+      hash_f32(std_dev.0, state);
+      hash_f32(std_dev.1, state);
+      hash_color(color, state);
+      hash_f32(*opacity, state);
+    }
+    FilterPrimitive::Blend {
+      input1,
+      input2,
+      mode,
+    } => {
+      state.write_u8(7);
+      hash_filter_input(input1, state);
+      hash_filter_input(input2, state);
+      std::mem::discriminant(mode).hash(state);
+    }
+    FilterPrimitive::Morphology { input, radius, op } => {
+      state.write_u8(8);
+      hash_filter_input(input, state);
+      hash_f32(radius.0, state);
+      hash_f32(radius.1, state);
+      match op {
+        MorphologyOp::Dilate => state.write_u8(0),
+        MorphologyOp::Erode => state.write_u8(1),
+      }
+    }
+    FilterPrimitive::ComponentTransfer { input, r, g, b, a } => {
+      state.write_u8(9);
+      hash_filter_input(input, state);
+      hash_transfer_fn(r, state);
+      hash_transfer_fn(g, state);
+      hash_transfer_fn(b, state);
+      hash_transfer_fn(a, state);
+    }
+    FilterPrimitive::DiffuseLighting {
+      input,
+      surface_scale,
+      diffuse_constant,
+      kernel_unit_length,
+      light,
+      lighting_color,
+    } => {
+      state.write_u8(10);
+      hash_filter_input(input, state);
+      hash_f32(*surface_scale, state);
+      hash_f32(*diffuse_constant, state);
+      if let Some((x, y)) = kernel_unit_length {
+        state.write_u8(1);
+        hash_f32(*x, state);
+        hash_f32(*y, state);
+      } else {
+        state.write_u8(0);
+      }
+      hash_light(light, state);
+      hash_color(lighting_color, state);
+    }
+    FilterPrimitive::SpecularLighting {
+      input,
+      surface_scale,
+      specular_constant,
+      specular_exponent,
+      kernel_unit_length,
+      light,
+      lighting_color,
+    } => {
+      state.write_u8(11);
+      hash_filter_input(input, state);
+      hash_f32(*surface_scale, state);
+      hash_f32(*specular_constant, state);
+      hash_f32(*specular_exponent, state);
+      if let Some((x, y)) = kernel_unit_length {
+        state.write_u8(1);
+        hash_f32(*x, state);
+        hash_f32(*y, state);
+      } else {
+        state.write_u8(0);
+      }
+      hash_light(light, state);
+      hash_color(lighting_color, state);
+    }
+    FilterPrimitive::Image(prim) => {
+      state.write_u8(12);
+      hash_image_primitive(prim, state);
+    }
+    FilterPrimitive::Tile { input } => {
+      state.write_u8(13);
+      hash_filter_input(input, state);
+    }
+    FilterPrimitive::Turbulence {
+      base_frequency,
+      seed,
+      octaves,
+      stitch_tiles,
+      kind,
+    } => {
+      state.write_u8(14);
+      hash_f32(base_frequency.0, state);
+      hash_f32(base_frequency.1, state);
+      state.write_u32(*seed);
+      state.write_u32(*octaves);
+      state.write_u8(*stitch_tiles as u8);
+      match kind {
+        TurbulenceType::FractalNoise => state.write_u8(0),
+        TurbulenceType::Turbulence => state.write_u8(1),
+      }
+    }
+    FilterPrimitive::DisplacementMap {
+      in1,
+      in2,
+      scale,
+      x_channel,
+      y_channel,
+    } => {
+      state.write_u8(15);
+      hash_filter_input(in1, state);
+      hash_filter_input(in2, state);
+      hash_f32(*scale, state);
+      match x_channel {
+        ChannelSelector::R => state.write_u8(0),
+        ChannelSelector::G => state.write_u8(1),
+        ChannelSelector::B => state.write_u8(2),
+        ChannelSelector::A => state.write_u8(3),
+      }
+      match y_channel {
+        ChannelSelector::R => state.write_u8(4),
+        ChannelSelector::G => state.write_u8(5),
+        ChannelSelector::B => state.write_u8(6),
+        ChannelSelector::A => state.write_u8(7),
+      }
+    }
+    FilterPrimitive::ConvolveMatrix {
+      input,
+      order_x,
+      order_y,
+      kernel,
+      divisor,
+      bias,
+      target_x,
+      target_y,
+      edge_mode,
+      preserve_alpha,
+      subregion,
+    } => {
+      state.write_u8(16);
+      hash_filter_input(input, state);
+      state.write_usize(*order_x);
+      state.write_usize(*order_y);
+      state.write_usize(kernel.len());
+      for k in kernel {
+        hash_f32(*k, state);
+      }
+      if let Some(div) = divisor {
+        state.write_u8(1);
+        hash_f32(*div, state);
+      } else {
+        state.write_u8(0);
+      }
+      hash_f32(*bias, state);
+      state.write(&target_x.to_le_bytes());
+      state.write(&target_y.to_le_bytes());
+      match edge_mode {
+        EdgeMode::Duplicate => state.write_u8(0),
+        EdgeMode::Wrap => state.write_u8(1),
+        EdgeMode::None => state.write_u8(2),
+      }
+      state.write_u8(*preserve_alpha as u8);
+      if let Some((x, y, w, h)) = subregion {
+        state.write_u8(1);
+        hash_f32(*x, state);
+        hash_f32(*y, state);
+        hash_f32(*w, state);
+        hash_f32(*h, state);
+      } else {
+        state.write_u8(0);
+      }
+    }
+  }
+}
+
+fn svg_filter_fingerprint(filter: &SvgFilter) -> u64 {
+  let mut hasher = DefaultHasher::default();
+  match filter.color_interpolation_filters {
+    ColorInterpolationFilters::LinearRGB => hasher.write_u8(0),
+    ColorInterpolationFilters::SRGB => hasher.write_u8(1),
+  }
+  hash_region(&filter.region, &mut hasher);
+  if let Some((x, y)) = filter.filter_res {
+    hasher.write_u8(1);
+    hasher.write_u32(x);
+    hasher.write_u32(y);
+  } else {
+    hasher.write_u8(0);
+  }
+  match filter.primitive_units {
+    SvgFilterUnits::ObjectBoundingBox => hasher.write_u8(0),
+    SvgFilterUnits::UserSpaceOnUse => hasher.write_u8(1),
+  }
+  hasher.write_usize(filter.steps.len());
+  for step in &filter.steps {
+    if let Some(result) = &step.result {
+      hasher.write_u8(1);
+      result.hash(&mut hasher);
+    } else {
+      hasher.write_u8(0);
+    }
+    if let Some(c) = &step.color_interpolation_filters {
+      hasher.write_u8(1);
+      match c {
+        ColorInterpolationFilters::LinearRGB => hasher.write_u8(0),
+        ColorInterpolationFilters::SRGB => hasher.write_u8(1),
+      }
+    } else {
+      hasher.write_u8(0);
+    }
+    if let Some(region) = &step.region {
+      hasher.write_u8(1);
+      hash_region(region, &mut hasher);
+    } else {
+      hasher.write_u8(0);
+    }
+    hash_filter_primitive(&step.primitive, &mut hasher);
+  }
+
+  hasher.finish()
+}
+
 #[derive(Clone, Copy, Debug)]
 struct UnpremultipliedColor {
   r: f32,
@@ -862,18 +1498,25 @@ fn parse_filter_node(node: &roxmltree::Node, image_cache: &ImageCache) -> Option
     return None;
   }
 
-  Some(Arc::new(SvgFilter {
+  let mut filter = SvgFilter {
     color_interpolation_filters: filter_color_interpolation_filters,
     steps,
     region,
     filter_res,
     primitive_units,
-  }))
+    fingerprint: 0,
+  };
+  filter.fingerprint = svg_filter_fingerprint(&filter);
+  Some(Arc::new(filter))
 }
 
 impl SvgFilter {
   pub fn resolve_region(&self, bbox: Rect) -> Rect {
     self.region.resolve(bbox)
+  }
+
+  pub(crate) fn refresh_fingerprint(&mut self) {
+    self.fingerprint = svg_filter_fingerprint(self);
   }
 
   fn resolve_primitive_x(&self, value: f32, bbox: &Rect) -> f32 {
@@ -1692,11 +2335,23 @@ fn parse_fe_convolve_matrix(node: &roxmltree::Node) -> Option<FilterPrimitive> {
 /// `scale` should be the device pixel ratio so that numeric parameters expressed in CSS pixels
 /// (e.g. stdDeviation, dx/dy, radius) are interpreted in device pixels.
 pub fn apply_svg_filter(def: &SvgFilter, pixmap: &mut Pixmap, scale: f32, bbox: Rect) {
+  apply_svg_filter_with_cache(def, pixmap, scale, bbox, None);
+}
+
+pub(crate) fn apply_svg_filter_with_cache(
+  def: &SvgFilter,
+  pixmap: &mut Pixmap,
+  scale: f32,
+  bbox: Rect,
+  blur_cache: Option<&mut BlurCache>,
+) {
+  let _depth = svg_filter_depth_guard();
   let scale = if scale.is_finite() && scale > 0.0 {
     scale
   } else {
     1.0
   };
+  let mut blur_cache = blur_cache;
 
   let Some((_, filter_region)) = resolve_filter_regions(def, scale, scale, bbox) else {
     for px in pixmap.pixels_mut() {
@@ -1706,7 +2361,7 @@ pub fn apply_svg_filter(def: &SvgFilter, pixmap: &mut Pixmap, scale: f32, bbox: 
   };
 
   let Some((res_w, res_h)) = def.filter_res else {
-    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox);
+    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut());
     return;
   };
 
@@ -1715,16 +2370,16 @@ pub fn apply_svg_filter(def: &SvgFilter, pixmap: &mut Pixmap, scale: f32, bbox: 
   let res_w = res_w.min(MAX_FILTER_RES);
   let res_h = res_h.min(MAX_FILTER_RES);
   if target_w == 0 || target_h == 0 || res_w == 0 || res_h == 0 {
-    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox);
+    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut());
     return;
   }
   if res_w == target_w && res_h == target_h {
-    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox);
+    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut());
     return;
   }
 
   let Some(mut working_pixmap) = resize_pixmap(pixmap, res_w, res_h) else {
-    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox);
+    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut());
     return;
   };
 
@@ -1743,10 +2398,11 @@ pub fn apply_svg_filter(def: &SvgFilter, pixmap: &mut Pixmap, scale: f32, bbox: 
     scale * scale_res_x,
     scale * scale_res_y,
     bbox_working,
+    blur_cache.as_deref_mut(),
   );
 
   let Some(resized_back) = resize_pixmap(&working_pixmap, target_w, target_h) else {
-    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox);
+    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut());
     return;
   };
   *pixmap = resized_back;
@@ -1824,6 +2480,7 @@ fn apply_svg_filter_scaled(
   scale_x: f32,
   scale_y: f32,
   bbox: Rect,
+  mut blur_cache: Option<&mut BlurCache>,
 ) {
   let Some((css_bbox, filter_region)) = resolve_filter_regions(def, scale_x, scale_y, bbox) else {
     for px in pixmap.pixels_mut() {
@@ -1831,6 +2488,17 @@ fn apply_svg_filter_scaled(
     }
     return;
   };
+
+  let cache_key = SvgFilterCacheKey::new(def, pixmap, scale_x, scale_y, css_bbox);
+  if let Some(key) = cache_key.as_ref() {
+    if let Ok(mut cache) = filter_result_cache().lock() {
+      if let Some(cached) = cache.get(key) {
+        *pixmap = cached;
+        clip_to_region(pixmap, filter_region);
+        return;
+      }
+    }
+  }
 
   let default_primitive_region = SvgFilterRegion {
     x: def.region.x,
@@ -1892,6 +2560,7 @@ fn apply_svg_filter_scaled(
       scale_y,
       primitive_region,
       color_interpolation_filters,
+      blur_cache.as_deref_mut(),
     ) {
       next.region = clip_region(next.region, primitive_region);
       clip_to_region(&mut next.pixmap, primitive_region);
@@ -1904,6 +2573,12 @@ fn apply_svg_filter_scaled(
 
   *pixmap = current.pixmap;
   clip_to_region(pixmap, filter_region);
+
+  if let Some(key) = cache_key {
+    if let Ok(mut cache) = filter_result_cache().lock() {
+      cache.insert(key, pixmap);
+    }
+  }
 }
 
 fn clip_to_region(pixmap: &mut Pixmap, region: Rect) {
@@ -1957,6 +2632,7 @@ fn apply_primitive(
   scale_y: f32,
   filter_region: Rect,
   color_interpolation_filters: ColorInterpolationFilters,
+  blur_cache: Option<&mut BlurCache>,
 ) -> Option<FilterResult> {
   let scale_avg = if scale_x.is_finite() && scale_y.is_finite() {
     0.5 * (scale_x + scale_y)
@@ -1984,7 +2660,9 @@ fn apply_primitive(
         if use_linear {
           reencode_pixmap_to_linear_rgb(&mut img.pixmap);
         }
-        apply_gaussian_blur_anisotropic(&mut img.pixmap, sigma_x, sigma_y);
+        with_blur_cache(blur_cache, |cache| {
+          apply_gaussian_blur_cached(&mut img.pixmap, sigma_x, sigma_y, cache, scale_avg);
+        });
         if use_linear {
           reencode_pixmap_to_srgb(&mut img.pixmap);
         }
@@ -2042,6 +2720,8 @@ fn apply_primitive(
         *opacity,
         color_interpolation_filters,
         filter_region,
+        blur_cache,
+        scale_avg,
       )
     }),
     FilterPrimitive::Blend {
@@ -2884,6 +3564,8 @@ fn drop_shadow_pixmap(
   opacity: f32,
   color_interpolation_filters: ColorInterpolationFilters,
   filter_region: Rect,
+  blur_cache: Option<&mut BlurCache>,
+  scale: f32,
 ) -> FilterResult {
   let Some((min_x, min_y, bounds_w, bounds_h)) = alpha_bounds(&input.pixmap) else {
     return input;
@@ -2936,7 +3618,9 @@ fn drop_shadow_pixmap(
     if use_linear {
       reencode_pixmap_to_linear_rgb(&mut shadow);
     }
-    apply_gaussian_blur_anisotropic(&mut shadow, stddev.0, stddev.1);
+    with_blur_cache(blur_cache, |cache| {
+      apply_gaussian_blur_cached(&mut shadow, stddev.0, stddev.1, cache, scale);
+    });
     if use_linear {
       reencode_pixmap_to_srgb(&mut shadow);
     }
@@ -3699,6 +4383,8 @@ fn apply_color_matrix_values(
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::paint::blur::BlurCache;
+  use crate::paint::painter::{enable_paint_diagnostics, take_paint_diagnostics};
   use std::collections::HashMap;
   use tiny_skia::ColorU8;
 
@@ -3727,13 +4413,15 @@ mod tests {
   fn apply_for_test(prim: &FilterPrimitive, pixmap: &Pixmap) -> FilterResult {
     let region = filter_region_for_pixmap(pixmap);
     let src = FilterResult::full_region(pixmap.clone(), region);
-    let filter = SvgFilter {
+    let mut filter = SvgFilter {
       color_interpolation_filters: ColorInterpolationFilters::LinearRGB,
       steps: Vec::new(),
       region: SvgFilterRegion::default_for_units(SvgFilterUnits::UserSpaceOnUse),
       filter_res: None,
       primitive_units: SvgFilterUnits::UserSpaceOnUse,
+      fingerprint: 0,
     };
+    filter.refresh_fingerprint();
     apply_primitive(
       &filter,
       &region,
@@ -3745,6 +4433,7 @@ mod tests {
       1.0,
       region,
       ColorInterpolationFilters::LinearRGB,
+      None,
     )
     .unwrap()
   }
@@ -4068,7 +4757,7 @@ mod tests {
     }
 
     let bbox = Rect::from_xywh(0.0, 0.0, 4.0, 4.0);
-    let filter = SvgFilter {
+    let mut filter = SvgFilter {
       color_interpolation_filters: ColorInterpolationFilters::LinearRGB,
       steps: vec![
         FilterStep {
@@ -4106,7 +4795,9 @@ mod tests {
       },
       filter_res: None,
       primitive_units: SvgFilterUnits::UserSpaceOnUse,
+      fingerprint: 0,
     };
+    filter.refresh_fingerprint();
 
     apply_svg_filter(&filter, &mut pixmap, 1.0, bbox);
     assert!(pixmap.pixels().iter().all(|px| px.alpha() == 0));
@@ -4316,6 +5007,8 @@ mod fe_image_tests {
 #[cfg(test)]
 mod tests_composite {
   use super::*;
+  use crate::paint::blur::BlurCache;
+  use crate::paint::painter::{enable_paint_diagnostics, take_paint_diagnostics};
 
   fn premul_rgba(r: u8, g: u8, b: u8, a: u8) -> PremultipliedColorU8 {
     let alpha = a as f32 / 255.0;
@@ -4421,6 +5114,74 @@ mod tests_composite {
     )
     .unwrap();
     assert_eq!(pixel(&result, 0, 0), (8, 14, 3, 54));
+  }
+
+  #[test]
+  fn gaussian_blur_primitives_share_svg_blur_cache() {
+    enable_paint_diagnostics();
+
+    let mut pixmap = Pixmap::new(32, 32).unwrap();
+    for px in pixmap.pixels_mut() {
+      *px = PremultipliedColorU8::from_rgba(10, 20, 200, 255)
+        .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+    }
+
+    let mut filter = SvgFilter {
+      color_interpolation_filters: ColorInterpolationFilters::LinearRGB,
+      steps: vec![
+        FilterStep {
+          result: Some("b1".to_string()),
+          color_interpolation_filters: None,
+          primitive: FilterPrimitive::GaussianBlur {
+            input: FilterInput::SourceGraphic,
+            std_dev: (4.0, 4.0),
+          },
+          region: None,
+        },
+        FilterStep {
+          result: Some("b2".to_string()),
+          color_interpolation_filters: None,
+          primitive: FilterPrimitive::GaussianBlur {
+            input: FilterInput::SourceGraphic,
+            std_dev: (4.0, 4.0),
+          },
+          region: None,
+        },
+        FilterStep {
+          result: None,
+          color_interpolation_filters: None,
+          primitive: FilterPrimitive::Merge {
+            inputs: vec![
+              FilterInput::Reference("b1".to_string()),
+              FilterInput::Reference("b2".to_string()),
+            ],
+          },
+          region: None,
+        },
+      ],
+      region: SvgFilterRegion::default_for_units(SvgFilterUnits::ObjectBoundingBox),
+      filter_res: None,
+      primitive_units: SvgFilterUnits::ObjectBoundingBox,
+      fingerprint: 0,
+    };
+    filter.refresh_fingerprint();
+
+    let mut cache = BlurCache::default();
+    let bbox = Rect::from_xywh(0.0, 0.0, 32.0, 32.0);
+    apply_svg_filter_with_cache(&filter, &mut pixmap, 1.0, bbox, Some(&mut cache));
+    apply_svg_filter_with_cache(&filter, &mut pixmap, 1.0, bbox, Some(&mut cache));
+
+    let stats = take_paint_diagnostics().expect("diagnostics enabled");
+    assert!(
+      stats.blur_cache_misses > 0,
+      "first blur should populate the cache (misses {})",
+      stats.blur_cache_misses
+    );
+    assert!(
+      stats.blur_cache_hits > 0,
+      "second blur should reuse cached result (hits {})",
+      stats.blur_cache_hits
+    );
   }
 }
 

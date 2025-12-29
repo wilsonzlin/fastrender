@@ -20,7 +20,7 @@ fn vertical_line_pixmap() -> Pixmap {
 fn render_offset(dx: f32) -> Pixmap {
   let mut pixmap = vertical_line_pixmap();
   let bbox = Rect::from_xywh(0.0, 0.0, pixmap.width() as f32, pixmap.height() as f32);
-  let filter = SvgFilter {
+  let mut filter = SvgFilter {
     color_interpolation_filters: ColorInterpolationFilters::SRGB,
     steps: vec![FilterStep {
       result: None,
@@ -41,6 +41,7 @@ fn render_offset(dx: f32) -> Pixmap {
     },
     filter_res: None,
     primitive_units: SvgFilterUnits::UserSpaceOnUse,
+    fingerprint: 0,
   };
   apply_svg_filter(&filter, &mut pixmap, 1.0, bbox);
   pixmap
@@ -49,7 +50,7 @@ fn render_offset(dx: f32) -> Pixmap {
 fn render_drop_shadow(dx: f32) -> Pixmap {
   let mut pixmap = vertical_line_pixmap();
   let bbox = Rect::from_xywh(0.0, 0.0, pixmap.width() as f32, pixmap.height() as f32);
-  let filter = SvgFilter {
+  let mut filter = SvgFilter {
     color_interpolation_filters: ColorInterpolationFilters::SRGB,
     steps: vec![FilterStep {
       result: None,
@@ -73,6 +74,7 @@ fn render_drop_shadow(dx: f32) -> Pixmap {
     },
     filter_res: None,
     primitive_units: SvgFilterUnits::UserSpaceOnUse,
+    fingerprint: 0,
   };
   apply_svg_filter(&filter, &mut pixmap, 1.0, bbox);
   pixmap

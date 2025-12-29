@@ -235,6 +235,11 @@ pub struct PaintDiagnosticsSummary {
   pub parallel_threads: usize,
   pub parallel_ms: f64,
   pub serial_ms: f64,
+  pub filter_cache_hits: usize,
+  pub filter_cache_misses: usize,
+  pub blur_cache_hits: usize,
+  pub blur_cache_misses: usize,
+  pub blur_tiles: usize,
 }
 
 thread_local! {

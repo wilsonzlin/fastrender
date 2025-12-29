@@ -15,6 +15,10 @@ fn solid_pixmap(width: u32, height: u32, color: PremultipliedColorU8) -> Pixmap 
   pixmap
 }
 
+fn with_fingerprint(filter: SvgFilter) -> SvgFilter {
+  filter
+}
+
 #[test]
 fn lighting_primitives_parse_light_sources() {
   let svg = r##"
@@ -107,7 +111,7 @@ fn diffuse_lighting_colors_flat_surface() {
   let mut pixmap = solid_pixmap(1, 1, PremultipliedColorU8::from_rgba(0, 0, 0, 255).unwrap());
   let bbox = Rect::from_xywh(0.0, 0.0, 1.0, 1.0);
 
-  let filter = SvgFilter {
+  let filter = with_fingerprint(SvgFilter {
     color_interpolation_filters: ColorInterpolationFilters::LinearRGB,
     steps: vec![FilterStep {
       result: None,
@@ -134,7 +138,8 @@ fn diffuse_lighting_colors_flat_surface() {
     },
     filter_res: None,
     primitive_units: SvgFilterUnits::UserSpaceOnUse,
-  };
+    fingerprint: 0,
+  });
 
   apply_svg_filter(&filter, &mut pixmap, 1.0, bbox);
 
@@ -150,7 +155,7 @@ fn specular_lighting_colors_flat_surface() {
   let mut pixmap = solid_pixmap(1, 1, PremultipliedColorU8::from_rgba(0, 0, 0, 255).unwrap());
   let bbox = Rect::from_xywh(0.0, 0.0, 1.0, 1.0);
 
-  let filter = SvgFilter {
+  let filter = with_fingerprint(SvgFilter {
     color_interpolation_filters: ColorInterpolationFilters::LinearRGB,
     steps: vec![FilterStep {
       result: None,
@@ -178,7 +183,8 @@ fn specular_lighting_colors_flat_surface() {
     },
     filter_res: None,
     primitive_units: SvgFilterUnits::UserSpaceOnUse,
-  };
+    fingerprint: 0,
+  });
 
   apply_svg_filter(&filter, &mut pixmap, 1.0, bbox);
 
@@ -192,7 +198,7 @@ fn specular_lighting_colors_flat_surface() {
 fn render_diffuse(color_space: ColorInterpolationFilters) -> PremultipliedColorU8 {
   let mut pixmap = solid_pixmap(1, 1, PremultipliedColorU8::from_rgba(0, 0, 0, 255).unwrap());
   let bbox = Rect::from_xywh(0.0, 0.0, 1.0, 1.0);
-  let filter = SvgFilter {
+  let filter = with_fingerprint(SvgFilter {
     color_interpolation_filters: color_space,
     steps: vec![FilterStep {
       result: None,
@@ -219,7 +225,8 @@ fn render_diffuse(color_space: ColorInterpolationFilters) -> PremultipliedColorU
     },
     filter_res: None,
     primitive_units: SvgFilterUnits::UserSpaceOnUse,
-  };
+    fingerprint: 0,
+  });
 
   apply_svg_filter(&filter, &mut pixmap, 1.0, bbox);
   pixmap.pixel(0, 0).unwrap().clone()
@@ -265,7 +272,7 @@ fn opaque_bounds(pixmap: &Pixmap) -> Option<(u32, u32, u32, u32)> {
 fn userspace_percent_regions_resolve_against_bbox() {
   let mut pixmap = Pixmap::new(80, 40).expect("pixmap");
   let bbox = Rect::from_xywh(10.0, 10.0, 80.0, 40.0);
-  let filter = SvgFilter {
+  let filter = with_fingerprint(SvgFilter {
     color_interpolation_filters: ColorInterpolationFilters::SRGB,
     steps: vec![FilterStep {
       result: None,
@@ -291,7 +298,8 @@ fn userspace_percent_regions_resolve_against_bbox() {
     },
     filter_res: None,
     primitive_units: SvgFilterUnits::UserSpaceOnUse,
-  };
+    fingerprint: 0,
+  });
 
   apply_svg_filter(&filter, &mut pixmap, 1.0, bbox);
 
@@ -303,7 +311,7 @@ fn userspace_percent_regions_resolve_against_bbox() {
 fn point_light_percentages_follow_bbox_in_userspace() {
   let mut pixmap = solid_pixmap(4, 4, PremultipliedColorU8::from_rgba(0, 0, 0, 255).unwrap());
   let bbox = Rect::from_xywh(10.0, 20.0, 4.0, 4.0);
-  let filter = SvgFilter {
+  let filter = with_fingerprint(SvgFilter {
     color_interpolation_filters: ColorInterpolationFilters::LinearRGB,
     steps: vec![FilterStep {
       result: None,
@@ -331,7 +339,8 @@ fn point_light_percentages_follow_bbox_in_userspace() {
     },
     filter_res: None,
     primitive_units: SvgFilterUnits::UserSpaceOnUse,
-  };
+    fingerprint: 0,
+  });
 
   apply_svg_filter(&filter, &mut pixmap, 1.0, bbox);
 

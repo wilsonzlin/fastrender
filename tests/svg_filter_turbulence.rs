@@ -6,7 +6,7 @@ use fastrender::paint::svg_filter::{
 use tiny_skia::Pixmap;
 
 fn turbulence_filter(primitive: FilterPrimitive) -> SvgFilter {
-  SvgFilter {
+  let mut filter = SvgFilter {
     color_interpolation_filters: ColorInterpolationFilters::LinearRGB,
     steps: vec![FilterStep {
       result: None,
@@ -23,7 +23,9 @@ fn turbulence_filter(primitive: FilterPrimitive) -> SvgFilter {
     },
     filter_res: None,
     primitive_units: SvgFilterUnits::ObjectBoundingBox,
-  }
+    fingerprint: 0,
+  };
+  filter
 }
 
 fn apply_filter(filter: &SvgFilter, pixmap: &mut Pixmap) {

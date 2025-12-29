@@ -20,7 +20,7 @@ fn identity_matrix() -> [f32; 20] {
 }
 
 fn make_filter(kind: ColorMatrixKind, color_space: ColorInterpolationFilters) -> SvgFilter {
-  SvgFilter {
+  let mut filter = SvgFilter {
     color_interpolation_filters: color_space,
     steps: vec![FilterStep {
       result: None,
@@ -40,7 +40,9 @@ fn make_filter(kind: ColorMatrixKind, color_space: ColorInterpolationFilters) ->
     },
     filter_res: None,
     primitive_units: SvgFilterUnits::ObjectBoundingBox,
-  }
+    fingerprint: 0,
+  };
+  filter
 }
 
 #[test]
@@ -115,7 +117,7 @@ fn identity_matrix_is_a_noop_in_all_color_spaces() {
 }
 
 fn blur_filter(color_space: ColorInterpolationFilters) -> SvgFilter {
-  SvgFilter {
+  let mut filter = SvgFilter {
     color_interpolation_filters: color_space,
     steps: vec![FilterStep {
       result: None,
@@ -135,7 +137,9 @@ fn blur_filter(color_space: ColorInterpolationFilters) -> SvgFilter {
     },
     filter_res: None,
     primitive_units: SvgFilterUnits::UserSpaceOnUse,
-  }
+    fingerprint: 0,
+  };
+  filter
 }
 
 #[test]

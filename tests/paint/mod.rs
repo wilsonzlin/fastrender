@@ -20,6 +20,7 @@ mod display_list_renderer_test;
 mod display_list_skip_ink_test;
 mod display_list_svg_filter_defs_backend;
 mod display_list_test;
+mod filter_cache_regressions;
 mod filter_premultiplication;
 mod filter_url_svg_display_list;
 mod fit_canvas_to_content;

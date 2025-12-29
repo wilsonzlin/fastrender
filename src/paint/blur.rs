@@ -1,11 +1,17 @@
 use crate::debug::runtime;
 use crate::error::RenderStage;
+use crate::paint::painter::with_paint_diagnostics;
+use crate::paint::svg_filter::FilterCacheConfig;
 use crate::render_control::check_active_periodic;
 use lru::LruCache;
 use std::cell::RefCell;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::BuildHasherDefault;
 use tiny_skia::Pixmap;
 
 const FAST_GAUSS_THRESHOLD_SIGMA: f32 = 4.0;
+
+type BlurHasher = BuildHasherDefault<DefaultHasher>;
 
 #[derive(Default)]
 struct BlurScratch {
@@ -39,59 +45,111 @@ thread_local! {
 pub(crate) struct BlurCacheKey {
   width: u32,
   height: u32,
-  radius_bits: u32,
+  sigma_x_bits: u32,
+  sigma_y_bits: u32,
+  scale_bits: u32,
   fingerprint: u64,
 }
 
 impl BlurCacheKey {
-  pub(crate) fn new(radius: f32, pixmap: &Pixmap) -> Option<Self> {
-    let radius = radius.abs();
-    if radius == 0.0 || pixmap.width() == 0 || pixmap.height() == 0 {
+  pub(crate) fn new(radius_x: f32, radius_y: f32, scale: f32, pixmap: &Pixmap) -> Option<Self> {
+    let radius_x = radius_x.abs();
+    let radius_y = radius_y.abs();
+    if (radius_x == 0.0 && radius_y == 0.0) || pixmap.width() == 0 || pixmap.height() == 0 {
       return None;
     }
     Some(Self {
       width: pixmap.width(),
       height: pixmap.height(),
-      radius_bits: radius.to_bits(),
+      sigma_x_bits: radius_x.to_bits(),
+      sigma_y_bits: radius_y.to_bits(),
+      scale_bits: scale.to_bits(),
       fingerprint: pixel_fingerprint(pixmap.data()),
     })
   }
 }
 
 pub(crate) struct BlurCache {
-  lru: LruCache<BlurCacheKey, Pixmap>,
-  capacity: usize,
+  lru: LruCache<BlurCacheKey, Pixmap, BlurHasher>,
+  current_bytes: usize,
+  config: FilterCacheConfig,
 }
 
 impl BlurCache {
-  pub(crate) fn new(capacity: usize) -> Self {
+  pub(crate) fn new(config: FilterCacheConfig) -> Self {
     Self {
-      lru: LruCache::unbounded(),
-      capacity,
+      lru: LruCache::unbounded_with_hasher(BlurHasher::default()),
+      current_bytes: 0,
+      config,
     }
   }
 
   pub(crate) fn get(&mut self, key: &BlurCacheKey) -> Option<Pixmap> {
-    self.lru.get(key).map(Clone::clone)
+    let hit = self.lru.get(key).map(Clone::clone);
+    if hit.is_some() {
+      record_blur_cache_hit();
+    } else {
+      record_blur_cache_miss();
+    }
+    hit
   }
 
   pub(crate) fn put(&mut self, key: BlurCacheKey, pixmap: &Pixmap) {
+    if self.config.max_items == 0 {
+      return;
+    }
+    let weight = pixmap.data().len();
+    if self.config.max_bytes > 0 && weight > self.config.max_bytes {
+      return;
+    }
+
+    if let Some(existing) = self.lru.peek(&key) {
+      let existing_weight: usize = existing.data().len();
+      self.current_bytes = self.current_bytes.saturating_sub(existing_weight);
+    }
+
+    self.current_bytes = self.current_bytes.saturating_add(weight);
     self.lru.put(key, pixmap.clone());
-    while self.lru.len() > self.capacity {
-      let _ = self.lru.pop_lru();
+    self.evict();
+  }
+
+  fn evict(&mut self) {
+    while (self.config.max_items > 0 && self.lru.len() > self.config.max_items)
+      || (self.config.max_bytes > 0 && self.current_bytes > self.config.max_bytes)
+    {
+      if let Some((_key, value)) = self.lru.pop_lru() {
+        let removed_weight: usize = value.data().len();
+        self.current_bytes = self.current_bytes.saturating_sub(removed_weight);
+      } else {
+        break;
+      }
     }
   }
 }
 
 impl Default for BlurCache {
   fn default() -> Self {
-    Self::new(32)
+    Self::new(FilterCacheConfig::from_env())
   }
 }
 
 #[inline]
 fn blur_deadline_exceeded(counter: &mut usize) -> bool {
   check_active_periodic(counter, 2048, RenderStage::Paint).is_err()
+}
+
+fn record_blur_cache_hit() {
+  with_paint_diagnostics(|diag| diag.blur_cache_hits += 1);
+}
+
+fn record_blur_cache_miss() {
+  with_paint_diagnostics(|diag| diag.blur_cache_misses += 1);
+}
+
+fn record_blur_tiles(count: usize) {
+  if count > 0 {
+    with_paint_diagnostics(|diag| diag.blur_tiles += count);
+  }
 }
 
 pub(crate) fn pixel_fingerprint(data: &[u8]) -> u64 {
@@ -488,7 +546,7 @@ fn gaussian_blur_box_approx(pixmap: &mut Pixmap, sigma: f32) {
   });
 }
 
-pub fn apply_gaussian_blur(pixmap: &mut Pixmap, sigma: f32) {
+fn blur_isotropic_body(pixmap: &mut Pixmap, sigma: f32) {
   let sigma = sigma.abs();
   let radius = (sigma * 3.0).ceil() as usize;
   if radius == 0 {
@@ -503,11 +561,11 @@ pub fn apply_gaussian_blur(pixmap: &mut Pixmap, sigma: f32) {
   }
 }
 
-pub(crate) fn apply_gaussian_blur_anisotropic(pixmap: &mut Pixmap, sigma_x: f32, sigma_y: f32) {
+fn blur_anisotropic_body(pixmap: &mut Pixmap, sigma_x: f32, sigma_y: f32) {
   let sigma_x = sigma_x.abs();
   let sigma_y = sigma_y.abs();
   if sigma_x == sigma_y {
-    apply_gaussian_blur(pixmap, sigma_x);
+    blur_isotropic_body(pixmap, sigma_x);
     return;
   }
 
@@ -613,6 +671,157 @@ pub(crate) fn apply_gaussian_blur_anisotropic(pixmap: &mut Pixmap, sigma_x: f32,
       }
     }
   });
+}
+
+fn tile_blur(
+  pixmap: &Pixmap,
+  sigma_x: f32,
+  sigma_y: f32,
+  config: &FilterCacheConfig,
+) -> Option<(Pixmap, usize)> {
+  if config.max_bytes == 0 {
+    return None;
+  }
+  let data_len = pixmap.data().len();
+  if data_len <= config.max_bytes {
+    return None;
+  }
+  let width = pixmap.width();
+  let height = pixmap.height();
+  if width == 0 || height == 0 {
+    return None;
+  }
+
+  let pad_x = (sigma_x.abs() * 3.0).ceil() as u32;
+  let pad_y = (sigma_y.abs() * 3.0).ceil() as u32;
+  let budget_pixels = config.max_bytes / 4;
+  if budget_pixels == 0 {
+    return None;
+  }
+  let base_span = (budget_pixels as f64).sqrt().floor() as u32;
+  let tile_w = base_span.saturating_sub(pad_x.saturating_mul(2)).max(1);
+  let tile_h = base_span.saturating_sub(pad_y.saturating_mul(2)).max(1);
+  if tile_w >= width && tile_h >= height {
+    return None;
+  }
+
+  let mut out = Pixmap::new(width, height)?;
+  let source = pixmap.data();
+  let row_stride = width as usize * 4;
+  let mut tiles = 0usize;
+
+  let mut y = 0;
+  while y < height {
+    let copy_h = tile_h.min(height - y);
+    let mut x = 0;
+    while x < width {
+      let copy_w = tile_w.min(width - x);
+      let src_min_x = x.saturating_sub(pad_x);
+      let src_min_y = y.saturating_sub(pad_y);
+      let src_max_x = (x + copy_w + pad_x).min(width);
+      let src_max_y = (y + copy_h + pad_y).min(height);
+      let src_w = src_max_x.saturating_sub(src_min_x);
+      let src_h = src_max_y.saturating_sub(src_min_y);
+
+      let mut tile = match Pixmap::new(src_w, src_h) {
+        Some(p) => p,
+        None => return None,
+      };
+      let tile_stride = src_w as usize * 4;
+      for row in 0..src_h as usize {
+        let src_start = (src_min_y as usize + row) * row_stride + src_min_x as usize * 4;
+        let dst_start = row * tile_stride;
+        tile.data_mut()[dst_start..dst_start + tile_stride]
+          .copy_from_slice(&source[src_start..src_start + tile_stride]);
+      }
+
+      blur_anisotropic_body(&mut tile, sigma_x, sigma_y);
+
+      let offset_x = (x - src_min_x) as usize;
+      let offset_y = (y - src_min_y) as usize;
+      let copy_w_bytes = copy_w as usize * 4;
+      let out_stride = out.width() as usize * 4;
+      let tile_stride = src_w as usize * 4;
+      let tile_data = tile.data();
+      let out_data = out.data_mut();
+
+      for row in 0..copy_h as usize {
+        let src_start = (offset_y + row) * tile_stride + offset_x * 4;
+        let dst_start = (y as usize + row) * out_stride + x as usize * 4;
+        out_data[dst_start..dst_start + copy_w_bytes]
+          .copy_from_slice(&tile_data[src_start..src_start + copy_w_bytes]);
+      }
+
+      tiles += 1;
+      x = x.saturating_add(tile_w);
+    }
+    y = y.saturating_add(tile_h);
+  }
+
+  Some((out, tiles))
+}
+
+fn apply_blur_internal(
+  pixmap: &mut Pixmap,
+  sigma_x: f32,
+  sigma_y: f32,
+  mut cache: Option<&mut BlurCache>,
+  scale: f32,
+) {
+  let sigma_x = sigma_x.abs();
+  let sigma_y = sigma_y.abs();
+  if (sigma_x == 0.0 && sigma_y == 0.0) || pixmap.width() == 0 || pixmap.height() == 0 {
+    return;
+  }
+
+  let cache_key = cache
+    .as_ref()
+    .and_then(|_| BlurCacheKey::new(sigma_x, sigma_y, scale, pixmap));
+  if let (Some(key), Some(cache)) = (cache_key.as_ref(), cache.as_deref_mut()) {
+    if let Some(cached) = cache.get(key) {
+      pixmap.data_mut().copy_from_slice(cached.data());
+      return;
+    }
+  }
+
+  let config = cache
+    .as_ref()
+    .map(|c| c.config)
+    .unwrap_or_else(FilterCacheConfig::from_env);
+
+  let mut tile_count = 0usize;
+  if let Some((tiled, tiles)) = tile_blur(pixmap, sigma_x, sigma_y, &config) {
+    tile_count = tiles;
+    *pixmap = tiled;
+  } else if sigma_x == sigma_y {
+    blur_isotropic_body(pixmap, sigma_x);
+  } else {
+    blur_anisotropic_body(pixmap, sigma_x, sigma_y);
+  }
+
+  record_blur_tiles(tile_count);
+
+  if let (Some(key), Some(cache)) = (cache_key, cache) {
+    cache.put(key, pixmap);
+  }
+}
+
+pub fn apply_gaussian_blur(pixmap: &mut Pixmap, sigma: f32) {
+  apply_blur_internal(pixmap, sigma, sigma, None, 1.0);
+}
+
+pub(crate) fn apply_gaussian_blur_anisotropic(pixmap: &mut Pixmap, sigma_x: f32, sigma_y: f32) {
+  apply_blur_internal(pixmap, sigma_x, sigma_y, None, 1.0);
+}
+
+pub(crate) fn apply_gaussian_blur_cached(
+  pixmap: &mut Pixmap,
+  sigma_x: f32,
+  sigma_y: f32,
+  cache: Option<&mut BlurCache>,
+  scale: f32,
+) {
+  apply_blur_internal(pixmap, sigma_x, sigma_y, cache, scale);
 }
 
 #[cfg(test)]

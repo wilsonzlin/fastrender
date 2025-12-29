@@ -1638,6 +1638,11 @@ pub struct PaintDiagnostics {
   pub parallel_threads: Option<usize>,
   pub parallel_ms: Option<f64>,
   pub serial_ms: Option<f64>,
+  pub filter_cache_hits: Option<usize>,
+  pub filter_cache_misses: Option<usize>,
+  pub blur_cache_hits: Option<usize>,
+  pub blur_cache_misses: Option<usize>,
+  pub blur_tiles: Option<usize>,
 }
 
 /// Resource loading counters.
@@ -3717,10 +3722,18 @@ impl FastRender {
           rec.stats.paint.display_items = Some(diag.command_count);
           rec.stats.paint.gradient_ms = Some(diag.gradient_ms);
           rec.stats.paint.gradient_pixels = Some(diag.gradient_pixels);
+<<<<<<< HEAD
           rec.stats.paint.parallel_tasks = Some(diag.parallel_tasks);
           rec.stats.paint.parallel_threads = Some(diag.parallel_threads);
           rec.stats.paint.parallel_ms = Some(diag.parallel_ms);
           rec.stats.paint.serial_ms = Some(diag.serial_ms);
+=======
+          rec.stats.paint.filter_cache_hits = Some(diag.filter_cache_hits);
+          rec.stats.paint.filter_cache_misses = Some(diag.filter_cache_misses);
+          rec.stats.paint.blur_cache_hits = Some(diag.blur_cache_hits);
+          rec.stats.paint.blur_cache_misses = Some(diag.blur_cache_misses);
+          rec.stats.paint.blur_tiles = Some(diag.blur_tiles);
+>>>>>>> d2d56f6 (Optimize filter blurs with caching and tiling)
         }
       }
 

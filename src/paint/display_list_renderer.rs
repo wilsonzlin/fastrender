@@ -10,7 +10,7 @@ use crate::css::types::RadialGradientSize;
 use crate::error::{Error, RenderError, RenderStage, Result};
 use crate::geometry::Point;
 use crate::geometry::Rect;
-use crate::paint::blur::{alpha_bounds, apply_gaussian_blur, BlurCache, BlurCacheKey};
+use crate::paint::blur::{alpha_bounds, apply_gaussian_blur_cached, BlurCache};
 use crate::paint::canvas::crop_mask;
 use crate::paint::canvas::Canvas;
 use crate::paint::display_list::BlendMode;
@@ -535,7 +535,9 @@ fn apply_filters(
   for filter in filters {
     let cache_ref = cache.as_deref_mut();
     match filter {
-      ResolvedFilter::Blur(radius) => apply_gaussian_blur(pixmap, *radius * scale),
+      ResolvedFilter::Blur(radius) => {
+        apply_gaussian_blur_cached(pixmap, *radius * scale, *radius * scale, cache_ref, scale)
+      }
       ResolvedFilter::Brightness(amount) => {
         apply_color_filter(pixmap, |c, a| (scale_color(c, *amount), a))
       }
@@ -568,7 +570,13 @@ fn apply_filters(
         cache_ref,
       ),
       ResolvedFilter::SvgFilter(ref filter) => {
-        crate::paint::svg_filter::apply_svg_filter(filter.as_ref(), pixmap, scale, bbox);
+        crate::paint::svg_filter::apply_svg_filter_with_cache(
+          filter.as_ref(),
+          pixmap,
+          scale,
+          bbox,
+          cache_ref,
+        );
       }
     }
   }
@@ -942,21 +950,7 @@ fn apply_drop_shadow(
   }
 
   if blur_radius > 0.0 {
-    let cache_key = BlurCacheKey::new(blur_radius, &shadow);
-    if let Some(key) = cache_key.as_ref() {
-      if let Some(cache) = cache {
-        if let Some(cached) = cache.get(key) {
-          shadow.data_mut().copy_from_slice(cached.data());
-        } else {
-          apply_gaussian_blur(&mut shadow, blur_radius);
-          cache.put(key.clone(), &shadow);
-        }
-      } else {
-        apply_gaussian_blur(&mut shadow, blur_radius);
-      }
-    } else {
-      apply_gaussian_blur(&mut shadow, blur_radius);
-    }
+    apply_gaussian_blur_cached(&mut shadow, blur_radius, blur_radius, cache, 1.0);
   }
 
   let mut result = match Pixmap::new(source.width(), source.height()) {
@@ -5044,16 +5038,13 @@ impl DisplayListRenderer {
       }
 
       if shadow.blur_radius > 0.0 {
-        if let Some(key) = BlurCacheKey::new(shadow.blur_radius, &shadow_pixmap) {
-          if let Some(cached) = self.blur_cache.get(&key) {
-            shadow_pixmap.data_mut().copy_from_slice(cached.data());
-          } else {
-            apply_gaussian_blur(&mut shadow_pixmap, shadow.blur_radius);
-            self.blur_cache.put(key, &shadow_pixmap);
-          }
-        } else {
-          apply_gaussian_blur(&mut shadow_pixmap, shadow.blur_radius);
-        }
+        apply_gaussian_blur_cached(
+          &mut shadow_pixmap,
+          shadow.blur_radius,
+          shadow.blur_radius,
+          Some(&mut self.blur_cache),
+          1.0,
+        );
       }
 
       let dest_x = shadow_min_x.floor() as i32;

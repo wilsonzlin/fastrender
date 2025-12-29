@@ -31,7 +31,7 @@ fn pixel(pixmap: &Pixmap, x: u32) -> (u8, u8, u8, u8) {
 
 fn displacement_filter(scale: f32) -> SvgFilter {
   let map = displacement_map_pixmap();
-  SvgFilter {
+  let mut filter = SvgFilter {
     color_interpolation_filters: ColorInterpolationFilters::LinearRGB,
     steps: vec![
       FilterStep {
@@ -62,7 +62,9 @@ fn displacement_filter(scale: f32) -> SvgFilter {
     },
     filter_res: None,
     primitive_units: SvgFilterUnits::ObjectBoundingBox,
-  }
+    fingerprint: 0,
+  };
+  filter
 }
 
 #[test]
@@ -101,7 +103,7 @@ fn displacement_map_interprets_map_in_color_interpolation_space() {
     *px = half;
   }
 
-  let filter = SvgFilter {
+  let mut filter = SvgFilter {
     color_interpolation_filters: ColorInterpolationFilters::LinearRGB,
     steps: vec![
       FilterStep {
@@ -132,6 +134,7 @@ fn displacement_map_interprets_map_in_color_interpolation_space() {
     },
     filter_res: None,
     primitive_units: SvgFilterUnits::ObjectBoundingBox,
+    fingerprint: 0,
   };
 
   let bbox = Rect::from_xywh(0.0, 0.0, primary.width() as f32, primary.height() as f32);

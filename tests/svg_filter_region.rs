@@ -88,6 +88,7 @@ fn filter_region_respects_bbox_offset() {
     },
     filter_res: None,
     primitive_units: SvgFilterUnits::ObjectBoundingBox,
+    fingerprint: 0,
   };
   filter.steps.push(FilterStep {
     result: None,
