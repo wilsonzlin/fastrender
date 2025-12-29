@@ -76,7 +76,7 @@ use rayon::prelude::*;
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 // ============================================================================
 // Table Structure Types
@@ -1057,6 +1057,106 @@ fn strip_borders_cached(
   let stripped = strip_borders(style);
   cache.insert(key, stripped.clone());
   stripped
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct StyleOverrideFlags(u8);
+
+impl StyleOverrideFlags {
+  const NONE: Self = Self(0);
+  const STRIP_PADDING_BORDERS: Self = Self(1 << 0);
+  const LAYOUT_CLEAR_WIDTHS_AND_MARGINS: Self = Self(1 << 1);
+  const COLLAPSE_ZERO_BORDERS: Self = Self(1 << 2);
+  const HIDE_EMPTY_RESET_BG_AND_TRANSPARENT_BORDERS: Self = Self(1 << 3);
+
+  fn is_empty(self) -> bool {
+    self.0 == 0
+  }
+
+  fn contains(self, other: Self) -> bool {
+    self.0 & other.0 != 0
+  }
+}
+
+impl std::ops::BitOr for StyleOverrideFlags {
+  type Output = Self;
+
+  fn bitor(self, rhs: Self) -> Self::Output {
+    Self(self.0 | rhs.0)
+  }
+}
+
+impl std::ops::BitOrAssign for StyleOverrideFlags {
+  fn bitor_assign(&mut self, rhs: Self) {
+    self.0 |= rhs.0;
+  }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct StyleOverrideKey {
+  base_ptr: usize,
+  flags: StyleOverrideFlags,
+}
+
+#[derive(Default)]
+struct StyleOverrideCache {
+  cache: Mutex<HashMap<StyleOverrideKey, Arc<ComputedStyle>>>,
+}
+
+impl StyleOverrideCache {
+  fn derive(&self, base: &Arc<ComputedStyle>, flags: StyleOverrideFlags) -> Arc<ComputedStyle> {
+    if flags.is_empty() {
+      debug_assert_eq!(flags, StyleOverrideFlags::NONE);
+      return base.clone();
+    }
+    let key = StyleOverrideKey {
+      base_ptr: Arc::as_ptr(base) as usize,
+      flags,
+    };
+    {
+      let cache = self.cache.lock().expect("override cache poisoned");
+      if let Some(hit) = cache.get(&key) {
+        return hit.clone();
+      }
+    }
+
+    let derived = Arc::new(apply_style_overrides(base, flags));
+    let mut cache = self.cache.lock().expect("override cache poisoned");
+    cache.entry(key).or_insert_with(|| derived.clone()).clone()
+  }
+}
+
+fn apply_style_overrides(base: &ComputedStyle, flags: StyleOverrideFlags) -> ComputedStyle {
+  let mut style = base.clone();
+  if flags.contains(StyleOverrideFlags::STRIP_PADDING_BORDERS) {
+    style.padding_left = Length::px(0.0);
+    style.padding_right = Length::px(0.0);
+    style.border_left_width = Length::px(0.0);
+    style.border_right_width = Length::px(0.0);
+  }
+  if flags.contains(StyleOverrideFlags::HIDE_EMPTY_RESET_BG_AND_TRANSPARENT_BORDERS) {
+    style.reset_background_to_initial();
+    style.border_left_color = Rgba::TRANSPARENT;
+    style.border_right_color = Rgba::TRANSPARENT;
+    style.border_top_color = Rgba::TRANSPARENT;
+    style.border_bottom_color = Rgba::TRANSPARENT;
+  }
+  if flags.contains(StyleOverrideFlags::LAYOUT_CLEAR_WIDTHS_AND_MARGINS) {
+    style.width = None;
+    style.min_width = None;
+    style.max_width = None;
+    style.margin_left = Some(Length::px(0.0));
+    style.margin_right = Some(Length::px(0.0));
+    style.margin_top = Some(Length::px(0.0));
+    style.margin_bottom = Some(Length::px(0.0));
+  }
+  if flags.contains(StyleOverrideFlags::COLLAPSE_ZERO_BORDERS) {
+    style.border_left_width = Length::px(0.0);
+    style.border_right_width = Length::px(0.0);
+    style.border_top_width = Length::px(0.0);
+    style.border_bottom_width = Length::px(0.0);
+  }
+  style
 }
 
 impl TableStructure {
@@ -3553,6 +3653,7 @@ impl TableFormattingContext {
     border_collapse: BorderCollapse,
     percent_base: Option<f32>,
     cell_bfc: &BlockFormattingContext,
+    style_overrides: &StyleOverrideCache,
   ) -> (f32, f32) {
     let fc_type = cell_box
       .formatting_context()
@@ -3560,12 +3661,8 @@ impl TableFormattingContext {
 
     // Measure intrinsic content widths without the cell's own padding/borders; we'll add them once below.
     let mut stripped_cell = cell_box.clone();
-    let mut stripped_style = (*stripped_cell.style).clone();
-    stripped_style.padding_left = Length::px(0.0);
-    stripped_style.padding_right = Length::px(0.0);
-    stripped_style.border_left_width = Length::px(0.0);
-    stripped_style.border_right_width = Length::px(0.0);
-    stripped_cell.style = Arc::new(stripped_style);
+    stripped_cell.style =
+      style_overrides.derive(&cell_box.style, StyleOverrideFlags::STRIP_PADDING_BORDERS);
 
     let measure_with_fc = |fc: &dyn FormattingContext| -> (f32, f32) {
       let min = fc
@@ -3606,6 +3703,7 @@ impl TableFormattingContext {
     constraints: &mut [ColumnConstraints],
     mode: DistributionMode,
     percent_base: Option<f32>,
+    style_overrides: &StyleOverrideCache,
   ) {
     let source_rows = collect_source_rows(table_box);
     let cell_bfc = BlockFormattingContext::with_font_context_and_viewport(
@@ -3641,6 +3739,7 @@ impl TableFormattingContext {
           structure.border_collapse,
           percent_base,
           &cell_bfc,
+          style_overrides,
         ),
       };
       let mut has_max_cap = false;
@@ -3826,49 +3925,23 @@ impl TableFormattingContext {
     cell_width: f32,
     border_collapse: BorderCollapse,
     cell_bfc: &BlockFormattingContext,
+    style_overrides: &StyleOverrideCache,
   ) -> Result<FragmentNode, LayoutError> {
     let hide_empty = border_collapse == BorderCollapse::Separate
       && cell_box.style.empty_cells == EmptyCells::Hide
       && cell_is_visually_empty(cell_box);
     let mut cloned = cell_box.clone();
+    let mut flags = StyleOverrideFlags::LAYOUT_CLEAR_WIDTHS_AND_MARGINS;
     if hide_empty {
-      let mut style = (*cloned.style).clone();
-      style.reset_background_to_initial();
-      // Hide borders without affecting layout: keep widths/styles but make them transparent.
-      style.border_left_color = Rgba::TRANSPARENT;
-      style.border_right_color = Rgba::TRANSPARENT;
-      style.border_top_color = Rgba::TRANSPARENT;
-      style.border_bottom_color = Rgba::TRANSPARENT;
-      cloned.style = std::sync::Arc::new(style);
+      flags |= StyleOverrideFlags::HIDE_EMPTY_RESET_BG_AND_TRANSPARENT_BORDERS;
     }
-
-    // The cell's used width is the computed column width; authored widths have already been
-    // accounted for during column distribution, so clear them here to avoid double-applying
-    // percentages/lengths. Table cells don't participate in margin resolution, so zero them.
-    {
-      let mut style = (*cloned.style).clone();
-      style.width = None;
-      style.min_width = None;
-      style.max_width = None;
-      style.margin_left = Some(Length::px(0.0));
-      style.margin_right = Some(Length::px(0.0));
-      style.margin_top = Some(Length::px(0.0));
-      style.margin_bottom = Some(Length::px(0.0));
-      cloned.style = std::sync::Arc::new(style);
+    if matches!(border_collapse, BorderCollapse::Collapse) {
+      flags |= StyleOverrideFlags::COLLAPSE_ZERO_BORDERS;
     }
+    cloned.style = style_overrides.derive(&cell_box.style, flags);
 
     let constraints = LayoutConstraints::definite_width(cell_width.max(0.0));
-    if matches!(border_collapse, BorderCollapse::Collapse) {
-      let mut style = (*cloned.style).clone();
-      style.border_left_width = crate::style::values::Length::px(0.0);
-      style.border_right_width = crate::style::values::Length::px(0.0);
-      style.border_top_width = crate::style::values::Length::px(0.0);
-      style.border_bottom_width = crate::style::values::Length::px(0.0);
-      cloned.style = std::sync::Arc::new(style);
-      cell_bfc.layout(&cloned, &constraints)
-    } else {
-      cell_bfc.layout(&cloned, &constraints)
-    }
+    cell_bfc.layout(&cloned, &constraints)
   }
 
   fn collect_row_group_constraints(
@@ -3976,6 +4049,7 @@ impl FormattingContext for TableFormattingContext {
     let has_running_children = !running_children.is_empty();
 
     let structure = table_structure_cached(table_box);
+    let style_override_cache = StyleOverrideCache::default();
     if dump {
       let cw = match constraints.available_width {
         AvailableSpace::Definite(w) => format!("{:.2}", w),
@@ -4353,6 +4427,7 @@ impl FormattingContext for TableFormattingContext {
       &mut column_constraints,
       mode,
       percent_base,
+      &style_override_cache,
     );
     self.normalize_percentage_constraints(&mut column_constraints, percent_base);
 
@@ -4545,7 +4620,13 @@ impl FormattingContext for TableFormattingContext {
       } else {
         row_vertical_align.unwrap_or(cell_box.style.vertical_align)
       };
-      match self.layout_cell(cell_box, width, structure.border_collapse, &cell_bfc) {
+      match self.layout_cell(
+        cell_box,
+        width,
+        structure.border_collapse,
+        &cell_bfc,
+        &style_override_cache,
+      ) {
         Ok(fragment) => {
           if dump {
             let b = fragment.bounds;
@@ -5906,6 +5987,7 @@ impl FormattingContext for TableFormattingContext {
     } else {
       DistributionMode::Auto
     };
+    let style_override_cache = StyleOverrideCache::default();
     let mut column_constraints: Vec<ColumnConstraints> = (0..structure.column_count)
       .map(|_| ColumnConstraints::new(0.0, 0.0))
       .collect();
@@ -5915,6 +5997,7 @@ impl FormattingContext for TableFormattingContext {
       &mut column_constraints,
       distribution_mode,
       percent_base,
+      &style_override_cache,
     );
     self.normalize_percentage_constraints(&mut column_constraints, percent_base);
 
@@ -6073,6 +6156,23 @@ mod tests {
     }
     for child in &fragment.children {
       collect_table_cell_tops(child, tops);
+    }
+  }
+
+  fn collect_table_cell_fragments<'a>(
+    fragment: &'a FragmentNode,
+    cells: &mut Vec<&'a FragmentNode>,
+  ) {
+    if fragment
+      .style
+      .as_ref()
+      .map(|s| matches!(s.display, Display::TableCell))
+      .unwrap_or(false)
+    {
+      cells.push(fragment);
+    }
+    for child in &fragment.children {
+      collect_table_cell_fragments(child, cells);
     }
   }
 
@@ -7034,6 +7134,7 @@ mod tests {
       &mut constraints,
       DistributionMode::Auto,
       None,
+      &StyleOverrideCache::default(),
     );
 
     assert!(
@@ -7101,6 +7202,7 @@ mod tests {
       &mut constraints,
       DistributionMode::Auto,
       None,
+      &StyleOverrideCache::default(),
     );
 
     let total_min: f32 = constraints.iter().map(|c| c.min_width).sum();
@@ -7163,6 +7265,7 @@ mod tests {
       .map(|_| ColumnConstraints::new(0.0, 0.0))
       .collect();
     let tfc = TableFormattingContext::new();
+    let style_overrides = StyleOverrideCache::default();
     let source_rows = collect_source_rows(&table);
     let cell_bfc = BlockFormattingContext::with_font_context_and_viewport(
       tfc.factory.font_context().clone(),
@@ -7178,6 +7281,7 @@ mod tests {
       structure.border_collapse,
       percent_base,
       &cell_bfc,
+      &style_overrides,
     );
     let resolved_width = span_box
       .style
@@ -7203,6 +7307,7 @@ mod tests {
       &mut constraints,
       DistributionMode::Auto,
       percent_base,
+      &style_overrides,
     );
 
     let percent_sum: f32 = constraints.iter().filter_map(|c| c.percentage).sum();
@@ -7253,6 +7358,7 @@ mod tests {
       &mut constraints,
       DistributionMode::Auto,
       None,
+      &StyleOverrideCache::default(),
     );
 
     let min = constraints.first().map(|c| c.min_width).unwrap_or(0.0);
@@ -7300,6 +7406,7 @@ mod tests {
       &mut constraints,
       DistributionMode::Auto,
       Some(200.0),
+      &StyleOverrideCache::default(),
     );
 
     let min = constraints.first().map(|c| c.min_width).unwrap_or(0.0);
@@ -7346,6 +7453,7 @@ mod tests {
       &mut constraints,
       DistributionMode::Auto,
       None,
+      &StyleOverrideCache::default(),
     );
 
     let min = constraints.first().map(|c| c.min_width).unwrap_or(0.0);
@@ -7522,6 +7630,7 @@ mod tests {
       &mut constraints,
       DistributionMode::Auto,
       None,
+      &StyleOverrideCache::default(),
     );
 
     let constraint = constraints
@@ -7579,6 +7688,7 @@ mod tests {
       &mut constraints,
       DistributionMode::Auto,
       None,
+      &StyleOverrideCache::default(),
     );
 
     let min = constraints.first().map(|c| c.min_width).unwrap_or(0.0);
@@ -7638,6 +7748,7 @@ mod tests {
       &mut constraints,
       DistributionMode::Auto,
       None,
+      &StyleOverrideCache::default(),
     );
 
     let constraint = constraints
@@ -7696,6 +7807,7 @@ mod tests {
       &mut constraints,
       DistributionMode::Auto,
       Some(200.0),
+      &StyleOverrideCache::default(),
     );
 
     let min = constraints.first().map(|c| c.min_width).unwrap_or(0.0);
@@ -7746,6 +7858,7 @@ mod tests {
       &mut constraints,
       DistributionMode::Auto,
       None,
+      &StyleOverrideCache::default(),
     );
 
     let min = constraints.first().map(|c| c.min_width).unwrap_or(0.0);
@@ -7794,6 +7907,7 @@ mod tests {
       &mut constraints,
       DistributionMode::Auto,
       Some(200.0),
+      &StyleOverrideCache::default(),
     );
 
     let col = constraints.first().expect("column constraints");
@@ -7846,6 +7960,7 @@ mod tests {
       &mut constraints,
       DistributionMode::Auto,
       None,
+      &StyleOverrideCache::default(),
     );
 
     let col = constraints.first().expect("column constraints");
@@ -8613,6 +8728,7 @@ mod tests {
       &mut constraints,
       DistributionMode::Auto,
       None,
+      &StyleOverrideCache::default(),
     );
 
     assert_eq!(constraints.len(), 1);
@@ -8959,6 +9075,7 @@ mod tests {
       &mut column_constraints,
       DistributionMode::Fixed,
       Some(available_content),
+      &StyleOverrideCache::default(),
     );
     let distribution = ColumnDistributor::new(DistributionMode::Fixed)
       .distribute(&column_constraints, available_content);
@@ -12356,6 +12473,7 @@ mod tests {
       &mut constraints,
       DistributionMode::Auto,
       percent_base,
+      &StyleOverrideCache::default(),
     );
     tfc.normalize_percentage_constraints(&mut constraints, percent_base);
 
@@ -13589,7 +13707,6 @@ mod tests {
     assert!(fragment.bounds.height() > 0.0);
   }
 
-  #[test]
   fn running_and_positioned_children_are_preserved() {
     let mut table_style = ComputedStyle::default();
     table_style.display = Display::Table;
@@ -13673,6 +13790,77 @@ mod tests {
         .map(|f| f.bounds.width() > 0.0 && f.bounds.height() > 0.0)
         .unwrap_or(false),
       "positioned child should have non-zero size"
+    );
+  }
+
+  #[test]
+  fn table_cell_override_styles_are_cached() {
+    let mut table_style = ComputedStyle::default();
+    table_style.display = Display::Table;
+    table_style.width = Some(Length::px(200.0));
+    table_style.border_spacing_horizontal = Length::px(0.0);
+    table_style.border_spacing_vertical = Length::px(0.0);
+
+    let mut row_style = ComputedStyle::default();
+    row_style.display = Display::TableRow;
+
+    let mut cell_style = ComputedStyle::default();
+    cell_style.display = Display::TableCell;
+    cell_style.width = Some(Length::px(100.0));
+    cell_style.margin_left = Some(Length::px(4.0));
+    cell_style.margin_right = Some(Length::px(4.0));
+    let shared_cell_style = Arc::new(cell_style);
+
+    let first_cell = BoxNode::new_block(
+      shared_cell_style.clone(),
+      FormattingContextType::Block,
+      vec![],
+    );
+    let second_cell = BoxNode::new_block(
+      shared_cell_style.clone(),
+      FormattingContextType::Block,
+      vec![],
+    );
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![first_cell, second_cell],
+    );
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
+
+    let tfc = TableFormattingContext::new();
+    let fragment = tfc
+      .layout(&table, &LayoutConstraints::definite_width(200.0))
+      .expect("table layout");
+
+    let mut cell_fragments = Vec::new();
+    collect_table_cell_fragments(&fragment, &mut cell_fragments);
+    assert_eq!(cell_fragments.len(), 2, "expected two table cell fragments");
+    let first_style = cell_fragments[0].style.as_ref().expect("first cell style");
+    let second_style = cell_fragments[1].style.as_ref().expect("second cell style");
+    assert!(
+      Arc::ptr_eq(first_style, second_style),
+      "override styles should be reused across cells sharing the same base style"
+    );
+    assert!(
+      first_style.width.is_none(),
+      "layout overrides should clear authored widths on derived styles"
+    );
+
+    let total_width: f32 = cell_fragments.iter().map(|f| f.bounds.width()).sum();
+    assert!(
+      (total_width - 200.0).abs() < 0.5,
+      "cached styles should not alter layout width (got {:.2})",
+      total_width
+    );
+    assert!(
+      (fragment.bounds.width() - 200.0).abs() < 0.5,
+      "table width should remain at the authored 200px (got {:.2})",
+      fragment.bounds.width()
     );
   }
 
