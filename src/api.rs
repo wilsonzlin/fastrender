@@ -121,7 +121,9 @@ use crate::paint::painter::paint_tree_display_list_with_resources_scaled_offset_
 use crate::paint::painter::paint_tree_with_resources_scaled_offset_backend_with_iframe_depth;
 use crate::paint::painter::paint_tree_with_resources_scaled_offset_with_trace;
 use crate::paint::painter::PaintBackend;
-use crate::render_control::{CancelCallback, DeadlineGuard, RenderDeadline};
+use crate::render_control::{
+  record_stage, CancelCallback, DeadlineGuard, RenderDeadline, StageHeartbeat,
+};
 use crate::resource::CachingFetcherConfig;
 use crate::resource::{
   origin_from_url, CachingFetcher, DocumentOrigin, HttpFetcher, PolicyError, ResourceAccessPolicy,
@@ -3408,6 +3410,7 @@ impl FastRender {
     let overall_start = stage_start.clone();
 
     // Parse HTML to DOM
+    record_stage(StageHeartbeat::DomParse);
     let parse_timer = stats.as_deref().and_then(|rec| rec.timer());
     let dom = {
       let _span = trace.span("dom_parse", "parse");
@@ -3748,26 +3751,23 @@ impl FastRender {
         trace,
       )?;
       if let Some(rec) = stats.as_deref_mut() {
-        if let Some(diag) = crate::paint::painter::take_paint_diagnostics() {
-          rec.stats.timings.paint_build_ms = Some(diag.build_ms);
-          rec.stats.timings.paint_rasterize_ms = Some(diag.raster_ms);
-          rec.stats.paint.display_items = Some(diag.command_count);
-          rec.stats.paint.gradient_ms = Some(diag.gradient_ms);
-          rec.stats.paint.gradient_pixels = Some(diag.gradient_pixels);
-<<<<<<< HEAD
-          rec.stats.paint.parallel_tasks = Some(diag.parallel_tasks);
-          rec.stats.paint.parallel_threads = Some(diag.parallel_threads);
-          rec.stats.paint.parallel_ms = Some(diag.parallel_ms);
-          rec.stats.paint.serial_ms = Some(diag.serial_ms);
-=======
-          rec.stats.paint.filter_cache_hits = Some(diag.filter_cache_hits);
-          rec.stats.paint.filter_cache_misses = Some(diag.filter_cache_misses);
-          rec.stats.paint.blur_cache_hits = Some(diag.blur_cache_hits);
-          rec.stats.paint.blur_cache_misses = Some(diag.blur_cache_misses);
-          rec.stats.paint.blur_tiles = Some(diag.blur_tiles);
->>>>>>> d2d56f6 (Optimize filter blurs with caching and tiling)
+          if let Some(diag) = crate::paint::painter::take_paint_diagnostics() {
+            rec.stats.timings.paint_build_ms = Some(diag.build_ms);
+            rec.stats.timings.paint_rasterize_ms = Some(diag.raster_ms);
+            rec.stats.paint.display_items = Some(diag.command_count);
+            rec.stats.paint.gradient_ms = Some(diag.gradient_ms);
+            rec.stats.paint.gradient_pixels = Some(diag.gradient_pixels);
+            rec.stats.paint.parallel_tasks = Some(diag.parallel_tasks);
+            rec.stats.paint.parallel_threads = Some(diag.parallel_threads);
+            rec.stats.paint.parallel_ms = Some(diag.parallel_ms);
+            rec.stats.paint.serial_ms = Some(diag.serial_ms);
+            rec.stats.paint.filter_cache_hits = Some(diag.filter_cache_hits);
+            rec.stats.paint.filter_cache_misses = Some(diag.filter_cache_misses);
+            rec.stats.paint.blur_cache_hits = Some(diag.blur_cache_hits);
+            rec.stats.paint.blur_cache_misses = Some(diag.blur_cache_misses);
+            rec.stats.paint.blur_tiles = Some(diag.blur_tiles);
+          }
         }
-      }
 
       if let Some(start) = stage_start {
         let now = Instant::now();
@@ -4523,6 +4523,7 @@ impl FastRender {
 
       let mut result = (|| -> Result<RenderReport> {
         let html_with_css = {
+          record_stage(StageHeartbeat::CssInline);
           let _span = trace_handle.span("css_inline", "style");
           let _deadline_guard = DeadlineGuard::install(Some(&deadline));
           let mut guard = diagnostics.lock().unwrap();
@@ -5413,6 +5414,7 @@ impl FastRender {
       eprintln!("timing:style_prepare {:?}", start.elapsed());
     }
     let style_apply_start = timings_enabled.then(Instant::now);
+    record_stage(StageHeartbeat::Cascade);
     let mut styled_tree = {
       let _span = trace.span("cascade", "style");
       apply_style_set_with_media_target_and_imports_cached_with_deadline(
@@ -5718,6 +5720,7 @@ impl FastRender {
     let mut layout_start = stage_start;
 
     // Perform initial layout
+    record_stage(StageHeartbeat::Layout);
     let _fragmentainer_hint = if page_rules.is_empty() {
       None
     } else {
@@ -6188,6 +6191,7 @@ impl FastRender {
     scroll_state: &ScrollState,
     trace: &TraceHandle,
   ) -> Result<Pixmap> {
+    record_stage(StageHeartbeat::PaintBuild);
     match paint_backend_from_env() {
       PaintBackend::Legacy => paint_tree_with_resources_scaled_offset_with_trace(
         fragment_tree,

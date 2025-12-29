@@ -30,6 +30,7 @@ use fastrender::error::{RenderError, RenderStage};
 use fastrender::pageset::{
   pageset_entries, pageset_stem, PagesetEntry, PagesetFilter, CACHE_HTML_DIR,
 };
+use fastrender::render_control::{record_stage, set_stage_listener, StageHeartbeat};
 use fastrender::resource::normalize_user_agent_for_log;
 use fastrender::resource::parse_cached_html_meta;
 #[cfg(not(feature = "disk_cache"))]
@@ -51,7 +52,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tempfile::NamedTempFile;
 
@@ -436,6 +437,10 @@ struct WorkerArgs {
   /// Output log path (optional)
   #[arg(long)]
   log_path: Option<PathBuf>,
+
+  /// Path to write heartbeat stage markers (optional)
+  #[arg(long)]
+  stage_path: Option<PathBuf>,
 
   /// Viewport size as WxH (e.g., 1200x800)
   #[arg(long, value_parser = parse_viewport)]
@@ -1133,6 +1138,15 @@ pub(crate) fn populate_timeout_progress(
 }
 
 fn render_worker(args: WorkerArgs) -> io::Result<()> {
+  let heartbeat = StageHeartbeatWriter::new(args.stage_path.clone());
+  let _heartbeat_guard = StageListenerGuard::new(heartbeat.listener());
+  record_stage(StageHeartbeat::ReadCache);
+  if let Some(delay) = std::env::var("FASTR_TEST_RENDER_DELAY_MS")
+    .ok()
+    .and_then(|v| v.parse::<u64>().ok())
+  {
+    std::thread::sleep(Duration::from_millis(delay));
+  }
   let started = Instant::now();
   let mut log = String::new();
   let current_sha = current_git_sha();
@@ -1314,6 +1328,7 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
 
   let mut doc = cached.document;
   log.push_str(&format!("Resource base: {}\n", doc.base_url));
+  record_stage(StageHeartbeat::FollowRedirects);
   doc = follow_client_redirects(fetcher.as_ref(), doc, |line| {
     log.push_str(line);
     log.push('\n');
@@ -1328,6 +1343,7 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     log.push_str("Detected @page rule; fitting canvas to content\n");
   }
 
+  record_stage(StageHeartbeat::CssInline);
   let render_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
     render_document(&mut renderer, doc, &options)
   }));
@@ -1417,6 +1433,7 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     let _ = write_text_file(path, &log);
   }
 
+  record_stage(StageHeartbeat::Done);
   Ok(())
 }
 
@@ -1709,6 +1726,105 @@ fn capture_dump_for_page(
     Err(panic) => {
       log.push_str(&format!("Dump render panic: {}\n", panic_to_string(panic)));
     }
+  }
+}
+
+#[derive(Clone)]
+struct StageHeartbeatWriter {
+  path: Option<PathBuf>,
+  last: Arc<Mutex<Option<StageHeartbeat>>>,
+}
+
+impl StageHeartbeatWriter {
+  fn new(path: Option<PathBuf>) -> Self {
+    Self {
+      path,
+      last: Arc::new(Mutex::new(None)),
+    }
+  }
+
+  fn listener(&self) -> Arc<dyn Fn(StageHeartbeat) + Send + Sync> {
+    let writer = self.clone();
+    Arc::new(move |stage| writer.record(stage))
+  }
+
+  fn record(&self, stage: StageHeartbeat) {
+    let Some(path) = &self.path else {
+      return;
+    };
+    {
+      if let Ok(guard) = self.last.lock() {
+        if guard.as_ref() == Some(&stage) {
+          return;
+        }
+      }
+    }
+    let tmp_path = stage_tmp_path(path);
+    let contents = format!("{}\n", stage.as_str());
+    let write_result = (|| -> io::Result<()> {
+      if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+          fs::create_dir_all(parent)?;
+        }
+      }
+      let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&tmp_path)?;
+      file.write_all(contents.as_bytes())?;
+      file.sync_all()?;
+      fs::rename(&tmp_path, path)?;
+      Ok(())
+    })();
+    if write_result.is_ok() {
+      if let Ok(mut guard) = self.last.lock() {
+        *guard = Some(stage);
+      }
+    }
+  }
+}
+
+struct StageListenerGuard;
+
+impl StageListenerGuard {
+  fn new(listener: Arc<dyn Fn(StageHeartbeat) + Send + Sync>) -> Self {
+    set_stage_listener(Some(listener));
+    Self
+  }
+}
+
+impl Drop for StageListenerGuard {
+  fn drop(&mut self) {
+    set_stage_listener(None);
+  }
+}
+
+fn stage_tmp_path(path: &Path) -> PathBuf {
+  let tmp_name = path
+    .file_name()
+    .map(|name| format!("{}.tmp", name.to_string_lossy()))
+    .unwrap_or_else(|| "stage.tmp".to_string());
+  path.with_file_name(tmp_name)
+}
+
+fn read_stage_file(path: &Path) -> Option<StageHeartbeat> {
+  let raw = fs::read_to_string(path).ok()?;
+  StageHeartbeat::from_str(raw.trim())
+}
+
+fn read_stage_heartbeat(path: &Path) -> Option<StageHeartbeat> {
+  read_stage_file(path).or_else(|| read_stage_file(&stage_tmp_path(path)))
+}
+
+fn append_stage_to_note(base: &str, stage: Option<StageHeartbeat>) -> String {
+  let Some(stage) = stage else {
+    return base.to_string();
+  };
+  if base.trim().is_empty() {
+    format!("stage: {}", stage.as_str())
+  } else {
+    format!("{base} (stage: {})", stage.as_str())
   }
 }
 
@@ -2689,6 +2805,7 @@ struct WorkItem {
   progress_path: PathBuf,
   log_path: PathBuf,
   stderr_path: PathBuf,
+  stage_path: PathBuf,
   trace_out: Option<PathBuf>,
 }
 
@@ -2761,6 +2878,7 @@ fn work_item_from_cache(
     progress_path: args.progress_dir.join(format!("{cache_stem}.json")),
     log_path: args.log_dir.join(format!("{cache_stem}.log")),
     stderr_path: args.log_dir.join(format!("{cache_stem}.stderr.log")),
+    stage_path: args.log_dir.join(format!("{cache_stem}.stage")),
     trace_out: None,
   }
 }
@@ -2781,6 +2899,7 @@ fn spawn_worker(
   worker_timeout: Duration,
   dump: Option<&DumpSettings>,
 ) -> io::Result<Child> {
+  let worker_timeout_secs = worker_timeout.as_secs().max(1);
   let mut cmd = Command::new(exe);
   cmd
     .arg("worker")
@@ -2792,6 +2911,8 @@ fn spawn_worker(
     .arg(&item.progress_path)
     .arg("--log-path")
     .arg(&item.log_path)
+    .arg("--stage-path")
+    .arg(&item.stage_path)
     .arg("--viewport")
     .arg(format!("{}x{}", args.viewport.0, args.viewport.1))
     .arg("--dpr")
@@ -2803,7 +2924,7 @@ fn spawn_worker(
     .arg("--diagnostics")
     .arg(format!("{:?}", diagnostics).to_ascii_lowercase())
     .arg("--timeout")
-    .arg(worker_timeout.as_secs().to_string());
+    .arg(worker_timeout_secs.to_string());
 
   if args.no_http_freshness {
     cmd.arg("--no-http-freshness");
@@ -2911,6 +3032,8 @@ fn run_queue(
       let Some(item) = queue.pop_front() else {
         break;
       };
+      let _ = fs::remove_file(&item.stage_path);
+      let _ = fs::remove_file(stage_tmp_path(&item.stage_path));
       let child = spawn_worker(
         exe,
         args,
@@ -2939,12 +3062,25 @@ fn run_queue(
         append_timeout_stderr_note(&entry.item.stderr_path, elapsed);
 
         let previous = read_progress(&entry.item.progress_path);
+        let heartbeat_stage = read_stage_heartbeat(&entry.item.stage_path);
         let mut progress = PageProgress::new(entry.item.url.clone());
         progress.status = ProgressStatus::Timeout;
         progress.total_ms = Some(kill_timeout.as_secs_f64() * 1000.0);
-        progress.notes = format!("hard timeout after {:.2}s", kill_timeout.as_secs_f64());
-        progress.hotspot = "unknown".to_string();
-        let progress = progress.merge_preserving_manual(previous, current_sha.as_deref());
+        progress.notes = append_stage_to_note(
+          &format!("hard timeout after {:.2}s", kill_timeout.as_secs_f64()),
+          heartbeat_stage,
+        );
+        progress.hotspot = heartbeat_stage
+          .map(|stage| stage.hotspot().to_string())
+          .unwrap_or_else(|| "unknown".to_string());
+        let mut progress = progress.merge_preserving_manual(previous, current_sha.as_deref());
+        ensure_note_includes(
+          &mut progress,
+          &format!("hard timeout after {:.2}s", kill_timeout.as_secs_f64()),
+        );
+        if let Some(stage) = heartbeat_stage {
+          ensure_note_includes(&mut progress, &format!("stage: {}", stage.as_str()));
+        }
         let _ = write_progress(&entry.item.progress_path, &progress);
 
         let _ = write_text_file(
@@ -2984,14 +3120,23 @@ fn run_queue(
           } else {
             // Fallback: worker exited but didn't write progress.
             let previous = read_progress(&entry.item.progress_path);
+            let heartbeat_stage = read_stage_heartbeat(&entry.item.stage_path);
             let mut progress = PageProgress::new(entry.item.url.clone());
             progress.status = ProgressStatus::Panic;
             progress.total_ms = Some(entry.started.elapsed().as_secs_f64() * 1000.0);
             let note = synthesize_missing_progress_note(exit_summary);
-            progress.notes = note.clone();
-            progress.hotspot = "unknown".to_string();
+            progress.notes = append_stage_to_note(&note, heartbeat_stage);
+            progress.hotspot = heartbeat_stage
+              .map(|stage| stage.hotspot().to_string())
+              .unwrap_or_else(|| "unknown".to_string());
             let mut progress = progress.merge_preserving_manual(previous, current_sha.as_deref());
             ensure_note_includes(&mut progress, &note);
+            if let Some(stage) = heartbeat_stage {
+              ensure_note_includes(&mut progress, &format!("stage: {}", stage.as_str()));
+              if is_hotspot_unset(&progress.hotspot) {
+                progress.hotspot = stage.hotspot().to_string();
+              }
+            }
             let _ = write_progress(&entry.item.progress_path, &progress);
             eprintln!(
               "PANIC {} (no progress written, exit: {})",
@@ -3012,12 +3157,18 @@ fn run_queue(
           // Treat as crash and move on.
           let entry = running.swap_remove(i);
           let previous = read_progress(&entry.item.progress_path);
+          let heartbeat_stage = read_stage_heartbeat(&entry.item.stage_path);
           let mut progress = PageProgress::new(entry.item.url.clone());
           progress.status = ProgressStatus::Panic;
           progress.total_ms = Some(entry.started.elapsed().as_secs_f64() * 1000.0);
           progress.notes = "worker try_wait failed".to_string();
-          progress.hotspot = "unknown".to_string();
-          let progress = progress.merge_preserving_manual(previous, current_sha.as_deref());
+          progress.hotspot = heartbeat_stage
+            .map(|stage| stage.hotspot().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+          let mut progress = progress.merge_preserving_manual(previous, current_sha.as_deref());
+          if let Some(stage) = heartbeat_stage {
+            ensure_note_includes(&mut progress, &format!("stage: {}", stage.as_str()));
+          }
           let _ = write_progress(&entry.item.progress_path, &progress);
           eprintln!("PANIC {} (try_wait failed)", entry.item.cache_stem);
           if let Some(trace_out) = &entry.item.trace_out {
@@ -3382,6 +3533,7 @@ fn run(args: RunArgs) -> io::Result<()> {
         stderr_path: args
           .log_dir
           .join(format!("{}.trace.stderr.log", item.cache_stem)),
+        stage_path: args.log_dir.join(format!("{}.trace.stage", item.cache_stem)),
         trace_out: Some(trace_out),
       });
     }
@@ -3427,6 +3579,7 @@ fn worker(args: WorkerArgs) -> io::Result<()> {
   }
   let progress_path = args.progress_path.clone();
   let log_path = args.log_path.clone();
+  let stage_path = args.stage_path.clone();
   let stem = args.stem.clone();
   let cache_path = args.cache_path.clone();
   let verbose = args.verbose;
@@ -3439,12 +3592,20 @@ fn worker(args: WorkerArgs) -> io::Result<()> {
     Err(panic) => {
       let previous = read_progress(&progress_path);
       let url = url_hint_from_cache_path(&cache_path);
+      let heartbeat_stage = stage_path
+        .as_ref()
+        .and_then(|path| read_stage_heartbeat(path));
       let mut progress = PageProgress::new(url);
       progress.status = ProgressStatus::Panic;
       progress.total_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
       progress.notes = panic_to_string(panic);
-      progress.hotspot = "unknown".to_string();
-      let progress = progress.merge_preserving_manual(previous, current_sha.as_deref());
+      progress.hotspot = heartbeat_stage
+        .map(|stage| stage.hotspot().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+      let mut progress = progress.merge_preserving_manual(previous, current_sha.as_deref());
+      if let Some(stage) = heartbeat_stage {
+        ensure_note_includes(&mut progress, &format!("stage: {}", stage.as_str()));
+      }
       let _ = write_progress(&progress_path, &progress);
       if let Some(path) = &log_path {
         let _ = write_text_file(
@@ -3464,9 +3625,10 @@ fn worker(args: WorkerArgs) -> io::Result<()> {
 mod tests {
   use super::*;
   use fastrender::api::RenderStageTimings;
-  use std::collections::HashSet;
+  use std::collections::{HashSet, VecDeque};
   use std::fs;
   use std::io;
+  use std::path::{Path, PathBuf};
   use std::time::Duration;
   use tempfile::tempdir;
 
@@ -3493,6 +3655,73 @@ mod tests {
       set.insert(*status);
     }
     set
+  }
+
+  struct EnvVarGuard {
+    key: &'static str,
+  }
+
+  impl EnvVarGuard {
+    fn set(key: &'static str, value: &str) -> Self {
+      std::env::set_var(key, value);
+      Self { key }
+    }
+  }
+
+  impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+      std::env::remove_var(self.key);
+    }
+  }
+
+  fn basic_run_args(base: &Path) -> RunArgs {
+    RunArgs {
+      jobs: 1,
+      timeout: 1,
+      soft_timeout_ms: None,
+      viewport: (120, 80),
+      dpr: 1.0,
+      user_agent: DEFAULT_USER_AGENT.to_string(),
+      accept_language: DEFAULT_ACCEPT_LANGUAGE.to_string(),
+      no_http_freshness: false,
+      css_limit: None,
+      fonts: FontSourceArgs {
+        bundled_fonts: false,
+        font_dir: Vec::new(),
+      },
+      resource_access: ResourceAccessArgs {
+        allow_file_from_http: false,
+        block_mixed_content: false,
+        same_origin_subresources: false,
+        allow_subresource_origin: Vec::new(),
+      },
+      layout_parallel: LayoutParallelArgs {
+        layout_parallel: false,
+        layout_parallel_min_fanout: 8,
+        layout_parallel_max_threads: None,
+      },
+      compat: CompatArgs::default(),
+      pages: None,
+      shard: None,
+      selection: ProgressSelectionArgs::default(),
+      progress_dir: base.to_path_buf(),
+      log_dir: base.to_path_buf(),
+      trace_failures: false,
+      trace_slow_ms: None,
+      trace_timeout: None,
+      trace_soft_timeout_ms: None,
+      trace_jobs: 1,
+      trace_dir: base.join("trace"),
+      trace_progress_dir: base.join("trace_progress"),
+      dump_failures: None,
+      dump_slow_ms: None,
+      dump_slow: None,
+      dump_dir: base.join("dump"),
+      dump_timeout: None,
+      dump_soft_timeout_ms: None,
+      diagnostics: DiagnosticsArg::None,
+      verbose: false,
+    }
   }
 
   #[test]
@@ -3869,6 +4098,90 @@ mod tests {
     let hard = Duration::from_secs(2);
     assert_eq!(compute_fetch_timeout(hard, None), hard);
     assert_eq!(compute_fetch_timeout(hard, Some(0)), hard);
+  }
+
+  #[test]
+  fn heartbeat_stage_maps_to_hotspot() {
+    assert_eq!(StageHeartbeat::ReadCache.hotspot(), "fetch");
+    assert_eq!(StageHeartbeat::FollowRedirects.hotspot(), "fetch");
+    assert_eq!(StageHeartbeat::DomParse.hotspot(), "fetch");
+    assert_eq!(StageHeartbeat::CssInline.hotspot(), "css");
+    assert_eq!(StageHeartbeat::Cascade.hotspot(), "cascade");
+    assert_eq!(StageHeartbeat::Layout.hotspot(), "layout");
+    assert_eq!(StageHeartbeat::PaintBuild.hotspot(), "paint");
+    assert_eq!(StageHeartbeat::PaintRasterize.hotspot(), "paint");
+  }
+
+  #[test]
+  fn hard_timeout_prefers_heartbeat_stage() {
+    let exe = std::env::var("CARGO_BIN_EXE_pageset_progress")
+      .map(PathBuf::from)
+      .map_err(|_| ())
+      .or_else(|_| {
+        let candidate = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+          .join("target")
+          .join("debug")
+          .join("pageset_progress");
+        if candidate.exists() {
+          Ok(candidate)
+        } else {
+          Err(())
+        }
+      });
+    let exe = match exe {
+      Ok(path) => path,
+      Err(_) => {
+        eprintln!("Skipping test: pageset_progress binary not found");
+        return;
+      }
+    };
+
+    let dir = tempdir().unwrap();
+    let cache_path = dir.path().join("page.html");
+    fs::write(&cache_path, "<html><body>slow</body></html>").unwrap();
+    let progress_path = dir.path().join("page.json");
+    let log_path = dir.path().join("page.log");
+    let stage_path = dir.path().join("page.stage");
+    let stderr_path = dir.path().join("page.stderr.log");
+
+    let item = WorkItem {
+      stem: "heartbeat".to_string(),
+      cache_stem: "heartbeat".to_string(),
+      url: url_hint_from_cache_path(&cache_path),
+      cache_path: cache_path.clone(),
+      progress_path: progress_path.clone(),
+      log_path: log_path.clone(),
+      stderr_path: stderr_path.clone(),
+      stage_path: stage_path.clone(),
+      trace_out: None,
+    };
+
+    let args = basic_run_args(dir.path());
+    let hard_timeout = Duration::from_millis(200);
+    let _guard = EnvVarGuard::set("FASTR_TEST_RENDER_DELAY_MS", "500");
+    let queue = VecDeque::from(vec![item]);
+    run_queue(
+      &exe,
+      &args,
+      queue,
+      hard_timeout,
+      hard_timeout,
+      None,
+      args.diagnostics,
+      args.jobs,
+      None,
+    )
+    .unwrap();
+
+    let progress = read_progress(&progress_path).expect("progress");
+    assert_eq!(progress.status, ProgressStatus::Timeout);
+    let heartbeat_stage = read_stage_heartbeat(&stage_path).expect("heartbeat");
+    assert_eq!(progress.hotspot, heartbeat_stage.hotspot().to_string());
+    assert!(
+      progress.notes.contains(heartbeat_stage.as_str()),
+      "notes missing stage: {}",
+      progress.notes
+    );
   }
 }
 

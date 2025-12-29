@@ -247,7 +247,6 @@ pub(crate) fn record_text_shape(start: Option<Instant>, shaped_runs: usize, glyp
   }
 }
 
-<<<<<<< HEAD
 pub(crate) fn record_text_coverage(start: Option<Instant>) {
   if let Some(start) = start {
     let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;

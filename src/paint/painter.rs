@@ -67,7 +67,7 @@ use crate::paint::text_shadow::resolve_text_shadows;
 use crate::paint::text_shadow::PathBounds;
 use crate::paint::text_shadow::ResolvedTextShadow;
 use crate::paint::transform_resolver::{backface_is_hidden, resolve_transform3d};
-use crate::render_control::check_active;
+use crate::render_control::{check_active, record_stage, StageHeartbeat};
 use crate::scroll::ScrollState;
 #[cfg(test)]
 use crate::style::color::Color;
@@ -9724,6 +9724,7 @@ fn legacy_paint_tree_with_resources_scaled_offset(
       .with_max_iframe_depth(max_iframe_depth)
       .with_scroll_state(scroll_state.clone())
       .with_trace(trace);
+  record_stage(StageHeartbeat::PaintRasterize);
   painter.paint_with_offset(tree, offset)
 }
 
@@ -9770,6 +9771,7 @@ pub fn paint_tree_display_list_with_resources_scaled_offset_depth(
   scroll_state: &ScrollState,
   max_iframe_depth: usize,
 ) -> Result<Pixmap> {
+  record_stage(StageHeartbeat::PaintBuild);
   let viewport = tree.viewport_size();
   let mut display_list = DisplayListBuilder::with_image_cache(image_cache.clone())
     .with_font_context(font_ctx.clone())
@@ -9799,6 +9801,7 @@ pub fn paint_tree_display_list_with_resources_scaled_offset_depth(
 
   let mut renderer = DisplayListRenderer::new_scaled(width, height, background, font_ctx, scale)?;
   renderer.set_parallelism(paint_parallelism);
+  record_stage(StageHeartbeat::PaintRasterize);
   let report = renderer.render_with_report(&optimized)?;
   if paint_diagnostics_enabled() {
     with_paint_diagnostics(|diag| {

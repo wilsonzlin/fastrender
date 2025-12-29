@@ -1,6 +1,6 @@
 use crate::error::{RenderError, RenderStage};
 use std::cell::RefCell;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 thread_local! {
@@ -21,6 +21,87 @@ pub struct RenderDeadline {
 /// Guard that installs an active deadline for the duration of a render stage.
 pub struct DeadlineGuard {
   previous: Option<RenderDeadline>,
+}
+
+/// Stages surfaced via heartbeat callbacks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StageHeartbeat {
+  ReadCache,
+  FollowRedirects,
+  CssInline,
+  DomParse,
+  Cascade,
+  Layout,
+  PaintBuild,
+  PaintRasterize,
+  Done,
+}
+
+impl StageHeartbeat {
+  pub fn as_str(self) -> &'static str {
+    match self {
+      StageHeartbeat::ReadCache => "read_cache",
+      StageHeartbeat::FollowRedirects => "follow_redirects",
+      StageHeartbeat::CssInline => "css_inline",
+      StageHeartbeat::DomParse => "dom_parse",
+      StageHeartbeat::Cascade => "cascade",
+      StageHeartbeat::Layout => "layout",
+      StageHeartbeat::PaintBuild => "paint_build",
+      StageHeartbeat::PaintRasterize => "paint_rasterize",
+      StageHeartbeat::Done => "done",
+    }
+  }
+
+  pub fn from_str(raw: &str) -> Option<Self> {
+    match raw.trim() {
+      "read_cache" => Some(StageHeartbeat::ReadCache),
+      "follow_redirects" => Some(StageHeartbeat::FollowRedirects),
+      "css_inline" => Some(StageHeartbeat::CssInline),
+      "dom_parse" => Some(StageHeartbeat::DomParse),
+      "cascade" => Some(StageHeartbeat::Cascade),
+      "layout" => Some(StageHeartbeat::Layout),
+      "paint_build" => Some(StageHeartbeat::PaintBuild),
+      "paint_rasterize" => Some(StageHeartbeat::PaintRasterize),
+      "done" => Some(StageHeartbeat::Done),
+      _ => None,
+    }
+  }
+
+  pub fn hotspot(self) -> &'static str {
+    match self {
+      StageHeartbeat::ReadCache | StageHeartbeat::FollowRedirects | StageHeartbeat::DomParse => {
+        "fetch"
+      }
+      StageHeartbeat::CssInline => "css",
+      StageHeartbeat::Cascade => "cascade",
+      StageHeartbeat::Layout => "layout",
+      StageHeartbeat::PaintBuild | StageHeartbeat::PaintRasterize => "paint",
+      StageHeartbeat::Done => "unknown",
+    }
+  }
+}
+
+type StageListener = Arc<dyn Fn(StageHeartbeat) + Send + Sync>;
+
+fn stage_listener() -> &'static Mutex<Option<StageListener>> {
+  static LISTENER: OnceLock<Mutex<Option<StageListener>>> = OnceLock::new();
+  LISTENER.get_or_init(|| Mutex::new(None))
+}
+
+pub fn set_stage_listener(listener: Option<StageListener>) {
+  if let Ok(mut guard) = stage_listener().lock() {
+    *guard = listener;
+  }
+}
+
+pub fn record_stage(stage: StageHeartbeat) {
+  let maybe_listener = stage_listener()
+    .lock()
+    .ok()
+    .and_then(|guard| guard.as_ref().cloned());
+  if let Some(listener) = maybe_listener {
+    listener(stage);
+  }
 }
 
 impl RenderDeadline {

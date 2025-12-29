@@ -41,7 +41,6 @@ use crate::dom::ElementRef;
 use crate::dom::SelectorBloomMap;
 use crate::dom::SelectorBloomSummary;
 use crate::dom::SiblingListCache;
-use crate::dom::SiblingListCache;
 use crate::dom::SlotAssignment;
 use crate::dom::HTML_NAMESPACE;
 use crate::error::Error;
