@@ -88,6 +88,8 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 use std::num::NonZeroUsize;
 use std::str::FromStr;
+#[cfg(any(test, debug_assertions))]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 use ttf_parser::Tag;
@@ -99,7 +101,11 @@ use unicode_vo::char_orientation;
 use unicode_vo::Orientation as VerticalOrientation;
 
 pub(crate) const DEFAULT_OBLIQUE_ANGLE_DEG: f32 = 14.0;
+const SHAPING_CACHE_CAPACITY: usize = 2048;
 const FONT_RESOLUTION_CACHE_SIZE: usize = 2048;
+
+#[cfg(any(test, debug_assertions))]
+static SHAPE_FONT_RUN_INVOCATIONS: AtomicUsize = AtomicUsize::new(0);
 
 // ============================================================================
 // Core Types
@@ -2781,6 +2787,9 @@ fn map_hb_position(
 
 /// Shapes a single font run into positioned glyphs.
 fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
+  #[cfg(any(test, debug_assertions))]
+  SHAPE_FONT_RUN_INVOCATIONS.fetch_add(1, Ordering::Relaxed);
+
   // Create rustybuzz face from font data
   let mut rb_face =
     Face::from_slice(&run.font.data, run.font.index).ok_or_else(|| TextError::ShapingFailed {
@@ -2928,9 +2937,7 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
 /// ```
 #[derive(Debug, Clone)]
 pub struct ShapingPipeline {
-  cache: std::sync::Arc<
-    std::sync::Mutex<std::collections::HashMap<ShapingCacheKey, std::sync::Arc<Vec<ShapedRun>>>>,
-  >,
+  cache: ShapingCache,
   font_cache: FontResolverCache,
 }
 
@@ -3082,6 +3089,108 @@ impl PartialEq for ShapingCacheKey {
   }
 }
 
+#[cfg(any(test, debug_assertions))]
+#[derive(Default, Debug)]
+struct ShapingCacheStats {
+  hits: AtomicUsize,
+  misses: AtomicUsize,
+  evictions: AtomicUsize,
+}
+
+#[cfg(any(test, debug_assertions))]
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ShapingCacheStatsSnapshot {
+  hits: usize,
+  misses: usize,
+  evictions: usize,
+}
+
+#[cfg(any(test, debug_assertions))]
+impl ShapingCacheStats {
+  fn snapshot(&self) -> ShapingCacheStatsSnapshot {
+    ShapingCacheStatsSnapshot {
+      hits: self.hits.load(Ordering::Relaxed),
+      misses: self.misses.load(Ordering::Relaxed),
+      evictions: self.evictions.load(Ordering::Relaxed),
+    }
+  }
+
+  fn clear(&self) {
+    self.hits.store(0, Ordering::Relaxed);
+    self.misses.store(0, Ordering::Relaxed);
+    self.evictions.store(0, Ordering::Relaxed);
+  }
+}
+
+#[derive(Clone, Debug)]
+struct ShapingCache {
+  entries: Arc<Mutex<LruCache<ShapingCacheKey, Arc<Vec<ShapedRun>>>>>,
+  #[cfg(any(test, debug_assertions))]
+  stats: Arc<ShapingCacheStats>,
+}
+
+impl ShapingCache {
+  fn new(capacity: usize) -> Self {
+    let cap = NonZeroUsize::new(capacity).unwrap_or_else(|| NonZeroUsize::new(1).unwrap());
+    Self {
+      entries: Arc::new(Mutex::new(LruCache::new(cap))),
+      #[cfg(any(test, debug_assertions))]
+      stats: Arc::new(ShapingCacheStats::default()),
+    }
+  }
+
+  fn get(&self, key: &ShapingCacheKey) -> Option<Arc<Vec<ShapedRun>>> {
+    let result = self
+      .entries
+      .lock()
+      .ok()
+      .and_then(|mut cache| cache.get(key).cloned());
+    #[cfg(any(test, debug_assertions))]
+    {
+      if result.is_some() {
+        self.stats.hits.fetch_add(1, Ordering::Relaxed);
+      } else {
+        self.stats.misses.fetch_add(1, Ordering::Relaxed);
+      }
+    }
+    result
+  }
+
+  fn insert(&self, key: ShapingCacheKey, value: Arc<Vec<ShapedRun>>) -> Arc<Vec<ShapedRun>> {
+    if let Ok(mut cache) = self.entries.lock() {
+      if let Some(existing) = cache.peek(&key).cloned() {
+        return existing;
+      }
+      #[cfg(any(test, debug_assertions))]
+      let at_capacity = cache.len() >= cache.cap().get();
+      let evicted = cache.put(key, Arc::clone(&value));
+      #[cfg(any(test, debug_assertions))]
+      if evicted.is_some() || at_capacity {
+        self.stats.evictions.fetch_add(1, Ordering::Relaxed);
+      }
+    }
+    value
+  }
+
+  fn clear(&self) {
+    if let Ok(mut cache) = self.entries.lock() {
+      cache.clear();
+    }
+    #[cfg(any(test, debug_assertions))]
+    self.stats.clear();
+  }
+
+  #[cfg(any(test, debug_assertions))]
+  fn len(&self) -> usize {
+    self.entries.lock().map(|cache| cache.len()).unwrap_or(0)
+  }
+
+  #[cfg(any(test, debug_assertions))]
+  fn stats(&self) -> ShapingCacheStatsSnapshot {
+    self.stats.snapshot()
+  }
+}
+
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 struct FontResolverCacheKey {
   ch: char,
@@ -3155,17 +3264,33 @@ impl ShapingPipeline {
   /// Creates a new shaping pipeline.
   pub fn new() -> Self {
     Self {
-      cache: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+      cache: ShapingCache::new(SHAPING_CACHE_CAPACITY),
+      font_cache: FontResolverCache::new(FONT_RESOLUTION_CACHE_SIZE),
+    }
+  }
+
+  #[cfg(test)]
+  fn with_cache_capacity_for_test(capacity: usize) -> Self {
+    Self {
+      cache: ShapingCache::new(capacity),
       font_cache: FontResolverCache::new(FONT_RESOLUTION_CACHE_SIZE),
     }
   }
 
   /// Clears the shaping cache. Useful when reusing a pipeline across multiple documents.
   pub fn clear_cache(&self) {
-    if let Ok(mut cache) = self.cache.lock() {
-      cache.clear();
-    }
+    self.cache.clear();
     self.font_cache.clear();
+  }
+
+  #[cfg(any(test, debug_assertions))]
+  fn cache_stats(&self) -> ShapingCacheStatsSnapshot {
+    self.cache.stats()
+  }
+
+  #[cfg(any(test, debug_assertions))]
+  fn cache_len(&self) -> usize {
+    self.cache.len()
   }
 
   /// Shapes text into positioned glyphs.
@@ -3222,7 +3347,7 @@ impl ShapingPipeline {
       }
     }
 
-    let cache_text = std::sync::Arc::<str>::from(text);
+    let cache_text = Arc::<str>::from(text);
     let style_hash = shaping_style_hash(style);
     let font_generation = font_context.font_generation();
     let cache_key = ShapingCacheKey {
@@ -3230,10 +3355,8 @@ impl ShapingPipeline {
       style_hash,
       font_generation,
     };
-    if let Ok(cache) = self.cache.lock() {
-      if let Some(cached) = cache.get(&cache_key) {
-        return Ok((**cached).clone());
-      }
+    if let Some(cached) = self.cache.get(&cache_key) {
+      return Ok(cached.as_ref().clone());
     }
 
     // Step 1: Bidi analysis
@@ -3298,9 +3421,7 @@ impl ShapingPipeline {
       reorder_runs(&mut shaped_runs, bidi.paragraphs());
     }
 
-    if let Ok(mut cache) = self.cache.lock() {
-      cache.insert(cache_key, std::sync::Arc::new(shaped_runs.clone()));
-    }
+    self.cache.insert(cache_key, Arc::new(shaped_runs.clone()));
 
     Ok(shaped_runs)
   }
@@ -3595,6 +3716,7 @@ mod tests {
   use crate::text::font_db::GenericFamily;
   use crate::text::font_fallback::FamilyEntry;
   use std::fs;
+  use std::sync::atomic::Ordering;
   use std::sync::Arc;
   use unicode_bidi::Level;
   use url::Url;
@@ -3941,6 +4063,70 @@ mod tests {
     let pipeline = ShapingPipeline::new();
     // Should not panic
     let _ = pipeline;
+  }
+
+  #[test]
+  fn shaping_cache_hits_increment_stats_and_skip_work() {
+    let style = ComputedStyle::default();
+    let ctx = FontContext::new();
+    let pipeline = ShapingPipeline::new();
+    SHAPE_FONT_RUN_INVOCATIONS.store(0, Ordering::Relaxed);
+
+    let first = pipeline
+      .shape("Cached text", &style, &ctx)
+      .expect("first shape should succeed");
+    assert!(!first.is_empty());
+    let first_run_calls = SHAPE_FONT_RUN_INVOCATIONS.load(Ordering::Relaxed);
+    assert!(
+      first_run_calls > 0,
+      "initial shape should call shape_font_run"
+    );
+
+    let initial_stats = pipeline.cache_stats();
+    assert_eq!(initial_stats.misses, 1);
+    assert_eq!(initial_stats.hits, 0);
+
+    let second = pipeline
+      .shape("Cached text", &style, &ctx)
+      .expect("cache hit should succeed");
+    assert_eq!(
+      SHAPE_FONT_RUN_INVOCATIONS.load(Ordering::Relaxed),
+      first_run_calls,
+      "cache hit should not invoke shaping again"
+    );
+
+    let stats_after_hit = pipeline.cache_stats();
+    assert_eq!(stats_after_hit.hits, 1);
+    assert_eq!(stats_after_hit.misses, 1);
+    assert_eq!(first.len(), second.len());
+  }
+
+  #[test]
+  fn shaping_cache_evicts_when_capacity_exceeded() {
+    let style = ComputedStyle::default();
+    let ctx = FontContext::new();
+    let capacity = 4;
+    let pipeline = ShapingPipeline::with_cache_capacity_for_test(capacity);
+    SHAPE_FONT_RUN_INVOCATIONS.store(0, Ordering::Relaxed);
+
+    let texts: Vec<String> = (0..(capacity + 2))
+      .map(|i| format!("Eviction {}", i))
+      .collect();
+    for text in &texts {
+      pipeline.shape(text, &style, &ctx).expect("shape succeeds");
+    }
+
+    let stats = pipeline.cache_stats();
+    assert!(
+      stats.evictions >= 2,
+      "expected evictions once cache exceeded capacity, saw {}",
+      stats.evictions
+    );
+    assert_eq!(
+      pipeline.cache_len(),
+      capacity,
+      "cache should stay bounded to its configured capacity"
+    );
   }
 
   #[test]
