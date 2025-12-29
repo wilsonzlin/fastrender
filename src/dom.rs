@@ -344,7 +344,7 @@ impl SelectorBloomSummary {
     self.bits[idx] |= 1u64 << bit;
   }
 
-  fn contains_hash(&self, hash: u32) -> bool {
+  pub(crate) fn contains_hash(&self, hash: u32) -> bool {
     let slot_a = (hash as usize) & (SELECTOR_BLOOM_SUMMARY_BITS - 1);
     let slot_b = ((hash >> 8) as usize) & (SELECTOR_BLOOM_SUMMARY_BITS - 1);
     self.contains_slot(slot_a) && self.contains_slot(slot_b)
@@ -3141,6 +3141,13 @@ impl<'a> RelativeSelectorAncestorStack<'a> {
     debug_assert!(popped.is_some());
     res
   }
+}
+
+pub(crate) fn relative_selector_bloom_hashes(
+  selector: &RelativeSelector<FastRenderSelectorImpl>,
+  quirks_mode: selectors::context::QuirksMode,
+) -> Vec<u32> {
+  selector.bloom_hashes.hashes_for_mode(quirks_mode).to_vec()
 }
 
 fn matches_has_relative(

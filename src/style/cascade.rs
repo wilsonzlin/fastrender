@@ -19,6 +19,7 @@ use crate::css::types::ContainerCondition;
 use crate::css::types::ContainerQuery;
 use crate::css::types::ContainerStyleQuery;
 use crate::css::types::CssImportLoader;
+use crate::css::types::CssRule;
 use crate::css::types::CssString;
 use crate::css::types::Declaration;
 use crate::css::types::PropertyValue;
@@ -38,7 +39,9 @@ use crate::dom::DomNode;
 use crate::dom::DomNodeType;
 use crate::dom::ElementRef;
 use crate::dom::SelectorBloomMap;
+use crate::dom::SelectorBloomSummary;
 use crate::dom::SlotAssignment;
+use crate::dom::HTML_NAMESPACE;
 use crate::error::Error;
 use crate::geometry::Size;
 use crate::render_control::check_active_periodic;
@@ -100,6 +103,12 @@ static UA_STYLESHEET: OnceLock<StyleSheet> = OnceLock::new();
 static CASCADE_PROFILE_NODES: AtomicU64 = AtomicU64::new(0);
 static CASCADE_PROFILE_RULE_CANDIDATES: AtomicU64 = AtomicU64::new(0);
 static CASCADE_PROFILE_RULE_MATCHES: AtomicU64 = AtomicU64::new(0);
+static CASCADE_PROFILE_RULE_PRUNED: AtomicU64 = AtomicU64::new(0);
+static CASCADE_PROFILE_CANDIDATES_BY_ID: AtomicU64 = AtomicU64::new(0);
+static CASCADE_PROFILE_CANDIDATES_BY_CLASS: AtomicU64 = AtomicU64::new(0);
+static CASCADE_PROFILE_CANDIDATES_BY_TAG: AtomicU64 = AtomicU64::new(0);
+static CASCADE_PROFILE_CANDIDATES_BY_ATTR: AtomicU64 = AtomicU64::new(0);
+static CASCADE_PROFILE_CANDIDATES_UNIVERSAL: AtomicU64 = AtomicU64::new(0);
 
 const CASCADE_NODE_DEADLINE_STRIDE: usize = 1024;
 const CASCADE_SELECTOR_DEADLINE_STRIDE: usize = 64;
@@ -288,6 +297,21 @@ fn node_is_inert(node: &DomNode, ancestors: &[&DomNode]) -> bool {
   ancestors.iter().any(|a| explicit_inert(a))
 }
 
+fn namespace_matches(node: &DomNode, namespace: &str) -> bool {
+  match node.namespace() {
+    Some(ns) => {
+      if namespace.is_empty() {
+        true
+      } else if ns == namespace {
+        true
+      } else {
+        ns.is_empty() && namespace == HTML_NAMESPACE
+      }
+    }
+    None => false,
+  }
+}
+
 pub(crate) fn cascade_profile_enabled() -> bool {
   ensure_cascade_profile_initialized();
   CASCADE_PROFILE_ENABLED.load(Ordering::Relaxed)
@@ -312,6 +336,12 @@ pub struct CascadeProfileStats {
   pub nodes: u64,
   pub rule_candidates: u64,
   pub rule_matches: u64,
+  pub rule_candidates_pruned: u64,
+  pub rule_candidates_by_id: u64,
+  pub rule_candidates_by_class: u64,
+  pub rule_candidates_by_tag: u64,
+  pub rule_candidates_by_attr: u64,
+  pub rule_candidates_universal: u64,
   pub selector_time_ns: u64,
   pub declaration_time_ns: u64,
   pub pseudo_time_ns: u64,
@@ -322,6 +352,12 @@ pub(crate) fn capture_cascade_profile() -> CascadeProfileStats {
     nodes: CASCADE_PROFILE_NODES.load(Ordering::Relaxed),
     rule_candidates: CASCADE_PROFILE_RULE_CANDIDATES.load(Ordering::Relaxed),
     rule_matches: CASCADE_PROFILE_RULE_MATCHES.load(Ordering::Relaxed),
+    rule_candidates_pruned: CASCADE_PROFILE_RULE_PRUNED.load(Ordering::Relaxed),
+    rule_candidates_by_id: CASCADE_PROFILE_CANDIDATES_BY_ID.load(Ordering::Relaxed),
+    rule_candidates_by_class: CASCADE_PROFILE_CANDIDATES_BY_CLASS.load(Ordering::Relaxed),
+    rule_candidates_by_tag: CASCADE_PROFILE_CANDIDATES_BY_TAG.load(Ordering::Relaxed),
+    rule_candidates_by_attr: CASCADE_PROFILE_CANDIDATES_BY_ATTR.load(Ordering::Relaxed),
+    rule_candidates_universal: CASCADE_PROFILE_CANDIDATES_UNIVERSAL.load(Ordering::Relaxed),
     selector_time_ns: CASCADE_PROFILE_FIND_TIME_NS.load(Ordering::Relaxed),
     declaration_time_ns: CASCADE_PROFILE_DECL_TIME_NS.load(Ordering::Relaxed),
     pseudo_time_ns: CASCADE_PROFILE_PSEUDO_TIME_NS.load(Ordering::Relaxed),
@@ -337,6 +373,12 @@ pub(crate) fn reset_cascade_profile() {
   CASCADE_PROFILE_NODES.store(0, Ordering::Relaxed);
   CASCADE_PROFILE_RULE_CANDIDATES.store(0, Ordering::Relaxed);
   CASCADE_PROFILE_RULE_MATCHES.store(0, Ordering::Relaxed);
+  CASCADE_PROFILE_RULE_PRUNED.store(0, Ordering::Relaxed);
+  CASCADE_PROFILE_CANDIDATES_BY_ID.store(0, Ordering::Relaxed);
+  CASCADE_PROFILE_CANDIDATES_BY_CLASS.store(0, Ordering::Relaxed);
+  CASCADE_PROFILE_CANDIDATES_BY_TAG.store(0, Ordering::Relaxed);
+  CASCADE_PROFILE_CANDIDATES_BY_ATTR.store(0, Ordering::Relaxed);
+  CASCADE_PROFILE_CANDIDATES_UNIVERSAL.store(0, Ordering::Relaxed);
   CASCADE_PROFILE_FIND_TIME_NS.store(0, Ordering::Relaxed);
   CASCADE_PROFILE_DECL_TIME_NS.store(0, Ordering::Relaxed);
   CASCADE_PROFILE_PSEUDO_TIME_NS.store(0, Ordering::Relaxed);
@@ -346,6 +388,7 @@ fn log_cascade_profile(elapsed_ms: f64) {
   let nodes = CASCADE_PROFILE_NODES.load(Ordering::Relaxed);
   let candidates = CASCADE_PROFILE_RULE_CANDIDATES.load(Ordering::Relaxed);
   let matches = CASCADE_PROFILE_RULE_MATCHES.load(Ordering::Relaxed);
+  let pruned = CASCADE_PROFILE_RULE_PRUNED.load(Ordering::Relaxed);
   let find_time_ns = CASCADE_PROFILE_FIND_TIME_NS.load(Ordering::Relaxed);
   let decl_time_ns = CASCADE_PROFILE_DECL_TIME_NS.load(Ordering::Relaxed);
   let pseudo_time_ns = CASCADE_PROFILE_PSEUDO_TIME_NS.load(Ordering::Relaxed);
@@ -363,9 +406,9 @@ fn log_cascade_profile(elapsed_ms: f64) {
     0.0
   };
   eprintln!(
-        "cascade profile: total_ms={:.2} nodes={} candidates={} matches={} avg_candidates={:.1} avg_matches={:.1} find_ms={:.2} decl_ms={:.2} pseudo_ms={:.2}",
-        elapsed_ms, nodes, candidates, matches, avg_candidates, avg_matches, find_ms, decl_ms, pseudo_ms
-    );
+    "cascade profile: total_ms={:.2} nodes={} candidates={} pruned={} matches={} avg_candidates={:.1} avg_matches={:.1} find_ms={:.2} decl_ms={:.2} pseudo_ms={:.2}",
+    elapsed_ms, nodes, candidates, pruned, matches, avg_candidates, avg_matches, find_ms, decl_ms, pseudo_ms
+  );
 }
 
 static UA_TEXTAREA_DECLS: OnceLock<Vec<Declaration>> = OnceLock::new();
@@ -533,18 +576,88 @@ fn collect_shadow_stylesheets(
   Ok(out)
 }
 
+fn selector_contains_has(selector: &Selector<FastRenderSelectorImpl>) -> bool {
+  use selectors::parser::Component;
+
+  for component in selector.iter_raw_match_order() {
+    match component {
+      Component::Has(_) => return true,
+      Component::Is(list) | Component::Where(list) | Component::Negation(list) => {
+        if selector_list_contains_has(list) {
+          return true;
+        }
+      }
+      Component::Slotted(inner) => {
+        if selector_contains_has(inner) {
+          return true;
+        }
+      }
+      Component::Host(Some(inner)) => {
+        if selector_contains_has(inner) {
+          return true;
+        }
+      }
+      Component::PseudoElement(pseudo) => {
+        if let PseudoElement::Slotted(list) = pseudo {
+          if list.iter().any(selector_contains_has) {
+            return true;
+          }
+        }
+      }
+      _ => {}
+    }
+  }
+
+  false
+}
+
+fn selector_list_contains_has(list: &SelectorList<FastRenderSelectorImpl>) -> bool {
+  list.slice().iter().any(selector_contains_has)
+}
+
+fn css_rule_contains_has(rule: &CssRule) -> bool {
+  match rule {
+    CssRule::Style(style) => {
+      selector_list_contains_has(&style.selectors)
+        || style.nested_rules.iter().any(css_rule_contains_has)
+    }
+    CssRule::Media(media) => media.rules.iter().any(css_rule_contains_has),
+    CssRule::Container(container) => container.rules.iter().any(css_rule_contains_has),
+    CssRule::Supports(supports) => supports.rules.iter().any(css_rule_contains_has),
+    CssRule::Layer(layer) => layer.rules.iter().any(css_rule_contains_has),
+    CssRule::Scope(scope) => scope.rules.iter().any(css_rule_contains_has),
+    _ => false,
+  }
+}
+
+fn stylesheet_uses_has(sheet: &StyleSheet) -> bool {
+  sheet.rules.iter().any(css_rule_contains_has)
+}
+
 fn record_node_visit(node: &DomNode) {
   if cascade_profile_enabled() && node.is_element() {
     CASCADE_PROFILE_NODES.fetch_add(1, Ordering::Relaxed);
   }
 }
 
-fn record_matching_stats(candidates: usize, matches: usize, elapsed: Option<std::time::Duration>) {
+fn record_matching_stats(
+  candidates: usize,
+  matches: usize,
+  pruned: usize,
+  stats: &CandidateStats,
+  elapsed: Option<std::time::Duration>,
+) {
   if !cascade_profile_enabled() {
     return;
   }
   CASCADE_PROFILE_RULE_CANDIDATES.fetch_add(candidates as u64, Ordering::Relaxed);
   CASCADE_PROFILE_RULE_MATCHES.fetch_add(matches as u64, Ordering::Relaxed);
+  CASCADE_PROFILE_RULE_PRUNED.fetch_add(pruned as u64, Ordering::Relaxed);
+  CASCADE_PROFILE_CANDIDATES_BY_ID.fetch_add(stats.by_id, Ordering::Relaxed);
+  CASCADE_PROFILE_CANDIDATES_BY_CLASS.fetch_add(stats.by_class, Ordering::Relaxed);
+  CASCADE_PROFILE_CANDIDATES_BY_TAG.fetch_add(stats.by_tag, Ordering::Relaxed);
+  CASCADE_PROFILE_CANDIDATES_BY_ATTR.fetch_add(stats.by_attr, Ordering::Relaxed);
+  CASCADE_PROFILE_CANDIDATES_UNIVERSAL.fetch_add(stats.universal, Ordering::Relaxed);
   if let Some(dur) = elapsed {
     CASCADE_PROFILE_FIND_TIME_NS.fetch_add(dur.as_nanos() as u64, Ordering::Relaxed);
   }
@@ -608,9 +721,14 @@ struct DomMaps {
   selector_blooms: Option<SelectorBloomMap>,
 }
 
+const SELECTOR_BLOOM_MIN_NODES: usize = 32;
+
 impl DomMaps {
-  fn new(root: &DomNode) -> Self {
-    let id_map = enumerate_dom_ids(root);
+  fn new(
+    root: &DomNode,
+    id_map: HashMap<*const DomNode, usize>,
+    build_selector_blooms: bool,
+  ) -> Self {
     let mut id_to_node: HashMap<usize, *const DomNode> = HashMap::new();
     for (ptr, id) in &id_map {
       id_to_node.insert(*id, *ptr);
@@ -661,7 +779,11 @@ impl DomMaps {
       &mut exportparts_map,
     );
 
-    let selector_blooms = build_selector_bloom_map(root);
+    let selector_blooms = if build_selector_blooms {
+      build_selector_bloom_map(root)
+    } else {
+      None
+    };
 
     Self {
       id_map,
@@ -770,11 +892,67 @@ fn tree_scope_prefix_for_node(dom_maps: &DomMaps, node_id: usize) -> u32 {
     .unwrap_or(DOCUMENT_TREE_SCOPE_PREFIX)
 }
 
+#[derive(Clone, Default)]
+struct HasRequirement {
+  non_quirks_hashes: Vec<u32>,
+  quirks_hashes: Vec<u32>,
+}
+
+impl HasRequirement {
+  fn matches_summary(
+    &self,
+    summary: &crate::dom::SelectorBloomSummary,
+    quirks_mode: QuirksMode,
+  ) -> bool {
+    let hashes = if matches!(quirks_mode, QuirksMode::Quirks) {
+      &self.quirks_hashes
+    } else {
+      &self.non_quirks_hashes
+    };
+    hashes.is_empty() || hashes.iter().all(|hash| summary.contains_hash(*hash))
+  }
+
+  fn is_empty(&self) -> bool {
+    self.non_quirks_hashes.is_empty() && self.quirks_hashes.is_empty()
+  }
+}
+
+#[derive(Clone, Default)]
+struct SelectorMetadata {
+  namespace: Option<String>,
+  has_requirements: Vec<HasRequirement>,
+}
+
+fn selector_metadata_matches_node(
+  metadata: &SelectorMetadata,
+  node: &DomNode,
+  summary: Option<&SelectorBloomSummary>,
+  quirks_mode: QuirksMode,
+) -> bool {
+  if let Some(ns) = metadata.namespace.as_deref() {
+    if !namespace_matches(node, ns) {
+      return false;
+    }
+  }
+  if let Some(summary) = summary {
+    if !metadata.has_requirements.is_empty()
+      && metadata
+        .has_requirements
+        .iter()
+        .any(|req| !req.matches_summary(summary, quirks_mode))
+    {
+      return false;
+    }
+  }
+  true
+}
+
 /// Simple index over the rightmost compound selector to prune rule matching.
 struct IndexedSelector<'a> {
   rule_idx: usize,
   selector: &'a Selector<crate::css::selectors::FastRenderSelectorImpl>,
   specificity: u32,
+  metadata: SelectorMetadata,
 }
 
 struct IndexedSlottedSelector<'a> {
@@ -782,6 +960,7 @@ struct IndexedSlottedSelector<'a> {
   selector: &'a Selector<crate::css::selectors::FastRenderSelectorImpl>,
   prelude_specificity: u32,
   prelude: Option<Selector<crate::css::selectors::FastRenderSelectorImpl>>,
+  metadata: SelectorMetadata,
 }
 
 struct PseudoBuckets {
@@ -832,6 +1011,7 @@ struct PartPseudoInfo {
 struct RuleIndex<'a> {
   rules: Vec<CascadeRule<'a>>,
   rule_sets_content: Vec<bool>,
+  has_has_requirements: bool,
   selectors: Vec<IndexedSelector<'a>>,
   by_id: HashMap<String, Vec<usize>>,
   by_class: HashMap<String, Vec<usize>>,
@@ -897,6 +1077,7 @@ struct CascadeScratch {
   candidates: Vec<usize>,
   match_index: MatchIndex,
   candidate_seen: CandidateSet,
+  candidate_stats: CandidateStats,
   part_candidates: Vec<usize>,
   part_seen: CandidateSet,
 }
@@ -907,6 +1088,7 @@ impl CascadeScratch {
       candidates: Vec::new(),
       match_index: MatchIndex::new(rule_count),
       candidate_seen: CandidateSet::new(rule_count),
+      candidate_stats: CandidateStats::default(),
       part_candidates: Vec::new(),
       part_seen: CandidateSet::new(rule_count),
     }
@@ -927,7 +1109,15 @@ impl CandidateSet {
   }
 
   fn insert(&mut self, idx: usize) -> bool {
-    if self.seen.get(idx).copied().unwrap_or(false) {
+    self.mark_seen(idx)
+  }
+
+  fn contains(&self, idx: usize) -> bool {
+    self.seen.get(idx).copied().unwrap_or(false)
+  }
+
+  fn mark_seen(&mut self, idx: usize) -> bool {
+    if self.contains(idx) {
       return false;
     }
     if idx >= self.seen.len() {
@@ -944,6 +1134,31 @@ impl CandidateSet {
         *slot = false;
       }
     }
+  }
+}
+
+#[derive(Default, Clone)]
+struct CandidateStats {
+  by_id: u64,
+  by_class: u64,
+  by_tag: u64,
+  by_attr: u64,
+  universal: u64,
+  pruned: u64,
+}
+
+impl CandidateStats {
+  fn reset(&mut self) {
+    self.by_id = 0;
+    self.by_class = 0;
+    self.by_tag = 0;
+    self.by_attr = 0;
+    self.universal = 0;
+    self.pruned = 0;
+  }
+
+  fn total(&self) -> u64 {
+    self.by_id + self.by_class + self.by_tag + self.by_attr + self.universal
   }
 }
 
@@ -1070,6 +1285,124 @@ fn selector_keys(
   selector_keys_with_polarity(selector, SelectorKeyPolarity::Matches)
 }
 
+fn merge_namespace_constraint(current: Option<String>, new: Option<String>) -> Option<String> {
+  match (current, new) {
+    (None, constraint) => constraint,
+    (Some(existing), Some(candidate)) if existing == candidate => Some(existing),
+    _ => None,
+  }
+}
+
+fn selector_namespace_constraint(
+  selector: &Selector<crate::css::selectors::FastRenderSelectorImpl>,
+) -> Option<String> {
+  use selectors::parser::Component;
+
+  let mut required: Option<String> = None;
+  let mut iter = selector.iter();
+  loop {
+    if let Some(component) = iter.next() {
+      match component {
+        Component::Namespace(_, url) | Component::DefaultNamespace(url) => {
+          required = merge_namespace_constraint(required, Some(url.0.clone()));
+        }
+        Component::ExplicitNoNamespace => {
+          required = merge_namespace_constraint(required, Some(String::new()));
+        }
+        Component::ExplicitAnyNamespace => required = None,
+        Component::Is(list) | Component::Where(list) | Component::Negation(list) => {
+          let nested = list.slice().iter().fold(None, |ns, sel| {
+            merge_namespace_constraint(ns, selector_namespace_constraint(sel))
+          });
+          required = merge_namespace_constraint(required, nested);
+        }
+        Component::Slotted(inner) => {
+          required = merge_namespace_constraint(required, selector_namespace_constraint(inner));
+        }
+        Component::Host(Some(inner)) => {
+          required = merge_namespace_constraint(required, selector_namespace_constraint(inner));
+        }
+        Component::PseudoElement(pseudo) => {
+          if let PseudoElement::Slotted(list) = pseudo {
+            let nested = list.iter().fold(None, |ns, sel| {
+              merge_namespace_constraint(ns, selector_namespace_constraint(sel))
+            });
+            required = merge_namespace_constraint(required, nested);
+          }
+        }
+        _ => {}
+      }
+      continue;
+    }
+    if iter.next_sequence().is_none() {
+      break;
+    }
+  }
+  required
+}
+
+fn selector_has_requirements(
+  selector: &Selector<crate::css::selectors::FastRenderSelectorImpl>,
+) -> Vec<HasRequirement> {
+  use selectors::parser::Component;
+
+  let mut requirements: Vec<HasRequirement> = Vec::new();
+  let mut iter = selector.iter();
+  loop {
+    if let Some(component) = iter.next() {
+      match component {
+        Component::Has(list) => {
+          for relative in list.iter() {
+            if !relative.match_hint.is_descendant_direction() {
+              continue;
+            }
+            let non_quirks =
+              crate::dom::relative_selector_bloom_hashes(relative, QuirksMode::NoQuirks);
+            let quirks = crate::dom::relative_selector_bloom_hashes(relative, QuirksMode::Quirks);
+            let requirement = HasRequirement {
+              non_quirks_hashes: non_quirks,
+              quirks_hashes: quirks,
+            };
+            if !requirement.is_empty() {
+              requirements.push(requirement);
+            }
+          }
+        }
+        Component::Is(list) | Component::Where(list) | Component::Negation(list) => {
+          for sel in list.slice() {
+            requirements.extend(selector_has_requirements(sel));
+          }
+        }
+        Component::Slotted(inner) => requirements.extend(selector_has_requirements(inner)),
+        Component::Host(Some(inner)) => requirements.extend(selector_has_requirements(inner)),
+        Component::PseudoElement(pseudo) => {
+          if let PseudoElement::Slotted(list) = pseudo {
+            for sel in list.iter() {
+              requirements.extend(selector_has_requirements(sel));
+            }
+          }
+        }
+        _ => {}
+      }
+      continue;
+    }
+    if iter.next_sequence().is_none() {
+      break;
+    }
+  }
+
+  requirements
+}
+
+fn selector_metadata(
+  selector: &Selector<crate::css::selectors::FastRenderSelectorImpl>,
+) -> SelectorMetadata {
+  SelectorMetadata {
+    namespace: selector_namespace_constraint(selector),
+    has_requirements: selector_has_requirements(selector),
+  }
+}
+
 fn selector_targets_shadow_host(
   selector: &Selector<crate::css::selectors::FastRenderSelectorImpl>,
 ) -> bool {
@@ -1184,6 +1517,7 @@ impl<'a> RuleIndex<'a> {
     let mut index = RuleIndex {
       rules: Vec::new(),
       rule_sets_content: Vec::new(),
+      has_has_requirements: false,
       selectors: Vec::new(),
       by_id: HashMap::new(),
       by_class: HashMap::new(),
@@ -1223,11 +1557,16 @@ impl<'a> RuleIndex<'a> {
             let selector_idx = index.slotted_selectors.len();
             let prelude = parse_slotted_prelude(selector);
             let prelude_specificity = prelude.as_ref().map(|sel| sel.specificity()).unwrap_or(0);
+            let metadata = selector_metadata(selector);
+            if !metadata.has_requirements.is_empty() {
+              index.has_has_requirements = true;
+            }
             index.slotted_selectors.push(IndexedSlottedSelector {
               rule_idx,
               selector,
               prelude_specificity,
               prelude,
+              metadata,
             });
             for key in slotted_selector_keys(pe) {
               match key {
@@ -1268,10 +1607,15 @@ impl<'a> RuleIndex<'a> {
             index.pseudo_content.insert(pe.clone());
           }
           let selector_idx = index.pseudo_selectors.len();
+          let metadata = selector_metadata(selector);
+          if !metadata.has_requirements.is_empty() {
+            index.has_has_requirements = true;
+          }
           index.pseudo_selectors.push(IndexedSelector {
             rule_idx,
             selector,
             specificity: selector.specificity(),
+            metadata,
           });
           for key in selector_keys(selector) {
             match key {
@@ -1288,10 +1632,15 @@ impl<'a> RuleIndex<'a> {
         }
 
         let selector_idx = index.selectors.len();
+        let metadata = selector_metadata(selector);
+        if !metadata.has_requirements.is_empty() {
+          index.has_has_requirements = true;
+        }
         index.selectors.push(IndexedSelector {
           rule_idx,
           selector,
           specificity: selector.specificity(),
+          metadata,
         });
         for key in selector_keys(selector) {
           match key {
@@ -1335,20 +1684,40 @@ impl<'a> RuleIndex<'a> {
     }
   }
 
-  fn selector_candidates(&self, node: &DomNode, out: &mut Vec<usize>, seen: &mut CandidateSet) {
+  fn selector_candidates(
+    &self,
+    node: &DomNode,
+    summary: Option<&SelectorBloomSummary>,
+    quirks_mode: QuirksMode,
+    out: &mut Vec<usize>,
+    seen: &mut CandidateSet,
+    stats: &mut CandidateStats,
+  ) {
     out.clear();
     seen.reset();
     if !node.is_element() {
       return;
     }
 
+    let mut consider_candidate = |idx: usize, bucket: &mut u64| {
+      if !selector_metadata_matches_node(&self.selectors[idx].metadata, node, summary, quirks_mode)
+      {
+        if seen.mark_seen(idx) {
+          stats.pruned += 1;
+        }
+        return;
+      }
+      if seen.mark_seen(idx) {
+        out.push(idx);
+        *bucket += 1;
+      }
+    };
+
     if !self.by_id.is_empty() {
       if let Some(id) = node.get_attribute("id") {
         if let Some(list) = self.by_id.get(&id) {
           for idx in list {
-            if seen.insert(*idx) {
-              out.push(*idx);
-            }
+            consider_candidate(*idx, &mut stats.by_id);
           }
         }
       }
@@ -1359,9 +1728,7 @@ impl<'a> RuleIndex<'a> {
         if !cls.is_empty() {
           if let Some(list) = self.by_class.get(cls) {
             for idx in list {
-              if seen.insert(*idx) {
-                out.push(*idx);
-              }
+              consider_candidate(*idx, &mut stats.by_class);
             }
           }
         }
@@ -1372,26 +1739,20 @@ impl<'a> RuleIndex<'a> {
       if let Some(tag) = node.tag_name() {
         if let Some(list) = self.by_tag.get(tag) {
           for idx in list {
-            if seen.insert(*idx) {
-              out.push(*idx);
-            }
+            consider_candidate(*idx, &mut stats.by_tag);
           }
         }
         let lower_tag = tag.to_ascii_lowercase();
         if lower_tag != tag {
           if let Some(list) = self.by_tag.get(&lower_tag) {
             for idx in list {
-              if seen.insert(*idx) {
-                out.push(*idx);
-              }
+              consider_candidate(*idx, &mut stats.by_tag);
             }
           }
         }
         if let Some(list) = self.by_tag.get("*") {
           for idx in list {
-            if seen.insert(*idx) {
-              out.push(*idx);
-            }
+            consider_candidate(*idx, &mut stats.by_tag);
           }
         }
       }
@@ -1402,34 +1763,54 @@ impl<'a> RuleIndex<'a> {
         let key = name.to_ascii_lowercase();
         if let Some(list) = self.by_attr.get(&key) {
           for idx in list {
-            if seen.insert(*idx) {
-              out.push(*idx);
-            }
+            consider_candidate(*idx, &mut stats.by_attr);
           }
         }
       }
     }
 
     for idx in &self.universal {
-      if seen.insert(*idx) {
-        out.push(*idx);
-      }
+      consider_candidate(*idx, &mut stats.universal);
     }
   }
 
-  fn slotted_candidates(&self, node: &DomNode, out: &mut Vec<usize>, seen: &mut CandidateSet) {
+  fn slotted_candidates(
+    &self,
+    node: &DomNode,
+    summary: Option<&SelectorBloomSummary>,
+    quirks_mode: QuirksMode,
+    out: &mut Vec<usize>,
+    seen: &mut CandidateSet,
+    stats: &mut CandidateStats,
+  ) {
     out.clear();
     seen.reset();
     if !node.is_element() {
       return;
     }
 
+    let mut consider_candidate = |idx: usize, bucket: &mut u64| {
+      if !selector_metadata_matches_node(
+        &self.slotted_selectors[idx].metadata,
+        node,
+        summary,
+        quirks_mode,
+      ) {
+        if seen.mark_seen(idx) {
+          stats.pruned += 1;
+        }
+        return;
+      }
+      if seen.mark_seen(idx) {
+        out.push(idx);
+        *bucket += 1;
+      }
+    };
+
     if let Some(id) = node.get_attribute("id") {
       if let Some(list) = self.slotted_buckets.by_id.get(&id) {
         for idx in list {
-          if seen.insert(*idx) {
-            out.push(*idx);
-          }
+          consider_candidate(*idx, &mut stats.by_id);
         }
       }
     }
@@ -1441,9 +1822,7 @@ impl<'a> RuleIndex<'a> {
         }
         if let Some(list) = self.slotted_buckets.by_class.get(cls) {
           for idx in list {
-            if seen.insert(*idx) {
-              out.push(*idx);
-            }
+            consider_candidate(*idx, &mut stats.by_class);
           }
         }
       }
@@ -1452,16 +1831,12 @@ impl<'a> RuleIndex<'a> {
     if let Some(tag) = node.tag_name() {
       if let Some(list) = self.slotted_buckets.by_tag.get(tag) {
         for idx in list {
-          if seen.insert(*idx) {
-            out.push(*idx);
-          }
+          consider_candidate(*idx, &mut stats.by_tag);
         }
       }
       if let Some(list) = self.slotted_buckets.by_tag.get("*") {
         for idx in list {
-          if seen.insert(*idx) {
-            out.push(*idx);
-          }
+          consider_candidate(*idx, &mut stats.by_tag);
         }
       }
     }
@@ -1470,17 +1845,13 @@ impl<'a> RuleIndex<'a> {
       let key = name.to_ascii_lowercase();
       if let Some(list) = self.slotted_buckets.by_attr.get(&key) {
         for idx in list {
-          if seen.insert(*idx) {
-            out.push(*idx);
-          }
+          consider_candidate(*idx, &mut stats.by_attr);
         }
       }
     }
 
     for idx in &self.slotted_buckets.universal {
-      if seen.insert(*idx) {
-        out.push(*idx);
-      }
+      consider_candidate(*idx, &mut stats.universal);
     }
   }
 
@@ -1488,8 +1859,11 @@ impl<'a> RuleIndex<'a> {
     &self,
     node: &DomNode,
     pseudo: &PseudoElement,
+    summary: Option<&SelectorBloomSummary>,
+    quirks_mode: QuirksMode,
     out: &mut Vec<usize>,
     seen: &mut CandidateSet,
+    stats: &mut CandidateStats,
   ) {
     out.clear();
     seen.reset();
@@ -1501,13 +1875,29 @@ impl<'a> RuleIndex<'a> {
       return;
     };
 
+    let mut consider_candidate = |idx: usize, bucket: &mut u64| {
+      if !selector_metadata_matches_node(
+        &self.pseudo_selectors[idx].metadata,
+        node,
+        summary,
+        quirks_mode,
+      ) {
+        if seen.mark_seen(idx) {
+          stats.pruned += 1;
+        }
+        return;
+      }
+      if seen.mark_seen(idx) {
+        out.push(idx);
+        *bucket += 1;
+      }
+    };
+
     if !bucket.by_id.is_empty() {
       if let Some(id) = node.get_attribute("id") {
         if let Some(list) = bucket.by_id.get(&id) {
           for idx in list {
-            if seen.insert(*idx) {
-              out.push(*idx);
-            }
+            consider_candidate(*idx, &mut stats.by_id);
           }
         }
       }
@@ -1519,9 +1909,7 @@ impl<'a> RuleIndex<'a> {
           if !cls.is_empty() {
             if let Some(list) = bucket.by_class.get(cls) {
               for idx in list {
-                if seen.insert(*idx) {
-                  out.push(*idx);
-                }
+                consider_candidate(*idx, &mut stats.by_class);
               }
             }
           }
@@ -1533,26 +1921,20 @@ impl<'a> RuleIndex<'a> {
       if let Some(tag) = node.tag_name() {
         if let Some(list) = bucket.by_tag.get(tag) {
           for idx in list {
-            if seen.insert(*idx) {
-              out.push(*idx);
-            }
+            consider_candidate(*idx, &mut stats.by_tag);
           }
         }
         let lower_tag = tag.to_ascii_lowercase();
         if lower_tag != tag {
           if let Some(list) = bucket.by_tag.get(&lower_tag) {
             for idx in list {
-              if seen.insert(*idx) {
-                out.push(*idx);
-              }
+              consider_candidate(*idx, &mut stats.by_tag);
             }
           }
         }
         if let Some(list) = bucket.by_tag.get("*") {
           for idx in list {
-            if seen.insert(*idx) {
-              out.push(*idx);
-            }
+            consider_candidate(*idx, &mut stats.by_tag);
           }
         }
       }
@@ -1563,18 +1945,14 @@ impl<'a> RuleIndex<'a> {
         let key = name.to_ascii_lowercase();
         if let Some(list) = bucket.by_attr.get(&key) {
           for idx in list {
-            if seen.insert(*idx) {
-              out.push(*idx);
-            }
+            consider_candidate(*idx, &mut stats.by_attr);
           }
         }
       }
     }
 
     for idx in &bucket.universal {
-      if seen.insert(*idx) {
-        out.push(*idx);
-      }
+      consider_candidate(*idx, &mut stats.universal);
     }
   }
 }
@@ -1991,8 +2369,13 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
     stylesheet.clone()
   };
 
-  let dom_maps = DomMaps::new(dom);
-  let shadow_stylesheets = collect_shadow_stylesheets(dom, &dom_maps.id_map)?;
+  let id_map = enumerate_dom_ids(dom);
+  let shadow_stylesheets = collect_shadow_stylesheets(dom, &id_map)?;
+  let has_has_selectors = stylesheet_uses_has(ua_stylesheet)
+    || stylesheet_uses_has(&author_sheet)
+    || shadow_stylesheets.values().any(stylesheet_uses_has);
+  let build_selector_blooms = has_has_selectors && id_map.len() >= SELECTOR_BLOOM_MIN_NODES;
+  let dom_maps = DomMaps::new(dom, id_map, build_selector_blooms);
   let slot_assignment = compute_slot_assignment(dom);
   let slot_maps = build_slot_maps(&slot_assignment, &dom_maps);
 
@@ -2563,7 +2946,12 @@ fn apply_style_set_with_media_target_and_imports_cached_with_deadline_impl(
     }
   }
 
-  let dom_maps = DomMaps::new(dom);
+  let id_map = enumerate_dom_ids(dom);
+  let has_has_selectors = stylesheet_uses_has(ua_stylesheet)
+    || stylesheet_uses_has(&style_set.document)
+    || style_set.shadows.values().any(stylesheet_uses_has);
+  let build_selector_blooms = has_has_selectors && id_map.len() >= SELECTOR_BLOOM_MIN_NODES;
+  let dom_maps = DomMaps::new(dom, id_map, build_selector_blooms);
   let slot_assignment = compute_slot_assignment(dom);
   let slot_maps = build_slot_maps(&slot_assignment, &dom_maps);
   let mut host_to_shadow_root: HashMap<usize, usize> = HashMap::new();
@@ -9341,12 +9729,34 @@ fn find_matching_rules<'a>(
   let current_shadow = dom_maps.containing_shadow_root(node_id);
   let profiling = cascade_profile_enabled();
   let start = profiling.then(|| Instant::now());
+  let node_summary = if rules.has_has_requirements {
+    dom_maps
+      .selector_blooms()
+      .and_then(|map| map.get(&(node as *const DomNode)))
+  } else {
+    None
+  };
   let candidates = &mut scratch.candidates;
   candidates.clear();
-  rules.selector_candidates(node, candidates, &mut scratch.candidate_seen);
+  scratch.candidate_stats.reset();
+  rules.selector_candidates(
+    node,
+    node_summary,
+    quirks_mode,
+    candidates,
+    &mut scratch.candidate_seen,
+    &mut scratch.candidate_stats,
+  );
   let mut slotted_candidates: Vec<usize> = Vec::new();
   if assigned_slot.is_some() {
-    rules.slotted_candidates(node, &mut slotted_candidates, &mut scratch.candidate_seen);
+    rules.slotted_candidates(
+      node,
+      node_summary,
+      quirks_mode,
+      &mut slotted_candidates,
+      &mut scratch.candidate_seen,
+      &mut scratch.candidate_stats,
+    );
   }
   if candidates.is_empty() && slotted_candidates.is_empty() {
     scratch.match_index.reset();
@@ -9659,9 +10069,12 @@ fn find_matching_rules<'a>(
   scratch.match_index.reset();
 
   if profiling {
+    let total_candidates = scratch.candidate_stats.total() as usize;
     record_matching_stats(
-      candidates.len() + slotted_candidates.len(),
+      total_candidates,
       matches.len(),
+      scratch.candidate_stats.pruned as usize,
+      &scratch.candidate_stats,
       start.map(|s| s.elapsed()),
     );
   }
@@ -9687,11 +10100,28 @@ fn find_pseudo_element_rules<'a>(
   if !node.is_element() {
     return Vec::new();
   }
+  if !rules.has_pseudo_rules(pseudo) {
+    return Vec::new();
+  }
   let profiling = cascade_profile_enabled();
   let start = profiling.then(|| Instant::now());
+  let node_summary = if rules.has_has_requirements {
+    selector_blooms.and_then(|map| map.get(&(node as *const DomNode)))
+  } else {
+    None
+  };
   let candidates = &mut scratch.candidates;
   candidates.clear();
-  rules.pseudo_candidates(node, pseudo, candidates, &mut scratch.candidate_seen);
+  scratch.candidate_stats.reset();
+  rules.pseudo_candidates(
+    node,
+    pseudo,
+    node_summary,
+    quirks_mode,
+    candidates,
+    &mut scratch.candidate_seen,
+    &mut scratch.candidate_stats,
+  );
   if candidates.is_empty() {
     scratch.match_index.reset();
     return Vec::new();
@@ -9846,7 +10276,14 @@ fn find_pseudo_element_rules<'a>(
   scratch.match_index.reset();
 
   if profiling {
-    record_matching_stats(candidates.len(), matches.len(), start.map(|s| s.elapsed()));
+    let total_candidates = scratch.candidate_stats.total() as usize;
+    record_matching_stats(
+      total_candidates,
+      matches.len(),
+      scratch.candidate_stats.pruned as usize,
+      &scratch.candidate_stats,
+      start.map(|s| s.elapsed()),
+    );
   }
 
   matches

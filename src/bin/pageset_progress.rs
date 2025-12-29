@@ -1826,7 +1826,21 @@ fn cascade_summary(cascade: &CascadeDiagnostics) -> Option<String> {
   let mut parts = Vec::new();
   push_opt_u64(&mut parts, "nodes", cascade.nodes);
   push_opt_u64(&mut parts, "candidates", cascade.rule_candidates);
+  push_opt_u64(&mut parts, "pruned", cascade.rule_candidates_pruned);
   push_opt_u64(&mut parts, "matches", cascade.rule_matches);
+  let mut bucket_parts = Vec::new();
+  push_opt_u64(&mut bucket_parts, "id", cascade.rule_candidates_by_id);
+  push_opt_u64(&mut bucket_parts, "class", cascade.rule_candidates_by_class);
+  push_opt_u64(&mut bucket_parts, "tag", cascade.rule_candidates_by_tag);
+  push_opt_u64(&mut bucket_parts, "attr", cascade.rule_candidates_by_attr);
+  push_opt_u64(
+    &mut bucket_parts,
+    "universal",
+    cascade.rule_candidates_universal,
+  );
+  if !bucket_parts.is_empty() {
+    parts.push(format!("buckets {}", bucket_parts.join("/")));
+  }
   push_opt_ms(&mut parts, "selector", cascade.selector_time_ms);
   push_opt_ms(&mut parts, "declaration", cascade.declaration_time_ms);
   if parts.is_empty() {

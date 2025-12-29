@@ -1576,6 +1576,12 @@ pub struct CascadeDiagnostics {
   pub nodes: Option<u64>,
   pub rule_candidates: Option<u64>,
   pub rule_matches: Option<u64>,
+  pub rule_candidates_pruned: Option<u64>,
+  pub rule_candidates_by_id: Option<u64>,
+  pub rule_candidates_by_class: Option<u64>,
+  pub rule_candidates_by_tag: Option<u64>,
+  pub rule_candidates_by_attr: Option<u64>,
+  pub rule_candidates_universal: Option<u64>,
   pub selector_time_ms: Option<f64>,
   pub declaration_time_ms: Option<f64>,
   pub pseudo_time_ms: Option<f64>,
@@ -3448,6 +3454,12 @@ impl FastRender {
           rec.stats.cascade.nodes = Some(profile.nodes);
           rec.stats.cascade.rule_candidates = Some(profile.rule_candidates);
           rec.stats.cascade.rule_matches = Some(profile.rule_matches);
+          rec.stats.cascade.rule_candidates_pruned = Some(profile.rule_candidates_pruned);
+          rec.stats.cascade.rule_candidates_by_id = Some(profile.rule_candidates_by_id);
+          rec.stats.cascade.rule_candidates_by_class = Some(profile.rule_candidates_by_class);
+          rec.stats.cascade.rule_candidates_by_tag = Some(profile.rule_candidates_by_tag);
+          rec.stats.cascade.rule_candidates_by_attr = Some(profile.rule_candidates_by_attr);
+          rec.stats.cascade.rule_candidates_universal = Some(profile.rule_candidates_universal);
           rec.stats.cascade.selector_time_ms = Some(profile.selector_time_ns as f64 / 1_000_000.0);
           rec.stats.cascade.declaration_time_ms =
             Some(profile.declaration_time_ns as f64 / 1_000_000.0);

@@ -3,6 +3,7 @@ use fastrender::css::types::CssRule;
 use fastrender::dom;
 use fastrender::style::cascade::apply_styles_with_media;
 use fastrender::style::cascade::StyledNode;
+use fastrender::style::color::Rgba;
 use fastrender::style::media::MediaContext;
 
 fn find_by_id<'a>(node: &'a StyledNode, id: &str) -> Option<&'a StyledNode> {
@@ -375,5 +376,46 @@ fn has_scope_ignores_shadow_tree_descendants() {
   assert_eq!(
     display(find_by_id(&styled, "host").expect("host")),
     "inline"
+  );
+}
+
+#[test]
+fn has_rules_respect_layer_and_scope_order() {
+  let html = r#"
+    <div id="root">
+      <div id="flagged" class="card">
+        <span class="flag"></span>
+      </div>
+      <div id="plain" class="card"></div>
+    </div>
+  "#;
+  let dom = dom::parse_html(html).unwrap();
+  let css = r#"
+    @layer base {
+      .card { color: rgb(0 0 255); }
+    }
+    @layer theme {
+      @scope (#root) {
+        .card:has(.flag) { color: rgb(255 0 0) !important; }
+        .card { color: rgb(0 128 0); }
+      }
+    }
+  "#;
+  let stylesheet = parse_stylesheet(css).unwrap();
+  let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
+
+  assert_eq!(
+    find_by_id(&styled, "flagged")
+      .expect("flagged card")
+      .styles
+      .color,
+    Rgba::rgb(255, 0, 0)
+  );
+  assert_eq!(
+    find_by_id(&styled, "plain")
+      .expect("plain card")
+      .styles
+      .color,
+    Rgba::rgb(0, 128, 0)
   );
 }
