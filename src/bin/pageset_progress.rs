@@ -267,6 +267,23 @@ struct ReportArgs {
   #[arg(long, default_value_t = 10)]
   top: usize,
 
+  /// Compare against another progress directory
+  #[arg(long, value_name = "DIR")]
+  compare: Option<PathBuf>,
+
+  /// Exit non-zero when pages slow down or regress vs `--compare`
+  #[arg(long, requires = "compare")]
+  fail_on_regression: bool,
+
+  /// Slowdown threshold (percent) for `--fail-on-regression`
+  #[arg(
+    long,
+    default_value_t = 10.0,
+    requires = "compare",
+    value_name = "PERCENT"
+  )]
+  regression_threshold_percent: f64,
+
   /// Exit non-zero when any page timed out or panicked
   #[arg(long)]
   fail_on_bad: bool,
@@ -1152,6 +1169,40 @@ fn divide_stage_buckets(total: &StageBuckets, divisor: f64) -> StageBuckets {
   }
 }
 
+fn subtract_stage_buckets(current: &StageBuckets, baseline: &StageBuckets) -> StageBuckets {
+  StageBuckets {
+    fetch: current.fetch - baseline.fetch,
+    css: current.css - baseline.css,
+    cascade: current.cascade - baseline.cascade,
+    layout: current.layout - baseline.layout,
+    paint: current.paint - baseline.paint,
+  }
+}
+
+fn is_bad_status(status: ProgressStatus) -> bool {
+  matches!(
+    status,
+    ProgressStatus::Timeout | ProgressStatus::Panic | ProgressStatus::Error
+  )
+}
+
+fn status_label(status: Option<ProgressStatus>) -> &'static str {
+  status.map(|s| s.as_str()).unwrap_or("missing")
+}
+
+fn format_stage_delta(delta: &StageBuckets) -> String {
+  format!(
+    "stages_ms=fetch:{:+.2} css:{:+.2} cascade:{:+.2} layout:{:+.2} paint:{:+.2}",
+    delta.fetch, delta.css, delta.cascade, delta.layout, delta.paint
+  )
+}
+
+fn format_percent(delta: Option<f64>) -> String {
+  delta
+    .map(|p| format!("{:+.2}%", p))
+    .unwrap_or_else(|| "n/a".to_string())
+}
+
 fn read_progress_dir(dir: &Path) -> io::Result<Vec<LoadedProgress>> {
   let mut files: Vec<PathBuf> = fs::read_dir(dir)
     .map_err(|e| io::Error::new(e.kind(), format!("{}: {}", dir.display(), e)))?
@@ -1514,6 +1565,90 @@ fn resources_summary(resources: &ResourceDiagnostics) -> Option<String> {
   }
 }
 
+#[derive(Debug)]
+struct PageDelta<'a> {
+  stem: String,
+  baseline: &'a LoadedProgress,
+  current: &'a LoadedProgress,
+  delta_ms: f64,
+  percent_delta: Option<f64>,
+  stage_delta: StageBuckets,
+}
+
+#[derive(Debug)]
+struct Comparison<'a> {
+  transitions: BTreeMap<String, usize>,
+  deltas: Vec<PageDelta<'a>>,
+  ok_to_bad: Vec<(String, ProgressStatus, ProgressStatus)>,
+}
+
+fn build_comparison<'a>(
+  current: &'a [LoadedProgress],
+  baseline: &'a [LoadedProgress],
+) -> Comparison<'a> {
+  let current_map: BTreeMap<String, &LoadedProgress> =
+    current.iter().map(|p| (p.stem.clone(), p)).collect();
+  let baseline_map: BTreeMap<String, &LoadedProgress> =
+    baseline.iter().map(|p| (p.stem.clone(), p)).collect();
+
+  let mut stems: BTreeSet<String> = BTreeSet::new();
+  stems.extend(current_map.keys().cloned());
+  stems.extend(baseline_map.keys().cloned());
+
+  let mut transitions: BTreeMap<String, usize> = BTreeMap::new();
+  let mut ok_to_bad: Vec<(String, ProgressStatus, ProgressStatus)> = Vec::new();
+  let mut deltas: Vec<PageDelta<'a>> = Vec::new();
+
+  for stem in stems {
+    let current_entry = current_map.get(&stem).copied();
+    let baseline_entry = baseline_map.get(&stem).copied();
+    let from_status = baseline_entry.map(|p| p.progress.status);
+    let to_status = current_entry.map(|p| p.progress.status);
+    if from_status != to_status {
+      let key = format!(
+        "{} -> {}",
+        status_label(from_status),
+        status_label(to_status)
+      );
+      *transitions.entry(key).or_default() += 1;
+    }
+    if matches!(from_status, Some(ProgressStatus::Ok)) {
+      if let Some(to_status) = to_status {
+        if is_bad_status(to_status) {
+          ok_to_bad.push((stem.clone(), ProgressStatus::Ok, to_status));
+        }
+      }
+    }
+    if let (Some(current), Some(baseline)) = (current_entry, baseline_entry) {
+      if let (Some(current_total), Some(baseline_total)) =
+        (current.progress.total_ms, baseline.progress.total_ms)
+      {
+        let percent_delta = if baseline_total.abs() <= f64::EPSILON {
+          None
+        } else {
+          Some((current_total - baseline_total) / baseline_total * 100.0)
+        };
+        let stage_delta =
+          subtract_stage_buckets(&current.progress.stages_ms, &baseline.progress.stages_ms);
+        deltas.push(PageDelta {
+          stem: stem.clone(),
+          baseline,
+          current,
+          delta_ms: current_total - baseline_total,
+          percent_delta,
+          stage_delta,
+        });
+      }
+    }
+  }
+
+  Comparison {
+    transitions,
+    deltas,
+    ok_to_bad,
+  }
+}
+
 fn print_render_stats(stats: &RenderStats, indent: &str) -> bool {
   let mut lines: Vec<(&str, String)> = Vec::new();
 
@@ -1545,6 +1680,15 @@ fn print_render_stats(stats: &RenderStats, indent: &str) -> bool {
 }
 
 fn report(args: ReportArgs) -> io::Result<()> {
+  if args.fail_on_regression && args.compare.is_none() {
+    eprintln!("--fail-on-regression requires --compare");
+    std::process::exit(2);
+  }
+  if args.regression_threshold_percent < 0.0 {
+    eprintln!("regression threshold must be >= 0");
+    std::process::exit(2);
+  }
+
   let progresses = read_progress_dir(&args.progress_dir)?;
   let total_pages = progresses.len();
   let status_counts = summarize_status(&progresses);
@@ -1660,6 +1804,131 @@ fn report(args: ReportArgs) -> io::Result<()> {
       stage_mean.fetch, stage_mean.css, stage_mean.cascade, stage_mean.layout, stage_mean.paint
     );
     println!();
+  }
+
+  if let Some(compare_dir) = args.compare.as_ref() {
+    let baseline = read_progress_dir(compare_dir)?;
+    let comparison = build_comparison(&progresses, &baseline);
+
+    println!("Status transitions vs {}:", compare_dir.display());
+    if comparison.transitions.is_empty() {
+      println!("  (none)");
+    } else {
+      for (transition, count) in comparison.transitions {
+        println!("  {transition}: {count}");
+      }
+    }
+    println!();
+
+    let mut regressions: Vec<&PageDelta<'_>> = comparison
+      .deltas
+      .iter()
+      .filter(|d| d.delta_ms > 0.0)
+      .collect();
+    regressions.sort_by(|a, b| {
+      b.delta_ms
+        .total_cmp(&a.delta_ms)
+        .then_with(|| a.stem.cmp(&b.stem))
+    });
+
+    let mut improvements: Vec<&PageDelta<'_>> = comparison
+      .deltas
+      .iter()
+      .filter(|d| d.delta_ms < 0.0)
+      .collect();
+    improvements.sort_by(|a, b| {
+      a.delta_ms
+        .total_cmp(&b.delta_ms)
+        .then_with(|| a.stem.cmp(&b.stem))
+    });
+
+    let regress_top = args.top.min(regressions.len());
+    println!(
+      "Regressions vs baseline (top {regress_top} of {} with timings):",
+      regressions.len()
+    );
+    if regress_top == 0 {
+      println!("  (none)");
+    } else {
+      for (idx, delta) in regressions.iter().take(regress_top).enumerate() {
+        let percent = format_percent(delta.percent_delta);
+        println!(
+          "  {}. {} ({} -> {}) Δtotal={:+.2}ms ({percent}) {} url={}",
+          idx + 1,
+          delta.stem,
+          status_label(Some(delta.baseline.progress.status)),
+          status_label(Some(delta.current.progress.status)),
+          delta.delta_ms,
+          format_stage_delta(&delta.stage_delta),
+          delta.current.progress.url
+        );
+      }
+    }
+    println!();
+
+    let improvements_top = args.top.min(improvements.len());
+    println!(
+      "Improvements vs baseline (top {improvements_top} of {} with timings):",
+      improvements.len()
+    );
+    if improvements_top == 0 {
+      println!("  (none)");
+    } else {
+      for (idx, delta) in improvements.iter().take(improvements_top).enumerate() {
+        let percent = format_percent(delta.percent_delta);
+        println!(
+          "  {}. {} ({} -> {}) Δtotal={:+.2}ms ({percent}) {} url={}",
+          idx + 1,
+          delta.stem,
+          status_label(Some(delta.baseline.progress.status)),
+          status_label(Some(delta.current.progress.status)),
+          delta.delta_ms,
+          format_stage_delta(&delta.stage_delta),
+          delta.current.progress.url
+        );
+      }
+    }
+    println!();
+
+    if args.fail_on_regression {
+      let mut failed_stems: HashSet<String> = HashSet::new();
+      let mut reasons = Vec::new();
+      for (stem, from, to) in &comparison.ok_to_bad {
+        reasons.push(format!(
+          "{stem}: {} -> {}",
+          status_label(Some(*from)),
+          status_label(Some(*to))
+        ));
+        failed_stems.insert(stem.clone());
+      }
+      for delta in &comparison.deltas {
+        if failed_stems.contains(&delta.stem) {
+          continue;
+        }
+        if delta.baseline.progress.status != ProgressStatus::Ok {
+          continue;
+        }
+        if delta.current.progress.status != ProgressStatus::Ok {
+          continue;
+        }
+        if let Some(percent) = delta.percent_delta {
+          if percent > args.regression_threshold_percent {
+            reasons.push(format!(
+              "{}: Δtotal={:+.2}ms ({:+.2}%)",
+              delta.stem, delta.delta_ms, percent
+            ));
+            failed_stems.insert(delta.stem.clone());
+          }
+        }
+      }
+      if !reasons.is_empty() {
+        eprintln!("Failing due to regressions vs {}:", compare_dir.display());
+        for reason in reasons {
+          eprintln!("  {reason}");
+        }
+        std::process::exit(1);
+      }
+    }
   }
 
   if args.include_trace {

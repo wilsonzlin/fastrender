@@ -1,5 +1,8 @@
-use std::path::PathBuf;
+use serde_json::json;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use tempfile::tempdir;
 
 fn fixtures_dir() -> PathBuf {
   PathBuf::from("tests/fixtures/pageset_progress")
@@ -7,6 +10,34 @@ fn fixtures_dir() -> PathBuf {
 
 fn stats_fixtures_dir() -> PathBuf {
   PathBuf::from("tests/fixtures/pageset_progress_stats")
+}
+
+fn write_progress(
+  dir: &Path,
+  stem: &str,
+  status: &str,
+  total_ms: Option<f64>,
+  stages: (f64, f64, f64, f64, f64),
+) {
+  let progress = json!({
+    "url": format!("https://{stem}.example.com/"),
+    "status": status,
+    "total_ms": total_ms,
+    "stages_ms": {
+      "fetch": stages.0,
+      "css": stages.1,
+      "cascade": stages.2,
+      "layout": stages.3,
+      "paint": stages.4
+    },
+    "notes": "",
+    "hotspot": "",
+    "last_good_commit": "",
+    "last_regression_commit": ""
+  });
+  let path = dir.join(format!("{stem}.json"));
+  fs::write(&path, serde_json::to_string_pretty(&progress).unwrap())
+    .unwrap_or_else(|_| panic!("write {}", path.display()));
 }
 
 #[test]
@@ -83,5 +114,150 @@ fn pageset_progress_report_fail_on_bad_exits_non_zero() {
   assert!(
     !status.success(),
     "expected non-zero exit for timeout/panic when --fail-on-bad is set"
+  );
+}
+
+#[test]
+fn pageset_progress_report_compares_and_detects_regressions() {
+  let baseline = tempdir().expect("baseline dir");
+  let current = tempdir().expect("current dir");
+
+  write_progress(
+    baseline.path(),
+    "regress_slow",
+    "ok",
+    Some(100.0),
+    (10.0, 10.0, 20.0, 40.0, 20.0),
+  );
+  write_progress(
+    baseline.path(),
+    "becomes_timeout",
+    "ok",
+    Some(80.0),
+    (10.0, 10.0, 20.0, 20.0, 20.0),
+  );
+  write_progress(
+    baseline.path(),
+    "improves_fast",
+    "ok",
+    Some(300.0),
+    (50.0, 50.0, 70.0, 80.0, 50.0),
+  );
+  write_progress(
+    baseline.path(),
+    "removed_page",
+    "ok",
+    Some(120.0),
+    (20.0, 20.0, 20.0, 40.0, 20.0),
+  );
+
+  write_progress(
+    current.path(),
+    "regress_slow",
+    "ok",
+    Some(160.0),
+    (10.0, 20.0, 40.0, 60.0, 30.0),
+  );
+  write_progress(
+    current.path(),
+    "becomes_timeout",
+    "timeout",
+    Some(5000.0),
+    (1000.0, 1000.0, 1000.0, 1000.0, 1000.0),
+  );
+  write_progress(
+    current.path(),
+    "improves_fast",
+    "ok",
+    Some(150.0),
+    (20.0, 30.0, 30.0, 40.0, 30.0),
+  );
+  write_progress(
+    current.path(),
+    "new_page",
+    "ok",
+    Some(70.0),
+    (20.0, 10.0, 10.0, 20.0, 10.0),
+  );
+
+  let comparison = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .args([
+      "report",
+      "--progress-dir",
+      current.path().to_str().unwrap(),
+      "--compare",
+      baseline.path().to_str().unwrap(),
+      "--top",
+      "3",
+    ])
+    .output()
+    .expect("run pageset_progress report with compare");
+  assert!(
+    comparison.status.success(),
+    "expected success comparing progress dirs"
+  );
+  let stdout = String::from_utf8(comparison.stdout).expect("stdout is utf-8");
+  assert!(
+    stdout.contains("Status transitions"),
+    "missing transitions header"
+  );
+  assert!(
+    stdout.contains("ok -> timeout: 1"),
+    "missing ok -> timeout transition"
+  );
+  assert!(
+    stdout.contains("ok -> missing: 1"),
+    "missing ok -> missing transition"
+  );
+  assert!(
+    stdout.contains("missing -> ok: 1"),
+    "missing missing -> ok transition"
+  );
+  assert!(
+    stdout.contains("Regressions vs baseline (top 2 of 2 with timings):"),
+    "missing regression header"
+  );
+  assert!(
+    stdout.contains("becomes_timeout (ok -> timeout) Δtotal=+4920.00ms"),
+    "missing timeout regression entry"
+  );
+  assert!(
+    stdout.contains("regress_slow (ok -> ok) Δtotal=+60.00ms (+60.00%) stages_ms=fetch:+0.00 css:+10.00 cascade:+20.00"),
+    "missing stage deltas for regression"
+  );
+  assert!(
+    stdout.contains("Improvements vs baseline (top 1 of 1 with timings):"),
+    "missing improvement header"
+  );
+  assert!(
+    stdout.contains("improves_fast (ok -> ok) Δtotal=-150.00ms (-50.00%) stages_ms=fetch:-30.00 css:-20.00 cascade:-40.00 layout:-40.00 paint:-20.00"),
+    "missing improvement entry"
+  );
+
+  let failure = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
+    .args([
+      "report",
+      "--progress-dir",
+      current.path().to_str().unwrap(),
+      "--compare",
+      baseline.path().to_str().unwrap(),
+      "--fail-on-regression",
+      "--regression-threshold-percent",
+      "20",
+    ])
+    .output()
+    .expect("run pageset_progress report --fail-on-regression");
+  assert!(
+    !failure.status.success(),
+    "expected non-zero exit for regressions"
+  );
+  let stderr = String::from_utf8(failure.stderr).expect("stderr is utf-8");
+  assert!(
+    stderr.contains("becomes_timeout: ok -> timeout"),
+    "missing ok->timeout failure reason"
+  );
+  assert!(
+    stderr.contains("regress_slow: Δtotal=+60.00ms (+60.00%)"),
+    "missing slowdown failure reason"
   );
 }
