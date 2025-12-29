@@ -192,11 +192,12 @@ pub(crate) fn intrinsic_cache_use_epoch(epoch: usize, reset_counters: bool) {
   subgrid_cache_use_epoch(epoch, reset_counters || epoch_changed);
 }
 
-/// Returns the currently active epoch for intrinsic sizing caches.
+/// Returns the active epoch used for intrinsic and layout-adjacent caches.
 pub(crate) fn intrinsic_cache_epoch() -> usize {
   CACHE_EPOCH.load(Ordering::Relaxed)
 }
 
+/// Resets tracked counts for intrinsic sizing cache metrics.
 pub(crate) fn intrinsic_cache_reset_counters() {
   CACHE_LOOKUPS.store(0, Ordering::Relaxed);
   CACHE_HITS.store(0, Ordering::Relaxed);
