@@ -50,6 +50,7 @@ use crate::layout::constraints::AvailableSpace;
 use crate::layout::constraints::LayoutConstraints;
 use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::contexts::inline::line_builder::InlineBoxItem;
+use crate::layout::contexts::inline::line_builder::ReshapeCache;
 use crate::layout::contexts::positioned::ContainingBlock;
 use crate::layout::engine::LayoutParallelism;
 use crate::layout::float_context::FloatContext;
@@ -162,6 +163,7 @@ pub struct InlineFormattingContext {
   /// Text shaping pipeline (bidi/script/fallback aware)
   pipeline: ShapingPipeline,
   font_context: FontContext,
+  reshape_cache: Mutex<ReshapeCache>,
   default_hyphenator: Option<Hyphenator>,
   viewport_size: crate::geometry::Size,
   nearest_positioned_cb: crate::layout::contexts::positioned::ContainingBlock,
@@ -219,6 +221,7 @@ impl InlineFormattingContext {
     Self {
       pipeline: ShapingPipeline::new(),
       font_context: FontContext::new(),
+      reshape_cache: Mutex::new(ReshapeCache::default()),
       default_hyphenator: Hyphenator::new("en-us").ok(),
       viewport_size: crate::geometry::Size::new(800.0, 600.0),
       nearest_positioned_cb: crate::layout::contexts::positioned::ContainingBlock::viewport(
@@ -262,6 +265,7 @@ impl InlineFormattingContext {
     Self {
       pipeline,
       font_context,
+      reshape_cache: Mutex::new(ReshapeCache::default()),
       default_hyphenator: Hyphenator::new("en-us").ok(),
       viewport_size,
       nearest_positioned_cb,
@@ -2579,9 +2583,16 @@ impl InlineFormattingContext {
         continue;
       }
       let relative = offset - consumed;
-      if let Some((before, after)) =
-        current.split_at(relative, false, &self.pipeline, &self.font_context)
-      {
+      if let Some((before, after)) = {
+        let mut cache = self.reshape_cache.lock().expect("reshape cache lock");
+        current.split_at(
+          relative,
+          false,
+          &self.pipeline,
+          &self.font_context,
+          &mut cache,
+        )
+      } {
         parts.push(before);
         current = after;
         consumed = offset;
@@ -3917,9 +3928,10 @@ impl InlineFormattingContext {
         }
 
         if pos > 0 {
-          if let Some((before, after)) =
-            remaining.split_at(pos, false, &self.pipeline, &self.font_context)
-          {
+          if let Some((before, after)) = {
+            let mut cache = self.reshape_cache.lock().expect("reshape cache lock");
+            remaining.split_at(pos, false, &self.pipeline, &self.font_context, &mut cache)
+          } {
             if before.advance > 0.0 {
               builder.add_item(InlineItem::Text(before));
             }
@@ -3942,9 +3954,16 @@ impl InlineFormattingContext {
             .map(|c| c.len_utf8())
             .unwrap_or(1);
           if pos + skip_bytes < remaining.text.len() {
-            if let Some((_, after)) =
-              remaining.split_at(pos + skip_bytes, false, &self.pipeline, &self.font_context)
-            {
+            if let Some((_, after)) = {
+              let mut cache = self.reshape_cache.lock().expect("reshape cache lock");
+              remaining.split_at(
+                pos + skip_bytes,
+                false,
+                &self.pipeline,
+                &self.font_context,
+                &mut cache,
+              )
+            } {
               remaining = after;
               continue;
             }
@@ -4388,9 +4407,10 @@ impl InlineFormattingContext {
         continue;
       }
       let local = target - consumed;
-      if let Some((before, after)) =
-        remaining.split_at(local, false, &self.pipeline, &self.font_context)
-      {
+      if let Some((before, after)) = {
+        let mut cache = self.reshape_cache.lock().expect("reshape cache lock");
+        remaining.split_at(local, false, &self.pipeline, &self.font_context, &mut cache)
+      } {
         consumed = target;
         segments.push(before);
         remaining = after;
@@ -6928,9 +6948,17 @@ impl InlineFormattingContext {
       return Some(item.clone());
     }
 
-    item
-      .split_at(offset, false, &self.pipeline, &self.font_context)
-      .map(|(before, _)| before)
+    {
+      let mut cache = self.reshape_cache.lock().expect("reshape cache lock");
+      item.split_at(
+        offset,
+        false,
+        &self.pipeline,
+        &self.font_context,
+        &mut cache,
+      )
+    }
+    .map(|(before, _)| before)
   }
 
   fn truncate_text_item_from_start(&self, item: &TextItem, max_width: f32) -> Option<TextItem> {
@@ -6954,9 +6982,17 @@ impl InlineFormattingContext {
     }
 
     let offset = best?;
-    item
-      .split_at(offset, false, &self.pipeline, &self.font_context)
-      .map(|(_, after)| after)
+    {
+      let mut cache = self.reshape_cache.lock().expect("reshape cache lock");
+      item.split_at(
+        offset,
+        false,
+        &self.pipeline,
+        &self.font_context,
+        &mut cache,
+      )
+    }
+    .map(|(_, after)| after)
   }
 
   fn line_items_width(&self, items: &[InlineItem]) -> f32 {
@@ -7038,6 +7074,9 @@ impl InlineFormattingContext {
     float_base_y: f32,
   ) -> Result<FragmentNode, LayoutError> {
     let _profile = layout_timer(LayoutKind::Inline);
+    if let Ok(mut cache) = self.reshape_cache.lock() {
+      cache.clear();
+    }
     let mut transformed: Option<BoxNode> = None;
     let box_node = if let Some(letter_style) = box_node.first_letter_style.as_ref() {
       if Self::first_letter_eligible(box_node) {

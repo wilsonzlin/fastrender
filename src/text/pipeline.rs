@@ -2956,7 +2956,7 @@ struct ShapingCacheKey {
   font_generation: u64,
 }
 
-fn shaping_style_hash(style: &ComputedStyle) -> u64 {
+pub(crate) fn shaping_style_hash(style: &ComputedStyle) -> u64 {
   use std::hash::Hash;
   use std::hash::Hasher;
   let mut hasher = std::collections::hash_map::DefaultHasher::new();

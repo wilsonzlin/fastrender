@@ -51,13 +51,17 @@ use crate::text::font_loader::FontContext;
 use crate::text::justify::InlineAxis;
 use crate::text::line_break::BreakOpportunity;
 use crate::text::line_break::BreakType;
+use crate::text::pipeline::shaping_style_hash;
 use crate::text::pipeline::ShapedRun;
 use crate::text::pipeline::ShapingPipeline;
 use crate::tree::box_tree::ReplacedType;
 use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
-use std::collections::BTreeMap;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
+use std::hash::Hash;
+use std::hash::Hasher;
+use std::ops::Range;
 use std::sync::Arc;
 use unicode_bidi::BidiInfo;
 use unicode_bidi::Level;
@@ -273,6 +277,8 @@ pub struct TextItem {
   pub break_opportunities: Vec<BreakOpportunity>,
   /// Offsets of forced breaks inserted during normalization (e.g., newlines)
   pub forced_break_offsets: Vec<usize>,
+  /// Earliest mandatory break in `break_opportunities` (if any).
+  first_mandatory_break: Option<BreakOpportunity>,
 
   /// Original text for fragment creation
   pub text: String,
@@ -290,6 +296,10 @@ pub struct TextItem {
   pub paint_offset: f32,
   /// Cumulative advances at cluster boundaries (text order)
   cluster_advances: Vec<ClusterBoundary>,
+  /// Range of the original source text represented by this item.
+  source_range: Range<usize>,
+  /// Stable hash of the source text used for ephemeral caches.
+  source_id: u64,
 }
 
 /// A floating box placeholder encountered in the inline stream
@@ -308,6 +318,28 @@ struct ClusterBoundary {
   byte_offset: usize,
   /// Advance width from the start of the item up to and including this cluster
   advance: f32,
+  /// Index of the shaped run that owns this cluster boundary.
+  run_index: Option<usize>,
+  /// Glyph index at which the boundary occurs (exclusive).
+  glyph_end: Option<usize>,
+  /// Advance within the run up to this boundary.
+  run_advance: f32,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct ReshapeCache {
+  runs: HashMap<ReshapeCacheKey, Arc<Vec<ShapedRun>>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ReshapeCacheKey {
+  style_hash: u64,
+  font_generation: u64,
+  text_id: u64,
+  range_start: usize,
+  range_end: usize,
+  letter_spacing_bits: u32,
+  word_spacing_bits: u32,
 }
 
 impl TextItem {
@@ -324,11 +356,14 @@ impl TextItem {
     let cluster_advances = Self::compute_cluster_advances(&runs, text.as_str(), style.font_size);
     let aligned_breaks =
       Self::align_breaks_to_clusters(break_opportunities, &cluster_advances, text.len());
+    let first_mandatory_break = Self::first_mandatory_break(&aligned_breaks);
     let advance: f32 = cluster_advances
       .last()
       .map(|c| c.advance)
       .unwrap_or_else(|| runs.iter().map(|r| r.advance).sum());
     let font_size = style.font_size;
+    let source_id = Self::hash_text(&text);
+    let source_range = 0..text.len();
     Self {
       box_id: 0,
       runs,
@@ -338,6 +373,7 @@ impl TextItem {
       vertical_align: VerticalAlign::Baseline,
       break_opportunities: aligned_breaks,
       forced_break_offsets,
+      first_mandatory_break,
       text,
       font_size,
       style,
@@ -345,6 +381,8 @@ impl TextItem {
       is_marker: false,
       paint_offset: 0.0,
       cluster_advances,
+      source_range,
+      source_id,
     }
   }
 
@@ -409,6 +447,7 @@ impl TextItem {
       }
       true
     });
+    self.first_mandatory_break = Self::first_mandatory_break(&self.break_opportunities);
   }
 
   pub fn recompute_cluster_advances(&mut self) {
@@ -463,12 +502,13 @@ impl TextItem {
   /// Splits this text item at a byte offset, returning (before, after)
   ///
   /// This is used for line breaking within text.
-  pub fn split_at(
+  pub(crate) fn split_at(
     &self,
     byte_offset: usize,
     insert_hyphen: bool,
     shaper: &ShapingPipeline,
     font_context: &FontContext,
+    reshape_cache: &mut ReshapeCache,
   ) -> Option<(TextItem, TextItem)> {
     const INSERTED_HYPHEN: char = '\u{2010}'; // CSS hyphenation hyphen
     let text_len = self.text.len();
@@ -486,13 +526,7 @@ impl TextItem {
       return None;
     }
 
-    let mut split_offset = self
-      .cluster_boundary_at_or_before(target_offset)
-      .map(|b| b.byte_offset)
-      .unwrap_or(target_offset);
-    if split_offset < target_offset {
-      split_offset = target_offset;
-    }
+    let split_offset = target_offset;
 
     if split_offset == 0 || split_offset >= text_len || !self.text.is_char_boundary(split_offset) {
       return None;
@@ -506,8 +540,9 @@ impl TextItem {
       self
         .split_runs_preserving_shaping(split_offset)
         .or_else(|| {
-          let before_runs = shaper.shape(before_text, &self.style, font_context).ok()?;
-          let after_runs = shaper.shape(after_text, &self.style, font_context).ok()?;
+          let before_runs = reshape_cache.shape(self, 0..split_offset, shaper, font_context)?;
+          let after_runs =
+            reshape_cache.shape(self, split_offset..text_len, shaper, font_context)?;
           Some((before_runs, after_runs))
         })?;
 
@@ -566,6 +601,8 @@ impl TextItem {
     )
     .with_vertical_align(self.vertical_align);
     before_item.box_id = self.box_id;
+    before_item.source_id = self.source_id;
+    before_item.source_range = self.source_range.start..self.source_range.start + split_offset;
 
     let mut after_item = TextItem::new(
       after_runs,
@@ -591,10 +628,12 @@ impl TextItem {
     )
     .with_vertical_align(self.vertical_align);
     after_item.box_id = self.box_id;
+    after_item.source_id = self.source_id;
+    after_item.source_range = self.source_range.start + split_offset..self.source_range.end;
 
     if before_item.advance <= 0.0 || after_item.advance <= 0.0 {
-      let before_runs = shaper.shape(before_text, &self.style, font_context).ok()?;
-      let after_runs = shaper.shape(after_text, &self.style, font_context).ok()?;
+      let before_runs = reshape_cache.shape(self, 0..split_offset, shaper, font_context)?;
+      let after_runs = reshape_cache.shape(self, split_offset..text_len, shaper, font_context)?;
       let before_metrics = TextItem::metrics_from_runs(&before_runs, line_height, self.font_size);
       let after_metrics = TextItem::metrics_from_runs(&after_runs, line_height, self.font_size);
       before_item = TextItem::new(
@@ -618,6 +657,8 @@ impl TextItem {
       )
       .with_vertical_align(self.vertical_align);
       before_item.box_id = self.box_id;
+      before_item.source_id = self.source_id;
+      before_item.source_range = self.source_range.start..self.source_range.start + split_offset;
 
       after_item = TextItem::new(
         after_runs,
@@ -643,6 +684,8 @@ impl TextItem {
       )
       .with_vertical_align(self.vertical_align);
       after_item.box_id = self.box_id;
+      after_item.source_id = self.source_id;
+      after_item.source_range = self.source_range.start + split_offset..self.source_range.end;
     }
 
     if self.is_marker {
@@ -798,27 +841,15 @@ impl TextItem {
 
   /// Finds the best break point that fits within max_width
   pub fn find_break_point(&self, max_width: f32) -> Option<BreakOpportunity> {
-    // Find the last break opportunity that fits
-    let mut mandatory_break: Option<BreakOpportunity> = None;
-    let mut allowed_break: Option<BreakOpportunity> = None;
-
-    for brk in &self.break_opportunities {
-      let width_at_break = self.advance_at_offset(brk.byte_offset);
-      if width_at_break <= max_width {
-        match brk.break_type {
-          BreakType::Mandatory => {
-            if mandatory_break.is_none() {
-              mandatory_break = Some(*brk);
-            }
-          }
-          BreakType::Allowed => allowed_break = Some(*brk),
-        }
-      } else {
-        break;
+    if let Some(mandatory) = self.first_mandatory_break {
+      if self.advance_at_offset(mandatory.byte_offset) <= max_width {
+        return Some(mandatory);
       }
     }
 
-    let mut best_break = mandatory_break.or(allowed_break);
+    let mut best_break = self
+      .offset_for_width(max_width)
+      .and_then(|offset| self.allowed_break_at_or_before(offset));
     if best_break.is_some() || !allows_soft_wrap(self.style.as_ref()) {
       return best_break;
     }
@@ -829,19 +860,49 @@ impl TextItem {
     );
     let can_overflow_break_by_wrap = self.style.overflow_wrap == OverflowWrap::BreakWord;
 
-    if can_overflow_break_word || can_overflow_break_by_wrap {
-      // Allow breaking anywhere within the word if nothing else fits
-      for (idx, _) in self.text.char_indices().skip(1) {
-        let width_at_break = self.advance_at_offset(idx);
-        if width_at_break <= max_width {
-          best_break = Some(BreakOpportunity::allowed(idx));
-        } else {
-          break;
+    if (can_overflow_break_word || can_overflow_break_by_wrap) && best_break.is_none() {
+      if let Some(offset) = self.offset_for_width(max_width) {
+        if offset > 0 {
+          best_break = Some(BreakOpportunity::allowed(offset));
         }
       }
     }
 
     best_break
+  }
+
+  fn offset_for_width(&self, max_width: f32) -> Option<usize> {
+    if self.cluster_advances.is_empty() {
+      return None;
+    }
+
+    let idx = self
+      .cluster_advances
+      .partition_point(|b| b.advance <= max_width);
+    if idx == 0 {
+      return None;
+    }
+
+    self.cluster_advances.get(idx - 1).map(|b| b.byte_offset)
+  }
+
+  fn allowed_break_at_or_before(&self, byte_offset: usize) -> Option<BreakOpportunity> {
+    if self.break_opportunities.is_empty() {
+      return None;
+    }
+
+    let mut idx = self
+      .break_opportunities
+      .partition_point(|b| b.byte_offset <= byte_offset);
+    while idx > 0 {
+      idx -= 1;
+      let brk = self.break_opportunities[idx];
+      if matches!(brk.break_type, BreakType::Allowed) {
+        return Some(brk);
+      }
+    }
+
+    None
   }
 
   fn cluster_boundary_at_or_before(&self, byte_offset: usize) -> Option<ClusterBoundary> {
@@ -867,6 +928,24 @@ impl TextItem {
     self.cluster_advances.get(idx).cloned()
   }
 
+  fn cluster_boundary_exact(&self, byte_offset: usize) -> Option<&ClusterBoundary> {
+    if self.cluster_advances.is_empty() {
+      return None;
+    }
+
+    let mut idx = self
+      .cluster_advances
+      .binary_search_by_key(&byte_offset, |c| c.byte_offset)
+      .ok()?;
+    while idx + 1 < self.cluster_advances.len()
+      && self.cluster_advances[idx + 1].byte_offset == byte_offset
+    {
+      idx += 1;
+    }
+
+    self.cluster_advances.get(idx)
+  }
+
   fn compute_cluster_advances(
     runs: &[ShapedRun],
     text: &str,
@@ -881,43 +960,73 @@ impl TextItem {
       return vec![ClusterBoundary {
         byte_offset: text_len,
         advance: estimated,
+        run_index: None,
+        glyph_end: None,
+        run_advance: estimated,
       }];
     }
 
-    let mut sorted_runs: Vec<&ShapedRun> = runs.iter().collect();
-    sorted_runs.sort_by_key(|r| r.start);
+    let mut run_indices: Vec<usize> = (0..runs.len()).collect();
+    run_indices.sort_by_key(|idx| runs[*idx].start);
 
     let mut advances = Vec::new();
     let mut cumulative = 0.0;
 
-    for run in sorted_runs {
+    for run_idx in run_indices {
+      let run = &runs[run_idx];
       let axis = run_inline_axis(run);
-      let mut cluster_widths: BTreeMap<usize, f32> = BTreeMap::new();
-      for glyph in &run.glyphs {
-        let raw_offset = run.start + glyph.cluster as usize;
-        let offset = Self::previous_char_boundary_in_text(text, raw_offset);
-        *cluster_widths.entry(offset).or_default() += glyph_inline_advance(glyph, axis);
+      if run.glyphs.is_empty() {
+        if run.advance > 0.0 {
+          let run_advance = run.advance.max(0.0);
+          cumulative += run_advance;
+          advances.push(ClusterBoundary {
+            byte_offset: Self::previous_char_boundary_in_text(text, run.end).min(text_len),
+            advance: cumulative,
+            run_index: Some(run_idx),
+            glyph_end: None,
+            run_advance,
+          });
+        }
+        continue;
       }
 
-      if cluster_widths.is_empty() {
-        // If shaping produced no glyphs, fall back to treating the entire run as a single cluster
-        cluster_widths.insert(
-          Self::previous_char_boundary_in_text(text, run.start),
-          run.advance.max(0.0),
-        );
-      }
+      let mut glyph_idx = 0;
+      let mut run_advance = 0.0;
+      while glyph_idx < run.glyphs.len() {
+        let cluster_value = run.glyphs[glyph_idx].cluster as usize;
+        let mut cluster_width = 0.0;
+        while glyph_idx < run.glyphs.len()
+          && run.glyphs[glyph_idx].cluster as usize == cluster_value
+        {
+          cluster_width += glyph_inline_advance(&run.glyphs[glyph_idx], axis);
+          glyph_idx += 1;
+        }
 
-      let last_offset = *cluster_widths.keys().next_back().unwrap_or(&run.end);
-      let run_end = Self::previous_char_boundary_in_text(text, run.end);
-      if last_offset < run_end {
-        cluster_widths.entry(run_end).or_insert(0.0);
-      }
-
-      for (offset, width) in cluster_widths {
-        cumulative += width;
+        run_advance += cluster_width;
+        cumulative += cluster_width;
+        let offset =
+          Self::previous_char_boundary_in_text(text, run.start + cluster_value).min(text_len);
         advances.push(ClusterBoundary {
-          byte_offset: offset.min(text_len),
+          byte_offset: offset,
           advance: cumulative,
+          run_index: Some(run_idx),
+          glyph_end: Some(glyph_idx),
+          run_advance,
+        });
+      }
+
+      let run_end = Self::previous_char_boundary_in_text(text, run.end).min(text_len);
+      if advances
+        .last()
+        .map(|b| b.byte_offset != run_end)
+        .unwrap_or(true)
+      {
+        advances.push(ClusterBoundary {
+          byte_offset: run_end,
+          advance: cumulative,
+          run_index: Some(run_idx),
+          glyph_end: Some(run.glyphs.len()),
+          run_advance,
         });
       }
     }
@@ -927,8 +1036,11 @@ impl TextItem {
     for boundary in advances {
       if let Some(last) = deduped.last_mut() {
         if last.byte_offset == boundary.byte_offset {
-          if boundary.advance > last.advance {
-            last.advance = boundary.advance;
+          if boundary.advance > last.advance
+            || last.run_index.is_none()
+            || (last.glyph_end.is_none() && boundary.glyph_end.is_some())
+          {
+            *last = boundary;
           }
           continue;
         }
@@ -944,6 +1056,12 @@ impl TextItem {
       deduped.push(ClusterBoundary {
         byte_offset: text_len,
         advance: deduped.last().map(|b| b.advance).unwrap_or(0.0),
+        run_index: None,
+        glyph_end: None,
+        run_advance: deduped
+          .last()
+          .map(|b| b.run_advance)
+          .unwrap_or(fallback_font_size),
       });
     }
 
@@ -951,6 +1069,9 @@ impl TextItem {
       deduped.push(ClusterBoundary {
         byte_offset: text_len,
         advance: fallback_font_size,
+        run_index: None,
+        glyph_end: None,
+        run_advance: fallback_font_size,
       });
     }
 
@@ -1008,6 +1129,19 @@ impl TextItem {
     aligned
   }
 
+  fn first_mandatory_break(breaks: &[BreakOpportunity]) -> Option<BreakOpportunity> {
+    breaks
+      .iter()
+      .find(|b| matches!(b.break_type, BreakType::Mandatory))
+      .copied()
+  }
+
+  fn hash_text(text: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    text.hash(&mut hasher);
+    hasher.finish()
+  }
+
   fn cluster_offset_at_or_before(target: usize, clusters: &[ClusterBoundary]) -> Option<usize> {
     if clusters.is_empty() {
       return None;
@@ -1024,83 +1158,110 @@ impl TextItem {
     &self,
     split_offset: usize,
   ) -> Option<(Vec<ShapedRun>, Vec<ShapedRun>)> {
-    let mut before_runs = Vec::new();
-    let mut after_runs = Vec::new();
+    let boundary = self.cluster_boundary_exact(split_offset)?;
+    let run_idx = boundary.run_index?;
+    let glyph_split = boundary.glyph_end?;
+    let run = self.runs.get(run_idx)?;
 
-    for run in &self.runs {
-      if split_offset <= run.start {
-        // Entire run goes to the after side
-        let mut shifted = run.clone();
-        shifted.start = shifted.start.saturating_sub(split_offset);
-        shifted.end = shifted.end.saturating_sub(split_offset);
-        after_runs.push(shifted);
-        continue;
-      }
-      if split_offset >= run.end {
-        // Entire run goes to the before side
-        before_runs.push(run.clone());
-        continue;
-      }
+    if split_offset < run.start || split_offset > run.end {
+      return None;
+    }
 
-      // Split within this run
-      let local = split_offset - run.start;
+    let local = split_offset.checked_sub(run.start)?;
+    if local > run.text.len() || !run.text.is_char_boundary(local) {
+      return None;
+    }
 
-      // Guard against invalid UTF-8 boundaries
-      if local > run.text.len() || !run.text.is_char_boundary(local) {
-        return None;
-      }
+    let left_text = run.text.get(..local)?;
+    let right_text = run.text.get(local..)?;
 
-      let left_text = run.text.get(..local)?;
-      let right_text = run.text.get(local..)?;
+    let mut before_runs: Vec<ShapedRun> = self.runs.iter().take(run_idx).cloned().collect();
+    let mut after_runs: Vec<ShapedRun> = self
+      .runs
+      .iter()
+      .skip(run_idx + 1)
+      .cloned()
+      .map(|mut r| {
+        r.start = r.start.saturating_sub(split_offset);
+        r.end = r.end.saturating_sub(split_offset);
+        r
+      })
+      .collect();
 
-      let mut left_glyphs = Vec::new();
-      let mut right_glyphs = Vec::new();
+    let left_glyphs = run.glyphs[..glyph_split.min(run.glyphs.len())].to_vec();
+    let mut right_glyphs = run.glyphs[glyph_split.min(run.glyphs.len())..].to_vec();
 
-      for glyph in &run.glyphs {
-        if (glyph.cluster as usize) < local {
-          left_glyphs.push(*glyph);
-        } else {
-          right_glyphs.push(*glyph);
-        }
-      }
+    let run_axis = run_inline_axis(run);
+    let left_advance = boundary.run_advance;
 
-      let run_axis = run_inline_axis(run);
-      let left_advance: f32 = left_glyphs
+    for glyph in &mut right_glyphs {
+      glyph.x_offset -= left_advance;
+      glyph.cluster = glyph.cluster.saturating_sub(local as u32);
+    }
+
+    if !left_glyphs.is_empty() {
+      let mut left_run = run.clone();
+      left_run.text = left_text.to_string();
+      left_run.end = split_offset;
+      left_run.glyphs = left_glyphs;
+      left_run.advance = left_advance;
+      before_runs.push(left_run);
+    }
+
+    if !right_glyphs.is_empty() {
+      let mut right_run = run.clone();
+      right_run.text = right_text.to_string();
+      right_run.start = 0;
+      right_run.end = right_run.text.len();
+      right_run.glyphs = right_glyphs;
+      right_run.advance = right_run
+        .glyphs
         .iter()
         .map(|g| glyph_inline_advance(g, run_axis))
         .sum();
-
-      // Adjust right glyph offsets/clusters to be relative to the split
-      for glyph in &mut right_glyphs {
-        glyph.x_offset -= left_advance;
-        glyph.cluster = glyph.cluster.saturating_sub(local as u32);
-      }
-
-      if !left_glyphs.is_empty() {
-        let mut left_run = run.clone();
-        left_run.text = left_text.to_string();
-        left_run.end = split_offset;
-        left_run.glyphs = left_glyphs;
-        left_run.advance = left_advance;
-        before_runs.push(left_run);
-      }
-
-      if !right_glyphs.is_empty() {
-        let mut right_run = run.clone();
-        right_run.text = right_text.to_string();
-        right_run.start = 0;
-        right_run.end = right_run.text.len();
-        right_run.glyphs = right_glyphs;
-        right_run.advance = right_run
-          .glyphs
-          .iter()
-          .map(|g| glyph_inline_advance(g, run_axis))
-          .sum();
-        after_runs.push(right_run);
-      }
+      after_runs.insert(0, right_run);
     }
 
     Some((before_runs, after_runs))
+  }
+}
+
+impl ReshapeCache {
+  pub(crate) fn clear(&mut self) {
+    self.runs.clear();
+  }
+
+  fn shape(
+    &mut self,
+    item: &TextItem,
+    range: Range<usize>,
+    shaper: &ShapingPipeline,
+    font_context: &FontContext,
+  ) -> Option<Vec<ShapedRun>> {
+    let text_slice = item.text.get(range.clone())?;
+    let key = ReshapeCacheKey {
+      style_hash: shaping_style_hash(item.style.as_ref()),
+      font_generation: font_context.font_generation(),
+      text_id: item.source_id,
+      range_start: item.source_range.start + range.start,
+      range_end: item.source_range.start + range.end,
+      letter_spacing_bits: item.style.letter_spacing.to_bits(),
+      word_spacing_bits: item.style.word_spacing.to_bits(),
+    };
+
+    if let Some(cached) = self.runs.get(&key) {
+      return Some((**cached).clone());
+    }
+
+    let mut runs = shaper.shape(text_slice, &item.style, font_context).ok()?;
+    TextItem::apply_spacing_to_runs(
+      &mut runs,
+      text_slice,
+      item.style.letter_spacing,
+      item.style.word_spacing,
+    );
+    self.runs.insert(key, Arc::new(runs.clone()));
+    Some(runs)
   }
 }
 
@@ -1765,6 +1926,9 @@ pub struct LineBuilder<'a> {
   /// Font context for reshaping during line breaks
   font_context: FontContext,
 
+  /// Cache for reshaping repeated substrings within this layout.
+  reshape_cache: ReshapeCache,
+
   /// Base paragraph level for bidi ordering (None = auto/first strong)
   base_level: Option<Level>,
 
@@ -1873,6 +2037,7 @@ impl<'a> LineBuilder<'a> {
       strut_metrics,
       shaper,
       font_context,
+      reshape_cache: ReshapeCache::default(),
       base_level,
       root_unicode_bidi,
       root_direction,
@@ -1975,6 +2140,7 @@ impl<'a> LineBuilder<'a> {
           break_opportunity.adds_hyphen,
           &self.shaper,
           &self.font_context,
+          &mut self.reshape_cache,
         ) {
           // Place the part that fits
           if before.advance_for_layout > 0.0 {
@@ -2679,10 +2845,13 @@ fn slice_text_item(
       .map(|b| ClusterBoundary {
         byte_offset: b.byte_offset - range.start,
         advance: (b.advance - start_adv).max(0.0),
+        run_index: b.run_index,
+        glyph_end: b.glyph_end,
+        run_advance: (b.run_advance - start_adv).max(0.0),
       })
       .collect();
 
-    let breaks = item
+    let breaks: Vec<BreakOpportunity> = item
       .break_opportunities
       .iter()
       .filter(|b| b.byte_offset >= range.start && b.byte_offset <= range.end)
@@ -2690,6 +2859,7 @@ fn slice_text_item(
         BreakOpportunity::with_hyphen(b.byte_offset - range.start, b.break_type, b.adds_hyphen)
       })
       .collect();
+    let first_mandatory_break = TextItem::first_mandatory_break(&breaks);
     let forced = item
       .forced_break_offsets
       .iter()
@@ -2711,6 +2881,7 @@ fn slice_text_item(
       vertical_align: item.vertical_align,
       break_opportunities: breaks,
       forced_break_offsets: forced,
+      first_mandatory_break,
       text: item.text[range.clone()].to_string(),
       font_size: item.font_size,
       style: item.style.clone(),
@@ -2718,6 +2889,8 @@ fn slice_text_item(
       is_marker: item.is_marker,
       paint_offset: item.paint_offset,
       cluster_advances,
+      source_range: item.source_range.start + range.start..item.source_range.start + range.end,
+      source_id: item.source_id,
     });
   }
 
@@ -2766,6 +2939,9 @@ fn slice_text_item(
   )
   .with_vertical_align(item.vertical_align);
   new_item.box_id = item.box_id;
+  new_item.source_id = item.source_id;
+  new_item.source_range =
+    item.source_range.start + range.start..item.source_range.start + range.end;
   if item.is_marker {
     new_item.is_marker = true;
     new_item.paint_offset = item.paint_offset;
@@ -2929,9 +3105,13 @@ mod tests {
         cluster_advances.push(ClusterBoundary {
           byte_offset: i,
           advance: step * i as f32,
+          run_index: None,
+          glyph_end: None,
+          run_advance: step * i as f32,
         });
       }
     }
+    let breaks = find_break_opportunities(text);
     TextItem {
       box_id: 0,
       runs: Vec::new(),
@@ -2939,8 +3119,9 @@ mod tests {
       advance_for_layout: advance,
       metrics: make_strut_metrics(),
       vertical_align: VerticalAlign::Baseline,
-      break_opportunities: find_break_opportunities(text),
+      break_opportunities: breaks.clone(),
       forced_break_offsets: Vec::new(),
+      first_mandatory_break: TextItem::first_mandatory_break(&breaks),
       text: text.to_string(),
       font_size: 16.0,
       style: style.clone(),
@@ -2948,7 +3129,54 @@ mod tests {
       is_marker: false,
       paint_offset: 0.0,
       cluster_advances,
+      source_range: 0..text.len(),
+      source_id: TextItem::hash_text(text),
     }
+  }
+
+  fn old_find_break_point(item: &TextItem, max_width: f32) -> Option<BreakOpportunity> {
+    let mut mandatory_break: Option<BreakOpportunity> = None;
+    let mut allowed_break: Option<BreakOpportunity> = None;
+
+    for brk in &item.break_opportunities {
+      let width_at_break = item.advance_at_offset(brk.byte_offset);
+      if width_at_break <= max_width {
+        match brk.break_type {
+          BreakType::Mandatory => {
+            if mandatory_break.is_none() {
+              mandatory_break = Some(*brk);
+            }
+          }
+          BreakType::Allowed => allowed_break = Some(*brk),
+        }
+      } else {
+        break;
+      }
+    }
+
+    let mut best_break = mandatory_break.or(allowed_break);
+    if best_break.is_some() || !allows_soft_wrap(item.style.as_ref()) {
+      return best_break;
+    }
+
+    let can_overflow_break_word = matches!(
+      item.style.word_break,
+      WordBreak::BreakWord | WordBreak::Anywhere
+    );
+    let can_overflow_break_by_wrap = item.style.overflow_wrap == OverflowWrap::BreakWord;
+
+    if can_overflow_break_word || can_overflow_break_by_wrap {
+      for (idx, _) in item.text.char_indices().skip(1) {
+        let width_at_break = item.advance_at_offset(idx);
+        if width_at_break <= max_width {
+          best_break = Some(BreakOpportunity::allowed(idx));
+        } else {
+          break;
+        }
+      }
+    }
+
+    best_break
   }
 
   #[test]
@@ -2972,6 +3200,7 @@ mod tests {
       Direction::Ltr,
     );
 
+    let mut cache = ReshapeCache::default();
     for brk in &item.break_opportunities {
       assert!(
         item.text.is_char_boundary(brk.byte_offset),
@@ -2984,7 +3213,7 @@ mod tests {
 
       assert!(
         item
-          .split_at(brk.byte_offset, false, &shaper, &font_context)
+          .split_at(brk.byte_offset, false, &shaper, &font_context, &mut cache)
           .is_some(),
         "Split failed at {}",
         brk.byte_offset
@@ -3013,9 +3242,10 @@ mod tests {
       Direction::Ltr,
     );
 
+    let mut cache = ReshapeCache::default();
     // Byte offset 2 is inside the emoji; split_at should clamp to the previous char boundary.
     let (before, after) = item
-      .split_at(2, false, &shaper, &font_context)
+      .split_at(2, false, &shaper, &font_context, &mut cache)
       .expect("split_at should succeed even at mid-codepoint offsets");
     assert_eq!(before.text, "a");
     assert_eq!(after.text, "😊b");
@@ -3026,7 +3256,57 @@ mod tests {
     let item = make_text_item("â€œenhancedâ€", 20.0);
     let pipeline = ShapingPipeline::new();
     let font_ctx = FontContext::new();
-    assert!(item.split_at(1, false, &pipeline, &font_ctx).is_none());
+    let mut cache = ReshapeCache::default();
+    assert!(item
+      .split_at(1, false, &pipeline, &font_ctx, &mut cache)
+      .is_none());
+  }
+
+  #[test]
+  fn break_point_selection_matches_linear_scan() {
+    let widths = [0.0, 0.5, 1.0, 2.0, 3.5, 10.0];
+    let mut cases: Vec<TextItem> = Vec::new();
+
+    let mut allowed_only = make_text_item("aaaa", 4.0);
+    allowed_only.break_opportunities = vec![
+      BreakOpportunity::allowed(1),
+      BreakOpportunity::allowed(2),
+      BreakOpportunity::allowed(3),
+    ];
+    allowed_only.first_mandatory_break =
+      TextItem::first_mandatory_break(&allowed_only.break_opportunities);
+    cases.push(allowed_only);
+
+    let mut mandatory_first = make_text_item("aaaa", 4.0);
+    mandatory_first.break_opportunities =
+      vec![BreakOpportunity::mandatory(2), BreakOpportunity::allowed(3)];
+    mandatory_first.first_mandatory_break =
+      TextItem::first_mandatory_break(&mandatory_first.break_opportunities);
+    cases.push(mandatory_first);
+
+    let mut break_word = make_text_item("abcdef", 6.0);
+    break_word.break_opportunities.clear();
+    Arc::make_mut(&mut break_word.style).word_break = WordBreak::BreakWord;
+    break_word.first_mandatory_break = None;
+    cases.push(break_word);
+
+    let mut overflow_wrap = make_text_item("abcdef", 6.0);
+    overflow_wrap.break_opportunities.clear();
+    Arc::make_mut(&mut overflow_wrap.style).overflow_wrap = OverflowWrap::BreakWord;
+    overflow_wrap.first_mandatory_break = None;
+    cases.push(overflow_wrap);
+
+    for (idx, item) in cases.into_iter().enumerate() {
+      for width in &widths {
+        let expected = old_find_break_point(&item, *width);
+        let actual = item.find_break_point(*width);
+        assert_eq!(
+          actual, expected,
+          "case {} text {} width {}",
+          idx, item.text, width
+        );
+      }
+    }
   }
 
   #[test]
@@ -4818,12 +5098,50 @@ mod tests {
       Direction::Ltr,
     );
 
+    let mut cache = ReshapeCache::default();
     let (before, after) = item
-      .split_at(1, true, &pipeline, &font_ctx)
+      .split_at(1, true, &pipeline, &font_ctx, &mut cache)
       .expect("split succeeds");
 
     assert_eq!(before.text, format!("a{}", '\u{2010}'));
     assert_eq!(after.text, "bc");
+    let combined = before.text.replace('\u{2010}', "") + &after.text;
+    assert_eq!(combined, "abc");
+  }
+
+  #[test]
+  fn split_at_round_trips_text() {
+    let font_ctx = FontContext::new();
+    let pipeline = ShapingPipeline::new();
+    let style = Arc::new(ComputedStyle::default());
+    let text = "wrap this 😊 text";
+
+    let runs = pipeline
+      .shape_with_direction(
+        text,
+        &style,
+        &font_ctx,
+        pipeline_dir_from_style(Direction::Ltr),
+      )
+      .expect("shape");
+    let metrics = TextItem::metrics_from_runs(&runs, 16.0, style.font_size);
+    let item = TextItem::new(
+      runs,
+      text.to_string(),
+      metrics,
+      find_break_opportunities(text),
+      Vec::new(),
+      style,
+      Direction::Ltr,
+    );
+
+    let split_offset = text.find('😊').unwrap();
+    let mut cache = ReshapeCache::default();
+    let (before, after) = item
+      .split_at(split_offset, false, &pipeline, &font_ctx, &mut cache)
+      .expect("split succeeds");
+
+    assert_eq!(before.text + &after.text, text);
   }
 
   #[test]
@@ -4855,8 +5173,9 @@ mod tests {
     // Offset 2 lands inside the multi-byte emoji; split_at should clamp to the previous
     // boundary rather than panicking.
     assert!(!text.is_char_boundary(2));
+    let mut cache = ReshapeCache::default();
     let (before, after) = item
-      .split_at(2, false, &pipeline, &font_ctx)
+      .split_at(2, false, &pipeline, &font_ctx, &mut cache)
       .expect("clamps to prior boundary");
     assert_eq!(before.text, "a");
     assert_eq!(after.text, "😊b");
@@ -4883,7 +5202,10 @@ mod tests {
       Direction::Ltr,
     );
 
-    assert!(euro_item.split_at(1, false, &pipeline, &font_ctx).is_none());
+    let mut euro_cache = ReshapeCache::default();
+    assert!(euro_item
+      .split_at(1, false, &pipeline, &font_ctx, &mut euro_cache)
+      .is_none());
   }
 
   #[test]
@@ -4934,8 +5256,9 @@ mod tests {
       Direction::Ltr,
     );
 
+    let mut cache = ReshapeCache::default();
     let (before, after) = item
-      .split_at(22, false, &pipeline, &font_ctx)
+      .split_at(22, false, &pipeline, &font_ctx, &mut cache)
       .expect("split succeeds");
 
     assert_eq!(format!("{}{}", before.text, after.text), text);
