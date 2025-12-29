@@ -72,6 +72,7 @@ use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
 use crate::tree::table_fixup::TableStructureFixer;
 use rayon::prelude::*;
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -3500,6 +3501,19 @@ impl TableFormattingContext {
     self.structure.as_ref()
   }
 
+  /// Returns the table box to use for layout, avoiding redundant fixup work for
+  /// already-normalized trees produced by box generation.
+  fn normalize_table_root<'a>(&self, box_node: &'a BoxNode) -> Cow<'a, BoxNode> {
+    if TableStructureFixer::validate_table_structure(box_node) {
+      Cow::Borrowed(box_node)
+    } else {
+      Cow::Owned(
+        TableStructureFixer::fixup_table_internals(box_node.clone())
+          .unwrap_or_else(|err| panic!("table structure fixup failed: {err}")),
+      )
+    }
+  }
+
   /// Measures cell intrinsic widths using inline min/max content rules
   fn measure_cell_intrinsic_widths(
     &self,
@@ -3897,8 +3911,8 @@ impl FormattingContext for TableFormattingContext {
         return Ok(cached);
       }
     }
-    let table_box = TableStructureFixer::fixup_table_internals(box_node.clone())
-      .unwrap_or_else(|err| panic!("table structure fixup failed: {err}"));
+    let normalized_table = self.normalize_table_root(box_node);
+    let table_box = normalized_table.as_ref();
     let dump = runtime::runtime_toggles().truthy("FASTR_DUMP_TABLE");
     let mut positioned_children: Vec<BoxNode> = Vec::new();
     let mut running_children: Vec<(usize, BoxNode)> = Vec::new();
@@ -3916,7 +3930,7 @@ impl FormattingContext for TableFormattingContext {
     }
     let has_running_children = !running_children.is_empty();
 
-    let structure = table_structure_cached(&table_box);
+    let structure = table_structure_cached(table_box);
     if dump {
       let cw = match constraints.available_width {
         AvailableSpace::Definite(w) => format!("{:.2}", w),
@@ -3991,7 +4005,7 @@ impl FormattingContext for TableFormattingContext {
     }
 
     let row_group_constraints =
-      self.collect_row_group_constraints(&table_box, &source_row_to_visible);
+      self.collect_row_group_constraints(table_box, &source_row_to_visible);
     let mut row_to_group: Vec<Option<usize>> = vec![None; structure.row_count];
     for (idx, group) in row_group_constraints.iter().enumerate() {
       for row in group.start..group.end {
@@ -4001,7 +4015,7 @@ impl FormattingContext for TableFormattingContext {
       }
     }
 
-    let source_rows = collect_source_rows(&table_box);
+    let source_rows = collect_source_rows(table_box);
 
     let containing_width = match constraints.available_width {
       AvailableSpace::Definite(w) => Some(w),
@@ -4289,7 +4303,7 @@ impl FormattingContext for TableFormattingContext {
     let percent_base = percent_base_width.map(|w| (w - spacing - edge_consumption).max(0.0));
 
     self.populate_column_constraints(
-      &table_box,
+      table_box,
       &structure,
       &mut column_constraints,
       mode,
@@ -4853,7 +4867,7 @@ impl FormattingContext for TableFormattingContext {
     // Border-collapse adjustments
     let collapsed_borders: Option<CollapsedBorders> =
       if structure.border_collapse == BorderCollapse::Collapse {
-        Some(compute_collapsed_borders(&table_box, &structure))
+        Some(compute_collapsed_borders(table_box, &structure))
       } else {
         None
       };
@@ -5809,9 +5823,9 @@ impl FormattingContext for TableFormattingContext {
     box_node: &BoxNode,
     mode: IntrinsicSizingMode,
   ) -> Result<f32, LayoutError> {
-    let table_box = TableStructureFixer::fixup_table_internals(box_node.clone())
-      .unwrap_or_else(|err| panic!("table structure fixup failed: {err}"));
-    let structure = table_structure_cached(&table_box);
+    let normalized_table = self.normalize_table_root(box_node);
+    let table_box = normalized_table.as_ref();
+    let structure = table_structure_cached(table_box);
     let spacing = structure.total_horizontal_spacing();
     let font_size = table_box.style.font_size;
     let authored_width = table_box
@@ -5845,7 +5859,7 @@ impl FormattingContext for TableFormattingContext {
       .map(|_| ColumnConstraints::new(0.0, 0.0))
       .collect();
     self.populate_column_constraints(
-      &table_box,
+      table_box,
       &structure,
       &mut column_constraints,
       distribution_mode,
@@ -6035,6 +6049,56 @@ mod tests {
       .with_debug_info(DebugInfo::new(Some("table".to_string()), None, vec![]))
   }
 
+  fn table_with_loose_cell() -> BoxNode {
+    let mut table_style = ComputedStyle::default();
+    table_style.display = Display::Table;
+
+    let mut cell_style = ComputedStyle::default();
+    cell_style.display = Display::TableCell;
+    let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![])
+      .with_debug_info(DebugInfo::new(Some("td".to_string()), None, vec![]));
+
+    BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![cell],
+    )
+    .with_debug_info(DebugInfo::new(Some("table".to_string()), None, vec![]))
+  }
+
+  fn normalized_table_with_row_group() -> BoxNode {
+    let mut table_style = ComputedStyle::default();
+    table_style.display = Display::Table;
+    let mut group_style = ComputedStyle::default();
+    group_style.display = Display::TableRowGroup;
+    let mut row_style = ComputedStyle::default();
+    row_style.display = Display::TableRow;
+    let mut cell_style = ComputedStyle::default();
+    cell_style.display = Display::TableCell;
+
+    let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![])
+      .with_debug_info(DebugInfo::new(Some("td".to_string()), None, vec![]));
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell],
+    )
+    .with_debug_info(DebugInfo::new(Some("tr".to_string()), None, vec![]));
+    let group = BoxNode::new_block(
+      Arc::new(group_style),
+      FormattingContextType::Block,
+      vec![row],
+    )
+    .with_debug_info(DebugInfo::new(Some("tbody".to_string()), None, vec![]));
+
+    BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![group],
+    )
+    .with_debug_info(DebugInfo::new(Some("table".to_string()), None, vec![]))
+  }
+
   fn find_fragment_by_box_id<'a>(
     fragment: &'a FragmentNode,
     target: usize,
@@ -6048,6 +6112,60 @@ mod tests {
       }
     }
     None
+  }
+
+  // -------------------------------------------------------------------------
+  // Table fixup fast path
+  // -------------------------------------------------------------------------
+
+  #[test]
+  fn malformed_table_layout_triggers_fixup() {
+    let table = table_with_loose_cell();
+    assert!(
+      !TableStructureFixer::validate_table_structure(&table),
+      "table with a loose cell should be considered malformed"
+    );
+
+    let tfc = TableFormattingContext::new();
+    let _guard = TableStructureFixer::scoped_fixup_internals_counter();
+    let fragment = tfc
+      .layout(&table, &LayoutConstraints::definite_width(200.0))
+      .expect("layout should fix up malformed tables");
+
+    assert!(
+      fragment.children.len() > 0,
+      "fixup should yield at least one table fragment child"
+    );
+    assert_eq!(
+      TableStructureFixer::fixup_internals_call_count(),
+      1,
+      "layout must invoke the fixup path for malformed tables"
+    );
+  }
+
+  #[test]
+  fn validated_table_skips_fixup_in_layout_and_intrinsic() {
+    let table = normalized_table_with_row_group();
+    assert!(
+      TableStructureFixer::validate_table_structure(&table),
+      "pre-normalized table should satisfy validation"
+    );
+
+    let tfc = TableFormattingContext::new();
+    let _guard = TableStructureFixer::scoped_fixup_internals_counter();
+    let constraints = LayoutConstraints::definite_width(300.0);
+    tfc
+      .layout(&table, &constraints)
+      .expect("layout should succeed for validated table");
+    tfc
+      .compute_intrinsic_inline_size(&table, IntrinsicSizingMode::MaxContent)
+      .expect("intrinsic sizing should succeed for validated table");
+
+    assert_eq!(
+      TableStructureFixer::fixup_internals_call_count(),
+      0,
+      "validated tables should use the fast path without re-running fixup"
+    );
   }
 
   // -------------------------------------------------------------------------

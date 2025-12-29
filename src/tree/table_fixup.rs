@@ -61,6 +61,8 @@ use crate::tree::box_tree::AnonymousBox;
 use crate::tree::box_tree::AnonymousType;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::box_tree::BoxType;
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 /// Table structure fixer
@@ -81,6 +83,20 @@ use std::sync::Arc;
 /// Each phase operates on the tree independently, allowing for clean
 /// separation of concerns and easy testing.
 pub struct TableStructureFixer;
+
+#[cfg(test)]
+static TRACK_FIXUP_INTERNALS: AtomicBool = AtomicBool::new(false);
+#[cfg(test)]
+static FIXUP_INTERNAL_CALLS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(test)]
+pub struct FixupCounterGuard;
+
+#[cfg(test)]
+impl Drop for FixupCounterGuard {
+  fn drop(&mut self) {
+    TRACK_FIXUP_INTERNALS.store(false, Ordering::SeqCst);
+  }
+}
 
 impl TableStructureFixer {
   /// Fixes up a table box tree, including caption wrappers.
@@ -116,7 +132,23 @@ impl TableStructureFixer {
   /// This variant normalizes rows, row groups, and cells but leaves caption
   /// handling to downstream layout (no anonymous table wrapper is generated).
   pub fn fixup_table_internals(table_box: BoxNode) -> Result<BoxNode> {
+    #[cfg(test)]
+    if TRACK_FIXUP_INTERNALS.load(Ordering::SeqCst) {
+      FIXUP_INTERNAL_CALLS.fetch_add(1, Ordering::SeqCst);
+    }
     Self::fixup_table_structure(table_box, false)
+  }
+
+  #[cfg(test)]
+  pub fn scoped_fixup_internals_counter() -> FixupCounterGuard {
+    FIXUP_INTERNAL_CALLS.store(0, Ordering::SeqCst);
+    TRACK_FIXUP_INTERNALS.store(true, Ordering::SeqCst);
+    FixupCounterGuard
+  }
+
+  #[cfg(test)]
+  pub fn fixup_internals_call_count() -> usize {
+    FIXUP_INTERNAL_CALLS.load(Ordering::SeqCst)
   }
 
   // ==================== Type Checking ====================
