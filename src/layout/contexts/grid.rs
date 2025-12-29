@@ -1344,6 +1344,10 @@ impl GridFormattingContext {
               && (measured.bounds.height() - bounds.height()).abs() < 0.1
             {
               let mut reused = measured.clone();
+              debug_assert!(
+                reused.bounds.x().abs() < 0.01 && reused.bounds.y().abs() < 0.01,
+                "measured fragments should be normalized to the origin",
+              );
               translate_fragment_tree(&mut reused, Point::new(bounds.x(), bounds.y()));
               return Ok(reused);
             }
@@ -2037,6 +2041,37 @@ impl GridFormattingContext {
       parent_inline_base,
     );
 
+    #[cfg(test)]
+    if let Some(mut fragment) = GRID_TEST_MEASURE_HOOK.with(|hook| {
+      hook
+        .borrow()
+        .as_ref()
+        .and_then(|hook| hook(box_node).map(normalize_fragment_origin))
+    }) {
+      let percentage_base = match available_space.width {
+        taffy::style::AvailableSpace::Definite(w) => w,
+        _ => constraints
+          .width()
+          .unwrap_or_else(|| fragment.bounds.width()),
+      };
+      fragment.content = FragmentContent::Block {
+        box_id: Some(box_node.id),
+      };
+      fragment.style = Some(box_node.style.clone());
+      let content_size = self.content_box_size(&fragment, &box_node.style, percentage_base);
+      let size = taffy::geometry::Size {
+        width: content_size.width.max(0.0),
+        height: content_size.height.max(0.0),
+      };
+      push_measured_key(
+        measured_node_keys.borrow_mut().entry(node_id).or_default(),
+        key,
+      );
+      measured_fragments.borrow_mut().insert(key, fragment);
+      measure_cache.borrow_mut().insert(key, size);
+      return size;
+    }
+
     if known_dimensions.width.is_none()
       && matches!(
         available_space.width,
@@ -2076,6 +2111,7 @@ impl GridFormattingContext {
       box_id: Some(box_node.id),
     };
     fragment.style = Some(box_node.style.clone());
+    let fragment = normalize_fragment_origin(fragment);
     let content_size = self.content_box_size(&fragment, &box_node.style, percentage_base);
     let size = taffy::geometry::Size {
       width: content_size.width.max(0.0),
@@ -2104,6 +2140,42 @@ fn translate_fragment_tree(fragment: &mut FragmentNode, delta: Point) {
   }
   for child in &mut fragment.children {
     translate_fragment_tree(child, delta);
+  }
+}
+
+fn normalize_fragment_origin(mut fragment: FragmentNode) -> FragmentNode {
+  let origin = fragment.bounds.origin;
+  if origin.x != 0.0 || origin.y != 0.0 {
+    translate_fragment_tree(&mut fragment, Point::new(-origin.x, -origin.y));
+  }
+  fragment
+}
+
+#[cfg(test)]
+thread_local! {
+  static GRID_TEST_MEASURE_HOOK: RefCell<Option<Box<dyn Fn(&BoxNode) -> Option<FragmentNode>>>> =
+    RefCell::new(None);
+}
+
+#[cfg(test)]
+struct GridTestMeasureHookGuard;
+
+#[cfg(test)]
+fn set_grid_test_measure_hook(
+  hook: impl Fn(&BoxNode) -> Option<FragmentNode> + 'static,
+) -> GridTestMeasureHookGuard {
+  GRID_TEST_MEASURE_HOOK.with(|slot| {
+    *slot.borrow_mut() = Some(Box::new(hook));
+  });
+  GridTestMeasureHookGuard
+}
+
+#[cfg(test)]
+impl Drop for GridTestMeasureHookGuard {
+  fn drop(&mut self) {
+    GRID_TEST_MEASURE_HOOK.with(|slot| {
+      slot.borrow_mut().take();
+    });
   }
 }
 
@@ -3868,6 +3940,32 @@ mod tests {
     let fragment = fc.layout(&grid, &constraints).unwrap();
 
     assert_eq!(fragment.children.len(), 3);
+  }
+
+  #[test]
+  fn grid_reuses_normalized_measured_fragments() {
+    let child = BoxNode::new_block(make_item_style(), FormattingContextType::Block, vec![]);
+    let child_id = child.id;
+    let grid = BoxNode::new_block(
+      make_grid_style_with_tracks(vec![GridTrack::Auto], vec![GridTrack::Auto]),
+      FormattingContextType::Grid,
+      vec![child],
+    );
+
+    let constraints = LayoutConstraints::definite(100.0, 100.0);
+    let fc = GridFormattingContext::new();
+    let _guard = set_grid_test_measure_hook(move |node| {
+      (node.id == child_id)
+        .then(|| FragmentNode::new_block(Rect::from_xywh(5.0, 7.0, 30.0, 10.0), vec![]))
+    });
+
+    let fragment = fc.layout(&grid, &constraints).unwrap();
+    assert_eq!(fragment.children.len(), 1);
+    let child_fragment = &fragment.children[0];
+    assert_eq!(child_fragment.bounds.x(), 0.0);
+    assert_eq!(child_fragment.bounds.y(), 0.0);
+    assert_eq!(child_fragment.bounds.width(), 30.0);
+    assert_eq!(child_fragment.bounds.height(), 10.0);
   }
 
   #[test]
