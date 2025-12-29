@@ -21,8 +21,7 @@
 //! fragment's background, borders, and content. Text is rendered
 //! using the system's default font.
 
-use crate::api::render_html_with_shared_resources;
-use crate::api::ResourceKind;
+use crate::api::{render_html_with_shared_resources, ResourceContext, ResourceKind};
 use crate::css;
 use crate::css::types::ColorStop;
 use crate::css::types::RadialGradientShape;
@@ -276,6 +275,8 @@ fn trace_image_paint_limit() -> Option<usize> {
 }
 
 static TRACE_IMAGE_PAINT_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+const IFRAME_NESTING_LIMIT_MESSAGE: &str = "iframe nesting limit exceeded";
 
 fn dump_counts_enabled() -> bool {
   runtime::runtime_toggles().truthy("FASTR_DUMP_COUNTS")
@@ -4900,7 +4901,7 @@ impl Painter {
         srcdoc: Some(html),
         src,
       } => {
-        if let Some(pixmap) = self.render_iframe_srcdoc(html, content_rect, style) {
+        if let Some(pixmap) = self.render_iframe_srcdoc(html, src, content_rect, style) {
           let device_x = self.device_length(content_rect.x());
           let device_y = self.device_length(content_rect.y());
           let paint = PixmapPaint::default();
@@ -5585,9 +5586,28 @@ impl Painter {
       }
     }
   }
+
+  fn iframe_depth_remaining(&self, context: Option<&ResourceContext>) -> usize {
+    context
+      .and_then(|ctx| ctx.iframe_depth_remaining)
+      .unwrap_or(self.max_iframe_depth)
+  }
+
+  fn record_iframe_depth_exhausted(context: Option<&ResourceContext>, url: &str) {
+    if let Some(ctx) = context {
+      ctx.record_violation(
+        ResourceKind::Document,
+        url,
+        None,
+        IFRAME_NESTING_LIMIT_MESSAGE.to_string(),
+      );
+    }
+  }
+
   fn render_iframe_srcdoc(
     &self,
     html: &str,
+    src: &str,
     content_rect: Rect,
     style: Option<&ComputedStyle>,
   ) -> Option<Pixmap> {
@@ -5597,13 +5617,11 @@ impl Painter {
       return None;
     }
 
-    if self.max_iframe_depth == 0 {
-      let device_width = ((width as f32) * self.scale).round().max(1.0) as u32;
-      let device_height = ((height as f32) * self.scale).round().max(1.0) as u32;
-      return Pixmap::new(device_width, device_height);
-    }
-    let nested_depth = self.max_iframe_depth.saturating_sub(1);
-
+    let iframe_url = if src.is_empty() {
+      "about:srcdoc".to_string()
+    } else {
+      self.image_cache.resolve_url(src)
+    };
     let background = style.map(|s| s.background_color).unwrap_or(Rgba::WHITE);
     let base_url = self.image_cache.base_url();
     let mut image_cache = self.image_cache.clone();
@@ -5611,8 +5629,20 @@ impl Painter {
       image_cache.set_base_url(base_url);
     }
     let context = image_cache.resource_context();
-    let policy = context
+    let remaining_depth = self.iframe_depth_remaining(context.as_ref());
+    if remaining_depth == 0 {
+      Self::record_iframe_depth_exhausted(context.as_ref(), &iframe_url);
+      let device_width = ((width as f32) * self.scale).round().max(1.0) as u32;
+      let device_height = ((height as f32) * self.scale).round().max(1.0) as u32;
+      return Pixmap::new(device_width, device_height);
+    }
+    let nested_depth = remaining_depth.saturating_sub(1);
+    let nested_context = context
       .as_ref()
+      .map(|ctx| ctx.clone().with_iframe_depth(nested_depth));
+    let policy = nested_context
+      .as_ref()
+      .or(context.as_ref())
       .map(|c| c.policy.clone())
       .unwrap_or_default();
     render_html_with_shared_resources(
@@ -5626,7 +5656,7 @@ impl Painter {
       base_url,
       self.scale,
       policy,
-      context,
+      nested_context,
       nested_depth,
     )
     .ok()
@@ -5647,15 +5677,16 @@ impl Painter {
       return None;
     }
 
-    if self.max_iframe_depth == 0 {
+    let context = self.image_cache.resource_context();
+    let resolved = self.image_cache.resolve_url(src);
+    let remaining_depth = self.iframe_depth_remaining(context.as_ref());
+    if remaining_depth == 0 {
+      Self::record_iframe_depth_exhausted(context.as_ref(), &resolved);
       let device_width = ((width as f32) * self.scale).round().max(1.0) as u32;
       let device_height = ((height as f32) * self.scale).round().max(1.0) as u32;
       return Pixmap::new(device_width, device_height);
     }
-    let nested_depth = self.max_iframe_depth.saturating_sub(1);
-
-    let context = self.image_cache.resource_context();
-    let resolved = self.image_cache.resolve_url(src);
+    let nested_depth = remaining_depth.saturating_sub(1);
     let fetcher = Arc::clone(self.image_cache.fetcher());
     if let Some(ctx) = context.as_ref() {
       if ctx
@@ -5700,7 +5731,11 @@ impl Painter {
     let mut image_cache = self.image_cache.clone();
     image_cache.set_base_url(resolved.clone());
     let nested_origin = origin_from_url(resource.final_url.as_deref().unwrap_or(&resolved));
-    let nested_context = context.as_ref().map(|ctx| ctx.for_origin(nested_origin));
+    let nested_context = context.as_ref().map(|ctx| {
+      ctx
+        .for_origin(nested_origin)
+        .with_iframe_depth(nested_depth)
+    });
     let policy = nested_context
       .as_ref()
       .map(|ctx| ctx.policy.clone())

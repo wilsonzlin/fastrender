@@ -1122,10 +1122,11 @@ impl ResourceFetchError {
 pub struct ResourceContext {
   pub policy: ResourceAccessPolicy,
   pub diagnostics: Option<SharedRenderDiagnostics>,
+  pub iframe_depth_remaining: Option<usize>,
 }
 
 impl ResourceContext {
-  fn record_violation(
+  pub(crate) fn record_violation(
     &self,
     kind: ResourceKind,
     url: &str,
@@ -1148,6 +1149,11 @@ impl ResourceContext {
         guard.fetch_errors.push(entry);
       }
     }
+  }
+
+  pub fn with_iframe_depth(mut self, depth: usize) -> Self {
+    self.iframe_depth_remaining = Some(depth);
+    self
   }
 
   /// Evaluate whether a URL is allowed by policy, recording a diagnostic on failure.
@@ -1184,6 +1190,7 @@ impl ResourceContext {
     Self {
       policy: self.policy.for_origin(origin),
       diagnostics: self.diagnostics.clone(),
+      iframe_depth_remaining: self.iframe_depth_remaining,
     }
   }
 }
@@ -6086,6 +6093,7 @@ impl FastRender {
     ResourceContext {
       policy: self.resource_policy.for_origin(origin),
       diagnostics,
+      iframe_depth_remaining: Some(self.max_iframe_depth),
     }
   }
 
@@ -8548,6 +8556,12 @@ pub(crate) fn render_html_with_shared_resources(
   resource_context: Option<ResourceContext>,
   max_iframe_depth: usize,
 ) -> Result<Pixmap> {
+  let resource_context = resource_context.map(|mut ctx| {
+    if ctx.iframe_depth_remaining.is_none() {
+      ctx.iframe_depth_remaining = Some(max_iframe_depth);
+    }
+    ctx
+  });
   let layout_config = LayoutConfig::for_viewport(Size::new(width as f32, height as f32))
     .with_identifier("foreignObject");
   let layout_engine = LayoutEngine::with_font_context(layout_config, font_ctx.clone());
