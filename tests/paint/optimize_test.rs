@@ -1206,6 +1206,71 @@ fn offscreen_filtered_stacking_context_is_culled() {
 }
 
 #[test]
+fn deep_filtered_stack_still_matches_baseline_after_culling() {
+  let viewport = Rect::from_xywh(0.0, 0.0, 10.0, 10.0);
+  let depth = 64usize;
+  let offscreen_clip = Rect::from_xywh(200.0, 0.0, 10.0, 10.0);
+
+  let mut list = DisplayList::new();
+  list.push(DisplayItem::PushClip(ClipItem {
+    shape: ClipShape::Rect {
+      rect: offscreen_clip,
+      radii: None,
+    },
+  }));
+
+  let translated_context = StackingContextItem {
+    z_index: 0,
+    creates_stacking_context: true,
+    bounds: offscreen_clip,
+    plane_rect: offscreen_clip,
+    mix_blend_mode: BlendMode::Normal,
+    is_isolated: false,
+    transform: Some(Transform3D::translate(-200.0, 0.0, 0.0)),
+    child_perspective: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
+    filters: vec![ResolvedFilter::Blur(1.0)],
+    backdrop_filters: Vec::new(),
+    radii: BorderRadii::ZERO,
+    mask: None,
+  };
+  list.push(DisplayItem::PushStackingContext(translated_context.clone()));
+
+  let mut inner_context = translated_context.clone();
+  inner_context.transform = None;
+  inner_context.child_perspective = None;
+  for _ in 0..depth {
+    list.push(DisplayItem::PushStackingContext(inner_context.clone()));
+  }
+
+  list.push(make_fill_rect(240.0, 0.0, 1.0, 1.0, Rgba::BLUE));
+
+  for _ in 0..depth {
+    list.push(DisplayItem::PopStackingContext);
+  }
+  list.push(DisplayItem::PopStackingContext);
+  list.push(DisplayItem::PopClip);
+
+  let expected_len = 5 + depth * 2;
+  let original_len = list.len();
+  let (optimized, stats) = DisplayListOptimizer::new().optimize(list, viewport);
+
+  assert_eq!(original_len, expected_len);
+  assert_eq!(optimized.len(), expected_len);
+  assert_eq!(stats.culled_count, 0);
+  assert_eq!(
+    optimized
+      .items()
+      .iter()
+      .filter(|item| matches!(item, DisplayItem::FillRect(_)))
+      .count(),
+    1
+  );
+  assert_balanced(optimized.items());
+}
+
+#[test]
 fn transforms_keep_children_from_being_culled() {
   let mut list = DisplayList::new();
   list.push(DisplayItem::PushTransform(TransformItem {

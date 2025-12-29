@@ -216,13 +216,35 @@ impl DisplayListOptimizer {
     let mut context_stack: Vec<ContextRecord> = Vec::new();
     let mut clip_stack: Vec<ClipRecord> = Vec::new();
     let mut filter_stack: Vec<f32> = Vec::new();
+    // Running aggregates to avoid repeatedly scanning the stacks.
+    let mut filter_outset_sum = 0.0f32;
+    let mut active_cull_clips: usize = 0;
+    let mut clips_can_cull_any = false;
 
-    let refresh_context_clipping = |contexts: &mut [ContextRecord], clips: &[ClipRecord]| {
-      let clipped = clips.iter().any(|c| c.can_cull);
+    let refresh_context_clipping = |contexts: &mut [ContextRecord], clips_can_cull_any: bool| {
       for ctx in contexts {
-        ctx.clipped_by_clip = clipped;
+        ctx.clipped_by_clip = clips_can_cull_any;
       }
     };
+
+    let disable_clip_culling =
+      |clip_stack: &mut [ClipRecord], active_cull_clips: &mut usize| -> bool {
+        if *active_cull_clips == 0 {
+          return false;
+        }
+        let mut disabled = 0usize;
+        for clip in clip_stack {
+          if clip.can_cull {
+            clip.can_cull = false;
+            disabled += 1;
+          }
+        }
+        if disabled > 0 {
+          *active_cull_clips = active_cull_clips.saturating_sub(disabled);
+          return true;
+        }
+        false
+      };
 
     for (index, item) in items.iter().enumerate() {
       let mut include_item = false;
@@ -252,11 +274,11 @@ impl DisplayListOptimizer {
             || matches!(context_transform, TransformMapping::Unsupported);
           if pushed_transform {
             transform_stack.push(transform_state.clone());
-            if !clip_stack.is_empty() {
-              for clip in &mut clip_stack {
-                clip.can_cull = false;
-              }
-              refresh_context_clipping(&mut context_stack, &clip_stack);
+            if !clip_stack.is_empty()
+              && disable_clip_culling(&mut clip_stack, &mut active_cull_clips)
+            {
+              clips_can_cull_any = active_cull_clips > 0;
+              refresh_context_clipping(&mut context_stack, clips_can_cull_any);
             }
             transform_state.current = context_transform.clone();
             if sc.child_perspective.is_some() {
@@ -275,6 +297,7 @@ impl DisplayListOptimizer {
             max_outset * Self::transform_scale_factor(&context_transform, sc.bounds)
           };
           filter_stack.push(world_outset);
+          filter_outset_sum += world_outset;
 
           let transform_for_bounds = if matches!(context_transform, TransformMapping::Unsupported) {
             None
@@ -287,7 +310,7 @@ impl DisplayListOptimizer {
             bounds: None,
             item: sc.clone(),
             transform_for_bounds,
-            clipped_by_clip: clip_stack.iter().any(|c| c.can_cull),
+            clipped_by_clip: clips_can_cull_any,
             culling_disabled: context_culling_disabled,
             pushed_transform,
           });
@@ -301,13 +324,15 @@ impl DisplayListOptimizer {
                 transform_state = previous;
               }
             }
-            filter_stack.pop();
+            if let Some(outset) = filter_stack.pop() {
+              filter_outset_sum -= outset;
+            }
 
             if record.culling_disabled {
               // Keep conservatively when transforms prevented culling
             } else if record.clipped_by_clip {
               result.truncate(record.start_index);
-              refresh_context_clipping(&mut context_stack, &clip_stack);
+              refresh_context_clipping(&mut context_stack, clips_can_cull_any);
               continue;
             } else {
               let ctx_bounds = self.stacking_context_bounds(
@@ -324,7 +349,7 @@ impl DisplayListOptimizer {
               };
               if keep {
                 if let Some(parent) = context_stack.last_mut() {
-                  if !parent.culling_disabled && clip_stack.iter().all(|c| !c.can_cull) {
+                  if !parent.culling_disabled && active_cull_clips == 0 {
                     if let Some(ctx_bounds) = ctx_bounds {
                       parent.bounds = Some(match parent.bounds {
                         Some(bounds) => bounds.union(ctx_bounds),
@@ -335,7 +360,7 @@ impl DisplayListOptimizer {
                 }
               } else {
                 result.truncate(record.start_index);
-                refresh_context_clipping(&mut context_stack, &clip_stack);
+                refresh_context_clipping(&mut context_stack, clips_can_cull_any);
                 continue;
               }
             }
@@ -351,7 +376,7 @@ impl DisplayListOptimizer {
           } else if let Some(mut world_bounds) =
             Self::transform_rect_any(&transform_state.current, local_bounds)
           {
-            let inflate = filter_stack.iter().copied().sum::<f32>();
+            let inflate = filter_outset_sum;
             if inflate > 0.0 {
               world_bounds = world_bounds.inflate(inflate);
             }
@@ -363,18 +388,26 @@ impl DisplayListOptimizer {
             start_index: result.len(),
             can_cull,
           });
-          refresh_context_clipping(&mut context_stack, &clip_stack);
+          if can_cull {
+            active_cull_clips += 1;
+          }
+          clips_can_cull_any = active_cull_clips > 0;
+          refresh_context_clipping(&mut context_stack, clips_can_cull_any);
           include_item = true;
         }
         DisplayItem::PopClip => {
           if let Some(record) = clip_stack.pop() {
             if record.can_cull {
+              active_cull_clips = active_cull_clips.saturating_sub(1);
+            }
+            clips_can_cull_any = active_cull_clips > 0;
+            refresh_context_clipping(&mut context_stack, clips_can_cull_any);
+            if record.can_cull {
               result.truncate(record.start_index);
-              refresh_context_clipping(&mut context_stack, &clip_stack);
               continue;
             }
           }
-          refresh_context_clipping(&mut context_stack, &clip_stack);
+          clips_can_cull_any = active_cull_clips > 0;
           include_item = true;
         }
         _ => {}
@@ -386,7 +419,7 @@ impl DisplayListOptimizer {
         } else if let Some(local_bounds) = self.item_bounds(item) {
           if let Some(mut bounds) = Self::transform_rect_any(&transform_state.current, local_bounds)
           {
-            let inflate = filter_stack.iter().copied().sum::<f32>();
+            let inflate = filter_outset_sum;
             if inflate > 0.0 {
               bounds = bounds.inflate(inflate);
             }
@@ -407,7 +440,7 @@ impl DisplayListOptimizer {
             if let Some(mut bounds) =
               Self::transform_rect_any(&transform_state.current, local_bounds)
             {
-              let inflate = filter_stack.iter().copied().sum::<f32>();
+              let inflate = filter_outset_sum;
               if inflate > 0.0 {
                 bounds = bounds.inflate(inflate);
               }
@@ -416,7 +449,7 @@ impl DisplayListOptimizer {
           }
         }
         if let Some(bounds) = transformed_bounds {
-          if !transform_state.culling_disabled() && clip_stack.iter().all(|c| !c.can_cull) {
+          if !transform_state.culling_disabled() && active_cull_clips == 0 {
             if let Some(context) = context_stack.last_mut() {
               context.bounds = Some(match context.bounds {
                 Some(existing) => existing.union(bounds),
@@ -587,13 +620,35 @@ impl DisplayListOptimizer {
     let mut context_stack: Vec<ContextRecord> = Vec::new();
     let mut clip_stack: Vec<ClipRecord> = Vec::new();
     let mut filter_stack: Vec<f32> = Vec::new();
+    // Running aggregates to avoid repeatedly scanning the stacks.
+    let mut filter_outset_sum = 0.0f32;
+    let mut active_cull_clips: usize = 0;
+    let mut clips_can_cull_any = false;
 
-    let refresh_context_clipping = |contexts: &mut [ContextRecord], clips: &[ClipRecord]| {
-      let clipped = clips.iter().any(|c| c.can_cull);
+    let refresh_context_clipping = |contexts: &mut [ContextRecord], clips_can_cull_any: bool| {
       for ctx in contexts {
-        ctx.clipped_by_clip = clipped;
+        ctx.clipped_by_clip = clips_can_cull_any;
       }
     };
+
+    let disable_clip_culling =
+      |clip_stack: &mut [ClipRecord], active_cull_clips: &mut usize| -> bool {
+        if *active_cull_clips == 0 {
+          return false;
+        }
+        let mut disabled = 0usize;
+        for clip in clip_stack {
+          if clip.can_cull {
+            clip.can_cull = false;
+            disabled += 1;
+          }
+        }
+        if disabled > 0 {
+          *active_cull_clips = active_cull_clips.saturating_sub(disabled);
+          return true;
+        }
+        false
+      };
 
     for item in items {
       let mut include_item = false;
@@ -624,11 +679,11 @@ impl DisplayListOptimizer {
             || matches!(context_transform, TransformMapping::Unsupported);
           if pushed_transform {
             transform_stack.push(transform_state.clone());
-            if !clip_stack.is_empty() {
-              for clip in &mut clip_stack {
-                clip.can_cull = false;
-              }
-              refresh_context_clipping(&mut context_stack, &clip_stack);
+            if !clip_stack.is_empty()
+              && disable_clip_culling(&mut clip_stack, &mut active_cull_clips)
+            {
+              clips_can_cull_any = active_cull_clips > 0;
+              refresh_context_clipping(&mut context_stack, clips_can_cull_any);
             }
             transform_state.current = context_transform.clone();
             if sc.child_perspective.is_some() {
@@ -650,6 +705,7 @@ impl DisplayListOptimizer {
             max_outset * Self::transform_scale_factor(&context_transform, sc.bounds)
           };
           filter_stack.push(world_outset);
+          filter_outset_sum += world_outset;
 
           let transform_for_bounds = if matches!(context_transform, TransformMapping::Unsupported) {
             None
@@ -662,7 +718,7 @@ impl DisplayListOptimizer {
             bounds: None,
             item: sc.clone(),
             transform_for_bounds,
-            clipped_by_clip: clip_stack.iter().any(|c| c.can_cull),
+            clipped_by_clip: clips_can_cull_any,
             culling_disabled: context_culling_disabled,
             pushed_transform,
           });
@@ -676,13 +732,15 @@ impl DisplayListOptimizer {
                 transform_state = previous;
               }
             }
-            filter_stack.pop();
+            if let Some(outset) = filter_stack.pop() {
+              filter_outset_sum -= outset;
+            }
 
             if record.culling_disabled {
               // Keep conservatively when transforms prevented culling
             } else if record.clipped_by_clip {
               result.truncate(record.start_index);
-              refresh_context_clipping(&mut context_stack, &clip_stack);
+              refresh_context_clipping(&mut context_stack, clips_can_cull_any);
               continue;
             } else {
               let ctx_bounds = self.stacking_context_bounds(
@@ -699,7 +757,7 @@ impl DisplayListOptimizer {
               };
               if keep {
                 if let Some(parent) = context_stack.last_mut() {
-                  if !parent.culling_disabled && clip_stack.iter().all(|c| !c.can_cull) {
+                  if !parent.culling_disabled && active_cull_clips == 0 {
                     if let Some(ctx_bounds) = ctx_bounds {
                       parent.bounds = Some(match parent.bounds {
                         Some(bounds) => bounds.union(ctx_bounds),
@@ -710,7 +768,7 @@ impl DisplayListOptimizer {
                 }
               } else {
                 result.truncate(record.start_index);
-                refresh_context_clipping(&mut context_stack, &clip_stack);
+                refresh_context_clipping(&mut context_stack, clips_can_cull_any);
                 continue;
               }
             }
@@ -726,7 +784,7 @@ impl DisplayListOptimizer {
           } else if let Some(mut world_bounds) =
             Self::transform_rect_any(&transform_state.current, local_bounds)
           {
-            let inflate = filter_stack.iter().copied().sum::<f32>();
+            let inflate = filter_outset_sum;
             if inflate > 0.0 {
               world_bounds = world_bounds.inflate(inflate);
             }
@@ -738,18 +796,26 @@ impl DisplayListOptimizer {
             start_index: result.len(),
             can_cull,
           });
-          refresh_context_clipping(&mut context_stack, &clip_stack);
+          if can_cull {
+            active_cull_clips += 1;
+          }
+          clips_can_cull_any = active_cull_clips > 0;
+          refresh_context_clipping(&mut context_stack, clips_can_cull_any);
           include_item = true;
         }
         DisplayItem::PopClip => {
           if let Some(record) = clip_stack.pop() {
             if record.can_cull {
+              active_cull_clips = active_cull_clips.saturating_sub(1);
+            }
+            clips_can_cull_any = active_cull_clips > 0;
+            refresh_context_clipping(&mut context_stack, clips_can_cull_any);
+            if record.can_cull {
               result.truncate(record.start_index);
-              refresh_context_clipping(&mut context_stack, &clip_stack);
               continue;
             }
           }
-          refresh_context_clipping(&mut context_stack, &clip_stack);
+          clips_can_cull_any = active_cull_clips > 0;
           include_item = true;
         }
         _ => {}
@@ -766,7 +832,7 @@ impl DisplayListOptimizer {
         } else if let Some(local_bounds) = self.item_bounds(&item) {
           if let Some(mut bounds) = Self::transform_rect_any(&transform_state.current, local_bounds)
           {
-            let inflate = filter_stack.iter().copied().sum::<f32>();
+            let inflate = filter_outset_sum;
             if inflate > 0.0 {
               bounds = bounds.inflate(inflate);
             }
@@ -787,7 +853,7 @@ impl DisplayListOptimizer {
             if let Some(mut bounds) =
               Self::transform_rect_any(&transform_state.current, local_bounds)
             {
-              let inflate = filter_stack.iter().copied().sum::<f32>();
+              let inflate = filter_outset_sum;
               if inflate > 0.0 {
                 bounds = bounds.inflate(inflate);
               }
@@ -796,7 +862,7 @@ impl DisplayListOptimizer {
           }
         }
         if let Some(bounds) = transformed_bounds {
-          if !transform_state.culling_disabled() && clip_stack.iter().all(|c| !c.can_cull) {
+          if !transform_state.culling_disabled() && active_cull_clips == 0 {
             if let Some(context) = context_stack.last_mut() {
               context.bounds = Some(match context.bounds {
                 Some(existing) => existing.union(bounds),
