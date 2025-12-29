@@ -192,6 +192,10 @@ pub(crate) fn intrinsic_cache_use_epoch(epoch: usize, reset_counters: bool) {
 }
 
 /// Returns the currently active epoch for intrinsic sizing caches.
+pub(crate) fn intrinsic_cache_epoch() -> usize {
+  CACHE_EPOCH.load(Ordering::Relaxed)
+}
+
 pub(crate) fn intrinsic_cache_reset_counters() {
   CACHE_LOOKUPS.store(0, Ordering::Relaxed);
   CACHE_HITS.store(0, Ordering::Relaxed);

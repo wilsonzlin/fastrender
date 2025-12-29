@@ -43,6 +43,7 @@ use crate::layout::contexts::table::column_distribution::ColumnConstraints;
 use crate::layout::contexts::table::column_distribution::ColumnDistributor;
 use crate::layout::contexts::table::column_distribution::DistributionMode;
 use crate::layout::engine::LayoutParallelism;
+use crate::layout::formatting_context::intrinsic_cache_epoch;
 use crate::layout::formatting_context::layout_cache_lookup;
 use crate::layout::formatting_context::layout_cache_store;
 use crate::layout::formatting_context::FormattingContext;
@@ -71,6 +72,8 @@ use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
 use crate::tree::table_fixup::TableStructureFixer;
 use rayon::prelude::*;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 // ============================================================================
@@ -3318,6 +3321,60 @@ pub fn calculate_row_heights(structure: &mut TableStructure, available_height: O
   }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct TableStructureCacheKey {
+  box_id: usize,
+  style_ptr: usize,
+}
+
+#[derive(Debug, Clone)]
+struct TableStructureCacheEntry {
+  epoch: usize,
+  structure: Arc<TableStructure>,
+}
+
+thread_local! {
+  static TABLE_STRUCTURE_CACHE: RefCell<HashMap<TableStructureCacheKey, TableStructureCacheEntry>> =
+    RefCell::new(HashMap::new());
+}
+
+fn table_structure_cache_key(table_box: &BoxNode) -> Option<TableStructureCacheKey> {
+  let box_id = table_box.id();
+  if box_id == 0 {
+    return None;
+  }
+  Some(TableStructureCacheKey {
+    box_id,
+    style_ptr: Arc::as_ptr(&table_box.style) as usize,
+  })
+}
+
+fn table_structure_cached(table_box: &BoxNode) -> Arc<TableStructure> {
+  let epoch = intrinsic_cache_epoch();
+  let key = table_structure_cache_key(table_box);
+  let build_structure = || Arc::new(TableStructure::from_box_tree(table_box));
+  if let Some(key) = key {
+    TABLE_STRUCTURE_CACHE.with(|cache| {
+      if let Some(entry) = cache.borrow().get(&key) {
+        if entry.epoch == epoch {
+          return entry.structure.clone();
+        }
+      }
+      let structure = build_structure();
+      cache.borrow_mut().insert(
+        key,
+        TableStructureCacheEntry {
+          epoch,
+          structure: structure.clone(),
+        },
+      );
+      structure
+    })
+  } else {
+    build_structure()
+  }
+}
+
 // ============================================================================
 // Table Formatting Context
 // ============================================================================
@@ -3837,7 +3894,7 @@ impl FormattingContext for TableFormattingContext {
     }
     let has_running_children = !running_children.is_empty();
 
-    let structure = TableStructure::from_box_tree(&table_box);
+    let structure = table_structure_cached(&table_box);
     if dump {
       let cw = match constraints.available_width {
         AvailableSpace::Definite(w) => format!("{:.2}", w),
@@ -5735,7 +5792,7 @@ impl FormattingContext for TableFormattingContext {
   ) -> Result<f32, LayoutError> {
     let table_box = TableStructureFixer::fixup_table_internals(box_node.clone())
       .unwrap_or_else(|err| panic!("table structure fixup failed: {err}"));
-    let structure = TableStructure::from_box_tree(&table_box);
+    let structure = table_structure_cached(&table_box);
     let spacing = structure.total_horizontal_spacing();
     let font_size = table_box.style.font_size;
     let authored_width = table_box
@@ -5886,6 +5943,8 @@ mod tests {
   use super::*;
   use crate::layout::constraints::AvailableSpace;
   use crate::layout::constraints::LayoutConstraints;
+  use crate::layout::formatting_context::intrinsic_cache_epoch;
+  use crate::layout::formatting_context::intrinsic_cache_use_epoch;
   use crate::style::color::Rgba;
   use crate::style::computed::Visibility;
   use crate::style::display::Display;
@@ -6003,6 +6062,23 @@ mod tests {
 
     let structure = TableStructure::from_box_tree(&table);
     assert!(structure.is_fixed_layout);
+  }
+
+  #[test]
+  fn table_structure_cache_respects_epoch() {
+    let starting_epoch = intrinsic_cache_epoch();
+    intrinsic_cache_use_epoch(starting_epoch.saturating_add(1), true);
+
+    let table = BoxTree::new(create_simple_table(1, 1)).root;
+    let first = table_structure_cached(&table);
+    let second = table_structure_cached(&table);
+    assert!(Arc::ptr_eq(&first, &second));
+
+    intrinsic_cache_use_epoch(intrinsic_cache_epoch().saturating_add(1), false);
+    let third = table_structure_cached(&table);
+    assert!(!Arc::ptr_eq(&first, &third));
+
+    intrinsic_cache_use_epoch(starting_epoch, true);
   }
 
   #[test]
