@@ -159,6 +159,9 @@ use std::thread::ThreadId;
 use std::time::{Duration, Instant};
 use tiny_skia::Pixmap;
 
+const DECODED_IMAGE_CACHE_MAX_ENTRIES: usize = 256;
+const DECODED_IMAGE_CACHE_MAX_BYTES: usize = 128 * 1024 * 1024;
+
 /// Builder that converts a fragment tree to a display list
 ///
 /// Walks the fragment tree depth-first, emitting display items
@@ -167,7 +170,7 @@ pub struct DisplayListBuilder {
   /// The display list being built
   list: DisplayList,
   image_cache: Option<ImageCache>,
-  decoded_image_cache: Arc<Mutex<LruCache<ImageKey, Arc<ImageData>>>>,
+  decoded_image_cache: Arc<Mutex<DecodedImageCache>>,
   /// Serialized SVG filter definitions collected from the document DOM.
   svg_filter_defs: Option<Arc<HashMap<String, String>>>,
   viewport: Option<(f32, f32)>,
@@ -198,6 +201,65 @@ struct ImageKey {
   decorative: bool,
   used_resolution_bits: u32,
   device_pixel_ratio_bits: u32,
+}
+
+struct DecodedImageCache {
+  inner: LruCache<ImageKey, CachedImageEntry>,
+  max_entries: usize,
+  max_bytes: usize,
+  current_bytes: usize,
+}
+
+struct CachedImageEntry {
+  image: Arc<ImageData>,
+  bytes: usize,
+}
+
+impl DecodedImageCache {
+  fn new(max_entries: usize, max_bytes: usize) -> Self {
+    Self {
+      inner: LruCache::unbounded(),
+      max_entries,
+      max_bytes,
+      current_bytes: 0,
+    }
+  }
+
+  fn estimate_bytes(image: &ImageData) -> usize {
+    image.pixels.len()
+  }
+
+  fn get(&mut self, key: &ImageKey) -> Option<Arc<ImageData>> {
+    self.inner.get(key).map(|entry| Arc::clone(&entry.image))
+  }
+
+  fn insert(&mut self, key: ImageKey, image: Arc<ImageData>) {
+    let bytes = Self::estimate_bytes(&image);
+    if let Some(entry) = self.inner.pop(&key) {
+      self.current_bytes = self.current_bytes.saturating_sub(entry.bytes);
+    }
+    self.inner.put(
+      key,
+      CachedImageEntry {
+        image,
+        bytes,
+      },
+    );
+    self.current_bytes = self.current_bytes.saturating_add(bytes);
+    self.evict_if_needed();
+  }
+
+  fn evict_if_needed(&mut self) {
+    while (self.max_entries > 0 && self.inner.len() > self.max_entries)
+      || (self.max_bytes > 0 && self.current_bytes > self.max_bytes)
+    {
+      if let Some((_k, entry)) = self.inner.pop_lru() {
+        self.current_bytes = self.current_bytes.saturating_sub(entry.bytes);
+      } else {
+        break;
+      }
+    }
+  }
 }
 
 #[derive(Default)]
@@ -315,7 +377,10 @@ impl DisplayListBuilder {
     Self {
       list: DisplayList::new(),
       image_cache: Some(ImageCache::new()),
-      decoded_image_cache: Arc::new(Mutex::new(LruCache::unbounded())),
+      decoded_image_cache: Arc::new(Mutex::new(DecodedImageCache::new(
+        DECODED_IMAGE_CACHE_MAX_ENTRIES,
+        DECODED_IMAGE_CACHE_MAX_BYTES,
+      ))),
       svg_filter_defs: None,
       viewport: None,
       font_ctx: FontContext::new(),
@@ -343,7 +408,10 @@ impl DisplayListBuilder {
     Self {
       list: DisplayList::new(),
       image_cache: Some(image_cache),
-      decoded_image_cache: Arc::new(Mutex::new(LruCache::unbounded())),
+      decoded_image_cache: Arc::new(Mutex::new(DecodedImageCache::new(
+        DECODED_IMAGE_CACHE_MAX_ENTRIES,
+        DECODED_IMAGE_CACHE_MAX_BYTES,
+      ))),
       svg_filter_defs: None,
       viewport: None,
       font_ctx: FontContext::new(),
@@ -5141,7 +5209,7 @@ impl DisplayListBuilder {
         .decoded_image_cache
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-      if let Some(image) = decoded_cache.get(&key).cloned() {
+      if let Some(image) = decoded_cache.get(&key) {
         return Some(image);
       }
     }
@@ -5163,10 +5231,10 @@ impl DisplayListBuilder {
       .decoded_image_cache
       .lock()
       .unwrap_or_else(|e| e.into_inner());
-    if let Some(image) = decoded_cache.get(&key).cloned() {
+    if let Some(image) = decoded_cache.get(&key) {
       return Some(image);
     }
-    decoded_cache.put(key, image_data.clone());
+    decoded_cache.insert(key, image_data.clone());
     Some(image_data)
   }
 

@@ -3751,23 +3751,23 @@ impl FastRender {
         trace,
       )?;
       if let Some(rec) = stats.as_deref_mut() {
-          if let Some(diag) = crate::paint::painter::take_paint_diagnostics() {
-            rec.stats.timings.paint_build_ms = Some(diag.build_ms);
-            rec.stats.timings.paint_rasterize_ms = Some(diag.raster_ms);
-            rec.stats.paint.display_items = Some(diag.command_count);
-            rec.stats.paint.gradient_ms = Some(diag.gradient_ms);
-            rec.stats.paint.gradient_pixels = Some(diag.gradient_pixels);
-            rec.stats.paint.parallel_tasks = Some(diag.parallel_tasks);
-            rec.stats.paint.parallel_threads = Some(diag.parallel_threads);
-            rec.stats.paint.parallel_ms = Some(diag.parallel_ms);
-            rec.stats.paint.serial_ms = Some(diag.serial_ms);
-            rec.stats.paint.filter_cache_hits = Some(diag.filter_cache_hits);
-            rec.stats.paint.filter_cache_misses = Some(diag.filter_cache_misses);
-            rec.stats.paint.blur_cache_hits = Some(diag.blur_cache_hits);
-            rec.stats.paint.blur_cache_misses = Some(diag.blur_cache_misses);
-            rec.stats.paint.blur_tiles = Some(diag.blur_tiles);
-          }
+        if let Some(diag) = crate::paint::painter::take_paint_diagnostics() {
+          rec.stats.timings.paint_build_ms = Some(diag.build_ms);
+          rec.stats.timings.paint_rasterize_ms = Some(diag.raster_ms);
+          rec.stats.paint.display_items = Some(diag.command_count);
+          rec.stats.paint.gradient_ms = Some(diag.gradient_ms);
+          rec.stats.paint.gradient_pixels = Some(diag.gradient_pixels);
+          rec.stats.paint.parallel_tasks = Some(diag.parallel_tasks);
+          rec.stats.paint.parallel_threads = Some(diag.parallel_threads);
+          rec.stats.paint.parallel_ms = Some(diag.parallel_ms);
+          rec.stats.paint.serial_ms = Some(diag.serial_ms);
+          rec.stats.paint.filter_cache_hits = Some(diag.filter_cache_hits);
+          rec.stats.paint.filter_cache_misses = Some(diag.filter_cache_misses);
+          rec.stats.paint.blur_cache_hits = Some(diag.blur_cache_hits);
+          rec.stats.paint.blur_cache_misses = Some(diag.blur_cache_misses);
+          rec.stats.paint.blur_tiles = Some(diag.blur_tiles);
         }
+      }
 
       if let Some(start) = stage_start {
         let now = Instant::now();
