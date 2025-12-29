@@ -1,3 +1,4 @@
+use fastrender::render_control::{with_deadline, RenderDeadline};
 use fastrender::resource::{CachingFetcher, CachingFetcherConfig, HttpFetcher, ResourcePolicy};
 use fastrender::ResourceFetcher;
 use httpdate::fmt_http_date;
@@ -301,5 +302,39 @@ fn expires_header_controls_freshness() {
     hits.load(Ordering::SeqCst),
     1,
     "Expires should allow serving cached entry"
+  );
+}
+
+#[test]
+fn http_fetch_respects_render_deadline() {
+  let Some(listener) = try_bind_localhost("http_fetch_respects_render_deadline") else {
+    return;
+  };
+  let addr = listener.local_addr().unwrap();
+  let handle = spawn_server(listener, 1, move |_count, _req, stream| {
+    thread::sleep(Duration::from_millis(500));
+    let response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    let _ = stream.write_all(response.as_bytes());
+  });
+
+  let fetcher = HttpFetcher::new();
+  let url = format!("http://{addr}/timeout");
+  let deadline = RenderDeadline::new(Some(Duration::from_millis(100)), None);
+
+  let start = Instant::now();
+  let result = with_deadline(Some(&deadline), || fetcher.fetch(&url));
+  let elapsed = start.elapsed();
+
+  handle.join().unwrap();
+
+  let err = result.expect_err("fetch should time out under render deadline");
+  assert!(
+    elapsed < Duration::from_millis(1000),
+    "deadline-aware fetch should return quickly (took {elapsed:?})"
+  );
+  let lower = err.to_string().to_ascii_lowercase();
+  assert!(
+    lower.contains("timeout") || lower.contains("deadline"),
+    "expected timeout-ish error, got {lower:?}"
   );
 }

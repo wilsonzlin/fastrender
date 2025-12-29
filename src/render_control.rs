@@ -48,6 +48,20 @@ impl RenderDeadline {
     self.start.elapsed()
   }
 
+  /// Returns the configured timeout duration, if any.
+  pub fn timeout_limit(&self) -> Option<Duration> {
+    self.timeout
+  }
+
+  /// Remaining time until the configured timeout elapses, if any.
+  ///
+  /// Returns `None` when no timeout is configured or the deadline has already expired.
+  pub fn remaining_timeout(&self) -> Option<Duration> {
+    self
+      .timeout
+      .and_then(|limit| limit.checked_sub(self.elapsed()))
+  }
+
   /// Check for timeout or cancellation at the given stage.
   pub fn check(&self, stage: RenderStage) -> Result<(), RenderError> {
     #[cfg(test)]

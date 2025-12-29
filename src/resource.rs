@@ -23,6 +23,7 @@
 //! ```
 
 use crate::error::{Error, ImageError, ResourceError, Result};
+use crate::render_control;
 use brotli::Decompressor;
 use flate2::read::{DeflateDecoder, GzDecoder, ZlibDecoder};
 use http::HeaderMap;
@@ -418,6 +419,9 @@ pub const DEFAULT_ACCEPT_LANGUAGE: &str = "en-US,en;q=0.9";
 
 /// Content-Encoding algorithms this fetcher can decode.
 const SUPPORTED_ACCEPT_ENCODING: &str = "gzip, deflate, br";
+
+/// Slack applied to deadline-derived HTTP timeouts to allow minor scheduling jitter.
+const RENDER_DEADLINE_TIMEOUT_SLACK: Duration = Duration::from_millis(50);
 
 /// Allowed URL schemes for resource fetching.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1135,6 +1139,38 @@ impl HttpFetcher {
     self
   }
 
+  fn deadline_aware_timeout(
+    &self,
+    deadline: Option<&render_control::RenderDeadline>,
+    url: &str,
+  ) -> Result<Option<Duration>> {
+    let Some(deadline) = deadline else {
+      return Ok(None);
+    };
+    if deadline.timeout_limit().is_none() {
+      return Ok(None);
+    }
+    let deadline_error = || {
+      Error::Resource(
+        ResourceError::new(
+          url.to_string(),
+          "render deadline exceeded before HTTP request (timeout)",
+        )
+        .with_final_url(url.to_string()),
+      )
+    };
+    let Some(remaining) = deadline.remaining_timeout() else {
+      return Err(deadline_error());
+    };
+    if remaining.is_zero() {
+      return Err(deadline_error());
+    }
+    let budget = remaining
+      .saturating_add(RENDER_DEADLINE_TIMEOUT_SLACK)
+      .min(self.policy.request_timeout);
+    Ok(Some(budget))
+  }
+
   /// Fetch from an HTTP/HTTPS URL
   fn fetch_http(&self, url: &str) -> Result<FetchedResource> {
     self.fetch_http_with_accept(url, None, None)
@@ -1146,12 +1182,14 @@ impl HttpFetcher {
     accept_encoding: Option<&str>,
     validators: Option<HttpCacheValidators<'_>>,
   ) -> Result<FetchedResource> {
+    let deadline = render_control::active_deadline();
     let mut current = url.to_string();
     let mut validators = validators;
     let agent = &self.agent;
     for _ in 0..self.policy.max_redirects {
       self.policy.ensure_url_allowed(&current)?;
       let allowed_limit = self.policy.allowed_response_limit()?;
+      let per_request_timeout = self.deadline_aware_timeout(deadline.as_ref(), &current)?;
 
       let accept_encoding_value = accept_encoding.unwrap_or(SUPPORTED_ACCEPT_ENCODING);
       let mut request = agent
@@ -1159,6 +1197,10 @@ impl HttpFetcher {
         .header("User-Agent", &self.user_agent)
         .header("Accept-Language", &self.accept_language)
         .header("Accept-Encoding", accept_encoding_value);
+
+      if let Some(timeout) = per_request_timeout {
+        request = request.config().timeout_global(Some(timeout)).build();
+      }
 
       if let Some(v) = validators {
         if let Some(tag) = v.etag {
