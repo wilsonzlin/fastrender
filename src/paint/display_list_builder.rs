@@ -26,6 +26,7 @@
 //! let display_list = builder.build_tree(&fragment_tree);
 //! ```
 
+use crate::api::DEFAULT_MAX_IFRAME_DEPTH;
 use crate::css::types::ColorStop;
 use crate::css::types::RadialGradientShape;
 use crate::css::types::RadialGradientSize;
@@ -86,6 +87,7 @@ use crate::paint::display_list::TextItem;
 use crate::paint::display_list::TextShadowItem;
 use crate::paint::display_list::Transform3D;
 use crate::paint::display_list::{list_marker_bounds, text_bounds};
+use crate::paint::iframe::{render_iframe_src, render_iframe_srcdoc};
 use crate::paint::object_fit::compute_object_fit;
 use crate::paint::object_fit::default_object_position;
 use crate::paint::stacking::Layer6Item;
@@ -150,6 +152,7 @@ use lru::LruCache;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
+use tiny_skia::Pixmap;
 
 /// Builder that converts a fragment tree to a display list
 ///
@@ -169,6 +172,7 @@ pub struct DisplayListBuilder {
   parallel_enabled: bool,
   parallel_min: usize,
   scroll_state: ScrollState,
+  max_iframe_depth: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -245,6 +249,7 @@ impl DisplayListBuilder {
       parallel_enabled,
       parallel_min,
       scroll_state: ScrollState::default(),
+      max_iframe_depth: DEFAULT_MAX_IFRAME_DEPTH,
     }
   }
 
@@ -263,6 +268,7 @@ impl DisplayListBuilder {
       parallel_enabled,
       parallel_min,
       scroll_state: ScrollState::default(),
+      max_iframe_depth: DEFAULT_MAX_IFRAME_DEPTH,
     }
   }
 
@@ -328,6 +334,12 @@ impl DisplayListBuilder {
   /// Sets the scroll state used when translating element content during display list construction.
   pub fn with_scroll_state(mut self, scroll_state: ScrollState) -> Self {
     self.scroll_state = scroll_state;
+    self
+  }
+
+  /// Sets the maximum iframe nesting depth for nested browsing context renders.
+  pub fn with_max_iframe_depth(mut self, max_iframe_depth: usize) -> Self {
+    self.max_iframe_depth = max_iframe_depth;
     self
   }
 
@@ -800,6 +812,31 @@ impl DisplayListBuilder {
       .unwrap_or(offset);
     let layer6_items = context.layer6_items();
     let mask = root_style.and_then(|style| self.resolve_mask(style, context_bounds));
+    let root_background = if is_root {
+      root_fragment.and_then(|fragment| {
+        let viewport = self
+          .viewport
+          .unwrap_or_else(|| (context_bounds.width(), context_bounds.height()));
+        if viewport.0 <= 0.0 || viewport.1 <= 0.0 {
+          return None;
+        }
+        let target_w = viewport.0.max(context_bounds.width());
+        let target_h = viewport.1.max(context_bounds.height());
+        if target_w <= context_bounds.width() && target_h <= context_bounds.height() {
+          return None;
+        }
+        let style = Self::root_background_style(fragment)?;
+        if !Self::has_paintable_background(&style) {
+          return None;
+        }
+        Some((
+          Rect::from_xywh(context_bounds.x(), context_bounds.y(), target_w, target_h),
+          style,
+        ))
+      })
+    } else {
+      None
+    };
 
     let root_fragment_rect = root_fragment.map(|fragment| {
       Rect::new(
@@ -933,6 +970,9 @@ impl DisplayListBuilder {
     }
 
     if is_root && !has_effects {
+      if let Some((rect, style)) = root_background.as_ref() {
+        self.emit_background_from_style(*rect, style);
+      }
       for child in neg {
         self.build_stacking_context(child, descendant_offset, false, svg_filters);
       }
@@ -996,6 +1036,9 @@ impl DisplayListBuilder {
       pushed_clips += 1;
     }
 
+    if let Some((rect, style)) = root_background.as_ref() {
+      self.emit_background_from_style(*rect, style);
+    }
     // Paint the stacking context root (backgrounds, borders, shadows) before applying overflow
     // clipping so outer effects remain visible.
     self.emit_fragment_list_shallow(&context.fragments, root_fragment_offset, apply_opacity);
@@ -2315,6 +2358,7 @@ impl DisplayListBuilder {
       parallel_enabled: self.parallel_enabled,
       parallel_min: self.parallel_min,
       scroll_state: self.scroll_state.clone(),
+      max_iframe_depth: self.max_iframe_depth,
     }
   }
 
@@ -2586,12 +2630,46 @@ impl DisplayListBuilder {
           return;
         }
 
+        let style_for_image = fragment.style.as_deref();
+
+        if let ReplacedType::Iframe { src, srcdoc } = replaced_type {
+          if let Some(cache) = self.image_cache.as_ref() {
+            if let Some(pixmap) = srcdoc.as_deref().and_then(|html| {
+              render_iframe_srcdoc(
+                html,
+                Some(src.as_str()),
+                rect,
+                style_for_image,
+                cache,
+                &self.font_ctx,
+                self.device_pixel_ratio,
+                self.max_iframe_depth,
+              )
+            }) {
+              self.emit_iframe_pixmap(pixmap, rect, style_for_image);
+              return;
+            }
+
+            if let Some(pixmap) = render_iframe_src(
+              src,
+              rect,
+              style_for_image,
+              cache,
+              &self.font_ctx,
+              self.device_pixel_ratio,
+              self.max_iframe_depth,
+            ) {
+              self.emit_iframe_pixmap(pixmap, rect, style_for_image);
+              return;
+            }
+          }
+        }
+
         let media_ctx = self.viewport.map(|(w, h)| {
           crate::style::media::MediaContext::screen(w, h)
             .with_device_pixel_ratio(self.device_pixel_ratio)
             .with_env_overrides()
         });
-        let style_for_image = fragment.style.as_deref();
         let cache_base = self.image_cache.as_ref().and_then(|cache| cache.base_url());
         let sources =
           replaced_type.image_sources_with_fallback(crate::tree::box_tree::ImageSelectionContext {
@@ -2661,6 +2739,38 @@ impl DisplayListBuilder {
       FragmentContent::RunningAnchor { .. } => None,
       FragmentContent::Line { .. } => None,
     }
+  }
+
+  fn has_paintable_background(style: &ComputedStyle) -> bool {
+    style.background_color.alpha_u8() > 0
+      || style
+        .background_layers
+        .iter()
+        .any(|layer| layer.image.is_some())
+  }
+
+  fn root_background_style(fragment: &FragmentNode) -> Option<Arc<ComputedStyle>> {
+    let html = if fragment.children.len() == 1 {
+      fragment.children.first().unwrap_or(fragment)
+    } else {
+      fragment
+    };
+
+    for child in &html.children {
+      if let Some(style) = child.style.clone() {
+        if Self::has_paintable_background(&style) {
+          return Some(style);
+        }
+      }
+    }
+
+    if let Some(style) = html.style.clone() {
+      if Self::has_paintable_background(&style) {
+        return Some(style);
+      }
+    }
+
+    fragment.style.clone()
   }
 
   /// Emits a background fill for a fragment
@@ -4765,6 +4875,18 @@ impl DisplayListBuilder {
     item.cached_bounds = Some(text_bounds(&item));
     self.list.push(DisplayItem::Text(item));
     true
+  }
+
+  fn emit_iframe_pixmap(&mut self, pixmap: Pixmap, rect: Rect, style: Option<&ComputedStyle>) {
+    let css_width = rect.width().max(0.0);
+    let css_height = rect.height().max(0.0);
+    let image = ImageData::from_pixmap(&pixmap, css_width, css_height);
+    self.list.push(DisplayItem::Image(ImageItem {
+      dest_rect: rect,
+      image: Arc::new(image),
+      filter_quality: Self::image_filter_quality(style),
+      src_rect: None,
+    }));
   }
 
   fn decode_image(

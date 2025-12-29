@@ -116,7 +116,7 @@ use crate::layout::profile::reset_layout_profile;
 use crate::paint::display_list_builder::DisplayListBuilder;
 use crate::paint::display_list_renderer::PaintParallelism;
 use crate::paint::painter::paint_backend_from_env;
-use crate::paint::painter::paint_tree_display_list_with_resources_scaled_offset;
+use crate::paint::painter::paint_tree_display_list_with_resources_scaled_offset_depth;
 use crate::paint::painter::paint_tree_with_resources_scaled_offset_backend_with_iframe_depth;
 use crate::paint::painter::paint_tree_with_resources_scaled_offset_with_trace;
 use crate::paint::painter::PaintBackend;
@@ -5998,7 +5998,7 @@ impl FastRender {
         self.max_iframe_depth,
         trace.clone(),
       ),
-      PaintBackend::DisplayList => paint_tree_display_list_with_resources_scaled_offset(
+      PaintBackend::DisplayList => paint_tree_display_list_with_resources_scaled_offset_depth(
         fragment_tree,
         width,
         height,
@@ -6009,6 +6009,7 @@ impl FastRender {
         offset,
         paint_parallelism,
         scroll_state,
+        self.max_iframe_depth,
       ),
     }
   }

@@ -66,7 +66,7 @@ pub use crate::text::font_fallback::FontId;
 use crate::tree::fragment_tree::TableCollapsedBorders;
 use std::fmt;
 use std::sync::Arc;
-use tiny_skia::FilterQuality;
+use tiny_skia::{FilterQuality, Pixmap};
 use ttf_parser::Tag;
 
 // ============================================================================
@@ -965,6 +965,9 @@ pub struct ImageData {
   /// Natural image height in CSS px after applying image-resolution/orientation
   pub css_height: f32,
 
+  /// Whether `pixels` are already premultiplied by alpha.
+  pub premultiplied: bool,
+
   /// Pixel data in RGBA8 format (4 bytes per pixel)
   pub pixels: Arc<Vec<u8>>,
 }
@@ -990,6 +993,7 @@ impl ImageData {
       height,
       css_width,
       css_height,
+      premultiplied: false,
       pixels: Arc::new(pixels),
     }
   }
@@ -997,6 +1001,40 @@ impl ImageData {
   /// Creates image data assuming 1dppx (CSS size equals pixel size).
   pub fn new_pixels(width: u32, height: u32, pixels: Vec<u8>) -> Self {
     Self::new(width, height, width as f32, height as f32, pixels)
+  }
+
+  /// Creates image data from an already-premultiplied pixel buffer.
+  pub fn new_premultiplied(
+    width: u32,
+    height: u32,
+    css_width: f32,
+    css_height: f32,
+    pixels: Vec<u8>,
+  ) -> Self {
+    debug_assert_eq!(
+      pixels.len(),
+      (width * height * 4) as usize,
+      "Pixel data size mismatch"
+    );
+    Self {
+      width,
+      height,
+      css_width,
+      css_height,
+      premultiplied: true,
+      pixels: Arc::new(pixels),
+    }
+  }
+
+  /// Creates image data from a premultiplied pixmap with the given natural CSS size.
+  pub fn from_pixmap(pixmap: &Pixmap, css_width: f32, css_height: f32) -> Self {
+    Self::new_premultiplied(
+      pixmap.width(),
+      pixmap.height(),
+      css_width,
+      css_height,
+      pixmap.data().to_vec(),
+    )
   }
 
   /// Get the size of the image as a Size

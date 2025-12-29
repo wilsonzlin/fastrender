@@ -5340,20 +5340,7 @@ impl DisplayListRenderer {
       return Some(cached.clone());
     }
 
-    let mut data = Vec::with_capacity((image.width * image.height * 4) as usize);
-    for chunk in image.pixels.chunks_exact(4) {
-      let r = chunk[0] as f32;
-      let g = chunk[1] as f32;
-      let b = chunk[2] as f32;
-      let a = chunk[3] as f32 / 255.0;
-      data.push((r * a).round() as u8);
-      data.push((g * a).round() as u8);
-      data.push((b * a).round() as u8);
-      data.push(chunk[3]);
-    }
-
-    let size = IntSize::from_wh(image.width, image.height)?;
-    let pixmap = Arc::new(Pixmap::from_vec(data, size)?);
+    let pixmap = Arc::new(image_data_to_pixmap_inner(image)?);
     #[cfg(test)]
     self.image_cache_misses.fetch_add(1, Ordering::Relaxed);
     self.image_cache.insert(key, pixmap.clone());
@@ -5361,6 +5348,79 @@ impl DisplayListRenderer {
   }
 }
 
+fn image_data_to_pixmap_inner(image: &ImageData) -> Option<Pixmap> {
+  let size = tiny_skia::IntSize::from_wh(image.width, image.height)?;
+  if image.premultiplied {
+    return Pixmap::from_vec((*image.pixels).clone(), size);
+  }
+
+  let mut data = Vec::with_capacity((image.width * image.height * 4) as usize);
+  for chunk in image.pixels.chunks_exact(4) {
+    let r = chunk[0] as f32;
+    let g = chunk[1] as f32;
+    let b = chunk[2] as f32;
+    let a = chunk[3] as f32 / 255.0;
+    data.push((r * a).round() as u8);
+    data.push((g * a).round() as u8);
+    data.push((b * a).round() as u8);
+    data.push(chunk[3]);
+  }
+
+  Pixmap::from_vec(data, size)
+}
+
+fn sample_conic_stops(
+  stops: &[(f32, crate::style::color::Rgba)],
+  t: f32,
+  repeating: bool,
+  period: f32,
+) -> crate::style::color::Rgba {
+  if stops.is_empty() {
+    return crate::style::color::Rgba::TRANSPARENT;
+  }
+  if stops.len() == 1 {
+    return stops[0].1;
+  }
+  let total = if repeating {
+    period
+  } else {
+    stops.last().map(|s| s.0).unwrap_or(1.0)
+  };
+  let mut pos = t;
+  if repeating && total > 0.0 {
+    pos = pos.rem_euclid(total);
+  }
+  if pos <= stops[0].0 {
+    return stops[0].1;
+  }
+  if pos >= stops.last().unwrap().0 && !repeating {
+    return stops.last().unwrap().1;
+  }
+  for window in stops.windows(2) {
+    let (p0, c0) = window[0];
+    let (p1, c1) = window[1];
+    if pos < p0 {
+      return c0;
+    }
+    if pos <= p1 || (repeating && (p1 - p0).abs() < f32::EPSILON) {
+      let span = (p1 - p0).max(1e-6);
+      let frac = ((pos - p0) / span).clamp(0.0, 1.0);
+      return crate::style::color::Rgba {
+        r: ((1.0 - frac) * c0.r as f32 + frac * c1.r as f32)
+          .round()
+          .clamp(0.0, 255.0) as u8,
+        g: ((1.0 - frac) * c0.g as f32 + frac * c1.g as f32)
+          .round()
+          .clamp(0.0, 255.0) as u8,
+        b: ((1.0 - frac) * c0.b as f32 + frac * c1.b as f32)
+          .round()
+          .clamp(0.0, 255.0) as u8,
+        a: (1.0 - frac) * c0.a + frac * c1.a,
+      };
+    }
+  }
+  stops.last().unwrap().1
+}
 #[derive(Copy, Clone)]
 struct BorderImageWidths {
   top: f32,

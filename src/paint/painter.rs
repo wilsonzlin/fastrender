@@ -21,7 +21,7 @@
 //! fragment's background, borders, and content. Text is rendered
 //! using the system's default font.
 
-use crate::api::{render_html_with_shared_resources, ResourceContext, ResourceKind};
+use crate::api::{render_html_with_shared_resources, ResourceContext};
 use crate::css;
 use crate::css::types::ColorStop;
 use crate::css::types::RadialGradientShape;
@@ -35,7 +35,6 @@ use crate::error::Result;
 use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::geometry::Size;
-use crate::html::encoding::decode_html_bytes;
 use crate::image_loader::CachedImage;
 use crate::image_loader::ImageCache;
 use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics_viewport;
@@ -56,6 +55,7 @@ use crate::paint::gradient::{
   GradientStats,
 };
 use crate::paint::homography::{quad_bounds, rect_corners, Homography};
+use crate::paint::iframe::{render_iframe_src, render_iframe_srcdoc};
 use crate::paint::object_fit::compute_object_fit;
 use crate::paint::object_fit::default_object_position;
 use crate::paint::optimize::DisplayListOptimizer;
@@ -68,8 +68,6 @@ use crate::paint::text_shadow::PathBounds;
 use crate::paint::text_shadow::ResolvedTextShadow;
 use crate::paint::transform_resolver::{backface_is_hidden, resolve_transform3d};
 use crate::render_control::check_active;
-use crate::resource::origin_from_url;
-use crate::resource::ResourceFetcher;
 use crate::scroll::ScrollState;
 #[cfg(test)]
 use crate::style::color::Color;
@@ -158,7 +156,6 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::OnceLock;
 use std::time::Instant;
 use tiny_skia::BlendMode as SkiaBlendMode;
 use tiny_skia::FilterQuality;
@@ -288,8 +285,6 @@ fn trace_image_paint_limit() -> Option<usize> {
 }
 
 static TRACE_IMAGE_PAINT_COUNT: AtomicUsize = AtomicUsize::new(0);
-
-const IFRAME_NESTING_LIMIT_MESSAGE: &str = "iframe nesting limit exceeded";
 
 fn dump_counts_enabled() -> bool {
   runtime::runtime_toggles().truthy("FASTR_DUMP_COUNTS")
@@ -1150,7 +1145,7 @@ impl Painter {
     let _display_list_span = trace.span("display_list_build", "paint");
     let root_paint = RootPaintOptions {
       use_root_background: tree.has_explicit_viewport(),
-      extend_background_to_viewport: false,
+      extend_background_to_viewport: tree.has_explicit_viewport(),
     };
     let svg_filter_roots: Vec<&FragmentNode> = std::iter::once(&tree.root)
       .chain(tree.additional_fragments.iter())
@@ -1925,7 +1920,9 @@ impl Painter {
     let has_background = Self::has_paintable_background(&style);
     if has_background {
       let background_rect = if matches!(root_background, Some(true)) {
-        Rect::from_xywh(0.0, 0.0, self.css_width, self.css_height)
+        let width = self.css_width.max(abs_bounds.width());
+        let height = self.css_height.max(abs_bounds.height());
+        Rect::from_xywh(0.0, 0.0, width, height)
       } else {
         abs_bounds
       };
@@ -5645,17 +5642,6 @@ impl Painter {
       .unwrap_or(self.max_iframe_depth)
   }
 
-  fn record_iframe_depth_exhausted(context: Option<&ResourceContext>, url: &str) {
-    if let Some(ctx) = context {
-      ctx.record_violation(
-        ResourceKind::Document,
-        url,
-        None,
-        IFRAME_NESTING_LIMIT_MESSAGE.to_string(),
-      );
-    }
-  }
-
   fn render_iframe_srcdoc(
     &self,
     html: &str,
@@ -5663,55 +5649,17 @@ impl Painter {
     content_rect: Rect,
     style: Option<&ComputedStyle>,
   ) -> Option<Pixmap> {
-    let width = content_rect.width().ceil() as u32;
-    let height = content_rect.height().ceil() as u32;
-    if width == 0 || height == 0 {
-      return None;
-    }
-
-    let iframe_url = if src.is_empty() {
-      "about:srcdoc".to_string()
-    } else {
-      self.image_cache.resolve_url(src)
-    };
-    let background = style.map(|s| s.background_color).unwrap_or(Rgba::WHITE);
-    let base_url = self.image_cache.base_url();
-    let mut image_cache = self.image_cache.clone();
-    if let Some(base_url) = base_url.clone() {
-      image_cache.set_base_url(base_url);
-    }
-    let context = image_cache.resource_context();
-    let remaining_depth = self.iframe_depth_remaining(context.as_ref());
-    if remaining_depth == 0 {
-      Self::record_iframe_depth_exhausted(context.as_ref(), &iframe_url);
-      let device_width = ((width as f32) * self.scale).round().max(1.0) as u32;
-      let device_height = ((height as f32) * self.scale).round().max(1.0) as u32;
-      return Pixmap::new(device_width, device_height);
-    }
-    let nested_depth = remaining_depth.saturating_sub(1);
-    let nested_context = context
-      .as_ref()
-      .map(|ctx| ctx.clone().with_iframe_depth(nested_depth));
-    let policy = nested_context
-      .as_ref()
-      .or(context.as_ref())
-      .map(|c| c.policy.clone())
-      .unwrap_or_default();
-    render_html_with_shared_resources(
+    let remaining_depth = self.iframe_depth_remaining(self.image_cache.resource_context().as_ref());
+    render_iframe_srcdoc(
       html,
-      width,
-      height,
-      background,
+      Some(src),
+      content_rect,
+      style,
+      &self.image_cache,
       &self.font_ctx,
-      &image_cache,
-      Arc::clone(image_cache.fetcher()),
-      base_url,
       self.scale,
-      policy,
-      nested_context,
-      nested_depth,
+      remaining_depth,
     )
-    .ok()
   }
 
   fn render_iframe_src(
@@ -5720,95 +5668,16 @@ impl Painter {
     content_rect: Rect,
     style: Option<&ComputedStyle>,
   ) -> Option<Pixmap> {
-    if src.is_empty() {
-      return None;
-    }
-    let width = content_rect.width().ceil() as u32;
-    let height = content_rect.height().ceil() as u32;
-    if width == 0 || height == 0 {
-      return None;
-    }
-
-    let context = self.image_cache.resource_context();
-    let resolved = self.image_cache.resolve_url(src);
-    let remaining_depth = self.iframe_depth_remaining(context.as_ref());
-    if remaining_depth == 0 {
-      Self::record_iframe_depth_exhausted(context.as_ref(), &resolved);
-      let device_width = ((width as f32) * self.scale).round().max(1.0) as u32;
-      let device_height = ((height as f32) * self.scale).round().max(1.0) as u32;
-      return Pixmap::new(device_width, device_height);
-    }
-    let nested_depth = remaining_depth.saturating_sub(1);
-    let fetcher = Arc::clone(self.image_cache.fetcher());
-    if let Some(ctx) = context.as_ref() {
-      if ctx
-        .check_allowed(ResourceKind::Document, &resolved)
-        .is_err()
-      {
-        return None;
-      }
-    }
-    let resource = fetcher.fetch(&resolved).ok()?;
-    if let Some(ctx) = context.as_ref() {
-      if ctx
-        .check_allowed_with_final(
-          ResourceKind::Document,
-          &resolved,
-          resource.final_url.as_deref(),
-        )
-        .is_err()
-      {
-        return None;
-      }
-    }
-    let content_type = resource.content_type.as_deref();
-    let is_html = content_type
-      .map(|ct| {
-        let ct = ct.to_ascii_lowercase();
-        ct.starts_with("text/html")
-          || ct.starts_with("application/xhtml+xml")
-          || ct.starts_with("application/html")
-          || ct.contains("+html")
-      })
-      .unwrap_or_else(|| {
-        let lower = resolved.to_ascii_lowercase();
-        lower.ends_with(".html") || lower.ends_with(".htm") || lower.ends_with(".xhtml")
-      });
-    if !is_html {
-      return None;
-    }
-
-    let html = decode_html_bytes(&resource.bytes, content_type);
-    let background = style.map(|s| s.background_color).unwrap_or(Rgba::WHITE);
-    let mut image_cache = self.image_cache.clone();
-    image_cache.set_base_url(resolved.clone());
-    let nested_origin = origin_from_url(resource.final_url.as_deref().unwrap_or(&resolved));
-    let nested_context = context.as_ref().map(|ctx| {
-      ctx
-        .for_origin(nested_origin)
-        .with_iframe_depth(nested_depth)
-    });
-    let policy = nested_context
-      .as_ref()
-      .map(|ctx| ctx.policy.clone())
-      .or_else(|| context.as_ref().map(|ctx| ctx.policy.clone()))
-      .unwrap_or_default();
-
-    render_html_with_shared_resources(
-      &html,
-      width,
-      height,
-      background,
+    let remaining_depth = self.iframe_depth_remaining(self.image_cache.resource_context().as_ref());
+    render_iframe_src(
+      src,
+      content_rect,
+      style,
+      &self.image_cache,
       &self.font_ctx,
-      &image_cache,
-      fetcher,
-      Some(resolved),
       self.scale,
-      policy,
-      nested_context,
-      nested_depth,
+      remaining_depth,
     )
-    .ok()
   }
 
   fn paint_image_from_src(
@@ -9764,17 +9633,14 @@ pub enum PaintBackend {
 }
 
 pub(crate) fn paint_backend_from_env() -> PaintBackend {
-  static BACKEND: OnceLock<PaintBackend> = OnceLock::new();
-  *BACKEND.get_or_init(|| {
-    let Ok(raw) = std::env::var("FASTR_PAINT_BACKEND") else {
-      return PaintBackend::Legacy;
-    };
-    match raw.trim().to_ascii_lowercase().as_str() {
-      "display_list" | "display-list" | "displaylist" => PaintBackend::DisplayList,
-      "legacy" | "immediate" => PaintBackend::Legacy,
-      _ => PaintBackend::Legacy,
-    }
-  })
+  let Ok(raw) = std::env::var("FASTR_PAINT_BACKEND") else {
+    return PaintBackend::Legacy;
+  };
+  match raw.trim().to_ascii_lowercase().as_str() {
+    "display_list" | "display-list" | "displaylist" => PaintBackend::DisplayList,
+    "legacy" | "immediate" => PaintBackend::Legacy,
+    _ => PaintBackend::Legacy,
+  }
 }
 
 fn legacy_paint_tree_with_resources_scaled_offset(
@@ -9811,12 +9677,43 @@ pub fn paint_tree_display_list_with_resources_scaled_offset(
   paint_parallelism: PaintParallelism,
   scroll_state: &ScrollState,
 ) -> Result<Pixmap> {
+  paint_tree_display_list_with_resources_scaled_offset_depth(
+    tree,
+    width,
+    height,
+    background,
+    font_ctx,
+    image_cache,
+    scale,
+    offset,
+    paint_parallelism,
+    scroll_state,
+    crate::api::DEFAULT_MAX_IFRAME_DEPTH,
+  )
+}
+
+/// Paints a fragment tree via the display-list pipeline (builder → optimize → renderer) with an
+/// explicit iframe depth limit.
+pub fn paint_tree_display_list_with_resources_scaled_offset_depth(
+  tree: &FragmentTree,
+  width: u32,
+  height: u32,
+  background: Rgba,
+  font_ctx: FontContext,
+  image_cache: ImageCache,
+  scale: f32,
+  offset: Point,
+  paint_parallelism: PaintParallelism,
+  scroll_state: &ScrollState,
+  max_iframe_depth: usize,
+) -> Result<Pixmap> {
   let viewport = tree.viewport_size();
   let mut display_list = DisplayListBuilder::with_image_cache(image_cache.clone())
     .with_font_context(font_ctx.clone())
     .with_svg_filter_defs(tree.svg_filter_defs.clone())
     .with_scroll_state(scroll_state.clone())
     .with_device_pixel_ratio(scale)
+    .with_max_iframe_depth(max_iframe_depth)
     .with_viewport_size(viewport.width, viewport.height)
     .build_with_stacking_tree_offset(&tree.root, offset);
   for extra in &tree.additional_fragments {
@@ -9825,6 +9722,7 @@ pub fn paint_tree_display_list_with_resources_scaled_offset(
       .with_svg_filter_defs(tree.svg_filter_defs.clone())
       .with_scroll_state(scroll_state.clone())
       .with_device_pixel_ratio(scale)
+      .with_max_iframe_depth(max_iframe_depth)
       .with_viewport_size(viewport.width, viewport.height)
       .build_with_stacking_tree_offset(extra, offset);
     display_list.append(extra_list);
