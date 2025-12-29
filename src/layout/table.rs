@@ -2779,7 +2779,7 @@ fn find_first_baseline(fragment: &FragmentNode, parent_offset: f32) -> Option<f3
     _ => {}
   }
 
-  for child in &fragment.children {
+  for child in fragment.children.iter() {
     if let Some(b) = find_first_baseline(child, origin) {
       return Some(b);
     }
@@ -4323,7 +4323,7 @@ impl FormattingContext for TableFormattingContext {
           let result = abs.layout_absolute(&input, &cb)?;
           child_fragment.bounds = Rect::new(result.position, result.size);
           child_fragment.style = Some(original_style);
-          fragment.children.push(child_fragment);
+          fragment.children_mut().push(child_fragment);
         }
         Ok(())
       };
@@ -4362,7 +4362,7 @@ impl FormattingContext for TableFormattingContext {
             let mut anchor =
               FragmentNode::new_running_anchor(anchor_bounds, name, snapshot_fragment);
             anchor.style = Some(running_child.style.clone());
-            fragment.children.push(anchor);
+            fragment.children_mut().push(anchor);
           }
         }
       }
@@ -5432,7 +5432,7 @@ impl FormattingContext for TableFormattingContext {
 
       if y_offset.abs() > 0.0 {
         let delta = Point::new(0.0, y_offset);
-        for child in &mut fragment.children {
+        for child in fragment.children_mut() {
           // Shift each direct child; their descendants stay relative to the shifted
           // parent, preventing cumulative translations down the subtree.
           child.bounds = child.bounds.translate(delta);
@@ -5738,7 +5738,7 @@ impl FormattingContext for TableFormattingContext {
             let mut anchor =
               FragmentNode::new_running_anchor(anchor_bounds, name, snapshot_fragment);
             anchor.style = Some(running_child.style.clone());
-            fragment.children.push(anchor);
+            fragment.children_mut().push(anchor);
           }
         }
       }
@@ -5899,7 +5899,7 @@ impl FormattingContext for TableFormattingContext {
           let anchor_bounds = Rect::from_xywh(0.0, anchor_y + (order as f32) * 1e-4, 0.0, 0.01);
           let mut anchor = FragmentNode::new_running_anchor(anchor_bounds, name, snapshot_fragment);
           anchor.style = Some(running_child.style.clone());
-          wrapper_fragment.children.push(anchor);
+          wrapper_fragment.children_mut().push(anchor);
         }
       }
     }
@@ -6154,7 +6154,7 @@ mod tests {
     {
       tops.push(fragment.bounds.y());
     }
-    for child in &fragment.children {
+    for child in fragment.children.iter() {
       collect_table_cell_tops(child, tops);
     }
   }
@@ -6282,7 +6282,7 @@ mod tests {
     if matches!(fragment.content, FragmentContent::Block { box_id: Some(id) } if id == target) {
       return Some(fragment);
     }
-    for child in &fragment.children {
+    for child in fragment.children.iter() {
       if let Some(found) = find_fragment_by_box_id(child, target) {
         return Some(found);
       }

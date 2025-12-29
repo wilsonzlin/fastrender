@@ -922,7 +922,7 @@ impl BlockFormattingContext {
       ),
       fragment.scroll_overflow.size,
     );
-    for child in &mut fragment.children {
+    for child in fragment.children_mut() {
       Self::translate_fragment_tree(child, delta_y);
     }
   }
@@ -2131,7 +2131,7 @@ impl BlockFormattingContext {
 
   fn set_logical_from_bounds(fragment: &mut FragmentNode) {
     fragment.logical_override = Some(fragment.bounds);
-    for child in &mut fragment.children {
+    for child in fragment.children_mut() {
       Self::set_logical_from_bounds(child);
     }
   }
@@ -2156,7 +2156,7 @@ impl BlockFormattingContext {
         logical.height(),
       ));
     }
-    for child in &mut fragment.children {
+    for child in fragment.children_mut() {
       Self::translate_with_logical(child, dx, physical_dy, logical_dy);
     }
   }
@@ -2289,7 +2289,7 @@ impl BlockFormattingContext {
     }
     if column_height <= 0.0 {
       return Ok((
-        flow_root.children,
+        Arc::try_unwrap(flow_root.children).unwrap_or_else(|arc| (*arc).clone()),
         flow_height,
         flow_positioned,
         flow_height,
@@ -2300,7 +2300,7 @@ impl BlockFormattingContext {
     let fragment_count = boundaries.len().saturating_sub(1);
     if fragment_count == 0 {
       return Ok((
-        flow_root.children,
+        Arc::try_unwrap(flow_root.children).unwrap_or_else(|arc| (*arc).clone()),
         flow_height,
         flow_positioned,
         flow_height,
@@ -2354,7 +2354,7 @@ impl BlockFormattingContext {
           offset.y += row_offset;
         }
         fragment_heights[index] = axis.block_size(&clipped.bounds);
-        let mut children = clipped.children;
+        let mut children = Arc::try_unwrap(clipped.children).unwrap_or_else(|arc| (*arc).clone());
         for child in &mut children {
           child.bounds = child.bounds.translate(offset);
           if let Some(logical) = child.logical_override {
@@ -3705,21 +3705,23 @@ fn convert_fragment_axes(
     fragment.bounds = Rect::from_xywh(phys_x, phys_y, block_size, inline_size);
     let child_inline = inline_size;
     let child_block = block_size;
-    fragment.children = fragment
-      .children
+    let mapped_children: Vec<_> = Arc::try_unwrap(fragment.children)
+      .unwrap_or_else(|arc| (*arc).clone())
       .into_iter()
       .map(|c| convert_fragment_axes(c, child_inline, child_block, style_wm, dir))
       .collect();
+    fragment.children = Arc::new(mapped_children);
     fragment
   } else {
     // Keep axes; only recurse.
     let child_inline = inline_size;
     let child_block = block_size;
-    fragment.children = fragment
-      .children
+    let mapped_children: Vec<_> = Arc::try_unwrap(fragment.children)
+      .unwrap_or_else(|arc| (*arc).clone())
       .into_iter()
       .map(|c| convert_fragment_axes(c, child_inline, child_block, style_wm, dir))
       .collect();
+    fragment.children = Arc::new(mapped_children);
     fragment
   }
 }
@@ -3737,7 +3739,7 @@ fn count_text_fragments(fragment: &FragmentNode) -> (usize, usize) {
     if matches!(node.content, FragmentContent::Text { .. }) {
       *text += 1;
     }
-    for child in &node.children {
+    for child in node.children.iter() {
       walk(child, text, total);
     }
   }
@@ -3754,12 +3756,12 @@ fn collect_first_texts(fragment: &FragmentNode, out: &mut Vec<String>, limit: us
       return;
     }
     if let FragmentContent::Text { text, .. } = &node.content {
-      out.push(text.clone());
+      out.push(text.to_string());
       if out.len() >= limit {
         return;
       }
     }
-    for child in &node.children {
+    for child in node.children.iter() {
       walk(child, out, limit);
       if out.len() >= limit {
         return;
@@ -4412,7 +4414,7 @@ mod tests {
 
     let mut float_y = None;
     let mut clear_y = None;
-    for child in &fragment.children {
+    for child in fragment.children.iter() {
       if let Some(style) = &child.style {
         if style.float.is_floating() {
           float_y = Some(child.bounds.y());
@@ -4461,7 +4463,7 @@ mod tests {
       if matches!(fragment.content, FragmentContent::Line { .. }) {
         return Some(fragment);
       }
-      for child in &fragment.children {
+      for child in fragment.children.iter() {
         if let Some(line) = find_line(child) {
           return Some(line);
         }
@@ -4509,7 +4511,7 @@ mod tests {
       if matches!(fragment.content, FragmentContent::Line { .. }) {
         return Some(fragment);
       }
-      for child in &fragment.children {
+      for child in fragment.children.iter() {
         if let Some(line) = find_line(child) {
           return Some(line);
         }
@@ -4647,7 +4649,7 @@ mod tests {
       if matches!(fragment.content, FragmentContent::Line { .. }) {
         return Some(fragment);
       }
-      for child in &fragment.children {
+      for child in fragment.children.iter() {
         if let Some(line) = find_line(child) {
           return Some(line);
         }

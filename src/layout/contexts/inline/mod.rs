@@ -3901,7 +3901,7 @@ impl InlineFormattingContext {
       fragment.style = Some(Arc::new(merged));
     }
 
-    for child in &mut fragment.children {
+    for child in fragment.children_mut() {
       self.apply_first_line_fragment_style(child, first_line_style, base_style);
     }
   }
@@ -4446,10 +4446,10 @@ impl InlineFormattingContext {
           FragmentNode::new_with_style(
             bounds,
             FragmentContent::Text {
-              text: text_item.text.clone(),
+              text: Arc::from(text_item.text.clone()),
               box_id,
               baseline_offset: text_item.metrics.baseline_offset,
-              shaped: Some(text_item.runs.clone()),
+              shaped: Some(Arc::from(text_item.runs.clone())),
               is_marker: text_item.is_marker,
             },
             vec![],
@@ -4465,10 +4465,10 @@ impl InlineFormattingContext {
           FragmentNode::new_with_style(
             bounds,
             FragmentContent::Text {
-              text: text_item.text.clone(),
+              text: Arc::from(text_item.text.clone()),
               box_id,
               baseline_offset: text_item.metrics.baseline_offset,
-              shaped: Some(text_item.runs.clone()),
+              shaped: Some(Arc::from(text_item.runs.clone())),
               is_marker: text_item.is_marker,
             },
             vec![],
@@ -4736,10 +4736,10 @@ impl InlineFormattingContext {
         FragmentNode::new_with_style(
           bounds,
           FragmentContent::Text {
-            text: text_item.text.clone(),
+            text: Arc::from(text_item.text.clone()),
             box_id,
             baseline_offset: text_item.metrics.baseline_offset,
-            shaped: Some(text_item.runs.clone()),
+            shaped: Some(Arc::from(text_item.runs.clone())),
             is_marker: text_item.is_marker,
           },
           vec![],

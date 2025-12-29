@@ -815,7 +815,7 @@ fn build_stacking_tree_internal(
 
     // Process children
     let base_offset = Point::ZERO;
-    for child in &fragment.children {
+    for child in fragment.children.iter() {
       let child_offset = Point::new(
         base_offset.x + child.bounds.origin.x,
         base_offset.y + child.bounds.origin.y,
@@ -872,7 +872,7 @@ fn build_stacking_tree_internal(
 
     // Process children
     let base_offset = offset_from_parent_context;
-    for child in &fragment.children {
+    for child in fragment.children.iter() {
       let child_offset = Point::new(
         base_offset.x + child.bounds.origin.x,
         base_offset.y + child.bounds.origin.y,
@@ -1018,7 +1018,7 @@ where
     context.fragments.push(fragment.clone());
 
     let base_offset = Point::ZERO;
-    for child in &fragment.children {
+    for child in fragment.children.iter() {
       let child_style = get_style(child);
       if let Some(s) = child_style.as_deref() {
         if !matches!(s.visibility, crate::style::computed::Visibility::Visible) {
@@ -1078,7 +1078,7 @@ where
     }
 
     let base_offset = offset_from_parent_context;
-    for child in &fragment.children {
+    for child in fragment.children.iter() {
       let child_style = get_style(child);
       if let Some(s) = child_style.as_deref() {
         if !matches!(s.visibility, crate::style::computed::Visibility::Visible) {

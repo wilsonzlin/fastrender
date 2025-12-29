@@ -439,17 +439,17 @@ pub fn paginate_fragment_tree(
           let mut counts: HashMap<String, usize> = HashMap::new();
           fn collect(node: &FragmentNode, out: &mut HashMap<String, usize>) {
             if let FragmentContent::RunningAnchor { name, .. } = &node.content {
-              *out.entry(name.clone()).or_insert(0) += 1;
+              *out.entry(name.to_string()).or_insert(0) += 1;
             }
-            for child in &node.children {
+            for child in node.children.iter() {
               collect(child, out);
             }
           }
           fn first_text(node: &FragmentNode) -> Option<String> {
             match &node.content {
-              FragmentContent::Text { text, .. } => Some(text.clone()),
+              FragmentContent::Text { text, .. } => Some(text.to_string()),
               _ => {
-                for child in &node.children {
+                for child in node.children.iter() {
                   if let Some(found) = first_text(child) {
                     return Some(found);
                   }
@@ -475,7 +475,7 @@ pub fn paginate_fragment_tree(
             page_index, counts, previews
           );
         }
-        page_root.children.push(content);
+        page_root.children_mut().push(content);
       }
 
       let base_advance = ((end - start).max(0.0) / total_height) * base_total_height;
@@ -488,7 +488,7 @@ pub fn paginate_fragment_tree(
         page_style.content_origin.x,
         page_style.content_origin.y,
       );
-      page_root.children.push(fixed);
+      page_root.children_mut().push(fixed);
     }
 
     let page_strings = running_strings_for_page(
@@ -518,7 +518,7 @@ pub fn paginate_fragment_tree(
   let mut page_roots = Vec::with_capacity(count);
   let mut running_element_state: HashMap<String, FragmentNode> = HashMap::new();
   for (idx, (mut page, style, running_strings, running_elements)) in pages.into_iter().enumerate() {
-    page.children.extend(build_margin_box_fragments(
+    page.children_mut().extend(build_margin_box_fragments(
       &style,
       font_ctx,
       idx,
@@ -620,7 +620,7 @@ fn collect_page_name_spans(node: &FragmentNode, abs_start: f32, spans: &mut Vec<
     }
   }
 
-  for child in &node.children {
+  for child in node.children.iter() {
     collect_page_name_spans(child, start, spans);
   }
 }
@@ -769,7 +769,7 @@ fn collect_running_element_occurrences(
 
   if let FragmentContent::RunningAnchor { name, snapshot } = &node.content {
     out
-      .entry(name.clone())
+      .entry(name.to_string())
       .or_default()
       .push((abs_origin.y, (**snapshot).clone()));
   } else if node.content.is_block() || node.content.is_inline() || node.content.is_replaced() {
@@ -785,21 +785,21 @@ fn collect_running_element_occurrences(
     }
   }
 
-  for child in &node.children {
+  for child in node.children.iter() {
     collect_running_element_occurrences(child, abs_origin, out);
   }
 }
 
 fn strip_running_anchor_fragments(node: &mut FragmentNode) {
   let mut kept: Vec<FragmentNode> = Vec::with_capacity(node.children.len());
-  for mut child in node.children.drain(..) {
+  for mut child in node.children_mut().drain(..) {
     if matches!(child.content, FragmentContent::RunningAnchor { .. }) {
       continue;
     }
     strip_running_anchor_fragments(&mut child);
     kept.push(child);
   }
-  node.children = kept;
+  node.set_children(kept);
 }
 
 fn clear_running_position(node: &mut FragmentNode) {
@@ -810,7 +810,7 @@ fn clear_running_position(node: &mut FragmentNode) {
       node.style = Some(Arc::new(owned));
     }
   }
-  for child in &mut node.children {
+  for child in node.children_mut() {
     clear_running_position(child);
   }
 }
@@ -858,14 +858,14 @@ fn is_fixed_fragment(fragment: &FragmentNode) -> bool {
 
 fn strip_fixed_fragments(node: &mut FragmentNode) {
   let mut kept = Vec::with_capacity(node.children.len());
-  for mut child in node.children.drain(..) {
+  for mut child in node.children_mut().drain(..) {
     if is_fixed_fragment(&child) {
       continue;
     }
     strip_fixed_fragments(&mut child);
     kept.push(child);
   }
-  node.children = kept;
+  node.set_children(kept);
 }
 
 fn collect_fixed_fragments(node: &FragmentNode, origin: Point, out: &mut Vec<FragmentNode>) {
@@ -877,7 +877,7 @@ fn collect_fixed_fragments(node: &FragmentNode, origin: Point, out: &mut Vec<Fra
   }
 
   let next_origin = Point::new(origin.x + node.bounds.x(), origin.y + node.bounds.y());
-  for child in &node.children {
+  for child in node.children.iter() {
     collect_fixed_fragments(child, next_origin, out);
   }
 }

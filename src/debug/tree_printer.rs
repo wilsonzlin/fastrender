@@ -577,7 +577,7 @@ fn export_fragment_recursive(
     let _ = writeln!(output, "  n{} -> n{};", parent, current_id);
   }
 
-  for child in &fragment.children {
+  for child in fragment.children.iter() {
     export_fragment_recursive(child, node_id, Some(current_id), output);
   }
 }

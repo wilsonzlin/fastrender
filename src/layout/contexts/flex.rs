@@ -104,7 +104,7 @@ fn translate_fragment_tree(fragment: &mut FragmentNode, delta: Point) {
       logical.size,
     ));
   }
-  for child in &mut fragment.children {
+  for child in fragment.children_mut() {
     translate_fragment_tree(child, delta);
   }
 }
@@ -215,7 +215,7 @@ fn fragment_first_baseline(fragment: &FragmentNode) -> Option<f32> {
     } => Some(*baseline_offset),
     FragmentContent::Replaced { .. } => Some(fragment.bounds.height()),
     _ => {
-      for child in &fragment.children {
+      for child in fragment.children.iter() {
         if let Some(baseline) = fragment_first_baseline(child) {
           return Some(child.bounds.y() - fragment.bounds.y() + baseline);
         }
@@ -1536,7 +1536,7 @@ impl FormattingContext for FlexFormattingContext {
         let mut current_line = 0usize;
         let mut prev_main: Option<f32> = None;
         let wrap_break_eps = 0.5;
-        for child in &fragment.children {
+        for child in fragment.children.iter() {
           let main_pos = if main_is_horizontal {
             child.bounds.x()
           } else {
@@ -1645,7 +1645,7 @@ impl FormattingContext for FlexFormattingContext {
 
       for (idx, (child_node, child_fragment)) in in_flow_children
         .iter()
-        .zip(fragment.children.iter_mut())
+        .zip(fragment.children_mut().iter_mut())
         .enumerate()
       {
         let align = child_node
@@ -1751,7 +1751,7 @@ impl FormattingContext for FlexFormattingContext {
       let max_h = fragment.bounds.height().max(0.0);
       let runaway_x = max_w.max(1.0) * 20.0;
       let runaway_y = max_h.max(1.0) * 20.0;
-      for child in &mut fragment.children {
+      for child in fragment.children_mut() {
         let mut x = child.bounds.x();
         let mut y = child.bounds.y();
         let mut w = child.bounds.width();
@@ -2111,13 +2111,13 @@ impl FormattingContext for FlexFormattingContext {
         }
         child_fragment.bounds = Rect::new(result.position, result.size);
         child_fragment.style = Some(candidate.child.style.clone());
-        fragment.children.push(child_fragment);
+        fragment.children_mut().push(child_fragment);
       }
     }
 
     if !running_children.is_empty() {
       let mut id_to_bounds: HashMap<usize, Rect> = HashMap::new();
-      for child in &fragment.children {
+      for child in fragment.children.iter() {
         let Some(box_id) = (match &child.content {
           FragmentContent::Block { box_id }
           | FragmentContent::Inline { box_id, .. }
@@ -2174,7 +2174,7 @@ impl FormattingContext for FlexFormattingContext {
             Rect::from_xywh(anchor_x, anchor_y + (order as f32) * 1e-4, 0.0, 0.01);
           let mut anchor = FragmentNode::new_running_anchor(anchor_bounds, name, snapshot_fragment);
           anchor.style = Some(running_child.style.clone());
-          fragment.children.push(anchor);
+          fragment.children_mut().push(anchor);
         }
       }
     }
@@ -2860,6 +2860,56 @@ impl FlexFormattingContext {
     node_map: &HashMap<*const BoxNode, NodeId>,
     constraints: &LayoutConstraints,
   ) -> Result<FragmentNode, LayoutError> {
+    fn accumulate_bounds(node: &FragmentNode, offset: Point, min: &mut Point, max: &mut Point) {
+      let abs = Rect::from_xywh(
+        node.bounds.x() + offset.x,
+        node.bounds.y() + offset.y,
+        node.bounds.width(),
+        node.bounds.height(),
+      );
+      min.x = min.x.min(abs.x());
+      min.y = min.y.min(abs.y());
+      max.x = max.x.max(abs.max_x());
+      max.y = max.y.max(abs.max_y());
+      let next = Point::new(offset.x + node.bounds.x(), offset.y + node.bounds.y());
+      for child in node.children.iter() {
+        accumulate_bounds(child, next, min, max);
+      }
+    }
+
+    fn fragment_subtree_size(node: &FragmentNode) -> Size {
+      let mut min = Point::new(0.0, 0.0);
+      let mut max = Point::new(0.0, 0.0);
+      accumulate_bounds(node, Point::ZERO, &mut min, &mut max);
+      Size::new((max.x - min.x).max(0.0), (max.y - min.y).max(0.0))
+    }
+
+    fn find_cached_fragment(
+      cache: &HashMap<(Option<u32>, Option<u32>), (Size, std::sync::Arc<FragmentNode>)>,
+      target_size: Size,
+    ) -> Option<(Size, std::sync::Arc<FragmentNode>)> {
+      let mut best = None;
+      let mut best_score = f32::MAX;
+      let (eps_w, eps_h) = cache_tolerances(target_size);
+      // Match cached fragments within a tolerance so quantized measurements (2–8px)
+      // can be reused without relayout.
+      for (size, frag) in cache.values() {
+        if !size.width.is_finite() || !size.height.is_finite() {
+          continue;
+        }
+        let dw = (size.width - target_size.width).abs();
+        let dh = (size.height - target_size.height).abs();
+        if dw <= eps_w && dh <= eps_h {
+          let score = dw + dh;
+          if score < best_score {
+            best_score = score;
+            best = Some((*size, frag.clone()));
+          }
+        }
+      }
+      best
+    }
+
     // Get layout from Taffy
     let layout = taffy_tree
       .layout(taffy_node)
@@ -3307,7 +3357,7 @@ impl FlexFormattingContext {
               if matches!(node.content, FragmentContent::Text { .. }) {
                 *count += 1;
               }
-              for child in &node.children {
+              for child in node.children.iter() {
                 walk(child, count);
               }
             }
@@ -4260,7 +4310,7 @@ impl FlexFormattingContext {
       min.y = min.y.min(bounds.y());
       max.x = max.x.max(bounds.max_x());
       max.y = max.y.max(bounds.max_y());
-      for child in &node.children {
+      for child in node.children.iter() {
         walk(child, origin, min, max);
       }
     }
@@ -4279,7 +4329,7 @@ impl FlexFormattingContext {
       max: &mut Point,
       found: &mut bool,
     ) {
-      for child in &node.children {
+      for child in node.children.iter() {
         let origin = Point::new(child.bounds.x() + offset.x, child.bounds.y() + offset.y);
         let bounds = Rect::new(origin, child.bounds.size);
         *found = true;
@@ -4349,7 +4399,7 @@ impl FlexFormattingContext {
     }
 
     let mut inflow_sizes: HashMap<usize, Size> = HashMap::new();
-    for child in &fragment.children {
+    for child in fragment.children.iter() {
       if let Some(box_id) = match &child.content {
         FragmentContent::Block { box_id }
         | FragmentContent::Inline { box_id, .. }

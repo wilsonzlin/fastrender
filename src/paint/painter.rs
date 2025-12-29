@@ -442,8 +442,8 @@ enum DisplayCommand {
   Text {
     rect: Rect,
     baseline_offset: f32,
-    text: String,
-    runs: Option<Vec<ShapedRun>>,
+    text: Arc<str>,
+    runs: Option<Arc<[ShapedRun]>>,
     style: Arc<ComputedStyle>,
   },
   Replaced {
@@ -1949,7 +1949,7 @@ impl Painter {
 
     // HTML canvas background propagation: prefer a non-transparent body background (usually the
     // first renderable child) over the html element's own background.
-    for child in &html.children {
+    for child in html.children.iter() {
       if let Some(style) = child.style.clone() {
         if Self::has_paintable_background(&style) {
           return Some(style);
@@ -2083,9 +2083,13 @@ impl Painter {
         let text_total_start = text_profile_enabled.then(Instant::now);
         let shape_start = text_profile_enabled.then(Instant::now);
         let color = style.color;
-        let shaped_runs = runs
-          .clone()
-          .or_else(|| self.shaper.shape(&text, &style, &self.font_ctx).ok());
+        let shaped_runs: Option<Arc<[ShapedRun]>> = runs.clone().or_else(|| {
+          self
+            .shaper
+            .shape(&text, &style, &self.font_ctx)
+            .ok()
+            .map(Arc::from)
+        });
         let shape_ms = shape_start
           .map(|start| start.elapsed().as_secs_f64() * 1000.0)
           .unwrap_or(0.0);
@@ -8139,7 +8143,7 @@ fn fragment_counts(node: &FragmentNode) -> (usize, usize, usize, usize, usize) {
     FragmentContent::Inline { .. } => inline += 1,
     FragmentContent::Block { .. } | FragmentContent::RunningAnchor { .. } => {}
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     let (t, tx, r, l, i) = fragment_counts(child);
     total += t;
     text += tx;

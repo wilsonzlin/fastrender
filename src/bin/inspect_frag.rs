@@ -384,7 +384,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
           );
         }
       }
-      for child in &node.children {
+      for child in node.children.iter() {
         walk(child, needle, stack, found);
       }
       stack.pop();
@@ -1570,7 +1570,7 @@ fn collect_tag_ids(node: &BoxNode, tag: &str, out: &mut Vec<usize>) {
   {
     out.push(node.id);
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     collect_tag_ids(child, tag, out);
   }
 }
@@ -1598,7 +1598,7 @@ fn find_fragment_node(
     return Some(node);
   }
   let child_base = if include_base { None } else { base };
-  for child in &node.children {
+  for child in node.children.iter() {
     if let Some(found) = find_fragment_node(child, next_offset, child_base, false, target) {
       return Some(found);
     }
@@ -1611,7 +1611,7 @@ fn count_text_fragments(fragment: &FragmentNode) -> usize {
     if matches!(node.content, FragmentContent::Text { .. }) {
       *total += 1;
     }
-    for child in &node.children {
+    for child in node.children.iter() {
       walk(child, total);
     }
   }
@@ -1643,7 +1643,7 @@ fn print_fragment_tree(node: &FragmentNode, indent: usize, max_lines: usize) {
       space = " ".repeat(indent * 2),
       desc = fmt_content(node)
     );
-    for child in &node.children {
+    for child in node.children.iter() {
       walk(child, indent + 1, remaining);
       if *remaining == 0 {
         break;
@@ -1659,7 +1659,7 @@ fn find_box_by_id(node: &BoxNode, target: usize) -> Option<&BoxNode> {
   if node.id == target {
     return Some(node);
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     if let Some(found) = find_box_by_id(child, target) {
       return Some(found);
     }
@@ -1682,7 +1682,7 @@ fn collect_tag_debug(node: &BoxNode, tag: &str, out: &mut Vec<(usize, String)>) 
       .unwrap_or_else(|| format!("{:?}", node.box_type));
     out.push((node.id, dbg));
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     collect_tag_debug(child, tag, out);
   }
 }
@@ -1697,7 +1697,7 @@ fn find_first_tag<'a>(node: &'a BoxNode, tag: &str) -> Option<&'a BoxNode> {
   {
     return Some(node);
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     if let Some(found) = find_first_tag(child, tag) {
       return Some(found);
     }
@@ -1722,7 +1722,7 @@ fn walk_boxes<F: FnMut(&BoxNode, &[String])>(node: &BoxNode, path: &mut Vec<Stri
     }
   }
   path.push(format!("#{} {:?}", node.id, node.box_type));
-  for child in &node.children {
+  for child in node.children.iter() {
     walk_boxes(child, path, f);
   }
   path.pop();
@@ -1763,7 +1763,7 @@ fn find_fragment_path(
   }
 
   let child_base = if include_base { None } else { base };
-  for child in &node.children {
+  for child in node.children.iter() {
     if let Some(mut child_path) =
       find_fragment_path(child, next_offset, child_base, include_base, needle)
     {
@@ -1822,7 +1822,7 @@ fn find_fragment_by_box_id(
     _ => {}
   }
 
-  for child in &node.children {
+  for child in node.children.iter() {
     let child_base = if include_base { None } else { base };
     if let Some(mut child_path) = find_fragment_by_box_id(
       child,
@@ -1892,7 +1892,7 @@ fn find_max_x_fragment(
       best.1 = current.clone();
     }
     let child_base = if include_base { None } else { base };
-    for child in &node.children {
+    for child in node.children.iter() {
       walk(child, next_offset, child_base, include_base, best, current);
     }
     current.pop();
@@ -1919,14 +1919,14 @@ fn walk_styled<F: FnMut(&ComputedStyle, &dom::DomNode)>(node: &StyledNode, f: &m
   if let Some(marker) = &node.marker_styles {
     f(marker, &node.node);
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     walk_styled(child, f);
   }
 }
 
 fn collect_box_debug(node: &BoxNode, out: &mut HashMap<usize, String>) {
   out.insert(node.id, format_debug_info(node));
-  for child in &node.children {
+  for child in node.children.iter() {
     collect_box_debug(child, out);
   }
 }
@@ -1955,7 +1955,7 @@ fn format_debug_info(node: &BoxNode) -> String {
 
 fn collect_box_styles(node: &BoxNode, out: &mut HashMap<usize, std::sync::Arc<ComputedStyle>>) {
   out.insert(node.id, node.style.clone());
-  for child in &node.children {
+  for child in node.children.iter() {
     collect_box_styles(child, out);
   }
 }
@@ -1983,7 +1983,7 @@ fn collect_column_info(
     }
   }
 
-  for child in &node.children {
+  for child in node.children.iter() {
     collect_column_info(child, columns, spanning_cells);
   }
 }
@@ -2015,7 +2015,7 @@ fn collect_dark_boxes(node: &BoxNode, out: &mut Vec<DarkBox>) {
       debug,
     });
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     collect_dark_boxes(child, out);
   }
 }
@@ -2104,7 +2104,7 @@ fn collect_fragments_abs<'a>(
   );
   out.push((abs, fragment, root_index));
   let child_base = if include_base { None } else { base };
-  for child in &fragment.children {
+  for child in fragment.children.iter() {
     collect_fragments_abs(
       child,
       next_offset,
@@ -2134,7 +2134,7 @@ fn collect_backgrounds_abs<'a>(
   );
   out.push((abs, fragment, root_index));
   let child_base = if include_base { None } else { base };
-  for child in &fragment.children {
+  for child in fragment.children.iter() {
     collect_backgrounds_abs(
       child,
       next_offset,
@@ -2163,10 +2163,10 @@ fn collect_text_abs(
     next_offset.y - element_scroll.y,
   );
   if let FragmentContent::Text { text, .. } = &fragment.content {
-    out.push((abs.x(), abs.y(), root_index, text.clone()));
+    out.push((abs.x(), abs.y(), root_index, text.to_string()));
   }
   let child_base = if include_base { None } else { base };
-  for child in &fragment.children {
+  for child in fragment.children.iter() {
     collect_text_abs(
       child,
       next_offset,
@@ -2296,7 +2296,7 @@ fn collect_stacking_contexts<'a>(
   }
 
   let child_base = if include_base { None } else { base };
-  for child in &fragment.children {
+  for child in fragment.children.iter() {
     collect_stacking_contexts(
       child,
       next_offset,
@@ -2413,7 +2413,7 @@ fn find_first_skinny(
   }
 
   let child_base = if include_base { None } else { base };
-  for child in &fragment.children {
+  for child in fragment.children.iter() {
     if let Some(mut path) = find_first_skinny(
       child,
       next_offset,
@@ -2462,7 +2462,7 @@ fn find_fragment_with_text(
   }
 
   let child_base = if include_base { None } else { base };
-  for child in &fragment.children {
+  for child in fragment.children.iter() {
     if find_fragment_with_text(child, next_offset, child_base, false, needle, path) {
       path.insert(0, label);
       return true;

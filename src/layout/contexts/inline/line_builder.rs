@@ -1594,7 +1594,7 @@ fn collect_line_baselines(
     }
     *last = Some(absolute);
   }
-  for child in &fragment.children {
+  for child in fragment.children.iter() {
     collect_line_baselines(child, current_offset, first, last);
   }
 }

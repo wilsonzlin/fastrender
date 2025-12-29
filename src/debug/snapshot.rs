@@ -628,7 +628,7 @@ fn snapshot_fragment_content(content: &FragmentContent) -> FragmentContentSnapsh
       is_marker,
       ..
     } => FragmentContentSnapshot::Text {
-      text: text.clone(),
+      text: text.to_string(),
       box_id: *box_id,
       baseline_offset: *baseline_offset,
       is_marker: *is_marker,

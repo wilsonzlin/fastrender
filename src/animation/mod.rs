@@ -1961,7 +1961,7 @@ fn collect_timelines(
     }
   }
 
-  for child in &node.children {
+  for child in node.children.iter() {
     let child_offset = Point::new(origin.x + child.bounds.x(), origin.y + child.bounds.y());
     collect_timelines(
       child,
@@ -2047,7 +2047,7 @@ fn apply_animations_to_node(
     }
   }
 
-  for child in &mut node.children {
+  for child in node.children_mut() {
     let child_offset = Point::new(origin.x + child.bounds.x(), origin.y + child.bounds.y());
     apply_animations_to_node(
       child,
@@ -2222,11 +2222,11 @@ fn apply_transitions_to_fragment(
 ) {
   let Some(style_arc) = fragment.style.clone() else {
     // Still traverse for running anchors/children.
-    for child in &mut fragment.children {
+    for child in fragment.children_mut() {
       apply_transitions_to_fragment(child, time_ms, viewport, log_enabled);
     }
     if let FragmentContent::RunningAnchor { snapshot, .. } = &mut fragment.content {
-      apply_transitions_to_fragment(snapshot, time_ms, viewport, log_enabled);
+      apply_transitions_to_fragment(Arc::make_mut(snapshot), time_ms, viewport, log_enabled);
     }
     return;
   };
@@ -2272,11 +2272,11 @@ fn apply_transitions_to_fragment(
     }
   }
 
-  for child in &mut fragment.children {
+  for child in fragment.children_mut() {
     apply_transitions_to_fragment(child, time_ms, viewport, log_enabled);
   }
   if let FragmentContent::RunningAnchor { snapshot, .. } = &mut fragment.content {
-    apply_transitions_to_fragment(snapshot, time_ms, viewport, log_enabled);
+    apply_transitions_to_fragment(Arc::make_mut(snapshot), time_ms, viewport, log_enabled);
   }
 }
 

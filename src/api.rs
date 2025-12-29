@@ -2603,7 +2603,7 @@ fn apply_sticky_offsets_with_context(
     scroll_for_self.x + self_scroll.x,
     scroll_for_self.y + self_scroll.y,
   );
-  for child in fragment.children.iter_mut() {
+  for child in fragment.children_mut().iter_mut() {
     apply_sticky_offsets_with_context(
       font_context,
       child,
@@ -3541,7 +3541,7 @@ impl FastRender {
             }
           }
           let child_offset = crate::geometry::Point::new(abs.x(), abs.y());
-          for child in &node.children {
+          for child in node.children.iter() {
             if trace_text(child, child_offset, query, trail) {
               trail.pop();
               return true;
@@ -3856,7 +3856,7 @@ impl FastRender {
           }
         }
         let child_offset = crate::geometry::Point::new(abs.x(), abs.y());
-        for child in &node.children {
+        for child in node.children.iter() {
           if trace_text(child, child_offset, query, trail) {
             trail.pop();
             return true;
@@ -7974,7 +7974,7 @@ fn collect_fragment_sizes(fragment: &FragmentNode, sizes: &mut HashMap<usize, (f
     entry.1 = entry.1.max(fragment.bounds.height());
   }
 
-  for child in &fragment.children {
+  for child in fragment.children.iter() {
     collect_fragment_sizes(child, sizes);
   }
 }
@@ -8260,7 +8260,7 @@ fn refresh_fragment_styles(
     }
   }
 
-  for child in &mut fragment.children {
+  for child in fragment.children_mut() {
     refresh_fragment_styles(child, boxes, styles);
   }
 }

@@ -1362,7 +1362,7 @@ impl GridFormattingContext {
         if let Some(positioned) = positioned_children.get(&node_id) {
           let mut abs_children =
             self.layout_positioned_children_for_node(box_node, bounds, positioned)?;
-          fragment.children.append(&mut abs_children);
+          fragment.children_mut().append(&mut abs_children);
         }
         return Ok(fragment);
       }
@@ -1712,7 +1712,7 @@ impl GridFormattingContext {
             delta
           );
         }
-        if let Some(child) = fragment.children.get_mut(item.idx) {
+        if let Some(child) = fragment.children_mut().get_mut(item.idx) {
           translate_along_axis(child, axis, delta);
         }
       } else if debug_baseline {
@@ -2169,7 +2169,7 @@ fn translate_fragment_tree(fragment: &mut FragmentNode, delta: Point) {
       logical.size,
     ));
   }
-  for child in &mut fragment.children {
+  for child in fragment.children_mut() {
     translate_fragment_tree(child, delta);
   }
 }
@@ -2222,7 +2222,7 @@ fn find_first_baseline_absolute(fragment: &FragmentNode) -> Option<f32> {
     _ => {}
   }
 
-  for child in &fragment.children {
+  for child in fragment.children.iter() {
     if let Some(b) = find_first_baseline_absolute(child) {
       return Some(b);
     }
@@ -2754,7 +2754,7 @@ impl FormattingContext for GridFormattingContext {
             if matches!(node.content, FragmentContent::Text { .. }) {
               *count += 1;
             }
-            for child in &node.children {
+            for child in node.children.iter() {
               walk(child, count);
             }
           }
@@ -3009,7 +3009,7 @@ impl FormattingContext for GridFormattingContext {
         }
         child_fragment.bounds = crate::geometry::Rect::new(result.position, result.size);
         child_fragment.style = Some(child.style.clone());
-        fragment.children.push(child_fragment);
+        fragment.children_mut().push(child_fragment);
       }
     }
     layout_cache_store(

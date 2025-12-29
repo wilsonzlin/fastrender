@@ -293,7 +293,7 @@ fn fragment_box_id(fragment: &FragmentNode) -> Option<usize> {
 
 fn annotate_overflow(node: &mut FragmentNode) -> Rect {
   let mut overflow = Rect::from_xywh(0.0, 0.0, node.bounds.width(), node.bounds.height());
-  for child in &mut node.children {
+  for child in node.children_mut() {
     let child_overflow = annotate_overflow(child);
     let translated = child_overflow.translate(Point::new(child.bounds.x(), child.bounds.y()));
     overflow = overflow.union(translated);
@@ -594,7 +594,7 @@ fn collect_scroll_metadata(
     }
   }
 
-  for child in &mut node.children {
+  for child in node.children_mut() {
     let child_origin = Point::new(origin.x + child.bounds.x(), origin.y + child.bounds.y());
     collect_scroll_metadata(child, child_origin, stack, metadata, root_viewport);
   }
@@ -799,12 +799,12 @@ fn apply_element_scroll_offsets(node: &mut FragmentNode, scroll: &ScrollState) {
     .unwrap_or(Point::ZERO);
   if offset != Point::ZERO {
     let delta = Point::new(-offset.x, -offset.y);
-    for child in node.children.iter_mut() {
+    for child in node.children_mut() {
       *child = child.translate_subtree_absolute(delta);
     }
   }
 
-  for child in node.children.iter_mut() {
+  for child in node.children_mut() {
     apply_element_scroll_offsets(child, scroll);
   }
 }
@@ -873,7 +873,7 @@ fn collect_bounds(node: &FragmentNode, origin: Point, bounds: &mut Bounds) {
   );
   bounds.update(abs_rect);
 
-  for child in &node.children {
+  for child in node.children.iter() {
     let child_origin = Point::new(
       abs_rect.x() + child.bounds.x(),
       abs_rect.y() + child.bounds.y(),
@@ -1347,7 +1347,7 @@ pub(crate) fn collect_snap_targets(
   }
 
   let child_offset = Point::new(abs_bounds.x(), abs_bounds.y());
-  for child in &node.children {
+  for child in node.children.iter() {
     collect_snap_targets(
       child,
       child_offset,
@@ -1374,7 +1374,7 @@ pub(crate) fn find_snap_container<'a>(
     }
   }
 
-  for child in &node.children {
+  for child in node.children.iter() {
     let child_origin = Point::new(origin.x + child.bounds.x(), origin.y + child.bounds.y());
     if let Some(found) = find_snap_container(child, child_origin) {
       return Some(found);

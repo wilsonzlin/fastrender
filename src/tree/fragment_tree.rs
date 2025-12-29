@@ -80,7 +80,7 @@ pub enum FragmentContent {
   /// Actual text that has been shaped (font, positions, etc.).
   Text {
     /// The text content
-    text: String,
+    text: Arc<str>,
 
     /// Index or ID of source BoxNode (TextBox)
     box_id: Option<usize>,
@@ -94,7 +94,7 @@ pub enum FragmentContent {
     /// Carrying shaped runs from layout allows painting to reuse the exact
     /// glyph positions and fonts chosen during layout instead of reshaping
     /// with potentially different fallback results.
-    shaped: Option<Vec<ShapedRun>>,
+    shaped: Option<Arc<[ShapedRun]>>,
 
     /// True when this fragment represents a list marker (::marker)
     is_marker: bool,
@@ -125,9 +125,9 @@ pub enum FragmentContent {
   /// Captures the rendered subtree of the running element without affecting in-flow layout.
   RunningAnchor {
     /// Name provided to `position: running(<name>)`.
-    name: String,
+    name: Arc<str>,
     /// Snapshot of the laid-out running element subtree.
-    snapshot: Box<FragmentNode>,
+    snapshot: Arc<FragmentNode>,
   },
 }
 
@@ -291,10 +291,15 @@ pub struct FragmentNode {
 
   /// Child fragments
   ///
+  /// Children are stored in an `Arc<Vec<...>>` to allow fragment clones to share
+  /// the same subtree cheaply while still permitting copy-on-write mutation via
+  /// [`Arc::make_mut`]. A `Vec` (not slice) backing preserves ergonomic random
+  /// access and mutation when a unique reference is required.
+  ///
   /// For block fragments: block and line children
   /// For line fragments: inline and text children
   /// For inline/text/replaced: typically empty
-  pub children: Vec<FragmentNode>,
+  pub children: Arc<Vec<FragmentNode>>,
 
   /// Computed style for painting
   ///
@@ -381,7 +386,7 @@ impl FragmentNode {
       logical_override: None,
       content,
       baseline: None,
-      children,
+      children: Arc::new(children),
       style: None,
       starting_style: None,
       fragment_index: 0,
@@ -409,7 +414,7 @@ impl FragmentNode {
       logical_override: None,
       content,
       baseline: None,
-      children,
+      children: Arc::new(children),
       style: Some(style),
       starting_style: None,
       fragment_index: 0,
@@ -534,7 +539,7 @@ impl FragmentNode {
     Self::new(
       bounds,
       FragmentContent::Text {
-        text,
+        text: Arc::from(text),
         box_id: None,
         baseline_offset,
         shaped: None,
@@ -554,7 +559,7 @@ impl FragmentNode {
     Self::new_with_style(
       bounds,
       FragmentContent::Text {
-        text,
+        text: Arc::from(text),
         box_id: None,
         baseline_offset,
         shaped: None,
@@ -576,10 +581,10 @@ impl FragmentNode {
     Self::new_with_style(
       bounds,
       FragmentContent::Text {
-        text,
+        text: Arc::from(text),
         box_id: None,
         baseline_offset,
-        shaped: Some(shaped),
+        shaped: Some(Arc::from(shaped)),
         is_marker: false,
       },
       vec![],
@@ -609,8 +614,8 @@ impl FragmentNode {
     Self::new(
       bounds,
       FragmentContent::RunningAnchor {
-        name,
-        snapshot: Box::new(snapshot),
+        name: Arc::from(name),
+        snapshot: Arc::new(snapshot),
       },
       vec![],
     )
@@ -663,7 +668,7 @@ impl FragmentNode {
   /// ```
   pub fn bounding_box(&self) -> Rect {
     let mut bbox = Rect::from_xywh(0.0, 0.0, self.bounds.width(), self.bounds.height());
-    for child in &self.children {
+    for child in self.children.iter() {
       bbox = bbox.union(child.bounding_box());
     }
     bbox.translate(self.bounds.origin)
@@ -679,7 +684,7 @@ impl FragmentNode {
   /// Computes a bounding box using logical bounds for this fragment and descendants.
   pub fn logical_bounding_box(&self) -> Rect {
     let mut bbox = self.logical_bounds();
-    for child in &self.children {
+    for child in self.children.iter() {
       let child_bbox = child.logical_bounding_box();
       bbox = bbox.union(child_bbox.translate(Point::new(
         self.logical_bounds().x(),
@@ -731,7 +736,7 @@ impl FragmentNode {
     }
     self.starting_style = None;
     if let FragmentContent::RunningAnchor { snapshot, .. } = &mut self.content {
-      snapshot.translate_root_in_place(offset);
+      Arc::make_mut(snapshot).translate_root_in_place(offset);
     }
   }
 
@@ -744,7 +749,7 @@ impl FragmentNode {
     let content = match &self.content {
       FragmentContent::RunningAnchor { name, snapshot } => FragmentContent::RunningAnchor {
         name: name.clone(),
-        snapshot: Box::new(snapshot.translate_subtree_absolute(offset)),
+        snapshot: Arc::new(snapshot.translate_subtree_absolute(offset)),
       },
       other => other.clone(),
     };
@@ -754,11 +759,13 @@ impl FragmentNode {
       logical_override: self.logical_override.map(|r| r.translate(offset)),
       content,
       baseline: self.baseline,
-      children: self
-        .children
-        .iter()
-        .map(|child| child.translate_subtree_absolute(offset))
-        .collect(),
+      children: Arc::new(
+        self
+          .children
+          .iter()
+          .map(|child| child.translate_subtree_absolute(offset))
+          .collect(),
+      ),
       style: self.style.clone(),
       starting_style: None,
       fragment_index: self.fragment_index,
@@ -872,12 +879,12 @@ impl FragmentNode {
 
   /// Returns a slice of direct children.
   pub fn children_ref(&self) -> &[FragmentNode] {
-    &self.children
+    self.children.as_ref()
   }
 
   /// Returns mutable access to this fragment's children.
   pub fn children_mut(&mut self) -> &mut Vec<FragmentNode> {
-    &mut self.children
+    Arc::make_mut(&mut self.children)
   }
 
   /// Creates a shallow clone of this fragment without cloning children.
@@ -892,7 +899,45 @@ impl FragmentNode {
       logical_override: self.logical_override,
       content: self.content.clone(),
       baseline: self.baseline,
-      children: Vec::new(),
+      children: Arc::new(Vec::new()),
+      style: self.style.clone(),
+      starting_style: self.starting_style.clone(),
+      fragment_index: self.fragment_index,
+      fragment_count: self.fragment_count,
+      fragmentainer_index: self.fragmentainer_index,
+      fragmentainer: self.fragmentainer,
+      slice_info: self.slice_info,
+      scroll_overflow: self.scroll_overflow,
+      fragmentation: self.fragmentation.clone(),
+    }
+  }
+
+  /// Replaces the current children vector.
+  pub fn set_children(&mut self, children: Vec<FragmentNode>) {
+    self.children = Arc::new(children);
+  }
+
+  /// Recursively clones this fragment and its descendants, ensuring unique child storage.
+  ///
+  /// [`Clone`] on [`FragmentNode`] is intentionally shallow for fast copies during layout and
+  /// painting. Use this when a caller needs to mutate the cloned tree without affecting other
+  /// sharers.
+  pub fn deep_clone(&self) -> Self {
+    let content = match &self.content {
+      FragmentContent::RunningAnchor { name, snapshot } => FragmentContent::RunningAnchor {
+        name: name.clone(),
+        snapshot: Arc::new(snapshot.deep_clone()),
+      },
+      other => other.clone(),
+    };
+
+    Self {
+      bounds: self.bounds,
+      block_metadata: self.block_metadata.clone(),
+      logical_override: self.logical_override,
+      content,
+      baseline: self.baseline,
+      children: Arc::new(self.children.iter().map(FragmentNode::deep_clone).collect()),
       style: self.style.clone(),
       starting_style: self.starting_style.clone(),
       fragment_index: self.fragment_index,
@@ -1115,9 +1160,9 @@ impl FragmentTree {
         }
       }
       if let FragmentContent::RunningAnchor { snapshot, .. } = &mut fragment.content {
-        apply(snapshot, map);
+        apply(Arc::make_mut(snapshot), map);
       }
-      for child in &mut fragment.children {
+      for child in fragment.children_mut() {
         apply(child, map);
       }
     }
@@ -1139,6 +1184,7 @@ impl fmt::Display for FragmentTree {
 mod tests {
   use super::*;
   use crate::layout::fragmentation::{fragment_tree as split_fragment_tree, FragmentationOptions};
+  use std::sync::Arc;
 
   // Constructor tests
   #[test]
@@ -1463,6 +1509,29 @@ mod tests {
     let tree = FragmentTree::new(root);
 
     assert_eq!(tree.fragment_count(), 3);
+  }
+
+  #[test]
+  fn test_fragment_node_shallow_clone_shares_children() {
+    let child = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), vec![]);
+    let parent = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), vec![child]);
+
+    let clone = parent.clone();
+    assert_eq!(Arc::strong_count(&parent.children), 2);
+    assert_eq!(clone.children.len(), 1);
+  }
+
+  #[test]
+  fn test_deep_clone_detaches_children() {
+    let child = FragmentNode::new_block(Rect::from_xywh(1.0, 2.0, 3.0, 4.0), vec![]);
+    let parent = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), vec![child]);
+
+    let mut clone = parent.deep_clone();
+    assert_eq!(Arc::strong_count(&parent.children), 1);
+    assert_eq!(Arc::strong_count(&clone.children), 1);
+
+    clone.children_mut()[0].bounds = clone.children[0].bounds.translate(Point::new(5.0, 0.0));
+    assert_ne!(clone.children[0].bounds.x(), parent.children[0].bounds.x());
   }
 
   // Edge case tests

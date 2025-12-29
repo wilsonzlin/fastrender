@@ -149,7 +149,7 @@ fn collect_string_set_events_inner(
     }
   }
 
-  for child in &node.children {
+  for child in node.children.iter() {
     collect_string_set_events_inner(
       child,
       start,
@@ -199,7 +199,7 @@ fn collect_text(node: &FragmentNode, out: &mut String) {
   if let FragmentContent::Text { text, .. } = &node.content {
     out.push_str(text);
   }
-  for child in &node.children {
+  for child in node.children.iter() {
     collect_text(child, out);
   }
 }

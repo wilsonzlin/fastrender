@@ -153,7 +153,7 @@ fn collect_running_element_occurrences(
       clean_running_snapshot(&mut cleaned);
       out.push(RunningElementEvent {
         abs_block: node_abs_block,
-        name: name.clone(),
+        name: name.to_string(),
         snapshot: cleaned,
       });
     }
@@ -175,7 +175,7 @@ fn collect_running_element_occurrences(
     _ => {}
   }
 
-  for child in &node.children {
+  for child in node.children.iter() {
     collect_running_element_occurrences(
       child,
       abs_origin,
@@ -197,14 +197,14 @@ fn clean_running_snapshot(node: &mut FragmentNode) {
 
 fn strip_running_anchor_fragments(node: &mut FragmentNode) {
   let mut kept: Vec<FragmentNode> = Vec::with_capacity(node.children.len());
-  for mut child in node.children.drain(..) {
+  for mut child in node.children_mut().drain(..) {
     if matches!(child.content, FragmentContent::RunningAnchor { .. }) {
       continue;
     }
     strip_running_anchor_fragments(&mut child);
     kept.push(child);
   }
-  node.children = kept;
+  node.set_children(kept);
 }
 
 fn clear_running_position(node: &mut FragmentNode) {
@@ -215,7 +215,7 @@ fn clear_running_position(node: &mut FragmentNode) {
       node.style = Some(Arc::new(owned));
     }
   }
-  for child in &mut node.children {
+  for child in node.children_mut() {
     clear_running_position(child);
   }
 }
@@ -235,7 +235,7 @@ fn translate_fragment(node: &mut FragmentNode, dx: f32, dy: f32) {
       logical.height(),
     ));
   }
-  for child in &mut node.children {
+  for child in node.children_mut() {
     translate_fragment(child, dx, dy);
   }
 }

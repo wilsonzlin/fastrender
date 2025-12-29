@@ -612,7 +612,7 @@ impl DisplayListBuilder {
         absolute_rect.origin.x - element_scroll.x,
         absolute_rect.origin.y - element_scroll.y,
       );
-      for child in &fragment.children {
+      for child in fragment.children.iter() {
         self.build_fragment_internal(child, child_offset, true, false);
       }
     }
@@ -699,7 +699,7 @@ impl DisplayListBuilder {
       absolute_rect.origin.x - element_scroll.x,
       absolute_rect.origin.y - element_scroll.y,
     );
-    for child in &fragment.children {
+    for child in fragment.children.iter() {
       self.build_fragment_with_clips(child, child_offset, clips);
     }
 
@@ -2311,7 +2311,7 @@ impl DisplayListBuilder {
 
         let mut shaped_storage: Option<Vec<ShapedRun>> = None;
         let runs_ref: Option<&[ShapedRun]> = if let Some(runs) = shaped {
-          Some(runs.as_slice())
+          Some(runs.as_ref())
         } else if let Some(style) = style_opt {
           if let Ok(mut runs) = self.shaper.shape(text, style, &self.font_ctx) {
             InlineTextItem::apply_spacing_to_runs(
