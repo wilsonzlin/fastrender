@@ -226,15 +226,11 @@ impl FormattingContextFactory {
     self.parallelism
   }
 
-  pub(crate) fn flex_measure_cache(
-    &self,
-  ) -> std::sync::Arc<ShardedFlexCache> {
+  pub(crate) fn flex_measure_cache(&self) -> std::sync::Arc<ShardedFlexCache> {
     self.flex_measure_cache.clone()
   }
 
-  pub(crate) fn flex_layout_cache(
-    &self,
-  ) -> std::sync::Arc<ShardedFlexCache> {
+  pub(crate) fn flex_layout_cache(&self) -> std::sync::Arc<ShardedFlexCache> {
     self.flex_layout_cache.clone()
   }
 

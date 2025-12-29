@@ -12,6 +12,7 @@ use fastrender::html::meta_refresh::extract_meta_refresh_url;
 use fastrender::pageset::{cache_html_path, pageset_stem, CACHE_HTML_DIR, PAGESET_URLS};
 use fastrender::resource::FetchedResource;
 use fastrender::resource::HttpFetcher;
+use fastrender::resource::ResourceFetcher;
 use fastrender::resource::DEFAULT_ACCEPT_LANGUAGE;
 use fastrender::resource::DEFAULT_USER_AGENT;
 use rayon::ThreadPoolBuilder;
