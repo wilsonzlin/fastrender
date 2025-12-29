@@ -1044,7 +1044,7 @@ impl DomNode {
       *quirks_mode
     } else {
       debug_assert!(
-        false,
+        matches!(self.node_type, DomNodeType::Document { .. }),
         "document_quirks_mode called on non-document node; defaulting to NoQuirks"
       );
       QuirksMode::NoQuirks
