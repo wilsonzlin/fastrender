@@ -1046,6 +1046,19 @@ fn strip_borders(style: &ComputedStyle) -> Arc<ComputedStyle> {
   Arc::new(clone)
 }
 
+fn strip_borders_cached(
+  style: &Arc<ComputedStyle>,
+  cache: &mut HashMap<usize, Arc<ComputedStyle>>,
+) -> Arc<ComputedStyle> {
+  let key = Arc::as_ptr(style) as usize;
+  if let Some(cached) = cache.get(&key) {
+    return cached.clone();
+  }
+  let stripped = strip_borders(style);
+  cache.insert(key, stripped.clone());
+  stripped
+}
+
 impl TableStructure {
   /// Creates a new empty table structure
   pub fn new() -> Self {
@@ -5031,6 +5044,8 @@ impl FormattingContext for TableFormattingContext {
         }
       };
 
+    let mut stripped_border_cache: HashMap<usize, Arc<ComputedStyle>> = HashMap::new();
+
     // Column group and column backgrounds precede row backgrounds/cells.
     let mut column_styles: Vec<Option<Arc<ComputedStyle>>> = vec![None; structure.column_count];
     let mut column_groups: Vec<(usize, usize, Arc<ComputedStyle>)> = Vec::new();
@@ -5077,15 +5092,20 @@ impl FormattingContext for TableFormattingContext {
       }
     }
 
-    let push_column_span_fragment =
-      |fragments: &mut Vec<FragmentNode>, style: Arc<ComputedStyle>, start: usize, end: usize| {
+    let mut push_column_span_fragment = |
+      fragments: &mut Vec<FragmentNode>,
+      cache: &mut HashMap<usize, Arc<ComputedStyle>>,
+      style: Arc<ComputedStyle>,
+      start: usize,
+      end: usize,
+    | {
         if start >= end || start >= col_offsets.len() {
           return;
         }
         if !style_paints_background_or_border(&style, false) {
           return;
         }
-        let style = strip_borders(&style);
+        let style = strip_borders_cached(&style, cache);
         let mut x = if structure.border_collapse == BorderCollapse::Collapse {
           col_offsets.get(start).copied().unwrap_or(0.0)
             - vertical_line_max.get(start).copied().unwrap_or(0.0)
@@ -5125,11 +5145,11 @@ impl FormattingContext for TableFormattingContext {
       };
 
     for (start, end, style) in column_groups {
-      push_column_span_fragment(&mut fragments, style, start, end);
+      push_column_span_fragment(&mut fragments, &mut stripped_border_cache, style, start, end);
     }
     for (idx, style) in column_styles.into_iter().enumerate() {
       if let Some(style) = style {
-        push_column_span_fragment(&mut fragments, style, idx, idx + 1);
+        push_column_span_fragment(&mut fragments, &mut stripped_border_cache, style, idx, idx + 1);
       }
     }
 
@@ -5174,7 +5194,7 @@ impl FormattingContext for TableFormattingContext {
     }
 
     for (start, end, style) in row_groups {
-      let style = strip_borders(&style);
+      let style = strip_borders_cached(&style, &mut stripped_border_cache);
       if start >= row_offsets.len() {
         break;
       }
@@ -5203,7 +5223,7 @@ impl FormattingContext for TableFormattingContext {
     // Rows
     for (idx, style) in row_styles.into_iter().enumerate() {
       if let Some(style) = style {
-        let style = strip_borders(&style);
+        let style = strip_borders_cached(&style, &mut stripped_border_cache);
         let top = row_offsets.get(idx).copied().unwrap_or(0.0);
         let height = row_metrics.get(idx).map(|r| r.height).unwrap_or(0.0);
         let rect = Rect::from_xywh(content_origin_x, top, content_width, height);
@@ -8289,6 +8309,73 @@ mod tests {
     assert_eq!(row_color, Rgba::from_rgba8(200, 0, 0, 255));
     let cell_frag = find_cell_fragment(&fragment).expect("cell fragment");
     assert!(row_frag.bounds.y() <= cell_frag.bounds.y());
+  }
+
+  #[test]
+  fn row_backgrounds_reuse_stripped_styles() {
+    let mut table_style = ComputedStyle::default();
+    table_style.display = Display::Table;
+    table_style.border_spacing_horizontal = Length::px(0.0);
+    table_style.border_spacing_vertical = Length::px(0.0);
+
+    let row_color = Rgba::from_rgba8(10, 20, 30, 255);
+    let mut row_style = ComputedStyle::default();
+    row_style.display = Display::TableRow;
+    row_style.background_color = row_color;
+    let shared_row_style = Arc::new(row_style);
+
+    let mut cell_style = ComputedStyle::default();
+    cell_style.display = Display::TableCell;
+    let cell_style = Arc::new(cell_style);
+
+    let mut rows = Vec::new();
+    for _ in 0..3 {
+      let cell = BoxNode::new_block(cell_style.clone(), FormattingContextType::Block, vec![]);
+      rows.push(BoxNode::new_block(
+        shared_row_style.clone(),
+        FormattingContextType::Block,
+        vec![cell],
+      ));
+    }
+
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      rows,
+    );
+
+    let fc = TableFormattingContext::with_factory(FormattingContextFactory::new());
+    let fragment = fc
+      .layout(
+        &table,
+        &LayoutConstraints::new(
+          AvailableSpace::Definite(200.0),
+          AvailableSpace::Indefinite,
+        ),
+      )
+      .expect("layout");
+
+    let row_background_styles: Vec<Arc<ComputedStyle>> = fragment
+      .children
+      .iter()
+      .filter_map(|child| {
+        child.style.as_ref().and_then(|style| {
+          if matches!(style.display, Display::TableRow) && style.background_color == row_color {
+            Some(style.clone())
+          } else {
+            None
+          }
+        })
+      })
+      .collect();
+
+    assert_eq!(row_background_styles.len(), 3);
+    assert!(
+      row_background_styles
+        .windows(2)
+        .all(|pair| Arc::ptr_eq(&pair[0], &pair[1])),
+      "row background styles should reuse stripped clones when input styles share the same Arc"
+    );
   }
 
   #[test]
