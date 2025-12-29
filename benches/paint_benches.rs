@@ -22,12 +22,14 @@ use criterion::Criterion;
 use fastrender::build_stacking_tree;
 use fastrender::geometry::Point;
 use fastrender::geometry::Rect;
-use fastrender::paint::blur::apply_gaussian_blur;
 use fastrender::paint::display_list::BorderRadius;
 use fastrender::paint::display_list::ClipShape;
 use fastrender::paint::display_list_builder::DisplayListBuilder;
 use fastrender::paint::display_list_renderer::DisplayListRenderer;
 use fastrender::paint::display_list_renderer::PaintParallelism;
+use fastrender::paint::gradient::{
+  gradient_bucket, gradient_period, rasterize_conic_gradient, GradientLutCache,
+};
 use fastrender::style::color::Rgba;
 use fastrender::text::font_loader::FontContext;
 use fastrender::text::pipeline::GlyphPosition;
@@ -47,6 +49,7 @@ use fastrender::StrokeRectItem;
 use fastrender::TextRasterizer;
 use tiny_skia::Pixmap;
 use tiny_skia::PremultipliedColorU8;
+use tiny_skia::SpreadMode;
 
 // ============================================================================
 // Helper Functions
@@ -804,6 +807,133 @@ fn bench_filter_blur(c: &mut Criterion) {
   group.finish();
 }
 
+fn naive_conic_gradient(
+  width: u32,
+  height: u32,
+  center: Point,
+  start_angle: f32,
+  stops: &[(f32, Rgba)],
+  spread: SpreadMode,
+  period: f32,
+) -> Pixmap {
+  let mut pixmap = Pixmap::new(width, height).expect("pixmap");
+  let stride = width as usize;
+  let pixels = pixmap.pixels_mut();
+  let inv_two_pi = 0.5 / std::f32::consts::PI;
+  for y in 0..height as usize {
+    let dy = y as f32 + 0.5 - center.y;
+    for x in 0..width as usize {
+      let dx = x as f32 + 0.5 - center.x;
+      let mut pos = (dx.atan2(-dy) + start_angle) * inv_two_pi;
+      pos = pos.rem_euclid(1.0) * period;
+      match spread {
+        SpreadMode::Repeat => {
+          if period > 0.0 {
+            pos = pos.rem_euclid(period);
+          }
+        }
+        SpreadMode::Reflect => {
+          let two_p = period * 2.0;
+          let mut v = pos.rem_euclid(two_p);
+          if v > period {
+            v = two_p - v;
+          }
+          pos = v;
+        }
+        SpreadMode::Pad => {
+          pos = pos.clamp(0.0, period);
+        }
+      }
+      let color = sample_stop_color(stops, pos);
+      pixels[y * stride + x] = PremultipliedColorU8::from_rgba(
+        color.r,
+        color.g,
+        color.b,
+        (color.a * 255.0).round().clamp(0.0, 255.0) as u8,
+      )
+      .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+    }
+  }
+  pixmap
+}
+
+fn sample_stop_color(stops: &[(f32, Rgba)], pos: f32) -> Rgba {
+  if stops.is_empty() {
+    return Rgba::TRANSPARENT;
+  }
+  if pos <= stops[0].0 {
+    return stops[0].1;
+  }
+  for window in stops.windows(2) {
+    let (p0, c0) = window[0];
+    let (p1, c1) = window[1];
+    if pos <= p1 {
+      let span = (p1 - p0).max(1e-6);
+      let frac = ((pos - p0) / span).clamp(0.0, 1.0);
+      return Rgba {
+        r: (c0.r as f32 + (c1.r as f32 - c0.r as f32) * frac)
+          .round()
+          .clamp(0.0, 255.0) as u8,
+        g: (c0.g as f32 + (c1.g as f32 - c0.g as f32) * frac)
+          .round()
+          .clamp(0.0, 255.0) as u8,
+        b: (c0.b as f32 + (c1.b as f32 - c0.b as f32) * frac)
+          .round()
+          .clamp(0.0, 255.0) as u8,
+        a: c0.a + (c1.a - c0.a) * frac,
+      };
+    }
+  }
+  stops.last().map(|(_, c)| *c).unwrap_or(Rgba::TRANSPARENT)
+}
+
+fn bench_conic_gradient(c: &mut Criterion) {
+  let width = 256;
+  let height = 256;
+  let center = Point::new(width as f32 / 2.0, height as f32 / 2.0);
+  let stops = vec![
+    (0.0, Rgba::new(255, 0, 0, 1.0)),
+    (0.45, Rgba::new(0, 255, 0, 1.0)),
+    (1.0, Rgba::new(0, 0, 255, 1.0)),
+  ];
+  let cache = GradientLutCache::default();
+  let bucket = gradient_bucket(width.max(height).saturating_mul(2));
+  let period = gradient_period(&stops);
+
+  let mut group = c.benchmark_group("conic_gradient_fill");
+  group.bench_function("cached_lut", |b| {
+    b.iter(|| {
+      black_box(
+        rasterize_conic_gradient(
+          width,
+          height,
+          center,
+          0.25,
+          SpreadMode::Repeat,
+          &stops,
+          &cache,
+          bucket,
+        )
+        .expect("pixmap"),
+      )
+    });
+  });
+  group.bench_function("naive", |b| {
+    b.iter(|| {
+      black_box(naive_conic_gradient(
+        width,
+        height,
+        center,
+        0.25,
+        &stops,
+        SpreadMode::Repeat,
+        period,
+      ))
+    });
+  });
+  group.finish();
+}
+
 // ============================================================================
 // Criterion Groups and Main
 // ============================================================================
@@ -821,6 +951,7 @@ criterion_group!(
   bench_parallel_display_list_raster,
   bench_text_rasterizer_cache,
   bench_filter_blur,
+  bench_conic_gradient,
 );
 
 criterion_main!(benches);

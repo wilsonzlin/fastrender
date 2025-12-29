@@ -194,7 +194,13 @@ pub fn render_colr_glyph(
     let mut paint = brush_to_paint(&command.brush, min_x, min_y)?;
     paint.blend_mode = command.blend_mode;
     paint.anti_alias = true;
-    pixmap.fill_path(&command.path, &paint, FillRule::Winding, translate, clip_ref);
+    pixmap.fill_path(
+      &command.path,
+      &paint,
+      FillRule::Winding,
+      translate,
+      clip_ref,
+    );
   }
 
   Some(ColorGlyphRaster {
@@ -790,8 +796,7 @@ impl<'a, 'p> Renderer<'a, 'p> {
       }
       Paint::SweepGradient(sweep) => {
         let color_line = sweep.color_line().ok()?;
-        let (spread, stops) =
-          resolve_color_line_rgba(color_line, self.palette, self.text_color)?;
+        let (spread, stops) = resolve_color_line_rgba(color_line, self.palette, self.text_color)?;
         Some(Brush::SweepGradient {
           center: Point::from_xy(
             sweep.center_x().to_i16() as f32,
@@ -1132,9 +1137,8 @@ fn render_sweep_gradient(
       let pm_r = ((color.r as f32) * alpha).round().clamp(0.0, 255.0) as u8;
       let pm_g = ((color.g as f32) * alpha).round().clamp(0.0, 255.0) as u8;
       let pm_b = ((color.b as f32) * alpha).round().clamp(0.0, 255.0) as u8;
-      layer_data[idx] =
-        PremultipliedColorU8::from_rgba(pm_r, pm_g, pm_b, pm_a)
-          .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+      layer_data[idx] = PremultipliedColorU8::from_rgba(pm_r, pm_g, pm_b, pm_a)
+        .unwrap_or(PremultipliedColorU8::TRANSPARENT);
     }
   }
 
@@ -1143,14 +1147,7 @@ fn render_sweep_gradient(
     blend_mode: command.blend_mode,
     ..Default::default()
   };
-  target.draw_pixmap(
-    0,
-    0,
-    layer.as_ref(),
-    &paint,
-    Transform::identity(),
-    None,
-  );
+  target.draw_pixmap(0, 0, layer.as_ref(), &paint, Transform::identity(), None);
 
   Some(())
 }
@@ -1346,7 +1343,10 @@ fn sample_color_stops(stops: &[ColorStop], position: f32) -> Rgba {
       };
     }
   }
-  stops.last().map(|stop| stop.color).unwrap_or(Rgba::TRANSPARENT)
+  stops
+    .last()
+    .map(|stop| stop.color)
+    .unwrap_or(Rgba::TRANSPARENT)
 }
 
 fn lerp_channel(start: u8, end: u8, t: f32) -> u8 {

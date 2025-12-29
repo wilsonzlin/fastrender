@@ -55,8 +55,13 @@ use crate::paint::display_list::Transform3D;
 use crate::paint::display_list::TransformItem;
 use crate::paint::filter_outset::filter_outset;
 use crate::paint::filter_outset::filter_outset_with_bounds;
+use crate::paint::gradient::{
+  gradient_bucket, rasterize_conic_gradient, rasterize_linear_gradient, GradientLutCache,
+  GradientStats,
+};
 use crate::paint::homography::Homography;
 use crate::paint::optimize::DisplayListOptimizer;
+use crate::paint::painter::paint_diagnostics_enabled;
 use crate::paint::projective_warp::{warp_pixmap_cached, WarpCache, WarpedPixmap};
 use crate::paint::rasterize::fill_rounded_rect;
 use crate::paint::rasterize::render_box_shadow;
@@ -107,7 +112,6 @@ use std::time::Instant;
 use tiny_skia::BlendMode as SkiaBlendMode;
 use tiny_skia::GradientStop as SkiaGradientStop;
 use tiny_skia::IntSize;
-use tiny_skia::LinearGradient;
 use tiny_skia::Mask;
 use tiny_skia::MaskType;
 use tiny_skia::PathBuilder;
@@ -1345,6 +1349,8 @@ pub struct RenderReport {
   pub duration: Duration,
   /// Optional reason parallel rendering was disabled.
   pub fallback_reason: Option<String>,
+  /// Gradient rasterization statistics collected during the render.
+  pub gradient_stats: GradientStats,
 }
 
 #[derive(Clone, Copy)]
@@ -1401,6 +1407,9 @@ pub struct DisplayListRenderer {
   image_cache_misses: Arc<AtomicUsize>,
   warp_cache: WarpCache,
   blur_cache: BlurCache,
+  gradient_cache: GradientLutCache,
+  gradient_stats: GradientStats,
+  diagnostics_enabled: bool,
 }
 
 #[derive(Debug)]
@@ -1985,49 +1994,70 @@ impl DisplayListRenderer {
       image_cache_misses: Arc::new(AtomicUsize::new(0)),
       warp_cache: WarpCache::new(WARP_CACHE_CAPACITY),
       blur_cache: BlurCache::default(),
+      gradient_cache: GradientLutCache::default(),
+      gradient_stats: GradientStats::default(),
+      diagnostics_enabled: paint_diagnostics_enabled(),
     })
   }
 
+  #[inline]
+  fn record_gradient_usage(&mut self, pixels: u64, start: Instant) {
+    if self.diagnostics_enabled {
+      self.gradient_stats.record(pixels, start.elapsed());
+    }
+  }
+
   fn render_linear_gradient(&mut self, item: &LinearGradientItem) {
-    let Some(stops) = self.convert_stops(&item.stops) else {
+    let Some(stops) = self.convert_stops_rgba(&item.stops) else {
       return;
     };
     let rect = self.ds_rect(item.rect);
-    let start = SkiaPoint::from_xy(
-      rect.x() + self.ds_len(item.start.x),
-      rect.y() + self.ds_len(item.start.y),
-    );
-    let end = SkiaPoint::from_xy(
-      rect.x() + self.ds_len(item.end.x),
-      rect.y() + self.ds_len(item.end.y),
-    );
+    let width = rect.width().ceil() as u32;
+    let height = rect.height().ceil() as u32;
+    if width == 0 || height == 0 {
+      return;
+    }
+
+    let start = Point::new(self.ds_len(item.start.x), self.ds_len(item.start.y));
+    let end = Point::new(self.ds_len(item.end.x), self.ds_len(item.end.y));
     let spread = match item.spread {
       crate::paint::display_list::GradientSpread::Pad => SpreadMode::Pad,
       crate::paint::display_list::GradientSpread::Repeat => SpreadMode::Repeat,
       crate::paint::display_list::GradientSpread::Reflect => SpreadMode::Reflect,
     };
-    let Some(shader) = LinearGradient::new(start, end, stops, spread, Transform::identity()) else {
+    let timer = self.diagnostics_enabled.then(Instant::now);
+    let Some(pixmap) = rasterize_linear_gradient(
+      width,
+      height,
+      start,
+      end,
+      spread,
+      &stops,
+      &self.gradient_cache,
+      gradient_bucket(width.max(height)),
+    ) else {
       return;
     };
+    if let Some(start) = timer {
+      self.record_gradient_usage((width * height) as u64, start);
+    }
 
-    let Some(skia_rect) =
-      tiny_skia::Rect::from_xywh(rect.x(), rect.y(), rect.width(), rect.height())
-    else {
-      return;
+    let paint = tiny_skia::PixmapPaint {
+      opacity: 1.0,
+      blend_mode: self.canvas.blend_mode(),
+      ..Default::default()
     };
-
-    let path = tiny_skia::PathBuilder::from_rect(skia_rect);
-
-    let mut paint = tiny_skia::Paint::default();
-    paint.shader = shader;
-    paint.anti_alias = true;
-    paint.blend_mode = self.canvas.blend_mode();
-    let transform = self.canvas.transform();
+    let dest_x = rect.x().floor() as i32;
+    let dest_y = rect.y().floor() as i32;
+    let frac_x = rect.x() - dest_x as f32;
+    let frac_y = rect.y() - dest_y as f32;
+    let transform = Transform::from_translate(frac_x, frac_y).post_concat(self.canvas.transform());
     let clip = self.canvas.clip_mask().cloned();
-    self.canvas.pixmap_mut().fill_path(
-      &path,
+    self.canvas.pixmap_mut().draw_pixmap(
+      dest_x,
+      dest_y,
+      pixmap.as_ref(),
       &paint,
-      tiny_skia::FillRule::Winding,
       transform,
       clip.as_ref(),
     );
@@ -2072,6 +2102,7 @@ impl DisplayListRenderer {
     paint.shader = shader;
     paint.anti_alias = true;
     paint.blend_mode = self.canvas.blend_mode();
+    let timer = self.diagnostics_enabled.then(Instant::now);
     let transform = self.canvas.transform();
     let clip = self.canvas.clip_mask().cloned();
     self.canvas.pixmap_mut().fill_path(
@@ -2081,6 +2112,11 @@ impl DisplayListRenderer {
       transform,
       clip.as_ref(),
     );
+    if let Some(start) = timer {
+      let pixels =
+        (rect.width().ceil().max(0.0) as u64).saturating_mul(rect.height().ceil().max(0.0) as u64);
+      self.record_gradient_usage(pixels, start);
+    }
   }
 
   fn render_conic_gradient(&mut self, item: &ConicGradientItem) {
@@ -2091,55 +2127,31 @@ impl DisplayListRenderer {
       return;
     }
 
-    let opacity = self.canvas.opacity().clamp(0.0, 1.0);
-    let stops: Vec<(f32, crate::style::color::Rgba)> = item
-      .stops
-      .iter()
-      .map(|s| {
-        (
-          s.position,
-          crate::style::color::Rgba {
-            a: s.color.a * opacity,
-            ..s.color
-          },
-        )
-      })
-      .collect();
-    if stops.is_empty() {
+    let Some(stops) = self.convert_stops_rgba(&item.stops) else {
       return;
-    }
+    };
 
-    let center = SkiaPoint::from_xy(self.ds_len(item.center.x), self.ds_len(item.center.y));
-    let start_angle = item.from_angle.to_radians();
-    let period = if item.repeating {
-      stops.last().map(|s| s.0).unwrap_or(1.0).max(1e-6)
+    let center = Point::new(self.ds_len(item.center.x), self.ds_len(item.center.y));
+    let spread = if item.repeating {
+      SpreadMode::Repeat
     } else {
-      1.0
+      SpreadMode::Pad
     };
-
-    let mut pix = match Pixmap::new(width, height) {
-      Some(p) => p,
-      None => return,
+    let timer = self.diagnostics_enabled.then(Instant::now);
+    let Some(pix) = rasterize_conic_gradient(
+      width,
+      height,
+      center,
+      item.from_angle.to_radians(),
+      spread,
+      &stops,
+      &self.gradient_cache,
+      gradient_bucket(width.max(height).saturating_mul(2)),
+    ) else {
+      return;
     };
-    let data = pix.pixels_mut();
-    let transparent = PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap();
-    for y in 0..height {
-      for x in 0..width {
-        let dx = x as f32 + 0.5 - center.x;
-        let dy = y as f32 + 0.5 - center.y;
-        let angle = dx.atan2(-dy) + start_angle;
-        let mut t = (angle / (2.0 * std::f32::consts::PI)).rem_euclid(1.0);
-        t *= period;
-        let color = sample_conic_stops(&stops, t, item.repeating, period);
-        let idx = (y * width + x) as usize;
-        data[idx] = PremultipliedColorU8::from_rgba(
-          color.r,
-          color.g,
-          color.b,
-          (color.a * 255.0).round().clamp(0.0, 255.0) as u8,
-        )
-        .unwrap_or(transparent);
-      }
+    if let Some(start) = timer {
+      self.record_gradient_usage((width * height) as u64, start);
     }
 
     let paint = tiny_skia::PixmapPaint {
@@ -2430,6 +2442,7 @@ impl DisplayListRenderer {
       BorderImageSourceItem::Generated(bg) => {
         let img_w = outer_rect.width().max(1.0).round() as u32;
         let img_h = outer_rect.height().max(1.0).round() as u32;
+        let timer = self.diagnostics_enabled.then(Instant::now);
         let Some(pixmap) = render_generated_border_image(
           bg,
           border_image.current_color,
@@ -2438,9 +2451,13 @@ impl DisplayListRenderer {
           border_image.font_size,
           border_image.root_font_size,
           border_image.viewport,
+          &self.gradient_cache,
         ) else {
           return false;
         };
+        if let Some(start) = timer {
+          self.record_gradient_usage((img_w * img_h) as u64, start);
+        }
         let pixmap = Arc::new(pixmap);
         let (w, h) = (pixmap.width(), pixmap.height());
         if w == 0 || h == 0 {
@@ -3034,7 +3051,8 @@ impl DisplayListRenderer {
         ResolvedMaskImage::Generated(image) => {
           let pixmap_w = tile_w.ceil().max(1.0) as u32;
           let pixmap_h = tile_h.ceil().max(1.0) as u32;
-          render_generated_border_image(
+          let timer = self.diagnostics_enabled.then(Instant::now);
+          let result = render_generated_border_image(
             image,
             mask.color,
             pixmap_w,
@@ -3042,8 +3060,12 @@ impl DisplayListRenderer {
             mask.font_size,
             mask.root_font_size,
             Some(viewport),
-          )
-          .map(Arc::new)
+            &self.gradient_cache,
+          );
+          if let (Some(start), Some(_)) = (timer, result.as_ref()) {
+            self.record_gradient_usage((pixmap_w * pixmap_h) as u64, start);
+          }
+          result.map(Arc::new)
         }
         ResolvedMaskImage::Raster(image) => self.image_data_to_pixmap(image),
       };
@@ -3078,6 +3100,31 @@ impl DisplayListRenderer {
     }
 
     combined
+  }
+
+  fn convert_stops_rgba(
+    &self,
+    stops: &[crate::paint::display_list::GradientStop],
+  ) -> Option<Vec<(f32, Rgba)>> {
+    if stops.is_empty() {
+      return None;
+    }
+    let opacity = self.canvas.opacity().clamp(0.0, 1.0);
+    Some(
+      stops
+        .iter()
+        .map(|s| {
+          let mut color = s.color;
+          color.a *= opacity;
+          let pos = if s.position.is_finite() {
+            s.position.clamp(0.0, 1.0)
+          } else {
+            0.0
+          };
+          (pos, color)
+        })
+        .collect(),
+    )
   }
 
   fn convert_stops(
@@ -3293,6 +3340,7 @@ impl DisplayListRenderer {
         tiles,
         duration,
         fallback_reason,
+        gradient_stats: self.gradient_stats,
       });
     }
 
@@ -3303,6 +3351,7 @@ impl DisplayListRenderer {
       tiles: 1,
       duration: start.elapsed(),
       fallback_reason,
+      gradient_stats: self.gradient_stats,
     })
   }
 
@@ -3489,7 +3538,7 @@ impl DisplayListRenderer {
     let color_cache = self.color_cache.clone();
 
     let deadline = active_deadline();
-    let results: Result<Vec<(TileWork<'_>, Pixmap)>> = tiles
+    let results: Result<Vec<(TileWork<'_>, Pixmap, GradientStats)>> = tiles
       .into_par_iter()
       .map(|work| {
         with_deadline(deadline.as_ref(), || {
@@ -3505,22 +3554,28 @@ impl DisplayListRenderer {
           )?;
           renderer.preserve_3d_disabled = preserve_3d_disabled;
           renderer.paint_parallelism = PaintParallelism::disabled();
+          renderer.gradient_cache = self.gradient_cache.clone();
+          renderer.diagnostics_enabled = self.diagnostics_enabled;
           if work.render_x > 0 || work.render_y > 0 {
             renderer
               .canvas
               .translate(-(work.render_x as f32), -(work.render_y as f32));
           }
           renderer.render_slice(&work.list)?;
-          Ok((work, renderer.canvas.into_pixmap()))
+          let stats = renderer.gradient_stats;
+          Ok((work, renderer.canvas.into_pixmap(), stats))
         })
       })
       .collect();
 
     let results = results?;
     let tile_count = results.len();
-    for (work, pixmap) in results {
+    let mut tile_stats = GradientStats::default();
+    for (work, pixmap, stats) in results {
+      tile_stats.merge(&stats);
       self.blit_tile(&work, &pixmap);
     }
+    self.gradient_stats.merge(&tile_stats);
 
     let pixmap = self.canvas.pixmap().clone();
     Ok((pixmap, tile_count))
@@ -3607,7 +3662,7 @@ impl DisplayListRenderer {
     Ok(end_idx)
   }
 
-  fn render_scene_item(&self, item: &SceneItem) -> Result<Option<Pixmap>> {
+  fn render_scene_item(&mut self, item: &SceneItem) -> Result<Option<Pixmap>> {
     let bounds = item.bounds;
     if bounds.width() <= 0.0 || bounds.height() <= 0.0 {
       return Ok(None);
@@ -3651,8 +3706,11 @@ impl DisplayListRenderer {
       self.scale,
     )?;
     renderer.preserve_3d_disabled = true;
-    let pixmap = renderer.render(&list)?;
-    Ok(Some(pixmap))
+    renderer.gradient_cache = self.gradient_cache.clone();
+    renderer.diagnostics_enabled = self.diagnostics_enabled;
+    let report = renderer.render_with_report(&list)?;
+    self.gradient_stats.merge(&report.gradient_stats);
+    Ok(Some(report.pixmap))
   }
 
   fn projective_warp(
@@ -5303,59 +5361,6 @@ impl DisplayListRenderer {
   }
 }
 
-fn sample_conic_stops(
-  stops: &[(f32, crate::style::color::Rgba)],
-  t: f32,
-  repeating: bool,
-  period: f32,
-) -> crate::style::color::Rgba {
-  if stops.is_empty() {
-    return crate::style::color::Rgba::TRANSPARENT;
-  }
-  if stops.len() == 1 {
-    return stops[0].1;
-  }
-  let total = if repeating {
-    period
-  } else {
-    stops.last().map(|s| s.0).unwrap_or(1.0)
-  };
-  let mut pos = t;
-  if repeating && total > 0.0 {
-    pos = pos.rem_euclid(total);
-  }
-  if pos <= stops[0].0 {
-    return stops[0].1;
-  }
-  if pos >= stops.last().unwrap().0 && !repeating {
-    return stops.last().unwrap().1;
-  }
-  for window in stops.windows(2) {
-    let (p0, c0) = window[0];
-    let (p1, c1) = window[1];
-    if pos < p0 {
-      return c0;
-    }
-    if pos <= p1 || (repeating && (p1 - p0).abs() < f32::EPSILON) {
-      let span = (p1 - p0).max(1e-6);
-      let frac = ((pos - p0) / span).clamp(0.0, 1.0);
-      return crate::style::color::Rgba {
-        r: ((1.0 - frac) * c0.r as f32 + frac * c1.r as f32)
-          .round()
-          .clamp(0.0, 255.0) as u8,
-        g: ((1.0 - frac) * c0.g as f32 + frac * c1.g as f32)
-          .round()
-          .clamp(0.0, 255.0) as u8,
-        b: ((1.0 - frac) * c0.b as f32 + frac * c1.b as f32)
-          .round()
-          .clamp(0.0, 255.0) as u8,
-        a: (1.0 - frac) * c0.a + frac * c1.a,
-      };
-    }
-  }
-  stops.last().unwrap().1
-}
-
 #[derive(Copy, Clone)]
 struct BorderImageWidths {
   top: f32,
@@ -5739,48 +5744,6 @@ fn resolve_gradient_center(
   Point::new(cx, cy)
 }
 
-fn sample_stops(stops: &[(f32, Rgba)], t: f32, repeating: bool, period: f32) -> Rgba {
-  if stops.is_empty() {
-    return Rgba::TRANSPARENT;
-  }
-  if stops.len() == 1 {
-    return stops[0].1;
-  }
-  let total = if repeating {
-    period
-  } else {
-    stops.last().map(|(p, _)| *p).unwrap_or(1.0)
-  };
-  let mut pos = t;
-  if repeating && total > 0.0 {
-    pos = pos.rem_euclid(total);
-  }
-  if pos <= stops[0].0 {
-    return stops[0].1;
-  }
-  if pos >= stops.last().unwrap().0 && !repeating {
-    return stops.last().unwrap().1;
-  }
-  for window in stops.windows(2) {
-    let (p0, c0) = window[0];
-    let (p1, c1) = window[1];
-    if pos >= p0 && pos <= p1 {
-      let t = if (p1 - p0).abs() < f32::EPSILON {
-        0.0
-      } else {
-        ((pos - p0) / (p1 - p0)).clamp(0.0, 1.0)
-      };
-      return Rgba {
-        r: (c0.r as f32 + (c1.r as f32 - c0.r as f32) * t).round() as u8,
-        g: (c0.g as f32 + (c1.g as f32 - c0.g as f32) * t).round() as u8,
-        b: (c0.b as f32 + (c1.b as f32 - c0.b as f32) * t).round() as u8,
-        a: c0.a + (c1.a - c0.a) * t,
-      };
-    }
-  }
-  Rgba::TRANSPARENT
-}
-
 fn render_generated_border_image(
   bg: &BackgroundImage,
   current_color: Rgba,
@@ -5789,6 +5752,7 @@ fn render_generated_border_image(
   font_size: f32,
   root_font_size: f32,
   viewport: Option<(f32, f32)>,
+  cache: &GradientLutCache,
 ) -> Option<Pixmap> {
   if width == 0 || height == 0 {
     return None;
@@ -5801,78 +5765,48 @@ fn render_generated_border_image(
       if resolved.is_empty() {
         return None;
       }
-      let skia_stops = gradient_stops(&resolved);
       let rad = angle.to_radians();
       let dx = rad.sin();
       let dy = -rad.cos();
       let len = 0.5 * (rect.width() * dx.abs() + rect.height() * dy.abs());
-      let cx = rect.x() + rect.width() / 2.0;
-      let cy = rect.y() + rect.height() / 2.0;
-
-      let start = tiny_skia::Point::from_xy(cx - dx * len, cy - dy * len);
-      let end = tiny_skia::Point::from_xy(cx + dx * len, cy + dy * len);
-      let shader = LinearGradient::new(
+      let cx = rect.width() * 0.5;
+      let cy = rect.height() * 0.5;
+      let start = Point::new(cx - dx * len, cy - dy * len);
+      let end = Point::new(cx + dx * len, cy + dy * len);
+      rasterize_linear_gradient(
+        width,
+        height,
         start,
         end,
-        skia_stops,
         SpreadMode::Pad,
-        Transform::identity(),
-      )?;
-
-      let mut pixmap = Pixmap::new(width, height)?;
-      let skia_rect = tiny_skia::Rect::from_xywh(0.0, 0.0, width as f32, height as f32)?;
-      let path = PathBuilder::from_rect(skia_rect);
-
-      let mut paint = tiny_skia::Paint::default();
-      paint.shader = shader;
-      paint.anti_alias = true;
-      pixmap.fill_path(
-        &path,
-        &paint,
-        tiny_skia::FillRule::Winding,
-        Transform::identity(),
-        None,
-      );
-      Some(pixmap)
+        &resolved,
+        cache,
+        gradient_bucket(width.max(height)),
+      )
     }
     BackgroundImage::RepeatingLinearGradient { angle, stops } => {
       let resolved = normalize_color_stops(stops, current_color);
       if resolved.is_empty() {
         return None;
       }
-      let skia_stops = gradient_stops(&resolved);
       let rad = angle.to_radians();
       let dx = rad.sin();
       let dy = -rad.cos();
       let len = 0.5 * (rect.width() * dx.abs() + rect.height() * dy.abs());
-      let cx = rect.x() + rect.width() / 2.0;
-      let cy = rect.y() + rect.height() / 2.0;
-
-      let start = tiny_skia::Point::from_xy(cx - dx * len, cy - dy * len);
-      let end = tiny_skia::Point::from_xy(cx + dx * len, cy + dy * len);
-      let shader = LinearGradient::new(
+      let cx = rect.width() * 0.5;
+      let cy = rect.height() * 0.5;
+      let start = Point::new(cx - dx * len, cy - dy * len);
+      let end = Point::new(cx + dx * len, cy + dy * len);
+      rasterize_linear_gradient(
+        width,
+        height,
         start,
         end,
-        skia_stops,
         SpreadMode::Repeat,
-        Transform::identity(),
-      )?;
-
-      let mut pixmap = Pixmap::new(width, height)?;
-      let skia_rect = tiny_skia::Rect::from_xywh(0.0, 0.0, width as f32, height as f32)?;
-      let path = PathBuilder::from_rect(skia_rect);
-
-      let mut paint = tiny_skia::Paint::default();
-      paint.shader = shader;
-      paint.anti_alias = true;
-      pixmap.fill_path(
-        &path,
-        &paint,
-        tiny_skia::FillRule::Winding,
-        Transform::identity(),
-        None,
-      );
-      Some(pixmap)
+        &resolved,
+        cache,
+        gradient_bucket(width.max(height)),
+      )
     }
     BackgroundImage::RadialGradient {
       shape,
@@ -5973,31 +5907,17 @@ fn render_generated_border_image(
       if resolved.is_empty() {
         return None;
       }
-      let mut pixmap = Pixmap::new(width, height)?;
       let center = resolve_gradient_center(rect, position, font_size, root_font_size, viewport);
-      let start_angle = from_angle.to_radians();
-      let period = 1.0;
-      let data = pixmap.pixels_mut();
-      let transparent = PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap();
-      for y in 0..height {
-        for x in 0..width {
-          let dx = x as f32 + 0.5 - center.x;
-          let dy = y as f32 + 0.5 - center.y;
-          let angle = dx.atan2(-dy) + start_angle;
-          let mut t = (angle / (2.0 * std::f32::consts::PI)).rem_euclid(1.0);
-          t *= period;
-          let color = sample_stops(&resolved, t, false, period);
-          let idx = (y * width + x) as usize;
-          data[idx] = PremultipliedColorU8::from_rgba(
-            color.r,
-            color.g,
-            color.b,
-            (color.a * 255.0).round().clamp(0.0, 255.0) as u8,
-          )
-          .unwrap_or(transparent);
-        }
-      }
-      Some(pixmap)
+      rasterize_conic_gradient(
+        width,
+        height,
+        center,
+        from_angle.to_radians(),
+        SpreadMode::Pad,
+        &resolved,
+        cache,
+        gradient_bucket(width.max(height).saturating_mul(2)),
+      )
     }
     BackgroundImage::RepeatingConicGradient {
       from_angle,
@@ -6008,31 +5928,17 @@ fn render_generated_border_image(
       if resolved.is_empty() {
         return None;
       }
-      let mut pixmap = Pixmap::new(width, height)?;
       let center = resolve_gradient_center(rect, position, font_size, root_font_size, viewport);
-      let start_angle = from_angle.to_radians();
-      let period = resolved.last().map(|(p, _)| *p).unwrap_or(1.0).max(1e-6);
-      let data = pixmap.pixels_mut();
-      let transparent = PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap();
-      for y in 0..height {
-        for x in 0..width {
-          let dx = x as f32 + 0.5 - center.x;
-          let dy = y as f32 + 0.5 - center.y;
-          let angle = dx.atan2(-dy) + start_angle;
-          let mut t = (angle / (2.0 * std::f32::consts::PI)).rem_euclid(1.0);
-          t *= period;
-          let color = sample_stops(&resolved, t, true, period);
-          let idx = (y * width + x) as usize;
-          data[idx] = PremultipliedColorU8::from_rgba(
-            color.r,
-            color.g,
-            color.b,
-            (color.a * 255.0).round().clamp(0.0, 255.0) as u8,
-          )
-          .unwrap_or(transparent);
-        }
-      }
-      Some(pixmap)
+      rasterize_conic_gradient(
+        width,
+        height,
+        center,
+        from_angle.to_radians(),
+        SpreadMode::Repeat,
+        &resolved,
+        cache,
+        gradient_bucket(width.max(height).saturating_mul(2)),
+      )
     }
     BackgroundImage::None | BackgroundImage::Url(_) => None,
   }

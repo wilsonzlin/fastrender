@@ -58,7 +58,9 @@ use crate::text::font_db::LoadedFont;
 use crate::text::font_instance::{
   glyph_transform, variation_hash, FontInstance, GlyphOutlineMetrics,
 };
-use crate::text::pipeline::{record_text_rasterize, text_diagnostics_timer, GlyphPosition, ShapedRun};
+use crate::text::pipeline::{
+  record_text_rasterize, text_diagnostics_timer, GlyphPosition, ShapedRun,
+};
 use rustybuzz::Variation;
 use std::collections::HashMap;
 use std::collections::VecDeque;

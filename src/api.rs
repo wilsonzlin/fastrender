@@ -1600,6 +1600,8 @@ pub struct PaintDiagnostics {
   pub transparent_removed: Option<usize>,
   pub noop_removed: Option<usize>,
   pub merged_items: Option<usize>,
+  pub gradient_ms: Option<f64>,
+  pub gradient_pixels: Option<u64>,
 }
 
 /// Resource loading counters.
@@ -3646,6 +3648,8 @@ impl FastRender {
           rec.stats.timings.paint_build_ms = Some(diag.build_ms);
           rec.stats.timings.paint_rasterize_ms = Some(diag.raster_ms);
           rec.stats.paint.display_items = Some(diag.command_count);
+          rec.stats.paint.gradient_ms = Some(diag.gradient_ms);
+          rec.stats.paint.gradient_pixels = Some(diag.gradient_pixels);
         }
       }
 

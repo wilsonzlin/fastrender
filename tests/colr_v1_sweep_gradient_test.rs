@@ -118,7 +118,11 @@ fn save_or_compare(name: &str, raster: &ColorGlyphRaster) {
   }
 
   let golden = load_png(&path).expect("missing golden image; set UPDATE_GOLDEN=1 to create");
-  let diff = compare_images(&roundtrip_pixmap(&raster.image), &golden, &CompareConfig::strict());
+  let diff = compare_images(
+    &roundtrip_pixmap(&raster.image),
+    &golden,
+    &CompareConfig::strict(),
+  );
   assert!(
     diff.is_match(),
     "rendered image {} did not match golden: {:?}",

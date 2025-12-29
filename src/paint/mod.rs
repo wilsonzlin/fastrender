@@ -96,6 +96,7 @@ pub mod display_list;
 pub mod display_list_builder;
 pub mod display_list_renderer;
 pub mod filter_outset;
+pub mod gradient;
 pub mod homography;
 pub mod motion_path;
 pub mod object_fit;

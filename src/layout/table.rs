@@ -2281,7 +2281,8 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
   let vertical_line_count = columns + 1;
   let horizontal_line_count = rows + 1;
 
-  let mut vertical: Vec<BorderCandidate> = vec![BorderCandidate::none(); vertical_line_count * rows];
+  let mut vertical: Vec<BorderCandidate> =
+    vec![BorderCandidate::none(); vertical_line_count * rows];
   let mut horizontal: Vec<BorderCandidate> =
     vec![BorderCandidate::none(); horizontal_line_count * columns];
 
@@ -2753,7 +2754,9 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
   for row in 0..horizontal_line_count {
     let mut line: Vec<ResolvedBorder> = Vec::with_capacity(columns);
     for col in 0..columns {
-      line.push(candidate_to_resolved(horizontal[horizontal_index(row, col)]));
+      line.push(candidate_to_resolved(
+        horizontal[horizontal_index(row, col)],
+      ));
     }
     resolved_horizontal.push(line);
   }
@@ -2765,37 +2768,39 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
       let mut best: Option<BorderCandidate> = None;
       if rows > 0 && c < vertical_line_count && r > 0 {
         let candidate = vertical[vertical_index(c, r - 1)];
-        if best
-          .map_or(true, |current| candidate_better(&candidate, &current, direction, None))
-        {
+        if best.map_or(true, |current| {
+          candidate_better(&candidate, &current, direction, None)
+        }) {
           best = Some(candidate);
         }
       }
       if rows > 0 && c < vertical_line_count && r < rows {
         let candidate = vertical[vertical_index(c, r)];
-        if best
-          .map_or(true, |current| candidate_better(&candidate, &current, direction, None))
-        {
+        if best.map_or(true, |current| {
+          candidate_better(&candidate, &current, direction, None)
+        }) {
           best = Some(candidate);
         }
       }
       if columns > 0 && r < horizontal_line_count && c > 0 {
         let candidate = horizontal[horizontal_index(r, c - 1)];
-        if best
-          .map_or(true, |current| candidate_better(&candidate, &current, direction, None))
-        {
+        if best.map_or(true, |current| {
+          candidate_better(&candidate, &current, direction, None)
+        }) {
           best = Some(candidate);
         }
       }
       if columns > 0 && r < horizontal_line_count && c < columns {
         let candidate = horizontal[horizontal_index(r, c)];
-        if best
-          .map_or(true, |current| candidate_better(&candidate, &current, direction, None))
-        {
+        if best.map_or(true, |current| {
+          candidate_better(&candidate, &current, direction, None)
+        }) {
           best = Some(candidate);
         }
       }
-      row_vec.push(candidate_to_resolved(best.unwrap_or_else(BorderCandidate::none)));
+      row_vec.push(candidate_to_resolved(
+        best.unwrap_or_else(BorderCandidate::none),
+      ));
     }
     resolved_corners.push(row_vec);
   }

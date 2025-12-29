@@ -51,6 +51,10 @@ use crate::paint::display_list_builder::DisplayListBuilder;
 use crate::paint::display_list_renderer::DisplayListRenderer;
 use crate::paint::display_list_renderer::PaintParallelism;
 use crate::paint::filter_outset::{compute_filter_outset, FilterOutsetExt};
+use crate::paint::gradient::{
+  gradient_bucket, rasterize_conic_gradient, rasterize_linear_gradient, GradientLutCache,
+  GradientStats,
+};
 use crate::paint::homography::{quad_bounds, rect_corners, Homography};
 use crate::paint::object_fit::compute_object_fit;
 use crate::paint::object_fit::default_object_position;
@@ -201,6 +205,12 @@ pub struct Painter {
   scroll_state: ScrollState,
   /// Remaining iframe nesting depth allowed for this document.
   max_iframe_depth: usize,
+  /// Cached gradient lookup tables reused within a render.
+  gradient_cache: GradientLutCache,
+  /// Accumulated gradient raster statistics for diagnostics.
+  gradient_stats: GradientStats,
+  /// Whether diagnostics are enabled for this render.
+  diagnostics_enabled: bool,
 }
 
 #[derive(Default)]
@@ -222,6 +232,8 @@ pub struct PaintDiagnosticsSummary {
   pub command_count: usize,
   pub build_ms: f64,
   pub raster_ms: f64,
+  pub gradient_ms: f64,
+  pub gradient_pixels: u64,
 }
 
 thread_local! {
@@ -238,11 +250,11 @@ pub(crate) fn take_paint_diagnostics() -> Option<PaintDiagnosticsSummary> {
   PAINT_DIAGNOSTICS.with(|cell| cell.borrow_mut().take())
 }
 
-fn paint_diagnostics_enabled() -> bool {
+pub(crate) fn paint_diagnostics_enabled() -> bool {
   PAINT_DIAGNOSTICS.with(|cell| cell.borrow().is_some())
 }
 
-fn with_paint_diagnostics<F: FnOnce(&mut PaintDiagnosticsSummary)>(f: F) {
+pub(crate) fn with_paint_diagnostics<F: FnOnce(&mut PaintDiagnosticsSummary)>(f: F) {
   PAINT_DIAGNOSTICS.with(|cell| {
     if let Some(stats) = cell.borrow_mut().as_mut() {
       f(stats);
@@ -1025,6 +1037,10 @@ impl Painter {
       trace: TraceHandle::disabled(),
       scroll_state: ScrollState::default(),
       max_iframe_depth: crate::api::DEFAULT_MAX_IFRAME_DEPTH,
+      gradient_cache: GradientLutCache::default(),
+      gradient_stats: GradientStats::default(),
+      diagnostics_enabled: paint_diagnostics_enabled(),
+      max_iframe_depth: crate::api::DEFAULT_MAX_IFRAME_DEPTH,
     })
   }
 
@@ -1078,6 +1094,13 @@ impl Painter {
       Some(t)
     } else {
       None
+    }
+  }
+
+  #[inline]
+  fn record_gradient_usage(&mut self, pixels: u64, start: Instant) {
+    if self.diagnostics_enabled {
+      self.gradient_stats.record(pixels, start.elapsed());
     }
   }
 
@@ -1347,6 +1370,16 @@ impl Painter {
       let raster_ms = start.elapsed().as_secs_f64() * 1000.0;
       with_paint_diagnostics(|diag| {
         diag.raster_ms = raster_ms;
+        if diag.command_count == 0 {
+          diag.command_count = command_len;
+        }
+        diag.gradient_ms = self.gradient_stats.millis();
+        diag.gradient_pixels = self.gradient_stats.pixels;
+      });
+    } else if diagnostics_enabled {
+      with_paint_diagnostics(|diag| {
+        diag.gradient_ms = self.gradient_stats.millis();
+        diag.gradient_pixels = self.gradient_stats.pixels;
         if diag.command_count == 0 {
           diag.command_count = command_len;
         }
@@ -2432,6 +2465,10 @@ impl Painter {
           trace: self.trace.clone(),
           scroll_state: self.scroll_state.clone(),
           max_iframe_depth: self.max_iframe_depth,
+          gradient_cache: self.gradient_cache.clone(),
+          gradient_stats: GradientStats::default(),
+          diagnostics_enabled: self.diagnostics_enabled,
+          max_iframe_depth: self.max_iframe_depth,
         };
         let paint_unclipped_start = profile_enabled.then(Instant::now);
         for cmd in unclipped {
@@ -2440,6 +2477,7 @@ impl Painter {
         if let Some(start) = paint_unclipped_start {
           base_paint_ms = start.elapsed().as_secs_f64() * 1000.0;
         }
+        self.gradient_stats.merge(&base_painter.gradient_stats);
 
         if !clipped.is_empty() {
           let clip_layer = match Pixmap::new(width as u32, height as u32) {
@@ -2459,6 +2497,10 @@ impl Painter {
             trace: self.trace.clone(),
             scroll_state: self.scroll_state.clone(),
             max_iframe_depth: self.max_iframe_depth,
+            gradient_cache: self.gradient_cache.clone(),
+            gradient_stats: GradientStats::default(),
+            diagnostics_enabled: self.diagnostics_enabled,
+            max_iframe_depth: self.max_iframe_depth,
           };
           let paint_clipped_start = profile_enabled.then(Instant::now);
           for cmd in clipped {
@@ -2467,6 +2509,7 @@ impl Painter {
           if let Some(start) = paint_clipped_start {
             clip_paint_ms = start.elapsed().as_secs_f64() * 1000.0;
           }
+          self.gradient_stats.merge(&clip_painter.gradient_stats);
           let mut clip_pixmap = clip_painter.pixmap;
           if let Some(clip) = clip {
             let mut clip_rect = clip.rect;
@@ -2569,6 +2612,10 @@ impl Painter {
             trace: self.trace.clone(),
             scroll_state: self.scroll_state.clone(),
             max_iframe_depth: self.max_iframe_depth,
+            gradient_cache: self.gradient_cache.clone(),
+            gradient_stats: GradientStats::default(),
+            diagnostics_enabled: self.diagnostics_enabled,
+            max_iframe_depth: self.max_iframe_depth,
           };
           let outline_start = profile_enabled.then(Instant::now);
           for cmd in outline_commands {
@@ -2577,6 +2624,7 @@ impl Painter {
           if let Some(start) = outline_start {
             outline_ms = start.elapsed().as_secs_f64() * 1000.0;
           }
+          self.gradient_stats.merge(&outline_painter.gradient_stats);
           layer_pixmap = outline_painter.pixmap;
         }
         if !filters.is_empty() {
@@ -2781,7 +2829,7 @@ impl Painter {
   }
 
   fn render_mask(
-    &self,
+    &mut self,
     style: &ComputedStyle,
     css_bounds: Rect,
     layer_bounds: Rect,
@@ -3394,37 +3442,26 @@ impl Painter {
       root_font_size,
       (self.css_width, self.css_height),
     );
-    let mut pix = match Pixmap::new(width, height) {
-      Some(p) => p,
-      None => return,
-    };
-
-    let start_angle = from_angle_deg.to_radians();
-    let period = if repeating {
-      stops.last().map(|(p, _)| *p).unwrap_or(1.0).max(1e-6)
+    let spread = if repeating {
+      SpreadMode::Repeat
     } else {
-      1.0
+      SpreadMode::Pad
     };
-
-    let data = pix.pixels_mut();
-    let transparent = PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap();
-    for y in 0..height {
-      for x in 0..width {
-        let dx = x as f32 + 0.5 - center.x;
-        let dy = y as f32 + 0.5 - center.y;
-        let angle = dx.atan2(-dy) + start_angle;
-        let mut t = (angle / (2.0 * std::f32::consts::PI)).rem_euclid(1.0);
-        t *= period;
-        let color = sample_stops(stops, t, repeating, period);
-        let idx = (y * width + x) as usize;
-        data[idx] = PremultipliedColorU8::from_rgba(
-          color.r,
-          color.g,
-          color.b,
-          (color.a * 255.0).round().clamp(0.0, 255.0) as u8,
-        )
-        .unwrap_or(transparent);
-      }
+    let timer = self.diagnostics_enabled.then(Instant::now);
+    let Some(pix) = rasterize_conic_gradient(
+      width,
+      height,
+      center,
+      from_angle_deg.to_radians(),
+      spread,
+      stops,
+      &self.gradient_cache,
+      gradient_bucket(width.max(height).saturating_mul(2)),
+    ) else {
+      return;
+    };
+    if let Some(start) = timer {
+      self.record_gradient_usage((width * height) as u64, start);
     }
 
     let mut paint = PixmapPaint::default();
@@ -6483,7 +6520,7 @@ impl Painter {
   }
 
   fn render_generated_image(
-    &self,
+    &mut self,
     bg: &BackgroundImage,
     style: &ComputedStyle,
     width: u32,
@@ -6501,7 +6538,6 @@ impl Painter {
           return None;
         }
         let gradient_rect = rect;
-        let skia_stops = gradient_stops(&resolved);
         let rad = angle.to_radians();
         let dx = rad.sin();
         let dy = -rad.cos();
@@ -6509,30 +6545,22 @@ impl Painter {
         let cx = gradient_rect.x() + gradient_rect.width() / 2.0;
         let cy = gradient_rect.y() + gradient_rect.height() / 2.0;
 
-        let start = tiny_skia::Point::from_xy(cx - dx * len, cy - dy * len);
-        let end = tiny_skia::Point::from_xy(cx + dx * len, cy + dy * len);
-        let shader = LinearGradient::new(
+        let start = Point::new(cx - dx * len, cy - dy * len);
+        let end = Point::new(cx + dx * len, cy + dy * len);
+        let timer = self.diagnostics_enabled.then(Instant::now);
+        let pixmap = rasterize_linear_gradient(
+          width,
+          height,
           start,
           end,
-          skia_stops,
           SpreadMode::Pad,
-          Transform::identity(),
+          &resolved,
+          &self.gradient_cache,
+          gradient_bucket(width.max(height)),
         )?;
-
-        let mut pixmap = Pixmap::new(width, height)?;
-        let skia_rect = SkiaRect::from_xywh(0.0, 0.0, width as f32, height as f32)?;
-        let path = PathBuilder::from_rect(skia_rect);
-
-        let mut paint = Paint::default();
-        paint.shader = shader;
-        paint.anti_alias = true;
-        pixmap.fill_path(
-          &path,
-          &paint,
-          tiny_skia::FillRule::Winding,
-          Transform::identity(),
-          None,
-        );
+        if let Some(start) = timer {
+          self.record_gradient_usage((width * height) as u64, start);
+        }
         Some(pixmap)
       }
       BackgroundImage::RepeatingLinearGradient { angle, stops } => {
@@ -6541,7 +6569,6 @@ impl Painter {
           return None;
         }
         let gradient_rect = rect;
-        let skia_stops = gradient_stops(&resolved);
         let rad = angle.to_radians();
         let dx = rad.sin();
         let dy = -rad.cos();
@@ -6549,30 +6576,22 @@ impl Painter {
         let cx = gradient_rect.x() + gradient_rect.width() / 2.0;
         let cy = gradient_rect.y() + gradient_rect.height() / 2.0;
 
-        let start = tiny_skia::Point::from_xy(cx - dx * len, cy - dy * len);
-        let end = tiny_skia::Point::from_xy(cx + dx * len, cy + dy * len);
-        let shader = LinearGradient::new(
+        let start = Point::new(cx - dx * len, cy - dy * len);
+        let end = Point::new(cx + dx * len, cy + dy * len);
+        let timer = self.diagnostics_enabled.then(Instant::now);
+        let pixmap = rasterize_linear_gradient(
+          width,
+          height,
           start,
           end,
-          skia_stops,
           SpreadMode::Repeat,
-          Transform::identity(),
+          &resolved,
+          &self.gradient_cache,
+          gradient_bucket(width.max(height)),
         )?;
-
-        let mut pixmap = Pixmap::new(width, height)?;
-        let skia_rect = SkiaRect::from_xywh(0.0, 0.0, width as f32, height as f32)?;
-        let path = PathBuilder::from_rect(skia_rect);
-
-        let mut paint = Paint::default();
-        paint.shader = shader;
-        paint.anti_alias = true;
-        pixmap.fill_path(
-          &path,
-          &paint,
-          tiny_skia::FillRule::Winding,
-          Transform::identity(),
-          None,
-        );
+        if let Some(start) = timer {
+          self.record_gradient_usage((width * height) as u64, start);
+        }
         Some(pixmap)
       }
       BackgroundImage::RadialGradient {
@@ -6605,6 +6624,7 @@ impl Painter {
           transform,
         )?;
 
+        let timer = self.diagnostics_enabled.then(Instant::now);
         let mut pixmap = Pixmap::new(width, height)?;
         let skia_rect = SkiaRect::from_xywh(0.0, 0.0, width as f32, height as f32)?;
         let path = PathBuilder::from_rect(skia_rect);
@@ -6618,6 +6638,9 @@ impl Painter {
           Transform::identity(),
           None,
         );
+        if let Some(start) = timer {
+          self.record_gradient_usage((width * height) as u64, start);
+        }
         Some(pixmap)
       }
       BackgroundImage::RepeatingRadialGradient {
@@ -6650,6 +6673,7 @@ impl Painter {
           transform,
         )?;
 
+        let timer = self.diagnostics_enabled.then(Instant::now);
         let mut pixmap = Pixmap::new(width, height)?;
         let skia_rect = SkiaRect::from_xywh(0.0, 0.0, width as f32, height as f32)?;
         let path = PathBuilder::from_rect(skia_rect);
@@ -6663,6 +6687,9 @@ impl Painter {
           Transform::identity(),
           None,
         );
+        if let Some(start) = timer {
+          self.record_gradient_usage((width * height) as u64, start);
+        }
         Some(pixmap)
       }
       BackgroundImage::ConicGradient {
@@ -6674,7 +6701,6 @@ impl Painter {
         if resolved.is_empty() {
           return None;
         }
-        let mut pixmap = Pixmap::new(width, height)?;
         let center = resolve_gradient_center(
           rect,
           position,
@@ -6683,27 +6709,19 @@ impl Painter {
           style.root_font_size,
           (self.css_width, self.css_height),
         );
-        let start_angle = from_angle.to_radians();
-        let period = 1.0;
-        let data = pixmap.pixels_mut();
-        let transparent = PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap();
-        for y in 0..height {
-          for x in 0..width {
-            let dx = x as f32 + 0.5 - center.x;
-            let dy = y as f32 + 0.5 - center.y;
-            let angle = dx.atan2(-dy) + start_angle;
-            let mut t = (angle / (2.0 * std::f32::consts::PI)).rem_euclid(1.0);
-            t *= period;
-            let color = sample_stops(&resolved, t, false, period);
-            let idx = (y * width + x) as usize;
-            data[idx] = PremultipliedColorU8::from_rgba(
-              color.r,
-              color.g,
-              color.b,
-              (color.a * 255.0).round().clamp(0.0, 255.0) as u8,
-            )
-            .unwrap_or(transparent);
-          }
+        let timer = self.diagnostics_enabled.then(Instant::now);
+        let pixmap = rasterize_conic_gradient(
+          width,
+          height,
+          center,
+          from_angle.to_radians(),
+          SpreadMode::Pad,
+          &resolved,
+          &self.gradient_cache,
+          gradient_bucket(width.max(height).saturating_mul(2)),
+        )?;
+        if let Some(start) = timer {
+          self.record_gradient_usage((width * height) as u64, start);
         }
         Some(pixmap)
       }
@@ -6716,7 +6734,6 @@ impl Painter {
         if resolved.is_empty() {
           return None;
         }
-        let mut pixmap = Pixmap::new(width, height)?;
         let center = resolve_gradient_center(
           rect,
           position,
@@ -6725,27 +6742,19 @@ impl Painter {
           style.root_font_size,
           (self.css_width, self.css_height),
         );
-        let start_angle = from_angle.to_radians();
-        let period = resolved.last().map(|(p, _)| *p).unwrap_or(1.0).max(1e-6);
-        let data = pixmap.pixels_mut();
-        let transparent = PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap();
-        for y in 0..height {
-          for x in 0..width {
-            let dx = x as f32 + 0.5 - center.x;
-            let dy = y as f32 + 0.5 - center.y;
-            let angle = dx.atan2(-dy) + start_angle;
-            let mut t = (angle / (2.0 * std::f32::consts::PI)).rem_euclid(1.0);
-            t *= period;
-            let color = sample_stops(&resolved, t, true, period);
-            let idx = (y * width + x) as usize;
-            data[idx] = PremultipliedColorU8::from_rgba(
-              color.r,
-              color.g,
-              color.b,
-              (color.a * 255.0).round().clamp(0.0, 255.0) as u8,
-            )
-            .unwrap_or(transparent);
-          }
+        let timer = self.diagnostics_enabled.then(Instant::now);
+        let pixmap = rasterize_conic_gradient(
+          width,
+          height,
+          center,
+          from_angle.to_radians(),
+          SpreadMode::Repeat,
+          &resolved,
+          &self.gradient_cache,
+          gradient_bucket(width.max(height).saturating_mul(2)),
+        )?;
+        if let Some(start) = timer {
+          self.record_gradient_usage((width * height) as u64, start);
         }
         Some(pixmap)
       }
@@ -9670,54 +9679,6 @@ fn resolve_gradient_center(
   Point::new(cx, cy)
 }
 
-fn sample_stops(stops: &[(f32, Rgba)], t: f32, repeating: bool, period: f32) -> Rgba {
-  if stops.is_empty() {
-    return Rgba::TRANSPARENT;
-  }
-  if stops.len() == 1 {
-    return stops[0].1;
-  }
-  let total = if repeating {
-    period
-  } else {
-    stops.last().map(|(p, _)| *p).unwrap_or(1.0)
-  };
-  let mut pos = t;
-  if repeating && total > 0.0 {
-    pos = pos.rem_euclid(total);
-  }
-  if pos <= stops[0].0 {
-    return stops[0].1;
-  }
-  if pos >= stops.last().unwrap().0 && !repeating {
-    return stops.last().unwrap().1;
-  }
-  for window in stops.windows(2) {
-    let (p0, c0) = window[0];
-    let (p1, c1) = window[1];
-    if pos < p0 {
-      return c0;
-    }
-    if pos <= p1 || (repeating && (p1 - p0).abs() < f32::EPSILON) {
-      let span = (p1 - p0).max(1e-6);
-      let frac = ((pos - p0) / span).clamp(0.0, 1.0);
-      return Rgba {
-        r: ((1.0 - frac) * c0.r as f32 + frac * c1.r as f32)
-          .round()
-          .clamp(0.0, 255.0) as u8,
-        g: ((1.0 - frac) * c0.g as f32 + frac * c1.g as f32)
-          .round()
-          .clamp(0.0, 255.0) as u8,
-        b: ((1.0 - frac) * c0.b as f32 + frac * c1.b as f32)
-          .round()
-          .clamp(0.0, 255.0) as u8,
-        a: ((1.0 - frac) * c0.a + frac * c1.a),
-      };
-    }
-  }
-  stops.last().unwrap().1
-}
-
 fn gradient_stops(stops: &[(f32, Rgba)]) -> Vec<tiny_skia::GradientStop> {
   stops
     .iter()
@@ -9876,6 +9837,14 @@ pub fn paint_tree_display_list_with_resources_scaled_offset(
   let mut renderer = DisplayListRenderer::new_scaled(width, height, background, font_ctx, scale)?;
   renderer.set_parallelism(paint_parallelism);
   let report = renderer.render_with_report(&optimized)?;
+  if paint_diagnostics_enabled() {
+    with_paint_diagnostics(|diag| {
+      diag.raster_ms = report.duration.as_secs_f64() * 1000.0;
+      diag.command_count = optimized.len();
+      diag.gradient_ms = report.gradient_stats.millis();
+      diag.gradient_pixels = report.gradient_stats.pixels;
+    });
+  }
   Ok(report.pixmap)
 }
 

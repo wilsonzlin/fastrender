@@ -87,9 +87,9 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 use std::num::NonZeroUsize;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(any(test, debug_assertions))]
 use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;

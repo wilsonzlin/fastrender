@@ -31,7 +31,8 @@ Most CLI tooling can capture `RenderDiagnostics.stats` by enabling a diagnostics
 - `css`: stylesheet inlining + css parse
 - `cascade`: selector matching + box tree generation
 - `layout`: layout engine
-- `paint`: display-list build/optimize + rasterize
+- `paint`: display-list build/optimize + rasterize (verbose captures `paint.gradient_ms` +
+  `paint.gradient_pixels` for gradient-heavy pages)
 
 If you need the full detail, check the per-page log (`target/pageset/logs/<stem>.log`) or rerun with `--diagnostics verbose`.
 
@@ -87,4 +88,3 @@ When adding new logs:
 3. Use stage buckets to decide where to dig.
 4. Get a CPU profile (`samply`/`perf`) or a trace.
 5. Fix root cause + add a regression + keep deadlines alive in loops.
-

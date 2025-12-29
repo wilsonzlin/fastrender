@@ -18,7 +18,10 @@ use fastrender::paint::display_list::DisplayItem;
 use fastrender::paint::display_list::DisplayList;
 use fastrender::paint::display_list::FillRectItem;
 use fastrender::paint::display_list::GlyphInstance;
+use fastrender::paint::display_list::GradientSpread;
+use fastrender::paint::display_list::GradientStop;
 use fastrender::paint::display_list::ImageData;
+use fastrender::paint::display_list::LinearGradientItem;
 use fastrender::paint::display_list::MaskReferenceRects;
 use fastrender::paint::display_list::OutlineItem;
 use fastrender::paint::display_list::ResolvedFilter;
@@ -2047,6 +2050,45 @@ fn display_list_linear_gradient_respects_background_size() {
   // Gradient tile should be confined to the 2x2 background-size at the top-left.
   assert_eq!(pixel(&pixmap, 1, 1), (255, 0, 0, 255));
   assert_eq!(pixel(&pixmap, 3, 3), (255, 255, 255, 255));
+}
+
+#[test]
+fn linear_gradient_rasterization_matches_endpoints() {
+  let mut list = DisplayList::new();
+  list.push(DisplayItem::LinearGradient(LinearGradientItem {
+    rect: Rect::from_xywh(0.0, 0.0, 4.0, 1.0),
+    start: Point::new(0.0, 0.0),
+    end: Point::new(4.0, 0.0),
+    stops: vec![
+      GradientStop {
+        position: 0.0,
+        color: Rgba::RED,
+      },
+      GradientStop {
+        position: 1.0,
+        color: Rgba::BLUE,
+      },
+    ],
+    spread: GradientSpread::Pad,
+  }));
+
+  let renderer = DisplayListRenderer::new(4, 1, Rgba::WHITE, FontContext::new()).unwrap();
+  let pixmap = renderer.render(&list).expect("render");
+
+  let left = pixel(&pixmap, 0, 0);
+  let right = pixel(&pixmap, 3, 0);
+  assert!(
+    left.0 > left.2 && right.2 > right.0 && left.3 == 255 && right.3 == 255,
+    "gradient endpoints should preserve dominant channels: left {:?} right {:?}",
+    left,
+    right
+  );
+  let mid = pixel(&pixmap, 1, 0);
+  assert!(
+    mid.0 > 0 && mid.2 > 0,
+    "middle sample should contain blended red/blue channels: {:?}",
+    mid
+  );
 }
 
 #[test]
