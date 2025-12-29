@@ -597,6 +597,7 @@ pub fn parse_mathml(node: &DomNode) -> Option<MathNode> {
           let children = parse_children(node);
           Some(MathNode::Math { display, children })
         }
+        "none" => None,
         "mrow" => Some(MathNode::Row(parse_children(node))),
         "mi" => normalized_text(node, false).map(|text| MathNode::Identifier {
           text,
@@ -2737,6 +2738,23 @@ pub fn layout_mathml(node: &MathNode, style: &ComputedStyle, font_ctx: &FontCont
 mod tests {
   use super::*;
 
+  fn find_math_element<'a>(node: &'a crate::dom::DomNode) -> Option<&'a crate::dom::DomNode> {
+    if node
+      .tag_name()
+      .map(|t| t.eq_ignore_ascii_case("math"))
+      .unwrap_or(false)
+    {
+      return Some(node);
+    }
+    node.children.iter().find_map(find_math_element)
+  }
+
+  fn parse_math_from_html(markup: &str) -> MathNode {
+    let dom = crate::dom::parse_html(markup).expect("dom");
+    let math_node = find_math_element(&dom).expect("math element");
+    parse_mathml(math_node).expect("math parsed")
+  }
+
   #[test]
   fn table_layout_completes() {
     let style = ComputedStyle::default();
@@ -2837,20 +2855,7 @@ mod tests {
 
   #[test]
   fn mathvariant_controls_token_style() {
-    let dom =
-      crate::dom::parse_html("<math><mi mathvariant=\"normal\">x</mi></math>").expect("dom");
-    fn find_math<'a>(node: &'a crate::dom::DomNode) -> Option<&'a crate::dom::DomNode> {
-      if node
-        .tag_name()
-        .map(|t| t.eq_ignore_ascii_case("math"))
-        .unwrap_or(false)
-      {
-        return Some(node);
-      }
-      node.children.iter().find_map(find_math)
-    }
-    let math_node = find_math(&dom).expect("math element");
-    let parsed = parse_mathml(math_node).expect("math parsed");
+    let parsed = parse_math_from_html("<math><mi mathvariant=\"normal\">x</mi></math>");
     let MathNode::Math { children, .. } = parsed else {
       panic!("expected math root");
     };
@@ -2859,5 +2864,42 @@ mod tests {
     };
     assert_eq!(text, "x");
     assert!(matches!(variant, Some(MathVariant::Normal)));
+  }
+
+  #[test]
+  fn parses_none_in_multiscripts_as_absent_slot() {
+    let parsed = parse_math_from_html(
+      "<math><mmultiscripts><mi>x</mi><none/><mi>a</mi></mmultiscripts></math>",
+    );
+    let MathNode::Math { children, .. } = parsed else {
+      panic!("expected math root");
+    };
+    let MathNode::Multiscripts { postscripts, .. } = &children[0] else {
+      panic!("expected multiscripts child");
+    };
+    assert_eq!(postscripts.len(), 1);
+    let (sub, sup) = &postscripts[0];
+    assert!(sub.is_none(), "expected omitted subscript to be None");
+    let MathNode::Identifier { text, .. } = sup.as_ref().expect("expected superscript") else {
+      panic!("expected identifier superscript");
+    };
+    assert_eq!(text, "a");
+  }
+
+  #[test]
+  fn none_scripts_do_not_affect_multiscript_width() {
+    let style = ComputedStyle::default();
+    let ctx = FontContext::empty();
+    let with_none =
+      parse_math_from_html("<math><mmultiscripts><mi>x</mi><none/><none/></mmultiscripts></math>");
+    let without_none = parse_math_from_html("<math><mmultiscripts><mi>x</mi></mmultiscripts></math>");
+    let with_layout = layout_mathml(&with_none, &style, &ctx);
+    let without_layout = layout_mathml(&without_none, &style, &ctx);
+    assert!(
+      (with_layout.width - without_layout.width).abs() < 0.001,
+      "none placeholder should not change width: {} vs {}",
+      with_layout.width,
+      without_layout.width
+    );
   }
 }
