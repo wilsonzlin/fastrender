@@ -429,6 +429,14 @@ impl FormattingContext for FlexFormattingContext {
     )
     .with_parallelism(self.parallelism);
     let factory = base_factory.clone();
+    let flex_item_block_fc: Arc<dyn FormattingContext> = Arc::new(
+      BlockFormattingContext::for_flex_item_with_font_context_viewport_and_cb(
+        self.font_context.clone(),
+        viewport_size,
+        nearest_positioned_cb,
+      )
+      .with_parallelism(self.parallelism),
+    );
     let this = self.clone();
     let mut pass_cache: HashMap<
       u64,
@@ -1111,17 +1119,10 @@ impl FormattingContext for FlexFormattingContext {
                         };
                     }
 
-                    let fc: Box<dyn FormattingContext> = if matches!(fc_type, FormattingContextType::Block) {
-                        Box::new(
-                            BlockFormattingContext::for_flex_item_with_font_context_viewport_and_cb(
-                                this.font_context.clone(),
-                                viewport_size,
-                                nearest_positioned_cb,
-                            )
-                            .with_parallelism(this.parallelism),
-                        )
+                    let fc: Arc<dyn FormattingContext> = if matches!(fc_type, FormattingContextType::Block) {
+                        flex_item_block_fc.clone()
                     } else {
-                        factory.create(fc_type)
+                        factory.get(fc_type)
                     };
 
                     let intrinsic_inline_hint = if matches!(
@@ -3255,7 +3256,7 @@ impl FlexFormattingContext {
           let fc_type = child_box
             .formatting_context()
             .unwrap_or(FormattingContextType::Block);
-          let fc = factory.create(fc_type);
+          let fc = factory.get(fc_type);
           let node_timer = flex_profile::node_timer();
           let selector_for_profile = node_timer
             .as_ref()

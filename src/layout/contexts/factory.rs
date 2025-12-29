@@ -33,6 +33,22 @@ use crate::style::display::FormattingContextType;
 use crate::text::font_loader::FontContext;
 use crate::text::pipeline::ShapingPipeline;
 use crate::tree::box_tree::BoxNode;
+use std::sync::Arc;
+use std::sync::OnceLock;
+
+#[derive(Default)]
+struct CachedFormattingContexts {
+  block: OnceLock<Arc<dyn FormattingContext>>,
+  inline: OnceLock<Arc<dyn FormattingContext>>,
+  flex: OnceLock<Arc<dyn FormattingContext>>,
+  grid: OnceLock<Arc<dyn FormattingContext>>,
+}
+
+impl CachedFormattingContexts {
+  fn fresh() -> Arc<Self> {
+    Arc::new(Self::default())
+  }
+}
 
 // =============================================================================
 // Factory
@@ -88,6 +104,7 @@ pub struct FormattingContextFactory {
   >,
   shaping_pipeline: crate::text::pipeline::ShapingPipeline,
   parallelism: LayoutParallelism,
+  cached_contexts: Arc<CachedFormattingContexts>,
 }
 
 impl std::fmt::Debug for FormattingContextFactory {
@@ -98,6 +115,52 @@ impl std::fmt::Debug for FormattingContextFactory {
 }
 
 impl FormattingContextFactory {
+  fn block_context(&self) -> BlockFormattingContext {
+    BlockFormattingContext::with_font_context_viewport_and_cb(
+      self.font_context.clone(),
+      self.viewport_size,
+      self.nearest_positioned_cb,
+    )
+    .with_parallelism(self.parallelism)
+  }
+
+  fn inline_context(&self) -> InlineFormattingContext {
+    InlineFormattingContext::with_font_context_viewport_cb_and_pipeline(
+      self.font_context.clone(),
+      self.viewport_size,
+      self.nearest_positioned_cb,
+      self.shaping_pipeline.clone(),
+    )
+    .with_parallelism(self.parallelism)
+  }
+
+  fn flex_context(&self) -> FlexFormattingContext {
+    FlexFormattingContext::with_viewport_and_cb(
+      self.viewport_size,
+      self.nearest_positioned_cb,
+      self.font_context.clone(),
+      self.flex_measure_cache.clone(),
+      self.flex_layout_cache.clone(),
+    )
+    .with_parallelism(self.parallelism)
+  }
+
+  fn grid_context(&self) -> GridFormattingContext {
+    GridFormattingContext::with_viewport_and_cb(
+      self.viewport_size,
+      self.nearest_positioned_cb,
+      self.font_context.clone(),
+    )
+  }
+
+  fn table_context(&self) -> TableFormattingContext {
+    TableFormattingContext::with_factory(self.clone())
+  }
+
+  fn reset_cached_contexts(&mut self) {
+    self.cached_contexts = CachedFormattingContexts::fresh();
+  }
+
   /// Creates a new factory
   pub fn new() -> Self {
     let viewport_size = crate::geometry::Size::new(800.0, 600.0);
@@ -176,6 +239,7 @@ impl FormattingContextFactory {
       flex_layout_cache,
       shaping_pipeline: ShapingPipeline::new(),
       parallelism: LayoutParallelism::default(),
+      cached_contexts: CachedFormattingContexts::fresh(),
     }
   }
 
@@ -183,12 +247,14 @@ impl FormattingContextFactory {
   pub fn with_positioned_cb(&self, cb: ContainingBlock) -> Self {
     let mut clone = self.clone();
     clone.nearest_positioned_cb = cb;
+    clone.reset_cached_contexts();
     clone
   }
 
   /// Returns a copy of this factory configured with the given parallelism settings.
   pub fn with_parallelism(mut self, parallelism: LayoutParallelism) -> Self {
     self.parallelism = parallelism;
+    self.reset_cached_contexts();
     self
   }
 
@@ -273,40 +339,54 @@ impl FormattingContextFactory {
   /// - Reusable (can be used for multiple layouts)
   pub fn create(&self, fc_type: FormattingContextType) -> Box<dyn FormattingContext> {
     match fc_type {
-      FormattingContextType::Block => Box::new(
-        BlockFormattingContext::with_font_context_viewport_and_cb(
-          self.font_context.clone(),
-          self.viewport_size,
-          self.nearest_positioned_cb,
-        )
-        .with_parallelism(self.parallelism),
-      ),
-      FormattingContextType::Inline => Box::new(
-        InlineFormattingContext::with_font_context_viewport_cb_and_pipeline(
-          self.font_context.clone(),
-          self.viewport_size,
-          self.nearest_positioned_cb,
-          self.shaping_pipeline.clone(),
-        )
-        .with_parallelism(self.parallelism),
-      ),
-      FormattingContextType::Flex => Box::new(
-        FlexFormattingContext::with_viewport_and_cb(
-          self.viewport_size,
-          self.nearest_positioned_cb,
-          self.font_context.clone(),
-          self.flex_measure_cache.clone(),
-          self.flex_layout_cache.clone(),
-        )
-        .with_parallelism(self.parallelism),
-      ),
-      FormattingContextType::Grid => Box::new(GridFormattingContext::with_viewport_and_cb(
-        self.viewport_size,
-        self.nearest_positioned_cb,
-        self.font_context.clone(),
-      )),
-      FormattingContextType::Table => Box::new(TableFormattingContext::with_factory(self.clone())),
+      FormattingContextType::Block => Box::new(self.block_context()),
+      FormattingContextType::Inline => Box::new(self.inline_context()),
+      FormattingContextType::Flex => Box::new(self.flex_context()),
+      FormattingContextType::Grid => Box::new(self.grid_context()),
+      FormattingContextType::Table => Box::new(self.table_context()),
     }
+  }
+
+  /// Returns a cached, shared formatting context for the specified type.
+  ///
+  /// This avoids repeated heap allocations in hot paths (e.g., Taffy measure callbacks) by
+  /// reusing stateless formatting context instances per factory. Contexts inherit the factory's
+  /// viewport, containing block, shaping pipeline, shared flex caches, and parallelism settings.
+  pub fn get(&self, fc_type: FormattingContextType) -> Arc<dyn FormattingContext> {
+    match fc_type {
+      FormattingContextType::Block => self
+        .cached_contexts
+        .block
+        .get_or_init(|| Arc::new(self.block_context()))
+        .clone(),
+      FormattingContextType::Inline => self
+        .cached_contexts
+        .inline
+        .get_or_init(|| Arc::new(self.inline_context()))
+        .clone(),
+      FormattingContextType::Flex => self
+        .cached_contexts
+        .flex
+        .get_or_init(|| Arc::new(self.flex_context()))
+        .clone(),
+      FormattingContextType::Grid => self
+        .cached_contexts
+        .grid
+        .get_or_init(|| Arc::new(self.grid_context()))
+        .clone(),
+      // TableFormattingContext maintains per-layout state (structure) so keep it uncached.
+      FormattingContextType::Table => Arc::new(self.table_context()),
+    }
+  }
+
+  /// Invokes a closure with a cached formatting context, avoiding an explicit clone in callers.
+  pub fn with_fc<R>(
+    &self,
+    fc_type: FormattingContextType,
+    f: impl FnOnce(&dyn FormattingContext) -> R,
+  ) -> R {
+    let fc = self.get(fc_type);
+    f(fc.as_ref())
   }
 
   /// Returns all supported formatting context types
@@ -364,6 +444,8 @@ impl Default for FormattingContextFactory {
 mod tests {
   use super::*;
   use crate::layout::constraints::LayoutConstraints;
+  use crate::layout::contexts::positioned::ContainingBlock;
+  use crate::layout::engine::LayoutParallelism;
   use crate::style::ComputedStyle;
   use std::sync::Arc;
 
@@ -515,5 +597,32 @@ mod tests {
         let _ = fc;
       });
     }
+  }
+
+  #[test]
+  fn test_get_reuses_cached_instances() {
+    let factory = FormattingContextFactory::new();
+    let a = factory.get(FormattingContextType::Flex);
+    let b = factory.get(FormattingContextType::Flex);
+    assert!(Arc::ptr_eq(&a, &b));
+
+    let block_a = factory.get(FormattingContextType::Block);
+    let block_b = factory.get(FormattingContextType::Block);
+    assert!(Arc::ptr_eq(&block_a, &block_b));
+  }
+
+  #[test]
+  fn test_get_resets_with_configuration_changes() {
+    let factory = FormattingContextFactory::new();
+    let original = factory.get(FormattingContextType::Block);
+
+    let different_cb = ContainingBlock::viewport(crate::geometry::Size::new(320.0, 240.0));
+    let with_cb = factory.with_positioned_cb(different_cb);
+    let cb_fc = with_cb.get(FormattingContextType::Block);
+    assert!(!Arc::ptr_eq(&original, &cb_fc));
+
+    let parallel = factory.with_parallelism(LayoutParallelism::enabled(2));
+    let parallel_fc = parallel.get(FormattingContextType::Block);
+    assert!(!Arc::ptr_eq(&original, &parallel_fc));
   }
 }

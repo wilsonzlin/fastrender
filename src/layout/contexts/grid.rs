@@ -1311,7 +1311,7 @@ impl GridFormattingContext {
           self.viewport_size,
           self.nearest_positioned_cb,
         );
-      let fc = factory.create(fc_type);
+      let fc = factory.get(fc_type);
 
       let mut layout_child = (*box_node).clone();
       let mut layout_style = (*layout_child.style).clone();
@@ -1881,7 +1881,7 @@ impl GridFormattingContext {
             let fc_type = box_node
               .formatting_context()
               .unwrap_or(FormattingContextType::Block);
-            let fc = factory.create(fc_type);
+            let fc = factory.get(fc_type);
             let constraints =
               constraints_from_taffy(viewport_size, known_dimensions, available_space, None);
             let fragment = match fc.layout(box_node, &constraints) {
@@ -2432,7 +2432,7 @@ impl FormattingContext for GridFormattingContext {
             let fc_type = box_node
               .formatting_context()
               .unwrap_or(FormattingContextType::Block);
-            let fc = factory.create(fc_type);
+            let fc = factory.get(fc_type);
 
             // Taffy frequently probes min/max-content sizes during track sizing.
             // Avoid running full layout for these probes; use intrinsic sizing APIs instead.
