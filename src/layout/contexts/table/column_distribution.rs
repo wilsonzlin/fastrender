@@ -26,10 +26,11 @@
 //! - CSS Tables Module Level 3: <https://www.w3.org/TR/css-tables-3/>
 //! - CSS 2.1 Section 17.5: <https://www.w3.org/TR/CSS21/tables.html#width-layout>
 
+<<<<<<< ours
 use crate::error::{RenderError, RenderStage};
 use crate::layout::formatting_context::LayoutError;
 use crate::render_control::check_active_periodic;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::time::Duration;
 
@@ -288,7 +289,7 @@ impl fmt::Display for ColumnConstraints {
 /// Distribution mode for column width algorithm
 ///
 /// Different table layout modes use different distribution strategies.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DistributionMode {
   /// Fixed table layout (`table-layout: fixed`)
   ///
@@ -351,6 +352,21 @@ impl ColumnWidthDistributionResult {
   pub fn column_count(&self) -> usize {
     self.widths.len()
   }
+}
+
+#[derive(Default)]
+struct FlexScratch {
+  infinite_indices: Vec<usize>,
+}
+
+#[derive(Default)]
+struct SpanScratch {
+  indices: Vec<usize>,
+}
+
+thread_local! {
+  static FLEX_SCRATCH: RefCell<FlexScratch> = RefCell::new(FlexScratch::default());
+  static SPAN_SCRATCH: RefCell<SpanScratch> = RefCell::new(SpanScratch::default());
 }
 
 /// Column width distribution algorithm
@@ -852,41 +868,24 @@ impl ColumnDistributor {
     // Between min and max - distribute proportionally to flexibility range, with explicit
     // handling for unbounded ranges so we don't end up dividing by infinity and producing NaN.
     let excess = remaining_width - flexible_min;
-    let mut finite_flex_total = 0.0;
-    let mut infinite_indices = Vec::new();
-    for &i in flexible_indices {
-      let range = columns[i].flexibility_range();
-      if range.is_finite() {
-        finite_flex_total += range;
-      } else {
-        infinite_indices.push(i);
-      }
-      widths[i] = columns[i].min_width.max(self.min_column_width);
-    }
-
-    let mut remaining_excess = excess;
-
-    // First, allocate to columns with finite headroom proportionally to their range, capped at
-    // their max. If the excess exceeds the total finite headroom, leave the remainder for
-    // unbounded columns.
-    if finite_flex_total > 0.0 {
+    FLEX_SCRATCH.with(|scratch_cell| {
+      let mut scratch = scratch_cell.borrow_mut();
+      scratch.infinite_indices.clear();
+      let mut finite_flex_total = 0.0;
       for &i in flexible_indices {
         if self.check_deadline(deadline_counter) {
           return;
         }
         let range = columns[i].flexibility_range();
-        if !range.is_finite() {
-          continue;
+        if range.is_finite() {
+          finite_flex_total += range;
+        } else {
+          scratch.infinite_indices.push(i);
         }
-        let share = excess * (range / finite_flex_total);
-        let clamped = share.min(range);
-        widths[i] =
-          (columns[i].min_width.max(self.min_column_width) + clamped).min(columns[i].max_width);
-        remaining_excess -= clamped;
+        widths[i] = columns[i].min_width.max(self.min_column_width);
       }
-      remaining_excess = remaining_excess.max(0.0);
-    }
 
+<<<<<<< ours
     // Any leftover space goes to unbounded columns; divide evenly to keep the result stable.
     if remaining_excess > 0.0 {
       if !infinite_indices.is_empty() {
@@ -905,9 +904,44 @@ impl ColumnDistributor {
             return;
           }
           widths[i] = per_column;
+=======
+      let mut remaining_excess = excess;
+
+      // First, allocate to columns with finite headroom proportionally to their range, capped at
+      // their max. If the excess exceeds the total finite headroom, leave the remainder for
+      // unbounded columns.
+      if finite_flex_total > 0.0 {
+        for &i in flexible_indices {
+          let range = columns[i].flexibility_range();
+          if !range.is_finite() {
+            continue;
+          }
+          let share = excess * (range / finite_flex_total);
+          let clamped = share.min(range);
+          widths[i] =
+            (columns[i].min_width.max(self.min_column_width) + clamped).min(columns[i].max_width);
+          remaining_excess -= clamped;
+>>>>>>> theirs
+        }
+        remaining_excess = remaining_excess.max(0.0);
+      }
+
+      // Any leftover space goes to unbounded columns; divide evenly to keep the result stable.
+      if remaining_excess > 0.0 {
+        if !scratch.infinite_indices.is_empty() {
+          let per = remaining_excess / scratch.infinite_indices.len() as f32;
+          for idx in scratch.infinite_indices.drain(..) {
+            widths[idx] += per;
+          }
+        } else if finite_flex_total == 0.0 {
+          // No range information at all (min == max for every column); split evenly.
+          let per_column = remaining_width / flexible_indices.len() as f32;
+          for &i in flexible_indices {
+            widths[i] = per_column;
+          }
         }
       }
-    }
+    });
   }
 }
 
@@ -977,183 +1011,73 @@ pub fn distribute_spanning_cell_width(
 
   let spanned = &mut columns[start_col..end_col];
 
-  let distribute_min = |cols: &mut [ColumnConstraints], indices: &[usize], need: f32| -> f32 {
-    if indices.is_empty() || need <= 0.0 {
-      return need;
-    }
-    let mut remaining = need;
+  SPAN_SCRATCH.with(|scratch_cell| {
+    let mut scratch = scratch_cell.borrow_mut();
+    let indices = &mut scratch.indices;
 
-    // Prefer columns with finite headroom; keep unbounded headroom separate to avoid inf/inf.
-    let mut finite: Vec<(usize, f32)> = Vec::new();
-    let mut infinite: Vec<usize> = Vec::new();
-    for &i in indices {
-      let headroom = (cols[i].max_width - cols[i].min_width).max(0.0);
-      if headroom.is_finite() {
-        if headroom > 0.0 {
-          finite.push((i, headroom));
-        }
-      } else {
-        infinite.push(i);
-      }
-    }
-
-    if !finite.is_empty() && remaining.is_finite() {
-      let total_headroom: f32 = finite.iter().map(|(_, h)| *h).sum();
-      if total_headroom > 0.0 {
-        let mut distributed = 0.0;
-        for (idx, headroom) in &finite {
-          let share = remaining * (*headroom / total_headroom);
-          let delta = share.min(*headroom);
-          cols[*idx].min_width += delta;
-          if cols[*idx].min_width > cols[*idx].max_width {
-            cols[*idx].max_width = cols[*idx].min_width;
-          }
-          distributed += delta;
-        }
-        remaining = (remaining - distributed).max(0.0);
-      }
-    }
-
-    if remaining > 0.0 {
-      if !infinite.is_empty() {
-        let per = remaining / infinite.len() as f32;
-        for idx in infinite {
-          cols[idx].min_width += per;
-          if cols[idx].max_width < cols[idx].min_width {
-            cols[idx].max_width = cols[idx].min_width;
-          }
-        }
-        remaining = 0.0;
-      } else {
-        let weights: Vec<f32> = indices
-          .iter()
-          .map(|&i| cols[i].min_width.max(1.0))
-          .collect();
-        let total_weight: f32 = weights.iter().sum();
-        if total_weight > 0.0 {
-          let mut distributed = 0.0;
-          for (&idx, weight) in indices.iter().zip(weights.iter()) {
-            let delta = remaining * (*weight / total_weight);
-            cols[idx].min_width += delta;
-            if cols[idx].max_width < cols[idx].min_width {
-              cols[idx].max_width = cols[idx].min_width;
-            }
-            distributed += delta;
-          }
-          remaining = (remaining - distributed).max(0.0);
-        }
-      }
-    }
-
-    remaining
-  };
-
-  let current_min_sum: f32 = spanned.iter().map(|c| c.min_width).sum();
-  if required_min > current_min_sum {
-    let mut need = required_min - current_min_sum;
-    let flex_indices: Vec<usize> = spanned
-      .iter()
-      .enumerate()
-      .filter_map(|(i, c)| if c.is_flexible { Some(i) } else { None })
-      .collect();
-    need = distribute_min(spanned, &flex_indices, need);
-
-    if need > 0.0 {
-      let percent_indices: Vec<usize> = spanned
-        .iter()
-        .enumerate()
-        .filter_map(|(i, c)| {
-          if c.percentage.is_some() {
-            Some(i)
-          } else {
-            None
-          }
-        })
-        .collect();
-      need = distribute_min(spanned, &percent_indices, need);
-    }
-
-    if need > 0.0 {
-      let all_indices: Vec<usize> = (0..spanned.len()).collect();
-      need = distribute_min(spanned, &all_indices, need);
-    }
-
-    if need > 0.0 {
-      let per = need / spanned.len() as f32;
-      for col in spanned.iter_mut() {
-        col.min_width += per;
-        if col.max_width < col.min_width {
-          col.max_width = col.min_width;
-        }
-      }
-    }
-  }
-
-  // Then ensure the span can satisfy the cell's maximum width request, preferring flexible and percentage columns.
-  if let Some(required_max) = required_max {
-    let current_max_sum: f32 = spanned.iter().map(|c| c.max_width).sum();
-    if required_max > current_max_sum {
-      let distribute_max = |cols: &mut [ColumnConstraints], indices: &[usize], need: f32| -> f32 {
+    let distribute_min =
+      |cols: &mut [ColumnConstraints], indices: &[usize], need: f32| -> f32 {
         if indices.is_empty() || need <= 0.0 {
           return need;
         }
-
         let mut remaining = need;
 
-        let mut finite: Vec<(usize, f32)> = Vec::new();
-        let mut infinite: Vec<usize> = Vec::new();
+        let mut total_headroom = 0.0;
+        let mut infinite = 0usize;
         for &i in indices {
           let headroom = (cols[i].max_width - cols[i].min_width).max(0.0);
           if headroom.is_finite() {
-            finite.push((i, headroom));
+            if headroom > 0.0 {
+              total_headroom += headroom;
+            }
           } else {
-            infinite.push(i);
+            infinite += 1;
           }
         }
 
-        if !finite.is_empty() && remaining.is_finite() {
-          let total_headroom: f32 = finite.iter().map(|(_, h)| *h).sum();
-          if total_headroom > 0.0 {
-            let to_distribute = remaining.min(total_headroom);
-            let mut distributed = 0.0;
-            for (idx, headroom) in &finite {
-              if *headroom <= 0.0 {
-                continue;
-              }
-              let delta = (to_distribute * (*headroom / total_headroom)).min(*headroom);
-              cols[*idx].max_width += delta;
-              if cols[*idx].max_width < cols[*idx].min_width {
-                cols[*idx].max_width = cols[*idx].min_width;
+        if total_headroom > 0.0 && remaining.is_finite() {
+          let mut distributed = 0.0;
+          for &i in indices {
+            let headroom = (cols[i].max_width - cols[i].min_width).max(0.0);
+            if headroom.is_finite() && headroom > 0.0 {
+              let share = remaining * (headroom / total_headroom);
+              let delta = share.min(headroom);
+              cols[i].min_width += delta;
+              if cols[i].max_width < cols[i].min_width {
+                cols[i].max_width = cols[i].min_width;
               }
               distributed += delta;
             }
-            remaining = (remaining - distributed).max(0.0);
           }
+          remaining = (remaining - distributed).max(0.0);
         }
 
         if remaining > 0.0 {
-          if !infinite.is_empty() {
-            let per = remaining / infinite.len() as f32;
-            for idx in infinite {
-              cols[idx].max_width += per;
-              if cols[idx].max_width < cols[idx].min_width {
-                cols[idx].max_width = cols[idx].min_width;
+          if infinite > 0 {
+            let per = remaining / infinite as f32;
+            for &i in indices {
+              let headroom = (cols[i].max_width - cols[i].min_width).max(0.0);
+              if !headroom.is_finite() {
+                cols[i].min_width += per;
+                if cols[i].max_width < cols[i].min_width {
+                  cols[i].max_width = cols[i].min_width;
+                }
               }
             }
             remaining = 0.0;
           } else {
-            let weights: Vec<f32> = indices
-              .iter()
-              .map(|&i| cols[i].max_width.max(1.0))
-              .collect();
-            let total_weight: f32 = weights.iter().sum();
+            let mut total_weight = 0.0;
+            for &i in indices {
+              total_weight += cols[i].min_width.max(1.0);
+            }
             if total_weight > 0.0 {
               let mut distributed = 0.0;
-              for (&idx, weight) in indices.iter().zip(weights.iter()) {
-                let delta = remaining * (*weight / total_weight);
-                cols[idx].max_width += delta;
-                if cols[idx].max_width < cols[idx].min_width {
-                  cols[idx].max_width = cols[idx].min_width;
+              for &i in indices {
+                let weight = cols[i].min_width.max(1.0);
+                let delta = remaining * (weight / total_weight);
+                cols[i].min_width += delta;
+                if cols[i].max_width < cols[i].min_width {
+                  cols[i].max_width = cols[i].min_width;
                 }
                 distributed += delta;
               }
@@ -1165,28 +1089,145 @@ pub fn distribute_spanning_cell_width(
         remaining
       };
 
-      let mut extra = required_max - current_max_sum;
-      let adjustable: Vec<usize> = spanned
-        .iter()
-        .enumerate()
-        .filter_map(|(i, c)| {
+    let current_min_sum: f32 = spanned.iter().map(|c| c.min_width).sum();
+    if required_min > current_min_sum {
+      let mut need = required_min - current_min_sum;
+      indices.clear();
+      indices.extend(spanned.iter().enumerate().filter_map(|(i, c)| {
+        if c.is_flexible {
+          Some(i)
+        } else {
+          None
+        }
+      }));
+      need = distribute_min(spanned, indices, need);
+
+      if need > 0.0 {
+        indices.clear();
+        indices.extend(spanned.iter().enumerate().filter_map(|(i, c)| {
+          if c.percentage.is_some() {
+            Some(i)
+          } else {
+            None
+          }
+        }));
+        need = distribute_min(spanned, indices, need);
+      }
+
+      if need > 0.0 {
+        indices.clear();
+        indices.extend(0..spanned.len());
+        need = distribute_min(spanned, indices, need);
+      }
+
+      if need > 0.0 {
+        let per = need / spanned.len() as f32;
+        for col in spanned.iter_mut() {
+          col.min_width += per;
+          if col.max_width < col.min_width {
+            col.max_width = col.min_width;
+          }
+        }
+      }
+    }
+
+    // Then ensure the span can satisfy the cell's maximum width request, preferring flexible and percentage columns.
+    if let Some(required_max) = required_max {
+      let current_max_sum: f32 = spanned.iter().map(|c| c.max_width).sum();
+      if required_max > current_max_sum {
+        let distribute_max =
+          |cols: &mut [ColumnConstraints], indices: &[usize], need: f32| -> f32 {
+            if indices.is_empty() || need <= 0.0 {
+              return need;
+            }
+
+            let mut remaining = need;
+            let mut total_headroom = 0.0;
+            let mut infinite = 0usize;
+            for &i in indices {
+              let headroom = (cols[i].max_width - cols[i].min_width).max(0.0);
+              if headroom.is_finite() {
+                total_headroom += headroom;
+              } else {
+                infinite += 1;
+              }
+            }
+
+            if total_headroom > 0.0 && remaining.is_finite() {
+              let mut distributed = 0.0;
+              let to_distribute = remaining.min(total_headroom);
+              for &i in indices {
+                let headroom = (cols[i].max_width - cols[i].min_width).max(0.0);
+                if headroom.is_finite() && headroom > 0.0 {
+                  let delta = (to_distribute * (headroom / total_headroom)).min(headroom);
+                  cols[i].max_width += delta;
+                  if cols[i].max_width < cols[i].min_width {
+                    cols[i].max_width = cols[i].min_width;
+                  }
+                  distributed += delta;
+                }
+              }
+              remaining = (remaining - distributed).max(0.0);
+            }
+
+            if remaining > 0.0 {
+              if infinite > 0 {
+                let per = remaining / infinite as f32;
+                for &i in indices {
+                  let headroom = (cols[i].max_width - cols[i].min_width).max(0.0);
+                  if !headroom.is_finite() {
+                    cols[i].max_width += per;
+                    if cols[i].max_width < cols[i].min_width {
+                      cols[i].max_width = cols[i].min_width;
+                    }
+                  }
+                }
+                remaining = 0.0;
+              } else {
+                let mut total_weight = 0.0;
+                for &i in indices {
+                  total_weight += cols[i].max_width.max(1.0);
+                }
+                if total_weight > 0.0 {
+                  let mut distributed = 0.0;
+                  for &i in indices {
+                    let weight = cols[i].max_width.max(1.0);
+                    let delta = remaining * (weight / total_weight);
+                    cols[i].max_width += delta;
+                    if cols[i].max_width < cols[i].min_width {
+                      cols[i].max_width = cols[i].min_width;
+                    }
+                    distributed += delta;
+                  }
+                  remaining = (remaining - distributed).max(0.0);
+                }
+              }
+            }
+
+            remaining
+          };
+
+        let mut extra = required_max - current_max_sum;
+        indices.clear();
+        indices.extend(spanned.iter().enumerate().filter_map(|(i, c)| {
           if c.max_width > c.min_width + 0.01 {
             Some(i)
           } else {
             None
           }
-        })
-        .collect();
-      if !adjustable.is_empty() {
-        extra = distribute_max(spanned, &adjustable, extra);
-      }
+        }));
+        if !indices.is_empty() {
+          extra = distribute_max(spanned, indices, extra);
+        }
 
-      if extra > 0.0 {
-        let all_indices: Vec<usize> = (0..spanned.len()).collect();
-        distribute_max(spanned, &all_indices, extra);
+        if extra > 0.0 {
+          indices.clear();
+          indices.extend(0..spanned.len());
+          distribute_max(spanned, indices, extra);
+        }
       }
     }
-  }
+  });
 }
 
 /// Assign a percentage width to a spanning cell by splitting it across columns.

@@ -194,6 +194,16 @@ impl ColumnInfo {
   }
 }
 
+#[derive(Default)]
+struct ColumnSpanScratch {
+  buffer: Vec<f32>,
+}
+
+thread_local! {
+  static COLUMN_SPAN_SCRATCH: RefCell<ColumnSpanScratch> =
+    RefCell::new(ColumnSpanScratch::default());
+}
+
 /// Distribute a spanning cell's minimum width across the covered columns.
 ///
 /// Extra width is allocated proportionally to each column's remaining growth
@@ -203,50 +213,56 @@ fn distribute_span_min(columns: &mut [ColumnInfo], start: usize, end: usize, req
   if start >= end || end > columns.len() {
     return;
   }
-  let span = &mut columns[start..end];
-  let current: f32 = span.iter().map(|c| c.min_width).sum();
-  if required_min <= current {
-    return;
-  }
-  let deficit = required_min - current;
+  COLUMN_SPAN_SCRATCH.with(|scratch_cell| {
+    let mut scratch = scratch_cell.borrow_mut();
+    let capacities = &mut scratch.buffer;
+    let span = &mut columns[start..end];
+    let current: f32 = span.iter().map(|c| c.min_width).sum();
+    if required_min <= current {
+      return;
+    }
+    let deficit = required_min - current;
 
-  let capacities: Vec<f32> = span
-    .iter()
-    .map(|c| {
-      let cap = c.max_width - c.min_width;
-      if cap.is_finite() && cap > 0.0 {
+    capacities.clear();
+    capacities.reserve(span.len());
+    for col in span.iter() {
+      let cap = col.max_width - col.min_width;
+      capacities.push(if cap.is_finite() && cap > 0.0 {
         cap
       } else {
         0.0
+      });
+    }
+    let total_cap: f32 = capacities.iter().sum();
+    let mut remaining = if total_cap > 0.0 {
+      let mut allocated = 0.0;
+      for (col, cap) in span.iter_mut().zip(capacities.iter()) {
+        if *cap > 0.0 {
+          let share = deficit * (*cap / total_cap);
+          let growth = share.min(*cap);
+          col.min_width += growth;
+          allocated += growth;
+        }
       }
-    })
-    .collect();
-  let total_cap: f32 = capacities.iter().sum();
-  let remaining = if total_cap > 0.0 {
-    let mut allocated = 0.0;
-    for (col, cap) in span.iter_mut().zip(capacities.iter()) {
-      if *cap > 0.0 {
-        let share = deficit * (*cap / total_cap);
-        let growth = share.min(*cap);
-        col.min_width += growth;
-        allocated += growth;
+      (deficit - allocated).max(0.0)
+    } else {
+      deficit
+    };
+
+    if remaining > 0.0 {
+      let per = remaining / span.len() as f32;
+      for col in span.iter_mut() {
+        col.min_width += per;
+      }
+      remaining = 0.0;
+    }
+
+    if remaining.is_finite() {
+      for col in span.iter_mut() {
+        col.max_width = col.max_width.max(col.min_width);
       }
     }
-    (deficit - allocated).max(0.0)
-  } else {
-    deficit
-  };
-
-  if remaining > 0.0 {
-    let per = remaining / span.len() as f32;
-    for col in span.iter_mut() {
-      col.min_width += per;
-    }
-  }
-
-  for col in span.iter_mut() {
-    col.max_width = col.max_width.max(col.min_width);
-  }
+  });
 }
 
 /// Distribute a spanning cell's maximum width across the covered columns.
@@ -257,49 +273,55 @@ fn distribute_span_max(columns: &mut [ColumnInfo], start: usize, end: usize, req
   if !required_max.is_finite() || start >= end || end > columns.len() {
     return;
   }
-  let span = &mut columns[start..end];
-  let current: f32 = span.iter().map(|c| c.max_width).sum();
-  if required_max <= current {
-    return;
-  }
-  let deficit = required_max - current;
+  COLUMN_SPAN_SCRATCH.with(|scratch_cell| {
+    let mut scratch = scratch_cell.borrow_mut();
+    let flex_ranges = &mut scratch.buffer;
+    let span = &mut columns[start..end];
+    let current: f32 = span.iter().map(|c| c.max_width).sum();
+    if required_max <= current {
+      return;
+    }
+    let deficit = required_max - current;
 
-  let flex_ranges: Vec<f32> = span
-    .iter()
-    .map(|c| {
-      let range = c.max_width - c.min_width;
-      if range.is_finite() && range > 0.0 {
+    flex_ranges.clear();
+    flex_ranges.reserve(span.len());
+    for col in span.iter() {
+      let range = col.max_width - col.min_width;
+      flex_ranges.push(if range.is_finite() && range > 0.0 {
         range
       } else {
         0.0
+      });
+    }
+    let total_flex: f32 = flex_ranges.iter().sum();
+    let mut remaining = if total_flex > 0.0 {
+      let mut allocated = 0.0;
+      for (col, range) in span.iter_mut().zip(flex_ranges.iter()) {
+        if *range > 0.0 {
+          let growth = deficit * (*range / total_flex);
+          col.max_width += growth;
+          allocated += growth;
+        }
       }
-    })
-    .collect();
-  let total_flex: f32 = flex_ranges.iter().sum();
-  let remaining = if total_flex > 0.0 {
-    let mut allocated = 0.0;
-    for (col, range) in span.iter_mut().zip(flex_ranges.iter()) {
-      if *range > 0.0 {
-        let growth = deficit * (*range / total_flex);
-        col.max_width += growth;
-        allocated += growth;
+      (deficit - allocated).max(0.0)
+    } else {
+      deficit
+    };
+
+    if remaining > 0.0 {
+      let per = remaining / span.len() as f32;
+      for col in span.iter_mut() {
+        col.max_width += per;
+      }
+      remaining = 0.0;
+    }
+
+    if remaining.is_finite() {
+      for col in span.iter_mut() {
+        col.max_width = col.max_width.max(col.min_width);
       }
     }
-    (deficit - allocated).max(0.0)
-  } else {
-    deficit
-  };
-
-  if remaining > 0.0 {
-    let per = remaining / span.len() as f32;
-    for col in span.iter_mut() {
-      col.max_width += per;
-    }
-  }
-
-  for col in span.iter_mut() {
-    col.max_width = col.max_width.max(col.min_width);
-  }
+  });
 }
 
 /// Information about a table row
@@ -391,6 +413,17 @@ struct RowGroupConstraints {
   max_height: Option<SpecifiedHeight>,
 }
 
+#[derive(Default)]
+struct RowSpanScratch {
+  weights: Vec<f32>,
+  caps: Vec<Option<f32>>,
+  shares: Vec<f32>,
+}
+
+thread_local! {
+  static ROWSPAN_SCRATCH: RefCell<RowSpanScratch> = RefCell::new(RowSpanScratch::default());
+}
+
 fn distribute_rowspan_targets_range(
   start: usize,
   end: usize,
@@ -412,86 +445,98 @@ fn distribute_rowspan_targets_range(
   }
   let span_len = span_end - span_start;
 
-  let mut weights = Vec::with_capacity(span_len);
-  let mut caps = Vec::with_capacity(span_len);
-  let mut total_weight = 0.0;
-  for idx in span_start..span_end {
-    let current = *row_heights.get(idx).unwrap_or(&0.0);
-    let base = row_floor(idx, current);
-    let (_, max_opt) = resolve_row_min_max(&rows[idx], percent_base);
-    let headroom = max_opt.map(|m| (m - base).max(0.0));
-    let weight = match headroom {
-      Some(h) if h > 0.0 => h,
-      Some(_) => 0.0,
-      None => 1.0, // Uncapped rows share spanning contributions evenly.
-    };
-    total_weight += weight;
-    weights.push(weight);
-    caps.push(headroom);
-  }
+  ROWSPAN_SCRATCH.with(|scratch_cell| {
+    let mut scratch = scratch_cell.borrow_mut();
+    let RowSpanScratch {
+      weights,
+      caps,
+      shares,
+    } = &mut *scratch;
+    weights.clear();
+    caps.clear();
+    shares.clear();
+    weights.resize(span_len, 0.0);
+    caps.resize(span_len, None);
+    shares.resize(span_len, 0.0);
 
-  if total_weight <= 0.0 {
-    total_weight = span_len as f32;
-    weights.fill(1.0);
-  }
-
-  let mut shares = vec![0.0; span_len];
-  let mut allocated = 0.0;
-  for ((share, weight), cap) in shares.iter_mut().zip(weights.iter()).zip(caps.iter()) {
-    let mut portion = if total_weight > 0.0 {
-      remaining * (*weight / total_weight)
-    } else {
-      0.0
-    };
-    if let Some(c) = cap {
-      portion = portion.min(*c);
+    let mut total_weight = 0.0;
+    for (offset, idx) in (span_start..span_end).enumerate() {
+      let current = *row_heights.get(idx).unwrap_or(&0.0);
+      let base = row_floor(idx, current);
+      let (_, max_opt) = resolve_row_min_max(&rows[idx], percent_base);
+      let headroom = max_opt.map(|m| (m - base).max(0.0));
+      let weight = match headroom {
+        Some(h) if h > 0.0 => h,
+        Some(_) => 0.0,
+        None => 1.0, // Uncapped rows share spanning contributions evenly.
+      };
+      total_weight += weight;
+      weights[offset] = weight;
+      caps[offset] = headroom;
     }
-    *share = portion;
-    allocated += portion;
-  }
 
-  let leftover = (remaining - allocated).max(0.0);
-  if leftover > 0.01 {
-    let mut finite_sum = 0.0;
-    let mut unbounded = 0usize;
-    for (cap, share) in caps.iter().zip(shares.iter()) {
-      let cap_left = cap.map(|c| (c - *share).max(0.0)).unwrap_or(f32::INFINITY);
-      if cap_left <= 0.0 {
-        continue;
-      }
-      if cap_left.is_finite() {
-        finite_sum += cap_left;
+    if total_weight <= 0.0 {
+      total_weight = span_len as f32;
+      weights.fill(1.0);
+    }
+
+    let mut allocated = 0.0;
+    for ((share, weight), cap) in shares.iter_mut().zip(weights.iter()).zip(caps.iter()) {
+      let mut portion = if total_weight > 0.0 {
+        remaining * (*weight / total_weight)
       } else {
-        unbounded += 1;
+        0.0
+      };
+      if let Some(c) = cap {
+        portion = portion.min(*c);
       }
+      *share = portion;
+      allocated += portion;
     }
 
-    if finite_sum > 0.0 {
-      for (cap, share) in caps.iter().zip(shares.iter_mut()) {
+    let leftover = (remaining - allocated).max(0.0);
+    if leftover > 0.01 {
+      let mut finite_sum = 0.0;
+      let mut unbounded = 0usize;
+      for (cap, share) in caps.iter().zip(shares.iter()) {
         let cap_left = cap.map(|c| (c - *share).max(0.0)).unwrap_or(f32::INFINITY);
-        if cap_left <= 0.0 || !cap_left.is_finite() {
+        if cap_left <= 0.0 {
           continue;
         }
-        let extra = leftover * (cap_left / finite_sum);
-        *share += extra.min(cap_left);
+        if cap_left.is_finite() {
+          finite_sum += cap_left;
+        } else {
+          unbounded += 1;
+        }
       }
-    } else if unbounded > 0 {
-      let per = leftover / unbounded as f32;
-      for (cap, share) in caps.iter().zip(shares.iter_mut()) {
-        let cap_left = cap.map(|c| (c - *share).max(0.0)).unwrap_or(f32::INFINITY);
-        if cap_left.is_infinite() && cap_left > 0.0 {
-          *share += per;
+
+      if finite_sum > 0.0 {
+        for (cap, share) in caps.iter().zip(shares.iter_mut()) {
+          let cap_left = cap.map(|c| (c - *share).max(0.0)).unwrap_or(f32::INFINITY);
+          if cap_left <= 0.0 || !cap_left.is_finite() {
+            continue;
+          }
+          let extra = leftover * (cap_left / finite_sum);
+          *share += extra.min(cap_left);
+        }
+      } else if unbounded > 0 {
+        let per = leftover / unbounded as f32;
+        for (cap, share) in caps.iter().zip(shares.iter_mut()) {
+          let cap_left = cap.map(|c| (c - *share).max(0.0)).unwrap_or(f32::INFINITY);
+          if cap_left.is_infinite() && cap_left > 0.0 {
+            *share += per;
+          }
         }
       }
     }
-  }
 
-  for (offset, share) in shares.iter().enumerate() {
-    let target_idx = span_start + offset;
-    if let Some(slot) = row_heights.get_mut(target_idx) {
-      *slot = combine(*slot, *share);
+    for (offset, share) in shares.iter().enumerate() {
+      let target_idx = span_start + offset;
+      if let Some(slot) = row_heights.get_mut(target_idx) {
+        *slot = combine(*slot, *share);
+      }
     }
-  }
+  });
 }
 
 fn distribute_remaining_height_with_caps(
@@ -1835,6 +1880,7 @@ impl TableStructure {
       }
     }
 
+    let mut col_cursor = 0usize;
     for (cell_idx, cell_child) in row.children.iter().enumerate() {
       if matches!(
         Self::get_table_element_type(cell_child),
@@ -1851,7 +1897,6 @@ impl TableStructure {
 
         // Find the first free block of columns that can fit the span in linear time.
         let mut run_len = 0usize;
-        let mut col_cursor = 0usize;
         let start_col = loop {
           if col_cursor >= occupied.len() {
             occupied.push(false);
@@ -1886,6 +1931,7 @@ impl TableStructure {
             *slot = (*slot).max(span_rows);
           }
         }
+        col_cursor = start_col + colspan;
       }
     }
   }
@@ -2463,8 +2509,15 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
     if col_idx >= vertical_line_count || row_start >= row_end || rows == 0 {
       return;
     }
+    if matches!(style, BorderStyle::None) {
+      return;
+    }
+    let resolved_width = resolved_border_width(style, width);
+    if resolved_width <= 0.0 && !matches!(style, BorderStyle::Hidden) {
+      return;
+    }
     let candidate = BorderCandidate {
-      width: resolved_border_width(style, width),
+      width: resolved_width,
       style,
       color: *color,
       origin,
@@ -2494,8 +2547,15 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
     if row_idx >= horizontal_line_count || col_start >= col_end || columns == 0 {
       return;
     }
+    if matches!(style, BorderStyle::None) {
+      return;
+    }
+    let resolved_width = resolved_border_width(style, width);
+    if resolved_width <= 0.0 && !matches!(style, BorderStyle::Hidden) {
+      return;
+    }
     let candidate = BorderCandidate {
-      width: resolved_border_width(style, width),
+      width: resolved_width,
       style,
       color: *color,
       origin,
@@ -3649,6 +3709,61 @@ thread_local! {
     RefCell::new(HashMap::new());
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct ColumnConstraintCacheKey {
+  box_id: usize,
+  epoch: usize,
+  mode: DistributionMode,
+  percent_base_bits: Option<u32>,
+  collapsed: bool,
+}
+
+#[derive(Debug, Clone)]
+struct ColumnConstraintCacheEntry {
+  constraints: Arc<Vec<ColumnConstraints>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct CellIntrinsicCacheKey {
+  box_id: usize,
+  style_ptr: usize,
+  percent_base_bits: Option<u32>,
+  collapsed: bool,
+  epoch: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CellIntrinsicCacheEntry {
+  min: f32,
+  max: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct CollapsedBordersCacheKey {
+  box_id: usize,
+  epoch: usize,
+  structure_ptr: usize,
+}
+
+thread_local! {
+  static COLUMN_CONSTRAINT_CACHE: RefCell<HashMap<ColumnConstraintCacheKey, ColumnConstraintCacheEntry>> =
+    RefCell::new(HashMap::new());
+  static COLLAPSED_BORDERS_CACHE: RefCell<HashMap<CollapsedBordersCacheKey, Arc<CollapsedBorders>>> =
+    RefCell::new(HashMap::new());
+  static CELL_INTRINSIC_CACHE: RefCell<HashMap<CellIntrinsicCacheKey, CellIntrinsicCacheEntry>> =
+    RefCell::new(HashMap::new());
+}
+
+fn percent_base_cache_key(base: Option<f32>) -> Option<u32> {
+  base.and_then(|v| {
+    if v.is_finite() {
+      Some(v.to_bits())
+    } else {
+      None
+    }
+  })
+}
+
 fn table_structure_cache_key(table_box: &BoxNode) -> Option<TableStructureCacheKey> {
   let box_id = table_box.id();
   if box_id == 0 {
@@ -3684,6 +3799,31 @@ fn table_structure_cached(table_box: &BoxNode) -> Arc<TableStructure> {
   } else {
     build_structure()
   }
+}
+
+fn collapsed_borders_cached(
+  table_box: &BoxNode,
+  structure: &TableStructure,
+) -> Arc<CollapsedBorders> {
+  let box_id = table_box.id();
+  let epoch = intrinsic_cache_epoch();
+  let build = || Arc::new(compute_collapsed_borders(table_box, structure));
+  if box_id == 0 {
+    return build();
+  }
+  let key = CollapsedBordersCacheKey {
+    box_id,
+    epoch,
+    structure_ptr: structure as *const _ as usize,
+  };
+  COLLAPSED_BORDERS_CACHE.with(|cache| {
+    if let Some(entry) = cache.borrow().get(&key) {
+      return entry.clone();
+    }
+    let borders = build();
+    cache.borrow_mut().insert(key, borders.clone());
+    borders
+  })
 }
 
 // ============================================================================
@@ -3757,6 +3897,117 @@ impl TableFormattingContext {
     }
   }
 
+  fn column_constraints_cached(
+    &self,
+    table_box: &BoxNode,
+    structure: &TableStructure,
+    mode: DistributionMode,
+    percent_base: Option<f32>,
+    style_overrides: &StyleOverrideCache,
+  ) -> Vec<ColumnConstraints> {
+    let build = || {
+      let mut constraints: Vec<ColumnConstraints> = (0..structure.column_count)
+        .map(|_| ColumnConstraints::new(0.0, 0.0))
+        .collect();
+      self.populate_column_constraints(
+        table_box,
+        structure,
+        &mut constraints,
+        mode,
+        percent_base,
+        style_overrides,
+      );
+      constraints
+    };
+
+    let box_id = table_box.id();
+    let epoch = intrinsic_cache_epoch();
+    let length_is_percent = |len: &crate::style::values::Length| {
+      matches!(len.unit, LengthUnit::Percent | LengthUnit::Calc)
+    };
+    let percent_sensitive = {
+      let style = &table_box.style;
+      if style.width.as_ref().map_or(false, |l| length_is_percent(l))
+        || style
+          .min_width
+          .as_ref()
+          .map_or(false, |l| length_is_percent(l))
+        || style
+          .max_width
+          .as_ref()
+          .map_or(false, |l| length_is_percent(l))
+        || length_is_percent(&style.padding_left)
+        || length_is_percent(&style.padding_right)
+      {
+        true
+      } else if structure.columns.iter().any(|col| {
+        matches!(col.specified_width, Some(SpecifiedWidth::Percent(_)))
+          || col
+            .author_min_width
+            .as_ref()
+            .map_or(false, |l| length_is_percent(l))
+          || col
+            .author_max_width
+            .as_ref()
+            .map_or(false, |l| length_is_percent(l))
+      }) {
+        true
+      } else {
+        let source_rows = collect_source_rows(table_box);
+        structure.cells.iter().any(|cell| {
+          source_rows
+            .get(cell.source_row)
+            .and_then(|row| row.children.get(cell.box_index))
+            .map(|cell_box| {
+              let style = &cell_box.style;
+              style.width.as_ref().map_or(false, |l| length_is_percent(l))
+                || style
+                  .min_width
+                  .as_ref()
+                  .map_or(false, |l| length_is_percent(l))
+                || style
+                  .max_width
+                  .as_ref()
+                  .map_or(false, |l| length_is_percent(l))
+                || length_is_percent(&style.padding_left)
+                || length_is_percent(&style.padding_right)
+            })
+            .unwrap_or(false)
+        })
+      }
+    };
+    let percent_bits = if percent_sensitive {
+      percent_base_cache_key(percent_base)
+    } else {
+      None
+    };
+    let collapsed = structure.border_collapse == BorderCollapse::Collapse;
+    if box_id == 0 {
+      return build();
+    }
+
+    let key = ColumnConstraintCacheKey {
+      box_id,
+      epoch,
+      mode,
+      percent_base_bits: percent_bits,
+      collapsed,
+    };
+    COLUMN_CONSTRAINT_CACHE.with(|cache| {
+      if let Some(entry) = cache.borrow().get(&key) {
+        return (*entry.constraints).clone();
+      }
+      let constraints = build();
+      cache.borrow_mut().insert(
+        key,
+        ColumnConstraintCacheEntry {
+          constraints: Arc::new(constraints.clone()),
+        },
+      );
+      constraints
+    })
+  }
+
   /// Gets the table structure, building it if necessary
   pub fn structure(&self) -> Option<&TableStructure> {
     self.structure.as_ref()
@@ -3784,6 +4035,48 @@ impl TableFormattingContext {
     cell_bfc: &BlockFormattingContext,
     style_overrides: &StyleOverrideCache,
   ) -> (f32, f32) {
+    let length_is_percent = |len: &crate::style::values::Length| {
+      matches!(len.unit, LengthUnit::Percent | LengthUnit::Calc)
+    };
+    let percent_sensitive = {
+      let style = &cell_box.style;
+      style.width.as_ref().map_or(false, |l| length_is_percent(l))
+        || style
+          .min_width
+          .as_ref()
+          .map_or(false, |l| length_is_percent(l))
+        || style
+          .max_width
+          .as_ref()
+          .map_or(false, |l| length_is_percent(l))
+        || length_is_percent(&style.padding_left)
+        || length_is_percent(&style.padding_right)
+    };
+    let percent_bits = if percent_sensitive {
+      percent_base_cache_key(percent_base)
+    } else {
+      None
+    };
+    let cache_key = {
+      let box_id = cell_box.id();
+      if box_id == 0 {
+        None
+      } else {
+        Some(CellIntrinsicCacheKey {
+          box_id,
+          style_ptr: Arc::as_ptr(&cell_box.style) as usize,
+          percent_base_bits: percent_bits,
+          collapsed: matches!(border_collapse, BorderCollapse::Collapse),
+          epoch: intrinsic_cache_epoch(),
+        })
+      }
+    };
+    if let Some(key) = cache_key {
+      if let Some(entry) = CELL_INTRINSIC_CACHE.with(|cache| cache.borrow().get(&key).copied()) {
+        return (entry.min, entry.max);
+      }
+    }
+
     let fc_type = cell_box
       .formatting_context()
       .unwrap_or(FormattingContextType::Block);
@@ -3821,7 +4114,19 @@ impl TableFormattingContext {
     min += padding_and_borders;
     max += padding_and_borders;
 
-    (min.max(0.0), max.max(min))
+    let result = (min.max(0.0), max.max(min));
+    if let Some(key) = cache_key {
+      CELL_INTRINSIC_CACHE.with(|cache| {
+        cache.borrow_mut().insert(
+          key,
+          CellIntrinsicCacheEntry {
+            min: result.0,
+            max: result.1,
+          },
+        );
+      });
+    }
+    result
   }
 
   /// Populates column constraints from cell intrinsic widths and explicit widths
@@ -3840,7 +4145,58 @@ impl TableFormattingContext {
       self.factory.viewport_size(),
     )
     .with_parallelism(self.parallelism);
-    for cell in &structure.cells {
+    let measure_cells_in_parallel = self.parallelism.should_parallelize(structure.cells.len())
+      || (structure.cells.len() > 256 && rayon::current_num_threads() > 1);
+    let measurements: Vec<Option<(f32, f32)>> = if matches!(mode, DistributionMode::Auto) {
+      if measure_cells_in_parallel {
+        let deadline = active_deadline();
+        structure
+          .cells
+          .par_iter()
+          .map(|cell| {
+            with_deadline(deadline.as_ref(), || {
+              let Some(row) = source_rows.get(cell.source_row) else {
+                return None;
+              };
+              let Some(cell_box) = row.children.get(cell.box_index) else {
+                return None;
+              };
+              Some(self.measure_cell_intrinsic_widths(
+                cell_box,
+                structure.border_collapse,
+                percent_base,
+                &cell_bfc,
+                style_overrides,
+              ))
+            })
+          })
+          .collect()
+      } else {
+        structure
+          .cells
+          .iter()
+          .map(|cell| {
+            let Some(row) = source_rows.get(cell.source_row) else {
+              return None;
+            };
+            let Some(cell_box) = row.children.get(cell.box_index) else {
+              return None;
+            };
+            Some(self.measure_cell_intrinsic_widths(
+              cell_box,
+              structure.border_collapse,
+              percent_base,
+              &cell_bfc,
+              style_overrides,
+            ))
+          })
+          .collect()
+      }
+    } else {
+      Vec::new()
+    };
+
+    for (idx, cell) in structure.cells.iter().enumerate() {
       if matches!(mode, DistributionMode::Fixed) && cell.row > 0 {
         // Fixed layout only inspects the first row.
         continue;
@@ -3863,13 +4219,10 @@ impl TableFormattingContext {
       };
       let (mut min_w, mut max_w) = match mode {
         DistributionMode::Fixed => (0.0, f32::INFINITY), // content is ignored in fixed layout
-        DistributionMode::Auto => self.measure_cell_intrinsic_widths(
-          cell_box,
-          structure.border_collapse,
-          percent_base,
-          &cell_bfc,
-          style_overrides,
-        ),
+        DistributionMode::Auto => match measurements.get(idx).and_then(|m| *m) {
+          Some(measured) => measured,
+          None => continue,
+        },
       };
       let mut has_max_cap = false;
       if mode == DistributionMode::Auto {
@@ -3950,7 +4303,7 @@ impl TableFormattingContext {
               col.max_width = col.max_width.max(max_w);
             }
             _ => {
-              let px = specified_width.unwrap_or_else(|| {
+              let px = span_specified_width.unwrap_or_else(|| {
                 crate::layout::utils::clamp_with_order(
                   width.to_px() + width_padding,
                   min_w,
@@ -3958,10 +4311,8 @@ impl TableFormattingContext {
                 )
               });
               let col = &mut constraints[cell.col];
-              col.fixed_width = Some(px);
-              col.min_width = col.min_width.max(min_w);
-              let target_max = if max_w.is_finite() { px.max(max_w) } else { px };
-              col.max_width = col.max_width.max(target_max);
+              col.min_width = col.min_width.max(px);
+              col.max_width = col.max_width.max(px);
               if has_max_cap {
                 col.has_max_cap = true;
               }
@@ -4538,9 +4889,6 @@ impl FormattingContext for TableFormattingContext {
       return Ok(fragment);
     }
 
-    let mut column_constraints: Vec<ColumnConstraints> = (0..structure.column_count)
-      .map(|_| ColumnConstraints::new(0.0, 0.0))
-      .collect();
     let mode = if structure.is_fixed_layout {
       DistributionMode::Fixed
     } else {
@@ -4555,10 +4903,9 @@ impl FormattingContext for TableFormattingContext {
       };
     let percent_base = percent_base_width.map(|w| (w - spacing - edge_consumption).max(0.0));
 
-    self.populate_column_constraints(
+    let mut column_constraints = self.column_constraints_cached(
       table_box,
       &structure,
-      &mut column_constraints,
       mode,
       percent_base,
       &style_override_cache,
@@ -4790,22 +5137,24 @@ impl FormattingContext for TableFormattingContext {
       }
     };
 
-    let outcomes: Vec<CellOutcome> =
-      if self.parallelism.should_parallelize(structure.cells.len()) && !dump {
-        let deadline = active_deadline();
-        structure
-          .cells
-          .par_iter()
-          .map(|cell| {
-            with_deadline(deadline.as_ref(), || {
-              crate::layout::engine::debug_record_parallel_work();
-              layout_single_cell(cell)
-            })
+    let should_parallelize_cells = !dump
+      && (self.parallelism.should_parallelize(structure.cells.len())
+        || (structure.cells.len() > 256 && rayon::current_num_threads() > 1));
+    let outcomes: Vec<CellOutcome> = if should_parallelize_cells {
+      let deadline = active_deadline();
+      structure
+        .cells
+        .par_iter()
+        .map(|cell| {
+          with_deadline(deadline.as_ref(), || {
+            crate::layout::engine::debug_record_parallel_work();
+            layout_single_cell(cell)
           })
-          .collect()
-      } else {
-        structure.cells.iter().map(layout_single_cell).collect()
-      };
+        })
+        .collect()
+    } else {
+      structure.cells.iter().map(layout_single_cell).collect()
+    };
     let mut laid_out_cells = Vec::new();
     let mut failed_cells = 0usize;
     for outcome in outcomes {
@@ -5131,9 +5480,9 @@ impl FormattingContext for TableFormattingContext {
     }
 
     // Border-collapse adjustments
-    let collapsed_borders: Option<CollapsedBorders> =
+    let collapsed_borders: Option<Arc<CollapsedBorders>> =
       if structure.border_collapse == BorderCollapse::Collapse {
-        Some(compute_collapsed_borders(&table_box, &structure))
+        Some(collapsed_borders_cached(&table_box, &structure))
       } else {
         None
       };
@@ -5977,13 +6326,9 @@ impl FormattingContext for TableFormattingContext {
       DistributionMode::Auto
     };
     let style_override_cache = StyleOverrideCache::default();
-    let mut column_constraints: Vec<ColumnConstraints> = (0..structure.column_count)
-      .map(|_| ColumnConstraints::new(0.0, 0.0))
-      .collect();
-    self.populate_column_constraints(
+    let mut column_constraints = self.column_constraints_cached(
       table_box,
       &structure,
-      &mut column_constraints,
       distribution_mode,
       percent_base,
       &style_override_cache,
