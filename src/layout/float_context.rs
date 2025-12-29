@@ -38,9 +38,10 @@
 //! - CSS 2.1 Section 9.5.2: <https://www.w3.org/TR/CSS21/visuren.html#propdef-clear>
 
 use crate::debug::runtime;
-use crate::error::{LayoutError, RenderError, RenderStage};
+use crate::error::{RenderError, RenderStage};
 use crate::geometry::Rect;
 use crate::layout::float_shape::FloatShape;
+use crate::layout::formatting_context::LayoutError;
 use crate::render_control::check_active_periodic;
 use crate::style::float::Clear;
 use crate::style::float::Float;

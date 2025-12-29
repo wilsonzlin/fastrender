@@ -450,7 +450,7 @@ pub(crate) struct ColorGlyphCache {
 }
 
 impl ColorGlyphCache {
-  fn new() -> Self {
+  pub(crate) fn new() -> Self {
     Self {
       glyphs: HashMap::new(),
       max_size: 512,
