@@ -630,6 +630,16 @@ impl FastRenderBuilder {
     self
   }
 
+  /// Limits nested iframe rendering depth when painting browsing contexts.
+  ///
+  /// A depth of 0 skips iframe contents entirely. Larger values allow rendering up to that many
+  /// nested iframe levels from the current document, with each child iframe inheriting one fewer
+  /// level.
+  pub fn max_iframe_depth(mut self, depth: usize) -> Self {
+    self.config.max_iframe_depth = depth;
+    self
+  }
+
   /// Enables pagination/fragmentation when no `@page` rules are present.
   pub fn fragmentation(mut self, options: FragmentationOptions) -> Self {
     self.config.fragmentation = Some(options);
@@ -1903,6 +1913,16 @@ impl FastRenderConfig {
   /// Sets the resource fetch policy used by the default fetcher.
   pub fn with_resource_policy(mut self, policy: ResourcePolicy) -> Self {
     self.resource_policy = policy;
+    self
+  }
+
+  /// Limits nested iframe rendering depth when painting browsing contexts.
+  ///
+  /// A depth of 0 skips iframe contents entirely. Larger values allow rendering up to that many
+  /// nested iframe levels from the current document, with each child iframe inheriting one fewer
+  /// level.
+  pub fn with_max_iframe_depth(mut self, depth: usize) -> Self {
+    self.max_iframe_depth = depth;
     self
   }
 
@@ -8786,6 +8806,19 @@ mod tests {
     assert_eq!(renderer.background_color().r, 128);
     assert_eq!(renderer.background_color().g, 128);
     assert_eq!(renderer.background_color().b, 128);
+  }
+
+  #[test]
+  fn builder_sets_max_iframe_depth() {
+    let renderer = FastRender::builder()
+      .max_iframe_depth(0)
+      .build()
+      .expect("builder should forward iframe depth to renderer");
+    assert_eq!(renderer.max_iframe_depth, 0);
+
+    let renderer_from_config =
+      FastRender::with_config(FastRenderConfig::new().with_max_iframe_depth(5)).unwrap();
+    assert_eq!(renderer_from_config.max_iframe_depth, 5);
   }
 
   #[test]

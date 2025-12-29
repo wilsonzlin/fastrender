@@ -160,6 +160,24 @@ let (png, diagnostics) = result.encode(fastrender::OutputFormat::Png)?;
 
 `RenderResult::into_pixmap()` discards diagnostics when they are not needed. To collect diagnostics when rendering raw HTML, use `render_html_with_diagnostics`.
 
+## Iframe rendering depth
+
+Iframe documents are rendered recursively up to `FastRenderConfig::max_iframe_depth` levels (default:
+3). Configure it via `FastRenderConfig::with_max_iframe_depth` or the builder helper:
+
+```rust
+let mut renderer = FastRender::builder()
+    .max_iframe_depth(1) // render only direct iframe children
+    .build()?;
+```
+
+Semantics:
+- `max_iframe_depth = 0` disables iframe content rendering entirely.
+- Values greater than zero allow up to that many nested iframe levels from the current document
+  (each iframe document inherits the parent’s depth minus one).
+- The display-list paint backend currently emits placeholders for iframes instead of painting their
+  nested content.
+
 ## Parallel rendering
 
 `FastRender` instances are `Send` but not `Sync`, so callers should avoid sharing a single instance across threads.
