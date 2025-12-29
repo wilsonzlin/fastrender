@@ -1,0 +1,16 @@
+body {
+  margin: 0;
+  font: 16px sans-serif;
+}
+
+.swatch {
+  width: 48px;
+  height: 48px;
+  background: url("8801d7a4ef4bec86d81bc12cc2158a74.png") repeat;
+}
+
+.inline {
+  background-image: url("cee2444ba7864555ddec0fcfa24866ff.png");
+}
+
+@import url("955fb3326d3ab302cfa514b48f6ede21.css");

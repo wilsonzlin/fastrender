@@ -16,6 +16,8 @@ use tempfile::TempDir;
 use url::Url;
 use walkdir::WalkDir;
 
+mod import_page_fixture;
+
 fn main() -> Result<()> {
   let cli = Cli::parse();
 
@@ -26,6 +28,7 @@ fn main() -> Result<()> {
     Commands::Pageset(args) => run_pageset(args),
     Commands::PagesetDiff(args) => run_pageset_diff(args),
     Commands::DiffRenders(args) => run_diff_renders(args),
+    Commands::ImportPageFixture(args) => import_page_fixture::run_import_page_fixture(args),
     Commands::PerfSmoke(args) => run_perf_smoke(args),
   }
 }
@@ -56,6 +59,8 @@ enum Commands {
   PagesetDiff(PagesetDiffArgs),
   /// Compare two render outputs and write visual diffs
   DiffRenders(DiffRendersArgs),
+  /// Convert a captured bundle into a pages_regression fixture
+  ImportPageFixture(import_page_fixture::ImportPageFixtureArgs),
   /// Run the offline perf smoke harness over a curated fixture set
   PerfSmoke(PerfSmokeArgs),
 }

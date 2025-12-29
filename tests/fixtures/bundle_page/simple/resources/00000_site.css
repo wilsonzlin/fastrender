@@ -1,0 +1,16 @@
+body {
+  margin: 0;
+  font: 16px sans-serif;
+}
+
+.swatch {
+  width: 48px;
+  height: 48px;
+  background: url("/static/tile.png") repeat;
+}
+
+.inline {
+  background-image: url("https://fixture.example/static/square.png");
+}
+
+@import url("https://fixture.example/static/extra.css");

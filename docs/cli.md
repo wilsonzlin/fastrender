@@ -27,6 +27,7 @@ Pageset wrappers enable the disk-backed subresource cache by default, persisting
 - Pageset diff: `cargo xtask pageset-diff [--baseline <dir>|--baseline-ref <git-ref>] [--no-run] [--fail-on-regression]` (extracts `progress/pages` from the chosen git ref by default and compares it to the freshly updated scoreboard)
 - Render one page: `cargo xtask render-page --url https://example.com --output out.png [--viewport 1200x800 --dpr 1.0 --full-page]`
 - Diff renders: `cargo xtask diff-renders --before fetches/renders/baseline --after fetches/renders/new [--output target/render-diffs]`
+- Import a bundled capture into a `pages_regression` fixture: `cargo xtask import-page-fixture <bundle_dir|.tar> <fixture_name> [--output-root tests/pages/fixtures --overwrite --dry-run]`
 - Perf smoke: `cargo xtask perf-smoke [--top 5 --baseline baseline.json --fail-on-regression]` (offline fixtures, bundled fonts, JSON summary at `target/perf_smoke.json`)
 
 `render-page` wraps `fetch_and_render` in release mode by default (add `--debug` to keep a debug build).
@@ -68,6 +69,7 @@ Pageset wrappers enable the disk-backed subresource cache by default, persisting
   - Fetch: `cargo run --release --bin bundle_page -- fetch <url> --out <bundle_dir|.tar>`
   - Render: `cargo run --release --bin bundle_page -- render <bundle> --out <png>`
 - Security: `--same-origin-subresources` (plus optional `--allow-subresource-origin`) applies both when capturing and replaying bundles to keep cross-origin assets out of offline artifacts.
+- Convert bundles to offline fixtures for the `pages_regression` harness: `cargo xtask import-page-fixture <bundle> <fixture_name> [--output-root tests/pages/fixtures --overwrite --dry-run]`. All HTML/CSS references are rewritten to hashed files under `assets/`, and the importer fails if any network URLs would remain.
 
 ## `inspect_frag`
 

@@ -52,6 +52,16 @@ This suite renders a curated set of realistic pages under `tests/pages/fixtures/
 
 Artifacts for failures land in `target/pages_diffs/<page>_{actual,expected,diff}.png`. Comparison defaults to strict pixel matching but respects the same knobs as the fixture harness with `PAGES_TOLERANCE`, `PAGES_MAX_DIFFERENT_PERCENT`, and `PAGES_FUZZY=1`.
 
+### Importing new offline page fixtures
+
+Use `bundle_page` to capture a page once, then convert that bundle into a deterministic fixture consumable by `pages_regression`:
+
+1. Capture: `cargo run --release --bin bundle_page -- fetch <url> --out /tmp/capture.tar` (or a directory path)
+2. Import: `cargo xtask import-page-fixture /tmp/capture.tar <fixture_name> [--output-root tests/pages/fixtures --overwrite --dry-run]`
+3. Add the new fixture to `tests/pages_regression_test.rs` and generate a golden if you want it covered by the suite.
+
+The importer rewrites all HTML/CSS references to hashed files under `assets/` and refuses to leave `http(s)` URLs behind, so the resulting directory is fully offline. A synthetic bundle for testing lives under `tests/fixtures/bundle_page/simple`, and `tests/pages/fixtures/bundle_import_example/` shows the expected output produced by the importer.
+
 ## WPT harness (local, visual)
 
 There is a self-contained WPT-style runner under `tests/wpt/` for local “render and compare” tests. It does not talk to upstream WPT and never fetches from the network.

@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "original_url": "https://fixture.example/",
+  "document": {
+    "path": "document.html",
+    "content_type": "text/html; charset=utf-8",
+    "final_url": "https://fixture.example/",
+    "status": 200,
+    "etag": null,
+    "last_modified": null
+  },
+  "render": {
+    "viewport": [
+      800,
+      600
+    ],
+    "device_pixel_ratio": 1.0,
+    "scroll_x": 0.0,
+    "scroll_y": 0.0,
+    "full_page": false,
+    "same_origin_subresources": false,
+    "allowed_subresource_origins": []
+  },
+  "resources": {
+    "https://fixture.example/static/site.css": {
+      "path": "resources/00000_site.css",
+      "content_type": "text/css",
+      "status": 200,
+      "final_url": "https://fixture.example/static/site.css",
+      "etag": null,
+      "last_modified": null
+    },
+    "https://fixture.example/static/extra.css": {
+      "path": "resources/00001_extra.css",
+      "content_type": "text/css",
+      "status": 200,
+      "final_url": "https://fixture.example/static/extra.css",
+      "etag": null,
+      "last_modified": null
+    },
+    "https://fixture.example/static/tile.png": {
+      "path": "resources/00002_tile.png",
+      "content_type": "image/png",
+      "status": 200,
+      "final_url": "https://fixture.example/static/tile.png",
+      "etag": null,
+      "last_modified": null
+    },
+    "https://fixture.example/static/logo.png": {
+      "path": "resources/00003_logo.png",
+      "content_type": "image/png",
+      "status": 200,
+      "final_url": "https://fixture.example/static/logo.png",
+      "etag": null,
+      "last_modified": null
+    },
+    "https://fixture.example/static/logo@2x.png": {
+      "path": "resources/00004_logo@2x.png",
+      "content_type": "image/png",
+      "status": 200,
+      "final_url": "https://fixture.example/static/logo@2x.png",
+      "etag": null,
+      "last_modified": null
+    },
+    "https://fixture.example/static/square.png": {
+      "path": "resources/00005_square.png",
+      "content_type": "image/png",
+      "status": 200,
+      "final_url": "https://fixture.example/static/square.png",
+      "etag": null,
+      "last_modified": null
+    }
+  }
+}

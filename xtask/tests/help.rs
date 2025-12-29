@@ -19,7 +19,8 @@ fn help_lists_commands() {
       && stdout.contains("diff-renders")
       && stdout.contains("pageset")
       && stdout.contains("pageset-diff")
-      && stdout.contains("perf-smoke"),
+      && stdout.contains("perf-smoke")
+      && stdout.contains("import-page-fixture"),
     "help output should mention available subcommands; got:\n{stdout}"
   );
 }
