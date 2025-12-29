@@ -1105,6 +1105,7 @@ impl TableStructure {
     let mut row_visibilities: Vec<Visibility> = Vec::new();
     let mut row_vertical_aligns: Vec<Option<VerticalAlign>> = Vec::new();
     let mut row_span_remaining: Vec<usize> = Vec::new();
+    let mut occupied_columns: Vec<bool> = Vec::new();
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum RowGroupKind {
       Head,
@@ -1225,6 +1226,7 @@ impl TableStructure {
                 row_child,
                 current_row,
                 &mut row_span_remaining,
+                &mut occupied_columns,
                 &mut max_cols,
                 &mut cell_data,
               );
@@ -1260,6 +1262,7 @@ impl TableStructure {
             child,
             current_row,
             &mut row_span_remaining,
+            &mut occupied_columns,
             &mut max_cols,
             &mut cell_data,
           );
@@ -1435,30 +1438,23 @@ impl TableStructure {
 
     // Initialize grid
     structure.grid = vec![vec![None; structure.column_count]; structure.row_count];
+    structure.cells.reserve(cell_data.len());
 
     // Create cells and populate grid
-    let remapped_cells: Vec<(usize, usize, usize, usize, usize, usize)> = cell_data
-      .iter()
-      .map(|(source_row, col, rowspan, colspan, box_idx)| {
-        let new_row = row_index_map
-          .get(*source_row)
-          .copied()
-          .unwrap_or(*source_row);
-        (*source_row, new_row, *col, *rowspan, *colspan, *box_idx)
-      })
-      .collect();
+    for (idx, (source_row, col, rowspan, colspan, box_idx)) in cell_data.iter().enumerate() {
+      let new_row = row_index_map
+        .get(*source_row)
+        .copied()
+        .unwrap_or(*source_row);
 
-    for (idx, (source_row, new_row, col, rowspan, colspan, box_idx)) in
-      remapped_cells.iter().enumerate()
-    {
       let mut cell = CellInfo::new(idx, *source_row, *col);
-      cell.row = *new_row;
+      cell.row = new_row;
       cell.rowspan = *rowspan;
       cell.colspan = *colspan;
       cell.box_index = *box_idx;
 
       // Mark grid cells
-      for r in *new_row..(*new_row + *rowspan).min(structure.row_count) {
+      for r in new_row..(new_row + *rowspan).min(structure.row_count) {
         for c in *col..(*col + *colspan).min(structure.column_count) {
           if structure.grid[r][c].is_none() {
             structure.grid[r][c] = Some(idx);
@@ -1507,7 +1503,7 @@ impl TableStructure {
       row_count: next_row,
       columns: Vec::with_capacity(next_col),
       rows: Vec::with_capacity(next_row),
-      cells: Vec::new(),
+      cells: Vec::with_capacity(self.cells.len()),
       grid: vec![vec![None; next_col]; next_row],
       border_spacing: self.border_spacing,
       border_collapse: self.border_collapse,
@@ -1544,20 +1540,25 @@ impl TableStructure {
       }
 
       let col_span_end = (cell.col + cell.colspan).min(col_map.len());
-      let mut mapped_cols: Vec<usize> = (cell.col..col_span_end)
-        .filter_map(|c| col_map.get(c).and_then(|m| *m))
-        .collect();
-      if mapped_cols.is_empty() {
-        continue;
+      let mut first_visible_col = None;
+      let mut visible_cols = 0usize;
+      for c in cell.col..col_span_end {
+        if let Some(mapped) = col_map.get(c).and_then(|m| *m) {
+          if first_visible_col.is_none() {
+            first_visible_col = Some(mapped);
+          }
+          visible_cols += 1;
+        }
       }
-      mapped_cols.sort_unstable();
-      mapped_cols.dedup();
+      let Some(start_col) = first_visible_col else {
+        continue;
+      };
 
       let mut new_cell = cell;
       new_cell.row = new_row;
-      new_cell.col = *mapped_cols.first().unwrap_or(&0);
+      new_cell.col = start_col;
       new_cell.rowspan = visible_rows;
-      new_cell.colspan = mapped_cols.len();
+      new_cell.colspan = visible_cols;
       new_cell.index = new_structure.cells.len();
       new_structure.cells.push(new_cell);
     }
@@ -1635,14 +1636,23 @@ impl TableStructure {
     row: &BoxNode,
     row_idx: usize,
     row_span_remaining: &mut Vec<usize>,
+    occupied: &mut Vec<bool>,
     max_cols: &mut usize,
     cell_data: &mut Vec<(usize, usize, usize, usize, usize)>,
   ) {
-    // Track columns occupied in the current row due to rowspans or earlier cells.
-    let mut occupied: Vec<bool> = row_span_remaining.iter().map(|span| *span > 0).collect();
-    for span in row_span_remaining.iter_mut() {
-      if *span > 0 {
+    if occupied.len() < row_span_remaining.len() {
+      occupied.resize(row_span_remaining.len(), false);
+    }
+    for (idx, span) in row_span_remaining.iter_mut().enumerate() {
+      let active = *span > 0;
+      if active {
         *span -= 1;
+      }
+      occupied[idx] = active;
+    }
+    if occupied.len() > row_span_remaining.len() {
+      for idx in row_span_remaining.len()..occupied.len() {
+        occupied[idx] = false;
       }
     }
 
@@ -1660,26 +1670,38 @@ impl TableStructure {
         colspan = colspan.max(1);
         rowspan = rowspan.max(1);
 
-        // Find the first free block of columns that can fit the span.
-        let mut start_col = 0usize;
-        loop {
-          let end_col = start_col + colspan;
-          if end_col > occupied.len() {
-            occupied.resize(end_col, false);
-            row_span_remaining.resize(end_col, 0);
+        // Find the first free block of columns that can fit the span in linear time.
+        let mut run_len = 0usize;
+        let mut col_cursor = 0usize;
+        let start_col = loop {
+          if col_cursor >= occupied.len() {
+            occupied.push(false);
+            row_span_remaining.push(0);
           }
-          if (start_col..end_col).all(|c| !occupied[c]) {
-            break;
+          if !occupied[col_cursor] {
+            run_len += 1;
+            if run_len == colspan {
+              break col_cursor + 1 - run_len;
+            }
+          } else {
+            run_len = 0;
           }
-          start_col += 1;
-        }
+          col_cursor += 1;
+        };
 
         cell_data.push((row_idx, start_col, rowspan, colspan, cell_idx));
         *max_cols = (*max_cols).max(start_col + colspan);
 
         // Mark the covered columns as occupied for this row and future rows.
         let span_rows = rowspan.saturating_sub(1);
-        for col in start_col..start_col + colspan {
+        let col_end = start_col + colspan;
+        if occupied.len() < col_end {
+          occupied.resize(col_end, false);
+        }
+        if row_span_remaining.len() < col_end {
+          row_span_remaining.resize(col_end, 0);
+        }
+        for col in start_col..col_end {
           occupied[col] = true;
           if let Some(slot) = row_span_remaining.get_mut(col) {
             *slot = (*slot).max(span_rows);
@@ -6103,6 +6125,30 @@ mod tests {
     .with_debug_info(DebugInfo::new(Some("table".to_string()), None, vec![]))
   }
 
+  fn table_cell_with_span(colspan: usize, rowspan: usize) -> BoxNode {
+    let mut style = ComputedStyle::default();
+    style.display = Display::TableCell;
+    BoxNode::new_block(Arc::new(style), FormattingContextType::Block, vec![]).with_debug_info(
+      DebugInfo::new(Some("td".to_string()), None, vec![]).with_spans(colspan, rowspan),
+    )
+  }
+
+  fn table_row_with_visibility(cells: Vec<BoxNode>, visibility: Visibility) -> BoxNode {
+    let mut style = ComputedStyle::default();
+    style.display = Display::TableRow;
+    style.visibility = visibility;
+    BoxNode::new_block(Arc::new(style), FormattingContextType::Block, cells)
+      .with_debug_info(DebugInfo::new(Some("tr".to_string()), None, vec![]))
+  }
+
+  fn table_column_with_visibility(visibility: Visibility) -> BoxNode {
+    let mut style = ComputedStyle::default();
+    style.display = Display::TableColumn;
+    style.visibility = visibility;
+    BoxNode::new_block(Arc::new(style), FormattingContextType::Block, vec![])
+      .with_debug_info(DebugInfo::new(Some("col".to_string()), None, vec![]))
+  }
+
   fn find_fragment_by_box_id<'a>(
     fragment: &'a FragmentNode,
     target: usize,
@@ -6220,6 +6266,70 @@ mod tests {
     assert!(!Arc::ptr_eq(&first, &third));
 
     intrinsic_cache_use_epoch(starting_epoch, true);
+  }
+
+  #[test]
+  fn rowspan_and_colspan_collision_places_cells_in_first_available_slots() {
+    let row0 = table_row_with_visibility(
+      vec![table_cell_with_span(1, 1), table_cell_with_span(1, 2)],
+      Visibility::Visible,
+    );
+    let row1 = table_row_with_visibility(
+      vec![table_cell_with_span(2, 1), table_cell_with_span(1, 1)],
+      Visibility::Visible,
+    );
+
+    let mut table_style = ComputedStyle::default();
+    table_style.display = Display::Table;
+    table_style.border_spacing_horizontal = Length::px(0.0);
+    table_style.border_spacing_vertical = Length::px(0.0);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row0, row1],
+    )
+    .with_debug_info(DebugInfo::new(Some("table".to_string()), None, vec![]));
+
+    let structure = TableStructure::from_box_tree(&table);
+    assert_eq!(structure.row_count, 2);
+    assert_eq!(structure.column_count, 4);
+
+    let span_down = structure
+      .cells
+      .iter()
+      .find(|c| c.source_row == 0 && c.box_index == 1)
+      .expect("rowspan cell");
+    assert_eq!(
+      span_down.col, 1,
+      "rowspan cell should follow the first cell"
+    );
+    assert_eq!(span_down.rowspan, 2);
+
+    let wide_cell = structure
+      .cells
+      .iter()
+      .find(|c| c.source_row == 1 && c.box_index == 0)
+      .expect("colspan cell");
+    assert_eq!(
+      wide_cell.col, 2,
+      "colspan cell should skip occupied columns from earlier row spans"
+    );
+    assert_eq!(wide_cell.colspan, 2);
+
+    let trailing_cell = structure
+      .cells
+      .iter()
+      .find(|c| c.source_row == 1 && c.box_index == 1)
+      .expect("later cell should fill earliest hole");
+    assert_eq!(
+      trailing_cell.col, 0,
+      "later cells should reuse early free columns left by larger spans"
+    );
+    assert_eq!(
+      structure.get_cell_at(1, 0).map(|c| c.index),
+      Some(trailing_cell.index),
+      "grid should point to the trailing cell in freed column"
+    );
   }
 
   #[test]
@@ -6456,6 +6566,74 @@ mod tests {
       fragment.bounds.height() <= 50.1,
       "table max-height should clamp the border box, got {:.2}",
       fragment.bounds.height()
+    );
+  }
+
+  #[test]
+  fn visibility_collapse_remaps_spanning_cells() {
+    let cols = vec![
+      table_column_with_visibility(Visibility::Visible),
+      table_column_with_visibility(Visibility::Collapse),
+      table_column_with_visibility(Visibility::Visible),
+    ];
+    let row0 = table_row_with_visibility(vec![table_cell_with_span(3, 2)], Visibility::Visible);
+    let row1 = table_row_with_visibility(vec![table_cell_with_span(1, 1)], Visibility::Collapse);
+    let row2 = table_row_with_visibility(
+      vec![
+        table_cell_with_span(1, 1),
+        table_cell_with_span(1, 1),
+        table_cell_with_span(1, 1),
+      ],
+      Visibility::Visible,
+    );
+
+    let mut table_style = ComputedStyle::default();
+    table_style.display = Display::Table;
+    table_style.border_spacing_horizontal = Length::px(0.0);
+    table_style.border_spacing_vertical = Length::px(0.0);
+    let mut children = cols;
+    children.extend(vec![row0, row1, row2]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      children,
+    )
+    .with_debug_info(DebugInfo::new(Some("table".to_string()), None, vec![]));
+
+    let structure = TableStructure::from_box_tree(&table);
+    assert_eq!(structure.column_count, 2);
+    assert_eq!(structure.row_count, 2);
+    assert_eq!(structure.grid.len(), 2);
+    assert_eq!(structure.grid[0].len(), 2);
+
+    let spanning = structure
+      .cells
+      .iter()
+      .find(|c| c.source_row == 0)
+      .expect("spanning cell should remain after collapse");
+    assert_eq!(spanning.col, 0);
+    assert_eq!(spanning.colspan, 2);
+    assert_eq!(
+      spanning.rowspan, 1,
+      "collapsed row should shorten the spanning cell"
+    );
+
+    let row2_cells: Vec<_> = structure
+      .cells
+      .iter()
+      .filter(|c| c.source_row == 2)
+      .collect();
+    assert_eq!(
+      row2_cells.len(),
+      2,
+      "collapsed column should remove the middle cell in the last row"
+    );
+    let mut cols: Vec<_> = row2_cells.iter().map(|c| c.col).collect();
+    cols.sort_unstable();
+    assert_eq!(cols, vec![0, 1]);
+    assert!(
+      structure.get_cell_at(1, 0).is_some(),
+      "visible row should remain represented in the grid"
     );
   }
 
@@ -7499,6 +7677,65 @@ mod tests {
       col.max_width < 0.5,
       "percent padding should be treated as auto with no width base (max={:.2})",
       col.max_width
+    );
+  }
+
+  #[test]
+  fn large_table_structure_preserves_grid_with_spans() {
+    let rows = 30;
+    let cols = 15;
+    let mut table_style = ComputedStyle::default();
+    table_style.display = Display::Table;
+    table_style.border_spacing_horizontal = Length::px(0.0);
+    table_style.border_spacing_vertical = Length::px(0.0);
+
+    let mut table_rows = Vec::new();
+    for r in 0..rows {
+      let mut cells = Vec::new();
+      if r % 3 == 0 {
+        cells.push(table_cell_with_span(2, 2));
+        for _ in 0..(cols - 2) {
+          cells.push(table_cell_with_span(1, 1));
+        }
+      } else if r % 3 == 1 {
+        for _ in 0..(cols - 2) {
+          cells.push(table_cell_with_span(1, 1));
+        }
+      } else {
+        cells.push(table_cell_with_span(3, 1));
+        for _ in 0..(cols - 3) {
+          cells.push(table_cell_with_span(1, 1));
+        }
+      }
+      table_rows.push(table_row_with_visibility(cells, Visibility::Visible));
+    }
+
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      table_rows,
+    )
+    .with_debug_info(DebugInfo::new(Some("table".to_string()), None, vec![]));
+
+    let structure = TableStructure::from_box_tree(&table);
+    assert_eq!(structure.row_count, rows);
+    assert_eq!(structure.column_count, cols);
+    assert_eq!(structure.grid.len(), rows);
+    assert_eq!(structure.grid[0].len(), cols);
+
+    let spanning = structure
+      .get_cell_at(1, 0)
+      .expect("row span should occupy first column in second row");
+    assert_eq!(spanning.source_row, 0);
+
+    let row_one_first = structure
+      .cells
+      .iter()
+      .find(|c| c.source_row == 1 && c.box_index == 0)
+      .expect("row after span should still place its first cell");
+    assert_eq!(
+      row_one_first.col, 2,
+      "row following a 2-column span should start after the occupied columns"
     );
   }
 
