@@ -31,6 +31,7 @@
 //! - CSS Flexbox: <https://www.w3.org/TR/css-flexbox-1/>
 //! - CSS Grid: <https://www.w3.org/TR/css-grid-1/>
 
+use crate::debug::runtime;
 use crate::geometry::Size;
 use crate::layout::constraints::LayoutConstraints;
 use crate::layout::fragmentation::FragmentationOptions;
@@ -231,13 +232,18 @@ pub(crate) fn count_inline_intrinsic_call() {
 // === Layout result cache ====================================================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct LayoutCacheKey {
+pub(crate) struct LayoutCacheKeyNoStyle {
   box_id: usize,
   fc_type: FormattingContextType,
-  style_hash: u64,
   constraints_hash: u64,
   fragmentation_hash: u64,
   viewport_hash: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LayoutCacheKeyParts {
+  key: LayoutCacheKeyNoStyle,
+  style_hash: u64,
   subgrid_dependent: bool,
 }
 
@@ -248,9 +254,14 @@ struct LayoutCacheEntry {
   style_hash: u64,
 }
 
+/// Default per-thread layout cache entry cap. Override via `FASTR_LAYOUT_CACHE_MAX_ENTRIES`.
+const DEFAULT_LAYOUT_CACHE_MAX_ENTRIES: Option<usize> = Some(8192);
+/// Number of entries to drop when the cache exceeds the cap.
+const LAYOUT_CACHE_EVICTION_BATCH: usize = 64;
+
 thread_local! {
   /// Layout result cache kept per-thread to stay contention-free during rayon-powered fan-out.
-  static LAYOUT_RESULT_CACHE: RefCell<HashMap<LayoutCacheKey, LayoutCacheEntry>> =
+  static LAYOUT_RESULT_CACHE: RefCell<HashMap<LayoutCacheKeyNoStyle, LayoutCacheEntry>> =
     RefCell::new(HashMap::new());
   static LAYOUT_CACHE_ENABLED: Cell<bool> = const { Cell::new(false) };
   static LAYOUT_CACHE_EPOCH: Cell<usize> = const { Cell::new(1) };
@@ -259,6 +270,7 @@ thread_local! {
   static LAYOUT_CACHE_HITS: Cell<usize> = const { Cell::new(0) };
   static LAYOUT_CACHE_STORES: Cell<usize> = const { Cell::new(0) };
   static LAYOUT_CACHE_EVICTIONS: Cell<usize> = const { Cell::new(0) };
+  static LAYOUT_CACHE_ENTRY_LIMIT: Cell<Option<usize>> = const { Cell::new(None) };
 }
 
 fn pack_viewport_size(size: Size) -> u64 {
@@ -591,7 +603,7 @@ fn layout_cache_key(
   constraints: &LayoutConstraints,
   viewport: Size,
   epoch: usize,
-) -> Option<LayoutCacheKey> {
+) -> Option<LayoutCacheKeyParts> {
   if !is_layout_cacheable(box_node, fc_type) {
     return None;
   }
@@ -599,15 +611,66 @@ fn layout_cache_key(
   let style_hash = layout_style_fingerprint(&box_node.style);
   let constraints_hash = layout_constraints_hash(constraints);
   let fragmentation_hash = LAYOUT_CACHE_FRAGMENTATION.with(|hash| hash.get());
-  Some(LayoutCacheKey {
-    box_id: box_node.id(),
-    fc_type,
+  Some(LayoutCacheKeyParts {
+    key: LayoutCacheKeyNoStyle {
+      box_id: box_node.id(),
+      fc_type,
+      constraints_hash,
+      fragmentation_hash,
+      viewport_hash: pack_viewport_size(viewport),
+    },
     style_hash,
-    constraints_hash,
-    fragmentation_hash,
-    viewport_hash: pack_viewport_size(viewport),
     subgrid_dependent: subtree_contains_subgrid(box_node, epoch),
   })
+}
+
+fn resolve_layout_cache_entry_limit() -> Option<usize> {
+  let limit = runtime::runtime_toggles()
+    .usize("FASTR_LAYOUT_CACHE_MAX_ENTRIES")
+    .or(DEFAULT_LAYOUT_CACHE_MAX_ENTRIES);
+  limit.filter(|limit| *limit > 0)
+}
+
+fn enforce_layout_cache_entry_limit(
+  map: &mut HashMap<LayoutCacheKeyNoStyle, LayoutCacheEntry>,
+  preserve: &LayoutCacheKeyNoStyle,
+) {
+  let limit = LAYOUT_CACHE_ENTRY_LIMIT.with(|limit| limit.get());
+  let Some(limit) = limit else {
+    return;
+  };
+  if map.len() <= limit {
+    return;
+  }
+
+  let over_limit = map.len().saturating_sub(limit);
+  if over_limit == 0 {
+    return;
+  }
+  let to_remove = if over_limit < LAYOUT_CACHE_EVICTION_BATCH {
+    over_limit
+  } else {
+    over_limit.max(LAYOUT_CACHE_EVICTION_BATCH)
+  };
+  let mut removed = 0usize;
+  let keys: Vec<_> = map
+    .keys()
+    .filter(|key| *key != preserve)
+    .take(to_remove)
+    .cloned()
+    .collect();
+  for key in keys {
+    if map.remove(&key).is_some() {
+      removed += 1;
+    }
+    if removed >= to_remove || map.len() <= limit {
+      break;
+    }
+  }
+
+  if removed > 0 {
+    LAYOUT_CACHE_EVICTIONS.with(|counter| counter.set(counter.get() + removed));
+  }
 }
 
 fn layout_cache_clear() {
@@ -670,6 +733,12 @@ pub(crate) fn layout_cache_use_epoch(
   } else {
     subgrid_cache_use_epoch(epoch, false);
   }
+  let entry_limit = if enabled {
+    resolve_layout_cache_entry_limit()
+  } else {
+    None
+  };
+  LAYOUT_CACHE_ENTRY_LIMIT.with(|cell| cell.set(entry_limit));
 }
 
 /// Attempts to retrieve a cached layout result for the given formatting context.
@@ -682,20 +751,20 @@ pub(crate) fn layout_cache_lookup(
   let epoch = LAYOUT_CACHE_EPOCH.with(|cell| cell.get());
   let key = layout_cache_key(box_node, fc_type, constraints, viewport, epoch)?;
   if key.subgrid_dependent {
-    evict_cache_entries_for_box(key.box_id);
+    evict_cache_entries_for_box(key.key.box_id);
     return None;
   }
   LAYOUT_CACHE_LOOKUPS.with(|counter| counter.set(counter.get() + 1));
 
   let result = LAYOUT_RESULT_CACHE.with(|cache| {
     let mut map = cache.borrow_mut();
-    if let Some(entry) = map.get(&key) {
+    if let Some(entry) = map.get(&key.key) {
       if entry.epoch == epoch && entry.style_hash == key.style_hash {
         return Some(entry.fragment.clone());
       }
       // Drop stale entries tied to an old epoch.
       if entry.epoch != epoch {
-        map.remove(&key);
+        map.remove(&key.key);
         LAYOUT_CACHE_EVICTIONS.with(|counter| counter.set(counter.get() + 1));
       }
     }
@@ -723,34 +792,23 @@ pub(crate) fn layout_cache_store(
     None => return,
   };
   if key.subgrid_dependent {
-    evict_cache_entries_for_box(key.box_id);
+    evict_cache_entries_for_box(key.key.box_id);
     return;
   }
 
   LAYOUT_RESULT_CACHE.with(|cache| {
     let mut map = cache.borrow_mut();
-    // Drop entries for the same box/style from previous epochs to avoid stale reuse when the
-    // caller opts into incremental layouts without bumping the epoch.
-    map.retain(|existing_key, entry| {
-      if entry.epoch != epoch {
+    let new_entry = LayoutCacheEntry {
+      epoch,
+      fragment: Arc::new(fragment.clone()),
+      style_hash: key.style_hash,
+    };
+    if let Some(previous) = map.insert(key.key, new_entry) {
+      if previous.epoch != epoch || previous.style_hash != key.style_hash {
         LAYOUT_CACHE_EVICTIONS.with(|counter| counter.set(counter.get() + 1));
-        return false;
       }
-      if existing_key.box_id == key.box_id && existing_key.style_hash != key.style_hash {
-        LAYOUT_CACHE_EVICTIONS.with(|counter| counter.set(counter.get() + 1));
-        return false;
-      }
-      true
-    });
-
-    map.insert(
-      key,
-      LayoutCacheEntry {
-        epoch,
-        fragment: Arc::new(fragment.clone()),
-        style_hash: key.style_hash,
-      },
-    );
+    }
+    enforce_layout_cache_entry_limit(&mut map, &key.key);
   });
 
   LAYOUT_CACHE_STORES.with(|counter| counter.set(counter.get() + 1));
@@ -972,8 +1030,9 @@ impl std::error::Error for LayoutError {}
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::geometry::Rect;
-  use crate::style::display::FormattingContextType;
+  use crate::geometry::{Rect, Size};
+  use crate::style::display::{Display, FormattingContextType};
+  use crate::style::values::Length;
   use crate::style::ComputedStyle;
   use std::sync::atomic::Ordering;
   use std::sync::Arc;
@@ -1261,6 +1320,124 @@ mod tests {
     reset_subgrid_walk_count();
     assert!(subtree_contains_subgrid(&root, new_epoch));
     assert!(subgrid_walk_count() > 0);
+
+    layout_cache_use_epoch(1, false, true, None);
+  }
+
+  fn flow_root_style() -> Arc<ComputedStyle> {
+    let mut style = ComputedStyle::default();
+    style.display = Display::FlowRoot;
+    Arc::new(style)
+  }
+
+  fn block_fragment(width: f32, height: f32) -> FragmentNode {
+    FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, width, height), vec![])
+  }
+
+  #[test]
+  fn layout_cache_hits_on_stable_style() {
+    layout_cache_use_epoch(1, true, true, None);
+
+    let mut node = BoxNode::new_block(flow_root_style(), FormattingContextType::Block, vec![]);
+    node.id = 1;
+    let constraints = LayoutConstraints::definite(800.0, 600.0);
+    let viewport = Size::new(800.0, 600.0);
+    let fc_type = FormattingContextType::Block;
+
+    assert!(layout_cache_lookup(&node, fc_type, &constraints, viewport).is_none());
+    layout_cache_store(
+      &node,
+      fc_type,
+      &constraints,
+      &block_fragment(100.0, 50.0),
+      viewport,
+    );
+    let hit = layout_cache_lookup(&node, fc_type, &constraints, viewport);
+    assert!(hit.is_some());
+
+    let (lookups, hits, stores, evictions) = layout_cache_stats();
+    assert_eq!(lookups, 2);
+    assert_eq!(hits, 1);
+    assert_eq!(stores, 1);
+    assert_eq!(evictions, 0);
+
+    layout_cache_use_epoch(1, false, true, None);
+  }
+
+  #[test]
+  fn layout_cache_overwrites_style_changes() {
+    layout_cache_use_epoch(1, true, true, None);
+
+    let mut node = BoxNode::new_block(flow_root_style(), FormattingContextType::Block, vec![]);
+    node.id = 1;
+    let constraints = LayoutConstraints::definite(640.0, 480.0);
+    let viewport = Size::new(640.0, 480.0);
+    let fc_type = FormattingContextType::Block;
+
+    layout_cache_store(
+      &node,
+      fc_type,
+      &constraints,
+      &block_fragment(50.0, 20.0),
+      viewport,
+    );
+    LAYOUT_RESULT_CACHE.with(|cache| assert_eq!(cache.borrow().len(), 1));
+
+    let mut style = (*flow_root_style()).as_ref().clone();
+    style.margin_left = Some(Length::px(10.0));
+    let mut changed_node = BoxNode::new_block(Arc::new(style), fc_type, vec![]);
+    changed_node.id = node.id;
+
+    assert!(layout_cache_lookup(&changed_node, fc_type, &constraints, viewport).is_none());
+    layout_cache_store(
+      &changed_node,
+      fc_type,
+      &constraints,
+      &block_fragment(60.0, 30.0),
+      viewport,
+    );
+
+    LAYOUT_RESULT_CACHE.with(|cache| assert_eq!(cache.borrow().len(), 1));
+
+    let updated = layout_cache_lookup(&changed_node, fc_type, &constraints, viewport).unwrap();
+    assert_eq!(updated.bounds.width(), 60.0);
+
+    let (lookups, hits, stores, evictions) = layout_cache_stats();
+    assert_eq!(lookups, 2);
+    assert_eq!(hits, 1);
+    assert_eq!(stores, 2);
+    assert_eq!(evictions, 1);
+
+    layout_cache_use_epoch(1, false, true, None);
+  }
+
+  #[test]
+  fn layout_cache_evicted_on_epoch_change() {
+    layout_cache_use_epoch(1, true, true, None);
+
+    let mut node = BoxNode::new_block(flow_root_style(), FormattingContextType::Block, vec![]);
+    node.id = 1;
+    let constraints = LayoutConstraints::definite(320.0, 240.0);
+    let viewport = Size::new(320.0, 240.0);
+    let fc_type = FormattingContextType::Block;
+
+    layout_cache_store(
+      &node,
+      fc_type,
+      &constraints,
+      &block_fragment(40.0, 10.0),
+      viewport,
+    );
+    LAYOUT_CACHE_EPOCH.with(|cell| cell.set(2));
+
+    assert!(layout_cache_lookup(&node, fc_type, &constraints, viewport).is_none());
+    LAYOUT_RESULT_CACHE.with(|cache| assert!(cache.borrow().is_empty()));
+
+    let (lookups, hits, stores, evictions) = layout_cache_stats();
+    assert_eq!(lookups, 1);
+    assert_eq!(hits, 0);
+    assert_eq!(stores, 1);
+    assert_eq!(evictions, 1);
 
     layout_cache_use_epoch(1, false, true, None);
   }
