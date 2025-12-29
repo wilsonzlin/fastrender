@@ -36,6 +36,8 @@ Pageset wrappers enable the disk-backed subresource cache by default, persisting
 - Entry: `src/bin/fetch_pages.rs`
 - Run: `cargo run --release --bin fetch_pages -- --help`
 - Supports deterministic sharding with `--shard <index>/<total>` when splitting the page list across workers.
+- Cache filenames and `--pages` filters use the canonical stem from `normalize_page_name` (strip the scheme and a leading `www.`). Colliding stems fail fast unless you opt into `--allow-collisions`, which appends a deterministic suffix.
+- **Migration:** cached HTML written before canonical stems were enforced may be ignored. Delete stale `fetches/html/*.html` entries and re-run `fetch_pages`.
 
 ## `render_pages`
 
@@ -43,6 +45,7 @@ Pageset wrappers enable the disk-backed subresource cache by default, persisting
 - Entry: `src/bin/render_pages.rs`
 - Run: `cargo run --release --bin render_pages -- --help`
 - Accepts `--shard <index>/<total>` to render a slice of the cached pages in a stable order.
+- `--pages` (and positional filters) use the same canonical stems as `fetch_pages` (strip scheme + leading `www.`). Cached filenames are normalized when matching filters so `www.`/non-`www` variants map consistently.
 - Optional outputs:
   - `--diagnostics-json` writes `fetches/renders/<page>.diagnostics.json` containing status, timing, and `RenderDiagnostics`.
   - `--dump-intermediate {summary|full}` emits per-page summaries or full JSON dumps of DOM/styled/box/fragment/display-list stages (use `--only-failures` to gate large artifacts on errors); `full` also writes a combined `fetches/renders/<page>.snapshot.json` pipeline snapshot.
@@ -126,6 +129,7 @@ Pageset wrappers enable the disk-backed subresource cache by default, persisting
 - Run:
   - Help: `cargo run --release --bin pageset_progress -- run --help`
   - Typical: `cargo run --release --bin pageset_progress -- run --timeout 5`
+- Progress filenames use the canonical stem from `normalize_page_name` (strip scheme + leading `www.`); `--pages` filters accept either the URL or the normalized stem. If you have older `fetches/html` entries with `www.` prefixes in the filename, re-run `fetch_pages` so progress filenames line up.
 - Report: `cargo run --release --bin pageset_progress -- report [--progress-dir progress/pages --top 10 --fail-on-bad]` prints status counts, slowest pages, and hotspot histograms for the saved progress files. Add `--include-trace` to list any saved Chrome traces (from `target/pageset/traces/` + `target/pageset/trace-progress/`).
 - Safety: uses **panic containment** (per-page worker process) and a **hard timeout** (kills runaway workers) so one broken page cannot stall the whole run.
 - Outputs:

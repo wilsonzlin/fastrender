@@ -20,7 +20,7 @@ use common::render_pipeline::{
 };
 use fastrender::api::{DiagnosticsLevel, RenderDiagnostics, ResourceKind};
 use fastrender::error::{RenderError, RenderStage};
-use fastrender::resource::normalize_page_name;
+use fastrender::pageset::{pageset_stem, CACHE_HTML_DIR};
 use fastrender::resource::normalize_user_agent_for_log;
 use fastrender::resource::parse_cached_html_meta;
 #[cfg(not(feature = "disk_cache"))]
@@ -35,7 +35,7 @@ use fastrender::resource::ResourceFetcher;
 use fastrender::resource::DEFAULT_ACCEPT_LANGUAGE;
 use fastrender::resource::DEFAULT_USER_AGENT;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -45,7 +45,6 @@ use std::time::{Duration, Instant};
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
 
-const HTML_DIR: &str = "fetches/html";
 const ASSET_DIR: &str = "fetches/assets";
 const DEFAULT_PROGRESS_DIR: &str = "progress/pages";
 const DEFAULT_LOG_DIR: &str = "target/pageset/logs";
@@ -1424,54 +1423,79 @@ fn run(args: RunArgs) -> io::Result<()> {
 
   let filter: Option<HashSet<String>> = args.pages.as_ref().map(|v| {
     v.iter()
-      .filter_map(|s| normalize_page_name(s))
+      .filter_map(|s| pageset_stem(s))
       .collect::<HashSet<_>>()
   });
 
-  let mut entries: Vec<PathBuf> = match fs::read_dir(HTML_DIR) {
+  let mut entries: Vec<(PathBuf, String)> = match fs::read_dir(CACHE_HTML_DIR) {
     Ok(dir) => dir
       .filter_map(|e| e.ok().map(|e| e.path()))
       .filter(|path| path.extension().map(|x| x == "html").unwrap_or(false))
-      .filter(|path| {
+      .filter_map(|path| {
+        let stem_os = path.file_stem()?;
+        let stem = pageset_stem(&stem_os.to_string_lossy())?;
         if let Some(ref filter) = filter {
-          if let Some(stem_os) = path.file_stem() {
-            if let Some(stem) = stem_os.to_str() {
-              if let Some(normalized) = normalize_page_name(stem) {
-                return filter.contains(&normalized);
-              }
-            }
+          if !filter.contains(&stem) {
+            return None;
           }
-          false
-        } else {
-          true
         }
+        Some((path, stem))
       })
       .collect(),
     Err(_) => {
-      eprintln!("No cached pages found in {HTML_DIR}.");
+      eprintln!("No cached pages found in {CACHE_HTML_DIR}.");
       eprintln!("Run fetch_pages first.");
       std::process::exit(1);
     }
   };
 
-  entries.sort();
+  let mut stem_to_paths: HashMap<String, Vec<PathBuf>> = HashMap::new();
+  for (path, stem) in &entries {
+    stem_to_paths
+      .entry(stem.clone())
+      .or_default()
+      .push(path.clone());
+  }
+
+  let duplicates: Vec<_> = stem_to_paths
+    .into_iter()
+    .filter(|(_, paths)| paths.len() > 1)
+    .collect();
+  if !duplicates.is_empty() {
+    eprintln!("Cached HTML stems collide after normalization:");
+    for (stem, paths) in duplicates {
+      let joined = paths
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+      eprintln!("  {stem}: {joined}");
+    }
+    eprintln!(
+      "Clean stale files in {} or re-run fetch_pages --refresh.",
+      CACHE_HTML_DIR
+    );
+    std::process::exit(1);
+  }
+
+  entries.sort_by(|a, b| a.1.cmp(&b.1));
   if let Some((index, total)) = args.shard {
     entries = entries
       .into_iter()
       .enumerate()
       .filter(|(idx, _)| idx % total == index)
-      .map(|(_, path)| path)
+      .map(|(_, entry)| entry)
       .collect();
   }
   if entries.is_empty() {
-    eprintln!("No cached pages in {HTML_DIR}. Run fetch_pages first.");
+    eprintln!("No cached pages in {CACHE_HTML_DIR}. Run fetch_pages first.");
     std::process::exit(1);
   }
 
   let items: Vec<WorkItem> = entries
     .into_iter()
     .filter_map(|cache_path| {
-      let stem = cache_path.file_stem()?.to_string_lossy().to_string();
+      let (cache_path, stem) = cache_path;
       let url = url_hint_from_cache_path(&cache_path);
       Some(WorkItem {
         stem: stem.clone(),
@@ -1486,7 +1510,6 @@ fn run(args: RunArgs) -> io::Result<()> {
     .collect();
 
   let exe = std::env::current_exe()?;
-  let queue = std::collections::VecDeque::from(items.clone());
 
   println!(
     "Pageset progress: {} pages ({} parallel), hard timeout {}s",

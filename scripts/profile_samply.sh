@@ -5,6 +5,7 @@ PAGE_STEM="${1:-}"
 if [[ -z "${PAGE_STEM}" ]]; then
   echo "usage: $0 <page-stem> [pageset_progress args...]"
   echo "example: $0 example.com --timeout 5"
+  echo "stems match fetch_pages normalization (strip scheme + leading www.)"
   exit 2
 fi
 shift || true

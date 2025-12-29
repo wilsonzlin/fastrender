@@ -9,26 +9,22 @@ use common::args::{parse_shard, TimeoutArgs};
 use fastrender::html::encoding::decode_html_bytes;
 use fastrender::html::meta_refresh::extract_js_location_redirect;
 use fastrender::html::meta_refresh::extract_meta_refresh_url;
-use fastrender::resource::normalize_page_name;
-use fastrender::resource::url_to_filename;
+use fastrender::pageset::{cache_html_path, pageset_stem, CACHE_HTML_DIR, PAGESET_URLS};
 use fastrender::resource::HttpFetcher;
 use fastrender::resource::ResourceFetcher;
 use fastrender::resource::DEFAULT_ACCEPT_LANGUAGE;
 use fastrender::resource::DEFAULT_USER_AGENT;
 use rayon::ThreadPoolBuilder;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::fs;
 use std::path::Path;
-use std::path::PathBuf;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 use url::Url;
-
-const CACHE_DIR: &str = "fetches/html";
 
 /// Fetch and cache HTML pages for testing
 #[derive(Parser, Debug)]
@@ -49,6 +45,10 @@ struct Args {
   #[arg(long, value_delimiter = ',')]
   pages: Option<Vec<String>>,
 
+  /// Allow duplicate stems by appending a hash suffix
+  #[arg(long)]
+  allow_collisions: bool,
+
   /// Process only a deterministic shard of the page set (index/total, 0-based)
   #[arg(long, value_parser = parse_shard)]
   shard: Option<(usize, usize)>,
@@ -66,177 +66,81 @@ struct Args {
   timings: bool,
 }
 
-// Target pages for testing
-const PAGES: &[&str] = &[
-  // Tier 1: Simple
-  "https://example.com",
-  "https://example.org",
-  "https://example.net",
-  // Tier 2: Text-heavy
-  "https://news.ycombinator.com",
-  "https://lobste.rs",
-  "https://lite.cnn.com",
-  "https://text.npr.org",
-  "https://iana.org",
-  // Tier 3: Modern
-  "https://google.com",
-  "https://duckduckgo.com",
-  "https://wikipedia.org",
-  "https://www.w3.org",
-  // Tier 4: Complex
-  "https://github.com",
-  "https://gitlab.com",
-  "https://stackoverflow.com",
-  "https://reddit.com",
-  "https://twitter.com",
-  "https://weibo.cn",
-  "https://alibaba.com",
-  "https://arxiv.org",
-  "https://amazon.com",
-  "https://youtube.com",
-  "https://facebook.com",
-  "https://linkedin.com",
-  "https://microsoft.com",
-  "https://apple.com",
-  "https://developer.apple.com",
-  "https://openai.com",
-  "https://icloud.com",
-  "https://nytimes.com",
-  "http://neverssl.com",
-  "https://htmldog.com",
-  "https://ietf.org",
-  "https://bbc.com",
-  "https://nhk.or.jp",
-  "https://si.edu",
-  "https://cdc.gov",
-  "https://britannica.com",
-  "https://zillow.com",
-  "https://apache.org",
-  "https://python.org",
-  "https://cnn.com",
-  "https://fast.com",
-  "https://theguardian.com",
-  "https://nyu.edu",
-  "https://openbsd.org",
-  "https://debian.org",
-  "https://gentoo.org",
-  "https://archlinux.org",
-  "https://manjaro.org",
-  "https://sina.com.cn",
-  "https://espn.com",
-  "https://imdb.com",
-  "https://craigslist.org",
-  "https://pinterest.com",
-  "https://medium.com",
-  "https://quora.com",
-  "https://twitch.tv",
-  "https://dropbox.com",
-  "https://gitlab.io",
-  "https://stripe.com",
-  "https://shopify.com",
-  "https://weebly.com",
-  "https://etsy.com",
-  "https://ebay.com",
-  "https://walmart.com",
-  "https://usatoday.com",
-  "https://newsweek.com",
-  "https://techmeme.com",
-  "https://fortune.com",
-  "https://cbsnews.com",
-  "https://vox.com",
-  "https://msnbc.com",
-  "https://buzzfeed.com",
-  "https://msn.com",
-  "https://huffpost.com",
-  "https://airbnb.com",
-  "https://booking.com",
-  "https://yelp.com",
-  "https://spotify.com",
-  "https://reuters.com",
-  "https://netflix.com",
-  "https://wsj.com",
-  "https://bloomberg.com",
-  "https://time.com",
-  "https://forbes.com",
-  "https://foxnews.com",
-  "https://techcrunch.com",
-  "https://theverge.com",
-  "https://wired.com",
-  "https://arstechnica.com",
-  "https://engadget.com",
-  "https://nbcnews.com",
-  "https://dailymail.co.uk",
-  "https://figma.com",
-  "https://ft.com",
-  "https://phoronix.com",
-  "https://nationalgeographic.com",
-  "https://cnet.com",
-  "https://developer.mozilla.org",
-  "https://developer.mozilla.org/en-US/docs/Web/CSS/writing-mode",
-  "https://developer.mozilla.org/en-US/docs/Web/CSS/text-orientation",
-  "https://developer.mozilla.org/en-US/docs/Web/CSS/text-combine-upright",
-  "https://developer.mozilla.org/en-US/docs/Web/CSS/transform",
-  "https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_multicol_layout/Using_multi-column_layouts",
-  "https://developer.mozilla.org/en-US/docs/Learn/Forms/Your_first_form",
-  "https://howtogeek.com",
-  "https://macrumors.com",
-  "https://washingtonpost.com",
-  "https://w3.org",
-  "https://abcnews.go.com",
-  "https://washington.edu",
-  "https://berkeley.edu",
-  "https://xkcd.com",
-  "https://fandom.com",
-  "https://ikea.com",
-  "https://elpais.com",
-  "https://ndtv.com",
-  "https://yahoo.com",
-  "https://nasa.gov",
-  "https://stackexchange.com",
-  "https://rust-lang.org",
-  "https://blog.rust-lang.org",
-  "https://rfc-editor.org",
-  "https://tesco.com",
-  "https://bing.com",
-  "https://discord.com",
-  "https://weather.com",
-  "https://bbc.co.uk",
-  "https://npmjs.com",
-  "https://latimes.com",
-  "https://cloudflare.com",
-  "https://aliexpress.com",
-  "https://apnews.com",
-  "https://aljazeera.com",
-  "https://tripadvisor.com",
-  "https://vogue.com",
-  "https://theatlantic.com",
-  "https://economist.com",
-  "https://newyorker.com",
-  "https://hbr.org",
-  "https://sqlite.org",
-  "https://nginx.org",
-  "https://go.dev",
-  "https://docs.rs",
-  "https://doc.rust-lang.org",
-  "https://www.openstreetmap.org",
-  "https://docs.python.org",
-  "https://kotlinlang.org",
-  "https://slashdot.org",
-];
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct PagesetEntry {
+  url: &'static str,
+  stem: String,
+  cache_stem: String,
+}
+
+fn short_hash(input: &str) -> String {
+  let mut hash: u32 = 0x811c9dc5;
+  for byte in input.as_bytes() {
+    hash ^= u32::from(*byte);
+    hash = hash.wrapping_mul(0x01000193);
+  }
+  format!("{hash:08x}")
+}
+
+fn build_pageset_entries(
+  allow_collisions: bool,
+) -> Result<(Vec<PagesetEntry>, Vec<(String, Vec<&'static str>)>), String> {
+  let mut normalized = Vec::new();
+  for &url in PAGESET_URLS {
+    let Some(stem) = pageset_stem(url) else {
+      return Err(format!("Invalid pageset URL: {url}"));
+    };
+    normalized.push((url, stem));
+  }
+
+  let mut stem_to_urls: HashMap<String, Vec<&'static str>> = HashMap::new();
+  for (url, stem) in &normalized {
+    stem_to_urls.entry(stem.clone()).or_default().push(*url);
+  }
+
+  let collisions: Vec<_> = stem_to_urls
+    .iter()
+    .filter(|(_, urls)| urls.len() > 1)
+    .map(|(stem, urls)| (stem.clone(), urls.clone()))
+    .collect();
+
+  if !collisions.is_empty() && !allow_collisions {
+    let mut msg = String::from("Pageset stem collisions detected:\n");
+    for (stem, urls) in &collisions {
+      msg.push_str(&format!("  {stem}: {}\n", urls.join(", ")));
+    }
+    msg.push_str("Pass --allow-collisions to append a deterministic hash suffix.");
+    return Err(msg);
+  }
+
+  let entries = normalized
+    .into_iter()
+    .map(|(url, stem)| {
+      let cache_stem = match stem_to_urls.get(&stem) {
+        Some(urls) if urls.len() > 1 => format!("{stem}--{}", short_hash(url)),
+        _ => stem.clone(),
+      };
+      PagesetEntry {
+        url,
+        stem,
+        cache_stem,
+      }
+    })
+    .collect();
+
+  Ok((entries, collisions))
+}
 
 fn selected_pages(
+  entries: &[PagesetEntry],
   filter: Option<&HashSet<String>>,
   shard: Option<(usize, usize)>,
-) -> Vec<&'static str> {
-  let filtered: Vec<&'static str> = PAGES
+) -> Vec<PagesetEntry> {
+  let filtered: Vec<PagesetEntry> = entries
     .iter()
-    .copied()
-    .filter(|url| match filter {
-      Some(names) => {
-        let fname = url_to_filename(url);
-        let no_www = fname.strip_prefix("www.");
-        names.contains(&fname) || no_www.map(|n| names.contains(n)).unwrap_or(false)
-      }
+    .cloned()
+    .filter(|entry| match filter {
+      Some(names) => names.contains(&entry.stem),
       None => true,
     })
     .collect();
@@ -246,7 +150,7 @@ fn selected_pages(
       .into_iter()
       .enumerate()
       .filter(|(idx, _)| idx % total == index)
-      .map(|(_, url)| url)
+      .map(|(_, entry)| entry)
       .collect()
   } else {
     filtered
@@ -354,17 +258,22 @@ fn fetch_page(
 fn main() {
   let args = Args::parse();
 
+  let (pageset_entries, collisions) = match build_pageset_entries(args.allow_collisions) {
+    Ok(result) => result,
+    Err(msg) => {
+      eprintln!("{msg}");
+      std::process::exit(1);
+    }
+  };
+
   // Build page filter from --pages
-  let page_filter: Option<HashSet<String>> = args.pages.map(|pages| {
-    pages
-      .iter()
-      .filter_map(|name| normalize_page_name(name))
-      .collect()
-  });
+  let page_filter: Option<HashSet<String>> = args
+    .pages
+    .map(|pages| pages.iter().filter_map(|name| pageset_stem(name)).collect());
 
-  fs::create_dir_all(CACHE_DIR).expect("create cache dir");
+  fs::create_dir_all(CACHE_HTML_DIR).expect("create cache dir");
 
-  let selected = selected_pages(page_filter.as_ref(), args.shard);
+  let selected = selected_pages(&pageset_entries, page_filter.as_ref(), args.shard);
   if selected.is_empty() {
     if page_filter.is_some() {
       println!("No pages matched the provided filter");
@@ -375,24 +284,21 @@ fn main() {
   }
 
   if let Some(filter) = &page_filter {
-    let matched: HashSet<_> = selected
-      .iter()
-      .flat_map(|u| {
-        let fname = url_to_filename(u);
-        let mut names = vec![fname.clone()];
-        if let Some(no_www) = fname.strip_prefix("www.") {
-          names.push(no_www.to_string());
-        }
-        names
-      })
-      .collect();
+    let matched: HashSet<_> = selected.iter().map(|entry| entry.stem.clone()).collect();
     let missing: Vec<_> = filter
       .iter()
-      .filter(|name| !matched.contains(name.as_str()))
+      .filter(|name| !matched.contains(*name))
       .cloned()
       .collect();
     if !missing.is_empty() {
       println!("Warning: unknown pages in filter: {}", missing.join(", "));
+    }
+  }
+
+  if !collisions.is_empty() && args.allow_collisions {
+    println!("Allowing {} stem collision(s):", collisions.len());
+    for (stem, urls) in &collisions {
+      println!("  {stem}: {}", urls.join(", "));
     }
   }
 
@@ -426,7 +332,8 @@ fn main() {
     .expect("create thread pool");
 
   pool.scope(|s| {
-    for &url in &selected {
+    for entry in &selected {
+      let entry = entry.clone();
       let success = Arc::clone(&success);
       let failed = Arc::clone(&failed);
       let skipped = Arc::clone(&skipped);
@@ -437,8 +344,7 @@ fn main() {
       let timings = args.timings;
 
       s.spawn(move |_| {
-        let filename = url_to_filename(url);
-        let cache_path = PathBuf::from(CACHE_DIR).join(format!("{}.html", filename));
+        let cache_path = cache_html_path(&entry.cache_stem);
 
         // Skip if cached and not refreshing
         if !refresh && cache_path.exists() {
@@ -451,7 +357,7 @@ fn main() {
         } else {
           None
         };
-        match fetch_page(url, timeout, &user_agent, &accept_language) {
+        match fetch_page(entry.url, timeout, &user_agent, &accept_language) {
           Ok((bytes, content_type, source_url)) => {
             if write_cached_html(
               &cache_path,
@@ -464,12 +370,12 @@ fn main() {
               if let Some(start) = start {
                 println!(
                   "✓ {} ({}b, {}ms)",
-                  url,
+                  entry.url,
                   bytes.len(),
                   start.elapsed().as_millis()
                 );
               } else {
-                println!("✓ {} ({}b)", url, bytes.len());
+                println!("✓ {} ({}b)", entry.url, bytes.len());
               }
               success.fetch_add(1, Ordering::Relaxed);
               return;
@@ -477,23 +383,27 @@ fn main() {
             if let Some(start) = start {
               println!(
                 "✗ {} (write failed, {}ms)",
-                url,
+                entry.url,
                 start.elapsed().as_millis()
               );
             } else {
-              println!("✗ {} (write failed)", url);
+              println!("✗ {} (write failed)", entry.url);
             }
             failed.fetch_add(1, Ordering::Relaxed);
-            let _ = failed_urls.lock().map(|mut v| v.push(url.to_string()));
+            let _ = failed_urls
+              .lock()
+              .map(|mut v| v.push(entry.url.to_string()));
           }
           Err(e) => {
             if let Some(start) = start {
-              println!("✗ {} ({}, {}ms)", url, e, start.elapsed().as_millis());
+              println!("✗ {} ({}, {}ms)", entry.url, e, start.elapsed().as_millis());
             } else {
-              println!("✗ {} ({})", url, e);
+              println!("✗ {} ({})", entry.url, e);
             }
             failed.fetch_add(1, Ordering::Relaxed);
-            let _ = failed_urls.lock().map(|mut v| v.push(url.to_string()));
+            let _ = failed_urls
+              .lock()
+              .map(|mut v| v.push(entry.url.to_string()));
           }
         }
       });
@@ -512,7 +422,7 @@ fn main() {
       println!("Failed URLs: {}", urls.join(", "));
     }
   }
-  println!("Cache: {}/", CACHE_DIR);
+  println!("Cache: {CACHE_HTML_DIR}/");
 }
 
 #[cfg(test)]
@@ -532,92 +442,107 @@ mod tests {
   }
 
   #[test]
-  fn url_to_filename_replaces_scheme_and_slashes() {
-    assert_eq!(
-      url_to_filename("https://example.com/foo/bar"),
-      "example.com_foo_bar"
-    );
-    assert_eq!(url_to_filename("http://example.com"), "example.com");
+  fn cache_stems_match_normalization() {
+    let (entries, collisions) = build_pageset_entries(false).expect("pageset ok");
+    assert!(collisions.is_empty());
+    for entry in entries {
+      assert_eq!(entry.stem, pageset_stem(entry.url).unwrap());
+      assert_eq!(entry.cache_stem, entry.stem);
+    }
   }
 
-  #[test]
-  fn url_to_filename_trims_trailing_underscore_from_slash() {
-    assert_eq!(url_to_filename("https://example.com/"), "example.com");
-    assert_eq!(url_to_filename("http://example.com/"), "example.com");
-    assert_eq!(url_to_filename("https://example.com"), "example.com");
+  fn pageset_entries() -> Vec<PagesetEntry> {
+    build_pageset_entries(false).expect("pageset ok").0
   }
 
   #[test]
   fn selected_pages_accepts_trailing_slash_filter() {
     let mut filter = HashSet::new();
     // Trailing slash should normalize to the same stem as the canonical URL.
-    filter.insert(url_to_filename("https://example.com/"));
+    filter.insert(pageset_stem("https://example.com/").unwrap());
 
-    let selected = selected_pages(Some(&filter), None);
-    assert!(selected.contains(&"https://example.com"));
+    let selected = selected_pages(&pageset_entries(), Some(&filter), None);
+    assert!(selected
+      .iter()
+      .any(|entry| entry.url == "https://example.com"));
   }
 
   #[test]
   fn selected_pages_respects_filter() {
     let mut filter = HashSet::new();
-    filter.insert(url_to_filename("https://cnn.com"));
-    filter.insert(url_to_filename("https://example.com"));
+    filter.insert(pageset_stem("https://cnn.com").unwrap());
+    filter.insert(pageset_stem("https://example.com").unwrap());
 
-    let selected = selected_pages(Some(&filter), None);
-    assert!(selected.contains(&"https://cnn.com"));
-    assert!(selected.contains(&"https://example.com"));
-    assert!(!selected.contains(&"https://reddit.com"));
+    let selected = selected_pages(&pageset_entries(), Some(&filter), None);
+    assert!(selected.iter().any(|entry| entry.url == "https://cnn.com"));
+    assert!(selected
+      .iter()
+      .any(|entry| entry.url == "https://example.com"));
+    assert!(!selected
+      .iter()
+      .any(|entry| entry.url == "https://reddit.com"));
   }
 
   #[test]
   fn selected_pages_combines_multiple_filters_case_insensitive() {
     let mut filter = HashSet::new();
-    filter.insert(url_to_filename(
-      "HTTPS://DEVELOPER.MOZILLA.ORG/en-US/docs/Web/CSS/text-orientation",
-    ));
-    filter.insert(url_to_filename("https://RUST-LANG.ORG"));
+    filter.insert(
+      pageset_stem("HTTPS://DEVELOPER.MOZILLA.ORG/en-US/docs/Web/CSS/text-orientation").unwrap(),
+    );
+    filter.insert(pageset_stem("https://RUST-LANG.ORG").unwrap());
 
-    let selected = selected_pages(Some(&filter), None);
+    let selected = selected_pages(&pageset_entries(), Some(&filter), None);
     assert_eq!(selected.len(), 2);
     assert!(selected
       .iter()
-      .any(|&url| url.ends_with("text-orientation")));
-    assert!(selected.iter().any(|&url| url.contains("rust-lang.org")));
+      .any(|entry| entry.url.ends_with("text-orientation")));
+    assert!(selected
+      .iter()
+      .any(|entry| entry.url.contains("rust-lang.org")));
   }
 
   #[test]
   fn selected_pages_respects_leading_www() {
     let mut filter = HashSet::new();
-    // www.openstreetmap.org is in PAGES; normalization should handle the www prefix.
-    filter.insert(url_to_filename("https://www.openstreetmap.org"));
+    // www.openstreetmap.org is in the pageset; normalization should handle the www prefix.
+    filter.insert(pageset_stem("https://www.openstreetmap.org").unwrap());
 
-    let selected = selected_pages(Some(&filter), None);
-    assert_eq!(selected, vec!["https://www.openstreetmap.org"]);
+    let selected = selected_pages(&pageset_entries(), Some(&filter), None);
+    assert!(selected
+      .iter()
+      .any(|entry| entry.url == "https://www.openstreetmap.org"));
   }
 
   #[test]
   fn selected_pages_deduplicates_filters() {
     let mut filter = HashSet::new();
-    // rust-lang.org is present in PAGES.
-    let stem = url_to_filename("https://rust-lang.org");
+    // rust-lang.org is present in the pageset.
+    let stem = pageset_stem("https://rust-lang.org").unwrap();
     filter.insert(stem.clone());
     filter.insert(stem);
 
-    let selected = selected_pages(Some(&filter), None);
-    assert_eq!(selected, vec!["https://rust-lang.org"]);
+    let selected = selected_pages(&pageset_entries(), Some(&filter), None);
+    assert_eq!(
+      selected,
+      vec![pageset_entries()
+        .into_iter()
+        .find(|entry| entry.url == "https://rust-lang.org")
+        .unwrap()]
+    );
   }
 
   #[test]
   fn selected_pages_none_returns_all() {
-    let all = selected_pages(None, None);
-    assert_eq!(all.len(), PAGES.len());
+    let all = selected_pages(&pageset_entries(), None, None);
+    assert_eq!(all.len(), PAGESET_URLS.len());
   }
 
   #[test]
   fn selected_pages_apply_shard_evenly() {
-    let shard0 = selected_pages(None, Some((0, 3)));
-    let shard1 = selected_pages(None, Some((1, 3)));
-    let shard2 = selected_pages(None, Some((2, 3)));
+    let entries = pageset_entries();
+    let shard0 = selected_pages(&entries, None, Some((0, 3)));
+    let shard1 = selected_pages(&entries, None, Some((1, 3)));
+    let shard2 = selected_pages(&entries, None, Some((2, 3)));
 
     assert!(!shard0.is_empty());
     assert!(!shard1.is_empty());
@@ -632,8 +557,8 @@ mod tests {
     deduped.sort();
     deduped.dedup();
 
-    let mut all = selected_pages(None, None);
-    all.sort();
+    let mut all = selected_pages(&entries, None, None);
+    all.sort_by(|a, b| a.url.cmp(b.url));
 
     assert_eq!(deduped, all);
   }
@@ -642,22 +567,28 @@ mod tests {
   fn pages_are_unique() {
     let mut seen = HashSet::new();
     let mut dupes = Vec::new();
-    for &url in PAGES {
+    for &url in PAGESET_URLS {
       if !seen.insert(url) {
         dupes.push(url);
       }
     }
-    assert!(dupes.is_empty(), "Duplicate entries in PAGES: {:?}", dupes);
+    assert!(
+      dupes.is_empty(),
+      "Duplicate entries in PAGESET_URLS: {:?}",
+      dupes
+    );
   }
 
   #[test]
   fn filter_accepts_full_urls_and_www() {
     let mut filter = HashSet::new();
-    filter.insert(normalize_page_name("https://www.w3.org").unwrap());
-    filter.insert(normalize_page_name("w3.org").unwrap());
-    let selected = selected_pages(Some(&filter), None);
-    assert!(selected.contains(&"https://w3.org"));
-    assert!(selected.contains(&"https://www.w3.org"));
+    filter.insert(pageset_stem("https://www.w3.org").unwrap());
+    filter.insert(pageset_stem("w3.org").unwrap());
+    let selected = selected_pages(&pageset_entries(), Some(&filter), None);
+    assert_eq!(selected.len(), 1);
+    assert!(selected
+      .iter()
+      .any(|entry| entry.url == "https://www.w3.org"));
   }
 
   #[test]

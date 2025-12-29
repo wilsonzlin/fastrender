@@ -16,8 +16,8 @@ use fastrender::api::{FastRenderPool, FastRenderPoolConfig};
 use fastrender::debug::runtime::RuntimeToggles;
 use fastrender::dom::{DomNode, DomNodeType};
 use fastrender::image_output::encode_image;
+use fastrender::pageset::{pageset_stem, CACHE_HTML_DIR};
 use fastrender::paint::display_list::DisplayItem;
-use fastrender::resource::normalize_page_name;
 use fastrender::resource::normalize_user_agent_for_log;
 #[cfg(not(feature = "disk_cache"))]
 use fastrender::resource::CachingFetcher;
@@ -41,7 +41,7 @@ use fastrender::{
 };
 use serde::Serialize;
 use serde_json;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::fs;
 use std::panic::AssertUnwindSafe;
@@ -54,7 +54,6 @@ use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
-const HTML_DIR: &str = "fetches/html";
 const ASSET_DIR: &str = "fetches/assets";
 const RENDER_DIR: &str = "fetches/renders";
 const RENDER_STACK_SIZE: usize = 64 * 1024 * 1024; // 64MB to avoid stack overflows on large pages
@@ -249,6 +248,12 @@ struct PageResult {
   size: Option<usize>,
 }
 
+#[derive(Clone)]
+struct CachedEntry {
+  path: PathBuf,
+  stem: String,
+}
+
 enum Status {
   Ok,
   Crash(String),
@@ -278,7 +283,7 @@ fn main() {
       Some(
         all_pages
           .iter()
-          .filter_map(|name| normalize_page_name(name))
+          .filter_map(|name| pageset_stem(name))
           .collect(),
       )
     }
@@ -322,43 +327,73 @@ fn main() {
   fs::create_dir_all(ASSET_DIR).expect("create asset dir");
 
   // Find all cached HTML files
-  let mut entries: Vec<PathBuf> = match fs::read_dir(HTML_DIR) {
+  let mut entries: Vec<CachedEntry> = match fs::read_dir(CACHE_HTML_DIR) {
     Ok(dir) => dir
       .filter_map(|e| e.ok().map(|e| e.path()))
       .filter(|path| path.extension().map(|x| x == "html").unwrap_or(false))
-      .filter(|path| {
+      .filter_map(|path| {
+        let stem_os = path.file_stem()?;
+        let stem = pageset_stem(&stem_os.to_string_lossy())?;
         if let Some(ref filter) = page_filter {
-          if let Some(stem_os) = path.file_stem() {
-            if let Some(stem) = stem_os.to_str() {
-              return filter.contains(stem);
-            }
+          if !filter.contains(&stem) {
+            return None;
           }
-          false
-        } else {
-          true
         }
+        Some(CachedEntry { path, stem })
       })
       .collect(),
     Err(_) => {
-      eprintln!("No cached pages found in {}.", HTML_DIR);
+      eprintln!("No cached pages found in {}.", CACHE_HTML_DIR);
       eprintln!("Run fetch_pages first.");
       std::process::exit(1);
     }
   };
 
-  entries.sort();
+  let mut stem_to_paths: HashMap<String, Vec<PathBuf>> = HashMap::new();
+  for entry in &entries {
+    stem_to_paths
+      .entry(entry.stem.clone())
+      .or_default()
+      .push(entry.path.clone());
+  }
+
+  let duplicates: Vec<_> = stem_to_paths
+    .into_iter()
+    .filter(|(_, paths)| paths.len() > 1)
+    .collect();
+  if !duplicates.is_empty() {
+    eprintln!("Cached HTML stems collide after normalization:");
+    for (stem, paths) in duplicates {
+      let joined = paths
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+      eprintln!("  {stem}: {joined}");
+    }
+    eprintln!(
+      "Clean stale files in {} or re-run fetch_pages --refresh.",
+      CACHE_HTML_DIR
+    );
+    std::process::exit(1);
+  }
+
+  entries.sort_by(|a, b| a.stem.cmp(&b.stem));
 
   if let Some((index, total)) = args.shard {
     entries = entries
       .into_iter()
       .enumerate()
       .filter(|(idx, _)| idx % total == index)
-      .map(|(_, path)| path)
+      .map(|(_, entry)| entry)
       .collect();
   }
 
   if entries.is_empty() {
-    eprintln!("No cached pages in {}. Run fetch_pages first.", HTML_DIR);
+    eprintln!(
+      "No cached pages in {}. Run fetch_pages first.",
+      CACHE_HTML_DIR
+    );
     std::process::exit(1);
   }
 
@@ -439,9 +474,9 @@ fn main() {
   let artifact_request = dump_mode.artifact_request();
 
   thread_pool.scope(|s| {
-    for path in &entries {
+    for entry in &entries {
       let results = &results;
-      let path = path.clone();
+      let entry = entry.clone();
       let fetcher = Arc::clone(&fetcher);
       let user_agent = args.user_agent.clone();
       let options = options.clone();
@@ -449,7 +484,8 @@ fn main() {
       let verbose = args.verbose;
 
       s.spawn(move |_| {
-        let name = path.file_stem().unwrap().to_string_lossy().to_string();
+        let name = entry.stem.clone();
+        let path = entry.path.clone();
         let output_path = PathBuf::from(RENDER_DIR).join(format!("{}.png", name));
         let log_path = PathBuf::from(RENDER_DIR).join(format!("{}.log", name));
 
@@ -1211,30 +1247,30 @@ fn truncate_text(text: &str, limit: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-  use super::normalize_page_name;
+  use super::pageset_stem;
 
   #[test]
   fn normalize_page_name_strips_scheme_and_www() {
     assert_eq!(
-      normalize_page_name("https://example.com/foo").as_deref(),
+      pageset_stem("https://example.com/foo").as_deref(),
       Some("example.com_foo")
     );
     assert_eq!(
-      normalize_page_name("http://www.example.com").as_deref(),
+      pageset_stem("http://www.example.com").as_deref(),
       Some("example.com")
     );
   }
 
   #[test]
   fn normalize_page_name_ignores_empty() {
-    assert!(normalize_page_name("").is_none());
-    assert!(normalize_page_name("   ").is_none());
+    assert!(pageset_stem("").is_none());
+    assert!(pageset_stem("   ").is_none());
   }
 
   #[test]
   fn normalize_page_name_strips_trailing_punctuation_and_whitespace() {
     assert_eq!(
-      normalize_page_name(" https://Example.com./path/ ").as_deref(),
+      pageset_stem(" https://Example.com./path/ ").as_deref(),
       Some("example.com_path")
     );
   }
