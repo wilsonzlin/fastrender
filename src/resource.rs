@@ -1124,11 +1124,12 @@ impl HttpFetcher {
       self.policy.ensure_url_allowed(&current)?;
       let allowed_limit = self.policy.allowed_response_limit()? as u64;
 
+      let accept_encoding_value = accept_encoding.unwrap_or("gzip, deflate, br");
       let mut request = agent
         .get(&current)
         .header("User-Agent", &self.user_agent)
         .header("Accept-Language", &self.accept_language)
-        .header("Accept-Encoding", "gzip, deflate, br");
+        .header("Accept-Encoding", accept_encoding_value);
 
       if let Some(v) = validators {
         if let Some(tag) = v.etag {
@@ -1138,11 +1139,6 @@ impl HttpFetcher {
           request = request.header("If-Modified-Since", modified);
         }
       }
-
-      if let Some(enc) = accept_encoding {
-        request = request.header("Accept-Encoding", enc);
-      }
-
       let mut response = match request.call() {
         Ok(resp) => resp,
         Err(err) => {
@@ -2942,6 +2938,118 @@ mod tests {
     let fetcher = HttpFetcher::new();
     let resource = fetcher.fetch("data:text/plain,test").unwrap();
     assert_eq!(resource.bytes, b"test");
+  }
+
+  #[test]
+  fn http_fetcher_retries_with_identity_accept_encoding_on_decompression_error() {
+    use std::time::{Duration, Instant};
+
+    let Some(listener) = try_bind_localhost(
+      "http_fetcher_retries_with_identity_accept_encoding_on_decompression_error",
+    ) else {
+      return;
+    };
+    let addr = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+
+    let captured = Arc::new(Mutex::new(Vec::<Vec<String>>::new()));
+    let captured_headers = Arc::clone(&captured);
+    let handle = thread::spawn(move || {
+      let mut handled = 0;
+      let start = Instant::now();
+      while handled < 2 && start.elapsed() < Duration::from_secs(5) {
+        match listener.accept() {
+          Ok((mut stream, _)) => {
+            let mut buf = [0u8; 1024];
+            let mut req = Vec::new();
+            loop {
+              match stream.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                  req.extend_from_slice(&buf[..n]);
+                  if req.windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                  }
+                }
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                  thread::sleep(Duration::from_millis(10));
+                  continue;
+                }
+                Err(_) => break,
+              }
+            }
+
+            let req_str = String::from_utf8_lossy(&req);
+            let headers: Vec<String> = req_str
+              .lines()
+              .filter(|line| line.to_ascii_lowercase().starts_with("accept-encoding:"))
+              .map(|line| line.trim().to_ascii_lowercase())
+              .collect();
+            captured_headers.lock().unwrap().push(headers);
+
+            if handled == 0 {
+              let body = b"not brotli";
+              let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Encoding: br\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+              );
+              let _ = stream.write_all(response.as_bytes());
+              let _ = stream.write_all(body);
+            } else {
+              let body = b"plain body";
+              let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+              );
+              let _ = stream.write_all(response.as_bytes());
+              let _ = stream.write_all(body);
+            }
+
+            handled += 1;
+          }
+          Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+            thread::sleep(Duration::from_millis(10));
+          }
+          Err(_) => break,
+        }
+      }
+    });
+
+    let fetcher = HttpFetcher::new().with_timeout(Duration::from_secs(2));
+    let url = format!("http://{}", addr);
+    let res = fetcher
+      .fetch(&url)
+      .expect("fetch after decompression retry");
+    handle.join().unwrap();
+
+    assert_eq!(res.bytes, b"plain body");
+
+    let captured = captured.lock().unwrap();
+    assert_eq!(
+      captured.len(),
+      2,
+      "decompression error should trigger a retry with a second request: {:?}",
+      *captured
+    );
+
+    let initial_headers = &captured[0];
+    assert_eq!(
+      initial_headers,
+      &vec!["accept-encoding: gzip, deflate, br".to_string()],
+      "default request should advertise gzip/deflate/br"
+    );
+
+    let retry_headers = &captured[1];
+    assert_eq!(
+      retry_headers.len(),
+      1,
+      "retry should send exactly one Accept-Encoding header: {:?}",
+      retry_headers
+    );
+    assert_eq!(
+      retry_headers[0], "accept-encoding: identity",
+      "retry Accept-Encoding should be identity"
+    );
   }
 
   #[test]
