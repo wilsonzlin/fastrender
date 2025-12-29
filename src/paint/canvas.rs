@@ -62,6 +62,7 @@ use crate::text::color_fonts::ColorGlyphRaster;
 use crate::text::font_db::LoadedFont;
 use crate::text::pipeline::{GlyphPosition, ShapedRun};
 use rustybuzz::Variation as HbVariation;
+use std::rc::Rc;
 use tiny_skia::BlendMode as SkiaBlendMode;
 use tiny_skia::FillRule;
 use tiny_skia::IntSize;
@@ -92,7 +93,7 @@ struct CanvasState {
   /// Clip rectangle (if any)
   clip_rect: Option<Rect>,
   /// Clip mask (respects radii/intersections)
-  clip_mask: Option<Mask>,
+  clip_mask: Option<Rc<Mask>>,
   /// Blend mode
   blend_mode: SkiaBlendMode,
 }
@@ -135,8 +136,12 @@ impl Default for CanvasState {
 #[derive(Debug)]
 struct LayerRecord {
   pixmap: Pixmap,
-  state_stack: Vec<CanvasState>,
-  current_state: CanvasState,
+  saved_state_depth: usize,
+  parent_opacity: f32,
+  parent_blend_mode: SkiaBlendMode,
+  parent_transform: Transform,
+  parent_clip_rect: Option<Rect>,
+  parent_clip_mask: Option<Rc<Mask>>,
   opacity: f32,
   composite_blend: Option<SkiaBlendMode>,
   origin: (i32, i32),
@@ -452,8 +457,12 @@ impl Canvas {
 
     let record = LayerRecord {
       pixmap: std::mem::replace(&mut self.pixmap, new_pixmap),
-      state_stack: self.state_stack.clone(),
-      current_state: self.current_state.clone(),
+      saved_state_depth: self.state_stack.len(),
+      parent_opacity: self.current_state.opacity,
+      parent_blend_mode: self.current_state.blend_mode,
+      parent_transform: self.current_state.transform,
+      parent_clip_rect: self.current_state.clip_rect,
+      parent_clip_mask: self.current_state.clip_mask.clone(),
       opacity: opacity.clamp(0.0, 1.0),
       composite_blend: blend,
       origin: (origin_x, origin_y),
@@ -489,8 +498,14 @@ impl Canvas {
         };
       }
       if let Some(mask) = self.current_state.clip_mask.take() {
-        self.current_state.clip_mask =
-          crop_mask(&mask, origin_x as u32, origin_y as u32, width, height);
+        self.current_state.clip_mask = crop_mask(
+          mask.as_ref(),
+          origin_x as u32,
+          origin_y as u32,
+          width,
+          height,
+        )
+        .map(Rc::new);
       }
     }
 
@@ -540,8 +555,12 @@ impl Canvas {
     };
 
     let layer_pixmap = std::mem::replace(&mut self.pixmap, record.pixmap);
-    self.state_stack = record.state_stack;
-    self.current_state = record.current_state;
+    self.state_stack.truncate(record.saved_state_depth);
+    self.current_state.opacity = record.parent_opacity;
+    self.current_state.blend_mode = record.parent_blend_mode;
+    self.current_state.transform = record.parent_transform;
+    self.current_state.clip_rect = record.parent_clip_rect;
+    self.current_state.clip_mask = record.parent_clip_mask;
     let opacity = (record.opacity * self.current_state.opacity).clamp(0.0, 1.0);
     Ok((layer_pixmap, record.origin, opacity, record.composite_blend))
   }
@@ -564,17 +583,12 @@ impl Canvas {
     let mut paint = PixmapPaint::default();
     paint.opacity = opacity;
     paint.blend_mode = composite_blend.unwrap_or(self.current_state.blend_mode);
-    let clip = self.current_state.clip_mask.clone();
+    let clip = self.current_state.clip_mask.as_deref();
     let transform = self.current_state.transform;
 
-    self.pixmap.draw_pixmap(
-      origin.0,
-      origin.1,
-      layer.as_ref(),
-      &paint,
-      transform,
-      clip.as_ref(),
-    );
+    self
+      .pixmap
+      .draw_pixmap(origin.0, origin.1, layer.as_ref(), &paint, transform, clip);
   }
 
   /// Returns the current blend mode.
@@ -648,10 +662,10 @@ impl Canvas {
     let new_mask = self.build_clip_mask(rect, radii.unwrap_or(BorderRadii::ZERO));
     self.current_state.clip_mask = match (new_mask, self.current_state.clip_mask.take()) {
       (Some(mut next), Some(existing)) => {
-        combine_masks(&mut next, &existing);
-        Some(next)
+        combine_masks(&mut next, existing.as_ref());
+        Some(Rc::new(next))
       }
-      (Some(mask), None) => Some(mask),
+      (Some(mask), None) => Some(Rc::new(mask)),
       (None, existing) => existing,
     };
   }
@@ -675,10 +689,10 @@ impl Canvas {
       .and_then(|size| path.mask(scale, size, self.current_state.transform));
     self.current_state.clip_mask = match (new_mask, self.current_state.clip_mask.take()) {
       (Some(mut next), Some(existing)) => {
-        combine_masks(&mut next, &existing);
-        Some(next)
+        combine_masks(&mut next, existing.as_ref());
+        Some(Rc::new(next))
       }
-      (Some(mask), None) => Some(mask),
+      (Some(mask), None) => Some(Rc::new(mask)),
       (None, existing) => existing,
     };
   }
@@ -696,7 +710,7 @@ impl Canvas {
 
   /// Returns the current clip mask, including any rounded radii.
   pub(crate) fn clip_mask(&self) -> Option<&Mask> {
-    self.current_state.clip_mask.as_ref()
+    self.current_state.clip_mask.as_deref()
   }
 
   fn current_text_state<'a>(&self, clip_mask: Option<&'a Mask>) -> TextRenderState<'a> {
@@ -745,7 +759,7 @@ impl Canvas {
         &paint,
         FillRule::Winding,
         self.current_state.transform,
-        self.current_state.clip_mask.as_ref(),
+        self.current_state.clip_mask.as_deref(),
       );
     }
   }
@@ -780,7 +794,7 @@ impl Canvas {
         &paint,
         &stroke,
         self.current_state.transform,
-        self.current_state.clip_mask.as_ref(),
+        self.current_state.clip_mask.as_deref(),
       );
     }
   }
@@ -811,7 +825,7 @@ impl Canvas {
         &paint,
         &stroke,
         self.current_state.transform,
-        self.current_state.clip_mask.as_ref(),
+        self.current_state.clip_mask.as_deref(),
       );
     }
   }
@@ -865,7 +879,7 @@ impl Canvas {
         &paint,
         FillRule::Winding,
         self.current_state.transform,
-        self.current_state.clip_mask.as_ref(),
+        self.current_state.clip_mask.as_deref(),
       );
     }
   }
@@ -909,7 +923,7 @@ impl Canvas {
         &paint,
         &stroke,
         self.current_state.transform,
-        self.current_state.clip_mask.as_ref(),
+        self.current_state.clip_mask.as_deref(),
       );
     }
   }
@@ -975,8 +989,7 @@ impl Canvas {
       return;
     }
 
-    let clip_mask = self.current_state.clip_mask.clone();
-    let state = self.current_text_state(clip_mask.as_ref());
+    let state = self.current_text_state(self.current_state.clip_mask.as_deref());
     let _ = self.text_rasterizer.render_shaped_run_with_state(
       run,
       position.x,
@@ -1040,8 +1053,7 @@ impl Canvas {
     }
 
     let hb_variations = Self::hb_variations(variations);
-    let clip_mask = self.current_state.clip_mask.clone();
-    let state = self.current_text_state(clip_mask.as_ref());
+    let state = self.current_text_state(self.current_state.clip_mask.as_deref());
 
     let positions: Vec<GlyphPosition> = glyphs
       .iter()
@@ -1098,15 +1110,10 @@ impl Canvas {
     let mut transform = glyph_transform.unwrap_or_else(Transform::identity);
     transform = concat_transforms(transform, translation);
     transform = concat_transforms(self.current_state.transform, transform);
-    let clip = self.current_state.clip_mask.clone();
-    self.pixmap.draw_pixmap(
-      0,
-      0,
-      glyph.image.as_ref().as_ref(),
-      &paint,
-      transform,
-      clip.as_ref(),
-    );
+    let clip = self.current_state.clip_mask.as_deref();
+    self
+      .pixmap
+      .draw_pixmap(0, 0, glyph.image.as_ref().as_ref(), &paint, transform, clip);
   }
 
   /// Draws a line between two points
@@ -1137,7 +1144,7 @@ impl Canvas {
         &paint,
         &stroke,
         self.current_state.transform,
-        self.current_state.clip_mask.as_ref(),
+        self.current_state.clip_mask.as_deref(),
       );
     }
   }
@@ -1161,7 +1168,7 @@ impl Canvas {
         &paint,
         FillRule::Winding,
         self.current_state.transform,
-        self.current_state.clip_mask.as_ref(),
+        self.current_state.clip_mask.as_deref(),
       );
     }
   }
@@ -1183,7 +1190,7 @@ impl Canvas {
         &paint,
         &stroke,
         self.current_state.transform,
-        self.current_state.clip_mask.as_ref(),
+        self.current_state.clip_mask.as_deref(),
       );
     }
   }
@@ -1836,5 +1843,55 @@ mod tests {
     let bounded_pixmap = bounded.into_pixmap();
 
     assert_eq!(bounded_pixmap.data(), full_pixmap.data());
+  }
+
+  #[test]
+  fn save_restore_survives_layer_push_pop() {
+    let mut canvas = Canvas::new(4, 4, Rgba::WHITE).unwrap();
+    canvas.set_opacity(0.5);
+    canvas.set_blend_mode(BlendMode::Screen);
+    canvas.save();
+    canvas.set_opacity(0.25);
+
+    canvas.push_layer(0.8).unwrap();
+    canvas.set_opacity(0.1);
+    canvas.save();
+    canvas.set_blend_mode(BlendMode::Multiply);
+    canvas.restore();
+
+    assert_eq!(canvas.state_depth(), 1);
+    assert_eq!(canvas.opacity(), 0.1);
+
+    canvas.pop_layer().unwrap();
+    assert_eq!(canvas.state_depth(), 1);
+    assert_eq!(canvas.opacity(), 0.25);
+    assert_eq!(canvas.blend_mode(), SkiaBlendMode::Screen);
+
+    canvas.restore();
+    assert_eq!(canvas.state_depth(), 0);
+    assert_eq!(canvas.opacity(), 0.5);
+  }
+
+  #[test]
+  fn bounded_layer_preserves_parent_clip_mask() {
+    let mut canvas = Canvas::new(8, 8, Rgba::WHITE).unwrap();
+    canvas.set_clip_with_radii(
+      Rect::from_xywh(1.0, 1.0, 6.0, 6.0),
+      Some(BorderRadii::uniform(1.0)),
+    );
+
+    canvas
+      .push_layer_bounded(1.0, None, Rect::from_xywh(1.0, 1.0, 6.0, 6.0))
+      .unwrap();
+    canvas.draw_rect(Rect::from_xywh(0.0, 0.0, 8.0, 8.0), Rgba::rgb(255, 0, 0));
+    canvas.pop_layer().unwrap();
+
+    // Clip mask should be restored and still apply to subsequent draws.
+    canvas.draw_rect(Rect::from_xywh(0.0, 0.0, 8.0, 8.0), Rgba::rgb(0, 255, 0));
+    let pixmap = canvas.into_pixmap();
+
+    assert_eq!(pixel(&pixmap, 0, 0), (255, 255, 255, 255));
+    assert_eq!(pixel(&pixmap, 7, 7), (255, 255, 255, 255));
+    assert_eq!(pixel(&pixmap, 3, 3), (0, 255, 0, 255));
   }
 }
