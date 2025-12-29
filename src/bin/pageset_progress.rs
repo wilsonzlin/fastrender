@@ -91,6 +91,49 @@ impl DiagnosticsArg {
   }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, ValueEnum)]
+enum ProgressStatusArg {
+  Ok,
+  Timeout,
+  Panic,
+  Error,
+}
+
+#[derive(Args, Debug, Default, Clone)]
+struct ProgressSelectionArgs {
+  /// Select pages from an existing `progress/pages` directory instead of the cache listing (filters combine with AND unless `--union` is set)
+  #[arg(long, value_name = "DIR")]
+  from_progress: Option<PathBuf>,
+
+  /// Filter to failures (timeout|panic|error)
+  #[arg(long, requires = "from_progress")]
+  only_failures: bool,
+
+  /// Filter to specific statuses (comma-separated)
+  #[arg(long, value_enum, value_delimiter = ',', requires = "from_progress")]
+  only_status: Vec<ProgressStatusArg>,
+
+  /// Filter to pages slower than this threshold (ms)
+  #[arg(long, value_name = "MS", requires = "from_progress")]
+  slow_ms: Option<f64>,
+
+  /// Apply the slow filter only to ok pages
+  #[arg(long, requires_all = ["from_progress", "slow_ms"])]
+  slow_ok_only: bool,
+
+  /// Filter to a hotspot (case-insensitive)
+  #[arg(long, value_name = "HOTSPOT", requires = "from_progress")]
+  hotspot: Option<String>,
+
+  /// Pick the N slowest pages (after other filters)
+  #[arg(long, value_name = "N", requires = "from_progress")]
+  top_slowest: Option<usize>,
+
+  /// Combine filters with OR instead of AND
+  #[arg(long, requires = "from_progress")]
+  union: bool,
+}
+
 #[derive(Args, Debug)]
 struct RunArgs {
   /// Number of parallel workers
@@ -141,6 +184,10 @@ struct RunArgs {
   /// Process only a deterministic shard of the cached pages (index/total, 0-based)
   #[arg(long, value_parser = parse_shard)]
   shard: Option<(usize, usize)>,
+
+  /// Reuse selection from existing progress artifacts (failures/slow pages)
+  #[command(flatten)]
+  selection: ProgressSelectionArgs,
 
   /// Directory to write committed progress artifacts into
   #[arg(long, default_value = DEFAULT_PROGRESS_DIR)]
@@ -289,7 +336,7 @@ fn parse_viewport(s: &str) -> Result<(u32, u32), String> {
   Ok((w, h))
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 enum ProgressStatus {
   Ok,
@@ -312,6 +359,17 @@ impl ProgressStatus {
 impl Default for ProgressStatus {
   fn default() -> Self {
     ProgressStatus::Error
+  }
+}
+
+impl From<ProgressStatusArg> for ProgressStatus {
+  fn from(value: ProgressStatusArg) -> Self {
+    match value {
+      ProgressStatusArg::Ok => ProgressStatus::Ok,
+      ProgressStatusArg::Timeout => ProgressStatus::Timeout,
+      ProgressStatusArg::Panic => ProgressStatus::Panic,
+      ProgressStatusArg::Error => ProgressStatus::Error,
+    }
   }
 }
 
@@ -360,6 +418,10 @@ fn is_hotspot_unset(h: &str) -> bool {
 
 fn is_manual_field_unset(value: &str) -> bool {
   value.trim().is_empty()
+}
+
+fn normalize_hotspot_filter(h: &str) -> String {
+  normalize_hotspot(h).to_ascii_lowercase()
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -434,6 +496,59 @@ struct StatusCounts {
   timeout: usize,
   panic: usize,
   error: usize,
+}
+
+#[derive(Debug, Clone)]
+enum ProgressCriterion {
+  Status(HashSet<ProgressStatus>),
+  Slow { threshold_ms: f64, ok_only: bool },
+  Hotspot(String),
+}
+
+#[derive(Debug, Clone, Default)]
+struct ProgressSelection {
+  criteria: Vec<ProgressCriterion>,
+  top_slowest: Option<usize>,
+  union: bool,
+}
+
+impl ProgressSelectionArgs {
+  fn is_active(&self) -> bool {
+    self.from_progress.is_some()
+  }
+
+  fn to_selection(&self) -> ProgressSelection {
+    let mut criteria = Vec::new();
+    let mut statuses: HashSet<ProgressStatus> = HashSet::new();
+    if self.only_failures {
+      statuses.insert(ProgressStatus::Timeout);
+      statuses.insert(ProgressStatus::Panic);
+      statuses.insert(ProgressStatus::Error);
+    }
+    for status in &self.only_status {
+      statuses.insert((*status).into());
+    }
+    if !statuses.is_empty() {
+      criteria.push(ProgressCriterion::Status(statuses));
+    }
+    if let Some(threshold_ms) = self.slow_ms {
+      criteria.push(ProgressCriterion::Slow {
+        threshold_ms,
+        ok_only: self.slow_ok_only,
+      });
+    }
+    if let Some(hotspot) = &self.hotspot {
+      criteria.push(ProgressCriterion::Hotspot(normalize_hotspot_filter(
+        hotspot,
+      )));
+    }
+
+    ProgressSelection {
+      criteria,
+      top_slowest: self.top_slowest,
+      union: self.union,
+    }
+  }
 }
 
 fn url_hint_from_cache_path(cache_path: &Path) -> String {
@@ -982,6 +1097,149 @@ fn read_progress_dir_allow_empty(dir: &Path) -> io::Result<Vec<LoadedProgress>> 
   Ok(progresses)
 }
 
+#[derive(Debug, Default)]
+struct ProgressLoadOutcome {
+  progresses: Vec<LoadedProgress>,
+  warnings: Vec<String>,
+}
+
+fn read_progress_dir_tolerant(dir: &Path) -> ProgressLoadOutcome {
+  let mut outcome = ProgressLoadOutcome::default();
+
+  let entries = match fs::read_dir(dir) {
+    Ok(entries) => entries,
+    Err(err) => {
+      outcome.warnings.push(format!("{}: {}", dir.display(), err));
+      return outcome;
+    }
+  };
+
+  let mut files: Vec<PathBuf> = entries
+    .filter_map(|entry| entry.ok().map(|e| e.path()))
+    .filter(|path| path.extension().map(|ext| ext == "json").unwrap_or(false))
+    .collect();
+  files.sort();
+
+  for path in files {
+    let contents = match fs::read_to_string(&path) {
+      Ok(contents) => contents,
+      Err(err) => {
+        outcome
+          .warnings
+          .push(format!("{}: failed to read: {}", path.display(), err));
+        continue;
+      }
+    };
+
+    match serde_json::from_str::<PageProgress>(&contents) {
+      Ok(progress) => {
+        let stem = path
+          .file_stem()
+          .map(|s| s.to_string_lossy().to_string())
+          .unwrap_or_else(|| path.display().to_string());
+        outcome.progresses.push(LoadedProgress { stem, progress });
+      }
+      Err(err) => {
+        outcome.warnings.push(format!(
+          "{}: failed to parse progress JSON: {}",
+          path.display(),
+          err
+        ));
+      }
+    }
+  }
+
+  outcome
+}
+
+fn entry_matches_criterion(progress: &LoadedProgress, criterion: &ProgressCriterion) -> bool {
+  match criterion {
+    ProgressCriterion::Status(set) => set.contains(&progress.progress.status),
+    ProgressCriterion::Slow {
+      threshold_ms,
+      ok_only,
+    } => {
+      if *ok_only && progress.progress.status != ProgressStatus::Ok {
+        return false;
+      }
+      progress
+        .progress
+        .total_ms
+        .map(|ms| ms > *threshold_ms)
+        .unwrap_or(false)
+    }
+    ProgressCriterion::Hotspot(hotspot) => normalize_hotspot(&progress.progress.hotspot)
+      .to_ascii_lowercase()
+      .eq(hotspot),
+  }
+}
+
+fn apply_top_slowest<'a>(
+  entries: Vec<&'a LoadedProgress>,
+  top_slowest: Option<usize>,
+) -> Vec<&'a LoadedProgress> {
+  let Some(limit) = top_slowest else {
+    return entries;
+  };
+  if limit == 0 {
+    return Vec::new();
+  }
+  let mut with_timings: Vec<&LoadedProgress> = entries
+    .into_iter()
+    .filter(|entry| entry.progress.total_ms.is_some())
+    .collect();
+  with_timings.sort_by(|a, b| {
+    let a_ms = a.progress.total_ms.unwrap_or(0.0);
+    let b_ms = b.progress.total_ms.unwrap_or(0.0);
+    b_ms.total_cmp(&a_ms).then_with(|| a.stem.cmp(&b.stem))
+  });
+  with_timings.truncate(limit);
+  with_timings
+}
+
+fn select_progress_entries<'a>(
+  progresses: &'a [LoadedProgress],
+  selection: &ProgressSelection,
+) -> Vec<&'a LoadedProgress> {
+  let mut filtered: Vec<&LoadedProgress> = if selection.criteria.is_empty() {
+    progresses.iter().collect()
+  } else if selection.union {
+    progresses
+      .iter()
+      .filter(|entry| {
+        selection
+          .criteria
+          .iter()
+          .any(|criterion| entry_matches_criterion(entry, criterion))
+      })
+      .collect()
+  } else {
+    progresses
+      .iter()
+      .filter(|entry| {
+        selection
+          .criteria
+          .iter()
+          .all(|criterion| entry_matches_criterion(entry, criterion))
+      })
+      .collect()
+  };
+
+  apply_top_slowest(std::mem::take(&mut filtered), selection.top_slowest)
+}
+
+fn apply_shard_filter<T>(items: Vec<T>, shard: Option<(usize, usize)>) -> Vec<T> {
+  let Some((index, total)) = shard else {
+    return items;
+  };
+  items
+    .into_iter()
+    .enumerate()
+    .filter(|(idx, _)| idx % total == index)
+    .map(|(_, item)| item)
+    .collect()
+}
+
 fn summarize_status(progresses: &[LoadedProgress]) -> StatusCounts {
   let mut counts = StatusCounts::default();
   for entry in progresses {
@@ -1167,6 +1425,44 @@ struct WorkItem {
   log_path: PathBuf,
   stderr_path: PathBuf,
   trace_out: Option<PathBuf>,
+}
+
+fn collect_cached_html_paths() -> io::Result<Vec<PathBuf>> {
+  let mut entries: Vec<PathBuf> = fs::read_dir(CACHE_HTML_DIR)
+    .map_err(|e| io::Error::new(e.kind(), format!("{}: {}", CACHE_HTML_DIR, e)))?
+    .filter_map(|e| e.ok().map(|e| e.path()))
+    .filter(|path| path.extension().map(|x| x == "html").unwrap_or(false))
+    .collect();
+  entries.sort();
+  Ok(entries)
+}
+
+fn build_cache_index(paths: &[PathBuf]) -> HashMap<String, PathBuf> {
+  let mut index = HashMap::new();
+  for path in paths {
+    let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+      continue;
+    };
+    if let Some(normalized) = pageset_stem(stem) {
+      index.insert(normalized, path.clone());
+    }
+  }
+  index
+}
+
+fn work_item_from_cache(cache_path: PathBuf, args: &RunArgs) -> Option<WorkItem> {
+  let stem_raw = cache_path.file_stem()?.to_string_lossy().to_string();
+  let stem = pageset_stem(&stem_raw)?;
+  let url = url_hint_from_cache_path(&cache_path);
+  Some(WorkItem {
+    stem: stem.clone(),
+    url,
+    cache_path,
+    progress_path: args.progress_dir.join(format!("{stem}.json")),
+    log_path: args.log_dir.join(format!("{stem}.log")),
+    stderr_path: args.log_dir.join(format!("{stem}.stderr.log")),
+    trace_out: None,
+  })
 }
 
 #[derive(Debug)]
@@ -1423,40 +1719,35 @@ fn run(args: RunArgs) -> io::Result<()> {
     fs::create_dir_all(ASSET_DIR)?;
   }
 
-  let filter: Option<HashSet<String>> = args.pages.as_ref().map(|v| {
+  let page_filter: Option<HashSet<String>> = args.pages.as_ref().map(|v| {
     v.iter()
       .filter_map(|s| pageset_stem(s))
       .collect::<HashSet<_>>()
   });
 
-  let mut entries: Vec<(PathBuf, String)> = match fs::read_dir(CACHE_HTML_DIR) {
-    Ok(dir) => dir
-      .filter_map(|e| e.ok().map(|e| e.path()))
-      .filter(|path| path.extension().map(|x| x == "html").unwrap_or(false))
-      .filter_map(|path| {
-        let stem_os = path.file_stem()?;
-        let stem = pageset_stem(&stem_os.to_string_lossy())?;
-        if let Some(ref filter) = filter {
-          if !filter.contains(&stem) {
-            return None;
-          }
-        }
-        Some((path, stem))
-      })
-      .collect(),
+  let cached_paths = match collect_cached_html_paths() {
+    Ok(paths) => paths,
     Err(_) => {
-      eprintln!("No cached pages found in {CACHE_HTML_DIR}.");
-      eprintln!("Run fetch_pages first.");
+      eprintln!("No cached pages found in {CACHE_HTML_DIR}. Run fetch_pages first.");
       std::process::exit(1);
     }
   };
+  if cached_paths.is_empty() {
+    eprintln!("No cached pages in {CACHE_HTML_DIR}. Run fetch_pages first.");
+    std::process::exit(1);
+  }
 
   let mut stem_to_paths: HashMap<String, Vec<PathBuf>> = HashMap::new();
-  for (path, stem) in &entries {
-    stem_to_paths
-      .entry(stem.clone())
-      .or_default()
-      .push(path.clone());
+  for path in &cached_paths {
+    let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+      continue;
+    };
+    if let Some(normalized) = pageset_stem(stem) {
+      stem_to_paths
+        .entry(normalized)
+        .or_default()
+        .push(path.clone());
+    }
   }
 
   let duplicates: Vec<_> = stem_to_paths
@@ -1480,39 +1771,123 @@ fn run(args: RunArgs) -> io::Result<()> {
     std::process::exit(1);
   }
 
-  entries.sort_by(|a, b| a.1.cmp(&b.1));
-  if let Some((index, total)) = args.shard {
-    entries = entries
+  let cache_index = build_cache_index(&cached_paths);
+
+  let mut items: Vec<WorkItem> = Vec::new();
+
+  if args.selection.is_active() {
+    let selection_dir = args.selection.from_progress.as_ref().unwrap();
+    let selection = args.selection.to_selection();
+    let outcome = read_progress_dir_tolerant(selection_dir);
+    for warning in &outcome.warnings {
+      eprintln!("Progress selection warning: {warning}");
+    }
+
+    let selected = select_progress_entries(&outcome.progresses, &selection);
+    if selected.is_empty() {
+      println!(
+        "No pages matched the selection in {}. Nothing to do.",
+        selection_dir.display()
+      );
+      return Ok(());
+    }
+
+    let mut stems: Vec<String> = selected.iter().map(|p| p.stem.clone()).collect();
+    if let Some(ref filter) = page_filter {
+      stems = stems
+        .into_iter()
+        .filter(|stem| {
+          pageset_stem(stem)
+            .map(|normalized| filter.contains(&normalized))
+            .unwrap_or(false)
+        })
+        .collect();
+    }
+
+    stems = apply_shard_filter(stems, args.shard);
+
+    let mut missing_cache: Vec<String> = Vec::new();
+    let mut invalid_stems: Vec<String> = Vec::new();
+
+    for stem in stems {
+      let Some(normalized) = pageset_stem(&stem) else {
+        invalid_stems.push(stem);
+        continue;
+      };
+      let Some(path) = cache_index.get(&normalized) else {
+        missing_cache.push(stem);
+        continue;
+      };
+      if let Some(item) = work_item_from_cache(path.clone(), &args) {
+        items.push(item);
+      }
+    }
+
+    if !invalid_stems.is_empty() {
+      eprintln!(
+        "Skipping stems that could not be normalized: {}",
+        invalid_stems.join(", ")
+      );
+    }
+    if !missing_cache.is_empty() {
+      eprintln!(
+        "Missing cached HTML for selected pages: {}",
+        missing_cache.join(", ")
+      );
+    }
+
+    if items.is_empty() {
+      println!(
+        "No pages matched the selection in {} after filtering and cache lookup.",
+        selection_dir.display()
+      );
+      return Ok(());
+    }
+
+    println!(
+      "Selected {} page(s) from {} ({}):",
+      items.len(),
+      selection_dir.display(),
+      if selection.union {
+        "union"
+      } else {
+        "intersection"
+      }
+    );
+    for item in &items {
+      println!("  {}", item.stem);
+    }
+    println!();
+  } else {
+    let mut filtered_paths = cached_paths;
+    if let Some(ref filter) = page_filter {
+      filtered_paths = filtered_paths
+        .into_iter()
+        .filter(|path| {
+          if let Some(stem_os) = path.file_stem() {
+            if let Some(stem) = stem_os.to_str() {
+              if let Some(normalized) = pageset_stem(stem) {
+                return filter.contains(&normalized);
+              }
+            }
+          }
+          false
+        })
+        .collect();
+    }
+    filtered_paths = apply_shard_filter(filtered_paths, args.shard);
+    if filtered_paths.is_empty() {
+      eprintln!(
+        "No cached pages matched the requested filters (--pages/shard) in {CACHE_HTML_DIR}."
+      );
+      std::process::exit(1);
+    }
+    items = filtered_paths
       .into_iter()
-      .enumerate()
-      .filter(|(idx, _)| idx % total == index)
-      .map(|(_, entry)| entry)
+      .filter_map(|cache_path| work_item_from_cache(cache_path, &args))
       .collect();
   }
-  if entries.is_empty() {
-    eprintln!("No cached pages in {CACHE_HTML_DIR}. Run fetch_pages first.");
-    std::process::exit(1);
-  }
-
-  let items: Vec<WorkItem> = entries
-    .into_iter()
-    .filter_map(|cache_path| {
-      let (cache_path, stem) = cache_path;
-      let url = url_hint_from_cache_path(&cache_path);
-      Some(WorkItem {
-        stem: stem.clone(),
-        url,
-        cache_path,
-        progress_path: args.progress_dir.join(format!("{stem}.json")),
-        log_path: args.log_dir.join(format!("{stem}.log")),
-        stderr_path: args.log_dir.join(format!("{stem}.stderr.log")),
-        trace_out: None,
-      })
-    })
-    .collect();
-
   let exe = std::env::current_exe()?;
-
   println!(
     "Pageset progress: {} pages ({} parallel), hard timeout {}s",
     items.len(),
@@ -1664,7 +2039,154 @@ fn worker(args: WorkerArgs) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use std::collections::HashSet;
+  use std::fs;
   use std::time::Duration;
+  use tempfile::tempdir;
+
+  fn make_progress(
+    stem: &str,
+    status: ProgressStatus,
+    total_ms: Option<f64>,
+    hotspot: &str,
+  ) -> LoadedProgress {
+    let mut progress = PageProgress::new(format!("https://{stem}"));
+    progress.status = status;
+    progress.total_ms = total_ms;
+    progress.hotspot = hotspot.to_string();
+    LoadedProgress {
+      stem: stem.to_string(),
+      progress,
+    }
+  }
+
+  fn status_set(statuses: &[ProgressStatus]) -> HashSet<ProgressStatus> {
+    let mut set = HashSet::new();
+    for status in statuses {
+      set.insert(*status);
+    }
+    set
+  }
+
+  #[test]
+  fn selection_uses_intersection_and_hotspot() {
+    let progresses = vec![
+      make_progress("a", ProgressStatus::Timeout, Some(100.0), "layout"),
+      make_progress("b", ProgressStatus::Error, Some(150.0), "paint"),
+      make_progress("c", ProgressStatus::Timeout, Some(200.0), "paint"),
+    ];
+    let selection = ProgressSelection {
+      criteria: vec![
+        ProgressCriterion::Status(status_set(&[
+          ProgressStatus::Timeout,
+          ProgressStatus::Panic,
+          ProgressStatus::Error,
+        ])),
+        ProgressCriterion::Hotspot("layout".into()),
+      ],
+      top_slowest: None,
+      union: false,
+    };
+    let stems: Vec<String> = select_progress_entries(&progresses, &selection)
+      .into_iter()
+      .map(|p| p.stem.clone())
+      .collect();
+    assert_eq!(stems, vec!["a".to_string()]);
+  }
+
+  #[test]
+  fn selection_union_combines_filters() {
+    let progresses = vec![
+      make_progress("a", ProgressStatus::Ok, Some(50.0), "layout"),
+      make_progress("b", ProgressStatus::Timeout, None, "layout"),
+      make_progress("c", ProgressStatus::Ok, Some(500.0), "paint"),
+    ];
+    let selection = ProgressSelection {
+      criteria: vec![
+        ProgressCriterion::Status(status_set(&[ProgressStatus::Timeout])),
+        ProgressCriterion::Slow {
+          threshold_ms: 300.0,
+          ok_only: true,
+        },
+      ],
+      top_slowest: None,
+      union: true,
+    };
+    let stems: Vec<String> = select_progress_entries(&progresses, &selection)
+      .into_iter()
+      .map(|p| p.stem.clone())
+      .collect();
+    assert_eq!(stems, vec!["b".to_string(), "c".to_string()]);
+  }
+
+  #[test]
+  fn top_slowest_orders_and_truncates() {
+    let progresses = vec![
+      make_progress("b", ProgressStatus::Ok, Some(300.0), "layout"),
+      make_progress("a", ProgressStatus::Ok, Some(300.0), "layout"),
+      make_progress("c", ProgressStatus::Ok, Some(200.0), "layout"),
+      make_progress("d", ProgressStatus::Ok, None, "layout"),
+    ];
+    let selection = ProgressSelection {
+      criteria: Vec::new(),
+      top_slowest: Some(2),
+      union: false,
+    };
+    let stems: Vec<String> = select_progress_entries(&progresses, &selection)
+      .into_iter()
+      .map(|p| p.stem.clone())
+      .collect();
+    assert_eq!(stems, vec!["a".to_string(), "b".to_string()]);
+  }
+
+  #[test]
+  fn tolerant_loader_skips_invalid_files() {
+    let dir = tempdir().unwrap();
+
+    let mut fast = PageProgress::new("https://fast.test/".to_string());
+    fast.status = ProgressStatus::Ok;
+    fast.total_ms = Some(10.0);
+    fs::write(
+      dir.path().join("a.json"),
+      serde_json::to_string_pretty(&fast).unwrap(),
+    )
+    .unwrap();
+
+    let mut slow = PageProgress::new("https://slow.test/".to_string());
+    slow.status = ProgressStatus::Timeout;
+    slow.total_ms = Some(250.0);
+    fs::write(
+      dir.path().join("b.json"),
+      serde_json::to_string_pretty(&slow).unwrap(),
+    )
+    .unwrap();
+
+    fs::write(dir.path().join("bad.json"), "{ not json").unwrap();
+
+    let outcome = read_progress_dir_tolerant(dir.path());
+    let stems: Vec<String> = outcome.progresses.iter().map(|p| p.stem.clone()).collect();
+    assert_eq!(stems, vec!["a".to_string(), "b".to_string()]);
+    assert_eq!(outcome.warnings.len(), 1);
+    assert!(
+      outcome.warnings[0].contains("bad.json"),
+      "warnings: {:?}",
+      outcome.warnings
+    );
+  }
+
+  #[test]
+  fn tolerant_loader_reports_missing_directory() {
+    let dir = tempdir().unwrap();
+    let missing = dir.path().join("nope");
+    let outcome = read_progress_dir_tolerant(&missing);
+    assert!(outcome.progresses.is_empty());
+    assert_eq!(outcome.warnings.len(), 1);
+    assert!(
+      outcome.warnings[0].contains("nope"),
+      "warnings: {:?}",
+      outcome.warnings
+    );
+  }
 
   #[test]
   fn merge_keeps_previous_hotspot_when_new_is_unknown() {

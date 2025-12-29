@@ -7,8 +7,8 @@ FastRender ships a few small binaries/examples intended for internal debugging a
 These are optional wrappers for the most common loops:
 
 - Pageset loop (fetch → progress JSON): `scripts/pageset.sh` (defaults to `--features disk_cache`; set `DISK_CACHE=0` or `NO_DISK_CACHE=1` or pass `--no-disk-cache` to opt out)
-- Profile one page with samply (saves profile + prints summary): `scripts/profile_samply.sh <stem>` (builds `pageset_progress` with `disk_cache`)
-- Profile one page with perf: `scripts/profile_perf.sh <stem>` (builds `pageset_progress` with `disk_cache`)
+- Profile one page with samply (saves profile + prints summary): `scripts/profile_samply.sh <stem|--from-progress ...>` (builds `pageset_progress` with `disk_cache`)
+- Profile one page with perf: `scripts/profile_perf.sh <stem|--from-progress ...>` (builds `pageset_progress` with `disk_cache`)
 - Summarize a saved samply profile: `scripts/samply_summary.py <profile.json.gz>`
 
 Pageset wrappers enable the disk-backed subresource cache by default, persisting assets under
@@ -129,7 +129,11 @@ Pageset wrappers enable the disk-backed subresource cache by default, persisting
 - Run:
   - Help: `cargo run --release --bin pageset_progress -- run --help`
   - Typical: `cargo run --release --bin pageset_progress -- run --timeout 5`
-- Progress filenames use the canonical stem from `normalize_page_name` (strip scheme + leading `www.`); `--pages` filters accept either the URL or the normalized stem. If you have older `fetches/html` entries with `www.` prefixes in the filename, re-run `fetch_pages` so progress filenames line up.
+- Progress filenames use the canonical stem from `pageset_stem` (strip scheme + leading `www.`); `--pages` filters accept either the URL or the normalized stem. If you have older `fetches/html` entries with `www.` prefixes in the filename, re-run `fetch_pages` so progress filenames line up.
+- Triage reruns (reuse existing `progress/pages/*.json` instead of typing stems):
+  - `--from-progress <dir>` enables selection from saved progress files (default intersection of filters, use `--union` to OR them).
+  - Filters: `--only-failures`, `--only-status timeout,panic,error`, `--slow-ms <ms> [--slow-ok-only]`, `--hotspot cascade|layout|paint|...`, `--top-slowest <n>`.
+  - The deterministic stem list is printed before running; if nothing matches, the command exits cleanly without touching caches.
 - Report: `cargo run --release --bin pageset_progress -- report [--progress-dir progress/pages --top 10 --fail-on-bad]` prints status counts, slowest pages, and hotspot histograms for the saved progress files. Add `--include-trace` to list any saved Chrome traces (from `target/pageset/traces/` + `target/pageset/trace-progress/`).
 - Safety: uses **panic containment** (per-page worker process) and a **hard timeout** (kills runaway workers) so one broken page cannot stall the whole run.
 - Outputs:
