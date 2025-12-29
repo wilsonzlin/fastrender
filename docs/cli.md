@@ -124,4 +124,6 @@ These are optional wrappers for the most common loops:
 - Outputs:
   - `progress/pages/<stem>.json` — small, committed per-page progress artifact
   - `target/pageset/logs/<stem>.log` — per-page log (not committed)
+  - `target/pageset/logs/<stem>.stderr.log` — worker stdout/stderr, including panic
+    backtraces and a note if the parent kills the process on timeout (not committed)
   - Optional traces: `--trace-failures` / `--trace-slow-ms <ms>` → `target/pageset/traces/<stem>.json` (not committed)

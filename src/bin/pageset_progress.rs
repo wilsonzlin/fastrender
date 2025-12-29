@@ -33,11 +33,14 @@ use fastrender::resource::DEFAULT_ACCEPT_LANGUAGE;
 use fastrender::resource::DEFAULT_USER_AGENT;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
-use std::fs;
-use std::io;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
+
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
 
 const HTML_DIR: &str = "fetches/html";
 const ASSET_DIR: &str = "fetches/assets";
@@ -719,6 +722,69 @@ fn write_text_file(path: &Path, contents: &str) -> io::Result<()> {
   fs::write(path, contents)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ExitStatusSummary {
+  code: Option<i32>,
+  signal: Option<i32>,
+}
+
+fn summarize_exit_status(status: &ExitStatus) -> ExitStatusSummary {
+  ExitStatusSummary {
+    code: status.code(),
+    signal: {
+      #[cfg(unix)]
+      {
+        status.signal()
+      }
+      #[cfg(not(unix))]
+      {
+        None
+      }
+    },
+  }
+}
+
+fn format_exit_status(status: ExitStatusSummary) -> String {
+  match (status.code, status.signal) {
+    (Some(code), Some(signal)) => format!("code {code} (signal {signal})"),
+    (Some(code), None) => format!("code {code}"),
+    (None, Some(signal)) => format!("signal {signal}"),
+    (None, None) => "unknown status".to_string(),
+  }
+}
+
+fn synthesize_missing_progress_note(status: ExitStatusSummary) -> String {
+  format!(
+    "worker exited (exit {}) without writing progress",
+    format_exit_status(status)
+  )
+}
+
+fn ensure_note_includes(progress: &mut PageProgress, note: &str) {
+  if progress.notes.contains(note) {
+    return;
+  }
+  if progress.notes.trim().is_empty() {
+    progress.notes = note.to_string();
+  } else {
+    progress.notes = format!("{}\n{note}", progress.notes);
+  }
+}
+
+fn append_timeout_stderr_note(stderr_path: &Path, elapsed: Duration) {
+  if let Ok(mut file) = OpenOptions::new()
+    .create(true)
+    .append(true)
+    .open(stderr_path)
+  {
+    let _ = writeln!(
+      file,
+      "parent killed worker after {:.2}s hard timeout",
+      elapsed.as_secs_f64()
+    );
+  }
+}
+
 fn add_stage_buckets(into: &mut StageBuckets, from: &StageBuckets) {
   into.fetch += from.fetch;
   into.css += from.css;
@@ -919,6 +985,7 @@ struct WorkItem {
   cache_path: PathBuf,
   progress_path: PathBuf,
   log_path: PathBuf,
+  stderr_path: PathBuf,
   trace_out: Option<PathBuf>,
 }
 
@@ -983,11 +1050,20 @@ fn spawn_worker(
     cmd.arg("--trace-out").arg(path);
   }
 
-  // Keep worker I/O deterministic: all logs go to the log file, stdout is unused.
+  if let Some(parent) = item.stderr_path.parent() {
+    if !parent.as_os_str().is_empty() {
+      fs::create_dir_all(parent)?;
+    }
+  }
+  let stderr_file = File::create(&item.stderr_path)?;
+  let stdout_file = stderr_file.try_clone()?;
+
+  // Keep worker I/O deterministic: worker-authored logs stay separate, while stdout/stderr
+  // from the process go to a dedicated stderr log for crash/debug output.
   cmd
     .stdin(Stdio::null())
-    .stdout(Stdio::null())
-    .stderr(Stdio::null());
+    .stdout(Stdio::from(stdout_file))
+    .stderr(Stdio::from(stderr_file));
 
   cmd.spawn()
 }
@@ -1024,6 +1100,7 @@ fn run_queue(
         let mut entry = running.swap_remove(i);
         let _ = entry.child.kill();
         let _ = entry.child.wait();
+        append_timeout_stderr_note(&entry.item.stderr_path, elapsed);
 
         let previous = read_progress(&entry.item.progress_path);
         let mut progress = PageProgress::new(entry.item.url.clone());
@@ -1048,12 +1125,17 @@ fn run_queue(
       }
 
       match running[i].child.try_wait() {
-        Ok(Some(_status)) => {
+        Ok(Some(status)) => {
+          let exit_summary = summarize_exit_status(&status);
+          let exit_str = format_exit_status(exit_summary);
           let entry = running.swap_remove(i);
           if let Some(p) = read_progress(&entry.item.progress_path) {
             if p.status != ProgressStatus::Ok {
               let short: String = p.notes.chars().take(120).collect();
-              eprintln!("FAIL {} {:?}: {}", entry.item.stem, p.status, short);
+              eprintln!(
+                "FAIL {} {:?}: {} (exit: {})",
+                entry.item.stem, p.status, short, exit_str
+              );
             }
           } else {
             // Fallback: worker exited but didn't write progress.
@@ -1061,11 +1143,16 @@ fn run_queue(
             let mut progress = PageProgress::new(entry.item.url.clone());
             progress.status = ProgressStatus::Panic;
             progress.total_ms = Some(entry.started.elapsed().as_secs_f64() * 1000.0);
-            progress.notes = "worker exited without writing progress".to_string();
+            let note = synthesize_missing_progress_note(exit_summary);
+            progress.notes = note.clone();
             progress.hotspot = "unknown".to_string();
-            let progress = progress.merge_preserving_manual(previous);
+            let mut progress = progress.merge_preserving_manual(previous);
+            ensure_note_includes(&mut progress, &note);
             let _ = write_progress(&entry.item.progress_path, &progress);
-            eprintln!("PANIC {} (no progress written)", entry.item.stem);
+            eprintln!(
+              "PANIC {} (no progress written, exit: {})",
+              entry.item.stem, exit_str
+            );
           }
           continue;
         }
@@ -1179,6 +1266,7 @@ fn run(args: RunArgs) -> io::Result<()> {
         cache_path,
         progress_path: args.progress_dir.join(format!("{stem}.json")),
         log_path: args.log_dir.join(format!("{stem}.log")),
+        stderr_path: args.log_dir.join(format!("{stem}.stderr.log")),
         trace_out: None,
       })
     })
@@ -1258,6 +1346,7 @@ fn run(args: RunArgs) -> io::Result<()> {
         cache_path: item.cache_path.clone(),
         progress_path: trace_progress,
         log_path: args.log_dir.join(format!("{}.trace.log", item.stem)),
+        stderr_path: args.log_dir.join(format!("{}.trace.stderr.log", item.stem)),
         trace_out: Some(trace_out),
       });
     }
@@ -1362,6 +1451,50 @@ mod tests {
     let merged = PageProgress::default().merge_preserving_manual(Some(previous));
     assert_eq!(merged.last_good_commit, "abc1234");
     assert_eq!(merged.last_regression_commit, "def5678");
+  }
+
+  #[test]
+  fn synthesized_note_includes_exit_code() {
+    let summary = ExitStatusSummary {
+      code: Some(101),
+      signal: None,
+    };
+    assert_eq!(
+      synthesize_missing_progress_note(summary),
+      "worker exited (exit code 101) without writing progress"
+    );
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn synthesized_note_includes_signal() {
+    let summary = ExitStatusSummary {
+      code: None,
+      signal: Some(9),
+    };
+    assert_eq!(
+      synthesize_missing_progress_note(summary),
+      "worker exited (exit signal 9) without writing progress"
+    );
+  }
+
+  #[test]
+  fn ensure_note_includes_preserves_manual_notes() {
+    let mut progress = PageProgress::new("https://example.com".to_string());
+    progress.notes = "manual note".to_string();
+    let note = "worker exited (exit code 1) without writing progress";
+    ensure_note_includes(&mut progress, note);
+    assert!(progress.notes.starts_with("manual note"));
+    assert!(progress.notes.contains(note));
+  }
+
+  #[test]
+  fn ensure_note_includes_is_idempotent() {
+    let mut progress = PageProgress::new("https://example.com".to_string());
+    let note = "worker exited (exit code 1) without writing progress";
+    ensure_note_includes(&mut progress, note);
+    ensure_note_includes(&mut progress, note);
+    assert_eq!(progress.notes, note);
   }
 }
 
