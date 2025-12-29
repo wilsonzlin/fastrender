@@ -94,7 +94,10 @@ use crate::text::color_fonts::ColorFontRenderer;
 use crate::text::font_db::LoadedFont;
 use crate::text::font_loader::FontContext;
 use rayon::prelude::*;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
+use std::hash::{Hash, Hasher};
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -1311,6 +1314,39 @@ pub struct RenderReport {
   pub fallback_reason: Option<String>,
 }
 
+#[derive(Clone, Copy)]
+struct ImageKey {
+  pixels_ptr: *const Vec<u8>,
+  width: u32,
+  height: u32,
+}
+
+impl ImageKey {
+  fn new(image: &ImageData) -> Self {
+    Self {
+      pixels_ptr: Arc::as_ptr(&image.pixels),
+      width: image.width,
+      height: image.height,
+    }
+  }
+}
+
+impl PartialEq for ImageKey {
+  fn eq(&self, other: &Self) -> bool {
+    self.pixels_ptr == other.pixels_ptr && self.width == other.width && self.height == other.height
+  }
+}
+
+impl Eq for ImageKey {}
+
+impl Hash for ImageKey {
+  fn hash<H: Hasher>(&self, state: &mut H) {
+    (self.pixels_ptr as usize).hash(state);
+    self.width.hash(state);
+    self.height.hash(state);
+  }
+}
+
 /// Renders a display list into a pixmap using the provided font context.
 pub struct DisplayListRenderer {
   canvas: Canvas,
@@ -1326,6 +1362,9 @@ pub struct DisplayListRenderer {
   preserve_3d_disabled: bool,
   background: Rgba,
   paint_parallelism: PaintParallelism,
+  image_cache: HashMap<ImageKey, Arc<Pixmap>>,
+  #[cfg(test)]
+  image_cache_misses: Arc<AtomicUsize>,
 }
 
 #[derive(Debug)]
@@ -1903,6 +1942,9 @@ impl DisplayListRenderer {
       preserve_3d_disabled: false,
       background,
       paint_parallelism: PaintParallelism::disabled(),
+      image_cache: HashMap::new(),
+      #[cfg(test)]
+      image_cache_misses: Arc::new(AtomicUsize::new(0)),
     })
   }
 
@@ -2336,7 +2378,7 @@ impl DisplayListRenderer {
 
     let (pixmap, img_w, img_h) = match &border_image.source {
       BorderImageSourceItem::Raster(image) => {
-        let Some(pixmap) = image_data_to_pixmap(image) else {
+        let Some(pixmap) = self.image_data_to_pixmap(image) else {
           return false;
         };
         let (w, h) = (pixmap.width(), pixmap.height());
@@ -2359,6 +2401,7 @@ impl DisplayListRenderer {
         ) else {
           return false;
         };
+        let pixmap = Arc::new(pixmap);
         let (w, h) = (pixmap.width(), pixmap.height());
         if w == 0 || h == 0 {
           return false;
@@ -2842,7 +2885,7 @@ impl DisplayListRenderer {
     }
   }
 
-  fn render_mask(&self, mask: &ResolvedMask) -> Option<Mask> {
+  fn render_mask(&mut self, mask: &ResolvedMask) -> Option<Mask> {
     let viewport = (
       self.canvas.width() as f32 / self.scale,
       self.canvas.height() as f32 / self.scale,
@@ -2960,8 +3003,9 @@ impl DisplayListRenderer {
             mask.root_font_size,
             Some(viewport),
           )
+          .map(Arc::new)
         }
-        ResolvedMaskImage::Raster(image) => image_data_to_pixmap(image),
+        ResolvedMaskImage::Raster(image) => self.image_data_to_pixmap(image),
       };
       let Some(tile) = tile else { continue };
       let Some(mask_tile) = mask_tile_from_image(&tile, layer.mode) else {
@@ -4913,10 +4957,11 @@ impl DisplayListRenderer {
     let transform = Transform::from_row(scale_x, 0.0, 0.0, scale_y, dest_rect.x(), dest_rect.y())
       .post_concat(self.canvas.transform());
     let clip_mask = self.canvas.clip_mask().cloned();
+    let pixmap_ref = pixmap.as_ref();
     self.canvas.pixmap_mut().draw_pixmap(
       0,
       0,
-      pixmap.as_ref(),
+      pixmap_ref.as_ref(),
       &paint,
       transform,
       clip_mask.as_ref(),
@@ -4968,8 +5013,8 @@ impl DisplayListRenderer {
     self.font_ctx.get_sans_serif()
   }
 
-  fn image_to_pixmap(&self, item: &ImageItem) -> Option<Pixmap> {
-    let Some(full) = image_data_to_pixmap(&item.image) else {
+  fn image_to_pixmap(&mut self, item: &ImageItem) -> Option<Arc<Pixmap>> {
+    let Some(full) = self.image_data_to_pixmap(&item.image) else {
       return None;
     };
 
@@ -4995,28 +5040,36 @@ impl DisplayListRenderer {
         cropped.data_mut()[dst_index..dst_index + (crop_w as usize * 4)]
           .copy_from_slice(&full.data()[src_index..src_index + (crop_w as usize * 4)]);
       }
-      Some(cropped)
+      Some(Arc::new(cropped))
     } else {
       Some(full)
     }
   }
-}
+  fn image_data_to_pixmap(&mut self, image: &ImageData) -> Option<Arc<Pixmap>> {
+    let key = ImageKey::new(image);
+    if let Some(cached) = self.image_cache.get(&key) {
+      return Some(cached.clone());
+    }
 
-fn image_data_to_pixmap(image: &ImageData) -> Option<Pixmap> {
-  let mut data = Vec::with_capacity((image.width * image.height * 4) as usize);
-  for chunk in image.pixels.chunks_exact(4) {
-    let r = chunk[0] as f32;
-    let g = chunk[1] as f32;
-    let b = chunk[2] as f32;
-    let a = chunk[3] as f32 / 255.0;
-    data.push((r * a).round() as u8);
-    data.push((g * a).round() as u8);
-    data.push((b * a).round() as u8);
-    data.push(chunk[3]);
+    let mut data = Vec::with_capacity((image.width * image.height * 4) as usize);
+    for chunk in image.pixels.chunks_exact(4) {
+      let r = chunk[0] as f32;
+      let g = chunk[1] as f32;
+      let b = chunk[2] as f32;
+      let a = chunk[3] as f32 / 255.0;
+      data.push((r * a).round() as u8);
+      data.push((g * a).round() as u8);
+      data.push((b * a).round() as u8);
+      data.push(chunk[3]);
+    }
+
+    let size = IntSize::from_wh(image.width, image.height)?;
+    let pixmap = Arc::new(Pixmap::from_vec(data, size)?);
+    #[cfg(test)]
+    self.image_cache_misses.fetch_add(1, Ordering::Relaxed);
+    self.image_cache.insert(key, pixmap.clone());
+    Some(pixmap)
   }
-
-  let size = tiny_skia::IntSize::from_wh(image.width, image.height)?;
-  Pixmap::from_vec(data, size)
 }
 
 fn sample_conic_stops(
@@ -6132,6 +6185,7 @@ mod tests {
   use crate::style::values::LengthUnit;
   use crate::style::ComputedStyle;
   use crate::tree::fragment_tree::FragmentNode;
+  use std::sync::atomic::Ordering;
   use std::sync::Arc;
 
   fn pixel(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
@@ -6451,6 +6505,33 @@ mod tests {
     assert_eq!(pixel(&pixmap, 0, 0), (0, 255, 0, 255));
     // Bottom-left pixel should come from yellow.
     assert_eq!(pixel(&pixmap, 0, 3), (255, 255, 0, 255));
+  }
+
+  #[test]
+  fn image_pixmap_conversion_is_cached_per_renderer() {
+    let pixels = vec![255, 0, 0, 255];
+    let image = Arc::new(ImageData::new_pixels(1, 1, pixels));
+
+    let mut list = DisplayList::new();
+    let item = ImageItem {
+      dest_rect: Rect::from_xywh(0.0, 0.0, 1.0, 1.0),
+      image: image.clone(),
+      filter_quality: ImageFilterQuality::Nearest,
+      src_rect: None,
+    };
+    list.push(DisplayItem::Image(item.clone()));
+    list.push(DisplayItem::Image(item));
+
+    let renderer = DisplayListRenderer::new(1, 1, Rgba::WHITE, FontContext::new()).unwrap();
+    let cache_misses = renderer.image_cache_misses.clone();
+
+    let _ = renderer.render(&list).unwrap();
+
+    assert_eq!(
+      cache_misses.load(Ordering::SeqCst),
+      1,
+      "expected pixmap conversion to be cached across repeated draws"
+    );
   }
 
   #[test]
