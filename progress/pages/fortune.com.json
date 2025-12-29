@@ -1,0 +1,16 @@
+{
+  "url": "https://fortune.com",
+  "status": "timeout",
+  "total_ms": 5000.0,
+  "stages_ms": {
+    "fetch": 0.0,
+    "css": 0.0,
+    "cascade": 0.0,
+    "layout": 0.0,
+    "paint": 0.0
+  },
+  "notes": "[paint] Invalid paint parameters: Layout failed: Timeout { elapsed: 4.756860653s }",
+  "hotspot": "unknown",
+  "last_good_commit": "",
+  "last_regression_commit": ""
+}

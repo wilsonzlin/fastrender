@@ -1,0 +1,16 @@
+{
+  "url": "https://ikea.com",
+  "status": "panic",
+  "total_ms": 1012.306782,
+  "stages_ms": {
+    "fetch": 0.0,
+    "css": 0.0,
+    "cascade": 0.0,
+    "layout": 0.0,
+    "paint": 0.0
+  },
+  "notes": "worker exited without writing progress",
+  "hotspot": "unknown",
+  "last_good_commit": "",
+  "last_regression_commit": ""
+}

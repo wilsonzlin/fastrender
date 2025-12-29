@@ -1,0 +1,16 @@
+{
+  "url": "https://lite.cnn.com/",
+  "status": "error",
+  "total_ms": 602.653924,
+  "stages_ms": {
+    "fetch": 0.0,
+    "css": 0.0,
+    "cascade": 0.0,
+    "layout": 0.0,
+    "paint": 0.0
+  },
+  "notes": "[paint] Invalid paint parameters: Layout failed: MissingContext(\"Shaping failed (fonts=8): Text(ShapingFailed { text: \\\"㻱\\\\u{35c}� ��\\\", reason: \\\"No suitable font found for cluster 㻱\\\\u{35c}\\\" })\")",
+  "hotspot": "unknown",
+  "last_good_commit": "",
+  "last_regression_commit": ""
+}

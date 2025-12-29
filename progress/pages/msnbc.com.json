@@ -1,0 +1,16 @@
+{
+  "url": "https://msnbc.com/",
+  "status": "error",
+  "total_ms": 593.912144,
+  "stages_ms": {
+    "fetch": 0.0,
+    "css": 0.0,
+    "cascade": 0.0,
+    "layout": 0.0,
+    "paint": 0.0
+  },
+  "notes": "[paint] Invalid paint parameters: Layout failed: MissingContext(\"Shaping failed (fonts=8): Text(ShapingFailed { text: \\\"鑬\\\\u{7ef}\\\", reason: \\\"No suitable font found for cluster 鑬\\\\u{7ef}\\\" })\")",
+  "hotspot": "unknown",
+  "last_good_commit": "",
+  "last_regression_commit": ""
+}

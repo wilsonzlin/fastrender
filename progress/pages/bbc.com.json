@@ -1,0 +1,16 @@
+{
+  "url": "https://bbc.com",
+  "status": "timeout",
+  "total_ms": 5000.0,
+  "stages_ms": {
+    "fetch": 0.0,
+    "css": 0.0,
+    "cascade": 0.0,
+    "layout": 0.0,
+    "paint": 0.0
+  },
+  "notes": "timeout at layout after 4.751408079s",
+  "hotspot": "unknown",
+  "last_good_commit": "",
+  "last_regression_commit": ""
+}

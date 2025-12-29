@@ -1,0 +1,16 @@
+{
+  "url": "https://twitch.tv/",
+  "status": "error",
+  "total_ms": 824.84239,
+  "stages_ms": {
+    "fetch": 0.0,
+    "css": 0.0,
+    "cascade": 0.0,
+    "layout": 0.0,
+    "paint": 0.0
+  },
+  "notes": "[paint] Invalid paint parameters: Layout failed: MissingContext(\"Shaping failed (fonts=8): Text(ShapingFailed { text: \\\"碶\\\\u{341}\\\", reason: \\\"No suitable font found for cluster 碶\\\\u{341}\\\" })\")",
+  "hotspot": "unknown",
+  "last_good_commit": "",
+  "last_regression_commit": ""
+}

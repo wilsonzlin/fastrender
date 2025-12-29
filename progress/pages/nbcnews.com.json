@@ -1,0 +1,16 @@
+{
+  "url": "https://nbcnews.com/",
+  "status": "error",
+  "total_ms": 732.7761830000001,
+  "stages_ms": {
+    "fetch": 0.0,
+    "css": 0.0,
+    "cascade": 0.0,
+    "layout": 0.0,
+    "paint": 0.0
+  },
+  "notes": "[paint] Invalid paint parameters: Layout failed: MissingContext(\"Shaping failed (fonts=8): Text(ShapingFailed { text: \\\"\\\\u{70f}��= ���\\\", reason: \\\"No suitable font found for cluster \\\\u{70f}�\\\" })\")",
+  "hotspot": "unknown",
+  "last_good_commit": "",
+  "last_regression_commit": ""
+}

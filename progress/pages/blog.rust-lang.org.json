@@ -1,0 +1,16 @@
+{
+  "url": "https://blog.rust-lang.org/",
+  "status": "ok",
+  "total_ms": 2718.697846,
+  "stages_ms": {
+    "fetch": 0.0,
+    "css": 0.0,
+    "cascade": 0.0,
+    "layout": 0.0,
+    "paint": 0.0
+  },
+  "notes": "",
+  "hotspot": "unknown",
+  "last_good_commit": "",
+  "last_regression_commit": ""
+}

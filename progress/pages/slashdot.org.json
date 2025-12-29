@@ -1,0 +1,16 @@
+{
+  "url": "https://slashdot.org/",
+  "status": "ok",
+  "total_ms": 1143.657128,
+  "stages_ms": {
+    "fetch": 0.0,
+    "css": 0.0,
+    "cascade": 0.0,
+    "layout": 0.0,
+    "paint": 0.0
+  },
+  "notes": "",
+  "hotspot": "unknown",
+  "last_good_commit": "",
+  "last_regression_commit": ""
+}

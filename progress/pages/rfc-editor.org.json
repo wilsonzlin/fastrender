@@ -1,0 +1,16 @@
+{
+  "url": "https://rfc-editor.org/",
+  "status": "error",
+  "total_ms": 610.137708,
+  "stages_ms": {
+    "fetch": 0.0,
+    "css": 0.0,
+    "cascade": 0.0,
+    "layout": 0.0,
+    "paint": 0.0
+  },
+  "notes": "[paint] Invalid paint parameters: Layout failed: MissingContext(\"Shaping failed (fonts=8): Text(ShapingFailed { text: \\\"ܮ\\\\u{327}\\\", reason: \\\"No suitable font found for cluster ܮ\\\\u{327}\\\" })\")",
+  "hotspot": "unknown",
+  "last_good_commit": "",
+  "last_regression_commit": ""
+}

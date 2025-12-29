@@ -1,0 +1,16 @@
+{
+  "url": "https://howtogeek.com/",
+  "status": "error",
+  "total_ms": 929.322753,
+  "stages_ms": {
+    "fetch": 0.0,
+    "css": 0.0,
+    "cascade": 0.0,
+    "layout": 0.0,
+    "paint": 0.0
+  },
+  "notes": "[paint] Invalid paint parameters: Layout failed: MissingContext(\"Shaping failed (fonts=8): Text(ShapingFailed { text: \\\"ۍ\\\\u{316}\\\", reason: \\\"No suitable font found for cluster ۍ\\\\u{316}\\\" })\")",
+  "hotspot": "unknown",
+  "last_good_commit": "",
+  "last_regression_commit": ""
+}

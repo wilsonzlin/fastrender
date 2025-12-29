@@ -1,0 +1,16 @@
+{
+  "url": "https://wikipedia.org/",
+  "status": "error",
+  "total_ms": 1683.162891,
+  "stages_ms": {
+    "fetch": 0.0,
+    "css": 0.0,
+    "cascade": 0.0,
+    "layout": 0.0,
+    "paint": 0.0
+  },
+  "notes": "[paint] Invalid paint parameters: Layout failed: MissingContext(\"Shaping failed (fonts=8): Text(ShapingFailed { text: \\\"ব\\\\u{9be}ংল\\\\u{9be}\\\", reason: \\\"No suitable font found for cluster ব\\\\u{9be}ং\\\" })\")",
+  "hotspot": "unknown",
+  "last_good_commit": "",
+  "last_regression_commit": ""
+}

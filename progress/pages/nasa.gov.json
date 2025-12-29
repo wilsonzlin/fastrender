@@ -1,0 +1,16 @@
+{
+  "url": "https://nasa.gov/",
+  "status": "error",
+  "total_ms": 592.616256,
+  "stages_ms": {
+    "fetch": 0.0,
+    "css": 0.0,
+    "cascade": 0.0,
+    "layout": 0.0,
+    "paint": 0.0
+  },
+  "notes": "[paint] Invalid paint parameters: Layout failed: MissingContext(\"Shaping failed (fonts=8): Text(ShapingFailed { text: \\\"鋞\\\\u{36b}�]�\\\\u{36d}!�\\\\u{6}�|:��\\\\u{1b}\\\", reason: \\\"No suitable font found for cluster 鋞\\\\u{36b}\\\" })\")",
+  "hotspot": "unknown",
+  "last_good_commit": "",
+  "last_regression_commit": ""
+}
