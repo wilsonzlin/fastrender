@@ -11,6 +11,7 @@ use super::FetchedResource;
 use super::HttpCachePolicy;
 use super::ResourceFetcher;
 use super::ResourcePolicy;
+use super::MAX_ALIAS_HOPS;
 use crate::error::Error;
 use crate::Result;
 use serde::{Deserialize, Serialize};
@@ -139,6 +140,19 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     url.starts_with("data:")
   }
 
+  fn canonical_url(&self, requested: &str, final_url: Option<&str>) -> String {
+    let final_url = final_url
+      .filter(|target| *target != requested)
+      .and_then(|target| {
+        if let Some(policy) = &self.policy {
+          policy.ensure_url_allowed(target).ok()?;
+        }
+        Some(target)
+      });
+
+    final_url.unwrap_or(requested).to_string()
+  }
+
   fn cache_key(url: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(url.as_bytes());
@@ -154,6 +168,10 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     let mut meta_path = data_path.to_path_buf();
     meta_path.set_extension("bin.meta");
     meta_path
+  }
+
+  fn alias_path(&self, url: &str) -> PathBuf {
+    self.cache_dir.join(format!("{}.alias", Self::cache_key(url)))
   }
 
   fn lock_is_active(&self, data_path: &Path) -> bool {
@@ -208,56 +226,85 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     }
   }
 
-  fn read_disk_entry(&self, url: &str) -> Option<CachedSnapshot> {
+  fn read_disk_entry(&self, url: &str) -> Option<(String, CachedSnapshot)> {
     self.index.refresh();
 
-    let key = Self::cache_key(url);
-    let data_path = self.data_path(url);
-    let meta_path = self.meta_path_for_data(&data_path);
+    let mut current = url.to_string();
+    let mut hops = 0usize;
 
-    if self.lock_is_active(&data_path) {
+    loop {
+      let key = Self::cache_key(&current);
+      let data_path = self.data_path(&current);
+      let meta_path = self.meta_path_for_data(&data_path);
+
+      if let Some(snapshot) = self.try_read_snapshot(&key, &current, &data_path, &meta_path) {
+        return Some((current, snapshot));
+      }
+
+      let Some(next) = self.read_alias_target(&current) else {
+        return None;
+      };
+
+      if hops >= MAX_ALIAS_HOPS || next == current {
+        self.remove_alias_for(&current);
+        return None;
+      }
+
+      current = next;
+      hops += 1;
+    }
+  }
+
+  fn try_read_snapshot(
+    &self,
+    key: &str,
+    url: &str,
+    data_path: &Path,
+    meta_path: &Path,
+  ) -> Option<CachedSnapshot> {
+    if self.lock_is_active(data_path) {
       return None;
     }
 
-    let meta_bytes = match fs::read(&meta_path) {
+    let meta_bytes = match fs::read(meta_path) {
       Ok(bytes) => bytes,
       Err(_) => {
-        self.remove_entry_if_unlocked(&key, &data_path, &meta_path);
+        self.remove_entry_if_unlocked(key, data_path, meta_path);
         return None;
       }
     };
     let meta: StoredMetadata = match serde_json::from_slice(&meta_bytes) {
       Ok(meta) => meta,
       Err(_) => {
-        self.remove_entry_if_unlocked(&key, &data_path, &meta_path);
+        self.remove_entry_if_unlocked(key, data_path, meta_path);
         return None;
       }
     };
 
     if let Some(max_age) = self.disk_config.max_age {
       if now_seconds().saturating_sub(meta.stored_at) > max_age.as_secs() {
-        self.remove_entry_if_unlocked(&key, &data_path, &meta_path);
+        self.remove_entry_if_unlocked(key, data_path, meta_path);
         return None;
       }
     }
 
-    let bytes = match fs::read(&data_path) {
+    let bytes = match fs::read(data_path) {
       Ok(bytes) => bytes,
       Err(_) => {
-        self.remove_entry_if_unlocked(&key, &data_path, &meta_path);
+        self.remove_entry_if_unlocked(key, data_path, meta_path);
         return None;
       }
     };
     if bytes.is_empty() || meta.len != bytes.len() {
-      self.remove_entry_if_unlocked(&key, &data_path, &meta_path);
+      self.remove_entry_if_unlocked(key, data_path, meta_path);
       return None;
     }
     self.index.backfill_if_missing(
-      &key,
+      key,
       meta.stored_at,
       meta.len as u64,
-      &data_path,
-      &meta_path,
+      data_path,
+      meta_path,
     );
 
     let mut resource = FetchedResource::with_final_url(
@@ -275,6 +322,44 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       last_modified: meta.last_modified,
       http_cache: meta.cache.and_then(|c| c.to_http()),
     })
+  }
+
+  fn read_alias_target(&self, url: &str) -> Option<String> {
+    let alias_path = self.alias_path(url);
+    fs::read(&alias_path)
+      .ok()
+      .and_then(|bytes| serde_json::from_slice::<StoredAlias>(&bytes).ok())
+      .map(|alias| alias.target)
+  }
+
+  fn remove_alias_for(&self, url: &str) {
+    let alias_path = self.alias_path(url);
+    let _ = fs::remove_file(tmp_path(&alias_path));
+    let _ = fs::remove_file(&alias_path);
+  }
+
+  fn persist_alias(&self, alias: &str, canonical: &str) {
+    if alias == canonical || self.should_skip_disk(alias) || self.should_skip_disk(canonical) {
+      return;
+    }
+
+    let alias_path = self.alias_path(alias);
+    if let Some(parent) = alias_path.parent() {
+      let _ = fs::create_dir_all(parent);
+    }
+
+    let tmp = tmp_path(&alias_path);
+    let alias = StoredAlias {
+      target: canonical.to_string(),
+    };
+    match serde_json::to_vec(&alias) {
+      Ok(serialized) if fs::write(&tmp, &serialized).is_ok() => {
+        let _ = fs::rename(&tmp, &alias_path);
+      }
+      _ => {
+        let _ = fs::remove_file(&tmp);
+      }
+    }
   }
 
   fn persist_snapshot(&self, url: &str, snapshot: &CachedSnapshot) {
@@ -300,6 +385,8 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     if self.should_skip_disk(url) {
       return;
     }
+
+    self.remove_alias_for(url);
 
     let key = Self::cache_key(url);
     let data_path = self.data_path(url);
@@ -403,7 +490,19 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     self.index.record_removal(key, data_path, meta_path);
     let _ = fs::remove_file(tmp_path(data_path));
     let _ = fs::remove_file(tmp_path(meta_path));
+    let mut alias_path = data_path.to_path_buf();
+    alias_path.set_extension("alias");
+    let _ = fs::remove_file(tmp_path(&alias_path));
+    let _ = fs::remove_file(&alias_path);
     Ok(())
+  }
+
+  fn remove_entry_for_url(&self, url: &str) {
+    let key = Self::cache_key(url);
+    let data_path = self.data_path(url);
+    let meta_path = self.meta_path_for_data(&data_path);
+    let _ = self.remove_entry(&key, &data_path, &meta_path);
+    self.remove_alias_for(url);
   }
 
   #[cfg(test)]
@@ -419,15 +518,20 @@ impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
     }
 
     let disk_snapshot = self.read_disk_entry(url);
-    if let Some(ref snapshot) = disk_snapshot {
+    if let Some((ref canonical, ref snapshot)) = disk_snapshot {
       self.memory.prime_cache_with_snapshot(url, snapshot.clone());
+      if canonical != url {
+        self.persist_alias(url, canonical);
+      }
     }
 
-    let cached = self.memory.cached_snapshot(url).or(disk_snapshot);
+    let cached = self
+      .memory
+      .cached_snapshot(url)
+      .or_else(|| disk_snapshot.map(|(_, snapshot)| snapshot));
     let plan = self
       .memory
       .plan_cache_use(url, cached.clone(), self.disk_config.max_age);
-    let cache_key = Self::cache_key(url);
 
     if let CacheAction::UseCached = plan.action {
       if let Some(snapshot) = plan.cached.as_ref() {
@@ -491,7 +595,7 @@ impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
                 });
 
               if should_store {
-                self.memory.insert_cache(
+                let canonical = self.memory.cache_entry(
                   url,
                   super::CacheEntry {
                     value: super::CacheValue::Resource(ok.clone()),
@@ -502,15 +606,21 @@ impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
                       .or_else(|| snapshot.last_modified.clone()),
                     http_cache,
                   },
+                  ok.final_url.as_deref(),
                 );
-                if let Some(snapshot) = self.memory.cached_snapshot(url) {
-                  self.persist_snapshot(url, &snapshot);
+                if let Some(snapshot) = self.memory.cached_snapshot(&canonical) {
+                  self.persist_snapshot(&canonical, &snapshot);
+                  if canonical != url {
+                    self.persist_alias(url, &canonical);
+                  }
                 }
               } else {
                 self.memory.remove_cached(url);
-                let data_path = self.data_path(url);
-                let meta_path = self.meta_path_for_data(&data_path);
-                let _ = self.remove_entry(&cache_key, &data_path, &meta_path);
+                let canonical = self.canonical_url(url, ok.final_url.as_deref());
+                self.remove_entry_for_url(&canonical);
+                if canonical != url {
+                  self.remove_alias_for(url);
+                }
               }
             }
             super::record_cache_revalidated_hit();
@@ -527,7 +637,27 @@ impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
         } else {
           let stored_at = SystemTime::now();
           if let Some(entry) = self.memory.build_cache_entry(&res, stored_at) {
-            self.memory.insert_cache(url, entry);
+            let canonical = self
+              .memory
+              .cache_entry(url, entry, res.final_url.as_deref());
+            if let Some(snapshot) = self.memory.cached_snapshot(&canonical) {
+              self.persist_snapshot(&canonical, &snapshot);
+            } else {
+              let http_cache = res
+                .cache_policy
+                .as_ref()
+                .and_then(|p| CachedHttpMetadata::from_policy(p, stored_at));
+              self.persist_resource(
+                &canonical,
+                &res,
+                res.etag.as_deref(),
+                res.last_modified.as_deref(),
+                http_cache.as_ref(),
+              );
+            }
+            if canonical != url {
+              self.persist_alias(url, &canonical);
+            }
           } else if res
             .cache_policy
             .as_ref()
@@ -535,24 +665,11 @@ impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
             .unwrap_or(false)
           {
             self.memory.remove_cached(url);
-            let data_path = self.data_path(url);
-            let meta_path = self.meta_path_for_data(&data_path);
-            let _ = self.remove_entry(&cache_key, &data_path, &meta_path);
-          }
-          if let Some(snapshot) = self.memory.cached_snapshot(url) {
-            self.persist_snapshot(url, &snapshot);
-          } else {
-            let http_cache = res
-              .cache_policy
-              .as_ref()
-              .and_then(|p| CachedHttpMetadata::from_policy(p, stored_at));
-            self.persist_resource(
-              url,
-              &res,
-              res.etag.as_deref(),
-              res.last_modified.as_deref(),
-              http_cache.as_ref(),
-            );
+            let canonical = self.canonical_url(url, res.final_url.as_deref());
+            self.remove_entry_for_url(&canonical);
+            if canonical != url {
+              self.remove_alias_for(url);
+            }
           }
           super::record_cache_miss();
           (Ok(res), false)
@@ -565,7 +682,7 @@ impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
           (fallback, is_ok)
         } else {
           if self.memory.config.cache_errors {
-            self.memory.insert_cache(
+            self.memory.cache_entry(
               url,
               super::CacheEntry {
                 value: super::CacheValue::Error(err.clone()),
@@ -573,6 +690,7 @@ impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
                 last_modified: None,
                 http_cache: None,
               },
+              None,
             );
           }
           (Err(err), false)
@@ -608,6 +726,11 @@ pub(super) struct StoredMetadata {
   stored_at: u64,
   len: usize,
   cache: Option<StoredCacheMetadata>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct StoredAlias {
+  target: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -749,6 +872,53 @@ mod tests {
     assert_eq!(counter.load(Ordering::SeqCst), 1, "should hit disk cache");
     assert_eq!(second.content_type.as_deref(), Some("text/plain"));
     assert_eq!(second.final_url.as_deref(), Some(url));
+  }
+
+  #[derive(Clone)]
+  struct RedirectingFetcher {
+    count: Arc<AtomicUsize>,
+    target: String,
+  }
+
+  impl ResourceFetcher for RedirectingFetcher {
+    fn fetch(&self, _url: &str) -> Result<FetchedResource> {
+      self.count.fetch_add(1, Ordering::SeqCst);
+      let mut resource =
+        FetchedResource::new(b"redirected".to_vec(), Some("text/plain".to_string()));
+      resource.final_url = Some(self.target.clone());
+      Ok(resource)
+    }
+  }
+
+  #[test]
+  fn disk_cache_aliases_final_url() {
+    let tmp = tempfile::tempdir().unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let target = "https://example.com/final".to_string();
+
+    let first_fetcher = RedirectingFetcher {
+      count: Arc::clone(&calls),
+      target: target.clone(),
+    };
+    let disk = DiskCachingFetcher::new(first_fetcher, tmp.path());
+    let first = disk
+      .fetch("https://example.com/start")
+      .expect("initial fetch");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(first.final_url.as_deref(), Some(target.as_str()));
+
+    let second_fetcher = RedirectingFetcher {
+      count: Arc::clone(&calls),
+      target: target.clone(),
+    };
+    let disk_again = DiskCachingFetcher::new(second_fetcher, tmp.path());
+    let second = disk_again.fetch(&target).expect("cached alias fetch");
+    assert_eq!(
+      calls.load(Ordering::SeqCst),
+      1,
+      "final URL should hit disk without new network call"
+    );
+    assert_eq!(second.bytes, first.bytes);
   }
 
   #[test]

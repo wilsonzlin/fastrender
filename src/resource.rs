@@ -1566,6 +1566,7 @@ fn reserve_policy_bytes(policy: &Option<ResourcePolicy>, resource: &FetchedResou
 struct CacheState {
   lru: LruCache<String, CacheEntry>,
   current_bytes: usize,
+  aliases: HashMap<String, String>,
 }
 
 impl CacheState {
@@ -1573,9 +1574,12 @@ impl CacheState {
     Self {
       lru: LruCache::unbounded(),
       current_bytes: 0,
+      aliases: HashMap::new(),
     }
   }
 }
+
+const MAX_ALIAS_HOPS: usize = 8;
 
 #[derive(Clone)]
 enum SharedResult {
@@ -1699,6 +1703,30 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
     self
   }
 
+  fn allowed_alias_target<'a>(
+    &self,
+    requested: &str,
+    final_url: Option<&'a str>,
+  ) -> Option<&'a str> {
+    let final_url = final_url?;
+    if final_url == requested {
+      return None;
+    }
+    if let Some(policy) = &self.policy {
+      if policy.ensure_url_allowed(final_url).is_err() {
+        return None;
+      }
+    }
+    Some(final_url)
+  }
+
+  fn canonical_url(&self, requested: &str, final_url: Option<&str>) -> String {
+    self
+      .allowed_alias_target(requested, final_url)
+      .unwrap_or(requested)
+      .to_string()
+  }
+
   fn plan_cache_use(
     &self,
     url: &str,
@@ -1780,25 +1808,72 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
     }
   }
 
-  fn insert_cache(&self, url: &str, entry: CacheEntry) {
-    if self.config.max_bytes > 0 && entry.weight() > self.config.max_bytes {
+  fn insert_canonical_locked(&self, state: &mut CacheState, url: &str, entry: CacheEntry) {
+    if let Some(existing) = state.lru.peek(url) {
+      state.current_bytes = state.current_bytes.saturating_sub(existing.weight());
+    }
+    state.current_bytes = state.current_bytes.saturating_add(entry.weight());
+    state.aliases.remove(url);
+    state.lru.put(url.to_string(), entry);
+    self.evict_locked(state);
+  }
+
+  fn set_alias_locked(&self, state: &mut CacheState, alias: &str, canonical: &str) {
+    if alias == canonical {
+      state.aliases.remove(alias);
       return;
     }
 
-    if let Ok(mut state) = self.state.lock() {
-      if let Some(existing) = state.lru.peek(url) {
-        state.current_bytes = state.current_bytes.saturating_sub(existing.weight());
+    let mut target = canonical.to_string();
+    let mut hops = 0usize;
+    let mut visited: HashSet<String> = HashSet::new();
+    while let Some(next) = state.aliases.get(&target) {
+      if hops >= MAX_ALIAS_HOPS || !visited.insert(target.clone()) {
+        return;
       }
-      state.current_bytes = state.current_bytes.saturating_add(entry.weight());
-      state.lru.put(url.to_string(), entry);
-      self.evict_locked(&mut state);
+      target = next.clone();
+      hops += 1;
     }
+
+    if target == alias {
+      return;
+    }
+
+    state.aliases.insert(alias.to_string(), target);
+  }
+
+  fn remove_aliases_targeting(&self, state: &mut CacheState, key: &str) {
+    state
+      .aliases
+      .retain(|alias, target| alias != key && target != key);
+  }
+
+  fn cache_entry(&self, requested_url: &str, entry: CacheEntry, final_url: Option<&str>) -> String {
+    if self.config.max_bytes > 0 && entry.weight() > self.config.max_bytes {
+      return self.canonical_url(requested_url, final_url);
+    }
+
+    let canonical = self.canonical_url(requested_url, final_url);
+
+    if let Ok(mut state) = self.state.lock() {
+      self.insert_canonical_locked(&mut state, &canonical, entry);
+      if requested_url != canonical {
+        self.set_alias_locked(&mut state, requested_url, &canonical);
+      }
+    }
+
+    canonical
   }
 
   fn remove_cached(&self, url: &str) {
     if let Ok(mut state) = self.state.lock() {
-      if let Some((_k, entry)) = state.lru.pop_entry(url) {
+      let canonical = self.resolve_alias_locked(&mut state, url);
+      if let Some((_k, entry)) = state.lru.pop_entry(&canonical) {
         state.current_bytes = state.current_bytes.saturating_sub(entry.weight());
+      }
+      self.remove_aliases_targeting(&mut state, &canonical);
+      if canonical != url {
+        state.aliases.remove(url);
       }
     }
   }
@@ -1834,12 +1909,37 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
     while (self.config.max_items > 0 && state.lru.len() > self.config.max_items)
       || (self.config.max_bytes > 0 && state.current_bytes > self.config.max_bytes)
     {
-      if let Some((_k, entry)) = state.lru.pop_lru() {
+      if let Some((key, entry)) = state.lru.pop_lru() {
         state.current_bytes = state.current_bytes.saturating_sub(entry.weight());
+        self.remove_aliases_targeting(state, &key);
       } else {
         break;
       }
     }
+  }
+
+  fn resolve_alias_locked(&self, state: &mut CacheState, url: &str) -> String {
+    let origin = url.to_string();
+    let mut current = origin.clone();
+    let mut hops = 0usize;
+    let mut visited: HashSet<String> = HashSet::new();
+    let mut removed = false;
+
+    while let Some(next) = state.aliases.get(&current).cloned() {
+      if hops >= MAX_ALIAS_HOPS || !visited.insert(current.clone()) || next == current {
+        state.aliases.remove(&origin);
+        removed = true;
+        break;
+      }
+      current = next;
+      hops += 1;
+    }
+
+    if !removed && current != origin {
+      state.aliases.insert(origin, current.clone());
+    }
+
+    current
   }
 
   fn cached_entry(&self, url: &str) -> Option<CachedSnapshot> {
@@ -1847,7 +1947,14 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
       .state
       .lock()
       .ok()
-      .and_then(|mut state| state.lru.get(url).cloned())
+      .and_then(|mut state| {
+        let canonical = self.resolve_alias_locked(&mut state, url);
+        let snapshot = state.lru.get(&canonical).cloned();
+        if snapshot.is_none() && canonical != url {
+          state.aliases.remove(url);
+        }
+        snapshot
+      })
       .map(|entry| CachedSnapshot {
         value: entry.value,
         etag: entry.etag,
@@ -1862,8 +1969,12 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
   }
 
   #[cfg(feature = "disk_cache")]
-  pub(crate) fn prime_cache_with_snapshot(&self, url: &str, snapshot: CachedSnapshot) {
-    self.insert_cache(
+  pub(crate) fn prime_cache_with_snapshot(&self, url: &str, snapshot: CachedSnapshot) -> String {
+    let final_url = match &snapshot.value {
+      CacheValue::Resource(res) => res.final_url.as_deref(),
+      CacheValue::Error(_) => None,
+    };
+    self.cache_entry(
       url,
       CacheEntry {
         etag: snapshot.etag,
@@ -1871,14 +1982,15 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
         http_cache: snapshot.http_cache,
         value: snapshot.value,
       },
-    );
+      final_url,
+    )
   }
 
   #[cfg(feature = "disk_cache")]
   pub(crate) fn prime_cache_with_resource(&self, url: &str, resource: FetchedResource) {
     let stored_at = SystemTime::now();
     if let Some(entry) = self.build_cache_entry(&resource, stored_at) {
-      self.insert_cache(url, entry);
+      self.cache_entry(url, entry, resource.final_url.as_deref());
     }
   }
 
@@ -1966,7 +2078,7 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
                 });
 
               if should_store {
-                self.insert_cache(
+                self.cache_entry(
                   url,
                   CacheEntry {
                     value: CacheValue::Resource(ok.clone()),
@@ -1977,6 +2089,7 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
                       .or_else(|| snapshot.last_modified.clone()),
                     http_cache: updated_meta,
                   },
+                  ok.final_url.as_deref(),
                 );
               } else {
                 self.remove_cached(url);
@@ -1997,7 +2110,7 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
         } else {
           let stored_at = SystemTime::now();
           if let Some(entry) = self.build_cache_entry(&res, stored_at) {
-            self.insert_cache(url, entry);
+            self.cache_entry(url, entry, res.final_url.as_deref());
           } else if res
             .cache_policy
             .as_ref()
@@ -2017,7 +2130,7 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
           (fallback, is_ok)
         } else {
           if self.config.cache_errors {
-            self.insert_cache(
+            self.cache_entry(
               url,
               CacheEntry {
                 value: CacheValue::Error(err.clone()),
@@ -2025,6 +2138,7 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
                 last_modified: None,
                 http_cache: None,
               },
+              None,
             );
           }
           (Err(err), false)
@@ -3333,5 +3447,40 @@ mod tests {
       matches!(plan.action, CacheAction::Validate { .. }),
       "freshness cap should force validation even when HTTP max-age is longer"
     );
+  }
+
+  #[test]
+  fn caching_fetcher_aliases_final_url() {
+    #[derive(Clone)]
+    struct RedirectingFetcher {
+      calls: Arc<Mutex<Vec<String>>>,
+      target: String,
+    }
+
+    impl ResourceFetcher for RedirectingFetcher {
+      fn fetch(&self, url: &str) -> Result<FetchedResource> {
+        self.calls.lock().unwrap().push(url.to_string());
+        let mut res = FetchedResource::new(b"alias".to_vec(), Some("text/plain".to_string()));
+        res.final_url = Some(self.target.clone());
+        Ok(res)
+      }
+    }
+
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let target = "http://example.com/final".to_string();
+    let fetcher = RedirectingFetcher {
+      calls: Arc::clone(&calls),
+      target: target.clone(),
+    };
+    let cache = CachingFetcher::new(fetcher);
+
+    let initial = cache
+      .fetch("http://example.com/start")
+      .expect("first fetch");
+    assert_eq!(initial.final_url.as_deref(), Some(target.as_str()));
+
+    let second = cache.fetch(&target).expect("aliased fetch");
+    assert_eq!(second.bytes, initial.bytes);
+    assert_eq!(calls.lock().unwrap().len(), 1, "alias should hit cache");
   }
 }
