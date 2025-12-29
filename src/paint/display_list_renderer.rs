@@ -28,6 +28,7 @@ use crate::paint::display_list::DecorationPaint;
 use crate::paint::display_list::DecorationStroke;
 use crate::paint::display_list::DisplayItem;
 use crate::paint::display_list::DisplayList;
+use crate::paint::display_list::DisplayListView;
 use crate::paint::display_list::EmphasisMark;
 use crate::paint::display_list::FillRectItem;
 use crate::paint::display_list::FontId;
@@ -1177,7 +1178,7 @@ struct PendingBackdrop {
 }
 
 #[derive(Clone)]
-struct TileWork {
+struct TileWork<'a> {
   tile_x: u32,
   tile_y: u32,
   tile_w: u32,
@@ -1186,7 +1187,7 @@ struct TileWork {
   render_y: u32,
   render_w: u32,
   render_h: u32,
-  list: DisplayList,
+  list: DisplayListView<'a>,
 }
 
 #[derive(Clone)]
@@ -1202,6 +1203,31 @@ struct StackingNode {
 enum StackingSegment {
   Items(Vec<DisplayItem>),
   Child(StackingNode),
+}
+
+trait DisplayItemSource {
+  fn len(&self) -> usize;
+  fn get(&self, index: usize) -> Option<&DisplayItem>;
+}
+
+impl DisplayItemSource for [DisplayItem] {
+  fn len(&self) -> usize {
+    <[DisplayItem]>::len(self)
+  }
+
+  fn get(&self, index: usize) -> Option<&DisplayItem> {
+    <[DisplayItem]>::get(self, index)
+  }
+}
+
+impl<'a> DisplayItemSource for DisplayListView<'a> {
+  fn len(&self) -> usize {
+    self.len()
+  }
+
+  fn get(&self, index: usize) -> Option<&DisplayItem> {
+    self.get(index)
+  }
 }
 
 #[derive(Clone)]
@@ -1220,11 +1246,14 @@ enum SceneItemSource {
   FlattenedSubtree(StackingNode),
 }
 
-fn parse_stacking_node(items: &[DisplayItem], start: usize) -> Option<(StackingNode, usize)> {
+fn parse_stacking_node<T>(items: &T, start: usize) -> Option<(StackingNode, usize)>
+where
+  T: DisplayItemSource + ?Sized,
+{
   if start >= items.len() {
     return None;
   }
-  let DisplayItem::PushStackingContext(context) = &items[start] else {
+  let DisplayItem::PushStackingContext(context) = items.get(start)? else {
     return None;
   };
 
@@ -1232,7 +1261,8 @@ fn parse_stacking_node(items: &[DisplayItem], start: usize) -> Option<(StackingN
   let mut segments = Vec::new();
   let mut current_items = Vec::new();
   while idx < items.len() {
-    match &items[idx] {
+    let item = items.get(idx)?;
+    match item {
       DisplayItem::PushStackingContext(_) => {
         if !current_items.is_empty() {
           segments.push(StackingSegment::Items(current_items));
@@ -1262,7 +1292,10 @@ fn parse_stacking_node(items: &[DisplayItem], start: usize) -> Option<(StackingN
   }
 
   let end_index = idx;
-  let subtree_items = items[start..=end_index].iter().cloned().collect();
+  let mut subtree_items = Vec::new();
+  for i in start..=end_index {
+    subtree_items.push(items.get(i)?.clone());
+  }
   Some((
     StackingNode {
       context: context.clone(),
@@ -3119,7 +3152,7 @@ impl DisplayListRenderer {
     max_pad
   }
 
-  fn build_tiles(&self, list: &DisplayList) -> Vec<TileWork> {
+  fn build_tiles<'a>(&self, list: &'a DisplayList) -> Vec<TileWork<'a>> {
     let tile_size = self.paint_parallelism.tile_size.max(1);
     let width = self.canvas.width();
     let height = self.canvas.height();
@@ -3148,7 +3181,7 @@ impl DisplayListRenderer {
           render_w as f32 / self.scale,
           render_h as f32 / self.scale,
         );
-        let slice = optimizer.intersect(list, render_css_rect);
+        let slice = optimizer.intersect_view(list.items(), render_css_rect);
 
         tiles.push(TileWork {
           tile_x: x,
@@ -3194,7 +3227,7 @@ impl DisplayListRenderer {
     let color_renderer = self.color_renderer.clone();
     let color_cache = self.color_cache.clone();
 
-    let results: Result<Vec<(TileWork, Pixmap)>> = tiles
+    let results: Result<Vec<(TileWork<'_>, Pixmap)>> = tiles
       .into_par_iter()
       .map(|work| {
         let mut renderer = DisplayListRenderer::new_with_text_state(
@@ -3213,7 +3246,7 @@ impl DisplayListRenderer {
             .canvas
             .translate(-(work.render_x as f32), -(work.render_y as f32));
         }
-        renderer.render_slice(work.list.items())?;
+        renderer.render_slice(&work.list)?;
         Ok((work, renderer.canvas.into_pixmap()))
       })
       .collect();
@@ -3228,35 +3261,42 @@ impl DisplayListRenderer {
     Ok((pixmap, tile_count))
   }
 
-  fn render_slice(&mut self, items: &[DisplayItem]) -> Result<()> {
+  fn render_slice<T>(&mut self, items: &T) -> Result<()>
+  where
+    T: DisplayItemSource + ?Sized,
+  {
     let mut idx = 0;
     while idx < items.len() {
+      let item = items
+        .get(idx)
+        .expect("display list iteration should remain in-bounds");
       if !self.preserve_3d_disabled {
-        if let DisplayItem::PushStackingContext(sc) = &items[idx] {
+        if let DisplayItem::PushStackingContext(sc) = item {
           if matches!(sc.transform_style, TransformStyle::Preserve3d) {
             // `render_item` normally applies pending backdrop filters before processing the next
             // item. We skip `render_item` for preserve-3d roots to render the subtree as a
             // depth-sorted scene, so apply pending backdrops here to keep behavior consistent.
-            self.apply_pending_backdrop(&items[idx]);
+            self.apply_pending_backdrop(item);
             idx = self.render_preserve_3d_context(items, idx)? + 1;
             continue;
           }
         }
       }
-      self.render_item(&items[idx])?;
+      self.render_item(item)?;
       idx += 1;
     }
     Ok(())
   }
 
-  fn render_preserve_3d_context(
-    &mut self,
-    items: &[DisplayItem],
-    start_index: usize,
-  ) -> Result<usize> {
+  fn render_preserve_3d_context<T>(&mut self, items: &T, start_index: usize) -> Result<usize>
+  where
+    T: DisplayItemSource + ?Sized,
+  {
     let Some((node, end_idx)) = parse_stacking_node(items, start_index) else {
       // Fallback to normal rendering if the tree is malformed.
-      self.render_item(&items[start_index])?;
+      if let Some(item) = items.get(start_index) {
+        self.render_item(item)?;
+      }
       return Ok(start_index);
     };
 

@@ -1915,6 +1915,52 @@ pub enum ResolvedFilter {
 // Display List
 // ============================================================================
 
+/// A lightweight view over a subset of a display list.
+///
+/// This avoids cloning display items by keeping a slice of the source list plus
+/// the indices of items that should be visited. Any synthetic stack pops needed
+/// to balance the view are stored in `tail` and yielded after the indexed items.
+#[derive(Clone, Debug)]
+pub struct DisplayListView<'a> {
+  items: &'a [DisplayItem],
+  indices: Vec<usize>,
+  tail: Vec<DisplayItem>,
+}
+
+impl<'a> DisplayListView<'a> {
+  pub fn new(items: &'a [DisplayItem], indices: Vec<usize>, tail: Vec<DisplayItem>) -> Self {
+    Self {
+      items,
+      indices,
+      tail,
+    }
+  }
+
+  pub fn len(&self) -> usize {
+    self.indices.len() + self.tail.len()
+  }
+
+  pub fn is_empty(&self) -> bool {
+    self.len() == 0
+  }
+
+  pub fn get(&self, index: usize) -> Option<&DisplayItem> {
+    if index < self.indices.len() {
+      return self.items.get(self.indices[index]);
+    }
+    let tail_index = index.checked_sub(self.indices.len())?;
+    self.tail.get(tail_index)
+  }
+
+  pub fn iter(&'a self) -> impl Iterator<Item = &'a DisplayItem> {
+    self
+      .indices
+      .iter()
+      .map(|&idx| &self.items[idx])
+      .chain(self.tail.iter())
+  }
+}
+
 /// Display list - flat list of display items in paint order
 ///
 /// The display list is the intermediate representation between layout
