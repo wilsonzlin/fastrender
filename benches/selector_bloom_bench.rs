@@ -298,9 +298,41 @@ fn has_selector_bloom_benchmark(c: &mut Criterion) {
   set_selector_bloom_enabled(true);
 }
 
+fn has_selector_summary_benchmark(c: &mut Criterion) {
+  let depth = 10;
+  let branching = 6;
+  let needle_stride = 23;
+
+  let html = build_has_tree_html(depth, branching, needle_stride);
+  let css = generate_has_styles(depth, needle_stride);
+
+  let dom = parse_html(&html).expect("parse html");
+  let stylesheet = parse_stylesheet(&css).expect("parse stylesheet");
+  let media = MediaContext::screen(1280.0, 720.0);
+
+  let mut group = c.benchmark_group("has_selector_summary");
+  group.bench_function("has_summary_with_bloom", |b| {
+    set_selector_bloom_enabled(true);
+    b.iter(|| {
+      let styled = apply_styles_with_media(black_box(&dom), black_box(&stylesheet), &media);
+      black_box(styled);
+    });
+  });
+  group.bench_function("has_summary_without_bloom", |b| {
+    set_selector_bloom_enabled(false);
+    b.iter(|| {
+      let styled = apply_styles_with_media(black_box(&dom), black_box(&stylesheet), &media);
+      black_box(styled);
+    });
+  });
+  group.finish();
+  set_selector_bloom_enabled(true);
+}
+
 criterion_group!(
   benches,
   selector_bloom_benchmark,
-  has_selector_bloom_benchmark
+  has_selector_bloom_benchmark,
+  has_selector_summary_benchmark
 );
 criterion_main!(benches);

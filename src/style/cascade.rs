@@ -26,14 +26,18 @@ use crate::css::types::ScopeContext;
 use crate::css::types::StyleRule;
 use crate::css::types::StyleSheet;
 use crate::debug::runtime;
+use crate::dom::build_selector_bloom_map;
 use crate::dom::compute_slot_assignment;
 use crate::dom::enumerate_dom_ids;
+use crate::dom::next_selector_cache_epoch;
 use crate::dom::parse_exportparts;
+use crate::dom::reset_has_counters;
 use crate::dom::resolve_first_strong_direction;
 use crate::dom::with_target_fragment;
 use crate::dom::DomNode;
 use crate::dom::DomNodeType;
 use crate::dom::ElementRef;
+use crate::dom::SelectorBloomMap;
 use crate::dom::SlotAssignment;
 use crate::geometry::Size;
 use crate::render_control::check_active_periodic;
@@ -596,6 +600,7 @@ struct DomMaps {
   parent_map: HashMap<usize, usize>,
   shadow_hosts: HashMap<usize, usize>,
   exportparts_map: HashMap<usize, Vec<(String, String)>>,
+  selector_blooms: Option<SelectorBloomMap>,
 }
 
 impl DomMaps {
@@ -651,12 +656,15 @@ impl DomMaps {
       &mut exportparts_map,
     );
 
+    let selector_blooms = build_selector_bloom_map(root);
+
     Self {
       id_map,
       id_to_node,
       parent_map,
       shadow_hosts,
       exportparts_map,
+      selector_blooms,
     }
   }
 
@@ -691,6 +699,10 @@ impl DomMaps {
   fn exportparts_for(&self, node: &DomNode) -> Option<&Vec<(String, String)>> {
     let id = self.id_map.get(&(node as *const DomNode))?;
     self.exportparts_map.get(id)
+  }
+
+  fn selector_blooms(&self) -> Option<&SelectorBloomMap> {
+    self.selector_blooms.as_ref()
   }
 }
 
@@ -1954,6 +1966,7 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
   if profile_enabled {
     reset_cascade_profile();
   }
+  reset_has_counters();
   let log_reuse = runtime::runtime_toggles().truthy("FASTR_LOG_CONTAINER_REUSE");
   let mut reuse_counter: usize = 0;
 
@@ -2267,6 +2280,7 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
   let styled = with_target_fragment(target_fragment, || {
     with_image_set_dpr(media_ctx.device_pixel_ratio, || {
       let mut selector_caches = SelectorCaches::default();
+      selector_caches.set_epoch(next_selector_cache_epoch());
       let mut max_rules = rule_scopes
         .ua
         .rules
@@ -2483,6 +2497,7 @@ fn apply_style_set_with_media_target_and_imports_cached_with_deadline_impl(
   if profile_enabled {
     reset_cascade_profile();
   }
+  reset_has_counters();
   let log_reuse = runtime::runtime_toggles().truthy("FASTR_LOG_CONTAINER_REUSE");
   let mut reuse_counter: usize = 0;
 
@@ -2806,6 +2821,7 @@ fn apply_style_set_with_media_target_and_imports_cached_with_deadline_impl(
   let styled = with_target_fragment(target_fragment, || {
     with_image_set_dpr(media_ctx.device_pixel_ratio, || {
       let mut selector_caches = SelectorCaches::default();
+      selector_caches.set_epoch(next_selector_cache_epoch());
       let mut max_rules = rule_scopes
         .ua
         .rules
@@ -3335,6 +3351,7 @@ fn match_part_rules<'a>(
             scratch,
             host_ancestors,
             slot_map,
+            dom_maps.selector_blooms(),
             &info.pseudo,
             allow_shadow_host,
           );
@@ -3538,6 +3555,7 @@ fn collect_pseudo_matching_rules<'a>(
     scratch,
     ancestors,
     current_slot_map,
+    dom_maps.selector_blooms(),
     pseudo,
     false,
   );
@@ -3550,6 +3568,7 @@ fn collect_pseudo_matching_rules<'a>(
       scratch,
       ancestors,
       base_slot_map,
+      dom_maps.selector_blooms(),
       pseudo,
       allow_shadow_host,
     ));
@@ -3565,6 +3584,7 @@ fn collect_pseudo_matching_rules<'a>(
           scratch,
           ancestors,
           current_slot_map,
+          dom_maps.selector_blooms(),
           pseudo,
           false,
         ));
@@ -3580,6 +3600,7 @@ fn collect_pseudo_matching_rules<'a>(
       scratch,
       ancestors,
       slot_map_for_host(node_id),
+      dom_maps.selector_blooms(),
       pseudo,
       true,
     ));
@@ -8604,6 +8625,7 @@ mod tests {
     let ancestors: Vec<&DomNode> = vec![&dom]; // ul ancestor for the li
     let element_ref = build_element_ref_chain(&dom.children[0], &ancestors, None);
     let mut caches = SelectorCaches::default();
+    caches.set_epoch(next_selector_cache_epoch());
     let mut context = MatchingContext::new(
       MatchingMode::ForStatelessPseudoElement,
       None,
@@ -8624,6 +8646,7 @@ mod tests {
       "selector should match the originating element"
     );
     let mut caches = SelectorCaches::default();
+    caches.set_epoch(next_selector_cache_epoch());
     let mut scratch = CascadeScratch::new(rule_index.rules.len());
     let marker_matches = find_pseudo_element_rules(
       &dom.children[0],
@@ -8631,6 +8654,7 @@ mod tests {
       &mut caches,
       &mut scratch,
       &ancestors,
+      None,
       None,
       &PseudoElement::Marker,
       false,
@@ -9328,6 +9352,7 @@ fn find_matching_rules<'a>(
     slot_map,
     part_export_map: None,
     deadline_error: None,
+    selector_blooms: dom_maps.selector_blooms(),
   };
 
   let mut scoped_rule_idx: Option<usize> = None;
@@ -9627,6 +9652,7 @@ fn find_pseudo_element_rules<'a>(
   scratch: &mut CascadeScratch,
   ancestors: &[&DomNode],
   slot_map: Option<&SlotAssignmentMap<'a>>,
+  selector_blooms: Option<&SelectorBloomMap>,
   pseudo: &PseudoElement,
   allow_shadow_host: bool,
 ) -> Vec<MatchedRule<'a>> {
@@ -9676,6 +9702,7 @@ fn find_pseudo_element_rules<'a>(
     slot_map,
     part_export_map: None,
     deadline_error: None,
+    selector_blooms,
   };
 
   let mut scoped_rule_idx: Option<usize> = None;

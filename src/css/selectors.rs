@@ -5,6 +5,7 @@
 use super::types::CssString;
 use crate::dom::AssignedSlot;
 use crate::dom::DomNode;
+use crate::dom::SelectorBloomMap;
 use crate::error::RenderError;
 use cssparser::ParseError;
 use cssparser::Parser;
@@ -45,6 +46,8 @@ pub struct ShadowMatchData<'a> {
   pub part_export_map: Option<&'a PartExportMap>,
   /// Deferred error from deadline checks performed during selector matching.
   pub deadline_error: Option<RenderError>,
+  /// Precomputed selector bloom summaries for fast :has() pruning.
+  pub selector_blooms: Option<&'a SelectorBloomMap>,
 }
 
 impl<'a> ShadowMatchData<'a> {
@@ -73,6 +76,11 @@ impl<'a> ShadowMatchData<'a> {
     if self.deadline_error.is_none() {
       self.deadline_error = Some(err);
     }
+  }
+
+  pub fn with_selector_blooms(mut self, selector_blooms: Option<&'a SelectorBloomMap>) -> Self {
+    self.selector_blooms = selector_blooms;
+    self
   }
 }
 

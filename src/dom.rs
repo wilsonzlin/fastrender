@@ -32,6 +32,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ptr;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::OnceLock;
@@ -161,6 +162,8 @@ fn current_target_fragment() -> Option<String> {
 static SELECTOR_BLOOM_ENV_INITIALIZED: OnceLock<()> = OnceLock::new();
 static SELECTOR_BLOOM_ENABLED: AtomicBool = AtomicBool::new(true);
 static SELECTOR_CACHE_EPOCH: AtomicUsize = AtomicUsize::new(1);
+const SELECTOR_BLOOM_SUMMARY_BITS: usize = 256;
+const SELECTOR_BLOOM_SUMMARY_WORDS: usize = SELECTOR_BLOOM_SUMMARY_BITS / 64;
 
 fn selector_bloom_enabled() -> bool {
   SELECTOR_BLOOM_ENV_INITIALIZED.get_or_init(|| {
@@ -183,6 +186,155 @@ pub fn set_selector_bloom_enabled(enabled: bool) {
 pub fn next_selector_cache_epoch() -> usize {
   SELECTOR_CACHE_EPOCH.fetch_add(1, Ordering::Relaxed)
 }
+
+fn selector_bloom_hash(value: &str) -> u32 {
+  use std::collections::hash_map::DefaultHasher;
+  use std::hash::{Hash, Hasher};
+
+  let mut hasher = DefaultHasher::new();
+  value.hash(&mut hasher);
+  (hasher.finish() as u32) & selectors::bloom::BLOOM_HASH_MASK
+}
+
+fn node_is_html_element(node: &DomNode) -> bool {
+  matches!(
+    node.node_type,
+    DomNodeType::Element { ref namespace, .. } | DomNodeType::Slot { ref namespace, .. }
+      if namespace.is_empty() || namespace == HTML_NAMESPACE
+  )
+}
+
+fn add_selector_bloom_hashes(node: &DomNode, add: &mut impl FnMut(u32)) {
+  if !node.is_element() {
+    return;
+  }
+
+  let is_html = node_is_html_element(node);
+  if let Some(tag) = node.tag_name() {
+    let tag_key = if is_html {
+      tag.to_ascii_lowercase()
+    } else {
+      tag.to_string()
+    };
+    add(selector_bloom_hash(&tag_key));
+    if is_html && tag != tag_key {
+      add(selector_bloom_hash(tag));
+    }
+  }
+
+  if let Some(id) = node.get_attribute_ref("id") {
+    add(selector_bloom_hash(id));
+  }
+
+  if let Some(class_attr) = node.get_attribute_ref("class") {
+    for class in class_attr.split_whitespace() {
+      if !class.is_empty() {
+        add(selector_bloom_hash(class));
+      }
+    }
+  }
+
+  for (name, _) in node.attributes_iter() {
+    add(selector_bloom_hash(name));
+    let lower = name.to_ascii_lowercase();
+    if lower != name {
+      add(selector_bloom_hash(&lower));
+    }
+  }
+}
+
+pub fn build_selector_bloom_map(root: &DomNode) -> Option<SelectorBloomMap> {
+  if !selector_bloom_enabled() {
+    return None;
+  }
+
+  fn walk(node: &DomNode, map: &mut SelectorBloomMap) -> SelectorBloomSummary {
+    let mut summary = SelectorBloomSummary::default();
+    if node.is_element() {
+      add_selector_bloom_hashes(node, &mut |hash| summary.insert_hash(hash));
+    }
+
+    for child in &node.children {
+      let child_summary = if matches!(child.node_type, DomNodeType::ShadowRoot { .. }) {
+        walk(child, map);
+        None
+      } else {
+        Some(walk(child, map))
+      };
+      if node.is_element() {
+        if let Some(summary_child) = child_summary.as_ref() {
+          summary.merge(summary_child);
+        }
+      }
+    }
+
+    if node.is_element() {
+      map.insert(node as *const DomNode, summary.clone());
+    }
+
+    summary
+  }
+
+  let mut blooms: SelectorBloomMap = SelectorBloomMap::new();
+  walk(root, &mut blooms);
+  Some(blooms)
+}
+
+static HAS_EVALS: AtomicU64 = AtomicU64::new(0);
+static HAS_CACHE_HITS: AtomicU64 = AtomicU64::new(0);
+static HAS_PRUNES: AtomicU64 = AtomicU64::new(0);
+
+pub fn reset_has_counters() {
+  HAS_EVALS.store(0, Ordering::Relaxed);
+  HAS_CACHE_HITS.store(0, Ordering::Relaxed);
+  HAS_PRUNES.store(0, Ordering::Relaxed);
+}
+
+pub fn capture_has_counters() -> (u64, u64, u64) {
+  (
+    HAS_EVALS.load(Ordering::Relaxed),
+    HAS_CACHE_HITS.load(Ordering::Relaxed),
+    HAS_PRUNES.load(Ordering::Relaxed),
+  )
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SelectorBloomSummary {
+  bits: [u64; SELECTOR_BLOOM_SUMMARY_WORDS],
+}
+
+impl SelectorBloomSummary {
+  fn insert_hash(&mut self, hash: u32) {
+    let slot_a = (hash as usize) & (SELECTOR_BLOOM_SUMMARY_BITS - 1);
+    let slot_b = ((hash >> 8) as usize) & (SELECTOR_BLOOM_SUMMARY_BITS - 1);
+    self.insert_slot(slot_a);
+    self.insert_slot(slot_b);
+  }
+
+  fn insert_slot(&mut self, slot: usize) {
+    let (idx, bit) = (slot / 64, slot % 64);
+    self.bits[idx] |= 1u64 << bit;
+  }
+
+  fn contains_hash(&self, hash: u32) -> bool {
+    let slot_a = (hash as usize) & (SELECTOR_BLOOM_SUMMARY_BITS - 1);
+    let slot_b = ((hash >> 8) as usize) & (SELECTOR_BLOOM_SUMMARY_BITS - 1);
+    self.contains_slot(slot_a) && self.contains_slot(slot_b)
+  }
+
+  fn contains_slot(&self, slot: usize) -> bool {
+    let (idx, bit) = (slot / 64, slot % 64);
+    (self.bits[idx] & (1u64 << bit)) != 0
+  }
+
+  fn merge(&mut self, other: &Self) {
+    for (dst, src) in self.bits.iter_mut().zip(other.bits.iter()) {
+      *dst |= *src;
+    }
+  }
+}
+
+pub type SelectorBloomMap = HashMap<*const DomNode, SelectorBloomSummary>;
 
 /// Resolve the first-strong direction within this subtree, skipping script/style contents.
 pub fn resolve_first_strong_direction(node: &DomNode) -> Option<TextDirection> {
@@ -2838,56 +2990,11 @@ impl<'a> Element for ElementRef<'a> {
     &self,
     filter: &mut selectors::bloom::CountingBloomFilter<selectors::bloom::BloomStorageU8>,
   ) -> bool {
-    use selectors::bloom;
-
     if !selector_bloom_enabled() {
       return false;
     }
 
-    let mut insert = |value: &str| {
-      use std::collections::hash_map::DefaultHasher;
-      use std::hash::{Hash, Hasher};
-
-      let mut hasher = DefaultHasher::new();
-      value.hash(&mut hasher);
-      let hash = (hasher.finish() as u32) & bloom::BLOOM_HASH_MASK;
-      filter.insert_hash(hash);
-    };
-
-    if let Some(tag) = self.node.tag_name() {
-      let is_html = self.is_html_element();
-      let tag_key = if is_html {
-        tag.to_ascii_lowercase()
-      } else {
-        tag.to_string()
-      };
-      insert(&tag_key);
-      if is_html && tag != tag_key {
-        insert(tag);
-      }
-    }
-
-    if let Some(id) = self.node.get_attribute_ref("id") {
-      insert(id);
-    }
-
-    if let Some(class_attr) = self.node.get_attribute_ref("class") {
-      for class in class_attr.split_whitespace() {
-        if !class.is_empty() {
-          insert(class);
-        }
-      }
-    }
-
-    // Attribute presence hashes to allow pruning on [attr] selectors.
-    for (name, _) in self.node.attributes_iter() {
-      insert(name);
-      let lower = name.to_ascii_lowercase();
-      if lower != name {
-        insert(&lower);
-      }
-    }
-
+    add_selector_bloom_hashes(self.node, &mut |hash| filter.insert_hash(hash));
     true
   }
 }
@@ -2970,6 +3077,67 @@ impl<'a> RelativeSelectorAncestorStack<'a> {
   }
 }
 
+fn collect_relative_selector_hashes(
+  selector: &RelativeSelector<FastRenderSelectorImpl>,
+  quirks_mode: selectors::matching::QuirksMode,
+  out: &mut Vec<u32>,
+) {
+  fn collect_from_selector(
+    selector: &selectors::parser::Selector<FastRenderSelectorImpl>,
+    quirks_mode: selectors::matching::QuirksMode,
+    out: &mut Vec<u32>,
+  ) {
+    const MAX_HASHES: usize = 8;
+    for component in selector.iter_raw_parse_order_from(0) {
+      match component {
+        selectors::parser::Component::LocalName(local) => {
+          let name = local.name.as_ref();
+          let lower = local.lower_name.as_ref();
+          if name == lower {
+            out.push(selector_bloom_hash(name));
+          } else {
+            out.push(selector_bloom_hash(lower));
+          }
+        }
+        selectors::parser::Component::ID(id) => {
+          if !matches!(quirks_mode, selectors::matching::QuirksMode::Quirks) {
+            out.push(selector_bloom_hash(id.as_ref()));
+          }
+        }
+        selectors::parser::Component::Class(class) => {
+          if !matches!(quirks_mode, selectors::matching::QuirksMode::Quirks) {
+            out.push(selector_bloom_hash(class.as_ref()));
+          }
+        }
+        selectors::parser::Component::AttributeInNoNamespaceExists { ref local_name, .. } => {
+          out.push(selector_bloom_hash(local_name.as_ref()));
+        }
+        selectors::parser::Component::AttributeInNoNamespace { ref local_name, .. } => {
+          out.push(selector_bloom_hash(local_name.as_ref()));
+        }
+        selectors::parser::Component::AttributeOther(selector) => {
+          out.push(selector_bloom_hash(selector.local_name.as_ref()));
+          if selector.local_name != selector.local_name_lower {
+            out.push(selector_bloom_hash(selector.local_name_lower.as_ref()));
+          }
+        }
+        selectors::parser::Component::Is(list) | selectors::parser::Component::Where(list) => {
+          let slice = list.slice();
+          if slice.len() == 1 {
+            collect_from_selector(&slice[0], quirks_mode, out);
+          }
+        }
+        _ => {}
+      }
+      if out.len() >= MAX_HASHES {
+        break;
+      }
+    }
+  }
+
+  collect_from_selector(&selector.selector, quirks_mode, out);
+}
+
 fn matches_has_relative(
   anchor: &ElementRef,
   selectors: &[RelativeSelector<FastRenderSelectorImpl>],
@@ -2985,6 +3153,7 @@ fn matches_has_relative(
       let mut deadline_counter = 0usize;
 
       for selector in selectors.iter() {
+        HAS_EVALS.fetch_add(1, Ordering::Relaxed);
         if let Err(err) = check_active_periodic(
           &mut deadline_counter,
           RELATIVE_SELECTOR_DEADLINE_STRIDE,
@@ -2998,10 +3167,32 @@ fn matches_has_relative(
           .relative_selector
           .lookup(anchor.opaque(), selector)
         {
+          HAS_CACHE_HITS.fetch_add(1, Ordering::Relaxed);
           if cached.matched() {
             return true;
           }
           continue;
+        }
+
+        let quirks_mode = ctx.quirks_mode();
+        if selector.match_hint.is_descendant_direction()
+          && !matches!(quirks_mode, selectors::context::QuirksMode::Quirks)
+        {
+          if let Some(map) = ctx.extra_data.selector_blooms {
+            if let Some(summary) = map.get(&(anchor.node as *const DomNode)) {
+              let mut hashes: Vec<u32> = Vec::with_capacity(8);
+              collect_relative_selector_hashes(selector, quirks_mode, &mut hashes);
+              if !hashes.is_empty() && hashes.iter().any(|hash| !summary.contains_hash(*hash)) {
+                HAS_PRUNES.fetch_add(1, Ordering::Relaxed);
+                ctx.selector_caches.relative_selector.add(
+                  anchor.opaque(),
+                  selector,
+                  RelativeSelectorCachedMatch::NotMatched,
+                );
+                continue;
+              }
+            }
+          }
         }
 
         if selector_bloom_enabled()

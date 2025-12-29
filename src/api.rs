@@ -75,7 +75,7 @@ use crate::debug::inspect::{InspectQuery, InspectionSnapshot};
 use crate::debug::runtime::{self, RuntimeToggles};
 use crate::debug::trace::TraceHandle;
 use crate::dom::DomNode;
-use crate::dom::{self, DomCompatibilityMode, DomParseOptions};
+use crate::dom::{self, capture_has_counters, DomCompatibilityMode, DomParseOptions};
 use crate::error::Error;
 use crate::error::NavigationError;
 use crate::error::RenderError;
@@ -1548,6 +1548,9 @@ pub struct CascadeDiagnostics {
   pub selector_time_ms: Option<f64>,
   pub declaration_time_ms: Option<f64>,
   pub pseudo_time_ms: Option<f64>,
+  pub has_evals: Option<u64>,
+  pub has_cache_hits: Option<u64>,
+  pub has_prunes: Option<u64>,
 }
 
 /// Layout cache and intrinsic sizing statistics.
@@ -3360,6 +3363,10 @@ impl FastRender {
           rec.stats.cascade.declaration_time_ms =
             Some(profile.declaration_time_ns as f64 / 1_000_000.0);
           rec.stats.cascade.pseudo_time_ms = Some(profile.pseudo_time_ns as f64 / 1_000_000.0);
+          let (has_evals, has_cache_hits, has_prunes) = capture_has_counters();
+          rec.stats.cascade.has_evals = Some(has_evals);
+          rec.stats.cascade.has_cache_hits = Some(has_cache_hits);
+          rec.stats.cascade.has_prunes = Some(has_prunes);
         }
       }
       self.pending_device_size = None;

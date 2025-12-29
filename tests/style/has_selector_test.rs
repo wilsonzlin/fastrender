@@ -255,6 +255,28 @@ fn has_uses_most_specific_argument_for_specificity() {
 }
 
 #[test]
+fn has_scope_matches_following_sibling() {
+  let html = r#"
+    <div id="first"></div>
+    <span class="hit"></span>
+    <div id="second"></div>
+  "#;
+  let dom = dom::parse_html(html).unwrap();
+  let css = r#"div:has(:scope ~ .hit) { display: inline; }"#;
+  let stylesheet = parse_stylesheet(css).unwrap();
+  let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
+
+  assert_eq!(
+    display(find_by_id(&styled, "first").expect("first")),
+    "inline"
+  );
+  assert_eq!(
+    display(find_by_id(&styled, "second").expect("second")),
+    "block"
+  );
+}
+
+#[test]
 fn has_respects_shadow_boundaries() {
   let html = r#"
     <div id="host">
