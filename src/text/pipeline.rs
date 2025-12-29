@@ -2740,6 +2740,45 @@ fn map_cluster_offset(cluster: usize, mapping: &[(usize, usize)]) -> usize {
   }
 }
 
+/// Converts HarfBuzz glyph positioning into engine coordinates.
+///
+/// Vertical runs keep HarfBuzz's cross-axis offset on `x_offset` and inline offset on
+/// `y_offset`, applying `baseline_shift` along the cross axis.
+fn map_hb_position(
+  vertical: bool,
+  baseline_shift: f32,
+  scale: f32,
+  pos: &rustybuzz::GlyphPosition,
+) -> (f32, f32, f32, f32) {
+  let mut inline_advance_raw = if vertical {
+    pos.y_advance
+  } else {
+    pos.x_advance
+  };
+  if vertical && inline_advance_raw == 0 {
+    inline_advance_raw = pos.x_advance;
+  }
+  let cross_advance_raw = if vertical { pos.x_advance } else { pos.y_advance };
+  let inline_offset_raw = if vertical { pos.y_offset } else { pos.x_offset };
+  let cross_offset_raw = if vertical { pos.x_offset } else { pos.y_offset };
+
+  let mut inline_advance = inline_advance_raw as f32 * scale;
+  if vertical {
+    inline_advance = inline_advance.abs();
+  }
+  let cross_advance = cross_advance_raw as f32 * scale;
+
+  if vertical {
+    let x_offset = cross_offset_raw as f32 * scale + baseline_shift;
+    let y_offset = inline_offset_raw as f32 * scale;
+    (x_offset, y_offset, cross_advance, inline_advance)
+  } else {
+    let x_offset = inline_offset_raw as f32 * scale;
+    let y_offset = cross_offset_raw as f32 * scale + baseline_shift;
+    (x_offset, y_offset, inline_advance, cross_advance)
+  }
+}
+
 /// Shapes a single font run into positioned glyphs.
 fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
   // Create rustybuzz face from font data
@@ -2830,42 +2869,9 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
       .and_then(|s| s.chars().next())
       .is_some_and(is_bidi_control_char);
 
-    let mut inline_advance_raw = if run.vertical {
-      pos.y_advance
-    } else {
-      pos.x_advance
-    };
-    if run.vertical && inline_advance_raw == 0 {
-      inline_advance_raw = pos.x_advance;
-    }
-    let cross_advance_raw = if run.vertical {
-      pos.x_advance
-    } else {
-      pos.y_advance
-    };
-    let inline_offset_raw = if run.vertical {
-      pos.y_offset
-    } else {
-      pos.x_offset
-    };
-    let cross_offset_raw = if run.vertical {
-      pos.x_offset
-    } else {
-      pos.y_offset
-    };
-    let mut inline_advance = inline_advance_raw as f32 * scale;
-    if run.vertical {
-      inline_advance = inline_advance.abs();
-    }
-    let cross_advance = cross_advance_raw as f32 * scale;
     if !is_bidi_control {
-      let x_offset = inline_offset_raw as f32 * scale;
-      let y_offset = cross_offset_raw as f32 * scale + run.baseline_shift;
-      let (x_advance, y_advance) = if run.vertical {
-        (cross_advance, inline_advance)
-      } else {
-        (inline_advance, cross_advance)
-      };
+      let (x_offset, y_offset, x_advance, y_advance) =
+        map_hb_position(run.vertical, run.baseline_shift, scale, pos);
 
       glyphs.push(GlyphPosition {
         glyph_id: info.glyph_id,
@@ -2875,7 +2881,7 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
         x_advance,
         y_advance,
       });
-      inline_position += inline_advance;
+      inline_position += if run.vertical { y_advance } else { x_advance };
     }
   }
 
@@ -3835,6 +3841,51 @@ mod tests {
       clean_adv,
       iso_adv
     );
+  }
+
+  #[test]
+  fn map_hb_position_applies_baseline_shift_horizontally() {
+    let mut pos = rustybuzz::GlyphPosition::default();
+    pos.x_advance = 10;
+    pos.y_advance = 3;
+    pos.x_offset = 2;
+    pos.y_offset = -4;
+    let (x_offset, y_offset, x_advance, y_advance) = map_hb_position(false, 1.5, 2.0, &pos);
+
+    assert_eq!(x_offset, 4.0, "x offset should use x_offset with scale");
+    assert_eq!(y_offset, -6.5, "baseline shift applies to y offset in horizontal mode");
+    assert_eq!(x_advance, 20.0, "x advance scales inline axis");
+    assert_eq!(y_advance, 6.0, "y advance scales cross axis");
+  }
+
+  #[test]
+  fn map_hb_position_applies_vertical_offsets_without_swapping() {
+    let mut pos = rustybuzz::GlyphPosition::default();
+    pos.x_advance = 10;
+    pos.y_advance = -20;
+    pos.x_offset = 7;
+    pos.y_offset = -3;
+    let (x_offset, y_offset, x_advance, y_advance) = map_hb_position(true, 2.0, 1.0, &pos);
+
+    assert_eq!(x_offset, 9.0, "baseline shift should move the cross axis (x) for vertical text");
+    assert_eq!(y_offset, -3.0, "inline offset should come from y_offset");
+    assert_eq!(x_advance, 10.0, "cross advance maps to x advance");
+    assert_eq!(y_advance, 20.0, "inline advance uses absolute y_advance");
+  }
+
+  #[test]
+  fn map_hb_position_falls_back_to_x_advance_in_vertical_mode() {
+    let mut pos = rustybuzz::GlyphPosition::default();
+    pos.x_advance = -15;
+    pos.y_advance = 0;
+    pos.x_offset = 1;
+    pos.y_offset = 2;
+    let (x_offset, y_offset, x_advance, y_advance) = map_hb_position(true, 5.0, 1.0, &pos);
+
+    assert_eq!(x_offset, 6.0, "baseline shift should still apply to x offset in vertical mode");
+    assert_eq!(y_offset, 2.0, "inline offset stays on the inline axis");
+    assert_eq!(x_advance, -15.0, "x advance uses the cross axis advance");
+    assert_eq!(y_advance, 15.0, "inline advance falls back to x_advance and is absolute");
   }
 
   #[test]
