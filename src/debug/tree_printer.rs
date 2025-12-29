@@ -549,7 +549,7 @@ fn export_box_node_recursive(
     let _ = writeln!(output, "  n{} -> n{};", parent, current_id);
   }
 
-  for child in &node.children {
+  for child in node.children.iter() {
     export_box_node_recursive(child, node_id, Some(current_id), output);
   }
 }
