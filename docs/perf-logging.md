@@ -35,22 +35,26 @@ These env vars are read in the rendering binaries (`render_pages`, `fetch_and_re
 
 All profiling logs are best run in release builds to reflect real performance.
 
-## Perf smoke runner (offline, deterministic)
+## Perf smoke (deterministic offline fixtures)
 
-For a quick, network-free perf sanity check, use the curated fixture harness:
+Run a quick offline perf pass against the curated pages fixtures with bundled fonts and
+machine-readable timings:
 
 ```
-cargo xtask perf-smoke [--top 5] [--output target/perf_smoke.json] \
-  [--baseline path/to/baseline.json --threshold 0.05 --fail-on-regression]
+cargo xtask perf-smoke [--top 5] [--output target/perf-smoke.json]
 ```
 
-- Renders a fixed set of `tests/pages/fixtures/*` HTML files in **release** using bundled fonts (`FASTR_USE_BUNDLED_FONTS=1`).
-- Emits a stable JSON summary per fixture (printed to stdout and written to the output path) with:
-  - `total_ms`
-  - `timings_ms` (html_decode/dom_parse/css_inlining/css_parse/cascade/box_tree/layout/paint_build/paint_optimize/paint_rasterize/encode)
-  - `counts` (dom_nodes/styled_nodes/box_nodes/fragments)
-  - `paint` diagnostics (display_items/optimized_items/culled_items/transparent_removed/noop_removed/merged_items)
-- `--top N` prints the slowest fixtures; `--baseline` + `--fail-on-regression` gates on relative stage regressions.
+The command renders the HTML under `tests/pages/fixtures/*`, captures `DiagnosticsLevel::Basic`
+stats, and writes `target/perf-smoke.json` with per-fixture stage timings/counters plus aggregate
+wall-clock totals. Compare against a saved baseline to flag obvious regressions:
+
+```
+cargo xtask perf-smoke --baseline ../baseline/perf-smoke.json --threshold 0.05
+```
+
+`--top N` prints the slowest fixtures. Baseline comparisons fail the run when any fixture (or the
+overall render wall time) exceeds the relative threshold, making the output suitable for lightweight
+CI or local preflight checks.
 
 ## Pipeline benchmarks (Criterion)
 

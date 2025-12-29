@@ -3383,7 +3383,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "fastrender",
  "image",
+ "serde",
+ "serde_json",
  "tempfile",
  "url",
  "walkdir",
