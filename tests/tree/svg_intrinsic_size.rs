@@ -23,7 +23,7 @@ fn svg_replaced_box(svg_markup: &str) -> ReplacedBox {
   let html = format!("<html><body>{}</body></html>", svg_markup);
   let dom = dom::parse_html(&html).expect("parse html");
   let styled = cascade::apply_styles(&dom, &StyleSheet::new());
-  let tree = generate_box_tree(&styled);
+  let tree = generate_box_tree(&styled).expect("box tree");
   find_inline_svg(&tree.root)
     .cloned()
     .expect("inline svg replaced box")

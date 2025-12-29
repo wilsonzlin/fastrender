@@ -162,7 +162,7 @@ pub fn cascade(dom: &DomNode, stylesheet: &StyleSheet, media_ctx: &MediaContext)
 }
 
 pub fn box_tree_from_styled(styled: &StyledNode) -> BoxTree {
-  generate_box_tree(styled)
+  generate_box_tree(styled).expect("box generation")
 }
 
 pub fn layout_engine(viewport: (u32, u32), font_ctx: &FontContext) -> LayoutEngine {

@@ -29,7 +29,7 @@ fn empty_ad_placeholders_are_kept_by_default() {
     let stylesheet = parse_stylesheet("").unwrap();
     let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
 
-    let box_tree = generate_box_tree_with_anonymous_fixup(&styled);
+    let box_tree = generate_box_tree_with_anonymous_fixup(&styled).unwrap();
     assert!(
       contains_class(&box_tree.root, class),
       "default pipeline should not drop placeholder {class}"
@@ -48,7 +48,8 @@ fn empty_ad_placeholders_are_dropped_with_site_compat() {
     let stylesheet = parse_stylesheet("").unwrap();
     let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
 
-    let box_tree = generate_box_tree_with_anonymous_fixup_with_options(&styled, &compat_options);
+    let box_tree =
+      generate_box_tree_with_anonymous_fixup_with_options(&styled, &compat_options).unwrap();
     assert!(
       !contains_class(&box_tree.root, class),
       "compat mode should drop empty placeholder {class}"
@@ -65,6 +66,7 @@ fn non_empty_ad_placeholders_are_kept_in_compat_mode() {
   let stylesheet = parse_stylesheet("").unwrap();
   let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
 
-  let box_tree = generate_box_tree_with_anonymous_fixup_with_options(&styled, &compat_options);
+  let box_tree =
+    generate_box_tree_with_anonymous_fixup_with_options(&styled, &compat_options).unwrap();
   assert!(contains_class(&box_tree.root, "ad-height-hold"));
 }

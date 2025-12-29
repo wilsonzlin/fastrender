@@ -44,7 +44,7 @@ fn inert_template_styles_are_not_collected_into_document_css() {
       let stylesheet = extract_css(&dom).expect("extract css");
       let media = MediaContext::screen(10.0, 10.0);
       let styled = apply_styles_with_media(&dom, &stylesheet, &media);
-      let box_tree = generate_box_tree(&styled);
+      let box_tree = generate_box_tree(&styled).expect("box tree");
       let svg = find_svg_content(&box_tree.root).expect("svg content");
       let compact_css = svg
         .shared_css

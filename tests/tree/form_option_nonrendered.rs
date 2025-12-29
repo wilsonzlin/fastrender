@@ -31,7 +31,7 @@ fn option_like_elements_outside_select_do_not_generate_boxes() {
   let html = "<html><body><option id=\"orphan\">Loose</option><optgroup label=\"g\"><option>One</option></optgroup></body></html>";
   let dom = dom::parse_html(html).expect("parse html");
   let styled = apply_styles(&dom, &StyleSheet::new());
-  let box_tree = generate_box_tree(&styled);
+  let box_tree = generate_box_tree(&styled).expect("box tree");
 
   assert!(contains_tag(&box_tree.root, "html"));
   assert!(!contains_tag(&box_tree.root, "option"));
@@ -43,7 +43,7 @@ fn select_generates_single_replaced_box_without_option_children() {
   let html = "<html><body><select id=\"flavors\"><option>Vanilla</option><optgroup label=\"sweet\"><option selected>Chocolate</option></optgroup></select></body></html>";
   let dom = dom::parse_html(html).expect("parse html");
   let styled = apply_styles(&dom, &StyleSheet::new());
-  let box_tree = generate_box_tree(&styled);
+  let box_tree = generate_box_tree(&styled).expect("box tree");
 
   assert!(contains_tag(&box_tree.root, "select"));
   assert!(!contains_tag(&box_tree.root, "option"));

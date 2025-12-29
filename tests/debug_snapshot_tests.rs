@@ -31,7 +31,7 @@ fn pipeline_snapshot_matches_fixture() {
       let dom = dom::parse_html(html).expect("parse html");
       let stylesheet = StyleSheet::new();
       let styled = apply_styles(&dom, &stylesheet);
-      let box_tree = generate_box_tree_with_anonymous_fixup(&styled);
+      let box_tree = generate_box_tree_with_anonymous_fixup(&styled).unwrap();
 
       let font_context = FontContext::with_config(
         FontConfig::new()

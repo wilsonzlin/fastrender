@@ -51,7 +51,8 @@
 //! let fixed = TableStructureFixer::fixup_table(table).unwrap();
 //! ```
 
-use crate::error::Result;
+use crate::error::{RenderStage, Result};
+use crate::render_control::check_active_periodic;
 use crate::style::display::Display;
 use crate::style::display::FormattingContextType;
 use crate::style::types::CaptionSide;
@@ -97,6 +98,7 @@ impl Drop for FixupCounterGuard {
     TRACK_FIXUP_INTERNALS.store(false, Ordering::SeqCst);
   }
 }
+const TABLE_FIXUP_DEADLINE_STRIDE: usize = 256;
 
 impl TableStructureFixer {
   /// Fixes up a table box tree, including caption wrappers.
@@ -124,7 +126,16 @@ impl TableStructureFixer {
   /// Returns an error if the table structure is fundamentally broken
   /// (e.g., completely empty after fixup).
   pub fn fixup_table(table_box: BoxNode) -> Result<BoxNode> {
-    Self::fixup_table_structure(table_box, true)
+    let mut deadline_counter = 0usize;
+    Self::fixup_table_with_deadline(table_box, &mut deadline_counter)
+  }
+
+  /// Fixes up a table box tree while periodically checking the active deadline.
+  pub fn fixup_table_with_deadline(
+    table_box: BoxNode,
+    deadline_counter: &mut usize,
+  ) -> Result<BoxNode> {
+    Self::fixup_table_structure(table_box, true, deadline_counter)
   }
 
   /// Fixes up table internals without creating wrapper boxes.
@@ -132,11 +143,20 @@ impl TableStructureFixer {
   /// This variant normalizes rows, row groups, and cells but leaves caption
   /// handling to downstream layout (no anonymous table wrapper is generated).
   pub fn fixup_table_internals(table_box: BoxNode) -> Result<BoxNode> {
+    let mut deadline_counter = 0usize;
     #[cfg(test)]
     if TRACK_FIXUP_INTERNALS.load(Ordering::SeqCst) {
       FIXUP_INTERNAL_CALLS.fetch_add(1, Ordering::SeqCst);
     }
-    Self::fixup_table_structure(table_box, false)
+    Self::fixup_table_internals_with_deadline(table_box, &mut deadline_counter)
+  }
+
+  /// Fixes up table internals while checking the active deadline.
+  pub fn fixup_table_internals_with_deadline(
+    table_box: BoxNode,
+    deadline_counter: &mut usize,
+  ) -> Result<BoxNode> {
+    Self::fixup_table_structure(table_box, false, deadline_counter)
   }
 
   #[cfg(test)]
@@ -322,22 +342,29 @@ impl TableStructureFixer {
   ///
   /// CSS 2.1 Section 17.2.1: "If a row group has cells not in a row,
   /// generate an anonymous row around those cells."
-  fn ensure_cells_in_rows(mut table: BoxNode) -> BoxNode {
+  fn ensure_cells_in_rows(mut table: BoxNode, deadline_counter: &mut usize) -> Result<BoxNode> {
     let children = std::mem::take(&mut table.children);
-    let fixed_children = Self::fixup_table_children_for_rows(children, &table.style);
+    let fixed_children =
+      Self::fixup_table_children_for_rows(children, &table.style, deadline_counter)?;
     table.children = fixed_children;
-    table
+    Ok(table)
   }
 
   /// Fixes children to ensure cells are in rows
   fn fixup_table_children_for_rows(
     children: Vec<BoxNode>,
     parent_style: &ComputedStyle,
-  ) -> Vec<BoxNode> {
+    deadline_counter: &mut usize,
+  ) -> Result<Vec<BoxNode>> {
     let mut result = Vec::new();
     let mut loose_cells: Vec<BoxNode> = Vec::new();
 
     for child in children {
+      check_active_periodic(
+        deadline_counter,
+        TABLE_FIXUP_DEADLINE_STRIDE,
+        RenderStage::Cascade,
+      )?;
       if Self::is_table_cell(&child) {
         // Accumulate loose cells
         loose_cells.push(child);
@@ -349,7 +376,7 @@ impl TableStructureFixer {
         }
 
         // Recursively fix row group
-        let fixed_group = Self::fixup_row_group(child);
+        let fixed_group = Self::fixup_row_group(child, deadline_counter)?;
         result.push(fixed_group);
       } else if Self::is_table_row(&child) {
         // Flush loose cells
@@ -357,7 +384,7 @@ impl TableStructureFixer {
           let anon_row = Self::create_anonymous_row(std::mem::take(&mut loose_cells), parent_style);
           result.push(anon_row);
         }
-        result.push(Self::fixup_row(child));
+        result.push(Self::fixup_row(child, deadline_counter)?);
       } else if Self::is_table_caption(&child)
         || Self::is_table_column_group(&child)
         || Self::is_table_column(&child)
@@ -381,16 +408,21 @@ impl TableStructureFixer {
       result.push(anon_row);
     }
 
-    result
+    Ok(result)
   }
 
   /// Fixes row group to ensure cells are in rows
-  fn fixup_row_group(mut group: BoxNode) -> BoxNode {
+  fn fixup_row_group(mut group: BoxNode, deadline_counter: &mut usize) -> Result<BoxNode> {
     let children = std::mem::take(&mut group.children);
     let mut result = Vec::new();
     let mut loose_cells: Vec<BoxNode> = Vec::new();
 
     for child in children {
+      check_active_periodic(
+        deadline_counter,
+        TABLE_FIXUP_DEADLINE_STRIDE,
+        RenderStage::Cascade,
+      )?;
       if Self::is_table_cell(&child) {
         loose_cells.push(child);
       } else if Self::is_table_row(&child) {
@@ -398,7 +430,7 @@ impl TableStructureFixer {
           let anon_row = Self::create_anonymous_row(std::mem::take(&mut loose_cells), &group.style);
           result.push(anon_row);
         }
-        result.push(Self::fixup_row(child));
+        result.push(Self::fixup_row(child, deadline_counter)?);
       } else {
         // Unexpected content - wrap in anonymous cell then add to loose cells
         if !loose_cells.is_empty() {
@@ -417,15 +449,20 @@ impl TableStructureFixer {
     }
 
     group.children = result;
-    group
+    Ok(group)
   }
 
   /// Wraps non-cell row children in anonymous table cells.
-  fn fixup_row(mut row: BoxNode) -> BoxNode {
+  fn fixup_row(mut row: BoxNode, deadline_counter: &mut usize) -> Result<BoxNode> {
     let children = std::mem::take(&mut row.children);
     let mut fixed_children = Vec::new();
     let mut pending_non_cells: Vec<BoxNode> = Vec::new();
     for child in children {
+      check_active_periodic(
+        deadline_counter,
+        TABLE_FIXUP_DEADLINE_STRIDE,
+        RenderStage::Cascade,
+      )?;
       if Self::is_table_cell(&child) {
         if !pending_non_cells.is_empty() {
           let anon_cell =
@@ -441,7 +478,7 @@ impl TableStructureFixer {
       fixed_children.push(Self::create_anonymous_cell(pending_non_cells, &row.style));
     }
     row.children = fixed_children;
-    row
+    Ok(row)
   }
 
   // ==================== Row-to-Group Fixup ====================
@@ -450,19 +487,28 @@ impl TableStructureFixer {
   ///
   /// CSS 2.1 Section 17.2.1: "If a table has rows not in a row group,
   /// generate an anonymous tbody around those rows."
-  fn ensure_rows_in_groups(mut table: BoxNode) -> BoxNode {
+  fn ensure_rows_in_groups(mut table: BoxNode, deadline_counter: &mut usize) -> Result<BoxNode> {
     let children = std::mem::take(&mut table.children);
-    let fixed_children = Self::wrap_loose_rows(children, &table.style);
+    let fixed_children = Self::wrap_loose_rows(children, &table.style, deadline_counter)?;
     table.children = fixed_children;
-    table
+    Ok(table)
   }
 
   /// Wraps loose rows in anonymous tbody
-  fn wrap_loose_rows(children: Vec<BoxNode>, parent_style: &ComputedStyle) -> Vec<BoxNode> {
+  fn wrap_loose_rows(
+    children: Vec<BoxNode>,
+    parent_style: &ComputedStyle,
+    deadline_counter: &mut usize,
+  ) -> Result<Vec<BoxNode>> {
     let mut result = Vec::new();
     let mut loose_rows: Vec<BoxNode> = Vec::new();
 
     for child in children {
+      check_active_periodic(
+        deadline_counter,
+        TABLE_FIXUP_DEADLINE_STRIDE,
+        RenderStage::Cascade,
+      )?;
       if Self::is_table_row(&child) {
         // Accumulate loose rows
         loose_rows.push(child);
@@ -491,7 +537,7 @@ impl TableStructureFixer {
       result.push(anon_tbody);
     }
 
-    result
+    Ok(result)
   }
 
   // ==================== Column Inference ====================
@@ -500,7 +546,12 @@ impl TableStructureFixer {
   ///
   /// CSS tables don't require explicit `<col>` elements - columns
   /// are inferred from the cells in rows.
-  fn infer_columns(table: BoxNode) -> BoxNode {
+  fn infer_columns(table: BoxNode, deadline_counter: &mut usize) -> Result<BoxNode> {
+    check_active_periodic(
+      deadline_counter,
+      TABLE_FIXUP_DEADLINE_STRIDE,
+      RenderStage::Cascade,
+    )?;
     // Find all row groups
     let row_groups: Vec<&BoxNode> = table
       .children
@@ -510,7 +561,7 @@ impl TableStructureFixer {
 
     if row_groups.is_empty() {
       // Empty table is valid
-      return table;
+      return Ok(table);
     }
 
     // Find first row
@@ -528,7 +579,7 @@ impl TableStructureFixer {
       }
     }
 
-    table
+    Ok(table)
   }
 
   /// Counts columns in a row (accounting for colspan)
@@ -549,7 +600,16 @@ impl TableStructureFixer {
 
   // ==================== Wrapper Creation ====================
 
-  fn fixup_table_structure(table_box: BoxNode, create_wrapper: bool) -> Result<BoxNode> {
+  fn fixup_table_structure(
+    table_box: BoxNode,
+    create_wrapper: bool,
+    deadline_counter: &mut usize,
+  ) -> Result<BoxNode> {
+    check_active_periodic(
+      deadline_counter,
+      TABLE_FIXUP_DEADLINE_STRIDE,
+      RenderStage::Cascade,
+    )?;
     // Verify this is actually a table
     if !Self::is_table_box(&table_box) {
       return Ok(table_box);
@@ -559,17 +619,17 @@ impl TableStructureFixer {
     let mut fixed = table_box;
 
     // Step 1: Wrap cells not in rows with anonymous rows
-    fixed = Self::ensure_cells_in_rows(fixed);
+    fixed = Self::ensure_cells_in_rows(fixed, deadline_counter)?;
 
     // Step 2: Wrap rows not in row-groups with anonymous tbody
-    fixed = Self::ensure_rows_in_groups(fixed);
+    fixed = Self::ensure_rows_in_groups(fixed, deadline_counter)?;
 
     // Step 3: Infer column structure
-    fixed = Self::infer_columns(fixed);
+    fixed = Self::infer_columns(fixed, deadline_counter)?;
 
     if create_wrapper {
       // Step 4: Create table wrapper if needed (captions)
-      fixed = Self::create_wrapper_if_needed(fixed);
+      fixed = Self::create_wrapper_if_needed(fixed, deadline_counter)?;
     }
 
     Ok(fixed)
@@ -578,13 +638,18 @@ impl TableStructureFixer {
   /// Creates table wrapper if needed
   ///
   /// CSS 2.1: Tables with captions need a wrapper box
-  fn create_wrapper_if_needed(mut table: BoxNode) -> BoxNode {
+  fn create_wrapper_if_needed(mut table: BoxNode, deadline_counter: &mut usize) -> Result<BoxNode> {
     let parent_style = table.style.clone();
     let mut top_captions = Vec::new();
     let mut bottom_captions = Vec::new();
     let mut grid_children = Vec::new();
 
     for child in std::mem::take(&mut table.children) {
+      check_active_periodic(
+        deadline_counter,
+        TABLE_FIXUP_DEADLINE_STRIDE,
+        RenderStage::Cascade,
+      )?;
       if Self::is_table_caption(&child) {
         match child.style.caption_side {
           CaptionSide::Top => top_captions.push(child),
@@ -597,7 +662,7 @@ impl TableStructureFixer {
 
     if top_captions.is_empty() && bottom_captions.is_empty() {
       table.children = grid_children;
-      return table;
+      return Ok(table);
     }
 
     table.children = grid_children;
@@ -607,7 +672,10 @@ impl TableStructureFixer {
     wrapper_children.push(table);
     wrapper_children.extend(bottom_captions);
 
-    Self::create_anonymous_wrapper(wrapper_children, &parent_style)
+    Ok(Self::create_anonymous_wrapper(
+      wrapper_children,
+      &parent_style,
+    ))
   }
 
   // ==================== Utility Methods ====================
@@ -617,14 +685,31 @@ impl TableStructureFixer {
   /// Walks the entire box tree and applies table fixup to any
   /// table boxes found.
   pub fn fixup_tree(mut root: BoxNode) -> Result<BoxNode> {
+    let mut deadline_counter = 0usize;
+    Self::fixup_tree_with_deadline(root, &mut deadline_counter)
+  }
+
+  /// Recursively fixes up all table boxes while checking deadlines.
+  pub fn fixup_tree_with_deadline(
+    mut root: BoxNode,
+    deadline_counter: &mut usize,
+  ) -> Result<BoxNode> {
+    check_active_periodic(
+      deadline_counter,
+      TABLE_FIXUP_DEADLINE_STRIDE,
+      RenderStage::Cascade,
+    )?;
     // If this is a table, fix it up
     if Self::is_table_box(&root) {
-      return Self::fixup_table(root);
+      return Self::fixup_table_with_deadline(root, deadline_counter);
     }
 
     // Otherwise, recursively process children
     let children = std::mem::take(&mut root.children);
-    let fixed_children: Result<Vec<BoxNode>> = children.into_iter().map(Self::fixup_tree).collect();
+    let fixed_children: Result<Vec<BoxNode>> = children
+      .into_iter()
+      .map(|child| Self::fixup_tree_with_deadline(child, deadline_counter))
+      .collect();
     root.children = fixed_children?;
 
     Ok(root)
@@ -635,14 +720,28 @@ impl TableStructureFixer {
   /// This normalizes table internals for use in pipelines that handle captions
   /// separately (e.g., layout).
   pub fn fixup_tree_internals(mut root: BoxNode) -> Result<BoxNode> {
+    let mut deadline_counter = 0usize;
+    Self::fixup_tree_internals_with_deadline(root, &mut deadline_counter)
+  }
+
+  /// Recursively fixes up table boxes without creating wrappers while checking deadlines.
+  pub fn fixup_tree_internals_with_deadline(
+    mut root: BoxNode,
+    deadline_counter: &mut usize,
+  ) -> Result<BoxNode> {
+    check_active_periodic(
+      deadline_counter,
+      TABLE_FIXUP_DEADLINE_STRIDE,
+      RenderStage::Cascade,
+    )?;
     if Self::is_table_box(&root) {
-      return Self::fixup_table_internals(root);
+      return Self::fixup_table_internals_with_deadline(root, deadline_counter);
     }
 
     let children = std::mem::take(&mut root.children);
     let fixed_children: Result<Vec<BoxNode>> = children
       .into_iter()
-      .map(Self::fixup_tree_internals)
+      .map(|child| Self::fixup_tree_internals_with_deadline(child, deadline_counter))
       .collect();
     root.children = fixed_children?;
 

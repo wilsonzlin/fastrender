@@ -40,7 +40,7 @@ fn hidden_onenav_overlay_is_retained_by_default() {
   let dom: DomNode = dom::parse_html(html).unwrap();
   let stylesheet = parse_stylesheet(css).unwrap();
   let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
-  let box_tree = generate_box_tree_with_anonymous_fixup(&styled);
+  let box_tree = generate_box_tree_with_anonymous_fixup(&styled).unwrap();
 
   assert!(contains_class(&box_tree.root, "keep"));
   assert!(contains_class(&box_tree.root, "content"));
@@ -69,7 +69,8 @@ fn hidden_onenav_overlay_skips_drawer_with_site_compat() {
   let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
   let compat_options =
     BoxGenerationOptions::default().with_compat_profile(CompatProfile::SiteCompatibility);
-  let box_tree = generate_box_tree_with_anonymous_fixup_with_options(&styled, &compat_options);
+  let box_tree =
+    generate_box_tree_with_anonymous_fixup_with_options(&styled, &compat_options).unwrap();
 
   assert!(contains_class(&box_tree.root, "keep"));
   assert!(contains_class(&box_tree.root, "content"));
@@ -97,7 +98,8 @@ fn visible_onenav_overlay_retained_with_drawer_in_compat_mode() {
   let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
   let compat_options =
     BoxGenerationOptions::default().with_compat_profile(CompatProfile::SiteCompatibility);
-  let box_tree = generate_box_tree_with_anonymous_fixup_with_options(&styled, &compat_options);
+  let box_tree =
+    generate_box_tree_with_anonymous_fixup_with_options(&styled, &compat_options).unwrap();
 
   assert!(contains_class(&box_tree.root, "Overlay-ljtLmi"));
   assert!(contains_class(&box_tree.root, "FocusTrapContainer-jqtblI"));

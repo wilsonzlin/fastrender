@@ -5320,7 +5320,7 @@ impl FastRender {
       crate::tree::box_generation::generate_box_tree_with_anonymous_fixup_with_options(
         &styled_tree,
         &box_gen_options,
-      )
+      )?
     };
     if let Some(start) = box_gen_start {
       eprintln!("timing:box_gen {:?}", start.elapsed());
@@ -5688,16 +5688,16 @@ impl FastRender {
             }
           }
           box_tree =
-            crate::tree::box_generation::generate_box_tree_with_anonymous_fixup(&styled_tree);
+            crate::tree::box_generation::generate_box_tree_with_anonymous_fixup(&styled_tree)?;
           self.resolve_replaced_intrinsic_sizes_for_media(
             &mut box_tree.root,
             layout_viewport,
             media_type,
           );
-          crate::tree::box_generation::generate_box_tree_with_anonymous_fixup_with_options(
+          let _ = crate::tree::box_generation::generate_box_tree_with_anonymous_fixup_with_options(
             &styled_tree,
             &box_gen_options,
-          );
+          )?;
           self.resolve_replaced_intrinsic_sizes(&mut box_tree.root, layout_viewport);
 
           intrinsic_cache_clear();
@@ -9304,7 +9304,8 @@ mod tests {
       crate::tree::box_generation::generate_box_tree_with_anonymous_fixup_with_options(
         &styled,
         &box_gen_options,
-      );
+      )
+      .unwrap();
     renderer.resolve_replaced_intrinsic_sizes(&mut box_tree.root, Size::new(800.0, 600.0));
     intrinsic_cache_clear();
     let fragments = renderer.layout_engine.layout_tree(&box_tree).unwrap();
@@ -9394,7 +9395,8 @@ mod tests {
       crate::tree::box_generation::generate_box_tree_with_anonymous_fixup_with_options(
         &styled,
         &box_gen_options,
-      );
+      )
+      .unwrap();
     renderer.resolve_replaced_intrinsic_sizes(&mut box_tree.root, Size::new(800.0, 600.0));
     intrinsic_cache_clear();
     let fragments = renderer.layout_engine.layout_tree(&box_tree).unwrap();
@@ -9460,7 +9462,8 @@ mod tests {
       crate::tree::box_generation::generate_box_tree_with_anonymous_fixup_with_options(
         &styled,
         &box_gen_options,
-      );
+      )
+      .unwrap();
     renderer.resolve_replaced_intrinsic_sizes(&mut box_tree.root, Size::new(800.0, 600.0));
     intrinsic_cache_clear();
     let fragments = renderer.layout_engine.layout_tree(&box_tree).unwrap();
@@ -9519,7 +9522,8 @@ mod tests {
       crate::tree::box_generation::generate_box_tree_with_anonymous_fixup_with_options(
         &styled,
         &box_gen_options,
-      );
+      )
+      .unwrap();
     renderer.resolve_replaced_intrinsic_sizes(&mut box_tree.root, Size::new(800.0, 600.0));
     intrinsic_cache_clear();
     let fragments = renderer.layout_engine.layout_tree(&box_tree).unwrap();
@@ -9578,7 +9582,8 @@ mod tests {
       crate::tree::box_generation::generate_box_tree_with_anonymous_fixup_with_options(
         &styled,
         &box_gen_options,
-      );
+      )
+      .unwrap();
     renderer.resolve_replaced_intrinsic_sizes(&mut box_tree.root, Size::new(800.0, 600.0));
     intrinsic_cache_clear();
     let fragments = renderer.layout_engine.layout_tree(&box_tree).unwrap();
@@ -9638,7 +9643,8 @@ mod tests {
       crate::tree::box_generation::generate_box_tree_with_anonymous_fixup_with_options(
         &styled,
         &box_gen_options,
-      );
+      )
+      .unwrap();
     renderer.resolve_replaced_intrinsic_sizes(&mut box_tree.root, Size::new(800.0, 600.0));
     intrinsic_cache_clear();
     let fragments = renderer.layout_engine.layout_tree(&box_tree).unwrap();

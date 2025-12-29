@@ -37,9 +37,11 @@
 //! use fastrender::tree::anonymous::AnonymousBoxCreator;
 //!
 //! let box_tree = generator.generate(&dom)?;
-//! let fixed_tree = AnonymousBoxCreator::fixup_tree(box_tree);
+//! let fixed_tree = AnonymousBoxCreator::fixup_tree(box_tree)?;
 //! ```
 
+use crate::error::{RenderStage, Result};
+use crate::render_control::check_active_periodic;
 use crate::style::display::Display;
 use crate::style::ComputedStyle;
 use crate::tree::box_tree::AnonymousBox;
@@ -63,6 +65,8 @@ use std::sync::Arc;
 /// This is accomplished by wrapping runs of inline-level content in anonymous
 /// block boxes.
 pub struct AnonymousBoxCreator;
+
+const ANON_FIXUP_DEADLINE_STRIDE: usize = 256;
 
 impl AnonymousBoxCreator {
   /// Fixes up a box tree by inserting anonymous boxes
@@ -99,25 +103,40 @@ impl AnonymousBoxCreator {
   ///     vec![text, block],
   /// );
   ///
-  /// let fixed = AnonymousBoxCreator::fixup_tree(container);
+  /// let fixed = AnonymousBoxCreator::fixup_tree(container)?;
   /// // Text is now wrapped in anonymous block
   /// assert_eq!(fixed.children.len(), 2);
   /// assert!(fixed.children[0].is_anonymous());
   /// ```
-  pub fn fixup_tree(box_node: BoxNode) -> BoxNode {
-    Self::fixup_tree_with_parent(box_node, None)
+  pub fn fixup_tree(box_node: BoxNode) -> Result<BoxNode> {
+    let mut deadline_counter = 0usize;
+    Self::fixup_tree_with_deadline(box_node, &mut deadline_counter)
+  }
+
+  /// Fixes up a box tree while periodically checking the active render deadline.
+  pub fn fixup_tree_with_deadline(
+    box_node: BoxNode,
+    deadline_counter: &mut usize,
+  ) -> Result<BoxNode> {
+    Self::fixup_tree_with_parent(box_node, None, deadline_counter)
   }
 
   fn fixup_tree_with_parent(
     mut box_node: BoxNode,
     parent_style: Option<&ComputedStyle>,
-  ) -> BoxNode {
+    deadline_counter: &mut usize,
+  ) -> Result<BoxNode> {
+    check_active_periodic(
+      deadline_counter,
+      ANON_FIXUP_DEADLINE_STRIDE,
+      RenderStage::Cascade,
+    )?;
     // First, recursively fix children (bottom-up traversal)
     box_node.children = box_node
       .children
       .into_iter()
-      .map(|child| Self::fixup_tree_with_parent(child, Some(&box_node.style)))
-      .collect();
+      .map(|child| Self::fixup_tree_with_parent(child, Some(&box_node.style), deadline_counter))
+      .collect::<Result<Vec<_>>>()?;
 
     // Then fix this node's children based on its type
     box_node.children = Self::fixup_children(
@@ -126,7 +145,7 @@ impl AnonymousBoxCreator {
       parent_style.unwrap_or(&box_node.style),
     );
 
-    box_node
+    Ok(box_node)
   }
 
   /// Fixes up children based on parent box type
@@ -671,11 +690,15 @@ mod tests {
     Arc::new(ComputedStyle::default())
   }
 
+  fn fixup_tree(node: BoxNode) -> BoxNode {
+    super::AnonymousBoxCreator::fixup_tree(node).expect("anonymous fixup")
+  }
+
   #[test]
   fn test_empty_container_no_crash() {
     let empty_block = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]);
 
-    let fixed = AnonymousBoxCreator::fixup_tree(empty_block);
+    let fixed = fixup_tree(empty_block);
     assert_eq!(fixed.children.len(), 0);
   }
 
@@ -690,7 +713,7 @@ mod tests {
       vec![child1, child2],
     );
 
-    let fixed = AnonymousBoxCreator::fixup_tree(container);
+    let fixed = fixup_tree(container);
 
     // Should still have 2 children, no wrapping
     assert_eq!(fixed.children.len(), 2);
@@ -704,7 +727,7 @@ mod tests {
 
     let container = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![text]);
 
-    let fixed = AnonymousBoxCreator::fixup_tree(container);
+    let fixed = fixup_tree(container);
 
     // Text should be wrapped in anonymous inline
     assert_eq!(fixed.children.len(), 1);
@@ -724,7 +747,7 @@ mod tests {
       vec![text1, block, text2],
     );
 
-    let fixed = AnonymousBoxCreator::fixup_tree(container);
+    let fixed = fixup_tree(container);
 
     // Should have 3 children: anon block, block, anon block
     assert_eq!(fixed.children.len(), 3);
@@ -757,7 +780,7 @@ mod tests {
       vec![inline1, inline2, block, inline3],
     );
 
-    let fixed = AnonymousBoxCreator::fixup_tree(container);
+    let fixed = fixup_tree(container);
 
     // Should have 3 children: anon[inline1, inline2], block, anon[inline3]
     assert_eq!(fixed.children.len(), 3);
@@ -794,7 +817,7 @@ mod tests {
       vec![outer_text, inner_container],
     );
 
-    let fixed = AnonymousBoxCreator::fixup_tree(outer_container);
+    let fixed = fixup_tree(outer_container);
 
     // Outer level should have 2 children (anon block, block)
     assert_eq!(fixed.children.len(), 2);
@@ -819,7 +842,7 @@ mod tests {
       vec![inline, text],
     );
 
-    let fixed = AnonymousBoxCreator::fixup_tree(container);
+    let fixed = fixup_tree(container);
 
     // All inline content - text should be wrapped in anonymous inline
     assert_eq!(fixed.children.len(), 2);
@@ -839,7 +862,7 @@ mod tests {
 
     let inline = BoxNode::new_inline(default_style(), vec![text]);
 
-    let fixed = AnonymousBoxCreator::fixup_tree(inline);
+    let fixed = fixup_tree(inline);
 
     // Text inside inline should be wrapped in anonymous inline
     assert_eq!(fixed.children.len(), 1);
@@ -873,7 +896,7 @@ mod tests {
       vec![text1, block, text2],
     );
 
-    let fixed = AnonymousBoxCreator::fixup_tree(container);
+    let fixed = fixup_tree(container);
 
     // Should have 2 anonymous blocks
     assert_eq!(AnonymousBoxCreator::count_anonymous_boxes(&fixed), 2);
@@ -891,7 +914,7 @@ mod tests {
       vec![text1, block, text2],
     );
 
-    let fixed = AnonymousBoxCreator::fixup_tree(container);
+    let fixed = fixup_tree(container);
 
     assert_eq!(fixed.children.len(), 3);
     assert!(fixed.children[0].is_anonymous());
@@ -915,7 +938,7 @@ mod tests {
 
     let level1 = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![level2]);
 
-    let fixed = AnonymousBoxCreator::fixup_tree(level1);
+    let fixed = fixup_tree(level1);
 
     // Navigate to level 3 and verify it was fixed
     let level3_fixed = &fixed.children[0].children[0];

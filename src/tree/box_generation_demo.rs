@@ -359,6 +359,7 @@ impl BoxGenerator {
 
     let final_root = if self.config.insert_anonymous_boxes {
       AnonymousBoxCreator::fixup_tree(root_box)
+        .map_err(|err| BoxGenerationError::InvalidStructure(err.to_string()))?
     } else {
       root_box
     };
@@ -385,7 +386,8 @@ impl BoxGenerator {
     counters.leave_scope();
 
     let root_box = root_result?;
-    let fixed_root = AnonymousBoxCreator::fixup_tree(root_box);
+    let fixed_root = AnonymousBoxCreator::fixup_tree(root_box)
+      .map_err(|err| BoxGenerationError::InvalidStructure(err.to_string()))?;
 
     Ok(BoxTree::new(fixed_root))
   }

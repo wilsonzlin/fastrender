@@ -12,7 +12,7 @@ fn serialized_inline_svg(html: &str, width: f32, height: f32) -> Option<SvgConte
   let stylesheet = extract_css(&dom).ok()?;
   let media = MediaContext::screen(width, height);
   let styled = apply_styles_with_media(&dom, &stylesheet, &media);
-  let box_tree = generate_box_tree(&styled);
+  let box_tree = generate_box_tree(&styled).ok()?;
 
   fn find_svg(node: &BoxNode) -> Option<SvgContent> {
     if let BoxType::Replaced(repl) = &node.box_type {

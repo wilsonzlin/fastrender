@@ -12,7 +12,9 @@ use crate::dom::DomNode;
 use crate::dom::DomNodeType;
 use crate::dom::ElementRef;
 use crate::dom::SVG_NAMESPACE;
+use crate::error::{RenderStage, Result};
 use crate::geometry::Size;
+use crate::render_control::check_active_periodic;
 use crate::style::color::Rgba;
 use crate::style::computed::Visibility;
 use crate::style::content::ContentContext;
@@ -298,15 +300,21 @@ impl BoxGenerationOptions {
   }
 }
 
+const BOX_GEN_DEADLINE_STRIDE: usize = 256;
+
 fn clone_starting_style(style: &Option<Box<ComputedStyle>>) -> Option<Arc<ComputedStyle>> {
   style.as_ref().map(|s| Arc::new((**s).clone()))
 }
 
-fn build_box_tree_root(styled: &StyledNode, options: &BoxGenerationOptions) -> BoxNode {
-  let document_css = collect_document_css(styled);
-  let picture_sources = collect_picture_source_map(styled);
+fn build_box_tree_root(
+  styled: &StyledNode,
+  options: &BoxGenerationOptions,
+  deadline_counter: &mut usize,
+) -> Result<BoxNode> {
+  let document_css = collect_document_css(styled, deadline_counter)?;
+  let picture_sources = collect_picture_source_map(styled, deadline_counter)?;
   let mut styled_lookup: HashMap<usize, &StyledNode> = HashMap::new();
-  build_styled_lookup(styled, &mut styled_lookup);
+  build_styled_lookup(styled, &mut styled_lookup, deadline_counter)?;
   let mut counters = CounterManager::new_with_styles(styled.styles.counter_styles.clone());
   counters.enter_scope();
   let mut roots = generate_boxes_for_styled(
@@ -317,16 +325,20 @@ fn build_box_tree_root(styled: &StyledNode, options: &BoxGenerationOptions) -> B
     &document_css,
     &picture_sources,
     options,
-  );
+    deadline_counter,
+  )?;
   counters.leave_scope();
   match roots.len() {
-    0 => BoxNode::new_block(
+    0 => Ok(BoxNode::new_block(
       Arc::new(ComputedStyle::default()),
       FormattingContextType::Block,
       Vec::new(),
-    ),
-    1 => roots.remove(0),
-    _ => BoxNode::new_anonymous_block(Arc::new(ComputedStyle::default()), roots),
+    )),
+    1 => Ok(roots.remove(0)),
+    _ => Ok(BoxNode::new_anonymous_block(
+      Arc::new(ComputedStyle::default()),
+      roots,
+    )),
   }
 }
 
@@ -342,7 +354,7 @@ fn build_box_tree_root(styled: &StyledNode, options: &BoxGenerationOptions) -> B
 /// # Returns
 ///
 /// A `BoxTree` containing the generated box structure
-pub fn generate_box_tree(styled: &StyledNode) -> BoxTree {
+pub fn generate_box_tree(styled: &StyledNode) -> Result<BoxTree> {
   generate_box_tree_with_options(styled, &BoxGenerationOptions::default())
 }
 
@@ -350,9 +362,10 @@ pub fn generate_box_tree(styled: &StyledNode) -> BoxTree {
 pub fn generate_box_tree_with_options(
   styled: &StyledNode,
   options: &BoxGenerationOptions,
-) -> BoxTree {
-  let root = build_box_tree_root(styled, options);
-  BoxTree::new(root)
+) -> Result<BoxTree> {
+  let mut deadline_counter = 0usize;
+  let root = build_box_tree_root(styled, options, &mut deadline_counter)?;
+  Ok(BoxTree::new(root))
 }
 
 /// Generates a BoxTree from a StyledNode tree and applies CSS-mandated anonymous box fixup.
@@ -360,7 +373,7 @@ pub fn generate_box_tree_with_options(
 /// This wraps inline-level runs in anonymous blocks and text in anonymous inline boxes so the
 /// resulting tree satisfies the CSS 2.1 box-generation invariants (required for flex/grid/blocks
 /// that contain raw text to be layed out correctly).
-pub fn generate_box_tree_with_anonymous_fixup(styled: &StyledNode) -> BoxTree {
+pub fn generate_box_tree_with_anonymous_fixup(styled: &StyledNode) -> Result<BoxTree> {
   generate_box_tree_with_anonymous_fixup_with_options(styled, &BoxGenerationOptions::default())
 }
 
@@ -369,13 +382,13 @@ pub fn generate_box_tree_with_anonymous_fixup(styled: &StyledNode) -> BoxTree {
 pub fn generate_box_tree_with_anonymous_fixup_with_options(
   styled: &StyledNode,
   options: &BoxGenerationOptions,
-) -> BoxTree {
-  let root = build_box_tree_root(styled, options);
-  let fixed_root = AnonymousBoxCreator::fixup_tree(root);
-  let fixed_root = TableStructureFixer::fixup_tree_internals(fixed_root).unwrap_or_else(|err| {
-    panic!("table structure fixup failed: {err}");
-  });
-  BoxTree::new(fixed_root)
+) -> Result<BoxTree> {
+  let mut deadline_counter = 0usize;
+  let root = build_box_tree_root(styled, options, &mut deadline_counter)?;
+  let fixed_root = AnonymousBoxCreator::fixup_tree_with_deadline(root, &mut deadline_counter)?;
+  let fixed_root =
+    TableStructureFixer::fixup_tree_internals_with_deadline(fixed_root, &mut deadline_counter)?;
+  Ok(BoxTree::new(fixed_root))
 }
 
 fn attach_styled_id(mut node: BoxNode, styled: &StyledNode) -> BoxNode {
@@ -395,14 +408,19 @@ fn escape_text(value: &str) -> String {
   value.replace('&', "&amp;").replace('<', "&lt;")
 }
 
-fn collect_document_css(styled: &StyledNode) -> String {
-  fn walk(node: &StyledNode, out: &mut String) {
+fn collect_document_css(styled: &StyledNode, deadline_counter: &mut usize) -> Result<String> {
+  fn walk(node: &StyledNode, out: &mut String, deadline_counter: &mut usize) -> Result<()> {
+    check_active_periodic(
+      deadline_counter,
+      BOX_GEN_DEADLINE_STRIDE,
+      RenderStage::Cascade,
+    )?;
     if let Some(tag) = node.node.tag_name() {
       if tag.eq_ignore_ascii_case("template")
         && node.node.get_attribute_ref("shadowroot").is_none()
         && node.node.get_attribute_ref("shadowrootmode").is_none()
       {
-        return;
+        return Ok(());
       }
       if tag.eq_ignore_ascii_case("style") {
         for child in &node.children {
@@ -415,20 +433,31 @@ fn collect_document_css(styled: &StyledNode) -> String {
     }
 
     for child in &node.children {
-      walk(child, out);
+      walk(child, out, deadline_counter)?;
     }
+    Ok(())
   }
 
   let mut css = String::new();
-  walk(styled, &mut css);
-  css
+  walk(styled, &mut css, deadline_counter)?;
+  Ok(css)
 }
 
-fn build_styled_lookup<'a>(node: &'a StyledNode, out: &mut HashMap<usize, &'a StyledNode>) {
+fn build_styled_lookup<'a>(
+  node: &'a StyledNode,
+  out: &mut HashMap<usize, &'a StyledNode>,
+  deadline_counter: &mut usize,
+) -> Result<()> {
+  check_active_periodic(
+    deadline_counter,
+    BOX_GEN_DEADLINE_STRIDE,
+    RenderStage::Cascade,
+  )?;
   out.insert(node.node_id, node);
   for child in &node.children {
-    build_styled_lookup(child, out);
+    build_styled_lookup(child, out, deadline_counter)?;
   }
+  Ok(())
 }
 
 fn composed_children<'a>(
@@ -527,20 +556,33 @@ fn picture_sources_for(styled: &StyledNode) -> Option<(usize, Vec<PictureSource>
   fallback_img.map(|img| (img.node_id, sources))
 }
 
-fn collect_picture_source_map(styled: &StyledNode) -> HashMap<usize, Vec<PictureSource>> {
-  fn walk(node: &StyledNode, out: &mut HashMap<usize, Vec<PictureSource>>) {
+fn collect_picture_source_map(
+  styled: &StyledNode,
+  deadline_counter: &mut usize,
+) -> Result<HashMap<usize, Vec<PictureSource>>> {
+  fn walk(
+    node: &StyledNode,
+    out: &mut HashMap<usize, Vec<PictureSource>>,
+    deadline_counter: &mut usize,
+  ) -> Result<()> {
+    check_active_periodic(
+      deadline_counter,
+      BOX_GEN_DEADLINE_STRIDE,
+      RenderStage::Cascade,
+    )?;
     if let Some((img_id, sources)) = picture_sources_for(node) {
       out.insert(img_id, sources);
     }
 
     for child in &node.children {
-      walk(child, out);
+      walk(child, out, deadline_counter)?;
     }
+    Ok(())
   }
 
   let mut map = HashMap::new();
-  walk(styled, &mut map);
-  map
+  walk(styled, &mut map, deadline_counter)?;
+  Ok(map)
 }
 
 fn parse_svg_number(value: &str) -> Option<f32> {
@@ -1203,7 +1245,13 @@ fn generate_boxes_for_styled(
   document_css: &str,
   picture_sources: &HashMap<usize, Vec<PictureSource>>,
   options: &BoxGenerationOptions,
-) -> Vec<BoxNode> {
+  deadline_counter: &mut usize,
+) -> Result<Vec<BoxNode>> {
+  check_active_periodic(
+    deadline_counter,
+    BOX_GEN_DEADLINE_STRIDE,
+    RenderStage::Cascade,
+  )?;
   if let Some(text) = styled.node.text_content() {
     if !text.is_empty() {
       let style = Arc::new(styled.styles.clone());
@@ -1220,7 +1268,7 @@ fn generate_boxes_for_styled(
       }
       let mut box_node = BoxNode::new_text(style, text.to_string());
       box_node.starting_style = clone_starting_style(&styled.starting_styles.base);
-      return vec![attach_styled_id(box_node, styled)];
+      return Ok(vec![attach_styled_id(box_node, styled)]);
     }
   }
 
@@ -1238,7 +1286,7 @@ fn generate_boxes_for_styled(
           || class_attr.contains("should-hold-space"))
       {
         counters.leave_scope();
-        return Vec::new();
+        return Ok(Vec::new());
       }
     }
   }
@@ -1246,7 +1294,7 @@ fn generate_boxes_for_styled(
   // display:none suppresses box generation entirely.
   if styled.styles.display == Display::None {
     counters.leave_scope();
-    return Vec::new();
+    return Ok(Vec::new());
   }
 
   if let Some(tag) = styled.node.tag_name() {
@@ -1265,7 +1313,7 @@ fn generate_boxes_for_styled(
       );
       let mut box_node = box_node;
       box_node.starting_style = clone_starting_style(&styled.starting_styles.base);
-      return vec![attach_debug_info(box_node, styled)];
+      return Ok(vec![attach_debug_info(box_node, styled)]);
     }
   }
 
@@ -1278,7 +1326,7 @@ fn generate_boxes_for_styled(
       None,
       None,
     );
-    return vec![attach_debug_info(box_node, styled)];
+    return Ok(vec![attach_debug_info(box_node, styled)]);
   }
 
   // Replaced elements short-circuit to a single replaced box unless they're display: contents.
@@ -1289,7 +1337,7 @@ fn generate_boxes_for_styled(
       "source" | "track" | "option" | "optgroup"
     ) {
       counters.leave_scope();
-      return Vec::new();
+      return Ok(Vec::new());
     }
 
     if is_replaced_element(tag) && styled.styles.display != Display::Contents {
@@ -1315,7 +1363,7 @@ fn generate_boxes_for_styled(
         );
         let mut box_node = box_node;
         box_node.starting_style = clone_starting_style(&styled.starting_styles.base);
-        return vec![attach_debug_info(box_node, styled)];
+        return Ok(vec![attach_debug_info(box_node, styled)]);
       }
     }
   }
@@ -1354,7 +1402,8 @@ fn generate_boxes_for_styled(
                       document_css,
                       picture_sources,
                       options,
-                    ));
+                      deadline_counter,
+                    )?);
                   }
                   idx += 1;
                 }
@@ -1374,7 +1423,8 @@ fn generate_boxes_for_styled(
       document_css,
       picture_sources,
       options,
-    ));
+      deadline_counter,
+    )?);
     idx += 1;
   }
 
@@ -1407,7 +1457,7 @@ fn generate_boxes_for_styled(
   // display: contents contributes its children directly.
   if styled.styles.display == Display::Contents {
     counters.leave_scope();
-    return children;
+    return Ok(children);
   }
 
   let style = Arc::new(styled.styles.clone());
@@ -1460,7 +1510,7 @@ fn generate_boxes_for_styled(
     .map(|style| Arc::new((**style).clone()));
 
   counters.leave_scope();
-  vec![attach_debug_info(box_node, styled)]
+  Ok(vec![attach_debug_info(box_node, styled)])
 }
 
 fn attach_debug_info(mut box_node: BoxNode, styled: &StyledNode) -> BoxNode {
@@ -2456,6 +2506,8 @@ fn create_replaced_box_from_styled(
 
 #[cfg(test)]
 mod tests {
+  use super::generate_box_tree as generate_box_tree_result;
+  use super::generate_box_tree_with_anonymous_fixup as generate_box_tree_with_anonymous_fixup_result;
   use super::*;
   use crate::dom;
   use crate::dom::HTML_NAMESPACE;
@@ -2496,6 +2548,14 @@ mod tests {
       slotted_node_ids: Vec::new(),
       children: vec![],
     }
+  }
+
+  fn generate_box_tree(styled: &StyledNode) -> BoxTree {
+    generate_box_tree_result(styled).expect("box generation failed")
+  }
+
+  fn generate_box_tree_with_anonymous_fixup(styled: &StyledNode) -> BoxTree {
+    generate_box_tree_with_anonymous_fixup_result(styled).expect("anonymous box generation failed")
   }
 
   #[test]

@@ -51,7 +51,7 @@ fn first_line_and_first_letter_styles_flow_through_pipeline() {
   let dom = dom::parse_html(html).expect("parse html");
   let stylesheet = parse_stylesheet(css).expect("parse stylesheet");
   let styled = apply_styles(&dom, &stylesheet);
-  let box_tree = generate_box_tree(&styled);
+  let box_tree = generate_box_tree(&styled).expect("box tree");
 
   let paragraph = find_first(&box_tree.root, "p").expect("paragraph box");
 

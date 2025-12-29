@@ -25,6 +25,11 @@ fn style_with_display(display: Display) -> Arc<ComputedStyle> {
   Arc::new(style)
 }
 
+fn fixup_tree(node: BoxNode) -> BoxNode {
+  fastrender::tree::anonymous::AnonymousBoxCreator::fixup_tree(node)
+    .expect("anonymous box fixup")
+}
+
 fn subtree_contains_text(node: &BoxNode, needle: &str) -> bool {
   if let Some(text) = node.text() {
     if text == needle {
@@ -45,7 +50,7 @@ fn subtree_contains_text(node: &BoxNode, needle: &str) -> bool {
 fn test_empty_container_no_crash() {
   let empty_block = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]);
 
-  let fixed = AnonymousBoxCreator::fixup_tree(empty_block);
+  let fixed = fixup_tree(empty_block);
   assert_eq!(fixed.children.len(), 0);
   assert!(!fixed.is_anonymous());
 }
@@ -56,7 +61,7 @@ fn test_single_block_child_no_change() {
 
   let container = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![child]);
 
-  let fixed = AnonymousBoxCreator::fixup_tree(container);
+  let fixed = fixup_tree(container);
 
   assert_eq!(fixed.children.len(), 1);
   assert!(!fixed.children[0].is_anonymous());
@@ -75,7 +80,7 @@ fn test_all_block_children_no_change() {
     vec![child1, child2, child3],
   );
 
-  let fixed = AnonymousBoxCreator::fixup_tree(container);
+  let fixed = fixup_tree(container);
 
   assert_eq!(fixed.children.len(), 3);
   for child in &fixed.children {
@@ -94,7 +99,7 @@ fn test_single_text_in_block_wrapped() {
 
   let container = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![text]);
 
-  let fixed = AnonymousBoxCreator::fixup_tree(container);
+  let fixed = fixup_tree(container);
 
   // Text should be wrapped in anonymous inline
   assert_eq!(fixed.children.len(), 1);
@@ -117,7 +122,7 @@ fn test_multiple_text_nodes_each_wrapped() {
     vec![text1, text2],
   );
 
-  let fixed = AnonymousBoxCreator::fixup_tree(container);
+  let fixed = fixup_tree(container);
 
   // Each text should be wrapped in its own anonymous inline
   assert_eq!(fixed.children.len(), 2);
@@ -133,7 +138,7 @@ fn test_text_in_inline_container_wrapped() {
 
   let inline = BoxNode::new_inline(default_style(), vec![text]);
 
-  let fixed = AnonymousBoxCreator::fixup_tree(inline);
+  let fixed = fixup_tree(inline);
 
   // Text inside inline should be wrapped in anonymous inline
   assert_eq!(fixed.children.len(), 1);
@@ -156,7 +161,7 @@ fn test_text_before_block_wrapped_in_anonymous_block() {
     vec![text, block],
   );
 
-  let fixed = AnonymousBoxCreator::fixup_tree(container);
+  let fixed = fixup_tree(container);
 
   // Should have 2 children: anonymous block (wrapping text), original block
   assert_eq!(fixed.children.len(), 2);
@@ -181,7 +186,7 @@ fn test_text_after_block_wrapped_in_anonymous_block() {
     vec![block, text],
   );
 
-  let fixed = AnonymousBoxCreator::fixup_tree(container);
+  let fixed = fixup_tree(container);
 
   // Should have 2 children: original block, anonymous block (wrapping text)
   assert_eq!(fixed.children.len(), 2);
@@ -207,7 +212,7 @@ fn test_text_between_blocks_wrapped() {
     vec![block1, text, block2],
   );
 
-  let fixed = AnonymousBoxCreator::fixup_tree(container);
+  let fixed = fixup_tree(container);
 
   // Should have 3 children: block, anonymous block, block
   assert_eq!(fixed.children.len(), 3);
@@ -230,7 +235,7 @@ fn test_mixed_content_text_block_text() {
     vec![text1, block, text2],
   );
 
-  let fixed = AnonymousBoxCreator::fixup_tree(container);
+  let fixed = fixup_tree(container);
 
   // Should have 3 children: anon block, block, anon block
   assert_eq!(fixed.children.len(), 3);
@@ -268,7 +273,7 @@ fn test_consecutive_inlines_grouped_in_single_anon_block() {
     vec![inline1, inline2, block, inline3],
   );
 
-  let fixed = AnonymousBoxCreator::fixup_tree(container);
+  let fixed = fixup_tree(container);
 
   // Should have 3 children: anon[inline1, inline2], block, anon[inline3]
   assert_eq!(fixed.children.len(), 3);
@@ -297,7 +302,7 @@ fn test_text_and_inline_grouped_together() {
     vec![text, inline, block],
   );
 
-  let fixed = AnonymousBoxCreator::fixup_tree(container);
+  let fixed = fixup_tree(container);
 
   // Text and inline should be grouped in same anonymous block
   assert_eq!(fixed.children.len(), 2);
@@ -319,7 +324,7 @@ fn test_alternating_block_inline_pattern() {
     vec![block1, inline1, block2, inline2, block3],
   );
 
-  let fixed = AnonymousBoxCreator::fixup_tree(container);
+  let fixed = fixup_tree(container);
 
   // Pattern: block, anon, block, anon, block
   assert_eq!(fixed.children.len(), 5);
@@ -355,7 +360,7 @@ fn test_nested_fixup_two_levels() {
     vec![outer_text, inner_container],
   );
 
-  let fixed = AnonymousBoxCreator::fixup_tree(outer_container);
+  let fixed = fixup_tree(outer_container);
 
   // Outer level: anon block, block (inner container)
   assert_eq!(fixed.children.len(), 2);
@@ -385,7 +390,7 @@ fn test_deeply_nested_structure() {
 
   let level1 = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![level2]);
 
-  let fixed = AnonymousBoxCreator::fixup_tree(level1);
+  let fixed = fixup_tree(level1);
 
   // Navigate to level 3 and verify it was fixed
   let level3_fixed = &fixed.children[0].children[0];
@@ -402,7 +407,7 @@ fn test_nested_inline_in_block() {
 
   let container = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![inline]);
 
-  let fixed = AnonymousBoxCreator::fixup_tree(container);
+  let fixed = fixup_tree(container);
 
   // Inline is wrapped in anonymous inline (since it's the only inline child)
   // Actually, the inline itself shouldn't change but text inside should be wrapped
@@ -427,7 +432,7 @@ fn test_inline_with_block_descendant_is_split_into_block_flow() {
   let inline = BoxNode::new_inline(style.clone(), vec![text_before, block.clone(), text_after]);
 
   let container = BoxNode::new_block(style.clone(), FormattingContextType::Block, vec![inline]);
-  let fixed = AnonymousBoxCreator::fixup_tree(container);
+  let fixed = fixup_tree(container);
 
   assert_eq!(fixed.children.len(), 3);
   assert!(fixed.children[0].is_anonymous());
@@ -459,7 +464,7 @@ fn test_nested_inline_with_block_descendant_splits_at_outer() {
     FormattingContextType::Block,
     vec![outer_inline],
   );
-  let fixed = AnonymousBoxCreator::fixup_tree(container);
+  let fixed = fixup_tree(container);
 
   assert_eq!(fixed.children.len(), 3);
   assert!(fixed.children[0].is_anonymous());
@@ -485,7 +490,7 @@ fn test_inline_block_with_block_children_is_not_split() {
     FormattingContextType::Block,
     vec![inline_block.clone()],
   );
-  let fixed = AnonymousBoxCreator::fixup_tree(container);
+  let fixed = fixup_tree(container);
 
   assert_eq!(fixed.children.len(), 1);
   assert!(fixed.children[0].is_inline_level());
@@ -507,7 +512,7 @@ fn test_all_inline_children_text_gets_wrapped() {
     vec![inline, text],
   );
 
-  let fixed = AnonymousBoxCreator::fixup_tree(container);
+  let fixed = fixup_tree(container);
 
   // All inline content - text should be wrapped in anonymous inline
   assert_eq!(fixed.children.len(), 2);
@@ -533,7 +538,7 @@ fn test_multiple_inlines_no_block_mixing() {
     vec![inline1, inline2, inline3],
   );
 
-  let fixed = AnonymousBoxCreator::fixup_tree(container);
+  let fixed = fixup_tree(container);
 
   // All inline content - no anonymous blocks needed
   assert_eq!(fixed.children.len(), 3);
@@ -600,7 +605,7 @@ fn test_count_anonymous_boxes() {
     vec![text1, block, text2],
   );
 
-  let fixed = AnonymousBoxCreator::fixup_tree(container);
+  let fixed = fixup_tree(container);
 
   // Should have 2 anonymous blocks (one for each text)
   let count = AnonymousBoxCreator::count_anonymous_boxes(&fixed);
@@ -617,7 +622,7 @@ fn test_single_inline_child_not_wrapped_in_anon_block() {
 
   let container = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![inline]);
 
-  let fixed = AnonymousBoxCreator::fixup_tree(container);
+  let fixed = fixup_tree(container);
 
   // Single inline child - no block wrapping needed (no mixed content)
   assert_eq!(fixed.children.len(), 1);
@@ -630,7 +635,7 @@ fn test_empty_text_node() {
 
   let container = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![text]);
 
-  let fixed = AnonymousBoxCreator::fixup_tree(container);
+  let fixed = fixup_tree(container);
 
   // Empty text is still wrapped
   assert_eq!(fixed.children.len(), 1);
@@ -643,7 +648,7 @@ fn test_whitespace_only_text_node() {
 
   let container = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![text]);
 
-  let fixed = AnonymousBoxCreator::fixup_tree(container);
+  let fixed = fixup_tree(container);
 
   // Whitespace text is still wrapped (collapsing is a later phase)
   assert_eq!(fixed.children.len(), 1);
@@ -661,7 +666,7 @@ fn test_anonymous_type_is_block() {
     vec![text, block],
   );
 
-  let fixed = AnonymousBoxCreator::fixup_tree(container);
+  let fixed = fixup_tree(container);
 
   // Verify the anonymous box type is Block
   match &fixed.children[0].box_type {
@@ -679,7 +684,7 @@ fn test_anonymous_inline_type() {
   // All inline content in block container
   let container = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![text]);
 
-  let fixed = AnonymousBoxCreator::fixup_tree(container);
+  let fixed = fixup_tree(container);
 
   // Text should be wrapped in anonymous inline
   match &fixed.children[0].box_type {

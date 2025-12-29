@@ -427,7 +427,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   }
 
   let find_box_text = env::var("FASTR_FIND_BOX_TEXT").ok();
-  let box_tree = generate_box_tree_with_anonymous_fixup(&styled);
+  let box_tree = generate_box_tree_with_anonymous_fixup(&styled)?;
   let mut text_boxes = 0;
   let mut path: Vec<String> = Vec::new();
   walk_boxes(&box_tree.root, &mut path, &mut |node, ancestors| {
