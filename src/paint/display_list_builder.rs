@@ -115,6 +115,7 @@ use crate::style::types::ImageRendering;
 use crate::style::types::Isolation;
 use crate::style::types::MixBlendMode;
 use crate::style::types::ObjectFit;
+use crate::style::types::OrientationTransform;
 use crate::style::types::ResolvedTextDecoration;
 use crate::style::types::TextDecorationLine;
 use crate::style::types::TextDecorationSkipInk;
@@ -142,9 +143,10 @@ use crate::tree::box_tree::TextControlKind;
 use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
 use crate::tree::fragment_tree::FragmentTree;
+use lru::LruCache;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// Builder that converts a fragment tree to a display list
 ///
@@ -154,6 +156,7 @@ pub struct DisplayListBuilder {
   /// The display list being built
   list: DisplayList,
   image_cache: Option<ImageCache>,
+  decoded_image_cache: Arc<Mutex<LruCache<ImageKey, Arc<ImageData>>>>,
   /// Serialized SVG filter definitions collected from the document DOM.
   svg_filter_defs: Option<Arc<HashMap<String, String>>>,
   viewport: Option<(f32, f32)>,
@@ -170,6 +173,15 @@ struct BackgroundRects {
   border: Rect,
   padding: Rect,
   content: Rect,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ImageKey {
+  url: String,
+  orientation: OrientationTransform,
+  decorative: bool,
+  used_resolution_bits: u32,
+  device_pixel_ratio_bits: u32,
 }
 
 fn parallel_config_from_env() -> (bool, usize) {
@@ -221,6 +233,7 @@ impl DisplayListBuilder {
     Self {
       list: DisplayList::new(),
       image_cache: Some(ImageCache::new()),
+      decoded_image_cache: Arc::new(Mutex::new(LruCache::unbounded())),
       svg_filter_defs: None,
       viewport: None,
       font_ctx: FontContext::new(),
@@ -238,6 +251,7 @@ impl DisplayListBuilder {
     Self {
       list: DisplayList::new(),
       image_cache: Some(image_cache),
+      decoded_image_cache: Arc::new(Mutex::new(LruCache::unbounded())),
       svg_filter_defs: None,
       viewport: None,
       font_ctx: FontContext::new(),
@@ -1316,7 +1330,7 @@ impl DisplayListBuilder {
           let Some(image) = self.decode_image(src, Some(style), true) else {
             continue;
           };
-          ResolvedMaskImage::Raster(image)
+          ResolvedMaskImage::Raster((*image).clone())
         }
         BackgroundImage::None => continue,
       };
@@ -2246,6 +2260,7 @@ impl DisplayListBuilder {
     DisplayListBuilder {
       list: DisplayList::new(),
       image_cache: self.image_cache.clone(),
+      decoded_image_cache: Arc::clone(&self.decoded_image_cache),
       svg_filter_defs: self.svg_filter_defs.clone(),
       viewport: self.viewport,
       font_ctx: self.font_ctx.clone(),
@@ -2565,7 +2580,7 @@ impl DisplayListBuilder {
           let dest_rect = Rect::from_xywh(rect.x() + dest_x, rect.y() + dest_y, dest_w, dest_h);
           self.list.push(DisplayItem::Image(ImageItem {
             dest_rect,
-            image: Arc::new(image),
+            image,
             filter_quality: Self::image_filter_quality(fragment.style.as_deref()),
             src_rect: None,
           }));
@@ -3185,7 +3200,6 @@ impl DisplayListBuilder {
               let max_x = clip_rect.max_x();
               let max_y = clip_rect.max_y();
               let quality = Self::image_filter_quality(Some(style));
-              let image = Arc::new(image);
 
               for ty in positions_y.iter().copied() {
                 for tx in positions_x.iter().copied() {
@@ -3362,7 +3376,7 @@ impl DisplayListBuilder {
         let source = match bg.as_ref() {
           BackgroundImage::Url(src) => self
             .decode_image(src, Some(style), true)
-            .map(BorderImageSourceItem::Raster),
+            .map(|image| BorderImageSourceItem::Raster((*image).clone())),
           BackgroundImage::LinearGradient { .. }
           | BackgroundImage::RepeatingLinearGradient { .. }
           | BackgroundImage::RadialGradient { .. }
@@ -4694,17 +4708,38 @@ impl DisplayListBuilder {
     src: &str,
     style: Option<&ComputedStyle>,
     decorative: bool,
-  ) -> Option<ImageData> {
-    let cache = self.image_cache.as_ref()?;
-    let image = match cache.load(src) {
+  ) -> Option<Arc<ImageData>> {
+    let image_cache = self.image_cache.as_ref()?;
+    let resolved_src = image_cache.resolve_url(src);
+    let image = match image_cache.load(&resolved_src) {
       Ok(img) => img,
-      Err(_) if src.trim_start().starts_with('<') => cache.render_svg(src).ok()?,
+      Err(_) if src.trim_start().starts_with('<') => image_cache.render_svg(src).ok()?,
       Err(_) => return None,
     };
     let image_resolution = style.map(|s| s.image_resolution).unwrap_or_default();
     let orientation = style
       .map(|s| s.image_orientation.resolve(image.orientation, decorative))
       .unwrap_or_else(|| ImageOrientation::default().resolve(image.orientation, decorative));
+    let used_resolution =
+      image_resolution.used_resolution(None, image.resolution, self.device_pixel_ratio);
+    let key = ImageKey {
+      url: resolved_src,
+      orientation,
+      decorative,
+      used_resolution_bits: used_resolution.to_bits(),
+      device_pixel_ratio_bits: self.device_pixel_ratio.to_bits(),
+    };
+
+    {
+      let mut decoded_cache = self
+        .decoded_image_cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+      if let Some(image) = decoded_cache.get(&key).cloned() {
+        return Some(image);
+      }
+    }
+
     let (css_w, css_h) = image.css_dimensions(
       orientation,
       &image_resolution,
@@ -4716,7 +4751,17 @@ impl DisplayListBuilder {
     if w == 0 || h == 0 {
       return None;
     }
-    Some(ImageData::new(w, h, css_w, css_h, rgba.into_raw()))
+    let image_data = Arc::new(ImageData::new(w, h, css_w, css_h, rgba.into_raw()));
+
+    let mut decoded_cache = self
+      .decoded_image_cache
+      .lock()
+      .unwrap_or_else(|e| e.into_inner());
+    if let Some(image) = decoded_cache.get(&key).cloned() {
+      return Some(image);
+    }
+    decoded_cache.put(key, image_data.clone());
+    Some(image_data)
   }
 
   fn image_filter_quality(style: Option<&ComputedStyle>) -> ImageFilterQuality {
@@ -4922,6 +4967,7 @@ mod tests {
   use crate::style::types::BackgroundRepeat;
   use crate::style::types::BasicShape;
   use crate::style::types::ClipPath;
+  use crate::style::types::ImageOrientation;
   use crate::style::types::ImageRendering;
   use crate::style::types::MixBlendMode;
   use crate::style::types::MotionPathCommand;
@@ -6227,6 +6273,40 @@ mod tests {
     let pixels = img.image.pixels.as_ref();
     assert_eq!(pixels.len(), 4);
     assert_eq!(pixels, &[255, 0, 0, 255]);
+  }
+
+  #[test]
+  fn decode_image_cache_reuses_converted_pixels() {
+    let src = data_url_for_color([5, 6, 7, 8]);
+    let mut builder = DisplayListBuilder::new();
+
+    let first = builder
+      .decode_image(&src, None, false)
+      .expect("first decode");
+    let second = builder
+      .decode_image(&src, None, false)
+      .expect("cached decode");
+    assert!(Arc::ptr_eq(&first, &second));
+
+    let mut rotated_style = ComputedStyle::default();
+    rotated_style.image_orientation = ImageOrientation::Angle {
+      quarter_turns: 1,
+      flip: false,
+    };
+    let rotated = builder
+      .decode_image(&src, Some(&rotated_style), false)
+      .expect("rotated decode");
+    assert!(!Arc::ptr_eq(&first, &rotated));
+
+    builder.set_device_pixel_ratio(2.0);
+    let hidpi = builder
+      .decode_image(&src, None, false)
+      .expect("hi-dpi decode");
+    assert!(!Arc::ptr_eq(&first, &hidpi));
+    let hidpi_cached = builder
+      .decode_image(&src, None, false)
+      .expect("cached hi-dpi decode");
+    assert!(Arc::ptr_eq(&hidpi, &hidpi_cached));
   }
 
   #[test]
