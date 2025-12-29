@@ -64,6 +64,60 @@ fn pageset_progress_sync_creates_placeholder_for_each_page() {
 }
 
 #[test]
+fn pageset_progress_sync_marks_missing_cache_as_error() {
+  let tmp = tempfile::tempdir().expect("temp dir");
+  let progress_dir = tmp.path().join("progress");
+  let html_dir = tmp.path().join("html");
+  fs::create_dir_all(&html_dir).unwrap();
+
+  let status = run_sync(&progress_dir, &html_dir, false);
+  assert!(status.success(), "sync should succeed");
+
+  let target = pageset::pageset_entries()
+    .into_iter()
+    .next()
+    .expect("pageset entries exist");
+  let progress_path = progress_dir.join(format!("{}.json", target.stem));
+  let updated: Value =
+    serde_json::from_str(&fs::read_to_string(&progress_path).unwrap()).expect("json value");
+  assert_eq!(
+    updated.get("status"),
+    Some(&Value::String("error".into())),
+    "missing caches should be marked as errors"
+  );
+  assert_eq!(
+    updated.get("notes"),
+    Some(&Value::String("missing cache".into())),
+    "missing caches should be called out in notes"
+  );
+  assert_eq!(
+    updated.get("hotspot"),
+    Some(&Value::String("fetch".into())),
+    "missing caches should be treated as fetch issues"
+  );
+  assert_eq!(
+    updated.get("url"),
+    Some(&Value::String(target.url.to_string())),
+    "sync should use the canonical pageset URL"
+  );
+  assert!(
+    updated.get("total_ms").is_some_and(Value::is_null),
+    "placeholder entries should not claim timings"
+  );
+  assert_eq!(
+    updated.get("stages_ms"),
+    Some(&serde_json::json!({
+      "fetch": 0.0,
+      "css": 0.0,
+      "cascade": 0.0,
+      "layout": 0.0,
+      "paint": 0.0
+    })),
+    "placeholder entries should reset stage timings"
+  );
+}
+
+#[test]
 fn pageset_progress_sync_prunes_stale_files() {
   let tmp = tempfile::tempdir().expect("temp dir");
   let progress_dir = tmp.path().join("progress");
@@ -157,5 +211,25 @@ fn pageset_progress_sync_preserves_manual_fields() {
   assert_eq!(
     updated.get("url"),
     Some(&Value::String(target.url.to_string()))
+  );
+  assert_eq!(
+    updated.get("status"),
+    Some(&Value::String("error".into())),
+    "missing caches should reset status to error even when manual fields are present"
+  );
+  assert!(
+    updated.get("total_ms").is_some_and(Value::is_null),
+    "missing caches should clear stale timings"
+  );
+  assert_eq!(
+    updated.get("stages_ms"),
+    Some(&serde_json::json!({
+      "fetch": 0.0,
+      "css": 0.0,
+      "cascade": 0.0,
+      "layout": 0.0,
+      "paint": 0.0
+    })),
+    "missing caches should clear stale stage timings"
   );
 }
