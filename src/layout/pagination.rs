@@ -405,7 +405,7 @@ pub fn paginate_fragment_tree(
         page_index,
         0,
         FragmentationContext::Page,
-      );
+      )?;
       if let Some(mut content) = clipped {
         strip_fixed_fragments(&mut content);
         normalize_fragment_margins(

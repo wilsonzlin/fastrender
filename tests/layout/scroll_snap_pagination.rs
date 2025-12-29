@@ -38,7 +38,7 @@ fn scroll_snap_targets_include_fragment_offsets() {
     container_style,
   );
 
-  let fragments = fragment_tree(&root, &FragmentationOptions::new(200.0).with_gap(30.0));
+  let fragments = fragment_tree(&root, &FragmentationOptions::new(200.0).with_gap(30.0)).unwrap();
   assert!(
     fragments.len() > 1,
     "pagination should produce multiple fragments"

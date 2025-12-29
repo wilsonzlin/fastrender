@@ -36,7 +36,7 @@ fn paragraph_breaks_on_line_boundaries() {
     vec![paragraph],
   );
 
-  let fragments = fragment_tree(&root, &FragmentationOptions::new(24.0));
+  let fragments = fragment_tree(&root, &FragmentationOptions::new(24.0)).unwrap();
 
   assert_eq!(fragments.len(), 3);
   let per_fragment: Vec<_> = fragments.iter().map(count_lines).collect();
@@ -102,7 +102,7 @@ fn pagination_respects_gap_and_forced_break() {
   );
 
   let options = FragmentationOptions::new(80.0).with_gap(20.0);
-  let fragments = fragment_tree(&root, &options);
+  let fragments = fragment_tree(&root, &options).unwrap();
 
   assert!(
     fragments.len() >= 3,
@@ -126,7 +126,7 @@ fn pagination_without_candidates_uses_fragmentainer_size() {
   let block = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 40.0, 150.0), vec![]);
   let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 150.0), vec![block]);
 
-  let fragments = fragment_tree(&root, &FragmentationOptions::new(60.0));
+  let fragments = fragment_tree(&root, &FragmentationOptions::new(60.0)).unwrap();
 
   assert_eq!(fragments.len(), 3);
   assert!((fragments[1].bounds.y() - 60.0).abs() < 0.1);
@@ -151,7 +151,8 @@ fn vertical_writing_fragment_tree_columns_use_inline_axis() {
   let fragments = fragment_tree(
     &root,
     &FragmentationOptions::new(60.0).with_columns(2, 10.0),
-  );
+  )
+  .unwrap();
 
   assert_eq!(fragments.len(), 3);
   assert_eq!(fragments[0].bounds.origin, Point::ZERO);
@@ -196,7 +197,7 @@ fn vertical_lr_fragmentation_clips_on_x_and_sets_slice_info() {
     style,
   );
 
-  let fragments = fragment_tree(&root, &FragmentationOptions::new(50.0));
+  let fragments = fragment_tree(&root, &FragmentationOptions::new(50.0)).unwrap();
 
   assert_eq!(fragments.len(), 2);
 
@@ -243,7 +244,7 @@ fn vertical_rl_fragmentation_block_negative_slice_info() {
     style,
   );
 
-  let fragments = fragment_tree(&root, &FragmentationOptions::new(50.0));
+  let fragments = fragment_tree(&root, &FragmentationOptions::new(50.0)).unwrap();
 
   assert_eq!(fragments.len(), 2);
 
@@ -282,7 +283,7 @@ fn vertical_writing_fragment_stacking_uses_x_for_gap() {
   let root =
     FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 80.0, 20.0), vec![child], style);
 
-  let fragments = fragment_tree(&root, &FragmentationOptions::new(50.0).with_gap(20.0));
+  let fragments = fragment_tree(&root, &FragmentationOptions::new(50.0).with_gap(20.0)).unwrap();
 
   assert_eq!(fragments.len(), 2);
   assert!(fragments[0].bounds.x().abs() < 0.01);
@@ -314,7 +315,7 @@ fn widows_and_orphans_keep_paragraph_together() {
     vec![paragraph, footer],
   );
 
-  let fragments = fragment_tree(&root, &FragmentationOptions::new(50.0));
+  let fragments = fragment_tree(&root, &FragmentationOptions::new(50.0)).unwrap();
 
   assert!(
     fragments.len() >= 2,
@@ -331,7 +332,7 @@ fn line_fragments_remain_atomic_when_boundary_slices_through() {
   let original_height = atomic_line.bounds.height();
   let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 120.0, 25.0), vec![atomic_line]);
 
-  let fragments = fragment_tree(&root, &FragmentationOptions::new(15.0));
+  let fragments = fragment_tree(&root, &FragmentationOptions::new(15.0)).unwrap();
 
   assert_eq!(fragments.len(), 2);
   let first_fragment_lines = count_lines(&fragments[0]);
@@ -370,7 +371,7 @@ fn widows_and_orphans_enforced_across_multiple_breaks() {
     vec![paragraph],
   );
 
-  let fragments = fragment_tree(&root, &FragmentationOptions::new(30.0));
+  let fragments = fragment_tree(&root, &FragmentationOptions::new(30.0)).unwrap();
   let per_fragment: Vec<_> = fragments
     .iter()
     .map(count_lines)
@@ -401,7 +402,7 @@ fn break_inside_avoid_prefers_unbroken_but_splits_when_needed() {
     vec![fitting_block, trailing],
   );
 
-  let fragments = fragment_tree(&root, &FragmentationOptions::new(50.0));
+  let fragments = fragment_tree(&root, &FragmentationOptions::new(50.0)).unwrap();
   let per_fragment: Vec<_> = fragments.iter().map(count_lines).collect();
   assert_eq!(per_fragment.iter().sum::<usize>(), 3);
   assert_eq!(per_fragment[0], 3);
@@ -415,7 +416,7 @@ fn break_inside_avoid_prefers_unbroken_but_splits_when_needed() {
   );
   let tall_root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 120.0, 72.0), vec![tall_block]);
 
-  let tall_fragments = fragment_tree(&tall_root, &FragmentationOptions::new(40.0));
+  let tall_fragments = fragment_tree(&tall_root, &FragmentationOptions::new(40.0)).unwrap();
   let tall_counts: Vec<_> = tall_fragments.iter().map(count_lines).collect();
   assert!(tall_fragments.len() > 1);
   assert_eq!(tall_counts.iter().sum::<usize>(), tall_lines.len());
@@ -437,7 +438,7 @@ fn forced_break_overrides_natural_flow() {
     vec![breaker, follower],
   );
 
-  let fragments = fragment_tree(&root, &FragmentationOptions::new(200.0));
+  let fragments = fragment_tree(&root, &FragmentationOptions::new(200.0)).unwrap();
 
   assert_eq!(fragments.len(), 2);
   assert_eq!(fragments[0].children.len(), 1);
@@ -457,7 +458,7 @@ fn column_break_hints_follow_column_context() {
   let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 50.0, 40.0), vec![first, second]);
 
   let options = FragmentationOptions::new(80.0).with_columns(2, 0.0);
-  let fragments = fragment_tree(&root, &options);
+  let fragments = fragment_tree(&root, &options).unwrap();
 
   assert_eq!(
     fragments.len(),
@@ -519,7 +520,7 @@ fn break_inside_avoid_keeps_block_together() {
     vec![tall_block, trailing],
   );
 
-  let fragments = fragment_tree(&root, &FragmentationOptions::new(80.0));
+  let fragments = fragment_tree(&root, &FragmentationOptions::new(80.0)).unwrap();
 
   assert_eq!(
     fragments.len(),
@@ -550,7 +551,7 @@ fn avoid_page_blocks_aren_t_split_across_pages() {
   avoid.style = Some(avoid_style);
   let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 50.0, 20.0), vec![leading, avoid]);
 
-  let fragments = fragment_tree(&root, &FragmentationOptions::new(10.0));
+  let fragments = fragment_tree(&root, &FragmentationOptions::new(10.0)).unwrap();
 
   assert!(
     fragments.len() >= 2,
@@ -589,7 +590,7 @@ fn positioned_children_follow_fragmentainers() {
     vec![normal, abs_child],
   );
 
-  let fragments = fragment_tree(&root, &FragmentationOptions::new(80.0));
+  let fragments = fragment_tree(&root, &FragmentationOptions::new(80.0)).unwrap();
 
   assert_eq!(fragments.len(), 3);
   let positioned_home = fragments.iter().position(|fragment| {
@@ -858,7 +859,8 @@ fn break_before_column_only_applies_in_column_context() {
   let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 50.0, 20.0), vec![lead, breaker]);
 
   let page_boundaries =
-    resolve_fragmentation_boundaries_with_context(&root, 100.0, FragmentationContext::Page);
+    resolve_fragmentation_boundaries_with_context(&root, 100.0, FragmentationContext::Page)
+      .unwrap();
   assert_eq!(
     page_boundaries.len(),
     2,
@@ -866,7 +868,8 @@ fn break_before_column_only_applies_in_column_context() {
   );
 
   let column_boundaries =
-    resolve_fragmentation_boundaries_with_context(&root, 100.0, FragmentationContext::Column);
+    resolve_fragmentation_boundaries_with_context(&root, 100.0, FragmentationContext::Column)
+      .unwrap();
   assert!(
     column_boundaries.len() > 2,
     "column context should honor column-forced breaks"
@@ -937,7 +940,7 @@ fn table_headers_repeat_across_fragments() {
   );
   let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, y), vec![table]);
 
-  let fragments = fragment_tree(&root, &FragmentationOptions::new(36.0));
+  let fragments = fragment_tree(&root, &FragmentationOptions::new(36.0)).unwrap();
   assert!(fragments.len() >= 2, "table should fragment across pages");
 
   for fragment in &fragments {

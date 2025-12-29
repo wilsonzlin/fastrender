@@ -30,6 +30,7 @@ use crate::error::{RenderError, RenderStage};
 use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::geometry::Size;
+use crate::layout::axis::FragmentAxes;
 use crate::layout::constraints::AvailableSpace;
 use crate::layout::constraints::LayoutConstraints;
 use crate::layout::contexts::block::width::MarginValue;
@@ -50,7 +51,7 @@ use crate::layout::formatting_context::IntrinsicSizingMode;
 use crate::layout::formatting_context::LayoutError;
 use crate::layout::fragmentation::{
   clip_node, fragmentation_axis, normalize_fragment_margins, propagate_fragment_metadata,
-  resolve_fragmentation_boundaries_with_context, FragmentationContext,
+  FragmentationAnalyzer, FragmentationContext,
 };
 use crate::layout::profile::layout_timer;
 use crate::layout::profile::LayoutKind;
@@ -2199,6 +2200,19 @@ impl BlockFormattingContext {
       flow_root.bounds = Rect::from_xywh(0.0, 0.0, column_width, flow_height);
     }
 
+    let axis = fragmentation_axis(&flow_root);
+    let (writing_mode, direction) = flow_root
+      .style
+      .as_ref()
+      .map(|s| (s.writing_mode, s.direction))
+      .unwrap_or((WritingMode::HorizontalTb, Direction::Ltr));
+    let axes = FragmentAxes::from_writing_mode_and_direction(writing_mode, direction);
+    let inline_is_horizontal = inline_axis_is_horizontal(writing_mode);
+    let inline_positive = inline_axis_positive(writing_mode, direction);
+    let mut analyzer =
+      FragmentationAnalyzer::new(&flow_root, FragmentationContext::Column, axes, None);
+    let flow_extent = analyzer.content_extent();
+
     let balanced_height = if column_count > 0 {
       (flow_height / column_count as f32).ceil()
     } else {
@@ -2229,31 +2243,22 @@ impl BlockFormattingContext {
     {
       let mut low = column_height;
       let mut high = flow_height;
-      let count_at_low = resolve_fragmentation_boundaries_with_context(
-        &flow_root,
-        low,
-        FragmentationContext::Column,
-      )
-      .len()
-      .saturating_sub(1);
-      if count_at_low > column_count {
-        let count_at_high = resolve_fragmentation_boundaries_with_context(
-          &flow_root,
-          high,
-          FragmentationContext::Column,
-        )
+      let count_at_low = analyzer
+        .boundaries(low, flow_extent.max(low))?
         .len()
         .saturating_sub(1);
+      if count_at_low > column_count {
+        let count_at_high = analyzer
+          .boundaries(high, flow_extent.max(high))?
+          .len()
+          .saturating_sub(1);
         if count_at_high <= column_count {
           for _ in 0..12 {
             let mid = (low + high) / 2.0;
-            let count_at_mid = resolve_fragmentation_boundaries_with_context(
-              &flow_root,
-              mid,
-              FragmentationContext::Column,
-            )
-            .len()
-            .saturating_sub(1);
+            let count_at_mid = analyzer
+              .boundaries(mid, flow_extent.max(mid))?
+              .len()
+              .saturating_sub(1);
             if count_at_mid <= column_count {
               high = mid;
             } else {
@@ -2281,11 +2286,7 @@ impl BlockFormattingContext {
       ));
     }
 
-    let boundaries = resolve_fragmentation_boundaries_with_context(
-      &flow_root,
-      column_height,
-      FragmentationContext::Column,
-    );
+    let boundaries = analyzer.boundaries(column_height, flow_extent.max(column_height))?;
     let fragment_count = boundaries.len().saturating_sub(1);
     if fragment_count == 0 {
       return Ok((
@@ -2296,14 +2297,6 @@ impl BlockFormattingContext {
       ));
     }
 
-    let axis = fragmentation_axis(&flow_root);
-    let (writing_mode, direction) = flow_root
-      .style
-      .as_ref()
-      .map(|s| (s.writing_mode, s.direction))
-      .unwrap_or((WritingMode::HorizontalTb, Direction::Ltr));
-    let inline_is_horizontal = inline_axis_is_horizontal(writing_mode);
-    let inline_positive = inline_axis_positive(writing_mode, direction);
     let block_sign = if axis.block_positive { 1.0 } else { -1.0 };
     let inline_sign = if inline_positive { 1.0 } else { -1.0 };
     let root_block_size = axis.block_size(&flow_root.bounds);
@@ -2328,7 +2321,7 @@ impl BlockFormattingContext {
         index,
         fragment_count,
         FragmentationContext::Column,
-      ) {
+      )? {
         normalize_fragment_margins(&mut clipped, index == 0, index + 1 >= fragment_count, &axis);
         // `clip_node` preserves existing logical overrides from the unclipped flow tree.
         // For multi-column layout we translate fragments into column coordinates, so ensure

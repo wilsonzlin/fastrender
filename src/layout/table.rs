@@ -3458,9 +3458,7 @@ impl TableFormattingContext {
       let width_is_percent = matches!(width_decl.map(|w| w.unit), Some(LengthUnit::Percent));
       let width_padding = if matches!(mode, DistributionMode::Fixed) {
         match structure.border_collapse {
-          BorderCollapse::Separate => {
-            horizontal_padding_and_borders(&cell_box.style, percent_base)
-          }
+          BorderCollapse::Separate => horizontal_padding_and_borders(&cell_box.style, percent_base),
           BorderCollapse::Collapse => horizontal_padding(&cell_box.style, percent_base),
         }
       } else {
@@ -5750,10 +5748,10 @@ impl FormattingContext for TableFormattingContext {
       _ if l.unit.is_absolute() => l.to_px(),
       _ => l.value,
     };
-    let padding_h_base =
-      resolve_abs_no_pct(&table_box.style.padding_left) + resolve_abs_no_pct(&table_box.style.padding_right);
-    let border_h_base =
-      resolve_abs_no_pct(&table_box.style.border_left_width) + resolve_abs_no_pct(&table_box.style.border_right_width);
+    let padding_h_base = resolve_abs_no_pct(&table_box.style.padding_left)
+      + resolve_abs_no_pct(&table_box.style.padding_right);
+    let border_h_base = resolve_abs_no_pct(&table_box.style.border_left_width)
+      + resolve_abs_no_pct(&table_box.style.border_right_width);
     let edge_consumption = if structure.border_collapse == BorderCollapse::Collapse {
       0.0
     } else {
@@ -12529,7 +12527,11 @@ mod tests {
           FormattingContextType::Block,
           vec![],
         ),
-        BoxNode::new_block(Arc::new(narrow_cell_style), FormattingContextType::Block, vec![]),
+        BoxNode::new_block(
+          Arc::new(narrow_cell_style),
+          FormattingContextType::Block,
+          vec![],
+        ),
       ],
     );
 
@@ -12546,7 +12548,11 @@ mod tests {
           FormattingContextType::Block,
           vec![],
         ),
-        BoxNode::new_block(Arc::new(wide_cell_style), FormattingContextType::Block, vec![]),
+        BoxNode::new_block(
+          Arc::new(wide_cell_style),
+          FormattingContextType::Block,
+          vec![],
+        ),
       ],
     );
 
@@ -12584,7 +12590,11 @@ mod tests {
     let row = BoxNode::new_block(
       Arc::new(row_style),
       FormattingContextType::Block,
-      vec![BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![])],
+      vec![BoxNode::new_block(
+        Arc::new(cell_style),
+        FormattingContextType::Block,
+        vec![],
+      )],
     );
 
     let table = BoxNode::new_block(

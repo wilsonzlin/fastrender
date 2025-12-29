@@ -32,7 +32,7 @@ fn widows_and_orphans_respected_across_multiple_fragmentainers() {
     Arc::new(style),
   );
 
-  let fragments = fragment_tree(&paragraph, &FragmentationOptions::new(30.0));
+  let fragments = fragment_tree(&paragraph, &FragmentationOptions::new(30.0)).unwrap();
 
   assert_eq!(fragments.len(), 3);
   let mut seen = Vec::new();
@@ -87,7 +87,7 @@ fn widows_and_orphans_are_soft_constraints() {
     Arc::new(style),
   );
 
-  let fragments = fragment_tree(&paragraph, &FragmentationOptions::new(20.0));
+  let fragments = fragment_tree(&paragraph, &FragmentationOptions::new(20.0)).unwrap();
 
   assert_eq!(
     fragments.len(),

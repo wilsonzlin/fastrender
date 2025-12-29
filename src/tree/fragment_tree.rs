@@ -1371,7 +1371,7 @@ mod tests {
     let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 20.0, 120.0), vec![child]);
     let options = FragmentationOptions::new(60.0).with_gap(20.0);
 
-    let fragments = split_fragment_tree(&root, &options);
+    let fragments = split_fragment_tree(&root, &options).unwrap();
     assert_eq!(fragments.len(), 2);
 
     let second = &fragments[1];

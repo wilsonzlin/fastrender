@@ -10,7 +10,10 @@
 use std::sync::OnceLock;
 
 use crate::geometry::{Point, Rect};
+use crate::error::RenderStage;
 use crate::layout::axis::{FragmentAxes, PhysicalAxis};
+use crate::layout::formatting_context::LayoutError;
+use crate::render_control::check_active;
 use crate::style::display::Display;
 use crate::style::page::PageSide;
 use crate::style::types::{BreakBetween, BreakInside, Direction, WritingMode};
@@ -276,6 +279,26 @@ fn axes_from_root(root: &FragmentNode) -> FragmentAxes {
   FragmentAxes::from_writing_mode_and_direction(writing_mode, direction)
 }
 
+fn check_layout_deadline() -> Result<(), LayoutError> {
+  if let Err(crate::error::RenderError::Timeout { elapsed, .. }) = check_active(RenderStage::Layout)
+  {
+    return Err(LayoutError::Timeout { elapsed });
+  }
+  Ok(())
+}
+
+#[derive(Debug)]
+pub struct FragmentationAnalyzer {
+  _axis: FragmentAxis,
+  _context: FragmentationContext,
+  opportunities: Vec<BreakOpportunity>,
+  line_containers: Vec<LineContainer>,
+  line_starts: Vec<usize>,
+  atomic: Vec<AtomicRange>,
+  content_extent: f32,
+  deadline_counter: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct ConstraintKey {
   /// Whether the candidate would place too few lines at the start of the fragment.
@@ -291,13 +314,291 @@ struct ConstraintKey {
 const BREAK_EPSILON: f32 = 0.01;
 const LINE_FALLBACK_EPSILON: f32 = 1.0;
 
+impl FragmentationAnalyzer {
+  pub fn new(
+    root: &FragmentNode,
+    context: FragmentationContext,
+    axes: FragmentAxes,
+    fragmentainer_size_hint: Option<f32>,
+  ) -> Self {
+    let axis = axis_from_fragment_axes(axes);
+    let mut collection = BreakCollection::default();
+    collect_break_opportunities(
+      root,
+      0.0,
+      &mut collection,
+      0,
+      0,
+      context,
+      &axis,
+      axis.block_size(&root.bounds),
+    );
+
+    let mut atomic = collection.atomic;
+    collect_atomic_ranges_with_axis(
+      root,
+      0.0,
+      &mut atomic,
+      &axis,
+      axis.block_size(&root.bounds),
+      context,
+      fragmentainer_size_hint,
+    );
+    normalize_atomic_ranges(&mut atomic);
+
+    collection.opportunities.sort_by(|a, b| {
+      a.pos
+        .partial_cmp(&b.pos)
+        .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    collection.opportunities.dedup_by(|a, b| {
+      (a.pos - b.pos).abs() < BREAK_EPSILON && a.kind == b.kind && a.strength == b.strength
+    });
+
+    let content_extent = axis.block_size(&root.logical_bounding_box());
+    let line_containers = collection.line_containers;
+    let line_starts = vec![0; line_containers.len()];
+    Self {
+      _axis: axis,
+      _context: context,
+      opportunities: collection.opportunities,
+      line_containers,
+      line_starts,
+      atomic,
+      content_extent,
+      deadline_counter: 0,
+    }
+  }
+
+  pub fn content_extent(&self) -> f32 {
+    self.content_extent
+  }
+
+  pub fn boundaries(
+    &mut self,
+    fragmentainer_size: f32,
+    total_extent: f32,
+  ) -> Result<Vec<f32>, LayoutError> {
+    let effective_total = total_extent.max(self.content_extent);
+    if fragmentainer_size <= 0.0 {
+      return Ok(vec![0.0, effective_total]);
+    }
+
+    self.reset_state();
+    let mut boundaries = vec![0.0];
+    let mut start = 0.0;
+    let mut opportunity_cursor = 0usize;
+
+    while start < effective_total - BREAK_EPSILON {
+      if self.deadline_counter % 8 == 0 {
+        check_layout_deadline()?;
+      }
+      self.deadline_counter = self.deadline_counter.wrapping_add(1);
+
+      let next = self.select_next_boundary(
+        start,
+        fragmentainer_size,
+        effective_total,
+        &mut opportunity_cursor,
+      );
+      debug_assert!(
+        next + BREAK_EPSILON >= start,
+        "boundaries must not move backwards"
+      );
+      if (next - start).abs() < BREAK_EPSILON {
+        boundaries.push(effective_total);
+        break;
+      }
+      boundaries.push(next);
+      start = next;
+    }
+
+    if effective_total - *boundaries.last().unwrap_or(&0.0) > BREAK_EPSILON {
+      boundaries.push(effective_total);
+    }
+
+    boundaries.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    boundaries.dedup_by(|a, b| (*a - *b).abs() < BREAK_EPSILON);
+    Ok(boundaries)
+  }
+
+  fn reset_state(&mut self) {
+    for start in &mut self.line_starts {
+      *start = 0;
+    }
+    self.deadline_counter = 0;
+  }
+
+  fn advance_line_starts(&mut self, boundary: f32) {
+    for container in &self.line_containers {
+      if let Some(slot) = self.line_starts.get_mut(container.id) {
+        let remaining = &container.line_ends[*slot..];
+        let advanced = remaining.partition_point(|end| *end <= boundary + BREAK_EPSILON);
+        *slot = (*slot + advanced).min(container.line_ends.len());
+      }
+    }
+  }
+
+  fn select_next_boundary(
+    &mut self,
+    start: f32,
+    fragmentainer: f32,
+    total_extent: f32,
+    opportunity_cursor: &mut usize,
+  ) -> f32 {
+    let mut limit = (start + fragmentainer).min(total_extent);
+
+    if let Some(range) = atomic_containing(start, &self.atomic) {
+      let boundary = range.end.min(total_extent);
+      self.advance_line_starts(boundary);
+      return boundary;
+    }
+
+    if let Some(range) = next_atomic_in_range(start, limit, &self.atomic) {
+      if range.start > start + BREAK_EPSILON {
+        limit = limit.min(range.start);
+      }
+    }
+
+    let ops = &self.opportunities;
+    if *opportunity_cursor > ops.len() {
+      *opportunity_cursor = ops.len();
+    }
+    let advance = ops[*opportunity_cursor..].partition_point(|o| o.pos <= start + BREAK_EPSILON);
+    *opportunity_cursor = (*opportunity_cursor + advance).min(ops.len());
+    let window_end = *opportunity_cursor
+      + ops[*opportunity_cursor..].partition_point(|o| o.pos <= limit + BREAK_EPSILON);
+    let window_end = window_end.min(ops.len());
+    let window = *opportunity_cursor..window_end;
+
+    if let Some(pos) = self.forced_in_window(start, limit, total_extent, window.clone()) {
+      self.advance_line_starts(pos);
+      return pos;
+    }
+
+    let mut best: Option<(ConstraintKey, u8, u8, f32)> = None;
+    for opportunity in self.opportunities[window.clone()].iter() {
+      if opportunity.pos <= start + BREAK_EPSILON {
+        continue;
+      }
+      if opportunity.pos > limit + BREAK_EPSILON {
+        break;
+      }
+      if pos_is_inside_atomic(opportunity.pos, &self.atomic) {
+        continue;
+      }
+      if matches!(opportunity.strength, BreakStrength::Forced) {
+        continue;
+      }
+
+      let constraint_key =
+        constraint_key_for(opportunity, &self.line_containers, &self.line_starts);
+      let strength_penalty = match opportunity.strength {
+        BreakStrength::Avoid => 1,
+        _ => 0,
+      };
+      let kind_rank = match opportunity.kind {
+        BreakKind::BetweenSiblings => 0,
+        BreakKind::LineBoundary { .. } => 1,
+        BreakKind::EndOfContent => 2,
+      };
+
+      match best {
+        None => best = Some((constraint_key, strength_penalty, kind_rank, opportunity.pos)),
+        Some((best_key, best_penalty, best_kind, best_pos)) => {
+          if constraint_key < best_key
+            || (constraint_key == best_key && strength_penalty < best_penalty)
+            || (constraint_key == best_key
+              && strength_penalty == best_penalty
+              && kind_rank < best_kind)
+            || (constraint_key == best_key
+              && strength_penalty == best_penalty
+              && kind_rank == best_kind
+              && opportunity.pos > best_pos + BREAK_EPSILON)
+          {
+            best = Some((constraint_key, strength_penalty, kind_rank, opportunity.pos));
+          }
+        }
+      }
+    }
+
+    if let Some((_, _, _, pos)) = best {
+      let clamped = pos.min(total_extent);
+      self.advance_line_starts(clamped);
+      return clamped;
+    }
+
+    let mut fallback = limit;
+    if let Some(near_line) = self.near_line_boundary(start, limit, window.clone()) {
+      fallback = near_line;
+    }
+
+    let clamped = fallback.min(total_extent);
+    let next = if clamped <= start + BREAK_EPSILON {
+      (start + fragmentainer).min(total_extent)
+    } else {
+      clamped
+    };
+    self.advance_line_starts(next);
+    next
+  }
+
+  fn forced_in_window(
+    &self,
+    start: f32,
+    limit: f32,
+    total_extent: f32,
+    window: std::ops::Range<usize>,
+  ) -> Option<f32> {
+    if limit >= total_extent - BREAK_EPSILON {
+      return Some(total_extent);
+    }
+
+    self.opportunities[window]
+      .iter()
+      .find(|o| {
+        matches!(o.strength, BreakStrength::Forced)
+          && o.pos > start + BREAK_EPSILON
+          && o.pos <= limit + BREAK_EPSILON
+          && !pos_is_inside_atomic(o.pos, &self.atomic)
+      })
+      .map(|o| o.pos.min(total_extent))
+  }
+
+  fn near_line_boundary(
+    &self,
+    start: f32,
+    limit: f32,
+    window: std::ops::Range<usize>,
+  ) -> Option<f32> {
+    self.opportunities[window].iter().find_map(|o| {
+      if o.pos <= start + BREAK_EPSILON {
+        return None;
+      }
+      if o.pos - limit > LINE_FALLBACK_EPSILON {
+        return None;
+      }
+      if pos_is_inside_atomic(o.pos, &self.atomic) {
+        return None;
+      }
+      match o.kind {
+        BreakKind::LineBoundary { .. } if o.pos > limit => Some(o.pos),
+        _ => None,
+      }
+    })
+  }
+}
+
 /// Returns the block-axis boundaries where a fragment tree should be split for a given
 /// fragmentainer size.
 ///
 /// The returned vector always starts at 0.0 and ends at the end of the content range (expanded to
 /// at least one fragmentainer). When `fragmentainer_size` is non-positive, a single fragment
 /// containing all content is implied.
-pub fn resolve_fragmentation_boundaries(root: &FragmentNode, fragmentainer_size: f32) -> Vec<f32> {
+pub fn resolve_fragmentation_boundaries(
+  root: &FragmentNode,
+  fragmentainer_size: f32,
+) -> Result<Vec<f32>, LayoutError> {
   resolve_fragmentation_boundaries_with_context(
     root,
     fragmentainer_size,
@@ -309,9 +610,9 @@ pub fn resolve_fragmentation_boundaries_with_context(
   root: &FragmentNode,
   fragmentainer_size: f32,
   context: FragmentationContext,
-) -> Vec<f32> {
-  let axis = fragmentation_axis(root);
-  resolve_fragmentation_boundaries_for_axis(root, fragmentainer_size, context, axis)
+) -> Result<Vec<f32>, LayoutError> {
+  let axes = axes_from_root(root);
+  resolve_fragmentation_boundaries_with_axes(root, fragmentainer_size, context, axes)
 }
 
 pub fn resolve_fragmentation_boundaries_with_axes(
@@ -319,88 +620,18 @@ pub fn resolve_fragmentation_boundaries_with_axes(
   fragmentainer_size: f32,
   context: FragmentationContext,
   axes: FragmentAxes,
-) -> Vec<f32> {
-  resolve_fragmentation_boundaries_for_axis(
+) -> Result<Vec<f32>, LayoutError> {
+  let mut analyzer = FragmentationAnalyzer::new(
     root,
-    fragmentainer_size,
     context,
-    axis_from_fragment_axes(axes),
-  )
-}
-
-fn resolve_fragmentation_boundaries_for_axis(
-  root: &FragmentNode,
-  fragmentainer_size: f32,
-  context: FragmentationContext,
-  axis: FragmentAxis,
-) -> Vec<f32> {
-  let block_extent = axis.block_size(&root.logical_bounding_box());
-  if fragmentainer_size <= 0.0 {
-    return vec![0.0, block_extent];
-  }
-
-  let total_extent = block_extent.max(fragmentainer_size);
-  let mut collection = BreakCollection::default();
-  collect_break_opportunities(
-    root,
-    0.0,
-    &mut collection,
-    0,
-    0,
-    context,
-    &axis,
-    axis.block_size(&root.bounds),
-    fragmentainer_size,
+    axes,
+    match context {
+      FragmentationContext::Page => Some(fragmentainer_size),
+      FragmentationContext::Column => None,
+    },
   );
-  collection.opportunities.push(BreakOpportunity {
-    pos: total_extent,
-    strength: BreakStrength::Forced,
-    kind: BreakKind::EndOfContent,
-  });
-
-  collection.opportunities.sort_by(|a, b| {
-    a.pos
-      .partial_cmp(&b.pos)
-      .unwrap_or(std::cmp::Ordering::Equal)
-  });
-  collection.opportunities.dedup_by(|a, b| {
-    (a.pos - b.pos).abs() < BREAK_EPSILON && a.kind == b.kind && a.strength == b.strength
-  });
-  normalize_atomic_ranges(&mut collection.atomic);
-
-  let mut line_starts = vec![0; collection.line_containers.len()];
-  let mut boundaries = vec![0.0];
-  let mut start = 0.0;
-
-  while start < total_extent - BREAK_EPSILON {
-    let next = select_next_boundary(
-      start,
-      fragmentainer_size,
-      total_extent,
-      &collection.opportunities,
-      &collection.line_containers,
-      &mut line_starts,
-      &collection.atomic,
-    );
-    debug_assert!(
-      next + BREAK_EPSILON >= start,
-      "boundaries must not move backwards"
-    );
-    if (next - start).abs() < BREAK_EPSILON {
-      boundaries.push(total_extent);
-      break;
-    }
-    boundaries.push(next);
-    start = next;
-  }
-
-  if total_extent - *boundaries.last().unwrap_or(&0.0) > BREAK_EPSILON {
-    boundaries.push(total_extent);
-  }
-
-  boundaries.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-  boundaries.dedup_by(|a, b| (*a - *b).abs() < BREAK_EPSILON);
-  boundaries
+  let total_extent = analyzer.content_extent().max(fragmentainer_size);
+  analyzer.boundaries(fragmentainer_size, total_extent)
 }
 
 /// Fragment a tree using the provided writing mode and direction. Non-default axes currently
@@ -410,7 +641,7 @@ pub fn fragment_tree_for_writing_mode(
   options: &FragmentationOptions,
   writing_mode: WritingMode,
   direction: Direction,
-) -> Vec<FragmentNode> {
+) -> Result<Vec<FragmentNode>, LayoutError> {
   let axes = FragmentAxes::from_writing_mode_and_direction(writing_mode, direction);
   fragment_tree_with_axes(root, options, axes)
 }
@@ -420,7 +651,7 @@ pub fn fragment_tree_with_axes(
   root: &FragmentNode,
   options: &FragmentationOptions,
   axes: FragmentAxes,
-) -> Vec<FragmentNode> {
+) -> Result<Vec<FragmentNode>, LayoutError> {
   if axes.block_axis() == PhysicalAxis::Y && axes.block_positive() {
     return fragment_tree(root, options);
   }
@@ -434,9 +665,12 @@ pub fn fragment_tree_with_axes(
 /// fragmentainer block-size. Fragment metadata (`fragment_index`, `fragment_count`, and
 /// `fragmentainer_index`) are populated so downstream stages can reason about page/column
 /// membership.
-pub fn fragment_tree(root: &FragmentNode, options: &FragmentationOptions) -> Vec<FragmentNode> {
+pub fn fragment_tree(
+  root: &FragmentNode,
+  options: &FragmentationOptions,
+) -> Result<Vec<FragmentNode>, LayoutError> {
   if options.fragmentainer_size <= 0.0 {
-    return vec![root.clone()];
+    return Ok(vec![root.clone()]);
   }
 
   let axes = axes_from_root(root);
@@ -449,11 +683,21 @@ pub fn fragment_tree(root: &FragmentNode, options: &FragmentationOptions) -> Vec
   } else {
     FragmentationContext::Page
   };
+  let mut analyzer = FragmentationAnalyzer::new(
+    root,
+    context,
+    axes,
+    if matches!(context, FragmentationContext::Page) {
+      Some(options.fragmentainer_size)
+    } else {
+      None
+    },
+  );
 
-  let boundaries =
-    resolve_fragmentation_boundaries_for_axis(root, options.fragmentainer_size, context, axis);
+  let total_extent = analyzer.content_extent().max(options.fragmentainer_size);
+  let boundaries = analyzer.boundaries(options.fragmentainer_size, total_extent)?;
   if boundaries.len() < 2 {
-    return vec![root.clone()];
+    return Ok(vec![root.clone()]);
   }
 
   let fragment_count = boundaries.len() - 1;
@@ -481,7 +725,7 @@ pub fn fragment_tree(root: &FragmentNode, options: &FragmentationOptions) -> Vec
       index,
       fragment_count,
       context,
-    ) {
+    )? {
       normalize_fragment_margins(&mut clipped, index == 0, index + 1 == fragment_count, &axis);
       propagate_fragment_metadata(&mut clipped, index, fragment_count);
 
@@ -513,7 +757,7 @@ pub fn fragment_tree(root: &FragmentNode, options: &FragmentationOptions) -> Vec
     fragments.push(root.clone());
   }
 
-  fragments
+  Ok(fragments)
 }
 
 pub(crate) fn propagate_fragment_metadata(node: &mut FragmentNode, index: usize, count: usize) {
@@ -539,7 +783,8 @@ pub(crate) fn clip_node(
   fragment_index: usize,
   fragment_count: usize,
   context: FragmentationContext,
-) -> Option<FragmentNode> {
+) -> Result<Option<FragmentNode>, LayoutError> {
+  check_layout_deadline()?;
   let parent_clip_start_offset = parent_clipped_flow_start - parent_abs_flow_start;
   let parent_clip_end_offset = parent_clipped_flow_end - parent_abs_flow_start;
   let parent_clip_origin_phys = axis
@@ -559,7 +804,7 @@ pub(crate) fn clip_node(
   let node_bbox_flow_end = node_bbox_flow_start + node_bbox_block_size;
 
   if node_bbox_flow_end <= fragment_start || node_bbox_flow_start >= fragment_end {
-    return None;
+    return Ok(None);
   }
 
   let default_style = default_style();
@@ -599,9 +844,9 @@ pub(crate) fn clip_node(
       cloned.fragment_count = fragment_count.max(1);
       cloned.fragmentainer_index = fragment_index;
       cloned.children = node.children.clone();
-      return Some(cloned);
+      return Ok(Some(cloned));
     }
-    return None;
+    return Ok(None);
   }
 
   let clipped_flow_start = node_flow_start.max(fragment_start);
@@ -659,7 +904,7 @@ pub(crate) fn clip_node(
         && !fragment_starts_inside
         && !(fragment_is_last && fragment_contains_line_start))
     {
-      return None;
+      return Ok(None);
     }
 
     let line_phys_start = axis.flow_box_start_to_physical(
@@ -670,7 +915,7 @@ pub(crate) fn clip_node(
     let line_block_start = line_phys_start - parent_clip_origin_phys;
     cloned.bounds = axis.update_block_components(node.bounds, line_block_start, node_block_size);
     cloned.children = node.children.clone();
-    return Some(cloned);
+    return Ok(Some(cloned));
   }
 
   for child in &node.children {
@@ -686,7 +931,7 @@ pub(crate) fn clip_node(
       fragment_index,
       fragment_count,
       context,
-    ) {
+    )? {
       cloned.children.push(child_clipped);
     }
   }
@@ -695,7 +940,7 @@ pub(crate) fn clip_node(
     inject_table_headers_and_footers(node, &mut cloned, fragment_index, fragment_count, axis);
   }
 
-  Some(cloned)
+  Ok(Some(cloned))
 }
 
 /// Axis-aware wrapper around `clip_node` for callers that use `FragmentAxes`.
@@ -710,7 +955,7 @@ pub(crate) fn clip_node_with_axes(
   fragment_index: usize,
   fragment_count: usize,
   context: FragmentationContext,
-) -> Option<FragmentNode> {
+) -> Result<Option<FragmentNode>, LayoutError> {
   let axis = axis_from_fragment_axes(axes);
   clip_node(
     node,
@@ -1046,7 +1291,6 @@ fn collect_break_opportunities(
   context: FragmentationContext,
   axis: &FragmentAxis,
   parent_block_size: f32,
-  fragmentainer_size: f32,
 ) {
   let default_style = default_style();
   let style = node
@@ -1165,7 +1409,6 @@ fn collect_break_opportunities(
       context,
       axis,
       child_block_size,
-      fragmentainer_size,
     );
 
     let mut strength = combine_breaks(child_style.break_after, next_style.break_before, context);
@@ -1320,128 +1563,6 @@ pub(crate) fn collect_forced_boundaries_with_axes(
   boundaries
 }
 
-fn select_next_boundary(
-  start: f32,
-  fragmentainer: f32,
-  total_height: f32,
-  opportunities: &[BreakOpportunity],
-  line_containers: &[LineContainer],
-  line_starts: &mut [usize],
-  atomic: &[AtomicRange],
-) -> f32 {
-  let mut limit = (start + fragmentainer).min(total_height);
-
-  if let Some(range) = atomic_containing(start, atomic) {
-    let boundary = range.end.min(total_height);
-    if boundary <= start + BREAK_EPSILON {
-      update_line_starts(total_height, line_containers, line_starts);
-      return total_height;
-    }
-    update_line_starts(boundary, line_containers, line_starts);
-    return boundary;
-  }
-
-  if let Some(range) = next_atomic_in_range(start, limit, atomic) {
-    if range.start > start + BREAK_EPSILON {
-      limit = limit.min(range.start);
-    }
-  }
-
-  if let Some(pos) = opportunities
-    .iter()
-    .filter(|o| matches!(o.strength, BreakStrength::Forced))
-    .filter(|o| !pos_is_inside_atomic(o.pos, atomic))
-    .find(|o| o.pos > start + BREAK_EPSILON && o.pos <= limit + BREAK_EPSILON)
-    .map(|o| o.pos.min(total_height))
-  {
-    update_line_starts(pos, line_containers, line_starts);
-    return pos;
-  }
-
-  let mut best: Option<(ConstraintKey, u8, u8, f32)> = None;
-  // Compare candidates by constraint satisfaction first (orphans, widows in continuations,
-  // then future widows), then by strength penalty (Auto over Avoid), then by kind (between
-  // siblings over line breaks), then by position.
-  for opportunity in opportunities.iter() {
-    if opportunity.pos <= start + BREAK_EPSILON {
-      continue;
-    }
-    if opportunity.pos > limit + BREAK_EPSILON {
-      break;
-    }
-    if pos_is_inside_atomic(opportunity.pos, atomic) {
-      continue;
-    }
-    if matches!(opportunity.strength, BreakStrength::Forced) {
-      continue;
-    }
-
-    let constraint_key = constraint_key_for(opportunity, line_containers, line_starts);
-    let strength_penalty = match opportunity.strength {
-      BreakStrength::Avoid => 1,
-      _ => 0,
-    };
-    let kind_rank = match opportunity.kind {
-      BreakKind::BetweenSiblings => 0,
-      BreakKind::LineBoundary { .. } => 1,
-      BreakKind::EndOfContent => 2,
-    };
-
-    match best {
-      None => {
-        best = Some((constraint_key, strength_penalty, kind_rank, opportunity.pos));
-      }
-      Some((best_key, best_penalty, best_kind, best_pos)) => {
-        if constraint_key < best_key
-          || (constraint_key == best_key && strength_penalty < best_penalty)
-          || (constraint_key == best_key
-            && strength_penalty == best_penalty
-            && kind_rank < best_kind)
-          || (constraint_key == best_key
-            && strength_penalty == best_penalty
-            && kind_rank == best_kind
-            && opportunity.pos > best_pos + BREAK_EPSILON)
-        {
-          best = Some((constraint_key, strength_penalty, kind_rank, opportunity.pos));
-        }
-      }
-    }
-  }
-
-  if let Some((_, _, _, pos)) = best {
-    update_line_starts(pos, line_containers, line_starts);
-    return pos.min(total_height);
-  }
-
-  let mut fallback = limit;
-  if let Some(near_line) = opportunities.iter().find_map(|o| {
-    if o.pos <= start + BREAK_EPSILON {
-      return None;
-    }
-    if o.pos - limit > LINE_FALLBACK_EPSILON {
-      return None;
-    }
-    if pos_is_inside_atomic(o.pos, atomic) {
-      return None;
-    }
-    match o.kind {
-      BreakKind::LineBoundary { .. } if o.pos > limit => Some(o.pos),
-      _ => None,
-    }
-  }) {
-    fallback = near_line;
-  }
-
-  let clamped = fallback.min(total_height);
-  let next = if clamped <= start + BREAK_EPSILON {
-    (start + fragmentainer).min(total_height)
-  } else {
-    clamped
-  };
-  update_line_starts(next, line_containers, line_starts);
-  next
-}
-
 fn constraint_key_for(
   opportunity: &BreakOpportunity,
   line_containers: &[LineContainer],
@@ -1479,29 +1600,37 @@ fn constraint_key_for(
 }
 
 fn pos_is_inside_atomic(pos: f32, atomic: &[AtomicRange]) -> bool {
-  atomic
-    .iter()
-    .any(|range| pos > range.start + BREAK_EPSILON && pos < range.end - BREAK_EPSILON)
+  atomic_containing(pos, atomic).is_some()
 }
 
 fn atomic_containing(pos: f32, atomic: &[AtomicRange]) -> Option<AtomicRange> {
-  atomic.iter().copied().find(|range| {
-    pos >= range.start - BREAK_EPSILON
-      && pos < range.end - BREAK_EPSILON
-      && (range.end - range.start) > BREAK_EPSILON
-  })
+  if atomic.is_empty() {
+    return None;
+  }
+  let idx = atomic.partition_point(|range| range.start <= pos + BREAK_EPSILON);
+  if idx == 0 {
+    return None;
+  }
+  let candidate = atomic[idx - 1];
+  if pos >= candidate.start - BREAK_EPSILON
+    && pos < candidate.end - BREAK_EPSILON
+    && (candidate.end - candidate.start) > BREAK_EPSILON
+  {
+    Some(candidate)
+  } else {
+    None
+  }
 }
 
 fn next_atomic_in_range(start: f32, end: f32, atomic: &[AtomicRange]) -> Option<AtomicRange> {
+  if atomic.is_empty() {
+    return None;
+  }
+  let idx = atomic.partition_point(|range| range.start <= start + BREAK_EPSILON);
   atomic
-    .iter()
+    .get(idx)
+    .filter(|range| range.start < end + BREAK_EPSILON)
     .copied()
-    .filter(|range| range.start > start + BREAK_EPSILON && range.start < end + BREAK_EPSILON)
-    .min_by(|a, b| {
-      a.start
-        .partial_cmp(&b.start)
-        .unwrap_or(std::cmp::Ordering::Equal)
-    })
 }
 
 fn collect_atomic_range_for_node(
@@ -1513,7 +1642,7 @@ fn collect_atomic_range_for_node(
   context: FragmentationContext,
   fragmentainer_size: Option<f32>,
 ) {
-  let node_block_size = axis.block_size(&node.bounds);
+  let _node_block_size = axis.block_size(&node.bounds);
   let (start, end) = axis.flow_range(abs_start, parent_block_size, &node.bounds);
   if end <= start + BREAK_EPSILON {
     return;
@@ -1642,19 +1771,6 @@ pub(crate) fn normalize_atomic_ranges(ranges: &mut Vec<AtomicRange>) {
   ranges.extend(merged);
 }
 
-fn update_line_starts(boundary: f32, line_containers: &[LineContainer], line_starts: &mut [usize]) {
-  for container in line_containers {
-    if let Some(slot) = line_starts.get_mut(container.id) {
-      let completed = container
-        .line_ends
-        .iter()
-        .take_while(|end| **end <= boundary + BREAK_EPSILON)
-        .count();
-      *slot = completed;
-    }
-  }
-}
-
 fn combine_breaks(
   after: BreakBetween,
   before: BreakBetween,
@@ -1713,4 +1829,88 @@ fn apply_avoid_penalty(strength: BreakStrength, inside_avoid: bool) -> BreakStre
 fn default_style() -> &'static ComputedStyle {
   static DEFAULT: OnceLock<ComputedStyle> = OnceLock::new();
   DEFAULT.get_or_init(ComputedStyle::default)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::layout::axis::FragmentAxes;
+  use std::sync::Arc;
+  use std::time::{Duration, Instant};
+
+  fn default_axes() -> FragmentAxes {
+    FragmentAxes::from_writing_mode_and_direction(WritingMode::HorizontalTb, Direction::Ltr)
+  }
+
+  #[test]
+  fn massive_opportunities_remains_fast() {
+    let line_height = 1.0;
+    let line_count = 10_000;
+    let mut lines = Vec::with_capacity(line_count);
+    for i in 0..line_count {
+      let y = i as f32 * line_height;
+      lines.push(FragmentNode::new_line(
+        Rect::from_xywh(0.0, y, 100.0, line_height),
+        line_height * 0.8,
+        Vec::new(),
+      ));
+    }
+    let total_height = line_count as f32 * line_height;
+    let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, total_height), lines);
+    let mut analyzer = FragmentationAnalyzer::new(
+      &root,
+      FragmentationContext::Page,
+      default_axes(),
+      Some(50.0),
+    );
+    let total_extent = analyzer.content_extent().max(50.0);
+    let start = Instant::now();
+    let boundaries = analyzer.boundaries(50.0, total_extent).unwrap();
+    let elapsed = start.elapsed();
+    let expected = (total_extent / 50.0).ceil() as usize + 1;
+    assert_eq!(boundaries.len(), expected);
+    assert!(
+      elapsed < Duration::from_millis(500),
+      "expected linear boundary resolution, took {elapsed:?}"
+    );
+  }
+
+  #[test]
+  fn atomic_ranges_are_not_split() {
+    let mut avoid = ComputedStyle::default();
+    avoid.break_inside = BreakInside::Avoid;
+    let atomic = FragmentNode::new_block_styled(
+      Rect::from_xywh(0.0, 0.0, 100.0, 60.0),
+      vec![],
+      Arc::new(avoid),
+    );
+    let trailing = FragmentNode::new_block(Rect::from_xywh(0.0, 60.0, 100.0, 40.0), vec![]);
+    let root = FragmentNode::new_block(
+      Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+      vec![atomic, trailing],
+    );
+    let mut analyzer = FragmentationAnalyzer::new(
+      &root,
+      FragmentationContext::Page,
+      default_axes(),
+      Some(40.0),
+    );
+    let total_extent = analyzer.content_extent().max(40.0);
+    let boundaries = analyzer.boundaries(40.0, total_extent).unwrap();
+    let first_break = boundaries
+      .iter()
+      .copied()
+      .find(|b| *b > BREAK_EPSILON)
+      .unwrap_or(total_extent);
+    assert!(
+      first_break >= 60.0 - BREAK_EPSILON,
+      "first break should land after the atomic range, got {first_break}"
+    );
+    assert!(
+      boundaries
+        .iter()
+        .all(|b| *b <= 0.0 + BREAK_EPSILON || *b >= 60.0 - BREAK_EPSILON),
+      "no boundary should fall inside the atomic range: {boundaries:?}"
+    );
+  }
 }
