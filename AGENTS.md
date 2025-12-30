@@ -41,15 +41,26 @@ Everything else is subordinate:
 - If they render but take seconds/minutes, we are failing.
 - If they regress, we are failing.
 
-This project needs relentless focus: **PERFORMANCE + PAGESET OUTPUT**.
+This project needs relentless focus: **PAGESET ACCURACY (pixel-correct output) + PERFORMANCE**.
+
+### Planner scope (strict, for now)
+
+For now, the planner’s universe is **ONLY** the pages listed in `src/bin/fetch_pages.rs`:
+- **Only**: do not chase work that is not motivated by a pageset failure/slowdown.
+- **Exactly**: do not add/remove pages or substitute “representative” pages. The list is the KPI.
+- **All of them**: the goal is not to make *one* page great — it’s to make the *entire pageset* render accurately and fast.
+
+You may temporarily focus on a single pageset page (or a minimized repro derived from one) to debug, but always return to full pageset runs and update `progress/pages/*.json`.
 
 ## Culture / mindset (read this twice)
 
+- **Accuracy is the product**: our job is to make the pageset render *correct pixels* (layout, paint, text, images). **Performance and data are tools** to reach that goal faster, not goals we chase for their own sake.
+- **Accuracy is correctness**: wrong/blank/missing output is a bug. Treat “it’s probably JS” as a hypothesis to disprove, not a conclusion.
 - **Performance is correctness**: a renderer that times out or loops is wrong.
-- **No vanity work**: changes that don’t move a pageset metric (or remove a crash) are not acceptable.
+- **No vanity work**: changes that don’t improve pageset accuracy, eliminate a crash/timeout, or reduce uncertainty for an imminent fix are not acceptable. Instrumentation that never leads to a fix is waste.
 - **Ruthless triage**: if you can’t turn a symptom into a task with a measurable outcome quickly, stop and split the work.
 - **Accountability**: progress must be visible, comparable, and committed. Regressions must be obvious.
-- **Worship data**: we don’t “feel” performance or correctness — we measure it. Prefer evidence like `progress/pages/*.json` deltas, timings, traces, logs, and tests (unit/prop/fuzz/regressions). Use standard instrumentation when helpful (`tracing` spans/events, `metrics` counters/histograms). If you can’t measure it, you can’t improve it.
+- **Worship data (in service of accuracy)**: we don’t “feel” performance or correctness — we measure it. Prefer evidence like `progress/pages/*.json` deltas, timings, traces, logs, and tests (unit/prop/fuzz/regressions). Use standard instrumentation when helpful (`tracing` spans/events, `metrics` counters/histograms). Data is only valuable if it helps us ship more correct pageset renders.
 - **No shortcuts**: the hard budgets are NOT permission to ship hacks, workarounds, TODOs, partial implementations, or “close enough” behavior. They are pressure to **think deeply** and **grind** until the solution is both **correct and fast** (fix root causes; don’t paper over them).
 
 ## Hard budgets (non-negotiable)
@@ -142,10 +153,9 @@ stage (e.g., hard-killed workers).
 
 1. **Panics / crashes**
 2. **Timeouts / loops** (must get under 5s)
-3. **Big-stage hotspots** (cascade/layout/paint dominating)
-4. **Blank/near-blank output on pages that should render without JS** (assume “HTML/CSS fallback exists” until proven otherwise)
-5. **Fidelity improvements**
-6. Spec expansion **only when it moves pageset output/perf**
+3. **Pageset accuracy failures** (missing content, wrong layout/paint, unreadable text). Fix root causes and add regressions where possible.
+4. **Big-stage hotspots** (cascade/layout/paint dominating) when they block pageset renders or iteration speed.
+5. Spec expansion **only when it moves pageset accuracy/perf**
 
 ## Tooling (use this to stay systematic)
 
