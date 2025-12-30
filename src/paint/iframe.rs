@@ -2,6 +2,7 @@ use crate::api::{render_html_with_shared_resources, ResourceKind};
 use crate::geometry::Rect;
 use crate::html::encoding::decode_html_bytes;
 use crate::image_loader::ImageCache;
+use crate::paint::pixmap::new_pixmap;
 use crate::resource::origin_from_url;
 use crate::style::color::Rgba;
 use crate::style::ComputedStyle;
@@ -47,7 +48,7 @@ pub(crate) fn render_iframe_srcdoc(
     }
     let device_width = ((width as f32) * device_pixel_ratio).round().max(1.0) as u32;
     let device_height = ((height as f32) * device_pixel_ratio).round().max(1.0) as u32;
-    return Pixmap::new(device_width, device_height);
+    return new_pixmap(device_width, device_height);
   }
 
   let background = style.map(|s| s.background_color).unwrap_or(Rgba::WHITE);
@@ -119,7 +120,7 @@ pub(crate) fn render_iframe_src(
     }
     let device_width = ((width as f32) * device_pixel_ratio).round().max(1.0) as u32;
     let device_height = ((height as f32) * device_pixel_ratio).round().max(1.0) as u32;
-    return Pixmap::new(device_width, device_height);
+    return new_pixmap(device_width, device_height);
   }
   let nested_depth = remaining_depth.saturating_sub(1);
   let fetcher = Arc::clone(image_cache.fetcher());

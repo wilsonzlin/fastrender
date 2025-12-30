@@ -1,4 +1,5 @@
 use crate::geometry::Point;
+use crate::paint::pixmap::new_pixmap;
 use crate::style::color::Rgba;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -276,7 +277,7 @@ pub fn rasterize_linear_gradient(
   let dx = end.x - start.x;
   let dy = end.y - start.y;
   let denom = dx * dx + dy * dy;
-  let Some(mut pixmap) = Pixmap::new(width, height) else {
+  let Some(mut pixmap) = new_pixmap(width, height) else {
     return None;
   };
   if denom.abs() <= f32::EPSILON {
@@ -322,7 +323,7 @@ pub fn rasterize_conic_gradient(
   let period = gradient_period(stops);
   let key = GradientCacheKey::new(stops, spread, period, bucket);
   let lut = cache.get_or_build(key, || build_gradient_lut(stops, spread, period, bucket));
-  let Some(mut pixmap) = Pixmap::new(width, height) else {
+  let Some(mut pixmap) = new_pixmap(width, height) else {
     return None;
   };
 
@@ -363,7 +364,7 @@ mod tests {
     spread: SpreadMode,
   ) -> Pixmap {
     let period = gradient_period(stops);
-    let Some(mut pixmap) = Pixmap::new(width, height) else {
+    let Some(mut pixmap) = new_pixmap(width, height) else {
       panic!("pixmap allocation failed");
     };
     let stride = width as usize;
@@ -497,7 +498,7 @@ mod tests {
     )
     .expect("lut rasterize");
 
-    let mut naive = Pixmap::new(width, height).expect("pixmap");
+    let mut naive = new_pixmap(width, height).expect("pixmap");
     let denom = (end.x - start.x) * (end.x - start.x) + (end.y - start.y) * (end.y - start.y);
     let inv = 1.0 / denom;
     let stride = width as usize;

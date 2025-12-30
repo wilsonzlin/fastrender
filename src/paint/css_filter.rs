@@ -6,6 +6,7 @@
 //! renderer to keep filter behavior in sync.
 
 use crate::paint::blur::{alpha_bounds, apply_gaussian_blur};
+use crate::paint::pixmap::new_pixmap;
 use crate::render_control::{active_deadline, with_deadline};
 use crate::style::color::Rgba;
 use rayon::prelude::*;
@@ -244,7 +245,7 @@ pub(crate) fn apply_drop_shadow(
   let spread_pad = spread.max(0.0).ceil() as u32;
   let pad = blur_pad + spread_pad;
 
-  let mut shadow = match Pixmap::new(bounds_w + pad * 2, bounds_h + pad * 2) {
+  let mut shadow = match new_pixmap(bounds_w + pad * 2, bounds_h + pad * 2) {
     Some(p) => p,
     None => return,
   };
@@ -289,7 +290,7 @@ pub(crate) fn apply_drop_shadow(
     apply_gaussian_blur(&mut shadow, blur_radius);
   }
 
-  let mut result = match Pixmap::new(source.width(), source.height()) {
+  let mut result = match new_pixmap(source.width(), source.height()) {
     Some(p) => p,
     None => return,
   };

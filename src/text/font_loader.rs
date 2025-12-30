@@ -32,6 +32,7 @@ use crate::css::types::FontFaceStyle;
 use crate::css::types::FontSourceFormat;
 use crate::debug::runtime;
 use crate::error::Error;
+use crate::error::FontError;
 use crate::error::Result;
 use crate::resource::{FetchedResource, ResourceFetcher};
 use crate::text::font_db::FontCacheConfig;
@@ -82,6 +83,9 @@ const FALLBACK_SWAP_PERIOD: Duration = Duration::from_secs(3);
 const OPTIONAL_BLOCK_PERIOD: Duration = Duration::from_millis(100);
 /// Default render-time window for waiting on blocking web fonts.
 pub const DEFAULT_WEB_FONT_TIMEOUT: Duration = Duration::from_millis(500);
+
+// Hard limit on font payload sizes to avoid allocator aborts on corrupt inputs.
+const MAX_FONT_BYTES: u64 = 32 * 1024 * 1024;
 
 /// Render-time policy for web font fetching.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2227,22 +2231,31 @@ fn decode_font_bytes(bytes: Vec<u8>, content_type: Option<&str>) -> Result<Vec<u
   let content_type = content_type.map(|c| c.to_ascii_lowercase());
   let content_type = content_type.as_deref();
 
+  enforce_font_size(bytes.len() as u64, "compressed")?;
+  if let Some(sfnt_size) = expected_sfnt_size(&bytes) {
+    enforce_font_size(sfnt_size, "uncompressed (declared)")?;
+  }
+
   if bytes.starts_with(b"wOF2") || content_type.map(|c| c.contains("woff2")).unwrap_or(false) {
-    return decompress_woff2(&bytes).map_err(|e| {
-      Error::Font(crate::error::FontError::LoadFailed {
+    let decoded = decompress_woff2(&bytes).map_err(|e| {
+      Error::Font(FontError::LoadFailed {
         family: "woff2".into(),
         reason: format!("{:?}", e),
       })
-    });
+    })?;
+    enforce_font_size(decoded.len() as u64, "uncompressed")?;
+    return Ok(decoded);
   }
 
   if bytes.starts_with(b"wOFF") || content_type.map(|c| c.contains("woff")).unwrap_or(false) {
-    return decompress_woff1(&bytes).map_err(|e| {
-      Error::Font(crate::error::FontError::LoadFailed {
+    let decoded = decompress_woff1(&bytes).map_err(|e| {
+      Error::Font(FontError::LoadFailed {
         family: "woff".into(),
         reason: format!("{:?}", e),
       })
-    });
+    })?;
+    enforce_font_size(decoded.len() as u64, "uncompressed")?;
+    return Ok(decoded);
   }
 
   Ok(bytes)
@@ -2287,6 +2300,30 @@ fn decode_data_url(url: &str) -> Result<(Vec<u8>, Option<String>)> {
 // ============================================================================
 // TextMeasurement
 // ============================================================================
+
+fn expected_sfnt_size(bytes: &[u8]) -> Option<u64> {
+  let header = bytes.get(..20)?;
+  let signature = &header[..4];
+  if signature != b"wOF2" && signature != b"wOFF" {
+    return None;
+  }
+  let mut buf = [0u8; 4];
+  buf.copy_from_slice(&header[16..20]);
+  Some(u32::from_be_bytes(buf) as u64)
+}
+
+fn enforce_font_size(size: u64, label: &str) -> Result<()> {
+  if size > MAX_FONT_BYTES {
+    return Err(Error::Font(FontError::LoadFailed {
+      family: "font".into(),
+      reason: format!(
+        "{label} font payload {} bytes exceeds max {}",
+        size, MAX_FONT_BYTES
+      ),
+    }));
+  }
+  Ok(())
+}
 
 /// Result of detailed text measurement
 ///
@@ -2524,6 +2561,27 @@ mod tests {
     );
     assert_eq!(calls[0], "https://example.com/font.woff2");
     assert!(ctx.has_web_faces("FormatPref"));
+  }
+
+  #[test]
+  fn rejects_oversized_woff_headers() {
+    let mut data = vec![0u8; 20];
+    data[0..4].copy_from_slice(b"wOF2");
+    data[16..20].copy_from_slice((MAX_FONT_BYTES as u32 + 1).to_be_bytes().as_slice());
+    let err = decode_font_bytes(data, Some("font/woff2")).unwrap_err();
+    assert!(format!("{err:?}").contains("exceeds max"));
+  }
+
+  #[test]
+  fn truncated_woff2_never_panics() {
+    // Some sites occasionally serve empty/broken WOFF2 responses with the correct
+    // content-type. Those used to trigger aborts when handed to the decoder.
+    let data = b"wOF2".to_vec();
+    let result = std::panic::catch_unwind(|| decode_font_bytes(data, Some("font/woff2")));
+    let Ok(result) = result else {
+      panic!("decode_font_bytes should not panic on truncated WOFF2 input");
+    };
+    assert!(result.is_err(), "truncated WOFF2 should be rejected");
   }
 
   #[test]

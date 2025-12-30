@@ -28,7 +28,7 @@
 //! use fastrender::text::pipeline::ShapedRun;
 //!
 //! let mut rasterizer = TextRasterizer::new();
-//! let pixmap = Pixmap::new(800, 600).unwrap();
+//! let pixmap = new_pixmap(800, 600).unwrap();
 //!
 //! rasterizer.render_shaped_run(
 //!     &shaped_run,
@@ -52,6 +52,8 @@
 
 use crate::error::RenderError;
 use crate::error::Result;
+#[cfg(test)]
+use crate::paint::pixmap::new_pixmap;
 use crate::style::color::Rgba;
 use crate::text::color_fonts::{ColorFontRenderer, ColorGlyphRaster};
 use crate::text::font_db::LoadedFont;
@@ -1638,7 +1640,7 @@ mod tests {
       None => return, // Skip if no fonts available
     };
 
-    let mut pixmap = Pixmap::new(100, 100).unwrap();
+    let mut pixmap = new_pixmap(100, 100).unwrap();
     pixmap.fill(tiny_skia::Color::WHITE);
 
     // Get glyph ID for 'A'
@@ -1660,7 +1662,7 @@ mod tests {
       None => return,
     };
 
-    let mut pixmap = Pixmap::new(100, 100).unwrap();
+    let mut pixmap = new_pixmap(100, 100).unwrap();
     pixmap.fill(tiny_skia::Color::WHITE);
 
     // Get glyph ID for space
@@ -1704,7 +1706,7 @@ mod tests {
       return;
     };
 
-    let mut pixmap = Pixmap::new(64, 64).unwrap();
+    let mut pixmap = new_pixmap(64, 64).unwrap();
     pixmap.fill(tiny_skia::Color::WHITE);
 
     let _guard = face_cache::FaceParseCountGuard::start();
@@ -1746,7 +1748,7 @@ mod tests {
       })
       .collect();
 
-    let mut pixmap = Pixmap::new(200, 100).unwrap();
+    let mut pixmap = new_pixmap(200, 100).unwrap();
     pixmap.fill(tiny_skia::Color::WHITE);
 
     let mut rasterizer = TextRasterizer::new();
@@ -1868,12 +1870,12 @@ mod tests {
     let mut rasterizer = TextRasterizer::new();
     rasterizer.reset_cache_stats();
 
-    let mut pixmap = Pixmap::new(50, 50).unwrap();
+    let mut pixmap = new_pixmap(50, 50).unwrap();
     rasterizer
       .render_glyphs(&glyphs, &font, 16.0, 10.0, 35.0, Rgba::BLACK, &mut pixmap)
       .unwrap();
 
-    let mut pixmap2 = Pixmap::new(50, 50).unwrap();
+    let mut pixmap2 = new_pixmap(50, 50).unwrap();
     rasterizer
       .render_glyphs(&glyphs, &font, 16.0, 20.0, 40.0, Rgba::BLACK, &mut pixmap2)
       .unwrap();

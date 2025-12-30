@@ -1,0 +1,4 @@
+astro-island,astro-slot,astro-static-slot{display:contents}
+    .region-links { position: absolute; bottom: 0; left: 0; height: 1px !important; width: 1px !important; overflow: hidden; display: flex; flex-direction: column; }
+    .link { background: #0159a3; color: white; }
+  

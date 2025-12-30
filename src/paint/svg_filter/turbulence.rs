@@ -1,4 +1,5 @@
 use crate::geometry::Rect;
+use crate::paint::pixmap::new_pixmap;
 use crate::render_control::{active_deadline, with_deadline};
 use rayon::prelude::*;
 use tiny_skia::{Pixmap, PremultipliedColorU8};
@@ -59,10 +60,10 @@ pub(super) fn render_turbulence(
 ) -> Option<Pixmap> {
   let region = match resolve_region(filter_region, output_width, output_height) {
     Some(region) => region,
-    None => return Pixmap::new(output_width, output_height),
+    None => return new_pixmap(output_width, output_height),
   };
 
-  let mut pixmap = Pixmap::new(output_width, output_height)?;
+  let mut pixmap = new_pixmap(output_width, output_height)?;
 
   let perm_table = build_permutation(seed);
   let octaves = octaves.max(1);

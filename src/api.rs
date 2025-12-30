@@ -127,6 +127,7 @@ use crate::paint::painter::paint_tree_display_list_with_resources_scaled_offset_
 use crate::paint::painter::paint_tree_with_resources_scaled_offset_backend_with_iframe_depth;
 use crate::paint::painter::paint_tree_with_resources_scaled_offset_with_trace;
 use crate::paint::painter::PaintBackend;
+use crate::paint::pixmap::new_pixmap;
 use crate::render_control::{
   record_stage, CancelCallback, DeadlineGuard, RenderDeadline, StageHeartbeat,
 };
@@ -1748,7 +1749,7 @@ fn merge_text_diagnostics(stats: &mut RenderStats) {
 }
 
 #[derive(Default)]
-struct RenderStatsRecorder {
+pub struct RenderStatsRecorder {
   level: DiagnosticsLevel,
   stats: RenderStats,
 }
@@ -6516,7 +6517,7 @@ impl FastRender {
     let width = width.max(1);
     let height = height.max(1);
     let mut pixmap =
-      Pixmap::new(width, height).ok_or(Error::Render(RenderError::CanvasCreationFailed {
+      new_pixmap(width, height).ok_or(Error::Render(RenderError::CanvasCreationFailed {
         width,
         height,
       }))?;

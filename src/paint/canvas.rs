@@ -53,6 +53,7 @@ use crate::geometry::Rect;
 use crate::geometry::Size;
 use crate::paint::clip_path::ResolvedClipPath;
 use crate::paint::display_list::GlyphInstance;
+use crate::paint::pixmap::{new_pixmap, new_pixmap_with_context};
 use crate::paint::text_rasterize::{
   concat_transforms, GlyphCacheStats, TextRasterizer, TextRenderState,
 };
@@ -220,9 +221,7 @@ impl Canvas {
     background: Rgba,
     text_rasterizer: TextRasterizer,
   ) -> Result<Self> {
-    let pixmap = Pixmap::new(width, height).ok_or_else(|| RenderError::InvalidParameters {
-      message: format!("Failed to create canvas {}x{}", width, height),
-    })?;
+    let pixmap = new_pixmap_with_context(width, height, "canvas")?;
 
     let mut canvas = Self {
       pixmap,
@@ -451,9 +450,7 @@ impl Canvas {
     let width = width.max(1);
     let height = height.max(1);
 
-    let new_pixmap = Pixmap::new(width, height).ok_or_else(|| RenderError::InvalidParameters {
-      message: "Failed to create layer pixmap".into(),
-    })?;
+    let new_pixmap = new_pixmap_with_context(width, height, "layer")?;
 
     let record = LayerRecord {
       pixmap: std::mem::replace(&mut self.pixmap, new_pixmap),
@@ -1258,7 +1255,7 @@ impl Canvas {
       return None;
     }
 
-    let mut mask_pixmap = Pixmap::new(self.width(), self.height())?;
+    let mut mask_pixmap = new_pixmap(self.width(), self.height())?;
     let paint = {
       let mut p = Paint::default();
       p.set_color_rgba8(255, 255, 255, 255);
@@ -1378,7 +1375,7 @@ pub(crate) fn crop_mask(
     return None;
   }
 
-  let mut pixmap = Pixmap::new(crop_w, crop_h)?;
+  let mut pixmap = new_pixmap(crop_w, crop_h)?;
   let dst = pixmap.data_mut();
   let src = mask.data();
   let src_stride = mask_width as usize;

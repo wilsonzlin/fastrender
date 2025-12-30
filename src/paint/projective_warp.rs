@@ -1,5 +1,6 @@
 use crate::geometry::Point;
 use crate::paint::homography::{quad_bounds, Homography};
+use crate::paint::pixmap::new_pixmap;
 use crate::render_control::{active_deadline, with_deadline};
 use lru::LruCache;
 use rayon::prelude::*;
@@ -155,7 +156,7 @@ pub fn warp_pixmap(
   let src_w = src.width() as i32;
   let src_h = src.height() as i32;
 
-  let mut output = Pixmap::new(width, height)?;
+  let mut output = new_pixmap(width, height)?;
   let clip_data = clip.map(|m| (m.data(), m.width() as usize, m.height() as usize));
   let area = width.saturating_mul(height);
 
@@ -331,7 +332,7 @@ mod tests {
 
   #[test]
   fn warp_identity_matches_source() {
-    let mut src = Pixmap::new(2, 2).unwrap();
+    let mut src = new_pixmap(2, 2).unwrap();
     let src_pixels = src.pixels_mut();
     src_pixels[0] = color(255, 0, 0, 255);
     src_pixels[1] = color(0, 255, 0, 255);
@@ -354,7 +355,7 @@ mod tests {
 
   #[test]
   fn warp_to_trapezoid_matches_inverse_sampling() {
-    let mut src = Pixmap::new(2, 2).unwrap();
+    let mut src = new_pixmap(2, 2).unwrap();
     let src_pixels = src.pixels_mut();
     src_pixels[0] = color(255, 0, 0, 255);
     src_pixels[1] = color(0, 255, 0, 255);
@@ -403,11 +404,11 @@ mod tests {
 
   #[test]
   fn clip_mask_limits_warp_region() {
-    let mut src = Pixmap::new(3, 3).unwrap();
+    let mut src = new_pixmap(3, 3).unwrap();
     src.pixels_mut().fill(color(200, 0, 0, 255));
 
     let dst_quad = [(0.0, 0.0), (3.0, 0.0), (3.0, 3.0), (0.0, 3.0)];
-    let mut mask_pixmap = Pixmap::new(3, 3).unwrap();
+    let mut mask_pixmap = new_pixmap(3, 3).unwrap();
     mask_pixmap.pixels_mut().fill(color(0, 0, 0, 0));
     mask_pixmap.pixels_mut()[4] = color(0, 0, 0, 255);
     let mask = Mask::from_pixmap(mask_pixmap.as_ref(), MaskType::Alpha);

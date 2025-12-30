@@ -3,6 +3,7 @@ use crate::image_loader::ImageCache;
 use crate::paint::blur::pixel_fingerprint;
 use crate::paint::blur::{alpha_bounds, apply_gaussian_blur_cached, BlurCache};
 use crate::paint::painter::with_paint_diagnostics;
+use crate::paint::pixmap::new_pixmap;
 use crate::render_control::{active_deadline, with_deadline};
 use crate::style::color;
 use crate::tree::box_tree::ReplacedType;
@@ -665,7 +666,7 @@ fn transparent_result(filter_region: Rect) -> Option<FilterResult> {
   let width = filter_region.width().max(0.0).round() as u32;
   let height = filter_region.height().max(0.0).round() as u32;
   Some(FilterResult::full_region(
-    Pixmap::new(width, height)?,
+    new_pixmap(width, height)?,
     filter_region,
   ))
 }
@@ -2420,7 +2421,7 @@ fn resize_pixmap(source: &Pixmap, width: u32, height: u32) -> Option<Pixmap> {
     return None;
   }
 
-  let mut out = Pixmap::new(width, height)?;
+  let mut out = new_pixmap(width, height)?;
   let mut paint = PixmapPaint::default();
   paint.quality = FilterQuality::Bilinear;
   let transform = Transform::from_scale(
@@ -2533,7 +2534,7 @@ fn apply_svg_filter_scaled(
       && primitive_region.width() > 0.0
       && primitive_region.height() > 0.0;
     if !primitive_region_valid {
-      let mut out = match Pixmap::new(source.pixmap.width(), source.pixmap.height()) {
+      let mut out = match new_pixmap(source.pixmap.width(), source.pixmap.height()) {
         Some(p) => p,
         None => continue,
       };
@@ -2888,7 +2889,7 @@ fn resolve_input(
   match input {
     FilterInput::SourceGraphic => Some(source.clone()),
     FilterInput::SourceAlpha => {
-      let mut mask = Pixmap::new(source.pixmap.width(), source.pixmap.height())?;
+      let mut mask = new_pixmap(source.pixmap.width(), source.pixmap.height())?;
       for (dst, src) in mask
         .pixels_mut()
         .iter_mut()
@@ -2915,7 +2916,7 @@ fn resolve_input(
 fn render_fe_image(prim: &ImagePrimitive, filter_region: Rect) -> Option<FilterResult> {
   let canvas_width = filter_region.width().max(0.0).round() as u32;
   let canvas_height = filter_region.height().max(0.0).round() as u32;
-  let mut out = Pixmap::new(canvas_width.max(1), canvas_height.max(1))?;
+  let mut out = new_pixmap(canvas_width.max(1), canvas_height.max(1))?;
   let src_w = prim.pixmap.width() as f32;
   let src_h = prim.pixmap.height() as f32;
   if src_w == 0.0 || src_h == 0.0 {
@@ -3174,10 +3175,10 @@ fn apply_diffuse_lighting(
   color_interpolation_filters: ColorInterpolationFilters,
 ) -> Option<FilterResult> {
   if matches!(light, LightSource::None) {
-    let pixmap = Pixmap::new(input.pixmap.width(), input.pixmap.height())?;
+    let pixmap = new_pixmap(input.pixmap.width(), input.pixmap.height())?;
     return Some(FilterResult::new(pixmap, input.region, filter_region));
   }
-  let mut out = Pixmap::new(input.pixmap.width(), input.pixmap.height())?;
+  let mut out = new_pixmap(input.pixmap.width(), input.pixmap.height())?;
   let base_color = lighting_color_in_space(lighting_color, color_interpolation_filters);
   let kernel_unit = resolve_kernel_unit_length(filter, css_bbox, kernel_unit_length);
   let surface_scale = filter
@@ -3270,10 +3271,10 @@ fn apply_specular_lighting(
   color_interpolation_filters: ColorInterpolationFilters,
 ) -> Option<FilterResult> {
   if matches!(light, LightSource::None) {
-    let pixmap = Pixmap::new(input.pixmap.width(), input.pixmap.height())?;
+    let pixmap = new_pixmap(input.pixmap.width(), input.pixmap.height())?;
     return Some(FilterResult::new(pixmap, input.region, filter_region));
   }
-  let mut out = Pixmap::new(input.pixmap.width(), input.pixmap.height())?;
+  let mut out = new_pixmap(input.pixmap.width(), input.pixmap.height())?;
   let base_color = lighting_color_in_space(lighting_color, color_interpolation_filters);
   let kernel_unit = resolve_kernel_unit_length(filter, css_bbox, kernel_unit_length);
   let surface_scale = filter
@@ -3362,7 +3363,7 @@ fn apply_specular_lighting(
 }
 
 fn flood(width: u32, height: u32, color: &Rgba, opacity: f32) -> Option<Pixmap> {
-  let mut pixmap = Pixmap::new(width, height)?;
+  let mut pixmap = new_pixmap(width, height)?;
   let alpha = (color.a * opacity).clamp(0.0, 1.0);
   let paint = tiny_skia::Color::from_rgba8(color.r, color.g, color.b, (alpha * 255.0) as u8);
   pixmap.fill(paint);
@@ -3381,7 +3382,7 @@ fn offset_pixmap(input: Pixmap, dx: f32, dy: f32) -> Pixmap {
   let w = width as i32;
   let h = height as i32;
   let pixels = input.pixels();
-  let mut out = Pixmap::new(width, height).unwrap();
+  let mut out = new_pixmap(width, height).unwrap();
   let out_pixels = out.pixels_mut();
 
   let sample = |x: i32, y: i32| -> PremultipliedColorU8 {
@@ -3520,7 +3521,7 @@ fn merge_inputs(
   current: &FilterResult,
   filter_region: Rect,
 ) -> FilterResult {
-  let mut out = Pixmap::new(source.pixmap.width(), source.pixmap.height()).unwrap();
+  let mut out = new_pixmap(source.pixmap.width(), source.pixmap.height()).unwrap();
   let mut region = Rect::ZERO;
   let mut seen_any = false;
   let mut paint = PixmapPaint::default();
@@ -3573,7 +3574,7 @@ fn drop_shadow_pixmap(
   let blur_pad_x = (stddev.0.abs() * 3.0).ceil() as u32;
   let blur_pad_y = (stddev.1.abs() * 3.0).ceil() as u32;
 
-  let mut shadow = match Pixmap::new(bounds_w + blur_pad_x * 2, bounds_h + blur_pad_y * 2) {
+  let mut shadow = match new_pixmap(bounds_w + blur_pad_x * 2, bounds_h + blur_pad_y * 2) {
     Some(p) => p,
     None => return input,
   };
@@ -3626,7 +3627,7 @@ fn drop_shadow_pixmap(
     }
   }
 
-  let mut out = match Pixmap::new(input.pixmap.width(), input.pixmap.height()) {
+  let mut out = match new_pixmap(input.pixmap.width(), input.pixmap.height()) {
     Some(p) => p,
     None => return input,
   };
@@ -3677,7 +3678,7 @@ fn composite_porter_duff<F>(a: &Pixmap, b: &Pixmap, factors: F) -> Option<Pixmap
 where
   F: Fn(f32, f32) -> (f32, f32),
 {
-  let mut out = Pixmap::new(a.width(), a.height())?;
+  let mut out = new_pixmap(a.width(), a.height())?;
   let a_pixels = a.pixels();
   let b_pixels = b.pixels();
   for ((dst, pa), pb) in out
@@ -3708,7 +3709,7 @@ fn arithmetic_composite(
   k3: f32,
   k4: f32,
 ) -> Option<Pixmap> {
-  let mut out = Pixmap::new(a.width(), a.height())?;
+  let mut out = new_pixmap(a.width(), a.height())?;
   for ((dst, pa), pb) in out
     .pixels_mut()
     .iter_mut()
@@ -3784,7 +3785,7 @@ fn region_to_int_bounds(
 fn tile_pixmap(input: FilterResult, filter_region: Rect) -> Option<FilterResult> {
   let width = input.pixmap.width();
   let height = input.pixmap.height();
-  let mut out = Pixmap::new(width, height)?;
+  let mut out = new_pixmap(width, height)?;
   let Some((start_x, start_y, tile_width, tile_height)) =
     region_to_int_bounds(input.region, width, height)
   else {
@@ -3844,7 +3845,7 @@ fn apply_displacement_map(
   y_channel: ChannelSelector,
   color_interpolation_filters: ColorInterpolationFilters,
 ) -> Option<Pixmap> {
-  let mut out = Pixmap::new(primary.width(), primary.height())?;
+  let mut out = new_pixmap(primary.width(), primary.height())?;
   let width = primary.width() as usize;
 
   for (idx, dst) in out.pixels_mut().iter_mut().enumerate() {
@@ -3984,7 +3985,7 @@ fn apply_convolve_matrix(
   let width = input.width() as usize;
   let width_i32 = input.width() as i32;
   let height_i32 = input.height() as i32;
-  let mut out = Pixmap::new(input.width(), input.height()).unwrap();
+  let mut out = new_pixmap(input.width(), input.height()).unwrap();
   for px in out.pixels_mut() {
     *px = PremultipliedColorU8::TRANSPARENT;
   }
@@ -4389,7 +4390,7 @@ mod tests {
   use tiny_skia::ColorU8;
 
   fn pixmap_from_rgba(colors: &[(u8, u8, u8, u8)]) -> Pixmap {
-    let mut pixmap = Pixmap::new(colors.len() as u32, 1).unwrap();
+    let mut pixmap = new_pixmap(colors.len() as u32, 1).unwrap();
     for (idx, (r, g, b, a)) in colors.iter().copied().enumerate() {
       pixmap.pixels_mut()[idx] = ColorU8::from_rgba(r, g, b, a).premultiply();
     }
@@ -4440,7 +4441,7 @@ mod tests {
 
   #[test]
   fn color_matrix_uses_unpremultiplied_channels() {
-    let mut pixmap = Pixmap::new(1, 1).unwrap();
+    let mut pixmap = new_pixmap(1, 1).unwrap();
     pixmap.pixels_mut()[0] =
       PremultipliedColorU8::from_rgba(128, 0, 0, 128).unwrap_or(PremultipliedColorU8::TRANSPARENT);
 
@@ -4462,7 +4463,7 @@ mod tests {
 
   #[test]
   fn component_transfer_operates_on_unpremultiplied_rgb() {
-    let mut pixmap = Pixmap::new(1, 1).unwrap();
+    let mut pixmap = new_pixmap(1, 1).unwrap();
     pixmap.pixels_mut()[0] =
       PremultipliedColorU8::from_rgba(128, 0, 0, 128).unwrap_or(PremultipliedColorU8::TRANSPARENT);
 
@@ -4487,7 +4488,7 @@ mod tests {
 
   #[test]
   fn luminance_to_alpha_uses_unpremultiplied_rgb() {
-    let mut pixmap = Pixmap::new(1, 1).unwrap();
+    let mut pixmap = new_pixmap(1, 1).unwrap();
     pixmap.pixels_mut()[0] =
       PremultipliedColorU8::from_rgba(128, 64, 0, 128).unwrap_or(PremultipliedColorU8::TRANSPARENT);
 
@@ -4583,7 +4584,7 @@ mod tests {
 
   #[test]
   fn convolve_identity_kernel_is_noop() {
-    let mut pixmap = Pixmap::new(2, 2).unwrap();
+    let mut pixmap = new_pixmap(2, 2).unwrap();
     let pixels = [
       premul(255, 0, 0, 255),
       premul(0, 255, 0, 255),
@@ -4613,7 +4614,7 @@ mod tests {
 
   #[test]
   fn convolve_blur_averages_neighbors() {
-    let mut pixmap = Pixmap::new(3, 3).unwrap();
+    let mut pixmap = new_pixmap(3, 3).unwrap();
     for (idx, px) in pixmap.pixels_mut().iter_mut().enumerate() {
       let v = (idx as u8) * 10;
       *px = premul(v, v, v, 255);
@@ -4643,7 +4644,7 @@ mod tests {
 
   #[test]
   fn convolve_edge_mode_none_darkens_edges() {
-    let mut pixmap = Pixmap::new(2, 2).unwrap();
+    let mut pixmap = new_pixmap(2, 2).unwrap();
     for px in pixmap.pixels_mut() {
       *px = premul(255, 255, 255, 255);
     }
@@ -4686,7 +4687,7 @@ mod tests {
 
   #[test]
   fn convolve_respects_subregion() {
-    let mut pixmap = Pixmap::new(2, 2).unwrap();
+    let mut pixmap = new_pixmap(2, 2).unwrap();
     let pixels = [
       premul(255, 0, 0, 255),
       premul(0, 255, 0, 255),
@@ -4720,7 +4721,7 @@ mod tests {
 
   #[test]
   fn tile_aligns_to_input_region_origin() {
-    let mut pixmap = Pixmap::new(4, 4).unwrap();
+    let mut pixmap = new_pixmap(4, 4).unwrap();
     let width = pixmap.width() as usize;
     let set = |pixmap: &mut Pixmap, x: usize, y: usize, rgba: (u8, u8, u8, u8)| {
       pixmap.pixels_mut()[y * width + x] =
@@ -4751,7 +4752,7 @@ mod tests {
 
   #[test]
   fn empty_primitive_region_produces_transparent_output() {
-    let mut pixmap = Pixmap::new(4, 4).unwrap();
+    let mut pixmap = new_pixmap(4, 4).unwrap();
     for px in pixmap.pixels_mut() {
       *px = premul(10, 20, 30, 255);
     }
@@ -4805,7 +4806,7 @@ mod tests {
 
   #[test]
   fn morphology_dilate_only_expands_horizontally_when_vertical_radius_zero() {
-    let mut pixmap = Pixmap::new(5, 3).unwrap();
+    let mut pixmap = new_pixmap(5, 3).unwrap();
     let idx = 1 * 5 + 2;
     pixmap.pixels_mut()[idx] = PremultipliedColorU8::from_rgba(255, 255, 255, 255).unwrap();
 
@@ -4862,7 +4863,7 @@ mod filter_res_tests {
   }
 
   fn basic_source() -> Pixmap {
-    let mut pixmap = Pixmap::new(12, 12).unwrap();
+    let mut pixmap = new_pixmap(12, 12).unwrap();
     pixmap.fill(Color::from_rgba8(0, 0, 0, 0));
     for y in 4..8 {
       for x in 4..8 {
@@ -4914,7 +4915,7 @@ mod filter_res_tests {
     let svg = "<svg xmlns='http://www.w3.org/2000/svg'><filter id='f' filterUnits='userSpaceOnUse' x='0' y='0' width='4' height='4' filterRes='2 2'><feOffset dx='0' dy='0'/></filter></svg>";
     let filter = load_svg_filter(&data_url(svg), &cache).expect("parsed filter");
 
-    let mut pixmap = Pixmap::new(8, 8).unwrap();
+    let mut pixmap = new_pixmap(8, 8).unwrap();
     pixmap.fill(Color::from_rgba8(0, 0, 255, 255));
     let bbox = Rect::from_xywh(0.0, 0.0, 8.0, 8.0);
     apply_svg_filter(filter.as_ref(), &mut pixmap, 1.0, bbox);
@@ -4972,7 +4973,7 @@ mod fe_image_tests {
     );
     let cache = ImageCache::new();
     let filter = parse_filter_definition(&svg, Some("f"), &cache).expect("filter");
-    let mut canvas = Pixmap::new(5, 5).unwrap();
+    let mut canvas = new_pixmap(5, 5).unwrap();
     let bbox = Rect::from_xywh(0.0, 0.0, canvas.width() as f32, canvas.height() as f32);
     apply_svg_filter(filter.as_ref(), &mut canvas, 1.0, bbox);
 
@@ -4991,7 +4992,7 @@ mod fe_image_tests {
     );
     let cache = ImageCache::new();
     let filter = parse_filter_definition(&svg, Some("f"), &cache).expect("filter");
-    let mut canvas = Pixmap::new(5, 5).unwrap();
+    let mut canvas = new_pixmap(5, 5).unwrap();
     let bbox = Rect::from_xywh(0.0, 0.0, canvas.width() as f32, canvas.height() as f32);
     apply_svg_filter(filter.as_ref(), &mut canvas, 1.0, bbox);
 
@@ -5022,7 +5023,7 @@ mod tests_composite {
 
   fn pixmap_from_colors(width: u32, height: u32, colors: &[(u8, u8, u8, u8)]) -> Pixmap {
     assert_eq!((width * height) as usize, colors.len());
-    let mut pixmap = Pixmap::new(width, height).unwrap();
+    let mut pixmap = new_pixmap(width, height).unwrap();
     for (dst, &(r, g, b, a)) in pixmap.pixels_mut().iter_mut().zip(colors.iter()) {
       *dst = premul_rgba(r, g, b, a);
     }
@@ -5368,7 +5369,7 @@ mod blend_pixmaps_tests {
   }
 
   fn solid_pixmap(color: (u8, u8, u8, u8)) -> FilterResult {
-    let mut pixmap = Pixmap::new(1, 1).unwrap();
+    let mut pixmap = new_pixmap(1, 1).unwrap();
     pixmap.pixels_mut()[0] =
       PremultipliedColorU8::from_rgba(color.0, color.1, color.2, color.3).unwrap();
     let filter_region = filter_region_for_pixmap(&pixmap);

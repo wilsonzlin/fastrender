@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <title>Your browser is out of date!</title>
+  <meta name="viewport" content="width=400">
+  <style nonce="IFuclqGCeOPwlkNygu6fPA==">
+    @import url('assets/dc61ba0f13a495269ca38ff07346f216.css');
+    .container {
+      position: absolute;
+      left: 0;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.3);
+    }
+    .modal {
+      box-sizing: border-box;
+      background: rgb(248, 248, 248);
+      box-shadow: rgba(0, 0, 0, 0.2) 0px 0px 0.5px 0.5px, rgba(0, 0, 0, 0.15) 0px 2px 14px 0px;
+      border-radius: 3px;
+      color: rgb(68, 68, 68);
+      font: 12px/16px Roboto, sans-serif;
+      width: 390px;
+      max-height: 386px;
+      padding: 24px;
+    }
+    .title {
+      font-size: 16px;
+      line-height: 12px;
+      padding-bottom: 12px;
+    }
+    .content {
+      margin-top: 12px;
+      font-size: 12px;
+      color: #444;
+    }
+    a {
+      cursor: pointer;
+      text-decoration: none;
+    }
+    .logos {
+      display: flex;
+      justify-content: center;
+    }
+    .logo {
+      flex: 1 0 0px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      margin: 6px 0px;
+    }
+    .logo img {
+      margin-bottom: 6px;
+      height: 32px;
+      width: 32px;
+    }
+  </style>
+  <script nonce="IFuclqGCeOPwlkNygu6fPA==">
+    var isiOS = /ios|iphone|ipad/i.test(navigator.userAgent);
+    var isMobile = /Mobi/.test(navigator.userAgent);
+    var isAndroid = /android/i.test(navigator.userAgent) && !/like android/i.test(navigator.userAgent);
+    var isMac = /macintosh/i.test(navigator.userAgent);
+    var isWin = /windows/i.test(navigator.userAgent) && !/windows phone/i.test(navigator.userAgent);
+
+    var isGov = window.location.hostname === 'figma-gov.com';
+
+    var setAttributeByClassName = function (className, attribute, value) {
+      var elements = document.getElementsByClassName(className);
+      for (var i = 0; i < elements.length; i++) {
+        elements[i].setAttribute(attribute, value);
+      }
+    }
+
+    if (isGov) {
+      window.onload = function() {
+        var desktopLinks = document.getElementsByClassName("desktop-link");
+        setAttributeByClassName("desktop-link", "href", "https://help.figma.com/hc/en-us/articles/22932461365015-Figma-for-Government#desktopapp");
+      };
+    }
+
+    var hideElementsByClassName = function (className) {
+      var elements = document.getElementsByClassName(className);
+      for (var i = 0; i < elements.length; i++) {
+        elements[i].style.display = 'none';
+      }
+    }
+    if (isMobile) hideElementsByClassName('desktop');
+    else hideElementsByClassName('mobile')
+    if (!isAndroid) hideElementsByClassName('chrome');
+    if (!isMac && !isiOS) hideElementsByClassName('safari');
+    if (!isWin && !isMac) hideElementsByClassName('desktop');
+
+    // Pre-blink MS Edge uses "Edge/xx", post-blink uses "Edg/xx".
+    // We can land on this page in Edge if "super secure mode" is enabled, though
+    // that is only supported in recent versions of Edge.
+    var isRecentEdge = /Edg\//.test(navigator.userAgent);
+    if (isRecentEdge) {
+      // Turn off the "notsecureedge" elements if we are on a recent edge version.
+      hideElementsByClassName('notsecureedge');
+
+      // If this a recent Edge version, update the title to indicate that we need the user
+      // to update settings rather than upgrade their browser version.
+      document.title = "Update your Microsoft Edge settings!"
+    } else {
+      // Turn off the "secureedge" elements if we are on an old edge version.
+      hideElementsByClassName('secureedge');
+    }
+  </script>
+</head>
+<body>
+  <div class="container">
+    <div class="modal">
+      <div class="title notsecureedge">Update or switch browsers</div>
+      <div class="title secureedge">Update your Microsoft Edge settings</div>
+      <div class="content mobile">
+        <span class="safari">
+          Figma requires Safari 16+.
+        </span>
+        <span class="chrome">
+          Figma requires Chrome 99+.
+        </span>
+        Please update your operating system to use Figma.
+        See <a href="assets/missing_1d9c3935685b124868e7ab01e52bfb36.bin">our help documentation on supported browsers</a> for more information.
+      </div>
+      <div class="content desktop notsecureedge">
+        Download or upgrade to one of the following browsers to continue using Figma.
+      </div>
+      <div class="secureedge">
+        To keep using Figma in Microsoft Edge, you'll need to
+        <a href="assets/missing_156daad520e8d07dae7cfeb7f7eb0c30.bin#Secure_mode">update these settings</a>.
+        You can also use the latest version of these browsers, or
+        the <a class="desktop-link" href="assets/missing_8e9e25ba42c57cc1f8cbc39485394f34.bin">Figma desktop app</a>.
+      </div>
+      <div class="content desktop">
+        <div class="logos">
+          <a class="logo" href="assets/missing_f017c8050d1c5fcdb4511ba7fa11d3f3.bin" target="_blank" rel="noopener">
+            <img src="assets/810a3d72d68816fbbe1b61e33e3143f2.png" />
+            Chrome 99+
+          </a>
+          <a class="logo" href="assets/missing_49c6bfcd46b2cc8b901edd8611348c5c.bin" target="_blank" rel="noopener">
+            <img src="assets/5fe33869bd07a653f66280d95e803fc2.png" />
+            Firefox 101+
+          </a>
+          <a class="logo safari" href="assets/missing_67eb7002db33565772bf5559c37ed8e1.bin" target="_blank" rel="noopener">
+            <img src="assets/11d1b96ad5d01cfb70f6d08345691f80.png" />
+            Safari 16+
+          </a>
+          <a class="logo edge notsecureedge" href="assets/missing_15064dbfdbbcb0ce7f091bbcd95c49a4.bin" target="_blank" rel="noopener">
+            <img src="assets/5c6fef225c5e1db32a602a2d2b6a9b23.png" />
+            Edge 121+
+          </a>
+        </div>
+        <div class="content desktop notsecureedge">
+          You can also use the <a class="desktop-link" href="assets/missing_8e9e25ba42c57cc1f8cbc39485394f34.bin">Figma desktop app</a>.
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

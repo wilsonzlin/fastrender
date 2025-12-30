@@ -62,6 +62,7 @@ use crate::paint::gradient::{
 use crate::paint::homography::Homography;
 use crate::paint::optimize::DisplayListOptimizer;
 use crate::paint::painter::paint_diagnostics_enabled;
+use crate::paint::pixmap::new_pixmap;
 use crate::paint::projective_warp::{warp_pixmap_cached, WarpCache, WarpedPixmap};
 use crate::paint::rasterize::fill_rounded_rect;
 use crate::paint::rasterize::render_box_shadow;
@@ -632,7 +633,7 @@ fn apply_filters_scoped(
     return;
   }
 
-  let Some(mut region) = Pixmap::new(region_w, region_h) else {
+  let Some(mut region) = new_pixmap(region_w, region_h) else {
     apply_filters(pixmap, filters, scale, bbox, cache);
     return;
   };
@@ -706,7 +707,7 @@ fn apply_backdrop_filters(
     return;
   }
 
-  let mut region = match Pixmap::new(region_w, region_h) {
+  let mut region = match new_pixmap(region_w, region_h) {
     Some(p) => p,
     None => return,
   };
@@ -733,7 +734,7 @@ fn apply_backdrop_filters(
   apply_filters(&mut region, filters, scale, local_bbox, cache);
 
   let radii_mask = if !radii.is_zero() {
-    let mut mask = match Pixmap::new(region_w, region_h) {
+    let mut mask = match new_pixmap(region_w, region_h) {
       Some(p) => p,
       None => return,
     };
@@ -845,7 +846,7 @@ fn apply_clip_mask_rect(pixmap: &mut Pixmap, rect: Rect, radii: BorderRadii) {
     return;
   }
 
-  let mut mask_pixmap = match Pixmap::new(width, height) {
+  let mut mask_pixmap = match new_pixmap(width, height) {
     Some(p) => p,
     None => return,
   };
@@ -912,7 +913,7 @@ fn apply_drop_shadow(
   let spread_pad = spread.max(0.0).ceil() as u32;
   let pad = blur_pad + spread_pad;
 
-  let mut shadow = match Pixmap::new(bounds_w + pad * 2, bounds_h + pad * 2) {
+  let mut shadow = match new_pixmap(bounds_w + pad * 2, bounds_h + pad * 2) {
     Some(p) => p,
     None => return,
   };
@@ -957,7 +958,7 @@ fn apply_drop_shadow(
     apply_gaussian_blur_cached(&mut shadow, blur_radius, blur_radius, cache, 1.0);
   }
 
-  let mut result = match Pixmap::new(source.width(), source.height()) {
+  let mut result = match new_pixmap(source.width(), source.height()) {
     Some(p) => p,
     None => return,
   };
@@ -3116,7 +3117,7 @@ impl DisplayListRenderer {
         continue;
       };
 
-      let mut mask_pixmap = Pixmap::new(self.canvas.width(), self.canvas.height())?;
+      let mut mask_pixmap = new_pixmap(self.canvas.width(), self.canvas.height())?;
       for ty in positions_y.iter().copied() {
         for tx in positions_x.iter().copied() {
           paint_mask_tile(
@@ -3209,7 +3210,7 @@ impl DisplayListRenderer {
     let rect = self.ds_rect(item.rect);
     let radii = self.ds_radii(item.radii);
 
-    let mut temp = match Pixmap::new(self.canvas.width(), self.canvas.height()) {
+    let mut temp = match new_pixmap(self.canvas.width(), self.canvas.height()) {
       Some(p) => p,
       None => return,
     };
@@ -5077,7 +5078,7 @@ impl DisplayListRenderer {
         continue;
       }
 
-      let Some(mut shadow_pixmap) = Pixmap::new(shadow_width, shadow_height) else {
+      let Some(mut shadow_pixmap) = new_pixmap(shadow_width, shadow_height) else {
         continue;
       };
 
@@ -5489,7 +5490,7 @@ impl DisplayListRenderer {
       if crop_w == 0 || crop_h == 0 {
         return None;
       }
-      let mut cropped = Pixmap::new(crop_w, crop_h)?;
+      let mut cropped = new_pixmap(crop_w, crop_h)?;
       for row in 0..crop_h {
         let src_index = ((src_y + row) * item.image.width + src_x) as usize * 4;
         let dst_index = (row * crop_w) as usize * 4;
@@ -6065,7 +6066,7 @@ fn render_generated_border_image(
         transform,
       )?;
 
-      let mut pixmap = Pixmap::new(width, height)?;
+      let mut pixmap = new_pixmap(width, height)?;
       let skia_rect = tiny_skia::Rect::from_xywh(0.0, 0.0, width as f32, height as f32)?;
       let path = PathBuilder::from_rect(skia_rect);
       let mut paint = tiny_skia::Paint::default();
@@ -6110,7 +6111,7 @@ fn render_generated_border_image(
         transform,
       )?;
 
-      let mut pixmap = Pixmap::new(width, height)?;
+      let mut pixmap = new_pixmap(width, height)?;
       let skia_rect = tiny_skia::Rect::from_xywh(0.0, 0.0, width as f32, height as f32)?;
       let path = PathBuilder::from_rect(skia_rect);
       let mut paint = tiny_skia::Paint::default();
@@ -8601,7 +8602,7 @@ mod tests {
   }
 
   fn generate_spread_test_pixmap(width: u32, height: u32, seed: u32) -> Pixmap {
-    let mut pixmap = Pixmap::new(width, height).unwrap();
+    let mut pixmap = new_pixmap(width, height).unwrap();
     let pixels = pixmap.pixels_mut();
     for y in 0..height {
       for x in 0..width {

@@ -7,6 +7,7 @@ use crate::api::{RenderDiagnostics, ResourceContext, ResourceKind};
 use crate::debug::runtime;
 use crate::error::{Error, ImageError, RenderError, RenderStage, Result};
 use crate::render_control::{check_active, check_active_periodic};
+use crate::paint::pixmap::{new_pixmap, MAX_PIXMAP_BYTES};
 use crate::resource::CachingFetcher;
 use crate::resource::CachingFetcherConfig;
 use crate::resource::FetchedResource;
@@ -46,6 +47,7 @@ use std::sync::Arc;
 use std::sync::Condvar;
 use std::sync::Mutex;
 use std::time::Instant;
+use tiny_skia::Pixmap;
 use url::Url;
 
 fn image_profile_threshold_ms() -> Option<f64> {
@@ -631,10 +633,9 @@ fn try_render_simple_svg_pixmap(
   svg_content: &str,
   render_width: u32,
   render_height: u32,
-) -> std::result::Result<Option<tiny_skia::Pixmap>, RenderError> {
+) -> std::result::Result<Option<Pixmap>, RenderError> {
   use tiny_skia::FillRule;
   use tiny_skia::Paint;
-  use tiny_skia::Pixmap;
 
   if render_width == 0 || render_height == 0 {
     return Ok(None);
@@ -738,9 +739,8 @@ fn try_render_simple_svg_pixmap(
     render_height as f32,
   );
 
-  let mut pixmap = match Pixmap::new(render_width, render_height) {
-    Some(pixmap) => pixmap,
-    None => return Ok(None),
+  let Some(mut pixmap) = new_pixmap(render_width, render_height) else {
+    return Ok(None);
   };
   for node in root.descendants().filter(|n| n.is_element()) {
     check_active_periodic(
@@ -1875,7 +1875,7 @@ impl ImageCache {
       }));
     }
 
-    let Some(mut pixmap) = tiny_skia::Pixmap::new(render_width, render_height) else {
+    let Some(mut pixmap) = new_pixmap(render_width, render_height) else {
       return Err(Error::Render(RenderError::CanvasCreationFailed {
         width: render_width,
         height: render_height,
@@ -2292,6 +2292,57 @@ impl ImageCache {
     Self::avif_image_to_dynamic(image, &mut deadline_counter)
   }
 
+  fn reserve_for_bytes(bytes: u64, context: &str) -> std::result::Result<usize, image::ImageError> {
+    if bytes > MAX_PIXMAP_BYTES {
+      return Err(image::ImageError::IoError(io::Error::new(
+        io::ErrorKind::Other,
+        format!("{context}: buffer would require {bytes} bytes (limit {MAX_PIXMAP_BYTES})"),
+      )));
+    }
+    usize::try_from(bytes).map_err(|_| {
+      image::ImageError::IoError(io::Error::new(
+        io::ErrorKind::Other,
+        format!("{context}: buffer size {bytes} does not fit in usize"),
+      ))
+    })
+  }
+
+  fn reserve_image_buffer(
+    bytes: u64,
+    context: &str,
+  ) -> std::result::Result<Vec<u8>, image::ImageError> {
+    let len = Self::reserve_for_bytes(bytes, context)?;
+    let mut buf = Vec::new();
+    buf.try_reserve_exact(len).map_err(|err| {
+      image::ImageError::IoError(io::Error::new(
+        io::ErrorKind::Other,
+        format!("{context}: buffer allocation failed for {bytes} bytes: {err}"),
+      ))
+    })?;
+    Ok(buf)
+  }
+
+  fn reserve_image_buffer_u16(
+    bytes: u64,
+    context: &str,
+  ) -> std::result::Result<Vec<u16>, image::ImageError> {
+    if bytes % 2 != 0 {
+      return Err(image::ImageError::IoError(io::Error::new(
+        io::ErrorKind::Other,
+        format!("{context}: buffer size {bytes} is not aligned to u16"),
+      )));
+    }
+    let len = Self::reserve_for_bytes(bytes, context)? / 2;
+    let mut buf: Vec<u16> = Vec::new();
+    buf.try_reserve_exact(len).map_err(|err| {
+      image::ImageError::IoError(io::Error::new(
+        io::ErrorKind::Other,
+        format!("{context}: buffer allocation failed for {bytes} bytes: {err}"),
+      ))
+    })?;
+    Ok(buf)
+  }
+
   fn avif_image_to_dynamic(
     image: AvifImage,
     deadline_counter: &mut usize,
@@ -2308,7 +2359,15 @@ impl ImageCache {
       AvifImage::Rgb8(img) => {
         let (width, height) =
           Self::avif_dimensions(img.width(), img.height()).map_err(AvifDecodeError::Image)?;
-        let mut buf = Vec::with_capacity(width as usize * height as usize * 3);
+        let Some(bytes) = u64::from(width)
+          .checked_mul(u64::from(height))
+          .and_then(|px| px.checked_mul(3))
+        else {
+          return Err(AvifDecodeError::Image(Self::avif_error(
+            "RGB8 dimensions overflow",
+          )));
+        };
+        let mut buf = Self::reserve_image_buffer(bytes, "avif rgb8 data")?;
         for px in img.buf() {
           check_active_periodic(
             deadline_counter,
@@ -2325,7 +2384,16 @@ impl ImageCache {
       AvifImage::Rgb16(img) => {
         let (width, height) =
           Self::avif_dimensions(img.width(), img.height()).map_err(AvifDecodeError::Image)?;
-        let mut buf = Vec::with_capacity(width as usize * height as usize * 3);
+        let Some(bytes) = u64::from(width)
+          .checked_mul(u64::from(height))
+          .and_then(|px| px.checked_mul(3))
+          .and_then(|px| px.checked_mul(2))
+        else {
+          return Err(AvifDecodeError::Image(Self::avif_error(
+            "RGB16 dimensions overflow",
+          )));
+        };
+        let mut buf = Self::reserve_image_buffer_u16(bytes, "avif rgb16 data")?;
         for px in img.buf() {
           check_active_periodic(
             deadline_counter,
@@ -2342,7 +2410,15 @@ impl ImageCache {
       AvifImage::Rgba8(img) => {
         let (width, height) =
           Self::avif_dimensions(img.width(), img.height()).map_err(AvifDecodeError::Image)?;
-        let mut buf = Vec::with_capacity(width as usize * height as usize * 4);
+        let Some(bytes) = u64::from(width)
+          .checked_mul(u64::from(height))
+          .and_then(|px| px.checked_mul(4))
+        else {
+          return Err(AvifDecodeError::Image(Self::avif_error(
+            "RGBA8 dimensions overflow",
+          )));
+        };
+        let mut buf = Self::reserve_image_buffer(bytes, "avif rgba8 data")?;
         for px in img.buf() {
           check_active_periodic(
             deadline_counter,
@@ -2359,7 +2435,16 @@ impl ImageCache {
       AvifImage::Rgba16(img) => {
         let (width, height) =
           Self::avif_dimensions(img.width(), img.height()).map_err(AvifDecodeError::Image)?;
-        let mut buf = Vec::with_capacity(width as usize * height as usize * 4);
+        let Some(bytes) = u64::from(width)
+          .checked_mul(u64::from(height))
+          .and_then(|px| px.checked_mul(4))
+          .and_then(|px| px.checked_mul(2))
+        else {
+          return Err(AvifDecodeError::Image(Self::avif_error(
+            "RGBA16 dimensions overflow",
+          )));
+        };
+        let mut buf = Self::reserve_image_buffer_u16(bytes, "avif rgba16 data")?;
         for px in img.buf() {
           check_active_periodic(
             deadline_counter,
@@ -2376,7 +2461,12 @@ impl ImageCache {
       AvifImage::Gray8(img) => {
         let (width, height) =
           Self::avif_dimensions(img.width(), img.height()).map_err(AvifDecodeError::Image)?;
-        let mut buf = Vec::with_capacity(width as usize * height as usize);
+        let Some(bytes) = u64::from(width).checked_mul(u64::from(height)) else {
+          return Err(AvifDecodeError::Image(Self::avif_error(
+            "Gray8 dimensions overflow",
+          )));
+        };
+        let mut buf = Self::reserve_image_buffer(bytes, "avif gray8 data")?;
         for px in img.buf() {
           check_active_periodic(
             deadline_counter,
@@ -2393,7 +2483,15 @@ impl ImageCache {
       AvifImage::Gray16(img) => {
         let (width, height) =
           Self::avif_dimensions(img.width(), img.height()).map_err(AvifDecodeError::Image)?;
-        let mut buf = Vec::with_capacity(width as usize * height as usize);
+        let Some(bytes) = u64::from(width)
+          .checked_mul(u64::from(height))
+          .and_then(|px| px.checked_mul(2))
+        else {
+          return Err(AvifDecodeError::Image(Self::avif_error(
+            "Gray16 dimensions overflow",
+          )));
+        };
+        let mut buf = Self::reserve_image_buffer_u16(bytes, "avif gray16 data")?;
         for px in img.buf() {
           check_active_periodic(
             deadline_counter,
@@ -2608,7 +2706,7 @@ impl ImageCache {
     check_active(RenderStage::Paint).map_err(Error::Render)?;
 
     // Render SVG to pixmap, scaling to the target intrinsic dimensions when needed
-    let mut pixmap = tiny_skia::Pixmap::new(render_width, render_height).ok_or(Error::Render(
+    let mut pixmap = new_pixmap(render_width, render_height).ok_or(Error::Render(
       RenderError::CanvasCreationFailed {
         width: render_width,
         height: render_height,

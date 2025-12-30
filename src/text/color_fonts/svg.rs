@@ -1,12 +1,13 @@
 use super::limits::{log_glyph_limit, round_dimension, GlyphRasterLimits};
 use super::{ColorFontCaches, ColorGlyphRaster, FontKey, SvgCacheKey};
+use crate::paint::pixmap::new_pixmap;
 use crate::style::color::Rgba;
 use crate::svg::{svg_root_view_box, svg_view_box_root_transform, SvgViewBox};
 use regex::Regex;
 use roxmltree::Document;
 use std::ops::Range;
 use std::sync::{Arc, Mutex, OnceLock};
-use tiny_skia::{Pixmap, Transform};
+use tiny_skia::Transform;
 
 pub const MAX_SVG_GLYPH_BYTES: usize = 256 * 1024;
 const MAX_SVG_GLYPH_NODES: usize = 10_000;
@@ -138,7 +139,7 @@ pub(super) fn rasterize_parsed_svg(
     return None;
   }
 
-  let mut pixmap = Pixmap::new(width, height)?;
+  let mut pixmap = new_pixmap(width, height)?;
   let max_y = parsed.view_box.min_y + parsed.view_box.height;
   let glyph_transform = Transform::from_row(
     scale,
@@ -207,7 +208,7 @@ fn rasterize_svg_with_metrics(
     return None;
   }
 
-  let mut pixmap = Pixmap::new(width, height)?;
+  let mut pixmap = new_pixmap(width, height)?;
 
   // Map the root SVG viewport into the glyph viewBox while respecting preserveAspectRatio,
   // then flip the Y axis so SVG glyph coordinates (y-up) align with font coordinates.

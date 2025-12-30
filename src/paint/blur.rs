@@ -827,11 +827,12 @@ pub(crate) fn apply_gaussian_blur_cached(
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::paint::pixmap::new_pixmap;
   use tiny_skia::PremultipliedColorU8;
 
   #[test]
   fn blur_with_zero_sigma_x_only_blurs_vertically() {
-    let mut pixmap = Pixmap::new(3, 5).unwrap();
+    let mut pixmap = new_pixmap(3, 5).unwrap();
     let idx = 2 * 3 + 1;
     pixmap.pixels_mut()[idx] = PremultipliedColorU8::from_rgba(255, 255, 255, 255).unwrap();
 

@@ -1,0 +1,14 @@
+<svg id="wave-with-animation" xmlns="http://www.w3.org/2000/svg" xmlns:xlink= "http://www.w3.org/1999/xlink" viewBox="0 0 16 16" fill="#ffffff">
+  <g id="middle-line" transform-origin="50% 50%">
+    <rect x="7" y="6" width="2" height="8" rx="1" fill="#CC0000"/>
+    <animateTransform attributeType="XML" attributeName="transform" type="scale" values="1,1;1,0.6;1,1" keyTimes="0; .5; 1" additive="sum" begin=".25s" dur="1s" repeatCount="indefinite"/>
+  </g>
+  <g id="right-line" transform-origin="50% 50%">
+    <rect x="11" y="6" width="2" height="8" rx="1" fill="#CC0000"/>
+    <animateTransform attributeType="XML" attributeName="transform" type="scale" values="1,1;1,0.6;1,1" keyTimes="0; .5; 1" additive="sum" begin=".5s" dur="1s" repeatCount="indefinite"/>
+  </g>
+  <g id="left-line" transform-origin="50% 50%">
+    <rect id="Line_3-2" x="3" y="6" width="2" height="8" rx="1" fill="#CC0000"/>
+    <animateTransform attributeType="XML" attributeName="transform" type="scale" values="1,1;1,0.6;1,1" keyTimes="0; .5; 1" additive="sum" begin=".75s" dur="1s" repeatCount="indefinite"/>
+  </g>
+</svg>

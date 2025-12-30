@@ -584,18 +584,26 @@ fn extension_for_resource(res: &FetchedResource, url: &str) -> String {
 }
 
 fn safe_stem(url: &str) -> String {
+  const MAX_STEM_LEN: usize = 180;
+
   let mut stem = url_to_filename(url);
   if stem.is_empty() {
     stem = "resource".to_string();
   }
-  const MAX_STEM_LEN: usize = 120;
+
   if stem.len() > MAX_STEM_LEN {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
     let mut hasher = DefaultHasher::new();
-    stem.hash(&mut hasher);
-    let hash = format!("{:016x}", hasher.finish());
-    let keep = MAX_STEM_LEN.saturating_sub(hash.len() + 1);
-    stem = format!("{}_{hash}", &stem[..keep]);
+    url.hash(&mut hasher);
+    let hash = hasher.finish();
+
+    let keep_len = MAX_STEM_LEN.saturating_sub(18);
+    let prefix = &stem[..keep_len.min(stem.len())];
+    stem = format!("{prefix}__{:016x}", hash);
   }
+
   stem
 }
 

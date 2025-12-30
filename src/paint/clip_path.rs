@@ -1,6 +1,7 @@
 use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::paint::display_list::BorderRadii;
+use crate::paint::pixmap::new_pixmap;
 use crate::style::types::BackgroundPosition;
 use crate::style::types::BasicShape;
 use crate::style::types::ClipPath;
@@ -16,7 +17,6 @@ use tiny_skia::IntSize;
 use tiny_skia::Mask;
 use tiny_skia::MaskType;
 use tiny_skia::PathBuilder;
-use tiny_skia::Pixmap;
 use tiny_skia::Rect as SkRect;
 use tiny_skia::Transform;
 
@@ -116,7 +116,7 @@ impl ResolvedClipPath {
     if size.width() == 0 || size.height() == 0 {
       return None;
     }
-    let mut mask_pixmap = Pixmap::new(size.width(), size.height())?;
+    let mut mask_pixmap = new_pixmap(size.width(), size.height())?;
     let mut paint = tiny_skia::Paint::default();
     paint.anti_alias = true;
     paint.set_color(tiny_skia::Color::from_rgba8(255, 255, 255, 255));

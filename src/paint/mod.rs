@@ -103,6 +103,7 @@ pub mod motion_path;
 pub mod object_fit;
 pub mod optimize;
 pub mod painter;
+pub mod pixmap;
 pub mod preserve3d;
 pub mod preserve_3d;
 pub mod projective_warp;

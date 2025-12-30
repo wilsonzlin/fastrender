@@ -1,9 +1,10 @@
 use super::limits::{log_glyph_limit, round_dimension, GlyphRasterLimits};
 use super::{cpal, read_u16, read_u32, ColorFontCaches, ColorGlyphRaster, FontKey};
+use crate::paint::pixmap::new_pixmap;
 use crate::style::color::Rgba;
 use crate::text::font_instance::{glyph_transform, FontInstance};
 use std::sync::{Arc, Mutex};
-use tiny_skia::{FillRule, Paint, Path, Pixmap, Transform};
+use tiny_skia::{FillRule, Paint, Path, Transform};
 
 #[derive(Clone, Copy, Debug)]
 pub struct ColrV0Header {
@@ -232,7 +233,7 @@ fn rasterize_colr_layers(
     log_glyph_limit("colr", glyph_id, &err);
     return None;
   }
-  let mut pixmap = Pixmap::new(width, height)?;
+  let mut pixmap = new_pixmap(width, height)?;
 
   for (path, color) in paths.drain(..) {
     let mut paint = Paint::default();

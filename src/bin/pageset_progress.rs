@@ -1252,6 +1252,7 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     "Dump timeouts: hard={}s, soft={dump_soft_desc}\n",
     dump_timeout_secs
   ));
+  flush_log(&log, &args.log_path);
 
   let http = HttpFetcher::new()
     .with_timeout(fetch_timeout)
@@ -1345,6 +1346,8 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
   }
 
   record_stage(StageHeartbeat::CssInline);
+  log.push_str("Stage: render\n");
+  flush_log(&log, &args.log_path);
   let render_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
     render_document(&mut renderer, doc, &options)
   }));
@@ -1434,9 +1437,7 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
   let progress = progress.merge_preserving_manual(progress_before, current_sha.as_deref());
   let _ = write_progress(&args.progress_path, &progress);
 
-  if let Some(path) = &args.log_path {
-    let _ = write_text_file(path, &log);
-  }
+  flush_log(&log, &args.log_path);
 
   record_stage(StageHeartbeat::Done);
   Ok(())
@@ -1904,6 +1905,28 @@ fn append_log_line(path: &Path, line: &str) -> io::Result<()> {
   }
   let mut file = OpenOptions::new().append(true).create(true).open(path)?;
   writeln!(file, "{line}")
+}
+
+fn flush_log(log: &str, path: &Option<PathBuf>) {
+  if let Some(path) = path {
+    let _ = write_text_file(path, log);
+  }
+}
+
+fn stderr_tail(stderr_path: &Path, max_bytes: usize, max_lines: usize) -> Option<String> {
+  let data = fs::read(stderr_path).ok()?;
+  let slice = if data.len() > max_bytes {
+    &data[data.len().saturating_sub(max_bytes)..]
+  } else {
+    data.as_slice()
+  };
+  let text = String::from_utf8_lossy(slice);
+  let mut lines: Vec<&str> = text.lines().rev().take(max_lines).collect();
+  if lines.is_empty() {
+    return None;
+  }
+  lines.reverse();
+  Some(lines.join("\n"))
 }
 
 fn add_stage_buckets(into: &mut StageBuckets, from: &StageBuckets) {
@@ -3147,6 +3170,16 @@ fn run_queue(
             progress.hotspot = heartbeat_stage
               .map(|stage| stage.hotspot().to_string())
               .unwrap_or_else(|| "unknown".to_string());
+            if let Some(tail) = stderr_tail(&entry.item.stderr_path, 2048, 20) {
+              ensure_note_includes(
+                &mut progress,
+                &format!(
+                  "stderr tail ({}):\n{}",
+                  entry.item.stderr_path.display(),
+                  tail
+                ),
+              );
+            }
             let mut progress = progress.merge_preserving_manual(previous, current_sha.as_deref());
             ensure_note_includes(&mut progress, &note);
             if let Some(stage) = heartbeat_stage {
@@ -3183,6 +3216,16 @@ fn run_queue(
           progress.hotspot = heartbeat_stage
             .map(|stage| stage.hotspot().to_string())
             .unwrap_or_else(|| "unknown".to_string());
+          if let Some(tail) = stderr_tail(&entry.item.stderr_path, 2048, 20) {
+            ensure_note_includes(
+              &mut progress,
+              &format!(
+                "stderr tail ({}):\n{}",
+                entry.item.stderr_path.display(),
+                tail
+              ),
+            );
+          }
           let mut progress = progress.merge_preserving_manual(previous, current_sha.as_deref());
           if let Some(stage) = heartbeat_stage {
             ensure_note_includes(&mut progress, &format!("stage: {}", stage.as_str()));

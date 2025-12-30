@@ -59,6 +59,7 @@ use crate::paint::iframe::{render_iframe_src, render_iframe_srcdoc};
 use crate::paint::object_fit::compute_object_fit;
 use crate::paint::object_fit::default_object_position;
 use crate::paint::optimize::DisplayListOptimizer;
+use crate::paint::pixmap::{new_pixmap, reserve_buffer};
 use crate::paint::projective_warp::warp_pixmap;
 use crate::paint::rasterize::fill_rounded_rect;
 use crate::paint::stacking::creates_stacking_context;
@@ -1024,7 +1025,7 @@ impl Painter {
     };
     let device_w = ((width as f32) * scale).round().max(1.0) as u32;
     let device_h = ((height as f32) * scale).round().max(1.0) as u32;
-    let pixmap = Pixmap::new(device_w, device_h).ok_or_else(|| RenderError::InvalidParameters {
+    let pixmap = new_pixmap(device_w, device_h).ok_or_else(|| RenderError::InvalidParameters {
       message: format!("Failed to create pixmap {}x{}", device_w, device_h),
     })?;
 
@@ -2457,7 +2458,7 @@ impl Painter {
           }
         }
 
-        let layer = match Pixmap::new(width as u32, height as u32) {
+        let layer = match new_pixmap(width as u32, height as u32) {
           Some(p) => p,
           None => return Ok(()),
         };
@@ -2489,7 +2490,7 @@ impl Painter {
         self.gradient_stats.merge(&base_painter.gradient_stats);
 
         if !clipped.is_empty() {
-          let clip_layer = match Pixmap::new(width as u32, height as u32) {
+          let clip_layer = match new_pixmap(width as u32, height as u32) {
             Some(p) => p,
             None => return Ok(()),
           };
@@ -2711,7 +2712,7 @@ impl Painter {
             .device_transform(Some(transform2d_to_skia(affine)))
             .unwrap_or_else(Transform::identity);
           if is_hsl_blend(blend_mode) && !isolated {
-            if let Some(mut transformed) = Pixmap::new(self.pixmap.width(), self.pixmap.height()) {
+            if let Some(mut transformed) = new_pixmap(self.pixmap.width(), self.pixmap.height()) {
               let mut paint = PixmapPaint::default();
               paint.opacity = 1.0;
               paint.blend_mode = SkiaBlendMode::SourceOver;
@@ -2746,8 +2747,7 @@ impl Painter {
             if let Some(warped) =
               warp_pixmap(&layer_pixmap, &homography, &dst_quad, target_size, None)
             {
-              if let Some(mut transformed) = Pixmap::new(self.pixmap.width(), self.pixmap.height())
-              {
+              if let Some(mut transformed) = new_pixmap(self.pixmap.width(), self.pixmap.height()) {
                 let mut paint = PixmapPaint::default();
                 paint.opacity = 1.0;
                 paint.blend_mode = SkiaBlendMode::SourceOver;
@@ -2964,7 +2964,7 @@ impl Painter {
         continue;
       };
 
-      let mut mask_pixmap = Pixmap::new(device_size.0, device_size.1)?;
+      let mut mask_pixmap = new_pixmap(device_size.0, device_size.1)?;
       for ty in positions_y.iter().copied() {
         for tx in positions_x.iter().copied() {
           paint_mask_tile(
@@ -3384,7 +3384,7 @@ impl Painter {
     paint.anti_alias = true;
 
     if is_hsl_blend(blend_mode) {
-      if let Some(mut layer) = Pixmap::new(self.pixmap.width(), self.pixmap.height()) {
+      if let Some(mut layer) = new_pixmap(self.pixmap.width(), self.pixmap.height()) {
         paint.blend_mode = SkiaBlendMode::SourceOver;
         layer.fill_path(
           &path,
@@ -3541,7 +3541,7 @@ impl Painter {
     paint.anti_alias = true;
 
     if is_hsl_blend(blend_mode) {
-      if let Some(mut layer) = Pixmap::new(self.pixmap.width(), self.pixmap.height()) {
+      if let Some(mut layer) = new_pixmap(self.pixmap.width(), self.pixmap.height()) {
         paint.blend_mode = SkiaBlendMode::SourceOver;
         layer.fill_path(
           &path,
@@ -3636,7 +3636,7 @@ impl Painter {
       intersection.height(),
     ) {
       if is_hsl_blend(blend_mode) {
-        if let Some(mut layer) = Pixmap::new(self.pixmap.width(), self.pixmap.height()) {
+        if let Some(mut layer) = new_pixmap(self.pixmap.width(), self.pixmap.height()) {
           paint.blend_mode = SkiaBlendMode::SourceOver;
           layer.fill_rect(rect, &paint, Transform::identity(), mask);
           composite_hsl_layer(
@@ -4024,7 +4024,29 @@ impl Painter {
     let height = sy1 - sy0;
 
     let data = source.data();
-    let mut patch = Vec::with_capacity((width * height * 4) as usize);
+    let Some(bytes) = u64::from(width)
+      .checked_mul(u64::from(height))
+      .and_then(|px| px.checked_mul(4))
+    else {
+      eprintln!(
+        "border image patch {}x{} overflow (source {}x{})",
+        width,
+        height,
+        source.width(),
+        source.height()
+      );
+      return;
+    };
+    let mut patch = match reserve_buffer(bytes, "border-image patch") {
+      Ok(buf) => buf,
+      Err(err) => {
+        eprintln!(
+          "border image patch {}x{} ({} bytes) dropped: {}",
+          width, height, bytes, err
+        );
+        return;
+      }
+    };
     for row in sy0..sy1 {
       let start = ((row * source.width() + sx0) * 4) as usize;
       let end = start + (width * 4) as usize;
@@ -4850,7 +4872,7 @@ impl Painter {
         continue;
       }
 
-      let Some(mut shadow_pixmap) = Pixmap::new(shadow_width, shadow_height) else {
+      let Some(mut shadow_pixmap) = new_pixmap(shadow_width, shadow_height) else {
         continue;
       };
 
@@ -6436,8 +6458,28 @@ impl Painter {
       return None;
     }
 
+    let Some(bytes) = u64::from(width)
+      .checked_mul(u64::from(height))
+      .and_then(|px| px.checked_mul(4))
+    else {
+      eprintln!(
+        "image allocation overflow for {}x{} (orientation {:?})",
+        width, height, orientation
+      );
+      return None;
+    };
+    let mut data = match reserve_buffer(bytes, "premultiplying image data for paint") {
+      Ok(buf) => buf,
+      Err(err) => {
+        eprintln!(
+          "skipping image {}x{} ({} bytes): {}",
+          width, height, bytes, err
+        );
+        return None;
+      }
+    };
+
     // tiny-skia expects premultiplied RGBA
-    let mut data = Vec::with_capacity((width * height * 4) as usize);
     for pixel in rgba.pixels() {
       let [r, g, b, a] = pixel.0;
       let alpha = a as f32 / 255.0;
@@ -6557,7 +6599,7 @@ impl Painter {
         )?;
 
         let timer = self.diagnostics_enabled.then(Instant::now);
-        let mut pixmap = Pixmap::new(width, height)?;
+        let mut pixmap = new_pixmap(width, height)?;
         let skia_rect = SkiaRect::from_xywh(0.0, 0.0, width as f32, height as f32)?;
         let path = PathBuilder::from_rect(skia_rect);
         let mut paint = Paint::default();
@@ -6606,7 +6648,7 @@ impl Painter {
         )?;
 
         let timer = self.diagnostics_enabled.then(Instant::now);
-        let mut pixmap = Pixmap::new(width, height)?;
+        let mut pixmap = new_pixmap(width, height)?;
         let skia_rect = SkiaRect::from_xywh(0.0, 0.0, width as f32, height as f32)?;
         let path = PathBuilder::from_rect(skia_rect);
         let mut paint = Paint::default();
@@ -8256,7 +8298,7 @@ fn apply_backdrop_filters(
     return;
   }
 
-  let mut region = match Pixmap::new(region_w, region_h) {
+  let mut region = match new_pixmap(region_w, region_h) {
     Some(p) => p,
     None => return,
   };
@@ -8420,7 +8462,7 @@ fn apply_drop_shadow(
   }
 
   let source = pixmap.clone();
-  let mut shadow = match Pixmap::new(source.width(), source.height()) {
+  let mut shadow = match new_pixmap(source.width(), source.height()) {
     Some(p) => p,
     None => return,
   };
@@ -8457,7 +8499,7 @@ fn apply_drop_shadow(
     apply_gaussian_blur(&mut shadow, blur_radius);
   }
 
-  let mut result = match Pixmap::new(source.width(), source.height()) {
+  let mut result = match new_pixmap(source.width(), source.height()) {
     Some(p) => p,
     None => return,
   };
@@ -8931,7 +8973,7 @@ fn build_rounded_rect_mask(
     return None;
   }
 
-  let mut mask_pixmap = Pixmap::new(canvas_w, canvas_h)?;
+  let mut mask_pixmap = new_pixmap(canvas_w, canvas_h)?;
   let _ = fill_rounded_rect(
     &mut mask_pixmap,
     rect.x(),
@@ -8954,7 +8996,7 @@ fn apply_clip_mask_rect(pixmap: &mut Pixmap, rect: Rect, radii: BorderRadii) {
     return;
   }
 
-  let mut mask_pixmap = match Pixmap::new(width, height) {
+  let mut mask_pixmap = match new_pixmap(width, height) {
     Some(p) => p,
     None => return,
   };
@@ -10080,7 +10122,7 @@ pub fn scale_pixmap_for_dpr(pixmap: Pixmap, dpr: f32) -> Result<Pixmap> {
 
   let new_w = (((pixmap.width() as f32) * dpr).round()).max(1.0) as u32;
   let new_h = (((pixmap.height() as f32) * dpr).round()).max(1.0) as u32;
-  let mut target = Pixmap::new(new_w, new_h).ok_or_else(|| RenderError::InvalidParameters {
+  let mut target = new_pixmap(new_w, new_h).ok_or_else(|| RenderError::InvalidParameters {
     message: "Failed to allocate scaled pixmap".to_string(),
   })?;
 
@@ -13289,7 +13331,7 @@ mod tests {
 
   #[test]
   fn backdrop_filters_cover_bounds() {
-    let mut pixmap = Pixmap::new(10, 10).expect("pixmap");
+    let mut pixmap = new_pixmap(10, 10).expect("pixmap");
     pixmap.fill(tiny_skia::Color::from_rgba8(0, 0, 255, 255));
 
     let bounds = Rect::from_xywh(2.0, 3.0, 4.0, 2.0);

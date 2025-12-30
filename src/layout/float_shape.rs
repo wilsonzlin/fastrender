@@ -9,6 +9,7 @@ use crate::css::types::{ColorStop, RadialGradientShape, RadialGradientSize};
 use crate::geometry::{Point, Rect, Size};
 use crate::image_loader::ImageCache;
 use crate::paint::clip_path::{resolve_basic_shape, ResolvedClipPath};
+use crate::paint::pixmap::{new_pixmap, reserve_buffer};
 use crate::style::color::Rgba;
 use crate::style::types::{BackgroundImage, BackgroundPosition, ReferenceBox, ShapeOutside};
 use crate::style::values::Length;
@@ -401,7 +402,23 @@ fn image_mask(
       let transform = style.image_orientation.resolve(cached.orientation, true);
       let rgba = cached.to_oriented_rgba(transform);
       let (width, height) = rgba.dimensions();
-      let mut alpha = Vec::with_capacity((width * height) as usize);
+      let Some(bytes) = u64::from(width).checked_mul(u64::from(height)) else {
+        eprintln!(
+          "shape-outside mask dimensions overflow ({}x{})",
+          width, height
+        );
+        return None;
+      };
+      let mut alpha = match reserve_buffer(bytes, "shape-outside image alpha") {
+        Ok(buf) => buf,
+        Err(err) => {
+          eprintln!(
+            "shape-outside mask {}x{} ({} bytes) skipped: {}",
+            width, height, bytes, err
+          );
+          return None;
+        }
+      };
       for chunk in rgba.as_raw().chunks_exact(4) {
         alpha.push(chunk[3]);
       }
@@ -501,7 +518,19 @@ fn image_size(rect: Rect) -> (u32, u32, Point) {
 }
 
 fn alpha_from_pixmap(pixmap: Pixmap, _origin: Point) -> AlphaBitmap {
-  let mut alpha = Vec::with_capacity((pixmap.width() * pixmap.height()) as usize);
+  let Some(bytes) = u64::from(pixmap.width()).checked_mul(u64::from(pixmap.height())) else {
+    eprintln!(
+      "shape-outside alpha overflow ({}x{})",
+      pixmap.width(),
+      pixmap.height()
+    );
+    return AlphaBitmap {
+      width: pixmap.width(),
+      height: pixmap.height(),
+      data: Vec::new(),
+    };
+  };
+  let mut alpha = reserve_buffer(bytes, "shape-outside alpha from pixmap").unwrap_or_default();
   for chunk in pixmap.data().chunks_exact(4) {
     alpha.push(chunk[3]);
   }
@@ -537,7 +566,7 @@ fn render_linear_gradient(
   let shader =
     tiny_skia::LinearGradient::new(start, end, sk_stops, SpreadMode::Pad, Transform::identity())?;
 
-  let mut pixmap = Pixmap::new(width, height)?;
+  let mut pixmap = new_pixmap(width, height)?;
   let sk_rect = tiny_skia::Rect::from_xywh(0.0, 0.0, width as f32, height as f32)?;
   let path = PathBuilder::from_rect(sk_rect);
   let mut paint = tiny_skia::Paint::default();
@@ -583,7 +612,7 @@ fn render_linear_gradient_repeat(
     Transform::identity(),
   )?;
 
-  let mut pixmap = Pixmap::new(width, height)?;
+  let mut pixmap = new_pixmap(width, height)?;
   let sk_rect = tiny_skia::Rect::from_xywh(0.0, 0.0, width as f32, height as f32)?;
   let path = PathBuilder::from_rect(sk_rect);
   let mut paint = tiny_skia::Paint::default();
@@ -650,7 +679,7 @@ fn render_radial_gradient_image(
     return None;
   };
 
-  let mut pixmap = Pixmap::new(width, height)?;
+  let mut pixmap = new_pixmap(width, height)?;
   let path = PathBuilder::from_rect(path_rect);
   let mut paint = tiny_skia::Paint::default();
   paint.shader = shader;
@@ -700,7 +729,20 @@ fn render_conic_gradient_alpha(
     1.0
   };
 
-  let mut data = Vec::with_capacity((width * height) as usize);
+  let Some(bytes) = u64::from(width).checked_mul(u64::from(height)) else {
+    eprintln!("conic gradient mask overflow for {}x{}", width, height);
+    return None;
+  };
+  let mut data = match reserve_buffer(bytes, "shape-outside conic gradient") {
+    Ok(buf) => buf,
+    Err(err) => {
+      eprintln!(
+        "conic gradient mask {}x{} ({} bytes) skipped: {}",
+        width, height, bytes, err
+      );
+      return None;
+    }
+  };
   for y in 0..height {
     for x in 0..width {
       let dx = x as f32 + 0.5 - center.x;

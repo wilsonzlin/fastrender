@@ -31,6 +31,14 @@ pub struct ImportPageFixtureArgs {
   #[arg(long)]
   pub overwrite: bool,
 
+  /// Replace missing resources with empty placeholder assets instead of failing the import
+  #[arg(long)]
+  pub allow_missing: bool,
+
+  /// Allow leaving http(s) references in rewritten HTML/CSS (skips validation)
+  #[arg(long)]
+  pub allow_http_references: bool,
+
   /// Validate without writing any files
   #[arg(long)]
   pub dry_run: bool,
@@ -70,7 +78,7 @@ pub fn run_import_page_fixture(args: ImportPageFixtureArgs) -> Result<()> {
   let effective_base = find_base_url(&document_html, &document_base_url);
 
   let fetcher = BundledFetcher::new(bundle);
-  let mut catalog = AssetCatalog::new();
+  let mut catalog = AssetCatalog::new(args.allow_missing);
   for (url, info) in &manifest.resources {
     let resource = fetcher
       .fetch(url)
@@ -81,10 +89,17 @@ pub fn run_import_page_fixture(args: ImportPageFixtureArgs) -> Result<()> {
   catalog.rewrite_stylesheets()?;
 
   let rewritten_html = rewrite_html(&document_html, &effective_base, &mut catalog)?;
-  if let Err(err) = assert_no_http_urls("index.html", &rewritten_html) {
-    eprintln!("Warning: {}", err);
+  if args.allow_http_references {
+    if let Err(err) = assert_no_http_urls("index.html", &rewritten_html) {
+      eprintln!("Warning: {}", err);
+    }
+    if let Err(err) = catalog.assert_no_remote_references() {
+      eprintln!("Warning: {}", err);
+    }
+  } else {
+    assert_no_http_urls("index.html", &rewritten_html)?;
+    catalog.assert_no_remote_references()?;
   }
-  catalog.assert_no_remote_references()?;
 
   if args.dry_run {
     println!(
@@ -142,13 +157,15 @@ struct AssetData {
 struct AssetCatalog {
   assets: BTreeMap<String, AssetData>,
   url_to_filename: HashMap<String, String>,
+  allow_missing: bool,
 }
 
 impl AssetCatalog {
-  fn new() -> Self {
+  fn new(allow_missing: bool) -> Self {
     Self {
       assets: BTreeMap::new(),
       url_to_filename: HashMap::new(),
+      allow_missing,
     }
   }
 
@@ -230,11 +247,39 @@ impl AssetCatalog {
     Ok(())
   }
 
-  fn path_for(&self, url: &str, ctx: ReferenceContext) -> Option<String> {
-    let filename = self.url_to_filename.get(url)?;
+  fn path_for(&mut self, url: &str, ctx: ReferenceContext) -> Option<String> {
+    if let Some(filename) = self.url_to_filename.get(url) {
+      return match ctx {
+        ReferenceContext::Html => Some(format!("{ASSETS_DIR}/{filename}")),
+        ReferenceContext::Css => Some(filename.clone()),
+      };
+    }
+
+    if !self.allow_missing {
+      return None;
+    }
+
+    let ext = extension_from_path(url);
+    let filename = format!("missing_{}.{}", hash_bytes(url.as_bytes()), ext);
+    if !self.assets.contains_key(&filename) {
+      self.assets.insert(
+        filename.clone(),
+        AssetData {
+          filename: filename.clone(),
+          bytes: Vec::new(),
+          content_type: None,
+          source_url: url.to_string(),
+        },
+      );
+    }
+    self
+      .url_to_filename
+      .entry(url.to_string())
+      .or_insert_with(|| filename.clone());
+
     match ctx {
       ReferenceContext::Html => Some(format!("{ASSETS_DIR}/{filename}")),
-      ReferenceContext::Css => Some(filename.clone()),
+      ReferenceContext::Css => Some(filename),
     }
   }
 
@@ -494,6 +539,9 @@ fn rewrite_reference(
   }
 
   let Some(resolved) = resolve_href(base_url.as_str(), trimmed) else {
+    if catalog.allow_missing {
+      return Ok(None);
+    }
     bail!("could not resolve URL '{trimmed}' against base {base_url}");
   };
 

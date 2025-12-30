@@ -501,6 +501,38 @@ fn pages_regression_suite() {
 }
 
 #[test]
+fn aborting_pages_render_without_panic() {
+  const STACK_SIZE: usize = 64 * 1024 * 1024;
+  let fixtures = ["cnn_com", "figma_com", "ikea_com"];
+  thread::Builder::new()
+    .stack_size(STACK_SIZE)
+    .spawn(move || {
+      for fixture in fixtures {
+        let html_path = fixtures_dir().join(fixture).join("index.html");
+        let html = fs::read_to_string(&html_path)
+          .unwrap_or_else(|e| panic!("Failed to read {}: {}", html_path.display(), e));
+        let base_dir = html_path
+          .parent()
+          .unwrap_or_else(|| panic!("No parent for {}", html_path.display()));
+        let base_url =
+          Url::from_directory_path(base_dir).expect("failed to build file:// base url");
+
+        let mut renderer = FastRender::builder()
+          .base_url(base_url.to_string())
+          .build()
+          .expect("renderer should build");
+        let options = RenderOptions::new().with_viewport(900, 1400);
+        renderer
+          .render_html_with_options(&html, options)
+          .unwrap_or_else(|e| panic!("Fixture '{}' failed to render: {:?}", fixture, e));
+      }
+    })
+    .unwrap()
+    .join()
+    .unwrap();
+}
+
+#[test]
 fn page_fixtures_present() {
   for fixture in PAGE_FIXTURES {
     let path = fixtures_dir().join(fixture.html);

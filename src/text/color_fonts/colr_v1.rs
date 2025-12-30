@@ -1,5 +1,6 @@
 use super::limits::{log_glyph_limit, round_dimension, GlyphRasterLimits};
 use super::{cpal, ColorFontCaches, ColorGlyphRaster, FontKey};
+use crate::paint::pixmap::new_pixmap;
 use crate::style::color::Rgba;
 use crate::text::font_db::LoadedFont;
 use crate::text::font_instance::{glyph_transform, FontInstance};
@@ -293,7 +294,7 @@ fn rasterize_plan(
     log_glyph_limit("colr", glyph_id, &err);
     return None;
   }
-  let mut pixmap = Pixmap::new(width, height)?;
+  let mut pixmap = new_pixmap(width, height)?;
 
   let clip_mask = plan
     .clip_path
@@ -1299,7 +1300,7 @@ fn render_two_circle_radial_gradient(
     return Some(());
   }
 
-  let mut layer = Pixmap::new(width, height)?;
+  let mut layer = new_pixmap(width, height)?;
   let mask_data = mask.data();
   let layer_data = layer.pixels_mut();
   for y in 0..height {
@@ -1392,7 +1393,7 @@ fn render_sweep_gradient(
     return Some(());
   }
 
-  let mut layer = Pixmap::new(width, height)?;
+  let mut layer = new_pixmap(width, height)?;
   let mask_data = mask.data();
   let layer_data = layer.pixels_mut();
   let start = *start_angle;
