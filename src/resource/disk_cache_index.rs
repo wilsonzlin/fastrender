@@ -341,7 +341,16 @@ impl DiskCacheIndex {
       }
     }
 
-    entries.sort_by_key(|(stored_at, _, _, _, _)| *stored_at);
+    // `stored_at` has second resolution so many resources will tie. `read_dir` iteration order is
+    // filesystem-dependent, so we must provide a deterministic total order when rebuilding.
+    entries.sort_by(
+      |(a_stored_at, a_len, _, _, a_key), (b_stored_at, b_len, _, _, b_key)| {
+        a_stored_at
+          .cmp(b_stored_at)
+          .then_with(|| a_key.cmp(b_key))
+          .then_with(|| a_len.cmp(b_len))
+      },
+    );
     for (stored_at, len, data_path, meta_path, key) in entries {
       self.apply_insert(state, key, stored_at, len, data_path, meta_path);
     }
@@ -455,5 +464,81 @@ impl DiskCacheIndex {
       rebuilds: state.rebuilds,
       journal_replays: state.journal_replays,
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use std::fs;
+
+  fn write_entry(cache_dir: &Path, key: &str, stored_at: u64) {
+    let data_path = cache_dir.join(format!("{key}.bin"));
+    let body = format!("body-{key}");
+    fs::write(&data_path, body.as_bytes()).expect("write data");
+
+    let mut meta_path = data_path.clone();
+    meta_path.set_extension("bin.meta");
+    let meta = StoredMetadata {
+      url: format!("https://example.com/{key}"),
+      content_type: Some("application/octet-stream".to_string()),
+      etag: None,
+      last_modified: None,
+      final_url: Some(format!("https://example.com/{key}")),
+      stored_at,
+      len: body.len(),
+      cache: None,
+    };
+    let meta_bytes = serde_json::to_vec(&meta).expect("serialize meta");
+    fs::write(&meta_path, meta_bytes).expect("write meta");
+  }
+
+  #[test]
+  fn rebuild_orders_colliding_timestamps_by_key() {
+    let tmp = tempfile::tempdir().unwrap();
+    let stored_at = 1_700_000_000;
+
+    // Write in an order that does not match lexicographic ordering to ensure the rebuild sort is
+    // responsible for the final journal ordering.
+    write_entry(tmp.path(), "c_key", stored_at);
+    write_entry(tmp.path(), "a_key", stored_at);
+    write_entry(tmp.path(), "b_key", stored_at);
+
+    let index = DiskCacheIndex::new(tmp.path().to_path_buf());
+    index.refresh();
+    assert_eq!(
+      index.debug_stats().rebuilds,
+      1,
+      "missing journal should force rebuild"
+    );
+
+    let journal_path = tmp.path().join("index.jsonl");
+    let journal = fs::read_to_string(journal_path).expect("read journal");
+    let mut inserts = Vec::new();
+    for line in journal.lines() {
+      if line.trim().is_empty() {
+        continue;
+      }
+      let record: JournalRecord = serde_json::from_str(line).expect("parse journal record");
+      match record {
+        JournalRecord::Insert { key, stored_at, .. } => inserts.push((stored_at, key)),
+        JournalRecord::Remove { .. } => panic!("rebuild journal should only contain inserts"),
+      }
+    }
+
+    let keys: Vec<String> = inserts.iter().map(|(_, key)| key.clone()).collect();
+    assert_eq!(
+      keys,
+      vec![
+        "a_key".to_string(),
+        "b_key".to_string(),
+        "c_key".to_string()
+      ]
+    );
+
+    assert!(
+      inserts.windows(2).all(|w| w[0] <= w[1]),
+      "journal inserts should be ordered by (stored_at, key): {inserts:?}"
+    );
   }
 }
