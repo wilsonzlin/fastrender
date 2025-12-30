@@ -40,8 +40,10 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Condvar;
 use std::sync::Mutex;
+use std::thread;
 use std::time::Duration;
 use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 use ureq::ResponseExt;
 use url::Url;
 
@@ -431,6 +433,137 @@ const RENDER_DEADLINE_TIMEOUT_SLACK: Duration = Duration::from_millis(50);
 
 /// Stride for cooperative deadline checks while decoding compressed bodies.
 const CONTENT_DECODE_DEADLINE_STRIDE: usize = 16;
+
+/// Retry/backoff policy for [`HttpFetcher`].
+#[derive(Debug, Clone)]
+pub struct HttpRetryPolicy {
+  /// Total number of attempts (initial request + retries).
+  ///
+  /// Set to `1` to disable retries.
+  pub max_attempts: usize,
+  /// Base delay used for exponential backoff.
+  pub backoff_base: Duration,
+  /// Maximum delay between retries.
+  pub backoff_cap: Duration,
+  /// When true, honor `Retry-After` for retryable responses (bounded by `backoff_cap`).
+  pub respect_retry_after: bool,
+}
+
+impl Default for HttpRetryPolicy {
+  fn default() -> Self {
+    Self {
+      max_attempts: 3,
+      backoff_base: Duration::from_millis(50),
+      backoff_cap: Duration::from_millis(500),
+      respect_retry_after: true,
+    }
+  }
+}
+
+fn retryable_http_status(status: u16) -> bool {
+  matches!(status, 202 | 429 | 500 | 502 | 503 | 504)
+}
+
+fn parse_retry_after(headers: &HeaderMap) -> Option<Duration> {
+  let value = headers.get("retry-after")?.to_str().ok()?.trim();
+  if value.is_empty() {
+    return None;
+  }
+  if let Ok(secs) = value.parse::<u64>() {
+    return Some(Duration::from_secs(secs));
+  }
+  parse_http_date(value)
+    .ok()
+    .and_then(|when| when.duration_since(SystemTime::now()).ok())
+}
+
+fn hash_u64(input: &str) -> u64 {
+  // 64-bit FNV-1a.
+  let mut hash: u64 = 0xcbf29ce484222325;
+  for &b in input.as_bytes() {
+    hash ^= u64::from(b);
+    hash = hash.wrapping_mul(0x100000001b3);
+  }
+  hash
+}
+
+fn pseudo_rand_u64(mut x: u64) -> u64 {
+  // xorshift64*
+  x ^= x >> 12;
+  x ^= x << 25;
+  x ^= x >> 27;
+  x.wrapping_mul(0x2545F4914F6CDD1D)
+}
+
+fn jitter_duration(max: Duration, seed: u64) -> Duration {
+  if max.is_zero() {
+    return Duration::ZERO;
+  }
+  let max_ns = max.as_nanos();
+  // Avoid division by zero / overflow in the modulo below.
+  let denom = max_ns.saturating_add(1);
+  let rand = pseudo_rand_u64(seed) as u128;
+  let jitter_ns = rand % denom;
+  let secs = (jitter_ns / 1_000_000_000) as u64;
+  let nanos = (jitter_ns % 1_000_000_000) as u32;
+  Duration::new(secs, nanos)
+}
+
+fn compute_backoff(policy: &HttpRetryPolicy, retry_count: usize, url: &str) -> Duration {
+  // Exponential backoff with "equal jitter":
+  //   sleep = backoff/2 + rand(0..backoff/2)
+  let retry_count = retry_count.max(1);
+  let shift = (retry_count - 1).min(30) as u32;
+  let factor = 1u32 << shift;
+  let backoff = policy
+    .backoff_base
+    .checked_mul(factor)
+    .unwrap_or(policy.backoff_cap)
+    .min(policy.backoff_cap);
+  let half = backoff / 2;
+  let now = SystemTime::now()
+    .duration_since(UNIX_EPOCH)
+    .map(|d| d.as_nanos() as u64)
+    .unwrap_or(0);
+  let seed = now ^ hash_u64(url) ^ (retry_count as u64).wrapping_mul(0x9E3779B97F4A7C15);
+  half + jitter_duration(half, seed)
+}
+
+fn is_retryable_io_error(err: &io::Error) -> bool {
+  matches!(
+    err.kind(),
+    io::ErrorKind::TimedOut
+      | io::ErrorKind::ConnectionReset
+      | io::ErrorKind::ConnectionAborted
+      | io::ErrorKind::NotConnected
+      | io::ErrorKind::BrokenPipe
+      | io::ErrorKind::UnexpectedEof
+      | io::ErrorKind::WouldBlock
+      | io::ErrorKind::Interrupted
+  )
+}
+
+fn is_retryable_ureq_error(err: &ureq::Error) -> bool {
+  let mut source: Option<&(dyn std::error::Error + 'static)> = Some(err);
+  while let Some(current) = source {
+    if let Some(io_err) = current.downcast_ref::<io::Error>() {
+      if is_retryable_io_error(io_err) {
+        return true;
+      }
+    }
+    source = current.source();
+  }
+
+  // Fallback: match common transient error strings when we can't downcast.
+  let msg = err.to_string().to_ascii_lowercase();
+  msg.contains("timeout")
+    || msg.contains("timed out")
+    || msg.contains("connection reset")
+    || msg.contains("connection aborted")
+    || msg.contains("broken pipe")
+    || msg.contains("temporary failure")
+    || msg.contains("dns")
+}
 
 /// Allowed URL schemes for resource fetching.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1074,6 +1207,7 @@ pub struct HttpFetcher {
   accept_language: String,
   policy: ResourcePolicy,
   agent: Arc<ureq::Agent>,
+  retry_policy: HttpRetryPolicy,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1088,6 +1222,7 @@ impl std::fmt::Debug for HttpFetcher {
       .field("user_agent", &self.user_agent)
       .field("accept_language", &self.accept_language)
       .field("policy", &self.policy)
+      .field("retry_policy", &self.retry_policy)
       .finish()
   }
 }
@@ -1139,6 +1274,12 @@ impl HttpFetcher {
   pub fn with_policy(mut self, policy: ResourcePolicy) -> Self {
     self.policy = policy;
     self.rebuild_agent();
+    self
+  }
+
+  /// Override the retry/backoff policy used for HTTP(S) fetches.
+  pub fn with_retry_policy(mut self, policy: HttpRetryPolicy) -> Self {
+    self.retry_policy = policy;
     self
   }
 
@@ -1195,153 +1336,266 @@ impl HttpFetcher {
     let mut current = url.to_string();
     let mut validators = validators;
     let agent = &self.agent;
-    for _ in 0..self.policy.max_redirects {
+    let max_attempts = self.retry_policy.max_attempts.max(1);
+
+    'redirects: for _ in 0..self.policy.max_redirects {
       self.policy.ensure_url_allowed(&current)?;
-      let allowed_limit = self.policy.allowed_response_limit()?;
-      let per_request_timeout = self.deadline_aware_timeout(deadline.as_ref(), &current)?;
+      for attempt in 1..=max_attempts {
+        self.policy.ensure_url_allowed(&current)?;
+        let allowed_limit = self.policy.allowed_response_limit()?;
+        let per_request_timeout = self.deadline_aware_timeout(deadline.as_ref(), &current)?;
 
-      let accept_encoding_value = accept_encoding.unwrap_or(SUPPORTED_ACCEPT_ENCODING);
-      let mut request = agent
-        .get(&current)
-        .header("User-Agent", &self.user_agent)
-        .header("Accept", DEFAULT_ACCEPT)
-        .header("Accept-Language", &self.accept_language)
-        .header("Accept-Encoding", accept_encoding_value);
+        let accept_encoding_value = accept_encoding.unwrap_or(SUPPORTED_ACCEPT_ENCODING);
+        let mut request = agent
+          .get(&current)
+          .header("User-Agent", &self.user_agent)
+          .header("Accept", DEFAULT_ACCEPT)
+          .header("Accept-Language", &self.accept_language)
+          .header("Accept-Encoding", accept_encoding_value);
 
-      if let Some(timeout) = per_request_timeout {
-        request = request.config().timeout_global(Some(timeout)).build();
-      }
-
-      if let Some(v) = validators {
-        if let Some(tag) = v.etag {
-          request = request.header("If-None-Match", tag);
+        if let Some(timeout) = per_request_timeout {
+          request = request.config().timeout_global(Some(timeout)).build();
         }
-        if let Some(modified) = v.last_modified {
-          request = request.header("If-Modified-Since", modified);
-        }
-      }
-      let mut response = match request.call() {
-        Ok(resp) => resp,
-        Err(err) => {
-          let err = ResourceError::new(current.clone(), err.to_string())
-            .with_final_url(current.clone())
-            .with_source(err);
-          return Err(Error::Resource(err));
-        }
-      };
 
-      let status = response.status();
-      if (300..400).contains(&status.as_u16()) {
-        if let Some(loc) = response
-          .headers()
-          .get("location")
-          .and_then(|h| h.to_str().ok())
-        {
-          let next = Url::parse(&current)
-            .ok()
-            .and_then(|base| base.join(loc).ok())
-            .map(|u| u.to_string())
-            .unwrap_or_else(|| loc.to_string());
-          self.policy.ensure_url_allowed(&next)?;
-          current = next;
-          validators = None;
-          continue;
-        }
-      }
-
-      let encodings = parse_content_encodings(response.headers());
-      let content_type = response
-        .headers()
-        .get("content-type")
-        .and_then(|h| h.to_str().ok())
-        .map(|s| s.to_string());
-      let decode_stage = decode_stage_for_content_type(content_type.as_deref());
-      let etag = response
-        .headers()
-        .get("etag")
-        .and_then(|h| h.to_str().ok())
-        .map(|s| s.to_string());
-      let last_modified = response
-        .headers()
-        .get("last-modified")
-        .and_then(|h| h.to_str().ok())
-        .map(|s| s.to_string());
-      let cache_policy = parse_http_cache_policy(response.headers());
-      let final_url = response.get_uri().to_string();
-
-      let body_result = response
-        .body_mut()
-        .with_config()
-        .limit(allowed_limit as u64)
-        .read_to_vec()
-        .map_err(|e| e.into_io());
-
-      match body_result {
-        Ok(bytes) => {
-          let bytes = match decode_content_encodings(bytes, &encodings, allowed_limit, decode_stage)
-          {
-            Ok(decoded) => decoded,
-            Err(ContentDecodeError::DecompressionFailed { .. }) if accept_encoding.is_none() => {
-              return self.fetch_http_with_accept(&current, Some("identity"), validators);
-            }
-            Err(err) => {
-              let err =
-                err.into_resource_error(current.clone(), status.as_u16(), final_url.clone());
-              return Err(Error::Resource(err));
-            }
-          };
-
-          if bytes.is_empty() && status.as_u16() != 304 {
-            let err = ResourceError::new(current.clone(), "empty HTTP response body")
-              .with_status(status.as_u16())
-              .with_final_url(final_url.clone());
-            return Err(Error::Resource(err));
+        if let Some(v) = validators {
+          if let Some(tag) = v.etag {
+            request = request.header("If-None-Match", tag);
           }
+          if let Some(modified) = v.last_modified {
+            request = request.header("If-Modified-Since", modified);
+          }
+        }
 
-          if bytes.len() > allowed_limit {
-            if let Some(remaining) = self.policy.remaining_budget() {
-              if bytes.len() > remaining {
-                let err = ResourceError::new(
-                  current.clone(),
-                  format!(
-                    "total bytes budget exceeded ({} > {} bytes remaining)",
-                    bytes.len(),
-                    remaining
-                  ),
-                )
-                .with_status(status.as_u16())
-                .with_final_url(final_url.clone());
-                return Err(Error::Resource(err));
+        let mut response = match request.call() {
+          Ok(resp) => resp,
+          Err(err) => {
+            if attempt < max_attempts && is_retryable_ureq_error(&err) {
+              let mut backoff = compute_backoff(&self.retry_policy, attempt, &current);
+              let mut can_retry = true;
+              if let Some(deadline) = deadline.as_ref() {
+                if deadline.timeout_limit().is_some() {
+                  match deadline.remaining_timeout() {
+                    Some(remaining) if !remaining.is_zero() => {
+                      // Ensure we never sleep past the deadline; cap and allow immediate retry if the
+                      // remaining budget is tiny.
+                      let max_sleep = remaining.saturating_sub(Duration::from_millis(1));
+                      backoff = backoff.min(max_sleep);
+                    }
+                    _ => can_retry = false,
+                  }
+                }
+              }
+              if can_retry {
+                if !backoff.is_zero() {
+                  thread::sleep(backoff);
+                }
+                continue;
               }
             }
 
-            let err = ResourceError::new(
-              current.clone(),
-              format!(
-                "response too large ({} > {} bytes)",
-                bytes.len(),
-                allowed_limit
-              ),
-            )
-            .with_status(status.as_u16())
-            .with_final_url(final_url.clone());
+            let err = ResourceError::new(current.clone(), err.to_string())
+              .with_final_url(current.clone())
+              .with_source(err);
             return Err(Error::Resource(err));
           }
+        };
 
-          self.policy.reserve_budget(bytes.len())?;
-          let mut resource = FetchedResource::with_final_url(bytes, content_type, Some(final_url));
-          resource.status = Some(status.as_u16());
-          resource.etag = etag;
-          resource.last_modified = last_modified;
-          resource.cache_policy = cache_policy;
-          return Ok(resource);
+        let status = response.status();
+        if (300..400).contains(&status.as_u16()) {
+          if let Some(loc) = response
+            .headers()
+            .get("location")
+            .and_then(|h| h.to_str().ok())
+          {
+            let next = Url::parse(&current)
+              .ok()
+              .and_then(|base| base.join(loc).ok())
+              .map(|u| u.to_string())
+              .unwrap_or_else(|| loc.to_string());
+            self.policy.ensure_url_allowed(&next)?;
+            current = next;
+            validators = None;
+            continue 'redirects;
+          }
         }
-        Err(err) => {
-          let err = ResourceError::new(current.clone(), err.to_string())
-            .with_status(status.as_u16())
-            .with_final_url(final_url)
-            .with_source(err);
-          return Err(Error::Resource(err));
+
+        let status_code = status.as_u16();
+        let retry_after =
+          if self.retry_policy.respect_retry_after && retryable_http_status(status_code) {
+            parse_retry_after(response.headers())
+          } else {
+            None
+          };
+
+        let encodings = parse_content_encodings(response.headers());
+        let content_type = response
+          .headers()
+          .get("content-type")
+          .and_then(|h| h.to_str().ok())
+          .map(|s| s.to_string());
+        let decode_stage = decode_stage_for_content_type(content_type.as_deref());
+        let etag = response
+          .headers()
+          .get("etag")
+          .and_then(|h| h.to_str().ok())
+          .map(|s| s.to_string());
+        let last_modified = response
+          .headers()
+          .get("last-modified")
+          .and_then(|h| h.to_str().ok())
+          .map(|s| s.to_string());
+        let cache_policy = parse_http_cache_policy(response.headers());
+        let final_url = response.get_uri().to_string();
+
+        let body_result = response
+          .body_mut()
+          .with_config()
+          .limit(allowed_limit as u64)
+          .read_to_vec()
+          .map_err(|e| e.into_io());
+
+        match body_result {
+          Ok(bytes) => {
+            let bytes =
+              match decode_content_encodings(bytes, &encodings, allowed_limit, decode_stage) {
+                Ok(decoded) => decoded,
+                Err(ContentDecodeError::DecompressionFailed { .. })
+                  if accept_encoding.is_none() =>
+                {
+                  return self.fetch_http_with_accept(&current, Some("identity"), validators);
+                }
+                Err(err) => {
+                  let err =
+                    err.into_resource_error(current.clone(), status.as_u16(), final_url.clone());
+                  return Err(Error::Resource(err));
+                }
+              };
+
+            if bytes.is_empty() && status_code != 304 {
+              if attempt < max_attempts {
+                let mut backoff = compute_backoff(&self.retry_policy, attempt, &current);
+                if let Some(retry_after) = retry_after {
+                  backoff = backoff.max(retry_after).min(self.retry_policy.backoff_cap);
+                }
+                let mut can_retry = true;
+                if let Some(deadline) = deadline.as_ref() {
+                  if deadline.timeout_limit().is_some() {
+                    match deadline.remaining_timeout() {
+                      Some(remaining) if !remaining.is_zero() => {
+                        let max_sleep = remaining.saturating_sub(Duration::from_millis(1));
+                        backoff = backoff.min(max_sleep);
+                      }
+                      _ => can_retry = false,
+                    }
+                  }
+                }
+                if can_retry {
+                  if !backoff.is_zero() {
+                    thread::sleep(backoff);
+                  }
+                  continue;
+                }
+              }
+
+              let err = ResourceError::new(current.clone(), "empty HTTP response body")
+                .with_status(status_code)
+                .with_final_url(final_url.clone());
+              return Err(Error::Resource(err));
+            }
+
+            if retryable_http_status(status_code) && attempt < max_attempts {
+              let mut backoff = compute_backoff(&self.retry_policy, attempt, &current);
+              if let Some(retry_after) = retry_after {
+                backoff = backoff.max(retry_after).min(self.retry_policy.backoff_cap);
+              }
+              let mut can_retry = true;
+              if let Some(deadline) = deadline.as_ref() {
+                if deadline.timeout_limit().is_some() {
+                  match deadline.remaining_timeout() {
+                    Some(remaining) if !remaining.is_zero() => {
+                      let max_sleep = remaining.saturating_sub(Duration::from_millis(1));
+                      backoff = backoff.min(max_sleep);
+                    }
+                    _ => can_retry = false,
+                  }
+                }
+              }
+              if can_retry {
+                if !backoff.is_zero() {
+                  thread::sleep(backoff);
+                }
+                continue;
+              }
+            }
+
+            if bytes.len() > allowed_limit {
+              if let Some(remaining) = self.policy.remaining_budget() {
+                if bytes.len() > remaining {
+                  let err = ResourceError::new(
+                    current.clone(),
+                    format!(
+                      "total bytes budget exceeded ({} > {} bytes remaining)",
+                      bytes.len(),
+                      remaining
+                    ),
+                  )
+                  .with_status(status.as_u16())
+                  .with_final_url(final_url.clone());
+                  return Err(Error::Resource(err));
+                }
+              }
+
+              let err = ResourceError::new(
+                current.clone(),
+                format!(
+                  "response too large ({} > {} bytes)",
+                  bytes.len(),
+                  allowed_limit
+                ),
+              )
+              .with_status(status.as_u16())
+              .with_final_url(final_url.clone());
+              return Err(Error::Resource(err));
+            }
+
+            self.policy.reserve_budget(bytes.len())?;
+            let mut resource =
+              FetchedResource::with_final_url(bytes, content_type, Some(final_url));
+            resource.status = Some(status.as_u16());
+            resource.etag = etag;
+            resource.last_modified = last_modified;
+            resource.cache_policy = cache_policy;
+            return Ok(resource);
+          }
+          Err(err) => {
+            if attempt < max_attempts && is_retryable_io_error(&err) {
+              let mut backoff = compute_backoff(&self.retry_policy, attempt, &current);
+              let mut can_retry = true;
+              if let Some(deadline) = deadline.as_ref() {
+                if deadline.timeout_limit().is_some() {
+                  match deadline.remaining_timeout() {
+                    Some(remaining) if !remaining.is_zero() => {
+                      let max_sleep = remaining.saturating_sub(Duration::from_millis(1));
+                      backoff = backoff.min(max_sleep);
+                    }
+                    _ => can_retry = false,
+                  }
+                }
+              }
+              if can_retry {
+                if !backoff.is_zero() {
+                  thread::sleep(backoff);
+                }
+                continue;
+              }
+            }
+
+            let err = ResourceError::new(current.clone(), err.to_string())
+              .with_status(status.as_u16())
+              .with_final_url(final_url)
+              .with_source(err);
+            return Err(Error::Resource(err));
+          }
         }
       }
     }
@@ -1445,6 +1699,7 @@ impl Default for HttpFetcher {
       accept_language: DEFAULT_ACCEPT_LANGUAGE.to_string(),
       agent: Self::build_agent(&policy),
       policy,
+      retry_policy: HttpRetryPolicy::default(),
     }
   }
 }

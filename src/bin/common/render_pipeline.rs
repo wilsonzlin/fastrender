@@ -10,7 +10,9 @@ use fastrender::css::loader::{infer_base_url, resolve_href};
 use fastrender::dom::DomCompatibilityMode;
 use fastrender::html::encoding::decode_html_bytes;
 use fastrender::html::meta_refresh::{extract_js_location_redirect, extract_meta_refresh_url};
-use fastrender::resource::{parse_cached_html_meta, FetchedResource, HttpFetcher, ResourceFetcher};
+use fastrender::resource::{
+  parse_cached_html_meta, FetchedResource, HttpFetcher, HttpRetryPolicy, ResourceFetcher,
+};
 use fastrender::style::media::MediaType;
 use fastrender::text::font_db::FontConfig;
 use fastrender::{Error, LayoutParallelism, Result};
@@ -99,6 +101,31 @@ pub fn build_http_fetcher(
   if let Some(secs) = timeout_secs {
     fetcher = fetcher.with_timeout(Duration::from_secs(secs));
   }
+  // CLI knobs for retry behavior without growing the flag surface area.
+  // - `FASTR_HTTP_MAX_ATTEMPTS=1` disables retries.
+  // - `FASTR_HTTP_BACKOFF_BASE_MS`, `FASTR_HTTP_BACKOFF_CAP_MS` tune backoff.
+  // - `FASTR_HTTP_RESPECT_RETRY_AFTER=0|1` controls honoring Retry-After.
+  let mut retry = HttpRetryPolicy::default();
+  if let Ok(raw) = std::env::var("FASTR_HTTP_MAX_ATTEMPTS") {
+    if let Ok(value) = raw.trim().parse::<usize>() {
+      retry.max_attempts = value.max(1);
+    }
+  }
+  if let Ok(raw) = std::env::var("FASTR_HTTP_BACKOFF_BASE_MS") {
+    if let Ok(value) = raw.trim().parse::<u64>() {
+      retry.backoff_base = Duration::from_millis(value);
+    }
+  }
+  if let Ok(raw) = std::env::var("FASTR_HTTP_BACKOFF_CAP_MS") {
+    if let Ok(value) = raw.trim().parse::<u64>() {
+      retry.backoff_cap = Duration::from_millis(value);
+    }
+  }
+  if let Ok(raw) = std::env::var("FASTR_HTTP_RESPECT_RETRY_AFTER") {
+    let lowered = raw.trim().to_ascii_lowercase();
+    retry.respect_retry_after = !matches!(lowered.as_str(), "0" | "false" | "no");
+  }
+  fetcher = fetcher.with_retry_policy(retry);
   fetcher
 }
 
