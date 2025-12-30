@@ -15,11 +15,13 @@ and tests can run in fully hermetic environments without relying on platform fon
   - `NotoSans-subset.ttf` / `NotoSerif-subset.ttf`: Basic + Extended Latin, combining marks, Greek, Cyrillic, and
     punctuation (U+2000–206F) for bundled serif/sans fallbacks.
   - `NotoSansMono-subset.ttf`: ASCII, punctuation, arrows, and box-drawing glyphs for monospace fallback.
-  - `NotoSansArabic-subset.ttf`: Arabic + Supplement/Extended ranges, presentation forms, and ZWNJ/ZWJ.
-  - `NotoSansDevanagari-subset.ttf`: Devanagari + Vedic extensions with joiners.
-  - `NotoSansBengali-subset.ttf`: Bengali + joiners.
-  - `NotoSansSC-subset.ttf` / `NotoSansJP-subset.ttf` / `NotoSansKR-subset.ttf`: Simplified/Traditional Han, kana, and
-    Hangul subsets sized for common UI text.
+  - `NotoSansArabic-subset.ttf`: Arabic + Supplement/Extended ranges, presentation forms, ZWNJ/ZWJ, and combining marks
+    (U+0300–036F) for mixed clusters.
+  - `NotoSansDevanagari-subset.ttf`: Devanagari + Vedic extensions with joiners + combining marks (U+0300–036F).
+  - `NotoSansBengali-subset.ttf`: Bengali + joiners + combining marks (U+0300–036F).
+  - `NotoSansSC-subset.ttf` / `NotoSansJP-subset.ttf` / `NotoSansKR-subset.ttf`: CJK Unified Ideographs (U+3400–4DBF,
+    U+4E00–9FFF), CJK punctuation/fullwidth forms, and common combining marks (U+0300–036F); JP adds kana (U+3040–31FF)
+    and KR adds Hangul (U+1100–11FF, U+AC00–D7AF).
   - `NotoSansSymbols-subset.ttf` / `NotoSansSymbols2-subset.ttf`: UI arrows, checkmarks, stars, alerts, and related
     symbol glyphs used by fallback chains.
   - `STIXTwoMath-Regular.otf`: Math operators and alphanumeric symbols preserved with the `MATH` table intact so math

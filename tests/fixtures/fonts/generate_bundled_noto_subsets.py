@@ -37,26 +37,37 @@ FONT_SOURCES = {
     "devanagari": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansdevanagari/NotoSansDevanagari%5Bwdth,wght%5D.ttf",
     "bengali": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansbengali/NotoSansBengali%5Bwdth,wght%5D.ttf",
     "cjk_sc": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanssc/NotoSansSC%5Bwght%5D.ttf",
-  "cjk_jp": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansjp/NotoSansJP%5Bwght%5D.ttf",
-  "cjk_kr": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanskr/NotoSansKR%5Bwght%5D.ttf",
-  "symbols": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanssymbols2/NotoSansSymbols2-Regular.ttf",
-  "symbols_arrows": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanssymbols/NotoSansSymbols%5Bwght%5D.ttf",
-  "license": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosans/OFL.txt",
-  "stix_math": "https://raw.githubusercontent.com/stipub/stixfonts/v2.14/archive/STIXv2.0.0/OTF/STIX2Math.otf",
-  "stix_license": "https://raw.githubusercontent.com/stipub/stixfonts/v2.14/OFL.txt",
+    "cjk_jp": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansjp/NotoSansJP%5Bwght%5D.ttf",
+    "cjk_kr": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanskr/NotoSansKR%5Bwght%5D.ttf",
+    "symbols": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanssymbols2/NotoSansSymbols2-Regular.ttf",
+    "symbols_arrows": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanssymbols/NotoSansSymbols%5Bwght%5D.ttf",
+    "license": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosans/OFL.txt",
+    "stix_math": "https://raw.githubusercontent.com/stipub/stixfonts/v2.14/archive/STIXv2.0.0/OTF/STIX2Math.otf",
+    "stix_license": "https://raw.githubusercontent.com/stipub/stixfonts/v2.14/OFL.txt",
 }
 
-CJK_SC_TEXT = (
-    "界面元素中文测试繁體漢字页面示例体验簡體繁體字符漢語语韓国韩国"
-    "界面设计常用字体體測試試圖，。、．！？《》「」『』【】（）［］０１２３４５６７８９"
-)
+CJK_SHARED_UNICODES = [
+    "U+0020-007E",
+    "U+0300-036F",
+    "U+2000-206F",
+    "U+3000-303F",
+    "U+3400-4DBF",
+    "U+4E00-9FFF",
+    "U+F900-FAFF",
+    "U+FF00-FFEF",
+]
 
-CJK_JP_TEXT = (
-    "日本語の例かなカナあいうえおアイウエオガギグゲゴサシスセソンャュョッー"
-    "漢字界面表示例韓国《》「」『』【】（）［］１２３４５"
-)
+CJK_JP_UNICODES = [
+    *CJK_SHARED_UNICODES,
+    "U+3040-30FF",
+    "U+31F0-31FF",
+]
 
-CJK_KR_TEXT = "한국어 한글 테스트 안내 페이지 글자 모음 자음 가나다라마바사 아자차카타파하"
+CJK_KR_UNICODES = [
+    *CJK_SHARED_UNICODES,
+    "U+1100-11FF",
+    "U+AC00-D7AF",
+]
 
 SYMBOLS_UI_TEXT = "✓✔✕✖★☆•…©®™°§€£¥☑☒☂⚠☎✈✉☕☰"
 SYMBOLS_ARROW_TEXT = "←→↑↓↔↕⇔⇦⇧⇨⇩↩↪"
@@ -121,6 +132,7 @@ FONT_DEFS = [
         "output": "NotoSansArabic-subset.ttf",
         "unicodes": [
             "U+0020-007E",
+            "U+0300-036F",
             "U+0600-06FF",
             "U+0750-077F",
             "U+08A0-08FF",
@@ -134,6 +146,7 @@ FONT_DEFS = [
         "output": "NotoSansDevanagari-subset.ttf",
         "unicodes": [
             "U+0020-007E",
+            "U+0300-036F",
             "U+0900-097F",
             "U+1CD0-1CFF",
             "U+200C-200D",
@@ -145,6 +158,7 @@ FONT_DEFS = [
         "output": "NotoSansBengali-subset.ttf",
         "unicodes": [
             "U+0020-007E",
+            "U+0300-036F",
             "U+0980-09FF",
             "U+200C-200D",
         ],
@@ -152,19 +166,19 @@ FONT_DEFS = [
     {
         "source": "cjk_sc",
         "output": "NotoSansSC-subset.ttf",
-        "text": CJK_SC_TEXT,
+        "unicodes": CJK_SHARED_UNICODES,
         "variations": {"wght": 400},
     },
     {
         "source": "cjk_jp",
         "output": "NotoSansJP-subset.ttf",
-        "text": CJK_JP_TEXT,
+        "unicodes": CJK_JP_UNICODES,
         "variations": {"wght": 400},
     },
     {
         "source": "cjk_kr",
         "output": "NotoSansKR-subset.ttf",
-        "text": CJK_KR_TEXT,
+        "unicodes": CJK_KR_UNICODES,
         "variations": {"wght": 400},
     },
     {

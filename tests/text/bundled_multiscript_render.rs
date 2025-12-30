@@ -45,6 +45,41 @@ fn bundled_fonts_render_common_scripts() {
 }
 
 #[test]
+fn bundled_fonts_render_pageset_blocker_clusters() {
+  let mut pipeline = ShapingPipeline::new();
+  let font_ctx = FontContext::with_config(FontConfig::bundled_only());
+
+  let samples = [
+    ("bengali_cluster", "বাং"),
+    ("cjk_ideograph", "碅"),
+    ("cjk_ideograph_with_combining_mark", "碅\u{036B}"),
+    ("arabic_marks", "\u{061A}\u{06DA}"),
+  ];
+
+  for (label, text) in samples {
+    let mut style = ComputedStyle::default();
+    style.font_family = vec!["sans-serif".to_string()];
+    style.font_size = 32.0;
+
+    let runs = pipeline
+      .shape(text, &style, &font_ctx)
+      .unwrap_or_else(|_| panic!("shape {label} sample"));
+    assert!(!runs.is_empty(), "{label} sample should produce runs");
+
+    let mut pixmap = Pixmap::new(256, 128).expect("pixmap");
+    let mut rasterizer = TextRasterizer::new();
+    rasterizer
+      .render_runs(&runs, 8.0, 80.0, Rgba::BLACK, &mut pixmap)
+      .unwrap_or_else(|_| panic!("rasterize {label} sample"));
+
+    assert!(
+      pixmap.data().iter().any(|&b| b != 0),
+      "{label} sample should render with bundled fonts"
+    );
+  }
+}
+
+#[test]
 fn bundled_generics_prefer_bundled_text_fonts() {
   let db = FontDatabase::with_config(&FontConfig::bundled_only());
 
