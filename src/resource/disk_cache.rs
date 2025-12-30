@@ -13,6 +13,7 @@ use super::ResourceFetcher;
 use super::ResourcePolicy;
 use super::MAX_ALIAS_HOPS;
 use crate::error::Error;
+use crate::render_control;
 use crate::Result;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -51,6 +52,9 @@ impl Default for DiskCacheConfig {
 const LOCK_STALE_AFTER: Duration = Duration::from_secs(30);
 const LOCK_WAIT_TIMEOUT: Duration = Duration::from_millis(500);
 const LOCK_RETRY_DELAY: Duration = Duration::from_millis(10);
+const READ_LOCK_WAIT_TIMEOUT: Duration = Duration::from_millis(200);
+const READ_LOCK_RETRY_INITIAL_DELAY: Duration = Duration::from_millis(5);
+const READ_LOCK_RETRY_MAX_DELAY: Duration = Duration::from_millis(50);
 
 #[derive(Debug, Clone)]
 pub struct DiskCachingFetcher<F: ResourceFetcher> {
@@ -63,6 +67,12 @@ pub struct DiskCachingFetcher<F: ResourceFetcher> {
 
 struct EntryLock {
   path: PathBuf,
+}
+
+enum SnapshotRead {
+  Hit(CachedSnapshot),
+  Miss,
+  Locked,
 }
 
 impl Drop for EntryLock {
@@ -222,6 +232,36 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     }
   }
 
+  fn deadline_aware_lock_wait(&self, desired: Duration) -> Duration {
+    let Some(deadline) = render_control::active_deadline() else {
+      return desired;
+    };
+    if deadline.timeout_limit().is_some() {
+      desired.min(deadline.remaining_timeout().unwrap_or_default())
+    } else {
+      desired
+    }
+  }
+
+  fn wait_for_unlock(&self, data_path: &Path, max_wait: Duration) -> bool {
+    if max_wait.is_zero() {
+      return !self.lock_is_active(data_path);
+    }
+
+    let deadline = Instant::now() + max_wait;
+    let mut delay = READ_LOCK_RETRY_INITIAL_DELAY;
+    while self.lock_is_active(data_path) {
+      let now = Instant::now();
+      if now >= deadline {
+        return false;
+      }
+      thread::sleep(delay.min(deadline.saturating_duration_since(now)));
+      delay = delay.saturating_mul(2).min(READ_LOCK_RETRY_MAX_DELAY);
+    }
+
+    true
+  }
+
   fn remove_entry_if_unlocked(&self, key: &str, data_path: &Path, meta_path: &Path) {
     if !self.lock_is_active(data_path) {
       let _ = self.remove_entry(key, data_path, meta_path);
@@ -239,8 +279,19 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       let data_path = self.data_path(&current);
       let meta_path = self.meta_path_for_data(&data_path);
 
-      if let Some(snapshot) = self.try_read_snapshot(&key, &current, &data_path, &meta_path) {
-        return Some((current, snapshot));
+      match self.try_read_snapshot(&key, &current, &data_path, &meta_path) {
+        SnapshotRead::Hit(snapshot) => return Some((current, snapshot)),
+        SnapshotRead::Locked => {
+          let max_wait = self.deadline_aware_lock_wait(READ_LOCK_WAIT_TIMEOUT);
+          if !max_wait.is_zero() && self.wait_for_unlock(&data_path, max_wait) {
+            if let SnapshotRead::Hit(snapshot) =
+              self.try_read_snapshot(&key, &current, &data_path, &meta_path)
+            {
+              return Some((current, snapshot));
+            }
+          }
+        }
+        SnapshotRead::Miss => {}
       }
 
       let Some(next) = self.read_alias_target(&current) else {
@@ -263,30 +314,30 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     url: &str,
     data_path: &Path,
     meta_path: &Path,
-  ) -> Option<CachedSnapshot> {
+  ) -> SnapshotRead {
     if self.lock_is_active(data_path) {
-      return None;
+      return SnapshotRead::Locked;
     }
 
     let meta_bytes = match fs::read(meta_path) {
       Ok(bytes) => bytes,
       Err(_) => {
         self.remove_entry_if_unlocked(key, data_path, meta_path);
-        return None;
+        return SnapshotRead::Miss;
       }
     };
     let meta: StoredMetadata = match serde_json::from_slice(&meta_bytes) {
       Ok(meta) => meta,
       Err(_) => {
         self.remove_entry_if_unlocked(key, data_path, meta_path);
-        return None;
+        return SnapshotRead::Miss;
       }
     };
 
     if let Some(max_age) = self.disk_config.max_age {
       if now_seconds().saturating_sub(meta.stored_at) > max_age.as_secs() {
         self.remove_entry_if_unlocked(key, data_path, meta_path);
-        return None;
+        return SnapshotRead::Miss;
       }
     }
 
@@ -294,12 +345,12 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       Ok(bytes) => bytes,
       Err(_) => {
         self.remove_entry_if_unlocked(key, data_path, meta_path);
-        return None;
+        return SnapshotRead::Miss;
       }
     };
     if bytes.is_empty() || meta.len != bytes.len() {
       self.remove_entry_if_unlocked(key, data_path, meta_path);
-      return None;
+      return SnapshotRead::Miss;
     }
     self
       .index
@@ -314,7 +365,7 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     resource.last_modified = meta.last_modified.clone();
     resource.cache_policy = meta.cache.as_ref().map(|c| c.to_policy());
 
-    Some(CachedSnapshot {
+    SnapshotRead::Hit(CachedSnapshot {
       value: super::CacheValue::Resource(resource),
       etag: meta.etag,
       last_modified: meta.last_modified,
@@ -1299,5 +1350,89 @@ mod tests {
       1,
       "fresh disk entries should be served without revalidation"
     );
+  }
+
+  #[derive(Clone)]
+  struct PanicFetcher;
+
+  impl ResourceFetcher for PanicFetcher {
+    fn fetch(&self, _url: &str) -> Result<FetchedResource> {
+      panic!("inner fetch should not be called");
+    }
+  }
+
+  #[test]
+  fn waits_for_lock_then_reads_cached_entry() {
+    let tmp = tempfile::tempdir().unwrap();
+    let url = "https://example.com/locked";
+    let disk = DiskCachingFetcher::new(PanicFetcher, tmp.path());
+
+    let bytes = b"from-disk".to_vec();
+    let data_path = disk.data_path(url);
+    let meta_path = disk.meta_path_for_data(&data_path);
+    fs::write(&data_path, &bytes).unwrap();
+    let meta = StoredMetadata {
+      url: url.to_string(),
+      content_type: Some("text/plain".to_string()),
+      etag: None,
+      last_modified: None,
+      final_url: Some(url.to_string()),
+      stored_at: now_seconds(),
+      len: bytes.len(),
+      cache: None,
+    };
+    fs::write(&meta_path, serde_json::to_vec(&meta).unwrap()).unwrap();
+
+    let lock_path = lock_path_for(&data_path);
+    fs::write(&lock_path, b"").unwrap();
+    let handle = thread::spawn({
+      let lock_path = lock_path.clone();
+      move || {
+        thread::sleep(Duration::from_millis(50));
+        fs::remove_file(lock_path).unwrap();
+      }
+    });
+
+    let res = disk.fetch(url).expect("fetch");
+    assert_eq!(res.bytes, bytes);
+    assert_eq!(res.content_type.as_deref(), Some("text/plain"));
+    handle.join().unwrap();
+  }
+
+  #[derive(Clone)]
+  struct NoStoreFetcher {
+    count: Arc<AtomicUsize>,
+  }
+
+  impl ResourceFetcher for NoStoreFetcher {
+    fn fetch(&self, url: &str) -> Result<FetchedResource> {
+      self.count.fetch_add(1, Ordering::SeqCst);
+      let mut resource = FetchedResource::new(b"network".to_vec(), Some("text/plain".to_string()));
+      resource.final_url = Some(url.to_string());
+      resource.cache_policy = Some(HttpCachePolicy {
+        no_store: true,
+        ..Default::default()
+      });
+      Ok(resource)
+    }
+  }
+
+  #[test]
+  fn falls_back_to_inner_fetch_if_lock_persists() {
+    let tmp = tempfile::tempdir().unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let disk = DiskCachingFetcher::new(
+      NoStoreFetcher {
+        count: Arc::clone(&calls),
+      },
+      tmp.path(),
+    );
+    let url = "https://example.com/locked-miss";
+    let data_path = disk.data_path(url);
+    fs::write(lock_path_for(&data_path), b"").unwrap();
+
+    let res = disk.fetch(url).expect("fetch");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(res.bytes, b"network");
   }
 }
