@@ -5,6 +5,7 @@
 //! pixels. They are used by both the legacy painter and the display list
 //! renderer to keep filter behavior in sync.
 
+use crate::error::RenderError;
 use crate::paint::blur::{alpha_bounds, apply_gaussian_blur};
 use crate::paint::pixmap::new_pixmap;
 use crate::render_control::{active_deadline, with_deadline};
@@ -232,14 +233,14 @@ pub(crate) fn apply_drop_shadow(
   blur_radius: f32,
   spread: f32,
   color: Rgba,
-) {
+) -> Result<(), RenderError> {
   if pixmap.width() == 0 || pixmap.height() == 0 {
-    return;
+    return Ok(());
   }
 
   let source = pixmap.clone();
   let Some((min_x, min_y, bounds_w, bounds_h)) = alpha_bounds(&source) else {
-    return;
+    return Ok(());
   };
   let blur_pad = (blur_radius.abs() * 3.0).ceil() as u32;
   let spread_pad = spread.max(0.0).ceil() as u32;
@@ -247,7 +248,7 @@ pub(crate) fn apply_drop_shadow(
 
   let mut shadow = match new_pixmap(bounds_w + pad * 2, bounds_h + pad * 2) {
     Some(p) => p,
-    None => return,
+    None => return Ok(()),
   };
 
   {
@@ -287,12 +288,12 @@ pub(crate) fn apply_drop_shadow(
   }
 
   if blur_radius > 0.0 {
-    apply_gaussian_blur(&mut shadow, blur_radius);
+    apply_gaussian_blur(&mut shadow, blur_radius)?;
   }
 
   let mut result = match new_pixmap(source.width(), source.height()) {
     Some(p) => p,
-    None => return,
+    None => return Ok(()),
   };
 
   let dest_x = min_x as i32 - pad as i32;
@@ -310,4 +311,5 @@ pub(crate) fn apply_drop_shadow(
   result.draw_pixmap(0, 0, source.as_ref(), &paint, Transform::identity(), None);
 
   *pixmap = result;
+  Ok(())
 }

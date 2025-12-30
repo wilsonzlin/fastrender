@@ -26,8 +26,8 @@
 //! println!("Reduced items by {:.1}%", stats.reduction_percentage());
 //! ```
 
-use crate::geometry::{Point, Rect};
 use crate::error::{Error, RenderError, RenderStage, Result};
+use crate::geometry::{Point, Rect};
 use crate::paint::display_list::BlendMode;
 use crate::paint::display_list::DisplayItem;
 use crate::paint::display_list::DisplayList;

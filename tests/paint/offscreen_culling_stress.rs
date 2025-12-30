@@ -41,7 +41,10 @@ fn offscreen_fragments_are_culled_fast() {
 
   let offscreen = 2500;
   for i in 0..offscreen {
-    let origin = Point::new(800.0 + (i % 60) as f32 * 40.0, 800.0 + (i / 60) as f32 * 40.0);
+    let origin = Point::new(
+      800.0 + (i % 60) as f32 * 40.0,
+      800.0 + (i / 60) as f32 * 40.0,
+    );
     children.push(FragmentNode::new_block_styled(
       Rect::from_xywh(origin.x, origin.y, 32.0, 32.0),
       vec![],

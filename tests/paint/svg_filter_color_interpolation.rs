@@ -61,12 +61,12 @@ fn color_matrix_respects_color_interpolation_filters() {
     linear_result.width() as f32,
     linear_result.height() as f32,
   );
-  apply_svg_filter(&filter_linear, &mut linear_result, 1.0, bbox);
+  apply_svg_filter(&filter_linear, &mut linear_result, 1.0, bbox).unwrap();
 
   let mut srgb_filter = filter_linear.clone();
   srgb_filter.color_interpolation_filters = ColorInterpolationFilters::SRGB;
   let mut srgb_result = base.clone();
-  apply_svg_filter(&srgb_filter, &mut srgb_result, 1.0, bbox);
+  apply_svg_filter(&srgb_filter, &mut srgb_result, 1.0, bbox).unwrap();
 
   let linear_px = linear_result.pixels()[0];
   let srgb_px = srgb_result.pixels()[0];
@@ -96,7 +96,8 @@ fn identity_matrix_is_a_noop_in_all_color_spaces() {
     &mut linear_result,
     1.0,
     linear_bbox,
-  );
+  )
+  .unwrap();
 
   let mut srgb_result = base.clone();
   let srgb_bbox = Rect::from_xywh(
@@ -110,7 +111,8 @@ fn identity_matrix_is_a_noop_in_all_color_spaces() {
     &mut srgb_result,
     1.0,
     srgb_bbox,
-  );
+  )
+  .unwrap();
 
   assert_eq!(base.data(), linear_result.data());
   assert_eq!(base.data(), srgb_result.data());
@@ -157,13 +159,15 @@ fn gaussian_blur_respects_color_interpolation_filters() {
     &mut linear,
     1.0,
     bbox,
-  );
+  )
+  .unwrap();
   apply_svg_filter(
     &blur_filter(ColorInterpolationFilters::SRGB),
     &mut srgb,
     1.0,
     bbox,
-  );
+  )
+  .unwrap();
 
   let linear_px = linear.pixel(0, 0).unwrap();
   let srgb_px = srgb.pixel(0, 0).unwrap();

@@ -58,7 +58,7 @@ fn missing_reference_defaults_to_transparent_integration() {
 
   let filter = base_filter(steps);
   let bbox = Rect::from_xywh(0.0, 0.0, 2.0, 1.0);
-  apply_svg_filter(&filter, &mut pixmap, 1.0, bbox);
+  apply_svg_filter(&filter, &mut pixmap, 1.0, bbox).unwrap();
 
   assert_eq!(pixel(&pixmap, 0, 0), (255, 0, 0, 255));
   assert_eq!(pixel(&pixmap, 1, 0), (255, 0, 0, 255));
@@ -86,7 +86,7 @@ fn primitive_region_userspace_respects_scale() {
   filter.primitive_units = SvgFilterUnits::UserSpaceOnUse;
 
   let bbox = Rect::from_xywh(0.0, 0.0, 4.0, 4.0);
-  apply_svg_filter(&filter, &mut pixmap, 2.0, bbox);
+  apply_svg_filter(&filter, &mut pixmap, 2.0, bbox).unwrap();
 
   // Region should be 2x2 after scaling (1px * scale=2).
   assert_eq!(pixel(&pixmap, 0, 0), (0, 255, 0, 255));
@@ -112,7 +112,7 @@ fn turbulence_is_deterministic() {
   }];
   let filter = base_filter(steps);
   let bbox = Rect::from_xywh(0.0, 0.0, 2.0, 2.0);
-  apply_svg_filter(&filter, &mut pixmap, 1.0, bbox);
+  apply_svg_filter(&filter, &mut pixmap, 1.0, bbox).unwrap();
 
   let checksum: u32 = pixmap.data().iter().map(|b| *b as u32).sum();
   assert_eq!(checksum, 2709);

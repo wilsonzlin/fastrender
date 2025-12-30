@@ -805,7 +805,7 @@ fn bench_filter_blur(c: &mut Criterion) {
   group.bench_function("gaussian_blur_512_r8", |b| {
     b.iter(|| {
       let mut pixmap = base.clone();
-      apply_gaussian_blur(&mut pixmap, 8.0);
+      apply_gaussian_blur(&mut pixmap, 8.0).unwrap();
       black_box(pixmap);
     })
   });

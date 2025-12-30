@@ -89,6 +89,7 @@ use crate::paint::display_list::TextShadowItem;
 use crate::paint::display_list::Transform3D;
 use crate::paint::display_list::{list_marker_bounds, text_bounds};
 use crate::paint::display_list_renderer::PaintParallelism;
+use crate::paint::filter_outset::filter_outset_with_bounds;
 use crate::paint::iframe::{render_iframe_src, render_iframe_srcdoc};
 use crate::paint::object_fit::compute_object_fit;
 use crate::paint::object_fit::default_object_position;
@@ -97,7 +98,6 @@ use crate::paint::stacking::Layer6Item;
 use crate::paint::stacking::StackingContext;
 use crate::paint::svg_filter::SvgFilterResolver;
 use crate::paint::text_shadow::resolve_text_shadows;
-use crate::paint::filter_outset::filter_outset_with_bounds;
 use crate::paint::transform3d::backface_is_hidden;
 use crate::paint::transform_resolver::ResolvedTransforms;
 use crate::render_control::{active_deadline, check_active, check_active_periodic, with_deadline};
@@ -825,7 +825,11 @@ impl DisplayListBuilder {
       self.viewport = Some((root.bounds.width(), root.bounds.height()));
     }
     self.estimate_from_roots(std::iter::once(root));
-    self.build_fragment(root, Point::ZERO, Visibility::with_viewport(self.viewport_rect()));
+    self.build_fragment(
+      root,
+      Point::ZERO,
+      Visibility::with_viewport(self.viewport_rect()),
+    );
     self.finish()
   }
 
@@ -844,7 +848,11 @@ impl DisplayListBuilder {
     }
     self.estimate_from_tree(tree);
     for root in std::iter::once(&tree.root).chain(tree.additional_fragments.iter()) {
-      self.build_fragment(root, Point::ZERO, Visibility::with_viewport(self.viewport_rect()));
+      self.build_fragment(
+        root,
+        Point::ZERO,
+        Visibility::with_viewport(self.viewport_rect()),
+      );
     }
     self.finish()
   }
@@ -856,10 +864,7 @@ impl DisplayListBuilder {
       .unwrap_or_else(|_| DisplayList::new())
   }
 
-  pub fn build_tree_with_stacking_checked(
-    mut self,
-    tree: &FragmentTree,
-  ) -> Result<DisplayList> {
+  pub fn build_tree_with_stacking_checked(mut self, tree: &FragmentTree) -> Result<DisplayList> {
     if self.viewport.is_none() {
       let viewport = tree.viewport_size();
       self.viewport = Some((viewport.width, viewport.height));
@@ -892,10 +897,7 @@ impl DisplayListBuilder {
       .unwrap_or_else(|_| DisplayList::new())
   }
 
-  pub fn build_from_stacking_checked(
-    mut self,
-    stacking: &StackingContext,
-  ) -> Result<DisplayList> {
+  pub fn build_from_stacking_checked(mut self, stacking: &StackingContext) -> Result<DisplayList> {
     if self.viewport.is_none() {
       self.viewport = Some((stacking.bounds.width(), stacking.bounds.height()));
     }
@@ -925,10 +927,7 @@ impl DisplayListBuilder {
       .unwrap_or_else(|_| DisplayList::new())
   }
 
-  pub fn build_with_stacking_tree_checked(
-    mut self,
-    root: &FragmentNode,
-  ) -> Result<DisplayList> {
+  pub fn build_with_stacking_tree_checked(mut self, root: &FragmentNode) -> Result<DisplayList> {
     if self.viewport.is_none() {
       self.viewport = Some((root.bounds.width(), root.bounds.height()));
     }
@@ -1577,8 +1576,7 @@ impl DisplayListBuilder {
     }
 
     let filter_outset = filter_outset_with_bounds(&filters, 1.0, Some(context.bounds));
-    let backdrop_outset =
-      filter_outset_with_bounds(&backdrop_filters, 1.0, Some(context.bounds));
+    let backdrop_outset = filter_outset_with_bounds(&backdrop_filters, 1.0, Some(context.bounds));
     let expand_left = filter_outset.left.max(backdrop_outset.left);
     let expand_top = filter_outset.top.max(backdrop_outset.top);
     let expand_right = filter_outset.right.max(backdrop_outset.right);
@@ -1661,22 +1659,21 @@ impl DisplayListBuilder {
       }
       child_visibility = child_visibility.intersect(Some(bounds), true);
     }
-    if let Some(bounds) =
-      clip_rect.as_ref().and_then(|clip| Self::map_clip_bounds(clip, transform.as_ref()))
+    if let Some(bounds) = clip_rect
+      .as_ref()
+      .and_then(|clip| Self::map_clip_bounds(clip, transform.as_ref()))
     {
       child_visibility = child_visibility.intersect(Some(bounds), true);
     }
-    if let Some(bounds) =
-      overflow_clip
-        .as_ref()
-        .and_then(|clip| Self::map_clip_bounds(clip, transform.as_ref()))
+    if let Some(bounds) = overflow_clip
+      .as_ref()
+      .and_then(|clip| Self::map_clip_bounds(clip, transform.as_ref()))
     {
       child_visibility = child_visibility.intersect(Some(bounds), true);
     }
-    if let Some(bounds) =
-      paint_containment_clip
-        .as_ref()
-        .and_then(|clip| Self::map_clip_bounds(clip, transform.as_ref()))
+    if let Some(bounds) = paint_containment_clip
+      .as_ref()
+      .and_then(|clip| Self::map_clip_bounds(clip, transform.as_ref()))
     {
       child_visibility = child_visibility.intersect(Some(bounds), true);
     }
@@ -1714,7 +1711,13 @@ impl DisplayListBuilder {
         if self.deadline_reached_periodic(&mut deadline_counter, DEADLINE_STRIDE) {
           break;
         }
-        self.build_stacking_context(child, descendant_offset, false, svg_filters, child_visibility);
+        self.build_stacking_context(
+          child,
+          descendant_offset,
+          false,
+          svg_filters,
+          child_visibility,
+        );
       }
 
       self.emit_fragment_list_shallow(
@@ -1734,9 +1737,13 @@ impl DisplayListBuilder {
           Layer6Item::Positioned(fragment) => {
             self.build_fragment(&fragment.fragment, descendant_offset, child_visibility)
           }
-          Layer6Item::ZeroContext(child) => {
-            self.build_stacking_context(child, descendant_offset, false, svg_filters, child_visibility)
-          }
+          Layer6Item::ZeroContext(child) => self.build_stacking_context(
+            child,
+            descendant_offset,
+            false,
+            svg_filters,
+            child_visibility,
+          ),
         }
       }
 
@@ -1744,7 +1751,13 @@ impl DisplayListBuilder {
         if self.deadline_reached_periodic(&mut deadline_counter, DEADLINE_STRIDE) {
           break;
         }
-        self.build_stacking_context(child, descendant_offset, false, svg_filters, child_visibility);
+        self.build_stacking_context(
+          child,
+          descendant_offset,
+          false,
+          svg_filters,
+          child_visibility,
+        );
       }
       if pushed_opacity {
         self.pop_opacity();
@@ -1810,7 +1823,13 @@ impl DisplayListBuilder {
       if self.deadline_reached_periodic(&mut deadline_counter, DEADLINE_STRIDE) {
         break;
       }
-      self.build_stacking_context(child, descendant_offset, false, svg_filters, child_visibility);
+      self.build_stacking_context(
+        child,
+        descendant_offset,
+        false,
+        svg_filters,
+        child_visibility,
+      );
     }
     self.emit_fragment_list(&context.layer3_blocks, descendant_offset, child_visibility);
     self.emit_fragment_list(&context.layer4_floats, descendant_offset, child_visibility);
@@ -1823,9 +1842,13 @@ impl DisplayListBuilder {
         Layer6Item::Positioned(fragment) => {
           self.build_fragment(&fragment.fragment, descendant_offset, child_visibility)
         }
-        Layer6Item::ZeroContext(child) => {
-          self.build_stacking_context(child, descendant_offset, false, svg_filters, child_visibility)
-        }
+        Layer6Item::ZeroContext(child) => self.build_stacking_context(
+          child,
+          descendant_offset,
+          false,
+          svg_filters,
+          child_visibility,
+        ),
       }
     }
 
@@ -1833,7 +1856,13 @@ impl DisplayListBuilder {
       if self.deadline_reached_periodic(&mut deadline_counter, DEADLINE_STRIDE) {
         break;
       }
-      self.build_stacking_context(child, descendant_offset, false, svg_filters, child_visibility);
+      self.build_stacking_context(
+        child,
+        descendant_offset,
+        false,
+        svg_filters,
+        child_visibility,
+      );
     }
 
     if overflow_clip_pushed {
@@ -3045,7 +3074,12 @@ impl DisplayListBuilder {
     crate::paint::transform_resolver::resolve_transform3d(style, bounds, viewport)
   }
 
-  fn emit_fragment_list(&mut self, fragments: &[FragmentNode], offset: Point, visibility: Visibility) {
+  fn emit_fragment_list(
+    &mut self,
+    fragments: &[FragmentNode],
+    offset: Point,
+    visibility: Visibility,
+  ) {
     if let Some(plan) = self.plan_parallel(fragments.len()) {
       let start = self.parallel_stats.as_ref().map(|_| Instant::now());
       let mut partials: Vec<(usize, DisplayList, ThreadId)> = fragments

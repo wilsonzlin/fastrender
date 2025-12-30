@@ -73,7 +73,7 @@ fn displacement_map_shifts_pixels_right() {
   let filter = displacement_filter(2.0);
   let bbox = Rect::from_xywh(0.0, 0.0, pixmap.width() as f32, pixmap.height() as f32);
 
-  apply_svg_filter(&filter, &mut pixmap, 1.0, bbox);
+  apply_svg_filter(&filter, &mut pixmap, 1.0, bbox).unwrap();
 
   assert_eq!(pixel(&pixmap, 0), (0, 255, 0, 255));
   assert_eq!(pixel(&pixmap, 1), (0, 0, 255, 255));
@@ -87,7 +87,7 @@ fn displacement_map_scale_zero_is_identity() {
 
   let filter = displacement_filter(0.0);
   let bbox = Rect::from_xywh(0.0, 0.0, pixmap.width() as f32, pixmap.height() as f32);
-  apply_svg_filter(&filter, &mut pixmap, 1.0, bbox);
+  apply_svg_filter(&filter, &mut pixmap, 1.0, bbox).unwrap();
 
   for x in 0..pixmap.width() {
     assert_eq!(pixel(&pixmap, x), expected[x as usize]);
@@ -138,7 +138,7 @@ fn displacement_map_interprets_map_in_color_interpolation_space() {
   };
 
   let bbox = Rect::from_xywh(0.0, 0.0, primary.width() as f32, primary.height() as f32);
-  apply_svg_filter(&filter, &mut primary, 1.0, bbox);
+  apply_svg_filter(&filter, &mut primary, 1.0, bbox).unwrap();
 
   let center = pixel(&primary, 1);
   assert!(

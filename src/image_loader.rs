@@ -6,8 +6,8 @@
 use crate::api::{RenderDiagnostics, ResourceContext, ResourceKind};
 use crate::debug::runtime;
 use crate::error::{Error, ImageError, RenderError, RenderStage, Result};
-use crate::render_control::{check_active, check_active_periodic};
 use crate::paint::pixmap::{new_pixmap, MAX_PIXMAP_BYTES};
+use crate::render_control::{check_active, check_active_periodic};
 use crate::resource::CachingFetcher;
 use crate::resource::CachingFetcherConfig;
 use crate::resource::FetchedResource;

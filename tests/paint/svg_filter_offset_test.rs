@@ -39,11 +39,11 @@ fn render_offset(dx: f32) -> Pixmap {
       height: SvgLength::Number(bbox.height()),
       units: SvgFilterUnits::UserSpaceOnUse,
     },
-    filter_res: None,
-    primitive_units: SvgFilterUnits::UserSpaceOnUse,
-    fingerprint: 0,
-  };
-  apply_svg_filter(&filter, &mut pixmap, 1.0, bbox);
+  filter_res: None,
+  primitive_units: SvgFilterUnits::UserSpaceOnUse,
+  fingerprint: 0,
+};
+  apply_svg_filter(&filter, &mut pixmap, 1.0, bbox).unwrap();
   pixmap
 }
 
@@ -72,11 +72,11 @@ fn render_drop_shadow(dx: f32) -> Pixmap {
       height: SvgLength::Number(bbox.height()),
       units: SvgFilterUnits::UserSpaceOnUse,
     },
-    filter_res: None,
-    primitive_units: SvgFilterUnits::UserSpaceOnUse,
-    fingerprint: 0,
-  };
-  apply_svg_filter(&filter, &mut pixmap, 1.0, bbox);
+  filter_res: None,
+  primitive_units: SvgFilterUnits::UserSpaceOnUse,
+  fingerprint: 0,
+};
+  apply_svg_filter(&filter, &mut pixmap, 1.0, bbox).unwrap();
   pixmap
 }
 

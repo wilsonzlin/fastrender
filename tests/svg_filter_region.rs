@@ -102,7 +102,7 @@ fn filter_region_respects_bbox_offset() {
 
   let mut pixmap = Pixmap::new(20, 20).unwrap();
   let bbox = Rect::from_xywh(5.0, 6.0, 10.0, 8.0);
-  apply_svg_filter(&filter, &mut pixmap, 1.0, bbox);
+  apply_svg_filter(&filter, &mut pixmap, 1.0, bbox).unwrap();
 
   let pixels = pixmap.pixels();
   let width = pixmap.width() as usize;

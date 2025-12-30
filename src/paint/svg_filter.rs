@@ -1,3 +1,4 @@
+use crate::error::RenderError;
 use crate::geometry::{Point, Rect};
 use crate::image_loader::ImageCache;
 use crate::paint::blur::pixel_fingerprint;
@@ -30,6 +31,7 @@ pub(crate) const ENV_FILTER_CACHE_ITEMS: &str = "FASTR_SVG_FILTER_CACHE_ITEMS";
 pub(crate) const ENV_FILTER_CACHE_BYTES: &str = "FASTR_SVG_FILTER_CACHE_BYTES";
 
 type FilterHasher = BuildHasherDefault<DefaultHasher>;
+type RenderResult<T> = std::result::Result<T, RenderError>;
 
 const MAX_FILTER_RES: u32 = 4096;
 const MAX_TURBULENCE_OCTAVES: u32 = 8;
@@ -2335,8 +2337,13 @@ fn parse_fe_convolve_matrix(node: &roxmltree::Node) -> Option<FilterPrimitive> {
 ///
 /// `scale` should be the device pixel ratio so that numeric parameters expressed in CSS pixels
 /// (e.g. stdDeviation, dx/dy, radius) are interpreted in device pixels.
-pub fn apply_svg_filter(def: &SvgFilter, pixmap: &mut Pixmap, scale: f32, bbox: Rect) {
-  apply_svg_filter_with_cache(def, pixmap, scale, bbox, None);
+pub fn apply_svg_filter(
+  def: &SvgFilter,
+  pixmap: &mut Pixmap,
+  scale: f32,
+  bbox: Rect,
+) -> RenderResult<()> {
+  apply_svg_filter_with_cache(def, pixmap, scale, bbox, None)
 }
 
 pub(crate) fn apply_svg_filter_with_cache(
@@ -2345,7 +2352,7 @@ pub(crate) fn apply_svg_filter_with_cache(
   scale: f32,
   bbox: Rect,
   blur_cache: Option<&mut BlurCache>,
-) {
+) -> RenderResult<()> {
   let _depth = svg_filter_depth_guard();
   let scale = if scale.is_finite() && scale > 0.0 {
     scale
@@ -2358,12 +2365,12 @@ pub(crate) fn apply_svg_filter_with_cache(
     for px in pixmap.pixels_mut() {
       *px = PremultipliedColorU8::TRANSPARENT;
     }
-    return;
+    return Ok(());
   };
 
   let Some((res_w, res_h)) = def.filter_res else {
-    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut());
-    return;
+    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut())?;
+    return Ok(());
   };
 
   let target_w = pixmap.width();
@@ -2371,17 +2378,17 @@ pub(crate) fn apply_svg_filter_with_cache(
   let res_w = res_w.min(MAX_FILTER_RES);
   let res_h = res_h.min(MAX_FILTER_RES);
   if target_w == 0 || target_h == 0 || res_w == 0 || res_h == 0 {
-    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut());
-    return;
+    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut())?;
+    return Ok(());
   }
   if res_w == target_w && res_h == target_h {
-    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut());
-    return;
+    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut())?;
+    return Ok(());
   }
 
   let Some(mut working_pixmap) = resize_pixmap(pixmap, res_w, res_h) else {
-    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut());
-    return;
+    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut())?;
+    return Ok(());
   };
 
   let scale_res_x = res_w as f32 / target_w as f32;
@@ -2400,14 +2407,15 @@ pub(crate) fn apply_svg_filter_with_cache(
     scale * scale_res_y,
     bbox_working,
     blur_cache.as_deref_mut(),
-  );
+  )?;
 
   let Some(resized_back) = resize_pixmap(&working_pixmap, target_w, target_h) else {
-    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut());
-    return;
+    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut())?;
+    return Ok(());
   };
   *pixmap = resized_back;
   clip_to_region(pixmap, filter_region);
+  Ok(())
 }
 
 fn resize_pixmap(source: &Pixmap, width: u32, height: u32) -> Option<Pixmap> {
@@ -2482,12 +2490,12 @@ fn apply_svg_filter_scaled(
   scale_y: f32,
   bbox: Rect,
   mut blur_cache: Option<&mut BlurCache>,
-) {
+) -> RenderResult<()> {
   let Some((css_bbox, filter_region)) = resolve_filter_regions(def, scale_x, scale_y, bbox) else {
     for px in pixmap.pixels_mut() {
       *px = PremultipliedColorU8::TRANSPARENT;
     }
-    return;
+    return Ok(());
   };
 
   let cache_key = SvgFilterCacheKey::new(def, pixmap, scale_x, scale_y, css_bbox);
@@ -2496,7 +2504,7 @@ fn apply_svg_filter_scaled(
       if let Some(cached) = cache.get(key) {
         *pixmap = cached;
         clip_to_region(pixmap, filter_region);
-        return;
+        return Ok(());
       }
     }
   }
@@ -2562,7 +2570,7 @@ fn apply_svg_filter_scaled(
       primitive_region,
       color_interpolation_filters,
       blur_cache.as_deref_mut(),
-    ) {
+    )? {
       next.region = clip_region(next.region, primitive_region);
       clip_to_region(&mut next.pixmap, primitive_region);
       if let Some(name) = &step.result {
@@ -2580,6 +2588,8 @@ fn apply_svg_filter_scaled(
       cache.insert(key, pixmap);
     }
   }
+
+  Ok(())
 }
 
 fn clip_to_region(pixmap: &mut Pixmap, region: Rect) {
@@ -2634,13 +2644,13 @@ fn apply_primitive(
   filter_region: Rect,
   color_interpolation_filters: ColorInterpolationFilters,
   blur_cache: Option<&mut BlurCache>,
-) -> Option<FilterResult> {
+) -> RenderResult<Option<FilterResult>> {
   let scale_avg = if scale_x.is_finite() && scale_y.is_finite() {
     0.5 * (scale_x + scale_y)
   } else {
     1.0
   };
-  match primitive {
+  let result = match primitive {
     FilterPrimitive::Flood { color, opacity } => flood(
       source.pixmap.width(),
       source.pixmap.height(),
@@ -2649,7 +2659,9 @@ fn apply_primitive(
     )
     .map(|pixmap| FilterResult::full_region(pixmap, filter_region)),
     FilterPrimitive::GaussianBlur { input, std_dev } => {
-      let mut img = resolve_input(input, source, results, current, filter_region)?;
+      let Some(mut img) = resolve_input(input, source, results, current, filter_region) else {
+        return Ok(None);
+      };
       let (sx, sy) = filter.resolve_primitive_pair(*std_dev, css_bbox);
       let sigma_x = sx * scale_x;
       let sigma_y = sy * scale_y;
@@ -2662,8 +2674,8 @@ fn apply_primitive(
           reencode_pixmap_to_linear_rgb(&mut img.pixmap);
         }
         with_blur_cache(blur_cache, |cache| {
-          apply_gaussian_blur_cached(&mut img.pixmap, sigma_x, sigma_y, cache, scale_avg);
-        });
+          apply_gaussian_blur_cached(&mut img.pixmap, sigma_x, sigma_y, cache, scale_avg)
+        })?;
         if use_linear {
           reencode_pixmap_to_srgb(&mut img.pixmap);
         }
@@ -2679,7 +2691,9 @@ fn apply_primitive(
         .map(|img| offset_result(img, dx, dy, filter_region))
     }
     FilterPrimitive::ColorMatrix { input, kind } => {
-      let mut img = resolve_input(input, source, results, current, filter_region)?;
+      let Some(mut img) = resolve_input(input, source, results, current, filter_region) else {
+        return Ok(None);
+      };
       apply_color_matrix(&mut img.pixmap, kind, color_interpolation_filters);
       Some(img)
     }
@@ -2707,12 +2721,15 @@ fn apply_primitive(
       std_dev,
       color,
       opacity,
-    } => resolve_input(input, source, results, current, filter_region).map(|img| {
+    } => {
+      let Some(img) = resolve_input(input, source, results, current, filter_region) else {
+        return Ok(None);
+      };
       let dx = filter.resolve_primitive_x(*dx, css_bbox) * scale_x;
       let dy = filter.resolve_primitive_y(*dy, css_bbox) * scale_y;
       let std_dev = filter.resolve_primitive_pair(*std_dev, css_bbox);
       let std_dev = (std_dev.0 * scale_x, std_dev.1 * scale_y);
-      drop_shadow_pixmap(
+      Some(drop_shadow_pixmap(
         img,
         dx,
         dy,
@@ -2723,8 +2740,8 @@ fn apply_primitive(
         filter_region,
         blur_cache,
         scale_avg,
-      )
-    }),
+      )?)
+    }
     FilterPrimitive::Blend {
       input1,
       input2,
@@ -2816,7 +2833,7 @@ fn apply_primitive(
       stitch_tiles,
       kind,
     } => {
-      let pixmap = turbulence::render_turbulence(
+      let Some(pixmap) = turbulence::render_turbulence(
         source.pixmap.width(),
         source.pixmap.height(),
         filter_region,
@@ -2825,7 +2842,9 @@ fn apply_primitive(
         *octaves,
         *stitch_tiles,
         *kind,
-      )?;
+      ) else {
+        return Ok(None);
+      };
       Some(FilterResult::full_region(pixmap, filter_region))
     }
     FilterPrimitive::DisplacementMap {
@@ -2835,16 +2854,22 @@ fn apply_primitive(
       x_channel,
       y_channel,
     } => {
-      let primary = resolve_input(in1, source, results, current, filter_region)?;
-      let map = resolve_input(in2, source, results, current, filter_region)?;
-      let output = apply_displacement_map(
+      let Some(primary) = resolve_input(in1, source, results, current, filter_region) else {
+        return Ok(None);
+      };
+      let Some(map) = resolve_input(in2, source, results, current, filter_region) else {
+        return Ok(None);
+      };
+      let Some(output) = apply_displacement_map(
         &primary.pixmap,
         &map.pixmap,
         filter.resolve_primitive_scalar(*disp_scale, css_bbox) * scale_avg,
         *x_channel,
         *y_channel,
         color_interpolation_filters,
-      )?;
+      ) else {
+        return Ok(None);
+      };
       let region = clip_region(primary.region.union(map.region), filter_region);
       Some(FilterResult::new(output, region, filter_region))
     }
@@ -2876,7 +2901,8 @@ fn apply_primitive(
       );
       FilterResult::new(output, img.region, filter_region)
     }),
-  }
+  };
+  Ok(result)
 }
 
 fn resolve_input(
@@ -3567,16 +3593,16 @@ fn drop_shadow_pixmap(
   filter_region: Rect,
   blur_cache: Option<&mut BlurCache>,
   scale: f32,
-) -> FilterResult {
+) -> RenderResult<FilterResult> {
   let Some((min_x, min_y, bounds_w, bounds_h)) = alpha_bounds(&input.pixmap) else {
-    return input;
+    return Ok(input);
   };
   let blur_pad_x = (stddev.0.abs() * 3.0).ceil() as u32;
   let blur_pad_y = (stddev.1.abs() * 3.0).ceil() as u32;
 
   let mut shadow = match new_pixmap(bounds_w + blur_pad_x * 2, bounds_h + blur_pad_y * 2) {
     Some(p) => p,
-    None => return input,
+    None => return Ok(input),
   };
 
   {
@@ -3620,8 +3646,8 @@ fn drop_shadow_pixmap(
       reencode_pixmap_to_linear_rgb(&mut shadow);
     }
     with_blur_cache(blur_cache, |cache| {
-      apply_gaussian_blur_cached(&mut shadow, stddev.0, stddev.1, cache, scale);
-    });
+      apply_gaussian_blur_cached(&mut shadow, stddev.0, stddev.1, cache, scale)
+    })?;
     if use_linear {
       reencode_pixmap_to_srgb(&mut shadow);
     }
@@ -3629,7 +3655,7 @@ fn drop_shadow_pixmap(
 
   let mut out = match new_pixmap(input.pixmap.width(), input.pixmap.height()) {
     Some(p) => p,
-    None => return input,
+    None => return Ok(input),
   };
 
   let mut paint = PixmapPaint::default();
@@ -3660,10 +3686,10 @@ fn drop_shadow_pixmap(
   );
   let region = clip_region(base_region.union(shadow_region), filter_region);
 
-  FilterResult {
+  Ok(FilterResult {
     pixmap: out,
     region,
-  }
+  })
 }
 
 fn draw_over(bottom: &Pixmap, top: &Pixmap) -> Pixmap {
@@ -4437,6 +4463,7 @@ mod tests {
       None,
     )
     .unwrap()
+    .expect("primitive output")
   }
 
   #[test]
@@ -4800,7 +4827,7 @@ mod tests {
     };
     filter.refresh_fingerprint();
 
-    apply_svg_filter(&filter, &mut pixmap, 1.0, bbox);
+    apply_svg_filter(&filter, &mut pixmap, 1.0, bbox).unwrap();
     assert!(pixmap.pixels().iter().all(|px| px.alpha() == 0));
   }
 
@@ -4889,9 +4916,9 @@ mod filter_res_tests {
     let mut low_res_repeat = basic_source();
 
     let bbox = Rect::from_xywh(0.0, 0.0, 12.0, 12.0);
-    apply_svg_filter(filter_full.as_ref(), &mut high_res, 1.0, bbox);
-    apply_svg_filter(filter_low.as_ref(), &mut low_res, 1.0, bbox);
-    apply_svg_filter(filter_low.as_ref(), &mut low_res_repeat, 1.0, bbox);
+    apply_svg_filter(filter_full.as_ref(), &mut high_res, 1.0, bbox).unwrap();
+    apply_svg_filter(filter_low.as_ref(), &mut low_res, 1.0, bbox).unwrap();
+    apply_svg_filter(filter_low.as_ref(), &mut low_res_repeat, 1.0, bbox).unwrap();
 
     assert_ne!(
       high_res.data(),
@@ -4918,7 +4945,7 @@ mod filter_res_tests {
     let mut pixmap = new_pixmap(8, 8).unwrap();
     pixmap.fill(Color::from_rgba8(0, 0, 255, 255));
     let bbox = Rect::from_xywh(0.0, 0.0, 8.0, 8.0);
-    apply_svg_filter(filter.as_ref(), &mut pixmap, 1.0, bbox);
+    apply_svg_filter(filter.as_ref(), &mut pixmap, 1.0, bbox).unwrap();
 
     assert!(
       pixel(&pixmap, 0, 0).3 > 0,
@@ -4975,7 +5002,7 @@ mod fe_image_tests {
     let filter = parse_filter_definition(&svg, Some("f"), &cache).expect("filter");
     let mut canvas = new_pixmap(5, 5).unwrap();
     let bbox = Rect::from_xywh(0.0, 0.0, canvas.width() as f32, canvas.height() as f32);
-    apply_svg_filter(filter.as_ref(), &mut canvas, 1.0, bbox);
+    apply_svg_filter(filter.as_ref(), &mut canvas, 1.0, bbox).unwrap();
 
     assert_eq!(pixel_rgba(&canvas, 1, 2), (255, 0, 0, 255));
     assert_eq!(pixel_rgba(&canvas, 2, 2), (0, 0, 255, 255));
@@ -4994,7 +5021,7 @@ mod fe_image_tests {
     let filter = parse_filter_definition(&svg, Some("f"), &cache).expect("filter");
     let mut canvas = new_pixmap(5, 5).unwrap();
     let bbox = Rect::from_xywh(0.0, 0.0, canvas.width() as f32, canvas.height() as f32);
-    apply_svg_filter(filter.as_ref(), &mut canvas, 1.0, bbox);
+    apply_svg_filter(filter.as_ref(), &mut canvas, 1.0, bbox).unwrap();
 
     for y in 1..=3 {
       assert_eq!(pixel_rgba(&canvas, 1, y), (255, 0, 0, 255));

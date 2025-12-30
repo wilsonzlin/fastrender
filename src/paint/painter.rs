@@ -177,6 +177,8 @@ use tiny_skia::Stroke;
 use tiny_skia::Transform;
 use url::Url;
 
+type RenderResult<T> = std::result::Result<T, RenderError>;
+
 /// Main painter that rasterizes a FragmentTree to pixels
 pub struct Painter {
   /// The pixmap being painted to
@@ -2173,7 +2175,7 @@ impl Painter {
               rect.y(),
               style.font_size,
               color,
-            );
+            )?;
           } else {
             self.paint_text(
               &text,
@@ -2182,7 +2184,7 @@ impl Painter {
               block_baseline,
               style.font_size,
               color,
-            );
+            )?;
           }
         }
         self.paint_text_decoration(
@@ -2637,7 +2639,7 @@ impl Painter {
         }
         if !filters.is_empty() {
           let filter_start = profile_enabled.then(Instant::now);
-          apply_filters(&mut layer_pixmap, &filters, self.scale, device_root_rect);
+          apply_filters(&mut layer_pixmap, &filters, self.scale, device_root_rect)?;
           if let Some(start) = filter_start {
             filter_ms = start.elapsed().as_secs_f64() * 1000.0;
           }
@@ -2696,7 +2698,7 @@ impl Painter {
             device_radii,
             self.scale,
             root_rect,
-          );
+          )?;
           if let Some(start) = backdrop_start {
             backdrop_ms = start.elapsed().as_secs_f64() * 1000.0;
           }
@@ -4470,9 +4472,9 @@ impl Painter {
     baseline_y: f32,
     font_size: f32,
     color: Rgba,
-  ) {
+  ) -> Result<()> {
     if text.is_empty() {
-      return;
+      return Ok(());
     }
 
     // Use computed style when available; otherwise construct a minimal fallback
@@ -4511,10 +4513,11 @@ impl Painter {
     });
 
     if shaped_runs.is_empty() {
-      return;
+      return Ok(());
     }
 
     self.paint_shaped_runs(&shaped_runs, x, baseline_y, color, style);
+    Ok(())
   }
 
   fn paint_shaped_runs(
@@ -4854,7 +4857,7 @@ impl Painter {
     paths: &[tiny_skia::Path],
     bounds: &PathBounds,
     shadows: &[ResolvedTextShadow],
-  ) {
+  ) -> RenderResult<()> {
     for shadow in shadows {
       let offset_x = shadow.offset_x * self.scale;
       let offset_y = shadow.offset_y * self.scale;
@@ -4893,7 +4896,7 @@ impl Painter {
       }
 
       if blur > 0.0 {
-        apply_gaussian_blur(&mut shadow_pixmap, blur);
+        apply_gaussian_blur(&mut shadow_pixmap, blur)?;
       }
 
       let dest_x = shadow_min_x.floor() as i32;
@@ -4914,6 +4917,7 @@ impl Painter {
         None,
       );
     }
+    Ok(())
   }
 
   /// Paints a replaced element (image, etc.)
@@ -8220,10 +8224,15 @@ fn resolve_filter_length(
   }
 }
 
-fn apply_filters(pixmap: &mut Pixmap, filters: &[ResolvedFilter], scale: f32, bbox: Rect) {
+fn apply_filters(
+  pixmap: &mut Pixmap,
+  filters: &[ResolvedFilter],
+  scale: f32,
+  bbox: Rect,
+) -> RenderResult<()> {
   for filter in filters {
     match filter {
-      ResolvedFilter::Blur(radius) => apply_gaussian_blur(pixmap, *radius * scale),
+      ResolvedFilter::Blur(radius) => apply_gaussian_blur(pixmap, *radius * scale)?,
       ResolvedFilter::Brightness(amount) => {
         apply_color_filter(pixmap, |c, a| (scale_color(c, *amount), a))
       }
@@ -8253,12 +8262,13 @@ fn apply_filters(pixmap: &mut Pixmap, filters: &[ResolvedFilter], scale: f32, bb
         *blur_radius * scale,
         *spread * scale,
         *color,
-      ),
+      )?,
       ResolvedFilter::SvgFilter(filter) => {
-        crate::paint::svg_filter::apply_svg_filter(filter.as_ref(), pixmap, scale, bbox);
+        crate::paint::svg_filter::apply_svg_filter(filter.as_ref(), pixmap, scale, bbox)?;
       }
     }
   }
+  Ok(())
 }
 
 fn apply_backdrop_filters(
@@ -8268,9 +8278,9 @@ fn apply_backdrop_filters(
   radii: BorderRadii,
   scale: f32,
   filter_bounds: Rect,
-) {
+) -> RenderResult<()> {
   if filters.is_empty() {
-    return;
+    return Ok(());
   }
   let (out_l, out_t, out_r, out_b) = compute_filter_outset(filters, filter_bounds, scale);
 
@@ -8279,13 +8289,13 @@ fn apply_backdrop_filters(
   let width = (bounds.width() + out_l + out_r).ceil() as u32;
   let height = (bounds.height() + out_t + out_b).ceil() as u32;
   if width == 0 || height == 0 {
-    return;
+    return Ok(());
   }
 
   let pix_w = pixmap.width() as i32;
   let pix_h = pixmap.height() as i32;
   if x >= pix_w || y >= pix_h {
-    return;
+    return Ok(());
   }
 
   let clamped_x = x.max(0) as u32;
@@ -8295,12 +8305,12 @@ fn apply_backdrop_filters(
   let region_w = width.min(max_w);
   let region_h = height.min(max_h);
   if region_w == 0 || region_h == 0 {
-    return;
+    return Ok(());
   }
 
   let mut region = match new_pixmap(region_w, region_h) {
     Some(p) => p,
-    None => return,
+    None => return Ok(()),
   };
 
   // Copy region
@@ -8323,7 +8333,7 @@ fn apply_backdrop_filters(
     bounds.width(),
     bounds.height(),
   );
-  apply_filters(&mut region, filters, scale, local_bbox);
+  apply_filters(&mut region, filters, scale, local_bbox)?;
   if !radii.is_zero() {
     apply_clip_mask_rect(&mut region, local_bbox, radii);
   }
@@ -8338,6 +8348,7 @@ fn apply_backdrop_filters(
     Transform::identity(),
     None,
   );
+  Ok(())
 }
 
 fn apply_color_filter<F>(pixmap: &mut Pixmap, mut f: F)
@@ -8456,15 +8467,15 @@ fn apply_drop_shadow(
   blur_radius: f32,
   spread: f32,
   color: Rgba,
-) {
+) -> RenderResult<()> {
   if pixmap.width() == 0 || pixmap.height() == 0 {
-    return;
+    return Ok(());
   }
 
   let source = pixmap.clone();
   let mut shadow = match new_pixmap(source.width(), source.height()) {
     Some(p) => p,
-    None => return,
+    None => return Ok(()),
   };
 
   {
@@ -8496,12 +8507,12 @@ fn apply_drop_shadow(
   }
 
   if blur_radius > 0.0 {
-    apply_gaussian_blur(&mut shadow, blur_radius);
+    apply_gaussian_blur(&mut shadow, blur_radius)?;
   }
 
   let mut result = match new_pixmap(source.width(), source.height()) {
     Some(p) => p,
-    None => return,
+    None => return Ok(()),
   };
 
   let mut paint = PixmapPaint::default();
@@ -8517,6 +8528,7 @@ fn apply_drop_shadow(
   result.draw_pixmap(0, 0, source.as_ref(), &paint, Transform::identity(), None);
 
   *pixmap = result;
+  Ok(())
 }
 
 fn apply_spread(pixmap: &mut Pixmap, spread: f32) {
@@ -13343,7 +13355,8 @@ mod tests {
       BorderRadii::ZERO,
       1.0,
       bounds,
-    );
+    )
+    .unwrap();
 
     let mut inverted = Vec::new();
     for y in 0..pixmap.height() {

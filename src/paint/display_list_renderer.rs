@@ -529,19 +529,21 @@ fn set_paint_color(paint: &mut tiny_skia::Paint, color: &Rgba, opacity: f32) {
   paint.set_color_rgba8(color.r, color.g, color.b, alpha);
 }
 
+type RenderResult<T> = std::result::Result<T, RenderError>;
+
 fn apply_filters(
   pixmap: &mut Pixmap,
   filters: &[ResolvedFilter],
   scale: f32,
   bbox: Rect,
   cache: Option<&mut BlurCache>,
-) {
+) -> RenderResult<()> {
   let mut cache = cache;
   for filter in filters {
     let cache_ref = cache.as_deref_mut();
     match filter {
       ResolvedFilter::Blur(radius) => {
-        apply_gaussian_blur_cached(pixmap, *radius * scale, *radius * scale, cache_ref, scale)
+        apply_gaussian_blur_cached(pixmap, *radius * scale, *radius * scale, cache_ref, scale)?
       }
       ResolvedFilter::Brightness(amount) => {
         apply_color_filter(pixmap, |c, a| (scale_color(c, *amount), a))
@@ -573,7 +575,7 @@ fn apply_filters(
         spread * scale,
         *color,
         cache_ref,
-      ),
+      )?,
       ResolvedFilter::SvgFilter(ref filter) => {
         crate::paint::svg_filter::apply_svg_filter_with_cache(
           filter.as_ref(),
@@ -581,10 +583,11 @@ fn apply_filters(
           scale,
           bbox,
           cache_ref,
-        );
+        )?;
       }
     }
   }
+  Ok(())
 }
 
 fn apply_filters_scoped(
@@ -594,14 +597,14 @@ fn apply_filters_scoped(
   bbox: Rect,
   bounds: Option<&Rect>,
   cache: Option<&mut BlurCache>,
-) {
+) -> RenderResult<()> {
   if filters.is_empty() {
-    return;
+    return Ok(());
   }
 
   let Some(bounds) = bounds else {
-    apply_filters(pixmap, filters, scale, bbox, cache);
-    return;
+    apply_filters(pixmap, filters, scale, bbox, cache)?;
+    return Ok(());
   };
 
   let x = bounds.min_x().floor() as i32;
@@ -609,13 +612,13 @@ fn apply_filters_scoped(
   let width = bounds.width().ceil() as u32;
   let height = bounds.height().ceil() as u32;
   if width == 0 || height == 0 {
-    return;
+    return Ok(());
   }
 
   let pix_w = pixmap.width() as i32;
   let pix_h = pixmap.height() as i32;
   if x >= pix_w || y >= pix_h {
-    return;
+    return Ok(());
   }
 
   let clamped_x = x.max(0) as u32;
@@ -625,17 +628,17 @@ fn apply_filters_scoped(
   let region_w = width.min(max_w);
   let region_h = height.min(max_h);
   if region_w == 0 || region_h == 0 {
-    return;
+    return Ok(());
   }
 
   if region_w == pixmap.width() && region_h == pixmap.height() && clamped_x == 0 && clamped_y == 0 {
-    apply_filters(pixmap, filters, scale, bbox, cache);
-    return;
+    apply_filters(pixmap, filters, scale, bbox, cache)?;
+    return Ok(());
   }
 
   let Some(mut region) = new_pixmap(region_w, region_h) else {
-    apply_filters(pixmap, filters, scale, bbox, cache);
-    return;
+    apply_filters(pixmap, filters, scale, bbox, cache)?;
+    return Ok(());
   };
 
   let bytes_per_row = pixmap.width() as usize * 4;
@@ -657,7 +660,7 @@ fn apply_filters_scoped(
     bbox.width(),
     bbox.height(),
   );
-  apply_filters(&mut region, filters, scale, local_bbox, cache);
+  apply_filters(&mut region, filters, scale, local_bbox, cache)?;
 
   for row in 0..region_h as usize {
     let dst_idx = (clamped_y as usize + row) * bytes_per_row + clamped_x as usize * 4;
@@ -666,6 +669,8 @@ fn apply_filters_scoped(
     let dst = &mut pixmap.data_mut()[dst_idx..dst_idx + region_row_bytes];
     dst.copy_from_slice(src);
   }
+
+  Ok(())
 }
 fn apply_backdrop_filters(
   pixmap: &mut Pixmap,
@@ -677,9 +682,9 @@ fn apply_backdrop_filters(
   clip_bounds: Option<Rect>,
   filter_bounds: Rect,
   cache: Option<&mut BlurCache>,
-) {
+) -> RenderResult<()> {
   if filters.is_empty() {
-    return;
+    return Ok(());
   }
   let (out_l, out_t, out_r, out_b) =
     filter_outset_with_bounds(filters, scale, Some(filter_bounds)).as_tuple();
@@ -688,13 +693,13 @@ fn apply_backdrop_filters(
   let width = (bounds.width() + out_l + out_r).ceil() as u32;
   let height = (bounds.height() + out_t + out_b).ceil() as u32;
   if width == 0 || height == 0 {
-    return;
+    return Ok(());
   }
 
   let pix_w = pixmap.width() as i32;
   let pix_h = pixmap.height() as i32;
   if x >= pix_w || y >= pix_h {
-    return;
+    return Ok(());
   }
 
   let clamped_x = x.max(0) as u32;
@@ -704,12 +709,12 @@ fn apply_backdrop_filters(
   let region_w = width.min(max_w);
   let region_h = height.min(max_h);
   if region_w == 0 || region_h == 0 {
-    return;
+    return Ok(());
   }
 
   let mut region = match new_pixmap(region_w, region_h) {
     Some(p) => p,
-    None => return,
+    None => return Ok(()),
   };
 
   let bytes_per_row = pixmap.width() as usize * 4;
@@ -731,12 +736,12 @@ fn apply_backdrop_filters(
     bounds.width(),
     bounds.height(),
   );
-  apply_filters(&mut region, filters, scale, local_bbox, cache);
+  apply_filters(&mut region, filters, scale, local_bbox, cache)?;
 
   let radii_mask = if !radii.is_zero() {
     let mut mask = match new_pixmap(region_w, region_h) {
       Some(p) => p,
-      None => return,
+      None => return Ok(()),
     };
     let local_x = bounds.x() - clamped_x as f32;
     let local_y = bounds.y() - clamped_y as f32;
@@ -757,12 +762,12 @@ fn apply_backdrop_filters(
   let mut write_rect = *bounds;
   if let Some(clip) = clip_bounds {
     let Some(intersection) = write_rect.intersection(clip) else {
-      return;
+      return Ok(());
     };
     write_rect = intersection;
   }
   if write_rect.width() <= 0.0 || write_rect.height() <= 0.0 {
-    return;
+    return Ok(());
   }
 
   let write_x = write_rect.min_x().floor().max(clamped_x as f32).max(0.0) as u32;
@@ -774,7 +779,7 @@ fn apply_backdrop_filters(
     .min(pix_h - write_y as i32)
     .max(0) as u32;
   if write_w == 0 || write_h == 0 {
-    return;
+    return Ok(());
   }
 
   let src_start_x = (write_x as i32 - clamped_x as i32) as u32;
@@ -833,6 +838,7 @@ fn apply_backdrop_filters(
       }
     }
   }
+  Ok(())
 }
 
 fn apply_clip_mask_rect(pixmap: &mut Pixmap, rect: Rect, radii: BorderRadii) {
@@ -900,14 +906,14 @@ fn apply_drop_shadow(
   spread: f32,
   color: Rgba,
   cache: Option<&mut BlurCache>,
-) {
+) -> RenderResult<()> {
   if pixmap.width() == 0 || pixmap.height() == 0 {
-    return;
+    return Ok(());
   }
 
   let source = pixmap.clone();
   let Some((min_x, min_y, bounds_w, bounds_h)) = alpha_bounds(&source) else {
-    return;
+    return Ok(());
   };
   let blur_pad = (blur_radius.abs() * 3.0).ceil() as u32;
   let spread_pad = spread.max(0.0).ceil() as u32;
@@ -915,7 +921,7 @@ fn apply_drop_shadow(
 
   let mut shadow = match new_pixmap(bounds_w + pad * 2, bounds_h + pad * 2) {
     Some(p) => p,
-    None => return,
+    None => return Ok(()),
   };
 
   {
@@ -955,12 +961,12 @@ fn apply_drop_shadow(
   }
 
   if blur_radius > 0.0 {
-    apply_gaussian_blur_cached(&mut shadow, blur_radius, blur_radius, cache, 1.0);
+    apply_gaussian_blur_cached(&mut shadow, blur_radius, blur_radius, cache, 1.0)?;
   }
 
   let mut result = match new_pixmap(source.width(), source.height()) {
     Some(p) => p,
-    None => return,
+    None => return Ok(()),
   };
 
   let mut paint = PixmapPaint::default();
@@ -976,6 +982,7 @@ fn apply_drop_shadow(
   result.draw_pixmap(0, 0, source.as_ref(), &paint, Transform::identity(), None);
 
   *pixmap = result;
+  Ok(())
 }
 
 fn apply_spread(pixmap: &mut Pixmap, spread: f32) {
@@ -3197,7 +3204,7 @@ impl DisplayListRenderer {
     )
   }
 
-  fn render_box_shadow(&mut self, item: &BoxShadowItem) {
+  fn render_box_shadow(&mut self, item: &BoxShadowItem) -> Result<()> {
     let mut shadow = BoxShadow {
       offset_x: self.ds_len(item.offset.x),
       offset_y: self.ds_len(item.offset.y),
@@ -3212,7 +3219,7 @@ impl DisplayListRenderer {
 
     let mut temp = match new_pixmap(self.canvas.width(), self.canvas.height()) {
       Some(p) => p,
-      None => return,
+      None => return Ok(()),
     };
 
     // Apply current opacity to the shadow when compositing.
@@ -3227,7 +3234,7 @@ impl DisplayListRenderer {
       rect.height(),
       &radii,
       &shadow,
-    );
+    )?;
 
     let paint = tiny_skia::PixmapPaint {
       opacity: 1.0,
@@ -3240,6 +3247,7 @@ impl DisplayListRenderer {
       .canvas
       .pixmap_mut()
       .draw_pixmap(0, 0, temp.as_ref(), &paint, transform, clip.as_ref());
+    Ok(())
   }
 
   fn composite_manual_layer(
@@ -3407,15 +3415,15 @@ impl DisplayListRenderer {
     })
   }
 
-  fn apply_pending_backdrop(&mut self, next_item: &DisplayItem) {
+  fn apply_pending_backdrop(&mut self, next_item: &DisplayItem) -> RenderResult<()> {
     let Some(record) = self.stacking_layers.last_mut() else {
-      return;
+      return Ok(());
     };
     if record.pending_backdrop.is_none() {
-      return;
+      return Ok(());
     }
     if matches!(next_item, DisplayItem::PushClip(_)) {
-      return;
+      return Ok(());
     }
 
     let pending = record.pending_backdrop.take().unwrap();
@@ -3431,7 +3439,8 @@ impl DisplayListRenderer {
       clip_bounds,
       pending.filter_bounds,
       Some(&mut self.blur_cache),
-    );
+    )?;
+    Ok(())
   }
 
   fn has_backdrop_sensitive_effects(
@@ -3745,7 +3754,7 @@ impl DisplayListRenderer {
             // `render_item` normally applies pending backdrop filters before processing the next
             // item. We skip `render_item` for preserve-3d roots to render the subtree as a
             // depth-sorted scene, so apply pending backdrops here to keep behavior consistent.
-            self.apply_pending_backdrop(item);
+            self.apply_pending_backdrop(item)?;
             idx = self.render_preserve_3d_context(items, idx)? + 1;
             continue;
           }
@@ -4166,7 +4175,7 @@ impl DisplayListRenderer {
       return Ok(());
     }
 
-    self.apply_pending_backdrop(item);
+    self.apply_pending_backdrop(item)?;
 
     match item {
       DisplayItem::FillRect(FillRectItem { rect, color }) => {
@@ -4211,7 +4220,7 @@ impl DisplayListRenderer {
         self.render_text(&scaled)?;
       }
       DisplayItem::Image(item) => self.render_image(item)?,
-      DisplayItem::BoxShadow(item) => self.render_box_shadow(item),
+      DisplayItem::BoxShadow(item) => self.render_box_shadow(item)?,
       DisplayItem::ListMarker(item) => {
         let scaled = self.scale_list_marker_item(item);
         self.render_list_marker(&scaled)?;
@@ -4461,7 +4470,7 @@ impl DisplayListRenderer {
               bbox,
               layer_region.as_ref(),
               Some(&mut self.blur_cache),
-            );
+            )?;
           }
 
           if !record.radii.is_zero() || !record.filters.is_empty() {
@@ -4663,7 +4672,7 @@ impl DisplayListRenderer {
     let text_timer = text_diagnostics_timer();
     let (paths, bounds) = self.glyph_paths(face.face(), item);
     if !item.shadows.is_empty() && !paths.is_empty() && bounds.is_valid() {
-      self.render_text_shadows(&paths, &bounds, item);
+      self.render_text_shadows(&paths, &bounds, item)?;
     }
     if text_timer.is_some() {
       record_text_rasterize(
@@ -5063,7 +5072,7 @@ impl DisplayListRenderer {
     paths: &[tiny_skia::Path],
     bounds: &PathBounds,
     item: &TextItem,
-  ) {
+  ) -> Result<()> {
     let opacity = self.canvas.opacity().clamp(0.0, 1.0);
     for shadow in &item.shadows {
       let blur_margin = (shadow.blur_radius.abs() * 3.0).ceil();
@@ -5106,7 +5115,7 @@ impl DisplayListRenderer {
           shadow.blur_radius,
           Some(&mut self.blur_cache),
           1.0,
-        );
+        )?;
       }
 
       let dest_x = shadow_min_x.floor() as i32;
@@ -5131,6 +5140,7 @@ impl DisplayListRenderer {
         clip.as_ref(),
       );
     }
+    Ok(())
   }
 
   fn render_emphasis(&mut self, emphasis: &TextEmphasis) -> Result<()> {

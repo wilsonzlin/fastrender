@@ -30,7 +30,7 @@ fn turbulence_filter(primitive: FilterPrimitive) -> SvgFilter {
 
 fn apply_filter(filter: &SvgFilter, pixmap: &mut Pixmap) {
   let bbox = Rect::from_xywh(0.0, 0.0, pixmap.width() as f32, pixmap.height() as f32);
-  apply_svg_filter(filter, pixmap, 1.0, bbox);
+  apply_svg_filter(filter, pixmap, 1.0, bbox).unwrap();
 }
 
 #[test]

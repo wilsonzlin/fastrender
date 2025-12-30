@@ -617,7 +617,7 @@ mod box_shadow_tests {
     let mut pixmap = create_pixmap(100, 100);
     let radii = BorderRadii::zero();
     let shadow = BoxShadow::new(5.0, 5.0, 0.0, 0.0, Rgba::from_rgba8(0, 0, 0, 128));
-    let result = render_box_shadow(&mut pixmap, 20.0, 20.0, 40.0, 40.0, &radii, &shadow);
+    let result = render_box_shadow(&mut pixmap, 20.0, 20.0, 40.0, 40.0, &radii, &shadow).unwrap();
     assert!(result);
   }
 
@@ -626,7 +626,7 @@ mod box_shadow_tests {
     let mut pixmap = create_pixmap(100, 100);
     let radii = BorderRadii::zero();
     let shadow = BoxShadow::new(5.0, 5.0, 10.0, 0.0, Rgba::from_rgba8(0, 0, 0, 128));
-    let result = render_box_shadow(&mut pixmap, 20.0, 20.0, 40.0, 40.0, &radii, &shadow);
+    let result = render_box_shadow(&mut pixmap, 20.0, 20.0, 40.0, 40.0, &radii, &shadow).unwrap();
     assert!(result);
   }
 
@@ -635,7 +635,7 @@ mod box_shadow_tests {
     let mut pixmap = create_pixmap(100, 100);
     let radii = BorderRadii::zero();
     let shadow = BoxShadow::new(0.0, 0.0, 0.0, 10.0, Rgba::from_rgba8(0, 0, 0, 100));
-    let result = render_box_shadow(&mut pixmap, 20.0, 20.0, 40.0, 40.0, &radii, &shadow);
+    let result = render_box_shadow(&mut pixmap, 20.0, 20.0, 40.0, 40.0, &radii, &shadow).unwrap();
     assert!(result);
   }
 
@@ -644,7 +644,7 @@ mod box_shadow_tests {
     let mut pixmap = create_pixmap(100, 100);
     let radii = BorderRadii::zero();
     let shadow = BoxShadow::inset(5.0, 5.0, 10.0, 5.0, Rgba::from_rgba8(0, 0, 0, 128));
-    let result = render_box_shadow(&mut pixmap, 10.0, 10.0, 80.0, 80.0, &radii, &shadow);
+    let result = render_box_shadow(&mut pixmap, 10.0, 10.0, 80.0, 80.0, &radii, &shadow).unwrap();
     assert!(result);
   }
 
@@ -653,7 +653,7 @@ mod box_shadow_tests {
     let mut pixmap = create_pixmap(100, 100);
     let radii = BorderRadii::zero();
     let shadow = BoxShadow::new(5.0, 5.0, 10.0, 0.0, Rgba::TRANSPARENT);
-    let result = render_box_shadow(&mut pixmap, 20.0, 20.0, 40.0, 40.0, &radii, &shadow);
+    let result = render_box_shadow(&mut pixmap, 20.0, 20.0, 40.0, 40.0, &radii, &shadow).unwrap();
     assert!(!result);
   }
 
@@ -662,7 +662,7 @@ mod box_shadow_tests {
     let mut pixmap = create_pixmap(100, 100);
     let radii = BorderRadii::uniform(10.0);
     let shadow = BoxShadow::new(5.0, 5.0, 10.0, 0.0, Rgba::from_rgba8(0, 0, 0, 128));
-    let result = render_box_shadow(&mut pixmap, 20.0, 20.0, 40.0, 40.0, &radii, &shadow);
+    let result = render_box_shadow(&mut pixmap, 20.0, 20.0, 40.0, 40.0, &radii, &shadow).unwrap();
     assert!(result);
   }
 
@@ -671,7 +671,7 @@ mod box_shadow_tests {
     let mut pixmap = create_pixmap(100, 100);
     let radii = BorderRadii::zero();
     let shadow = BoxShadow::new(-5.0, -5.0, 5.0, 0.0, Rgba::from_rgba8(0, 0, 0, 128));
-    let result = render_box_shadow(&mut pixmap, 30.0, 30.0, 40.0, 40.0, &radii, &shadow);
+    let result = render_box_shadow(&mut pixmap, 30.0, 30.0, 40.0, 40.0, &radii, &shadow).unwrap();
     assert!(result);
   }
 }
@@ -852,7 +852,8 @@ mod integration {
       100.0,
       &BorderRadii::zero(),
       &shadow,
-    );
+    )
+    .unwrap();
 
     // Draw main box
     fill_rounded_rect(
@@ -924,7 +925,7 @@ mod integration {
 
     // Shadow
     let shadow = BoxShadow::new(0.0, 2.0, 8.0, 0.0, Rgba::from_rgba8(0, 0, 0, 50));
-    render_box_shadow(&mut pixmap, 20.0, 20.0, 260.0, 160.0, &radii, &shadow);
+    render_box_shadow(&mut pixmap, 20.0, 20.0, 260.0, 160.0, &radii, &shadow).unwrap();
 
     // Card background
     fill_rounded_rect(

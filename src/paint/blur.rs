@@ -1,6 +1,7 @@
 use crate::debug::runtime;
-use crate::error::RenderStage;
+use crate::error::{RenderError, RenderStage};
 use crate::paint::painter::with_paint_diagnostics;
+use crate::paint::pixmap::{guard_allocation_bytes, new_pixmap_with_context};
 use crate::paint::svg_filter::FilterCacheConfig;
 use crate::render_control::check_active_periodic;
 use lru::LruCache;
@@ -20,25 +21,50 @@ struct BlurScratch {
 }
 
 impl BlurScratch {
-  fn ensure_len(&mut self, len: usize) {
+  fn ensure_len(&mut self, len: usize, context: &str) -> Result<(), RenderError> {
     if self.ping.len() < len {
+      self
+        .ping
+        .try_reserve_exact(len.saturating_sub(self.ping.len()))
+        .map_err(|err| RenderError::InvalidParameters {
+          message: format!("{context}: blur scratch allocation failed: {err}"),
+        })?;
       self.ping.resize(len, 0);
     }
     if self.pong.len() < len {
+      self
+        .pong
+        .try_reserve_exact(len.saturating_sub(self.pong.len()))
+        .map_err(|err| RenderError::InvalidParameters {
+          message: format!("{context}: blur scratch allocation failed: {err}"),
+        })?;
       self.pong.resize(len, 0);
     }
+    Ok(())
   }
 
-  fn split(&mut self, len: usize) -> (&mut [u8], &mut [u8]) {
-    self.ensure_len(len);
-    let ping = &mut self.ping[..len];
-    let pong = &mut self.pong[..len];
-    (ping, pong)
+  fn split(&mut self, len: usize, context: &str) -> Result<(&mut [u8], &mut [u8]), RenderError> {
+    self.ensure_len(len, context)?;
+    Ok((&mut self.ping[..len], &mut self.pong[..len]))
   }
 }
 
 thread_local! {
   static BLUR_SCRATCH: RefCell<BlurScratch> = RefCell::new(BlurScratch::default());
+}
+
+fn blur_buffer_len(width: usize, height: usize, context: &str) -> Result<usize, RenderError> {
+  let pixels = (width as u64)
+    .checked_mul(height as u64)
+    .ok_or(RenderError::InvalidParameters {
+      message: format!("{context}: blur dimensions overflow ({width}x{height})"),
+    })?;
+  let bytes = pixels
+    .checked_mul(4)
+    .ok_or(RenderError::InvalidParameters {
+      message: format!("{context}: blur buffer byte size overflow ({width}x{height})"),
+    })?;
+  guard_allocation_bytes(bytes, context)
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -274,22 +300,29 @@ fn clamp_channel_to_alpha(channel: i32, alpha: i32) -> u8 {
   channel.clamp(0, alpha).clamp(0, 255) as u8
 }
 
-fn gaussian_convolve_premultiplied(pixmap: &mut Pixmap, sigma: f32) {
+fn gaussian_convolve_premultiplied(pixmap: &mut Pixmap, sigma: f32) -> Result<(), RenderError> {
   let (kernel, radius, scale) = gaussian_kernel_fixed(sigma);
   if radius == 0 || kernel.is_empty() || scale <= 0 {
-    return;
+    return Ok(());
   }
 
   let width = pixmap.width() as usize;
   let height = pixmap.height() as usize;
   if width == 0 || height == 0 {
-    return;
+    return Ok(());
   }
 
-  let len = width * height * 4;
+  let len = blur_buffer_len(width, height, "gaussian blur")?;
+  let mut error: Option<RenderError> = None;
   BLUR_SCRATCH.with(|scratch| {
     let mut scratch = scratch.borrow_mut();
-    let (src, buf) = scratch.split(len);
+    let (src, buf) = match scratch.split(len, "gaussian blur") {
+      Ok(parts) => parts,
+      Err(err) => {
+        error = Some(err);
+        return;
+      }
+    };
     src[..len].copy_from_slice(pixmap.data());
     let mut deadline_counter = 0usize;
 
@@ -359,6 +392,11 @@ fn gaussian_convolve_premultiplied(pixmap: &mut Pixmap, sigma: f32) {
       }
     }
   });
+  if let Some(err) = error {
+    Err(err)
+  } else {
+    Ok(())
+  }
 }
 
 fn box_sizes_for_gauss(sigma: f32, n: usize) -> [usize; 3] {
@@ -498,20 +536,27 @@ fn box_blur_v(
   false
 }
 
-fn gaussian_blur_box_approx(pixmap: &mut Pixmap, sigma: f32) {
+fn gaussian_blur_box_approx(pixmap: &mut Pixmap, sigma: f32) -> Result<(), RenderError> {
   let sigma = sigma.abs();
   if sigma <= 0.0 {
-    return;
+    return Ok(());
   }
   let width = pixmap.width() as usize;
   let height = pixmap.height() as usize;
   if width == 0 || height == 0 {
-    return;
+    return Ok(());
   }
-  let len = width * height * 4;
+  let len = blur_buffer_len(width, height, "box blur")?;
+  let mut error: Option<RenderError> = None;
   BLUR_SCRATCH.with(|scratch| {
     let mut scratch = scratch.borrow_mut();
-    let (a, b) = scratch.split(len);
+    let (a, b) = match scratch.split(len, "box blur") {
+      Ok(parts) => parts,
+      Err(err) => {
+        error = Some(err);
+        return;
+      }
+    };
     a[..len].copy_from_slice(pixmap.data());
     let sizes = box_sizes_for_gauss(sigma, 3);
     let mut deadline_counter = 0usize;
@@ -544,51 +589,66 @@ fn gaussian_blur_box_approx(pixmap: &mut Pixmap, sigma: f32) {
 
     pixmap.data_mut().copy_from_slice(&a[..len]);
   });
+  if let Some(err) = error {
+    Err(err)
+  } else {
+    Ok(())
+  }
 }
 
-fn blur_isotropic_body(pixmap: &mut Pixmap, sigma: f32) {
+fn blur_isotropic_body(pixmap: &mut Pixmap, sigma: f32) -> Result<(), RenderError> {
   let sigma = sigma.abs();
   let radius = (sigma * 3.0).ceil() as usize;
   if radius == 0 {
-    return;
+    return Ok(());
   }
 
   let fast_enabled = runtime::runtime_toggles().truthy("FASTR_FAST_BLUR");
   if fast_enabled || sigma <= FAST_GAUSS_THRESHOLD_SIGMA {
-    gaussian_convolve_premultiplied(pixmap, sigma);
+    gaussian_convolve_premultiplied(pixmap, sigma)
   } else {
-    gaussian_blur_box_approx(pixmap, sigma);
+    gaussian_blur_box_approx(pixmap, sigma)
   }
 }
 
-fn blur_anisotropic_body(pixmap: &mut Pixmap, sigma_x: f32, sigma_y: f32) {
+fn blur_anisotropic_body(
+  pixmap: &mut Pixmap,
+  sigma_x: f32,
+  sigma_y: f32,
+) -> Result<(), RenderError> {
   let sigma_x = sigma_x.abs();
   let sigma_y = sigma_y.abs();
   if sigma_x == sigma_y {
-    blur_isotropic_body(pixmap, sigma_x);
-    return;
+    return blur_isotropic_body(pixmap, sigma_x);
   }
 
   if sigma_x == 0.0 && sigma_y == 0.0 {
-    return;
+    return Ok(());
   }
 
   let width = pixmap.width() as usize;
   let height = pixmap.height() as usize;
   if width == 0 || height == 0 {
-    return;
+    return Ok(());
   }
 
   let (kernel_x, radius_x, scale_x) = gaussian_kernel_fixed(sigma_x);
   let (kernel_y, radius_y, scale_y) = gaussian_kernel_fixed(sigma_y);
   if (radius_x == 0 || kernel_x.is_empty()) && (radius_y == 0 || kernel_y.is_empty()) {
-    return;
+    return Ok(());
   }
 
-  let len = width * height * 4;
+  let len = blur_buffer_len(width, height, "anisotropic blur")?;
+  let mut error: Option<RenderError> = None;
   BLUR_SCRATCH.with(|scratch| {
     let mut scratch = scratch.borrow_mut();
-    let (src, tmp) = scratch.split(len);
+    let (src, tmp) = match scratch.split(len, "anisotropic blur") {
+      Ok(parts) => parts,
+      Err(err) => {
+        error = Some(err);
+        return;
+      }
+    };
     src[..len].copy_from_slice(pixmap.data());
     let mut deadline_counter = 0usize;
 
@@ -671,6 +731,11 @@ fn blur_anisotropic_body(pixmap: &mut Pixmap, sigma_x: f32, sigma_y: f32) {
       }
     }
   });
+  if let Some(err) = error {
+    Err(err)
+  } else {
+    Ok(())
+  }
 }
 
 fn tile_blur(
@@ -678,34 +743,34 @@ fn tile_blur(
   sigma_x: f32,
   sigma_y: f32,
   config: &FilterCacheConfig,
-) -> Option<(Pixmap, usize)> {
+) -> Result<Option<(Pixmap, usize)>, RenderError> {
   if config.max_bytes == 0 {
-    return None;
+    return Ok(None);
   }
   let data_len = pixmap.data().len();
   if data_len <= config.max_bytes {
-    return None;
+    return Ok(None);
   }
   let width = pixmap.width();
   let height = pixmap.height();
   if width == 0 || height == 0 {
-    return None;
+    return Ok(None);
   }
 
   let pad_x = (sigma_x.abs() * 3.0).ceil() as u32;
   let pad_y = (sigma_y.abs() * 3.0).ceil() as u32;
   let budget_pixels = config.max_bytes / 4;
   if budget_pixels == 0 {
-    return None;
+    return Ok(None);
   }
   let base_span = (budget_pixels as f64).sqrt().floor() as u32;
   let tile_w = base_span.saturating_sub(pad_x.saturating_mul(2)).max(1);
   let tile_h = base_span.saturating_sub(pad_y.saturating_mul(2)).max(1);
   if tile_w >= width && tile_h >= height {
-    return None;
+    return Ok(None);
   }
 
-  let mut out = Pixmap::new(width, height)?;
+  let mut out = new_pixmap_with_context(width, height, "tile blur output")?;
   let source = pixmap.data();
   let row_stride = width as usize * 4;
   let mut tiles = 0usize;
@@ -723,9 +788,9 @@ fn tile_blur(
       let src_w = src_max_x.saturating_sub(src_min_x);
       let src_h = src_max_y.saturating_sub(src_min_y);
 
-      let mut tile = match Pixmap::new(src_w, src_h) {
-        Some(p) => p,
-        None => return None,
+      let mut tile = match new_pixmap_with_context(src_w, src_h, "tile blur tile") {
+        Ok(p) => p,
+        Err(err) => return Err(err),
       };
       let tile_stride = src_w as usize * 4;
       for row in 0..src_h as usize {
@@ -735,7 +800,7 @@ fn tile_blur(
           .copy_from_slice(&source[src_start..src_start + tile_stride]);
       }
 
-      blur_anisotropic_body(&mut tile, sigma_x, sigma_y);
+      blur_anisotropic_body(&mut tile, sigma_x, sigma_y)?;
 
       let offset_x = (x - src_min_x) as usize;
       let offset_y = (y - src_min_y) as usize;
@@ -758,7 +823,7 @@ fn tile_blur(
     y = y.saturating_add(tile_h);
   }
 
-  Some((out, tiles))
+  Ok(Some((out, tiles)))
 }
 
 fn apply_blur_internal(
@@ -767,11 +832,11 @@ fn apply_blur_internal(
   sigma_y: f32,
   mut cache: Option<&mut BlurCache>,
   scale: f32,
-) {
+) -> Result<(), RenderError> {
   let sigma_x = sigma_x.abs();
   let sigma_y = sigma_y.abs();
   if (sigma_x == 0.0 && sigma_y == 0.0) || pixmap.width() == 0 || pixmap.height() == 0 {
-    return;
+    return Ok(());
   }
 
   let cache_key = cache
@@ -780,7 +845,7 @@ fn apply_blur_internal(
   if let (Some(key), Some(cache)) = (cache_key.as_ref(), cache.as_deref_mut()) {
     if let Some(cached) = cache.get(key) {
       pixmap.data_mut().copy_from_slice(cached.data());
-      return;
+      return Ok(());
     }
   }
 
@@ -790,13 +855,13 @@ fn apply_blur_internal(
     .unwrap_or_else(FilterCacheConfig::from_env);
 
   let mut tile_count = 0usize;
-  if let Some((tiled, tiles)) = tile_blur(pixmap, sigma_x, sigma_y, &config) {
+  if let Some((tiled, tiles)) = tile_blur(pixmap, sigma_x, sigma_y, &config)? {
     tile_count = tiles;
     *pixmap = tiled;
   } else if sigma_x == sigma_y {
-    blur_isotropic_body(pixmap, sigma_x);
+    blur_isotropic_body(pixmap, sigma_x)?;
   } else {
-    blur_anisotropic_body(pixmap, sigma_x, sigma_y);
+    blur_anisotropic_body(pixmap, sigma_x, sigma_y)?;
   }
 
   record_blur_tiles(tile_count);
@@ -804,14 +869,20 @@ fn apply_blur_internal(
   if let (Some(key), Some(cache)) = (cache_key, cache) {
     cache.put(key, pixmap);
   }
+
+  Ok(())
 }
 
-pub fn apply_gaussian_blur(pixmap: &mut Pixmap, sigma: f32) {
-  apply_blur_internal(pixmap, sigma, sigma, None, 1.0);
+pub fn apply_gaussian_blur(pixmap: &mut Pixmap, sigma: f32) -> Result<(), RenderError> {
+  apply_blur_internal(pixmap, sigma, sigma, None, 1.0)
 }
 
-pub(crate) fn apply_gaussian_blur_anisotropic(pixmap: &mut Pixmap, sigma_x: f32, sigma_y: f32) {
-  apply_blur_internal(pixmap, sigma_x, sigma_y, None, 1.0);
+pub(crate) fn apply_gaussian_blur_anisotropic(
+  pixmap: &mut Pixmap,
+  sigma_x: f32,
+  sigma_y: f32,
+) -> Result<(), RenderError> {
+  apply_blur_internal(pixmap, sigma_x, sigma_y, None, 1.0)
 }
 
 pub(crate) fn apply_gaussian_blur_cached(
@@ -820,8 +891,8 @@ pub(crate) fn apply_gaussian_blur_cached(
   sigma_y: f32,
   cache: Option<&mut BlurCache>,
   scale: f32,
-) {
-  apply_blur_internal(pixmap, sigma_x, sigma_y, cache, scale);
+) -> Result<(), RenderError> {
+  apply_blur_internal(pixmap, sigma_x, sigma_y, cache, scale)
 }
 
 #[cfg(test)]
@@ -836,7 +907,7 @@ mod tests {
     let idx = 2 * 3 + 1;
     pixmap.pixels_mut()[idx] = PremultipliedColorU8::from_rgba(255, 255, 255, 255).unwrap();
 
-    apply_gaussian_blur_anisotropic(&mut pixmap, 0.0, 2.0);
+    apply_gaussian_blur_anisotropic(&mut pixmap, 0.0, 2.0).unwrap();
 
     let pixels = pixmap.pixels();
     let mut center_non_zero = 0;

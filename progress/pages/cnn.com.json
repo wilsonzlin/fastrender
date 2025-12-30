@@ -1,5 +1,5 @@
 {
-  "url": "https://www.cnn.com/",
+  "url": "https://cnn.com",
   "status": "timeout",
   "total_ms": 5000.0,
   "stages_ms": {
@@ -9,8 +9,8 @@
     "layout": 0.0,
     "paint": 0.0
   },
-  "notes": "worker exited (exit signal 6) without writing progress",
-  "hotspot": "css",
+  "notes": "worker exited (exit signal 6) without writing progress\nhard timeout after 5.00s\nstage: cascade",
+  "hotspot": "cascade",
   "failure_stage": null,
   "timeout_stage": null,
   "last_good_commit": "",

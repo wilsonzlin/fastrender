@@ -1,18 +1,125 @@
 {
   "url": "https://www.figma.com/login",
   "status": "ok",
-  "total_ms": 207.037213,
+  "total_ms": 235.81449400000002,
   "stages_ms": {
-    "fetch": 0.0,
-    "css": 0.0,
+    "fetch": 0.17031300000000002,
+    "css": 0.022141,
     "cascade": 0.0,
-    "layout": 0.0,
-    "paint": 0.0
+    "layout": 56.793431,
+    "paint": 55.41212
   },
   "notes": "",
-  "hotspot": "unknown",
+  "hotspot": "layout",
   "failure_stage": null,
   "timeout_stage": null,
   "last_good_commit": "833aa788ed1a7102190a18ae8eae4a0af8876bc4",
-  "last_regression_commit": ""
+  "last_regression_commit": "",
+  "diagnostics": {
+    "stats": {
+      "timings": {
+        "html_decode_ms": null,
+        "dom_parse_ms": 0.17031300000000002,
+        "css_inlining_ms": 0.022141,
+        "css_parse_ms": null,
+        "cascade_ms": null,
+        "box_tree_ms": null,
+        "layout_ms": 50.408421000000004,
+        "text_fallback_ms": 12.295403999999996,
+        "text_shape_ms": 6.385009999999992,
+        "paint_build_ms": 0.072852,
+        "paint_optimize_ms": null,
+        "paint_rasterize_ms": 48.361961,
+        "text_rasterize_ms": 6.977307000000001,
+        "encode_ms": null
+      },
+      "counts": {
+        "dom_nodes": 86,
+        "styled_nodes": 86,
+        "box_nodes": 119,
+        "fragments": 122,
+        "shaped_runs": 570,
+        "glyphs": 8674,
+        "color_glyph_rasters": 0,
+        "fallback_cache_hits": 3822,
+        "fallback_cache_misses": 4904,
+        "last_resort_font_fallbacks": 0,
+        "glyph_cache_hits": 0,
+        "glyph_cache_misses": 0,
+        "glyph_cache_evictions": 0,
+        "glyph_cache_bytes": 0,
+        "color_glyph_cache_hits": 0,
+        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_evictions": 0,
+        "color_glyph_cache_bytes": 0
+      },
+      "cascade": {
+        "nodes": null,
+        "rule_candidates": null,
+        "rule_matches": null,
+        "rule_candidates_pruned": null,
+        "rule_candidates_by_id": null,
+        "rule_candidates_by_class": null,
+        "rule_candidates_by_tag": null,
+        "rule_candidates_by_attr": null,
+        "rule_candidates_universal": null,
+        "selector_time_ms": null,
+        "declaration_time_ms": null,
+        "pseudo_time_ms": null,
+        "has_evals": null,
+        "has_cache_hits": null,
+        "has_prunes": null,
+        "has_bloom_prunes": null,
+        "has_filter_prunes": null,
+        "has_evaluated": null
+      },
+      "layout": {
+        "intrinsic_lookups": 665,
+        "intrinsic_hits": 395,
+        "intrinsic_stores": 270,
+        "block_intrinsic": 507,
+        "flex_intrinsic": 158,
+        "inline_intrinsic": 228,
+        "layout_cache_lookups": 40,
+        "layout_cache_hits": 2,
+        "layout_cache_stores": 38,
+        "layout_cache_evictions": 8,
+        "layout_cache_clones": 2,
+        "flex_cache_clones": 0,
+        "taffy_nodes_built": 0,
+        "taffy_nodes_reused": 0,
+        "taffy_style_cache_hits": 0,
+        "taffy_style_cache_misses": 0,
+        "fragment_deep_clones": 0,
+        "fragment_traversed": 0
+      },
+      "paint": {
+        "display_items": 38,
+        "optimized_items": null,
+        "culled_items": null,
+        "transparent_removed": null,
+        "noop_removed": null,
+        "merged_items": null,
+        "gradient_ms": 0.0,
+        "gradient_pixels": 0,
+        "parallel_tasks": 0,
+        "parallel_threads": 1,
+        "parallel_ms": 0.0,
+        "serial_ms": 48.434813,
+        "filter_cache_hits": 0,
+        "filter_cache_misses": 0,
+        "blur_cache_hits": 0,
+        "blur_cache_misses": 0,
+        "blur_tiles": 0
+      },
+      "resources": {
+        "fetch_counts": {
+          "Image": 4
+        },
+        "image_cache_hits": 0,
+        "image_cache_misses": 4,
+        "image_decode_ms": 0.166993
+      }
+    }
+  }
 }

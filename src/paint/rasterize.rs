@@ -31,6 +31,7 @@
 //! fill_rounded_rect(&mut pixmap, 20.0, 20.0, 60.0, 60.0, &radii, Rgba::rgb(0, 255, 0));
 //! ```
 
+use crate::error::RenderError;
 use crate::geometry::Rect;
 use crate::paint::blur::apply_gaussian_blur;
 use crate::paint::display_list::BorderRadii;
@@ -967,9 +968,9 @@ pub fn render_box_shadow(
   height: f32,
   radii: &BorderRadii,
   shadow: &BoxShadow,
-) -> bool {
+) -> Result<bool, RenderError> {
   if shadow.color.a == 0.0 {
-    return false;
+    return Ok(false);
   }
 
   if shadow.inset {
@@ -988,7 +989,7 @@ fn render_outset_shadow(
   height: f32,
   radii: &BorderRadii,
   shadow: &BoxShadow,
-) -> bool {
+) -> Result<bool, RenderError> {
   let sigma = shadow.blur_radius.max(0.0);
   let spread = shadow.spread_radius;
   let shadow_rect = Rect::from_xywh(
@@ -1023,14 +1024,14 @@ fn render_outset_shadow(
   let max_y = (shadow_rect.y() + shadow_rect.height() + blur_pad).ceil();
 
   if max_x <= min_x || max_y <= min_y {
-    return false;
+    return Ok(false);
   }
 
   let canvas_w = (max_x - min_x).max(1.0) as u32;
   let canvas_h = (max_y - min_y).max(1.0) as u32;
   let mut tmp = match new_pixmap(canvas_w, canvas_h) {
     Some(p) => p,
-    None => return false,
+    None => return Ok(false),
   };
 
   let draw_x = shadow_rect.x() - min_x;
@@ -1047,7 +1048,7 @@ fn render_outset_shadow(
   );
 
   if sigma > 0.0 {
-    apply_gaussian_blur(&mut tmp, sigma);
+    apply_gaussian_blur(&mut tmp, sigma)?;
   }
 
   let mut paint = PixmapPaint::default();
@@ -1060,7 +1061,7 @@ fn render_outset_shadow(
     Transform::identity(),
     None,
   );
-  true
+  Ok(true)
 }
 
 /// Renders an inset box shadow
@@ -1072,7 +1073,7 @@ fn render_inset_shadow(
   height: f32,
   radii: &BorderRadii,
   shadow: &BoxShadow,
-) -> bool {
+) -> Result<bool, RenderError> {
   let sigma = shadow.blur_radius.max(0.0);
   let blur_pad = (sigma * 3.0).ceil();
   let spread = shadow.spread_radius;
@@ -1084,7 +1085,7 @@ fn render_inset_shadow(
   let canvas_h = (height + pad_y * 2.0).max(1.0) as u32;
   let mut tmp = match new_pixmap(canvas_w, canvas_h) {
     Some(p) => p,
-    None => return false,
+    None => return Ok(false),
   };
 
   let outer_x = pad_x + shadow.offset_x + spread;
@@ -1104,7 +1105,7 @@ fn render_inset_shadow(
   );
 
   if sigma > 0.0 {
-    apply_gaussian_blur(&mut tmp, sigma);
+    apply_gaussian_blur(&mut tmp, sigma)?;
   }
 
   // Clip to the outer box to keep inset shadows inside
@@ -1139,7 +1140,7 @@ fn render_inset_shadow(
     Transform::identity(),
     None,
   );
-  true
+  Ok(true)
 }
 
 /// Renders a blurred shadow by drawing multiple layers
@@ -1549,7 +1550,7 @@ mod tests {
     let mut pixmap = new_pixmap(100, 100).unwrap();
     let radii = BorderRadii::zero();
     let shadow = BoxShadow::new(5.0, 5.0, 10.0, 0.0, Rgba::from_rgba8(0, 0, 0, 128));
-    let result = render_box_shadow(&mut pixmap, 20.0, 20.0, 50.0, 50.0, &radii, &shadow);
+    let result = render_box_shadow(&mut pixmap, 20.0, 20.0, 50.0, 50.0, &radii, &shadow).unwrap();
     assert!(result);
   }
 
@@ -1558,7 +1559,7 @@ mod tests {
     let mut pixmap = new_pixmap(100, 100).unwrap();
     let radii = BorderRadii::zero();
     let shadow = BoxShadow::inset(5.0, 5.0, 10.0, 5.0, Rgba::from_rgba8(0, 0, 0, 128));
-    let result = render_box_shadow(&mut pixmap, 10.0, 10.0, 80.0, 80.0, &radii, &shadow);
+    let result = render_box_shadow(&mut pixmap, 10.0, 10.0, 80.0, 80.0, &radii, &shadow).unwrap();
     assert!(result);
   }
 
