@@ -350,30 +350,22 @@ pub fn absolutize_css_urls(css: &str, base_url: &str) -> std::result::Result<Str
   rewrite_urls_in_parser(&mut parser, base_url, css.len(), &mut deadline_counter)
 }
 
-fn parse_import_target(rule: &str) -> Option<(String, String)> {
+fn parse_import_target(rule: &str) -> Option<(&str, &str)> {
   let after_at = rule
     .get(..7)
     .filter(|prefix| prefix.eq_ignore_ascii_case("@import"))?;
   let after_at = rule[after_at.len()..].trim_start();
   let (target, rest) = if let Some(inner) = after_at.strip_prefix("url(") {
     let close = inner.find(')')?;
-    let url_part = &inner[..close].trim();
-    let url_str = url_part.trim_matches(|c| c == '"' || c == '\'').to_string();
-    let media = inner[close + 1..]
-      .trim()
-      .trim_end_matches(';')
-      .trim()
-      .to_string();
+    let url_part = inner[..close].trim();
+    let url_str = url_part.trim_matches(|c| c == '"' || c == '\'');
+    let media = inner[close + 1..].trim().trim_end_matches(';').trim();
     (url_str, media)
   } else if let Some(quote) = after_at.chars().next().filter(|c| *c == '"' || *c == '\'') {
     let rest = &after_at[1..];
     let close_idx = rest.find(quote)?;
-    let url_str = rest[..close_idx].to_string();
-    let media = rest[close_idx + 1..]
-      .trim()
-      .trim_end_matches(';')
-      .trim()
-      .to_string();
+    let url_str = &rest[..close_idx];
+    let media = rest[close_idx + 1..].trim().trim_end_matches(';').trim();
     (url_str, media)
   } else {
     return None;
@@ -708,113 +700,119 @@ where
           continue;
         }
 
-        if bytes[i] == b'@' {
-          let remainder = &css[i..];
-          if remainder.len() >= 7 && remainder[1..].to_lowercase().starts_with("import") {
-            if budget_exhausted {
-              diagnostics(base_url, "stylesheet byte budget exhausted");
-              break;
-            }
-            let mut j = i;
-            let mut inner_state = State::Normal;
-            while j < bytes.len() {
-              match inner_state {
-                State::Normal => {
-                  if bytes[j] == b';' {
-                    j += 1;
-                    break;
-                  }
-                  if bytes[j] == b'\'' {
-                    inner_state = State::Single;
-                  } else if bytes[j] == b'"' {
-                    inner_state = State::Double;
-                  } else if bytes[j] == b'/' && j + 1 < bytes.len() && bytes[j + 1] == b'*' {
-                    inner_state = State::Comment;
-                    j += 1;
-                  }
-                }
-                State::Single => {
-                  if bytes[j] == b'\\' {
-                    j += 1;
-                  } else if bytes[j] == b'\'' {
-                    inner_state = State::Normal;
-                  }
-                }
-                State::Double => {
-                  if bytes[j] == b'\\' {
-                    j += 1;
-                  } else if bytes[j] == b'"' {
-                    inner_state = State::Normal;
-                  }
-                }
-                State::Comment => {
-                  if bytes[j] == b'*' && j + 1 < bytes.len() && bytes[j + 1] == b'/' {
-                    inner_state = State::Normal;
-                    j += 1;
-                  }
-                }
-              }
-              j += 1;
-            }
-
-            let rule = css[i..j].trim();
-            if let Some((target, media)) = parse_import_target(rule) {
-              if let Some(resolved) = resolve_href(base_url, &target) {
-                if !push_with_budget(
-                  &mut out,
-                  &css[last_emit..i],
-                  base_url,
-                  &mut state.budget,
-                  diagnostics,
-                ) {
-                  budget_exhausted = true;
+        if bytes[i] == b'@'
+          && bytes.len().saturating_sub(i) >= 7
+          && bytes[i + 1..i + 7].eq_ignore_ascii_case(b"import")
+        {
+          if budget_exhausted {
+            diagnostics(base_url, "stylesheet byte budget exhausted");
+            break;
+          }
+          let mut j = i;
+          let mut inner_state = State::Normal;
+          while j < bytes.len() {
+            match inner_state {
+              State::Normal => {
+                if bytes[j] == b';' {
+                  j += 1;
                   break;
                 }
-                if !state
-                  .budget
-                  .import_depth_allowed(state.stack.len(), &resolved, diagnostics)
-                {
-                  last_emit = j;
-                  i = j;
-                  continue;
+                if bytes[j] == b'\'' {
+                  inner_state = State::Single;
+                } else if bytes[j] == b'"' {
+                  inner_state = State::Double;
+                } else if bytes[j] == b'/' && j + 1 < bytes.len() && bytes[j + 1] == b'*' {
+                  inner_state = State::Comment;
+                  j += 1;
                 }
-                if state.stack.contains(&resolved) {
-                  diagnostics(&resolved, "skipping cyclic @import");
-                } else {
-                  let mut inlined: Option<String> = None;
-                  if !state.try_register_stylesheet_with_budget(&resolved, diagnostics) {
-                    // Count exhausted; skip this import.
-                  } else if state.budget.remaining_bytes() == 0 {
-                    diagnostics(&resolved, "stylesheet byte budget exhausted");
-                    budget_exhausted = true;
-                  } else if let Some(cached) = state.cache.get(&resolved) {
-                    inlined = Some(cached.clone());
-                  } else {
-                    if let Ok(fetched) = fetch(&resolved) {
-                      let rewritten = absolutize_css_urls(&fetched, &resolved)?;
-                      if rewritten.len() > state.budget.remaining_bytes() {
-                        diagnostics(&resolved, "stylesheet byte budget exhausted");
-                      } else {
-                        let nested = inline_imports_with_diagnostics(
-                          &rewritten,
-                          &resolved,
-                          fetch,
-                          state,
-                          diagnostics,
-                          deadline,
-                        )?;
-                        state.cache.insert(resolved.clone(), nested.clone());
-                        inlined = Some(nested);
-                      }
-                    }
-                  }
+              }
+              State::Single => {
+                if bytes[j] == b'\\' {
+                  j += 1;
+                } else if bytes[j] == b'\'' {
+                  inner_state = State::Normal;
+                }
+              }
+              State::Double => {
+                if bytes[j] == b'\\' {
+                  j += 1;
+                } else if bytes[j] == b'"' {
+                  inner_state = State::Normal;
+                }
+              }
+              State::Comment => {
+                if bytes[j] == b'*' && j + 1 < bytes.len() && bytes[j + 1] == b'/' {
+                  inner_state = State::Normal;
+                  j += 1;
+                }
+              }
+            }
+            j += 1;
+          }
 
-                  if let Some(inlined) = inlined {
-                    let to_insert = if media.is_empty() || media.eq_ignore_ascii_case("all") {
-                      inlined
-                    } else {
-                      format!("@media {} {{\n{}\n}}\n", media, inlined)
-                    };
+          let rule = css[i..j].trim();
+          if let Some((target, media)) = parse_import_target(rule) {
+            if let Some(resolved) = resolve_href(base_url, target) {
+              if !push_with_budget(
+                &mut out,
+                &css[last_emit..i],
+                base_url,
+                &mut state.budget,
+                diagnostics,
+              ) {
+                budget_exhausted = true;
+                break;
+              }
+              if !state
+                .budget
+                .import_depth_allowed(state.stack.len(), &resolved, diagnostics)
+              {
+                last_emit = j;
+                i = j;
+                continue;
+              }
+              if state.stack.contains(&resolved) {
+                diagnostics(&resolved, "skipping cyclic @import");
+              } else {
+                let mut inlined: Option<&str> = None;
+                if !state.try_register_stylesheet_with_budget(&resolved, diagnostics) {
+                  // Count exhausted; skip this import.
+                } else if state.budget.remaining_bytes() == 0 {
+                  diagnostics(&resolved, "stylesheet byte budget exhausted");
+                  budget_exhausted = true;
+                } else if let Some(cached) = state.cache.get(&resolved) {
+                  inlined = Some(cached);
+                } else if let Ok(fetched) = fetch(&resolved) {
+                  let rewritten = absolutize_css_urls(&fetched, &resolved)?;
+                  if rewritten.len() > state.budget.remaining_bytes() {
+                    diagnostics(&resolved, "stylesheet byte budget exhausted");
+                  } else {
+                    let nested = inline_imports_with_diagnostics(
+                      &rewritten,
+                      &resolved,
+                      fetch,
+                      state,
+                      diagnostics,
+                      deadline,
+                    )?;
+                    let cached = state.cache.entry(resolved.clone()).or_insert(nested);
+                    inlined = Some(cached.as_str());
+                  }
+                }
+
+                if let Some(inlined) = inlined {
+                  if media.is_empty() || media.eq_ignore_ascii_case("all") {
+                    if !push_with_budget(
+                      &mut out,
+                      inlined,
+                      &resolved,
+                      &mut state.budget,
+                      diagnostics,
+                    ) {
+                      budget_exhausted = true;
+                    }
+                  } else {
+                    let to_insert = format!("@media {} {{\n{}\n}}\n", media, inlined);
                     if !push_with_budget(
                       &mut out,
                       &to_insert,
@@ -826,10 +824,10 @@ where
                     }
                   }
                 }
-                last_emit = j;
-                i = j;
-                continue;
               }
+              last_emit = j;
+              i = j;
+              continue;
             }
           }
         }
@@ -1803,6 +1801,47 @@ mod tests {
     .unwrap();
     assert!(out.contains("p { color: blue; }"));
     assert!(out.contains("body { color: black; }"));
+  }
+
+  #[test]
+  fn inline_imports_handles_mixedcase_at_keyword() {
+    let mut state = InlineImportState::new();
+    let css = "@ImPoRt \"nested.css\";\nbody { color: black; }";
+    let mut fetched = |url: &str| -> Result<String> {
+      assert_eq!(url, "https://example.com/nested.css");
+      Ok("p { color: blue; }".to_string())
+    };
+    let out = inline_imports(
+      css,
+      "https://example.com/main.css",
+      &mut fetched,
+      &mut state,
+      None,
+    )
+    .unwrap();
+    assert!(out.contains("p { color: blue; }"));
+    assert!(out.contains("body { color: black; }"));
+  }
+
+  #[test]
+  fn inline_imports_handles_many_at_tokens() {
+    let mut state = InlineImportState::new();
+    let css = format!(
+      "body {{ color: black; }}\n{}\nbody {{ color: blue; }}",
+      "@".repeat(50_000)
+    );
+    let mut fetched = |_url: &str| -> Result<String> {
+      panic!("inline_imports should not attempt to fetch when there are no @import rules")
+    };
+    let out = inline_imports(
+      &css,
+      "https://example.com/main.css",
+      &mut fetched,
+      &mut state,
+      None,
+    )
+    .unwrap();
+    assert_eq!(out, css);
   }
 
   #[test]
