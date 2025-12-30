@@ -417,6 +417,12 @@ pub const DEFAULT_USER_AGENT: &str =
 /// Default Accept-Language header value
 pub const DEFAULT_ACCEPT_LANGUAGE: &str = "en-US,en;q=0.9";
 
+/// Default Accept header value.
+///
+/// This is intentionally "browser-like" while remaining broadly compatible with non-HTML
+/// subresource requests (it includes `*/*`).
+const DEFAULT_ACCEPT: &str = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
+
 /// Content-Encoding algorithms this fetcher can decode.
 const SUPPORTED_ACCEPT_ENCODING: &str = "gzip, deflate, br";
 
@@ -1198,6 +1204,7 @@ impl HttpFetcher {
       let mut request = agent
         .get(&current)
         .header("User-Agent", &self.user_agent)
+        .header("Accept", DEFAULT_ACCEPT)
         .header("Accept-Language", &self.accept_language)
         .header("Accept-Encoding", accept_encoding_value);
 
@@ -2999,6 +3006,115 @@ mod tests {
   }
 
   #[test]
+  fn http_fetcher_persists_cookies_across_requests_and_clones() {
+    let Some(listener) =
+      try_bind_localhost("http_fetcher_persists_cookies_across_requests_and_clones")
+    else {
+      return;
+    };
+    let addr = listener.local_addr().unwrap();
+    let handle = thread::spawn(move || {
+      // First request sets a cookie.
+      let (mut stream, _) = listener.accept().unwrap();
+      stream
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .unwrap();
+      let _ = read_http_request(&mut stream).unwrap();
+      let body = b"first";
+      let headers = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nSet-Cookie: a=b; Path=/\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+      );
+      stream.write_all(headers.as_bytes()).unwrap();
+      stream.write_all(body).unwrap();
+      drop(stream);
+
+      // Second request must send the cookie.
+      let (mut stream, _) = listener.accept().unwrap();
+      stream
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .unwrap();
+      let request = read_http_request(&mut stream)
+        .unwrap()
+        .expect("expected second HTTP request");
+      let req = String::from_utf8_lossy(&request).to_ascii_lowercase();
+      assert!(
+        req.contains("cookie: a=b"),
+        "expected cookie header in follow-up request, got:\n{req}"
+      );
+
+      let body = b"second";
+      let headers = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+      );
+      stream.write_all(headers.as_bytes()).unwrap();
+      stream.write_all(body).unwrap();
+    });
+
+    let fetcher = HttpFetcher::new().with_timeout(Duration::from_secs(2));
+    let cloned = fetcher.clone();
+    let url = format!("http://{}/set", addr);
+    let res = fetcher.fetch(&url).expect("fetch initial cookie setter");
+    assert_eq!(res.bytes, b"first");
+
+    let url = format!("http://{}/check", addr);
+    let res = cloned
+      .fetch(&url)
+      .expect("fetch should include cookie from prior request");
+    assert_eq!(res.bytes, b"second");
+    handle.join().unwrap();
+  }
+
+  #[test]
+  fn http_fetcher_sends_cookies_on_redirect_followups() {
+    let Some(listener) = try_bind_localhost("http_fetcher_sends_cookies_on_redirect_followups")
+    else {
+      return;
+    };
+    let addr = listener.local_addr().unwrap();
+    let handle = thread::spawn(move || {
+      // First request triggers a redirect and sets a cookie.
+      let (mut stream, _) = listener.accept().unwrap();
+      stream
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .unwrap();
+      let _ = read_http_request(&mut stream).unwrap();
+      let headers = "HTTP/1.1 302 Found\r\nLocation: /final\r\nSet-Cookie: a=b; Path=/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+      stream.write_all(headers.as_bytes()).unwrap();
+      drop(stream);
+
+      // Redirect follow-up request must include the cookie.
+      let (mut stream, _) = listener.accept().unwrap();
+      stream
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .unwrap();
+      let request = read_http_request(&mut stream)
+        .unwrap()
+        .expect("expected redirect follow-up request");
+      let req = String::from_utf8_lossy(&request).to_ascii_lowercase();
+      assert!(
+        req.contains("cookie: a=b"),
+        "expected cookie header in redirect follow-up request, got:\n{req}"
+      );
+
+      let body = b"ok";
+      let headers = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+      );
+      stream.write_all(headers.as_bytes()).unwrap();
+      stream.write_all(body).unwrap();
+    });
+
+    let fetcher = HttpFetcher::new().with_timeout(Duration::from_secs(2));
+    let url = format!("http://{}/start", addr);
+    let res = fetcher.fetch(&url).expect("fetch should follow redirect");
+    assert_eq!(res.bytes, b"ok");
+    handle.join().unwrap();
+  }
+
+  #[test]
   fn http_fetcher_sets_accept_language() {
     let Some(listener) = try_bind_localhost("http_fetcher_sets_accept_language") else {
       return;
@@ -3037,6 +3153,48 @@ mod tests {
       req.contains("accept-language: en-us,en;q=0.9"),
       "missing header: {}",
       req
+    );
+  }
+
+  #[test]
+  fn http_fetcher_sets_accept_header() {
+    let Some(listener) = try_bind_localhost("http_fetcher_sets_accept_header") else {
+      return;
+    };
+    let addr = listener.local_addr().unwrap();
+    let captured = Arc::new(Mutex::new(String::new()));
+    let captured_req = Arc::clone(&captured);
+    let handle = thread::spawn(move || {
+      let (mut stream, _) = listener.accept().unwrap();
+      stream
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .unwrap();
+      let request = read_http_request(&mut stream)
+        .unwrap()
+        .expect("expected HTTP request");
+      if let Ok(mut slot) = captured_req.lock() {
+        *slot = String::from_utf8_lossy(&request).to_string();
+      }
+
+      let body = b"hi";
+      let headers = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+      );
+      stream.write_all(headers.as_bytes()).unwrap();
+      stream.write_all(body).unwrap();
+    });
+
+    let fetcher = HttpFetcher::new();
+    let url = format!("http://{}/", addr);
+    let res = fetcher.fetch(&url).expect("fetch accept header");
+    handle.join().unwrap();
+
+    assert_eq!(res.bytes, b"hi");
+    let req = captured.lock().unwrap().to_ascii_lowercase();
+    assert!(
+      req.contains(&format!("accept: {DEFAULT_ACCEPT}").to_ascii_lowercase()),
+      "missing accept header: {req}"
     );
   }
 
