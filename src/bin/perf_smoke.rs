@@ -349,6 +349,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   let mut specs = fixture_specs_for_suite(args.suite)?;
   specs = filter_specs(specs, filters)?;
   if specs.is_empty() {
+    if matches!(args.suite, Suite::PagesetTimeouts) {
+      eprintln!(
+        "No pageset timeout fixtures available; capture them under tests/pages/fixtures before running this suite."
+      );
+      return Ok(());
+    }
     return Err("no fixtures selected to run".into());
   }
 
@@ -466,6 +472,8 @@ fn pageset_timeout_fixture_specs() -> Result<Vec<FixtureSpec>, Box<dyn std::erro
 
   let default_budget = manifest.default_budget_ms;
   let mut specs = Vec::new();
+  let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+  let fixtures_root = root.join("tests/pages/fixtures");
   for fixture in manifest.fixtures {
     if fixture.viewport.len() != 2 {
       return Err(
@@ -476,14 +484,31 @@ fn pageset_timeout_fixture_specs() -> Result<Vec<FixtureSpec>, Box<dyn std::erro
         .into(),
       );
     }
+    let path = format!("tests/pages/fixtures/{}/index.html", fixture.name);
+    let full_path = root.join(&path);
+    if !full_path.exists() {
+      eprintln!(
+        "Skipping pageset timeout fixture {} (missing {})",
+        fixture.name,
+        full_path.display()
+      );
+      continue;
+    }
     specs.push(FixtureSpec {
       name: fixture.name.clone(),
-      path: format!("tests/pages/fixtures/{}/index.html", fixture.name),
+      path,
       viewport: (fixture.viewport[0], fixture.viewport[1]),
       dpr: fixture.dpr,
       media: media_from_label(&fixture.media)?,
       budget_ms: fixture.budget_ms.or(default_budget),
     });
+  }
+
+  if specs.is_empty() {
+    eprintln!(
+      "No pageset timeout fixtures found under {}; skipping pageset-timeouts suite.",
+      fixtures_root.display()
+    );
   }
 
   Ok(specs)

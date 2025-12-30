@@ -562,9 +562,18 @@ mod pageset_timeouts {
           std::env::set_var("FASTR_USE_BUNDLED_FONTS", "1");
         }
 
+        let mut skipped = Vec::new();
+        let mut ran = 0usize;
         for fixture in &manifest.fixtures {
+          let html_path = fixtures_dir().join(&fixture.name).join("index.html");
+          if !html_path.exists() {
+            skipped.push((fixture.name.clone(), html_path));
+            continue;
+          }
+
           let run = render_timeout_fixture(fixture, default_budget_ms, global_budget)
             .unwrap_or_else(|e| panic!("Failed to render {}: {}", fixture.name, e));
+          ran += 1;
           assert!(
             run.elapsed_ms <= run.budget_ms,
             "Fixture {} exceeded budget ({:.1}ms > {:.1}ms). Timings: {}",
@@ -573,6 +582,26 @@ mod pageset_timeouts {
             run.budget_ms,
             summarize_timings(&run.timings),
           );
+        }
+
+        if !skipped.is_empty() {
+          let skipped_paths: Vec<String> = skipped
+            .iter()
+            .map(|(name, path)| format!("{} ({})", name, path.display()))
+            .collect();
+          eprintln!(
+            "Skipped {} pageset timeout fixtures missing locally: {}",
+            skipped.len(),
+            skipped_paths.join(", ")
+          );
+        }
+
+        if ran == 0 {
+          eprintln!(
+            "Skipping pageset timeout fixtures: no fixture HTML found under {}",
+            fixtures_dir().display()
+          );
+          return;
         }
       })
       .unwrap()
