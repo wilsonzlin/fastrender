@@ -36,6 +36,7 @@ mod marker_underline_order;
 mod math_render;
 mod multi_root_display_list;
 mod optimize_test;
+mod offscreen_culling_stress;
 mod overflow_clip_test;
 mod paged_media_margin_boxes;
 mod parallel_paint_test;

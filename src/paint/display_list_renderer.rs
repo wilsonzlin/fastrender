@@ -72,7 +72,7 @@ use crate::paint::text_rasterize::{
 };
 use crate::paint::text_shadow::PathBounds;
 use crate::paint::transform3d::backface_is_hidden;
-use crate::render_control::{active_deadline, check_active, with_deadline};
+use crate::render_control::{active_deadline, check_active, check_active_periodic, with_deadline};
 use crate::style::color::Rgba;
 use crate::style::types::BackfaceVisibility;
 use crate::style::types::BackgroundImage;
@@ -128,6 +128,8 @@ use tiny_skia::SpreadMode;
 use tiny_skia::Stroke;
 use tiny_skia::StrokeDash;
 use tiny_skia::Transform;
+
+const DEADLINE_STRIDE: usize = 256;
 
 fn map_blend_mode(mode: BlendMode) -> tiny_skia::BlendMode {
   match mode {
@@ -3359,7 +3361,7 @@ impl DisplayListRenderer {
 
     let tile_estimate = self.estimated_tile_count();
     let parallel_supported =
-      self.should_render_parallel(&list, tile_estimate, &mut fallback_reason);
+      self.should_render_parallel(&list, tile_estimate, &mut fallback_reason)?;
 
     if parallel_supported {
       let (pixmap, tiles, threads_used, parallel_duration) = self.render_parallel(&list)?;
@@ -3435,21 +3437,23 @@ impl DisplayListRenderer {
     &self,
     items: &[DisplayItem],
     fallback_reason: &mut Option<String>,
-  ) -> bool {
+  ) -> std::result::Result<bool, RenderError> {
+    let mut deadline_counter = 0usize;
     for item in items {
+      check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)?;
       if let DisplayItem::PushStackingContext(sc) = item {
         if !sc.backdrop_filters.is_empty() {
           *fallback_reason = Some("backdrop-filter requires serial painting".to_string());
-          return true;
+          return Ok(true);
         }
         if !matches!(sc.mix_blend_mode, BlendMode::Normal) && !sc.is_isolated {
           *fallback_reason =
             Some("mix-blend-mode on non-isolated context requires serial painting".to_string());
-          return true;
+          return Ok(true);
         }
       }
     }
-    false
+    Ok(false)
   }
 
   fn estimated_tile_count(&self) -> usize {
@@ -3464,32 +3468,35 @@ impl DisplayListRenderer {
     list: &DisplayList,
     tile_estimate: usize,
     fallback_reason: &mut Option<String>,
-  ) -> bool {
+  ) -> Result<bool> {
     if !self.paint_parallelism.enabled || self.paint_parallelism.tile_size == 0 {
       *fallback_reason = Some("parallel painting disabled".to_string());
-      return false;
+      return Ok(false);
     }
 
     let threads = rayon::current_num_threads().max(1);
     if threads <= 1 {
       *fallback_reason = Some("rayon pool is single-threaded".to_string());
-      return false;
+      return Ok(false);
     }
 
     if tile_estimate < self.paint_parallelism.min_tiles {
       *fallback_reason = Some("tile count below parallel threshold".to_string());
-      return false;
+      return Ok(false);
     }
 
     if self.canvas.width() <= self.paint_parallelism.tile_size
       && self.canvas.height() <= self.paint_parallelism.tile_size
     {
       *fallback_reason = Some("viewport smaller than tile size".to_string());
-      return false;
+      return Ok(false);
     }
 
-    if self.has_backdrop_sensitive_effects(list.items(), fallback_reason) {
-      return false;
+    if self
+      .has_backdrop_sensitive_effects(list.items(), fallback_reason)
+      .map_err(Error::Render)?
+    {
+      return Ok(false);
     }
 
     let task_capacity = threads.min(tile_estimate.max(1)).max(1);
@@ -3506,17 +3513,20 @@ impl DisplayListRenderer {
 
     if work_estimate < work_threshold {
       *fallback_reason = Some("estimated paint work below parallel threshold".to_string());
-      return false;
+      return Ok(false);
     }
 
-    true
+    Ok(true)
   }
 
-  fn max_effect_padding(&self, items: &[DisplayItem]) -> f32 {
+  fn max_effect_padding(&self, items: &[DisplayItem]) -> Result<f32> {
     // Capture the largest expansion any item can paint beyond its base bounds so tiled
     // rendering includes enough halo to avoid clipping strokes, shadows, and filters.
     let mut max_pad = 0.0f32;
+    let mut deadline_counter = 0usize;
     for item in items {
+      check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)
+        .map_err(Error::Render)?;
       match item {
         DisplayItem::StrokeRect(stroke) => {
           max_pad = max_pad.max(stroke.width.abs() * 0.5);
@@ -3568,23 +3578,26 @@ impl DisplayListRenderer {
         _ => {}
       }
     }
-    max_pad
+    Ok(max_pad)
   }
 
-  fn build_tiles<'a>(&self, list: &'a DisplayList) -> Vec<TileWork<'a>> {
+  fn build_tiles<'a>(&self, list: &'a DisplayList) -> Result<Vec<TileWork<'a>>> {
     let tile_size = self.paint_parallelism.tile_size.max(1);
     let width = self.canvas.width();
     let height = self.canvas.height();
     // Add a small safety margin to avoid seams from antialiasing or filter kernels that
     // extend slightly beyond our conservative padding estimates.
-    let halo_css = self.max_effect_padding(list.items()) + 4.0;
+    let halo_css = self.max_effect_padding(list.items())? + 4.0;
     let halo_px = (halo_css * self.scale).ceil() as u32;
     let optimizer = DisplayListOptimizer::new();
     let mut tiles = Vec::new();
+    let mut deadline_counter = 0usize;
 
     for y in (0..height).step_by(tile_size as usize) {
       let tile_h = height.saturating_sub(y).min(tile_size);
       for x in (0..width).step_by(tile_size as usize) {
+        check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)
+          .map_err(Error::Render)?;
         let tile_w = width.saturating_sub(x).min(tile_size);
 
         let render_x = x.saturating_sub(halo_px);
@@ -3600,7 +3613,9 @@ impl DisplayListRenderer {
           render_w as f32 / self.scale,
           render_h as f32 / self.scale,
         );
-        let slice = optimizer.intersect_view(list.items(), render_css_rect);
+        let slice = optimizer
+          .intersect_view(list.items(), render_css_rect)
+          .map_err(Error::Render)?;
 
         tiles.push(TileWork {
           tile_x: x,
@@ -3616,28 +3631,33 @@ impl DisplayListRenderer {
       }
     }
 
-    tiles
+    Ok(tiles)
   }
 
-  fn blit_tile(&mut self, work: &TileWork, pixmap: &Pixmap) {
+  fn blit_tile(&mut self, work: &TileWork, pixmap: &Pixmap) -> Result<()> {
     let dest = self.canvas.pixmap_mut();
     let dest_bpr = dest.width() as usize * 4;
     let src_bpr = pixmap.width() as usize * 4;
     let start_x = work.tile_x.saturating_sub(work.render_x) as usize;
     let start_y = work.tile_y.saturating_sub(work.render_y) as usize;
 
+    let mut deadline_counter = 0usize;
     for row in 0..work.tile_h as usize {
+      check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)
+        .map_err(Error::Render)?;
       let dest_offset = (work.tile_y as usize + row) * dest_bpr + work.tile_x as usize * 4;
       let src_offset = (start_y + row) * src_bpr + start_x * 4;
       let len = work.tile_w as usize * 4;
       dest.data_mut()[dest_offset..dest_offset + len]
         .copy_from_slice(&pixmap.data()[src_offset..src_offset + len]);
     }
+
+    Ok(())
   }
 
   fn render_parallel(&mut self, list: &DisplayList) -> Result<(Pixmap, usize, usize, Duration)> {
     let start = Instant::now();
-    let tiles = self.build_tiles(list);
+    let tiles = self.build_tiles(list)?;
     self.canvas.clear(self.background);
 
     let font_ctx = self.font_ctx.clone();
@@ -3689,10 +3709,13 @@ impl DisplayListRenderer {
     let tile_count = results.len();
     let mut thread_set = HashSet::new();
     let mut tile_stats = GradientStats::default();
+    let mut deadline_counter = 0usize;
     for (work, pixmap, stats, thread) in results {
+      check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)
+        .map_err(Error::Render)?;
       thread_set.insert(thread);
       tile_stats.merge(&stats);
-      self.blit_tile(&work, &pixmap);
+      self.blit_tile(&work, &pixmap)?;
     }
     self.gradient_stats.merge(&tile_stats);
     let parallel_duration = start.elapsed();
@@ -3708,7 +3731,10 @@ impl DisplayListRenderer {
   {
     check_active(RenderStage::Paint).map_err(Error::Render)?;
     let mut idx = 0;
+    let mut deadline_counter = 0usize;
     while idx < items.len() {
+      check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)
+        .map_err(Error::Render)?;
       let item = items
         .get(idx)
         .expect("display list iteration should remain in-bounds");
@@ -3769,7 +3795,10 @@ impl DisplayListRenderer {
         .then_with(|| a.order.cmp(&b.order))
     });
 
+    let mut deadline_counter = 0usize;
     for scene_item in scene_items {
+      check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)
+        .map_err(Error::Render)?;
       if let Some(pixmap) = self.render_scene_item(&scene_item)? {
         let adjusted_transform = scene_item.transform.multiply(&Transform3D::translate(
           scene_item.bounds.x(),
@@ -3799,12 +3828,18 @@ impl DisplayListRenderer {
     }));
     match &item.source {
       SceneItemSource::Segment(items) => {
+        let mut deadline_counter = 0usize;
         for it in items {
+          check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)
+            .map_err(Error::Render)?;
           list.push(it.clone());
         }
       }
       SceneItemSource::FlattenedSubtree(node) => {
+        let mut deadline_counter = 0usize;
         for (i, it) in node.subtree_items.iter().enumerate() {
+          check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)
+            .map_err(Error::Render)?;
           if i == 0 {
             if let DisplayItem::PushStackingContext(sc) = it {
               let mut adjusted = sc.clone();
@@ -3938,7 +3973,7 @@ impl DisplayListRenderer {
     );
   }
 
-  fn render_table_collapsed_borders(&mut self, item: &TableCollapsedBordersItem) {
+  fn render_table_collapsed_borders(&mut self, item: &TableCollapsedBordersItem) -> Result<()> {
     let zero_side = BorderSide {
       width: 0.0,
       style: CssBorderStyle::None,
@@ -3948,7 +3983,10 @@ impl DisplayListRenderer {
     let column_lines = &item.borders.column_line_positions;
     let row_lines = &item.borders.row_line_positions;
 
+    let mut deadline_counter = 0usize;
     for col_idx in 0..=item.borders.column_count {
+      check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)
+        .map_err(Error::Render)?;
       let base_x = item.origin.x + column_lines.get(col_idx).copied().unwrap_or(0.0);
       let base_edge_width = item.borders.vertical_line_width(col_idx);
       for row_idx in 0..item.borders.row_count {
@@ -4011,6 +4049,8 @@ impl DisplayListRenderer {
     }
 
     for row_idx in 0..=item.borders.row_count {
+      check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)
+        .map_err(Error::Render)?;
       let base_y = item.origin.y + row_lines.get(row_idx).copied().unwrap_or(0.0);
       let base_edge_width = item.borders.horizontal_line_width(row_idx);
       for col_idx in 0..item.borders.column_count {
@@ -4074,6 +4114,8 @@ impl DisplayListRenderer {
 
     for r in 0..=item.borders.row_count {
       for c in 0..=item.borders.column_count {
+        check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)
+          .map_err(Error::Render)?;
         let Some(corner) = item.borders.corner(r, c) else {
           continue;
         };
@@ -4103,6 +4145,8 @@ impl DisplayListRenderer {
         self.render_border(&border_item);
       }
     }
+
+    Ok(())
   }
 
   fn render_item(&mut self, item: &DisplayItem) -> Result<()> {
@@ -4156,7 +4200,7 @@ impl DisplayListRenderer {
       DisplayItem::RadialGradient(item) => self.render_radial_gradient(item),
       DisplayItem::ConicGradient(item) => self.render_conic_gradient(item),
       DisplayItem::Border(item) => self.render_border(item),
-      DisplayItem::TableCollapsedBorders(item) => self.render_table_collapsed_borders(item),
+      DisplayItem::TableCollapsedBorders(item) => self.render_table_collapsed_borders(item)?,
       DisplayItem::TextDecoration(item) => {
         let scaled = self.scale_decoration_item(item);
         self.render_text_decoration(&scaled)?;

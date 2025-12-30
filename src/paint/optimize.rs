@@ -27,6 +27,7 @@
 //! ```
 
 use crate::geometry::{Point, Rect};
+use crate::error::{Error, RenderError, RenderStage, Result};
 use crate::paint::display_list::BlendMode;
 use crate::paint::display_list::DisplayItem;
 use crate::paint::display_list::DisplayList;
@@ -37,6 +38,9 @@ use crate::paint::display_list::Transform2D;
 use crate::paint::display_list::Transform3D;
 use crate::paint::filter_outset::filter_outset_with_bounds;
 use crate::paint::homography::Homography;
+use crate::render_control::{check_active, check_active_periodic};
+
+const DEADLINE_STRIDE: usize = 256;
 
 // ============================================================================
 // Optimization Configuration
@@ -162,55 +166,92 @@ impl DisplayListOptimizer {
   ///
   /// Returns the optimized display list and statistics about what was optimized.
   pub fn optimize(&self, list: DisplayList, viewport: Rect) -> (DisplayList, OptimizationStats) {
+    self
+      .optimize_checked(list, viewport)
+      .unwrap_or_else(|err| panic!("display list optimization failed: {err}"))
+  }
+
+  /// Optimize a display list with deadline awareness.
+  pub fn optimize_checked(
+    &self,
+    list: DisplayList,
+    viewport: Rect,
+  ) -> Result<(DisplayList, OptimizationStats)> {
     let original_count = list.len();
     let mut items: Vec<DisplayItem> = list.items().to_vec();
     let mut stats = OptimizationStats {
       original_count,
       ..Default::default()
     };
+    let mut deadline_counter = 0usize;
+
+    check_active(RenderStage::Paint).map_err(Error::Render)?;
 
     // Pass 1: Remove transparent items
     if self.config.enable_transparent_removal {
       let before = items.len();
-      items = self.remove_transparent_items(items);
+      items = self
+        .remove_transparent_items_checked(items, &mut deadline_counter)
+        .map_err(Error::Render)?;
       stats.transparent_removed = before - items.len();
     }
 
     // Pass 2: Remove no-op operations
     if self.config.enable_noop_removal {
       let before = items.len();
-      items = self.remove_noop_items(items);
+      items = self
+        .remove_noop_items_checked(items, &mut deadline_counter)
+        .map_err(Error::Render)?;
       stats.noop_removed = before - items.len();
     }
 
     // Pass 3: Cull items outside viewport
     if self.config.enable_culling {
       let before = items.len();
-      items = self.cull_items(items, viewport);
+      items = self
+        .cull_items_checked(items, viewport, &mut deadline_counter)
+        .map_err(Error::Render)?;
       stats.culled_count = before - items.len();
     }
 
     // Pass 4: Merge adjacent fills
     if self.config.enable_fill_merging {
       let before = items.len();
-      items = self.merge_adjacent_fills(items);
+      items = self
+        .merge_adjacent_fills_checked(items, &mut deadline_counter)
+        .map_err(Error::Render)?;
       stats.merged_count = before - items.len();
     }
 
     stats.final_count = items.len();
-    (DisplayList::from_items(items), stats)
+    Ok((DisplayList::from_items(items), stats))
   }
 
   /// Extract only the items that intersect the viewport while preserving stack
   /// operations needed for correct rasterization order.
   pub fn intersect(&self, list: &DisplayList, viewport: Rect) -> DisplayList {
+    self
+      .intersect_checked(list, viewport)
+      .unwrap_or_else(|_| DisplayList::new())
+  }
+
+  pub fn intersect_checked(&self, list: &DisplayList, viewport: Rect) -> Result<DisplayList> {
     let items = list.items().to_vec();
-    DisplayList::from_items(self.cull_items(items, viewport))
+    Ok(DisplayList::from_items(
+      self
+        .cull_items_checked(items, viewport, &mut 0usize)
+        .map_err(Error::Render)?,
+    ))
   }
 
   /// Extract indices of items that intersect the viewport while preserving stack operations.
-  pub fn intersect_indices(&self, items: &[DisplayItem], viewport: Rect) -> Vec<usize> {
+  pub fn intersect_indices(
+    &self,
+    items: &[DisplayItem],
+    viewport: Rect,
+  ) -> std::result::Result<Vec<usize>, RenderError> {
     let mut result = Vec::with_capacity(items.len());
+    let mut deadline_counter = 0usize;
     let mut transform_state = TransformState::default();
     let mut transform_stack: Vec<TransformState> = Vec::new();
     let mut context_stack: Vec<ContextRecord> = Vec::new();
@@ -247,6 +288,7 @@ impl DisplayListOptimizer {
       };
 
     for (index, item) in items.iter().enumerate() {
+      check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)?;
       let mut include_item = false;
       let mut transformed_bounds: Option<Rect> = None;
 
@@ -461,7 +503,7 @@ impl DisplayListOptimizer {
       }
     }
 
-    result
+    Ok(result)
   }
 
   /// Build a display list view containing only the items that intersect the viewport.
@@ -469,18 +511,30 @@ impl DisplayListOptimizer {
     &self,
     items: &'a [DisplayItem],
     viewport: Rect,
-  ) -> DisplayListView<'a> {
-    let indices = self.intersect_indices(items, viewport);
-    let tail = self.balance_stack_tail(items, &indices);
-    DisplayListView::new(items, indices, tail)
+  ) -> std::result::Result<DisplayListView<'a>, RenderError> {
+    let indices = self.intersect_indices(items, viewport)?;
+    let tail = self.balance_stack_tail(items, &indices)?;
+    Ok(DisplayListView::new(items, indices, tail))
   }
 
   /// Remove fully transparent items
   fn remove_transparent_items(&self, items: Vec<DisplayItem>) -> Vec<DisplayItem> {
+    let mut counter = 0usize;
+    self
+      .remove_transparent_items_checked(items, &mut counter)
+      .unwrap_or_default()
+  }
+
+  fn remove_transparent_items_checked(
+    &self,
+    items: Vec<DisplayItem>,
+    counter: &mut usize,
+  ) -> std::result::Result<Vec<DisplayItem>, RenderError> {
     let mut result = Vec::with_capacity(items.len());
     let mut skip_opacity_depth: usize = 0;
 
     for item in items {
+      check_active_periodic(counter, DEADLINE_STRIDE, RenderStage::Paint)?;
       if skip_opacity_depth > 0 {
         match &item {
           DisplayItem::PushOpacity(_) => skip_opacity_depth += 1,
@@ -506,7 +560,7 @@ impl DisplayListOptimizer {
       result.push(item);
     }
 
-    result
+    Ok(result)
   }
 
   /// Check if an item is fully transparent
@@ -517,6 +571,28 @@ impl DisplayListOptimizer {
       DisplayItem::FillRoundedRect(item) => item.color.a == 0.0,
       DisplayItem::StrokeRoundedRect(item) => item.color.a == 0.0,
       DisplayItem::Text(item) => item.color.a == 0.0,
+      DisplayItem::Outline(item) => {
+        item.width <= 0.0
+          || matches!(
+            item.style,
+            crate::style::types::BorderStyle::None | crate::style::types::BorderStyle::Hidden
+          )
+          || item.color.a == 0.0
+      }
+      DisplayItem::Border(border) => {
+        let invisible = |side: &crate::paint::display_list::BorderSide| {
+          side.width <= 0.0
+            || matches!(
+              side.style,
+              crate::style::types::BorderStyle::None | crate::style::types::BorderStyle::Hidden
+            )
+            || side.color.a == 0.0
+        };
+        invisible(&border.top)
+          && invisible(&border.right)
+          && invisible(&border.bottom)
+          && invisible(&border.left)
+      }
       DisplayItem::TextDecoration(item) => item.decorations.iter().all(|d| {
         d.color.a == 0.0
           || (d.underline.is_none() && d.overline.is_none() && d.line_through.is_none())
@@ -528,13 +604,43 @@ impl DisplayListOptimizer {
 
   /// Remove no-op operations (identity transforms, 1.0 opacity, normal blend)
   fn remove_noop_items(&self, items: Vec<DisplayItem>) -> Vec<DisplayItem> {
+    let mut counter = 0usize;
+    self
+      .remove_noop_items_checked(items, &mut counter)
+      .unwrap_or_default()
+  }
+
+  fn remove_noop_items_checked(
+    &self,
+    items: Vec<DisplayItem>,
+    counter: &mut usize,
+  ) -> std::result::Result<Vec<DisplayItem>, RenderError> {
     let mut result = Vec::with_capacity(items.len());
     let mut opacity_stack: Vec<bool> = Vec::new();
     let mut transform_stack: Vec<bool> = Vec::new();
     let mut blend_stack: Vec<bool> = Vec::new();
     let mut stacking_context_stack: Vec<bool> = Vec::new();
+    let mut culled_transform_depth = 0usize;
+    let mut culled_clip_depth = 0usize;
 
     for item in items {
+      check_active_periodic(counter, DEADLINE_STRIDE, RenderStage::Paint)?;
+      if culled_transform_depth > 0 {
+        match &item {
+          DisplayItem::PushTransform(_) => culled_transform_depth += 1,
+          DisplayItem::PopTransform => culled_transform_depth -= 1,
+          _ => {}
+        }
+        continue;
+      }
+      if culled_clip_depth > 0 {
+        match &item {
+          DisplayItem::PushClip(_) => culled_clip_depth += 1,
+          DisplayItem::PopClip => culled_clip_depth -= 1,
+          _ => {}
+        }
+        continue;
+      }
       match &item {
         DisplayItem::PushOpacity(op) => {
           let removed = op.opacity >= 1.0;
@@ -552,6 +658,11 @@ impl DisplayListOptimizer {
         }
         DisplayItem::PushTransform(t) => {
           let removed = t.transform.is_identity();
+          let collapses = Self::transform_collapses(&t.transform);
+          if collapses {
+            culled_transform_depth = 1;
+            continue;
+          }
           transform_stack.push(removed);
           if removed {
             continue;
@@ -592,12 +703,19 @@ impl DisplayListOptimizer {
             }
           }
         }
+        DisplayItem::PushClip(clip) => {
+          if Self::clip_is_empty(clip) {
+            culled_clip_depth = 1;
+            continue;
+          }
+        }
+        DisplayItem::PopClip => {}
         _ => {}
       }
       result.push(item);
     }
 
-    result
+    Ok(result)
   }
 
   fn is_noop_stacking_context(item: &StackingContextItem) -> bool {
@@ -614,6 +732,18 @@ impl DisplayListOptimizer {
   /// Cull items outside the viewport
   #[allow(clippy::cognitive_complexity)]
   fn cull_items(&self, items: Vec<DisplayItem>, viewport: Rect) -> Vec<DisplayItem> {
+    let mut counter = 0usize;
+    self
+      .cull_items_checked(items, viewport, &mut counter)
+      .unwrap_or_default()
+  }
+
+  fn cull_items_checked(
+    &self,
+    items: Vec<DisplayItem>,
+    viewport: Rect,
+    counter: &mut usize,
+  ) -> std::result::Result<Vec<DisplayItem>, RenderError> {
     let mut result = Vec::with_capacity(items.len());
     let mut transform_state = TransformState::default();
     let mut transform_stack: Vec<TransformState> = Vec::new();
@@ -651,6 +781,7 @@ impl DisplayListOptimizer {
       };
 
     for item in items {
+      check_active_periodic(counter, DEADLINE_STRIDE, RenderStage::Paint)?;
       let mut include_item = false;
       let mut transformed_bounds: Option<Rect> = None;
       let culled_by_clip = clip_stack.last().map(|c| c.can_cull).unwrap_or(false);
@@ -875,11 +1006,15 @@ impl DisplayListOptimizer {
     }
 
     // Balance any orphaned pops
-    self.balance_stack_operations(result)
+    self.balance_stack_operations(result, counter)
   }
 
   /// Ensure push/pop operations are balanced
-  fn balance_stack_operations(&self, items: Vec<DisplayItem>) -> Vec<DisplayItem> {
+  fn balance_stack_operations(
+    &self,
+    items: Vec<DisplayItem>,
+    counter: &mut usize,
+  ) -> std::result::Result<Vec<DisplayItem>, RenderError> {
     let mut clip_depth = 0i32;
     let mut opacity_depth = 0i32;
     let mut transform_depth = 0i32;
@@ -888,6 +1023,7 @@ impl DisplayListOptimizer {
 
     // Count depths
     for item in &items {
+      check_active_periodic(counter, DEADLINE_STRIDE, RenderStage::Paint)?;
       match item {
         DisplayItem::PushClip(_) => clip_depth += 1,
         DisplayItem::PopClip => clip_depth -= 1,
@@ -927,18 +1063,24 @@ impl DisplayListOptimizer {
       stacking_depth -= 1;
     }
 
-    result
+    Ok(result)
   }
 
   /// Generate the missing pop operations needed to balance the provided item indices.
-  pub fn balance_stack_tail(&self, items: &[DisplayItem], indices: &[usize]) -> Vec<DisplayItem> {
+  pub fn balance_stack_tail(
+    &self,
+    items: &[DisplayItem],
+    indices: &[usize],
+  ) -> std::result::Result<Vec<DisplayItem>, RenderError> {
     let mut clip_depth = 0i32;
     let mut opacity_depth = 0i32;
     let mut transform_depth = 0i32;
     let mut blend_depth = 0i32;
     let mut stacking_depth = 0i32;
 
+    let mut counter = 0usize;
     for &idx in indices {
+      check_active_periodic(&mut counter, DEADLINE_STRIDE, RenderStage::Paint)?;
       if let Some(item) = items.get(idx) {
         match item {
           DisplayItem::PushClip(_) => clip_depth += 1,
@@ -978,19 +1120,31 @@ impl DisplayListOptimizer {
       stacking_depth -= 1;
     }
 
-    tail
+    Ok(tail)
   }
 
   /// Merge adjacent fills with the same color
   fn merge_adjacent_fills(&self, items: Vec<DisplayItem>) -> Vec<DisplayItem> {
+    let mut counter = 0usize;
+    self
+      .merge_adjacent_fills_checked(items, &mut counter)
+      .unwrap_or_default()
+  }
+
+  fn merge_adjacent_fills_checked(
+    &self,
+    items: Vec<DisplayItem>,
+    counter: &mut usize,
+  ) -> std::result::Result<Vec<DisplayItem>, RenderError> {
     if items.len() < 2 {
-      return items;
+      return Ok(items);
     }
 
     let mut result = Vec::with_capacity(items.len());
     let mut pending_fill: Option<FillRectItem> = None;
 
     for item in items {
+      check_active_periodic(counter, DEADLINE_STRIDE, RenderStage::Paint)?;
       match item {
         DisplayItem::FillRect(current) => {
           if let Some(prev) = pending_fill.take() {
@@ -1017,11 +1171,73 @@ impl DisplayListOptimizer {
       result.push(DisplayItem::FillRect(prev));
     }
 
-    result
+    Ok(result)
   }
 
   fn item_bounds(&self, item: &DisplayItem) -> Option<Rect> {
     item.bounds()
+  }
+
+  fn clip_bounds(clip: &crate::paint::display_list::ClipItem) -> Rect {
+    match &clip.shape {
+      crate::paint::display_list::ClipShape::Rect { rect, .. } => *rect,
+      crate::paint::display_list::ClipShape::Path { path } => path.bounds(),
+    }
+  }
+
+  fn clip_is_empty(clip: &crate::paint::display_list::ClipItem) -> bool {
+    let bounds = Self::clip_bounds(clip);
+    bounds.width() <= 0.0
+      || bounds.height() <= 0.0
+      || !bounds.x().is_finite()
+      || !bounds.y().is_finite()
+  }
+
+  fn map_rect_with_transform(rect: Rect, transform: &Transform3D) -> Option<Rect> {
+    if transform.is_identity() {
+      return Some(rect);
+    }
+    let corners = [
+      (rect.min_x(), rect.min_y()),
+      (rect.max_x(), rect.min_y()),
+      (rect.max_x(), rect.max_y()),
+      (rect.min_x(), rect.max_y()),
+    ];
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+
+    for (x, y) in corners {
+      let (tx, ty, _tz, tw) = transform.transform_point(x, y, 0.0);
+      if !tx.is_finite()
+        || !ty.is_finite()
+        || !tw.is_finite()
+        || tw.abs() < Transform3D::MIN_PROJECTIVE_W
+      {
+        return None;
+      }
+      let px = tx / tw;
+      let py = ty / tw;
+      min_x = min_x.min(px);
+      min_y = min_y.min(py);
+      max_x = max_x.max(px);
+      max_y = max_y.max(py);
+    }
+
+    let width = max_x - min_x;
+    let height = max_y - min_y;
+    if width <= 0.0 || height <= 0.0 {
+      return None;
+    }
+    Some(Rect::from_xywh(min_x, min_y, width, height))
+  }
+
+  fn transform_collapses(transform: &Transform3D) -> bool {
+    matches!(
+      Self::map_rect_with_transform(Rect::from_xywh(0.0, 0.0, 1.0, 1.0), transform),
+      None
+    )
   }
 
   fn transform_mapping(transform: &Transform3D) -> TransformMapping {

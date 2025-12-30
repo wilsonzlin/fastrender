@@ -31,6 +31,7 @@ use crate::css::types::ColorStop;
 use crate::css::types::RadialGradientShape;
 use crate::css::types::RadialGradientSize;
 use crate::debug::runtime;
+use crate::error::{Error, RenderError, RenderStage, Result};
 use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::geometry::Size;
@@ -96,9 +97,10 @@ use crate::paint::stacking::Layer6Item;
 use crate::paint::stacking::StackingContext;
 use crate::paint::svg_filter::SvgFilterResolver;
 use crate::paint::text_shadow::resolve_text_shadows;
+use crate::paint::filter_outset::filter_outset_with_bounds;
 use crate::paint::transform3d::backface_is_hidden;
 use crate::paint::transform_resolver::ResolvedTransforms;
-use crate::render_control::{active_deadline, with_deadline};
+use crate::render_control::{active_deadline, check_active, check_active_periodic, with_deadline};
 use crate::scroll::ScrollState;
 use crate::style::block_axis_is_horizontal;
 use crate::style::block_axis_positive;
@@ -161,6 +163,7 @@ use tiny_skia::Pixmap;
 
 const DECODED_IMAGE_CACHE_MAX_ENTRIES: usize = 256;
 const DECODED_IMAGE_CACHE_MAX_BYTES: usize = 128 * 1024 * 1024;
+const DEADLINE_STRIDE: usize = 256;
 
 /// Builder that converts a fragment tree to a display list
 ///
@@ -185,6 +188,7 @@ pub struct DisplayListBuilder {
   estimated_fragments: Option<usize>,
   scroll_state: ScrollState,
   max_iframe_depth: usize,
+  error: Option<RenderError>,
 }
 
 #[derive(Clone, Copy)]
@@ -272,6 +276,43 @@ struct ParallelStatsSnapshot {
   serial_ns: u64,
 }
 
+#[derive(Clone, Copy)]
+struct Visibility {
+  rect: Option<Rect>,
+  /// When true, content outside `rect` is guaranteed to be clipped away (e.g.,
+  /// due to an explicit clip or mask), allowing more aggressive culling of
+  /// effects that would otherwise overflow their base bounds.
+  hard_clip: bool,
+}
+
+impl Visibility {
+  fn none() -> Self {
+    Self {
+      rect: None,
+      hard_clip: false,
+    }
+  }
+
+  fn with_viewport(rect: Option<Rect>) -> Self {
+    Self {
+      rect,
+      hard_clip: false,
+    }
+  }
+
+  fn intersect(self, other: Option<Rect>, hard: bool) -> Self {
+    let rect = match (self.rect, other) {
+      (Some(a), Some(b)) => a.intersection(b),
+      (a @ Some(_), None) => a,
+      (None, b) => b,
+    };
+    Self {
+      rect,
+      hard_clip: self.hard_clip || (hard && rect.is_some()),
+    }
+  }
+}
+
 struct ParallelPlan {
   chunk_size: usize,
 }
@@ -327,6 +368,263 @@ fn parallel_config_from_env() -> (bool, usize, bool) {
 }
 
 impl DisplayListBuilder {
+  fn viewport_rect(&self) -> Option<Rect> {
+    self
+      .viewport
+      .map(|(w, h)| Rect::from_xywh(0.0, 0.0, w, h))
+      .filter(|r| r.width() > 0.0 && r.height() > 0.0)
+  }
+
+  fn root_visibility(&self) -> Visibility {
+    Visibility::with_viewport(self.viewport_rect())
+  }
+
+  fn map_rect_with_transform(rect: Rect, transform: &Transform3D) -> Option<Rect> {
+    if transform.is_identity() {
+      return Some(rect);
+    }
+    let corners = [
+      (rect.min_x(), rect.min_y()),
+      (rect.max_x(), rect.min_y()),
+      (rect.max_x(), rect.max_y()),
+      (rect.min_x(), rect.max_y()),
+    ];
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+
+    for (x, y) in corners {
+      let (tx, ty, _tz, tw) = transform.transform_point(x, y, 0.0);
+      if !tx.is_finite()
+        || !ty.is_finite()
+        || !tw.is_finite()
+        || tw.abs() < Transform3D::MIN_PROJECTIVE_W
+      {
+        return None;
+      }
+      let px = tx / tw;
+      let py = ty / tw;
+      min_x = min_x.min(px);
+      min_y = min_y.min(py);
+      max_x = max_x.max(px);
+      max_y = max_y.max(py);
+    }
+
+    let width = max_x - min_x;
+    let height = max_y - min_y;
+    if width <= 0.0 || height <= 0.0 {
+      return None;
+    }
+    Some(Rect::from_xywh(min_x, min_y, width, height))
+  }
+
+  fn visible_in_local_space(
+    visible: Option<Rect>,
+    transform: Option<&Transform3D>,
+  ) -> Option<Rect> {
+    let Some(view) = visible else {
+      return None;
+    };
+    let Some(transform) = transform else {
+      return Some(view);
+    };
+    let Some(inverse) = transform.to_2d().and_then(|t| t.inverse()) else {
+      return Some(view);
+    };
+    Some(inverse.transform_rect(view))
+  }
+
+  fn clip_bounds(clip: &ClipItem) -> Option<Rect> {
+    match &clip.shape {
+      ClipShape::Rect { rect, .. } => Some(*rect),
+      ClipShape::Path { path } => Some(path.bounds()),
+    }
+  }
+
+  fn map_clip_bounds(clip: &ClipItem, transform: Option<&Transform3D>) -> Option<Rect> {
+    let bounds = Self::clip_bounds(clip)?;
+    match transform {
+      Some(t) => Self::map_rect_with_transform(bounds, t),
+      None => Some(bounds),
+    }
+  }
+
+  fn outline_bounds(style: &ComputedStyle, rect: Rect) -> Option<Rect> {
+    let width = style.outline_width.to_px();
+    let outline_style = style.outline_style.to_border_style();
+    if width <= 0.0
+      || matches!(
+        outline_style,
+        crate::style::types::BorderStyle::None | crate::style::types::BorderStyle::Hidden
+      )
+    {
+      return None;
+    }
+    let offset = style.outline_offset.to_px();
+    let expand = width.abs() + offset.abs();
+    Some(rect.inflate(expand))
+  }
+
+  fn box_shadow_bounds(&self, rect: Rect, style: &ComputedStyle, inset: bool) -> Option<Rect> {
+    if style.box_shadow.is_empty() {
+      return None;
+    }
+    let rects = Self::background_rects(rect, style, self.viewport);
+    let base_rect = if inset { rects.padding } else { rects.border };
+    let mut min_x = base_rect.min_x();
+    let mut min_y = base_rect.min_y();
+    let mut max_x = base_rect.max_x();
+    let mut max_y = base_rect.max_y();
+    let mut changed = false;
+
+    for shadow in &style.box_shadow {
+      if shadow.inset != inset {
+        continue;
+      }
+      let offset_x = Self::resolve_length_for_paint(
+        &shadow.offset_x,
+        style.font_size,
+        style.root_font_size,
+        rect.width(),
+        self.viewport,
+      );
+      let offset_y = Self::resolve_length_for_paint(
+        &shadow.offset_y,
+        style.font_size,
+        style.root_font_size,
+        rect.width(),
+        self.viewport,
+      );
+      let blur = Self::resolve_length_for_paint(
+        &shadow.blur_radius,
+        style.font_size,
+        style.root_font_size,
+        rect.width(),
+        self.viewport,
+      )
+      .max(0.0);
+      let spread = Self::resolve_length_for_paint(
+        &shadow.spread_radius,
+        style.font_size,
+        style.root_font_size,
+        rect.width(),
+        self.viewport,
+      )
+      .max(-1e6);
+      let blur_pad = blur * 3.0;
+      let left = blur_pad + spread - offset_x.min(0.0);
+      let right = blur_pad + spread + offset_x.max(0.0);
+      let top = blur_pad + spread - offset_y.min(0.0);
+      let bottom = blur_pad + spread + offset_y.max(0.0);
+
+      min_x = min_x.min(base_rect.min_x() - left);
+      min_y = min_y.min(base_rect.min_y() - top);
+      max_x = max_x.max(base_rect.max_x() + right);
+      max_y = max_y.max(base_rect.max_y() + bottom);
+      changed = true;
+    }
+
+    if changed {
+      Some(Rect::from_xywh(min_x, min_y, max_x - min_x, max_y - min_y))
+    } else {
+      None
+    }
+  }
+
+  fn fragment_paint_bounds(
+    &self,
+    fragment: &FragmentNode,
+    absolute_rect: Rect,
+    style: Option<&ComputedStyle>,
+  ) -> Rect {
+    let mut bounds = absolute_rect;
+    if let Some(style) = style {
+      if let Some(outline) = Self::outline_bounds(style, absolute_rect) {
+        bounds = bounds.union(outline);
+      }
+      if let Some(shadows) = self.box_shadow_bounds(absolute_rect, style, false) {
+        bounds = bounds.union(shadows);
+      }
+      if let Some(inset) = self.box_shadow_bounds(absolute_rect, style, true) {
+        bounds = bounds.union(inset);
+      }
+      if !style.text_shadow.is_empty() {
+        let mut min_x = absolute_rect.min_x();
+        let mut min_y = absolute_rect.min_y();
+        let mut max_x = absolute_rect.max_x();
+        let mut max_y = absolute_rect.max_y();
+        for shadow in &style.text_shadow {
+          let offset_x = Self::resolve_length_for_paint(
+            &shadow.offset_x,
+            style.font_size,
+            style.root_font_size,
+            absolute_rect.width(),
+            self.viewport,
+          );
+          let offset_y = Self::resolve_length_for_paint(
+            &shadow.offset_y,
+            style.font_size,
+            style.root_font_size,
+            absolute_rect.width(),
+            self.viewport,
+          );
+          let blur = Self::resolve_length_for_paint(
+            &shadow.blur_radius,
+            style.font_size,
+            style.root_font_size,
+            absolute_rect.width(),
+            self.viewport,
+          )
+          .max(0.0)
+            * 3.0;
+          min_x = min_x.min(absolute_rect.min_x() + offset_x - blur);
+          min_y = min_y.min(absolute_rect.min_y() + offset_y - blur);
+          max_x = max_x.max(absolute_rect.max_x() + offset_x + blur);
+          max_y = max_y.max(absolute_rect.max_y() + offset_y + blur);
+        }
+        bounds = bounds.union(Rect::from_xywh(min_x, min_y, max_x - min_x, max_y - min_y));
+      }
+      if fragment.table_borders.is_some() {
+        bounds = bounds.union(fragment.bounds.translate(absolute_rect.origin));
+      }
+    }
+    bounds
+  }
+
+  fn deadline_reached(&mut self) -> bool {
+    if self.error.is_some() {
+      return true;
+    }
+    if let Err(err) = check_active(RenderStage::Paint) {
+      self.error = Some(err);
+      return true;
+    }
+    false
+  }
+
+  fn deadline_reached_periodic(&mut self, counter: &mut usize, stride: usize) -> bool {
+    if stride == 0 {
+      return self.deadline_reached();
+    }
+    if let Err(err) = check_active_periodic(counter, stride, RenderStage::Paint) {
+      self.error = Some(err);
+      return true;
+    }
+    false
+  }
+
+  fn finish(mut self) -> Result<DisplayList> {
+    if paint_diagnostics_enabled() {
+      self.record_parallel_diagnostics();
+    }
+    if let Some(err) = self.error.take() {
+      Err(Error::Render(err))
+    } else {
+      Ok(self.list)
+    }
+  }
+
   fn resolve_scaled_metrics(
     style: &ComputedStyle,
     font_ctx: &FontContext,
@@ -388,6 +686,7 @@ impl DisplayListBuilder {
       estimated_fragments: None,
       scroll_state: ScrollState::default(),
       max_iframe_depth: DEFAULT_MAX_IFRAME_DEPTH,
+      error: None,
     }
   }
 
@@ -419,6 +718,7 @@ impl DisplayListBuilder {
       estimated_fragments: None,
       scroll_state: ScrollState::default(),
       max_iframe_depth: DEFAULT_MAX_IFRAME_DEPTH,
+      error: None,
     }
   }
 
@@ -514,29 +814,52 @@ impl DisplayListBuilder {
 
   /// Builds a display list from a fragment tree root
   pub fn build(mut self, root: &FragmentNode) -> DisplayList {
+    self
+      .build_checked(root)
+      .unwrap_or_else(|_| DisplayList::new())
+  }
+
+  /// Builds a display list from a fragment tree root while surfacing timeouts.
+  pub fn build_checked(mut self, root: &FragmentNode) -> Result<DisplayList> {
     if self.viewport.is_none() {
       self.viewport = Some((root.bounds.width(), root.bounds.height()));
     }
     self.estimate_from_roots(std::iter::once(root));
-    self.build_fragment(root, Point::ZERO);
+    self.build_fragment(root, Point::ZERO, Visibility::with_viewport(self.viewport_rect()));
     self.finish()
   }
 
   /// Builds a display list from a FragmentTree
   pub fn build_tree(mut self, tree: &FragmentTree) -> DisplayList {
+    self
+      .build_tree_checked(tree)
+      .unwrap_or_else(|_| DisplayList::new())
+  }
+
+  /// Builds a display list from a FragmentTree and propagates timeouts.
+  pub fn build_tree_checked(mut self, tree: &FragmentTree) -> Result<DisplayList> {
     if self.viewport.is_none() {
       let viewport = tree.viewport_size();
       self.viewport = Some((viewport.width, viewport.height));
     }
     self.estimate_from_tree(tree);
     for root in std::iter::once(&tree.root).chain(tree.additional_fragments.iter()) {
-      self.build_fragment(root, Point::ZERO);
+      self.build_fragment(root, Point::ZERO, Visibility::with_viewport(self.viewport_rect()));
     }
     self.finish()
   }
 
   /// Builds a stacking-context-aware display list from a `FragmentTree`.
   pub fn build_tree_with_stacking(mut self, tree: &FragmentTree) -> DisplayList {
+    self
+      .build_tree_with_stacking_checked(tree)
+      .unwrap_or_else(|_| DisplayList::new())
+  }
+
+  pub fn build_tree_with_stacking_checked(
+    mut self,
+    tree: &FragmentTree,
+  ) -> Result<DisplayList> {
     if self.viewport.is_none() {
       let viewport = tree.viewport_size();
       self.viewport = Some((viewport.width, viewport.height));
@@ -554,8 +877,9 @@ impl DisplayListBuilder {
     let mut svg_filters = SvgFilterResolver::new(defs, svg_roots, image_cache.as_ref());
 
     let contexts = crate::paint::stacking::build_stacking_tree_from_tree(tree);
+    let visibility = self.root_visibility();
     for context in &contexts {
-      self.build_stacking_context(context, Point::ZERO, true, &mut svg_filters);
+      self.build_stacking_context(context, Point::ZERO, true, &mut svg_filters, visibility);
     }
 
     self.finish()
@@ -563,6 +887,15 @@ impl DisplayListBuilder {
 
   /// Builds a display list from a stacking context tree (respecting z-order).
   pub fn build_from_stacking(mut self, stacking: &StackingContext) -> DisplayList {
+    self
+      .build_from_stacking_checked(stacking)
+      .unwrap_or_else(|_| DisplayList::new())
+  }
+
+  pub fn build_from_stacking_checked(
+    mut self,
+    stacking: &StackingContext,
+  ) -> Result<DisplayList> {
     if self.viewport.is_none() {
       self.viewport = Some((stacking.bounds.width(), stacking.bounds.height()));
     }
@@ -575,12 +908,27 @@ impl DisplayListBuilder {
       svg_roots,
       image_cache.as_ref(),
     );
-    self.build_stacking_context(stacking, Point::ZERO, true, &mut svg_filters);
+    self.build_stacking_context(
+      stacking,
+      Point::ZERO,
+      true,
+      &mut svg_filters,
+      self.root_visibility(),
+    );
     self.finish()
   }
 
   /// Builds a display list by first constructing a stacking context tree from the fragment tree.
   pub fn build_with_stacking_tree(mut self, root: &FragmentNode) -> DisplayList {
+    self
+      .build_with_stacking_tree_checked(root)
+      .unwrap_or_else(|_| DisplayList::new())
+  }
+
+  pub fn build_with_stacking_tree_checked(
+    mut self,
+    root: &FragmentNode,
+  ) -> Result<DisplayList> {
     if self.viewport.is_none() {
       self.viewport = Some((root.bounds.width(), root.bounds.height()));
     }
@@ -592,7 +940,13 @@ impl DisplayListBuilder {
       vec![root],
       image_cache.as_ref(),
     );
-    self.build_stacking_context(&stacking, Point::ZERO, true, &mut svg_filters);
+    self.build_stacking_context(
+      &stacking,
+      Point::ZERO,
+      true,
+      &mut svg_filters,
+      self.root_visibility(),
+    );
     self.finish()
   }
 
@@ -603,6 +957,18 @@ impl DisplayListBuilder {
     root: &FragmentNode,
     offset: Point,
   ) -> DisplayList {
+    self
+      .build_with_stacking_tree_offset_checked(root, offset)
+      .unwrap_or_else(|_| DisplayList::new())
+  }
+
+  /// Builds a display list by first constructing a stacking context tree from the fragment tree
+  /// and applying an additional offset to all fragments, surfacing timeouts.
+  pub fn build_with_stacking_tree_offset_checked(
+    mut self,
+    root: &FragmentNode,
+    offset: Point,
+  ) -> Result<DisplayList> {
     if self.viewport.is_none() {
       self.viewport = Some((root.bounds.width(), root.bounds.height()));
     }
@@ -616,12 +982,27 @@ impl DisplayListBuilder {
       svg_roots,
       image_cache.as_ref(),
     );
-    self.build_stacking_context(&stacking, offset, true, &mut svg_filters);
+    self.build_stacking_context(
+      &stacking,
+      offset,
+      true,
+      &mut svg_filters,
+      self.root_visibility(),
+    );
     self.finish()
   }
 
   /// Builds a display list from multiple stacking context roots.
   pub fn build_from_stacking_contexts(mut self, stackings: &[StackingContext]) -> DisplayList {
+    self
+      .build_from_stacking_contexts_checked(stackings)
+      .unwrap_or_else(|_| DisplayList::new())
+  }
+
+  pub fn build_from_stacking_contexts_checked(
+    mut self,
+    stackings: &[StackingContext],
+  ) -> Result<DisplayList> {
     if self.viewport.is_none() {
       if let Some(first) = stackings.first() {
         self.viewport = Some((first.bounds.width(), first.bounds.height()));
@@ -638,8 +1019,9 @@ impl DisplayListBuilder {
       svg_roots,
       image_cache.as_ref(),
     );
+    let visibility = self.root_visibility();
     for stacking in stackings {
-      self.build_stacking_context(stacking, Point::ZERO, true, &mut svg_filters);
+      self.build_stacking_context(stacking, Point::ZERO, true, &mut svg_filters, visibility);
     }
     self.finish()
   }
@@ -668,8 +1050,18 @@ impl DisplayListBuilder {
     root: &FragmentNode,
     clips: &HashSet<Option<usize>>,
   ) -> DisplayList {
+    self
+      .build_with_clips_checked(root, clips)
+      .unwrap_or_else(|_| DisplayList::new())
+  }
+
+  pub fn build_with_clips_checked(
+    mut self,
+    root: &FragmentNode,
+    clips: &HashSet<Option<usize>>,
+  ) -> Result<DisplayList> {
     self.estimate_from_roots(std::iter::once(root));
-    self.build_fragment_with_clips(root, Point::ZERO, clips);
+    self.build_fragment_with_clips(root, Point::ZERO, clips, self.root_visibility());
     self.finish()
   }
 
@@ -695,7 +1087,11 @@ impl DisplayListBuilder {
     }
     let mut stack: Vec<&FragmentNode> = roots.into_iter().collect();
     let mut count = 0;
+    let mut counter = 0usize;
     while let Some(fragment) = stack.pop() {
+      if self.deadline_reached_periodic(&mut counter, DEADLINE_STRIDE) {
+        break;
+      }
       count += 1;
       if let FragmentContent::RunningAnchor { snapshot, .. } = &fragment.content {
         stack.push(snapshot);
@@ -715,13 +1111,18 @@ impl DisplayListBuilder {
   }
 
   /// Recursively builds display items for a fragment
-  fn build_fragment(&mut self, fragment: &FragmentNode, offset: Point) {
-    self.build_fragment_internal(fragment, offset, true, false);
+  fn build_fragment(&mut self, fragment: &FragmentNode, offset: Point, visibility: Visibility) {
+    self.build_fragment_internal(fragment, offset, true, false, visibility);
   }
 
   /// Builds display items for a fragment without descending into children.
-  fn build_fragment_shallow(&mut self, fragment: &FragmentNode, offset: Point) {
-    self.build_fragment_internal(fragment, offset, false, false);
+  fn build_fragment_shallow(
+    &mut self,
+    fragment: &FragmentNode,
+    offset: Point,
+    visibility: Visibility,
+  ) {
+    self.build_fragment_internal(fragment, offset, false, false, visibility);
   }
 
   fn build_fragment_internal(
@@ -730,7 +1131,12 @@ impl DisplayListBuilder {
     offset: Point,
     recurse_children: bool,
     suppress_opacity: bool,
+    visibility: Visibility,
   ) {
+    if self.deadline_reached() {
+      return;
+    }
+
     let style_opt = fragment.style.as_deref();
     if let Some(style) = style_opt {
       if !matches!(
@@ -750,9 +1156,6 @@ impl DisplayListBuilder {
       return;
     }
     let push_opacity = !suppress_opacity && opacity < 1.0 - f32::EPSILON;
-    if push_opacity {
-      self.push_opacity(opacity);
-    }
 
     let absolute_rect = Rect::new(
       Point::new(
@@ -761,6 +1164,7 @@ impl DisplayListBuilder {
       ),
       fragment.bounds.size,
     );
+    let mut paint_bounds = self.fragment_paint_bounds(fragment, absolute_rect, style_opt);
 
     if let Some(style) = style_opt {
       if matches!(style.backface_visibility, BackfaceVisibility::Hidden)
@@ -778,6 +1182,22 @@ impl DisplayListBuilder {
       }
     }
 
+    if let Some(vis) = visibility.rect {
+      if !vis.intersects(paint_bounds) {
+        return;
+      }
+      if visibility.hard_clip {
+        paint_bounds = match paint_bounds.intersection(vis) {
+          Some(intersection) if intersection.width() > 0.0 && intersection.height() > 0.0 => {
+            intersection
+          }
+          _ => return,
+        };
+      } else {
+        paint_bounds = paint_bounds.intersection(vis).unwrap_or(paint_bounds);
+      }
+    }
+
     let (overflow_clip, clip_rect) = if let Some(style) = style_opt {
       (
         Self::overflow_clip_from_style(style, absolute_rect, self.viewport),
@@ -786,6 +1206,31 @@ impl DisplayListBuilder {
     } else {
       (None, None)
     };
+    let mut child_visibility = visibility;
+    if let Some(clip) = overflow_clip.as_ref() {
+      child_visibility = child_visibility.intersect(Self::clip_bounds(clip), true);
+    }
+    if let Some(clip) = clip_rect.as_ref() {
+      child_visibility = child_visibility.intersect(Self::clip_bounds(clip), true);
+    }
+    if child_visibility.rect.is_none() && visibility.rect.is_some() {
+      return;
+    }
+    if let Some(vis) = child_visibility.rect {
+      if !vis.intersects(paint_bounds) {
+        return;
+      }
+      if child_visibility.hard_clip {
+        match paint_bounds.intersection(vis) {
+          Some(intersection) if intersection.width() > 0.0 && intersection.height() > 0.0 => {}
+          _ => return,
+        };
+      }
+    }
+
+    if push_opacity {
+      self.push_opacity(opacity);
+    }
 
     if let Some(style) = style_opt {
       let (decoration_rect, decoration_clip) =
@@ -828,8 +1273,12 @@ impl DisplayListBuilder {
         absolute_rect.origin.x - element_scroll.x,
         absolute_rect.origin.y - element_scroll.y,
       );
+      let mut counter = 0usize;
       for child in fragment.children.iter() {
-        self.build_fragment_internal(child, child_offset, true, false);
+        if self.deadline_reached_periodic(&mut counter, DEADLINE_STRIDE) {
+          break;
+        }
+        self.build_fragment_internal(child, child_offset, true, false, child_visibility);
       }
     }
 
@@ -872,7 +1321,11 @@ impl DisplayListBuilder {
     fragment: &FragmentNode,
     offset: Point,
     clips: &HashSet<Option<usize>>,
+    visibility: Visibility,
   ) {
+    if self.deadline_reached() {
+      return;
+    }
     if let Some(style) = fragment.style.as_deref() {
       if !matches!(
         style.visibility,
@@ -888,9 +1341,6 @@ impl DisplayListBuilder {
 
     let opacity = fragment.style.as_deref().map(|s| s.opacity).unwrap_or(1.0);
     let push_opacity = opacity < 1.0 - f32::EPSILON;
-    if push_opacity {
-      self.push_opacity(opacity);
-    }
 
     let absolute_rect = Rect::new(
       Point::new(
@@ -899,6 +1349,14 @@ impl DisplayListBuilder {
       ),
       fragment.bounds.size,
     );
+    if let Some(vis) = visibility.rect {
+      if !vis.intersects(absolute_rect) {
+        return;
+      }
+    }
+    if push_opacity {
+      self.push_opacity(opacity);
+    }
 
     if let Some(style) = fragment.style.as_deref() {
       let (decoration_rect, decoration_clip) =
@@ -935,8 +1393,12 @@ impl DisplayListBuilder {
       absolute_rect.origin.x - element_scroll.x,
       absolute_rect.origin.y - element_scroll.y,
     );
+    let mut counter = 0usize;
     for child in fragment.children.iter() {
-      self.build_fragment_with_clips(child, child_offset, clips);
+      if self.deadline_reached_periodic(&mut counter, DEADLINE_STRIDE) {
+        break;
+      }
+      self.build_fragment_with_clips(child, child_offset, clips, visibility);
     }
 
     if let Some(table_borders) = fragment.table_borders.as_ref() {
@@ -979,7 +1441,11 @@ impl DisplayListBuilder {
     offset: Point,
     is_root: bool,
     svg_filters: &mut SvgFilterResolver,
+    visibility: Visibility,
   ) {
+    if self.deadline_reached() {
+      return;
+    }
     let mut children: Vec<&StackingContext> = context.children.iter().collect();
     children.sort_by(|a, b| {
       a.z_index
@@ -1110,6 +1576,38 @@ impl DisplayListBuilder {
       }
     }
 
+    let filter_outset = filter_outset_with_bounds(&filters, 1.0, Some(context.bounds));
+    let backdrop_outset =
+      filter_outset_with_bounds(&backdrop_filters, 1.0, Some(context.bounds));
+    let expand_left = filter_outset.left.max(backdrop_outset.left);
+    let expand_top = filter_outset.top.max(backdrop_outset.top);
+    let expand_right = filter_outset.right.max(backdrop_outset.right);
+    let expand_bottom = filter_outset.bottom.max(backdrop_outset.bottom);
+    let mut local_bounds = plane_rect;
+    if expand_left > 0.0 || expand_top > 0.0 || expand_right > 0.0 || expand_bottom > 0.0 {
+      local_bounds = Rect::from_xywh(
+        local_bounds.min_x() - expand_left,
+        local_bounds.min_y() - expand_top,
+        local_bounds.width() + expand_left + expand_right,
+        local_bounds.height() + expand_top + expand_bottom,
+      );
+    }
+    let mut world_bounds = Some(local_bounds);
+    if let Some(t) = transform.as_ref() {
+      world_bounds = Self::map_rect_with_transform(local_bounds, t);
+    }
+    let mut context_visibility = visibility;
+    if child_perspective.is_none() {
+      if let (Some(vis), Some(bounds)) = (visibility.rect, world_bounds) {
+        if !vis.intersects(bounds) {
+          return;
+        }
+      }
+    }
+    if let Some(bounds) = world_bounds {
+      context_visibility = context_visibility.intersect(Some(bounds), false);
+    }
+
     let viewport = self
       .viewport
       .unwrap_or_else(|| (context_bounds.width(), context_bounds.height()));
@@ -1153,6 +1651,42 @@ impl DisplayListBuilder {
     };
     let has_paint_containment_clip = paint_containment_clip.is_some();
 
+    let mut pushed_opacity = false;
+    let mut child_visibility = context_visibility;
+    if let Some(mut bounds) = clip_path.as_ref().map(|clip| clip.bounds()) {
+      if let Some(t) = transform.as_ref() {
+        if let Some(mapped) = Self::map_rect_with_transform(bounds, t) {
+          bounds = mapped;
+        }
+      }
+      child_visibility = child_visibility.intersect(Some(bounds), true);
+    }
+    if let Some(bounds) =
+      clip_rect.as_ref().and_then(|clip| Self::map_clip_bounds(clip, transform.as_ref()))
+    {
+      child_visibility = child_visibility.intersect(Some(bounds), true);
+    }
+    if let Some(bounds) =
+      overflow_clip
+        .as_ref()
+        .and_then(|clip| Self::map_clip_bounds(clip, transform.as_ref()))
+    {
+      child_visibility = child_visibility.intersect(Some(bounds), true);
+    }
+    if let Some(bounds) =
+      paint_containment_clip
+        .as_ref()
+        .and_then(|clip| Self::map_clip_bounds(clip, transform.as_ref()))
+    {
+      child_visibility = child_visibility.intersect(Some(bounds), true);
+    }
+    if child_visibility.rect.is_none() && visibility.rect.is_some() {
+      if pushed_opacity {
+        self.pop_opacity();
+      }
+      return;
+    }
+
     let has_effects = is_isolated
       || transform.is_some()
       || child_perspective.is_some()
@@ -1166,7 +1700,6 @@ impl DisplayListBuilder {
       || !radii.is_zero()
       || mask.is_some();
 
-    let mut pushed_opacity = false;
     if apply_opacity {
       self.push_opacity(root_opacity);
       pushed_opacity = true;
@@ -1176,27 +1709,42 @@ impl DisplayListBuilder {
       if let Some((rect, style)) = root_background.as_ref() {
         self.emit_background_from_style(*rect, style);
       }
+      let mut deadline_counter = 0usize;
       for child in neg {
-        self.build_stacking_context(child, descendant_offset, false, svg_filters);
+        if self.deadline_reached_periodic(&mut deadline_counter, DEADLINE_STRIDE) {
+          break;
+        }
+        self.build_stacking_context(child, descendant_offset, false, svg_filters, child_visibility);
       }
 
-      self.emit_fragment_list_shallow(&context.fragments, root_fragment_offset, apply_opacity);
-      self.emit_fragment_list(&context.layer3_blocks, descendant_offset);
-      self.emit_fragment_list(&context.layer4_floats, descendant_offset);
-      self.emit_fragment_list(&context.layer5_inlines, descendant_offset);
+      self.emit_fragment_list_shallow(
+        &context.fragments,
+        root_fragment_offset,
+        apply_opacity,
+        child_visibility,
+      );
+      self.emit_fragment_list(&context.layer3_blocks, descendant_offset, child_visibility);
+      self.emit_fragment_list(&context.layer4_floats, descendant_offset, child_visibility);
+      self.emit_fragment_list(&context.layer5_inlines, descendant_offset, child_visibility);
       for item in &layer6_items {
+        if self.deadline_reached_periodic(&mut deadline_counter, DEADLINE_STRIDE) {
+          break;
+        }
         match item {
           Layer6Item::Positioned(fragment) => {
-            self.build_fragment(&fragment.fragment, descendant_offset)
+            self.build_fragment(&fragment.fragment, descendant_offset, child_visibility)
           }
           Layer6Item::ZeroContext(child) => {
-            self.build_stacking_context(child, descendant_offset, false, svg_filters)
+            self.build_stacking_context(child, descendant_offset, false, svg_filters, child_visibility)
           }
         }
       }
 
       for child in pos {
-        self.build_stacking_context(child, descendant_offset, false, svg_filters);
+        if self.deadline_reached_periodic(&mut deadline_counter, DEADLINE_STRIDE) {
+          break;
+        }
+        self.build_stacking_context(child, descendant_offset, false, svg_filters, child_visibility);
       }
       if pushed_opacity {
         self.pop_opacity();
@@ -1244,7 +1792,12 @@ impl DisplayListBuilder {
     }
     // Paint the stacking context root (backgrounds, borders, shadows) before applying overflow
     // clipping so outer effects remain visible.
-    self.emit_fragment_list_shallow(&context.fragments, root_fragment_offset, apply_opacity);
+    self.emit_fragment_list_shallow(
+      &context.fragments,
+      root_fragment_offset,
+      apply_opacity,
+      child_visibility,
+    );
 
     let mut overflow_clip_pushed = false;
     if let Some(clip) = overflow_clip {
@@ -1252,25 +1805,35 @@ impl DisplayListBuilder {
       overflow_clip_pushed = true;
     }
 
+    let mut deadline_counter = 0usize;
     for child in neg {
-      self.build_stacking_context(child, descendant_offset, false, svg_filters);
+      if self.deadline_reached_periodic(&mut deadline_counter, DEADLINE_STRIDE) {
+        break;
+      }
+      self.build_stacking_context(child, descendant_offset, false, svg_filters, child_visibility);
     }
-    self.emit_fragment_list(&context.layer3_blocks, descendant_offset);
-    self.emit_fragment_list(&context.layer4_floats, descendant_offset);
-    self.emit_fragment_list(&context.layer5_inlines, descendant_offset);
+    self.emit_fragment_list(&context.layer3_blocks, descendant_offset, child_visibility);
+    self.emit_fragment_list(&context.layer4_floats, descendant_offset, child_visibility);
+    self.emit_fragment_list(&context.layer5_inlines, descendant_offset, child_visibility);
     for item in &layer6_items {
+      if self.deadline_reached_periodic(&mut deadline_counter, DEADLINE_STRIDE) {
+        break;
+      }
       match item {
         Layer6Item::Positioned(fragment) => {
-          self.build_fragment(&fragment.fragment, descendant_offset)
+          self.build_fragment(&fragment.fragment, descendant_offset, child_visibility)
         }
         Layer6Item::ZeroContext(child) => {
-          self.build_stacking_context(child, descendant_offset, false, svg_filters)
+          self.build_stacking_context(child, descendant_offset, false, svg_filters, child_visibility)
         }
       }
     }
 
     for child in pos {
-      self.build_stacking_context(child, descendant_offset, false, svg_filters);
+      if self.deadline_reached_periodic(&mut deadline_counter, DEADLINE_STRIDE) {
+        break;
+      }
+      self.build_stacking_context(child, descendant_offset, false, svg_filters, child_visibility);
     }
 
     if overflow_clip_pushed {
@@ -2482,7 +3045,7 @@ impl DisplayListBuilder {
     crate::paint::transform_resolver::resolve_transform3d(style, bounds, viewport)
   }
 
-  fn emit_fragment_list(&mut self, fragments: &[FragmentNode], offset: Point) {
+  fn emit_fragment_list(&mut self, fragments: &[FragmentNode], offset: Point, visibility: Visibility) {
     if let Some(plan) = self.plan_parallel(fragments.len()) {
       let start = self.parallel_stats.as_ref().map(|_| Instant::now());
       let mut partials: Vec<(usize, DisplayList, ThreadId)> = fragments
@@ -2491,8 +3054,12 @@ impl DisplayListBuilder {
         .map(|(chunk_idx, chunk)| {
           let chunk_offset = chunk_idx * plan.chunk_size;
           let mut builder = self.fork();
+          let mut counter = 0usize;
           for fragment in chunk {
-            builder.build_fragment(fragment, offset);
+            if builder.deadline_reached_periodic(&mut counter, DEADLINE_STRIDE) {
+              break;
+            }
+            builder.build_fragment(fragment, offset, visibility);
           }
           (chunk_offset, builder.list, std::thread::current().id())
         })
@@ -2512,8 +3079,12 @@ impl DisplayListBuilder {
     }
 
     let serial_start = self.parallel_stats.as_ref().map(|_| Instant::now());
+    let mut counter = 0usize;
     for fragment in fragments {
-      self.build_fragment(fragment, offset);
+      if self.deadline_reached_periodic(&mut counter, DEADLINE_STRIDE) {
+        break;
+      }
+      self.build_fragment(fragment, offset, visibility);
     }
     if let (Some(stats), Some(start)) = (self.parallel_stats.as_ref(), serial_start) {
       stats.record_serial(start.elapsed());
@@ -2525,6 +3096,7 @@ impl DisplayListBuilder {
     fragments: &[FragmentNode],
     offset: Point,
     suppress_opacity: bool,
+    visibility: Visibility,
   ) {
     if let Some(plan) = self.plan_parallel(fragments.len()) {
       let start = self.parallel_stats.as_ref().map(|_| Instant::now());
@@ -2536,11 +3108,15 @@ impl DisplayListBuilder {
           let chunk_offset = chunk_idx * plan.chunk_size;
           with_deadline(deadline.as_ref(), || {
             let mut builder = self.fork();
+            let mut counter = 0usize;
             for fragment in chunk {
+              if builder.deadline_reached_periodic(&mut counter, DEADLINE_STRIDE) {
+                break;
+              }
               if suppress_opacity {
-                builder.build_fragment_internal(fragment, offset, false, true);
+                builder.build_fragment_internal(fragment, offset, false, true, visibility);
               } else {
-                builder.build_fragment_shallow(fragment, offset);
+                builder.build_fragment_shallow(fragment, offset, visibility);
               }
             }
             (chunk_offset, builder.list, std::thread::current().id())
@@ -2562,11 +3138,15 @@ impl DisplayListBuilder {
     }
 
     let serial_start = self.parallel_stats.as_ref().map(|_| Instant::now());
+    let mut counter = 0usize;
     for fragment in fragments {
+      if self.deadline_reached_periodic(&mut counter, DEADLINE_STRIDE) {
+        break;
+      }
       if suppress_opacity {
-        self.build_fragment_internal(fragment, offset, false, true);
+        self.build_fragment_internal(fragment, offset, false, true, visibility);
       } else {
-        self.build_fragment_shallow(fragment, offset);
+        self.build_fragment_shallow(fragment, offset, visibility);
       }
     }
     if let (Some(stats), Some(start)) = (self.parallel_stats.as_ref(), serial_start) {
@@ -2616,13 +3196,6 @@ impl DisplayListBuilder {
     });
   }
 
-  fn finish(self) -> DisplayList {
-    if paint_diagnostics_enabled() {
-      self.record_parallel_diagnostics();
-    }
-    self.list
-  }
-
   fn fork(&self) -> DisplayListBuilder {
     DisplayListBuilder {
       list: DisplayList::new(),
@@ -2641,6 +3214,7 @@ impl DisplayListBuilder {
       estimated_fragments: self.estimated_fragments,
       scroll_state: self.scroll_state.clone(),
       max_iframe_depth: self.max_iframe_depth,
+      error: self.error.clone(),
     }
   }
 
@@ -3916,7 +4490,11 @@ impl DisplayListBuilder {
     inline_vertical: bool,
   ) {
     let mut pen_x = start_x;
+    let mut counter = 0usize;
     for run in runs {
+      if self.deadline_reached_periodic(&mut counter, DEADLINE_STRIDE) {
+        break;
+      }
       let origin_x = if run.direction.is_rtl() {
         pen_x + run.advance
       } else {
@@ -3966,7 +4544,11 @@ impl DisplayListBuilder {
     style: Option<&ComputedStyle>,
   ) {
     let mut pen_inline = inline_start;
+    let mut counter = 0usize;
     for run in runs {
+      if self.deadline_reached_periodic(&mut counter, DEADLINE_STRIDE) {
+        break;
+      }
       let run_origin_inline = if run.direction.is_rtl() {
         pen_inline + run.advance
       } else {
@@ -4018,7 +4600,11 @@ impl DisplayListBuilder {
     inline_vertical: bool,
   ) {
     let mut pen_x = start_x;
+    let mut counter = 0usize;
     for run in runs {
+      if self.deadline_reached_periodic(&mut counter, DEADLINE_STRIDE) {
+        break;
+      }
       let origin_x = if run.direction.is_rtl() {
         pen_x + run.advance
       } else {
@@ -4067,7 +4653,11 @@ impl DisplayListBuilder {
     style: Option<&ComputedStyle>,
   ) {
     let mut pen_inline = inline_start;
+    let mut counter = 0usize;
     for run in runs {
+      if self.deadline_reached_periodic(&mut counter, DEADLINE_STRIDE) {
+        break;
+      }
       let run_origin_inline = if run.direction.is_rtl() {
         pen_inline + run.advance
       } else {
