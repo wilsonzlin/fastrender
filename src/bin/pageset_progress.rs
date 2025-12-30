@@ -1119,6 +1119,29 @@ pub(crate) fn hotspot_from_timeout_stage(stage: RenderStage) -> &'static str {
   }
 }
 
+pub(crate) fn progress_stage_from_heartbeat(stage: StageHeartbeat) -> Option<ProgressStage> {
+  match stage {
+    StageHeartbeat::ReadCache | StageHeartbeat::FollowRedirects | StageHeartbeat::DomParse => {
+      Some(ProgressStage::DomParse)
+    }
+    StageHeartbeat::CssInline => Some(ProgressStage::Css),
+    StageHeartbeat::Cascade => Some(ProgressStage::Cascade),
+    StageHeartbeat::Layout => Some(ProgressStage::Layout),
+    StageHeartbeat::PaintBuild | StageHeartbeat::PaintRasterize => Some(ProgressStage::Paint),
+    StageHeartbeat::Done => None,
+  }
+}
+
+pub(crate) fn hotspot_from_progress_stage(stage: ProgressStage) -> &'static str {
+  match stage {
+    ProgressStage::DomParse => "fetch",
+    ProgressStage::Css => "css",
+    ProgressStage::Cascade => "cascade",
+    ProgressStage::Layout => "layout",
+    ProgressStage::Paint => "paint",
+  }
+}
+
 pub(crate) fn apply_diagnostics_to_progress(
   progress: &mut PageProgress,
   diagnostics: &RenderDiagnostics,
@@ -3104,6 +3127,11 @@ fn run_queue(
 
         let previous = read_progress(&entry.item.progress_path);
         let heartbeat_stage = read_stage_heartbeat(&entry.item.stage_path);
+        let timeout_stage = heartbeat_stage.and_then(progress_stage_from_heartbeat);
+        let timeout_hotspot = timeout_stage
+          .map(hotspot_from_progress_stage)
+          .unwrap_or("unknown")
+          .to_string();
         let mut progress = PageProgress::new(entry.item.url.clone());
         progress.status = ProgressStatus::Timeout;
         progress.total_ms = Some(kill_timeout.as_secs_f64() * 1000.0);
@@ -3111,10 +3139,11 @@ fn run_queue(
           &format!("hard timeout after {:.2}s", kill_timeout.as_secs_f64()),
           heartbeat_stage,
         );
-        progress.hotspot = heartbeat_stage
-          .map(|stage| stage.hotspot().to_string())
-          .unwrap_or_else(|| "unknown".to_string());
+        progress.hotspot = timeout_hotspot.clone();
+        progress.timeout_stage = timeout_stage;
         let mut progress = progress.merge_preserving_manual(previous, current_sha.as_deref());
+        progress.hotspot = timeout_hotspot;
+        progress.timeout_stage = timeout_stage;
         ensure_note_includes(
           &mut progress,
           &format!("hard timeout after {:.2}s", kill_timeout.as_secs_f64()),
