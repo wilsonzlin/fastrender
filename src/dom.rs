@@ -274,13 +274,9 @@ pub fn next_selector_cache_epoch() -> usize {
   SELECTOR_CACHE_EPOCH.fetch_add(1, Ordering::Relaxed)
 }
 
+#[inline]
 fn selector_bloom_hash(value: &str) -> u32 {
-  use std::collections::hash_map::DefaultHasher;
-  use std::hash::{Hash, Hasher};
-
-  let mut hasher = DefaultHasher::new();
-  value.hash(&mut hasher);
-  (hasher.finish() as u32) & selectors::bloom::BLOOM_HASH_MASK
+  crate::css::types::selector_hash(value) & selectors::bloom::BLOOM_HASH_MASK
 }
 
 fn node_is_html_element(node: &DomNode) -> bool {
@@ -4869,6 +4865,16 @@ mod tests {
       },
       children: vec![],
     }
+  }
+
+  #[test]
+  fn selector_bloom_hash_matches_selector_token_hash() {
+    use precomputed_hash::PrecomputedHash;
+
+    let value = "data-Thing";
+    let token_hash = CssString::from(value).precomputed_hash() & selectors::bloom::BLOOM_HASH_MASK;
+    let dom_hash = selector_bloom_hash(value);
+    assert_eq!(dom_hash, token_hash);
   }
 
   fn find_element_by_id<'a>(node: &'a DomNode, id: &str) -> Option<&'a DomNode> {

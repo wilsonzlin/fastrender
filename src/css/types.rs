@@ -181,15 +181,20 @@ impl ToCss for CssString {
   }
 }
 
+#[inline]
+pub(crate) fn selector_hash(value: &str) -> u32 {
+  use rustc_hash::FxHasher;
+  use std::hash::{Hash, Hasher};
+
+  let mut hasher = FxHasher::default();
+  value.hash(&mut hasher);
+  let hash = hasher.finish();
+  (hash as u32) ^ ((hash >> 32) as u32)
+}
+
 impl precomputed_hash::PrecomputedHash for CssString {
   fn precomputed_hash(&self) -> u32 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::Hash;
-    use std::hash::Hasher;
-
-    let mut hasher = DefaultHasher::new();
-    self.0.hash(&mut hasher);
-    hasher.finish() as u32
+    selector_hash(&self.0)
   }
 }
 

@@ -11,6 +11,7 @@ use fastrender::dom::set_selector_bloom_enabled;
 use fastrender::style::cascade::apply_styles_with_media;
 use fastrender::style::media::MediaContext;
 use std::fmt::Write;
+use std::hash::{Hash, Hasher};
 
 fn build_branching_tree_html(depth: usize, branching: usize, class_variants: usize) -> String {
   fn build_level(
@@ -493,12 +494,74 @@ fn selector_bloom_lookup_benchmark(c: &mut Criterion) {
   group.finish();
 }
 
+fn bloom_hash_insert_benchmark(c: &mut Criterion) {
+  use rustc_hash::FxHasher;
+  use selectors::bloom::BLOOM_HASH_MASK;
+
+  fn fxhash_u32(value: &str) -> u32 {
+    let mut hasher = FxHasher::default();
+    value.hash(&mut hasher);
+    let hash = hasher.finish();
+    ((hash >> 32) as u32) ^ (hash as u32)
+  }
+
+  fn siphash_u32(value: &str) -> u32 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish() as u32
+  }
+
+  fn insert_summary(summary: &mut [u64; 4], hash: u32) {
+    const SUMMARY_BITS: usize = 256;
+    let slot_a = (hash as usize) & (SUMMARY_BITS - 1);
+    let slot_b = ((hash >> 8) as usize) & (SUMMARY_BITS - 1);
+    for slot in [slot_a, slot_b] {
+      let (idx, bit) = (slot / 64, slot % 64);
+      summary[idx] |= 1u64 << bit;
+    }
+  }
+
+  let values: Vec<String> = (0..200_000)
+    .map(|i| match i % 5 {
+      0 => format!("c{}", i % 4096),
+      1 => format!("id{}", i % 16384),
+      2 => format!("data-attr{}", i % 4096),
+      3 => format!("data-Attr{}", i % 4096),
+      _ => format!("tag{}", i % 512),
+    })
+    .collect();
+
+  let mut group = c.benchmark_group("selector_bloom_hashing");
+  group.bench_function("fxhash_mask_insert", |b| {
+    b.iter(|| {
+      let mut summary = [0u64; 4];
+      for value in values.iter() {
+        let hash = fxhash_u32(value) & BLOOM_HASH_MASK;
+        insert_summary(&mut summary, hash);
+      }
+      black_box(summary);
+    });
+  });
+  group.bench_function("siphash_mask_insert", |b| {
+    b.iter(|| {
+      let mut summary = [0u64; 4];
+      for value in values.iter() {
+        let hash = siphash_u32(value) & BLOOM_HASH_MASK;
+        insert_summary(&mut summary, hash);
+      }
+      black_box(summary);
+    });
+  });
+  group.finish();
+}
+
 criterion_group!(
   benches,
   selector_bloom_benchmark,
   ancestor_bloom_benchmark,
   has_selector_bloom_benchmark,
   has_selector_summary_benchmark,
-  selector_bloom_lookup_benchmark
+  selector_bloom_lookup_benchmark,
+  bloom_hash_insert_benchmark
 );
 criterion_main!(benches);
