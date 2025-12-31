@@ -429,8 +429,12 @@ const DEFAULT_ACCEPT: &str = "text/html,application/xhtml+xml,application/xml;q=
 /// Content-Encoding algorithms this fetcher can decode.
 const SUPPORTED_ACCEPT_ENCODING: &str = "gzip, deflate, br";
 
-/// Slack applied to deadline-derived HTTP timeouts to allow minor scheduling jitter.
-const RENDER_DEADLINE_TIMEOUT_SLACK: Duration = Duration::from_millis(50);
+/// Safety buffer subtracted from deadline-derived HTTP timeouts.
+///
+/// When rendering under a cooperative timeout, we must ensure that HTTP fetches never extend past
+/// the remaining render budget. Leaving a small buffer gives the renderer time to unwind and
+/// return a structured timeout/error before any external hard-kill triggers.
+const HTTP_DEADLINE_BUFFER: Duration = Duration::from_millis(25);
 
 /// Stride for cooperative deadline checks while decoding compressed bodies.
 const CONTENT_DECODE_DEADLINE_STRIDE: usize = 16;
@@ -1346,23 +1350,21 @@ impl HttpFetcher {
     if deadline.timeout_limit().is_none() {
       return Ok(None);
     }
-    let deadline_error = || {
-      Error::Resource(
-        ResourceError::new(
-          url.to_string(),
-          "render deadline exceeded before HTTP request (timeout)",
-        )
-        .with_final_url(url.to_string()),
-      )
+    let deadline_error = |message: &str| {
+      Error::Resource(ResourceError::new(url.to_string(), message).with_final_url(url.to_string()))
     };
     let Some(remaining) = deadline.remaining_timeout() else {
-      return Err(deadline_error());
+      return Err(deadline_error(
+        "render deadline exceeded before HTTP request (timeout)",
+      ));
     };
-    if remaining.is_zero() {
-      return Err(deadline_error());
+    if remaining <= HTTP_DEADLINE_BUFFER {
+      return Err(deadline_error(
+        "render deadline exceeded before HTTP request (timeout)",
+      ));
     }
     let budget = remaining
-      .saturating_add(RENDER_DEADLINE_TIMEOUT_SLACK)
+      .saturating_sub(HTTP_DEADLINE_BUFFER)
       .min(self.policy.request_timeout);
     Ok(Some(budget))
   }
@@ -1382,7 +1384,15 @@ impl HttpFetcher {
     let mut current = url.to_string();
     let mut validators = validators;
     let agent = &self.agent;
-    let max_attempts = self.retry_policy.max_attempts.max(1);
+    let max_attempts = if deadline
+      .as_ref()
+      .and_then(render_control::RenderDeadline::timeout_limit)
+      .is_some()
+    {
+      1
+    } else {
+      self.retry_policy.max_attempts.max(1)
+    };
 
     'redirects: for _ in 0..self.policy.max_redirects {
       self.policy.ensure_url_allowed(&current)?;
@@ -3763,6 +3773,146 @@ mod tests {
         Err(e) => return Err(e),
       }
     }
+  }
+
+  #[test]
+  fn http_fetch_does_not_run_past_render_deadline() {
+    let Some(listener) = try_bind_localhost("http_fetch_does_not_run_past_render_deadline") else {
+      return;
+    };
+    let addr = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+
+    let handle = thread::spawn(move || {
+      let start = Instant::now();
+      while start.elapsed() < Duration::from_secs(2) {
+        match listener.accept() {
+          Ok((mut stream, _)) => {
+            stream
+              .set_read_timeout(Some(Duration::from_millis(500)))
+              .unwrap();
+            let _ = read_http_request(&mut stream);
+
+            // Delay the response well past the render deadline so the client must time out.
+            thread::sleep(Duration::from_millis(200));
+
+            let body = b"ok";
+            let headers = format!(
+              "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+              body.len()
+            );
+            let _ = stream.write_all(headers.as_bytes());
+            let _ = stream.write_all(body);
+            return;
+          }
+          Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+            thread::sleep(Duration::from_millis(5));
+          }
+          Err(err) => panic!("accept http_fetch_does_not_run_past_render_deadline: {err}"),
+        }
+      }
+
+      panic!("server did not receive request within {:?}", start.elapsed());
+    });
+
+    let fetcher = HttpFetcher::new().with_timeout(Duration::from_secs(5));
+    let url = format!("http://{}/", addr);
+    let deadline = render_control::RenderDeadline::new(Some(Duration::from_millis(50)), None);
+
+    let start = Instant::now();
+    let res = render_control::with_deadline(Some(&deadline), || fetcher.fetch(&url));
+    let elapsed = start.elapsed();
+
+    handle.join().unwrap();
+
+    assert!(
+      res.is_err(),
+      "expected fetch to fail under render deadline, got: {res:?}"
+    );
+    assert!(
+      elapsed < Duration::from_millis(150),
+      "fetch should fail quickly under deadline (elapsed={elapsed:?})"
+    );
+
+    let err = res.unwrap_err().to_string().to_ascii_lowercase();
+    assert!(
+      err.contains("timeout") || err.contains("deadline"),
+      "expected error to mention timeout/deadline, got: {err}"
+    );
+  }
+
+  #[test]
+  fn http_fetch_disables_retries_under_deadline() {
+    let Some(listener) = try_bind_localhost("http_fetch_disables_retries_under_deadline") else {
+      return;
+    };
+    let addr = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+
+    let request_count = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&request_count);
+
+    let handle = thread::spawn(move || {
+      let start = Instant::now();
+      let mut last_request = None::<Instant>;
+
+      while start.elapsed() < Duration::from_secs(2) {
+        match listener.accept() {
+          Ok((mut stream, _)) => {
+            seen.fetch_add(1, Ordering::SeqCst);
+            last_request = Some(Instant::now());
+
+            stream
+              .set_read_timeout(Some(Duration::from_millis(500)))
+              .unwrap();
+            let _ = read_http_request(&mut stream);
+
+            let body = b"unavailable";
+            let headers = format!(
+              "HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+              body.len()
+            );
+            let _ = stream.write_all(headers.as_bytes());
+            let _ = stream.write_all(body);
+          }
+          Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+            if let Some(last) = last_request {
+              if last.elapsed() > Duration::from_millis(250) {
+                break;
+              }
+            }
+            thread::sleep(Duration::from_millis(5));
+          }
+          Err(err) => panic!("accept http_fetch_disables_retries_under_deadline: {err}"),
+        }
+      }
+    });
+
+    let retry_policy = HttpRetryPolicy {
+      max_attempts: 6,
+      backoff_base: Duration::ZERO,
+      backoff_cap: Duration::ZERO,
+      respect_retry_after: false,
+    };
+    let fetcher = HttpFetcher::new()
+      .with_timeout(Duration::from_secs(5))
+      .with_retry_policy(retry_policy);
+    let url = format!("http://{}/", addr);
+    let deadline = render_control::RenderDeadline::new(Some(Duration::from_millis(200)), None);
+
+    let res = render_control::with_deadline(Some(&deadline), || fetcher.fetch(&url));
+    assert!(
+      res.is_err(),
+      "expected 503 to surface as an error when retries are disabled, got: {res:?}"
+    );
+
+    handle.join().unwrap();
+
+    assert_eq!(
+      request_count.load(Ordering::SeqCst),
+      1,
+      "expected retries to be disabled under render deadline"
+    );
   }
 
   #[test]
