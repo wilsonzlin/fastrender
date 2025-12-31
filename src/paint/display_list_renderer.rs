@@ -11,8 +11,8 @@ use crate::error::{Error, RenderError, RenderStage, Result};
 use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::paint::blur::{alpha_bounds, apply_gaussian_blur_cached, BlurCache};
-use crate::paint::canvas::crop_mask;
 use crate::paint::canvas::Canvas;
+use crate::paint::canvas::{apply_mask_with_offset, crop_mask};
 use crate::paint::display_list::BlendMode;
 use crate::paint::display_list::BorderImageItem;
 use crate::paint::display_list::BorderImageSourceItem;
@@ -3072,14 +3072,26 @@ impl DisplayListRenderer {
     }
   }
 
-  fn render_mask(&mut self, mask: &ResolvedMask) -> Option<Mask> {
+  fn render_mask(&mut self, mask: &ResolvedMask) -> Option<OffsetMask> {
     let viewport = (
       self.canvas.width() as f32 / self.scale,
       self.canvas.height() as f32 / self.scale,
     );
     let rects = mask.rects;
-    let mut combined: Option<Mask> = None;
-    let canvas_clip = Rect::from_xywh(0.0, 0.0, viewport.0, viewport.1);
+    let mut combined: Option<CompositeMask> = None;
+    let canvas_bounds_css = Rect::from_xywh(0.0, 0.0, viewport.0, viewport.1);
+    let canvas_clip_bounds_css = self
+      .canvas
+      .clip_bounds()
+      .map(|rect| {
+        Rect::from_xywh(
+          rect.x() / self.scale,
+          rect.y() / self.scale,
+          rect.width() / self.scale,
+          rect.height() / self.scale,
+        )
+      })
+      .unwrap_or(canvas_bounds_css);
 
     for layer in mask.layers.iter().rev() {
       let origin_rect_css = match layer.origin {
@@ -3091,13 +3103,35 @@ impl DisplayListRenderer {
         MaskClip::BorderBox => rects.border,
         MaskClip::PaddingBox => rects.padding,
         MaskClip::ContentBox | MaskClip::Text => rects.content,
-        MaskClip::NoClip => canvas_clip,
+        MaskClip::NoClip => canvas_bounds_css,
       };
       if origin_rect_css.width() <= 0.0
         || origin_rect_css.height() <= 0.0
         || clip_rect_css.width() <= 0.0
         || clip_rect_css.height() <= 0.0
       {
+        continue;
+      }
+
+      let Some(clip_rect_css) = clip_rect_css
+        .intersection(canvas_bounds_css)
+        .and_then(|r| r.intersection(canvas_clip_bounds_css))
+      else {
+        combined = Some(match combined.take() {
+          Some(existing) => {
+            apply_mask_composite(existing, CompositeMask::Transparent, layer.composite)?
+          }
+          None => CompositeMask::Transparent,
+        });
+        continue;
+      };
+      if clip_rect_css.width() <= 0.0 || clip_rect_css.height() <= 0.0 {
+        combined = Some(match combined.take() {
+          Some(existing) => {
+            apply_mask_composite(existing, CompositeMask::Transparent, layer.composite)?
+          }
+          None => CompositeMask::Transparent,
+        });
         continue;
       }
 
@@ -3176,6 +3210,15 @@ impl DisplayListRenderer {
         clip_rect_css.min_y(),
         clip_rect_css.max_y(),
       );
+      if positions_x.is_empty() || positions_y.is_empty() {
+        combined = Some(match combined.take() {
+          Some(existing) => {
+            apply_mask_composite(existing, CompositeMask::Transparent, layer.composite)?
+          }
+          None => CompositeMask::Transparent,
+        });
+        continue;
+      }
 
       let tile = match &layer.image {
         ResolvedMaskImage::Generated(image) => {
@@ -3204,7 +3247,29 @@ impl DisplayListRenderer {
         continue;
       };
 
-      let mut mask_pixmap = new_pixmap(self.canvas.width(), self.canvas.height())?;
+      let canvas_w = self.canvas.width() as i32;
+      let canvas_h = self.canvas.height() as i32;
+      let mut x0 = (clip_rect_css.min_x() * self.scale).floor() as i32;
+      let mut y0 = (clip_rect_css.min_y() * self.scale).floor() as i32;
+      let mut x1 = (clip_rect_css.max_x() * self.scale).ceil() as i32;
+      let mut y1 = (clip_rect_css.max_y() * self.scale).ceil() as i32;
+      x0 = x0.clamp(0, canvas_w);
+      y0 = y0.clamp(0, canvas_h);
+      x1 = x1.clamp(0, canvas_w);
+      y1 = y1.clamp(0, canvas_h);
+      let region_w = x1.saturating_sub(x0) as u32;
+      let region_h = y1.saturating_sub(y0) as u32;
+      if region_w == 0 || region_h == 0 {
+        combined = Some(match combined.take() {
+          Some(existing) => {
+            apply_mask_composite(existing, CompositeMask::Transparent, layer.composite)?
+          }
+          None => CompositeMask::Transparent,
+        });
+        continue;
+      }
+
+      let mut mask_pixmap = new_pixmap(region_w, region_h)?;
       for ty in positions_y.iter().copied() {
         for tx in positions_x.iter().copied() {
           paint_mask_tile(
@@ -3216,20 +3281,34 @@ impl DisplayListRenderer {
             tile_h,
             clip_rect_css,
             self.scale,
+            (x0, y0),
           );
         }
       }
 
-      let layer_mask = Mask::from_pixmap(mask_pixmap.as_ref(), MaskType::Alpha);
+      let layer_mask = CompositeMask::Region(OffsetMask {
+        mask: Mask::from_pixmap(mask_pixmap.as_ref(), MaskType::Alpha),
+        origin: (x0, y0),
+      });
 
-      if let Some(dest) = combined.as_mut() {
-        apply_mask_composite(dest, &layer_mask, layer.composite);
-      } else {
-        combined = Some(layer_mask);
-      }
+      combined = Some(match combined.take() {
+        Some(existing) => apply_mask_composite(existing, layer_mask, layer.composite)?,
+        None => layer_mask,
+      });
     }
 
-    combined
+    match combined {
+      None => None,
+      Some(CompositeMask::Region(mask)) => Some(mask),
+      Some(CompositeMask::Transparent) => {
+        let mut mask = Mask::new(1, 1)?;
+        mask.data_mut()[0] = 0;
+        Some(OffsetMask {
+          mask,
+          origin: (0, 0),
+        })
+      }
+    }
   }
 
   fn convert_stops_rgba(
@@ -4520,17 +4599,7 @@ impl DisplayListRenderer {
 
           if let Some(mask_style) = record.mask.as_ref() {
             if let Some(mask) = self.render_mask(mask_style) {
-              if let Some(cropped) = crop_mask(
-                &mask,
-                origin.0 as u32,
-                origin.1 as u32,
-                layer.width(),
-                layer.height(),
-              ) {
-                layer.apply_mask(&cropped);
-              } else if mask.width() == layer.width() && mask.height() == layer.height() {
-                layer.apply_mask(&mask);
-              } else {
+              if !apply_mask_with_offset(&mut layer, origin, &mask.mask, mask.origin) {
                 return Ok(());
               }
             }
@@ -6493,6 +6562,20 @@ fn mask_tile_from_image(tile: &Pixmap, mode: MaskMode) -> Option<Pixmap> {
   Pixmap::from_vec(data, size)
 }
 
+#[derive(Debug, Clone)]
+struct OffsetMask {
+  mask: Mask,
+  origin: (i32, i32),
+}
+
+#[derive(Debug, Clone)]
+enum CompositeMask {
+  /// A fully transparent mask (alpha 0 everywhere).
+  Transparent,
+  /// A mask with explicit alpha values in the rectangle described by `origin` + `mask` size.
+  Region(OffsetMask),
+}
+
 fn paint_mask_tile(
   dest: &mut Pixmap,
   tile: &Pixmap,
@@ -6502,6 +6585,7 @@ fn paint_mask_tile(
   tile_h: f32,
   clip_rect: Rect,
   scale: f32,
+  dest_origin: (i32, i32),
 ) {
   if tile_w <= 0.0 || tile_h <= 0.0 {
     return;
@@ -6515,8 +6599,8 @@ fn paint_mask_tile(
   }
 
   let device_clip = Rect::from_xywh(
-    intersection.x() * scale,
-    intersection.y() * scale,
+    intersection.x() * scale - dest_origin.0 as f32,
+    intersection.y() * scale - dest_origin.1 as f32,
     intersection.width() * scale,
     intersection.height() * scale,
   );
@@ -6546,36 +6630,179 @@ fn paint_mask_tile(
       0.0,
       0.0,
       scale_y * scale,
-      tx * scale,
-      ty * scale,
+      tx * scale - dest_origin.0 as f32,
+      ty * scale - dest_origin.1 as f32,
     ),
   );
   paint.anti_alias = false;
   dest.fill_rect(src_rect, &paint, Transform::identity(), None);
 }
 
-fn apply_mask_composite(dest: &mut Mask, src: &Mask, op: MaskComposite) {
-  if dest.width() != src.width() || dest.height() != src.height() {
-    return;
+fn apply_mask_composite(
+  dest: CompositeMask,
+  src: CompositeMask,
+  op: MaskComposite,
+) -> Option<CompositeMask> {
+  use CompositeMask::*;
+
+  match (dest, src) {
+    (Transparent, Transparent) => Some(Transparent),
+    (Transparent, Region(mask)) => match op {
+      MaskComposite::Intersect => Some(Transparent),
+      MaskComposite::Add | MaskComposite::Subtract | MaskComposite::Exclude => Some(Region(mask)),
+    },
+    (Region(mask), Transparent) => match op {
+      MaskComposite::Add | MaskComposite::Exclude => Some(Region(mask)),
+      MaskComposite::Subtract | MaskComposite::Intersect => Some(Transparent),
+    },
+    (Region(dest), Region(src)) => composite_offset_masks(dest, src, op),
+  }
+}
+
+fn composite_offset_masks(
+  dest: OffsetMask,
+  src: OffsetMask,
+  op: MaskComposite,
+) -> Option<CompositeMask> {
+  let dx0 = dest.origin.0;
+  let dy0 = dest.origin.1;
+  let dx1 = dx0 + dest.mask.width() as i32;
+  let dy1 = dy0 + dest.mask.height() as i32;
+
+  let sx0 = src.origin.0;
+  let sy0 = src.origin.1;
+  let sx1 = sx0 + src.mask.width() as i32;
+  let sy1 = sy0 + src.mask.height() as i32;
+
+  let (ox0, oy0, ox1, oy1) = match op {
+    MaskComposite::Add | MaskComposite::Exclude => {
+      (dx0.min(sx0), dy0.min(sy0), dx1.max(sx1), dy1.max(sy1))
+    }
+    MaskComposite::Intersect => (dx0.max(sx0), dy0.max(sy0), dx1.min(sx1), dy1.min(sy1)),
+    MaskComposite::Subtract => (sx0, sy0, sx1, sy1),
+  };
+
+  let out_w_i32 = ox1.saturating_sub(ox0);
+  let out_h_i32 = oy1.saturating_sub(oy0);
+  if out_w_i32 <= 0 || out_h_i32 <= 0 {
+    return Some(CompositeMask::Transparent);
+  }
+  let out_w = out_w_i32 as u32;
+  let out_h = out_h_i32 as u32;
+
+  let mut out = Mask::new(out_w, out_h)?;
+  let out_data = out.data_mut();
+
+  let dst_w = dest.mask.width() as usize;
+  let dst_data = dest.mask.data();
+  let src_w = src.mask.width() as usize;
+  let src_data = src.mask.data();
+
+  match op {
+    MaskComposite::Intersect => {
+      let dst_x_offset = ox0.saturating_sub(dx0) as usize;
+      let src_x_offset = ox0.saturating_sub(sx0) as usize;
+      for y in 0..out_h as usize {
+        let global_y = oy0 + y as i32;
+        let dst_row_idx = global_y.saturating_sub(dy0) as usize * dst_w;
+        let src_row_idx = global_y.saturating_sub(sy0) as usize * src_w;
+        let out_row_idx = y * out_w as usize;
+        for x in 0..out_w as usize {
+          let dst = dst_data[dst_row_idx + dst_x_offset + x] as u16;
+          let src = src_data[src_row_idx + src_x_offset + x] as u16;
+          out_data[out_row_idx + x] = (src.saturating_mul(dst) / 255) as u8;
+        }
+      }
+    }
+    MaskComposite::Subtract => {
+      let dst_y0 = dy0;
+      let dst_y1 = dy1;
+      let dst_x0 = dx0;
+      let dst_x1 = dx1;
+      for y in 0..out_h as usize {
+        let global_y = oy0 + y as i32;
+        let src_row_idx = y * src_w;
+        let out_row_idx = y * out_w as usize;
+        let dst_row = if global_y >= dst_y0 && global_y < dst_y1 {
+          let row_idx = (global_y - dst_y0) as usize * dst_w;
+          Some(&dst_data[row_idx..row_idx + dst_w])
+        } else {
+          None
+        };
+        for x in 0..out_w as usize {
+          let global_x = ox0 + x as i32;
+          let src = src_data[src_row_idx + x] as u16;
+          let dst = if let Some(row) = dst_row {
+            if global_x >= dst_x0 && global_x < dst_x1 {
+              row[(global_x - dst_x0) as usize] as u16
+            } else {
+              0
+            }
+          } else {
+            0
+          };
+          out_data[out_row_idx + x] = (src.saturating_mul(255 - dst) / 255) as u8;
+        }
+      }
+    }
+    MaskComposite::Add | MaskComposite::Exclude => {
+      for y in 0..out_h as usize {
+        let global_y = oy0 + y as i32;
+        let out_row_idx = y * out_w as usize;
+
+        let dst_row = if global_y >= dy0 && global_y < dy1 {
+          let row_idx = (global_y - dy0) as usize * dst_w;
+          Some(&dst_data[row_idx..row_idx + dst_w])
+        } else {
+          None
+        };
+        let src_row = if global_y >= sy0 && global_y < sy1 {
+          let row_idx = (global_y - sy0) as usize * src_w;
+          Some(&src_data[row_idx..row_idx + src_w])
+        } else {
+          None
+        };
+
+        for x in 0..out_w as usize {
+          let global_x = ox0 + x as i32;
+          let dst = if let Some(row) = dst_row {
+            if global_x >= dx0 && global_x < dx1 {
+              row[(global_x - dx0) as usize] as u16
+            } else {
+              0
+            }
+          } else {
+            0
+          };
+          let src = if let Some(row) = src_row {
+            if global_x >= sx0 && global_x < sx1 {
+              row[(global_x - sx0) as usize] as u16
+            } else {
+              0
+            }
+          } else {
+            0
+          };
+
+          let out = match op {
+            MaskComposite::Add => src + dst.saturating_mul(255 - src) / 255,
+            MaskComposite::Exclude => {
+              let src_out = src.saturating_mul(255 - dst) / 255;
+              let dst_out = dst.saturating_mul(255 - src) / 255;
+              src_out + dst_out
+            }
+            _ => 0,
+          };
+          out_data[out_row_idx + x] = out.min(255) as u8;
+        }
+      }
+    }
   }
 
-  let dest_data = dest.data_mut();
-  let src_data = src.data();
-  for (d, s) in dest_data.iter_mut().zip(src_data.iter()) {
-    let src = *s as u16;
-    let dst = *d as u16;
-    let out = match op {
-      MaskComposite::Add => src + dst.saturating_mul(255 - src) / 255,
-      MaskComposite::Subtract => src.saturating_mul(255 - dst) / 255,
-      MaskComposite::Intersect => src.saturating_mul(dst) / 255,
-      MaskComposite::Exclude => {
-        let src_out = src.saturating_mul(255 - dst) / 255;
-        let dst_out = dst.saturating_mul(255 - src) / 255;
-        src_out + dst_out
-      }
-    };
-    *d = out.min(255) as u8;
-  }
+  Some(CompositeMask::Region(OffsetMask {
+    mask: out,
+    origin: (ox0, oy0),
+  }))
 }
 
 #[cfg(test)]
@@ -8773,6 +9000,107 @@ mod tests {
     let pixmap = renderer.render(&list).unwrap();
     assert_eq!(pixel(&pixmap, 0, 0), (0, 0, 255, 255));
     assert_eq!(pixel(&pixmap, 3, 0), (255, 255, 255, 255));
+  }
+
+  #[test]
+  fn render_mask_allocates_only_for_clip_region() {
+    let mut renderer = DisplayListRenderer::new(200, 200, Rgba::WHITE, FontContext::new()).unwrap();
+
+    let bounds = Rect::from_xywh(50.0, 60.0, 10.0, 10.0);
+    let mut layer = MaskLayer::default();
+    layer.repeat = BackgroundRepeat::no_repeat();
+    layer.size = BackgroundSize::Explicit(
+      BackgroundSizeComponent::Length(Length::percent(100.0)),
+      BackgroundSizeComponent::Length(Length::percent(100.0)),
+    );
+
+    let image = ImageData::new_pixels(1, 1, vec![0, 0, 0, 255]);
+    let mask = ResolvedMask {
+      layers: vec![ResolvedMaskLayer {
+        image: ResolvedMaskImage::Raster(image),
+        repeat: layer.repeat,
+        position: layer.position,
+        size: layer.size,
+        origin: layer.origin,
+        clip: layer.clip,
+        mode: layer.mode,
+        composite: layer.composite,
+      }],
+      color: Rgba::BLACK,
+      font_size: 16.0,
+      root_font_size: 16.0,
+      rects: mask_rects(bounds, (0.0, 0.0, 0.0, 0.0)),
+    };
+
+    let rendered = renderer.render_mask(&mask).expect("mask rendered");
+    assert_eq!(rendered.origin, (50, 60));
+    assert_eq!(rendered.mask.width(), 10);
+    assert_eq!(rendered.mask.height(), 10);
+  }
+
+  #[test]
+  fn mask_composite_with_offsets_preserves_disjoint_alpha() {
+    let mut dst = Mask::new(4, 4).unwrap();
+    dst.data_mut().fill(255);
+    let mut src = Mask::new(4, 4).unwrap();
+    src.data_mut().fill(255);
+
+    let result = apply_mask_composite(
+      CompositeMask::Region(OffsetMask {
+        mask: dst,
+        origin: (0, 0),
+      }),
+      CompositeMask::Region(OffsetMask {
+        mask: src,
+        origin: (10, 0),
+      }),
+      MaskComposite::Add,
+    )
+    .expect("composite");
+
+    let CompositeMask::Region(composed) = result else {
+      panic!("expected region mask");
+    };
+    assert_eq!(composed.origin, (0, 0));
+    assert_eq!(composed.mask.width(), 14);
+    assert_eq!(composed.mask.height(), 4);
+
+    let data = composed.mask.data();
+    // Left region comes from the destination.
+    assert_eq!(data[0], 255);
+    // Gap between the rectangles should remain transparent.
+    assert_eq!(data[5], 0);
+    // Right region comes from the source.
+    assert_eq!(data[10], 255);
+  }
+
+  #[test]
+  fn mask_composite_with_offsets_intersects_overlap() {
+    let mut dst = Mask::new(10, 10).unwrap();
+    dst.data_mut().fill(255);
+    let mut src = Mask::new(10, 10).unwrap();
+    src.data_mut().fill(255);
+
+    let result = apply_mask_composite(
+      CompositeMask::Region(OffsetMask {
+        mask: dst,
+        origin: (0, 0),
+      }),
+      CompositeMask::Region(OffsetMask {
+        mask: src,
+        origin: (5, 5),
+      }),
+      MaskComposite::Intersect,
+    )
+    .expect("composite");
+
+    let CompositeMask::Region(composed) = result else {
+      panic!("expected region mask");
+    };
+    assert_eq!(composed.origin, (5, 5));
+    assert_eq!(composed.mask.width(), 5);
+    assert_eq!(composed.mask.height(), 5);
+    assert!(composed.mask.data().iter().all(|v| *v == 255));
   }
 
   #[test]

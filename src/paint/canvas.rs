@@ -1396,6 +1396,106 @@ pub(crate) fn crop_mask(
   Some(Mask::from_pixmap(pixmap.as_ref(), MaskType::Alpha))
 }
 
+/// Applies a mask that is positioned in a larger coordinate space.
+///
+/// The provided `mask` is interpreted as covering the rectangle
+/// `[mask_origin.x, mask_origin.y]..[mask_origin.x + mask.width, mask_origin.y + mask.height]`
+/// in the same coordinate space as `pixmap_origin`.
+///
+/// Mask values outside of this rectangle are treated as `0` (fully transparent).
+///
+/// Returns `false` when the mask rectangle does not overlap the pixmap at all; callers can use
+/// this to skip further work because the pixmap would become fully transparent.
+pub(crate) fn apply_mask_with_offset(
+  pixmap: &mut Pixmap,
+  pixmap_origin: (i32, i32),
+  mask: &Mask,
+  mask_origin: (i32, i32),
+) -> bool {
+  let pixmap_w = pixmap.width() as i32;
+  let pixmap_h = pixmap.height() as i32;
+  if pixmap_w <= 0 || pixmap_h <= 0 {
+    return false;
+  }
+
+  let pix_x0 = pixmap_origin.0;
+  let pix_y0 = pixmap_origin.1;
+  let pix_x1 = pix_x0 + pixmap_w;
+  let pix_y1 = pix_y0 + pixmap_h;
+
+  let mask_x0 = mask_origin.0;
+  let mask_y0 = mask_origin.1;
+  let mask_x1 = mask_x0 + mask.width() as i32;
+  let mask_y1 = mask_y0 + mask.height() as i32;
+
+  let inter_x0 = pix_x0.max(mask_x0);
+  let inter_y0 = pix_y0.max(mask_y0);
+  let inter_x1 = pix_x1.min(mask_x1);
+  let inter_y1 = pix_y1.min(mask_y1);
+
+  if inter_x1 <= inter_x0 || inter_y1 <= inter_y0 {
+    return false;
+  }
+
+  let local_x0 = (inter_x0 - pix_x0) as usize;
+  let local_y0 = (inter_y0 - pix_y0) as usize;
+  let local_x1 = (inter_x1 - pix_x0) as usize;
+  let local_y1 = (inter_y1 - pix_y0) as usize;
+
+  let mask_local_x0 = (inter_x0 - mask_x0) as usize;
+  let mask_local_y0 = (inter_y0 - mask_y0) as usize;
+
+  let pixmap_stride = pixmap.width() as usize * 4;
+  let pixmap_height = pixmap.height() as usize;
+  let pix_data = pixmap.data_mut();
+
+  // Clear rows above the intersection.
+  for y in 0..local_y0 {
+    let row = &mut pix_data[y * pixmap_stride..(y + 1) * pixmap_stride];
+    row.fill(0);
+  }
+  // Clear rows below the intersection.
+  for y in local_y1..pixmap_height {
+    let row = &mut pix_data[y * pixmap_stride..(y + 1) * pixmap_stride];
+    row.fill(0);
+  }
+
+  let mask_stride = mask.width() as usize;
+  let mask_data = mask.data();
+  for row_offset in 0..(local_y1 - local_y0) {
+    let y = local_y0 + row_offset;
+    let pix_row = &mut pix_data[y * pixmap_stride..(y + 1) * pixmap_stride];
+
+    // Clear left/right segments where mask is implicitly zero.
+    pix_row[..local_x0 * 4].fill(0);
+    pix_row[local_x1 * 4..].fill(0);
+
+    let mask_y = mask_local_y0 + row_offset;
+    if mask_y >= mask.height() as usize {
+      continue;
+    }
+    let mask_row = &mask_data[mask_y * mask_stride..(mask_y + 1) * mask_stride];
+    let mask_slice = &mask_row[mask_local_x0..mask_local_x0 + (local_x1 - local_x0)];
+
+    for (col_offset, m) in mask_slice.iter().copied().enumerate() {
+      let base = (local_x0 + col_offset) * 4;
+      if m == 255 {
+        continue;
+      }
+      if m == 0 {
+        pix_row[base..base + 4].fill(0);
+        continue;
+      }
+      let m16 = m as u16;
+      for c in 0..4 {
+        pix_row[base + c] = ((pix_row[base + c] as u16 * m16 + 127) / 255) as u8;
+      }
+    }
+  }
+
+  true
+}
+
 // ============================================================================
 // Blend Mode Conversion
 // ============================================================================
