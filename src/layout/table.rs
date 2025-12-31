@@ -4605,6 +4605,10 @@ impl TableFormattingContext {
       };
       let width_decl = cell_box.style.width.as_ref();
       let width_is_percent = matches!(width_decl.map(|w| w.unit), Some(LengthUnit::Percent));
+      // In fixed table layout, cell/column `width` hints participate directly in column sizing.
+      // These `width` properties follow normal box-sizing rules: content-box widths must grow
+      // by the horizontal padding/borders (or just padding for collapsed borders), while
+      // border-box widths already include them.
       let width_padding = if matches!(mode, DistributionMode::Fixed) {
         match structure.border_collapse {
           BorderCollapse::Separate => horizontal_padding_and_borders(&cell_box.style, percent_base),
@@ -4658,13 +4662,21 @@ impl TableFormattingContext {
         .and_then(|width| match width.unit {
           LengthUnit::Percent => percent_base.map(|base| {
             crate::layout::utils::clamp_with_order(
-              (width.value / 100.0) * base + width_padding,
+              crate::layout::utils::border_size_from_box_sizing(
+                (width.value / 100.0) * base,
+                width_padding,
+                cell_box.style.box_sizing,
+              ),
               min_w,
               effective_max,
             )
           }),
           _ => Some(crate::layout::utils::clamp_with_order(
-            width.to_px() + width_padding,
+            crate::layout::utils::border_size_from_box_sizing(
+              width.to_px(),
+              width_padding,
+              cell_box.style.box_sizing,
+            ),
             min_w,
             effective_max,
           )),
@@ -9837,6 +9849,69 @@ mod tests {
     assert!(
       (max - 120.0).abs() < 0.5,
       "content-box intrinsic max width should include padding once (got {max:.2})"
+    );
+  }
+
+  #[test]
+  fn fixed_layout_border_box_cell_width_does_not_add_padding_twice() {
+    let mut table_style = ComputedStyle::default();
+    table_style.display = Display::Table;
+    table_style.table_layout = TableLayout::Fixed;
+    table_style.border_spacing_horizontal = Length::px(0.0);
+    table_style.border_spacing_vertical = Length::px(0.0);
+
+    let mut row_style = ComputedStyle::default();
+    row_style.display = Display::TableRow;
+
+    let mut border_box_style = ComputedStyle::default();
+    border_box_style.display = Display::TableCell;
+    border_box_style.box_sizing = BoxSizing::BorderBox;
+    border_box_style.width = Some(Length::px(100.0));
+    border_box_style.padding_left = Length::px(10.0);
+    border_box_style.padding_right = Length::px(10.0);
+
+    let mut content_box_style = border_box_style.clone();
+    content_box_style.box_sizing = BoxSizing::ContentBox;
+
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![
+        BoxNode::new_block(Arc::new(border_box_style), FormattingContextType::Block, vec![]),
+        BoxNode::new_block(Arc::new(content_box_style), FormattingContextType::Block, vec![]),
+      ],
+    );
+
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
+
+    let structure = TableStructure::from_box_tree(&table);
+    let mut constraints: Vec<ColumnConstraints> = (0..structure.column_count)
+      .map(|_| ColumnConstraints::new(0.0, 0.0))
+      .collect();
+    let tfc = TableFormattingContext::new();
+    tfc.populate_column_constraints(
+      &table,
+      &structure,
+      &mut constraints,
+      DistributionMode::Fixed,
+      None,
+      &StyleOverrideCache::default(),
+    );
+
+    assert_eq!(constraints.len(), 2);
+    assert!(
+      (constraints[0].min_width - 100.0).abs() < 0.5,
+      "border-box width should not include padding twice (got {:.2})",
+      constraints[0].min_width
+    );
+    assert!(
+      (constraints[1].min_width - 120.0).abs() < 0.5,
+      "content-box width should include padding once (got {:.2})",
+      constraints[1].min_width
     );
   }
 
