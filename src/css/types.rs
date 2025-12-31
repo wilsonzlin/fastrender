@@ -2319,6 +2319,7 @@ struct LayerChild {
   name: String,
   order: u32,
   node: LayerNode,
+  path: Option<Arc<[u32]>>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -2339,7 +2340,7 @@ impl LayerRegistry {
       &mut self.root
     };
     for component in name {
-      let (_, next) = node.ensure_child(component);
+      let (_, next, _) = node.ensure_child(component);
       node = next;
     }
   }
@@ -2351,19 +2352,57 @@ impl LayerRegistry {
   }
 
   fn ensure_path(&mut self, base: &[u32], name: &[String]) -> Arc<[u32]> {
-    let mut path = Vec::with_capacity(base.len().saturating_add(name.len()));
-    path.extend_from_slice(base);
+    if name.is_empty() {
+      return Arc::from(base);
+    }
+
     let mut node: &mut LayerNode = if let Some(existing) = self.get_node_mut(base) {
       existing
     } else {
       &mut self.root
     };
-    for component in name {
-      let (order, next) = node.ensure_child(component);
-      path.push(order);
+
+    const LAYER_PATH_STACK_LEN: usize = 32;
+    let mut orders_stack = [0u32; LAYER_PATH_STACK_LEN];
+    let mut orders_heap: Vec<u32> = Vec::new();
+    let mut last_path_slot: Option<&mut Option<Arc<[u32]>>> = None;
+
+    for (idx, component) in name.iter().enumerate() {
+      let (order, next, path_slot) = node.ensure_child(component);
+
+      if idx < LAYER_PATH_STACK_LEN {
+        orders_stack[idx] = order;
+      } else {
+        if orders_heap.is_empty() {
+          orders_heap = Vec::with_capacity(name.len());
+          orders_heap.extend_from_slice(&orders_stack[..LAYER_PATH_STACK_LEN]);
+        }
+        orders_heap.push(order);
+      }
+
+      if idx + 1 == name.len() {
+        if let Some(existing) = path_slot.as_ref() {
+          return existing.clone();
+        }
+        last_path_slot = Some(path_slot);
+      }
+
       node = next;
     }
-    Arc::from(path)
+
+    let mut path = Vec::with_capacity(base.len().saturating_add(name.len()));
+    path.extend_from_slice(base);
+    if orders_heap.is_empty() {
+      path.extend_from_slice(&orders_stack[..name.len()]);
+    } else {
+      path.extend_from_slice(&orders_heap);
+    }
+
+    let arc: Arc<[u32]> = Arc::from(path);
+    if let Some(slot) = last_path_slot {
+      *slot = Some(arc.clone());
+    }
+    arc
   }
 
   fn ensure_anonymous(&mut self, base: &[u32]) -> Arc<[u32]> {
@@ -2378,8 +2417,10 @@ impl LayerRegistry {
         return Some(node);
       }
       let (first, rest) = path.split_first()?;
-      let pos = node.children.iter().position(|c| c.order == *first)?;
-      let child = &mut node.children[pos].node;
+      let pos = *first as usize;
+      let child = node.children.get_mut(pos)?;
+      debug_assert_eq!(child.order, *first);
+      let child = &mut child.node;
       if rest.is_empty() {
         Some(child)
       } else {
@@ -2391,21 +2432,21 @@ impl LayerRegistry {
 }
 
 impl LayerNode {
-  fn ensure_child(&mut self, name: &str) -> (u32, &mut LayerNode) {
+  fn ensure_child(&mut self, name: &str) -> (u32, &mut LayerNode, &mut Option<Arc<[u32]>>) {
     if let Some(pos) = self.children.iter().position(|c| c.name == name) {
-      let order = self.children[pos].order;
-      let node = &mut self.children[pos].node;
-      return (order, node);
+      let child = &mut self.children[pos];
+      return (child.order, &mut child.node, &mut child.path);
     }
     let order = self.children.len() as u32;
     self.children.push(LayerChild {
       name: name.to_string(),
       order,
       node: LayerNode::default(),
+      path: None,
     });
     let len = self.children.len();
-    let node = &mut self.children[len - 1].node;
-    (order, node)
+    let child = &mut self.children[len - 1];
+    (child.order, &mut child.node, &mut child.path)
   }
 }
 
