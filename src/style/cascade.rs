@@ -3882,7 +3882,7 @@ struct MatchedDeclaration<'a> {
   specificity: u32,
   rule_order: usize,
   decl_order: usize,
-  layer_order: Arc<[u32]>,
+  layer_order_idx: usize,
   is_custom_property: bool,
   declaration: Cow<'a, Declaration>,
   starting_style: bool,
@@ -15366,12 +15366,16 @@ fn apply_cascaded_declarations<'a, F>(
     return;
   }
   flattened.reserve(total_decls);
+  // Store layer orders once per matched rule (and inline style) and reference them by index from
+  // each flattened declaration. This avoids an `Arc` clone per declaration.
+  let mut layer_orders: Vec<Arc<[u32]>> = Vec::with_capacity(matched_rules.len().saturating_add(1));
 
   for rule in matched_rules {
     let origin = rule.origin;
     let specificity = rule.specificity;
     let order = rule.order;
-    let layer_order = rule.layer_order;
+    let layer_order_idx = layer_orders.len();
+    layer_orders.push(rule.layer_order);
     let starting_style = rule.starting_style;
 
     match rule.declarations {
@@ -15384,7 +15388,7 @@ fn apply_cascaded_declarations<'a, F>(
             specificity,
             rule_order: order,
             decl_order,
-            layer_order: layer_order.clone(),
+            layer_order_idx,
             is_custom_property,
             declaration: Cow::Borrowed(declaration),
             starting_style,
@@ -15400,7 +15404,7 @@ fn apply_cascaded_declarations<'a, F>(
             specificity,
             rule_order: order,
             decl_order,
-            layer_order: layer_order.clone(),
+            layer_order_idx,
             is_custom_property,
             declaration: Cow::Owned(declaration),
             starting_style,
@@ -15412,6 +15416,8 @@ fn apply_cascaded_declarations<'a, F>(
 
   if let Some(inline) = inline_declarations {
     let inline_layer_order = inline_layer_order.expect("inline layer order missing");
+    let layer_order_idx = layer_orders.len();
+    layer_orders.push(inline_layer_order);
     match inline {
       Cow::Borrowed(decls) => {
         for (decl_order, declaration) in decls.iter().enumerate() {
@@ -15422,7 +15428,7 @@ fn apply_cascaded_declarations<'a, F>(
             specificity: INLINE_SPECIFICITY,
             rule_order: INLINE_RULE_ORDER,
             decl_order,
-            layer_order: inline_layer_order.clone(),
+            layer_order_idx,
             is_custom_property,
             declaration: Cow::Borrowed(declaration),
             starting_style: false,
@@ -15438,7 +15444,7 @@ fn apply_cascaded_declarations<'a, F>(
             specificity: INLINE_SPECIFICITY,
             rule_order: INLINE_RULE_ORDER,
             decl_order,
-            layer_order: inline_layer_order.clone(),
+            layer_order_idx,
             is_custom_property,
             declaration: Cow::Owned(declaration),
             starting_style: false,
@@ -15469,13 +15475,15 @@ fn apply_cascaded_declarations<'a, F>(
       .cmp(&b.important)
       .then(a.origin.rank().cmp(&b.origin.rank()))
       .then_with(|| {
-        if Arc::ptr_eq(&a.layer_order, &b.layer_order) {
+        let a_layer_order = &layer_orders[a.layer_order_idx];
+        let b_layer_order = &layer_orders[b.layer_order_idx];
+        if Arc::ptr_eq(a_layer_order, b_layer_order) {
           return std::cmp::Ordering::Equal;
         }
         if a.important {
-          cmp_layer_order_important(a.layer_order.as_ref(), b.layer_order.as_ref())
+          cmp_layer_order_important(a_layer_order.as_ref(), b_layer_order.as_ref())
         } else {
-          cmp_layer_order_normal(a.layer_order.as_ref(), b.layer_order.as_ref())
+          cmp_layer_order_normal(a_layer_order.as_ref(), b_layer_order.as_ref())
         }
       })
       .then(a.specificity.cmp(&b.specificity))
@@ -15567,16 +15575,17 @@ fn apply_cascaded_declarations<'a, F>(
         layer_snapshots.clear();
         layer_snapshot_stratum = Some(stratum);
       }
+      let layer_order = &layer_orders[entry.layer_order_idx];
       // `layer_snapshots` is keyed by the declaration's `Arc<[u32]>` layer order. Most
       // declarations in a rule set share the same layer order, so avoid cloning the `Arc` on
       // lookup hits by probing with the borrowed slice and cloning only when we need to insert a
       // new snapshot.
-      let layer_base = match layer_snapshots.get_mut(entry.layer_order.as_ref()) {
+      let layer_base = match layer_snapshots.get_mut(layer_order.as_ref()) {
         Some(existing) => existing,
         None => {
-          layer_snapshots.insert(entry.layer_order.clone(), styles.clone());
+          layer_snapshots.insert(Arc::clone(layer_order), styles.clone());
           layer_snapshots
-            .get_mut(entry.layer_order.as_ref())
+            .get_mut(layer_order.as_ref())
             .expect("layer snapshot inserted")
         }
       };
