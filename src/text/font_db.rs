@@ -962,7 +962,7 @@ impl FontDatabase {
   /// Bundled fonts are always used as a final fallback to ensure text shaping
   /// works in minimal environments where no system fonts are present.
   pub fn with_config(config: &FontConfig) -> Self {
-    if !config.use_system_fonts && config.use_bundled_fonts && config.font_dirs.is_empty() {
+    if !config.use_system_fonts && config.font_dirs.is_empty() {
       return Self::shared_bundled();
     }
 
