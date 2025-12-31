@@ -1431,6 +1431,8 @@ pub struct RenderReport {
   pub image_pixmap_cache_misses: u64,
   /// Time spent converting image buffers into pixmaps during paint.
   pub image_pixmap_ms: f64,
+  /// Time spent painting background tiles (images + gradients) during paint.
+  pub background_ms: f64,
   /// Clip mask operations performed during paint.
   pub clip_mask_calls: u64,
   /// Time spent building/applying clip masks during paint.
@@ -1569,6 +1571,36 @@ impl LayerAllocationDiagnostics {
   }
 }
 
+#[derive(Default)]
+struct BackgroundPaintDiagnostics {
+  nanos: AtomicU64,
+}
+
+#[derive(Clone, Copy, Default)]
+struct BackgroundPaintSnapshot {
+  nanos: u64,
+}
+
+impl BackgroundPaintDiagnostics {
+  #[inline]
+  fn record_duration(&self, duration: Duration) {
+    let nanos = duration.as_nanos().min(u128::from(u64::MAX)) as u64;
+    self.nanos.fetch_add(nanos, Ordering::Relaxed);
+  }
+
+  fn snapshot(&self) -> BackgroundPaintSnapshot {
+    BackgroundPaintSnapshot {
+      nanos: self.nanos.load(Ordering::Relaxed),
+    }
+  }
+}
+
+impl BackgroundPaintSnapshot {
+  fn millis(self) -> f64 {
+    self.nanos as f64 / 1_000_000.0
+  }
+}
+
 #[derive(Clone, Copy)]
 struct ImageKey {
   pixels_ptr: *const Vec<u8>,
@@ -1634,6 +1666,7 @@ pub struct DisplayListRenderer {
   #[cfg(test)]
   image_cache_misses: Arc<AtomicUsize>,
   image_pixmap_diagnostics: Option<Arc<ImagePixmapDiagnostics>>,
+  background_paint_diagnostics: Option<Arc<BackgroundPaintDiagnostics>>,
   clip_mask_diagnostics: Option<Arc<ClipMaskDiagnostics>>,
   layer_alloc_diagnostics: Option<Arc<LayerAllocationDiagnostics>>,
   warp_cache: WarpCache,
@@ -2237,6 +2270,8 @@ impl DisplayListRenderer {
       image_cache_misses: Arc::new(AtomicUsize::new(0)),
       image_pixmap_diagnostics: diagnostics_enabled
         .then(|| Arc::new(ImagePixmapDiagnostics::default())),
+      background_paint_diagnostics: diagnostics_enabled
+        .then(|| Arc::new(BackgroundPaintDiagnostics::default())),
       clip_mask_diagnostics: diagnostics_enabled.then(|| Arc::new(ClipMaskDiagnostics::default())),
       layer_alloc_diagnostics: diagnostics_enabled
         .then(|| Arc::new(LayerAllocationDiagnostics::default())),
@@ -2259,6 +2294,13 @@ impl DisplayListRenderer {
   fn record_layer_allocation(&self, width: u32, height: u32) {
     if let Some(diag) = self.layer_alloc_diagnostics.as_ref() {
       diag.record(width, height);
+    }
+  }
+
+  #[inline]
+  fn record_background_paint(&self, start: Option<Instant>) {
+    if let (Some(diag), Some(start)) = (self.background_paint_diagnostics.as_ref(), start) {
+      diag.record_duration(start.elapsed());
     }
   }
 
@@ -2327,6 +2369,10 @@ impl DisplayListRenderer {
     };
     let original_width = rect.width().ceil().max(0.0) as u32;
     let original_height = rect.height().ceil().max(0.0) as u32;
+    let background_timer = self
+      .background_paint_diagnostics
+      .as_ref()
+      .map(|_| Instant::now());
     let timer = self.diagnostics_enabled.then(Instant::now);
     let Some(pixmap) = rasterize_linear_gradient(
       width,
@@ -2363,6 +2409,7 @@ impl DisplayListRenderer {
       transform,
       clip.as_ref(),
     );
+    self.record_background_paint(background_timer);
   }
 
   fn render_radial_gradient(&mut self, item: &RadialGradientItem) {
@@ -2411,6 +2458,10 @@ impl DisplayListRenderer {
     paint.shader = shader;
     paint.anti_alias = true;
     paint.blend_mode = self.canvas.blend_mode();
+    let background_timer = self
+      .background_paint_diagnostics
+      .as_ref()
+      .map(|_| Instant::now());
     let timer = self.diagnostics_enabled.then(Instant::now);
     let transform = self.canvas.transform();
     let clip = self.canvas.clip_mask().cloned();
@@ -2426,6 +2477,7 @@ impl DisplayListRenderer {
         .saturating_mul(visible_rect.height().ceil().max(0.0) as u64);
       self.record_gradient_usage(pixels, start);
     }
+    self.record_background_paint(background_timer);
   }
 
   fn render_conic_gradient(&mut self, item: &ConicGradientItem) {
@@ -2457,6 +2509,10 @@ impl DisplayListRenderer {
     };
     let original_width = rect.width().ceil().max(0.0) as u32;
     let original_height = rect.height().ceil().max(0.0) as u32;
+    let background_timer = self
+      .background_paint_diagnostics
+      .as_ref()
+      .map(|_| Instant::now());
     let timer = self.diagnostics_enabled.then(Instant::now);
     let Some(pix) = rasterize_conic_gradient(
       width,
@@ -2493,6 +2549,7 @@ impl DisplayListRenderer {
       transform,
       clip.as_ref(),
     );
+    self.record_background_paint(background_timer);
   }
 
   fn render_border(&mut self, item: &BorderItem) {
@@ -3807,6 +3864,11 @@ impl DisplayListRenderer {
         .as_ref()
         .map(|d| d.snapshot())
         .unwrap_or_default();
+      let background_stats = self
+        .background_paint_diagnostics
+        .as_ref()
+        .map(|d| d.snapshot())
+        .unwrap_or_default();
       let clip_stats = self
         .clip_mask_diagnostics
         .as_ref()
@@ -3827,6 +3889,7 @@ impl DisplayListRenderer {
         image_pixmap_cache_hits: image_stats.hits,
         image_pixmap_cache_misses: image_stats.misses,
         image_pixmap_ms: image_stats.millis(),
+        background_ms: background_stats.millis(),
         clip_mask_calls: clip_stats.calls,
         clip_mask_ms: clip_stats.millis(),
         clip_mask_pixels: clip_stats.pixels,
@@ -3843,6 +3906,11 @@ impl DisplayListRenderer {
     let serial_duration = start.elapsed();
     let image_stats = self
       .image_pixmap_diagnostics
+      .as_ref()
+      .map(|d| d.snapshot())
+      .unwrap_or_default();
+    let background_stats = self
+      .background_paint_diagnostics
       .as_ref()
       .map(|d| d.snapshot())
       .unwrap_or_default();
@@ -3866,6 +3934,7 @@ impl DisplayListRenderer {
       image_pixmap_cache_hits: image_stats.hits,
       image_pixmap_cache_misses: image_stats.misses,
       image_pixmap_ms: image_stats.millis(),
+      background_ms: background_stats.millis(),
       clip_mask_calls: clip_stats.calls,
       clip_mask_ms: clip_stats.millis(),
       clip_mask_pixels: clip_stats.pixels,
@@ -4162,6 +4231,7 @@ impl DisplayListRenderer {
           renderer.gradient_cache = self.gradient_cache.clone();
           renderer.diagnostics_enabled = self.diagnostics_enabled;
           renderer.image_pixmap_diagnostics = self.image_pixmap_diagnostics.clone();
+          renderer.background_paint_diagnostics = self.background_paint_diagnostics.clone();
           renderer.clip_mask_diagnostics = self.clip_mask_diagnostics.clone();
           renderer.layer_alloc_diagnostics = self.layer_alloc_diagnostics.clone();
           if work.render_x > 0 || work.render_y > 0 {
@@ -4341,6 +4411,7 @@ impl DisplayListRenderer {
     renderer.gradient_cache = self.gradient_cache.clone();
     renderer.diagnostics_enabled = self.diagnostics_enabled;
     renderer.image_pixmap_diagnostics = self.image_pixmap_diagnostics.clone();
+    renderer.background_paint_diagnostics = self.background_paint_diagnostics.clone();
     renderer.clip_mask_diagnostics = self.clip_mask_diagnostics.clone();
     renderer.layer_alloc_diagnostics = self.layer_alloc_diagnostics.clone();
     let report = renderer.render_with_report(&list)?;
@@ -5899,6 +5970,11 @@ impl DisplayListRenderer {
       return Ok(());
     }
 
+    let background_timer = item
+      .src_rect
+      .is_some()
+      .then(|| self.background_paint_diagnostics.as_ref().map(|_| Instant::now()))
+      .flatten();
     let Some(pixmap) = self.image_to_pixmap(item) else {
       return Ok(());
     };
@@ -5946,6 +6022,7 @@ impl DisplayListRenderer {
       clip_mask.as_ref(),
     );
 
+    self.record_background_paint(background_timer);
     Ok(())
   }
 
@@ -5963,6 +6040,10 @@ impl DisplayListRenderer {
       return Ok(());
     }
 
+    let background_timer = self
+      .background_paint_diagnostics
+      .as_ref()
+      .map(|_| Instant::now());
     let Some(pixmap) = self.image_data_to_pixmap(&item.image) else {
       return Ok(());
     };
@@ -6012,6 +6093,7 @@ impl DisplayListRenderer {
       .pixmap_mut()
       .fill_rect(skia_rect, &paint, transform, clip_mask.as_ref());
 
+    self.record_background_paint(background_timer);
     Ok(())
   }
 

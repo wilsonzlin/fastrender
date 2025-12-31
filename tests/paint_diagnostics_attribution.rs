@@ -129,6 +129,10 @@ fn paint_diagnostics_include_attribution_counters() {
     "expected display list background tiles"
   );
   assert!(
+    dl_paint.background_ms.unwrap_or(0.0) > 0.0,
+    "expected display list background timing"
+  );
+  assert!(
     dl_paint.image_pixmap_cache_misses.unwrap_or(0) > 0,
     "expected image pixmap cache misses"
   );
