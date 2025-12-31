@@ -1,7 +1,7 @@
 use crate::geometry::Point;
 use crate::paint::pixmap::new_pixmap;
 use crate::style::color::Rgba;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tiny_skia::{Pixmap, PremultipliedColorU8, SpreadMode};
@@ -144,7 +144,7 @@ impl GradientLut {
 
 #[derive(Clone, Default)]
 pub struct GradientLutCache {
-  inner: Arc<Mutex<HashMap<GradientCacheKey, Arc<GradientLut>>>>,
+  inner: Arc<Mutex<FxHashMap<GradientCacheKey, Arc<GradientLut>>>>,
 }
 
 impl GradientLutCache {
