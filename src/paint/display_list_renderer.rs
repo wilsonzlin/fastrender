@@ -187,6 +187,21 @@ fn transform_rect(rect: Rect, ts: &Transform) -> Rect {
   Rect::from_xywh(min_x, min_y, max_x - min_x, max_y - min_y)
 }
 
+fn invert_transform(ts: Transform) -> Option<Transform> {
+  let det = ts.sx * ts.sy - ts.kx * ts.ky;
+  if !det.is_finite() || det.abs() < 1e-6 {
+    return None;
+  }
+  let inv_det = 1.0 / det;
+  let sx = ts.sy * inv_det;
+  let kx = -ts.kx * inv_det;
+  let ky = -ts.ky * inv_det;
+  let sy = ts.sx * inv_det;
+  let tx = (ts.kx * ts.ty - ts.sy * ts.tx) * inv_det;
+  let ty = (ts.ky * ts.tx - ts.sx * ts.ty) * inv_det;
+  Some(Transform::from_row(sx, ky, kx, sy, tx, ty))
+}
+
 fn shade_color(color: &Rgba, factor: f32) -> Rgba {
   let clamp = |v: f32| v.clamp(0.0, 255.0) as u8;
   let r = clamp(color.r as f32 * factor);
@@ -2057,24 +2072,71 @@ impl DisplayListRenderer {
     }
   }
 
+  fn gradient_visible_rect(&self, rect_device: Rect) -> Option<Rect> {
+    if rect_device.width() <= 0.0
+      || rect_device.height() <= 0.0
+      || !rect_device.x().is_finite()
+      || !rect_device.y().is_finite()
+    {
+      return None;
+    }
+
+    let mut visible_device = self.canvas.bounds();
+    if let Some(clip) = self.canvas.clip_bounds() {
+      visible_device = visible_device.intersection(clip)?;
+    }
+
+    if visible_device.width() <= 0.0 || visible_device.height() <= 0.0 {
+      return None;
+    }
+
+    let transform = self.canvas.transform();
+    let visible_local = if transform == Transform::identity() {
+      visible_device
+    } else {
+      let inv = invert_transform(transform)?;
+      transform_rect(visible_device, &inv)
+    };
+
+    let clipped = rect_device.intersection(visible_local)?;
+    if clipped.width() <= 0.0 || clipped.height() <= 0.0 {
+      return None;
+    }
+    Some(clipped)
+  }
+
   fn render_linear_gradient(&mut self, item: &LinearGradientItem) {
     let Some(stops) = self.convert_stops_rgba(&item.stops) else {
       return;
     };
     let rect = self.ds_rect(item.rect);
-    let width = rect.width().ceil() as u32;
-    let height = rect.height().ceil() as u32;
+    let visible_rect = match self.gradient_visible_rect(rect) {
+      Some(r) => r,
+      None => return,
+    };
+    let width = visible_rect.width().ceil() as u32;
+    let height = visible_rect.height().ceil() as u32;
     if width == 0 || height == 0 {
       return;
     }
 
-    let start = Point::new(self.ds_len(item.start.x), self.ds_len(item.start.y));
-    let end = Point::new(self.ds_len(item.end.x), self.ds_len(item.end.y));
+    let offset_x = visible_rect.x() - rect.x();
+    let offset_y = visible_rect.y() - rect.y();
+    let start = Point::new(
+      self.ds_len(item.start.x) - offset_x,
+      self.ds_len(item.start.y) - offset_y,
+    );
+    let end = Point::new(
+      self.ds_len(item.end.x) - offset_x,
+      self.ds_len(item.end.y) - offset_y,
+    );
     let spread = match item.spread {
       crate::paint::display_list::GradientSpread::Pad => SpreadMode::Pad,
       crate::paint::display_list::GradientSpread::Repeat => SpreadMode::Repeat,
       crate::paint::display_list::GradientSpread::Reflect => SpreadMode::Reflect,
     };
+    let original_width = rect.width().ceil().max(0.0) as u32;
+    let original_height = rect.height().ceil().max(0.0) as u32;
     let timer = self.diagnostics_enabled.then(Instant::now);
     let Some(pixmap) = rasterize_linear_gradient(
       width,
@@ -2084,7 +2146,7 @@ impl DisplayListRenderer {
       spread,
       &stops,
       &self.gradient_cache,
-      gradient_bucket(width.max(height)),
+      gradient_bucket(original_width.max(original_height)),
     ) else {
       return;
     };
@@ -2097,10 +2159,10 @@ impl DisplayListRenderer {
       blend_mode: self.canvas.blend_mode(),
       ..Default::default()
     };
-    let dest_x = rect.x().floor() as i32;
-    let dest_y = rect.y().floor() as i32;
-    let frac_x = rect.x() - dest_x as f32;
-    let frac_y = rect.y() - dest_y as f32;
+    let dest_x = visible_rect.x().floor() as i32;
+    let dest_y = visible_rect.y().floor() as i32;
+    let frac_x = visible_rect.x() - dest_x as f32;
+    let frac_y = visible_rect.y() - dest_y as f32;
     let transform = Transform::from_translate(frac_x, frac_y).post_concat(self.canvas.transform());
     let clip = self.canvas.clip_mask().cloned();
     self.canvas.pixmap_mut().draw_pixmap(
@@ -2118,6 +2180,10 @@ impl DisplayListRenderer {
       return;
     };
     let rect = self.ds_rect(item.rect);
+    let visible_rect = match self.gradient_visible_rect(rect) {
+      Some(r) => r,
+      None => return,
+    };
     let center = SkiaPoint::from_xy(
       rect.x() + self.ds_len(item.center.x),
       rect.y() + self.ds_len(item.center.y),
@@ -2140,9 +2206,12 @@ impl DisplayListRenderer {
       return;
     };
 
-    let Some(skia_rect) =
-      tiny_skia::Rect::from_xywh(rect.x(), rect.y(), rect.width(), rect.height())
-    else {
+    let Some(skia_rect) = tiny_skia::Rect::from_xywh(
+      visible_rect.x(),
+      visible_rect.y(),
+      visible_rect.width(),
+      visible_rect.height(),
+    ) else {
       return;
     };
 
@@ -2163,16 +2232,20 @@ impl DisplayListRenderer {
       clip.as_ref(),
     );
     if let Some(start) = timer {
-      let pixels =
-        (rect.width().ceil().max(0.0) as u64).saturating_mul(rect.height().ceil().max(0.0) as u64);
+      let pixels = (visible_rect.width().ceil().max(0.0) as u64)
+        .saturating_mul(visible_rect.height().ceil().max(0.0) as u64);
       self.record_gradient_usage(pixels, start);
     }
   }
 
   fn render_conic_gradient(&mut self, item: &ConicGradientItem) {
     let rect = self.ds_rect(item.rect);
-    let width = rect.width().ceil() as u32;
-    let height = rect.height().ceil() as u32;
+    let visible_rect = match self.gradient_visible_rect(rect) {
+      Some(r) => r,
+      None => return,
+    };
+    let width = visible_rect.width().ceil() as u32;
+    let height = visible_rect.height().ceil() as u32;
     if width == 0 || height == 0 {
       return;
     }
@@ -2181,12 +2254,19 @@ impl DisplayListRenderer {
       return;
     };
 
-    let center = Point::new(self.ds_len(item.center.x), self.ds_len(item.center.y));
+    let offset_x = visible_rect.x() - rect.x();
+    let offset_y = visible_rect.y() - rect.y();
+    let center = Point::new(
+      self.ds_len(item.center.x) - offset_x,
+      self.ds_len(item.center.y) - offset_y,
+    );
     let spread = if item.repeating {
       SpreadMode::Repeat
     } else {
       SpreadMode::Pad
     };
+    let original_width = rect.width().ceil().max(0.0) as u32;
+    let original_height = rect.height().ceil().max(0.0) as u32;
     let timer = self.diagnostics_enabled.then(Instant::now);
     let Some(pix) = rasterize_conic_gradient(
       width,
@@ -2196,7 +2276,7 @@ impl DisplayListRenderer {
       spread,
       &stops,
       &self.gradient_cache,
-      gradient_bucket(width.max(height).saturating_mul(2)),
+      gradient_bucket(original_width.max(original_height).saturating_mul(2)),
     ) else {
       return;
     };
@@ -2209,10 +2289,10 @@ impl DisplayListRenderer {
       blend_mode: self.canvas.blend_mode(),
       ..Default::default()
     };
-    let dest_x = rect.x().floor() as i32;
-    let dest_y = rect.y().floor() as i32;
-    let frac_x = rect.x() - dest_x as f32;
-    let frac_y = rect.y() - dest_y as f32;
+    let dest_x = visible_rect.x().floor() as i32;
+    let dest_y = visible_rect.y().floor() as i32;
+    let frac_x = visible_rect.x() - dest_x as f32;
+    let frac_y = visible_rect.y() - dest_y as f32;
     let transform = Transform::from_translate(frac_x, frac_y).post_concat(self.canvas.transform());
     let clip = self.canvas.clip_mask().cloned();
     self.canvas.pixmap_mut().draw_pixmap(
@@ -6569,6 +6649,64 @@ mod tests {
     (data[idx], data[idx + 1], data[idx + 2], data[idx + 3])
   }
 
+  fn assert_rgba_close(actual: (u8, u8, u8, u8), expected: (u8, u8, u8, u8), tol: u8) {
+    let diffs = [
+      actual.0.abs_diff(expected.0),
+      actual.1.abs_diff(expected.1),
+      actual.2.abs_diff(expected.2),
+      actual.3.abs_diff(expected.3),
+    ];
+    assert!(
+      diffs.into_iter().all(|d| d <= tol),
+      "expected {:?} ≈ {:?} (tol {}), diffs {:?}",
+      actual,
+      expected,
+      tol,
+      diffs
+    );
+  }
+
+  fn expected_linear_red_blue(
+    rect: Rect,
+    start: Point,
+    end: Point,
+    x: u32,
+    y: u32,
+  ) -> (u8, u8, u8, u8) {
+    let px = x as f32 + 0.5 - rect.x();
+    let py = y as f32 + 0.5 - rect.y();
+    let dx = end.x - start.x;
+    let dy = end.y - start.y;
+    let denom = dx * dx + dy * dy;
+    if denom.abs() < f32::EPSILON {
+      return (255, 0, 0, 255);
+    }
+    let t = ((px - start.x) * dx + (py - start.y) * dy) / denom;
+    let t = t.clamp(0.0, 1.0);
+    let r = (255.0 * (1.0 - t)).round().clamp(0.0, 255.0) as u8;
+    let b = (255.0 * t).round().clamp(0.0, 255.0) as u8;
+    (r, 0, b, 255)
+  }
+
+  fn expected_conic_red_blue(
+    rect: Rect,
+    center: Point,
+    from_angle_deg: f32,
+    x: u32,
+    y: u32,
+  ) -> (u8, u8, u8, u8) {
+    let px = x as f32 + 0.5 - rect.x();
+    let py = y as f32 + 0.5 - rect.y();
+    let dx = px - center.x;
+    let dy = py - center.y;
+    let start_angle = from_angle_deg.to_radians();
+    let angle = dx.atan2(-dy) + start_angle;
+    let pos = (angle / (std::f32::consts::PI * 2.0)).rem_euclid(1.0);
+    let r = (255.0 * (1.0 - pos)).round().clamp(0.0, 255.0) as u8;
+    let b = (255.0 * pos).round().clamp(0.0, 255.0) as u8;
+    (r, 0, b, 255)
+  }
+
   fn bounding_box_for_color(
     pixmap: &Pixmap,
     predicate: impl Fn((u8, u8, u8, u8)) -> bool,
@@ -7123,6 +7261,48 @@ mod tests {
   }
 
   #[test]
+  fn linear_gradient_clips_to_visible_bounds_and_does_not_skip() {
+    let mut renderer = DisplayListRenderer::new(64, 64, Rgba::WHITE, FontContext::new()).unwrap();
+    renderer.diagnostics_enabled = true;
+    let mut list = DisplayList::new();
+    let rect = Rect::from_xywh(-10_000.0, -10_000.0, 20_000.0, 20_000.0);
+    let start = Point::new(0.0, 0.0);
+    let end = Point::new(20_000.0, 0.0);
+    list.push(DisplayItem::LinearGradient(LinearGradientItem {
+      rect,
+      start,
+      end,
+      spread: GradientSpread::Pad,
+      stops: vec![
+        GradientStop {
+          position: 0.0,
+          color: Rgba::rgb(255, 0, 0),
+        },
+        GradientStop {
+          position: 1.0,
+          color: Rgba::rgb(0, 0, 255),
+        },
+      ],
+    }));
+
+    let report = renderer.render_with_report(&list).unwrap();
+    assert_eq!(
+      report.gradient_stats.pixels,
+      (64 * 64) as u64,
+      "should only rasterize the visible portion of the oversized gradient"
+    );
+
+    let pixmap = report.pixmap;
+    let actual = pixel(&pixmap, 0, 0);
+    let expected = expected_linear_red_blue(rect, start, end, 0, 0);
+    assert_rgba_close(actual, expected, 1);
+
+    let actual = pixel(&pixmap, 63, 0);
+    let expected = expected_linear_red_blue(rect, start, end, 63, 0);
+    assert_rgba_close(actual, expected, 1);
+  }
+
+  #[test]
   fn renders_radial_gradient_center_color() {
     let renderer = DisplayListRenderer::new(3, 3, Rgba::WHITE, FontContext::new()).unwrap();
     let mut list = DisplayList::new();
@@ -7174,6 +7354,46 @@ mod tests {
     let pixmap = renderer.render(&list).unwrap();
     assert!(pixel(&pixmap, 2, 0).0 > pixel(&pixmap, 2, 0).2);
     assert!(pixel(&pixmap, 2, 3).2 > pixel(&pixmap, 2, 3).0);
+  }
+
+  #[test]
+  fn conic_gradient_clips_to_visible_bounds_and_does_not_skip() {
+    let mut renderer = DisplayListRenderer::new(64, 64, Rgba::WHITE, FontContext::new()).unwrap();
+    renderer.diagnostics_enabled = true;
+    let mut list = DisplayList::new();
+    let rect = Rect::from_xywh(-10_000.0, -10_000.0, 20_000.0, 20_000.0);
+    let center = Point::new(10_032.0, 10_032.0);
+    let from_angle = 0.0;
+    list.push(DisplayItem::ConicGradient(ConicGradientItem {
+      rect,
+      center,
+      from_angle,
+      repeating: false,
+      stops: vec![
+        GradientStop {
+          position: 0.0,
+          color: Rgba::rgb(255, 0, 0),
+        },
+        GradientStop {
+          position: 1.0,
+          color: Rgba::rgb(0, 0, 255),
+        },
+      ],
+    }));
+
+    let report = renderer.render_with_report(&list).unwrap();
+    assert_eq!(
+      report.gradient_stats.pixels,
+      (64 * 64) as u64,
+      "should only rasterize the visible portion of the oversized conic gradient"
+    );
+
+    let pixmap = report.pixmap;
+    for (x, y) in [(32, 0), (63, 32), (32, 63), (0, 32)] {
+      let actual = pixel(&pixmap, x, y);
+      let expected = expected_conic_red_blue(rect, center, from_angle, x, y);
+      assert_rgba_close(actual, expected, 3);
+    }
   }
 
   #[test]
