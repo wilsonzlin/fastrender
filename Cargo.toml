@@ -86,6 +86,10 @@ harness = false
 name = "http_agent_pool"
 harness = false
 
+[[bench]]
+name = "disk_cache_contention"
+harness = false
+
 [[bin]]
 name = "bench_compare"
 path = "tools/bench_compare.rs"

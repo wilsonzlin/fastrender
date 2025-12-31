@@ -45,7 +45,7 @@ struct OrderKey {
   order: u64,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "op", rename_all = "snake_case")]
 enum JournalRecord {
   Insert {
@@ -110,6 +110,41 @@ impl DiskCacheIndex {
     }
   }
 
+  pub(super) fn record_insert_and_evict_if_needed<F>(
+    &self,
+    key: &str,
+    stored_at: u64,
+    len: u64,
+    data_path: &Path,
+    meta_path: &Path,
+    max_bytes: u64,
+    mut can_remove: F,
+  ) where
+    F: FnMut(&Path) -> bool,
+  {
+    let mut state = self.state.lock().unwrap();
+    if self.refresh_locked(&mut state).is_err() {
+      let _ = self.rebuild_from_disk(&mut state);
+    }
+
+    let record = JournalRecord::Insert {
+      key: key.to_string(),
+      stored_at,
+      len,
+      data_file: self.relative_path(data_path),
+      meta_file: self.relative_path(meta_path),
+    };
+
+    if self.append_record_locked(&mut state, &record).is_err() {
+      let _ = self.rebuild_from_disk(&mut state);
+      return;
+    }
+
+    if let Err(_) = self.evict_if_needed_locked(&mut state, max_bytes, &mut can_remove) {
+      let _ = self.rebuild_from_disk(&mut state);
+    }
+  }
+
   pub(super) fn record_removal(&self, key: &str, data_path: &Path, meta_path: &Path) {
     let mut state = self.state.lock().unwrap();
     if self.refresh_locked(&mut state).is_err() {
@@ -135,6 +170,9 @@ impl DiskCacheIndex {
     meta_path: &Path,
   ) {
     let mut state = self.state.lock().unwrap();
+    if state.loaded && state.entries.contains_key(key) {
+      return;
+    }
     if self.refresh_locked(&mut state).is_err() {
       let _ = self.rebuild_from_disk(&mut state);
     }
@@ -165,24 +203,8 @@ impl DiskCacheIndex {
     if self.refresh_locked(&mut state).is_err() {
       let _ = self.rebuild_from_disk(&mut state);
     }
-
-    let keys: Vec<String> = state.order.iter().map(|(_, key)| key.clone()).collect();
-    for key in keys {
-      if state.total_bytes <= max_bytes {
-        break;
-      }
-      let Some(entry) = state.entries.get(&key).cloned() else {
-        continue;
-      };
-      if !can_remove(&entry.data_path) {
-        continue;
-      }
-      let _ = self.remove_paths(&entry.data_path, &entry.meta_path);
-      let record = JournalRecord::Remove { key };
-      if self.append_record_locked(&mut state, &record).is_err() {
-        let _ = self.rebuild_from_disk(&mut state);
-        break;
-      }
+    if let Err(_) = self.evict_if_needed_locked(&mut state, max_bytes, &mut can_remove) {
+      let _ = self.rebuild_from_disk(&mut state);
     }
   }
 
@@ -219,12 +241,109 @@ impl DiskCacheIndex {
     Ok(())
   }
 
+  fn append_records_locked(
+    &self,
+    state: &mut IndexState,
+    records: &[JournalRecord],
+  ) -> std::io::Result<()> {
+    if records.is_empty() {
+      return Ok(());
+    }
+
+    let start_offset = state.journal_len;
+    let mut file = OpenOptions::new()
+      .create(true)
+      .append(true)
+      .open(&self.journal_path)?;
+
+    let mut buf = Vec::new();
+    for record in records {
+      let mut line = serde_json::to_vec(record)?;
+      line.push(b'\n');
+      buf.extend_from_slice(&line);
+    }
+
+    file.write_all(&buf)?;
+    file.flush()?;
+    let end_offset = file.stream_position()?;
+    drop(file);
+
+    let actual_start = end_offset.saturating_sub(buf.len() as u64);
+    if actual_start == start_offset {
+      for record in records {
+        self.apply_record(state, record.clone());
+      }
+      state.loaded = true;
+      state.journal_len = end_offset;
+      Ok(())
+    } else {
+      self.replay_from_offset(state, start_offset)?;
+      state.loaded = true;
+      Ok(())
+    }
+  }
+
+  fn evict_if_needed_locked<F>(
+    &self,
+    state: &mut IndexState,
+    max_bytes: u64,
+    can_remove: &mut F,
+  ) -> std::io::Result<()>
+  where
+    F: FnMut(&Path) -> bool,
+  {
+    if max_bytes == 0 || state.total_bytes <= max_bytes {
+      return Ok(());
+    }
+
+    let mut to_remove: Vec<String> = Vec::new();
+    let mut projected_total = state.total_bytes;
+    for (_, key) in state.order.iter() {
+      if projected_total <= max_bytes {
+        break;
+      }
+      let Some(entry) = state.entries.get(key) else {
+        continue;
+      };
+      if !can_remove(&entry.data_path) {
+        continue;
+      }
+      to_remove.push(key.clone());
+      projected_total = projected_total.saturating_sub(entry.len);
+    }
+
+    if to_remove.is_empty() {
+      return Ok(());
+    }
+
+    let mut records: Vec<JournalRecord> = Vec::with_capacity(to_remove.len());
+    for key in to_remove {
+      let Some(entry) = state.entries.get(&key).cloned() else {
+        continue;
+      };
+      let _ = self.remove_paths(&entry.data_path, &entry.meta_path);
+      self.apply_remove(state, &key);
+      records.push(JournalRecord::Remove { key });
+      if state.total_bytes <= max_bytes {
+        break;
+      }
+    }
+
+    self.append_records_locked(state, &records)
+  }
+
   fn replay_from_offset(&self, state: &mut IndexState, offset: u64) -> std::io::Result<()> {
     let file = File::open(&self.journal_path)?;
     let mut reader = BufReader::new(file);
     reader.seek(SeekFrom::Start(offset))?;
     let mut line = String::new();
-    while reader.read_line(&mut line)? != 0 {
+    let mut bytes_read: u64 = 0;
+    loop {
+      let n = reader.read_line(&mut line)?;
+      if n == 0 {
+        break;
+      }
+      bytes_read = bytes_read.saturating_add(n as u64);
       if line.trim().is_empty() {
         line.clear();
         continue;
@@ -242,7 +361,7 @@ impl DiskCacheIndex {
     {
       state.journal_replays += 1;
     }
-    state.journal_len = reader.get_ref().metadata()?.len();
+    state.journal_len = offset.saturating_add(bytes_read);
     Ok(())
   }
 
@@ -388,6 +507,7 @@ impl DiskCacheIndex {
       .truncate(true)
       .open(&self.journal_path)?;
 
+    let mut written: u64 = 0;
     for (_, key) in state.order.iter() {
       if let Some(entry) = state.entries.get(key) {
         let record = JournalRecord::Insert {
@@ -397,13 +517,14 @@ impl DiskCacheIndex {
           data_file: self.relative_path(&entry.data_path),
           meta_file: self.relative_path(&entry.meta_path),
         };
-        let line = serde_json::to_string(&record)?;
-        file.write_all(line.as_bytes())?;
-        file.write_all(b"\n")?;
+        let mut line = serde_json::to_vec(&record)?;
+        line.push(b'\n');
+        file.write_all(&line)?;
+        written = written.saturating_add(line.len() as u64);
       }
     }
     file.flush()?;
-    state.journal_len = file.metadata()?.len();
+    state.journal_len = written;
     Ok(())
   }
 
@@ -417,12 +538,26 @@ impl DiskCacheIndex {
       .create(true)
       .append(true)
       .open(&self.journal_path)?;
-    let line = serde_json::to_string(record)?;
-    file.write_all(line.as_bytes())?;
-    file.write_all(b"\n")?;
+    let mut bytes = serde_json::to_vec(record)?;
+    bytes.push(b'\n');
+
+    file.write_all(&bytes)?;
     file.flush()?;
+    let end_offset = file.stream_position()?;
     drop(file);
-    self.replay_from_offset(state, start_offset)
+
+    let expected_start = start_offset;
+    let actual_start = end_offset.saturating_sub(bytes.len() as u64);
+    if actual_start == expected_start {
+      self.apply_record(state, record.clone());
+      state.loaded = true;
+      state.journal_len = end_offset;
+      Ok(())
+    } else {
+      self.replay_from_offset(state, start_offset)?;
+      state.loaded = true;
+      Ok(())
+    }
   }
 
   fn meta_path_for_data(&self, data_path: &Path) -> PathBuf {
@@ -468,6 +603,9 @@ impl DiskCacheIndex {
 mod tests {
   use super::*;
   use std::fs;
+  use std::sync::Arc;
+  use std::sync::Barrier;
+  use std::thread;
 
   fn write_entry(cache_dir: &Path, key: &str, stored_at: u64) {
     let data_path = cache_dir.join(format!("{key}.bin"));
@@ -537,5 +675,45 @@ mod tests {
       inserts.windows(2).all(|w| w[0] <= w[1]),
       "journal inserts should be ordered by (stored_at, key): {inserts:?}"
     );
+  }
+
+  #[test]
+  fn concurrent_journal_appends_remain_parseable() {
+    let tmp = tempfile::tempdir().unwrap();
+    let journal_path = tmp.path().join("index.jsonl");
+    fs::write(&journal_path, b"").expect("seed empty journal");
+
+    let threads = 8usize;
+    let inserts_per_thread = 64usize;
+    let barrier = Arc::new(Barrier::new(threads));
+
+    let mut handles = Vec::new();
+    for t in 0..threads {
+      let barrier = Arc::clone(&barrier);
+      let cache_dir = tmp.path().to_path_buf();
+      handles.push(thread::spawn(move || {
+        let index = DiskCacheIndex::new(cache_dir.clone());
+        barrier.wait();
+        for i in 0..inserts_per_thread {
+          let key = format!("k{t}_{i}");
+          let data_path = cache_dir.join(format!("{key}.bin"));
+          let meta_path = cache_dir.join(format!("{key}.bin.meta"));
+          index.record_insert(&key, 1_700_000_000, 1, &data_path, &meta_path);
+        }
+      }));
+    }
+
+    for handle in handles {
+      handle.join().expect("thread should not panic");
+    }
+
+    let journal = fs::read_to_string(&journal_path).expect("read journal");
+    for (idx, line) in journal.lines().enumerate() {
+      if line.trim().is_empty() {
+        continue;
+      }
+      serde_json::from_str::<JournalRecord>(line)
+        .unwrap_or_else(|err| panic!("invalid journal line {idx}: {err} (raw={line:?})"));
+    }
   }
 }

@@ -72,7 +72,8 @@ impl Default for DiskCacheConfig {
 
 const DEFAULT_LOCK_STALE_AFTER: Duration = Duration::from_secs(8);
 const LOCK_WAIT_TIMEOUT: Duration = Duration::from_millis(500);
-const LOCK_RETRY_DELAY: Duration = Duration::from_millis(10);
+const LOCK_RETRY_INITIAL_DELAY: Duration = Duration::from_millis(2);
+const LOCK_RETRY_MAX_DELAY: Duration = Duration::from_millis(50);
 const READ_LOCK_WAIT_TIMEOUT: Duration = Duration::from_millis(200);
 const READ_LOCK_RETRY_INITIAL_DELAY: Duration = Duration::from_millis(5);
 const READ_LOCK_RETRY_MAX_DELAY: Duration = Duration::from_millis(50);
@@ -157,6 +158,34 @@ fn lock_age_from_metadata(meta: &fs::Metadata) -> Option<Duration> {
     .and_then(|time| SystemTime::now().duration_since(time).ok())
 }
 
+fn hash_u64(input: &str) -> u64 {
+  let mut hash: u64 = 0xcbf29ce484222325;
+  for &b in input.as_bytes() {
+    hash ^= u64::from(b);
+    hash = hash.wrapping_mul(0x100000001b3);
+  }
+  hash
+}
+
+fn pseudo_rand_u64(mut x: u64) -> u64 {
+  x ^= x >> 12;
+  x ^= x << 25;
+  x ^= x >> 27;
+  x.wrapping_mul(0x2545F4914F6CDD1D)
+}
+
+fn jitter_duration(max: Duration, seed: u64) -> Duration {
+  if max.is_zero() {
+    return Duration::ZERO;
+  }
+  let max_ns = max.as_nanos();
+  let denom = max_ns.saturating_add(1);
+  let rand = pseudo_rand_u64(seed) as u128;
+  let jitter_ns = rand % denom;
+  let secs = (jitter_ns / 1_000_000_000) as u64;
+  let nanos = (jitter_ns % 1_000_000_000) as u32;
+  Duration::new(secs, nanos)
+}
 impl<F: ResourceFetcher> DiskCachingFetcher<F> {
   pub fn new(inner: F, cache_dir: impl Into<PathBuf>) -> Self {
     let memory_config = CachingFetcherConfig {
@@ -269,6 +298,9 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     let lock_path = lock_path_for(data_path);
     let max_wait = self.deadline_aware_lock_wait(LOCK_WAIT_TIMEOUT);
     let deadline = Instant::now() + max_wait;
+    let mut delay = LOCK_RETRY_INITIAL_DELAY;
+    let path_hash = hash_u64(&lock_path.to_string_lossy());
+    let mut attempt: u64 = 0;
 
     loop {
       match OpenOptions::new()
@@ -291,12 +323,29 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
             continue;
           }
 
-          if max_wait.is_zero() || Instant::now() >= deadline {
+          let now = Instant::now();
+          if now >= deadline {
             return None;
           }
-
-          let now = Instant::now();
-          thread::sleep(LOCK_RETRY_DELAY.min(deadline.saturating_duration_since(now)));
+          let remaining = deadline.saturating_duration_since(now);
+          let sleep_cap = delay.min(remaining);
+          if !sleep_cap.is_zero() {
+            let half = sleep_cap / 2;
+            let now_ns = SystemTime::now()
+              .duration_since(UNIX_EPOCH)
+              .map(|d| d.as_nanos() as u64)
+              .unwrap_or(0);
+            let seed = now_ns
+              ^ path_hash
+              ^ attempt.wrapping_mul(0x9E3779B97F4A7C15)
+              ^ (u64::from(std::process::id()));
+            let sleep_for = (half + jitter_duration(half, seed)).min(remaining);
+            if !sleep_for.is_zero() {
+              thread::sleep(sleep_for);
+            }
+          }
+          delay = delay.saturating_mul(2).min(LOCK_RETRY_MAX_DELAY);
+          attempt = attempt.wrapping_add(1);
         }
         Err(_) => return None,
       }
@@ -325,13 +374,32 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
 
     let deadline = Instant::now() + max_wait;
     let mut delay = READ_LOCK_RETRY_INITIAL_DELAY;
+    let path_hash = hash_u64(&data_path.to_string_lossy());
+    let mut attempt: u64 = 0;
     while self.lock_is_active(data_path) {
       let now = Instant::now();
       if now >= deadline {
         return false;
       }
-      thread::sleep(delay.min(deadline.saturating_duration_since(now)));
+      let remaining = deadline.saturating_duration_since(now);
+      let sleep_cap = delay.min(remaining);
+      if !sleep_cap.is_zero() {
+        let half = sleep_cap / 2;
+        let now_ns = SystemTime::now()
+          .duration_since(UNIX_EPOCH)
+          .map(|d| d.as_nanos() as u64)
+          .unwrap_or(0);
+        let seed = now_ns
+          ^ path_hash
+          ^ attempt.wrapping_mul(0x9E3779B97F4A7C15)
+          ^ (u64::from(std::process::id()));
+        let sleep_for = (half + jitter_duration(half, seed)).min(remaining);
+        if !sleep_for.is_zero() {
+          thread::sleep(sleep_for);
+        }
+      }
       delay = delay.saturating_mul(2).min(READ_LOCK_RETRY_MAX_DELAY);
+      attempt = attempt.wrapping_add(1);
     }
 
     true
@@ -344,8 +412,6 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
   }
 
   fn read_disk_entry(&self, url: &str) -> Option<(String, CachedSnapshot)> {
-    self.index.refresh();
-
     let mut current = url.to_string();
     let mut hops = 0usize;
 
@@ -606,18 +672,15 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       return;
     }
 
-    self.index.record_insert(
+    self.index.record_insert_and_evict_if_needed(
       &key,
       stored_at,
       resource.bytes.len() as u64,
       &data_path,
       &meta_path,
+      self.disk_config.max_bytes,
+      |path| !self.lock_is_active(path),
     );
-    self
-      .index
-      .evict_if_needed(self.disk_config.max_bytes, |path| {
-        !self.lock_is_active(path)
-      });
   }
 
   fn remove_entry(&self, key: &str, data_path: &Path, meta_path: &Path) -> Result<()> {
