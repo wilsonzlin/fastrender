@@ -679,6 +679,16 @@ static UA_LINK_VISITED_DECLS: OnceLock<Vec<Declaration>> = OnceLock::new();
 static UA_LINK_ACTIVE_DECLS: OnceLock<Vec<Declaration>> = OnceLock::new();
 static UA_LINK_HOVER_DECLS: OnceLock<Vec<Declaration>> = OnceLock::new();
 static UA_LINK_FOCUS_DECLS: OnceLock<Vec<Declaration>> = OnceLock::new();
+static UA_BDI_LTR_DECLS: OnceLock<Vec<Declaration>> = OnceLock::new();
+static UA_BDI_RTL_DECLS: OnceLock<Vec<Declaration>> = OnceLock::new();
+static UA_BDO_DECLS: OnceLock<Vec<Declaration>> = OnceLock::new();
+
+static PRESENTATIONAL_DIR_ISOLATE_LTR_DECLS: OnceLock<Vec<Declaration>> = OnceLock::new();
+static PRESENTATIONAL_DIR_ISOLATE_RTL_DECLS: OnceLock<Vec<Declaration>> = OnceLock::new();
+static PRESENTATIONAL_DIR_OVERRIDE_LTR_DECLS: OnceLock<Vec<Declaration>> = OnceLock::new();
+static PRESENTATIONAL_DIR_OVERRIDE_RTL_DECLS: OnceLock<Vec<Declaration>> = OnceLock::new();
+static PRESENTATIONAL_NOWRAP_DECLS: OnceLock<Vec<Declaration>> = OnceLock::new();
+static PRESENTATIONAL_HIDDEN_DECLS: OnceLock<Vec<Declaration>> = OnceLock::new();
 
 fn cached_declarations(
   cache: &'static OnceLock<Vec<Declaration>>,
@@ -5400,16 +5410,15 @@ fn ua_default_rules(
       crate::style::types::Direction::Rtl => "rtl",
       crate::style::types::Direction::Ltr => "ltr",
     };
-    add_rule(
-      Cow::Owned(parse_declarations(&format!(
-        "unicode-bidi: isolate; direction: {};",
-        dir_value
-      ))),
-      0,
-    );
+    let decls = if dir_value == "rtl" {
+      cached_declarations(&UA_BDI_RTL_DECLS, "unicode-bidi: isolate; direction: rtl;")
+    } else {
+      cached_declarations(&UA_BDI_LTR_DECLS, "unicode-bidi: isolate; direction: ltr;")
+    };
+    add_rule(decls, 0);
   } else if tag.eq_ignore_ascii_case("bdo") && node.get_attribute_ref("dir").is_none() {
     add_rule(
-      Cow::Owned(parse_declarations("unicode-bidi: bidi-override; direction: ltr;")),
+      cached_declarations(&UA_BDO_DECLS, "unicode-bidi: bidi-override; direction: ltr;"),
       0,
     );
   } else if tag.eq_ignore_ascii_case("textarea") {
@@ -6174,11 +6183,11 @@ fn compute_base_styles<'a>(
   }
 
   if let Some(lang) = node
-    .get_attribute("lang")
-    .or_else(|| node.get_attribute("xml:lang"))
+    .get_attribute_ref("lang")
+    .or_else(|| node.get_attribute_ref("xml:lang"))
     .filter(|l| !l.is_empty())
   {
-    ua_styles.language = normalize_language_tag(&lang);
+    ua_styles.language = normalize_language_tag(lang);
   }
 
   let is_root = is_root_element(ancestors);
@@ -6235,11 +6244,11 @@ fn compute_base_styles<'a>(
 
   // Apply language from attributes (inherits by default)
   if let Some(lang) = node
-    .get_attribute("lang")
-    .or_else(|| node.get_attribute("xml:lang"))
+    .get_attribute_ref("lang")
+    .or_else(|| node.get_attribute_ref("xml:lang"))
     .filter(|l| !l.is_empty())
   {
-    styles.language = normalize_language_tag(&lang);
+    styles.language = normalize_language_tag(lang);
   }
 
   // Finalize grid placement - resolve named grid lines
@@ -15272,59 +15281,62 @@ fn dir_presentational_hint(
   order: usize,
 ) -> Option<MatchedRule<'static>> {
   let dir = node.get_attribute_ref("dir")?.trim();
-  let unicode_bidi_value = node
+  let is_bdo = node
     .tag_name()
     .map(|tag| tag.eq_ignore_ascii_case("bdo"))
-    .unwrap_or(false)
-    .then_some("bidi-override")
-    .unwrap_or("isolate");
+    .unwrap_or(false);
 
-  let dir_value = if dir.eq_ignore_ascii_case("ltr") {
+  let mut dir_value = if dir.eq_ignore_ascii_case("ltr") {
     Some("ltr")
   } else if dir.eq_ignore_ascii_case("rtl") {
     Some("rtl")
   } else {
     None
   };
-  if let Some(dir_value) = dir_value {
-    let css = format!(
-      "direction: {}; unicode-bidi: {};",
-      dir_value, unicode_bidi_value
-    );
-    let declarations = parse_declarations(&css);
-    return Some(MatchedRule {
-      origin: StyleOrigin::Author,
-      specificity: 0,
-      order,
-      layer_order: layer_order.clone(),
-      declarations: Cow::Owned(declarations),
-      starting_style: false,
-    });
-  }
-
-  if dir.eq_ignore_ascii_case("auto") {
+  if dir_value.is_none() && dir.eq_ignore_ascii_case("auto") {
     let resolved = resolve_first_strong_direction(node).map(|d| match d {
       TextDirection::Ltr => crate::style::types::Direction::Ltr,
       TextDirection::Rtl => crate::style::types::Direction::Rtl,
     });
-    let dir_value = match resolved.unwrap_or(fallback_direction) {
+    dir_value = Some(match resolved.unwrap_or(fallback_direction) {
       crate::style::types::Direction::Rtl => "rtl",
       crate::style::types::Direction::Ltr => "ltr",
-    };
-    let declarations = parse_declarations(&format!(
-      "direction: {}; unicode-bidi: {};",
-      dir_value, unicode_bidi_value
-    ));
-    return Some(MatchedRule {
-      origin: StyleOrigin::Author,
-      specificity: 0,
-      order,
-      layer_order: layer_order.clone(),
-      declarations: Cow::Owned(declarations),
-      starting_style: false,
     });
   }
-  None
+  let dir_value = dir_value?;
+
+  let declarations = if is_bdo {
+    if dir_value == "rtl" {
+      cached_declarations(
+        &PRESENTATIONAL_DIR_OVERRIDE_RTL_DECLS,
+        "direction: rtl; unicode-bidi: bidi-override;",
+      )
+    } else {
+      cached_declarations(
+        &PRESENTATIONAL_DIR_OVERRIDE_LTR_DECLS,
+        "direction: ltr; unicode-bidi: bidi-override;",
+      )
+    }
+  } else if dir_value == "rtl" {
+    cached_declarations(
+      &PRESENTATIONAL_DIR_ISOLATE_RTL_DECLS,
+      "direction: rtl; unicode-bidi: isolate;",
+    )
+  } else {
+    cached_declarations(
+      &PRESENTATIONAL_DIR_ISOLATE_LTR_DECLS,
+      "direction: ltr; unicode-bidi: isolate;",
+    )
+  };
+
+  Some(MatchedRule {
+    origin: StyleOrigin::Author,
+    specificity: 0,
+    order,
+    layer_order: layer_order.clone(),
+    declarations,
+    starting_style: false,
+  })
 }
 
 fn list_type_presentational_hint(
@@ -15788,7 +15800,7 @@ fn nowrap_presentational_hint(
     specificity: 0,
     order,
     layer_order: layer_order.clone(),
-    declarations: Cow::Owned(parse_declarations("white-space: nowrap;")),
+    declarations: cached_declarations(&PRESENTATIONAL_NOWRAP_DECLS, "white-space: nowrap;"),
     starting_style: false,
   })
 }
@@ -15805,7 +15817,7 @@ fn hidden_presentational_hint(
     specificity: 0,
     order,
     layer_order: layer_order.clone(),
-    declarations: Cow::Owned(parse_declarations("display: none;")),
+    declarations: cached_declarations(&PRESENTATIONAL_HIDDEN_DECLS, "display: none;"),
     starting_style: false,
   })
 }
