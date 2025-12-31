@@ -11180,7 +11180,8 @@ pub fn paint_tree_display_list_with_resources_scaled_offset_depth(
   };
   let display_list_result = match build_budget {
     Some(budget) => {
-      let deadline = RenderDeadline::new(Some(budget), None);
+      let cancel = active_deadline().and_then(|deadline| deadline.cancel_callback());
+      let deadline = RenderDeadline::new(Some(budget), cancel);
       with_deadline(Some(&deadline), || {
         let mut display_list = build_display_list_for_root(&tree.root)?;
         for extra in &tree.additional_fragments {
@@ -11205,6 +11206,11 @@ pub fn paint_tree_display_list_with_resources_scaled_offset_depth(
       // deadline, fall back to the legacy painter if the builder can't complete within a small
       // slice of the remaining budget.
       if build_budget.is_some() && matches!(err, Error::Render(RenderError::Timeout { .. })) {
+        // If the outer render deadline has expired/canceled, surface it instead of treating this
+        // as a display-list build budget timeout.
+        if let Err(err) = check_active(RenderStage::Paint) {
+          return Err(Error::Render(err));
+        }
         return legacy_paint_tree_with_resources_scaled_offset(
           tree,
           width,
@@ -11240,7 +11246,8 @@ pub fn paint_tree_display_list_with_resources_scaled_offset_depth(
   let original_items = display_list.len();
   let optimize_result = match optimize_budget {
     Some(budget) => {
-      let deadline = RenderDeadline::new(Some(budget), None);
+      let cancel = active_deadline().and_then(|deadline| deadline.cancel_callback());
+      let deadline = RenderDeadline::new(Some(budget), cancel);
       with_deadline(Some(&deadline), || optimizer.optimize_checked(&display_list, viewport_rect))
     }
     None => optimizer.optimize_checked(&display_list, viewport_rect),
@@ -11251,6 +11258,9 @@ pub fn paint_tree_display_list_with_resources_scaled_offset_depth(
       // Optimization is optional; if we hit the optimization budget, rasterize the original
       // display list (still benefiting from display-list renderer caching + tiling).
       if optimize_budget.is_some() && matches!(err, Error::Render(RenderError::Timeout { .. })) {
+        if let Err(err) = check_active(RenderStage::Paint) {
+          return Err(Error::Render(err));
+        }
         (
           display_list,
           crate::paint::optimize::OptimizationStats {

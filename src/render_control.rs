@@ -144,6 +144,11 @@ impl RenderDeadline {
     self.timeout
   }
 
+  /// Returns the configured cooperative cancellation callback, if any.
+  pub fn cancel_callback(&self) -> Option<Arc<CancelCallback>> {
+    self.cancel.clone()
+  }
+
   /// Remaining time until the configured timeout elapses, if any.
   ///
   /// Returns `None` when no timeout is configured or the deadline has already expired.
