@@ -3296,8 +3296,13 @@ fn report(args: ReportArgs) -> io::Result<()> {
           );
           for (idx, (entry, ms)) in stage_sorted.iter().take(top).enumerate() {
             let total_ms = entry.progress.total_ms.unwrap_or(0.0);
+            let share = if total_ms > 0.0 {
+              *ms / total_ms * 100.0
+            } else {
+              0.0
+            };
             println!(
-              "  {}. {} stage={ms:.2}ms total={total_ms:.2}ms url={}",
+              "  {}. {} stage={ms:.2}ms ({share:.1}%) total={total_ms:.2}ms url={}",
               idx + 1,
               entry.stem,
               entry.progress.url
