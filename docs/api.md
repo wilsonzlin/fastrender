@@ -161,6 +161,12 @@ if let Some(stats) = &result.diagnostics.stats {
     if let Some(wait_ms) = stats.resources.fetch_inflight_wait_ms {
         eprintln!("Inflight wait time (ms): {wait_ms}");
     }
+    if let Some(disk_ms) = stats.resources.disk_cache_ms {
+        eprintln!("Disk cache time (ms): {disk_ms}");
+    }
+    if let Some(lock_ms) = stats.resources.disk_cache_lock_wait_ms {
+        eprintln!("Disk cache lock wait time (ms): {lock_ms}");
+    }
     if let Some(hits) = stats.resources.resource_cache_fresh_hits {
         eprintln!("Resource cache hits: {hits}");
     }
