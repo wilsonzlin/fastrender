@@ -198,16 +198,16 @@ fn container_query_matches(
   query: &ContainerQuery,
   container: &ContainerQueryInfo,
   ctx: &ContainerQueryContext,
+  ctx_ptr: usize,
   guard: &mut Vec<usize>,
+  memo: &mut ContainerQueryMemo,
 ) -> bool {
   let key = QueryEvalCacheKey {
-    ctx_ptr: ctx as *const _ as usize,
+    ctx_ptr,
     container_id,
     query_ptr: query as *const _ as usize,
   };
-  if let Some(hit) = CONTAINER_QUERY_MEMO
-    .with(|memo| memo.borrow().query_eval.get(&key).copied())
-  {
+  if let Some(hit) = memo.query_eval.get(&key).copied() {
     return hit;
   }
 
@@ -217,8 +217,7 @@ fn container_query_matches(
         container.container_type,
         ContainerType::Size | ContainerType::InlineSize
       ) {
-        CONTAINER_QUERY_MEMO
-          .with(|memo| memo.borrow_mut().query_eval.insert(key, false));
+        memo.query_eval.insert(key, false);
         return false;
       }
       let mut media_ctx = ctx.base_media.clone();
@@ -229,7 +228,7 @@ fn container_query_matches(
       };
       media_ctx.base_font_size = container.font_size;
       let result = media_ctx.evaluate(mq);
-      CONTAINER_QUERY_MEMO.with(|memo| memo.borrow_mut().query_eval.insert(key, result));
+      memo.query_eval.insert(key, result);
       result
     }
     ContainerQuery::Style(style_query) => {
@@ -237,31 +236,30 @@ fn container_query_matches(
         container.container_type,
         ContainerType::Size | ContainerType::InlineSize | ContainerType::Style
       ) {
-        CONTAINER_QUERY_MEMO
-          .with(|memo| memo.borrow_mut().query_eval.insert(key, false));
+        memo.query_eval.insert(key, false);
         return false;
       }
       let result = matches_style_query(style_query, container.styles.as_ref());
-      CONTAINER_QUERY_MEMO.with(|memo| memo.borrow_mut().query_eval.insert(key, result));
+      memo.query_eval.insert(key, result);
       result
     }
     ContainerQuery::Not(inner) => {
-      let result = !container_query_matches(container_id, inner, container, ctx, guard);
-      CONTAINER_QUERY_MEMO.with(|memo| memo.borrow_mut().query_eval.insert(key, result));
+      let result = !container_query_matches(container_id, inner, container, ctx, ctx_ptr, guard, memo);
+      memo.query_eval.insert(key, result);
       result
     }
     ContainerQuery::And(list) => {
       let result = list
         .iter()
-        .all(|inner| container_query_matches(container_id, inner, container, ctx, guard));
-      CONTAINER_QUERY_MEMO.with(|memo| memo.borrow_mut().query_eval.insert(key, result));
+        .all(|inner| container_query_matches(container_id, inner, container, ctx, ctx_ptr, guard, memo));
+      memo.query_eval.insert(key, result);
       result
     }
     ContainerQuery::Or(list) => {
       let result = list
         .iter()
-        .any(|inner| container_query_matches(container_id, inner, container, ctx, guard));
-      CONTAINER_QUERY_MEMO.with(|memo| memo.borrow_mut().query_eval.insert(key, result));
+        .any(|inner| container_query_matches(container_id, inner, container, ctx, ctx_ptr, guard, memo));
+      memo.query_eval.insert(key, result);
       result
     }
   }
@@ -2366,9 +2364,9 @@ impl ContainerQueryContext {
     depth_limit: usize,
   ) -> bool {
     let ctx_ptr = self as *const _ as usize;
-    for condition in conditions {
-      let container_id = CONTAINER_QUERY_MEMO.with(|memo_cell| {
-        let mut memo = memo_cell.borrow_mut();
+    CONTAINER_QUERY_MEMO.with(|memo_cell| {
+      let mut memo = memo_cell.borrow_mut();
+      for condition in conditions {
         let condition_ptr = condition as *const _ as usize;
         let (name_id, support_mask) = match memo.condition_sigs.get(&condition_ptr).copied() {
           Some(sig) => (sig.name_id, sig.support_mask),
@@ -2385,47 +2383,48 @@ impl ContainerQueryContext {
             (name_id, support_mask)
           }
         };
+
         let key = FindContainerCacheKey {
           ctx_ptr,
           node_id,
           name_id,
           support_mask,
         };
-        if let Some(cached) = memo.find_container.get(&key) {
-          return *cached;
+        let container_id = if let Some(cached) = memo.find_container.get(&key) {
+          *cached
+        } else {
+          let found = self
+            .find_container_impl(node_id, ancestor_ids, condition.name.as_deref(), support_mask)
+            .map(|(id, _)| id);
+          memo.find_container.insert(key, found);
+          found
+        };
+
+        let Some(container_id) = container_id else {
+          return false;
+        };
+        let Some(container) = self.containers.get(&container_id) else {
+          return false;
+        };
+
+        if guard.len() >= depth_limit || guard.contains(&container_id) {
+          return false;
         }
-        let found = self
-          .find_container_impl(node_id, ancestor_ids, condition.name.as_deref(), support_mask)
-          .map(|(id, _)| id);
-        memo.find_container.insert(key, found);
-        found
-      });
 
-      let Some(container_id) = container_id else {
-        return false;
-      };
-      let Some(container) = self.containers.get(&container_id) else {
-        return false;
-      };
+        guard.push(container_id);
+        let matches = !condition.query_list.is_empty()
+          && condition.query_list.iter().any(|query| {
+            container_query_matches(container_id, query, container, self, ctx_ptr, guard, &mut memo)
+          });
+        guard.pop();
 
-      if guard.len() >= depth_limit || guard.contains(&container_id) {
-        return false;
+        if !matches {
+          return false;
+        }
       }
 
-      guard.push(container_id);
-      let matches = !condition.query_list.is_empty()
-        && condition
-          .query_list
-          .iter()
-          .any(|query| container_query_matches(container_id, query, container, self, guard));
-      guard.pop();
-
-      if !matches {
-        return false;
-      }
-    }
-
-    true
+      true
+    })
   }
 
   fn find_container<'a>(
