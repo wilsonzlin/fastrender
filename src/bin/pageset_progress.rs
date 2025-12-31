@@ -3356,6 +3356,40 @@ fn report(args: ReportArgs) -> io::Result<()> {
         println!("  {summary}");
         println!();
       }
+
+      let mut network_sorted: Vec<(&LoadedProgress, f64)> = progresses
+        .iter()
+        .filter_map(|entry| {
+          let stats = entry.stats.as_ref()?;
+          let ms = stats.resources.network_fetch_ms?;
+          Some((entry, ms))
+        })
+        .collect();
+      network_sorted.sort_by(|(a_entry, a_ms), (b_entry, b_ms)| {
+        b_ms
+          .total_cmp(a_ms)
+          .then_with(|| a_entry.stem.cmp(&b_entry.stem))
+      });
+      let net_top = args.top.min(network_sorted.len());
+      if net_top > 0 {
+        println!(
+          "Top network fetch time (top {net_top} of {} with stats):",
+          network_sorted.len()
+        );
+        for (idx, (entry, ms)) in network_sorted.iter().take(net_top).enumerate() {
+          let stats = entry.stats.as_ref().expect("stats should be present");
+          let bytes = stats.resources.network_fetch_bytes.unwrap_or(0) as u64;
+          let fetches = stats.resources.network_fetches.unwrap_or(0);
+          println!(
+            "  {}. {} fetches={fetches} bytes={} ms={ms:.2}ms url={}",
+            idx + 1,
+            entry.stem,
+            format_bytes(bytes),
+            entry.progress.url
+          );
+        }
+        println!();
+      }
     }
   }
 
