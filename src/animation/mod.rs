@@ -43,8 +43,8 @@ use crate::style::types::WritingMode;
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
+use rustc_hash::FxHashSet;
 use std::borrow::Cow;
-use std::collections::HashSet;
 use std::mem::discriminant;
 use std::sync::Arc;
 
@@ -1776,17 +1776,19 @@ pub fn sample_keyframes(
   }
 
   let ctx = AnimationResolveContext::new(viewport, element_size);
-  let mut properties: HashSet<String> = HashSet::new();
+  // Property names are normalized to lowercase during CSS parsing (custom properties keep
+  // their case), so we can dedupe by borrowing the property strings directly without allocating.
+  let mut properties: FxHashSet<&str> = FxHashSet::default();
   for decl in &prev.declarations {
-    properties.insert(decl.property.to_ascii_lowercase());
+    properties.insert(decl.property.as_str());
   }
   for decl in &next.declarations {
-    properties.insert(decl.property.to_ascii_lowercase());
+    properties.insert(decl.property.as_str());
   }
 
   let mut result = HashMap::new();
   for prop in properties {
-    let Some(interpolator) = interpolator_for(&prop) else {
+    let Some(interpolator) = interpolator_for(prop) else {
       continue;
     };
     let Some(from_val) = (interpolator.extract)(&from_style, &ctx) else {
@@ -1803,7 +1805,7 @@ pub fn sample_keyframes(
       }
     });
     if let Some(v) = value {
-      result.insert(prop.clone(), v);
+      result.insert(prop.to_string(), v);
     }
   }
 

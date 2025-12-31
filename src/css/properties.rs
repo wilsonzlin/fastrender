@@ -23,6 +23,8 @@ use cssparser::BasicParseErrorKind;
 use cssparser::Parser;
 use cssparser::ParserInput;
 use cssparser::Token;
+use rustc_hash::FxHashSet;
+use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeclarationContext {
@@ -405,12 +407,19 @@ const KNOWN_PAGE_PROPERTIES: &[&str] = &[
   "trim",
 ];
 
+static KNOWN_STYLE_PROPERTIES_SET: OnceLock<FxHashSet<&'static str>> = OnceLock::new();
+static KNOWN_PAGE_PROPERTIES_SET: OnceLock<FxHashSet<&'static str>> = OnceLock::new();
+
 pub(crate) fn is_known_style_property(property: &str) -> bool {
-  KNOWN_STYLE_PROPERTIES.contains(&property)
+  KNOWN_STYLE_PROPERTIES_SET
+    .get_or_init(|| KNOWN_STYLE_PROPERTIES.iter().copied().collect())
+    .contains(property)
 }
 
 fn is_known_page_property(property: &str) -> bool {
-  KNOWN_PAGE_PROPERTIES.contains(&property)
+  KNOWN_PAGE_PROPERTIES_SET
+    .get_or_init(|| KNOWN_PAGE_PROPERTIES.iter().copied().collect())
+    .contains(property)
 }
 
 fn tokenize_property_value(value_str: &str, allow_commas: bool) -> Vec<String> {
