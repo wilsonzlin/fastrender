@@ -135,6 +135,45 @@ fn build_flex_row(children: usize) -> BoxTree {
   BoxTree::new(root)
 }
 
+fn build_flex_row_heavy(children: usize) -> BoxTree {
+  const LOREM: &str = "FastRender flex item benchmark text: lorem ipsum dolor sit amet consectetur adipiscing elit.";
+  let mut flex_style = ComputedStyle::default();
+  flex_style.display = Display::Flex;
+  let flex_style = Arc::new(flex_style);
+
+  let mut item_style = ComputedStyle::default();
+  item_style.display = Display::Block;
+  item_style.padding_left = Length::px(4.0);
+  item_style.padding_right = Length::px(4.0);
+  let item_style = Arc::new(item_style);
+
+  let mut inline_style = ComputedStyle::default();
+  inline_style.display = Display::Inline;
+  let inline_style = Arc::new(inline_style);
+
+  let mut text_style = ComputedStyle::default();
+  text_style.display = Display::Inline;
+  let text_style = Arc::new(text_style);
+
+  let mut items = Vec::with_capacity(children);
+  for idx in 0..children {
+    let text_node = BoxNode::new_text(
+      text_style.clone(),
+      format!("item-{idx} {LOREM} {LOREM} {LOREM}"),
+    );
+    let inline = BoxNode::new_block(
+      inline_style.clone(),
+      FormattingContextType::Inline,
+      vec![text_node],
+    );
+    let child = BoxNode::new_block(item_style.clone(), FormattingContextType::Block, vec![inline]);
+    items.push(child);
+  }
+
+  let root = BoxNode::new_block(flex_style, FormattingContextType::Flex, items);
+  BoxTree::new(root)
+}
+
 fn build_flex_sibling_containers(
   flex_containers: usize,
   children_per_flex: usize,
@@ -454,6 +493,29 @@ fn bench_flex_parallel(c: &mut Criterion) {
   group.finish();
 }
 
+fn bench_flex_item_children_parallel(c: &mut Criterion) {
+  let box_tree = build_flex_row_heavy(1024);
+  let viewport = Size::new(1280.0, 900.0);
+  let font_ctx = FontContext::new();
+
+  let serial_engine =
+    LayoutEngine::with_font_context(LayoutConfig::for_viewport(viewport), font_ctx.clone());
+  let parallelism = LayoutParallelism::enabled(8).with_max_threads(Some(num_cpus::get().max(2)));
+  let parallel_engine = LayoutEngine::with_font_context(
+    LayoutConfig::for_viewport(viewport).with_parallelism(parallelism),
+    font_ctx,
+  );
+
+  let mut group = c.benchmark_group("layout_flex_item_children_parallel");
+  group.bench_function("serial", |b| {
+    b.iter(|| serial_engine.layout_tree(black_box(&box_tree)).unwrap())
+  });
+  group.bench_function("parallel", |b| {
+    b.iter(|| parallel_engine.layout_tree(black_box(&box_tree)).unwrap())
+  });
+  group.finish();
+}
+
 fn bench_flex_cache_contention_case(
   c: &mut Criterion,
   flex_containers: usize,
@@ -590,6 +652,7 @@ criterion_group!(
   bench_layout_parallel_dense,
   bench_block_parallel,
   bench_flex_parallel,
+  bench_flex_item_children_parallel,
   bench_flex_cache_contention,
   bench_taffy_node_cache_contention,
   bench_grid_parallel

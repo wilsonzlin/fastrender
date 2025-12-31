@@ -33,7 +33,7 @@ use crate::layout::constraints::LayoutConstraints;
 use crate::layout::contexts::block::BlockFormattingContext;
 use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::contexts::flex_cache::{
-  cache_tolerances, find_layout_cache_fragment, ShardedFlexCache,
+  find_layout_cache_fragment, ShardedFlexCache,
 };
 use crate::layout::contexts::positioned::ContainingBlock;
 use crate::layout::engine::LayoutParallelism;
@@ -2940,56 +2940,6 @@ impl FlexFormattingContext {
     node_map: &HashMap<*const BoxNode, NodeId>,
     constraints: &LayoutConstraints,
   ) -> Result<FragmentNode, LayoutError> {
-    fn accumulate_bounds(node: &FragmentNode, offset: Point, min: &mut Point, max: &mut Point) {
-      let abs = Rect::from_xywh(
-        node.bounds.x() + offset.x,
-        node.bounds.y() + offset.y,
-        node.bounds.width(),
-        node.bounds.height(),
-      );
-      min.x = min.x.min(abs.x());
-      min.y = min.y.min(abs.y());
-      max.x = max.x.max(abs.max_x());
-      max.y = max.y.max(abs.max_y());
-      let next = Point::new(offset.x + node.bounds.x(), offset.y + node.bounds.y());
-      for child in node.children.iter() {
-        accumulate_bounds(child, next, min, max);
-      }
-    }
-
-    fn fragment_subtree_size(node: &FragmentNode) -> Size {
-      let mut min = Point::new(0.0, 0.0);
-      let mut max = Point::new(0.0, 0.0);
-      accumulate_bounds(node, Point::ZERO, &mut min, &mut max);
-      Size::new((max.x - min.x).max(0.0), (max.y - min.y).max(0.0))
-    }
-
-    fn find_cached_fragment(
-      cache: &HashMap<(Option<u32>, Option<u32>), (Size, std::sync::Arc<FragmentNode>)>,
-      target_size: Size,
-    ) -> Option<(Size, std::sync::Arc<FragmentNode>)> {
-      let mut best = None;
-      let mut best_score = f32::MAX;
-      let (eps_w, eps_h) = cache_tolerances(target_size);
-      // Match cached fragments within a tolerance so quantized measurements (2–8px)
-      // can be reused without relayout.
-      for (size, frag) in cache.values() {
-        if !size.width.is_finite() || !size.height.is_finite() {
-          continue;
-        }
-        let dw = (size.width - target_size.width).abs();
-        let dh = (size.height - target_size.height).abs();
-        if dw <= eps_w && dh <= eps_h {
-          let score = dw + dh;
-          if score < best_score {
-            best_score = score;
-            best = Some((*size, frag.clone()));
-          }
-        }
-      }
-      best
-    }
-
     // Get layout from Taffy
     let layout = taffy_tree
       .layout(taffy_node)
@@ -3045,13 +2995,418 @@ impl FlexFormattingContext {
         matches!(box_node.style.overflow_y, CssOverflow::Visible)
       };
     let toggles = crate::debug::runtime::runtime_toggles();
+    let wrap_eps = 0.5;
+    #[derive(Clone, Copy)]
+    struct ChildMetrics {
+      child_loc_x: f32,
+      child_loc_y: f32,
+      layout_width: f32,
+      layout_height: f32,
+      target_width: f32,
+      target_height: f32,
+    }
+
+    #[derive(Clone)]
+    enum ChildPlan {
+      Skip,
+      Reuse {
+        stored_size: Size,
+        fragment: std::sync::Arc<FragmentNode>,
+      },
+      Replaced,
+      NeedsLayout,
+    }
+
+    struct ChildLayoutWorkItem<'a> {
+      dom_idx: usize,
+      child_box: &'a BoxNode,
+      fc_type: FormattingContextType,
+      constraints: LayoutConstraints,
+      used_border_box_width: Option<f32>,
+      used_border_box_height: Option<f32>,
+      layout_child_storage: Option<BoxNode>,
+      layout_width: f32,
+      layout_height: f32,
+    }
+
+    struct ChildLayoutWorkOutput {
+      fragment: FragmentNode,
+      intrinsic_size: Size,
+      max_content: Option<(FragmentNode, Size)>,
+    }
+
+    let child_count = box_node.children.len();
+    let rect_w = rect.width();
+    let rect_h = rect.height();
+    let eps = 0.01;
+
+    let mut child_metrics: Vec<Option<ChildMetrics>> = vec![None; child_count];
+    let mut child_plans: Vec<ChildPlan> = vec![ChildPlan::Skip; child_count];
+    let mut layout_work: Vec<ChildLayoutWorkItem<'_>> = Vec::new();
+
+    // Pre-pass to compute sizing/position inputs and decide which children require real layout.
+    for (dom_idx, child_box) in box_node.children.iter().enumerate() {
+      let Some(&child_taffy) = node_map.get(&(child_box as *const BoxNode)) else {
+        continue;
+      };
+
+      let child_layout = taffy_tree.layout(child_taffy).map_err(|e| {
+        LayoutError::MissingContext(format!("Failed to get Taffy layout: {:?}", e))
+      })?;
+      let child_loc_x = child_layout.location.x - rect.origin.x;
+      let child_loc_y = child_layout.location.y - rect.origin.y;
+      let mut layout_width = child_layout.size.width;
+      let mut layout_height = child_layout.size.height;
+      let raw_layout_width = layout_width;
+      let raw_layout_height = layout_height;
+      let target_width = if raw_layout_width > eps {
+        raw_layout_width
+      } else if rect_w.is_finite() && rect_w > eps {
+        rect_w
+      } else {
+        self.viewport_size.width
+      };
+      let target_height = if raw_layout_height > eps {
+        raw_layout_height
+      } else if rect_h.is_finite() && rect_h > eps {
+        rect_h
+      } else {
+        self.viewport_size.height
+      };
+      if toggles.truthy("FASTR_DEBUG_FLEX_CHILD") {
+        eprintln!(
+                    "[flex-child-layout] id={} selector={} layout=({:.2},{:.2}) loc=({:.2},{:.2}) grow={} shrink={} basis={:?}",
+                    child_box.id,
+                    child_box
+                        .debug_info
+                        .as_ref()
+                        .map(|d| d.to_selector())
+                        .unwrap_or_else(|| "<anon>".to_string()),
+                    layout_width,
+                    layout_height,
+                    child_loc_x,
+                    child_loc_y,
+                    child_box.style.flex_grow,
+                    child_box.style.flex_shrink,
+                    child_box.style.flex_basis
+                );
+      }
+
+      // Guard against zero-sized cross axes coming from overly tight flex constraints
+      // (e.g., items measured with 0px available space). When the flex container has
+      // a real cross size, fall back to that (or the resolved specified size) so
+      // percentage/auto widths don't collapse to zero.
+      if !main_axis_is_row && layout_width <= eps {
+        let explicit_zero_width = child_box
+          .style
+          .width
+          .as_ref()
+          .map(|l| l.unit.is_absolute() && l.value.abs() <= eps && !l.unit.is_percentage())
+          .unwrap_or(false);
+        if !explicit_zero_width {
+          let base = if rect_w.is_finite() && rect_w > eps {
+            rect_w
+          } else {
+            self.viewport_size.width
+          };
+          if let Some(specified) = child_box
+            .style
+            .width
+            .as_ref()
+            .map(|l| self.resolve_length_for_width(*l, base, &child_box.style))
+          {
+            if specified > eps {
+              layout_width = specified;
+            }
+          }
+          if layout_width <= eps && base > eps {
+            layout_width = base;
+          }
+        }
+      }
+      if main_axis_is_row && layout_height <= eps {
+        let explicit_zero_height = child_box
+          .style
+          .height
+          .as_ref()
+          .map(|l| l.unit.is_absolute() && l.value.abs() <= eps && !l.unit.is_percentage())
+          .unwrap_or(false);
+        if !explicit_zero_height {
+          let base = if rect_h.is_finite() && rect_h > eps {
+            rect_h
+          } else {
+            self.viewport_size.height
+          };
+          if let Some(specified) = child_box
+            .style
+            .height
+            .as_ref()
+            .map(|l| self.resolve_length_for_width(*l, base, &child_box.style))
+          {
+            if specified > eps {
+              layout_height = specified;
+            }
+          }
+          if layout_height <= eps && base > eps {
+            layout_height = base;
+          }
+        }
+      }
+      if rect_w.is_finite() && rect_w > eps {
+        layout_width = layout_width.min(rect_w);
+      }
+      if rect_h.is_finite() && rect_h > eps {
+        layout_height = layout_height.min(rect_h);
+      }
+      let needs_intrinsic_main =
+        (main_axis_is_row && raw_layout_width <= eps) || (!main_axis_is_row && raw_layout_height <= eps);
+
+      child_metrics[dom_idx] = Some(ChildMetrics {
+        child_loc_x,
+        child_loc_y,
+        layout_width,
+        layout_height,
+        target_width,
+        target_height,
+      });
+
+      if !needs_intrinsic_main {
+        if let Some((stored_size, frag)) = measured_fragments.find_fragment(
+          flex_cache_key(child_box),
+          Size::new(target_width, target_height),
+        ) {
+          child_plans[dom_idx] = ChildPlan::Reuse {
+            stored_size,
+            fragment: frag,
+          };
+          continue;
+        }
+      }
+
+      if matches!(child_box.box_type, crate::tree::box_tree::BoxType::Replaced(_)) {
+        child_plans[dom_idx] = ChildPlan::Replaced;
+        continue;
+      }
+
+      child_plans[dom_idx] = ChildPlan::NeedsLayout;
+
+      let fc_type = child_box
+        .formatting_context()
+        .unwrap_or(FormattingContextType::Block);
+      let size_eps = 0.01;
+      let used_border_box_width =
+        (raw_layout_width.is_finite() && raw_layout_width > size_eps).then_some(raw_layout_width);
+      let used_border_box_height =
+        (raw_layout_height.is_finite() && raw_layout_height > size_eps).then_some(raw_layout_height);
+
+      // Preserve the flex-resolved size. For block formatting contexts, pass the used border-box
+      // size through constraints to avoid deep-cloning the box subtree just to override style.
+      let layout_child_storage = if fc_type == FormattingContextType::Block {
+        None
+      } else {
+        let mut layout_child = child_box.clone();
+        let mut layout_style = (*layout_child.style).clone();
+        if used_border_box_width.is_some() {
+          layout_style.width = Some(Length::px(raw_layout_width));
+        } else {
+          layout_style.width = None;
+          layout_style.min_width = None;
+          layout_style.max_width = None;
+        }
+        if used_border_box_height.is_some() {
+          layout_style.height = Some(Length::px(raw_layout_height));
+        } else {
+          layout_style.height = None;
+          layout_style.min_height = None;
+          layout_style.max_height = None;
+        }
+        layout_child.style = Arc::new(layout_style);
+        Some(layout_child)
+      };
+
+      let rect_main_def = if main_axis_is_row { rect_w } else { rect_h };
+      let base_constraints = if needs_intrinsic_main {
+        let width = if main_axis_is_row {
+          if raw_layout_width > eps {
+            CrateAvailableSpace::Definite(raw_layout_width)
+          } else if rect_main_def.is_finite() && rect_main_def > eps {
+            CrateAvailableSpace::Definite(rect_main_def)
+          } else {
+            CrateAvailableSpace::MaxContent
+          }
+        } else if raw_layout_width > eps {
+          CrateAvailableSpace::Definite(layout_width)
+        } else {
+          CrateAvailableSpace::MaxContent
+        };
+        let height = if main_axis_is_row {
+          if raw_layout_height > eps {
+            CrateAvailableSpace::Definite(raw_layout_height)
+          } else {
+            CrateAvailableSpace::MaxContent
+          }
+        } else if layout_height > eps {
+          CrateAvailableSpace::Definite(layout_height)
+        } else if rect_main_def.is_finite() && rect_main_def > eps {
+          CrateAvailableSpace::Definite(rect_main_def)
+        } else {
+          CrateAvailableSpace::MaxContent
+        };
+        LayoutConstraints::new(width, height)
+      } else {
+        LayoutConstraints::new(
+          CrateAvailableSpace::Definite(layout_width),
+          CrateAvailableSpace::Definite(layout_height),
+        )
+      };
+      let constraints = if fc_type == FormattingContextType::Block {
+        base_constraints.with_used_border_box_size(used_border_box_width, used_border_box_height)
+      } else {
+        base_constraints
+      };
+      layout_work.push(ChildLayoutWorkItem {
+        dom_idx,
+        child_box,
+        fc_type,
+        constraints,
+        used_border_box_width,
+        used_border_box_height,
+        layout_child_storage,
+        layout_width,
+        layout_height,
+      });
+    }
+
+    let mut layout_results: Vec<Option<ChildLayoutWorkOutput>> =
+      std::iter::repeat_with(|| None).take(child_count).collect();
+    if !layout_work.is_empty() {
+      let layout_work_count = layout_work.len();
+      let should_parallel_layout = self.parallelism.should_parallelize(layout_work_count)
+        && layout_work_count >= self.parallelism.min_fanout;
+      let deadline = active_deadline();
+      let run_layout = |work: &ChildLayoutWorkItem<'_>| -> Result<(usize, ChildLayoutWorkOutput), LayoutError> {
+        let fc = factory.get(work.fc_type);
+        let layout_node: &BoxNode = work.layout_child_storage.as_ref().unwrap_or(work.child_box);
+        let node_timer = flex_profile::node_timer();
+        let selector_for_profile = node_timer
+          .as_ref()
+          .and_then(|_| work.child_box.debug_info.as_ref().map(|d| d.to_selector()));
+        let child_fragment = fc.layout(layout_node, &work.constraints)?;
+        flex_profile::record_node_layout(
+          work.child_box.id,
+          selector_for_profile.as_deref(),
+          node_timer,
+        );
+        let intrinsic_size = Self::fragment_subtree_size(&child_fragment);
+
+        if !trace_flex_text_ids().is_empty() && trace_flex_text_ids().contains(&work.child_box.id) {
+          let mut text_count = 0;
+          fn walk(node: &FragmentNode, count: &mut usize) {
+            if matches!(node.content, FragmentContent::Text { .. }) {
+              *count += 1;
+            }
+            for child in node.children.iter() {
+              walk(child, count);
+            }
+          }
+          walk(&child_fragment, &mut text_count);
+          let selector = work
+            .child_box
+            .debug_info
+            .as_ref()
+            .map(|d| d.to_selector())
+            .unwrap_or_else(|| "<anon>".to_string());
+          eprintln!(
+            "[flex-child-text] id={} selector={} text_fragments={} size=({:.1},{:.1})",
+            work.child_box.id,
+            selector,
+            text_count,
+            child_fragment.bounds.width(),
+            child_fragment.bounds.height()
+          );
+        }
+
+        let mut max_content: Option<(FragmentNode, Size)> = None;
+        if (main_axis_is_row && work.layout_width <= eps) || (!main_axis_is_row && work.layout_height <= eps) {
+          let mc_constraints = if main_axis_is_row {
+            LayoutConstraints::new(
+              CrateAvailableSpace::MaxContent,
+              CrateAvailableSpace::Definite(if work.layout_height > eps {
+                work.layout_height
+              } else {
+                intrinsic_size.height
+              }),
+            )
+          } else {
+            LayoutConstraints::new(
+              CrateAvailableSpace::Definite(if work.layout_width > eps {
+                work.layout_width
+              } else {
+                intrinsic_size.width
+              }),
+              CrateAvailableSpace::MaxContent,
+            )
+          };
+          let mc_timer = flex_profile::node_timer();
+          let mc_selector = mc_timer
+            .as_ref()
+            .and_then(|_| work.child_box.debug_info.as_ref().map(|d| d.to_selector()));
+          let mc_constraints = if work.fc_type == FormattingContextType::Block {
+            mc_constraints.with_used_border_box_size(work.used_border_box_width, work.used_border_box_height)
+          } else {
+            mc_constraints
+          };
+          if let Ok(mc_fragment) = fc.layout(layout_node, &mc_constraints) {
+            flex_profile::record_node_layout(work.child_box.id, mc_selector.as_deref(), mc_timer);
+            let mc_fragment = mc_fragment;
+            let mut mc_size = Self::fragment_subtree_size(&mc_fragment);
+            if rect.width().is_finite() && rect.width() > 0.0 {
+              mc_size.width = mc_size.width.min(rect.width());
+            }
+            if rect.height().is_finite() && rect.height() > 0.0 {
+              mc_size.height = mc_size.height.min(rect.height());
+            }
+            max_content = Some((mc_fragment, mc_size));
+          }
+        }
+
+        Ok((
+          work.dom_idx,
+          ChildLayoutWorkOutput {
+            fragment: child_fragment,
+            intrinsic_size,
+            max_content,
+          },
+        ))
+      };
+
+      let outputs = if should_parallel_layout {
+        layout_work
+          .par_iter()
+          .map(|work| {
+            with_deadline(deadline.as_ref(), || {
+              crate::layout::engine::debug_record_parallel_work();
+              run_layout(work)
+            })
+          })
+          .collect::<Result<Vec<_>, LayoutError>>()?
+      } else {
+        layout_work
+          .iter()
+          .map(run_layout)
+          .collect::<Result<Vec<_>, LayoutError>>()?
+      };
+      for (dom_idx, output) in outputs {
+        layout_results[dom_idx] = Some(output);
+      }
+    }
+
     let mut fallback_cursor_x = 0.0;
     let mut fallback_cursor_y = 0.0;
     let mut last_layout_x: Option<f32> = None;
     let mut last_layout_y: Option<f32> = None;
     let mut manual_row_positions = false;
     let mut manual_col_positions = false;
-    let wrap_eps = 0.5;
     let mut unordered_children: Vec<(i32, usize, FragmentNode)> =
       Vec::with_capacity(box_node.children.len());
     #[cfg(test)]
@@ -3060,460 +3415,223 @@ impl FlexFormattingContext {
       box_node.id,
       node_map.len()
     );
+
+    // Sequential assembly: apply placement/fallback logic in DOM order, but reuse/compute child
+    // fragments using the results from the parallel stage above.
     for (dom_idx, child_box) in box_node.children.iter().enumerate() {
-      if let Some(&child_taffy) = node_map.get(&(child_box as *const BoxNode)) {
-        let child_layout = taffy_tree.layout(child_taffy).map_err(|e| {
-          LayoutError::MissingContext(format!("Failed to get Taffy layout: {:?}", e))
-        })?;
-        let child_loc_x = child_layout.location.x - rect.origin.x;
-        let child_loc_y = child_layout.location.y - rect.origin.y;
-        let eps = 0.01;
-        let rect_w = rect.width();
-        let rect_h = rect.height();
-        let mut layout_width = child_layout.size.width;
-        let mut layout_height = child_layout.size.height;
-        let raw_layout_width = layout_width;
-        let raw_layout_height = layout_height;
-        let target_width = if raw_layout_width > eps {
-          raw_layout_width
-        } else if rect_w.is_finite() && rect_w > eps {
-          rect_w
-        } else {
-          self.viewport_size.width
-        };
-        let target_height = if raw_layout_height > eps {
-          raw_layout_height
-        } else if rect_h.is_finite() && rect_h > eps {
-          rect_h
-        } else {
-          self.viewport_size.height
-        };
-        if toggles.truthy("FASTR_DEBUG_FLEX_CHILD") {
+      let plan = mem::replace(&mut child_plans[dom_idx], ChildPlan::Skip);
+      let Some(metrics) = child_metrics[dom_idx] else {
+        #[cfg(test)]
+        if node_map.get(&(child_box as *const BoxNode)).is_none() {
           eprintln!(
-                        "[flex-child-layout] id={} selector={} layout=({:.2},{:.2}) loc=({:.2},{:.2}) grow={} shrink={} basis={:?}",
-                        child_box.id,
-                        child_box
-                            .debug_info
-                            .as_ref()
-                            .map(|d| d.to_selector())
-                            .unwrap_or_else(|| "<anon>".to_string()),
-                        layout_width,
-                        layout_height,
-                        child_loc_x,
-                        child_loc_y,
-                        child_box.style.flex_grow,
-                        child_box.style.flex_shrink,
-                        child_box.style.flex_basis
-                    );
+            "[flex-debug-missing-child] box_id={} child_ptr={:p}",
+            box_node.id, child_box
+          );
         }
+        continue;
+      };
 
-        // Guard against zero-sized cross axes coming from overly tight flex constraints
-        // (e.g., items measured with 0px available space). When the flex container has
-        // a real cross size, fall back to that (or the resolved specified size) so
-        // percentage/auto widths don't collapse to zero.
-        if !main_axis_is_row && layout_width <= eps {
-          let explicit_zero_width = child_box
-            .style
-            .width
-            .as_ref()
-            .map(|l| l.unit.is_absolute() && l.value.abs() <= eps && !l.unit.is_percentage())
-            .unwrap_or(false);
-          if !explicit_zero_width {
-            let base = if rect_w.is_finite() && rect_w > eps {
-              rect_w
-            } else {
-              self.viewport_size.width
-            };
-            if let Some(specified) = child_box
-              .style
-              .width
-              .as_ref()
-              .map(|l| self.resolve_length_for_width(*l, base, &child_box.style))
-            {
-              if specified > eps {
-                layout_width = specified;
-              }
-            }
-            if layout_width <= eps && base > eps {
-              layout_width = base;
+      let child_loc_x = metrics.child_loc_x;
+      let child_loc_y = metrics.child_loc_y;
+      let layout_width = metrics.layout_width;
+      let layout_height = metrics.layout_height;
+      let target_width = metrics.target_width;
+      let target_height = metrics.target_height;
+
+      let mut final_fragment: Option<FragmentNode> = None;
+      match plan {
+        ChildPlan::Skip => {}
+        ChildPlan::Reuse {
+          stored_size,
+          fragment,
+        } => {
+          record_fragment_clone(CloneSite::FlexMeasureReuse, fragment.as_ref());
+          let template = CachedFragmentTemplate::new(fragment);
+          let intrinsic_size = Self::fragment_subtree_size(template.fragment());
+          let mut resolved_width = layout_width;
+          let mut resolved_height = layout_height;
+          if resolved_width <= eps && intrinsic_size.width > eps {
+            resolved_width = intrinsic_size.width;
+          }
+          if resolved_height <= eps && intrinsic_size.height > eps {
+            resolved_height = intrinsic_size.height;
+          }
+          if resolved_width <= eps {
+            resolved_width = stored_size.width.max(resolved_width);
+          }
+          if resolved_height <= eps {
+            resolved_height = stored_size.height.max(resolved_height);
+          }
+          if resolved_width <= eps {
+            resolved_width = target_width;
+          }
+          if resolved_height <= eps {
+            resolved_height = target_height;
+          }
+          if rect.width().is_finite() && rect.width() > 0.0 {
+            resolved_width = resolved_width.min(rect.width());
+          }
+          if rect.height().is_finite() && rect.height() > 0.0 {
+            resolved_height = resolved_height.min(rect.height());
+          }
+          let mut origin_x = child_loc_x;
+          let mut origin_y = child_loc_y;
+          if main_axis_is_row && rect.height().is_finite() {
+            let limit = rect.height().max(1.0) * 5.0;
+            if origin_y.abs() > limit {
+              origin_y = rect.origin.y;
             }
           }
-        }
-        if main_axis_is_row && layout_height <= eps {
-          let explicit_zero_height = child_box
-            .style
-            .height
-            .as_ref()
-            .map(|l| l.unit.is_absolute() && l.value.abs() <= eps && !l.unit.is_percentage())
-            .unwrap_or(false);
-          if !explicit_zero_height {
-            let base = if rect_h.is_finite() && rect_h > eps {
-              rect_h
-            } else {
-              self.viewport_size.height
-            };
-            if let Some(specified) = child_box
-              .style
-              .height
-              .as_ref()
-              .map(|l| self.resolve_length_for_width(*l, base, &child_box.style))
-            {
-              if specified > eps {
-                layout_height = specified;
-              }
-            }
-            if layout_height <= eps && base > eps {
-              layout_height = base;
-            }
+          if resolved_width <= eps && main_axis_is_row {
+            manual_row_positions = true;
           }
-        }
-        if rect_w.is_finite() && rect_w > eps {
-          layout_width = layout_width.min(rect_w);
-        }
-        if rect_h.is_finite() && rect_h > eps {
-          layout_height = layout_height.min(rect_h);
-        }
-        let needs_intrinsic_main = (main_axis_is_row && raw_layout_width <= eps)
-          || (!main_axis_is_row && raw_layout_height <= eps);
-
-        let mut reused: Option<PlacedFragment> = None;
-        if !needs_intrinsic_main {
-          if let Some((stored_size, frag)) = measured_fragments.find_fragment(
-            flex_cache_key(child_box),
-            Size::new(target_width, target_height),
-          ) {
-            record_fragment_clone(CloneSite::FlexMeasureReuse, frag.as_ref());
-            let template = CachedFragmentTemplate::new(frag);
-            let intrinsic_size = Self::fragment_subtree_size(template.fragment());
-            let mut resolved_width = layout_width;
-            let mut resolved_height = layout_height;
-            if resolved_width <= eps && intrinsic_size.width > eps {
-              resolved_width = intrinsic_size.width;
-            }
-            if resolved_height <= eps && intrinsic_size.height > eps {
-              resolved_height = intrinsic_size.height;
-            }
-            if resolved_width <= eps {
-              resolved_width = stored_size.width.max(resolved_width);
-            }
-            if resolved_height <= eps {
-              resolved_height = stored_size.height.max(resolved_height);
-            }
-            if resolved_width <= eps {
-              resolved_width = target_width;
-            }
-            if resolved_height <= eps {
-              resolved_height = target_height;
-            }
-            if rect.width().is_finite() && rect.width() > 0.0 {
-              resolved_width = resolved_width.min(rect.width());
-            }
-            if rect.height().is_finite() && rect.height() > 0.0 {
-              resolved_height = resolved_height.min(rect.height());
-            }
-            let mut origin_x = child_loc_x;
-            let mut origin_y = child_loc_y;
-            if main_axis_is_row && rect.height().is_finite() {
-              let limit = rect.height().max(1.0) * 5.0;
-              if origin_y.abs() > limit {
-                origin_y = rect.origin.y;
-              }
-            }
-            if resolved_width <= eps && main_axis_is_row {
+          if resolved_height <= eps && !main_axis_is_row {
+            manual_col_positions = true;
+          }
+          if allow_overflow_fallback
+            && main_axis_is_row
+            && rect_w.is_finite()
+            && rect_w > wrap_eps
+          {
+            let runaway = child_loc_x.abs() > rect_w * 2.0;
+            if runaway {
               manual_row_positions = true;
+              fallback_cursor_x = rect.origin.x;
             }
-            if resolved_height <= eps && !main_axis_is_row {
-              manual_col_positions = true;
-            }
-            if allow_overflow_fallback
-              && main_axis_is_row
-              && rect_w.is_finite()
-              && rect_w > wrap_eps
-            {
-              let runaway = child_loc_x.abs() > rect_w * 2.0;
-              if runaway {
-                manual_row_positions = true;
-                fallback_cursor_x = rect.origin.x;
+          }
+          if main_axis_is_row {
+            let same_row = last_layout_y
+              .map(|prev_y| (child_loc_y - prev_y).abs() < wrap_eps)
+              .unwrap_or(true);
+            if same_row {
+              if allow_overflow_fallback {
+                if child_loc_x > rect.width() + wrap_eps {
+                  manual_row_positions = true;
+                  fallback_cursor_x = rect.origin.x;
+                }
+                if child_loc_x < rect.origin.x - rect.width().abs().max(wrap_eps) {
+                  manual_row_positions = true;
+                  fallback_cursor_x = rect.origin.x;
+                }
+                if let Some(prev) = last_layout_x {
+                  if child_loc_x <= prev + 0.1 {
+                    manual_row_positions = true;
+                  }
+                }
               }
-            }
-            if main_axis_is_row {
-              let same_row = last_layout_y
-                .map(|prev_y| (child_loc_y - prev_y).abs() < wrap_eps)
-                .unwrap_or(true);
-              if same_row {
-                if allow_overflow_fallback {
-                  if child_loc_x > rect.width() + wrap_eps {
-                    manual_row_positions = true;
-                    fallback_cursor_x = rect.origin.x;
-                  }
-                  if child_loc_x < rect.origin.x - rect.width().abs().max(wrap_eps) {
-                    manual_row_positions = true;
-                    fallback_cursor_x = rect.origin.x;
-                  }
-                  if let Some(prev) = last_layout_x {
-                    if child_loc_x <= prev + 0.1 {
-                      manual_row_positions = true;
-                    }
-                  }
-                }
-                if last_layout_x.is_none() && !manual_row_positions {
-                  fallback_cursor_x = child_loc_x;
-                }
-              } else {
-                manual_row_positions = false;
+              if last_layout_x.is_none() && !manual_row_positions {
                 fallback_cursor_x = child_loc_x;
               }
-              let use_manual_row = allow_overflow_fallback && manual_row_positions;
-              if use_manual_row {
-                let cap_base = if rect.width().is_finite() && rect.width() > wrap_eps {
-                  rect.width()
-                } else {
-                  self.viewport_size.width
-                };
-                let cap = cap_base.max(wrap_eps) * 2.0 + rect.origin.x;
-                if fallback_cursor_x + resolved_width > cap {
-                  fallback_cursor_x = rect.origin.x;
-                  last_layout_x = None;
-                }
-              }
-              if use_manual_row {
-                origin_x = fallback_cursor_x;
-                fallback_cursor_x += resolved_width;
+            } else {
+              manual_row_positions = false;
+              fallback_cursor_x = child_loc_x;
+            }
+            let use_manual_row = allow_overflow_fallback && manual_row_positions;
+            if use_manual_row {
+              let cap_base = if rect.width().is_finite() && rect.width() > wrap_eps {
+                rect.width()
               } else {
-                fallback_cursor_x = child_loc_x + resolved_width;
-                last_layout_x = Some(child_loc_x);
-                last_layout_y = Some(child_loc_y);
+                self.viewport_size.width
+              };
+              let cap = cap_base.max(wrap_eps) * 2.0 + rect.origin.x;
+              if fallback_cursor_x + resolved_width > cap {
+                fallback_cursor_x = rect.origin.x;
+                last_layout_x = None;
+              }
+            }
+            if use_manual_row {
+              origin_x = fallback_cursor_x;
+              fallback_cursor_x += resolved_width;
+            } else {
+              fallback_cursor_x = child_loc_x + resolved_width;
+              last_layout_x = Some(child_loc_x);
+              last_layout_y = Some(child_loc_y);
+            }
+          } else {
+            if let Some(prev) = last_layout_y {
+              if child_loc_y <= prev + 0.1 {
+                manual_col_positions = true;
               }
             } else {
-              if let Some(prev) = last_layout_y {
-                if child_loc_y <= prev + 0.1 {
-                  manual_col_positions = true;
-                }
-              } else {
-                fallback_cursor_y = child_loc_y;
-              }
-              if manual_col_positions {
-                origin_y = fallback_cursor_y;
-                fallback_cursor_y += resolved_height;
-              } else {
-                fallback_cursor_y = child_loc_y + resolved_height;
-                last_layout_y = Some(child_loc_y);
-              }
+              fallback_cursor_y = child_loc_y;
             }
-            let log_child_ids = toggles
-              .usize_list("FASTR_LOG_FLEX_CHILD_IDS")
-              .unwrap_or_default();
-            let log_child = !log_child_ids.is_empty()
-              && (log_child_ids.contains(&child_box.id) || log_child_ids.contains(&box_node.id));
-            if log_child {
-              let selector = child_box
-                .debug_info
-                .as_ref()
-                .map(|d| d.to_selector())
-                .unwrap_or_else(|| "<anon>".to_string());
-              eprintln!(
-                                    "[flex-child-reuse] parent_id={} child_id={} selector={} layout=({:.2},{:.2}) loc=({:.2},{:.2}) resolved=({:.2},{:.2}) rect_w={:.2} manual_row={} cursor_x={:.2} flex=({:.2},{:.2},{:?}) width={:?} min_w={:?} max_w={:?}",
-                                    box_node.id,
-                                    child_box.id,
-                                    selector,
-                                    layout_width,
-                                    layout_height,
-                                    child_loc_x,
-                                    child_loc_y,
-                                    resolved_width,
-                                    resolved_height,
-                                    rect.width(),
-                                    manual_row_positions,
-                                    fallback_cursor_x,
-                                    child_box.style.flex_grow,
-                                    child_box.style.flex_shrink,
-                                    child_box.style.flex_basis,
-                                    child_box.style.width,
-                                    child_box.style.min_width,
-                                    child_box.style.max_width
-                                );
+            if manual_col_positions {
+              origin_y = fallback_cursor_y;
+              fallback_cursor_y += resolved_height;
+            } else {
+              fallback_cursor_y = child_loc_y + resolved_height;
+              last_layout_y = Some(child_loc_y);
             }
-            let bounds = Rect::new(
-              Point::new(origin_x, origin_y),
-              Size::new(resolved_width, resolved_height),
-            );
-            reused = Some(template.place(bounds));
           }
-        }
-
-        let mut final_fragment: Option<FragmentNode> = None;
-        if let Some(child_fragment) = reused {
-          final_fragment = Some(child_fragment.materialize());
-        } else if let crate::tree::box_tree::BoxType::Replaced(replaced_box) = &child_box.box_type {
-          let bounds = Rect::new(
-            Point::new(child_loc_x, child_loc_y),
-            Size::new(layout_width, layout_height),
-          );
-          let fragment = FragmentNode::new_with_style(
-            bounds,
-            crate::tree::fragment_tree::FragmentContent::Replaced {
-              replaced_type: replaced_box.replaced_type.clone(),
-              box_id: Some(child_box.id),
-            },
-            vec![],
-            child_box.style.clone(),
-          );
-          final_fragment = Some(fragment);
-        } else {
-          let fc_type = child_box
-            .formatting_context()
-            .unwrap_or(FormattingContextType::Block);
-          let fc = factory.get(fc_type);
-          let node_timer = flex_profile::node_timer();
-          let selector_for_profile = node_timer
-            .as_ref()
-            .and_then(|_| child_box.debug_info.as_ref().map(|d| d.to_selector()));
-          let size_eps = 0.01;
-          let used_border_box_width =
-            (raw_layout_width.is_finite() && raw_layout_width > size_eps).then_some(raw_layout_width);
-          let used_border_box_height =
-            (raw_layout_height.is_finite() && raw_layout_height > size_eps).then_some(raw_layout_height);
-
-          // Preserve the flex-resolved size. For block formatting contexts, pass the used border-box
-          // size through constraints to avoid deep-cloning the box subtree just to override style.
-          let layout_child_storage = if fc_type == FormattingContextType::Block {
-            None
-          } else {
-            let mut layout_child = child_box.clone();
-            let mut layout_style = (*layout_child.style).clone();
-            if used_border_box_width.is_some() {
-              layout_style.width = Some(Length::px(raw_layout_width));
-            } else {
-              layout_style.width = None;
-              layout_style.min_width = None;
-              layout_style.max_width = None;
-            }
-            if used_border_box_height.is_some() {
-              layout_style.height = Some(Length::px(raw_layout_height));
-            } else {
-              layout_style.height = None;
-              layout_style.min_height = None;
-              layout_style.max_height = None;
-            }
-            layout_child.style = Arc::new(layout_style);
-            Some(layout_child)
-          };
-          let layout_node: &BoxNode = layout_child_storage.as_ref().unwrap_or(child_box);
-          let rect_main_def = if main_axis_is_row { rect_w } else { rect_h };
-          let base_constraints = if needs_intrinsic_main {
-            let width = if main_axis_is_row {
-              if raw_layout_width > eps {
-                CrateAvailableSpace::Definite(raw_layout_width)
-              } else if rect_main_def.is_finite() && rect_main_def > eps {
-                CrateAvailableSpace::Definite(rect_main_def)
-              } else {
-                CrateAvailableSpace::MaxContent
-              }
-            } else if raw_layout_width > eps {
-              CrateAvailableSpace::Definite(layout_width)
-            } else {
-              CrateAvailableSpace::MaxContent
-            };
-            let height = if main_axis_is_row {
-              if raw_layout_height > eps {
-                CrateAvailableSpace::Definite(raw_layout_height)
-              } else {
-                CrateAvailableSpace::MaxContent
-              }
-            } else if layout_height > eps {
-              CrateAvailableSpace::Definite(layout_height)
-            } else if rect_main_def.is_finite() && rect_main_def > eps {
-              CrateAvailableSpace::Definite(rect_main_def)
-            } else {
-              CrateAvailableSpace::MaxContent
-            };
-            LayoutConstraints::new(width, height)
-          } else {
-            LayoutConstraints::new(
-              CrateAvailableSpace::Definite(layout_width),
-              CrateAvailableSpace::Definite(layout_height),
-            )
-          };
-          let child_constraints = if fc_type == FormattingContextType::Block {
-            base_constraints.with_used_border_box_size(used_border_box_width, used_border_box_height)
-          } else {
-            base_constraints
-          };
-          let mut child_fragment = fc.layout(layout_node, &child_constraints)?;
-          flex_profile::record_node_layout(
-            child_box.id,
-            selector_for_profile.as_deref(),
-            node_timer,
-          );
-          let intrinsic_size = Self::fragment_subtree_size(&child_fragment);
-
-          if !trace_flex_text_ids().is_empty() && trace_flex_text_ids().contains(&child_box.id) {
-            let mut text_count = 0;
-            fn walk(node: &FragmentNode, count: &mut usize) {
-              if matches!(node.content, FragmentContent::Text { .. }) {
-                *count += 1;
-              }
-              for child in node.children.iter() {
-                walk(child, count);
-              }
-            }
-            walk(&child_fragment, &mut text_count);
+          let log_child_ids = toggles
+            .usize_list("FASTR_LOG_FLEX_CHILD_IDS")
+            .unwrap_or_default();
+          let log_child = !log_child_ids.is_empty()
+            && (log_child_ids.contains(&child_box.id) || log_child_ids.contains(&box_node.id));
+          if log_child {
             let selector = child_box
               .debug_info
               .as_ref()
               .map(|d| d.to_selector())
               .unwrap_or_else(|| "<anon>".to_string());
             eprintln!(
-              "[flex-child-text] id={} selector={} text_fragments={} size=({:.1},{:.1})",
-              child_box.id,
-              selector,
-              text_count,
-              child_fragment.bounds.width(),
-              child_fragment.bounds.height()
-            );
+                            "[flex-child-reuse] parent_id={} child_id={} selector={} layout=({:.2},{:.2}) loc=({:.2},{:.2}) resolved=({:.2},{:.2}) rect_w={:.2} manual_row={} cursor_x={:.2} flex=({:.2},{:.2},{:?}) width={:?} min_w={:?} max_w={:?}",
+                            box_node.id,
+                            child_box.id,
+                            selector,
+                            layout_width,
+                            layout_height,
+                            child_loc_x,
+                            child_loc_y,
+                            resolved_width,
+                            resolved_height,
+                            rect.width(),
+                            manual_row_positions,
+                            fallback_cursor_x,
+                            child_box.style.flex_grow,
+                            child_box.style.flex_shrink,
+                            child_box.style.flex_basis,
+                            child_box.style.width,
+                            child_box.style.min_width,
+                            child_box.style.max_width
+                        );
           }
+          let bounds = Rect::new(
+            Point::new(origin_x, origin_y),
+            Size::new(resolved_width, resolved_height),
+          );
+          final_fragment = Some(template.place(bounds).materialize());
+        }
+        ChildPlan::Replaced => {
+          if let crate::tree::box_tree::BoxType::Replaced(replaced_box) = &child_box.box_type {
+            let bounds = Rect::new(
+              Point::new(child_loc_x, child_loc_y),
+              Size::new(layout_width, layout_height),
+            );
+            let fragment = FragmentNode::new_with_style(
+              bounds,
+              crate::tree::fragment_tree::FragmentContent::Replaced {
+                replaced_type: replaced_box.replaced_type.clone(),
+                box_id: Some(child_box.id),
+              },
+              vec![],
+              child_box.style.clone(),
+            );
+            final_fragment = Some(fragment);
+          }
+        }
+        ChildPlan::NeedsLayout => {
+          let Some(output) = layout_results[dom_idx].take() else {
+            return Err(LayoutError::MissingContext(
+              "Missing flex child layout output".to_string(),
+            ));
+          };
+          let mut child_fragment = output.fragment;
+          let intrinsic_size = output.intrinsic_size;
 
-          // If Taffy produced ~0 main-size, remeasure with max-content and use that result.
-          if (main_axis_is_row && layout_width <= eps)
-            || (!main_axis_is_row && layout_height <= eps)
+          if (main_axis_is_row && layout_width <= eps) || (!main_axis_is_row && layout_height <= eps)
           {
-            let mc_constraints = if main_axis_is_row {
-              LayoutConstraints::new(
-                CrateAvailableSpace::MaxContent,
-                CrateAvailableSpace::Definite(if layout_height > eps {
-                  layout_height
-                } else {
-                  intrinsic_size.height
-                }),
-              )
-            } else {
-              LayoutConstraints::new(
-                CrateAvailableSpace::Definite(if layout_width > eps {
-                  layout_width
-                } else {
-                  intrinsic_size.width
-                }),
-                CrateAvailableSpace::MaxContent,
-              )
-            };
-            let mc_timer = flex_profile::node_timer();
-            let mc_selector = mc_timer
-              .as_ref()
-              .and_then(|_| child_box.debug_info.as_ref().map(|d| d.to_selector()));
-            let mc_constraints = if fc_type == FormattingContextType::Block {
-              mc_constraints.with_used_border_box_size(used_border_box_width, used_border_box_height)
-            } else {
-              mc_constraints
-            };
-            if let Ok(mut mc_fragment) = fc.layout(layout_node, &mc_constraints) {
-              flex_profile::record_node_layout(child_box.id, mc_selector.as_deref(), mc_timer);
-              let mut mc_size = Self::fragment_subtree_size(&mc_fragment);
-              if rect.width().is_finite() && rect.width() > 0.0 {
-                mc_size.width = mc_size.width.min(rect.width());
-              }
-              if rect.height().is_finite() && rect.height() > 0.0 {
-                mc_size.height = mc_size.height.min(rect.height());
-              }
+            if let Some((mut mc_fragment, mc_size)) = output.max_content {
               let mut origin = Point::new(child_loc_x, child_loc_y);
               if main_axis_is_row {
                 let same_row = last_layout_y
@@ -3659,26 +3777,26 @@ impl FlexFormattingContext {
                 .map(|d| d.to_selector())
                 .unwrap_or_else(|| "<anon>".to_string());
               eprintln!(
-                                "[flex-child-place] parent_id={} child_id={} selector={} layout=({:.2},{:.2}) loc=({:.2},{:.2}) resolved=({:.2},{:.2}) rect_w={:.2} manual_row={} cursor_x={:.2} flex=({:.2},{:.2},{:?}) width={:?} min_w={:?} max_w={:?}",
-                                box_node.id,
-                                child_box.id,
-                                selector,
-                                layout_width,
-                                layout_height,
-                                child_loc_x,
-                                child_loc_y,
-                                resolved_width,
-                                resolved_height,
-                                rect.width(),
-                                manual_row_positions,
-                                fallback_cursor_x,
-                                child_box.style.flex_grow,
-                                child_box.style.flex_shrink,
-                                child_box.style.flex_basis,
-                                child_box.style.width,
-                                child_box.style.min_width,
-                                child_box.style.max_width
-                            );
+                            "[flex-child-place] parent_id={} child_id={} selector={} layout=({:.2},{:.2}) loc=({:.2},{:.2}) resolved=({:.2},{:.2}) rect_w={:.2} manual_row={} cursor_x={:.2} flex=({:.2},{:.2},{:?}) width={:?} min_w={:?} max_w={:?}",
+                            box_node.id,
+                            child_box.id,
+                            selector,
+                            layout_width,
+                            layout_height,
+                            child_loc_x,
+                            child_loc_y,
+                            resolved_width,
+                            resolved_height,
+                            rect.width(),
+                            manual_row_positions,
+                            fallback_cursor_x,
+                            child_box.style.flex_grow,
+                            child_box.style.flex_shrink,
+                            child_box.style.flex_basis,
+                            child_box.style.width,
+                            child_box.style.min_width,
+                            child_box.style.max_width
+                        );
             }
             child_fragment.bounds = Rect::new(
               Point::new(origin_x, origin_y),
@@ -3687,11 +3805,12 @@ impl FlexFormattingContext {
             final_fragment = Some(child_fragment);
           }
         }
-
-        if let Some(fragment) = final_fragment {
-          unordered_children.push((child_box.style.order, dom_idx, fragment));
-        }
       }
+
+      if let Some(fragment) = final_fragment {
+        unordered_children.push((child_box.style.order, dom_idx, fragment));
+      }
+
       #[cfg(test)]
       if node_map.get(&(child_box as *const BoxNode)).is_none() {
         eprintln!(
@@ -3700,11 +3819,9 @@ impl FlexFormattingContext {
         );
       }
     }
+
     unordered_children.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
-    children = unordered_children
-      .into_iter()
-      .map(|(_, _, frag)| frag)
-      .collect();
+    children = unordered_children.into_iter().map(|(_, _, frag)| frag).collect();
     #[cfg(test)]
     if children.is_empty() {
       let keys: Vec<usize> = node_map.keys().map(|k| *k as usize).collect();
