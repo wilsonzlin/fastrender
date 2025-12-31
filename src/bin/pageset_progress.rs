@@ -782,6 +782,26 @@ fn legacy_auto_notes_from_previous(previous: &PageProgress) -> Option<String> {
   }
 }
 
+fn migrate_legacy_notes(progress: &mut PageProgress) {
+  if !progress.auto_notes.trim().is_empty() || progress.notes.trim().is_empty() {
+    return;
+  }
+  let manual = manual_notes_from_previous(progress).unwrap_or_default();
+  let auto = legacy_auto_notes_from_previous(progress).unwrap_or_default();
+  progress.notes = manual;
+  progress.auto_notes = auto;
+}
+
+fn normalize_missing_cache_placeholder(progress: &mut PageProgress, cache_exists: bool) {
+  if cache_exists
+    && progress.status == ProgressStatus::Error
+    && progress.total_ms.is_none()
+    && progress.auto_notes.trim() == "missing cache"
+  {
+    progress.auto_notes = "not run".to_string();
+  }
+}
+
 fn normalize_hotspot_filter(h: &str) -> String {
   normalize_hotspot(h).to_ascii_lowercase()
 }
@@ -1233,6 +1253,9 @@ fn sync(args: SyncArgs) -> io::Result<()> {
       .as_ref()
       .and_then(|path| cached_url_from_cache_meta(path))
       .unwrap_or_else(|| entry.url.clone());
+
+    migrate_legacy_notes(&mut progress);
+    normalize_missing_cache_placeholder(&mut progress, cache_exists);
 
     if !cache_exists {
       progress.status = ProgressStatus::Error;
@@ -5830,6 +5853,40 @@ mod tests {
       legacy_auto_notes_from_previous(&previous),
       Some("stage…\ns…".to_string())
     );
+  }
+
+  #[test]
+  fn migrate_legacy_notes_splits_manual_and_auto() {
+    let mut progress = PageProgress {
+      url: "https://example.com".to_string(),
+      status: ProgressStatus::Timeout,
+      notes: "[paint] Invalid paint parameters\nmanual blocker\nhard timeout after 5.00s\nstage: layout".to_string(),
+      ..PageProgress::default()
+    };
+
+    migrate_legacy_notes(&mut progress);
+
+    assert_eq!(progress.notes, "manual blocker");
+    assert_eq!(
+      progress.auto_notes,
+      "[paint] Invalid paint parameters\nhard timeout after 5.00s\nstage: layout"
+    );
+  }
+
+  #[test]
+  fn normalize_missing_cache_placeholder_becomes_not_run_when_cache_exists() {
+    let mut progress = PageProgress {
+      url: "https://example.com".to_string(),
+      status: ProgressStatus::Error,
+      notes: String::new(),
+      auto_notes: "missing cache".to_string(),
+      total_ms: None,
+      ..PageProgress::default()
+    };
+
+    normalize_missing_cache_placeholder(&mut progress, true);
+
+    assert_eq!(progress.auto_notes, "not run");
   }
 
   #[test]
