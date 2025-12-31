@@ -629,7 +629,7 @@ impl DiskCacheIndex {
     }
   }
 
-  fn append_file_locked(&self, state: &mut IndexState) -> std::io::Result<&mut File> {
+  fn append_file_locked<'a>(&self, state: &'a mut IndexState) -> std::io::Result<&'a mut File> {
     if state.journal_append.is_none() {
       state.journal_append = Some(
         OpenOptions::new()
