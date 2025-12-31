@@ -3212,34 +3212,156 @@ impl InlineFormattingContext {
         if self.font_context.is_effectively_empty() {
           return Ok(Vec::new());
         }
+
+        let mut fallback_error: Option<crate::error::Error> = None;
         if let Some(fallback_font) = self.font_context.get_sans_serif() {
           let mut fallback_style = style.clone();
           fallback_style.font_family = vec![fallback_font.family.clone()];
-          self
-            .pipeline
-            .shape_with_context(
-              text,
-              &fallback_style,
-              &self.font_context,
-              pipeline_direction(base_direction),
-              bidi_context,
-            )
-            .map_err(|e| {
-              LayoutError::MissingContext(format!(
-                "Shaping failed (fonts={}): {:?}",
-                self.font_context.font_count(),
-                e
-              ))
-            })
-        } else {
-          Err(LayoutError::MissingContext(format!(
-            "Shaping failed (fonts={}): {:?}",
-            self.font_context.font_count(),
-            err
-          )))
+          match self.pipeline.shape_with_context(
+            text,
+            &fallback_style,
+            &self.font_context,
+            pipeline_direction(base_direction),
+            bidi_context,
+          ) {
+            Ok(runs) => return Ok(runs),
+            Err(err) => fallback_error = Some(err),
+          }
         }
+
+        static SHAPING_PLACEHOLDER_RUNS: AtomicUsize = AtomicUsize::new(0);
+        let _ = SHAPING_PLACEHOLDER_RUNS.fetch_add(1, Ordering::Relaxed);
+
+        let verbose = {
+          static VERBOSE: OnceLock<bool> = OnceLock::new();
+          *VERBOSE.get_or_init(|| {
+            std::env::var("FASTR_TEXT_DIAGNOSTICS")
+              .map(|value| {
+                let value = value.to_ascii_lowercase();
+                matches!(
+                  value.as_str(),
+                  "verbose" | "2" | "debug" | "true" | "1" | "on"
+                )
+              })
+              .unwrap_or(false)
+          })
+        };
+        if verbose {
+          use std::fmt::Write;
+
+          static SHAPING_PLACEHOLDER_LOGGED: AtomicUsize = AtomicUsize::new(0);
+          const SAMPLE_LIMIT: usize = 8;
+          let idx = SHAPING_PLACEHOLDER_LOGGED.fetch_add(1, Ordering::Relaxed);
+          if idx < SAMPLE_LIMIT {
+            let mut out = String::new();
+            for (i, ch) in text.chars().take(SAMPLE_LIMIT).enumerate() {
+              if i > 0 {
+                out.push(' ');
+              }
+              let _ = write!(&mut out, "U+{:04X}", ch as u32);
+            }
+            if text.chars().count() > SAMPLE_LIMIT {
+              out.push_str(" …");
+            }
+            eprintln!(
+              "FASTR_TEXT_DIAGNOSTICS: inline shaping failed; using notdef placeholders (db_fonts={}): {}",
+              self.font_context.font_count(),
+              out
+            );
+            eprintln!("  primary error: {:?}", err);
+            if let Some(err) = fallback_error.as_ref() {
+              eprintln!("  sans-serif retry error: {:?}", err);
+            }
+          }
+        }
+
+        Ok(self.synthesize_notdef_runs(text, style, base_direction, bidi_context))
       }
     }
+  }
+
+  fn synthesize_notdef_runs(
+    &self,
+    text: &str,
+    style: &ComputedStyle,
+    base_direction: crate::style::types::Direction,
+    bidi_context: Option<ExplicitBidiContext>,
+  ) -> Vec<ShapedRun> {
+    let Some(font) = self
+      .font_context
+      .get_sans_serif()
+      .or_else(|| self.font_context.database().first_font())
+    else {
+      return Vec::new();
+    };
+
+    let preferred_aspect = preferred_font_aspect(style, &self.font_context);
+    let used_font_size = compute_adjusted_font_size(style, &font, preferred_aspect);
+    let glyph_advance = crate::text::pipeline::notdef_advance_for_font(&font, used_font_size);
+
+    let (direction, level) = bidi_context
+      .map(|ctx| {
+        (
+          crate::text::pipeline::Direction::from_level(ctx.level),
+          ctx.level.number(),
+        )
+      })
+      .unwrap_or_else(|| {
+        let direction = pipeline_direction(base_direction);
+        let level = if direction.is_rtl() { 1 } else { 0 };
+        (direction, level)
+      });
+
+    let font = Arc::new(font);
+    let mut glyphs = Vec::new();
+    let mut advance = 0.0_f32;
+    for (cluster, ch) in text.char_indices() {
+      if matches!(
+        ch,
+        '\u{202a}' // LRE
+                | '\u{202b}' // RLE
+                | '\u{202c}' // PDF
+                | '\u{202d}' // LRO
+                | '\u{202e}' // RLO
+                | '\u{2066}' // LRI
+                | '\u{2067}' // RLI
+                | '\u{2068}' // FSI
+                | '\u{2069}' // PDI
+      ) {
+        continue;
+      }
+      glyphs.push(crate::text::pipeline::GlyphPosition {
+        glyph_id: 0,
+        cluster: cluster as u32,
+        x_offset: 0.0,
+        y_offset: 0.0,
+        x_advance: glyph_advance,
+        y_advance: 0.0,
+      });
+      advance += glyph_advance;
+    }
+
+    vec![ShapedRun {
+      text: text.to_string(),
+      start: 0,
+      end: text.len(),
+      glyphs,
+      direction,
+      level,
+      advance,
+      font,
+      font_size: used_font_size,
+      baseline_shift: 0.0,
+      language: None,
+      synthetic_bold: 0.0,
+      synthetic_oblique: 0.0,
+      rotation: crate::text::pipeline::RunRotation::None,
+      palette_index: 0,
+      palette_overrides: Arc::new(Vec::new()),
+      palette_override_hash: 0,
+      variations: Vec::new(),
+      scale: 1.0,
+    }]
   }
 
   fn space_advance(&self, style: &ComputedStyle) -> Result<f32, LayoutError> {

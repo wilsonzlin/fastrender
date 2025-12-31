@@ -13,6 +13,7 @@ mod fragmentation;
 mod fragmentation_widows_orphans;
 mod grid_box_sizing_test;
 mod inline_float_min_width;
+mod inline_shaping_fallback;
 mod legend_shrink_to_fit;
 mod multicol;
 mod nested_absolute;

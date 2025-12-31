@@ -3194,8 +3194,8 @@ fn map_hb_position(
   }
 }
 
-fn fallback_notdef_advance(run: &FontRun) -> f32 {
-  let (units_per_em, notdef_advance) = crate::text::face_cache::with_face(&run.font, |face| {
+pub(crate) fn notdef_advance_for_font(font: &LoadedFont, font_size: f32) -> f32 {
+  let (units_per_em, notdef_advance) = crate::text::face_cache::with_face(font, |face| {
     (
       face.units_per_em() as f32,
       face
@@ -3206,16 +3206,20 @@ fn fallback_notdef_advance(run: &FontRun) -> f32 {
   .unwrap_or((0.0, 0.0));
 
   let mut inline_advance = if units_per_em > 0.0 {
-    notdef_advance * (run.font_size / units_per_em)
+    notdef_advance * (font_size / units_per_em)
   } else {
     0.0
   };
 
   if !inline_advance.is_finite() || inline_advance <= 0.0 {
-    inline_advance = run.font_size * 0.5;
+    inline_advance = font_size * 0.5;
   }
 
   inline_advance
+}
+
+fn fallback_notdef_advance(run: &FontRun) -> f32 {
+  notdef_advance_for_font(&run.font, run.font_size)
 }
 
 fn synthesize_notdef_run(run: &FontRun) -> ShapedRun {
