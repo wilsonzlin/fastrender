@@ -1385,6 +1385,136 @@ pub(crate) fn clone_dom_with_deadline(node: &DomNode, stage: RenderStage) -> Res
   Ok(root)
 }
 
+/// Clone a DOM tree and also report whether top-layer state (dialog/popover open state + inert
+/// propagation) is needed.
+///
+/// This is used to avoid an additional full-tree `needs_top_layer_state` scan in call sites that
+/// already pay the cost of cloning the DOM.
+pub(crate) fn clone_dom_with_deadline_and_top_layer_hint(
+  node: &DomNode,
+  stage: RenderStage,
+) -> Result<(DomNode, bool)> {
+  struct Frame {
+    src: *const DomNode,
+    dst: *mut DomNode,
+    next_child: usize,
+    scan_children_suppressed: bool,
+  }
+
+  fn scan_top_layer_hint(node: &DomNode, hint: &mut bool, suppressed: bool) -> bool {
+    if suppressed {
+      return true;
+    }
+    if *hint {
+      return false;
+    }
+
+    match &node.node_type {
+      DomNodeType::ShadowRoot { .. } => {
+        // `needs_top_layer_state` treats shadow DOM presence as a reason to run the full traversal
+        // because dialogs/popovers may appear inside attached shadow roots.
+        *hint = true;
+        false
+      }
+      DomNodeType::Element {
+        tag_name,
+        namespace,
+        attributes,
+      } => {
+        if (namespace.is_empty() || namespace == HTML_NAMESPACE) && tag_name.eq_ignore_ascii_case("dialog")
+        {
+          *hint = true;
+        }
+
+        // Template contents are inert; avoid descending into them to match `needs_top_layer_state`.
+        if tag_name.eq_ignore_ascii_case("template") {
+          return true;
+        }
+
+        for (name, _) in attributes {
+          if name.eq_ignore_ascii_case("popover")
+            || name.eq_ignore_ascii_case("data-fastr-open")
+            || name.eq_ignore_ascii_case("data-fastr-modal")
+          {
+            *hint = true;
+            break;
+          }
+        }
+        false
+      }
+      DomNodeType::Slot { attributes, .. } => {
+        for (name, _) in attributes {
+          if name.eq_ignore_ascii_case("popover")
+            || name.eq_ignore_ascii_case("data-fastr-open")
+            || name.eq_ignore_ascii_case("data-fastr-modal")
+          {
+            *hint = true;
+            break;
+          }
+        }
+        false
+      }
+      DomNodeType::Document { .. } | DomNodeType::Text { .. } => false,
+    }
+  }
+
+  let mut deadline_counter = 0usize;
+  check_active_periodic(&mut deadline_counter, DOM_PARSE_NODE_DEADLINE_STRIDE, stage)?;
+
+  let mut top_layer_hint = false;
+  let root_children_suppressed = scan_top_layer_hint(node, &mut top_layer_hint, false);
+
+  let mut root = DomNode {
+    node_type: node.node_type.clone(),
+    children: Vec::with_capacity(node.children.len()),
+  };
+
+  let mut stack = vec![Frame {
+    src: node as *const _,
+    dst: &mut root as *mut _,
+    next_child: 0,
+    scan_children_suppressed: root_children_suppressed,
+  }];
+
+  while let Some(mut frame) = stack.pop() {
+    let src = unsafe { &*frame.src };
+    // Safety: destination nodes are owned by `root` and its descendants, and we never mutate a
+    // node's children while a frame borrowing that node is active. This keeps raw pointers stable
+    // for the duration of the DFS clone.
+    let dst = unsafe { &mut *frame.dst };
+
+    if frame.next_child < src.children.len() {
+      let child_src = &src.children[frame.next_child];
+      frame.next_child += 1;
+
+      check_active_periodic(&mut deadline_counter, DOM_PARSE_NODE_DEADLINE_STRIDE, stage)?;
+
+      dst.children.push(DomNode {
+        node_type: child_src.node_type.clone(),
+        children: Vec::with_capacity(child_src.children.len()),
+      });
+      let child_dst = dst.children.last_mut().expect("child was just pushed") as *mut DomNode;
+
+      let child_scan_suppressed = frame.scan_children_suppressed;
+      let child_children_suppressed = if top_layer_hint {
+        false
+      } else {
+        scan_top_layer_hint(child_src, &mut top_layer_hint, child_scan_suppressed)
+      };
+
+      stack.push(frame);
+      stack.push(Frame {
+        src: child_src as *const _,
+        dst: child_dst,
+        next_child: 0,
+        scan_children_suppressed: child_children_suppressed,
+      });
+    }
+  }
+
+  Ok((root, top_layer_hint))
+}
+
 fn parse_shadow_root_definition(template: &DomNode) -> Option<(ShadowRootMode, bool)> {
   if !template
     .tag_name()

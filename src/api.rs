@@ -3828,8 +3828,10 @@ impl FastRender {
     let result = (|| -> Result<RenderOutputs> {
       self.device_pixel_ratio = resolved_viewport.device_pixel_ratio;
       self.pending_device_size = Some(resolved_viewport.visual_viewport);
+      let needs_top_layer_state = needs_top_layer_state(&dom);
       let layout_artifacts = self.layout_document_for_media_with_artifacts_owned(
         dom,
+        needs_top_layer_state,
         layout_width,
         layout_height,
         media_type,
@@ -5876,12 +5878,14 @@ impl FastRender {
   ) -> Result<LayoutArtifacts> {
     let _deadline_guard = DeadlineGuard::install(deadline);
     let clone_timer = stats.as_deref().and_then(|rec| rec.timer());
-    let dom_with_state = dom::clone_dom_with_deadline(dom, RenderStage::DomParse)?;
+    let (dom_with_state, needs_top_layer_state) =
+      dom::clone_dom_with_deadline_and_top_layer_hint(dom, RenderStage::DomParse)?;
     if let Some(rec) = stats.as_deref_mut() {
       RenderStatsRecorder::add_ms(&mut rec.stats.timings.dom_clone_ms, clone_timer);
     }
     self.layout_document_for_media_with_artifacts_owned(
       dom_with_state,
+      needs_top_layer_state,
       width,
       height,
       media_type,
@@ -5897,6 +5901,7 @@ impl FastRender {
   fn layout_document_for_media_with_artifacts_owned(
     &mut self,
     mut dom_with_state: DomNode,
+    needs_top_layer_state: bool,
     width: u32,
     height: u32,
     media_type: MediaType,
@@ -5917,7 +5922,7 @@ impl FastRender {
     let timings_enabled = toggles.truthy("FASTR_RENDER_TIMINGS");
     let overall_start = timings_enabled.then(Instant::now);
 
-    if needs_top_layer_state(&dom_with_state) {
+    if needs_top_layer_state {
       let top_layer_timer = stats.as_deref().and_then(|rec| rec.timer());
       dom::apply_top_layer_state_with_deadline(&mut dom_with_state)?;
       if let Some(rec) = stats.as_deref_mut() {
