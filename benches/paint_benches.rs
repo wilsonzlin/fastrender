@@ -907,6 +907,18 @@ fn bench_filter_blur(c: &mut Criterion) {
     );
 
     group.bench_with_input(
+      BenchmarkId::new("gaussian_blur_isotropic_sigma8", size),
+      &base,
+      |b, base| {
+        b.iter(|| {
+          let mut pixmap = base.clone();
+          apply_gaussian_blur(&mut pixmap, 8.0).unwrap();
+          black_box(pixmap);
+        })
+      },
+    );
+
+    group.bench_with_input(
       BenchmarkId::new("gaussian_blur_anisotropic_sigma2_5", size),
       &base,
       |b, base| {

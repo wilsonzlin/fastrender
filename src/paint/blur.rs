@@ -641,6 +641,84 @@ fn box_blur_h(
   false
 }
 
+fn box_blur_h_parallel(
+  src: &[u8],
+  dst: &mut [u8],
+  width: usize,
+  _height: usize,
+  radius: usize,
+  deadline: &Option<crate::render_control::RenderDeadline>,
+  deadline_enabled: bool,
+  cancelled: &AtomicBool,
+  deadline_counter: &AtomicUsize,
+) -> bool {
+  if radius == 0 {
+    dst.copy_from_slice(src);
+    return false;
+  }
+  let window = (radius * 2 + 1) as i32;
+  let half = window / 2;
+  let row_stride = width * 4;
+
+  let blur_row = |y: usize, out_row: &mut [u8]| {
+    if cancelled.load(Ordering::Relaxed) {
+      return;
+    }
+    if blur_deadline_exceeded_parallel(deadline_enabled, deadline_counter) {
+      cancelled.store(true, Ordering::Relaxed);
+      return;
+    }
+
+    let src_row = &src[y * row_stride..(y + 1) * row_stride];
+    let mut sum_r: i32 = 0;
+    let mut sum_g: i32 = 0;
+    let mut sum_b: i32 = 0;
+    let mut sum_a: i32 = 0;
+    for dx in -(radius as isize)..=(radius as isize) {
+      let cx = dx.clamp(0, width as isize - 1) as usize;
+      let idx = cx * 4;
+      sum_r += src_row[idx] as i32;
+      sum_g += src_row[idx + 1] as i32;
+      sum_b += src_row[idx + 2] as i32;
+      sum_a += src_row[idx + 3] as i32;
+    }
+
+    for x in 0..width {
+      let out_idx = x * 4;
+      let a = ((sum_a + half) / window).clamp(0, 255);
+      let r = (sum_r + half) / window;
+      let g = (sum_g + half) / window;
+      let b = (sum_b + half) / window;
+      out_row[out_idx] = clamp_channel_to_alpha(r, a);
+      out_row[out_idx + 1] = clamp_channel_to_alpha(g, a);
+      out_row[out_idx + 2] = clamp_channel_to_alpha(b, a);
+      out_row[out_idx + 3] = a as u8;
+
+      let remove_x = (x as isize - radius as isize).clamp(0, width as isize - 1) as usize;
+      let add_x = (x as isize + radius as isize + 1).clamp(0, width as isize - 1) as usize;
+      let rem_idx = remove_x * 4;
+      let add_idx = add_x * 4;
+      sum_r += src_row[add_idx] as i32 - src_row[rem_idx] as i32;
+      sum_g += src_row[add_idx + 1] as i32 - src_row[rem_idx + 1] as i32;
+      sum_b += src_row[add_idx + 2] as i32 - src_row[rem_idx + 2] as i32;
+      sum_a += src_row[add_idx + 3] as i32 - src_row[rem_idx + 3] as i32;
+    }
+  };
+
+  dst
+    .par_chunks_mut(row_stride)
+    .enumerate()
+    .for_each(|(y, out_row)| {
+      if deadline_enabled {
+        with_deadline(deadline.as_ref(), || blur_row(y, out_row));
+      } else {
+        blur_row(y, out_row);
+      }
+    });
+
+  cancelled.load(Ordering::Relaxed)
+}
+
 fn box_blur_v(
   src: &[u8],
   dst: &mut [u8],
@@ -696,7 +774,100 @@ fn box_blur_v(
   false
 }
 
+fn box_blur_v_parallel(
+  src: &[u8],
+  dst: &mut [u8],
+  width: usize,
+  height: usize,
+  radius: usize,
+  deadline: &Option<crate::render_control::RenderDeadline>,
+  deadline_enabled: bool,
+  cancelled: &AtomicBool,
+  deadline_counter: &AtomicUsize,
+) -> bool {
+  if radius == 0 {
+    dst.copy_from_slice(src);
+    return false;
+  }
+  const COLUMN_BLOCK: usize = 32;
+  let window = (radius * 2 + 1) as i32;
+  let half = window / 2;
+  let blocks = (width + COLUMN_BLOCK - 1) / COLUMN_BLOCK;
+  let dst_base = dst.as_mut_ptr() as usize;
+
+  (0..blocks).into_par_iter().for_each(|block| {
+    let x_start = block * COLUMN_BLOCK;
+    let x_end = (x_start + COLUMN_BLOCK).min(width);
+    let dst_ptr = dst_base as *mut u8;
+
+    let run = || {
+      for x in x_start..x_end {
+        if cancelled.load(Ordering::Relaxed) {
+          return;
+        }
+        if blur_deadline_exceeded_parallel(deadline_enabled, deadline_counter) {
+          cancelled.store(true, Ordering::Relaxed);
+          return;
+        }
+
+        let mut sum_r: i32 = 0;
+        let mut sum_g: i32 = 0;
+        let mut sum_b: i32 = 0;
+        let mut sum_a: i32 = 0;
+        for dy in -(radius as isize)..=(radius as isize) {
+          let cy = dy.clamp(0, height as isize - 1) as usize;
+          let idx = (cy * width + x) * 4;
+          sum_r += src[idx] as i32;
+          sum_g += src[idx + 1] as i32;
+          sum_b += src[idx + 2] as i32;
+          sum_a += src[idx + 3] as i32;
+        }
+
+        for y in 0..height {
+          let out_idx = (y * width + x) * 4;
+          let a = ((sum_a + half) / window).clamp(0, 255);
+          let r = (sum_r + half) / window;
+          let g = (sum_g + half) / window;
+          let b = (sum_b + half) / window;
+          unsafe {
+            let out = dst_ptr.add(out_idx);
+            *out = clamp_channel_to_alpha(r, a);
+            *out.add(1) = clamp_channel_to_alpha(g, a);
+            *out.add(2) = clamp_channel_to_alpha(b, a);
+            *out.add(3) = a as u8;
+          }
+
+          let remove_y = (y as isize - radius as isize).clamp(0, height as isize - 1) as usize;
+          let add_y = (y as isize + radius as isize + 1).clamp(0, height as isize - 1) as usize;
+          let rem_idx = (remove_y * width + x) * 4;
+          let add_idx = (add_y * width + x) * 4;
+          sum_r += src[add_idx] as i32 - src[rem_idx] as i32;
+          sum_g += src[add_idx + 1] as i32 - src[rem_idx + 1] as i32;
+          sum_b += src[add_idx + 2] as i32 - src[rem_idx + 2] as i32;
+          sum_a += src[add_idx + 3] as i32 - src[rem_idx + 3] as i32;
+        }
+      }
+    };
+
+    if deadline_enabled {
+      with_deadline(deadline.as_ref(), run);
+    } else {
+      run();
+    }
+  });
+
+  cancelled.load(Ordering::Relaxed)
+}
+
 fn gaussian_blur_box_approx(pixmap: &mut Pixmap, sigma: f32) -> Result<(), RenderError> {
+  gaussian_blur_box_approx_with_parallelism(pixmap, sigma, BlurParallelism::Auto)
+}
+
+fn gaussian_blur_box_approx_with_parallelism(
+  pixmap: &mut Pixmap,
+  sigma: f32,
+  parallelism: BlurParallelism,
+) -> Result<(), RenderError> {
   let sigma = sigma.abs();
   if sigma <= 0.0 {
     return Ok(());
@@ -706,6 +877,13 @@ fn gaussian_blur_box_approx(pixmap: &mut Pixmap, sigma: f32) -> Result<(), Rende
   if width == 0 || height == 0 {
     return Ok(());
   }
+
+  let use_parallel = match parallelism {
+    BlurParallelism::Serial => false,
+    BlurParallelism::Parallel => true,
+    BlurParallelism::Auto => blur_should_parallelize(width, height),
+  };
+
   let len = blur_buffer_len(width, height, "box blur")?;
   let mut error: Option<RenderError> = None;
   BLUR_SCRATCH.with(|scratch| {
@@ -719,32 +897,77 @@ fn gaussian_blur_box_approx(pixmap: &mut Pixmap, sigma: f32) -> Result<(), Rende
     };
     a[..len].copy_from_slice(pixmap.data());
     let sizes = box_sizes_for_gauss(sigma, 3);
-    let mut deadline_counter = 0usize;
+    if !use_parallel {
+      let mut deadline_counter = 0usize;
+      for size in sizes {
+        let radius = size.saturating_sub(1) / 2;
+        if radius == 0 {
+          continue;
+        }
+        if box_blur_h(
+          &a[..len],
+          &mut b[..len],
+          width,
+          height,
+          radius,
+          &mut deadline_counter,
+        ) {
+          return;
+        }
+        if box_blur_v(
+          &b[..len],
+          &mut a[..len],
+          width,
+          height,
+          radius,
+          &mut deadline_counter,
+        ) {
+          return;
+        }
+      }
+      pixmap.data_mut().copy_from_slice(&a[..len]);
+      return;
+    }
+
+    let deadline = active_deadline();
+    let deadline_enabled = deadline.as_ref().map_or(false, |d| d.is_enabled());
+    let cancelled = AtomicBool::new(false);
+    let deadline_counter = AtomicUsize::new(0);
     for size in sizes {
       let radius = size.saturating_sub(1) / 2;
       if radius == 0 {
         continue;
       }
-      if box_blur_h(
+      if box_blur_h_parallel(
         &a[..len],
         &mut b[..len],
         width,
         height,
         radius,
-        &mut deadline_counter,
+        &deadline,
+        deadline_enabled,
+        &cancelled,
+        &deadline_counter,
       ) {
         return;
       }
-      if box_blur_v(
+      if box_blur_v_parallel(
         &b[..len],
         &mut a[..len],
         width,
         height,
         radius,
-        &mut deadline_counter,
+        &deadline,
+        deadline_enabled,
+        &cancelled,
+        &deadline_counter,
       ) {
         return;
       }
+    }
+
+    if cancelled.load(Ordering::Relaxed) {
+      return;
     }
 
     pixmap.data_mut().copy_from_slice(&a[..len]);
@@ -1311,6 +1534,17 @@ mod tests {
       serial.data(),
       parallel.data(),
       "isotropic gaussian output mismatch"
+    );
+
+    let mut serial = base.clone();
+    let mut parallel = base.clone();
+    gaussian_blur_box_approx_with_parallelism(&mut serial, 8.0, BlurParallelism::Serial).unwrap();
+    gaussian_blur_box_approx_with_parallelism(&mut parallel, 8.0, BlurParallelism::Parallel)
+      .unwrap();
+    assert_eq!(
+      serial.data(),
+      parallel.data(),
+      "isotropic box blur output mismatch"
     );
 
     let mut serial = base.clone();
