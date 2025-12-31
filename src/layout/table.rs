@@ -81,7 +81,8 @@ use rayon::prelude::*;
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 fn check_layout_deadline(counter: &mut usize) -> Result<(), LayoutError> {
   if let Err(RenderError::Timeout { elapsed, .. }) =
@@ -3754,6 +3755,63 @@ thread_local! {
     RefCell::new(HashMap::new());
 }
 
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct TableLayoutStats {
+  pub(crate) cell_intrinsic_measurements: usize,
+  pub(crate) cell_layouts: usize,
+}
+
+static TABLE_STATS_ENABLED: OnceLock<bool> = OnceLock::new();
+static TABLE_CELL_INTRINSIC_MEASUREMENTS: AtomicUsize = AtomicUsize::new(0);
+static TABLE_CELL_LAYOUTS: AtomicUsize = AtomicUsize::new(0);
+
+fn table_stats_enabled() -> bool {
+  *TABLE_STATS_ENABLED.get_or_init(|| runtime::runtime_toggles().truthy("FASTR_TABLE_STATS"))
+}
+
+fn record_table_cell_intrinsic_measurement() {
+  if !table_stats_enabled() {
+    return;
+  }
+  TABLE_CELL_INTRINSIC_MEASUREMENTS.fetch_add(1, Ordering::Relaxed);
+}
+
+fn record_table_cell_layout() {
+  if !table_stats_enabled() {
+    return;
+  }
+  TABLE_CELL_LAYOUTS.fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn reset_table_stats_counters() {
+  if !table_stats_enabled() {
+    return;
+  }
+  TABLE_CELL_INTRINSIC_MEASUREMENTS.store(0, Ordering::Relaxed);
+  TABLE_CELL_LAYOUTS.store(0, Ordering::Relaxed);
+}
+
+pub(crate) fn table_stats_counters() -> TableLayoutStats {
+  if !table_stats_enabled() {
+    return TableLayoutStats::default();
+  }
+  TableLayoutStats {
+    cell_intrinsic_measurements: TABLE_CELL_INTRINSIC_MEASUREMENTS.load(Ordering::Relaxed),
+    cell_layouts: TABLE_CELL_LAYOUTS.load(Ordering::Relaxed),
+  }
+}
+
+pub(crate) fn log_table_stats() {
+  if !table_stats_enabled() {
+    return;
+  }
+  let stats = table_stats_counters();
+  eprintln!(
+    "table_stats cell_intrinsic_measurements={} cell_layouts={} (FASTR_TABLE_STATS=1)",
+    stats.cell_intrinsic_measurements, stats.cell_layouts
+  );
+}
+
 fn percent_base_cache_key(base: Option<f32>) -> Option<u32> {
   base.and_then(|v| {
     if v.is_finite() {
@@ -4013,6 +4071,81 @@ impl TableFormattingContext {
     self.structure.as_ref()
   }
 
+  /// Bench helper: measure a list of table cells' intrinsic widths (min/max-content).
+  ///
+  /// This mirrors the work done during `populate_column_constraints`, without building
+  /// column constraints or laying out cells. Intended for Criterion benchmarks.
+  #[doc(hidden)]
+  pub fn bench_measure_cells_intrinsic_widths(
+    &self,
+    cells: &[BoxNode],
+    border_collapse: BorderCollapse,
+    percent_base: Option<f32>,
+  ) -> (f32, f32) {
+    let style_overrides = StyleOverrideCache::default();
+    let cell_bfc = BlockFormattingContext::with_font_context_and_viewport(
+      self.factory.font_context().clone(),
+      self.factory.viewport_size(),
+    )
+    .with_parallelism(self.parallelism);
+    let mut min_sum = 0.0;
+    let mut max_sum = 0.0;
+    for cell in cells {
+      let (min, max) = self.measure_cell_intrinsic_widths(
+        cell,
+        border_collapse,
+        percent_base,
+        &cell_bfc,
+        &style_overrides,
+      );
+      min_sum += min;
+      max_sum += max;
+    }
+    (min_sum, max_sum)
+  }
+
+  /// Bench helper: compute column constraints and run column width distribution.
+  ///
+  /// This isolates table auto-layout intrinsic sizing (cell measurement + constraint building +
+  /// distribution) without performing full per-cell layout.
+  #[doc(hidden)]
+  pub fn bench_column_constraints_and_distribute(
+    &self,
+    table_box: &BoxNode,
+    structure: &TableStructure,
+    available_content_width: f32,
+    percent_base: Option<f32>,
+  ) -> Vec<f32> {
+    let mode = if structure.is_fixed_layout {
+      DistributionMode::Fixed
+    } else {
+      DistributionMode::Auto
+    };
+    let style_overrides = StyleOverrideCache::default();
+    let mut constraints: Vec<ColumnConstraints> = (0..structure.column_count)
+      .map(|_| ColumnConstraints::new(0.0, 0.0))
+      .collect();
+    self.populate_column_constraints(
+      table_box,
+      structure,
+      &mut constraints,
+      mode,
+      percent_base,
+      &style_overrides,
+    );
+    self.normalize_percentage_constraints(&mut constraints, percent_base);
+    let distributor = ColumnDistributor::new(mode).with_min_column_width(0.0);
+    let distribution = distributor.distribute(&constraints, available_content_width);
+    if let Some(err) = distributor.take_timeout_error() {
+      panic!("table column distribution timed out: {err:?}");
+    }
+    if distribution.widths.len() == structure.column_count {
+      distribution.widths
+    } else {
+      vec![0.0; structure.column_count]
+    }
+  }
+
   /// Returns the table box to use for layout, avoiding redundant fixup work for
   /// already-normalized trees produced by box generation.
   fn normalize_table_root<'a>(&self, box_node: &'a BoxNode) -> Cow<'a, BoxNode> {
@@ -4035,6 +4168,7 @@ impl TableFormattingContext {
     cell_bfc: &BlockFormattingContext,
     style_overrides: &StyleOverrideCache,
   ) -> (f32, f32) {
+    record_table_cell_intrinsic_measurement();
     let length_is_percent = |len: &crate::style::values::Length| {
       matches!(len.unit, LengthUnit::Percent | LengthUnit::Calc)
     };
@@ -4407,6 +4541,7 @@ impl TableFormattingContext {
     cell_bfc: &BlockFormattingContext,
     style_overrides: &StyleOverrideCache,
   ) -> Result<FragmentNode, LayoutError> {
+    record_table_cell_layout();
     let hide_empty = border_collapse == BorderCollapse::Separate
       && cell_box.style.empty_cells == EmptyCells::Hide
       && cell_is_visually_empty(cell_box);

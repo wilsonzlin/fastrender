@@ -28,9 +28,10 @@ These env vars are read in the rendering binaries (`render_pages`, `fetch_and_re
 - `FASTR_FLEX_PROFILE=1` — flex-specific profiling (measure/compute/convert stats, cache hits). Optional helpers:
   - `FASTR_FLEX_PROFILE_NODES=1`
   - `FASTR_FLEX_PROFILE_NODE_KEYS=1`
-  - `FASTR_FLEX_PROFILE_HIST=1`
+- `FASTR_FLEX_PROFILE_HIST=1`
 - `FASTR_INTRINSIC_STATS=1` — reports intrinsic sizing cache hits/misses/lookups after layout.
 - `FASTR_LAYOUT_CACHE_STATS=1` — reports layout cache stats (intrinsic cache hits/misses, layout pass count).
+- `FASTR_TABLE_STATS=1` — reports table-specific counters (cell intrinsic measurements + per-cell layout calls) after layout; also attached to `RenderStats.layout` when diagnostics are enabled.
 - `FASTR_DISPLAY_LIST_PARALLEL_MIN=<N>` — lowers the display list parallel fan-out threshold when debugging determinism or forcing rayon paths in tests.
 
 All profiling logs are best run in release builds to reflect real performance.
@@ -67,6 +68,9 @@ Run `cargo bench --bench perf_regressions -- --noplot` to exercise each stage of
 - `bench_cascade`
 - `bench_box_generation`
 - `bench_layout_{block,flex,grid,table}`
+- `bench_table_intrinsic`
+  - `table_column_constraints_only` — isolates table auto-layout intrinsic sizing by measuring column constraint building + column width distribution (no per-cell layout).
+  - `table_cell_intrinsic_only` — synthetic N-cell workload that isolates `measure_cell_intrinsic_widths`.
 - `bench_paint_{display_list_build,optimize,rasterize}`
 - `bench_end_to_end_small` / `bench_end_to_end_realistic`
 

@@ -1647,6 +1647,8 @@ pub struct LayoutDiagnostics {
   pub block_intrinsic: Option<usize>,
   pub flex_intrinsic: Option<usize>,
   pub inline_intrinsic: Option<usize>,
+  pub table_cell_intrinsic_measurements: Option<usize>,
+  pub table_cell_layouts: Option<usize>,
   pub layout_cache_lookups: Option<usize>,
   pub layout_cache_hits: Option<usize>,
   pub layout_cache_stores: Option<usize>,
@@ -3566,6 +3568,13 @@ impl FastRender {
         let fragment_metrics = crate::tree::fragment_tree::fragment_instrumentation_counters();
         rec.stats.layout.fragment_deep_clones = Some(fragment_metrics.deep_clones);
         rec.stats.layout.fragment_traversed = Some(fragment_metrics.traversed_nodes);
+
+        if self.runtime_toggles.truthy("FASTR_TABLE_STATS") {
+          let table_stats = crate::layout::table::table_stats_counters();
+          rec.stats.layout.table_cell_intrinsic_measurements =
+            Some(table_stats.cell_intrinsic_measurements);
+          rec.stats.layout.table_cell_layouts = Some(table_stats.cell_layouts);
+        }
 
         if rec.verbose() {
           let profile = crate::style::cascade::capture_cascade_profile();
@@ -5766,8 +5775,12 @@ impl FastRender {
     intrinsic_cache_clear();
     let report_intrinsic = toggles.truthy("FASTR_INTRINSIC_STATS");
     let report_layout_cache = toggles.truthy("FASTR_LAYOUT_CACHE_STATS");
+    let report_table_stats = toggles.truthy("FASTR_TABLE_STATS");
     if report_intrinsic {
       intrinsic_cache_reset_counters();
+    }
+    if report_table_stats {
+      crate::layout::table::reset_table_stats_counters();
     }
     let _fragment_metrics_guard: Option<FragmentInstrumentationGuard> =
       report_layout_cache.then(|| {
@@ -6027,6 +6040,9 @@ impl FastRender {
           if report_intrinsic {
             intrinsic_cache_reset_counters();
           }
+          if report_table_stats {
+            crate::layout::table::reset_table_stats_counters();
+          }
           if layout_profile {
             reset_layout_profile();
           }
@@ -6176,6 +6192,10 @@ impl FastRender {
         stats.fragment_traversed,
         stats.total_layouts
       );
+    }
+
+    if report_table_stats {
+      crate::layout::table::log_table_stats();
     }
 
     if options.animation_time.is_some() && stylesheet.has_starting_style_rules() {

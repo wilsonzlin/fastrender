@@ -4,10 +4,13 @@ use std::time::Duration;
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
 use fastrender::geometry::Rect;
 use fastrender::layout::fragmentation::{fragment_tree, FragmentationOptions};
+use fastrender::layout::table::{TableFormattingContext, TableStructure};
 use fastrender::style::display::Display;
+use fastrender::style::types::BorderCollapse;
 use fastrender::tree::fragment_tree::FragmentNode;
 use fastrender::{
-  BoxNode, BoxTree, ComputedStyle, FormattingContextType, LayoutConfig, LayoutEngine, Size,
+  BoxNode, BoxTree, ComputedStyle, FormattingContextFactory, FormattingContextType, LayoutConfig,
+  LayoutEngine, Length, Size,
 };
 
 mod common;
@@ -41,6 +44,30 @@ fn flex_text_tree(item_count: usize) -> BoxTree {
 
   let root = BoxNode::new_block(flex_style, FormattingContextType::Flex, children);
   BoxTree::new(root)
+}
+
+fn clear_box_ids(node: &mut BoxNode) {
+  node.id = 0;
+  for child in &mut node.children {
+    clear_box_ids(child);
+  }
+}
+
+fn find_first_table<'a>(node: &'a BoxNode) -> Option<&'a BoxNode> {
+  if matches!(node.style.display, Display::Table | Display::InlineTable)
+    || matches!(
+      node.formatting_context(),
+      Some(FormattingContextType::Table)
+    )
+  {
+    return Some(node);
+  }
+  for child in &node.children {
+    if let Some(found) = find_first_table(child) {
+      return Some(found);
+    }
+  }
+  None
 }
 
 fn perf_criterion() -> Criterion {
@@ -268,6 +295,87 @@ fn bench_layout_table_stress(c: &mut Criterion) {
   group.finish();
 }
 
+fn bench_table_intrinsic(c: &mut Criterion) {
+  let mut group = c.benchmark_group("bench_table_intrinsic");
+  let viewport = (1400, 1200);
+  let media = common::media_context(viewport);
+  let font_ctx = common::fixed_font_context();
+  let factory = FormattingContextFactory::with_font_context_and_viewport(
+    font_ctx,
+    Size::new(viewport.0 as f32, viewport.1 as f32),
+  );
+  let tfc = TableFormattingContext::with_factory(factory);
+
+  // Benchmark A: column constraints + distribution for a real large table fixture.
+  {
+    let dom = common::parse_dom(common::TABLE_LARGE_ROWSPAN_HTML);
+    let sheet = common::stylesheet_for_dom(&dom, &media);
+    let styled = common::cascade(&dom, &sheet, &media);
+    let box_tree = common::box_tree_from_styled(&styled);
+    let table_box = find_first_table(&box_tree.root).expect("fixture should contain a table");
+
+    // Avoid layout cache interactions so the benchmark reflects real per-run work.
+    let mut table_box = table_box.clone();
+    clear_box_ids(&mut table_box);
+    let structure = TableStructure::from_box_tree(&table_box);
+
+    // The fixture uses a fixed width (1200px). Feed the same width as the available content size
+    // so this bench focuses on intrinsic sizing + constraint distribution.
+    let available_content_width = 1200.0;
+    let percent_base = Some(available_content_width);
+    group.bench_function("table_column_constraints_only", |b| {
+      b.iter(|| {
+        let widths = tfc.bench_column_constraints_and_distribute(
+          black_box(&table_box),
+          black_box(&structure),
+          black_box(available_content_width),
+          percent_base,
+        );
+        black_box(widths);
+      })
+    });
+  }
+
+  // Benchmark B: intrinsic cell measurement in isolation on a synthetic workload.
+  {
+    const CELL_COUNT: usize = 1024;
+    let mut cell_style = ComputedStyle::default();
+    cell_style.display = Display::TableCell;
+    cell_style.padding_left = Length::px(4.0);
+    cell_style.padding_right = Length::px(4.0);
+    let cell_style = Arc::new(cell_style);
+    let inline_style = Arc::new(ComputedStyle::default());
+    let text_style = Arc::new(ComputedStyle::default());
+    let mut cells = Vec::with_capacity(CELL_COUNT);
+    for _ in 0..CELL_COUNT {
+      let text_node = BoxNode::new_text(text_style.clone(), "Synthetic cell content".to_string());
+      let inline = BoxNode::new_block(
+        inline_style.clone(),
+        FormattingContextType::Inline,
+        vec![text_node],
+      );
+      cells.push(BoxNode::new_block(
+        cell_style.clone(),
+        FormattingContextType::Block,
+        vec![inline],
+      ));
+    }
+
+    group.bench_function("table_cell_intrinsic_only", |b| {
+      b.iter(|| {
+        let totals = tfc.bench_measure_cells_intrinsic_widths(
+          black_box(&cells),
+          BorderCollapse::Separate,
+          Some(800.0),
+        );
+        black_box(totals);
+      })
+    });
+  }
+
+  group.finish();
+}
+
 fn bench_fragmentation_many_pages(c: &mut Criterion) {
   let mut group = c.benchmark_group("bench_fragmentation");
   let blocks_per_fragment = 8;
@@ -396,6 +504,7 @@ criterion_group!(
     bench_layout_grid,
     bench_layout_table,
     bench_layout_table_stress,
+    bench_table_intrinsic,
     bench_fragmentation_many_pages,
     bench_paint_display_list_build,
     bench_paint_optimize,

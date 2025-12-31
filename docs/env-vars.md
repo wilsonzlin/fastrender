@@ -91,6 +91,7 @@ These are emitted by the paint pipeline:
 - `FASTR_PROFILE_FRAGMENT_CLONES=1` – count fragment clones when layout/flex/grid caches reuse measured/layout fragments and enable fragment instrumentation (deep clone counts, traversal).
 - `FASTR_INTRINSIC_STATS=1` – intrinsic sizing cache stats.
 - `FASTR_LAYOUT_CACHE_STATS=1` – layout cache stats (intrinsic cache hits/misses and pass counts).
+- `FASTR_TABLE_STATS=1` – table auto-layout counters (cell intrinsic measurements + per-cell layout calls).
 - `FASTR_LAYOUT_CACHE_MAX_ENTRIES=<N>` – per-thread layout cache entry cap (default 8192; set to 0 to disable).
 - `FASTR_TRACE_OUT=/path/to/trace.json` – emit Chrome trace events for parse/style/layout/paint.
 - `FASTR_DISABLE_LAYOUT_CACHE=1` / `FASTR_DISABLE_FLEX_CACHE=1` – disable layout/flex caches.
