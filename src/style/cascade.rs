@@ -324,9 +324,9 @@ fn cq_query_support_mask(query: &ContainerQuery) -> u8 {
       if list.is_empty() {
         CQ_SUPPORT_ALL
       } else {
-        list
-          .iter()
-          .fold(CQ_SUPPORT_ALL, |acc, inner| acc & cq_query_support_mask(inner))
+        list.iter().fold(CQ_SUPPORT_ALL, |acc, inner| {
+          acc & cq_query_support_mask(inner)
+        })
       }
     }
     ContainerQuery::Or(list) => list
@@ -1172,6 +1172,11 @@ fn selector_bucket_attr(value: &str) -> SelectorBucketKey {
   selector_hash_ascii_lowercase(value)
 }
 
+#[inline]
+fn selector_bucket_part(value: &str) -> SelectorBucketKey {
+  selector_hash_str(value)
+}
+
 #[derive(Default)]
 struct SelectorBucketHasher(u64);
 
@@ -1243,7 +1248,6 @@ impl SlottedBuckets {
 
 struct PartPseudoInfo {
   pseudo: PseudoElement,
-  required: String,
 }
 
 struct RuleIndex<'a> {
@@ -1262,7 +1266,7 @@ struct RuleIndex<'a> {
   slotted_selectors: Vec<IndexedSlottedSelector<'a>>,
   slotted_buckets: SlottedBuckets,
   part_pseudos: Vec<PartPseudoInfo>,
-  part_lookup: HashMap<String, Vec<usize>>,
+  part_lookup: SelectorBucketMap<Vec<usize>>,
 }
 
 struct RuleScopes<'a> {
@@ -1769,7 +1773,7 @@ impl<'a> RuleIndex<'a> {
       slotted_selectors: Vec::new(),
       slotted_buckets: SlottedBuckets::new(),
       part_pseudos: Vec::new(),
-      part_lookup: HashMap::new(),
+      part_lookup: SelectorBucketMap::default(),
     };
 
     for rule in rules {
@@ -1925,13 +1929,12 @@ impl<'a> RuleIndex<'a> {
       let PseudoElement::Part(required) = pseudo else {
         continue;
       };
-      let required_name = required.to_string();
       let idx = self.part_pseudos.len();
       self.part_pseudos.push(PartPseudoInfo {
         pseudo: pseudo.clone(),
-        required: required_name.clone(),
       });
-      self.part_lookup.entry(required_name).or_default().push(idx);
+      let key = selector_bucket_part(required.as_str());
+      self.part_lookup.entry(key).or_default().push(idx);
     }
   }
 
@@ -4026,7 +4029,8 @@ fn match_part_rules<'a>(
       scratch.part_candidates.clear();
       scratch.part_seen.reset();
       for name in visible_names.iter() {
-        if let Some(list) = rules.part_lookup.get(name.as_str()) {
+        let key = selector_bucket_part(name.as_str());
+        if let Some(list) = rules.part_lookup.get(&key) {
           for &idx in list {
             if scratch.part_seen.insert(idx) {
               scratch.part_candidates.push(idx);
@@ -4049,7 +4053,11 @@ fn match_part_rules<'a>(
         let candidates = scratch.part_candidates.clone();
         for idx in candidates {
           let info = &rules.part_pseudos[idx];
-          if !name_set.contains(info.required.as_str()) {
+          let required = match &info.pseudo {
+            PseudoElement::Part(name) => name.as_str(),
+            _ => continue,
+          };
+          if !name_set.contains(required) {
             continue;
           }
           // allow_shadow_host prevents document-scope ::part selectors from exposing :host context.
