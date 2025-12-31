@@ -102,6 +102,7 @@ fn pageset_progress_report_outputs_stats_when_verbose() {
     "resources: fetches doc=1 css=4 img=6 font=2 other=0 | image_cache hits=5 misses=3 | resource_cache fresh_hits=10 stale_hits=2 revalidated_hits=1 misses=3 bytes=12.1KiB | inflight waits=7 ms=45.67ms | disk_cache hits=4 misses=1 bytes=66.3KiB lock_waits=2 lock_wait=3.21ms ms=12.34ms | network fetches=5 bytes=4.1KiB ms=67.89ms"
   ));
   assert!(stdout.contains("Resource totals (pages with stats: 1):"));
+  assert!(stdout.contains("derived:"));
   assert!(stdout.contains("Top network fetch time (top 1 of 1 with stats):"));
   assert!(stdout.contains("Top inflight wait time (top 1 of 1 with stats):"));
   assert!(stdout.contains("Top disk cache time (top 1 of 1 with stats):"));

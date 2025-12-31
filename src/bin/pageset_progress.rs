@@ -3354,6 +3354,86 @@ fn report(args: ReportArgs) -> io::Result<()> {
       if let Some(summary) = resources_summary(&totals) {
         println!("Resource totals (pages with stats: {pages_with_stats}):");
         println!("  {summary}");
+        let mut derived_parts = Vec::new();
+        let resource_cache_present = totals.resource_cache_fresh_hits.is_some()
+          || totals.resource_cache_stale_hits.is_some()
+          || totals.resource_cache_revalidated_hits.is_some()
+          || totals.resource_cache_misses.is_some();
+        if resource_cache_present {
+          let hits = totals.resource_cache_fresh_hits.unwrap_or(0)
+            + totals.resource_cache_stale_hits.unwrap_or(0)
+            + totals.resource_cache_revalidated_hits.unwrap_or(0);
+          let misses = totals.resource_cache_misses.unwrap_or(0);
+          let total = hits + misses;
+          if total > 0 {
+            derived_parts.push(format!(
+              "resource_cache hit_rate={:.1}%",
+              hits as f64 / total as f64 * 100.0
+            ));
+          }
+        }
+
+        let disk_cache_present =
+          totals.disk_cache_hits.is_some() || totals.disk_cache_misses.is_some();
+        if disk_cache_present {
+          let hits = totals.disk_cache_hits.unwrap_or(0);
+          let misses = totals.disk_cache_misses.unwrap_or(0);
+          let total = hits + misses;
+          if total > 0 {
+            derived_parts.push(format!(
+              "disk_cache hit_rate={:.1}%",
+              hits as f64 / total as f64 * 100.0
+            ));
+          }
+        }
+
+        let image_cache_present =
+          totals.image_cache_hits.is_some() || totals.image_cache_misses.is_some();
+        if image_cache_present {
+          let hits = totals.image_cache_hits.unwrap_or(0);
+          let misses = totals.image_cache_misses.unwrap_or(0);
+          let total = hits + misses;
+          if total > 0 {
+            derived_parts.push(format!(
+              "image_cache hit_rate={:.1}%",
+              hits as f64 / total as f64 * 100.0
+            ));
+          }
+        }
+
+        if let (Some(lock_ms), Some(total_ms)) =
+          (totals.disk_cache_lock_wait_ms, totals.disk_cache_ms)
+        {
+          if total_ms > 0.0 {
+            derived_parts.push(format!(
+              "disk_lock_wait_share={:.1}%",
+              lock_ms / total_ms * 100.0
+            ));
+          }
+        }
+
+        if let (Some(wait_ms), Some(waits)) =
+          (totals.fetch_inflight_wait_ms, totals.fetch_inflight_waits)
+        {
+          if waits > 0 {
+            derived_parts.push(format!("inflight_avg={:.2}ms", wait_ms / waits as f64));
+          }
+        }
+
+        if let (Some(bytes), Some(fetches)) =
+          (totals.network_fetch_bytes, totals.network_fetches)
+        {
+          if fetches > 0 {
+            derived_parts.push(format!(
+              "network_avg_bytes={}",
+              format_bytes((bytes as u64) / fetches as u64)
+            ));
+          }
+        }
+
+        if !derived_parts.is_empty() {
+          println!("  derived: {}", derived_parts.join(" "));
+        }
         println!();
       }
 
