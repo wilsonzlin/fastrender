@@ -3495,8 +3495,7 @@ pub struct ScopedStylesheetSources {
 /// Tokenize a `rel` attribute into lowercase relationship values.
 pub fn tokenize_rel_list(rel: &str) -> Vec<String> {
   rel
-    .split_whitespace()
-    .filter(|t| !t.is_empty())
+    .split_ascii_whitespace()
     .map(|t| t.to_ascii_lowercase())
     .collect()
 }
@@ -3532,7 +3531,7 @@ fn is_inert_template(node: &DomNode) -> bool {
     return true;
   };
 
-  !matches!(mode_attr.to_ascii_lowercase().as_str(), "open" | "closed")
+  !(mode_attr.eq_ignore_ascii_case("open") || mode_attr.eq_ignore_ascii_case("closed"))
 }
 
 /// Extract inline `<style>` blocks and external `<link>` entries from a DOM.
