@@ -32,11 +32,16 @@ use fastrender::tree::box_generation::generate_box_tree_with_anonymous_fixup;
 use fastrender::tree::box_tree::BoxNode;
 use fastrender::tree::fragment_tree::FragmentContent;
 use fastrender::tree::fragment_tree::FragmentNode;
-use std::collections::HashMap;
+use fastrender::image_output::encode_image;
+use fastrender::{snapshot_pipeline, OutputFormat, RenderArtifactRequest, RenderOptions};
+use serde_json;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
+use tiny_skia::{Color, Paint, PathBuilder, Stroke, Transform};
 use url::Url;
 
 /// Inspect fragment tree for a given HTML file
@@ -45,6 +50,30 @@ use url::Url;
 struct Args {
   /// HTML file or file:// URL to inspect
   file: String,
+
+  /// Write deterministic pipeline stage snapshots into this directory
+  ///
+  /// Writes `dom.json`, `styled.json`, `box_tree.json`, `fragment_tree.json`, and
+  /// `display_list.json`. When filters are provided, the dumps are restricted to the
+  /// first matching subtree.
+  #[arg(long, value_name = "DIR")]
+  dump_json: Option<PathBuf>,
+
+  /// Print a combined pipeline snapshot JSON to stdout and exit
+  #[arg(long)]
+  dump_snapshot: bool,
+
+  /// Render the page to a PNG and draw debug overlays (fragment bounds, scroll containers)
+  #[arg(long, value_name = "PNG")]
+  render_overlay: Option<PathBuf>,
+
+  /// Restrict dumps/overlays to the first node matching this selector
+  #[arg(long, value_name = "SELECTOR")]
+  filter_selector: Option<String>,
+
+  /// Restrict dumps/overlays to the first node matching this id attribute
+  #[arg(long, value_name = "ID")]
+  filter_id: Option<String>,
 
   /// Viewport size as WxH (e.g., 1200x800)
   #[arg(long, value_parser = parse_viewport, default_value = "1200x800")]
@@ -79,6 +108,330 @@ struct Args {
   /// Abort after this many seconds
   #[arg(long)]
   timeout: Option<u64>,
+}
+
+fn write_pretty_json(path: &Path, value: &impl serde::Serialize) -> Result<(), Box<dyn std::error::Error>> {
+  if let Some(parent) = path.parent() {
+    if !parent.as_os_str().is_empty() {
+      fs::create_dir_all(parent)?;
+    }
+  }
+  let json = serde_json::to_string_pretty(value)?;
+  fs::write(path, json)?;
+  Ok(())
+}
+
+fn find_dom_node_by_preorder_id(root: &fastrender::dom::DomNode, target_id: usize) -> Option<fastrender::dom::DomNode> {
+  fn walk(
+    node: &fastrender::dom::DomNode,
+    next: &mut usize,
+    target_id: usize,
+  ) -> Option<fastrender::dom::DomNode> {
+    let id = *next;
+    *next += 1;
+    if id == target_id {
+      return Some(node.clone());
+    }
+    for child in &node.children {
+      if let Some(found) = walk(child, next, target_id) {
+        return Some(found);
+      }
+    }
+    None
+  }
+
+  let mut next = 1usize;
+  walk(root, &mut next, target_id)
+}
+
+fn find_styled_node_by_id(root: &StyledNode, target_id: usize) -> Option<StyledNode> {
+  if root.node_id == target_id {
+    return Some(root.clone());
+  }
+  for child in &root.children {
+    if let Some(found) = find_styled_node_by_id(child, target_id) {
+      return Some(found);
+    }
+  }
+  None
+}
+
+fn collect_styled_node_ids(root: &StyledNode, out: &mut HashSet<usize>) {
+  out.insert(root.node_id);
+  for child in &root.children {
+    collect_styled_node_ids(child, out);
+  }
+}
+
+fn filter_box_subtree(node: &BoxNode, allowed_styled_ids: &HashSet<usize>) -> Option<BoxNode> {
+  let children: Vec<BoxNode> = node
+    .children
+    .iter()
+    .filter_map(|child| filter_box_subtree(child, allowed_styled_ids))
+    .collect();
+  let keep_self = node
+    .styled_node_id
+    .is_some_and(|id| allowed_styled_ids.contains(&id));
+  if !keep_self && children.is_empty() {
+    return None;
+  }
+  Some(BoxNode {
+    style: node.style.clone(),
+    starting_style: node.starting_style.clone(),
+    box_type: node.box_type.clone(),
+    children,
+    id: node.id,
+    debug_info: node.debug_info.clone(),
+    styled_node_id: node.styled_node_id,
+    first_line_style: node.first_line_style.clone(),
+    first_letter_style: node.first_letter_style.clone(),
+  })
+}
+
+fn collect_box_ids(node: &BoxNode, out: &mut HashSet<usize>) {
+  out.insert(node.id);
+  for child in &node.children {
+    collect_box_ids(child, out);
+  }
+}
+
+fn filter_fragment_subtree(node: &FragmentNode, allowed_box_ids: &HashSet<usize>) -> Option<FragmentNode> {
+  let children: Vec<FragmentNode> = node
+    .children
+    .iter()
+    .filter_map(|child| filter_fragment_subtree(child, allowed_box_ids))
+    .collect();
+  let keep_self = fragment_box_id(node).is_some_and(|id| allowed_box_ids.contains(&id));
+  if !keep_self && children.is_empty() {
+    return None;
+  }
+  let mut filtered = node.clone();
+  filtered.set_children(children);
+  Some(filtered)
+}
+
+fn draw_fragment_overlays(pixmap: &mut tiny_skia::Pixmap, tree: &fastrender::FragmentTree, dpr: f32, scroll_x: f32, scroll_y: f32) {
+  fn color_for(fragment: &FragmentNode) -> Color {
+    match &fragment.content {
+      FragmentContent::Block { .. } => Color::from_rgba8(255, 0, 0, 160),
+      FragmentContent::Inline { .. } => Color::from_rgba8(0, 200, 0, 160),
+      FragmentContent::Line { .. } => Color::from_rgba8(255, 165, 0, 160),
+      FragmentContent::Text { .. } => Color::from_rgba8(0, 128, 255, 160),
+      FragmentContent::Replaced { .. } => Color::from_rgba8(200, 0, 200, 160),
+      FragmentContent::RunningAnchor { .. } => Color::from_rgba8(0, 200, 200, 160),
+    }
+  }
+
+  let offset_x = -scroll_x;
+  let offset_y = -scroll_y;
+  let mut stack: Vec<&FragmentNode> = Vec::new();
+  for root in tree.additional_fragments.iter().rev() {
+    stack.push(root);
+  }
+  stack.push(&tree.root);
+
+  let stroke = Stroke {
+    width: (1.0 * dpr).max(1.0),
+    ..Stroke::default()
+  };
+  while let Some(fragment) = stack.pop() {
+    let rect = fragment.bounds;
+    let x = (rect.x() + offset_x) * dpr;
+    let y = (rect.y() + offset_y) * dpr;
+    let w = rect.width() * dpr;
+    let h = rect.height() * dpr;
+    if w > 0.0 && h > 0.0 {
+      if let Some(rect) = tiny_skia::Rect::from_xywh(x, y, w, h) {
+        let mut pb = PathBuilder::new();
+        pb.push_rect(rect);
+        if let Some(path) = pb.finish() {
+          let mut paint = Paint::default();
+          paint.set_color(color_for(fragment));
+          pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+        }
+      }
+    }
+
+    for child in fragment.children.iter().rev() {
+      stack.push(child);
+    }
+  }
+}
+
+fn run_dump_outputs(
+  renderer: &mut FastRender,
+  html: &str,
+  base_hint: &str,
+  args: &Args,
+  viewport: (u32, u32),
+) -> Result<(), Box<dyn std::error::Error>> {
+  if args.filter_id.is_some() && args.filter_selector.is_some() {
+    return Err(std::io::Error::new(
+      std::io::ErrorKind::InvalidInput,
+      "--filter-id and --filter-selector are mutually exclusive",
+    )
+    .into());
+  }
+
+  let options = RenderOptions::new()
+    .with_viewport(viewport.0, viewport.1)
+    .with_device_pixel_ratio(args.dpr)
+    .with_media_type(MediaType::Screen)
+    .with_scroll(args.scroll_x, args.scroll_y);
+
+  let report = renderer.render_html_with_stylesheets_report(
+    html,
+    base_hint,
+    options,
+    RenderArtifactRequest::full(),
+  )?;
+
+  let fastrender::RenderReport {
+    pixmap: _pixmap,
+    artifacts,
+    ..
+  } = report;
+
+  let mut dom = artifacts
+    .dom
+    .ok_or_else(|| {
+      std::io::Error::new(std::io::ErrorKind::Other, "inspect_frag: missing DOM artifact")
+    })?;
+  let mut styled = artifacts
+    .styled_tree
+    .ok_or_else(|| {
+      std::io::Error::new(std::io::ErrorKind::Other, "inspect_frag: missing styled tree artifact")
+    })?;
+  let mut box_tree = artifacts
+    .box_tree
+    .ok_or_else(|| {
+      std::io::Error::new(std::io::ErrorKind::Other, "inspect_frag: missing box tree artifact")
+    })?;
+  let mut fragment_tree = artifacts
+    .fragment_tree
+    .ok_or_else(|| {
+      std::io::Error::new(
+        std::io::ErrorKind::Other,
+        "inspect_frag: missing fragment tree artifact",
+      )
+    })?;
+  let mut display_list = artifacts
+    .display_list
+    .ok_or_else(|| {
+      std::io::Error::new(
+        std::io::ErrorKind::Other,
+        "inspect_frag: missing display list artifact",
+      )
+    })?;
+
+  let target_node_id = match (&args.filter_id, &args.filter_selector) {
+    (None, None) => None,
+    (Some(id), None) => {
+      let matches = fastrender::debug::inspect::inspect(
+        &styled,
+        &box_tree.root,
+        &fragment_tree,
+        fastrender::InspectQuery::Id(id.clone()),
+      )?;
+      matches.first().map(|m| m.node.node_id)
+    }
+    (None, Some(selector)) => {
+      let matches = fastrender::debug::inspect::inspect(
+        &styled,
+        &box_tree.root,
+        &fragment_tree,
+        fastrender::InspectQuery::Selector(selector.clone()),
+      )?;
+      matches.first().map(|m| m.node.node_id)
+    }
+    _ => unreachable!("validated mutual exclusion above"),
+  };
+
+  if let Some(node_id) = target_node_id {
+    if let Some(subtree) = find_dom_node_by_preorder_id(&dom, node_id) {
+      dom = subtree;
+    }
+    if let Some(subtree) = find_styled_node_by_id(&styled, node_id) {
+      styled = subtree;
+    }
+
+    let mut allowed_styled_ids = HashSet::new();
+    collect_styled_node_ids(&styled, &mut allowed_styled_ids);
+
+    if let Some(filtered_root) = filter_box_subtree(&box_tree.root, &allowed_styled_ids) {
+      box_tree.root = filtered_root;
+    }
+
+    let mut allowed_box_ids = HashSet::new();
+    collect_box_ids(&box_tree.root, &mut allowed_box_ids);
+
+    let mut roots = Vec::new();
+    if let Some(filtered_root) = filter_fragment_subtree(&fragment_tree.root, &allowed_box_ids) {
+      roots.push(filtered_root);
+    }
+    for extra in &fragment_tree.additional_fragments {
+      if let Some(filtered_extra) = filter_fragment_subtree(extra, &allowed_box_ids) {
+        roots.push(filtered_extra);
+      }
+    }
+    if roots.is_empty() {
+      return Err(std::io::Error::new(
+        std::io::ErrorKind::Other,
+        format!(
+          "inspect_frag: filter matched node_id={node_id} but no fragments were retained"
+        ),
+      )
+      .into());
+    }
+    let viewport_size = fragment_tree.viewport_size();
+    let mut filtered_tree = fastrender::FragmentTree::from_fragments(roots, viewport_size);
+    filtered_tree.keyframes = fragment_tree.keyframes.clone();
+    filtered_tree.svg_filter_defs = fragment_tree.svg_filter_defs.clone();
+    filtered_tree.scroll_metadata = fragment_tree.scroll_metadata.clone();
+    fragment_tree = filtered_tree;
+
+    let bounds = fragment_tree.content_size();
+    let filtered_items: Vec<fastrender::DisplayItem> = display_list
+      .items()
+      .iter()
+      .cloned()
+      .filter(|item| match item.bounds() {
+        None => true,
+        Some(rect) => rect.intersects(bounds),
+      })
+      .collect();
+    display_list = fastrender::DisplayList::from_items(filtered_items);
+  }
+
+  if let Some(dir) = &args.dump_json {
+    fs::create_dir_all(dir)?;
+    let snapshot = snapshot_pipeline(&dom, &styled, &box_tree, &fragment_tree, &display_list);
+    write_pretty_json(&dir.join("dom.json"), &snapshot.dom)?;
+    write_pretty_json(&dir.join("styled.json"), &snapshot.styled)?;
+    write_pretty_json(&dir.join("box_tree.json"), &snapshot.box_tree)?;
+    write_pretty_json(&dir.join("fragment_tree.json"), &snapshot.fragment_tree)?;
+    write_pretty_json(&dir.join("display_list.json"), &snapshot.display_list)?;
+  }
+
+  if args.dump_snapshot {
+    let snapshot = snapshot_pipeline(&dom, &styled, &box_tree, &fragment_tree, &display_list);
+    println!("{}", serde_json::to_string_pretty(&snapshot)?);
+  }
+
+  if let Some(path) = &args.render_overlay {
+    let mut pixmap = _pixmap;
+    draw_fragment_overlays(&mut pixmap, &fragment_tree, args.dpr, args.scroll_x, args.scroll_y);
+    let bytes = encode_image(&pixmap, OutputFormat::Png)?;
+    if let Some(parent) = path.parent() {
+      if !parent.as_os_str().is_empty() {
+        fs::create_dir_all(parent)?;
+      }
+    }
+    fs::write(path, bytes)?;
+    eprintln!("Overlay render written to {}", path.display());
+  }
+
+  Ok(())
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -152,7 +505,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       .with_user_agent(args.user_agent.clone())
       .with_accept_language(args.accept_language.clone()),
   );
-  let renderer = FastRender::builder()
+  let mut renderer = FastRender::builder()
     .device_pixel_ratio(args.dpr)
     .compat_mode(args.compat.compat_profile())
     .dom_compatibility_mode(args.compat.dom_compat_mode())
@@ -160,6 +513,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     .fetcher(fetcher)
     .runtime_toggles(runtime_toggles)
     .build()?;
+
+  if args.dump_snapshot || args.dump_json.is_some() || args.render_overlay.is_some() {
+    run_dump_outputs(&mut renderer, &html, &input_url, &args, (viewport_w, viewport_h))?;
+    return Ok(());
+  }
 
   if let Ok(val) = env::var("FASTR_TRACE_BOXES") {
     eprintln!("FASTR_TRACE_BOXES env in inspect_frag: {val}");

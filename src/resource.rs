@@ -332,7 +332,16 @@ pub fn normalize_page_name(raw: &str) -> Option<String> {
 
   let (host, rest) = match without_www.find('/') {
     Some(idx) => (&without_www[..idx], &without_www[idx..]),
-    None => (without_www, ""),
+    None => match without_www.find('_') {
+      // When called with an already-sanitized cache stem (e.g. `example.com_Path`), `without_www`
+      // will not contain `/` separators. Treat the first underscore as the boundary between the
+      // hostname and the rest of the stem so we preserve case-sensitive path/query segments.
+      //
+      // This keeps normalization idempotent for `normalize_page_name` outputs and matches how the
+      // CLI tools name cached pages.
+      Some(idx) => (&without_www[..idx], &without_www[idx..]),
+      None => (without_www, ""),
+    },
   };
 
   let host = host.trim_end_matches('.');

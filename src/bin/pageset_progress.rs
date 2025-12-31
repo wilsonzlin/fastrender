@@ -3481,6 +3481,48 @@ struct RunningChild {
   child: Child,
 }
 
+#[cfg(test)]
+thread_local! {
+  /// Test-only environment overrides for worker processes spawned via `spawn_worker`/`run_queue`.
+  ///
+  /// The integration tests include this file directly as a module, and those tests used to set
+  /// `FASTR_TEST_*` variables via `std::env::set_var`. Because the Rust test harness runs tests in
+  /// parallel, those process-global env vars leaked across tests and caused flaky worker/dump
+  /// behaviour. Keeping overrides thread-local and applying them explicitly to spawned workers
+  /// avoids cross-test contamination while preserving the ability to influence the worker process.
+  static WORKER_ENV_OVERRIDES: std::cell::RefCell<std::collections::BTreeMap<&'static str, String>> =
+    std::cell::RefCell::new(std::collections::BTreeMap::new());
+}
+
+#[cfg(test)]
+fn set_worker_env_override(key: &'static str, value: &str) -> Option<String> {
+  WORKER_ENV_OVERRIDES.with(|overrides| overrides.borrow_mut().insert(key, value.to_string()))
+}
+
+#[cfg(test)]
+fn restore_worker_env_override(key: &'static str, previous: Option<String>) {
+  WORKER_ENV_OVERRIDES.with(|overrides| {
+    let mut overrides = overrides.borrow_mut();
+    match previous {
+      Some(value) => {
+        overrides.insert(key, value);
+      }
+      None => {
+        overrides.remove(key);
+      }
+    }
+  });
+}
+
+#[cfg(test)]
+fn apply_worker_env_overrides(cmd: &mut Command) {
+  WORKER_ENV_OVERRIDES.with(|overrides| {
+    for (key, value) in overrides.borrow().iter() {
+      cmd.env(key, value);
+    }
+  });
+}
+
 fn spawn_worker(
   exe: &Path,
   args: &RunArgs,
@@ -3621,6 +3663,9 @@ fn spawn_worker(
     .stdin(Stdio::null())
     .stdout(Stdio::from(stdout_file))
     .stderr(Stdio::from(stderr_file));
+
+  #[cfg(test)]
+  apply_worker_env_overrides(&mut cmd);
 
   cmd.spawn()
 }
@@ -4474,6 +4519,7 @@ mod tests {
 
   struct EnvVarGuard {
     key: &'static str,
+    previous: Option<String>,
   }
 
   fn env_lock() -> std::sync::MutexGuard<'static, ()> {
@@ -4486,14 +4532,14 @@ mod tests {
 
   impl EnvVarGuard {
     fn set(key: &'static str, value: &str) -> Self {
-      std::env::set_var(key, value);
-      Self { key }
+      let previous = set_worker_env_override(key, value);
+      Self { key, previous }
     }
   }
 
   impl Drop for EnvVarGuard {
     fn drop(&mut self) {
-      std::env::remove_var(self.key);
+      restore_worker_env_override(self.key, self.previous.take());
     }
   }
 
