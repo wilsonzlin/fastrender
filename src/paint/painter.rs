@@ -183,6 +183,13 @@ pub struct Painter {
   pixmap: Pixmap,
   /// CSS-to-device scale factor (device pixel ratio)
   scale: f32,
+  /// CSS-space origin of this painter's pixmap.
+  ///
+  /// Display commands remain in absolute CSS coordinates. For intermediate stacking-context
+  /// layers we allocate a smaller pixmap covering a sub-rectangle of the page and set
+  /// `origin_offset_css` to that sub-rectangle's top-left so that CSS coordinates map into the
+  /// layer's local (0,0)-based pixel space without cloning/rewriting the command tree.
+  origin_offset_css: Point,
   /// Logical viewport width in CSS px
   css_width: f32,
   /// Logical viewport height in CSS px
@@ -1074,6 +1081,7 @@ impl Painter {
     Ok(Self {
       pixmap,
       scale,
+      origin_offset_css: Point::ZERO,
       css_width: width as f32,
       css_height: height as f32,
       background,
@@ -1113,12 +1121,27 @@ impl Painter {
   }
 
   #[inline]
+  fn device_x(&self, x: f32) -> f32 {
+    (x - self.origin_offset_css.x) * self.scale
+  }
+
+  #[inline]
+  fn device_y(&self, y: f32) -> f32 {
+    (y - self.origin_offset_css.y) * self.scale
+  }
+
+  #[inline]
+  fn device_point(&self, point: Point) -> Point {
+    Point::new(self.device_x(point.x), self.device_y(point.y))
+  }
+
+  #[inline]
   fn device_rect(&self, rect: Rect) -> Rect {
     Rect::from_xywh(
-      rect.x() * self.scale,
-      rect.y() * self.scale,
-      rect.width() * self.scale,
-      rect.height() * self.scale,
+      self.device_x(rect.x()),
+      self.device_y(rect.y()),
+      self.device_length(rect.width()),
+      self.device_length(rect.height()),
     )
   }
 
@@ -1135,8 +1158,8 @@ impl Painter {
   #[inline]
   fn device_transform(&self, transform: Option<Transform>) -> Option<Transform> {
     if let Some(mut t) = transform {
-      t.tx *= self.scale;
-      t.ty *= self.scale;
+      t.tx = self.device_x(t.tx);
+      t.ty = self.device_y(t.ty);
       Some(t)
     } else {
       None
@@ -2439,13 +2462,11 @@ impl Painter {
           );
         }
 
-        // Reduce layer size by translating to the top-left of the local bounds.
+        // Reduce intermediate layer size by rendering into a pixmap whose origin is the
+        // top-left of the computed bounds. Display commands remain in absolute CSS coordinates;
+        // the child painters use `origin_offset_css` to map them into the local layer space.
         let offset = Point::new(bounds.min_x(), bounds.min_y());
-        let translate_start = profile_enabled.then(Instant::now);
-        let translated = translate_commands(commands, -offset.x, -offset.y);
-        if let Some(start) = translate_start {
-          translate_ms = start.elapsed().as_secs_f64() * 1000.0;
-        }
+        translate_ms = 0.0;
 
         let device_bounds = self.device_rect(bounds);
         let width = device_bounds.width().ceil().max(0.0);
@@ -2454,26 +2475,17 @@ impl Painter {
           return Ok(());
         }
 
-        let root_rect = match context_rect
-          .intersection(bounds)
-          .map(|r| Rect::from_xywh(r.x() - offset.x, r.y() - offset.y, r.width(), r.height()))
-        {
+        let root_rect = match context_rect.intersection(bounds) {
           Some(r) if r.width() > 0.0 && r.height() > 0.0 => r,
-          _ => Rect::from_xywh(
-            bounds.x() - offset.x,
-            bounds.y() - offset.y,
-            bounds.width(),
-            bounds.height(),
-          ),
+          _ => bounds,
         };
-        let device_root_rect = self.device_rect(root_rect);
         let has_clip = clip.is_some();
         let clip_root = clip.map(|clip| clip.clip_root).unwrap_or(false);
         let mut outline_commands = Vec::new();
         let mut unclipped = Vec::new();
         let mut clipped = Vec::new();
         if has_clip {
-          for cmd in translated {
+          for cmd in commands {
             match cmd {
               DisplayCommand::Outline { .. } => outline_commands.push(cmd),
               DisplayCommand::Background { rect, .. } | DisplayCommand::Border { rect, .. }
@@ -2491,7 +2503,7 @@ impl Painter {
         } else {
           // Without overflow clipping there's no need for a secondary clip layer; execute
           // commands directly into the base layer while keeping outlines separate.
-          for cmd in translated {
+          for cmd in commands {
             if matches!(cmd, DisplayCommand::Outline { .. }) {
               outline_commands.push(cmd);
             } else {
@@ -2515,6 +2527,7 @@ impl Painter {
         let mut base_painter = Painter {
           pixmap: layer,
           scale: self.scale,
+          origin_offset_css: offset,
           css_width: self.css_width,
           css_height: self.css_height,
           background: Rgba::new(0, 0, 0, 0.0),
@@ -2529,6 +2542,7 @@ impl Painter {
           diagnostics_enabled: self.diagnostics_enabled,
           max_iframe_depth: self.max_iframe_depth,
         };
+        let device_root_rect = base_painter.device_rect(root_rect);
         let paint_unclipped_start = profile_enabled.then(Instant::now);
         for cmd in unclipped {
           base_painter.execute_command(cmd)?;
@@ -2536,7 +2550,6 @@ impl Painter {
         if let Some(start) = paint_unclipped_start {
           base_paint_ms = start.elapsed().as_secs_f64() * 1000.0;
         }
-        self.gradient_stats.merge(&base_painter.gradient_stats);
 
         if !clipped.is_empty() {
           let clip_layer = match new_pixmap(layer_w, layer_h) {
@@ -2551,6 +2564,7 @@ impl Painter {
           let mut clip_painter = Painter {
             pixmap: clip_layer,
             scale: self.scale,
+            origin_offset_css: offset,
             css_width: self.css_width,
             css_height: self.css_height,
             background: Rgba::new(0, 0, 0, 0.0),
@@ -2572,7 +2586,7 @@ impl Painter {
           if let Some(start) = paint_clipped_start {
             clip_paint_ms = start.elapsed().as_secs_f64() * 1000.0;
           }
-          self.gradient_stats.merge(&clip_painter.gradient_stats);
+          base_painter.gradient_stats.merge(&clip_painter.gradient_stats);
           let mut clip_pixmap = clip_painter.pixmap;
           if let Some(clip) = clip {
             let mut clip_rect = clip.rect;
@@ -2581,28 +2595,21 @@ impl Painter {
             let clip_y = clip.clip_y;
             if !clip_x {
               clip_rect =
-                Rect::from_xywh(offset.x, clip_rect.y(), bounds.width(), clip_rect.height());
+                Rect::from_xywh(bounds.min_x(), clip_rect.y(), bounds.width(), clip_rect.height());
               clip_radii = BorderRadii::ZERO;
             }
             if !clip_y {
               clip_rect =
-                Rect::from_xywh(clip_rect.x(), offset.y, clip_rect.width(), bounds.height());
+                Rect::from_xywh(clip_rect.x(), bounds.min_y(), clip_rect.width(), bounds.height());
               clip_radii = BorderRadii::ZERO;
             }
-            let mut local_clip = Rect::from_xywh(
-              clip_rect.x() - offset.x,
-              clip_rect.y() - offset.y,
-              clip_rect.width(),
-              clip_rect.height(),
-            );
-            let layer_bounds = Rect::from_xywh(0.0, 0.0, bounds.width(), bounds.height());
-            local_clip = clip_rect_axes(local_clip, layer_bounds, true, true);
+            let local_clip = clip_rect_axes(clip_rect, bounds, true, true);
             if local_clip.width() > 0.0 && local_clip.height() > 0.0 {
               let clip_apply_start = profile_enabled.then(Instant::now);
               apply_clip_mask_rect(
                 &mut clip_pixmap,
-                self.device_rect(local_clip),
-                self.device_radii(clip_radii),
+                base_painter.device_rect(local_clip),
+                base_painter.device_radii(clip_radii),
               );
               if let Some(start) = clip_apply_start {
                 overflow_clip_ms = start.elapsed().as_secs_f64() * 1000.0;
@@ -2628,12 +2635,12 @@ impl Painter {
           }
         }
 
-        let mut layer_pixmap = base_painter.pixmap;
         if let Some(ref clip_path) = clip_path {
           let clip_path_start = profile_enabled.then(Instant::now);
-          if let Some(size) = IntSize::from_wh(layer_pixmap.width(), layer_pixmap.height()) {
-            if let Some(mask) = clip_path.mask(self.scale, size, Transform::identity()) {
-              layer_pixmap.apply_mask(&mask);
+          if let Some(size) = IntSize::from_wh(base_painter.pixmap.width(), base_painter.pixmap.height()) {
+            let transform = Transform::from_translate(-offset.x * self.scale, -offset.y * self.scale);
+            if let Some(mask) = clip_path.mask(self.scale, size, transform) {
+              base_painter.pixmap.apply_mask(&mask);
             }
           }
           if let Some(start) = clip_path_start {
@@ -2642,62 +2649,37 @@ impl Painter {
         }
         if let Some(ref mask_style) = mask {
           let mask_start = profile_enabled.then(Instant::now);
-          let local_bounds = Rect::from_xywh(0.0, 0.0, bounds.width(), bounds.height());
-          let local_context_rect = Rect::from_xywh(
-            context_rect.x() - offset.x,
-            context_rect.y() - offset.y,
-            context_rect.width(),
-            context_rect.height(),
-          );
-          if let Some(mask) = self.render_mask(
+          if let Some(mask) = base_painter.render_mask(
             mask_style,
-            local_context_rect,
-            local_bounds,
-            (layer_pixmap.width(), layer_pixmap.height()),
+            context_rect,
+            bounds,
+            (base_painter.pixmap.width(), base_painter.pixmap.height()),
           ) {
-            layer_pixmap.apply_mask(&mask);
+            base_painter.pixmap.apply_mask(&mask);
           }
           if let Some(start) = mask_start {
             mask_ms = start.elapsed().as_secs_f64() * 1000.0;
           }
         }
         if !outline_commands.is_empty() {
-          let mut outline_painter = Painter {
-            pixmap: layer_pixmap,
-            scale: self.scale,
-            css_width: self.css_width,
-            css_height: self.css_height,
-            background: Rgba::new(0, 0, 0, 0.0),
-            shaper: ShapingPipeline::new(),
-            font_ctx: self.font_ctx.clone(),
-            image_cache: self.image_cache.clone(),
-            text_shape_cache: Arc::clone(&self.text_shape_cache),
-            trace: self.trace.clone(),
-            scroll_state: self.scroll_state.clone(),
-            gradient_cache: self.gradient_cache.clone(),
-            gradient_stats: GradientStats::default(),
-            diagnostics_enabled: self.diagnostics_enabled,
-            max_iframe_depth: self.max_iframe_depth,
-          };
           let outline_start = profile_enabled.then(Instant::now);
           for cmd in outline_commands {
-            outline_painter.execute_command(cmd)?;
+            base_painter.execute_command(cmd)?;
           }
           if let Some(start) = outline_start {
             outline_ms = start.elapsed().as_secs_f64() * 1000.0;
           }
-          self.gradient_stats.merge(&outline_painter.gradient_stats);
-          layer_pixmap = outline_painter.pixmap;
         }
+
         if !filters.is_empty() {
           let filter_start = profile_enabled.then(Instant::now);
-          apply_filters(&mut layer_pixmap, &filters, self.scale, device_root_rect)?;
+          apply_filters(&mut base_painter.pixmap, &filters, self.scale, device_root_rect)?;
           if let Some(start) = filter_start {
             filter_ms = start.elapsed().as_secs_f64() * 1000.0;
           }
         }
 
-        let device_radii = self.device_radii(radii);
+        let device_radii = base_painter.device_radii(radii);
         if !radii.is_zero() || !filters.is_empty() {
           let (device_out_l, device_out_t, device_out_r, device_out_b) =
             compute_filter_outset(&filters, root_rect, self.scale);
@@ -2708,11 +2690,14 @@ impl Painter {
             device_root_rect.height() + device_out_t + device_out_b,
           );
           let radii_clip_start = profile_enabled.then(Instant::now);
-          apply_clip_mask_rect(&mut layer_pixmap, clip_rect, device_radii);
+          apply_clip_mask_rect(&mut base_painter.pixmap, clip_rect, device_radii);
           if let Some(start) = radii_clip_start {
             radii_clip_ms = start.elapsed().as_secs_f64() * 1000.0;
           }
         }
+
+        self.gradient_stats.merge(&base_painter.gradient_stats);
+        let mut layer_pixmap = base_painter.pixmap;
 
         let combined_transform = transform_3d
           .unwrap_or_else(Transform3D::identity)
@@ -2734,7 +2719,7 @@ impl Painter {
             projected = false;
             break;
           }
-          dest_quad_device[idx] = Point::new(tx / tw * self.scale, ty / tw * self.scale);
+          dest_quad_device[idx] = self.device_point(Point::new(tx / tw, ty / tw));
         }
         if !projected {
           dest_quad_device = src_quad;
@@ -3035,6 +3020,7 @@ impl Painter {
             tile_w,
             tile_h,
             clip_rect_css,
+            self.origin_offset_css,
             self.scale,
           );
         }
@@ -3845,8 +3831,8 @@ impl Painter {
     let bottom = bottom_css * self.scale;
     let left = left_css * self.scale;
 
-    let x = self.device_length(x);
-    let y = self.device_length(y);
+    let x = self.device_x(x);
+    let y = self.device_y(y);
     let width = self.device_length(width);
     let height = self.device_length(height);
 
@@ -4404,8 +4390,8 @@ impl Painter {
             0.0,
             0.0,
             scale_y * self.scale,
-            self.device_length(tx),
-            self.device_length(ty),
+            self.device_x(tx),
+            self.device_y(ty),
           ),
         );
         paint.anti_alias = false;
@@ -4586,8 +4572,8 @@ impl Painter {
     if ow <= 0.0 || matches!(outline_style, CssBorderStyle::None | CssBorderStyle::Hidden) {
       return;
     }
-    let outer_x = self.device_length(x);
-    let outer_y = self.device_length(y);
+    let outer_x = self.device_x(x);
+    let outer_y = self.device_y(y);
     let outer_w = self.device_length(width);
     let outer_h = self.device_length(height);
     let (color, invert) = style.outline_color.resolve(style.color);
@@ -4758,8 +4744,8 @@ impl Painter {
     color: Rgba,
     style: Option<&ComputedStyle>,
   ) {
-    let origin_x = origin_x * self.scale;
-    let baseline_y = baseline_y * self.scale;
+    let origin_x = self.device_x(origin_x);
+    let baseline_y = self.device_y(baseline_y);
     let Some(instance) = FontInstance::new(&run.font, &run.variations) else {
       return;
     };
@@ -4901,8 +4887,8 @@ impl Painter {
     color: Rgba,
     style: Option<&ComputedStyle>,
   ) {
-    let block_origin = block_origin * self.scale;
-    let inline_origin = inline_origin * self.scale;
+    let block_origin = self.device_x(block_origin);
+    let inline_origin = self.device_y(inline_origin);
 
     let Some(instance) = FontInstance::new(&run.font, &run.variations) else {
       return;
@@ -5189,8 +5175,8 @@ impl Painter {
         src,
       } => {
         if let Some(pixmap) = self.render_iframe_srcdoc(html, src, content_rect, style) {
-          let device_x = self.device_length(content_rect.x());
-          let device_y = self.device_length(content_rect.y());
+          let device_x = self.device_x(content_rect.x());
+          let device_y = self.device_y(content_rect.y());
           let paint = PixmapPaint::default();
           self.pixmap.draw_pixmap(
             device_x as i32,
@@ -5273,8 +5259,8 @@ impl Painter {
         srcdoc: None,
       } => {
         if let Some(pixmap) = self.render_iframe_src(content, content_rect, style) {
-          let device_x = self.device_length(content_rect.x());
-          let device_y = self.device_length(content_rect.y());
+          let device_x = self.device_x(content_rect.x());
+          let device_y = self.device_y(content_rect.y());
           let paint = PixmapPaint::default();
           self.pixmap.draw_pixmap(
             device_x as i32,
@@ -5552,12 +5538,14 @@ impl Painter {
     if let Some(tint) = highlight {
       let rect = inset_rect(content_rect, 1.0);
       let radii = BorderRadii::uniform((rect.height().min(rect.width()) / 6.0).max(2.0));
+      let device_rect = self.device_rect(rect);
+      let radii = self.device_radii(radii);
       let _ = fill_rounded_rect(
         &mut self.pixmap,
-        rect.x(),
-        rect.y(),
-        rect.width(),
-        rect.height(),
+        device_rect.x(),
+        device_rect.y(),
+        device_rect.width(),
+        device_rect.height(),
         &radii,
         tint,
       );
@@ -5783,13 +5771,20 @@ impl Painter {
         let track_color = style
           .background_color
           .with_alpha((style.background_color.a * 0.8).max(0.1));
-        let _ = fill_rounded_rect(
-          &mut self.pixmap,
+        let device_track_rect = self.device_rect(Rect::from_xywh(
           content_rect.x(),
           track_y,
           content_rect.width(),
           track_height,
-          &radii,
+        ));
+        let device_radii = self.device_radii(radii);
+        let _ = fill_rounded_rect(
+          &mut self.pixmap,
+          device_track_rect.x(),
+          device_track_rect.y(),
+          device_track_rect.width(),
+          device_track_rect.height(),
+          &device_radii,
           track_color,
         );
 
@@ -5801,6 +5796,9 @@ impl Painter {
         let knob_center_x =
           content_rect.x() + knob_radius + clamped * (content_rect.width() - 2.0 * knob_radius);
         let knob_center_y = content_rect.y() + content_rect.height() / 2.0;
+        let knob_center_x = self.device_x(knob_center_x);
+        let knob_center_y = self.device_y(knob_center_y);
+        let knob_radius = self.device_length(knob_radius);
         if let Some(path) = PathBuilder::from_circle(knob_center_x, knob_center_y, knob_radius) {
           let mut paint = Paint::default();
           paint.set_color(
@@ -5826,12 +5824,14 @@ impl Painter {
       FormControlKind::Color { value, raw } => {
         let rect = inset_rect(content_rect, 3.0);
         let radii = BorderRadii::uniform((rect.height().min(rect.width()) / 5.0).max(2.0));
+        let device_rect = self.device_rect(rect);
+        let radii = self.device_radii(radii);
         let _ = fill_rounded_rect(
           &mut self.pixmap,
-          rect.x(),
-          rect.y(),
-          rect.width(),
-          rect.height(),
+          device_rect.x(),
+          device_rect.y(),
+          device_rect.width(),
+          device_rect.height(),
           &radii,
           *value,
         );
@@ -6053,8 +6053,8 @@ impl Painter {
                 0.0,
                 0.0,
                 scale_y,
-                self.device_length(x) + dest_x_device,
-                self.device_length(y) + dest_y_device,
+                self.device_x(x) + dest_x_device,
+                self.device_y(y) + dest_y_device,
               );
               self
                 .pixmap
@@ -6115,8 +6115,8 @@ impl Painter {
         0.0,
         0.0,
         scale_y,
-        self.device_length(x) + dest_x,
-        self.device_length(y) + dest_y,
+        self.device_x(x) + dest_x,
+        self.device_y(y) + dest_y,
       );
       self
         .pixmap
@@ -6143,8 +6143,8 @@ impl Painter {
       0.0,
       0.0,
       scale_y,
-      self.device_length(x) + dest_x,
-      self.device_length(y) + dest_y,
+      self.device_x(x) + dest_x,
+      self.device_y(y) + dest_y,
     );
     self
       .pixmap
@@ -6234,20 +6234,20 @@ impl Painter {
         return false;
       }
 
-      let mut paint = PixmapPaint::default();
-      paint.quality = Self::filter_quality_for_image(style);
+        let mut paint = PixmapPaint::default();
+        paint.quality = Self::filter_quality_for_image(style);
 
-      let transform = Transform::from_row(
-        scale_x,
-        0.0,
-        0.0,
-        scale_y,
-        self.device_length(x) + dest_x_device,
-        self.device_length(y) + dest_y_device,
-      );
-      self
-        .pixmap
-        .draw_pixmap(0, 0, pixmap.as_ref().as_ref(), &paint, transform, None);
+        let transform = Transform::from_row(
+          scale_x,
+          0.0,
+          0.0,
+          scale_y,
+          self.device_x(x) + dest_x_device,
+          self.device_y(y) + dest_y_device,
+        );
+        self
+          .pixmap
+          .draw_pixmap(0, 0, pixmap.as_ref().as_ref(), &paint, transform, None);
       return true;
     }
 
@@ -6367,8 +6367,8 @@ impl Painter {
         0.0,
         0.0,
         scale_y,
-        self.device_length(x) + dest_x,
-        self.device_length(y) + dest_y,
+        self.device_x(x) + dest_x,
+        self.device_y(y) + dest_y,
       );
       self
         .pixmap
@@ -6395,8 +6395,8 @@ impl Painter {
       0.0,
       0.0,
       scale_y,
-      self.device_length(x) + dest_x,
-      self.device_length(y) + dest_y,
+      self.device_x(x) + dest_x,
+      self.device_y(y) + dest_y,
     );
     self
       .pixmap
@@ -7355,8 +7355,16 @@ impl Painter {
       return;
     }
 
-    let inline_start = self.device_length(inline_start);
-    let block_baseline = self.device_length(block_baseline);
+    let inline_start = if inline_vertical {
+      self.device_y(inline_start)
+    } else {
+      self.device_x(inline_start)
+    };
+    let block_baseline = if inline_vertical {
+      self.device_x(block_baseline)
+    } else {
+      self.device_y(block_baseline)
+    };
     let inline_len = self.device_length(inline_len);
 
     let Some(metrics) = self.decoration_metrics(runs, style) else {
@@ -7733,8 +7741,16 @@ impl Painter {
       return;
     }
 
-    let inline_origin = self.device_length(inline_origin);
-    let block_baseline = self.device_length(block_baseline);
+    let inline_origin = if inline_vertical {
+      self.device_y(inline_origin)
+    } else {
+      self.device_x(inline_origin)
+    };
+    let block_baseline = if inline_vertical {
+      self.device_x(block_baseline)
+    } else {
+      self.device_y(block_baseline)
+    };
 
     let Some(metrics) = self.decoration_metrics(Some(runs), style) else {
       return;
@@ -8634,81 +8650,6 @@ fn clip_non_outline(
     bounds = bounds.union(c);
   }
   bounds
-}
-
-fn translate_commands(commands: Vec<DisplayCommand>, dx: f32, dy: f32) -> Vec<DisplayCommand> {
-  let offset = Point::new(dx, dy);
-  commands
-    .into_iter()
-    .map(|cmd| match cmd {
-      DisplayCommand::Background { rect, style } => DisplayCommand::Background {
-        rect: rect.translate(offset),
-        style,
-      },
-      DisplayCommand::Border { rect, style } => DisplayCommand::Border {
-        rect: rect.translate(offset),
-        style,
-      },
-      DisplayCommand::Outline { rect, style } => DisplayCommand::Outline {
-        rect: rect.translate(offset),
-        style,
-      },
-      DisplayCommand::Text {
-        rect,
-        baseline_offset,
-        text,
-        runs,
-        style,
-      } => DisplayCommand::Text {
-        rect: rect.translate(offset),
-        baseline_offset,
-        text,
-        runs,
-        style,
-      },
-      DisplayCommand::Replaced {
-        rect,
-        replaced_type,
-        style,
-      } => DisplayCommand::Replaced {
-        rect: rect.translate(offset),
-        replaced_type,
-        style,
-      },
-      DisplayCommand::StackingContext {
-        rect,
-        opacity,
-        transform,
-        transform_3d,
-        blend_mode,
-        isolated,
-        mask,
-        filters,
-        backdrop_filters,
-        radii,
-        clip,
-        clip_path,
-        commands,
-      } => DisplayCommand::StackingContext {
-        rect: rect.translate(offset),
-        opacity,
-        transform,
-        transform_3d,
-        blend_mode,
-        isolated,
-        mask,
-        filters,
-        backdrop_filters,
-        radii,
-        clip: clip.map(|clip| StackingClip {
-          rect: clip.rect.translate(offset),
-          ..clip
-        }),
-        clip_path: clip_path.map(|cp| cp.translate(dx, dy)),
-        commands: translate_commands(commands, dx, dy),
-      },
-    })
-    .collect()
 }
 
 fn describe_content(content: &FragmentContent) -> &'static str {
@@ -9713,6 +9654,7 @@ fn paint_mask_tile(
   tile_w: f32,
   tile_h: f32,
   clip_rect: Rect,
+  origin_offset: Point,
   scale: f32,
 ) {
   if tile_w <= 0.0 || tile_h <= 0.0 {
@@ -9727,8 +9669,8 @@ fn paint_mask_tile(
   }
 
   let device_clip = Rect::from_xywh(
-    intersection.x() * scale,
-    intersection.y() * scale,
+    (intersection.x() - origin_offset.x) * scale,
+    (intersection.y() - origin_offset.y) * scale,
     intersection.width() * scale,
     intersection.height() * scale,
   );
@@ -9762,8 +9704,8 @@ fn paint_mask_tile(
       0.0,
       0.0,
       scale_y * scale,
-      tx * scale,
-      ty * scale,
+      (tx - origin_offset.x) * scale,
+      (ty - origin_offset.y) * scale,
     ),
   );
   paint.anti_alias = false;
