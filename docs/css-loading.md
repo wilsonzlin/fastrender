@@ -6,7 +6,15 @@ FastRender extracts CSS from:
 - Linked stylesheets (`<link rel="stylesheet" href="…">`)
 - `@import` rules inside stylesheets
 
-The core implementation is in `src/css/loader.rs`.
+In the render pipeline:
+
+- Stylesheet *source extraction* happens in `src/css/parser.rs` (see `extract_scoped_css_sources`).
+- Stylesheet *fetch + parse + @import resolution* happens in `FastRender::collect_document_style_set`
+  (`src/api.rs`).
+- URL resolution and `url(...)` rewriting helpers live in `src/css/loader.rs`.
+
+FastRender also exposes `inline_stylesheets_*` helpers that explicitly fetch linked stylesheets and
+inject a `<style>` block into HTML for tooling. These helpers are not used by the main render path.
 
 ## Link resolution rules (high level)
 

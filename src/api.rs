@@ -4299,7 +4299,7 @@ impl FastRender {
     trace.finalize(result)
   }
 
-  /// Render already-fetched HTML while inlining linked stylesheets using the configured fetcher.
+  /// Render already-fetched HTML using the renderer's standard stylesheet loading pipeline.
   pub fn render_fetched_html_with_options(
     &mut self,
     resource: &crate::resource::FetchedResource,
@@ -4316,8 +4316,8 @@ impl FastRender {
       .map(RenderReport::into_result)
   }
 
-  /// Render already-fetched HTML while inlining linked stylesheets using the configured fetcher.
-  /// Captures intermediate artifacts.
+  /// Render already-fetched HTML using the renderer's standard stylesheet loading pipeline,
+  /// capturing intermediate artifacts.
   pub fn render_fetched_html_with_options_report(
     &mut self,
     resource: &crate::resource::FetchedResource,
@@ -4400,78 +4400,9 @@ impl FastRender {
     let base_url = infer_base_url(&html, hint).into_owned();
     self.set_base_url(base_url.clone());
     let deadline = RenderDeadline::new(options.timeout, options.cancel_callback.clone());
-    let (width, height) = options
-      .viewport
-      .unwrap_or((self.default_width, self.default_height));
-
-    let html_to_render = {
-      let _span = trace.span("css_inline", "style");
-      let mut guard = diagnostics.lock().unwrap();
-      match self.inline_stylesheets(
-        &html,
-        &base_url,
-        options.media_type,
-        options.css_limit,
-        &mut guard,
-        Some(&deadline),
-        stats.as_deref_mut(),
-      ) {
-        Ok(inlined) => {
-          if options.allow_partial
-            && guard.failure_stage.is_none()
-            && guard
-              .fetch_errors
-              .iter()
-              .any(|entry| entry.kind == ResourceKind::Stylesheet)
-          {
-            guard.note_failure_stage(RenderStage::Css);
-          }
-          inlined
-        }
-        Err(err) => {
-          if options.allow_partial {
-            if let RenderError::Timeout { stage, .. } = &err {
-              guard.timeout_stage = Some(*stage);
-              guard.note_failure_stage(*stage);
-              let diagnostics = guard.clone();
-              let pixmap = self.render_error_overlay(width, height)?;
-              if let Some(recorder) = local_recorder.take() {
-                let mut stats = recorder.finish();
-                merge_text_diagnostics(&mut stats);
-                merge_image_cache_diagnostics(&mut stats);
-                guard.stats = Some(stats);
-              }
-              if !had_sink {
-                self.set_diagnostics_sink(None);
-              }
-              return Ok(RenderReport {
-                pixmap,
-                accessibility: None,
-                diagnostics,
-                artifacts: RenderArtifacts::new(artifacts),
-              });
-            }
-            guard.note_failure_stage(RenderStage::Css);
-            drop(guard);
-            html
-          } else {
-            drop(guard);
-            if !had_sink {
-              self.set_diagnostics_sink(None);
-            }
-            if local_recorder.is_some() {
-              let _ = crate::image_loader::take_image_cache_diagnostics();
-              let _ = crate::paint::painter::take_paint_diagnostics();
-              let _ = crate::text::pipeline::take_text_diagnostics();
-            }
-            return Err(Error::Render(err));
-          }
-        }
-      }
-    };
     let mut captured = RenderArtifacts::new(artifacts);
     let outputs = self.render_html_with_options_internal_with_deadline(
-      &html_to_render,
+      &html,
       options,
       Some(&mut captured),
       Some(&deadline),
@@ -4509,7 +4440,7 @@ impl FastRender {
     Ok(report)
   }
 
-  /// Renders an HTML string after inlining linked stylesheets.
+  /// Renders an HTML string with external resources resolved against a base URL hint.
   pub fn render_html_with_stylesheets(
     &mut self,
     html: &str,
@@ -4521,7 +4452,8 @@ impl FastRender {
       .map(RenderReport::into_result)
   }
 
-  /// Renders an HTML string after inlining linked stylesheets, capturing artifacts.
+  /// Renders an HTML string with external resources resolved against a base URL hint,
+  /// capturing intermediate artifacts.
   pub fn render_html_with_stylesheets_report(
     &mut self,
     html: &str,
@@ -4572,68 +4504,10 @@ impl FastRender {
       let base_url = infer_base_url(html, base_hint).into_owned();
       self.set_base_url(base_url.clone());
       let deadline = RenderDeadline::new(options.timeout, options.cancel_callback.clone());
-      let (width, height) = options
-        .viewport
-        .unwrap_or((self.default_width, self.default_height));
-      let shared_diagnostics = Some(SharedRenderDiagnostics {
-        inner: Arc::clone(&diagnostics),
-      });
-      let context = Some(self.build_resource_context(Some(&base_url), shared_diagnostics));
-      let (prev_self, prev_image, prev_font) = self.push_resource_context(context);
-
       let mut result = (|| -> Result<RenderReport> {
-        let html_with_css = {
-          record_stage(StageHeartbeat::CssInline);
-          let _span = trace_handle.span("css_inline", "style");
-          let _deadline_guard = DeadlineGuard::install(Some(&deadline));
-          let mut guard = diagnostics.lock().unwrap();
-          match self.inline_stylesheets(
-            html,
-            &base_url,
-            options.media_type,
-            options.css_limit,
-            &mut guard,
-            Some(&deadline),
-            stats_recorder.as_mut(),
-          ) {
-            Ok(inlined) => {
-              if options.allow_partial
-                && guard.failure_stage.is_none()
-                && guard
-                  .fetch_errors
-                  .iter()
-                  .any(|entry| entry.kind == ResourceKind::Stylesheet)
-              {
-                guard.note_failure_stage(RenderStage::Css);
-              }
-              inlined
-            }
-            Err(err) => {
-              if options.allow_partial {
-                if let RenderError::Timeout { stage, .. } = &err {
-                  guard.timeout_stage = Some(*stage);
-                  guard.note_failure_stage(*stage);
-                  let diagnostics = guard.clone();
-                  let pixmap = self.render_error_overlay(width, height)?;
-                  return Ok(RenderReport {
-                    pixmap,
-                    accessibility: None,
-                    diagnostics,
-                    artifacts: RenderArtifacts::new(artifacts),
-                  });
-                }
-                guard.note_failure_stage(RenderStage::Css);
-                html.to_string()
-              } else {
-                return Err(Error::Render(err));
-              }
-            }
-          }
-        };
-
         let mut captured = RenderArtifacts::new(artifacts);
         let outputs = self.render_html_with_options_internal_with_deadline(
-          &html_with_css,
+          html,
           options,
           Some(&mut captured),
           Some(&deadline),
@@ -4649,7 +4523,6 @@ impl FastRender {
           artifacts: captured,
         })
       })();
-      self.pop_resource_context(prev_self, prev_image, prev_font);
 
       if let Some(recorder) = stats_recorder {
         match result.as_mut() {
@@ -4691,24 +4564,11 @@ impl FastRender {
       .viewport
       .unwrap_or((self.default_width, self.default_height));
 
-    let mut diagnostics = RenderDiagnostics::default();
     let base_url = infer_base_url(html, base_hint).into_owned();
     self.set_base_url(base_url.clone());
 
-    let html_with_css = self
-      .inline_stylesheets(
-        html,
-        &base_url,
-        options.media_type,
-        options.css_limit,
-        &mut diagnostics,
-        None,
-        None,
-      )
-      .map_err(Error::Render)?;
-
     let requested_viewport = Size::new(width as f32, height as f32);
-    let dom = self.parse_html(&html_with_css)?;
+    let dom = self.parse_html(html)?;
     let meta_viewport = if self.apply_meta_viewport {
       crate::html::viewport::extract_viewport(&dom)
     } else {
@@ -5437,6 +5297,9 @@ impl FastRender {
     .with_device_pixel_ratio(self.device_pixel_ratio)
     .with_env_overrides();
 
+    // CSS fetching/parsing happens before cascade; keep the stage heartbeat in sync so
+    // render runners can attribute stalls/timeouts correctly.
+    record_stage(StageHeartbeat::CssInline);
     let css_parse_start = timings_enabled.then(Instant::now);
     let mut media_query_cache = MediaQueryCache::default();
     let style_set = {

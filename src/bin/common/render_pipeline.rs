@@ -257,7 +257,7 @@ pub fn follow_client_redirects(
   doc
 }
 
-/// Render prepared HTML using the shared stylesheet inlining path.
+/// Render prepared HTML using the shared render pipeline (including linked stylesheets).
 pub fn render_document(
   renderer: &mut FastRender,
   doc: PreparedDocument,
