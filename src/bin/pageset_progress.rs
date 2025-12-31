@@ -2532,6 +2532,21 @@ fn push_opt_u64(parts: &mut Vec<String>, label: &str, value: Option<u64>) {
   }
 }
 
+fn format_bytes(bytes: u64) -> String {
+  const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+  let mut value = bytes as f64;
+  let mut idx = 0usize;
+  while value >= 1024.0 && idx + 1 < UNITS.len() {
+    value /= 1024.0;
+    idx += 1;
+  }
+  if idx == 0 {
+    format!("{bytes}B")
+  } else {
+    format!("{value:.1}{}", UNITS[idx])
+  }
+}
+
 fn push_opt_ms(parts: &mut Vec<String>, label: &str, value: Option<f64>) {
   if let Some(v) = value {
     parts.push(format!("{label}={v:.2}ms", v = v));
@@ -2817,7 +2832,7 @@ fn resources_summary(resources: &ResourceDiagnostics) -> Option<String> {
     resource_cache_parts.push(format!("misses={misses}"));
   }
   if let Some(bytes) = resources.resource_cache_bytes {
-    resource_cache_parts.push(format!("bytes={bytes}"));
+    resource_cache_parts.push(format!("bytes={}", format_bytes(bytes as u64)));
   }
   if !resource_cache_parts.is_empty() {
     parts.push(format!("resource_cache {}", resource_cache_parts.join(" ")));
@@ -2831,7 +2846,7 @@ fn resources_summary(resources: &ResourceDiagnostics) -> Option<String> {
     disk_cache_parts.push(format!("misses={misses}"));
   }
   if let Some(bytes) = resources.disk_cache_bytes {
-    disk_cache_parts.push(format!("bytes={bytes}"));
+    disk_cache_parts.push(format!("bytes={}", format_bytes(bytes as u64)));
   }
   if let Some(ms) = resources.disk_cache_ms {
     disk_cache_parts.push(format!("ms={ms:.2}ms"));
@@ -2845,7 +2860,7 @@ fn resources_summary(resources: &ResourceDiagnostics) -> Option<String> {
     network_parts.push(format!("fetches={fetches}"));
   }
   if let Some(bytes) = resources.network_fetch_bytes {
-    network_parts.push(format!("bytes={bytes}"));
+    network_parts.push(format!("bytes={}", format_bytes(bytes as u64)));
   }
   if let Some(ms) = resources.network_fetch_ms {
     network_parts.push(format!("ms={ms:.2}ms"));
