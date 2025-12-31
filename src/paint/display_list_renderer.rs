@@ -4131,6 +4131,8 @@ impl DisplayListRenderer {
 
     if parallel_supported {
       let (pixmap, tiles, threads_used, parallel_duration) = self.render_parallel(&list)?;
+      // Ensure we catch deadlines that expire during the final tile render/blit.
+      check_active(RenderStage::Paint).map_err(Error::Render)?;
       let duration = start.elapsed();
       let serial_duration = duration.saturating_sub(parallel_duration);
       if self.paint_parallelism.log_timing {
@@ -4186,6 +4188,9 @@ impl DisplayListRenderer {
     }
 
     self.render_slice(list.items())?;
+    // Like the legacy painter, `render_slice` checks periodically before each display item. Run a
+    // final check so we don't miss deadlines expiring during the last item.
+    check_active(RenderStage::Paint).map_err(Error::Render)?;
     let serial_duration = start.elapsed();
     let image_stats = self
       .image_pixmap_diagnostics

@@ -1473,6 +1473,10 @@ impl Painter {
       });
     }
 
+    // The per-command check above runs before executing each display item. Ensure we also check
+    // once at the end so we don't miss a deadline that expires during the final command.
+    check_active(RenderStage::Paint).map_err(Error::Render)?;
+
     if profiling {
       eprintln!("paint_stats enabled");
       stats.log();
