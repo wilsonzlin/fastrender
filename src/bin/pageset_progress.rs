@@ -727,6 +727,9 @@ fn is_legacy_auto_note_line(line: &str) -> bool {
     || trimmed.starts_with("renderer init:")
     || trimmed.starts_with("stderr tail")
     || trimmed.starts_with("stage:")
+    // Notes are capped to `PROGRESS_NOTE_MAX_CHARS`, which can truncate a line mid-token and leave
+    // partial `stage:` prefixes behind.
+    || matches!(trimmed, "stage…" | "s…")
     // Legacy progress files often stored the formatted error display in `notes`; treat those as
     // machine-generated so reruns do not preserve stale diagnostics as "manual notes".
     || trimmed.starts_with("[parse]")
@@ -5796,6 +5799,26 @@ mod tests {
     assert_eq!(
       legacy_auto_notes_from_previous(&previous),
       Some("fetch failed: [resource] https://example.com: timeout: global".to_string())
+    );
+  }
+
+  #[test]
+  fn truncated_stage_lines_are_ignored_in_manual_notes() {
+    let url = "https://example.com".to_string();
+    let previous = PageProgress {
+      url,
+      status: ProgressStatus::Timeout,
+      notes: "manual blocker\nstage…\ns…".to_string(),
+      ..PageProgress::default()
+    };
+
+    assert_eq!(
+      manual_notes_from_previous(&previous),
+      Some("manual blocker".to_string())
+    );
+    assert_eq!(
+      legacy_auto_notes_from_previous(&previous),
+      Some("stage…\ns…".to_string())
     );
   }
 
