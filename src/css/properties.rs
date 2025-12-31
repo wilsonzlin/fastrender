@@ -1510,11 +1510,15 @@ fn parse_simple_value(value_str: &str) -> Option<PropertyValue> {
 }
 
 fn parse_gradient(value: &str) -> Option<PropertyValue> {
-  fn is_single_function_call(value: &str, name: &str) -> bool {
-    let trimmed = value.trim();
-    let lower = trimmed.to_ascii_lowercase();
-    let prefix = format!("{name}(");
-    if !lower.starts_with(&prefix) {
+  fn is_single_function_call(trimmed: &str, name: &str) -> bool {
+    let name_len = name.len();
+    let Some(prefix) = trimmed.get(..name_len) else {
+      return false;
+    }
+    if !prefix.eq_ignore_ascii_case(name) {
+      return false;
+    }
+    if trimmed.as_bytes().get(name_len) != Some(&b'(') {
       return false;
     }
 
@@ -1522,7 +1526,8 @@ fn parse_gradient(value: &str) -> Option<PropertyValue> {
     let mut in_string: Option<char> = None;
     let mut escape = false;
 
-    for (idx, ch) in trimmed.char_indices() {
+    for (rel_idx, ch) in trimmed[name_len..].char_indices() {
+      let idx = rel_idx + name_len;
       if escape {
         escape = false;
         continue;
@@ -1553,23 +1558,32 @@ fn parse_gradient(value: &str) -> Option<PropertyValue> {
     false
   }
 
-  let lower = value.trim().to_ascii_lowercase();
-  if is_single_function_call(value, "linear-gradient") {
+  let trimmed = value.trim();
+  if !trimmed.ends_with(')') {
+    return None;
+  }
+  if is_single_function_call(trimmed, "linear-gradient") {
+    let lower = trimmed.to_ascii_lowercase();
     return parse_linear_gradient(&lower, false);
   }
-  if is_single_function_call(value, "radial-gradient") {
+  if is_single_function_call(trimmed, "radial-gradient") {
+    let lower = trimmed.to_ascii_lowercase();
     return parse_radial_gradient(&lower, false);
   }
-  if is_single_function_call(value, "repeating-linear-gradient") {
+  if is_single_function_call(trimmed, "repeating-linear-gradient") {
+    let lower = trimmed.to_ascii_lowercase();
     return parse_linear_gradient(&lower, true);
   }
-  if is_single_function_call(value, "repeating-radial-gradient") {
+  if is_single_function_call(trimmed, "repeating-radial-gradient") {
+    let lower = trimmed.to_ascii_lowercase();
     return parse_radial_gradient(&lower, true);
   }
-  if is_single_function_call(value, "conic-gradient") {
+  if is_single_function_call(trimmed, "conic-gradient") {
+    let lower = trimmed.to_ascii_lowercase();
     return parse_conic_gradient(&lower, false);
   }
-  if is_single_function_call(value, "repeating-conic-gradient") {
+  if is_single_function_call(trimmed, "repeating-conic-gradient") {
+    let lower = trimmed.to_ascii_lowercase();
     return parse_conic_gradient(&lower, true);
   }
   None
