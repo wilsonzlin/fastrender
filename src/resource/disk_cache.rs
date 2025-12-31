@@ -72,8 +72,6 @@ impl Default for DiskCacheConfig {
 
 const DEFAULT_LOCK_STALE_AFTER: Duration = Duration::from_secs(8);
 const LOCK_WAIT_TIMEOUT: Duration = Duration::from_millis(500);
-const LOCK_RETRY_INITIAL_DELAY: Duration = Duration::from_millis(2);
-const LOCK_RETRY_MAX_DELAY: Duration = Duration::from_millis(50);
 const READ_LOCK_WAIT_TIMEOUT: Duration = Duration::from_millis(200);
 const READ_LOCK_RETRY_INITIAL_DELAY: Duration = Duration::from_millis(5);
 const READ_LOCK_RETRY_MAX_DELAY: Duration = Duration::from_millis(50);
@@ -314,9 +312,6 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     let lock_path = lock_path_for(data_path);
     let max_wait = self.deadline_aware_lock_wait(LOCK_WAIT_TIMEOUT);
     let deadline = Instant::now() + max_wait;
-    let mut delay = LOCK_RETRY_INITIAL_DELAY;
-    let path_hash = hash_u64(&lock_path.to_string_lossy());
-    let mut attempt: u64 = 0;
 
     loop {
       match OpenOptions::new()
@@ -335,33 +330,16 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
           return Some(EntryLock { path: lock_path });
         }
         Err(err) if err.kind() == ErrorKind::AlreadyExists => {
-          if !self.lock_is_active(data_path) {
-            continue;
-          }
-
           let now = Instant::now();
           if now >= deadline {
             return None;
           }
-          let remaining = deadline.saturating_duration_since(now);
-          let sleep_cap = delay.min(remaining);
-          if !sleep_cap.is_zero() {
-            let half = sleep_cap / 2;
-            let now_ns = SystemTime::now()
-              .duration_since(UNIX_EPOCH)
-              .map(|d| d.as_nanos() as u64)
-              .unwrap_or(0);
-            let seed = now_ns
-              ^ path_hash
-              ^ attempt.wrapping_mul(0x9E3779B97F4A7C15)
-              ^ (u64::from(std::process::id()));
-            let sleep_for = (half + jitter_duration(half, seed)).min(remaining);
-            if !sleep_for.is_zero() {
-              thread::sleep(sleep_for);
-            }
+
+          // Avoid busy looping on a held lock by reusing the reader wait path (which checks PID
+          // liveness once, then polls via cheap metadata/backoff).
+          if !self.wait_for_unlock(data_path, deadline.saturating_duration_since(now)) {
+            return None;
           }
-          delay = delay.saturating_mul(2).min(LOCK_RETRY_MAX_DELAY);
-          attempt = attempt.wrapping_add(1);
         }
         Err(_) => return None,
       }
