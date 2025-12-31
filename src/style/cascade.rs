@@ -15401,7 +15401,7 @@ fn apply_cascaded_declarations<'a, F>(
 
   // Scope revert-layer bases to the current cascade stratum (origin + importance) so that
   // important declarations don't reuse snapshots from the normal cascade segment.
-  let mut layer_snapshots: HashMap<Arc<[u32]>, ComputedStyle> = HashMap::new();
+  let mut layer_snapshots: FxHashMap<Arc<[u32]>, ComputedStyle> = FxHashMap::default();
   let mut layer_snapshot_stratum: Option<(u8, bool)> = None;
 
   let mut apply_entry = |entry: &MatchedDeclaration<'_>| {
