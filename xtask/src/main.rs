@@ -420,6 +420,31 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
     run_command(cmd)?;
   }
 
+  if disk_cache_enabled {
+    let mut cmd = Command::new("cargo");
+    cmd
+      .arg("run")
+      .arg("--release")
+      .apply_disk_cache_feature(true)
+      .args(["--bin", "prefetch_assets"])
+      .arg("--")
+      .arg("--jobs")
+      .arg(args.jobs.to_string())
+      .arg("--timeout")
+      .arg(args.fetch_timeout.to_string());
+    if let Some(pages) = &pages_arg {
+      cmd.arg("--pages").arg(pages);
+    }
+    if let Some(shard) = &shard_arg {
+      cmd.arg("--shard").arg(shard);
+    }
+    println!(
+      "Prefetching subresources into fetches/assets/ (jobs={}, timeout={}s)...",
+      args.jobs, args.fetch_timeout
+    );
+    run_command(cmd)?;
+  }
+
   let mut cmd = Command::new("cargo");
   cmd
     .arg("run")
@@ -1563,6 +1588,7 @@ mod tests {
             styled_nodes: Some(3),
             box_nodes: None,
             fragments: Some(5),
+            ..Default::default()
           },
           cascade: fastrender::CascadeDiagnostics {
             nodes: Some(10),
@@ -1601,9 +1627,12 @@ mod tests {
           "cascade_ms": null,
           "box_tree_ms": null,
           "layout_ms": null,
+          "text_fallback_ms": null,
+          "text_shape_ms": null,
           "paint_build_ms": null,
           "paint_optimize_ms": null,
           "paint_rasterize_ms": null,
+          "text_rasterize_ms": null,
           "encode_ms": null
         }
       },
@@ -1627,27 +1656,53 @@ mod tests {
               "cascade_ms": 2.5,
               "box_tree_ms": null,
               "layout_ms": null,
+              "text_fallback_ms": null,
+              "text_shape_ms": null,
               "paint_build_ms": null,
               "paint_optimize_ms": null,
               "paint_rasterize_ms": null,
+              "text_rasterize_ms": null,
               "encode_ms": null
             },
             "counts": {
               "dom_nodes": 4,
               "styled_nodes": 3,
               "box_nodes": null,
-              "fragments": 5
+              "fragments": 5,
+              "shaped_runs": null,
+              "glyphs": null,
+              "color_glyph_rasters": null,
+              "fallback_cache_hits": null,
+              "fallback_cache_misses": null,
+              "last_resort_font_fallbacks": null,
+              "glyph_cache_hits": null,
+              "glyph_cache_misses": null,
+              "glyph_cache_evictions": null,
+              "glyph_cache_bytes": null,
+              "color_glyph_cache_hits": null,
+              "color_glyph_cache_misses": null,
+              "color_glyph_cache_evictions": null,
+              "color_glyph_cache_bytes": null
             },
             "cascade": {
               "nodes": 10,
               "rule_candidates": 4,
               "rule_matches": null,
+              "rule_candidates_pruned": null,
+              "rule_candidates_by_id": null,
+              "rule_candidates_by_class": null,
+              "rule_candidates_by_tag": null,
+              "rule_candidates_by_attr": null,
+              "rule_candidates_universal": null,
               "selector_time_ms": null,
               "declaration_time_ms": null,
               "pseudo_time_ms": null,
               "has_evals": null,
               "has_cache_hits": null,
-              "has_prunes": null
+              "has_prunes": null,
+              "has_bloom_prunes": null,
+              "has_filter_prunes": null,
+              "has_evaluated": null
             },
             "layout": {
               "intrinsic_lookups": 1,
@@ -1659,7 +1714,15 @@ mod tests {
               "layout_cache_lookups": null,
               "layout_cache_hits": null,
               "layout_cache_stores": null,
-              "layout_cache_evictions": null
+              "layout_cache_evictions": null,
+              "layout_cache_clones": null,
+              "flex_cache_clones": null,
+              "taffy_nodes_built": null,
+              "taffy_nodes_reused": null,
+              "taffy_style_cache_hits": null,
+              "taffy_style_cache_misses": null,
+              "fragment_deep_clones": null,
+              "fragment_traversed": null
             },
             "paint": {
               "display_items": 8,
@@ -1673,7 +1736,12 @@ mod tests {
               "parallel_tasks": null,
               "parallel_threads": null,
               "parallel_ms": null,
-              "serial_ms": null
+              "serial_ms": null,
+              "filter_cache_hits": null,
+              "filter_cache_misses": null,
+              "blur_cache_hits": null,
+              "blur_cache_misses": null,
+              "blur_tiles": null
             },
             "resources": {
               "fetch_counts": { "document": 1, "image": 2 },
