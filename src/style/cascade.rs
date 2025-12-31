@@ -153,6 +153,11 @@ thread_local! {
   static SCOPE_RESOLVE_MISSES: std::cell::Cell<u64> = std::cell::Cell::new(0);
 }
 
+#[cfg(test)]
+thread_local! {
+  static ANCESTOR_BLOOM_HASH_INSERTS: std::cell::Cell<u64> = std::cell::Cell::new(0);
+}
+
 fn attr_truthy_value(value: &str) -> bool {
   matches!(
     value.to_ascii_lowercase().as_str(),
@@ -6425,8 +6430,10 @@ fn apply_styles_internal_with_ancestors<'a>(
 
   let mut children = Vec::with_capacity(node.children.len());
 
-  let push_ancestor_bloom = ancestor_bloom_enabled && node.is_element();
+  let push_ancestor_bloom = ancestor_bloom_enabled && node.is_element() && !node.children.is_empty();
   if push_ancestor_bloom {
+    #[cfg(test)]
+    ANCESTOR_BLOOM_HASH_INSERTS.with(|counter| counter.set(counter.get().saturating_add(1)));
     for_each_ancestor_bloom_hash(node, rule_scopes.quirks_mode, |hash| {
       ancestor_bloom_filter.insert_hash(hash);
     });
@@ -7539,6 +7546,58 @@ mod tests {
     );
 
     assert_eq!(out.len(), 2);
+  }
+
+  #[test]
+  fn ancestor_bloom_filter_is_built_incrementally() {
+    crate::dom::set_ancestor_bloom_enabled(true);
+
+    let depth = 4usize;
+    let mut current = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![],
+      },
+      children: vec![],
+    };
+    for _ in 0..(depth - 2) {
+      current = DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "div".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: vec![],
+        },
+        children: vec![current],
+      };
+    }
+
+    let dom = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("id".to_string(), "root".to_string())],
+      },
+      children: vec![current],
+    };
+
+    let stylesheet = parse_stylesheet("#root div { color: rgb(1, 2, 3); }").unwrap();
+
+    ANCESTOR_BLOOM_HASH_INSERTS.with(|counter| counter.set(0));
+    let styled = apply_styles(&dom, &stylesheet);
+
+    let mut leaf = &styled;
+    for _ in 0..(depth - 1) {
+      leaf = leaf.children.first().expect("child");
+    }
+    assert_eq!(leaf.styles.color, Rgba::rgb(1, 2, 3));
+
+    let inserts = ANCESTOR_BLOOM_HASH_INSERTS.with(|counter| counter.get());
+    assert!(inserts > 0);
+    assert!(
+      inserts <= depth as u64,
+      "expected O(n) ancestor bloom-filter hash insertions, got {inserts} for depth={depth}"
+    );
   }
 
   #[test]
