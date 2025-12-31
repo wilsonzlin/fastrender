@@ -19,7 +19,7 @@ pip install -r tests/fixtures/fonts/requirements.txt
 - **Sources:** [Noto Sans families](https://github.com/google/fonts/tree/main/ofl) (OFL, see `Noto-LICENSE-OFL.txt`),
    [STIX Math v2.0.0](https://github.com/stipub/stixfonts) (OFL, see `STIXTwoMath-OFL.txt`),
    and `FastRenderEmoji.ttf` (CC0) for color emoji.
-- **Regeneration:**
+- **Regeneration:** From the repository root:
   ```bash
   python3 -m venv .venv && . .venv/bin/activate
   pip install -r tests/fixtures/fonts/requirements.txt

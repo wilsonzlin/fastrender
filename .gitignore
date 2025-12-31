@@ -1,6 +1,6 @@
 /fetches/
 target/
 target_pages/
-/.venv/
+.venv/
 __pycache__/
 *.py[cod]

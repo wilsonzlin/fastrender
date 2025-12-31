@@ -18,7 +18,8 @@ try:
 except ImportError as exc:
   raise SystemExit(
     "Missing dependency: fontTools.\n\n"
-    "Regenerate bundled font subsets by installing the pinned Python deps:\n"
+    "Regenerate bundled font subsets by installing the pinned Python deps.\n"
+    "From the repository root:\n"
     "  python3 -m venv .venv && . .venv/bin/activate\n"
     "  pip install -r tests/fixtures/fonts/requirements.txt\n"
   ) from exc
