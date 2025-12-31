@@ -14,7 +14,7 @@ use std::sync::Mutex;
 use tiny_skia::Pixmap;
 
 const FAST_GAUSS_THRESHOLD_SIGMA: f32 = 4.0;
-const BLUR_DEADLINE_STRIDE: usize = 2048;
+const BLUR_DEADLINE_STRIDE: usize = 256;
 const PARALLEL_BLUR_MIN_PIXELS: usize = 512 * 512;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
