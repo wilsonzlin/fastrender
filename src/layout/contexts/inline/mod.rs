@@ -7896,7 +7896,15 @@ impl InlineFormattingContext {
       }
     }
 
-    let mut merged_children = Vec::new();
+    let mut line_fragments: Vec<Option<FragmentNode>> =
+      line_fragments.into_iter().map(Some).collect();
+    let mut float_fragments: Vec<Option<FragmentNode>> =
+      float_fragments.into_iter().map(Some).collect();
+    let mut block_fragments: Vec<Option<FragmentNode>> =
+      block_fragments.into_iter().map(Some).collect();
+
+    let mut merged_children =
+      Vec::with_capacity(line_fragments.len() + float_fragments.len() + block_fragments.len());
     for chunk in flow_order {
       if let Err(RenderError::Timeout { elapsed, .. }) =
         check_active_periodic(&mut deadline_counter, 32, RenderStage::Layout)
@@ -7905,16 +7913,20 @@ impl InlineFormattingContext {
       }
       match chunk {
         FlowChunk::Inline { start, end } => {
-          merged_children.extend(line_fragments[start..end].iter().cloned());
+          for fragment in &mut line_fragments[start..end] {
+            if let Some(fragment) = fragment.take() {
+              merged_children.push(fragment);
+            }
+          }
         }
         FlowChunk::Float { index } => {
-          if let Some(f) = float_fragments.get(index) {
-            merged_children.push(f.clone());
+          if let Some(fragment) = float_fragments.get_mut(index).and_then(|f| f.take()) {
+            merged_children.push(fragment);
           }
         }
         FlowChunk::Block { index } => {
-          if let Some(b) = block_fragments.get(index) {
-            merged_children.push(b.clone());
+          if let Some(fragment) = block_fragments.get_mut(index).and_then(|b| b.take()) {
+            merged_children.push(fragment);
           }
         }
       }
