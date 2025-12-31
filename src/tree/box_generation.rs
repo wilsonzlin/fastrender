@@ -1593,8 +1593,8 @@ fn attach_debug_info(mut box_node: BoxNode, styled: &StyledNode) -> BoxNode {
     let id = styled.node.get_attribute("id");
     let classes = styled
       .node
-      .get_attribute("class")
-      .map(|c| c.split_whitespace().map(|s| s.to_string()).collect())
+      .get_attribute_ref("class")
+      .map(|c| c.split_ascii_whitespace().map(str::to_owned).collect())
       .unwrap_or_default();
 
     let mut dbg = DebugInfo::new(Some(tag.to_string()), id, classes).with_spans(colspan, rowspan);
