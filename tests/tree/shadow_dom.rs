@@ -1,5 +1,6 @@
 use fastrender::dom::{
-  compute_slot_assignment, enumerate_dom_ids, parse_html, DomNode, DomNodeType, ShadowRootMode,
+  compute_slot_assignment_with_ids, enumerate_dom_ids, parse_html, DomNode, DomNodeType,
+  ShadowRootMode,
 };
 use std::collections::HashMap;
 
@@ -48,7 +49,7 @@ fn declarative_shadow_dom_attaches_shadow_root() {
     "<div id='host'><template shadowroot=\"open\"><span id='shadow'><slot></slot></span></template><p id='light'>Light</p></div>";
   let dom = parse_html(html).expect("parse html");
   let ids = enumerate_dom_ids(&dom);
-  let assignments = compute_slot_assignment(&dom);
+  let assignments = compute_slot_assignment_with_ids(&dom, &ids);
   let mut lookup = HashMap::new();
   build_id_lookup(&dom, &ids, &mut lookup);
 
@@ -84,7 +85,7 @@ fn slot_uses_fallback_when_unassigned() {
     "<div id='host'><template shadowroot='closed'><slot id='slot'>fallback</slot></template></div>";
   let dom = parse_html(html).expect("parse html");
   let ids = enumerate_dom_ids(&dom);
-  let assignments = compute_slot_assignment(&dom);
+  let assignments = compute_slot_assignment_with_ids(&dom, &ids);
   let host = find_by_id(&dom, "host").expect("host element");
   let shadow_root = host.children.first().expect("shadow root");
   match shadow_root.node_type {
@@ -108,7 +109,7 @@ fn named_slots_receive_matching_light_dom() {
   let html = "<div id='host'><template shadowroot='open'><slot name='title' id='title-slot'></slot><slot id='default-slot'></slot></template><span slot='title' id='title'>Title</span><span id='body'>Body</span></div>";
   let dom = parse_html(html).expect("parse html");
   let ids = enumerate_dom_ids(&dom);
-  let assignments = compute_slot_assignment(&dom);
+  let assignments = compute_slot_assignment_with_ids(&dom, &ids);
   let mut lookup = HashMap::new();
   build_id_lookup(&dom, &ids, &mut lookup);
   let host = find_by_id(&dom, "host").expect("host element");
@@ -150,7 +151,7 @@ fn unmatched_named_content_falls_back_to_default_slot() {
   let html = "<div id='host'><template shadowroot='open'><slot id='default-slot'></slot></template><span slot='missing' id='named'>Named</span><span id='plain'>Plain</span></div>";
   let dom = parse_html(html).expect("parse html");
   let ids = enumerate_dom_ids(&dom);
-  let assignments = compute_slot_assignment(&dom);
+  let assignments = compute_slot_assignment_with_ids(&dom, &ids);
   let mut lookup = HashMap::new();
   build_id_lookup(&dom, &ids, &mut lookup);
   let host = find_by_id(&dom, "host").expect("host element");
@@ -216,7 +217,7 @@ fn nested_default_slot_in_fallback_prefers_outer_slot() {
   let html = "<div id='host'><template shadowroot='open'><slot id='outer'><div><slot id='inner'></slot></div></slot></template><span id='light'>X</span></div>";
   let dom = parse_html(html).expect("parse html");
   let ids = enumerate_dom_ids(&dom);
-  let assignments = compute_slot_assignment(&dom);
+  let assignments = compute_slot_assignment_with_ids(&dom, &ids);
   let mut lookup = HashMap::new();
   build_id_lookup(&dom, &ids, &mut lookup);
   let host = find_by_id(&dom, "host").expect("host element");
@@ -250,7 +251,7 @@ fn nested_named_slots_in_fallback_receive_assignments_when_outer_is_unassigned()
   let html = "<div id='host'><template shadowroot='open'><slot name='outer' id='outer'><slot name='inner' id='inner'></slot></slot></template><span slot='inner' id='light-inner'>Y</span></div>";
   let dom = parse_html(html).expect("parse html");
   let ids = enumerate_dom_ids(&dom);
-  let assignments = compute_slot_assignment(&dom);
+  let assignments = compute_slot_assignment_with_ids(&dom, &ids);
   let mut lookup = HashMap::new();
   build_id_lookup(&dom, &ids, &mut lookup);
   let host = find_by_id(&dom, "host").expect("host element");

@@ -28,7 +28,7 @@ use crate::css::types::StyleSheet;
 use crate::debug::runtime;
 use crate::dom::ancestor_bloom_enabled;
 use crate::dom::build_selector_bloom_store;
-use crate::dom::compute_slot_assignment;
+use crate::dom::compute_slot_assignment_with_ids;
 use crate::dom::enumerate_dom_ids;
 use crate::dom::for_each_ancestor_bloom_hash;
 use crate::dom::next_selector_cache_epoch;
@@ -1236,10 +1236,17 @@ fn build_slot_maps<'a>(
   maps
 }
 
-const DOCUMENT_TREE_SCOPE_PREFIX: u32 = u32::MAX;
+// Tree scopes participate in cascade-layer ordering (outer document vs inner shadow trees).
+//
+// The document scope should be the lowest-precedence tree scope so that shadow-root author rules
+// (including ::slotted()) can override document author rules when they target the same element.
+// This matches browser behavior and is covered by the shadow ::slotted regression tests.
+const DOCUMENT_TREE_SCOPE_PREFIX: u32 = 0;
 
 fn shadow_tree_scope_prefix(shadow_root_id: usize) -> u32 {
-  u32::try_from(shadow_root_id).unwrap_or(DOCUMENT_TREE_SCOPE_PREFIX.saturating_sub(1))
+  u32::try_from(shadow_root_id)
+    .unwrap_or(u32::MAX)
+    .saturating_add(1)
 }
 
 static DOCUMENT_UNLAYERED_LAYER_ORDER: OnceLock<Arc<[u32]>> = OnceLock::new();
@@ -3848,7 +3855,11 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
   let id_map = enumerate_dom_ids(dom);
   let shadow_stylesheets = collect_shadow_stylesheets(dom, &id_map)?;
   let mut dom_maps = DomMaps::new(dom, id_map);
-  let slot_assignment = compute_slot_assignment(dom);
+  let slot_assignment = if dom_maps.shadow_hosts.is_empty() {
+    SlotAssignment::default()
+  } else {
+    compute_slot_assignment_with_ids(dom, &dom_maps.id_map)
+  };
   let slot_maps = build_slot_maps(dom, &slot_assignment, &dom_maps);
 
   // Collect applicable rules from both stylesheets
@@ -4325,7 +4336,11 @@ impl<'a> PreparedCascade<'a> {
 
     let id_map = enumerate_dom_ids(dom);
     let dom_maps = DomMaps::new(dom, id_map);
-    let slot_assignment = compute_slot_assignment(dom);
+    let slot_assignment = if dom_maps.shadow_hosts.is_empty() {
+      SlotAssignment::default()
+    } else {
+      compute_slot_assignment_with_ids(dom, &dom_maps.id_map)
+    };
     let slot_maps = build_slot_maps(dom, &slot_assignment, &dom_maps);
     let mut host_to_shadow_root: HashMap<usize, usize> = HashMap::new();
     for (shadow_root_id, host_id) in dom_maps.shadow_hosts.iter() {

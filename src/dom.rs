@@ -1794,14 +1794,9 @@ fn attach_shadow_roots(node: &mut DomNode, deadline_counter: &mut usize) -> Resu
   Ok(())
 }
 
-fn collect_slot_names(node: &DomNode, out: &mut HashSet<String>) {
+fn collect_slot_names<'a>(node: &'a DomNode, out: &mut HashSet<&'a str>) {
   if matches!(node.node_type, DomNodeType::Slot { .. }) {
-    out.insert(
-      node
-        .get_attribute_ref("name")
-        .map(|v| v.to_string())
-        .unwrap_or_default(),
-    );
+    out.insert(node.get_attribute_ref("name").unwrap_or(""));
   }
 
   for child in node.children.iter() {
@@ -1810,15 +1805,13 @@ fn collect_slot_names(node: &DomNode, out: &mut HashSet<String>) {
 }
 
 fn take_assignments_for_slot_ptr(
-  assignments: &mut Vec<(Option<String>, *const DomNode)>,
+  assignments: &mut Vec<(Option<&str>, *const DomNode)>,
   slot_name: &str,
-  available_slots: &HashSet<String>,
+  available_slots: &HashSet<&str>,
 ) -> Vec<*const DomNode> {
   let mut taken = Vec::new();
-  let mut remaining = Vec::with_capacity(assignments.len());
-
-  for (name, node) in assignments.drain(..) {
-    let target = name.as_deref().unwrap_or("");
+  assignments.retain(|(name, node)| {
+    let target = name.unwrap_or("");
     let matches = if slot_name.is_empty() {
       name.is_none() || !available_slots.contains(target)
     } else {
@@ -1826,21 +1819,20 @@ fn take_assignments_for_slot_ptr(
     };
 
     if matches {
-      taken.push(node);
+      taken.push(*node);
+      false
     } else {
-      remaining.push((name, node));
+      true
     }
-  }
-
-  *assignments = remaining;
+  });
   taken
 }
 
 fn fill_slot_assignments(
   node: &DomNode,
   shadow_root_id: usize,
-  assignments: &mut Vec<(Option<String>, *const DomNode)>,
-  available_slots: &HashSet<String>,
+  assignments: &mut Vec<(Option<&str>, *const DomNode)>,
+  available_slots: &HashSet<&str>,
   ids: &HashMap<*const DomNode, usize>,
   out: &mut SlotAssignment,
 ) {
@@ -1853,7 +1845,6 @@ fn fill_slot_assignments(
         .iter()
         .filter_map(|ptr| ids.get(ptr).copied())
         .collect();
-      out.slot_to_nodes.insert(slot_id, assigned_ids.clone());
       out
         .shadow_to_slots
         .entry(shadow_root_id)
@@ -1861,7 +1852,7 @@ fn fill_slot_assignments(
         .entry(slot_name.to_string())
         .or_default()
         .extend(assigned_ids.iter().copied());
-      for node_id in assigned_ids {
+      for &node_id in &assigned_ids {
         out.node_to_slot.insert(
           node_id,
           AssignedSlot {
@@ -1871,6 +1862,7 @@ fn fill_slot_assignments(
           },
         );
       }
+      out.slot_to_nodes.insert(slot_id, assigned_ids);
       // Once a slot is assigned, its fallback subtree is not rendered; stop recursion.
       return;
     }
@@ -1907,6 +1899,14 @@ pub fn enumerate_dom_ids(root: &DomNode) -> HashMap<*const DomNode, usize> {
 /// Compute the slot assignment map for all shadow roots in the DOM.
 pub fn compute_slot_assignment(root: &DomNode) -> SlotAssignment {
   let ids = enumerate_dom_ids(root);
+  compute_slot_assignment_with_ids(root, &ids)
+}
+
+/// Compute the slot assignment map for all shadow roots in the DOM using a precomputed id map.
+pub fn compute_slot_assignment_with_ids(
+  root: &DomNode,
+  ids: &HashMap<*const DomNode, usize>,
+) -> SlotAssignment {
   let mut assignment = SlotAssignment::default();
 
   fn walk<'a>(
@@ -1917,9 +1917,9 @@ pub fn compute_slot_assignment(root: &DomNode) -> SlotAssignment {
   ) {
     if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
       if let Some(host) = parent {
-        let mut available_slots: HashSet<String> = HashSet::new();
+        let mut available_slots: HashSet<&str> = HashSet::new();
         collect_slot_names(node, &mut available_slots);
-        let mut light_children: Vec<(Option<String>, *const DomNode)> = host
+        let mut light_children: Vec<(Option<&str>, *const DomNode)> = host
           .children
           .iter()
           .filter(|c| !matches!(c.node_type, DomNodeType::ShadowRoot { .. }))
@@ -1927,8 +1927,7 @@ pub fn compute_slot_assignment(root: &DomNode) -> SlotAssignment {
             let slot_name = child
               .get_attribute_ref("slot")
               .map(|v| v.trim())
-              .filter(|v| !v.is_empty())
-              .map(|v| v.to_string());
+              .filter(|v| !v.is_empty());
             (slot_name, child as *const DomNode)
           })
           .collect();
@@ -1950,7 +1949,7 @@ pub fn compute_slot_assignment(root: &DomNode) -> SlotAssignment {
     }
   }
 
-  walk(root, None, &ids, &mut assignment);
+  walk(root, None, ids, &mut assignment);
   assignment
 }
 
