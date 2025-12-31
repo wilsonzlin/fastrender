@@ -1549,18 +1549,18 @@ impl HttpFetcher {
 
         match body_result {
           Ok(bytes) => {
-            let bytes = match decode_content_encodings(bytes, &encodings, allowed_limit, decode_stage)
-            {
-              Ok(decoded) => decoded,
-              Err(ContentDecodeError::DeadlineExceeded { stage, elapsed, .. }) => {
-                finish_network_fetch_diagnostics(network_timer.take());
-                return Err(Error::Render(RenderError::Timeout { stage, elapsed }));
-              }
-              Err(ContentDecodeError::DecompressionFailed { .. })
-                if accept_encoding.is_none() =>
-              {
-                finish_network_fetch_diagnostics(network_timer.take());
-                return self.fetch_http_with_accept(&current, Some("identity"), validators);
+            let bytes =
+              match decode_content_encodings(bytes, &encodings, allowed_limit, decode_stage) {
+                Ok(decoded) => decoded,
+                Err(ContentDecodeError::DeadlineExceeded { stage, elapsed, .. }) => {
+                  finish_network_fetch_diagnostics(network_timer.take());
+                  return Err(Error::Render(RenderError::Timeout { stage, elapsed }));
+                }
+                Err(ContentDecodeError::DecompressionFailed { .. })
+                  if accept_encoding.is_none() =>
+                {
+                  finish_network_fetch_diagnostics(network_timer.take());
+                  return self.fetch_http_with_accept(&current, Some("identity"), validators);
                 }
                 Err(err) => {
                   finish_network_fetch_diagnostics(network_timer.take());
@@ -3545,6 +3545,11 @@ mod tests {
       stats.disk_cache_hits >= 1,
       "expected disk cache hit counter to increment (got {})",
       stats.disk_cache_hits
+    );
+    assert!(
+      stats.disk_cache_ms.is_finite() && stats.disk_cache_ms >= 0.0,
+      "expected finite disk cache duration, got {}",
+      stats.disk_cache_ms
     );
   }
 
