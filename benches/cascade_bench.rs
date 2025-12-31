@@ -5,10 +5,15 @@ use criterion::Criterion;
 use fastrender::css::parser::parse_stylesheet;
 use fastrender::dom::parse_html;
 use fastrender::style::cascade::{
-  apply_styles_with_media, capture_cascade_profile, cascade_profile_enabled, reset_cascade_profile,
+  apply_starting_style_set_with_media_target_and_imports_cached_with_deadline,
+  apply_styles_with_media,
+  capture_cascade_profile,
+  cascade_profile_enabled,
+  reset_cascade_profile,
   set_cascade_profile_enabled,
 };
 use fastrender::style::media::MediaContext;
+use fastrender::style::style_set::StyleSet;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::fmt::Write;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -374,11 +379,25 @@ fn inline_style_starting_style_benchmark(c: &mut Criterion) {
 
   let dom = parse_html(&html).expect("parse html");
   let stylesheet = parse_stylesheet(css).expect("parse stylesheet");
+  let style_set = StyleSet::from_document(stylesheet);
   let media = MediaContext::screen(1280.0, 720.0);
 
   c.bench_function("cascade apply_styles @starting-style inline-style heavy", |b| {
     b.iter(|| {
-      let styled = apply_styles_with_media(black_box(&dom), black_box(&stylesheet), &media);
+      let styled = apply_starting_style_set_with_media_target_and_imports_cached_with_deadline(
+        black_box(&dom),
+        black_box(&style_set),
+        &media,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+      )
+      .expect("starting-style cascade");
       black_box(styled);
     });
   });
