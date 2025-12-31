@@ -135,7 +135,8 @@ pub(super) fn place_grid_items<'a, S, ChildIter>(
           start: sec_idx,
           end: sec_idx + secondary_span_width,
         };
-        if cell_occupancy_matrix.line_area_is_unoccupied(primary_axis, primary_placement, secondary_span)
+        if cell_occupancy_matrix
+          .line_area_is_unoccupied(primary_axis, primary_placement, secondary_span)
         {
           break (primary_placement, secondary_span);
         }
@@ -470,6 +471,7 @@ mod tests {
       );
 
       // Assert that each item has been placed in the right location
+      assert_eq!(items.len(), children.len());
       for (idx, (id, _style, expected_placement)) in children.iter().enumerate() {
         let node_id = NodeId::from(*id);
         let item = items

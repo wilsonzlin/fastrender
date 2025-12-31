@@ -76,6 +76,35 @@ fn take_subgrid_override(_node: NodeId) -> Option<SubgridOverride> {
   None
 }
 
+#[cfg(feature = "std")]
+pub(crate) fn clear_subgrid_overrides() {
+  SUBGRID_OVERRIDES.with(|map| map.borrow_mut().clear());
+}
+
+#[cfg(not(feature = "std"))]
+pub(crate) fn clear_subgrid_overrides() {}
+
+#[cfg(all(test, feature = "std"))]
+pub(crate) fn subgrid_overrides_len() -> usize {
+  SUBGRID_OVERRIDES.with(|map| map.borrow().len())
+}
+
+#[cfg(all(test, not(feature = "std")))]
+pub(crate) fn subgrid_overrides_len() -> usize {
+  0
+}
+
+#[cfg(test)]
+pub(crate) fn insert_dummy_subgrid_override(node: NodeId) {
+  store_subgrid_override(
+    node,
+    SubgridOverride {
+      rows: None,
+      columns: None,
+    },
+  );
+}
+
 fn apply_subgrid_override(style: &mut Style, data: &SubgridOverride) {
   if let Some(rows) = &data.rows {
     style.subgrid_rows = true;

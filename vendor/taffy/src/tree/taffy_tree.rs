@@ -354,7 +354,6 @@ impl<NodeContext, MeasureFunction> TraverseTree for TaffyView<'_, NodeContext, M
       Option<&mut NodeContext>,
       &Style,
     ) -> Size<f32>
-    + 'static
 {
 }
 
@@ -368,7 +367,6 @@ where
       Option<&mut NodeContext>,
       &Style,
     ) -> Size<f32>
-    + 'static,
 {
   type CoreContainerStyle<'a>
     = &'a Style
@@ -500,7 +498,6 @@ where
       Option<&mut NodeContext>,
       &Style,
     ) -> Size<f32>
-    + 'static,
 {
   type BlockContainerStyle<'a>
     = &'a Style
@@ -533,7 +530,6 @@ where
       Option<&mut NodeContext>,
       &Style,
     ) -> Size<f32>
-    + 'static,
 {
   type FlexboxContainerStyle<'a>
     = &'a Style
@@ -566,7 +562,6 @@ where
       Option<&mut NodeContext>,
       &Style,
     ) -> Size<f32>
-    + 'static,
 {
   type GridContainerStyle<'a>
     = &'a Style
@@ -615,7 +610,6 @@ where
       Option<&mut NodeContext>,
       &Style,
     ) -> Size<f32>
-    + 'static,
 {
   #[inline(always)]
   fn get_unrounded_layout(&self, node: NodeId) -> Layout {
@@ -1054,18 +1048,57 @@ impl<NodeContext> TaffyTree<NodeContext> {
         Option<&mut NodeContext>,
         &Style,
       ) -> Size<f32>
-      + 'static,
   {
+    // Clear any lingering state from a previous aborted/panicked layout run.
+    #[cfg(feature = "grid")]
+    crate::compute::grid::clear_subgrid_overrides();
+
     let use_rounding = self.config.use_rounding;
     let mut taffy_view = TaffyView {
       taffy: self,
       measure_function,
     };
-    compute_root_layout(&mut taffy_view, node_id, available_space);
-    if use_rounding {
-      round_layout(&mut taffy_view, node_id);
+
+    #[cfg(feature = "std")]
+    {
+      let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        compute_root_layout(&mut taffy_view, node_id, available_space);
+        if use_rounding {
+          round_layout(&mut taffy_view, node_id);
+        }
+      }));
+
+      match result {
+        Ok(()) => {
+          // Ensure no state from successful layout runs leaks into future layout passes.
+          #[cfg(feature = "grid")]
+          crate::compute::grid::clear_subgrid_overrides();
+          Ok(())
+        }
+        Err(payload) => {
+          // Ensure no state from aborted/panicked layout runs leaks into future layout passes.
+          #[cfg(feature = "grid")]
+          crate::compute::grid::clear_subgrid_overrides();
+
+          if payload.is::<crate::util::LayoutAbort>() {
+            return Err(TaffyError::LayoutAborted);
+          }
+
+          std::panic::resume_unwind(payload);
+        }
+      }
     }
-    Ok(())
+
+    #[cfg(not(feature = "std"))]
+    {
+      compute_root_layout(&mut taffy_view, node_id, available_space);
+      if use_rounding {
+        round_layout(&mut taffy_view, node_id);
+      }
+      #[cfg(feature = "grid")]
+      crate::compute::grid::clear_subgrid_overrides();
+      Ok(())
+    }
   }
 
   /// Updates the stored layout of the provided `node` and its children, with cooperative cancellation support.
@@ -1788,5 +1821,54 @@ mod tests {
         },
       );
     }
+  }
+
+  #[cfg(all(feature = "grid", feature = "std", panic = "unwind"))]
+  #[test]
+  fn clears_subgrid_overrides_after_layout_abort() {
+    use crate::compute::grid::{insert_dummy_subgrid_override, subgrid_overrides_len};
+
+    insert_dummy_subgrid_override(NodeId::new(1));
+    assert_eq!(subgrid_overrides_len(), 1);
+
+    let mut taffy: TaffyTree<()> = TaffyTree::new();
+    let root = taffy.new_leaf(Style::default()).unwrap();
+
+    let cancel = std::sync::Arc::new(|| true);
+    let result = taffy.compute_layout_with_measure_and_cancel(
+      root,
+      Size::MAX_CONTENT,
+      |_, _, _, _, _| {
+        insert_dummy_subgrid_override(NodeId::new(2));
+        crate::util::check_layout_abort();
+        Size::ZERO
+      },
+      Some(cancel),
+      1,
+    );
+
+    assert_eq!(result, Err(TaffyError::LayoutAborted));
+    assert_eq!(subgrid_overrides_len(), 0);
+  }
+
+  #[cfg(all(feature = "grid", feature = "std", panic = "unwind"))]
+  #[test]
+  fn clears_subgrid_overrides_before_resuming_measure_panic() {
+    use crate::compute::grid::{insert_dummy_subgrid_override, subgrid_overrides_len};
+
+    insert_dummy_subgrid_override(NodeId::new(1));
+    assert_eq!(subgrid_overrides_len(), 1);
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+      let mut taffy: TaffyTree<()> = TaffyTree::new();
+      let node = taffy.new_leaf(Style::default()).unwrap();
+      let _ = taffy.compute_layout_with_measure(node, Size::MAX_CONTENT, |_, _, _, _, _| {
+        insert_dummy_subgrid_override(NodeId::new(2));
+        panic!("boom");
+      });
+    }));
+
+    assert!(result.is_err());
+    assert_eq!(subgrid_overrides_len(), 0);
   }
 }
