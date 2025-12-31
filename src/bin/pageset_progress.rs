@@ -1188,8 +1188,21 @@ fn maybe_apply_hotspot(
   if !is_hotspot_unset(&progress.hotspot) {
     return;
   }
-  let prev_hotspot = previous.map(|p| p.hotspot.as_str()).unwrap_or("");
-  if is_hotspot_unset(prev_hotspot) {
+  let Some(prev) = previous else {
+    progress.hotspot = hotspot.to_string();
+    return;
+  };
+  if is_hotspot_unset(&prev.hotspot) {
+    progress.hotspot = hotspot.to_string();
+    return;
+  }
+  // `hotspot` edits are effectively "manual overrides" for failures: the runner historically
+  // emitted `unknown` for error statuses, so any non-unknown value on a failing page is assumed to
+  // be a deliberate human classification and should not be clobbered.
+  //
+  // For pages that were previously OK, `hotspot` is generated from timings and should be allowed
+  // to change as failures appear/regress.
+  if prev.status == ProgressStatus::Ok {
     progress.hotspot = hotspot.to_string();
   }
 }
@@ -4479,6 +4492,27 @@ mod tests {
     }
     let merged = progress.merge_preserving_manual(Some(previous), None);
     assert_eq!(merged.hotspot, "layout");
+  }
+
+  #[test]
+  fn inferred_hotspot_overrides_previous_ok_hotspot() {
+    let err = fastrender::Error::Resource(fastrender::error::ResourceError::new(
+      "https://example.com/style.css",
+      "fetch failed",
+    ));
+    let previous = PageProgress {
+      url: "https://example.com".to_string(),
+      status: ProgressStatus::Ok,
+      hotspot: "layout".to_string(),
+      ..PageProgress::default()
+    };
+    let mut progress = PageProgress::new(previous.url.clone());
+    progress.status = ProgressStatus::Error;
+    if let Some(hotspot) = hotspot_from_error(&err, None) {
+      maybe_apply_hotspot(&mut progress, Some(&previous), hotspot, false);
+    }
+    let merged = progress.merge_preserving_manual(Some(previous), None);
+    assert_eq!(merged.hotspot, "fetch");
   }
 
   #[test]
