@@ -14,7 +14,6 @@
 
 use crate::text::pipeline::Script;
 
-const NOTO_SANS: &str = "Noto Sans";
 const NOTO_SANS_MONO: &str = "Noto Sans Mono";
 const NOTO_SANS_SC: &str = "Noto Sans SC";
 const NOTO_SANS_JP: &str = "Noto Sans JP";
@@ -24,26 +23,20 @@ const NOTO_SANS_SYMBOLS: &str = "Noto Sans Symbols";
 const STIX_TWO_MATH: &str = "STIX Two Math";
 
 const COMMON_FALLBACKS: &[&str] = &[
-  NOTO_SANS,
-  NOTO_SANS_SYMBOLS_2,
-  NOTO_SANS_SYMBOLS,
-  STIX_TWO_MATH,
-];
-const LATIN_FALLBACKS: &[&str] = &[
-  NOTO_SANS,
   NOTO_SANS_SYMBOLS_2,
   NOTO_SANS_SYMBOLS,
   NOTO_SANS_MONO,
   STIX_TWO_MATH,
 ];
+const LATIN_FALLBACKS: &[&str] = COMMON_FALLBACKS;
 
 macro_rules! script_fallbacks {
   ($primary:expr) => {
     &[
       $primary,
-      NOTO_SANS,
       NOTO_SANS_SYMBOLS_2,
       NOTO_SANS_SYMBOLS,
+      NOTO_SANS_MONO,
       STIX_TWO_MATH,
     ]
   };
@@ -84,19 +77,19 @@ mod tests {
       (Script::Tamil, "Noto Sans Tamil"),
     ] {
       assert_eq!(preferred_families(script, "")[0], expected_first);
-      assert!(
-        preferred_families(script, "").contains(&NOTO_SANS),
-        "expected {script:?} fallback list to include general text face"
-      );
+      let families = preferred_families(script, "");
+      assert!(families.contains(&NOTO_SANS_SYMBOLS_2));
+      assert!(families.contains(&NOTO_SANS_SYMBOLS));
+      assert!(families.contains(&STIX_TWO_MATH));
     }
   }
 
   #[test]
   fn preferred_families_include_bundled_symbol_fonts_for_latin_runs() {
     let families = preferred_families(Script::Latin, "");
-    assert_eq!(families[0], NOTO_SANS);
     assert!(families.contains(&NOTO_SANS_SYMBOLS_2));
     assert!(families.contains(&NOTO_SANS_SYMBOLS));
+    assert!(families.contains(&NOTO_SANS_MONO));
     assert!(families.contains(&STIX_TWO_MATH));
   }
 
