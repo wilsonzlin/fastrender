@@ -163,6 +163,7 @@ use tiny_skia::FilterQuality;
 use tiny_skia::IntSize;
 use tiny_skia::LinearGradient;
 use tiny_skia::Mask;
+#[cfg(test)]
 use tiny_skia::MaskType;
 use tiny_skia::Paint;
 use tiny_skia::PathBuilder;
@@ -2931,6 +2932,7 @@ impl Painter {
     );
     let mut combined: Option<Mask> = None;
     let mut combined_dirty: Option<ClipMaskDirtyRect> = None;
+    let mut combined_bounds: Option<ClipMaskDirtyRect> = None;
     let canvas_clip = layer_bounds;
 
     for layer in style.mask_layers.iter().rev() {
@@ -3057,7 +3059,7 @@ impl Painter {
         };
       }
 
-      let layer_mask = MASK_LAYER_PIXMAP_SCRATCH.with(|cell| {
+      MASK_LAYER_PIXMAP_SCRATCH.with(|cell| {
         let mut scratch = cell.borrow_mut();
 
         let replace = match scratch.pixmap.as_ref() {
@@ -3071,60 +3073,102 @@ impl Painter {
 
         let prev_dirty = scratch.last_dirty;
 
-        let layer_mask = {
-          let Some(mask_pixmap) = scratch.pixmap.as_mut() else {
-            return None;
-          };
-
-          // The scratch pixmap is reused between layers/calls, so ensure the pixels that might
-          // contain stale data are cleared back to transparent before painting the new layer.
-          let clear = match (prev_dirty, dirty) {
-            (Some(prev), Some(curr)) => ClipMaskDirtyRect {
-              x0: prev.x0.min(curr.x0),
-              y0: prev.y0.min(curr.y0),
-              x1: prev.x1.max(curr.x1),
-              y1: prev.y1.max(curr.y1),
-            },
-            (Some(prev), None) => prev,
-            (None, Some(curr)) => curr,
-            (None, None) => ClipMaskDirtyRect {
-              x0: 0,
-              y0: 0,
-              x1: device_size.0,
-              y1: device_size.1,
-            },
-          };
-          clear_pixmap_rect_rgba(mask_pixmap, clear);
-
-          if dirty.is_some() {
-            for ty in positions_y.iter().copied() {
-              for tx in positions_x.iter().copied() {
-                paint_mask_tile(
-                  mask_pixmap,
-                  &mask_tile,
-                  tx,
-                  ty,
-                  tile_w,
-                  tile_h,
-                  clip_rect_css,
-                  self.origin_offset_css,
-                  self.scale,
-                );
-              }
-            }
-          }
-
-          Mask::from_pixmap(mask_pixmap.as_ref(), MaskType::Alpha)
+        let Some(mask_pixmap) = scratch.pixmap.as_mut() else {
+          return None;
         };
 
+        // The scratch pixmap is reused between layers/calls, so ensure the pixels that might
+        // contain stale data are cleared back to transparent before painting the new layer.
+        let clear = match (prev_dirty, dirty) {
+          (Some(prev), Some(curr)) => ClipMaskDirtyRect {
+            x0: prev.x0.min(curr.x0),
+            y0: prev.y0.min(curr.y0),
+            x1: prev.x1.max(curr.x1),
+            y1: prev.y1.max(curr.y1),
+          },
+          (Some(prev), None) => prev,
+          (None, Some(curr)) => curr,
+          (None, None) => ClipMaskDirtyRect {
+            x0: 0,
+            y0: 0,
+            x1: device_size.0,
+            y1: device_size.1,
+          },
+        };
+        clear_pixmap_rect_rgba(mask_pixmap, clear);
+
+        if dirty.is_some() {
+          for ty in positions_y.iter().copied() {
+            for tx in positions_x.iter().copied() {
+              paint_mask_tile(
+                mask_pixmap,
+                &mask_tile,
+                tx,
+                ty,
+                tile_w,
+                tile_h,
+                clip_rect_css,
+                self.origin_offset_css,
+                self.scale,
+              );
+            }
+          }
+        }
+
+        if combined.is_none() {
+          let mut mask = Mask::new(device_size.0, device_size.1)?;
+          mask.data_mut().fill(0);
+          if let Some(dirty) = dirty {
+            copy_pixmap_alpha_to_mask(&mut mask, mask_pixmap, dirty);
+          }
+          combined_bounds = dirty;
+          combined = Some(mask);
+        } else if let Some(dest) = combined.as_mut() {
+          let op = layer.composite;
+          match dirty {
+            None => match op {
+              MaskComposite::Add | MaskComposite::Exclude => {}
+              MaskComposite::Intersect | MaskComposite::Subtract => {
+                dest.data_mut().fill(0);
+                combined_bounds = None;
+              }
+            },
+            Some(dirty) => {
+              let prev_bounds = combined_bounds;
+
+              if matches!(op, MaskComposite::Intersect | MaskComposite::Subtract) {
+                if let Some(bounds) = prev_bounds {
+                  hard_clip_mask_outside_rect_within_bounds(dest, dirty, bounds);
+                }
+              }
+
+              let process = match op {
+                MaskComposite::Intersect => {
+                  prev_bounds.and_then(|bounds| dirty_intersection(bounds, dirty))
+                }
+                _ => Some(dirty),
+              };
+              if let Some(process) = process {
+                apply_mask_composite_from_pixmap_alpha(dest, mask_pixmap, process, op);
+              }
+
+              combined_bounds = match op {
+                MaskComposite::Add | MaskComposite::Exclude => Some(match prev_bounds {
+                  Some(prev) => dirty_union(prev, dirty),
+                  None => dirty,
+                }),
+                MaskComposite::Intersect => {
+                  prev_bounds.and_then(|bounds| dirty_intersection(bounds, dirty))
+                }
+                MaskComposite::Subtract => Some(dirty),
+              };
+            }
+          }
+        }
+
         scratch.last_dirty = dirty;
-        Some(layer_mask)
+        Some(())
       })?;
-      if let Some(dest) = combined.as_mut() {
-        apply_mask_composite(dest, &layer_mask, layer.composite);
-      } else {
-        combined = Some(layer_mask);
-      }
     }
 
     combined.map(|mask| RenderedMask {
@@ -9992,6 +10036,172 @@ fn clear_mask_rect(mask: &mut Mask, rect: ClipMaskDirtyRect) {
   }
 }
 
+#[inline]
+fn dirty_union(a: ClipMaskDirtyRect, b: ClipMaskDirtyRect) -> ClipMaskDirtyRect {
+  ClipMaskDirtyRect {
+    x0: a.x0.min(b.x0),
+    y0: a.y0.min(b.y0),
+    x1: a.x1.max(b.x1),
+    y1: a.y1.max(b.y1),
+  }
+}
+
+#[inline]
+fn dirty_intersection(a: ClipMaskDirtyRect, b: ClipMaskDirtyRect) -> Option<ClipMaskDirtyRect> {
+  let x0 = a.x0.max(b.x0);
+  let y0 = a.y0.max(b.y0);
+  let x1 = a.x1.min(b.x1);
+  let y1 = a.y1.min(b.y1);
+  if x0 >= x1 || y0 >= y1 {
+    None
+  } else {
+    Some(ClipMaskDirtyRect { x0, y0, x1, y1 })
+  }
+}
+
+fn hard_clip_mask_outside_rect_within_bounds(
+  mask: &mut Mask,
+  keep: ClipMaskDirtyRect,
+  bounds: ClipMaskDirtyRect,
+) {
+  if bounds.x0 >= bounds.x1 || bounds.y0 >= bounds.y1 {
+    return;
+  }
+
+  let keep_x0 = keep.x0.max(bounds.x0);
+  let keep_y0 = keep.y0.max(bounds.y0);
+  let keep_x1 = keep.x1.min(bounds.x1);
+  let keep_y1 = keep.y1.min(bounds.y1);
+  if keep_x0 >= keep_x1 || keep_y0 >= keep_y1 {
+    clear_mask_rect(mask, bounds);
+    return;
+  }
+
+  if bounds.y0 < keep_y0 {
+    clear_mask_rect(
+      mask,
+      ClipMaskDirtyRect {
+        x0: bounds.x0,
+        y0: bounds.y0,
+        x1: bounds.x1,
+        y1: keep_y0,
+      },
+    );
+  }
+  if keep_y1 < bounds.y1 {
+    clear_mask_rect(
+      mask,
+      ClipMaskDirtyRect {
+        x0: bounds.x0,
+        y0: keep_y1,
+        x1: bounds.x1,
+        y1: bounds.y1,
+      },
+    );
+  }
+  if bounds.x0 < keep_x0 {
+    clear_mask_rect(
+      mask,
+      ClipMaskDirtyRect {
+        x0: bounds.x0,
+        y0: keep_y0,
+        x1: keep_x0,
+        y1: keep_y1,
+      },
+    );
+  }
+  if keep_x1 < bounds.x1 {
+    clear_mask_rect(
+      mask,
+      ClipMaskDirtyRect {
+        x0: keep_x1,
+        y0: keep_y0,
+        x1: bounds.x1,
+        y1: keep_y1,
+      },
+    );
+  }
+}
+
+#[inline]
+fn apply_mask_composite_pixel(dst: u8, src: u8, op: MaskComposite) -> u8 {
+  let src = src as u16;
+  let dst = dst as u16;
+  let out = match op {
+    MaskComposite::Add => src + dst.saturating_mul(255 - src) / 255,
+    MaskComposite::Subtract => src.saturating_mul(255 - dst) / 255,
+    MaskComposite::Intersect => src.saturating_mul(dst) / 255,
+    MaskComposite::Exclude => {
+      let src_out = src.saturating_mul(255 - dst) / 255;
+      let dst_out = dst.saturating_mul(255 - src) / 255;
+      src_out + dst_out
+    }
+  };
+  out.min(255) as u8
+}
+
+fn copy_pixmap_alpha_to_mask(mask: &mut Mask, pixmap: &Pixmap, rect: ClipMaskDirtyRect) {
+  if rect.x0 >= rect.x1 || rect.y0 >= rect.y1 {
+    return;
+  }
+  if mask.width() != pixmap.width() || mask.height() != pixmap.height() {
+    return;
+  }
+
+  let width = mask.width() as usize;
+  let mask_stride = width;
+  let pixmap_stride = width * 4;
+  let mask_data = mask.data_mut();
+  let pixmap_data = pixmap.data();
+
+  let x0 = rect.x0 as usize;
+  let x1 = rect.x1 as usize;
+  for y in rect.y0 as usize..rect.y1 as usize {
+    let dst_start = y * mask_stride + x0;
+    let dst_end = y * mask_stride + x1;
+    let dst = &mut mask_data[dst_start..dst_end];
+    let mut src_idx = y * pixmap_stride + x0 * 4 + 3;
+    for px in dst.iter_mut() {
+      *px = pixmap_data[src_idx];
+      src_idx += 4;
+    }
+  }
+}
+
+fn apply_mask_composite_from_pixmap_alpha(
+  dest: &mut Mask,
+  src: &Pixmap,
+  rect: ClipMaskDirtyRect,
+  op: MaskComposite,
+) {
+  if rect.x0 >= rect.x1 || rect.y0 >= rect.y1 {
+    return;
+  }
+  if dest.width() != src.width() || dest.height() != src.height() {
+    return;
+  }
+
+  let width = dest.width() as usize;
+  let mask_stride = width;
+  let pixmap_stride = width * 4;
+  let dest_data = dest.data_mut();
+  let src_data = src.data();
+
+  let x0 = rect.x0 as usize;
+  let x1 = rect.x1 as usize;
+  for y in rect.y0 as usize..rect.y1 as usize {
+    let dst_start = y * mask_stride + x0;
+    let dst_end = y * mask_stride + x1;
+    let dst = &mut dest_data[dst_start..dst_end];
+    let mut src_idx = y * pixmap_stride + x0 * 4 + 3;
+    for px in dst.iter_mut() {
+      let s = src_data[src_idx];
+      *px = apply_mask_composite_pixel(*px, s, op);
+      src_idx += 4;
+    }
+  }
+}
+
 fn clear_pixmap_rect_rgba(pixmap: &mut Pixmap, rect: ClipMaskDirtyRect) {
   if rect.x0 >= rect.x1 || rect.y0 >= rect.y1 {
     return;
@@ -10473,6 +10683,7 @@ fn paint_mask_tile(
   dest.fill_rect(src_rect, &paint, Transform::identity(), None);
 }
 
+#[cfg(test)]
 fn apply_mask_composite(dest: &mut Mask, src: &Mask, op: MaskComposite) {
   if dest.width() != src.width() || dest.height() != src.height() {
     return;
@@ -16273,6 +16484,66 @@ mod tests {
     style.mask_layers = vec![
       make_alpha_gradient_mask_layer(MaskClip::BorderBox, MaskComposite::Add, 0.0, 1.0),
       make_alpha_gradient_mask_layer(MaskClip::ContentBox, MaskComposite::Add, 1.0, 0.0),
+    ];
+
+    let css_bounds = Rect::from_xywh(0.0, 0.0, 32.0, 32.0);
+    let layer_bounds = css_bounds;
+    let device_size = (64, 64);
+
+    let mut optimized_painter =
+      Painter::new(device_size.0, device_size.1, Rgba::WHITE).expect("painter");
+    let optimized =
+      optimized_painter.render_mask(&style, css_bounds, layer_bounds, device_size).expect("mask");
+
+    let mut reference_painter =
+      Painter::new(device_size.0, device_size.1, Rgba::WHITE).expect("painter");
+    let reference =
+      render_mask_reference(&mut reference_painter, &style, css_bounds, layer_bounds, device_size)
+        .expect("mask");
+
+    assert_eq!(optimized.mask.data(), reference.data());
+  }
+
+  #[test]
+  fn render_mask_matches_reference_for_intersect_composite() {
+    let mut style = ComputedStyle::default();
+    style.padding_top = Length::px(4.0);
+    style.padding_right = Length::px(4.0);
+    style.padding_bottom = Length::px(4.0);
+    style.padding_left = Length::px(4.0);
+    style.mask_layers = vec![
+      make_alpha_gradient_mask_layer(MaskClip::ContentBox, MaskComposite::Intersect, 1.0, 1.0),
+      make_alpha_gradient_mask_layer(MaskClip::BorderBox, MaskComposite::Add, 0.0, 1.0),
+    ];
+
+    let css_bounds = Rect::from_xywh(0.0, 0.0, 32.0, 32.0);
+    let layer_bounds = css_bounds;
+    let device_size = (64, 64);
+
+    let mut optimized_painter =
+      Painter::new(device_size.0, device_size.1, Rgba::WHITE).expect("painter");
+    let optimized =
+      optimized_painter.render_mask(&style, css_bounds, layer_bounds, device_size).expect("mask");
+
+    let mut reference_painter =
+      Painter::new(device_size.0, device_size.1, Rgba::WHITE).expect("painter");
+    let reference =
+      render_mask_reference(&mut reference_painter, &style, css_bounds, layer_bounds, device_size)
+        .expect("mask");
+
+    assert_eq!(optimized.mask.data(), reference.data());
+  }
+
+  #[test]
+  fn render_mask_matches_reference_for_subtract_composite() {
+    let mut style = ComputedStyle::default();
+    style.padding_top = Length::px(4.0);
+    style.padding_right = Length::px(4.0);
+    style.padding_bottom = Length::px(4.0);
+    style.padding_left = Length::px(4.0);
+    style.mask_layers = vec![
+      make_alpha_gradient_mask_layer(MaskClip::ContentBox, MaskComposite::Subtract, 1.0, 1.0),
+      make_alpha_gradient_mask_layer(MaskClip::BorderBox, MaskComposite::Add, 0.0, 1.0),
     ];
 
     let css_bounds = Rect::from_xywh(0.0, 0.0, 32.0, 32.0);
