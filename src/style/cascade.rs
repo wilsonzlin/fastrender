@@ -181,10 +181,12 @@ thread_local! {
 }
 
 fn attr_truthy_value(value: &str) -> bool {
-  matches!(
-    value.to_ascii_lowercase().as_str(),
-    "true" | "1" | "yes" | "on" | "open"
-  )
+  let value = value.trim();
+  value == "1"
+    || value.eq_ignore_ascii_case("true")
+    || value.eq_ignore_ascii_case("yes")
+    || value.eq_ignore_ascii_case("on")
+    || value.eq_ignore_ascii_case("open")
 }
 
 fn attr_truthy(node: &DomNode, name: &str) -> bool {
@@ -195,15 +197,14 @@ fn attr_truthy(node: &DomNode, name: &str) -> bool {
 }
 
 fn data_fastr_open(node: &DomNode) -> Option<(bool, bool)> {
-  let value = node.get_attribute_ref("data-fastr-open")?;
-  let lower = value.to_ascii_lowercase();
-  if lower == "false" {
+  let value = node.get_attribute_ref("data-fastr-open")?.trim();
+  if value.eq_ignore_ascii_case("false") {
     return Some((false, false));
   }
-  if lower == "modal" {
+  if value.eq_ignore_ascii_case("modal") {
     return Some((true, true));
   }
-  if attr_truthy_value(&lower) {
+  if attr_truthy_value(value) {
     return Some((true, false));
   }
   None
@@ -5310,7 +5311,7 @@ fn ua_default_rules(
 ) -> Vec<MatchedRule<'static>> {
   let mut rules = Vec::new();
   let tag = match node.tag_name() {
-    Some(t) => t.to_ascii_lowercase(),
+    Some(t) => t,
     None => return rules,
   };
   // UA default rules should participate in the same tree-scope-prefixed layer ordering as UA
@@ -5329,150 +5330,143 @@ fn ua_default_rules(
     });
   };
 
-  match tag.as_str() {
-        "a" | "area" | "link" => {
-            if node.get_attribute_ref("href").is_some() {
-                let is_true = |name: &str| {
-                    node.get_attribute_ref(name)
-                        .map(|v| v.eq_ignore_ascii_case("true"))
-                        .unwrap_or(false)
-                };
-                let specificity = (1 << 10) + 1; // tag selector + pseudo-class weight
-                let base_order = 1000;
+  if tag.eq_ignore_ascii_case("a")
+    || tag.eq_ignore_ascii_case("area")
+    || tag.eq_ignore_ascii_case("link")
+  {
+    if node.get_attribute_ref("href").is_some() {
+      let is_true = |name: &str| {
+        node
+          .get_attribute_ref(name)
+          .map(|v| v.eq_ignore_ascii_case("true"))
+          .unwrap_or(false)
+      };
+      let specificity = (1 << 10) + 1; // tag selector + pseudo-class weight
+      let base_order = 1000;
 
-                if is_true("data-fastr-visited") {
-                    rules.push(MatchedRule {
-                         origin: StyleOrigin::UserAgent,
-                         specificity,
-                         order: base_order + 1,
-                         layer_order: layer_order.clone(),
-                         declarations: cached_declarations(
-                             &UA_LINK_VISITED_DECLS,
-                             "color: rgb(85, 26, 139);",
-                        ),
-                        starting_style: false,
-                    });
-                }
+      if is_true("data-fastr-visited") {
+        rules.push(MatchedRule {
+          origin: StyleOrigin::UserAgent,
+          specificity,
+          order: base_order + 1,
+          layer_order: layer_order.clone(),
+          declarations: cached_declarations(&UA_LINK_VISITED_DECLS, "color: rgb(85, 26, 139);"),
+          starting_style: false,
+        });
+      }
 
-                if is_true("data-fastr-active") {
-                    rules.push(MatchedRule {
-                         origin: StyleOrigin::UserAgent,
-                         specificity,
-                         order: base_order + 2,
-                         layer_order: layer_order.clone(),
-                         declarations: cached_declarations(
-                             &UA_LINK_ACTIVE_DECLS,
-                             "color: rgb(255, 0, 0);",
-                        ),
-                        starting_style: false,
-                    });
-                }
+      if is_true("data-fastr-active") {
+        rules.push(MatchedRule {
+          origin: StyleOrigin::UserAgent,
+          specificity,
+          order: base_order + 2,
+          layer_order: layer_order.clone(),
+          declarations: cached_declarations(&UA_LINK_ACTIVE_DECLS, "color: rgb(255, 0, 0);"),
+          starting_style: false,
+        });
+      }
 
-                if is_true("data-fastr-hover") {
-                    rules.push(MatchedRule {
-                         origin: StyleOrigin::UserAgent,
-                         specificity,
-                         order: base_order + 3,
-                         layer_order: layer_order.clone(),
-                         declarations: cached_declarations(
-                             &UA_LINK_HOVER_DECLS,
-                             "color: rgb(255, 0, 0);",
-                        ),
-                        starting_style: false,
-                    });
-                }
+      if is_true("data-fastr-hover") {
+        rules.push(MatchedRule {
+          origin: StyleOrigin::UserAgent,
+          specificity,
+          order: base_order + 3,
+          layer_order: layer_order.clone(),
+          declarations: cached_declarations(&UA_LINK_HOVER_DECLS, "color: rgb(255, 0, 0);"),
+          starting_style: false,
+        });
+      }
 
-                if is_true("data-fastr-focus") {
-                    rules.push(MatchedRule {
-                         origin: StyleOrigin::UserAgent,
-                         specificity,
-                         order: base_order + 4,
-                         layer_order: layer_order.clone(),
-                         declarations: cached_declarations(
-                             &UA_LINK_FOCUS_DECLS,
-                             "outline: 1px dotted rgb(0, 0, 0); outline-offset: 2px;",
-                        ),
-                        starting_style: false,
-                    });
-                }
-            }
-        }
-        "bdi" if node.get_attribute_ref("dir").is_none() => {
-            let resolved = resolve_first_strong_direction(node).map(|d| match d {
-                TextDirection::Ltr => crate::style::types::Direction::Ltr,
-                TextDirection::Rtl => crate::style::types::Direction::Rtl,
-            });
-            let dir_value = match resolved.unwrap_or(parent_direction) {
-                crate::style::types::Direction::Rtl => "rtl",
-                crate::style::types::Direction::Ltr => "ltr",
-            };
-            add_rule(
-                Cow::Owned(parse_declarations(&format!(
-                    "unicode-bidi: isolate; direction: {};",
-                    dir_value
-                ))),
-                0,
-            );
-        }
-        "bdo" if node.get_attribute_ref("dir").is_none() => {
-            add_rule(
-                Cow::Owned(parse_declarations("unicode-bidi: bidi-override; direction: ltr;")),
-                0,
-            );
-        }
-        "textarea" => {
-            add_rule(
-                cached_declarations(
-                    &UA_TEXTAREA_DECLS,
-                    "font: inherit; color: inherit; border: 2px inset rgb(204,204,204); background: white; padding: 2px 3px; box-sizing: border-box; display: inline-block; cursor: text;",
-                ),
-                0,
-            );
-        }
-        "input" => {
-            let input_type = node
-                .get_attribute("type")
-                .map(|t| t.to_ascii_lowercase())
-                .unwrap_or_else(|| "text".to_string());
-            if input_type == "hidden" {
-                rules.push(MatchedRule {
-                     origin: StyleOrigin::UserAgent,
-                     specificity: 11, // input[type=\"hidden\"] should outrank generic UA form rules
-                     order: 0,
-                     layer_order: layer_order.clone(),
-                     declarations: cached_declarations(&UA_INPUT_HIDDEN_DECLS, "display: none;"),
-                     starting_style: false,
-                 });
-                return rules;
-            }
-            add_rule(
-                cached_declarations(
-                    &UA_INPUT_BASE_DECLS,
-                    "font: inherit; color: inherit; border: 2px inset rgb(204,204,204); background: white; padding: 2px 3px; box-sizing: border-box; display: inline-block;",
-                ),
-                0,
-            );
-            if matches!(
-                input_type.as_str(),
-                "text" | "search" | "email" | "url" | "tel" | "password" | "number"
-            ) {
-                add_rule(cached_declarations(&UA_INPUT_TEXT_CURSOR_DECLS, "cursor: text;"), 1);
-            } else if matches!(input_type.as_str(), "button" | "submit" | "reset") {
-                add_rule(
-                    cached_declarations(&UA_INPUT_POINTER_CURSOR_DECLS, "cursor: pointer;"),
-                    1,
-                );
-            }
-        }
-        "select" | "button" => add_rule(
-            cached_declarations(
-                &UA_INPUT_BASE_DECLS,
-                "font: inherit; color: inherit; border: 2px inset rgb(204,204,204); background: white; padding: 2px 3px; box-sizing: border-box; display: inline-block;",
-            ),
-            0,
-        ),
-        _ => {}
+      if is_true("data-fastr-focus") {
+        rules.push(MatchedRule {
+          origin: StyleOrigin::UserAgent,
+          specificity,
+          order: base_order + 4,
+          layer_order: layer_order.clone(),
+          declarations: cached_declarations(
+            &UA_LINK_FOCUS_DECLS,
+            "outline: 1px dotted rgb(0, 0, 0); outline-offset: 2px;",
+          ),
+          starting_style: false,
+        });
+      }
     }
+  } else if tag.eq_ignore_ascii_case("bdi") && node.get_attribute_ref("dir").is_none() {
+    let resolved = resolve_first_strong_direction(node).map(|d| match d {
+      TextDirection::Ltr => crate::style::types::Direction::Ltr,
+      TextDirection::Rtl => crate::style::types::Direction::Rtl,
+    });
+    let dir_value = match resolved.unwrap_or(parent_direction) {
+      crate::style::types::Direction::Rtl => "rtl",
+      crate::style::types::Direction::Ltr => "ltr",
+    };
+    add_rule(
+      Cow::Owned(parse_declarations(&format!(
+        "unicode-bidi: isolate; direction: {};",
+        dir_value
+      ))),
+      0,
+    );
+  } else if tag.eq_ignore_ascii_case("bdo") && node.get_attribute_ref("dir").is_none() {
+    add_rule(
+      Cow::Owned(parse_declarations("unicode-bidi: bidi-override; direction: ltr;")),
+      0,
+    );
+  } else if tag.eq_ignore_ascii_case("textarea") {
+    add_rule(
+      cached_declarations(
+        &UA_TEXTAREA_DECLS,
+        "font: inherit; color: inherit; border: 2px inset rgb(204,204,204); background: white; padding: 2px 3px; box-sizing: border-box; display: inline-block; cursor: text;",
+      ),
+      0,
+    );
+  } else if tag.eq_ignore_ascii_case("input") {
+    let input_type = node.get_attribute_ref("type").unwrap_or("text");
+    if input_type.eq_ignore_ascii_case("hidden") {
+      rules.push(MatchedRule {
+        origin: StyleOrigin::UserAgent,
+        specificity: 11, // input[type="hidden"] should outrank generic UA form rules
+        order: 0,
+        layer_order: layer_order.clone(),
+        declarations: cached_declarations(&UA_INPUT_HIDDEN_DECLS, "display: none;"),
+        starting_style: false,
+      });
+      return rules;
+    }
+    add_rule(
+      cached_declarations(
+        &UA_INPUT_BASE_DECLS,
+        "font: inherit; color: inherit; border: 2px inset rgb(204,204,204); background: white; padding: 2px 3px; box-sizing: border-box; display: inline-block;",
+      ),
+      0,
+    );
+    if input_type.eq_ignore_ascii_case("text")
+      || input_type.eq_ignore_ascii_case("search")
+      || input_type.eq_ignore_ascii_case("email")
+      || input_type.eq_ignore_ascii_case("url")
+      || input_type.eq_ignore_ascii_case("tel")
+      || input_type.eq_ignore_ascii_case("password")
+      || input_type.eq_ignore_ascii_case("number")
+    {
+      add_rule(cached_declarations(&UA_INPUT_TEXT_CURSOR_DECLS, "cursor: text;"), 1);
+    } else if input_type.eq_ignore_ascii_case("button")
+      || input_type.eq_ignore_ascii_case("submit")
+      || input_type.eq_ignore_ascii_case("reset")
+    {
+      add_rule(
+        cached_declarations(&UA_INPUT_POINTER_CURSOR_DECLS, "cursor: pointer;"),
+        1,
+      );
+    }
+  } else if tag.eq_ignore_ascii_case("select") || tag.eq_ignore_ascii_case("button") {
+    add_rule(
+      cached_declarations(
+        &UA_INPUT_BASE_DECLS,
+        "font: inherit; color: inherit; border: 2px inset rgb(204,204,204); background: white; padding: 2px 3px; box-sizing: border-box; display: inline-block;",
+      ),
+      0,
+    );
+  }
 
   rules
 }
