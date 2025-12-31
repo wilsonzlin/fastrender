@@ -171,8 +171,8 @@ impl Default for BlurCache {
 }
 
 #[inline]
-fn blur_deadline_exceeded(counter: &mut usize) -> bool {
-  check_active_periodic(counter, BLUR_DEADLINE_STRIDE, RenderStage::Paint).is_err()
+fn blur_deadline_exceeded(counter: &mut usize) -> Option<RenderError> {
+  check_active_periodic(counter, BLUR_DEADLINE_STRIDE, RenderStage::Paint).err()
 }
 
 #[inline]
@@ -184,15 +184,18 @@ fn blur_should_parallelize(width: usize, height: usize) -> bool {
 }
 
 #[inline]
-fn blur_deadline_exceeded_parallel(deadline_enabled: bool, counter: &AtomicUsize) -> bool {
+fn blur_deadline_exceeded_parallel(
+  deadline_enabled: bool,
+  counter: &AtomicUsize,
+) -> Option<RenderError> {
   if !deadline_enabled {
-    return false;
+    return None;
   }
   let next = counter.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
   if next % BLUR_DEADLINE_STRIDE == 0 {
-    check_active(RenderStage::Paint).is_err()
+    check_active(RenderStage::Paint).err()
   } else {
-    false
+    None
   }
 }
 
@@ -359,7 +362,6 @@ fn gaussian_convolve_premultiplied_with_parallelism(
 
   let len = blur_buffer_len(width, height, "gaussian blur")?;
   let mut error: Option<RenderError> = None;
-  let mut skipped = false;
   BLUR_SCRATCH.with(|scratch| {
     let mut scratch = scratch.borrow_mut();
     let (src, buf) = match scratch.split(len, "gaussian blur") {
@@ -380,8 +382,8 @@ fn gaussian_convolve_premultiplied_with_parallelism(
 
       // Horizontal pass: src -> buf
       for y in 0..height {
-        if blur_deadline_exceeded(&mut deadline_counter) {
-          skipped = true;
+        if let Some(err) = blur_deadline_exceeded(&mut deadline_counter) {
+          error = Some(err);
           pixmap.data_mut().copy_from_slice(src);
           return;
         }
@@ -415,8 +417,8 @@ fn gaussian_convolve_premultiplied_with_parallelism(
       // Vertical pass: buf -> pixmap data
       let dst = pixmap.data_mut();
       for y in 0..height {
-        if blur_deadline_exceeded(&mut deadline_counter) {
-          skipped = true;
+        if let Some(err) = blur_deadline_exceeded(&mut deadline_counter) {
+          error = Some(err);
           dst.copy_from_slice(src);
           return;
         }
@@ -450,13 +452,19 @@ fn gaussian_convolve_premultiplied_with_parallelism(
       let deadline_enabled = deadline.as_ref().map_or(false, |d| d.is_enabled());
       let cancelled = AtomicBool::new(false);
       let deadline_counter = AtomicUsize::new(0);
+      let deadline_error: Mutex<Option<RenderError>> = Mutex::new(None);
 
       let convolve_row_x = |y: usize, out_row: &mut [u8]| {
         if cancelled.load(Ordering::Relaxed) {
           return;
         }
-        if blur_deadline_exceeded_parallel(deadline_enabled, &deadline_counter) {
+        if let Some(err) = blur_deadline_exceeded_parallel(deadline_enabled, &deadline_counter) {
           cancelled.store(true, Ordering::Relaxed);
+          if let Ok(mut slot) = deadline_error.lock() {
+            if slot.is_none() {
+              *slot = Some(err);
+            }
+          }
           return;
         }
         let src_row = &src[y * row_stride..(y + 1) * row_stride];
@@ -487,13 +495,10 @@ fn gaussian_convolve_premultiplied_with_parallelism(
       };
 
       if deadline_enabled {
-        buf
-          .par_chunks_mut(row_stride)
-          .enumerate()
-          .for_each_init(
-            || DeadlineGuard::install(deadline.as_ref()),
-            |_, (y, out_row)| convolve_row_x(y, out_row),
-          );
+        buf.par_chunks_mut(row_stride).enumerate().for_each_init(
+          || DeadlineGuard::install(deadline.as_ref()),
+          |_, (y, out_row)| convolve_row_x(y, out_row),
+        );
       } else {
         buf
           .par_chunks_mut(row_stride)
@@ -502,7 +507,11 @@ fn gaussian_convolve_premultiplied_with_parallelism(
       }
 
       if cancelled.load(Ordering::Relaxed) {
-        skipped = true;
+        error = deadline_error
+          .lock()
+          .ok()
+          .and_then(|slot| slot.clone())
+          .or_else(|| check_active(RenderStage::Paint).err());
         pixmap.data_mut().copy_from_slice(src);
         return;
       }
@@ -513,8 +522,13 @@ fn gaussian_convolve_premultiplied_with_parallelism(
         if cancelled.load(Ordering::Relaxed) {
           return;
         }
-        if blur_deadline_exceeded_parallel(deadline_enabled, &deadline_counter) {
+        if let Some(err) = blur_deadline_exceeded_parallel(deadline_enabled, &deadline_counter) {
           cancelled.store(true, Ordering::Relaxed);
+          if let Ok(mut slot) = deadline_error.lock() {
+            if slot.is_none() {
+              *slot = Some(err);
+            }
+          }
           return;
         }
         for x in 0..width {
@@ -544,13 +558,10 @@ fn gaussian_convolve_premultiplied_with_parallelism(
       };
 
       if deadline_enabled {
-        dst
-          .par_chunks_mut(row_stride)
-          .enumerate()
-          .for_each_init(
-            || DeadlineGuard::install(deadline.as_ref()),
-            |_, (y, out_row)| convolve_row_y(y, out_row),
-          );
+        dst.par_chunks_mut(row_stride).enumerate().for_each_init(
+          || DeadlineGuard::install(deadline.as_ref()),
+          |_, (y, out_row)| convolve_row_y(y, out_row),
+        );
       } else {
         dst
           .par_chunks_mut(row_stride)
@@ -559,7 +570,11 @@ fn gaussian_convolve_premultiplied_with_parallelism(
       }
 
       if cancelled.load(Ordering::Relaxed) {
-        skipped = true;
+        error = deadline_error
+          .lock()
+          .ok()
+          .and_then(|slot| slot.clone())
+          .or_else(|| check_active(RenderStage::Paint).err());
         dst.copy_from_slice(src);
       }
     }
@@ -567,7 +582,7 @@ fn gaussian_convolve_premultiplied_with_parallelism(
   if let Some(err) = error {
     Err(err)
   } else {
-    Ok(!skipped)
+    Ok(true)
   }
 }
 
@@ -604,16 +619,16 @@ fn box_blur_h(
   height: usize,
   radius: usize,
   deadline_counter: &mut usize,
-) -> bool {
+) -> Result<(), RenderError> {
   if radius == 0 {
     dst.copy_from_slice(src);
-    return false;
+    return Ok(());
   }
   let window = (radius * 2 + 1) as i32;
   let half = window / 2;
   for y in 0..height {
-    if blur_deadline_exceeded(deadline_counter) {
-      return true;
+    if let Some(err) = blur_deadline_exceeded(deadline_counter) {
+      return Err(err);
     }
     let row_start = y * width * 4;
     let mut sum_r: i32 = 0;
@@ -650,7 +665,7 @@ fn box_blur_h(
       sum_a += src[add_idx + 3] as i32 - src[rem_idx + 3] as i32;
     }
   }
-  false
+  Ok(())
 }
 
 fn box_blur_h_parallel(
@@ -663,10 +678,11 @@ fn box_blur_h_parallel(
   deadline_enabled: bool,
   cancelled: &AtomicBool,
   deadline_counter: &AtomicUsize,
-) -> bool {
+  error: &Mutex<Option<RenderError>>,
+) -> Result<(), RenderError> {
   if radius == 0 {
     dst.copy_from_slice(src);
-    return false;
+    return Ok(());
   }
   let window = (radius * 2 + 1) as i32;
   let half = window / 2;
@@ -676,8 +692,13 @@ fn box_blur_h_parallel(
     if cancelled.load(Ordering::Relaxed) {
       return;
     }
-    if blur_deadline_exceeded_parallel(deadline_enabled, deadline_counter) {
+    if let Some(err) = blur_deadline_exceeded_parallel(deadline_enabled, deadline_counter) {
       cancelled.store(true, Ordering::Relaxed);
+      if let Ok(mut slot) = error.lock() {
+        if slot.is_none() {
+          *slot = Some(err);
+        }
+      }
       return;
     }
 
@@ -718,13 +739,10 @@ fn box_blur_h_parallel(
   };
 
   if deadline_enabled {
-    dst
-      .par_chunks_mut(row_stride)
-      .enumerate()
-      .for_each_init(
-        || DeadlineGuard::install(deadline.as_ref()),
-        |_, (y, out_row)| blur_row(y, out_row),
-      );
+    dst.par_chunks_mut(row_stride).enumerate().for_each_init(
+      || DeadlineGuard::install(deadline.as_ref()),
+      |_, (y, out_row)| blur_row(y, out_row),
+    );
   } else {
     dst
       .par_chunks_mut(row_stride)
@@ -732,7 +750,17 @@ fn box_blur_h_parallel(
       .for_each(|(y, out_row)| blur_row(y, out_row));
   }
 
-  cancelled.load(Ordering::Relaxed)
+  if cancelled.load(Ordering::Relaxed) {
+    let err = error
+      .lock()
+      .ok()
+      .and_then(|slot| slot.clone())
+      .or_else(|| check_active(RenderStage::Paint).err());
+    if let Some(err) = err {
+      return Err(err);
+    }
+  }
+  Ok(())
 }
 
 fn box_blur_v(
@@ -742,16 +770,16 @@ fn box_blur_v(
   height: usize,
   radius: usize,
   deadline_counter: &mut usize,
-) -> bool {
+) -> Result<(), RenderError> {
   if radius == 0 {
     dst.copy_from_slice(src);
-    return false;
+    return Ok(());
   }
   let window = (radius * 2 + 1) as i32;
   let half = window / 2;
   for x in 0..width {
-    if blur_deadline_exceeded(deadline_counter) {
-      return true;
+    if let Some(err) = blur_deadline_exceeded(deadline_counter) {
+      return Err(err);
     }
     let mut sum_r: i32 = 0;
     let mut sum_g: i32 = 0;
@@ -787,7 +815,7 @@ fn box_blur_v(
       sum_a += src[add_idx + 3] as i32 - src[rem_idx + 3] as i32;
     }
   }
-  false
+  Ok(())
 }
 
 fn box_blur_v_parallel(
@@ -800,10 +828,11 @@ fn box_blur_v_parallel(
   deadline_enabled: bool,
   cancelled: &AtomicBool,
   deadline_counter: &AtomicUsize,
-) -> bool {
+  error: &Mutex<Option<RenderError>>,
+) -> Result<(), RenderError> {
   if radius == 0 {
     dst.copy_from_slice(src);
-    return false;
+    return Ok(());
   }
   const COLUMN_BLOCK: usize = 32;
   let window = (radius * 2 + 1) as i32;
@@ -820,8 +849,13 @@ fn box_blur_v_parallel(
       if cancelled.load(Ordering::Relaxed) {
         return;
       }
-      if blur_deadline_exceeded_parallel(deadline_enabled, deadline_counter) {
+      if let Some(err) = blur_deadline_exceeded_parallel(deadline_enabled, deadline_counter) {
         cancelled.store(true, Ordering::Relaxed);
+        if let Ok(mut slot) = error.lock() {
+          if slot.is_none() {
+            *slot = Some(err);
+          }
+        }
         return;
       }
 
@@ -870,10 +904,22 @@ fn box_blur_v_parallel(
       |_, block| blur_block(block),
     );
   } else {
-    (0..blocks).into_par_iter().for_each(|block| blur_block(block));
+    (0..blocks)
+      .into_par_iter()
+      .for_each(|block| blur_block(block));
   }
 
-  cancelled.load(Ordering::Relaxed)
+  if cancelled.load(Ordering::Relaxed) {
+    let err = error
+      .lock()
+      .ok()
+      .and_then(|slot| slot.clone())
+      .or_else(|| check_active(RenderStage::Paint).err());
+    if let Some(err) = err {
+      return Err(err);
+    }
+  }
+  Ok(())
 }
 
 fn gaussian_blur_box_approx(pixmap: &mut Pixmap, sigma: f32) -> Result<bool, RenderError> {
@@ -1035,7 +1081,6 @@ fn gaussian_blur_box_approx_with_parallelism(
 
   let len = blur_buffer_len(width, height, "box blur")?;
   let mut error: Option<RenderError> = None;
-  let mut skipped = false;
   BLUR_SCRATCH.with(|scratch| {
     let mut scratch = scratch.borrow_mut();
     let (a, b) = match scratch.split(len, "box blur") {
@@ -1054,7 +1099,7 @@ fn gaussian_blur_box_approx_with_parallelism(
         if radius == 0 {
           continue;
         }
-        if box_blur_h(
+        if let Err(err) = box_blur_h(
           &a[..len],
           &mut b[..len],
           width,
@@ -1062,10 +1107,10 @@ fn gaussian_blur_box_approx_with_parallelism(
           radius,
           &mut deadline_counter,
         ) {
-          skipped = true;
+          error = Some(err);
           return;
         }
-        if box_blur_v(
+        if let Err(err) = box_blur_v(
           &b[..len],
           &mut a[..len],
           width,
@@ -1073,7 +1118,7 @@ fn gaussian_blur_box_approx_with_parallelism(
           radius,
           &mut deadline_counter,
         ) {
-          skipped = true;
+          error = Some(err);
           return;
         }
       }
@@ -1085,12 +1130,13 @@ fn gaussian_blur_box_approx_with_parallelism(
     let deadline_enabled = deadline.as_ref().map_or(false, |d| d.is_enabled());
     let cancelled = AtomicBool::new(false);
     let deadline_counter = AtomicUsize::new(0);
+    let deadline_error: Mutex<Option<RenderError>> = Mutex::new(None);
     for size in sizes {
       let radius = size.saturating_sub(1) / 2;
       if radius == 0 {
         continue;
       }
-      if box_blur_h_parallel(
+      if let Err(err) = box_blur_h_parallel(
         &a[..len],
         &mut b[..len],
         width,
@@ -1100,11 +1146,12 @@ fn gaussian_blur_box_approx_with_parallelism(
         deadline_enabled,
         &cancelled,
         &deadline_counter,
+        &deadline_error,
       ) {
-        skipped = true;
+        error = Some(err);
         return;
       }
-      if box_blur_v_parallel(
+      if let Err(err) = box_blur_v_parallel(
         &b[..len],
         &mut a[..len],
         width,
@@ -1114,14 +1161,19 @@ fn gaussian_blur_box_approx_with_parallelism(
         deadline_enabled,
         &cancelled,
         &deadline_counter,
+        &deadline_error,
       ) {
-        skipped = true;
+        error = Some(err);
         return;
       }
     }
 
     if cancelled.load(Ordering::Relaxed) {
-      skipped = true;
+      error = deadline_error
+        .lock()
+        .ok()
+        .and_then(|slot| slot.clone())
+        .or_else(|| check_active(RenderStage::Paint).err());
       return;
     }
 
@@ -1130,7 +1182,7 @@ fn gaussian_blur_box_approx_with_parallelism(
   if let Some(err) = error {
     Err(err)
   } else {
-    Ok(!skipped)
+    Ok(true)
   }
 }
 
@@ -1197,7 +1249,6 @@ fn blur_anisotropic_body_with_parallelism(
 
   let len = blur_buffer_len(width, height, "anisotropic blur")?;
   let mut error: Option<RenderError> = None;
-  let mut skipped = false;
   BLUR_SCRATCH.with(|scratch| {
     let mut scratch = scratch.borrow_mut();
     let (src, tmp) = match scratch.split(len, "anisotropic blur") {
@@ -1221,8 +1272,8 @@ fn blur_anisotropic_body_with_parallelism(
         tmp[..len].copy_from_slice(src);
       } else {
         for y in 0..height {
-          if blur_deadline_exceeded(&mut deadline_counter) {
-            skipped = true;
+          if let Some(err) = blur_deadline_exceeded(&mut deadline_counter) {
+            error = Some(err);
             pixmap.data_mut().copy_from_slice(src);
             return;
           }
@@ -1266,8 +1317,8 @@ fn blur_anisotropic_body_with_parallelism(
         return;
       }
       for y in 0..height {
-        if blur_deadline_exceeded(&mut deadline_counter) {
-          skipped = true;
+        if let Some(err) = blur_deadline_exceeded(&mut deadline_counter) {
+          error = Some(err);
           dst.copy_from_slice(src);
           return;
         }
@@ -1301,6 +1352,7 @@ fn blur_anisotropic_body_with_parallelism(
       let deadline_enabled = deadline.as_ref().map_or(false, |d| d.is_enabled());
       let cancelled = AtomicBool::new(false);
       let deadline_counter = AtomicUsize::new(0);
+      let deadline_error: Mutex<Option<RenderError>> = Mutex::new(None);
 
       // Horizontal pass (if needed): src -> tmp, otherwise copy
       if radius_x == 0 || kernel_x.is_empty() {
@@ -1310,8 +1362,12 @@ fn blur_anisotropic_body_with_parallelism(
           if cancelled.load(Ordering::Relaxed) {
             return;
           }
-          if blur_deadline_exceeded_parallel(deadline_enabled, &deadline_counter) {
+          if let Some(err) = blur_deadline_exceeded_parallel(deadline_enabled, &deadline_counter) {
             cancelled.store(true, Ordering::Relaxed);
+            let mut slot = deadline_error.lock().unwrap_or_else(|err| err.into_inner());
+            if slot.is_none() {
+              *slot = Some(err);
+            }
             return;
           }
           let src_row = &src[y * row_stride..(y + 1) * row_stride];
@@ -1342,13 +1398,10 @@ fn blur_anisotropic_body_with_parallelism(
         };
 
         if deadline_enabled {
-          tmp
-            .par_chunks_mut(row_stride)
-            .enumerate()
-            .for_each_init(
-              || DeadlineGuard::install(deadline.as_ref()),
-              |_, (y, out_row)| convolve_row_x(y, out_row),
-            );
+          tmp.par_chunks_mut(row_stride).enumerate().for_each_init(
+            || DeadlineGuard::install(deadline.as_ref()),
+            |_, (y, out_row)| convolve_row_x(y, out_row),
+          );
         } else {
           tmp
             .par_chunks_mut(row_stride)
@@ -1357,7 +1410,11 @@ fn blur_anisotropic_body_with_parallelism(
         }
 
         if cancelled.load(Ordering::Relaxed) {
-          skipped = true;
+          error = deadline_error
+            .lock()
+            .ok()
+            .and_then(|slot| slot.clone())
+            .or_else(|| check_active(RenderStage::Paint).err());
           pixmap.data_mut().copy_from_slice(src);
           return;
         }
@@ -1379,8 +1436,12 @@ fn blur_anisotropic_body_with_parallelism(
         if cancelled.load(Ordering::Relaxed) {
           return;
         }
-        if blur_deadline_exceeded_parallel(deadline_enabled, &deadline_counter) {
+        if let Some(err) = blur_deadline_exceeded_parallel(deadline_enabled, &deadline_counter) {
           cancelled.store(true, Ordering::Relaxed);
+          let mut slot = deadline_error.lock().unwrap_or_else(|err| err.into_inner());
+          if slot.is_none() {
+            *slot = Some(err);
+          }
           return;
         }
         for x in 0..width {
@@ -1410,13 +1471,10 @@ fn blur_anisotropic_body_with_parallelism(
       };
 
       if deadline_enabled {
-        dst
-          .par_chunks_mut(row_stride)
-          .enumerate()
-          .for_each_init(
-            || DeadlineGuard::install(deadline.as_ref()),
-            |_, (y, out_row)| convolve_row_y(y, out_row),
-          );
+        dst.par_chunks_mut(row_stride).enumerate().for_each_init(
+          || DeadlineGuard::install(deadline.as_ref()),
+          |_, (y, out_row)| convolve_row_y(y, out_row),
+        );
       } else {
         dst
           .par_chunks_mut(row_stride)
@@ -1425,7 +1483,11 @@ fn blur_anisotropic_body_with_parallelism(
       }
 
       if cancelled.load(Ordering::Relaxed) {
-        skipped = true;
+        error = deadline_error
+          .lock()
+          .ok()
+          .and_then(|slot| slot.clone())
+          .or_else(|| check_active(RenderStage::Paint).err());
         dst.copy_from_slice(src);
       }
     }
@@ -1433,7 +1495,7 @@ fn blur_anisotropic_body_with_parallelism(
   if let Some(err) = error {
     Err(err)
   } else {
-    Ok(!skipped)
+    Ok(true)
   }
 }
 
@@ -1458,10 +1520,8 @@ fn tile_blur(
 
   let deadline = active_deadline();
   let deadline_enabled = deadline.as_ref().map_or(false, |d| d.is_enabled());
-  if deadline_enabled && check_active(RenderStage::Paint).is_err() {
-    let mut out = new_pixmap_with_context(width, height, "tile blur output")?;
-    out.data_mut().copy_from_slice(pixmap.data());
-    return Ok(Some((out, 0)));
+  if deadline_enabled {
+    check_active(RenderStage::Paint)?;
   }
 
   let pad_x = (sigma_x.abs() * 3.0).ceil() as u32;
@@ -1507,9 +1567,8 @@ fn tile_blur(
   let max_src_w = width.min(tile_w.saturating_add(pad_x.saturating_mul(2)));
   let max_src_h = height.min(tile_h.saturating_add(pad_y.saturating_mul(2)));
   let max_tile_pixels = (max_src_w as usize).saturating_mul(max_src_h as usize);
-  let parallel_tiles = max_tile_pixels < PARALLEL_BLUR_MIN_PIXELS
-    && tiles > 1
-    && rayon::current_num_threads() > 1;
+  let parallel_tiles =
+    max_tile_pixels < PARALLEL_BLUR_MIN_PIXELS && tiles > 1 && rayon::current_num_threads() > 1;
 
   if parallel_tiles {
     let out_stride = row_stride;
@@ -1524,23 +1583,32 @@ fn tile_blur(
       }
       let out_ptr = out_base as *mut u8;
 
-      if blur_deadline_exceeded_parallel(deadline_enabled, &deadline_counter) {
+      if let Some(err) = blur_deadline_exceeded_parallel(deadline_enabled, &deadline_counter) {
         cancelled.store(true, Ordering::Relaxed);
+        let mut slot = error.lock().unwrap_or_else(|err| err.into_inner());
+        if slot.is_none() {
+          *slot = Some(err);
+        }
         return;
       }
-      if deadline_enabled && check_active(RenderStage::Paint).is_err() {
-        cancelled.store(true, Ordering::Relaxed);
-        return;
+      if deadline_enabled {
+        if let Err(err) = check_active(RenderStage::Paint) {
+          cancelled.store(true, Ordering::Relaxed);
+          let mut slot = error.lock().unwrap_or_else(|err| err.into_inner());
+          if slot.is_none() {
+            *slot = Some(err);
+          }
+          return;
+        }
       }
 
       let mut tile = match new_pixmap_with_context(job.src_w, job.src_h, "tile blur tile") {
         Ok(p) => p,
         Err(err) => {
           cancelled.store(true, Ordering::Relaxed);
-          if let Ok(mut slot) = error.lock() {
-            if slot.is_none() {
-              *slot = Some(err);
-            }
+          let mut slot = error.lock().unwrap_or_else(|err| err.into_inner());
+          if slot.is_none() {
+            *slot = Some(err);
           }
           return;
         }
@@ -1551,8 +1619,12 @@ fn tile_blur(
         if cancelled.load(Ordering::Relaxed) {
           return;
         }
-        if blur_deadline_exceeded_parallel(deadline_enabled, &deadline_counter) {
+        if let Some(err) = blur_deadline_exceeded_parallel(deadline_enabled, &deadline_counter) {
           cancelled.store(true, Ordering::Relaxed);
+          let mut slot = error.lock().unwrap_or_else(|err| err.into_inner());
+          if slot.is_none() {
+            *slot = Some(err);
+          }
           return;
         }
         let src_start = (job.src_min_y as usize + row) * row_stride + job.src_min_x as usize * 4;
@@ -1561,27 +1633,32 @@ fn tile_blur(
           .copy_from_slice(&source[src_start..src_start + tile_stride]);
       }
 
-      match blur_anisotropic_body_with_parallelism(&mut tile, sigma_x, sigma_y, BlurParallelism::Serial)
-      {
-        Ok(true) => {}
-        Ok(false) => {
-          cancelled.store(true, Ordering::Relaxed);
-          return;
-        }
+      match blur_anisotropic_body_with_parallelism(
+        &mut tile,
+        sigma_x,
+        sigma_y,
+        BlurParallelism::Serial,
+      ) {
+        Ok(_) => {}
         Err(err) => {
           cancelled.store(true, Ordering::Relaxed);
-          if let Ok(mut slot) = error.lock() {
-            if slot.is_none() {
-              *slot = Some(err);
-            }
+          let mut slot = error.lock().unwrap_or_else(|err| err.into_inner());
+          if slot.is_none() {
+            *slot = Some(err);
           }
           return;
         }
       }
 
-      if deadline_enabled && check_active(RenderStage::Paint).is_err() {
-        cancelled.store(true, Ordering::Relaxed);
-        return;
+      if deadline_enabled {
+        if let Err(err) = check_active(RenderStage::Paint) {
+          cancelled.store(true, Ordering::Relaxed);
+          let mut slot = error.lock().unwrap_or_else(|err| err.into_inner());
+          if slot.is_none() {
+            *slot = Some(err);
+          }
+          return;
+        }
       }
 
       let offset_x = job.offset_x as usize;
@@ -1592,8 +1669,12 @@ fn tile_blur(
         if cancelled.load(Ordering::Relaxed) {
           return;
         }
-        if blur_deadline_exceeded_parallel(deadline_enabled, &deadline_counter) {
+        if let Some(err) = blur_deadline_exceeded_parallel(deadline_enabled, &deadline_counter) {
           cancelled.store(true, Ordering::Relaxed);
+          let mut slot = error.lock().unwrap_or_else(|err| err.into_inner());
+          if slot.is_none() {
+            *slot = Some(err);
+          }
           return;
         }
         let src_start = (offset_y + row) * tile_stride + offset_x * 4;
@@ -1648,7 +1729,9 @@ fn tile_blur(
           |_, idx| blur_tile(idx),
         );
       } else {
-        (0..total_tiles).into_par_iter().for_each(|idx| blur_tile(idx));
+        (0..total_tiles)
+          .into_par_iter()
+          .for_each(|idx| blur_tile(idx));
       }
     } else if deadline_enabled {
       // Extremely high tile counts can overflow usize on 32-bit platforms; fall back to row-parallel
@@ -1723,22 +1806,23 @@ fn tile_blur(
       });
     }
 
-    if let Ok(mut slot) = error.lock() {
-      if let Some(err) = slot.take() {
-        return Err(err);
-      }
+    let stored_error = error.lock().ok().and_then(|mut slot| slot.take());
+    if let Some(err) = stored_error {
+      return Err(err);
     }
 
     if cancelled.load(Ordering::Relaxed) {
-      out.data_mut().copy_from_slice(source);
-      return Ok(Some((out, 0)));
+      return Err(check_active(RenderStage::Paint).err().unwrap_or_else(|| {
+        RenderError::PaintFailed {
+          operation: "tile blur cancelled".to_string(),
+        }
+      }));
     }
 
     return Ok(Some((out, tiles)));
   }
 
   let mut deadline_counter = 0usize;
-  let mut cancelled = false;
   for ty in 0..tiles_y {
     let y = ty.saturating_mul(tile_h);
     let copy_h = tile_h.min(height - y);
@@ -1754,37 +1838,29 @@ fn tile_blur(
       let offset_x = (x - src_min_x) as usize;
       let offset_y = (y - src_min_y) as usize;
 
-      if blur_deadline_exceeded(&mut deadline_counter) {
-        cancelled = true;
-        break;
+      if let Some(err) = blur_deadline_exceeded(&mut deadline_counter) {
+        return Err(err);
       }
 
       let mut tile = new_pixmap_with_context(src_w, src_h, "tile blur tile")?;
       let tile_stride = src_w as usize * 4;
       for row in 0..src_h as usize {
-        if blur_deadline_exceeded(&mut deadline_counter) {
-          cancelled = true;
-          break;
+        if let Some(err) = blur_deadline_exceeded(&mut deadline_counter) {
+          return Err(err);
         }
         let src_start = (src_min_y as usize + row) * row_stride + src_min_x as usize * 4;
         let dst_start = row * tile_stride;
         tile.data_mut()[dst_start..dst_start + tile_stride]
           .copy_from_slice(&source[src_start..src_start + tile_stride]);
       }
-      if cancelled {
-        break;
-      }
 
       let blurred = blur_anisotropic_body(&mut tile, sigma_x, sigma_y)?;
       if !blurred {
-        cancelled = true;
-        break;
+        return Ok(None);
       }
 
-      // If the blur was cancelled mid-tile, skip the entire tiled blur and leave the pixmap unchanged.
-      if deadline_enabled && check_active(RenderStage::Paint).is_err() {
-        cancelled = true;
-        break;
+      if deadline_enabled {
+        check_active(RenderStage::Paint)?;
       }
 
       let copy_w_bytes = copy_w as usize * 4;
@@ -1792,9 +1868,8 @@ fn tile_blur(
       {
         let out_data = out.data_mut();
         for row in 0..copy_h as usize {
-          if blur_deadline_exceeded(&mut deadline_counter) {
-            cancelled = true;
-            break;
+          if let Some(err) = blur_deadline_exceeded(&mut deadline_counter) {
+            return Err(err);
           }
           let src_start = (offset_y + row) * tile_stride + offset_x * 4;
           let dst_start = (y as usize + row) * row_stride + x as usize * 4;
@@ -1802,18 +1877,7 @@ fn tile_blur(
             .copy_from_slice(&tile_data[src_start..src_start + copy_w_bytes]);
         }
       }
-      if cancelled {
-        break;
-      }
     }
-    if cancelled {
-      break;
-    }
-  }
-
-  if cancelled {
-    out.data_mut().copy_from_slice(source);
-    return Ok(Some((out, 0)));
   }
 
   Ok(Some((out, tiles)))
@@ -1994,15 +2058,22 @@ mod tests {
 
     let cancel: Arc<crate::render_control::CancelCallback> = Arc::new(|| true);
     let deadline = RenderDeadline::new(None, Some(cancel));
-    with_deadline(Some(&deadline), || {
-      apply_gaussian_blur_cached(&mut pixmap, 3.0, 3.0, Some(&mut cache), 1.0).unwrap();
+    let err = with_deadline(Some(&deadline), || {
+      apply_gaussian_blur_cached(&mut pixmap, 3.0, 3.0, Some(&mut cache), 1.0).unwrap_err()
     });
+    assert!(matches!(
+      err,
+      RenderError::Timeout {
+        stage: RenderStage::Paint,
+        ..
+      }
+    ));
 
     assert_eq!(pixmap.data(), original.as_slice());
     assert_eq!(
       cache.lru.len(),
       0,
-      "expected blur cache to remain empty when blur is skipped due to deadline"
+      "expected blur cache to remain empty when blur fails due to deadline"
     );
   }
 
@@ -2021,14 +2092,21 @@ mod tests {
 
     let cancel: Arc<crate::render_control::CancelCallback> = Arc::new(|| true);
     let deadline = RenderDeadline::new(None, Some(cancel));
-    with_deadline(Some(&deadline), || {
-      apply_gaussian_blur_cached(&mut pixmap, 3.0, 3.0, Some(&mut cache), 1.0).unwrap();
+    let err = with_deadline(Some(&deadline), || {
+      apply_gaussian_blur_cached(&mut pixmap, 3.0, 3.0, Some(&mut cache), 1.0).unwrap_err()
     });
+    assert!(matches!(
+      err,
+      RenderError::Timeout {
+        stage: RenderStage::Paint,
+        ..
+      }
+    ));
 
     assert_eq!(
       pixmap.data(),
       original.as_slice(),
-      "expected tiled blur to skip when deadline is cancelled"
+      "expected tiled blur to leave pixmap unchanged when deadline is cancelled"
     );
   }
 
@@ -2064,11 +2142,7 @@ mod tests {
       .unwrap()
       .install(|| apply_gaussian_blur_cached(&mut tiled, 3.0, 3.0, Some(&mut cache), 1.0).unwrap());
 
-    assert_eq!(
-      direct.data(),
-      tiled.data(),
-      "tiled blur output mismatch"
-    );
+    assert_eq!(direct.data(), tiled.data(), "tiled blur output mismatch");
   }
 
   #[test]
