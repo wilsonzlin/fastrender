@@ -189,7 +189,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::io;
 use std::mem;
@@ -1247,6 +1247,30 @@ pub enum ResourceKind {
   Other,
 }
 
+impl ResourceKind {
+  const fn order(self) -> u8 {
+    match self {
+      ResourceKind::Document => 0,
+      ResourceKind::Stylesheet => 1,
+      ResourceKind::Image => 2,
+      ResourceKind::Font => 3,
+      ResourceKind::Other => 4,
+    }
+  }
+}
+
+impl PartialOrd for ResourceKind {
+  fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    Some(self.cmp(other))
+  }
+}
+
+impl Ord for ResourceKind {
+  fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    self.order().cmp(&other.order())
+  }
+}
+
 /// Result of a rendering operation that includes diagnostics.
 #[derive(Debug, Clone)]
 pub struct RenderResult {
@@ -1688,7 +1712,7 @@ pub struct PaintDiagnostics {
 /// Resource loading counters.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct ResourceDiagnostics {
-  pub fetch_counts: HashMap<ResourceKind, usize>,
+  pub fetch_counts: BTreeMap<ResourceKind, usize>,
   pub image_cache_hits: Option<usize>,
   pub image_cache_misses: Option<usize>,
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -9525,6 +9549,39 @@ mod tests {
     assert!(stats.timings.cascade_ms.is_some());
     assert!(stats.timings.box_tree_ms.is_some());
     assert!(stats.timings.layout_ms.is_some());
+  }
+
+  #[test]
+  fn render_stats_fetch_counts_json_is_sorted_by_resource_kind() {
+    let mut stats = RenderStats::default();
+    stats.resources.fetch_counts.insert(ResourceKind::Other, 5);
+    stats.resources.fetch_counts.insert(ResourceKind::Image, 3);
+    stats
+      .resources
+      .fetch_counts
+      .insert(ResourceKind::Document, 1);
+    stats.resources.fetch_counts.insert(ResourceKind::Font, 4);
+    stats
+      .resources
+      .fetch_counts
+      .insert(ResourceKind::Stylesheet, 2);
+
+    let json = serde_json::to_string(&stats).expect("serialize RenderStats");
+    let Some(fetch_counts_pos) = json.find("\"fetch_counts\"") else {
+      panic!("serialized RenderStats missing fetch_counts: {json}");
+    };
+    let slice = &json[fetch_counts_pos..];
+
+    let doc = slice.find("\"Document\"").expect("find Document key");
+    let stylesheet = slice.find("\"Stylesheet\"").expect("find Stylesheet key");
+    let image = slice.find("\"Image\"").expect("find Image key");
+    let font = slice.find("\"Font\"").expect("find Font key");
+    let other = slice.find("\"Other\"").expect("find Other key");
+
+    assert!(doc < stylesheet);
+    assert!(stylesheet < image);
+    assert!(image < font);
+    assert!(font < other);
   }
 
   #[test]
