@@ -455,39 +455,28 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
   }
 
   if disk_cache_enabled {
-    // The asset prefetcher is expected to live in `src/bin/prefetch_assets.rs` (or equivalently
-    // `src/bin/prefetch_assets/main.rs`). Guard execution so `cargo xtask pageset` keeps working on
-    // checkouts that predate the binary landing.
-    let prefetch_assets_path = repo_root().join("src/bin/prefetch_assets.rs");
-    let prefetch_assets_dir = repo_root().join("src/bin/prefetch_assets/main.rs");
-    if prefetch_assets_path.is_file() || prefetch_assets_dir.is_file() {
-      let mut cmd = Command::new("cargo");
-      cmd
-        .arg("run")
-        .arg("--release")
-        .apply_disk_cache_feature(true)
-        .args(["--bin", "prefetch_assets"])
-        .arg("--")
-        .arg("--jobs")
-        .arg(args.jobs.to_string())
-        .arg("--timeout")
-        .arg(args.fetch_timeout.to_string());
-      if let Some(pages) = &pages_arg {
-        cmd.arg("--pages").arg(pages);
-      }
-      if let Some(shard) = &shard_arg {
-        cmd.arg("--shard").arg(shard);
-      }
-      println!(
-        "Prefetching subresources into fetches/assets/ (jobs={}, timeout={}s)...",
-        args.jobs, args.fetch_timeout
-      );
-      if let Err(err) = run_command(cmd) {
-        eprintln!("Warning: prefetch_assets failed (continuing): {err}");
-      }
-    } else {
-      println!("Skipping asset prefetch (prefetch_assets binary not found).");
+    let mut cmd = Command::new("cargo");
+    cmd
+      .arg("run")
+      .arg("--release")
+      .apply_disk_cache_feature(true)
+      .args(["--bin", "prefetch_assets"])
+      .arg("--")
+      .arg("--jobs")
+      .arg(args.jobs.to_string())
+      .arg("--timeout")
+      .arg(args.fetch_timeout.to_string());
+    if let Some(pages) = &pages_arg {
+      cmd.arg("--pages").arg(pages);
     }
+    if let Some(shard) = &shard_arg {
+      cmd.arg("--shard").arg(shard);
+    }
+    println!(
+      "Prefetching subresources into fetches/assets/ (jobs={}, timeout={}s)...",
+      args.jobs, args.fetch_timeout
+    );
+    run_command(cmd)?;
   }
 
   let mut cmd = Command::new("cargo");
