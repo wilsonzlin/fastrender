@@ -68,7 +68,6 @@ use tiny_skia::BlendMode as SkiaBlendMode;
 use tiny_skia::FillRule;
 use tiny_skia::IntSize;
 use tiny_skia::Mask;
-use tiny_skia::MaskType;
 use tiny_skia::Paint;
 use tiny_skia::PathBuilder;
 use tiny_skia::Pixmap;
@@ -1293,7 +1292,8 @@ impl Canvas {
   }
 
   fn build_clip_mask_slow_path(&self, rect: Rect, radii: BorderRadii) -> Option<Mask> {
-    let mut mask_pixmap = new_pixmap(self.width(), self.height())?;
+    let mut mask = Mask::new(self.width(), self.height())?;
+    mask.data_mut().fill(0);
     let paint = {
       let mut p = Paint::default();
       p.set_color_rgba8(255, 255, 255, 255);
@@ -1301,14 +1301,13 @@ impl Canvas {
     };
 
     let path = self.build_rounded_rect_path(rect, radii)?;
-    mask_pixmap.fill_path(
+    mask.fill_path(
       &path,
-      &paint,
       FillRule::Winding,
+      paint.anti_alias,
       self.current_state.transform,
-      None,
     );
-    Some(Mask::from_pixmap(mask_pixmap.as_ref(), MaskType::Alpha))
+    Some(mask)
   }
 
   /// Builds a path for a rounded rectangle
@@ -1578,6 +1577,7 @@ impl BlendModeExt for BlendMode {
 mod tests {
   use super::*;
   use crate::paint::pixmap::NewPixmapAllocRecorder;
+  use tiny_skia::MaskType;
 
   fn pixel(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
     let width = pixmap.width();
@@ -2064,6 +2064,73 @@ mod tests {
     assert!(
       allocations.is_empty(),
       "expected no new_pixmap allocations for rect clip fast-path, got {allocations:?}"
+    );
+  }
+
+  fn build_clip_mask_slow_path_reference(
+    canvas: &Canvas,
+    rect: Rect,
+    radii: BorderRadii,
+  ) -> Option<Mask> {
+    let mut mask_pixmap = new_pixmap(canvas.width(), canvas.height())?;
+    let paint = {
+      let mut p = Paint::default();
+      p.set_color_rgba8(255, 255, 255, 255);
+      p
+    };
+
+    let path = canvas.build_rounded_rect_path(rect, radii)?;
+    mask_pixmap.fill_path(
+      &path,
+      &paint,
+      FillRule::Winding,
+      canvas.current_state.transform,
+      None,
+    );
+    Some(Mask::from_pixmap(mask_pixmap.as_ref(), MaskType::Alpha))
+  }
+
+  #[test]
+  fn slow_path_clip_mask_matches_reference_for_rounded_rect_with_transform() {
+    let mut canvas = Canvas::new_transparent(32, 32).unwrap();
+    canvas.set_transform(Transform::from_translate(1.25, -0.5));
+
+    let rect = Rect::from_xywh(4.2, 3.7, 12.8, 9.5);
+    let radii = BorderRadii::uniform(3.3);
+
+    let optimized = canvas
+      .build_clip_mask_slow_path(rect, radii)
+      .expect("optimized mask");
+    let reference =
+      build_clip_mask_slow_path_reference(&canvas, rect, radii).expect("reference mask");
+    assert_eq!(optimized.data(), reference.data());
+  }
+
+  #[test]
+  fn rounded_rect_clip_slow_path_avoids_pixmap_allocation() {
+    let mut canvas = Canvas::new_transparent(8, 8).unwrap();
+    let recorder = NewPixmapAllocRecorder::start();
+    canvas.set_clip_with_radii(
+      Rect::from_xywh(1.0, 1.0, 6.0, 6.0),
+      Some(BorderRadii::uniform(2.0)),
+    );
+    let allocations = recorder.take();
+    assert!(
+      allocations.is_empty(),
+      "expected no new_pixmap allocations for rounded clip masks, got {allocations:?}"
+    );
+  }
+
+  #[test]
+  fn transformed_rect_clip_slow_path_avoids_pixmap_allocation() {
+    let mut canvas = Canvas::new_transparent(8, 8).unwrap();
+    canvas.translate(0.5, 0.25);
+    let recorder = NewPixmapAllocRecorder::start();
+    canvas.set_clip(Rect::from_xywh(1.0, 1.0, 6.0, 6.0));
+    let allocations = recorder.take();
+    assert!(
+      allocations.is_empty(),
+      "expected no new_pixmap allocations for transformed rect clip masks, got {allocations:?}"
     );
   }
 
