@@ -299,7 +299,7 @@ fn generate_has_styles(max_depth: usize, needle_stride: usize) -> String {
 }
 
 fn selector_bloom_benchmark(c: &mut Criterion) {
-  let depth = 200;
+  let depth = 64;
   let branching = 5;
   let class_variants = 48;
   let chain_lengths = [4, 6, 8];
