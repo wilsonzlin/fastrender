@@ -2613,22 +2613,18 @@ fn clip_to_region(pixmap: &mut Pixmap, region: Rect) {
     return;
   }
 
-  let row_stride = pixmap.width() as usize;
-  for (y, row) in pixmap.pixels_mut().chunks_mut(row_stride).enumerate() {
+  let min_x_bytes = clamped_min_x as usize * 4;
+  let max_x_bytes = clamped_max_x as usize * 4;
+  let row_stride_bytes = pixmap.width() as usize * 4;
+  for (y, row) in pixmap.data_mut().chunks_exact_mut(row_stride_bytes).enumerate() {
     let y = y as i32;
     if y < clamped_min_y || y >= clamped_max_y {
-      for px in row {
-        *px = PremultipliedColorU8::TRANSPARENT;
-      }
+      row.fill(0);
       continue;
     }
 
-    for (x, px) in row.iter_mut().enumerate() {
-      let x = x as i32;
-      if x < clamped_min_x || x >= clamped_max_x {
-        *px = PremultipliedColorU8::TRANSPARENT;
-      }
-    }
+    row[..min_x_bytes].fill(0);
+    row[max_x_bytes..].fill(0);
   }
 }
 
@@ -4464,6 +4460,35 @@ mod tests {
     )
     .unwrap()
     .expect("primitive output")
+  }
+
+  #[test]
+  fn clip_to_region_clears_pixels_outside_rect() {
+    let mut pixmap = new_pixmap(4, 4).unwrap();
+    let color = PremultipliedColorU8::from_rgba(10, 20, 30, 255).unwrap();
+    for px in pixmap.pixels_mut() {
+      *px = color;
+    }
+
+    // Use fractional edges so the test also covers the floor/ceil rounding behavior.
+    let region = Rect::from_xywh(1.2, 1.2, 1.6, 1.6);
+    clip_to_region(&mut pixmap, region);
+
+    let pixels = pixmap.pixels();
+    for y in 0..4 {
+      for x in 0..4 {
+        let px = pixels[(y * 4 + x) as usize];
+        if (1..3).contains(&x) && (1..3).contains(&y) {
+          assert_eq!(px, color, "pixel ({x},{y}) should remain inside clip");
+        } else {
+          assert_eq!(
+            px,
+            PremultipliedColorU8::TRANSPARENT,
+            "pixel ({x},{y}) should be cleared outside clip"
+          );
+        }
+      }
+    }
   }
 
   #[test]
