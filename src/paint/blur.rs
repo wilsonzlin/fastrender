@@ -333,7 +333,7 @@ fn gaussian_kernel_fixed(sigma: f32) -> (Vec<i32>, usize, i32) {
 
 #[inline]
 fn clamp_channel_to_alpha(channel: i32, alpha: i32) -> u8 {
-  let alpha = alpha.clamp(0, 255);
+  debug_assert!(alpha >= 0 && alpha <= 255);
   // Clamping to alpha keeps the channel within the u8 range.
   channel.clamp(0, alpha) as u8
 }
