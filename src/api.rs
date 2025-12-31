@@ -2250,6 +2250,78 @@ struct PoolState {
   total: usize,
 }
 
+fn font_db_for_pool(font_config: &FontConfig) -> Arc<FontDbDatabase> {
+  // `FastRender::with_config` ultimately guarantees that at least the bundled fallback set
+  // is available (even when `use_bundled_fonts` is false) so text shaping never runs with
+  // an empty database. Mirror that behaviour for pooled renderers.
+
+  // Pure bundled runs (the pageset default) can reuse the shared bundled database.
+  if !font_config.use_system_fonts && font_config.font_dirs.is_empty() {
+    return FontDatabase::shared_bundled_db();
+  }
+
+  // System-only runs can reuse the shared system database, but must fall back to bundled
+  // fixtures in minimal environments where no system fonts are discoverable.
+  if font_config.use_system_fonts
+    && !font_config.use_bundled_fonts
+    && font_config.font_dirs.is_empty()
+  {
+    let system = FontDatabase::shared_system_db();
+    if system.is_empty() {
+      return FontDatabase::shared_bundled_db();
+    }
+    return system;
+  }
+
+  // Mixed configurations (system + bundled, custom font dirs) need a bespoke database per pool.
+  FontDatabase::with_config(font_config).shared_db()
+}
+
+#[cfg(test)]
+mod pool_fontdb_tests {
+  use super::*;
+
+  #[test]
+  fn pooled_renderers_reuse_shared_bundled_fontdb() {
+    let renderer = FastRenderConfig::default().with_font_sources(FontConfig::bundled_only());
+    let pool = FastRenderPool::with_config(
+      FastRenderPoolConfig::new()
+        .with_renderer_config(renderer)
+        .with_pool_size(1),
+    )
+    .expect("pool");
+
+    assert!(Arc::ptr_eq(
+      &pool.inner.shared.font_db,
+      &FontDatabase::shared_bundled_db()
+    ));
+  }
+
+  #[test]
+  fn pooled_renderers_reuse_shared_system_fontdb_when_available() {
+    let font_config = FontConfig::new()
+      .with_system_fonts(true)
+      .with_bundled_fonts(false);
+    let renderer = FastRenderConfig::default().with_font_sources(font_config);
+    let pool = FastRenderPool::with_config(
+      FastRenderPoolConfig::new()
+        .with_renderer_config(renderer)
+        .with_pool_size(1),
+    )
+    .expect("pool");
+
+    let system = FontDatabase::shared_system_db();
+    if system.is_empty() {
+      assert!(Arc::ptr_eq(
+        &pool.inner.shared.font_db,
+        &FontDatabase::shared_bundled_db()
+      ));
+    } else {
+      assert!(Arc::ptr_eq(&pool.inner.shared.font_db, &system));
+    }
+  }
+}
+
 struct SharedPoolResources {
   config: FastRenderConfig,
   font_cache: FontCacheConfig,
@@ -2297,13 +2369,14 @@ impl FastRenderPool {
     let fetcher = resolve_fetcher(&renderer, fetcher);
     let shared_image_cache =
       build_image_cache(&renderer.base_url, Arc::clone(&fetcher), image_cache);
+    let font_db = font_db_for_pool(&renderer.font_config);
     let inner = PoolInner {
       shared: Arc::new(SharedPoolResources {
         config: renderer,
         font_cache,
         image_cache_config: image_cache,
         fetcher,
-        font_db: FontDatabase::shared_system_db(),
+        font_db,
         pool_size,
         image_cache: shared_image_cache,
       }),

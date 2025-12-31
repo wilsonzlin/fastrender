@@ -1168,9 +1168,9 @@ pub(crate) fn hotspot_from_error(
     return Some(hotspot_from_timeout_stage(stage));
   }
   match err {
-    fastrender::Error::Resource(_) | fastrender::Error::Navigation(_) | fastrender::Error::Io(_) => {
-      Some("fetch")
-    }
+    fastrender::Error::Resource(_)
+    | fastrender::Error::Navigation(_)
+    | fastrender::Error::Io(_) => Some("fetch"),
     _ => None,
   }
 }
@@ -4127,6 +4127,10 @@ mod tests {
       user_agent: DEFAULT_USER_AGENT.to_string(),
       accept_language: DEFAULT_ACCEPT_LANGUAGE.to_string(),
       no_http_freshness: false,
+      disk_cache: DiskCacheArgs {
+        max_bytes: common::args::DEFAULT_DISK_CACHE_MAX_BYTES,
+        max_age_secs: common::args::DEFAULT_DISK_CACHE_MAX_AGE_SECS,
+      },
       css_limit: None,
       fonts: FontSourceArgs {
         bundled_fonts: false,
