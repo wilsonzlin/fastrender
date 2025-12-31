@@ -957,15 +957,14 @@ fn apply_backdrop_filters(
             continue;
           }
 
-          let cov = coverage as f32 / 255.0;
-          let inv = 1.0 - cov;
+          let cov = coverage as u16;
+          let inv = 255u16 - cov;
           let src_px = &src_data[src_offset..src_offset + 4];
           let dst_slice = &mut dest_data[dest_offset..dest_offset + 4];
           for i in 0..4 {
-            let val = (src_px[i] as f32 * cov + dst_slice[i] as f32 * inv)
-              .round()
-              .clamp(0.0, 255.0) as u8;
-            dst_slice[i] = val;
+            let src_v = src_px[i] as u16;
+            let dst_v = dst_slice[i] as u16;
+            dst_slice[i] = div_255(src_v * cov + dst_v * inv + 127) as u8;
           }
         }
       }
@@ -8271,6 +8270,37 @@ mod tests {
       allocations.is_empty(),
       "expected apply_filters_scoped to reuse scratch pixmaps, got {allocations:?}"
     );
+  }
+
+  #[test]
+  fn backdrop_filter_partial_coverage_blend_matches_float_rounding() {
+    for coverage in 0u8..=255 {
+      let cov_f = coverage as f32 / 255.0;
+      let inv_f = 1.0 - cov_f;
+      let cov_i = coverage as u16;
+      let inv_i = 255u16 - cov_i;
+
+      for src in 0u8..=255 {
+        let src_f = src as f32;
+        let src_i = src as u16;
+        for dst in 0u8..=255 {
+          let numerator = src_i * cov_i + dst as u16 * inv_i;
+          let rem = numerator % 255;
+          if rem != 127 && rem != 128 {
+            continue;
+          }
+
+          let expected = (src_f * cov_f + dst as f32 * inv_f)
+            .round()
+            .clamp(0.0, 255.0) as u8;
+          let got = div_255(numerator + 127) as u8;
+          assert_eq!(
+            got, expected,
+            "blend mismatch for src={src} dst={dst} coverage={coverage}"
+          );
+        }
+      }
+    }
   }
 
   fn expected_linear_red_blue(
