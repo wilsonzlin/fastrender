@@ -4567,15 +4567,27 @@ impl FlexFormattingContext {
       .new_with_children(root_style, &child_nodes)
       .map_err(|e| LayoutError::MissingContext(format!("Failed to create Taffy root: {:?}", e)))?;
 
+    let cancel: Option<Arc<dyn Fn() -> bool + Send + Sync>> = active_deadline()
+      .filter(|deadline| deadline.is_enabled())
+      .map(|_| Arc::new(|| check_active(RenderStage::Layout).is_err()) as _);
     taffy
-      .compute_layout(
+      .compute_layout_with_measure_and_cancel(
         root,
         taffy::geometry::Size {
           width: AvailableSpace::Definite(fragment.bounds.width()),
           height: AvailableSpace::Definite(fragment.bounds.height()),
         },
+        |_, _, _, _, _| taffy::geometry::Size::ZERO,
+        cancel,
+        TAFFY_ABORT_CHECK_STRIDE,
       )
-      .map_err(|e| LayoutError::MissingContext(format!("Taffy layout failed: {:?}", e)))?;
+      .map_err(|e| match e {
+        taffy::TaffyError::LayoutAborted => match check_active(RenderStage::Layout) {
+          Err(RenderError::Timeout { elapsed, .. }) => LayoutError::Timeout { elapsed },
+          _ => LayoutError::MissingContext("Taffy layout aborted".to_string()),
+        },
+        _ => LayoutError::MissingContext(format!("Taffy layout failed: {:?}", e)),
+      })?;
 
     for candidate in positioned {
       if let Some(node_id) = node_lookup.get(&candidate.child_id) {
