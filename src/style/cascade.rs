@@ -15679,9 +15679,26 @@ fn border_presentational_hint(
     None
   }?;
 
-  let mut css = format!("border: {} solid;", border_len);
+  let mut declarations = Vec::with_capacity(3);
+  declarations.push(Declaration {
+    property: "border-width".to_string(),
+    value: PropertyValue::Length(border_len),
+    raw_value: String::new(),
+    important: false,
+  });
+  declarations.push(Declaration {
+    property: "border-style".to_string(),
+    value: PropertyValue::Keyword("solid".to_string()),
+    raw_value: String::new(),
+    important: false,
+  });
   if is_table && border_len.to_px() > 0.0 {
-    css.push_str("border-collapse: collapse;");
+    declarations.push(Declaration {
+      property: "border-collapse".to_string(),
+      value: PropertyValue::Keyword("collapse".to_string()),
+      raw_value: String::new(),
+      important: false,
+    });
   }
 
   Some(MatchedRule {
@@ -15689,7 +15706,7 @@ fn border_presentational_hint(
     specificity: 0,
     order,
     layer_order: layer_order.clone(),
-    declarations: Cow::Owned(parse_declarations(&css)),
+    declarations: Cow::Owned(declarations),
     starting_style: false,
   })
 }
