@@ -778,10 +778,10 @@ fn collect_rules_recursive<'a>(
       CssRule::Layer(layer_rule) => {
         if layer_rule.rules.is_empty() {
           for name in &layer_rule.names {
-            let _ = registry.ensure_path(current_layer.as_ref(), name);
+            registry.register_path(current_layer.as_ref(), name);
           }
           if layer_rule.anonymous {
-            let _ = registry.ensure_anonymous(current_layer.as_ref());
+            registry.register_anonymous(current_layer.as_ref());
           }
           continue;
         }
@@ -908,10 +908,10 @@ fn collect_page_rules_recursive<'a>(
       CssRule::Layer(layer_rule) => {
         if layer_rule.rules.is_empty() {
           for name in &layer_rule.names {
-            let _ = registry.ensure_path(current_layer.as_ref(), name);
+            registry.register_path(current_layer.as_ref(), name);
           }
           if layer_rule.anonymous {
-            let _ = registry.ensure_anonymous(current_layer.as_ref());
+            registry.register_anonymous(current_layer.as_ref());
           }
           continue;
         }
@@ -1118,10 +1118,10 @@ fn collect_counter_styles_recursive<'a>(
       CssRule::Layer(layer_rule) => {
         if layer_rule.rules.is_empty() {
           for name in &layer_rule.names {
-            let _ = registry.ensure_path(current_layer.as_ref(), name);
+            registry.register_path(current_layer.as_ref(), name);
           }
           if layer_rule.anonymous {
-            let _ = registry.ensure_anonymous(current_layer.as_ref());
+            registry.register_anonymous(current_layer.as_ref());
           }
           continue;
         }
@@ -1255,10 +1255,10 @@ fn collect_font_palette_rules_recursive<'a>(
       CssRule::Layer(layer_rule) => {
         if layer_rule.rules.is_empty() {
           for name in &layer_rule.names {
-            let _ = registry.ensure_path(current_layer.as_ref(), name);
+            registry.register_path(current_layer.as_ref(), name);
           }
           if layer_rule.anonymous {
-            let _ = registry.ensure_anonymous(current_layer.as_ref());
+            registry.register_anonymous(current_layer.as_ref());
           }
           continue;
         }
@@ -1389,10 +1389,10 @@ fn collect_property_rules_recursive<'a>(
       CssRule::Layer(layer_rule) => {
         if layer_rule.rules.is_empty() {
           for name in &layer_rule.names {
-            let _ = registry.ensure_path(current_layer.as_ref(), name);
+            registry.register_path(current_layer.as_ref(), name);
           }
           if layer_rule.anonymous {
-            let _ = registry.ensure_anonymous(current_layer.as_ref());
+            registry.register_anonymous(current_layer.as_ref());
           }
           continue;
         }
@@ -2332,8 +2332,27 @@ impl LayerRegistry {
     Self::default()
   }
 
+  fn register_path(&mut self, base: &[u32], name: &[String]) {
+    let mut node: &mut LayerNode = if let Some(existing) = self.get_node_mut(base) {
+      existing
+    } else {
+      &mut self.root
+    };
+    for component in name {
+      let (_, next) = node.ensure_child(component);
+      node = next;
+    }
+  }
+
+  fn register_anonymous(&mut self, base: &[u32]) {
+    let name = format!("__anon{}", self.next_anonymous);
+    self.next_anonymous += 1;
+    self.register_path(base, &[name]);
+  }
+
   fn ensure_path(&mut self, base: &[u32], name: &[String]) -> Arc<[u32]> {
-    let mut path = base.to_vec();
+    let mut path = Vec::with_capacity(base.len().saturating_add(name.len()));
+    path.extend_from_slice(base);
     let mut node: &mut LayerNode = if let Some(existing) = self.get_node_mut(base) {
       existing
     } else {
