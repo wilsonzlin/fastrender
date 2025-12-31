@@ -1642,6 +1642,7 @@ mod tests {
   use crate::paint::painter::{enable_paint_diagnostics, take_paint_diagnostics};
   use crate::paint::pixmap::new_pixmap;
   use crate::render_control::{with_deadline, RenderDeadline};
+  use rayon::ThreadPoolBuilder;
   use std::sync::Arc;
   use tiny_skia::PremultipliedColorU8;
 
@@ -1741,6 +1742,45 @@ mod tests {
       pixmap.data(),
       original.as_slice(),
       "expected tiled blur to skip when deadline is cancelled"
+    );
+  }
+
+  #[test]
+  fn tile_blur_matches_direct_output() {
+    let mut base = new_pixmap(32, 24).unwrap();
+    let w = base.width() as usize;
+    for y in 0..base.height() as usize {
+      for x in 0..w {
+        let a = ((x * 29 + y * 31) % 256) as u8;
+        let r0 = ((x * 11 + y * 7) % 256) as u8;
+        let g0 = ((x * 5 + y * 13) % 256) as u8;
+        let b0 = ((x * 17 + y * 19) % 256) as u8;
+        let premul = |c: u8| ((c as u16 * a as u16) / 255) as u8;
+        base.pixels_mut()[y * w + x] =
+          PremultipliedColorU8::from_rgba(premul(r0), premul(g0), premul(b0), a).unwrap();
+      }
+    }
+
+    let mut direct = base.clone();
+    apply_gaussian_blur(&mut direct, 3.0).unwrap();
+
+    let mut tiled = base.clone();
+    let mut cache = BlurCache::new(FilterCacheConfig {
+      max_items: 0,
+      max_bytes: 2048,
+    });
+
+    // Ensure the tile-parallel branch is exercised even when the global rayon pool is single-threaded.
+    ThreadPoolBuilder::new()
+      .num_threads(2)
+      .build()
+      .unwrap()
+      .install(|| apply_gaussian_blur_cached(&mut tiled, 3.0, 3.0, Some(&mut cache), 1.0).unwrap());
+
+    assert_eq!(
+      direct.data(),
+      tiled.data(),
+      "tiled blur output mismatch"
     );
   }
 
