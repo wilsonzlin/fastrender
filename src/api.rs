@@ -9799,6 +9799,52 @@ mod tests {
   }
 
   #[test]
+  fn diagnostics_populates_style_and_layout_stage_timings_with_external_stylesheet_imports() {
+    let fetcher = MapFetcher::default()
+      .with_entry(
+        "https://example.com/style.css",
+        "@import \"import.css\";\ndiv { color: rgb(255, 0, 0); }",
+      )
+      .with_entry("https://example.com/import.css", "div { background: rgb(0, 0, 0); }");
+    let mut renderer = FastRender::builder().fetcher(Arc::new(fetcher)).build().unwrap();
+    let html = r#"<!DOCTYPE html>
+<html>
+  <head>
+    <link rel="stylesheet" href="style.css">
+  </head>
+  <body>
+    <div>Hello</div>
+  </body>
+</html>"#;
+    let options = RenderOptions::new()
+      .with_viewport(64, 64)
+      .with_diagnostics_level(DiagnosticsLevel::Basic);
+    let result = renderer
+      .render_html_with_stylesheets(html, "https://example.com/page.html", options)
+      .unwrap();
+
+    let stats = result
+      .diagnostics
+      .stats
+      .as_ref()
+      .expect("expected RenderDiagnostics.stats when diagnostics are enabled");
+    assert!(stats.timings.css_parse_ms.is_some());
+    assert!(stats.timings.cascade_ms.is_some());
+    assert!(stats.timings.box_tree_ms.is_some());
+    assert!(stats.timings.layout_ms.is_some());
+    assert_eq!(
+      stats
+        .resources
+        .fetch_counts
+        .get(&ResourceKind::Stylesheet)
+        .copied()
+        .unwrap_or(0),
+      2,
+      "expected one external stylesheet + one @import load"
+    );
+  }
+
+  #[test]
   fn render_stats_fetch_counts_json_is_sorted_by_resource_kind() {
     let mut stats = RenderStats::default();
     stats.resources.fetch_counts.insert(ResourceKind::Other, 5);
