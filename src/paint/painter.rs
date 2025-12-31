@@ -3022,24 +3022,71 @@ impl Painter {
         continue;
       };
 
-      let mut mask_pixmap = new_pixmap(device_size.0, device_size.1)?;
-      for ty in positions_y.iter().copied() {
-        for tx in positions_x.iter().copied() {
-          paint_mask_tile(
-            &mut mask_pixmap,
-            &mask_tile,
-            tx,
-            ty,
-            tile_w,
-            tile_h,
-            clip_rect_css,
-            self.origin_offset_css,
-            self.scale,
-          );
-        }
-      }
+      let layer_mask = MASK_LAYER_PIXMAP_SCRATCH.with(|cell| {
+        let mut scratch = cell.borrow_mut();
 
-      let layer_mask = Mask::from_pixmap(mask_pixmap.as_ref(), MaskType::Alpha);
+        let replace = match scratch.pixmap.as_ref() {
+          Some(existing) => existing.width() != device_size.0 || existing.height() != device_size.1,
+          None => true,
+        };
+        if replace {
+          scratch.pixmap = new_pixmap(device_size.0, device_size.1);
+          scratch.last_dirty = None;
+        }
+
+        let device_clip = self.device_rect(clip_rect_css);
+        let dirty = clip_mask_dirty_bounds(device_clip, device_size.0, device_size.1);
+        let prev_dirty = scratch.last_dirty;
+
+        let layer_mask = {
+          let Some(mask_pixmap) = scratch.pixmap.as_mut() else {
+            return None;
+          };
+
+          // The scratch pixmap is reused between layers/calls, so ensure the pixels that might
+          // contain stale data are cleared back to transparent before painting the new layer.
+          let clear = match (prev_dirty, dirty) {
+            (Some(prev), Some(curr)) => ClipMaskDirtyRect {
+              x0: prev.x0.min(curr.x0),
+              y0: prev.y0.min(curr.y0),
+              x1: prev.x1.max(curr.x1),
+              y1: prev.y1.max(curr.y1),
+            },
+            (Some(prev), None) => prev,
+            (None, Some(curr)) => curr,
+            (None, None) => ClipMaskDirtyRect {
+              x0: 0,
+              y0: 0,
+              x1: device_size.0,
+              y1: device_size.1,
+            },
+          };
+          clear_pixmap_rect_rgba(mask_pixmap, clear);
+
+          if dirty.is_some() {
+            for ty in positions_y.iter().copied() {
+              for tx in positions_x.iter().copied() {
+                paint_mask_tile(
+                  mask_pixmap,
+                  &mask_tile,
+                  tx,
+                  ty,
+                  tile_w,
+                  tile_h,
+                  clip_rect_css,
+                  self.origin_offset_css,
+                  self.scale,
+                );
+              }
+            }
+          }
+
+          Mask::from_pixmap(mask_pixmap.as_ref(), MaskType::Alpha)
+        };
+
+        scratch.last_dirty = dirty;
+        Some(layer_mask)
+      })?;
       if let Some(dest) = combined.as_mut() {
         apply_mask_composite(dest, &layer_mask, layer.composite);
       } else {
@@ -9779,6 +9826,17 @@ thread_local! {
 }
 
 #[derive(Default)]
+struct MaskLayerPixmapScratch {
+  pixmap: Option<Pixmap>,
+  last_dirty: Option<ClipMaskDirtyRect>,
+}
+
+thread_local! {
+  static MASK_LAYER_PIXMAP_SCRATCH: RefCell<MaskLayerPixmapScratch> =
+    RefCell::new(MaskLayerPixmapScratch::default());
+}
+
+#[derive(Default)]
 struct BackgroundClipMaskScratch {
   mask: Option<Mask>,
   last_rect: Option<Rect>,
@@ -9886,6 +9944,30 @@ fn clear_mask_rect(mask: &mut Mask, rect: ClipMaskDirtyRect) {
     data[y0 * stride..y1 * stride].fill(0);
     return;
   }
+  for row in y0..y1 {
+    let offset = row * stride;
+    data[offset + x0..offset + x1].fill(0);
+  }
+}
+
+fn clear_pixmap_rect_rgba(pixmap: &mut Pixmap, rect: ClipMaskDirtyRect) {
+  if rect.x0 >= rect.x1 || rect.y0 >= rect.y1 {
+    return;
+  }
+
+  let width = pixmap.width() as usize;
+  let stride = width * 4;
+  let data = pixmap.data_mut();
+  let x0 = rect.x0 as usize * 4;
+  let x1 = rect.x1 as usize * 4;
+  let y0 = rect.y0 as usize;
+  let y1 = rect.y1 as usize;
+
+  if x0 == 0 && x1 == stride {
+    data[y0 * stride..y1 * stride].fill(0);
+    return;
+  }
+
   for row in y0..y1 {
     let offset = row * stride;
     data[offset + x0..offset + x1].fill(0);
@@ -11712,6 +11794,11 @@ mod tests {
   use crate::style::types::ImageRendering;
   use crate::style::types::Isolation;
   use crate::style::types::MixBlendMode;
+  use crate::style::types::MaskClip;
+  use crate::style::types::MaskComposite;
+  use crate::style::types::MaskLayer;
+  use crate::style::types::MaskMode;
+  use crate::style::types::MaskOrigin;
   use crate::style::types::OutlineColor;
   use crate::style::types::OutlineStyle;
   use crate::style::types::Overflow;
@@ -15838,6 +15925,191 @@ mod tests {
     Some(Mask::from_pixmap(mask_pixmap.as_ref(), MaskType::Alpha))
   }
 
+  fn make_alpha_gradient_mask_layer(
+    clip: MaskClip,
+    composite: MaskComposite,
+    alpha_start: f32,
+    alpha_end: f32,
+  ) -> MaskLayer {
+    let mut layer = MaskLayer::default();
+    layer.clip = clip;
+    layer.composite = composite;
+    layer.repeat = BackgroundRepeat::no_repeat();
+    layer.mode = MaskMode::Alpha;
+    layer.origin = MaskOrigin::BorderBox;
+    layer.image = Some(BackgroundImage::LinearGradient {
+      angle: 0.0,
+      stops: vec![
+        ColorStop {
+          color: Color::Rgba(Rgba::new(0, 0, 0, alpha_start)),
+          position: Some(0.0),
+        },
+        ColorStop {
+          color: Color::Rgba(Rgba::new(0, 0, 0, alpha_end)),
+          position: Some(1.0),
+        },
+      ],
+    });
+    layer
+  }
+
+  fn render_mask_reference(
+    painter: &mut Painter,
+    style: &ComputedStyle,
+    css_bounds: Rect,
+    layer_bounds: Rect,
+    device_size: (u32, u32),
+  ) -> Option<Mask> {
+    let viewport = (painter.css_width, painter.css_height);
+    let rects = background_rects(
+      css_bounds.x(),
+      css_bounds.y(),
+      css_bounds.width(),
+      css_bounds.height(),
+      style,
+      Some(viewport),
+    );
+    let mut combined: Option<Mask> = None;
+    let canvas_clip = layer_bounds;
+
+    for layer in style.mask_layers.iter().rev() {
+      let Some(image) = &layer.image else { continue };
+
+      let origin_rect_css = match layer.origin {
+        MaskOrigin::BorderBox => rects.border,
+        MaskOrigin::PaddingBox => rects.padding,
+        MaskOrigin::ContentBox => rects.content,
+      };
+      let clip_rect_css = match layer.clip {
+        MaskClip::BorderBox => rects.border,
+        MaskClip::PaddingBox => rects.padding,
+        MaskClip::ContentBox | MaskClip::Text => rects.content,
+        MaskClip::NoClip => canvas_clip,
+      };
+      if origin_rect_css.width() <= 0.0
+        || origin_rect_css.height() <= 0.0
+        || clip_rect_css.width() <= 0.0
+        || clip_rect_css.height() <= 0.0
+      {
+        continue;
+      }
+
+      let mut dummy = BackgroundLayer::default();
+      dummy.size = layer.size;
+      let (mut tile_w, mut tile_h) = compute_background_size(
+        &dummy,
+        style.font_size,
+        style.root_font_size,
+        viewport,
+        origin_rect_css.width(),
+        origin_rect_css.height(),
+        0.0,
+        0.0,
+      );
+      if tile_w <= 0.0 || tile_h <= 0.0 {
+        continue;
+      }
+
+      let mut rounded_x = false;
+      let mut rounded_y = false;
+      if layer.repeat.x == BackgroundRepeatKeyword::Round {
+        tile_w = round_tile_length(origin_rect_css.width(), tile_w);
+        rounded_x = true;
+      }
+      if layer.repeat.y == BackgroundRepeatKeyword::Round {
+        tile_h = round_tile_length(origin_rect_css.height(), tile_h);
+        rounded_y = true;
+      }
+      if rounded_x ^ rounded_y
+        && matches!(
+          layer.size,
+          BackgroundSize::Explicit(BackgroundSizeComponent::Auto, BackgroundSizeComponent::Auto)
+        )
+      {
+        let aspect = 1.0;
+        if rounded_x {
+          tile_h = tile_w / aspect;
+        } else {
+          tile_w = tile_h * aspect;
+        }
+      }
+
+      let (offset_x, offset_y) = resolve_background_offset(
+        layer.position,
+        origin_rect_css.width(),
+        origin_rect_css.height(),
+        tile_w,
+        tile_h,
+        style.font_size,
+        style.root_font_size,
+        viewport,
+      );
+
+      let positions_x = tile_positions(
+        layer.repeat.x,
+        origin_rect_css.x(),
+        origin_rect_css.width(),
+        tile_w,
+        offset_x,
+        clip_rect_css.min_x(),
+        clip_rect_css.max_x(),
+      );
+      let positions_y = tile_positions(
+        layer.repeat.y,
+        origin_rect_css.y(),
+        origin_rect_css.height(),
+        tile_h,
+        offset_y,
+        clip_rect_css.min_y(),
+        clip_rect_css.max_y(),
+      );
+
+      let pixmap_w = tile_w.ceil().max(1.0) as u32;
+      let pixmap_h = tile_h.ceil().max(1.0) as u32;
+      let tile = match image {
+        BackgroundImage::LinearGradient { .. }
+        | BackgroundImage::RepeatingLinearGradient { .. }
+        | BackgroundImage::RadialGradient { .. }
+        | BackgroundImage::RepeatingRadialGradient { .. }
+        | BackgroundImage::ConicGradient { .. }
+        | BackgroundImage::RepeatingConicGradient { .. } => {
+          painter.render_generated_image(image, style, pixmap_w, pixmap_h)
+        }
+        BackgroundImage::Url(_) | BackgroundImage::None => None,
+      };
+      let Some(tile) = tile else { continue };
+      let Some(mask_tile) = mask_tile_from_image(&tile, layer.mode) else {
+        continue;
+      };
+
+      let mut mask_pixmap = new_pixmap(device_size.0, device_size.1)?;
+      for ty in positions_y.iter().copied() {
+        for tx in positions_x.iter().copied() {
+          paint_mask_tile(
+            &mut mask_pixmap,
+            &mask_tile,
+            tx,
+            ty,
+            tile_w,
+            tile_h,
+            clip_rect_css,
+            painter.origin_offset_css,
+            painter.scale,
+          );
+        }
+      }
+
+      let layer_mask = Mask::from_pixmap(mask_pixmap.as_ref(), MaskType::Alpha);
+      if let Some(dest) = combined.as_mut() {
+        apply_mask_composite(dest, &layer_mask, layer.composite);
+      } else {
+        combined = Some(layer_mask);
+      }
+    }
+
+    combined
+  }
+
   #[test]
   fn rounded_rect_mask_matches_reference() {
     let rect = Rect::from_xywh(1.0, 1.0, 8.0, 8.0);
@@ -15908,6 +16180,70 @@ mod tests {
       guard.scratch.mask.as_ref().expect("mask").data()[idx],
       123,
       "expected BackgroundClipMaskGuard to reuse the cached mask when clip parameters are unchanged"
+    );
+  }
+
+  #[test]
+  fn render_mask_matches_reference_for_multiple_layers() {
+    let mut style = ComputedStyle::default();
+    style.padding_top = Length::px(4.0);
+    style.padding_right = Length::px(4.0);
+    style.padding_bottom = Length::px(4.0);
+    style.padding_left = Length::px(4.0);
+    style.mask_layers = vec![
+      make_alpha_gradient_mask_layer(MaskClip::BorderBox, MaskComposite::Add, 0.0, 1.0),
+      make_alpha_gradient_mask_layer(MaskClip::ContentBox, MaskComposite::Add, 1.0, 0.0),
+    ];
+
+    let css_bounds = Rect::from_xywh(0.0, 0.0, 32.0, 32.0);
+    let layer_bounds = css_bounds;
+    let device_size = (64, 64);
+
+    let mut optimized_painter =
+      Painter::new(device_size.0, device_size.1, Rgba::WHITE).expect("painter");
+    let optimized =
+      optimized_painter.render_mask(&style, css_bounds, layer_bounds, device_size).expect("mask");
+
+    let mut reference_painter =
+      Painter::new(device_size.0, device_size.1, Rgba::WHITE).expect("painter");
+    let reference =
+      render_mask_reference(&mut reference_painter, &style, css_bounds, layer_bounds, device_size)
+        .expect("mask");
+
+    assert_eq!(optimized.data(), reference.data());
+  }
+
+  #[test]
+  fn render_mask_reuses_layer_pixmap_scratch_for_multiple_layers() {
+    MASK_LAYER_PIXMAP_SCRATCH.with(|cell| {
+      *cell.borrow_mut() = MaskLayerPixmapScratch::default();
+    });
+
+    let mut style = ComputedStyle::default();
+    style.mask_layers = vec![
+      make_alpha_gradient_mask_layer(MaskClip::BorderBox, MaskComposite::Add, 0.0, 1.0),
+      make_alpha_gradient_mask_layer(MaskClip::BorderBox, MaskComposite::Add, 1.0, 0.0),
+    ];
+
+    let css_bounds = Rect::from_xywh(0.0, 0.0, 32.0, 32.0);
+    let layer_bounds = css_bounds;
+    let device_size = (64, 64);
+
+    let mut painter =
+      Painter::new(device_size.0, device_size.1, Rgba::WHITE).expect("painter");
+    let recorder = NewPixmapAllocRecorder::start();
+    let _mask = painter
+      .render_mask(&style, css_bounds, layer_bounds, device_size)
+      .expect("mask");
+
+    let allocs = recorder.take();
+    let scratch_allocs = allocs
+      .iter()
+      .filter(|record| record.width == device_size.0 && record.height == device_size.1)
+      .count();
+    assert_eq!(
+      scratch_allocs, 1,
+      "expected render_mask to allocate its layer scratch pixmap once, got {scratch_allocs} allocations: {allocs:?}"
     );
   }
 
