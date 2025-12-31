@@ -143,6 +143,9 @@ pub struct TableStructure {
 
   /// Whether table uses fixed layout
   pub is_fixed_layout: bool,
+
+  /// Whether any column constraint depends on the table's percentage base (`percent_base`).
+  pub percent_sensitive: bool,
 }
 
 /// Information about a table column
@@ -1351,7 +1354,25 @@ impl TableStructure {
       border_spacing: (0.0, 0.0),
       border_collapse: BorderCollapse::Separate,
       is_fixed_layout: false,
+      percent_sensitive: false,
     }
+  }
+
+  fn style_has_percent_sensitive_column_constraints(style: &ComputedStyle) -> bool {
+    let length_is_percent = |len: &crate::style::values::Length| {
+      matches!(len.unit, LengthUnit::Percent | LengthUnit::Calc)
+    };
+    style.width.as_ref().map_or(false, |l| length_is_percent(l))
+      || style
+        .min_width
+        .as_ref()
+        .map_or(false, |l| length_is_percent(l))
+      || style
+        .max_width
+        .as_ref()
+        .map_or(false, |l| length_is_percent(l))
+      || length_is_percent(&style.padding_left)
+      || length_is_percent(&style.padding_right)
   }
 
   /// Builds table structure from a table box node
@@ -1371,6 +1392,8 @@ impl TableStructure {
   #[allow(clippy::cognitive_complexity)]
   pub fn from_box_tree(table_box: &BoxNode) -> Self {
     let mut structure = TableStructure::new();
+    let mut percent_sensitive =
+      Self::style_has_percent_sensitive_column_constraints(&table_box.style);
 
     // Extract border model and spacing from style (UA stylesheet can override)
     structure.border_collapse = table_box.style.border_collapse;
@@ -1404,7 +1427,7 @@ impl TableStructure {
     let mut footer_rows: Vec<usize> = Vec::new();
 
     // Collect all cells first
-    let mut cell_data: Vec<(usize, usize, usize, usize, usize)> = Vec::new(); // (source_row, col, rowspan, colspan, box_idx)
+    let mut cell_data: Vec<(usize, usize, usize, usize, usize, bool)> = Vec::new(); // (source_row, col, rowspan, colspan, box_idx, percent_sensitive)
 
     // Track explicit columns from <col>/<colgroup> to honor Tables spec that the number of columns
     // is the maximum of col elements and the actual grid.
@@ -1706,6 +1729,26 @@ impl TableStructure {
       }
     }
 
+    if !percent_sensitive {
+      let length_is_percent = |len: &crate::style::values::Length| {
+        matches!(len.unit, LengthUnit::Percent | LengthUnit::Calc)
+      };
+      if structure.columns.iter().any(|col| {
+        !matches!(col.visibility, Visibility::Collapse)
+          && (matches!(col.specified_width, Some(SpecifiedWidth::Percent(_)))
+            || col
+              .author_min_width
+              .as_ref()
+              .map_or(false, |l| length_is_percent(l))
+            || col
+              .author_max_width
+              .as_ref()
+              .map_or(false, |l| length_is_percent(l)))
+      }) {
+        percent_sensitive = true;
+      }
+    }
+
     // Initialize rows
     for i in 0..structure.row_count {
       let mut row = RowInfo::new(i);
@@ -1728,11 +1771,35 @@ impl TableStructure {
     structure.cells.reserve(cell_data.len());
 
     // Create cells and populate grid
-    for (idx, (source_row, col, rowspan, colspan, box_idx)) in cell_data.iter().enumerate() {
+    for (idx, (source_row, col, rowspan, colspan, box_idx, cell_percent_sensitive)) in
+      cell_data.iter().enumerate()
+    {
       let new_row = row_index_map
         .get(*source_row)
         .copied()
         .unwrap_or(*source_row);
+
+      if *cell_percent_sensitive && !percent_sensitive {
+        let row_visible = structure
+          .rows
+          .get(new_row)
+          .map(|row| !matches!(row.visibility, Visibility::Collapse))
+          .unwrap_or(false);
+        if row_visible {
+          let col_end = (*col + *colspan).min(structure.columns.len());
+          let start = (*col).min(col_end);
+          let mut has_visible_col = false;
+          for col in &structure.columns[start..col_end] {
+            if !matches!(col.visibility, Visibility::Collapse) {
+              has_visible_col = true;
+              break;
+            }
+          }
+          if has_visible_col {
+            percent_sensitive = true;
+          }
+        }
+      }
 
       let mut cell = CellInfo::new(idx, *source_row, *col);
       cell.row = new_row;
@@ -1751,6 +1818,8 @@ impl TableStructure {
 
       structure.cells.push(cell);
     }
+
+    structure.percent_sensitive = percent_sensitive;
 
     structure.apply_visibility_collapse()
   }
@@ -1795,6 +1864,7 @@ impl TableStructure {
       border_spacing: self.border_spacing,
       border_collapse: self.border_collapse,
       is_fixed_layout: self.is_fixed_layout,
+      percent_sensitive: self.percent_sensitive,
     };
 
     for (old_idx, mut col) in self.columns.into_iter().enumerate() {
@@ -1925,7 +1995,7 @@ impl TableStructure {
     row_span_remaining: &mut Vec<usize>,
     occupied: &mut Vec<bool>,
     max_cols: &mut usize,
-    cell_data: &mut Vec<(usize, usize, usize, usize, usize)>,
+    cell_data: &mut Vec<(usize, usize, usize, usize, usize, bool)>,
   ) {
     if occupied.len() < row_span_remaining.len() {
       occupied.resize(row_span_remaining.len(), false);
@@ -1949,6 +2019,8 @@ impl TableStructure {
         Self::get_table_element_type(cell_child),
         TableElementType::Cell
       ) {
+        let percent_sensitive =
+          Self::style_has_percent_sensitive_column_constraints(&cell_child.style);
         // Extract colspan and rowspan from debug info and normalize to at least 1.
         let (mut colspan, mut rowspan) = if let Some(ref debug_info) = cell_child.debug_info {
           (debug_info.colspan, debug_info.rowspan)
@@ -1976,7 +2048,14 @@ impl TableStructure {
           col_cursor += 1;
         };
 
-        cell_data.push((row_idx, start_col, rowspan, colspan, cell_idx));
+        cell_data.push((
+          row_idx,
+          start_col,
+          rowspan,
+          colspan,
+          cell_idx,
+          percent_sensitive,
+        ));
         *max_cols = (*max_cols).max(start_col + colspan);
 
         // Mark the covered columns as occupied for this row and future rows.
@@ -4025,61 +4104,7 @@ impl TableFormattingContext {
 
     let box_id = table_box.id();
     let epoch = intrinsic_cache_epoch();
-    let length_is_percent = |len: &crate::style::values::Length| {
-      matches!(len.unit, LengthUnit::Percent | LengthUnit::Calc)
-    };
-    let percent_sensitive = {
-      let style = &table_box.style;
-      if style.width.as_ref().map_or(false, |l| length_is_percent(l))
-        || style
-          .min_width
-          .as_ref()
-          .map_or(false, |l| length_is_percent(l))
-        || style
-          .max_width
-          .as_ref()
-          .map_or(false, |l| length_is_percent(l))
-        || length_is_percent(&style.padding_left)
-        || length_is_percent(&style.padding_right)
-      {
-        true
-      } else if structure.columns.iter().any(|col| {
-        matches!(col.specified_width, Some(SpecifiedWidth::Percent(_)))
-          || col
-            .author_min_width
-            .as_ref()
-            .map_or(false, |l| length_is_percent(l))
-          || col
-            .author_max_width
-            .as_ref()
-            .map_or(false, |l| length_is_percent(l))
-      }) {
-        true
-      } else {
-        let source_rows = collect_source_rows(table_box);
-        structure.cells.iter().any(|cell| {
-          source_rows
-            .get(cell.source_row)
-            .and_then(|row| row.children.get(cell.box_index))
-            .map(|cell_box| {
-              let style = &cell_box.style;
-              style.width.as_ref().map_or(false, |l| length_is_percent(l))
-                || style
-                  .min_width
-                  .as_ref()
-                  .map_or(false, |l| length_is_percent(l))
-                || style
-                  .max_width
-                  .as_ref()
-                  .map_or(false, |l| length_is_percent(l))
-                || length_is_percent(&style.padding_left)
-                || length_is_percent(&style.padding_right)
-            })
-            .unwrap_or(false)
-        })
-      }
-    };
-    let percent_bits = if percent_sensitive {
+    let percent_bits = if structure.percent_sensitive {
       percent_base_cache_key(percent_base)
     } else {
       None
@@ -6975,6 +7000,68 @@ mod tests {
     let structure = TableStructure::default();
     assert_eq!(structure.column_count, 0);
     assert!(!structure.is_fixed_layout);
+  }
+
+  #[test]
+  fn table_structure_percent_sensitive_true_with_percent_cell_padding() {
+    let mut table_style = ComputedStyle::default();
+    table_style.display = Display::Table;
+
+    let mut row_style = ComputedStyle::default();
+    row_style.display = Display::TableRow;
+
+    let mut cell_style = ComputedStyle::default();
+    cell_style.display = Display::TableCell;
+    cell_style.padding_left = Length::percent(10.0);
+
+    let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell],
+    );
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
+
+    let structure = TableStructure::from_box_tree(&table);
+    assert!(
+      structure.percent_sensitive,
+      "percent padding on a cell should make column constraints depend on percent_base"
+    );
+  }
+
+  #[test]
+  fn table_structure_percent_sensitive_false_with_absolute_lengths() {
+    let mut table_style = ComputedStyle::default();
+    table_style.display = Display::Table;
+
+    let mut row_style = ComputedStyle::default();
+    row_style.display = Display::TableRow;
+
+    let mut cell_style = ComputedStyle::default();
+    cell_style.display = Display::TableCell;
+    cell_style.padding_left = Length::px(10.0);
+
+    let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell],
+    );
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
+
+    let structure = TableStructure::from_box_tree(&table);
+    assert!(
+      !structure.percent_sensitive,
+      "tables with only absolute widths/padding should not include percent_base in the cache key"
+    );
   }
 
   #[test]
