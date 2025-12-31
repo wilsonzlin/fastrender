@@ -260,11 +260,11 @@ pub enum LayoutParallelModeArg {
 
 #[derive(Debug, Clone, Args)]
 pub struct LayoutParallelArgs {
-  /// Layout fan-out mode (off|on|auto)
+  /// Layout fan-out mode (off|on|auto). Defaults to `auto`.
   #[arg(
     long,
     value_enum,
-    default_value_t = LayoutParallelModeArg::Off,
+    default_value_t = LayoutParallelModeArg::Auto,
     default_missing_value = "on",
     num_args = 0..=1
   )]
@@ -286,7 +286,7 @@ pub struct LayoutParallelArgs {
 impl LayoutParallelArgs {
   pub fn parallelism(&self) -> Option<LayoutParallelism> {
     let mut parallelism = match self.layout_parallel {
-      LayoutParallelModeArg::Off => return None,
+      LayoutParallelModeArg::Off => LayoutParallelism::disabled(),
       LayoutParallelModeArg::On => LayoutParallelism::enabled(self.layout_parallel_min_fanout),
       LayoutParallelModeArg::Auto => LayoutParallelism::auto(self.layout_parallel_min_fanout),
     };

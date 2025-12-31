@@ -3370,7 +3370,9 @@ fn spawn_worker(
     cmd.arg("--allow-subresource-origin").arg(origin);
   }
   match args.layout_parallel.layout_parallel {
-    LayoutParallelModeArg::Off => {}
+    LayoutParallelModeArg::Off => {
+      cmd.arg("--layout-parallel").arg("off");
+    }
     LayoutParallelModeArg::On => {
       cmd.arg("--layout-parallel").arg("on");
     }

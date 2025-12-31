@@ -941,6 +941,10 @@ impl BlockFormattingContext {
     if delta_y == 0.0 {
       return;
     }
+    // `FragmentNode` positions are stored in the coordinate space of their parent
+    // fragment. Child bounds (and `scroll_overflow`) are expressed in the fragment's
+    // local coordinate space, so adjusting a block's placement within its parent
+    // should only translate the fragment root, not its descendants.
     fragment.bounds = Rect::new(
       Point::new(fragment.bounds.x(), fragment.bounds.y() + delta_y),
       fragment.bounds.size,
@@ -950,16 +954,6 @@ impl BlockFormattingContext {
         Point::new(logical.x(), logical.y() + delta_y),
         logical.size,
       ));
-    }
-    fragment.scroll_overflow = Rect::new(
-      Point::new(
-        fragment.scroll_overflow.x(),
-        fragment.scroll_overflow.y() + delta_y,
-      ),
-      fragment.scroll_overflow.size,
-    );
-    for child in fragment.children_mut() {
-      Self::translate_fragment_tree(child, delta_y);
     }
   }
 

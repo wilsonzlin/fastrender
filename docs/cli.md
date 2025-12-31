@@ -71,7 +71,7 @@ Pageset wrappers enable the disk-backed subresource cache by default, persisting
 - Optional outputs:
   - `--diagnostics-json` writes `fetches/renders/<page>.diagnostics.json` containing status, timing, and `RenderDiagnostics`.
   - `--dump-intermediate {summary|full}` emits per-page summaries or full JSON dumps of DOM/styled/box/fragment/display-list stages (use `--only-failures` to gate large artifacts on errors); `full` also writes a combined `fetches/renders/<page>.snapshot.json` pipeline snapshot.
-  - `--layout-parallel {on|auto}` enables rayon fan-out during layout; adjust `--layout-parallel-min-fanout`, `--layout-parallel-auto-min-nodes`, and `--layout-parallel-max-threads` to control when/how many worker threads are used. This helps on very large DOMs with wide sibling fan-out; defaults stay serial to preserve baseline timings.
+- Layout fan-out defaults to `auto` (only engages once the box tree is large enough and has sufficient independent sibling work); use `--layout-parallel off` to force serial layout, `--layout-parallel on` to force fan-out, or tune thresholds with `--layout-parallel-min-fanout`, `--layout-parallel-auto-min-nodes`, and `--layout-parallel-max-threads`.
 
 ## `fetch_and_render`
 
@@ -79,7 +79,7 @@ Pageset wrappers enable the disk-backed subresource cache by default, persisting
 - Entry: `src/bin/fetch_and_render.rs`
 - Run: `cargo run --release --bin fetch_and_render -- --help`
 - Security defaults mirror the library: `file://` subresources are blocked for HTTP(S) documents. Use `--allow-file-from-http` to override during local testing, `--block-mixed-content` to forbid HTTP under HTTPS, and `--same-origin-subresources` (plus optional `--allow-subresource-origin`) to block cross-origin CSS/images/fonts when rendering untrusted pages.
-- Performance: pass `--layout-parallel {on|auto}` (with optional `--layout-parallel-min-fanout` / `--layout-parallel-auto-min-nodes` / `--layout-parallel-max-threads`) to fan out layout across rayon threads on very large, independent subtrees. Default is off to match serial layout behavior.
+- Performance: layout fan-out defaults to `auto` (with optional `--layout-parallel-min-fanout` / `--layout-parallel-auto-min-nodes` / `--layout-parallel-max-threads`). Use `--layout-parallel off` to force serial layout or `--layout-parallel on` to force fan-out when chasing wall-time regressions on wide pages.
 
 ## `bundle_page`
 
@@ -179,4 +179,4 @@ Pageset wrappers enable the disk-backed subresource cache by default, persisting
   - `target/pageset/logs/<stem>.stderr.log` — worker stdout/stderr, including panic
     backtraces and a note if the parent kills the process on timeout (not committed)
   - Optional traces: `--trace-failures` / `--trace-slow-ms <ms>` rerun targeted pages with Chrome tracing enabled; tune trace rerun budgets with `--trace-timeout` (defaults to `timeout * 2`), `--trace-soft-timeout-ms`, and `--trace-jobs` (defaults to 1 to avoid contention). Traces land in `target/pageset/traces/<stem>.json` with rerun progress under `target/pageset/trace-progress/<stem>.json` and logs at `target/pageset/logs/<stem>.trace.log`.
-  - Workers accept `--layout-parallel {on|auto}` (plus `--layout-parallel-min-fanout` / `--layout-parallel-auto-min-nodes` / `--layout-parallel-max-threads`) to fan out layout on wide DOMs when chasing wall-time regressions; defaults remain serial.
+  - Workers accept `--layout-parallel {off|on|auto}` (plus `--layout-parallel-min-fanout` / `--layout-parallel-auto-min-nodes` / `--layout-parallel-max-threads`). The default is `auto`, so small pages stay serial while large pages can fan out across Rayon threads.

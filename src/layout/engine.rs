@@ -46,7 +46,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 /// Default minimum sibling fan-out before spawning layout tasks.
 pub const DEFAULT_LAYOUT_MIN_FANOUT: usize = 8;
 /// Minimum box tree size before auto parallelism engages.
-pub const DEFAULT_LAYOUT_AUTO_MIN_NODES: usize = 512;
+pub const DEFAULT_LAYOUT_AUTO_MIN_NODES: usize = 1024;
 
 /// Summary of layout fan-out opportunities for a box tree.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -100,7 +100,7 @@ pub enum LayoutParallelismMode {
 
 impl Default for LayoutParallelismMode {
   fn default() -> Self {
-    LayoutParallelismMode::Disabled
+    LayoutParallelismMode::Auto
   }
 }
 
@@ -233,7 +233,7 @@ impl LayoutParallelism {
 
 impl Default for LayoutParallelism {
   fn default() -> Self {
-    LayoutParallelism::disabled()
+    LayoutParallelism::auto(DEFAULT_LAYOUT_MIN_FANOUT)
   }
 }
 
@@ -337,7 +337,7 @@ pub struct LayoutConfig {
   /// Optional identifier for profiling/logging (e.g., page name)
   pub name: Option<String>,
 
-  /// Parallel layout configuration (off by default).
+  /// Parallel layout configuration (auto by default).
   pub parallelism: LayoutParallelism,
 }
 
