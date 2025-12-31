@@ -110,7 +110,8 @@ pub fn resolve_page_style(
   matching.sort_by(|a, b| {
     a.0
       .layer_order
-      .cmp(&b.0.layer_order)
+      .as_ref()
+      .cmp(b.0.layer_order.as_ref())
       .then(a.1.cmp(&b.1))
       .then(a.0.order.cmp(&b.0.order))
   });

@@ -23,6 +23,7 @@ use cssparser::ToCss;
 use cssparser::Token;
 use selectors::parser::SelectorList;
 use std::fmt;
+use std::sync::{Arc, OnceLock};
 
 // ============================================================================
 // CSS Parse Errors
@@ -207,7 +208,7 @@ impl precomputed_hash::PrecomputedHash for CssString {
 pub struct CollectedRule<'a> {
   pub rule: &'a StyleRule,
   /// Cascade layer order (lexicographic; unlayered rules use a sentinel of u32::MAX).
-  pub layer_order: Vec<u32>,
+  pub layer_order: Arc<[u32]>,
   /// Whether this rule originated inside an @starting-style block.
   pub starting_style: bool,
   /// Container query conditions that must match at cascade time.
@@ -220,7 +221,7 @@ pub struct CollectedRule<'a> {
 #[derive(Debug, Clone)]
 pub struct CollectedPageRule<'a> {
   pub rule: &'a PageRule,
-  pub layer_order: Vec<u32>,
+  pub layer_order: Arc<[u32]>,
   pub order: usize,
 }
 
@@ -229,7 +230,7 @@ pub struct CollectedPageRule<'a> {
 pub struct CollectedCounterStyleRule<'a> {
   pub rule: &'a CounterStyleRule,
   /// Cascade layer order (lexicographic; unlayered rules use a sentinel of u32::MAX).
-  pub layer_order: Vec<u32>,
+  pub layer_order: Arc<[u32]>,
   pub order: usize,
 }
 
@@ -237,7 +238,7 @@ pub struct CollectedCounterStyleRule<'a> {
 #[derive(Debug, Clone)]
 pub struct CollectedFontPaletteRule<'a> {
   pub rule: &'a FontPaletteValuesRule,
-  pub layer_order: Vec<u32>,
+  pub layer_order: Arc<[u32]>,
   pub order: usize,
 }
 
@@ -246,8 +247,23 @@ pub struct CollectedFontPaletteRule<'a> {
 pub struct CollectedPropertyRule<'a> {
   pub rule: &'a PropertyRule,
   /// Cascade layer order (lexicographic; unlayered rules use a sentinel of u32::MAX).
-  pub layer_order: Vec<u32>,
+  pub layer_order: Arc<[u32]>,
   pub order: usize,
+}
+
+static UNLAYERED_LAYER_ORDER: OnceLock<Arc<[u32]>> = OnceLock::new();
+static EMPTY_LAYER_PATH: OnceLock<Arc<[u32]>> = OnceLock::new();
+
+fn unlayered_layer_order() -> Arc<[u32]> {
+  UNLAYERED_LAYER_ORDER
+    .get_or_init(|| Arc::from([u32::MAX].as_slice()))
+    .clone()
+}
+
+fn empty_layer_path() -> Arc<[u32]> {
+  EMPTY_LAYER_PATH
+    .get_or_init(|| Arc::from(Vec::<u32>::new()))
+    .clone()
 }
 
 /// Stylesheet containing CSS rules
@@ -359,12 +375,13 @@ impl StyleSheet {
   ) -> Vec<CollectedRule<'_>> {
     let mut result = Vec::new();
     let mut registry = LayerRegistry::new();
+    let empty_layer = empty_layer_path();
     collect_rules_recursive(
       &self.rules,
       media_ctx,
       cache,
       &mut registry,
-      &[],
+      &empty_layer,
       &[],
       &[],
       false,
@@ -392,12 +409,13 @@ impl StyleSheet {
     }
     let mut result = Vec::new();
     let mut registry = LayerRegistry::new();
+    let empty_layer = empty_layer_path();
     collect_page_rules_recursive(
       &self.rules,
       media_ctx,
       cache,
       &mut registry,
-      &[],
+      &empty_layer,
       &mut result,
     );
     result
@@ -451,12 +469,13 @@ impl StyleSheet {
   ) -> Vec<CollectedCounterStyleRule<'_>> {
     let mut result = Vec::new();
     let mut registry = LayerRegistry::new();
+    let empty_layer = empty_layer_path();
     collect_counter_styles_recursive(
       &self.rules,
       media_ctx,
       cache,
       &mut registry,
-      &[],
+      &empty_layer,
       &mut result,
     );
     result
@@ -478,12 +497,13 @@ impl StyleSheet {
   ) -> Vec<CollectedFontPaletteRule<'_>> {
     let mut result = Vec::new();
     let mut registry = LayerRegistry::new();
+    let empty_layer = empty_layer_path();
     collect_font_palette_rules_recursive(
       &self.rules,
       media_ctx,
       cache,
       &mut registry,
-      &[],
+      &empty_layer,
       &mut result,
     );
     result
@@ -502,12 +522,13 @@ impl StyleSheet {
   ) -> Vec<CollectedPropertyRule<'_>> {
     let mut result = Vec::new();
     let mut registry = LayerRegistry::new();
+    let empty_layer = empty_layer_path();
     collect_property_rules_recursive(
       &self.rules,
       media_ctx,
       cache,
       &mut registry,
-      &[],
+      &empty_layer,
       &mut result,
     );
     result
@@ -659,7 +680,7 @@ fn collect_rules_recursive<'a>(
   media_ctx: &MediaContext,
   cache: Option<&mut MediaQueryCache>,
   registry: &mut LayerRegistry,
-  current_layer: &[u32],
+  current_layer: &Arc<[u32]>,
   container_conditions: &[ContainerCondition],
   current_scopes: &[ScopeContext<'a>],
   in_starting_style: bool,
@@ -672,9 +693,9 @@ fn collect_rules_recursive<'a>(
     match rule {
       CssRule::Style(style_rule) => {
         let layer_order = if current_layer.is_empty() {
-          vec![u32::MAX]
+          unlayered_layer_order()
         } else {
-          current_layer.to_vec()
+          Arc::clone(current_layer)
         };
         out.push(CollectedRule {
           rule: style_rule,
@@ -757,16 +778,16 @@ fn collect_rules_recursive<'a>(
       CssRule::Layer(layer_rule) => {
         if layer_rule.rules.is_empty() {
           for name in &layer_rule.names {
-            registry.ensure_path(current_layer, name);
+            let _ = registry.ensure_path(current_layer.as_ref(), name);
           }
           if layer_rule.anonymous {
-            registry.ensure_anonymous(current_layer);
+            let _ = registry.ensure_anonymous(current_layer.as_ref());
           }
           continue;
         }
 
         if layer_rule.anonymous {
-          let path = registry.ensure_anonymous(current_layer);
+          let path = registry.ensure_anonymous(current_layer.as_ref());
           collect_rules_recursive(
             &layer_rule.rules,
             media_ctx,
@@ -785,7 +806,7 @@ fn collect_rules_recursive<'a>(
           // Invalid layer block; skip the rules.
           continue;
         }
-        let path = registry.ensure_path(current_layer, &layer_rule.names[0]);
+        let path = registry.ensure_path(current_layer.as_ref(), &layer_rule.names[0]);
         collect_rules_recursive(
           &layer_rule.rules,
           media_ctx,
@@ -841,7 +862,7 @@ fn collect_page_rules_recursive<'a>(
   media_ctx: &MediaContext,
   cache: Option<&mut MediaQueryCache>,
   registry: &mut LayerRegistry,
-  current_layer: &[u32],
+  current_layer: &Arc<[u32]>,
   out: &mut Vec<CollectedPageRule<'a>>,
 ) {
   let mut cache = cache;
@@ -849,9 +870,9 @@ fn collect_page_rules_recursive<'a>(
     match rule {
       CssRule::Page(page_rule) => {
         let layer_order = if current_layer.is_empty() {
-          vec![u32::MAX]
+          unlayered_layer_order()
         } else {
-          current_layer.to_vec()
+          Arc::clone(current_layer)
         };
         let order = out.len();
         out.push(CollectedPageRule {
@@ -887,16 +908,16 @@ fn collect_page_rules_recursive<'a>(
       CssRule::Layer(layer_rule) => {
         if layer_rule.rules.is_empty() {
           for name in &layer_rule.names {
-            registry.ensure_path(current_layer, name);
+            let _ = registry.ensure_path(current_layer.as_ref(), name);
           }
           if layer_rule.anonymous {
-            registry.ensure_anonymous(current_layer);
+            let _ = registry.ensure_anonymous(current_layer.as_ref());
           }
           continue;
         }
 
         if layer_rule.anonymous {
-          let path = registry.ensure_anonymous(current_layer);
+          let path = registry.ensure_anonymous(current_layer.as_ref());
           collect_page_rules_recursive(
             &layer_rule.rules,
             media_ctx,
@@ -912,7 +933,7 @@ fn collect_page_rules_recursive<'a>(
           continue;
         }
 
-        let path = registry.ensure_path(current_layer, &layer_rule.names[0]);
+        let path = registry.ensure_path(current_layer.as_ref(), &layer_rule.names[0]);
         collect_page_rules_recursive(
           &layer_rule.rules,
           media_ctx,
@@ -1051,7 +1072,7 @@ fn collect_counter_styles_recursive<'a>(
   media_ctx: &MediaContext,
   cache: Option<&mut MediaQueryCache>,
   registry: &mut LayerRegistry,
-  current_layer: &[u32],
+  current_layer: &Arc<[u32]>,
   out: &mut Vec<CollectedCounterStyleRule<'a>>,
 ) {
   let mut cache = cache;
@@ -1059,9 +1080,9 @@ fn collect_counter_styles_recursive<'a>(
     match rule {
       CssRule::CounterStyle(counter) => {
         let layer_order = if current_layer.is_empty() {
-          vec![u32::MAX]
+          unlayered_layer_order()
         } else {
-          current_layer.to_vec()
+          Arc::clone(current_layer)
         };
         let order = out.len();
         out.push(CollectedCounterStyleRule {
@@ -1097,16 +1118,16 @@ fn collect_counter_styles_recursive<'a>(
       CssRule::Layer(layer_rule) => {
         if layer_rule.rules.is_empty() {
           for name in &layer_rule.names {
-            registry.ensure_path(current_layer, name);
+            let _ = registry.ensure_path(current_layer.as_ref(), name);
           }
           if layer_rule.anonymous {
-            registry.ensure_anonymous(current_layer);
+            let _ = registry.ensure_anonymous(current_layer.as_ref());
           }
           continue;
         }
 
         if layer_rule.anonymous {
-          let path = registry.ensure_anonymous(current_layer);
+          let path = registry.ensure_anonymous(current_layer.as_ref());
           collect_counter_styles_recursive(
             &layer_rule.rules,
             media_ctx,
@@ -1121,7 +1142,7 @@ fn collect_counter_styles_recursive<'a>(
         if layer_rule.names.len() != 1 {
           continue;
         }
-        let path = registry.ensure_path(current_layer, &layer_rule.names[0]);
+        let path = registry.ensure_path(current_layer.as_ref(), &layer_rule.names[0]);
         collect_counter_styles_recursive(
           &layer_rule.rules,
           media_ctx,
@@ -1188,7 +1209,7 @@ fn collect_font_palette_rules_recursive<'a>(
   media_ctx: &MediaContext,
   cache: Option<&mut MediaQueryCache>,
   registry: &mut LayerRegistry,
-  current_layer: &[u32],
+  current_layer: &Arc<[u32]>,
   out: &mut Vec<CollectedFontPaletteRule<'a>>,
 ) {
   let mut cache = cache;
@@ -1196,9 +1217,9 @@ fn collect_font_palette_rules_recursive<'a>(
     match rule {
       CssRule::FontPaletteValues(palette) => {
         let layer_order = if current_layer.is_empty() {
-          vec![u32::MAX]
+          unlayered_layer_order()
         } else {
-          current_layer.to_vec()
+          Arc::clone(current_layer)
         };
         let order = out.len();
         out.push(CollectedFontPaletteRule {
@@ -1234,16 +1255,16 @@ fn collect_font_palette_rules_recursive<'a>(
       CssRule::Layer(layer_rule) => {
         if layer_rule.rules.is_empty() {
           for name in &layer_rule.names {
-            registry.ensure_path(current_layer, name);
+            let _ = registry.ensure_path(current_layer.as_ref(), name);
           }
           if layer_rule.anonymous {
-            registry.ensure_anonymous(current_layer);
+            let _ = registry.ensure_anonymous(current_layer.as_ref());
           }
           continue;
         }
 
         if layer_rule.anonymous {
-          let path = registry.ensure_anonymous(current_layer);
+          let path = registry.ensure_anonymous(current_layer.as_ref());
           collect_font_palette_rules_recursive(
             &layer_rule.rules,
             media_ctx,
@@ -1258,7 +1279,7 @@ fn collect_font_palette_rules_recursive<'a>(
         if layer_rule.names.len() != 1 {
           continue;
         }
-        let path = registry.ensure_path(current_layer, &layer_rule.names[0]);
+        let path = registry.ensure_path(current_layer.as_ref(), &layer_rule.names[0]);
         collect_font_palette_rules_recursive(
           &layer_rule.rules,
           media_ctx,
@@ -1322,7 +1343,7 @@ fn collect_property_rules_recursive<'a>(
   media_ctx: &MediaContext,
   cache: Option<&mut MediaQueryCache>,
   registry: &mut LayerRegistry,
-  current_layer: &[u32],
+  current_layer: &Arc<[u32]>,
   out: &mut Vec<CollectedPropertyRule<'a>>,
 ) {
   let mut cache = cache;
@@ -1330,9 +1351,9 @@ fn collect_property_rules_recursive<'a>(
     match rule {
       CssRule::Property(property) => {
         let layer_order = if current_layer.is_empty() {
-          vec![u32::MAX]
+          unlayered_layer_order()
         } else {
-          current_layer.to_vec()
+          Arc::clone(current_layer)
         };
         let order = out.len();
         out.push(CollectedPropertyRule {
@@ -1368,16 +1389,16 @@ fn collect_property_rules_recursive<'a>(
       CssRule::Layer(layer_rule) => {
         if layer_rule.rules.is_empty() {
           for name in &layer_rule.names {
-            registry.ensure_path(current_layer, name);
+            let _ = registry.ensure_path(current_layer.as_ref(), name);
           }
           if layer_rule.anonymous {
-            registry.ensure_anonymous(current_layer);
+            let _ = registry.ensure_anonymous(current_layer.as_ref());
           }
           continue;
         }
 
         if layer_rule.anonymous {
-          let path = registry.ensure_anonymous(current_layer);
+          let path = registry.ensure_anonymous(current_layer.as_ref());
           collect_property_rules_recursive(
             &layer_rule.rules,
             media_ctx,
@@ -1392,7 +1413,7 @@ fn collect_property_rules_recursive<'a>(
         if layer_rule.names.len() != 1 {
           continue;
         }
-        let path = registry.ensure_path(current_layer, &layer_rule.names[0]);
+        let path = registry.ensure_path(current_layer.as_ref(), &layer_rule.names[0]);
         collect_property_rules_recursive(
           &layer_rule.rules,
           media_ctx,
@@ -2311,7 +2332,7 @@ impl LayerRegistry {
     Self::default()
   }
 
-  fn ensure_path(&mut self, base: &[u32], name: &[String]) -> Vec<u32> {
+  fn ensure_path(&mut self, base: &[u32], name: &[String]) -> Arc<[u32]> {
     let mut path = base.to_vec();
     let mut node: &mut LayerNode = if let Some(existing) = self.get_node_mut(base) {
       existing
@@ -2323,10 +2344,10 @@ impl LayerRegistry {
       path.push(order);
       node = next;
     }
-    path
+    Arc::from(path)
   }
 
-  fn ensure_anonymous(&mut self, base: &[u32]) -> Vec<u32> {
+  fn ensure_anonymous(&mut self, base: &[u32]) -> Arc<[u32]> {
     let name = format!("__anon{}", self.next_anonymous);
     self.next_anonymous += 1;
     self.ensure_path(base, &[name])

@@ -4228,7 +4228,8 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
         origin: StyleOrigin::UserAgent,
         order,
         rule: rule.rule,
-        layer_order: layer_order_interner.intern_prefixed(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
+        layer_order: layer_order_interner
+          .intern_prefixed(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope_signature: ScopeSignature::compute(&rule.scopes),
@@ -4247,7 +4248,8 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
         origin: StyleOrigin::Author,
         order: document_order_base + idx,
         rule: rule.rule,
-        layer_order: layer_order_interner.intern_prefixed(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
+        layer_order: layer_order_interner
+          .intern_prefixed(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope_signature: ScopeSignature::compute(&rule.scopes),
@@ -4278,8 +4280,10 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
         origin: StyleOrigin::Author,
         order: shadow_order_base + idx,
         rule: rule.rule,
-        layer_order: layer_order_interner
-          .intern_prefixed(&rule.layer_order, shadow_tree_scope_prefix(*shadow_root_id)),
+        layer_order: layer_order_interner.intern_prefixed(
+          rule.layer_order.as_ref(),
+          shadow_tree_scope_prefix(*shadow_root_id),
+        ),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope_signature: ScopeSignature::compute(&rule.scopes),
@@ -4339,7 +4343,8 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
     ) {
       collected.sort_by(|a, b| {
         a.layer_order
-          .cmp(&b.layer_order)
+          .as_ref()
+          .cmp(b.layer_order.as_ref())
           .then(a.order.cmp(&b.order))
       });
       for rule in collected {
@@ -4383,7 +4388,8 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
     ) {
       collected.sort_by(|a, b| {
         a.layer_order
-          .cmp(&b.layer_order)
+          .as_ref()
+          .cmp(b.layer_order.as_ref())
           .then(a.order.cmp(&b.order))
       });
       for rule in collected {
@@ -4415,7 +4421,8 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
     ) {
       collected.sort_by(|a, b| {
         a.layer_order
-          .cmp(&b.layer_order)
+          .as_ref()
+          .cmp(b.layer_order.as_ref())
           .then(a.order.cmp(&b.order))
       });
       for rule in collected {
@@ -4694,7 +4701,7 @@ impl<'a> PreparedCascade<'a> {
           order,
           rule: rule.rule,
           layer_order: layer_order_interner
-            .intern_prefixed(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
+            .intern_prefixed(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
           container_conditions: rule.container_conditions.clone(),
           scopes: rule.scopes.clone(),
           scope_signature: ScopeSignature::compute(&rule.scopes),
@@ -4714,7 +4721,7 @@ impl<'a> PreparedCascade<'a> {
           order: document_order_base + idx,
           rule: rule.rule,
           layer_order: layer_order_interner
-            .intern_prefixed(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
+            .intern_prefixed(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
           container_conditions: rule.container_conditions.clone(),
           scopes: rule.scopes.clone(),
           scope_signature: ScopeSignature::compute(&rule.scopes),
@@ -4751,7 +4758,7 @@ impl<'a> PreparedCascade<'a> {
           order: shadow_order_base + idx,
           rule: rule.rule,
           layer_order: layer_order_interner.intern_prefixed(
-            &rule.layer_order,
+            rule.layer_order.as_ref(),
             shadow_tree_scope_prefix(shadow_root_id),
           ),
           container_conditions: rule.container_conditions.clone(),
@@ -4809,7 +4816,8 @@ impl<'a> PreparedCascade<'a> {
       ) {
         collected.sort_by(|a, b| {
           a.layer_order
-            .cmp(&b.layer_order)
+            .as_ref()
+            .cmp(b.layer_order.as_ref())
             .then(a.order.cmp(&b.order))
         });
         for rule in collected {
@@ -4853,7 +4861,8 @@ impl<'a> PreparedCascade<'a> {
       ) {
         collected.sort_by(|a, b| {
           a.layer_order
-            .cmp(&b.layer_order)
+            .as_ref()
+            .cmp(b.layer_order.as_ref())
             .then(a.order.cmp(&b.order))
         });
         for rule in collected {
@@ -4886,7 +4895,8 @@ impl<'a> PreparedCascade<'a> {
       ) {
         collected.sort_by(|a, b| {
           a.layer_order
-            .cmp(&b.layer_order)
+            .as_ref()
+            .cmp(b.layer_order.as_ref())
             .then(a.order.cmp(&b.order))
         });
         for rule in collected {
@@ -7841,7 +7851,7 @@ mod tests {
         origin: StyleOrigin::Author,
         order,
         rule: rule.rule,
-        layer_order: layer_order_with_tree_scope(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
+        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope_signature: ScopeSignature::compute(&rule.scopes),
@@ -7879,7 +7889,7 @@ mod tests {
         origin: StyleOrigin::Author,
         order,
         rule: rule.rule,
-        layer_order: layer_order_with_tree_scope(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
+        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope_signature: ScopeSignature::compute(&rule.scopes),
@@ -7968,7 +7978,7 @@ mod tests {
         origin: StyleOrigin::Author,
         order,
         rule: rule.rule,
-        layer_order: layer_order_with_tree_scope(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
+        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope_signature: ScopeSignature::compute(&rule.scopes),
@@ -7994,7 +8004,7 @@ mod tests {
         origin: StyleOrigin::Author,
         order,
         rule: rule.rule,
-        layer_order: layer_order_with_tree_scope(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
+        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope_signature: ScopeSignature::compute(&rule.scopes),
@@ -8212,7 +8222,7 @@ mod tests {
         origin: StyleOrigin::Author,
         order,
         rule: rule.rule,
-        layer_order: layer_order_with_tree_scope(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
+        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope_signature: ScopeSignature::compute(&rule.scopes),
@@ -8280,7 +8290,7 @@ mod tests {
         origin: StyleOrigin::Author,
         order,
         rule: rule.rule,
-        layer_order: layer_order_with_tree_scope(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
+        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope_signature: ScopeSignature::compute(&rule.scopes),
@@ -8583,7 +8593,7 @@ mod tests {
         origin: StyleOrigin::Author,
         order,
         rule: rule.rule,
-        layer_order: layer_order_with_tree_scope(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
+        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope_signature: ScopeSignature::compute(&rule.scopes),
@@ -8647,7 +8657,7 @@ mod tests {
         origin: StyleOrigin::Author,
         order,
         rule: rule.rule,
-        layer_order: layer_order_with_tree_scope(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
+        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope_signature: ScopeSignature::compute(&rule.scopes),
@@ -8711,7 +8721,7 @@ mod tests {
         origin: StyleOrigin::Author,
         order,
         rule: rule.rule,
-        layer_order: layer_order_with_tree_scope(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
+        layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope_signature: ScopeSignature::compute(&rule.scopes),
@@ -13240,7 +13250,7 @@ slot[name=\"s\"]::slotted(.assigned) { color: rgb(4, 5, 6); }"
           origin: StyleOrigin::Author,
           order,
           rule: rule.rule,
-          layer_order: layer_order_with_tree_scope(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
+          layer_order: layer_order_with_tree_scope(rule.layer_order.as_ref(), DOCUMENT_TREE_SCOPE_PREFIX),
           container_conditions: rule.container_conditions.clone(),
           scopes,
           scope_signature,
