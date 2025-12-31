@@ -84,7 +84,7 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 fn check_layout_deadline(counter: &mut usize) -> Result<(), LayoutError> {
   if let Err(RenderError::Timeout { elapsed, .. }) =
@@ -3823,40 +3823,23 @@ pub(crate) struct TableLayoutStats {
   pub(crate) cell_layouts: usize,
 }
 
-static TABLE_STATS_ENABLED: OnceLock<bool> = OnceLock::new();
 static TABLE_CELL_INTRINSIC_MEASUREMENTS: AtomicUsize = AtomicUsize::new(0);
 static TABLE_CELL_LAYOUTS: AtomicUsize = AtomicUsize::new(0);
 
-fn table_stats_enabled() -> bool {
-  *TABLE_STATS_ENABLED.get_or_init(|| runtime::runtime_toggles().truthy("FASTR_TABLE_STATS"))
-}
-
 fn record_table_cell_intrinsic_measurement() {
-  if !table_stats_enabled() {
-    return;
-  }
   TABLE_CELL_INTRINSIC_MEASUREMENTS.fetch_add(1, Ordering::Relaxed);
 }
 
 fn record_table_cell_layout() {
-  if !table_stats_enabled() {
-    return;
-  }
   TABLE_CELL_LAYOUTS.fetch_add(1, Ordering::Relaxed);
 }
 
 pub(crate) fn reset_table_stats_counters() {
-  if !table_stats_enabled() {
-    return;
-  }
   TABLE_CELL_INTRINSIC_MEASUREMENTS.store(0, Ordering::Relaxed);
   TABLE_CELL_LAYOUTS.store(0, Ordering::Relaxed);
 }
 
 pub(crate) fn table_stats_counters() -> TableLayoutStats {
-  if !table_stats_enabled() {
-    return TableLayoutStats::default();
-  }
   TableLayoutStats {
     cell_intrinsic_measurements: TABLE_CELL_INTRINSIC_MEASUREMENTS.load(Ordering::Relaxed),
     cell_layouts: TABLE_CELL_LAYOUTS.load(Ordering::Relaxed),
@@ -3864,7 +3847,7 @@ pub(crate) fn table_stats_counters() -> TableLayoutStats {
 }
 
 pub(crate) fn log_table_stats() {
-  if !table_stats_enabled() {
+  if !runtime::runtime_toggles().truthy("FASTR_TABLE_STATS") {
     return;
   }
   let stats = table_stats_counters();
