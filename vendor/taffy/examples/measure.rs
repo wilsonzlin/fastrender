@@ -80,8 +80,8 @@ fn main() -> Result<(), taffy::TaffyError> {
   taffy.compute_layout_with_measure(
     root,
     Size::MAX_CONTENT,
-    // Note: the measure function must be `'static`, so capture any external context using `move`.
-    // For example, you may wish to capture a global font registry and pass it into your text measuring function.
+    // Note: the measure function is moved into the layout pass. Use `move` if you want to capture
+    // external context by value (for example, a font registry used by your text measuring function).
     move |known_dimensions, available_space, _node_id, node_context, _style| {
       measure_function(
         known_dimensions,
