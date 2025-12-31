@@ -397,20 +397,18 @@ fn attach_styled_id(mut node: BoxNode, styled: &StyledNode) -> BoxNode {
 }
 
 fn push_escaped_text(out: &mut String, value: &str) {
+  let bytes = value.as_bytes();
   let mut last = 0usize;
-  for (idx, b) in value.as_bytes().iter().enumerate() {
-    let replacement = match b {
-      b'&' => Some("&amp;"),
-      b'<' => Some("&lt;"),
-      _ => None,
-    };
-    let Some(replacement) = replacement else {
-      continue;
-    };
+  while let Some(rel_idx) = memchr::memchr2(b'&', b'<', &bytes[last..]) {
+    let idx = last + rel_idx;
     if last < idx {
       out.push_str(&value[last..idx]);
     }
-    out.push_str(replacement);
+    match bytes[idx] {
+      b'&' => out.push_str("&amp;"),
+      b'<' => out.push_str("&lt;"),
+      _ => unreachable!("memchr2 returned non-matching byte"),
+    }
     last = idx + 1;
   }
   if last < value.len() {
@@ -419,22 +417,19 @@ fn push_escaped_text(out: &mut String, value: &str) {
 }
 
 fn push_escaped_attr(out: &mut String, value: &str) {
+  let bytes = value.as_bytes();
   let mut last = 0usize;
-  for (idx, b) in value.as_bytes().iter().enumerate() {
-    let replacement = match b {
-      b'&' => Some("&amp;"),
-      b'<' => Some("&lt;"),
-      b'"' => Some("&quot;"),
-      b'\'' => Some("&apos;"),
-      _ => None,
-    };
-    let Some(replacement) = replacement else {
-      continue;
-    };
+  while let Some(rel_idx) = memchr::memchr3(b'&', b'<', b'"', &bytes[last..]) {
+    let idx = last + rel_idx;
     if last < idx {
       out.push_str(&value[last..idx]);
     }
-    out.push_str(replacement);
+    match bytes[idx] {
+      b'&' => out.push_str("&amp;"),
+      b'<' => out.push_str("&lt;"),
+      b'"' => out.push_str("&quot;"),
+      _ => unreachable!("memchr3 returned non-matching byte"),
+    }
     last = idx + 1;
   }
   if last < value.len() {
