@@ -10,6 +10,15 @@ Pageset wrappers (`cargo xtask pageset`, `scripts/pageset.sh`, and the profiling
 
 The rendering pipeline parses the environment once into a typed [`RuntimeToggles`](../src/debug/runtime.rs) structure. Library callers can override these values without mutating the process environment by constructing a `RuntimeToggles` instance and supplying it via `FastRender::builder().runtime_toggles(...)` or `RenderOptions::with_runtime_toggles(...)`.
 
+## Pageset disk cache tuning
+
+These are parsed by the pageset CLI binaries (`render_pages`, `pageset_progress`, `fetch_and_render`) and wire into `DiskCacheConfig` when built with the `disk_cache` cargo feature.
+
+- `FASTR_DISK_CACHE_MAX_BYTES=<bytes>` – on-disk subresource cache size limit (0 disables eviction; default 512MB).
+- `FASTR_DISK_CACHE_MAX_AGE_SECS=<secs>` – cap cached entry age (0 disables age-based expiry; default 7 days).
+
+CLI flag equivalents: `--disk-cache-max-bytes`, `--disk-cache-max-age-secs`.
+
 ## Commonly useful
 
 - `FASTR_RENDER_TIMINGS=1` – print per-stage timings during rendering (parse/cascade/box/layout/paint).
