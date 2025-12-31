@@ -26,7 +26,7 @@ CLI flag equivalents: `--disk-cache-max-bytes`, `--disk-cache-max-age-secs`, `--
 - `FASTR_FULL_PAGE=1` – expand output to the full document content size (instead of the viewport).
 - `FASTR_USE_BUNDLED_FONTS=1` – disable system font discovery and use the bundled fixtures (default in CI).
 - `FASTR_BUNDLE_EMOJI_FONT=0|1` – explicitly enable/disable the bundled emoji font fixture (on by default in bundled mode/CI).
-- `FASTR_FETCH_LINK_CSS=0` – skip fetching linked stylesheets (defaults to on).
+- `FASTR_FETCH_LINK_CSS=0` – skip fetching linked stylesheets from `<link>` elements (defaults to on; does not affect `@import` loads).
 - `FASTR_FETCH_PRELOAD_STYLESHEETS=0|1` – control whether `<link rel=preload as=style>` entries are treated as stylesheet candidates (defaults to on).
 - `FASTR_FETCH_MODULEPRELOAD_STYLESHEETS=0|1` – opt into treating `<link rel=modulepreload as=style>` as stylesheet candidates (defaults to off).
 - `FASTR_FETCH_ALTERNATE_STYLESHEETS=0|1` – allow skipping `<link rel="alternate stylesheet">` entries when disabled (defaults to on).

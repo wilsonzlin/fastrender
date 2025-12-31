@@ -4877,10 +4877,9 @@ impl FastRender {
     media_ctx: &MediaContext,
     media_query_cache: &mut MediaQueryCache,
   ) -> Result<StyleSet> {
+    let fetch_link_css =
+      runtime::runtime_toggles().truthy_with_default("FASTR_FETCH_LINK_CSS", true);
     let scoped_sources = extract_scoped_css_sources(dom);
-    let fetch_link_css = self
-      .runtime_toggles
-      .truthy_with_default("FASTR_FETCH_LINK_CSS", true);
     let fetcher = Arc::clone(&self.fetcher);
     let base_url = self.base_url.clone();
     let resource_context = self.resource_context.clone();
@@ -5103,11 +5102,10 @@ impl FastRender {
     media_ctx: &MediaContext,
     media_query_cache: &mut MediaQueryCache,
   ) -> Result<StyleSheet> {
+    let fetch_link_css =
+      runtime::runtime_toggles().truthy_with_default("FASTR_FETCH_LINK_CSS", true);
     let mut combined_rules = Vec::new();
     let sources = extract_css_sources(dom);
-    let fetch_link_css = self
-      .runtime_toggles
-      .truthy_with_default("FASTR_FETCH_LINK_CSS", true);
     let fetcher = Arc::clone(&self.fetcher);
     let resource_context = self.resource_context.as_ref();
     let preload_stylesheets_enabled = self
@@ -6953,8 +6951,13 @@ impl FastRender {
     budget: StylesheetInlineBudget,
   ) -> std::result::Result<String, RenderError> {
     let inlining_start = stats.as_deref().and_then(|rec| rec.timer());
+    let fetch_link_css =
+      runtime::runtime_toggles().truthy_with_default("FASTR_FETCH_LINK_CSS", true);
     let mut css_links = extract_css_links(html, base_url, media_type)?;
     let has_link_stylesheets = !css_links.is_empty();
+    if !fetch_link_css {
+      css_links.clear();
+    }
     if let Some(limit) = css_limit {
       if css_links.len() > limit {
         css_links.truncate(limit);
@@ -11626,6 +11629,63 @@ mod tests {
     };
 
     assert_eq!(url, "https://example.com/app/images/bg.png");
+  }
+
+  #[test]
+  fn fetch_link_css_toggle_controls_linked_stylesheets() {
+    let base_url = "https://example.com/page.html";
+    let fetcher =
+      MapFetcher::default().with_entry("https://example.com/a.css", "p { color: rgb(0, 0, 255); }");
+
+    let mut renderer = FastRender::builder()
+      .base_url(base_url)
+      .fetcher(Arc::new(fetcher) as Arc<dyn ResourceFetcher>)
+      .build()
+      .unwrap();
+
+    let html = r#"
+      <style>p { color: rgb(255, 0, 0); }</style>
+      <link rel="stylesheet" href="a.css">
+      <p>Toggle</p>
+    "#;
+
+    let mut artifacts = RenderArtifacts::new(RenderArtifactRequest {
+      fragment_tree: true,
+      ..RenderArtifactRequest::default()
+    });
+    renderer
+      .render_html_with_options_and_artifacts(
+        html,
+        RenderOptions::new()
+          .with_viewport(200, 200)
+          .with_runtime_toggles(RuntimeToggles::from_map(HashMap::from([(
+            "FASTR_FETCH_LINK_CSS".to_string(),
+            "1".to_string(),
+          )]))),
+        &mut artifacts,
+      )
+      .unwrap();
+    let tree = artifacts.fragment_tree.as_ref().expect("fragment tree");
+    assert_eq!(text_color_for(tree, "Toggle"), Some(Rgba::rgb(0, 0, 255)));
+
+    let mut artifacts = RenderArtifacts::new(RenderArtifactRequest {
+      fragment_tree: true,
+      ..RenderArtifactRequest::default()
+    });
+    renderer
+      .render_html_with_options_and_artifacts(
+        html,
+        RenderOptions::new()
+          .with_viewport(200, 200)
+          .with_runtime_toggles(RuntimeToggles::from_map(HashMap::from([(
+            "FASTR_FETCH_LINK_CSS".to_string(),
+            "0".to_string(),
+          )]))),
+        &mut artifacts,
+      )
+      .unwrap();
+    let tree = artifacts.fragment_tree.as_ref().expect("fragment tree");
+    assert_eq!(text_color_for(tree, "Toggle"), Some(Rgba::rgb(255, 0, 0)));
   }
 
   #[test]
