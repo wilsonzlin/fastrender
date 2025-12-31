@@ -6515,8 +6515,8 @@ impl Painter {
                 0.0,
                 0.0,
                 scale_y,
-                self.device_length(x) + dest_x_device,
-                self.device_length(y) + dest_y_device,
+                self.device_x(x) + dest_x_device,
+                self.device_y(y) + dest_y_device,
               );
               self
                 .pixmap
