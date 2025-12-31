@@ -9796,6 +9796,52 @@ fn clear_mask_rect(mask: &mut Mask, rect: ClipMaskDirtyRect) {
   }
 }
 
+#[inline]
+fn mul_div_255_round(value: u8, alpha: u8) -> u8 {
+  // Match `tiny_skia::Pixmap::apply_mask` rounding behavior.
+  let prod = value as u16 * alpha as u16;
+  ((prod + 255) >> 8) as u8
+}
+
+fn apply_mask_rect_rgba(pixmap: &mut Pixmap, mask: &Mask, rect: ClipMaskDirtyRect) {
+  if rect.x0 >= rect.x1 || rect.y0 >= rect.y1 {
+    return;
+  }
+  if pixmap.width() != mask.width() || pixmap.height() != mask.height() {
+    return;
+  }
+
+  let width = pixmap.width() as usize;
+  let pixel_stride = width * 4;
+  let mask_stride = width;
+  let pixmap_data = pixmap.data_mut();
+  let mask_data = mask.data();
+
+  let x0 = rect.x0 as usize;
+  let x1 = rect.x1 as usize;
+  for y in rect.y0 as usize..rect.y1 as usize {
+    let pixel_row_start = y * pixel_stride;
+    let mask_row_start = y * mask_stride;
+    let row_pixels =
+      &mut pixmap_data[pixel_row_start + x0 * 4..pixel_row_start + x1 * 4];
+    let row_mask = &mask_data[mask_row_start + x0..mask_row_start + x1];
+    for (px, m) in row_pixels.chunks_exact_mut(4).zip(row_mask.iter()) {
+      let m = *m;
+      if m == 255 {
+        continue;
+      }
+      if m == 0 {
+        px.fill(0);
+        continue;
+      }
+      px[0] = mul_div_255_round(px[0], m);
+      px[1] = mul_div_255_round(px[1], m);
+      px[2] = mul_div_255_round(px[2], m);
+      px[3] = mul_div_255_round(px[3], m);
+    }
+  }
+}
+
 fn clip_mask_dirty_bounds(rect: Rect, width: u32, height: u32) -> Option<ClipMaskDirtyRect> {
   let x0 = rect.x().floor().max(0.0) as u32;
   let y0 = rect.y().floor().max(0.0) as u32;
@@ -9936,6 +9982,7 @@ fn apply_clip_mask_rect(pixmap: &mut Pixmap, rect: Rect, radii: BorderRadii) {
 
     let clamped = radii.clamped(rect.width(), rect.height());
     let needs_rebuild = scratch.last_rect != Some(rect) || scratch.last_radii != Some(clamped);
+    let dirty = clip_mask_dirty_bounds(rect, width, height);
 
     {
       let Some(mask) = scratch.mask.as_mut() else {
@@ -9943,36 +9990,118 @@ fn apply_clip_mask_rect(pixmap: &mut Pixmap, rect: Rect, radii: BorderRadii) {
       };
 
       if needs_rebuild {
-      let dirty = clip_mask_dirty_bounds(rect, width, height);
-      if let Some(dirty) = dirty {
-        clear_mask_rect(mask, dirty);
-      } else {
-        // If the dirty bounds are empty (e.g. due to weird floating point inputs), clear the
-        // entire mask so we don't reuse stale data.
-        mask.data_mut().fill(0);
+        if let Some(dirty) = dirty {
+          clear_mask_rect(mask, dirty);
+        } else {
+          // If the dirty bounds are empty (e.g. due to weird floating point inputs), clear the
+          // entire mask so we don't reuse stale data.
+          mask.data_mut().fill(0);
+        }
+
+        let Some(path) = crate::paint::rasterize::build_rounded_rect_path(
+          rect.x(),
+          rect.y(),
+          rect.width(),
+          rect.height(),
+          &clamped,
+        ) else {
+          return false;
+        };
+
+        // Match `fill_rounded_rect` semantics (anti-aliased) without allocating an intermediate
+        // RGBA pixmap or converting it to a mask.
+        mask.fill_path(
+          &path,
+          tiny_skia::FillRule::Winding,
+          true,
+          Transform::identity(),
+        );
       }
 
-      let Some(path) = crate::paint::rasterize::build_rounded_rect_path(
-        rect.x(),
-        rect.y(),
-        rect.width(),
-        rect.height(),
-        &clamped,
-      ) else {
-        return false;
-      };
+      if let Some(dirty) = dirty {
+        let right = rect.x() + rect.width();
+        let bottom = rect.y() + rect.height();
+        let left_radius = clamped.top_left.x.max(clamped.bottom_left.x);
+        let right_radius = clamped.top_right.x.max(clamped.bottom_right.x);
+        let top_radius = clamped.top_left.y.max(clamped.top_right.y);
+        let bottom_radius = clamped.bottom_left.y.max(clamped.bottom_right.y);
+        let skip_pad = 1.0f32;
 
-      // Match `fill_rounded_rect` semantics (anti-aliased) without allocating an intermediate RGBA
-      // pixmap or converting it to a mask.
-      mask.fill_path(
-        &path,
-        tiny_skia::FillRule::Winding,
-        true,
-        Transform::identity(),
-      );
-    }
+        let skip_x0 = (rect.x() + left_radius + skip_pad)
+          .ceil()
+          .clamp(0.0, width as f32) as u32;
+        let skip_x1 = (right - right_radius - skip_pad)
+          .floor()
+          .clamp(0.0, width as f32) as u32;
+        let skip_y0 = (rect.y() + top_radius + skip_pad)
+          .ceil()
+          .clamp(0.0, height as f32) as u32;
+        let skip_y1 = (bottom - bottom_radius - skip_pad)
+          .floor()
+          .clamp(0.0, height as f32) as u32;
 
-    pixmap.apply_mask(mask);
+        let skip_x0 = skip_x0.clamp(dirty.x0, dirty.x1);
+        let skip_x1 = skip_x1.clamp(dirty.x0, dirty.x1);
+        let skip_y0 = skip_y0.clamp(dirty.y0, dirty.y1);
+        let skip_y1 = skip_y1.clamp(dirty.y0, dirty.y1);
+
+        if skip_x0 >= skip_x1 || skip_y0 >= skip_y1 {
+          apply_mask_rect_rgba(pixmap, mask, dirty);
+        } else {
+          if dirty.y0 < skip_y0 {
+            apply_mask_rect_rgba(
+              pixmap,
+              mask,
+              ClipMaskDirtyRect {
+                x0: dirty.x0,
+                y0: dirty.y0,
+                x1: dirty.x1,
+                y1: skip_y0,
+              },
+            );
+          }
+          if skip_y0 < skip_y1 {
+            if dirty.x0 < skip_x0 {
+              apply_mask_rect_rgba(
+                pixmap,
+                mask,
+                ClipMaskDirtyRect {
+                  x0: dirty.x0,
+                  y0: skip_y0,
+                  x1: skip_x0,
+                  y1: skip_y1,
+                },
+              );
+            }
+            if skip_x1 < dirty.x1 {
+              apply_mask_rect_rgba(
+                pixmap,
+                mask,
+                ClipMaskDirtyRect {
+                  x0: skip_x1,
+                  y0: skip_y0,
+                  x1: dirty.x1,
+                  y1: skip_y1,
+                },
+              );
+            }
+          }
+          if skip_y1 < dirty.y1 {
+            apply_mask_rect_rgba(
+              pixmap,
+              mask,
+              ClipMaskDirtyRect {
+                x0: dirty.x0,
+                y0: skip_y1,
+                x1: dirty.x1,
+                y1: dirty.y1,
+              },
+            );
+          }
+        }
+      } else {
+        pixmap.apply_mask(mask);
+      }
     }
 
     if needs_rebuild {
@@ -15655,6 +15784,68 @@ mod tests {
     apply_clip_mask_rect_reference(&mut reference, rect, radii);
 
     assert_eq!(optimized.data(), reference.data());
+  }
+
+  #[test]
+  fn clip_mask_rounded_rect_matches_reference_with_varied_pixels() {
+    let mut optimized = new_pixmap(16, 16).expect("pixmap");
+    let mut reference = new_pixmap(16, 16).expect("pixmap");
+
+    for (idx, (opt, rf)) in optimized
+      .data_mut()
+      .chunks_exact_mut(4)
+      .zip(reference.data_mut().chunks_exact_mut(4))
+      .enumerate()
+    {
+      // Deterministic but non-trivial RGBA values so we exercise mask multiplication rounding.
+      let v = (idx as u32 * 37 + 11) as u8;
+      let r = v;
+      let g = v.rotate_left(3);
+      let b = v.wrapping_mul(5);
+      let a = v.wrapping_add(17);
+      opt.copy_from_slice(&[r, g, b, a]);
+      rf.copy_from_slice(&[r, g, b, a]);
+    }
+
+    // Use fractional bounds to ensure anti-aliased edge pixels.
+    let rect = Rect::from_xywh(1.3, 0.7, 13.1, 12.4);
+    let radii = BorderRadii::uniform(4.0);
+
+    apply_clip_mask_rect(&mut optimized, rect, radii);
+    apply_clip_mask_rect_reference(&mut reference, rect, radii);
+
+    assert_eq!(optimized.data(), reference.data());
+  }
+
+  #[test]
+  fn clip_mask_apply_mask_math_matches_tiny_skia() {
+    let mut pixmap_expected = new_pixmap(4, 1).expect("pixmap");
+    let mut pixmap_actual = new_pixmap(4, 1).expect("pixmap");
+    let px = pixmap_expected.data_mut();
+    px.copy_from_slice(&[
+      1, 2, 3, 4, // exercises rounding for non-255 values
+      5, 6, 7, 8, //
+      9, 10, 11, 12, //
+      13, 14, 15, 16, //
+    ]);
+    pixmap_actual.data_mut().copy_from_slice(px);
+
+    let mut mask = Mask::new(4, 1).expect("mask");
+    mask.data_mut().copy_from_slice(&[0, 64, 128, 255]);
+
+    pixmap_expected.apply_mask(&mask);
+    apply_mask_rect_rgba(
+      &mut pixmap_actual,
+      &mask,
+      ClipMaskDirtyRect {
+        x0: 0,
+        y0: 0,
+        x1: 4,
+        y1: 1,
+      },
+    );
+
+    assert_eq!(pixmap_actual.data(), pixmap_expected.data());
   }
 
   #[test]
