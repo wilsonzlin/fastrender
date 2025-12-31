@@ -3376,19 +3376,79 @@ impl DisplayListRenderer {
     let rect = self.ds_rect(item.rect);
     let radii = self.ds_radii(item.radii);
 
-    let mut temp = match new_pixmap(self.canvas.width(), self.canvas.height()) {
+    // Apply current opacity to the shadow when compositing.
+    let opacity = self.canvas.opacity().clamp(0.0, 1.0);
+    shadow.color.a *= opacity;
+    if shadow.color.a <= f32::EPSILON {
+      return Ok(());
+    }
+
+    // Compute a tight device-space bounding box for the shadow and render it into a small
+    // offscreen pixmap. This avoids allocating a full-canvas temporary surface per shadow.
+    //
+    // Note: The bounds must be computed in the same untransformed device coordinate space that
+    // `render_box_shadow` expects. The current canvas transform is applied only when compositing
+    // the offscreen pixmap back onto the destination.
+    let (shadow_bounds, temp_w, temp_h) = if shadow.inset {
+      // Inset shadow rendering allocates a padded temporary surface internally. To avoid clipping
+      // any pixels (and to match the previous full-canvas behavior), compute the same padded
+      // region that `rasterize::render_box_shadow` draws into.
+      let sigma = shadow.blur_radius.max(0.0);
+      let blur_pad = (sigma * 3.0).ceil();
+      let spread = shadow.spread_radius;
+      let pad_x = (blur_pad + shadow.offset_x.abs() + spread.abs()).ceil();
+      let pad_y = (blur_pad + shadow.offset_y.abs() + spread.abs()).ceil();
+
+      let temp_w = (rect.width() + pad_x * 2.0).max(1.0) as u32;
+      let temp_h = (rect.height() + pad_y * 2.0).max(1.0) as u32;
+      let min_x = (rect.x() - pad_x) as i32 as f32;
+      let min_y = (rect.y() - pad_y) as i32 as f32;
+      (
+        Rect::from_xywh(min_x, min_y, temp_w as f32, temp_h as f32),
+        temp_w,
+        temp_h,
+      )
+    } else {
+      // Match the internal `rasterize::render_box_shadow` math (spread + 3σ blur padding).
+      let sigma = shadow.blur_radius.max(0.0);
+      let spread = shadow.spread_radius;
+      let shadow_rect = Rect::from_xywh(
+        rect.x() + shadow.offset_x - spread,
+        rect.y() + shadow.offset_y - spread,
+        rect.width() + spread * 2.0,
+        rect.height() + spread * 2.0,
+      );
+      let blur_pad = (sigma * 3.0).ceil();
+      let min_x = (shadow_rect.x() - blur_pad).floor();
+      let min_y = (shadow_rect.y() - blur_pad).floor();
+      let max_x = (shadow_rect.x() + shadow_rect.width() + blur_pad).ceil();
+      let max_y = (shadow_rect.y() + shadow_rect.height() + blur_pad).ceil();
+      let width = max_x - min_x;
+      let height = max_y - min_y;
+      let temp_w = width.ceil().max(1.0) as u32;
+      let temp_h = height.ceil().max(1.0) as u32;
+      (Rect::from_xywh(min_x, min_y, width, height), temp_w, temp_h)
+    };
+
+    if shadow_bounds.width() <= 0.0
+      || shadow_bounds.height() <= 0.0
+      || !shadow_bounds.x().is_finite()
+      || !shadow_bounds.y().is_finite()
+      || !shadow_bounds.width().is_finite()
+      || !shadow_bounds.height().is_finite()
+    {
+      return Ok(());
+    }
+
+    let mut temp = match new_pixmap(temp_w, temp_h) {
       Some(p) => p,
       None => return Ok(()),
     };
 
-    // Apply current opacity to the shadow when compositing.
-    let opacity = self.canvas.opacity().clamp(0.0, 1.0);
-    shadow.color.a *= opacity;
-
     let _ = render_box_shadow(
       &mut temp,
-      rect.x(),
-      rect.y(),
+      rect.x() - shadow_bounds.x(),
+      rect.y() - shadow_bounds.y(),
       rect.width(),
       rect.height(),
       &radii,
@@ -3400,12 +3460,20 @@ impl DisplayListRenderer {
       blend_mode: self.canvas.blend_mode(),
       ..Default::default()
     };
+    let dest_x = shadow_bounds.x().floor() as i32;
+    let dest_y = shadow_bounds.y().floor() as i32;
+    let frac_x = shadow_bounds.x() - dest_x as f32;
+    let frac_y = shadow_bounds.y() - dest_y as f32;
+    let transform = Transform::from_translate(frac_x, frac_y).post_concat(self.canvas.transform());
     let clip = self.canvas.clip_mask().cloned();
-    let transform = self.canvas.transform();
-    self
-      .canvas
-      .pixmap_mut()
-      .draw_pixmap(0, 0, temp.as_ref(), &paint, transform, clip.as_ref());
+    self.canvas.pixmap_mut().draw_pixmap(
+      dest_x,
+      dest_y,
+      temp.as_ref(),
+      &paint,
+      transform,
+      clip.as_ref(),
+    );
     Ok(())
   }
 
@@ -7112,6 +7180,187 @@ mod tests {
       padding: bounds,
       content,
     }
+  }
+
+  fn render_box_shadow_reference(
+    renderer: &mut DisplayListRenderer,
+    item: &BoxShadowItem,
+  ) -> Result<()> {
+    let mut shadow = BoxShadow {
+      offset_x: renderer.ds_len(item.offset.x),
+      offset_y: renderer.ds_len(item.offset.y),
+      blur_radius: renderer.ds_len(item.blur_radius),
+      spread_radius: renderer.ds_len(item.spread_radius),
+      color: item.color,
+      inset: item.inset,
+    };
+
+    let rect = renderer.ds_rect(item.rect);
+    let radii = renderer.ds_radii(item.radii);
+
+    let mut temp = match new_pixmap(renderer.canvas.width(), renderer.canvas.height()) {
+      Some(p) => p,
+      None => return Ok(()),
+    };
+
+    let opacity = renderer.canvas.opacity().clamp(0.0, 1.0);
+    shadow.color.a *= opacity;
+
+    let _ = render_box_shadow(
+      &mut temp,
+      rect.x(),
+      rect.y(),
+      rect.width(),
+      rect.height(),
+      &radii,
+      &shadow,
+    )?;
+
+    let paint = tiny_skia::PixmapPaint {
+      opacity: 1.0,
+      blend_mode: renderer.canvas.blend_mode(),
+      ..Default::default()
+    };
+    let clip = renderer.canvas.clip_mask().cloned();
+    let transform = renderer.canvas.transform();
+    renderer
+      .canvas
+      .pixmap_mut()
+      .draw_pixmap(0, 0, temp.as_ref(), &paint, transform, clip.as_ref());
+    Ok(())
+  }
+
+  fn box_shadow_scene(
+    setup: impl Fn(&mut DisplayListRenderer),
+    item: &BoxShadowItem,
+  ) -> (Pixmap, Pixmap) {
+    let mut new_renderer =
+      DisplayListRenderer::new(64, 64, Rgba::WHITE, FontContext::new()).expect("renderer");
+    setup(&mut new_renderer);
+    new_renderer
+      .render_box_shadow(item)
+      .expect("render_box_shadow");
+    let new_pixmap = new_renderer.canvas.into_pixmap();
+
+    let mut reference_renderer =
+      DisplayListRenderer::new(64, 64, Rgba::WHITE, FontContext::new()).expect("renderer");
+    setup(&mut reference_renderer);
+    render_box_shadow_reference(&mut reference_renderer, item).expect("reference");
+    let reference_pixmap = reference_renderer.canvas.into_pixmap();
+
+    (new_pixmap, reference_pixmap)
+  }
+
+  fn setup_translate(renderer: &mut DisplayListRenderer) {
+    renderer
+      .canvas
+      .set_transform(Transform::from_translate(7.0, -5.0));
+  }
+
+  fn setup_rotate(renderer: &mut DisplayListRenderer) {
+    let transform = Transform::from_rotate(25.0).post_concat(Transform::from_translate(40.0, 10.0));
+    renderer.canvas.set_transform(transform);
+  }
+
+  fn setup_clip_mask(renderer: &mut DisplayListRenderer) {
+    renderer.canvas.set_clip_with_radii(
+      Rect::from_xywh(8.0, 8.0, 40.0, 40.0),
+      Some(BorderRadii::uniform(6.0)),
+    );
+  }
+
+  fn setup_rotated_clip_mask(renderer: &mut DisplayListRenderer) {
+    setup_rotate(renderer);
+    setup_clip_mask(renderer);
+  }
+
+  #[test]
+  fn box_shadow_offscreen_renders_match_reference() {
+    let outset = BoxShadowItem {
+      rect: Rect::from_xywh(12.0, 10.0, 16.0, 14.0),
+      radii: BorderRadii::ZERO,
+      offset: Point::new(4.0, 3.0),
+      blur_radius: 4.0,
+      spread_radius: 1.0,
+      color: Rgba::new(0, 0, 0, 0.7),
+      inset: false,
+    };
+
+    let inset = BoxShadowItem {
+      rect: Rect::from_xywh(10.0, 12.0, 20.0, 18.0),
+      radii: BorderRadii::uniform(6.0),
+      offset: Point::new(-2.0, 1.0),
+      blur_radius: 3.0,
+      spread_radius: 0.0,
+      color: Rgba::new(255, 0, 0, 0.55),
+      inset: true,
+    };
+
+    let cases: &[(&str, fn(&mut DisplayListRenderer), &BoxShadowItem)] = &[
+      ("outset_identity", |_| {}, &outset),
+      ("inset_identity", |_| {}, &inset),
+      ("outset_translate", setup_translate, &outset),
+      ("outset_rotate", setup_rotate, &outset),
+      ("outset_clipped", setup_clip_mask, &outset),
+      ("outset_rotated_clipped", setup_rotated_clip_mask, &outset),
+    ];
+
+    for (name, setup, item) in cases {
+      let (new_pixmap, reference_pixmap) = box_shadow_scene(*setup, item);
+      assert_eq!(
+        new_pixmap.data(),
+        reference_pixmap.data(),
+        "box shadow output mismatch for case {name}"
+      );
+    }
+  }
+
+  #[test]
+  fn box_shadow_does_not_allocate_full_canvas_pixmap() {
+    let mut renderer =
+      DisplayListRenderer::new(256, 256, Rgba::WHITE, FontContext::new()).expect("renderer");
+    let canvas_w = renderer.canvas.width();
+    let canvas_h = renderer.canvas.height();
+
+    let item = BoxShadowItem {
+      rect: Rect::from_xywh(10.0, 10.0, 20.0, 20.0),
+      radii: BorderRadii::ZERO,
+      offset: Point::new(5.0, 5.0),
+      blur_radius: 4.0,
+      spread_radius: 0.0,
+      color: Rgba::new(0, 0, 0, 0.5),
+      inset: false,
+    };
+
+    let recorder = crate::paint::pixmap::NewPixmapAllocRecorder::start();
+    renderer
+      .render_box_shadow(&item)
+      .expect("box shadow render should succeed");
+    let records = recorder.take();
+    drop(recorder);
+
+    let renderer_allocs: Vec<_> = records
+      .iter()
+      .filter(|r| r.file.ends_with("display_list_renderer.rs"))
+      .collect();
+
+    assert_eq!(
+      renderer_allocs.len(),
+      1,
+      "expected exactly one renderer-level pixmap allocation, got {renderer_allocs:?}"
+    );
+
+    let alloc = renderer_allocs[0];
+    assert_ne!(
+      (alloc.width, alloc.height),
+      (canvas_w, canvas_h),
+      "renderer should not allocate a full-canvas pixmap for box shadows"
+    );
+    assert_eq!(
+      (alloc.width, alloc.height),
+      (44, 44),
+      "unexpected offscreen allocation size for box shadow: {alloc:?}"
+    );
   }
 
   #[test]

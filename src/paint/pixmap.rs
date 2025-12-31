@@ -6,6 +6,50 @@ const BYTES_PER_PIXEL: u64 = 4;
 /// Upper bound on a single pixmap allocation to avoid process aborts on OOM.
 pub(crate) const MAX_PIXMAP_BYTES: u64 = 512 * 1024 * 1024;
 
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct NewPixmapAllocRecord {
+  pub width: u32,
+  pub height: u32,
+  pub file: &'static str,
+  pub line: u32,
+}
+
+#[cfg(test)]
+thread_local! {
+  static RECORD_NEW_PIXMAP: std::cell::Cell<bool> = std::cell::Cell::new(false);
+  static NEW_PIXMAP_RECORDS: std::cell::RefCell<Vec<NewPixmapAllocRecord>> =
+    std::cell::RefCell::new(Vec::new());
+}
+
+/// Records `new_pixmap` allocations for the current thread.
+///
+/// This is intended for unit tests that want to assert on temporary allocation patterns without
+/// relying on global allocators or OS-level accounting.
+#[cfg(test)]
+pub(crate) struct NewPixmapAllocRecorder;
+
+#[cfg(test)]
+impl NewPixmapAllocRecorder {
+  pub(crate) fn start() -> Self {
+    RECORD_NEW_PIXMAP.with(|flag| flag.set(true));
+    NEW_PIXMAP_RECORDS.with(|records| records.borrow_mut().clear());
+    Self
+  }
+
+  pub(crate) fn take(&self) -> Vec<NewPixmapAllocRecord> {
+    NEW_PIXMAP_RECORDS.with(|records| std::mem::take(&mut *records.borrow_mut()))
+  }
+}
+
+#[cfg(test)]
+impl Drop for NewPixmapAllocRecorder {
+  fn drop(&mut self) {
+    RECORD_NEW_PIXMAP.with(|flag| flag.set(false));
+    NEW_PIXMAP_RECORDS.with(|records| records.borrow_mut().clear());
+  }
+}
+
 pub(crate) fn guard_allocation_bytes(bytes: u64, context: &str) -> Result<usize, RenderError> {
   if bytes > MAX_PIXMAP_BYTES {
     return Err(RenderError::InvalidParameters {
@@ -96,6 +140,20 @@ pub(crate) fn new_pixmap_with_context(
 
 #[track_caller]
 pub(crate) fn new_pixmap(width: u32, height: u32) -> Option<Pixmap> {
+  #[cfg(test)]
+  {
+    if RECORD_NEW_PIXMAP.with(|flag| flag.get()) {
+      let caller = std::panic::Location::caller();
+      NEW_PIXMAP_RECORDS.with(|records| {
+        records.borrow_mut().push(NewPixmapAllocRecord {
+          width,
+          height,
+          file: caller.file(),
+          line: caller.line(),
+        });
+      });
+    }
+  }
   new_pixmap_with_context(width, height, "pixmap").ok()
 }
 
