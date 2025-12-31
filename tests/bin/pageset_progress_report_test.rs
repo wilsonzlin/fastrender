@@ -90,6 +90,7 @@ fn pageset_progress_report_outputs_stats_when_verbose() {
   let stdout = String::from_utf8(output.stdout).expect("stdout is utf-8");
   assert!(stdout.contains("Slowest pages (top 1 of 1 with timings):"));
   assert!(stdout.contains("stats:"));
+  assert!(stdout.contains("Top fetch stage (top 1 of 1 ok pages):"));
   assert!(stdout.contains("nodes: dom=1200 styled=1100 boxes=900 fragments=1500"));
   assert!(stdout.contains(
     "cascade: nodes=1100 candidates=6000 matches=2000 selector=320.50ms declaration=210.25ms"

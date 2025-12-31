@@ -3266,6 +3266,54 @@ fn report(args: ReportArgs) -> io::Result<()> {
   }
 
   if args.verbose_stats {
+    macro_rules! stage_ranking {
+      ($label:literal, $field:ident) => {{
+        let mut stage_sorted: Vec<(&LoadedProgress, f64)> = progresses
+          .iter()
+          .filter_map(|entry| {
+            if entry.progress.status != ProgressStatus::Ok {
+              return None;
+            }
+            entry.progress.total_ms?;
+            let ms = entry.progress.stages_ms.$field;
+            if ms <= 0.0 {
+              return None;
+            }
+            Some((entry, ms))
+          })
+          .collect();
+        stage_sorted.sort_by(|(a_entry, a_ms), (b_entry, b_ms)| {
+          b_ms
+            .total_cmp(a_ms)
+            .then_with(|| a_entry.stem.cmp(&b_entry.stem))
+        });
+        let top = args.top.min(stage_sorted.len());
+        if top > 0 {
+          println!(
+            "Top {label} stage (top {top} of {} ok pages):",
+            stage_sorted.len(),
+            label = $label
+          );
+          for (idx, (entry, ms)) in stage_sorted.iter().take(top).enumerate() {
+            let total_ms = entry.progress.total_ms.unwrap_or(0.0);
+            println!(
+              "  {}. {} stage={ms:.2}ms total={total_ms:.2}ms url={}",
+              idx + 1,
+              entry.stem,
+              entry.progress.url
+            );
+          }
+          println!();
+        }
+      }};
+    }
+
+    stage_ranking!("fetch", fetch);
+    stage_ranking!("css", css);
+    stage_ranking!("cascade", cascade);
+    stage_ranking!("layout", layout);
+    stage_ranking!("paint", paint);
+
     let mut pages_with_stats = 0usize;
     let mut totals = ResourceDiagnostics::default();
     let mut saw = ResourceDiagnostics {
