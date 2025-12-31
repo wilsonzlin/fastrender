@@ -1295,6 +1295,18 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     soft_timeout_desc,
     fetch_timeout.as_millis()
   ));
+  #[cfg(feature = "disk_cache")]
+  {
+    let max_age = if args.disk_cache.max_age_secs == 0 {
+      "none".to_string()
+    } else {
+      format!("{}s", args.disk_cache.max_age_secs)
+    };
+    log.push_str(&format!(
+      "Disk cache: max_bytes={} max_age={}\n",
+      args.disk_cache.max_bytes, max_age
+    ));
+  }
 
   let dump_timeout_secs = args
     .dump_timeout

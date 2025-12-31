@@ -411,6 +411,18 @@ fn run(args: Args) -> io::Result<()> {
     normalize_user_agent_for_log(&args.user_agent)
   );
   println!("Accept-Language: {}", args.accept_language);
+  #[cfg(feature = "disk_cache")]
+  {
+    let max_age = if args.disk_cache.max_age_secs == 0 {
+      "none".to_string()
+    } else {
+      format!("{}s", args.disk_cache.max_age_secs)
+    };
+    println!(
+      "Disk cache: max_bytes={} max_age={}",
+      args.disk_cache.max_bytes, max_age
+    );
+  }
   if let Some((index, total)) = args.shard {
     println!("Shard: {}/{}", index, total);
   }

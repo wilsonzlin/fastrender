@@ -210,7 +210,7 @@ fn try_main(args: Args) -> Result<()> {
     }
   }
 
-  eprintln!(
+  let mut banner = format!(
     "User-Agent: {}\nAccept-Language: {}\nViewport: {}x{} @{}x, scroll ({}, {})\nOutput: {} ({})",
     normalize_user_agent_for_log(&args.user_agent),
     args.accept_language,
@@ -222,6 +222,19 @@ fn try_main(args: Args) -> Result<()> {
     output,
     output_ext
   );
+  #[cfg(feature = "disk_cache")]
+  {
+    let max_age = if args.disk_cache.max_age_secs == 0 {
+      "none".to_string()
+    } else {
+      format!("{}s", args.disk_cache.max_age_secs)
+    };
+    banner.push_str(&format!(
+      "\nDisk cache: max_bytes={} max_age={}",
+      args.disk_cache.max_bytes, max_age
+    ));
+  }
+  eprintln!("{banner}");
 
   let timeout_secs = args.timeout.seconds(Some(0));
 
