@@ -1827,12 +1827,13 @@ fn create_pseudo_element_box(
   let mut text_buf = String::new();
 
   let flush_text = |buf: &mut String, pseudo_style: &Arc<ComputedStyle>, out: &mut Vec<BoxNode>| {
-    if !buf.is_empty() {
-      let mut text_box = BoxNode::new_text(pseudo_style.clone(), buf.clone());
-      text_box.styled_node_id = Some(styled.node_id);
-      out.push(text_box);
-      buf.clear();
+    if buf.is_empty() {
+      return;
     }
+    let text = std::mem::take(buf);
+    let mut text_box = BoxNode::new_text(pseudo_style.clone(), text);
+    text_box.styled_node_id = Some(styled.node_id);
+    out.push(text_box);
   };
 
   let items = match &content_value {
