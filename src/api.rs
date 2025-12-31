@@ -10075,7 +10075,11 @@ mod tests {
 </html>"#;
     let options = RenderOptions::new()
       .with_viewport(64, 64)
-      .with_diagnostics_level(DiagnosticsLevel::Basic);
+      .with_diagnostics_level(DiagnosticsLevel::Basic)
+      .with_runtime_toggles(RuntimeToggles::from_map(HashMap::from([(
+        "FASTR_FETCH_LINK_CSS".to_string(),
+        "1".to_string(),
+      )])));
     let result = renderer
       .render_html_with_stylesheets(html, "https://example.com/page.html", options)
       .unwrap();
@@ -10089,6 +10093,16 @@ mod tests {
     assert!(stats.timings.cascade_ms.is_some());
     assert!(stats.timings.box_tree_ms.is_some());
     assert!(stats.timings.layout_ms.is_some());
+    assert_eq!(
+      stats
+        .resources
+        .fetch_counts
+        .get(&ResourceKind::Stylesheet)
+        .copied()
+        .unwrap_or(0),
+      1,
+      "expected external stylesheet to be fetched"
+    );
   }
 
   #[test]
@@ -10111,7 +10125,11 @@ mod tests {
 </html>"#;
     let options = RenderOptions::new()
       .with_viewport(64, 64)
-      .with_diagnostics_level(DiagnosticsLevel::Basic);
+      .with_diagnostics_level(DiagnosticsLevel::Basic)
+      .with_runtime_toggles(RuntimeToggles::from_map(HashMap::from([(
+        "FASTR_FETCH_LINK_CSS".to_string(),
+        "1".to_string(),
+      )])));
     let result = renderer
       .render_html_with_stylesheets(html, "https://example.com/page.html", options)
       .unwrap();
@@ -10155,7 +10173,11 @@ mod tests {
 </html>"#;
     let options = RenderOptions::new()
       .with_viewport(64, 64)
-      .with_diagnostics_level(DiagnosticsLevel::Basic);
+      .with_diagnostics_level(DiagnosticsLevel::Basic)
+      .with_runtime_toggles(RuntimeToggles::from_map(HashMap::from([(
+        "FASTR_FETCH_LINK_CSS".to_string(),
+        "1".to_string(),
+      )])));
     let result = renderer
       .render_html_with_stylesheets(html, "https://example.com/page.html", options)
       .unwrap();
