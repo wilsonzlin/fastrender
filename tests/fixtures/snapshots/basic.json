@@ -2484,7 +2484,7 @@
                           "x": 0.0,
                           "y": 0.0,
                           "width": 120.0,
-                          "height": 48.808
+                          "height": 46.792
                         },
                         "fragment_index": 0,
                         "fragment_count": 1,
@@ -2549,13 +2549,13 @@
                               "x": 9.0,
                               "y": 13.0,
                               "width": 35.808,
-                              "height": 35.808
+                              "height": 27.792002
                             },
                             "scroll_overflow": {
                               "x": 0.0,
                               "y": 0.0,
                               "width": 35.808,
-                              "height": 35.808
+                              "height": 33.792
                             },
                             "fragment_index": 0,
                             "fragment_count": 1,

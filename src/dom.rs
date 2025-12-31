@@ -1951,7 +1951,6 @@ fn convert_handle_to_node(
       quirks_mode: document_quirks_mode,
     },
     NodeData::Element { name, attrs, .. } => {
-      let tag_name = name.local.to_string();
       let namespace = if name.ns.as_ref() == HTML_NAMESPACE {
         String::new()
       } else {
@@ -1963,7 +1962,7 @@ fn convert_handle_to_node(
         attributes.push((attr.name.local.to_string(), attr.value.to_string()));
       }
 
-      let is_html_slot = tag_name.eq_ignore_ascii_case("slot")
+      let is_html_slot = name.local.as_ref().eq_ignore_ascii_case("slot")
         && (namespace.is_empty() || namespace == HTML_NAMESPACE);
 
       if is_html_slot {
@@ -1973,6 +1972,7 @@ fn convert_handle_to_node(
           assigned: false,
         }
       } else {
+        let tag_name = name.local.to_string();
         DomNodeType::Element {
           tag_name,
           namespace,
