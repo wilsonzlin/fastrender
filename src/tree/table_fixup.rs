@@ -804,13 +804,15 @@ impl TableStructureFixer {
       return Self::fixup_table_with_deadline(root, deadline_counter);
     }
 
-    // Otherwise, recursively process children
-    let children = std::mem::take(&mut root.children);
-    let fixed_children: Result<Vec<BoxNode>> = children
-      .into_iter()
-      .map(|child| Self::fixup_tree_with_deadline(child, deadline_counter))
-      .collect();
-    root.children = fixed_children?;
+    // Otherwise, recursively process children in place to preserve capacity and avoid
+    // allocating a new Vec for every node in large trees.
+    if !root.children.is_empty() {
+      let placeholder = BoxNode::new_text(root.style.clone(), String::new());
+      for child in root.children.iter_mut() {
+        let child_node = std::mem::replace(child, placeholder.clone());
+        *child = Self::fixup_tree_with_deadline(child_node, deadline_counter)?;
+      }
+    }
 
     Ok(root)
   }
@@ -838,12 +840,13 @@ impl TableStructureFixer {
       return Self::fixup_table_internals_with_deadline(root, deadline_counter);
     }
 
-    let children = std::mem::take(&mut root.children);
-    let fixed_children: Result<Vec<BoxNode>> = children
-      .into_iter()
-      .map(|child| Self::fixup_tree_internals_with_deadline(child, deadline_counter))
-      .collect();
-    root.children = fixed_children?;
+    if !root.children.is_empty() {
+      let placeholder = BoxNode::new_text(root.style.clone(), String::new());
+      for child in root.children.iter_mut() {
+        let child_node = std::mem::replace(child, placeholder.clone());
+        *child = Self::fixup_tree_internals_with_deadline(child_node, deadline_counter)?;
+      }
+    }
 
     Ok(root)
   }

@@ -131,12 +131,16 @@ impl AnonymousBoxCreator {
       ANON_FIXUP_DEADLINE_STRIDE,
       RenderStage::Cascade,
     )?;
-    // First, recursively fix children (bottom-up traversal)
-    box_node.children = box_node
-      .children
-      .into_iter()
-      .map(|child| Self::fixup_tree_with_parent(child, Some(&box_node.style), deadline_counter))
-      .collect::<Result<Vec<_>>>()?;
+    // First, recursively fix children (bottom-up traversal) while reusing the existing
+    // child Vec allocation to avoid allocating a new Vec for every node.
+    if !box_node.children.is_empty() {
+      let placeholder = BoxNode::new_text(box_node.style.clone(), String::new());
+      for child in box_node.children.iter_mut() {
+        let child_node = std::mem::replace(child, placeholder.clone());
+        *child =
+          Self::fixup_tree_with_parent(child_node, Some(&box_node.style), deadline_counter)?;
+      }
+    }
 
     // Then fix this node's children based on its type
     box_node.children = Self::fixup_children(
