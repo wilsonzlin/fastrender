@@ -12785,7 +12785,7 @@ mod tests {
       r#"
         <style>
           html, body {{ margin: 0; padding: 0; background: rgb(0, 255, 0); }}
-          iframe {{ border: 0; width: 100%; height: 100%; display: block; }}
+          iframe {{ border: 0; width: 8px; height: 8px; display: block; }}
         </style>
         <iframe srcdoc='{inner}'></iframe>
       "#,
@@ -12795,7 +12795,7 @@ mod tests {
       r#"
         <style>
           html, body {{ margin: 0; padding: 0; }}
-          iframe {{ border: 0; width: 100%; height: 100%; display: block; }}
+          iframe {{ border: 0; width: 8px; height: 8px; display: block; }}
         </style>
         <iframe srcdoc="{outer}"></iframe>
       "#,

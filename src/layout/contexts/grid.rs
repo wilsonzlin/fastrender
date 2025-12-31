@@ -41,6 +41,7 @@ use crate::layout::formatting_context::layout_cache_store;
 use crate::layout::formatting_context::FormattingContext;
 use crate::layout::formatting_context::IntrinsicSizingMode;
 use crate::layout::formatting_context::LayoutError;
+use crate::layout::engine::LayoutParallelism;
 use crate::layout::fragment_clone_profile::{self, CloneSite};
 use crate::layout::profile::layout_timer;
 use crate::layout::profile::LayoutKind;
@@ -53,7 +54,7 @@ use crate::layout::taffy_integration::{
 };
 use crate::layout::utils::resolve_length_with_percentage_metrics;
 use crate::layout::utils::resolve_scrollbar_width;
-use crate::render_control::{active_deadline, check_active};
+use crate::render_control::{active_deadline, check_active, with_deadline};
 use crate::style::display::Display as CssDisplay;
 use crate::style::display::FormattingContextType;
 use crate::style::grid::validate_area_rectangles;
@@ -72,6 +73,7 @@ use crate::style::ComputedStyle;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
+use rayon::prelude::*;
 #[cfg(test)]
 use std::cell::Cell;
 use std::cell::RefCell;
@@ -283,6 +285,7 @@ pub struct GridFormattingContext {
   font_context: crate::text::font_loader::FontContext,
   nearest_positioned_cb: crate::layout::contexts::positioned::ContainingBlock,
   taffy_cache: std::sync::Arc<crate::layout::taffy_integration::TaffyNodeCache>,
+  parallelism: LayoutParallelism,
 }
 
 impl GridFormattingContext {
@@ -415,6 +418,7 @@ impl GridFormattingContext {
     let viewport_size = factory.viewport_size();
     let nearest_positioned_cb = factory.nearest_positioned_cb();
     let font_context = factory.font_context().clone();
+    let parallelism = factory.parallelism();
     let taffy_cache = factory.grid_taffy_cache();
     Self {
       factory,
@@ -422,7 +426,15 @@ impl GridFormattingContext {
       font_context,
       nearest_positioned_cb,
       taffy_cache,
+      parallelism,
     }
+  }
+
+  pub fn with_parallelism(mut self, parallelism: LayoutParallelism) -> Self {
+    self.parallelism = parallelism;
+    self.factory = self.factory.clone().with_parallelism(parallelism);
+    self.taffy_cache = self.factory.grid_taffy_cache();
+    self
   }
 
   fn horizontal_edges_px(&self, style: &ComputedStyle) -> Option<f32> {
@@ -1501,6 +1513,195 @@ impl GridFormattingContext {
       })
     })?;
     measured.remove(&matched_key)
+  }
+
+  #[allow(clippy::too_many_arguments)]
+  fn try_parallel_root_children_conversion(
+    &self,
+    taffy: &TaffyTree<*const BoxNode>,
+    root_id: TaffyNodeId,
+    box_node: &BoxNode,
+    constraints: &LayoutConstraints,
+    in_flow_children: &[&BoxNode],
+    measured_fragments: &Rc<RefCell<HashMap<MeasureKey, FragmentNode>>>,
+    measured_node_keys: &HashMap<TaffyNodeId, Vec<MeasureKey>>,
+  ) -> Option<Result<FragmentNode, LayoutError>> {
+    let child_ids = match taffy.children(root_id) {
+      Ok(children) => children,
+      Err(e) => {
+        return Some(Err(LayoutError::MissingContext(format!(
+          "Taffy children error: {:?}",
+          e
+        ))));
+      }
+    };
+    if child_ids.is_empty()
+      || child_ids.len() != in_flow_children.len()
+      || !self.parallelism.should_parallelize(child_ids.len())
+    {
+      return None;
+    }
+
+    for child_id in child_ids.iter().copied() {
+      let Ok(grandchildren) = taffy.children(child_id) else {
+        return None;
+      };
+      if !grandchildren.is_empty() {
+        return None;
+      }
+    }
+
+    let mut child_bounds: Vec<Rect> = Vec::with_capacity(child_ids.len());
+    let mut reused_fragments: Vec<Option<FragmentNode>> = vec![None; child_ids.len()];
+    for (idx, child_id) in child_ids.iter().copied().enumerate() {
+      let layout = match taffy.layout(child_id) {
+        Ok(layout) => layout,
+        Err(e) => {
+          return Some(Err(LayoutError::MissingContext(format!(
+            "Taffy layout error: {:?}",
+            e
+          ))));
+        }
+      };
+      let bounds = Rect::from_xywh(
+        layout.location.x,
+        layout.location.y,
+        layout.size.width,
+        layout.size.height,
+      );
+      child_bounds.push(bounds);
+      if let Some(keys) = measured_node_keys.get(&child_id) {
+        if let Some(mut reused) = Self::take_matching_measured_fragment(
+          measured_fragments,
+          keys,
+          bounds.width(),
+          bounds.height(),
+        ) {
+          fragment_clone_profile::record_fragment_reuse_without_clone(CloneSite::GridMeasureReuse);
+          debug_assert!(
+            reused.bounds.x().abs() < 0.01 && reused.bounds.y().abs() < 0.01,
+            "measured fragments should be normalized to the origin",
+          );
+          translate_fragment_tree(&mut reused, Point::new(bounds.x(), bounds.y()));
+          reused_fragments[idx] = Some(reused);
+        }
+      }
+    }
+
+    let mut indices_to_layout: Vec<usize> = Vec::new();
+    for (idx, reused) in reused_fragments.iter().enumerate() {
+      if reused.is_none() {
+        indices_to_layout.push(idx);
+      }
+    }
+
+    let factory = std::sync::Arc::new(self.factory.clone());
+
+    let deadline = active_deadline();
+    let child_results = indices_to_layout
+      .par_iter()
+      .map(|&idx| {
+        with_deadline(deadline.as_ref(), || {
+          crate::layout::engine::debug_record_parallel_work();
+
+          let child = in_flow_children[idx];
+          let bounds = child_bounds[idx];
+          let fc_type = child
+            .formatting_context()
+            .unwrap_or(FormattingContextType::Block);
+          let fc = factory.get(fc_type);
+
+          let child_constraints = LayoutConstraints::new(
+            CrateAvailableSpace::Definite(bounds.width()),
+            CrateAvailableSpace::Definite(bounds.height()),
+          )
+          .with_inline_percentage_base(
+            constraints
+              .inline_percentage_base
+              .or_else(|| Some(bounds.width())),
+          );
+
+          let mut laid_out = if fc_type == FormattingContextType::Block {
+            let child_constraints = child_constraints
+              .with_used_border_box_size(Some(bounds.width()), Some(bounds.height()));
+            fc.layout(child, &child_constraints)?
+          } else {
+            let mut layout_child = (*child).clone();
+            let mut layout_style = (*layout_child.style).clone();
+            layout_style.width = Some(Length::px(bounds.width()));
+            layout_style.height = Some(Length::px(bounds.height()));
+            layout_child.style = Arc::new(layout_style);
+            fc.layout(&layout_child, &child_constraints)?
+          };
+
+          translate_fragment_tree(&mut laid_out, Point::new(bounds.x(), bounds.y()));
+          laid_out.content = FragmentContent::Block {
+            box_id: Some(child.id),
+          };
+          laid_out.style = Some(child.style.clone());
+          Ok((idx, laid_out))
+        })
+      })
+      .collect::<Result<Vec<_>, LayoutError>>();
+
+    let mut child_results = match child_results {
+      Ok(results) => results,
+      Err(err) => return Some(Err(err)),
+    };
+    child_results.sort_by_key(|(idx, _)| *idx);
+
+    let mut child_fragments = Vec::with_capacity(child_ids.len());
+    let mut child_results = child_results.into_iter();
+    let mut next_child = child_results.next();
+    for idx in 0..child_ids.len() {
+      if let Some(fragment) = reused_fragments[idx].take() {
+        child_fragments.push(fragment);
+        continue;
+      }
+
+      let Some((result_idx, fragment)) = next_child.take() else {
+        return Some(Err(LayoutError::MissingContext(
+          "Missing parallel grid child fragment".into(),
+        )));
+      };
+      debug_assert_eq!(result_idx, idx, "parallel grid conversion index mismatch");
+      child_fragments.push(fragment);
+      next_child = child_results.next();
+    }
+
+    let root_layout = match taffy.layout(root_id) {
+      Ok(layout) => layout,
+      Err(e) => {
+        return Some(Err(LayoutError::MissingContext(format!(
+          "Taffy layout error: {:?}",
+          e
+        ))));
+      }
+    };
+    let bounds = Rect::from_xywh(
+      root_layout.location.x,
+      root_layout.location.y,
+      root_layout.size.width,
+      root_layout.size.height,
+    );
+    let mut fragment = FragmentNode::new_with_style(
+      bounds,
+      FragmentContent::Block {
+        box_id: Some(box_node.id),
+      },
+      child_fragments,
+      box_node.style.clone(),
+    );
+
+    let is_grid_style = matches!(
+      taffy.style(root_id).ok().map(|style| style.display),
+      Some(Display::Grid)
+    );
+    if is_grid_style {
+      self.apply_grid_baseline_alignment(taffy, root_id, root_layout, &child_ids, &mut fragment);
+    }
+
+    Some(Ok(fragment))
   }
 
   /// Converts Taffy layout results to FragmentNode tree
@@ -2780,6 +2981,10 @@ impl FormattingContext for GridFormattingContext {
         _ => in_flow_children.push(child),
       }
     }
+    let has_subgrid = box_node.style.grid_row_subgrid || box_node.style.grid_column_subgrid;
+    let child_has_subgrid = in_flow_children
+      .iter()
+      .any(|child| child.style.grid_row_subgrid || child.style.grid_column_subgrid);
 
     // Build Taffy tree from in-flow children
     let root_id = self.build_taffy_tree_children(
@@ -3006,15 +3211,38 @@ impl FormattingContext for GridFormattingContext {
     }
 
     // Convert back to FragmentNode tree and layout each in-flow child using its formatting context.
-    let mut fragment = self.convert_to_fragments(
-      &taffy,
-      root_id,
-      root_id,
-      &constraints,
-      &measured_fragments,
-      &measured_node_keys,
-      &positioned_children_map,
-    )?;
+    let mut fragment = if !has_subgrid && !child_has_subgrid {
+      match self.try_parallel_root_children_conversion(
+        &taffy,
+        root_id,
+        box_node,
+        constraints,
+        &in_flow_children,
+        &measured_fragments,
+        &measured_node_keys,
+      ) {
+        Some(result) => result?,
+        None => self.convert_to_fragments(
+          &taffy,
+          root_id,
+          root_id,
+          &constraints,
+          &measured_fragments,
+          &measured_node_keys,
+          &positioned_children_map,
+        )?,
+      }
+    } else {
+      self.convert_to_fragments(
+        &taffy,
+        root_id,
+        root_id,
+        &constraints,
+        &measured_fragments,
+        &measured_node_keys,
+        &positioned_children_map,
+      )?
+    };
 
     if let Some(trace_id) = crate::debug::runtime::runtime_toggles().usize("FASTR_TRACE_GRID_TEXT")
     {

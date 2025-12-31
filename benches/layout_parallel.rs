@@ -1,11 +1,16 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use fastrender::layout::engine::LayoutParallelism;
+use fastrender::layout::contexts::grid::GridFormattingContext;
 use fastrender::style::display::Display;
 use fastrender::style::position::Position;
 use fastrender::style::values::Length;
 use fastrender::style::ComputedStyle;
 use fastrender::text::font_loader::FontContext;
-use fastrender::{BoxNode, BoxTree, FormattingContextType, LayoutConfig, LayoutEngine, Size};
+use fastrender::{
+  AvailableSpace, BoxNode, BoxTree, ContainingBlock, FormattingContext, FormattingContextType,
+  LayoutConfig, LayoutConstraints, LayoutEngine, Size,
+};
+use rayon::ThreadPoolBuilder;
 use std::{env, sync::Arc};
 
 fn build_table(rows: usize, cols: usize) -> BoxTree {
@@ -258,7 +263,7 @@ fn build_flex_sibling_containers(
 }
 
 fn build_grid(rows: usize, cols: usize) -> BoxTree {
-  use fastrender::style::types::GridAutoFlow;
+  use fastrender::style::types::{GridAutoFlow, GridTrack};
 
   let mut root_style = ComputedStyle::default();
   root_style.display = Display::Block;
@@ -266,20 +271,53 @@ fn build_grid(rows: usize, cols: usize) -> BoxTree {
   let mut grid_style = ComputedStyle::default();
   grid_style.display = Display::Grid;
   grid_style.grid_auto_flow = GridAutoFlow::RowDense;
-  grid_style.width = Some(Length::px(1200.0));
+  // Fixed implicit row sizing keeps Taffy from needing full child layout during track sizing when
+  // the grid container itself is laid out with an indefinite inline size (shrink-to-fit style).
+  // That pushes work into fragment conversion where we can parallelize per-item layout.
+  grid_style.grid_auto_rows = vec![GridTrack::Length(Length::px(48.0))];
 
   let mut item_style = ComputedStyle::default();
   item_style.display = Display::Block;
   item_style.padding_left = Length::px(2.0);
   item_style.padding_right = Length::px(2.0);
+  item_style.padding_top = Length::px(1.0);
+  item_style.padding_bottom = Length::px(1.0);
   let item_style = Arc::new(item_style);
+
+  let mut inner_style = ComputedStyle::default();
+  inner_style.display = Display::Block;
+  inner_style.padding_left = Length::px(1.0);
+  inner_style.padding_right = Length::px(1.0);
+  inner_style.padding_top = Length::px(1.0);
+  inner_style.padding_bottom = Length::px(1.0);
+  let inner_style = Arc::new(inner_style);
 
   let mut items = Vec::new();
   for r in 0..rows {
     for c in 0..cols {
-      let text = BoxNode::new_text(item_style.clone(), format!("grid-{r}-{c} lorem ipsum"));
-      let child = BoxNode::new_block(item_style.clone(), FormattingContextType::Block, vec![text]);
-      items.push(child);
+      // Give each grid item a moderate but non-trivial subtree so per-item fragment conversion
+      // spends meaningful time in `fc.layout(...)` (and benefits from the grid formatting context's
+      // parallel conversion path).
+      let mut paragraphs = Vec::new();
+      for idx in 0..4 {
+        let text = BoxNode::new_text(
+          inner_style.clone(),
+          format!(
+            "grid-{r}-{c}-{idx} lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua"
+          ),
+        );
+        paragraphs.push(BoxNode::new_block(
+          inner_style.clone(),
+          FormattingContextType::Block,
+          vec![text],
+        ));
+      }
+      let current = BoxNode::new_block(inner_style.clone(), FormattingContextType::Block, paragraphs);
+      items.push(BoxNode::new_block(
+        item_style.clone(),
+        FormattingContextType::Block,
+        vec![current],
+      ));
     }
   }
 
@@ -425,24 +463,35 @@ fn bench_layout_parallel_dense(c: &mut Criterion) {
 }
 
 fn bench_grid_parallel(c: &mut Criterion) {
-  let box_tree = build_grid(36, 18);
+  // 256 grid items (>= 64) with non-trivial subtrees. This benchmark uses indefinite inline
+  // constraints to mimic shrink-to-fit sizing, which minimizes Taffy's measure/layout reuse and
+  // shifts most work into fragment conversion (the parallelized hotspot).
+  let box_tree = build_grid(16, 16);
   let viewport = Size::new(1400.0, 960.0);
+  let cb = ContainingBlock::viewport(viewport);
   let font_ctx = FontContext::new();
+  let constraints = LayoutConstraints::new(AvailableSpace::Indefinite, AvailableSpace::Indefinite);
+  let grid = &box_tree.root.children[0];
 
-  let serial_engine =
-    LayoutEngine::with_font_context(LayoutConfig::for_viewport(viewport), font_ctx.clone());
-  let parallelism = LayoutParallelism::enabled(8).with_max_threads(Some(num_cpus::get().max(2)));
-  let parallel_engine = LayoutEngine::with_font_context(
-    LayoutConfig::for_viewport(viewport).with_parallelism(parallelism),
-    font_ctx,
-  );
+  let serial_fc =
+    GridFormattingContext::with_viewport_and_cb(viewport, cb, font_ctx.clone());
+  let parallel_fc = GridFormattingContext::with_viewport_and_cb(viewport, cb, font_ctx)
+    .with_parallelism(LayoutParallelism::enabled(8));
+
+  let pool = ThreadPoolBuilder::new()
+    .num_threads(num_cpus::get().max(2))
+    .build()
+    .expect("build rayon pool");
 
   let mut group = c.benchmark_group("layout_grid_parallel");
   group.bench_function("serial", |b| {
-    b.iter(|| serial_engine.layout_tree(black_box(&box_tree)).unwrap())
+    b.iter(|| pool.install(|| serial_fc.layout(black_box(grid), black_box(&constraints)).unwrap()))
   });
   group.bench_function("parallel", |b| {
-    b.iter(|| parallel_engine.layout_tree(black_box(&box_tree)).unwrap())
+    b.iter(|| {
+      pool
+        .install(|| parallel_fc.layout(black_box(grid), black_box(&constraints)).unwrap())
+    })
   });
   group.finish();
 }
