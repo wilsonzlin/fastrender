@@ -1020,6 +1020,53 @@ fn cached_url_from_cache_meta(cache_path: &Path) -> Option<String> {
   parsed_meta.url
 }
 
+fn cached_html_index_by_pageset_stem(
+  cached_paths: &BTreeMap<String, PathBuf>,
+) -> HashMap<String, Vec<(String, PathBuf)>> {
+  let mut by_stem: HashMap<String, Vec<(String, PathBuf)>> = HashMap::new();
+  for (cache_stem, cache_path) in cached_paths {
+    if let Some(stem) = pageset_stem(cache_stem) {
+      by_stem
+        .entry(stem)
+        .or_default()
+        .push((cache_stem.clone(), cache_path.clone()));
+    }
+  }
+  for entries in by_stem.values_mut() {
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+  }
+  by_stem
+}
+
+fn cached_html_path_for_pageset_entry(
+  entry: &PagesetEntry,
+  cached_paths: &BTreeMap<String, PathBuf>,
+  cached_by_stem: &HashMap<String, Vec<(String, PathBuf)>>,
+) -> Option<PathBuf> {
+  if let Some(path) = cached_paths.get(&entry.cache_stem) {
+    return Some(path.clone());
+  }
+  let candidates = cached_by_stem.get(&entry.stem)?;
+  if candidates.len() == 1 {
+    return Some(candidates[0].1.clone());
+  }
+  None
+}
+
+fn resolve_pageset_entry_for_cache_stem<'a>(
+  cache_stem: &str,
+  pageset_by_cache: &HashMap<String, &'a PagesetEntry>,
+  pageset_by_stem: &HashMap<String, Vec<&'a PagesetEntry>>,
+) -> Option<&'a PagesetEntry> {
+  pageset_by_cache.get(cache_stem).copied().or_else(|| {
+    pageset_stem(cache_stem).and_then(|stem| {
+      pageset_by_stem
+        .get(&stem)
+        .and_then(|entries| (entries.len() == 1).then_some(entries[0]))
+    })
+  })
+}
+
 fn atomic_write_with_hook<F>(path: &Path, contents: &[u8], pre_rename_hook: F) -> io::Result<()>
 where
   F: FnOnce(&Path) -> io::Result<()>,
@@ -4493,6 +4540,7 @@ fn run(args: RunArgs) -> io::Result<()> {
       std::process::exit(1);
     }
   };
+  let cached_by_stem = cached_html_index_by_pageset_stem(&cached_paths);
   if cached_paths.is_empty() {
     eprintln!("No cached pages in {CACHE_HTML_DIR}. Run fetch_pages first.");
     std::process::exit(1);
@@ -4583,7 +4631,8 @@ fn run(args: RunArgs) -> io::Result<()> {
       };
       let mut found = false;
       for entry in entries {
-        if let Some(path) = cached_paths.get(&entry.cache_stem) {
+        let path = cached_html_path_for_pageset_entry(entry, &cached_paths, &cached_by_stem);
+        if let Some(path) = path {
           if !filter_matches(&entry.cache_stem, Some(entry)) {
             continue;
           }
@@ -4639,17 +4688,22 @@ fn run(args: RunArgs) -> io::Result<()> {
     }
     println!();
   } else {
-    let mut filtered_paths: Vec<(String, PathBuf)> = cached_paths
+    let mut seen_cache_stems: HashSet<String> = HashSet::new();
+    let mut filtered_paths: Vec<(String, PathBuf, Option<&PagesetEntry>)> = cached_paths
       .iter()
-      .filter(|(stem, _)| filter_matches(stem, pageset_by_cache.get(stem.as_str()).copied()))
-      .map(|(stem, path)| (stem.clone(), path.clone()))
+      .filter_map(|(cache_stem, cache_path)| {
+        let entry = resolve_pageset_entry_for_cache_stem(cache_stem, &pageset_by_cache, &pageset_by_stem);
+        let effective_cache_stem = entry.map(|e| e.cache_stem.as_str()).unwrap_or(cache_stem.as_str());
+        if !filter_matches(effective_cache_stem, entry) {
+          return None;
+        }
+        if !seen_cache_stems.insert(effective_cache_stem.to_string()) {
+          return None;
+        }
+        Some((effective_cache_stem.to_string(), cache_path.clone(), entry))
+      })
       .collect();
-    if let Some(ref filter) = page_filter {
-      filtered_paths = filtered_paths
-        .into_iter()
-        .filter(|(stem, _)| filter.matches_cache_stem(stem, pageset_stem(stem).as_deref()))
-        .collect();
-    }
+    filtered_paths.sort_by(|a, b| a.0.cmp(&b.0));
     filtered_paths = apply_shard_filter(filtered_paths, args.shard);
     if filtered_paths.is_empty() {
       eprintln!(
@@ -4659,10 +4713,7 @@ fn run(args: RunArgs) -> io::Result<()> {
     }
     items = filtered_paths
       .into_iter()
-      .filter_map(|(cache_stem, cache_path)| {
-        let entry = pageset_by_cache.get(&cache_stem).copied();
-        Some(work_item_from_cache(&cache_stem, cache_path, entry, &args))
-      })
+      .map(|(cache_stem, cache_path, entry)| work_item_from_cache(&cache_stem, cache_path, entry, &args))
       .collect();
   }
   let dump_settings = if dumps_enabled {
@@ -5320,6 +5371,77 @@ mod tests {
       "warnings: {:?}",
       outcome.warnings
     );
+  }
+
+  #[test]
+  fn cached_html_path_for_entry_prefers_exact_cache_stem() {
+    let dir = tempdir().unwrap();
+    let canonical = dir.path().join("example.com.html");
+    let alias = dir.path().join("www.example.com.html");
+    let mut cached_paths: BTreeMap<String, PathBuf> = BTreeMap::new();
+    cached_paths.insert("www.example.com".to_string(), alias.clone());
+    cached_paths.insert("example.com".to_string(), canonical.clone());
+    let cached_by_stem = cached_html_index_by_pageset_stem(&cached_paths);
+
+    let entry = PagesetEntry {
+      url: "https://example.com".to_string(),
+      stem: "example.com".to_string(),
+      cache_stem: "example.com".to_string(),
+    };
+
+    assert_eq!(
+      cached_html_path_for_pageset_entry(&entry, &cached_paths, &cached_by_stem),
+      Some(canonical)
+    );
+  }
+
+  #[test]
+  fn cached_html_path_for_entry_falls_back_to_single_alias() {
+    let dir = tempdir().unwrap();
+    let alias = dir.path().join("www.example.com.html");
+    let mut cached_paths: BTreeMap<String, PathBuf> = BTreeMap::new();
+    cached_paths.insert("www.example.com".to_string(), alias.clone());
+    let cached_by_stem = cached_html_index_by_pageset_stem(&cached_paths);
+
+    let entry = PagesetEntry {
+      url: "https://example.com".to_string(),
+      stem: "example.com".to_string(),
+      cache_stem: "example.com".to_string(),
+    };
+
+    assert_eq!(
+      cached_html_path_for_pageset_entry(&entry, &cached_paths, &cached_by_stem),
+      Some(alias)
+    );
+  }
+
+  #[test]
+  fn resolve_pageset_entry_maps_www_cache_stem() {
+    let entries = vec![PagesetEntry {
+      url: "https://example.com".to_string(),
+      stem: "example.com".to_string(),
+      cache_stem: "example.com".to_string(),
+    }];
+    let pageset_by_cache: HashMap<String, &PagesetEntry> = entries
+      .iter()
+      .map(|entry| (entry.cache_stem.clone(), entry))
+      .collect();
+    let mut pageset_by_stem: HashMap<String, Vec<&PagesetEntry>> = HashMap::new();
+    for entry in &entries {
+      pageset_by_stem
+        .entry(entry.stem.clone())
+        .or_default()
+        .push(entry);
+    }
+
+    let resolved = resolve_pageset_entry_for_cache_stem(
+      "www.example.com",
+      &pageset_by_cache,
+      &pageset_by_stem,
+    )
+    .expect("entry");
+
+    assert_eq!(resolved.cache_stem, "example.com");
   }
 
   #[test]
