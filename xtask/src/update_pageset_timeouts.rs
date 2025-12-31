@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
-use clap::Args;
+use clap::{Args, ValueEnum};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -47,6 +47,20 @@ pub struct UpdatePagesetTimeoutsArgs {
   /// Print what would change without writing files
   #[arg(long)]
   pub dry_run: bool,
+
+  /// Selection strategy for picking fixtures from the pageset progress report
+  #[arg(long, value_enum, default_value_t = PagesetTimeoutSelectionStrategy::Slowest)]
+  pub strategy: PagesetTimeoutSelectionStrategy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[clap(rename_all = "snake_case")]
+pub enum PagesetTimeoutSelectionStrategy {
+  /// Preserve the current behavior: pick the globally slowest pages by total_ms, preferring
+  /// timeouts first.
+  Slowest,
+  /// Prioritize coverage across timeout stages and OK-page hotspots.
+  Coverage,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -58,12 +72,26 @@ enum ProgressStatus {
   Error,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ProgressStage {
+  DomParse,
+  Css,
+  Cascade,
+  Layout,
+  Paint,
+}
+
 #[derive(Debug, Deserialize)]
 struct PageProgress {
   url: String,
   status: ProgressStatus,
   #[serde(default)]
   total_ms: Option<f64>,
+  #[serde(default)]
+  timeout_stage: Option<ProgressStage>,
+  #[serde(default)]
+  hotspot: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -72,6 +100,8 @@ struct ProgressEntry {
   url: String,
   status: ProgressStatus,
   total_ms: f64,
+  timeout_stage: Option<ProgressStage>,
+  hotspot: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -111,7 +141,7 @@ pub fn run_update_pageset_timeouts(args: UpdatePagesetTimeoutsArgs) -> Result<()
   }
 
   let progress = read_progress_entries(&args.progress_dir)?;
-  let selected = select_pages(&progress, count);
+  let selected = select_pages(&progress, count, args.strategy);
   if selected.is_empty() {
     bail!(
       "no pages selected from {}; expected at least one timeout or ok page",
@@ -291,13 +321,33 @@ fn read_progress_entries(progress_dir: &Path) -> Result<Vec<ProgressEntry>> {
       url: parsed.url,
       status: parsed.status,
       total_ms: parsed.total_ms.unwrap_or(0.0),
+      timeout_stage: parsed.timeout_stage,
+      hotspot: parsed.hotspot,
     });
   }
 
   Ok(entries)
 }
 
-fn select_pages(entries: &[ProgressEntry], count: usize) -> Vec<ProgressEntry> {
+fn select_pages(
+  entries: &[ProgressEntry],
+  count: usize,
+  strategy: PagesetTimeoutSelectionStrategy,
+) -> Vec<ProgressEntry> {
+  match strategy {
+    PagesetTimeoutSelectionStrategy::Slowest => select_pages_slowest(entries, count),
+    PagesetTimeoutSelectionStrategy::Coverage => select_pages_coverage(entries, count),
+  }
+}
+
+fn entry_slowest_first(a: &ProgressEntry, b: &ProgressEntry) -> std::cmp::Ordering {
+  b.total_ms
+    .partial_cmp(&a.total_ms)
+    .unwrap_or(std::cmp::Ordering::Equal)
+    .then_with(|| a.name.cmp(&b.name))
+}
+
+fn select_pages_slowest(entries: &[ProgressEntry], count: usize) -> Vec<ProgressEntry> {
   let mut timeouts: Vec<ProgressEntry> = entries
     .iter()
     .filter(|e| e.status == ProgressStatus::Timeout)
@@ -309,28 +359,141 @@ fn select_pages(entries: &[ProgressEntry], count: usize) -> Vec<ProgressEntry> {
     .cloned()
     .collect();
 
-  timeouts.sort_by(|a, b| {
-    b.total_ms
-      .partial_cmp(&a.total_ms)
-      .unwrap_or(std::cmp::Ordering::Equal)
-      .then_with(|| a.name.cmp(&b.name))
-  });
-  ok.sort_by(|a, b| {
-    b.total_ms
-      .partial_cmp(&a.total_ms)
-      .unwrap_or(std::cmp::Ordering::Equal)
-      .then_with(|| a.name.cmp(&b.name))
-  });
+  timeouts.sort_by(entry_slowest_first);
+  ok.sort_by(entry_slowest_first);
 
-  let mut selected = Vec::new();
-  for entry in timeouts.into_iter().chain(ok.into_iter()) {
-    if selected.len() >= count {
+  timeouts
+    .into_iter()
+    .chain(ok.into_iter())
+    .take(count)
+    .collect()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+enum HotspotCategory {
+  Css,
+  Cascade,
+  Layout,
+  Paint,
+  Unknown,
+}
+
+impl HotspotCategory {
+  fn from_hotspot(hotspot: Option<&str>) -> Self {
+    let Some(raw) = hotspot else {
+      return HotspotCategory::Unknown;
+    };
+    let normalized = raw.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+      "css" => HotspotCategory::Css,
+      "cascade" => HotspotCategory::Cascade,
+      "layout" => HotspotCategory::Layout,
+      "paint" => HotspotCategory::Paint,
+      "unknown" | "" => HotspotCategory::Unknown,
+      // Treat any unexpected value (including "fetch") as "unknown" for the purposes of
+      // hotspot diversity.
+      _ => HotspotCategory::Unknown,
+    }
+  }
+}
+
+fn select_pages_coverage(entries: &[ProgressEntry], count: usize) -> Vec<ProgressEntry> {
+  let mut timeouts: Vec<ProgressEntry> = entries
+    .iter()
+    .filter(|e| e.status == ProgressStatus::Timeout)
+    .cloned()
+    .collect();
+  let mut ok: Vec<ProgressEntry> = entries
+    .iter()
+    .filter(|e| e.status == ProgressStatus::Ok)
+    .cloned()
+    .collect();
+
+  timeouts.sort_by(entry_slowest_first);
+  ok.sort_by(entry_slowest_first);
+
+  // Determine one representative timeout per stage (if the stage is known), and one
+  // representative OK page per hotspot category.
+  let stage_order = [
+    ProgressStage::DomParse,
+    ProgressStage::Css,
+    ProgressStage::Cascade,
+    ProgressStage::Layout,
+    ProgressStage::Paint,
+  ];
+  let mut stage_reps: Vec<ProgressEntry> = stage_order
+    .iter()
+    .filter_map(|stage| {
+      timeouts
+        .iter()
+        .find(|e| e.timeout_stage == Some(*stage))
+        .cloned()
+    })
+    .collect();
+  stage_reps.sort_by(entry_slowest_first);
+
+  let mut hotspot_categories_present: BTreeSet<HotspotCategory> = BTreeSet::new();
+  for entry in &ok {
+    hotspot_categories_present.insert(HotspotCategory::from_hotspot(entry.hotspot.as_deref()));
+  }
+  let desired_ok_slots = hotspot_categories_present.len();
+
+  // Reserve enough slots for one OK page per hotspot category when possible, but do not reserve
+  // more than we can fit alongside the timeout-stage representatives.
+  let max_ok_slots = count.saturating_sub(stage_reps.len().min(count));
+  let ok_slots = desired_ok_slots.min(max_ok_slots);
+  let timeout_slots = count.saturating_sub(ok_slots);
+
+  let mut selected_timeouts = Vec::new();
+  let mut selected_timeout_names = BTreeSet::new();
+  for entry in stage_reps.into_iter().take(timeout_slots) {
+    selected_timeout_names.insert(entry.name.clone());
+    selected_timeouts.push(entry);
+  }
+  for entry in &timeouts {
+    if selected_timeouts.len() >= timeout_slots {
       break;
     }
-    selected.push(entry);
+    if selected_timeout_names.insert(entry.name.clone()) {
+      selected_timeouts.push(entry.clone());
+    }
+  }
+  selected_timeouts.sort_by(entry_slowest_first);
+
+  let remaining_slots = count.saturating_sub(selected_timeouts.len());
+  if remaining_slots == 0 {
+    return selected_timeouts;
   }
 
-  selected
+  let mut ok_reps_by_category: BTreeMap<HotspotCategory, ProgressEntry> = BTreeMap::new();
+  for entry in &ok {
+    let category = HotspotCategory::from_hotspot(entry.hotspot.as_deref());
+    ok_reps_by_category
+      .entry(category)
+      .or_insert_with(|| entry.clone());
+  }
+  let mut ok_reps: Vec<ProgressEntry> = ok_reps_by_category.into_values().collect();
+  ok_reps.sort_by(entry_slowest_first);
+
+  let mut selected_ok = Vec::new();
+  let mut selected_ok_names = BTreeSet::new();
+  for entry in ok_reps.into_iter().take(remaining_slots) {
+    selected_ok_names.insert(entry.name.clone());
+    selected_ok.push(entry);
+  }
+  for entry in &ok {
+    if selected_ok.len() >= remaining_slots {
+      break;
+    }
+    if selected_ok_names.insert(entry.name.clone()) {
+      selected_ok.push(entry.clone());
+    }
+  }
+  selected_ok.sort_by(entry_slowest_first);
+
+  selected_timeouts.extend(selected_ok);
+  selected_timeouts.truncate(count);
+  selected_timeouts
 }
 
 fn update_manifest(
@@ -385,7 +548,7 @@ mod tests {
   #[test]
   fn selects_timeouts_then_slowest_ok_pages() {
     let entries = read_progress_entries(&fixture_progress_dir()).expect("read fixture progress");
-    let selected = select_pages(&entries, 3);
+    let selected = select_pages(&entries, 3, PagesetTimeoutSelectionStrategy::Slowest);
     let names: Vec<&str> = selected.iter().map(|e| e.name.as_str()).collect();
     assert_eq!(
       names,
@@ -412,7 +575,7 @@ mod tests {
 
     let existing = load_manifest(&manifest_path).expect("load manifest");
     let entries = read_progress_entries(&fixture_progress_dir()).expect("read fixture progress");
-    let selected = select_pages(&entries, 3);
+    let selected = select_pages(&entries, 3, PagesetTimeoutSelectionStrategy::Slowest);
     let updated = update_manifest(existing, &selected);
     fs::write(
       &manifest_path,
@@ -432,5 +595,137 @@ mod tests {
       ]
     });
     assert_eq!(reparsed, expected);
+  }
+
+  fn mk_entry(
+    name: &str,
+    status: ProgressStatus,
+    total_ms: f64,
+    timeout_stage: Option<ProgressStage>,
+    hotspot: Option<&str>,
+  ) -> ProgressEntry {
+    ProgressEntry {
+      name: name.to_string(),
+      url: format!("https://{name}/"),
+      status,
+      total_ms,
+      timeout_stage,
+      hotspot: hotspot.map(|s| s.to_string()),
+    }
+  }
+
+  #[test]
+  fn coverage_strategy_picks_one_timeout_per_stage_when_available() {
+    let entries = vec![
+      mk_entry(
+        "dom-slowest",
+        ProgressStatus::Timeout,
+        5000.0,
+        Some(ProgressStage::DomParse),
+        None,
+      ),
+      mk_entry(
+        "dom-fast",
+        ProgressStatus::Timeout,
+        4000.0,
+        Some(ProgressStage::DomParse),
+        None,
+      ),
+      mk_entry(
+        "css-timeout",
+        ProgressStatus::Timeout,
+        4900.0,
+        Some(ProgressStage::Css),
+        None,
+      ),
+      mk_entry(
+        "cascade-timeout",
+        ProgressStatus::Timeout,
+        4800.0,
+        Some(ProgressStage::Cascade),
+        None,
+      ),
+      mk_entry(
+        "layout-timeout",
+        ProgressStatus::Timeout,
+        4700.0,
+        Some(ProgressStage::Layout),
+        None,
+      ),
+      mk_entry(
+        "paint-timeout",
+        ProgressStatus::Timeout,
+        4600.0,
+        Some(ProgressStage::Paint),
+        None,
+      ),
+    ];
+
+    let selected = select_pages(&entries, 5, PagesetTimeoutSelectionStrategy::Coverage);
+    let names: Vec<&str> = selected.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(
+      names,
+      vec![
+        "dom-slowest",
+        "css-timeout",
+        "cascade-timeout",
+        "layout-timeout",
+        "paint-timeout"
+      ]
+    );
+  }
+
+  #[test]
+  fn coverage_strategy_is_deterministic() {
+    let entries = vec![
+      mk_entry(
+        "timeout-layout",
+        ProgressStatus::Timeout,
+        5000.0,
+        Some(ProgressStage::Layout),
+        None,
+      ),
+      mk_entry(
+        "timeout-css",
+        ProgressStatus::Timeout,
+        5000.0,
+        Some(ProgressStage::Css),
+        None,
+      ),
+      mk_entry(
+        "slow-ok-paint",
+        ProgressStatus::Ok,
+        4500.0,
+        None,
+        Some("paint"),
+      ),
+      mk_entry("slow-ok-css", ProgressStatus::Ok, 4400.0, None, Some("css")),
+    ];
+
+    let a = select_pages(&entries, 3, PagesetTimeoutSelectionStrategy::Coverage);
+    let b = select_pages(&entries, 3, PagesetTimeoutSelectionStrategy::Coverage);
+    let a_names: Vec<&str> = a.iter().map(|e| e.name.as_str()).collect();
+    let b_names: Vec<&str> = b.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(a_names, b_names);
+  }
+
+  #[test]
+  fn parses_progress_entries_missing_hotspot_and_timeout_stage() {
+    let temp = TempDir::new().expect("tempdir");
+    let progress_dir = temp.path();
+    fs::write(
+      progress_dir.join("missing-fields.json"),
+      r#"{"url":"https://example.test","status":"ok","total_ms":123.0}"#,
+    )
+    .unwrap();
+
+    let parsed = read_progress_entries(progress_dir).expect("read progress entries");
+    assert_eq!(parsed.len(), 1);
+    assert_eq!(parsed[0].name, "missing-fields");
+    assert_eq!(parsed[0].url, "https://example.test");
+    assert_eq!(parsed[0].status, ProgressStatus::Ok);
+    assert_eq!(parsed[0].total_ms, 123.0);
+    assert_eq!(parsed[0].timeout_stage, None);
+    assert_eq!(parsed[0].hotspot, None);
   }
 }

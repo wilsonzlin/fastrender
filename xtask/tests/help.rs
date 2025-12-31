@@ -62,3 +62,22 @@ fn pageset_help_mentions_filters() {
     "pageset help should mention sharding and page filters; got:\n{stdout}"
   );
 }
+
+#[test]
+fn update_pageset_timeouts_help_mentions_strategy_flag() {
+  let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    .args(["update-pageset-timeouts", "--help"])
+    .output()
+    .expect("run cargo xtask update-pageset-timeouts --help");
+
+  assert!(
+    output.status.success(),
+    "update-pageset-timeouts help should exit successfully"
+  );
+
+  let stdout = String::from_utf8_lossy(&output.stdout);
+  assert!(
+    stdout.contains("--strategy"),
+    "update-pageset-timeouts help should mention the selection strategy; got:\n{stdout}"
+  );
+}
