@@ -3746,6 +3746,18 @@ fn run(args: RunArgs) -> io::Result<()> {
     normalize_user_agent_for_log(&args.user_agent)
   );
   println!("Accept-Language: {}", args.accept_language);
+  #[cfg(feature = "disk_cache")]
+  {
+    let max_age = if args.disk_cache.max_age_secs == 0 {
+      "none".to_string()
+    } else {
+      format!("{}s", args.disk_cache.max_age_secs)
+    };
+    println!(
+      "Disk cache: max_bytes={} max_age={}",
+      args.disk_cache.max_bytes, max_age
+    );
+  }
   if args.fonts.bundled_fonts {
     println!("Fonts: bundled fixtures (system fonts skipped)");
   } else if !args.fonts.font_dir.is_empty() {
