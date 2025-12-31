@@ -194,17 +194,31 @@ fn popover_top_layer(node: &DomNode) -> Option<TopLayerKind> {
 }
 
 fn container_query_matches(
+  container_id: usize,
   query: &ContainerQuery,
   container: &ContainerQueryInfo,
   ctx: &ContainerQueryContext,
   guard: &mut Vec<usize>,
 ) -> bool {
+  let key = QueryEvalCacheKey {
+    ctx_ptr: ctx as *const _ as usize,
+    container_id,
+    query_ptr: query as *const _ as usize,
+  };
+  if let Some(hit) = CONTAINER_QUERY_MEMO
+    .with(|memo| memo.borrow().query_eval.get(&key).copied())
+  {
+    return hit;
+  }
+
   match query {
     ContainerQuery::Size(mq) => {
       if !matches!(
         container.container_type,
         ContainerType::Size | ContainerType::InlineSize
       ) {
+        CONTAINER_QUERY_MEMO
+          .with(|memo| memo.borrow_mut().query_eval.insert(key, false));
         return false;
       }
       let mut media_ctx = ctx.base_media.clone();
@@ -214,24 +228,42 @@ fn container_query_matches(
         _ => container.block_size,
       };
       media_ctx.base_font_size = container.font_size;
-      media_ctx.evaluate(mq)
+      let result = media_ctx.evaluate(mq);
+      CONTAINER_QUERY_MEMO.with(|memo| memo.borrow_mut().query_eval.insert(key, result));
+      result
     }
     ContainerQuery::Style(style_query) => {
       if !matches!(
         container.container_type,
         ContainerType::Size | ContainerType::InlineSize | ContainerType::Style
       ) {
+        CONTAINER_QUERY_MEMO
+          .with(|memo| memo.borrow_mut().query_eval.insert(key, false));
         return false;
       }
-      matches_style_query(style_query, container.styles.as_ref())
+      let result = matches_style_query(style_query, container.styles.as_ref());
+      CONTAINER_QUERY_MEMO.with(|memo| memo.borrow_mut().query_eval.insert(key, result));
+      result
     }
-    ContainerQuery::Not(inner) => !container_query_matches(inner, container, ctx, guard),
-    ContainerQuery::And(list) => list
-      .iter()
-      .all(|inner| container_query_matches(inner, container, ctx, guard)),
-    ContainerQuery::Or(list) => list
-      .iter()
-      .any(|inner| container_query_matches(inner, container, ctx, guard)),
+    ContainerQuery::Not(inner) => {
+      let result = !container_query_matches(container_id, inner, container, ctx, guard);
+      CONTAINER_QUERY_MEMO.with(|memo| memo.borrow_mut().query_eval.insert(key, result));
+      result
+    }
+    ContainerQuery::And(list) => {
+      let result = list
+        .iter()
+        .all(|inner| container_query_matches(container_id, inner, container, ctx, guard));
+      CONTAINER_QUERY_MEMO.with(|memo| memo.borrow_mut().query_eval.insert(key, result));
+      result
+    }
+    ContainerQuery::Or(list) => {
+      let result = list
+        .iter()
+        .any(|inner| container_query_matches(container_id, inner, container, ctx, guard));
+      CONTAINER_QUERY_MEMO.with(|memo| memo.borrow_mut().query_eval.insert(key, result));
+      result
+    }
   }
 }
 
@@ -321,10 +353,18 @@ struct FindContainerCacheKey {
   support_mask: u8,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct QueryEvalCacheKey {
+  ctx_ptr: usize,
+  container_id: usize,
+  query_ptr: usize,
+}
+
 #[derive(Debug)]
 struct ContainerQueryMemo {
   // Map from (query-container lookup key) -> selected container id (or None).
   find_container: HashMap<FindContainerCacheKey, Option<usize>>,
+  query_eval: HashMap<QueryEvalCacheKey, bool>,
   // Intern container names to avoid storing strings in every cache key.
   name_ids: HashMap<String, u32>,
   next_name_id: u32,
@@ -334,6 +374,7 @@ impl Default for ContainerQueryMemo {
   fn default() -> Self {
     Self {
       find_container: HashMap::new(),
+      query_eval: HashMap::new(),
       name_ids: HashMap::new(),
       next_name_id: 1,
     }
@@ -343,6 +384,7 @@ impl Default for ContainerQueryMemo {
 impl ContainerQueryMemo {
   fn clear(&mut self) {
     self.find_container.clear();
+    self.query_eval.clear();
     self.name_ids.clear();
     self.next_name_id = 1;
   }
@@ -2346,7 +2388,7 @@ impl ContainerQueryContext {
         && condition
           .query_list
           .iter()
-          .any(|query| container_query_matches(query, container, self, guard));
+          .any(|query| container_query_matches(container_id, query, container, self, guard));
       guard.pop();
 
       if !matches {
