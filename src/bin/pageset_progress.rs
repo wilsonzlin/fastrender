@@ -761,6 +761,24 @@ fn manual_notes_from_previous(previous: &PageProgress) -> Option<String> {
   }
 }
 
+fn legacy_auto_notes_from_previous(previous: &PageProgress) -> Option<String> {
+  let raw = previous.notes.trim();
+  if raw.is_empty() || !previous.auto_notes.trim().is_empty() {
+    return None;
+  }
+  let auto: String = raw
+    .lines()
+    .filter(|line| is_legacy_auto_note_line(line))
+    .collect::<Vec<_>>()
+    .join("\n");
+  let auto = auto.trim();
+  if auto.is_empty() {
+    None
+  } else {
+    Some(auto.to_string())
+  }
+}
+
 fn normalize_hotspot_filter(h: &str) -> String {
   normalize_hotspot(h).to_ascii_lowercase()
 }
@@ -3278,9 +3296,15 @@ fn report(args: ReportArgs) -> io::Result<()> {
           println!("      stats: (not captured in progress file)");
         }
       }
-      print_note_block("notes (manual)", &entry.progress.notes, "      ");
+      let manual_notes = manual_notes_from_previous(&entry.progress).unwrap_or_default();
+      print_note_block("notes (manual)", &manual_notes, "      ");
       if args.verbose {
-        print_note_block("last run", &entry.progress.auto_notes, "      ");
+        let auto_notes = if entry.progress.auto_notes.trim().is_empty() {
+          legacy_auto_notes_from_previous(&entry.progress).unwrap_or_default()
+        } else {
+          entry.progress.auto_notes.clone()
+        };
+        print_note_block("last run", &auto_notes, "      ");
       }
     }
   }
@@ -5748,6 +5772,10 @@ mod tests {
       manual_notes_from_previous(&previous),
       Some("manual blocker".to_string())
     );
+    assert_eq!(
+      legacy_auto_notes_from_previous(&previous),
+      Some("[paint] Invalid paint parameters: Layout failed\nhard timeout after 5.00s\nstage: layout".to_string())
+    );
   }
 
   #[test]
@@ -5764,6 +5792,10 @@ mod tests {
     assert_eq!(
       manual_notes_from_previous(&previous),
       Some("manual blocker".to_string())
+    );
+    assert_eq!(
+      legacy_auto_notes_from_previous(&previous),
+      Some("fetch failed: [resource] https://example.com: timeout: global".to_string())
     );
   }
 
