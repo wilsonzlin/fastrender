@@ -5184,6 +5184,27 @@ mod tests {
   }
 
   #[test]
+  fn flex_auto_min_height_uses_item_formatting_context() {
+    let mut flex_style = ComputedStyle::default();
+    flex_style.display = Display::Flex;
+    flex_style.flex_direction = FlexDirection::Column;
+
+    let mut item_style = ComputedStyle::default();
+    item_style.height = Some(Length::px(10.0));
+    item_style.overflow_y = Overflow::Visible;
+
+    let child =
+      BoxNode::new_block(Arc::new(item_style), FormattingContextType::Block, vec![]);
+    let container =
+      BoxNode::new_block(Arc::new(flex_style), FormattingContextType::Flex, vec![child]);
+
+    let fc = FlexFormattingContext::new();
+    let constraints = LayoutConstraints::definite(100.0, 100.0);
+    fc.layout(&container, &constraints)
+      .expect("flex layout should succeed without calling flex layout on the block item");
+  }
+
+  #[test]
   fn taffy_style_maps_overflow_and_scrollbar_width() {
     let mut style = ComputedStyle::default();
     style.display = Display::Flex;
