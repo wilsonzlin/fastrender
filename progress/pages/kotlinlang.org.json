@@ -1,36 +1,36 @@
 {
-  "url": "https://kotlinlang.org",
+  "url": "https://kotlinlang.org/",
   "status": "ok",
-  "total_ms": 3824.714391,
+  "total_ms": 2337.285344,
   "stages_ms": {
-    "fetch": 2.378303,
-    "css": 148.123004,
-    "cascade": 2378.25387,
-    "layout": 397.37660699999986,
-    "paint": 608.4864449999999
+    "fetch": 3.611363,
+    "css": 90.437717,
+    "cascade": 452.045892,
+    "layout": 343.6547199999999,
+    "paint": 65.337749
   },
   "notes": "",
   "hotspot": "cascade",
-  "failure_stage": null,
+  "failure_stage": "paint",
   "timeout_stage": null,
   "last_good_commit": "4e2dcd18c8bbe80d971147f7ea1026b6e720fdbb",
-  "last_regression_commit": "",
+  "last_regression_commit": "4e2dcd18c8bbe80d971147f7ea1026b6e720fdbb",
   "diagnostics": {
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 2.378303,
+        "dom_parse_ms": 3.611363,
         "css_inlining_ms": null,
-        "css_parse_ms": 148.123004,
-        "cascade_ms": 226.217267,
-        "box_tree_ms": 2152.036603,
-        "layout_ms": 306.48618799999997,
-        "text_fallback_ms": 92.23650900000008,
-        "text_shape_ms": 90.8904189999999,
-        "paint_build_ms": 1.1398350000000002,
+        "css_parse_ms": 90.437717,
+        "cascade_ms": 242.018788,
+        "box_tree_ms": 210.02710399999998,
+        "layout_ms": 265.235171,
+        "text_fallback_ms": 81.29994299999987,
+        "text_shape_ms": 78.41954899999989,
+        "paint_build_ms": 1.29835,
         "paint_optimize_ms": 0.0,
-        "paint_rasterize_ms": 599.971556,
-        "text_rasterize_ms": 7.375054,
+        "paint_rasterize_ms": 56.637001,
+        "text_rasterize_ms": 7.402398,
         "encode_ms": null
       },
       "counts": {
@@ -107,7 +107,7 @@
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 601.1113909999999,
+        "serial_ms": 1103.8938090000001,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -117,14 +117,14 @@
       "resources": {
         "fetch_counts": {
           "Stylesheet": 10,
-          "Image": 42
+          "Image": 46
         },
-        "resource_cache_fresh_hits": 0,
+        "resource_cache_fresh_hits": 7,
         "resource_cache_revalidated_hits": 0,
-        "resource_cache_misses": 22,
+        "resource_cache_misses": 16,
         "image_cache_hits": 12,
-        "image_cache_misses": 42,
-        "image_decode_ms": 10.893285
+        "image_cache_misses": 46,
+        "image_decode_ms": 12.247182
       }
     }
   }

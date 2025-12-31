@@ -1,13 +1,13 @@
 {
-  "url": "https://www.openstreetmap.org",
+  "url": "https://www.openstreetmap.org/",
   "status": "ok",
-  "total_ms": 1760.703222,
+  "total_ms": 985.054733,
   "stages_ms": {
-    "fetch": 1.6604180000000002,
-    "css": 146.881277,
-    "cascade": 667.7775790000001,
-    "layout": 40.186788,
-    "paint": 503.2227449999999
+    "fetch": 1.355101,
+    "css": 114.960393,
+    "cascade": 532.53124,
+    "layout": 23.964593000000004,
+    "paint": 74.174687
   },
   "notes": "",
   "hotspot": "cascade",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 1.6604180000000002,
+        "dom_parse_ms": 1.355101,
         "css_inlining_ms": null,
-        "css_parse_ms": 146.881277,
-        "cascade_ms": 207.884888,
-        "box_tree_ms": 459.892691,
-        "layout_ms": 37.567209,
-        "text_fallback_ms": 3.564670000000001,
-        "text_shape_ms": 2.6195790000000003,
-        "paint_build_ms": 0.589213,
-        "paint_optimize_ms": 0.0,
-        "paint_rasterize_ms": 495.585497,
-        "text_rasterize_ms": 7.048034999999998,
+        "css_parse_ms": 114.960393,
+        "cascade_ms": 185.773197,
+        "box_tree_ms": 346.75804300000004,
+        "layout_ms": 22.237893000000003,
+        "text_fallback_ms": 2.128707,
+        "text_shape_ms": 1.7267,
+        "paint_build_ms": 49.054422,
+        "paint_optimize_ms": 0.045551,
+        "paint_rasterize_ms": 22.586871000000002,
+        "text_rasterize_ms": 2.4878430000000002,
         "encode_ms": null
       },
       "counts": {
@@ -41,15 +41,15 @@
         "shaped_runs": 85,
         "glyphs": 1418,
         "color_glyph_rasters": 0,
-        "fallback_cache_hits": 444,
-        "fallback_cache_misses": 1044,
+        "fallback_cache_hits": 449,
+        "fallback_cache_misses": 1034,
         "last_resort_font_fallbacks": 0,
-        "glyph_cache_hits": 0,
-        "glyph_cache_misses": 0,
+        "glyph_cache_hits": 196,
+        "glyph_cache_misses": 56,
         "glyph_cache_evictions": 0,
-        "glyph_cache_bytes": 0,
+        "glyph_cache_bytes": 17946,
         "color_glyph_cache_hits": 0,
-        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_misses": 252,
         "color_glyph_cache_evictions": 0,
         "color_glyph_cache_bytes": 0
       },
@@ -96,18 +96,18 @@
         "fragment_traversed": 0
       },
       "paint": {
-        "display_items": 27,
-        "optimized_items": null,
-        "culled_items": null,
-        "transparent_removed": null,
-        "noop_removed": null,
-        "merged_items": null,
+        "display_items": 93,
+        "optimized_items": 85,
+        "culled_items": 0,
+        "transparent_removed": 0,
+        "noop_removed": 8,
+        "merged_items": 0,
         "gradient_ms": 0.0,
         "gradient_pixels": 0,
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 496.17470999999995,
+        "serial_ms": 117.96947200000001,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -117,14 +117,14 @@
       "resources": {
         "fetch_counts": {
           "Stylesheet": 3,
-          "Image": 4
+          "Image": 2
         },
-        "resource_cache_fresh_hits": 0,
+        "resource_cache_fresh_hits": 1,
         "resource_cache_revalidated_hits": 0,
-        "resource_cache_misses": 2,
-        "image_cache_hits": 1,
-        "image_cache_misses": 4,
-        "image_decode_ms": 38.50731
+        "resource_cache_misses": 1,
+        "image_cache_hits": 2,
+        "image_cache_misses": 2,
+        "image_decode_ms": 33.648256
       }
     }
   }

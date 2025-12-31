@@ -1,36 +1,36 @@
 {
-  "url": "https://huffpost.com",
+  "url": "https://www.huffpost.com/",
   "status": "ok",
-  "total_ms": 2887.030681,
+  "total_ms": 3915.5901000000003,
   "stages_ms": {
-    "fetch": 28.835483,
-    "css": 176.60364,
-    "cascade": 629.196508,
-    "layout": 1616.9613289999998,
-    "paint": 200.00427
+    "fetch": 42.24953,
+    "css": 175.14961200000002,
+    "cascade": 593.000077,
+    "layout": 1801.437288999999,
+    "paint": 154.54820700000002
   },
   "notes": "",
   "hotspot": "layout",
-  "failure_stage": null,
+  "failure_stage": "paint",
   "timeout_stage": null,
-  "last_good_commit": "02eacedd5340344865616a4f4d19e08dd6f218fe",
+  "last_good_commit": "4e2dcd18c8bbe80d971147f7ea1026b6e720fdbb",
   "last_regression_commit": "833aa788ed1a7102190a18ae8eae4a0af8876bc4",
   "diagnostics": {
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 28.835483,
+        "dom_parse_ms": 42.24953,
         "css_inlining_ms": null,
-        "css_parse_ms": 176.60364,
-        "cascade_ms": 459.344199,
-        "box_tree_ms": 169.85230900000002,
-        "layout_ms": 1371.4402770000002,
-        "text_fallback_ms": 625.1745540000039,
-        "text_shape_ms": 245.52105199999963,
-        "paint_build_ms": 7.588349,
+        "css_parse_ms": 175.14961200000002,
+        "cascade_ms": 470.682679,
+        "box_tree_ms": 122.317398,
+        "layout_ms": 1540.949748,
+        "text_fallback_ms": 731.8105200000024,
+        "text_shape_ms": 260.48754099999906,
+        "paint_build_ms": 3.5175110000000003,
         "paint_optimize_ms": 0.0,
-        "paint_rasterize_ms": 172.615521,
-        "text_rasterize_ms": 19.800400000000007,
+        "paint_rasterize_ms": 131.697754,
+        "text_rasterize_ms": 19.332942000000006,
         "encode_ms": null
       },
       "counts": {
@@ -38,11 +38,11 @@
         "styled_nodes": 2539,
         "box_nodes": 1852,
         "fragments": 3198,
-        "shaped_runs": 10846,
-        "glyphs": 306247,
+        "shaped_runs": 10848,
+        "glyphs": 306259,
         "color_glyph_rasters": 0,
-        "fallback_cache_hits": 187611,
-        "fallback_cache_misses": 121864,
+        "fallback_cache_hits": 187618,
+        "fallback_cache_misses": 121874,
         "last_resort_font_fallbacks": 0,
         "glyph_cache_hits": 0,
         "glyph_cache_misses": 0,
@@ -107,7 +107,7 @@
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 180.20387,
+        "serial_ms": 1151.116374,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -117,14 +117,14 @@
       "resources": {
         "fetch_counts": {
           "Stylesheet": 13,
-          "Image": 10
+          "Image": 12
         },
-        "resource_cache_fresh_hits": 0,
+        "resource_cache_fresh_hits": 1,
         "resource_cache_revalidated_hits": 0,
-        "resource_cache_misses": 2,
+        "resource_cache_misses": 1,
         "image_cache_hits": 0,
-        "image_cache_misses": 10,
-        "image_decode_ms": 18.420682
+        "image_cache_misses": 12,
+        "image_decode_ms": 18.290903
       }
     }
   }

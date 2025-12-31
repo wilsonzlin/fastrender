@@ -185,19 +185,38 @@ impl DisplayListOptimizer {
   ///
   /// Returns the optimized display list and statistics about what was optimized.
   pub fn optimize(&self, list: DisplayList, viewport: Rect) -> (DisplayList, OptimizationStats) {
-    self
-      .optimize_checked(list, viewport)
-      .unwrap_or_else(|err| panic!("display list optimization failed: {err}"))
+    let original_count = list.len();
+    match self.optimize_checked(&list, viewport) {
+      Ok((optimized, stats)) => (optimized, stats),
+      Err(_err) => {
+        // Optimization is best-effort. When rendering under a deadline (e.g. pageset),
+        // `check_active` can abort optimization early; callers should still be able to
+        // rasterize the unoptimized list instead of panicking.
+        (
+          list,
+          OptimizationStats {
+            original_count,
+            final_count: original_count,
+            ..Default::default()
+          },
+        )
+      }
+    }
   }
 
   /// Optimize a display list with deadline awareness.
   pub fn optimize_checked(
     &self,
-    list: DisplayList,
+    list: &DisplayList,
     viewport: Rect,
   ) -> Result<(DisplayList, OptimizationStats)> {
     let original_count = list.len();
-    let mut items: Vec<DisplayItem> = list.into_items();
+    check_active(RenderStage::Paint).map_err(Error::Render)?;
+
+    // Clone display items so we can apply in-place optimization passes (fill merging and retention)
+    // without mutating the input list. This also ensures callers can fall back to the original
+    // list on timeout.
+    let mut items: Vec<DisplayItem> = list.items().to_vec();
     let mut indices: Vec<usize> = (0..items.len()).collect();
     let mut scratch_indices: Vec<usize> = Vec::with_capacity(indices.len());
     let mut stats = OptimizationStats {
@@ -205,8 +224,6 @@ impl DisplayListOptimizer {
       ..Default::default()
     };
     let mut deadline_counter = 0usize;
-
-    check_active(RenderStage::Paint).map_err(Error::Render)?;
 
     // Pass 1: Remove transparent items
     if self.config.enable_transparent_removal {

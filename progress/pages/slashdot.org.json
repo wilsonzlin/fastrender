@@ -1,13 +1,13 @@
 {
-  "url": "https://slashdot.org",
+  "url": "https://slashdot.org/ajax.pl?op=nel",
   "status": "ok",
-  "total_ms": 1275.906887,
+  "total_ms": 1106.876735,
   "stages_ms": {
-    "fetch": 0.508402,
-    "css": 61.86555,
-    "cascade": 96.884372,
-    "layout": 889.106776,
-    "paint": 10.32431
+    "fetch": 0.288536,
+    "css": 27.805902,
+    "cascade": 115.978117,
+    "layout": 752.903653,
+    "paint": 12.396317999999999
   },
   "notes": "",
   "hotspot": "layout",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 0.508402,
+        "dom_parse_ms": 0.288536,
         "css_inlining_ms": null,
-        "css_parse_ms": 61.86555,
-        "cascade_ms": 43.222264,
-        "box_tree_ms": 53.662108,
-        "layout_ms": 888.2926679999999,
-        "text_fallback_ms": 0.758576,
-        "text_shape_ms": 0.814108,
-        "paint_build_ms": 0.164964,
-        "paint_optimize_ms": 0.0,
-        "paint_rasterize_ms": 5.972453,
-        "text_rasterize_ms": 4.1868929999999995,
+        "css_parse_ms": 27.805902,
+        "cascade_ms": 93.359844,
+        "box_tree_ms": 22.618273000000002,
+        "layout_ms": 752.21348,
+        "text_fallback_ms": 0.7246600000000001,
+        "text_shape_ms": 0.6901729999999997,
+        "paint_build_ms": 3.203813,
+        "paint_optimize_ms": 0.039081,
+        "paint_rasterize_ms": 4.918214,
+        "text_rasterize_ms": 4.23521,
         "encode_ms": null
       },
       "counts": {
@@ -44,12 +44,12 @@
         "fallback_cache_hits": 608,
         "fallback_cache_misses": 244,
         "last_resort_font_fallbacks": 0,
-        "glyph_cache_hits": 0,
-        "glyph_cache_misses": 0,
+        "glyph_cache_hits": 352,
+        "glyph_cache_misses": 82,
         "glyph_cache_evictions": 0,
-        "glyph_cache_bytes": 0,
+        "glyph_cache_bytes": 40043,
         "color_glyph_cache_hits": 0,
-        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_misses": 434,
         "color_glyph_cache_evictions": 0,
         "color_glyph_cache_bytes": 0
       },
@@ -97,17 +97,17 @@
       },
       "paint": {
         "display_items": 17,
-        "optimized_items": null,
-        "culled_items": null,
-        "transparent_removed": null,
-        "noop_removed": null,
-        "merged_items": null,
+        "optimized_items": 17,
+        "culled_items": 0,
+        "transparent_removed": 0,
+        "noop_removed": 0,
+        "merged_items": 0,
         "gradient_ms": 0.0,
         "gradient_pixels": 0,
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 6.137417,
+        "serial_ms": 9.012298000000001,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -123,7 +123,7 @@
         "resource_cache_misses": 1,
         "image_cache_hits": 1,
         "image_cache_misses": 1,
-        "image_decode_ms": 0.216785
+        "image_decode_ms": 0.156353
       }
     }
   }

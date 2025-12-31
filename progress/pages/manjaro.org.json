@@ -1,13 +1,13 @@
 {
-  "url": "https://manjaro.org",
+  "url": "https://manjaro.org/",
   "status": "ok",
-  "total_ms": 1950.120648,
+  "total_ms": 1388.0593059999999,
   "stages_ms": {
-    "fetch": 0.873989,
-    "css": 118.582575,
-    "cascade": 1343.374031,
-    "layout": 141.95290100000005,
-    "paint": 49.256437
+    "fetch": 0.723197,
+    "css": 33.904678000000004,
+    "cascade": 952.612476,
+    "layout": 133.59944800000002,
+    "paint": 17.283636
   },
   "notes": "",
   "hotspot": "cascade",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 0.873989,
+        "dom_parse_ms": 0.723197,
         "css_inlining_ms": null,
-        "css_parse_ms": 118.582575,
-        "cascade_ms": 103.246054,
-        "box_tree_ms": 1240.127977,
-        "layout_ms": 111.563619,
-        "text_fallback_ms": 28.476652999999985,
-        "text_shape_ms": 30.38928200000002,
-        "paint_build_ms": 0.266306,
-        "paint_optimize_ms": 0.0,
-        "paint_rasterize_ms": 46.369954,
-        "text_rasterize_ms": 2.620176999999999,
+        "css_parse_ms": 33.904678000000004,
+        "cascade_ms": 53.028957,
+        "box_tree_ms": 899.583519,
+        "layout_ms": 104.701704,
+        "text_fallback_ms": 27.251872000000017,
+        "text_shape_ms": 28.89774400000002,
+        "paint_build_ms": 9.523079000000001,
+        "paint_optimize_ms": 0.02405,
+        "paint_rasterize_ms": 7.121734,
+        "text_rasterize_ms": 0.6147730000000001,
         "encode_ms": null
       },
       "counts": {
@@ -38,18 +38,18 @@
         "styled_nodes": 234,
         "box_nodes": 178,
         "fragments": 161,
-        "shaped_runs": 2415,
-        "glyphs": 40636,
+        "shaped_runs": 2410,
+        "glyphs": 40594,
         "color_glyph_rasters": 0,
-        "fallback_cache_hits": 18737,
-        "fallback_cache_misses": 20160,
+        "fallback_cache_hits": 18729,
+        "fallback_cache_misses": 20140,
         "last_resort_font_fallbacks": 0,
-        "glyph_cache_hits": 0,
-        "glyph_cache_misses": 0,
+        "glyph_cache_hits": 11,
+        "glyph_cache_misses": 28,
         "glyph_cache_evictions": 0,
-        "glyph_cache_bytes": 0,
+        "glyph_cache_bytes": 8796,
         "color_glyph_cache_hits": 0,
-        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_misses": 39,
         "color_glyph_cache_evictions": 0,
         "color_glyph_cache_bytes": 0
       },
@@ -96,18 +96,18 @@
         "fragment_traversed": 0
       },
       "paint": {
-        "display_items": 51,
-        "optimized_items": null,
-        "culled_items": null,
-        "transparent_removed": null,
-        "noop_removed": null,
-        "merged_items": null,
+        "display_items": 14,
+        "optimized_items": 14,
+        "culled_items": 0,
+        "transparent_removed": 0,
+        "noop_removed": 0,
+        "merged_items": 0,
         "gradient_ms": 0.0,
         "gradient_pixels": 0,
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 46.63626,
+        "serial_ms": 23.53026,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -117,14 +117,14 @@
       "resources": {
         "fetch_counts": {
           "Stylesheet": 1,
-          "Image": 8
+          "Image": 4
         },
         "resource_cache_fresh_hits": 0,
-        "resource_cache_revalidated_hits": 0,
-        "resource_cache_misses": 4,
-        "image_cache_hits": 7,
-        "image_cache_misses": 8,
-        "image_decode_ms": 22.542523999999997
+        "resource_cache_revalidated_hits": 4,
+        "resource_cache_misses": 0,
+        "image_cache_hits": 3,
+        "image_cache_misses": 4,
+        "image_decode_ms": 5.854574999999999
       }
     }
   }

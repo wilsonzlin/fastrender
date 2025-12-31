@@ -1,7 +1,7 @@
 {
-  "url": "https://developer.mozilla.org/en-US/docs/Web/CSS/writing-mode",
+  "url": "https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/writing-mode",
   "status": "error",
-  "total_ms": 4098.328889,
+  "total_ms": 3865.695708,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

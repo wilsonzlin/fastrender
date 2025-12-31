@@ -1,13 +1,13 @@
 {
-  "url": "https://reddit.com",
+  "url": "https://www.reddit.com/",
   "status": "ok",
-  "total_ms": 614.364837,
+  "total_ms": 409.05787,
   "stages_ms": {
-    "fetch": 0.962381,
-    "css": 19.223179,
-    "cascade": 100.718937,
-    "layout": 29.812796,
-    "paint": 10.631319
+    "fetch": 0.565353,
+    "css": 14.680619,
+    "cascade": 85.93950300000002,
+    "layout": 28.316785,
+    "paint": 40.072905
   },
   "notes": "",
   "hotspot": "cascade",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 0.962381,
+        "dom_parse_ms": 0.565353,
         "css_inlining_ms": null,
-        "css_parse_ms": 19.223179,
-        "cascade_ms": 30.316157,
-        "box_tree_ms": 70.40277999999999,
-        "layout_ms": 28.167068,
-        "text_fallback_ms": 16.167415000000002,
-        "text_shape_ms": 1.6457280000000003,
-        "paint_build_ms": 0.165004,
-        "paint_optimize_ms": 0.0,
-        "paint_rasterize_ms": 8.689024,
-        "text_rasterize_ms": 1.7772910000000002,
+        "css_parse_ms": 14.680619,
+        "cascade_ms": 20.047582000000002,
+        "box_tree_ms": 65.89192100000001,
+        "layout_ms": 26.658475,
+        "text_fallback_ms": 16.45931,
+        "text_shape_ms": 1.6583099999999995,
+        "paint_build_ms": 22.496629000000002,
+        "paint_optimize_ms": 0.01473,
+        "paint_rasterize_ms": 14.963526,
+        "text_rasterize_ms": 2.59802,
         "encode_ms": null
       },
       "counts": {
@@ -44,12 +44,12 @@
         "fallback_cache_hits": 1230,
         "fallback_cache_misses": 688,
         "last_resort_font_fallbacks": 0,
-        "glyph_cache_hits": 0,
-        "glyph_cache_misses": 0,
+        "glyph_cache_hits": 153,
+        "glyph_cache_misses": 63,
         "glyph_cache_evictions": 0,
-        "glyph_cache_bytes": 0,
+        "glyph_cache_bytes": 17612,
         "color_glyph_cache_hits": 0,
-        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_misses": 216,
         "color_glyph_cache_evictions": 0,
         "color_glyph_cache_bytes": 0
       },
@@ -96,18 +96,18 @@
         "fragment_traversed": 0
       },
       "paint": {
-        "display_items": 13,
-        "optimized_items": null,
-        "culled_items": null,
-        "transparent_removed": null,
-        "noop_removed": null,
-        "merged_items": null,
+        "display_items": 19,
+        "optimized_items": 19,
+        "culled_items": 0,
+        "transparent_removed": 0,
+        "noop_removed": 0,
+        "merged_items": 0,
         "gradient_ms": 0.0,
         "gradient_pixels": 0,
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 8.854028,
+        "serial_ms": 41.275743000000006,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -123,7 +123,7 @@
         "resource_cache_misses": 1,
         "image_cache_hits": 1,
         "image_cache_misses": 1,
-        "image_decode_ms": 1.048674
+        "image_decode_ms": 1.091415
       }
     }
   }

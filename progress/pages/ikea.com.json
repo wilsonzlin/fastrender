@@ -1,13 +1,13 @@
 {
-  "url": "https://ikea.com",
+  "url": "https://www.ikea.com/",
   "status": "ok",
-  "total_ms": 2166.989686,
+  "total_ms": 2101.193033,
   "stages_ms": {
-    "fetch": 11.739652,
-    "css": 71.848203,
-    "cascade": 560.903594,
-    "layout": 964.7633950000009,
-    "paint": 276.27936700000004
+    "fetch": 16.291365,
+    "css": 71.015631,
+    "cascade": 480.03632400000004,
+    "layout": 1066.7003030000003,
+    "paint": 59.088716
   },
   "notes": "",
   "hotspot": "layout",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 11.739652,
+        "dom_parse_ms": 16.291365,
         "css_inlining_ms": null,
-        "css_parse_ms": 71.848203,
-        "cascade_ms": 429.604894,
-        "box_tree_ms": 131.2987,
-        "layout_ms": 808.2759130000001,
-        "text_fallback_ms": 198.02501499999948,
-        "text_shape_ms": 156.48748200000085,
-        "paint_build_ms": 5.37021,
-        "paint_optimize_ms": 0.0,
-        "paint_rasterize_ms": 269.630596,
-        "text_rasterize_ms": 1.2785610000000005,
+        "css_parse_ms": 71.015631,
+        "cascade_ms": 351.260336,
+        "box_tree_ms": 128.775988,
+        "layout_ms": 900.3588070000001,
+        "text_fallback_ms": 233.36643600000002,
+        "text_shape_ms": 166.34149600000015,
+        "paint_build_ms": 18.395713,
+        "paint_optimize_ms": 0.088851,
+        "paint_rasterize_ms": 40.604152,
+        "text_rasterize_ms": 0.0,
         "encode_ms": null
       },
       "counts": {
@@ -38,11 +38,11 @@
         "styled_nodes": 2067,
         "box_nodes": 1785,
         "fragments": 1619,
-        "shaped_runs": 7885,
-        "glyphs": 165015,
+        "shaped_runs": 8093,
+        "glyphs": 170523,
         "color_glyph_rasters": 0,
-        "fallback_cache_hits": 62447,
-        "fallback_cache_misses": 123756,
+        "fallback_cache_hits": 64638,
+        "fallback_cache_misses": 130424,
         "last_resort_font_fallbacks": 0,
         "glyph_cache_hits": 0,
         "glyph_cache_misses": 0,
@@ -74,10 +74,10 @@
         "has_evaluated": null
       },
       "layout": {
-        "intrinsic_lookups": 11020,
-        "intrinsic_hits": 6682,
-        "intrinsic_stores": 4338,
-        "block_intrinsic": 9351,
+        "intrinsic_lookups": 11038,
+        "intrinsic_hits": 6478,
+        "intrinsic_stores": 4560,
+        "block_intrinsic": 9369,
         "flex_intrinsic": 1669,
         "inline_intrinsic": 0,
         "table_cell_intrinsic_measurements": null,
@@ -96,18 +96,18 @@
         "fragment_traversed": 0
       },
       "paint": {
-        "display_items": 263,
-        "optimized_items": null,
-        "culled_items": null,
-        "transparent_removed": null,
-        "noop_removed": null,
-        "merged_items": null,
-        "gradient_ms": 1.483953,
-        "gradient_pixels": 54720,
+        "display_items": 52,
+        "optimized_items": 40,
+        "culled_items": 0,
+        "transparent_removed": 0,
+        "noop_removed": 12,
+        "merged_items": 0,
+        "gradient_ms": 0.0,
+        "gradient_pixels": 0,
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 275.000806,
+        "serial_ms": 59.522088,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -116,15 +116,14 @@
       },
       "resources": {
         "fetch_counts": {
-          "Stylesheet": 9,
-          "Image": 4
+          "Stylesheet": 9
         },
         "resource_cache_fresh_hits": 0,
         "resource_cache_revalidated_hits": 0,
-        "resource_cache_misses": 3,
+        "resource_cache_misses": 0,
         "image_cache_hits": 0,
-        "image_cache_misses": 4,
-        "image_decode_ms": 1.76462
+        "image_cache_misses": 0,
+        "image_decode_ms": 0.0
       }
     }
   }

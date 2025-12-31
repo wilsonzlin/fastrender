@@ -1,17 +1,17 @@
 {
-  "url": "https://openai.com",
+  "url": "https://openai.com/",
   "status": "ok",
-  "total_ms": 479.412236,
+  "total_ms": 225.904764,
   "stages_ms": {
-    "fetch": 0.160434,
-    "css": 29.769055,
-    "cascade": 39.964321,
-    "layout": 8.105678999999999,
-    "paint": 2.463246
+    "fetch": 0.175654,
+    "css": 8.584427999999999,
+    "cascade": 31.429606,
+    "layout": 4.324611,
+    "paint": 42.4272
   },
   "notes": "",
-  "hotspot": "cascade",
-  "failure_stage": null,
+  "hotspot": "paint",
+  "failure_stage": "paint",
   "timeout_stage": null,
   "last_good_commit": "02eacedd5340344865616a4f4d19e08dd6f218fe",
   "last_regression_commit": "833aa788ed1a7102190a18ae8eae4a0af8876bc4",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 0.160434,
+        "dom_parse_ms": 0.175654,
         "css_inlining_ms": null,
-        "css_parse_ms": 29.769055,
-        "cascade_ms": 28.292621,
-        "box_tree_ms": 11.6717,
-        "layout_ms": 7.505448,
-        "text_fallback_ms": 2.441485,
-        "text_shape_ms": 0.600231,
-        "paint_build_ms": 0.102713,
-        "paint_optimize_ms": 0.0,
-        "paint_rasterize_ms": 1.7796,
-        "text_rasterize_ms": 0.5809329999999999,
+        "css_parse_ms": 8.584427999999999,
+        "cascade_ms": 19.096550999999998,
+        "box_tree_ms": 12.333055,
+        "layout_ms": 3.9668409999999996,
+        "text_fallback_ms": 1.2909,
+        "text_shape_ms": 0.35777000000000003,
+        "paint_build_ms": 41.206681,
+        "paint_optimize_ms": 0.00564,
+        "paint_rasterize_ms": 0.8051389999999999,
+        "text_rasterize_ms": 0.40974000000000005,
         "encode_ms": null
       },
       "counts": {
@@ -44,12 +44,12 @@
         "fallback_cache_hits": 126,
         "fallback_cache_misses": 240,
         "last_resort_font_fallbacks": 0,
-        "glyph_cache_hits": 0,
-        "glyph_cache_misses": 0,
+        "glyph_cache_hits": 21,
+        "glyph_cache_misses": 20,
         "glyph_cache_evictions": 0,
-        "glyph_cache_bytes": 0,
+        "glyph_cache_bytes": 6124,
         "color_glyph_cache_hits": 0,
-        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_misses": 41,
         "color_glyph_cache_evictions": 0,
         "color_glyph_cache_bytes": 0
       },
@@ -97,17 +97,17 @@
       },
       "paint": {
         "display_items": 4,
-        "optimized_items": null,
-        "culled_items": null,
-        "transparent_removed": null,
-        "noop_removed": null,
-        "merged_items": null,
+        "optimized_items": 4,
+        "culled_items": 0,
+        "transparent_removed": 0,
+        "noop_removed": 0,
+        "merged_items": 0,
         "gradient_ms": 0.0,
         "gradient_pixels": 0,
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 1.882313,
+        "serial_ms": 69.33630099999999,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -116,14 +116,14 @@
       },
       "resources": {
         "fetch_counts": {
-          "Image": 1
+          "Image": 2
         },
         "resource_cache_fresh_hits": 0,
         "resource_cache_revalidated_hits": 0,
-        "resource_cache_misses": 0,
+        "resource_cache_misses": 1,
         "image_cache_hits": 0,
-        "image_cache_misses": 1,
-        "image_decode_ms": 0.44051
+        "image_cache_misses": 2,
+        "image_decode_ms": 0.268067
       }
     }
   }

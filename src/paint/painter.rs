@@ -67,7 +67,9 @@ use crate::paint::text_shadow::resolve_text_shadows;
 use crate::paint::text_shadow::PathBounds;
 use crate::paint::text_shadow::ResolvedTextShadow;
 use crate::paint::transform_resolver::{backface_is_hidden, resolve_transform3d};
-use crate::render_control::{check_active, record_stage, StageHeartbeat};
+use crate::render_control::{
+  active_deadline, check_active, record_stage, with_deadline, RenderDeadline, StageHeartbeat,
+};
 use crate::scroll::ScrollState;
 #[cfg(test)]
 use crate::style::color::Color;
@@ -10701,12 +10703,12 @@ pub enum PaintBackend {
 
 pub(crate) fn paint_backend_from_env() -> PaintBackend {
   let Ok(raw) = std::env::var("FASTR_PAINT_BACKEND") else {
-    return PaintBackend::Legacy;
+    return PaintBackend::DisplayList;
   };
   match raw.trim().to_ascii_lowercase().as_str() {
     "display_list" | "display-list" | "displaylist" => PaintBackend::DisplayList,
     "legacy" | "immediate" => PaintBackend::Legacy,
-    _ => PaintBackend::Legacy,
+    _ => PaintBackend::DisplayList,
   }
 }
 
@@ -10779,17 +10781,12 @@ pub fn paint_tree_display_list_with_resources_scaled_offset_depth(
   let diagnostics_enabled = paint_diagnostics_enabled();
   let build_start = diagnostics_enabled.then(Instant::now);
   let viewport = tree.viewport_size();
-  let mut display_list = DisplayListBuilder::with_image_cache(image_cache.clone())
-    .with_font_context(font_ctx.clone())
-    .with_svg_filter_defs(tree.svg_filter_defs.clone())
-    .with_scroll_state(scroll_state.clone())
-    .with_device_pixel_ratio(scale)
-    .with_parallelism(&paint_parallelism)
-    .with_max_iframe_depth(max_iframe_depth)
-    .with_viewport_size(viewport.width, viewport.height)
-    .build_with_stacking_tree_offset(&tree.root, offset);
-  for extra in &tree.additional_fragments {
-    let extra_list = DisplayListBuilder::with_image_cache(image_cache.clone())
+  let build_budget = active_deadline()
+    .and_then(|deadline| deadline.remaining_timeout())
+    .map(|remaining| (remaining / 2).min(std::time::Duration::from_millis(1000)));
+  let build_display_list_for_root =
+    |root: &FragmentNode| -> Result<crate::paint::display_list::DisplayList> {
+    DisplayListBuilder::with_image_cache(image_cache.clone())
       .with_font_context(font_ctx.clone())
       .with_svg_filter_defs(tree.svg_filter_defs.clone())
       .with_scroll_state(scroll_state.clone())
@@ -10797,9 +10794,52 @@ pub fn paint_tree_display_list_with_resources_scaled_offset_depth(
       .with_parallelism(&paint_parallelism)
       .with_max_iframe_depth(max_iframe_depth)
       .with_viewport_size(viewport.width, viewport.height)
-      .build_with_stacking_tree_offset(extra, offset);
-    display_list.append(extra_list);
-  }
+      .build_with_stacking_tree_offset_checked(root, offset)
+  };
+  let display_list_result = match build_budget {
+    Some(budget) => {
+      let deadline = RenderDeadline::new(Some(budget), None);
+      with_deadline(Some(&deadline), || {
+        let mut display_list = build_display_list_for_root(&tree.root)?;
+        for extra in &tree.additional_fragments {
+          display_list.append(build_display_list_for_root(extra)?);
+        }
+        Ok(display_list)
+      })
+    }
+    None => {
+      let mut display_list = build_display_list_for_root(&tree.root)?;
+      for extra in &tree.additional_fragments {
+        display_list.append(build_display_list_for_root(extra)?);
+      }
+      Ok(display_list)
+    }
+  };
+  let mut display_list = match display_list_result {
+    Ok(list) => list,
+    Err(err) => {
+      // The display-list pipeline is faster for most pages, but builder/stacking-tree construction
+      // can still be slower than legacy in pathological cases. When we're running under a render
+      // deadline, fall back to the legacy painter if the builder can't complete within a small
+      // slice of the remaining budget.
+      if build_budget.is_some() && matches!(err, Error::Render(RenderError::Timeout { .. })) {
+        return legacy_paint_tree_with_resources_scaled_offset(
+          tree,
+          width,
+          height,
+          background,
+          font_ctx,
+          image_cache,
+          scale,
+          offset,
+          scroll_state,
+          max_iframe_depth,
+          TraceHandle::disabled(),
+        );
+      }
+      return Err(err);
+    }
+  };
   if let (true, Some(start)) = (diagnostics_enabled, build_start) {
     let build_ms = start.elapsed().as_secs_f64() * 1000.0;
     with_paint_diagnostics(|diag| {
@@ -10812,7 +10852,36 @@ pub fn paint_tree_display_list_with_resources_scaled_offset_depth(
   let optimizer = DisplayListOptimizer::new();
   let viewport_rect = Rect::from_xywh(0.0, 0.0, viewport.width, viewport.height);
   let optimize_start = diagnostics_enabled.then(Instant::now);
-  let (optimized, stats) = optimizer.optimize(display_list, viewport_rect);
+  let optimize_budget = active_deadline()
+    .and_then(|deadline| deadline.remaining_timeout())
+    .map(|remaining| (remaining / 4).min(std::time::Duration::from_millis(200)));
+  let original_items = display_list.len();
+  let optimize_result = match optimize_budget {
+    Some(budget) => {
+      let deadline = RenderDeadline::new(Some(budget), None);
+      with_deadline(Some(&deadline), || optimizer.optimize_checked(&display_list, viewport_rect))
+    }
+    None => optimizer.optimize_checked(&display_list, viewport_rect),
+  };
+  let (optimized, stats) = match optimize_result {
+    Ok((optimized, stats)) => (optimized, stats),
+    Err(err) => {
+      // Optimization is optional; if we hit the optimization budget, rasterize the original
+      // display list (still benefiting from display-list renderer caching + tiling).
+      if optimize_budget.is_some() && matches!(err, Error::Render(RenderError::Timeout { .. })) {
+        (
+          display_list,
+          crate::paint::optimize::OptimizationStats {
+            original_count: original_items,
+            final_count: original_items,
+            ..Default::default()
+          },
+        )
+      } else {
+        return Err(err);
+      }
+    }
+  };
   if let (true, Some(start)) = (diagnostics_enabled, optimize_start) {
     let optimize_ms = start.elapsed().as_secs_f64() * 1000.0;
     with_paint_diagnostics(|diag| {

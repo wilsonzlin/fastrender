@@ -1,13 +1,13 @@
 {
-  "url": "https://docs.python.org",
+  "url": "https://docs.python.org/3/",
   "status": "ok",
-  "total_ms": 869.513042,
+  "total_ms": 720.137797,
   "stages_ms": {
-    "fetch": 1.076024,
-    "css": 35.01268099999999,
-    "cascade": 208.816369,
-    "layout": 377.278846,
-    "paint": 26.44229200000001
+    "fetch": 1.0279040000000002,
+    "css": 41.882706999999996,
+    "cascade": 115.08414499999999,
+    "layout": 348.67024699999996,
+    "paint": 41.642534
   },
   "notes": "",
   "hotspot": "layout",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 1.076024,
+        "dom_parse_ms": 1.0279040000000002,
         "css_inlining_ms": null,
-        "css_parse_ms": 35.01268099999999,
-        "cascade_ms": 89.75744300000001,
-        "box_tree_ms": 119.058926,
-        "layout_ms": 364.276967,
-        "text_fallback_ms": 325.34615700000023,
-        "text_shape_ms": 13.00187900000001,
-        "paint_build_ms": 0.826618,
-        "paint_optimize_ms": 0.0,
-        "paint_rasterize_ms": 15.136748,
-        "text_rasterize_ms": 10.478926000000008,
+        "css_parse_ms": 41.882706999999996,
+        "cascade_ms": 70.91317599999999,
+        "box_tree_ms": 44.170969,
+        "layout_ms": 336.72848999999997,
+        "text_fallback_ms": 297.78204199999965,
+        "text_shape_ms": 11.941756999999999,
+        "paint_build_ms": 7.911873,
+        "paint_optimize_ms": 0.082742,
+        "paint_rasterize_ms": 21.132978,
+        "text_rasterize_ms": 12.514941,
         "encode_ms": null
       },
       "counts": {
@@ -38,18 +38,18 @@
         "styled_nodes": 799,
         "box_nodes": 799,
         "fragments": 695,
-        "shaped_runs": 734,
-        "glyphs": 11622,
+        "shaped_runs": 728,
+        "glyphs": 11599,
         "color_glyph_rasters": 0,
-        "fallback_cache_hits": 3863,
+        "fallback_cache_hits": 3844,
         "fallback_cache_misses": 9742,
         "last_resort_font_fallbacks": 0,
-        "glyph_cache_hits": 0,
-        "glyph_cache_misses": 0,
+        "glyph_cache_hits": 1215,
+        "glyph_cache_misses": 220,
         "glyph_cache_evictions": 0,
-        "glyph_cache_bytes": 0,
+        "glyph_cache_bytes": 66535,
         "color_glyph_cache_hits": 0,
-        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_misses": 1435,
         "color_glyph_cache_evictions": 0,
         "color_glyph_cache_bytes": 0
       },
@@ -96,18 +96,18 @@
         "fragment_traversed": 0
       },
       "paint": {
-        "display_items": 152,
-        "optimized_items": null,
-        "culled_items": null,
-        "transparent_removed": null,
-        "noop_removed": null,
-        "merged_items": null,
+        "display_items": 108,
+        "optimized_items": 108,
+        "culled_items": 0,
+        "transparent_removed": 0,
+        "noop_removed": 0,
+        "merged_items": 0,
         "gradient_ms": 0.0,
         "gradient_pixels": 0,
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 15.963366,
+        "serial_ms": 32.714126,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -117,14 +117,14 @@
       "resources": {
         "fetch_counts": {
           "Stylesheet": 4,
-          "Image": 2
+          "Image": 1
         },
-        "resource_cache_fresh_hits": 0,
+        "resource_cache_fresh_hits": 1,
         "resource_cache_revalidated_hits": 0,
-        "resource_cache_misses": 1,
-        "image_cache_hits": 4,
-        "image_cache_misses": 2,
-        "image_decode_ms": 0.334878
+        "resource_cache_misses": 0,
+        "image_cache_hits": 2,
+        "image_cache_misses": 1,
+        "image_decode_ms": 0.378098
       }
     }
   }

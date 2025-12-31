@@ -1,16 +1,16 @@
 {
-  "url": "https://gentoo.org",
+  "url": "https://www.gentoo.org/",
   "status": "ok",
-  "total_ms": 2892.775069,
+  "total_ms": 1279.895762,
   "stages_ms": {
-    "fetch": 1.252878,
-    "css": 81.85234600000001,
-    "cascade": 1810.8449909999997,
-    "layout": 670.9989639999999,
-    "paint": 109.31757100000002
+    "fetch": 1.126986,
+    "css": 90.865027,
+    "cascade": 266.605713,
+    "layout": 688.0647730000001,
+    "paint": 73.385995
   },
   "notes": "",
-  "hotspot": "cascade",
+  "hotspot": "layout",
   "failure_stage": null,
   "timeout_stage": null,
   "last_good_commit": "02eacedd5340344865616a4f4d19e08dd6f218fe",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 1.252878,
+        "dom_parse_ms": 1.126986,
         "css_inlining_ms": null,
-        "css_parse_ms": 81.85234600000001,
-        "cascade_ms": 141.545688,
-        "box_tree_ms": 1669.2993029999998,
-        "layout_ms": 659.4750329999999,
-        "text_fallback_ms": 14.079686,
-        "text_shape_ms": 11.523931000000005,
-        "paint_build_ms": 2.043796,
-        "paint_optimize_ms": 0.0,
-        "paint_rasterize_ms": 95.866108,
-        "text_rasterize_ms": 11.407667,
+        "css_parse_ms": 90.865027,
+        "cascade_ms": 106.23387,
+        "box_tree_ms": 160.37184299999998,
+        "layout_ms": 676.9889770000001,
+        "text_fallback_ms": 13.590681999999992,
+        "text_shape_ms": 11.075796,
+        "paint_build_ms": 28.341441,
+        "paint_optimize_ms": 0.03094,
+        "paint_rasterize_ms": 43.188882,
+        "text_rasterize_ms": 1.824732,
         "encode_ms": null
       },
       "counts": {
@@ -44,12 +44,12 @@
         "fallback_cache_hits": 7383,
         "fallback_cache_misses": 6638,
         "last_resort_font_fallbacks": 0,
-        "glyph_cache_hits": 0,
-        "glyph_cache_misses": 0,
+        "glyph_cache_hits": 76,
+        "glyph_cache_misses": 71,
         "glyph_cache_evictions": 0,
-        "glyph_cache_bytes": 0,
+        "glyph_cache_bytes": 22876,
         "color_glyph_cache_hits": 0,
-        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_misses": 147,
         "color_glyph_cache_evictions": 0,
         "color_glyph_cache_bytes": 0
       },
@@ -96,18 +96,18 @@
         "fragment_traversed": 0
       },
       "paint": {
-        "display_items": 255,
-        "optimized_items": null,
-        "culled_items": null,
-        "transparent_removed": null,
-        "noop_removed": null,
-        "merged_items": null,
-        "gradient_ms": 7.971428,
-        "gradient_pixels": 324784,
+        "display_items": 50,
+        "optimized_items": 44,
+        "culled_items": 0,
+        "transparent_removed": 0,
+        "noop_removed": 6,
+        "merged_items": 0,
+        "gradient_ms": 13.631623000000001,
+        "gradient_pixels": 574800,
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 97.909904,
+        "serial_ms": 96.26679,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -117,14 +117,14 @@
       "resources": {
         "fetch_counts": {
           "Stylesheet": 3,
-          "Image": 11
+          "Image": 8
         },
-        "resource_cache_fresh_hits": 0,
+        "resource_cache_fresh_hits": 8,
         "resource_cache_revalidated_hits": 0,
-        "resource_cache_misses": 10,
-        "image_cache_hits": 7,
-        "image_cache_misses": 11,
-        "image_decode_ms": 13.411527
+        "resource_cache_misses": 0,
+        "image_cache_hits": 2,
+        "image_cache_misses": 8,
+        "image_decode_ms": 8.157677000000001
       }
     }
   }

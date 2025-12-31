@@ -1,13 +1,13 @@
 {
-  "url": "https://bloomberg.com",
+  "url": "https://www.bloomberg.com/",
   "status": "ok",
-  "total_ms": 389.983815,
+  "total_ms": 294.665359,
   "stages_ms": {
-    "fetch": 0.359068,
-    "css": 35.333058,
-    "cascade": 56.154222999999995,
-    "layout": 7.203427999999999,
-    "paint": 27.365273999999996
+    "fetch": 0.26690600000000003,
+    "css": 30.213447000000002,
+    "cascade": 48.246123,
+    "layout": 6.643286,
+    "paint": 30.216827
   },
   "notes": "",
   "hotspot": "cascade",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 0.359068,
+        "dom_parse_ms": 0.26690600000000003,
         "css_inlining_ms": null,
-        "css_parse_ms": 35.333058,
-        "cascade_ms": 35.009001999999995,
-        "box_tree_ms": 21.145221,
-        "layout_ms": 6.121576999999999,
-        "text_fallback_ms": 2.875003,
-        "text_shape_ms": 1.081851,
-        "paint_build_ms": 0.31079700000000005,
-        "paint_optimize_ms": 0.0,
-        "paint_rasterize_ms": 21.822156999999997,
-        "text_rasterize_ms": 5.232319999999999,
+        "css_parse_ms": 30.213447000000002,
+        "cascade_ms": 34.483786,
+        "box_tree_ms": 13.762336999999999,
+        "layout_ms": 5.688371,
+        "text_fallback_ms": 2.6550010000000004,
+        "text_shape_ms": 0.9549149999999998,
+        "paint_build_ms": 15.092928,
+        "paint_optimize_ms": 0.029781000000000002,
+        "paint_rasterize_ms": 9.936879,
+        "text_rasterize_ms": 5.157239000000001,
         "encode_ms": null
       },
       "counts": {
@@ -41,15 +41,15 @@
         "shaped_runs": 52,
         "glyphs": 1438,
         "color_glyph_rasters": 0,
-        "fallback_cache_hits": 676,
-        "fallback_cache_misses": 582,
+        "fallback_cache_hits": 679,
+        "fallback_cache_misses": 576,
         "last_resort_font_fallbacks": 0,
-        "glyph_cache_hits": 0,
-        "glyph_cache_misses": 0,
+        "glyph_cache_hits": 468,
+        "glyph_cache_misses": 141,
         "glyph_cache_evictions": 0,
-        "glyph_cache_bytes": 0,
+        "glyph_cache_bytes": 43449,
         "color_glyph_cache_hits": 0,
-        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_misses": 609,
         "color_glyph_cache_evictions": 0,
         "color_glyph_cache_bytes": 0
       },
@@ -96,18 +96,18 @@
         "fragment_traversed": 0
       },
       "paint": {
-        "display_items": 34,
-        "optimized_items": null,
-        "culled_items": null,
-        "transparent_removed": null,
-        "noop_removed": null,
-        "merged_items": null,
+        "display_items": 37,
+        "optimized_items": 36,
+        "culled_items": 1,
+        "transparent_removed": 0,
+        "noop_removed": 0,
+        "merged_items": 0,
         "gradient_ms": 0.0,
         "gradient_pixels": 0,
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 22.132954,
+        "serial_ms": 37.534776,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -123,7 +123,7 @@
         "resource_cache_misses": 1,
         "image_cache_hits": 0,
         "image_cache_misses": 1,
-        "image_decode_ms": 0.507841
+        "image_decode_ms": 0.504662
       }
     }
   }

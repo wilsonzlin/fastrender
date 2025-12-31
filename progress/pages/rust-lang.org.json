@@ -1,13 +1,13 @@
 {
-  "url": "https://rust-lang.org",
+  "url": "https://rust-lang.org/",
   "status": "ok",
-  "total_ms": 1360.024822,
+  "total_ms": 1067.4951560000002,
   "stages_ms": {
-    "fetch": 1.293099,
-    "css": 70.00385100000001,
-    "cascade": 646.6892580000001,
-    "layout": 308.8347119999999,
-    "paint": 27.303970000000007
+    "fetch": 0.7087760000000001,
+    "css": 67.776304,
+    "cascade": 527.161746,
+    "layout": 269.28305800000015,
+    "paint": 9.726362
   },
   "notes": "",
   "hotspot": "cascade",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 1.293099,
+        "dom_parse_ms": 0.7087760000000001,
         "css_inlining_ms": null,
-        "css_parse_ms": 70.00385100000001,
-        "cascade_ms": 78.088772,
-        "box_tree_ms": 568.600486,
-        "layout_ms": 252.983245,
-        "text_fallback_ms": 74.15050799999992,
-        "text_shape_ms": 55.851466999999914,
-        "paint_build_ms": 0.87929,
-        "paint_optimize_ms": 0.0,
-        "paint_rasterize_ms": 18.863271,
-        "text_rasterize_ms": 7.561409000000003,
+        "css_parse_ms": 67.776304,
+        "cascade_ms": 55.235995,
+        "box_tree_ms": 471.925751,
+        "layout_ms": 219.037315,
+        "text_fallback_ms": 64.53505999999997,
+        "text_shape_ms": 50.24574300000015,
+        "paint_build_ms": 3.8553390000000003,
+        "paint_optimize_ms": 0.02709,
+        "paint_rasterize_ms": 5.176389,
+        "text_rasterize_ms": 0.6675439999999999,
         "encode_ms": null
       },
       "counts": {
@@ -44,12 +44,12 @@
         "fallback_cache_hits": 54478,
         "fallback_cache_misses": 31794,
         "last_resort_font_fallbacks": 0,
-        "glyph_cache_hits": 0,
-        "glyph_cache_misses": 0,
+        "glyph_cache_hits": 27,
+        "glyph_cache_misses": 23,
         "glyph_cache_evictions": 0,
-        "glyph_cache_bytes": 0,
+        "glyph_cache_bytes": 7210,
         "color_glyph_cache_hits": 0,
-        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_misses": 50,
         "color_glyph_cache_evictions": 0,
         "color_glyph_cache_bytes": 0
       },
@@ -96,18 +96,18 @@
         "fragment_traversed": 0
       },
       "paint": {
-        "display_items": 173,
-        "optimized_items": null,
-        "culled_items": null,
-        "transparent_removed": null,
-        "noop_removed": null,
-        "merged_items": null,
+        "display_items": 32,
+        "optimized_items": 18,
+        "culled_items": 2,
+        "transparent_removed": 0,
+        "noop_removed": 12,
+        "merged_items": 0,
         "gradient_ms": 0.0,
         "gradient_pixels": 0,
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 19.742561,
+        "serial_ms": 9.967578,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -117,14 +117,14 @@
       "resources": {
         "fetch_counts": {
           "Stylesheet": 4,
-          "Image": 18
+          "Image": 9
         },
         "resource_cache_fresh_hits": 0,
-        "resource_cache_revalidated_hits": 0,
-        "resource_cache_misses": 9,
-        "image_cache_hits": 9,
-        "image_cache_misses": 18,
-        "image_decode_ms": 9.017062
+        "resource_cache_revalidated_hits": 9,
+        "resource_cache_misses": 0,
+        "image_cache_hits": 1,
+        "image_cache_misses": 9,
+        "image_decode_ms": 0.666376
       }
     }
   }

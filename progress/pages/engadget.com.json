@@ -1,13 +1,13 @@
 {
-  "url": "https://engadget.com",
+  "url": "https://www.engadget.com/",
   "status": "ok",
-  "total_ms": 2256.5596600000003,
+  "total_ms": 1743.584352,
   "stages_ms": {
-    "fetch": 4.816587,
-    "css": 74.528713,
-    "cascade": 694.766211,
-    "layout": 1021.340914,
-    "paint": 88.290867
+    "fetch": 2.7395229999999997,
+    "css": 54.504258,
+    "cascade": 624.386576,
+    "layout": 767.63465,
+    "paint": 16.397196
   },
   "notes": "",
   "hotspot": "layout",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 4.816587,
+        "dom_parse_ms": 2.7395229999999997,
         "css_inlining_ms": null,
-        "css_parse_ms": 74.528713,
-        "cascade_ms": 489.537592,
-        "box_tree_ms": 205.228619,
-        "layout_ms": 958.435583,
-        "text_fallback_ms": 429.0804169999995,
-        "text_shape_ms": 62.905330999999975,
-        "paint_build_ms": 2.671469,
-        "paint_optimize_ms": 0.0,
-        "paint_rasterize_ms": 73.013509,
-        "text_rasterize_ms": 12.605889000000005,
+        "css_parse_ms": 54.504258,
+        "cascade_ms": 419.447408,
+        "box_tree_ms": 204.939168,
+        "layout_ms": 717.6532490000001,
+        "text_fallback_ms": 300.83389800000026,
+        "text_shape_ms": 49.981400999999906,
+        "paint_build_ms": 3.299476,
+        "paint_optimize_ms": 0.052861,
+        "paint_rasterize_ms": 10.515322000000001,
+        "text_rasterize_ms": 2.5295369999999995,
         "encode_ms": null
       },
       "counts": {
@@ -38,18 +38,18 @@
         "styled_nodes": 1021,
         "box_nodes": 863,
         "fragments": 1231,
-        "shaped_runs": 2025,
-        "glyphs": 83923,
+        "shaped_runs": 2022,
+        "glyphs": 83888,
         "color_glyph_rasters": 0,
-        "fallback_cache_hits": 41458,
-        "fallback_cache_misses": 39286,
+        "fallback_cache_hits": 41447,
+        "fallback_cache_misses": 39256,
         "last_resort_font_fallbacks": 0,
-        "glyph_cache_hits": 0,
-        "glyph_cache_misses": 0,
+        "glyph_cache_hits": 360,
+        "glyph_cache_misses": 63,
         "glyph_cache_evictions": 0,
-        "glyph_cache_bytes": 0,
+        "glyph_cache_bytes": 19935,
         "color_glyph_cache_hits": 0,
-        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_misses": 423,
         "color_glyph_cache_evictions": 0,
         "color_glyph_cache_bytes": 0
       },
@@ -96,18 +96,18 @@
         "fragment_traversed": 0
       },
       "paint": {
-        "display_items": 223,
-        "optimized_items": null,
-        "culled_items": null,
-        "transparent_removed": null,
-        "noop_removed": null,
-        "merged_items": null,
+        "display_items": 51,
+        "optimized_items": 29,
+        "culled_items": 0,
+        "transparent_removed": 0,
+        "noop_removed": 22,
+        "merged_items": 0,
         "gradient_ms": 0.0,
         "gradient_pixels": 0,
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 75.684978,
+        "serial_ms": 13.95017,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -116,15 +116,14 @@
       },
       "resources": {
         "fetch_counts": {
-          "Stylesheet": 5,
-          "Image": 7
+          "Stylesheet": 5
         },
         "resource_cache_fresh_hits": 0,
         "resource_cache_revalidated_hits": 0,
-        "resource_cache_misses": 1,
+        "resource_cache_misses": 0,
         "image_cache_hits": 0,
-        "image_cache_misses": 7,
-        "image_decode_ms": 1.140645
+        "image_cache_misses": 0,
+        "image_decode_ms": 0.0
       }
     }
   }

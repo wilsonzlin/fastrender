@@ -30,7 +30,7 @@ CLI flag equivalents: `--disk-cache-max-bytes`, `--disk-cache-max-age-secs`, `--
 - `FASTR_FETCH_PRELOAD_STYLESHEETS=0|1` – control whether `<link rel=preload as=style>` entries are treated as stylesheet candidates (defaults to on).
 - `FASTR_FETCH_MODULEPRELOAD_STYLESHEETS=0|1` – opt into treating `<link rel=modulepreload as=style>` as stylesheet candidates (defaults to off).
 - `FASTR_FETCH_ALTERNATE_STYLESHEETS=0|1` – allow skipping `<link rel="alternate stylesheet">` entries when disabled (defaults to on).
-- Painting always uses the display-list (builder → optimizer → renderer) pipeline; the legacy immediate painter has been removed.
+- `FASTR_PAINT_BACKEND=display_list|legacy` – select the paint pipeline (defaults to `display_list`). Use `legacy` to force the immediate painter.
 
 ## HTTP fetch tuning
 

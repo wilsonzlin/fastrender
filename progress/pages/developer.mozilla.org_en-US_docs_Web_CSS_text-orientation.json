@@ -1,7 +1,7 @@
 {
-  "url": "https://developer.mozilla.org/en-US/docs/Web/CSS/text-orientation",
+  "url": "https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/text-orientation",
   "status": "error",
-  "total_ms": 3663.636366,
+  "total_ms": 3663.78803,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

@@ -1,13 +1,13 @@
 {
-  "url": "https://quora.com",
+  "url": "https://www.quora.com/",
   "status": "ok",
-  "total_ms": 426.801412,
+  "total_ms": 371.127755,
   "stages_ms": {
-    "fetch": 0.158374,
-    "css": 9.274197,
-    "cascade": 38.209391999999994,
-    "layout": 4.036179,
-    "paint": 13.226166
+    "fetch": 0.121233,
+    "css": 9.977099999999998,
+    "cascade": 121.18928700000001,
+    "layout": 2.9345779999999997,
+    "paint": 29.750317000000006
   },
   "notes": "",
   "hotspot": "cascade",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 0.158374,
+        "dom_parse_ms": 0.121233,
         "css_inlining_ms": null,
-        "css_parse_ms": 9.274197,
-        "cascade_ms": 17.567832,
-        "box_tree_ms": 20.64156,
-        "layout_ms": 3.569659,
-        "text_fallback_ms": 0.677725,
-        "text_shape_ms": 0.46651999999999993,
-        "paint_build_ms": 0.069272,
-        "paint_optimize_ms": 0.0,
-        "paint_rasterize_ms": 12.631232,
-        "text_rasterize_ms": 0.525662,
+        "css_parse_ms": 9.977099999999998,
+        "cascade_ms": 51.97078,
+        "box_tree_ms": 69.218507,
+        "layout_ms": 2.645031,
+        "text_fallback_ms": 0.47413099999999997,
+        "text_shape_ms": 0.28954699999999994,
+        "paint_build_ms": 28.196021000000002,
+        "paint_optimize_ms": 0.0069,
+        "paint_rasterize_ms": 0.965302,
+        "text_rasterize_ms": 0.582094,
         "encode_ms": null
       },
       "counts": {
@@ -44,12 +44,12 @@
         "fallback_cache_hits": 105,
         "fallback_cache_misses": 200,
         "last_resort_font_fallbacks": 0,
-        "glyph_cache_hits": 0,
-        "glyph_cache_misses": 0,
+        "glyph_cache_hits": 21,
+        "glyph_cache_misses": 20,
         "glyph_cache_evictions": 0,
-        "glyph_cache_bytes": 0,
+        "glyph_cache_bytes": 6124,
         "color_glyph_cache_hits": 0,
-        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_misses": 41,
         "color_glyph_cache_evictions": 0,
         "color_glyph_cache_bytes": 0
       },
@@ -96,18 +96,18 @@
         "fragment_traversed": 0
       },
       "paint": {
-        "display_items": 4,
-        "optimized_items": null,
-        "culled_items": null,
-        "transparent_removed": null,
-        "noop_removed": null,
-        "merged_items": null,
+        "display_items": 3,
+        "optimized_items": 3,
+        "culled_items": 0,
+        "transparent_removed": 0,
+        "noop_removed": 0,
+        "merged_items": 0,
         "gradient_ms": 0.0,
         "gradient_pixels": 0,
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 12.700504,
+        "serial_ms": 41.573989000000005,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -123,7 +123,7 @@
         "resource_cache_misses": 1,
         "image_cache_hits": 0,
         "image_cache_misses": 1,
-        "image_decode_ms": 0.288997
+        "image_decode_ms": 0.180005
       }
     }
   }

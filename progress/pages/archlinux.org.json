@@ -1,16 +1,16 @@
 {
-  "url": "https://archlinux.org",
+  "url": "https://archlinux.org/",
   "status": "ok",
-  "total_ms": 1391.338256,
+  "total_ms": 405.532777,
   "stages_ms": {
-    "fetch": 1.572385,
-    "css": 20.61012,
-    "cascade": 1027.646696,
-    "layout": 77.372913,
-    "paint": 85.65324100000001
+    "fetch": 0.927031,
+    "css": 9.430608,
+    "cascade": 87.00769700000001,
+    "layout": 74.25550499999999,
+    "paint": 152.52024299999994
   },
   "notes": "",
-  "hotspot": "cascade",
+  "hotspot": "paint",
   "failure_stage": null,
   "timeout_stage": null,
   "last_good_commit": "02eacedd5340344865616a4f4d19e08dd6f218fe",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 1.572385,
+        "dom_parse_ms": 0.927031,
         "css_inlining_ms": null,
-        "css_parse_ms": 20.61012,
-        "cascade_ms": 72.819554,
-        "box_tree_ms": 954.827142,
-        "layout_ms": 61.189505,
-        "text_fallback_ms": 18.789309999999983,
-        "text_shape_ms": 16.183407999999996,
-        "paint_build_ms": 3.947688,
-        "paint_optimize_ms": 0.0,
-        "paint_rasterize_ms": 43.343497,
-        "text_rasterize_ms": 38.36205600000002,
+        "css_parse_ms": 9.430608,
+        "cascade_ms": 44.66966,
+        "box_tree_ms": 42.338037,
+        "layout_ms": 59.668056,
+        "text_fallback_ms": 18.70719500000002,
+        "text_shape_ms": 14.58744899999998,
+        "paint_build_ms": 15.729473,
+        "paint_optimize_ms": 0.072102,
+        "paint_rasterize_ms": 14.455614,
+        "text_rasterize_ms": 122.26305399999994,
         "encode_ms": null
       },
       "counts": {
@@ -44,12 +44,12 @@
         "fallback_cache_hits": 12354,
         "fallback_cache_misses": 11588,
         "last_resort_font_fallbacks": 0,
-        "glyph_cache_hits": 0,
-        "glyph_cache_misses": 0,
+        "glyph_cache_hits": 66281,
+        "glyph_cache_misses": 2670,
         "glyph_cache_evictions": 0,
-        "glyph_cache_bytes": 0,
+        "glyph_cache_bytes": 68025,
         "color_glyph_cache_hits": 0,
-        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_misses": 68915,
         "color_glyph_cache_evictions": 0,
         "color_glyph_cache_bytes": 0
       },
@@ -96,18 +96,18 @@
         "fragment_traversed": 0
       },
       "paint": {
-        "display_items": 288,
-        "optimized_items": null,
-        "culled_items": null,
-        "transparent_removed": null,
-        "noop_removed": null,
-        "merged_items": null,
+        "display_items": 143,
+        "optimized_items": 143,
+        "culled_items": 0,
+        "transparent_removed": 0,
+        "noop_removed": 0,
+        "merged_items": 0,
         "gradient_ms": 0.0,
         "gradient_pixels": 0,
-        "parallel_tasks": 0,
-        "parallel_threads": 1,
-        "parallel_ms": 0.0,
-        "serial_ms": 47.291185,
+        "parallel_tasks": 20,
+        "parallel_threads": 20,
+        "parallel_ms": 12.494698999999999,
+        "serial_ms": 18.447376000000002,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -117,14 +117,14 @@
       "resources": {
         "fetch_counts": {
           "Stylesheet": 1,
-          "Image": 5
+          "Image": 4
         },
-        "resource_cache_fresh_hits": 1,
+        "resource_cache_fresh_hits": 5,
         "resource_cache_revalidated_hits": 0,
-        "resource_cache_misses": 4,
-        "image_cache_hits": 7,
-        "image_cache_misses": 5,
-        "image_decode_ms": 0.477442
+        "resource_cache_misses": 0,
+        "image_cache_hits": 3,
+        "image_cache_misses": 4,
+        "image_decode_ms": 0.139493
       }
     }
   }

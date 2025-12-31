@@ -1,36 +1,36 @@
 {
-  "url": "https://airbnb.com",
+  "url": "https://www.airbnb.com/",
   "status": "ok",
-  "total_ms": 984.905949,
+  "total_ms": 1809.5314440000002,
   "stages_ms": {
-    "fetch": 2.897655,
-    "css": 49.454723,
-    "cascade": 512.29085,
-    "layout": 118.85609,
-    "paint": 23.496314
+    "fetch": 2.8884269999999996,
+    "css": 55.780347,
+    "cascade": 324.304303,
+    "layout": 104.484713,
+    "paint": 19.551491
   },
   "notes": "",
   "hotspot": "cascade",
-  "failure_stage": null,
+  "failure_stage": "paint",
   "timeout_stage": null,
   "last_good_commit": "4e2dcd18c8bbe80d971147f7ea1026b6e720fdbb",
-  "last_regression_commit": "",
+  "last_regression_commit": "4e2dcd18c8bbe80d971147f7ea1026b6e720fdbb",
   "diagnostics": {
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 2.897655,
+        "dom_parse_ms": 2.8884269999999996,
         "css_inlining_ms": null,
-        "css_parse_ms": 49.454723,
-        "cascade_ms": 318.93625599999996,
-        "box_tree_ms": 193.354594,
-        "layout_ms": 116.448348,
-        "text_fallback_ms": 16.532699,
-        "text_shape_ms": 2.407742000000001,
-        "paint_build_ms": 1.033943,
+        "css_parse_ms": 55.780347,
+        "cascade_ms": 261.279229,
+        "box_tree_ms": 63.025074000000004,
+        "layout_ms": 102.380813,
+        "text_fallback_ms": 13.480710000000004,
+        "text_shape_ms": 2.1038999999999994,
+        "paint_build_ms": 0.624014,
         "paint_optimize_ms": 0.0,
-        "paint_rasterize_ms": 21.201423,
-        "text_rasterize_ms": 1.260948,
+        "paint_rasterize_ms": 18.096648,
+        "text_rasterize_ms": 0.830829,
         "encode_ms": null
       },
       "counts": {
@@ -102,12 +102,12 @@
         "transparent_removed": null,
         "noop_removed": null,
         "merged_items": null,
-        "gradient_ms": 2.819723,
+        "gradient_ms": 2.509038,
         "gradient_pixels": 90880,
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 22.235366000000003,
+        "serial_ms": 1085.837025,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -116,14 +116,14 @@
       },
       "resources": {
         "fetch_counts": {
-          "Image": 5
+          "Image": 7
         },
         "resource_cache_fresh_hits": 0,
         "resource_cache_revalidated_hits": 0,
         "resource_cache_misses": 0,
         "image_cache_hits": 0,
-        "image_cache_misses": 5,
-        "image_decode_ms": 0.654325
+        "image_cache_misses": 7,
+        "image_decode_ms": 0.5002
       }
     }
   }

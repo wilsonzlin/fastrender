@@ -1,36 +1,36 @@
 {
-  "url": "https://weather.com",
+  "url": "https://weather.com/",
   "status": "ok",
-  "total_ms": 2703.285022,
+  "total_ms": 3494.62077,
   "stages_ms": {
-    "fetch": 14.80443,
-    "css": 75.674479,
-    "cascade": 1100.701397,
-    "layout": 734.6533909999999,
-    "paint": 58.398701
+    "fetch": 8.552287,
+    "css": 184.300523,
+    "cascade": 918.444755,
+    "layout": 703.1801469999998,
+    "paint": 60.010767
   },
   "notes": "",
   "hotspot": "cascade",
-  "failure_stage": null,
+  "failure_stage": "paint",
   "timeout_stage": null,
-  "last_good_commit": "02eacedd5340344865616a4f4d19e08dd6f218fe",
+  "last_good_commit": "4e2dcd18c8bbe80d971147f7ea1026b6e720fdbb",
   "last_regression_commit": "833aa788ed1a7102190a18ae8eae4a0af8876bc4",
   "diagnostics": {
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 14.80443,
+        "dom_parse_ms": 8.552287,
         "css_inlining_ms": null,
-        "css_parse_ms": 75.674479,
-        "cascade_ms": 833.548826,
-        "box_tree_ms": 267.152571,
-        "layout_ms": 662.945401,
-        "text_fallback_ms": 273.4946149999998,
-        "text_shape_ms": 71.70798999999995,
-        "paint_build_ms": 0.8831289999999999,
+        "css_parse_ms": 184.300523,
+        "cascade_ms": 776.051219,
+        "box_tree_ms": 142.39353599999998,
+        "layout_ms": 632.64767,
+        "text_fallback_ms": 266.8673630000004,
+        "text_shape_ms": 70.53247699999986,
+        "paint_build_ms": 1.143206,
         "paint_optimize_ms": 0.0,
-        "paint_rasterize_ms": 53.668337,
-        "text_rasterize_ms": 3.847235000000001,
+        "paint_rasterize_ms": 55.252755,
+        "text_rasterize_ms": 3.6148059999999993,
         "encode_ms": null
       },
       "counts": {
@@ -38,11 +38,11 @@
         "styled_nodes": 2746,
         "box_nodes": 1064,
         "fragments": 650,
-        "shaped_runs": 3607,
-        "glyphs": 98792,
+        "shaped_runs": 3609,
+        "glyphs": 98806,
         "color_glyph_rasters": 0,
-        "fallback_cache_hits": 47179,
-        "fallback_cache_misses": 50038,
+        "fallback_cache_hits": 47181,
+        "fallback_cache_misses": 50062,
         "last_resort_font_fallbacks": 0,
         "glyph_cache_hits": 0,
         "glyph_cache_misses": 0,
@@ -74,10 +74,10 @@
         "has_evaluated": null
       },
       "layout": {
-        "intrinsic_lookups": 8417,
-        "intrinsic_hits": 4875,
-        "intrinsic_stores": 3542,
-        "block_intrinsic": 6865,
+        "intrinsic_lookups": 8421,
+        "intrinsic_hits": 4889,
+        "intrinsic_stores": 3532,
+        "block_intrinsic": 6869,
         "flex_intrinsic": 1552,
         "inline_intrinsic": 0,
         "table_cell_intrinsic_measurements": null,
@@ -102,12 +102,12 @@
         "transparent_removed": null,
         "noop_removed": null,
         "merged_items": null,
-        "gradient_ms": 4.03287,
+        "gradient_ms": 3.990802,
         "gradient_pixels": 152256,
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 54.551466,
+        "serial_ms": 1096.922275,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -116,14 +116,14 @@
       },
       "resources": {
         "fetch_counts": {
-          "Image": 23
+          "Image": 29
         },
-        "resource_cache_fresh_hits": 0,
+        "resource_cache_fresh_hits": 6,
         "resource_cache_revalidated_hits": 0,
-        "resource_cache_misses": 6,
+        "resource_cache_misses": 2,
         "image_cache_hits": 5,
-        "image_cache_misses": 23,
-        "image_decode_ms": 6.873597000000001
+        "image_cache_misses": 29,
+        "image_decode_ms": 7.226448000000001
       }
     }
   }

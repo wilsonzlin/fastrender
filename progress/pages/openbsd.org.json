@@ -1,16 +1,16 @@
 {
-  "url": "https://openbsd.org",
+  "url": "https://www.openbsd.org/",
   "status": "ok",
-  "total_ms": 1318.2018,
+  "total_ms": 214.51609,
   "stages_ms": {
-    "fetch": 0.287857,
-    "css": 15.347422,
-    "cascade": 49.455173,
-    "layout": 21.648472000000005,
-    "paint": 848.63569
+    "fetch": 0.317678,
+    "css": 11.749901,
+    "cascade": 45.860509,
+    "layout": 18.53787,
+    "paint": 14.418222
   },
   "notes": "",
-  "hotspot": "paint",
+  "hotspot": "cascade",
   "failure_stage": null,
   "timeout_stage": null,
   "last_good_commit": "02eacedd5340344865616a4f4d19e08dd6f218fe",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 0.287857,
+        "dom_parse_ms": 0.317678,
         "css_inlining_ms": null,
-        "css_parse_ms": 15.347422,
-        "cascade_ms": 25.284774,
-        "box_tree_ms": 24.170399,
-        "layout_ms": 17.125642,
-        "text_fallback_ms": 3.8419329999999983,
-        "text_shape_ms": 4.522830000000004,
-        "paint_build_ms": 0.405049,
-        "paint_optimize_ms": 0.0,
-        "paint_rasterize_ms": 839.622332,
-        "text_rasterize_ms": 8.608309000000002,
+        "css_parse_ms": 11.749901,
+        "cascade_ms": 28.684252,
+        "box_tree_ms": 17.176257,
+        "layout_ms": 14.508164,
+        "text_fallback_ms": 3.6068030000000006,
+        "text_shape_ms": 4.029706000000001,
+        "paint_build_ms": 13.788508,
+        "paint_optimize_ms": 0.01149,
+        "paint_rasterize_ms": 0.618224,
+        "text_rasterize_ms": 0.0,
         "encode_ms": null
       },
       "counts": {
@@ -96,18 +96,18 @@
         "fragment_traversed": 0
       },
       "paint": {
-        "display_items": 92,
-        "optimized_items": null,
-        "culled_items": null,
-        "transparent_removed": null,
-        "noop_removed": null,
-        "merged_items": null,
+        "display_items": 3,
+        "optimized_items": 3,
+        "culled_items": 0,
+        "transparent_removed": 0,
+        "noop_removed": 0,
+        "merged_items": 0,
         "gradient_ms": 0.0,
         "gradient_pixels": 0,
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 840.027381,
+        "serial_ms": 14.442152,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -116,15 +116,14 @@
       },
       "resources": {
         "fetch_counts": {
-          "Stylesheet": 1,
-          "Image": 2
+          "Stylesheet": 1
         },
         "resource_cache_fresh_hits": 1,
         "resource_cache_revalidated_hits": 0,
-        "resource_cache_misses": 2,
+        "resource_cache_misses": 0,
         "image_cache_hits": 0,
-        "image_cache_misses": 2,
-        "image_decode_ms": 1.836021
+        "image_cache_misses": 0,
+        "image_decode_ms": 0.0
       }
     }
   }

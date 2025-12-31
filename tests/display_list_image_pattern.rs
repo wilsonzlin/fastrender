@@ -82,7 +82,9 @@ fn repeating_background_emits_single_image_pattern_item() {
 
   // Ensure the optimizer preserves the item and the renderer produces non-empty output.
   let viewport = Rect::from_xywh(0.0, 0.0, 32.0, 32.0);
-  let (optimized, _) = DisplayListOptimizer::new().optimize_checked(list, viewport).unwrap();
+  let (optimized, _) = DisplayListOptimizer::new()
+    .optimize_checked(&list, viewport)
+    .unwrap();
   assert_eq!(
     optimized
       .items()

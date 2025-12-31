@@ -894,7 +894,7 @@ impl DisplayListBuilder {
       .or_else(|| self.svg_filter_defs.clone());
     let mut svg_filters = SvgFilterResolver::new(defs, svg_roots, image_cache.as_ref());
 
-    let contexts = crate::paint::stacking::build_stacking_tree_from_tree(tree);
+    let contexts = crate::paint::stacking::build_stacking_tree_from_tree_checked(tree)?;
     let visibility = self.root_visibility();
     for context in &contexts {
       self.build_stacking_context(context, Point::ZERO, true, &mut svg_filters, visibility);
@@ -945,7 +945,7 @@ impl DisplayListBuilder {
       self.viewport = Some((root.bounds.width(), root.bounds.height()));
     }
     self.estimate_from_roots(std::iter::once(root));
-    let stacking = crate::paint::stacking::build_stacking_tree_from_fragment_tree(root);
+    let stacking = crate::paint::stacking::build_stacking_tree_from_fragment_tree_checked(root)?;
     let image_cache = self.image_cache.clone();
     let mut svg_filters = SvgFilterResolver::new(
       self.svg_filter_defs.clone(),
@@ -985,7 +985,7 @@ impl DisplayListBuilder {
       self.viewport = Some((root.bounds.width(), root.bounds.height()));
     }
     self.estimate_from_roots(std::iter::once(root));
-    let stacking = crate::paint::stacking::build_stacking_tree_from_fragment_tree(root);
+    let stacking = crate::paint::stacking::build_stacking_tree_from_fragment_tree_checked(root)?;
     let mut svg_roots = Vec::new();
     Self::collect_stacking_fragments(&stacking, &mut svg_roots);
     let image_cache = self.image_cache.clone();
@@ -1049,7 +1049,8 @@ impl DisplayListBuilder {
       .clone()
       .or_else(|| self.svg_filter_defs.clone());
     self.svg_filter_defs = defs;
-    let stackings = crate::paint::stacking::build_stacking_tree_from_tree(tree);
+    let stackings = crate::paint::stacking::build_stacking_tree_from_tree_checked(tree)
+      .unwrap_or_else(|_| Vec::new());
     self.estimate_from_tree(tree);
     self.build_from_stacking_contexts(&stackings)
   }

@@ -1,13 +1,13 @@
 {
-  "url": "https://figma.com",
+  "url": "https://www.figma.com/login",
   "status": "ok",
-  "total_ms": 786.8393649999999,
+  "total_ms": 465.310586,
   "stages_ms": {
-    "fetch": 0.257726,
-    "css": 102.275622,
-    "cascade": 143.516272,
-    "layout": 40.17118599999999,
-    "paint": 103.935239
+    "fetch": 0.184164,
+    "css": 34.170565,
+    "cascade": 42.146947,
+    "layout": 28.072826999999997,
+    "paint": 21.022833
   },
   "notes": "",
   "hotspot": "cascade",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 0.257726,
+        "dom_parse_ms": 0.184164,
         "css_inlining_ms": null,
-        "css_parse_ms": 102.275622,
-        "cascade_ms": 118.741549,
-        "box_tree_ms": 24.774723,
-        "layout_ms": 33.003727,
-        "text_fallback_ms": 10.130702,
-        "text_shape_ms": 7.167458999999996,
-        "paint_build_ms": 0.227945,
-        "paint_optimize_ms": 0.0,
-        "paint_rasterize_ms": 92.242238,
-        "text_rasterize_ms": 11.465056,
+        "css_parse_ms": 34.170565,
+        "cascade_ms": 19.292582999999997,
+        "box_tree_ms": 22.854363999999997,
+        "layout_ms": 22.987548,
+        "text_fallback_ms": 7.461753999999993,
+        "text_shape_ms": 5.085278999999995,
+        "paint_build_ms": 13.526290999999999,
+        "paint_optimize_ms": 0.005,
+        "paint_rasterize_ms": 7.491542,
+        "text_rasterize_ms": 0.0,
         "encode_ms": null
       },
       "counts": {
@@ -96,18 +96,18 @@
         "fragment_traversed": 0
       },
       "paint": {
-        "display_items": 37,
-        "optimized_items": null,
-        "culled_items": null,
-        "transparent_removed": null,
-        "noop_removed": null,
-        "merged_items": null,
+        "display_items": 3,
+        "optimized_items": 3,
+        "culled_items": 0,
+        "transparent_removed": 0,
+        "noop_removed": 0,
+        "merged_items": 0,
         "gradient_ms": 0.0,
         "gradient_pixels": 0,
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 92.470183,
+        "serial_ms": 21.055813999999998,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -116,15 +116,14 @@
       },
       "resources": {
         "fetch_counts": {
-          "Stylesheet": 1,
-          "Image": 4
+          "Stylesheet": 1
         },
-        "resource_cache_fresh_hits": 0,
+        "resource_cache_fresh_hits": 1,
         "resource_cache_revalidated_hits": 0,
-        "resource_cache_misses": 5,
+        "resource_cache_misses": 0,
         "image_cache_hits": 0,
-        "image_cache_misses": 4,
-        "image_decode_ms": 0.250206
+        "image_cache_misses": 0,
+        "image_decode_ms": 0.0
       }
     }
   }

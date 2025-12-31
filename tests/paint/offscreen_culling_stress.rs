@@ -74,7 +74,7 @@ fn offscreen_fragments_are_culled_fast() {
 
   let optimizer = DisplayListOptimizer::new();
   let (optimized, stats) = optimizer
-    .optimize_checked(list_full.clone(), viewport)
+    .optimize_checked(&list_full, viewport)
     .expect("optimize");
   assert!(
     optimized.len() <= list_full.len(),
@@ -106,7 +106,7 @@ fn offscreen_fragments_are_culled_fast() {
     .build_checked(&visible_root)
     .expect("visible list build");
   let (visible_opt, _) = optimizer
-    .optimize_checked(visible_list, viewport)
+    .optimize_checked(&visible_list, viewport)
     .expect("visible optimize");
 
   let font_ctx = FontContext::new();

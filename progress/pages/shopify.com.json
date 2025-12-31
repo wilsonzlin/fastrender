@@ -1,13 +1,13 @@
 {
-  "url": "https://shopify.com",
+  "url": "https://www.shopify.com/",
   "status": "ok",
-  "total_ms": 3357.999338,
+  "total_ms": 2882.872172,
   "stages_ms": {
-    "fetch": 8.163241999999999,
-    "css": 108.91877,
-    "cascade": 1116.983789,
-    "layout": 1585.3023119999984,
-    "paint": 289.58746700000006
+    "fetch": 6.9160189999999995,
+    "css": 75.62915600000001,
+    "cascade": 881.8615020000001,
+    "layout": 1558.2478629999998,
+    "paint": 193.19414500000002
   },
   "notes": "",
   "hotspot": "layout",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 8.163241999999999,
+        "dom_parse_ms": 6.9160189999999995,
         "css_inlining_ms": null,
-        "css_parse_ms": 108.91877,
-        "cascade_ms": 810.227786,
-        "box_tree_ms": 306.756003,
-        "layout_ms": 1418.113159,
-        "text_fallback_ms": 582.3893990000015,
-        "text_shape_ms": 167.1891529999984,
-        "paint_build_ms": 3.2293019999999997,
-        "paint_optimize_ms": 0.0,
-        "paint_rasterize_ms": 281.573342,
-        "text_rasterize_ms": 4.784822999999996,
+        "css_parse_ms": 75.62915600000001,
+        "cascade_ms": 686.2290370000001,
+        "box_tree_ms": 195.632465,
+        "layout_ms": 1394.150275,
+        "text_fallback_ms": 559.9722620000002,
+        "text_shape_ms": 164.09758799999977,
+        "paint_build_ms": 48.49814,
+        "paint_optimize_ms": 0.091202,
+        "paint_rasterize_ms": 143.534122,
+        "text_rasterize_ms": 1.070681,
         "encode_ms": null
       },
       "counts": {
@@ -38,11 +38,11 @@
         "styled_nodes": 3032,
         "box_nodes": 2019,
         "fragments": 2714,
-        "shaped_runs": 20214,
-        "glyphs": 383650,
+        "shaped_runs": 20209,
+        "glyphs": 383574,
         "color_glyph_rasters": 0,
-        "fallback_cache_hits": 85316,
-        "fallback_cache_misses": 102808,
+        "fallback_cache_hits": 85289,
+        "fallback_cache_misses": 102714,
         "last_resort_font_fallbacks": 60,
         "last_resort_font_fallback_samples": [
           "U+1F1FA U+1F1F8",
@@ -54,12 +54,12 @@
           "U+1F1FA U+1F1F8",
           "U+1F1FA U+1F1F8"
         ],
-        "glyph_cache_hits": 0,
-        "glyph_cache_misses": 0,
+        "glyph_cache_hits": 69,
+        "glyph_cache_misses": 28,
         "glyph_cache_evictions": 0,
-        "glyph_cache_bytes": 0,
+        "glyph_cache_bytes": 8700,
         "color_glyph_cache_hits": 0,
-        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_misses": 97,
         "color_glyph_cache_evictions": 0,
         "color_glyph_cache_bytes": 0
       },
@@ -84,10 +84,10 @@
         "has_evaluated": null
       },
       "layout": {
-        "intrinsic_lookups": 16233,
-        "intrinsic_hits": 11001,
-        "intrinsic_stores": 5232,
-        "block_intrinsic": 12075,
+        "intrinsic_lookups": 16209,
+        "intrinsic_hits": 10972,
+        "intrinsic_stores": 5237,
+        "block_intrinsic": 12051,
         "flex_intrinsic": 4158,
         "inline_intrinsic": 0,
         "table_cell_intrinsic_measurements": null,
@@ -106,18 +106,18 @@
         "fragment_traversed": 0
       },
       "paint": {
-        "display_items": 177,
-        "optimized_items": null,
-        "culled_items": null,
-        "transparent_removed": null,
-        "noop_removed": null,
-        "merged_items": null,
-        "gradient_ms": 0.0,
-        "gradient_pixels": 0,
+        "display_items": 129,
+        "optimized_items": 99,
+        "culled_items": 4,
+        "transparent_removed": 0,
+        "noop_removed": 26,
+        "merged_items": 0,
+        "gradient_ms": 12.805745,
+        "gradient_pixels": 498888,
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 284.80264400000004,
+        "serial_ms": 223.916608,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -127,14 +127,14 @@
       "resources": {
         "fetch_counts": {
           "Stylesheet": 1,
-          "Image": 18
+          "Image": 7
         },
-        "resource_cache_fresh_hits": 1,
+        "resource_cache_fresh_hits": 8,
         "resource_cache_revalidated_hits": 0,
-        "resource_cache_misses": 8,
-        "image_cache_hits": 3,
-        "image_cache_misses": 18,
-        "image_decode_ms": 18.349019
+        "resource_cache_misses": 0,
+        "image_cache_hits": 6,
+        "image_cache_misses": 7,
+        "image_decode_ms": 17.550345
       }
     }
   }

@@ -1,16 +1,16 @@
 {
-  "url": "https://britannica.com",
+  "url": "https://www.britannica.com/",
   "status": "ok",
-  "total_ms": 322.317517,
+  "total_ms": 316.241408,
   "stages_ms": {
-    "fetch": 0.201924,
-    "css": 11.906586,
-    "cascade": 48.204126,
-    "layout": 4.1678820000000005,
-    "paint": 38.774624
+    "fetch": 0.174814,
+    "css": 19.560691000000002,
+    "cascade": 35.987491,
+    "layout": 3.583461,
+    "paint": 64.371486
   },
   "notes": "",
-  "hotspot": "cascade",
+  "hotspot": "paint",
   "failure_stage": null,
   "timeout_stage": null,
   "last_good_commit": "02eacedd5340344865616a4f4d19e08dd6f218fe",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 0.201924,
+        "dom_parse_ms": 0.174814,
         "css_inlining_ms": null,
-        "css_parse_ms": 11.906586,
-        "cascade_ms": 24.401375,
-        "box_tree_ms": 23.802751,
-        "layout_ms": 3.687132,
-        "text_fallback_ms": 0.6346240000000001,
-        "text_shape_ms": 0.48075,
-        "paint_build_ms": 0.099402,
-        "paint_optimize_ms": 0.0,
-        "paint_rasterize_ms": 37.878285,
-        "text_rasterize_ms": 0.7969369999999999,
+        "css_parse_ms": 19.560691000000002,
+        "cascade_ms": 21.454774999999998,
+        "box_tree_ms": 14.532715999999999,
+        "layout_ms": 3.229414,
+        "text_fallback_ms": 0.578724,
+        "text_shape_ms": 0.35404700000000006,
+        "paint_build_ms": 62.86234,
+        "paint_optimize_ms": 0.020381,
+        "paint_rasterize_ms": 0.9091509999999999,
+        "text_rasterize_ms": 0.5796140000000001,
         "encode_ms": null
       },
       "counts": {
@@ -44,12 +44,12 @@
         "fallback_cache_hits": 105,
         "fallback_cache_misses": 200,
         "last_resort_font_fallbacks": 0,
-        "glyph_cache_hits": 0,
-        "glyph_cache_misses": 0,
+        "glyph_cache_hits": 21,
+        "glyph_cache_misses": 20,
         "glyph_cache_evictions": 0,
-        "glyph_cache_bytes": 0,
+        "glyph_cache_bytes": 6124,
         "color_glyph_cache_hits": 0,
-        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_misses": 41,
         "color_glyph_cache_evictions": 0,
         "color_glyph_cache_bytes": 0
       },
@@ -96,18 +96,18 @@
         "fragment_traversed": 0
       },
       "paint": {
-        "display_items": 4,
-        "optimized_items": null,
-        "culled_items": null,
-        "transparent_removed": null,
-        "noop_removed": null,
-        "merged_items": null,
+        "display_items": 3,
+        "optimized_items": 3,
+        "culled_items": 0,
+        "transparent_removed": 0,
+        "noop_removed": 0,
+        "merged_items": 0,
         "gradient_ms": 0.0,
         "gradient_pixels": 0,
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 37.977687,
+        "serial_ms": 76.004254,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -123,7 +123,7 @@
         "resource_cache_misses": 1,
         "image_cache_hits": 0,
         "image_cache_misses": 1,
-        "image_decode_ms": 0.335798
+        "image_decode_ms": 0.265596
       }
     }
   }

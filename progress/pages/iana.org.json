@@ -1,16 +1,16 @@
 {
-  "url": "https://iana.org",
+  "url": "https://www.iana.org/",
   "status": "ok",
-  "total_ms": 741.510494,
+  "total_ms": 713.994767,
   "stages_ms": {
-    "fetch": 0.4216,
-    "css": 77.705043,
-    "cascade": 202.461217,
-    "layout": 41.126189,
-    "paint": 130.844055
+    "fetch": 0.685995,
+    "css": 89.03149400000001,
+    "cascade": 79.788483,
+    "layout": 54.89607600000001,
+    "paint": 227.227846
   },
   "notes": "",
-  "hotspot": "cascade",
+  "hotspot": "paint",
   "failure_stage": null,
   "timeout_stage": null,
   "last_good_commit": "833aa788ed1a7102190a18ae8eae4a0af8876bc4",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 0.4216,
+        "dom_parse_ms": 0.685995,
         "css_inlining_ms": null,
-        "css_parse_ms": 77.705043,
-        "cascade_ms": 84.185678,
-        "box_tree_ms": 118.275539,
-        "layout_ms": 34.580672,
-        "text_fallback_ms": 14.422162999999998,
-        "text_shape_ms": 6.545517000000002,
-        "paint_build_ms": 0.599444,
-        "paint_optimize_ms": 0.0,
-        "paint_rasterize_ms": 118.945473,
-        "text_rasterize_ms": 11.299137999999996,
+        "css_parse_ms": 89.03149400000001,
+        "cascade_ms": 47.616994000000005,
+        "box_tree_ms": 32.171488999999994,
+        "layout_ms": 46.735073,
+        "text_fallback_ms": 19.945032999999984,
+        "text_shape_ms": 8.16100300000001,
+        "paint_build_ms": 195.536411,
+        "paint_optimize_ms": 0.116202,
+        "paint_rasterize_ms": 18.815332,
+        "text_rasterize_ms": 12.759901,
         "encode_ms": null
       },
       "counts": {
@@ -44,12 +44,12 @@
         "fallback_cache_hits": 3284,
         "fallback_cache_misses": 3322,
         "last_resort_font_fallbacks": 0,
-        "glyph_cache_hits": 0,
-        "glyph_cache_misses": 0,
+        "glyph_cache_hits": 750,
+        "glyph_cache_misses": 82,
         "glyph_cache_evictions": 0,
-        "glyph_cache_bytes": 0,
+        "glyph_cache_bytes": 24074,
         "color_glyph_cache_hits": 0,
-        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_misses": 832,
         "color_glyph_cache_evictions": 0,
         "color_glyph_cache_bytes": 0
       },
@@ -96,18 +96,18 @@
         "fragment_traversed": 0
       },
       "paint": {
-        "display_items": 59,
-        "optimized_items": null,
-        "culled_items": null,
-        "transparent_removed": null,
-        "noop_removed": null,
-        "merged_items": null,
+        "display_items": 64,
+        "optimized_items": 64,
+        "culled_items": 0,
+        "transparent_removed": 0,
+        "noop_removed": 0,
+        "merged_items": 0,
         "gradient_ms": 0.0,
         "gradient_pixels": 0,
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 119.544917,
+        "serial_ms": 356.66594,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -124,7 +124,7 @@
         "resource_cache_misses": 1,
         "image_cache_hits": 0,
         "image_cache_misses": 1,
-        "image_decode_ms": 1.158105
+        "image_decode_ms": 0.999123
       }
     }
   }

@@ -1,13 +1,13 @@
 {
-  "url": "https://fandom.com",
+  "url": "https://www.fandom.com/",
   "status": "ok",
-  "total_ms": 2811.803742,
+  "total_ms": 1458.7780089999999,
   "stages_ms": {
-    "fetch": 3.098589,
-    "css": 106.524227,
-    "cascade": 1204.946493,
-    "layout": 366.0578059999999,
-    "paint": 745.9326209999999
+    "fetch": 2.524518,
+    "css": 124.063859,
+    "cascade": 564.468983,
+    "layout": 304.549013,
+    "paint": 169.21441000000002
   },
   "notes": "",
   "hotspot": "cascade",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 3.098589,
+        "dom_parse_ms": 2.524518,
         "css_inlining_ms": null,
-        "css_parse_ms": 106.524227,
-        "cascade_ms": 357.157138,
-        "box_tree_ms": 847.789355,
-        "layout_ms": 334.78988999999996,
-        "text_fallback_ms": 92.222734,
-        "text_shape_ms": 31.267915999999975,
-        "paint_build_ms": 3.710733,
-        "paint_optimize_ms": 0.0,
-        "paint_rasterize_ms": 727.6938349999999,
-        "text_rasterize_ms": 14.528052999999998,
+        "css_parse_ms": 124.063859,
+        "cascade_ms": 285.60383900000005,
+        "box_tree_ms": 278.865144,
+        "layout_ms": 276.284735,
+        "text_fallback_ms": 78.747112,
+        "text_shape_ms": 28.26427799999998,
+        "paint_build_ms": 12.764353000000002,
+        "paint_optimize_ms": 0.028071,
+        "paint_rasterize_ms": 155.125923,
+        "text_rasterize_ms": 1.2960629999999997,
         "encode_ms": null
       },
       "counts": {
@@ -38,18 +38,18 @@
         "styled_nodes": 2174,
         "box_nodes": 2845,
         "fragments": 2356,
-        "shaped_runs": 2082,
-        "glyphs": 38661,
+        "shaped_runs": 2077,
+        "glyphs": 38622,
         "color_glyph_rasters": 0,
-        "fallback_cache_hits": 15378,
-        "fallback_cache_misses": 25880,
+        "fallback_cache_hits": 15370,
+        "fallback_cache_misses": 25844,
         "last_resort_font_fallbacks": 0,
-        "glyph_cache_hits": 0,
-        "glyph_cache_misses": 0,
+        "glyph_cache_hits": 74,
+        "glyph_cache_misses": 26,
         "glyph_cache_evictions": 0,
-        "glyph_cache_bytes": 0,
+        "glyph_cache_bytes": 12381,
         "color_glyph_cache_hits": 0,
-        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_misses": 100,
         "color_glyph_cache_evictions": 0,
         "color_glyph_cache_bytes": 0
       },
@@ -96,18 +96,18 @@
         "fragment_traversed": 0
       },
       "paint": {
-        "display_items": 76,
-        "optimized_items": null,
-        "culled_items": null,
-        "transparent_removed": null,
-        "noop_removed": null,
-        "merged_items": null,
-        "gradient_ms": 74.393679,
-        "gradient_pixels": 1894124,
+        "display_items": 73,
+        "optimized_items": 53,
+        "culled_items": 4,
+        "transparent_removed": 0,
+        "noop_removed": 16,
+        "merged_items": 0,
+        "gradient_ms": 55.807952,
+        "gradient_pixels": 2180352,
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 731.4045679999999,
+        "serial_ms": 176.550435,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -117,14 +117,14 @@
       "resources": {
         "fetch_counts": {
           "Stylesheet": 9,
-          "Image": 32
+          "Image": 19
         },
-        "resource_cache_fresh_hits": 0,
+        "resource_cache_fresh_hits": 19,
         "resource_cache_revalidated_hits": 0,
-        "resource_cache_misses": 25,
-        "image_cache_hits": 22,
-        "image_cache_misses": 32,
-        "image_decode_ms": 228.03386100000003
+        "resource_cache_misses": 0,
+        "image_cache_hits": 5,
+        "image_cache_misses": 19,
+        "image_decode_ms": 4.0757129999999995
       }
     }
   }

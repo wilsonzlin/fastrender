@@ -1,17 +1,17 @@
 {
-  "url": "https://netflix.com",
+  "url": "https://www.netflix.com/",
   "status": "ok",
-  "total_ms": 1316.919821,
+  "total_ms": 1771.097114,
   "stages_ms": {
-    "fetch": 6.414613,
-    "css": 66.429872,
-    "cascade": 258.657001,
-    "layout": 188.567979,
-    "paint": 264.421223
+    "fetch": 5.348643999999999,
+    "css": 37.168318,
+    "cascade": 174.36069399999997,
+    "layout": 170.13597099999996,
+    "paint": 964.270072
   },
   "notes": "",
   "hotspot": "paint",
-  "failure_stage": null,
+  "failure_stage": "paint",
   "timeout_stage": null,
   "last_good_commit": "833aa788ed1a7102190a18ae8eae4a0af8876bc4",
   "last_regression_commit": "",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 6.414613,
+        "dom_parse_ms": 5.348643999999999,
         "css_inlining_ms": null,
-        "css_parse_ms": 66.429872,
-        "cascade_ms": 194.116881,
-        "box_tree_ms": 64.54012,
-        "layout_ms": 166.49124400000002,
-        "text_fallback_ms": 44.39921300000001,
-        "text_shape_ms": 22.07673499999996,
-        "paint_build_ms": 1.987534,
-        "paint_optimize_ms": 0.0,
-        "paint_rasterize_ms": 259.35744700000004,
-        "text_rasterize_ms": 3.076242000000001,
+        "css_parse_ms": 37.168318,
+        "cascade_ms": 140.328558,
+        "box_tree_ms": 34.032135999999994,
+        "layout_ms": 150.19052599999998,
+        "text_fallback_ms": 40.63885499999998,
+        "text_shape_ms": 19.945444999999985,
+        "paint_build_ms": 823.545976,
+        "paint_optimize_ms": 0.170014,
+        "paint_rasterize_ms": 136.22215400000002,
+        "text_rasterize_ms": 4.331927999999999,
         "encode_ms": null
       },
       "counts": {
@@ -44,12 +44,12 @@
         "fallback_cache_hits": 19652,
         "fallback_cache_misses": 18772,
         "last_resort_font_fallbacks": 0,
-        "glyph_cache_hits": 0,
-        "glyph_cache_misses": 0,
+        "glyph_cache_hits": 277,
+        "glyph_cache_misses": 61,
         "glyph_cache_evictions": 0,
-        "glyph_cache_bytes": 0,
+        "glyph_cache_bytes": 16315,
         "color_glyph_cache_hits": 0,
-        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_misses": 338,
         "color_glyph_cache_evictions": 0,
         "color_glyph_cache_bytes": 0
       },
@@ -74,10 +74,10 @@
         "has_evaluated": null
       },
       "layout": {
-        "intrinsic_lookups": 3126,
+        "intrinsic_lookups": 3127,
         "intrinsic_hits": 2067,
-        "intrinsic_stores": 1059,
-        "block_intrinsic": 1386,
+        "intrinsic_stores": 1060,
+        "block_intrinsic": 1387,
         "flex_intrinsic": 1740,
         "inline_intrinsic": 0,
         "table_cell_intrinsic_measurements": null,
@@ -96,35 +96,35 @@
         "fragment_traversed": 0
       },
       "paint": {
-        "display_items": 114,
-        "optimized_items": null,
-        "culled_items": null,
-        "transparent_removed": null,
-        "noop_removed": null,
-        "merged_items": null,
-        "gradient_ms": 15.143368,
-        "gradient_pixels": 470180,
+        "display_items": 230,
+        "optimized_items": 166,
+        "culled_items": 0,
+        "transparent_removed": 0,
+        "noop_removed": 64,
+        "merged_items": 0,
+        "gradient_ms": 9.90221,
+        "gradient_pixels": 378240,
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 261.344981,
+        "serial_ms": 1779.970207,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
-        "blur_cache_misses": 0,
+        "blur_cache_misses": 4,
         "blur_tiles": 0
       },
       "resources": {
         "fetch_counts": {
           "Stylesheet": 1,
-          "Image": 9
+          "Image": 18
         },
-        "resource_cache_fresh_hits": 0,
+        "resource_cache_fresh_hits": 8,
         "resource_cache_revalidated_hits": 0,
-        "resource_cache_misses": 1,
-        "image_cache_hits": 0,
-        "image_cache_misses": 9,
-        "image_decode_ms": 16.002509000000003
+        "resource_cache_misses": 5,
+        "image_cache_hits": 8,
+        "image_cache_misses": 18,
+        "image_decode_ms": 2.067727
       }
     }
   }

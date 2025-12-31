@@ -1,13 +1,13 @@
 {
-  "url": "https://wikipedia.org",
+  "url": "https://www.wikipedia.org/",
   "status": "ok",
-  "total_ms": 2573.9209459999997,
+  "total_ms": 2037.2576769999998,
   "stages_ms": {
-    "fetch": 15.085357,
-    "css": 44.824961,
-    "cascade": 1082.536132,
-    "layout": 551.590227,
-    "paint": 131.436154
+    "fetch": 3.369188,
+    "css": 40.844331999999994,
+    "cascade": 1044.585818,
+    "layout": 492.286948,
+    "paint": 34.694288
   },
   "notes": "",
   "hotspot": "cascade",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 15.085357,
+        "dom_parse_ms": 3.369188,
         "css_inlining_ms": null,
-        "css_parse_ms": 44.824961,
-        "cascade_ms": 634.6743,
-        "box_tree_ms": 447.861832,
-        "layout_ms": 517.501135,
-        "text_fallback_ms": 399.30106200000074,
-        "text_shape_ms": 34.089092000000015,
-        "paint_build_ms": 4.110612,
-        "paint_optimize_ms": 0.0,
-        "paint_rasterize_ms": 114.787221,
-        "text_rasterize_ms": 12.538321000000003,
+        "css_parse_ms": 40.844331999999994,
+        "cascade_ms": 621.467593,
+        "box_tree_ms": 423.118225,
+        "layout_ms": 464.21444299999996,
+        "text_fallback_ms": 370.54870099999965,
+        "text_shape_ms": 28.07250500000006,
+        "paint_build_ms": 13.311337,
+        "paint_optimize_ms": 0.04345,
+        "paint_rasterize_ms": 18.252530999999998,
+        "text_rasterize_ms": 3.08697,
         "encode_ms": null
       },
       "counts": {
@@ -38,8 +38,8 @@
         "styled_nodes": 2683,
         "box_nodes": 3370,
         "fragments": 3629,
-        "shaped_runs": 1962,
-        "glyphs": 16590,
+        "shaped_runs": 1961,
+        "glyphs": 16584,
         "color_glyph_rasters": 0,
         "fallback_cache_hits": 3713,
         "fallback_cache_misses": 17674,
@@ -54,12 +54,12 @@
           "U+0C24 U+0C46",
           "U+0C32 U+0C41"
         ],
-        "glyph_cache_hits": 0,
-        "glyph_cache_misses": 0,
+        "glyph_cache_hits": 183,
+        "glyph_cache_misses": 105,
         "glyph_cache_evictions": 0,
-        "glyph_cache_bytes": 0,
+        "glyph_cache_bytes": 37771,
         "color_glyph_cache_hits": 0,
-        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_misses": 288,
         "color_glyph_cache_evictions": 0,
         "color_glyph_cache_bytes": 0
       },
@@ -106,18 +106,18 @@
         "fragment_traversed": 0
       },
       "paint": {
-        "display_items": 155,
-        "optimized_items": null,
-        "culled_items": null,
-        "transparent_removed": null,
-        "noop_removed": null,
-        "merged_items": null,
-        "gradient_ms": 0.17211400000000002,
-        "gradient_pixels": 5728,
+        "display_items": 82,
+        "optimized_items": 78,
+        "culled_items": 2,
+        "transparent_removed": 0,
+        "noop_removed": 2,
+        "merged_items": 0,
+        "gradient_ms": 0.0,
+        "gradient_pixels": 0,
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 118.897833,
+        "serial_ms": 40.80804,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -126,14 +126,14 @@
       },
       "resources": {
         "fetch_counts": {
-          "Image": 3
+          "Image": 2
         },
-        "resource_cache_fresh_hits": 0,
+        "resource_cache_fresh_hits": 2,
         "resource_cache_revalidated_hits": 0,
-        "resource_cache_misses": 3,
-        "image_cache_hits": 17,
-        "image_cache_misses": 3,
-        "image_decode_ms": 5.827501000000001
+        "resource_cache_misses": 0,
+        "image_cache_hits": 0,
+        "image_cache_misses": 2,
+        "image_decode_ms": 5.098267
       }
     }
   }

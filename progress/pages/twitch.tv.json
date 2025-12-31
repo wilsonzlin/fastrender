@@ -1,17 +1,17 @@
 {
-  "url": "https://twitch.tv",
+  "url": "https://www.twitch.tv/",
   "status": "ok",
-  "total_ms": 683.09184,
+  "total_ms": 959.090265,
   "stages_ms": {
-    "fetch": 1.414221,
-    "css": 129.70351399999998,
-    "cascade": 59.956297,
-    "layout": 6.561596000000001,
-    "paint": 22.147773
+    "fetch": 0.947492,
+    "css": 39.516052,
+    "cascade": 336.87853400000006,
+    "layout": 3.705735,
+    "paint": 57.880315
   },
   "notes": "",
-  "hotspot": "css",
-  "failure_stage": null,
+  "hotspot": "cascade",
+  "failure_stage": "paint",
   "timeout_stage": null,
   "last_good_commit": "02eacedd5340344865616a4f4d19e08dd6f218fe",
   "last_regression_commit": "725d8be6ad0695e8b178bcc904ae8f93bb745f34",
@@ -19,17 +19,17 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 1.414221,
+        "dom_parse_ms": 0.947492,
         "css_inlining_ms": null,
-        "css_parse_ms": 129.70351399999998,
-        "cascade_ms": 48.140174,
-        "box_tree_ms": 11.816123,
-        "layout_ms": 6.561596000000001,
+        "css_parse_ms": 39.516052,
+        "cascade_ms": 139.24864300000002,
+        "box_tree_ms": 197.62989100000001,
+        "layout_ms": 3.705735,
         "text_fallback_ms": 0.0,
         "text_shape_ms": 0.0,
-        "paint_build_ms": 0.100872,
-        "paint_optimize_ms": 0.0,
-        "paint_rasterize_ms": 22.046901,
+        "paint_build_ms": 47.642059,
+        "paint_optimize_ms": 0.039881,
+        "paint_rasterize_ms": 10.198375,
         "text_rasterize_ms": 0.0,
         "encode_ms": null
       },
@@ -96,18 +96,18 @@
         "fragment_traversed": 0
       },
       "paint": {
-        "display_items": 2,
-        "optimized_items": null,
-        "culled_items": null,
-        "transparent_removed": null,
-        "noop_removed": null,
-        "merged_items": null,
+        "display_items": 30,
+        "optimized_items": 22,
+        "culled_items": 0,
+        "transparent_removed": 0,
+        "noop_removed": 8,
+        "merged_items": 0,
         "gradient_ms": 0.0,
         "gradient_pixels": 0,
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 22.147773,
+        "serial_ms": 57.88688500000001,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -117,14 +117,14 @@
       "resources": {
         "fetch_counts": {
           "Stylesheet": 1,
-          "Image": 1
+          "Image": 2
         },
         "resource_cache_fresh_hits": 0,
         "resource_cache_revalidated_hits": 0,
-        "resource_cache_misses": 0,
+        "resource_cache_misses": 1,
         "image_cache_hits": 0,
-        "image_cache_misses": 1,
-        "image_decode_ms": 0.17564300000000002
+        "image_cache_misses": 2,
+        "image_decode_ms": 0.219515
       }
     }
   }

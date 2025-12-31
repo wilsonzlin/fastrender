@@ -1,7 +1,7 @@
 {
-  "url": "https://cnet.com",
+  "url": "https://www.cnet.com/",
   "status": "error",
-  "total_ms": 5062.363469,
+  "total_ms": 4851.070246,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,
@@ -9,7 +9,7 @@
     "layout": 0.0,
     "paint": 0.0
   },
-  "notes": "hard timeout after 5.00s\nstage: paint_build",
+  "notes": "hard timeout after 5.00s\nstage: paint_build\nstage: cascade",
   "hotspot": "paint",
   "failure_stage": "paint",
   "timeout_stage": null,

@@ -1,17 +1,17 @@
 {
-  "url": "https://youtube.com",
+  "url": "https://www.youtube.com/",
   "status": "ok",
-  "total_ms": 3746.584498,
+  "total_ms": 3551.098584,
   "stages_ms": {
-    "fetch": 3.2972740000000003,
-    "css": 2806.911973,
-    "cascade": 306.53832900000003,
-    "layout": 125.262785,
-    "paint": 17.588103
+    "fetch": 1.761891,
+    "css": 2559.980651,
+    "cascade": 297.828944,
+    "layout": 127.763408,
+    "paint": 165.870299
   },
   "notes": "",
   "hotspot": "css",
-  "failure_stage": null,
+  "failure_stage": "paint",
   "timeout_stage": null,
   "last_good_commit": "4e2dcd18c8bbe80d971147f7ea1026b6e720fdbb",
   "last_regression_commit": "833aa788ed1a7102190a18ae8eae4a0af8876bc4",
@@ -19,17 +19,17 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 3.2972740000000003,
+        "dom_parse_ms": 1.761891,
         "css_inlining_ms": null,
-        "css_parse_ms": 2806.911973,
-        "cascade_ms": 248.721189,
-        "box_tree_ms": 57.81714,
-        "layout_ms": 125.262785,
+        "css_parse_ms": 2559.980651,
+        "cascade_ms": 247.191505,
+        "box_tree_ms": 50.637439,
+        "layout_ms": 127.763408,
         "text_fallback_ms": 0.0,
         "text_shape_ms": 0.0,
-        "paint_build_ms": 0.360518,
-        "paint_optimize_ms": 0.0,
-        "paint_rasterize_ms": 17.227585,
+        "paint_build_ms": 154.261901,
+        "paint_optimize_ms": 0.151054,
+        "paint_rasterize_ms": 11.457343999999999,
         "text_rasterize_ms": 0.0,
         "encode_ms": null
       },
@@ -96,18 +96,18 @@
         "fragment_traversed": 0
       },
       "paint": {
-        "display_items": 103,
-        "optimized_items": null,
-        "culled_items": null,
-        "transparent_removed": null,
-        "noop_removed": null,
-        "merged_items": null,
+        "display_items": 185,
+        "optimized_items": 177,
+        "culled_items": 0,
+        "transparent_removed": 0,
+        "noop_removed": 6,
+        "merged_items": 2,
         "gradient_ms": 0.0,
         "gradient_pixels": 0,
-        "parallel_tasks": 0,
-        "parallel_threads": 1,
-        "parallel_ms": 0.0,
-        "serial_ms": 17.588103,
+        "parallel_tasks": 20,
+        "parallel_threads": 20,
+        "parallel_ms": 11.099636,
+        "serial_ms": 306.515494,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -117,14 +117,14 @@
       "resources": {
         "fetch_counts": {
           "Stylesheet": 5,
-          "Image": 1
+          "Image": 3
         },
         "resource_cache_fresh_hits": 0,
         "resource_cache_revalidated_hits": 0,
-        "resource_cache_misses": 0,
-        "image_cache_hits": 0,
-        "image_cache_misses": 1,
-        "image_decode_ms": 0.363118
+        "resource_cache_misses": 2,
+        "image_cache_hits": 1,
+        "image_cache_misses": 3,
+        "image_decode_ms": 0.521612
       }
     }
   }

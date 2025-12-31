@@ -1,13 +1,13 @@
 {
-  "url": "https://walmart.com",
+  "url": "https://www.walmart.com/src",
   "status": "ok",
-  "total_ms": 1303.564683,
+  "total_ms": 861.701917,
   "stages_ms": {
-    "fetch": 1.32511,
-    "css": 320.964641,
-    "cascade": 247.62232500000005,
-    "layout": 54.944385999999994,
-    "paint": 39.167485
+    "fetch": 0.9586520000000001,
+    "css": 205.518083,
+    "cascade": 189.266478,
+    "layout": 55.041140000000006,
+    "paint": 13.220084000000002
   },
   "notes": "",
   "hotspot": "css",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 1.32511,
+        "dom_parse_ms": 0.9586520000000001,
         "css_inlining_ms": null,
-        "css_parse_ms": 320.964641,
-        "cascade_ms": 154.39714500000002,
-        "box_tree_ms": 93.22518,
-        "layout_ms": 50.199639999999995,
-        "text_fallback_ms": 24.893488,
-        "text_shape_ms": 4.744746,
-        "paint_build_ms": 0.375018,
-        "paint_optimize_ms": 0.0,
-        "paint_rasterize_ms": 36.519065000000005,
-        "text_rasterize_ms": 2.2734020000000004,
+        "css_parse_ms": 205.518083,
+        "cascade_ms": 124.78714000000001,
+        "box_tree_ms": 64.479338,
+        "layout_ms": 50.336321000000005,
+        "text_fallback_ms": 24.650887999999995,
+        "text_shape_ms": 4.704819000000003,
+        "paint_build_ms": 4.415612,
+        "paint_optimize_ms": 0.02946,
+        "paint_rasterize_ms": 7.7814190000000005,
+        "text_rasterize_ms": 0.9935930000000002,
         "encode_ms": null
       },
       "counts": {
@@ -38,18 +38,18 @@
         "styled_nodes": 255,
         "box_nodes": 214,
         "fragments": 308,
-        "shaped_runs": 250,
-        "glyphs": 4659,
+        "shaped_runs": 248,
+        "glyphs": 4641,
         "color_glyph_rasters": 0,
-        "fallback_cache_hits": 1641,
-        "fallback_cache_misses": 3564,
+        "fallback_cache_hits": 1643,
+        "fallback_cache_misses": 3572,
         "last_resort_font_fallbacks": 0,
-        "glyph_cache_hits": 0,
-        "glyph_cache_misses": 0,
+        "glyph_cache_hits": 19,
+        "glyph_cache_misses": 55,
         "glyph_cache_evictions": 0,
-        "glyph_cache_bytes": 0,
+        "glyph_cache_bytes": 18690,
         "color_glyph_cache_hits": 0,
-        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_misses": 74,
         "color_glyph_cache_evictions": 0,
         "color_glyph_cache_bytes": 0
       },
@@ -96,18 +96,18 @@
         "fragment_traversed": 0
       },
       "paint": {
-        "display_items": 87,
-        "optimized_items": null,
-        "culled_items": null,
-        "transparent_removed": null,
-        "noop_removed": null,
-        "merged_items": null,
+        "display_items": 37,
+        "optimized_items": 19,
+        "culled_items": 0,
+        "transparent_removed": 0,
+        "noop_removed": 18,
+        "merged_items": 0,
         "gradient_ms": 0.0,
         "gradient_pixels": 0,
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 36.894083,
+        "serial_ms": 14.073234000000001,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -117,14 +117,14 @@
       "resources": {
         "fetch_counts": {
           "Stylesheet": 2,
-          "Image": 5
+          "Image": 1
         },
-        "resource_cache_fresh_hits": 0,
+        "resource_cache_fresh_hits": 1,
         "resource_cache_revalidated_hits": 0,
-        "resource_cache_misses": 3,
+        "resource_cache_misses": 0,
         "image_cache_hits": 1,
-        "image_cache_misses": 5,
-        "image_decode_ms": 7.070578
+        "image_cache_misses": 1,
+        "image_decode_ms": 0.793918
       }
     }
   }

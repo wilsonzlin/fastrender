@@ -1,13 +1,13 @@
 {
-  "url": "https://ietf.org",
+  "url": "https://www.ietf.org/",
   "status": "ok",
-  "total_ms": 1959.713682,
+  "total_ms": 2407.2635020000002,
   "stages_ms": {
-    "fetch": 2.301001,
-    "css": 230.39668,
-    "cascade": 663.2160369999999,
-    "layout": 304.8591760000001,
-    "paint": 357.3096719999999
+    "fetch": 3.160132,
+    "css": 310.082411,
+    "cascade": 798.397295,
+    "layout": 469.2789610000001,
+    "paint": 307.87094799999994
   },
   "notes": "",
   "hotspot": "cascade",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 2.301001,
+        "dom_parse_ms": 3.160132,
         "css_inlining_ms": null,
-        "css_parse_ms": 230.39668,
-        "cascade_ms": 377.40479,
-        "box_tree_ms": 285.811247,
-        "layout_ms": 255.759526,
-        "text_fallback_ms": 94.65407900000008,
-        "text_shape_ms": 49.09965000000006,
-        "paint_build_ms": 1.619466,
-        "paint_optimize_ms": 0.0,
-        "paint_rasterize_ms": 348.56686599999995,
-        "text_rasterize_ms": 7.1233400000000024,
+        "css_parse_ms": 310.082411,
+        "cascade_ms": 500.020943,
+        "box_tree_ms": 298.376352,
+        "layout_ms": 385.21223599999996,
+        "text_fallback_ms": 132.23323400000007,
+        "text_shape_ms": 84.0667250000001,
+        "paint_build_ms": 203.496343,
+        "paint_optimize_ms": 0.085262,
+        "paint_rasterize_ms": 97.15256099999999,
+        "text_rasterize_ms": 7.136782,
         "encode_ms": null
       },
       "counts": {
@@ -38,18 +38,18 @@
         "styled_nodes": 1677,
         "box_nodes": 1015,
         "fragments": 885,
-        "shaped_runs": 3578,
-        "glyphs": 42800,
+        "shaped_runs": 3574,
+        "glyphs": 42792,
         "color_glyph_rasters": 0,
-        "fallback_cache_hits": 23373,
-        "fallback_cache_misses": 24134,
+        "fallback_cache_hits": 23371,
+        "fallback_cache_misses": 24130,
         "last_resort_font_fallbacks": 0,
-        "glyph_cache_hits": 0,
-        "glyph_cache_misses": 0,
+        "glyph_cache_hits": 345,
+        "glyph_cache_misses": 136,
         "glyph_cache_evictions": 0,
-        "glyph_cache_bytes": 0,
+        "glyph_cache_bytes": 39612,
         "color_glyph_cache_hits": 0,
-        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_misses": 481,
         "color_glyph_cache_evictions": 0,
         "color_glyph_cache_bytes": 0
       },
@@ -75,8 +75,8 @@
       },
       "layout": {
         "intrinsic_lookups": 1790,
-        "intrinsic_hits": 1103,
-        "intrinsic_stores": 687,
+        "intrinsic_hits": 1104,
+        "intrinsic_stores": 686,
         "block_intrinsic": 1643,
         "flex_intrinsic": 147,
         "inline_intrinsic": 0,
@@ -96,18 +96,18 @@
         "fragment_traversed": 0
       },
       "paint": {
-        "display_items": 151,
-        "optimized_items": null,
-        "culled_items": null,
-        "transparent_removed": null,
-        "noop_removed": null,
-        "merged_items": null,
+        "display_items": 93,
+        "optimized_items": 69,
+        "culled_items": 2,
+        "transparent_removed": 0,
+        "noop_removed": 22,
+        "merged_items": 0,
         "gradient_ms": 0.0,
         "gradient_pixels": 0,
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 350.18633199999994,
+        "serial_ms": 493.98373399999997,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -117,14 +117,14 @@
       "resources": {
         "fetch_counts": {
           "Stylesheet": 2,
-          "Image": 6
+          "Image": 4
         },
-        "resource_cache_fresh_hits": 0,
-        "resource_cache_revalidated_hits": 0,
-        "resource_cache_misses": 5,
-        "image_cache_hits": 1,
-        "image_cache_misses": 6,
-        "image_decode_ms": 31.036803000000003
+        "resource_cache_fresh_hits": 2,
+        "resource_cache_revalidated_hits": 1,
+        "resource_cache_misses": 1,
+        "image_cache_hits": 0,
+        "image_cache_misses": 4,
+        "image_decode_ms": 25.053636
       }
     }
   }

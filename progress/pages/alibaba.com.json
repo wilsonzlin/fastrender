@@ -1,16 +1,16 @@
 {
-  "url": "https://alibaba.com",
+  "url": "https://error.alibaba.com/error404.htm",
   "status": "ok",
-  "total_ms": 1473.62899,
+  "total_ms": 474.817006,
   "stages_ms": {
-    "fetch": 1.373921,
-    "css": 79.32643,
-    "cascade": 118.258928,
-    "layout": 34.156308,
-    "paint": 454.752516
+    "fetch": 1.122096,
+    "css": 66.60176700000001,
+    "cascade": 101.45464100000001,
+    "layout": 30.028616,
+    "paint": 30.494734
   },
   "notes": "",
-  "hotspot": "paint",
+  "hotspot": "cascade",
   "failure_stage": null,
   "timeout_stage": null,
   "last_good_commit": "833aa788ed1a7102190a18ae8eae4a0af8876bc4",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 1.373921,
+        "dom_parse_ms": 1.122096,
         "css_inlining_ms": null,
-        "css_parse_ms": 79.32643,
-        "cascade_ms": 63.015376,
-        "box_tree_ms": 55.243552,
-        "layout_ms": 32.593647000000004,
-        "text_fallback_ms": 19.545774,
-        "text_shape_ms": 1.5626610000000003,
-        "paint_build_ms": 0.240385,
-        "paint_optimize_ms": 0.0,
-        "paint_rasterize_ms": 453.154021,
-        "text_rasterize_ms": 1.35811,
+        "css_parse_ms": 66.60176700000001,
+        "cascade_ms": 46.132445000000004,
+        "box_tree_ms": 55.322196,
+        "layout_ms": 28.557209,
+        "text_fallback_ms": 17.23345,
+        "text_shape_ms": 1.4714069999999995,
+        "paint_build_ms": 19.411698,
+        "paint_optimize_ms": 0.036059999999999995,
+        "paint_rasterize_ms": 9.325935000000001,
+        "text_rasterize_ms": 1.7210410000000007,
         "encode_ms": null
       },
       "counts": {
@@ -44,12 +44,12 @@
         "fallback_cache_hits": 240,
         "fallback_cache_misses": 1030,
         "last_resort_font_fallbacks": 0,
-        "glyph_cache_hits": 0,
-        "glyph_cache_misses": 0,
+        "glyph_cache_hits": 175,
+        "glyph_cache_misses": 25,
         "glyph_cache_evictions": 0,
-        "glyph_cache_bytes": 0,
+        "glyph_cache_bytes": 7807,
         "color_glyph_cache_hits": 0,
-        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_misses": 200,
         "color_glyph_cache_evictions": 0,
         "color_glyph_cache_bytes": 0
       },
@@ -96,18 +96,18 @@
         "fragment_traversed": 0
       },
       "paint": {
-        "display_items": 17,
-        "optimized_items": null,
-        "culled_items": null,
-        "transparent_removed": null,
-        "noop_removed": null,
-        "merged_items": null,
+        "display_items": 37,
+        "optimized_items": 33,
+        "culled_items": 0,
+        "transparent_removed": 0,
+        "noop_removed": 4,
+        "merged_items": 0,
         "gradient_ms": 0.0,
         "gradient_pixels": 0,
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 453.394406,
+        "serial_ms": 44.549547000000004,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -118,12 +118,12 @@
         "fetch_counts": {
           "Image": 1
         },
-        "resource_cache_fresh_hits": 0,
+        "resource_cache_fresh_hits": 1,
         "resource_cache_revalidated_hits": 0,
-        "resource_cache_misses": 1,
-        "image_cache_hits": 0,
+        "resource_cache_misses": 0,
+        "image_cache_hits": 1,
         "image_cache_misses": 1,
-        "image_decode_ms": 0.337157
+        "image_decode_ms": 0.25568599999999997
       }
     }
   }

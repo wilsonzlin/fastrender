@@ -58,6 +58,8 @@
 
 use crate::geometry::Point;
 use crate::geometry::Rect;
+use crate::error::{Error, RenderStage, Result};
+use crate::render_control::check_active_periodic;
 use crate::style::display::Display;
 use crate::style::position::Position;
 use crate::style::types::Overflow;
@@ -67,6 +69,8 @@ use crate::tree::fragment_tree::FragmentNode;
 use crate::tree::fragment_tree::FragmentTree;
 use std::cmp::Ordering;
 use std::sync::Arc;
+
+const DEADLINE_STRIDE: usize = 256;
 
 /// A reference to a fragment with associated style information
 ///
@@ -917,6 +921,25 @@ where
   build_stacking_tree_with_styles_and_counter(root, &get_style, &mut tree_order_counter)
 }
 
+/// Builds a stacking context tree with cooperative cancellation.
+///
+/// This is the deadline-aware variant used by the display list pipeline so the
+/// builder can fall back to a different paint backend instead of getting
+/// hard-killed after the render timeout expires.
+pub fn build_stacking_tree_with_styles_checked<F>(root: &FragmentNode, get_style: F) -> Result<StackingContext>
+where
+  F: Fn(&FragmentNode) -> Option<Arc<ComputedStyle>> + Clone,
+{
+  let mut tree_order_counter = 0;
+  let mut deadline_counter = 0usize;
+  build_stacking_tree_with_styles_and_counter_checked(
+    root,
+    &get_style,
+    &mut tree_order_counter,
+    &mut deadline_counter,
+  )
+}
+
 fn build_stacking_tree_with_styles_and_counter<F>(
   root: &FragmentNode,
   get_style: &F,
@@ -941,9 +964,41 @@ where
   context
 }
 
+fn build_stacking_tree_with_styles_and_counter_checked<F>(
+  root: &FragmentNode,
+  get_style: &F,
+  tree_order_counter: &mut usize,
+  deadline_counter: &mut usize,
+) -> Result<StackingContext>
+where
+  F: Fn(&FragmentNode) -> Option<Arc<ComputedStyle>> + Clone,
+{
+  let root_style = get_style(root);
+  let mut context = build_stacking_tree_with_styles_internal_checked(
+    root,
+    root_style.as_ref().map(|s| s.as_ref()),
+    None,
+    true,
+    tree_order_counter,
+    Point::ZERO,
+    get_style,
+    deadline_counter,
+  )?;
+
+  context.sort_children();
+  context.compute_bounds();
+  Ok(context)
+}
+
 /// Builds a stacking context tree from a fragment tree using the fragment's embedded styles.
 pub fn build_stacking_tree_from_fragment_tree(root: &FragmentNode) -> StackingContext {
   build_stacking_tree_with_styles(root, |fragment| fragment.style.clone())
+}
+
+/// Builds a stacking context tree from a fragment tree using the fragment's embedded styles while
+/// surfacing timeouts.
+pub fn build_stacking_tree_from_fragment_tree_checked(root: &FragmentNode) -> Result<StackingContext> {
+  build_stacking_tree_with_styles_checked(root, |fragment| fragment.style.clone())
 }
 
 /// Builds stacking context trees for every root in a FragmentTree.
@@ -966,6 +1021,184 @@ pub fn build_stacking_tree_from_tree(tree: &FragmentTree) -> Vec<StackingContext
     ));
   }
   contexts
+}
+
+/// Builds stacking context trees for every root in a FragmentTree while surfacing timeouts.
+pub fn build_stacking_tree_from_tree_checked(tree: &FragmentTree) -> Result<Vec<StackingContext>> {
+  let mut tree_order_counter = 0;
+  let mut deadline_counter = 0usize;
+  let mut contexts = Vec::with_capacity(1 + tree.additional_fragments.len());
+  contexts.push(build_stacking_tree_with_styles_and_counter_checked(
+    &tree.root,
+    &|fragment| fragment.style.clone(),
+    &mut tree_order_counter,
+    &mut deadline_counter,
+  )?);
+  for fragment in &tree.additional_fragments {
+    contexts.push(build_stacking_tree_with_styles_and_counter_checked(
+      fragment,
+      &|node| node.style.clone(),
+      &mut tree_order_counter,
+      &mut deadline_counter,
+    )?);
+  }
+  Ok(contexts)
+}
+
+fn build_stacking_tree_with_styles_internal_checked<F>(
+  fragment: &FragmentNode,
+  style: Option<&ComputedStyle>,
+  parent_style: Option<&ComputedStyle>,
+  is_root: bool,
+  tree_order: &mut usize,
+  offset_from_parent_context: Point,
+  get_style: &F,
+  deadline_counter: &mut usize,
+) -> Result<StackingContext>
+where
+  F: Fn(&FragmentNode) -> Option<Arc<ComputedStyle>>,
+{
+  check_active_periodic(deadline_counter, DEADLINE_STRIDE, RenderStage::Paint).map_err(Error::Render)?;
+
+  let current_order = *tree_order;
+  *tree_order += 1;
+
+  if let Some(style) = style {
+    if !matches!(
+      style.visibility,
+      crate::style::computed::Visibility::Visible
+    ) {
+      return Ok(StackingContext::new(0));
+    }
+  }
+
+  let creates_context = if let Some(s) = style {
+    creates_stacking_context(s, parent_style, is_root)
+  } else {
+    is_root
+  };
+
+  if creates_context {
+    let z_index = style
+      .map(|s| {
+        if s.top_layer.is_some() {
+          i32::MAX
+        } else {
+          s.z_index.unwrap_or(0)
+        }
+      })
+      .unwrap_or(0);
+    let reason = style
+      .and_then(|s| get_stacking_context_reason(s, parent_style, is_root))
+      .unwrap_or(StackingContextReason::Root);
+
+    let mut context = StackingContext::with_reason(z_index, reason, current_order);
+    context.offset_from_parent_context = offset_from_parent_context;
+    context.fragments.push(fragment.clone());
+
+    let base_offset = Point::ZERO;
+    for child in fragment.children.iter() {
+      let child_style = get_style(child);
+      if let Some(s) = child_style.as_deref() {
+        if !matches!(s.visibility, crate::style::computed::Visibility::Visible) {
+          continue;
+        }
+      }
+      let child_offset = Point::new(
+        base_offset.x + child.bounds.origin.x,
+        base_offset.y + child.bounds.origin.y,
+      );
+      let child_context = build_stacking_tree_with_styles_internal_checked(
+        child,
+        child_style.as_ref().map(|s| s.as_ref()),
+        style,
+        false,
+        tree_order,
+        child_offset,
+        get_style,
+        deadline_counter,
+      )?;
+
+      let child_creates_context =
+        child_context.reason != StackingContextReason::Root || child_context.z_index != 0;
+
+      if child_creates_context {
+        context.add_child(child_context);
+      } else {
+        if !child_context.children.is_empty() {
+          context.children.extend(child_context.children);
+        }
+        context.add_fragment_to_layer(
+          child.clone(),
+          child_style.as_deref(),
+          child_context.tree_order,
+        );
+      }
+    }
+
+    Ok(context)
+  } else {
+    let mut context = StackingContext::new(0);
+    context.tree_order = current_order;
+    context.offset_from_parent_context = offset_from_parent_context;
+
+    if let Some(s) = style {
+      context.add_fragment_to_layer(fragment.clone(), Some(s), current_order);
+    } else {
+      match &fragment.content {
+        FragmentContent::Text { .. }
+        | FragmentContent::Inline { .. }
+        | FragmentContent::Line { .. } => {
+          context.layer5_inlines.push(fragment.clone());
+        }
+        _ => {
+          context.layer3_blocks.push(fragment.clone());
+        }
+      }
+    }
+
+    let base_offset = offset_from_parent_context;
+    for child in fragment.children.iter() {
+      let child_style = get_style(child);
+      if let Some(s) = child_style.as_deref() {
+        if !matches!(s.visibility, crate::style::computed::Visibility::Visible) {
+          continue;
+        }
+      }
+      let child_offset = Point::new(
+        base_offset.x + child.bounds.origin.x,
+        base_offset.y + child.bounds.origin.y,
+      );
+      let child_context = build_stacking_tree_with_styles_internal_checked(
+        child,
+        child_style.as_ref().map(|s| s.as_ref()),
+        style,
+        false,
+        tree_order,
+        child_offset,
+        get_style,
+        deadline_counter,
+      )?;
+
+      let child_creates_context =
+        child_context.reason != StackingContextReason::Root || child_context.z_index != 0;
+
+      if child_creates_context {
+        context.add_child(child_context);
+      } else {
+        if !child_context.children.is_empty() {
+          context.children.extend(child_context.children);
+        }
+        context.add_fragment_to_layer(
+          child.clone(),
+          child_style.as_deref(),
+          child_context.tree_order,
+        );
+      }
+    }
+
+    Ok(context)
+  }
 }
 
 /// Internal recursive function to build stacking context tree with styles
