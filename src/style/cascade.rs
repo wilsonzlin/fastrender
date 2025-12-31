@@ -93,6 +93,7 @@ use selectors::parser::Selector;
 use selectors::parser::SelectorList;
 use selectors::Element;
 use std::borrow::Cow;
+use std::cell::Cell;
 use std::cell::RefCell;
 use std::cmp::Ordering as CmpOrdering;
 use std::collections::BinaryHeap;
@@ -126,6 +127,27 @@ static CASCADE_PROFILE_SELECTOR_BLOOM_TIME_NS: AtomicU64 = AtomicU64::new(0);
 static CASCADE_PROFILE_SELECTOR_BLOOM_FAST_REJECTS: AtomicU64 = AtomicU64::new(0);
 static CASCADE_PROFILE_SELECTOR_ATTEMPTS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static CASCADE_PROFILE_SELECTOR_ATTEMPTS_AFTER_BLOOM: AtomicU64 = AtomicU64::new(0);
+
+thread_local! {
+  /// Controls whether the ancestor bloom filter is reset at `DomNodeType::ShadowRoot` boundaries.
+  ///
+  /// When enabled, the bloom filter for nodes inside a shadow root only contains hashes for
+  /// ancestors within that shadow tree. This improves fast-reject effectiveness by avoiding
+  /// irrelevant outer-tree hashes (which can only increase false positives).
+  static ANCESTOR_BLOOM_SHADOW_SCOPING_ENABLED: Cell<bool> = const { Cell::new(true) };
+}
+
+pub fn ancestor_bloom_shadow_scoping_enabled() -> bool {
+  ANCESTOR_BLOOM_SHADOW_SCOPING_ENABLED.with(|flag| flag.get())
+}
+
+/// Toggle shadow-boundary scoping of the cascade ancestor bloom filter.
+///
+/// This is primarily intended for benchmarking and tests; normal callers should rely on the
+/// default (enabled).
+pub fn set_ancestor_bloom_shadow_scoping_enabled(enabled: bool) {
+  ANCESTOR_BLOOM_SHADOW_SCOPING_ENABLED.with(|flag| flag.set(enabled));
+}
 
 const CASCADE_NODE_DEADLINE_STRIDE: usize = 1024;
 const CASCADE_SELECTOR_DEADLINE_STRIDE: usize = 64;
@@ -6310,6 +6332,8 @@ fn apply_styles_internal(
   let mut ancestors: Vec<&DomNode> = Vec::new();
   let mut ancestor_bloom_filter = selectors::bloom::BloomFilter::new();
   let ancestor_bloom_enabled = ancestor_bloom_enabled();
+  let ancestor_bloom_shadow_scoping =
+    ancestor_bloom_enabled && ancestor_bloom_shadow_scoping_enabled();
   let mut deadline_counter: usize = 0;
   let styled = apply_styles_internal_with_ancestors(
     node,
@@ -6328,6 +6352,7 @@ fn apply_styles_internal(
     &mut ancestors,
     &mut ancestor_bloom_filter,
     ancestor_bloom_enabled,
+    ancestor_bloom_shadow_scoping,
     node_counter,
     ancestor_ids,
     container_ctx,
@@ -6582,6 +6607,7 @@ fn apply_styles_internal_with_ancestors<'a>(
   ancestors: &mut Vec<&'a DomNode>,
   ancestor_bloom_filter: &mut selectors::bloom::BloomFilter,
   ancestor_bloom_enabled: bool,
+  ancestor_bloom_shadow_scoping: bool,
   node_counter: &mut usize,
   ancestor_ids: &mut Vec<usize>,
   container_ctx: Option<&ContainerQueryContext>,
@@ -6606,6 +6632,7 @@ fn apply_styles_internal_with_ancestors<'a>(
     next_child: usize,
     is_shadow_root: bool,
     push_ancestor_bloom: bool,
+    entered_shadow_bloom_scope: bool,
   }
 
   let mut reuse_counter = reuse_counter;
@@ -6691,6 +6718,14 @@ fn apply_styles_internal_with_ancestors<'a>(
     None
   };
 
+  let mut shadow_bloom_stack: Vec<selectors::bloom::BloomFilter> = Vec::new();
+  let root_is_shadow_root = matches!(node.node_type, DomNodeType::ShadowRoot { .. });
+  let root_shadow_bloom_scope = ancestor_bloom_shadow_scoping && root_is_shadow_root;
+  if root_shadow_bloom_scope {
+    let saved = std::mem::replace(ancestor_bloom_filter, selectors::bloom::BloomFilter::new());
+    shadow_bloom_stack.push(saved);
+  }
+
   let mut stack: Vec<Frame<'a>> = Vec::new();
   let push_ancestor_bloom = ancestor_bloom_enabled && node.is_element() && !node.children.is_empty();
   stack.push(Frame {
@@ -6701,8 +6736,9 @@ fn apply_styles_internal_with_ancestors<'a>(
     starting_base: root_starting_base,
     children: Vec::with_capacity(node.children.len()),
     next_child: 0,
-    is_shadow_root: matches!(node.node_type, DomNodeType::ShadowRoot { .. }),
+    is_shadow_root: root_is_shadow_root,
     push_ancestor_bloom,
+    entered_shadow_bloom_scope: root_shadow_bloom_scope,
   });
   if push_ancestor_bloom {
     #[cfg(test)]
@@ -6827,6 +6863,14 @@ fn apply_styles_internal_with_ancestors<'a>(
         (base, starting_base)
       };
 
+      let child_is_shadow_root = matches!(child.node_type, DomNodeType::ShadowRoot { .. });
+      let child_shadow_bloom_scope = ancestor_bloom_shadow_scoping && child_is_shadow_root;
+      if child_shadow_bloom_scope {
+        let saved =
+          std::mem::replace(ancestor_bloom_filter, selectors::bloom::BloomFilter::new());
+        shadow_bloom_stack.push(saved);
+      }
+
       let child_push_ancestor_bloom =
         ancestor_bloom_enabled && child.is_element() && !child.children.is_empty();
       stack.push(Frame {
@@ -6837,8 +6881,9 @@ fn apply_styles_internal_with_ancestors<'a>(
         starting_base: child_starting_base,
         children: Vec::with_capacity(child.children.len()),
         next_child: 0,
-        is_shadow_root: matches!(child.node_type, DomNodeType::ShadowRoot { .. }),
+        is_shadow_root: child_is_shadow_root,
         push_ancestor_bloom: child_push_ancestor_bloom,
+        entered_shadow_bloom_scope: child_shadow_bloom_scope,
       });
 
       if child_push_ancestor_bloom {
@@ -6864,6 +6909,13 @@ fn apply_styles_internal_with_ancestors<'a>(
       for_each_ancestor_bloom_hash(frame.node, rule_scopes.quirks_mode, |hash| {
         ancestor_bloom_filter.remove_hash(hash);
       });
+    }
+
+    if frame.entered_shadow_bloom_scope {
+      let restored = shadow_bloom_stack
+        .pop()
+        .expect("ancestor bloom shadow scope stack underflow");
+      *ancestor_bloom_filter = restored;
     }
 
     let mut base = frame.base;
@@ -8882,6 +8934,260 @@ slot[name=\"s\"]::slotted(.assigned) { color: rgb(4, 5, 6); }"
     let leaf = slotted.children.first().expect("leaf node");
     let before = leaf.before_styles.as_ref().expect("generated ::before");
     assert_eq!(before.color, Rgba::rgb(7, 8, 9));
+  }
+
+  struct ShadowBloomScopingGuard {
+    prev: bool,
+  }
+
+  impl ShadowBloomScopingGuard {
+    fn new(enabled: bool) -> Self {
+      let prev = ancestor_bloom_shadow_scoping_enabled();
+      set_ancestor_bloom_shadow_scoping_enabled(enabled);
+      Self { prev }
+    }
+  }
+
+  impl Drop for ShadowBloomScopingGuard {
+    fn drop(&mut self) {
+      set_ancestor_bloom_shadow_scoping_enabled(self.prev);
+    }
+  }
+
+  fn simple_shadow_dom_fixture(css: &str) -> DomNode {
+    let style_node = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "style".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![],
+      },
+      children: vec![DomNode {
+        node_type: DomNodeType::Text {
+          content: css.to_string(),
+        },
+        children: vec![],
+      }],
+    };
+
+    let target = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "span".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("class".to_string(), "target".to_string())],
+      },
+      children: vec![],
+    };
+
+    let deep_node = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("class".to_string(), "deep".to_string())],
+      },
+      children: vec![target],
+    };
+
+    let inner_node = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("class".to_string(), "inner0".to_string())],
+      },
+      children: vec![deep_node],
+    };
+
+    let shadow_root = DomNode {
+      node_type: DomNodeType::ShadowRoot {
+        mode: crate::dom::ShadowRootMode::Open,
+        delegates_focus: false,
+      },
+      children: vec![style_node, inner_node],
+    };
+
+    DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![
+          ("id".to_string(), "host".to_string()),
+          ("class".to_string(), "outer".to_string()),
+        ],
+      },
+      children: vec![shadow_root],
+    }
+  }
+
+  fn nested_shadow_dom_fixture(
+    depth: usize,
+    selector_chain_len: usize,
+    selectors_per_depth: usize,
+    target_count: usize,
+  ) -> DomNode {
+    use std::fmt::Write;
+
+    let inner_chain = (0..selector_chain_len)
+      .map(|idx| format!(".inner{idx}"))
+      .collect::<Vec<_>>()
+      .join(" ");
+
+    let mut css = String::from(".deep .target { color: rgb(10, 20, 30); }\n");
+    for outer in 0..depth {
+      for idx in 0..selectors_per_depth {
+        let _ = write!(
+          css,
+          ".outer{outer} {inner} .deep .target {{ padding-left: {}px; }}\n",
+          (idx % 7) + 1,
+          outer = outer,
+          inner = inner_chain
+        );
+      }
+    }
+
+    let style_node = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "style".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![],
+      },
+      children: vec![DomNode {
+        node_type: DomNodeType::Text { content: css },
+        children: vec![],
+      }],
+    };
+
+    let targets: Vec<DomNode> = (0..target_count)
+      .map(|idx| DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "span".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: vec![
+            ("id".to_string(), format!("t{idx}")),
+            ("class".to_string(), "target".to_string()),
+          ],
+        },
+        children: vec![],
+      })
+      .collect();
+
+    let mut content = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("class".to_string(), "deep".to_string())],
+      },
+      children: targets,
+    };
+
+    for idx in (0..selector_chain_len).rev() {
+      content = DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "div".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: vec![("class".to_string(), format!("inner{idx}"))],
+        },
+        children: vec![content],
+      };
+    }
+
+    let mut nested = content;
+    for level in (0..depth).rev() {
+      let shadow_root_children = if level + 1 == depth {
+        vec![style_node.clone(), nested]
+      } else {
+        vec![nested]
+      };
+
+      let shadow_root = DomNode {
+        node_type: DomNodeType::ShadowRoot {
+          mode: crate::dom::ShadowRootMode::Open,
+          delegates_focus: false,
+        },
+        children: shadow_root_children,
+      };
+
+      nested = DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "div".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: vec![
+            ("id".to_string(), format!("host{level}")),
+            ("class".to_string(), format!("outer{level}")),
+          ],
+        },
+        children: vec![shadow_root],
+      };
+    }
+
+    nested
+  }
+
+  #[test]
+  fn ancestor_bloom_shadow_scoping_preserves_cascade_output() {
+    crate::dom::set_ancestor_bloom_enabled(true);
+
+    let dom = simple_shadow_dom_fixture(
+      r#"
+        .deep .target { color: rgb(10, 20, 30); }
+        .inner0 .deep .target { margin-left: 2px; }
+        .outer .deep .target { padding-left: 5px; }
+        .missing .target { padding-left: 7px; }
+        .target::before { content: 'x'; color: rgb(1, 2, 3); }
+      "#,
+    );
+
+    let stylesheet = StyleSheet::new();
+    let styled_without_scoping = {
+      let _guard = ShadowBloomScopingGuard::new(false);
+      apply_styles(&dom, &stylesheet)
+    };
+    let styled_with_scoping = {
+      let _guard = ShadowBloomScopingGuard::new(true);
+      apply_styles(&dom, &stylesheet)
+    };
+
+    assert_styled_trees_equal(&styled_with_scoping, &styled_without_scoping);
+
+    let shadow_root = styled_with_scoping.children.first().expect("shadow root");
+    let inner = shadow_root.children.get(1).expect("inner wrapper");
+    let deep = inner.children.first().expect("deep wrapper");
+    let target = deep.children.first().expect("target node");
+    assert_eq!(target.styles.color, Rgba::rgb(10, 20, 30));
+    assert!(
+      target.before_styles.is_some(),
+      "expected ::before to be generated for .target"
+    );
+  }
+
+  #[test]
+  fn ancestor_bloom_shadow_scoping_increases_fast_rejects() {
+    crate::dom::set_ancestor_bloom_enabled(true);
+
+    let prev_profile_enabled = cascade_profile_enabled();
+    set_cascade_profile_enabled(true);
+
+    let dom = nested_shadow_dom_fixture(8, 4, 20, 12);
+    let stylesheet = StyleSheet::new();
+
+    let without_scoping = {
+      let _guard = ShadowBloomScopingGuard::new(false);
+      reset_cascade_profile();
+      let _ = apply_styles(&dom, &stylesheet);
+      capture_cascade_profile().selector_bloom_fast_rejects
+    };
+
+    let with_scoping = {
+      let _guard = ShadowBloomScopingGuard::new(true);
+      reset_cascade_profile();
+      let _ = apply_styles(&dom, &stylesheet);
+      capture_cascade_profile().selector_bloom_fast_rejects
+    };
+
+    assert!(
+      with_scoping > without_scoping,
+      "expected more bloom fast rejects with shadow scoping enabled (with={with_scoping}, without={without_scoping})"
+    );
+
+    set_cascade_profile_enabled(prev_profile_enabled);
   }
 
   fn child_font_weight(parent_style: &str, child_style: &str) -> u16 {

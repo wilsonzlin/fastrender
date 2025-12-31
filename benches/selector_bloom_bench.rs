@@ -3,12 +3,23 @@ use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::Criterion;
 use fastrender::css::parser::parse_stylesheet;
+use fastrender::css::types::StyleSheet;
 use fastrender::dom::build_selector_bloom_store;
 use fastrender::dom::enumerate_dom_ids;
 use fastrender::dom::parse_html;
 use fastrender::dom::set_ancestor_bloom_enabled;
 use fastrender::dom::set_selector_bloom_enabled;
+use fastrender::dom::DomNode;
+use fastrender::dom::DomNodeType;
+use fastrender::dom::ShadowRootMode;
+use fastrender::dom::HTML_NAMESPACE;
+use fastrender::style::cascade::apply_styles;
 use fastrender::style::cascade::apply_styles_with_media;
+use fastrender::style::cascade::capture_cascade_profile;
+use fastrender::style::cascade::cascade_profile_enabled;
+use fastrender::style::cascade::reset_cascade_profile;
+use fastrender::style::cascade::set_ancestor_bloom_shadow_scoping_enabled;
+use fastrender::style::cascade::set_cascade_profile_enabled;
 use fastrender::style::media::MediaContext;
 use std::fmt::Write;
 use std::hash::{Hash, Hasher};
@@ -300,6 +311,108 @@ fn generate_has_styles(max_depth: usize, needle_stride: usize) -> String {
   css
 }
 
+fn build_nested_shadow_dom(
+  depth: usize,
+  selector_chain_len: usize,
+  selectors_per_depth: usize,
+  target_count: usize,
+) -> DomNode {
+  let inner_chain = (0..selector_chain_len)
+    .map(|idx| format!(".inner{idx}"))
+    .collect::<Vec<_>>()
+    .join(" ");
+
+  let mut css = String::from(".deep .target { color: rgb(10, 20, 30); }\n");
+  for outer in 0..depth {
+    for idx in 0..selectors_per_depth {
+      let _ = write!(
+        css,
+        ".outer{outer} {inner} .deep .target {{ padding-left: {}px; }}\n",
+        (idx % 7) + 1,
+        outer = outer,
+        inner = inner_chain
+      );
+    }
+  }
+
+  let style_node = DomNode {
+    node_type: DomNodeType::Element {
+      tag_name: "style".to_string(),
+      namespace: HTML_NAMESPACE.to_string(),
+      attributes: vec![],
+    },
+    children: vec![DomNode {
+      node_type: DomNodeType::Text { content: css },
+      children: vec![],
+    }],
+  };
+
+  let targets: Vec<DomNode> = (0..target_count)
+    .map(|idx| DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "span".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![
+          ("id".to_string(), format!("t{idx}")),
+          ("class".to_string(), "target".to_string()),
+        ],
+      },
+      children: vec![],
+    })
+    .collect();
+
+  let mut content = DomNode {
+    node_type: DomNodeType::Element {
+      tag_name: "div".to_string(),
+      namespace: HTML_NAMESPACE.to_string(),
+      attributes: vec![("class".to_string(), "deep".to_string())],
+    },
+    children: targets,
+  };
+
+  for idx in (0..selector_chain_len).rev() {
+    content = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("class".to_string(), format!("inner{idx}"))],
+      },
+      children: vec![content],
+    };
+  }
+
+  let mut nested = content;
+  for level in (0..depth).rev() {
+    let shadow_root_children = if level + 1 == depth {
+      vec![style_node.clone(), nested]
+    } else {
+      vec![nested]
+    };
+
+    let shadow_root = DomNode {
+      node_type: DomNodeType::ShadowRoot {
+        mode: ShadowRootMode::Open,
+        delegates_focus: false,
+      },
+      children: shadow_root_children,
+    };
+
+    nested = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![
+          ("id".to_string(), format!("host{level}")),
+          ("class".to_string(), format!("outer{level}")),
+        ],
+      },
+      children: vec![shadow_root],
+    };
+  }
+
+  nested
+}
+
 fn selector_bloom_benchmark(c: &mut Criterion) {
   let depth = 64;
   let branching = 5;
@@ -362,6 +475,60 @@ fn ancestor_bloom_benchmark(c: &mut Criterion) {
   });
   group.finish();
   set_ancestor_bloom_enabled(true);
+}
+
+fn shadow_scoping_selector_bloom_benchmark(c: &mut Criterion) {
+  let shadow_depth = 32;
+  let chain_len = 8;
+  let selectors_per_depth = 120;
+  let targets = 64;
+
+  set_ancestor_bloom_enabled(true);
+  let dom = build_nested_shadow_dom(shadow_depth, chain_len, selectors_per_depth, targets);
+  let stylesheet = StyleSheet::new();
+
+  // One-time validation that shadow boundary scoping increases fast-reject counts.
+  let prev_profile_enabled = cascade_profile_enabled();
+  set_cascade_profile_enabled(true);
+
+  set_ancestor_bloom_shadow_scoping_enabled(false);
+  reset_cascade_profile();
+  let _ = apply_styles(black_box(&dom), black_box(&stylesheet));
+  let without_scoping = capture_cascade_profile().selector_bloom_fast_rejects;
+
+  set_ancestor_bloom_shadow_scoping_enabled(true);
+  reset_cascade_profile();
+  let _ = apply_styles(black_box(&dom), black_box(&stylesheet));
+  let with_scoping = capture_cascade_profile().selector_bloom_fast_rejects;
+
+  assert!(
+    with_scoping > without_scoping,
+    "expected more bloom fast rejects with shadow scoping enabled (with={with_scoping}, without={without_scoping})"
+  );
+
+  set_cascade_profile_enabled(prev_profile_enabled);
+
+  let mut group = c.benchmark_group("shadow_ancestor_bloom_scoping");
+  group.bench_function("shadow_scoping_enabled", |b| {
+    set_ancestor_bloom_shadow_scoping_enabled(true);
+    b.iter(|| {
+      let styled = apply_styles(black_box(&dom), black_box(&stylesheet));
+      black_box(styled);
+    });
+  });
+  group.bench_function("shadow_scoping_disabled", |b| {
+    set_ancestor_bloom_shadow_scoping_enabled(false);
+    b.iter(|| {
+      let styled = apply_styles(black_box(&dom), black_box(&stylesheet));
+      black_box(styled);
+    });
+  });
+  group.finish();
+
+  // Restore defaults for other benches.
+  set_ancestor_bloom_shadow_scoping_enabled(true);
+  set_ancestor_bloom_enabled(true);
+  set_selector_bloom_enabled(true);
 }
 
 fn has_selector_bloom_benchmark(c: &mut Criterion) {
@@ -559,6 +726,7 @@ criterion_group!(
   benches,
   selector_bloom_benchmark,
   ancestor_bloom_benchmark,
+  shadow_scoping_selector_bloom_benchmark,
   has_selector_bloom_benchmark,
   has_selector_summary_benchmark,
   selector_bloom_lookup_benchmark,
