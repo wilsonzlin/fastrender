@@ -776,7 +776,7 @@ fn box_blur_row_horizontal(
   if inner_start >= inner_end {
     for x in 0..width {
       let out_idx = x * 4;
-      let a = div.div((sum_a + half) as u32).min(255) as i32;
+      let a = div.div((sum_a + half) as u32) as i32;
       let r = div.div((sum_r + half) as u32) as i32;
       let g = div.div((sum_g + half) as u32) as i32;
       let b = div.div((sum_b + half) as u32) as i32;
@@ -801,7 +801,7 @@ fn box_blur_row_horizontal(
   let mut out_idx = 0usize;
   let mut add_idx = radius_plus_one * 4;
   for x in 0..inner_start {
-    let a = div.div((sum_a + half) as u32).min(255) as i32;
+    let a = div.div((sum_a + half) as u32) as i32;
     let r = div.div((sum_r + half) as u32) as i32;
     let g = div.div((sum_g + half) as u32) as i32;
     let b = div.div((sum_b + half) as u32) as i32;
@@ -825,7 +825,7 @@ fn box_blur_row_horizontal(
   let mut rem_idx = (inner_start - radius) * 4;
   let mut add_idx = (inner_start + radius_plus_one) * 4;
   for _x in inner_start..inner_end {
-    let a = div.div((sum_a + half) as u32).min(255) as i32;
+    let a = div.div((sum_a + half) as u32) as i32;
     let r = div.div((sum_r + half) as u32) as i32;
     let g = div.div((sum_g + half) as u32) as i32;
     let b = div.div((sum_b + half) as u32) as i32;
@@ -848,7 +848,7 @@ fn box_blur_row_horizontal(
   let mut out_idx = inner_end * 4;
   let mut rem_idx = (inner_end - radius) * 4;
   for _x in inner_end..width {
-    let a = div.div((sum_a + half) as u32).min(255) as i32;
+    let a = div.div((sum_a + half) as u32) as i32;
     let r = div.div((sum_r + half) as u32) as i32;
     let g = div.div((sum_g + half) as u32) as i32;
     let b = div.div((sum_b + half) as u32) as i32;
@@ -903,7 +903,7 @@ unsafe fn box_blur_column_vertical_to_ptr(
   if inner_start >= inner_end {
     for y in 0..height {
       let out_idx = y * row_stride + x_offset;
-      let a = div.div((sum_a + half) as u32).min(255) as i32;
+      let a = div.div((sum_a + half) as u32) as i32;
       let r = div.div((sum_r + half) as u32) as i32;
       let g = div.div((sum_g + half) as u32) as i32;
       let b = div.div((sum_b + half) as u32) as i32;
@@ -934,7 +934,7 @@ unsafe fn box_blur_column_vertical_to_ptr(
   let mut out_idx = x_offset;
   let mut add_idx = radius_plus_one * row_stride + x_offset;
   for y in 0..inner_start {
-    let a = div.div((sum_a + half) as u32).min(255) as i32;
+    let a = div.div((sum_a + half) as u32) as i32;
     let r = div.div((sum_r + half) as u32) as i32;
     let g = div.div((sum_g + half) as u32) as i32;
     let b = div.div((sum_b + half) as u32) as i32;
@@ -959,7 +959,7 @@ unsafe fn box_blur_column_vertical_to_ptr(
   let mut rem_idx = (inner_start - radius) * row_stride + x_offset;
   let mut add_idx = (inner_start + radius_plus_one) * row_stride + x_offset;
   for _y in inner_start..inner_end {
-    let a = div.div((sum_a + half) as u32).min(255) as i32;
+    let a = div.div((sum_a + half) as u32) as i32;
     let r = div.div((sum_r + half) as u32) as i32;
     let g = div.div((sum_g + half) as u32) as i32;
     let b = div.div((sum_b + half) as u32) as i32;
@@ -988,7 +988,7 @@ unsafe fn box_blur_column_vertical_to_ptr(
   let mut out_idx = inner_end * row_stride + x_offset;
   let mut rem_idx = (inner_end - radius) * row_stride + x_offset;
   for _y in inner_end..height {
-    let a = div.div((sum_a + half) as u32).min(255) as i32;
+    let a = div.div((sum_a + half) as u32) as i32;
     let r = div.div((sum_r + half) as u32) as i32;
     let g = div.div((sum_g + half) as u32) as i32;
     let b = div.div((sum_b + half) as u32) as i32;
