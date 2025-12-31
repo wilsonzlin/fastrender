@@ -397,20 +397,21 @@ fn convolve_row_horizontal_fixed(
     convolve_edge(x, out_row);
   }
 
-  for x in inner_start..inner_end {
+  let mut out_idx = inner_start * 4;
+  let mut base = (inner_start - radius) * 4;
+  for _x in inner_start..inner_end {
     let mut acc_r: i32 = 0;
     let mut acc_g: i32 = 0;
     let mut acc_b: i32 = 0;
     let mut acc_a: i32 = 0;
-    let base = (x - radius) * 4;
-    for (i, &w) in kernel.iter().enumerate() {
-      let idx = base + i * 4;
+    let mut idx = base;
+    for &w in kernel {
       acc_r += w * src_row[idx] as i32;
       acc_g += w * src_row[idx + 1] as i32;
       acc_b += w * src_row[idx + 2] as i32;
       acc_a += w * src_row[idx + 3] as i32;
+      idx += 4;
     }
-    let out_idx = x * 4;
     let a = ((acc_a + bias) >> shift).clamp(0, 255);
     let r = (acc_r + bias) >> shift;
     let g = (acc_g + bias) >> shift;
@@ -419,6 +420,9 @@ fn convolve_row_horizontal_fixed(
     out_row[out_idx + 1] = clamp_channel_to_alpha(g, a);
     out_row[out_idx + 2] = clamp_channel_to_alpha(b, a);
     out_row[out_idx + 3] = a as u8;
+
+    out_idx += 4;
+    base += 4;
   }
 
   for x in inner_end..width {
@@ -478,20 +482,21 @@ fn convolve_row_vertical_fixed(
   }
 
   let base_y = (y - radius) * row_stride;
-  for x in 0..width {
+  let mut base = base_y;
+  let mut out_idx = 0usize;
+  for _x in 0..width {
     let mut acc_r: i32 = 0;
     let mut acc_g: i32 = 0;
     let mut acc_b: i32 = 0;
     let mut acc_a: i32 = 0;
-    let base = base_y + x * 4;
-    for (i, &w) in kernel.iter().enumerate() {
-      let idx = base + i * row_stride;
+    let mut idx = base;
+    for &w in kernel {
       acc_r += w * src[idx] as i32;
       acc_g += w * src[idx + 1] as i32;
       acc_b += w * src[idx + 2] as i32;
       acc_a += w * src[idx + 3] as i32;
+      idx += row_stride;
     }
-    let out_idx = x * 4;
     let a = ((acc_a + bias) >> shift).clamp(0, 255);
     let r = (acc_r + bias) >> shift;
     let g = (acc_g + bias) >> shift;
@@ -500,6 +505,9 @@ fn convolve_row_vertical_fixed(
     out_row[out_idx + 1] = clamp_channel_to_alpha(g, a);
     out_row[out_idx + 2] = clamp_channel_to_alpha(b, a);
     out_row[out_idx + 3] = a as u8;
+
+    out_idx += 4;
+    base += 4;
   }
 }
 
