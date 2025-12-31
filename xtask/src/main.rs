@@ -448,7 +448,9 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
       "Prefetching subresources into fetches/assets/ (jobs={}, timeout={}s)...",
       args.jobs, args.fetch_timeout
     );
-    run_command(cmd)?;
+    if let Err(err) = run_command(cmd) {
+      eprintln!("Warning: prefetch_assets failed (continuing): {err}");
+    }
   }
 
   let mut cmd = Command::new("cargo");
