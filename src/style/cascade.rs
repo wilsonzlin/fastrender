@@ -19,7 +19,6 @@ use crate::css::types::ContainerCondition;
 use crate::css::types::ContainerQuery;
 use crate::css::types::ContainerStyleQuery;
 use crate::css::types::CssImportLoader;
-use crate::css::types::CssRule;
 use crate::css::types::CssString;
 use crate::css::types::Declaration;
 use crate::css::types::PropertyValue;
@@ -114,6 +113,8 @@ static CASCADE_PROFILE_CANDIDATES_BY_CLASS: AtomicU64 = AtomicU64::new(0);
 static CASCADE_PROFILE_CANDIDATES_BY_TAG: AtomicU64 = AtomicU64::new(0);
 static CASCADE_PROFILE_CANDIDATES_BY_ATTR: AtomicU64 = AtomicU64::new(0);
 static CASCADE_PROFILE_CANDIDATES_UNIVERSAL: AtomicU64 = AtomicU64::new(0);
+static CASCADE_PROFILE_SELECTOR_BLOOM_BUILT: AtomicU64 = AtomicU64::new(0);
+static CASCADE_PROFILE_SELECTOR_BLOOM_TIME_NS: AtomicU64 = AtomicU64::new(0);
 
 const CASCADE_NODE_DEADLINE_STRIDE: usize = 1024;
 const CASCADE_SELECTOR_DEADLINE_STRIDE: usize = 64;
@@ -540,6 +541,8 @@ pub fn reset_cascade_profile() {
   CASCADE_PROFILE_CANDIDATES_BY_TAG.store(0, Ordering::Relaxed);
   CASCADE_PROFILE_CANDIDATES_BY_ATTR.store(0, Ordering::Relaxed);
   CASCADE_PROFILE_CANDIDATES_UNIVERSAL.store(0, Ordering::Relaxed);
+  CASCADE_PROFILE_SELECTOR_BLOOM_BUILT.store(0, Ordering::Relaxed);
+  CASCADE_PROFILE_SELECTOR_BLOOM_TIME_NS.store(0, Ordering::Relaxed);
   CASCADE_PROFILE_FIND_TIME_NS.store(0, Ordering::Relaxed);
   CASCADE_PROFILE_DECL_TIME_NS.store(0, Ordering::Relaxed);
   CASCADE_PROFILE_PSEUDO_TIME_NS.store(0, Ordering::Relaxed);
@@ -550,9 +553,12 @@ fn log_cascade_profile(elapsed_ms: f64) {
   let candidates = CASCADE_PROFILE_RULE_CANDIDATES.load(Ordering::Relaxed);
   let matches = CASCADE_PROFILE_RULE_MATCHES.load(Ordering::Relaxed);
   let pruned = CASCADE_PROFILE_RULE_PRUNED.load(Ordering::Relaxed);
+  let bloom_built = CASCADE_PROFILE_SELECTOR_BLOOM_BUILT.load(Ordering::Relaxed);
+  let bloom_time_ns = CASCADE_PROFILE_SELECTOR_BLOOM_TIME_NS.load(Ordering::Relaxed);
   let find_time_ns = CASCADE_PROFILE_FIND_TIME_NS.load(Ordering::Relaxed);
   let decl_time_ns = CASCADE_PROFILE_DECL_TIME_NS.load(Ordering::Relaxed);
   let pseudo_time_ns = CASCADE_PROFILE_PSEUDO_TIME_NS.load(Ordering::Relaxed);
+  let bloom_ms = bloom_time_ns as f64 / 1_000_000.0;
   let find_ms = find_time_ns as f64 / 1_000_000.0;
   let decl_ms = decl_time_ns as f64 / 1_000_000.0;
   let pseudo_ms = pseudo_time_ns as f64 / 1_000_000.0;
@@ -567,8 +573,19 @@ fn log_cascade_profile(elapsed_ms: f64) {
     0.0
   };
   eprintln!(
-    "cascade profile: total_ms={:.2} nodes={} candidates={} pruned={} matches={} avg_candidates={:.1} avg_matches={:.1} find_ms={:.2} decl_ms={:.2} pseudo_ms={:.2}",
-    elapsed_ms, nodes, candidates, pruned, matches, avg_candidates, avg_matches, find_ms, decl_ms, pseudo_ms
+    "cascade profile: total_ms={:.2} nodes={} candidates={} pruned={} matches={} avg_candidates={:.1} avg_matches={:.1} bloom_built={} bloom_ms={:.2} find_ms={:.2} decl_ms={:.2} pseudo_ms={:.2}",
+    elapsed_ms,
+    nodes,
+    candidates,
+    pruned,
+    matches,
+    avg_candidates,
+    avg_matches,
+    bloom_built,
+    bloom_ms,
+    find_ms,
+    decl_ms,
+    pseudo_ms
   );
 }
 
@@ -737,35 +754,71 @@ fn collect_shadow_stylesheets(
   Ok(out)
 }
 
-fn selector_contains_has(selector: &Selector<FastRenderSelectorImpl>) -> bool {
+fn relative_selectors_need_bloom_summaries(
+  selectors: &[selectors::parser::RelativeSelector<FastRenderSelectorImpl>],
+  quirks_mode: QuirksMode,
+) -> bool {
+  selectors.iter().any(|selector| {
+    selector.match_hint.is_descendant_direction()
+      && !selector
+        .bloom_hashes
+        .hashes_for_mode(quirks_mode)
+        .is_empty()
+  })
+}
+
+fn selector_needs_bloom_summaries_for_has_relative(
+  selector: &Selector<FastRenderSelectorImpl>,
+  quirks_mode: QuirksMode,
+) -> bool {
   use selectors::parser::Component;
 
   for component in selector.iter_raw_match_order() {
     match component {
-      Component::Has(_) => return true,
-      Component::NonTSPseudoClass(pc) => {
-        if matches!(pc, PseudoClass::Has(_)) {
+      Component::Has(list) => {
+        if relative_selectors_need_bloom_summaries(&list[..], quirks_mode) {
           return true;
         }
       }
+      Component::NonTSPseudoClass(pc) => match pc {
+        PseudoClass::Has(list) => {
+          if relative_selectors_need_bloom_summaries(&list[..], quirks_mode) {
+            return true;
+          }
+        }
+        PseudoClass::Host(Some(list)) | PseudoClass::HostContext(list) => {
+          if selector_list_needs_bloom_summaries_for_has_relative(list, quirks_mode) {
+            return true;
+          }
+        }
+        PseudoClass::NthChild(_, _, Some(list)) | PseudoClass::NthLastChild(_, _, Some(list)) => {
+          if selector_list_needs_bloom_summaries_for_has_relative(list, quirks_mode) {
+            return true;
+          }
+        }
+        _ => {}
+      },
       Component::Is(list) | Component::Where(list) | Component::Negation(list) => {
-        if selector_list_contains_has(list) {
+        if selector_list_needs_bloom_summaries_for_has_relative(list, quirks_mode) {
           return true;
         }
       }
       Component::Slotted(inner) => {
-        if selector_contains_has(inner) {
+        if selector_needs_bloom_summaries_for_has_relative(inner, quirks_mode) {
           return true;
         }
       }
       Component::Host(Some(inner)) => {
-        if selector_contains_has(inner) {
+        if selector_needs_bloom_summaries_for_has_relative(inner, quirks_mode) {
           return true;
         }
       }
       Component::PseudoElement(pseudo) => {
         if let PseudoElement::Slotted(list) = pseudo {
-          if list.iter().any(selector_contains_has) {
+          if list
+            .iter()
+            .any(|selector| selector_needs_bloom_summaries_for_has_relative(selector, quirks_mode))
+          {
             return true;
           }
         }
@@ -777,27 +830,61 @@ fn selector_contains_has(selector: &Selector<FastRenderSelectorImpl>) -> bool {
   false
 }
 
-fn selector_list_contains_has(list: &SelectorList<FastRenderSelectorImpl>) -> bool {
-  list.slice().iter().any(selector_contains_has)
+fn selector_list_needs_bloom_summaries_for_has_relative(
+  list: &SelectorList<FastRenderSelectorImpl>,
+  quirks_mode: QuirksMode,
+) -> bool {
+  list
+    .slice()
+    .iter()
+    .any(|selector| selector_needs_bloom_summaries_for_has_relative(selector, quirks_mode))
 }
 
-fn css_rule_contains_has(rule: &CssRule) -> bool {
-  match rule {
-    CssRule::Style(style) => {
-      selector_list_contains_has(&style.selectors)
-        || style.nested_rules.iter().any(css_rule_contains_has)
-    }
-    CssRule::Media(media) => media.rules.iter().any(css_rule_contains_has),
-    CssRule::Container(container) => container.rules.iter().any(css_rule_contains_has),
-    CssRule::Supports(supports) => supports.rules.iter().any(css_rule_contains_has),
-    CssRule::Layer(layer) => layer.rules.iter().any(css_rule_contains_has),
-    CssRule::Scope(scope) => scope.rules.iter().any(css_rule_contains_has),
-    _ => false,
+fn rule_index_needs_bloom_summaries_for_has_relative<'a>(
+  index: &RuleIndex<'a>,
+  quirks_mode: QuirksMode,
+) -> bool {
+  index
+    .selectors
+    .iter()
+    .any(|sel| selector_needs_bloom_summaries_for_has_relative(sel.selector, quirks_mode))
+    || index
+      .pseudo_selectors
+      .iter()
+      .any(|sel| selector_needs_bloom_summaries_for_has_relative(sel.selector, quirks_mode))
+    || index.slotted_selectors.iter().any(|sel| {
+      selector_needs_bloom_summaries_for_has_relative(sel.selector, quirks_mode)
+        || sel.prelude.as_ref().is_some_and(|prelude| {
+          selector_needs_bloom_summaries_for_has_relative(prelude, quirks_mode)
+        })
+    })
+}
+
+fn rule_scopes_needs_selector_bloom_summaries<'a>(scopes: &RuleScopes<'a>) -> bool {
+  let needs_for_index = |index: &RuleIndex<'a>| index.has_has_requirements;
+  if needs_for_index(&scopes.ua)
+    || needs_for_index(&scopes.document)
+    || scopes.shadows.values().any(needs_for_index)
+    || scopes.host_rules.values().any(needs_for_index)
+  {
+    return true;
   }
-}
 
-fn stylesheet_uses_has(sheet: &StyleSheet) -> bool {
-  sheet.rules.iter().any(css_rule_contains_has)
+  if matches!(scopes.quirks_mode, QuirksMode::Quirks) {
+    return false;
+  }
+  let quirks_mode = scopes.quirks_mode;
+
+  rule_index_needs_bloom_summaries_for_has_relative(&scopes.ua, quirks_mode)
+    || rule_index_needs_bloom_summaries_for_has_relative(&scopes.document, quirks_mode)
+    || scopes
+      .shadows
+      .values()
+      .any(|idx| rule_index_needs_bloom_summaries_for_has_relative(idx, quirks_mode))
+    || scopes
+      .host_rules
+      .values()
+      .any(|idx| rule_index_needs_bloom_summaries_for_has_relative(idx, quirks_mode))
 }
 
 fn record_node_visit(node: &DomNode) {
@@ -891,11 +978,7 @@ struct DomMaps {
 const SELECTOR_BLOOM_MIN_NODES: usize = 32;
 
 impl DomMaps {
-  fn new(
-    root: &DomNode,
-    id_map: HashMap<*const DomNode, usize>,
-    build_selector_blooms: bool,
-  ) -> Self {
+  fn new(root: &DomNode, id_map: HashMap<*const DomNode, usize>) -> Self {
     let mut id_to_node: HashMap<usize, *const DomNode> = HashMap::new();
     for (ptr, id) in &id_map {
       id_to_node.insert(*id, *ptr);
@@ -946,20 +1029,32 @@ impl DomMaps {
       &mut exportparts_map,
     );
 
-    let selector_blooms = if build_selector_blooms {
-      build_selector_bloom_map(root)
-    } else {
-      None
-    };
-
     Self {
       id_map,
       id_to_node,
       parent_map,
       shadow_hosts,
       exportparts_map,
-      selector_blooms,
+      selector_blooms: None,
     }
+  }
+
+  fn ensure_selector_blooms(&mut self, root: &DomNode) {
+    if self.selector_blooms.is_some() {
+      return;
+    }
+    let profiling = cascade_profile_enabled();
+    let start = profiling.then(Instant::now);
+    let blooms = build_selector_bloom_map(root);
+    if let Some(start) = start {
+      let elapsed = start.elapsed();
+      CASCADE_PROFILE_SELECTOR_BLOOM_TIME_NS
+        .fetch_add(elapsed.as_nanos() as u64, Ordering::Relaxed);
+      if blooms.is_some() {
+        CASCADE_PROFILE_SELECTOR_BLOOM_BUILT.fetch_add(1, Ordering::Relaxed);
+      }
+    }
+    self.selector_blooms = blooms;
   }
 
   fn ancestors_for(&self, node_id: usize) -> Vec<&DomNode> {
@@ -3285,11 +3380,7 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
 
   let id_map = enumerate_dom_ids(dom);
   let shadow_stylesheets = collect_shadow_stylesheets(dom, &id_map)?;
-  let has_has_selectors = stylesheet_uses_has(ua_stylesheet)
-    || stylesheet_uses_has(&author_sheet)
-    || shadow_stylesheets.values().any(stylesheet_uses_has);
-  let build_selector_blooms = has_has_selectors && id_map.len() >= SELECTOR_BLOOM_MIN_NODES;
-  let dom_maps = DomMaps::new(dom, id_map, build_selector_blooms);
+  let mut dom_maps = DomMaps::new(dom, id_map);
   let slot_assignment = compute_slot_assignment(dom);
   let slot_maps = build_slot_maps(dom, &slot_assignment, &dom_maps);
 
@@ -3436,6 +3527,11 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
     fallback_document_rules_in_shadow_scopes: true,
     quirks_mode: quirks_mode_for_dom(dom),
   };
+
+  let needs_selector_blooms = rule_scopes_needs_selector_bloom_summaries(&rule_scopes);
+  if needs_selector_blooms && dom_maps.id_map.len() >= SELECTOR_BLOOM_MIN_NODES {
+    dom_maps.ensure_selector_blooms(dom);
+  }
 
   let counter_styles = {
     let mut registry = crate::style::counter_styles::CounterStyleRegistry::with_builtins();
@@ -3682,6 +3778,7 @@ pub(crate) struct PreparedCascade<'a> {
   _shadow_sheets: Vec<(usize, Box<StyleSheet>)>,
   rule_scopes: RuleScopes<'a>,
   dom_maps: DomMaps,
+  needs_selector_bloom_summaries: bool,
   slot_assignment: SlotAssignment,
   base_styles: ComputedStyle,
   base_ua_styles: ComputedStyle,
@@ -3758,13 +3855,7 @@ impl<'a> PreparedCascade<'a> {
     );
 
     let id_map = enumerate_dom_ids(dom);
-    let has_has_selectors = stylesheet_uses_has(ua_stylesheet)
-      || stylesheet_uses_has(document_ref)
-      || shadow_sheets
-        .iter()
-        .any(|(_, sheet)| stylesheet_uses_has(sheet));
-    let build_selector_blooms = has_has_selectors && id_map.len() >= SELECTOR_BLOOM_MIN_NODES;
-    let dom_maps = DomMaps::new(dom, id_map, build_selector_blooms);
+    let dom_maps = DomMaps::new(dom, id_map);
     let slot_assignment = compute_slot_assignment(dom);
     let slot_maps = build_slot_maps(dom, &slot_assignment, &dom_maps);
     let mut host_to_shadow_root: HashMap<usize, usize> = HashMap::new();
@@ -3890,6 +3981,9 @@ impl<'a> PreparedCascade<'a> {
       fallback_document_rules_in_shadow_scopes: false,
       quirks_mode: quirks_mode_for_dom(dom),
     };
+
+    let needs_selector_bloom_summaries = rule_scopes_needs_selector_bloom_summaries(&rule_scopes)
+      && dom_maps.id_map.len() >= SELECTOR_BLOOM_MIN_NODES;
 
     let counter_styles = {
       let mut registry = crate::style::counter_styles::CounterStyleRegistry::with_builtins();
@@ -4077,6 +4171,7 @@ impl<'a> PreparedCascade<'a> {
       _shadow_sheets: shadow_sheets,
       rule_scopes,
       dom_maps,
+      needs_selector_bloom_summaries,
       slot_assignment,
       base_styles,
       base_ua_styles,
@@ -4104,6 +4199,9 @@ impl<'a> PreparedCascade<'a> {
     let profile_start = profile_enabled.then(|| Instant::now());
     if profile_enabled {
       reset_cascade_profile();
+    }
+    if self.needs_selector_bloom_summaries {
+      self.dom_maps.ensure_selector_blooms(self.dom);
     }
     reset_has_counters();
     reset_container_query_memo();
@@ -6638,7 +6736,8 @@ mod tests {
     };
 
     let id_map = enumerate_dom_ids(&dom);
-    let dom_maps = DomMaps::new(&dom, id_map, true);
+    let mut dom_maps = DomMaps::new(&dom, id_map);
+    dom_maps.ensure_selector_blooms(&dom);
     let blooms = dom_maps.selector_blooms().expect("bloom map");
     let summary = blooms
       .get(&(std::ptr::addr_of!(dom) as *const DomNode))
@@ -6702,7 +6801,8 @@ mod tests {
     };
 
     let id_map = enumerate_dom_ids(&dom);
-    let dom_maps = DomMaps::new(&dom, id_map, true);
+    let mut dom_maps = DomMaps::new(&dom, id_map);
+    dom_maps.ensure_selector_blooms(&dom);
     let blooms = dom_maps.selector_blooms().expect("bloom map");
     let summary = blooms
       .get(&(std::ptr::addr_of!(dom) as *const DomNode))
@@ -6766,7 +6866,8 @@ mod tests {
     };
 
     let id_map = enumerate_dom_ids(&dom);
-    let dom_maps = DomMaps::new(&dom, id_map, true);
+    let mut dom_maps = DomMaps::new(&dom, id_map);
+    dom_maps.ensure_selector_blooms(&dom);
     let blooms = dom_maps.selector_blooms().expect("bloom map");
     let summary = blooms
       .get(&(std::ptr::addr_of!(dom) as *const DomNode))
@@ -6807,6 +6908,66 @@ mod tests {
       &mut merge,
     );
     assert_eq!(candidates, vec![0]);
+  }
+
+  #[test]
+  fn selector_bloom_summaries_skipped_for_unprunable_has_sibling_direction() {
+    crate::dom::set_selector_bloom_enabled(true);
+
+    let mut children: Vec<DomNode> = Vec::new();
+    children.push(DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("id".to_string(), "a".to_string())],
+      },
+      children: vec![],
+    });
+    children.push(DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("class".to_string(), "x".to_string())],
+      },
+      children: vec![],
+    });
+    let needed_children = SELECTOR_BLOOM_MIN_NODES.saturating_sub(1 + children.len());
+    for _ in 0..needed_children {
+      children.push(DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "div".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: vec![],
+        },
+        children: vec![],
+      });
+    }
+    let dom = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![],
+      },
+      children,
+    };
+    assert!(enumerate_dom_ids(&dom).len() >= SELECTOR_BLOOM_MIN_NODES);
+
+    let stylesheet = parse_stylesheet("#a:has(+ .x) { color: rgb(1, 2, 3); }").unwrap();
+    let style_set = StyleSet::from_document(stylesheet);
+    let media_ctx = MediaContext::screen(800.0, 600.0);
+    let mut prepared =
+      PreparedCascade::new_for_style_set(&dom, &style_set, &media_ctx, None, None, None, false)
+        .expect("build prepared cascade");
+    let styled = prepared
+      .apply(None, None, None, None, None)
+      .expect("apply cascade");
+
+    assert_eq!(
+      styled.children.first().expect("first child").styles.color,
+      Rgba::rgb(1, 2, 3)
+    );
+    assert!(!prepared.needs_selector_bloom_summaries);
+    assert!(prepared.dom_maps.selector_blooms().is_none());
   }
 
   fn child_font_weight(parent_style: &str, child_style: &str) -> u16 {
