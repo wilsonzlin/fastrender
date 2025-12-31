@@ -5,14 +5,22 @@ are generated in-repo; the rest are subsetted from upstream OFL families so they
 checked in alongside their regeneration scripts. They live under `tests/fixtures/fonts` so CI
 and tests can run in fully hermetic environments without relying on platform fonts.
 
+### Regeneration prerequisites (Python)
+Most generators in this directory use [FontTools](https://github.com/fonttools/fonttools) v4.61.1.
+To regenerate fonts without relying on system-wide Python packages, create a venv and install the
+pinned dependencies from the repository root:
+
+```bash
+python3 -m venv .venv && . .venv/bin/activate
+pip install -r tests/fixtures/fonts/requirements.txt
+```
+
 ### Bundled text/script coverage (Noto subsets + math)
 - **Sources:** [Noto Sans families](https://github.com/google/fonts/tree/main/ofl) (OFL, see `Noto-LICENSE-OFL.txt`),
    [STIX Math v2.0.0](https://github.com/stipub/stixfonts) (OFL, see `STIXTwoMath-OFL.txt`),
    and `FastRenderEmoji.ttf` (CC0) for color emoji.
-- **Regeneration:** From the repository root:
+- **Regeneration:**
   ```bash
-  python3 -m venv .venv && . .venv/bin/activate
-  pip install -r tests/fixtures/fonts/requirements.txt
   python tests/fixtures/fonts/generate_bundled_noto_subsets.py
   ```
   (pins deterministic timestamps and instantiates the CJK faces at `wght=400` before subsetting).
