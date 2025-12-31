@@ -148,9 +148,12 @@ pub fn render_glyph_with_variations(
 // Glyph Cache
 // ============================================================================
 
-/// Cache key for glyph paths.
+/// Cache key for glyph outlines.
 ///
-/// Glyphs are cached by font data pointer + glyph ID + skew + variations.
+/// `FontInstance::glyph_outline` returns paths in font design units (unscaled and
+/// without synthetic oblique). The cache key therefore excludes draw-time
+/// transforms like font size and skew.
+///
 /// Using the font data pointer avoids comparing large font binaries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct GlyphCacheKey {
@@ -160,22 +163,16 @@ struct GlyphCacheKey {
   font_index: u32,
   /// Glyph ID within the font
   glyph_id: u32,
-  /// Quantized scale applied to the outline
-  scale_key: u32,
-  /// Quantized synthetic skew (tan(angle) * 1e4)
-  skew_units: i32,
   /// Hash of variation coordinates applied to the face.
   variation_hash: u64,
 }
 
 impl GlyphCacheKey {
-  fn new(font: &LoadedFont, glyph_id: u32, scale: f32, skew: f32, variation_hash: u64) -> Self {
+  fn new(font: &LoadedFont, glyph_id: u32, variation_hash: u64) -> Self {
     Self {
       font_ptr: Arc::as_ptr(&font.data) as usize,
       font_index: font.index,
       glyph_id,
-      scale_key: quantize_scale(scale),
-      skew_units: quantize_skew(skew),
       variation_hash,
     }
   }
@@ -184,13 +181,13 @@ impl GlyphCacheKey {
 /// Cached glyph path for efficient repeated rendering.
 ///
 /// Contains a pre-built path that can be reused across multiple
-/// render calls at the same font size.
+/// render calls at different font sizes; scaling and skew are applied at draw time.
 /// (Reserved for glyph caching optimization)
 #[derive(Debug, Clone)]
 struct CachedGlyph {
   /// The rendered path, or None if the glyph has no outline
   path: Option<Arc<Path>>,
-  /// Horizontal advance for this glyph
+  /// Horizontal advance for this glyph (font design units).
   advance: f32,
   /// LRU timestamp (monotonic counter)
   last_used: u64,
@@ -225,8 +222,8 @@ impl GlyphCacheStats {
 /// Cache for rendered glyph paths.
 ///
 /// Glyph outlines are cached in font design units (unpositioned) and
-/// transformed at draw time. The cache key includes the font identity,
-/// face index, glyph id, and synthetic oblique skew.
+/// transformed at draw time. The cache key includes the font identity, face
+/// index, glyph id, and variation coordinates.
 ///
 /// The cache uses an LRU eviction policy with an optional memory budget
 /// to keep footprint predictable while still delivering reuse on text-
@@ -331,10 +328,8 @@ impl GlyphCache {
     font: &LoadedFont,
     instance: &FontInstance,
     glyph_id: u32,
-    scale: f32,
-    skew: f32,
   ) -> Option<&CachedGlyph> {
-    let key = GlyphCacheKey::new(font, glyph_id, scale, skew, instance.variation_hash());
+    let key = GlyphCacheKey::new(font, glyph_id, instance.variation_hash());
     let generation = self.bump_generation();
 
     if let Some(entry) = self.glyphs.get_mut(&key) {
@@ -1045,7 +1040,7 @@ impl TextRasterizer {
       } else {
         let cached_path = if let Ok(mut cache) = self.cache.lock() {
           cache
-            .get_or_build(font, &instance, glyph.glyph_id, scale, synthetic_oblique)
+            .get_or_build(font, &instance, glyph.glyph_id)
             .and_then(|glyph| glyph.path.clone())
         } else {
           None
@@ -1321,7 +1316,7 @@ impl TextRasterizer {
       let glyph_y = baseline_y + cursor_y + glyph.y_offset;
       let cached_path = if let Ok(mut cache) = self.cache.lock() {
         cache
-          .get_or_build(font, &instance, glyph.glyph_id, scale, synthetic_oblique)
+          .get_or_build(font, &instance, glyph.glyph_id)
           .and_then(|glyph| glyph.path.clone())
       } else {
         None
@@ -1686,7 +1681,9 @@ mod tests {
     };
 
     let face = font.as_ttf_face().unwrap();
-    let glyph_id = face.glyph_index('A').map(|g| g.0 as u32).unwrap_or(0);
+    let Some(glyph_id) = face.glyph_index('A').map(|g| g.0 as u32) else {
+      return;
+    };
 
     let advance = glyph_advance(&font, glyph_id, 16.0);
     assert!(advance.is_ok());
@@ -1781,18 +1778,18 @@ mod tests {
     let variations: &[Variation] = &[];
     let var_hash = variation_hash(variations);
 
-    let key1 = GlyphCacheKey::new(&font, 65, 1.0, 0.0, var_hash);
-    let key2 = GlyphCacheKey::new(&font, 65, 1.0, 0.0, var_hash);
-    let key3 = GlyphCacheKey::new(&font, 66, 1.0, 0.0, var_hash);
-    let key4 = GlyphCacheKey::new(&font, 65, 1.0, 0.25, var_hash);
+    let key1 = GlyphCacheKey::new(&font, 65, var_hash);
+    let key2 = GlyphCacheKey::new(&font, 65, var_hash);
+    let key3 = GlyphCacheKey::new(&font, 66, var_hash);
+    let key4 = GlyphCacheKey::new(&font, 65, var_hash.wrapping_add(1));
 
-    // Same font, glyph, and size should be equal
+    // Same font, glyph, and variation hash should be equal
     assert_eq!(key1, key2);
 
     // Different glyph should be different
     assert_ne!(key1, key3);
 
-    // Different skew should be different
+    // Different variation hash should be different
     assert_ne!(key1, key4);
   }
 
@@ -1813,21 +1810,21 @@ mod tests {
     let instance = FontInstance::new(&font, variations).unwrap();
 
     assert!(cache
-      .get_or_build(&font, &instance, glyph_a, 1.0, 0.0)
+      .get_or_build(&font, &instance, glyph_a)
       .is_some());
     let stats = cache.stats();
     assert_eq!(stats.misses, 1);
     assert_eq!(stats.hits, 0);
 
     assert!(cache
-      .get_or_build(&font, &instance, glyph_a, 1.0, 0.0)
+      .get_or_build(&font, &instance, glyph_a)
       .is_some());
     let stats = cache.stats();
     assert_eq!(stats.hits, 1);
 
     // Insert another glyph to trigger eviction
     assert!(cache
-      .get_or_build(&font, &instance, glyph_b, 1.0, 0.0)
+      .get_or_build(&font, &instance, glyph_b)
       .is_some());
     let stats = cache.stats();
     assert!(stats.evictions >= 1);
@@ -1856,7 +1853,9 @@ mod tests {
     };
 
     let face = font.as_ttf_face().unwrap();
-    let glyph_id = face.glyph_index('A').map(|g| g.0 as u32).unwrap_or(0);
+    let Some(glyph_id) = face.glyph_index('A').map(|g| g.0 as u32) else {
+      return;
+    };
 
     let glyphs = vec![GlyphPosition {
       glyph_id,
@@ -1883,6 +1882,44 @@ mod tests {
     let stats = rasterizer.cache_stats();
     assert_eq!(stats.misses, 1);
     assert!(stats.hits >= 1);
+  }
+
+  #[test]
+  fn test_text_rasterizer_outline_cache_reused_across_font_sizes() {
+    let font = match get_test_font() {
+      Some(f) => f,
+      None => return,
+    };
+
+    let face = font.as_ttf_face().unwrap();
+    let glyph_id = face.glyph_index('A').map(|g| g.0 as u32).unwrap_or(0);
+
+    let glyphs = vec![GlyphPosition {
+      glyph_id,
+      cluster: 0,
+      x_offset: 0.0,
+      y_offset: 0.0,
+      x_advance: 10.0,
+      y_advance: 0.0,
+    }];
+
+    let mut rasterizer = TextRasterizer::new();
+    rasterizer.reset_cache_stats();
+
+    rasterizer
+      .positioned_glyph_paths(&glyphs, &font, 16.0, 0.0, 0.0, 0.0, None, &[])
+      .unwrap();
+    rasterizer
+      .positioned_glyph_paths(&glyphs, &font, 32.0, 0.0, 0.0, 0.0, None, &[])
+      .unwrap();
+
+    let outline_stats = rasterizer
+      .cache
+      .lock()
+      .map(|cache| cache.stats())
+      .unwrap_or_default();
+    assert_eq!(outline_stats.misses, 1);
+    assert!(outline_stats.hits >= 1);
   }
 
   #[test]
