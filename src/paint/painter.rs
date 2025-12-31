@@ -3878,8 +3878,8 @@ impl Painter {
       return false;
     }
 
-    let translate_x = self.device_length(start_x);
-    let translate_y = self.device_length(start_y);
+    let translate_x = self.device_x(start_x);
+    let translate_y = self.device_y(start_y);
     let tiles_painted = tiles_x.saturating_mul(tiles_y);
     if self.diagnostics_enabled {
       with_paint_diagnostics(|diag| {
