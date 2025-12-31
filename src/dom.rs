@@ -325,8 +325,11 @@ fn add_selector_bloom_hashes(node: &DomNode, add: &mut impl FnMut(u32)) {
         add(selector_bloom_hash(tag));
       }
     } else {
-      // Foreign elements are case-sensitive, so hash the tag as-is.
       add(selector_bloom_hash(tag));
+      if tag.bytes().any(|b| b.is_ascii_uppercase()) {
+        let lower = tag.to_ascii_lowercase();
+        add(selector_bloom_hash(&lower));
+      }
     }
   }
 
