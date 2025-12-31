@@ -63,12 +63,11 @@ use crate::compat::CompatProfile;
 use crate::css::encoding::decode_css_bytes;
 use crate::css::loader::{
   absolutize_css_urls, extract_css_links, extract_embedded_css_urls_with_meta, infer_base_url,
-  inject_css_into_html, inline_imports_with_diagnostics, resolve_href_with_base,
-  should_scan_embedded_css_urls, InlineImportState, StylesheetInlineBudget,
+  inject_css_into_html, inline_imports_with_diagnostics, link_rel_is_stylesheet_candidate,
+  resolve_href_with_base, should_scan_embedded_css_urls, InlineImportState, StylesheetInlineBudget,
 };
 use crate::css::parser::{
-  extract_css_sources, extract_scoped_css_sources, parse_stylesheet, rel_list_contains_stylesheet,
-  CssTreeScope, StylesheetSource,
+  extract_css_sources, extract_scoped_css_sources, parse_stylesheet, CssTreeScope, StylesheetSource,
 };
 use crate::css::types::{CssImportLoader, StyleSheet};
 use crate::debug;
@@ -5005,8 +5004,9 @@ impl FastRender {
                 continue;
               }
               if link.disabled
-                || !Self::link_rel_is_stylesheet_candidate(
-                  link,
+                || !link_rel_is_stylesheet_candidate(
+                  &link.rel,
+                  link.as_attr.as_deref(),
                   preload_stylesheets_enabled,
                   modulepreload_stylesheets_enabled,
                   alternate_stylesheets_enabled,
@@ -5154,8 +5154,9 @@ impl FastRender {
             continue;
           }
           if link.disabled
-            || !Self::link_rel_is_stylesheet_candidate(
-              &link,
+            || !link_rel_is_stylesheet_candidate(
+              &link.rel,
+              link.as_attr.as_deref(),
               preload_stylesheets_enabled,
               modulepreload_stylesheets_enabled,
               alternate_stylesheets_enabled,
@@ -5244,40 +5245,6 @@ impl FastRender {
         mime.is_empty() || mime.eq_ignore_ascii_case("text/css")
       }
     }
-  }
-
-  fn link_rel_is_stylesheet_candidate(
-    link: &crate::css::parser::StylesheetLink,
-    preload_stylesheets_enabled: bool,
-    modulepreload_stylesheets_enabled: bool,
-    alternate_stylesheets_enabled: bool,
-  ) -> bool {
-    let rel_has_stylesheet = rel_list_contains_stylesheet(&link.rel);
-    let rel_has_alternate = link.rel.iter().any(|t| t.eq_ignore_ascii_case("alternate"));
-    let rel_has_preload = link.rel.iter().any(|t| t.eq_ignore_ascii_case("preload"));
-    let rel_has_modulepreload = link
-      .rel
-      .iter()
-      .any(|t| t.eq_ignore_ascii_case("modulepreload"));
-    let as_style = link
-      .as_attr
-      .as_deref()
-      .map(|v| v.trim().eq_ignore_ascii_case("style"))
-      .unwrap_or(false);
-
-    let mut is_stylesheet_link =
-      rel_has_stylesheet && (alternate_stylesheets_enabled || !rel_has_alternate);
-
-    if !is_stylesheet_link && preload_stylesheets_enabled && rel_has_preload && as_style {
-      is_stylesheet_link = true;
-    }
-
-    if !is_stylesheet_link && modulepreload_stylesheets_enabled && rel_has_modulepreload && as_style
-    {
-      is_stylesheet_link = true;
-    }
-
-    is_stylesheet_link
   }
 
   fn media_attr_allows(

@@ -15,6 +15,44 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use url::Url;
 
+/// Determine whether a tokenized `<link rel>` list should be treated as a stylesheet.
+///
+/// This is used by both the HTML string pre-pass (`extract_css_links`) and the DOM-based
+/// stylesheet loader (`FastRender::collect_document_style_set`) so the two discovery paths stay
+/// in sync.
+pub fn link_rel_is_stylesheet_candidate(
+  rel_tokens: &[String],
+  as_attr: Option<&str>,
+  preload_stylesheets_enabled: bool,
+  modulepreload_stylesheets_enabled: bool,
+  alternate_stylesheets_enabled: bool,
+) -> bool {
+  let rel_has_stylesheet = rel_list_contains_stylesheet(rel_tokens);
+  let rel_has_alternate = rel_tokens
+    .iter()
+    .any(|t| t.eq_ignore_ascii_case("alternate"));
+  let rel_has_preload = rel_tokens.iter().any(|t| t.eq_ignore_ascii_case("preload"));
+  let rel_has_modulepreload = rel_tokens
+    .iter()
+    .any(|t| t.eq_ignore_ascii_case("modulepreload"));
+  let as_style = as_attr
+    .map(|v| v.trim().eq_ignore_ascii_case("style"))
+    .unwrap_or(false);
+
+  let mut is_stylesheet_link =
+    rel_has_stylesheet && (alternate_stylesheets_enabled || !rel_has_alternate);
+
+  if !is_stylesheet_link && preload_stylesheets_enabled && rel_has_preload && as_style {
+    is_stylesheet_link = true;
+  }
+
+  if !is_stylesheet_link && modulepreload_stylesheets_enabled && rel_has_modulepreload && as_style {
+    is_stylesheet_link = true;
+  }
+
+  is_stylesheet_link
+}
+
 /// Resolve a possibly-relative `href` against a base URL.
 ///
 /// Supports protocol-relative URLs (`//example.com`), `data:` URLs (returned
@@ -1196,34 +1234,14 @@ pub fn extract_css_links(
         .get("rel")
         .map(|rel| tokenize_rel_list(rel))
         .unwrap_or_default();
-      let rel_has_stylesheet = rel_list_contains_stylesheet(&rel_tokens);
-      let rel_has_alternate = rel_tokens
-        .iter()
-        .any(|t| t.eq_ignore_ascii_case("alternate"));
-      let rel_has_preload = rel_tokens.iter().any(|t| t.eq_ignore_ascii_case("preload"));
-      let rel_has_modulepreload = rel_tokens
-        .iter()
-        .any(|t| t.eq_ignore_ascii_case("modulepreload"));
 
-      let as_style = attrs
-        .get("as")
-        .map(|v| v.trim().eq_ignore_ascii_case("style"))
-        .unwrap_or(false);
-
-      let mut is_stylesheet_link =
-        rel_has_stylesheet && (alternate_stylesheets_enabled || !rel_has_alternate);
-
-      if !is_stylesheet_link && preload_stylesheets_enabled && rel_has_preload && as_style {
-        is_stylesheet_link = true;
-      }
-
-      if !is_stylesheet_link
-        && modulepreload_stylesheets_enabled
-        && rel_has_modulepreload
-        && as_style
-      {
-        is_stylesheet_link = true;
-      }
+      let mut is_stylesheet_link = link_rel_is_stylesheet_candidate(
+        &rel_tokens,
+        attrs.get("as").map(String::as_str),
+        preload_stylesheets_enabled,
+        modulepreload_stylesheets_enabled,
+        alternate_stylesheets_enabled,
+      );
 
       let link_tag_lower = link_tag.to_lowercase();
 
