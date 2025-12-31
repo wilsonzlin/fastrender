@@ -139,6 +139,7 @@ Each file should be tiny (no huge logs, no raw HTML):
   "total_ms": 123.4,
   "stages_ms": { "fetch": 0.0, "css": 0.0, "cascade": 0.0, "layout": 0.0, "paint": 0.0 },
   "notes": "short, durable explanation of current blocker",
+  "auto_notes": "machine-generated last-run diagnostics (overwritten each run)",
   "hotspot": "cascade|layout|paint|fetch|decode|unknown",
   "failure_stage": "dom_parse|css|cascade|layout|paint|null",
   "timeout_stage": "dom_parse|css|cascade|layout|paint|null",

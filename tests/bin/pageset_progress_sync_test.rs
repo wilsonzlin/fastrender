@@ -99,8 +99,13 @@ fn pageset_progress_sync_marks_missing_cache_as_error() {
   );
   assert_eq!(
     updated.get("notes"),
+    Some(&Value::String("".into())),
+    "missing caches should not populate manual notes"
+  );
+  assert_eq!(
+    updated.get("auto_notes"),
     Some(&Value::String("missing cache".into())),
-    "missing caches should be called out in notes"
+    "missing caches should be called out in auto notes"
   );
   assert_eq!(
     updated.get("hotspot"),

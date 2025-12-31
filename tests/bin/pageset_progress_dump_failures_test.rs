@@ -19,6 +19,7 @@ fn worker_writes_dumps_for_failures() {
 
   let status = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
     .env("FASTR_TEST_RENDER_DELAY_MS", "20")
+    .env("FASTR_TEST_RENDER_DELAY_STEM", "dump")
     .args([
       "worker",
       "--cache-path",

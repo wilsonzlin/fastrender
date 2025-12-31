@@ -20,6 +20,7 @@ fn pageset_progress_hard_timeout_populates_timeout_stage_from_heartbeat() {
   let status = Command::new(env!("CARGO_BIN_EXE_pageset_progress"))
     .current_dir(temp.path())
     .env("FASTR_TEST_RENDER_DELAY_MS", "2000")
+    .env("FASTR_TEST_RENDER_DELAY_STEM", "slow")
     .args([
       "run",
       "--jobs",

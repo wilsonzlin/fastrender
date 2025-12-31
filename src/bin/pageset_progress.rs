@@ -422,6 +422,10 @@ struct ReportArgs {
   #[arg(long = "verbose-stats", visible_alias = "show-counts")]
   verbose_stats: bool,
 
+  /// Include machine-generated notes from the most recent run in per-page listings
+  #[arg(long)]
+  verbose: bool,
+
   /// Exit non-zero when any timeout/panic/error entry lacks stage attribution
   #[arg(long)]
   fail_on_missing_stages: bool,
@@ -709,6 +713,43 @@ fn is_manual_field_unset(value: &str) -> bool {
   value.trim().is_empty()
 }
 
+fn is_legacy_auto_note_line(line: &str) -> bool {
+  let trimmed = line.trim();
+  matches!(trimmed, "not run" | "missing cache" | "timeout" | "panic" | "error")
+    || trimmed.starts_with("hard timeout after ")
+    || trimmed.starts_with("timeout at ")
+    || trimmed.starts_with("worker exited")
+    || trimmed.starts_with("worker try_wait failed")
+    || trimmed.starts_with("read:")
+    || trimmed.starts_with("renderer init:")
+    || trimmed.starts_with("stderr tail")
+    || trimmed.starts_with("stage:")
+}
+
+fn manual_notes_from_previous(previous: &PageProgress) -> Option<String> {
+  let raw = previous.notes.trim();
+  if raw.is_empty() {
+    return None;
+  }
+  if previous.auto_notes.trim().is_empty() {
+    // Legacy progress files stored machine diagnostics in `notes`. Attempt to strip the known
+    // machine-generated lines so only human notes remain durable across runs.
+    let manual: String = raw
+      .lines()
+      .filter(|line| !is_legacy_auto_note_line(line))
+      .collect::<Vec<_>>()
+      .join("\n");
+    let manual = manual.trim();
+    if manual.is_empty() {
+      None
+    } else {
+      Some(manual.to_string())
+    }
+  } else {
+    Some(previous.notes.clone())
+  }
+}
+
 fn normalize_hotspot_filter(h: &str) -> String {
   normalize_hotspot(h).to_ascii_lowercase()
 }
@@ -776,6 +817,8 @@ pub(crate) struct PageProgress {
   total_ms: Option<f64>,
   stages_ms: StageBuckets,
   notes: String,
+  #[serde(default, skip_serializing_if = "String::is_empty")]
+  auto_notes: String,
   hotspot: String,
   failure_stage: Option<ProgressStage>,
   timeout_stage: Option<ProgressStage>,
@@ -793,6 +836,7 @@ impl PageProgress {
       total_ms: None,
       stages_ms: StageBuckets::default(),
       notes: String::new(),
+      auto_notes: String::new(),
       hotspot: String::new(),
       failure_stage: None,
       timeout_stage: None,
@@ -810,16 +854,17 @@ impl PageProgress {
     if let Some(sha) = current_sha {
       self.update_commit_markers(previous.as_ref(), sha);
     }
+    if self.status == ProgressStatus::Ok {
+      self.notes = String::new();
+      self.auto_notes = String::new();
+    }
     let Some(prev) = previous else {
       return self;
     };
-    // Treat `notes` as the durable human field:
-    // - keep previous notes for failures (sticky until fixed),
-    // - clear notes when the page is OK.
-    if self.status == ProgressStatus::Ok {
-      self.notes = String::new();
-    } else if !prev.notes.trim().is_empty() {
-      self.notes = prev.notes;
+    if self.status != ProgressStatus::Ok {
+      if let Some(notes) = manual_notes_from_previous(&prev) {
+        self.notes = notes;
+      }
     }
     if !is_hotspot_unset(&prev.hotspot) && is_hotspot_unset(&self.hotspot) {
       self.hotspot = prev.hotspot;
@@ -993,6 +1038,7 @@ fn atomic_write(path: &Path, contents: &[u8]) -> io::Result<()> {
 fn write_progress(path: &Path, progress: &PageProgress) -> io::Result<()> {
   let mut normalized = progress.clone();
   normalized.notes = normalize_progress_note(&normalized.notes);
+  normalized.auto_notes = normalize_progress_note(&normalized.auto_notes);
   let json = serde_json::to_string_pretty(&normalized)
     .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
   let formatted = format!("{json}\n");
@@ -1040,7 +1086,7 @@ fn sync(args: SyncArgs) -> io::Result<()> {
     } else {
       created += 1;
       let mut new_progress = PageProgress::new(entry.url.clone());
-      new_progress.notes = "not run".to_string();
+      new_progress.auto_notes = "not run".to_string();
       new_progress
     };
 
@@ -1051,9 +1097,7 @@ fn sync(args: SyncArgs) -> io::Result<()> {
       if is_hotspot_unset(&progress.hotspot) {
         progress.hotspot = "fetch".to_string();
       }
-      if progress.notes.trim().is_empty() || previous.is_none() {
-        progress.notes = "missing cache".to_string();
-      }
+      progress.auto_notes = "missing cache".to_string();
       progress.total_ms = None;
       progress.stages_ms = StageBuckets::default();
       progress.failure_stage = None;
@@ -1225,7 +1269,7 @@ pub(crate) fn populate_timeout_progress(
   elapsed: Duration,
 ) {
   progress.status = ProgressStatus::Timeout;
-  progress.notes = format!("timeout at {stage} after {elapsed:?}");
+  progress.auto_notes = format!("timeout at {stage} after {elapsed:?}");
   progress.hotspot = hotspot_from_timeout_stage(stage).to_string();
   progress.timeout_stage = Some(stage.into());
 }
@@ -1235,12 +1279,7 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
   let heartbeat = StageHeartbeatWriter::new(args.stage_path.clone());
   let _heartbeat_guard = StageListenerGuard::new(heartbeat.listener());
   record_stage(StageHeartbeat::ReadCache);
-  if let Some(delay) = std::env::var("FASTR_TEST_RENDER_DELAY_MS")
-    .ok()
-    .and_then(|v| v.parse::<u64>().ok())
-  {
-    std::thread::sleep(Duration::from_millis(delay));
-  }
+  common::render_pipeline::apply_test_render_delay(Some(&args.stem));
   let started = Instant::now();
   let mut log = String::new();
   let current_sha = current_git_sha();
@@ -1255,7 +1294,7 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
       log.push_str(&format!("Read error: {log_msg}\n"));
       let mut progress = PageProgress::new(url_hint_from_cache_path(&args.cache_path));
       progress.status = ProgressStatus::Error;
-      progress.notes = format!("read: {note_msg}");
+      progress.auto_notes = format!("read: {note_msg}");
       progress.failure_stage = heartbeat
         .last_stage()
         .and_then(progress_stage_from_heartbeat);
@@ -1461,7 +1500,7 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
         log.push_str(&format!("Renderer init error: {log_msg}\n"));
         let mut progress = PageProgress::new(url);
         progress.status = ProgressStatus::Error;
-        progress.notes = format!("renderer init: {note_msg}");
+        progress.auto_notes = format!("renderer init: {note_msg}");
         progress.failure_stage = heartbeat
           .last_stage()
           .and_then(progress_stage_from_heartbeat);
@@ -1539,7 +1578,7 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
         }
         _ => {
           progress.status = ProgressStatus::Error;
-          progress.notes = format_error_with_chain(&err, args.verbose);
+          progress.auto_notes = format_error_with_chain(&err, args.verbose);
           // Avoid clobbering manual `hotspot` edits in committed progress files: only set the
           // inferred hotspot when the previous value is unset/unknown (or when explicitly marked
           // authoritative).
@@ -1556,10 +1595,10 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     }
     Err(panic) => {
       progress.status = ProgressStatus::Panic;
-      progress.notes = panic_to_string(panic);
+      progress.auto_notes = panic_to_string(panic);
       progress.hotspot = "unknown".to_string();
       log.push_str("Status: PANIC\n");
-      log.push_str(&format!("Panic: {}\n", progress.notes));
+      log.push_str(&format!("Panic: {}\n", progress.auto_notes));
     }
   }
 
@@ -1573,9 +1612,8 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     progress.failure_stage = stage;
   }
 
-  if progress.notes.trim().is_empty() {
-    // Preserve manual notes if present; otherwise fill something durable.
-    progress.notes = match progress.status {
+  if progress.auto_notes.trim().is_empty() {
+    progress.auto_notes = match progress.status {
       ProgressStatus::Ok => String::new(),
       ProgressStatus::Timeout => "timeout".to_string(),
       ProgressStatus::Panic => "panic".to_string(),
@@ -1877,14 +1915,32 @@ fn capture_dump_for_page(
   dump_soft_timeout_ms: Option<u64>,
   log: &mut String,
 ) {
+  if std::env::var("FASTR_TEST_DUMP_PANIC").is_ok() {
+    let should_panic = match std::env::var("FASTR_TEST_DUMP_PANIC_STEM").ok() {
+      Some(filter) => filter
+        .split(',')
+        .map(|s| s.trim())
+        .any(|candidate| candidate == args.stem),
+      None => true,
+    };
+    if should_panic {
+      panic!("FASTR_TEST_DUMP_PANIC");
+    }
+  }
   if let Some(delay) = std::env::var("FASTR_TEST_DUMP_DELAY_MS")
     .ok()
     .and_then(|v| v.parse::<u64>().ok())
   {
-    std::thread::sleep(Duration::from_millis(delay));
-  }
-  if std::env::var("FASTR_TEST_DUMP_PANIC").is_ok() {
-    panic!("FASTR_TEST_DUMP_PANIC");
+    let should_sleep = match std::env::var("FASTR_TEST_DUMP_DELAY_STEM").ok() {
+      Some(filter) => filter
+        .split(',')
+        .map(|s| s.trim())
+        .any(|candidate| candidate == args.stem),
+      None => true,
+    };
+    if should_sleep {
+      std::thread::sleep(Duration::from_millis(delay));
+    }
   }
 
   let RenderConfigBundle {
@@ -2070,17 +2126,6 @@ fn read_stage_heartbeat(path: &Path) -> Option<StageHeartbeat> {
   read_stage_file(path).or_else(|| read_stage_file(&stage_tmp_path(path)))
 }
 
-fn append_stage_to_note(base: &str, stage: Option<StageHeartbeat>) -> String {
-  let Some(stage) = stage else {
-    return base.to_string();
-  };
-  if base.trim().is_empty() {
-    format!("stage: {}", stage.as_str())
-  } else {
-    format!("{base} (stage: {})", stage.as_str())
-  }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ExitStatusSummary {
   code: Option<i32>,
@@ -2119,14 +2164,14 @@ fn synthesize_missing_progress_note(status: ExitStatusSummary) -> String {
   )
 }
 
-fn ensure_note_includes(progress: &mut PageProgress, note: &str) {
-  if progress.notes.contains(note) {
+fn ensure_auto_note_includes(progress: &mut PageProgress, note: &str) {
+  if progress.auto_notes.contains(note) {
     return;
   }
-  if progress.notes.trim().is_empty() {
-    progress.notes = note.to_string();
+  if progress.auto_notes.trim().is_empty() {
+    progress.auto_notes = note.to_string();
   } else {
-    progress.notes = format!("{}\n{note}", progress.notes);
+    progress.auto_notes = format!("{}\n{note}", progress.auto_notes);
   }
 }
 
@@ -2802,6 +2847,17 @@ fn print_render_stats(stats: &RenderStats, indent: &str) -> bool {
   true
 }
 
+fn print_note_block(label: &str, note: &str, indent: &str) {
+  let trimmed = note.trim();
+  if trimmed.is_empty() {
+    return;
+  }
+  println!("{indent}{label}:");
+  for line in trimmed.lines() {
+    println!("{indent}  {line}");
+  }
+}
+
 const REPORT_OFFENDING_STEMS_LIMIT: usize = 25;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2931,6 +2987,10 @@ fn report(args: ReportArgs) -> io::Result<()> {
         } else {
           println!("      stats: (not captured in progress file)");
         }
+      }
+      print_note_block("notes (manual)", &entry.progress.notes, "      ");
+      if args.verbose {
+        print_note_block("last run", &entry.progress.auto_notes, "      ");
       }
     }
   }
@@ -3539,22 +3599,15 @@ fn run_queue(
         let mut progress = PageProgress::new(entry.item.url.clone());
         progress.status = ProgressStatus::Timeout;
         progress.total_ms = Some(worker_timeout.as_secs_f64() * 1000.0);
-        progress.notes = append_stage_to_note(
-          &format!("hard timeout after {:.2}s", worker_timeout.as_secs_f64()),
-          heartbeat_stage,
-        );
+        progress.auto_notes = format!("hard timeout after {:.2}s", worker_timeout.as_secs_f64());
+        if let Some(stage) = heartbeat_stage {
+          progress.auto_notes = format!("{}\nstage: {}", progress.auto_notes, stage.as_str());
+        }
         progress.hotspot = timeout_hotspot.clone();
         progress.timeout_stage = Some(timeout_stage);
         let mut progress = progress.merge_preserving_manual(previous, current_sha.as_deref());
         progress.hotspot = timeout_hotspot;
         progress.timeout_stage = Some(timeout_stage);
-        ensure_note_includes(
-          &mut progress,
-          &format!("hard timeout after {:.2}s", worker_timeout.as_secs_f64()),
-        );
-        if let Some(stage) = heartbeat_stage {
-          ensure_note_includes(&mut progress, &format!("stage: {}", stage.as_str()));
-        }
         let _ = write_progress(&entry.item.progress_path, &progress);
 
         let _ = write_text_file(
@@ -3585,7 +3638,12 @@ fn run_queue(
           let entry = running.swap_remove(i);
           if let Some(p) = read_progress(&entry.item.progress_path) {
             if p.status != ProgressStatus::Ok {
-              let short: String = p.notes.chars().take(120).collect();
+              let note = if p.auto_notes.trim().is_empty() {
+                p.notes.as_str()
+              } else {
+                p.auto_notes.as_str()
+              };
+              let short: String = note.chars().take(120).collect();
               eprintln!(
                 "FAIL {} {:?}: {} (exit: {})",
                 entry.item.cache_stem, p.status, short, exit_str
@@ -3599,7 +3657,7 @@ fn run_queue(
             progress.status = ProgressStatus::Panic;
             progress.total_ms = Some(entry.started.elapsed().as_secs_f64() * 1000.0);
             let note = synthesize_missing_progress_note(exit_summary);
-            progress.notes = append_stage_to_note(&note, heartbeat_stage);
+            progress.auto_notes = note.clone();
             progress.failure_stage = heartbeat_stage.and_then(progress_stage_from_heartbeat);
             if let Some(stage) = heartbeat_stage {
               maybe_apply_hotspot(&mut progress, previous.as_ref(), stage.hotspot(), false);
@@ -3608,7 +3666,7 @@ fn run_queue(
               progress.hotspot = "unknown".to_string();
             }
             if let Some(tail) = stderr_tail(&entry.item.stderr_path, 2048, 20) {
-              ensure_note_includes(
+              ensure_auto_note_includes(
                 &mut progress,
                 &format!(
                   "stderr tail ({}):\n{}",
@@ -3618,9 +3676,8 @@ fn run_queue(
               );
             }
             let mut progress = progress.merge_preserving_manual(previous, current_sha.as_deref());
-            ensure_note_includes(&mut progress, &note);
             if let Some(stage) = heartbeat_stage {
-              ensure_note_includes(&mut progress, &format!("stage: {}", stage.as_str()));
+              ensure_auto_note_includes(&mut progress, &format!("stage: {}", stage.as_str()));
               if is_hotspot_unset(&progress.hotspot) {
                 progress.hotspot = stage.hotspot().to_string();
               }
@@ -3649,7 +3706,7 @@ fn run_queue(
           let mut progress = PageProgress::new(entry.item.url.clone());
           progress.status = ProgressStatus::Panic;
           progress.total_ms = Some(entry.started.elapsed().as_secs_f64() * 1000.0);
-          progress.notes = "worker try_wait failed".to_string();
+          progress.auto_notes = "worker try_wait failed".to_string();
           progress.failure_stage = heartbeat_stage.and_then(progress_stage_from_heartbeat);
           if let Some(stage) = heartbeat_stage {
             maybe_apply_hotspot(&mut progress, previous.as_ref(), stage.hotspot(), false);
@@ -3658,7 +3715,7 @@ fn run_queue(
             progress.hotspot = "unknown".to_string();
           }
           if let Some(tail) = stderr_tail(&entry.item.stderr_path, 2048, 20) {
-            ensure_note_includes(
+            ensure_auto_note_includes(
               &mut progress,
               &format!(
                 "stderr tail ({}):\n{}",
@@ -3669,7 +3726,7 @@ fn run_queue(
           }
           let mut progress = progress.merge_preserving_manual(previous, current_sha.as_deref());
           if let Some(stage) = heartbeat_stage {
-            ensure_note_includes(&mut progress, &format!("stage: {}", stage.as_str()));
+            ensure_auto_note_includes(&mut progress, &format!("stage: {}", stage.as_str()));
             if is_hotspot_unset(&progress.hotspot) {
               progress.hotspot = stage.hotspot().to_string();
             }
@@ -4171,7 +4228,7 @@ fn worker(args: WorkerArgs) -> io::Result<()> {
       let mut progress = PageProgress::new(url);
       progress.status = ProgressStatus::Panic;
       progress.total_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
-      progress.notes = panic_msg;
+      progress.auto_notes = panic_msg;
       progress.failure_stage = heartbeat_stage.and_then(progress_stage_from_heartbeat);
       if let Some(stage) = heartbeat_stage {
         maybe_apply_hotspot(&mut progress, previous.as_ref(), stage.hotspot(), false);
@@ -4181,7 +4238,7 @@ fn worker(args: WorkerArgs) -> io::Result<()> {
       }
       let mut progress = progress.merge_preserving_manual(previous, current_sha.as_deref());
       if let Some(stage) = heartbeat_stage {
-        ensure_note_includes(&mut progress, &format!("stage: {}", stage.as_str()));
+        ensure_auto_note_includes(&mut progress, &format!("stage: {}", stage.as_str()));
         if is_hotspot_unset(&progress.hotspot) {
           progress.hotspot = stage.hotspot().to_string();
         }
@@ -4192,7 +4249,7 @@ fn worker(args: WorkerArgs) -> io::Result<()> {
           path,
           &format!(
             "=== {stem} ===\nStatus: PANIC\nPanic: {}\nVerbose: {}\n",
-            progress.notes, verbose
+            progress.auto_notes, verbose
           ),
         );
       }
@@ -4241,6 +4298,7 @@ mod tests {
       trace_progress_dir: PathBuf::new(),
       trace_dir: PathBuf::new(),
       verbose_stats: false,
+      verbose: false,
       fail_on_missing_stages: false,
       fail_on_missing_stage_timings: false,
     }
@@ -4316,6 +4374,14 @@ mod tests {
 
   struct EnvVarGuard {
     key: &'static str,
+  }
+
+  fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK
+      .get_or_init(|| std::sync::Mutex::new(()))
+      .lock()
+      .expect("env lock poisoned")
   }
 
   impl EnvVarGuard {
@@ -4738,6 +4804,81 @@ mod tests {
   }
 
   #[test]
+  fn rerun_preserves_manual_notes_but_rewrites_auto_notes() {
+    let url = "https://example.com".to_string();
+    let previous = PageProgress {
+      url: url.clone(),
+      status: ProgressStatus::Timeout,
+      // Simulate a legacy progress file where auto diagnostics accumulated inside `notes`.
+      notes: "manual blocker\nhard timeout after 5.00s\nstage: layout".to_string(),
+      ..PageProgress::default()
+    };
+
+    let new_progress = PageProgress {
+      url: url.clone(),
+      status: ProgressStatus::Timeout,
+      auto_notes: "hard timeout after 5.00s\nstage: paint".to_string(),
+      ..PageProgress::default()
+    };
+
+    let merged = new_progress.merge_preserving_manual(Some(previous), None);
+    assert_eq!(merged.notes, "manual blocker");
+    assert_eq!(merged.auto_notes, "hard timeout after 5.00s\nstage: paint");
+  }
+
+  #[test]
+  fn reruns_do_not_accumulate_stage_lines_in_auto_notes() {
+    let url = "https://example.com".to_string();
+    let previous = PageProgress {
+      url: url.clone(),
+      status: ProgressStatus::Timeout,
+      auto_notes: "hard timeout after 5.00s\nstage: layout".to_string(),
+      ..PageProgress::default()
+    };
+
+    let run2 = PageProgress {
+      url,
+      status: ProgressStatus::Timeout,
+      auto_notes: "hard timeout after 5.00s\nstage: paint".to_string(),
+      ..PageProgress::default()
+    }
+    .merge_preserving_manual(Some(previous), None);
+
+    let stage_lines = run2
+      .auto_notes
+      .lines()
+      .filter(|line| line.trim_start().starts_with("stage:"))
+      .count();
+    assert_eq!(stage_lines, 1, "auto_notes={}", run2.auto_notes);
+    assert!(run2.auto_notes.contains("stage: paint"));
+    assert!(!run2.auto_notes.contains("stage: layout"));
+  }
+
+  #[test]
+  fn ok_pages_clear_manual_notes() {
+    let url = "https://example.com".to_string();
+    let previous = PageProgress {
+      url: url.clone(),
+      status: ProgressStatus::Timeout,
+      notes: "manual blocker".to_string(),
+      auto_notes: "hard timeout after 5.00s\nstage: layout".to_string(),
+      ..PageProgress::default()
+    };
+
+    let new_progress = PageProgress {
+      url,
+      status: ProgressStatus::Ok,
+      // If the runner forgets to clear this, we'd reintroduce stale diagnostics.
+      auto_notes: "stale".to_string(),
+      ..PageProgress::default()
+    };
+
+    let merged = new_progress.merge_preserving_manual(Some(previous), None);
+    assert!(merged.notes.trim().is_empty());
+    assert!(merged.auto_notes.trim().is_empty());
+  }
+
+  #[test]
   fn synthesized_note_includes_exit_code() {
     let summary = ExitStatusSummary {
       code: Some(101),
@@ -4763,22 +4904,22 @@ mod tests {
   }
 
   #[test]
-  fn ensure_note_includes_preserves_manual_notes() {
+  fn ensure_auto_note_includes_does_not_clobber_manual_notes() {
     let mut progress = PageProgress::new("https://example.com".to_string());
     progress.notes = "manual note".to_string();
     let note = "worker exited (exit code 1) without writing progress";
-    ensure_note_includes(&mut progress, note);
-    assert!(progress.notes.starts_with("manual note"));
-    assert!(progress.notes.contains(note));
+    ensure_auto_note_includes(&mut progress, note);
+    assert_eq!(progress.notes, "manual note");
+    assert!(progress.auto_notes.contains(note));
   }
 
   #[test]
-  fn ensure_note_includes_is_idempotent() {
+  fn ensure_auto_note_includes_is_idempotent() {
     let mut progress = PageProgress::new("https://example.com".to_string());
     let note = "worker exited (exit code 1) without writing progress";
-    ensure_note_includes(&mut progress, note);
-    ensure_note_includes(&mut progress, note);
-    assert_eq!(progress.notes, note);
+    ensure_auto_note_includes(&mut progress, note);
+    ensure_auto_note_includes(&mut progress, note);
+    assert_eq!(progress.auto_notes, note);
   }
 
   #[test]
@@ -4869,6 +5010,7 @@ mod tests {
 
   #[test]
   fn hard_timeout_prefers_heartbeat_stage() {
+    let _lock = env_lock();
     let Some(exe) = pageset_progress_exe() else {
       eprintln!("Skipping test: pageset_progress binary not found");
       return;
@@ -4897,6 +5039,7 @@ mod tests {
     let args = basic_run_args(dir.path());
     let hard_timeout = Duration::from_millis(200);
     let _guard = EnvVarGuard::set("FASTR_TEST_RENDER_DELAY_MS", "500");
+    let _stem_guard = EnvVarGuard::set("FASTR_TEST_RENDER_DELAY_STEM", "heartbeat");
     let queue = VecDeque::from(vec![item]);
     run_queue(
       &exe,
@@ -4916,14 +5059,15 @@ mod tests {
     let heartbeat_stage = read_stage_heartbeat(&stage_path).expect("heartbeat");
     assert_eq!(progress.hotspot, heartbeat_stage.hotspot().to_string());
     assert!(
-      progress.notes.contains(heartbeat_stage.as_str()),
-      "notes missing stage: {}",
-      progress.notes
+      progress.auto_notes.contains(heartbeat_stage.as_str()),
+      "auto_notes missing stage: {}",
+      progress.auto_notes
     );
   }
 
   #[test]
   fn kill_after_progress_during_dump_capture_does_not_overwrite_progress() {
+    let _lock = env_lock();
     let Some(exe) = pageset_progress_exe() else {
       eprintln!("Skipping test: pageset_progress binary not found");
       return;
@@ -4966,6 +5110,7 @@ mod tests {
     let render_kill_timeout = Duration::from_secs(2);
     let overall_kill_timeout = Duration::from_secs(3);
     let _guard = EnvVarGuard::set("FASTR_TEST_DUMP_DELAY_MS", "10000");
+    let _stem_guard = EnvVarGuard::set("FASTR_TEST_DUMP_DELAY_STEM", "dumpkill");
     let queue = VecDeque::from(vec![item]);
     run_queue(
       &exe,
@@ -4996,6 +5141,7 @@ mod tests {
 
   #[test]
   fn dump_capture_panic_does_not_overwrite_progress() {
+    let _lock = env_lock();
     let Some(exe) = pageset_progress_exe() else {
       eprintln!("Skipping test: pageset_progress binary not found");
       return;
@@ -5038,6 +5184,7 @@ mod tests {
     let render_kill_timeout = Duration::from_secs(5);
     let overall_kill_timeout = Duration::from_secs(6);
     let _guard = EnvVarGuard::set("FASTR_TEST_DUMP_PANIC", "1");
+    let _stem_guard = EnvVarGuard::set("FASTR_TEST_DUMP_PANIC_STEM", "dumppanic");
     let queue = VecDeque::from(vec![item]);
     run_queue(
       &exe,

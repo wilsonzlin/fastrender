@@ -60,8 +60,9 @@ fn pageset_progress_worker_respects_fetch_timeout_budget() {
     status_str, "ok",
     "worker should record failure when subresource fetch times out"
   );
-  let notes = progress["notes"]
+  let notes = progress["auto_notes"]
     .as_str()
+    .or_else(|| progress["notes"].as_str())
     .unwrap_or_default()
     .to_ascii_lowercase();
   assert!(
