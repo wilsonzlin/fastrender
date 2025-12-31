@@ -2498,11 +2498,7 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
             )
           }
         } else {
-          if res
-            .status
-            .map(is_transient_http_status)
-            .unwrap_or(false)
-          {
+          if res.status.map(is_transient_http_status).unwrap_or(false) {
             if let Some(snapshot) = plan.cached.as_ref() {
               let fallback = snapshot.value.as_result();
               let is_ok = fallback.is_ok();
@@ -4542,8 +4538,7 @@ mod tests {
 
     let second = cache.fetch(url).expect("fallback fetch");
     assert_eq!(
-      second.bytes,
-      b"cached",
+      second.bytes, b"cached",
       "should fall back to cached bytes on transient status"
     );
 

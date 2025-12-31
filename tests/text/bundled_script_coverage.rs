@@ -36,4 +36,3 @@ fn bundled_fonts_cover_thaana_syriac_and_nko() {
     "bundled Noto Sans NKo should cover U+07EB (߫)"
   );
 }
-

@@ -99,10 +99,7 @@ fn bundled_fonts_cover_spacing_modifier_letters() {
   let mut pipeline = ShapingPipeline::new();
   let font_ctx = FontContext::with_config(FontConfig::bundled_only());
 
-  let samples = [
-    ("sans-serif", "Noto Sans"),
-    ("serif", "Noto Serif"),
-  ];
+  let samples = [("sans-serif", "Noto Sans"), ("serif", "Noto Serif")];
 
   // pageset regression: phoronix.com surfaced clusters containing U+02FD (˽) with combining marks.
   let text = "˽\u{0365}";

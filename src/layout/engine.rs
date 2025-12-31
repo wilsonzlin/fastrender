@@ -1371,11 +1371,15 @@ mod tests {
     let (_, _, _, factory) = engine.resolve_parallelism_for_tree(&tree);
     assert!(!factory.cached_context_is_initialized(FormattingContextType::Block));
 
-    engine.layout_tree_inner(&factory, &tree, true, None).unwrap();
+    engine
+      .layout_tree_inner(&factory, &tree, true, None)
+      .unwrap();
     assert!(factory.cached_context_is_initialized(FormattingContextType::Block));
 
     let first = factory.get(FormattingContextType::Block);
-    engine.layout_tree_inner(&factory, &tree, true, None).unwrap();
+    engine
+      .layout_tree_inner(&factory, &tree, true, None)
+      .unwrap();
     let second = factory.get(FormattingContextType::Block);
     assert!(Arc::ptr_eq(&first, &second));
   }

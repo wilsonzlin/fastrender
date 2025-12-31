@@ -251,21 +251,22 @@ fn container_query_matches(
       result
     }
     ContainerQuery::Not(inner) => {
-      let result = !container_query_matches(container_id, inner, container, ctx, ctx_ptr, guard, memo);
+      let result =
+        !container_query_matches(container_id, inner, container, ctx, ctx_ptr, guard, memo);
       memo.query_eval.insert(key, result);
       result
     }
     ContainerQuery::And(list) => {
-      let result = list
-        .iter()
-        .all(|inner| container_query_matches(container_id, inner, container, ctx, ctx_ptr, guard, memo));
+      let result = list.iter().all(|inner| {
+        container_query_matches(container_id, inner, container, ctx, ctx_ptr, guard, memo)
+      });
       memo.query_eval.insert(key, result);
       result
     }
     ContainerQuery::Or(list) => {
-      let result = list
-        .iter()
-        .any(|inner| container_query_matches(container_id, inner, container, ctx, ctx_ptr, guard, memo));
+      let result = list.iter().any(|inner| {
+        container_query_matches(container_id, inner, container, ctx, ctx_ptr, guard, memo)
+      });
       memo.query_eval.insert(key, result);
       result
     }
@@ -2418,9 +2419,13 @@ impl ContainerQueryContext {
               .as_deref()
               .map(|name| memo.intern_name(name))
               .unwrap_or(0);
-            memo
-              .condition_sigs
-              .insert(condition_ptr, ConditionSignature { name_id, support_mask });
+            memo.condition_sigs.insert(
+              condition_ptr,
+              ConditionSignature {
+                name_id,
+                support_mask,
+              },
+            );
             (name_id, support_mask)
           }
         };
@@ -2435,7 +2440,12 @@ impl ContainerQueryContext {
           *cached
         } else {
           let found = self
-            .find_container_impl(node_id, ancestor_ids, condition.name.as_deref(), support_mask)
+            .find_container_impl(
+              node_id,
+              ancestor_ids,
+              condition.name.as_deref(),
+              support_mask,
+            )
             .map(|(id, _)| id);
           memo.find_container.insert(key, found);
           found
@@ -2455,7 +2465,15 @@ impl ContainerQueryContext {
         guard.push(container_id);
         let matches = !condition.query_list.is_empty()
           && condition.query_list.iter().any(|query| {
-            container_query_matches(container_id, query, container, self, ctx_ptr, guard, &mut memo)
+            container_query_matches(
+              container_id,
+              query,
+              container,
+              self,
+              ctx_ptr,
+              guard,
+              &mut memo,
+            )
           });
         guard.pop();
 

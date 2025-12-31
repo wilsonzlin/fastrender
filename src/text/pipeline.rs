@@ -3379,7 +3379,10 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
       .as_ref()
       .map(|map| map_cluster_offset(cluster_in_shape, map))
       .unwrap_or(cluster_in_shape);
-    let char_at_cluster = run.text.get(logical_cluster..).and_then(|s| s.chars().next());
+    let char_at_cluster = run
+      .text
+      .get(logical_cluster..)
+      .and_then(|s| s.chars().next());
     let is_bidi_control = char_at_cluster.is_some_and(is_bidi_control_char);
 
     if !is_bidi_control {
@@ -4617,11 +4620,15 @@ mod tests {
       .0;
 
     let shaped = pipeline.shape(text, &style, &ctx).expect("shape succeeds");
-    assert!(!shaped.is_empty(), "shaping should produce at least one run");
+    assert!(
+      !shaped.is_empty(),
+      "shaping should produce at least one run"
+    );
 
-    let base_has_glyph = shaped.iter().flat_map(|run| run.glyphs.iter()).any(|glyph| {
-      glyph.cluster == 0 && glyph.glyph_id != 0
-    });
+    let base_has_glyph = shaped
+      .iter()
+      .flat_map(|run| run.glyphs.iter())
+      .any(|glyph| glyph.cluster == 0 && glyph.glyph_id != 0);
     assert!(
       base_has_glyph,
       "base character should render with a real glyph even when followed by an unsupported combining mark"

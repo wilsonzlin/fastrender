@@ -904,8 +904,8 @@ pub(crate) fn apply_gaussian_blur_cached(
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::paint::pixmap::new_pixmap;
   use crate::paint::painter::{enable_paint_diagnostics, take_paint_diagnostics};
+  use crate::paint::pixmap::new_pixmap;
   use tiny_skia::PremultipliedColorU8;
 
   #[test]

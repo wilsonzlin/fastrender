@@ -2778,7 +2778,11 @@ fn clip_to_region(pixmap: &mut Pixmap, region: Rect) {
   let min_x_bytes = clamped_min_x as usize * 4;
   let max_x_bytes = clamped_max_x as usize * 4;
   let row_stride_bytes = pixmap.width() as usize * 4;
-  for (y, row) in pixmap.data_mut().chunks_exact_mut(row_stride_bytes).enumerate() {
+  for (y, row) in pixmap
+    .data_mut()
+    .chunks_exact_mut(row_stride_bytes)
+    .enumerate()
+  {
     let y = y as i32;
     if y < clamped_min_y || y >= clamped_max_y {
       row.fill(0);

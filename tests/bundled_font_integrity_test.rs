@@ -14,20 +14,18 @@ fn loaded_family_names(ctx: &FontContext) -> Vec<String> {
 fn assert_family_has_glyph(ctx: &FontContext, family: &str, sample: char) {
   let db = ctx.database();
   let families = loaded_family_names(ctx);
-  let id = db.query(family, FontWeight::NORMAL, FontStyle::Normal).unwrap_or_else(|| {
-    panic!(
-      "expected bundled family {family:?} to be queryable; loaded families: {families:?}"
-    )
-  });
+  let id = db
+    .query(family, FontWeight::NORMAL, FontStyle::Normal)
+    .unwrap_or_else(|| {
+      panic!("expected bundled family {family:?} to be queryable; loaded families: {families:?}")
+    });
 
   let loaded = db
     .load_font(id)
     .unwrap_or_else(|| panic!("bundled family {family:?} resolved but failed to load"));
 
   let face = loaded.as_ttf_face().unwrap_or_else(|err| {
-    panic!(
-      "bundled family {family:?} resolved but could not be parsed: {err}"
-    )
+    panic!("bundled family {family:?} resolved but could not be parsed: {err}")
   });
 
   assert!(

@@ -9473,6 +9473,7 @@ mod tests {
     reset_layout_parallel_debug_counters,
   };
   use crate::layout::formatting_context::IntrinsicSizingMode;
+  use crate::render_control::RenderDeadline;
   use crate::style::color::Rgba;
   use crate::style::display::Display;
   use crate::style::display::FormattingContextType;
@@ -9620,6 +9621,57 @@ mod tests {
         "expected positioned child {idx} x≈{idx}, got {x}"
       );
     }
+  }
+
+  #[test]
+  fn positioned_children_parallel_layout_propagates_deadlines() {
+    let mut children = vec![make_text_box("anchor")];
+    for idx in 0..64usize {
+      let mut style = ComputedStyle::default();
+      style.font_size = 16.0;
+      style.position = Position::Absolute;
+      style.left = Some(Length::px(idx as f32));
+      style.top = Some(Length::px(0.0));
+      style.width = Some(Length::px(1.0));
+      style.height = Some(Length::px(1.0));
+      let abs_child = BoxNode::new_block(Arc::new(style), FormattingContextType::Block, vec![]);
+      children.push(abs_child);
+    }
+    let root = make_inline_container(children);
+    let constraints = LayoutConstraints::definite_width(200.0);
+
+    let pool = ThreadPoolBuilder::new()
+      .num_threads(2)
+      .build()
+      .expect("thread pool");
+
+    let (serial, parallel) = pool.install(|| {
+      // Install a cancel callback that only fires on worker threads. The deadline itself must be
+      // propagated into Rayon jobs via `with_deadline`, otherwise worker threads would not observe
+      // it and layout would succeed even though cancellation was requested.
+      let root_thread_id = std::thread::current().id();
+      let cancel = Arc::new(move || std::thread::current().id() != root_thread_id);
+      let deadline = RenderDeadline::new(None, Some(cancel));
+
+      let serial = with_deadline(Some(&deadline), || {
+        InlineFormattingContext::new().layout(&root, &constraints)
+      });
+      let parallel = with_deadline(Some(&deadline), || {
+        InlineFormattingContext::new()
+          .with_parallelism(LayoutParallelism::enabled(8))
+          .layout(&root, &constraints)
+      });
+
+      (serial, parallel)
+    });
+    assert!(
+      serial.is_ok(),
+      "cancel callback should not fire on root thread"
+    );
+    assert!(
+      matches!(parallel, Err(LayoutError::Timeout { .. })),
+      "expected worker-thread deadline cancellation to surface as LayoutError::Timeout, got {parallel:?}"
+    );
   }
 
   #[test]

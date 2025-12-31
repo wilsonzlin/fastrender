@@ -1536,7 +1536,9 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     && progress.timeout_stage.is_none()
     && progress.failure_stage.is_none()
   {
-    let stage = heartbeat.last_stage().and_then(progress_stage_from_heartbeat);
+    let stage = heartbeat
+      .last_stage()
+      .and_then(progress_stage_from_heartbeat);
     progress.failure_stage = stage;
   }
 

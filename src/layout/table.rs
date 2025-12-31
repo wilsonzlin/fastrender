@@ -56,9 +56,9 @@ use crate::style::color::Rgba;
 use crate::style::computed::Visibility;
 use crate::style::display::Display;
 use crate::style::display::FormattingContextType;
-use crate::style::types::BoxSizing;
 use crate::style::types::BorderCollapse;
 use crate::style::types::BorderStyle;
+use crate::style::types::BoxSizing;
 use crate::style::types::CaptionSide;
 use crate::style::types::Direction;
 use crate::style::types::EmptyCells;
@@ -1445,7 +1445,11 @@ fn apply_style_overrides(base: &ComputedStyle, flags: StyleOverrideFlags) -> Com
     // not depend on percentage base resolution.
     if style.box_sizing == BoxSizing::BorderBox {
       let mut horizontal_edges = CalcLength::empty();
-      let to_calc = |len: Length| len.calc.unwrap_or_else(|| CalcLength::single(len.unit, len.value));
+      let to_calc = |len: Length| {
+        len
+          .calc
+          .unwrap_or_else(|| CalcLength::single(len.unit, len.value))
+      };
       for edge in [
         style.padding_left,
         style.padding_right,

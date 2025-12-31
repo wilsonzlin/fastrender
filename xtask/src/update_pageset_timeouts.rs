@@ -167,7 +167,10 @@ pub fn run_update_pageset_timeouts(args: UpdatePagesetTimeoutsArgs) -> Result<()
       entry.name,
       args.fixtures_root.display()
     );
-    eprintln!("    Expected output: {}", fixture_dir.join("index.html").display());
+    eprintln!(
+      "    Expected output: {}",
+      fixture_dir.join("index.html").display()
+    );
   }
 
   if args.capture_missing_fixtures {
@@ -330,13 +333,18 @@ fn select_pages(entries: &[ProgressEntry], count: usize) -> Vec<ProgressEntry> {
   selected
 }
 
-fn update_manifest(mut existing: PagesetTimeoutManifest, selected: &[ProgressEntry]) -> PagesetTimeoutManifest {
+fn update_manifest(
+  mut existing: PagesetTimeoutManifest,
+  selected: &[ProgressEntry],
+) -> PagesetTimeoutManifest {
   let mut existing_map = BTreeMap::new();
   for fixture in existing.fixtures {
     existing_map.insert(fixture.name.clone(), fixture);
   }
 
-  let default_budget = existing.default_budget_ms.unwrap_or(FALLBACK_DEFAULT_BUDGET_MS);
+  let default_budget = existing
+    .default_budget_ms
+    .unwrap_or(FALLBACK_DEFAULT_BUDGET_MS);
   existing.fixtures = selected
     .iter()
     .map(|entry| {
@@ -379,7 +387,10 @@ mod tests {
     let entries = read_progress_entries(&fixture_progress_dir()).expect("read fixture progress");
     let selected = select_pages(&entries, 3);
     let names: Vec<&str> = selected.iter().map(|e| e.name.as_str()).collect();
-    assert_eq!(names, vec!["timeout-a.test", "timeout-b.test", "slow-ok.test"]);
+    assert_eq!(
+      names,
+      vec!["timeout-a.test", "timeout-b.test", "slow-ok.test"]
+    );
   }
 
   #[test]
@@ -393,13 +404,21 @@ mod tests {
         { "name": "timeout-b.test", "viewport": [800, 600], "dpr": 2.0, "media": "print", "budget_ms": 1234.0 }
       ]
     });
-    fs::write(&manifest_path, serde_json::to_string_pretty(&original).unwrap()).unwrap();
+    fs::write(
+      &manifest_path,
+      serde_json::to_string_pretty(&original).unwrap(),
+    )
+    .unwrap();
 
     let existing = load_manifest(&manifest_path).expect("load manifest");
     let entries = read_progress_entries(&fixture_progress_dir()).expect("read fixture progress");
     let selected = select_pages(&entries, 3);
     let updated = update_manifest(existing, &selected);
-    fs::write(&manifest_path, serde_json::to_string_pretty(&updated).unwrap()).unwrap();
+    fs::write(
+      &manifest_path,
+      serde_json::to_string_pretty(&updated).unwrap(),
+    )
+    .unwrap();
 
     let reparsed: serde_json::Value =
       serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();

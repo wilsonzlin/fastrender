@@ -1319,7 +1319,9 @@ mod tests {
 
   impl FloatProfileGuard {
     fn new(enabled: bool) -> Self {
-      let lock = FLOAT_PROFILE_LOCK.lock().expect("float profile lock poisoned");
+      let lock = FLOAT_PROFILE_LOCK
+        .lock()
+        .expect("float profile lock poisoned");
       let previous_override = FLOAT_PROFILE_OVERRIDE.with(|cell| {
         let previous = cell.get();
         cell.set(Some(enabled));

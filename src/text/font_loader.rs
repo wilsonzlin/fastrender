@@ -1200,13 +1200,19 @@ impl FontContext {
     let subset_indices = if !filter_by_codepoints || max_subset_fonts == 0 {
       Vec::new()
     } else if subset_candidates.len() <= max_subset_fonts {
-      let mut indices: Vec<usize> = subset_candidates.into_iter().map(|(order, _)| order).collect();
+      let mut indices: Vec<usize> = subset_candidates
+        .into_iter()
+        .map(|(order, _)| order)
+        .collect();
       indices.sort_unstable();
       indices
     } else {
       subset_candidates.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
       subset_candidates.truncate(max_subset_fonts);
-      let mut indices: Vec<usize> = subset_candidates.into_iter().map(|(order, _)| order).collect();
+      let mut indices: Vec<usize> = subset_candidates
+        .into_iter()
+        .map(|(order, _)| order)
+        .collect();
       indices.sort_unstable();
       indices
     };
@@ -2828,14 +2834,8 @@ mod tests {
       .collect();
     let used_codepoints: Vec<u32> = (0..9).map(|i| 0xE000 + i).collect();
 
-    let selected = FontContext::select_web_font_faces_for_load(
-      &faces,
-      true,
-      true,
-      &used_codepoints,
-      8,
-      64,
-    );
+    let selected =
+      FontContext::select_web_font_faces_for_load(&faces, true, true, &used_codepoints, 8, 64);
     assert_eq!(selected, (0..9).collect::<Vec<_>>());
   }
 
@@ -2854,14 +2854,8 @@ mod tests {
       .collect();
     let used_codepoints = vec![0x0041];
 
-    let selected = FontContext::select_web_font_faces_for_load(
-      &faces,
-      true,
-      true,
-      &used_codepoints,
-      8,
-      64,
-    );
+    let selected =
+      FontContext::select_web_font_faces_for_load(&faces, true, true, &used_codepoints, 8, 64);
     assert_eq!(selected, (0..8).collect::<Vec<_>>());
   }
 
@@ -2871,38 +2865,40 @@ mod tests {
     let faces = vec![
       FontFaceRule {
         family: Some("CapFamily".to_string()),
-        sources: vec![FontFaceSource::url("https://example.com/all.woff2".to_string())],
+        sources: vec![FontFaceSource::url(
+          "https://example.com/all.woff2".to_string(),
+        )],
         unicode_ranges: vec![(10, 13)],
         ..Default::default()
       },
       FontFaceRule {
         family: Some("CapFamily".to_string()),
-        sources: vec![FontFaceSource::url("https://example.com/first.woff2".to_string())],
+        sources: vec![FontFaceSource::url(
+          "https://example.com/first.woff2".to_string(),
+        )],
         unicode_ranges: vec![(10, 11)],
         ..Default::default()
       },
       FontFaceRule {
         family: Some("CapFamily".to_string()),
-        sources: vec![FontFaceSource::url("https://example.com/second.woff2".to_string())],
+        sources: vec![FontFaceSource::url(
+          "https://example.com/second.woff2".to_string(),
+        )],
         unicode_ranges: vec![(12, 13)],
         ..Default::default()
       },
       FontFaceRule {
         family: Some("CapFamily".to_string()),
-        sources: vec![FontFaceSource::url("https://example.com/one.woff2".to_string())],
+        sources: vec![FontFaceSource::url(
+          "https://example.com/one.woff2".to_string(),
+        )],
         unicode_ranges: vec![(10, 10)],
         ..Default::default()
       },
     ];
 
-    let selected = FontContext::select_web_font_faces_for_load(
-      &faces,
-      true,
-      true,
-      &used_codepoints,
-      0,
-      2,
-    );
+    let selected =
+      FontContext::select_web_font_faces_for_load(&faces, true, true, &used_codepoints, 0, 2);
     assert_eq!(selected, vec![0, 1]);
   }
 
