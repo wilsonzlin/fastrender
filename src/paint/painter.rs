@@ -10182,13 +10182,14 @@ fn hard_clip_mask_outside_rect_within_bounds(
 fn apply_mask_composite_pixel(dst: u8, src: u8, op: MaskComposite) -> u8 {
   let src = src as u16;
   let dst = dst as u16;
+  // `src` and `dst` are in the 0..=255 range, so intermediate products fit in u16 (max 65025).
   let out = match op {
-    MaskComposite::Add => src + div_255(dst.saturating_mul(255 - src)),
-    MaskComposite::Subtract => div_255(src.saturating_mul(255 - dst)),
-    MaskComposite::Intersect => div_255(src.saturating_mul(dst)),
+    MaskComposite::Add => src + div_255(dst * (255 - src)),
+    MaskComposite::Subtract => div_255(src * (255 - dst)),
+    MaskComposite::Intersect => div_255(src * dst),
     MaskComposite::Exclude => {
-      let src_out = div_255(src.saturating_mul(255 - dst));
-      let dst_out = div_255(dst.saturating_mul(255 - src));
+      let src_out = div_255(src * (255 - dst));
+      let dst_out = div_255(dst * (255 - src));
       src_out + dst_out
     }
   };
