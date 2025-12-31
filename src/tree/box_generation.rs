@@ -323,7 +323,7 @@ fn clone_starting_style(style: &Option<Box<ComputedStyle>>) -> Option<Arc<Comput
 
 struct BoxGenerationPrepass<'a> {
   document_css: String,
-  picture_sources: HashMap<usize, Vec<PictureSource>>,
+  picture_sources: PictureSourceLookup,
   styled_lookup: StyledLookup<'a>,
 }
 
@@ -350,6 +350,36 @@ impl<'a> StyledLookup<'a> {
 
   fn get(&self, node_id: usize) -> Option<&'a StyledNode> {
     self.nodes.get(node_id).copied().flatten()
+  }
+}
+
+struct PictureSourceLookup {
+  entries: Vec<Option<Vec<PictureSource>>>,
+}
+
+impl PictureSourceLookup {
+  fn new() -> Self {
+    Self { entries: vec![None] }
+  }
+
+  fn insert(&mut self, node_id: usize, sources: Vec<PictureSource>) {
+    if node_id == self.entries.len() {
+      self.entries.push(Some(sources));
+      return;
+    }
+
+    if node_id >= self.entries.len() {
+      self.entries.resize(node_id + 1, None);
+    }
+    self.entries[node_id] = Some(sources);
+  }
+
+  fn take(&mut self, node_id: usize) -> Vec<PictureSource> {
+    self
+      .entries
+      .get_mut(node_id)
+      .and_then(Option::take)
+      .unwrap_or_default()
   }
 }
 
@@ -422,7 +452,7 @@ fn collect_box_generation_prepass<'a>(
   let max_css_bytes = foreign_object_css_limit_bytes().max(MAX_EMBEDDED_SVG_CSS_BYTES);
   let mut out = BoxGenerationPrepass {
     document_css: String::new(),
-    picture_sources: HashMap::new(),
+    picture_sources: PictureSourceLookup::new(),
     styled_lookup: StyledLookup::new(),
   };
   let mut css = CssState { enabled: true };
@@ -1427,7 +1457,7 @@ fn generate_boxes_for_styled_into(
   counters: &mut CounterManager,
   _is_root: bool,
   document_css: &str,
-  picture_sources: &mut HashMap<usize, Vec<PictureSource>>,
+  picture_sources: &mut PictureSourceLookup,
   options: &BoxGenerationOptions,
   deadline_counter: &mut usize,
   out: &mut Vec<BoxNode>,
@@ -1541,7 +1571,7 @@ fn generate_boxes_for_styled_into(
       {
         counters.leave_scope();
         let picture_sources_for_img = if tag.eq_ignore_ascii_case("img") {
-          picture_sources.remove(&styled.node_id).unwrap_or_default()
+          picture_sources.take(styled.node_id)
         } else {
           Vec::new()
         };
