@@ -3,6 +3,7 @@ use super::properties::{
   supports_parsed_declaration_is_valid,
 };
 use crate::style::var_resolution::contains_var;
+use std::borrow::Cow;
 
 /// Validates a (property, value) pair for use in @supports queries.
 ///
@@ -19,8 +20,16 @@ pub fn supports_declaration(property: &str, value: &str) -> bool {
     return true;
   }
 
-  let normalized_property = trimmed_property.to_ascii_lowercase();
-  if !is_known_style_property(&normalized_property) {
+  let normalized_property: Cow<'_, str> = if trimmed_property
+    .as_bytes()
+    .iter()
+    .any(|b| b.is_ascii_uppercase())
+  {
+    Cow::Owned(trimmed_property.to_ascii_lowercase())
+  } else {
+    Cow::Borrowed(trimmed_property)
+  };
+  if !is_known_style_property(normalized_property.as_ref()) {
     return false;
   }
 
@@ -35,10 +44,14 @@ pub fn supports_declaration(property: &str, value: &str) -> bool {
     return true;
   }
 
-  let parsed = match parse_property_value(&normalized_property, value_without_important) {
+  let parsed = match parse_property_value(normalized_property.as_ref(), value_without_important) {
     Some(v) => v,
     None => return false,
   };
 
-  supports_parsed_declaration_is_valid(&normalized_property, value_without_important, &parsed)
+  supports_parsed_declaration_is_valid(
+    normalized_property.as_ref(),
+    value_without_important,
+    &parsed,
+  )
 }

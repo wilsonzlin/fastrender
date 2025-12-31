@@ -518,10 +518,24 @@ pub(crate) fn parse_transform_list(value: &str) -> Option<Vec<Transform>> {
   loop {
     match parser.next() {
       Ok(Token::Function(function_name)) => {
-        let name = function_name.as_ref().to_ascii_lowercase();
+        let name = function_name.as_ref();
+        let mut name_lower_buf = [0u8; 16];
+        let mut name_lower_owned = String::new();
+        let name_lower = if name.len() <= name_lower_buf.len() {
+          for (dst, src) in name_lower_buf[..name.len()]
+            .iter_mut()
+            .zip(name.as_bytes().iter().copied())
+          {
+            *dst = src.to_ascii_lowercase();
+          }
+          std::str::from_utf8(&name_lower_buf[..name.len()]).ok()?
+        } else {
+          name_lower_owned = name.to_ascii_lowercase();
+          name_lower_owned.as_str()
+        };
         let parsed = parser
           .parse_nested_block(|p| {
-            match name.as_str() {
+            match name_lower {
               "translate" => parse_translate(p),
               "translatex" => parse_translate_x(p),
               "translatey" => parse_translate_y(p),
@@ -1253,8 +1267,7 @@ fn parse_known_property_value(property: &str, value_str: &str) -> Option<Propert
 
 fn keyword_in_list(value: &PropertyValue, allowed: &[&str]) -> bool {
   if let PropertyValue::Keyword(kw) = value {
-    let kw_lower = kw.to_ascii_lowercase();
-    allowed.iter().any(|v| kw_lower == *v)
+    allowed.iter().any(|v| kw.eq_ignore_ascii_case(v))
   } else {
     false
   }
@@ -1277,8 +1290,7 @@ pub(crate) fn supports_parsed_declaration_is_valid(
     return true;
   }
 
-  let prop = property.to_ascii_lowercase();
-  match prop.as_str() {
+  match property {
     "color"
     | "background-color"
     | "border-color"
@@ -1312,17 +1324,25 @@ pub(crate) fn supports_parsed_declaration_is_valid(
     }
     "text-combine-upright" => {
       let keyword_is_valid = |kw: &str| -> bool {
-        let lower = kw.to_ascii_lowercase();
-        if lower == "none" || lower == "all" || lower == "digits" {
+        if kw.eq_ignore_ascii_case("none")
+          || kw.eq_ignore_ascii_case("all")
+          || kw.eq_ignore_ascii_case("digits")
+        {
           return true;
         }
-        if let Some(rest) = lower.strip_prefix("digits") {
-          return rest
-            .parse::<u8>()
-            .map(|n| (2..=4).contains(&n))
-            .unwrap_or(false);
+        let Some(prefix) = kw.get(..6) else {
+          return false;
+        };
+        if !prefix.eq_ignore_ascii_case("digits") {
+          return false;
         }
-        false
+        let Some(rest) = kw.get(6..) else {
+          return false;
+        };
+        rest
+          .parse::<u8>()
+          .map(|n| (2..=4).contains(&n))
+          .unwrap_or(false)
       };
 
       return match parsed {

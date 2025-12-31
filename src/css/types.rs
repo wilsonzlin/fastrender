@@ -1668,6 +1668,18 @@ mod tests {
   }
 
   #[test]
+  fn supports_declaration_is_case_insensitive() {
+    let cond = SupportsCondition::Declaration {
+      property: "TEXT-ORIENTATION".into(),
+      value: "SIDEWAYS-LEFT".into(),
+    };
+    assert!(
+      cond.matches(),
+      "supports declarations should treat property/value keywords case-insensitively"
+    );
+  }
+
+  #[test]
   fn supports_rejects_page_only_properties() {
     let cond = SupportsCondition::Declaration {
       property: "size".into(),
