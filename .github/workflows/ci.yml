@@ -11,6 +11,8 @@ env:
   RUST_BACKTRACE: 1
   # Minimum supported Rust version
   MSRV: "1.70"
+  # perf_smoke is a lightweight offline perf signal; keep this conservative to avoid flakiness.
+  PERF_SMOKE_REGRESSION_THRESHOLD: "0.10"
 
 jobs:
   # ===========================================================================
@@ -87,9 +89,105 @@ jobs:
 
       - name: Pageset timeout perf smoke (release, offline fixtures)
         if: matrix.os == 'ubuntu-latest' && matrix.rust == 'stable'
+        id: perf_smoke_pageset_timeouts
         run: |
           set -o pipefail
           cargo run --release --bin perf_smoke -- --suite pageset-timeouts --top 5 --output target/perf_smoke_pageset_timeouts.json | tee target/perf_smoke_pageset_timeouts.log
+
+      - name: Download perf_smoke pageset-timeouts baseline (main)
+        if: matrix.os == 'ubuntu-latest' && matrix.rust == 'stable'
+        id: download_perf_smoke_pageset_timeouts_baseline
+        uses: dawidd6/action-download-artifact@v3
+        continue-on-error: true
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          workflow: ci.yml
+          workflow_conclusion: success
+          branch: main
+          name: perf_smoke_pageset_timeouts
+          path: baseline
+
+      - name: Locate perf_smoke pageset-timeouts baseline JSON
+        if: matrix.os == 'ubuntu-latest' && matrix.rust == 'stable' && steps.download_perf_smoke_pageset_timeouts_baseline.outcome == 'success'
+        run: |
+          set -e
+          if [ -f baseline/target/perf_smoke_pageset_timeouts.json ]; then
+            echo "PERF_SMOKE_PAGESET_TIMEOUTS_BASELINE=baseline/target/perf_smoke_pageset_timeouts.json" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          match=$(find baseline -type f -name "perf_smoke_pageset_timeouts.json" | head -n 1 || true)
+          if [ -z "$match" ]; then
+            echo "Downloaded baseline artifact did not contain perf_smoke_pageset_timeouts.json" >&2
+            exit 1
+          fi
+          echo "PERF_SMOKE_PAGESET_TIMEOUTS_BASELINE=$match" >> "$GITHUB_ENV"
+          echo "Using perf_smoke baseline at $match"
+
+      - name: Perf regression check (perf_smoke pageset-timeouts)
+        if: matrix.os == 'ubuntu-latest' && matrix.rust == 'stable' && steps.download_perf_smoke_pageset_timeouts_baseline.outcome == 'success'
+        run: |
+          # To reproduce locally:
+          #   cargo run --release --bin perf_smoke -- --suite pageset-timeouts --baseline <path> --fail-on-regression --threshold 0.10
+          report_path=target/perf_smoke_pageset_timeouts_regression_report.txt
+          status=0
+
+          # Use the already-built binary to keep the report free of cargo build noise.
+          target/release/perf_smoke \
+            --suite pageset-timeouts \
+            --top 5 \
+            --output target/perf_smoke_pageset_timeouts.json \
+            --baseline "${PERF_SMOKE_PAGESET_TIMEOUTS_BASELINE}" \
+            --fail-on-regression \
+            --threshold "${PERF_SMOKE_REGRESSION_THRESHOLD}" \
+            > /dev/null 2> "${report_path}" || status=$?
+
+          cat "${report_path}" >&2
+
+          {
+            echo "## perf_smoke pageset-timeouts regression check"
+            echo
+            echo "Baseline: ${PERF_SMOKE_PAGESET_TIMEOUTS_BASELINE}"
+            echo "Threshold: ${PERF_SMOKE_REGRESSION_THRESHOLD} (relative)"
+            echo
+            if grep -q "Regressions detected vs baseline" "${report_path}"; then
+              echo "**Result: regressions detected**"
+            elif grep -q "baseline schema_version" "${report_path}"; then
+              echo "**Result: baseline incompatible (schema mismatch); skipping regression gate**"
+            else
+              echo "**Result: no regressions detected**"
+            fi
+            echo
+            echo '```'
+            cat "${report_path}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # If the baseline is from an older perf_smoke schema, skip gating and let this run
+          # upload a new baseline artifact.
+          if grep -q "baseline schema_version" "${report_path}"; then
+            exit 0
+          fi
+
+          exit $status
+
+      - name: Baseline unavailable
+        if: matrix.os == 'ubuntu-latest' && matrix.rust == 'stable' && steps.download_perf_smoke_pageset_timeouts_baseline.outcome != 'success'
+        run: |
+          echo "Previous perf_smoke pageset-timeouts artifact not found; skipping regression gate."
+          {
+            echo "## perf_smoke pageset-timeouts regression check"
+            echo
+            echo "No prior baseline artifact was available from main."
+            echo "The uploaded perf_smoke output from this run will serve as the next baseline."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload perf_smoke pageset-timeouts output
+        if: always() && matrix.os == 'ubuntu-latest' && matrix.rust == 'stable' && steps.perf_smoke_pageset_timeouts.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf_smoke_pageset_timeouts
+          path: target/perf_smoke_pageset_timeouts.json
+          if-no-files-found: error
 
   # ===========================================================================
   # MSRV Job - Verify minimum supported Rust version
