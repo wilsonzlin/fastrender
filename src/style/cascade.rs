@@ -7420,6 +7420,18 @@ mod tests {
     }
   }
 
+  fn find_styled_node_by_id<'a>(node: &'a StyledNode, id: &str) -> Option<&'a StyledNode> {
+    if node.node.get_attribute_ref("id") == Some(id) {
+      return Some(node);
+    }
+    for child in node.children.iter() {
+      if let Some(found) = find_styled_node_by_id(child, id) {
+        return Some(found);
+      }
+    }
+    None
+  }
+
   #[test]
   fn styled_node_holds_shallow_dom_copy_and_handles_deep_trees() {
     let depth = 256;
@@ -9191,6 +9203,82 @@ slot[name=\"s\"]::slotted(.assigned) { color: rgb(4, 5, 6); }"
       target.before_styles.is_some(),
       "expected ::before to be generated for .target"
     );
+  }
+
+  #[test]
+  fn ancestor_bloom_shadow_scoping_preserves_host_context_outer_ancestors() {
+    let _lock = cascade_global_test_lock();
+    let _ancestor_bloom = AncestorBloomEnabledGuard::new(true);
+
+    let css = r#"
+      body :host-context(.outer) .target { color: rgb(10, 20, 30); }
+    "#;
+
+    let style_node = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "style".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![],
+      },
+      children: vec![DomNode {
+        node_type: DomNodeType::Text {
+          content: css.to_string(),
+        },
+        children: vec![],
+      }],
+    };
+
+    let shadow_root = DomNode {
+      node_type: DomNodeType::ShadowRoot {
+        mode: crate::dom::ShadowRootMode::Open,
+        delegates_focus: false,
+      },
+      children: vec![
+        style_node,
+        DomNode {
+          node_type: DomNodeType::Element {
+            tag_name: "span".to_string(),
+            namespace: HTML_NAMESPACE.to_string(),
+            attributes: vec![
+              ("id".to_string(), "target".to_string()),
+              ("class".to_string(), "target".to_string()),
+            ],
+          },
+          children: vec![],
+        },
+      ],
+    };
+
+    let dom = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "body".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("class".to_string(), "outer".to_string())],
+      },
+      children: vec![DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "div".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: vec![("id".to_string(), "host".to_string())],
+        },
+        children: vec![shadow_root],
+      }],
+    };
+
+    let stylesheet = StyleSheet::new();
+    let styled_without_scoping = {
+      let _guard = ShadowBloomScopingGuard::new(false);
+      apply_styles(&dom, &stylesheet)
+    };
+    let styled_with_scoping = {
+      let _guard = ShadowBloomScopingGuard::new(true);
+      apply_styles(&dom, &stylesheet)
+    };
+
+    assert_styled_trees_equal(&styled_with_scoping, &styled_without_scoping);
+
+    let target = find_styled_node_by_id(&styled_with_scoping, "target").expect("target node");
+    assert_eq!(target.styles.color, Rgba::rgb(10, 20, 30));
   }
 
   #[test]
@@ -14415,12 +14503,19 @@ fn find_matching_rules<'a>(
               match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
                 ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
                   ctx.with_featureless(false, |ctx| {
-                    matches_selector_cascade(
+                    // `:host-context()` selectors are allowed to match outside the shadow tree, so
+                    // the shadow-scoped bloom filter may be missing required outer-ancestor hashes.
+                    // Disable bloom fast-reject for this retry to avoid false negatives.
+                    let prev_bloom_filter = ctx.bloom_filter;
+                    ctx.bloom_filter = None;
+                    let matched = matches_selector_cascade(
                       selector,
                       Some(&indexed.ancestor_hashes),
                       &element_ref,
                       ctx,
-                    )
+                    );
+                    ctx.bloom_filter = prev_bloom_filter;
+                    matched
                   })
                 })
               })
@@ -14428,7 +14523,12 @@ fn find_matching_rules<'a>(
             ScopeMatchResult::Unscoped => {
               match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
                 ctx.with_featureless(false, |ctx| {
-                  matches_selector_cascade(selector, Some(&indexed.ancestor_hashes), &element_ref, ctx)
+                  let prev_bloom_filter = ctx.bloom_filter;
+                  ctx.bloom_filter = None;
+                  let matched =
+                    matches_selector_cascade(selector, Some(&indexed.ancestor_hashes), &element_ref, ctx);
+                  ctx.bloom_filter = prev_bloom_filter;
+                  matched
                 })
               })
             }
@@ -14880,12 +14980,16 @@ fn find_pseudo_element_rules<'a>(
           match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
             ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
               ctx.with_featureless(false, |ctx| {
-                matches_selector_cascade(
+                let prev_bloom_filter = ctx.bloom_filter;
+                ctx.bloom_filter = None;
+                let matched = matches_selector_cascade(
                   selector,
                   Some(&indexed.ancestor_hashes),
                   &element_ref,
                   ctx,
-                )
+                );
+                ctx.bloom_filter = prev_bloom_filter;
+                matched
               })
             })
           })
@@ -14893,7 +14997,12 @@ fn find_pseudo_element_rules<'a>(
         ScopeMatchResult::Unscoped => {
           match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
             ctx.with_featureless(false, |ctx| {
-              matches_selector_cascade(selector, Some(&indexed.ancestor_hashes), &element_ref, ctx)
+              let prev_bloom_filter = ctx.bloom_filter;
+              ctx.bloom_filter = None;
+              let matched =
+                matches_selector_cascade(selector, Some(&indexed.ancestor_hashes), &element_ref, ctx);
+              ctx.bloom_filter = prev_bloom_filter;
+              matched
             })
           })
         }
