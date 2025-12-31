@@ -950,7 +950,7 @@ fn gaussian_blur_box_approx_anisotropic_with_parallelism(
 
   let len = blur_buffer_len(width, height, "anisotropic box blur")?;
   let mut error: Option<RenderError> = None;
-  let mut skipped = false;
+  let mut blur_applied = false;
   BLUR_SCRATCH.with(|scratch| {
     let mut scratch = scratch.borrow_mut();
     let (a, b) = match scratch.split(len, "anisotropic box blur") {
@@ -970,13 +970,15 @@ fn gaussian_blur_box_approx_anisotropic_with_parallelism(
 
     if !use_parallel {
       let mut deadline_counter = 0usize;
+      let mut did_work = false;
       for size in sizes_x {
         let radius = size.saturating_sub(1) / 2;
         if radius == 0 {
           continue;
         }
-        if box_blur_h(&cur[..], tmp, width, height, radius, &mut deadline_counter) {
-          skipped = true;
+        did_work = true;
+        if let Err(err) = box_blur_h(&cur[..], tmp, width, height, radius, &mut deadline_counter) {
+          error = Some(err);
           return;
         }
         std::mem::swap(&mut cur, &mut tmp);
@@ -986,13 +988,17 @@ fn gaussian_blur_box_approx_anisotropic_with_parallelism(
         if radius == 0 {
           continue;
         }
-        if box_blur_v(&cur[..], tmp, width, height, radius, &mut deadline_counter) {
-          skipped = true;
+        did_work = true;
+        if let Err(err) = box_blur_v(&cur[..], tmp, width, height, radius, &mut deadline_counter) {
+          error = Some(err);
           return;
         }
         std::mem::swap(&mut cur, &mut tmp);
       }
-      pixmap.data_mut().copy_from_slice(&cur[..len]);
+      if did_work {
+        pixmap.data_mut().copy_from_slice(&cur[..len]);
+      }
+      blur_applied = did_work;
       return;
     }
 
@@ -1000,13 +1006,16 @@ fn gaussian_blur_box_approx_anisotropic_with_parallelism(
     let deadline_enabled = deadline.as_ref().map_or(false, |d| d.is_enabled());
     let cancelled = AtomicBool::new(false);
     let deadline_counter = AtomicUsize::new(0);
+    let deadline_error: Mutex<Option<RenderError>> = Mutex::new(None);
+    let mut did_work = false;
 
     for size in sizes_x {
       let radius = size.saturating_sub(1) / 2;
       if radius == 0 {
         continue;
       }
-      if box_blur_h_parallel(
+      did_work = true;
+      if let Err(err) = box_blur_h_parallel(
         &cur[..],
         tmp,
         width,
@@ -1016,8 +1025,9 @@ fn gaussian_blur_box_approx_anisotropic_with_parallelism(
         deadline_enabled,
         &cancelled,
         &deadline_counter,
+        &deadline_error,
       ) {
-        skipped = true;
+        error = Some(err);
         return;
       }
       std::mem::swap(&mut cur, &mut tmp);
@@ -1027,7 +1037,8 @@ fn gaussian_blur_box_approx_anisotropic_with_parallelism(
       if radius == 0 {
         continue;
       }
-      if box_blur_v_parallel(
+      did_work = true;
+      if let Err(err) = box_blur_v_parallel(
         &cur[..],
         tmp,
         width,
@@ -1037,25 +1048,33 @@ fn gaussian_blur_box_approx_anisotropic_with_parallelism(
         deadline_enabled,
         &cancelled,
         &deadline_counter,
+        &deadline_error,
       ) {
-        skipped = true;
+        error = Some(err);
         return;
       }
       std::mem::swap(&mut cur, &mut tmp);
     }
 
     if cancelled.load(Ordering::Relaxed) {
-      skipped = true;
+      error = deadline_error
+        .lock()
+        .ok()
+        .and_then(|slot| slot.clone())
+        .or_else(|| check_active(RenderStage::Paint).err());
       return;
     }
 
-    pixmap.data_mut().copy_from_slice(&cur[..len]);
+    if did_work {
+      pixmap.data_mut().copy_from_slice(&cur[..len]);
+    }
+    blur_applied = did_work;
   });
 
   if let Some(err) = error {
     Err(err)
   } else {
-    Ok(!skipped)
+    Ok(blur_applied)
   }
 }
 
@@ -1084,7 +1103,7 @@ fn blur_anisotropic_box_kernel_mixed_with_parallelism(
 
   let len = blur_buffer_len(width, height, "mixed anisotropic blur")?;
   let mut error: Option<RenderError> = None;
-  let mut skipped = false;
+  let mut blur_applied = false;
   BLUR_SCRATCH.with(|scratch| {
     let mut scratch = scratch.borrow_mut();
     let (a, b) = match scratch.split(len, "mixed anisotropic blur") {
@@ -1122,6 +1141,7 @@ fn blur_anisotropic_box_kernel_mixed_with_parallelism(
 
     if !use_parallel {
       let mut deadline_counter = 0usize;
+      let mut did_work = false;
 
       if use_box_x {
         for size in sizes_x {
@@ -1129,23 +1149,18 @@ fn blur_anisotropic_box_kernel_mixed_with_parallelism(
           if radius == 0 {
             continue;
           }
-          if box_blur_h(
-            &cur[..],
-            tmp,
-            width,
-            height,
-            radius,
-            &mut deadline_counter,
-          ) {
-            skipped = true;
+          did_work = true;
+          if let Err(err) = box_blur_h(&cur[..], tmp, width, height, radius, &mut deadline_counter) {
+            error = Some(err);
             return;
           }
           std::mem::swap(&mut cur, &mut tmp);
         }
       } else if radius_x != 0 && !kernel_x.is_empty() && scale_x > 0 {
+        did_work = true;
         for y in 0..height {
-          if blur_deadline_exceeded(&mut deadline_counter) {
-            skipped = true;
+          if let Some(err) = blur_deadline_exceeded(&mut deadline_counter) {
+            error = Some(err);
             return;
           }
           let row_start = y * row_stride;
@@ -1185,23 +1200,18 @@ fn blur_anisotropic_box_kernel_mixed_with_parallelism(
           if radius == 0 {
             continue;
           }
-          if box_blur_v(
-            &cur[..],
-            tmp,
-            width,
-            height,
-            radius,
-            &mut deadline_counter,
-          ) {
-            skipped = true;
+          did_work = true;
+          if let Err(err) = box_blur_v(&cur[..], tmp, width, height, radius, &mut deadline_counter) {
+            error = Some(err);
             return;
           }
           std::mem::swap(&mut cur, &mut tmp);
         }
       } else if radius_y != 0 && !kernel_y.is_empty() && scale_y > 0 {
+        did_work = true;
         for y in 0..height {
-          if blur_deadline_exceeded(&mut deadline_counter) {
-            skipped = true;
+          if let Some(err) = blur_deadline_exceeded(&mut deadline_counter) {
+            error = Some(err);
             return;
           }
           let out_row = &mut tmp[y * row_stride..(y + 1) * row_stride];
@@ -1233,7 +1243,10 @@ fn blur_anisotropic_box_kernel_mixed_with_parallelism(
         std::mem::swap(&mut cur, &mut tmp);
       }
 
-      pixmap.data_mut().copy_from_slice(cur);
+      if did_work {
+        pixmap.data_mut().copy_from_slice(cur);
+      }
+      blur_applied = did_work;
       return;
     }
 
@@ -1241,6 +1254,8 @@ fn blur_anisotropic_box_kernel_mixed_with_parallelism(
     let deadline_enabled = deadline.as_ref().map_or(false, |d| d.is_enabled());
     let cancelled = AtomicBool::new(false);
     let deadline_counter = AtomicUsize::new(0);
+    let deadline_error: Mutex<Option<RenderError>> = Mutex::new(None);
+    let mut did_work = false;
 
     if use_box_x {
       for size in sizes_x {
@@ -1248,7 +1263,8 @@ fn blur_anisotropic_box_kernel_mixed_with_parallelism(
         if radius == 0 {
           continue;
         }
-        if box_blur_h_parallel(
+        did_work = true;
+        if let Err(err) = box_blur_h_parallel(
           &cur[..],
           tmp,
           width,
@@ -1258,20 +1274,27 @@ fn blur_anisotropic_box_kernel_mixed_with_parallelism(
           deadline_enabled,
           &cancelled,
           &deadline_counter,
+          &deadline_error,
         ) {
-          skipped = true;
+          error = Some(err);
           return;
         }
         std::mem::swap(&mut cur, &mut tmp);
       }
     } else if radius_x != 0 && !kernel_x.is_empty() && scale_x > 0 {
+      did_work = true;
       let src = &cur[..];
       let convolve_row_x = |y: usize, out_row: &mut [u8]| {
         if cancelled.load(Ordering::Relaxed) {
           return;
         }
-        if blur_deadline_exceeded_parallel(deadline_enabled, &deadline_counter) {
+        if let Some(err) = blur_deadline_exceeded_parallel(deadline_enabled, &deadline_counter) {
           cancelled.store(true, Ordering::Relaxed);
+          if let Ok(mut slot) = deadline_error.lock() {
+            if slot.is_none() {
+              *slot = Some(err);
+            }
+          }
           return;
         }
         let src_row = &src[y * row_stride..(y + 1) * row_stride];
@@ -1316,7 +1339,11 @@ fn blur_anisotropic_box_kernel_mixed_with_parallelism(
           .for_each(|(y, out_row)| convolve_row_x(y, out_row));
       }
       if cancelled.load(Ordering::Relaxed) {
-        skipped = true;
+        error = deadline_error
+          .lock()
+          .ok()
+          .and_then(|slot| slot.clone())
+          .or_else(|| check_active(RenderStage::Paint).err());
         return;
       }
       std::mem::swap(&mut cur, &mut tmp);
@@ -1328,7 +1355,8 @@ fn blur_anisotropic_box_kernel_mixed_with_parallelism(
         if radius == 0 {
           continue;
         }
-        if box_blur_v_parallel(
+        did_work = true;
+        if let Err(err) = box_blur_v_parallel(
           &cur[..],
           tmp,
           width,
@@ -1338,20 +1366,27 @@ fn blur_anisotropic_box_kernel_mixed_with_parallelism(
           deadline_enabled,
           &cancelled,
           &deadline_counter,
+          &deadline_error,
         ) {
-          skipped = true;
+          error = Some(err);
           return;
         }
         std::mem::swap(&mut cur, &mut tmp);
       }
     } else if radius_y != 0 && !kernel_y.is_empty() && scale_y > 0 {
+      did_work = true;
       let src = &cur[..];
       let convolve_row_y = |y: usize, out_row: &mut [u8]| {
         if cancelled.load(Ordering::Relaxed) {
           return;
         }
-        if blur_deadline_exceeded_parallel(deadline_enabled, &deadline_counter) {
+        if let Some(err) = blur_deadline_exceeded_parallel(deadline_enabled, &deadline_counter) {
           cancelled.store(true, Ordering::Relaxed);
+          if let Ok(mut slot) = deadline_error.lock() {
+            if slot.is_none() {
+              *slot = Some(err);
+            }
+          }
           return;
         }
         for x in 0..width {
@@ -1396,23 +1431,34 @@ fn blur_anisotropic_box_kernel_mixed_with_parallelism(
       }
 
       if cancelled.load(Ordering::Relaxed) {
-        skipped = true;
+        error = deadline_error
+          .lock()
+          .ok()
+          .and_then(|slot| slot.clone())
+          .or_else(|| check_active(RenderStage::Paint).err());
         return;
       }
       std::mem::swap(&mut cur, &mut tmp);
     }
 
     if cancelled.load(Ordering::Relaxed) {
-      skipped = true;
+      error = deadline_error
+        .lock()
+        .ok()
+        .and_then(|slot| slot.clone())
+        .or_else(|| check_active(RenderStage::Paint).err());
       return;
     }
 
-    pixmap.data_mut().copy_from_slice(cur);
+    if did_work {
+      pixmap.data_mut().copy_from_slice(cur);
+    }
+    blur_applied = did_work;
   });
   if let Some(err) = error {
     Err(err)
   } else {
-    Ok(!skipped)
+    Ok(blur_applied)
   }
 }
 
