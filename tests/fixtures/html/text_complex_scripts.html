@@ -6,94 +6,113 @@
     <style>
         body {
             margin: 0;
-            padding: 20px;
-            font-family: "Noto Sans", "Arial Unicode MS", sans-serif;
-            font-size: 18px;
-            line-height: 1.8;
+            padding: 16px;
+            /* Keep fixtures deterministic under FASTR_USE_BUNDLED_FONTS=1 by preferring bundled family names. */
+            font-family: "Noto Sans", sans-serif;
+            font-size: 16px;
+            line-height: 1.4;
         }
         .label {
-            margin: 15px 0 5px 0;
-            font-weight: bold;
+            width: 200px;
+            font-weight: 600;
             color: #495057;
-            font-size: 14px;
+            font-size: 13px;
         }
-        .container {
-            width: 500px;
+        .row {
+            display: flex;
+            gap: 12px;
+            align-items: baseline;
+            margin-bottom: 10px;
+        }
+        .sample {
+            flex: 1;
             background-color: #f8f9fa;
-            padding: 15px;
-            margin-bottom: 15px;
+            padding: 8px 10px;
             border-radius: 4px;
         }
         .arabic {
-            font-family: "Noto Naskh Arabic", "Arabic Typesetting", serif;
+            font-family: "Noto Sans Arabic", sans-serif;
+            direction: rtl;
+        }
+        .hebrew {
+            /* Noto Sans Hebrew is not currently bundled, but this keeps the fixture stable once it is. */
+            font-family: "Noto Sans Hebrew", "Noto Sans", sans-serif;
             direction: rtl;
         }
         .devanagari {
             font-family: "Noto Sans Devanagari", sans-serif;
         }
+        .bengali {
+            font-family: "Noto Sans Bengali", sans-serif;
+        }
         .thai {
-            font-family: "Noto Sans Thai", sans-serif;
+            font-family: "Noto Sans Thai", "Noto Sans", sans-serif;
         }
         .cjk {
-            font-family: "Noto Sans CJK SC", "SimSun", sans-serif;
+            font-family: "Noto Sans SC", sans-serif;
         }
         .japanese {
-            font-family: "Noto Sans CJK JP", "MS Gothic", sans-serif;
+            font-family: "Noto Sans JP", sans-serif;
         }
         .korean {
-            font-family: "Noto Sans CJK KR", "Malgun Gothic", sans-serif;
+            font-family: "Noto Sans KR", sans-serif;
         }
     </style>
 </head>
 <body>
-    <div class="label">Latin (English)</div>
-    <div class="container">
-        <p>The quick brown fox jumps over the lazy dog.</p>
+    <div class="row">
+        <div class="label">Latin (English)</div>
+        <div class="sample">The quick brown fox jumps over the lazy dog.</div>
     </div>
 
-    <div class="label">Arabic Script (requires RTL and complex shaping)</div>
-    <div class="container arabic">
-        <p>مرحبا بالعالم - السلام عليكم ورحمة الله وبركاته</p>
+    <div class="row">
+        <div class="label">Arabic (RTL + shaping)</div>
+        <div class="sample arabic">مرحبا بالعالم - السلام عليكم ورحمة الله وبركاته</div>
     </div>
 
-    <div class="label">Hebrew Script</div>
-    <div class="container" style="direction: rtl;">
-        <p>שלום עולם - זו דוגמה לטקסט בעברית</p>
+    <div class="row">
+        <div class="label">Hebrew (RTL)</div>
+        <div class="sample hebrew">שלום עולם - זו דוגמה לטקסט בעברית</div>
     </div>
 
-    <div class="label">Devanagari Script (Hindi)</div>
-    <div class="container devanagari">
-        <p>नमस्ते विश्व - यह हिंदी में एक उदाहरण है</p>
+    <div class="row">
+        <div class="label">Devanagari (Hindi)</div>
+        <div class="sample devanagari">नमस्ते विश्व - यह हिंदी में एक उदाहरण है</div>
     </div>
 
-    <div class="label">Thai Script (requires complex clustering)</div>
-    <div class="container thai">
-        <p>สวัสดีชาวโลก - นี่คือตัวอย่างภาษาไทย</p>
+    <div class="row">
+        <div class="label">Bengali</div>
+        <div class="sample bengali">হ্যালো বিশ্ব - এটি বাংলা ভাষার উদাহরণ</div>
     </div>
 
-    <div class="label">Chinese (Simplified)</div>
-    <div class="container cjk">
-        <p>你好世界 - 这是简体中文示例</p>
+    <div class="row">
+        <div class="label">Thai (clustering)</div>
+        <div class="sample thai">สวัสดีชาวโลก - นี่คือตัวอย่างภาษาไทย</div>
     </div>
 
-    <div class="label">Japanese (Kanji, Hiragana, Katakana mix)</div>
-    <div class="container japanese">
-        <p>こんにちは世界 - 日本語のテキスト例です</p>
+    <div class="row">
+        <div class="label">Chinese (Simplified)</div>
+        <div class="sample cjk">你好世界 - 这是简体中文示例</div>
     </div>
 
-    <div class="label">Korean (Hangul)</div>
-    <div class="container korean">
-        <p>안녕하세요 세계 - 한국어 텍스트 예시입니다</p>
+    <div class="row">
+        <div class="label">Japanese (kana mix)</div>
+        <div class="sample japanese">こんにちは世界 - 日本語のテキスト例です</div>
     </div>
 
-    <div class="label">Cyrillic (Russian)</div>
-    <div class="container">
-        <p>Привет мир - Это пример текста на русском языке</p>
+    <div class="row">
+        <div class="label">Korean (Hangul)</div>
+        <div class="sample korean">안녕하세요 세계 - 한국어 텍스트 예시입니다</div>
     </div>
 
-    <div class="label">Greek</div>
-    <div class="container">
-        <p>Γεια σου κόσμε - Αυτό είναι ένα ελληνικό παράδειγμα</p>
+    <div class="row">
+        <div class="label">Cyrillic (Russian)</div>
+        <div class="sample">Привет мир - Это пример текста на русском языке</div>
+    </div>
+
+    <div class="row">
+        <div class="label">Greek</div>
+        <div class="sample">Γεια σου κόσμε - Αυτό είναι ένα ελληνικό παράδειγμα</div>
     </div>
 </body>
 </html>
