@@ -5,6 +5,10 @@
 //! avoid derailing layout when authors provide non-standard tokens.
 
 use crate::dom::{DomNode, DomNodeType};
+use crate::error::{Error, RenderStage, Result};
+use crate::render_control::check_active_periodic;
+
+const VIEWPORT_DEADLINE_STRIDE: usize = 1024;
 
 /// A parsed viewport directive.
 #[derive(Debug, Clone, PartialEq)]
@@ -130,10 +134,27 @@ pub fn parse_meta_viewport_content(content: &str) -> Option<MetaViewport> {
 ///
 /// Unknown and malformed directives are skipped until a valid one is found.
 pub fn extract_viewport(dom: &DomNode) -> Option<MetaViewport> {
+  extract_viewport_impl(dom, None).ok().flatten()
+}
+
+pub(crate) fn extract_viewport_with_deadline(dom: &DomNode) -> Result<Option<MetaViewport>> {
+  let mut deadline_counter = 0usize;
+  extract_viewport_impl(dom, Some(&mut deadline_counter))
+}
+
+fn extract_viewport_impl(
+  dom: &DomNode,
+  mut deadline_counter: Option<&mut usize>,
+) -> Result<Option<MetaViewport>> {
   let mut stack = vec![dom];
   let mut head: Option<&DomNode> = None;
 
   while let Some(node) = stack.pop() {
+    if let Some(counter) = deadline_counter.as_deref_mut() {
+      check_active_periodic(counter, VIEWPORT_DEADLINE_STRIDE, RenderStage::DomParse)
+        .map_err(Error::Render)?;
+    }
+
     if let DomNodeType::ShadowRoot { .. } = node.node_type {
       continue;
     }
@@ -151,11 +172,16 @@ pub fn extract_viewport(dom: &DomNode) -> Option<MetaViewport> {
   }
 
   let Some(head) = head else {
-    return None;
+    return Ok(None);
   };
 
   let mut stack = vec![head];
   while let Some(node) = stack.pop() {
+    if let Some(counter) = deadline_counter.as_deref_mut() {
+      check_active_periodic(counter, VIEWPORT_DEADLINE_STRIDE, RenderStage::DomParse)
+        .map_err(Error::Render)?;
+    }
+
     let tag_name = node.tag_name();
     if let Some(tag) = tag_name {
       if tag.eq_ignore_ascii_case("meta") {
@@ -168,7 +194,7 @@ pub fn extract_viewport(dom: &DomNode) -> Option<MetaViewport> {
         {
           if let Some(content) = content_attr {
             if let Some(parsed) = parse_meta_viewport_content(content) {
-              return Some(parsed);
+              return Ok(Some(parsed));
             }
           }
         }
@@ -188,7 +214,7 @@ pub fn extract_viewport(dom: &DomNode) -> Option<MetaViewport> {
     }
   }
 
-  None
+  Ok(None)
 }
 
 #[derive(Clone, Copy)]
@@ -264,6 +290,10 @@ fn parse_user_scalable(value: &str) -> Option<bool> {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::error::{Error, RenderStage};
+  use crate::render_control::{with_deadline, RenderDeadline};
+  use selectors::context::QuirksMode;
+  use std::time::Duration;
 
   #[test]
   fn parses_common_viewport_pairs() {
@@ -356,5 +386,37 @@ mod tests {
       "<html><head><template><meta name=viewport content='width=device-width'></template></head></html>";
     let dom = crate::dom::parse_html(html).unwrap();
     assert!(extract_viewport(&dom).is_none());
+  }
+
+  #[test]
+  fn extract_viewport_timeout_is_cooperative() {
+    let mut dom = crate::dom::DomNode {
+      node_type: crate::dom::DomNodeType::Document {
+        quirks_mode: QuirksMode::NoQuirks,
+      },
+      children: vec![],
+    };
+    let mut current = &mut dom;
+    for _ in 0..(VIEWPORT_DEADLINE_STRIDE * 2) {
+      current.children.push(crate::dom::DomNode {
+        node_type: crate::dom::DomNodeType::Element {
+          tag_name: "div".to_string(),
+          namespace: crate::dom::HTML_NAMESPACE.to_string(),
+          attributes: vec![],
+        },
+        children: vec![],
+      });
+      current = current.children.last_mut().expect("child pushed");
+    }
+
+    let deadline = RenderDeadline::new(Some(Duration::from_millis(0)), None);
+    let result = with_deadline(Some(&deadline), || extract_viewport_with_deadline(&dom));
+
+    match result {
+      Err(Error::Render(crate::error::RenderError::Timeout { stage, .. })) => {
+        assert_eq!(stage, RenderStage::DomParse);
+      }
+      other => panic!("expected dom_parse timeout, got {other:?}"),
+    }
   }
 }

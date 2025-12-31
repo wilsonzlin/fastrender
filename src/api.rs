@@ -3756,7 +3756,7 @@ impl FastRender {
       None
     };
     let meta_viewport = if self.apply_meta_viewport {
-      crate::html::viewport::extract_viewport(&dom)
+      crate::html::viewport::extract_viewport_with_deadline(&dom)?
     } else {
       None
     };
@@ -4204,7 +4204,7 @@ impl FastRender {
       .device_pixel_ratio
       .unwrap_or(self.device_pixel_ratio);
     let meta_viewport = if self.apply_meta_viewport {
-      crate::html::viewport::extract_viewport(&dom)
+      crate::html::viewport::extract_viewport_with_deadline(&dom)?
     } else {
       None
     };
@@ -4911,7 +4911,7 @@ impl FastRender {
     let requested_viewport = Size::new(width as f32, height as f32);
     let dom = self.parse_html(html)?;
     let meta_viewport = if self.apply_meta_viewport {
-      crate::html::viewport::extract_viewport(&dom)
+      crate::html::viewport::extract_viewport_with_deadline(&dom)?
     } else {
       None
     };
@@ -5507,7 +5507,7 @@ impl FastRender {
 
     let requested_viewport = Size::new(width as f32, height as f32);
     let meta_viewport = if self.apply_meta_viewport {
-      crate::html::viewport::extract_viewport(dom)
+      crate::html::viewport::extract_viewport_with_deadline(dom)?
     } else {
       None
     };
