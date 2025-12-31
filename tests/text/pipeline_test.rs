@@ -251,6 +251,13 @@ fn atomic_clusters_preserve_emoji_variation_sequences() {
   assert_eq!(clusters, vec![(0, text.len())]);
 }
 
+#[test]
+fn atomic_clusters_preserve_crlf() {
+  let text = "\r\n";
+  let clusters = atomic_shaping_clusters(text);
+  assert_eq!(clusters, vec![(0, text.len())]);
+}
+
 // ============================================================================
 // Script Detection Tests
 // ============================================================================

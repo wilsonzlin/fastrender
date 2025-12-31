@@ -1190,6 +1190,24 @@ pub fn atomic_shaping_clusters(text: &str) -> Vec<(usize, usize)> {
     return Vec::new();
   }
 
+  if text.is_ascii() {
+    // ASCII text cannot contain combining marks, ZWJ sequences, or variation selectors, so the
+    // grapheme boundaries are trivial apart from the CRLF special-case in UAX#29.
+    let bytes = text.as_bytes();
+    let mut clusters = Vec::with_capacity(bytes.len());
+    let mut idx = 0usize;
+    while idx < bytes.len() {
+      if bytes[idx] == b'\r' && bytes.get(idx + 1) == Some(&b'\n') {
+        clusters.push((idx, idx + 2));
+        idx += 2;
+      } else {
+        clusters.push((idx, idx + 1));
+        idx += 1;
+      }
+    }
+    return clusters;
+  }
+
   let mut boundaries: Vec<usize> = UnicodeSegmentation::grapheme_indices(text, true)
     .map(|(idx, _)| idx)
     .collect();
