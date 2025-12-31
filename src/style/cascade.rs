@@ -15382,12 +15382,11 @@ fn apply_cascaded_declarations<'a, F>(
   // `revert-layer` is rare, but when we track layer bases we clone the current `ComputedStyle` at
   // each layer boundary. This is expensive for large pages (especially with many custom
   // properties), so avoid the work unless `revert-layer` is actually in play.
-  let mut track_revert_layer = styles.custom_properties.values().any(|value| {
-    value
-      .value
-      .trim()
-      .eq_ignore_ascii_case("revert-layer")
-  });
+  let mut track_revert_layer =
+    styles
+      .custom_properties
+      .values()
+      .any(|value| contains_revert_layer_token(&value.value));
   if !track_revert_layer {
     track_revert_layer = flattened.iter().any(|entry| {
       if entry.is_custom_property {
