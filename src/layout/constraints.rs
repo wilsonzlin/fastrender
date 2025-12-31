@@ -247,6 +247,18 @@ pub struct LayoutConstraints {
   /// Available space in the block direction (height for horizontal-tb)
   pub available_height: AvailableSpace,
 
+  /// Optional override for the box's used border-box inline size.
+  ///
+  /// This is primarily used by layout modes like flex/grid that compute a final
+  /// used size for an item (via Taffy) and need to force that size during block
+  /// layout without mutating the box tree.
+  pub used_border_box_width: Option<f32>,
+
+  /// Optional override for the box's used border-box block size.
+  ///
+  /// See `used_border_box_width`.
+  pub used_border_box_height: Option<f32>,
+
   /// The containing block inline size used for resolving percentage-based lengths. This remains
   /// available even when `available_width` is intrinsic (min-/max-content) or indefinite so that
   /// percentage resolution can still use a definite parent width instead of falling back to the
@@ -278,6 +290,8 @@ impl LayoutConstraints {
     Self {
       available_width,
       available_height,
+      used_border_box_width: None,
+      used_border_box_height: None,
       inline_percentage_base,
     }
   }
@@ -285,6 +299,13 @@ impl LayoutConstraints {
   /// Overrides the inline percentage base while keeping the available space unchanged.
   pub fn with_inline_percentage_base(mut self, base: Option<f32>) -> Self {
     self.inline_percentage_base = base;
+    self
+  }
+
+  /// Overrides the box's used border-box size while keeping the available space unchanged.
+  pub fn with_used_border_box_size(mut self, width: Option<f32>, height: Option<f32>) -> Self {
+    self.used_border_box_width = width;
+    self.used_border_box_height = height;
     self
   }
 

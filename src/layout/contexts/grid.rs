@@ -1501,12 +1501,6 @@ impl GridFormattingContext {
         );
       let fc = factory.get(fc_type);
 
-      let mut layout_child = (*box_node).clone();
-      let mut layout_style = (*layout_child.style).clone();
-      layout_style.width = Some(Length::px(bounds.width()));
-      layout_style.height = Some(Length::px(bounds.height()));
-      layout_child.style = Arc::new(layout_style);
-
       let child_constraints = LayoutConstraints::new(
         CrateAvailableSpace::Definite(bounds.width()),
         CrateAvailableSpace::Definite(bounds.height()),
@@ -1517,7 +1511,18 @@ impl GridFormattingContext {
           .or_else(|| Some(bounds.width())),
       );
 
-      let mut laid_out = fc.layout(&layout_child, &child_constraints)?;
+      let mut laid_out = if fc_type == FormattingContextType::Block {
+        let child_constraints =
+          child_constraints.with_used_border_box_size(Some(bounds.width()), Some(bounds.height()));
+        fc.layout(box_node, &child_constraints)?
+      } else {
+        let mut layout_child = (*box_node).clone();
+        let mut layout_style = (*layout_child.style).clone();
+        layout_style.width = Some(Length::px(bounds.width()));
+        layout_style.height = Some(Length::px(bounds.height()));
+        layout_child.style = Arc::new(layout_style);
+        fc.layout(&layout_child, &child_constraints)?
+      };
       translate_fragment_tree(&mut laid_out, Point::new(bounds.x(), bounds.y()));
       laid_out.content = FragmentContent::Block {
         box_id: Some(box_node.id),

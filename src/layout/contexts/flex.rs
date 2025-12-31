@@ -3355,28 +3355,39 @@ impl FlexFormattingContext {
           let selector_for_profile = node_timer
             .as_ref()
             .and_then(|_| child_box.debug_info.as_ref().map(|d| d.to_selector()));
-          // Preserve the flex-resolved size by overriding the child's used width/height
-          // with the Taffy result before laying it out in its own formatting context.
-          let mut layout_child = child_box.clone();
-          let mut layout_style = (*layout_child.style).clone();
           let size_eps = 0.01;
-          if raw_layout_width.is_finite() && raw_layout_width > size_eps {
-            layout_style.width = Some(Length::px(raw_layout_width));
+          let used_border_box_width =
+            (raw_layout_width.is_finite() && raw_layout_width > size_eps).then_some(raw_layout_width);
+          let used_border_box_height =
+            (raw_layout_height.is_finite() && raw_layout_height > size_eps).then_some(raw_layout_height);
+
+          // Preserve the flex-resolved size. For block formatting contexts, pass the used border-box
+          // size through constraints to avoid deep-cloning the box subtree just to override style.
+          let layout_child_storage = if fc_type == FormattingContextType::Block {
+            None
           } else {
-            layout_style.width = None;
-            layout_style.min_width = None;
-            layout_style.max_width = None;
-          }
-          if raw_layout_height.is_finite() && raw_layout_height > size_eps {
-            layout_style.height = Some(Length::px(raw_layout_height));
-          } else {
-            layout_style.height = None;
-            layout_style.min_height = None;
-            layout_style.max_height = None;
-          }
-          layout_child.style = std::sync::Arc::new(layout_style);
+            let mut layout_child = child_box.clone();
+            let mut layout_style = (*layout_child.style).clone();
+            if used_border_box_width.is_some() {
+              layout_style.width = Some(Length::px(raw_layout_width));
+            } else {
+              layout_style.width = None;
+              layout_style.min_width = None;
+              layout_style.max_width = None;
+            }
+            if used_border_box_height.is_some() {
+              layout_style.height = Some(Length::px(raw_layout_height));
+            } else {
+              layout_style.height = None;
+              layout_style.min_height = None;
+              layout_style.max_height = None;
+            }
+            layout_child.style = Arc::new(layout_style);
+            Some(layout_child)
+          };
+          let layout_node: &BoxNode = layout_child_storage.as_ref().unwrap_or(child_box);
           let rect_main_def = if main_axis_is_row { rect_w } else { rect_h };
-          let child_constraints = if needs_intrinsic_main {
+          let base_constraints = if needs_intrinsic_main {
             let width = if main_axis_is_row {
               if raw_layout_width > eps {
                 CrateAvailableSpace::Definite(raw_layout_width)
@@ -3410,7 +3421,12 @@ impl FlexFormattingContext {
               CrateAvailableSpace::Definite(layout_height),
             )
           };
-          let mut child_fragment = fc.layout(&layout_child, &child_constraints)?;
+          let child_constraints = if fc_type == FormattingContextType::Block {
+            base_constraints.with_used_border_box_size(used_border_box_width, used_border_box_height)
+          } else {
+            base_constraints
+          };
+          let mut child_fragment = fc.layout(layout_node, &child_constraints)?;
           flex_profile::record_node_layout(
             child_box.id,
             selector_for_profile.as_deref(),
@@ -3471,7 +3487,12 @@ impl FlexFormattingContext {
             let mc_selector = mc_timer
               .as_ref()
               .and_then(|_| child_box.debug_info.as_ref().map(|d| d.to_selector()));
-            if let Ok(mut mc_fragment) = fc.layout(&layout_child, &mc_constraints) {
+            let mc_constraints = if fc_type == FormattingContextType::Block {
+              mc_constraints.with_used_border_box_size(used_border_box_width, used_border_box_height)
+            } else {
+              mc_constraints
+            };
+            if let Ok(mut mc_fragment) = fc.layout(layout_node, &mc_constraints) {
               flex_profile::record_node_layout(child_box.id, mc_selector.as_deref(), mc_timer);
               let mut mc_size = Self::fragment_subtree_size(&mc_fragment);
               if rect.width().is_finite() && rect.width() > 0.0 {

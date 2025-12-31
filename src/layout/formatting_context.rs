@@ -485,7 +485,7 @@ fn subtree_contains_subgrid(node: &BoxNode, epoch: usize) -> bool {
 fn layout_constraints_hash(constraints: &LayoutConstraints) -> u64 {
   let mut h = DefaultHasher::new();
   let hash_space = |space: &crate::layout::constraints::AvailableSpace,
-                    hasher: &mut DefaultHasher| match space {
+                     hasher: &mut DefaultHasher| match space {
     crate::layout::constraints::AvailableSpace::Definite(v) => {
       0u8.hash(hasher);
       v.to_bits().hash(hasher);
@@ -496,6 +496,20 @@ fn layout_constraints_hash(constraints: &LayoutConstraints) -> u64 {
   };
   hash_space(&constraints.available_width, &mut h);
   hash_space(&constraints.available_height, &mut h);
+  match constraints.used_border_box_width {
+    Some(v) => {
+      1u8.hash(&mut h);
+      v.to_bits().hash(&mut h);
+    }
+    None => 0u8.hash(&mut h),
+  }
+  match constraints.used_border_box_height {
+    Some(v) => {
+      1u8.hash(&mut h);
+      v.to_bits().hash(&mut h);
+    }
+    None => 0u8.hash(&mut h),
+  }
   match constraints.inline_percentage_base {
     Some(v) => {
       1u8.hash(&mut h);

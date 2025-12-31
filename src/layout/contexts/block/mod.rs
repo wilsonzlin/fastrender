@@ -310,8 +310,50 @@ impl BlockFormattingContext {
             );
     }
 
+    // Pre-resolve vertical edges so box-sizing and used-size overrides can convert border-box sizes
+    // into content sizes before laying out descendants.
+    let border_top = resolve_border_side(
+      style,
+      block_sides.0,
+      containing_width,
+      &self.font_context,
+      self.viewport_size,
+    );
+    let border_bottom = resolve_border_side(
+      style,
+      block_sides.1,
+      containing_width,
+      &self.font_context,
+      self.viewport_size,
+    );
+    let mut padding_top = resolve_padding_side(
+      style,
+      block_sides.0,
+      containing_width,
+      &self.font_context,
+      self.viewport_size,
+    );
+    let mut padding_bottom = resolve_padding_side(
+      style,
+      block_sides.1,
+      containing_width,
+      &self.font_context,
+      self.viewport_size,
+    );
+    let reserve_horizontal_gutter = matches!(style.overflow_x, Overflow::Scroll)
+      || (style.scrollbar_gutter.stable
+        && matches!(style.overflow_x, Overflow::Auto | Overflow::Scroll));
+    if reserve_horizontal_gutter {
+      let gutter = resolve_scrollbar_width(style);
+      if style.scrollbar_gutter.both_edges {
+        padding_top += gutter;
+      }
+      padding_bottom += gutter;
+    }
+    let vertical_edges = border_top + padding_top + padding_bottom + border_bottom;
+
     // Create constraints for child layout
-    let specified_height = style.height.as_ref().and_then(|h| {
+    let mut specified_height = style.height.as_ref().and_then(|h| {
       resolve_length_with_percentage(
         *h,
         containing_height,
@@ -320,6 +362,14 @@ impl BlockFormattingContext {
         style.root_font_size,
       )
     });
+    specified_height = specified_height
+      .map(|h| content_size_from_box_sizing(h, vertical_edges, style.box_sizing))
+      .or_else(|| {
+        (style.height.is_none())
+          .then_some(constraints.used_border_box_height)
+          .flatten()
+          .map(|h| (h - vertical_edges).max(0.0))
+      });
     let child_height_space = specified_height
       .map(AvailableSpace::Definite)
       .unwrap_or(AvailableSpace::Indefinite);
@@ -432,6 +482,30 @@ impl BlockFormattingContext {
       computed_width.content_width = shrink_content;
       computed_width.margin_left = margin_left;
       computed_width.margin_right = margin_right;
+    }
+
+    if style.width.is_none() {
+      if let Some(used_border_box) = constraints.used_border_box_width {
+        let horizontal_edges = computed_width.border_left
+          + computed_width.padding_left
+          + computed_width.padding_right
+          + computed_width.border_right;
+        let used_content = (used_border_box - horizontal_edges).max(0.0);
+        let (margin_left, margin_right) = recompute_margins_for_width(
+          style,
+          containing_width,
+          used_content,
+          computed_width.border_left,
+          computed_width.padding_left,
+          computed_width.padding_right,
+          computed_width.border_right,
+          self.viewport_size,
+          &self.font_context,
+        );
+        computed_width.content_width = used_content;
+        computed_width.margin_left = margin_left;
+        computed_width.margin_right = margin_right;
+      }
     }
 
     let child_constraints = LayoutConstraints::new(
@@ -618,46 +692,6 @@ impl BlockFormattingContext {
       }
     };
 
-    // Compute height (resolve em/rem units with font-size)
-    let border_top = resolve_border_side(
-      style,
-      block_sides.0,
-      containing_width,
-      &self.font_context,
-      self.viewport_size,
-    );
-    let border_bottom = resolve_border_side(
-      style,
-      block_sides.1,
-      containing_width,
-      &self.font_context,
-      self.viewport_size,
-    );
-    let mut padding_top = resolve_padding_side(
-      style,
-      block_sides.0,
-      containing_width,
-      &self.font_context,
-      self.viewport_size,
-    );
-    let mut padding_bottom = resolve_padding_side(
-      style,
-      block_sides.1,
-      containing_width,
-      &self.font_context,
-      self.viewport_size,
-    );
-    let reserve_horizontal_gutter = matches!(style.overflow_x, Overflow::Scroll)
-      || (style.scrollbar_gutter.stable
-        && matches!(style.overflow_x, Overflow::Auto | Overflow::Scroll));
-    if reserve_horizontal_gutter {
-      let gutter = resolve_scrollbar_width(style);
-      if style.scrollbar_gutter.both_edges {
-        padding_top += gutter;
-      }
-      padding_bottom += gutter;
-    }
-
     // Height computation (CSS 2.1 Section 10.6.3) with aspect-ratio adjustment (CSS Sizing L4)
     let mut height = specified_height.unwrap_or(content_height);
     if specified_height.is_none() {
@@ -683,6 +717,7 @@ impl BlockFormattingContext {
           style.root_font_size,
         )
       })
+      .map(|h| content_size_from_box_sizing(h, vertical_edges, style.box_sizing))
       .unwrap_or(0.0);
     let max_height = style
       .max_height
@@ -696,6 +731,7 @@ impl BlockFormattingContext {
           style.root_font_size,
         )
       })
+      .map(|h| content_size_from_box_sizing(h, vertical_edges, style.box_sizing))
       .unwrap_or(f32::INFINITY);
     let max_height = if max_height.is_finite() && max_height < min_height {
       min_height
@@ -3166,6 +3202,30 @@ impl FormattingContext for BlockFormattingContext {
       }
     }
 
+    if style_for_width.width.is_none() {
+      if let Some(used_border_box) = constraints.used_border_box_width {
+        let used_content = (used_border_box - horizontal_edges).max(0.0);
+        if self.flex_item_mode {
+          computed_width.content_width = used_content;
+        } else {
+          let (margin_left, margin_right) = recompute_margins_for_width(
+            style,
+            containing_width,
+            used_content,
+            computed_width.border_left,
+            computed_width.padding_left,
+            computed_width.padding_right,
+            computed_width.border_right,
+            self.viewport_size,
+            &self.font_context,
+          );
+          computed_width.content_width = used_content;
+          computed_width.margin_left = margin_left;
+          computed_width.margin_right = margin_right;
+        }
+      }
+    }
+
     let border_top = resolve_length_for_width(
       style.border_top_width,
       containing_width,
@@ -3207,7 +3267,7 @@ impl FormattingContext for BlockFormattingContext {
     }
     let vertical_edges = border_top + padding_top + padding_bottom + border_bottom;
 
-    let resolved_height = style
+    let mut resolved_height = style
       .height
       .as_ref()
       .and_then(|h| {
@@ -3220,6 +3280,11 @@ impl FormattingContext for BlockFormattingContext {
         )
       })
       .map(|h| content_size_from_box_sizing(h, vertical_edges, style.box_sizing));
+    if style.height.is_none() {
+      if let Some(used_border_box) = constraints.used_border_box_height {
+        resolved_height = Some((used_border_box - vertical_edges).max(0.0));
+      }
+    }
     let child_height_space = resolved_height
       .map(|h| AvailableSpace::Definite(h.max(0.0)))
       .unwrap_or(AvailableSpace::Indefinite);
@@ -4039,6 +4104,56 @@ mod tests {
     style.display = Display::Block;
     style.height = Some(Length::px(height));
     Arc::new(style)
+  }
+
+  #[test]
+  fn percent_heights_resolve_with_used_height_override() {
+    let mut parent_style = ComputedStyle::default();
+    parent_style.display = Display::Block;
+    parent_style.padding_top = Length::px(10.0);
+    parent_style.padding_bottom = Length::px(10.0);
+    parent_style.border_top_width = Length::px(5.0);
+    parent_style.border_bottom_width = Length::px(5.0);
+
+    let mut child_style = ComputedStyle::default();
+    child_style.display = Display::Block;
+    child_style.height = Some(Length::percent(50.0));
+
+    let child = BoxNode::new_block(
+      Arc::new(child_style),
+      FormattingContextType::Block,
+      vec![],
+    );
+    let parent = BoxNode::new_block(
+      Arc::new(parent_style),
+      FormattingContextType::Block,
+      vec![child],
+    );
+
+    let viewport = Size::new(300.0, 300.0);
+    let fc = BlockFormattingContext::with_font_context_viewport_and_cb(
+      FontContext::new(),
+      viewport,
+      ContainingBlock::viewport(viewport),
+    );
+    let constraints = LayoutConstraints::new(AvailableSpace::Definite(300.0), AvailableSpace::Indefinite)
+      .with_used_border_box_size(None, Some(200.0));
+
+    let fragment = fc.layout(&parent, &constraints).unwrap();
+    assert!(
+      (fragment.bounds.height() - 200.0).abs() < 0.5,
+      "expected parent border-box height 200, got {}",
+      fragment.bounds.height()
+    );
+    assert_eq!(fragment.children.len(), 1);
+
+    // Parent vertical edges = 5 + 10 + 10 + 5 = 30px, so the used content height is 170px.
+    // The child has height:50%, so it should resolve to 85px.
+    assert!(
+      (fragment.children[0].bounds.height() - 85.0).abs() < 0.5,
+      "expected child height ~85, got {}",
+      fragment.children[0].bounds.height()
+    );
   }
 
   #[test]
