@@ -10,6 +10,7 @@ use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::BuildHasherDefault;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Mutex;
 use tiny_skia::Pixmap;
 
 const FAST_GAUSS_THRESHOLD_SIGMA: f32 = 4.0;
@@ -1284,6 +1285,14 @@ fn tile_blur(
     return Ok(None);
   }
 
+  let deadline = active_deadline();
+  let deadline_enabled = deadline.as_ref().map_or(false, |d| d.is_enabled());
+  if deadline_enabled && check_active(RenderStage::Paint).is_err() {
+    let mut out = new_pixmap_with_context(width, height, "tile blur output")?;
+    out.data_mut().copy_from_slice(pixmap.data());
+    return Ok(Some((out, 0)));
+  }
+
   let pad_x = (sigma_x.abs() * 3.0).ceil() as u32;
   let pad_y = (sigma_y.abs() * 3.0).ceil() as u32;
   let budget_pixels = config.max_bytes / 4;
@@ -1297,11 +1306,21 @@ fn tile_blur(
     return Ok(None);
   }
 
-  let mut out = new_pixmap_with_context(width, height, "tile blur output")?;
-  let source = pixmap.data();
-  let row_stride = width as usize * 4;
-  let mut tiles = 0usize;
+  #[derive(Clone, Copy, Debug)]
+  struct TileJob {
+    x: u32,
+    y: u32,
+    copy_w: u32,
+    copy_h: u32,
+    src_min_x: u32,
+    src_min_y: u32,
+    src_w: u32,
+    src_h: u32,
+    offset_x: u32,
+    offset_y: u32,
+  }
 
+  let mut jobs = Vec::new();
   let mut y = 0;
   while y < height {
     let copy_h = tile_h.min(height - y);
@@ -1314,40 +1333,210 @@ fn tile_blur(
       let src_max_y = (y + copy_h + pad_y).min(height);
       let src_w = src_max_x.saturating_sub(src_min_x);
       let src_h = src_max_y.saturating_sub(src_min_y);
-
-      let mut tile = match new_pixmap_with_context(src_w, src_h, "tile blur tile") {
-        Ok(p) => p,
-        Err(err) => return Err(err),
-      };
-      let tile_stride = src_w as usize * 4;
-      for row in 0..src_h as usize {
-        let src_start = (src_min_y as usize + row) * row_stride + src_min_x as usize * 4;
-        let dst_start = row * tile_stride;
-        tile.data_mut()[dst_start..dst_start + tile_stride]
-          .copy_from_slice(&source[src_start..src_start + tile_stride]);
-      }
-
-      blur_anisotropic_body(&mut tile, sigma_x, sigma_y)?;
-
-      let offset_x = (x - src_min_x) as usize;
-      let offset_y = (y - src_min_y) as usize;
-      let copy_w_bytes = copy_w as usize * 4;
-      let out_stride = out.width() as usize * 4;
-      let tile_stride = src_w as usize * 4;
-      let tile_data = tile.data();
-      let out_data = out.data_mut();
-
-      for row in 0..copy_h as usize {
-        let src_start = (offset_y + row) * tile_stride + offset_x * 4;
-        let dst_start = (y as usize + row) * out_stride + x as usize * 4;
-        out_data[dst_start..dst_start + copy_w_bytes]
-          .copy_from_slice(&tile_data[src_start..src_start + copy_w_bytes]);
-      }
-
-      tiles += 1;
+      jobs.push(TileJob {
+        x,
+        y,
+        copy_w,
+        copy_h,
+        src_min_x,
+        src_min_y,
+        src_w,
+        src_h,
+        offset_x: x - src_min_x,
+        offset_y: y - src_min_y,
+      });
       x = x.saturating_add(tile_w);
     }
     y = y.saturating_add(tile_h);
+  }
+
+  let tiles = jobs.len();
+  if tiles == 0 {
+    return Ok(None);
+  }
+
+  let mut out = new_pixmap_with_context(width, height, "tile blur output")?;
+  let source = pixmap.data();
+  let row_stride = width as usize * 4;
+
+  // When tiles are small enough that per-tile blur won't parallelize, distribute work across tiles
+  // instead of paying nested rayon overhead inside each tile blur pass.
+  let parallel_tiles =
+    budget_pixels < PARALLEL_BLUR_MIN_PIXELS && tiles > 1 && rayon::current_num_threads() > 1;
+
+  if parallel_tiles {
+    let out_stride = row_stride;
+    let out_base = out.data_mut().as_mut_ptr() as usize;
+    let cancelled = AtomicBool::new(false);
+    let deadline_counter = AtomicUsize::new(0);
+    let error: Mutex<Option<RenderError>> = Mutex::new(None);
+
+    jobs.into_par_iter().for_each(|job| {
+      if cancelled.load(Ordering::Relaxed) {
+        return;
+      }
+      let out_ptr = out_base as *mut u8;
+
+      let run = || {
+        if cancelled.load(Ordering::Relaxed) {
+          return;
+        }
+        if blur_deadline_exceeded_parallel(deadline_enabled, &deadline_counter) {
+          cancelled.store(true, Ordering::Relaxed);
+          return;
+        }
+        if deadline_enabled && check_active(RenderStage::Paint).is_err() {
+          cancelled.store(true, Ordering::Relaxed);
+          return;
+        }
+
+        let mut tile = match new_pixmap_with_context(job.src_w, job.src_h, "tile blur tile") {
+          Ok(p) => p,
+          Err(err) => {
+            cancelled.store(true, Ordering::Relaxed);
+            if let Ok(mut slot) = error.lock() {
+              if slot.is_none() {
+                *slot = Some(err);
+              }
+            }
+            return;
+          }
+        };
+
+        let tile_stride = job.src_w as usize * 4;
+        for row in 0..job.src_h as usize {
+          if cancelled.load(Ordering::Relaxed) {
+            return;
+          }
+          if blur_deadline_exceeded_parallel(deadline_enabled, &deadline_counter) {
+            cancelled.store(true, Ordering::Relaxed);
+            return;
+          }
+          let src_start = (job.src_min_y as usize + row) * row_stride + job.src_min_x as usize * 4;
+          let dst_start = row * tile_stride;
+          tile.data_mut()[dst_start..dst_start + tile_stride]
+            .copy_from_slice(&source[src_start..src_start + tile_stride]);
+        }
+
+        if let Err(err) =
+          blur_anisotropic_body_with_parallelism(&mut tile, sigma_x, sigma_y, BlurParallelism::Serial)
+        {
+          cancelled.store(true, Ordering::Relaxed);
+          if let Ok(mut slot) = error.lock() {
+            if slot.is_none() {
+              *slot = Some(err);
+            }
+          }
+          return;
+        }
+
+        if deadline_enabled && check_active(RenderStage::Paint).is_err() {
+          cancelled.store(true, Ordering::Relaxed);
+          return;
+        }
+
+        let offset_x = job.offset_x as usize;
+        let offset_y = job.offset_y as usize;
+        let copy_w_bytes = job.copy_w as usize * 4;
+        let tile_data = tile.data();
+        for row in 0..job.copy_h as usize {
+          if cancelled.load(Ordering::Relaxed) {
+            return;
+          }
+          if blur_deadline_exceeded_parallel(deadline_enabled, &deadline_counter) {
+            cancelled.store(true, Ordering::Relaxed);
+            return;
+          }
+          let src_start = (offset_y + row) * tile_stride + offset_x * 4;
+          let dst_start = (job.y as usize + row) * out_stride + job.x as usize * 4;
+          unsafe {
+            std::ptr::copy_nonoverlapping(
+              tile_data.as_ptr().add(src_start),
+              out_ptr.add(dst_start),
+              copy_w_bytes,
+            );
+          }
+        }
+      };
+
+      if deadline_enabled {
+        with_deadline(deadline.as_ref(), run);
+      } else {
+        run();
+      }
+    });
+
+    if let Ok(mut slot) = error.lock() {
+      if let Some(err) = slot.take() {
+        return Err(err);
+      }
+    }
+
+    if cancelled.load(Ordering::Relaxed) {
+      out.data_mut().copy_from_slice(source);
+      return Ok(Some((out, 0)));
+    }
+
+    return Ok(Some((out, tiles)));
+  }
+
+  let mut deadline_counter = 0usize;
+  let mut cancelled = false;
+  for job in jobs {
+    if blur_deadline_exceeded(&mut deadline_counter) {
+      cancelled = true;
+      break;
+    }
+
+    let mut tile = new_pixmap_with_context(job.src_w, job.src_h, "tile blur tile")?;
+    let tile_stride = job.src_w as usize * 4;
+    for row in 0..job.src_h as usize {
+      if blur_deadline_exceeded(&mut deadline_counter) {
+        cancelled = true;
+        break;
+      }
+      let src_start = (job.src_min_y as usize + row) * row_stride + job.src_min_x as usize * 4;
+      let dst_start = row * tile_stride;
+      tile.data_mut()[dst_start..dst_start + tile_stride]
+        .copy_from_slice(&source[src_start..src_start + tile_stride]);
+    }
+    if cancelled {
+      break;
+    }
+
+    blur_anisotropic_body(&mut tile, sigma_x, sigma_y)?;
+
+    // If the blur was cancelled mid-tile, skip the entire tiled blur and leave the pixmap unchanged.
+    if deadline_enabled && check_active(RenderStage::Paint).is_err() {
+      cancelled = true;
+      break;
+    }
+
+    let offset_x = job.offset_x as usize;
+    let offset_y = job.offset_y as usize;
+    let copy_w_bytes = job.copy_w as usize * 4;
+    let tile_data = tile.data();
+    {
+      let out_data = out.data_mut();
+      for row in 0..job.copy_h as usize {
+        if blur_deadline_exceeded(&mut deadline_counter) {
+          cancelled = true;
+          break;
+        }
+        let src_start = (offset_y + row) * tile_stride + offset_x * 4;
+        let dst_start = (job.y as usize + row) * row_stride + job.x as usize * 4;
+        out_data[dst_start..dst_start + copy_w_bytes]
+          .copy_from_slice(&tile_data[src_start..src_start + copy_w_bytes]);
+      }
+    }
+    if cancelled {
+      break;
+    }
+  }
+
+  if cancelled {
+    out.data_mut().copy_from_slice(source);
+    return Ok(Some((out, 0)));
   }
 
   Ok(Some((out, tiles)))
@@ -1433,6 +1622,8 @@ mod tests {
   use super::*;
   use crate::paint::painter::{enable_paint_diagnostics, take_paint_diagnostics};
   use crate::paint::pixmap::new_pixmap;
+  use crate::render_control::RenderDeadline;
+  use std::sync::Arc;
   use tiny_skia::PremultipliedColorU8;
 
   #[test]
@@ -1505,6 +1696,32 @@ mod tests {
     assert!(
       pixmap.pixels().iter().any(|p| p.alpha() > 0),
       "expected blurred output to retain some alpha"
+    );
+  }
+
+  #[test]
+  fn tile_blur_respects_deadline_cancellation() {
+    let mut cache = BlurCache::new(FilterCacheConfig {
+      max_items: 0,
+      max_bytes: 4 * 1024,
+    });
+    let mut pixmap = new_pixmap(64, 64).unwrap();
+    for (i, px) in pixmap.pixels_mut().iter_mut().enumerate() {
+      let a = (i % 256) as u8;
+      *px = PremultipliedColorU8::from_rgba(a, a, a, a).unwrap();
+    }
+    let original = pixmap.data().to_vec();
+
+    let cancel: Arc<crate::render_control::CancelCallback> = Arc::new(|| true);
+    let deadline = RenderDeadline::new(None, Some(cancel));
+    with_deadline(Some(&deadline), || {
+      apply_gaussian_blur_cached(&mut pixmap, 3.0, 3.0, Some(&mut cache), 1.0).unwrap();
+    });
+
+    assert_eq!(
+      pixmap.data(),
+      original.as_slice(),
+      "expected tiled blur to skip when deadline is cancelled"
     );
   }
 
