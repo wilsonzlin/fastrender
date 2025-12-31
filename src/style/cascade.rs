@@ -7282,6 +7282,30 @@ mod tests {
   use crate::style::ComputedStyle;
   use crate::style::CursorKeyword;
   use crate::style::OutlineStyle;
+  use std::sync::{Mutex, MutexGuard, OnceLock};
+
+  fn cascade_global_test_lock() -> MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+  }
+
+  struct AncestorBloomEnabledGuard {
+    prev: bool,
+  }
+
+  impl AncestorBloomEnabledGuard {
+    fn new(enabled: bool) -> Self {
+      let prev = crate::dom::ancestor_bloom_enabled();
+      crate::dom::set_ancestor_bloom_enabled(enabled);
+      Self { prev }
+    }
+  }
+
+  impl Drop for AncestorBloomEnabledGuard {
+    fn drop(&mut self) {
+      crate::dom::set_ancestor_bloom_enabled(self.prev);
+    }
+  }
 
   fn element_with_style(style: &str) -> DomNode {
     DomNode {
@@ -8328,7 +8352,8 @@ mod tests {
 
   #[test]
   fn ancestor_bloom_filter_is_built_incrementally() {
-    crate::dom::set_ancestor_bloom_enabled(true);
+    let _lock = cascade_global_test_lock();
+    let _ancestor_bloom = AncestorBloomEnabledGuard::new(true);
 
     let depth = 4usize;
     let mut current = DomNode {
@@ -8807,6 +8832,7 @@ mod tests {
 
   #[test]
   fn cascade_profile_tracks_bloom_fast_rejects() {
+    let _lock = cascade_global_test_lock();
     crate::dom::set_selector_bloom_enabled(true);
 
     let prev_profile_enabled = cascade_profile_enabled();
@@ -8847,6 +8873,8 @@ mod tests {
 
   #[test]
   fn ancestor_bloom_toggle_preserves_cascade_output() {
+    let _lock = cascade_global_test_lock();
+    let _ancestor_bloom = AncestorBloomEnabledGuard::new(true);
     let dom = DomNode {
       node_type: DomNodeType::Element {
         tag_name: "div".to_string(),
@@ -9129,7 +9157,8 @@ slot[name=\"s\"]::slotted(.assigned) { color: rgb(4, 5, 6); }"
 
   #[test]
   fn ancestor_bloom_shadow_scoping_preserves_cascade_output() {
-    crate::dom::set_ancestor_bloom_enabled(true);
+    let _lock = cascade_global_test_lock();
+    let _ancestor_bloom = AncestorBloomEnabledGuard::new(true);
 
     let dom = simple_shadow_dom_fixture(
       r#"
@@ -9166,7 +9195,8 @@ slot[name=\"s\"]::slotted(.assigned) { color: rgb(4, 5, 6); }"
 
   #[test]
   fn ancestor_bloom_shadow_scoping_increases_fast_rejects() {
-    crate::dom::set_ancestor_bloom_enabled(true);
+    let _lock = cascade_global_test_lock();
+    let _ancestor_bloom = AncestorBloomEnabledGuard::new(true);
 
     let prev_profile_enabled = cascade_profile_enabled();
     set_cascade_profile_enabled(true);
