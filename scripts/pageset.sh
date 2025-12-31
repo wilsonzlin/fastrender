@@ -6,11 +6,33 @@ set -euo pipefail
 #
 # Environment overrides:
 #   JOBS=8 FETCH_TIMEOUT=30 RENDER_TIMEOUT=5 DISK_CACHE=0 NO_DISK_CACHE=1
+#   RAYON_NUM_THREADS=4 FASTR_LAYOUT_PARALLEL=off|on|auto
 
-JOBS="${JOBS:-$(nproc)}"
+TOTAL_CPUS="$(nproc)"
+JOBS="${JOBS:-${TOTAL_CPUS}}"
 FETCH_TIMEOUT="${FETCH_TIMEOUT:-30}"
 RENDER_TIMEOUT="${RENDER_TIMEOUT:-5}"
 USE_DISK_CACHE="${DISK_CACHE:-1}"
+
+if [[ "${JOBS}" -lt 1 ]]; then
+  echo "JOBS must be > 0" >&2
+  exit 2
+fi
+
+# pageset_progress runs up to JOBS worker processes in parallel (one per page). The renderer
+# itself can also use Rayon threads (e.g., layout fan-out). Without a cap, enabling layout
+# parallelism by default can oversubscribe CPUs catastrophically (JOBS * nproc threads).
+THREADS_PER_WORKER=$((TOTAL_CPUS / JOBS))
+if [[ "${THREADS_PER_WORKER}" -lt 1 ]]; then
+  THREADS_PER_WORKER=1
+fi
+
+if [[ -z "${RAYON_NUM_THREADS:-}" ]]; then
+  export RAYON_NUM_THREADS="${THREADS_PER_WORKER}"
+fi
+if [[ -z "${FASTR_LAYOUT_PARALLEL:-}" ]]; then
+  export FASTR_LAYOUT_PARALLEL=auto
+fi
 
 if [[ -n "${NO_DISK_CACHE:-}" ]]; then
   USE_DISK_CACHE=0
@@ -47,5 +69,5 @@ fi
 echo "Fetching pages (jobs=${JOBS}, timeout=${FETCH_TIMEOUT}s, disk_cache=${USE_DISK_CACHE})..."
 cargo run --release "${FEATURE_ARGS[@]}" --bin fetch_pages -- --jobs "${JOBS}" --timeout "${FETCH_TIMEOUT}"
 
-echo "Updating progress/pages (jobs=${JOBS}, hard timeout=${RENDER_TIMEOUT}s, disk_cache=${USE_DISK_CACHE})..."
+echo "Updating progress/pages (jobs=${JOBS}, hard timeout=${RENDER_TIMEOUT}s, disk_cache=${USE_DISK_CACHE}, rayon_threads=${RAYON_NUM_THREADS}, layout_parallel=${FASTR_LAYOUT_PARALLEL})..."
 cargo run --release "${FEATURE_ARGS[@]}" --bin pageset_progress -- run --jobs "${JOBS}" --timeout "${RENDER_TIMEOUT}" --bundled-fonts "${ARGS[@]}"
