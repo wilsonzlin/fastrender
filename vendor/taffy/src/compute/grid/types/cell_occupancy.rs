@@ -3,6 +3,7 @@ use super::TrackCounts;
 use crate::compute::grid::OriginZeroLine;
 use crate::geometry::AbsoluteAxis;
 use crate::geometry::Line;
+use crate::util::check_layout_abort;
 use crate::util::sys::Vec;
 use core::cmp::max;
 use core::fmt::Debug;
@@ -209,6 +210,7 @@ impl CellOccupancyMatrix {
 
     // Search for occupied cells in the specified area. Out of bounds cells are considered unoccupied.
     for x in row_range {
+      check_layout_abort();
       for y in col_range.clone() {
         match self.inner.get(x as usize, y as usize) {
           None | Some(CellOccupancyState::Unoccupied) => continue,

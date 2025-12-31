@@ -1,9 +1,13 @@
 //! Helpful misc. utilities such as a function to debug print a tree
 mod math;
+pub(crate) mod layout_abort;
 mod resolve;
 pub(crate) mod sys;
 
 pub use math::MaybeMath;
+#[cfg(feature = "std")]
+pub(crate) use layout_abort::{with_layout_abort, LayoutAbort};
+pub(crate) use layout_abort::check_layout_abort;
 pub use resolve::{MaybeResolve, ResolveOrZero};
 
 #[doc(hidden)]

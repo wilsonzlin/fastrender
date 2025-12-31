@@ -1264,6 +1264,16 @@ mod tests {
       #[cfg(feature = "grid")]
       grid_template_columns: Default::default(),
       #[cfg(feature = "grid")]
+      subgrid_rows: false,
+      #[cfg(feature = "grid")]
+      subgrid_columns: false,
+      #[cfg(feature = "grid")]
+      axes_swapped: false,
+      #[cfg(feature = "grid")]
+      subgrid_row_names: Default::default(),
+      #[cfg(feature = "grid")]
+      subgrid_column_names: Default::default(),
+      #[cfg(feature = "grid")]
       grid_template_row_names: Default::default(),
       #[cfg(feature = "grid")]
       grid_template_column_names: Default::default(),
@@ -1355,12 +1365,12 @@ mod tests {
     assert_type_size::<GridTemplateComponent<String>>(56);
     assert_type_size::<GridPlacement<String>>(32);
     assert_type_size::<Line<GridPlacement<String>>>(64);
-    assert_type_size::<Style<String>>(536);
+    assert_type_size::<Style<String>>(584);
 
     // String-type dependent (Arc<str>)
     assert_type_size::<GridTemplateComponent<Arc<str>>>(56);
     assert_type_size::<GridPlacement<Arc<str>>>(24);
     assert_type_size::<Line<GridPlacement<Arc<str>>>>(48);
-    assert_type_size::<Style<Arc<str>>>(504);
+    assert_type_size::<Style<Arc<str>>>(552);
   }
 }

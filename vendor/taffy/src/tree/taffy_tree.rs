@@ -53,6 +53,8 @@ pub enum TaffyError {
   InvalidChildNode(NodeId),
   /// The supplied node was not found in the [`TaffyTree`](crate::TaffyTree) instance.
   InvalidInputNode(NodeId),
+  /// Layout computation was cooperatively aborted (for example due to a deadline being exceeded).
+  LayoutAborted,
 }
 
 impl core::fmt::Display for TaffyError {
@@ -76,6 +78,9 @@ impl core::fmt::Display for TaffyError {
       }
       TaffyError::InvalidInputNode(node) => {
         write!(f, "Supplied Node {node:?} is not in the TaffyTree instance")
+      }
+      TaffyError::LayoutAborted => {
+        write!(f, "Layout computation was aborted")
       }
     }
   }
@@ -1063,6 +1068,53 @@ impl<NodeContext> TaffyTree<NodeContext> {
     Ok(())
   }
 
+  /// Updates the stored layout of the provided `node` and its children, with cooperative cancellation support.
+  ///
+  /// The `cancel` callback is invoked periodically during layout (amortized by `check_stride`).
+  /// If it returns `true`, layout aborts early and returns `Err(TaffyError::LayoutAborted)`.
+  ///
+  /// Cancellation is only supported when the crate is built with the `std` feature enabled.
+  #[cfg(feature = "std")]
+  pub fn compute_layout_with_measure_and_cancel<MeasureFunction>(
+    &mut self,
+    node_id: NodeId,
+    available_space: Size<AvailableSpace>,
+    measure_function: MeasureFunction,
+    cancel: Option<std::sync::Arc<dyn Fn() -> bool + Send + Sync>>,
+    check_stride: usize,
+  ) -> Result<(), TaffyError>
+  where
+    MeasureFunction: FnMut(
+        Size<Option<f32>>,
+        Size<AvailableSpace>,
+        NodeId,
+        Option<&mut NodeContext>,
+        &Style,
+      ) -> Size<f32>
+      + 'static,
+  {
+    let Some(cancel) = cancel else {
+      return self.compute_layout_with_measure(node_id, available_space, measure_function);
+    };
+
+    let result = crate::util::with_layout_abort(cancel, check_stride, || {
+      std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        self.compute_layout_with_measure(node_id, available_space, measure_function)
+      }))
+    });
+
+    match result {
+      Ok(inner) => inner,
+      Err(payload) => {
+        if payload.is::<crate::util::LayoutAbort>() {
+          Err(TaffyError::LayoutAborted)
+        } else {
+          std::panic::resume_unwind(payload)
+        }
+      }
+    }
+  }
+
   /// Updates the stored layout of the provided `node` and its children
   pub fn compute_layout(
     &mut self,
@@ -1638,5 +1690,79 @@ mod tests {
     taffy.set_children(new_parent, &[child]).unwrap();
 
     assert!(taffy.children(old_parent).unwrap().is_empty());
+  }
+
+  #[cfg(feature = "std")]
+  mod layout_abort {
+    use super::*;
+
+    #[test]
+    fn cancellation_returns_layout_aborted_error() {
+      let mut taffy: TaffyTree<()> = TaffyTree::new();
+      let root = taffy.new_leaf(Style::default()).unwrap();
+
+      let cancel = std::sync::Arc::new(|| true);
+      let result = taffy.compute_layout_with_measure_and_cancel(
+        root,
+        Size::MAX_CONTENT,
+        |_, _, _, _, _| Size::ZERO,
+        Some(cancel),
+        1,
+      );
+
+      assert_eq!(result, Err(TaffyError::LayoutAborted));
+    }
+
+    #[test]
+    #[should_panic(expected = "boom")]
+    fn non_abort_panics_still_propagate() {
+      let mut taffy: TaffyTree<()> = TaffyTree::new();
+      let root = taffy.new_leaf(Style::default()).unwrap();
+
+      let cancel = std::sync::Arc::new(|| false);
+      let _ = taffy.compute_layout_with_measure_and_cancel(
+        root,
+        Size::MAX_CONTENT,
+        |_, _, _, _, _| panic!("boom"),
+        Some(cancel),
+        1,
+      );
+    }
+
+    #[test]
+    fn nested_scopes_restore_previous_callback() {
+      use std::sync::atomic::{AtomicUsize, Ordering};
+
+      let called = std::sync::Arc::new(AtomicUsize::new(0));
+      let outer_called = called.clone();
+
+      crate::util::with_layout_abort(
+        std::sync::Arc::new(move || {
+          outer_called.store(1, Ordering::SeqCst);
+          false
+        }),
+        1,
+        || {
+          crate::util::check_layout_abort();
+          assert_eq!(called.load(Ordering::SeqCst), 1);
+
+          let inner_called = called.clone();
+          crate::util::with_layout_abort(
+            std::sync::Arc::new(move || {
+              inner_called.store(2, Ordering::SeqCst);
+              false
+            }),
+            1,
+            || {
+              crate::util::check_layout_abort();
+              assert_eq!(called.load(Ordering::SeqCst), 2);
+            },
+          );
+
+          crate::util::check_layout_abort();
+          assert_eq!(called.load(Ordering::SeqCst), 1);
+        },
+      );
+    }
   }
 }

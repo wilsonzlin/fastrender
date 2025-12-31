@@ -50,6 +50,7 @@ use crate::tree::{
   Layout, LayoutInput, LayoutOutput, LayoutPartialTree, LayoutPartialTreeExt, NodeId, RoundTree,
   SizingMode,
 };
+use crate::util::check_layout_abort;
 use crate::util::debug::{debug_log, debug_log_node, debug_pop_node, debug_push_node};
 use crate::util::sys::round;
 use crate::util::ResolveOrZero;
@@ -202,6 +203,7 @@ where
   ComputeFunction: FnMut(&mut Tree, NodeId, LayoutInput) -> LayoutOutput,
 {
   debug_push_node!(node);
+  check_layout_abort();
   let LayoutInput {
     known_dimensions,
     available_space,
@@ -271,6 +273,7 @@ pub fn round_layout(tree: &mut impl RoundTree, node_id: NodeId) {
     cumulative_x: f32,
     cumulative_y: f32,
   ) {
+    check_layout_abort();
     let unrounded_layout = tree.get_unrounded_layout(node_id);
     let mut layout = unrounded_layout;
 

@@ -9,6 +9,7 @@ use crate::style::{CoreStyle, FlexDirection, FlexboxContainerStyle, FlexboxItemS
 use crate::style_helpers::{TaffyMaxContent, TaffyMinContent};
 use crate::tree::{Layout, LayoutInput, LayoutOutput, RunMode, SizingMode};
 use crate::tree::{LayoutFlexboxContainer, LayoutPartialTreeExt, NodeId};
+use crate::util::check_layout_abort;
 use crate::util::debug::debug_log;
 use crate::util::sys::{f32_max, new_vec_with_capacity, Vec};
 use crate::util::MaybeMath;
@@ -1409,6 +1410,7 @@ fn resolve_flexible_lengths(line: &mut FlexLine, constants: &AlgoConstants) {
   // 4. Loop
 
   loop {
+    check_layout_abort();
     // a. Check for flexible items. If all the flex items on the line are frozen,
     //    free space has been distributed; exit this loop.
 

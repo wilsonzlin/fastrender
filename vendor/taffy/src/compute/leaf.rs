@@ -4,6 +4,7 @@ use crate::geometry::{Point, Size};
 use crate::style::{AvailableSpace, Overflow, Position};
 use crate::tree::{CollapsibleMarginSet, RunMode};
 use crate::tree::{LayoutInput, LayoutOutput, SizingMode};
+use crate::util::check_layout_abort;
 use crate::util::debug::debug_log;
 use crate::util::sys::f32_max;
 use crate::util::MaybeMath;
@@ -157,6 +158,7 @@ where
   };
 
   // Measure node
+  check_layout_abort();
   let measured_size = measure_function(
     match run_mode {
       RunMode::ComputeSize => known_dimensions,

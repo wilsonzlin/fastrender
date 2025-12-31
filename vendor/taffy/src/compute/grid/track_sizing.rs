@@ -5,6 +5,7 @@ use crate::geometry::{AbstractAxis, Line, Size};
 use crate::style::{AlignContent, AlignSelf, AvailableSpace};
 use crate::style_helpers::TaffyMinContent;
 use crate::tree::{LayoutPartialTree, LayoutPartialTreeExt, SizingMode};
+use crate::util::check_layout_abort;
 use crate::util::sys::{f32_max, f32_min, Vec};
 use crate::util::{MaybeMath, ResolveOrZero};
 use crate::CompactLength;
@@ -1407,6 +1408,7 @@ fn find_size_of_fr(tracks: &[GridTrack], space_to_fill: f32) -> f32 {
   let mut hypothetical_fr_size = f32::INFINITY;
   let mut previous_iter_hypothetical_fr_size;
   loop {
+    check_layout_abort();
     // Let leftover space be the space to fill minus the base sizes of the non-flexible grid tracks.
     // Let flex factor sum be the sum of the flex factors of the flexible tracks. If this value is less than 1, set it to 1 instead.
     // We compute both of these in a single loop to avoid iterating over the data twice
@@ -1502,6 +1504,7 @@ fn distribute_space_up_to_limits(
 
   let mut space_to_distribute = space_to_distribute;
   while space_to_distribute > THRESHOLD {
+    check_layout_abort();
     let track_distribution_proportion_sum: f32 = tracks
       .iter()
       .filter(|track| {

@@ -6,6 +6,7 @@ use crate::geometry::Line;
 use crate::geometry::{AbsoluteAxis, InBothAbsAxis};
 use crate::style::{AlignItems, GridAutoFlow, OriginZeroGridPlacement};
 use crate::tree::NodeId;
+use crate::util::check_layout_abort;
 use crate::util::sys::Vec;
 use crate::{CoreStyle, GridItemStyle};
 
@@ -48,8 +49,8 @@ pub(super) fn place_grid_items<'a, S, ChildIter>(
     }
   };
 
-  // MODIFIED: Single-pass placement respecting source order
-  // Collect all children first
+  // Collect all children first. The placement algorithm operates over multiple passes, but
+  // each pass preserves the original order of items within that category.
   let all_children: Vec<_> = children_iter()
     .map(map_child_style_to_origin_zero_placement)
     .collect();
@@ -67,138 +68,140 @@ pub(super) fn place_grid_items<'a, S, ChildIter>(
   );
   let mut grid_position = grid_start_position;
 
-  // Process all children in SOURCE ORDER
+  // 8.5. Grid Item Placement Algorithm
+  // Step 1. Place all definitely positioned items (both axes definite)
   for (index, child_node, child_placement, style) in all_children.iter() {
-    let h_definite = child_placement.horizontal.is_definite();
-    let v_definite = child_placement.vertical.is_definite();
+    let primary_definite = child_placement.get(primary_axis).is_definite();
+    let secondary_definite = child_placement.get(secondary_axis).is_definite();
 
-    match (h_definite, v_definite) {
-      // Both row and column definite - place exactly
-      (true, true) => {
-        #[cfg(test)]
-        println!("Definite Item {}\n==============", index);
+    if primary_definite && secondary_definite {
+      #[cfg(test)]
+      println!("Definite Item {}\n==============", index);
 
-        let (primary_span, secondary_span) =
-          place_definite_grid_item(*child_placement, primary_axis);
-        record_grid_placement(
-          cell_occupancy_matrix,
-          items,
-          *child_node,
-          *index,
-          style,
-          align_items,
-          justify_items,
-          primary_axis,
-          primary_span,
-          secondary_span,
-          CellOccupancyState::DefinitelyPlaced,
-        );
-      }
+      let (primary_span, secondary_span) =
+        place_definite_grid_item(*child_placement, primary_axis);
+      record_grid_placement(
+        cell_occupancy_matrix,
+        items,
+        *child_node,
+        *index,
+        style,
+        align_items,
+        justify_items,
+        primary_axis,
+        primary_span,
+        secondary_span,
+        CellOccupancyState::DefinitelyPlaced,
+      );
+    }
+  }
 
-      // One axis definite, other axis auto (e.g., just row or just column specified)
-      _ if (child_placement.get(secondary_axis).is_definite()
-        && !child_placement.get(primary_axis).is_definite())
-        || (child_placement.get(primary_axis).is_definite()
-          && !child_placement.get(secondary_axis).is_definite()) =>
-      {
-        #[cfg(test)]
-        println!("Definite One Axis Item {}\n==============", index);
+  // Step 2/3. Place items with one axis definite and the other auto
+  for (index, child_node, child_placement, style) in all_children.iter() {
+    let primary_definite = child_placement.get(primary_axis).is_definite();
+    let secondary_definite = child_placement.get(secondary_axis).is_definite();
 
-        // Determine which axis is definite and call the appropriate placement function
-        let (primary_span, secondary_span) = if child_placement.get(secondary_axis).is_definite() {
-          // Secondary axis definite, primary auto - use existing function
-          place_definite_secondary_axis_item(
-            &*cell_occupancy_matrix,
-            *child_placement,
-            grid_auto_flow,
-          )
-        } else {
-          // Primary axis definite, secondary auto - need to handle this case
-          let primary_placement = child_placement
-            .get(primary_axis)
-            .resolve_definite_grid_lines();
-          let secondary_start = match grid_auto_flow.is_dense() {
-            true => cell_occupancy_matrix
-              .track_counts(primary_axis.other_axis())
-              .implicit_start_line(),
-            false => grid_position.1,
-          };
+    if primary_definite == secondary_definite {
+      continue;
+    }
 
-          // Find first free secondary position for this primary span
-          let mut sec_idx = secondary_start;
-          let secondary_span_width = child_placement
-            .get(primary_axis.other_axis())
-            .indefinite_span();
-          loop {
-            let secondary_span = Line {
-              start: sec_idx,
-              end: sec_idx + secondary_span_width,
-            };
-            if cell_occupancy_matrix.line_area_is_unoccupied(
-              primary_axis,
-              primary_placement,
-              secondary_span,
-            ) {
-              break (primary_placement, secondary_span);
-            }
-            sec_idx += 1;
-          }
+    #[cfg(test)]
+    println!("Definite One Axis Item {}\n==============", index);
+
+    // Determine which axis is definite and call the appropriate placement function
+    let (primary_span, secondary_span) = if secondary_definite {
+      // Secondary axis definite, primary auto - use existing function
+      place_definite_secondary_axis_item(&*cell_occupancy_matrix, *child_placement, grid_auto_flow)
+    } else {
+      // Primary axis definite, secondary auto
+      let primary_placement = child_placement
+        .get(primary_axis)
+        .resolve_definite_grid_lines();
+      let secondary_start = match grid_auto_flow.is_dense() {
+        true => cell_occupancy_matrix
+          .track_counts(primary_axis.other_axis())
+          .implicit_start_line(),
+        false => grid_position.1,
+      };
+
+      // Find first free secondary position for this primary span
+      let mut sec_idx = secondary_start;
+      let secondary_span_width = child_placement
+        .get(primary_axis.other_axis())
+        .indefinite_span();
+      loop {
+        check_layout_abort();
+        let secondary_span = Line {
+          start: sec_idx,
+          end: sec_idx + secondary_span_width,
         };
-
-        record_grid_placement(
-          cell_occupancy_matrix,
-          items,
-          *child_node,
-          *index,
-          style,
-          align_items,
-          justify_items,
-          primary_axis,
-          primary_span,
-          secondary_span,
-          CellOccupancyState::AutoPlaced,
-        );
-
-        // Update cursor for next item (if not dense mode)
-        if !grid_auto_flow.is_dense() {
-          grid_position = (primary_span.end, secondary_span.start);
+        if cell_occupancy_matrix.line_area_is_unoccupied(primary_axis, primary_placement, secondary_span)
+        {
+          break (primary_placement, secondary_span);
         }
+        sec_idx += 1;
       }
+    };
 
-      // Auto placement (no definite secondary axis)
-      _ => {
-        #[cfg(test)]
-        println!("\nAuto Item {}\n==============", index);
+    record_grid_placement(
+      cell_occupancy_matrix,
+      items,
+      *child_node,
+      *index,
+      style,
+      align_items,
+      justify_items,
+      primary_axis,
+      primary_span,
+      secondary_span,
+      CellOccupancyState::AutoPlaced,
+    );
 
-        // Compute placement
-        let (primary_span, secondary_span) = place_indefinitely_positioned_item(
-          &*cell_occupancy_matrix,
-          *child_placement,
-          grid_auto_flow,
-          grid_position,
-        );
+    // Update cursor for next item (if not dense mode)
+    if !grid_auto_flow.is_dense() {
+      grid_position = (primary_span.end, secondary_span.start);
+    }
+  }
 
-        // Record item
-        record_grid_placement(
-          cell_occupancy_matrix,
-          items,
-          *child_node,
-          *index,
-          style,
-          align_items,
-          justify_items,
-          primary_axis,
-          primary_span,
-          secondary_span,
-          CellOccupancyState::AutoPlaced,
-        );
+  // Step 4. Auto placement of the remaining items
+  for (index, child_node, child_placement, style) in all_children.iter() {
+    let primary_definite = child_placement.get(primary_axis).is_definite();
+    let secondary_definite = child_placement.get(secondary_axis).is_definite();
 
-        // Update cursor for next auto item
-        grid_position = match grid_auto_flow.is_dense() {
-          true => grid_start_position,
-          false => (primary_span.end, secondary_span.start),
-        }
-      }
+    if primary_definite || secondary_definite {
+      continue;
+    }
+
+    #[cfg(test)]
+    println!("\nAuto Item {}\n==============", index);
+
+    // Compute placement
+    let (primary_span, secondary_span) = place_indefinitely_positioned_item(
+      &*cell_occupancy_matrix,
+      *child_placement,
+      grid_auto_flow,
+      grid_position,
+    );
+
+    // Record item
+    record_grid_placement(
+      cell_occupancy_matrix,
+      items,
+      *child_node,
+      *index,
+      style,
+      align_items,
+      justify_items,
+      primary_axis,
+      primary_span,
+      secondary_span,
+      CellOccupancyState::AutoPlaced,
+    );
+
+    // Update cursor for next auto item
+    grid_position = match grid_auto_flow.is_dense() {
+      true => grid_start_position,
+      false => (primary_span.end, secondary_span.start),
     }
   }
 }
@@ -245,6 +248,7 @@ fn place_definite_secondary_axis_item(
 
   let mut position: OriginZeroLine = starting_position;
   loop {
+    check_layout_abort();
     let primary_axis_placement = placement
       .get(primary_axis)
       .resolve_indefinite_grid_tracks(position);
@@ -313,6 +317,7 @@ fn place_indefinitely_positioned_item(
     // Item has fixed primary axis position: so we simply increment the secondary axis position
     // until we find a space that the item fits in
     loop {
+      check_layout_abort();
       let secondary_span = Line {
         start: secondary_idx,
         end: secondary_idx + secondary_span,
@@ -334,6 +339,7 @@ fn place_indefinitely_positioned_item(
     // existent tracks, and then we reset the primary axis back to zero and increment the secondary axis index.
     // We continue in this vein until we find a space that the item fits in.
     loop {
+      check_layout_abort();
       let primary_span = Line {
         start: primary_idx,
         end: primary_idx + primary_span,
@@ -464,12 +470,12 @@ mod tests {
       );
 
       // Assert that each item has been placed in the right location
-      let mut sorted_children = children.clone();
-      sorted_children.sort_by_key(|child| child.0);
-      for (idx, ((id, _style, expected_placement), item)) in
-        sorted_children.iter().zip(items.iter()).enumerate()
-      {
-        assert_eq!(item.node, NodeId::from(*id));
+      for (idx, (id, _style, expected_placement)) in children.iter().enumerate() {
+        let node_id = NodeId::from(*id);
+        let item = items
+          .iter()
+          .find(|item| item.node == node_id)
+          .unwrap_or_else(|| panic!("Missing placed item for node {node_id:?}"));
         let actual_placement = (
           item.column.start,
           item.column.end,
@@ -479,7 +485,7 @@ mod tests {
         assert_eq!(
           actual_placement,
           (*expected_placement).into_oz(),
-          "Item {idx} (0-indexed)"
+          "Item {idx} (0-indexed, node {node_id:?})"
         );
       }
 

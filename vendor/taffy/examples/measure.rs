@@ -80,9 +80,9 @@ fn main() -> Result<(), taffy::TaffyError> {
   taffy.compute_layout_with_measure(
     root,
     Size::MAX_CONTENT,
-    // Note: this closure is a FnMut closure and can be used to borrow external context for the duration of layout
-    // For example, you may wish to borrow a global font registry and pass it into your text measuring function
-    |known_dimensions, available_space, _node_id, node_context, _style| {
+    // Note: the measure function must be `'static`, so capture any external context using `move`.
+    // For example, you may wish to capture a global font registry and pass it into your text measuring function.
+    move |known_dimensions, available_space, _node_id, node_context, _style| {
       measure_function(
         known_dimensions,
         available_space,
