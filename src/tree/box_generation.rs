@@ -1205,25 +1205,30 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
           current_ns = SVG_NAMESPACE;
         }
 
-        let has_xmlns = attributes
-          .iter()
-          .any(|(name, _)| name.eq_ignore_ascii_case("xmlns"));
-        let needs_xmlns = (!current_ns.is_empty() && parent_ns != Some(current_ns))
-          || (is_root && !has_xmlns);
-        let needs_xmlns_attr = needs_xmlns && !has_xmlns;
-
         let mut owned_attrs: Option<Vec<(String, String)>> = None;
-        let attrs: &[(String, String)] = if needs_xmlns_attr || is_root {
+        let attrs: &[(String, String)] = if is_root {
           let mut attrs = attributes.clone();
-          if needs_xmlns_attr {
+          let has_xmlns = attrs.iter().any(|(name, _)| name.eq_ignore_ascii_case("xmlns"));
+          if !has_xmlns {
             attrs.push(("xmlns".to_string(), current_ns.to_string()));
           }
-          if is_root {
-            let style_attr = root_style(&styled.styles);
-            merge_style_attribute(&mut attrs, &style_attr);
-          }
+
+          let style_attr = root_style(&styled.styles);
+          merge_style_attribute(&mut attrs, &style_attr);
           owned_attrs = Some(attrs);
           owned_attrs.as_deref().unwrap()
+        } else if !current_ns.is_empty() && parent_ns != Some(current_ns) {
+          let has_xmlns = attributes
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("xmlns"));
+          if has_xmlns {
+            attributes
+          } else {
+            let mut attrs = attributes.clone();
+            attrs.push(("xmlns".to_string(), current_ns.to_string()));
+            owned_attrs = Some(attrs);
+            owned_attrs.as_deref().unwrap()
+          }
         } else {
           attributes
         };
