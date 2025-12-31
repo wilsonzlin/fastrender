@@ -788,12 +788,14 @@ impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
 
     let (flight, is_owner) = self.memory.join_inflight(url);
     if !is_owner {
-      let result = flight.wait();
+      let result = flight.wait(url);
       if let Ok(ref res) = result {
         super::reserve_policy_bytes(&self.policy, res)?;
       }
       return result;
     }
+
+    let mut inflight_guard = super::InFlightOwnerGuard::new(&self.memory, url, flight);
 
     let validators = match &plan.action {
       CacheAction::Validate {
@@ -967,7 +969,7 @@ impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
       Ok(res) => super::SharedResult::Success(res.clone()),
       Err(err) => super::SharedResult::Error(err.clone()),
     };
-    self.memory.finish_inflight(url, &flight, notify);
+    inflight_guard.finish(notify);
 
     result
   }

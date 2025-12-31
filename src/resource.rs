@@ -2129,10 +2129,27 @@ impl InFlight {
     }
   }
 
-  fn wait(&self) -> Result<FetchedResource> {
+  fn wait(&self, url: &str) -> Result<FetchedResource> {
     let mut guard = self.result.lock().unwrap();
+    let deadline = render_control::active_deadline().filter(|d| d.timeout_limit().is_some());
+
     while guard.is_none() {
-      guard = self.cv.wait(guard).unwrap();
+      if let Some(deadline) = deadline.as_ref() {
+        match deadline.remaining_timeout() {
+          Some(remaining) if !remaining.is_zero() => {
+            let wait_for = remaining.min(Duration::from_millis(10));
+            guard = self.cv.wait_timeout(guard, wait_for).unwrap().0;
+          }
+          _ => {
+            return Err(Error::Resource(ResourceError::new(
+              url.to_string(),
+              "render deadline exceeded while waiting for in-flight fetch",
+            )));
+          }
+        }
+      } else {
+        guard = self.cv.wait(guard).unwrap();
+      }
     }
     guard.as_ref().unwrap().as_result()
   }
@@ -2540,6 +2557,49 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
   }
 }
 
+struct InFlightOwnerGuard<'a, F: ResourceFetcher> {
+  fetcher: &'a CachingFetcher<F>,
+  url: &'a str,
+  flight: Arc<InFlight>,
+  finished: bool,
+}
+
+impl<'a, F: ResourceFetcher> InFlightOwnerGuard<'a, F> {
+  fn new(fetcher: &'a CachingFetcher<F>, url: &'a str, flight: Arc<InFlight>) -> Self {
+    Self {
+      fetcher,
+      url,
+      flight,
+      finished: false,
+    }
+  }
+
+  fn finish(&mut self, result: SharedResult) {
+    if self.finished {
+      return;
+    }
+    self.finished = true;
+    self.fetcher.finish_inflight(self.url, &self.flight, result);
+  }
+}
+
+impl<'a, F: ResourceFetcher> Drop for InFlightOwnerGuard<'a, F> {
+  fn drop(&mut self) {
+    if self.finished {
+      return;
+    }
+
+    self.finished = true;
+    let err = Error::Resource(ResourceError::new(
+      self.url.to_string(),
+      "in-flight fetch owner dropped without resolving",
+    ));
+    self
+      .fetcher
+      .finish_inflight(self.url, &self.flight, SharedResult::Error(err));
+  }
+}
+
 impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
   fn fetch(&self, url: &str) -> Result<FetchedResource> {
     if let Some(policy) = &self.policy {
@@ -2561,12 +2621,14 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
 
     let (flight, is_owner) = self.join_inflight(url);
     if !is_owner {
-      let result = flight.wait();
+      let result = flight.wait(url);
       if let Ok(ref res) = result {
         reserve_policy_bytes(&self.policy, res)?;
       }
       return result;
     }
+
+    let mut inflight_guard = InFlightOwnerGuard::new(self, url, flight);
 
     let validators = match &plan.action {
       CacheAction::Validate {
@@ -2696,7 +2758,7 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
       Ok(res) => SharedResult::Success(res.clone()),
       Err(err) => SharedResult::Error(err.clone()),
     };
-    self.finish_inflight(url, &flight, notify);
+    inflight_guard.finish(notify);
 
     result
   }
@@ -3824,6 +3886,89 @@ mod tests {
       err.to_string().contains("budget"),
       "unexpected error: {err:?}"
     );
+  }
+
+  #[test]
+  fn inflight_wait_respects_render_deadline() {
+    use std::sync::mpsc;
+
+    struct BlockingFetcher {
+      started: Arc<Barrier>,
+      release: Arc<Barrier>,
+    }
+
+    impl ResourceFetcher for BlockingFetcher {
+      fn fetch(&self, url: &str) -> Result<FetchedResource> {
+        if url == "https://example.com/blocked" {
+          self.started.wait();
+          self.release.wait();
+          return Ok(FetchedResource::new(
+            b"ok".to_vec(),
+            Some("text/plain".to_string()),
+          ));
+        }
+
+        Err(Error::Resource(ResourceError::new(
+          url.to_string(),
+          "unexpected url",
+        )))
+      }
+    }
+
+    let started = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let url = "https://example.com/blocked".to_string();
+    let fetcher = Arc::new(CachingFetcher::new(BlockingFetcher {
+      started: Arc::clone(&started),
+      release: Arc::clone(&release),
+    }));
+
+    let fetcher_owner = Arc::clone(&fetcher);
+    let url_owner = url.clone();
+    let owner_handle = thread::spawn(move || fetcher_owner.fetch(&url_owner));
+
+    // Wait until the owner thread has started the inner fetch and registered the in-flight entry.
+    started.wait();
+
+    let fetcher_waiter = Arc::clone(&fetcher);
+    let url_waiter = url.clone();
+    let (tx, rx) = mpsc::channel();
+    let waiter_handle = thread::spawn(move || {
+      let deadline = render_control::RenderDeadline::new(Some(Duration::from_millis(50)), None);
+      let start = Instant::now();
+      let result =
+        render_control::with_deadline(Some(&deadline), || fetcher_waiter.fetch(&url_waiter));
+      let elapsed = start.elapsed();
+      tx.send((result, elapsed)).unwrap();
+    });
+
+    let (result, elapsed) = match rx.recv_timeout(Duration::from_secs(1)) {
+      Ok(value) => value,
+      Err(err) => {
+        // Unblock the owner thread so the test can terminate even if the waiter path is broken.
+        release.wait();
+        let _ = owner_handle.join();
+        waiter_handle.join().unwrap();
+        panic!("waiter fetch did not complete under deadline: {err}");
+      }
+    };
+
+    let err = result.expect_err("waiter fetch should fail under deadline");
+    let message = err.to_string();
+    assert!(
+      message.contains("render deadline exceeded") && message.contains("in-flight"),
+      "unexpected error after {elapsed:?}: {message}"
+    );
+
+    // Let the owner thread finish so it can clean up the in-flight entry.
+    release.wait();
+
+    let owner_result = owner_handle.join().unwrap();
+    assert!(
+      owner_result.is_ok(),
+      "owner fetch should complete after being released: {owner_result:?}"
+    );
+    waiter_handle.join().unwrap();
   }
 
   #[test]
