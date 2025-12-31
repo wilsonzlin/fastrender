@@ -40,7 +40,8 @@ disk cache reads, single-flight inflight waits, and total network fetch time). T
 `pageset_progress report --verbose-stats` and stored under `diagnostics.stats` in the per-page JSON
 when present.
 `pageset_progress report --verbose-stats` also prints an aggregated resource totals line plus
-rankings for the heaviest network/inflight/disk-cache pages to speed up triage.
+rankings for the heaviest network/inflight/disk-cache pages (including disk lock wait time) to
+speed up triage.
 
 Common fields in `stats.resources`:
 - `resource_cache_*` (hits/misses/bytes when serving from the in-process cache)

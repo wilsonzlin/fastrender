@@ -173,7 +173,7 @@ Pageset wrappers enable the disk-backed subresource cache by default, persisting
   - The deterministic stem list is printed before running; if nothing matches, the command exits cleanly without touching caches.
 - Report: `cargo run --release --bin pageset_progress -- report [--progress-dir progress/pages --top 10 --fail-on-bad --compare <other> --fail-on-regression --regression-threshold-percent 10]` prints status counts, slowest pages, and hotspot histograms for the saved progress files. With `--compare`, it also prints status transitions plus the top regressions/improvements by `total_ms`; `--fail-on-regression` exits non-zero for ok→bad or > threshold slowdowns.
   - `--include-trace` lists saved Chrome traces (from `target/pageset/traces/` + `target/pageset/trace-progress/`).
-  - `--verbose-stats` prints structured per-page stats when present (including resource cache hit/miss/bytes breakdowns, single-flight inflight wait time, disk cache lock waits, and network fetch totals). It also prints an aggregated "Resource totals" summary plus top-N rankings for network/inflight/disk cache time.
+  - `--verbose-stats` prints structured per-page stats when present (including resource cache hit/miss/bytes breakdowns, single-flight inflight wait time, disk cache lock waits, and network fetch totals). It also prints an aggregated "Resource totals" summary plus top-N rankings for network/inflight/disk cache time (including disk lock wait time).
 - Safety: uses **panic containment** (per-page worker process) and a **hard timeout** (kills runaway workers) so one broken page cannot stall the whole run.
 - Outputs:
   - `progress/pages/<stem>.json` — small, committed per-page progress artifact
