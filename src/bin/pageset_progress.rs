@@ -2630,6 +2630,70 @@ fn layout_summary(layout: &LayoutDiagnostics) -> Option<String> {
     parts.push(format!("intrinsic {}", intrinsic_parts.join(" ")));
   }
 
+  fn push_profile_kind(
+    parts: &mut Vec<String>,
+    label: &str,
+    ms: Option<f64>,
+    calls: Option<u64>,
+  ) {
+    match (ms, calls) {
+      (Some(ms), Some(calls)) => {
+        if ms > 0.0 || calls > 0 {
+          parts.push(format!("{label}={ms:.2}ms/{calls}"));
+        }
+      }
+      _ => {
+        if let Some(ms) = ms {
+          parts.push(format!("{label}_ms={ms:.2}ms"));
+        }
+        if let Some(calls) = calls {
+          parts.push(format!("{label}_calls={calls}"));
+        }
+      }
+    }
+  }
+
+  let mut profile_parts = Vec::new();
+  push_profile_kind(
+    &mut profile_parts,
+    "block",
+    layout.layout_block_ms,
+    layout.layout_block_calls,
+  );
+  push_profile_kind(
+    &mut profile_parts,
+    "inline",
+    layout.layout_inline_ms,
+    layout.layout_inline_calls,
+  );
+  push_profile_kind(
+    &mut profile_parts,
+    "flex",
+    layout.layout_flex_ms,
+    layout.layout_flex_calls,
+  );
+  push_profile_kind(
+    &mut profile_parts,
+    "grid",
+    layout.layout_grid_ms,
+    layout.layout_grid_calls,
+  );
+  push_profile_kind(
+    &mut profile_parts,
+    "table",
+    layout.layout_table_ms,
+    layout.layout_table_calls,
+  );
+  push_profile_kind(
+    &mut profile_parts,
+    "absolute",
+    layout.layout_absolute_ms,
+    layout.layout_absolute_calls,
+  );
+  if !profile_parts.is_empty() {
+    parts.push(format!("profile {}", profile_parts.join(" ")));
+  }
+
   let mut parallel_parts = Vec::new();
   if let Some(enabled) = layout.layout_parallel_enabled {
     parallel_parts.push(format!("enabled={enabled}"));
