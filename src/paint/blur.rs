@@ -2535,6 +2535,47 @@ mod tests {
   use tiny_skia::PremultipliedColorU8;
 
   #[test]
+  fn fast_div_u32_matches_builtin_division() {
+    for divisor in 1u32..=2048 {
+      let fast = FastDivU32::new(divisor);
+      let aligned = ((u32::MAX as u64 / divisor as u64) * divisor as u64) as u32;
+      let values = [
+        0u32,
+        1,
+        divisor.saturating_sub(1),
+        divisor,
+        divisor.saturating_add(1),
+        divisor.saturating_mul(2).saturating_sub(1),
+        divisor.saturating_mul(2),
+        divisor.saturating_mul(2).saturating_add(1),
+        u32::MAX / 2,
+        aligned,
+        aligned.saturating_add(1),
+        u32::MAX.saturating_sub(1),
+        u32::MAX,
+      ];
+      for &value in &values {
+        assert_eq!(
+          fast.div(value),
+          value / divisor,
+          "divisor={divisor} value={value}"
+        );
+      }
+
+      // Deterministic value fuzzing to cover the full u32 range with minimal cost.
+      let mut x = divisor.wrapping_mul(0x9E37_79B9);
+      for _ in 0..128 {
+        x = x.wrapping_mul(1664525).wrapping_add(1013904223);
+        assert_eq!(
+          fast.div(x),
+          x / divisor,
+          "divisor={divisor} value={x}"
+        );
+      }
+    }
+  }
+
+  #[test]
   fn blur_with_zero_sigma_x_only_blurs_vertically() {
     let mut pixmap = new_pixmap(3, 5).unwrap();
     let idx = 2 * 3 + 1;
