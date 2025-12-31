@@ -5,29 +5,41 @@
 //! pixels. They are used by both the legacy painter and the display list
 //! renderer to keep filter behavior in sync.
 
-use crate::error::RenderError;
+use crate::error::{RenderError, RenderStage};
 use crate::paint::blur::{alpha_bounds, apply_gaussian_blur};
 use crate::paint::pixmap::new_pixmap;
-use crate::render_control::{active_deadline, with_deadline};
+use crate::render_control::{active_deadline, check_active, with_deadline};
 use crate::style::color::Rgba;
 use rayon::prelude::*;
 use tiny_skia::BlendMode as SkiaBlendMode;
 use tiny_skia::{Pixmap, PixmapPaint, PremultipliedColorU8, Transform};
 
 const COLOR_FILTER_PARALLEL_THRESHOLD: usize = 2048;
+const COLOR_FILTER_DEADLINE_STRIDE: usize = 1024;
+const COLOR_FILTER_CHUNK_SIZE: usize = 1024;
 
-pub(crate) fn apply_color_filter<F>(pixmap: &mut Pixmap, f: F)
+pub(crate) fn apply_color_filter<F>(pixmap: &mut Pixmap, f: F) -> Result<(), RenderError>
 where
   F: Fn([f32; 3], f32) -> ([f32; 3], f32) + Send + Sync,
 {
+  check_active(RenderStage::Paint)?;
   let pixels = pixmap.pixels_mut();
   if pixels.len() > COLOR_FILTER_PARALLEL_THRESHOLD {
     let deadline = active_deadline();
-    pixels
-      .par_iter_mut()
-      .for_each(|px| with_deadline(deadline.as_ref(), || apply_color_filter_to_pixel(px, &f)));
+    pixels.par_chunks_mut(COLOR_FILTER_CHUNK_SIZE).try_for_each(|chunk| {
+      with_deadline(deadline.as_ref(), || -> Result<(), RenderError> {
+        check_active(RenderStage::Paint)?;
+        for px in chunk.iter_mut() {
+          apply_color_filter_to_pixel(px, &f);
+        }
+        Ok(())
+      })
+    })?;
   } else {
-    for px in pixels.iter_mut() {
+    for (idx, px) in pixels.iter_mut().enumerate() {
+      if idx % COLOR_FILTER_DEADLINE_STRIDE == 0 {
+        check_active(RenderStage::Paint)?;
+      }
       if std::env::var("DEBUG_FILTER_PIXEL").is_ok() {
         eprintln!(
           "filter in: r={} g={} b={} a={}",
@@ -49,6 +61,7 @@ where
       }
     }
   }
+  Ok(())
 }
 
 fn apply_color_filter_to_pixel<F>(px: &mut PremultipliedColorU8, f: &F)
@@ -312,4 +325,29 @@ pub(crate) fn apply_drop_shadow(
 
   *pixmap = result;
   Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::render_control::{with_deadline, RenderDeadline};
+  use std::sync::atomic::{AtomicUsize, Ordering};
+  use std::sync::Arc;
+
+  #[test]
+  fn apply_color_filter_respects_cancel_callback() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_cb = Arc::clone(&calls);
+    let cancel = Arc::new(move || calls_cb.fetch_add(1, Ordering::SeqCst) >= 1);
+    let deadline = RenderDeadline::new(None, Some(cancel));
+
+    let mut pixmap = new_pixmap((COLOR_FILTER_PARALLEL_THRESHOLD + 1) as u32, 1).unwrap();
+    let result = with_deadline(Some(&deadline), || apply_color_filter(&mut pixmap, |c, a| (c, a)));
+
+    assert!(
+      matches!(result, Err(RenderError::Timeout { stage: RenderStage::Paint, .. })),
+      "expected timeout, got {result:?}"
+    );
+    assert!(calls.load(Ordering::SeqCst) >= 2);
+  }
 }

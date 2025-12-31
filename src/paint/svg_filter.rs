@@ -1,11 +1,11 @@
-use crate::error::RenderError;
+use crate::error::{RenderError, RenderStage};
 use crate::geometry::{Point, Rect};
 use crate::image_loader::ImageCache;
 use crate::paint::blur::pixel_fingerprint;
 use crate::paint::blur::{alpha_bounds, apply_gaussian_blur_cached, BlurCache};
 use crate::paint::painter::with_paint_diagnostics;
 use crate::paint::pixmap::new_pixmap;
-use crate::render_control::{active_deadline, with_deadline};
+use crate::render_control::{active_deadline, check_active, with_deadline};
 use crate::style::color;
 use crate::tree::box_tree::ReplacedType;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
@@ -36,6 +36,7 @@ type RenderResult<T> = std::result::Result<T, RenderError>;
 
 const MAX_FILTER_RES: u32 = 4096;
 const MAX_TURBULENCE_OCTAVES: u32 = 8;
+const FILTER_DEADLINE_STRIDE: usize = 256;
 
 static FILTER_CACHE: OnceLock<Mutex<FilterCache>> = OnceLock::new();
 
@@ -2807,6 +2808,7 @@ fn apply_primitive(
   color_interpolation_filters: ColorInterpolationFilters,
   blur_cache: Option<&mut BlurCache>,
 ) -> RenderResult<Option<FilterResult>> {
+  check_active(RenderStage::Paint)?;
   let scale_avg = if scale_x.is_finite() && scale_y.is_finite() {
     0.5 * (scale_x + scale_y)
   } else {
@@ -2915,19 +2917,20 @@ fn apply_primitive(
       filter_region,
     ),
     FilterPrimitive::Morphology { input, radius, op } => {
-      resolve_input(input, source, results, current, filter_region).map(|mut img| {
-        let radius = filter.resolve_primitive_pair(*radius, css_bbox);
-        let radius = (radius.0 * scale_x, radius.1 * scale_y);
-        apply_morphology(&mut img.pixmap, radius, *op);
-        img.region = clip_region(
-          match op {
-            MorphologyOp::Dilate => inflate_rect_xy(img.region, radius.0, radius.1),
-            MorphologyOp::Erode => inflate_rect_xy(img.region, -radius.0, -radius.1),
-          },
-          filter_region,
-        );
-        img
-      })
+      let Some(mut img) = resolve_input(input, source, results, current, filter_region) else {
+        return Ok(None);
+      };
+      let radius = filter.resolve_primitive_pair(*radius, css_bbox);
+      let radius = (radius.0 * scale_x, radius.1 * scale_y);
+      apply_morphology(&mut img.pixmap, radius, *op)?;
+      img.region = clip_region(
+        match op {
+          MorphologyOp::Dilate => inflate_rect_xy(img.region, radius.0, radius.1),
+          MorphologyOp::Erode => inflate_rect_xy(img.region, -radius.0, -radius.1),
+        },
+        filter_region,
+      );
+      Some(img)
     }
     FilterPrimitive::ComponentTransfer { input, r, g, b, a } => {
       resolve_input(input, source, results, current, filter_region).map(|mut img| {
@@ -2942,7 +2945,10 @@ fn apply_primitive(
       kernel_unit_length,
       light,
       lighting_color,
-    } => resolve_input(input, source, results, current, filter_region).and_then(|img| {
+    } => {
+      let Some(img) = resolve_input(input, source, results, current, filter_region) else {
+        return Ok(None);
+      };
       apply_diffuse_lighting(
         filter,
         css_bbox,
@@ -2956,8 +2962,8 @@ fn apply_primitive(
         scale_y,
         filter_region,
         color_interpolation_filters,
-      )
-    }),
+      )?
+    }
     FilterPrimitive::SpecularLighting {
       input,
       surface_scale,
@@ -2966,7 +2972,10 @@ fn apply_primitive(
       kernel_unit_length,
       light,
       lighting_color,
-    } => resolve_input(input, source, results, current, filter_region).and_then(|img| {
+    } => {
+      let Some(img) = resolve_input(input, source, results, current, filter_region) else {
+        return Ok(None);
+      };
       apply_specular_lighting(
         filter,
         css_bbox,
@@ -2981,8 +2990,8 @@ fn apply_primitive(
         scale_y,
         filter_region,
         color_interpolation_filters,
-      )
-    }),
+      )?
+    }
     FilterPrimitive::Image(prim) => render_fe_image(prim, filter_region),
     FilterPrimitive::Tile { input } => {
       resolve_input(input, source, results, current, filter_region)
@@ -3004,7 +3013,8 @@ fn apply_primitive(
         *octaves,
         *stitch_tiles,
         *kind,
-      ) else {
+      )?
+      else {
         return Ok(None);
       };
       Some(FilterResult::full_region(pixmap, filter_region))
@@ -3029,7 +3039,8 @@ fn apply_primitive(
         *x_channel,
         *y_channel,
         color_interpolation_filters,
-      ) else {
+      )?
+      else {
         return Ok(None);
       };
       let region = clip_region(primary.region.union(map.region), filter_region);
@@ -3047,7 +3058,11 @@ fn apply_primitive(
       edge_mode,
       preserve_alpha,
       subregion,
-    } => resolve_input(input, source, results, current, filter_region).map(|img| {
+    } => {
+      let Some(img) = resolve_input(input, source, results, current, filter_region) else {
+        return Ok(None);
+      };
+      let region = img.region;
       let output = apply_convolve_matrix(
         img.pixmap,
         *order_x,
@@ -3060,9 +3075,9 @@ fn apply_primitive(
         *edge_mode,
         *preserve_alpha,
         *subregion,
-      );
-      FilterResult::new(output, img.region, filter_region)
-    }),
+      )?;
+      Some(FilterResult::new(output, region, filter_region))
+    }
   };
   Ok(result)
 }
@@ -3361,12 +3376,18 @@ fn apply_diffuse_lighting(
   scale_y: f32,
   filter_region: Rect,
   color_interpolation_filters: ColorInterpolationFilters,
-) -> Option<FilterResult> {
+) -> RenderResult<Option<FilterResult>> {
+  check_active(RenderStage::Paint)?;
   if matches!(light, LightSource::None) {
-    let pixmap = new_pixmap(input.pixmap.width(), input.pixmap.height())?;
-    return Some(FilterResult::new(pixmap, input.region, filter_region));
+    let Some(pixmap) = new_pixmap(input.pixmap.width(), input.pixmap.height()) else {
+      return Ok(None);
+    };
+    return Ok(Some(FilterResult::new(pixmap, input.region, filter_region)));
   }
-  let mut out = new_pixmap(input.pixmap.width(), input.pixmap.height())?;
+  let mut out = match new_pixmap(input.pixmap.width(), input.pixmap.height()) {
+    Some(pixmap) => pixmap,
+    None => return Ok(None),
+  };
   let base_color = lighting_color_in_space(lighting_color, color_interpolation_filters);
   let kernel_unit = resolve_kernel_unit_length(filter, css_bbox, kernel_unit_length);
   let surface_scale = filter
@@ -3388,59 +3409,65 @@ fn apply_diffuse_lighting(
   let width = input.pixmap.width() as usize;
 
   let deadline = active_deadline();
-  out
-    .pixels_mut()
-    .par_iter_mut()
-    .enumerate()
-    .for_each(|(idx, dst)| {
-      with_deadline(deadline.as_ref(), || {
-        let y = (idx / width) as u32;
-        let x = (idx % width) as u32;
-        let css_x = origin_x + x as f32 * inv_scale_x;
-        let css_y = origin_y + y as f32 * inv_scale_y;
-        let alpha = sample_alpha_at(&input.pixmap, css_x, css_y, css_bbox, scale_x, scale_y);
-        if alpha <= 0.0 {
-          *dst = PremultipliedColorU8::TRANSPARENT;
-          return;
-        }
-        let normal = surface_normal(
-          &input.pixmap,
-          css_x,
-          css_y,
-          css_bbox,
-          scale_x,
-          scale_y,
-          surface_scale,
-          kernel_unit,
-        );
-        let height = sample_height_at(
-          &input.pixmap,
-          css_x,
-          css_y,
-          css_bbox,
-          scale_x,
-          scale_y,
-          surface_scale,
-        );
-        let (light_dir, light_factor) =
-          compute_light_direction(filter, css_bbox, &light, (css_x, css_y, height));
-        let n_dot_l = dot3(normal, light_dir).max(0.0);
-        let intensity = n_dot_l * diffuse_constant * light_factor;
-        let color_scale = (intensity * base_color.a * alpha).clamp(0.0, 1.0);
-        let out_alpha = color_scale;
-        *dst = pack_color(
-          UnpremultipliedColor {
-            r: base_color.r * color_scale,
-            g: base_color.g * color_scale,
-            b: base_color.b * color_scale,
-            a: out_alpha,
-          },
-          color_interpolation_filters,
-        );
-      });
-    });
+  if width > 0 {
+    out
+      .pixels_mut()
+      .par_chunks_mut(width)
+      .enumerate()
+      .try_for_each(|(y, row)| {
+        with_deadline(deadline.as_ref(), || -> RenderResult<()> {
+          let css_y = origin_y + y as f32 * inv_scale_y;
+          for (x, dst) in row.iter_mut().enumerate() {
+            if x % FILTER_DEADLINE_STRIDE == 0 {
+              check_active(RenderStage::Paint)?;
+            }
+            let css_x = origin_x + x as f32 * inv_scale_x;
+            let alpha = sample_alpha_at(&input.pixmap, css_x, css_y, css_bbox, scale_x, scale_y);
+            if alpha <= 0.0 {
+              *dst = PremultipliedColorU8::TRANSPARENT;
+              continue;
+            }
+            let normal = surface_normal(
+              &input.pixmap,
+              css_x,
+              css_y,
+              css_bbox,
+              scale_x,
+              scale_y,
+              surface_scale,
+              kernel_unit,
+            );
+            let height = sample_height_at(
+              &input.pixmap,
+              css_x,
+              css_y,
+              css_bbox,
+              scale_x,
+              scale_y,
+              surface_scale,
+            );
+            let (light_dir, light_factor) =
+              compute_light_direction(filter, css_bbox, &light, (css_x, css_y, height));
+            let n_dot_l = dot3(normal, light_dir).max(0.0);
+            let intensity = n_dot_l * diffuse_constant * light_factor;
+            let color_scale = (intensity * base_color.a * alpha).clamp(0.0, 1.0);
+            let out_alpha = color_scale;
+            *dst = pack_color(
+              UnpremultipliedColor {
+                r: base_color.r * color_scale,
+                g: base_color.g * color_scale,
+                b: base_color.b * color_scale,
+                a: out_alpha,
+              },
+              color_interpolation_filters,
+            );
+          }
+          Ok(())
+        })
+      })?;
+  }
 
-  Some(FilterResult::new(out, input.region, filter_region))
+  Ok(Some(FilterResult::new(out, input.region, filter_region)))
 }
 
 fn apply_specular_lighting(
@@ -3457,12 +3484,18 @@ fn apply_specular_lighting(
   scale_y: f32,
   filter_region: Rect,
   color_interpolation_filters: ColorInterpolationFilters,
-) -> Option<FilterResult> {
+) -> RenderResult<Option<FilterResult>> {
+  check_active(RenderStage::Paint)?;
   if matches!(light, LightSource::None) {
-    let pixmap = new_pixmap(input.pixmap.width(), input.pixmap.height())?;
-    return Some(FilterResult::new(pixmap, input.region, filter_region));
+    let Some(pixmap) = new_pixmap(input.pixmap.width(), input.pixmap.height()) else {
+      return Ok(None);
+    };
+    return Ok(Some(FilterResult::new(pixmap, input.region, filter_region)));
   }
-  let mut out = new_pixmap(input.pixmap.width(), input.pixmap.height())?;
+  let mut out = match new_pixmap(input.pixmap.width(), input.pixmap.height()) {
+    Some(pixmap) => pixmap,
+    None => return Ok(None),
+  };
   let base_color = lighting_color_in_space(lighting_color, color_interpolation_filters);
   let kernel_unit = resolve_kernel_unit_length(filter, css_bbox, kernel_unit_length);
   let surface_scale = filter
@@ -3485,69 +3518,75 @@ fn apply_specular_lighting(
   let exponent = specular_exponent.clamp(0.0, 128.0);
 
   let deadline = active_deadline();
-  out
-    .pixels_mut()
-    .par_iter_mut()
-    .enumerate()
-    .for_each(|(idx, dst)| {
-      with_deadline(deadline.as_ref(), || {
-        let y = (idx / width) as u32;
-        let x = (idx % width) as u32;
-        let css_x = origin_x + x as f32 * inv_scale_x;
-        let css_y = origin_y + y as f32 * inv_scale_y;
-        let alpha = sample_alpha_at(&input.pixmap, css_x, css_y, css_bbox, scale_x, scale_y);
-        if alpha <= 0.0 {
-          *dst = PremultipliedColorU8::TRANSPARENT;
-          return;
-        }
-        let normal = surface_normal(
-          &input.pixmap,
-          css_x,
-          css_y,
-          css_bbox,
-          scale_x,
-          scale_y,
-          surface_scale,
-          kernel_unit,
-        );
-        let height = sample_height_at(
-          &input.pixmap,
-          css_x,
-          css_y,
-          css_bbox,
-          scale_x,
-          scale_y,
-          surface_scale,
-        );
-        let (light_dir, light_factor) =
-          compute_light_direction(filter, css_bbox, &light, (css_x, css_y, height));
-        let n_dot_l = dot3(normal, light_dir).max(0.0);
-        if n_dot_l <= 0.0 || light_factor <= 0.0 {
-          *dst = PremultipliedColorU8::TRANSPARENT;
-          return;
-        }
-        let reflect = normalize3(
-          2.0 * n_dot_l * normal.0 - light_dir.0,
-          2.0 * n_dot_l * normal.1 - light_dir.1,
-          2.0 * n_dot_l * normal.2 - light_dir.2,
-        );
-        let spec_angle = reflect.2.max(0.0).powf(exponent);
-        let intensity = specular_constant * spec_angle * light_factor;
-        let color_scale = (intensity * base_color.a * alpha).clamp(0.0, 1.0);
-        let out_alpha = color_scale;
-        *dst = pack_color(
-          UnpremultipliedColor {
-            r: base_color.r * color_scale,
-            g: base_color.g * color_scale,
-            b: base_color.b * color_scale,
-            a: out_alpha,
-          },
-          color_interpolation_filters,
-        );
-      });
-    });
+  if width > 0 {
+    out
+      .pixels_mut()
+      .par_chunks_mut(width)
+      .enumerate()
+      .try_for_each(|(y, row)| {
+        with_deadline(deadline.as_ref(), || -> RenderResult<()> {
+          let css_y = origin_y + y as f32 * inv_scale_y;
+          for (x, dst) in row.iter_mut().enumerate() {
+            if x % FILTER_DEADLINE_STRIDE == 0 {
+              check_active(RenderStage::Paint)?;
+            }
+            let css_x = origin_x + x as f32 * inv_scale_x;
+            let alpha = sample_alpha_at(&input.pixmap, css_x, css_y, css_bbox, scale_x, scale_y);
+            if alpha <= 0.0 {
+              *dst = PremultipliedColorU8::TRANSPARENT;
+              continue;
+            }
+            let normal = surface_normal(
+              &input.pixmap,
+              css_x,
+              css_y,
+              css_bbox,
+              scale_x,
+              scale_y,
+              surface_scale,
+              kernel_unit,
+            );
+            let height = sample_height_at(
+              &input.pixmap,
+              css_x,
+              css_y,
+              css_bbox,
+              scale_x,
+              scale_y,
+              surface_scale,
+            );
+            let (light_dir, light_factor) =
+              compute_light_direction(filter, css_bbox, &light, (css_x, css_y, height));
+            let n_dot_l = dot3(normal, light_dir).max(0.0);
+            if n_dot_l <= 0.0 || light_factor <= 0.0 {
+              *dst = PremultipliedColorU8::TRANSPARENT;
+              continue;
+            }
+            let reflect = normalize3(
+              2.0 * n_dot_l * normal.0 - light_dir.0,
+              2.0 * n_dot_l * normal.1 - light_dir.1,
+              2.0 * n_dot_l * normal.2 - light_dir.2,
+            );
+            let spec_angle = reflect.2.max(0.0).powf(exponent);
+            let intensity = specular_constant * spec_angle * light_factor;
+            let color_scale = (intensity * base_color.a * alpha).clamp(0.0, 1.0);
+            let out_alpha = color_scale;
+            *dst = pack_color(
+              UnpremultipliedColor {
+                r: base_color.r * color_scale,
+                g: base_color.g * color_scale,
+                b: base_color.b * color_scale,
+                a: out_alpha,
+              },
+              color_interpolation_filters,
+            );
+          }
+          Ok(())
+        })
+      })?;
+  }
 
-  Some(FilterResult::new(out, input.region, filter_region))
+  Ok(Some(FilterResult::new(out, input.region, filter_region)))
 }
 
 fn flood(width: u32, height: u32, color: &Rgba, opacity: f32) -> Option<Pixmap> {
@@ -4032,11 +4071,18 @@ fn apply_displacement_map(
   x_channel: ChannelSelector,
   y_channel: ChannelSelector,
   color_interpolation_filters: ColorInterpolationFilters,
-) -> Option<Pixmap> {
-  let mut out = new_pixmap(primary.width(), primary.height())?;
+) -> RenderResult<Option<Pixmap>> {
+  check_active(RenderStage::Paint)?;
+  let mut out = match new_pixmap(primary.width(), primary.height()) {
+    Some(pixmap) => pixmap,
+    None => return Ok(None),
+  };
   let width = primary.width() as usize;
 
   for (idx, dst) in out.pixels_mut().iter_mut().enumerate() {
+    if idx % FILTER_DEADLINE_STRIDE == 0 {
+      check_active(RenderStage::Paint)?;
+    }
     let y = (idx / width) as u32;
     let x = (idx % width) as u32;
 
@@ -4058,7 +4104,7 @@ fn apply_displacement_map(
     .unwrap_or(PremultipliedColorU8::TRANSPARENT);
   }
 
-  Some(out)
+  Ok(Some(out))
 }
 
 fn sample_to_color_space(
@@ -4150,10 +4196,11 @@ fn apply_convolve_matrix(
   edge_mode: EdgeMode,
   preserve_alpha: bool,
   subregion: Option<(f32, f32, f32, f32)>,
-) -> Pixmap {
+) -> RenderResult<Pixmap> {
+  check_active(RenderStage::Paint)?;
   if order_x == 0 || order_y == 0 || kernel.is_empty() || input.width() == 0 || input.height() == 0
   {
-    return input;
+    return Ok(input);
   }
 
   let divisor = match divisor {
@@ -4194,72 +4241,87 @@ fn apply_convolve_matrix(
     })
     .unwrap_or((0, 0, width_i32, height_i32));
   if sub_min_x >= sub_max_x || sub_min_y >= sub_max_y {
-    return out;
+    return Ok(out);
   }
 
   let deadline = active_deadline();
-  dst_pixels
-    .par_iter_mut()
-    .enumerate()
-    .for_each(|(idx, dst_px)| {
-      with_deadline(deadline.as_ref(), || {
-        let y = (idx / width) as i32;
-        let x = (idx % width) as i32;
-        if x < sub_min_x || x >= sub_max_x || y < sub_min_y || y >= sub_max_y {
-          return;
-        }
-        let preserved_alpha = if preserve_alpha {
-          src_pixels[idx].alpha() as f32 / 255.0
-        } else {
-          0.0
-        };
-
-        let mut sum_r = 0.0;
-        let mut sum_g = 0.0;
-        let mut sum_b = 0.0;
-        let mut sum_a = 0.0;
-
-        for (ky, row) in kernel_rows.iter().enumerate() {
-          let sy = y + ky as i32 - target_y;
-          for (kx, weight) in row.iter().enumerate() {
-            if *weight == 0.0 {
+  if width > 0 {
+    dst_pixels
+      .par_chunks_mut(width)
+      .enumerate()
+      .try_for_each(|(y, row)| {
+        with_deadline(deadline.as_ref(), || -> RenderResult<()> {
+          let y = y as i32;
+          if y < sub_min_y || y >= sub_max_y {
+            return Ok(());
+          }
+          let idx_base = y as usize * width;
+          for (x, dst_px) in row.iter_mut().enumerate() {
+            if x % FILTER_DEADLINE_STRIDE == 0 {
+              check_active(RenderStage::Paint)?;
+            }
+            let x = x as i32;
+            if x < sub_min_x || x >= sub_max_x {
               continue;
             }
-            let sx = x + kx as i32 - target_x;
-            if let Some(px) = sample_pixel(src_pixels, sx, sy, width_i32, height_i32, edge_mode) {
-              let (r, g, b, a) = unpremultiply(px);
-              sum_r += r * weight;
-              sum_g += g * weight;
-              sum_b += b * weight;
-              sum_a += a * weight;
+            let idx = idx_base + x as usize;
+            let preserved_alpha = if preserve_alpha {
+              src_pixels[idx].alpha() as f32 / 255.0
+            } else {
+              0.0
+            };
+
+            let mut sum_r = 0.0;
+            let mut sum_g = 0.0;
+            let mut sum_b = 0.0;
+            let mut sum_a = 0.0;
+
+            for (ky, row) in kernel_rows.iter().enumerate() {
+              let sy = y + ky as i32 - target_y;
+              for (kx, weight) in row.iter().enumerate() {
+                if *weight == 0.0 {
+                  continue;
+                }
+                let sx = x + kx as i32 - target_x;
+                if let Some(px) =
+                  sample_pixel(src_pixels, sx, sy, width_i32, height_i32, edge_mode)
+                {
+                  let (r, g, b, a) = unpremultiply(px);
+                  sum_r += r * weight;
+                  sum_g += g * weight;
+                  sum_b += b * weight;
+                  sum_a += a * weight;
+                }
+              }
             }
+
+            let r = sum_r / divisor + bias;
+            let g = sum_g / divisor + bias;
+            let b = sum_b / divisor + bias;
+            let a = sum_a / divisor + bias;
+            let clamp = |v: f32| v.clamp(0.0, 1.0);
+            let out_alpha = if preserve_alpha {
+              preserved_alpha
+            } else {
+              clamp(a)
+            };
+            let to_channel =
+              |v: f32, alpha: f32| (clamp(v) * alpha * 255.0).round().clamp(0.0, 255.0) as u8;
+            let a_byte = (out_alpha * 255.0).round().clamp(0.0, 255.0) as u8;
+            *dst_px = PremultipliedColorU8::from_rgba(
+              to_channel(r, out_alpha),
+              to_channel(g, out_alpha),
+              to_channel(b, out_alpha),
+              a_byte,
+            )
+            .unwrap_or(PremultipliedColorU8::TRANSPARENT);
           }
-        }
+          Ok(())
+        })
+      })?;
+  }
 
-        let r = sum_r / divisor + bias;
-        let g = sum_g / divisor + bias;
-        let b = sum_b / divisor + bias;
-        let a = sum_a / divisor + bias;
-        let clamp = |v: f32| v.clamp(0.0, 1.0);
-        let out_alpha = if preserve_alpha {
-          preserved_alpha
-        } else {
-          clamp(a)
-        };
-        let to_channel =
-          |v: f32, alpha: f32| (clamp(v) * alpha * 255.0).round().clamp(0.0, 255.0) as u8;
-        let a_byte = (out_alpha * 255.0).round().clamp(0.0, 255.0) as u8;
-        *dst_px = PremultipliedColorU8::from_rgba(
-          to_channel(r, out_alpha),
-          to_channel(g, out_alpha),
-          to_channel(b, out_alpha),
-          a_byte,
-        )
-        .unwrap_or(PremultipliedColorU8::TRANSPARENT);
-      });
-    });
-
-  out
+  Ok(out)
 }
 
 fn sample_pixel(
@@ -4310,54 +4372,79 @@ fn unpremultiply(px: PremultipliedColorU8) -> (f32, f32, f32, f32) {
   }
 }
 
-fn apply_morphology(pixmap: &mut Pixmap, radius: (f32, f32), op: MorphologyOp) {
+fn apply_morphology(pixmap: &mut Pixmap, radius: (f32, f32), op: MorphologyOp) -> RenderResult<()> {
+  check_active(RenderStage::Paint)?;
   let rx = radius.0.abs().ceil() as i32;
   let ry = radius.1.abs().ceil() as i32;
   if rx <= 0 && ry <= 0 {
-    return;
+    return Ok(());
   }
   let width = pixmap.width() as i32;
   let height = pixmap.height() as i32;
+  if width <= 0 || height <= 0 {
+    return Ok(());
+  }
   let original = pixmap.clone();
   let src = original.pixels();
   let dst = pixmap.pixels_mut();
   let row_len = width as usize;
 
+  let window_w = rx.saturating_mul(2).saturating_add(1) as usize;
+  let window_h = ry.saturating_mul(2).saturating_add(1) as usize;
+  let window_area = window_w.saturating_mul(window_h);
+  let check_stride = if window_area > 4096 {
+    1
+  } else {
+    FILTER_DEADLINE_STRIDE
+  };
+
   let deadline = active_deadline();
-  dst.par_iter_mut().enumerate().for_each(|(idx, dst_px)| {
-    with_deadline(deadline.as_ref(), || {
-      let y = (idx / row_len) as i32;
-      let x = (idx % row_len) as i32;
-      let mut agg = match op {
-        MorphologyOp::Dilate => [0u8; 4],
-        MorphologyOp::Erode => [255u8; 4],
-      };
-      for dy in -ry..=ry {
-        for dx in -rx..=rx {
-          let ny = (y + dy).clamp(0, height - 1);
-          let nx = (x + dx).clamp(0, width - 1);
-          let sample_idx = (ny as usize) * row_len + nx as usize;
-          let px = src[sample_idx];
-          match op {
-            MorphologyOp::Dilate => {
-              agg[0] = agg[0].max(px.red());
-              agg[1] = agg[1].max(px.green());
-              agg[2] = agg[2].max(px.blue());
-              agg[3] = agg[3].max(px.alpha());
+  if row_len > 0 {
+    dst
+      .par_chunks_mut(row_len)
+      .enumerate()
+      .try_for_each(|(y, row)| {
+        with_deadline(deadline.as_ref(), || -> RenderResult<()> {
+          let y = y as i32;
+          for (x, dst_px) in row.iter_mut().enumerate() {
+            if x % check_stride == 0 {
+              check_active(RenderStage::Paint)?;
             }
-            MorphologyOp::Erode => {
-              agg[0] = agg[0].min(px.red());
-              agg[1] = agg[1].min(px.green());
-              agg[2] = agg[2].min(px.blue());
-              agg[3] = agg[3].min(px.alpha());
+            let x = x as i32;
+            let mut agg = match op {
+              MorphologyOp::Dilate => [0u8; 4],
+              MorphologyOp::Erode => [255u8; 4],
+            };
+            for dy in -ry..=ry {
+              for dx in -rx..=rx {
+                let ny = (y + dy).clamp(0, height - 1);
+                let nx = (x + dx).clamp(0, width - 1);
+                let sample_idx = (ny as usize) * row_len + nx as usize;
+                let px = src[sample_idx];
+                match op {
+                  MorphologyOp::Dilate => {
+                    agg[0] = agg[0].max(px.red());
+                    agg[1] = agg[1].max(px.green());
+                    agg[2] = agg[2].max(px.blue());
+                    agg[3] = agg[3].max(px.alpha());
+                  }
+                  MorphologyOp::Erode => {
+                    agg[0] = agg[0].min(px.red());
+                    agg[1] = agg[1].min(px.green());
+                    agg[2] = agg[2].min(px.blue());
+                    agg[3] = agg[3].min(px.alpha());
+                  }
+                }
+              }
             }
+            *dst_px = PremultipliedColorU8::from_rgba(agg[0], agg[1], agg[2], agg[3])
+              .unwrap_or(PremultipliedColorU8::TRANSPARENT);
           }
-        }
-      }
-      *dst_px = PremultipliedColorU8::from_rgba(agg[0], agg[1], agg[2], agg[3])
-        .unwrap_or(PremultipliedColorU8::TRANSPARENT);
-    });
-  });
+          Ok(())
+        })
+      })?;
+  }
+  Ok(())
 }
 
 fn apply_component_transfer(
@@ -4572,9 +4659,10 @@ fn apply_color_matrix_values(
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::paint::blur::BlurCache;
-  use crate::paint::painter::{enable_paint_diagnostics, take_paint_diagnostics};
+  use crate::render_control::{with_deadline, RenderDeadline};
   use std::collections::HashMap;
+  use std::sync::atomic::{AtomicUsize, Ordering};
+  use std::sync::Arc;
   use tiny_skia::ColorU8;
 
   fn pixmap_from_rgba(colors: &[(u8, u8, u8, u8)]) -> Pixmap {
@@ -4599,7 +4687,10 @@ mod tests {
     PremultipliedColorU8::from_rgba(pm(r), pm(g), pm(b), a).unwrap()
   }
 
-  fn apply_for_test(prim: &FilterPrimitive, pixmap: &Pixmap) -> FilterResult {
+  fn apply_primitive_for_test(
+    prim: &FilterPrimitive,
+    pixmap: &Pixmap,
+  ) -> RenderResult<Option<FilterResult>> {
     let region = filter_region_for_pixmap(pixmap);
     let src = FilterResult::full_region(pixmap.clone(), region);
     let mut filter = SvgFilter {
@@ -4624,8 +4715,107 @@ mod tests {
       ColorInterpolationFilters::LinearRGB,
       None,
     )
-    .unwrap()
-    .expect("primitive output")
+  }
+
+  fn apply_for_test(prim: &FilterPrimitive, pixmap: &Pixmap) -> FilterResult {
+    apply_primitive_for_test(prim, pixmap)
+      .unwrap()
+      .expect("primitive output")
+  }
+
+  fn deadline_after_first_check() -> (RenderDeadline, Arc<AtomicUsize>) {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_cb = Arc::clone(&calls);
+    let cancel = Arc::new(move || calls_cb.fetch_add(1, Ordering::SeqCst) >= 1);
+    (RenderDeadline::new(None, Some(cancel)), calls)
+  }
+
+  #[test]
+  fn convolve_matrix_respects_cancel_callback() {
+    let (deadline, calls) = deadline_after_first_check();
+    let pixmap = new_pixmap(1, 1).unwrap();
+    let prim = FilterPrimitive::ConvolveMatrix {
+      input: FilterInput::SourceGraphic,
+      order_x: 1,
+      order_y: 1,
+      kernel: vec![1.0],
+      divisor: Some(1.0),
+      bias: 0.0,
+      target_x: 0,
+      target_y: 0,
+      edge_mode: EdgeMode::Duplicate,
+      preserve_alpha: false,
+      subregion: None,
+    };
+
+    let result = with_deadline(Some(&deadline), || apply_primitive_for_test(&prim, &pixmap));
+
+    assert!(
+      matches!(result, Err(RenderError::Timeout { stage: RenderStage::Paint, .. })),
+      "expected timeout, got {result:?}"
+    );
+    assert!(calls.load(Ordering::SeqCst) >= 2);
+  }
+
+  #[test]
+  fn morphology_respects_cancel_callback() {
+    let (deadline, calls) = deadline_after_first_check();
+    let pixmap = new_pixmap(1, 1).unwrap();
+    let prim = FilterPrimitive::Morphology {
+      input: FilterInput::SourceGraphic,
+      radius: (1.0, 1.0),
+      op: MorphologyOp::Dilate,
+    };
+
+    let result = with_deadline(Some(&deadline), || apply_primitive_for_test(&prim, &pixmap));
+
+    assert!(
+      matches!(result, Err(RenderError::Timeout { stage: RenderStage::Paint, .. })),
+      "expected timeout, got {result:?}"
+    );
+    assert!(calls.load(Ordering::SeqCst) >= 2);
+  }
+
+  #[test]
+  fn displacement_map_respects_cancel_callback() {
+    let (deadline, calls) = deadline_after_first_check();
+    let pixmap = new_pixmap(1, 1).unwrap();
+    let prim = FilterPrimitive::DisplacementMap {
+      in1: FilterInput::SourceGraphic,
+      in2: FilterInput::SourceGraphic,
+      scale: 10.0,
+      x_channel: ChannelSelector::R,
+      y_channel: ChannelSelector::G,
+    };
+
+    let result = with_deadline(Some(&deadline), || apply_primitive_for_test(&prim, &pixmap));
+
+    assert!(
+      matches!(result, Err(RenderError::Timeout { stage: RenderStage::Paint, .. })),
+      "expected timeout, got {result:?}"
+    );
+    assert!(calls.load(Ordering::SeqCst) >= 2);
+  }
+
+  #[test]
+  fn turbulence_respects_cancel_callback() {
+    let (deadline, calls) = deadline_after_first_check();
+    let pixmap = new_pixmap(1, 1).unwrap();
+    let prim = FilterPrimitive::Turbulence {
+      base_frequency: (0.05, 0.05),
+      seed: 1,
+      octaves: 1,
+      stitch_tiles: false,
+      kind: TurbulenceType::FractalNoise,
+    };
+
+    let result = with_deadline(Some(&deadline), || apply_primitive_for_test(&prim, &pixmap));
+
+    assert!(
+      matches!(result, Err(RenderError::Timeout { stage: RenderStage::Paint, .. })),
+      "expected timeout, got {result:?}"
+    );
+    assert!(calls.load(Ordering::SeqCst) >= 2);
   }
 
   #[test]
@@ -5028,7 +5218,7 @@ mod tests {
     let idx = 1 * 5 + 2;
     pixmap.pixels_mut()[idx] = PremultipliedColorU8::from_rgba(255, 255, 255, 255).unwrap();
 
-    apply_morphology(&mut pixmap, (1.0, 0.0), MorphologyOp::Dilate);
+    apply_morphology(&mut pixmap, (1.0, 0.0), MorphologyOp::Dilate).unwrap();
 
     let pixels = pixmap.pixels();
     for y in 0..3 {
@@ -5419,8 +5609,8 @@ mod tests_composite {
 
     let mut cache = BlurCache::default();
     let bbox = Rect::from_xywh(0.0, 0.0, 32.0, 32.0);
-    apply_svg_filter_with_cache(&filter, &mut pixmap, 1.0, bbox, Some(&mut cache));
-    apply_svg_filter_with_cache(&filter, &mut pixmap, 1.0, bbox, Some(&mut cache));
+    apply_svg_filter_with_cache(&filter, &mut pixmap, 1.0, bbox, Some(&mut cache)).unwrap();
+    apply_svg_filter_with_cache(&filter, &mut pixmap, 1.0, bbox, Some(&mut cache)).unwrap();
 
     let stats = take_paint_diagnostics().expect("diagnostics enabled");
     assert!(

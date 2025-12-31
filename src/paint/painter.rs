@@ -5206,7 +5206,7 @@ impl Painter {
       if !style.text_shadow.is_empty() {
         let shadows = resolve_text_shadows(style);
         if !shadows.is_empty() {
-          self.paint_text_shadows(&glyph_paths, &bounds, &shadows);
+          let _ = self.paint_text_shadows(&glyph_paths, &bounds, &shadows);
         }
       }
     }
@@ -5340,7 +5340,7 @@ impl Painter {
       if !style.text_shadow.is_empty() {
         let shadows = resolve_text_shadows(style);
         if !shadows.is_empty() {
-          self.paint_text_shadows(&glyph_paths, &bounds, &shadows);
+          let _ = self.paint_text_shadows(&glyph_paths, &bounds, &shadows);
         }
       }
     }
@@ -9130,21 +9130,21 @@ fn apply_filters(
     match filter {
       ResolvedFilter::Blur(radius) => apply_gaussian_blur(pixmap, *radius * scale)?,
       ResolvedFilter::Brightness(amount) => {
-        apply_color_filter(pixmap, |c, a| (scale_color(c, *amount), a))
+        apply_color_filter(pixmap, |c, a| (scale_color(c, *amount), a))?
       }
       ResolvedFilter::Contrast(amount) => {
-        apply_color_filter(pixmap, |c, a| (apply_contrast(c, *amount), a))
+        apply_color_filter(pixmap, |c, a| (apply_contrast(c, *amount), a))?
       }
       ResolvedFilter::Grayscale(amount) => {
-        apply_color_filter(pixmap, |c, a| (grayscale(c, *amount), a))
+        apply_color_filter(pixmap, |c, a| (grayscale(c, *amount), a))?
       }
-      ResolvedFilter::Sepia(amount) => apply_color_filter(pixmap, |c, a| (sepia(c, *amount), a)),
+      ResolvedFilter::Sepia(amount) => apply_color_filter(pixmap, |c, a| (sepia(c, *amount), a))?,
       ResolvedFilter::Saturate(amount) => {
-        apply_color_filter(pixmap, |c, a| (saturate(c, *amount), a))
+        apply_color_filter(pixmap, |c, a| (saturate(c, *amount), a))?
       }
-      ResolvedFilter::HueRotate(deg) => apply_color_filter(pixmap, |c, a| (hue_rotate(c, *deg), a)),
-      ResolvedFilter::Invert(amount) => apply_color_filter(pixmap, |c, a| (invert(c, *amount), a)),
-      ResolvedFilter::Opacity(amount) => apply_color_filter(pixmap, |c, a| (c, a * *amount)),
+      ResolvedFilter::HueRotate(deg) => apply_color_filter(pixmap, |c, a| (hue_rotate(c, *deg), a))?,
+      ResolvedFilter::Invert(amount) => apply_color_filter(pixmap, |c, a| (invert(c, *amount), a))?,
+      ResolvedFilter::Opacity(amount) => apply_color_filter(pixmap, |c, a| (c, a * *amount))?,
       ResolvedFilter::DropShadow {
         offset_x,
         offset_y,
@@ -9250,11 +9250,15 @@ fn apply_backdrop_filters(
   Ok(())
 }
 
-fn apply_color_filter<F>(pixmap: &mut Pixmap, mut f: F)
+fn apply_color_filter<F>(pixmap: &mut Pixmap, mut f: F) -> RenderResult<()>
 where
   F: FnMut([f32; 3], f32) -> ([f32; 3], f32),
 {
-  for px in pixmap.pixels_mut() {
+  const FILTER_DEADLINE_STRIDE: usize = 1024;
+  for (idx, px) in pixmap.pixels_mut().iter_mut().enumerate() {
+    if idx % FILTER_DEADLINE_STRIDE == 0 {
+      check_active(RenderStage::Paint)?;
+    }
     let alpha = px.alpha() as f32 / 255.0;
     let base = if alpha > 0.0 {
       [
@@ -9278,6 +9282,7 @@ where
 
     *px = PremultipliedColorU8::from_rgba(r, g, b, a).unwrap_or(PremultipliedColorU8::TRANSPARENT);
   }
+  Ok(())
 }
 
 fn scale_color(color: [f32; 3], factor: f32) -> [f32; 3] {

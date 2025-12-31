@@ -1,10 +1,11 @@
 use crate::geometry::Rect;
 use crate::paint::pixmap::new_pixmap;
-use crate::render_control::{active_deadline, with_deadline};
+use crate::error::RenderStage;
+use crate::render_control::{active_deadline, check_active, with_deadline};
 use rayon::prelude::*;
 use tiny_skia::{Pixmap, PremultipliedColorU8};
 
-use super::TurbulenceType;
+use super::{RenderResult, TurbulenceType, FILTER_DEADLINE_STRIDE};
 
 #[derive(Clone, Copy, Debug)]
 struct ResolvedRegion {
@@ -57,13 +58,17 @@ pub(super) fn render_turbulence(
   octaves: u32,
   stitch_tiles: bool,
   kind: TurbulenceType,
-) -> Option<Pixmap> {
+) -> RenderResult<Option<Pixmap>> {
+  check_active(RenderStage::Paint)?;
   let region = match resolve_region(filter_region, output_width, output_height) {
     Some(region) => region,
-    None => return new_pixmap(output_width, output_height),
+    None => return Ok(new_pixmap(output_width, output_height)),
   };
 
-  let mut pixmap = new_pixmap(output_width, output_height)?;
+  let mut pixmap = match new_pixmap(output_width, output_height) {
+    Some(pixmap) => pixmap,
+    None => return Ok(None),
+  };
 
   let perm_table = build_permutation(seed);
   let octaves = octaves.max(1);
@@ -84,11 +89,14 @@ pub(super) fn render_turbulence(
     .enumerate()
     .skip(region.y as usize)
     .take(region.height as usize)
-    .for_each(|(y, row)| {
-      with_deadline(deadline.as_ref(), || {
+    .try_for_each(|(y, row)| {
+      with_deadline(deadline.as_ref(), || -> RenderResult<()> {
         let y_coord = (y - region.y as usize) as f32;
         let row_slice = &mut row[start_x..end_x];
         for (x_offset, px) in row_slice.iter_mut().enumerate() {
+          if x_offset % FILTER_DEADLINE_STRIDE == 0 {
+            check_active(RenderStage::Paint)?;
+          }
           let x_coord = x_offset as f32;
           let mut freq_x = base_freq_x;
           let mut freq_y = base_freq_y;
@@ -129,10 +137,11 @@ pub(super) fn render_turbulence(
           *px = PremultipliedColorU8::from_rgba(byte, byte, byte, 255)
             .unwrap_or(PremultipliedColorU8::TRANSPARENT);
         }
-      });
-    });
+        Ok(())
+      })
+    })?;
 
-  Some(pixmap)
+  Ok(Some(pixmap))
 }
 
 fn adjust_frequency(freq: f32, extent: u32, stitch: bool) -> (f32, Option<i32>) {

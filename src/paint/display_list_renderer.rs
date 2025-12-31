@@ -570,35 +570,35 @@ fn apply_filters(
       ResolvedFilter::Brightness(amount) => {
         crate::paint::css_filter::apply_color_filter(pixmap, |c, a| {
           (crate::paint::css_filter::scale_color(c, *amount), a)
-        })
+        })?
       }
       ResolvedFilter::Contrast(amount) => {
         crate::paint::css_filter::apply_color_filter(pixmap, |c, a| {
           (crate::paint::css_filter::apply_contrast(c, *amount), a)
-        })
+        })?
       }
       ResolvedFilter::Grayscale(amount) => {
         crate::paint::css_filter::apply_color_filter(pixmap, |c, a| {
           (crate::paint::css_filter::grayscale(c, *amount), a)
-        })
+        })?
       }
       ResolvedFilter::Sepia(amount) => crate::paint::css_filter::apply_color_filter(pixmap, |c, a| {
         (crate::paint::css_filter::sepia(c, *amount), a)
-      }),
+      })?,
       ResolvedFilter::Saturate(amount) => {
         crate::paint::css_filter::apply_color_filter(pixmap, |c, a| {
           (crate::paint::css_filter::saturate(c, *amount), a)
-        })
+        })?
       }
       ResolvedFilter::HueRotate(deg) => crate::paint::css_filter::apply_color_filter(pixmap, |c, a| {
         (crate::paint::css_filter::hue_rotate(c, *deg), a)
-      }),
+      })?,
       ResolvedFilter::Invert(amount) => crate::paint::css_filter::apply_color_filter(pixmap, |c, a| {
         (crate::paint::css_filter::invert(c, *amount), a)
-      }),
+      })?,
       ResolvedFilter::Opacity(amount) => crate::paint::css_filter::apply_color_filter(pixmap, |c, a| {
         (c, a * *amount)
-      }),
+      })?,
       ResolvedFilter::DropShadow {
         offset_x,
         offset_y,
