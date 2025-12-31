@@ -1383,9 +1383,15 @@ fn combine_masks(into: &mut Mask, existing: &Mask) {
     return;
   }
 
+  #[inline]
+  fn mul_div_255_round(value: u8, alpha: u8) -> u8 {
+    // Match `tiny_skia::Pixmap::apply_mask` rounding behavior.
+    let prod = value as u16 * alpha as u16;
+    ((prod + 255) >> 8) as u8
+  }
+
   for (dst, src) in into.data_mut().iter_mut().zip(existing.data().iter()) {
-    let multiplied = (*dst as u16 * *src as u16 + 127) / 255;
-    *dst = multiplied as u8;
+    *dst = mul_div_255_round(*dst, *src);
   }
 }
 
@@ -1442,6 +1448,13 @@ pub(crate) fn apply_mask_with_offset(
   mask: &Mask,
   mask_origin: (i32, i32),
 ) -> bool {
+  #[inline]
+  fn mul_div_255_round(value: u8, alpha: u8) -> u8 {
+    // Match `tiny_skia::Pixmap::apply_mask` rounding behavior.
+    let prod = value as u16 * alpha as u16;
+    ((prod + 255) >> 8) as u8
+  }
+
   let pixmap_w = pixmap.width() as i32;
   let pixmap_h = pixmap.height() as i32;
   if pixmap_w <= 0 || pixmap_h <= 0 {
@@ -1514,9 +1527,8 @@ pub(crate) fn apply_mask_with_offset(
         pix_row[base..base + 4].fill(0);
         continue;
       }
-      let m16 = m as u16;
       for c in 0..4 {
-        pix_row[base + c] = ((pix_row[base + c] as u16 * m16 + 127) / 255) as u8;
+        pix_row[base + c] = mul_div_255_round(pix_row[base + c], m);
       }
     }
   }
@@ -2164,5 +2176,29 @@ mod tests {
       recorder.take().is_empty(),
       "crop_mask should not allocate Pixmaps"
     );
+  }
+
+  #[test]
+  fn apply_mask_with_offset_matches_tiny_skia_when_aligned() {
+    let mut base = new_pixmap(8, 8).expect("pixmap");
+    for (idx, chunk) in base.data_mut().chunks_exact_mut(4).enumerate() {
+      let v = (idx as u8).wrapping_mul(37).wrapping_add(11);
+      chunk.copy_from_slice(&[v, v.rotate_left(1), v.rotate_left(2), v.rotate_left(3)]);
+    }
+
+    let mut mask = Mask::new(8, 8).expect("mask");
+    for y in 0..8u32 {
+      for x in 0..8u32 {
+        mask.data_mut()[(y * 8 + x) as usize] = (x * 17 + y * 13) as u8;
+      }
+    }
+
+    let mut expected = base.clone();
+    expected.apply_mask(&mask);
+
+    let mut actual = base.clone();
+    assert!(apply_mask_with_offset(&mut actual, (0, 0), &mask, (0, 0)));
+
+    assert_eq!(actual.data(), expected.data());
   }
 }
