@@ -35,6 +35,7 @@ use crate::error::Error;
 use crate::error::FontError;
 use crate::error::Result;
 use crate::resource::{FetchedResource, ResourceFetcher};
+use crate::text::face_cache;
 use crate::text::font_db::FontCacheConfig;
 use crate::text::font_db::FontConfig;
 use crate::text::font_db::FontDatabase;
@@ -1313,12 +1314,16 @@ impl FontContext {
     ch: Option<char>,
   ) -> Option<LoadedFont> {
     let active_generation = self.active_web_font_generation.load(Ordering::Relaxed);
-    let used_codepoints = self
-      .web_used_codepoints
-      .read()
-      .map(|v| v.clone())
-      .unwrap_or_default();
-    let faces = self.web_fonts.read().ok()?.clone();
+    let faces = self.web_fonts.read().ok()?;
+    let used_codepoints_guard = if ch.is_none() {
+      self.web_used_codepoints.read().ok()
+    } else {
+      None
+    };
+    let used_codepoints = used_codepoints_guard
+      .as_deref()
+      .map(|v| v.as_slice())
+      .unwrap_or(&[]);
     let desired_stretch = stretch.to_percentage();
     let mut best: Option<((u8, f32, f32, u8, (u8, f32), usize), LoadedFont)> = None;
 
@@ -1329,7 +1334,7 @@ impl FontContext {
     {
       if ch.is_none()
         && !used_codepoints.is_empty()
-        && !Self::unicode_range_intersects_used(&face.ranges, &used_codepoints)
+        && !Self::unicode_range_intersects_used(&face.ranges, used_codepoints)
       {
         continue;
       }
@@ -1849,10 +1854,8 @@ impl WebFontFace {
     if !self.ranges.iter().any(|(s, e)| *s <= cp && cp <= *e) {
       return false;
     }
-    ttf_parser::Face::parse(&self.data, self.index)
-      .ok()
-      .and_then(|f| f.glyph_index(ch))
-      .is_some()
+    face_cache::get_ttf_face_with_data(&self.data, self.index)
+      .is_some_and(|cached| cached.has_glyph(ch))
   }
 
   pub(crate) fn effective_style(&self, _requested: FontStyle) -> FontStyle {
@@ -2486,6 +2489,36 @@ mod tests {
     let families = vec!["WebFont".to_string()];
     let loaded = ctx.get_font_full(&families, 400, FontStyle::Normal, FontStretch::Normal);
     assert!(loaded.is_some());
+  }
+
+  #[cfg(debug_assertions)]
+  #[test]
+  fn web_font_supports_char_uses_face_cache() {
+    let data =
+      Arc::new(include_bytes!("../../tests/fixtures/fonts/DejaVuSans-subset.ttf").to_vec());
+    let face = WebFontFace {
+      family: "WebFontCacheTest".to_string(),
+      data,
+      index: 0,
+      style: FontFaceStyle::Normal,
+      display: FontDisplay::Swap,
+      weight: (400, 400),
+      stretch: (100.0, 100.0),
+      order: 0,
+      ranges: vec![(0, 0x10ffff)],
+      has_math: false,
+      generation: 0,
+    };
+
+    let _guard = face_cache::FaceParseCountGuard::start();
+    for _ in 0..8 {
+      assert!(face.supports_char('A'));
+    }
+    assert_eq!(
+      face_cache::face_parse_count(),
+      1,
+      "supports_char should reuse the global parsed face cache"
+    );
   }
 
   #[test]
