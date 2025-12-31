@@ -643,44 +643,80 @@ fn tokenize_image_set_candidate(value_str: &str) -> Vec<String> {
 }
 
 fn parse_cursor_keyword(kw: &str) -> Option<CursorKeyword> {
-  match kw.to_ascii_lowercase().as_str() {
-    "auto" => Some(CursorKeyword::Auto),
-    "default" => Some(CursorKeyword::Default),
-    "none" => Some(CursorKeyword::None),
-    "context-menu" => Some(CursorKeyword::ContextMenu),
-    "help" => Some(CursorKeyword::Help),
-    "pointer" => Some(CursorKeyword::Pointer),
-    "progress" => Some(CursorKeyword::Progress),
-    "wait" => Some(CursorKeyword::Wait),
-    "cell" => Some(CursorKeyword::Cell),
-    "crosshair" => Some(CursorKeyword::Crosshair),
-    "text" => Some(CursorKeyword::Text),
-    "vertical-text" => Some(CursorKeyword::VerticalText),
-    "alias" => Some(CursorKeyword::Alias),
-    "copy" => Some(CursorKeyword::Copy),
-    "move" => Some(CursorKeyword::Move),
-    "no-drop" => Some(CursorKeyword::NoDrop),
-    "not-allowed" => Some(CursorKeyword::NotAllowed),
-    "grab" => Some(CursorKeyword::Grab),
-    "grabbing" => Some(CursorKeyword::Grabbing),
-    "all-scroll" => Some(CursorKeyword::AllScroll),
-    "col-resize" => Some(CursorKeyword::ColResize),
-    "row-resize" => Some(CursorKeyword::RowResize),
-    "n-resize" => Some(CursorKeyword::NResize),
-    "s-resize" => Some(CursorKeyword::SResize),
-    "e-resize" => Some(CursorKeyword::EResize),
-    "w-resize" => Some(CursorKeyword::WResize),
-    "ne-resize" => Some(CursorKeyword::NeResize),
-    "nw-resize" => Some(CursorKeyword::NwResize),
-    "se-resize" => Some(CursorKeyword::SeResize),
-    "sw-resize" => Some(CursorKeyword::SwResize),
-    "ew-resize" => Some(CursorKeyword::EwResize),
-    "ns-resize" => Some(CursorKeyword::NsResize),
-    "nesw-resize" => Some(CursorKeyword::NeswResize),
-    "nwse-resize" => Some(CursorKeyword::NwseResize),
-    "zoom-in" => Some(CursorKeyword::ZoomIn),
-    "zoom-out" => Some(CursorKeyword::ZoomOut),
-    _ => None,
+  if kw.eq_ignore_ascii_case("auto") {
+    Some(CursorKeyword::Auto)
+  } else if kw.eq_ignore_ascii_case("default") {
+    Some(CursorKeyword::Default)
+  } else if kw.eq_ignore_ascii_case("none") {
+    Some(CursorKeyword::None)
+  } else if kw.eq_ignore_ascii_case("context-menu") {
+    Some(CursorKeyword::ContextMenu)
+  } else if kw.eq_ignore_ascii_case("help") {
+    Some(CursorKeyword::Help)
+  } else if kw.eq_ignore_ascii_case("pointer") {
+    Some(CursorKeyword::Pointer)
+  } else if kw.eq_ignore_ascii_case("progress") {
+    Some(CursorKeyword::Progress)
+  } else if kw.eq_ignore_ascii_case("wait") {
+    Some(CursorKeyword::Wait)
+  } else if kw.eq_ignore_ascii_case("cell") {
+    Some(CursorKeyword::Cell)
+  } else if kw.eq_ignore_ascii_case("crosshair") {
+    Some(CursorKeyword::Crosshair)
+  } else if kw.eq_ignore_ascii_case("text") {
+    Some(CursorKeyword::Text)
+  } else if kw.eq_ignore_ascii_case("vertical-text") {
+    Some(CursorKeyword::VerticalText)
+  } else if kw.eq_ignore_ascii_case("alias") {
+    Some(CursorKeyword::Alias)
+  } else if kw.eq_ignore_ascii_case("copy") {
+    Some(CursorKeyword::Copy)
+  } else if kw.eq_ignore_ascii_case("move") {
+    Some(CursorKeyword::Move)
+  } else if kw.eq_ignore_ascii_case("no-drop") {
+    Some(CursorKeyword::NoDrop)
+  } else if kw.eq_ignore_ascii_case("not-allowed") {
+    Some(CursorKeyword::NotAllowed)
+  } else if kw.eq_ignore_ascii_case("grab") {
+    Some(CursorKeyword::Grab)
+  } else if kw.eq_ignore_ascii_case("grabbing") {
+    Some(CursorKeyword::Grabbing)
+  } else if kw.eq_ignore_ascii_case("all-scroll") {
+    Some(CursorKeyword::AllScroll)
+  } else if kw.eq_ignore_ascii_case("col-resize") {
+    Some(CursorKeyword::ColResize)
+  } else if kw.eq_ignore_ascii_case("row-resize") {
+    Some(CursorKeyword::RowResize)
+  } else if kw.eq_ignore_ascii_case("n-resize") {
+    Some(CursorKeyword::NResize)
+  } else if kw.eq_ignore_ascii_case("s-resize") {
+    Some(CursorKeyword::SResize)
+  } else if kw.eq_ignore_ascii_case("e-resize") {
+    Some(CursorKeyword::EResize)
+  } else if kw.eq_ignore_ascii_case("w-resize") {
+    Some(CursorKeyword::WResize)
+  } else if kw.eq_ignore_ascii_case("ne-resize") {
+    Some(CursorKeyword::NeResize)
+  } else if kw.eq_ignore_ascii_case("nw-resize") {
+    Some(CursorKeyword::NwResize)
+  } else if kw.eq_ignore_ascii_case("se-resize") {
+    Some(CursorKeyword::SeResize)
+  } else if kw.eq_ignore_ascii_case("sw-resize") {
+    Some(CursorKeyword::SwResize)
+  } else if kw.eq_ignore_ascii_case("ew-resize") {
+    Some(CursorKeyword::EwResize)
+  } else if kw.eq_ignore_ascii_case("ns-resize") {
+    Some(CursorKeyword::NsResize)
+  } else if kw.eq_ignore_ascii_case("nesw-resize") {
+    Some(CursorKeyword::NeswResize)
+  } else if kw.eq_ignore_ascii_case("nwse-resize") {
+    Some(CursorKeyword::NwseResize)
+  } else if kw.eq_ignore_ascii_case("zoom-in") {
+    Some(CursorKeyword::ZoomIn)
+  } else if kw.eq_ignore_ascii_case("zoom-out") {
+    Some(CursorKeyword::ZoomOut)
+  } else {
+    None
   }
 }
 
@@ -877,11 +913,14 @@ fn parse_background_image_list(value: &PropertyValue) -> Option<Vec<Option<Backg
 }
 
 fn parse_overscroll_keyword(kw: &str) -> Option<OverscrollBehavior> {
-  match kw.to_ascii_lowercase().as_str() {
-    "auto" => Some(OverscrollBehavior::Auto),
-    "contain" => Some(OverscrollBehavior::Contain),
-    "none" => Some(OverscrollBehavior::None),
-    _ => None,
+  if kw.eq_ignore_ascii_case("auto") {
+    Some(OverscrollBehavior::Auto)
+  } else if kw.eq_ignore_ascii_case("contain") {
+    Some(OverscrollBehavior::Contain)
+  } else if kw.eq_ignore_ascii_case("none") {
+    Some(OverscrollBehavior::None)
+  } else {
+    None
   }
 }
 
@@ -889,20 +928,28 @@ fn parse_scroll_snap_type_keywords(parts: &[String]) -> Option<ScrollSnapType> {
   if parts.is_empty() || parts.len() > 2 {
     return None;
   }
-  let axis = match parts[0].to_ascii_lowercase().as_str() {
-    "none" => ScrollSnapAxis::None,
-    "x" => ScrollSnapAxis::X,
-    "y" => ScrollSnapAxis::Y,
-    "block" => ScrollSnapAxis::Block,
-    "inline" => ScrollSnapAxis::Inline,
-    "both" => ScrollSnapAxis::Both,
-    _ => return None,
+  let axis = if parts[0].eq_ignore_ascii_case("none") {
+    ScrollSnapAxis::None
+  } else if parts[0].eq_ignore_ascii_case("x") {
+    ScrollSnapAxis::X
+  } else if parts[0].eq_ignore_ascii_case("y") {
+    ScrollSnapAxis::Y
+  } else if parts[0].eq_ignore_ascii_case("block") {
+    ScrollSnapAxis::Block
+  } else if parts[0].eq_ignore_ascii_case("inline") {
+    ScrollSnapAxis::Inline
+  } else if parts[0].eq_ignore_ascii_case("both") {
+    ScrollSnapAxis::Both
+  } else {
+    return None;
   };
   let strictness = if parts.len() == 2 {
-    match parts[1].to_ascii_lowercase().as_str() {
-      "mandatory" => ScrollSnapStrictness::Mandatory,
-      "proximity" => ScrollSnapStrictness::Proximity,
-      _ => return None,
+    if parts[1].eq_ignore_ascii_case("mandatory") {
+      ScrollSnapStrictness::Mandatory
+    } else if parts[1].eq_ignore_ascii_case("proximity") {
+      ScrollSnapStrictness::Proximity
+    } else {
+      return None;
     }
   } else {
     ScrollSnapStrictness::Proximity
@@ -914,17 +961,23 @@ fn parse_scroll_snap_align_keywords(parts: &[String]) -> Option<ScrollSnapAlignm
   if parts.is_empty() || parts.len() > 2 {
     return None;
   }
-  let parse_align = |kw: &str| match kw {
-    "none" => Some(ScrollSnapAlign::None),
-    "start" => Some(ScrollSnapAlign::Start),
-    "end" => Some(ScrollSnapAlign::End),
-    "center" => Some(ScrollSnapAlign::Center),
-    _ => None,
+  let parse_align = |kw: &str| {
+    if kw.eq_ignore_ascii_case("none") {
+      Some(ScrollSnapAlign::None)
+    } else if kw.eq_ignore_ascii_case("start") {
+      Some(ScrollSnapAlign::Start)
+    } else if kw.eq_ignore_ascii_case("end") {
+      Some(ScrollSnapAlign::End)
+    } else if kw.eq_ignore_ascii_case("center") {
+      Some(ScrollSnapAlign::Center)
+    } else {
+      None
+    }
   };
 
-  let first = parse_align(&parts[0].to_ascii_lowercase())?;
+  let first = parse_align(parts[0].as_str())?;
   let second = if parts.len() == 2 {
-    parse_align(&parts[1].to_ascii_lowercase())?
+    parse_align(parts[1].as_str())?
   } else {
     first
   };
