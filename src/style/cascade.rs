@@ -984,10 +984,29 @@ fn matches_selector_cascade(
   element: &ElementRef,
   context: &mut MatchingContext<FastRenderSelectorImpl>,
 ) -> bool {
-  let profiling = cascade_profile_enabled();
-  if profiling {
-    CASCADE_PROFILE_SELECTOR_ATTEMPTS_TOTAL.fetch_add(1, Ordering::Relaxed);
+  // Extremely hot path: avoid the `OnceLock` initialization dance and extra
+  // branches when profiling is disabled.
+  if !CASCADE_PROFILE_ENABLED.load(Ordering::Relaxed) {
+    let computed_hashes;
+    let hashes = if hashes.is_some() || context.bloom_filter.is_none() {
+      hashes
+    } else {
+      computed_hashes = AncestorHashes::new(selector, context.quirks_mode());
+      Some(&computed_hashes)
+    };
+
+    if let (Some(filter), Some(hashes)) = (context.bloom_filter, hashes) {
+      if !selector_may_match(hashes, filter) {
+        return false;
+      }
+    }
+
+    // We've already applied the bloom fast-reject above (if enabled), so avoid
+    // repeating it inside `matches_selector`.
+    return matches_selector(selector, 0, None, element, context);
   }
+
+  CASCADE_PROFILE_SELECTOR_ATTEMPTS_TOTAL.fetch_add(1, Ordering::Relaxed);
 
   let computed_hashes;
   let hashes = if hashes.is_some() || context.bloom_filter.is_none() {
@@ -999,18 +1018,14 @@ fn matches_selector_cascade(
 
   if let (Some(filter), Some(hashes)) = (context.bloom_filter, hashes) {
     if !selector_may_match(hashes, filter) {
-      if profiling {
-        CASCADE_PROFILE_SELECTOR_BLOOM_FAST_REJECTS.fetch_add(1, Ordering::Relaxed);
-      }
+      CASCADE_PROFILE_SELECTOR_BLOOM_FAST_REJECTS.fetch_add(1, Ordering::Relaxed);
       return false;
     }
   }
 
-  if profiling {
-    CASCADE_PROFILE_SELECTOR_ATTEMPTS_AFTER_BLOOM.fetch_add(1, Ordering::Relaxed);
-  }
+  CASCADE_PROFILE_SELECTOR_ATTEMPTS_AFTER_BLOOM.fetch_add(1, Ordering::Relaxed);
 
-  matches_selector(selector, 0, hashes, element, context)
+  matches_selector(selector, 0, None, element, context)
 }
 
 /// The origin of a style rule for cascade ordering.
