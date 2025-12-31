@@ -276,6 +276,24 @@ fn point_in_quad(p: (f32, f32), quad: &[(f32, f32); 4]) -> bool {
 }
 
 fn sample_bilinear(src: &Pixmap, x: f32, y: f32) -> PremultipliedColorU8 {
+  if src.width() == 0 || src.height() == 0 {
+    return PremultipliedColorU8::TRANSPARENT;
+  }
+
+  // `warp_pixmap` samples using destination pixel centers (x + 0.5, y + 0.5) in a coordinate
+  // system where pixel boundaries are at integer coordinates.
+  //
+  // `tiny-skia` treats pixel centers as integer coordinates, so shift into that space before
+  // floor/lerp to ensure an identity warp samples exact source pixels rather than blending the
+  // four neighboring pixels at (0.5, 0.5), etc.
+  let mut x = x - 0.5;
+  let mut y = y - 0.5;
+
+  let max_x = src.width() as f32 - 1.0;
+  let max_y = src.height() as f32 - 1.0;
+  x = x.clamp(0.0, max_x);
+  y = y.clamp(0.0, max_y);
+
   let sx0 = x.floor() as i32;
   let sy0 = y.floor() as i32;
   let sx1 = (sx0 + 1).min(src.width() as i32 - 1);

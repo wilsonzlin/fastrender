@@ -112,6 +112,10 @@ name = "element_attr_cache_bench"
 harness = false
 
 [[bench]]
+name = "selector_candidates_bench"
+harness = false
+
+[[bench]]
 name = "layout_parallel"
 harness = false
 

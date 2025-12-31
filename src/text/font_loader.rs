@@ -2867,7 +2867,7 @@ mod tests {
 
     let _guard = face_cache::FaceParseCountGuard::start();
     for _ in 0..8 {
-      assert!(face.supports_char('A'));
+      assert!(face.supports_char('W'));
     }
     assert_eq!(
       face_cache::face_parse_count(),

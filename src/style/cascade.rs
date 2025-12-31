@@ -1080,9 +1080,70 @@ struct DomMaps {
   shadow_hosts: HashMap<usize, usize>,
   exportparts_map: HashMap<usize, Vec<(String, String)>>,
   selector_blooms: Option<SelectorBloomStore>,
+  selector_keys: DomSelectorKeyCache,
 }
 
 const SELECTOR_BLOOM_MIN_NODES: usize = 32;
+
+#[derive(Debug, Clone, Copy, Default)]
+struct DomSelectorKeyEntry {
+  tag_key: SelectorBucketKey,
+  id_key: SelectorBucketKey,
+  has_id: bool,
+  class_start: u32,
+  class_len: u32,
+  attr_start: u32,
+  attr_len: u32,
+}
+
+#[derive(Debug, Default)]
+struct DomSelectorKeyCache {
+  nodes: Vec<DomSelectorKeyEntry>,
+  class_keys: Vec<SelectorBucketKey>,
+  attr_keys: Vec<SelectorBucketKey>,
+}
+
+#[derive(Clone, Copy)]
+struct NodeSelectorKeys<'a> {
+  tag_key: SelectorBucketKey,
+  id_key: Option<SelectorBucketKey>,
+  class_keys: &'a [SelectorBucketKey],
+  attr_keys: &'a [SelectorBucketKey],
+}
+
+impl DomSelectorKeyCache {
+  fn new(node_count: usize) -> Self {
+    // Node ids are 1-indexed; leave slot 0 empty.
+    let mut nodes = Vec::with_capacity(node_count + 1);
+    nodes.resize(node_count + 1, DomSelectorKeyEntry::default());
+    Self {
+      nodes,
+      class_keys: Vec::new(),
+      attr_keys: Vec::new(),
+    }
+  }
+
+  fn set_node_keys(&mut self, node_id: usize, entry: DomSelectorKeyEntry) {
+    if node_id >= self.nodes.len() {
+      self.nodes.resize(node_id + 1, DomSelectorKeyEntry::default());
+    }
+    self.nodes[node_id] = entry;
+  }
+
+  fn node_keys(&self, node_id: usize) -> NodeSelectorKeys<'_> {
+    let entry = self.nodes.get(node_id).copied().unwrap_or_default();
+    let class_start = entry.class_start as usize;
+    let class_end = class_start + entry.class_len as usize;
+    let attr_start = entry.attr_start as usize;
+    let attr_end = attr_start + entry.attr_len as usize;
+    NodeSelectorKeys {
+      tag_key: entry.tag_key,
+      id_key: entry.has_id.then_some(entry.id_key),
+      class_keys: self.class_keys.get(class_start..class_end).unwrap_or(&[]),
+      attr_keys: self.attr_keys.get(attr_start..attr_end).unwrap_or(&[]),
+    }
+  }
+}
 
 impl DomMaps {
   fn new(root: &DomNode, id_map: HashMap<*const DomNode, usize>) -> Self {
@@ -1094,6 +1155,7 @@ impl DomMaps {
     let mut parent_map: HashMap<usize, usize> = HashMap::new();
     let mut shadow_hosts: HashMap<usize, usize> = HashMap::new();
     let mut exportparts_map: HashMap<usize, Vec<(String, String)>> = HashMap::new();
+    let mut selector_keys = DomSelectorKeyCache::new(id_map.len());
 
     fn walk(
       node: &DomNode,
@@ -1102,6 +1164,7 @@ impl DomMaps {
       parent_map: &mut HashMap<usize, usize>,
       shadow_hosts: &mut HashMap<usize, usize>,
       exportparts_map: &mut HashMap<usize, Vec<(String, String)>>,
+      selector_keys: &mut DomSelectorKeyCache,
     ) {
       let id = ids.get(&(node as *const DomNode)).copied().unwrap_or(0);
       if let Some(p) = parent {
@@ -1115,6 +1178,44 @@ impl DomMaps {
           exportparts_map.insert(id, mapping);
         }
       }
+
+      if node.is_element() {
+        let tag_key = node.tag_name().map(selector_bucket_tag).unwrap_or_default();
+        let (id_key, has_id) = node
+          .get_attribute_ref("id")
+          .map(|value| (selector_bucket_id(value), true))
+          .unwrap_or((SelectorBucketKey::default(), false));
+
+        let class_start = selector_keys.class_keys.len();
+        if let Some(class_attr) = node.get_attribute_ref("class") {
+          for cls in class_attr.split_whitespace() {
+            if cls.is_empty() {
+              continue;
+            }
+            selector_keys.class_keys.push(selector_bucket_class(cls));
+          }
+        }
+        let class_len = selector_keys.class_keys.len() - class_start;
+
+        let attr_start = selector_keys.attr_keys.len();
+        for (name, _) in node.attributes_iter() {
+          selector_keys.attr_keys.push(selector_bucket_attr(name));
+        }
+        let attr_len = selector_keys.attr_keys.len() - attr_start;
+
+        selector_keys.set_node_keys(
+          id,
+          DomSelectorKeyEntry {
+            tag_key,
+            id_key,
+            has_id,
+            class_start: u32::try_from(class_start).expect("selector key cache overflow"),
+            class_len: u32::try_from(class_len).expect("selector key cache overflow"),
+            attr_start: u32::try_from(attr_start).expect("selector key cache overflow"),
+            attr_len: u32::try_from(attr_len).expect("selector key cache overflow"),
+          },
+        );
+      }
       for child in node.children.iter() {
         walk(
           child,
@@ -1123,6 +1224,7 @@ impl DomMaps {
           parent_map,
           shadow_hosts,
           exportparts_map,
+          selector_keys,
         );
       }
     }
@@ -1134,6 +1236,7 @@ impl DomMaps {
       &mut parent_map,
       &mut shadow_hosts,
       &mut exportparts_map,
+      &mut selector_keys,
     );
 
     Self {
@@ -1143,6 +1246,7 @@ impl DomMaps {
       shadow_hosts,
       exportparts_map,
       selector_blooms: None,
+      selector_keys,
     }
   }
 
@@ -1199,6 +1303,10 @@ impl DomMaps {
 
   fn selector_blooms(&self) -> Option<&SelectorBloomStore> {
     self.selector_blooms.as_ref()
+  }
+
+  fn selector_keys(&self, node_id: usize) -> NodeSelectorKeys<'_> {
+    self.selector_keys.node_keys(node_id)
   }
 }
 
@@ -3000,6 +3108,7 @@ impl<'a> RuleIndex<'a> {
   fn selector_candidates(
     &self,
     node: &DomNode,
+    node_keys: NodeSelectorKeys<'_>,
     summary: Option<&SelectorBloomSummary>,
     quirks_mode: QuirksMode,
     out: &mut Vec<usize>,
@@ -3034,8 +3143,7 @@ impl<'a> RuleIndex<'a> {
     };
 
     if !self.by_id.is_empty() {
-      if let Some(id) = node.get_attribute_ref("id") {
-        let key = selector_bucket_id(id);
+      if let Some(key) = node_keys.id_key {
         if let Some(list) = self.by_id.get(&key) {
           push_list(list.as_slice(), CandidateBucket::Id);
         }
@@ -3043,36 +3151,27 @@ impl<'a> RuleIndex<'a> {
     }
 
     if !self.by_class.is_empty() {
-      if let Some(class_attr) = node.get_attribute_ref("class") {
-        for cls in class_attr.split_whitespace() {
-          if cls.is_empty() {
-            continue;
-          }
-          let key = selector_bucket_class(cls);
-          if let Some(list) = self.by_class.get(&key) {
-            push_list(list.as_slice(), CandidateBucket::Class);
-          }
+      for key in node_keys.class_keys {
+        if let Some(list) = self.by_class.get(key) {
+          push_list(list.as_slice(), CandidateBucket::Class);
         }
       }
     }
 
     if !self.by_tag.is_empty() {
-      if let Some(tag) = node.tag_name() {
-        let key = selector_bucket_tag(tag);
-        if let Some(list) = self.by_tag.get(&key) {
-          push_list(list.as_slice(), CandidateBucket::Tag);
-        }
-        let star = selector_bucket_tag("*");
-        if let Some(list) = self.by_tag.get(&star) {
-          push_list(list.as_slice(), CandidateBucket::Tag);
-        }
+      let key = node_keys.tag_key;
+      if let Some(list) = self.by_tag.get(&key) {
+        push_list(list.as_slice(), CandidateBucket::Tag);
+      }
+      let star = selector_bucket_tag("*");
+      if let Some(list) = self.by_tag.get(&star) {
+        push_list(list.as_slice(), CandidateBucket::Tag);
       }
     }
 
     if !self.by_attr.is_empty() {
-      for (name, _) in node.attributes_iter() {
-        let key = selector_bucket_attr(name);
-        if let Some(list) = self.by_attr.get(&key) {
+      for key in node_keys.attr_keys {
+        if let Some(list) = self.by_attr.get(key) {
           push_list(list.as_slice(), CandidateBucket::Attr);
         }
       }
@@ -3153,6 +3252,7 @@ impl<'a> RuleIndex<'a> {
   fn slotted_candidates(
     &self,
     node: &DomNode,
+    node_keys: NodeSelectorKeys<'_>,
     summary: Option<&SelectorBloomSummary>,
     quirks_mode: QuirksMode,
     out: &mut Vec<usize>,
@@ -3187,8 +3287,7 @@ impl<'a> RuleIndex<'a> {
     };
 
     if !self.slotted_buckets.by_id.is_empty() {
-      if let Some(id) = node.get_attribute_ref("id") {
-        let key = selector_bucket_id(id);
+      if let Some(key) = node_keys.id_key {
         if let Some(list) = self.slotted_buckets.by_id.get(&key) {
           push_list(list.as_slice(), CandidateBucket::Id);
         }
@@ -3196,36 +3295,27 @@ impl<'a> RuleIndex<'a> {
     }
 
     if !self.slotted_buckets.by_class.is_empty() {
-      if let Some(class_attr) = node.get_attribute_ref("class") {
-        for cls in class_attr.split_whitespace() {
-          if cls.is_empty() {
-            continue;
-          }
-          let key = selector_bucket_class(cls);
-          if let Some(list) = self.slotted_buckets.by_class.get(&key) {
-            push_list(list.as_slice(), CandidateBucket::Class);
-          }
+      for key in node_keys.class_keys {
+        if let Some(list) = self.slotted_buckets.by_class.get(key) {
+          push_list(list.as_slice(), CandidateBucket::Class);
         }
       }
     }
 
     if !self.slotted_buckets.by_tag.is_empty() {
-      if let Some(tag) = node.tag_name() {
-        let key = selector_bucket_tag(tag);
-        if let Some(list) = self.slotted_buckets.by_tag.get(&key) {
-          push_list(list.as_slice(), CandidateBucket::Tag);
-        }
-        let star = selector_bucket_tag("*");
-        if let Some(list) = self.slotted_buckets.by_tag.get(&star) {
-          push_list(list.as_slice(), CandidateBucket::Tag);
-        }
+      let key = node_keys.tag_key;
+      if let Some(list) = self.slotted_buckets.by_tag.get(&key) {
+        push_list(list.as_slice(), CandidateBucket::Tag);
+      }
+      let star = selector_bucket_tag("*");
+      if let Some(list) = self.slotted_buckets.by_tag.get(&star) {
+        push_list(list.as_slice(), CandidateBucket::Tag);
       }
     }
 
     if !self.slotted_buckets.by_attr.is_empty() {
-      for (name, _) in node.attributes_iter() {
-        let key = selector_bucket_attr(name);
-        if let Some(list) = self.slotted_buckets.by_attr.get(&key) {
+      for key in node_keys.attr_keys {
+        if let Some(list) = self.slotted_buckets.by_attr.get(key) {
           push_list(list.as_slice(), CandidateBucket::Attr);
         }
       }
@@ -3310,6 +3400,7 @@ impl<'a> RuleIndex<'a> {
     &self,
     node: &DomNode,
     pseudo: &PseudoElement,
+    node_keys: NodeSelectorKeys<'_>,
     summary: Option<&SelectorBloomSummary>,
     quirks_mode: QuirksMode,
     out: &mut Vec<usize>,
@@ -3345,8 +3436,7 @@ impl<'a> RuleIndex<'a> {
     };
 
     if !bucket.by_id.is_empty() {
-      if let Some(id) = node.get_attribute_ref("id") {
-        let key = selector_bucket_id(id);
+      if let Some(key) = node_keys.id_key {
         if let Some(list) = bucket.by_id.get(&key) {
           for idx in list {
             consider_candidate(*idx, &mut stats.by_id);
@@ -3356,41 +3446,33 @@ impl<'a> RuleIndex<'a> {
     }
 
     if !bucket.by_class.is_empty() {
-      if let Some(class_attr) = node.get_attribute_ref("class") {
-        for cls in class_attr.split_whitespace() {
-          if !cls.is_empty() {
-            let key = selector_bucket_class(cls);
-            if let Some(list) = bucket.by_class.get(&key) {
-              for idx in list {
-                consider_candidate(*idx, &mut stats.by_class);
-              }
-            }
+      for key in node_keys.class_keys {
+        if let Some(list) = bucket.by_class.get(key) {
+          for idx in list {
+            consider_candidate(*idx, &mut stats.by_class);
           }
         }
       }
     }
 
     if !bucket.by_tag.is_empty() {
-      if let Some(tag) = node.tag_name() {
-        let key = selector_bucket_tag(tag);
-        if let Some(list) = bucket.by_tag.get(&key) {
-          for idx in list {
-            consider_candidate(*idx, &mut stats.by_tag);
-          }
+      let key = node_keys.tag_key;
+      if let Some(list) = bucket.by_tag.get(&key) {
+        for idx in list {
+          consider_candidate(*idx, &mut stats.by_tag);
         }
-        let star = selector_bucket_tag("*");
-        if let Some(list) = bucket.by_tag.get(&star) {
-          for idx in list {
-            consider_candidate(*idx, &mut stats.by_tag);
-          }
+      }
+      let star = selector_bucket_tag("*");
+      if let Some(list) = bucket.by_tag.get(&star) {
+        for idx in list {
+          consider_candidate(*idx, &mut stats.by_tag);
         }
       }
     }
 
     if !bucket.by_attr.is_empty() {
-      for (name, _) in node.attributes_iter() {
-        let key = selector_bucket_attr(name);
-        if let Some(list) = bucket.by_attr.get(&key) {
+      for key in node_keys.attr_keys {
+        if let Some(list) = bucket.by_attr.get(key) {
           for idx in list {
             consider_candidate(*idx, &mut stats.by_attr);
           }
@@ -3401,6 +3483,163 @@ impl<'a> RuleIndex<'a> {
     for idx in &bucket.universal {
       consider_candidate(*idx, &mut stats.universal);
     }
+  }
+}
+
+/// Criterion benchmark harness for isolating selector candidate collection overhead.
+///
+/// This is intentionally `#[doc(hidden)]` because it exists purely for microbenchmarks; the
+/// renderer uses the full cascade pipeline.
+#[doc(hidden)]
+pub struct SelectorCandidateBench<'a, 'dom> {
+  index: RuleIndex<'a>,
+  dom_maps: DomMaps,
+  element_nodes: Vec<(usize, *const DomNode)>,
+  out: Vec<usize>,
+  seen: CandidateSet,
+  stats: CandidateStats,
+  merge: CandidateMergeScratch,
+  tmp_class_keys: Vec<SelectorBucketKey>,
+  tmp_attr_keys: Vec<SelectorBucketKey>,
+  quirks_mode: QuirksMode,
+  _dom: std::marker::PhantomData<&'dom DomNode>,
+}
+
+#[doc(hidden)]
+impl<'a, 'dom> SelectorCandidateBench<'a, 'dom> {
+  pub fn new(dom: &'dom DomNode, stylesheet: &'a StyleSheet, media_ctx: &MediaContext) -> Self {
+    let quirks_mode = quirks_mode_for_dom(dom);
+    let mut layer_order_interner = LayerOrderInterner::default();
+    let collected = stylesheet.collect_style_rules(media_ctx);
+    let rules: Vec<CascadeRule<'_>> = collected
+      .iter()
+      .enumerate()
+      .map(|(order, rule)| CascadeRule {
+        origin: StyleOrigin::Author,
+        order,
+        rule: rule.rule,
+        layer_order: layer_order_interner.intern_prefixed(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+        scope_signature: ScopeSignature::compute(&rule.scopes),
+        scope: RuleScope::Document,
+        starting_style: rule.starting_style,
+      })
+      .collect();
+
+    let index = RuleIndex::new(rules, quirks_mode);
+    let selector_count = index.selectors.len();
+
+    let id_map = enumerate_dom_ids(dom);
+    let dom_maps = DomMaps::new(dom, id_map);
+
+    fn collect_element_nodes(
+      node: &DomNode,
+      ids: &HashMap<*const DomNode, usize>,
+      out: &mut Vec<(usize, *const DomNode)>,
+    ) {
+      if node.is_element() {
+        if let Some(id) = ids.get(&(node as *const DomNode)).copied() {
+          out.push((id, node as *const DomNode));
+        }
+      }
+      for child in node.children.iter() {
+        collect_element_nodes(child, ids, out);
+      }
+    }
+
+    let mut element_nodes: Vec<(usize, *const DomNode)> = Vec::new();
+    collect_element_nodes(dom, &dom_maps.id_map, &mut element_nodes);
+
+    Self {
+      index,
+      dom_maps,
+      element_nodes,
+      out: Vec::new(),
+      seen: CandidateSet::new(selector_count),
+      stats: CandidateStats::default(),
+      merge: CandidateMergeScratch::default(),
+      tmp_class_keys: Vec::new(),
+      tmp_attr_keys: Vec::new(),
+      quirks_mode,
+      _dom: std::marker::PhantomData,
+    }
+  }
+
+  /// Runs `selector_candidates` for every element node `repetitions` times and returns the
+  /// total number of candidates produced (for `black_box`ing).
+  pub fn run_cached(&mut self, repetitions: usize) -> usize {
+    let mut total = 0usize;
+    for _ in 0..repetitions {
+      for (node_id, ptr) in self.element_nodes.iter().copied() {
+        // Safety: `ptr` points into `dom`, which is held alive by the caller for `'dom`.
+        let node = unsafe { &*ptr };
+        let node_keys = self.dom_maps.selector_keys(node_id);
+        self.stats.reset();
+        self.index.selector_candidates(
+          node,
+          node_keys,
+          None,
+          self.quirks_mode,
+          &mut self.out,
+          &mut self.seen,
+          &mut self.stats,
+          &mut self.merge,
+        );
+        total = total.wrapping_add(self.out.len());
+      }
+    }
+    total
+  }
+
+  /// Baseline implementation that re-hashes selector keys from strings on every call.
+  pub fn run_uncached(&mut self, repetitions: usize) -> usize {
+    let mut total = 0usize;
+    for _ in 0..repetitions {
+      for (_node_id, ptr) in self.element_nodes.iter().copied() {
+        // Safety: `ptr` points into `dom`, which is held alive by the caller for `'dom`.
+        let node = unsafe { &*ptr };
+        if !node.is_element() {
+          continue;
+        }
+
+        self.tmp_class_keys.clear();
+        self.tmp_attr_keys.clear();
+        let tag_key = node.tag_name().map(selector_bucket_tag).unwrap_or_default();
+        let id_key = node.get_attribute_ref("id").map(selector_bucket_id);
+        if let Some(class_attr) = node.get_attribute_ref("class") {
+          for cls in class_attr.split_whitespace() {
+            if cls.is_empty() {
+              continue;
+            }
+            self.tmp_class_keys.push(selector_bucket_class(cls));
+          }
+        }
+        for (name, _) in node.attributes_iter() {
+          self.tmp_attr_keys.push(selector_bucket_attr(name));
+        }
+        let node_keys = NodeSelectorKeys {
+          tag_key,
+          id_key,
+          class_keys: &self.tmp_class_keys,
+          attr_keys: &self.tmp_attr_keys,
+        };
+
+        self.stats.reset();
+        self.index.selector_candidates(
+          node,
+          node_keys,
+          None,
+          self.quirks_mode,
+          &mut self.out,
+          &mut self.seen,
+          &mut self.stats,
+          &mut self.merge,
+        );
+        total = total.wrapping_add(self.out.len());
+      }
+    }
+    total
   }
 }
 
@@ -5445,10 +5684,13 @@ fn match_part_rules<'a>(
           if !name_set.contains(required) {
             continue;
           }
+          let host_id = scope_host.unwrap_or(0);
+          let host_keys = dom_maps.selector_keys(host_id);
           // allow_shadow_host prevents document-scope ::part selectors from exposing :host context.
           let part_matches = find_pseudo_element_rules(
             host,
-            scope_host.unwrap_or(0),
+            host_id,
+            host_keys,
             rules,
             selector_caches,
             scratch,
@@ -5666,6 +5908,7 @@ fn collect_pseudo_matching_rules<'a>(
   pseudo: &PseudoElement,
 ) -> Vec<MatchedRule<'a>> {
   let current_shadow = dom_maps.containing_shadow_root(node_id);
+  let node_keys = dom_maps.selector_keys(node_id);
   let slot_map_for_host = |host_id: usize| -> Option<&SlotAssignmentMap> {
     dom_maps
       .shadow_hosts
@@ -5687,6 +5930,7 @@ fn collect_pseudo_matching_rules<'a>(
   let mut matches = find_pseudo_element_rules(
     node,
     node_id,
+    node_keys,
     &scopes.ua,
     selector_caches,
     scratch,
@@ -5705,6 +5949,7 @@ fn collect_pseudo_matching_rules<'a>(
     matches.extend(find_pseudo_element_rules(
       node,
       node_id,
+      node_keys,
       base,
       selector_caches,
       scratch,
@@ -5726,6 +5971,7 @@ fn collect_pseudo_matching_rules<'a>(
         matches.extend(find_pseudo_element_rules(
           node,
           node_id,
+          node_keys,
           &scopes.document,
           selector_caches,
           scratch,
@@ -5747,6 +5993,7 @@ fn collect_pseudo_matching_rules<'a>(
     matches.extend(find_pseudo_element_rules(
       node,
       node_id,
+      node_keys,
       host,
       selector_caches,
       scratch,
@@ -6846,6 +7093,34 @@ mod tests {
     }
   }
 
+  fn node_selector_keys<'a>(
+    node: &DomNode,
+    class_keys: &'a mut Vec<SelectorBucketKey>,
+    attr_keys: &'a mut Vec<SelectorBucketKey>,
+  ) -> NodeSelectorKeys<'a> {
+    class_keys.clear();
+    attr_keys.clear();
+    let tag_key = node.tag_name().map(selector_bucket_tag).unwrap_or_default();
+    let id_key = node.get_attribute_ref("id").map(selector_bucket_id);
+    if let Some(class_attr) = node.get_attribute_ref("class") {
+      for cls in class_attr.split_whitespace() {
+        if cls.is_empty() {
+          continue;
+        }
+        class_keys.push(selector_bucket_class(cls));
+      }
+    }
+    for (name, _) in node.attributes_iter() {
+      attr_keys.push(selector_bucket_attr(name));
+    }
+    NodeSelectorKeys {
+      tag_key,
+      id_key,
+      class_keys: class_keys.as_slice(),
+      attr_keys: attr_keys.as_slice(),
+    }
+  }
+
   fn assert_styled_trees_equal(a: &StyledNode, b: &StyledNode) {
     assert_eq!(a.node_id, b.node_id);
     assert_eq!(a.styles, b.styles, "styles differ at node_id={}", a.node_id);
@@ -7368,9 +7643,13 @@ mod tests {
     let mut candidates = Vec::new();
     let mut seen = CandidateSet::new(index.pseudo_selectors.len());
     let mut stats = CandidateStats::default();
+    let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
+    let node_keys = node_selector_keys(&node, &mut class_keys, &mut attr_keys);
     index.pseudo_candidates(
       &node,
       &PseudoElement::Before,
+      node_keys,
       None,
       QuirksMode::NoQuirks,
       &mut candidates,
@@ -7475,12 +7754,16 @@ mod tests {
       children: vec![],
     };
 
+    let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
+    let node_keys = node_selector_keys(&node, &mut class_keys, &mut attr_keys);
     let mut out = Vec::new();
     let mut seen = CandidateSet::new(index.selectors.len());
     let mut stats = CandidateStats::default();
     let mut merge = CandidateMergeScratch::default();
     index.selector_candidates(
       &node,
+      node_keys,
       None,
       QuirksMode::NoQuirks,
       &mut out,
@@ -7531,12 +7814,16 @@ mod tests {
       children: vec![],
     };
 
+    let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
+    let node_keys = node_selector_keys(&node, &mut class_keys, &mut attr_keys);
     let mut out = Vec::new();
     let mut seen = CandidateSet::new(index.selectors.len());
     let mut stats = CandidateStats::default();
     let mut merge = CandidateMergeScratch::default();
     index.selector_candidates(
       &node,
+      node_keys,
       None,
       QuirksMode::NoQuirks,
       &mut out,
@@ -7601,6 +7888,181 @@ mod tests {
   }
 
   #[test]
+  fn selector_candidate_cache_matches_uncached() {
+    let dom = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "DiV".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![
+          ("id".to_string(), "Foo".to_string()),
+          ("ClAsS".to_string(), "a    b\tc".to_string()),
+          ("DATA-TEST".to_string(), "1".to_string()),
+          ("data-other".to_string(), "2".to_string()),
+        ],
+      },
+      children: vec![DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "span".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: vec![
+            ("ID".to_string(), "bar".to_string()),
+            ("class".to_string(), "b".to_string()),
+            ("data-test".to_string(), "x".to_string()),
+          ],
+        },
+        children: vec![],
+      }],
+    };
+
+    let id_map = enumerate_dom_ids(&dom);
+    let dom_maps = DomMaps::new(&dom, id_map);
+
+    let stylesheet = parse_stylesheet(
+      r#"
+        #Foo { color: red; }
+        #foo { color: blue; }
+        .a { color: green; }
+        .b { color: yellow; }
+        div { color: black; }
+        SPAN { color: black; }
+        [data-Test] { color: black; }
+        [DATA-OTHER] { color: black; }
+        * { color: black; }
+
+        div::before { content: 'x'; }
+        .b::before { content: 'y'; }
+
+        slot::slotted(.b) { color: red; }
+      "#,
+    )
+    .expect("stylesheet");
+    let media_ctx = MediaContext::default();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+    let rules: Vec<CascadeRule<'_>> = collected
+      .iter()
+      .enumerate()
+      .map(|(order, rule)| CascadeRule {
+        origin: StyleOrigin::Author,
+        order,
+        rule: rule.rule,
+        layer_order: layer_order_with_tree_scope(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+        scope_signature: ScopeSignature::compute(&rule.scopes),
+        scope: RuleScope::Document,
+        starting_style: rule.starting_style,
+      })
+      .collect();
+
+    let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
+
+    let pseudo = PseudoElement::Before;
+    for (node_id, node) in [(1usize, &dom), (2usize, &dom.children[0])] {
+      let cached_keys = dom_maps.selector_keys(node_id);
+      let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
+      let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
+      let uncached_keys = node_selector_keys(node, &mut class_keys, &mut attr_keys);
+
+      let mut cached: Vec<usize> = Vec::new();
+      let mut uncached: Vec<usize> = Vec::new();
+      let mut cached_seen = CandidateSet::new(index.selectors.len());
+      let mut uncached_seen = CandidateSet::new(index.selectors.len());
+      let mut cached_stats = CandidateStats::default();
+      let mut uncached_stats = CandidateStats::default();
+      let mut cached_merge = CandidateMergeScratch::default();
+      let mut uncached_merge = CandidateMergeScratch::default();
+      index.selector_candidates(
+        node,
+        cached_keys,
+        None,
+        QuirksMode::NoQuirks,
+        &mut cached,
+        &mut cached_seen,
+        &mut cached_stats,
+        &mut cached_merge,
+      );
+      index.selector_candidates(
+        node,
+        uncached_keys,
+        None,
+        QuirksMode::NoQuirks,
+        &mut uncached,
+        &mut uncached_seen,
+        &mut uncached_stats,
+        &mut uncached_merge,
+      );
+      assert_eq!(
+        cached, uncached,
+        "base selector candidates differ for node_id={node_id}"
+      );
+
+      let mut cached: Vec<usize> = Vec::new();
+      let mut uncached: Vec<usize> = Vec::new();
+      let mut cached_seen = CandidateSet::new(index.pseudo_selectors.len());
+      let mut uncached_seen = CandidateSet::new(index.pseudo_selectors.len());
+      let mut cached_stats = CandidateStats::default();
+      let mut uncached_stats = CandidateStats::default();
+      index.pseudo_candidates(
+        node,
+        &pseudo,
+        cached_keys,
+        None,
+        QuirksMode::NoQuirks,
+        &mut cached,
+        &mut cached_seen,
+        &mut cached_stats,
+      );
+      index.pseudo_candidates(
+        node,
+        &pseudo,
+        uncached_keys,
+        None,
+        QuirksMode::NoQuirks,
+        &mut uncached,
+        &mut uncached_seen,
+        &mut uncached_stats,
+      );
+      assert_eq!(
+        cached, uncached,
+        "pseudo selector candidates differ for node_id={node_id}"
+      );
+
+      let mut cached: Vec<usize> = Vec::new();
+      let mut uncached: Vec<usize> = Vec::new();
+      let mut cached_seen = CandidateSet::new(index.slotted_selectors.len());
+      let mut uncached_seen = CandidateSet::new(index.slotted_selectors.len());
+      let mut cached_stats = CandidateStats::default();
+      let mut uncached_stats = CandidateStats::default();
+      let mut cached_merge = CandidateMergeScratch::default();
+      let mut uncached_merge = CandidateMergeScratch::default();
+      index.slotted_candidates(
+        node,
+        cached_keys,
+        None,
+        QuirksMode::NoQuirks,
+        &mut cached,
+        &mut cached_seen,
+        &mut cached_stats,
+        &mut cached_merge,
+      );
+      index.slotted_candidates(
+        node,
+        uncached_keys,
+        None,
+        QuirksMode::NoQuirks,
+        &mut uncached,
+        &mut uncached_seen,
+        &mut uncached_stats,
+        &mut uncached_merge,
+      );
+      assert_eq!(
+        cached, uncached,
+        "slotted selector candidates differ for node_id={node_id}"
+      );
+    }
+  }
+
+  #[test]
   fn selector_bloom_pruning_has_list_is_or() {
     crate::dom::set_selector_bloom_enabled(true);
 
@@ -7653,6 +8115,7 @@ mod tests {
     let mut merge = CandidateMergeScratch::default();
     index.selector_candidates(
       &dom,
+      dom_maps.selector_keys(1),
       Some(summary),
       QuirksMode::NoQuirks,
       &mut candidates,
@@ -7716,6 +8179,7 @@ mod tests {
     let mut merge = CandidateMergeScratch::default();
     index.selector_candidates(
       &dom,
+      dom_maps.selector_keys(1),
       Some(summary),
       QuirksMode::NoQuirks,
       &mut candidates,
@@ -7779,6 +8243,7 @@ mod tests {
     let mut merge = CandidateMergeScratch::default();
     index.selector_candidates(
       &dom,
+      dom_maps.selector_keys(1),
       Some(summary),
       QuirksMode::NoQuirks,
       &mut candidates,
@@ -12081,9 +12546,13 @@ slot[name=\"s\"]::slotted(.assigned) { color: rgb(4, 5, 6); }"
     caches.set_epoch(cache_epoch);
     let sibling_cache = SiblingListCache::new(cache_epoch);
     let mut scratch = CascadeScratch::new(rule_index.rules.len());
+    let mut class_keys: Vec<SelectorBucketKey> = Vec::new();
+    let mut attr_keys: Vec<SelectorBucketKey> = Vec::new();
+    let node_keys = node_selector_keys(&dom.children[0], &mut class_keys, &mut attr_keys);
     let marker_matches = find_pseudo_element_rules(
       &dom.children[0],
       0,
+      node_keys,
       &rule_index,
       &mut caches,
       &mut scratch,
@@ -12990,11 +13459,13 @@ fn find_matching_rules<'a>(
   } else {
     None
   };
+  let node_keys = dom_maps.selector_keys(node_id);
   let candidates = &mut scratch.candidates;
   candidates.clear();
   scratch.candidate_stats.reset();
   rules.selector_candidates(
     node,
+    node_keys,
     node_summary,
     quirks_mode,
     candidates,
@@ -13007,6 +13478,7 @@ fn find_matching_rules<'a>(
   if assigned_slot.is_some() {
     rules.slotted_candidates(
       node,
+      node_keys,
       node_summary,
       quirks_mode,
       slotted_candidates,
@@ -13470,6 +13942,7 @@ fn find_matching_rules<'a>(
 fn find_pseudo_element_rules<'a>(
   node: &DomNode,
   node_id: usize,
+  node_keys: NodeSelectorKeys<'_>,
   rules: &'a RuleIndex<'a>,
   selector_caches: &mut SelectorCaches,
   scratch: &mut CascadeScratch,
@@ -13502,6 +13975,7 @@ fn find_pseudo_element_rules<'a>(
   rules.pseudo_candidates(
     node,
     pseudo,
+    node_keys,
     node_summary,
     quirks_mode,
     candidates,
