@@ -908,15 +908,16 @@ fn dialog_state(node: &DomNode) -> Option<(bool, bool)> {
   Some((open, modal))
 }
 
-fn popover_open(node: &DomNode) -> bool {
-  if node.get_attribute_ref("popover").is_none() {
-    return false;
-  }
+fn popover_open_assuming_popover(node: &DomNode) -> bool {
   let mut open = node.get_attribute_ref("open").is_some();
   if let Some((open_override, _)) = data_fastr_open_state(node) {
     open = open_override;
   }
   open
+}
+
+fn popover_open(node: &DomNode) -> bool {
+  node.get_attribute_ref("popover").is_some() && popover_open_assuming_popover(node)
 }
 
 /// Bench helper: determine whether the DOM contains an open modal `<dialog>`.
@@ -933,7 +934,10 @@ pub fn modal_dialog_present(node: &DomNode) -> bool {
 
 fn set_attr(attrs: &mut Vec<(String, String)>, name: &str, value: &str) {
   if let Some((_, val)) = attrs.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case(name)) {
-    *val = value.to_string();
+    if val != value {
+      val.clear();
+      val.push_str(value);
+    }
   } else {
     attrs.push((name.to_string(), value.to_string()));
   }
@@ -967,7 +971,7 @@ fn apply_top_layer_open_state_with_deadline(node: &mut DomNode) -> Result<bool> 
     }
 
     let has_popover = current.get_attribute_ref("popover").is_some();
-    let popover_is_open = has_popover && popover_open(current);
+    let popover_is_open = has_popover && popover_open_assuming_popover(current);
 
     if let DomNodeType::Element {
       tag_name,
@@ -1016,7 +1020,7 @@ fn apply_top_layer_open_state(node: &mut DomNode) -> bool {
     }
 
     let has_popover = current.get_attribute_ref("popover").is_some();
-    let popover_is_open = has_popover && popover_open(current);
+    let popover_is_open = has_popover && popover_open_assuming_popover(current);
 
     if let DomNodeType::Element {
       tag_name,
@@ -1055,7 +1059,7 @@ fn apply_top_layer_state_inner(node: &mut DomNode, modal_open: bool, inside_moda
   let dialog_info = dialog_state(node);
   let has_popover = node.get_attribute_ref("popover").is_some();
   let popover_is_open = if has_popover {
-    popover_open(node)
+    popover_open_assuming_popover(node)
   } else {
     false
   };
@@ -1114,6 +1118,27 @@ pub fn apply_top_layer_state(node: &mut DomNode, modal_open: bool) {
   let _ = apply_top_layer_state_inner(node, modal_open, false);
 }
 
+fn open_modal_dialog_after_open_state(node: &DomNode) -> bool {
+  let is_dialog = node
+    .tag_name()
+    .map(|t| t.eq_ignore_ascii_case("dialog"))
+    .unwrap_or(false);
+  if !is_dialog {
+    return false;
+  }
+  if node.get_attribute_ref("open").is_none() {
+    return false;
+  }
+  node
+    .get_attribute_ref("data-fastr-modal")
+    .map(boolish)
+    .unwrap_or(false)
+    || node
+      .get_attribute_ref("data-fastr-open")
+      .map(|v| v.eq_ignore_ascii_case("modal"))
+      .unwrap_or(false)
+}
+
 fn apply_top_layer_inert_state_with_deadline(node: &mut DomNode) -> Result<()> {
   struct Frame {
     node: *mut DomNode,
@@ -1151,11 +1176,9 @@ fn apply_top_layer_inert_state_with_deadline(node: &mut DomNode) -> Result<()> {
       frame.subtree_has_modal = frame.within_modal;
 
       if !frame.within_modal {
-        if let Some((_, modal)) = dialog_state(current) {
-          if modal {
-            frame.within_modal = true;
-            frame.subtree_has_modal = true;
-          }
+        if open_modal_dialog_after_open_state(current) {
+          frame.within_modal = true;
+          frame.subtree_has_modal = true;
         }
       }
     }
@@ -1222,11 +1245,9 @@ fn apply_top_layer_inert_state(node: &mut DomNode) {
       frame.subtree_has_modal = frame.within_modal;
 
       if !frame.within_modal {
-        if let Some((_, modal)) = dialog_state(current) {
-          if modal {
-            frame.within_modal = true;
-            frame.subtree_has_modal = true;
-          }
+        if open_modal_dialog_after_open_state(current) {
+          frame.within_modal = true;
+          frame.subtree_has_modal = true;
         }
       }
     }
