@@ -25,6 +25,9 @@ use fastrender::geometry::Rect;
 use fastrender::paint::blur::{apply_gaussian_blur, apply_gaussian_blur_anisotropic};
 use fastrender::paint::display_list::BorderRadius;
 use fastrender::paint::display_list::ClipShape;
+use fastrender::paint::display_list::ImageData;
+use fastrender::paint::display_list::ImageFilterQuality;
+use fastrender::paint::display_list::ImageItem;
 use fastrender::paint::display_list_builder::DisplayListBuilder;
 use fastrender::paint::display_list_renderer::DisplayListRenderer;
 use fastrender::paint::display_list_renderer::PaintParallelism;
@@ -48,6 +51,7 @@ use fastrender::OpacityItem;
 use fastrender::OptimizationConfig;
 use fastrender::StrokeRectItem;
 use fastrender::TextRasterizer;
+use std::sync::Arc;
 use tiny_skia::Pixmap;
 use tiny_skia::PremultipliedColorU8;
 use tiny_skia::SpreadMode;
@@ -788,6 +792,88 @@ fn bench_parallel_display_list_raster(c: &mut Criterion) {
   group.finish();
 }
 
+/// Benchmark image draw workloads that resemble tiled background rendering.
+///
+/// This is sensitive to per-item pixmap crops (alloc + memcpy) when `src_rect`
+/// is specified. The renderer should avoid allocating for full-image `src_rect`
+/// values and reuse cached crops for repeated `src_rect` values.
+fn bench_tiled_background_image_src_rect(c: &mut Criterion) {
+  let tile = 64u32;
+  let item_count = 4096usize;
+
+  let mut pixels = Vec::with_capacity((tile * tile * 4) as usize);
+  for i in 0..(tile * tile) {
+    // Fully opaque premultiplied RGBA.
+    let v = (i % 255) as u8;
+    pixels.extend_from_slice(&[v, 128, 200, 255]);
+  }
+  let image = Arc::new(ImageData::new_premultiplied(
+    tile,
+    tile,
+    tile as f32,
+    tile as f32,
+    pixels,
+  ));
+
+  let dest_rect = Rect::from_xywh(0.0, 0.0, tile as f32, tile as f32);
+  let src_full = Some(Rect::from_xywh(0.0, 0.0, tile as f32, tile as f32));
+  let src_partial = Some(Rect::from_xywh(0.0, 0.0, (tile / 2) as f32, tile as f32));
+
+  let build_list = |src_rect| {
+    let mut list = DisplayList::new();
+    for _ in 0..item_count {
+      list.push(DisplayItem::Image(ImageItem {
+        dest_rect,
+        image: image.clone(),
+        filter_quality: ImageFilterQuality::Nearest,
+        src_rect,
+      }));
+    }
+    list
+  };
+
+  let list_none = build_list(None);
+  let list_full = build_list(src_full);
+  let list_partial = build_list(src_partial);
+
+  let font_ctx = FontContext::new();
+  let parallelism = PaintParallelism::disabled();
+  let mut group = c.benchmark_group("tiled_background_image_src_rect");
+  group.sample_size(10);
+
+  group.bench_function(BenchmarkId::new("src_rect_none", item_count), |b| {
+    b.iter(|| {
+      let renderer = DisplayListRenderer::new(tile, tile, Rgba::WHITE, font_ctx.clone())
+        .unwrap()
+        .with_parallelism(parallelism);
+      black_box(renderer.render(black_box(&list_none)).unwrap());
+    });
+  });
+
+  group.bench_function(BenchmarkId::new("src_rect_full", item_count), |b| {
+    b.iter(|| {
+      let renderer = DisplayListRenderer::new(tile, tile, Rgba::WHITE, font_ctx.clone())
+        .unwrap()
+        .with_parallelism(parallelism);
+      black_box(renderer.render(black_box(&list_full)).unwrap());
+    });
+  });
+
+  group.bench_function(
+    BenchmarkId::new("src_rect_partial_reused", item_count),
+    |b| {
+      b.iter(|| {
+        let renderer = DisplayListRenderer::new(tile, tile, Rgba::WHITE, font_ctx.clone())
+          .unwrap()
+          .with_parallelism(parallelism);
+        black_box(renderer.render(black_box(&list_partial)).unwrap());
+      });
+    },
+  );
+
+  group.finish();
+}
+
 fn bench_filter_blur(c: &mut Criterion) {
   let mut group = c.benchmark_group("filters_blur");
   group.sample_size(10);
@@ -978,6 +1064,7 @@ criterion_group!(
   bench_fragment_tree_operations,
   bench_paint_stress_tests,
   bench_parallel_display_list_raster,
+  bench_tiled_background_image_src_rect,
   bench_text_rasterizer_cache,
   bench_filter_blur,
   bench_conic_gradient,

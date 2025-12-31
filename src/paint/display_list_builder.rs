@@ -4341,12 +4341,27 @@ impl DisplayListBuilder {
                       intersection.width() * scale_x,
                       intersection.height() * scale_y,
                     );
+                    let src_rect = {
+                      let src_x = src_rect.x().max(0.0).floor() as u32;
+                      let src_y = src_rect.y().max(0.0).floor() as u32;
+                      let src_w = src_rect.width().ceil() as u32;
+                      let src_h = src_rect.height().ceil() as u32;
+                      let max_x = image.width.saturating_sub(src_x);
+                      let max_y = image.height.saturating_sub(src_y);
+                      let crop_w = src_w.min(max_x);
+                      let crop_h = src_h.min(max_y);
+                      if src_x == 0 && src_y == 0 && crop_w == image.width && crop_h == image.height {
+                        None
+                      } else {
+                        Some(src_rect)
+                      }
+                    };
 
                     self.emit_background_tile(DisplayItem::Image(ImageItem {
                       dest_rect: intersection,
                       image: image.clone(),
                       filter_quality: quality,
-                      src_rect: Some(src_rect),
+                      src_rect,
                     }));
                   }
                 }

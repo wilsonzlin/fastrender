@@ -105,9 +105,11 @@ use crate::text::color_fonts::ColorFontRenderer;
 use crate::text::font_db::LoadedFont;
 use crate::text::font_loader::FontContext;
 use crate::text::pipeline::{record_text_rasterize, text_diagnostics_timer, TextCacheStats};
+use lru::LruCache;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
+use std::num::NonZeroUsize;
 #[cfg(test)]
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -1482,6 +1484,15 @@ impl ImageKey {
   }
 }
 
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+struct ImageCropKey {
+  image: ImageKey,
+  src_x: u32,
+  src_y: u32,
+  crop_w: u32,
+  crop_h: u32,
+}
+
 impl PartialEq for ImageKey {
   fn eq(&self, other: &Self) -> bool {
     self.pixels_ptr == other.pixels_ptr && self.width == other.width && self.height == other.height
@@ -1500,6 +1511,7 @@ impl Hash for ImageKey {
 
 /// Renders a display list into a pixmap using the provided font context.
 const WARP_CACHE_CAPACITY: usize = 8;
+const CROPPED_IMAGE_CACHE_CAPACITY: usize = 128;
 pub struct DisplayListRenderer {
   canvas: Canvas,
   font_ctx: FontContext,
@@ -1516,6 +1528,7 @@ pub struct DisplayListRenderer {
   background: Rgba,
   paint_parallelism: PaintParallelism,
   image_cache: HashMap<ImageKey, Arc<Pixmap>>,
+  cropped_image_cache: LruCache<ImageCropKey, Arc<Pixmap>>,
   #[cfg(test)]
   image_cache_misses: Arc<AtomicUsize>,
   image_pixmap_diagnostics: Option<Arc<ImagePixmapDiagnostics>>,
@@ -2112,6 +2125,10 @@ impl DisplayListRenderer {
       background,
       paint_parallelism: PaintParallelism::default(),
       image_cache: HashMap::new(),
+      cropped_image_cache: LruCache::new(
+        NonZeroUsize::new(CROPPED_IMAGE_CACHE_CAPACITY)
+          .unwrap_or_else(|| NonZeroUsize::new(1).expect("nonzero")),
+      ),
       #[cfg(test)]
       image_cache_misses: Arc::new(AtomicUsize::new(0)),
       image_pixmap_diagnostics: diagnostics_enabled
@@ -5863,6 +5880,20 @@ impl DisplayListRenderer {
       if crop_w == 0 || crop_h == 0 {
         return None;
       }
+      if src_x == 0 && src_y == 0 && crop_w == item.image.width && crop_h == item.image.height {
+        return Some(full);
+      }
+
+      let key = ImageCropKey {
+        image: ImageKey::new(&item.image),
+        src_x,
+        src_y,
+        crop_w,
+        crop_h,
+      };
+      if let Some(cached) = self.cropped_image_cache.get(&key) {
+        return Some(cached.clone());
+      }
       let mut cropped = new_pixmap(crop_w, crop_h)?;
       for row in 0..crop_h {
         let src_index = ((src_y + row) * item.image.width + src_x) as usize * 4;
@@ -5873,7 +5904,9 @@ impl DisplayListRenderer {
       if let (Some(diag), Some(start)) = (crop_diag, crop_timer) {
         diag.record_duration(start.elapsed());
       }
-      Some(Arc::new(cropped))
+      let cropped = Arc::new(cropped);
+      self.cropped_image_cache.put(key, cropped.clone());
+      Some(cropped)
     } else {
       Some(full)
     }
@@ -7792,6 +7825,89 @@ mod tests {
     assert_eq!(pixel(&pixmap, 0, 0), (0, 255, 0, 255));
     // Bottom-left pixel should come from yellow.
     assert_eq!(pixel(&pixmap, 0, 3), (255, 255, 0, 255));
+  }
+
+  #[test]
+  fn image_full_src_rect_does_not_allocate_crop_pixmap() {
+    let pixels = vec![
+      255, 0, 0, 255, // red
+      0, 255, 0, 255, // green
+      0, 0, 255, 255, // blue
+      255, 255, 0, 255, // yellow
+    ];
+    let image = Arc::new(ImageData::new_pixels(2, 2, pixels));
+
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::Image(ImageItem {
+      dest_rect: Rect::from_xywh(0.0, 0.0, 2.0, 2.0),
+      image: image.clone(),
+      filter_quality: ImageFilterQuality::Nearest,
+      src_rect: Some(Rect::from_xywh(0.0, 0.0, 2.0, 2.0)),
+    }));
+
+    let renderer = DisplayListRenderer::new(2, 2, Rgba::WHITE, FontContext::new())
+      .unwrap()
+      .with_parallelism(PaintParallelism::disabled());
+    let recorder = crate::paint::pixmap::NewPixmapAllocRecorder::start();
+    let _ = renderer.render(&list).unwrap();
+    let records = recorder.take();
+    drop(recorder);
+
+    let renderer_allocs: Vec<_> = records
+      .iter()
+      .filter(|r| r.file.ends_with("display_list_renderer.rs"))
+      .collect();
+
+    assert!(
+      renderer_allocs.is_empty(),
+      "expected full-image src_rect to avoid crop allocations, got {renderer_allocs:?}"
+    );
+  }
+
+  #[test]
+  fn image_src_rect_crop_is_cached_across_draws() {
+    let pixels = vec![
+      255, 0, 0, 255, // red
+      0, 255, 0, 255, // green
+      0, 0, 255, 255, // blue
+      255, 255, 0, 255, // yellow
+    ];
+    let image = Arc::new(ImageData::new_pixels(2, 2, pixels));
+
+    let mut list = DisplayList::new();
+    let item = ImageItem {
+      dest_rect: Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+      image: image.clone(),
+      filter_quality: ImageFilterQuality::Nearest,
+      src_rect: Some(Rect::from_xywh(1.0, 0.0, 1.0, 2.0)),
+    };
+    list.push(DisplayItem::Image(item.clone()));
+    list.push(DisplayItem::Image(item));
+
+    let renderer = DisplayListRenderer::new(4, 4, Rgba::WHITE, FontContext::new())
+      .unwrap()
+      .with_parallelism(PaintParallelism::disabled());
+    let recorder = crate::paint::pixmap::NewPixmapAllocRecorder::start();
+    let _ = renderer.render(&list).unwrap();
+    let records = recorder.take();
+    drop(recorder);
+
+    let renderer_allocs: Vec<_> = records
+      .iter()
+      .filter(|r| r.file.ends_with("display_list_renderer.rs"))
+      .collect();
+
+    assert_eq!(
+      renderer_allocs.len(),
+      1,
+      "expected exactly one crop allocation for repeated src_rect draws, got {renderer_allocs:?}"
+    );
+    assert_eq!(
+      (renderer_allocs[0].width, renderer_allocs[0].height),
+      (1, 2),
+      "unexpected cropped pixmap dimensions: {:?}",
+      renderer_allocs[0]
+    );
   }
 
   #[test]
