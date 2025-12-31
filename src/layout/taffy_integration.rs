@@ -236,6 +236,12 @@ pub fn taffy_counters() -> TaffyUsageCounters {
   TAFFY_COUNTERS.snapshot()
 }
 
+/// Stride used when wiring FastRender's render deadline into Taffy's cooperative abort checks.
+///
+/// This amortizes deadline checks while still ensuring long-running grid/flex layout can be aborted
+/// within a reasonable time budget.
+pub(crate) const TAFFY_ABORT_CHECK_STRIDE: usize = 256;
+
 /// Convenience accessor for the total number of Taffy invocations observed.
 #[inline]
 pub fn total_taffy_invocations() -> u64 {

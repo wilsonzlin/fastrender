@@ -46,11 +46,11 @@ use crate::layout::taffy_integration::{
   record_taffy_invocation, record_taffy_node_cache_hit, record_taffy_node_cache_miss,
   record_taffy_style_cache_hit, record_taffy_style_cache_miss, taffy_constraint_key,
   CachedTaffyTemplate, SendSyncStyle, TaffyAdapterKind, TaffyNodeCache, TaffyNodeCacheKey,
-  DEFAULT_TAFFY_CACHE_LIMIT,
+  TAFFY_ABORT_CHECK_STRIDE, DEFAULT_TAFFY_CACHE_LIMIT,
 };
 use crate::layout::utils::resolve_length_with_percentage_metrics;
 use crate::layout::utils::resolve_scrollbar_width;
-use crate::render_control::check_active;
+use crate::render_control::{active_deadline, check_active};
 use crate::style::display::Display as CssDisplay;
 use crate::style::display::FormattingContextType;
 use crate::style::grid::validate_area_rectangles;
@@ -2043,8 +2043,10 @@ impl GridFormattingContext {
     };
 
     record_taffy_invocation(TaffyAdapterKind::Grid);
+    let cancel: Option<Arc<dyn Fn() -> bool + Send + Sync>> =
+      active_deadline().map(|_| Arc::new(|| check_active(RenderStage::Layout).is_err()) as _);
     taffy
-      .compute_layout_with_measure(
+      .compute_layout_with_measure_and_cancel(
         root_id,
         available_space,
         {
@@ -2101,8 +2103,16 @@ impl GridFormattingContext {
             size
           }
         },
+        cancel,
+        TAFFY_ABORT_CHECK_STRIDE,
       )
-      .map_err(|e| LayoutError::MissingContext(format!("Taffy compute error: {:?}", e)))?;
+      .map_err(|e| match e {
+        taffy::TaffyError::LayoutAborted => match check_active(RenderStage::Layout) {
+          Err(RenderError::Timeout { elapsed, .. }) => LayoutError::Timeout { elapsed },
+          _ => LayoutError::MissingContext("Taffy layout aborted".to_string()),
+        },
+        _ => LayoutError::MissingContext(format!("Taffy compute error: {:?}", e)),
+      })?;
 
     let layout = taffy
       .layout(root_id)
@@ -2744,6 +2754,8 @@ impl FormattingContext for GridFormattingContext {
 
     // Run Taffy layout
     record_taffy_invocation(TaffyAdapterKind::Grid);
+    let cancel: Option<Arc<dyn Fn() -> bool + Send + Sync>> =
+      active_deadline().map(|_| Arc::new(|| check_active(RenderStage::Layout).is_err()) as _);
     let measure_cache: Rc<RefCell<HashMap<MeasureKey, taffy::geometry::Size<f32>>>> =
       Rc::new(RefCell::new(HashMap::new()));
     let measured_fragments: Rc<RefCell<HashMap<MeasureKey, FragmentNode>>> =
@@ -2751,7 +2763,7 @@ impl FormattingContext for GridFormattingContext {
     let measured_node_keys: Rc<RefCell<HashMap<TaffyNodeId, Vec<MeasureKey>>>> =
       Rc::new(RefCell::new(HashMap::new()));
     taffy
-      .compute_layout_with_measure(
+      .compute_layout_with_measure_and_cancel(
         root_id,
         available_space,
         {
@@ -2859,8 +2871,16 @@ impl FormattingContext for GridFormattingContext {
             )
           }
         },
+        cancel,
+        TAFFY_ABORT_CHECK_STRIDE,
       )
-      .map_err(|e| LayoutError::MissingContext(format!("Taffy compute error: {:?}", e)))?;
+      .map_err(|e| match e {
+        taffy::TaffyError::LayoutAborted => match check_active(RenderStage::Layout) {
+          Err(RenderError::Timeout { elapsed, .. }) => LayoutError::Timeout { elapsed },
+          _ => LayoutError::MissingContext("Taffy layout aborted".to_string()),
+        },
+        _ => LayoutError::MissingContext(format!("Taffy compute error: {:?}", e)),
+      })?;
 
     let measured_node_keys = measured_node_keys.borrow();
 

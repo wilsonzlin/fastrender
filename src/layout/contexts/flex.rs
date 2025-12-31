@@ -57,7 +57,7 @@ use crate::layout::taffy_integration::{
   record_taffy_invocation, record_taffy_node_cache_hit, record_taffy_node_cache_miss,
   record_taffy_style_cache_hit, record_taffy_style_cache_miss, taffy_constraint_key,
   CachedTaffyTemplate, SendSyncStyle, TaffyAdapterKind, TaffyNodeCacheKey,
-  DEFAULT_TAFFY_CACHE_LIMIT,
+  TAFFY_ABORT_CHECK_STRIDE, DEFAULT_TAFFY_CACHE_LIMIT,
 };
 use crate::layout::utils::resolve_length_with_percentage_metrics;
 use crate::layout::utils::resolve_scrollbar_width;
@@ -591,9 +591,11 @@ impl FormattingContext for FlexFormattingContext {
     static LOG_FIRST_N_COUNTER: std::sync::OnceLock<std::sync::Mutex<usize>> =
       std::sync::OnceLock::new();
     record_taffy_invocation(TaffyAdapterKind::Flex);
+    let cancel: Option<Arc<dyn Fn() -> bool + Send + Sync>> =
+      active_deadline().map(|_| Arc::new(|| check_active(RenderStage::Layout).is_err()) as _);
     let measure_toggles = toggles.clone();
     taffy_tree
-            .compute_layout_with_measure(
+            .compute_layout_with_measure_and_cancel(
                 root_node,
                 available_space,
                 move |mut known_dimensions, mut avail, _node_id, node_context, _style| {
@@ -1453,8 +1455,16 @@ impl FormattingContext for FlexFormattingContext {
                     flex_profile::record_measure_time(measure_timer);
                     size
                 },
+                cancel,
+                TAFFY_ABORT_CHECK_STRIDE,
             )
-            .map_err(|e| LayoutError::MissingContext(format!("Taffy layout failed: {:?}", e)))?;
+            .map_err(|e| match e {
+              taffy::TaffyError::LayoutAborted => match check_active(RenderStage::Layout) {
+                Err(RenderError::Timeout { elapsed, .. }) => LayoutError::Timeout { elapsed },
+                _ => LayoutError::MissingContext("Taffy layout aborted".to_string()),
+              },
+              _ => LayoutError::MissingContext(format!("Taffy layout failed: {:?}", e)),
+            })?;
     flex_profile::record_compute_time(compute_timer);
     if toggles.truthy("FASTR_DEBUG_FLEX_CHILD") {
       if let Ok(style) = taffy_tree.style(root_node) {
