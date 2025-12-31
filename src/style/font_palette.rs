@@ -38,11 +38,11 @@ pub struct ResolvedFontPalette {
 }
 
 fn hash_overrides(overrides: &[(u16, Rgba)]) -> u64 {
-  use std::collections::hash_map::DefaultHasher;
+  use rustc_hash::FxHasher;
   use std::hash::Hash;
   use std::hash::Hasher;
 
-  let mut hasher = DefaultHasher::new();
+  let mut hasher = FxHasher::default();
   for (idx, color) in overrides {
     idx.hash(&mut hasher);
     color.r.hash(&mut hasher);

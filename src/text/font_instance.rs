@@ -4,7 +4,7 @@ use rustybuzz::Variation;
 use skrifa::instance::{Location, LocationRef, Size};
 use skrifa::outline::{DrawSettings, OutlineGlyph, OutlineGlyphCollection, OutlinePen};
 use skrifa::{FontRef, GlyphId, MetadataProvider, Tag};
-use std::collections::hash_map::DefaultHasher;
+use rustc_hash::FxHasher;
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -13,7 +13,7 @@ use ttf_parser::GlyphId as ParserGlyphId;
 
 /// Hash variations to use in cache keys.
 pub fn variation_hash(variations: &[Variation]) -> u64 {
-  let mut hasher = DefaultHasher::new();
+  let mut hasher = FxHasher::default();
   let mut ordered: BTreeMap<[u8; 4], f32> = BTreeMap::new();
   for variation in variations {
     ordered.insert(variation.tag.to_bytes(), variation.value);

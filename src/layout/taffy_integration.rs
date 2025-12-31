@@ -13,6 +13,7 @@
 use crate::geometry::Size;
 use crate::layout::constraints::AvailableSpace as CrateAvailableSpace;
 use crate::layout::constraints::LayoutConstraints;
+use rustc_hash::FxHasher;
 use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -397,7 +398,7 @@ pub(crate) fn taffy_constraint_key(
 }
 
 fn viewport_hash(viewport: Size) -> u64 {
-  let mut h = std::collections::hash_map::DefaultHasher::new();
+  let mut h = FxHasher::default();
   quantize(viewport.width).to_bits().hash(&mut h);
   quantize(viewport.height).to_bits().hash(&mut h);
   h.finish()
@@ -542,7 +543,7 @@ impl TaffyNodeCache {
   #[inline]
   fn shard_index(&self, key: &TaffyNodeCacheKey) -> usize {
     debug_assert!(!self.shards.is_empty());
-    let mut h = std::collections::hash_map::DefaultHasher::new();
+    let mut h = FxHasher::default();
     key.hash(&mut h);
     (h.finish() as usize) & self.shard_mask
   }
