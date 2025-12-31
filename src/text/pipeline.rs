@@ -87,6 +87,7 @@ use crate::text::font_fallback::GlyphFallbackCacheKey;
 use crate::text::font_loader::FontContext;
 use crate::text::script_fallback;
 use lru::LruCache;
+use rustc_hash::FxHasher;
 use rustybuzz::Direction as HbDirection;
 use rustybuzz::Feature;
 use rustybuzz::Language as HbLanguage;
@@ -94,6 +95,7 @@ use rustybuzz::UnicodeBuffer;
 use rustybuzz::Variation;
 use std::borrow::Cow;
 use std::collections::HashSet;
+use std::hash::BuildHasherDefault;
 use std::num::NonZeroUsize;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -115,6 +117,8 @@ const SHAPING_CACHE_CAPACITY: usize = 2048;
 const FONT_RESOLUTION_CACHE_SIZE: usize = 2048;
 #[cfg(any(test, debug_assertions))]
 static SHAPE_FONT_RUN_INVOCATIONS: AtomicUsize = AtomicUsize::new(0);
+
+type ShapingCacheHasher = BuildHasherDefault<FxHasher>;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct TextCacheStats {
@@ -1189,16 +1193,38 @@ pub fn atomic_shaping_clusters(text: &str) -> Vec<(usize, usize)> {
   let mut boundaries: Vec<usize> = UnicodeSegmentation::grapheme_indices(text, true)
     .map(|(idx, _)| idx)
     .collect();
-  boundaries.push(0);
-  boundaries.push(text.len());
-  boundaries.sort_unstable();
-  boundaries.dedup();
-
-  for seq in emoji::find_emoji_sequences(text) {
-    boundaries.retain(|b| !(seq.start < *b && *b < seq.end));
+  if boundaries.first().copied() != Some(0) {
+    boundaries.insert(0, 0);
+  }
+  if boundaries.last().copied() != Some(text.len()) {
+    boundaries.push(text.len());
   }
 
-  let mut clusters = Vec::new();
+  let sequences = emoji::find_emoji_sequences(text);
+  if !sequences.is_empty() {
+    let mut filtered = Vec::with_capacity(boundaries.len());
+    let mut seq_iter = sequences.iter().peekable();
+    for boundary in boundaries {
+      while let Some(seq) = seq_iter.peek() {
+        if seq.end <= boundary {
+          seq_iter.next();
+        } else {
+          break;
+        }
+      }
+      if let Some(seq) = seq_iter.peek() {
+        if seq.start < boundary && boundary < seq.end {
+          continue;
+        }
+      }
+      if filtered.last().copied() != Some(boundary) {
+        filtered.push(boundary);
+      }
+    }
+    boundaries = filtered;
+  }
+
+  let mut clusters = Vec::with_capacity(boundaries.len().saturating_sub(1));
   for window in boundaries.windows(2) {
     let start = window[0];
     let end = window[1];
@@ -3632,7 +3658,7 @@ impl ShapingCacheStats {
 
 #[derive(Clone, Debug)]
 struct ShapingCache {
-  entries: Arc<Mutex<LruCache<ShapingCacheKey, Arc<Vec<ShapedRun>>>>>,
+  entries: Arc<Mutex<LruCache<ShapingCacheKey, Arc<Vec<ShapedRun>>, ShapingCacheHasher>>>,
   #[cfg(any(test, debug_assertions))]
   stats: Arc<ShapingCacheStats>,
 }
@@ -3641,7 +3667,10 @@ impl ShapingCache {
   fn new(capacity: usize) -> Self {
     let cap = NonZeroUsize::new(capacity).unwrap_or_else(|| NonZeroUsize::new(1).unwrap());
     Self {
-      entries: Arc::new(Mutex::new(LruCache::new(cap))),
+      entries: Arc::new(Mutex::new(LruCache::with_hasher(
+        cap,
+        ShapingCacheHasher::default(),
+      ))),
       #[cfg(any(test, debug_assertions))]
       stats: Arc::new(ShapingCacheStats::default()),
     }

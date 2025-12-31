@@ -50,10 +50,14 @@ use fontdb::Family;
 use fontdb::Query;
 use fontdb::ID;
 use lru::LruCache;
+use rustc_hash::FxHasher;
 use std::hash::Hasher;
+use std::hash::BuildHasherDefault;
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+
+type FallbackCacheHasher = BuildHasherDefault<FxHasher>;
 
 /// Unique identifier for a font face in the database.
 ///
@@ -241,8 +245,8 @@ impl FallbackCacheStats {
 
 #[derive(Debug)]
 pub(crate) struct FallbackCache {
-  glyphs: Arc<Mutex<LruCache<GlyphFallbackCacheKey, Option<LoadedFont>>>>,
-  clusters: Arc<Mutex<LruCache<ClusterFallbackCacheKey, Option<LoadedFont>>>>,
+  glyphs: Arc<Mutex<LruCache<GlyphFallbackCacheKey, Option<LoadedFont>, FallbackCacheHasher>>>,
+  clusters: Arc<Mutex<LruCache<ClusterFallbackCacheKey, Option<LoadedFont>, FallbackCacheHasher>>>,
   last_generation: AtomicU64,
   stats: Arc<FallbackCacheStats>,
 }
@@ -262,8 +266,14 @@ impl FallbackCache {
   pub(crate) fn new(capacity: usize) -> Self {
     let cap = NonZeroUsize::new(capacity.max(1)).unwrap();
     Self {
-      glyphs: Arc::new(Mutex::new(LruCache::new(cap))),
-      clusters: Arc::new(Mutex::new(LruCache::new(cap))),
+      glyphs: Arc::new(Mutex::new(LruCache::with_hasher(
+        cap,
+        FallbackCacheHasher::default(),
+      ))),
+      clusters: Arc::new(Mutex::new(LruCache::with_hasher(
+        cap,
+        FallbackCacheHasher::default(),
+      ))),
       last_generation: AtomicU64::new(0),
       stats: Arc::new(FallbackCacheStats::default()),
     }

@@ -1,6 +1,8 @@
 use crate::text::font_db::LoadedFont;
 use lru::LruCache;
+use rustc_hash::FxHasher;
 use rustybuzz::Face as RbFace;
+use std::hash::BuildHasherDefault;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -15,6 +17,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// handles to the same font bytes share entries.
 const FACE_CACHE_SIZE: usize = 256;
 const RUSTYBUZZ_FACE_CACHE_SIZE: usize = 256;
+type FaceCacheHasher = BuildHasherDefault<FxHasher>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct FaceCacheKey {
@@ -102,14 +105,17 @@ impl CachedRustybuzzFace {
 /// critical sections short and the cache small to limit contention.
 #[derive(Clone)]
 struct FaceCache {
-  inner: Arc<Mutex<LruCache<FaceCacheKey, Arc<CachedFace>>>>,
+  inner: Arc<Mutex<LruCache<FaceCacheKey, Arc<CachedFace>, FaceCacheHasher>>>,
 }
 
 impl FaceCache {
   fn new(capacity: usize) -> Self {
     let cap = NonZeroUsize::new(capacity.max(1)).unwrap();
     Self {
-      inner: Arc::new(Mutex::new(LruCache::new(cap))),
+      inner: Arc::new(Mutex::new(LruCache::with_hasher(
+        cap,
+        FaceCacheHasher::default(),
+      ))),
     }
   }
 
@@ -141,14 +147,17 @@ impl FaceCache {
 /// avoid reparsing HarfBuzz faces for each shaping run.
 #[derive(Clone)]
 struct RustybuzzFaceCache {
-  inner: Arc<Mutex<LruCache<FaceCacheKey, Arc<CachedRustybuzzFace>>>>,
+  inner: Arc<Mutex<LruCache<FaceCacheKey, Arc<CachedRustybuzzFace>, FaceCacheHasher>>>,
 }
 
 impl RustybuzzFaceCache {
   fn new(capacity: usize) -> Self {
     let cap = NonZeroUsize::new(capacity.max(1)).unwrap();
     Self {
-      inner: Arc::new(Mutex::new(LruCache::new(cap))),
+      inner: Arc::new(Mutex::new(LruCache::with_hasher(
+        cap,
+        FaceCacheHasher::default(),
+      ))),
     }
   }
 

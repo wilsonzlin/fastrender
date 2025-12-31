@@ -41,7 +41,9 @@ use fontdb::Family as FontDbFamily;
 use fontdb::Query as FontDbQuery;
 use fontdb::ID;
 use lru::LruCache;
+use rustc_hash::FxHasher;
 use std::collections::HashMap;
+use std::hash::BuildHasherDefault;
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::path::PathBuf;
@@ -58,6 +60,8 @@ pub use crate::text::face_cache::FaceParseCountGuard;
 pub use crate::text::face_cache::{face_parse_count, reset_face_parse_counter_for_tests};
 
 const GLYPH_COVERAGE_CACHE_SIZE: usize = 128;
+type GlyphCoverageCacheHasher = BuildHasherDefault<FxHasher>;
+
 #[derive(Clone, Copy)]
 struct BundledFont {
   name: &'static str,
@@ -345,14 +349,17 @@ fn parse_face_with_counter<'a>(
 
 #[derive(Clone)]
 struct GlyphCoverageCache {
-  inner: Arc<Mutex<LruCache<ID, Arc<CachedFace>>>>,
+  inner: Arc<Mutex<LruCache<ID, Arc<CachedFace>, GlyphCoverageCacheHasher>>>,
 }
 
 impl GlyphCoverageCache {
   fn new(capacity: usize) -> Self {
     let cap = NonZeroUsize::new(capacity.max(1)).unwrap();
     Self {
-      inner: Arc::new(Mutex::new(LruCache::new(cap))),
+      inner: Arc::new(Mutex::new(LruCache::with_hasher(
+        cap,
+        GlyphCoverageCacheHasher::default(),
+      ))),
     }
   }
 
