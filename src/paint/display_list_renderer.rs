@@ -3784,6 +3784,9 @@ impl DisplayListRenderer {
       }
       Some(CompositeMask::Region(mask)) => Some(mask),
       Some(CompositeMask::Transparent) => {
+        MASK_RENDER_SCRATCH.with(|cell| {
+          *cell.borrow_mut() = reusable_mask;
+        });
         let mut mask = Mask::new(1, 1)?;
         mask.data_mut()[0] = 0;
         Some(OffsetMask {
@@ -5229,9 +5232,14 @@ impl DisplayListRenderer {
                 origin: mask_origin,
               } = mask;
               let applied = apply_mask_with_offset(&mut layer, origin, &mask, mask_origin);
-              MASK_RENDER_SCRATCH.with(|cell| {
-                *cell.borrow_mut() = Some(mask);
-              });
+              // Don't overwrite the reusable scratch with the 1x1 all-transparent sentinel mask;
+              // that case is common for fully clipped masks and would otherwise destroy the
+              // allocation we want to reuse for subsequent (larger) masks.
+              if mask.width() > 1 || mask.height() > 1 {
+                MASK_RENDER_SCRATCH.with(|cell| {
+                  *cell.borrow_mut() = Some(mask);
+                });
+              }
               if !applied {
                 return Ok(());
               }
