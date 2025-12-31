@@ -450,7 +450,14 @@ fn escape_text(value: &str) -> String {
 }
 
 fn collect_document_css(styled: &StyledNode, deadline_counter: &mut usize) -> Result<String> {
-  fn walk(node: &StyledNode, out: &mut String, deadline_counter: &mut usize) -> Result<()> {
+  const MAX_EMBEDDED_SVG_CSS_BYTES: usize = 64 * 1024;
+
+  fn walk(
+    node: &StyledNode,
+    out: &mut String,
+    deadline_counter: &mut usize,
+    max_bytes: usize,
+  ) -> Result<bool> {
     check_active_periodic(
       deadline_counter,
       BOX_GEN_DEADLINE_STRIDE,
@@ -461,26 +468,33 @@ fn collect_document_css(styled: &StyledNode, deadline_counter: &mut usize) -> Re
         && node.node.get_attribute_ref("shadowroot").is_none()
         && node.node.get_attribute_ref("shadowrootmode").is_none()
       {
-        return Ok(());
+        return Ok(true);
       }
       if tag.eq_ignore_ascii_case("style") {
         for child in node.children.iter() {
           if let Some(text) = child.node.text_content() {
             out.push_str(text);
             out.push('\n');
+            if out.len() > max_bytes {
+              out.clear();
+              return Ok(false);
+            }
           }
         }
       }
     }
 
     for child in node.children.iter() {
-      walk(child, out, deadline_counter)?;
+      if !walk(child, out, deadline_counter, max_bytes)? {
+        return Ok(false);
+      }
     }
-    Ok(())
+    Ok(true)
   }
 
   let mut css = String::new();
-  walk(styled, &mut css, deadline_counter)?;
+  let max_bytes = foreign_object_css_limit_bytes().max(MAX_EMBEDDED_SVG_CSS_BYTES);
+  let _ = walk(styled, &mut css, deadline_counter, max_bytes)?;
   Ok(css)
 }
 
