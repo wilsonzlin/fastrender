@@ -3972,8 +3972,18 @@ impl FastRender {
       if let Some(rec) = stats.as_deref_mut() {
         if let Some(diag) = crate::paint::painter::take_paint_diagnostics() {
           rec.stats.timings.paint_build_ms = Some(diag.build_ms);
+          rec.stats.timings.paint_optimize_ms = Some(diag.optimize_ms);
           rec.stats.timings.paint_rasterize_ms = Some(diag.raster_ms);
-          rec.stats.paint.display_items = Some(diag.command_count);
+          if diag.optimize_original_items > 0 {
+            rec.stats.paint.display_items = Some(diag.optimize_original_items);
+            rec.stats.paint.optimized_items = Some(diag.optimize_final_items);
+            rec.stats.paint.culled_items = Some(diag.optimize_culled);
+            rec.stats.paint.transparent_removed = Some(diag.optimize_transparent_removed);
+            rec.stats.paint.noop_removed = Some(diag.optimize_noop_removed);
+            rec.stats.paint.merged_items = Some(diag.optimize_merged);
+          } else {
+            rec.stats.paint.display_items = Some(diag.command_count);
+          }
           rec.stats.paint.gradient_ms = Some(diag.gradient_ms);
           rec.stats.paint.gradient_pixels = Some(diag.gradient_pixels);
           rec.stats.paint.parallel_tasks = Some(diag.parallel_tasks);

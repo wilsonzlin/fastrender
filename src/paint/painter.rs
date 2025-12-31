@@ -231,6 +231,13 @@ struct PaintStats {
 pub struct PaintDiagnosticsSummary {
   pub command_count: usize,
   pub build_ms: f64,
+  pub optimize_ms: f64,
+  pub optimize_original_items: usize,
+  pub optimize_final_items: usize,
+  pub optimize_culled: usize,
+  pub optimize_transparent_removed: usize,
+  pub optimize_noop_removed: usize,
+  pub optimize_merged: usize,
   pub raster_ms: f64,
   pub gradient_ms: f64,
   pub gradient_pixels: u64,
@@ -10279,6 +10286,8 @@ pub fn paint_tree_display_list_with_resources_scaled_offset_depth(
   max_iframe_depth: usize,
 ) -> Result<Pixmap> {
   record_stage(StageHeartbeat::PaintBuild);
+  let diagnostics_enabled = paint_diagnostics_enabled();
+  let build_start = diagnostics_enabled.then(Instant::now);
   let viewport = tree.viewport_size();
   let mut display_list = DisplayListBuilder::with_image_cache(image_cache.clone())
     .with_font_context(font_ctx.clone())
@@ -10301,10 +10310,33 @@ pub fn paint_tree_display_list_with_resources_scaled_offset_depth(
       .build_with_stacking_tree_offset(extra, offset);
     display_list.append(extra_list);
   }
+  if let (true, Some(start)) = (diagnostics_enabled, build_start) {
+    let build_ms = start.elapsed().as_secs_f64() * 1000.0;
+    with_paint_diagnostics(|diag| {
+      diag.build_ms = build_ms;
+      diag.serial_ms += build_ms;
+      diag.parallel_threads = diag.parallel_threads.max(1);
+    });
+  }
 
   let optimizer = DisplayListOptimizer::new();
   let viewport_rect = Rect::from_xywh(0.0, 0.0, viewport.width, viewport.height);
-  let (optimized, _) = optimizer.optimize(display_list, viewport_rect);
+  let optimize_start = diagnostics_enabled.then(Instant::now);
+  let (optimized, stats) = optimizer.optimize(display_list, viewport_rect);
+  if let (true, Some(start)) = (diagnostics_enabled, optimize_start) {
+    let optimize_ms = start.elapsed().as_secs_f64() * 1000.0;
+    with_paint_diagnostics(|diag| {
+      diag.optimize_ms = optimize_ms;
+      diag.optimize_original_items = stats.original_count;
+      diag.optimize_final_items = stats.final_count;
+      diag.optimize_culled = stats.culled_count;
+      diag.optimize_transparent_removed = stats.transparent_removed;
+      diag.optimize_noop_removed = stats.noop_removed;
+      diag.optimize_merged = stats.merged_count;
+      diag.serial_ms += optimize_ms;
+      diag.parallel_threads = diag.parallel_threads.max(1);
+    });
+  }
 
   let mut renderer = DisplayListRenderer::new_scaled(width, height, background, font_ctx, scale)?;
   renderer.set_parallelism(paint_parallelism);
