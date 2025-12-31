@@ -1042,6 +1042,9 @@ mod tests {
     // implementation detail. Compare as sets (sorted) so this regression test
     // continues to validate the presence of expected hashes without coupling to
     // internal ordering.
+    //
+    // Attribute selector names are case-insensitive in HTML, and the DOM stores attribute names
+    // lowercased (via html5ever). Match the bloom-pruning behavior by hashing the lowercase form.
     let mut expected_no_quirks = vec![hash("span"), hash("foo"), hash("bar"), hash("data-thing")];
     expected_no_quirks.sort_unstable();
     let mut actual_no_quirks = selector

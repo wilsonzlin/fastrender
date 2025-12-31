@@ -2064,10 +2064,7 @@ fn collect_relative_selector_hashes<Impl: SelectorImpl>(
                         classes.push(class.precomputed_hash() & BLOOM_HASH_MASK);
                     }
                 },
-                Component::AttributeInNoNamespaceExists {
-                    ref local_name_lower,
-                    ..
-                } => {
+                Component::AttributeInNoNamespaceExists { ref local_name_lower, .. } => {
                     // Attribute names are matched case-insensitively in HTML documents. Emit the
                     // canonical ASCII-lowercased name so callers can safely use these hashes for
                     // pruning without depending on the original casing used in the selector.
