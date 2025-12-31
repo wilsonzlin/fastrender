@@ -7579,7 +7579,7 @@ fn composite_offset_masks(
         for x in 0..out_w as usize {
           let dst = dst_data[dst_row_idx + dst_x_offset + x] as u16;
           let src = src_data[src_row_idx + src_x_offset + x] as u16;
-          out_data[out_row_idx + x] = (src.saturating_mul(dst) / 255) as u8;
+          out_data[out_row_idx + x] = div_255(src.saturating_mul(dst)) as u8;
         }
       }
     }
@@ -7610,7 +7610,7 @@ fn composite_offset_masks(
           } else {
             0
           };
-          out_data[out_row_idx + x] = (src.saturating_mul(255 - dst) / 255) as u8;
+          out_data[out_row_idx + x] = div_255(src.saturating_mul(255 - dst)) as u8;
         }
       }
     }
@@ -7654,10 +7654,10 @@ fn composite_offset_masks(
           };
 
           let out = match op {
-            MaskComposite::Add => src + dst.saturating_mul(255 - src) / 255,
+            MaskComposite::Add => src + div_255(dst.saturating_mul(255 - src)),
             MaskComposite::Exclude => {
-              let src_out = src.saturating_mul(255 - dst) / 255;
-              let dst_out = dst.saturating_mul(255 - src) / 255;
+              let src_out = div_255(src.saturating_mul(255 - dst));
+              let dst_out = div_255(dst.saturating_mul(255 - src));
               src_out + dst_out
             }
             _ => 0,
@@ -7679,12 +7679,12 @@ fn apply_mask_composite_same_bounds(dest: &mut [u8], src: &[u8], op: MaskComposi
     let src = *s as u16;
     let dst = *d as u16;
     let out = match op {
-      MaskComposite::Add => src + dst.saturating_mul(255 - src) / 255,
-      MaskComposite::Subtract => src.saturating_mul(255 - dst) / 255,
-      MaskComposite::Intersect => src.saturating_mul(dst) / 255,
+      MaskComposite::Add => src + div_255(dst.saturating_mul(255 - src)),
+      MaskComposite::Subtract => div_255(src.saturating_mul(255 - dst)),
+      MaskComposite::Intersect => div_255(src.saturating_mul(dst)),
       MaskComposite::Exclude => {
-        let src_out = src.saturating_mul(255 - dst) / 255;
-        let dst_out = dst.saturating_mul(255 - src) / 255;
+        let src_out = div_255(src.saturating_mul(255 - dst));
+        let dst_out = div_255(dst.saturating_mul(255 - src));
         src_out + dst_out
       }
     };
@@ -7750,16 +7750,23 @@ fn apply_mask_composite_pixel(dst: u8, src: u8, op: MaskComposite) -> u8 {
   let src = src as u16;
   let dst = dst as u16;
   let out = match op {
-    MaskComposite::Add => src + dst.saturating_mul(255 - src) / 255,
-    MaskComposite::Subtract => src.saturating_mul(255 - dst) / 255,
-    MaskComposite::Intersect => src.saturating_mul(dst) / 255,
+    MaskComposite::Add => src + div_255(dst.saturating_mul(255 - src)),
+    MaskComposite::Subtract => div_255(src.saturating_mul(255 - dst)),
+    MaskComposite::Intersect => div_255(src.saturating_mul(dst)),
     MaskComposite::Exclude => {
-      let src_out = src.saturating_mul(255 - dst) / 255;
-      let dst_out = dst.saturating_mul(255 - src) / 255;
+      let src_out = div_255(src.saturating_mul(255 - dst));
+      let dst_out = div_255(dst.saturating_mul(255 - src));
       src_out + dst_out
     }
   };
   out.min(255) as u8
+}
+
+#[inline]
+fn div_255(value: u16) -> u16 {
+  // Exact floor division by 255 for values in the 0..=65025 range (the max product of two u8s).
+  // This is faster than a general integer division and keeps mask composites deterministic.
+  (value + 1 + (value >> 8)) >> 8
 }
 
 #[cfg(test)]
