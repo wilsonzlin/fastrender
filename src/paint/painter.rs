@@ -10184,24 +10184,6 @@ fn hard_clip_mask_outside_rect_within_bounds(
 }
 
 #[inline]
-fn apply_mask_composite_pixel(dst: u8, src: u8, op: MaskComposite) -> u8 {
-  let src = src as u16;
-  let dst = dst as u16;
-  // `src` and `dst` are in the 0..=255 range, so intermediate products fit in u16 (max 65025).
-  let out = match op {
-    MaskComposite::Add => src + div_255(dst * (255 - src)),
-    MaskComposite::Subtract => div_255(src * (255 - dst)),
-    MaskComposite::Intersect => div_255(src * dst),
-    MaskComposite::Exclude => {
-      let src_out = div_255(src * (255 - dst));
-      let dst_out = div_255(dst * (255 - src));
-      src_out + dst_out
-    }
-  };
-  out.min(255) as u8
-}
-
-#[inline]
 fn div_255(value: u16) -> u16 {
   // Exact floor division by 255 for values in the 0..=65025 range (the max product of two u8s).
   (value + 1 + (value >> 8)) >> 8
@@ -10256,15 +10238,65 @@ fn apply_mask_composite_from_pixmap_alpha(
 
   let x0 = rect.x0 as usize;
   let x1 = rect.x1 as usize;
-  for y in rect.y0 as usize..rect.y1 as usize {
-    let dst_start = y * mask_stride + x0;
-    let dst_end = y * mask_stride + x1;
-    let dst = &mut dest_data[dst_start..dst_end];
-    let mut src_idx = y * pixmap_stride + x0 * 4 + 3;
-    for px in dst.iter_mut() {
-      let s = src_data[src_idx];
-      *px = apply_mask_composite_pixel(*px, s, op);
-      src_idx += 4;
+  match op {
+    MaskComposite::Add => {
+      for y in rect.y0 as usize..rect.y1 as usize {
+        let dst_start = y * mask_stride + x0;
+        let dst_end = y * mask_stride + x1;
+        let dst = &mut dest_data[dst_start..dst_end];
+        let mut src_idx = y * pixmap_stride + x0 * 4 + 3;
+        for px in dst.iter_mut() {
+          let s = src_data[src_idx] as u16;
+          let d = *px as u16;
+          let out = s + div_255(d * (255 - s));
+          *px = out.min(255) as u8;
+          src_idx += 4;
+        }
+      }
+    }
+    MaskComposite::Subtract => {
+      for y in rect.y0 as usize..rect.y1 as usize {
+        let dst_start = y * mask_stride + x0;
+        let dst_end = y * mask_stride + x1;
+        let dst = &mut dest_data[dst_start..dst_end];
+        let mut src_idx = y * pixmap_stride + x0 * 4 + 3;
+        for px in dst.iter_mut() {
+          let s = src_data[src_idx] as u16;
+          let d = *px as u16;
+          *px = div_255(s * (255 - d)) as u8;
+          src_idx += 4;
+        }
+      }
+    }
+    MaskComposite::Intersect => {
+      for y in rect.y0 as usize..rect.y1 as usize {
+        let dst_start = y * mask_stride + x0;
+        let dst_end = y * mask_stride + x1;
+        let dst = &mut dest_data[dst_start..dst_end];
+        let mut src_idx = y * pixmap_stride + x0 * 4 + 3;
+        for px in dst.iter_mut() {
+          let s = src_data[src_idx] as u16;
+          let d = *px as u16;
+          *px = div_255(s * d) as u8;
+          src_idx += 4;
+        }
+      }
+    }
+    MaskComposite::Exclude => {
+      for y in rect.y0 as usize..rect.y1 as usize {
+        let dst_start = y * mask_stride + x0;
+        let dst_end = y * mask_stride + x1;
+        let dst = &mut dest_data[dst_start..dst_end];
+        let mut src_idx = y * pixmap_stride + x0 * 4 + 3;
+        for px in dst.iter_mut() {
+          let s = src_data[src_idx] as u16;
+          let d = *px as u16;
+          let src_out = div_255(s * (255 - d));
+          let dst_out = div_255(d * (255 - s));
+          *px = (src_out + dst_out).min(255) as u8;
+          src_idx += 4;
+        }
+      }
     }
   }
 }

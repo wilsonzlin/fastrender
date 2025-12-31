@@ -7690,21 +7690,38 @@ fn composite_offset_masks(
 }
 
 fn apply_mask_composite_same_bounds(dest: &mut [u8], src: &[u8], op: MaskComposite) {
-  for (d, s) in dest.iter_mut().zip(src.iter()) {
-    let src = *s as u16;
-    let dst = *d as u16;
-    // `src` and `dst` are in the 0..=255 range, so intermediate products fit in u16 (max 65025).
-    let out = match op {
-      MaskComposite::Add => src + div_255(dst * (255 - src)),
-      MaskComposite::Subtract => div_255(src * (255 - dst)),
-      MaskComposite::Intersect => div_255(src * dst),
-      MaskComposite::Exclude => {
+  match op {
+    MaskComposite::Add => {
+      for (d, s) in dest.iter_mut().zip(src.iter()) {
+        let src = *s as u16;
+        let dst = *d as u16;
+        let out = src + div_255(dst * (255 - src));
+        *d = out.min(255) as u8;
+      }
+    }
+    MaskComposite::Subtract => {
+      for (d, s) in dest.iter_mut().zip(src.iter()) {
+        let src = *s as u16;
+        let dst = *d as u16;
+        *d = div_255(src * (255 - dst)) as u8;
+      }
+    }
+    MaskComposite::Intersect => {
+      for (d, s) in dest.iter_mut().zip(src.iter()) {
+        let src = *s as u16;
+        let dst = *d as u16;
+        *d = div_255(src * dst) as u8;
+      }
+    }
+    MaskComposite::Exclude => {
+      for (d, s) in dest.iter_mut().zip(src.iter()) {
+        let src = *s as u16;
+        let dst = *d as u16;
         let src_out = div_255(src * (255 - dst));
         let dst_out = div_255(dst * (255 - src));
-        src_out + dst_out
+        *d = (src_out + dst_out).min(255) as u8;
       }
-    };
-    *d = out.min(255) as u8;
+    }
   }
 }
 
