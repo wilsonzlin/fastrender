@@ -492,13 +492,7 @@ fn http_retry_logging_enabled() -> bool {
   })
 }
 
-fn log_http_retry(
-  reason: &str,
-  attempt: usize,
-  max_attempts: usize,
-  url: &str,
-  backoff: Duration,
-) {
+fn log_http_retry(reason: &str, attempt: usize, max_attempts: usize, url: &str, backoff: Duration) {
   if !http_retry_logging_enabled() {
     return;
   }
@@ -1407,7 +1401,10 @@ impl HttpFetcher {
           .header("Accept-Encoding", accept_encoding_value);
 
         if !effective_timeout.is_zero() {
-          request = request.config().timeout_global(Some(effective_timeout)).build();
+          request = request
+            .config()
+            .timeout_global(Some(effective_timeout))
+            .build();
         }
 
         if let Some(v) = validators {
@@ -1909,6 +1906,17 @@ fn parse_http_cache_policy(headers: &HeaderMap) -> Option<HttpCachePolicy> {
 // CachingFetcher - in-memory cache + single-flight
 // ============================================================================
 
+/// Policy controlling how stale cached entries are handled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CacheStalePolicy {
+  /// Preserve existing behavior: stale entries trigger revalidation (conditional request) when
+  /// validators are available, falling back to cached bytes only after the network attempt fails.
+  Revalidate,
+  /// When a render deadline with a timeout is active, serve cached bytes immediately even if the
+  /// entry is stale or requires revalidation.
+  UseStaleWhenDeadline,
+}
+
 /// Configuration for [`CachingFetcher`].
 #[derive(Debug, Clone, Copy)]
 pub struct CachingFetcherConfig {
@@ -1922,6 +1930,9 @@ pub struct CachingFetcherConfig {
   pub honor_http_cache_headers: bool,
   /// Whether to honor HTTP freshness metadata (Cache-Control/Expires) to avoid revalidation.
   pub honor_http_cache_freshness: bool,
+  /// Policy controlling whether stale cached entries are served without revalidation when a
+  /// render deadline is active.
+  pub stale_policy: CacheStalePolicy,
 }
 
 impl Default for CachingFetcherConfig {
@@ -1932,6 +1943,7 @@ impl Default for CachingFetcherConfig {
       cache_errors: true,
       honor_http_cache_headers: true,
       honor_http_cache_freshness: false,
+      stale_policy: CacheStalePolicy::Revalidate,
     }
   }
 }
@@ -2266,7 +2278,21 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
             action: CacheAction::Fetch,
           };
         }
-        if meta.is_fresh(SystemTime::now(), freshness_cap) && !meta.requires_revalidation() {
+        let now = SystemTime::now();
+        let is_fresh = meta.is_fresh(now, freshness_cap);
+        let requires_revalidation = meta.requires_revalidation();
+        if is_fresh && !requires_revalidation {
+          return CachePlan {
+            cached,
+            action: CacheAction::UseCached,
+          };
+        }
+        if self.config.stale_policy == CacheStalePolicy::UseStaleWhenDeadline
+          && render_control::active_deadline()
+            .as_ref()
+            .and_then(|deadline| deadline.timeout_limit())
+            .is_some()
+        {
           return CachePlan {
             cached,
             action: CacheAction::UseCached,

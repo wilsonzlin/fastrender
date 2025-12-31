@@ -1052,7 +1052,7 @@ fn secs_to_system_time(secs: u64) -> Option<SystemTime> {
 
 #[cfg(test)]
 mod tests {
-  use super::super::{HttpFetcher, ResourcePolicy};
+  use super::super::{CacheStalePolicy, HttpFetcher, ResourcePolicy};
   use super::*;
   use filetime::FileTime;
   use std::collections::VecDeque;
@@ -1854,6 +1854,37 @@ mod tests {
     fn fetch(&self, _url: &str) -> Result<FetchedResource> {
       panic!("inner fetch should not be called");
     }
+  }
+
+  #[test]
+  fn serves_stale_entries_without_revalidation_when_deadline_active() {
+    let tmp = tempfile::tempdir().unwrap();
+    let url = "https://example.com/stale";
+    let disk = DiskCachingFetcher::with_configs(
+      PanicFetcher,
+      tmp.path(),
+      CachingFetcherConfig {
+        honor_http_cache_freshness: true,
+        stale_policy: CacheStalePolicy::UseStaleWhenDeadline,
+        ..CachingFetcherConfig::default()
+      },
+      DiskCacheConfig {
+        max_bytes: 0,
+        // Force entries to be treated as stale so the default plan would revalidate.
+        max_age: Some(Duration::from_secs(0)),
+        ..DiskCacheConfig::default()
+      },
+    );
+
+    let mut resource = FetchedResource::new(b"cached".to_vec(), Some("text/css".to_string()));
+    resource.final_url = Some(url.to_string());
+    resource.etag = Some("etag1".to_string());
+    disk.persist_resource(url, &resource, resource.etag.as_deref(), None, None);
+
+    let deadline = render_control::RenderDeadline::new(Some(Duration::from_secs(1)), None);
+    let fetched =
+      render_control::with_deadline(Some(&deadline), || disk.fetch(url)).expect("disk hit");
+    assert_eq!(fetched.bytes, b"cached");
   }
 
   #[test]

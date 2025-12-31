@@ -34,6 +34,7 @@ use fastrender::pageset::{
 use fastrender::render_control::{record_stage, set_stage_listener, StageHeartbeat};
 use fastrender::resource::normalize_user_agent_for_log;
 use fastrender::resource::parse_cached_html_meta;
+use fastrender::resource::CacheStalePolicy;
 #[cfg(not(feature = "disk_cache"))]
 use fastrender::resource::CachingFetcher;
 use fastrender::resource::CachingFetcherConfig;
@@ -1250,7 +1251,9 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
       let mut progress = PageProgress::new(url_hint_from_cache_path(&args.cache_path));
       progress.status = ProgressStatus::Error;
       progress.notes = format!("read: {note_msg}");
-      progress.failure_stage = heartbeat.last_stage().and_then(progress_stage_from_heartbeat);
+      progress.failure_stage = heartbeat
+        .last_stage()
+        .and_then(progress_stage_from_heartbeat);
       if let Some(hotspot) = hotspot_from_error(&e, None) {
         maybe_apply_hotspot(&mut progress, progress_before.as_ref(), hotspot, false);
       }
@@ -1274,6 +1277,16 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
 
   let hard_timeout = Duration::from_secs(args.timeout);
   let fetch_timeout = compute_fetch_timeout(hard_timeout, args.soft_timeout_ms);
+  let serve_stale_when_deadline = cfg!(feature = "disk_cache")
+    && std::env::var("FASTR_PAGESET_SERVE_STALE")
+      .ok()
+      .map(|raw| {
+        !matches!(
+          raw.trim().to_ascii_lowercase().as_str(),
+          "0" | "false" | "no" | "off"
+        )
+      })
+      .unwrap_or(true);
 
   log.push_str(&format!("=== {} ===\n", args.stem));
   log.push_str(&format!("Cache: {}\n", args.cache_path.display()));
@@ -1339,6 +1352,12 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
       "Disk cache: max_bytes={} max_age={}\n",
       args.disk_cache.max_bytes, max_age
     ));
+    let stale_policy = if serve_stale_when_deadline {
+      "use_stale_when_deadline"
+    } else {
+      "revalidate"
+    };
+    log.push_str(&format!("Disk cache stale policy: {stale_policy}\n"));
   }
 
   let dump_timeout_secs = args
@@ -1367,6 +1386,11 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
   let honor_http_freshness = cfg!(feature = "disk_cache") && !args.no_http_freshness;
   let memory_config = CachingFetcherConfig {
     honor_http_cache_freshness: honor_http_freshness,
+    stale_policy: if serve_stale_when_deadline {
+      CacheStalePolicy::UseStaleWhenDeadline
+    } else {
+      CacheStalePolicy::Revalidate
+    },
     ..CachingFetcherConfig::default()
   };
   #[cfg(feature = "disk_cache")]
@@ -1433,7 +1457,9 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
         let mut progress = PageProgress::new(url);
         progress.status = ProgressStatus::Error;
         progress.notes = format!("renderer init: {note_msg}");
-        progress.failure_stage = heartbeat.last_stage().and_then(progress_stage_from_heartbeat);
+        progress.failure_stage = heartbeat
+          .last_stage()
+          .and_then(progress_stage_from_heartbeat);
         if let Some(hotspot) = hotspot_from_error(&e, None) {
           maybe_apply_hotspot(&mut progress, progress_before.as_ref(), hotspot, false);
         }
