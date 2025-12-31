@@ -1359,17 +1359,19 @@ impl HttpFetcher {
     if deadline.timeout_limit().is_none() {
       return Ok(None);
     }
-    let deadline_error = |message: &str| {
-      Error::Resource(ResourceError::new(url.to_string(), message).with_final_url(url.to_string()))
-    };
     let Some(remaining) = deadline.remaining_timeout() else {
-      return Err(deadline_error(
-        "render deadline exceeded before HTTP request (timeout)",
-      ));
+      return Err(Error::Render(RenderError::Timeout {
+        stage: render_stage_hint_from_url(url),
+        elapsed: deadline.elapsed(),
+      }));
     };
     if remaining <= HTTP_DEADLINE_BUFFER {
-      return Err(deadline_error(
-        "render deadline exceeded before HTTP request (timeout)",
+      return Err(Error::Resource(
+        ResourceError::new(
+          url.to_string(),
+          "render deadline exceeded before HTTP request (timeout)",
+        )
+        .with_final_url(url.to_string()),
       ));
     }
     let budget = remaining
@@ -1547,14 +1549,18 @@ impl HttpFetcher {
 
         match body_result {
           Ok(bytes) => {
-            let bytes =
-              match decode_content_encodings(bytes, &encodings, allowed_limit, decode_stage) {
-                Ok(decoded) => decoded,
-                Err(ContentDecodeError::DecompressionFailed { .. })
-                  if accept_encoding.is_none() =>
-                {
-                  finish_network_fetch_diagnostics(network_timer.take());
-                  return self.fetch_http_with_accept(&current, Some("identity"), validators);
+            let bytes = match decode_content_encodings(bytes, &encodings, allowed_limit, decode_stage)
+            {
+              Ok(decoded) => decoded,
+              Err(ContentDecodeError::DeadlineExceeded { stage, elapsed, .. }) => {
+                finish_network_fetch_diagnostics(network_timer.take());
+                return Err(Error::Render(RenderError::Timeout { stage, elapsed }));
+              }
+              Err(ContentDecodeError::DecompressionFailed { .. })
+                if accept_encoding.is_none() =>
+              {
+                finish_network_fetch_diagnostics(network_timer.take());
+                return self.fetch_http_with_accept(&current, Some("identity"), validators);
                 }
                 Err(err) => {
                   finish_network_fetch_diagnostics(network_timer.take());
@@ -2383,10 +2389,10 @@ impl InFlight {
             guard = self.cv.wait_timeout(guard, wait_for).unwrap().0;
           }
           _ => {
-            return Err(Error::Resource(ResourceError::new(
-              url.to_string(),
-              "render deadline exceeded while waiting for in-flight fetch",
-            )));
+            return Err(Error::Render(RenderError::Timeout {
+              stage: render_stage_hint_from_url(url),
+              elapsed: deadline.elapsed(),
+            }));
           }
         }
       } else {
@@ -2395,6 +2401,21 @@ impl InFlight {
     }
     guard.as_ref().unwrap().as_result()
   }
+}
+
+fn render_stage_hint_from_url(url: &str) -> RenderStage {
+  let path_hint = Url::parse(url)
+    .ok()
+    .map(|parsed| parsed.path().to_string())
+    .unwrap_or_else(|| {
+      url
+        .split(|c| c == '?' || c == '#')
+        .next()
+        .unwrap_or(url)
+        .to_string()
+    });
+  let content_type = guess_content_type_from_path(&path_hint);
+  decode_stage_for_content_type(content_type.as_deref())
 }
 
 /// In-memory caching [`ResourceFetcher`] with LRU eviction and single-flight
@@ -3294,7 +3315,7 @@ mod tests {
   use std::sync::Mutex;
   use std::sync::OnceLock;
   use std::thread;
-  use std::time::Instant;
+  use std::time::{Duration, Instant};
 
   fn try_bind_localhost(context: &str) -> Option<TcpListener> {
     match TcpListener::bind("127.0.0.1:0") {
@@ -4576,11 +4597,12 @@ mod tests {
     };
 
     let err = result.expect_err("waiter fetch should fail under deadline");
-    let message = err.to_string();
-    assert!(
-      message.contains("render deadline exceeded") && message.contains("in-flight"),
-      "unexpected error after {elapsed:?}: {message}"
-    );
+    match err {
+      Error::Render(RenderError::Timeout { stage, .. }) => {
+        assert_eq!(stage, RenderStage::Paint);
+      }
+      other => panic!("unexpected error after {elapsed:?}: {other:?}"),
+    }
 
     // Let the owner thread finish so it can clean up the in-flight entry.
     release.wait();
@@ -4591,6 +4613,21 @@ mod tests {
       "owner fetch should complete after being released: {owner_result:?}"
     );
     waiter_handle.join().unwrap();
+  }
+
+  #[test]
+  fn http_fetch_deadline_exceeded_before_request_surfaces_as_timeout() {
+    let fetcher = HttpFetcher::new();
+    let url = "http://example.com/style.css";
+    let deadline = render_control::RenderDeadline::new(Some(Duration::from_millis(0)), None);
+    let err = render_control::with_deadline(Some(&deadline), || fetcher.fetch(url))
+      .expect_err("expected deadline-exceeded fetch to fail");
+    match err {
+      Error::Render(RenderError::Timeout { stage, .. }) => {
+        assert_eq!(stage, RenderStage::Css);
+      }
+      other => panic!("expected timeout error, got {other:?}"),
+    }
   }
 
   #[test]

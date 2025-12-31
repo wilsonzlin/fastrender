@@ -12,8 +12,7 @@ use super::HttpCachePolicy;
 use super::ResourceFetcher;
 use super::ResourcePolicy;
 use super::MAX_ALIAS_HOPS;
-use crate::error::Error;
-use crate::error::RenderStage;
+use crate::error::{Error, RenderError, RenderStage};
 use crate::render_control;
 use crate::Result;
 use serde::{Deserialize, Serialize};
@@ -83,7 +82,7 @@ const DISK_META_READ_STAGE: RenderStage = RenderStage::Paint;
 #[derive(Debug)]
 enum ReadAllWithDeadlineError {
   Io,
-  DeadlineExceeded,
+  Timeout(RenderError),
 }
 
 impl From<io::Error> for ReadAllWithDeadlineError {
@@ -104,8 +103,8 @@ fn read_all_with_deadline<R: Read>(
   let mut buf = vec![0u8; DISK_READ_CHUNK_SIZE];
   let mut deadline_counter = 0usize;
   loop {
-    if render_control::check_active_periodic(&mut deadline_counter, 1, stage).is_err() {
-      return Err(ReadAllWithDeadlineError::DeadlineExceeded);
+    if let Err(err) = render_control::check_active_periodic(&mut deadline_counter, 1, stage) {
+      return Err(ReadAllWithDeadlineError::Timeout(err));
     }
     match reader.read(&mut buf) {
       Ok(0) => break,
@@ -192,6 +191,7 @@ enum SnapshotRead {
   Hit(CachedSnapshot),
   Miss,
   Locked,
+  Timeout(RenderError),
 }
 
 impl Drop for EntryLock {
@@ -537,12 +537,17 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     }
   }
 
-  fn read_disk_entry(&self, url: &str) -> Option<(String, CachedSnapshot)> {
+  fn read_disk_entry(&self, url: &str) -> Result<Option<(String, CachedSnapshot)>> {
     let mut disk_timer = super::start_disk_cache_diagnostics();
     let mut current = url.to_string();
     let mut hops = 0usize;
 
     loop {
+      if let Err(err) = render_control::check_active(DISK_META_READ_STAGE) {
+        super::finish_disk_cache_diagnostics(disk_timer.take());
+        return Err(Error::Render(err));
+      }
+
       let key = self.cache_key(&current);
       let data_path = self.data_path_for_key(&key);
       let meta_path = self.meta_path_for_data(&data_path);
@@ -551,17 +556,26 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
         SnapshotRead::Hit(snapshot) => {
           super::record_disk_cache_hit();
           super::finish_disk_cache_diagnostics(disk_timer.take());
-          return Some((current, snapshot));
+          return Ok(Some((current, snapshot)));
+        }
+        SnapshotRead::Timeout(err) => {
+          super::finish_disk_cache_diagnostics(disk_timer.take());
+          return Err(Error::Render(err));
         }
         SnapshotRead::Locked => {
           let max_wait = self.deadline_aware_lock_wait(READ_LOCK_WAIT_TIMEOUT);
           if !max_wait.is_zero() && self.wait_for_unlock(&data_path, max_wait) {
-            if let SnapshotRead::Hit(snapshot) =
-              self.try_read_snapshot(&key, &current, &data_path, &meta_path)
-            {
-              super::record_disk_cache_hit();
-              super::finish_disk_cache_diagnostics(disk_timer.take());
-              return Some((current, snapshot));
+            match self.try_read_snapshot(&key, &current, &data_path, &meta_path) {
+              SnapshotRead::Hit(snapshot) => {
+                super::record_disk_cache_hit();
+                super::finish_disk_cache_diagnostics(disk_timer.take());
+                return Ok(Some((current, snapshot)));
+              }
+              SnapshotRead::Timeout(err) => {
+                super::finish_disk_cache_diagnostics(disk_timer.take());
+                return Err(Error::Render(err));
+              }
+              _ => {}
             }
           }
         }
@@ -571,14 +585,14 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       let Some(next) = self.read_alias_target(&current) else {
         super::record_disk_cache_miss();
         super::finish_disk_cache_diagnostics(disk_timer.take());
-        return None;
+        return Ok(None);
       };
 
       if hops >= MAX_ALIAS_HOPS || next == current {
         self.remove_alias_for(&current);
         super::record_disk_cache_miss();
         super::finish_disk_cache_diagnostics(disk_timer.take());
-        return None;
+        return Ok(None);
       }
 
       current = next;
@@ -599,7 +613,7 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
 
     let meta_bytes = match read_path_with_deadline(meta_path, DISK_META_READ_STAGE) {
       Ok(bytes) => bytes,
-      Err(ReadAllWithDeadlineError::DeadlineExceeded) => return SnapshotRead::Miss,
+      Err(ReadAllWithDeadlineError::Timeout(err)) => return SnapshotRead::Timeout(err),
       Err(_) => {
         self.remove_entry_if_unlocked(key, data_path, meta_path);
         return SnapshotRead::Miss;
@@ -616,7 +630,7 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     let read_stage = stage_for_cached_content_type(meta.content_type.as_deref());
     let bytes = match read_path_with_deadline(data_path, read_stage) {
       Ok(bytes) => bytes,
-      Err(ReadAllWithDeadlineError::DeadlineExceeded) => return SnapshotRead::Miss,
+      Err(ReadAllWithDeadlineError::Timeout(err)) => return SnapshotRead::Timeout(err),
       Err(_) => {
         self.remove_entry_if_unlocked(key, data_path, meta_path);
         return SnapshotRead::Miss;
@@ -883,7 +897,7 @@ impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
       None => true,
     };
     if should_read_disk {
-      disk_snapshot = self.read_disk_entry(url);
+      disk_snapshot = self.read_disk_entry(url)?;
       if let Some((ref canonical, ref snapshot)) = disk_snapshot {
         self.memory.prime_cache_with_snapshot(url, snapshot.clone());
         if canonical != url {
@@ -1304,7 +1318,10 @@ mod tests {
     });
 
     assert!(
-      matches!(result, Err(ReadAllWithDeadlineError::DeadlineExceeded)),
+      matches!(
+        result,
+        Err(ReadAllWithDeadlineError::Timeout(RenderError::Timeout { .. }))
+      ),
       "expected deadline-aware read to abort under active deadline"
     );
     let consumed = bytes_read.load(Ordering::SeqCst);
@@ -1316,6 +1333,35 @@ mod tests {
       consumed < total_bytes,
       "reader should not consume entire stream"
     );
+  }
+
+  #[test]
+  fn disk_cache_read_timeout_propagates() {
+    #[derive(Clone)]
+    struct PanicFetcher;
+
+    impl ResourceFetcher for PanicFetcher {
+      fn fetch(&self, _url: &str) -> Result<FetchedResource> {
+        panic!("network fetch should not be reached when the render deadline is exceeded");
+      }
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let disk = DiskCachingFetcher::new(PanicFetcher, tmp.path());
+    let url = "https://example.com/cached";
+
+    let mut resource = FetchedResource::new(b"cached".to_vec(), Some("text/plain".to_string()));
+    resource.final_url = Some(url.to_string());
+    disk.persist_resource(url, &resource, None, None, None);
+
+    let deadline = render_control::RenderDeadline::new(Some(Duration::from_millis(0)), None);
+    let err =
+      render_control::with_deadline(Some(&deadline), || disk.fetch(url)).expect_err("fetch timeout");
+
+    match err {
+      Error::Render(RenderError::Timeout { stage, .. }) => assert_eq!(stage, RenderStage::Paint),
+      other => panic!("expected render timeout, got {other:?}"),
+    }
   }
 
   #[test]
@@ -1933,7 +1979,7 @@ mod tests {
 
     fs::write(&data_path, b"tiny").unwrap();
 
-    let snapshot = disk.read_disk_entry(url);
+    let snapshot = disk.read_disk_entry(url).expect("read_disk_entry");
     assert!(snapshot.is_none(), "corrupted entry should be discarded");
     assert!(!data_path.exists());
     assert!(!meta_path.exists());
@@ -1958,7 +2004,10 @@ mod tests {
     fs::write(tmp_path(&data_path), b"junk").unwrap();
     fs::write(tmp_path(&meta_path), b"junk").unwrap();
 
-    let (_, snapshot) = disk.read_disk_entry(url).expect("entry should be readable");
+    let (_, snapshot) = disk
+      .read_disk_entry(url)
+      .expect("read_disk_entry")
+      .expect("entry should be readable");
     let cached = snapshot
       .value
       .as_result()
@@ -1999,6 +2048,7 @@ mod tests {
 
     let (_, snapshot) = disk
       .read_disk_entry(url)
+      .expect("read_disk_entry")
       .expect("entry should be present after concurrent persists");
     let resource = snapshot
       .value

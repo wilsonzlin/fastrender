@@ -1170,7 +1170,7 @@ impl DecodeInFlight {
     }
   }
 
-  fn wait(&self, url: &str) -> Result<Arc<CachedImage>> {
+  fn wait(&self, _url: &str) -> Result<Arc<CachedImage>> {
     let mut guard = self.result.lock().unwrap();
     let deadline = render_control::active_deadline().filter(|d| d.timeout_limit().is_some());
     while guard.is_none() {
@@ -1181,10 +1181,9 @@ impl DecodeInFlight {
             guard = self.cv.wait_timeout(guard, wait_for).unwrap().0;
           }
           _ => {
-            return Err(Error::Image(ImageError::LoadFailed {
-              url: url.to_string(),
-              reason: "render deadline exceeded while waiting for in-flight image decode"
-                .to_string(),
+            return Err(Error::Render(RenderError::Timeout {
+              stage: RenderStage::Paint,
+              elapsed: deadline.elapsed(),
             }));
           }
         }
@@ -1231,7 +1230,7 @@ impl ProbeInFlight {
     }
   }
 
-  fn wait(&self, url: &str) -> Result<Arc<CachedImageMetadata>> {
+  fn wait(&self, _url: &str) -> Result<Arc<CachedImageMetadata>> {
     let mut guard = self.result.lock().unwrap();
     let deadline = render_control::active_deadline().filter(|d| d.timeout_limit().is_some());
     while guard.is_none() {
@@ -1242,9 +1241,9 @@ impl ProbeInFlight {
             guard = self.cv.wait_timeout(guard, wait_for).unwrap().0;
           }
           _ => {
-            return Err(Error::Image(ImageError::LoadFailed {
-              url: url.to_string(),
-              reason: "render deadline exceeded while waiting for in-flight image probe".to_string(),
+            return Err(Error::Render(RenderError::Timeout {
+              stage: RenderStage::Paint,
+              elapsed: deadline.elapsed(),
             }));
           }
         }
@@ -3716,11 +3715,12 @@ mod tests {
       Ok(_) => panic!("waiter decode should fail under deadline"),
       Err(err) => err,
     };
-    let message = err.to_string();
-    assert!(
-      message.contains("render deadline exceeded") && message.contains("in-flight"),
-      "unexpected error after {elapsed:?}: {message}"
-    );
+    match err {
+      Error::Render(RenderError::Timeout { stage, .. }) => {
+        assert_eq!(stage, RenderStage::Paint);
+      }
+      other => panic!("unexpected error after {elapsed:?}: {other:?}"),
+    }
 
     // Let the owner thread exit so it can resolve the in-flight entry.
     release.wait();
@@ -3798,11 +3798,12 @@ mod tests {
       Ok(_) => panic!("waiter probe should fail under deadline"),
       Err(err) => err,
     };
-    let message = err.to_string();
-    assert!(
-      message.contains("render deadline exceeded") && message.contains("in-flight"),
-      "unexpected error after {elapsed:?}: {message}"
-    );
+    match err {
+      Error::Render(RenderError::Timeout { stage, .. }) => {
+        assert_eq!(stage, RenderStage::Paint);
+      }
+      other => panic!("unexpected error after {elapsed:?}: {other:?}"),
+    }
 
     release.wait();
     let _ = owner_handle.join();
