@@ -48,6 +48,7 @@ mod shadow_slot_focus_within_test;
 mod shadow_slotted_specificity_test;
 mod shadow_slotted_test;
 mod string_set_test;
+mod styled_node_shallow_dom_clone;
 mod supports_rule_test;
 mod supports_selector_test;
 mod supports_writing_mode_test;

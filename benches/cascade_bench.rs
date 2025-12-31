@@ -3,7 +3,7 @@ use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::Criterion;
 use fastrender::css::parser::parse_stylesheet;
-use fastrender::dom::parse_html;
+use fastrender::dom::{parse_html, DomNode, DomNodeType, HTML_NAMESPACE};
 use fastrender::style::cascade::{
   apply_starting_style_set_with_media_target_and_imports_cached_with_deadline,
   apply_styles_with_media,
@@ -14,6 +14,7 @@ use fastrender::style::cascade::{
 };
 use fastrender::style::media::MediaContext;
 use fastrender::style::style_set::StyleSet;
+use selectors::context::QuirksMode;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::fmt::Write;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -91,6 +92,61 @@ fn generate_cascade_html(nodes: usize, class_variants: usize) -> String {
   }
   html.push_str("</div></body></html>");
   html
+}
+
+fn generate_balanced_dom(depth: usize, fan_out: usize, payload_bytes: usize) -> (DomNode, usize) {
+  let payload = "x".repeat(payload_bytes);
+
+  fn build_subtree(
+    current_depth: usize,
+    max_depth: usize,
+    fan_out: usize,
+    payload: &str,
+    node_count: &mut usize,
+  ) -> DomNode {
+    *node_count += 1;
+    let children = if current_depth < max_depth {
+      (0..fan_out)
+        .map(|_| build_subtree(current_depth + 1, max_depth, fan_out, payload, node_count))
+        .collect()
+    } else {
+      Vec::new()
+    };
+
+    DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("data-payload".to_string(), payload.to_string())],
+      },
+      children,
+    }
+  }
+
+  let mut node_count = 0usize;
+  let body_child = build_subtree(0, depth, fan_out, &payload, &mut node_count);
+  let dom = DomNode {
+    node_type: DomNodeType::Document {
+      quirks_mode: QuirksMode::NoQuirks,
+    },
+    children: vec![DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "html".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: Vec::new(),
+      },
+      children: vec![DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "body".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: Vec::new(),
+        },
+        children: vec![body_child],
+      }],
+    }],
+  };
+
+  (dom, node_count)
 }
 
 fn generate_cascade_css(class_variants: usize) -> String {
@@ -348,6 +404,57 @@ fn cascade_layer_heavy_benchmark(c: &mut Criterion) {
   });
 }
 
+fn cascade_deep_dom_benchmark(c: &mut Criterion) {
+  // Stress the cost of cloning DOM subtrees by constructing a balanced tree where each node carries
+  // a large attribute payload. A balanced tree keeps recursion depth bounded while still producing
+  // thousands of nodes.
+  let depth = std::env::var("FASTR_CASCADE_DEEP_DEPTH")
+    .ok()
+    .and_then(|v| v.trim().parse::<usize>().ok())
+    .unwrap_or(10);
+  let fan_out = std::env::var("FASTR_CASCADE_DEEP_FAN_OUT")
+    .ok()
+    .and_then(|v| v.trim().parse::<usize>().ok())
+    .unwrap_or(2);
+  let payload_bytes = std::env::var("FASTR_CASCADE_DEEP_PAYLOAD_BYTES")
+    .ok()
+    .and_then(|v| v.trim().parse::<usize>().ok())
+    .unwrap_or(512);
+
+  let (dom, node_count) = generate_balanced_dom(depth, fan_out, payload_bytes);
+  let stylesheet = parse_stylesheet("div { color: #222; }").expect("parse stylesheet");
+  let media = MediaContext::screen(1280.0, 720.0);
+  static PRINTED: AtomicBool = AtomicBool::new(false);
+
+  let id = format!(
+    "cascade apply_styles deep-dom depth{depth} fan{fan_out} nodes{node_count} payload{payload_bytes}B"
+  );
+  c.bench_function(&id, |b| {
+    b.iter_custom(|iters| {
+      let (calls_start, bytes_start) = allocation_counts();
+      let start = Instant::now();
+      for _ in 0..iters {
+        let styled = apply_styles_with_media(black_box(&dom), black_box(&stylesheet), &media);
+        black_box(styled);
+      }
+      let duration = start.elapsed();
+      let (calls_end, bytes_end) = allocation_counts();
+      let calls = calls_end.saturating_sub(calls_start);
+      let bytes = bytes_end.saturating_sub(bytes_start);
+      black_box((calls, bytes));
+
+      if !PRINTED.swap(true, Ordering::Relaxed) {
+        let iters_usize = iters as usize;
+        let per_call_calls = calls / iters_usize.max(1);
+        let per_call_bytes = bytes / iters_usize.max(1);
+        eprintln!("deep-dom allocations/call: calls={per_call_calls} bytes={per_call_bytes}");
+      }
+
+      duration
+    });
+  });
+}
+
 fn cascade_not_benchmark(c: &mut Criterion) {
   let node_count = 300;
   let class_variants = 24;
@@ -595,6 +702,7 @@ criterion_group!(
   targets =
     cascade_benchmark,
     cascade_layer_heavy_benchmark,
+    cascade_deep_dom_benchmark,
     cascade_not_benchmark,
     inline_style_starting_style_benchmark,
     has_selector_benchmark,

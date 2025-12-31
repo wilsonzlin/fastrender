@@ -2756,6 +2756,15 @@ impl DomNode {
     }
   }
 
+  /// Clone this node without cloning its children.
+  ///
+  /// This is used when building the styled tree: `StyledNode.children` represents the tree
+  /// structure, so cloning descendant DOM nodes into every `StyledNode.node` is redundant and
+  /// extremely expensive on large documents.
+  pub fn clone_shallow(&self) -> Self {
+    self.clone_without_children()
+  }
+
   pub fn get_attribute_ref(&self, name: &str) -> Option<&str> {
     match &self.node_type {
       DomNodeType::Element { attributes, .. } => attributes
