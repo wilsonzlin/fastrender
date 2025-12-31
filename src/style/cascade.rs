@@ -3735,12 +3735,12 @@ pub struct StyledNode {
 /// The traversal assumes both trees were produced from the same DOM with identical
 /// pre-order numbering; when their shapes diverge the copy stops at the shortest path.
 pub fn attach_starting_styles(target: &mut StyledNode, starting: &StyledNode) {
-  target.starting_styles.base = Some(Box::new(starting.styles.clone()));
-  target.starting_styles.before = starting.before_styles.clone();
-  target.starting_styles.after = starting.after_styles.clone();
-  target.starting_styles.marker = starting.marker_styles.clone();
-  target.starting_styles.first_line = starting.first_line_styles.clone();
-  target.starting_styles.first_letter = starting.first_letter_styles.clone();
+  target.starting_styles.base = starting.starting_styles.base.clone();
+  target.starting_styles.before = starting.starting_styles.before.clone();
+  target.starting_styles.after = starting.starting_styles.after.clone();
+  target.starting_styles.marker = starting.starting_styles.marker.clone();
+  target.starting_styles.first_line = starting.starting_styles.first_line.clone();
+  target.starting_styles.first_letter = starting.starting_styles.first_letter.clone();
 
   let child_count = target.children.len().min(starting.children.len());
   for idx in 0..child_count {
@@ -4443,11 +4443,12 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
   base_ua_styles.font_palettes = font_palettes;
   base_ua_styles.custom_property_registry = property_registry.clone();
   base_ua_styles.custom_properties = initial_custom_properties;
-  let has_starting_styles = ua_stylesheet.has_starting_style_rules()
-    || author_sheet.has_starting_style_rules()
-    || shadow_sheets
-      .iter()
-      .any(|(_, _, sheet)| sheet.has_starting_style_rules());
+  let has_starting_styles = include_starting_style
+    && (ua_stylesheet.has_starting_style_rules()
+      || author_sheet.has_starting_style_rules()
+      || shadow_sheets
+        .iter()
+        .any(|(_, _, sheet)| sheet.has_starting_style_rules()));
 
   let styled = with_target_fragment(target_fragment, || {
     with_image_set_dpr(media_ctx.device_pixel_ratio, || {
@@ -4916,11 +4917,12 @@ impl<'a> PreparedCascade<'a> {
     base_ua_styles.custom_property_registry = property_registry.clone();
     base_ua_styles.custom_properties = initial_custom_properties;
 
-    let has_starting_styles = ua_stylesheet.has_starting_style_rules()
-      || document_ref.has_starting_style_rules()
-      || shadow_sheets
-        .iter()
-        .any(|(_, sheet)| sheet.has_starting_style_rules());
+    let has_starting_styles = include_starting_style
+      && (ua_stylesheet.has_starting_style_rules()
+        || document_ref.has_starting_style_rules()
+        || shadow_sheets
+          .iter()
+          .any(|(_, sheet)| sheet.has_starting_style_rules()));
 
     let device_pixel_ratio = media_ctx.device_pixel_ratio;
     let viewport = Size::new(media_ctx.viewport_width, media_ctx.viewport_height);
@@ -7389,6 +7391,58 @@ mod tests {
   }
 
   #[test]
+  fn attach_starting_styles_copies_snapshot_fields() {
+    let node = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("id".to_string(), "target".to_string())],
+      },
+      children: vec![],
+    };
+    let mut after_change = ComputedStyle::default();
+    after_change.opacity = 1.0;
+    let mut starting_snapshot = ComputedStyle::default();
+    starting_snapshot.opacity = 0.25;
+
+    let mut target = StyledNode {
+      node_id: 1,
+      node: node.clone(),
+      styles: after_change.clone(),
+      starting_styles: StartingStyleSet::default(),
+      before_styles: None,
+      after_styles: None,
+      marker_styles: None,
+      first_line_styles: None,
+      first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
+      children: Vec::new(),
+    };
+
+    let starting_tree = StyledNode {
+      node_id: 1,
+      node,
+      styles: after_change,
+      starting_styles: StartingStyleSet {
+        base: Some(Box::new(starting_snapshot.clone())),
+        ..StartingStyleSet::default()
+      },
+      before_styles: None,
+      after_styles: None,
+      marker_styles: None,
+      first_line_styles: None,
+      first_letter_styles: None,
+      assigned_slot: None,
+      slotted_node_ids: Vec::new(),
+      children: Vec::new(),
+    };
+
+    attach_starting_styles(&mut target, &starting_tree);
+    assert_eq!(target.starting_styles.base.as_deref(), Some(&starting_snapshot));
+  }
+
+  #[test]
   fn prepared_cascade_matches_legacy_container_query_recascade() {
     let dom = DomNode {
       node_type: DomNodeType::Element {
@@ -7518,7 +7572,7 @@ mod tests {
     let media_ctx = MediaContext::screen(800.0, 600.0);
 
     // "Legacy" behavior: rebuild a PreparedCascade for each pass.
-    let legacy_first = apply_style_set_with_media_target_and_imports_cached_with_deadline(
+    let legacy_first = apply_starting_style_set_with_media_target_and_imports_cached_with_deadline(
       &dom,
       &style_set,
       &media_ctx,
@@ -7548,7 +7602,7 @@ mod tests {
       )]),
     };
 
-    let legacy_second = apply_style_set_with_media_target_and_imports_cached_with_deadline(
+    let legacy_second = apply_starting_style_set_with_media_target_and_imports_cached_with_deadline(
       &dom,
       &style_set,
       &media_ctx,
@@ -7566,7 +7620,7 @@ mod tests {
     reset_inline_style_declaration_parse_count();
 
     let mut prepared =
-      PreparedCascade::new_for_style_set(&dom, &style_set, &media_ctx, None, None, None, false)
+      PreparedCascade::new_for_style_set(&dom, &style_set, &media_ctx, None, None, None, true)
         .expect("build prepared cascade");
     let prepared_first = prepared
       .apply(None, None, None, None, None)
@@ -15975,78 +16029,4 @@ pub(crate) fn reset_marker_box_properties(styles: &mut ComputedStyle) {
   // Outlines do not apply to markers; clear any inherited or authored values.
   styles.outline_style = defaults.outline_style;
   styles.outline_width = defaults.outline_width;
-  styles.outline_color = defaults.outline_color;
-  styles.outline_offset = defaults.outline_offset;
-
-  // Text alignment/indentation properties do not apply to ::marker (CSS Pseudo/Lists).
-  styles.text_align = defaults.text_align;
-  styles.text_align_last = defaults.text_align_last;
-  styles.text_justify = defaults.text_justify;
-  styles.text_indent = defaults.text_indent;
-  styles.text_overflow = defaults.text_overflow;
-
-  // Vertical alignment does not apply to ::marker; keep default baseline alignment.
-  styles.vertical_align = defaults.vertical_align;
-  styles.vertical_align_specified = false;
-}
-
-fn marker_allows_property(property: &str) -> bool {
-  let p = property.to_ascii_lowercase();
-
-  // Marker boxes honor a limited set of box-level properties
-  // (CSS Lists 3 § 3.1.1).
-  if matches!(
-    p.as_str(),
-    "content" | "direction" | "unicode-bidi" | "text-combine-upright"
-  ) {
-    return true;
-  }
-
-  // Cursor is explicitly allowed for ::marker in the CSS Pseudo tests.
-  if p == "cursor" {
-    return true;
-  }
-
-  // Font shorthand is allowed; individual font-* longhands are covered below.
-  if p == "font" {
-    return true;
-  }
-
-  // Animations/transitions are explicitly permitted.
-  if p.starts_with("animation") || p.starts_with("transition") {
-    return true;
-  }
-
-  // Inheritable text-affecting properties apply to the marker's contents.
-  if p.starts_with("font-") {
-    return true;
-  }
-
-  matches!(
-    p.as_str(),
-    "color"
-      | "white-space"
-      | "line-height"
-      | "letter-spacing"
-      | "word-spacing"
-      | "text-transform"
-      | "text-emphasis"
-      | "text-emphasis-style"
-      | "text-emphasis-color"
-      | "text-emphasis-position"
-      | "text-decoration"
-      | "text-decoration-line"
-      | "text-decoration-style"
-      | "text-decoration-color"
-      | "text-decoration-thickness"
-      | "text-decoration-skip-ink"
-      | "text-underline-offset"
-      | "text-underline-position"
-      | "text-shadow"
-      | "line-break"
-      | "word-break"
-      | "overflow-wrap"
-      | "hyphens"
-      | "tab-size"
-  )
-}
+  st
