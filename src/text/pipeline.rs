@@ -77,6 +77,7 @@ use crate::text::font_db::FontStretch as DbFontStretch;
 use crate::text::font_db::FontStyle;
 use crate::text::font_db::LoadedFont;
 use crate::text::font_fallback::families_signature;
+use crate::text::font_fallback::family_name_signature;
 use crate::text::font_fallback::ClusterFallbackCacheKey;
 use crate::text::font_fallback::EmojiPreference;
 use crate::text::font_fallback::FallbackCache;
@@ -84,6 +85,7 @@ use crate::text::font_fallback::FallbackCacheDescriptor;
 use crate::text::font_fallback::FallbackCacheStatsSnapshot;
 use crate::text::font_fallback::GlyphFallbackCacheKey;
 use crate::text::font_loader::FontContext;
+use crate::text::script_fallback;
 use lru::LruCache;
 use rustybuzz::Direction as HbDirection;
 use rustybuzz::Feature;
@@ -1564,6 +1566,11 @@ fn assign_fonts_internal(
   let families_signature = families_signature(&families);
   let oblique_degrees = quantize_oblique_degrees(requested_oblique);
   let weight_value = style.font_weight.to_u16();
+  let language = match &style.font_language_override {
+    FontLanguageOverride::Normal => style.language.as_str(),
+    FontLanguageOverride::Override(tag) => tag.as_str(),
+  };
+  let language_signature = family_name_signature(language);
 
   if font_context.is_effectively_empty() {
     let sample = runs.first().map(|run| run.text.clone()).unwrap_or_default();
@@ -1590,6 +1597,8 @@ fn assign_fonts_internal(
       let descriptor = font_cache.map(|_| {
         FallbackCacheDescriptor::new(
           families_signature,
+          language_signature,
+          run.script as u8,
           weight_value,
           font_style,
           font_stretch,
@@ -1631,6 +1640,8 @@ fn assign_fonts_internal(
           let mut picker = FontPreferencePicker::new(emoji_pref);
           let candidate = resolve_font_for_char(
             base_char,
+            run.script,
+            language,
             &families,
             weight_value,
             font_style,
@@ -1654,6 +1665,8 @@ fn assign_fonts_internal(
         };
         resolved = resolve_font_for_cluster(
           base_char,
+          run.script,
+          language,
           &coverage_chars,
           &families,
           weight_value,
@@ -2367,6 +2380,8 @@ fn build_family_entries(style: &ComputedStyle) -> Vec<crate::text::font_fallback
 #[allow(clippy::cognitive_complexity)]
 fn resolve_font_for_char(
   ch: char,
+  script: Script,
+  language: &str,
   families: &[crate::text::font_fallback::FamilyEntry],
   weight: u16,
   style: FontStyle,
@@ -2506,6 +2521,33 @@ fn resolve_font_for_char(
     }
   }
 
+  for family in script_fallback::preferred_families(script, language) {
+    for stretch_choice in &stretch_preferences {
+      for slope in slope_preferences {
+        for weight_choice in &weight_preferences {
+          let query = fontdb::Query {
+            families: &[Family::Name(family)],
+            weight: fontdb::Weight(*weight_choice),
+            stretch: (*stretch_choice).into(),
+            style: (*slope).into(),
+          };
+          if let Some(id) = db.inner().query(&query) {
+            if let Some(font) = db.load_font(id) {
+              let is_emoji_font = font_is_emoji_font(db, Some(id), &font);
+              let idx = picker.bump_order();
+              picker.record_any(&font, is_emoji_font, idx);
+              if db.has_glyph_cached(id, ch) {
+                if let Some(font) = picker.consider(font, is_emoji_font, idx) {
+                  return Some(font);
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
   for face in db.faces() {
     if let Some(font) = db.load_font(face.id) {
       let is_emoji_font = font_is_emoji_font(db, Some(face.id), &font);
@@ -2525,6 +2567,8 @@ fn resolve_font_for_char(
 #[allow(clippy::cognitive_complexity)]
 fn resolve_font_for_cluster(
   base_char: char,
+  script: Script,
+  language: &str,
   coverage_chars: &[char],
   families: &[crate::text::font_fallback::FamilyEntry],
   weight: u16,
@@ -2707,6 +2751,36 @@ fn resolve_font_for_cluster(
         if covers_needed(id) {
           if let Some(font) = picker.consider(font, true, idx) {
             return Some(font);
+          }
+        }
+      }
+    }
+  }
+
+  for family in script_fallback::preferred_families(script, language) {
+    for stretch_choice in &stretch_preferences {
+      for slope in slope_preferences {
+        for weight_choice in &weight_preferences {
+          let query = fontdb::Query {
+            families: &[Family::Name(family)],
+            weight: fontdb::Weight(*weight_choice),
+            stretch: (*stretch_choice).into(),
+            style: (*slope).into(),
+          };
+          if let Some(id) = db.inner().query(&query) {
+            if let Some(font) = db.load_font(id) {
+              if !base_supported(id) {
+                continue;
+              }
+              let is_emoji_font = font_is_emoji_font(db, Some(id), &font);
+              let idx = picker.bump_order();
+              picker.record_any(&font, is_emoji_font, idx);
+              if covers_needed(id) {
+                if let Some(font) = picker.consider(font, is_emoji_font, idx) {
+                  return Some(font);
+                }
+              }
+            }
           }
         }
       }
@@ -4050,6 +4124,7 @@ mod tests {
   use crate::style::types::NumericSpacing;
   use crate::style::types::TextOrientation;
   use crate::style::types::WritingMode;
+  use crate::text::font_db::FontConfig;
   use crate::text::font_db::FontDatabase;
   use crate::text::font_db::FontStretch as DbFontStretch;
   use crate::text::font_db::FontStyle as DbFontStyle;
@@ -5221,6 +5296,8 @@ mod tests {
     let mut picker = FontPreferencePicker::new(EmojiPreference::Neutral);
     let upper = resolve_font_for_char(
       'A',
+      Script::Latin,
+      "",
       &families,
       400,
       DbFontStyle::Normal,
@@ -5235,6 +5312,8 @@ mod tests {
     let mut picker = FontPreferencePicker::new(EmojiPreference::Neutral);
     let lower = resolve_font_for_char(
       'a',
+      Script::Latin,
+      "",
       &families,
       400,
       DbFontStyle::Normal,
@@ -5245,6 +5324,100 @@ mod tests {
     )
     .expect("fallback font");
     assert_ne!(lower.family, "RangeFace");
+  }
+
+  #[test]
+  fn script_aware_fallback_prefers_bundled_script_faces() {
+    let ctx = FontContext::with_config(FontConfig::bundled_only());
+    let pipeline = ShapingPipeline::new();
+
+    let mut base_style = ComputedStyle::default();
+    base_style.font_family = vec!["sans-serif".to_string()];
+    base_style.font_size = 16.0;
+
+    let mut latin_style = base_style.clone();
+    latin_style.language = "en".to_string();
+    let latin_runs = pipeline
+      .shape("Hello", &latin_style, &ctx)
+      .expect("shape latin");
+    assert!(!latin_runs.is_empty());
+    assert_eq!(latin_runs[0].font.family, "Noto Sans");
+
+    let mut devanagari_style = base_style.clone();
+    devanagari_style.language = "hi".to_string();
+    let devanagari_runs = pipeline
+      .shape("ह", &devanagari_style, &ctx)
+      .expect("shape devanagari");
+    assert_eq!(devanagari_runs[0].font.family, "Noto Sans Devanagari");
+
+    let mut bengali_style = base_style.clone();
+    bengali_style.language = "bn".to_string();
+    let bengali_runs = pipeline
+      .shape("আ", &bengali_style, &ctx)
+      .expect("shape bengali");
+    assert_eq!(bengali_runs[0].font.family, "Noto Sans Bengali");
+
+    let mut arabic_style = base_style.clone();
+    arabic_style.language = "ar".to_string();
+    let arabic_runs = pipeline
+      .shape("م", &arabic_style, &ctx)
+      .expect("shape arabic");
+    assert_eq!(arabic_runs[0].font.family, "Noto Sans Arabic");
+
+    // CJK Han characters exist in multiple bundled faces. We prefer a language-specific
+    // face, mirroring browser system fallback.
+    let mut ja_style = base_style.clone();
+    ja_style.language = "ja".to_string();
+    let ja_runs = pipeline
+      .shape("漢、字", &ja_style, &ctx)
+      .expect("shape japanese han");
+    assert_eq!(
+      ja_runs.len(),
+      1,
+      "expected CJK punctuation to share the JP face"
+    );
+    assert_eq!(ja_runs[0].font.family, "Noto Sans JP");
+
+    let mut ko_style = base_style.clone();
+    ko_style.language = "ko".to_string();
+    let ko_runs = pipeline
+      .shape("漢、字", &ko_style, &ctx)
+      .expect("shape korean han");
+    assert_eq!(
+      ko_runs.len(),
+      1,
+      "expected CJK punctuation to share the KR face"
+    );
+    assert_eq!(ko_runs[0].font.family, "Noto Sans KR");
+
+    let mut zh_style = base_style.clone();
+    zh_style.language = "zh".to_string();
+    let zh_runs = pipeline
+      .shape("漢、字", &zh_style, &ctx)
+      .expect("shape chinese han");
+    assert_eq!(zh_runs.len(), 1);
+    assert_eq!(zh_runs[0].font.family, "Noto Sans SC");
+
+    // Hebrew/Thai mapping is exercised only when those faces are present (they may be
+    // added by a separate bundled-font task).
+    for (lang, sample, expected) in [
+      ("he", "א", "Noto Sans Hebrew"),
+      ("th", "ก", "Noto Sans Thai"),
+    ] {
+      let has_face = ctx
+        .database()
+        .faces()
+        .any(|face| face.families.iter().any(|(family, _)| family == expected));
+      if !has_face {
+        continue;
+      }
+      let mut style = base_style.clone();
+      style.language = lang.to_string();
+      let runs = pipeline
+        .shape(sample, &style, &ctx)
+        .expect("shape optional");
+      assert_eq!(runs[0].font.family, expected);
+    }
   }
 
   #[test]

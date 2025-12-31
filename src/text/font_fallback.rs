@@ -145,6 +145,8 @@ pub(crate) fn families_signature(families: &[FamilyEntry]) -> u64 {
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub(crate) struct FallbackCacheDescriptor {
   pub families: u64,
+  pub language: u64,
+  pub script: u8,
   pub weight: u16,
   pub style: FontStyle,
   pub stretch: FontStretch,
@@ -156,6 +158,8 @@ pub(crate) struct FallbackCacheDescriptor {
 impl FallbackCacheDescriptor {
   pub(crate) fn new(
     families: u64,
+    language: u64,
+    script: u8,
     weight: u16,
     style: FontStyle,
     stretch: FontStretch,
@@ -165,6 +169,8 @@ impl FallbackCacheDescriptor {
   ) -> Self {
     Self {
       families,
+      language,
+      script,
       weight,
       style,
       stretch,
