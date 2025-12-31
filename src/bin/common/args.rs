@@ -17,6 +17,11 @@ pub const DEFAULT_DISK_CACHE_MAX_BYTES: u64 = 512 * 1024 * 1024;
 /// This matches `fastrender::resource::DiskCacheConfig::default()` when built with `disk_cache`.
 pub const DEFAULT_DISK_CACHE_MAX_AGE_SECS: u64 = 60 * 60 * 24 * 7;
 
+/// Default maximum age of `.lock` files before they are treated as stale (8 seconds).
+///
+/// This matches `fastrender::resource::DiskCacheConfig::default()` when built with `disk_cache`.
+pub const DEFAULT_DISK_CACHE_LOCK_STALE_SECS: u64 = 8;
+
 fn default_disk_cache_max_bytes() -> u64 {
   #[cfg(feature = "disk_cache")]
   {
@@ -39,6 +44,19 @@ fn default_disk_cache_max_age_secs() -> u64 {
   #[cfg(not(feature = "disk_cache"))]
   {
     DEFAULT_DISK_CACHE_MAX_AGE_SECS
+  }
+}
+
+fn default_disk_cache_lock_stale_secs() -> u64 {
+  #[cfg(feature = "disk_cache")]
+  {
+    fastrender::resource::DiskCacheConfig::default()
+      .lock_stale_after
+      .as_secs()
+  }
+  #[cfg(not(feature = "disk_cache"))]
+  {
+    DEFAULT_DISK_CACHE_LOCK_STALE_SECS
   }
 }
 
@@ -326,6 +344,18 @@ pub struct DiskCacheArgs {
     value_name = "SECS"
   )]
   pub max_age_secs: u64,
+
+  /// Maximum age in seconds for `.lock` files before they are treated as stale and removed.
+  ///
+  /// Note: this only has an effect when the binary is built with the `disk_cache` cargo feature.
+  #[arg(
+    long = "disk-cache-lock-stale-secs",
+    env = "FASTR_DISK_CACHE_LOCK_STALE_SECS",
+    default_value_t = default_disk_cache_lock_stale_secs(),
+    value_parser = clap::value_parser!(u64).range(1..),
+    value_name = "SECS"
+  )]
+  pub lock_stale_secs: u64,
 }
 
 pub fn disk_cache_max_age_from_secs(secs: u64) -> Option<Duration> {
@@ -342,6 +372,7 @@ impl DiskCacheArgs {
     fastrender::resource::DiskCacheConfig {
       max_bytes: self.max_bytes,
       max_age: disk_cache_max_age_from_secs(self.max_age_secs),
+      lock_stale_after: Duration::from_secs(self.lock_stale_secs),
       ..fastrender::resource::DiskCacheConfig::default()
     }
   }

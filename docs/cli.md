@@ -139,7 +139,8 @@ Pageset wrappers enable the disk-backed subresource cache by default, persisting
   - Disk-backed cache tuning (applies to `prefetch_assets`, `pageset_progress`, `render_pages`, and `fetch_and_render` when built with `disk_cache`):
     - `--disk-cache-max-age-secs <secs>` (or `FASTR_DISK_CACHE_MAX_AGE_SECS=<secs>`) caps how long cached subresources are trusted before forcing a refetch. Use `0` to disable age-based expiry (never age out).
     - `--disk-cache-max-bytes <bytes>` (or `FASTR_DISK_CACHE_MAX_BYTES=<bytes>`) sets the eviction budget for on-disk cached bytes. Use `0` to disable eviction.
-    - Defaults are `512MB` and `7d`. Example: `pageset_progress run --disk-cache-max-age-secs 0` keeps cached subresources pinned to avoid surprise refetches during short timeout runs.
+    - `--disk-cache-lock-stale-secs <secs>` (or `FASTR_DISK_CACHE_LOCK_STALE_SECS=<secs>`) controls how quickly stale `.lock` files are removed when workers are hard-killed mid-write (default 8 seconds).
+    - Defaults are `512MB`, `7d`, and `8s`. Example: `pageset_progress run --disk-cache-max-age-secs 0` keeps cached subresources pinned to avoid surprise refetches during short timeout runs.
 - Asset fetches in library code go through [`fastrender::resource::CachingFetcher`] in-memory by default, or [`fastrender::resource::DiskCachingFetcher`] behind the optional `disk_cache` feature.
 
 ## Diagnostics

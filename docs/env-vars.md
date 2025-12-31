@@ -16,8 +16,9 @@ These are parsed by the pageset CLI binaries (`prefetch_assets`, `render_pages`,
 
 - `FASTR_DISK_CACHE_MAX_BYTES=<bytes>` – on-disk subresource cache size limit (0 disables eviction; default 512MB).
 - `FASTR_DISK_CACHE_MAX_AGE_SECS=<secs>` – cap cached entry age (0 disables age-based expiry; default 7 days).
+- `FASTR_DISK_CACHE_LOCK_STALE_SECS=<secs>` – treat disk-cache `.lock` files older than this as stale and remove them (default 8 seconds).
 
-CLI flag equivalents: `--disk-cache-max-bytes`, `--disk-cache-max-age-secs`.
+CLI flag equivalents: `--disk-cache-max-bytes`, `--disk-cache-max-age-secs`, `--disk-cache-lock-stale-secs`.
 
 ## Commonly useful
 
