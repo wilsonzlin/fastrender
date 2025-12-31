@@ -3828,7 +3828,7 @@ impl FastRender {
     let result = (|| -> Result<RenderOutputs> {
       self.device_pixel_ratio = resolved_viewport.device_pixel_ratio;
       self.pending_device_size = Some(resolved_viewport.visual_viewport);
-      let needs_top_layer_state = needs_top_layer_state(&dom);
+      let needs_top_layer_state = needs_top_layer_state(&dom)?;
       let layout_artifacts = self.layout_document_for_media_with_artifacts_owned(
         dom,
         needs_top_layer_state,
@@ -5638,7 +5638,7 @@ impl FastRender {
       );
 
       let target_fragment = self.current_target_fragment();
-      let dom_with_state = if needs_top_layer_state(dom) {
+      let dom_with_state = if needs_top_layer_state(dom)? {
         let mut dom_with_state = dom::clone_dom_with_deadline(dom, RenderStage::DomParse)?;
         dom::apply_top_layer_state_with_deadline(&mut dom_with_state)?;
         Some(dom_with_state)
@@ -9509,16 +9509,22 @@ fn build_styled_lookup<'a>(styled: &'a StyledNode, out: &mut HashMap<usize, *con
   }
 }
 
-fn needs_top_layer_state(node: &DomNode) -> bool {
+fn needs_top_layer_state(node: &DomNode) -> Result<bool> {
+  let mut deadline_counter = 0usize;
   let mut stack = vec![node];
   while let Some(current) = stack.pop() {
+    crate::render_control::check_active_periodic(
+      &mut deadline_counter,
+      1024,
+      RenderStage::DomParse,
+    )?;
     // We intentionally avoid descending into shadow roots and inert template contents. This keeps
     // the scan cheap and mirrors other early DOM walks (e.g. viewport extraction).
     match &current.node_type {
       crate::dom::DomNodeType::ShadowRoot { .. } => {
         // Shadow roots may contain dialogs/popovers but are not scanned here; conservatively keep
         // the legacy top-layer traversal enabled when shadow DOM is present.
-        return true;
+        return Ok(true);
       }
       crate::dom::DomNodeType::Element {
         tag_name,
@@ -9528,7 +9534,7 @@ fn needs_top_layer_state(node: &DomNode) -> bool {
         if (namespace.is_empty() || namespace == crate::dom::HTML_NAMESPACE)
           && tag_name.eq_ignore_ascii_case("dialog")
         {
-          return true;
+          return Ok(true);
         }
 
         if tag_name.eq_ignore_ascii_case("template") {
@@ -9540,7 +9546,7 @@ fn needs_top_layer_state(node: &DomNode) -> bool {
             || name.eq_ignore_ascii_case("data-fastr-open")
             || name.eq_ignore_ascii_case("data-fastr-modal")
           {
-            return true;
+            return Ok(true);
           }
         }
       }
@@ -9550,7 +9556,7 @@ fn needs_top_layer_state(node: &DomNode) -> bool {
             || name.eq_ignore_ascii_case("data-fastr-open")
             || name.eq_ignore_ascii_case("data-fastr-modal")
           {
-            return true;
+            return Ok(true);
           }
         }
       }
@@ -9562,7 +9568,7 @@ fn needs_top_layer_state(node: &DomNode) -> bool {
     }
   }
 
-  false
+  Ok(false)
 }
 /// Renders an HTML fragment using shared font/image resources. This is used for nested rendering
 /// such as SVG `<foreignObject>` content so we can reuse the outer renderer's caches.
@@ -10230,6 +10236,48 @@ mod tests {
       .with_viewport(10, 10)
       .with_timeout(Some(std::time::Duration::from_millis(0)));
     let result = renderer.accessibility_tree_html("<div>Hello</div>", options);
+
+    match result {
+      Err(Error::Render(RenderError::Timeout { stage, .. })) => {
+        assert_eq!(stage, RenderStage::DomParse);
+      }
+      Ok(_) => panic!("expected dom_parse timeout, got Ok"),
+      Err(err) => panic!("expected dom_parse timeout, got {err}"),
+    }
+  }
+
+  #[test]
+  fn needs_top_layer_state_timeout_is_cooperative() {
+    let mut dom = DomNode {
+      node_type: DomNodeType::Document {
+        quirks_mode: selectors::context::QuirksMode::NoQuirks,
+      },
+      children: vec![DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "div".to_string(),
+          namespace: crate::dom::HTML_NAMESPACE.to_string(),
+          attributes: vec![],
+        },
+        children: vec![],
+      }],
+    };
+
+    let mut current = &mut dom.children[0];
+    for _ in 0..(1024 * 2) {
+      current.children.push(DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "div".to_string(),
+          namespace: crate::dom::HTML_NAMESPACE.to_string(),
+          attributes: vec![],
+        },
+        children: vec![],
+      });
+      current = current.children.last_mut().expect("child pushed");
+    }
+
+    let deadline = RenderDeadline::new(Some(std::time::Duration::from_millis(0)), None);
+    let result =
+      crate::render_control::with_deadline(Some(&deadline), || needs_top_layer_state(&dom));
 
     match result {
       Err(Error::Render(RenderError::Timeout { stage, .. })) => {
