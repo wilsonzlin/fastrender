@@ -25,6 +25,7 @@ struct IndexState {
   order: BTreeMap<OrderKey, String>,
   total_bytes: u64,
   journal_len: u64,
+  pending_backfills: Vec<JournalRecord>,
   journal_append: Option<File>,
   next_order: u64,
   #[cfg(test)]
@@ -199,6 +200,13 @@ impl DiskCacheIndex {
       data_path.to_path_buf(),
       meta_path.to_path_buf(),
     );
+    state.pending_backfills.push(JournalRecord::Insert {
+      key: key.to_string(),
+      stored_at,
+      len,
+      data_file: self.relative_path(data_path),
+      meta_file: self.relative_path(meta_path),
+    });
   }
 
   pub(super) fn evict_if_needed<F>(&self, max_bytes: u64, mut can_remove: F)
@@ -257,14 +265,15 @@ impl DiskCacheIndex {
     state: &mut IndexState,
     records: &[JournalRecord],
   ) -> std::io::Result<()> {
-    if records.is_empty() {
+    if records.is_empty() && state.pending_backfills.is_empty() {
       return Ok(());
     }
 
     let start_offset = state.journal_len;
+    let pending = std::mem::take(&mut state.pending_backfills);
 
     let mut buf = Vec::new();
-    for record in records {
+    for record in pending.iter().chain(records.iter()) {
       let mut line = serde_json::to_vec(record)?;
       line.push(b'\n');
       buf.extend_from_slice(&line);
@@ -279,6 +288,7 @@ impl DiskCacheIndex {
 
     let actual_start = end_offset.saturating_sub(buf.len() as u64);
     if actual_start == start_offset {
+      // `pending_backfills` were already applied to the in-memory index.
       for record in records {
         self.apply_record(state, record.clone());
       }
@@ -469,6 +479,7 @@ impl DiskCacheIndex {
     state.order.clear();
     state.total_bytes = 0;
     state.journal_len = 0;
+    state.pending_backfills.clear();
     state.journal_append = None;
     state.next_order = 0;
 
@@ -544,6 +555,7 @@ impl DiskCacheIndex {
 
   fn write_full_journal(&self, state: &mut IndexState) -> std::io::Result<()> {
     state.journal_append = None;
+    state.pending_backfills.clear();
     let mut file = OpenOptions::new()
       .create(true)
       .write(true)
@@ -576,34 +588,7 @@ impl DiskCacheIndex {
     state: &mut IndexState,
     record: &JournalRecord,
   ) -> std::io::Result<()> {
-    let start_offset = state.journal_len;
-    let mut bytes = serde_json::to_vec(record)?;
-    bytes.push(b'\n');
-
-    let end_offset = {
-      let file = self.append_file_locked(state)?;
-      file.write_all(&bytes)?;
-      file.flush()?;
-      file.stream_position()?
-    };
-
-    let expected_start = start_offset;
-    let actual_start = end_offset.saturating_sub(bytes.len() as u64);
-    if actual_start == expected_start {
-      self.apply_record(state, record.clone());
-      state.loaded = true;
-      state.journal_len = end_offset;
-      Ok(())
-    } else if actual_start > expected_start {
-      self.replay_from_offset(state, start_offset)?;
-      state.loaded = true;
-      Ok(())
-    } else {
-      self.reset_for_replay(state);
-      self.replay_from_offset(state, 0)?;
-      state.loaded = true;
-      Ok(())
-    }
+    self.append_records_locked(state, std::slice::from_ref(record))
   }
 
   fn meta_path_for_data(&self, data_path: &Path) -> PathBuf {
@@ -661,6 +646,7 @@ impl DiskCacheIndex {
     state.order.clear();
     state.total_bytes = 0;
     state.journal_len = 0;
+    state.pending_backfills.clear();
     state.journal_append = None;
     state.next_order = 0;
     state.loaded = false;
