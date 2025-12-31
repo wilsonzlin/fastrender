@@ -10025,18 +10025,16 @@ fn apply_clip_mask_rect(pixmap: &mut Pixmap, rect: Rect, radii: BorderRadii) {
         let right_radius = clamped.top_right.x.max(clamped.bottom_right.x);
         let top_radius = clamped.top_left.y.max(clamped.top_right.y);
         let bottom_radius = clamped.bottom_left.y.max(clamped.bottom_right.y);
-        let skip_pad = 1.0f32;
-
-        let skip_x0 = (rect.x() + left_radius + skip_pad)
+        let skip_x0 = (rect.x() + left_radius)
           .ceil()
           .clamp(0.0, width as f32) as u32;
-        let skip_x1 = (right - right_radius - skip_pad)
+        let skip_x1 = (right - right_radius)
           .floor()
           .clamp(0.0, width as f32) as u32;
-        let skip_y0 = (rect.y() + top_radius + skip_pad)
+        let skip_y0 = (rect.y() + top_radius)
           .ceil()
           .clamp(0.0, height as f32) as u32;
-        let skip_y1 = (bottom - bottom_radius - skip_pad)
+        let skip_y1 = (bottom - bottom_radius)
           .floor()
           .clamp(0.0, height as f32) as u32;
 
