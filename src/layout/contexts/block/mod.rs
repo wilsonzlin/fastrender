@@ -1479,7 +1479,7 @@ impl BlockFormattingContext {
       let pending_margin = margin_ctx.consume_pending();
       *current_y += pending_margin;
 
-      let inline_container = BoxNode::new_inline(parent.style.clone(), buffer.clone());
+      let mut inline_container = BoxNode::new_inline(parent.style.clone(), std::mem::take(buffer));
       // If the inline container would start below the current cursor because of pending
       // margins, advance to that baseline first.
       let inline_y = *current_y;
@@ -1491,12 +1491,18 @@ impl BlockFormattingContext {
       .with_parallelism(self.parallelism);
       let inline_constraints =
         LayoutConstraints::new(AvailableSpace::Definite(containing_width), available_height);
-      let mut inline_fragment = inline_fc.layout_with_floats(
+      let mut inline_fragment = match inline_fc.layout_with_floats(
         &inline_container,
         &inline_constraints,
         Some(float_ctx_ref),
         inline_y,
-      )?;
+      ) {
+        Ok(fragment) => fragment,
+        Err(err) => {
+          *buffer = std::mem::take(&mut inline_container.children);
+          return Err(err);
+        }
+      };
 
       inline_fragment.bounds = Rect::from_xywh(
         0.0,
@@ -1508,6 +1514,7 @@ impl BlockFormattingContext {
       *content_height = content_height.max(inline_fragment.bounds.max_y());
       *current_y += inline_fragment.bounds.height();
       fragments.push(inline_fragment);
+      *buffer = std::mem::take(&mut inline_container.children);
       buffer.clear();
       Ok(())
     };
