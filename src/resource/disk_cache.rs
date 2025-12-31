@@ -1882,14 +1882,9 @@ mod tests {
     let data_path = disk.data_path(url);
     let lock_path = lock_path_for(&data_path);
 
-    let mut child = std::process::Command::new("sh")
-      .arg("-c")
-      .arg("exit 0")
-      .spawn()
-      .unwrap();
-    let pid = child.id();
-    let _ = child.wait();
-
+    // Pick a PID value that should never exist on typical systems (Linux pid_max defaults to a
+    // much smaller value), so `kill(pid, 0)` deterministically returns ESRCH.
+    let pid = i32::MAX as u32;
     assert_eq!(
       pid_is_alive(pid),
       Some(false),
@@ -1904,6 +1899,35 @@ mod tests {
 
     assert!(!disk.lock_is_active(&data_path));
     assert!(!lock_path.exists());
+  }
+
+  #[test]
+  fn acquire_lock_respects_deadline_buffer() {
+    let tmp = tempfile::tempdir().unwrap();
+    let url = "https://example.com/deadline-buffer-lock";
+    let disk = DiskCachingFetcher::new(PanicFetcher, tmp.path());
+    let data_path = disk.data_path(url);
+    let lock_path = lock_path_for(&data_path);
+
+    let contents = LockFileContents {
+      pid: std::process::id(),
+      started_at: now_seconds(),
+    };
+    fs::write(&lock_path, serde_json::to_vec(&contents).unwrap()).unwrap();
+
+    let deadline = render_control::RenderDeadline::new(Some(LOCK_DEADLINE_BUFFER / 2), None);
+    let start = Instant::now();
+    let lock = render_control::with_deadline(Some(&deadline), || disk.acquire_lock(&data_path));
+    let elapsed = start.elapsed();
+
+    assert!(
+      lock.is_none(),
+      "should not acquire lock within deadline buffer"
+    );
+    assert!(
+      elapsed < Duration::from_millis(50),
+      "acquire_lock should return quickly under tight deadlines: {elapsed:?}"
+    );
   }
 
   #[test]
