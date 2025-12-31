@@ -20,6 +20,10 @@ cargo xtask pageset
 
 Pageset wrappers enable the disk-backed subresource cache (writes to `fetches/assets/`) by default for faster, repeatable runs. Set `NO_DISK_CACHE=1` or `DISK_CACHE=0` (or pass `--no-disk-cache`) to fall back to in-memory fetch caching. Both wrappers default to bundled fonts to avoid slow or non-deterministic system font discovery.
 
+Disk cache tuning knobs (useful for reproducibility when long-lived caches would otherwise age out):
+- `FASTR_DISK_CACHE_MAX_AGE_SECS=0` pins cached subresources (never expire purely due to age).
+- `FASTR_DISK_CACHE_MAX_BYTES=<bytes>` increases the on-disk cache eviction budget (0 disables eviction).
+
 **Profile one page (terminal-only; writes a profile file + prints a summary):**
 
 ```bash
