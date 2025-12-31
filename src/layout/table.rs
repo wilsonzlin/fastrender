@@ -4229,11 +4229,13 @@ impl TableFormattingContext {
         .unwrap_or(min);
       (min, max)
     };
-    let (mut min, mut max) = if fc_type == FormattingContextType::Block {
-      measure_with_fc(cell_bfc)
-    } else {
-      let fc = self.factory.create(fc_type);
-      measure_with_fc(fc.as_ref())
+    let (mut min, mut max) = match fc_type {
+      FormattingContextType::Block => measure_with_fc(cell_bfc),
+      FormattingContextType::Table => {
+        let fc = self.factory.create(fc_type);
+        measure_with_fc(fc.as_ref())
+      }
+      _ => self.factory.with_fc(fc_type, |fc| measure_with_fc(fc)),
     };
 
     // Add horizontal padding (and borders in separate model) to intrinsic widths
@@ -4783,10 +4785,17 @@ impl FormattingContext for TableFormattingContext {
         } else {
           let fc_type = caption
             .formatting_context()
-            .unwrap_or(crate::style::display::FormattingContextType::Block);
-          let fc = self.factory.create(fc_type);
-          fc.compute_intrinsic_inline_size(caption, IntrinsicSizingMode::MaxContent)
-            .unwrap_or(0.0)
+            .unwrap_or(FormattingContextType::Block);
+          match fc_type {
+            FormattingContextType::Table => {
+              let fc = self.factory.create(fc_type);
+              fc.compute_intrinsic_inline_size(caption, IntrinsicSizingMode::MaxContent)
+            }
+            _ => self.factory.with_fc(fc_type, |fc| {
+              fc.compute_intrinsic_inline_size(caption, IntrinsicSizingMode::MaxContent)
+            }),
+          }
+          .unwrap_or(0.0)
         }
       })
       .fold(0.0, f32::max);
@@ -6548,9 +6557,17 @@ impl FormattingContext for TableFormattingContext {
     }) {
       let fc_type = child
         .formatting_context()
-        .unwrap_or(crate::style::display::FormattingContextType::Block);
-      let fc = self.factory.create(fc_type);
-      if let Ok(w) = fc.compute_intrinsic_inline_size(child, mode) {
+        .unwrap_or(FormattingContextType::Block);
+      let res = match fc_type {
+        FormattingContextType::Table => {
+          let fc = self.factory.create(fc_type);
+          fc.compute_intrinsic_inline_size(child, mode)
+        }
+        _ => self
+          .factory
+          .with_fc(fc_type, |fc| fc.compute_intrinsic_inline_size(child, mode)),
+      };
+      if let Ok(w) = res {
         caption_min = caption_min.max(w);
       }
     }

@@ -593,13 +593,20 @@ mod tests {
   #[test]
   fn test_get_reuses_cached_instances() {
     let factory = FormattingContextFactory::new();
-    let a = factory.get(FormattingContextType::Flex);
-    let b = factory.get(FormattingContextType::Flex);
-    assert!(Arc::ptr_eq(&a, &b));
+    for fc_type in [
+      FormattingContextType::Block,
+      FormattingContextType::Inline,
+      FormattingContextType::Flex,
+      FormattingContextType::Grid,
+    ] {
+      let a = factory.get(fc_type);
+      let b = factory.get(fc_type);
+      assert!(Arc::ptr_eq(&a, &b));
+    }
 
-    let block_a = factory.get(FormattingContextType::Block);
-    let block_b = factory.get(FormattingContextType::Block);
-    assert!(Arc::ptr_eq(&block_a, &block_b));
+    let table_a = factory.get(FormattingContextType::Table);
+    let table_b = factory.get(FormattingContextType::Table);
+    assert!(!Arc::ptr_eq(&table_a, &table_b));
   }
 
   #[test]
