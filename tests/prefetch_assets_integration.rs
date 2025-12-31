@@ -1,8 +1,13 @@
 #![cfg(feature = "disk_cache")]
 
 use fastrender::pageset::pageset_stem;
+use fastrender::resource::CachingFetcherConfig;
+use fastrender::resource::DiskCacheConfig;
 use fastrender::resource::DiskCachingFetcher;
 use fastrender::resource::FetchedResource;
+use fastrender::resource::{
+  normalize_user_agent_for_log, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT,
+};
 use fastrender::Error;
 use fastrender::ResourceFetcher;
 use std::collections::HashMap;
@@ -19,6 +24,12 @@ use tempfile::TempDir;
 
 const MAX_WAIT: Duration = Duration::from_secs(3);
 
+fn disk_cache_namespace() -> String {
+  let ua = normalize_user_agent_for_log(DEFAULT_USER_AGENT).trim();
+  let lang = DEFAULT_ACCEPT_LANGUAGE.trim();
+  format!("user-agent:{ua}\naccept-language:{lang}")
+}
+
 fn try_bind_localhost(context: &str) -> Option<TcpListener> {
   match TcpListener::bind("127.0.0.1:0") {
     Ok(listener) => Some(listener),
@@ -33,6 +44,8 @@ fn try_bind_localhost(context: &str) -> Option<TcpListener> {
 fn spawn_server(
   listener: TcpListener,
   hits: Arc<Mutex<HashMap<String, usize>>>,
+  responses: HashMap<String, (Vec<u8>, &'static str)>,
+  required_paths: Vec<&'static str>,
 ) -> thread::JoinHandle<()> {
   thread::spawn(move || {
     let _ = listener.set_nonblocking(true);
@@ -70,49 +83,27 @@ fn spawn_server(
             *map.entry(path.to_string()).or_insert(0) += 1;
           }
 
-          match path {
-            "/a.css" => {
-              let body = b"@import \"/b.css\"; @font-face { src: url(\"/f.woff2\") }";
-              let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/css\r\nCache-Control: max-age=3600\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                body.len()
-              );
-              let _ = stream.write_all(response.as_bytes());
-              let _ = stream.write_all(body);
-            }
-            "/b.css" => {
-              let body = b"body { color: black }";
-              let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/css\r\nCache-Control: max-age=3600\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                body.len()
-              );
-              let _ = stream.write_all(response.as_bytes());
-              let _ = stream.write_all(body);
-            }
-            "/f.woff2" => {
-              let body = b"dummy-font-bytes";
-              let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: font/woff2\r\nCache-Control: max-age=3600\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                body.len()
-              );
-              let _ = stream.write_all(response.as_bytes());
-              let _ = stream.write_all(body);
-            }
-            _ => {
-              let body = b"not found";
-              let response = format!(
-                "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                body.len()
-              );
-              let _ = stream.write_all(response.as_bytes());
-              let _ = stream.write_all(body);
-            }
+          if let Some((body, content_type)) = responses.get(path) {
+            let response = format!(
+              "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nCache-Control: max-age=3600\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+              body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.write_all(body);
+          } else {
+            let body = b"not found";
+            let response = format!(
+              "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+              body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.write_all(body);
           }
 
           if let Ok(map) = hits.lock() {
-            if map.get("/a.css").copied().unwrap_or(0) > 0
-              && map.get("/b.css").copied().unwrap_or(0) > 0
-              && map.get("/f.woff2").copied().unwrap_or(0) > 0
+            if required_paths
+              .iter()
+              .all(|path| map.get(*path).copied().unwrap_or(0) > 0)
             {
               break;
             }
@@ -145,7 +136,28 @@ fn prefetch_assets_warms_disk_cache_with_imports_and_fonts() {
   };
   let addr = listener.local_addr().unwrap();
   let hits = Arc::new(Mutex::new(HashMap::new()));
-  let handle = spawn_server(listener, Arc::clone(&hits));
+  let mut responses: HashMap<String, (Vec<u8>, &'static str)> = HashMap::new();
+  responses.insert(
+    "/a.css".to_string(),
+    (
+      b"@import \"/b.css\"; @font-face { src: url(\"/f.woff2\") }".to_vec(),
+      "text/css",
+    ),
+  );
+  responses.insert(
+    "/b.css".to_string(),
+    (b"body { color: black }".to_vec(), "text/css"),
+  );
+  responses.insert(
+    "/f.woff2".to_string(),
+    (b"dummy-font-bytes".to_vec(), "font/woff2"),
+  );
+  let handle = spawn_server(
+    listener,
+    Arc::clone(&hits),
+    responses,
+    vec!["/a.css", "/b.css", "/f.woff2"],
+  );
 
   let tmp = TempDir::new().expect("tempdir");
   let page_url = format!("http://{}/", addr);
@@ -184,7 +196,18 @@ fn prefetch_assets_warms_disk_cache_with_imports_and_fonts() {
   let b_css = format!("http://{}/b.css", addr);
   let font = format!("http://{}/f.woff2", addr);
 
-  let offline = DiskCachingFetcher::new(FailFetcher, asset_dir.clone());
+  let offline = DiskCachingFetcher::with_configs(
+    FailFetcher,
+    asset_dir.clone(),
+    CachingFetcherConfig {
+      honor_http_cache_freshness: true,
+      ..CachingFetcherConfig::default()
+    },
+    DiskCacheConfig {
+      namespace: Some(disk_cache_namespace()),
+      ..DiskCacheConfig::default()
+    },
+  );
   assert!(
     offline.fetch(&a_css).is_ok(),
     "a.css should be cached on disk"
@@ -196,5 +219,101 @@ fn prefetch_assets_warms_disk_cache_with_imports_and_fonts() {
   assert!(
     offline.fetch(&font).is_ok(),
     "font url referenced by @font-face should be cached on disk"
+  );
+}
+
+#[test]
+fn prefetch_assets_warms_disk_cache_with_layer_imports_and_fonts() {
+  let Some(listener) =
+    try_bind_localhost("prefetch_assets_warms_disk_cache_with_layer_imports_and_fonts")
+  else {
+    return;
+  };
+  let addr = listener.local_addr().unwrap();
+  let hits = Arc::new(Mutex::new(HashMap::new()));
+  let mut responses: HashMap<String, (Vec<u8>, &'static str)> = HashMap::new();
+  responses.insert(
+    "/a.css".to_string(),
+    (b"@import URL(\"/b.css\") layer(foo);".to_vec(), "text/css"),
+  );
+  responses.insert(
+    "/b.css".to_string(),
+    (
+      b"@font-face { src: url(\"f2.woff2\") } body { color: black }".to_vec(),
+      "text/css",
+    ),
+  );
+  responses.insert(
+    "/f2.woff2".to_string(),
+    (b"dummy-font-bytes-2".to_vec(), "font/woff2"),
+  );
+  let handle = spawn_server(
+    listener,
+    Arc::clone(&hits),
+    responses,
+    vec!["/a.css", "/b.css", "/f2.woff2"],
+  );
+
+  let tmp = TempDir::new().expect("tempdir");
+  let page_url = format!("http://{}/", addr);
+  let stem = pageset_stem(&page_url).expect("stem");
+
+  let html_dir = tmp.path().join("fetches/html");
+  std::fs::create_dir_all(&html_dir).expect("create html dir");
+
+  let html_path = html_dir.join(format!("{stem}.html"));
+  std::fs::write(
+    &html_path,
+    "<!doctype html><html><head><link rel=\"stylesheet\" href=\"/a.css\"></head><body>ok</body></html>",
+  )
+  .expect("write html cache");
+
+  let meta_path = html_path.with_extension("html.meta");
+  std::fs::write(&meta_path, format!("url: {page_url}\n")).expect("write html meta");
+
+  let status = std::process::Command::new(env!("CARGO_BIN_EXE_prefetch_assets"))
+    .current_dir(tmp.path())
+    .env("FASTR_PAGESET_URLS", page_url.clone())
+    .arg("--jobs")
+    .arg("1")
+    .arg("--timeout")
+    .arg("5")
+    .status()
+    .expect("run prefetch_assets");
+  assert!(status.success(), "prefetch_assets should succeed");
+
+  handle.join().unwrap();
+
+  let asset_dir = tmp.path().join("fetches/assets");
+  assert!(asset_dir.is_dir(), "disk cache dir should be created");
+
+  let a_css = format!("http://{}/a.css", addr);
+  let b_css = format!("http://{}/b.css", addr);
+  let font = format!("http://{}/f2.woff2", addr);
+
+  let offline = DiskCachingFetcher::with_configs(
+    FailFetcher,
+    asset_dir.clone(),
+    CachingFetcherConfig {
+      honor_http_cache_freshness: true,
+      ..CachingFetcherConfig::default()
+    },
+    DiskCacheConfig {
+      namespace: Some(disk_cache_namespace()),
+      ..DiskCacheConfig::default()
+    },
+  );
+
+  assert!(
+    offline.fetch(&a_css).is_ok(),
+    "a.css should be cached on disk"
+  );
+  assert!(
+    offline.fetch(&b_css).is_ok(),
+    "b.css (layer import) should be cached on disk"
+  );
+  assert!(
+    offline.fetch(&font).is_ok(),
+    "font url referenced by imported stylesheet should be cached on disk"
   );
 }
