@@ -812,4 +812,45 @@ mod tests {
     assert_eq!(lines.len(), 1, "corrupt tail should be removed");
     serde_json::from_str::<JournalRecord>(lines[0]).expect("remaining line should parse");
   }
+
+  #[test]
+  fn backfills_are_flushed_on_next_journal_append() {
+    let tmp = tempfile::tempdir().unwrap();
+    let journal_path = tmp.path().join("index.jsonl");
+    fs::write(&journal_path, b"").expect("seed empty journal");
+
+    let index = DiskCacheIndex::new(tmp.path().to_path_buf());
+    index.refresh();
+
+    let orphan_data = tmp.path().join("orphan.bin");
+    let orphan_meta = tmp.path().join("orphan.bin.meta");
+    index.backfill_if_missing("orphan", 1_700_000_000, 10, &orphan_data, &orphan_meta);
+
+    let contents = fs::read_to_string(&journal_path).expect("read journal");
+    assert!(
+      contents.trim().is_empty(),
+      "backfill should not write to the journal immediately"
+    );
+
+    let new_data = tmp.path().join("new.bin");
+    let new_meta = tmp.path().join("new.bin.meta");
+    index.record_insert("new", 1_700_000_001, 20, &new_data, &new_meta);
+
+    let journal = fs::read_to_string(&journal_path).expect("read journal after append");
+    let mut keys = Vec::new();
+    for line in journal.lines() {
+      if line.trim().is_empty() {
+        continue;
+      }
+      match serde_json::from_str::<JournalRecord>(line).expect("parse journal record") {
+        JournalRecord::Insert { key, .. } => keys.push(key),
+        JournalRecord::Remove { .. } => {}
+      }
+    }
+    assert_eq!(
+      keys,
+      vec!["orphan".to_string(), "new".to_string()],
+      "pending backfills should be flushed before the next record"
+    );
+  }
 }
