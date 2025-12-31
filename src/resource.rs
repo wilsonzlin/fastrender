@@ -2142,12 +2142,12 @@ pub(crate) fn enable_resource_cache_diagnostics() {
   let baseline = resource_cache_diagnostics_snapshot();
   let enabled = RESOURCE_CACHE_DIAGNOSTICS_BASELINE.with(|cell| {
     let mut guard = cell.borrow_mut();
-    if guard.baseline.is_some() {
-      false
-    } else {
-      guard.baseline = Some(baseline);
-      true
-    }
+    let was_enabled = guard.baseline.is_some();
+    // Reset the baseline every time enable is called so a panic that skips
+    // `take_resource_cache_diagnostics()` doesn't permanently poison subsequent sessions (e.g.
+    // pageset dump capture after a panic).
+    guard.baseline = Some(baseline);
+    !was_enabled
   });
   if enabled {
     RESOURCE_CACHE_DIAGNOSTICS_ACTIVE_SESSIONS.fetch_add(1, Ordering::Relaxed);
