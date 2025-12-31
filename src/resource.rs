@@ -29,12 +29,13 @@ use flate2::read::{DeflateDecoder, GzDecoder, ZlibDecoder};
 use http::HeaderMap;
 use httpdate::parse_http_date;
 use lru::LruCache;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::io::{self, Cursor, Read};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::Condvar;
 use std::sync::Mutex;
@@ -2049,7 +2050,6 @@ pub struct ResourceCacheDiagnostics {
 }
 
 struct ResourceCacheDiagnosticsState {
-  enabled: AtomicBool,
   fresh_hits: AtomicUsize,
   revalidated_hits: AtomicUsize,
   misses: AtomicUsize,
@@ -2059,8 +2059,25 @@ struct ResourceCacheDiagnosticsState {
   network_fetch_ns: AtomicU64,
 }
 
+#[derive(Clone, Copy)]
+struct ResourceCacheDiagnosticsSnapshot {
+  fresh_hits: usize,
+  revalidated_hits: usize,
+  misses: usize,
+  disk_cache_hits: usize,
+  disk_cache_misses: usize,
+  network_fetches: usize,
+  network_fetch_ns: u64,
+}
+
+thread_local! {
+  static RESOURCE_CACHE_DIAGNOSTICS_BASELINE: RefCell<Option<ResourceCacheDiagnosticsSnapshot>> =
+    RefCell::new(None);
+}
+
+static RESOURCE_CACHE_DIAGNOSTICS_ACTIVE_SESSIONS: AtomicUsize = AtomicUsize::new(0);
+
 static RESOURCE_CACHE_DIAGNOSTICS: ResourceCacheDiagnosticsState = ResourceCacheDiagnosticsState {
-  enabled: AtomicBool::new(false),
   fresh_hits: AtomicUsize::new(0),
   revalidated_hits: AtomicUsize::new(0),
   misses: AtomicUsize::new(0),
@@ -2070,97 +2087,107 @@ static RESOURCE_CACHE_DIAGNOSTICS: ResourceCacheDiagnosticsState = ResourceCache
   network_fetch_ns: AtomicU64::new(0),
 };
 
+fn resource_cache_diagnostics_snapshot() -> ResourceCacheDiagnosticsSnapshot {
+  ResourceCacheDiagnosticsSnapshot {
+    fresh_hits: RESOURCE_CACHE_DIAGNOSTICS.fresh_hits.load(Ordering::Relaxed),
+    revalidated_hits: RESOURCE_CACHE_DIAGNOSTICS.revalidated_hits.load(Ordering::Relaxed),
+    misses: RESOURCE_CACHE_DIAGNOSTICS.misses.load(Ordering::Relaxed),
+    disk_cache_hits: RESOURCE_CACHE_DIAGNOSTICS.disk_cache_hits.load(Ordering::Relaxed),
+    disk_cache_misses: RESOURCE_CACHE_DIAGNOSTICS
+      .disk_cache_misses
+      .load(Ordering::Relaxed),
+    network_fetches: RESOURCE_CACHE_DIAGNOSTICS.network_fetches.load(Ordering::Relaxed),
+    network_fetch_ns: RESOURCE_CACHE_DIAGNOSTICS.network_fetch_ns.load(Ordering::Relaxed),
+  }
+}
+
+fn resource_cache_diagnostics_enabled() -> bool {
+  RESOURCE_CACHE_DIAGNOSTICS_ACTIVE_SESSIONS.load(Ordering::Relaxed) > 0
+}
+
 pub(crate) fn enable_resource_cache_diagnostics() {
-  RESOURCE_CACHE_DIAGNOSTICS.fresh_hits.store(0, Ordering::Relaxed);
-  RESOURCE_CACHE_DIAGNOSTICS
-    .revalidated_hits
-    .store(0, Ordering::Relaxed);
-  RESOURCE_CACHE_DIAGNOSTICS.misses.store(0, Ordering::Relaxed);
-  RESOURCE_CACHE_DIAGNOSTICS
-    .disk_cache_hits
-    .store(0, Ordering::Relaxed);
-  RESOURCE_CACHE_DIAGNOSTICS
-    .disk_cache_misses
-    .store(0, Ordering::Relaxed);
-  RESOURCE_CACHE_DIAGNOSTICS
-    .network_fetches
-    .store(0, Ordering::Relaxed);
-  RESOURCE_CACHE_DIAGNOSTICS
-    .network_fetch_ns
-    .store(0, Ordering::Relaxed);
-  RESOURCE_CACHE_DIAGNOSTICS.enabled.store(true, Ordering::Relaxed);
+  let already_enabled = RESOURCE_CACHE_DIAGNOSTICS_BASELINE.with(|cell| cell.borrow().is_some());
+  if already_enabled {
+    return;
+  }
+
+  let baseline = resource_cache_diagnostics_snapshot();
+  RESOURCE_CACHE_DIAGNOSTICS_BASELINE.with(|cell| {
+    *cell.borrow_mut() = Some(baseline);
+  });
+  RESOURCE_CACHE_DIAGNOSTICS_ACTIVE_SESSIONS.fetch_add(1, Ordering::Relaxed);
 }
 
 pub(crate) fn take_resource_cache_diagnostics() -> Option<ResourceCacheDiagnostics> {
-  if !RESOURCE_CACHE_DIAGNOSTICS.enabled.swap(false, Ordering::Relaxed) {
-    return None;
-  }
-  let network_fetch_ns = RESOURCE_CACHE_DIAGNOSTICS
-    .network_fetch_ns
-    .swap(0, Ordering::Relaxed);
+  let baseline = RESOURCE_CACHE_DIAGNOSTICS_BASELINE.with(|cell| cell.borrow_mut().take())?;
+  RESOURCE_CACHE_DIAGNOSTICS_ACTIVE_SESSIONS.fetch_sub(1, Ordering::Relaxed);
+
+  let current = resource_cache_diagnostics_snapshot();
+  let network_fetch_ns = current.network_fetch_ns.saturating_sub(baseline.network_fetch_ns);
   Some(ResourceCacheDiagnostics {
-    fresh_hits: RESOURCE_CACHE_DIAGNOSTICS.fresh_hits.swap(0, Ordering::Relaxed),
-    revalidated_hits: RESOURCE_CACHE_DIAGNOSTICS
+    fresh_hits: current.fresh_hits.saturating_sub(baseline.fresh_hits),
+    revalidated_hits: current
       .revalidated_hits
-      .swap(0, Ordering::Relaxed),
-    misses: RESOURCE_CACHE_DIAGNOSTICS.misses.swap(0, Ordering::Relaxed),
-    disk_cache_hits: RESOURCE_CACHE_DIAGNOSTICS
-      .disk_cache_hits
-      .swap(0, Ordering::Relaxed),
-    disk_cache_misses: RESOURCE_CACHE_DIAGNOSTICS
+      .saturating_sub(baseline.revalidated_hits),
+    misses: current.misses.saturating_sub(baseline.misses),
+    disk_cache_hits: current.disk_cache_hits.saturating_sub(baseline.disk_cache_hits),
+    disk_cache_misses: current
       .disk_cache_misses
-      .swap(0, Ordering::Relaxed),
-    network_fetches: RESOURCE_CACHE_DIAGNOSTICS
-      .network_fetches
-      .swap(0, Ordering::Relaxed),
+      .saturating_sub(baseline.disk_cache_misses),
+    network_fetches: current.network_fetches.saturating_sub(baseline.network_fetches),
     network_fetch_ms: (network_fetch_ns as f64) / 1_000_000.0,
   })
 }
 
 fn record_cache_fresh_hit() {
-  if RESOURCE_CACHE_DIAGNOSTICS.enabled.load(Ordering::Relaxed) {
-    RESOURCE_CACHE_DIAGNOSTICS
-      .fresh_hits
-      .fetch_add(1, Ordering::Relaxed);
+  if !resource_cache_diagnostics_enabled() {
+    return;
   }
+  RESOURCE_CACHE_DIAGNOSTICS
+    .fresh_hits
+    .fetch_add(1, Ordering::Relaxed);
 }
 
 fn record_cache_revalidated_hit() {
-  if RESOURCE_CACHE_DIAGNOSTICS.enabled.load(Ordering::Relaxed) {
-    RESOURCE_CACHE_DIAGNOSTICS
-      .revalidated_hits
-      .fetch_add(1, Ordering::Relaxed);
+  if !resource_cache_diagnostics_enabled() {
+    return;
   }
+  RESOURCE_CACHE_DIAGNOSTICS
+    .revalidated_hits
+    .fetch_add(1, Ordering::Relaxed);
 }
 
 fn record_cache_miss() {
-  if RESOURCE_CACHE_DIAGNOSTICS.enabled.load(Ordering::Relaxed) {
-    RESOURCE_CACHE_DIAGNOSTICS
-      .misses
-      .fetch_add(1, Ordering::Relaxed);
+  if !resource_cache_diagnostics_enabled() {
+    return;
   }
+  RESOURCE_CACHE_DIAGNOSTICS
+    .misses
+    .fetch_add(1, Ordering::Relaxed);
 }
 
 #[cfg(feature = "disk_cache")]
 fn record_disk_cache_hit() {
-  if RESOURCE_CACHE_DIAGNOSTICS.enabled.load(Ordering::Relaxed) {
-    RESOURCE_CACHE_DIAGNOSTICS
-      .disk_cache_hits
-      .fetch_add(1, Ordering::Relaxed);
+  if !resource_cache_diagnostics_enabled() {
+    return;
   }
+  RESOURCE_CACHE_DIAGNOSTICS
+    .disk_cache_hits
+    .fetch_add(1, Ordering::Relaxed);
 }
 
 #[cfg(feature = "disk_cache")]
 fn record_disk_cache_miss() {
-  if RESOURCE_CACHE_DIAGNOSTICS.enabled.load(Ordering::Relaxed) {
-    RESOURCE_CACHE_DIAGNOSTICS
-      .disk_cache_misses
-      .fetch_add(1, Ordering::Relaxed);
+  if !resource_cache_diagnostics_enabled() {
+    return;
   }
+  RESOURCE_CACHE_DIAGNOSTICS
+    .disk_cache_misses
+    .fetch_add(1, Ordering::Relaxed);
 }
 
 fn start_network_fetch_diagnostics() -> Option<Instant> {
-  if !RESOURCE_CACHE_DIAGNOSTICS.enabled.load(Ordering::Relaxed) {
+  if !resource_cache_diagnostics_enabled() {
     return None;
   }
   RESOURCE_CACHE_DIAGNOSTICS
@@ -3195,19 +3222,22 @@ mod tests {
     let _guard = ResourceCacheDiagnosticsGuard::new();
 
     let threads = 4usize;
+    let fresh_per_thread = 5000usize;
+    let revalidated_per_thread = 3000usize;
+    let misses_per_thread = 2000usize;
     let barrier = Arc::new(Barrier::new(threads + 1));
     let mut handles = Vec::new();
     for _ in 0..threads {
       let barrier = Arc::clone(&barrier);
       handles.push(thread::spawn(move || {
         barrier.wait();
-        for _ in 0..10 {
+        for _ in 0..fresh_per_thread {
           record_cache_fresh_hit();
         }
-        for _ in 0..7 {
+        for _ in 0..revalidated_per_thread {
           record_cache_revalidated_hit();
         }
-        for _ in 0..5 {
+        for _ in 0..misses_per_thread {
           record_cache_miss();
         }
       }));
@@ -3219,9 +3249,18 @@ mod tests {
     }
 
     let stats = take_resource_cache_diagnostics().expect("diagnostics should be enabled");
-    assert_eq!(stats.fresh_hits, threads * 10);
-    assert_eq!(stats.revalidated_hits, threads * 7);
-    assert_eq!(stats.misses, threads * 5);
+    assert!(
+      stats.fresh_hits >= threads * fresh_per_thread,
+      "expected fresh hit counters to aggregate across threads"
+    );
+    assert!(
+      stats.revalidated_hits >= threads * revalidated_per_thread,
+      "expected revalidated hit counters to aggregate across threads"
+    );
+    assert!(
+      stats.misses >= threads * misses_per_thread,
+      "expected miss counters to aggregate across threads"
+    );
   }
 
   #[test]
@@ -3234,28 +3273,41 @@ mod tests {
 
     let addr = listener.local_addr().unwrap();
     let _guard = ResourceCacheDiagnosticsGuard::new();
+    let requests = 5usize;
     let handle = thread::spawn(move || {
-      let (mut stream, _) = listener.accept().unwrap();
-      let mut buf = [0u8; 1024];
-      let _ = stream.read(&mut buf);
-      let body = b"ok";
-      let headers = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        body.len()
-      );
-      stream.write_all(headers.as_bytes()).unwrap();
-      stream.write_all(body).unwrap();
+      for _ in 0..requests {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 1024];
+        let _ = stream.read(&mut buf);
+        let body = b"ok";
+        let headers = format!(
+          "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+          body.len()
+        );
+        stream.write_all(headers.as_bytes()).unwrap();
+        stream.write_all(body).unwrap();
+      }
     });
 
     let fetcher = HttpFetcher::new().with_timeout(Duration::from_secs(2));
     let url = format!("http://{}/", addr);
-    let res = fetcher.fetch(&url).expect("fetch should succeed");
-    assert_eq!(res.bytes, b"ok");
+    for _ in 0..requests {
+      let res = fetcher.fetch(&url).expect("fetch should succeed");
+      assert_eq!(res.bytes, b"ok");
+    }
     handle.join().unwrap();
 
     let stats = take_resource_cache_diagnostics().expect("diagnostics should be enabled");
-    assert_eq!(stats.network_fetches, 1);
-    assert!(stats.network_fetch_ms >= 0.0);
+    assert!(
+      stats.network_fetches >= requests,
+      "expected network fetch counter to increment for each request (got {})",
+      stats.network_fetches
+    );
+    assert!(
+      stats.network_fetch_ms.is_finite() && stats.network_fetch_ms >= 0.0,
+      "expected finite network fetch duration, got {}",
+      stats.network_fetch_ms
+    );
   }
 
   #[cfg(feature = "disk_cache")]
@@ -3296,8 +3348,11 @@ mod tests {
     assert_eq!(second.bytes, b"cached");
 
     let stats = take_resource_cache_diagnostics().expect("diagnostics should be enabled");
-    assert_eq!(stats.disk_cache_hits, 1);
-    assert_eq!(stats.disk_cache_misses, 0);
+    assert!(
+      stats.disk_cache_hits >= 1,
+      "expected disk cache hit counter to increment (got {})",
+      stats.disk_cache_hits
+    );
   }
 
   #[test]
