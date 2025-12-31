@@ -4182,7 +4182,8 @@ impl FastRender {
             rec.stats.paint.background_layers = Some(diag.background_layers);
           }
           if diag.background_pattern_fast_paths > 0 {
-            rec.stats.paint.background_pattern_fast_paths = Some(diag.background_pattern_fast_paths);
+            rec.stats.paint.background_pattern_fast_paths =
+              Some(diag.background_pattern_fast_paths);
           }
           if diag.background_ms > 0.0 {
             rec.stats.paint.background_ms = Some(diag.background_ms);
@@ -7199,8 +7200,9 @@ impl FastRender {
     deadline: Option<&RenderDeadline>,
     stats: Option<&mut RenderStatsRecorder>,
   ) -> std::result::Result<String, RenderError> {
-    Self::inline_stylesheets_for_html_with_context_with_budget(
+    Self::inline_stylesheets_for_html_with_context_with_budget_with_toggles(
       self.fetcher.as_ref(),
+      self.runtime_toggles.as_ref(),
       html,
       base_url,
       media_type,
@@ -7245,8 +7247,9 @@ impl FastRender {
     diagnostics: &mut RenderDiagnostics,
     deadline: Option<&RenderDeadline>,
   ) -> std::result::Result<String, RenderError> {
-    Self::inline_stylesheets_for_html_with_context_with_budget(
+    Self::inline_stylesheets_for_html_with_context_with_budget_with_toggles(
       self.fetcher.as_ref(),
+      self.runtime_toggles.as_ref(),
       html,
       base_url,
       media_type,
@@ -7293,7 +7296,7 @@ impl FastRender {
     resource_context: Option<&ResourceContext>,
     diagnostics: &mut RenderDiagnostics,
     deadline: Option<&RenderDeadline>,
-    mut stats: Option<&mut RenderStatsRecorder>,
+    stats: Option<&mut RenderStatsRecorder>,
   ) -> std::result::Result<String, RenderError> {
     Self::inline_stylesheets_for_html_with_context_with_budget(
       fetcher,
@@ -7319,12 +7322,40 @@ impl FastRender {
     resource_context: Option<&ResourceContext>,
     diagnostics: &mut RenderDiagnostics,
     deadline: Option<&RenderDeadline>,
+    stats: Option<&mut RenderStatsRecorder>,
+    budget: StylesheetInlineBudget,
+  ) -> std::result::Result<String, RenderError> {
+    let toggles = runtime::runtime_toggles();
+    Self::inline_stylesheets_for_html_with_context_with_budget_with_toggles(
+      fetcher,
+      toggles.as_ref(),
+      html,
+      base_url,
+      media_type,
+      css_limit,
+      resource_context,
+      diagnostics,
+      deadline,
+      stats,
+      budget,
+    )
+  }
+
+  fn inline_stylesheets_for_html_with_context_with_budget_with_toggles(
+    fetcher: &dyn ResourceFetcher,
+    runtime_toggles: &RuntimeToggles,
+    html: &str,
+    base_url: &str,
+    media_type: MediaType,
+    css_limit: Option<usize>,
+    resource_context: Option<&ResourceContext>,
+    diagnostics: &mut RenderDiagnostics,
+    deadline: Option<&RenderDeadline>,
     mut stats: Option<&mut RenderStatsRecorder>,
     budget: StylesheetInlineBudget,
   ) -> std::result::Result<String, RenderError> {
     let inlining_start = stats.as_deref().and_then(|rec| rec.timer());
-    let fetch_link_css =
-      runtime::runtime_toggles().truthy_with_default("FASTR_FETCH_LINK_CSS", true);
+    let fetch_link_css = runtime_toggles.truthy_with_default("FASTR_FETCH_LINK_CSS", true);
     let mut css_links = extract_css_links(html, base_url, media_type)?;
     let has_link_stylesheets = !css_links.is_empty();
     if !fetch_link_css {
@@ -10285,7 +10316,10 @@ mod tests {
       "https://example.com/style.css",
       "div { color: rgb(255, 0, 0); }",
     );
-    let mut renderer = FastRender::builder().fetcher(Arc::new(fetcher)).build().unwrap();
+    let mut renderer = FastRender::builder()
+      .fetcher(Arc::new(fetcher))
+      .build()
+      .unwrap();
     let html = r#"<!DOCTYPE html>
 <html>
   <head>
@@ -10334,8 +10368,14 @@ mod tests {
         "https://example.com/style.css",
         "@import \"import.css\";\ndiv { color: rgb(255, 0, 0); }",
       )
-      .with_entry("https://example.com/import.css", "div { background: rgb(0, 0, 0); }");
-    let mut renderer = FastRender::builder().fetcher(Arc::new(fetcher)).build().unwrap();
+      .with_entry(
+        "https://example.com/import.css",
+        "div { background: rgb(0, 0, 0); }",
+      );
+    let mut renderer = FastRender::builder()
+      .fetcher(Arc::new(fetcher))
+      .build()
+      .unwrap();
     let html = r#"<!DOCTYPE html>
 <html>
   <head>
@@ -10380,9 +10420,18 @@ mod tests {
   #[test]
   fn diagnostics_populates_style_and_layout_stage_timings_with_multiple_external_stylesheets() {
     let fetcher = MapFetcher::default()
-      .with_entry("https://example.com/a.css", "div { color: rgb(255, 0, 0); }")
-      .with_entry("https://example.com/b.css", "div { background: rgb(0, 0, 0); }");
-    let mut renderer = FastRender::builder().fetcher(Arc::new(fetcher)).build().unwrap();
+      .with_entry(
+        "https://example.com/a.css",
+        "div { color: rgb(255, 0, 0); }",
+      )
+      .with_entry(
+        "https://example.com/b.css",
+        "div { background: rgb(0, 0, 0); }",
+      );
+    let mut renderer = FastRender::builder()
+      .fetcher(Arc::new(fetcher))
+      .build()
+      .unwrap();
     let html = r#"<!DOCTYPE html>
 <html>
   <head>
@@ -12148,6 +12197,76 @@ mod tests {
 
     let color = text_color_for(&tree, "Link toggle").unwrap();
     assert_eq!(color, Rgba::rgb(200, 0, 0));
+  }
+
+  #[test]
+  fn fetch_link_css_toggle_controls_inline_stylesheets_for_document() {
+    let base_url = "https://example.com/page.html";
+    let html = r#"<link rel="stylesheet" href="a.css"><div>Inline</div>"#;
+
+    let fetcher = Arc::new(
+      RecordingFetcher::default()
+        .with_entry("https://example.com/a.css", "div { color: rgb(1, 2, 3); }"),
+    );
+    let renderer = FastRender::builder()
+      .fetcher(fetcher.clone() as Arc<dyn ResourceFetcher>)
+      .runtime_toggles(RuntimeToggles::from_map(HashMap::from([(
+        "FASTR_FETCH_LINK_CSS".to_string(),
+        "0".to_string(),
+      )])))
+      .build()
+      .unwrap();
+
+    let mut diagnostics = RenderDiagnostics::default();
+    let output = renderer
+      .inline_stylesheets_for_document(
+        html,
+        base_url,
+        MediaType::Screen,
+        None,
+        &mut diagnostics,
+        None,
+      )
+      .unwrap();
+    assert_eq!(output, html.to_string());
+    assert!(
+      fetcher.fetched_urls().is_empty(),
+      "expected inline_stylesheets_for_document to skip fetches when FASTR_FETCH_LINK_CSS=0"
+    );
+
+    let fetcher = Arc::new(
+      RecordingFetcher::default()
+        .with_entry("https://example.com/a.css", "div { color: rgb(1, 2, 3); }"),
+    );
+    let renderer = FastRender::builder()
+      .fetcher(fetcher.clone() as Arc<dyn ResourceFetcher>)
+      .runtime_toggles(RuntimeToggles::from_map(HashMap::from([(
+        "FASTR_FETCH_LINK_CSS".to_string(),
+        "1".to_string(),
+      )])))
+      .build()
+      .unwrap();
+
+    let mut diagnostics = RenderDiagnostics::default();
+    let output = renderer
+      .inline_stylesheets_for_document(
+        html,
+        base_url,
+        MediaType::Screen,
+        None,
+        &mut diagnostics,
+        None,
+      )
+      .unwrap();
+    assert!(
+      output.starts_with("<style>"),
+      "expected inline stylesheet injection when FASTR_FETCH_LINK_CSS=1 (output={output:?})"
+    );
+    assert_eq!(
+      fetcher.fetched_urls(),
+      vec!["https://example.com/a.css".to_string()],
+      "expected linked stylesheet to be fetched once when FASTR_FETCH_LINK_CSS=1"
+    );
   }
 
   #[test]
