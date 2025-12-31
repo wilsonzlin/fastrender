@@ -3362,6 +3362,9 @@ fn report(args: ReportArgs) -> io::Result<()> {
         .filter_map(|entry| {
           let stats = entry.stats.as_ref()?;
           let ms = stats.resources.network_fetch_ms?;
+          if ms <= 0.0 {
+            return None;
+          }
           Some((entry, ms))
         })
         .collect();
@@ -3396,6 +3399,9 @@ fn report(args: ReportArgs) -> io::Result<()> {
         .filter_map(|entry| {
           let stats = entry.stats.as_ref()?;
           let ms = stats.resources.fetch_inflight_wait_ms?;
+          if ms <= 0.0 {
+            return None;
+          }
           Some((entry, ms))
         })
         .collect();
@@ -3428,6 +3434,9 @@ fn report(args: ReportArgs) -> io::Result<()> {
         .filter_map(|entry| {
           let stats = entry.stats.as_ref()?;
           let ms = stats.resources.disk_cache_ms?;
+          if ms <= 0.0 {
+            return None;
+          }
           Some((entry, ms))
         })
         .collect();
