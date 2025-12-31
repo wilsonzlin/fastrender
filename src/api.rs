@@ -1737,6 +1737,26 @@ pub struct PaintDiagnostics {
   pub merged_items: Option<usize>,
   pub gradient_ms: Option<f64>,
   pub gradient_pixels: Option<u64>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub image_pixmap_cache_hits: Option<u64>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub image_pixmap_cache_misses: Option<u64>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub image_pixmap_ms: Option<f64>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub background_tiles: Option<u64>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub background_ms: Option<f64>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub clip_mask_calls: Option<u64>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub clip_mask_ms: Option<f64>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub clip_mask_pixels: Option<u64>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub layer_allocations: Option<u64>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub layer_alloc_bytes: Option<u64>,
   pub parallel_tasks: Option<usize>,
   pub parallel_threads: Option<usize>,
   pub parallel_ms: Option<f64>,
@@ -4045,6 +4065,36 @@ impl FastRender {
           }
           rec.stats.paint.gradient_ms = Some(diag.gradient_ms);
           rec.stats.paint.gradient_pixels = Some(diag.gradient_pixels);
+          if diag.image_pixmap_cache_hits > 0 {
+            rec.stats.paint.image_pixmap_cache_hits = Some(diag.image_pixmap_cache_hits);
+          }
+          if diag.image_pixmap_cache_misses > 0 {
+            rec.stats.paint.image_pixmap_cache_misses = Some(diag.image_pixmap_cache_misses);
+          }
+          if diag.image_pixmap_ms > 0.0 {
+            rec.stats.paint.image_pixmap_ms = Some(diag.image_pixmap_ms);
+          }
+          if diag.background_tiles > 0 {
+            rec.stats.paint.background_tiles = Some(diag.background_tiles);
+          }
+          if diag.background_ms > 0.0 {
+            rec.stats.paint.background_ms = Some(diag.background_ms);
+          }
+          if diag.clip_mask_calls > 0 {
+            rec.stats.paint.clip_mask_calls = Some(diag.clip_mask_calls);
+          }
+          if diag.clip_mask_ms > 0.0 {
+            rec.stats.paint.clip_mask_ms = Some(diag.clip_mask_ms);
+          }
+          if diag.clip_mask_pixels > 0 {
+            rec.stats.paint.clip_mask_pixels = Some(diag.clip_mask_pixels);
+          }
+          if diag.layer_allocations > 0 {
+            rec.stats.paint.layer_allocations = Some(diag.layer_allocations);
+          }
+          if diag.layer_alloc_bytes > 0 {
+            rec.stats.paint.layer_alloc_bytes = Some(diag.layer_alloc_bytes);
+          }
           rec.stats.paint.parallel_tasks = Some(diag.parallel_tasks);
           rec.stats.paint.parallel_threads = Some(diag.parallel_threads);
           rec.stats.paint.parallel_ms = Some(diag.parallel_ms);

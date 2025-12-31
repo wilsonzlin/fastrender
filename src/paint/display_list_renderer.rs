@@ -109,7 +109,8 @@ use rayon::prelude::*;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 #[cfg(test)]
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::thread::ThreadId;
@@ -1402,6 +1403,12 @@ pub struct RenderReport {
   pub fallback_reason: Option<String>,
   /// Gradient rasterization statistics collected during the render.
   pub gradient_stats: GradientStats,
+  /// Image pixmap conversion cache hits during paint.
+  pub image_pixmap_cache_hits: u64,
+  /// Image pixmap conversion cache misses during paint.
+  pub image_pixmap_cache_misses: u64,
+  /// Time spent converting image buffers into pixmaps during paint.
+  pub image_pixmap_ms: f64,
   /// Number of parallel tasks spawned during rasterization.
   pub parallel_tasks: usize,
   /// Unique threads observed while painting.
@@ -1410,6 +1417,52 @@ pub struct RenderReport {
   pub parallel_duration: Duration,
   /// Wall-clock time spent painting serially.
   pub serial_duration: Duration,
+}
+
+#[derive(Default)]
+struct ImagePixmapDiagnostics {
+  hits: AtomicU64,
+  misses: AtomicU64,
+  nanos: AtomicU64,
+}
+
+#[derive(Clone, Copy, Default)]
+struct ImagePixmapSnapshot {
+  hits: u64,
+  misses: u64,
+  nanos: u64,
+}
+
+impl ImagePixmapDiagnostics {
+  #[inline]
+  fn record_hit(&self) {
+    self.hits.fetch_add(1, Ordering::Relaxed);
+  }
+
+  #[inline]
+  fn record_miss(&self) {
+    self.misses.fetch_add(1, Ordering::Relaxed);
+  }
+
+  #[inline]
+  fn record_duration(&self, duration: Duration) {
+    let nanos = duration.as_nanos().min(u128::from(u64::MAX)) as u64;
+    self.nanos.fetch_add(nanos, Ordering::Relaxed);
+  }
+
+  fn snapshot(&self) -> ImagePixmapSnapshot {
+    ImagePixmapSnapshot {
+      hits: self.hits.load(Ordering::Relaxed),
+      misses: self.misses.load(Ordering::Relaxed),
+      nanos: self.nanos.load(Ordering::Relaxed),
+    }
+  }
+}
+
+impl ImagePixmapSnapshot {
+  fn millis(self) -> f64 {
+    self.nanos as f64 / 1_000_000.0
+  }
 }
 
 #[derive(Clone, Copy)]
@@ -1465,6 +1518,7 @@ pub struct DisplayListRenderer {
   image_cache: HashMap<ImageKey, Arc<Pixmap>>,
   #[cfg(test)]
   image_cache_misses: Arc<AtomicUsize>,
+  image_pixmap_diagnostics: Option<Arc<ImagePixmapDiagnostics>>,
   warp_cache: WarpCache,
   blur_cache: BlurCache,
   gradient_cache: GradientLutCache,
@@ -2036,6 +2090,7 @@ impl DisplayListRenderer {
       color_renderer.clone(),
       color_cache.clone(),
     );
+    let diagnostics_enabled = paint_diagnostics_enabled();
     Ok(Self {
       canvas: Canvas::new_with_text_rasterizer(
         device_width.max(1),
@@ -2059,11 +2114,13 @@ impl DisplayListRenderer {
       image_cache: HashMap::new(),
       #[cfg(test)]
       image_cache_misses: Arc::new(AtomicUsize::new(0)),
+      image_pixmap_diagnostics: diagnostics_enabled
+        .then(|| Arc::new(ImagePixmapDiagnostics::default())),
       warp_cache: WarpCache::new(WARP_CACHE_CAPACITY),
       blur_cache: BlurCache::default(),
       gradient_cache: GradientLutCache::default(),
       gradient_stats: GradientStats::default(),
-      diagnostics_enabled: paint_diagnostics_enabled(),
+      diagnostics_enabled,
     })
   }
 
@@ -3614,6 +3671,11 @@ impl DisplayListRenderer {
           duration.as_secs_f64() * 1000.0
         );
       }
+      let image_stats = self
+        .image_pixmap_diagnostics
+        .as_ref()
+        .map(|d| d.snapshot())
+        .unwrap_or_default();
       return Ok(RenderReport {
         pixmap,
         parallel_used: true,
@@ -3621,6 +3683,9 @@ impl DisplayListRenderer {
         duration,
         fallback_reason,
         gradient_stats: self.gradient_stats,
+        image_pixmap_cache_hits: image_stats.hits,
+        image_pixmap_cache_misses: image_stats.misses,
+        image_pixmap_ms: image_stats.millis(),
         parallel_tasks: tiles,
         parallel_threads: threads_used,
         parallel_duration,
@@ -3630,6 +3695,11 @@ impl DisplayListRenderer {
 
     self.render_slice(list.items())?;
     let serial_duration = start.elapsed();
+    let image_stats = self
+      .image_pixmap_diagnostics
+      .as_ref()
+      .map(|d| d.snapshot())
+      .unwrap_or_default();
     Ok(RenderReport {
       pixmap: self.canvas.into_pixmap(),
       parallel_used: false,
@@ -3637,6 +3707,9 @@ impl DisplayListRenderer {
       duration: serial_duration,
       fallback_reason,
       gradient_stats: self.gradient_stats,
+      image_pixmap_cache_hits: image_stats.hits,
+      image_pixmap_cache_misses: image_stats.misses,
+      image_pixmap_ms: image_stats.millis(),
       parallel_tasks: 0,
       parallel_threads: 1,
       parallel_duration: Duration::ZERO,
@@ -3927,6 +4000,7 @@ impl DisplayListRenderer {
           renderer.paint_parallelism = PaintParallelism::disabled();
           renderer.gradient_cache = self.gradient_cache.clone();
           renderer.diagnostics_enabled = self.diagnostics_enabled;
+          renderer.image_pixmap_diagnostics = self.image_pixmap_diagnostics.clone();
           if work.render_x > 0 || work.render_y > 0 {
             renderer
               .canvas
@@ -4103,6 +4177,7 @@ impl DisplayListRenderer {
     renderer.preserve_3d_disabled = true;
     renderer.gradient_cache = self.gradient_cache.clone();
     renderer.diagnostics_enabled = self.diagnostics_enabled;
+    renderer.image_pixmap_diagnostics = self.image_pixmap_diagnostics.clone();
     let report = renderer.render_with_report(&list)?;
     self.gradient_stats.merge(&report.gradient_stats);
     Ok(Some(report.pixmap))
@@ -5772,6 +5847,8 @@ impl DisplayListRenderer {
     };
 
     if let Some(src) = item.src_rect {
+      let crop_diag = self.image_pixmap_diagnostics.as_ref();
+      let crop_timer = crop_diag.map(|_| Instant::now());
       let src_x = src.x().max(0.0).floor() as u32;
       let src_y = src.y().max(0.0).floor() as u32;
       let src_w = src.width().ceil() as u32;
@@ -5793,6 +5870,9 @@ impl DisplayListRenderer {
         cropped.data_mut()[dst_index..dst_index + (crop_w as usize * 4)]
           .copy_from_slice(&full.data()[src_index..src_index + (crop_w as usize * 4)]);
       }
+      if let (Some(diag), Some(start)) = (crop_diag, crop_timer) {
+        diag.record_duration(start.elapsed());
+      }
       Some(Arc::new(cropped))
     } else {
       Some(full)
@@ -5801,10 +5881,21 @@ impl DisplayListRenderer {
   fn image_data_to_pixmap(&mut self, image: &ImageData) -> Option<Arc<Pixmap>> {
     let key = ImageKey::new(image);
     if let Some(cached) = self.image_cache.get(&key) {
+      if let Some(diag) = self.image_pixmap_diagnostics.as_ref() {
+        diag.record_hit();
+      }
       return Some(cached.clone());
     }
 
+    let diag = self.image_pixmap_diagnostics.as_ref();
+    if let Some(diag) = diag {
+      diag.record_miss();
+    }
+    let timer = diag.map(|_| Instant::now());
     let pixmap = Arc::new(image_data_to_pixmap_inner(image)?);
+    if let (Some(diag), Some(start)) = (diag, timer) {
+      diag.record_duration(start.elapsed());
+    }
     #[cfg(test)]
     self.image_cache_misses.fetch_add(1, Ordering::Relaxed);
     self.image_cache.insert(key, pixmap.clone());

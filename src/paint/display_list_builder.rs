@@ -187,6 +187,7 @@ pub struct DisplayListBuilder {
   parallel_root_min: usize,
   parallel_min_explicit: bool,
   parallel_stats: Option<Arc<ParallelStats>>,
+  background_tiles: Option<Arc<AtomicU64>>,
   estimated_fragments: Option<usize>,
   scroll_state: ScrollState,
   max_iframe_depth: usize,
@@ -619,6 +620,14 @@ impl DisplayListBuilder {
   fn finish(mut self) -> Result<DisplayList> {
     if paint_diagnostics_enabled() {
       self.record_parallel_diagnostics();
+      if let Some(counter) = self.background_tiles.as_ref() {
+        let tiles = counter.load(Ordering::Relaxed);
+        if tiles > 0 {
+          with_paint_diagnostics(|diag| {
+            diag.background_tiles += tiles;
+          });
+        }
+      }
     }
     if let Some(err) = self.error.take() {
       Err(Error::Render(err))
@@ -685,6 +694,7 @@ impl DisplayListBuilder {
       parallel_root_min,
       parallel_min_explicit,
       parallel_stats: paint_diagnostics_enabled().then(|| Arc::new(ParallelStats::default())),
+      background_tiles: paint_diagnostics_enabled().then(|| Arc::new(AtomicU64::new(0))),
       estimated_fragments: None,
       scroll_state: ScrollState::default(),
       max_iframe_depth: DEFAULT_MAX_IFRAME_DEPTH,
@@ -717,6 +727,7 @@ impl DisplayListBuilder {
       parallel_root_min,
       parallel_min_explicit,
       parallel_stats: paint_diagnostics_enabled().then(|| Arc::new(ParallelStats::default())),
+      background_tiles: paint_diagnostics_enabled().then(|| Arc::new(AtomicU64::new(0))),
       estimated_fragments: None,
       scroll_state: ScrollState::default(),
       max_iframe_depth: DEFAULT_MAX_IFRAME_DEPTH,
@@ -3247,6 +3258,7 @@ impl DisplayListBuilder {
       parallel_root_min: self.parallel_root_min,
       parallel_min_explicit: self.parallel_min_explicit,
       parallel_stats: self.parallel_stats.clone(),
+      background_tiles: self.background_tiles.clone(),
       estimated_fragments: self.estimated_fragments,
       scroll_state: self.scroll_state.clone(),
       max_iframe_depth: self.max_iframe_depth,
@@ -3674,6 +3686,14 @@ impl DisplayListBuilder {
     }
   }
 
+  #[inline]
+  fn emit_background_tile(&mut self, item: DisplayItem) {
+    self.list.push(item);
+    if let Some(counter) = self.background_tiles.as_ref() {
+      counter.fetch_add(1, Ordering::Relaxed);
+    }
+  }
+
   /// Emits border strokes for a fragment
   pub fn emit_border(&mut self, rect: Rect, width: f32, color: Rgba) {
     if width > 0.0 && !color.is_transparent() {
@@ -3902,15 +3922,13 @@ impl DisplayListBuilder {
                   cy + dy * len - intersection.y(),
                 );
 
-                self
-                  .list
-                  .push(DisplayItem::LinearGradient(LinearGradientItem {
-                    rect: intersection,
-                    start,
-                    end,
-                    stops: stops.clone(),
-                    spread: GradientSpread::Pad,
-                  }));
+                self.emit_background_tile(DisplayItem::LinearGradient(LinearGradientItem {
+                  rect: intersection,
+                  start,
+                  end,
+                  stops: stops.clone(),
+                  spread: GradientSpread::Pad,
+                }));
               }
             }
           }
@@ -3953,15 +3971,13 @@ impl DisplayListBuilder {
                   cy + dy * len - intersection.y(),
                 );
 
-                self
-                  .list
-                  .push(DisplayItem::LinearGradient(LinearGradientItem {
-                    rect: intersection,
-                    start,
-                    end,
-                    stops: stops.clone(),
-                    spread: GradientSpread::Repeat,
-                  }));
+                self.emit_background_tile(DisplayItem::LinearGradient(LinearGradientItem {
+                  rect: intersection,
+                  start,
+                  end,
+                  stops: stops.clone(),
+                  spread: GradientSpread::Repeat,
+                }));
               }
             }
           }
@@ -4005,15 +4021,13 @@ impl DisplayListBuilder {
                   center_abs.y - intersection.y(),
                 );
 
-                self
-                  .list
-                  .push(DisplayItem::ConicGradient(ConicGradientItem {
-                    rect: intersection,
-                    center,
-                    from_angle: *from_angle,
-                    stops: stops.clone(),
-                    repeating: false,
-                  }));
+                self.emit_background_tile(DisplayItem::ConicGradient(ConicGradientItem {
+                  rect: intersection,
+                  center,
+                  from_angle: *from_angle,
+                  stops: stops.clone(),
+                  repeating: false,
+                }));
               }
             }
           }
@@ -4057,15 +4071,13 @@ impl DisplayListBuilder {
                   center_abs.y - intersection.y(),
                 );
 
-                self
-                  .list
-                  .push(DisplayItem::ConicGradient(ConicGradientItem {
-                    rect: intersection,
-                    center,
-                    from_angle: *from_angle,
-                    stops: stops.clone(),
-                    repeating: true,
-                  }));
+                self.emit_background_tile(DisplayItem::ConicGradient(ConicGradientItem {
+                  rect: intersection,
+                  center,
+                  from_angle: *from_angle,
+                  stops: stops.clone(),
+                  repeating: true,
+                }));
               }
             }
           }
@@ -4109,15 +4121,13 @@ impl DisplayListBuilder {
                 );
                 let center = Point::new(cx - intersection.x(), cy - intersection.y());
 
-                self
-                  .list
-                  .push(DisplayItem::RadialGradient(RadialGradientItem {
-                    rect: intersection,
-                    center,
-                    radii: Point::new(radius_x, radius_y),
-                    stops: stops.clone(),
-                    spread: GradientSpread::Pad,
-                  }));
+                self.emit_background_tile(DisplayItem::RadialGradient(RadialGradientItem {
+                  rect: intersection,
+                  center,
+                  radii: Point::new(radius_x, radius_y),
+                  stops: stops.clone(),
+                  spread: GradientSpread::Pad,
+                }));
               }
             }
           }
@@ -4161,15 +4171,13 @@ impl DisplayListBuilder {
                 );
                 let center = Point::new(cx - intersection.x(), cy - intersection.y());
 
-                self
-                  .list
-                  .push(DisplayItem::RadialGradient(RadialGradientItem {
-                    rect: intersection,
-                    center,
-                    radii: Point::new(radius_x, radius_y),
-                    stops: stops.clone(),
-                    spread: GradientSpread::Repeat,
-                  }));
+                self.emit_background_tile(DisplayItem::RadialGradient(RadialGradientItem {
+                  rect: intersection,
+                  center,
+                  radii: Point::new(radius_x, radius_y),
+                  stops: stops.clone(),
+                  spread: GradientSpread::Repeat,
+                }));
               }
             }
           }
@@ -4249,6 +4257,31 @@ impl DisplayListBuilder {
 
                 if let Some(dest_rect) = visible_clip {
                   if dest_rect.width() > 0.0 && dest_rect.height() > 0.0 {
+                    if let Some(counter) = self.background_tiles.as_ref() {
+                      let positions_x = Self::tile_positions(
+                        layer.repeat.x,
+                        origin_rect.x(),
+                        origin_rect.width(),
+                        tile_w,
+                        offset_x,
+                        dest_rect.min_x(),
+                        dest_rect.max_x(),
+                      );
+                      let positions_y = Self::tile_positions(
+                        layer.repeat.y,
+                        origin_rect.y(),
+                        origin_rect.height(),
+                        tile_h,
+                        offset_y,
+                        dest_rect.min_y(),
+                        dest_rect.max_y(),
+                      );
+                      let tiles =
+                        (positions_x.len() as u64).saturating_mul(positions_y.len() as u64);
+                      if tiles > 0 {
+                        counter.fetch_add(tiles, Ordering::Relaxed);
+                      }
+                    }
                     self.list.push(DisplayItem::ImagePattern(ImagePatternItem {
                       dest_rect,
                       image: image.clone(),
@@ -4309,7 +4342,7 @@ impl DisplayListBuilder {
                       intersection.height() * scale_y,
                     );
 
-                    self.list.push(DisplayItem::Image(ImageItem {
+                    self.emit_background_tile(DisplayItem::Image(ImageItem {
                       dest_rect: intersection,
                       image: image.clone(),
                       filter_quality: quality,

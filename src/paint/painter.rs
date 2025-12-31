@@ -241,6 +241,16 @@ pub struct PaintDiagnosticsSummary {
   pub raster_ms: f64,
   pub gradient_ms: f64,
   pub gradient_pixels: u64,
+  pub image_pixmap_cache_hits: u64,
+  pub image_pixmap_cache_misses: u64,
+  pub image_pixmap_ms: f64,
+  pub background_tiles: u64,
+  pub background_ms: f64,
+  pub clip_mask_calls: u64,
+  pub clip_mask_ms: f64,
+  pub clip_mask_pixels: u64,
+  pub layer_allocations: u64,
+  pub layer_alloc_bytes: u64,
   pub parallel_tasks: usize,
   pub parallel_threads: usize,
   pub parallel_ms: f64,
@@ -334,6 +344,16 @@ fn pixmap_allocation_bytes(width: u32, height: u32) -> Option<u64> {
   u64::from(width)
     .checked_mul(u64::from(height))
     .and_then(|px| px.checked_mul(4))
+}
+
+#[inline]
+fn record_layer_allocation(width: u32, height: u32) {
+  with_paint_diagnostics(|diag| {
+    diag.layer_allocations += 1;
+    if let Some(bytes) = pixmap_allocation_bytes(width, height) {
+      diag.layer_alloc_bytes += bytes;
+    }
+  });
 }
 
 fn nested_counts(cmds: &[DisplayCommand]) -> (usize, usize) {
@@ -2482,8 +2502,15 @@ impl Painter {
           }
         }
 
-        let layer = match new_pixmap(width as u32, height as u32) {
-          Some(p) => p,
+        let layer_w = width as u32;
+        let layer_h = height as u32;
+        let layer = match new_pixmap(layer_w, layer_h) {
+          Some(p) => {
+            if self.diagnostics_enabled {
+              record_layer_allocation(layer_w, layer_h);
+            }
+            p
+          }
           None => return Ok(()),
         };
 
@@ -2514,8 +2541,13 @@ impl Painter {
         self.gradient_stats.merge(&base_painter.gradient_stats);
 
         if !clipped.is_empty() {
-          let clip_layer = match new_pixmap(width as u32, height as u32) {
-            Some(p) => p,
+          let clip_layer = match new_pixmap(layer_w, layer_h) {
+            Some(p) => {
+              if self.diagnostics_enabled {
+                record_layer_allocation(layer_w, layer_h);
+              }
+              p
+            }
             None => return Ok(()),
           };
           let mut clip_painter = Painter {
@@ -2737,6 +2769,9 @@ impl Painter {
             .unwrap_or_else(Transform::identity);
           if is_hsl_blend(blend_mode) && !isolated {
             if let Some(mut transformed) = new_pixmap(self.pixmap.width(), self.pixmap.height()) {
+              if self.diagnostics_enabled {
+                record_layer_allocation(self.pixmap.width(), self.pixmap.height());
+              }
               let mut paint = PixmapPaint::default();
               paint.opacity = 1.0;
               paint.blend_mode = SkiaBlendMode::SourceOver;
@@ -2772,6 +2807,9 @@ impl Painter {
               warp_pixmap(&layer_pixmap, &homography, &dst_quad, target_size, None)
             {
               if let Some(mut transformed) = new_pixmap(self.pixmap.width(), self.pixmap.height()) {
+                if self.diagnostics_enabled {
+                  record_layer_allocation(self.pixmap.width(), self.pixmap.height());
+                }
                 let mut paint = PixmapPaint::default();
                 paint.opacity = 1.0;
                 paint.blend_mode = SkiaBlendMode::SourceOver;
@@ -3017,6 +3055,7 @@ impl Painter {
 
   /// Paints the background of a fragment
   fn paint_background(&mut self, x: f32, y: f32, width: f32, height: f32, style: &ComputedStyle) {
+    let timer = self.diagnostics_enabled.then(Instant::now);
     let rects = background_rects(
       x,
       y,
@@ -3035,6 +3074,11 @@ impl Painter {
     };
 
     if color_clip_rect.width() <= 0.0 || color_clip_rect.height() <= 0.0 {
+      if let Some(start) = timer {
+        with_paint_diagnostics(|diag| {
+          diag.background_ms += start.elapsed().as_secs_f64() * 1000.0;
+        });
+      }
       return;
     }
 
@@ -3062,6 +3106,11 @@ impl Painter {
         self.paint_background_image_layer(&rects, style, layer, image);
       }
     }
+    if let Some(start) = timer {
+      with_paint_diagnostics(|diag| {
+        diag.background_ms += start.elapsed().as_secs_f64() * 1000.0;
+      });
+    }
   }
 
   fn scale_background_rects(&self, rects: &BackgroundRects) -> BackgroundRects {
@@ -3079,6 +3128,8 @@ impl Painter {
     layer: &BackgroundLayer,
     bg: &BackgroundImage,
   ) {
+    let mut tiles_painted = 0u64;
+    let record_tiles = self.diagnostics_enabled;
     let is_local = layer.attachment == BackgroundAttachment::Local;
     let clip_box = if is_local {
       match layer.clip {
@@ -3238,6 +3289,9 @@ impl Painter {
                 if tx >= max_x || ty >= max_y {
                   continue;
                 }
+                if record_tiles {
+                  tiles_painted += 1;
+                }
                 self.paint_background_tile(
                   &pixmap,
                   tx,
@@ -3250,6 +3304,11 @@ impl Painter {
                   quality,
                 );
               }
+            }
+            if record_tiles && tiles_painted > 0 {
+              with_paint_diagnostics(|diag| {
+                diag.background_tiles += tiles_painted;
+              });
             }
             return;
           }
@@ -3271,6 +3330,9 @@ impl Painter {
               continue;
             }
 
+            if record_tiles {
+              tiles_painted += 1;
+            }
             self.paint_generated_image_intersection(
               bg,
               style,
@@ -3305,8 +3367,16 @@ impl Painter {
           return;
         }
 
+        let pixmap_timer = self.diagnostics_enabled.then(Instant::now);
         let pixmap = match Self::dynamic_image_to_pixmap(&image, orientation) {
-          Some(p) => p,
+          Some(p) => {
+            if let Some(start) = pixmap_timer {
+              with_paint_diagnostics(|diag| {
+                diag.image_pixmap_ms += start.elapsed().as_secs_f64() * 1000.0;
+              });
+            }
+            p
+          }
           None => return,
         };
 
@@ -3387,6 +3457,9 @@ impl Painter {
             if tx >= max_x || ty >= max_y {
               continue;
             }
+            if record_tiles {
+              tiles_painted += 1;
+            }
             self.paint_background_tile(
               &pixmap,
               tx,
@@ -3401,6 +3474,11 @@ impl Painter {
           }
         }
       }
+    }
+    if record_tiles && tiles_painted > 0 {
+      with_paint_diagnostics(|diag| {
+        diag.background_tiles += tiles_painted;
+      });
     }
   }
 
@@ -4944,6 +5022,9 @@ impl Painter {
       let Some(mut shadow_pixmap) = new_pixmap(shadow_width, shadow_height) else {
         continue;
       };
+      if self.diagnostics_enabled {
+        record_layer_allocation(shadow_width, shadow_height);
+      }
 
       let mut paint = Paint::default();
       paint.set_color_rgba8(
@@ -5904,6 +5985,7 @@ impl Painter {
         let render_w = dest_w_device.ceil().max(1.0) as u32;
         let render_h = dest_h_device.ceil().max(1.0) as u32;
         if render_w > 0 && render_h > 0 {
+          let pixmap_timer = self.diagnostics_enabled.then(Instant::now);
           if let Ok(pixmap) = self.image_cache.render_svg_pixmap_at_size(
             svg,
             render_w,
@@ -5911,6 +5993,11 @@ impl Painter {
             &resolved_src,
             self.scale,
           ) {
+            if let Some(start) = pixmap_timer {
+              with_paint_diagnostics(|diag| {
+                diag.image_pixmap_ms += start.elapsed().as_secs_f64() * 1000.0;
+              });
+            }
             let scale_x = dest_w_device / render_w as f32;
             let scale_y = dest_h_device / render_h as f32;
             if scale_x.is_finite() && scale_y.is_finite() {
@@ -5934,8 +6021,16 @@ impl Painter {
       }
     }
 
+    let pixmap_timer = self.diagnostics_enabled.then(Instant::now);
     let pixmap = match Self::dynamic_image_to_pixmap(&image, orientation) {
-      Some(pixmap) => pixmap,
+      Some(pixmap) => {
+        if let Some(start) = pixmap_timer {
+          with_paint_diagnostics(|diag| {
+            diag.image_pixmap_ms += start.elapsed().as_secs_f64() * 1000.0;
+          });
+        }
+        pixmap
+      }
       None => {
         if log_image_fail {
           eprintln!("[image-load-fail] src={} stage=pixmap", src.url);
@@ -8769,7 +8864,10 @@ fn apply_backdrop_filters(
   }
 
   let mut region = match new_pixmap(region_w, region_h) {
-    Some(p) => p,
+    Some(p) => {
+      record_layer_allocation(region_w, region_h);
+      p
+    }
     None => return Ok(()),
   };
 
@@ -8934,7 +9032,10 @@ fn apply_drop_shadow(
 
   let source = pixmap.clone();
   let mut shadow = match new_pixmap(source.width(), source.height()) {
-    Some(p) => p,
+    Some(p) => {
+      record_layer_allocation(source.width(), source.height());
+      p
+    }
     None => return Ok(()),
   };
 
@@ -8971,7 +9072,10 @@ fn apply_drop_shadow(
   }
 
   let mut result = match new_pixmap(source.width(), source.height()) {
-    Some(p) => p,
+    Some(p) => {
+      record_layer_allocation(source.width(), source.height());
+      p
+    }
     None => return Ok(()),
   };
 
@@ -9468,9 +9572,30 @@ fn apply_clip_mask_rect(pixmap: &mut Pixmap, rect: Rect, radii: BorderRadii) {
     return;
   }
 
+  let diag_enabled = paint_diagnostics_enabled();
+  let timer = diag_enabled.then(Instant::now);
+  let clip_pixels = if diag_enabled {
+    u64::from(width).saturating_mul(u64::from(height))
+  } else {
+    0
+  };
+  let record = |timer: Option<Instant>| {
+    if let Some(start) = timer {
+      let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+      with_paint_diagnostics(|diag| {
+        diag.clip_mask_calls += 1;
+        diag.clip_mask_ms += elapsed_ms;
+        diag.clip_mask_pixels += clip_pixels;
+      });
+    }
+  };
+
   let mut mask_pixmap = match new_pixmap(width, height) {
     Some(p) => p,
-    None => return,
+    None => {
+      record(timer);
+      return;
+    }
   };
   let clamped = radii.clamped(rect.width(), rect.height());
   let _ = fill_rounded_rect(
@@ -9504,6 +9629,7 @@ fn apply_clip_mask_rect(pixmap: &mut Pixmap, rect: Rect, radii: BorderRadii) {
       }
     }
   }
+  record(timer);
 }
 
 fn mask_value_from_pixel(pixel: &[u8], mode: MaskMode) -> u8 {
@@ -10348,6 +10474,9 @@ pub fn paint_tree_display_list_with_resources_scaled_offset_depth(
       diag.command_count = optimized.len();
       diag.gradient_ms = report.gradient_stats.millis();
       diag.gradient_pixels = report.gradient_stats.pixels;
+      diag.image_pixmap_cache_hits += report.image_pixmap_cache_hits;
+      diag.image_pixmap_cache_misses += report.image_pixmap_cache_misses;
+      diag.image_pixmap_ms += report.image_pixmap_ms;
       diag.parallel_tasks += report.parallel_tasks;
       diag.parallel_threads = diag.parallel_threads.max(report.parallel_threads);
       diag.parallel_ms += report.parallel_duration.as_secs_f64() * 1000.0;
