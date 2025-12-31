@@ -304,6 +304,8 @@ pub struct ResourceAccessArgs {
 #[derive(Debug, Clone, Args)]
 pub struct DiskCacheArgs {
   /// Maximum total bytes to keep in the on-disk subresource cache (0 disables eviction).
+  ///
+  /// Note: this only has an effect when the binary is built with the `disk_cache` cargo feature.
   #[arg(
     long = "disk-cache-max-bytes",
     env = "FASTR_DISK_CACHE_MAX_BYTES",
@@ -315,6 +317,8 @@ pub struct DiskCacheArgs {
   /// Maximum age in seconds for on-disk cached entries before they are treated as stale.
   ///
   /// Use `0` to disable age-based eviction/revalidation (never expire purely due to age).
+  ///
+  /// Note: this only has an effect when the binary is built with the `disk_cache` cargo feature.
   #[arg(
     long = "disk-cache-max-age-secs",
     env = "FASTR_DISK_CACHE_MAX_AGE_SECS",
