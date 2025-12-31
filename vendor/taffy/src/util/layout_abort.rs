@@ -183,3 +183,31 @@ pub(crate) fn check_layout_abort() {
 #[cfg(not(feature = "std"))]
 #[inline(always)]
 pub(crate) fn check_layout_abort() {}
+
+/// Immediately abort the current Taffy layout computation.
+///
+/// This is intended for use by callers (for example, measure functions) that
+/// detect a cancellation condition and want to stop the current layout run
+/// *immediately* rather than returning a dummy size and waiting for the next
+/// periodic [`check_layout_abort`] call.
+///
+/// # Panics
+///
+/// When built with the `std` feature, this function panics with the same
+/// internal payload used by [`check_layout_abort`]. Layout entrypoints that
+/// support cooperative cancellation (such as
+/// [`TaffyTree::compute_layout_with_measure_and_cancel`](crate::TaffyTree::compute_layout_with_measure_and_cancel))
+/// catch this panic and return [`TaffyError::LayoutAborted`](crate::tree::TaffyError::LayoutAborted).
+///
+/// If called outside of a cancellation-aware entrypoint, the panic will
+/// propagate.
+#[cfg(feature = "std")]
+#[inline]
+pub fn abort_now() -> ! {
+  std::panic::panic_any(LayoutAbort)
+}
+
+/// `no_std` stub: does nothing.
+#[cfg(not(feature = "std"))]
+#[inline]
+pub fn abort_now() {}

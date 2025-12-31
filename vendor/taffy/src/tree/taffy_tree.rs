@@ -1158,6 +1158,30 @@ mod tests {
     known_dimensions.unwrap_or(node_context.cloned().unwrap_or(Size::ZERO))
   }
 
+  #[cfg(all(feature = "std", panic = "unwind"))]
+  #[test]
+  fn abort_now_aborts_layout_computation() {
+    let mut taffy: TaffyTree<()> = TaffyTree::new();
+    let node = taffy.new_leaf(Style::default()).unwrap();
+
+    let result = taffy.compute_layout_with_measure_and_cancel(
+      node,
+      Size::MAX_CONTENT,
+      |_, _, _, _, _| crate::util::layout_abort::abort_now(),
+      Some(std::sync::Arc::new(|| false)),
+      1,
+    );
+
+    assert_eq!(result, Err(TaffyError::LayoutAborted));
+  }
+
+  #[cfg(all(feature = "std", panic = "unwind"))]
+  #[test]
+  #[should_panic]
+  fn abort_now_panics_outside_layout_entrypoints() {
+    crate::util::layout_abort::abort_now();
+  }
+
   #[test]
   fn new_should_allocate_default_capacity() {
     const DEFAULT_CAPACITY: usize = 16; // This is the capacity defined in the `impl Default`

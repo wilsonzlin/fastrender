@@ -1,9 +1,11 @@
 //! Helpful misc. utilities such as a function to debug print a tree
+pub mod layout_abort;
 mod math;
-pub(crate) mod layout_abort;
 mod resolve;
 pub(crate) mod sys;
 
+/// Abort the current Taffy layout computation (see [`layout_abort::abort_now`]).
+pub use layout_abort::abort_now as abort_layout_now;
 pub use math::MaybeMath;
 #[cfg(feature = "std")]
 pub(crate) use layout_abort::{with_layout_abort, LayoutAbort};
