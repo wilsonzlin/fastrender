@@ -902,6 +902,17 @@ fn foreign_object_css_limit_bytes() -> usize {
   })
 }
 
+fn box_debug_info_enabled() -> bool {
+  static ENABLED: OnceLock<bool> = OnceLock::new();
+
+  *ENABLED.get_or_init(|| {
+    if runtime::runtime_toggles().truthy("FASTR_BOX_DEBUG_INFO") {
+      return true;
+    }
+    cfg!(debug_assertions) || cfg!(test)
+  })
+}
+
 fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent {
   const MAX_EMBEDDED_SVG_CSS_BYTES: usize = 64 * 1024;
 
@@ -1638,6 +1649,9 @@ fn generate_boxes_for_styled(
 
 fn attach_debug_info(mut box_node: BoxNode, styled: &StyledNode) -> BoxNode {
   box_node.styled_node_id = Some(styled.node_id);
+  if !box_debug_info_enabled() {
+    return box_node;
+  }
   if let Some(tag) = styled.node.tag_name() {
     // Extract colspan/rowspan for table cells and span for columns/colgroups
     let colspan = styled
