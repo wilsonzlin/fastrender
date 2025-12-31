@@ -898,6 +898,23 @@ fn display_item_value(item: &DisplayItem) -> Value {
         Value::String(format!("{:?}", it.filter_quality)),
       ),
     ]),
+    DisplayItem::ImagePattern(it) => map_from_pairs(vec![
+      ("type", Value::String("ImagePattern".into())),
+      ("dest_rect", rect_value(it.dest_rect, None)),
+      (
+        "tile_size",
+        map_from_pairs(vec![
+          ("width", Value::from(it.tile_size.width)),
+          ("height", Value::from(it.tile_size.height)),
+        ]),
+      ),
+      ("origin", point_value(it.origin)),
+      ("repeat", Value::String(format!("{:?}", it.repeat))),
+      (
+        "filter_quality",
+        Value::String(format!("{:?}", it.filter_quality)),
+      ),
+    ]),
     DisplayItem::BoxShadow(it) => map_from_pairs(vec![
       ("type", Value::String("BoxShadow".into())),
       ("rect", rect_value(it.rect, None)),

@@ -770,6 +770,22 @@ fn snapshot_display_item(item_id: usize, item: &DisplayItem) -> DisplayItemSnaps
         }
       })),
     ),
+    DisplayItem::ImagePattern(pattern) => (
+      "image_pattern".to_string(),
+      Some(serde_json::json!({
+        "dest_rect": snapshot_rect(pattern.dest_rect),
+        "tile_size": { "width": pattern.tile_size.width, "height": pattern.tile_size.height },
+        "origin": { "x": pattern.origin.x, "y": pattern.origin.y },
+        "repeat": format!("{:?}", pattern.repeat),
+        "filter_quality": format!("{:?}", pattern.filter_quality),
+        "image": {
+          "width": pattern.image.width,
+          "height": pattern.image.height,
+          "css_width": pattern.image.css_width,
+          "css_height": pattern.image.css_height,
+        }
+      })),
+    ),
     DisplayItem::BoxShadow(shadow) => (
       "box_shadow".to_string(),
       Some(serde_json::json!({

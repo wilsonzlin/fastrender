@@ -296,6 +296,8 @@ pub use paint::display_list::GradientStop;
 pub use paint::display_list::ImageData;
 pub use paint::display_list::ImageFilterQuality;
 pub use paint::display_list::ImageItem;
+pub use paint::display_list::ImagePatternItem;
+pub use paint::display_list::ImagePatternRepeat;
 pub use paint::display_list::LinearGradientItem;
 pub use paint::display_list::OpacityItem;
 pub use paint::display_list::RadialGradientItem;

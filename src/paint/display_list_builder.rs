@@ -68,6 +68,8 @@ use crate::paint::display_list::GradientStop;
 use crate::paint::display_list::ImageData;
 use crate::paint::display_list::ImageFilterQuality;
 use crate::paint::display_list::ImageItem;
+use crate::paint::display_list::ImagePatternItem;
+use crate::paint::display_list::ImagePatternRepeat;
 use crate::paint::display_list::LinearGradientItem;
 use crate::paint::display_list::ListMarkerItem;
 use crate::paint::display_list::MaskReferenceRects;
@@ -4228,62 +4230,92 @@ impl DisplayListBuilder {
                 self.viewport,
               );
 
-              let positions_x = Self::tile_positions(
-                layer.repeat.x,
-                origin_rect.x(),
-                origin_rect.width(),
-                tile_w,
-                offset_x,
-                clip_rect.min_x(),
-                clip_rect.max_x(),
-              );
-              let positions_y = Self::tile_positions(
-                layer.repeat.y,
-                origin_rect.y(),
-                origin_rect.height(),
-                tile_h,
-                offset_y,
-                clip_rect.min_y(),
-                clip_rect.max_y(),
-              );
-
-              let max_x = clip_rect.max_x();
-              let max_y = clip_rect.max_y();
               let quality = Self::image_filter_quality(Some(style));
+              let repeat_both_axes = matches!(
+                layer.repeat,
+                crate::style::types::BackgroundRepeat {
+                  x: BackgroundRepeatKeyword::Repeat | BackgroundRepeatKeyword::Round,
+                  y: BackgroundRepeatKeyword::Repeat | BackgroundRepeatKeyword::Round,
+                }
+              );
 
-              for ty in positions_y.iter().copied() {
-                for tx in positions_x.iter().copied() {
-                  if tx >= max_x || ty >= max_y {
-                    continue;
+              // Fast path: for the common `repeat`/`round` in both axes case, emit a single pattern
+              // fill instead of one item per tile.
+              if repeat_both_axes {
+                let visible_clip = match self.viewport_rect() {
+                  Some(viewport) => clip_rect.intersection(viewport),
+                  None => Some(clip_rect),
+                };
+
+                if let Some(dest_rect) = visible_clip {
+                  if dest_rect.width() > 0.0 && dest_rect.height() > 0.0 {
+                    self.list.push(DisplayItem::ImagePattern(ImagePatternItem {
+                      dest_rect,
+                      image: image.clone(),
+                      tile_size: Size::new(tile_w, tile_h),
+                      origin: Point::new(origin_rect.x() + offset_x, origin_rect.y() + offset_y),
+                      repeat: ImagePatternRepeat::Repeat,
+                      filter_quality: quality,
+                    }));
                   }
+                }
+              } else {
+                let positions_x = Self::tile_positions(
+                  layer.repeat.x,
+                  origin_rect.x(),
+                  origin_rect.width(),
+                  tile_w,
+                  offset_x,
+                  clip_rect.min_x(),
+                  clip_rect.max_x(),
+                );
+                let positions_y = Self::tile_positions(
+                  layer.repeat.y,
+                  origin_rect.y(),
+                  origin_rect.height(),
+                  tile_h,
+                  offset_y,
+                  clip_rect.min_y(),
+                  clip_rect.max_y(),
+                );
 
-                  let tile_rect = Rect::from_xywh(tx, ty, tile_w, tile_h);
-                  let Some(intersection) = tile_rect.intersection(clip_rect) else {
-                    continue;
-                  };
-                  if intersection.width() <= 0.0 || intersection.height() <= 0.0 {
-                    continue;
+                let max_x = clip_rect.max_x();
+                let max_y = clip_rect.max_y();
+
+                for ty in positions_y.iter().copied() {
+                  for tx in positions_x.iter().copied() {
+                    if tx >= max_x || ty >= max_y {
+                      continue;
+                    }
+
+                    let tile_rect = Rect::from_xywh(tx, ty, tile_w, tile_h);
+                    let Some(intersection) = tile_rect.intersection(clip_rect) else {
+                      continue;
+                    };
+                    if intersection.width() <= 0.0 || intersection.height() <= 0.0 {
+                      continue;
+                    }
+
+                    let scale_x = image.width as f32 / tile_w;
+                    let scale_y = image.height as f32 / tile_h;
+                    if !scale_x.is_finite() || !scale_y.is_finite() {
+                      continue;
+                    }
+
+                    let src_rect = Rect::from_xywh(
+                      (intersection.x() - tile_rect.x()) * scale_x,
+                      (intersection.y() - tile_rect.y()) * scale_y,
+                      intersection.width() * scale_x,
+                      intersection.height() * scale_y,
+                    );
+
+                    self.list.push(DisplayItem::Image(ImageItem {
+                      dest_rect: intersection,
+                      image: image.clone(),
+                      filter_quality: quality,
+                      src_rect: Some(src_rect),
+                    }));
                   }
-
-                  let scale_x = image.width as f32 / tile_w;
-                  let scale_y = image.height as f32 / tile_h;
-                  if !scale_x.is_finite() || !scale_y.is_finite() {
-                    continue;
-                  }
-
-                  let src_rect = Rect::from_xywh(
-                    (intersection.x() - tile_rect.x()) * scale_x,
-                    (intersection.y() - tile_rect.y()) * scale_y,
-                    intersection.width() * scale_x,
-                    intersection.height() * scale_y,
-                  );
-
-                  self.list.push(DisplayItem::Image(ImageItem {
-                    dest_rect: intersection,
-                    image: image.clone(),
-                    filter_quality: quality,
-                    src_rect: Some(src_rect),
-                  }));
                 }
               }
             }
@@ -7029,16 +7061,17 @@ mod tests {
     );
 
     let list = DisplayListBuilder::new().build(&fragment);
-    let image = list
+    let image_data = list
       .items()
       .iter()
       .find_map(|item| match item {
-        DisplayItem::Image(img) => Some(img),
+        DisplayItem::Image(img) => Some(&img.image),
+        DisplayItem::ImagePattern(pattern) => Some(&pattern.image),
         _ => None,
       })
       .expect("background image should emit an image item");
 
-    assert_eq!(&image.image.pixels[..4], &[0, 255, 0, 255]);
+    assert_eq!(&image_data.pixels[..4], &[0, 255, 0, 255]);
   }
 
   #[test]

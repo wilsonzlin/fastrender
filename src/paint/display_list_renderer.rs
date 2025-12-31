@@ -35,6 +35,8 @@ use crate::paint::display_list::GlyphInstance;
 use crate::paint::display_list::ImageData;
 use crate::paint::display_list::ImageFilterQuality;
 use crate::paint::display_list::ImageItem;
+use crate::paint::display_list::ImagePatternItem;
+use crate::paint::display_list::ImagePatternRepeat;
 use crate::paint::display_list::LinearGradientItem;
 use crate::paint::display_list::ListMarkerItem;
 #[cfg(test)]
@@ -4447,6 +4449,7 @@ impl DisplayListRenderer {
         self.render_text(&scaled)?;
       }
       DisplayItem::Image(item) => self.render_image(item)?,
+      DisplayItem::ImagePattern(item) => self.render_image_pattern(item)?,
       DisplayItem::BoxShadow(item) => self.render_box_shadow(item)?,
       DisplayItem::ListMarker(item) => {
         let scaled = self.scale_list_marker_item(item);
@@ -5650,6 +5653,72 @@ impl DisplayListRenderer {
       transform,
       clip_mask.as_ref(),
     );
+
+    Ok(())
+  }
+
+  fn render_image_pattern(&mut self, item: &ImagePatternItem) -> Result<()> {
+    let opacity = self.canvas.opacity().clamp(0.0, 1.0);
+    if opacity <= 0.0 {
+      return Ok(());
+    }
+
+    let dest_rect = self.ds_rect(item.dest_rect);
+    if self.canvas.apply_clip(dest_rect).is_none() {
+      return Ok(());
+    }
+    if dest_rect.width() <= 0.0 || dest_rect.height() <= 0.0 {
+      return Ok(());
+    }
+
+    let Some(pixmap) = self.image_data_to_pixmap(&item.image) else {
+      return Ok(());
+    };
+    let (img_w, img_h) = (pixmap.width() as f32, pixmap.height() as f32);
+    if img_w <= 0.0 || img_h <= 0.0 {
+      return Ok(());
+    }
+
+    let tile_w = self.ds_len(item.tile_size.width);
+    let tile_h = self.ds_len(item.tile_size.height);
+    if tile_w <= 0.0 || tile_h <= 0.0 {
+      return Ok(());
+    }
+
+    let origin = self.ds_point(item.origin);
+    let scale_x = tile_w / img_w;
+    let scale_y = tile_h / img_h;
+    if !scale_x.is_finite() || !scale_y.is_finite() {
+      return Ok(());
+    }
+
+    let spread = match item.repeat {
+      ImagePatternRepeat::Repeat => SpreadMode::Repeat,
+    };
+
+    let pixmap_ref = pixmap.as_ref();
+    let mut paint = tiny_skia::Paint::default();
+    paint.shader = Pattern::new(
+      pixmap_ref.as_ref(),
+      spread,
+      item.filter_quality.into(),
+      opacity,
+      Transform::from_row(scale_x, 0.0, 0.0, scale_y, origin.x, origin.y),
+    );
+    paint.anti_alias = false;
+    paint.blend_mode = self.canvas.blend_mode();
+
+    let Some(skia_rect) =
+      tiny_skia::Rect::from_xywh(dest_rect.x(), dest_rect.y(), dest_rect.width(), dest_rect.height())
+    else {
+      return Ok(());
+    };
+    let transform = self.canvas.transform();
+    let clip_mask = self.canvas.clip_mask().cloned();
+    self
+      .canvas
+      .pixmap_mut()
+      .fill_rect(skia_rect, &paint, transform, clip_mask.as_ref());
 
     Ok(())
   }

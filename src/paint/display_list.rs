@@ -100,6 +100,9 @@ pub enum DisplayItem {
   /// Draw an image
   Image(ImageItem),
 
+  /// Draw a repeating image pattern (background-repeat: repeat)
+  ImagePattern(ImagePatternItem),
+
   /// Draw a box shadow
   BoxShadow(BoxShadowItem),
 
@@ -168,6 +171,7 @@ impl DisplayItem {
       DisplayItem::Outline(item) => Some(item.outer_rect()),
       DisplayItem::Text(item) => Some(text_bounds(item)),
       DisplayItem::Image(item) => Some(item.dest_rect),
+      DisplayItem::ImagePattern(item) => Some(item.dest_rect),
       DisplayItem::BoxShadow(item) => {
         if item.inset {
           Some(item.rect)
@@ -948,6 +952,40 @@ impl From<ImageFilterQuality> for FilterQuality {
       ImageFilterQuality::Linear => FilterQuality::Bilinear,
     }
   }
+}
+
+/// Repeat mode for [`ImagePatternItem`].
+///
+/// This is intentionally narrow for now: the display-list renderer only needs
+/// the common "repeat in both axes" background case to avoid emitting one item
+/// per tile. If/when we need `repeat-x` / `repeat-y` / `space` semantics, this
+/// can be extended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImagePatternRepeat {
+  Repeat,
+}
+
+/// Draw a repeating image pattern (single fill call).
+#[derive(Debug, Clone)]
+pub struct ImagePatternItem {
+  /// Destination rectangle (already clipped to the visible region).
+  pub dest_rect: Rect,
+
+  /// Image data (full source image).
+  pub image: Arc<ImageData>,
+
+  /// Tile size in CSS px after background-size/repeat-round resolution.
+  pub tile_size: Size,
+
+  /// Phase/origin in CSS px; this maps the image tile's top-left corner to
+  /// `origin` before repetition.
+  pub origin: Point,
+
+  /// Pattern repeat mode.
+  pub repeat: ImagePatternRepeat,
+
+  /// Sampling quality to apply when scaling.
+  pub filter_quality: ImageFilterQuality,
 }
 
 /// Image data for rendering
