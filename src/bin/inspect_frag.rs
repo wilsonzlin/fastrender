@@ -173,7 +173,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   let media_ctx =
     media_prefs.media_context_with_overrides((viewport_w, viewport_h), args.dpr, MediaType::Screen);
   let mut media_query_cache = MediaQueryCache::default();
-  let style_set = renderer.collect_document_style_set(&dom, &media_ctx, &mut media_query_cache)?;
+  let style_set =
+    renderer.collect_document_style_set(&dom, &media_ctx, &mut media_query_cache, None)?;
   let styled = apply_style_set_with_media_target_and_imports_cached_with_deadline(
     &dom,
     &style_set,

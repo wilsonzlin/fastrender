@@ -193,6 +193,7 @@ use std::hash::{Hash, Hasher};
 use std::io;
 use std::mem;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 #[cfg(test)]
 use url::Url;
@@ -4875,6 +4876,7 @@ impl FastRender {
     dom: &DomNode,
     media_ctx: &MediaContext,
     media_query_cache: &mut MediaQueryCache,
+    stats: Option<&mut RenderStatsRecorder>,
   ) -> Result<StyleSet> {
     let fetch_link_css =
       runtime::runtime_toggles().truthy_with_default("FASTR_FETCH_LINK_CSS", true);
@@ -4893,6 +4895,7 @@ impl FastRender {
     let alternate_stylesheets_enabled = self
       .runtime_toggles
       .truthy_with_default("FASTR_FETCH_ALTERNATE_STYLESHEETS", true);
+    let stylesheet_fetch_counter = stats.as_deref().map(|_| Arc::new(AtomicUsize::new(0)));
 
     enum StylesheetTask {
       Inline { css: String },
@@ -4908,6 +4911,7 @@ impl FastRender {
         media_ctx: &MediaContext,
         diagnostics: &Option<Arc<Mutex<RenderDiagnostics>>>,
         deadline: &Option<RenderDeadline>,
+        stylesheet_fetch_counter: &Option<Arc<AtomicUsize>>,
       ) -> Result<(Option<StyleSheet>, MediaQueryCache)> {
         // Parallel work runs on rayon threads; propagate any active deadline to keep cancellation
         // effective inside stylesheet parsing/import resolution and resource fetch timeouts.
@@ -4921,6 +4925,7 @@ impl FastRender {
               document_base_url.clone(),
               Arc::clone(fetcher),
               resource_context.clone(),
+              stylesheet_fetch_counter.clone(),
             );
             let resolved = sheet.resolve_imports_with_cache(
               &loader,
@@ -4931,6 +4936,9 @@ impl FastRender {
             Ok((Some(resolved), local_media_cache))
           }
           StylesheetTask::External { url } => {
+            if let Some(counter) = stylesheet_fetch_counter.as_ref() {
+              counter.fetch_add(1, Ordering::Relaxed);
+            }
             let resource = match fetcher.fetch(&url) {
               Ok(resource) => resource,
               Err(err) => {
@@ -4966,6 +4974,7 @@ impl FastRender {
               Some(sheet_base.clone()),
               Arc::clone(fetcher),
               resource_context.clone(),
+              stylesheet_fetch_counter.clone(),
             );
             let resolved = sheet.resolve_imports_with_cache(
               &loader,
@@ -5054,6 +5063,7 @@ impl FastRender {
                 media_ctx,
                 &diagnostics,
                 &deadline,
+                &stylesheet_fetch_counter,
               )
             })
             .collect()
@@ -5068,6 +5078,7 @@ impl FastRender {
                 media_ctx,
                 &diagnostics,
                 &deadline,
+                &stylesheet_fetch_counter,
               )
             })
             .collect()
@@ -5093,6 +5104,18 @@ impl FastRender {
       shadows.insert(host, collect_from_sources(&sources, media_query_cache)?);
     }
 
+    if let (Some(recorder), Some(counter)) = (stats, stylesheet_fetch_counter.as_ref()) {
+      let count = counter.load(Ordering::Relaxed);
+      if count > 0 {
+        *recorder
+          .stats
+          .resources
+          .fetch_counts
+          .entry(ResourceKind::Stylesheet)
+          .or_default() += count;
+      }
+    }
+
     Ok(StyleSet { document, shadows })
   }
 
@@ -5101,6 +5124,7 @@ impl FastRender {
     dom: &DomNode,
     media_ctx: &MediaContext,
     media_query_cache: &mut MediaQueryCache,
+    stats: Option<&mut RenderStatsRecorder>,
   ) -> Result<StyleSheet> {
     let fetch_link_css =
       runtime::runtime_toggles().truthy_with_default("FASTR_FETCH_LINK_CSS", true);
@@ -5117,10 +5141,12 @@ impl FastRender {
     let alternate_stylesheets_enabled = self
       .runtime_toggles
       .truthy_with_default("FASTR_FETCH_ALTERNATE_STYLESHEETS", true);
+    let stylesheet_fetch_counter = stats.as_deref().map(|_| Arc::new(AtomicUsize::new(0)));
     let inline_loader = CssImportFetcher::new(
       self.base_url.clone(),
       Arc::clone(&fetcher),
       self.resource_context.clone(),
+      stylesheet_fetch_counter.clone(),
     );
 
     for scoped in sources {
@@ -5186,6 +5212,9 @@ impl FastRender {
             }
           }
 
+          if let Some(counter) = stylesheet_fetch_counter.as_ref() {
+            counter.fetch_add(1, Ordering::Relaxed);
+          }
           match fetcher.fetch(&stylesheet_url) {
             Ok(resource) => {
               if let Some(ctx) = resource_context {
@@ -5209,6 +5238,7 @@ impl FastRender {
                 Some(stylesheet_url.clone()),
                 Arc::clone(&fetcher),
                 resource_context.cloned(),
+                stylesheet_fetch_counter.clone(),
               );
               let resolved = sheet.resolve_imports_with_cache(
                 &loader,
@@ -5229,6 +5259,18 @@ impl FastRender {
             }
           }
         }
+      }
+    }
+
+    if let (Some(recorder), Some(counter)) = (stats, stylesheet_fetch_counter.as_ref()) {
+      let count = counter.load(Ordering::Relaxed);
+      if count > 0 {
+        *recorder
+          .stats
+          .resources
+          .fetch_counts
+          .entry(ResourceKind::Stylesheet)
+          .or_default() += count;
       }
     }
 
@@ -5334,7 +5376,7 @@ impl FastRender {
     let mut media_query_cache = MediaQueryCache::default();
     record_stage(StageHeartbeat::CssInline);
     let style_set =
-      self.collect_document_style_set(&dom_with_state, &media_ctx, &mut media_query_cache)?;
+      self.collect_document_style_set(&dom_with_state, &media_ctx, &mut media_query_cache, None)?;
     // Style and accessibility tree construction are deeply recursive. Run them on a larger-stack
     // helper thread to avoid stack overflows on debug builds and on documents with deep nesting.
     let result = std::thread::scope(|scope| {
@@ -5605,7 +5647,12 @@ impl FastRender {
     record_stage(StageHeartbeat::CssParse);
     let style_set = {
       let _span = trace.span("css_parse", "style");
-      self.collect_document_style_set(&dom_with_state, &media_ctx, &mut media_query_cache)?
+      self.collect_document_style_set(
+        &dom_with_state,
+        &media_ctx,
+        &mut media_query_cache,
+        stats.as_deref_mut(),
+      )?
     };
     let mut stylesheet = style_set.document.clone();
     for sheet in style_set.shadows.values() {
@@ -7714,6 +7761,7 @@ struct CssImportFetcher {
   base_url: Option<String>,
   fetcher: Arc<dyn ResourceFetcher>,
   resource_context: Option<ResourceContext>,
+  stylesheet_fetch_counter: Option<Arc<AtomicUsize>>,
 }
 
 impl CssImportFetcher {
@@ -7721,11 +7769,13 @@ impl CssImportFetcher {
     base_url: Option<String>,
     fetcher: Arc<dyn ResourceFetcher>,
     resource_context: Option<ResourceContext>,
+    stylesheet_fetch_counter: Option<Arc<AtomicUsize>>,
   ) -> Self {
     Self {
       base_url,
       fetcher,
       resource_context,
+      stylesheet_fetch_counter,
     }
   }
 
@@ -7754,6 +7804,9 @@ impl CssImportLoader for CssImportFetcher {
     }
 
     // Use the fetcher to get the bytes
+    if let Some(counter) = self.stylesheet_fetch_counter.as_ref() {
+      counter.fetch_add(1, Ordering::Relaxed);
+    }
     let resource = match self.fetcher.fetch(&resolved) {
       Ok(res) => res,
       Err(err) => {
@@ -11363,6 +11416,54 @@ mod tests {
   }
 
   #[test]
+  fn diagnostics_records_stylesheet_fetches_and_css_parse_ms() {
+    let base_url = "https://example.com/page.html";
+    let fetcher = MapFetcher::default()
+      .with_entry(
+        "https://example.com/style.css",
+        "@import \"import.css\";\nbody { color: rgb(1, 2, 3); }",
+      )
+      .with_entry(
+        "https://example.com/import.css",
+        "body { background: rgb(4, 5, 6); }",
+      );
+
+    let mut renderer = FastRender::builder()
+      .base_url(base_url.to_string())
+      .fetcher(Arc::new(fetcher) as Arc<dyn ResourceFetcher>)
+      .build()
+      .unwrap();
+
+    let html = r#"
+      <link rel="stylesheet" href="style.css">
+      <div>hello</div>
+    "#;
+
+    let options = RenderOptions::new()
+      .with_viewport(200, 200)
+      .with_diagnostics_level(DiagnosticsLevel::Basic);
+    let result = renderer
+      .render_html_with_diagnostics(html, options)
+      .expect("render with diagnostics");
+    let stats = result.diagnostics.stats.expect("stats should be populated");
+
+    let stylesheet_fetches = stats
+      .resources
+      .fetch_counts
+      .get(&ResourceKind::Stylesheet)
+      .copied()
+      .unwrap_or(0);
+    assert_eq!(
+      stylesheet_fetches, 2,
+      "expected one external stylesheet + one @import load"
+    );
+    assert!(
+      stats.timings.css_parse_ms.is_some(),
+      "css_parse_ms should be populated"
+    );
+  }
+
+  #[test]
   fn preload_stylesheets_apply_from_dom_links() {
     let base_url = "https://example.com/page.html";
     let fetcher = MapFetcher::default().with_entry(
@@ -11568,7 +11669,7 @@ mod tests {
       .with_env_overrides();
     let mut media_query_cache = MediaQueryCache::default();
     let stylesheet = renderer
-      .collect_document_stylesheet(&dom, &media_ctx, &mut media_query_cache)
+      .collect_document_stylesheet(&dom, &media_ctx, &mut media_query_cache, None)
       .unwrap();
     let style_set = StyleSet::from_document(stylesheet.clone());
     let styled = apply_style_set_with_media_target_and_imports_cached(
