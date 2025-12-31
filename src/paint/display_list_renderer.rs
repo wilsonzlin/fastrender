@@ -1025,6 +1025,17 @@ thread_local! {
     RefCell::new(BackdropFilterScratch::default());
 }
 
+#[derive(Default)]
+struct SpreadScratch {
+  source: Vec<[u8; 4]>,
+  horizontal: Vec<[u8; 4]>,
+  transposed: Vec<[u8; 4]>,
+}
+
+thread_local! {
+  static SPREAD_SCRATCH: RefCell<SpreadScratch> = RefCell::new(SpreadScratch::default());
+}
+
 fn clip_mask_dirty_bounds(rect: Rect, width: u32, height: u32) -> Option<ClipMaskDirtyRect> {
   let x0 = rect.x().floor().max(0.0) as u32;
   let y0 = rect.y().floor().max(0.0) as u32;
@@ -1459,17 +1470,18 @@ fn apply_spread(pixmap: &mut Pixmap, spread: f32) {
   let radius = radius as usize;
   let len = width * height;
 
-  let source = pixmap.clone();
-  let source_channels: Vec<[u8; 4]> = source
-    .pixels()
-    .iter()
-    .map(|p| [p.red(), p.green(), p.blue(), p.alpha()])
-    .collect();
+  let mut scratch = SPREAD_SCRATCH.with(|cell| std::mem::take(&mut *cell.borrow_mut()));
+  scratch.source.resize(len, [0u8; 4]);
+  scratch.horizontal.resize(len, [0u8; 4]);
+  scratch.transposed.resize(len, [0u8; 4]);
 
-  let mut horizontal = vec![[0u8; 4]; len];
+  for (src, dst) in pixmap.pixels().iter().zip(scratch.source.iter_mut()) {
+    *dst = [src.red(), src.green(), src.blue(), src.alpha()];
+  }
+
   apply_spread_horizontal(
-    &source_channels,
-    &mut horizontal,
+    &scratch.source,
+    &mut scratch.horizontal,
     width,
     height,
     radius,
@@ -1477,14 +1489,24 @@ fn apply_spread(pixmap: &mut Pixmap, spread: f32) {
   );
 
   // Transpose so the vertical pass can reuse the horizontal sliding window.
-  let mut transposed = vec![[0u8; 4]; len];
-  transpose_channels(&horizontal, width, height, &mut transposed);
+  transpose_channels(&scratch.horizontal, width, height, &mut scratch.transposed);
 
   // Reuse the horizontal buffer to store the vertical pass output.
-  apply_spread_horizontal(&transposed, &mut horizontal, height, width, radius, expand);
+  apply_spread_horizontal(
+    &scratch.transposed,
+    &mut scratch.horizontal,
+    height,
+    width,
+    radius,
+    expand,
+  );
 
   let dst = pixmap.pixels_mut();
-  write_transposed_to_pixmap(&horizontal, width, height, dst);
+  write_transposed_to_pixmap(&scratch.horizontal, width, height, dst);
+
+  SPREAD_SCRATCH.with(|cell| {
+    *cell.borrow_mut() = scratch;
+  });
 }
 
 fn apply_spread_horizontal(
@@ -8300,6 +8322,32 @@ mod tests {
           );
         }
       }
+    }
+  }
+
+  #[test]
+  fn spread_matches_reference() {
+    let mut base = new_pixmap(7, 6).expect("pixmap");
+    for y in 0..base.height() {
+      for x in 0..base.width() {
+        let idx = ((y * base.width() + x) * 4) as usize;
+        base.data_mut()[idx] = (x.wrapping_mul(53).wrapping_add(y.wrapping_mul(19))) as u8;
+        base.data_mut()[idx + 1] = (x.wrapping_mul(7).wrapping_add(y.wrapping_mul(41))) as u8;
+        base.data_mut()[idx + 2] = (x.wrapping_mul(29).wrapping_add(y.wrapping_mul(3))) as u8;
+        base.data_mut()[idx + 3] = (x.wrapping_mul(11).wrapping_add(y.wrapping_mul(97))) as u8;
+      }
+    }
+
+    for spread in [2.0, -2.0] {
+      let mut optimized = base.clone();
+      let mut reference = base.clone();
+      apply_spread(&mut optimized, spread);
+      apply_spread_slow_reference(&mut reference, spread);
+      assert_eq!(
+        optimized.data(),
+        reference.data(),
+        "spread mismatch for {spread}"
+      );
     }
   }
 
