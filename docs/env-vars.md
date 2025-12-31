@@ -31,6 +31,19 @@ CLI flag equivalents: `--disk-cache-max-bytes`, `--disk-cache-max-age-secs`.
 - `FASTR_FETCH_ALTERNATE_STYLESHEETS=0|1` – allow skipping `<link rel="alternate stylesheet">` entries when disabled (defaults to on).
 - Painting always uses the display-list (builder → optimizer → renderer) pipeline; the legacy immediate painter has been removed.
 
+## HTTP fetch tuning
+
+These env vars tune the retry/backoff behavior for HTTP(S) requests made by the CLI binaries that construct their fetcher via [`common::render_pipeline::build_http_fetcher`](../src/bin/common/render_pipeline.rs).
+
+They map to [`fastrender::resource::HttpRetryPolicy`](../src/resource.rs) and are parsed once at process startup; invalid values are ignored.
+
+- `FASTR_HTTP_MAX_ATTEMPTS=<N>` – total attempts per HTTP request (initial request + retries). Set to `1` to disable retries (default `3`).
+- `FASTR_HTTP_BACKOFF_BASE_MS=<ms>` – base delay for exponential backoff (default `50`).
+- `FASTR_HTTP_BACKOFF_CAP_MS=<ms>` – maximum delay between retries (default `500`).
+- `FASTR_HTTP_RESPECT_RETRY_AFTER=0|false|no` – disable honoring `Retry-After` headers for retryable responses (enabled by default).
+
+This also applies to `fetch_pages` (migrated to `build_http_fetcher` in Task 13), so pageset fetch runs can be tuned without adding new flags.
+
 ## Resource limits
 
 - `FASTR_MAX_FOREIGN_OBJECT_CSS_BYTES=<N>` – cap the amount of document-level CSS injected into nested

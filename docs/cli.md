@@ -8,10 +8,16 @@ Compatibility toggles are **opt-in** across the render CLIs. Pass `--compat-prof
 
 These are optional wrappers for the most common loops:
 
-- Pageset loop (fetch → progress JSON, defaults to bundled fonts): `scripts/pageset.sh` (defaults to `--features disk_cache`; set `DISK_CACHE=0` or `NO_DISK_CACHE=1` or pass `--no-disk-cache` to opt out)
+- Pageset loop (`fetch_pages` → `pageset_progress`, defaults to bundled fonts): `scripts/pageset.sh` (defaults to `--features disk_cache`; set `DISK_CACHE=0` or `NO_DISK_CACHE=1` or pass `--no-disk-cache` to opt out)
 - Profile one page with samply (saves profile + prints summary): `scripts/profile_samply.sh <stem|--from-progress ...>` (builds `pageset_progress` with `disk_cache`)
 - Profile one page with perf: `scripts/profile_perf.sh <stem|--from-progress ...>` (builds `pageset_progress` with `disk_cache`)
 - Summarize a saved samply profile: `scripts/samply_summary.py <profile.json.gz>`
+
+The full pageset workflow is:
+
+`fetch_pages` (HTML) → `prefetch_assets` (CSS/@import/fonts into `fetches/assets/`) → `pageset_progress` (render + write `progress/pages/*.json`).
+
+`cargo xtask pageset` runs all three steps (the prefetch step is skipped when disk cache is disabled). `scripts/pageset.sh` is a lighter wrapper that currently runs `fetch_pages` → `pageset_progress`.
 
 Pageset wrappers enable the disk-backed subresource cache by default, persisting assets under
 `fetches/assets/` for repeatable/offline runs. Set `NO_DISK_CACHE=1` or `DISK_CACHE=0` (or pass
@@ -24,8 +30,8 @@ Pageset wrappers enable the disk-backed subresource cache by default, persisting
 - Help: `cargo xtask --help`
 - Tests: `cargo xtask test [core|style|fixtures|wpt|all]`
 - Refresh goldens: `cargo xtask update-goldens [all|fixtures|reference|wpt]` (sets the appropriate `UPDATE_*` env vars)
-- Pageset scoreboard (disk-backed cache on by default for reproducible runs; bundled fonts by default): `cargo xtask pageset [--pages example.com,news.ycombinator.com] [--shard 0/4] [--no-fetch] [--no-disk-cache] [-- <pageset_progress args...>]`
-  - Sharded example: `cargo xtask pageset --shard 0/4` (applies to both fetch + render; add `--no-fetch` to reuse cached pages)
+- Pageset scoreboard (`fetch_pages` → `prefetch_assets` → `pageset_progress` when disk cache is enabled; bundled fonts by default): `cargo xtask pageset [--pages example.com,news.ycombinator.com] [--shard 0/4] [--no-fetch] [--no-disk-cache] [-- <pageset_progress args...>]`
+  - Sharded example: `cargo xtask pageset --shard 0/4` (applies to fetch + prefetch (disk cache only) + render; add `--no-fetch` to reuse cached pages)
   - Forward compatibility gates when needed: `--compat-profile site` and/or `--dom-compat compat` are passed through to `pageset_progress run` but remain off by default.
 - Pageset diff: `cargo xtask pageset-diff [--baseline <dir>|--baseline-ref <git-ref>] [--no-run] [--fail-on-regression]` (extracts `progress/pages` from the chosen git ref by default and compares it to the freshly updated scoreboard)
 - Render one page: `cargo xtask render-page --url https://example.com --output out.png [--viewport 1200x800 --dpr 1.0 --full-page]`
@@ -43,6 +49,14 @@ Pageset wrappers enable the disk-backed subresource cache by default, persisting
 - Supports deterministic sharding with `--shard <index>/<total>` when splitting the page list across workers.
 - Cache filenames and `--pages` filters use the canonical stem from `normalize_page_name` (strip the scheme and a leading `www.`). Colliding stems fail fast unless you opt into `--allow-collisions`, which appends a deterministic suffix.
 - **Migration:** cached HTML written before canonical stems were enforced may be ignored. Delete stale `fetches/html/*.html` entries and re-run `fetch_pages`.
+
+## `prefetch_assets`
+
+- Purpose: warm the subresource cache (`fetches/assets/`) by prefetching linked stylesheets and their `@import` chains (plus referenced fonts) for the cached pages under `fetches/html/`. This makes subsequent pageset renders more repeatable and reduces time spent fetching during `pageset_progress`.
+- Entry: `src/bin/prefetch_assets.rs`
+- Run: `cargo run --release --bin prefetch_assets -- --help`
+- Most useful when built with `--features disk_cache` (so cache entries persist across processes).
+- Key flags: page selection (`--pages`), deterministic sharding (`--shard <index>/<total>`), parallelism (`--jobs`), and fetch timeout (`--timeout`). See `--help` for the full flag list.
 
 ## `render_pages`
 
