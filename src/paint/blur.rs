@@ -720,8 +720,8 @@ fn box_blur_row_horizontal(
   out_row: &mut [u8],
   width: usize,
   radius: usize,
-  window: i32,
   half: i32,
+  div: FastDivU32,
 ) {
   debug_assert!(radius > 0);
   debug_assert_eq!(src_row.len(), width * 4);
@@ -753,8 +753,6 @@ fn box_blur_row_horizontal(
   let edge_gl = src_row[edge_last_idx + 1] as i32;
   let edge_bl = src_row[edge_last_idx + 2] as i32;
   let edge_al = src_row[edge_last_idx + 3] as i32;
-
-  let div = FastDivU32::new(window as u32);
 
   let radius_plus_one = radius + 1;
   let inner_start = radius.min(width);
@@ -862,8 +860,8 @@ unsafe fn box_blur_column_vertical_to_ptr(
   height: usize,
   x_offset: usize,
   radius: usize,
-  window: i32,
   half: i32,
+  div: FastDivU32,
 ) {
   debug_assert!(radius > 0);
   debug_assert!(height > 0);
@@ -886,8 +884,6 @@ unsafe fn box_blur_column_vertical_to_ptr(
   let radius_plus_one = radius + 1;
   let inner_start = radius.min(height);
   let inner_end = height.saturating_sub(radius_plus_one);
-
-  let div = FastDivU32::new(window as u32);
 
   if inner_start >= inner_end {
     for y in 0..height {
@@ -1011,6 +1007,7 @@ fn box_blur_h(
   }
   let window = (radius * 2 + 1) as i32;
   let half = window / 2;
+  let div = FastDivU32::new(window as u32);
   let row_stride = width * 4;
   for y in 0..height {
     if let Some(err) = blur_deadline_exceeded(deadline_counter) {
@@ -1019,7 +1016,7 @@ fn box_blur_h(
     let row_start = y * row_stride;
     let src_row = &src[row_start..row_start + row_stride];
     let out_row = &mut dst[row_start..row_start + row_stride];
-    box_blur_row_horizontal(src_row, out_row, width, radius, window, half);
+    box_blur_row_horizontal(src_row, out_row, width, radius, half, div);
   }
   Ok(())
 }
@@ -1042,6 +1039,7 @@ fn box_blur_h_parallel(
   }
   let window = (radius * 2 + 1) as i32;
   let half = window / 2;
+  let div = FastDivU32::new(window as u32);
   let row_stride = width * 4;
 
   let blur_row = |y: usize, out_row: &mut [u8]| {
@@ -1059,7 +1057,7 @@ fn box_blur_h_parallel(
     }
 
     let src_row = &src[y * row_stride..(y + 1) * row_stride];
-    box_blur_row_horizontal(src_row, out_row, width, radius, window, half);
+    box_blur_row_horizontal(src_row, out_row, width, radius, half, div);
   };
 
   if deadline_enabled {
@@ -1101,6 +1099,7 @@ fn box_blur_v(
   }
   let window = (radius * 2 + 1) as i32;
   let half = window / 2;
+  let div = FastDivU32::new(window as u32);
   let row_stride = width * 4;
   for x in 0..width {
     if let Some(err) = blur_deadline_exceeded(deadline_counter) {
@@ -1115,8 +1114,8 @@ fn box_blur_v(
         height,
         x_offset,
         radius,
-        window,
         half,
+        div,
       );
     }
   }
@@ -1142,6 +1141,7 @@ fn box_blur_v_parallel(
   const COLUMN_BLOCK: usize = 32;
   let window = (radius * 2 + 1) as i32;
   let half = window / 2;
+  let div = FastDivU32::new(window as u32);
   let blocks = (width + COLUMN_BLOCK - 1) / COLUMN_BLOCK;
   let dst_base = dst.as_mut_ptr() as usize;
   let row_stride = width * 4;
@@ -1168,7 +1168,7 @@ fn box_blur_v_parallel(
       let x_offset = x * 4;
       unsafe {
         box_blur_column_vertical_to_ptr(
-          src, dst_ptr, row_stride, height, x_offset, radius, window, half,
+          src, dst_ptr, row_stride, height, x_offset, radius, half, div,
         );
       }
     }
