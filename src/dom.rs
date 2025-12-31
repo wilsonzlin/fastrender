@@ -48,6 +48,11 @@ pub const MATHML_NAMESPACE: &str = "http://www.w3.org/1998/Math/MathML";
 const RELATIVE_SELECTOR_DEADLINE_STRIDE: usize = 64;
 const NTH_DEADLINE_STRIDE: usize = 64;
 
+#[cfg(test)]
+thread_local! {
+  static NTH_OF_CACHE_POPULATIONS: AtomicU64 = const { AtomicU64::new(0) };
+}
+
 /// Controls whether non-standard DOM compatibility mutations are applied while parsing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DomCompatibilityMode {
@@ -1735,49 +1740,82 @@ impl<'a> ElementRef<'a> {
       .map(|position| (position.type_index, position.type_len))
   }
 
-  fn position_in_selector_list(
+  fn populate_nth_index_cache_for_selectors(
     &self,
     selectors: &selectors::parser::SelectorList<FastRenderSelectorImpl>,
+    is_from_end: bool,
     context: &mut selectors::matching::MatchingContext<FastRenderSelectorImpl>,
-  ) -> Option<(usize, usize)> {
+  ) -> Option<i32> {
     let parent = self.parent?;
-    context.nest(|context| {
-      let mut index = None;
-      let mut len = 0usize;
+    let (entries, self_index) = context.nest(|context| {
+      let mut entries: Vec<(OpaqueElement, i32)> = Vec::with_capacity(parent.children.len());
+      let mut self_index: Option<i32> = None;
+      let mut matching_index = 0i32;
       let mut deadline_counter = 0usize;
 
-      for child in parent.children.iter() {
-        if let Err(err) = check_active_periodic(
-          &mut deadline_counter,
-          NTH_DEADLINE_STRIDE,
-          RenderStage::Cascade,
-        ) {
-          context.extra_data.record_deadline_error(err);
-          return None;
+      let mut process_child =
+        |child: &DomNode,
+         context: &mut selectors::matching::MatchingContext<FastRenderSelectorImpl>|
+         -> Option<()> {
+          if let Err(err) = check_active_periodic(
+            &mut deadline_counter,
+            NTH_DEADLINE_STRIDE,
+            RenderStage::Cascade,
+          ) {
+            context.extra_data.record_deadline_error(err);
+            return None;
+          }
+          if !child.is_element() {
+            return Some(());
+          }
+          let child_ref =
+            ElementRef::with_ancestors(child, self.all_ancestors).with_slot_map(self.slot_map);
+          let matches = selectors
+            .slice()
+            .iter()
+            .any(|selector| matches_selector(selector, 0, None, &child_ref, context));
+          if context.extra_data.deadline_error.is_some() {
+            return None;
+          }
+
+          let idx = if matches {
+            matching_index += 1;
+            matching_index
+          } else {
+            0
+          };
+          entries.push((OpaqueElement::new(child), idx));
+
+          if ptr::eq(child, self.node) {
+            self_index = Some(idx);
+          }
+          Some(())
+        };
+
+      if is_from_end {
+        for child in parent.children.iter().rev() {
+          process_child(child, context)?;
         }
-        if !child.is_element() {
-          continue;
+      } else {
+        for child in parent.children.iter() {
+          process_child(child, context)?;
         }
-        let child_ref =
-          ElementRef::with_ancestors(child, self.all_ancestors).with_slot_map(self.slot_map);
-        let matches = selectors
-          .slice()
-          .iter()
-          .any(|selector| matches_selector(selector, 0, None, &child_ref, context));
-        if context.extra_data.deadline_error.is_some() {
-          return None;
-        }
-        if !matches {
-          continue;
-        }
-        if ptr::eq(child, self.node) {
-          index = Some(len);
-        }
-        len += 1;
       }
 
-      index.map(|idx| (idx, len))
-    })
+      Some((entries, self_index))
+    })?;
+
+    let cache = context.nth_index_cache(false, is_from_end, selectors.slice());
+    for (el, idx) in entries {
+      cache.insert(el, idx);
+    }
+
+    #[cfg(test)]
+    NTH_OF_CACHE_POPULATIONS.with(|counter| {
+      counter.fetch_add(1, Ordering::Relaxed);
+    });
+
+    Some(self_index.unwrap_or(0))
   }
 
   /// Return the language of this element, inherited from ancestors if absent.
@@ -2939,23 +2977,40 @@ impl<'a> Element for ElementRef<'a> {
         .map(|(_, len)| len == 1)
         .unwrap_or(false),
       PseudoClass::NthChild(a, b, of) => match of {
-        Some(selectors) => self
-          .position_in_selector_list(selectors, _context)
-          .map(|(index, _)| matches_an_plus_b(*a, *b, (index + 1) as i32))
-          .unwrap_or(false),
+        Some(selectors) => {
+          let cached = {
+            let cache = _context.nth_index_cache(false, false, selectors.slice());
+            cache.lookup(self.opaque())
+          };
+          let index = match cached {
+            Some(index) => index,
+            None => match self.populate_nth_index_cache_for_selectors(selectors, false, _context) {
+              Some(index) => index,
+              None => return false,
+            },
+          };
+          index > 0 && matches_an_plus_b(*a, *b, index)
+        }
         None => self
           .element_index(_context)
           .map(|index| matches_an_plus_b(*a, *b, (index + 1) as i32))
           .unwrap_or(false),
       },
       PseudoClass::NthLastChild(a, b, of) => match of {
-        Some(selectors) => self
-          .position_in_selector_list(selectors, _context)
-          .map(|(index, len)| {
-            let n = (len - index) as i32;
-            matches_an_plus_b(*a, *b, n)
-          })
-          .unwrap_or(false),
+        Some(selectors) => {
+          let cached = {
+            let cache = _context.nth_index_cache(false, true, selectors.slice());
+            cache.lookup(self.opaque())
+          };
+          let index = match cached {
+            Some(index) => index,
+            None => match self.populate_nth_index_cache_for_selectors(selectors, true, _context) {
+              Some(index) => index,
+              None => return false,
+            },
+          };
+          index > 0 && matches_an_plus_b(*a, *b, index)
+        }
         None => self
           .element_index_and_len(_context)
           .map(|(index, len)| {
@@ -3815,6 +3870,116 @@ mod tests {
     context.extra_data = ShadowMatchData::for_document().with_sibling_cache(&sibling_cache);
     let element_ref = ElementRef::with_ancestors(node, ancestors);
     element_ref.match_non_ts_pseudo_class(pseudo, &mut context)
+  }
+
+  fn parse_selector_list(selector_list: &str) -> SelectorList<FastRenderSelectorImpl> {
+    let mut input = ParserInput::new(selector_list);
+    let mut parser = Parser::new(&mut input);
+    SelectorList::parse(&PseudoClassParser, &mut parser, ParseRelative::No)
+      .expect("selector list should parse")
+  }
+
+  fn nth_of_cache_populations() -> u64 {
+    super::NTH_OF_CACHE_POPULATIONS.with(|counter| counter.load(Ordering::Relaxed))
+  }
+
+  fn reset_nth_of_cache_populations() {
+    super::NTH_OF_CACHE_POPULATIONS.with(|counter| counter.store(0, Ordering::Relaxed))
+  }
+
+  #[test]
+  fn nth_child_of_selector_list_uses_nth_index_cache() {
+    reset_nth_of_cache_populations();
+    let foo_selectors = parse_selector_list(".foo");
+
+    let mut children = Vec::new();
+    for idx in 0..128usize {
+      let class = if idx == 0 || idx == 64 || idx == 127 {
+        vec![("class".to_string(), "foo".to_string())]
+      } else {
+        vec![]
+      };
+      children.push(DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "span".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: class,
+        },
+        children: vec![],
+      });
+    }
+    let parent = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![],
+      },
+      children,
+    };
+
+    let ancestors: Vec<&DomNode> = vec![&parent];
+    let non_matching = &parent.children[1];
+    let second_foo = &parent.children[64];
+    let last_foo = &parent.children[127];
+
+    let nth_child = PseudoClass::NthChild(0, 2, Some(foo_selectors.clone()));
+
+    let mut caches = SelectorCaches::default();
+    let cache_epoch = next_selector_cache_epoch();
+    caches.set_epoch(cache_epoch);
+    let sibling_cache = SiblingListCache::new(cache_epoch);
+    let mut context = MatchingContext::new(
+      MatchingMode::Normal,
+      None,
+      &mut caches,
+      QuirksMode::NoQuirks,
+      NeedsSelectorFlags::No,
+      MatchingForInvalidation::No,
+    );
+    context.extra_data = ShadowMatchData::for_document().with_sibling_cache(&sibling_cache);
+
+    let non_matching_ref = ElementRef::with_ancestors(non_matching, &ancestors);
+    assert!(
+      !non_matching_ref.match_non_ts_pseudo_class(&nth_child, &mut context),
+      "non-matching siblings should never match :nth-child(of ...)"
+    );
+    assert!(
+      !non_matching_ref.match_non_ts_pseudo_class(&nth_child, &mut context),
+      "non-matching siblings should not trigger repeated rescans"
+    );
+
+    let second_ref = ElementRef::with_ancestors(second_foo, &ancestors);
+    assert!(
+      second_ref.match_non_ts_pseudo_class(&nth_child, &mut context),
+      "should match the 2nd .foo element"
+    );
+
+    assert_eq!(
+      nth_of_cache_populations(),
+      1,
+      "nth-child(of ...) should populate nth-index cache once per parent+selector list"
+    );
+
+    let nth_last_child = PseudoClass::NthLastChild(0, 1, Some(foo_selectors));
+    let last_ref = ElementRef::with_ancestors(last_foo, &ancestors);
+    assert!(
+      last_ref.match_non_ts_pseudo_class(&nth_last_child, &mut context),
+      "should match the last .foo element via :nth-last-child(1 of .foo)"
+    );
+    assert!(
+      !non_matching_ref.match_non_ts_pseudo_class(&nth_last_child, &mut context),
+      "non-matching siblings should never match :nth-last-child(of ...)"
+    );
+    assert!(
+      !non_matching_ref.match_non_ts_pseudo_class(&nth_last_child, &mut context),
+      "non-matching siblings should not trigger repeated rescans for :nth-last-child(of ...)"
+    );
+
+    assert_eq!(
+      nth_of_cache_populations(),
+      2,
+      "nth-last-child(of ...) should maintain an independent cached index map"
+    );
   }
 
   #[test]
