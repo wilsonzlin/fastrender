@@ -90,6 +90,10 @@ harness = false
 name = "disk_cache_contention"
 harness = false
 
+[[bench]]
+name = "cascade_bench"
+harness = false
+
 [[bin]]
 name = "bench_compare"
 path = "tools/bench_compare.rs"
