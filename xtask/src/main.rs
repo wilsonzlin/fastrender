@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 use fastrender::style::media::MediaType;
@@ -1840,6 +1842,10 @@ mod tests {
               "block_intrinsic": null,
               "flex_intrinsic": null,
               "inline_intrinsic": null,
+              "layout_parallel_work_items": null,
+              "layout_parallel_worker_threads": null,
+              "layout_parallel_enabled": null,
+              "layout_parallel_auto_activated": null,
               "table_cell_intrinsic_measurements": null,
               "table_cell_layouts": null,
               "layout_cache_lookups": null,

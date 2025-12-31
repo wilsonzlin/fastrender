@@ -1680,6 +1680,10 @@ pub struct LayoutDiagnostics {
   pub block_intrinsic: Option<usize>,
   pub flex_intrinsic: Option<usize>,
   pub inline_intrinsic: Option<usize>,
+  pub layout_parallel_work_items: Option<usize>,
+  pub layout_parallel_worker_threads: Option<usize>,
+  pub layout_parallel_enabled: Option<bool>,
+  pub layout_parallel_auto_activated: Option<bool>,
   pub table_cell_intrinsic_measurements: Option<usize>,
   pub table_cell_layouts: Option<usize>,
   pub layout_cache_lookups: Option<usize>,
@@ -6060,8 +6064,16 @@ impl FastRender {
     };
     let store_parallelism_diag =
       !matches!(resolved_parallelism.mode, LayoutParallelismMode::Disabled);
-    let capture_parallel_counters =
-      store_parallelism_diag && toggles.truthy("FASTR_LAYOUT_PARALLEL_DEBUG");
+    if let Some(rec) = stats.as_deref_mut() {
+      rec.stats.layout.layout_parallel_enabled = Some(store_parallelism_diag);
+      rec.stats.layout.layout_parallel_auto_activated = match resolved_parallelism.mode {
+        LayoutParallelismMode::Auto => Some(resolved_parallelism.is_active()),
+        _ => None,
+      };
+    }
+    let stats_capture_parallel_counters = stats.as_deref().is_some_and(|rec| rec.enabled());
+    let capture_parallel_counters = store_parallelism_diag
+      && (stats_capture_parallel_counters || toggles.truthy("FASTR_LAYOUT_PARALLEL_DEBUG"));
     struct ParallelCounterGuard(bool);
     impl Drop for ParallelCounterGuard {
       fn drop(&mut self) {
@@ -6531,6 +6543,25 @@ impl FastRender {
         .into_iter()
         .map(|rule| (rule.name.clone(), rule))
         .collect();
+    }
+
+    if let Some(rec) = stats.as_deref_mut() {
+      if store_parallelism_diag && capture_parallel_counters {
+        let counters = layout_parallel_debug_counters();
+        rec.stats.layout.layout_parallel_work_items = Some(
+          counters
+            .work_items
+            .saturating_sub(parallelism_counters_start.work_items),
+        );
+        rec.stats.layout.layout_parallel_worker_threads = Some(
+          counters
+            .worker_threads
+            .saturating_sub(parallelism_counters_start.worker_threads),
+        );
+      } else {
+        rec.stats.layout.layout_parallel_work_items = Some(0);
+        rec.stats.layout.layout_parallel_worker_threads = Some(0);
+      }
     }
 
     Ok(LayoutArtifacts {
