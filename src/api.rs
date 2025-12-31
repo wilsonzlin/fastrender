@@ -4938,6 +4938,9 @@ impl FastRender {
     base_hint: &str,
     options: RenderOptions,
   ) -> Result<debug::snapshot::PipelineSnapshot> {
+    let deadline = RenderDeadline::new(options.timeout, options.cancel_callback.clone());
+    let _deadline_guard = DeadlineGuard::install(Some(&deadline));
+
     let (width, height) = options
       .viewport
       .unwrap_or((self.default_width, self.default_height));
@@ -5762,13 +5765,14 @@ impl FastRender {
     media_type: MediaType,
   ) -> Result<LayoutIntermediates> {
     let trace = TraceHandle::disabled();
+    let deadline = crate::render_control::active_deadline();
     let artifacts = self.layout_document_for_media_with_artifacts(
       dom,
       width,
       height,
       media_type,
       LayoutDocumentOptions::default(),
-      None,
+      deadline.as_ref(),
       &trace,
       self.layout_parallelism,
       None,
@@ -10113,6 +10117,28 @@ mod tests {
       .with_viewport(10, 10)
       .with_timeout(Some(std::time::Duration::from_millis(0)));
     let result = renderer.accessibility_tree_with_options(&dom, options);
+
+    match result {
+      Err(Error::Render(RenderError::Timeout { stage, .. })) => {
+        assert_eq!(stage, RenderStage::DomParse);
+      }
+      Ok(_) => panic!("expected dom_parse timeout, got Ok"),
+      Err(err) => panic!("expected dom_parse timeout, got {err}"),
+    }
+  }
+
+  #[test]
+  fn snapshot_pipeline_timeout_is_cooperative() {
+    let mut renderer = FastRender::with_config(FastRenderConfig {
+      font_config: FontConfig::bundled_only(),
+      ..FastRenderConfig::default()
+    })
+    .unwrap();
+
+    let options = RenderOptions::new()
+      .with_viewport(10, 10)
+      .with_timeout(Some(std::time::Duration::from_millis(0)));
+    let result = renderer.snapshot_pipeline("<div>Hello</div>", "https://example.com/", options);
 
     match result {
       Err(Error::Render(RenderError::Timeout { stage, .. })) => {
