@@ -592,6 +592,86 @@ impl FontContext {
     self.web_fonts.read().map(|w| w.is_empty()).unwrap_or(true)
   }
 
+  /// Returns a deterministic "last resort" font for shaping.
+  ///
+  /// The shaping pipeline only needs *some* font handle to proceed; when nothing
+  /// matches a run's requested families/scripts we fall back to `.notdef` glyphs.
+  /// In web-font-only contexts the system/bundled [`FontDatabase`] may be empty,
+  /// so we also consider active @font-face entries.
+  pub(crate) fn last_resort_loaded_font(&self) -> Option<LoadedFont> {
+    // Prefer a non-emoji system/bundled font with basic Latin coverage.
+    let db = self.database();
+    let mut first_any = None;
+    let mut first_non_emoji = None;
+
+    for face in db.faces() {
+      first_any.get_or_insert(face.id);
+      let is_emoji = face
+        .families
+        .iter()
+        .any(|(name, _)| FontDatabase::family_name_is_emoji_font(name));
+      if is_emoji {
+        continue;
+      }
+      if db.has_glyph_cached(face.id, 'A') && db.has_glyph_cached(face.id, 'a') {
+        return db.load_font(face.id);
+      }
+      if first_non_emoji.is_none() {
+        first_non_emoji = Some(face.id);
+      }
+    }
+
+    if let Some(id) = first_non_emoji.or(first_any) {
+      if let Some(font) = db.load_font(id) {
+        return Some(font);
+      }
+    }
+
+    // When the database is empty, fall back to the first *active* web font face
+    // so shaping can proceed with `.notdef` glyphs instead of hard failing.
+    let active_generation = self.active_web_font_generation.load(Ordering::Relaxed);
+    let faces = self.web_fonts.read().ok()?;
+
+    fn choose<'a>(current: Option<&'a WebFontFace>, candidate: &'a WebFontFace) -> Option<&'a WebFontFace> {
+      match current {
+        None => Some(candidate),
+        Some(best) => {
+          if (candidate.order, candidate.index) < (best.order, best.index) {
+            Some(candidate)
+          } else {
+            Some(best)
+          }
+        }
+      }
+    }
+
+    let mut best_any: Option<&WebFontFace> = None;
+    let mut best_non_emoji: Option<&WebFontFace> = None;
+    let mut best_basic_latin: Option<&WebFontFace> = None;
+
+    for face in faces.iter().filter(|face| face.generation <= active_generation) {
+      best_any = choose(best_any, face);
+      let is_emoji = FontDatabase::family_name_is_emoji_font(&face.family);
+      if is_emoji {
+        continue;
+      }
+      best_non_emoji = choose(best_non_emoji, face);
+      let has_basic_latin = face_cache::get_ttf_face_with_data(&face.data, face.index)
+        .is_some_and(|cached| cached.has_glyph('A') && cached.has_glyph('a'));
+      if has_basic_latin {
+        best_basic_latin = choose(best_basic_latin, face);
+      }
+    }
+
+    let face = best_basic_latin.or(best_non_emoji).or(best_any)?;
+    Some(face.to_loaded_font(
+      &face.family,
+      face.weight.0,
+      face.effective_style(FontStyle::Normal),
+      percent_to_stretch_variant(face.stretch.0),
+    ))
+  }
+
   /// Gets a font matching the given CSS properties
   ///
   /// This is the main method for resolving fonts from CSS.

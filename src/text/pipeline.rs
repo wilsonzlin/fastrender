@@ -1562,30 +1562,7 @@ fn font_supports_all_chars(font: &LoadedFont, chars: &[char]) -> bool {
 }
 
 fn last_resort_font(font_context: &FontContext) -> Option<LoadedFont> {
-  let db = font_context.database();
-  let mut first_any = None;
-  let mut first_non_emoji = None;
-
-  for face in db.faces() {
-    first_any.get_or_insert(face.id);
-    let is_emoji = face
-      .families
-      .iter()
-      .any(|(name, _)| FontDatabase::family_name_is_emoji_font(name));
-    if is_emoji {
-      continue;
-    }
-    if db.has_glyph_cached(face.id, 'A') && db.has_glyph_cached(face.id, 'a') {
-      return db.load_font(face.id);
-    }
-    if first_non_emoji.is_none() {
-      first_non_emoji = Some(face.id);
-    }
-  }
-
-  first_non_emoji
-    .or(first_any)
-    .and_then(|id| db.load_font(id))
+  font_context.last_resort_loaded_font()
 }
 
 /// Assigns fonts to itemized runs.
@@ -4254,6 +4231,7 @@ mod tests {
   use std::fs;
   use std::sync::atomic::Ordering;
   use std::sync::Arc;
+  use std::time::Duration;
   use unicode_bidi::Level;
   use url::Url;
 
@@ -5541,6 +5519,74 @@ mod tests {
     )
     .expect("fallback font");
     assert_ne!(lower.family, "RangeFace");
+  }
+
+  #[test]
+  fn web_font_only_context_shapes_missing_glyphs_with_notdef() {
+    let font_data = fs::read("tests/fixtures/fonts/NotoSans-subset.ttf")
+      .expect("read NotoSans subset fixture");
+    let parsed = ttf_parser::Face::parse(&font_data, 0).expect("parse NotoSans subset fixture");
+    assert!(parsed.glyph_index('A').is_some());
+    assert!(parsed.glyph_index('a').is_some());
+
+    let missing = 'א';
+    assert!(
+      parsed.glyph_index(missing).is_none(),
+      "fixture should not cover the missing codepoint"
+    );
+
+    let Some((_dir, font_url)) = temp_font_url(&font_data) else {
+      panic!("expected temp file URL for font fixture");
+    };
+
+    let ctx = FontContext::with_database(Arc::new(FontDatabase::empty()));
+    assert_eq!(ctx.database().font_count(), 0);
+
+    let face = FontFaceRule {
+      family: Some("WebOnlySans".to_string()),
+      sources: vec![FontFaceSource::url(font_url.to_string())],
+      ..Default::default()
+    };
+    ctx
+      .load_web_fonts(&[face], None, None)
+      .expect("load web fonts");
+    assert!(
+      ctx.wait_for_pending_web_fonts(Duration::from_secs(1)),
+      "web font load should settle"
+    );
+    assert!(
+      !ctx.is_effectively_empty(),
+      "web fonts should make the font context non-empty"
+    );
+
+    let pipeline = ShapingPipeline::new();
+    let mut style = ComputedStyle::default();
+    style.font_family = vec!["WebOnlySans".to_string()];
+    style.font_size = 16.0;
+
+    let ok_runs = pipeline
+      .shape("Aa", &style, &ctx)
+      .expect("shape basic Latin with web font");
+    assert!(!ok_runs.is_empty());
+    assert!(ok_runs.iter().all(|run| run.font.family == "WebOnlySans"));
+    assert!(
+      ok_runs
+        .iter()
+        .all(|run| run.glyphs.iter().all(|glyph| glyph.glyph_id != 0)),
+      "covered ASCII should not produce `.notdef`"
+    );
+
+    let missing_runs = pipeline
+      .shape(&missing.to_string(), &style, &ctx)
+      .expect("shape missing glyph with web font last-resort");
+    assert!(!missing_runs.is_empty());
+    assert!(missing_runs.iter().all(|run| run.font.family == "WebOnlySans"));
+    assert!(
+      missing_runs
+        .iter()
+        .any(|run| run.glyphs.iter().any(|glyph| glyph.glyph_id == 0)),
+      "missing codepoint should be shaped into `.notdef` glyphs, not a hard error"
+    );
   }
 
   #[test]

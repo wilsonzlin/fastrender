@@ -194,9 +194,23 @@ fn last_resort_font_fallback_shapes_missing_scripts() {
   let font_ctx = FontContext::with_config(FontConfig::bundled_only());
   let style = ComputedStyle::default();
 
-  let text = "বাংলা العربية 汉字";
+  // Pick a codepoint that none of the bundled fonts cover so the shaping pipeline
+  // is forced into last-resort font selection and emits `.notdef` glyphs.
+  let db = font_ctx.database();
+  let missing = [
+    '\u{10380}', // UGARITIC LETTER ALPA
+    '\u{103A0}', // OLD PERSIAN SIGN A
+    '\u{10400}', // DESERET CAPITAL LETTER LONG I
+    '\u{16A0}',  // RUNIC LETTER FEHU FEOH FE F
+    '\u{10FFFF}', // highest Unicode scalar value (noncharacter)
+  ]
+  .into_iter()
+  .find(|ch| !db.faces().any(|face| db.has_glyph_cached(face.id, *ch)))
+  .expect("expected at least one missing codepoint");
+
+  let text = format!("hello {missing}");
   let runs = pipeline
-    .shape(text, &style, &font_ctx)
+    .shape(&text, &style, &font_ctx)
     .expect("shaping should succeed with last-resort fallback");
   assert!(
     !runs.is_empty(),
