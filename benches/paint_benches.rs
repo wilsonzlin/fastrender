@@ -1155,6 +1155,18 @@ fn bench_filter_blur(c: &mut Criterion) {
         })
       },
     );
+
+    group.bench_with_input(
+      BenchmarkId::new("gaussian_blur_anisotropic_sigma12_2", size),
+      &base,
+      |b, base| {
+        b.iter(|| {
+          let mut pixmap = base.clone();
+          apply_gaussian_blur_anisotropic(&mut pixmap, 12.0, 2.0).unwrap();
+          black_box(pixmap);
+        })
+      },
+    );
   }
 
   group.finish();

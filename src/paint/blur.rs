@@ -1059,6 +1059,363 @@ fn gaussian_blur_box_approx_anisotropic_with_parallelism(
   }
 }
 
+fn blur_anisotropic_box_kernel_mixed_with_parallelism(
+  pixmap: &mut Pixmap,
+  sigma_x: f32,
+  sigma_y: f32,
+  use_box_x: bool,
+  use_box_y: bool,
+  parallelism: BlurParallelism,
+) -> Result<bool, RenderError> {
+  debug_assert!(
+    use_box_x ^ use_box_y,
+    "expected mixed anisotropic blur to box-blur exactly one axis"
+  );
+  let width = pixmap.width() as usize;
+  let height = pixmap.height() as usize;
+  if width == 0 || height == 0 {
+    return Ok(false);
+  }
+
+  let use_parallel = match parallelism {
+    BlurParallelism::Serial => false,
+    BlurParallelism::Auto => blur_should_parallelize(width, height),
+  };
+
+  let len = blur_buffer_len(width, height, "mixed anisotropic blur")?;
+  let mut error: Option<RenderError> = None;
+  let mut skipped = false;
+  BLUR_SCRATCH.with(|scratch| {
+    let mut scratch = scratch.borrow_mut();
+    let (a, b) = match scratch.split(len, "mixed anisotropic blur") {
+      Ok(parts) => parts,
+      Err(err) => {
+        error = Some(err);
+        return;
+      }
+    };
+    a[..len].copy_from_slice(pixmap.data());
+
+    let row_stride = width * 4;
+    let mut cur: &mut [u8] = &mut a[..len];
+    let mut tmp: &mut [u8] = &mut b[..len];
+
+    let mut sizes_x = [1usize; 3];
+    let mut sizes_y = [1usize; 3];
+    if use_box_x {
+      sizes_x = box_sizes_for_gauss(sigma_x, 3);
+    }
+    if use_box_y {
+      sizes_y = box_sizes_for_gauss(sigma_y, 3);
+    }
+
+    let (kernel_x, radius_x, scale_x) = if use_box_x {
+      (Vec::new(), 0usize, 0i32)
+    } else {
+      gaussian_kernel_fixed(sigma_x)
+    };
+    let (kernel_y, radius_y, scale_y) = if use_box_y {
+      (Vec::new(), 0usize, 0i32)
+    } else {
+      gaussian_kernel_fixed(sigma_y)
+    };
+
+    if !use_parallel {
+      let mut deadline_counter = 0usize;
+
+      if use_box_x {
+        for size in sizes_x {
+          let radius = size.saturating_sub(1) / 2;
+          if radius == 0 {
+            continue;
+          }
+          if box_blur_h(
+            &cur[..],
+            tmp,
+            width,
+            height,
+            radius,
+            &mut deadline_counter,
+          ) {
+            skipped = true;
+            return;
+          }
+          std::mem::swap(&mut cur, &mut tmp);
+        }
+      } else if radius_x != 0 && !kernel_x.is_empty() && scale_x > 0 {
+        for y in 0..height {
+          if blur_deadline_exceeded(&mut deadline_counter) {
+            skipped = true;
+            return;
+          }
+          let row_start = y * row_stride;
+          let src_row = &cur[row_start..row_start + row_stride];
+          let out_row = &mut tmp[row_start..row_start + row_stride];
+          for x in 0..width {
+            let mut acc_r: i32 = 0;
+            let mut acc_g: i32 = 0;
+            let mut acc_b: i32 = 0;
+            let mut acc_a: i32 = 0;
+            for (i, &w) in kernel_x.iter().enumerate() {
+              let offset = i as isize - radius_x as isize;
+              let cx = (x as isize + offset).clamp(0, width as isize - 1) as usize;
+              let idx = cx * 4;
+              acc_r += w * src_row[idx] as i32;
+              acc_g += w * src_row[idx + 1] as i32;
+              acc_b += w * src_row[idx + 2] as i32;
+              acc_a += w * src_row[idx + 3] as i32;
+            }
+            let out_idx = x * 4;
+            let a = ((acc_a + scale_x / 2) / scale_x).clamp(0, 255);
+            let r = (acc_r + scale_x / 2) / scale_x;
+            let g = (acc_g + scale_x / 2) / scale_x;
+            let b = (acc_b + scale_x / 2) / scale_x;
+            out_row[out_idx] = clamp_channel_to_alpha(r, a);
+            out_row[out_idx + 1] = clamp_channel_to_alpha(g, a);
+            out_row[out_idx + 2] = clamp_channel_to_alpha(b, a);
+            out_row[out_idx + 3] = a as u8;
+          }
+        }
+        std::mem::swap(&mut cur, &mut tmp);
+      }
+
+      if use_box_y {
+        for size in sizes_y {
+          let radius = size.saturating_sub(1) / 2;
+          if radius == 0 {
+            continue;
+          }
+          if box_blur_v(
+            &cur[..],
+            tmp,
+            width,
+            height,
+            radius,
+            &mut deadline_counter,
+          ) {
+            skipped = true;
+            return;
+          }
+          std::mem::swap(&mut cur, &mut tmp);
+        }
+      } else if radius_y != 0 && !kernel_y.is_empty() && scale_y > 0 {
+        for y in 0..height {
+          if blur_deadline_exceeded(&mut deadline_counter) {
+            skipped = true;
+            return;
+          }
+          let out_row = &mut tmp[y * row_stride..(y + 1) * row_stride];
+          for x in 0..width {
+            let mut acc_r: i32 = 0;
+            let mut acc_g: i32 = 0;
+            let mut acc_b: i32 = 0;
+            let mut acc_a: i32 = 0;
+            for (i, &w) in kernel_y.iter().enumerate() {
+              let offset = i as isize - radius_y as isize;
+              let cy = (y as isize + offset).clamp(0, height as isize - 1) as usize;
+              let idx = cy * row_stride + x * 4;
+              acc_r += w * cur[idx] as i32;
+              acc_g += w * cur[idx + 1] as i32;
+              acc_b += w * cur[idx + 2] as i32;
+              acc_a += w * cur[idx + 3] as i32;
+            }
+            let out_idx = x * 4;
+            let a = ((acc_a + scale_y / 2) / scale_y).clamp(0, 255);
+            let r = (acc_r + scale_y / 2) / scale_y;
+            let g = (acc_g + scale_y / 2) / scale_y;
+            let b = (acc_b + scale_y / 2) / scale_y;
+            out_row[out_idx] = clamp_channel_to_alpha(r, a);
+            out_row[out_idx + 1] = clamp_channel_to_alpha(g, a);
+            out_row[out_idx + 2] = clamp_channel_to_alpha(b, a);
+            out_row[out_idx + 3] = a as u8;
+          }
+        }
+        std::mem::swap(&mut cur, &mut tmp);
+      }
+
+      pixmap.data_mut().copy_from_slice(cur);
+      return;
+    }
+
+    let deadline = active_deadline();
+    let deadline_enabled = deadline.as_ref().map_or(false, |d| d.is_enabled());
+    let cancelled = AtomicBool::new(false);
+    let deadline_counter = AtomicUsize::new(0);
+
+    if use_box_x {
+      for size in sizes_x {
+        let radius = size.saturating_sub(1) / 2;
+        if radius == 0 {
+          continue;
+        }
+        if box_blur_h_parallel(
+          &cur[..],
+          tmp,
+          width,
+          height,
+          radius,
+          &deadline,
+          deadline_enabled,
+          &cancelled,
+          &deadline_counter,
+        ) {
+          skipped = true;
+          return;
+        }
+        std::mem::swap(&mut cur, &mut tmp);
+      }
+    } else if radius_x != 0 && !kernel_x.is_empty() && scale_x > 0 {
+      let src = &cur[..];
+      let convolve_row_x = |y: usize, out_row: &mut [u8]| {
+        if cancelled.load(Ordering::Relaxed) {
+          return;
+        }
+        if blur_deadline_exceeded_parallel(deadline_enabled, &deadline_counter) {
+          cancelled.store(true, Ordering::Relaxed);
+          return;
+        }
+        let src_row = &src[y * row_stride..(y + 1) * row_stride];
+        for x in 0..width {
+          let mut acc_r: i32 = 0;
+          let mut acc_g: i32 = 0;
+          let mut acc_b: i32 = 0;
+          let mut acc_a: i32 = 0;
+          for (i, &w) in kernel_x.iter().enumerate() {
+            let offset = i as isize - radius_x as isize;
+            let cx = (x as isize + offset).clamp(0, width as isize - 1) as usize;
+            let idx = cx * 4;
+            acc_r += w * src_row[idx] as i32;
+            acc_g += w * src_row[idx + 1] as i32;
+            acc_b += w * src_row[idx + 2] as i32;
+            acc_a += w * src_row[idx + 3] as i32;
+          }
+          let out_idx = x * 4;
+          let a = ((acc_a + scale_x / 2) / scale_x).clamp(0, 255);
+          let r = (acc_r + scale_x / 2) / scale_x;
+          let g = (acc_g + scale_x / 2) / scale_x;
+          let b = (acc_b + scale_x / 2) / scale_x;
+          out_row[out_idx] = clamp_channel_to_alpha(r, a);
+          out_row[out_idx + 1] = clamp_channel_to_alpha(g, a);
+          out_row[out_idx + 2] = clamp_channel_to_alpha(b, a);
+          out_row[out_idx + 3] = a as u8;
+        }
+      };
+
+      if deadline_enabled {
+        tmp
+          .par_chunks_mut(row_stride)
+          .enumerate()
+          .for_each_init(
+            || DeadlineGuard::install(deadline.as_ref()),
+            |_, (y, out_row)| convolve_row_x(y, out_row),
+          );
+      } else {
+        tmp
+          .par_chunks_mut(row_stride)
+          .enumerate()
+          .for_each(|(y, out_row)| convolve_row_x(y, out_row));
+      }
+      if cancelled.load(Ordering::Relaxed) {
+        skipped = true;
+        return;
+      }
+      std::mem::swap(&mut cur, &mut tmp);
+    }
+
+    if use_box_y {
+      for size in sizes_y {
+        let radius = size.saturating_sub(1) / 2;
+        if radius == 0 {
+          continue;
+        }
+        if box_blur_v_parallel(
+          &cur[..],
+          tmp,
+          width,
+          height,
+          radius,
+          &deadline,
+          deadline_enabled,
+          &cancelled,
+          &deadline_counter,
+        ) {
+          skipped = true;
+          return;
+        }
+        std::mem::swap(&mut cur, &mut tmp);
+      }
+    } else if radius_y != 0 && !kernel_y.is_empty() && scale_y > 0 {
+      let src = &cur[..];
+      let convolve_row_y = |y: usize, out_row: &mut [u8]| {
+        if cancelled.load(Ordering::Relaxed) {
+          return;
+        }
+        if blur_deadline_exceeded_parallel(deadline_enabled, &deadline_counter) {
+          cancelled.store(true, Ordering::Relaxed);
+          return;
+        }
+        for x in 0..width {
+          let mut acc_r: i32 = 0;
+          let mut acc_g: i32 = 0;
+          let mut acc_b: i32 = 0;
+          let mut acc_a: i32 = 0;
+          for (i, &w) in kernel_y.iter().enumerate() {
+            let offset = i as isize - radius_y as isize;
+            let cy = (y as isize + offset).clamp(0, height as isize - 1) as usize;
+            let idx = cy * row_stride + x * 4;
+            acc_r += w * src[idx] as i32;
+            acc_g += w * src[idx + 1] as i32;
+            acc_b += w * src[idx + 2] as i32;
+            acc_a += w * src[idx + 3] as i32;
+          }
+          let out_idx = x * 4;
+          let a = ((acc_a + scale_y / 2) / scale_y).clamp(0, 255);
+          let r = (acc_r + scale_y / 2) / scale_y;
+          let g = (acc_g + scale_y / 2) / scale_y;
+          let b = (acc_b + scale_y / 2) / scale_y;
+          out_row[out_idx] = clamp_channel_to_alpha(r, a);
+          out_row[out_idx + 1] = clamp_channel_to_alpha(g, a);
+          out_row[out_idx + 2] = clamp_channel_to_alpha(b, a);
+          out_row[out_idx + 3] = a as u8;
+        }
+      };
+
+      if deadline_enabled {
+        tmp
+          .par_chunks_mut(row_stride)
+          .enumerate()
+          .for_each_init(
+            || DeadlineGuard::install(deadline.as_ref()),
+            |_, (y, out_row)| convolve_row_y(y, out_row),
+          );
+      } else {
+        tmp
+          .par_chunks_mut(row_stride)
+          .enumerate()
+          .for_each(|(y, out_row)| convolve_row_y(y, out_row));
+      }
+
+      if cancelled.load(Ordering::Relaxed) {
+        skipped = true;
+        return;
+      }
+      std::mem::swap(&mut cur, &mut tmp);
+    }
+
+    if cancelled.load(Ordering::Relaxed) {
+      skipped = true;
+      return;
+    }
+
+    pixmap.data_mut().copy_from_slice(cur);
+  });
+  if let Some(err) = error {
+    Err(err)
+  } else {
+    Ok(!skipped)
+  }
+}
+
 fn gaussian_blur_box_approx_with_parallelism(
   pixmap: &mut Pixmap,
   sigma: f32,
@@ -1232,8 +1589,23 @@ fn blur_anisotropic_body_with_parallelism(
   }
 
   let fast_enabled = runtime::runtime_toggles().truthy("FASTR_FAST_BLUR");
-  if !fast_enabled && sigma_x > FAST_GAUSS_THRESHOLD_SIGMA && sigma_y > FAST_GAUSS_THRESHOLD_SIGMA {
-    return gaussian_blur_box_approx_anisotropic_with_parallelism(pixmap, sigma_x, sigma_y, parallelism);
+  let use_box_x = !fast_enabled && sigma_x > FAST_GAUSS_THRESHOLD_SIGMA;
+  let use_box_y = !fast_enabled && sigma_y > FAST_GAUSS_THRESHOLD_SIGMA;
+  match (use_box_x, use_box_y) {
+    (true, true) => {
+      return gaussian_blur_box_approx_anisotropic_with_parallelism(pixmap, sigma_x, sigma_y, parallelism);
+    }
+    (true, false) | (false, true) => {
+      return blur_anisotropic_box_kernel_mixed_with_parallelism(
+        pixmap,
+        sigma_x,
+        sigma_y,
+        use_box_x,
+        use_box_y,
+        parallelism,
+      );
+    }
+    (false, false) => {}
   }
 
   let (kernel_x, radius_x, scale_x) = gaussian_kernel_fixed(sigma_x);
@@ -2213,6 +2585,19 @@ mod tests {
       serial.data(),
       parallel.data(),
       "anisotropic box blur output mismatch"
+    );
+
+    let mut serial = base.clone();
+    blur_anisotropic_body_with_parallelism(&mut serial, 12.0, 2.0, BlurParallelism::Serial).unwrap();
+    let mut parallel = base.clone();
+    pool.install(|| {
+      blur_anisotropic_body_with_parallelism(&mut parallel, 12.0, 2.0, BlurParallelism::Auto)
+        .unwrap();
+    });
+    assert_eq!(
+      serial.data(),
+      parallel.data(),
+      "mixed box/kernel anisotropic blur output mismatch"
     );
   }
 }
