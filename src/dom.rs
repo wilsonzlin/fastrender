@@ -689,6 +689,155 @@ pub fn collect_text_codepoints(node: &DomNode) -> Vec<u32> {
   codepoints
 }
 
+fn boolish(value: &str) -> bool {
+  matches!(
+    value.to_ascii_lowercase().as_str(),
+    "true" | "1" | "yes" | "on" | "open"
+  )
+}
+
+fn data_fastr_open_state(node: &DomNode) -> Option<(bool, bool)> {
+  let value = node.get_attribute_ref("data-fastr-open")?;
+  let lower = value.to_ascii_lowercase();
+  if lower == "false" {
+    return Some((false, false));
+  }
+  if lower == "modal" {
+    return Some((true, true));
+  }
+  if boolish(&lower) {
+    return Some((true, false));
+  }
+  None
+}
+
+fn dialog_state(node: &DomNode) -> Option<(bool, bool)> {
+  if !node
+    .tag_name()
+    .map(|t| t.eq_ignore_ascii_case("dialog"))
+    .unwrap_or(false)
+  {
+    return None;
+  }
+
+  let mut open = node.get_attribute_ref("open").is_some();
+  let mut modal = node
+    .get_attribute_ref("data-fastr-modal")
+    .map(boolish)
+    .unwrap_or(false);
+  if let Some((open_override, modal_override)) = data_fastr_open_state(node) {
+    open = open_override;
+    modal |= modal_override;
+  }
+
+  if !open {
+    return None;
+  }
+
+  Some((open, modal))
+}
+
+fn popover_open(node: &DomNode) -> bool {
+  if node.get_attribute_ref("popover").is_none() {
+    return false;
+  }
+  let mut open = node.get_attribute_ref("open").is_some();
+  if let Some((open_override, _)) = data_fastr_open_state(node) {
+    open = open_override;
+  }
+  open
+}
+
+/// Bench helper: determine whether the DOM contains an open modal `<dialog>`.
+#[doc(hidden)]
+pub fn modal_dialog_present(node: &DomNode) -> bool {
+  if let Some((_, modal)) = dialog_state(node) {
+    if modal {
+      return true;
+    }
+  }
+
+  node.children.iter().any(modal_dialog_present)
+}
+
+fn set_attr(attrs: &mut Vec<(String, String)>, name: &str, value: &str) {
+  if let Some((_, val)) = attrs.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case(name)) {
+    *val = value.to_string();
+  } else {
+    attrs.push((name.to_string(), value.to_string()));
+  }
+}
+
+fn remove_attr(attrs: &mut Vec<(String, String)>, name: &str) {
+  if let Some(idx) = attrs.iter().position(|(k, _)| k.eq_ignore_ascii_case(name)) {
+    attrs.remove(idx);
+  }
+}
+
+fn apply_top_layer_state_inner(node: &mut DomNode, modal_open: bool, inside_modal: bool) -> bool {
+  let mut within_modal = inside_modal;
+  let dialog_info = dialog_state(node);
+  let has_popover = node.get_attribute_ref("popover").is_some();
+  let popover_is_open = if has_popover {
+    popover_open(node)
+  } else {
+    false
+  };
+  let mut subtree_has_modal = within_modal;
+
+  if let DomNodeType::Element {
+    tag_name,
+    attributes,
+    ..
+  } = &mut node.node_type
+  {
+    let tag_lower = tag_name.to_ascii_lowercase();
+    let mut should_open = false;
+
+    if tag_lower == "dialog" {
+      if let Some((open, modal)) = dialog_info {
+        should_open = open;
+        if modal {
+          within_modal = true;
+          subtree_has_modal = true;
+        }
+      }
+    } else if has_popover {
+      should_open = popover_is_open;
+    }
+
+    if tag_lower == "dialog" || has_popover {
+      if should_open {
+        set_attr(attributes, "open", "");
+      } else {
+        remove_attr(attributes, "open");
+      }
+    }
+  }
+
+  let child_modal = within_modal;
+  for child in node.children.iter_mut() {
+    let child_contains_modal = apply_top_layer_state_inner(child, modal_open, child_modal);
+    subtree_has_modal |= child_contains_modal;
+  }
+
+  if modal_open {
+    if let DomNodeType::Element { attributes, .. } = &mut node.node_type {
+      if !subtree_has_modal {
+        set_attr(attributes, "data-fastr-inert", "true");
+      }
+    }
+  }
+
+  subtree_has_modal
+}
+
+/// Bench helper: apply dialog/popover open state and `data-fastr-inert` propagation.
+#[doc(hidden)]
+pub fn apply_top_layer_state(node: &mut DomNode, modal_open: bool) {
+  let _ = apply_top_layer_state_inner(node, modal_open, false);
+}
+
 pub fn parse_html(html: &str) -> Result<DomNode> {
   parse_html_with_options(html, DomParseOptions::default())
 }

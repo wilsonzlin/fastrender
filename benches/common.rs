@@ -1,5 +1,7 @@
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
+use criterion::Criterion;
 use fastrender::{
   css::parser::{
     extract_css_sources, parse_stylesheet, rel_list_contains_stylesheet, StylesheetSource,
@@ -214,4 +216,12 @@ pub fn render_pipeline(html: &str, viewport: (u32, u32), font_ctx: &FontContext)
 
 pub fn parse_stylesheet_text(css: &str) -> StyleSheet {
   parse_stylesheet(css).expect("parse stylesheet")
+}
+
+pub fn perf_criterion() -> Criterion {
+  Criterion::default()
+    .sample_size(15)
+    .warm_up_time(Duration::from_millis(500))
+    .measurement_time(Duration::from_secs(1))
+    .configure_from_args()
 }

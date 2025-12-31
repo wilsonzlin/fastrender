@@ -110,6 +110,10 @@ harness = false
 name = "fragment_clone"
 harness = false
 
+[[bench]]
+name = "dom_clone_bench"
+harness = false
+
 [profile.release]
 opt-level = 3
 lto = true
