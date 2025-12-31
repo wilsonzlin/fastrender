@@ -106,6 +106,23 @@ mod tests {
     assert!(families.contains(&NOTO_SANS_SYMBOLS_2));
     assert!(families.contains(&NOTO_SANS_SYMBOLS));
   }
+
+  #[test]
+  fn preferred_families_use_language_specific_cjk_faces() {
+    for (lang, expected) in [
+      ("ja", NOTO_SANS_JP),
+      ("ja-JP", NOTO_SANS_JP),
+      ("ko", NOTO_SANS_KR),
+      ("zh", NOTO_SANS_SC),
+      ("", NOTO_SANS_SC),
+    ] {
+      let families = preferred_families(Script::Han, lang);
+      assert_eq!(families[0], expected);
+      assert!(families.contains(&NOTO_SANS_SYMBOLS_2));
+      assert!(families.contains(&NOTO_SANS_SYMBOLS));
+      assert!(families.contains(&STIX_TWO_MATH));
+    }
+  }
 }
 
 fn cjk_fallback_families(language: &str) -> &'static [&'static str] {
