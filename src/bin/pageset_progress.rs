@@ -4624,14 +4624,15 @@ fn run(args: RunArgs) -> io::Result<()> {
         continue;
       }
       if let Some(path) = cached_paths.get(&stem) {
-        if filter_matches(&stem, pageset_by_cache.get(&stem).copied()) {
-          seen.insert(stem.clone());
-          items.push(work_item_from_cache(
-            &stem,
-            path.clone(),
-            pageset_by_cache.get(&stem).copied(),
-            &args,
-          ));
+        let entry =
+          resolve_pageset_entry_for_cache_stem(&stem, &pageset_by_cache, &pageset_by_stem);
+        let effective_cache_stem = entry
+          .map(|e| e.cache_stem.as_str())
+          .unwrap_or(stem.as_str());
+        if filter_matches(effective_cache_stem, entry)
+          && seen.insert(effective_cache_stem.to_string())
+        {
+          items.push(work_item_from_cache(effective_cache_stem, path.clone(), entry, &args));
         }
         continue;
       }
