@@ -32,6 +32,10 @@ use types::{
   CellOccupancyMatrix, GridItem, GridTrack, GridTrackKind, NamedLineResolver, TrackCounts,
 };
 
+// Subgrid overrides rely on thread-local storage to pass resolved track sizes from a parent grid
+// container to a subgrid child during the same layout run. This is only available when `std` is
+// enabled. In `no_std` builds we fall back to no-ops so that the crate continues to compile.
+#[cfg(feature = "std")]
 thread_local! {
     static SUBGRID_OVERRIDES: std::cell::RefCell<Map<NodeId, SubgridOverride>> =
         std::cell::RefCell::new(Map::new());
@@ -52,14 +56,24 @@ struct SubgridOverride {
   columns: Option<SubgridAxisOverride>,
 }
 
+#[cfg(feature = "std")]
 fn store_subgrid_override(node: NodeId, data: SubgridOverride) {
   SUBGRID_OVERRIDES.with(|map| {
     map.borrow_mut().insert(node, data);
   });
 }
 
+#[cfg(feature = "std")]
 fn take_subgrid_override(node: NodeId) -> Option<SubgridOverride> {
   SUBGRID_OVERRIDES.with(|map| map.borrow_mut().remove(&node))
+}
+
+#[cfg(not(feature = "std"))]
+fn store_subgrid_override(_node: NodeId, _data: SubgridOverride) {}
+
+#[cfg(not(feature = "std"))]
+fn take_subgrid_override(_node: NodeId) -> Option<SubgridOverride> {
+  None
 }
 
 fn apply_subgrid_override(style: &mut Style, data: &SubgridOverride) {
@@ -344,7 +358,7 @@ fn collect_subgrid_virtual_items<
       &line_resolver,
     );
 
-    #[cfg(debug_assertions)]
+    #[cfg(all(feature = "std", debug_assertions))]
     {
       eprintln!(
         "[subgrid-debug] node={:?} row_span={} col_span={} row_explicit={} col_explicit={} items={}",
@@ -411,7 +425,10 @@ fn record_subgrid_overrides<
   rows: &[GridTrack],
   columns: &[GridTrack],
 ) {
+  #[cfg(feature = "std")]
   let debug_subgrid = std::env::var("FASTR_DEBUG_SUBGRID").is_ok();
+  #[cfg(not(feature = "std"))]
+  let debug_subgrid = false;
   let parent_axes_swapped = parent_style.axes_swapped;
   let parent_row_names = if parent_axes_swapped {
     to_ident_line_names(&parent_style.grid_template_column_names)
@@ -524,12 +541,14 @@ fn record_subgrid_overrides<
 
     if rows_override.is_some() || cols_override.is_some() {
       if debug_subgrid {
+        #[cfg(feature = "std")]
         if let Some(override_data) = &rows_override {
           eprintln!(
             "[subgrid-override] node={:?} rows tracks={:?} names={:?} gap={}",
             item.node, override_data.track_sizes, override_data.line_names, override_data.gap
           );
         }
+        #[cfg(feature = "std")]
         if let Some(override_data) = &cols_override {
           eprintln!(
             "[subgrid-override] node={:?} cols tracks={:?} names={:?} gap={}",
@@ -548,7 +567,6 @@ fn record_subgrid_overrides<
   }
 }
 
-#[cfg(feature = "detailed_layout_info")]
 pub(crate) use types::{GridCoordinate, GridLine, OriginZeroLine};
 
 mod alignment;
