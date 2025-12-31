@@ -193,6 +193,7 @@ pub struct DisplayListBuilder {
   estimated_fragments: Option<usize>,
   scroll_state: ScrollState,
   max_iframe_depth: usize,
+  skip_stacking_context_children: bool,
   error: Option<RenderError>,
 }
 
@@ -726,6 +727,7 @@ impl DisplayListBuilder {
       estimated_fragments: None,
       scroll_state: ScrollState::default(),
       max_iframe_depth: DEFAULT_MAX_IFRAME_DEPTH,
+      skip_stacking_context_children: false,
       error: None,
     }
   }
@@ -762,6 +764,7 @@ impl DisplayListBuilder {
       estimated_fragments: None,
       scroll_state: ScrollState::default(),
       max_iframe_depth: DEFAULT_MAX_IFRAME_DEPTH,
+      skip_stacking_context_children: false,
       error: None,
     }
   }
@@ -909,6 +912,7 @@ impl DisplayListBuilder {
   }
 
   pub fn build_tree_with_stacking_checked(mut self, tree: &FragmentTree) -> Result<DisplayList> {
+    self.skip_stacking_context_children = true;
     if self.viewport.is_none() {
       let viewport = tree.viewport_size();
       self.viewport = Some((viewport.width, viewport.height));
@@ -942,6 +946,7 @@ impl DisplayListBuilder {
   }
 
   pub fn build_from_stacking_checked(mut self, stacking: &StackingContext) -> Result<DisplayList> {
+    self.skip_stacking_context_children = true;
     if self.viewport.is_none() {
       self.viewport = Some((stacking.bounds.width(), stacking.bounds.height()));
     }
@@ -972,6 +977,7 @@ impl DisplayListBuilder {
   }
 
   pub fn build_with_stacking_tree_checked(mut self, root: &FragmentNode) -> Result<DisplayList> {
+    self.skip_stacking_context_children = true;
     if self.viewport.is_none() {
       self.viewport = Some((root.bounds.width(), root.bounds.height()));
     }
@@ -1012,6 +1018,7 @@ impl DisplayListBuilder {
     root: &FragmentNode,
     offset: Point,
   ) -> Result<DisplayList> {
+    self.skip_stacking_context_children = true;
     if self.viewport.is_none() {
       self.viewport = Some((root.bounds.width(), root.bounds.height()));
     }
@@ -1046,6 +1053,7 @@ impl DisplayListBuilder {
     mut self,
     stackings: &[StackingContext],
   ) -> Result<DisplayList> {
+    self.skip_stacking_context_children = true;
     if self.viewport.is_none() {
       if let Some(first) = stackings.first() {
         self.viewport = Some((first.bounds.width(), first.bounds.height()));
@@ -1321,6 +1329,13 @@ impl DisplayListBuilder {
       for child in fragment.children.iter() {
         if self.deadline_reached_periodic(&mut counter, DEADLINE_STRIDE) {
           break;
+        }
+        if self.skip_stacking_context_children {
+          if let Some(child_style) = child.style.as_deref() {
+            if crate::paint::stacking::creates_stacking_context(child_style, style_opt, false) {
+              continue;
+            }
+          }
         }
         self.build_fragment_internal(child, child_offset, true, false, child_visibility);
       }
@@ -1626,7 +1641,7 @@ impl DisplayListBuilder {
     let expand_top = filter_outset.top.max(backdrop_outset.top);
     let expand_right = filter_outset.right.max(backdrop_outset.right);
     let expand_bottom = filter_outset.bottom.max(backdrop_outset.bottom);
-    let mut local_bounds = plane_rect;
+    let mut local_bounds = context_bounds;
     if expand_left > 0.0 || expand_top > 0.0 || expand_right > 0.0 || expand_bottom > 0.0 {
       local_bounds = Rect::from_xywh(
         local_bounds.min_x() - expand_left,
@@ -3296,6 +3311,7 @@ impl DisplayListBuilder {
       estimated_fragments: self.estimated_fragments,
       scroll_state: self.scroll_state.clone(),
       max_iframe_depth: self.max_iframe_depth,
+      skip_stacking_context_children: self.skip_stacking_context_children,
       error: self.error.clone(),
     }
   }

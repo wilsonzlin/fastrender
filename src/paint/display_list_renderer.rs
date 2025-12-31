@@ -567,21 +567,37 @@ fn apply_filters(
         apply_gaussian_blur_cached(pixmap, *radius * scale, *radius * scale, cache_ref, scale)?
       }
       ResolvedFilter::Brightness(amount) => {
-        apply_color_filter(pixmap, |c, a| (scale_color(c, *amount), a))
+        crate::paint::css_filter::apply_color_filter(pixmap, |c, a| {
+          (crate::paint::css_filter::scale_color(c, *amount), a)
+        })
       }
       ResolvedFilter::Contrast(amount) => {
-        apply_color_filter(pixmap, |c, a| (apply_contrast(c, *amount), a))
+        crate::paint::css_filter::apply_color_filter(pixmap, |c, a| {
+          (crate::paint::css_filter::apply_contrast(c, *amount), a)
+        })
       }
       ResolvedFilter::Grayscale(amount) => {
-        apply_color_filter(pixmap, |c, a| (grayscale(c, *amount), a))
+        crate::paint::css_filter::apply_color_filter(pixmap, |c, a| {
+          (crate::paint::css_filter::grayscale(c, *amount), a)
+        })
       }
-      ResolvedFilter::Sepia(amount) => apply_color_filter(pixmap, |c, a| (sepia(c, *amount), a)),
+      ResolvedFilter::Sepia(amount) => crate::paint::css_filter::apply_color_filter(pixmap, |c, a| {
+        (crate::paint::css_filter::sepia(c, *amount), a)
+      }),
       ResolvedFilter::Saturate(amount) => {
-        apply_color_filter(pixmap, |c, a| (saturate(c, *amount), a))
+        crate::paint::css_filter::apply_color_filter(pixmap, |c, a| {
+          (crate::paint::css_filter::saturate(c, *amount), a)
+        })
       }
-      ResolvedFilter::HueRotate(deg) => apply_color_filter(pixmap, |c, a| (hue_rotate(c, *deg), a)),
-      ResolvedFilter::Invert(amount) => apply_color_filter(pixmap, |c, a| (invert(c, *amount), a)),
-      ResolvedFilter::Opacity(amount) => apply_color_filter(pixmap, |c, a| (c, a * *amount)),
+      ResolvedFilter::HueRotate(deg) => crate::paint::css_filter::apply_color_filter(pixmap, |c, a| {
+        (crate::paint::css_filter::hue_rotate(c, *deg), a)
+      }),
+      ResolvedFilter::Invert(amount) => crate::paint::css_filter::apply_color_filter(pixmap, |c, a| {
+        (crate::paint::css_filter::invert(c, *amount), a)
+      }),
+      ResolvedFilter::Opacity(amount) => crate::paint::css_filter::apply_color_filter(pixmap, |c, a| {
+        (c, a * *amount)
+      }),
       ResolvedFilter::DropShadow {
         offset_x,
         offset_y,
@@ -1507,130 +1523,6 @@ fn apply_spread_slow_reference(pixmap: &mut Pixmap, spread: f32) {
         .unwrap_or(PremultipliedColorU8::TRANSPARENT);
     });
   });
-}
-
-fn apply_color_filter(
-  pixmap: &mut Pixmap,
-  f: impl Fn((u8, u8, u8), f32) -> ((u8, u8, u8), f32) + Send + Sync,
-) {
-  let pixels = pixmap.pixels_mut();
-  let threshold = 2048;
-  if pixels.len() > threshold {
-    let deadline = active_deadline();
-    pixels.par_iter_mut().for_each(|pixel| {
-      with_deadline(deadline.as_ref(), || {
-        let a = pixel.alpha() as f32 / 255.0;
-        let (c, a2) = f((pixel.red(), pixel.green(), pixel.blue()), a);
-        let final_a = (a2 * 255.0).round().clamp(0.0, 255.0) as u8;
-        let premultiply = |v: u8| ((v as f32 * a2).round().clamp(0.0, 255.0)) as u8;
-        *pixel = tiny_skia::PremultipliedColorU8::from_rgba(
-          premultiply(c.0),
-          premultiply(c.1),
-          premultiply(c.2),
-          final_a,
-        )
-        .unwrap_or_else(|| tiny_skia::PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap());
-      });
-    });
-  } else {
-    for pixel in pixels.iter_mut() {
-      let a = pixel.alpha() as f32 / 255.0;
-      let (c, a2) = f((pixel.red(), pixel.green(), pixel.blue()), a);
-      let final_a = (a2 * 255.0).round().clamp(0.0, 255.0) as u8;
-      let premultiply = |v: u8| ((v as f32 * a2).round().clamp(0.0, 255.0)) as u8;
-      *pixel = tiny_skia::PremultipliedColorU8::from_rgba(
-        premultiply(c.0),
-        premultiply(c.1),
-        premultiply(c.2),
-        final_a,
-      )
-      .unwrap_or_else(|| tiny_skia::PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap());
-    }
-  }
-}
-
-fn scale_color((r, g, b): (u8, u8, u8), amount: f32) -> (u8, u8, u8) {
-  let scale = |v: u8| ((v as f32) * amount).round().clamp(0.0, 255.0) as u8;
-  (scale(r), scale(g), scale(b))
-}
-
-fn apply_contrast((r, g, b): (u8, u8, u8), amount: f32) -> (u8, u8, u8) {
-  let factor = (259.0 * (amount + 255.0)) / (255.0 * (259.0 - amount));
-  let adjust = |v: u8| {
-    ((factor * (v as f32 - 128.0) + 128.0)
-      .round()
-      .clamp(0.0, 255.0)) as u8
-  };
-  (adjust(r), adjust(g), adjust(b))
-}
-
-fn grayscale((r, g, b): (u8, u8, u8), amount: f32) -> (u8, u8, u8) {
-  let gray = (0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32)
-    .round()
-    .clamp(0.0, 255.0) as u8;
-  let mix = |v: u8| {
-    ((v as f32 * (1.0 - amount) + gray as f32 * amount)
-      .round()
-      .clamp(0.0, 255.0)) as u8
-  };
-  (mix(r), mix(g), mix(b))
-}
-
-fn sepia((r, g, b): (u8, u8, u8), amount: f32) -> (u8, u8, u8) {
-  let tr = (0.393 * r as f32 + 0.769 * g as f32 + 0.189 * b as f32)
-    .round()
-    .clamp(0.0, 255.0);
-  let tg = (0.349 * r as f32 + 0.686 * g as f32 + 0.168 * b as f32)
-    .round()
-    .clamp(0.0, 255.0);
-  let tb = (0.272 * r as f32 + 0.534 * g as f32 + 0.131 * b as f32)
-    .round()
-    .clamp(0.0, 255.0);
-  let mix = |orig: u8, target: f32| {
-    ((orig as f32 * (1.0 - amount) + target * amount)
-      .round()
-      .clamp(0.0, 255.0)) as u8
-  };
-  (mix(r, tr), mix(g, tg), mix(b, tb))
-}
-
-fn saturate((r, g, b): (u8, u8, u8), amount: f32) -> (u8, u8, u8) {
-  let gray = 0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32;
-  let mix = |v: u8| {
-    ((gray + (v as f32 - gray) * amount)
-      .round()
-      .clamp(0.0, 255.0)) as u8
-  };
-  (mix(r), mix(g), mix(b))
-}
-
-fn hue_rotate((r, g, b): (u8, u8, u8), degrees: f32) -> (u8, u8, u8) {
-  let rad = degrees.to_radians();
-  let cos = rad.cos();
-  let sin = rad.sin();
-  let nr = (0.213 + cos * 0.787 - sin * 0.213) * r as f32
-    + (0.715 - cos * 0.715 - sin * 0.715) * g as f32
-    + (0.072 - cos * 0.072 + sin * 0.928) * b as f32;
-  let ng = (0.213 - cos * 0.213 + sin * 0.143) * r as f32
-    + (0.715 + cos * 0.285 + sin * 0.140) * g as f32
-    + (0.072 - cos * 0.072 - sin * 0.283) * b as f32;
-  let nb = (0.213 - cos * 0.213 - sin * 0.787) * r as f32
-    + (0.715 - cos * 0.715 + sin * 0.715) * g as f32
-    + (0.072 + cos * 0.928 + sin * 0.072) * b as f32;
-  (
-    nr.round().clamp(0.0, 255.0) as u8,
-    ng.round().clamp(0.0, 255.0) as u8,
-    nb.round().clamp(0.0, 255.0) as u8,
-  )
-}
-
-fn invert((r, g, b): (u8, u8, u8), amount: f32) -> (u8, u8, u8) {
-  let inv = |v: u8| {
-    ((255.0 - v as f32) * amount + v as f32 * (1.0 - amount))
-      .round()
-      .clamp(0.0, 255.0) as u8
-  };
-  (inv(r), inv(g), inv(b))
 }
 
 /// Configuration for parallel display list painting.

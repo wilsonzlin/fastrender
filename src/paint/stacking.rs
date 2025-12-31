@@ -396,8 +396,13 @@ impl StackingContext {
 
     // Union all fragment bounds from all layers in the parent stacking context's
     // coordinate space.
-    for frag in &self.fragments {
-      accumulate(translate(frag.bounds), &mut bounds);
+    for (idx, frag) in self.fragments.iter().enumerate() {
+      let rect = if idx == 0 {
+        Rect::from_xywh(0.0, 0.0, frag.bounds.width(), frag.bounds.height())
+      } else {
+        frag.bounds
+      };
+      accumulate(translate(rect), &mut bounds);
     }
     for frag in &self.layer3_blocks {
       accumulate(translate(frag.bounds), &mut bounds);
