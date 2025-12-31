@@ -13,13 +13,13 @@ use super::ResourceFetcher;
 use super::ResourcePolicy;
 use super::MAX_ALIAS_HOPS;
 use crate::error::Error;
+use crate::error::RenderStage;
 use crate::render_control;
 use crate::Result;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
-use std::io::ErrorKind;
-use std::io::Write;
+use std::io::{self, ErrorKind, Read, Write};
 use std::path::Path;
 use std::path::PathBuf;
 use std::thread;
@@ -77,6 +77,72 @@ const READ_LOCK_RETRY_INITIAL_DELAY: Duration = Duration::from_millis(5);
 const READ_LOCK_RETRY_MAX_DELAY: Duration = Duration::from_millis(50);
 /// Small time buffer to avoid spending the entire render budget waiting on `.lock` files.
 const LOCK_DEADLINE_BUFFER: Duration = Duration::from_millis(10);
+const DISK_READ_CHUNK_SIZE: usize = 64 * 1024;
+const DISK_META_READ_STAGE: RenderStage = RenderStage::Paint;
+
+#[derive(Debug)]
+enum ReadAllWithDeadlineError {
+  Io,
+  DeadlineExceeded,
+}
+
+impl From<io::Error> for ReadAllWithDeadlineError {
+  fn from(_err: io::Error) -> Self {
+    Self::Io
+  }
+}
+
+fn read_all_with_deadline<R: Read>(
+  reader: &mut R,
+  capacity_hint: Option<usize>,
+  stage: RenderStage,
+) -> std::result::Result<Vec<u8>, ReadAllWithDeadlineError> {
+  let mut bytes = Vec::new();
+  if let Some(cap) = capacity_hint {
+    bytes.reserve(cap);
+  }
+  let mut buf = vec![0u8; DISK_READ_CHUNK_SIZE];
+  let mut deadline_counter = 0usize;
+  loop {
+    if render_control::check_active_periodic(&mut deadline_counter, 1, stage).is_err() {
+      return Err(ReadAllWithDeadlineError::DeadlineExceeded);
+    }
+    match reader.read(&mut buf) {
+      Ok(0) => break,
+      Ok(n) => bytes.extend_from_slice(&buf[..n]),
+      Err(err) if err.kind() == ErrorKind::Interrupted => continue,
+      Err(_err) => return Err(ReadAllWithDeadlineError::Io),
+    }
+  }
+  Ok(bytes)
+}
+
+fn read_path_with_deadline(
+  path: &Path,
+  stage: RenderStage,
+) -> std::result::Result<Vec<u8>, ReadAllWithDeadlineError> {
+  let mut file = fs::File::open(path)?;
+  let capacity_hint = file
+    .metadata()
+    .ok()
+    .and_then(|meta| meta.len().try_into().ok());
+  read_all_with_deadline(&mut file, capacity_hint, stage)
+}
+
+fn stage_for_cached_content_type(content_type: Option<&str>) -> RenderStage {
+  let mime = content_type
+    .and_then(|ct| ct.split(';').next())
+    .map(|ct| ct.trim().to_ascii_lowercase())
+    .unwrap_or_default();
+
+  if mime.contains("text/css") || mime.contains("font/") {
+    return RenderStage::Css;
+  }
+  if mime.contains("html") {
+    return RenderStage::DomParse;
+  }
+  RenderStage::Paint
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct LockFileContents {
@@ -233,6 +299,12 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     url.starts_with("data:")
   }
 
+  fn disk_writeback_disabled(&self) -> bool {
+    render_control::active_deadline()
+      .map(|deadline| deadline.timeout_limit().is_some())
+      .unwrap_or(false)
+  }
+
   fn canonical_url(&self, requested: &str, final_url: Option<&str>) -> String {
     let final_url = final_url
       .filter(|target| *target != requested)
@@ -288,6 +360,7 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
 
   fn lock_is_active(&self, data_path: &Path) -> bool {
     let lock_path = lock_path_for(data_path);
+    let writeback_disabled = self.disk_writeback_disabled();
     match fs::metadata(&lock_path) {
       Ok(meta) => {
         let meta_age = lock_age_from_metadata(&meta);
@@ -295,7 +368,11 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
           .map(|age| age > self.disk_config.lock_stale_after)
           .unwrap_or(false)
         {
-          return !clear_lock_file(&lock_path);
+          return if writeback_disabled {
+            false
+          } else {
+            !clear_lock_file(&lock_path)
+          };
         }
 
         let contents = fs::read(&lock_path)
@@ -303,14 +380,22 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
           .and_then(|bytes| serde_json::from_slice::<LockFileContents>(&bytes).ok());
         if let Some(contents) = contents {
           if let Some(false) = pid_is_alive(contents.pid) {
-            return !clear_lock_file(&lock_path);
+            return if writeback_disabled {
+              false
+            } else {
+              !clear_lock_file(&lock_path)
+            };
           }
           // On platforms/filesystems where we can't rely on mtime/ctime, fall back to the stored
           // timestamp in the lockfile itself.
           if meta_age.is_none() {
             let lock_age = Duration::from_secs(now_seconds().saturating_sub(contents.started_at));
             if lock_age > self.disk_config.lock_stale_after {
-              return !clear_lock_file(&lock_path);
+              return if writeback_disabled {
+                false
+              } else {
+                !clear_lock_file(&lock_path)
+              };
             }
           }
         }
@@ -398,6 +483,9 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
           let meta_age = lock_age_from_metadata(&meta);
           if let Some(age) = meta_age {
             if age > self.disk_config.lock_stale_after {
+              if self.disk_writeback_disabled() {
+                return true;
+              }
               if clear_lock_file(&lock_path) {
                 return true;
               }
@@ -441,6 +529,9 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
   }
 
   fn remove_entry_if_unlocked(&self, key: &str, data_path: &Path, meta_path: &Path) {
+    if self.disk_writeback_disabled() {
+      return;
+    }
     if !self.lock_is_active(data_path) {
       let _ = self.remove_entry(key, data_path, meta_path);
     }
@@ -495,8 +586,9 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       return SnapshotRead::Locked;
     }
 
-    let meta_bytes = match fs::read(meta_path) {
+    let meta_bytes = match read_path_with_deadline(meta_path, DISK_META_READ_STAGE) {
       Ok(bytes) => bytes,
+      Err(ReadAllWithDeadlineError::DeadlineExceeded) => return SnapshotRead::Miss,
       Err(_) => {
         self.remove_entry_if_unlocked(key, data_path, meta_path);
         return SnapshotRead::Miss;
@@ -510,8 +602,10 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       }
     };
 
-    let bytes = match fs::read(data_path) {
+    let read_stage = stage_for_cached_content_type(meta.content_type.as_deref());
+    let bytes = match read_path_with_deadline(data_path, read_stage) {
       Ok(bytes) => bytes,
+      Err(ReadAllWithDeadlineError::DeadlineExceeded) => return SnapshotRead::Miss,
       Err(_) => {
         self.remove_entry_if_unlocked(key, data_path, meta_path);
         return SnapshotRead::Miss;
@@ -568,12 +662,18 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
   }
 
   fn remove_alias_for(&self, url: &str) {
+    if self.disk_writeback_disabled() {
+      return;
+    }
     let alias_path = self.alias_path(url);
     let _ = fs::remove_file(tmp_path(&alias_path));
     let _ = fs::remove_file(&alias_path);
   }
 
   fn persist_alias(&self, alias: &str, canonical: &str) {
+    if self.disk_writeback_disabled() {
+      return;
+    }
     if alias == canonical || self.should_skip_disk(alias) || self.should_skip_disk(canonical) {
       return;
     }
@@ -598,6 +698,9 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
   }
 
   fn persist_snapshot(&self, url: &str, snapshot: &CachedSnapshot) {
+    if self.disk_writeback_disabled() {
+      return;
+    }
     if let Some(resource) = snapshot.as_resource() {
       self.persist_resource(
         url,
@@ -617,6 +720,9 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     last_modified: Option<&str>,
     http_cache: Option<&CachedHttpMetadata>,
   ) {
+    if self.disk_writeback_disabled() {
+      return;
+    }
     if self.should_skip_disk(url) {
       return;
     }
@@ -723,6 +829,9 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
   }
 
   fn remove_entry(&self, key: &str, data_path: &Path, meta_path: &Path) -> Result<()> {
+    if self.disk_writeback_disabled() {
+      return Ok(());
+    }
     self.index.record_removal(key, data_path, meta_path);
     let _ = fs::remove_file(tmp_path(data_path));
     let _ = fs::remove_file(tmp_path(meta_path));
@@ -734,6 +843,9 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
   }
 
   fn remove_entry_for_url(&self, url: &str) {
+    if self.disk_writeback_disabled() {
+      return;
+    }
     let key = self.cache_key(url);
     let data_path = self.data_path_for_key(&key);
     let meta_path = self.meta_path_for_data(&data_path);
@@ -1135,6 +1247,79 @@ mod tests {
       resource.final_url = Some(url.to_string());
       Ok(resource)
     }
+  }
+
+  #[test]
+  fn disk_cache_read_is_deadline_aware() {
+    struct SlowReader {
+      remaining: usize,
+      per_read: usize,
+      delay: Duration,
+      bytes_read: Arc<AtomicUsize>,
+    }
+
+    impl Read for SlowReader {
+      fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.remaining == 0 {
+          return Ok(0);
+        }
+        thread::sleep(self.delay);
+        let n = self.remaining.min(self.per_read).min(buf.len());
+        buf[..n].fill(0);
+        self.remaining -= n;
+        self.bytes_read.fetch_add(n, Ordering::SeqCst);
+        Ok(n)
+      }
+    }
+
+    let total_bytes = DISK_READ_CHUNK_SIZE * 8;
+    let bytes_read = Arc::new(AtomicUsize::new(0));
+    let mut reader = SlowReader {
+      remaining: total_bytes,
+      per_read: DISK_READ_CHUNK_SIZE,
+      delay: Duration::from_millis(40),
+      bytes_read: Arc::clone(&bytes_read),
+    };
+
+    let deadline = render_control::RenderDeadline::new(Some(Duration::from_millis(70)), None);
+    let result = render_control::with_deadline(Some(&deadline), || {
+      read_all_with_deadline(&mut reader, Some(total_bytes), RenderStage::Css)
+    });
+
+    assert!(
+      matches!(result, Err(ReadAllWithDeadlineError::DeadlineExceeded)),
+      "expected deadline-aware read to abort under active deadline"
+    );
+    let consumed = bytes_read.load(Ordering::SeqCst);
+    assert!(
+      consumed > 0,
+      "reader should start consuming bytes before timing out"
+    );
+    assert!(
+      consumed < total_bytes,
+      "reader should not consume entire stream"
+    );
+  }
+
+  #[test]
+  fn disk_cache_does_not_persist_under_deadline() {
+    let tmp = tempfile::tempdir().unwrap();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let fetcher = CountingFetcher {
+      count: Arc::clone(&counter),
+    };
+    let disk = DiskCachingFetcher::new(fetcher, tmp.path());
+    let url = "https://example.com/no-persist";
+
+    let deadline = render_control::RenderDeadline::new(Some(Duration::from_millis(500)), None);
+    let res = render_control::with_deadline(Some(&deadline), || disk.fetch(url)).expect("fetch");
+    assert_eq!(res.bytes, b"hello");
+    assert_eq!(counter.load(Ordering::SeqCst), 1);
+
+    let data_path = disk.data_path(url);
+    let meta_path = disk.meta_path_for_data(&data_path);
+    assert!(!data_path.exists());
+    assert!(!meta_path.exists());
   }
 
   #[test]
