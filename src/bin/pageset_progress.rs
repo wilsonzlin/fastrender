@@ -720,6 +720,7 @@ fn is_legacy_auto_note_line(line: &str) -> bool {
     "not run" | "missing cache" | "timeout" | "panic" | "error"
   ) || trimmed.starts_with("hard timeout after ")
     || trimmed.starts_with("timeout at ")
+    || trimmed.starts_with("fetch failed:")
     || trimmed.starts_with("worker exited")
     || trimmed.starts_with("worker try_wait failed")
     || trimmed.starts_with("read:")
@@ -5394,6 +5395,23 @@ mod tests {
       url,
       status: ProgressStatus::Timeout,
       notes: "[paint] Invalid paint parameters: Layout failed\nmanual blocker\nhard timeout after 5.00s\nstage: layout".to_string(),
+      ..PageProgress::default()
+    };
+
+    assert_eq!(
+      manual_notes_from_previous(&previous),
+      Some("manual blocker".to_string())
+    );
+  }
+
+  #[test]
+  fn legacy_fetch_failed_lines_are_not_treated_as_manual_notes() {
+    let url = "https://example.com".to_string();
+    let previous = PageProgress {
+      url,
+      status: ProgressStatus::Error,
+      notes: "fetch failed: [resource] https://example.com: timeout: global\nmanual blocker"
+        .to_string(),
       ..PageProgress::default()
     };
 
