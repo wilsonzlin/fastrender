@@ -995,20 +995,20 @@ impl ProgressSelectionArgs {
 }
 
 fn url_hint_from_cache_path(cache_path: &Path) -> String {
+  cached_url_from_cache_meta(cache_path)
+    .unwrap_or_else(|| format!("file://{}", cache_path.display()))
+}
+
+fn cached_url_from_cache_meta(cache_path: &Path) -> Option<String> {
   let mut meta_path = cache_path.to_path_buf();
   if let Some(ext) = meta_path.extension().and_then(|e| e.to_str()) {
     meta_path.set_extension(format!("{ext}.meta"));
   } else {
     meta_path.set_extension("meta");
   }
-  let meta = fs::read_to_string(&meta_path).ok();
-  let parsed_meta = meta
-    .as_deref()
-    .map(parse_cached_html_meta)
-    .unwrap_or_default();
-  parsed_meta
-    .url
-    .unwrap_or_else(|| format!("file://{}", cache_path.display()))
+  let meta = fs::read_to_string(&meta_path).ok()?;
+  let parsed_meta = parse_cached_html_meta(&meta);
+  parsed_meta.url
 }
 
 fn atomic_write_with_hook<F>(path: &Path, contents: &[u8], pre_rename_hook: F) -> io::Result<()>
@@ -3476,9 +3476,11 @@ fn work_item_from_cache(
   entry: Option<&PagesetEntry>,
   args: &RunArgs,
 ) -> WorkItem {
-  let url = entry
-    .map(|e| e.url.clone())
-    .unwrap_or_else(|| url_hint_from_cache_path(&cache_path));
+  // Prefer the final URL recorded by `fetch_pages` so progress metadata matches what we
+  // actually render (redirects to `www.`, MDN reference pages, etc).
+  let url = cached_url_from_cache_meta(&cache_path)
+    .or_else(|| entry.map(|e| e.url.clone()))
+    .unwrap_or_else(|| format!("file://{}", cache_path.display()));
   let stem = entry
     .map(|e| e.stem.clone())
     .or_else(|| pageset_stem(cache_stem))

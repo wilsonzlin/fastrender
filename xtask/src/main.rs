@@ -411,6 +411,23 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
     bail!("jobs must be > 0");
   }
 
+  // `pageset_progress` runs up to `jobs` worker processes in parallel (one per page). The renderer
+  // itself can also use Rayon threads (e.g., layout fan-out, CSS selector work, etc). Without a
+  // cap, running N worker processes on a machine with M logical CPUs can oversubscribe
+  // catastrophically (N * M threads).
+  //
+  // Mirror `scripts/pageset.sh`: if the user hasn't provided `RAYON_NUM_THREADS`, divide the
+  // available CPU budget across the configured worker processes.
+  let total_cpus = std::thread::available_parallelism()
+    .map(|n| n.get())
+    .unwrap_or(1);
+  let mut threads_per_worker = total_cpus / args.jobs;
+  if threads_per_worker == 0 {
+    threads_per_worker = 1;
+  }
+  let rayon_threads_env = std::env::var_os("RAYON_NUM_THREADS");
+  let layout_parallel_env = std::env::var_os("FASTR_LAYOUT_PARALLEL");
+
   let pages_arg = args.pages.as_ref().map(|pages| pages.join(","));
   let shard_arg = args.shard.map(|(index, total)| format!("{index}/{total}"));
   let disk_cache_extra_args = extract_disk_cache_args(&args.extra);
@@ -450,6 +467,12 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
     if let Some(shard) = &shard_arg {
       cmd.arg("--shard").arg(shard);
     }
+    if rayon_threads_env.is_none() {
+      cmd.env("RAYON_NUM_THREADS", threads_per_worker.to_string());
+    }
+    if layout_parallel_env.is_none() {
+      cmd.env("FASTR_LAYOUT_PARALLEL", "auto");
+    }
     println!(
       "Updating cached pages (jobs={}, timeout={}s, disk_cache={})...",
       args.jobs, args.fetch_timeout, disk_cache_status
@@ -476,6 +499,12 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
       cmd.arg("--shard").arg(shard);
     }
     cmd.args(&disk_cache_extra_args);
+    if rayon_threads_env.is_none() {
+      cmd.env("RAYON_NUM_THREADS", threads_per_worker.to_string());
+    }
+    if layout_parallel_env.is_none() {
+      cmd.env("FASTR_LAYOUT_PARALLEL", "auto");
+    }
     println!(
       "Prefetching subresources into fetches/assets/ (jobs={}, timeout={}s)...",
       args.jobs, args.fetch_timeout
@@ -503,6 +532,12 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
     cmd.arg("--shard").arg(shard);
   }
   cmd.args(&args.extra);
+  if rayon_threads_env.is_none() {
+    cmd.env("RAYON_NUM_THREADS", threads_per_worker.to_string());
+  }
+  if layout_parallel_env.is_none() {
+    cmd.env("FASTR_LAYOUT_PARALLEL", "auto");
+  }
   println!(
     "Updating progress/pages scoreboard (jobs={}, hard timeout={}s, disk_cache={})...",
     args.jobs, args.render_timeout, disk_cache_status
@@ -1825,6 +1860,9 @@ mod tests {
               "rule_candidates_by_tag": null,
               "rule_candidates_by_attr": null,
               "rule_candidates_universal": null,
+              "selector_attempts_total": null,
+              "selector_attempts_after_bloom": null,
+              "selector_bloom_fast_rejects": null,
               "selector_time_ms": null,
               "declaration_time_ms": null,
               "pseudo_time_ms": null,
