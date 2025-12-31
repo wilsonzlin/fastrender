@@ -1124,28 +1124,14 @@ impl<NodeContext> TaffyTree<NodeContext> {
         Option<&mut NodeContext>,
         &Style,
       ) -> Size<f32>
-      + 'static,
   {
     let Some(cancel) = cancel else {
       return self.compute_layout_with_measure(node_id, available_space, measure_function);
     };
 
-    let result = crate::util::with_layout_abort(cancel, check_stride, || {
-      std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        self.compute_layout_with_measure(node_id, available_space, measure_function)
-      }))
-    });
-
-    match result {
-      Ok(inner) => inner,
-      Err(payload) => {
-        if payload.is::<crate::util::LayoutAbort>() {
-          Err(TaffyError::LayoutAborted)
-        } else {
-          std::panic::resume_unwind(payload)
-        }
-      }
-    }
+    crate::util::with_layout_abort(cancel, check_stride, || {
+      self.compute_layout_with_measure(node_id, available_space, measure_function)
+    })
   }
 
   /// Updates the stored layout of the provided `node` and its children
