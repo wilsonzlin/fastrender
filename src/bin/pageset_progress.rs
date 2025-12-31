@@ -2590,6 +2590,13 @@ fn cascade_summary(cascade: &CascadeDiagnostics) -> Option<String> {
   push_opt_u64(&mut parts, "candidates", cascade.rule_candidates);
   push_opt_u64(&mut parts, "pruned", cascade.rule_candidates_pruned);
   push_opt_u64(&mut parts, "matches", cascade.rule_matches);
+  push_opt_u64(&mut parts, "sel_attempts", cascade.selector_attempts_total);
+  push_opt_u64(&mut parts, "sel_after_bloom", cascade.selector_attempts_after_bloom);
+  push_opt_u64(
+    &mut parts,
+    "sel_bloom_rejects",
+    cascade.selector_bloom_fast_rejects,
+  );
   let mut bucket_parts = Vec::new();
   push_opt_u64(&mut bucket_parts, "id", cascade.rule_candidates_by_id);
   push_opt_u64(&mut bucket_parts, "class", cascade.rule_candidates_by_class);
