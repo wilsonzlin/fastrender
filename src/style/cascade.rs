@@ -15338,9 +15338,18 @@ fn apply_cascaded_declarations<'a, F>(
       StyleOrigin::UserAgent => &defaults,
       StyleOrigin::Author | StyleOrigin::Inline => revert_base_styles,
     };
-    let layer_base = layer_snapshots
-      .entry(entry.layer_order.clone())
-      .or_insert_with(|| styles.clone());
+    // `layer_snapshots` is keyed by the declaration's `Arc<[u32]>` layer order. Most declarations
+    // in a rule set share the same layer order, so avoid cloning the `Arc` on lookup hits by
+    // probing with the borrowed slice and cloning only when we need to insert a new snapshot.
+    let layer_base = match layer_snapshots.get_mut(entry.layer_order.as_ref()) {
+      Some(existing) => existing,
+      None => {
+        layer_snapshots.insert(entry.layer_order.clone(), styles.clone());
+        layer_snapshots
+          .get_mut(entry.layer_order.as_ref())
+          .expect("layer snapshot inserted")
+      }
+    };
     apply_declaration_with_base(
       styles,
       entry.declaration.as_ref(),
