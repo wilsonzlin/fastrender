@@ -203,8 +203,8 @@ pub fn compute_cached_layout<Tree: CacheTree + ?Sized, ComputeFunction>(
 where
   ComputeFunction: FnMut(&mut Tree, NodeId, LayoutInput) -> LayoutOutput,
 {
-  debug_push_node!(node);
   check_layout_abort();
+  debug_push_node!(node);
   let LayoutInput {
     known_dimensions,
     available_space,

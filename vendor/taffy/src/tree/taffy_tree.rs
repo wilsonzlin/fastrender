@@ -1208,6 +1208,61 @@ mod tests {
     assert_eq!(result, Err(TaffyError::LayoutAborted));
   }
 
+  /// Ensure that hidden layout recursion (`Display::None`) is interruptible.
+  ///
+  /// `compute_hidden_layout` does not go through `compute_cached_layout`, so it must perform
+  /// its own periodic abort checks to avoid walking large hidden subtrees past a deadline.
+  #[cfg(all(feature = "std", panic = "unwind"))]
+  #[test]
+  fn hidden_layout_should_be_abortable() {
+    let mut taffy: TaffyTree<()> = TaffyTree::new();
+    // Keep this test focused on `compute_hidden_layout`, not rounding.
+    taffy.disable_rounding();
+
+    // Build a tree that's deep enough to exercise recursion, but not so deep that it risks
+    // overflowing the stack in debug builds.
+    const DEPTH: usize = 64;
+    const FANOUT: usize = 16;
+
+    let mut deep_child = taffy.new_leaf(Style::default()).unwrap();
+    for _ in 0..DEPTH {
+      let mut children = sys::new_vec_with_capacity(FANOUT + 1);
+      for _ in 0..FANOUT {
+        children.push(taffy.new_leaf(Style::default()).unwrap());
+      }
+      children.push(deep_child);
+      deep_child = taffy.new_with_children(Style::default(), &children).unwrap();
+    }
+    let root = deep_child;
+    taffy
+      .set_style(
+        root,
+        Style {
+          display: Display::None,
+          ..Default::default()
+        },
+      )
+      .unwrap();
+
+    let checks = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let checks_for_cb = std::sync::Arc::clone(&checks);
+    let cancel = std::sync::Arc::new(move || {
+      let count = checks_for_cb.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+      count >= 2
+    });
+
+    let result = taffy.compute_layout_with_measure_and_cancel(
+      root,
+      Size::MAX_CONTENT,
+      |_, _, _, _, _| Size::ZERO,
+      Some(cancel),
+      16,
+    );
+
+    assert_eq!(result, Err(TaffyError::LayoutAborted));
+    assert!(checks.load(std::sync::atomic::Ordering::Relaxed) >= 2);
+  }
+
   #[cfg(all(feature = "std", panic = "unwind"))]
   #[test]
   #[should_panic]
