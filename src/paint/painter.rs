@@ -10183,16 +10183,22 @@ fn apply_mask_composite_pixel(dst: u8, src: u8, op: MaskComposite) -> u8 {
   let src = src as u16;
   let dst = dst as u16;
   let out = match op {
-    MaskComposite::Add => src + dst.saturating_mul(255 - src) / 255,
-    MaskComposite::Subtract => src.saturating_mul(255 - dst) / 255,
-    MaskComposite::Intersect => src.saturating_mul(dst) / 255,
+    MaskComposite::Add => src + div_255(dst.saturating_mul(255 - src)),
+    MaskComposite::Subtract => div_255(src.saturating_mul(255 - dst)),
+    MaskComposite::Intersect => div_255(src.saturating_mul(dst)),
     MaskComposite::Exclude => {
-      let src_out = src.saturating_mul(255 - dst) / 255;
-      let dst_out = dst.saturating_mul(255 - src) / 255;
+      let src_out = div_255(src.saturating_mul(255 - dst));
+      let dst_out = div_255(dst.saturating_mul(255 - src));
       src_out + dst_out
     }
   };
   out.min(255) as u8
+}
+
+#[inline]
+fn div_255(value: u16) -> u16 {
+  // Exact floor division by 255 for values in the 0..=65025 range (the max product of two u8s).
+  (value + 1 + (value >> 8)) >> 8
 }
 
 fn copy_pixmap_alpha_to_mask(mask: &mut Mask, pixmap: &Pixmap, rect: ClipMaskDirtyRect) {
