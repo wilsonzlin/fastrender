@@ -591,8 +591,11 @@ impl FormattingContext for FlexFormattingContext {
     static LOG_FIRST_N_COUNTER: std::sync::OnceLock<std::sync::Mutex<usize>> =
       std::sync::OnceLock::new();
     record_taffy_invocation(TaffyAdapterKind::Flex);
-    let cancel: Option<Arc<dyn Fn() -> bool + Send + Sync>> =
-      active_deadline().map(|_| Arc::new(|| check_active(RenderStage::Layout).is_err()) as _);
+    // Render pipeline always installs a deadline guard (even when disabled), so only enable
+    // the Taffy cancellation path when the active deadline is actually configured.
+    let cancel: Option<Arc<dyn Fn() -> bool + Send + Sync>> = active_deadline()
+      .filter(|deadline| deadline.is_enabled())
+      .map(|_| Arc::new(|| check_active(RenderStage::Layout).is_err()) as _);
     let measure_toggles = toggles.clone();
     taffy_tree
             .compute_layout_with_measure_and_cancel(

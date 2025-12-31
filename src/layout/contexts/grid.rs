@@ -2117,8 +2117,11 @@ impl GridFormattingContext {
     };
 
     record_taffy_invocation(TaffyAdapterKind::Grid);
-    let cancel: Option<Arc<dyn Fn() -> bool + Send + Sync>> =
-      active_deadline().map(|_| Arc::new(|| check_active(RenderStage::Layout).is_err()) as _);
+    // Render pipeline always installs a deadline guard (even when disabled), so only enable
+    // the Taffy cancellation path when the active deadline is actually configured.
+    let cancel: Option<Arc<dyn Fn() -> bool + Send + Sync>> = active_deadline()
+      .filter(|deadline| deadline.is_enabled())
+      .map(|_| Arc::new(|| check_active(RenderStage::Layout).is_err()) as _);
     taffy
       .compute_layout_with_measure_and_cancel(
         root_id,
@@ -2846,8 +2849,11 @@ impl FormattingContext for GridFormattingContext {
 
     // Run Taffy layout
     record_taffy_invocation(TaffyAdapterKind::Grid);
-    let cancel: Option<Arc<dyn Fn() -> bool + Send + Sync>> =
-      active_deadline().map(|_| Arc::new(|| check_active(RenderStage::Layout).is_err()) as _);
+    // Render pipeline always installs a deadline guard (even when disabled), so only enable
+    // the Taffy cancellation path when the active deadline is actually configured.
+    let cancel: Option<Arc<dyn Fn() -> bool + Send + Sync>> = active_deadline()
+      .filter(|deadline| deadline.is_enabled())
+      .map(|_| Arc::new(|| check_active(RenderStage::Layout).is_err()) as _);
     let measure_cache: Rc<RefCell<HashMap<MeasureKey, taffy::geometry::Size<f32>>>> =
       Rc::new(RefCell::new(HashMap::new()));
     let measured_fragments: Rc<RefCell<HashMap<MeasureKey, FragmentNode>>> =
