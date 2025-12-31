@@ -411,7 +411,7 @@ fn build_box_tree_root(
 ) -> Result<BoxNode> {
   let BoxGenerationPrepass {
     document_css,
-    picture_sources,
+    mut picture_sources,
     styled_lookup,
   } = collect_box_generation_prepass(styled, deadline_counter)?;
   let mut counters = CounterManager::new_with_styles(styled.styles.counter_styles.clone());
@@ -422,7 +422,7 @@ fn build_box_tree_root(
     &mut counters,
     true,
     &document_css,
-    &picture_sources,
+    &mut picture_sources,
     options,
     deadline_counter,
   )?;
@@ -1386,7 +1386,7 @@ fn generate_boxes_for_styled(
   counters: &mut CounterManager,
   _is_root: bool,
   document_css: &str,
-  picture_sources: &HashMap<usize, Vec<PictureSource>>,
+  picture_sources: &mut HashMap<usize, Vec<PictureSource>>,
   options: &BoxGenerationOptions,
   deadline_counter: &mut usize,
 ) -> Result<Vec<BoxNode>> {
@@ -1495,15 +1495,16 @@ fn generate_boxes_for_styled(
           .is_some_and(|d| !d.is_empty())
       {
         counters.leave_scope();
-        let picture = picture_sources
-          .get(&styled.node_id)
-          .map(|v| v.as_slice())
-          .unwrap_or(&[]);
+        let picture_sources_for_img = if tag.eq_ignore_ascii_case("img") {
+          picture_sources.remove(&styled.node_id).unwrap_or_default()
+        } else {
+          Vec::new()
+        };
         let box_node = create_replaced_box_from_styled(
           styled,
           Arc::new(styled.styles.clone()),
           document_css,
-          picture,
+          picture_sources_for_img,
         );
         let mut box_node = box_node;
         box_node.starting_style = clone_starting_style(&styled.starting_styles.base);
@@ -2555,7 +2556,7 @@ fn create_replaced_box_from_styled(
   styled: &StyledNode,
   style: Arc<ComputedStyle>,
   document_css: &str,
-  picture_sources: &[PictureSource],
+  picture_sources: Vec<PictureSource>,
 ) -> BoxNode {
   let tag = styled.node.tag_name().unwrap_or("img");
 
@@ -2586,7 +2587,7 @@ fn create_replaced_box_from_styled(
       alt,
       srcset,
       sizes,
-      picture_sources: picture_sources.to_vec(),
+      picture_sources,
     }
   } else if tag.eq_ignore_ascii_case("video") {
     ReplacedType::Video { src, poster }
@@ -3155,7 +3156,7 @@ mod tests {
 
     for tag in ["canvas", "video", "iframe", "embed", "object"] {
       let styled = styled_element(tag);
-      let box_node = create_replaced_box_from_styled(&styled, style.clone(), "", &[]);
+      let box_node = create_replaced_box_from_styled(&styled, style.clone(), "", Vec::new());
       match &box_node.box_type {
         BoxType::Replaced(replaced) => {
           assert_eq!(
