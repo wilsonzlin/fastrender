@@ -485,9 +485,24 @@ impl TaffyNodeCacheShard {
   }
 }
 
+/// Cache-line padded wrapper used to keep shard locks on distinct cache lines.
+///
+/// Without padding, adjacent shard locks frequently share cache lines and can exhibit severe
+/// false-sharing under rayon fan-out (threads contending even when they touch different shards).
+#[repr(align(64))]
+struct CacheLinePadded<T>(T);
+
+impl<T> std::ops::Deref for CacheLinePadded<T> {
+  type Target = T;
+
+  fn deref(&self) -> &Self::Target {
+    &self.0
+  }
+}
+
 /// Stores Taffy style templates keyed by container and constraint fingerprints.
 pub(crate) struct TaffyNodeCache {
-  shards: Box<[TaffyNodeCacheShard]>,
+  shards: Box<[CacheLinePadded<TaffyNodeCacheShard>]>,
   shard_mask: usize,
 }
 
@@ -499,7 +514,7 @@ impl TaffyNodeCache {
     let available = std::thread::available_parallelism()
       .map(|threads| threads.get())
       .unwrap_or(1);
-    let desired = available.next_power_of_two().clamp(1, 64);
+    let desired = available.next_power_of_two();
     let max_shards = capacity.min(desired).max(1);
     let next_pow2 = max_shards.next_power_of_two();
     let shard_count = if next_pow2 == max_shards {
@@ -511,10 +526,10 @@ impl TaffyNodeCache {
 
     let per_shard = capacity / shard_count;
     let remainder = capacity % shard_count;
-    let shards: Vec<TaffyNodeCacheShard> = (0..shard_count)
+    let shards: Vec<CacheLinePadded<TaffyNodeCacheShard>> = (0..shard_count)
       .map(|idx| {
         let cap = per_shard + usize::from(idx < remainder);
-        TaffyNodeCacheShard::new(cap)
+        CacheLinePadded(TaffyNodeCacheShard::new(cap))
       })
       .collect();
 
@@ -534,20 +549,22 @@ impl TaffyNodeCache {
 
   pub(crate) fn clear(&self) {
     for shard in self.shards.iter() {
-      if let Ok(mut guard) = shard.inner.lock() {
-        guard.templates.clear();
-        guard.order.clear();
-      }
+      let mut guard = match shard.inner.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+      };
+      guard.templates.clear();
+      guard.order.clear();
     }
   }
 
   pub(crate) fn get(&self, key: &TaffyNodeCacheKey) -> Option<Arc<CachedTaffyTemplate>> {
     let shard = self.shards.get(self.shard_index(key))?;
-    shard
-      .inner
-      .lock()
-      .ok()
-      .and_then(|guard| guard.templates.get(key).cloned())
+    let guard = match shard.inner.lock() {
+      Ok(guard) => guard,
+      Err(poisoned) => poisoned.into_inner(),
+    };
+    guard.templates.get(key).cloned()
   }
 
   pub(crate) fn insert(&self, key: TaffyNodeCacheKey, template: Arc<CachedTaffyTemplate>) {
@@ -555,16 +572,18 @@ impl TaffyNodeCache {
     let Some(shard) = self.shards.get(shard_idx) else {
       return;
     };
-    if let Ok(mut guard) = shard.inner.lock() {
-      if let Some(pos) = guard.order.iter().position(|existing| existing == &key) {
-        guard.order.remove(pos);
-      }
-      guard.order.push_back(key);
-      guard.templates.insert(key, template);
-      while guard.order.len() > shard.capacity {
-        if let Some(evicted) = guard.order.pop_front() {
-          guard.templates.remove(&evicted);
-        }
+    let mut guard = match shard.inner.lock() {
+      Ok(guard) => guard,
+      Err(poisoned) => poisoned.into_inner(),
+    };
+    if let Some(pos) = guard.order.iter().position(|existing| existing == &key) {
+      guard.order.remove(pos);
+    }
+    guard.order.push_back(key);
+    guard.templates.insert(key, template);
+    while guard.order.len() > shard.capacity {
+      if let Some(evicted) = guard.order.pop_front() {
+        guard.templates.remove(&evicted);
       }
     }
   }
@@ -587,7 +606,6 @@ mod tests {
     let cache = TaffyNodeCache::new(capacity);
     assert!(cache.shards.len().is_power_of_two());
     assert!(cache.shards.len() <= capacity);
-    assert!(cache.shards.len() <= 64);
     assert_eq!(cache.shard_mask + 1, cache.shards.len());
 
     let total_capacity: usize = cache.shards.iter().map(|shard| shard.capacity).sum();
@@ -631,5 +649,45 @@ mod tests {
       .map(|shard| shard.inner.lock().unwrap().templates.len())
       .sum();
     assert_eq!(entry_count, 1);
+  }
+
+  #[test]
+  fn taffy_node_cache_supports_parallel_reads() {
+    // Ensure shard-local eviction cannot remove entries during this test. With per-shard capacity
+    // distribution, a small total capacity can still evict entries if multiple keys hash into the
+    // same shard. Using a generous capacity makes the test deterministic across CPU counts.
+    let cache = Arc::new(TaffyNodeCache::new(8192));
+    let viewport = Size::new(800.0, 600.0);
+
+    let mut expected = Vec::new();
+    for idx in 0..32usize {
+      let tpl = template();
+      let key = TaffyNodeCacheKey::new(
+        TaffyAdapterKind::Flex,
+        idx + 1,
+        1,
+        idx as u64,
+        (Some(1), Some(1)),
+        1,
+        viewport,
+      );
+      cache.insert(key, tpl.clone());
+      expected.push((key, tpl));
+    }
+
+    std::thread::scope(|scope| {
+      for _ in 0..8 {
+        let cache = cache.clone();
+        let expected = &expected;
+        scope.spawn(move || {
+          for _ in 0..64 {
+            for (key, tpl) in expected.iter() {
+              let got = cache.get(key).expect("template present");
+              assert!(Arc::ptr_eq(&got, tpl));
+            }
+          }
+        });
+      }
+    });
   }
 }
