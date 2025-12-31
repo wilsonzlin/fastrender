@@ -1781,6 +1781,12 @@ pub struct ResourceDiagnostics {
   pub image_cache_hits: Option<usize>,
   pub image_cache_misses: Option<usize>,
   #[serde(skip_serializing_if = "Option::is_none")]
+  pub raster_pixmap_cache_hits: Option<usize>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub raster_pixmap_cache_misses: Option<usize>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub raster_pixmap_cache_bytes: Option<usize>,
+  #[serde(skip_serializing_if = "Option::is_none")]
   pub image_decode_ms: Option<f64>,
 }
 
@@ -1811,6 +1817,9 @@ fn merge_image_cache_diagnostics(stats: &mut RenderStats) {
   if let Some(image_stats) = crate::image_loader::take_image_cache_diagnostics() {
     stats.resources.image_cache_hits = Some(image_stats.cache_hits);
     stats.resources.image_cache_misses = Some(image_stats.cache_misses);
+    stats.resources.raster_pixmap_cache_hits = Some(image_stats.raster_pixmap_cache_hits);
+    stats.resources.raster_pixmap_cache_misses = Some(image_stats.raster_pixmap_cache_misses);
+    stats.resources.raster_pixmap_cache_bytes = Some(image_stats.raster_pixmap_cache_bytes);
     stats.resources.image_decode_ms = Some(image_stats.decode_ms);
     if image_stats.cache_misses > 0 {
       *stats

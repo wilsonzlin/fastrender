@@ -47,7 +47,7 @@ use std::sync::Arc;
 use std::sync::Condvar;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tiny_skia::Pixmap;
+use tiny_skia::{IntSize, Pixmap};
 use url::Url;
 
 fn image_profile_threshold_ms() -> Option<f64> {
@@ -61,6 +61,10 @@ pub struct ImageCacheDiagnostics {
   pub cache_hits: usize,
   pub cache_misses: usize,
   pub decode_ms: f64,
+  pub raster_pixmap_cache_hits: usize,
+  pub raster_pixmap_cache_misses: usize,
+  /// Maximum cached bytes observed for the raster pixmap cache during the diagnostic window.
+  pub raster_pixmap_cache_bytes: usize,
 }
 
 thread_local! {
@@ -108,6 +112,30 @@ fn record_image_decode_ms(duration_ms: f64) {
   IMAGE_CACHE_DIAGNOSTICS.with(|cell| {
     if let Some(stats) = cell.borrow_mut().as_mut() {
       stats.decode_ms += duration_ms;
+    }
+  });
+}
+
+fn record_raster_pixmap_cache_hit() {
+  IMAGE_CACHE_DIAGNOSTICS.with(|cell| {
+    if let Some(stats) = cell.borrow_mut().as_mut() {
+      stats.raster_pixmap_cache_hits += 1;
+    }
+  });
+}
+
+fn record_raster_pixmap_cache_miss() {
+  IMAGE_CACHE_DIAGNOSTICS.with(|cell| {
+    if let Some(stats) = cell.borrow_mut().as_mut() {
+      stats.raster_pixmap_cache_misses += 1;
+    }
+  });
+}
+
+fn record_raster_pixmap_cache_bytes(bytes: usize) {
+  IMAGE_CACHE_DIAGNOSTICS.with(|cell| {
+    if let Some(stats) = cell.borrow_mut().as_mut() {
+      stats.raster_pixmap_cache_bytes = stats.raster_pixmap_cache_bytes.max(bytes);
     }
   });
 }
@@ -235,6 +263,10 @@ impl<K: Eq + Hash, V> SizedLruCache<K, V> {
       }
     }
   }
+
+  fn current_bytes(&self) -> usize {
+    self.current_bytes
+  }
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
@@ -245,6 +277,29 @@ struct SvgPixmapKey {
   width: u32,
   height: u32,
   device_pixel_ratio_bits: u32,
+}
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+struct RasterPixmapKey {
+  url_hash: u64,
+  len: usize,
+  orientation: OrientationTransform,
+  decorative: bool,
+}
+
+fn raster_pixmap_key(
+  url: &str,
+  orientation: OrientationTransform,
+  decorative: bool,
+) -> RasterPixmapKey {
+  let mut url_hasher = DefaultHasher::new();
+  url.hash(&mut url_hasher);
+  RasterPixmapKey {
+    url_hash: url_hasher.finish(),
+    len: url.len(),
+    orientation,
+    decorative,
+  }
 }
 
 fn svg_pixmap_key(
@@ -1000,10 +1055,26 @@ pub struct ImageCacheConfig {
   pub max_cached_svg_pixmaps: usize,
   /// Maximum estimated bytes of cached SVG pixmaps (`0` disables eviction by size).
   pub max_cached_svg_bytes: usize,
+  /// Maximum number of cached premultiplied raster pixmaps (`0` disables eviction by count).
+  pub max_cached_raster_pixmaps: usize,
+  /// Maximum estimated bytes of cached raster pixmaps (`0` disables eviction by size).
+  pub max_cached_raster_bytes: usize,
 }
 
 impl Default for ImageCacheConfig {
   fn default() -> Self {
+    const DEFAULT_MAX_RASTER_PIXMAP_CACHE_ITEMS: usize = 256;
+    const DEFAULT_MAX_RASTER_PIXMAP_CACHE_BYTES: usize = 128 * 1024 * 1024;
+
+    let max_cached_raster_pixmaps = std::env::var("FASTR_IMAGE_RASTER_PIXMAP_CACHE_ITEMS")
+      .ok()
+      .and_then(|v| v.trim().parse::<usize>().ok())
+      .unwrap_or(DEFAULT_MAX_RASTER_PIXMAP_CACHE_ITEMS);
+    let max_cached_raster_bytes = std::env::var("FASTR_IMAGE_RASTER_PIXMAP_CACHE_BYTES")
+      .ok()
+      .and_then(|v| v.trim().parse::<usize>().ok())
+      .unwrap_or(DEFAULT_MAX_RASTER_PIXMAP_CACHE_BYTES);
+
     Self {
       max_decoded_pixels: 100_000_000,
       max_decoded_dimension: 32768,
@@ -1011,6 +1082,8 @@ impl Default for ImageCacheConfig {
       max_cached_image_bytes: 256 * 1024 * 1024,
       max_cached_svg_pixmaps: 128,
       max_cached_svg_bytes: 128 * 1024 * 1024,
+      max_cached_raster_pixmaps,
+      max_cached_raster_bytes,
     }
   }
 }
@@ -1047,6 +1120,16 @@ impl ImageCacheConfig {
 
   pub fn with_max_cached_svg_bytes(mut self, max: usize) -> Self {
     self.max_cached_svg_bytes = max;
+    self
+  }
+
+  pub fn with_max_cached_raster_pixmaps(mut self, max: usize) -> Self {
+    self.max_cached_raster_pixmaps = max;
+    self
+  }
+
+  pub fn with_max_cached_raster_bytes(mut self, max: usize) -> Self {
+    self.max_cached_raster_bytes = max;
     self
   }
 }
@@ -1206,6 +1289,8 @@ pub struct ImageCache {
   meta_in_flight: Arc<Mutex<HashMap<String, Arc<ProbeInFlight>>>>,
   /// In-memory cache of rendered inline SVG pixmaps keyed by (hash, size).
   svg_pixmap_cache: Arc<Mutex<SizedLruCache<SvgPixmapKey, Arc<tiny_skia::Pixmap>>>>,
+  /// In-memory cache of premultiplied raster pixmaps keyed by URL + orientation.
+  raster_pixmap_cache: Arc<Mutex<SizedLruCache<RasterPixmapKey, Arc<tiny_skia::Pixmap>>>>,
   /// Base URL for resolving relative image sources
   base_url: Option<String>,
   /// Resource fetcher for loading bytes from URLs
@@ -1390,6 +1475,10 @@ impl ImageCache {
         config.max_cached_svg_pixmaps,
         config.max_cached_svg_bytes,
       ))),
+      raster_pixmap_cache: Arc::new(Mutex::new(SizedLruCache::new(
+        config.max_cached_raster_pixmaps,
+        config.max_cached_raster_bytes,
+      ))),
       base_url,
       fetcher,
       config,
@@ -1510,6 +1599,88 @@ impl ImageCache {
     inflight_guard.finish(shared);
 
     result
+  }
+
+  /// Load a decoded raster image and convert it to a premultiplied [`tiny_skia::Pixmap`],
+  /// caching the result for reuse in subsequent paint calls.
+  ///
+  /// Returns `Ok(None)` when the resource is a vector image (SVG) or the conversion fails.
+  pub fn load_raster_pixmap(
+    &self,
+    url: &str,
+    orientation: OrientationTransform,
+    decorative: bool,
+  ) -> Result<Option<Arc<tiny_skia::Pixmap>>> {
+    let resolved_url = self.resolve_url(url);
+    self.enforce_image_policy(&resolved_url)?;
+
+    let key = raster_pixmap_key(&resolved_url, orientation, decorative);
+    if let Ok(mut cache) = self.raster_pixmap_cache.lock() {
+      if let Some(cached) = cache.get_cloned(&key) {
+        record_raster_pixmap_cache_hit();
+        record_raster_pixmap_cache_bytes(cache.current_bytes());
+        return Ok(Some(cached));
+      }
+    }
+    record_raster_pixmap_cache_miss();
+
+    let image = self.load(&resolved_url)?;
+    if image.is_vector {
+      return Ok(None);
+    }
+
+    let (width, height) = image.oriented_dimensions(orientation);
+    if width == 0 || height == 0 {
+      return Ok(None);
+    }
+
+    let Some(bytes) = u64::from(width)
+      .checked_mul(u64::from(height))
+      .and_then(|px| px.checked_mul(4))
+    else {
+      return Ok(None);
+    };
+    if bytes > MAX_PIXMAP_BYTES {
+      return Ok(None);
+    }
+    let bytes = match usize::try_from(bytes) {
+      Ok(bytes) => bytes,
+      Err(_) => return Ok(None),
+    };
+
+    let rgba = image.to_oriented_rgba(orientation);
+    let (rgba_w, rgba_h) = rgba.dimensions();
+    if rgba_w != width || rgba_h != height {
+      return Ok(None);
+    }
+    let mut data = rgba.into_raw();
+
+    // tiny-skia expects premultiplied RGBA.
+    for pixel in data.chunks_exact_mut(4) {
+      let alpha = pixel[3] as f32 / 255.0;
+      pixel[0] = (pixel[0] as f32 * alpha).round() as u8;
+      pixel[1] = (pixel[1] as f32 * alpha).round() as u8;
+      pixel[2] = (pixel[2] as f32 * alpha).round() as u8;
+    }
+
+    let Some(size) = IntSize::from_wh(width, height) else {
+      return Ok(None);
+    };
+    let Some(pixmap) = Pixmap::from_vec(data, size) else {
+      return Ok(None);
+    };
+    let pixmap = Arc::new(pixmap);
+
+    if self.config.max_cached_raster_bytes > 0 && bytes > self.config.max_cached_raster_bytes {
+      return Ok(Some(pixmap));
+    }
+
+    if let Ok(mut cache) = self.raster_pixmap_cache.lock() {
+      cache.insert(key, Arc::clone(&pixmap), bytes);
+      record_raster_pixmap_cache_bytes(cache.current_bytes());
+    }
+
+    Ok(Some(pixmap))
   }
 
   /// Probe image metadata (dimensions, EXIF orientation/resolution, SVG intrinsic ratio)
@@ -2968,6 +3139,7 @@ impl Clone for ImageCache {
       raw_cache: Arc::clone(&self.raw_cache),
       meta_in_flight: Arc::clone(&self.meta_in_flight),
       svg_pixmap_cache: Arc::clone(&self.svg_pixmap_cache),
+      raster_pixmap_cache: Arc::clone(&self.raster_pixmap_cache),
       base_url: self.base_url.clone(),
       fetcher: Arc::clone(&self.fetcher),
       config: self.config,

@@ -35,7 +35,6 @@ use crate::error::Result;
 use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::geometry::Size;
-use crate::image_loader::CachedImage;
 use crate::image_loader::ImageCache;
 use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics_viewport;
 use crate::layout::contexts::inline::line_builder::TextItem;
@@ -107,7 +106,6 @@ use crate::style::types::MaskMode;
 use crate::style::types::MaskOrigin;
 use crate::style::types::MixBlendMode;
 use crate::style::types::ObjectFit;
-use crate::style::types::OrientationTransform;
 use crate::style::types::Overflow;
 use crate::style::types::TextDecorationLine;
 use crate::style::types::TextDecorationSkipInk;
@@ -3351,7 +3349,8 @@ impl Painter {
         return;
       }
       BackgroundImage::Url(src) => {
-        let image = match self.image_cache.load(src) {
+        let resolved_src = self.image_cache.resolve_url(src);
+        let image = match self.image_cache.load(&resolved_src) {
           Ok(img) => img,
           Err(_) => return,
         };
@@ -3366,20 +3365,6 @@ impl Painter {
         if img_w <= 0.0 || img_h <= 0.0 || img_w_raw == 0 || img_h_raw == 0 {
           return;
         }
-
-        let pixmap_timer = self.diagnostics_enabled.then(Instant::now);
-        let pixmap = match Self::dynamic_image_to_pixmap(&image, orientation) {
-          Some(p) => {
-            if let Some(start) = pixmap_timer {
-              with_paint_diagnostics(|diag| {
-                diag.image_pixmap_ms += start.elapsed().as_secs_f64() * 1000.0;
-              });
-            }
-            p
-          }
-          None => return,
-        };
-
         let (mut tile_w, mut tile_h) = compute_background_size(
           layer,
           style.font_size,
@@ -3416,6 +3401,38 @@ impl Painter {
           } else {
             tile_w = tile_h * aspect;
           }
+        }
+
+        let pixmap_timer = self.diagnostics_enabled.then(Instant::now);
+        let pixmap = if image.is_vector {
+          let Some(svg) = &image.svg_content else {
+            return;
+          };
+          let render_w = self.device_length(tile_w).ceil().max(1.0) as u32;
+          let render_h = self.device_length(tile_h).ceil().max(1.0) as u32;
+          match self.image_cache.render_svg_pixmap_at_size(
+            svg,
+            render_w,
+            render_h,
+            &resolved_src,
+            self.scale,
+          ) {
+            Ok(pixmap) => pixmap,
+            Err(_) => return,
+          }
+        } else {
+          match self
+            .image_cache
+            .load_raster_pixmap(&resolved_src, orientation, true)
+          {
+            Ok(Some(pixmap)) => pixmap,
+            _ => return,
+          }
+        };
+        if let Some(start) = pixmap_timer {
+          with_paint_diagnostics(|diag| {
+            diag.image_pixmap_ms += start.elapsed().as_secs_f64() * 1000.0;
+          });
         }
 
         let (offset_x, offset_y) = resolve_background_offset(
@@ -3461,7 +3478,7 @@ impl Painter {
               tiles_painted += 1;
             }
             self.paint_background_tile(
-              &pixmap,
+              pixmap.as_ref(),
               tx,
               ty,
               tile_w,
@@ -3976,13 +3993,38 @@ impl Painter {
 
     let (pixmap, img_w, img_h) = match bg.as_ref() {
       BackgroundImage::Url(src) => {
-        let image = match self.image_cache.load(src) {
+        let resolved_src = self.image_cache.resolve_url(src);
+        let image = match self.image_cache.load(&resolved_src) {
           Ok(img) => img,
           Err(_) => return false,
         };
         let orientation = style.image_orientation.resolve(image.orientation, true);
-        let Some(pixmap) = Self::dynamic_image_to_pixmap(&image, orientation) else {
-          return false;
+        let pixmap = if image.is_vector {
+          let Some(svg) = &image.svg_content else {
+            return false;
+          };
+          let (render_w, render_h) = image.oriented_dimensions(orientation);
+          if render_w == 0 || render_h == 0 {
+            return false;
+          }
+          match self.image_cache.render_svg_pixmap_at_size(
+            svg,
+            render_w,
+            render_h,
+            &resolved_src,
+            self.scale,
+          ) {
+            Ok(pixmap) => pixmap,
+            Err(_) => return false,
+          }
+        } else {
+          match self
+            .image_cache
+            .load_raster_pixmap(&resolved_src, orientation, true)
+          {
+            Ok(Some(pixmap)) => pixmap,
+            _ => return false,
+          }
         };
         let img_w = pixmap.width();
         let img_h = pixmap.height();
@@ -4002,6 +4044,9 @@ impl Painter {
         let Some(pixmap) = self.render_generated_image(bg, style, img_w, img_h) else {
           return false;
         };
+        let pixmap = Arc::new(pixmap);
+        let img_w = pixmap.width();
+        let img_h = pixmap.height();
         (pixmap, img_w, img_h)
       }
       BackgroundImage::None => return false,
@@ -4026,7 +4071,7 @@ impl Painter {
 
     // Corners
     self.paint_border_patch(
-      &pixmap,
+      pixmap.as_ref(),
       Rect::from_xywh(sx0, sy0, sx1 - sx0, sy1 - sy0),
       Rect::from_xywh(
         outer_rect.x(),
@@ -4038,7 +4083,7 @@ impl Painter {
       BorderImageRepeat::Stretch,
     );
     self.paint_border_patch(
-      &pixmap,
+      pixmap.as_ref(),
       Rect::from_xywh(sx2, sy0, sx3 - sx2, sy1 - sy0),
       Rect::from_xywh(
         outer_rect.x() + outer_rect.width() - target_widths.right,
@@ -4050,7 +4095,7 @@ impl Painter {
       BorderImageRepeat::Stretch,
     );
     self.paint_border_patch(
-      &pixmap,
+      pixmap.as_ref(),
       Rect::from_xywh(sx0, sy2, sx1 - sx0, sy3 - sy2),
       Rect::from_xywh(
         outer_rect.x(),
@@ -4062,7 +4107,7 @@ impl Painter {
       BorderImageRepeat::Stretch,
     );
     self.paint_border_patch(
-      &pixmap,
+      pixmap.as_ref(),
       Rect::from_xywh(sx2, sy2, sx3 - sx2, sy3 - sy2),
       Rect::from_xywh(
         outer_rect.x() + outer_rect.width() - target_widths.right,
@@ -4076,7 +4121,7 @@ impl Painter {
 
     // Edges
     self.paint_border_patch(
-      &pixmap,
+      pixmap.as_ref(),
       Rect::from_xywh(sx1, sy0, sx2 - sx1, sy1 - sy0),
       Rect::from_xywh(
         inner_rect.x(),
@@ -4088,7 +4133,7 @@ impl Painter {
       BorderImageRepeat::Stretch,
     );
     self.paint_border_patch(
-      &pixmap,
+      pixmap.as_ref(),
       Rect::from_xywh(sx1, sy2, sx2 - sx1, sy3 - sy2),
       Rect::from_xywh(
         inner_rect.x(),
@@ -4100,7 +4145,7 @@ impl Painter {
       BorderImageRepeat::Stretch,
     );
     self.paint_border_patch(
-      &pixmap,
+      pixmap.as_ref(),
       Rect::from_xywh(sx0, sy1, sx1 - sx0, sy2 - sy1),
       Rect::from_xywh(
         outer_rect.x(),
@@ -4112,7 +4157,7 @@ impl Painter {
       repeat_y,
     );
     self.paint_border_patch(
-      &pixmap,
+      pixmap.as_ref(),
       Rect::from_xywh(sx2, sy1, sx3 - sx2, sy2 - sy1),
       Rect::from_xywh(
         outer_rect.x() + outer_rect.width() - target_widths.right,
@@ -4126,7 +4171,7 @@ impl Painter {
 
     if slice.fill {
       self.paint_border_patch(
-        &pixmap,
+        pixmap.as_ref(),
         Rect::from_xywh(sx1, sy1, sx2 - sx1, sy2 - sy1),
         inner_rect,
         repeat_x,
@@ -6022,22 +6067,23 @@ impl Painter {
     }
 
     let pixmap_timer = self.diagnostics_enabled.then(Instant::now);
-    let pixmap = match Self::dynamic_image_to_pixmap(&image, orientation) {
-      Some(pixmap) => {
-        if let Some(start) = pixmap_timer {
-          with_paint_diagnostics(|diag| {
-            diag.image_pixmap_ms += start.elapsed().as_secs_f64() * 1000.0;
-          });
-        }
-        pixmap
-      }
-      None => {
+    let pixmap = match self
+      .image_cache
+      .load_raster_pixmap(&resolved_src, orientation, false)
+    {
+      Ok(Some(pixmap)) => pixmap,
+      Ok(None) | Err(_) => {
         if log_image_fail {
           eprintln!("[image-load-fail] src={} stage=pixmap", src.url);
         }
         return false;
       }
     };
+    if let Some(start) = pixmap_timer {
+      with_paint_diagnostics(|diag| {
+        diag.image_pixmap_ms += start.elapsed().as_secs_f64() * 1000.0;
+      });
+    }
 
     if matches!(
       style.map(|s| s.image_rendering),
@@ -6074,7 +6120,7 @@ impl Painter {
       );
       self
         .pixmap
-        .draw_pixmap(0, 0, pixmap.as_ref(), &paint, transform, None);
+        .draw_pixmap(0, 0, pixmap.as_ref().as_ref(), &paint, transform, None);
       return true;
     }
 
@@ -6102,7 +6148,7 @@ impl Painter {
     );
     self
       .pixmap
-      .draw_pixmap(0, 0, pixmap.as_ref(), &paint, transform, None);
+      .draw_pixmap(0, 0, pixmap.as_ref().as_ref(), &paint, transform, None);
     true
   }
 
@@ -6205,7 +6251,8 @@ impl Painter {
       return true;
     }
 
-    let image = match self.image_cache.load(content) {
+    let resolved_src = self.image_cache.resolve_url(content);
+    let image = match self.image_cache.load(&resolved_src) {
       Ok(img) => img,
       Err(_) => return false,
     };
@@ -6222,11 +6269,6 @@ impl Painter {
       image.css_dimensions(orientation, &image_resolution, self.scale, None)
     else {
       return false;
-    };
-
-    let pixmap = match Self::dynamic_image_to_pixmap(&image, orientation) {
-      Some(pixmap) => pixmap,
-      None => return false,
     };
     let fit = style.map(|s| s.object_fit).unwrap_or(ObjectFit::Fill);
     let pos = style
@@ -6245,6 +6287,54 @@ impl Painter {
     ) {
       Some(v) => v,
       None => return false,
+    };
+
+    let dest_x_device = self.device_length(dest_x);
+    let dest_y_device = self.device_length(dest_y);
+    let dest_w_device = self.device_length(dest_w);
+    let dest_h_device = self.device_length(dest_h);
+
+    if image.is_vector {
+      if let Some(svg) = &image.svg_content {
+        let render_w = dest_w_device.ceil().max(1.0) as u32;
+        let render_h = dest_h_device.ceil().max(1.0) as u32;
+        if render_w > 0 && render_h > 0 {
+          if let Ok(pixmap) = self.image_cache.render_svg_pixmap_at_size(
+            svg,
+            render_w,
+            render_h,
+            &resolved_src,
+            self.scale,
+          ) {
+            let scale_x = dest_w_device / render_w as f32;
+            let scale_y = dest_h_device / render_h as f32;
+            if scale_x.is_finite() && scale_y.is_finite() {
+              let mut paint = PixmapPaint::default();
+              paint.quality = Self::filter_quality_for_image(style);
+              let transform = Transform::from_row(
+                scale_x,
+                0.0,
+                0.0,
+                scale_y,
+                self.device_length(x) + dest_x_device,
+                self.device_length(y) + dest_y_device,
+              );
+              self
+                .pixmap
+                .draw_pixmap(0, 0, pixmap.as_ref().as_ref(), &paint, transform, None);
+              return true;
+            }
+          }
+        }
+      }
+    }
+
+    let pixmap = match self
+      .image_cache
+      .load_raster_pixmap(&resolved_src, orientation, false)
+    {
+      Ok(Some(pixmap)) => pixmap,
+      _ => return false,
     };
 
     if matches!(
@@ -6282,7 +6372,7 @@ impl Painter {
       );
       self
         .pixmap
-        .draw_pixmap(0, 0, pixmap.as_ref(), &paint, transform, None);
+        .draw_pixmap(0, 0, pixmap.as_ref().as_ref(), &paint, transform, None);
       return true;
     }
 
@@ -6310,7 +6400,7 @@ impl Painter {
     );
     self
       .pixmap
-      .draw_pixmap(0, 0, pixmap.as_ref(), &paint, transform, None);
+      .draw_pixmap(0, 0, pixmap.as_ref().as_ref(), &paint, transform, None);
     true
   }
 
@@ -6611,51 +6701,6 @@ impl Painter {
     };
 
     metrics.underline_position_with_offset(base, offset)
-  }
-
-  fn dynamic_image_to_pixmap(
-    image: &CachedImage,
-    orientation: OrientationTransform,
-  ) -> Option<Pixmap> {
-    let rgba = image.to_oriented_rgba(orientation);
-    let (width, height) = rgba.dimensions();
-    if width == 0 || height == 0 {
-      return None;
-    }
-
-    let Some(bytes) = u64::from(width)
-      .checked_mul(u64::from(height))
-      .and_then(|px| px.checked_mul(4))
-    else {
-      eprintln!(
-        "image allocation overflow for {}x{} (orientation {:?})",
-        width, height, orientation
-      );
-      return None;
-    };
-    let mut data = match reserve_buffer(bytes, "premultiplying image data for paint") {
-      Ok(buf) => buf,
-      Err(err) => {
-        eprintln!(
-          "skipping image {}x{} ({} bytes): {}",
-          width, height, bytes, err
-        );
-        return None;
-      }
-    };
-
-    // tiny-skia expects premultiplied RGBA
-    for pixel in rgba.pixels() {
-      let [r, g, b, a] = pixel.0;
-      let alpha = a as f32 / 255.0;
-      data.push((r as f32 * alpha).round() as u8);
-      data.push((g as f32 * alpha).round() as u8);
-      data.push((b as f32 * alpha).round() as u8);
-      data.push(a);
-    }
-
-    let size = IntSize::from_wh(width, height)?;
-    Pixmap::from_vec(data, size)
   }
 
   fn render_generated_image(
