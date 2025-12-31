@@ -86,6 +86,7 @@ use selectors::parser::Selector;
 use selectors::parser::SelectorList;
 use selectors::Element;
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::hash::{BuildHasherDefault, Hasher};
@@ -234,26 +235,6 @@ fn container_query_matches(
   }
 }
 
-fn container_type_supports_query(container_type: ContainerType, query: &ContainerQuery) -> bool {
-  match query {
-    ContainerQuery::Size(_) => matches!(
-      container_type,
-      ContainerType::Size | ContainerType::InlineSize
-    ),
-    ContainerQuery::Style(_) => matches!(
-      container_type,
-      ContainerType::Size | ContainerType::InlineSize | ContainerType::Style
-    ),
-    ContainerQuery::Not(inner) => container_type_supports_query(container_type, inner),
-    ContainerQuery::And(list) => list
-      .iter()
-      .all(|inner| container_type_supports_query(container_type, inner)),
-    ContainerQuery::Or(list) => list
-      .iter()
-      .any(|inner| container_type_supports_query(container_type, inner)),
-  }
-}
-
 fn matches_style_query(query: &ContainerStyleQuery, styles: &ComputedStyle) -> bool {
   match query {
     ContainerStyleQuery::CustomProperty { name, value } => {
@@ -279,6 +260,111 @@ fn matches_style_query(query: &ContainerStyleQuery, styles: &ComputedStyle) -> b
 
 fn normalize_query_value(value: &str) -> String {
   value.trim().trim_end_matches(';').trim().to_string()
+}
+
+// Container query evaluation memoization.
+//
+// Container conditions are cloned per collected rule, so pointer-based caching is ineffective.
+// Instead we cache based on a small, spec-relevant signature:
+// - the optional container name
+// - the set of container types that can *possibly* satisfy the condition's query list
+//   (i.e. the container-type gating used while selecting a query container).
+//
+// The cache is thread-local and cleared at the start of each cascade pass.
+const CQ_SUPPORT_SIZE: u8 = 1 << 0;
+const CQ_SUPPORT_INLINE_SIZE: u8 = 1 << 1;
+const CQ_SUPPORT_STYLE: u8 = 1 << 2;
+const CQ_SUPPORT_ALL: u8 = CQ_SUPPORT_SIZE | CQ_SUPPORT_INLINE_SIZE | CQ_SUPPORT_STYLE;
+
+fn cq_type_bit(container_type: ContainerType) -> u8 {
+  match container_type {
+    ContainerType::Size => CQ_SUPPORT_SIZE,
+    ContainerType::InlineSize => CQ_SUPPORT_INLINE_SIZE,
+    ContainerType::Style => CQ_SUPPORT_STYLE,
+    _ => 0,
+  }
+}
+
+fn cq_query_support_mask(query: &ContainerQuery) -> u8 {
+  match query {
+    ContainerQuery::Size(_) => CQ_SUPPORT_SIZE | CQ_SUPPORT_INLINE_SIZE,
+    ContainerQuery::Style(_) => CQ_SUPPORT_ALL,
+    ContainerQuery::Not(inner) => cq_query_support_mask(inner),
+    ContainerQuery::And(list) => {
+      if list.is_empty() {
+        CQ_SUPPORT_ALL
+      } else {
+        list
+          .iter()
+          .fold(CQ_SUPPORT_ALL, |acc, inner| acc & cq_query_support_mask(inner))
+      }
+    }
+    ContainerQuery::Or(list) => list
+      .iter()
+      .fold(0u8, |acc, inner| acc | cq_query_support_mask(inner)),
+  }
+}
+
+fn cq_condition_support_mask(condition: &ContainerCondition) -> u8 {
+  condition
+    .query_list
+    .iter()
+    .fold(0u8, |acc, query| acc | cq_query_support_mask(query))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct FindContainerCacheKey {
+  ctx_ptr: usize,
+  node_id: usize,
+  /// Interned container-name id; 0 represents "no name restriction".
+  name_id: u32,
+  support_mask: u8,
+}
+
+#[derive(Debug)]
+struct ContainerQueryMemo {
+  // Map from (query-container lookup key) -> selected container id (or None).
+  find_container: HashMap<FindContainerCacheKey, Option<usize>>,
+  // Intern container names to avoid storing strings in every cache key.
+  name_ids: HashMap<String, u32>,
+  next_name_id: u32,
+}
+
+impl Default for ContainerQueryMemo {
+  fn default() -> Self {
+    Self {
+      find_container: HashMap::new(),
+      name_ids: HashMap::new(),
+      next_name_id: 1,
+    }
+  }
+}
+
+impl ContainerQueryMemo {
+  fn clear(&mut self) {
+    self.find_container.clear();
+    self.name_ids.clear();
+    self.next_name_id = 1;
+  }
+
+  fn intern_name(&mut self, name: &str) -> u32 {
+    if let Some(id) = self.name_ids.get(name) {
+      *id
+    } else {
+      let id = self.next_name_id;
+      self.next_name_id = self.next_name_id.saturating_add(1);
+      self.name_ids.insert(name.to_string(), id);
+      id
+    }
+  }
+}
+
+thread_local! {
+  static CONTAINER_QUERY_MEMO: RefCell<ContainerQueryMemo> = RefCell::new(ContainerQueryMemo::default());
+}
+
+fn reset_container_query_memo() {
+  CONTAINER_QUERY_MEMO.with(|memo| memo.borrow_mut().clear());
 }
 
 fn top_layer_kind(node: &DomNode) -> Option<TopLayerKind> {
@@ -2220,9 +2306,35 @@ impl ContainerQueryContext {
     depth_limit: usize,
   ) -> bool {
     for condition in conditions {
-      let (container_id, container) = match self.find_container(node_id, ancestor_ids, condition) {
-        Some(info) => info,
-        None => return false,
+      let support_mask = cq_condition_support_mask(condition);
+      let container_id = CONTAINER_QUERY_MEMO.with(|memo_cell| {
+        let mut memo = memo_cell.borrow_mut();
+        let name_id = condition
+          .name
+          .as_deref()
+          .map(|name| memo.intern_name(name))
+          .unwrap_or(0);
+        let key = FindContainerCacheKey {
+          ctx_ptr: self as *const _ as usize,
+          node_id,
+          name_id,
+          support_mask,
+        };
+        if let Some(cached) = memo.find_container.get(&key) {
+          return *cached;
+        }
+        let found = self
+          .find_container_impl(node_id, ancestor_ids, condition.name.as_deref(), support_mask)
+          .map(|(id, _)| id);
+        memo.find_container.insert(key, found);
+        found
+      });
+
+      let Some(container_id) = container_id else {
+        return false;
+      };
+      let Some(container) = self.containers.get(&container_id) else {
+        return false;
       };
 
       if guard.len() >= depth_limit || guard.contains(&container_id) {
@@ -2251,27 +2363,37 @@ impl ContainerQueryContext {
     ancestor_ids: &[usize],
     condition: &ContainerCondition,
   ) -> Option<(usize, &'a ContainerQueryInfo)> {
+    self.find_container_impl(
+      node_id,
+      ancestor_ids,
+      condition.name.as_deref(),
+      cq_condition_support_mask(condition),
+    )
+  }
+
+  fn find_container_impl<'a>(
+    &'a self,
+    node_id: usize,
+    ancestor_ids: &[usize],
+    required_name: Option<&str>,
+    support_mask: u8,
+  ) -> Option<(usize, &'a ContainerQueryInfo)> {
+    if support_mask == 0 {
+      return None;
+    }
+
     // Per spec the query container is the nearest ancestor that establishes a container;
     // allow the current element itself if it is a container.
-    let mut search: Vec<usize> = Vec::with_capacity(ancestor_ids.len() + 1);
-    search.push(node_id);
-    search.extend_from_slice(ancestor_ids);
-
-    for &candidate in search.iter().rev() {
-      let info = match self.containers.get(&candidate) {
-        Some(info) => info,
-        None => continue,
+    for candidate in std::iter::once(node_id).chain(ancestor_ids.iter().rev().copied()) {
+      let Some(info) = self.containers.get(&candidate) else {
+        continue;
       };
 
-      if !condition
-        .query_list
-        .iter()
-        .any(|query| container_type_supports_query(info.container_type, query))
-      {
+      if (support_mask & cq_type_bit(info.container_type)) == 0 {
         continue;
       }
 
-      if let Some(name) = &condition.name {
+      if let Some(name) = required_name {
         if !info.names.iter().any(|n| n == name) {
           continue;
         }
@@ -2451,6 +2573,7 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
     reset_cascade_profile();
   }
   reset_has_counters();
+  reset_container_query_memo();
   let log_reuse = runtime::runtime_toggles().truthy("FASTR_LOG_CONTAINER_REUSE");
   let mut reuse_counter: usize = 0;
 
@@ -2996,6 +3119,7 @@ fn apply_style_set_with_media_target_and_imports_cached_with_deadline_impl(
     reset_cascade_profile();
   }
   reset_has_counters();
+  reset_container_query_memo();
   let log_reuse = runtime::runtime_toggles().truthy("FASTR_LOG_CONTAINER_REUSE");
   let mut reuse_counter: usize = 0;
 
@@ -5104,6 +5228,7 @@ mod tests {
   use crate::style::display::Display;
   use crate::style::float::Float;
   use crate::style::media::MediaContext;
+  use crate::style::media::MediaQuery;
   use crate::style::properties::apply_declaration;
   use crate::style::types::BorderCollapse;
   use crate::style::types::BorderStyle;
@@ -5137,6 +5262,144 @@ mod tests {
       },
       children: vec![],
     }
+  }
+
+  #[test]
+  fn container_query_prefers_self_container_over_ancestor() {
+    reset_container_query_memo();
+    let mut containers = HashMap::new();
+    containers.insert(
+      1,
+      ContainerQueryInfo {
+        inline_size: 400.0,
+        block_size: 0.0,
+        container_type: ContainerType::Size,
+        names: Vec::new(),
+        font_size: 16.0,
+        styles: Arc::new(ComputedStyle::default()),
+      },
+    );
+    containers.insert(
+      2,
+      ContainerQueryInfo {
+        inline_size: 600.0,
+        block_size: 0.0,
+        container_type: ContainerType::Size,
+        names: Vec::new(),
+        font_size: 16.0,
+        styles: Arc::new(ComputedStyle::default()),
+      },
+    );
+    let ctx = ContainerQueryContext {
+      base_media: MediaContext::default(),
+      containers,
+    };
+
+    let condition = ContainerCondition {
+      name: None,
+      query_list: vec![ContainerQuery::Size(
+        MediaQuery::parse("(min-width: 500px)").expect("media query"),
+      )],
+    };
+    let ancestor_ids = vec![0, 1];
+
+    let (container_id, _) = ctx
+      .find_container(2, &ancestor_ids, &condition)
+      .expect("container");
+    assert_eq!(container_id, 2);
+    assert!(ctx.matches(2, &ancestor_ids, &[condition]));
+  }
+
+  #[test]
+  fn container_query_nearest_named_container_wins() {
+    reset_container_query_memo();
+    let mut containers = HashMap::new();
+    containers.insert(
+      1,
+      ContainerQueryInfo {
+        inline_size: 400.0,
+        block_size: 0.0,
+        container_type: ContainerType::Size,
+        names: vec!["foo".to_string()],
+        font_size: 16.0,
+        styles: Arc::new(ComputedStyle::default()),
+      },
+    );
+    containers.insert(
+      2,
+      ContainerQueryInfo {
+        inline_size: 600.0,
+        block_size: 0.0,
+        container_type: ContainerType::Size,
+        names: vec!["foo".to_string()],
+        font_size: 16.0,
+        styles: Arc::new(ComputedStyle::default()),
+      },
+    );
+    let ctx = ContainerQueryContext {
+      base_media: MediaContext::default(),
+      containers,
+    };
+
+    let condition = ContainerCondition {
+      name: Some("foo".to_string()),
+      query_list: vec![ContainerQuery::Size(
+        MediaQuery::parse("(min-width: 500px)").expect("media query"),
+      )],
+    };
+    let ancestor_ids = vec![0, 1];
+
+    let (container_id, _) = ctx
+      .find_container(2, &ancestor_ids, &condition)
+      .expect("container");
+    assert_eq!(container_id, 2);
+    assert!(ctx.matches(2, &ancestor_ids, &[condition]));
+  }
+
+  #[test]
+  fn container_query_container_type_gating_respected() {
+    reset_container_query_memo();
+    let mut containers = HashMap::new();
+    containers.insert(
+      1,
+      ContainerQueryInfo {
+        inline_size: 600.0,
+        block_size: 0.0,
+        container_type: ContainerType::Size,
+        names: Vec::new(),
+        font_size: 16.0,
+        styles: Arc::new(ComputedStyle::default()),
+      },
+    );
+    containers.insert(
+      2,
+      ContainerQueryInfo {
+        inline_size: 800.0,
+        block_size: 0.0,
+        container_type: ContainerType::Style,
+        names: Vec::new(),
+        font_size: 16.0,
+        styles: Arc::new(ComputedStyle::default()),
+      },
+    );
+    let ctx = ContainerQueryContext {
+      base_media: MediaContext::default(),
+      containers,
+    };
+
+    let condition = ContainerCondition {
+      name: None,
+      query_list: vec![ContainerQuery::Size(
+        MediaQuery::parse("(min-width: 500px)").expect("media query"),
+      )],
+    };
+    let ancestor_ids = vec![0, 1];
+
+    let (container_id, _) = ctx
+      .find_container(2, &ancestor_ids, &condition)
+      .expect("container");
+    assert_eq!(container_id, 1);
+    assert!(ctx.matches(2, &ancestor_ids, &[condition]));
   }
 
   #[test]
