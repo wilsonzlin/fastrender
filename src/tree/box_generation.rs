@@ -905,24 +905,30 @@ pub fn collect_svg_filter_defs(styled: &StyledNode) -> HashMap<String, String> {
     inherited_xmlns: &[(String, String)],
     filters: &mut HashMap<String, String>,
   ) {
-    let mut namespaces: Vec<(String, String)> = inherited_xmlns.to_vec();
+    let mut owned_namespaces: Option<Vec<(String, String)>> = None;
+    let mut namespaces = inherited_xmlns;
     if let crate::dom::DomNodeType::Element {
       tag_name,
       attributes,
       ..
     } = &styled.node.node_type
     {
-      for (name, value) in attributes.iter().filter(|(n, _)| n.starts_with("xmlns")) {
-        if !namespaces.iter().any(|(n, _)| n.eq_ignore_ascii_case(name)) {
-          namespaces.push((name.clone(), value.clone()));
+      if attributes.iter().any(|(name, _)| name.starts_with("xmlns")) {
+        let mut updated = inherited_xmlns.to_vec();
+        for (name, value) in attributes.iter().filter(|(n, _)| n.starts_with("xmlns")) {
+          if !updated.iter().any(|(n, _)| n.eq_ignore_ascii_case(name)) {
+            updated.push((name.clone(), value.clone()));
+          }
         }
+        owned_namespaces = Some(updated);
+        namespaces = owned_namespaces.as_deref().unwrap_or(inherited_xmlns);
       }
 
       if tag_name.eq_ignore_ascii_case("filter") {
         if let Some(id) = styled.node.get_attribute_ref("id") {
           if !id.is_empty() && !filters.contains_key(id) {
             let mut serialized = String::new();
-            serialize_node_with_namespaces(styled, &namespaces, &mut serialized);
+            serialize_node_with_namespaces(styled, namespaces, &mut serialized);
             filters.insert(id.to_string(), serialized);
           }
         }
@@ -930,7 +936,7 @@ pub fn collect_svg_filter_defs(styled: &StyledNode) -> HashMap<String, String> {
     }
 
     for child in &styled.children {
-      walk(child, &namespaces, filters);
+      walk(child, namespaces, filters);
     }
   }
 
