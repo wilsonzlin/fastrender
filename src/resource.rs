@@ -464,6 +464,10 @@ fn retryable_http_status(status: u16) -> bool {
   matches!(status, 202 | 429 | 500 | 502 | 503 | 504)
 }
 
+fn http_status_allows_empty_body(status: u16) -> bool {
+  matches!(status, 204 | 205 | 304) || (100..200).contains(&status)
+}
+
 fn parse_retry_after(headers: &HeaderMap) -> Option<Duration> {
   let value = headers.get("retry-after")?.to_str().ok()?.trim();
   if value.is_empty() {
@@ -1471,7 +1475,10 @@ impl HttpFetcher {
                 }
               };
 
-            if bytes.is_empty() && status_code != 304 {
+            if bytes.is_empty()
+              && !http_status_allows_empty_body(status_code)
+              && !retryable_http_status(status_code)
+            {
               if attempt < max_attempts {
                 let mut backoff = compute_backoff(&self.retry_policy, attempt, &current);
                 if let Some(retry_after) = retry_after {
@@ -3995,6 +4002,118 @@ mod tests {
     assert_eq!(resource.bytes, b"hello brotli");
 
     handle.join().unwrap();
+  }
+
+  #[test]
+  fn http_fetcher_allows_204_empty_body() {
+    let Some(listener) = try_bind_localhost("http_fetcher_allows_204_empty_body") else {
+      return;
+    };
+    let addr = listener.local_addr().unwrap();
+
+    let handle = thread::spawn(move || {
+      if let Some(stream) = listener.incoming().next() {
+        let mut stream = stream.unwrap();
+        let mut buf = [0u8; 1024];
+        let _ = stream.read(&mut buf);
+        let headers = b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        let _ = stream.write_all(headers);
+      }
+    });
+
+    let fetcher = HttpFetcher::new().with_timeout(Duration::from_secs(2));
+    let url = format!("http://{}", addr);
+    let res = fetcher.fetch(&url).expect("fetch 204");
+    handle.join().unwrap();
+
+    assert!(res.bytes.is_empty());
+    assert_eq!(res.status, Some(204));
+  }
+
+  #[test]
+  fn http_fetcher_retries_202_empty_body_then_succeeds() {
+    let Some(listener) = try_bind_localhost("http_fetcher_retries_202_empty_body_then_succeeds")
+    else {
+      return;
+    };
+    let addr = listener.local_addr().unwrap();
+
+    let handle = thread::spawn(move || {
+      for (idx, stream) in listener.incoming().take(2).enumerate() {
+        let mut stream = stream.unwrap();
+        let mut buf = [0u8; 1024];
+        let _ = stream.read(&mut buf);
+
+        if idx == 0 {
+          let headers =
+            b"HTTP/1.1 202 Accepted\r\nRetry-After: 0\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+          let _ = stream.write_all(headers);
+        } else {
+          let body = b"ok";
+          let headers = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+          );
+          stream.write_all(headers.as_bytes()).unwrap();
+          stream.write_all(body).unwrap();
+        }
+      }
+    });
+
+    let retry_policy = HttpRetryPolicy {
+      max_attempts: 2,
+      backoff_base: Duration::ZERO,
+      backoff_cap: Duration::ZERO,
+      respect_retry_after: true,
+    };
+    let fetcher = HttpFetcher::new()
+      .with_timeout(Duration::from_secs(2))
+      .with_retry_policy(retry_policy);
+    let url = format!("http://{}", addr);
+    let res = fetcher.fetch(&url).expect("fetch after 202 retry");
+    handle.join().unwrap();
+
+    assert_eq!(res.bytes, b"ok");
+    assert_eq!(res.status, Some(200));
+  }
+
+  #[test]
+  fn http_fetcher_returns_ok_on_persistent_202_empty_body_after_retries() {
+    let Some(listener) =
+      try_bind_localhost("http_fetcher_returns_ok_on_persistent_202_empty_body_after_retries")
+    else {
+      return;
+    };
+    let addr = listener.local_addr().unwrap();
+
+    let handle = thread::spawn(move || {
+      for stream in listener.incoming().take(2) {
+        let mut stream = stream.unwrap();
+        let mut buf = [0u8; 1024];
+        let _ = stream.read(&mut buf);
+        let headers =
+          b"HTTP/1.1 202 Accepted\r\nRetry-After: 0\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        let _ = stream.write_all(headers);
+      }
+    });
+
+    let retry_policy = HttpRetryPolicy {
+      max_attempts: 2,
+      backoff_base: Duration::ZERO,
+      backoff_cap: Duration::ZERO,
+      respect_retry_after: true,
+    };
+    let fetcher = HttpFetcher::new()
+      .with_timeout(Duration::from_secs(2))
+      .with_retry_policy(retry_policy);
+    let url = format!("http://{}", addr);
+    let res = fetcher
+      .fetch(&url)
+      .expect("persistent 202 empty body should return Ok");
+    handle.join().unwrap();
+
+    assert!(res.bytes.is_empty());
+    assert_eq!(res.status, Some(202));
   }
 
   #[test]
