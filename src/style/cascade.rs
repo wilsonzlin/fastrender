@@ -712,6 +712,11 @@ fn selector_contains_has(selector: &Selector<FastRenderSelectorImpl>) -> bool {
   for component in selector.iter_raw_match_order() {
     match component {
       Component::Has(_) => return true,
+      Component::NonTSPseudoClass(pc) => {
+        if matches!(pc, PseudoClass::Has(_)) {
+          return true;
+        }
+      }
       Component::Is(list) | Component::Where(list) | Component::Negation(list) => {
         if selector_list_contains_has(list) {
           return true;
@@ -1050,7 +1055,7 @@ impl HasRequirement {
 #[derive(Clone, Default)]
 struct SelectorMetadata {
   namespace: Option<String>,
-  has_requirements: Vec<HasRequirement>,
+  has_requirement_groups: Vec<Vec<HasRequirement>>,
 }
 
 fn selector_metadata_matches_node(
@@ -1065,13 +1070,16 @@ fn selector_metadata_matches_node(
     }
   }
   if let Some(summary) = summary {
-    if !metadata.has_requirements.is_empty()
-      && metadata
-        .has_requirements
+    for group in metadata.has_requirement_groups.iter() {
+      if group.is_empty() {
+        continue;
+      }
+      if !group
         .iter()
-        .any(|req| !req.matches_summary(summary, quirks_mode))
-    {
-      return false;
+        .any(|req| req.matches_summary(summary, quirks_mode))
+      {
+        return false;
+      }
     }
   }
   true
@@ -1573,57 +1581,46 @@ fn selector_namespace_constraint(
   required
 }
 
-fn selector_has_requirements(
+fn selector_has_requirement_groups(
   selector: &Selector<crate::css::selectors::FastRenderSelectorImpl>,
-) -> Vec<HasRequirement> {
+) -> Vec<Vec<HasRequirement>> {
   use selectors::parser::Component;
 
-  let mut requirements: Vec<HasRequirement> = Vec::new();
+  let mut groups: Vec<Vec<HasRequirement>> = Vec::new();
   let mut iter = selector.iter();
-  loop {
-    if let Some(component) = iter.next() {
-      match component {
-        Component::Has(list) => {
-          for relative in list.iter() {
-            if !relative.match_hint.is_descendant_direction() {
-              continue;
-            }
-            let non_quirks =
-              crate::dom::relative_selector_bloom_hashes(relative, QuirksMode::NoQuirks);
-            let quirks = crate::dom::relative_selector_bloom_hashes(relative, QuirksMode::Quirks);
-            let requirement = HasRequirement {
-              non_quirks_hashes: non_quirks,
-              quirks_hashes: quirks,
-            };
-            if !requirement.is_empty() {
-              requirements.push(requirement);
-            }
-          }
+  while let Some(component) = iter.next() {
+    let relative_selectors = match component {
+      Component::Has(list) => Some(&list[..]),
+      Component::NonTSPseudoClass(pc) => match pc {
+        PseudoClass::Has(list) => Some(&list[..]),
+        _ => None,
+      },
+      _ => None,
+    };
+    if let Some(list) = relative_selectors {
+      let mut group: Vec<HasRequirement> = Vec::new();
+      let mut unprunable = false;
+      for relative in list.iter() {
+        if !relative.match_hint.is_descendant_direction() {
+          unprunable = true;
+          break;
         }
-        Component::Is(list) | Component::Where(list) | Component::Negation(list) => {
-          for sel in list.slice() {
-            requirements.extend(selector_has_requirements(sel));
-          }
-        }
-        Component::Slotted(inner) => requirements.extend(selector_has_requirements(inner)),
-        Component::Host(Some(inner)) => requirements.extend(selector_has_requirements(inner)),
-        Component::PseudoElement(pseudo) => {
-          if let PseudoElement::Slotted(list) = pseudo {
-            for sel in list.iter() {
-              requirements.extend(selector_has_requirements(sel));
-            }
-          }
-        }
-        _ => {}
+        let non_quirks = crate::dom::relative_selector_bloom_hashes(relative, QuirksMode::NoQuirks);
+        let quirks = crate::dom::relative_selector_bloom_hashes(relative, QuirksMode::Quirks);
+        group.push(HasRequirement {
+          non_quirks_hashes: non_quirks,
+          quirks_hashes: quirks,
+        });
       }
-      continue;
-    }
-    if iter.next_sequence().is_none() {
-      break;
+      if unprunable {
+        groups.push(Vec::new());
+      } else {
+        groups.push(group);
+      }
     }
   }
 
-  requirements
+  groups
 }
 
 fn selector_metadata(
@@ -1631,7 +1628,7 @@ fn selector_metadata(
 ) -> SelectorMetadata {
   SelectorMetadata {
     namespace: selector_namespace_constraint(selector),
-    has_requirements: selector_has_requirements(selector),
+    has_requirement_groups: selector_has_requirement_groups(selector),
   }
 }
 
@@ -1790,7 +1787,11 @@ impl<'a> RuleIndex<'a> {
             let prelude = parse_slotted_prelude(selector);
             let prelude_specificity = prelude.as_ref().map(|sel| sel.specificity()).unwrap_or(0);
             let metadata = selector_metadata(selector);
-            if !metadata.has_requirements.is_empty() {
+            if metadata
+              .has_requirement_groups
+              .iter()
+              .any(|group| group.iter().any(|req| !req.is_empty()))
+            {
               index.has_has_requirements = true;
             }
             index.slotted_selectors.push(IndexedSlottedSelector {
@@ -1840,7 +1841,11 @@ impl<'a> RuleIndex<'a> {
           }
           let selector_idx = index.pseudo_selectors.len();
           let metadata = selector_metadata(selector);
-          if !metadata.has_requirements.is_empty() {
+          if metadata
+            .has_requirement_groups
+            .iter()
+            .any(|group| group.iter().any(|req| !req.is_empty()))
+          {
             index.has_has_requirements = true;
           }
           index.pseudo_selectors.push(IndexedSelector {
@@ -1865,7 +1870,11 @@ impl<'a> RuleIndex<'a> {
 
         let selector_idx = index.selectors.len();
         let metadata = selector_metadata(selector);
-        if !metadata.has_requirements.is_empty() {
+        if metadata
+          .has_requirement_groups
+          .iter()
+          .any(|group| group.iter().any(|req| !req.is_empty()))
+        {
           index.has_has_requirements = true;
         }
         index.selectors.push(IndexedSelector {
@@ -5545,7 +5554,6 @@ mod tests {
     let stylesheet = parse_stylesheet("DIV { color: red; } [data-Test] { color: blue; }").unwrap();
     let media_ctx = MediaContext::default();
     let collected = stylesheet.collect_style_rules(&media_ctx);
-
     let rules: Vec<CascadeRule<'_>> = collected
       .iter()
       .enumerate()
@@ -5560,7 +5568,6 @@ mod tests {
         starting_style: rule.starting_style,
       })
       .collect();
-
     let index = RuleIndex::new(rules);
 
     let node = DomNode {
@@ -5585,6 +5592,189 @@ mod tests {
     );
 
     assert_eq!(out.len(), 2);
+  }
+
+  #[test]
+  fn selector_bloom_pruning_has_list_is_or() {
+    crate::dom::set_selector_bloom_enabled(true);
+
+    let dom = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![],
+      },
+      children: vec![DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "span".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: vec![("class".to_string(), "a".to_string())],
+        },
+        children: vec![],
+      }],
+    };
+
+    let id_map = enumerate_dom_ids(&dom);
+    let dom_maps = DomMaps::new(&dom, id_map, true);
+    let blooms = dom_maps.selector_blooms().expect("bloom map");
+    let summary = blooms
+      .get(&(std::ptr::addr_of!(dom) as *const DomNode))
+      .expect("summary");
+
+    let stylesheet = parse_stylesheet("div:has(.a, .b) { color: red; }").unwrap();
+    let media_ctx = MediaContext::default();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+    let rules: Vec<CascadeRule<'_>> = collected
+      .iter()
+      .enumerate()
+      .map(|(order, rule)| CascadeRule {
+        origin: StyleOrigin::Author,
+        order,
+        rule: rule.rule,
+        layer_order: layer_order_with_tree_scope(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+        scope: RuleScope::Document,
+        starting_style: rule.starting_style,
+      })
+      .collect();
+    let index = RuleIndex::new(rules);
+    assert!(index.has_has_requirements);
+
+    let mut candidates: Vec<usize> = Vec::new();
+    let mut seen = CandidateSet::new(index.selectors.len());
+    let mut stats = CandidateStats::default();
+    index.selector_candidates(
+      &dom,
+      Some(summary),
+      QuirksMode::NoQuirks,
+      &mut candidates,
+      &mut seen,
+      &mut stats,
+    );
+    assert_eq!(candidates, vec![0]);
+  }
+
+  #[test]
+  fn selector_bloom_pruning_does_not_descend_into_is() {
+    crate::dom::set_selector_bloom_enabled(true);
+
+    let dom = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("class".to_string(), "b".to_string())],
+      },
+      children: vec![DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "span".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: vec![("class".to_string(), "c".to_string())],
+        },
+        children: vec![],
+      }],
+    };
+
+    let id_map = enumerate_dom_ids(&dom);
+    let dom_maps = DomMaps::new(&dom, id_map, true);
+    let blooms = dom_maps.selector_blooms().expect("bloom map");
+    let summary = blooms
+      .get(&(std::ptr::addr_of!(dom) as *const DomNode))
+      .expect("summary");
+
+    let stylesheet = parse_stylesheet("div:is(:has(.a), .b) { color: red; }").unwrap();
+    let media_ctx = MediaContext::default();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+    let rules: Vec<CascadeRule<'_>> = collected
+      .iter()
+      .enumerate()
+      .map(|(order, rule)| CascadeRule {
+        origin: StyleOrigin::Author,
+        order,
+        rule: rule.rule,
+        layer_order: layer_order_with_tree_scope(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+        scope: RuleScope::Document,
+        starting_style: rule.starting_style,
+      })
+      .collect();
+    let index = RuleIndex::new(rules);
+    assert!(!index.has_has_requirements);
+
+    let mut candidates: Vec<usize> = Vec::new();
+    let mut seen = CandidateSet::new(index.selectors.len());
+    let mut stats = CandidateStats::default();
+    index.selector_candidates(
+      &dom,
+      Some(summary),
+      QuirksMode::NoQuirks,
+      &mut candidates,
+      &mut seen,
+      &mut stats,
+    );
+    assert_eq!(candidates, vec![0]);
+  }
+
+  #[test]
+  fn selector_bloom_pruning_does_not_descend_into_not() {
+    crate::dom::set_selector_bloom_enabled(true);
+
+    let dom = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![],
+      },
+      children: vec![DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "span".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: vec![("class".to_string(), "b".to_string())],
+        },
+        children: vec![],
+      }],
+    };
+
+    let id_map = enumerate_dom_ids(&dom);
+    let dom_maps = DomMaps::new(&dom, id_map, true);
+    let blooms = dom_maps.selector_blooms().expect("bloom map");
+    let summary = blooms
+      .get(&(std::ptr::addr_of!(dom) as *const DomNode))
+      .expect("summary");
+
+    let stylesheet = parse_stylesheet("div:not(:has(.a)) { color: red; }").unwrap();
+    let media_ctx = MediaContext::default();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+    let rules: Vec<CascadeRule<'_>> = collected
+      .iter()
+      .enumerate()
+      .map(|(order, rule)| CascadeRule {
+        origin: StyleOrigin::Author,
+        order,
+        rule: rule.rule,
+        layer_order: layer_order_with_tree_scope(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+        scope: RuleScope::Document,
+        starting_style: rule.starting_style,
+      })
+      .collect();
+    let index = RuleIndex::new(rules);
+    assert!(!index.has_has_requirements);
+
+    let mut candidates: Vec<usize> = Vec::new();
+    let mut seen = CandidateSet::new(index.selectors.len());
+    let mut stats = CandidateStats::default();
+    index.selector_candidates(
+      &dom,
+      Some(summary),
+      QuirksMode::NoQuirks,
+      &mut candidates,
+      &mut seen,
+      &mut stats,
+    );
+    assert_eq!(candidates, vec![0]);
   }
 
   fn child_font_weight(parent_style: &str, child_style: &str) -> u16 {
