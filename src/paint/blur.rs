@@ -348,6 +348,11 @@ fn convolve_row_horizontal_fixed(
   debug_assert_eq!(src_row.len(), width * 4);
   debug_assert_eq!(out_row.len(), width * 4);
 
+  debug_assert!(scale > 0);
+  // `gaussian_kernel_fixed` uses a power-of-two SCALE (currently 1<<16).
+  // Using a shift instead of division is output-identical for the positive accumulators we produce here.
+  let shift = scale.trailing_zeros();
+  debug_assert_eq!(scale, 1i32 << shift);
   let bias = scale / 2;
   let max_x = width.saturating_sub(1) as isize;
 
@@ -366,10 +371,10 @@ fn convolve_row_horizontal_fixed(
       acc_a += w * src_row[idx + 3] as i32;
     }
     let out_idx = x * 4;
-    let a = ((acc_a + bias) / scale).clamp(0, 255);
-    let r = (acc_r + bias) / scale;
-    let g = (acc_g + bias) / scale;
-    let b = (acc_b + bias) / scale;
+    let a = ((acc_a + bias) >> shift).clamp(0, 255);
+    let r = (acc_r + bias) >> shift;
+    let g = (acc_g + bias) >> shift;
+    let b = (acc_b + bias) >> shift;
     out_row[out_idx] = clamp_channel_to_alpha(r, a);
     out_row[out_idx + 1] = clamp_channel_to_alpha(g, a);
     out_row[out_idx + 2] = clamp_channel_to_alpha(b, a);
@@ -403,10 +408,10 @@ fn convolve_row_horizontal_fixed(
       acc_a += w * src_row[idx + 3] as i32;
     }
     let out_idx = x * 4;
-    let a = ((acc_a + bias) / scale).clamp(0, 255);
-    let r = (acc_r + bias) / scale;
-    let g = (acc_g + bias) / scale;
-    let b = (acc_b + bias) / scale;
+    let a = ((acc_a + bias) >> shift).clamp(0, 255);
+    let r = (acc_r + bias) >> shift;
+    let g = (acc_g + bias) >> shift;
+    let b = (acc_b + bias) >> shift;
     out_row[out_idx] = clamp_channel_to_alpha(r, a);
     out_row[out_idx + 1] = clamp_channel_to_alpha(g, a);
     out_row[out_idx + 2] = clamp_channel_to_alpha(b, a);
@@ -432,6 +437,11 @@ fn convolve_row_vertical_fixed(
   let row_stride = width * 4;
   debug_assert_eq!(out_row.len(), row_stride);
 
+  debug_assert!(scale > 0);
+  // `gaussian_kernel_fixed` uses a power-of-two SCALE (currently 1<<16).
+  // Using a shift instead of division is output-identical for the positive accumulators we produce here.
+  let shift = scale.trailing_zeros();
+  debug_assert_eq!(scale, 1i32 << shift);
   let bias = scale / 2;
   let max_y = height.saturating_sub(1) as isize;
   let inner_end = height.saturating_sub(radius);
@@ -452,10 +462,10 @@ fn convolve_row_vertical_fixed(
         acc_a += w * src[idx + 3] as i32;
       }
       let out_idx = x * 4;
-      let a = ((acc_a + bias) / scale).clamp(0, 255);
-      let r = (acc_r + bias) / scale;
-      let g = (acc_g + bias) / scale;
-      let b = (acc_b + bias) / scale;
+      let a = ((acc_a + bias) >> shift).clamp(0, 255);
+      let r = (acc_r + bias) >> shift;
+      let g = (acc_g + bias) >> shift;
+      let b = (acc_b + bias) >> shift;
       out_row[out_idx] = clamp_channel_to_alpha(r, a);
       out_row[out_idx + 1] = clamp_channel_to_alpha(g, a);
       out_row[out_idx + 2] = clamp_channel_to_alpha(b, a);
@@ -479,10 +489,10 @@ fn convolve_row_vertical_fixed(
       acc_a += w * src[idx + 3] as i32;
     }
     let out_idx = x * 4;
-    let a = ((acc_a + bias) / scale).clamp(0, 255);
-    let r = (acc_r + bias) / scale;
-    let g = (acc_g + bias) / scale;
-    let b = (acc_b + bias) / scale;
+    let a = ((acc_a + bias) >> shift).clamp(0, 255);
+    let r = (acc_r + bias) >> shift;
+    let g = (acc_g + bias) >> shift;
+    let b = (acc_b + bias) >> shift;
     out_row[out_idx] = clamp_channel_to_alpha(r, a);
     out_row[out_idx + 1] = clamp_channel_to_alpha(g, a);
     out_row[out_idx + 2] = clamp_channel_to_alpha(b, a);
