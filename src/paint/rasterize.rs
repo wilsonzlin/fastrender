@@ -33,7 +33,7 @@
 
 use crate::error::RenderError;
 use crate::geometry::Rect;
-use crate::paint::blur::apply_gaussian_blur;
+use crate::paint::blur::{apply_gaussian_blur_cached, BlurCache};
 use crate::paint::display_list::BorderRadii;
 use crate::paint::display_list::BorderRadius;
 use crate::paint::pixmap::new_pixmap;
@@ -969,14 +969,31 @@ pub fn render_box_shadow(
   radii: &BorderRadii,
   shadow: &BoxShadow,
 ) -> Result<bool, RenderError> {
+  render_box_shadow_cached(pixmap, x, y, width, height, radii, shadow, None)
+}
+
+/// Renders a box shadow using an optional blur cache.
+///
+/// When `cache` is provided, the gaussian blur step can be reused across identical
+/// box shadows, avoiding repeated convolution work.
+pub fn render_box_shadow_cached(
+  pixmap: &mut Pixmap,
+  x: f32,
+  y: f32,
+  width: f32,
+  height: f32,
+  radii: &BorderRadii,
+  shadow: &BoxShadow,
+  cache: Option<&mut BlurCache>,
+) -> Result<bool, RenderError> {
   if shadow.color.a == 0.0 {
     return Ok(false);
   }
 
   if shadow.inset {
-    render_inset_shadow(pixmap, x, y, width, height, radii, shadow)
+    render_inset_shadow(pixmap, x, y, width, height, radii, shadow, cache)
   } else {
-    render_outset_shadow(pixmap, x, y, width, height, radii, shadow)
+    render_outset_shadow(pixmap, x, y, width, height, radii, shadow, cache)
   }
 }
 
@@ -989,6 +1006,7 @@ fn render_outset_shadow(
   height: f32,
   radii: &BorderRadii,
   shadow: &BoxShadow,
+  cache: Option<&mut BlurCache>,
 ) -> Result<bool, RenderError> {
   let sigma = shadow.blur_radius.max(0.0);
   let spread = shadow.spread_radius;
@@ -1048,7 +1066,7 @@ fn render_outset_shadow(
   );
 
   if sigma > 0.0 {
-    apply_gaussian_blur(&mut tmp, sigma)?;
+    apply_gaussian_blur_cached(&mut tmp, sigma, sigma, cache, 1.0)?;
   }
 
   let mut paint = PixmapPaint::default();
@@ -1073,6 +1091,7 @@ fn render_inset_shadow(
   height: f32,
   radii: &BorderRadii,
   shadow: &BoxShadow,
+  cache: Option<&mut BlurCache>,
 ) -> Result<bool, RenderError> {
   let sigma = shadow.blur_radius.max(0.0);
   let blur_pad = (sigma * 3.0).ceil();
@@ -1105,7 +1124,7 @@ fn render_inset_shadow(
   );
 
   if sigma > 0.0 {
-    apply_gaussian_blur(&mut tmp, sigma)?;
+    apply_gaussian_blur_cached(&mut tmp, sigma, sigma, cache, 1.0)?;
   }
 
   // Clip to the outer box to keep inset shadows inside
@@ -1360,6 +1379,7 @@ pub fn fill_circle(pixmap: &mut Pixmap, cx: f32, cy: f32, radius: f32, color: Rg
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::paint::painter::{enable_paint_diagnostics, take_paint_diagnostics};
 
   #[test]
   fn test_border_radii_uniform() {
@@ -1552,6 +1572,53 @@ mod tests {
     let shadow = BoxShadow::new(5.0, 5.0, 10.0, 0.0, Rgba::from_rgba8(0, 0, 0, 128));
     let result = render_box_shadow(&mut pixmap, 20.0, 20.0, 50.0, 50.0, &radii, &shadow).unwrap();
     assert!(result);
+  }
+
+  #[test]
+  fn test_render_box_shadow_cached_uses_blur_cache() {
+    enable_paint_diagnostics();
+    let mut cache = BlurCache::default();
+    let radii = BorderRadii::zero();
+    let shadow = BoxShadow::new(0.0, 0.0, 8.0, 0.0, Rgba::from_rgba8(0, 0, 0, 128));
+    let mut pixmap = new_pixmap(120, 120).unwrap();
+    let result = render_box_shadow_cached(
+      &mut pixmap,
+      20.0,
+      20.0,
+      50.0,
+      50.0,
+      &radii,
+      &shadow,
+      Some(&mut cache),
+    )
+    .unwrap();
+    assert!(result);
+
+    let mut pixmap2 = new_pixmap(120, 120).unwrap();
+    let result2 = render_box_shadow_cached(
+      &mut pixmap2,
+      20.0,
+      20.0,
+      50.0,
+      50.0,
+      &radii,
+      &shadow,
+      Some(&mut cache),
+    )
+    .unwrap();
+    assert!(result2);
+
+    let stats = take_paint_diagnostics().expect("diagnostics enabled");
+    assert!(
+      stats.blur_cache_misses > 0,
+      "expected at least one miss, got {}",
+      stats.blur_cache_misses
+    );
+    assert!(
+      stats.blur_cache_hits > 0,
+      "expected hits from second shadow, got {}",
+      stats.blur_cache_hits
+    );
   }
 
   #[test]

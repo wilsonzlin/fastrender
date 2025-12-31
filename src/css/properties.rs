@@ -4,6 +4,7 @@
 
 use super::types::GradientPosition;
 use super::types::GradientPositionComponent;
+use super::types::BoxShadow;
 use super::types::PropertyValue;
 use super::types::RadialGradientShape;
 use super::types::RadialGradientSize;
@@ -945,6 +946,90 @@ fn parse_text_shadow_list(value_str: &str) -> Option<Vec<TextShadow>> {
   Some(shadows)
 }
 
+fn parse_box_shadow_list(value_str: &str) -> Option<Vec<BoxShadow>> {
+  if value_str.trim().eq_ignore_ascii_case("none") {
+    return Some(Vec::new());
+  }
+
+  let trimmed = value_str.trim();
+  if trimmed.is_empty() {
+    return None;
+  }
+
+  let tokens = tokenize_property_value(trimmed, true);
+  if tokens.is_empty() {
+    return None;
+  }
+
+  let mut layers: Vec<Vec<String>> = Vec::new();
+  let mut current: Vec<String> = Vec::new();
+  for token in tokens {
+    if token == "," {
+      if current.is_empty() {
+        return None;
+      }
+      layers.push(std::mem::take(&mut current));
+      continue;
+    }
+    current.push(token);
+  }
+  if current.is_empty() {
+    return None;
+  }
+  layers.push(current);
+
+  let mut shadows = Vec::new();
+  for layer in layers {
+    let mut lengths = Vec::new();
+    let mut color: Option<Rgba> = None;
+    let mut inset = false;
+
+    for token in layer {
+      if token.eq_ignore_ascii_case("inset") {
+        inset = true;
+        continue;
+      }
+      if color.is_none() {
+        if let Ok(parsed_color) = Color::parse(&token) {
+          color = Some(parsed_color.to_rgba(Rgba::BLACK));
+          continue;
+        }
+      }
+      if let Some(len) = parse_length(&token) {
+        lengths.push(len);
+        continue;
+      }
+      return None;
+    }
+
+    if lengths.len() < 2 || lengths.len() > 4 {
+      return None;
+    }
+
+    let blur = if lengths.len() >= 3 {
+      lengths[2]
+    } else {
+      Length::px(0.0)
+    };
+    let spread = if lengths.len() >= 4 {
+      lengths[3]
+    } else {
+      Length::px(0.0)
+    };
+
+    shadows.push(BoxShadow {
+      offset_x: lengths[0],
+      offset_y: lengths[1],
+      blur_radius: blur,
+      spread_radius: spread,
+      color: color.unwrap_or(Rgba::BLACK),
+      inset,
+    });
+  }
+
+  Some(shadows)
+}
+
 fn parse_known_property_value(property: &str, value_str: &str) -> Option<PropertyValue> {
   let value_str = value_str.trim();
   if value_str.is_empty() {
@@ -968,6 +1053,13 @@ fn parse_known_property_value(property: &str, value_str: &str) -> Option<Propert
   if property == "text-shadow" {
     if let Some(shadows) = parse_text_shadow_list(value_str) {
       return Some(PropertyValue::TextShadow(shadows));
+    }
+    return None;
+  }
+
+  if property == "box-shadow" {
+    if let Some(shadows) = parse_box_shadow_list(value_str) {
+      return Some(PropertyValue::BoxShadow(shadows));
     }
     return None;
   }

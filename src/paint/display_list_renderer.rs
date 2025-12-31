@@ -67,7 +67,7 @@ use crate::paint::painter::paint_diagnostics_enabled;
 use crate::paint::pixmap::new_pixmap;
 use crate::paint::projective_warp::{warp_pixmap_cached, WarpCache, WarpedPixmap};
 use crate::paint::rasterize::fill_rounded_rect;
-use crate::paint::rasterize::render_box_shadow;
+use crate::paint::rasterize::render_box_shadow_cached;
 use crate::paint::rasterize::BoxShadow;
 use crate::paint::text_rasterize::{
   shared_color_cache, shared_color_renderer, shared_glyph_cache, ColorGlyphCache, GlyphCache,
@@ -3692,7 +3692,7 @@ impl DisplayListRenderer {
       None => return Ok(()),
     };
 
-    let _ = render_box_shadow(
+    let _ = render_box_shadow_cached(
       &mut temp,
       rect.x() - shadow_bounds.x(),
       rect.y() - shadow_bounds.y(),
@@ -3700,6 +3700,7 @@ impl DisplayListRenderer {
       rect.height(),
       &radii,
       &shadow,
+      Some(&mut self.blur_cache),
     )?;
 
     let paint = tiny_skia::PixmapPaint {
@@ -7533,6 +7534,7 @@ mod tests {
   use crate::paint::display_list::TextShadowItem;
   use crate::paint::display_list::Transform3D;
   use crate::paint::display_list_builder::DisplayListBuilder;
+  use crate::paint::rasterize::render_box_shadow;
   use crate::style::color::{Color, Rgba};
   use crate::style::types::BackfaceVisibility;
   use crate::style::types::BackgroundImage;

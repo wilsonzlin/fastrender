@@ -107,7 +107,7 @@ impl BlurCacheKey {
   }
 }
 
-pub(crate) struct BlurCache {
+pub struct BlurCache {
   lru: LruCache<BlurCacheKey, Pixmap, BlurHasher>,
   current_bytes: usize,
   config: FilterCacheConfig,

@@ -53,6 +53,7 @@ use fastrender::tree::fragment_tree::FragmentNode;
 use fastrender::tree::fragment_tree::FragmentTree;
 use fastrender::BlendMode;
 use fastrender::BorderRadii;
+use fastrender::BoxShadowItem;
 use fastrender::ClipItem;
 use fastrender::DisplayItem;
 use fastrender::DisplayList;
@@ -1008,6 +1009,82 @@ fn bench_tiled_background_image_src_rect(c: &mut Criterion) {
       });
     },
   );
+  group.finish();
+}
+
+/// Bench repeated box-shadow rendering with and without BlurCache enabled.
+fn bench_display_list_box_shadow_blur_cache(c: &mut Criterion) {
+  fn restore_env(name: &str, prev: Option<std::ffi::OsString>) {
+    if let Some(value) = prev {
+      std::env::set_var(name, value);
+    } else {
+      std::env::remove_var(name);
+    }
+  }
+
+  let mut list = DisplayList::new();
+  let padding = 32.0;
+  let size = 20.0;
+  let gap = 4.0;
+  let pitch = size + gap;
+  let radii = BorderRadii::uniform(6.0);
+  let shadow_color = Rgba::from_rgba8(0, 0, 0, 128);
+  for row in 0..10 {
+    for col in 0..10 {
+      let x = padding + (col as f32) * pitch;
+      let y = padding + (row as f32) * pitch;
+      list.push(DisplayItem::BoxShadow(BoxShadowItem {
+        rect: Rect::from_xywh(x, y, size, size),
+        radii,
+        offset: Point::new(0.0, 0.0),
+        blur_radius: 8.0,
+        spread_radius: 0.0,
+        color: shadow_color,
+        inset: false,
+      }));
+    }
+  }
+
+  let font_ctx = FontContext::new();
+  let parallelism = PaintParallelism::disabled();
+  let width = 320;
+  let height = 320;
+  let mut group = c.benchmark_group("display_list_box_shadow_blur_cache");
+  group.sample_size(10);
+
+  group.bench_function("uncached", |b| {
+    let prev_items = std::env::var_os("FASTR_SVG_FILTER_CACHE_ITEMS");
+    let prev_bytes = std::env::var_os("FASTR_SVG_FILTER_CACHE_BYTES");
+    std::env::set_var("FASTR_SVG_FILTER_CACHE_ITEMS", "0");
+    std::env::set_var("FASTR_SVG_FILTER_CACHE_BYTES", "4194304");
+
+    b.iter(|| {
+      let renderer = DisplayListRenderer::new(width, height, Rgba::WHITE, font_ctx.clone())
+        .unwrap()
+        .with_parallelism(parallelism);
+      black_box(renderer.render(&list).unwrap());
+    });
+
+    restore_env("FASTR_SVG_FILTER_CACHE_ITEMS", prev_items);
+    restore_env("FASTR_SVG_FILTER_CACHE_BYTES", prev_bytes);
+  });
+
+  group.bench_function("cached", |b| {
+    let prev_items = std::env::var_os("FASTR_SVG_FILTER_CACHE_ITEMS");
+    let prev_bytes = std::env::var_os("FASTR_SVG_FILTER_CACHE_BYTES");
+    std::env::set_var("FASTR_SVG_FILTER_CACHE_ITEMS", "256");
+    std::env::set_var("FASTR_SVG_FILTER_CACHE_BYTES", "4194304");
+
+    b.iter(|| {
+      let renderer = DisplayListRenderer::new(width, height, Rgba::WHITE, font_ctx.clone())
+        .unwrap()
+        .with_parallelism(parallelism);
+      black_box(renderer.render(&list).unwrap());
+    });
+
+    restore_env("FASTR_SVG_FILTER_CACHE_ITEMS", prev_items);
+    restore_env("FASTR_SVG_FILTER_CACHE_BYTES", prev_bytes);
+  });
 
   group.finish();
 }
@@ -1216,6 +1293,7 @@ criterion_group!(
   bench_large_repeating_background,
   bench_parallel_display_list_raster,
   bench_tiled_background_image_src_rect,
+  bench_display_list_box_shadow_blur_cache,
   bench_text_rasterizer_cache,
   bench_filter_blur,
   bench_conic_gradient,
