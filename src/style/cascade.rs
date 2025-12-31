@@ -3885,7 +3885,6 @@ struct MatchedDeclaration<'a> {
   layer_order_idx: usize,
   is_custom_property: bool,
   declaration: Cow<'a, Declaration>,
-  starting_style: bool,
 }
 
 const INLINE_SPECIFICITY: u32 = 1 << 30;
@@ -15376,7 +15375,6 @@ fn apply_cascaded_declarations<'a, F>(
     let order = rule.order;
     let layer_order_idx = layer_orders.len();
     layer_orders.push(rule.layer_order);
-    let starting_style = rule.starting_style;
 
     match rule.declarations {
       Cow::Borrowed(decls) => {
@@ -15391,7 +15389,6 @@ fn apply_cascaded_declarations<'a, F>(
             layer_order_idx,
             is_custom_property,
             declaration: Cow::Borrowed(declaration),
-            starting_style,
           });
         }
       }
@@ -15407,7 +15404,6 @@ fn apply_cascaded_declarations<'a, F>(
             layer_order_idx,
             is_custom_property,
             declaration: Cow::Owned(declaration),
-            starting_style,
           });
         }
       }
@@ -15431,7 +15427,6 @@ fn apply_cascaded_declarations<'a, F>(
             layer_order_idx,
             is_custom_property,
             declaration: Cow::Borrowed(declaration),
-            starting_style: false,
           });
         }
       }
@@ -15447,7 +15442,6 @@ fn apply_cascaded_declarations<'a, F>(
             layer_order_idx,
             is_custom_property,
             declaration: Cow::Owned(declaration),
-            starting_style: false,
           });
         }
       }
