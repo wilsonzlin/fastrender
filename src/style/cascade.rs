@@ -15335,6 +15335,71 @@ fn apply_cascaded_declarations<'a, F>(
   });
 
   let defaults = default_computed_style();
+
+  // First apply custom properties so later var() resolutions can see them
+  // Avoid repeated property.starts_with for the hot loop by checking once.
+  for entry in flattened.iter() {
+    if entry.is_custom_property {
+      if !filter(entry.declaration.as_ref()) {
+        continue;
+      }
+      // Custom properties are handled via a fast-path in `apply_declaration_with_base` and do not
+      // participate in `revert-layer`, so we can skip all snapshot bookkeeping here.
+      apply_declaration_with_base(
+        styles,
+        entry.declaration.as_ref(),
+        parent_styles,
+        defaults,
+        None,
+        parent_font_size,
+        root_font_size,
+        viewport,
+      );
+    }
+  }
+
+  fn contains_revert_layer_token(haystack: &str) -> bool {
+    const NEEDLE: &[u8] = b"revert-layer";
+    let bytes = haystack.as_bytes();
+    if bytes.len() < NEEDLE.len() {
+      return false;
+    }
+    for start in 0..=bytes.len().saturating_sub(NEEDLE.len()) {
+      let mut matched = true;
+      for (offset, &needle_byte) in NEEDLE.iter().enumerate() {
+        if bytes[start + offset].to_ascii_lowercase() != needle_byte {
+          matched = false;
+          break;
+        }
+      }
+      if matched {
+        return true;
+      }
+    }
+    false
+  }
+
+  // `revert-layer` is rare, but when we track layer bases we clone the current `ComputedStyle` at
+  // each layer boundary. This is expensive for large pages (especially with many custom
+  // properties), so avoid the work unless `revert-layer` is actually in play.
+  let mut track_revert_layer = styles.custom_properties.values().any(|value| {
+    value
+      .value
+      .trim()
+      .eq_ignore_ascii_case("revert-layer")
+  });
+  if !track_revert_layer {
+    track_revert_layer = flattened.iter().any(|entry| {
+      if entry.is_custom_property {
+        return false;
+      }
+      match &entry.declaration.value {
+        PropertyValue::Keyword(kw) => contains_revert_layer_token(kw),
+        _ => false,
+      }
+    });
+  }
+
   // Scope revert-layer bases to the current cascade stratum (origin + importance) so that
   // important declarations don't reuse snapshots from the normal cascade segment.
   let mut layer_snapshots: HashMap<Arc<[u32]>, ComputedStyle> = HashMap::new();
@@ -15344,46 +15409,45 @@ fn apply_cascaded_declarations<'a, F>(
     if !filter(entry.declaration.as_ref()) {
       return;
     }
-    let stratum = (entry.origin.rank(), entry.important);
-    if layer_snapshot_stratum != Some(stratum) {
-      layer_snapshots.clear();
-      layer_snapshot_stratum = Some(stratum);
-    }
     let revert_base = match entry.origin {
       StyleOrigin::UserAgent => defaults,
       StyleOrigin::Author | StyleOrigin::Inline => revert_base_styles,
     };
-    // `layer_snapshots` is keyed by the declaration's `Arc<[u32]>` layer order. Most declarations
-    // in a rule set share the same layer order, so avoid cloning the `Arc` on lookup hits by
-    // probing with the borrowed slice and cloning only when we need to insert a new snapshot.
-    let layer_base = match layer_snapshots.get_mut(entry.layer_order.as_ref()) {
-      Some(existing) => existing,
-      None => {
-        layer_snapshots.insert(entry.layer_order.clone(), styles.clone());
-        layer_snapshots
-          .get_mut(entry.layer_order.as_ref())
-          .expect("layer snapshot inserted")
+    let revert_layer_base = if track_revert_layer {
+      let stratum = (entry.origin.rank(), entry.important);
+      if layer_snapshot_stratum != Some(stratum) {
+        layer_snapshots.clear();
+        layer_snapshot_stratum = Some(stratum);
       }
+      // `layer_snapshots` is keyed by the declaration's `Arc<[u32]>` layer order. Most
+      // declarations in a rule set share the same layer order, so avoid cloning the `Arc` on
+      // lookup hits by probing with the borrowed slice and cloning only when we need to insert a
+      // new snapshot.
+      let layer_base = match layer_snapshots.get_mut(entry.layer_order.as_ref()) {
+        Some(existing) => existing,
+        None => {
+          layer_snapshots.insert(entry.layer_order.clone(), styles.clone());
+          layer_snapshots
+            .get_mut(entry.layer_order.as_ref())
+            .expect("layer snapshot inserted")
+        }
+      };
+      Some(&*layer_base)
+    } else {
+      None
     };
     apply_declaration_with_base(
       styles,
       entry.declaration.as_ref(),
       parent_styles,
       revert_base,
-      Some(&*layer_base),
+      revert_layer_base,
       parent_font_size,
       root_font_size,
       viewport,
     );
   };
 
-  // First apply custom properties so later var() resolutions can see them
-  // Avoid repeated property.starts_with for the hot loop by checking once.
-  for entry in flattened.iter() {
-    if entry.is_custom_property {
-      apply_entry(entry);
-    }
-  }
   // Then apply all other declarations in cascade order
   for entry in flattened.iter() {
     if !entry.is_custom_property {
