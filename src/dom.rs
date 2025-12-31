@@ -4247,6 +4247,39 @@ mod tests {
   }
 
   #[test]
+  fn dom_clone_timeout_is_cooperative() {
+    let mut dom = DomNode {
+      node_type: DomNodeType::Document {
+        quirks_mode: QuirksMode::NoQuirks,
+      },
+      children: vec![],
+    };
+    let mut current = &mut dom;
+    for _ in 0..(super::DOM_PARSE_NODE_DEADLINE_STRIDE * 2) {
+      current.children.push(DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "div".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: vec![],
+        },
+        children: vec![],
+      });
+      current = current.children.last_mut().expect("child pushed");
+    }
+
+    let deadline = RenderDeadline::new(Some(std::time::Duration::from_millis(0)), None);
+    let result =
+      with_deadline(Some(&deadline), || clone_dom_with_deadline(&dom, RenderStage::DomParse));
+
+    match result {
+      Err(Error::Render(crate::error::RenderError::Timeout { stage, .. })) => {
+        assert_eq!(stage, RenderStage::DomParse);
+      }
+      other => panic!("expected dom_parse timeout during clone, got {other:?}"),
+    }
+  }
+
+  #[test]
   fn document_quirks_mode_defaults_to_no_quirks_with_doctype() {
     let dom = parse_html("<!doctype html><html><body></body></html>").expect("parse html");
     assert_eq!(
