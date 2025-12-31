@@ -2596,7 +2596,11 @@ fn cascade_summary(cascade: &CascadeDiagnostics) -> Option<String> {
   push_opt_u64(&mut parts, "pruned", cascade.rule_candidates_pruned);
   push_opt_u64(&mut parts, "matches", cascade.rule_matches);
   push_opt_u64(&mut parts, "sel_attempts", cascade.selector_attempts_total);
-  push_opt_u64(&mut parts, "sel_after_bloom", cascade.selector_attempts_after_bloom);
+  push_opt_u64(
+    &mut parts,
+    "sel_after_bloom",
+    cascade.selector_attempts_after_bloom,
+  );
   push_opt_u64(
     &mut parts,
     "sel_bloom_rejects",

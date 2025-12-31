@@ -10,6 +10,7 @@ use fastrender::resource::{
 };
 use fastrender::Error;
 use fastrender::ResourceFetcher;
+mod test_support;
 use std::collections::HashMap;
 use std::io;
 use std::io::Read;
@@ -21,6 +22,7 @@ use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 use tempfile::TempDir;
+use test_support::net::try_bind_localhost;
 
 const MAX_WAIT: Duration = Duration::from_secs(3);
 

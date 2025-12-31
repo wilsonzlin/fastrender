@@ -1352,7 +1352,9 @@ mod tests {
     assert!(
       matches!(
         result,
-        Err(ReadAllWithDeadlineError::Timeout(RenderError::Timeout { .. }))
+        Err(ReadAllWithDeadlineError::Timeout(
+          RenderError::Timeout { .. }
+        ))
       ),
       "expected deadline-aware read to abort under active deadline"
     );
@@ -1387,8 +1389,8 @@ mod tests {
     disk.persist_resource(url, &resource, None, None, None);
 
     let deadline = render_control::RenderDeadline::new(Some(Duration::from_millis(0)), None);
-    let err =
-      render_control::with_deadline(Some(&deadline), || disk.fetch(url)).expect_err("fetch timeout");
+    let err = render_control::with_deadline(Some(&deadline), || disk.fetch(url))
+      .expect_err("fetch timeout");
 
     match err {
       Error::Render(RenderError::Timeout { stage, .. }) => assert_eq!(stage, RenderStage::Paint),

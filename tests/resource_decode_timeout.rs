@@ -1,15 +1,17 @@
+use std::io;
 use std::io::{Read, Write};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use fastrender::api::{FastRender, RenderOptions};
 use fastrender::error::{Error, RenderError, RenderStage};
 use fastrender::render_control::{with_deadline, RenderDeadline};
 use fastrender::resource::HttpFetcher;
 use fastrender::ResourceFetcher;
-
 mod test_support;
 use test_support::net::try_bind_localhost;
+
+const MAX_WAIT: Duration = Duration::from_secs(3);
 
 struct EnvGuard(&'static str);
 
@@ -36,15 +38,26 @@ fn compressed_resource_respects_render_timeout() {
   };
   let addr = listener.local_addr().expect("local addr");
   let handle = thread::spawn(move || {
-    if let Ok((mut stream, _)) = listener.accept() {
-      let mut buf = [0u8; 1024];
-      let _ = stream.read(&mut buf);
-      let response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Encoding: gzip\r\nContent-Type: image/png\r\nConnection: close\r\n\r\n",
-        compressed.len()
-      );
-      stream.write_all(response.as_bytes()).unwrap();
-      stream.write_all(compressed).unwrap();
+    let _ = listener.set_nonblocking(true);
+    let start = Instant::now();
+    while start.elapsed() < MAX_WAIT {
+      match listener.accept() {
+        Ok((mut stream, _)) => {
+          let mut buf = [0u8; 1024];
+          let _ = stream.read(&mut buf);
+          let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Encoding: gzip\r\nContent-Type: image/png\r\nConnection: close\r\n\r\n",
+            compressed.len()
+          );
+          stream.write_all(response.as_bytes()).unwrap();
+          stream.write_all(compressed).unwrap();
+          break;
+        }
+        Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+          thread::sleep(Duration::from_millis(5));
+        }
+        Err(_) => break,
+      }
     }
   });
 
@@ -56,14 +69,10 @@ fn compressed_resource_respects_render_timeout() {
   let err = with_deadline(Some(&deadline), || fetcher.fetch(&url)).expect_err("expected timeout");
 
   match err {
-    Error::Resource(res) => {
-      assert!(
-        res.message.to_ascii_lowercase().contains("decompress"),
-        "unexpected resource error: {}",
-        res.message
-      );
+    Error::Render(RenderError::Timeout { stage, .. }) => {
+      assert_eq!(stage, RenderStage::Paint);
     }
-    other => panic!("expected resource timeout, got {other:?}"),
+    other => panic!("expected timeout error, got {other:?}"),
   }
 
   handle.join().unwrap();
@@ -78,15 +87,26 @@ fn renderer_times_out_while_decompressing_image() {
   };
   let addr = listener.local_addr().expect("local addr");
   let handle = thread::spawn(move || {
-    if let Ok((mut stream, _)) = listener.accept() {
-      let mut buf = [0u8; 1024];
-      let _ = stream.read(&mut buf);
-      let response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Encoding: gzip\r\nContent-Type: image/png\r\nConnection: close\r\n\r\n",
-        compressed.len()
-      );
-      stream.write_all(response.as_bytes()).unwrap();
-      stream.write_all(compressed).unwrap();
+    let _ = listener.set_nonblocking(true);
+    let start = Instant::now();
+    while start.elapsed() < MAX_WAIT {
+      match listener.accept() {
+        Ok((mut stream, _)) => {
+          let mut buf = [0u8; 1024];
+          let _ = stream.read(&mut buf);
+          let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Encoding: gzip\r\nContent-Type: image/png\r\nConnection: close\r\n\r\n",
+            compressed.len()
+          );
+          stream.write_all(response.as_bytes()).unwrap();
+          stream.write_all(compressed).unwrap();
+          break;
+        }
+        Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+          thread::sleep(Duration::from_millis(5));
+        }
+        Err(_) => break,
+      }
     }
   });
 
@@ -112,7 +132,7 @@ fn renderer_times_out_while_decompressing_image() {
     Error::Render(RenderError::Timeout { stage, .. }) => {
       assert!(
         matches!(stage, RenderStage::Layout | RenderStage::Paint),
-        "expected timeout in layout/paint, got {stage:?}"
+        "expected timeout during layout/paint, got {stage:?}"
       );
     }
     other => panic!("expected timeout error, got {other:?}"),

@@ -1,16 +1,14 @@
 use fastrender::resource::{HttpFetcher, HttpRetryPolicy};
 use fastrender::ResourceFetcher;
+mod test_support;
 use std::io;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::thread;
 use std::time::{Duration, Instant};
-
-const MAX_WAIT: Duration = Duration::from_secs(3);
-
-mod test_support;
 use test_support::net::try_bind_localhost;
 
+const MAX_WAIT: Duration = Duration::from_secs(3);
 fn read_request(stream: &mut std::net::TcpStream) -> Vec<u8> {
   let mut buf = Vec::new();
   let mut tmp = [0u8; 1024];
@@ -186,7 +184,9 @@ fn http_fetch_empty_body_error_mentions_attempts() {
 
   let fetcher = fast_retry_fetcher();
   let url = format!("http://{addr}/accepted");
-  let err = fetcher.fetch(&url).expect_err("fetch should fail after retries");
+  let err = fetcher
+    .fetch(&url)
+    .expect_err("fetch should fail after retries");
   assert!(
     err.to_string().contains("attempt 2/2"),
     "error should include attempt info: {err}"

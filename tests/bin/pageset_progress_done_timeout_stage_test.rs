@@ -49,4 +49,3 @@ fn pageset_progress_killed_after_done_populates_timeout_stage() {
   assert_eq!(progress["timeout_stage"], "paint");
   assert_eq!(progress["hotspot"], "paint");
 }
-

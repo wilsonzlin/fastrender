@@ -2,6 +2,7 @@ use fastrender::render_control::{with_deadline, RenderDeadline};
 use fastrender::resource::{CachingFetcher, CachingFetcherConfig, HttpFetcher, ResourcePolicy};
 use fastrender::ResourceFetcher;
 use httpdate::fmt_http_date;
+mod test_support;
 use std::io;
 use std::io::Read;
 use std::io::Write;
@@ -10,12 +11,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
-
-const MAX_WAIT: Duration = Duration::from_secs(3);
-
-mod test_support;
 use test_support::net::try_bind_localhost;
 
+const MAX_WAIT: Duration = Duration::from_secs(3);
 fn spawn_server<F>(
   listener: TcpListener,
   max_requests: usize,

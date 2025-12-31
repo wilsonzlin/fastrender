@@ -39,16 +39,15 @@ fn pageset_progress_worker_fast_exits_after_writing_progress() {
 
   assert!(status.success(), "pageset_progress exited with {status:?}");
 
-  let progress_raw = fs::read_to_string(progress_dir.join("fast_exit.json"))
-    .expect("read progress json");
+  let progress_raw =
+    fs::read_to_string(progress_dir.join("fast_exit.json")).expect("read progress json");
   let progress: Value = serde_json::from_str(&progress_raw).expect("parse progress json");
   assert_eq!(progress["status"], "ok");
 
-  let stderr_contents = fs::read_to_string(log_dir.join("fast_exit.stderr.log"))
-    .unwrap_or_default();
+  let stderr_contents =
+    fs::read_to_string(log_dir.join("fast_exit.stderr.log")).unwrap_or_default();
   assert!(
     !stderr_contents.contains("parent killed worker"),
     "worker should exit before parent kill; stderr log contained:\n{stderr_contents}"
   );
 }
-

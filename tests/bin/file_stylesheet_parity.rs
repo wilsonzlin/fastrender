@@ -4,6 +4,8 @@ use std::io::Write;
 use std::process::Command;
 use std::thread;
 
+use crate::test_support::net::try_bind_localhost;
+
 #[test]
 fn file_and_url_paths_render_the_same_with_external_css() {
   let tmp = tempfile::tempdir().expect("temp dir");

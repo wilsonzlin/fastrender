@@ -3,7 +3,7 @@ use fastrender::ResourceKind;
 use std::fmt::Write as FmtWrite;
 use std::io::{Read, Write};
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -21,7 +21,8 @@ struct TestResponse {
 struct TestServer {
   addr: SocketAddr,
   served: Arc<AtomicUsize>,
-  handle: thread::JoinHandle<()>,
+  shutdown: Arc<AtomicBool>,
+  handle: Option<thread::JoinHandle<()>>,
 }
 
 impl TestServer {
@@ -38,10 +39,16 @@ impl TestServer {
     let served = Arc::new(AtomicUsize::new(0));
     let served_clone = Arc::clone(&served);
     let handler = Arc::new(handler);
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let shutdown_clone = Arc::clone(&shutdown);
 
     let handle = thread::spawn(move || {
       let start = Instant::now();
       loop {
+        if shutdown_clone.load(Ordering::SeqCst) {
+          break;
+        }
+
         if served_clone.load(Ordering::SeqCst) >= expected
           && start.elapsed() > Duration::from_millis(200)
         {
@@ -85,6 +92,9 @@ impl TestServer {
             served_clone.fetch_add(1, Ordering::SeqCst);
           }
           Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+            if shutdown_clone.load(Ordering::SeqCst) {
+              break;
+            }
             if start.elapsed() > Duration::from_millis(200)
               && served_clone.load(Ordering::SeqCst) >= expected
             {
@@ -100,7 +110,8 @@ impl TestServer {
     Some(Self {
       addr,
       served,
-      handle,
+      shutdown,
+      handle: Some(handle),
     })
   }
 
@@ -112,8 +123,20 @@ impl TestServer {
     self.served.load(Ordering::SeqCst)
   }
 
-  fn join(self) {
-    let _ = self.handle.join();
+  fn join(mut self) {
+    self.shutdown.store(true, Ordering::SeqCst);
+    if let Some(handle) = self.handle.take() {
+      let _ = handle.join();
+    }
+  }
+}
+
+impl Drop for TestServer {
+  fn drop(&mut self) {
+    self.shutdown.store(true, Ordering::SeqCst);
+    if let Some(handle) = self.handle.take() {
+      let _ = handle.join();
+    }
   }
 }
 
@@ -163,19 +186,27 @@ fn same_origin_stylesheet_allowed() {
 
 #[test]
 fn cross_origin_stylesheet_blocked() {
-  let Some(origin_server) = TestServer::start("cross_origin_stylesheet_blocked origin", 0, |_path| TestResponse {
-    status: 404,
-    headers: Vec::new(),
-    body: String::new(),
-  }) else {
+  let Some(origin_server) = TestServer::start(
+    "cross_origin_stylesheet_blocked.origin_server",
+    0,
+    |_path| TestResponse {
+      status: 404,
+      headers: Vec::new(),
+      body: String::new(),
+    },
+  ) else {
     return;
   };
-  let Some(blocked_server) = TestServer::start("cross_origin_stylesheet_blocked blocked", 0, |_path| TestResponse {
-    status: 200,
-    headers: vec![("Content-Type".into(), "text/css".into())],
-    body: "body { color: red; }".into(),
-  }) else {
-    origin_server.join();
+
+  let Some(blocked_server) = TestServer::start(
+    "cross_origin_stylesheet_blocked.blocked_server",
+    0,
+    |_path| TestResponse {
+      status: 200,
+      headers: vec![("Content-Type".into(), "text/css".into())],
+      body: "body { color: red; }".into(),
+    },
+  ) else {
     return;
   };
 
@@ -219,21 +250,28 @@ fn cross_origin_stylesheet_blocked() {
 
 #[test]
 fn redirects_to_cross_origin_are_blocked() {
-  let Some(cross_origin) = TestServer::start("redirects_to_cross_origin_are_blocked cross_origin", 1, |_path| TestResponse {
-    status: 200,
-    headers: vec![("Content-Type".into(), "text/css".into())],
-    body: "body { color: blue; }".into(),
-  }) else {
+  let Some(cross_origin) = TestServer::start(
+    "redirects_to_cross_origin_are_blocked.cross_origin",
+    1,
+    |_path| TestResponse {
+      status: 200,
+      headers: vec![("Content-Type".into(), "text/css".into())],
+      body: "body { color: blue; }".into(),
+    },
+  ) else {
     return;
   };
 
   let redirect_target = cross_origin.url("final.css");
-  let Some(redirect_origin) = TestServer::start("redirects_to_cross_origin_are_blocked redirect_origin", 1, move |_path| TestResponse {
-    status: 302,
-    headers: vec![("Location".into(), redirect_target.clone())],
-    body: String::new(),
-  }) else {
-    cross_origin.join();
+  let Some(redirect_origin) = TestServer::start(
+    "redirects_to_cross_origin_are_blocked.redirect_origin",
+    1,
+    move |_path| TestResponse {
+      status: 302,
+      headers: vec![("Location".into(), redirect_target.clone())],
+      body: String::new(),
+    },
+  ) else {
     return;
   };
 
