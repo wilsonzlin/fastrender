@@ -2823,6 +2823,28 @@ fn resources_summary(resources: &ResourceDiagnostics) -> Option<String> {
     parts.push(format!("resource_cache {}", resource_cache_parts.join(" ")));
   }
 
+  let mut disk_cache_parts = Vec::new();
+  if let Some(hits) = resources.disk_cache_hits {
+    disk_cache_parts.push(format!("hits={hits}"));
+  }
+  if let Some(misses) = resources.disk_cache_misses {
+    disk_cache_parts.push(format!("misses={misses}"));
+  }
+  if !disk_cache_parts.is_empty() {
+    parts.push(format!("disk_cache {}", disk_cache_parts.join(" ")));
+  }
+
+  let mut network_parts = Vec::new();
+  if let Some(fetches) = resources.network_fetches {
+    network_parts.push(format!("fetches={fetches}"));
+  }
+  if let Some(ms) = resources.network_fetch_ms {
+    network_parts.push(format!("ms={ms:.2}ms"));
+  }
+  if !network_parts.is_empty() {
+    parts.push(format!("network {}", network_parts.join(" ")));
+  }
+
   if parts.is_empty() {
     None
   } else {
