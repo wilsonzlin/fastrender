@@ -1258,11 +1258,8 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
         progress.hotspot = "unknown".to_string();
       }
       let progress = progress.merge_preserving_manual(progress_before, current_sha.as_deref());
-      let _ = write_progress_with_sentinel(
-        &args.progress_path,
-        args.stage_path.as_deref(),
-        &progress,
-      );
+      let _ =
+        write_progress_with_sentinel(&args.progress_path, args.stage_path.as_deref(), &progress);
       if let Some(path) = &args.log_path {
         let _ = write_text_file(path, &log);
       }
@@ -1438,11 +1435,8 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
         progress.notes = format!("renderer init: {note_msg}");
         progress.hotspot = "unknown".to_string();
         let progress = progress.merge_preserving_manual(progress_before, current_sha.as_deref());
-        let _ = write_progress_with_sentinel(
-          &args.progress_path,
-          args.stage_path.as_deref(),
-          &progress,
-        );
+        let _ =
+          write_progress_with_sentinel(&args.progress_path, args.stage_path.as_deref(), &progress);
         if let Some(path) = &args.log_path {
           let _ = write_text_file(path, &log);
         }
@@ -1554,11 +1548,8 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
   }
 
   let progress = progress.merge_preserving_manual(progress_before, current_sha.as_deref());
-  let wrote_progress = write_progress_with_sentinel(
-    &args.progress_path,
-    args.stage_path.as_deref(),
-    &progress,
-  );
+  let wrote_progress =
+    write_progress_with_sentinel(&args.progress_path, args.stage_path.as_deref(), &progress);
   if let Err(err) = wrote_progress {
     log.push_str(&format!(
       "Progress write failed (skipping dumps): {}\n",
@@ -4174,6 +4165,7 @@ mod tests {
       disk_cache: DiskCacheArgs {
         max_bytes: common::args::DEFAULT_DISK_CACHE_MAX_BYTES,
         max_age_secs: common::args::DEFAULT_DISK_CACHE_MAX_AGE_SECS,
+        lock_stale_secs: common::args::DEFAULT_DISK_CACHE_LOCK_STALE_SECS,
       },
       css_limit: None,
       fonts: FontSourceArgs {
