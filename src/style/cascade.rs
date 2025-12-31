@@ -15936,6 +15936,46 @@ fn first_letter_allows_property(property: &str) -> bool {
   false
 }
 
+fn marker_allows_property(property: &str) -> bool {
+  let p = property.to_ascii_lowercase();
+  if p == "content" {
+    return true;
+  }
+  if p == "font" || p.starts_with("font-") {
+    return true;
+  }
+  if matches!(
+    p.as_str(),
+    "color"
+      | "white-space"
+      | "unicode-bidi"
+      | "direction"
+      | "text-transform"
+      | "text-combine-upright"
+      | "letter-spacing"
+      | "word-spacing"
+      | "line-height"
+      | "text-shadow"
+      | "cursor"
+  ) {
+    return true;
+  }
+  if p.starts_with("text-decoration")
+    || matches!(
+      p.as_str(),
+      "text-underline-offset"
+        | "text-underline-position"
+        | "text-emphasis"
+        | "text-emphasis-style"
+        | "text-emphasis-color"
+        | "text-emphasis-position"
+    )
+  {
+    return true;
+  }
+  false
+}
+
 fn compute_first_line_styles(
   node: &DomNode,
   rule_scopes: &RuleScopes<'_>,
@@ -16330,6 +16370,11 @@ pub(crate) fn reset_marker_box_properties(styles: &mut ComputedStyle) {
   styles.overflow_x = defaults.overflow_x;
   styles.overflow_y = defaults.overflow_y;
   styles.opacity = defaults.opacity;
+  // Markers should not be affected by list-item paragraph alignment and indentation.
+  // (CSS Lists 3 limits ::marker applicability to text/font properties; alignment is ignored.)
+  styles.text_align = defaults.text_align;
+  styles.text_align_last = defaults.text_align_last;
+  styles.text_indent = defaults.text_indent;
   // Markers should not carry table/layout-specific state
   styles.border_spacing_horizontal = defaults.border_spacing_horizontal;
   styles.border_spacing_vertical = defaults.border_spacing_vertical;
