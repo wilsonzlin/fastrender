@@ -129,12 +129,7 @@ impl FormattingContextFactory {
   }
 
   fn grid_context(&self) -> GridFormattingContext {
-    GridFormattingContext::with_viewport_cb_and_cache(
-      self.viewport_size,
-      self.nearest_positioned_cb,
-      self.font_context.clone(),
-      self.grid_taffy_cache.clone(),
-    )
+    GridFormattingContext::with_factory(self.clone())
   }
 
   fn table_context(&self) -> TableFormattingContext {

@@ -33,6 +33,8 @@ use crate::geometry::Rect;
 use crate::geometry::Size;
 use crate::layout::constraints::AvailableSpace as CrateAvailableSpace;
 use crate::layout::constraints::LayoutConstraints;
+use crate::layout::contexts::factory::FormattingContextFactory;
+use crate::layout::contexts::flex_cache::ShardedFlexCache;
 use crate::layout::formatting_context::intrinsic_cache_epoch;
 use crate::layout::formatting_context::layout_cache_lookup;
 use crate::layout::formatting_context::layout_cache_store;
@@ -274,6 +276,8 @@ fn constraints_from_taffy(
 /// ```
 #[derive(Clone)]
 pub struct GridFormattingContext {
+  /// Shared factory used to create child formatting contexts without losing shared caches.
+  factory: FormattingContextFactory,
   viewport_size: crate::geometry::Size,
   font_context: crate::text::font_loader::FontContext,
   nearest_positioned_cb: crate::layout::contexts::positioned::ContainingBlock,
@@ -394,7 +398,25 @@ impl GridFormattingContext {
     font_context: crate::text::font_loader::FontContext,
     taffy_cache: std::sync::Arc<crate::layout::taffy_integration::TaffyNodeCache>,
   ) -> Self {
+    let factory = FormattingContextFactory::with_font_context_viewport_cb_and_cache(
+      font_context.clone(),
+      viewport_size,
+      nearest_positioned_cb,
+      std::sync::Arc::new(ShardedFlexCache::new_measure()),
+      std::sync::Arc::new(ShardedFlexCache::new_layout()),
+      std::sync::Arc::new(TaffyNodeCache::new(DEFAULT_TAFFY_CACHE_LIMIT)),
+      taffy_cache.clone(),
+    );
+    Self::with_factory(factory)
+  }
+
+  pub(crate) fn with_factory(factory: FormattingContextFactory) -> Self {
+    let viewport_size = factory.viewport_size();
+    let nearest_positioned_cb = factory.nearest_positioned_cb();
+    let font_context = factory.font_context().clone();
+    let taffy_cache = factory.grid_taffy_cache();
     Self {
+      factory,
       viewport_size,
       font_context,
       nearest_positioned_cb,
@@ -1530,7 +1552,7 @@ impl GridFormattingContext {
         .unwrap_or(FormattingContextType::Block);
       let taffy_style = taffy.style(node_id).ok();
       let is_grid_style = matches!(taffy_style.as_ref().map(|s| s.display), Some(Display::Grid));
-      if is_grid_style || fc_type == FormattingContextType::Grid || !child_fragments.is_empty() {
+      if node_id == root_id || is_grid_style || !child_fragments.is_empty() {
         let mut fragment = FragmentNode::new_with_style(
           bounds,
           FragmentContent::Block {
@@ -1567,13 +1589,7 @@ impl GridFormattingContext {
         }
       }
 
-      let factory =
-        crate::layout::contexts::factory::FormattingContextFactory::with_font_context_viewport_and_cb(
-          self.font_context.clone(),
-          self.viewport_size,
-          self.nearest_positioned_cb,
-        );
-      let fc = factory.get(fc_type);
+      let fc = self.factory.get(fc_type);
 
       let child_constraints = LayoutConstraints::new(
         CrateAvailableSpace::Definite(bounds.width()),
@@ -1698,12 +1714,7 @@ impl GridFormattingContext {
         _ => cb_for_absolute,
       };
 
-      let factory =
-        crate::layout::contexts::factory::FormattingContextFactory::with_font_context_viewport_and_cb(
-          self.font_context.clone(),
-          self.viewport_size,
-          cb,
-        );
+      let factory = self.factory.with_positioned_cb(cb);
       let fc_type = layout_child
         .formatting_context()
         .unwrap_or(crate::style::display::FormattingContextType::Block);
@@ -2127,12 +2138,7 @@ impl GridFormattingContext {
         root_id,
         available_space,
         {
-          let factory =
-            crate::layout::contexts::factory::FormattingContextFactory::with_font_context_viewport_and_cb(
-              self.font_context.clone(),
-              self.viewport_size,
-              self.nearest_positioned_cb,
-            );
+          let factory = self.factory.clone();
           let viewport_size = self.viewport_size;
           let mut cache: HashMap<MeasureKey, taffy::geometry::Size<f32>> = HashMap::new();
           move |known_dimensions,
@@ -2224,13 +2230,51 @@ impl GridFormattingContext {
     if let Some(size) = measure_cache.borrow().get(&key) {
       return *size;
     }
+    let mut constraints = constraints_from_taffy(
+      self.viewport_size,
+      known_dimensions,
+      available_space,
+      parent_inline_base,
+    );
+
+    // Taffy frequently probes min/max-content sizes during track sizing.
+    // Avoid running full layout for these probes; use intrinsic sizing APIs instead.
+    #[cfg(test)]
+    if let Some(mut fragment) = GRID_TEST_MEASURE_HOOK.with(|hook| {
+      hook
+        .borrow()
+        .as_ref()
+        .and_then(|hook| hook(box_node).map(normalize_fragment_origin))
+    }) {
+      let percentage_base = match available_space.width {
+        taffy::style::AvailableSpace::Definite(w) => w,
+        _ => constraints
+          .width()
+          .unwrap_or_else(|| fragment.bounds.width()),
+      };
+      fragment.content = FragmentContent::Block {
+        box_id: Some(box_node.id),
+      };
+      fragment.style = Some(box_node.style.clone());
+      let content_size = self.content_box_size(&fragment, &box_node.style, percentage_base);
+      let size = taffy::geometry::Size {
+        width: content_size.width.max(0.0),
+        height: content_size.height.max(0.0),
+      };
+      push_measured_key(
+        measured_node_keys.borrow_mut().entry(node_id).or_default(),
+        key,
+      );
+      measured_fragments.borrow_mut().insert(key, fragment);
+      measure_cache.borrow_mut().insert(key, size);
+      return size;
+    }
+
     let fc_type = box_node
       .formatting_context()
       .unwrap_or(FormattingContextType::Block);
     let fc = factory.get(fc_type);
 
-    // Taffy frequently probes min/max-content sizes during track sizing.
-    // Avoid running full layout for these probes; use intrinsic sizing APIs instead.
     let mut intrinsic_width: Option<f32> = None;
     if known_dimensions.width.is_none() {
       intrinsic_width = match available_space.width {
@@ -2290,44 +2334,6 @@ impl GridFormattingContext {
         .unwrap_or_else(|| fallback_size(known_dimensions.height, available_space.height).max(0.0));
 
       let size = taffy::geometry::Size { width, height };
-      measure_cache.borrow_mut().insert(key, size);
-      return size;
-    }
-
-    let mut constraints = constraints_from_taffy(
-      self.viewport_size,
-      known_dimensions,
-      available_space,
-      parent_inline_base,
-    );
-
-    #[cfg(test)]
-    if let Some(mut fragment) = GRID_TEST_MEASURE_HOOK.with(|hook| {
-      hook
-        .borrow()
-        .as_ref()
-        .and_then(|hook| hook(box_node).map(normalize_fragment_origin))
-    }) {
-      let percentage_base = match available_space.width {
-        taffy::style::AvailableSpace::Definite(w) => w,
-        _ => constraints
-          .width()
-          .unwrap_or_else(|| fragment.bounds.width()),
-      };
-      fragment.content = FragmentContent::Block {
-        box_id: Some(box_node.id),
-      };
-      fragment.style = Some(box_node.style.clone());
-      let content_size = self.content_box_size(&fragment, &box_node.style, percentage_base);
-      let size = taffy::geometry::Size {
-        width: content_size.width.max(0.0),
-        height: content_size.height.max(0.0),
-      };
-      push_measured_key(
-        measured_node_keys.borrow_mut().entry(node_id).or_default(),
-        key,
-      );
-      measured_fragments.borrow_mut().insert(key, fragment);
       measure_cache.borrow_mut().insert(key, size);
       return size;
     }
@@ -2769,9 +2775,6 @@ impl FormattingContext for GridFormattingContext {
       constraints,
       &mut positioned_children_map,
     )?;
-    if !positioned_children.is_empty() {
-      positioned_children_map.insert(root_id, positioned_children.clone());
-    }
 
     if trace_grid_layout {
       let selector = box_node
@@ -2866,12 +2869,6 @@ impl FormattingContext for GridFormattingContext {
         available_space,
         {
           let this = self.clone();
-          let factory =
-            crate::layout::contexts::factory::FormattingContextFactory::with_font_context_viewport_and_cb(
-              self.font_context.clone(),
-              self.viewport_size,
-              self.nearest_positioned_cb,
-            );
           let parent_inline_base = constraints.inline_percentage_base;
           let container_justify_items = box_node.style.justify_items;
           let cache = measure_cache.clone();
@@ -2962,7 +2959,7 @@ impl FormattingContext for GridFormattingContext {
               available_space,
               parent_inline_base,
               container_justify_items,
-              &factory,
+              &this.factory,
               &cache,
               &measured,
               &measured_keys,
@@ -3174,12 +3171,7 @@ impl FormattingContext for GridFormattingContext {
           _ => cb_for_absolute,
         };
 
-        let factory =
-                    crate::layout::contexts::factory::FormattingContextFactory::with_font_context_viewport_and_cb(
-                        self.font_context.clone(),
-                        self.viewport_size,
-                        cb,
-                    );
+        let factory = self.factory.with_positioned_cb(cb);
         let fc_type = layout_child
           .formatting_context()
           .unwrap_or(crate::style::display::FormattingContextType::Block);
@@ -3414,12 +3406,7 @@ mod tests {
     use taffy::style::AvailableSpace;
 
     let gc = GridFormattingContext::new();
-    let factory =
-      crate::layout::contexts::factory::FormattingContextFactory::with_font_context_viewport_and_cb(
-        gc.font_context.clone(),
-        gc.viewport_size,
-        gc.nearest_positioned_cb,
-      );
+    let factory = gc.factory.clone();
     let measure_cache: Rc<RefCell<HashMap<MeasureKey, taffy::geometry::Size<f32>>>> =
       Rc::new(RefCell::new(HashMap::new()));
     let measured_fragments: Rc<RefCell<HashMap<MeasureKey, FragmentNode>>> =
@@ -3479,12 +3466,7 @@ mod tests {
     use taffy::style::AvailableSpace;
 
     let gc = GridFormattingContext::new();
-    let factory =
-      crate::layout::contexts::factory::FormattingContextFactory::with_font_context_viewport_and_cb(
-        gc.font_context.clone(),
-        gc.viewport_size,
-        gc.nearest_positioned_cb,
-      );
+    let factory = gc.factory.clone();
     let measure_cache: Rc<RefCell<HashMap<MeasureKey, taffy::geometry::Size<f32>>>> =
       Rc::new(RefCell::new(HashMap::new()));
     let measured_fragments: Rc<RefCell<HashMap<MeasureKey, FragmentNode>>> =
@@ -3852,12 +3834,7 @@ mod tests {
           height: taffy::style::AvailableSpace::Definite(constraints.height().unwrap()),
         };
 
-        let factory = crate::layout::contexts::factory::FormattingContextFactory::
-          with_font_context_viewport_and_cb(
-            fc.font_context.clone(),
-            fc.viewport_size,
-            fc.nearest_positioned_cb,
-          );
+        let factory = fc.factory.clone();
         let viewport_size = fc.viewport_size;
         let parent_inline_base = constraints.inline_percentage_base;
         let cache = measure_cache.clone();
