@@ -59,7 +59,7 @@ use crate::paint::iframe::{render_iframe_src, render_iframe_srcdoc};
 use crate::paint::object_fit::compute_object_fit;
 use crate::paint::object_fit::default_object_position;
 use crate::paint::optimize::DisplayListOptimizer;
-use crate::paint::pixmap::{new_pixmap, reserve_buffer};
+use crate::paint::pixmap::{new_pixmap, reserve_buffer, MAX_PIXMAP_BYTES};
 use crate::paint::projective_warp::warp_pixmap;
 use crate::paint::rasterize::fill_rounded_rect;
 use crate::paint::stacking::creates_stacking_context;
@@ -312,6 +312,21 @@ fn text_profile_threshold_ms() -> Option<f64> {
 
 fn cmd_profile_threshold_ms() -> Option<f64> {
   runtime::runtime_toggles().f64("FASTR_CMD_PROFILE_MS")
+}
+
+fn legacy_generated_gradient_tile_raster_bytes_threshold() -> u64 {
+  // Legacy background painting for generated gradients rasterizes the entire tile into a pixmap.
+  // Large origin boxes (e.g. when layout explodes) can cause huge allocations/work even if only a
+  // tiny portion is visible. Clamp by default to keep work proportional to what's on-screen.
+  runtime::runtime_toggles()
+    .u64("FASTR_LEGACY_GRADIENT_TILE_MAX_BYTES")
+    .unwrap_or(64 * 1024 * 1024)
+}
+
+fn pixmap_allocation_bytes(width: u32, height: u32) -> Option<u64> {
+  u64::from(width)
+    .checked_mul(u64::from(height))
+    .and_then(|px| px.checked_mul(4))
 }
 
 fn nested_counts(cmds: &[DisplayCommand]) -> (usize, usize) {
@@ -3192,26 +3207,70 @@ impl Painter {
 
         let pixmap_w = tile_w.ceil().max(1.0) as u32;
         let pixmap_h = tile_h.ceil().max(1.0) as u32;
-        let Some(pixmap) = self.render_generated_image(bg, style, pixmap_w, pixmap_h) else {
+        let quality = Self::filter_quality_for_image(Some(style));
+        let viewport_rect_css = Rect::from_xywh(0.0, 0.0, self.css_width, self.css_height);
+        let Some(visible_clip_css) = clip_rect_css.intersection(viewport_rect_css) else {
           return;
         };
 
-        let max_x = clip_rect_css.max_x();
-        let max_y = clip_rect_css.max_y();
-        let quality = Self::filter_quality_for_image(Some(style));
+        let tile_bytes = pixmap_allocation_bytes(pixmap_w, pixmap_h);
+        let tile_too_large = tile_bytes
+          .map(|bytes| {
+            bytes > legacy_generated_gradient_tile_raster_bytes_threshold()
+              || bytes > MAX_PIXMAP_BYTES
+          })
+          .unwrap_or(true);
+
+        if !tile_too_large {
+          if let Some(pixmap) = self.render_generated_image(bg, style, pixmap_w, pixmap_h) {
+            let max_x = clip_rect_css.max_x();
+            let max_y = clip_rect_css.max_y();
+
+            for ty in positions_y.iter().copied() {
+              for tx in positions_x.iter().copied() {
+                if tx >= max_x || ty >= max_y {
+                  continue;
+                }
+                self.paint_background_tile(
+                  &pixmap,
+                  tx,
+                  ty,
+                  tile_w,
+                  tile_h,
+                  clip_rect_css,
+                  clip_mask.as_ref(),
+                  layer.blend_mode,
+                  quality,
+                );
+              }
+            }
+            return;
+          }
+        }
+
+        let max_x = visible_clip_css.max_x();
+        let max_y = visible_clip_css.max_y();
 
         for ty in positions_y.iter().copied() {
           for tx in positions_x.iter().copied() {
             if tx >= max_x || ty >= max_y {
               continue;
             }
-            self.paint_background_tile(
-              &pixmap,
-              tx,
-              ty,
-              tile_w,
-              tile_h,
-              clip_rect_css,
+            let tile_rect_css = Rect::from_xywh(tx, ty, tile_w, tile_h);
+            let Some(intersection_css) = tile_rect_css.intersection(visible_clip_css) else {
+              continue;
+            };
+            if intersection_css.width() <= 0.0 || intersection_css.height() <= 0.0 {
+              continue;
+            }
+
+            self.paint_generated_image_intersection(
+              bg,
+              style,
+              tile_rect_css,
+              intersection_css,
+              pixmap_w,
+              pixmap_h,
               clip_mask.as_ref(),
               layer.blend_mode,
               quality,
@@ -6737,6 +6796,400 @@ impl Painter {
         Some(pixmap)
       }
       BackgroundImage::Url(_) | BackgroundImage::None => None,
+    }
+  }
+
+  fn render_generated_image_region(
+    &mut self,
+    bg: &BackgroundImage,
+    style: &ComputedStyle,
+    full_w: u32,
+    full_h: u32,
+    region_x: u32,
+    region_y: u32,
+    width: u32,
+    height: u32,
+  ) -> Option<Pixmap> {
+    if width == 0 || height == 0 || full_w == 0 || full_h == 0 {
+      return None;
+    }
+
+    let full_rect = Rect::from_xywh(0.0, 0.0, full_w as f32, full_h as f32);
+    let paint_rect = Rect::from_xywh(
+      region_x as f32,
+      region_y as f32,
+      width as f32,
+      height as f32,
+    );
+    let offset = Point::new(region_x as f32, region_y as f32);
+
+    match bg {
+      BackgroundImage::LinearGradient { angle, stops } => {
+        let resolved = normalize_color_stops(stops, style.color);
+        if resolved.is_empty() {
+          return None;
+        }
+        let rad = angle.to_radians();
+        let dx = rad.sin();
+        let dy = -rad.cos();
+        let len = 0.5 * (full_rect.width() * dx.abs() + full_rect.height() * dy.abs());
+        let cx = full_rect.width() / 2.0;
+        let cy = full_rect.height() / 2.0;
+        let start = Point::new(cx - dx * len - offset.x, cy - dy * len - offset.y);
+        let end = Point::new(cx + dx * len - offset.x, cy + dy * len - offset.y);
+        let timer = self.diagnostics_enabled.then(Instant::now);
+        let pixmap = rasterize_linear_gradient(
+          width,
+          height,
+          start,
+          end,
+          SpreadMode::Pad,
+          &resolved,
+          &self.gradient_cache,
+          gradient_bucket(full_w.max(full_h)),
+        )?;
+        if let Some(start) = timer {
+          self.record_gradient_usage((width * height) as u64, start);
+        }
+        Some(pixmap)
+      }
+      BackgroundImage::RepeatingLinearGradient { angle, stops } => {
+        let resolved = normalize_color_stops(stops, style.color);
+        if resolved.is_empty() {
+          return None;
+        }
+        let rad = angle.to_radians();
+        let dx = rad.sin();
+        let dy = -rad.cos();
+        let len = 0.5 * (full_rect.width() * dx.abs() + full_rect.height() * dy.abs());
+        let cx = full_rect.width() / 2.0;
+        let cy = full_rect.height() / 2.0;
+        let start = Point::new(cx - dx * len - offset.x, cy - dy * len - offset.y);
+        let end = Point::new(cx + dx * len - offset.x, cy + dy * len - offset.y);
+        let timer = self.diagnostics_enabled.then(Instant::now);
+        let pixmap = rasterize_linear_gradient(
+          width,
+          height,
+          start,
+          end,
+          SpreadMode::Repeat,
+          &resolved,
+          &self.gradient_cache,
+          gradient_bucket(full_w.max(full_h)),
+        )?;
+        if let Some(start) = timer {
+          self.record_gradient_usage((width * height) as u64, start);
+        }
+        Some(pixmap)
+      }
+      BackgroundImage::RadialGradient {
+        shape,
+        size,
+        position,
+        stops,
+      } => {
+        let resolved = normalize_color_stops(stops, style.color);
+        if resolved.is_empty() {
+          return None;
+        }
+        let skia_stops = gradient_stops(&resolved);
+        let (cx, cy, radius_x, radius_y) = radial_geometry(
+          full_rect,
+          position,
+          size,
+          *shape,
+          style.font_size,
+          style.root_font_size,
+          (self.css_width, self.css_height),
+        );
+        let cx = cx - offset.x;
+        let cy = cy - offset.y;
+        let transform = Transform::from_translate(cx, cy).pre_scale(radius_x, radius_y);
+        let shader = RadialGradient::new(
+          tiny_skia::Point::from_xy(0.0, 0.0),
+          tiny_skia::Point::from_xy(0.0, 0.0),
+          1.0,
+          skia_stops,
+          SpreadMode::Pad,
+          transform,
+        )?;
+
+        let timer = self.diagnostics_enabled.then(Instant::now);
+        let mut pixmap = new_pixmap(width, height)?;
+        let skia_rect = SkiaRect::from_xywh(0.0, 0.0, width as f32, height as f32)?;
+        let path = PathBuilder::from_rect(skia_rect);
+        let mut paint = Paint::default();
+        paint.shader = shader;
+        paint.anti_alias = true;
+        pixmap.fill_path(
+          &path,
+          &paint,
+          tiny_skia::FillRule::Winding,
+          Transform::identity(),
+          None,
+        );
+        if let Some(start) = timer {
+          self.record_gradient_usage((width * height) as u64, start);
+        }
+        Some(pixmap)
+      }
+      BackgroundImage::RepeatingRadialGradient {
+        shape,
+        size,
+        position,
+        stops,
+      } => {
+        let resolved = normalize_color_stops(stops, style.color);
+        if resolved.is_empty() {
+          return None;
+        }
+        let skia_stops = gradient_stops(&resolved);
+        let (cx, cy, radius_x, radius_y) = radial_geometry(
+          full_rect,
+          position,
+          size,
+          *shape,
+          style.font_size,
+          style.root_font_size,
+          (self.css_width, self.css_height),
+        );
+        let cx = cx - offset.x;
+        let cy = cy - offset.y;
+        let transform = Transform::from_translate(cx, cy).pre_scale(radius_x, radius_y);
+        let shader = RadialGradient::new(
+          tiny_skia::Point::from_xy(0.0, 0.0),
+          tiny_skia::Point::from_xy(0.0, 0.0),
+          1.0,
+          skia_stops,
+          SpreadMode::Repeat,
+          transform,
+        )?;
+
+        let timer = self.diagnostics_enabled.then(Instant::now);
+        let mut pixmap = new_pixmap(width, height)?;
+        let skia_rect = SkiaRect::from_xywh(0.0, 0.0, width as f32, height as f32)?;
+        let path = PathBuilder::from_rect(skia_rect);
+        let mut paint = Paint::default();
+        paint.shader = shader;
+        paint.anti_alias = true;
+        pixmap.fill_path(
+          &path,
+          &paint,
+          tiny_skia::FillRule::Winding,
+          Transform::identity(),
+          None,
+        );
+        if let Some(start) = timer {
+          self.record_gradient_usage((width * height) as u64, start);
+        }
+        Some(pixmap)
+      }
+      BackgroundImage::ConicGradient {
+        from_angle,
+        position,
+        stops,
+      } => {
+        let resolved = normalize_color_stops_unclamped(stops, style.color);
+        if resolved.is_empty() {
+          return None;
+        }
+        let center = resolve_gradient_center(
+          full_rect,
+          position,
+          paint_rect,
+          style.font_size,
+          style.root_font_size,
+          (self.css_width, self.css_height),
+        );
+        let timer = self.diagnostics_enabled.then(Instant::now);
+        let pixmap = rasterize_conic_gradient(
+          width,
+          height,
+          center,
+          from_angle.to_radians(),
+          SpreadMode::Pad,
+          &resolved,
+          &self.gradient_cache,
+          gradient_bucket(full_w.max(full_h).saturating_mul(2)),
+        )?;
+        if let Some(start) = timer {
+          self.record_gradient_usage((width * height) as u64, start);
+        }
+        Some(pixmap)
+      }
+      BackgroundImage::RepeatingConicGradient {
+        from_angle,
+        position,
+        stops,
+      } => {
+        let resolved = normalize_color_stops_unclamped(stops, style.color);
+        if resolved.is_empty() {
+          return None;
+        }
+        let center = resolve_gradient_center(
+          full_rect,
+          position,
+          paint_rect,
+          style.font_size,
+          style.root_font_size,
+          (self.css_width, self.css_height),
+        );
+        let timer = self.diagnostics_enabled.then(Instant::now);
+        let pixmap = rasterize_conic_gradient(
+          width,
+          height,
+          center,
+          from_angle.to_radians(),
+          SpreadMode::Repeat,
+          &resolved,
+          &self.gradient_cache,
+          gradient_bucket(full_w.max(full_h).saturating_mul(2)),
+        )?;
+        if let Some(start) = timer {
+          self.record_gradient_usage((width * height) as u64, start);
+        }
+        Some(pixmap)
+      }
+      BackgroundImage::Url(_) | BackgroundImage::None => None,
+    }
+  }
+
+  fn paint_generated_image_intersection(
+    &mut self,
+    bg: &BackgroundImage,
+    style: &ComputedStyle,
+    tile_rect_css: Rect,
+    intersection_css: Rect,
+    full_w: u32,
+    full_h: u32,
+    clip_mask: Option<&Mask>,
+    blend_mode: MixBlendMode,
+    quality: FilterQuality,
+  ) {
+    if full_w == 0
+      || full_h == 0
+      || intersection_css.width() <= 0.0
+      || intersection_css.height() <= 0.0
+    {
+      return;
+    }
+
+    let tile_rect_device_original = self.device_rect(tile_rect_css);
+    let intersection_device = self.device_rect(intersection_css);
+    if intersection_device.width() <= 0.0 || intersection_device.height() <= 0.0 {
+      return;
+    }
+
+    let mut tile_rect_device = tile_rect_device_original;
+    if quality == FilterQuality::Nearest
+      && (tile_rect_device.width() > full_w as f32 || tile_rect_device.height() > full_h as f32)
+    {
+      let (snapped_w, offset_x) = snap_upscale(tile_rect_device.width(), full_w as f32)
+        .unwrap_or_else(|| (tile_rect_device.width(), 0.0));
+      let (snapped_h, offset_y) = snap_upscale(tile_rect_device.height(), full_h as f32)
+        .unwrap_or_else(|| (tile_rect_device.height(), 0.0));
+      tile_rect_device = Rect::from_xywh(
+        tile_rect_device.x() + offset_x,
+        tile_rect_device.y() + offset_y,
+        snapped_w,
+        snapped_h,
+      );
+    }
+
+    let scale_x = tile_rect_device.width() / full_w as f32;
+    let scale_y = tile_rect_device.height() / full_h as f32;
+    if !scale_x.is_finite() || !scale_y.is_finite() || scale_x <= 0.0 || scale_y <= 0.0 {
+      return;
+    }
+
+    let src_min_x = (intersection_device.x() - tile_rect_device.x()) / scale_x;
+    let src_max_x = (intersection_device.max_x() - tile_rect_device.x()) / scale_x;
+    let src_min_y = (intersection_device.y() - tile_rect_device.y()) / scale_y;
+    let src_max_y = (intersection_device.max_y() - tile_rect_device.y()) / scale_y;
+
+    let pad: i64 = 1;
+    let full_w_i = i64::from(full_w);
+    let full_h_i = i64::from(full_h);
+    let mut src_x0 = src_min_x.floor() as i64 - pad;
+    let mut src_y0 = src_min_y.floor() as i64 - pad;
+    let mut src_x1 = src_max_x.ceil() as i64 + pad;
+    let mut src_y1 = src_max_y.ceil() as i64 + pad;
+    src_x0 = src_x0.clamp(0, full_w_i.saturating_sub(1));
+    src_y0 = src_y0.clamp(0, full_h_i.saturating_sub(1));
+    src_x1 = src_x1.clamp(0, full_w_i);
+    src_y1 = src_y1.clamp(0, full_h_i);
+    if src_x1 <= src_x0 || src_y1 <= src_y0 {
+      return;
+    }
+
+    let region_w = (src_x1 - src_x0) as u32;
+    let region_h = (src_y1 - src_y0) as u32;
+    if region_w == 0 || region_h == 0 {
+      return;
+    }
+    if pixmap_allocation_bytes(region_w, region_h)
+      .map(|bytes| bytes > MAX_PIXMAP_BYTES)
+      .unwrap_or(true)
+    {
+      return;
+    }
+
+    let Some(pixmap) = self.render_generated_image_region(
+      bg,
+      style,
+      full_w,
+      full_h,
+      src_x0 as u32,
+      src_y0 as u32,
+      region_w,
+      region_h,
+    ) else {
+      return;
+    };
+
+    let translate_x = tile_rect_device.x() + (src_x0 as f32) * scale_x;
+    let translate_y = tile_rect_device.y() + (src_y0 as f32) * scale_y;
+    let mut paint = Paint::default();
+    paint.shader = Pattern::new(
+      pixmap.as_ref(),
+      SpreadMode::Pad,
+      quality,
+      1.0,
+      Transform::from_row(scale_x, 0.0, 0.0, scale_y, translate_x, translate_y),
+    );
+    paint.anti_alias = false;
+
+    let Some(rect) = SkiaRect::from_xywh(
+      intersection_device.x(),
+      intersection_device.y(),
+      intersection_device.width(),
+      intersection_device.height(),
+    ) else {
+      return;
+    };
+
+    if is_hsl_blend(blend_mode) {
+      if let Some(mut layer) = new_pixmap(self.pixmap.width(), self.pixmap.height()) {
+        paint.blend_mode = SkiaBlendMode::SourceOver;
+        layer.fill_rect(rect, &paint, Transform::identity(), clip_mask);
+        composite_hsl_layer(
+          &mut self.pixmap,
+          &layer,
+          1.0,
+          blend_mode,
+          Some(intersection_device),
+        );
+      } else {
+        paint.blend_mode = map_blend_mode(blend_mode);
+        self
+          .pixmap
+          .fill_rect(rect, &paint, Transform::identity(), clip_mask);
+      }
+    } else {
+      paint.blend_mode = map_blend_mode(blend_mode);
+      self
+        .pixmap
+        .fill_rect(rect, &paint, Transform::identity(), clip_mask);
     }
   }
 
@@ -13210,6 +13663,159 @@ mod tests {
       content_px.1 > 200 && content_px.2 < 50,
       "expected green in content area, got {:?}",
       content_px
+    );
+  }
+
+  #[test]
+  fn legacy_generated_linear_gradient_clips_huge_tile_to_viewport() {
+    let mut style = ComputedStyle::default();
+    style.set_background_layers(vec![BackgroundLayer {
+      image: Some(BackgroundImage::LinearGradient {
+        angle: 0.0,
+        stops: vec![
+          ColorStop {
+            color: Color::Rgba(Rgba::RED),
+            position: Some(0.0),
+          },
+          ColorStop {
+            color: Color::Rgba(Rgba::BLUE),
+            position: Some(1.0),
+          },
+        ],
+      }),
+      repeat: BackgroundRepeat::no_repeat(),
+      ..BackgroundLayer::default()
+    }]);
+
+    // Large background tile that would exceed MAX_PIXMAP_BYTES if rasterized in full.
+    let fragment = FragmentNode::new_block_styled(
+      Rect::from_xywh(-9900.0, -9900.0, 20000.0, 20000.0),
+      vec![],
+      Arc::new(style),
+    );
+    let tree = FragmentTree::new(fragment);
+
+    let pixmap = paint_tree_with_resources_scaled_offset_backend(
+      &tree,
+      200,
+      200,
+      Rgba::WHITE,
+      FontContext::new(),
+      ImageCache::new(),
+      1.0,
+      Point::ZERO,
+      PaintParallelism::default(),
+      &ScrollState::default(),
+      PaintBackend::Legacy,
+    )
+    .expect("paint");
+
+    let top = color_at(&pixmap, 0, 0);
+    let bottom = color_at(&pixmap, 0, 199);
+    assert!(
+      top.2 > top.0 && top.0 > 100 && top.2 > 100 && top.1 < 20,
+      "expected purple-ish (blue>red) near top of viewport, got {:?}",
+      top
+    );
+    assert!(
+      bottom.0 > bottom.2 && bottom.0 > 100 && bottom.2 > 100 && bottom.1 < 20,
+      "expected purple-ish (red>blue) near bottom of viewport, got {:?}",
+      bottom
+    );
+  }
+
+  #[test]
+  fn legacy_generated_conic_gradient_clips_huge_tile_to_viewport() {
+    let mut style = ComputedStyle::default();
+    style.set_background_layers(vec![BackgroundLayer {
+      image: Some(BackgroundImage::ConicGradient {
+        from_angle: 0.0,
+        position: BackgroundPosition::Position {
+          x: BackgroundPositionComponent {
+            alignment: 0.5,
+            offset: Length::px(0.0),
+          },
+          y: BackgroundPositionComponent {
+            alignment: 0.5,
+            offset: Length::px(0.0),
+          },
+        },
+        stops: vec![
+          ColorStop {
+            color: Color::Rgba(Rgba::RED),
+            position: Some(0.0),
+          },
+          ColorStop {
+            color: Color::Rgba(Rgba::GREEN),
+            position: Some(0.25),
+          },
+          ColorStop {
+            color: Color::Rgba(Rgba::BLUE),
+            position: Some(0.5),
+          },
+          ColorStop {
+            color: Color::Rgba(Rgba::new(255, 255, 0, 1.0)),
+            position: Some(0.75),
+          },
+          ColorStop {
+            color: Color::Rgba(Rgba::RED),
+            position: Some(1.0),
+          },
+        ],
+      }),
+      repeat: BackgroundRepeat::no_repeat(),
+      ..BackgroundLayer::default()
+    }]);
+
+    // Offset the tile by half a pixel so the conic center lands exactly on a device pixel center.
+    let fragment = FragmentNode::new_block_styled(
+      Rect::from_xywh(-9899.5, -9899.5, 20000.0, 20000.0),
+      vec![],
+      Arc::new(style),
+    );
+    let tree = FragmentTree::new(fragment);
+
+    let pixmap = paint_tree_with_resources_scaled_offset_backend(
+      &tree,
+      200,
+      200,
+      Rgba::WHITE,
+      FontContext::new(),
+      ImageCache::new(),
+      1.0,
+      Point::ZERO,
+      PaintParallelism::default(),
+      &ScrollState::default(),
+      PaintBackend::Legacy,
+    )
+    .expect("paint");
+
+    let top = color_at(&pixmap, 100, 0);
+    assert!(
+      top.0 > 200 && top.1 < 50 && top.2 < 50,
+      "expected red above the conic center, got {:?}",
+      top
+    );
+
+    let right = color_at(&pixmap, 199, 100);
+    assert!(
+      right.1 > 200 && right.0 < 50 && right.2 < 50,
+      "expected green to the right of the conic center, got {:?}",
+      right
+    );
+
+    let bottom = color_at(&pixmap, 100, 199);
+    assert!(
+      bottom.2 > 200 && bottom.0 < 50 && bottom.1 < 50,
+      "expected blue below the conic center, got {:?}",
+      bottom
+    );
+
+    let left = color_at(&pixmap, 0, 100);
+    assert!(
+      left.0 > 200 && left.1 > 200 && left.2 < 50,
+      "expected yellow to the left of the conic center, got {:?}",
+      left
     );
   }
 
