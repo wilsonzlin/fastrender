@@ -892,6 +892,7 @@ struct ElementAttrCacheEntry {
   class: CachedClassTokens,
   attr_index: CachedAttrIndex,
   ancestor_bloom_hashes: Option<Box<[u32]>>,
+  selector_bloom_hashes: Option<Box<[u32]>>,
 }
 
 impl ElementAttrCacheEntry {
@@ -928,6 +929,7 @@ impl ElementAttrCacheEntry {
       class,
       attr_index: CachedAttrIndex::Pending,
       ancestor_bloom_hashes: None,
+      selector_bloom_hashes: None,
     }
   }
 
@@ -1182,6 +1184,20 @@ impl ElementAttrCache {
       entry.ancestor_bloom_hashes = Some(hashes.into_boxed_slice());
     }
     if let Some(hashes) = entry.ancestor_bloom_hashes.as_deref() {
+      for &hash in hashes {
+        add(hash);
+      }
+    }
+  }
+
+  pub fn for_each_selector_bloom_hash(&self, node: &DomNode, mut add: impl FnMut(u32)) {
+    let mut entry = self.entry_mut(node);
+    if entry.selector_bloom_hashes.is_none() {
+      let mut hashes = Vec::new();
+      add_selector_bloom_hashes(node, &mut |hash| hashes.push(hash));
+      entry.selector_bloom_hashes = Some(hashes.into_boxed_slice());
+    }
+    if let Some(hashes) = entry.selector_bloom_hashes.as_deref() {
       for &hash in hashes {
         add(hash);
       }
@@ -4862,7 +4878,11 @@ impl<'a> Element for ElementRef<'a> {
       return false;
     }
 
-    add_selector_bloom_hashes(self.node, &mut |hash| filter.insert_hash(hash));
+    if let Some(cache) = self.attr_cache {
+      cache.for_each_selector_bloom_hash(self.node, |hash| filter.insert_hash(hash));
+    } else {
+      add_selector_bloom_hashes(self.node, &mut |hash| filter.insert_hash(hash));
+    }
     true
   }
 }
@@ -5166,7 +5186,11 @@ fn match_relative_selector_descendants<'a>(
   let ancestor_hashes = selector.ancestor_hashes_for_mode(context.quirks_mode());
   ancestors.with_pushed(anchor, |ancestors| {
     if use_ancestor_bloom {
-      add_selector_bloom_hashes(anchor, &mut |hash| bloom_filter.insert_hash(hash));
+      if let Some(cache) = context.extra_data.element_attr_cache {
+        cache.for_each_selector_bloom_hash(anchor, |hash| bloom_filter.insert_hash(hash));
+      } else {
+        add_selector_bloom_hashes(anchor, &mut |hash| bloom_filter.insert_hash(hash));
+      }
     }
     let mut found = false;
     for child in anchor.children.iter().filter(|c| c.is_element()) {
@@ -5208,7 +5232,11 @@ fn match_relative_selector_descendants<'a>(
       }
     }
     if use_ancestor_bloom {
-      add_selector_bloom_hashes(anchor, &mut |hash| bloom_filter.remove_hash(hash));
+      if let Some(cache) = context.extra_data.element_attr_cache {
+        cache.for_each_selector_bloom_hash(anchor, |hash| bloom_filter.remove_hash(hash));
+      } else {
+        add_selector_bloom_hashes(anchor, &mut |hash| bloom_filter.remove_hash(hash));
+      }
     }
     found
   })
@@ -5297,7 +5325,11 @@ fn match_relative_selector_subtree<'a>(
   let ancestor_hashes = selector.ancestor_hashes_for_mode(context.quirks_mode());
   ancestors.with_pushed(node, |ancestors| {
     if use_ancestor_bloom {
-      add_selector_bloom_hashes(node, &mut |hash| bloom_filter.insert_hash(hash));
+      if let Some(cache) = context.extra_data.element_attr_cache {
+        cache.for_each_selector_bloom_hash(node, |hash| bloom_filter.insert_hash(hash));
+      } else {
+        add_selector_bloom_hashes(node, &mut |hash| bloom_filter.insert_hash(hash));
+      }
     }
     let mut found = false;
     for child in node.children.iter().filter(|c| c.is_element()) {
@@ -5337,7 +5369,11 @@ fn match_relative_selector_subtree<'a>(
       }
     }
     if use_ancestor_bloom {
-      add_selector_bloom_hashes(node, &mut |hash| bloom_filter.remove_hash(hash));
+      if let Some(cache) = context.extra_data.element_attr_cache {
+        cache.for_each_selector_bloom_hash(node, |hash| bloom_filter.remove_hash(hash));
+      } else {
+        add_selector_bloom_hashes(node, &mut |hash| bloom_filter.remove_hash(hash));
+      }
     }
     found
   })
