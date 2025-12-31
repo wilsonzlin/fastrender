@@ -39,6 +39,9 @@ pip install -r tests/fixtures/fonts/requirements.txt
   - `NotoSansBengali-subset.ttf`: Bengali + joiners + combining marks (U+0300–036F).
   - `NotoSansTamil-subset.ttf`: Tamil (U+0B80–0BFF) plus common punctuation and joiners.
   - `NotoSansThai-subset.ttf`: Thai (U+0E00–0E7F) plus common punctuation and joiners.
+  - `NotoSansThaana-subset.ttf`: Thaana (U+0780–07BF) with joiners + combining marks (U+0300–036F).
+  - `NotoSansSyriac-subset.ttf`: Syriac (U+0700–074F) with joiners + combining marks (U+0300–036F).
+  - `NotoSansNKo-subset.ttf`: N’Ko (U+07C0–07FF) with joiners + combining marks (U+0300–036F).
   - `NotoSansSC-subset.ttf` / `NotoSansJP-subset.ttf` / `NotoSansKR-subset.ttf`: CJK Unified Ideographs (U+3400–4DBF,
     U+4E00–9FFF), CJK punctuation/fullwidth forms, and common combining marks (U+0300–036F); JP adds kana (U+3040–31FF)
     and KR adds Hangul (U+1100–11FF, U+AC00–D7AF).

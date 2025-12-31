@@ -103,6 +103,18 @@ const BUNDLED_FONTS: &[BundledFont] = &[
     data: include_bytes!("../../tests/fixtures/fonts/NotoSansThai-subset.ttf"),
   },
   BundledFont {
+    name: "Noto Sans Thaana",
+    data: include_bytes!("../../tests/fixtures/fonts/NotoSansThaana-subset.ttf"),
+  },
+  BundledFont {
+    name: "Noto Sans Syriac",
+    data: include_bytes!("../../tests/fixtures/fonts/NotoSansSyriac-subset.ttf"),
+  },
+  BundledFont {
+    name: "Noto Sans NKo",
+    data: include_bytes!("../../tests/fixtures/fonts/NotoSansNKo-subset.ttf"),
+  },
+  BundledFont {
     name: "Noto Sans SC",
     data: include_bytes!("../../tests/fixtures/fonts/NotoSansSC-subset.ttf"),
   },
