@@ -986,7 +986,9 @@ impl FontDatabase {
     }
 
     if this.font_count() == 0 && !config.use_bundled_fonts {
-      this.load_bundled_fonts();
+      // Bundled fonts are always loaded as a last resort to ensure shaping works even in
+      // minimal environments. Reuse the shared bundled metadata handle instead of reparsing.
+      return Self::shared_bundled();
     }
 
     this.set_generic_fallbacks();
