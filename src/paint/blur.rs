@@ -1719,17 +1719,15 @@ fn apply_blur_internal(
 
   let config = cache_config.unwrap_or_else(FilterCacheConfig::from_env);
 
-  let mut tile_count = 0usize;
-  let mut blur_applied = false;
-  if let Some((tiled, tiles)) = tile_blur(pixmap, sigma_x, sigma_y, &config)? {
-    tile_count = tiles;
-    blur_applied = tiles > 0;
-    *pixmap = tiled;
-  } else if sigma_x == sigma_y {
-    blur_applied = blur_isotropic_body(pixmap, sigma_x)?;
-  } else {
-    blur_applied = blur_anisotropic_body(pixmap, sigma_x, sigma_y)?;
-  }
+  let (tile_count, blur_applied) =
+    if let Some((tiled, tiles)) = tile_blur(pixmap, sigma_x, sigma_y, &config)? {
+      *pixmap = tiled;
+      (tiles, tiles > 0)
+    } else if sigma_x == sigma_y {
+      (0, blur_isotropic_body(pixmap, sigma_x)?)
+    } else {
+      (0, blur_anisotropic_body(pixmap, sigma_x, sigma_y)?)
+    };
 
   record_blur_tiles(tile_count);
 
