@@ -227,6 +227,8 @@ fn current_target_fragment() -> Option<String> {
 
 static SELECTOR_BLOOM_ENV_INITIALIZED: OnceLock<()> = OnceLock::new();
 static SELECTOR_BLOOM_ENABLED: AtomicBool = AtomicBool::new(true);
+static ANCESTOR_BLOOM_ENV_INITIALIZED: OnceLock<()> = OnceLock::new();
+static ANCESTOR_BLOOM_ENABLED: AtomicBool = AtomicBool::new(true);
 static SELECTOR_CACHE_EPOCH: AtomicUsize = AtomicUsize::new(1);
 const SELECTOR_BLOOM_SUMMARY_BITS: usize = 256;
 const SELECTOR_BLOOM_SUMMARY_WORDS: usize = SELECTOR_BLOOM_SUMMARY_BITS / 64;
@@ -246,6 +248,23 @@ pub(crate) fn selector_bloom_enabled() -> bool {
 pub fn set_selector_bloom_enabled(enabled: bool) {
   SELECTOR_BLOOM_ENV_INITIALIZED.get_or_init(|| ());
   SELECTOR_BLOOM_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+pub(crate) fn ancestor_bloom_enabled() -> bool {
+  ANCESTOR_BLOOM_ENV_INITIALIZED.get_or_init(|| {
+    if let Ok(value) = std::env::var("FASTR_ANCESTOR_BLOOM") {
+      if value.trim() == "0" {
+        ANCESTOR_BLOOM_ENABLED.store(false, Ordering::Relaxed);
+      }
+    }
+  });
+  ANCESTOR_BLOOM_ENABLED.load(Ordering::Relaxed)
+}
+
+/// Toggle the cascade ancestor bloom filter for benchmarking/testing.
+pub fn set_ancestor_bloom_enabled(enabled: bool) {
+  ANCESTOR_BLOOM_ENV_INITIALIZED.get_or_init(|| ());
+  ANCESTOR_BLOOM_ENABLED.store(enabled, Ordering::Relaxed);
 }
 
 /// Returns a monotonically increasing epoch for selector caches.
@@ -268,6 +287,16 @@ fn node_is_html_element(node: &DomNode) -> bool {
     DomNodeType::Element { ref namespace, .. } | DomNodeType::Slot { ref namespace, .. }
       if namespace.is_empty() || namespace == HTML_NAMESPACE
   )
+}
+
+fn to_ascii_lowercase_cow(s: &str) -> std::borrow::Cow<'_, str> {
+  if let Some(first_uppercase) = s.bytes().position(|byte| byte >= b'A' && byte <= b'Z') {
+    let mut string = s.to_owned();
+    string[first_uppercase..].make_ascii_lowercase();
+    string.into()
+  } else {
+    s.into()
+  }
 }
 
 fn add_selector_bloom_hashes(node: &DomNode, add: &mut impl FnMut(u32)) {
@@ -322,6 +351,60 @@ fn add_selector_bloom_hashes(node: &DomNode, add: &mut impl FnMut(u32)) {
   }
 }
 
+pub(crate) fn for_each_ancestor_bloom_hash(
+  node: &DomNode,
+  quirks_mode: QuirksMode,
+  mut add: impl FnMut(u32),
+) {
+  if !node.is_element() {
+    return;
+  }
+
+  let is_html = node_is_html_element(node);
+  if let Some(tag) = node.tag_name() {
+    let tag_key = if is_html {
+      to_ascii_lowercase_cow(tag)
+    } else {
+      tag.into()
+    };
+    add(selector_bloom_hash(tag_key.as_ref()));
+  }
+
+  let quirks_case_fold = matches!(quirks_mode, QuirksMode::Quirks) && is_html;
+  if let Some(id) = node.get_attribute_ref("id") {
+    if quirks_case_fold {
+      let lower = to_ascii_lowercase_cow(id);
+      add(selector_bloom_hash(lower.as_ref()));
+      if lower.as_ref() != id {
+        add(selector_bloom_hash(id));
+      }
+    } else {
+      add(selector_bloom_hash(id));
+    }
+  }
+
+  if let Some(class_attr) = node.get_attribute_ref("class") {
+    for class in class_attr.split_whitespace() {
+      if class.is_empty() {
+        continue;
+      }
+      if quirks_case_fold {
+        let lower = to_ascii_lowercase_cow(class);
+        add(selector_bloom_hash(lower.as_ref()));
+        if lower.as_ref() != class {
+          add(selector_bloom_hash(class));
+        }
+      } else {
+        add(selector_bloom_hash(class));
+      }
+    }
+  }
+
+  for (name, _) in node.attributes_iter() {
+    let lower = to_ascii_lowercase_cow(name);
+    add(selector_bloom_hash(lower.as_ref()));
+  }
+}
 static HAS_EVALS: AtomicU64 = AtomicU64::new(0);
 static HAS_CACHE_HITS: AtomicU64 = AtomicU64::new(0);
 static HAS_PRUNES: AtomicU64 = AtomicU64::new(0);

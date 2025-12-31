@@ -26,9 +26,11 @@ use crate::css::types::ScopeContext;
 use crate::css::types::StyleRule;
 use crate::css::types::StyleSheet;
 use crate::debug::runtime;
+use crate::dom::ancestor_bloom_enabled;
 use crate::dom::build_selector_bloom_store;
 use crate::dom::compute_slot_assignment;
 use crate::dom::enumerate_dom_ids;
+use crate::dom::for_each_ancestor_bloom_hash;
 use crate::dom::next_selector_cache_epoch;
 use crate::dom::parse_exportparts;
 use crate::dom::reset_has_counters;
@@ -975,23 +977,6 @@ fn record_pseudo_time(elapsed: std::time::Duration) {
   }
 }
 
-fn build_ancestor_bloom_filter(ancestors: &[&DomNode]) -> Option<selectors::bloom::BloomFilter> {
-  if !crate::dom::selector_bloom_enabled() {
-    return None;
-  }
-
-  let mut filter = selectors::bloom::BloomFilter::new();
-  for ancestor in ancestors.iter() {
-    if !ancestor.is_element() {
-      continue;
-    }
-    let ancestor_ref = ElementRef::new(*ancestor);
-    let _ = ancestor_ref.add_element_unique_hashes(&mut filter);
-  }
-
-  Some(filter)
-}
-
 #[inline(always)]
 fn matches_selector_cascade(
   selector: &Selector<FastRenderSelectorImpl>,
@@ -1004,15 +989,15 @@ fn matches_selector_cascade(
     CASCADE_PROFILE_SELECTOR_ATTEMPTS_TOTAL.fetch_add(1, Ordering::Relaxed);
   }
 
-  if let Some(filter) = context.bloom_filter {
-    let computed_hashes;
-    let hashes = match hashes {
-      Some(hashes) => hashes,
-      None => {
-        computed_hashes = AncestorHashes::new(selector, context.quirks_mode());
-        &computed_hashes
-      }
-    };
+  let computed_hashes;
+  let hashes = if hashes.is_some() || context.bloom_filter.is_none() {
+    hashes
+  } else {
+    computed_hashes = AncestorHashes::new(selector, context.quirks_mode());
+    Some(&computed_hashes)
+  };
+
+  if let (Some(filter), Some(hashes)) = (context.bloom_filter, hashes) {
     if !selector_may_match(hashes, filter) {
       if profiling {
         CASCADE_PROFILE_SELECTOR_BLOOM_FAST_REJECTS.fetch_add(1, Ordering::Relaxed);
@@ -1025,7 +1010,7 @@ fn matches_selector_cascade(
     CASCADE_PROFILE_SELECTOR_ATTEMPTS_AFTER_BLOOM.fetch_add(1, Ordering::Relaxed);
   }
 
-  matches_selector(selector, 0, None, element, context)
+  matches_selector(selector, 0, hashes, element, context)
 }
 
 /// The origin of a style rule for cascade ordering.
@@ -1355,8 +1340,7 @@ struct IndexedSelector<'a> {
   rule_idx: usize,
   selector: &'a Selector<crate::css::selectors::FastRenderSelectorImpl>,
   specificity: u32,
-  ancestor_hashes_non_quirks: AncestorHashes,
-  ancestor_hashes_quirks: AncestorHashes,
+  ancestor_hashes: AncestorHashes,
   metadata: SelectorMetadata,
 }
 
@@ -1365,6 +1349,8 @@ struct IndexedSlottedSelector<'a> {
   selector: &'a Selector<crate::css::selectors::FastRenderSelectorImpl>,
   prelude_specificity: u32,
   prelude: Option<Selector<crate::css::selectors::FastRenderSelectorImpl>>,
+  prelude_ancestor_hashes: Option<AncestorHashes>,
+  args_ancestor_hashes: Vec<AncestorHashes>,
   metadata: SelectorMetadata,
 }
 
@@ -2676,7 +2662,7 @@ enum SelectorKey {
 }
 
 impl<'a> RuleIndex<'a> {
-  fn new(rules: Vec<CascadeRule<'a>>) -> Self {
+  fn new(rules: Vec<CascadeRule<'a>>, quirks_mode: QuirksMode) -> Self {
     let mut index = RuleIndex {
       rules: Vec::new(),
       rule_sets_content: Vec::new(),
@@ -2719,6 +2705,15 @@ impl<'a> RuleIndex<'a> {
             let selector_idx = index.slotted_selectors.len();
             let prelude = parse_slotted_prelude(selector);
             let prelude_specificity = prelude.as_ref().map(|sel| sel.specificity()).unwrap_or(0);
+            let prelude_ancestor_hashes =
+              prelude.as_ref().map(|sel| AncestorHashes::new(sel, quirks_mode));
+            let args_ancestor_hashes = match pe {
+              PseudoElement::Slotted(args) => args
+                .iter()
+                .map(|sel| AncestorHashes::new(sel, quirks_mode))
+                .collect(),
+              _ => Vec::new(),
+            };
             let metadata = selector_metadata(selector);
             if metadata
               .has_requirement_groups
@@ -2732,6 +2727,8 @@ impl<'a> RuleIndex<'a> {
               selector,
               prelude_specificity,
               prelude,
+              prelude_ancestor_hashes,
+              args_ancestor_hashes,
               metadata,
             });
             for key in slotted_selector_keys(pe) {
@@ -2781,14 +2778,12 @@ impl<'a> RuleIndex<'a> {
           {
             index.has_has_requirements = true;
           }
-          let ancestor_hashes_non_quirks = AncestorHashes::new(selector, QuirksMode::NoQuirks);
-          let ancestor_hashes_quirks = AncestorHashes::new(selector, QuirksMode::Quirks);
+          let ancestor_hashes = AncestorHashes::new(selector, quirks_mode);
           index.pseudo_selectors.push(IndexedSelector {
             rule_idx,
             selector,
             specificity: selector.specificity(),
-            ancestor_hashes_non_quirks,
-            ancestor_hashes_quirks,
+            ancestor_hashes,
             metadata,
           });
           for key in pseudo_selector_subject_keys(selector) {
@@ -2814,14 +2809,12 @@ impl<'a> RuleIndex<'a> {
         {
           index.has_has_requirements = true;
         }
-        let ancestor_hashes_non_quirks = AncestorHashes::new(selector, QuirksMode::NoQuirks);
-        let ancestor_hashes_quirks = AncestorHashes::new(selector, QuirksMode::Quirks);
+        let ancestor_hashes = AncestorHashes::new(selector, quirks_mode);
         index.selectors.push(IndexedSelector {
           rule_idx,
           selector,
           specificity: selector.specificity(),
-          ancestor_hashes_non_quirks,
-          ancestor_hashes_quirks,
+          ancestor_hashes,
           metadata,
         });
         for key in selector_keys(selector) {
@@ -3866,6 +3859,8 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
   let document_order_base = max_author_rules.saturating_add(1);
   let shadow_order_base = document_order_base.saturating_mul(2);
 
+  let quirks_mode = quirks_mode_for_dom(dom);
+
   let ua_index = RuleIndex::new(
     ua_rules
       .iter()
@@ -3882,6 +3877,7 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
         starting_style: rule.starting_style,
       })
       .collect(),
+    quirks_mode,
   );
 
   let document_author_index = RuleIndex::new(
@@ -3900,6 +3896,7 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
         starting_style: rule.starting_style,
       })
       .collect(),
+    quirks_mode,
   );
 
   let mut shadow_indices: HashMap<usize, RuleIndex<'_>> = HashMap::new();
@@ -3944,9 +3941,9 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
       rules.push(cascade_rule);
     }
 
-    shadow_indices.insert(*host, RuleIndex::new(rules));
+    shadow_indices.insert(*host, RuleIndex::new(rules, quirks_mode));
     if !host_rules.is_empty() {
-      shadow_host_indices.insert(*host, RuleIndex::new(host_rules));
+      shadow_host_indices.insert(*host, RuleIndex::new(host_rules, quirks_mode));
     }
   }
 
@@ -3957,7 +3954,7 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
     host_rules: shadow_host_indices,
     slot_maps,
     fallback_document_rules_in_shadow_scopes: true,
-    quirks_mode: quirks_mode_for_dom(dom),
+    quirks_mode,
   };
 
   let needs_selector_blooms = rule_scopes_needs_selector_bloom_summaries(&rule_scopes);
@@ -4317,6 +4314,8 @@ impl<'a> PreparedCascade<'a> {
     let document_order_base = max_author_rules.saturating_add(1);
     let shadow_order_base = document_order_base.saturating_mul(2);
 
+    let quirks_mode = quirks_mode_for_dom(dom);
+
     let ua_index = RuleIndex::new(
       ua_rules
         .iter()
@@ -4333,6 +4332,7 @@ impl<'a> PreparedCascade<'a> {
           starting_style: rule.starting_style,
         })
         .collect(),
+      quirks_mode,
     );
 
     let document_author_index = RuleIndex::new(
@@ -4351,6 +4351,7 @@ impl<'a> PreparedCascade<'a> {
           starting_style: rule.starting_style,
         })
         .collect(),
+      quirks_mode,
     );
 
     let mut shadow_indices: HashMap<usize, RuleIndex<'a>> = HashMap::new();
@@ -4398,9 +4399,9 @@ impl<'a> PreparedCascade<'a> {
         rules.push(cascade_rule);
       }
 
-      shadow_indices.insert(*host, RuleIndex::new(rules));
+      shadow_indices.insert(*host, RuleIndex::new(rules, quirks_mode));
       if !host_rules.is_empty() {
-        shadow_host_indices.insert(*host, RuleIndex::new(host_rules));
+        shadow_host_indices.insert(*host, RuleIndex::new(host_rules, quirks_mode));
       }
     }
 
@@ -4411,7 +4412,7 @@ impl<'a> PreparedCascade<'a> {
       host_rules: shadow_host_indices,
       slot_maps,
       fallback_document_rules_in_shadow_scopes: false,
-      quirks_mode: quirks_mode_for_dom(dom),
+      quirks_mode,
     };
 
     let needs_selector_bloom_summaries = rule_scopes_needs_selector_bloom_summaries(&rule_scopes)
@@ -5224,6 +5225,7 @@ fn containing_scope_host_id(dom_maps: &DomMaps, node: &DomNode) -> Option<usize>
 fn match_part_rules<'a>(
   node: &DomNode,
   ancestors: &[&DomNode],
+  ancestor_bloom: Option<&selectors::bloom::BloomFilter>,
   scopes: &'a RuleScopes<'a>,
   selector_caches: &mut SelectorCaches,
   scratch: &mut CascadeScratch,
@@ -5332,6 +5334,7 @@ fn match_part_rules<'a>(
             selector_caches,
             scratch,
             host_ancestors,
+            ancestor_bloom,
             slot_map,
             dom_maps.selector_blooms(),
             sibling_cache,
@@ -5367,6 +5370,7 @@ fn collect_matching_rules<'a>(
   selector_caches: &mut SelectorCaches,
   scratch: &mut CascadeScratch,
   ancestors: &[&DomNode],
+  ancestor_bloom: Option<&selectors::bloom::BloomFilter>,
   ancestor_ids: &[usize],
   node_id: usize,
   container_ctx: Option<&ContainerQueryContext>,
@@ -5395,6 +5399,7 @@ fn collect_matching_rules<'a>(
     selector_caches,
     scratch,
     ancestors,
+    ancestor_bloom,
     ancestor_ids,
     node_id,
     container_ctx,
@@ -5417,6 +5422,7 @@ fn collect_matching_rules<'a>(
       selector_caches,
       scratch,
       ancestors,
+      ancestor_bloom,
       ancestor_ids,
       node_id,
       container_ctx,
@@ -5441,6 +5447,7 @@ fn collect_matching_rules<'a>(
           selector_caches,
           scratch,
           ancestors,
+          ancestor_bloom,
           ancestor_ids,
           node_id,
           container_ctx,
@@ -5463,6 +5470,7 @@ fn collect_matching_rules<'a>(
       selector_caches,
       scratch,
       ancestors,
+      ancestor_bloom,
       ancestor_ids,
       node_id,
       container_ctx,
@@ -5485,6 +5493,7 @@ fn collect_matching_rules<'a>(
           selector_caches,
           scratch,
           ancestors,
+          ancestor_bloom,
           ancestor_ids,
           node_id,
           container_ctx,
@@ -5502,6 +5511,7 @@ fn collect_matching_rules<'a>(
   matches.extend(match_part_rules(
     node,
     ancestors,
+    ancestor_bloom,
     scopes,
     selector_caches,
     scratch,
@@ -5521,6 +5531,7 @@ fn collect_pseudo_matching_rules<'a>(
   selector_caches: &mut SelectorCaches,
   scratch: &mut CascadeScratch,
   ancestors: &[&DomNode],
+  ancestor_bloom: Option<&selectors::bloom::BloomFilter>,
   node_id: usize,
   dom_maps: &DomMaps,
   sibling_cache: &SiblingListCache,
@@ -5552,6 +5563,7 @@ fn collect_pseudo_matching_rules<'a>(
     selector_caches,
     scratch,
     ancestors,
+    ancestor_bloom,
     current_slot_map,
     dom_maps.selector_blooms(),
     sibling_cache,
@@ -5568,6 +5580,7 @@ fn collect_pseudo_matching_rules<'a>(
       selector_caches,
       scratch,
       ancestors,
+      ancestor_bloom,
       base_slot_map,
       dom_maps.selector_blooms(),
       sibling_cache,
@@ -5587,6 +5600,7 @@ fn collect_pseudo_matching_rules<'a>(
           selector_caches,
           scratch,
           ancestors,
+          ancestor_bloom,
           current_slot_map,
           dom_maps.selector_blooms(),
           sibling_cache,
@@ -5606,6 +5620,7 @@ fn collect_pseudo_matching_rules<'a>(
       selector_caches,
       scratch,
       ancestors,
+      ancestor_bloom,
       slot_map_for_host(node_id),
       dom_maps.selector_blooms(),
       sibling_cache,
@@ -5632,6 +5647,7 @@ fn compute_base_styles<'a>(
   viewport: Size,
   color_scheme_pref: ColorScheme,
   ancestors: &[&'a DomNode],
+  ancestor_bloom: Option<&selectors::bloom::BloomFilter>,
   ancestor_ids: &[usize],
   node_id: usize,
   container_ctx: Option<&ContainerQueryContext>,
@@ -5683,6 +5699,7 @@ fn compute_base_styles<'a>(
     selector_caches,
     scratch,
     ancestors,
+    ancestor_bloom,
     ancestor_ids,
     node_id,
     container_ctx,
@@ -5878,6 +5895,8 @@ fn apply_styles_internal(
   has_starting_styles: bool,
 ) -> Result<StyledNode, RenderError> {
   let mut ancestors: Vec<&DomNode> = Vec::new();
+  let mut ancestor_bloom_filter = selectors::bloom::BloomFilter::new();
+  let ancestor_bloom_enabled = ancestor_bloom_enabled();
   let mut deadline_counter: usize = 0;
   let styled = apply_styles_internal_with_ancestors(
     node,
@@ -5893,6 +5912,8 @@ fn apply_styles_internal(
     viewport,
     color_scheme_pref,
     &mut ancestors,
+    &mut ancestor_bloom_filter,
+    ancestor_bloom_enabled,
     node_counter,
     ancestor_ids,
     container_ctx,
@@ -5922,6 +5943,7 @@ fn compute_pseudo_styles(
   selector_caches: &mut SelectorCaches,
   scratch: &mut CascadeScratch,
   ancestors: &[&DomNode],
+  ancestor_bloom: Option<&selectors::bloom::BloomFilter>,
   node_id: usize,
   dom_maps: &DomMaps,
   sibling_cache: &SiblingListCache,
@@ -5955,6 +5977,7 @@ fn compute_pseudo_styles(
       selector_caches,
       scratch,
       ancestors,
+      ancestor_bloom,
       node_id,
       dom_maps,
       sibling_cache,
@@ -5979,6 +6002,7 @@ fn compute_pseudo_styles(
     selector_caches,
     scratch,
     ancestors,
+    ancestor_bloom,
     node_id,
     dom_maps,
     sibling_cache,
@@ -6002,6 +6026,7 @@ fn compute_pseudo_styles(
     selector_caches,
     scratch,
     ancestors,
+    ancestor_bloom,
     node_id,
     dom_maps,
     sibling_cache,
@@ -6022,6 +6047,7 @@ fn compute_pseudo_styles(
         selector_caches,
         scratch,
         ancestors,
+        ancestor_bloom,
         node_id,
         dom_maps,
         sibling_cache,
@@ -6046,6 +6072,7 @@ fn compute_pseudo_styles(
         selector_caches,
         scratch,
         ancestors,
+        ancestor_bloom,
         node_id,
         dom_maps,
         sibling_cache,
@@ -6068,6 +6095,7 @@ fn compute_pseudo_styles(
     selector_caches,
     scratch,
     ancestors,
+    ancestor_bloom,
     node_id,
     dom_maps,
     sibling_cache,
@@ -6134,6 +6162,8 @@ fn apply_styles_internal_with_ancestors<'a>(
   viewport: Size,
   color_scheme_pref: ColorScheme,
   ancestors: &mut Vec<&'a DomNode>,
+  ancestor_bloom_filter: &mut selectors::bloom::BloomFilter,
+  ancestor_bloom_enabled: bool,
   node_counter: &mut usize,
   ancestor_ids: &mut Vec<usize>,
   container_ctx: Option<&ContainerQueryContext>,
@@ -6186,6 +6216,7 @@ fn apply_styles_internal_with_ancestors<'a>(
     viewport,
     color_scheme_pref,
     ancestors.as_slice(),
+    ancestor_bloom_enabled.then_some(&*ancestor_bloom_filter),
     ancestor_ids.as_slice(),
     node_id,
     container_ctx,
@@ -6212,6 +6243,7 @@ fn apply_styles_internal_with_ancestors<'a>(
       viewport,
       color_scheme_pref,
       ancestors.as_slice(),
+      ancestor_bloom_enabled.then_some(&*ancestor_bloom_filter),
       ancestor_ids.as_slice(),
       node_id,
       container_ctx,
@@ -6226,6 +6258,12 @@ fn apply_styles_internal_with_ancestors<'a>(
 
   let mut children = Vec::with_capacity(node.children.len());
 
+  let push_ancestor_bloom = ancestor_bloom_enabled && node.is_element();
+  if push_ancestor_bloom {
+    for_each_ancestor_bloom_hash(node, rule_scopes.quirks_mode, |hash| {
+      ancestor_bloom_filter.insert_hash(hash);
+    });
+  }
   ancestors.push(node);
   ancestor_ids.push(node_id);
   let parent_is_shadow_root = matches!(node.node_type, DomNodeType::ShadowRoot { .. });
@@ -6250,6 +6288,8 @@ fn apply_styles_internal_with_ancestors<'a>(
       viewport,
       color_scheme_pref,
       ancestors,
+      ancestor_bloom_filter,
+      ancestor_bloom_enabled,
       node_counter,
       ancestor_ids,
       container_ctx,
@@ -6267,6 +6307,11 @@ fn apply_styles_internal_with_ancestors<'a>(
   }
   ancestors.pop();
   ancestor_ids.pop();
+  if push_ancestor_bloom {
+    for_each_ancestor_bloom_hash(node, rule_scopes.quirks_mode, |hash| {
+      ancestor_bloom_filter.remove_hash(hash);
+    });
+  }
 
   let (before_styles, after_styles, marker_styles, first_line_styles, first_letter_styles) =
     compute_pseudo_styles(
@@ -6276,6 +6321,7 @@ fn apply_styles_internal_with_ancestors<'a>(
       selector_caches,
       scratch,
       ancestors.as_slice(),
+      ancestor_bloom_enabled.then_some(&*ancestor_bloom_filter),
       node_id,
       dom_maps,
       sibling_cache,
@@ -6296,6 +6342,7 @@ fn apply_styles_internal_with_ancestors<'a>(
       selector_caches,
       scratch,
       ancestors.as_slice(),
+      ancestor_bloom_enabled.then_some(&*ancestor_bloom_filter),
       node_id,
       dom_maps,
       sibling_cache,
@@ -6940,7 +6987,7 @@ mod tests {
       })
       .collect();
 
-    let index = RuleIndex::new(rules);
+    let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
     assert_eq!(index.selectors.len(), 1);
     let class_bucket_len = index
       .by_class
@@ -6978,7 +7025,7 @@ mod tests {
       })
       .collect();
 
-    let index = RuleIndex::new(rules);
+    let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
     assert_eq!(index.pseudo_selectors.len(), 2);
 
     let before_bucket = index
@@ -7063,7 +7110,7 @@ mod tests {
       })
       .collect();
 
-    let index = RuleIndex::new(rules);
+    let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
     assert_eq!(index.pseudo_selectors.len(), 1);
   }
 
@@ -7089,7 +7136,7 @@ mod tests {
       })
       .collect();
 
-    let index = RuleIndex::new(rules);
+    let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
     assert_eq!(index.slotted_selectors.len(), 1);
   }
 
@@ -7118,7 +7165,7 @@ mod tests {
       })
       .collect();
 
-    let index = RuleIndex::new(rules);
+    let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
     assert!(index.by_id.contains_key(&selector_bucket_id("Foo")));
     assert!(index.by_id.contains_key(&selector_bucket_id("foo")));
     assert!(index.by_class.contains_key(&selector_bucket_class("Bar")));
@@ -7181,7 +7228,7 @@ mod tests {
         starting_style: rule.starting_style,
       })
       .collect();
-    let index = RuleIndex::new(rules);
+    let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
 
     let node = DomNode {
       node_type: DomNodeType::Element {
@@ -7253,7 +7300,7 @@ mod tests {
         starting_style: rule.starting_style,
       })
       .collect();
-    let index = RuleIndex::new(rules);
+    let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
     assert!(index.has_has_requirements);
 
     let mut candidates: Vec<usize> = Vec::new();
@@ -7316,7 +7363,7 @@ mod tests {
         starting_style: rule.starting_style,
       })
       .collect();
-    let index = RuleIndex::new(rules);
+    let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
     assert!(!index.has_has_requirements);
 
     let mut candidates: Vec<usize> = Vec::new();
@@ -7379,7 +7426,7 @@ mod tests {
         starting_style: rule.starting_style,
       })
       .collect();
-    let index = RuleIndex::new(rules);
+    let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
     assert!(!index.has_has_requirements);
 
     let mut candidates: Vec<usize> = Vec::new();
@@ -7496,6 +7543,103 @@ mod tests {
     );
 
     set_cascade_profile_enabled(prev_profile_enabled);
+  }
+
+  #[test]
+  fn ancestor_bloom_toggle_preserves_cascade_output() {
+    let dom = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![
+          ("id".to_string(), "host".to_string()),
+          ("class".to_string(), "container".to_string()),
+        ],
+      },
+      children: vec![
+        DomNode {
+          node_type: DomNodeType::ShadowRoot {
+            mode: crate::dom::ShadowRootMode::Open,
+            delegates_focus: false,
+          },
+          children: vec![
+            DomNode {
+              node_type: DomNodeType::Element {
+                tag_name: "style".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![],
+              },
+              children: vec![DomNode {
+                node_type: DomNodeType::Text {
+                  content: "::slotted(.assigned) { background-color: rgb(1, 2, 3); }\
+slot[name=\"s\"]::slotted(.assigned) { color: rgb(4, 5, 6); }"
+                    .to_string(),
+                },
+                children: vec![],
+              }],
+            },
+            DomNode {
+              node_type: DomNodeType::Slot {
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![("name".to_string(), "s".to_string())],
+                assigned: false,
+              },
+              children: vec![],
+            },
+          ],
+        },
+        DomNode {
+          node_type: DomNodeType::Element {
+            tag_name: "span".to_string(),
+            namespace: HTML_NAMESPACE.to_string(),
+            attributes: vec![
+              ("slot".to_string(), "s".to_string()),
+              ("class".to_string(), "assigned".to_string()),
+              ("data-x".to_string(), "1".to_string()),
+            ],
+          },
+          children: vec![DomNode {
+            node_type: DomNodeType::Element {
+              tag_name: "div".to_string(),
+              namespace: HTML_NAMESPACE.to_string(),
+              attributes: vec![
+                ("class".to_string(), "leaf".to_string()),
+                ("data-test".to_string(), "yes".to_string()),
+              ],
+            },
+            children: vec![],
+          }],
+        },
+      ],
+    };
+
+    let stylesheet = parse_stylesheet(
+      r#"
+        /* Descendant selectors that should be fast-rejected when ancestors are absent. */
+        .assigned .leaf { margin-left: 5px; }
+        .missing .leaf { margin-left: 10px; }
+        [data-x] .leaf { padding-left: 3px; }
+
+        /* Ensure pseudo-element cascade also stays identical. */
+        .leaf::before { content: 'x'; color: rgb(7, 8, 9); }
+      "#,
+    )
+    .expect("parse stylesheet");
+    let media = MediaContext::screen(800.0, 600.0);
+
+    crate::dom::set_ancestor_bloom_enabled(true);
+    let styled_on = apply_styles_with_media(&dom, &stylesheet, &media);
+    crate::dom::set_ancestor_bloom_enabled(false);
+    let styled_off = apply_styles_with_media(&dom, &stylesheet, &media);
+    crate::dom::set_ancestor_bloom_enabled(true);
+
+    assert_styled_trees_equal(&styled_on, &styled_off);
+
+    let slotted = styled_on.children.get(1).expect("slotted node");
+    assert_eq!(slotted.styles.background_color, Rgba::rgb(1, 2, 3));
+    let leaf = slotted.children.first().expect("leaf node");
+    let before = leaf.before_styles.as_ref().expect("generated ::before");
+    assert_eq!(before.color, Rgba::rgb(7, 8, 9));
   }
 
   fn child_font_weight(parent_style: &str, child_style: &str) -> u16 {
@@ -11521,7 +11665,7 @@ mod tests {
         }
       })
       .collect();
-    let rule_index = RuleIndex::new(rule_refs);
+    let rule_index = RuleIndex::new(rule_refs, QuirksMode::NoQuirks);
     assert_eq!(
       rule_index.rules.len(),
       1,
@@ -11564,6 +11708,7 @@ mod tests {
       &mut caches,
       &mut scratch,
       &ancestors,
+      None,
       None,
       None,
       &sibling_cache,
@@ -12373,7 +12518,10 @@ fn resolve_scopes<'a>(
         let matches = context.nest_for_scope_condition(Some(base_ref.opaque()), |ctx| {
           start_selectors
             .iter()
-            .any(|sel| matches_selector_cascade(sel, None, &candidate_ref, ctx))
+            .any(|sel| {
+              let hashes = AncestorHashes::new(sel, ctx.quirks_mode());
+              matches_selector_cascade(sel, Some(&hashes), &candidate_ref, ctx)
+            })
         });
         if matches {
           matched_root = Some(idx);
@@ -12405,7 +12553,10 @@ fn resolve_scopes<'a>(
         let blocked = context.nest_for_scope_condition(Some(scope_ref.opaque()), |ctx| {
           limit_selectors
             .iter()
-            .any(|sel| matches_selector_cascade(sel, None, &candidate_ref, ctx))
+            .any(|sel| {
+              let hashes = AncestorHashes::new(sel, ctx.quirks_mode());
+              matches_selector_cascade(sel, Some(&hashes), &candidate_ref, ctx)
+            })
         });
         if blocked {
           return None;
@@ -12432,6 +12583,7 @@ fn find_matching_rules<'a>(
   selector_caches: &mut SelectorCaches,
   scratch: &mut CascadeScratch,
   ancestors: &[&DomNode],
+  ancestor_bloom: Option<&selectors::bloom::BloomFilter>,
   ancestor_ids: &[usize],
   node_id: usize,
   container_ctx: Option<&ContainerQueryContext>,
@@ -12497,10 +12649,9 @@ fn find_matching_rules<'a>(
   };
 
   // Create selector caches and matching context
-  let bloom_filter = build_ancestor_bloom_filter(ancestors);
   let mut context = MatchingContext::new_for_visited(
     MatchingMode::Normal,
-    bloom_filter.as_ref(),
+    ancestor_bloom,
     selector_caches,
     VisitedHandlingMode::AllLinksVisitedAndUnvisited,
     IncludeStartingStyle::No,
@@ -12605,24 +12756,19 @@ fn find_matching_rules<'a>(
         }
 
         let selector = indexed.selector;
-        let selector_hashes = if matches!(quirks_mode, QuirksMode::Quirks) {
-          &indexed.ancestor_hashes_quirks
-        } else {
-          &indexed.ancestor_hashes_non_quirks
-        };
         let mut selector_matches = match scope_match {
           ScopeMatchResult::Scoped(scope_root) => {
             let (root, root_ancestors) = scope_root.root_and_ancestors(node, ancestors);
             let scope_ref = ElementRef::with_ancestors(root, root_ancestors);
             match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
               ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
-                matches_selector_cascade(selector, Some(selector_hashes), &element_ref, ctx)
+                matches_selector_cascade(selector, Some(&indexed.ancestor_hashes), &element_ref, ctx)
               })
             })
           }
           ScopeMatchResult::Unscoped => {
             match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
-              matches_selector_cascade(selector, Some(selector_hashes), &element_ref, ctx)
+              matches_selector_cascade(selector, Some(&indexed.ancestor_hashes), &element_ref, ctx)
             })
           }
         };
@@ -12636,7 +12782,12 @@ fn find_matching_rules<'a>(
               match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
                 ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
                   ctx.with_featureless(false, |ctx| {
-                    matches_selector_cascade(selector, Some(selector_hashes), &element_ref, ctx)
+                    matches_selector_cascade(
+                      selector,
+                      Some(&indexed.ancestor_hashes),
+                      &element_ref,
+                      ctx,
+                    )
                   })
                 })
               })
@@ -12644,7 +12795,7 @@ fn find_matching_rules<'a>(
             ScopeMatchResult::Unscoped => {
               match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
                 ctx.with_featureless(false, |ctx| {
-                  matches_selector_cascade(selector, Some(selector_hashes), &element_ref, ctx)
+                  matches_selector_cascade(selector, Some(&indexed.ancestor_hashes), &element_ref, ctx)
                 })
               })
             }
@@ -12796,8 +12947,8 @@ fn find_matching_rules<'a>(
               shadow_host_for_slotted,
               |ctx| {
                 ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
-                  for sel in args.iter() {
-                    if matches_selector_cascade(sel, None, &element_ref, ctx) {
+                  for (sel, hashes) in args.iter().zip(indexed.args_ancestor_hashes.iter()) {
+                    if matches_selector_cascade(sel, Some(hashes), &element_ref, ctx) {
                       let spec = sel.specificity();
                       best_arg_specificity =
                         Some(best_arg_specificity.map_or(spec, |best| best.max(spec)));
@@ -12815,8 +12966,8 @@ fn find_matching_rules<'a>(
               &mut context,
               shadow_host_for_slotted,
               |ctx| {
-                for sel in args.iter() {
-                  if matches_selector_cascade(sel, None, &element_ref, ctx) {
+                for (sel, hashes) in args.iter().zip(indexed.args_ancestor_hashes.iter()) {
+                  if matches_selector_cascade(sel, Some(hashes), &element_ref, ctx) {
                     let spec = sel.specificity();
                     best_arg_specificity =
                       Some(best_arg_specificity.map_or(spec, |best| best.max(spec)));
@@ -12833,6 +12984,7 @@ fn find_matching_rules<'a>(
         };
 
         if let Some(prelude) = &indexed.prelude {
+          let prelude_hashes = indexed.prelude_ancestor_hashes.as_ref();
           let Some((slot_node, slot_ancestors)) = slot_node_and_ancestors.as_ref() else {
             continue;
           };
@@ -12849,7 +13001,8 @@ fn find_matching_rules<'a>(
                   ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
                     let prev_bloom_filter = ctx.bloom_filter;
                     ctx.bloom_filter = None;
-                    let matched = matches_selector_cascade(prelude, None, &slot_ref, ctx);
+                    let matched =
+                      matches_selector_cascade(prelude, prelude_hashes, &slot_ref, ctx);
                     ctx.bloom_filter = prev_bloom_filter;
                     matched
                   })
@@ -12863,7 +13016,7 @@ fn find_matching_rules<'a>(
               |ctx| {
                 let prev_bloom_filter = ctx.bloom_filter;
                 ctx.bloom_filter = None;
-                let matched = matches_selector_cascade(prelude, None, &slot_ref, ctx);
+                let matched = matches_selector_cascade(prelude, prelude_hashes, &slot_ref, ctx);
                 ctx.bloom_filter = prev_bloom_filter;
                 matched
               },
@@ -12938,6 +13091,7 @@ fn find_pseudo_element_rules<'a>(
   selector_caches: &mut SelectorCaches,
   scratch: &mut CascadeScratch,
   ancestors: &[&DomNode],
+  ancestor_bloom: Option<&selectors::bloom::BloomFilter>,
   slot_map: Option<&SlotAssignmentMap<'a>>,
   selector_blooms: Option<&SelectorBloomStore>,
   sibling_cache: &SiblingListCache,
@@ -12995,10 +13149,9 @@ fn find_pseudo_element_rules<'a>(
   };
 
   // Create selector caches and matching context
-  let bloom_filter = build_ancestor_bloom_filter(ancestors);
   let mut context = MatchingContext::new(
     MatchingMode::ForStatelessPseudoElement,
-    bloom_filter.as_ref(),
+    ancestor_bloom,
     selector_caches,
     quirks_mode,
     selectors::matching::NeedsSelectorFlags::No,
@@ -13053,24 +13206,19 @@ fn find_pseudo_element_rules<'a>(
     };
 
     let selector = indexed.selector;
-    let selector_hashes = if matches!(quirks_mode, QuirksMode::Quirks) {
-      &indexed.ancestor_hashes_quirks
-    } else {
-      &indexed.ancestor_hashes_non_quirks
-    };
     let mut selector_matches = match scope_match {
       ScopeMatchResult::Scoped(scope_root) => {
         let (root, root_ancestors) = scope_root.root_and_ancestors(node, ancestors);
         let scope_ref = ElementRef::with_ancestors(root, root_ancestors);
         match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
           ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
-            matches_selector_cascade(selector, Some(selector_hashes), &element_ref, ctx)
+            matches_selector_cascade(selector, Some(&indexed.ancestor_hashes), &element_ref, ctx)
           })
         })
       }
       ScopeMatchResult::Unscoped => {
         match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
-          matches_selector_cascade(selector, Some(selector_hashes), &element_ref, ctx)
+          matches_selector_cascade(selector, Some(&indexed.ancestor_hashes), &element_ref, ctx)
         })
       }
     };
@@ -13083,7 +13231,12 @@ fn find_pseudo_element_rules<'a>(
           match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
             ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
               ctx.with_featureless(false, |ctx| {
-                matches_selector_cascade(selector, Some(selector_hashes), &element_ref, ctx)
+                matches_selector_cascade(
+                  selector,
+                  Some(&indexed.ancestor_hashes),
+                  &element_ref,
+                  ctx,
+                )
               })
             })
           })
@@ -13091,7 +13244,7 @@ fn find_pseudo_element_rules<'a>(
         ScopeMatchResult::Unscoped => {
           match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
             ctx.with_featureless(false, |ctx| {
-              matches_selector_cascade(selector, Some(selector_hashes), &element_ref, ctx)
+              matches_selector_cascade(selector, Some(&indexed.ancestor_hashes), &element_ref, ctx)
             })
           })
         }
@@ -13975,6 +14128,7 @@ fn compute_pseudo_element_styles(
   selector_caches: &mut SelectorCaches,
   scratch: &mut CascadeScratch,
   ancestors: &[&DomNode],
+  ancestor_bloom: Option<&selectors::bloom::BloomFilter>,
   node_id: usize,
   dom_maps: &DomMaps,
   sibling_cache: &SiblingListCache,
@@ -13997,6 +14151,7 @@ fn compute_pseudo_element_styles(
     selector_caches,
     scratch,
     ancestors,
+    ancestor_bloom,
     node_id,
     dom_maps,
     sibling_cache,
@@ -14139,6 +14294,7 @@ fn compute_first_line_styles(
   selector_caches: &mut SelectorCaches,
   scratch: &mut CascadeScratch,
   ancestors: &[&DomNode],
+  ancestor_bloom: Option<&selectors::bloom::BloomFilter>,
   node_id: usize,
   dom_maps: &DomMaps,
   sibling_cache: &SiblingListCache,
@@ -14160,6 +14316,7 @@ fn compute_first_line_styles(
     selector_caches,
     scratch,
     ancestors,
+    ancestor_bloom,
     node_id,
     dom_maps,
     sibling_cache,
@@ -14233,6 +14390,7 @@ fn compute_first_letter_styles(
   selector_caches: &mut SelectorCaches,
   scratch: &mut CascadeScratch,
   ancestors: &[&DomNode],
+  ancestor_bloom: Option<&selectors::bloom::BloomFilter>,
   node_id: usize,
   dom_maps: &DomMaps,
   sibling_cache: &SiblingListCache,
@@ -14259,6 +14417,7 @@ fn compute_first_letter_styles(
     selector_caches,
     scratch,
     ancestors,
+    ancestor_bloom,
     node_id,
     dom_maps,
     sibling_cache,
@@ -14334,6 +14493,7 @@ fn compute_marker_styles(
   selector_caches: &mut SelectorCaches,
   scratch: &mut CascadeScratch,
   ancestors: &[&DomNode],
+  ancestor_bloom: Option<&selectors::bloom::BloomFilter>,
   node_id: usize,
   dom_maps: &DomMaps,
   sibling_cache: &SiblingListCache,
@@ -14357,6 +14517,7 @@ fn compute_marker_styles(
         selector_caches,
         scratch,
         ancestors,
+        ancestor_bloom,
         node_id,
         dom_maps,
         sibling_cache,

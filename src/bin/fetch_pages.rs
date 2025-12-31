@@ -662,7 +662,7 @@ mod tests {
         let _ = stream.write_all(body);
       }
     });
-  
+
     let url = format!("http://{}/start", addr);
     let res = fetch_page(
       &url,
@@ -711,7 +711,7 @@ mod tests {
         let _ = stream.write_all(headers);
       }
     });
-  
+
     let url = format!("http://{}", addr);
     let result = fetch_page(
       &url,
@@ -753,7 +753,7 @@ mod tests {
         let _ = stream.write_all(body);
       }
     });
-  
+
     let url = format!("http://{}/", addr);
     let res = fetch_page(
       &url,
@@ -814,7 +814,7 @@ mod tests {
         let _ = stream.write_all(body);
       }
     });
-  
+
     let url = format!("http://{}/", addr);
     let res = fetch_page(
       &url,
@@ -877,7 +877,7 @@ mod tests {
         let _ = stream.write_all(body);
       }
     });
-  
+
     let url = format!("http://{}/", addr);
     let res = fetch_page(
       &url,
@@ -938,7 +938,7 @@ mod tests {
         let _ = stream.write_all(body);
       }
     });
-  
+
     let url = format!("http://{}/", addr);
     let res = fetch_page(
       &url,

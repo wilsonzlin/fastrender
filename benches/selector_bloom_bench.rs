@@ -6,6 +6,7 @@ use fastrender::css::parser::parse_stylesheet;
 use fastrender::dom::build_selector_bloom_store;
 use fastrender::dom::enumerate_dom_ids;
 use fastrender::dom::parse_html;
+use fastrender::dom::set_ancestor_bloom_enabled;
 use fastrender::dom::set_selector_bloom_enabled;
 use fastrender::style::cascade::apply_styles_with_media;
 use fastrender::style::media::MediaContext;
@@ -330,6 +331,38 @@ fn selector_bloom_benchmark(c: &mut Criterion) {
   set_selector_bloom_enabled(true);
 }
 
+fn ancestor_bloom_benchmark(c: &mut Criterion) {
+  let depth = 200;
+  let branching = 5;
+  let class_variants = 48;
+  let chain_lengths = [4, 6, 8];
+
+  let html = build_branching_tree_html(depth, branching, class_variants);
+  let css = generate_descendant_styles(class_variants, &chain_lengths);
+
+  let dom = parse_html(&html).expect("parse html");
+  let stylesheet = parse_stylesheet(&css).expect("parse stylesheet");
+  let media = MediaContext::screen(1280.0, 720.0);
+
+  let mut group = c.benchmark_group("ancestor_bloom_filter");
+  group.bench_function("ancestor_bloom_on", |b| {
+    set_ancestor_bloom_enabled(true);
+    b.iter(|| {
+      let styled = apply_styles_with_media(black_box(&dom), black_box(&stylesheet), &media);
+      black_box(styled);
+    });
+  });
+  group.bench_function("ancestor_bloom_off", |b| {
+    set_ancestor_bloom_enabled(false);
+    b.iter(|| {
+      let styled = apply_styles_with_media(black_box(&dom), black_box(&stylesheet), &media);
+      black_box(styled);
+    });
+  });
+  group.finish();
+  set_ancestor_bloom_enabled(true);
+}
+
 fn has_selector_bloom_benchmark(c: &mut Criterion) {
   let depth = 7;
   let branching = 5;
@@ -463,6 +496,7 @@ fn selector_bloom_lookup_benchmark(c: &mut Criterion) {
 criterion_group!(
   benches,
   selector_bloom_benchmark,
+  ancestor_bloom_benchmark,
   has_selector_bloom_benchmark,
   has_selector_summary_benchmark,
   selector_bloom_lookup_benchmark
