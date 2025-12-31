@@ -945,7 +945,9 @@ impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
 
     let (flight, is_owner) = self.memory.join_inflight(url);
     if !is_owner {
+      let inflight_timer = super::start_fetch_inflight_wait_diagnostics();
       let result = flight.wait(url);
+      super::finish_fetch_inflight_wait_diagnostics(inflight_timer);
       if let Ok(ref res) = result {
         super::reserve_policy_bytes(&self.policy, res)?;
       }

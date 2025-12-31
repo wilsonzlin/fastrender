@@ -2074,6 +2074,11 @@ pub struct ResourceCacheDiagnostics {
   pub disk_cache_lock_waits: usize,
   /// Time spent waiting for disk cache `.lock` files to clear.
   pub disk_cache_lock_wait_ms: f64,
+  /// Number of times a `CachingFetcher` caller waited for another thread to finish an in-flight
+  /// fetch (single-flight de-duplication).
+  pub fetch_inflight_waits: usize,
+  /// Total time spent waiting for in-flight fetches to resolve.
+  pub fetch_inflight_wait_ms: f64,
   pub network_fetches: usize,
   pub network_fetch_bytes: usize,
   pub network_fetch_ms: f64,
@@ -2091,6 +2096,8 @@ struct ResourceCacheDiagnosticsState {
   disk_cache_ns: AtomicU64,
   disk_cache_lock_waits: AtomicUsize,
   disk_cache_lock_wait_ns: AtomicU64,
+  fetch_inflight_waits: AtomicUsize,
+  fetch_inflight_wait_ns: AtomicU64,
   network_fetches: AtomicUsize,
   network_fetch_bytes: AtomicUsize,
   network_fetch_ns: AtomicU64,
@@ -2109,6 +2116,8 @@ struct ResourceCacheDiagnosticsSnapshot {
   disk_cache_ns: u64,
   disk_cache_lock_waits: usize,
   disk_cache_lock_wait_ns: u64,
+  fetch_inflight_waits: usize,
+  fetch_inflight_wait_ns: u64,
   network_fetches: usize,
   network_fetch_bytes: usize,
   network_fetch_ns: u64,
@@ -2146,6 +2155,8 @@ static RESOURCE_CACHE_DIAGNOSTICS: ResourceCacheDiagnosticsState = ResourceCache
   disk_cache_ns: AtomicU64::new(0),
   disk_cache_lock_waits: AtomicUsize::new(0),
   disk_cache_lock_wait_ns: AtomicU64::new(0),
+  fetch_inflight_waits: AtomicUsize::new(0),
+  fetch_inflight_wait_ns: AtomicU64::new(0),
   network_fetches: AtomicUsize::new(0),
   network_fetch_bytes: AtomicUsize::new(0),
   network_fetch_ns: AtomicU64::new(0),
@@ -2183,6 +2194,12 @@ fn resource_cache_diagnostics_snapshot() -> ResourceCacheDiagnosticsSnapshot {
       .load(Ordering::Relaxed),
     disk_cache_lock_wait_ns: RESOURCE_CACHE_DIAGNOSTICS
       .disk_cache_lock_wait_ns
+      .load(Ordering::Relaxed),
+    fetch_inflight_waits: RESOURCE_CACHE_DIAGNOSTICS
+      .fetch_inflight_waits
+      .load(Ordering::Relaxed),
+    fetch_inflight_wait_ns: RESOURCE_CACHE_DIAGNOSTICS
+      .fetch_inflight_wait_ns
       .load(Ordering::Relaxed),
     network_fetches: RESOURCE_CACHE_DIAGNOSTICS
       .network_fetches
@@ -2239,6 +2256,9 @@ pub(crate) fn take_resource_cache_diagnostics() -> Option<ResourceCacheDiagnosti
   let disk_cache_lock_wait_ns = current
     .disk_cache_lock_wait_ns
     .saturating_sub(baseline.disk_cache_lock_wait_ns);
+  let fetch_inflight_wait_ns = current
+    .fetch_inflight_wait_ns
+    .saturating_sub(baseline.fetch_inflight_wait_ns);
   let network_fetch_ns = current
     .network_fetch_ns
     .saturating_sub(baseline.network_fetch_ns);
@@ -2266,6 +2286,10 @@ pub(crate) fn take_resource_cache_diagnostics() -> Option<ResourceCacheDiagnosti
       .disk_cache_lock_waits
       .saturating_sub(baseline.disk_cache_lock_waits),
     disk_cache_lock_wait_ms: (disk_cache_lock_wait_ns as f64) / 1_000_000.0,
+    fetch_inflight_waits: current
+      .fetch_inflight_waits
+      .saturating_sub(baseline.fetch_inflight_waits),
+    fetch_inflight_wait_ms: (fetch_inflight_wait_ns as f64) / 1_000_000.0,
     network_fetches: current
       .network_fetches
       .saturating_sub(baseline.network_fetches),
@@ -2388,6 +2412,27 @@ fn finish_disk_cache_lock_wait_diagnostics(start: Option<Instant>) {
   let nanos = u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX);
   RESOURCE_CACHE_DIAGNOSTICS
     .disk_cache_lock_wait_ns
+    .fetch_add(nanos, Ordering::Relaxed);
+}
+
+fn start_fetch_inflight_wait_diagnostics() -> Option<Instant> {
+  if !resource_cache_diagnostics_enabled() {
+    return None;
+  }
+  RESOURCE_CACHE_DIAGNOSTICS
+    .fetch_inflight_waits
+    .fetch_add(1, Ordering::Relaxed);
+  Some(Instant::now())
+}
+
+fn finish_fetch_inflight_wait_diagnostics(start: Option<Instant>) {
+  let Some(start) = start else {
+    return;
+  };
+  let elapsed = start.elapsed();
+  let nanos = u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX);
+  RESOURCE_CACHE_DIAGNOSTICS
+    .fetch_inflight_wait_ns
     .fetch_add(nanos, Ordering::Relaxed);
 }
 
@@ -3012,7 +3057,9 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
 
     let (flight, is_owner) = self.join_inflight(url);
     if !is_owner {
+      let inflight_timer = start_fetch_inflight_wait_diagnostics();
       let result = flight.wait(url);
+      finish_fetch_inflight_wait_diagnostics(inflight_timer);
       if let Ok(ref res) = result {
         reserve_policy_bytes(&self.policy, res)?;
       }
@@ -3576,6 +3623,57 @@ mod tests {
       stats.network_fetch_bytes >= requests * 2,
       "expected network fetch byte counter to include response bodies (got {})",
       stats.network_fetch_bytes
+    );
+  }
+
+  #[test]
+  fn resource_cache_diagnostics_record_inflight_waits() {
+    let _lock = resource_cache_diagnostics_test_lock();
+
+    #[derive(Clone)]
+    struct SlowFetcher;
+
+    impl ResourceFetcher for SlowFetcher {
+      fn fetch(&self, url: &str) -> Result<FetchedResource> {
+        thread::sleep(Duration::from_millis(150));
+        let mut resource = FetchedResource::new(b"ok".to_vec(), Some("text/plain".to_string()));
+        resource.final_url = Some(url.to_string());
+        Ok(resource)
+      }
+    }
+
+    let fetcher = CachingFetcher::new(SlowFetcher);
+    let url = "https://example.com/inflight";
+    enable_resource_cache_diagnostics();
+
+    let barrier = Arc::new(Barrier::new(3));
+    let mut handles = Vec::new();
+    for _ in 0..2 {
+      let barrier = Arc::clone(&barrier);
+      let fetcher = fetcher.clone();
+      handles.push(thread::spawn(move || {
+        barrier.wait();
+        fetcher.fetch(url)
+      }));
+    }
+    barrier.wait();
+    for handle in handles {
+      handle
+        .join()
+        .expect("thread should join")
+        .expect("fetch should succeed");
+    }
+
+    let stats = take_resource_cache_diagnostics().expect("diagnostics should be enabled");
+    assert!(
+      stats.fetch_inflight_waits >= 1,
+      "expected at least one inflight wait (got {})",
+      stats.fetch_inflight_waits
+    );
+    assert!(
+      stats.fetch_inflight_wait_ms.is_finite() && stats.fetch_inflight_wait_ms >= 0.0,
+      "expected finite inflight wait duration (got {})",
+      stats.fetch_inflight_wait_ms
     );
   }
 

@@ -1815,6 +1815,10 @@ pub struct ResourceDiagnostics {
   #[serde(skip_serializing_if = "Option::is_none")]
   pub disk_cache_lock_wait_ms: Option<f64>,
   #[serde(skip_serializing_if = "Option::is_none")]
+  pub fetch_inflight_waits: Option<usize>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub fetch_inflight_wait_ms: Option<f64>,
+  #[serde(skip_serializing_if = "Option::is_none")]
   pub network_fetches: Option<usize>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub network_fetch_bytes: Option<usize>,
@@ -1911,6 +1915,8 @@ fn merge_resource_cache_diagnostics(stats: &mut RenderStats) {
     stats.resources.disk_cache_ms = Some(resource_stats.disk_cache_ms);
     stats.resources.disk_cache_lock_waits = Some(resource_stats.disk_cache_lock_waits);
     stats.resources.disk_cache_lock_wait_ms = Some(resource_stats.disk_cache_lock_wait_ms);
+    stats.resources.fetch_inflight_waits = Some(resource_stats.fetch_inflight_waits);
+    stats.resources.fetch_inflight_wait_ms = Some(resource_stats.fetch_inflight_wait_ms);
     stats.resources.network_fetches = Some(resource_stats.network_fetches);
     stats.resources.network_fetch_bytes = Some(resource_stats.network_fetch_bytes);
     stats.resources.network_fetch_ms = Some(resource_stats.network_fetch_ms);

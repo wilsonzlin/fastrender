@@ -2838,6 +2838,17 @@ fn resources_summary(resources: &ResourceDiagnostics) -> Option<String> {
     parts.push(format!("resource_cache {}", resource_cache_parts.join(" ")));
   }
 
+  let mut inflight_parts = Vec::new();
+  if let Some(waits) = resources.fetch_inflight_waits {
+    inflight_parts.push(format!("waits={waits}"));
+  }
+  if let Some(ms) = resources.fetch_inflight_wait_ms {
+    inflight_parts.push(format!("ms={ms:.2}ms"));
+  }
+  if !inflight_parts.is_empty() {
+    parts.push(format!("inflight {}", inflight_parts.join(" ")));
+  }
+
   let mut disk_cache_parts = Vec::new();
   if let Some(hits) = resources.disk_cache_hits {
     disk_cache_parts.push(format!("hits={hits}"));
