@@ -104,6 +104,7 @@ fn pageset_progress_report_outputs_stats_when_verbose() {
   assert!(stdout.contains("Resource totals (pages with stats: 1):"));
   assert!(stdout.contains("Top network fetch time (top 1 of 1 with stats):"));
   assert!(stdout.contains("Top inflight wait time (top 1 of 1 with stats):"));
+  assert!(stdout.contains("Top disk cache time (top 1 of 1 with stats):"));
 }
 
 #[test]
