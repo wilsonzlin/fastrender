@@ -16333,6 +16333,8 @@ pub(crate) fn reset_marker_box_properties(styles: &mut ComputedStyle) {
   styles.empty_cells = defaults.empty_cells;
 
   // Outlines do not apply to markers; clear any inherited or authored values.
+  styles.outline_color = defaults.outline_color;
   styles.outline_style = defaults.outline_style;
   styles.outline_width = defaults.outline_width;
-  st
+  styles.outline_offset = defaults.outline_offset;
+}
