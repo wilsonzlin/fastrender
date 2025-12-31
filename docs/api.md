@@ -152,6 +152,9 @@ for error in &result.diagnostics.fetch_errors {
 if let Some(stats) = &result.diagnostics.stats {
     eprintln!("DOM nodes: {:?}", stats.counts.dom_nodes);
     eprintln!("Paint time (ms): {:?}", stats.timings.paint_rasterize_ms);
+    if let Some(samples) = &stats.counts.last_resort_font_fallback_samples {
+        eprintln!("Last-resort font fallback samples: {samples:?}");
+    }
 }
 
 result.pixmap.save_png("example.png")?;

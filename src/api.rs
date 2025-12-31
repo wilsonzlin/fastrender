@@ -9518,6 +9518,51 @@ mod tests {
   }
 
   #[test]
+  fn last_resort_fallback_samples_are_exposed_in_render_stats() {
+    struct TextDiagnosticsGuard;
+
+    impl Drop for TextDiagnosticsGuard {
+      fn drop(&mut self) {
+        let _ = crate::text::pipeline::take_text_diagnostics();
+      }
+    }
+
+    crate::text::pipeline::enable_text_diagnostics();
+    let _guard = TextDiagnosticsGuard;
+
+    let font_context = FontContext::with_config(FontConfig::bundled_only());
+    let db = font_context.database();
+
+    let candidates = [
+      '\u{10FFFF}',
+      '\u{10FFFE}',
+      '\u{FDD0}',
+      '\u{E000}',
+      '\u{0378}',
+    ];
+    let missing = candidates
+      .into_iter()
+      .find(|ch| !db.faces().any(|face| db.has_glyph_cached(face.id, *ch)))
+      .expect("expected at least one missing glyph candidate in bundled fonts");
+
+    let pipeline = ShapingPipeline::new();
+    let style = ComputedStyle::default();
+    let cluster = format!("{missing}\u{0301}");
+    pipeline
+      .shape(&cluster, &style, &font_context)
+      .expect("shape run");
+
+    let mut stats = RenderStats::default();
+    merge_text_diagnostics(&mut stats);
+
+    assert_eq!(stats.counts.last_resort_font_fallbacks, Some(1));
+    assert_eq!(
+      stats.counts.last_resort_font_fallback_samples,
+      Some(vec![format!("U+{:04X} U+0301", missing as u32)])
+    );
+  }
+
+  #[test]
   fn stage_heartbeats_record_css_loading_between_dom_parse_and_cascade() {
     use crate::render_control::set_stage_listener;
 
