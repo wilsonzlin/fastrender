@@ -994,11 +994,22 @@ pub struct BoxTree {
   pub root: BoxNode,
 }
 
-fn assign_box_ids(node: &mut BoxNode, next_id: &mut usize) {
-  node.id = *next_id;
-  *next_id += 1;
-  for child in &mut node.children {
-    assign_box_ids(child, next_id);
+fn assign_box_ids(root: &mut BoxNode, next_id: &mut usize) {
+  let mut stack: Vec<*mut BoxNode> = vec![root as *mut _];
+  while let Some(node_ptr) = stack.pop() {
+    // SAFETY: We only push pointers to nodes owned by `root`, and we never move the
+    // underlying `BoxNode`s while this traversal runs. Each pointer is popped and
+    // used to assign a unique `id` before pushing its children.
+    unsafe {
+      let node = &mut *node_ptr;
+      node.id = *next_id;
+      *next_id += 1;
+      // Preserve the previous recursive pre-order traversal by visiting children
+      // from left-to-right.
+      for child in node.children.iter_mut().rev() {
+        stack.push(child as *mut _);
+      }
+    }
   }
 }
 
