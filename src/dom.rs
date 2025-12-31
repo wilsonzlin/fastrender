@@ -289,13 +289,30 @@ fn node_is_html_element(node: &DomNode) -> bool {
   )
 }
 
-fn to_ascii_lowercase_cow(s: &str) -> std::borrow::Cow<'_, str> {
-  if let Some(first_uppercase) = s.bytes().position(|byte| byte >= b'A' && byte <= b'Z') {
-    let mut string = s.to_owned();
-    string[first_uppercase..].make_ascii_lowercase();
-    string.into()
+const SELECTOR_BLOOM_ASCII_LOWERCASE_STACK_BUF: usize = 64;
+
+#[inline]
+fn selector_bloom_hash_ascii_lowercase(value: &str) -> u32 {
+  if value.bytes().any(|b| b.is_ascii_uppercase()) {
+    selector_bloom_hash_ascii_lowercase_known_upper(value)
   } else {
-    s.into()
+    selector_bloom_hash(value)
+  }
+}
+
+#[inline]
+fn selector_bloom_hash_ascii_lowercase_known_upper(value: &str) -> u32 {
+  let bytes = value.as_bytes();
+  if bytes.len() <= SELECTOR_BLOOM_ASCII_LOWERCASE_STACK_BUF {
+    let mut buf = [0u8; SELECTOR_BLOOM_ASCII_LOWERCASE_STACK_BUF];
+    for (dst, &byte) in buf.iter_mut().zip(bytes.iter()) {
+      *dst = byte.to_ascii_lowercase();
+    }
+    let lower = unsafe { std::str::from_utf8_unchecked(&buf[..bytes.len()]) };
+    selector_bloom_hash(lower)
+  } else {
+    // Extremely long IDs/classes are rare; fall back to allocating.
+    selector_bloom_hash(&value.to_ascii_lowercase())
   }
 }
 
@@ -317,18 +334,14 @@ fn add_selector_bloom_hashes(node: &DomNode, add: &mut impl FnMut(u32)) {
     if is_html {
       let has_upper = tag.bytes().any(|b| b.is_ascii_uppercase());
       if has_upper {
-        let lower = tag.to_ascii_lowercase();
-        add(selector_bloom_hash(&lower));
-        add(selector_bloom_hash(tag));
-      } else {
-        // Most HTML tag names are already lowercase (html5ever lowercases), so avoid allocating.
-        add(selector_bloom_hash(tag));
+        add(selector_bloom_hash_ascii_lowercase_known_upper(tag));
       }
+      // Most HTML tag names are already lowercase (html5ever lowercases), so avoid allocating.
+      add(selector_bloom_hash(tag));
     } else {
       add(selector_bloom_hash(tag));
       if tag.bytes().any(|b| b.is_ascii_uppercase()) {
-        let lower = tag.to_ascii_lowercase();
-        add(selector_bloom_hash(&lower));
+        add(selector_bloom_hash_ascii_lowercase_known_upper(tag));
       }
     }
   }
@@ -349,8 +362,7 @@ fn add_selector_bloom_hashes(node: &DomNode, add: &mut impl FnMut(u32)) {
 
     add(selector_bloom_hash(name));
     if name.bytes().any(|b| b.is_ascii_uppercase()) {
-      let lower = name.to_ascii_lowercase();
-      add(selector_bloom_hash(&lower));
+      add(selector_bloom_hash_ascii_lowercase_known_upper(name));
     }
   }
 }
@@ -366,27 +378,27 @@ pub(crate) fn for_each_ancestor_bloom_hash(
 
   let is_html = node_is_html_element(node);
   if let Some(tag) = node.tag_name() {
-    let tag_key = if is_html {
-      to_ascii_lowercase_cow(tag)
+    let hash = if is_html {
+      selector_bloom_hash_ascii_lowercase(tag)
     } else {
-      tag.into()
+      selector_bloom_hash(tag)
     };
-    add(selector_bloom_hash(tag_key.as_ref()));
+    add(hash);
   }
 
   let quirks_case_fold = matches!(quirks_mode, QuirksMode::Quirks) && is_html;
   let mut saw_id = false;
   let mut saw_class = false;
   for (name, value) in node.attributes_iter() {
-    let lower = to_ascii_lowercase_cow(name);
-    add(selector_bloom_hash(lower.as_ref()));
+    add(selector_bloom_hash_ascii_lowercase(name));
 
     if !saw_id && name.eq_ignore_ascii_case("id") {
       saw_id = true;
       if quirks_case_fold {
-        let lower = to_ascii_lowercase_cow(value);
-        add(selector_bloom_hash(lower.as_ref()));
-        if lower.as_ref() != value {
+        if value.bytes().any(|b| b.is_ascii_uppercase()) {
+          add(selector_bloom_hash_ascii_lowercase_known_upper(value));
+          add(selector_bloom_hash(value));
+        } else {
           add(selector_bloom_hash(value));
         }
       } else {
@@ -399,9 +411,10 @@ pub(crate) fn for_each_ancestor_bloom_hash(
       saw_class = true;
       for class in value.split_ascii_whitespace() {
         if quirks_case_fold {
-          let lower = to_ascii_lowercase_cow(class);
-          add(selector_bloom_hash(lower.as_ref()));
-          if lower.as_ref() != class {
+          if class.bytes().any(|b| b.is_ascii_uppercase()) {
+            add(selector_bloom_hash_ascii_lowercase_known_upper(class));
+            add(selector_bloom_hash(class));
+          } else {
             add(selector_bloom_hash(class));
           }
         } else {
