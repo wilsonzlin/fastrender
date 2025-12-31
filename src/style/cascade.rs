@@ -15169,7 +15169,7 @@ fn find_matching_rules<'a>(
   }
 
   // Sort by specificity (lower specificity first, so later rules override), then document order.
-  matches.sort_by(|a, b| {
+  matches.sort_unstable_by(|a, b| {
     a.specificity
       .cmp(&b.specificity)
       .then(a.order.cmp(&b.order))
@@ -15607,7 +15607,7 @@ fn apply_cascaded_declarations<'a, F>(
     cmp_layer_order_normal(b, a)
   }
 
-  flattened.sort_by(|a, b| {
+  flattened.sort_unstable_by(|a, b| {
     a.important
       .cmp(&b.important)
       .then(a.origin.rank().cmp(&b.origin.rank()))
