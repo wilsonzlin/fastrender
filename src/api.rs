@@ -5520,8 +5520,7 @@ impl FastRender {
     let target_fragment = self.current_target_fragment();
     let dom_with_state = if needs_top_layer_state(dom) {
       let mut dom_with_state = dom::clone_dom_with_deadline(dom, RenderStage::DomParse)?;
-      let modal_open = dom::modal_dialog_present_with_deadline(&dom_with_state)?;
-      dom::apply_top_layer_state_with_deadline(&mut dom_with_state, modal_open)?;
+      dom::apply_top_layer_state_with_deadline(&mut dom_with_state)?;
       Some(dom_with_state)
     } else {
       None
@@ -5826,8 +5825,7 @@ impl FastRender {
 
     if needs_top_layer_state(&dom_with_state) {
       let top_layer_timer = stats.as_deref().and_then(|rec| rec.timer());
-      let modal_open = dom::modal_dialog_present_with_deadline(&dom_with_state)?;
-      dom::apply_top_layer_state_with_deadline(&mut dom_with_state, modal_open)?;
+      dom::apply_top_layer_state_with_deadline(&mut dom_with_state)?;
       if let Some(rec) = stats.as_deref_mut() {
         RenderStatsRecorder::add_ms(&mut rec.stats.timings.dom_top_layer_ms, top_layer_timer);
       }

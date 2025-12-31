@@ -772,22 +772,22 @@ pub fn collect_text_codepoints(node: &DomNode) -> Vec<u32> {
 }
 
 fn boolish(value: &str) -> bool {
-  matches!(
-    value.to_ascii_lowercase().as_str(),
-    "true" | "1" | "yes" | "on" | "open"
-  )
+  value == "1"
+    || value.eq_ignore_ascii_case("true")
+    || value.eq_ignore_ascii_case("yes")
+    || value.eq_ignore_ascii_case("on")
+    || value.eq_ignore_ascii_case("open")
 }
 
 fn data_fastr_open_state(node: &DomNode) -> Option<(bool, bool)> {
   let value = node.get_attribute_ref("data-fastr-open")?;
-  let lower = value.to_ascii_lowercase();
-  if lower == "false" {
+  if value.eq_ignore_ascii_case("false") {
     return Some((false, false));
   }
-  if lower == "modal" {
+  if value.eq_ignore_ascii_case("modal") {
     return Some((true, true));
   }
-  if boolish(&lower) {
+  if boolish(value) {
     return Some((true, false));
   }
   None
@@ -873,10 +873,10 @@ fn apply_top_layer_state_inner(node: &mut DomNode, modal_open: bool, inside_moda
     ..
   } = &mut node.node_type
   {
-    let tag_lower = tag_name.to_ascii_lowercase();
+    let is_dialog = tag_name.eq_ignore_ascii_case("dialog");
     let mut should_open = false;
 
-    if tag_lower == "dialog" {
+    if is_dialog {
       if let Some((open, modal)) = dialog_info {
         should_open = open;
         if modal {
@@ -888,7 +888,7 @@ fn apply_top_layer_state_inner(node: &mut DomNode, modal_open: bool, inside_moda
       should_open = popover_is_open;
     }
 
-    if tag_lower == "dialog" || has_popover {
+    if is_dialog || has_popover {
       if should_open {
         set_attr(attributes, "open", "");
       } else {
@@ -920,32 +920,11 @@ pub fn apply_top_layer_state(node: &mut DomNode, modal_open: bool) {
   let _ = apply_top_layer_state_inner(node, modal_open, false);
 }
 
-pub(crate) fn modal_dialog_present_with_deadline(node: &DomNode) -> Result<bool> {
-  let mut deadline_counter = 0usize;
-  let mut stack = vec![node];
-  while let Some(current) = stack.pop() {
-    check_active_periodic(
-      &mut deadline_counter,
-      DOM_PARSE_NODE_DEADLINE_STRIDE,
-      RenderStage::DomParse,
-    )?;
-    if let Some((_, modal)) = dialog_state(current) {
-      if modal {
-        return Ok(true);
-      }
-    }
-    for child in current.children.iter().rev() {
-      stack.push(child);
-    }
-  }
-
-  Ok(false)
-}
-
-pub(crate) fn apply_top_layer_state_with_deadline(
+fn apply_top_layer_state_with_deadline_inner(
   node: &mut DomNode,
-  modal_open: bool,
-) -> Result<()> {
+  apply_open: bool,
+  apply_inert: bool,
+) -> Result<bool> {
   struct Frame {
     node: *mut DomNode,
     inside_modal: bool,
@@ -956,6 +935,7 @@ pub(crate) fn apply_top_layer_state_with_deadline(
   }
 
   let mut deadline_counter = 0usize;
+  let mut root_has_modal = false;
   let mut stack = vec![Frame {
     node: node as *mut _,
     inside_modal: false,
@@ -982,35 +962,40 @@ pub(crate) fn apply_top_layer_state_with_deadline(
       frame.subtree_has_modal = frame.within_modal;
 
       let dialog_info = dialog_state(current);
-      let has_popover = current.get_attribute_ref("popover").is_some();
-      let popover_is_open = has_popover && popover_open(current);
-
-      if let DomNodeType::Element {
-        tag_name,
-        attributes,
-        ..
-      } = &mut current.node_type
-      {
-        let tag_lower = tag_name.to_ascii_lowercase();
-        let mut should_open = false;
-
-        if tag_lower == "dialog" {
-          if let Some((open, modal)) = dialog_info {
-            should_open = open;
-            if modal {
-              frame.within_modal = true;
-              frame.subtree_has_modal = true;
-            }
-          }
-        } else if has_popover {
-          should_open = popover_is_open;
+      if let Some((_, modal)) = dialog_info {
+        if modal {
+          frame.within_modal = true;
+          frame.subtree_has_modal = true;
         }
+      }
 
-        if tag_lower == "dialog" || has_popover {
-          if should_open {
-            set_attr(attributes, "open", "");
-          } else {
-            remove_attr(attributes, "open");
+      if apply_open {
+        let has_popover = current.get_attribute_ref("popover").is_some();
+        let popover_is_open = has_popover && popover_open(current);
+
+        if let DomNodeType::Element {
+          tag_name,
+          attributes,
+          ..
+        } = &mut current.node_type
+        {
+          let is_dialog = tag_name.eq_ignore_ascii_case("dialog");
+          let mut should_open = false;
+
+          if is_dialog {
+            if let Some((open, _)) = dialog_info {
+              should_open = open;
+            }
+          } else if has_popover {
+            should_open = popover_is_open;
+          }
+
+          if is_dialog || has_popover {
+            if should_open {
+              set_attr(attributes, "open", "");
+            } else {
+              remove_attr(attributes, "open");
+            }
           }
         }
       }
@@ -1033,7 +1018,7 @@ pub(crate) fn apply_top_layer_state_with_deadline(
       continue;
     }
 
-    if modal_open {
+    if apply_inert {
       if let DomNodeType::Element { attributes, .. } = &mut current.node_type {
         if !frame.subtree_has_modal {
           set_attr(attributes, "data-fastr-inert", "true");
@@ -1044,9 +1029,19 @@ pub(crate) fn apply_top_layer_state_with_deadline(
     let subtree_has_modal = frame.subtree_has_modal;
     if let Some(parent) = stack.last_mut() {
       parent.subtree_has_modal |= subtree_has_modal;
+    } else {
+      root_has_modal = subtree_has_modal;
     }
   }
 
+  Ok(root_has_modal)
+}
+
+pub(crate) fn apply_top_layer_state_with_deadline(node: &mut DomNode) -> Result<()> {
+  let modal_open = apply_top_layer_state_with_deadline_inner(node, true, false)?;
+  if modal_open {
+    let _ = apply_top_layer_state_with_deadline_inner(node, false, true)?;
+  }
   Ok(())
 }
 
@@ -4281,6 +4276,29 @@ mod tests {
     }
   }
 
+  fn element_with_attrs(tag: &str, attrs: Vec<(&str, &str)>, children: Vec<DomNode>) -> DomNode {
+    DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: tag.to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: attrs
+          .into_iter()
+          .map(|(k, v)| (k.to_string(), v.to_string()))
+          .collect(),
+      },
+      children,
+    }
+  }
+
+  fn document(children: Vec<DomNode>) -> DomNode {
+    DomNode {
+      node_type: DomNodeType::Document {
+        quirks_mode: QuirksMode::NoQuirks,
+      },
+      children,
+    }
+  }
+
   fn svg_element(tag: &str) -> DomNode {
     DomNode {
       node_type: DomNodeType::Element {
@@ -6915,5 +6933,159 @@ mod tests {
     };
     assert!(classes.contains(&"portal"));
     assert!(classes.contains(&"jsl10n-visible"));
+  }
+
+  #[test]
+  fn top_layer_state_sets_open_for_dialog_and_popover() {
+    let mut dom = document(vec![
+      element_with_attrs(
+        "DIALOG",
+        vec![("id", "dialog-open"), ("data-fastr-open", "TRUE")],
+        vec![],
+      ),
+      element_with_attrs(
+        "dialog",
+        vec![
+          ("id", "dialog-closed"),
+          ("open", ""),
+          ("data-fastr-open", "false"),
+        ],
+        vec![],
+      ),
+      element_with_attrs(
+        "div",
+        vec![("id", "popover-open"), ("popover", ""), ("data-fastr-open", "oPeN")],
+        vec![],
+      ),
+      element_with_attrs(
+        "div",
+        vec![
+          ("id", "popover-closed"),
+          ("popover", ""),
+          ("open", ""),
+          ("data-fastr-open", "FALSE"),
+        ],
+        vec![],
+      ),
+    ]);
+
+    apply_top_layer_state_with_deadline(&mut dom).expect("apply top-layer state");
+
+    let dialog_open = find_element_by_id(&dom, "dialog-open").expect("dialog-open");
+    assert!(
+      dialog_open.get_attribute_ref("open").is_some(),
+      "data-fastr-open should force dialog open"
+    );
+
+    let dialog_closed = find_element_by_id(&dom, "dialog-closed").expect("dialog-closed");
+    assert!(
+      dialog_closed.get_attribute_ref("open").is_none(),
+      "data-fastr-open=false should remove dialog open"
+    );
+
+    let popover_open = find_element_by_id(&dom, "popover-open").expect("popover-open");
+    assert!(
+      popover_open.get_attribute_ref("open").is_some(),
+      "data-fastr-open should force popover open"
+    );
+    assert!(
+      popover_open.get_attribute_ref("data-fastr-inert").is_none(),
+      "non-modal top-layer content should not inert the document"
+    );
+
+    let popover_closed = find_element_by_id(&dom, "popover-closed").expect("popover-closed");
+    assert!(
+      popover_closed.get_attribute_ref("open").is_none(),
+      "data-fastr-open=false should remove popover open"
+    );
+  }
+
+  #[test]
+  fn top_layer_state_inerts_outside_modal_dialog() {
+    let mut dom = document(vec![
+      element_with_attrs(
+        "div",
+        vec![("id", "outside")],
+        vec![element_with_attrs("span", vec![("id", "outside-child")], vec![])],
+      ),
+      element_with_attrs(
+        "dialog",
+        vec![("id", "modal"), ("data-fastr-open", "modal")],
+        vec![element_with_attrs("p", vec![("id", "inside")], vec![])],
+      ),
+      element_with_attrs(
+        "div",
+        vec![("id", "popover"), ("popover", ""), ("data-fastr-open", "true")],
+        vec![],
+      ),
+    ]);
+
+    apply_top_layer_state_with_deadline(&mut dom).expect("apply top-layer state");
+
+    let outside = find_element_by_id(&dom, "outside").expect("outside");
+    assert_eq!(
+      outside.get_attribute_ref("data-fastr-inert"),
+      Some("true"),
+      "outside subtree should be inert when a modal dialog is open"
+    );
+    let outside_child = find_element_by_id(&dom, "outside-child").expect("outside-child");
+    assert_eq!(
+      outside_child.get_attribute_ref("data-fastr-inert"),
+      Some("true"),
+      "descendants outside the modal subtree should also be inert"
+    );
+
+    let modal = find_element_by_id(&dom, "modal").expect("modal");
+    assert!(
+      modal.get_attribute_ref("open").is_some(),
+      "modal dialog should be forced open"
+    );
+    assert!(
+      modal.get_attribute_ref("data-fastr-inert").is_none(),
+      "modal subtree should not be inert"
+    );
+
+    let inside = find_element_by_id(&dom, "inside").expect("inside");
+    assert!(
+      inside.get_attribute_ref("data-fastr-inert").is_none(),
+      "modal descendants should not be inert"
+    );
+
+    let popover = find_element_by_id(&dom, "popover").expect("popover");
+    assert!(
+      popover.get_attribute_ref("open").is_some(),
+      "popover open state should still be applied"
+    );
+    assert_eq!(
+      popover.get_attribute_ref("data-fastr-inert"),
+      Some("true"),
+      "popover outside modal subtree should be inert"
+    );
+  }
+
+  #[test]
+  fn top_layer_state_does_not_inert_for_non_modal_dialogs() {
+    let mut dom = document(vec![
+      element_with_attrs("div", vec![("id", "outside")], vec![]),
+      element_with_attrs(
+        "dialog",
+        vec![("id", "dialog"), ("open", "")],
+        vec![element_with_attrs("p", vec![("id", "inside")], vec![])],
+      ),
+      element_with_attrs("div", vec![("id", "outside2")], vec![]),
+    ]);
+
+    apply_top_layer_state_with_deadline(&mut dom).expect("apply top-layer state");
+
+    let outside = find_element_by_id(&dom, "outside").expect("outside");
+    let outside2 = find_element_by_id(&dom, "outside2").expect("outside2");
+    assert!(outside.get_attribute_ref("data-fastr-inert").is_none());
+    assert!(outside2.get_attribute_ref("data-fastr-inert").is_none());
+
+    let dialog = find_element_by_id(&dom, "dialog").expect("dialog");
+    assert!(
+      dialog.get_attribute_ref("open").is_some(),
+      "open dialogs should remain open"
+    );
   }
 }
