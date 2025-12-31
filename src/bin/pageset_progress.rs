@@ -4690,10 +4690,20 @@ fn run(args: RunArgs) -> io::Result<()> {
         let effective_cache_stem = entry
           .map(|e| e.cache_stem.as_str())
           .unwrap_or(stem.as_str());
+        let cache_path = entry
+          .and_then(|entry| {
+            cached_html_path_for_pageset_entry(entry, &cached_paths, &cached_by_stem)
+          })
+          .unwrap_or_else(|| path.clone());
         if filter_matches(effective_cache_stem, entry)
           && seen.insert(effective_cache_stem.to_string())
         {
-          items.push(work_item_from_cache(effective_cache_stem, path.clone(), entry, &args));
+          items.push(work_item_from_cache(
+            effective_cache_stem,
+            cache_path,
+            entry,
+            &args,
+          ));
         }
         continue;
       }
