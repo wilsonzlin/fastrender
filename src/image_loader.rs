@@ -1172,21 +1172,24 @@ impl DecodeInFlight {
 
   fn wait(&self, _url: &str) -> Result<Arc<CachedImage>> {
     let mut guard = self.result.lock().unwrap();
-    let deadline = render_control::active_deadline().filter(|d| d.timeout_limit().is_some());
+    let deadline = render_control::active_deadline().filter(|d| d.is_enabled());
     while guard.is_none() {
       if let Some(deadline) = deadline.as_ref() {
-        match deadline.remaining_timeout() {
-          Some(remaining) if !remaining.is_zero() => {
-            let wait_for = remaining.min(Duration::from_millis(10));
-            guard = self.cv.wait_timeout(guard, wait_for).unwrap().0;
+        deadline.check(RenderStage::Paint).map_err(Error::Render)?;
+        let wait_for = if deadline.timeout_limit().is_some() {
+          match deadline.remaining_timeout() {
+            Some(remaining) if !remaining.is_zero() => remaining.min(Duration::from_millis(10)),
+            _ => {
+              return Err(Error::Render(RenderError::Timeout {
+                stage: RenderStage::Paint,
+                elapsed: deadline.elapsed(),
+              }));
+            }
           }
-          _ => {
-            return Err(Error::Render(RenderError::Timeout {
-              stage: RenderStage::Paint,
-              elapsed: deadline.elapsed(),
-            }));
-          }
-        }
+        } else {
+          Duration::from_millis(10)
+        };
+        guard = self.cv.wait_timeout(guard, wait_for).unwrap().0;
       } else {
         guard = self.cv.wait(guard).unwrap();
       }
@@ -1232,21 +1235,24 @@ impl ProbeInFlight {
 
   fn wait(&self, _url: &str) -> Result<Arc<CachedImageMetadata>> {
     let mut guard = self.result.lock().unwrap();
-    let deadline = render_control::active_deadline().filter(|d| d.timeout_limit().is_some());
+    let deadline = render_control::active_deadline().filter(|d| d.is_enabled());
     while guard.is_none() {
       if let Some(deadline) = deadline.as_ref() {
-        match deadline.remaining_timeout() {
-          Some(remaining) if !remaining.is_zero() => {
-            let wait_for = remaining.min(Duration::from_millis(10));
-            guard = self.cv.wait_timeout(guard, wait_for).unwrap().0;
+        deadline.check(RenderStage::Paint).map_err(Error::Render)?;
+        let wait_for = if deadline.timeout_limit().is_some() {
+          match deadline.remaining_timeout() {
+            Some(remaining) if !remaining.is_zero() => remaining.min(Duration::from_millis(10)),
+            _ => {
+              return Err(Error::Render(RenderError::Timeout {
+                stage: RenderStage::Paint,
+                elapsed: deadline.elapsed(),
+              }));
+            }
           }
-          _ => {
-            return Err(Error::Render(RenderError::Timeout {
-              stage: RenderStage::Paint,
-              elapsed: deadline.elapsed(),
-            }));
-          }
-        }
+        } else {
+          Duration::from_millis(10)
+        };
+        guard = self.cv.wait_timeout(guard, wait_for).unwrap().0;
       } else {
         guard = self.cv.wait(guard).unwrap();
       }
@@ -3729,6 +3735,96 @@ mod tests {
   }
 
   #[test]
+  fn decode_inflight_wait_respects_cancel_callback() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc;
+    use std::sync::Barrier;
+    use std::thread;
+
+    struct BlockingFetcher {
+      started: Arc<Barrier>,
+      release: Arc<Barrier>,
+      url: String,
+    }
+
+    impl ResourceFetcher for BlockingFetcher {
+      fn fetch(&self, url: &str) -> Result<FetchedResource> {
+        if url == self.url {
+          self.started.wait();
+          self.release.wait();
+          return Ok(FetchedResource::new(
+            b"not an image".to_vec(),
+            Some("image/png".to_string()),
+          ));
+        }
+
+        Err(Error::Resource(crate::error::ResourceError::new(
+          url.to_string(),
+          "unexpected url",
+        )))
+      }
+    }
+
+    let started = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let url = "https://example.com/blocked-image.png".to_string();
+    let cache = ImageCache::with_fetcher(Arc::new(BlockingFetcher {
+      started: Arc::clone(&started),
+      release: Arc::clone(&release),
+      url: url.clone(),
+    }));
+
+    let owner_cache = cache.clone();
+    let owner_url = url.clone();
+    let owner_handle = thread::spawn(move || owner_cache.load(&owner_url));
+
+    // Wait until the owner has entered the fetcher (and therefore registered the in-flight entry).
+    started.wait();
+
+    let waiter_cache = cache.clone();
+    let waiter_url = url.clone();
+    let cancel_flag = Arc::new(AtomicBool::new(false));
+    let cancel_flag_worker = Arc::clone(&cancel_flag);
+    let cancel: Arc<crate::render_control::CancelCallback> =
+      Arc::new(move || cancel_flag_worker.load(Ordering::Relaxed));
+    let (tx, rx) = mpsc::channel();
+    let waiter_handle = thread::spawn(move || {
+      let deadline = render_control::RenderDeadline::new(None, Some(cancel));
+      let start = Instant::now();
+      let result = render_control::with_deadline(Some(&deadline), || waiter_cache.load(&waiter_url));
+      tx.send((result, start.elapsed())).unwrap();
+    });
+
+    thread::sleep(Duration::from_millis(50));
+    cancel_flag.store(true, Ordering::Relaxed);
+
+    let (result, elapsed) = match rx.recv_timeout(Duration::from_secs(1)) {
+      Ok(value) => value,
+      Err(err) => {
+        release.wait();
+        let _ = owner_handle.join();
+        drop(waiter_handle);
+        panic!("waiter decode did not complete under cancel: {err}");
+      }
+    };
+
+    let err = match result {
+      Ok(_) => panic!("waiter decode should fail under cancel callback"),
+      Err(err) => err,
+    };
+    match err {
+      Error::Render(RenderError::Timeout { stage, .. }) => {
+        assert_eq!(stage, RenderStage::Paint);
+      }
+      other => panic!("unexpected error after {elapsed:?}: {other:?}"),
+    }
+
+    release.wait();
+    let _ = owner_handle.join();
+    let _ = waiter_handle.join();
+  }
+
+  #[test]
   fn probe_inflight_wait_respects_render_deadline() {
     use std::sync::mpsc;
     use std::sync::Barrier;
@@ -3796,6 +3892,96 @@ mod tests {
 
     let err = match result {
       Ok(_) => panic!("waiter probe should fail under deadline"),
+      Err(err) => err,
+    };
+    match err {
+      Error::Render(RenderError::Timeout { stage, .. }) => {
+        assert_eq!(stage, RenderStage::Paint);
+      }
+      other => panic!("unexpected error after {elapsed:?}: {other:?}"),
+    }
+
+    release.wait();
+    let _ = owner_handle.join();
+    let _ = waiter_handle.join();
+  }
+
+  #[test]
+  fn probe_inflight_wait_respects_cancel_callback() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc;
+    use std::sync::Barrier;
+    use std::thread;
+
+    struct BlockingFetcher {
+      started: Arc<Barrier>,
+      release: Arc<Barrier>,
+      url: String,
+    }
+
+    impl ResourceFetcher for BlockingFetcher {
+      fn fetch(&self, url: &str) -> Result<FetchedResource> {
+        if url == self.url {
+          self.started.wait();
+          self.release.wait();
+          return Ok(FetchedResource::new(
+            b"not an image".to_vec(),
+            Some("image/png".to_string()),
+          ));
+        }
+
+        Err(Error::Resource(crate::error::ResourceError::new(
+          url.to_string(),
+          "unexpected url",
+        )))
+      }
+    }
+
+    let started = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let url = "https://example.com/blocked-probe.png".to_string();
+    let cache = ImageCache::with_fetcher(Arc::new(BlockingFetcher {
+      started: Arc::clone(&started),
+      release: Arc::clone(&release),
+      url: url.clone(),
+    }));
+
+    let owner_cache = cache.clone();
+    let owner_url = url.clone();
+    let owner_handle = thread::spawn(move || owner_cache.probe(&owner_url));
+
+    started.wait();
+
+    let waiter_cache = cache.clone();
+    let waiter_url = url.clone();
+    let cancel_flag = Arc::new(AtomicBool::new(false));
+    let cancel_flag_worker = Arc::clone(&cancel_flag);
+    let cancel: Arc<crate::render_control::CancelCallback> =
+      Arc::new(move || cancel_flag_worker.load(Ordering::Relaxed));
+    let (tx, rx) = mpsc::channel();
+    let waiter_handle = thread::spawn(move || {
+      let deadline = render_control::RenderDeadline::new(None, Some(cancel));
+      let start = Instant::now();
+      let result =
+        render_control::with_deadline(Some(&deadline), || waiter_cache.probe(&waiter_url));
+      tx.send((result, start.elapsed())).unwrap();
+    });
+
+    thread::sleep(Duration::from_millis(50));
+    cancel_flag.store(true, Ordering::Relaxed);
+
+    let (result, elapsed) = match rx.recv_timeout(Duration::from_secs(1)) {
+      Ok(value) => value,
+      Err(err) => {
+        release.wait();
+        let _ = owner_handle.join();
+        drop(waiter_handle);
+        panic!("waiter probe did not complete under cancel: {err}");
+      }
+    };
+
+    let err = match result {
+      Ok(_) => panic!("waiter probe should fail under cancel callback"),
       Err(err) => err,
     };
     match err {

@@ -2442,22 +2442,26 @@ impl InFlight {
 
   fn wait(&self, url: &str) -> Result<FetchedResource> {
     let mut guard = self.result.lock().unwrap();
-    let deadline = render_control::active_deadline().filter(|d| d.timeout_limit().is_some());
+    let deadline = render_control::active_deadline().filter(|d| d.is_enabled());
+    let stage = render_stage_hint_from_url(url);
 
     while guard.is_none() {
       if let Some(deadline) = deadline.as_ref() {
-        match deadline.remaining_timeout() {
-          Some(remaining) if !remaining.is_zero() => {
-            let wait_for = remaining.min(Duration::from_millis(10));
-            guard = self.cv.wait_timeout(guard, wait_for).unwrap().0;
+        deadline.check(stage).map_err(Error::Render)?;
+        let wait_for = if deadline.timeout_limit().is_some() {
+          match deadline.remaining_timeout() {
+            Some(remaining) if !remaining.is_zero() => remaining.min(Duration::from_millis(10)),
+            _ => {
+              return Err(Error::Render(RenderError::Timeout {
+                stage,
+                elapsed: deadline.elapsed(),
+              }));
+            }
           }
-          _ => {
-            return Err(Error::Render(RenderError::Timeout {
-              stage: render_stage_hint_from_url(url),
-              elapsed: deadline.elapsed(),
-            }));
-          }
-        }
+        } else {
+          Duration::from_millis(10)
+        };
+        guard = self.cv.wait_timeout(guard, wait_for).unwrap().0;
       } else {
         guard = self.cv.wait(guard).unwrap();
       }
@@ -4703,6 +4707,95 @@ mod tests {
     }
 
     // Let the owner thread finish so it can clean up the in-flight entry.
+    release.wait();
+
+    let owner_result = owner_handle.join().unwrap();
+    assert!(
+      owner_result.is_ok(),
+      "owner fetch should complete after being released: {owner_result:?}"
+    );
+    waiter_handle.join().unwrap();
+  }
+
+  #[test]
+  fn inflight_wait_respects_cancel_callback() {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::mpsc;
+
+    struct BlockingFetcher {
+      started: Arc<Barrier>,
+      release: Arc<Barrier>,
+    }
+
+    impl ResourceFetcher for BlockingFetcher {
+      fn fetch(&self, url: &str) -> Result<FetchedResource> {
+        if url == "https://example.com/blocked" {
+          self.started.wait();
+          self.release.wait();
+          return Ok(FetchedResource::new(
+            b"ok".to_vec(),
+            Some("text/plain".to_string()),
+          ));
+        }
+
+        Err(Error::Resource(ResourceError::new(
+          url.to_string(),
+          "unexpected url",
+        )))
+      }
+    }
+
+    let started = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let url = "https://example.com/blocked".to_string();
+    let fetcher = Arc::new(CachingFetcher::new(BlockingFetcher {
+      started: Arc::clone(&started),
+      release: Arc::clone(&release),
+    }));
+
+    let fetcher_owner = Arc::clone(&fetcher);
+    let url_owner = url.clone();
+    let owner_handle = thread::spawn(move || fetcher_owner.fetch(&url_owner));
+
+    started.wait();
+
+    let fetcher_waiter = Arc::clone(&fetcher);
+    let url_waiter = url.clone();
+    let cancel_flag = Arc::new(AtomicBool::new(false));
+    let cancel_flag_worker = Arc::clone(&cancel_flag);
+    let cancel: Arc<crate::render_control::CancelCallback> =
+      Arc::new(move || cancel_flag_worker.load(Ordering::Relaxed));
+    let (tx, rx) = mpsc::channel();
+    let waiter_handle = thread::spawn(move || {
+      let deadline = render_control::RenderDeadline::new(None, Some(cancel));
+      let start = Instant::now();
+      let result =
+        render_control::with_deadline(Some(&deadline), || fetcher_waiter.fetch(&url_waiter));
+      let elapsed = start.elapsed();
+      tx.send((result, elapsed)).unwrap();
+    });
+
+    thread::sleep(Duration::from_millis(50));
+    cancel_flag.store(true, Ordering::Relaxed);
+
+    let (result, elapsed) = match rx.recv_timeout(Duration::from_secs(1)) {
+      Ok(value) => value,
+      Err(err) => {
+        release.wait();
+        let _ = owner_handle.join();
+        waiter_handle.join().unwrap();
+        panic!("waiter fetch did not complete under cancel: {err}");
+      }
+    };
+
+    let err = result.expect_err("waiter fetch should fail under cancel callback");
+    match err {
+      Error::Render(RenderError::Timeout { stage, .. }) => {
+        assert_eq!(stage, RenderStage::Paint);
+      }
+      other => panic!("unexpected error after {elapsed:?}: {other:?}"),
+    }
+
     release.wait();
 
     let owner_result = owner_handle.join().unwrap();
