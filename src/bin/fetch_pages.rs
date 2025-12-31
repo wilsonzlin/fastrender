@@ -6,6 +6,7 @@ mod common;
 
 use clap::Parser;
 use common::args::{parse_shard, TimeoutArgs};
+use common::render_pipeline::build_http_fetcher;
 use fastrender::html::encoding::decode_html_bytes;
 use fastrender::html::meta_refresh::extract_js_location_redirect;
 use fastrender::html::meta_refresh::extract_meta_refresh_url;
@@ -13,7 +14,6 @@ use fastrender::pageset::{
   cache_html_path, pageset_entries_with_collisions, PagesetEntry, PagesetFilter, CACHE_HTML_DIR,
 };
 use fastrender::resource::FetchedResource;
-use fastrender::resource::HttpFetcher;
 use fastrender::resource::ResourceFetcher;
 use fastrender::resource::DEFAULT_ACCEPT_LANGUAGE;
 use fastrender::resource::DEFAULT_USER_AGENT;
@@ -155,10 +155,7 @@ fn fetch_page(
   user_agent: &str,
   accept_language: &str,
 ) -> Result<FetchedResource, String> {
-  let fetcher = HttpFetcher::default()
-    .with_timeout(timeout)
-    .with_user_agent(user_agent.to_string())
-    .with_accept_language(accept_language.to_string());
+  let fetcher = build_http_fetcher(user_agent, accept_language, Some(timeout.as_secs()));
 
   let fetch = |target: &str| -> Result<(FetchedResource, String), String> {
     let mut res = fetcher.fetch(target).map_err(|e| e.to_string())?;

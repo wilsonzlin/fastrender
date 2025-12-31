@@ -445,7 +445,11 @@ pub struct HttpRetryPolicy {
   pub backoff_base: Duration,
   /// Maximum delay between retries.
   pub backoff_cap: Duration,
-  /// When true, honor `Retry-After` for retryable responses (bounded by `backoff_cap`).
+  /// When true, honor `Retry-After` for retryable responses.
+  ///
+  /// `backoff_cap` still caps the computed exponential backoff, but `Retry-After` can exceed it.
+  /// Any active render deadline (timeout) remains the final cap so we never sleep past the
+  /// remaining budget.
   pub respect_retry_after: bool,
 }
 
@@ -1482,7 +1486,7 @@ impl HttpFetcher {
               if attempt < max_attempts {
                 let mut backoff = compute_backoff(&self.retry_policy, attempt, &current);
                 if let Some(retry_after) = retry_after {
-                  backoff = backoff.max(retry_after).min(self.retry_policy.backoff_cap);
+                  backoff = backoff.max(retry_after);
                 }
                 let mut can_retry = true;
                 if let Some(deadline) = deadline.as_ref() {
@@ -1513,7 +1517,7 @@ impl HttpFetcher {
             if retryable_http_status(status_code) && attempt < max_attempts {
               let mut backoff = compute_backoff(&self.retry_policy, attempt, &current);
               if let Some(retry_after) = retry_after {
-                backoff = backoff.max(retry_after).min(self.retry_policy.backoff_cap);
+                backoff = backoff.max(retry_after);
               }
               let mut can_retry = true;
               if let Some(deadline) = deadline.as_ref() {
@@ -4139,6 +4143,72 @@ mod tests {
     assert!(res.is_err(), "expected empty response to error: {res:?}");
 
     handle.join().unwrap();
+  }
+
+  #[test]
+  fn fetch_http_honors_retry_after_over_backoff_cap() {
+    let Some(listener) = try_bind_localhost("fetch_http_honors_retry_after_over_backoff_cap")
+    else {
+      return;
+    };
+    let addr = listener.local_addr().unwrap();
+
+    let handle = std::thread::spawn(move || {
+      let mut iter = listener.incoming();
+
+      // First response: 429 with Retry-After.
+      if let Some(stream) = iter.next() {
+        let mut stream = stream.unwrap();
+        let _ = stream.read(&mut [0u8; 1024]);
+        let body = b"too many";
+        let headers = format!(
+          "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 1\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+          body.len()
+        );
+        let _ = stream.write_all(headers.as_bytes());
+        let _ = stream.write_all(body);
+      }
+
+      // Second response: OK.
+      if let Some(stream) = iter.next() {
+        let mut stream = stream.unwrap();
+        let _ = stream.read(&mut [0u8; 1024]);
+        let body = b"ok";
+        let headers = format!(
+          "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+          body.len()
+        );
+        let _ = stream.write_all(headers.as_bytes());
+        let _ = stream.write_all(body);
+      }
+    });
+
+    // Use a tiny exponential backoff so the only way to sleep ~1s is via Retry-After.
+    let retry_policy = HttpRetryPolicy {
+      max_attempts: 2,
+      backoff_base: Duration::from_millis(1),
+      backoff_cap: Duration::from_millis(5),
+      respect_retry_after: true,
+    };
+    let fetcher = HttpFetcher::new()
+      .with_timeout(Duration::from_secs(2))
+      .with_retry_policy(retry_policy);
+
+    let url = format!("http://{}/", addr);
+    let start = Instant::now();
+    let res = fetcher.fetch(&url).expect("fetch should retry after 429");
+    let elapsed = start.elapsed();
+    handle.join().unwrap();
+
+    assert_eq!(res.bytes, b"ok");
+    assert!(
+      elapsed >= Duration::from_millis(900),
+      "expected Retry-After delay to be respected (elapsed={elapsed:?})"
+    );
+    assert!(
+      elapsed < Duration::from_secs(10),
+      "unexpectedly slow retry-after test (elapsed={elapsed:?})"
+    );
   }
 
   #[test]
