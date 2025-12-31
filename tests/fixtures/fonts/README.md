@@ -12,8 +12,9 @@ and tests can run in fully hermetic environments without relying on platform fon
 - **Regeneration:** `python tests/fixtures/fonts/generate_bundled_noto_subsets.py` (pins deterministic timestamps and
   instantiates the CJK faces at `wght=400` before subsetting).
 - **Coverage:**
-  - `NotoSans-subset.ttf` / `NotoSerif-subset.ttf`: Basic + Extended Latin, combining marks, Greek, Cyrillic, and
-    punctuation (U+2000–206F) for bundled serif/sans fallbacks.
+  - `NotoSans-subset.ttf` / `NotoSerif-subset.ttf`: Basic + Extended Latin plus IPA/modifier-letter support
+    (U+0250–02FF, U+1D00–1D7F), combining marks, Greek, Cyrillic, and punctuation (U+2000–206F) for bundled
+    serif/sans fallbacks.
   - `NotoSansMono-subset.ttf`: ASCII, punctuation, arrows, and box-drawing glyphs for monospace fallback.
   - `NotoSansArabic-subset.ttf`: Arabic + Supplement/Extended ranges, presentation forms, ZWNJ/ZWJ, and combining marks
     (U+0300–036F) for mixed clusters.

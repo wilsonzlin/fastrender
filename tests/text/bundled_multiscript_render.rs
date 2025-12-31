@@ -80,6 +80,50 @@ fn bundled_fonts_render_pageset_blocker_clusters() {
 }
 
 #[test]
+fn bundled_fonts_cover_spacing_modifier_letters() {
+  let mut pipeline = ShapingPipeline::new();
+  let font_ctx = FontContext::with_config(FontConfig::bundled_only());
+
+  let samples = [
+    ("sans-serif", "Noto Sans"),
+    ("serif", "Noto Serif"),
+  ];
+
+  // pageset regression: phoronix.com surfaced clusters containing U+02FD (˽) with combining marks.
+  let text = "˽\u{0365}";
+
+  for (family, expected_font) in samples {
+    let mut style = ComputedStyle::default();
+    style.font_family = vec![family.to_string()];
+    style.font_size = 32.0;
+
+    let runs = pipeline
+      .shape(text, &style, &font_ctx)
+      .unwrap_or_else(|_| panic!("shape {family} sample"));
+    assert!(!runs.is_empty(), "{family} sample should produce runs");
+
+    let mut saw_modifier = false;
+    for run in &runs {
+      if run.text.contains('˽') {
+        saw_modifier = true;
+        assert_eq!(
+          run.font.family, expected_font,
+          "U+02FD should be covered by the primary bundled {family} font"
+        );
+        assert!(
+          run.glyphs.iter().all(|g| g.glyph_id != 0),
+          "U+02FD cluster should shape without .notdef glyphs"
+        );
+      }
+    }
+    assert!(
+      saw_modifier,
+      "expected a shaped run containing U+02FD for {family}"
+    );
+  }
+}
+
+#[test]
 fn bundled_generics_prefer_bundled_text_fonts() {
   let db = FontDatabase::with_config(&FontConfig::bundled_only());
 
