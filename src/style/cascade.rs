@@ -39,6 +39,7 @@ use crate::dom::resolve_first_strong_direction;
 use crate::dom::with_target_fragment;
 use crate::dom::DomNode;
 use crate::dom::DomNodeType;
+use crate::dom::ElementAttrCache;
 use crate::dom::ElementRef;
 use crate::dom::SelectorBloomStore;
 use crate::dom::SelectorBloomSummary;
@@ -4203,6 +4204,7 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
       let cache_epoch = next_selector_cache_epoch();
       selector_caches.set_epoch(cache_epoch);
       let sibling_cache = SiblingListCache::new(cache_epoch);
+      let element_attr_cache = ElementAttrCache::new(cache_epoch);
       let mut max_rules = rule_scopes
         .ua
         .rules
@@ -4249,6 +4251,7 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
         &dom_maps,
         &slot_assignment,
         &sibling_cache,
+        &element_attr_cache,
         deadline,
         has_starting_styles,
       )
@@ -4303,6 +4306,7 @@ pub(crate) struct PreparedCascade<'a> {
   selector_caches: SelectorCaches,
   sibling_cache: SiblingListCache,
   inline_style_decls: Vec<Option<Arc<[Declaration]>>>,
+  element_attr_cache: ElementAttrCache,
   scratch: CascadeScratch,
 }
 
@@ -4677,6 +4681,7 @@ impl<'a> PreparedCascade<'a> {
     let cache_epoch = next_selector_cache_epoch();
     selector_caches.set_epoch(cache_epoch);
     let sibling_cache = SiblingListCache::new(cache_epoch);
+    let element_attr_cache = ElementAttrCache::new(cache_epoch);
 
     let mut max_rules = rule_scopes
       .ua
@@ -4709,6 +4714,7 @@ impl<'a> PreparedCascade<'a> {
       selector_caches,
       sibling_cache,
       inline_style_decls,
+      element_attr_cache,
       scratch,
     })
   }
@@ -4734,6 +4740,7 @@ impl<'a> PreparedCascade<'a> {
     reset_has_counters();
     reset_container_query_memo();
     self.scratch.scope_cache.clear();
+    self.element_attr_cache.clear();
     let log_reuse = runtime::runtime_toggles().truthy("FASTR_LOG_CONTAINER_REUSE");
     let mut reuse_counter: usize = 0;
 
@@ -4769,6 +4776,7 @@ impl<'a> PreparedCascade<'a> {
           &self.dom_maps,
           &self.slot_assignment,
           &self.sibling_cache,
+          &self.element_attr_cache,
           deadline,
           self.has_starting_styles,
         )
@@ -5336,6 +5344,7 @@ fn match_part_rules<'a>(
   scratch: &mut CascadeScratch,
   dom_maps: &DomMaps,
   sibling_cache: &SiblingListCache,
+  element_attr_cache: &'a ElementAttrCache,
   slot_map_for_host: &dyn Fn(usize) -> Option<&'a SlotAssignmentMap<'a>>,
   current_slot_map: Option<&SlotAssignmentMap<'a>>,
 ) -> Vec<MatchedRule<'a>> {
@@ -5442,6 +5451,7 @@ fn match_part_rules<'a>(
             ancestor_bloom,
             slot_map,
             dom_maps.selector_blooms(),
+            Some(element_attr_cache),
             sibling_cache,
             &info.pseudo,
             allow_shadow_host,
@@ -5482,6 +5492,7 @@ fn collect_matching_rules<'a>(
   dom_maps: &DomMaps,
   slot_assignment: &SlotAssignment,
   sibling_cache: &SiblingListCache,
+  element_attr_cache: &'a ElementAttrCache,
 ) -> Result<Vec<MatchedRule<'a>>, RenderError> {
   let current_shadow = dom_maps.containing_shadow_root(node_id);
   let slot_map_for_host = |host_id: usize| -> Option<&SlotAssignmentMap<'a>> {
@@ -5511,6 +5522,7 @@ fn collect_matching_rules<'a>(
     dom_maps,
     slot_assignment,
     current_slot_map,
+    Some(element_attr_cache),
     sibling_cache,
     false,
     scopes.quirks_mode,
@@ -5534,6 +5546,7 @@ fn collect_matching_rules<'a>(
       dom_maps,
       slot_assignment,
       base_slot_map,
+      Some(element_attr_cache),
       sibling_cache,
       allow_shadow_host,
       scopes.quirks_mode,
@@ -5559,6 +5572,7 @@ fn collect_matching_rules<'a>(
           dom_maps,
           slot_assignment,
           current_slot_map,
+          Some(element_attr_cache),
           sibling_cache,
           false,
           scopes.quirks_mode,
@@ -5582,6 +5596,7 @@ fn collect_matching_rules<'a>(
       dom_maps,
       slot_assignment,
       host_slot_map,
+      Some(element_attr_cache),
       sibling_cache,
       true,
       scopes.quirks_mode,
@@ -5605,6 +5620,7 @@ fn collect_matching_rules<'a>(
           dom_maps,
           slot_assignment,
           scopes.slot_maps.get(&slot.shadow_root_id),
+          Some(element_attr_cache),
           sibling_cache,
           true,
           scopes.quirks_mode,
@@ -5622,6 +5638,7 @@ fn collect_matching_rules<'a>(
     scratch,
     dom_maps,
     sibling_cache,
+    element_attr_cache,
     &slot_map_for_host,
     current_slot_map,
   ));
@@ -5640,6 +5657,7 @@ fn collect_pseudo_matching_rules<'a>(
   node_id: usize,
   dom_maps: &DomMaps,
   sibling_cache: &SiblingListCache,
+  element_attr_cache: &'a ElementAttrCache,
   pseudo: &PseudoElement,
 ) -> Vec<MatchedRule<'a>> {
   let current_shadow = dom_maps.containing_shadow_root(node_id);
@@ -5671,6 +5689,7 @@ fn collect_pseudo_matching_rules<'a>(
     ancestor_bloom,
     current_slot_map,
     dom_maps.selector_blooms(),
+    Some(element_attr_cache),
     sibling_cache,
     pseudo,
     false,
@@ -5688,6 +5707,7 @@ fn collect_pseudo_matching_rules<'a>(
       ancestor_bloom,
       base_slot_map,
       dom_maps.selector_blooms(),
+      Some(element_attr_cache),
       sibling_cache,
       pseudo,
       allow_shadow_host,
@@ -5708,6 +5728,7 @@ fn collect_pseudo_matching_rules<'a>(
           ancestor_bloom,
           current_slot_map,
           dom_maps.selector_blooms(),
+          Some(element_attr_cache),
           sibling_cache,
           pseudo,
           false,
@@ -5728,6 +5749,7 @@ fn collect_pseudo_matching_rules<'a>(
       ancestor_bloom,
       slot_map_for_host(node_id),
       dom_maps.selector_blooms(),
+      Some(element_attr_cache),
       sibling_cache,
       pseudo,
       true,
@@ -5776,6 +5798,7 @@ fn compute_base_styles<'a>(
   dom_maps: &DomMaps,
   slot_assignment: &SlotAssignment,
   sibling_cache: &SiblingListCache,
+  element_attr_cache: &ElementAttrCache,
   include_starting_style: bool,
 ) -> Result<NodeBaseStyles, RenderError> {
   if !node.is_element() {
@@ -5828,6 +5851,7 @@ fn compute_base_styles<'a>(
     dom_maps,
     slot_assignment,
     sibling_cache,
+    element_attr_cache,
   )?;
   let inline_tree_scope = tree_scope_prefix_for_node(dom_maps, node_id);
   matching_rules.extend(ua_default_rules(
@@ -6018,6 +6042,7 @@ fn apply_styles_internal(
   dom_maps: &DomMaps,
   slot_assignment: &SlotAssignment,
   sibling_cache: &SiblingListCache,
+  element_attr_cache: &ElementAttrCache,
   deadline: Option<&RenderDeadline>,
   has_starting_styles: bool,
 ) -> Result<StyledNode, RenderError> {
@@ -6051,6 +6076,7 @@ fn apply_styles_internal(
     dom_maps,
     slot_assignment,
     sibling_cache,
+    element_attr_cache,
     &mut deadline_counter,
     deadline,
     has_starting_styles,
@@ -6075,6 +6101,7 @@ fn compute_pseudo_styles(
   node_id: usize,
   dom_maps: &DomMaps,
   sibling_cache: &SiblingListCache,
+  element_attr_cache: &ElementAttrCache,
   styles: &mut ComputedStyle,
   ua_styles: &ComputedStyle,
   root_font_size: f32,
@@ -6109,6 +6136,7 @@ fn compute_pseudo_styles(
       node_id,
       dom_maps,
       sibling_cache,
+      element_attr_cache,
       styles,
       ua_styles,
       root_font_size,
@@ -6134,6 +6162,7 @@ fn compute_pseudo_styles(
     node_id,
     dom_maps,
     sibling_cache,
+    element_attr_cache,
     styles,
     ua_styles,
     root_font_size,
@@ -6158,6 +6187,7 @@ fn compute_pseudo_styles(
     node_id,
     dom_maps,
     sibling_cache,
+    element_attr_cache,
     base_first_letter_styles,
     base_first_letter_ua_styles,
     root_font_size,
@@ -6179,6 +6209,7 @@ fn compute_pseudo_styles(
         node_id,
         dom_maps,
         sibling_cache,
+        element_attr_cache,
         styles,
         ua_styles,
         root_font_size,
@@ -6204,6 +6235,7 @@ fn compute_pseudo_styles(
         node_id,
         dom_maps,
         sibling_cache,
+        element_attr_cache,
         styles,
         ua_styles,
         root_font_size,
@@ -6227,6 +6259,7 @@ fn compute_pseudo_styles(
     node_id,
     dom_maps,
     sibling_cache,
+    element_attr_cache,
     styles,
     ua_styles,
     root_font_size,
@@ -6302,6 +6335,7 @@ fn apply_styles_internal_with_ancestors<'a>(
   dom_maps: &DomMaps,
   slot_assignment: &SlotAssignment,
   sibling_cache: &SiblingListCache,
+  element_attr_cache: &ElementAttrCache,
   deadline_counter: &mut usize,
   deadline: Option<&RenderDeadline>,
   has_starting_styles: bool,
@@ -6353,6 +6387,7 @@ fn apply_styles_internal_with_ancestors<'a>(
     dom_maps,
     slot_assignment,
     sibling_cache,
+    element_attr_cache,
     false,
   )?;
   let mut starting_base = if has_starting_styles {
@@ -6381,6 +6416,7 @@ fn apply_styles_internal_with_ancestors<'a>(
       dom_maps,
       slot_assignment,
       sibling_cache,
+      element_attr_cache,
       true,
     )?)
   } else {
@@ -6431,6 +6467,7 @@ fn apply_styles_internal_with_ancestors<'a>(
       dom_maps,
       slot_assignment,
       sibling_cache,
+      element_attr_cache,
       deadline_counter,
       deadline,
       has_starting_styles,
@@ -6457,6 +6494,7 @@ fn apply_styles_internal_with_ancestors<'a>(
       node_id,
       dom_maps,
       sibling_cache,
+      element_attr_cache,
       &mut base.styles,
       &base.ua_styles,
       base.current_root_font_size,
@@ -6478,6 +6516,7 @@ fn apply_styles_internal_with_ancestors<'a>(
       node_id,
       dom_maps,
       sibling_cache,
+      element_attr_cache,
       &mut start.styles,
       &start.ua_styles,
       start.current_root_font_size,
@@ -11954,7 +11993,7 @@ slot[name=\"s\"]::slotted(.assigned) { color: rgb(4, 5, 6); }"
       "should collect the authored li::marker rule"
     );
     let ancestors: Vec<&DomNode> = vec![&dom]; // ul ancestor for the li
-    let element_ref = build_element_ref_chain(&dom.children[0], 0, &ancestors, None);
+    let element_ref = build_element_ref_chain(&dom.children[0], 0, &ancestors, None, None);
     let mut caches = SelectorCaches::default();
     let cache_epoch = next_selector_cache_epoch();
     caches.set_epoch(cache_epoch);
@@ -11990,6 +12029,7 @@ slot[name=\"s\"]::slotted(.assigned) { color: rgb(4, 5, 6); }"
       &mut caches,
       &mut scratch,
       &ancestors,
+      None,
       None,
       None,
       None,
@@ -12872,6 +12912,7 @@ fn find_matching_rules<'a>(
   dom_maps: &DomMaps,
   slot_assignment: &SlotAssignment,
   slot_map: Option<&'a SlotAssignmentMap<'a>>,
+  element_attr_cache: Option<&'a ElementAttrCache>,
   sibling_cache: &SiblingListCache,
   allow_shadow_host: bool,
   quirks_mode: QuirksMode,
@@ -12923,9 +12964,9 @@ fn find_matching_rules<'a>(
   let mut deadline_counter = 0usize;
 
   // Build ElementRef chain with proper parent links
-  let element_ref = build_element_ref_chain(node, node_id, ancestors, slot_map);
+  let element_ref = build_element_ref_chain(node, node_id, ancestors, slot_map, element_attr_cache);
   let shadow_host = if allow_shadow_host {
-    shadow_host_ref(node, ancestors, slot_map)
+    shadow_host_ref(node, ancestors, slot_map, element_attr_cache)
   } else {
     None
   };
@@ -12948,6 +12989,7 @@ fn find_matching_rules<'a>(
     deadline_error: None,
     selector_blooms: dom_maps.selector_blooms(),
     sibling_cache: Some(sibling_cache),
+    element_attr_cache,
   };
 
   let scope_allows = |scope: &RuleScope, is_slotted: bool| -> bool {
@@ -13376,6 +13418,7 @@ fn find_pseudo_element_rules<'a>(
   ancestor_bloom: Option<&selectors::bloom::BloomFilter>,
   slot_map: Option<&SlotAssignmentMap<'a>>,
   selector_blooms: Option<&SelectorBloomStore>,
+  element_attr_cache: Option<&'a ElementAttrCache>,
   sibling_cache: &SiblingListCache,
   pseudo: &PseudoElement,
   allow_shadow_host: bool,
@@ -13423,9 +13466,9 @@ fn find_pseudo_element_rules<'a>(
   let mut matches: Vec<MatchedRule<'a>> = Vec::new();
 
   // Build ElementRef chain with proper parent links
-  let element_ref = build_element_ref_chain(node, node_id, ancestors, slot_map);
+  let element_ref = build_element_ref_chain(node, node_id, ancestors, slot_map, element_attr_cache);
   let shadow_host = if allow_shadow_host {
-    shadow_host_ref(node, ancestors, slot_map)
+    shadow_host_ref(node, ancestors, slot_map, element_attr_cache)
   } else {
     None
   };
@@ -13446,6 +13489,7 @@ fn find_pseudo_element_rules<'a>(
     deadline_error: None,
     selector_blooms,
     sibling_cache: Some(sibling_cache),
+    element_attr_cache,
   };
 
   let mut scoped_rule_idx: Option<usize> = None;
@@ -14309,17 +14353,20 @@ fn build_element_ref_chain<'a>(
   node_id: usize,
   ancestors: &'a [&'a DomNode],
   slot_map: Option<&'a SlotAssignmentMap<'a>>,
+  element_attr_cache: Option<&'a ElementAttrCache>,
 ) -> ElementRef<'a> {
   if ancestors.is_empty() {
     return ElementRef::new(node)
       .with_node_id(node_id)
-      .with_slot_map(slot_map);
+      .with_slot_map(slot_map)
+      .with_attr_cache(element_attr_cache);
   }
 
   // Create ElementRef with all ancestors
   ElementRef::with_ancestors(node, ancestors)
     .with_node_id(node_id)
     .with_slot_map(slot_map)
+    .with_attr_cache(element_attr_cache)
 }
 
 fn is_shadow_host_node(node: &DomNode) -> bool {
@@ -14336,9 +14383,14 @@ fn shadow_host_ref<'a>(
   node: &'a DomNode,
   ancestors: &'a [&'a DomNode],
   slot_map: Option<&'a SlotAssignmentMap<'a>>,
+  element_attr_cache: Option<&'a ElementAttrCache>,
 ) -> Option<ElementRef<'a>> {
   if is_shadow_host_node(node) {
-    return Some(ElementRef::with_ancestors(node, ancestors).with_slot_map(slot_map));
+    return Some(
+      ElementRef::with_ancestors(node, ancestors)
+        .with_slot_map(slot_map)
+        .with_attr_cache(element_attr_cache),
+    );
   }
 
   for (idx, ancestor) in ancestors.iter().enumerate().rev() {
@@ -14349,7 +14401,9 @@ fn shadow_host_ref<'a>(
       let host = ancestors[idx - 1];
       if is_shadow_host_node(host) {
         return Some(
-          ElementRef::with_ancestors(host, &ancestors[..idx - 1]).with_slot_map(slot_map),
+          ElementRef::with_ancestors(host, &ancestors[..idx - 1])
+            .with_slot_map(slot_map)
+            .with_attr_cache(element_attr_cache),
         );
       }
     }
@@ -14432,6 +14486,7 @@ fn compute_pseudo_element_styles(
   node_id: usize,
   dom_maps: &DomMaps,
   sibling_cache: &SiblingListCache,
+  element_attr_cache: &ElementAttrCache,
   parent_styles: &ComputedStyle,
   ua_parent_styles: &ComputedStyle,
   root_font_size: f32,
@@ -14455,6 +14510,7 @@ fn compute_pseudo_element_styles(
     node_id,
     dom_maps,
     sibling_cache,
+    element_attr_cache,
     pseudo,
   );
   if include_starting_style {
@@ -14598,6 +14654,7 @@ fn compute_first_line_styles(
   node_id: usize,
   dom_maps: &DomMaps,
   sibling_cache: &SiblingListCache,
+  element_attr_cache: &ElementAttrCache,
   base_styles: &ComputedStyle,
   base_ua_styles: &ComputedStyle,
   root_font_size: f32,
@@ -14620,6 +14677,7 @@ fn compute_first_line_styles(
     node_id,
     dom_maps,
     sibling_cache,
+    element_attr_cache,
     &PseudoElement::FirstLine,
   );
   if include_starting_style {
@@ -14694,6 +14752,7 @@ fn compute_first_letter_styles(
   node_id: usize,
   dom_maps: &DomMaps,
   sibling_cache: &SiblingListCache,
+  element_attr_cache: &ElementAttrCache,
   base_styles: &ComputedStyle,
   base_ua_styles: &ComputedStyle,
   root_font_size: f32,
@@ -14721,6 +14780,7 @@ fn compute_first_letter_styles(
     node_id,
     dom_maps,
     sibling_cache,
+    element_attr_cache,
     &PseudoElement::FirstLetter,
   );
   if include_starting_style {
@@ -14797,6 +14857,7 @@ fn compute_marker_styles(
   node_id: usize,
   dom_maps: &DomMaps,
   sibling_cache: &SiblingListCache,
+  element_attr_cache: &ElementAttrCache,
   list_item_styles: &ComputedStyle,
   ua_list_item_styles: &ComputedStyle,
   root_font_size: f32,
@@ -14821,6 +14882,7 @@ fn compute_marker_styles(
         node_id,
         dom_maps,
         sibling_cache,
+        element_attr_cache,
         &PseudoElement::Marker,
       )
     } else {

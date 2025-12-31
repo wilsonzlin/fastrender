@@ -5,6 +5,7 @@
 use super::types::CssString;
 use crate::dom::AssignedSlot;
 use crate::dom::DomNode;
+use crate::dom::ElementAttrCache;
 use crate::dom::SelectorBloomStore;
 use crate::dom::SiblingListCache;
 use crate::error::RenderError;
@@ -54,6 +55,8 @@ pub struct ShadowMatchData<'a> {
   pub selector_blooms: Option<&'a SelectorBloomStore>,
   /// Cached sibling positions for structural pseudo-classes.
   pub sibling_cache: Option<&'a SiblingListCache>,
+  /// Per-pass cache for expensive element attribute lookups during selector matching.
+  pub element_attr_cache: Option<&'a ElementAttrCache>,
 }
 
 impl<'a> ShadowMatchData<'a> {
@@ -94,6 +97,11 @@ impl<'a> ShadowMatchData<'a> {
 
   pub fn with_sibling_cache(mut self, sibling_cache: &'a SiblingListCache) -> Self {
     self.sibling_cache = Some(sibling_cache);
+    self
+  }
+
+  pub fn with_element_attr_cache(mut self, element_attr_cache: &'a ElementAttrCache) -> Self {
+    self.element_attr_cache = Some(element_attr_cache);
     self
   }
 }

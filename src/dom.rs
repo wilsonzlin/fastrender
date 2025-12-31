@@ -32,8 +32,10 @@ use selectors::OpaqueElement;
 use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
 use std::cell::RefCell;
+use std::cell::RefMut;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::hash::{BuildHasherDefault, Hasher};
 use std::io;
 use std::ptr;
 use std::sync::atomic::AtomicBool;
@@ -750,6 +752,321 @@ impl SiblingListCache {
     let elements = entry.elements.clone();
     self.parents.borrow_mut().insert(parent_ptr, entry);
     Some(elements)
+  }
+}
+
+const ELEMENT_ATTR_CACHE_ATTR_INDEX_THRESHOLD: usize = 10;
+const ELEMENT_ATTR_CACHE_FNV_OFFSET_BASIS: u64 = 14695981039346656037;
+const ELEMENT_ATTR_CACHE_FNV_PRIME: u64 = 1099511628211;
+
+#[derive(Default)]
+struct ElementAttrCacheHasher(u64);
+
+impl Hasher for ElementAttrCacheHasher {
+  fn write(&mut self, bytes: &[u8]) {
+    let mut hash = ELEMENT_ATTR_CACHE_FNV_OFFSET_BASIS;
+    for &byte in bytes {
+      hash ^= byte as u64;
+      hash = hash.wrapping_mul(ELEMENT_ATTR_CACHE_FNV_PRIME);
+    }
+    self.0 = hash;
+  }
+
+  fn write_u64(&mut self, i: u64) {
+    self.0 = i;
+  }
+
+  fn write_usize(&mut self, i: usize) {
+    self.0 = i as u64;
+  }
+
+  fn finish(&self) -> u64 {
+    self.0
+  }
+}
+
+type ElementAttrCacheBuildHasher = BuildHasherDefault<ElementAttrCacheHasher>;
+
+#[inline]
+fn element_attr_cache_hash_ascii_lowercase(value: &str) -> u64 {
+  let mut hash = ELEMENT_ATTR_CACHE_FNV_OFFSET_BASIS;
+  for byte in value.bytes() {
+    let folded = if byte >= b'A' && byte <= b'Z' {
+      byte + 32
+    } else {
+      byte
+    };
+    hash ^= folded as u64;
+    hash = hash.wrapping_mul(ELEMENT_ATTR_CACHE_FNV_PRIME);
+  }
+  hash
+}
+
+#[inline]
+fn element_attr_cache_hash_str(value: &str) -> u64 {
+  let mut hash = ELEMENT_ATTR_CACHE_FNV_OFFSET_BASIS;
+  for &byte in value.as_bytes() {
+    hash ^= byte as u64;
+    hash = hash.wrapping_mul(ELEMENT_ATTR_CACHE_FNV_PRIME);
+  }
+  hash
+}
+
+#[inline]
+fn element_attr_cache_name_hash(name: &str, is_html: bool) -> u64 {
+  if is_html {
+    element_attr_cache_hash_ascii_lowercase(name)
+  } else {
+    element_attr_cache_hash_str(name)
+  }
+}
+
+#[inline]
+fn element_attr_cache_name_matches(actual: &str, expected: &str, is_html: bool) -> bool {
+  if is_html {
+    actual.eq_ignore_ascii_case(expected)
+  } else {
+    actual == expected
+  }
+}
+
+#[derive(Debug, Clone)]
+enum CachedClassTokens {
+  None,
+  Unparsed(*const str),
+  Parsed { raw: *const str, ranges: Box<[std::ops::Range<usize>]> },
+}
+
+#[derive(Debug, Clone)]
+enum CachedAttrIndex {
+  Pending,
+  Disabled,
+  Built(HashMap<u64, AttrBucket, ElementAttrCacheBuildHasher>),
+}
+
+#[derive(Debug, Clone)]
+enum AttrBucket {
+  Single(usize),
+  Multi(Vec<usize>),
+}
+
+#[derive(Debug, Clone)]
+struct ElementAttrCacheEntry {
+  is_html: bool,
+  id: Option<*const str>,
+  class: CachedClassTokens,
+  attr_index: CachedAttrIndex,
+}
+
+impl ElementAttrCacheEntry {
+  fn new(node: &DomNode) -> Self {
+    let is_html = node_is_html_element(node);
+    let attrs: &[(String, String)] = match &node.node_type {
+      DomNodeType::Element { attributes, .. } => attributes,
+      DomNodeType::Slot { attributes, .. } => attributes,
+      _ => &[],
+    };
+
+    let mut id: Option<*const str> = None;
+    let mut class: Option<*const str> = None;
+    for (name, value) in attrs.iter() {
+      if id.is_none() && element_attr_cache_name_matches(name, "id", is_html) {
+        id = Some(value.as_str() as *const str);
+      }
+      if class.is_none() && element_attr_cache_name_matches(name, "class", is_html) {
+        class = Some(value.as_str() as *const str);
+      }
+      if id.is_some() && class.is_some() {
+        break;
+      }
+    }
+
+    let class = match class {
+      Some(raw) => CachedClassTokens::Unparsed(raw),
+      None => CachedClassTokens::None,
+    };
+
+    Self {
+      is_html,
+      id,
+      class,
+      attr_index: CachedAttrIndex::Pending,
+    }
+  }
+
+  fn class_ranges(&mut self) -> Option<(*const str, &[std::ops::Range<usize>])> {
+    let raw_ptr = match &self.class {
+      CachedClassTokens::Unparsed(ptr) => Some(*ptr),
+      _ => None,
+    };
+
+    if let Some(ptr) = raw_ptr {
+      let raw: &str = unsafe { &*ptr };
+      let base_ptr = raw.as_ptr() as usize;
+      let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
+      for token in raw.split_whitespace() {
+        let start = token.as_ptr() as usize - base_ptr;
+        ranges.push(start..start + token.len());
+      }
+      self.class = CachedClassTokens::Parsed {
+        raw: ptr,
+        ranges: ranges.into_boxed_slice(),
+      };
+    }
+
+    match &self.class {
+      CachedClassTokens::Parsed { raw, ranges } => Some((*raw, ranges.as_ref())),
+      _ => None,
+    }
+  }
+
+  fn attr_index<'a>(
+    &'a mut self,
+    node: &DomNode,
+  ) -> Option<(&'a HashMap<u64, AttrBucket, ElementAttrCacheBuildHasher>, bool)> {
+    if matches!(self.attr_index, CachedAttrIndex::Pending) {
+      let attrs: &[(String, String)] = match &node.node_type {
+        DomNodeType::Element { attributes, .. } => attributes,
+        DomNodeType::Slot { attributes, .. } => attributes,
+        _ => &[],
+      };
+      if attrs.len() < ELEMENT_ATTR_CACHE_ATTR_INDEX_THRESHOLD {
+        self.attr_index = CachedAttrIndex::Disabled;
+      } else {
+        let mut map: HashMap<u64, AttrBucket, ElementAttrCacheBuildHasher> = HashMap::default();
+        for (idx, (name, _)) in attrs.iter().enumerate() {
+          let hash = element_attr_cache_name_hash(name, self.is_html);
+          match map.entry(hash) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+              entry.insert(AttrBucket::Single(idx));
+            }
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+              let bucket = entry.get_mut();
+              let is_dup = match bucket {
+                AttrBucket::Single(existing) => {
+                  let existing_name = attrs.get(*existing).map(|(n, _)| n.as_str()).unwrap_or("");
+                  element_attr_cache_name_matches(existing_name, name, self.is_html)
+                }
+                AttrBucket::Multi(existing) => existing.iter().any(|existing| {
+                  let existing_name =
+                    attrs.get(*existing).map(|(n, _)| n.as_str()).unwrap_or("");
+                  element_attr_cache_name_matches(existing_name, name, self.is_html)
+                }),
+              };
+              if is_dup {
+                continue;
+              }
+              match bucket {
+                AttrBucket::Single(existing) => {
+                  let prev = *existing;
+                  *bucket = AttrBucket::Multi(vec![prev, idx]);
+                }
+                AttrBucket::Multi(existing) => existing.push(idx),
+              }
+            }
+          }
+        }
+        self.attr_index = CachedAttrIndex::Built(map);
+      }
+    }
+
+    match &self.attr_index {
+      CachedAttrIndex::Built(map) => Some((map, self.is_html)),
+      _ => None,
+    }
+  }
+}
+
+#[derive(Debug)]
+pub struct ElementAttrCache {
+  _epoch: usize,
+  entries: RefCell<HashMap<*const DomNode, ElementAttrCacheEntry, ElementAttrCacheBuildHasher>>,
+}
+
+impl ElementAttrCache {
+  pub fn new(epoch: usize) -> Self {
+    Self {
+      _epoch: epoch,
+      entries: RefCell::new(HashMap::default()),
+    }
+  }
+
+  pub fn clear(&self) {
+    self.entries.borrow_mut().clear();
+  }
+
+  fn entry_mut<'a>(&'a self, node: &DomNode) -> RefMut<'a, ElementAttrCacheEntry> {
+    let ptr = node as *const DomNode;
+    RefMut::map(self.entries.borrow_mut(), |entries| {
+      entries.entry(ptr).or_insert_with(|| ElementAttrCacheEntry::new(node))
+    })
+  }
+
+  pub fn has_id(&self, node: &DomNode, id: &str, case_sensitivity: CaseSensitivity) -> bool {
+    let entry = self.entry_mut(node);
+    let Some(id_ptr) = entry.id else {
+      return false;
+    };
+    let actual: &str = unsafe { &*id_ptr };
+    match case_sensitivity {
+      CaseSensitivity::CaseSensitive => actual == id,
+      CaseSensitivity::AsciiCaseInsensitive => actual.eq_ignore_ascii_case(id),
+    }
+  }
+
+  pub fn has_class(
+    &self,
+    node: &DomNode,
+    class: &str,
+    case_sensitivity: CaseSensitivity,
+  ) -> bool {
+    let mut entry = self.entry_mut(node);
+    let Some((raw_ptr, ranges)) = entry.class_ranges() else {
+      return false;
+    };
+    let raw: &str = unsafe { &*raw_ptr };
+    match case_sensitivity {
+      CaseSensitivity::CaseSensitive => ranges
+        .iter()
+        .any(|range| &raw[range.start..range.end] == class),
+      CaseSensitivity::AsciiCaseInsensitive => ranges
+        .iter()
+        .any(|range| raw[range.start..range.end].eq_ignore_ascii_case(class)),
+    }
+  }
+
+  pub fn attr_value<'a>(&self, node: &'a DomNode, name: &str) -> Option<&'a str> {
+    let mut entry = self.entry_mut(node);
+    let attrs: &'a [(String, String)] = match &node.node_type {
+      DomNodeType::Element { attributes, .. } => attributes,
+      DomNodeType::Slot { attributes, .. } => attributes,
+      _ => return None,
+    };
+
+    let query_hash = element_attr_cache_name_hash(name, entry.is_html);
+    if let Some((index, is_html)) = entry.attr_index(node) {
+      if let Some(bucket) = index.get(&query_hash) {
+        let indices: &[usize] = match bucket {
+          AttrBucket::Single(idx) => std::slice::from_ref(idx),
+          AttrBucket::Multi(list) => list.as_slice(),
+        };
+        for idx in indices {
+          let (attr_name, attr_value) = attrs.get(*idx)?;
+          if element_attr_cache_name_matches(attr_name, name, is_html) {
+            return Some(attr_value.as_str());
+          }
+        }
+        return None;
+      }
+    }
+
+    for (attr_name, attr_value) in attrs.iter() {
+      if element_attr_cache_name_matches(attr_name, name, entry.is_html) {
+        return Some(attr_value.as_str());
+      }
+    }
+
+    None
   }
 }
 
@@ -2475,6 +2792,7 @@ pub struct ElementRef<'a> {
   pub parent: Option<&'a DomNode>,
   all_ancestors: &'a [&'a DomNode],
   slot_map: Option<&'a crate::css::selectors::SlotAssignmentMap<'a>>,
+  attr_cache: Option<&'a ElementAttrCache>,
 }
 
 impl<'a> ElementRef<'a> {
@@ -2485,6 +2803,7 @@ impl<'a> ElementRef<'a> {
       parent: None,
       all_ancestors: &[],
       slot_map: None,
+      attr_cache: None,
     }
   }
 
@@ -2496,6 +2815,7 @@ impl<'a> ElementRef<'a> {
       parent,
       all_ancestors: ancestors,
       slot_map: None,
+      attr_cache: None,
     }
   }
 
@@ -2509,6 +2829,11 @@ impl<'a> ElementRef<'a> {
     slot_map: Option<&'a crate::css::selectors::SlotAssignmentMap<'a>>,
   ) -> Self {
     self.slot_map = slot_map;
+    self
+  }
+
+  pub fn with_attr_cache(mut self, attr_cache: Option<&'a ElementAttrCache>) -> Self {
+    self.attr_cache = attr_cache;
     self
   }
 
@@ -2836,8 +3161,9 @@ impl<'a> ElementRef<'a> {
           if !child.is_element() {
             return Some(());
           }
-          let child_ref =
-            ElementRef::with_ancestors(child, self.all_ancestors).with_slot_map(self.slot_map);
+          let child_ref = ElementRef::with_ancestors(child, self.all_ancestors)
+            .with_slot_map(self.slot_map)
+            .with_attr_cache(self.attr_cache);
           let matches = selectors
             .slice()
             .iter()
@@ -3785,9 +4111,12 @@ impl<'a> Element for ElementRef<'a> {
       // If we have multiple ancestors, the parent's ancestors are all but the last
       ElementRef::with_ancestors(parent, &self.all_ancestors[..self.all_ancestors.len() - 1])
         .with_slot_map(self.slot_map)
+        .with_attr_cache(self.attr_cache)
     } else {
       // Parent is the root
-      ElementRef::new(parent).with_slot_map(self.slot_map)
+      ElementRef::new(parent)
+        .with_slot_map(self.slot_map)
+        .with_attr_cache(self.attr_cache)
     })
   }
 
@@ -3807,7 +4136,8 @@ impl<'a> Element for ElementRef<'a> {
         let host = self.all_ancestors[idx - 1];
         return Some(
           ElementRef::with_ancestors(host, &self.all_ancestors[..idx - 1])
-            .with_slot_map(self.slot_map),
+            .with_slot_map(self.slot_map)
+            .with_attr_cache(self.attr_cache),
         );
       }
     }
@@ -3832,6 +4162,7 @@ impl<'a> Element for ElementRef<'a> {
           parent: self.parent,
           all_ancestors: self.all_ancestors,
           slot_map: self.slot_map,
+          attr_cache: self.attr_cache,
         });
       }
       prev = Some(child);
@@ -3853,6 +4184,7 @@ impl<'a> Element for ElementRef<'a> {
           parent: self.parent,
           all_ancestors: self.all_ancestors,
           slot_map: self.slot_map,
+          attr_cache: self.attr_cache,
         });
       }
       if ptr::eq(child, self.node) {
@@ -3945,7 +4277,17 @@ impl<'a> Element for ElementRef<'a> {
       }
     }
 
-    let attr_value = match self.node.get_attribute_ref(local_name.as_str()) {
+    let attr_value = if let Some(cache) = self.attr_cache {
+      cache.attr_value(self.node, local_name.as_str())
+    } else {
+      let is_html = self.is_html_element();
+      self
+        .node
+        .attributes_iter()
+        .find(|(name, _)| element_attr_cache_name_matches(name, local_name.as_str(), is_html))
+        .map(|(_, value)| value)
+    };
+    let attr_value = match attr_value {
       Some(v) => v,
       None => return false,
     };
@@ -4015,7 +4357,8 @@ impl<'a> Element for ElementRef<'a> {
               continue;
             }
             let ancestor_ref = ElementRef::with_ancestors(*ancestor, &self.all_ancestors[..idx])
-              .with_slot_map(self.slot_map);
+              .with_slot_map(self.slot_map)
+              .with_attr_cache(self.attr_cache);
             if selectors
               .slice()
               .iter()
@@ -4225,32 +4568,50 @@ impl<'a> Element for ElementRef<'a> {
       parent,
       all_ancestors: slot.ancestors,
       slot_map: Some(slot_map),
+      attr_cache: self.attr_cache,
     })
   }
 
   fn has_id(&self, id: &CssString, case_sensitivity: CaseSensitivity) -> bool {
+    if let Some(cache) = self.attr_cache {
+      return cache.has_id(self.node, id.as_str(), case_sensitivity);
+    }
+
+    let is_html = self.is_html_element();
+    let actual = self
+      .node
+      .attributes_iter()
+      .find(|(name, _)| element_attr_cache_name_matches(name, "id", is_html))
+      .map(|(_, value)| value);
+    let Some(actual) = actual else {
+      return false;
+    };
     match case_sensitivity {
-      CaseSensitivity::CaseSensitive => self.node.has_id(id.as_str()),
-      CaseSensitivity::AsciiCaseInsensitive => self
-        .node
-        .get_attribute_ref("id")
-        .map(|attr| attr.eq_ignore_ascii_case(id.as_str()))
-        .unwrap_or(false),
+      CaseSensitivity::CaseSensitive => actual == id.as_str(),
+      CaseSensitivity::AsciiCaseInsensitive => actual.eq_ignore_ascii_case(id.as_str()),
     }
   }
 
   fn has_class(&self, class: &CssString, case_sensitivity: CaseSensitivity) -> bool {
+    if let Some(cache) = self.attr_cache {
+      return cache.has_class(self.node, class.as_str(), case_sensitivity);
+    }
+
+    let is_html = self.is_html_element();
+    let classes = self
+      .node
+      .attributes_iter()
+      .find(|(name, _)| element_attr_cache_name_matches(name, "class", is_html))
+      .map(|(_, value)| value);
+    let Some(classes) = classes else {
+      return false;
+    };
+
     match case_sensitivity {
-      CaseSensitivity::CaseSensitive => self.node.has_class(class.as_str()),
-      CaseSensitivity::AsciiCaseInsensitive => self
-        .node
-        .get_attribute_ref("class")
-        .map(|classes| {
-          classes
-            .split_whitespace()
-            .any(|c| c.eq_ignore_ascii_case(class.as_str()))
-        })
-        .unwrap_or(false),
+      CaseSensitivity::CaseSensitive => classes.split_whitespace().any(|c| c == class.as_str()),
+      CaseSensitivity::AsciiCaseInsensitive => classes
+        .split_whitespace()
+        .any(|c| c.eq_ignore_ascii_case(class.as_str())),
     }
   }
 
@@ -4294,6 +4655,7 @@ impl<'a> Element for ElementRef<'a> {
           parent: Some(self.node),
           all_ancestors: self.all_ancestors,
           slot_map: self.slot_map,
+          attr_cache: self.attr_cache,
         });
       }
     }
@@ -4635,7 +4997,8 @@ fn match_relative_selector_descendants<'a>(
         break;
       }
       let child_ref = ElementRef::with_ancestors(child, ancestors.as_slice())
-        .with_slot_map(context.extra_data.slot_map);
+        .with_slot_map(context.extra_data.slot_map)
+        .with_attr_cache(context.extra_data.element_attr_cache);
       let mut matched = if use_ancestor_bloom && !selector_may_match(ancestor_hashes, bloom_filter) {
         false
       } else {
@@ -4702,7 +5065,8 @@ fn match_relative_selector_siblings<'a>(
     }
 
     let sibling_ref = ElementRef::with_ancestors(sibling, ancestors.as_slice())
-      .with_slot_map(context.extra_data.slot_map);
+      .with_slot_map(context.extra_data.slot_map)
+      .with_attr_cache(context.extra_data.element_attr_cache);
     let matched = if selector.match_hint.is_subtree() {
       match_relative_selector_subtree(
         selector,
@@ -4764,7 +5128,8 @@ fn match_relative_selector_subtree<'a>(
         break;
       }
       let child_ref = ElementRef::with_ancestors(child, ancestors.as_slice())
-        .with_slot_map(context.extra_data.slot_map);
+        .with_slot_map(context.extra_data.slot_map)
+        .with_attr_cache(context.extra_data.element_attr_cache);
       if (!use_ancestor_bloom || selector_may_match(ancestor_hashes, bloom_filter))
         && matches_selector(&selector.selector, 0, None, &child_ref, context)
       {
@@ -5929,6 +6294,109 @@ mod tests {
       &CssString("bar".into()),
       CaseSensitivity::AsciiCaseInsensitive
     ));
+  }
+
+  #[test]
+  fn has_class_matches_with_and_without_attr_cache() {
+    let node = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("class".to_string(), "a B\tc".to_string())],
+      },
+      children: vec![],
+    };
+
+    let cache = ElementAttrCache::new(0);
+    let cached = ElementRef::new(&node).with_attr_cache(Some(&cache));
+    let uncached = ElementRef::new(&node);
+
+    let a = CssString::from("a");
+    assert!(uncached.has_class(&a, CaseSensitivity::CaseSensitive));
+    assert_eq!(
+      uncached.has_class(&a, CaseSensitivity::CaseSensitive),
+      cached.has_class(&a, CaseSensitivity::CaseSensitive)
+    );
+
+    let b_lower = CssString::from("b");
+    assert!(!uncached.has_class(&b_lower, CaseSensitivity::CaseSensitive));
+    assert_eq!(
+      uncached.has_class(&b_lower, CaseSensitivity::CaseSensitive),
+      cached.has_class(&b_lower, CaseSensitivity::CaseSensitive)
+    );
+    assert!(uncached.has_class(&b_lower, CaseSensitivity::AsciiCaseInsensitive));
+    assert_eq!(
+      uncached.has_class(&b_lower, CaseSensitivity::AsciiCaseInsensitive),
+      cached.has_class(&b_lower, CaseSensitivity::AsciiCaseInsensitive)
+    );
+
+    let missing = CssString::from("missing");
+    assert!(!uncached.has_class(&missing, CaseSensitivity::AsciiCaseInsensitive));
+    assert_eq!(
+      uncached.has_class(&missing, CaseSensitivity::AsciiCaseInsensitive),
+      cached.has_class(&missing, CaseSensitivity::AsciiCaseInsensitive)
+    );
+  }
+
+  #[test]
+  fn attr_matches_name_casing_matches_with_and_without_attr_cache() {
+    use selectors::attr::AttrSelectorOperation;
+    use selectors::attr::NamespaceConstraint;
+
+    let ns: NamespaceConstraint<&CssString> = NamespaceConstraint::Any;
+    let op: AttrSelectorOperation<&CssString> = AttrSelectorOperation::Exists;
+
+    let mut html_attrs = vec![("DaTa-X".to_string(), "1".to_string())];
+    for idx in 0..12 {
+      html_attrs.push((format!("data-a{idx}"), "x".to_string()));
+    }
+    let html_node = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: html_attrs,
+      },
+      children: vec![],
+    };
+
+    let html_cache = ElementAttrCache::new(0);
+    let html_cached = ElementRef::new(&html_node).with_attr_cache(Some(&html_cache));
+    let html_uncached = ElementRef::new(&html_node);
+    let data_x = CssString::from("data-x");
+    assert!(html_uncached.attr_matches(&ns, &data_x, &op));
+    assert_eq!(
+      html_uncached.attr_matches(&ns, &data_x, &op),
+      html_cached.attr_matches(&ns, &data_x, &op)
+    );
+
+    let mut svg_attrs = vec![("viewBox".to_string(), "0 0 10 10".to_string())];
+    for idx in 0..12 {
+      svg_attrs.push((format!("attr{idx}"), "y".to_string()));
+    }
+    let svg_node = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "svg".to_string(),
+        namespace: SVG_NAMESPACE.to_string(),
+        attributes: svg_attrs,
+      },
+      children: vec![],
+    };
+
+    let svg_cache = ElementAttrCache::new(0);
+    let svg_cached = ElementRef::new(&svg_node).with_attr_cache(Some(&svg_cache));
+    let svg_uncached = ElementRef::new(&svg_node);
+    let viewbox_lower = CssString::from("viewbox");
+    assert!(!svg_uncached.attr_matches(&ns, &viewbox_lower, &op));
+    assert_eq!(
+      svg_uncached.attr_matches(&ns, &viewbox_lower, &op),
+      svg_cached.attr_matches(&ns, &viewbox_lower, &op)
+    );
+    let viewbox = CssString::from("viewBox");
+    assert!(svg_uncached.attr_matches(&ns, &viewbox, &op));
+    assert_eq!(
+      svg_uncached.attr_matches(&ns, &viewbox, &op),
+      svg_cached.attr_matches(&ns, &viewbox, &op)
+    );
   }
 
   #[test]
