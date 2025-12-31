@@ -4707,8 +4707,14 @@ fn run(args: RunArgs) -> io::Result<()> {
     let mut filtered_paths: Vec<(String, PathBuf, Option<&PagesetEntry>)> = cached_paths
       .iter()
       .filter_map(|(cache_stem, cache_path)| {
-        let entry = resolve_pageset_entry_for_cache_stem(cache_stem, &pageset_by_cache, &pageset_by_stem);
-        let effective_cache_stem = entry.map(|e| e.cache_stem.as_str()).unwrap_or(cache_stem.as_str());
+        let entry = resolve_pageset_entry_for_cache_stem(
+          cache_stem,
+          &pageset_by_cache,
+          &pageset_by_stem,
+        );
+        let effective_cache_stem = entry
+          .map(|e| e.cache_stem.as_str())
+          .unwrap_or(cache_stem.as_str());
         if !filter_matches(effective_cache_stem, entry) {
           return None;
         }
@@ -4719,8 +4725,40 @@ fn run(args: RunArgs) -> io::Result<()> {
       })
       .collect();
     filtered_paths.sort_by(|a, b| a.0.cmp(&b.0));
+    let matched_count = filtered_paths.len();
     filtered_paths = apply_shard_filter(filtered_paths, args.shard);
     if filtered_paths.is_empty() {
+      if matched_count > 0 && args.shard.is_some() {
+        let (index, total) = args.shard.expect("shard present");
+        println!(
+          "Shard {}/{} selected no cached pages ({} matched before sharding). Nothing to do.",
+          index,
+          total,
+          matched_count
+        );
+        return Ok(());
+      }
+      if let Some(ref filter) = page_filter {
+        let requested: Vec<&PagesetEntry> = pageset_entries
+          .iter()
+          .filter(|entry| filter.matches_entry(entry))
+          .collect();
+        if !requested.is_empty() {
+          let mut missing: Vec<String> = requested
+            .iter()
+            .filter_map(|entry| {
+              cached_html_path_for_pageset_entry(entry, &cached_paths, &cached_by_stem)
+                .is_none()
+                .then(|| entry.cache_stem.clone())
+            })
+            .collect();
+          if !missing.is_empty() {
+            missing.sort();
+            missing.dedup();
+            eprintln!("Missing cached HTML for requested pages: {}", missing.join(", "));
+          }
+        }
+      }
       eprintln!(
         "No cached pages matched the requested filters (--pages/shard) in {CACHE_HTML_DIR}."
       );
@@ -4728,7 +4766,9 @@ fn run(args: RunArgs) -> io::Result<()> {
     }
     items = filtered_paths
       .into_iter()
-      .map(|(cache_stem, cache_path, entry)| work_item_from_cache(&cache_stem, cache_path, entry, &args))
+      .map(|(cache_stem, cache_path, entry)| {
+        work_item_from_cache(&cache_stem, cache_path, entry, &args)
+      })
       .collect();
   }
   let dump_settings = if dumps_enabled {
