@@ -662,7 +662,7 @@ mod tests {
         let _ = stream.write_all(body);
       }
     });
-
+ 
     let url = format!("http://{}/start", addr);
     let res = fetch_page(&url, Some(5), DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE)
       .expect("fetch succeeds");
@@ -706,7 +706,7 @@ mod tests {
         let _ = stream.write_all(headers);
       }
     });
-
+ 
     let url = format!("http://{}", addr);
     let result = fetch_page(&url, Some(5), DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE);
     assert!(
@@ -743,7 +743,7 @@ mod tests {
         let _ = stream.write_all(body);
       }
     });
-
+ 
     let url = format!("http://{}/", addr);
     let res =
       fetch_page(&url, Some(5), DEFAULT_USER_AGENT, "es-MX,es;q=0.8").expect("fetch succeeds");
@@ -799,7 +799,7 @@ mod tests {
         let _ = stream.write_all(body);
       }
     });
-
+ 
     let url = format!("http://{}/", addr);
     let res = fetch_page(&url, Some(5), DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE)
       .expect("fetch succeeds");
@@ -857,7 +857,7 @@ mod tests {
         let _ = stream.write_all(body);
       }
     });
-
+ 
     let url = format!("http://{}/", addr);
     let res = fetch_page(&url, Some(5), DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE)
       .expect("fetch succeeds");
@@ -913,7 +913,7 @@ mod tests {
         let _ = stream.write_all(body);
       }
     });
-
+ 
     let url = format!("http://{}/", addr);
     let res = fetch_page(&url, Some(5), DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE)
       .expect("fetch succeeds");

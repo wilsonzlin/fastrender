@@ -33,6 +33,7 @@
 
 use crate::debug::runtime;
 use crate::geometry::Size;
+use crate::layout::constraints::AvailableSpace;
 use crate::layout::constraints::LayoutConstraints;
 use crate::layout::fragment_clone_profile::{self, CloneSite};
 use crate::layout::fragmentation::FragmentationOptions;
@@ -95,6 +96,16 @@ thread_local! {
     /// Intrinsic sizing cache scoped per-thread so rayon fan-out does not require locking.
     static INTRINSIC_INLINE_CACHE: RefCell<HashMap<(usize, usize, IntrinsicSizingMode), (usize, f32)>> =
         RefCell::new(HashMap::new());
+}
+
+thread_local! {
+  /// Intrinsic block-size cache scoped per-thread so rayon fan-out does not require locking.
+  ///
+  /// This mirrors `INTRINSIC_INLINE_CACHE` but stores sizes in the block axis. The cache is
+  /// invalidated on the same epoch boundaries to keep intrinsic sizing consistent within a layout
+  /// run while remaining thread-local and contention free.
+  static INTRINSIC_BLOCK_CACHE: RefCell<HashMap<(usize, usize, IntrinsicSizingMode), (usize, f32)>> =
+    RefCell::new(HashMap::new());
 }
 
 thread_local! {
@@ -172,6 +183,7 @@ pub(crate) fn intrinsic_cache_store(node: &BoxNode, mode: IntrinsicSizingMode, v
 
 pub(crate) fn intrinsic_cache_clear() {
   INTRINSIC_INLINE_CACHE.with(|cache| cache.borrow_mut().clear());
+  INTRINSIC_BLOCK_CACHE.with(|cache| cache.borrow_mut().clear());
   clear_subgrid_cache();
 }
 
@@ -1073,8 +1085,51 @@ pub trait FormattingContext: Send + Sync {
     box_node: &BoxNode,
     mode: IntrinsicSizingMode,
   ) -> Result<f32, LayoutError> {
-    // Default to inline size for contexts that have symmetric handling.
-    self.compute_intrinsic_inline_size(box_node, mode)
+    if let Some(cached) = intrinsic_block_cache_lookup(box_node, mode) {
+      return Ok(cached);
+    }
+
+    // The intrinsic block-size depends on layout in the opposite axis. Mirror the intrinsic inline
+    // size probes by laying out the box with an intrinsic constraint in the inline axis and an
+    // indefinite constraint in the block axis, then returning the resulting border-box block size.
+    let inline_is_horizontal = crate::style::inline_axis_is_horizontal(box_node.style.writing_mode);
+    let intrinsic_inline_space = match mode {
+      IntrinsicSizingMode::MinContent => AvailableSpace::MinContent,
+      IntrinsicSizingMode::MaxContent => AvailableSpace::MaxContent,
+    };
+    let constraints = if inline_is_horizontal {
+      LayoutConstraints::new(intrinsic_inline_space, AvailableSpace::Indefinite)
+    } else {
+      LayoutConstraints::new(AvailableSpace::Indefinite, intrinsic_inline_space)
+    };
+    let fragment = self.layout(box_node, &constraints)?;
+    let block_size = if inline_is_horizontal {
+      fragment.bounds.height()
+    } else {
+      fragment.bounds.width()
+    };
+    intrinsic_block_cache_store(box_node, mode, block_size);
+    Ok(block_size)
+  }
+}
+
+pub(crate) fn intrinsic_block_cache_lookup(node: &BoxNode, mode: IntrinsicSizingMode) -> Option<f32> {
+  let epoch = CACHE_EPOCH.load(Ordering::Relaxed);
+  let key = cache_key(node, mode, epoch)?;
+  INTRINSIC_BLOCK_CACHE.with(|cache| {
+    cache
+      .borrow()
+      .get(&key)
+      .and_then(|(entry_epoch, value)| (*entry_epoch == epoch).then_some(*value))
+  })
+}
+
+pub(crate) fn intrinsic_block_cache_store(node: &BoxNode, mode: IntrinsicSizingMode, value: f32) {
+  let epoch = CACHE_EPOCH.load(Ordering::Relaxed);
+  if let Some(key) = cache_key(node, mode, epoch) {
+    INTRINSIC_BLOCK_CACHE.with(|cache| {
+      cache.borrow_mut().insert(key, (epoch, value));
+    });
   }
 }
 

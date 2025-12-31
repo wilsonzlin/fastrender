@@ -73,7 +73,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 #[cfg(test)]
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::cell::Cell;
 use std::sync::Arc;
 use taffy::geometry::Line;
 use taffy::prelude::TaffyFitContent;
@@ -181,11 +181,25 @@ fn push_measured_key(keys: &mut Vec<MeasureKey>, key: MeasureKey) {
 }
 
 #[cfg(test)]
-static GRID_MEASURE_LAYOUT_CALLS: AtomicUsize = AtomicUsize::new(0);
+thread_local! {
+  // Grid measure callbacks can be triggered during many unrelated tests. Keep the counter
+  // thread-local so tests can make assertions without racing other parallel test threads.
+  static GRID_MEASURE_LAYOUT_CALLS: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+fn reset_grid_measure_layout_calls() {
+  GRID_MEASURE_LAYOUT_CALLS.with(|counter| counter.set(0));
+}
+
+#[cfg(test)]
+fn grid_measure_layout_calls() -> usize {
+  GRID_MEASURE_LAYOUT_CALLS.with(|counter| counter.get())
+}
 
 #[cfg(test)]
 fn record_measure_layout_call() {
-  GRID_MEASURE_LAYOUT_CALLS.fetch_add(1, Ordering::Relaxed);
+  GRID_MEASURE_LAYOUT_CALLS.with(|counter| counter.set(counter.get() + 1));
 }
 
 #[cfg(not(test))]
@@ -419,17 +433,48 @@ impl GridFormattingContext {
     .unwrap_or(0.0)
   }
 
-  fn content_box_size(
+  fn resolved_padding_border_for_measure(
     &self,
-    fragment: &FragmentNode,
     style: &ComputedStyle,
     percentage_base: f32,
-  ) -> Size {
-    let padding_left = self.resolve_length_for_width(style.padding_left, percentage_base, style);
-    let padding_right = self.resolve_length_for_width(style.padding_right, percentage_base, style);
-    let padding_top = self.resolve_length_for_width(style.padding_top, percentage_base, style);
-    let padding_bottom =
+  ) -> (f32, f32, f32, f32, f32, f32, f32, f32) {
+    let mut padding_left = self.resolve_length_for_width(style.padding_left, percentage_base, style);
+    let mut padding_right =
+      self.resolve_length_for_width(style.padding_right, percentage_base, style);
+    let mut padding_top = self.resolve_length_for_width(style.padding_top, percentage_base, style);
+    let mut padding_bottom =
       self.resolve_length_for_width(style.padding_bottom, percentage_base, style);
+
+    // Reserve space for scrollbars when overflow/scrollbar-gutter request stable gutters. This
+    // mirrors the block formatting context behaviour so grid measurement returns the true content
+    // box size (excluding scrollbar gutters).
+    let reserve_vertical_gutter = matches!(style.overflow_y, CssOverflow::Scroll)
+      || (style.scrollbar_gutter.stable
+        && matches!(style.overflow_y, CssOverflow::Auto | CssOverflow::Scroll));
+    if reserve_vertical_gutter {
+      let gutter = resolve_scrollbar_width(style);
+      if gutter > 0.0 {
+        if style.scrollbar_gutter.both_edges {
+          padding_left += gutter;
+          padding_right += gutter;
+        } else {
+          padding_right += gutter;
+        }
+      }
+    }
+
+    let reserve_horizontal_gutter = matches!(style.overflow_x, CssOverflow::Scroll)
+      || (style.scrollbar_gutter.stable
+        && matches!(style.overflow_x, CssOverflow::Auto | CssOverflow::Scroll));
+    if reserve_horizontal_gutter {
+      let gutter = resolve_scrollbar_width(style);
+      if gutter > 0.0 {
+        if style.scrollbar_gutter.both_edges {
+          padding_top += gutter;
+        }
+        padding_bottom += gutter;
+      }
+    }
 
     let border_left =
       self.resolve_length_for_width(style.border_left_width, percentage_base, style);
@@ -438,6 +483,35 @@ impl GridFormattingContext {
     let border_top = self.resolve_length_for_width(style.border_top_width, percentage_base, style);
     let border_bottom =
       self.resolve_length_for_width(style.border_bottom_width, percentage_base, style);
+
+    (
+      padding_left,
+      padding_right,
+      padding_top,
+      padding_bottom,
+      border_left,
+      border_right,
+      border_top,
+      border_bottom,
+    )
+  }
+
+  fn content_box_size(
+    &self,
+    fragment: &FragmentNode,
+    style: &ComputedStyle,
+    percentage_base: f32,
+  ) -> Size {
+    let (
+      padding_left,
+      padding_right,
+      padding_top,
+      padding_bottom,
+      border_left,
+      border_right,
+      border_top,
+      border_bottom,
+    ) = self.resolved_padding_border_for_measure(style, percentage_base);
 
     let content_width =
       (fragment.bounds.width() - padding_left - padding_right - border_left - border_right)
@@ -2154,49 +2228,67 @@ impl GridFormattingContext {
 
     // Taffy frequently probes min/max-content sizes during track sizing.
     // Avoid running full layout for these probes; use intrinsic sizing APIs instead.
+    let mut intrinsic_width: Option<f32> = None;
     if known_dimensions.width.is_none() {
-      let intrinsic_mode = match available_space.width {
-        taffy::style::AvailableSpace::MinContent => Some(IntrinsicSizingMode::MinContent),
-        taffy::style::AvailableSpace::MaxContent => Some(IntrinsicSizingMode::MaxContent),
+      intrinsic_width = match available_space.width {
+        taffy::style::AvailableSpace::MinContent => Some(
+          fc.compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MinContent)
+            .unwrap_or(0.0),
+        ),
+        taffy::style::AvailableSpace::MaxContent => Some(
+          fc.compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MaxContent)
+            .unwrap_or(0.0),
+        ),
         _ => None,
       };
-      if let Some(mode) = intrinsic_mode {
-        let border_width = fc
-          .compute_intrinsic_inline_size(box_node, mode)
-          .unwrap_or(0.0);
-        let percentage_base = match available_space.width {
-          taffy::style::AvailableSpace::Definite(w) => w,
-          _ => parent_inline_base.unwrap_or(0.0),
-        };
-        let padding_left = self.resolve_length_for_width(
-          box_node.style.padding_left,
-          percentage_base,
-          &box_node.style,
-        );
-        let padding_right = self.resolve_length_for_width(
-          box_node.style.padding_right,
-          percentage_base,
-          &box_node.style,
-        );
-        let border_left = self.resolve_length_for_width(
-          box_node.style.border_left_width,
-          percentage_base,
-          &box_node.style,
-        );
-        let border_right = self.resolve_length_for_width(
-          box_node.style.border_right_width,
-          percentage_base,
-          &box_node.style,
-        );
-        let edges_inline = padding_left + padding_right + border_left + border_right;
-        let width = (border_width - edges_inline).max(0.0);
-        let size = taffy::geometry::Size {
-          width,
-          height: fallback_size(known_dimensions.height, available_space.height).max(0.0),
-        };
-        measure_cache.borrow_mut().insert(key, size);
-        return size;
-      }
+    }
+
+    let mut intrinsic_height: Option<f32> = None;
+    if known_dimensions.height.is_none() {
+      intrinsic_height = match available_space.height {
+        taffy::style::AvailableSpace::MinContent => Some(
+          fc.compute_intrinsic_block_size(box_node, IntrinsicSizingMode::MinContent)
+            .unwrap_or(0.0),
+        ),
+        taffy::style::AvailableSpace::MaxContent => Some(
+          fc.compute_intrinsic_block_size(box_node, IntrinsicSizingMode::MaxContent)
+            .unwrap_or(0.0),
+        ),
+        _ => None,
+      };
+    }
+
+    if intrinsic_width.is_some() || intrinsic_height.is_some() {
+      let percentage_base = match available_space.width {
+        taffy::style::AvailableSpace::Definite(w) => w,
+        _ => parent_inline_base.unwrap_or(0.0),
+      };
+      let (
+        padding_left,
+        padding_right,
+        padding_top,
+        padding_bottom,
+        border_left,
+        border_right,
+        border_top,
+        border_bottom,
+      ) = self.resolved_padding_border_for_measure(&box_node.style, percentage_base);
+
+      let width = intrinsic_width
+        .map(|border_width| {
+          (border_width - padding_left - padding_right - border_left - border_right).max(0.0)
+        })
+        .unwrap_or_else(|| fallback_size(known_dimensions.width, available_space.width).max(0.0));
+
+      let height = intrinsic_height
+        .map(|border_height| {
+          (border_height - padding_top - padding_bottom - border_top - border_bottom).max(0.0)
+        })
+        .unwrap_or_else(|| fallback_size(known_dimensions.height, available_space.height).max(0.0));
+
+      let size = taffy::geometry::Size { width, height };
+      measure_cache.borrow_mut().insert(key, size);
+      return size;
     }
 
     let mut constraints = constraints_from_taffy(
@@ -3199,6 +3291,7 @@ mod tests {
   use crate::style::types::Overflow;
   use crate::style::types::ScrollbarWidth;
   use crate::style::types::WritingMode;
+  use crate::tree::box_tree::BoxTree;
   use std::collections::HashMap;
   use std::sync::Arc;
 
@@ -3344,7 +3437,6 @@ mod tests {
 
   #[test]
   fn grid_measure_quantization_limits_layout_calls() {
-    use std::sync::atomic::Ordering;
     use taffy::style::AvailableSpace;
 
     let gc = GridFormattingContext::new();
@@ -3361,7 +3453,7 @@ mod tests {
     let measured_node_keys: Rc<RefCell<HashMap<TaffyNodeId, Vec<MeasureKey>>>> =
       Rc::new(RefCell::new(HashMap::new()));
 
-    GRID_MEASURE_LAYOUT_CALLS.store(0, Ordering::SeqCst);
+    reset_grid_measure_layout_calls();
 
     let known = taffy::geometry::Size {
       width: None,
@@ -3399,11 +3491,153 @@ mod tests {
       }
     }
 
-    let calls = GRID_MEASURE_LAYOUT_CALLS.load(Ordering::SeqCst);
+    let calls = grid_measure_layout_calls();
     assert!(
       calls > 0 && calls <= nodes.len() * 3,
       "quantized keys should coalesce near-identical probes (calls={calls})"
     );
+  }
+
+  #[test]
+  fn measure_grid_item_short_circuits_min_content_height_probes() {
+    use taffy::style::AvailableSpace;
+
+    reset_grid_measure_layout_calls();
+
+    let gc = GridFormattingContext::new();
+    let factory =
+      crate::layout::contexts::factory::FormattingContextFactory::with_font_context_viewport_and_cb(
+        gc.font_context.clone(),
+        gc.viewport_size,
+        gc.nearest_positioned_cb,
+      );
+    let measure_cache: Rc<RefCell<HashMap<MeasureKey, taffy::geometry::Size<f32>>>> =
+      Rc::new(RefCell::new(HashMap::new()));
+    let measured_fragments: Rc<RefCell<HashMap<MeasureKey, FragmentNode>>> =
+      Rc::new(RefCell::new(HashMap::new()));
+    let measured_node_keys: Rc<RefCell<HashMap<TaffyNodeId, Vec<MeasureKey>>>> =
+      Rc::new(RefCell::new(HashMap::new()));
+
+    let mut node = make_text_item("hello world", 16.0);
+    node.id = 1;
+    let node_ptr = &node as *const _;
+
+    let size = gc.measure_grid_item(
+      node_ptr,
+      TaffyNodeId::from(1u64),
+      taffy::geometry::Size {
+        width: Some(200.0),
+        height: None,
+      },
+      taffy::geometry::Size {
+        width: AvailableSpace::Definite(200.0),
+        height: AvailableSpace::MinContent,
+      },
+      Some(200.0),
+      AlignItems::Stretch,
+      &factory,
+      &measure_cache,
+      &measured_fragments,
+      &measured_node_keys,
+    );
+
+    assert!(
+      size.height > 0.0,
+      "min-content height probe should return a non-zero intrinsic height"
+    );
+    assert_eq!(
+      grid_measure_layout_calls(),
+      0,
+      "min-content height probe should not require full layout"
+    );
+  }
+
+  #[test]
+  fn measure_grid_item_short_circuits_max_content_height_probes() {
+    use taffy::style::AvailableSpace;
+
+    reset_grid_measure_layout_calls();
+
+    let gc = GridFormattingContext::new();
+    let factory =
+      crate::layout::contexts::factory::FormattingContextFactory::with_font_context_viewport_and_cb(
+        gc.font_context.clone(),
+        gc.viewport_size,
+        gc.nearest_positioned_cb,
+      );
+    let measure_cache: Rc<RefCell<HashMap<MeasureKey, taffy::geometry::Size<f32>>>> =
+      Rc::new(RefCell::new(HashMap::new()));
+    let measured_fragments: Rc<RefCell<HashMap<MeasureKey, FragmentNode>>> =
+      Rc::new(RefCell::new(HashMap::new()));
+    let measured_node_keys: Rc<RefCell<HashMap<TaffyNodeId, Vec<MeasureKey>>>> =
+      Rc::new(RefCell::new(HashMap::new()));
+
+    let mut node = make_text_item("hello world", 16.0);
+    node.id = 1;
+    let node_ptr = &node as *const _;
+
+    let size = gc.measure_grid_item(
+      node_ptr,
+      TaffyNodeId::from(1u64),
+      taffy::geometry::Size {
+        width: Some(200.0),
+        height: None,
+      },
+      taffy::geometry::Size {
+        width: AvailableSpace::Definite(200.0),
+        height: AvailableSpace::MaxContent,
+      },
+      Some(200.0),
+      AlignItems::Stretch,
+      &factory,
+      &measure_cache,
+      &measured_fragments,
+      &measured_node_keys,
+    );
+
+    assert!(
+      size.height > 0.0,
+      "max-content height probe should return a non-zero intrinsic height"
+    );
+    assert_eq!(
+      grid_measure_layout_calls(),
+      0,
+      "max-content height probe should not require full layout"
+    );
+  }
+
+  #[test]
+  fn grid_auto_rows_min_and_max_content_measure_text_height() {
+    let gc = GridFormattingContext::new();
+    let constraints = LayoutConstraints::definite_width(320.0);
+
+    for (track, label) in [
+      (GridTrack::MinContent, "min-content"),
+      (GridTrack::MaxContent, "max-content"),
+    ] {
+      let mut grid_style = ComputedStyle::default();
+      grid_style.display = CssDisplay::Grid;
+      grid_style.grid_auto_rows = vec![track];
+      let grid_style = Arc::new(grid_style);
+
+      let item = make_text_item(
+        "This grid item should contribute a non-zero intrinsic height",
+        16.0,
+      );
+
+      let tree = BoxTree::new(BoxNode::new_block(
+        grid_style,
+        FormattingContextType::Grid,
+        vec![item],
+      ));
+
+      let fragment = gc.layout(&tree.root, &constraints).expect("grid layout");
+      assert_eq!(fragment.children.len(), 1);
+      assert!(
+        fragment.children[0].bounds.height() > 0.0,
+        "{label} auto row should be sized from inline text height"
+      );
+    }
   }
 
   #[test]

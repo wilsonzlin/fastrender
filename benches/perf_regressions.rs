@@ -7,6 +7,7 @@ use fastrender::layout::fragmentation::{fragment_tree, FragmentationOptions};
 use fastrender::layout::table::{TableFormattingContext, TableStructure};
 use fastrender::style::display::Display;
 use fastrender::style::types::BorderCollapse;
+use fastrender::style::types::GridTrack;
 use fastrender::tree::fragment_tree::FragmentNode;
 use fastrender::{
   BoxNode, BoxTree, ComputedStyle, FormattingContextFactory, FormattingContextType, LayoutConfig,
@@ -17,6 +18,9 @@ mod common;
 
 const FLEX_TEXT: &str =
   "FastRender should reuse shaped text for repeated carousels instead of reshaping every item.";
+
+const GRID_INTRINSIC_TEXT: &str =
+  "Grid track sizing should avoid repeated full layout during intrinsic measurement.";
 
 fn flex_text_tree(item_count: usize) -> BoxTree {
   let mut flex_style = ComputedStyle::default();
@@ -43,6 +47,36 @@ fn flex_text_tree(item_count: usize) -> BoxTree {
   }
 
   let root = BoxNode::new_block(flex_style, FormattingContextType::Flex, children);
+  BoxTree::new(root)
+}
+
+fn grid_intrinsic_sizing_tree(item_count: usize, columns: usize) -> BoxTree {
+  let mut grid_style = ComputedStyle::default();
+  grid_style.display = Display::Grid;
+  grid_style.grid_template_columns = vec![GridTrack::MinContent; columns];
+  grid_style.grid_auto_rows = vec![GridTrack::MinContent];
+  let grid_style = Arc::new(grid_style);
+  let block_style = Arc::new(ComputedStyle::default());
+  let inline_style = Arc::new(ComputedStyle::default());
+  let text_style = Arc::new(ComputedStyle::default());
+
+  let mut children = Vec::with_capacity(item_count);
+  for idx in 0..item_count {
+    let text = format!("Item {}: {} {}", idx, GRID_INTRINSIC_TEXT, GRID_INTRINSIC_TEXT);
+    let text_node = BoxNode::new_text(text_style.clone(), text);
+    let inline = BoxNode::new_block(
+      inline_style.clone(),
+      FormattingContextType::Inline,
+      vec![text_node],
+    );
+    children.push(BoxNode::new_block(
+      block_style.clone(),
+      FormattingContextType::Block,
+      vec![inline],
+    ));
+  }
+
+  let root = BoxNode::new_block(grid_style, FormattingContextType::Grid, children);
   BoxTree::new(root)
 }
 
@@ -236,9 +270,13 @@ fn bench_layout_grid(c: &mut Criterion) {
   let box_tree = common::box_tree_from_styled(&styled);
   let font_ctx = common::fixed_font_context();
   let engine = common::layout_engine(viewport, &font_ctx);
+  let intrinsic_tree = grid_intrinsic_sizing_tree(256, 16);
 
   group.bench_function("grid_template", |b| {
     b.iter(|| engine.layout_tree(black_box(&box_tree)).unwrap())
+  });
+  group.bench_function("grid_intrinsic_track_sizing", |b| {
+    b.iter(|| engine.layout_tree(black_box(&intrinsic_tree)).unwrap())
   });
 
   group.finish();
