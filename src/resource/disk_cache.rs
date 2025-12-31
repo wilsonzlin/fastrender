@@ -76,6 +76,8 @@ const LOCK_RETRY_DELAY: Duration = Duration::from_millis(10);
 const READ_LOCK_WAIT_TIMEOUT: Duration = Duration::from_millis(200);
 const READ_LOCK_RETRY_INITIAL_DELAY: Duration = Duration::from_millis(5);
 const READ_LOCK_RETRY_MAX_DELAY: Duration = Duration::from_millis(50);
+/// Small time buffer to avoid spending the entire render budget waiting on `.lock` files.
+const LOCK_DEADLINE_BUFFER: Duration = Duration::from_millis(10);
 
 #[derive(Debug, Serialize, Deserialize)]
 struct LockFileContents {
@@ -305,11 +307,15 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     let Some(deadline) = render_control::active_deadline() else {
       return desired;
     };
-    if deadline.timeout_limit().is_some() {
-      desired.min(deadline.remaining_timeout().unwrap_or_default())
-    } else {
-      desired
+    if deadline.timeout_limit().is_none() {
+      return desired;
     }
+    desired.min(
+      deadline
+        .remaining_timeout()
+        .unwrap_or_default()
+        .saturating_sub(LOCK_DEADLINE_BUFFER),
+    )
   }
 
   fn wait_for_unlock(&self, data_path: &Path, max_wait: Duration) -> bool {
