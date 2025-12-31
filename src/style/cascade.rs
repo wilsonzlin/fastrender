@@ -1024,6 +1024,152 @@ fn record_pseudo_time(elapsed: std::time::Duration) {
   }
 }
 
+fn pack_ancestor_bloom_hashes(hashes: &[u32]) -> AncestorHashes {
+  debug_assert!(hashes.len() <= 4);
+  let mut packed = [0u32; 3];
+  packed[0] = *hashes.get(0).unwrap_or(&0);
+  packed[1] = *hashes.get(1).unwrap_or(&0);
+  packed[2] = *hashes.get(2).unwrap_or(&0);
+  if hashes.len() == 4 {
+    // Pack the fourth hash into the upper byte of each of the first three hashes, matching the
+    // layout used by `selectors::parser::AncestorHashes`.
+    let fourth = hashes[3];
+    packed[0] |= (fourth & 0x000000ff) << 24;
+    packed[1] |= (fourth & 0x0000ff00) << 16;
+    packed[2] |= (fourth & 0x00ff0000) << 8;
+  }
+  AncestorHashes { packed_hashes: packed }
+}
+
+fn cascade_ancestor_hashes(selector: &Selector<FastRenderSelectorImpl>, quirks_mode: QuirksMode) -> AncestorHashes {
+  use precomputed_hash::PrecomputedHash;
+  use selectors::bloom::BLOOM_HASH_MASK;
+  use selectors::parser::Combinator;
+  use selectors::parser::Component;
+
+  fn for_each_hash<F: FnMut(u32)>(
+    selector: &Selector<FastRenderSelectorImpl>,
+    quirks_mode: QuirksMode,
+    add: &mut F,
+  ) {
+    let mut iter = selector.iter();
+
+    // Skip the rightmost (subject) sequence and any sibling-only sequences until we reach the
+    // first ancestor combinator (child/descendant). This matches the logic used by
+    // `selectors::parser::AncestorHashes`.
+    loop {
+      while iter.next().is_some() {}
+      match iter.next_sequence() {
+        Some(combinator) if matches!(combinator, Combinator::Child | Combinator::Descendant) => break,
+        Some(_) => continue,
+        None => return,
+      }
+    }
+
+    loop {
+      while let Some(component) = iter.next() {
+        match component {
+          Component::LocalName(local) => {
+            if local.name != local.lower_name {
+              continue;
+            }
+            add(local.name.precomputed_hash() & BLOOM_HASH_MASK);
+          }
+          Component::DefaultNamespace(url) | Component::Namespace(_, url) => {
+            add(url.precomputed_hash() & BLOOM_HASH_MASK);
+          }
+          Component::ID(id) if quirks_mode != QuirksMode::Quirks => {
+            add(id.precomputed_hash() & BLOOM_HASH_MASK);
+          }
+          Component::Class(class) if quirks_mode != QuirksMode::Quirks => {
+            add(class.precomputed_hash() & BLOOM_HASH_MASK);
+          }
+          Component::AttributeInNoNamespace { local_name, .. } => {
+            if <FastRenderSelectorImpl as selectors::parser::SelectorImpl>::should_collect_attr_hash(
+              local_name,
+            ) {
+              add(local_name.precomputed_hash() & BLOOM_HASH_MASK);
+            }
+          }
+          Component::AttributeInNoNamespaceExists {
+            local_name,
+            local_name_lower,
+            ..
+          } => {
+            if local_name == local_name_lower
+              && <FastRenderSelectorImpl as selectors::parser::SelectorImpl>::should_collect_attr_hash(
+                local_name,
+              )
+            {
+              add(local_name.precomputed_hash() & BLOOM_HASH_MASK);
+            }
+          }
+          Component::AttributeOther(attr) => {
+            if attr.local_name == attr.local_name_lower
+              && <FastRenderSelectorImpl as selectors::parser::SelectorImpl>::should_collect_attr_hash(
+                &attr.local_name,
+              )
+            {
+              add(attr.local_name.precomputed_hash() & BLOOM_HASH_MASK);
+            }
+          }
+          Component::Is(list) | Component::Where(list) => {
+            // :is() and :where() are OR selectors. Only descend when there is exactly one selector
+            // so the nested selector doesn't introduce additional optional branches.
+            let slice = list.slice();
+            if slice.len() == 1 {
+              for_each_hash(&slice[0], quirks_mode, add);
+            }
+          }
+          _ => {}
+        }
+      }
+
+      let Some(combinator) = iter.next_sequence() else {
+        break;
+      };
+      if !matches!(combinator, Combinator::Child | Combinator::Descendant) {
+        // Skip sequences connected via non-ancestor combinators (siblings, pseudo-elements, slot
+        // assignments, etc) until we reach the next ancestor combinator.
+        loop {
+          while iter.next().is_some() {}
+          match iter.next_sequence() {
+            Some(combinator) if matches!(combinator, Combinator::Child | Combinator::Descendant) => {
+              break;
+            }
+            Some(_) => continue,
+            None => return,
+          }
+        }
+      }
+    }
+  }
+
+  // The upstream `AncestorHashes` stores at most four hashes. For long descendant chains this can
+  // miss far-left ancestor requirements (e.g. shadow-boundary "outer" selectors) and reduce bloom
+  // fast-reject effectiveness. Keep the first three (closest) hashes and use the farthest hash as
+  // the fourth when more than four are available.
+  let mut first_three = [0u32; 3];
+  let mut first_len = 0usize;
+  let mut total = 0usize;
+  let mut farthest = 0u32;
+
+  for_each_hash(selector, quirks_mode, &mut |hash| {
+    total = total.saturating_add(1);
+    if first_len < 3 {
+      first_three[first_len] = hash;
+      first_len += 1;
+    }
+    farthest = hash;
+  });
+
+  match total {
+    0 => pack_ancestor_bloom_hashes(&[]),
+    1..=3 => pack_ancestor_bloom_hashes(&first_three[..total]),
+    _ => pack_ancestor_bloom_hashes(&[first_three[0], first_three[1], first_three[2], farthest]),
+  }
+}
+
 #[inline(always)]
 fn matches_selector_cascade(
   selector: &Selector<FastRenderSelectorImpl>,
@@ -1038,7 +1184,7 @@ fn matches_selector_cascade(
     let hashes = if hashes.is_some() || context.bloom_filter.is_none() {
       hashes
     } else {
-      computed_hashes = AncestorHashes::new(selector, context.quirks_mode());
+      computed_hashes = cascade_ancestor_hashes(selector, context.quirks_mode());
       Some(&computed_hashes)
     };
 
@@ -1059,7 +1205,7 @@ fn matches_selector_cascade(
   let hashes = if hashes.is_some() || context.bloom_filter.is_none() {
     hashes
   } else {
-    computed_hashes = AncestorHashes::new(selector, context.quirks_mode());
+    computed_hashes = cascade_ancestor_hashes(selector, context.quirks_mode());
     Some(&computed_hashes)
   };
 
@@ -2961,11 +3107,11 @@ impl<'a> RuleIndex<'a> {
             let prelude = parse_slotted_prelude(selector);
             let prelude_specificity = prelude.as_ref().map(|sel| sel.specificity()).unwrap_or(0);
             let prelude_ancestor_hashes =
-              prelude.as_ref().map(|sel| AncestorHashes::new(sel, quirks_mode));
+              prelude.as_ref().map(|sel| cascade_ancestor_hashes(sel, quirks_mode));
             let args_ancestor_hashes = match pe {
               PseudoElement::Slotted(args) => args
                 .iter()
-                .map(|sel| AncestorHashes::new(sel, quirks_mode))
+                .map(|sel| cascade_ancestor_hashes(sel, quirks_mode))
                 .collect(),
               _ => Vec::new(),
             };
@@ -3033,7 +3179,7 @@ impl<'a> RuleIndex<'a> {
           {
             index.has_has_requirements = true;
           }
-          let ancestor_hashes = AncestorHashes::new(selector, quirks_mode);
+          let ancestor_hashes = cascade_ancestor_hashes(selector, quirks_mode);
           index.pseudo_selectors.push(IndexedSelector {
             rule_idx,
             selector,
@@ -3064,7 +3210,7 @@ impl<'a> RuleIndex<'a> {
         {
           index.has_has_requirements = true;
         }
-        let ancestor_hashes = AncestorHashes::new(selector, quirks_mode);
+        let ancestor_hashes = cascade_ancestor_hashes(selector, quirks_mode);
         index.selectors.push(IndexedSelector {
           rule_idx,
           selector,
@@ -14335,10 +14481,10 @@ fn resolve_scopes<'a>(
         }
         let candidate_ref = ElementRef::with_ancestors(candidate, &ancestors[..idx]);
         let matches = context.nest_for_scope_condition(Some(base_ref.opaque()), |ctx| {
-          start_selectors
-            .iter()
-            .any(|sel| {
-              let hashes = AncestorHashes::new(sel, ctx.quirks_mode());
+            start_selectors
+              .iter()
+              .any(|sel| {
+              let hashes = cascade_ancestor_hashes(sel, ctx.quirks_mode());
               matches_selector_cascade(sel, Some(&hashes), &candidate_ref, ctx)
             })
         });
@@ -14370,10 +14516,10 @@ fn resolve_scopes<'a>(
         }
         let candidate_ref = ElementRef::with_ancestors(candidate, &ancestors[..idx]);
         let blocked = context.nest_for_scope_condition(Some(scope_ref.opaque()), |ctx| {
-          limit_selectors
-            .iter()
-            .any(|sel| {
-              let hashes = AncestorHashes::new(sel, ctx.quirks_mode());
+            limit_selectors
+              .iter()
+              .any(|sel| {
+              let hashes = cascade_ancestor_hashes(sel, ctx.quirks_mode());
               matches_selector_cascade(sel, Some(&hashes), &candidate_ref, ctx)
             })
         });
@@ -14608,10 +14754,13 @@ fn find_matching_rules<'a>(
               let scope_ref = ElementRef::with_ancestors(root, root_ancestors);
               match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
                 ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
-                  ctx.with_featureless(false, |ctx| {
-                    // `:host-context()` selectors are allowed to match outside the shadow tree, so
-                    // the shadow-scoped bloom filter may be missing required outer-ancestor hashes.
-                    // Disable bloom fast-reject for this retry to avoid false negatives.
+                  ctx.with_allow_featureless_host_traversal(true, |ctx| {
+                    // `:host-context()` selectors are allowed to match outside the shadow tree.
+                    //
+                    // 1. A shadow host is normally treated as "featureless", which prevents
+                    //    matching further ancestor combinators. Enable traversal for this retry.
+                    // 2. The shadow-scoped bloom filter may be missing required outer-ancestor
+                    //    hashes, so disable bloom fast-reject to avoid false negatives.
                     let prev_bloom_filter = ctx.bloom_filter;
                     ctx.bloom_filter = None;
                     let matched = matches_selector_cascade(
@@ -14628,7 +14777,7 @@ fn find_matching_rules<'a>(
             }
             ScopeMatchResult::Unscoped => {
               match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
-                ctx.with_featureless(false, |ctx| {
+                ctx.with_allow_featureless_host_traversal(true, |ctx| {
                   let prev_bloom_filter = ctx.bloom_filter;
                   ctx.bloom_filter = None;
                   let matched =
@@ -15085,7 +15234,7 @@ fn find_pseudo_element_rules<'a>(
           let scope_ref = ElementRef::with_ancestors(root, root_ancestors);
           match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
             ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
-              ctx.with_featureless(false, |ctx| {
+              ctx.with_allow_featureless_host_traversal(true, |ctx| {
                 let prev_bloom_filter = ctx.bloom_filter;
                 ctx.bloom_filter = None;
                 let matched = matches_selector_cascade(
@@ -15102,7 +15251,7 @@ fn find_pseudo_element_rules<'a>(
         }
         ScopeMatchResult::Unscoped => {
           match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
-            ctx.with_featureless(false, |ctx| {
+            ctx.with_allow_featureless_host_traversal(true, |ctx| {
               let prev_bloom_filter = ctx.bloom_filter;
               ctx.bloom_filter = None;
               let matched =

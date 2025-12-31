@@ -203,6 +203,14 @@ where
     /// Whether we're currently matching a featureless element.
     pub featureless: bool,
 
+    /// Whether a featureless element (e.g. a shadow host reached after crossing a shadow boundary)
+    /// is allowed to match further ancestor combinators.
+    ///
+    /// Normally, featureless elements act as a hard boundary to enforce selector scoping across
+    /// shadow roots. Some consumers (like fastrender) need to selectively relax this for
+    /// `:host-context()` selectors, which are allowed to evaluate outer ancestors.
+    allow_featureless_host_traversal: bool,
+
     /// The current nesting level of selectors that we're matching.
     nesting_level: usize,
 
@@ -281,6 +289,7 @@ where
             scope_element: None,
             current_host: None,
             featureless: false,
+            allow_featureless_host_traversal: false,
             nesting_level: 0,
             in_negation: false,
             pseudo_element_matching_fn: None,
@@ -423,6 +432,28 @@ where
     #[inline]
     pub fn featureless(&self) -> bool {
         self.featureless
+    }
+
+    /// Runs F with a different "allow traversal beyond featureless host" flag.
+    ///
+    /// When enabled, a featureless element is still treated as featureless for the purposes of
+    /// simple selector matching (so normal selectors like `.foo` don't suddenly match the shadow
+    /// host), but it is not treated as a hard stop for further ancestor combinators.
+    #[inline]
+    pub fn with_allow_featureless_host_traversal<F, R>(&mut self, allow: bool, f: F) -> R
+    where
+        F: FnOnce(&mut Self) -> R,
+    {
+        let orig = self.allow_featureless_host_traversal;
+        self.allow_featureless_host_traversal = allow;
+        let result = f(self);
+        self.allow_featureless_host_traversal = orig;
+        result
+    }
+
+    #[inline]
+    pub fn allow_featureless_host_traversal(&self) -> bool {
+        self.allow_featureless_host_traversal
     }
 
     /// Runs F with a different VisitedHandlingMode.

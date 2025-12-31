@@ -856,7 +856,8 @@ where
     };
 
     let is_pseudo_combinator = combinator.is_pseudo_element();
-    if context.featureless() && !is_pseudo_combinator {
+    if context.featureless() && !is_pseudo_combinator && !context.allow_featureless_host_traversal()
+    {
         // A featureless element shouldn't match any further combinator.
         // TODO(emilio): Maybe we could avoid the compound matching more eagerly.
         return SelectorMatchingResult::NotMatchedGlobally;
