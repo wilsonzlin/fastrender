@@ -34,7 +34,9 @@ mod disk_cache_main {
   use std::sync::Arc;
 
   use crate::common::args::{parse_shard, DiskCacheArgs, TimeoutArgs};
-  use crate::common::render_pipeline::{build_http_fetcher, read_cached_document};
+  use crate::common::render_pipeline::{
+    build_http_fetcher, disk_cache_namespace, read_cached_document,
+  };
 
   const DEFAULT_ASSET_DIR: &str = "fetches/assets";
 
@@ -334,6 +336,11 @@ mod disk_cache_main {
     }
 
     let http = build_http_fetcher(DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE, timeout_secs);
+    let mut disk_config = args.disk_cache.to_config();
+    disk_config.namespace = Some(disk_cache_namespace(
+      DEFAULT_USER_AGENT,
+      DEFAULT_ACCEPT_LANGUAGE,
+    ));
     let fetcher: Arc<dyn ResourceFetcher> = Arc::new(DiskCachingFetcher::with_configs(
       http,
       args.cache_dir.clone(),
@@ -341,7 +348,7 @@ mod disk_cache_main {
         honor_http_cache_freshness: true,
         ..CachingFetcherConfig::default()
       },
-      args.disk_cache.to_config(),
+      disk_config,
     ));
 
     println!(
