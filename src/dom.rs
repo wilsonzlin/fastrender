@@ -878,6 +878,7 @@ struct ElementAttrCacheEntry {
   id: Option<*const str>,
   class: CachedClassTokens,
   attr_index: CachedAttrIndex,
+  ancestor_bloom_hashes: Option<Box<[u32]>>,
 }
 
 impl ElementAttrCacheEntry {
@@ -913,6 +914,7 @@ impl ElementAttrCacheEntry {
       id,
       class,
       attr_index: CachedAttrIndex::Pending,
+      ancestor_bloom_hashes: None,
     }
   }
 
@@ -1152,6 +1154,25 @@ impl ElementAttrCache {
     RefMut::map(self.entries.borrow_mut(), |entries| {
       entries.entry(ptr).or_insert_with(|| ElementAttrCacheEntry::new(node))
     })
+  }
+
+  pub fn for_each_ancestor_bloom_hash(
+    &self,
+    node: &DomNode,
+    quirks_mode: QuirksMode,
+    mut add: impl FnMut(u32),
+  ) {
+    let mut entry = self.entry_mut(node);
+    if entry.ancestor_bloom_hashes.is_none() {
+      let mut hashes = Vec::new();
+      for_each_ancestor_bloom_hash(node, quirks_mode, |hash| hashes.push(hash));
+      entry.ancestor_bloom_hashes = Some(hashes.into_boxed_slice());
+    }
+    if let Some(hashes) = entry.ancestor_bloom_hashes.as_deref() {
+      for &hash in hashes {
+        add(hash);
+      }
+    }
   }
 
   pub fn has_id(&self, node: &DomNode, id: &str, case_sensitivity: CaseSensitivity) -> bool {

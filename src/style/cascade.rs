@@ -31,7 +31,6 @@ use crate::dom::ancestor_bloom_enabled;
 use crate::dom::build_selector_bloom_store;
 use crate::dom::compute_slot_assignment_with_ids;
 use crate::dom::enumerate_dom_ids;
-use crate::dom::for_each_ancestor_bloom_hash;
 use crate::dom::next_selector_cache_epoch;
 use crate::dom::parse_exportparts;
 use crate::dom::reset_has_counters;
@@ -6753,7 +6752,7 @@ fn apply_styles_internal_with_ancestors<'a>(
   if push_ancestor_bloom {
     #[cfg(test)]
     ANCESTOR_BLOOM_HASH_INSERTS.with(|counter| counter.set(counter.get().saturating_add(1)));
-    for_each_ancestor_bloom_hash(node, rule_scopes.quirks_mode, |hash| {
+    element_attr_cache.for_each_ancestor_bloom_hash(node, rule_scopes.quirks_mode, |hash| {
       ancestor_bloom_filter.insert_hash(hash);
     });
   }
@@ -6899,7 +6898,7 @@ fn apply_styles_internal_with_ancestors<'a>(
       if child_push_ancestor_bloom {
         #[cfg(test)]
         ANCESTOR_BLOOM_HASH_INSERTS.with(|counter| counter.set(counter.get().saturating_add(1)));
-        for_each_ancestor_bloom_hash(child, rule_scopes.quirks_mode, |hash| {
+        element_attr_cache.for_each_ancestor_bloom_hash(child, rule_scopes.quirks_mode, |hash| {
           ancestor_bloom_filter.insert_hash(hash);
         });
       }
@@ -6916,7 +6915,7 @@ fn apply_styles_internal_with_ancestors<'a>(
       .expect("style traversal stack must contain at least one frame");
 
     if frame.push_ancestor_bloom {
-      for_each_ancestor_bloom_hash(frame.node, rule_scopes.quirks_mode, |hash| {
+      element_attr_cache.for_each_ancestor_bloom_hash(frame.node, rule_scopes.quirks_mode, |hash| {
         ancestor_bloom_filter.remove_hash(hash);
       });
     }
