@@ -138,16 +138,11 @@ use crate::resource::{
 use crate::scroll::ScrollState;
 use crate::style::cascade::apply_starting_style_set_with_media_target_and_imports_cached_with_deadline;
 use crate::style::cascade::apply_style_set_with_media_target_and_imports_cached;
-use crate::style::cascade::apply_style_set_with_media_target_and_imports_cached_with_deadline;
 use crate::style::cascade::attach_starting_styles;
 use crate::style::cascade::ContainerQueryContext;
 use crate::style::cascade::ContainerQueryInfo;
+use crate::style::cascade::PreparedCascade;
 use crate::style::cascade::StyledNode;
-#[cfg(test)]
-use crate::style::cascade::{
-  apply_styles_with_media_target_and_imports, apply_styles_with_media_target_and_imports_cached,
-  apply_styles_with_media_target_and_imports_cached_with_deadline,
-};
 use crate::style::color::Rgba;
 use crate::style::media::MediaType;
 use crate::style::media::{MediaContext, MediaQuery, MediaQueryCache};
@@ -5692,21 +5687,19 @@ impl FastRender {
     let cascade_timer = stats.as_deref().and_then(|rec| rec.timer());
     let style_apply_start = timings_enabled.then(Instant::now);
     record_stage(StageHeartbeat::Cascade);
-    let mut styled_tree = {
+    let (mut prepared_cascade, mut styled_tree) = {
       let _span = trace.span("cascade", "style");
-      apply_style_set_with_media_target_and_imports_cached_with_deadline(
+      let mut prepared = PreparedCascade::new_for_style_set(
         &dom_with_state,
         &style_set,
         &media_ctx,
-        target_fragment.as_deref(),
-        None,
-        None,
-        None,
         None,
         None,
         Some(&mut media_query_cache),
-        deadline,
-      )?
+        false,
+      )?;
+      let styled_tree = prepared.apply(target_fragment.as_deref(), None, None, None, deadline)?;
+      (prepared, styled_tree)
     };
     if options.animation_time.is_some() && stylesheet.has_starting_style_rules() {
       if let Ok(starting_tree) =
@@ -6137,17 +6130,11 @@ impl FastRender {
 
         let container_cascade_timer = stats.as_deref().and_then(|rec| rec.timer());
         record_stage(StageHeartbeat::Cascade);
-        let new_styled_tree = apply_style_set_with_media_target_and_imports_cached_with_deadline(
-          &dom_with_state,
-          &style_set,
-          &media_ctx,
+        let new_styled_tree = prepared_cascade.apply(
           target_fragment.as_deref(),
-          None,
-          None::<&str>,
           Some(&container_ctx),
           Some(&container_scope),
           Some(&reuse_map),
-          Some(&mut media_query_cache),
           deadline,
         )?;
         svg_filter_defs = crate::tree::box_generation::collect_svg_filter_defs(&new_styled_tree);
@@ -6328,6 +6315,10 @@ impl FastRender {
         }
       }
     }
+
+    // `PreparedCascade` borrows from `dom_with_state`; drop it before moving the DOM into the
+    // returned artifacts.
+    drop(prepared_cascade);
 
     let svg_filter_defs = (!svg_filter_defs.is_empty()).then(|| Arc::new(svg_filter_defs));
     if let Some(start) = layout_start {
