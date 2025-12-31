@@ -946,7 +946,7 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
   fn svg_uses_document_css(styled: &StyledNode) -> bool {
     let mut stack = vec![styled];
     while let Some(node) = stack.pop() {
-      if node.node.get_attribute("class").is_some() || node.node.get_attribute("id").is_some() {
+      if node.node.get_attribute_ref("class").is_some() || node.node.get_attribute_ref("id").is_some() {
         return true;
       }
       if let Some(tag) = node.node.tag_name() {
@@ -1364,7 +1364,7 @@ fn generate_boxes_for_styled(
 
   // Common ad placeholders that hold space even when empty: drop when they have no children/content.
   if site_compat {
-    if let Some(class_attr) = styled.node.get_attribute("class") {
+    if let Some(class_attr) = styled.node.get_attribute_ref("class") {
       if styled.children.is_empty()
         && (class_attr.contains("ad-height-hold")
           || class_attr.contains("ad__slot")
@@ -1432,9 +1432,8 @@ fn generate_boxes_for_styled(
       if !tag.eq_ignore_ascii_case("object")
         || styled
           .node
-          .get_attribute("data")
-          .map(|d| !d.is_empty())
-          .unwrap_or(false)
+          .get_attribute_ref("data")
+          .is_some_and(|d| !d.is_empty())
       {
         counters.leave_scope();
         let picture = picture_sources
@@ -1460,7 +1459,7 @@ fn generate_boxes_for_styled(
   while idx < composed_children.len() {
     let child = composed_children[idx];
     if site_compat {
-      if let Some(testid) = child.node.get_attribute("data-testid") {
+      if let Some(testid) = child.node.get_attribute_ref("data-testid") {
         if testid == "one-nav-overlay" {
           let overlay_hidden =
             matches!(child.styles.visibility, Visibility::Hidden) || child.styles.opacity == 0.0;
@@ -1477,7 +1476,7 @@ fn generate_boxes_for_styled(
                 }
               }
 
-              if let Some(class_attr) = next.node.get_attribute("class") {
+              if let Some(class_attr) = next.node.get_attribute_ref("class") {
                 if class_attr.contains("FocusTrapContainer-") {
                   for grandchild in &next.children {
                     children.extend(generate_boxes_for_styled(
@@ -1605,13 +1604,13 @@ fn attach_debug_info(mut box_node: BoxNode, styled: &StyledNode) -> BoxNode {
     // Extract colspan/rowspan for table cells and span for columns/colgroups
     let colspan = styled
       .node
-      .get_attribute("colspan")
+      .get_attribute_ref("colspan")
       .and_then(|s| s.parse::<usize>().ok())
       .unwrap_or(1)
       .max(1);
     let rowspan = styled
       .node
-      .get_attribute("rowspan")
+      .get_attribute_ref("rowspan")
       .and_then(|s| s.parse::<usize>().ok())
       .unwrap_or(1)
       .max(1);
@@ -1621,7 +1620,7 @@ fn attach_debug_info(mut box_node: BoxNode, styled: &StyledNode) -> BoxNode {
     ) {
       styled
         .node
-        .get_attribute("span")
+        .get_attribute_ref("span")
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(1)
         .max(1)
@@ -1981,7 +1980,7 @@ fn apply_counter_properties_from_style(styled: &StyledNode, counters: &mut Count
 
   let tag_name = styled.node.tag_name();
   let is_ol = tag_name.is_some_and(|t| t.eq_ignore_ascii_case("ol"));
-  let reversed = is_ol && styled.node.get_attribute("reversed").is_some();
+  let reversed = is_ol && styled.node.get_attribute_ref("reversed").is_some();
 
   let is_list_container = tag_name.is_some_and(|tag| {
     tag.eq_ignore_ascii_case("ol")
@@ -2017,7 +2016,7 @@ fn apply_counter_properties_from_style(styled: &StyledNode, counters: &mut Count
   if is_list_container && !applied_reset {
     let start = styled
       .node
-      .get_attribute("start")
+      .get_attribute_ref("start")
       .and_then(|s| s.parse::<i32>().ok());
     let step = counters.list_item_increment();
     let start_value = if is_ol {
@@ -2134,15 +2133,15 @@ fn find_selected_option_label(node: &DomNode, optgroup_disabled: bool) -> Option
   let is_option = lower == "option";
   let is_optgroup = lower == "optgroup";
   let this_disabled = optgroup_disabled
-    || (is_option && node.get_attribute("disabled").is_some())
-    || (is_optgroup && node.get_attribute("disabled").is_some());
+    || (is_option && node.get_attribute_ref("disabled").is_some())
+    || (is_optgroup && node.get_attribute_ref("disabled").is_some());
 
-  if is_option && !this_disabled && node.get_attribute("selected").is_some() {
+  if is_option && !this_disabled && node.get_attribute_ref("selected").is_some() {
     return option_label_from_node(node);
   }
 
   let next_optgroup_disabled =
-    optgroup_disabled || (is_optgroup && node.get_attribute("disabled").is_some());
+    optgroup_disabled || (is_optgroup && node.get_attribute_ref("disabled").is_some());
   for child in node.children.iter() {
     if let Some(val) = find_selected_option_label(child, next_optgroup_disabled) {
       return Some(val);
@@ -2161,15 +2160,15 @@ fn first_enabled_option_label(node: &DomNode, optgroup_disabled: bool) -> Option
   let is_option = lower == "option";
   let is_optgroup = lower == "optgroup";
   let this_disabled = optgroup_disabled
-    || (is_option && node.get_attribute("disabled").is_some())
-    || (is_optgroup && node.get_attribute("disabled").is_some());
+    || (is_option && node.get_attribute_ref("disabled").is_some())
+    || (is_optgroup && node.get_attribute_ref("disabled").is_some());
 
   if is_option && !this_disabled {
     return option_label_from_node(node);
   }
 
   let next_optgroup_disabled =
-    optgroup_disabled || (is_optgroup && node.get_attribute("disabled").is_some());
+    optgroup_disabled || (is_optgroup && node.get_attribute_ref("disabled").is_some());
   for child in node.children.iter() {
     if let Some(val) = first_enabled_option_label(child, next_optgroup_disabled) {
       return Some(val);
@@ -2185,7 +2184,7 @@ fn select_label(node: &DomNode) -> Option<String> {
     return explicit;
   }
 
-  if node.get_attribute("multiple").is_some() {
+  if node.get_attribute_ref("multiple").is_some() {
     return None;
   }
 
@@ -2221,7 +2220,7 @@ fn button_label(node: &StyledNode) -> String {
 
 fn parse_f32_attr(node: &DomNode, name: &str) -> Option<f32> {
   node
-    .get_attribute(name)
+    .get_attribute_ref(name)
     .and_then(|v| v.trim().parse::<f32>().ok())
 }
 
@@ -2233,21 +2232,21 @@ fn create_form_control_replaced(styled: &StyledNode) -> Option<FormControl> {
     return None;
   }
 
-  let disabled = styled.node.get_attribute("disabled").is_some();
-  let inert = styled.node.get_attribute("inert").is_some()
+  let disabled = styled.node.get_attribute_ref("disabled").is_some();
+  let inert = styled.node.get_attribute_ref("inert").is_some()
     || styled
       .node
-      .get_attribute("data-fastr-inert")
+      .get_attribute_ref("data-fastr-inert")
       .map(|v| v.eq_ignore_ascii_case("true"))
       .unwrap_or(false);
   let focus_flag = styled
     .node
-    .get_attribute("data-fastr-focus")
+    .get_attribute_ref("data-fastr-focus")
     .map(|v| v.eq_ignore_ascii_case("true"))
     .unwrap_or(false);
   let focus_visible_flag = styled
     .node
-    .get_attribute("data-fastr-focus-visible")
+    .get_attribute_ref("data-fastr-focus-visible")
     .map(|v| v.eq_ignore_ascii_case("true"))
     .unwrap_or(false);
   let mut focused = (focus_flag || focus_visible_flag) && !inert;
@@ -2280,21 +2279,21 @@ fn create_form_control_replaced(styled: &StyledNode) -> Option<FormControl> {
       let control = match input_type.as_str() {
         "checkbox" => FormControlKind::Checkbox {
           is_radio: false,
-          checked: styled.node.get_attribute("checked").is_some(),
+          checked: styled.node.get_attribute_ref("checked").is_some(),
           indeterminate: styled
             .node
-            .get_attribute("indeterminate")
+            .get_attribute_ref("indeterminate")
             .map(|v| v.eq_ignore_ascii_case("true"))
             .unwrap_or(false)
             || styled
               .node
-              .get_attribute("aria-checked")
+              .get_attribute_ref("aria-checked")
               .map(|v| v.eq_ignore_ascii_case("mixed"))
               .unwrap_or(false),
         },
         "radio" => FormControlKind::Checkbox {
           is_radio: true,
-          checked: styled.node.get_attribute("checked").is_some(),
+          checked: styled.node.get_attribute_ref("checked").is_some(),
           indeterminate: false,
         },
         "button" | "submit" | "reset" => FormControlKind::Button {
@@ -2403,11 +2402,11 @@ fn create_form_control_replaced(styled: &StyledNode) -> Option<FormControl> {
         value: collect_text_content(&styled.node),
         rows: styled
           .node
-          .get_attribute("rows")
+          .get_attribute_ref("rows")
           .and_then(|r| r.parse::<u32>().ok()),
         cols: styled
           .node
-          .get_attribute("cols")
+          .get_attribute_ref("cols")
           .and_then(|c| c.parse::<u32>().ok()),
       },
       appearance,
@@ -2422,7 +2421,7 @@ fn create_form_control_replaced(styled: &StyledNode) -> Option<FormControl> {
       Some(FormControl {
         control: FormControlKind::Select {
           label,
-          multiple: styled.node.get_attribute("multiple").is_some(),
+          multiple: styled.node.get_attribute_ref("multiple").is_some(),
         },
         appearance,
         disabled,
