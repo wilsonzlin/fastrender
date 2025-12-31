@@ -53,6 +53,22 @@ fn allocation_counts() -> (usize, usize) {
   )
 }
 
+fn generate_inline_style_html(nodes: usize) -> String {
+  let mut html = String::from("<html><body><div id=\"root\">");
+  for i in 0..nodes {
+    let padding = (i % 8) + 1;
+    let margin = (i % 6) + 1;
+    let r = (i * 31) % 255;
+    let g = (i * 47) % 255;
+    let b = (i * 59) % 255;
+    html.push_str(&format!(
+      "<div class=\"item\" style=\"padding: {padding}px {padding}px; margin: {margin}px; font-size: 12px; line-height: 1.2; color: rgb({r}, {g}, {b}); background-color: rgb({b}, {r}, {g});\">item {i}</div>"
+    ));
+  }
+  html.push_str("</div></body></html>");
+  html
+}
+
 fn generate_cascade_html(nodes: usize, class_variants: usize) -> String {
   let mut html = String::from("<html><head><style>body{margin:0;padding:0;}</style></head><body>");
   html.push_str("<div id=\"root\" class=\"container\">");
@@ -345,6 +361,29 @@ fn cascade_not_benchmark(c: &mut Criterion) {
   });
 }
 
+fn inline_style_starting_style_benchmark(c: &mut Criterion) {
+  let node_count = 1500;
+  let html = generate_inline_style_html(node_count);
+  // Include a @starting-style rule to trigger the second cascade pass that previously
+  // re-parsed each node's inline `style=""` attribute.
+  let css = r#"
+    @starting-style {
+      .item { opacity: 0.5; }
+    }
+  "#;
+
+  let dom = parse_html(&html).expect("parse html");
+  let stylesheet = parse_stylesheet(css).expect("parse stylesheet");
+  let media = MediaContext::screen(1280.0, 720.0);
+
+  c.bench_function("cascade apply_styles @starting-style inline-style heavy", |b| {
+    b.iter(|| {
+      let styled = apply_styles_with_media(black_box(&dom), black_box(&stylesheet), &media);
+      black_box(styled);
+    });
+  });
+}
+
 fn generate_has_bench_html(depth: usize, fan_out: usize) -> String {
   fn build_branch(
     level: usize,
@@ -538,6 +577,7 @@ criterion_group!(
     cascade_benchmark,
     cascade_layer_heavy_benchmark,
     cascade_not_benchmark,
+    inline_style_starting_style_benchmark,
     has_selector_benchmark,
     pseudo_selector_candidate_benchmark,
     candidate_heavy_benchmark,

@@ -1417,9 +1417,29 @@ fn parse_simple_value(value_str: &str) -> Option<PropertyValue> {
     let last = trimmed.chars().last();
     if let (Some(quote), Some(end_quote)) = (first, last) {
       if (quote == '"' || quote == '\'') && end_quote == quote {
-        return Some(PropertyValue::String(
-          trimmed[1..trimmed.len() - 1].to_string(),
-        ));
+        let inner = &trimmed[1..trimmed.len() - 1];
+        // Only treat the value as a single quoted string if it contains no unescaped quotes of
+        // the same kind inside; otherwise this is a token stream like `"a" "b"` (e.g.
+        // grid-template-areas, quotes) and must be preserved verbatim for downstream parsing.
+        let mut escaped = false;
+        let mut has_unescaped_quote = false;
+        for ch in inner.chars() {
+          if escaped {
+            escaped = false;
+            continue;
+          }
+          if ch == '\\' {
+            escaped = true;
+            continue;
+          }
+          if ch == quote {
+            has_unescaped_quote = true;
+            break;
+          }
+        }
+        if !has_unescaped_quote {
+          return Some(PropertyValue::String(inner.to_string()));
+        }
       }
     }
   }

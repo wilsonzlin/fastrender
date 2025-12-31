@@ -7,6 +7,7 @@
 //! <https://www.w3.org/TR/css-cascade-4/>
 
 use crate::css::parser::parse_declarations;
+use crate::css::parser::parse_inline_style_declarations;
 use crate::css::parser::parse_stylesheet;
 use crate::css::selectors::FastRenderSelectorImpl;
 use crate::css::selectors::PseudoClass;
@@ -3883,6 +3884,7 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
   };
 
   let id_map = enumerate_dom_ids(dom);
+  let dom_node_count = id_map.len();
   let shadow_stylesheets = collect_shadow_stylesheets(dom, &id_map)?;
   let mut dom_maps = DomMaps::new(dom, id_map);
   let slot_assignment = if dom_maps.shadow_hosts.is_empty() {
@@ -4213,6 +4215,7 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
         max_rules = max_rules.max(index.rules.len());
       }
       let mut scratch = CascadeScratch::new(max_rules.max(1));
+      let mut inline_style_decls = vec![None; dom_node_count + 1];
       let mut node_counter: usize = 1;
       let mut ancestor_ids: Vec<usize> = Vec::new();
       let reuse_counter_opt = if container_scope.is_some() || reuse_map.is_some() {
@@ -4229,6 +4232,7 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
         None,
         &mut selector_caches,
         &mut scratch,
+        &mut inline_style_decls,
         &base_styles,
         None,
         &base_ua_styles,
@@ -4298,6 +4302,7 @@ pub(crate) struct PreparedCascade<'a> {
   device_pixel_ratio: f32,
   selector_caches: SelectorCaches,
   sibling_cache: SiblingListCache,
+  inline_style_decls: Vec<Option<Arc<[Declaration]>>>,
   scratch: CascadeScratch,
 }
 
@@ -4365,6 +4370,7 @@ impl<'a> PreparedCascade<'a> {
     );
 
     let id_map = enumerate_dom_ids(dom);
+    let dom_node_count = id_map.len();
     let dom_maps = DomMaps::new(dom, id_map);
     let slot_assignment = if dom_maps.shadow_hosts.is_empty() {
       SlotAssignment::default()
@@ -4684,6 +4690,7 @@ impl<'a> PreparedCascade<'a> {
       max_rules = max_rules.max(index.rules.len());
     }
     let scratch = CascadeScratch::new(max_rules.max(1));
+    let inline_style_decls = vec![None; dom_node_count + 1];
 
     Ok(Self {
       dom,
@@ -4701,6 +4708,7 @@ impl<'a> PreparedCascade<'a> {
       device_pixel_ratio,
       selector_caches,
       sibling_cache,
+      inline_style_decls,
       scratch,
     })
   }
@@ -4744,6 +4752,7 @@ impl<'a> PreparedCascade<'a> {
           None,
           &mut self.selector_caches,
           &mut self.scratch,
+          &mut self.inline_style_decls,
           &self.base_styles,
           None,
           &self.base_ua_styles,
@@ -5002,13 +5011,20 @@ fn append_presentational_hints<'a>(
   }
 }
 
-fn ua_default_rules(node: &DomNode, parent_direction: Direction) -> Vec<MatchedRule<'static>> {
+fn ua_default_rules(
+  node: &DomNode,
+  parent_direction: Direction,
+  tree_scope_prefix: u32,
+) -> Vec<MatchedRule<'static>> {
   let mut rules = Vec::new();
   let tag = match node.tag_name() {
     Some(t) => t.to_ascii_lowercase(),
     None => return rules,
   };
-  let layer_order = unprefixed_unlayered_layer_order();
+  // UA default rules should participate in the same tree-scope-prefixed layer ordering as UA
+  // stylesheet rules so higher-order UA defaults (e.g. link pseudo-state overrides) can outrank
+  // baseline UA stylesheet declarations.
+  let layer_order = layer_order_with_tree_scope(&[u32::MAX], tree_scope_prefix);
 
   let mut add_rule = |decls: Cow<'static, [Declaration]>, order: usize| {
     rules.push(MatchedRule {
@@ -5034,13 +5050,13 @@ fn ua_default_rules(node: &DomNode, parent_direction: Direction) -> Vec<MatchedR
 
                 if is_true("data-fastr-visited") {
                     rules.push(MatchedRule {
-                        origin: StyleOrigin::UserAgent,
-                        specificity,
-                        order: base_order + 1,
-                        layer_order: layer_order.clone(),
-                        declarations: cached_declarations(
-                            &UA_LINK_VISITED_DECLS,
-                            "color: rgb(85, 26, 139);",
+                         origin: StyleOrigin::UserAgent,
+                         specificity,
+                         order: base_order + 1,
+                         layer_order: layer_order.clone(),
+                         declarations: cached_declarations(
+                             &UA_LINK_VISITED_DECLS,
+                             "color: rgb(85, 26, 139);",
                         ),
                         starting_style: false,
                     });
@@ -5048,13 +5064,13 @@ fn ua_default_rules(node: &DomNode, parent_direction: Direction) -> Vec<MatchedR
 
                 if is_true("data-fastr-active") {
                     rules.push(MatchedRule {
-                        origin: StyleOrigin::UserAgent,
-                        specificity,
-                        order: base_order + 2,
-                        layer_order: layer_order.clone(),
-                        declarations: cached_declarations(
-                            &UA_LINK_ACTIVE_DECLS,
-                            "color: rgb(255, 0, 0);",
+                         origin: StyleOrigin::UserAgent,
+                         specificity,
+                         order: base_order + 2,
+                         layer_order: layer_order.clone(),
+                         declarations: cached_declarations(
+                             &UA_LINK_ACTIVE_DECLS,
+                             "color: rgb(255, 0, 0);",
                         ),
                         starting_style: false,
                     });
@@ -5062,13 +5078,13 @@ fn ua_default_rules(node: &DomNode, parent_direction: Direction) -> Vec<MatchedR
 
                 if is_true("data-fastr-hover") {
                     rules.push(MatchedRule {
-                        origin: StyleOrigin::UserAgent,
-                        specificity,
-                        order: base_order + 3,
-                        layer_order: layer_order.clone(),
-                        declarations: cached_declarations(
-                            &UA_LINK_HOVER_DECLS,
-                            "color: rgb(255, 0, 0);",
+                         origin: StyleOrigin::UserAgent,
+                         specificity,
+                         order: base_order + 3,
+                         layer_order: layer_order.clone(),
+                         declarations: cached_declarations(
+                             &UA_LINK_HOVER_DECLS,
+                             "color: rgb(255, 0, 0);",
                         ),
                         starting_style: false,
                     });
@@ -5076,13 +5092,13 @@ fn ua_default_rules(node: &DomNode, parent_direction: Direction) -> Vec<MatchedR
 
                 if is_true("data-fastr-focus") {
                     rules.push(MatchedRule {
-                        origin: StyleOrigin::UserAgent,
-                        specificity,
-                        order: base_order + 4,
-                        layer_order: layer_order.clone(),
-                        declarations: cached_declarations(
-                            &UA_LINK_FOCUS_DECLS,
-                            "outline: 1px dotted rgb(0, 0, 0); outline-offset: 2px;",
+                         origin: StyleOrigin::UserAgent,
+                         specificity,
+                         order: base_order + 4,
+                         layer_order: layer_order.clone(),
+                         declarations: cached_declarations(
+                             &UA_LINK_FOCUS_DECLS,
+                             "outline: 1px dotted rgb(0, 0, 0); outline-offset: 2px;",
                         ),
                         starting_style: false,
                     });
@@ -5128,13 +5144,13 @@ fn ua_default_rules(node: &DomNode, parent_direction: Direction) -> Vec<MatchedR
                 .unwrap_or_else(|| "text".to_string());
             if input_type == "hidden" {
                 rules.push(MatchedRule {
-                    origin: StyleOrigin::UserAgent,
-                    specificity: 11, // input[type=\"hidden\"] should outrank generic UA form rules
-                    order: 0,
-                    layer_order: layer_order.clone(),
-                    declarations: cached_declarations(&UA_INPUT_HIDDEN_DECLS, "display: none;"),
-                    starting_style: false,
-                });
+                     origin: StyleOrigin::UserAgent,
+                     specificity: 11, // input[type=\"hidden\"] should outrank generic UA form rules
+                     order: 0,
+                     layer_order: layer_order.clone(),
+                     declarations: cached_declarations(&UA_INPUT_HIDDEN_DECLS, "display: none;"),
+                     starting_style: false,
+                 });
                 return rules;
             }
             add_rule(
@@ -5722,6 +5738,22 @@ fn collect_pseudo_matching_rules<'a>(
   matches
 }
 
+#[inline]
+fn cached_inline_style_declarations<'a>(
+  cache: &'a mut Vec<Option<Arc<[Declaration]>>>,
+  node: &DomNode,
+  node_id: usize,
+) -> Option<&'a [Declaration]> {
+  let Some(entry) = cache.get_mut(node_id) else {
+    return None;
+  };
+  if entry.is_none() {
+    let style_attr = node.get_attribute_ref("style")?;
+    *entry = Some(parse_inline_style_declarations(style_attr).into());
+  }
+  entry.as_deref()
+}
+
 #[inline(never)]
 fn compute_base_styles<'a>(
   node: &DomNode,
@@ -5729,6 +5761,7 @@ fn compute_base_styles<'a>(
   scope_host: Option<usize>,
   selector_caches: &mut SelectorCaches,
   scratch: &mut CascadeScratch,
+  inline_style_decls: &mut Vec<Option<Arc<[Declaration]>>>,
   parent_styles: &ComputedStyle,
   parent_ua_styles: &ComputedStyle,
   root_font_size: f32,
@@ -5796,13 +5829,17 @@ fn compute_base_styles<'a>(
     slot_assignment,
     sibling_cache,
   )?;
-  matching_rules.extend(ua_default_rules(node, parent_styles.direction));
+  let inline_tree_scope = tree_scope_prefix_for_node(dom_maps, node_id);
+  matching_rules.extend(ua_default_rules(
+    node,
+    parent_styles.direction,
+    inline_tree_scope,
+  ));
   if include_starting_style {
     prioritize_starting_style_rules(&mut matching_rules);
   } else {
     matching_rules.retain(|r| !r.starting_style);
   }
-  let inline_tree_scope = tree_scope_prefix_for_node(dom_maps, node_id);
   let ua_matches: Vec<_> = matching_rules
     .iter()
     .filter(|r| r.origin == StyleOrigin::UserAgent)
@@ -5867,10 +5904,8 @@ fn compute_base_styles<'a>(
     scratch,
     &mut matching_rules,
   );
-  let inline_decls = node
-    .get_attribute("style")
-    .as_deref()
-    .map(parse_declarations);
+  let inline_decls =
+    cached_inline_style_declarations(inline_style_decls, node, node_id).map(Cow::Borrowed);
   let decl_start = prof.then(|| Instant::now());
   apply_cascaded_declarations(
     &mut styles,
@@ -5966,6 +6001,7 @@ fn apply_styles_internal(
   scope_host: Option<usize>,
   selector_caches: &mut SelectorCaches,
   scratch: &mut CascadeScratch,
+  inline_style_decls: &mut Vec<Option<Arc<[Declaration]>>>,
   parent_styles: &ComputedStyle,
   parent_starting_styles: Option<&ComputedStyle>,
   parent_ua_styles: &ComputedStyle,
@@ -5995,6 +6031,7 @@ fn apply_styles_internal(
     scope_host,
     selector_caches,
     scratch,
+    inline_style_decls,
     parent_styles,
     parent_starting_styles,
     parent_ua_styles,
@@ -6245,6 +6282,7 @@ fn apply_styles_internal_with_ancestors<'a>(
   scope_host: Option<usize>,
   selector_caches: &mut SelectorCaches,
   scratch: &mut CascadeScratch,
+  inline_style_decls: &mut Vec<Option<Arc<[Declaration]>>>,
   parent_styles: &ComputedStyle,
   parent_starting_styles: Option<&ComputedStyle>,
   parent_ua_styles: &ComputedStyle,
@@ -6300,6 +6338,7 @@ fn apply_styles_internal_with_ancestors<'a>(
     scope_host,
     selector_caches,
     scratch,
+    inline_style_decls,
     parent_styles,
     parent_ua_styles,
     root_font_size,
@@ -6327,6 +6366,7 @@ fn apply_styles_internal_with_ancestors<'a>(
       scope_host,
       selector_caches,
       scratch,
+      inline_style_decls,
       start_parent_styles,
       parent_ua_styles,
       start_root_font_size,
@@ -6371,6 +6411,7 @@ fn apply_styles_internal_with_ancestors<'a>(
       child_scope,
       selector_caches,
       scratch,
+      inline_style_decls,
       &base.styles,
       starting_base.as_ref().map(|b| &b.styles),
       &base.ua_styles,
@@ -6707,8 +6748,10 @@ fn resolve_match_parent_text_align_last(
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::css::parser::inline_style_declaration_parse_count;
   use crate::css::parser::parse_declarations;
   use crate::css::parser::parse_stylesheet;
+  use crate::css::parser::reset_inline_style_declaration_parse_count;
   use crate::css::types::CssImportLoader;
   use crate::css::types::StyleSheet;
   use crate::dom::DomNode;
@@ -6916,6 +6959,118 @@ mod tests {
     let inner_second = legacy_second.children.first().expect("inner");
     assert_eq!(inner_first.styles.color, Rgba::rgb(10, 20, 30));
     assert_eq!(inner_second.styles.color, Rgba::rgb(1, 2, 3));
+  }
+
+  #[test]
+  fn prepared_cascade_caches_inline_style_declarations_across_passes() {
+    let dom = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![
+          ("id".to_string(), "container".to_string()),
+          (
+            "style".to_string(),
+            "padding: 4px; margin: 2px; font-size: 12px;".to_string(),
+          ),
+        ],
+      },
+      children: vec![DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "div".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: vec![
+            ("id".to_string(), "inner".to_string()),
+            (
+              "style".to_string(),
+              "padding: 1px 2px; margin: 3px; opacity: 0.5;".to_string(),
+            ),
+          ],
+        },
+        children: vec![],
+      }],
+    };
+
+    let stylesheet = parse_stylesheet(
+      r#"
+        #inner { color: rgb(10, 20, 30); }
+        @container (min-width: 500px) {
+          #inner { color: rgb(1, 2, 3); }
+        }
+        @starting-style {
+          #inner { opacity: 0.25; }
+        }
+      "#,
+    )
+    .expect("parse stylesheet");
+    let style_set = StyleSet::from_document(stylesheet);
+    let media_ctx = MediaContext::screen(800.0, 600.0);
+
+    // "Legacy" behavior: rebuild a PreparedCascade for each pass.
+    let legacy_first = apply_style_set_with_media_target_and_imports_cached_with_deadline(
+      &dom,
+      &style_set,
+      &media_ctx,
+      None,
+      None,
+      None,
+      None,
+      None,
+      None,
+      None,
+      None,
+    )
+    .expect("legacy first cascade");
+
+    let container_ctx = ContainerQueryContext {
+      base_media: media_ctx.clone(),
+      containers: HashMap::from([(
+        1usize,
+        ContainerQueryInfo {
+          inline_size: 600.0,
+          block_size: 400.0,
+          container_type: ContainerType::InlineSize,
+          names: Vec::new(),
+          font_size: 16.0,
+          styles: Arc::new(legacy_first.styles.clone()),
+        },
+      )]),
+    };
+
+    let legacy_second = apply_style_set_with_media_target_and_imports_cached_with_deadline(
+      &dom,
+      &style_set,
+      &media_ctx,
+      None,
+      None,
+      None,
+      Some(&container_ctx),
+      None,
+      None,
+      None,
+      None,
+    )
+    .expect("legacy second cascade");
+
+    reset_inline_style_declaration_parse_count();
+
+    let mut prepared =
+      PreparedCascade::new_for_style_set(&dom, &style_set, &media_ctx, None, None, None, false)
+        .expect("build prepared cascade");
+    let prepared_first = prepared
+      .apply(None, None, None, None, None)
+      .expect("prepared first cascade");
+    let prepared_second = prepared
+      .apply(None, Some(&container_ctx), None, None, None)
+      .expect("prepared second cascade");
+
+    assert_styled_trees_equal(&legacy_first, &prepared_first);
+    assert_styled_trees_equal(&legacy_second, &prepared_second);
+
+    // There are two nodes with inline style attributes. Ensure we only parse them once across:
+    // - both base + @starting-style cascades, and
+    // - both container-query passes.
+    assert_eq!(inline_style_declaration_parse_count(), 2);
   }
 
   #[test]
@@ -13455,7 +13610,7 @@ fn find_pseudo_element_rules<'a>(
 fn apply_cascaded_declarations<'a, F>(
   styles: &mut ComputedStyle,
   matched_rules: Vec<MatchedRule<'a>>,
-  inline_declarations: Option<Vec<Declaration>>,
+  inline_declarations: Option<Cow<'a, [Declaration]>>,
   inline_tree_scope: u32,
   parent_styles: &ComputedStyle,
   parent_font_size: f32,
@@ -13521,17 +13676,35 @@ fn apply_cascaded_declarations<'a, F>(
 
   if let Some(inline) = inline_declarations {
     let inline_layer_order = layer_order_with_tree_scope(&[u32::MAX], inline_tree_scope);
-    for (decl_order, declaration) in inline.into_iter().enumerate() {
-      flattened.push(MatchedDeclaration {
-        important: declaration.important,
-        origin: StyleOrigin::Inline,
-        specificity: INLINE_SPECIFICITY,
-        rule_order: INLINE_RULE_ORDER,
-        decl_order,
-        layer_order: inline_layer_order.clone(),
-        declaration: Cow::Owned(declaration),
-        starting_style: false,
-      });
+    match inline {
+      Cow::Borrowed(decls) => {
+        for (decl_order, declaration) in decls.iter().enumerate() {
+          flattened.push(MatchedDeclaration {
+            important: declaration.important,
+            origin: StyleOrigin::Inline,
+            specificity: INLINE_SPECIFICITY,
+            rule_order: INLINE_RULE_ORDER,
+            decl_order,
+            layer_order: inline_layer_order.clone(),
+            declaration: Cow::Borrowed(declaration),
+            starting_style: false,
+          });
+        }
+      }
+      Cow::Owned(decls) => {
+        for (decl_order, declaration) in decls.into_iter().enumerate() {
+          flattened.push(MatchedDeclaration {
+            important: declaration.important,
+            origin: StyleOrigin::Inline,
+            specificity: INLINE_SPECIFICITY,
+            rule_order: INLINE_RULE_ORDER,
+            decl_order,
+            layer_order: inline_layer_order.clone(),
+            declaration: Cow::Owned(declaration),
+            starting_style: false,
+          });
+        }
+      }
     }
   }
 

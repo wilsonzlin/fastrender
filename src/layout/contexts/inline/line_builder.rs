@@ -723,7 +723,7 @@ impl TextItem {
   ///
   /// Spacing is added after each cluster (except the final cluster).
   /// Word spacing stacks on top of letter spacing for space-like clusters.
-  pub(crate) fn apply_spacing_to_runs(
+  pub fn apply_spacing_to_runs(
     runs: &mut [ShapedRun],
     text: &str,
     letter_spacing: f32,

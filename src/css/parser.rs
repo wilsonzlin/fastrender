@@ -62,11 +62,28 @@ use selectors::parser::SelectorList;
 use selectors::parser::SelectorParseErrorKind;
 use std::cell::RefCell;
 use std::collections::HashMap;
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 const CSS_DEADLINE_STRIDE: usize = 64;
 
 thread_local! {
   static CSS_PARSE_DEADLINE: RefCell<CssParseDeadline> = RefCell::new(CssParseDeadline::new());
+}
+
+#[cfg(test)]
+thread_local! {
+  static INLINE_STYLE_DECL_PARSE_COUNT: AtomicUsize = const { AtomicUsize::new(0) };
+}
+
+#[cfg(test)]
+pub fn reset_inline_style_declaration_parse_count() {
+  INLINE_STYLE_DECL_PARSE_COUNT.with(|counter| counter.store(0, Ordering::Relaxed));
+}
+
+#[cfg(test)]
+pub fn inline_style_declaration_parse_count() -> usize {
+  INLINE_STYLE_DECL_PARSE_COUNT.with(|counter| counter.load(Ordering::Relaxed))
 }
 
 #[derive(Default)]
@@ -3390,6 +3407,18 @@ pub fn parse_declarations(declarations_str: &str) -> Vec<Declaration> {
   let mut input = ParserInput::new(declarations_str);
   let mut parser = Parser::new(&mut input);
   parse_declaration_list(&mut parser, DeclarationContext::Style).unwrap_or_default()
+}
+
+/// Parse declarations from an inline `style=""` attribute.
+///
+/// This is identical to [`parse_declarations`], but exposes a test-only counter so unit tests
+/// can assert that inline styles are parsed once per node across multi-pass cascades.
+pub fn parse_inline_style_declarations(declarations_str: &str) -> Vec<Declaration> {
+  #[cfg(test)]
+  INLINE_STYLE_DECL_PARSE_COUNT.with(|counter| {
+    counter.fetch_add(1, Ordering::Relaxed);
+  });
+  parse_declarations(declarations_str)
 }
 
 /// Distinguishes which tree scope a stylesheet source applies to.

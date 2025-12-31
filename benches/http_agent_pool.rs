@@ -86,7 +86,7 @@ fn bench_agent_pool(c: &mut Criterion) {
       let mut resp = agent.get(&url).call().expect("one-off fetch");
       assert_eq!(resp.status(), 200);
       let out = resp.body_mut().with_config().read_to_vec().unwrap();
-      assert_eq!(out, body);
+      assert_eq!(out.as_slice(), body);
     });
   });
 
