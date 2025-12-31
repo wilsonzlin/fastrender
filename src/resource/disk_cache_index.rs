@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone)]
@@ -14,6 +15,7 @@ pub(super) struct DiskCacheIndex {
   cache_dir: PathBuf,
   journal_path: PathBuf,
   state: Arc<Mutex<IndexState>>,
+  loaded: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Default)]
@@ -74,6 +76,7 @@ impl DiskCacheIndex {
       cache_dir,
       journal_path,
       state: Arc::new(Mutex::new(IndexState::default())),
+      loaded: Arc::new(AtomicBool::new(false)),
     }
   }
 
@@ -82,6 +85,7 @@ impl DiskCacheIndex {
     if self.refresh_locked(&mut state).is_err() {
       let _ = self.rebuild_from_disk(&mut state);
     }
+    self.loaded.store(state.loaded, Ordering::Release);
   }
 
   pub(super) fn record_insert(
@@ -108,6 +112,7 @@ impl DiskCacheIndex {
     if self.append_record_locked(&mut state, &record).is_err() {
       let _ = self.rebuild_from_disk(&mut state);
     }
+    self.loaded.store(state.loaded, Ordering::Release);
   }
 
   pub(super) fn record_insert_and_evict_if_needed<F>(
@@ -137,12 +142,14 @@ impl DiskCacheIndex {
 
     if self.append_record_locked(&mut state, &record).is_err() {
       let _ = self.rebuild_from_disk(&mut state);
+      self.loaded.store(state.loaded, Ordering::Release);
       return;
     }
 
     if let Err(_) = self.evict_if_needed_locked(&mut state, max_bytes, &mut can_remove) {
       let _ = self.rebuild_from_disk(&mut state);
     }
+    self.loaded.store(state.loaded, Ordering::Release);
   }
 
   pub(super) fn record_removal(&self, key: &str, data_path: &Path, meta_path: &Path) {
@@ -159,6 +166,7 @@ impl DiskCacheIndex {
     if self.append_record_locked(&mut state, &record).is_err() {
       let _ = self.rebuild_from_disk(&mut state);
     }
+    self.loaded.store(state.loaded, Ordering::Release);
   }
 
   pub(super) fn backfill_if_missing(
@@ -169,6 +177,9 @@ impl DiskCacheIndex {
     data_path: &Path,
     meta_path: &Path,
   ) {
+    if !self.loaded.load(Ordering::Acquire) {
+      return;
+    }
     let mut state = self.state.lock().unwrap();
     // Reads should remain cheap: most pageset workers only ever *read* the cache, and loading the
     // full journal in every process defeats the point of having a disk cache. Only writer
@@ -204,6 +215,7 @@ impl DiskCacheIndex {
     if let Err(_) = self.evict_if_needed_locked(&mut state, max_bytes, &mut can_remove) {
       let _ = self.rebuild_from_disk(&mut state);
     }
+    self.loaded.store(state.loaded, Ordering::Release);
   }
 
   fn refresh_locked(&self, state: &mut IndexState) -> std::io::Result<()> {
