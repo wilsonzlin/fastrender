@@ -847,20 +847,24 @@ fn apply_backdrop_filters(
       let src_offset = src_idx + col * 4;
       let mut coverage = 255u16;
 
-      if let Some((mask_data, mask_w, mask_h)) = &clip_mask_data {
-        let mask_x = write_x as usize + col;
-        if mask_x >= *mask_w || mask_y >= *mask_h {
-          coverage = 0;
-        } else {
-          let mask_idx = mask_y * mask_w + mask_x;
-          coverage = coverage.saturating_mul(mask_data[mask_idx] as u16) / 255;
+        if let Some((mask_data, mask_w, mask_h)) = &clip_mask_data {
+          let mask_x = write_x as usize + col;
+          if mask_x >= *mask_w || mask_y >= *mask_h {
+            coverage = 0;
+          } else {
+            let mask_idx = mask_y * mask_w + mask_x;
+            coverage = div_255(coverage.saturating_mul(mask_data[mask_idx] as u16));
+          }
         }
-      }
 
-      if let Some(mask_data) = radii_mask_data {
-        let mask_idx = (src_start_y as usize + row) * region_width + (src_start_x as usize + col);
-        coverage = coverage.saturating_mul(mask_data[mask_idx] as u16) / 255;
-      }
+        if coverage == 0 {
+          continue;
+        }
+
+        if let Some(mask_data) = radii_mask_data {
+          let mask_idx = (src_start_y as usize + row) * region_width + (src_start_x as usize + col);
+          coverage = div_255(coverage.saturating_mul(mask_data[mask_idx] as u16));
+        }
 
       if coverage >= 255 {
         dest_data[dest_offset..dest_offset + 4]
