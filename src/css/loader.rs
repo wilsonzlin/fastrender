@@ -376,6 +376,7 @@ fn parse_import_target(rule: &str) -> Option<(&str, &str)> {
 const DEFAULT_MAX_INLINE_STYLESHEETS: usize = 128;
 const DEFAULT_MAX_INLINE_CSS_BYTES: usize = 2 * 1024 * 1024;
 const DEFAULT_MAX_INLINE_IMPORT_DEPTH: usize = 8;
+const DEFAULT_MAX_EMBEDDED_CSS_CANDIDATES: usize = 16;
 
 /// Shared budget for stylesheet inlining across `<link>` tags and `@import` chains.
 ///
@@ -1338,34 +1339,123 @@ fn media_flags_allow_target(
 /// without executing JavaScript, scan the raw HTML for any substring that looks
 /// like a CSS URL (ends with `.css`, possibly with a query string) and try to
 /// resolve and fetch it as a stylesheet.
-#[allow(clippy::cognitive_complexity)]
-pub fn extract_embedded_css_urls(
+#[derive(Debug, Clone)]
+pub(crate) struct EmbeddedCssUrlDiscovery {
+  pub urls: Vec<String>,
+  pub truncated: bool,
+  pub max_candidates: usize,
+}
+
+fn embedded_css_max_candidates() -> usize {
+  let toggles = runtime::runtime_toggles();
+  let max = toggles.usize_with_default(
+    "FASTR_EMBEDDED_CSS_MAX_CANDIDATES",
+    DEFAULT_MAX_EMBEDDED_CSS_CANDIDATES,
+  );
+  max.min(DEFAULT_MAX_INLINE_STYLESHEETS)
+}
+
+fn is_url_function_before_paren(bytes: &[u8], paren_pos: usize) -> bool {
+  let mut end = paren_pos;
+  while end > 0 && bytes[end - 1].is_ascii_whitespace() {
+    end -= 1;
+  }
+  if end < 3 {
+    return false;
+  }
+  let start = end - 3;
+  if !bytes[start..end].eq_ignore_ascii_case(b"url") {
+    return false;
+  }
+  if start == 0 {
+    return true;
+  }
+  let before = bytes[start - 1];
+  !(before.is_ascii_alphanumeric() || before == b'-' || before == b'_')
+}
+
+fn embedded_candidate_has_valid_context(bytes: &[u8], start: usize) -> bool {
+  let mut i = start;
+  while i > 0 && bytes[i - 1].is_ascii_whitespace() {
+    i -= 1;
+  }
+  if i == 0 {
+    return false;
+  }
+  match bytes[i - 1] {
+    b'"' | b'\'' | b'`' => true,
+    b'(' => is_url_function_before_paren(bytes, i - 1),
+    _ => false,
+  }
+}
+
+pub(crate) fn extract_embedded_css_urls_with_meta(
   html: &str,
   base_url: &str,
-) -> std::result::Result<Vec<String>, RenderError> {
+  max_candidates_hint: Option<usize>,
+) -> std::result::Result<EmbeddedCssUrlDiscovery, RenderError> {
+  let runtime_cap = embedded_css_max_candidates();
+  let max_candidates = match max_candidates_hint {
+    Some(hint) => runtime_cap.min(hint),
+    None => runtime_cap,
+  };
+
+  if max_candidates == 0 {
+    return Ok(EmbeddedCssUrlDiscovery {
+      urls: Vec::new(),
+      truncated: false,
+      max_candidates,
+    });
+  }
+
   let mut urls = Vec::new();
   let mut seen = HashSet::new();
   let bytes = html.as_bytes();
   let mut idx = 0;
   let mut deadline_counter = 0usize;
+  let mut truncated = false;
 
-  while let Some(pos) = memchr::memmem::find(&bytes[idx..], b".css") {
+  fn record_url(
+    resolved: String,
+    seen: &mut HashSet<String>,
+    urls: &mut Vec<String>,
+    truncated: &mut bool,
+    max_candidates: usize,
+  ) -> bool {
+    if seen.insert(resolved.clone()) {
+      urls.push(resolved);
+      if urls.len() >= max_candidates {
+        *truncated = true;
+        return true;
+      }
+    }
+    false
+  }
+
+  'css_scan: while let Some(pos) = memchr::memmem::find(&bytes[idx..], b".css") {
     check_active_periodic(&mut deadline_counter, 1, RenderStage::Css)?;
     let abs_pos = idx + pos;
 
     let mut start = abs_pos;
     while start > 0 {
       let c = bytes[start - 1] as char;
-      if matches!(c, '"' | '\'' | '(' | '<') || c.is_whitespace() {
+      if matches!(c, '"' | '\'' | '`' | '(' | '<') || c.is_whitespace() {
         break;
       }
       start -= 1;
     }
 
+    // Require the token to be inside quotes or a `url(...)` context. This avoids treating
+    // random `.css` substrings in inline scripts as fetchable stylesheet URLs.
+    if !embedded_candidate_has_valid_context(bytes, start) {
+      idx = abs_pos + 4;
+      continue;
+    }
+
     let mut end = abs_pos + 4;
     while end < bytes.len() {
       let c = bytes[end] as char;
-      if matches!(c, '"' | '\'' | ')' | '>' | '{' | '}') || c.is_whitespace() {
+      if matches!(c, '"' | '\'' | '`' | ')' | '>' | '{' | '}') || c.is_whitespace() {
         break;
       }
       end += 1;
@@ -1409,7 +1499,8 @@ pub fn extract_embedded_css_urls(
       if candidate.len() < 512 {
         let raw_lower = candidate.to_ascii_lowercase();
 
-        // Detect sourceURL-style sourcemap markers (/*# or //#) immediately preceding the token.
+        // Detect sourceURL/sourceMappingURL-style sourcemap markers (/*# or //#) immediately
+        // preceding the token.
         let mut marker_back = start;
         while marker_back > 0 && (bytes[marker_back - 1] as char).is_whitespace() {
           marker_back -= 1;
@@ -1421,7 +1512,9 @@ pub fn extract_embedded_css_urls(
           false
         };
 
-        if sourcemap_marker && raw_lower.contains("sourceurl=") {
+        if sourcemap_marker
+          && (raw_lower.contains("sourceurl=") || raw_lower.contains("sourcemappingurl="))
+        {
           idx = end;
           continue;
         }
@@ -1439,7 +1532,11 @@ pub fn extract_embedded_css_urls(
           }
 
           let cleaned_lower = cleaned.to_ascii_lowercase();
-          if cleaned_lower.contains("sourceurl=") {
+          if cleaned_lower.contains("sourceurl=") || cleaned_lower.contains("sourcemappingurl=") {
+            idx = end;
+            continue;
+          }
+          if cleaned_lower.contains(".css.map") {
             idx = end;
             continue;
           }
@@ -1459,8 +1556,14 @@ pub fn extract_embedded_css_urls(
           }
           if !cleaned_lower.contains("style.csstext") && !cleaned.trim_end().ends_with(':') {
             if let Some(resolved) = resolve_href(base_url, &cleaned) {
-              if seen.insert(resolved.clone()) {
-                urls.push(resolved);
+              if record_url(
+                resolved,
+                &mut seen,
+                &mut urls,
+                &mut truncated,
+                max_candidates,
+              ) {
+                break 'css_scan;
               }
             }
           }
@@ -1471,28 +1574,40 @@ pub fn extract_embedded_css_urls(
     idx = end;
   }
 
-  let lower = html.to_lowercase();
-  let mut pos = 0;
-  while let Some(hit) = lower[pos..].find("cssurl") {
-    check_active_periodic(&mut deadline_counter, 1, RenderStage::Css)?;
-    let abs = pos + hit;
-    let slice = &html[abs..];
-    if let Some(colon) = slice.find(':') {
-      let after_colon = &slice[colon + 1..];
-      if let Some(q_start_rel) = after_colon.find(['"', '\'']) {
-        let quote = after_colon.chars().nth(q_start_rel).unwrap();
-        let after_quote = &after_colon[q_start_rel + 1..];
-        if let Some(q_end_rel) = after_quote.find(quote) {
-          let candidate = &after_quote[..q_end_rel];
-          if !candidate.to_ascii_lowercase().contains("style.csstext")
-            && !candidate.trim_end().ends_with(':')
-          {
-            if let Some(cleaned) = normalize_embedded_css_candidate(candidate) {
-              let lower = cleaned.to_ascii_lowercase();
-              if !lower.contains("style.csstext") && !cleaned.trim_end().ends_with(':') {
-                if let Some(resolved) = resolve_href(base_url, &cleaned) {
-                  if seen.insert(resolved.clone()) {
-                    urls.push(resolved);
+  if !truncated {
+    let lower = html.to_lowercase();
+    let mut pos = 0;
+    while let Some(hit) = lower[pos..].find("cssurl") {
+      check_active_periodic(&mut deadline_counter, 1, RenderStage::Css)?;
+      let abs = pos + hit;
+      let slice = &html[abs..];
+      if let Some(colon) = slice.find(':') {
+        let after_colon = &slice[colon + 1..];
+        if let Some(q_start_rel) = after_colon.find(['"', '\'']) {
+          let quote = after_colon.chars().nth(q_start_rel).unwrap();
+          let after_quote = &after_colon[q_start_rel + 1..];
+          if let Some(q_end_rel) = after_quote.find(quote) {
+            let candidate = &after_quote[..q_end_rel];
+            if !candidate.to_ascii_lowercase().contains("style.csstext")
+              && !candidate.trim_end().ends_with(':')
+            {
+              if let Some(cleaned) = normalize_embedded_css_candidate(candidate) {
+                let lower = cleaned.to_ascii_lowercase();
+                if lower.contains("sourcemappingurl=") || lower.contains(".css.map") {
+                  pos = abs + 6;
+                  continue;
+                }
+                if !lower.contains("style.csstext") && !cleaned.trim_end().ends_with(':') {
+                  if let Some(resolved) = resolve_href(base_url, &cleaned) {
+                    if record_url(
+                      resolved,
+                      &mut seen,
+                      &mut urls,
+                      &mut truncated,
+                      max_candidates,
+                    ) {
+                      break;
+                    }
                   }
                 }
               }
@@ -1500,11 +1615,35 @@ pub fn extract_embedded_css_urls(
           }
         }
       }
+      pos = abs + 6;
     }
-    pos = abs + 6;
   }
 
-  Ok(urls)
+  Ok(EmbeddedCssUrlDiscovery {
+    urls,
+    truncated,
+    max_candidates,
+  })
+}
+
+#[allow(clippy::cognitive_complexity)]
+pub fn extract_embedded_css_urls(
+  html: &str,
+  base_url: &str,
+) -> std::result::Result<Vec<String>, RenderError> {
+  Ok(extract_embedded_css_urls_with_meta(html, base_url, None)?.urls)
+}
+
+pub(crate) fn html_has_inline_style_tag(html: &str) -> bool {
+  find_tag_case_insensitive(html, "style", false).is_some()
+}
+
+pub(crate) fn should_scan_embedded_css_urls(
+  html: &str,
+  has_link_stylesheets: bool,
+  remaining_limit: usize,
+) -> bool {
+  !has_link_stylesheets && remaining_limit > 0 && !html_has_inline_style_tag(html)
 }
 
 /// Deduplicate a list while preserving the order of first occurrence.
@@ -2115,16 +2254,63 @@ mod tests {
 
   #[test]
   fn strips_sourceurl_prefix_in_embedded_css_urls() {
-    let html = r"
+    let html = r#"
             <script>
-                /* sourceURL=https://example.com/assets/style.css */
+                const url = "sourceURL=https://example.com/assets/style.css";
             </script>
-        ";
+        "#;
     let urls = extract_embedded_css_urls(html, "https://example.com/").unwrap();
     assert_eq!(
       urls,
       vec!["https://example.com/assets/style.css".to_string()]
     );
+  }
+
+  #[test]
+  fn embedded_css_discovery_enforces_candidate_cap() {
+    let mut html = String::new();
+    for i in 0..100 {
+      html.push_str(&format!(
+        r#"<script>var css="style{idx}.css";</script>"#,
+        idx = i
+      ));
+    }
+
+    let toggles = RuntimeToggles::from_map(HashMap::from([(
+      "FASTR_EMBEDDED_CSS_MAX_CANDIDATES".to_string(),
+      "5".to_string(),
+    )]));
+    let urls = runtime::with_runtime_toggles(Arc::new(toggles), || {
+      extract_embedded_css_urls(&html, "https://example.com/").unwrap()
+    });
+    assert_eq!(urls.len(), 5);
+  }
+
+  #[test]
+  fn embedded_css_discovery_is_gated_by_static_stylesheets() {
+    let mut html = String::from(r#"<link rel="stylesheet" href="/static.css">"#);
+    for i in 0..50 {
+      html.push_str(&format!(
+        r#"<script>var css="dyn{idx}.css";</script>"#,
+        idx = i
+      ));
+    }
+
+    let base_url = "https://example.com/";
+    let css_links = extract_css_links(&html, base_url, MediaType::Screen).unwrap();
+    assert_eq!(
+      css_links,
+      vec!["https://example.com/static.css".to_string()]
+    );
+
+    let should_scan = should_scan_embedded_css_urls(&html, !css_links.is_empty(), usize::MAX);
+    assert!(!should_scan);
+    let urls = if should_scan {
+      extract_embedded_css_urls(&html, base_url).unwrap()
+    } else {
+      Vec::new()
+    };
+    assert!(urls.is_empty());
   }
 
   #[test]

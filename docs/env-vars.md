@@ -37,6 +37,9 @@ CLI flag equivalents: `--disk-cache-max-bytes`, `--disk-cache-max-age-secs`.
   `<foreignObject>` HTML renders (default 262_144 bytes).
 - `FASTR_INLINE_MAX_STYLESHEETS=<N>` – maximum number of stylesheets inlined across `<link>`/embedded
   discovery and `@import` chains (default 128).
+- `FASTR_EMBEDDED_CSS_MAX_CANDIDATES=<N>` – cap the number of stylesheet URLs discovered via the
+  embedded `.css` string heuristic (default 16; only used when the HTML has no `<link rel=stylesheet>`
+  candidates and no inline `<style>` tags).
 - `FASTR_INLINE_MAX_INLINE_CSS_BYTES=<N>` – total CSS bytes allowed when inlining stylesheets
   (default 2 MiB).
 - `FASTR_INLINE_MAX_INLINE_IMPORT_DEPTH=<N>` – maximum @import nesting depth during inlining

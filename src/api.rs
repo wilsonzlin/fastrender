@@ -62,9 +62,9 @@ use crate::animation;
 use crate::compat::CompatProfile;
 use crate::css::encoding::decode_css_bytes;
 use crate::css::loader::{
-  absolutize_css_urls, extract_css_links, extract_embedded_css_urls, infer_base_url,
-  inject_css_into_html, inline_imports_with_diagnostics, resolve_href_with_base, InlineImportState,
-  StylesheetInlineBudget,
+  absolutize_css_urls, extract_css_links, extract_embedded_css_urls_with_meta, infer_base_url,
+  inject_css_into_html, inline_imports_with_diagnostics, resolve_href_with_base,
+  should_scan_embedded_css_urls, InlineImportState, StylesheetInlineBudget,
 };
 use crate::css::parser::{
   extract_css_sources, extract_scoped_css_sources, parse_stylesheet, rel_list_contains_stylesheet,
@@ -6691,15 +6691,35 @@ impl FastRender {
   ) -> std::result::Result<String, RenderError> {
     let inlining_start = stats.as_deref().and_then(|rec| rec.timer());
     let mut css_links = extract_css_links(html, base_url, media_type)?;
+    let has_link_stylesheets = !css_links.is_empty();
     if let Some(limit) = css_limit {
       if css_links.len() > limit {
         css_links.truncate(limit);
       }
     }
     let mut seen: HashSet<String> = css_links.iter().cloned().collect();
-    for extra in extract_embedded_css_urls(html, base_url)? {
-      if seen.insert(extra.clone()) {
-        css_links.push(extra);
+    let remaining_limit = css_limit
+      .unwrap_or(usize::MAX)
+      .saturating_sub(css_links.len());
+    let should_scan_embedded =
+      should_scan_embedded_css_urls(html, has_link_stylesheets, remaining_limit);
+    if should_scan_embedded {
+      let embedded = extract_embedded_css_urls_with_meta(html, base_url, Some(remaining_limit))?;
+      if embedded.truncated {
+        diagnostics.record_message(
+          ResourceKind::Stylesheet,
+          base_url,
+          format!(
+            "embedded css discovery truncated after {} candidates (cap {})",
+            embedded.urls.len(),
+            embedded.max_candidates
+          ),
+        );
+      }
+      for extra in embedded.urls {
+        if seen.insert(extra.clone()) {
+          css_links.push(extra);
+        }
       }
     }
 
