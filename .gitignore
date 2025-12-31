@@ -2,3 +2,5 @@
 target/
 target_pages/
 /.venv/
+__pycache__/
+*.py[cod]
