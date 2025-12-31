@@ -1508,8 +1508,12 @@ pub(crate) fn apply_mask_with_offset(
     let pix_row = &mut pix_data[y * pixmap_stride..(y + 1) * pixmap_stride];
 
     // Clear left/right segments where mask is implicitly zero.
-    pix_row[..local_x0 * 4].fill(0);
-    pix_row[local_x1 * 4..].fill(0);
+    if local_x0 > 0 {
+      pix_row[..local_x0 * 4].fill(0);
+    }
+    if local_x1 < pixmap_w as usize {
+      pix_row[local_x1 * 4..].fill(0);
+    }
 
     let mask_y = mask_local_y0 + row_offset;
     if mask_y >= mask.height() as usize {
@@ -1518,18 +1522,22 @@ pub(crate) fn apply_mask_with_offset(
     let mask_row = &mask_data[mask_y * mask_stride..(mask_y + 1) * mask_stride];
     let mask_slice = &mask_row[mask_local_x0..mask_local_x0 + (local_x1 - local_x0)];
 
-    for (col_offset, m) in mask_slice.iter().copied().enumerate() {
-      let base = (local_x0 + col_offset) * 4;
+    let mut base = local_x0 * 4;
+    for m in mask_slice.iter().copied() {
       if m == 255 {
+        base += 4;
         continue;
       }
       if m == 0 {
         pix_row[base..base + 4].fill(0);
+        base += 4;
         continue;
       }
-      for c in 0..4 {
-        pix_row[base + c] = mul_div_255_round(pix_row[base + c], m);
-      }
+      pix_row[base] = mul_div_255_round(pix_row[base], m);
+      pix_row[base + 1] = mul_div_255_round(pix_row[base + 1], m);
+      pix_row[base + 2] = mul_div_255_round(pix_row[base + 2], m);
+      pix_row[base + 3] = mul_div_255_round(pix_row[base + 3], m);
+      base += 4;
     }
   }
 
