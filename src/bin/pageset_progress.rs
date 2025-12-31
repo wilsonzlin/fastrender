@@ -726,6 +726,14 @@ fn is_legacy_auto_note_line(line: &str) -> bool {
     || trimmed.starts_with("renderer init:")
     || trimmed.starts_with("stderr tail")
     || trimmed.starts_with("stage:")
+    // Legacy progress files often stored the formatted error display in `notes`; treat those as
+    // machine-generated so reruns do not preserve stale diagnostics as "manual notes".
+    || trimmed.starts_with("[parse]")
+    || trimmed.starts_with("[style]")
+    || trimmed.starts_with("[layout]")
+    || trimmed.starts_with("[paint]")
+    || trimmed.starts_with("[resource]")
+    || trimmed.starts_with("[other]")
 }
 
 fn manual_notes_from_previous(previous: &PageProgress) -> Option<String> {
@@ -5377,6 +5385,22 @@ mod tests {
     let merged = new_progress.merge_preserving_manual(Some(previous), None);
     assert_eq!(merged.notes, "manual blocker");
     assert_eq!(merged.auto_notes, "hard timeout after 5.00s\nstage: paint");
+  }
+
+  #[test]
+  fn legacy_error_lines_are_not_treated_as_manual_notes() {
+    let url = "https://example.com".to_string();
+    let previous = PageProgress {
+      url,
+      status: ProgressStatus::Timeout,
+      notes: "[paint] Invalid paint parameters: Layout failed\nmanual blocker\nhard timeout after 5.00s\nstage: layout".to_string(),
+      ..PageProgress::default()
+    };
+
+    assert_eq!(
+      manual_notes_from_previous(&previous),
+      Some("manual blocker".to_string())
+    );
   }
 
   #[test]
