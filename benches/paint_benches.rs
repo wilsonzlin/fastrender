@@ -20,8 +20,10 @@ use criterion::criterion_main;
 use criterion::BenchmarkId;
 use criterion::Criterion;
 use fastrender::build_stacking_tree;
+use fastrender::css::types::ColorStop;
 use fastrender::geometry::Point;
 use fastrender::geometry::Rect;
+use fastrender::geometry::Size;
 use fastrender::paint::blur::{apply_gaussian_blur, apply_gaussian_blur_anisotropic};
 use fastrender::paint::display_list::BorderRadius;
 use fastrender::paint::display_list::ClipShape;
@@ -34,7 +36,15 @@ use fastrender::paint::display_list_renderer::PaintParallelism;
 use fastrender::paint::gradient::{
   gradient_bucket, gradient_period, rasterize_conic_gradient, GradientLutCache,
 };
+use fastrender::style::color::Color;
 use fastrender::style::color::Rgba;
+use fastrender::style::types::BackgroundImage;
+use fastrender::style::types::BackgroundLayer;
+use fastrender::style::types::BackgroundRepeat;
+use fastrender::style::types::BackgroundSize;
+use fastrender::style::types::BackgroundSizeComponent;
+use fastrender::style::values::Length;
+use fastrender::style::ComputedStyle;
 use fastrender::text::font_loader::FontContext;
 use fastrender::text::pipeline::GlyphPosition;
 use fastrender::tree::fragment_tree::FragmentNode;
@@ -114,6 +124,45 @@ fn create_text_fragment_tree(text_count: usize) -> FragmentTree {
   );
 
   FragmentTree::new(root)
+}
+
+/// Creates a fragment tree containing a huge element with a repeating background.
+///
+/// Used to exercise display-list background tiling. The viewport is kept small so the builder
+/// should clamp tile emission to the visible canvas bounds.
+fn create_background_tiling_fragment_tree(page_height: f32) -> FragmentTree {
+  let viewport = Size::new(800.0, 600.0);
+  let mut style = ComputedStyle::default();
+  style.background_color = Rgba::TRANSPARENT;
+  style.set_background_layers(vec![BackgroundLayer {
+    image: Some(BackgroundImage::LinearGradient {
+      angle: 0.0,
+      stops: vec![
+        ColorStop {
+          color: Color::Rgba(Rgba::RED),
+          position: Some(0.0),
+        },
+        ColorStop {
+          color: Color::Rgba(Rgba::BLUE),
+          position: Some(1.0),
+        },
+      ],
+    }),
+    repeat: BackgroundRepeat::repeat(),
+    size: BackgroundSize::Explicit(
+      BackgroundSizeComponent::Length(Length::px(10.0)),
+      BackgroundSizeComponent::Length(Length::px(10.0)),
+    ),
+    ..BackgroundLayer::default()
+  }]);
+
+  let root = FragmentNode::new_block_styled(
+    Rect::from_xywh(0.0, 0.0, viewport.width, page_height),
+    vec![],
+    Arc::new(style),
+  );
+
+  FragmentTree::with_viewport(root, viewport)
 }
 
 /// Creates a display list with N items
@@ -333,6 +382,15 @@ fn bench_display_list_builder(c: &mut Criterion) {
       })
     });
   }
+
+  // Huge repeating background tiling (viewport clamping should keep this bounded).
+  let tiling_tree = create_background_tiling_fragment_tree(1_000_000.0);
+  group.bench_function("background_tiling_repeat_huge", |b| {
+    b.iter(|| {
+      let builder = DisplayListBuilder::new();
+      builder.build_tree_with_stacking(black_box(&tiling_tree))
+    })
+  });
 
   group.finish();
 }
@@ -924,7 +982,6 @@ fn bench_filter_blur(c: &mut Criterion) {
         }
       }
     }
-
     group.bench_with_input(
       BenchmarkId::new("gaussian_blur_isotropic_sigma3", size),
       &base,

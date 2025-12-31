@@ -3793,6 +3793,23 @@ impl DisplayListBuilder {
       return;
     }
 
+    // Tiling is computed from `clip_rect`, which may be enormous for very tall pages. When we're
+    // building a display list for a viewport-sized canvas we should only emit tiles that can
+    // actually land on the canvas; the optimizer will cull off-screen items anyway. Clamping here
+    // keeps paint build time proportional to what is visible.
+    let visible_clip = match self.viewport_rect() {
+      Some(viewport_rect) => {
+        let Some(intersection) = clip_rect.intersection(viewport_rect) else {
+          return;
+        };
+        if intersection.width() <= 0.0 || intersection.height() <= 0.0 {
+          return;
+        }
+        intersection
+      }
+      None => clip_rect,
+    };
+
     let clip_radii = Self::resolve_clip_radii(style, rects, clip_box, self.viewport);
     let blend_mode = Self::convert_blend_mode(layer.blend_mode);
     let use_blend = blend_mode != BlendMode::Normal;
@@ -3868,8 +3885,8 @@ impl DisplayListBuilder {
         origin_rect.width(),
         tile_w,
         offset_x,
-        clip_rect.min_x(),
-        clip_rect.max_x(),
+        visible_clip.min_x(),
+        visible_clip.max_x(),
       );
       let positions_y = Self::tile_positions(
         layer.repeat.y,
@@ -3877,8 +3894,8 @@ impl DisplayListBuilder {
         origin_rect.height(),
         tile_h,
         offset_y,
-        clip_rect.min_y(),
-        clip_rect.max_y(),
+        visible_clip.min_y(),
+        visible_clip.max_y(),
       );
 
       Some((tile_w, tile_h, positions_x, positions_y))
@@ -3889,8 +3906,8 @@ impl DisplayListBuilder {
         let resolved = Self::normalize_color_stops(stops, style.color);
         if !resolved.is_empty() {
           if let Some((tile_w, tile_h, positions_x, positions_y)) = compute_tiles(0.0, 0.0) {
-            let max_x = clip_rect.max_x();
-            let max_y = clip_rect.max_y();
+            let max_x = visible_clip.max_x();
+            let max_y = visible_clip.max_y();
             let stops = Self::gradient_stops(&resolved);
             let rad = angle.to_radians();
             let dx = rad.sin();
@@ -3904,7 +3921,7 @@ impl DisplayListBuilder {
                 }
 
                 let tile_rect = Rect::from_xywh(tx, ty, tile_w, tile_h);
-                let Some(intersection) = tile_rect.intersection(clip_rect) else {
+                let Some(intersection) = tile_rect.intersection(visible_clip) else {
                   continue;
                 };
                 if intersection.width() <= 0.0 || intersection.height() <= 0.0 {
@@ -3938,8 +3955,8 @@ impl DisplayListBuilder {
         let resolved = Self::normalize_color_stops(stops, style.color);
         if !resolved.is_empty() {
           if let Some((tile_w, tile_h, positions_x, positions_y)) = compute_tiles(0.0, 0.0) {
-            let max_x = clip_rect.max_x();
-            let max_y = clip_rect.max_y();
+            let max_x = visible_clip.max_x();
+            let max_y = visible_clip.max_y();
             let stops = Self::gradient_stops(&resolved);
             let rad = angle.to_radians();
             let dx = rad.sin();
@@ -3953,7 +3970,7 @@ impl DisplayListBuilder {
                 }
 
                 let tile_rect = Rect::from_xywh(tx, ty, tile_w, tile_h);
-                let Some(intersection) = tile_rect.intersection(clip_rect) else {
+                let Some(intersection) = tile_rect.intersection(visible_clip) else {
                   continue;
                 };
                 if intersection.width() <= 0.0 || intersection.height() <= 0.0 {
@@ -3991,8 +4008,8 @@ impl DisplayListBuilder {
         let resolved = Self::normalize_color_stops_unclamped(stops, style.color);
         if !resolved.is_empty() {
           if let Some((tile_w, tile_h, positions_x, positions_y)) = compute_tiles(0.0, 0.0) {
-            let max_x = clip_rect.max_x();
-            let max_y = clip_rect.max_y();
+            let max_x = visible_clip.max_x();
+            let max_y = visible_clip.max_y();
             let stops = Self::gradient_stops_unclamped(&resolved);
 
             for ty in positions_y.iter().copied() {
@@ -4002,7 +4019,7 @@ impl DisplayListBuilder {
                 }
 
                 let tile_rect = Rect::from_xywh(tx, ty, tile_w, tile_h);
-                let Some(intersection) = tile_rect.intersection(clip_rect) else {
+                let Some(intersection) = tile_rect.intersection(visible_clip) else {
                   continue;
                 };
                 if intersection.width() <= 0.0 || intersection.height() <= 0.0 {
@@ -4041,8 +4058,8 @@ impl DisplayListBuilder {
         let resolved = Self::normalize_color_stops_unclamped(stops, style.color);
         if !resolved.is_empty() {
           if let Some((tile_w, tile_h, positions_x, positions_y)) = compute_tiles(0.0, 0.0) {
-            let max_x = clip_rect.max_x();
-            let max_y = clip_rect.max_y();
+            let max_x = visible_clip.max_x();
+            let max_y = visible_clip.max_y();
             let stops = Self::gradient_stops_unclamped(&resolved);
 
             for ty in positions_y.iter().copied() {
@@ -4052,7 +4069,7 @@ impl DisplayListBuilder {
                 }
 
                 let tile_rect = Rect::from_xywh(tx, ty, tile_w, tile_h);
-                let Some(intersection) = tile_rect.intersection(clip_rect) else {
+                let Some(intersection) = tile_rect.intersection(visible_clip) else {
                   continue;
                 };
                 if intersection.width() <= 0.0 || intersection.height() <= 0.0 {
@@ -4092,8 +4109,8 @@ impl DisplayListBuilder {
         let resolved = Self::normalize_color_stops(stops, style.color);
         if !resolved.is_empty() {
           if let Some((tile_w, tile_h, positions_x, positions_y)) = compute_tiles(0.0, 0.0) {
-            let max_x = clip_rect.max_x();
-            let max_y = clip_rect.max_y();
+            let max_x = visible_clip.max_x();
+            let max_y = visible_clip.max_y();
             let stops = Self::gradient_stops(&resolved);
 
             for ty in positions_y.iter().copied() {
@@ -4103,7 +4120,7 @@ impl DisplayListBuilder {
                 }
 
                 let tile_rect = Rect::from_xywh(tx, ty, tile_w, tile_h);
-                let Some(intersection) = tile_rect.intersection(clip_rect) else {
+                let Some(intersection) = tile_rect.intersection(visible_clip) else {
                   continue;
                 };
                 if intersection.width() <= 0.0 || intersection.height() <= 0.0 {
@@ -4142,8 +4159,8 @@ impl DisplayListBuilder {
         let resolved = Self::normalize_color_stops(stops, style.color);
         if !resolved.is_empty() {
           if let Some((tile_w, tile_h, positions_x, positions_y)) = compute_tiles(0.0, 0.0) {
-            let max_x = clip_rect.max_x();
-            let max_y = clip_rect.max_y();
+            let max_x = visible_clip.max_x();
+            let max_y = visible_clip.max_y();
             let stops = Self::gradient_stops(&resolved);
 
             for ty in positions_y.iter().copied() {
@@ -4153,7 +4170,7 @@ impl DisplayListBuilder {
                 }
 
                 let tile_rect = Rect::from_xywh(tx, ty, tile_w, tile_h);
-                let Some(intersection) = tile_rect.intersection(clip_rect) else {
+                let Some(intersection) = tile_rect.intersection(visible_clip) else {
                   continue;
                 };
                 if intersection.width() <= 0.0 || intersection.height() <= 0.0 {
@@ -4250,48 +4267,39 @@ impl DisplayListBuilder {
               // Fast path: for the common `repeat`/`round` in both axes case, emit a single pattern
               // fill instead of one item per tile.
               if repeat_both_axes {
-                let visible_clip = match self.viewport_rect() {
-                  Some(viewport) => clip_rect.intersection(viewport),
-                  None => Some(clip_rect),
-                };
-
-                if let Some(dest_rect) = visible_clip {
-                  if dest_rect.width() > 0.0 && dest_rect.height() > 0.0 {
-                    if let Some(counter) = self.background_tiles.as_ref() {
-                      let positions_x = Self::tile_positions(
-                        layer.repeat.x,
-                        origin_rect.x(),
-                        origin_rect.width(),
-                        tile_w,
-                        offset_x,
-                        dest_rect.min_x(),
-                        dest_rect.max_x(),
-                      );
-                      let positions_y = Self::tile_positions(
-                        layer.repeat.y,
-                        origin_rect.y(),
-                        origin_rect.height(),
-                        tile_h,
-                        offset_y,
-                        dest_rect.min_y(),
-                        dest_rect.max_y(),
-                      );
-                      let tiles =
-                        (positions_x.len() as u64).saturating_mul(positions_y.len() as u64);
-                      if tiles > 0 {
-                        counter.fetch_add(tiles, Ordering::Relaxed);
-                      }
-                    }
-                    self.list.push(DisplayItem::ImagePattern(ImagePatternItem {
-                      dest_rect,
-                      image: image.clone(),
-                      tile_size: Size::new(tile_w, tile_h),
-                      origin: Point::new(origin_rect.x() + offset_x, origin_rect.y() + offset_y),
-                      repeat: ImagePatternRepeat::Repeat,
-                      filter_quality: quality,
-                    }));
+                if let Some(counter) = self.background_tiles.as_ref() {
+                  let positions_x = Self::tile_positions(
+                    layer.repeat.x,
+                    origin_rect.x(),
+                    origin_rect.width(),
+                    tile_w,
+                    offset_x,
+                    visible_clip.min_x(),
+                    visible_clip.max_x(),
+                  );
+                  let positions_y = Self::tile_positions(
+                    layer.repeat.y,
+                    origin_rect.y(),
+                    origin_rect.height(),
+                    tile_h,
+                    offset_y,
+                    visible_clip.min_y(),
+                    visible_clip.max_y(),
+                  );
+                  let tiles = (positions_x.len() as u64).saturating_mul(positions_y.len() as u64);
+                  if tiles > 0 {
+                    counter.fetch_add(tiles, Ordering::Relaxed);
                   }
                 }
+
+                self.list.push(DisplayItem::ImagePattern(ImagePatternItem {
+                  dest_rect: visible_clip,
+                  image: image.clone(),
+                  tile_size: Size::new(tile_w, tile_h),
+                  origin: Point::new(origin_rect.x() + offset_x, origin_rect.y() + offset_y),
+                  repeat: ImagePatternRepeat::Repeat,
+                  filter_quality: quality,
+                }));
               } else {
                 let positions_x = Self::tile_positions(
                   layer.repeat.x,
@@ -4299,8 +4307,8 @@ impl DisplayListBuilder {
                   origin_rect.width(),
                   tile_w,
                   offset_x,
-                  clip_rect.min_x(),
-                  clip_rect.max_x(),
+                  visible_clip.min_x(),
+                  visible_clip.max_x(),
                 );
                 let positions_y = Self::tile_positions(
                   layer.repeat.y,
@@ -4308,12 +4316,12 @@ impl DisplayListBuilder {
                   origin_rect.height(),
                   tile_h,
                   offset_y,
-                  clip_rect.min_y(),
-                  clip_rect.max_y(),
+                  visible_clip.min_y(),
+                  visible_clip.max_y(),
                 );
 
-                let max_x = clip_rect.max_x();
-                let max_y = clip_rect.max_y();
+                let max_x = visible_clip.max_x();
+                let max_y = visible_clip.max_y();
 
                 for ty in positions_y.iter().copied() {
                   for tx in positions_x.iter().copied() {
@@ -4322,7 +4330,7 @@ impl DisplayListBuilder {
                     }
 
                     let tile_rect = Rect::from_xywh(tx, ty, tile_w, tile_h);
-                    let Some(intersection) = tile_rect.intersection(clip_rect) else {
+                    let Some(intersection) = tile_rect.intersection(visible_clip) else {
                       continue;
                     };
                     if intersection.width() <= 0.0 || intersection.height() <= 0.0 {
