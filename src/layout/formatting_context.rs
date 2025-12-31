@@ -45,6 +45,7 @@ use crate::style::values::Length;
 use crate::style::ComputedStyle;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::FragmentNode;
+use rustc_hash::FxHashMap;
 use std::cell::Cell;
 use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
@@ -94,8 +95,8 @@ pub enum IntrinsicSizingMode {
 
 thread_local! {
     /// Intrinsic sizing cache scoped per-thread so rayon fan-out does not require locking.
-    static INTRINSIC_INLINE_CACHE: RefCell<HashMap<(usize, usize, IntrinsicSizingMode), (usize, f32)>> =
-        RefCell::new(HashMap::new());
+    static INTRINSIC_INLINE_CACHE: RefCell<FxHashMap<(usize, usize, IntrinsicSizingMode), (usize, f32)>> =
+        RefCell::new(FxHashMap::default());
 }
 
 thread_local! {
@@ -104,8 +105,8 @@ thread_local! {
   /// This mirrors `INTRINSIC_INLINE_CACHE` but stores sizes in the block axis. The cache is
   /// invalidated on the same epoch boundaries to keep intrinsic sizing consistent within a layout
   /// run while remaining thread-local and contention free.
-  static INTRINSIC_BLOCK_CACHE: RefCell<HashMap<(usize, usize, IntrinsicSizingMode), (usize, f32)>> =
-    RefCell::new(HashMap::new());
+  static INTRINSIC_BLOCK_CACHE: RefCell<FxHashMap<(usize, usize, IntrinsicSizingMode), (usize, f32)>> =
+    RefCell::new(FxHashMap::default());
 }
 
 thread_local! {
@@ -114,8 +115,8 @@ thread_local! {
 
 thread_local! {
   /// Subgrid dependency memoization keyed by node id within a cache epoch.
-  static SUBGRID_DEPENDENT_CACHE: RefCell<HashMap<usize, (usize, bool)>> =
-    RefCell::new(HashMap::new());
+  static SUBGRID_DEPENDENT_CACHE: RefCell<FxHashMap<usize, (usize, bool)>> =
+    RefCell::new(FxHashMap::default());
   static SUBGRID_CACHE_EPOCH: Cell<usize> = const { Cell::new(0) };
 }
 
@@ -275,16 +276,16 @@ const LAYOUT_CACHE_EVICTION_BATCH: usize = 64;
 
 thread_local! {
   /// Layout result cache kept per-thread to stay contention-free during rayon-powered fan-out.
-  static LAYOUT_RESULT_CACHE: RefCell<HashMap<LayoutCacheKeyNoStyle, LayoutCacheEntry>> =
-    RefCell::new(HashMap::new());
+  static LAYOUT_RESULT_CACHE: RefCell<FxHashMap<LayoutCacheKeyNoStyle, LayoutCacheEntry>> =
+    RefCell::new(FxHashMap::default());
   /// Memoized `layout_style_fingerprint` results keyed by `Arc<ComputedStyle>` pointer.
   ///
   /// We intentionally key by the `Arc` pointer (not deep style equality) because the
   /// underlying `ComputedStyle` is immutable once created and the existing fingerprint
   /// already incorporates the pointer address. This keeps lookups extremely cheap in
   /// layout-cache-heavy documents.
-  static LAYOUT_STYLE_FINGERPRINT_CACHE: RefCell<HashMap<usize, (usize, u64)>> =
-    RefCell::new(HashMap::new());
+  static LAYOUT_STYLE_FINGERPRINT_CACHE: RefCell<FxHashMap<usize, (usize, u64)>> =
+    RefCell::new(FxHashMap::default());
   static LAYOUT_CACHE_ENABLED: Cell<bool> = const { Cell::new(false) };
   static LAYOUT_CACHE_EPOCH: Cell<usize> = const { Cell::new(1) };
   static LAYOUT_CACHE_FRAGMENTATION: Cell<u64> = const { Cell::new(0) };
@@ -725,7 +726,7 @@ fn resolve_layout_cache_entry_limit() -> Option<usize> {
 }
 
 fn enforce_layout_cache_entry_limit(
-  map: &mut HashMap<LayoutCacheKeyNoStyle, LayoutCacheEntry>,
+  map: &mut FxHashMap<LayoutCacheKeyNoStyle, LayoutCacheEntry>,
   preserve: &LayoutCacheKeyNoStyle,
 ) {
   let limit = LAYOUT_CACHE_ENTRY_LIMIT.with(|limit| limit.get());
