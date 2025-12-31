@@ -122,14 +122,14 @@ fn hash_case_folded<H: Hasher>(mut hasher: H, name: &str) -> u64 {
 }
 
 pub(crate) fn family_name_signature(name: &str) -> u64 {
-  hash_case_folded(std::collections::hash_map::DefaultHasher::new(), name)
+  hash_case_folded(FxHasher::default(), name)
 }
 
 pub(crate) fn families_signature(families: &[FamilyEntry]) -> u64 {
   use std::hash::Hash;
   use std::hash::Hasher;
 
-  let mut hasher = std::collections::hash_map::DefaultHasher::new();
+  let mut hasher = FxHasher::default();
   families.len().hash(&mut hasher);
   for entry in families {
     match entry {

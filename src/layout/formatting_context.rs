@@ -46,9 +46,9 @@ use crate::style::ComputedStyle;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::FragmentNode;
 use rustc_hash::FxHashMap;
+use rustc_hash::FxHasher as DefaultHasher;
 use std::cell::Cell;
 use std::cell::RefCell;
-use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::hash::Hasher;
@@ -496,7 +496,7 @@ fn subtree_contains_subgrid(node: &BoxNode, epoch: usize) -> bool {
 }
 
 fn layout_constraints_hash(constraints: &LayoutConstraints) -> u64 {
-  let mut h = DefaultHasher::new();
+  let mut h = DefaultHasher::default();
   let hash_space = |space: &crate::layout::constraints::AvailableSpace,
                      hasher: &mut DefaultHasher| match space {
     crate::layout::constraints::AvailableSpace::Definite(v) => {
@@ -538,7 +538,7 @@ pub(crate) fn layout_style_fingerprint(style: &Arc<ComputedStyle>) -> u64 {
   #[cfg(test)]
   increment_style_fingerprint_compute_count();
 
-  let mut h = DefaultHasher::new();
+  let mut h = DefaultHasher::default();
   (Arc::as_ptr(style) as usize).hash(&mut h);
   hash_enum_discriminant(&style.display, &mut h);
   hash_enum_discriminant(&style.position, &mut h);
@@ -653,7 +653,7 @@ fn layout_style_fingerprint_cached(style: &Arc<ComputedStyle>) -> u64 {
 fn fragmentation_fingerprint(options: Option<FragmentationOptions>) -> u64 {
   options
     .map(|opts| {
-      let mut h = DefaultHasher::new();
+      let mut h = DefaultHasher::default();
       opts.fragmentainer_size.to_bits().hash(&mut h);
       opts.fragmentainer_gap.to_bits().hash(&mut h);
       opts.column_count.hash(&mut h);

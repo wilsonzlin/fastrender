@@ -1590,11 +1590,10 @@ fn cluster_emoji_preference(text: &str, variant: FontVariantEmoji) -> EmojiPrefe
 }
 
 fn cluster_signature(text: &str) -> u64 {
-  use std::collections::hash_map::DefaultHasher;
   use std::hash::Hash;
   use std::hash::Hasher;
 
-  let mut hasher = DefaultHasher::new();
+  let mut hasher = FxHasher::default();
   text.hash(&mut hasher);
   hasher.finish()
 }
@@ -3521,7 +3520,7 @@ struct ShapingCacheKey {
 pub(crate) fn shaping_style_hash(style: &ComputedStyle) -> u64 {
   use std::hash::Hash;
   use std::hash::Hasher;
-  let mut hasher = std::collections::hash_map::DefaultHasher::new();
+  let mut hasher = FxHasher::default();
 
   std::mem::discriminant(&style.direction).hash(&mut hasher);
   std::mem::discriminant(&style.unicode_bidi).hash(&mut hasher);

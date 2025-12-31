@@ -15,7 +15,6 @@ use rustc_hash::FxHasher;
 use rayon::prelude::*;
 use roxmltree::Document;
 use std::cell::Cell;
-use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::env;
 use std::hash::{BuildHasherDefault, Hash, Hasher};
@@ -1302,7 +1301,7 @@ fn hash_filter_primitive(prim: &FilterPrimitive, state: &mut impl Hasher) {
 }
 
 fn svg_filter_fingerprint(filter: &SvgFilter) -> u64 {
-  let mut hasher = DefaultHasher::default();
+  let mut hasher = FxHasher::default();
   match filter.color_interpolation_filters {
     ColorInterpolationFilters::LinearRGB => hasher.write_u8(0),
     ColorInterpolationFilters::SRGB => hasher.write_u8(1),
