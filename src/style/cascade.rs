@@ -16344,3 +16344,64 @@ pub(crate) fn reset_marker_box_properties(styles: &mut ComputedStyle) {
   styles.outline_width = defaults.outline_width;
   styles.outline_offset = defaults.outline_offset;
 }
+
+fn marker_allows_property(property: &str) -> bool {
+  let p = property.to_ascii_lowercase();
+
+  // Marker boxes honor a limited set of box-level properties
+  // (CSS Lists 3 § 3.1.1).
+  if matches!(
+    p.as_str(),
+    "content" | "direction" | "unicode-bidi" | "text-combine-upright"
+  ) {
+    return true;
+  }
+
+  // Cursor is explicitly allowed for ::marker in the CSS Pseudo tests.
+  if p == "cursor" {
+    return true;
+  }
+
+  // Font shorthand is allowed; individual font-* longhands are covered below.
+  if p == "font" {
+    return true;
+  }
+
+  // Animations/transitions are explicitly permitted.
+  if p.starts_with("animation") || p.starts_with("transition") {
+    return true;
+  }
+
+  // Inheritable text-affecting properties apply to the marker's contents.
+  if p.starts_with("font-") {
+    return true;
+  }
+
+  matches!(
+    p.as_str(),
+    "color"
+      | "white-space"
+      | "line-height"
+      | "letter-spacing"
+      | "word-spacing"
+      | "text-transform"
+      | "text-emphasis"
+      | "text-emphasis-style"
+      | "text-emphasis-color"
+      | "text-emphasis-position"
+      | "text-decoration"
+      | "text-decoration-line"
+      | "text-decoration-style"
+      | "text-decoration-color"
+      | "text-decoration-thickness"
+      | "text-decoration-skip-ink"
+      | "text-underline-offset"
+      | "text-underline-position"
+      | "text-shadow"
+      | "line-break"
+      | "word-break"
+      | "overflow-wrap"
+      | "hyphens"
+      | "tab-size"
+  )
+}
