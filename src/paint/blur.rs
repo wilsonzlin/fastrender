@@ -219,9 +219,8 @@ pub(crate) fn pixel_fingerprint(data: &[u8]) -> u64 {
   let mut hash = (data.len() as u64).wrapping_mul(PRIME);
   let mut chunks = data.chunks_exact(8);
   for chunk in &mut chunks {
-    let mut buf = [0u8; 8];
-    buf.copy_from_slice(chunk);
-    hash ^= u64::from_le_bytes(buf).wrapping_mul(PRIME).rotate_left(7);
+    let val = u64::from_le_bytes(chunk.try_into().unwrap());
+    hash ^= val.wrapping_mul(PRIME).rotate_left(7);
   }
   let rem = chunks.remainder();
   if !rem.is_empty() {
