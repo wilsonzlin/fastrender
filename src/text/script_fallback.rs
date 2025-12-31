@@ -71,6 +71,8 @@ pub(crate) fn preferred_families(script: Script, language: &str) -> &'static [&'
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::text::font_db::FontDatabase;
+  use std::collections::HashSet;
 
   #[test]
   fn preferred_families_include_pageset_script_fonts() {
@@ -127,6 +129,47 @@ mod tests {
   fn preferred_families_treat_neutral_scripts_like_common() {
     for script in [Script::Common, Script::Inherited, Script::Unknown] {
       assert_eq!(preferred_families(script, ""), COMMON_FALLBACKS);
+    }
+  }
+
+  #[test]
+  fn preferred_families_reference_bundled_faces() {
+    let db = FontDatabase::shared_bundled();
+    let mut families = HashSet::<String>::new();
+    for face in db.faces() {
+      for (name, _) in &face.families {
+        families.insert(name.clone());
+      }
+    }
+
+    for (script, language) in [
+      (Script::Common, ""),
+      (Script::Inherited, ""),
+      (Script::Unknown, ""),
+      (Script::Latin, ""),
+      (Script::Greek, ""),
+      (Script::Cyrillic, ""),
+      (Script::Arabic, ""),
+      (Script::Hebrew, ""),
+      (Script::Syriac, ""),
+      (Script::Thaana, ""),
+      (Script::Nko, ""),
+      (Script::Devanagari, ""),
+      (Script::Bengali, ""),
+      (Script::Tamil, ""),
+      (Script::Thai, ""),
+      (Script::Javanese, ""),
+      (Script::Hangul, ""),
+      (Script::Han, "ja"),
+      (Script::Han, "ko"),
+      (Script::Han, "zh"),
+    ] {
+      for &family in preferred_families(script, language) {
+        assert!(
+          families.contains(family),
+          "missing bundled face {family} for {script:?} {language:?}"
+        );
+      }
     }
   }
 }
