@@ -833,12 +833,7 @@ fn render_entry_inner(shared: &RenderShared, entry: &CachedEntry) -> PageResult 
   let _ = writeln!(log, "Final resource base: {}", doc.base_url);
 
   let worker_name = name.clone();
-  let mut render_opts = shared.base_options.clone();
-  let has_page_rule = doc.html.to_ascii_lowercase().contains("@page");
-  if has_page_rule {
-    render_opts.fit_canvas_to_content = Some(true);
-    let _ = writeln!(log, "Detected @page rule; fitting canvas to content");
-  }
+  let render_opts = shared.base_options.clone();
   let doc_for_render = doc.clone();
   let render_request = shared.artifact_request;
 

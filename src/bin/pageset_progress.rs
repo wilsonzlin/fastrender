@@ -1530,13 +1530,6 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
   log.push_str(&format!("Final resource base: {}\n", doc.base_url));
   let dump_doc = doc.clone();
 
-  // Keep parity with render_pages: fit canvas when @page is detected.
-  let has_page_rule = doc.html.to_ascii_lowercase().contains("@page");
-  if has_page_rule {
-    options.fit_canvas_to_content = Some(true);
-    log.push_str("Detected @page rule; fitting canvas to content\n");
-  }
-
   record_stage(StageHeartbeat::CssInline);
   log.push_str("Stage: render\n");
   flush_log(&log, &args.log_path);
@@ -1652,7 +1645,6 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
       &render_surface,
       &fetcher,
       &dump_doc,
-      has_page_rule,
       dump_soft_timeout_ms,
       &mut log,
     );
@@ -1911,7 +1903,6 @@ fn capture_dump_for_page(
   render_surface: &RenderSurface,
   fetcher: &std::sync::Arc<dyn ResourceFetcher>,
   doc: &PreparedDocument,
-  has_page_rule: bool,
   dump_soft_timeout_ms: Option<u64>,
   log: &mut String,
 ) {
@@ -1952,9 +1943,6 @@ fn capture_dump_for_page(
     if ms > 0 {
       options.timeout = Some(Duration::from_millis(ms));
     }
-  }
-  if has_page_rule {
-    options.fit_canvas_to_content = Some(true);
   }
 
   let mut renderer = match common::render_pipeline::build_renderer_with_fetcher(

@@ -12,6 +12,7 @@ use crate::style::color::Color;
 use crate::style::color::Rgba;
 use crate::style::counter_styles::CounterStyleRule;
 use crate::style::media::MediaContext;
+use crate::style::media::MediaType;
 use crate::style::media::MediaQuery;
 use crate::style::media::MediaQueryCache;
 use crate::style::values::Length;
@@ -378,6 +379,12 @@ impl StyleSheet {
     media_ctx: &MediaContext,
     cache: Option<&mut MediaQueryCache>,
   ) -> Vec<CollectedPageRule<'_>> {
+    // `@page` rules only apply to paged media (print preview / printing). Treating them as active
+    // for screen documents causes large layout/viewports (and `fit_canvas_to_content` callers) to
+    // explode, since many websites ship print CSS alongside screen styles.
+    if !matches!(media_ctx.media_type, MediaType::Print) {
+      return Vec::new();
+    }
     let mut result = Vec::new();
     let mut registry = LayerRegistry::new();
     collect_page_rules_recursive(
@@ -1560,6 +1567,7 @@ fn consume_nested_tokens_for_selector_split<'i, 't>(
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::css::parser::parse_stylesheet;
 
   #[test]
   fn supports_selector_matches_for_basic_selector() {
@@ -1690,6 +1698,27 @@ mod tests {
     assert!(
       !cond.matches(),
       "unknown properties should not be considered supported"
+    );
+  }
+
+  #[test]
+  fn page_rules_only_collected_for_print_media() {
+    let stylesheet = parse_stylesheet("@page { margin: 0; }").expect("page rule parses");
+    assert_eq!(stylesheet.rules.len(), 1);
+
+    let screen_ctx = MediaContext::screen(800.0, 600.0);
+    let screen_rules = stylesheet.collect_page_rules(&screen_ctx);
+    assert!(
+      screen_rules.is_empty(),
+      "@page rules should be ignored for screen media"
+    );
+
+    let print_ctx = MediaContext::print(800.0, 600.0);
+    let print_rules = stylesheet.collect_page_rules(&print_ctx);
+    assert_eq!(
+      print_rules.len(),
+      1,
+      "@page rules should apply for print media"
     );
   }
 }

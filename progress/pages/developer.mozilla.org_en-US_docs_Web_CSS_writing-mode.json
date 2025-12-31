@@ -1,7 +1,7 @@
 {
-  "url": "https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/writing-mode",
-  "status": "error",
-  "total_ms": 3865.695708,
+  "url": "https://developer.mozilla.org/en-US/docs/Web/CSS/writing-mode",
+  "status": "timeout",
+  "total_ms": 5000.0,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,
@@ -9,10 +9,11 @@
     "layout": 0.0,
     "paint": 0.0
   },
-  "notes": "timeout at cascade after 4.755880593s",
-  "hotspot": "layout",
-  "failure_stage": "paint",
-  "timeout_stage": null,
+  "notes": "",
+  "auto_notes": "hard timeout after 5.00s\nstage: paint_rasterize",
+  "hotspot": "paint",
+  "failure_stage": null,
+  "timeout_stage": "paint",
   "last_good_commit": "",
   "last_regression_commit": ""
 }
