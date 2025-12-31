@@ -9586,6 +9586,8 @@ pub(crate) fn render_html_with_shared_resources(
   resource_context: Option<ResourceContext>,
   max_iframe_depth: usize,
 ) -> Result<Pixmap> {
+  let deadline = crate::render_control::active_deadline();
+
   let resource_context = resource_context.map(|mut ctx| {
     if ctx.iframe_depth_remaining.is_none() {
       ctx.iframe_depth_remaining = Some(max_iframe_depth);
@@ -9639,7 +9641,7 @@ pub(crate) fn render_html_with_shared_resources(
       MediaType::Screen,
       false,
       false,
-      None,
+      deadline.as_ref(),
       None,
       None,
       renderer.paint_parallelism,
@@ -10300,6 +10302,41 @@ mod tests {
       .with_viewport(10, 10)
       .with_timeout(Some(std::time::Duration::from_millis(0)));
     let result = renderer.snapshot_pipeline("<div>Hello</div>", "https://example.com/", options);
+
+    match result {
+      Err(Error::Render(RenderError::Timeout { stage, .. })) => {
+        assert_eq!(stage, RenderStage::DomParse);
+      }
+      Ok(_) => panic!("expected dom_parse timeout, got Ok"),
+      Err(err) => panic!("expected dom_parse timeout, got {err}"),
+    }
+  }
+
+  #[test]
+  fn shared_resource_nested_render_timeout_is_cooperative() {
+    let renderer = FastRender::with_config(FastRenderConfig {
+      font_config: FontConfig::bundled_only(),
+      ..FastRenderConfig::default()
+    })
+    .unwrap();
+
+    let deadline = RenderDeadline::new(Some(std::time::Duration::from_millis(0)), None);
+    let result = crate::render_control::with_deadline(Some(&deadline), || {
+      render_html_with_shared_resources(
+        "<div>Hello</div>",
+        10,
+        10,
+        Rgba::WHITE,
+        &renderer.font_context,
+        &renderer.image_cache,
+        Arc::new(MapFetcher::default()),
+        Some("https://example.com/".to_string()),
+        renderer.device_pixel_ratio,
+        ResourceAccessPolicy::default(),
+        None,
+        renderer.max_iframe_depth,
+      )
+    });
 
     match result {
       Err(Error::Render(RenderError::Timeout { stage, .. })) => {
