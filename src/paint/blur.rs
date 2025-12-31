@@ -1,6 +1,6 @@
 use crate::debug::runtime;
 use crate::error::{RenderError, RenderStage};
-use crate::paint::painter::with_paint_diagnostics;
+use crate::paint::painter::{paint_diagnostics_enabled, with_paint_diagnostics};
 use crate::paint::pixmap::{guard_allocation_bytes, new_pixmap_with_context};
 use crate::paint::svg_filter::FilterCacheConfig;
 use crate::render_control::{active_deadline, check_active, check_active_periodic, DeadlineGuard};
@@ -11,6 +11,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::BuildHasherDefault;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::time::Instant;
 use tiny_skia::Pixmap;
 
 const FAST_GAUSS_THRESHOLD_SIGMA: f32 = 4.0;
@@ -2335,15 +2336,52 @@ fn apply_blur_internal(
 
   let config = cache_config.unwrap_or_else(FilterCacheConfig::from_env);
 
-  let (tile_count, blur_applied) =
+  let blur_operation = |pixmap: &mut Pixmap| -> Result<(usize, bool), RenderError> {
     if let Some((tiled, tiles)) = tile_blur(pixmap, sigma_x, sigma_y, &config)? {
       *pixmap = tiled;
-      (tiles, tiles > 0)
+      Ok((tiles, tiles > 0))
     } else if sigma_x == sigma_y {
-      (0, blur_isotropic_body(pixmap, sigma_x)?)
+      Ok((0, blur_isotropic_body(pixmap, sigma_x)?))
     } else {
-      (0, blur_anisotropic_body(pixmap, sigma_x, sigma_y)?)
-    };
+      Ok((0, blur_anisotropic_body(pixmap, sigma_x, sigma_y)?))
+    }
+  };
+
+  let (tile_count, blur_applied) = if paint_diagnostics_enabled() {
+    let pixels = u64::from(pixmap.width()).saturating_mul(u64::from(pixmap.height()));
+    let bytes = pixmap.data().len() as u64;
+    let start = Instant::now();
+    let blur_result = blur_operation(pixmap);
+    let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+
+    with_paint_diagnostics(|diag| {
+      diag.blur_calls += 1;
+      diag.blur_ms += elapsed_ms;
+      match &blur_result {
+        Ok((_, blur_applied)) => {
+          if *blur_applied {
+            diag.blur_pixels += pixels;
+            diag.blur_bytes += bytes;
+          }
+        }
+        Err(err) => {
+          if matches!(
+            err,
+            RenderError::Timeout {
+              stage: RenderStage::Paint,
+              ..
+            }
+          ) {
+            diag.blur_cancellations += 1;
+          }
+        }
+      }
+    });
+
+    blur_result?
+  } else {
+    blur_operation(pixmap)?
+  };
 
   record_blur_tiles(tile_count);
 
@@ -2459,6 +2497,90 @@ mod tests {
       pixmap.pixels().iter().any(|p| p.alpha() > 0),
       "expected blurred output to retain some alpha"
     );
+  }
+
+  #[test]
+  fn blur_diagnostics_counts_non_cached_blur() {
+    enable_paint_diagnostics();
+    let mut cache = BlurCache::new(FilterCacheConfig {
+      max_items: 0,
+      max_bytes: 1024 * 1024,
+    });
+    let mut pixmap = new_pixmap(64, 64).unwrap();
+    let idx = 32 * 64 + 32;
+    pixmap.pixels_mut()[idx] = PremultipliedColorU8::from_rgba(255, 255, 255, 255).unwrap();
+
+    apply_gaussian_blur_cached(&mut pixmap, 2.0, 2.0, Some(&mut cache), 1.0).unwrap();
+
+    let diag = take_paint_diagnostics().unwrap();
+    assert_eq!(diag.blur_cache_hits, 0);
+    assert_eq!(diag.blur_cache_misses, 0);
+    assert_eq!(diag.blur_calls, 1);
+    assert_eq!(diag.blur_cancellations, 0);
+    assert_eq!(diag.blur_pixels, 64u64 * 64);
+    assert_eq!(diag.blur_bytes, 64u64 * 64 * 4);
+  }
+
+  #[test]
+  fn blur_diagnostics_counts_cached_hit_as_no_work() {
+    enable_paint_diagnostics();
+    let mut cache = BlurCache::new(FilterCacheConfig {
+      max_items: 8,
+      max_bytes: 1024 * 1024,
+    });
+    let mut first = new_pixmap(64, 64).unwrap();
+    let idx = 32 * 64 + 32;
+    first.pixels_mut()[idx] = PremultipliedColorU8::from_rgba(255, 255, 255, 255).unwrap();
+    let mut second = first.clone();
+
+    apply_gaussian_blur_cached(&mut first, 2.0, 2.0, Some(&mut cache), 1.0).unwrap();
+    apply_gaussian_blur_cached(&mut second, 2.0, 2.0, Some(&mut cache), 1.0).unwrap();
+    assert_eq!(first.data(), second.data(), "expected cached blur output to match");
+
+    let diag = take_paint_diagnostics().unwrap();
+    assert_eq!(diag.blur_cache_hits, 1);
+    assert_eq!(diag.blur_cache_misses, 1);
+    assert_eq!(diag.blur_calls, 1);
+    assert_eq!(diag.blur_cancellations, 0);
+    assert_eq!(diag.blur_pixels, 64u64 * 64);
+    assert_eq!(diag.blur_bytes, 64u64 * 64 * 4);
+  }
+
+  #[test]
+  fn blur_diagnostics_counts_deadline_cancellation() {
+    enable_paint_diagnostics();
+    let mut cache = BlurCache::new(FilterCacheConfig {
+      max_items: 0,
+      max_bytes: 4 * 1024,
+    });
+    let mut pixmap = new_pixmap(64, 64).unwrap();
+    for (i, px) in pixmap.pixels_mut().iter_mut().enumerate() {
+      let a = (i % 256) as u8;
+      *px = PremultipliedColorU8::from_rgba(a, a, a, a).unwrap();
+    }
+    let original = pixmap.data().to_vec();
+
+    let cancel: Arc<crate::render_control::CancelCallback> = Arc::new(|| true);
+    let deadline = RenderDeadline::new(None, Some(cancel));
+    let err = with_deadline(Some(&deadline), || {
+      apply_gaussian_blur_cached(&mut pixmap, 3.0, 3.0, Some(&mut cache), 1.0).unwrap_err()
+    });
+    assert!(matches!(
+      err,
+      RenderError::Timeout {
+        stage: RenderStage::Paint,
+        ..
+      }
+    ));
+    assert_eq!(pixmap.data(), original.as_slice());
+
+    let diag = take_paint_diagnostics().unwrap();
+    assert_eq!(diag.blur_cache_hits, 0);
+    assert_eq!(diag.blur_cache_misses, 0);
+    assert_eq!(diag.blur_calls, 1);
+    assert_eq!(diag.blur_cancellations, 1);
+    assert_eq!(diag.blur_pixels, 0);
+    assert_eq!(diag.blur_bytes, 0);
   }
 
   #[test]

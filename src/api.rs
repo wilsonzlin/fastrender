@@ -1786,6 +1786,11 @@ pub struct PaintDiagnostics {
   pub blur_cache_hits: Option<usize>,
   pub blur_cache_misses: Option<usize>,
   pub blur_tiles: Option<usize>,
+  pub blur_calls: Option<u64>,
+  pub blur_ms: Option<f64>,
+  pub blur_pixels: Option<u64>,
+  pub blur_bytes: Option<u64>,
+  pub blur_cancellations: Option<u64>,
 }
 
 /// Resource loading counters.
@@ -4250,6 +4255,11 @@ impl FastRender {
           rec.stats.paint.blur_cache_hits = Some(diag.blur_cache_hits);
           rec.stats.paint.blur_cache_misses = Some(diag.blur_cache_misses);
           rec.stats.paint.blur_tiles = Some(diag.blur_tiles);
+          rec.stats.paint.blur_calls = Some(diag.blur_calls);
+          rec.stats.paint.blur_ms = Some(diag.blur_ms);
+          rec.stats.paint.blur_pixels = Some(diag.blur_pixels);
+          rec.stats.paint.blur_bytes = Some(diag.blur_bytes);
+          rec.stats.paint.blur_cancellations = Some(diag.blur_cancellations);
         }
       }
 

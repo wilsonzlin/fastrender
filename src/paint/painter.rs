@@ -269,6 +269,11 @@ pub struct PaintDiagnosticsSummary {
   pub blur_cache_hits: usize,
   pub blur_cache_misses: usize,
   pub blur_tiles: usize,
+  pub blur_calls: u64,
+  pub blur_ms: f64,
+  pub blur_pixels: u64,
+  pub blur_bytes: u64,
+  pub blur_cancellations: u64,
 }
 
 thread_local! {
