@@ -7,6 +7,7 @@ set -euo pipefail
 # Environment overrides:
 #   JOBS=8 FETCH_TIMEOUT=30 RENDER_TIMEOUT=5 DISK_CACHE=0 NO_DISK_CACHE=1
 #   RAYON_NUM_THREADS=4 FASTR_LAYOUT_PARALLEL=off|on|auto
+#   FASTR_DISK_CACHE_MAX_BYTES=... FASTR_DISK_CACHE_MAX_AGE_SECS=... (0 = never expire)
 
 TOTAL_CPUS="$(nproc)"
 JOBS="${JOBS:-${TOTAL_CPUS}}"
