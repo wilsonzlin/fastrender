@@ -3319,12 +3319,35 @@ fn parse_declaration<'i, 't>(
     full_slice_raw.trim_end_matches(';').trim_end()
   };
 
-  parse_property_value_in_context(context, &property, value).map(|parsed_value| Declaration {
+  let parsed_value = parse_property_value_in_context(context, &property, value)?;
+  let raw_value = if property_needs_raw_value(&property) {
+    value.to_string()
+  } else {
+    String::new()
+  };
+  Some(Declaration {
     property,
     value: parsed_value,
-    raw_value: value.to_string(),
+    raw_value,
     important,
   })
+}
+
+fn property_needs_raw_value(property: &str) -> bool {
+  property.starts_with("--")
+    || matches!(
+      property,
+      "scroll-timeline"
+        | "view-timeline"
+        | "animation-timeline"
+        | "animation-range"
+        | "animation-name"
+        | "transition-property"
+        | "transition-duration"
+        | "transition-delay"
+        | "transition-timing-function"
+        | "transition"
+    )
 }
 
 fn parse_declaration_collecting_errors<'i, 't>(
@@ -3406,10 +3429,15 @@ fn parse_declaration_collecting_errors<'i, 't>(
     return None;
   };
 
+  let raw_value = if property_needs_raw_value(&property) {
+    value.to_string()
+  } else {
+    String::new()
+  };
   Some(Declaration {
     property,
     value: parsed_value,
-    raw_value: value.to_string(),
+    raw_value,
     important,
   })
 }
@@ -4013,6 +4041,22 @@ mod tests {
       other => panic!("expected custom value, got {:?}", other),
     }
     assert_eq!(decls[0].raw_value, "  10px  var(--bar)");
+  }
+
+  #[test]
+  fn non_custom_properties_do_not_store_raw_value() {
+    let decls = parse_declarations("color:red;");
+    assert_eq!(decls.len(), 1);
+    assert_eq!(decls[0].property, "color");
+    assert!(decls[0].raw_value.is_empty());
+  }
+
+  #[test]
+  fn transition_declarations_preserve_raw_value() {
+    let decls = parse_declarations("transition:opacity 1s;");
+    assert_eq!(decls.len(), 1);
+    assert_eq!(decls[0].property, "transition");
+    assert_eq!(decls[0].raw_value, "opacity 1s");
   }
 
   #[test]
