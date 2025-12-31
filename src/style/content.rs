@@ -1529,9 +1529,13 @@ fn parse_function(name: &str, args: &str) -> Option<ContentItem> {
       let kind = match parts.next().map(|k| k.to_ascii_lowercase()) {
         Some(k) if k == "start" => StringReferenceKind::Start,
         Some(k) if k == "first" => StringReferenceKind::First,
-        Some(_) => StringReferenceKind::Last,
+        Some(k) if k == "last" => StringReferenceKind::Last,
+        Some(_) => return None,
         None => StringReferenceKind::Last,
       };
+      if parts.next().is_some() {
+        return None;
+      }
       Some(ContentItem::StringReference { name, kind })
     }
 
