@@ -48,7 +48,7 @@
 //! - Unicode Standard Annex #14: <https://www.unicode.org/reports/tr14/>
 //! - CSS Text Module Level 3: <https://www.w3.org/TR/css-text-3/>
 
-use crate::text::emoji::find_emoji_sequences;
+use crate::text::emoji::find_emoji_sequence_spans;
 use unicode_linebreak::linebreaks;
 use unicode_linebreak::BreakOpportunity as UnicodeBreakOpportunity;
 
@@ -267,7 +267,7 @@ fn filter_breaks_inside_emoji_sequences(
   text: &str,
   opportunities: Vec<BreakOpportunity>,
 ) -> Vec<BreakOpportunity> {
-  let emoji_sequences = find_emoji_sequences(text);
+  let emoji_sequences = find_emoji_sequence_spans(text);
   if emoji_sequences.is_empty() {
     return opportunities;
   }

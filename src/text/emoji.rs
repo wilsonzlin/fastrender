@@ -82,6 +82,13 @@ pub enum EmojiSequenceType {
   TagSequence,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct EmojiSequenceSpan {
+  pub(crate) start: usize,
+  pub(crate) end: usize,
+  pub(crate) sequence_type: EmojiSequenceType,
+}
+
 // =============================================================================
 // Core Emoji Detection Functions
 // =============================================================================
@@ -484,6 +491,149 @@ pub fn is_tag_base(c: char) -> bool {
 /// let seqs = find_emoji_sequences("👨‍👩‍👧");
 /// assert_eq!(seqs.len(), 1);
 /// ```
+pub(crate) fn find_emoji_sequence_spans(text: &str) -> Vec<EmojiSequenceSpan> {
+  if text.is_ascii() {
+    return Vec::new();
+  }
+
+  let mut sequences = Vec::new();
+  let mut chars = text.char_indices().peekable();
+
+  while let Some((start_idx, ch)) = chars.next() {
+    // Check for keycap sequences first (0-9, *, #).
+    if is_keycap_base(ch) {
+      let mut end_idx = start_idx + ch.len_utf8();
+
+      // Check for VS16 (emoji presentation).
+      if let Some(&(idx, next_ch)) = chars.peek() {
+        if is_emoji_variation_selector(next_ch) {
+          end_idx = idx + next_ch.len_utf8();
+          chars.next();
+        }
+      }
+
+      // Check for combining enclosing keycap.
+      if let Some(&(idx, next_ch)) = chars.peek() {
+        if is_combining_enclosing_keycap(next_ch) {
+          end_idx = idx + next_ch.len_utf8();
+          chars.next();
+          sequences.push(EmojiSequenceSpan {
+            start: start_idx,
+            end: end_idx,
+            sequence_type: EmojiSequenceType::KeycapSequence,
+          });
+        }
+      }
+
+      // Not a keycap sequence; skip (not emoji on its own without a keycap suffix).
+      continue;
+    }
+
+    // Check for tag sequences (subdivision flags like 🏴).
+    if is_tag_base(ch) {
+      let mut end_idx = start_idx + ch.len_utf8();
+      let mut found_tags = false;
+
+      while let Some(&(idx, next_ch)) = chars.peek() {
+        if is_tag_character(next_ch) {
+          found_tags = true;
+          end_idx = idx + next_ch.len_utf8();
+          chars.next();
+          if is_cancel_tag(next_ch) {
+            break;
+          }
+        } else {
+          break;
+        }
+      }
+
+      sequences.push(EmojiSequenceSpan {
+        start: start_idx,
+        end: if found_tags { end_idx } else { start_idx + ch.len_utf8() },
+        sequence_type: if found_tags {
+          EmojiSequenceType::TagSequence
+        } else {
+          EmojiSequenceType::Single
+        },
+      });
+      continue;
+    }
+
+    // Check for regional indicator (potential flag sequence).
+    if is_regional_indicator(ch) {
+      if let Some(&(second_idx, second)) = chars.peek() {
+        if is_regional_indicator(second) {
+          chars.next();
+          sequences.push(EmojiSequenceSpan {
+            start: start_idx,
+            end: second_idx + second.len_utf8(),
+            sequence_type: EmojiSequenceType::FlagSequence,
+          });
+          continue;
+        }
+      }
+      sequences.push(EmojiSequenceSpan {
+        start: start_idx,
+        end: start_idx + ch.len_utf8(),
+        sequence_type: EmojiSequenceType::Single,
+      });
+      continue;
+    }
+
+    // Skip non-emoji characters.
+    if !is_emoji(ch) || is_variation_selector(ch) || is_zwj(ch) {
+      continue;
+    }
+
+    let mut end_idx = start_idx + ch.len_utf8();
+    let mut seq_type = EmojiSequenceType::Single;
+    let mut last_non_vs_or_zwj = ch;
+
+    while let Some(&(next_idx, next_ch)) = chars.peek() {
+      if is_variation_selector(next_ch) {
+        end_idx = next_idx + next_ch.len_utf8();
+        chars.next();
+        continue;
+      }
+
+      if is_emoji_modifier(next_ch) && is_emoji_modifier_base(last_non_vs_or_zwj) {
+        end_idx = next_idx + next_ch.len_utf8();
+        seq_type = EmojiSequenceType::WithModifier;
+        last_non_vs_or_zwj = next_ch;
+        chars.next();
+        continue;
+      }
+
+      if is_zwj(next_ch) {
+        chars.next(); // consume ZWJ
+
+        if let Some(&(after_zwj_idx, after_zwj_ch)) = chars.peek() {
+          if is_emoji(after_zwj_ch) && !is_variation_selector(after_zwj_ch) {
+            end_idx = after_zwj_idx + after_zwj_ch.len_utf8();
+            seq_type = EmojiSequenceType::ZwjSequence;
+            last_non_vs_or_zwj = after_zwj_ch;
+            chars.next(); // consume emoji after ZWJ
+            continue;
+          }
+        }
+
+        // ZWJ not followed by emoji - we already consumed it, so just break.
+        break;
+      }
+
+      break;
+    }
+
+    sequences.push(EmojiSequenceSpan {
+      start: start_idx,
+      end: end_idx,
+      sequence_type: seq_type,
+    });
+  }
+
+  sequences
+}
+
 pub fn find_emoji_sequences(text: &str) -> Vec<EmojiSequence> {
   let mut sequences = Vec::new();
   let mut chars = text.char_indices().peekable();
@@ -1039,6 +1189,31 @@ mod tests {
     assert_eq!(seqs.len(), 1);
     assert_eq!(seqs[0].chars, vec!['🚀']);
     assert_eq!(seqs[0].sequence_type, EmojiSequenceType::Single);
+  }
+
+  #[test]
+  fn test_find_emoji_sequence_spans_matches_sequences() {
+    let cases = [
+      "Hello 🚀 World",
+      "👋🏽",
+      "🇺🇸",
+      "👨\u{200D}👩",
+      "1️⃣",
+      "❤️",
+      "🏴",
+      "Hello World",
+    ];
+
+    for text in cases {
+      let spans = find_emoji_sequence_spans(text);
+      let seqs = find_emoji_sequences(text);
+      assert_eq!(spans.len(), seqs.len(), "text={text}");
+      for (span, seq) in spans.iter().zip(seqs.iter()) {
+        assert_eq!(span.start, seq.start, "text={text}");
+        assert_eq!(span.end, seq.end, "text={text}");
+        assert_eq!(span.sequence_type, seq.sequence_type, "text={text}");
+      }
+    }
   }
 
   #[test]

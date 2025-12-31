@@ -1218,7 +1218,7 @@ pub fn atomic_shaping_clusters(text: &str) -> Vec<(usize, usize)> {
     boundaries.push(text.len());
   }
 
-  let sequences = emoji::find_emoji_sequences(text);
+  let sequences = emoji::find_emoji_sequence_spans(text);
   if !sequences.is_empty() {
     let mut filtered = Vec::with_capacity(boundaries.len());
     let mut seq_iter = sequences.iter().peekable();
