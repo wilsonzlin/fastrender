@@ -1,0 +1,13 @@
+{
+  "url": "https://slow-ok.test/",
+  "status": "ok",
+  "total_ms": 4321.0,
+  "stages_ms": { "fetch": 1.0, "css": 100.0, "cascade": 500.0, "layout": 1000.0, "paint": 2000.0 },
+  "notes": "",
+  "hotspot": "paint",
+  "failure_stage": null,
+  "timeout_stage": null,
+  "last_good_commit": "",
+  "last_regression_commit": ""
+}
+

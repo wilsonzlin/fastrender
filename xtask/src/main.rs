@@ -17,6 +17,7 @@ use url::Url;
 use walkdir::WalkDir;
 
 mod import_page_fixture;
+mod update_pageset_timeouts;
 
 fn main() -> Result<()> {
   let cli = Cli::parse();
@@ -29,6 +30,9 @@ fn main() -> Result<()> {
     Commands::PagesetDiff(args) => run_pageset_diff(args),
     Commands::DiffRenders(args) => run_diff_renders(args),
     Commands::ImportPageFixture(args) => import_page_fixture::run_import_page_fixture(args),
+    Commands::UpdatePagesetTimeouts(args) => {
+      update_pageset_timeouts::run_update_pageset_timeouts(args)
+    }
     Commands::PerfSmoke(args) => run_perf_smoke(args),
   }
 }
@@ -61,6 +65,8 @@ enum Commands {
   DiffRenders(DiffRendersArgs),
   /// Convert a captured bundle into a pages_regression fixture
   ImportPageFixture(import_page_fixture::ImportPageFixtureArgs),
+  /// Update `tests/pages/pageset_timeouts.json` based on `progress/pages/*.json`
+  UpdatePagesetTimeouts(update_pageset_timeouts::UpdatePagesetTimeoutsArgs),
   /// Run the offline perf smoke harness over a curated fixture set
   PerfSmoke(PerfSmokeArgs),
 }
@@ -1586,7 +1592,6 @@ mod tests {
           counts: fastrender::RenderCounts {
             dom_nodes: Some(4),
             styled_nodes: Some(3),
-            box_nodes: None,
             fragments: Some(5),
             ..Default::default()
           },
