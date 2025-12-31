@@ -537,16 +537,37 @@ fn build_styled_lookup<'a>(
   Ok(())
 }
 
+enum ComposedChildren<'a> {
+  Slice(&'a [StyledNode]),
+  Refs(Vec<&'a StyledNode>),
+}
+
+impl<'a> ComposedChildren<'a> {
+  fn len(&self) -> usize {
+    match self {
+      Self::Slice(children) => children.len(),
+      Self::Refs(children) => children.len(),
+    }
+  }
+
+  fn get(&self, idx: usize) -> &'a StyledNode {
+    match self {
+      Self::Slice(children) => &children[idx],
+      Self::Refs(children) => children[idx],
+    }
+  }
+}
+
 fn composed_children<'a>(
   styled: &'a StyledNode,
   lookup: &'a HashMap<usize, &'a StyledNode>,
-) -> Vec<&'a StyledNode> {
+) -> ComposedChildren<'a> {
   if let Some(shadow_root) = styled
     .children
     .iter()
     .find(|c| matches!(c.node.node_type, crate::dom::DomNodeType::ShadowRoot { .. }))
   {
-    return vec![shadow_root];
+    return ComposedChildren::Refs(vec![shadow_root]);
   }
 
   if matches!(styled.node.node_type, crate::dom::DomNodeType::Slot { .. })
@@ -558,10 +579,10 @@ fn composed_children<'a>(
         resolved.push(*node);
       }
     }
-    return resolved;
+    return ComposedChildren::Refs(resolved);
   }
 
-  styled.children.iter().collect()
+  ComposedChildren::Slice(&styled.children)
 }
 
 fn normalize_mime_type(value: &str) -> Option<String> {
@@ -1506,7 +1527,7 @@ fn generate_boxes_for_styled(
   let mut children: Vec<BoxNode> = Vec::new();
   let mut idx = 0;
   while idx < composed_children.len() {
-    let child = composed_children[idx];
+    let child = composed_children.get(idx);
     if site_compat {
       if let Some(testid) = child.node.get_attribute_ref("data-testid") {
         if testid == "one-nav-overlay" {
@@ -1516,7 +1537,7 @@ fn generate_boxes_for_styled(
             // Skip the overlay and the subsequent focus-trap container when the overlay is hidden (menu closed).
             idx += 1;
             while idx < composed_children.len() {
-              let next = composed_children[idx];
+              let next = composed_children.get(idx);
               // Skip over whitespace/text nodes between the overlay and drawer.
               if let crate::dom::DomNodeType::Text { content } = &next.node.node_type {
                 if content.trim().is_empty() {
