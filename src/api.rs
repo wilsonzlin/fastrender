@@ -6479,17 +6479,15 @@ impl FastRender {
           let container_box_tree_timer = stats.as_deref().and_then(|rec| rec.timer());
           record_stage(StageHeartbeat::BoxTree);
           box_tree =
-            crate::tree::box_generation::generate_box_tree_with_anonymous_fixup(&styled_tree)?;
+            crate::tree::box_generation::generate_box_tree_with_anonymous_fixup_with_options(
+              &styled_tree,
+              &box_gen_options,
+            )?;
           self.resolve_replaced_intrinsic_sizes_for_media(
             &mut box_tree.root,
             layout_viewport,
             media_type,
           );
-          let _ = crate::tree::box_generation::generate_box_tree_with_anonymous_fixup_with_options(
-            &styled_tree,
-            &box_gen_options,
-          )?;
-          self.resolve_replaced_intrinsic_sizes(&mut box_tree.root, layout_viewport);
           if let Some(rec) = stats.as_deref_mut() {
             RenderStatsRecorder::add_ms(
               &mut rec.stats.timings.box_tree_ms,
