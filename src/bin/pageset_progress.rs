@@ -1020,6 +1020,12 @@ fn cached_url_from_cache_meta(cache_path: &Path) -> Option<String> {
   parsed_meta.url
 }
 
+fn parse_cache_collision_suffix(raw: &str) -> Option<(&str, &str)> {
+  raw
+    .rsplit_once("--")
+    .filter(|(_, suffix)| suffix.len() == 8 && suffix.chars().all(|c| c.is_ascii_hexdigit()))
+}
+
 fn cached_html_index_by_pageset_stem(
   cached_paths: &BTreeMap<String, PathBuf>,
 ) -> HashMap<String, Vec<(String, PathBuf)>> {
@@ -1050,6 +1056,23 @@ fn cached_html_path_for_pageset_entry(
   if candidates.len() == 1 {
     return Some(candidates[0].1.clone());
   }
+  if let Some((_, suffix)) = parse_cache_collision_suffix(&entry.cache_stem) {
+    let mut matched: Option<&PathBuf> = None;
+    let suffix = suffix.to_ascii_lowercase();
+    for (cache_stem, cache_path) in candidates {
+      if let Some((_, candidate_suffix)) = parse_cache_collision_suffix(cache_stem) {
+        if candidate_suffix.to_ascii_lowercase() == suffix {
+          if matched.is_some() {
+            return None;
+          }
+          matched = Some(cache_path);
+        }
+      }
+    }
+    if let Some(path) = matched {
+      return Some(path.clone());
+    }
+  }
   None
 }
 
@@ -1058,13 +1081,24 @@ fn resolve_pageset_entry_for_cache_stem<'a>(
   pageset_by_cache: &HashMap<String, &'a PagesetEntry>,
   pageset_by_stem: &HashMap<String, Vec<&'a PagesetEntry>>,
 ) -> Option<&'a PagesetEntry> {
-  pageset_by_cache.get(cache_stem).copied().or_else(|| {
-    pageset_stem(cache_stem).and_then(|stem| {
-      pageset_by_stem
-        .get(&stem)
-        .and_then(|entries| (entries.len() == 1).then_some(entries[0]))
+  pageset_by_cache
+    .get(cache_stem)
+    .copied()
+    .or_else(|| {
+      parse_cache_collision_suffix(cache_stem).and_then(|(base, suffix)| {
+        pageset_stem(base).and_then(|stem| {
+          let canonical = format!("{stem}--{}", suffix.to_ascii_lowercase());
+          pageset_by_cache.get(&canonical).copied()
+        })
+      })
     })
-  })
+    .or_else(|| {
+      pageset_stem(cache_stem).and_then(|stem| {
+        pageset_by_stem
+          .get(&stem)
+          .and_then(|entries| (entries.len() == 1).then_some(entries[0]))
+      })
+    })
 }
 
 fn atomic_write_with_hook<F>(path: &Path, contents: &[u8], pre_rename_hook: F) -> io::Result<()>
@@ -5471,6 +5505,28 @@ mod tests {
   }
 
   #[test]
+  fn cached_html_path_for_entry_falls_back_to_matching_collision_alias() {
+    let dir = tempdir().unwrap();
+    let alias_a = dir.path().join("www.example.com--aaaaaaaa.html");
+    let alias_b = dir.path().join("www.example.com--bbbbbbbb.html");
+    let mut cached_paths: BTreeMap<String, PathBuf> = BTreeMap::new();
+    cached_paths.insert("www.example.com--aaaaaaaa".to_string(), alias_a);
+    cached_paths.insert("www.example.com--bbbbbbbb".to_string(), alias_b.clone());
+    let cached_by_stem = cached_html_index_by_pageset_stem(&cached_paths);
+
+    let entry = PagesetEntry {
+      url: "http://example.com".to_string(),
+      stem: "example.com".to_string(),
+      cache_stem: "example.com--bbbbbbbb".to_string(),
+    };
+
+    assert_eq!(
+      cached_html_path_for_pageset_entry(&entry, &cached_paths, &cached_by_stem),
+      Some(alias_b)
+    );
+  }
+
+  #[test]
   fn resolve_pageset_entry_maps_www_cache_stem() {
     let entries = vec![PagesetEntry {
       url: "https://example.com".to_string(),
@@ -5497,6 +5553,42 @@ mod tests {
     .expect("entry");
 
     assert_eq!(resolved.cache_stem, "example.com");
+  }
+
+  #[test]
+  fn resolve_pageset_entry_maps_www_cache_stem_with_collision_suffix() {
+    let entries = vec![
+      PagesetEntry {
+        url: "https://example.com".to_string(),
+        stem: "example.com".to_string(),
+        cache_stem: "example.com--aaaaaaaa".to_string(),
+      },
+      PagesetEntry {
+        url: "http://example.com/".to_string(),
+        stem: "example.com".to_string(),
+        cache_stem: "example.com--bbbbbbbb".to_string(),
+      },
+    ];
+    let pageset_by_cache: HashMap<String, &PagesetEntry> = entries
+      .iter()
+      .map(|entry| (entry.cache_stem.clone(), entry))
+      .collect();
+    let mut pageset_by_stem: HashMap<String, Vec<&PagesetEntry>> = HashMap::new();
+    for entry in &entries {
+      pageset_by_stem
+        .entry(entry.stem.clone())
+        .or_default()
+        .push(entry);
+    }
+
+    let resolved = resolve_pageset_entry_for_cache_stem(
+      "www.example.com--bbbbbbbb",
+      &pageset_by_cache,
+      &pageset_by_stem,
+    )
+    .expect("entry");
+
+    assert_eq!(resolved.cache_stem, "example.com--bbbbbbbb");
   }
 
   #[test]
