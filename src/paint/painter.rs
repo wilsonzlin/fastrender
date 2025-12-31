@@ -9392,21 +9392,22 @@ fn apply_drop_shadow(
   spread: f32,
   color: Rgba,
 ) -> RenderResult<()> {
-  if pixmap.width() == 0 || pixmap.height() == 0 {
+  let width = pixmap.width();
+  let height = pixmap.height();
+  if width == 0 || height == 0 {
     return Ok(());
   }
 
-  let source = pixmap.clone();
-  let mut shadow = match new_pixmap(source.width(), source.height()) {
+  let mut shadow = match new_pixmap(width, height) {
     Some(p) => {
-      record_layer_allocation(source.width(), source.height());
+      record_layer_allocation(width, height);
       p
     }
     None => return Ok(()),
   };
 
   {
-    let src = source.pixels();
+    let src = pixmap.pixels();
     let dst = shadow.pixels_mut();
     for (src_px, dst_px) in src.iter().zip(dst.iter_mut()) {
       let alpha = src_px.alpha() as f32 / 255.0;
@@ -9437,9 +9438,9 @@ fn apply_drop_shadow(
     apply_gaussian_blur(&mut shadow, blur_radius)?;
   }
 
-  let mut result = match new_pixmap(source.width(), source.height()) {
+  let mut result = match new_pixmap(width, height) {
     Some(p) => {
-      record_layer_allocation(source.width(), source.height());
+      record_layer_allocation(width, height);
       p
     }
     None => return Ok(()),
@@ -9455,7 +9456,7 @@ fn apply_drop_shadow(
     Transform::from_translate(offset_x, offset_y),
     None,
   );
-  result.draw_pixmap(0, 0, source.as_ref(), &paint, Transform::identity(), None);
+  result.draw_pixmap(0, 0, pixmap.as_ref(), &paint, Transform::identity(), None);
 
   *pixmap = result;
   Ok(())

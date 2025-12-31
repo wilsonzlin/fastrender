@@ -247,12 +247,13 @@ pub(crate) fn apply_drop_shadow(
   spread: f32,
   color: Rgba,
 ) -> Result<(), RenderError> {
-  if pixmap.width() == 0 || pixmap.height() == 0 {
+  let width = pixmap.width();
+  let height = pixmap.height();
+  if width == 0 || height == 0 {
     return Ok(());
   }
 
-  let source = pixmap.clone();
-  let Some((min_x, min_y, bounds_w, bounds_h)) = alpha_bounds(&source) else {
+  let Some((min_x, min_y, bounds_w, bounds_h)) = alpha_bounds(pixmap) else {
     return Ok(());
   };
   let blur_pad = (blur_radius.abs() * 3.0).ceil() as u32;
@@ -265,8 +266,8 @@ pub(crate) fn apply_drop_shadow(
   };
 
   {
-    let src = source.pixels();
-    let src_stride = source.width() as usize;
+    let src = pixmap.pixels();
+    let src_stride = width as usize;
     let dst_stride = shadow.width() as usize;
     let dst = shadow.pixels_mut();
     for y in 0..bounds_h as usize {
@@ -304,7 +305,7 @@ pub(crate) fn apply_drop_shadow(
     apply_gaussian_blur(&mut shadow, blur_radius)?;
   }
 
-  let mut result = match new_pixmap(source.width(), source.height()) {
+  let mut result = match new_pixmap(width, height) {
     Some(p) => p,
     None => return Ok(()),
   };
@@ -321,7 +322,7 @@ pub(crate) fn apply_drop_shadow(
     Transform::from_translate(offset_x, offset_y),
     None,
   );
-  result.draw_pixmap(0, 0, source.as_ref(), &paint, Transform::identity(), None);
+  result.draw_pixmap(0, 0, pixmap.as_ref(), &paint, Transform::identity(), None);
 
   *pixmap = result;
   Ok(())
