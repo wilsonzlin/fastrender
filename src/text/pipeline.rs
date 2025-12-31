@@ -1479,6 +1479,35 @@ fn is_non_rendering_for_coverage(ch: char) -> bool {
     || ('\u{180b}'..='\u{180d}').contains(&ch)
 }
 
+fn is_unicode_mark(ch: char) -> bool {
+  matches!(
+    get_general_category(ch),
+    GeneralCategory::NonspacingMark | GeneralCategory::SpacingMark | GeneralCategory::EnclosingMark
+  )
+}
+
+// Optional-mark fallback invariants (Task 72):
+// - Only treat marks (General Category M*) as optional when the cluster also contains at least one
+//   non-mark glyph that must render.
+// - For mark-only clusters, at least one mark remains required so coverage requirements never
+//   collapse to "empty" (which could erase the cluster entirely).
+// - If we ever skip `.notdef` for missing marks, only do so when the cluster has a non-mark glyph;
+//   for mark-only clusters keep `.notdef` so there's always something visible.
+fn is_mark_only_cluster(text: &str) -> bool {
+  let mut saw_mark = false;
+  for ch in text.chars() {
+    if is_bidi_control_char(ch) || is_non_rendering_for_coverage(ch) {
+      continue;
+    }
+    if is_unicode_mark(ch) {
+      saw_mark = true;
+    } else {
+      return false;
+    }
+  }
+  saw_mark
+}
+
 fn cluster_base_and_relevant_chars(text: &str) -> (char, Vec<char>) {
   let mut chars: Vec<char> = text.chars().collect();
   let mut base = chars
@@ -3163,7 +3192,7 @@ fn map_hb_position(
   }
 }
 
-fn synthesize_notdef_run(run: &FontRun) -> ShapedRun {
+fn fallback_notdef_advance(run: &FontRun) -> f32 {
   let (units_per_em, notdef_advance) = crate::text::face_cache::with_face(&run.font, |face| {
     (
       face.units_per_em() as f32,
@@ -3179,9 +3208,16 @@ fn synthesize_notdef_run(run: &FontRun) -> ShapedRun {
   } else {
     0.0
   };
+
   if !inline_advance.is_finite() || inline_advance <= 0.0 {
     inline_advance = run.font_size * 0.5;
   }
+
+  inline_advance
+}
+
+fn synthesize_notdef_run(run: &FontRun) -> ShapedRun {
+  let inline_advance = fallback_notdef_advance(run);
 
   let mut glyphs = Vec::new();
   let mut advance = 0.0_f32;
@@ -3337,6 +3373,23 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
       });
       inline_position += if run.vertical { y_advance } else { x_advance };
     }
+  }
+
+  if inline_position.abs() <= f32::EPSILON && !glyphs.is_empty() && is_mark_only_cluster(&run.text)
+  {
+    // HarfBuzz gives combining marks zero advance because they normally attach to a base glyph.
+    // When the entire run is marks (e.g. standalone Arabic diacritics), that would collapse the
+    // run to zero width and allow higher-level layout to drop it entirely. Ensure mark-only runs
+    // remain visible by assigning a fallback advance to the final glyph.
+    let fallback_advance = fallback_notdef_advance(run);
+    if run.vertical {
+      if let Some(last) = glyphs.last_mut() {
+        last.y_advance = fallback_advance;
+      }
+    } else if let Some(last) = glyphs.last_mut() {
+      last.x_advance = fallback_advance;
+    }
+    inline_position = fallback_advance;
   }
 
   Ok(ShapedRun {
