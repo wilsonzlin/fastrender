@@ -4,6 +4,11 @@
 //! Taffy engine is invoked. Counters are available in release builds but are
 //! disabled by default; call sites can enable them at runtime when collecting
 //! render statistics.
+//!
+//! When enabled, the counters can be used to attribute slow flex/grid layouts by recording:
+//! - wall time spent inside `taffy::TaffyTree::compute_layout_with_measure(_and_cancel)`, and
+//! - how many times the measure callback is invoked,
+//! split by Flex vs Grid.
 
 use crate::geometry::Size;
 use crate::layout::constraints::AvailableSpace as CrateAvailableSpace;
@@ -12,6 +17,7 @@ use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use taffy::style::Style as TaffyStyle;
 
 /// Count of Taffy layout invocations per adapter.
@@ -44,6 +50,109 @@ pub struct TaffyUsageCounters {
 pub(crate) enum TaffyAdapterKind {
   Flex,
   Grid,
+}
+
+/// Taffy perf counters captured during a render when diagnostics are enabled.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TaffyPerfCounters {
+  pub flex_compute_ns: u64,
+  pub grid_compute_ns: u64,
+  pub flex_measure_calls: u64,
+  pub grid_measure_calls: u64,
+}
+
+static TAFFY_PERF_ENABLED: AtomicBool = AtomicBool::new(false);
+static TAFFY_PERF_RESET_REQUESTED: AtomicBool = AtomicBool::new(false);
+static TAFFY_FLEX_COMPUTE_NS: AtomicU64 = AtomicU64::new(0);
+static TAFFY_GRID_COMPUTE_NS: AtomicU64 = AtomicU64::new(0);
+static TAFFY_FLEX_MEASURE_CALLS: AtomicU64 = AtomicU64::new(0);
+static TAFFY_GRID_MEASURE_CALLS: AtomicU64 = AtomicU64::new(0);
+
+/// Enables Taffy perf counters for the duration of a diagnostics-enabled render.
+///
+/// The counters are global and not intended for per-thread attribution.
+pub(crate) struct TaffyPerfCountersGuard {
+  previous: bool,
+}
+
+impl TaffyPerfCountersGuard {
+  pub(crate) fn new() -> Self {
+    let previous = TAFFY_PERF_ENABLED.swap(true, Ordering::Relaxed);
+    if !previous {
+      TAFFY_PERF_RESET_REQUESTED.store(true, Ordering::Relaxed);
+    }
+    Self { previous }
+  }
+}
+
+impl Drop for TaffyPerfCountersGuard {
+  fn drop(&mut self) {
+    TAFFY_PERF_ENABLED.store(self.previous, Ordering::Relaxed);
+  }
+}
+
+#[inline]
+pub(crate) fn taffy_perf_enabled() -> bool {
+  TAFFY_PERF_ENABLED.load(Ordering::Relaxed)
+}
+
+/// Resets Taffy perf counters at the start of a layout run when requested.
+///
+/// Layout runs can occur outside of diagnostics-enabled renders; this should be cheap to call in
+/// hot paths by doing nothing unless perf counters are enabled for an active diagnostics capture.
+#[inline]
+pub(crate) fn reset_taffy_perf_counters() {
+  if !taffy_perf_enabled() {
+    return;
+  }
+  if !TAFFY_PERF_RESET_REQUESTED.swap(false, Ordering::Relaxed) {
+    return;
+  }
+  TAFFY_FLEX_COMPUTE_NS.store(0, Ordering::Relaxed);
+  TAFFY_GRID_COMPUTE_NS.store(0, Ordering::Relaxed);
+  TAFFY_FLEX_MEASURE_CALLS.store(0, Ordering::Relaxed);
+  TAFFY_GRID_MEASURE_CALLS.store(0, Ordering::Relaxed);
+}
+
+#[inline]
+pub(crate) fn record_taffy_compute(kind: TaffyAdapterKind, duration: Duration) {
+  if !taffy_perf_enabled() {
+    return;
+  }
+  let ns = duration.as_nanos().min(u64::MAX as u128) as u64;
+  match kind {
+    TaffyAdapterKind::Flex => {
+      TAFFY_FLEX_COMPUTE_NS.fetch_add(ns, Ordering::Relaxed);
+    }
+    TaffyAdapterKind::Grid => {
+      TAFFY_GRID_COMPUTE_NS.fetch_add(ns, Ordering::Relaxed);
+    }
+  }
+}
+
+#[inline]
+pub(crate) fn record_taffy_measure_call(kind: TaffyAdapterKind) {
+  if !taffy_perf_enabled() {
+    return;
+  }
+  match kind {
+    TaffyAdapterKind::Flex => {
+      TAFFY_FLEX_MEASURE_CALLS.fetch_add(1, Ordering::Relaxed);
+    }
+    TaffyAdapterKind::Grid => {
+      TAFFY_GRID_MEASURE_CALLS.fetch_add(1, Ordering::Relaxed);
+    }
+  }
+}
+
+#[inline]
+pub(crate) fn taffy_perf_counters() -> TaffyPerfCounters {
+  TaffyPerfCounters {
+    flex_compute_ns: TAFFY_FLEX_COMPUTE_NS.load(Ordering::Relaxed),
+    grid_compute_ns: TAFFY_GRID_COMPUTE_NS.load(Ordering::Relaxed),
+    flex_measure_calls: TAFFY_FLEX_MEASURE_CALLS.load(Ordering::Relaxed),
+    grid_measure_calls: TAFFY_GRID_MEASURE_CALLS.load(Ordering::Relaxed),
+  }
 }
 
 static TAFFY_COUNTERS_ENABLED: AtomicBool = AtomicBool::new(false);

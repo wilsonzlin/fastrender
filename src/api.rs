@@ -1698,6 +1698,14 @@ pub struct LayoutDiagnostics {
   pub taffy_nodes_reused: Option<usize>,
   pub taffy_style_cache_hits: Option<usize>,
   pub taffy_style_cache_misses: Option<usize>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub taffy_flex_compute_ms: Option<f64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub taffy_grid_compute_ms: Option<f64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub taffy_flex_measure_calls: Option<u64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub taffy_grid_measure_calls: Option<u64>,
   pub fragment_deep_clones: Option<usize>,
   pub fragment_traversed: Option<usize>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1895,6 +1903,7 @@ fn merge_text_diagnostics(stats: &mut RenderStats) {
 pub struct RenderStatsRecorder {
   level: DiagnosticsLevel,
   stats: RenderStats,
+  _taffy_perf_guard: Option<crate::layout::taffy_integration::TaffyPerfCountersGuard>,
 }
 
 impl RenderStatsRecorder {
@@ -1902,6 +1911,8 @@ impl RenderStatsRecorder {
     Self {
       level,
       stats: RenderStats::default(),
+      _taffy_perf_guard: (level != DiagnosticsLevel::None)
+        .then(crate::layout::taffy_integration::TaffyPerfCountersGuard::new),
     }
   }
 
@@ -3833,6 +3844,17 @@ impl FastRender {
           Some((taffy.flex_style_cache_hits + taffy.grid_style_cache_hits) as usize);
         rec.stats.layout.taffy_style_cache_misses =
           Some((taffy.flex_style_cache_misses + taffy.grid_style_cache_misses) as usize);
+        let taffy_perf = crate::layout::taffy_integration::taffy_perf_counters();
+        if taffy_perf.flex_compute_ns > 0 || taffy_perf.flex_measure_calls > 0 {
+          rec.stats.layout.taffy_flex_compute_ms =
+            Some(taffy_perf.flex_compute_ns as f64 / 1_000_000.0);
+          rec.stats.layout.taffy_flex_measure_calls = Some(taffy_perf.flex_measure_calls);
+        }
+        if taffy_perf.grid_compute_ns > 0 || taffy_perf.grid_measure_calls > 0 {
+          rec.stats.layout.taffy_grid_compute_ms =
+            Some(taffy_perf.grid_compute_ns as f64 / 1_000_000.0);
+          rec.stats.layout.taffy_grid_measure_calls = Some(taffy_perf.grid_measure_calls);
+        }
         let fragment_metrics = crate::tree::fragment_tree::fragment_instrumentation_counters();
         rec.stats.layout.fragment_deep_clones = Some(fragment_metrics.deep_clones);
         rec.stats.layout.fragment_traversed = Some(fragment_metrics.traversed_nodes);

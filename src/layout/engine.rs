@@ -724,6 +724,7 @@ impl LayoutEngine {
     if let Err(RenderError::Timeout { elapsed, .. }) = check_active(RenderStage::Layout) {
       return Err(LayoutError::Timeout { elapsed });
     }
+    crate::layout::taffy_integration::reset_taffy_perf_counters();
     crate::tree::fragment_tree::reset_fragment_instrumentation_counters();
     let instrument_fragments =
       crate::layout::fragment_clone_profile::fragment_clone_profile_enabled();

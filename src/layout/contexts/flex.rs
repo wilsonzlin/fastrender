@@ -54,10 +54,10 @@ use crate::layout::fragment_clone_profile::{self, CloneSite};
 use crate::layout::profile::layout_timer;
 use crate::layout::profile::LayoutKind;
 use crate::layout::taffy_integration::{
-  record_taffy_invocation, record_taffy_node_cache_hit, record_taffy_node_cache_miss,
-  record_taffy_style_cache_hit, record_taffy_style_cache_miss, taffy_constraint_key,
-  CachedTaffyTemplate, SendSyncStyle, TaffyAdapterKind, TaffyNodeCacheKey,
-  TAFFY_ABORT_CHECK_STRIDE, DEFAULT_TAFFY_CACHE_LIMIT,
+  record_taffy_compute, record_taffy_invocation, record_taffy_measure_call,
+  record_taffy_node_cache_hit, record_taffy_node_cache_miss, record_taffy_style_cache_hit,
+  record_taffy_style_cache_miss, taffy_constraint_key, CachedTaffyTemplate, SendSyncStyle,
+  TaffyAdapterKind, TaffyNodeCacheKey, TAFFY_ABORT_CHECK_STRIDE, DEFAULT_TAFFY_CACHE_LIMIT,
 };
 use crate::layout::utils::resolve_length_with_percentage_metrics;
 use crate::layout::utils::resolve_scrollbar_width;
@@ -591,17 +591,22 @@ impl FormattingContext for FlexFormattingContext {
     static LOG_FIRST_N_COUNTER: std::sync::OnceLock<std::sync::Mutex<usize>> =
       std::sync::OnceLock::new();
     record_taffy_invocation(TaffyAdapterKind::Flex);
+    let taffy_perf_enabled = crate::layout::taffy_integration::taffy_perf_enabled();
+    let taffy_compute_start = taffy_perf_enabled.then(std::time::Instant::now);
     // Render pipeline always installs a deadline guard (even when disabled), so only enable
     // the Taffy cancellation path when the active deadline is actually configured.
     let cancel: Option<Arc<dyn Fn() -> bool + Send + Sync>> = active_deadline()
       .filter(|deadline| deadline.is_enabled())
       .map(|_| Arc::new(|| check_active(RenderStage::Layout).is_err()) as _);
     let measure_toggles = toggles.clone();
-    taffy_tree
-            .compute_layout_with_measure_and_cancel(
+    let compute_result = taffy_tree
+      .compute_layout_with_measure_and_cancel(
                 root_node,
                 available_space,
                 move |mut known_dimensions, mut avail, _node_id, node_context, _style| {
+                    if taffy_perf_enabled {
+                      record_taffy_measure_call(TaffyAdapterKind::Flex);
+                    }
                     let toggles = measure_toggles.as_ref();
                     // Treat zero/near-zero definite sizes as absent to avoid pathological
                     // measurement probes when Taffy propagates a 0px available size. This
@@ -1472,14 +1477,18 @@ impl FormattingContext for FlexFormattingContext {
                 },
                 cancel,
                 TAFFY_ABORT_CHECK_STRIDE,
-            )
-            .map_err(|e| match e {
-              taffy::TaffyError::LayoutAborted => match check_active(RenderStage::Layout) {
-                Err(RenderError::Timeout { elapsed, .. }) => LayoutError::Timeout { elapsed },
-                _ => LayoutError::MissingContext("Taffy layout aborted".to_string()),
-              },
-              _ => LayoutError::MissingContext(format!("Taffy layout failed: {:?}", e)),
-            })?;
+            );
+    if let Some(start) = taffy_compute_start {
+      record_taffy_compute(TaffyAdapterKind::Flex, start.elapsed());
+    }
+    compute_result
+      .map_err(|e| match e {
+        taffy::TaffyError::LayoutAborted => match check_active(RenderStage::Layout) {
+          Err(RenderError::Timeout { elapsed, .. }) => LayoutError::Timeout { elapsed },
+          _ => LayoutError::MissingContext("Taffy layout aborted".to_string()),
+        },
+        _ => LayoutError::MissingContext(format!("Taffy layout failed: {:?}", e)),
+      })?;
     flex_profile::record_compute_time(compute_timer);
     if toggles.truthy("FASTR_DEBUG_FLEX_CHILD") {
       if let Ok(style) = taffy_tree.style(root_node) {
@@ -5107,6 +5116,7 @@ impl FlexFormattingContext {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::api::{DiagnosticsLevel, FastRender, FastRenderConfig, RenderOptions};
   use crate::style::display::Display;
   use crate::style::display::FormattingContextType;
   use crate::style::position::Position;
@@ -5117,6 +5127,7 @@ mod tests {
   use crate::style::types::ScrollbarWidth;
   use crate::style::values::Length;
   use crate::style::values::LengthOrAuto;
+  use crate::text::font_db::FontConfig;
   use crate::tree::box_tree::ReplacedType;
   use crate::tree::debug::{track_to_selector_calls, DebugInfo};
   use std::sync::Arc;
@@ -6400,6 +6411,41 @@ mod tests {
       fc.length_option_to_dimension(None, &style),
       Dimension::auto()
     );
+  }
+
+  #[test]
+  fn taffy_perf_counters_record_flex_measure_and_compute_time() {
+    let config = FastRenderConfig::default().with_font_sources(FontConfig::bundled_only());
+    let mut renderer = FastRender::with_config(config).expect("renderer");
+    let html = r#"<!doctype html>
+      <html>
+        <body>
+          <div style="display:flex">
+            <div>hello</div>
+          </div>
+        </body>
+      </html>"#;
+    let options = RenderOptions::default()
+      .with_viewport(200, 200)
+      .with_diagnostics_level(DiagnosticsLevel::Basic);
+    let result = renderer
+      .render_html_with_diagnostics(html, options)
+      .expect("render");
+    let stats = result
+      .diagnostics
+      .stats
+      .as_ref()
+      .expect("diagnostics stats should be captured");
+    let measure_calls = stats
+      .layout
+      .taffy_flex_measure_calls
+      .expect("flex measure call count should be recorded");
+    assert!(measure_calls > 0, "expected flex measure calls > 0");
+    let compute_ms = stats
+      .layout
+      .taffy_flex_compute_ms
+      .expect("flex compute_ms should be recorded");
+    assert!(compute_ms >= 0.0, "expected flex compute_ms >= 0");
   }
 
   #[test]

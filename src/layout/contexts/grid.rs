@@ -45,10 +45,11 @@ use crate::layout::fragment_clone_profile::{self, CloneSite};
 use crate::layout::profile::layout_timer;
 use crate::layout::profile::LayoutKind;
 use crate::layout::taffy_integration::{
-  record_taffy_invocation, record_taffy_node_cache_hit, record_taffy_node_cache_miss,
-  record_taffy_style_cache_hit, record_taffy_style_cache_miss, taffy_constraint_key,
-  CachedTaffyTemplate, SendSyncStyle, TaffyAdapterKind, TaffyNodeCache, TaffyNodeCacheKey,
-  TAFFY_ABORT_CHECK_STRIDE, DEFAULT_TAFFY_CACHE_LIMIT,
+  record_taffy_compute, record_taffy_invocation, record_taffy_measure_call,
+  record_taffy_node_cache_hit, record_taffy_node_cache_miss, record_taffy_style_cache_hit,
+  record_taffy_style_cache_miss, taffy_constraint_key, CachedTaffyTemplate, SendSyncStyle,
+  TaffyAdapterKind, TaffyNodeCache, TaffyNodeCacheKey, TAFFY_ABORT_CHECK_STRIDE,
+  DEFAULT_TAFFY_CACHE_LIMIT,
 };
 use crate::layout::utils::resolve_length_with_percentage_metrics;
 use crate::layout::utils::resolve_scrollbar_width;
@@ -2140,13 +2141,14 @@ impl GridFormattingContext {
     };
 
     record_taffy_invocation(TaffyAdapterKind::Grid);
+    let taffy_perf_enabled = crate::layout::taffy_integration::taffy_perf_enabled();
+    let taffy_compute_start = taffy_perf_enabled.then(std::time::Instant::now);
     // Render pipeline always installs a deadline guard (even when disabled), so only enable
     // the Taffy cancellation path when the active deadline is actually configured.
     let cancel: Option<Arc<dyn Fn() -> bool + Send + Sync>> = active_deadline()
       .filter(|deadline| deadline.is_enabled())
       .map(|_| Arc::new(|| check_active(RenderStage::Layout).is_err()) as _);
-    taffy
-      .compute_layout_with_measure_and_cancel(
+    let compute_result = taffy.compute_layout_with_measure_and_cancel(
         root_id,
         available_space,
         {
@@ -2158,6 +2160,9 @@ impl GridFormattingContext {
                 node_id,
                 node_context,
                 _style: &taffy::style::Style| {
+            if taffy_perf_enabled {
+              record_taffy_measure_call(TaffyAdapterKind::Grid);
+            }
             if node_id == root_id {
               return taffy::geometry::Size::ZERO;
             }
@@ -2201,14 +2206,17 @@ impl GridFormattingContext {
         },
         cancel,
         TAFFY_ABORT_CHECK_STRIDE,
-      )
-      .map_err(|e| match e {
-        taffy::TaffyError::LayoutAborted => match check_active(RenderStage::Layout) {
-          Err(RenderError::Timeout { elapsed, .. }) => LayoutError::Timeout { elapsed },
-          _ => LayoutError::MissingContext("Taffy layout aborted".to_string()),
-        },
-        _ => LayoutError::MissingContext(format!("Taffy compute error: {:?}", e)),
-      })?;
+    );
+    if let Some(start) = taffy_compute_start {
+      record_taffy_compute(TaffyAdapterKind::Grid, start.elapsed());
+    }
+    compute_result.map_err(|e| match e {
+      taffy::TaffyError::LayoutAborted => match check_active(RenderStage::Layout) {
+        Err(RenderError::Timeout { elapsed, .. }) => LayoutError::Timeout { elapsed },
+        _ => LayoutError::MissingContext("Taffy layout aborted".to_string()),
+      },
+      _ => LayoutError::MissingContext(format!("Taffy compute error: {:?}", e)),
+    })?;
 
     let layout = taffy
       .layout(root_id)
@@ -2880,6 +2888,8 @@ impl FormattingContext for GridFormattingContext {
 
     // Run Taffy layout
     record_taffy_invocation(TaffyAdapterKind::Grid);
+    let taffy_perf_enabled = crate::layout::taffy_integration::taffy_perf_enabled();
+    let taffy_compute_start = taffy_perf_enabled.then(std::time::Instant::now);
     // Render pipeline always installs a deadline guard (even when disabled), so only enable
     // the Taffy cancellation path when the active deadline is actually configured.
     let cancel: Option<Arc<dyn Fn() -> bool + Send + Sync>> = active_deadline()
@@ -2891,8 +2901,7 @@ impl FormattingContext for GridFormattingContext {
       Rc::new(RefCell::new(HashMap::new()));
     let measured_node_keys: Rc<RefCell<HashMap<TaffyNodeId, Vec<MeasureKey>>>> =
       Rc::new(RefCell::new(HashMap::new()));
-    taffy
-      .compute_layout_with_measure_and_cancel(
+    let compute_result = taffy.compute_layout_with_measure_and_cancel(
         root_id,
         available_space,
         {
@@ -2907,6 +2916,9 @@ impl FormattingContext for GridFormattingContext {
                 node_id,
                 node_context,
                 _style: &taffy::style::Style| {
+            if taffy_perf_enabled {
+              record_taffy_measure_call(TaffyAdapterKind::Grid);
+            }
             let fallback_size =
               |known: Option<f32>, avail_dim: taffy::style::AvailableSpace| {
                 known.unwrap_or(match avail_dim {
@@ -2996,14 +3008,17 @@ impl FormattingContext for GridFormattingContext {
         },
         cancel,
         TAFFY_ABORT_CHECK_STRIDE,
-      )
-      .map_err(|e| match e {
-        taffy::TaffyError::LayoutAborted => match check_active(RenderStage::Layout) {
-          Err(RenderError::Timeout { elapsed, .. }) => LayoutError::Timeout { elapsed },
-          _ => LayoutError::MissingContext("Taffy layout aborted".to_string()),
-        },
-        _ => LayoutError::MissingContext(format!("Taffy compute error: {:?}", e)),
-      })?;
+    );
+    if let Some(start) = taffy_compute_start {
+      record_taffy_compute(TaffyAdapterKind::Grid, start.elapsed());
+    }
+    compute_result.map_err(|e| match e {
+      taffy::TaffyError::LayoutAborted => match check_active(RenderStage::Layout) {
+        Err(RenderError::Timeout { elapsed, .. }) => LayoutError::Timeout { elapsed },
+        _ => LayoutError::MissingContext("Taffy layout aborted".to_string()),
+      },
+      _ => LayoutError::MissingContext(format!("Taffy compute error: {:?}", e)),
+    })?;
 
     let measured_node_keys = measured_node_keys.borrow();
 
@@ -3320,6 +3335,7 @@ impl FormattingContext for GridFormattingContext {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::api::{DiagnosticsLevel, FastRender, FastRenderConfig, RenderOptions};
   use crate::debug::runtime;
   use crate::style::display::FormattingContextType;
   use crate::style::types::AlignItems;
@@ -3329,6 +3345,7 @@ mod tests {
   use crate::style::types::Overflow;
   use crate::style::types::ScrollbarWidth;
   use crate::style::types::WritingMode;
+  use crate::text::font_db::FontConfig;
   use crate::tree::box_tree::BoxTree;
   use std::collections::HashMap;
   use std::sync::Arc;
@@ -4824,5 +4841,40 @@ mod tests {
       fragment.children[0].bounds.x() >= 0.0 || fragment.children[1].bounds.x() >= 0.0,
       "baseline alignment should not move items outside the column"
     );
+  }
+
+  #[test]
+  fn taffy_perf_counters_record_grid_measure_and_compute_time() {
+    let config = FastRenderConfig::default().with_font_sources(FontConfig::bundled_only());
+    let mut renderer = FastRender::with_config(config).expect("renderer");
+    let html = r#"<!doctype html>
+      <html>
+        <body>
+          <div style="display:grid">
+            <div>hello</div>
+          </div>
+        </body>
+      </html>"#;
+    let options = RenderOptions::default()
+      .with_viewport(200, 200)
+      .with_diagnostics_level(DiagnosticsLevel::Basic);
+    let result = renderer
+      .render_html_with_diagnostics(html, options)
+      .expect("render");
+    let stats = result
+      .diagnostics
+      .stats
+      .as_ref()
+      .expect("diagnostics stats should be captured");
+    let measure_calls = stats
+      .layout
+      .taffy_grid_measure_calls
+      .expect("grid measure call count should be recorded");
+    assert!(measure_calls > 0, "expected grid measure calls > 0");
+    let compute_ms = stats
+      .layout
+      .taffy_grid_compute_ms
+      .expect("grid compute_ms should be recorded");
+    assert!(compute_ms >= 0.0, "expected grid compute_ms >= 0");
   }
 }
