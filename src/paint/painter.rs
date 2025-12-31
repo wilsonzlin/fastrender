@@ -9757,7 +9757,7 @@ struct ClipMaskDirtyRect {
 
 #[derive(Default)]
 struct ClipMaskScratch {
-  pixmap: Option<Pixmap>,
+  mask: Option<Mask>,
   dirty: Option<ClipMaskDirtyRect>,
 }
 
@@ -9765,15 +9765,15 @@ thread_local! {
   static CLIP_MASK_SCRATCH: RefCell<ClipMaskScratch> = RefCell::new(ClipMaskScratch::default());
 }
 
-fn clear_pixmap_rect_rgba(pixmap: &mut Pixmap, rect: ClipMaskDirtyRect) {
+fn clear_mask_rect(mask: &mut Mask, rect: ClipMaskDirtyRect) {
   if rect.x0 >= rect.x1 || rect.y0 >= rect.y1 {
     return;
   }
-  let width = pixmap.width() as usize;
-  let stride = width * 4;
-  let data = pixmap.data_mut();
-  let x0 = rect.x0 as usize * 4;
-  let x1 = rect.x1 as usize * 4;
+  let width = mask.width() as usize;
+  let stride = width;
+  let data = mask.data_mut();
+  let x0 = rect.x0 as usize;
+  let x1 = rect.x1 as usize;
   let y0 = rect.y0 as usize;
   let y1 = rect.y1 as usize;
   if x0 == 0 && x1 == stride {
@@ -9910,42 +9910,50 @@ fn apply_clip_mask_rect(pixmap: &mut Pixmap, rect: Rect, radii: BorderRadii) {
     }
   }
 
-  // Generate a rounded-rect alpha mask, reusing a thread-local scratch pixmap to avoid per-call
-  // allocations. We clear only the region touched by the previous call.
+  // Generate a rounded-rect alpha mask, reusing a thread-local scratch mask to avoid per-call
+  // allocations.
   let applied_mask = CLIP_MASK_SCRATCH.with(|cell| {
     let mut scratch = cell.borrow_mut();
-    let replace = match scratch.pixmap.as_ref() {
+    let replace = match scratch.mask.as_ref() {
       Some(existing) => existing.width() != width || existing.height() != height,
       None => true,
     };
     if replace {
-      scratch.pixmap = new_pixmap(width, height);
-      scratch.dirty = None;
+      scratch.mask = Mask::new(width, height);
     }
-    let prev_dirty = scratch.dirty.take();
-    let next_dirty = clip_mask_dirty_bounds(rect, width, height);
+    let dirty = clip_mask_dirty_bounds(rect, width, height);
     {
-      let Some(mask_pixmap) = scratch.pixmap.as_mut() else {
-        scratch.dirty = prev_dirty;
+      let Some(mask) = scratch.mask.as_mut() else {
         return false;
       };
-      if let Some(dirty) = prev_dirty {
-        clear_pixmap_rect_rgba(mask_pixmap, dirty);
+      if let Some(dirty) = dirty {
+        clear_mask_rect(mask, dirty);
+      } else {
+        // If the dirty bounds are empty (e.g. due to weird floating point inputs), clear the
+        // entire mask so we don't reuse stale data.
+        mask.data_mut().fill(0);
       }
       let clamped = radii.clamped(rect.width(), rect.height());
-      let _ = fill_rounded_rect(
-        mask_pixmap,
+      let Some(path) = crate::paint::rasterize::build_rounded_rect_path(
         rect.x(),
         rect.y(),
         rect.width(),
         rect.height(),
         &clamped,
-        Rgba::new(255, 255, 255, 1.0),
+      ) else {
+        return false;
+      };
+      // Match `fill_rounded_rect` semantics (anti-aliased) without allocating an intermediate RGBA
+      // pixmap or converting it to a mask.
+      mask.fill_path(
+        &path,
+        tiny_skia::FillRule::Winding,
+        true,
+        Transform::identity(),
       );
-      let mask = Mask::from_pixmap(mask_pixmap.as_ref(), MaskType::Alpha);
-      pixmap.apply_mask(&mask);
+      pixmap.apply_mask(mask);
     }
-    scratch.dirty = next_dirty;
+    scratch.dirty = dirty;
     true
   });
   if !applied_mask {
