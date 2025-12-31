@@ -95,7 +95,7 @@ fn pageset_progress_report_outputs_stats_when_verbose() {
     "cascade: nodes=1100 candidates=6000 matches=2000 selector=320.50ms declaration=210.25ms"
   ));
   assert!(stdout.contains(
-    "layout: layout_cache lookups=450 hits=300 stores=120 evictions=10 | intrinsic lookups=50 hits=20"
+    "layout: layout_cache lookups=450 hits=300 stores=120 evictions=10 | intrinsic lookups=50 hits=20 | parallel enabled=true items=12 threads=2"
   ));
   assert!(stdout.contains("paint: display_items=800 optimized_items=500 culled_items=120"));
   assert!(stdout

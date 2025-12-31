@@ -2585,6 +2585,27 @@ fn layout_summary(layout: &LayoutDiagnostics) -> Option<String> {
     parts.push(format!("intrinsic {}", intrinsic_parts.join(" ")));
   }
 
+  let mut parallel_parts = Vec::new();
+  if let Some(enabled) = layout.layout_parallel_enabled {
+    parallel_parts.push(format!("enabled={enabled}"));
+  }
+  if let Some(auto) = layout.layout_parallel_auto_activated {
+    parallel_parts.push(format!("auto={auto}"));
+  }
+  push_opt_usize(
+    &mut parallel_parts,
+    "items",
+    layout.layout_parallel_work_items,
+  );
+  push_opt_usize(
+    &mut parallel_parts,
+    "threads",
+    layout.layout_parallel_worker_threads,
+  );
+  if !parallel_parts.is_empty() {
+    parts.push(format!("parallel {}", parallel_parts.join(" ")));
+  }
+
   if parts.is_empty() {
     None
   } else {
@@ -3704,7 +3725,9 @@ fn infer_hard_timeout_stage(
         .or_else(|| (stage == StageHeartbeat::Done).then_some(ProgressStage::Paint))
     })
     .or_else(|| {
-      previous.and_then(|p| p.timeout_stage.or(p.failure_stage)).or(Some(ProgressStage::DomParse))
+      previous
+        .and_then(|p| p.timeout_stage.or(p.failure_stage))
+        .or(Some(ProgressStage::DomParse))
     })
     .unwrap_or(ProgressStage::DomParse)
 }
@@ -4252,8 +4275,12 @@ mod tests {
 
   #[test]
   fn report_gate_ignores_placeholder_failures_missing_stages() {
-    let mut placeholder_timeout =
-      make_progress("placeholder_timeout", ProgressStatus::Timeout, None, "unknown");
+    let mut placeholder_timeout = make_progress(
+      "placeholder_timeout",
+      ProgressStatus::Timeout,
+      None,
+      "unknown",
+    );
     placeholder_timeout.progress.timeout_stage = None;
     placeholder_timeout.progress.failure_stage = None;
 

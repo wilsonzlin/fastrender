@@ -35,7 +35,11 @@
         "layout_cache_stores": 120,
         "layout_cache_evictions": 10,
         "intrinsic_lookups": 50,
-        "intrinsic_hits": 20
+        "intrinsic_hits": 20,
+        "layout_parallel_work_items": 12,
+        "layout_parallel_worker_threads": 2,
+        "layout_parallel_enabled": true,
+        "layout_parallel_auto_activated": null
       },
       "paint": {
         "display_items": 800,
