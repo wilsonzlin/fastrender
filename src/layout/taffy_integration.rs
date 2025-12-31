@@ -250,31 +250,79 @@ struct TaffyNodeCacheInner {
   order: VecDeque<TaffyNodeCacheKey>,
 }
 
-/// Stores Taffy style templates keyed by container and constraint fingerprints.
-pub(crate) struct TaffyNodeCache {
+struct TaffyNodeCacheShard {
   capacity: usize,
   inner: Mutex<TaffyNodeCacheInner>,
+}
+
+impl TaffyNodeCacheShard {
+  fn new(capacity: usize) -> Self {
+    Self {
+      capacity: capacity.max(1),
+      inner: Mutex::new(TaffyNodeCacheInner::default()),
+    }
+  }
+}
+
+/// Stores Taffy style templates keyed by container and constraint fingerprints.
+pub(crate) struct TaffyNodeCache {
+  shards: Box<[TaffyNodeCacheShard]>,
+  shard_mask: usize,
 }
 
 pub(crate) const DEFAULT_TAFFY_CACHE_LIMIT: usize = 512;
 
 impl TaffyNodeCache {
   pub(crate) fn new(capacity: usize) -> Self {
+    let capacity = capacity.max(1);
+    let available = std::thread::available_parallelism()
+      .map(|threads| threads.get())
+      .unwrap_or(1);
+    let desired = available.next_power_of_two().clamp(1, 64);
+    let max_shards = capacity.min(desired).max(1);
+    let next_pow2 = max_shards.next_power_of_two();
+    let shard_count = if next_pow2 == max_shards {
+      next_pow2
+    } else {
+      next_pow2 >> 1
+    }
+    .max(1);
+
+    let per_shard = capacity / shard_count;
+    let remainder = capacity % shard_count;
+    let shards: Vec<TaffyNodeCacheShard> = (0..shard_count)
+      .map(|idx| {
+        let cap = per_shard + usize::from(idx < remainder);
+        TaffyNodeCacheShard::new(cap)
+      })
+      .collect();
+
     Self {
-      capacity: capacity.max(1),
-      inner: Mutex::new(TaffyNodeCacheInner::default()),
+      shards: shards.into_boxed_slice(),
+      shard_mask: shard_count - 1,
     }
   }
 
+  #[inline]
+  fn shard_index(&self, key: &TaffyNodeCacheKey) -> usize {
+    debug_assert!(!self.shards.is_empty());
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut h);
+    (h.finish() as usize) & self.shard_mask
+  }
+
   pub(crate) fn clear(&self) {
-    if let Ok(mut guard) = self.inner.lock() {
-      guard.templates.clear();
-      guard.order.clear();
+    for shard in self.shards.iter() {
+      if let Ok(mut guard) = shard.inner.lock() {
+        guard.templates.clear();
+        guard.order.clear();
+      }
     }
   }
 
   pub(crate) fn get(&self, key: &TaffyNodeCacheKey) -> Option<Arc<CachedTaffyTemplate>> {
-    self
+    let shard = self.shards.get(self.shard_index(key))?;
+    shard
       .inner
       .lock()
       .ok()
@@ -282,17 +330,85 @@ impl TaffyNodeCache {
   }
 
   pub(crate) fn insert(&self, key: TaffyNodeCacheKey, template: Arc<CachedTaffyTemplate>) {
-    if let Ok(mut guard) = self.inner.lock() {
+    let shard_idx = self.shard_index(&key);
+    let Some(shard) = self.shards.get(shard_idx) else {
+      return;
+    };
+    if let Ok(mut guard) = shard.inner.lock() {
       if let Some(pos) = guard.order.iter().position(|existing| existing == &key) {
         guard.order.remove(pos);
       }
       guard.order.push_back(key);
       guard.templates.insert(key, template);
-      while guard.order.len() > self.capacity {
+      while guard.order.len() > shard.capacity {
         if let Some(evicted) = guard.order.pop_front() {
           guard.templates.remove(&evicted);
         }
       }
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn template() -> Arc<CachedTaffyTemplate> {
+    Arc::new(CachedTaffyTemplate {
+      root_style: Arc::new(SendSyncStyle(TaffyStyle::default())),
+      child_styles: Vec::new(),
+    })
+  }
+
+  #[test]
+  fn taffy_node_cache_shard_capacities_sum_to_configured_capacity() {
+    let capacity = 7;
+    let cache = TaffyNodeCache::new(capacity);
+    assert!(cache.shards.len().is_power_of_two());
+    assert!(cache.shards.len() <= capacity);
+    assert!(cache.shards.len() <= 64);
+    assert_eq!(cache.shard_mask + 1, cache.shards.len());
+
+    let total_capacity: usize = cache.shards.iter().map(|shard| shard.capacity).sum();
+    assert_eq!(total_capacity, capacity);
+  }
+
+  #[test]
+  fn taffy_node_cache_is_bounded_by_capacity() {
+    let cache = TaffyNodeCache::new(1);
+    let viewport = Size::new(800.0, 600.0);
+    let tpl = template();
+
+    let key1 = TaffyNodeCacheKey::new(
+      TaffyAdapterKind::Flex,
+      1,
+      1,
+      0,
+      (Some(1), Some(1)),
+      1,
+      viewport,
+    );
+    let key2 = TaffyNodeCacheKey::new(
+      TaffyAdapterKind::Flex,
+      2,
+      1,
+      0,
+      (Some(1), Some(1)),
+      1,
+      viewport,
+    );
+
+    cache.insert(key1, tpl.clone());
+    cache.insert(key2, tpl.clone());
+
+    assert!(cache.get(&key1).is_none());
+    assert!(cache.get(&key2).is_some());
+
+    let entry_count: usize = cache
+      .shards
+      .iter()
+      .map(|shard| shard.inner.lock().unwrap().templates.len())
+      .sum();
+    assert_eq!(entry_count, 1);
   }
 }

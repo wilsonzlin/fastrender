@@ -253,6 +253,90 @@ fn build_grid(rows: usize, cols: usize) -> BoxTree {
   BoxTree::new(root)
 }
 
+fn build_flex_sibling_containers_fixed(
+  flex_containers: usize,
+  children_per_flex: usize,
+) -> BoxTree {
+  let mut root_style = ComputedStyle::default();
+  root_style.display = Display::Block;
+
+  let mut flex_style = ComputedStyle::default();
+  flex_style.display = Display::Flex;
+
+  let mut item_style = ComputedStyle::default();
+  item_style.display = Display::Block;
+  item_style.width = Some(Length::px(8.0));
+  item_style.height = Some(Length::px(8.0));
+
+  let root_style = Arc::new(root_style);
+  let flex_style = Arc::new(flex_style);
+  let item_style = Arc::new(item_style);
+
+  let mut flex_nodes = Vec::with_capacity(flex_containers);
+  for _ in 0..flex_containers {
+    let mut items = Vec::with_capacity(children_per_flex);
+    for _ in 0..children_per_flex {
+      items.push(BoxNode::new_block(
+        item_style.clone(),
+        FormattingContextType::Block,
+        vec![],
+      ));
+    }
+    flex_nodes.push(BoxNode::new_block(
+      flex_style.clone(),
+      FormattingContextType::Flex,
+      items,
+    ));
+  }
+
+  let root = BoxNode::new_block(root_style, FormattingContextType::Block, flex_nodes);
+  BoxTree::new(root)
+}
+
+fn build_grid_sibling_containers_fixed(
+  grid_containers: usize,
+  children_per_grid: usize,
+) -> BoxTree {
+  use fastrender::style::types::GridAutoFlow;
+
+  let mut root_style = ComputedStyle::default();
+  root_style.display = Display::Block;
+
+  let mut grid_style = ComputedStyle::default();
+  grid_style.display = Display::Grid;
+  grid_style.grid_auto_flow = GridAutoFlow::Row;
+  grid_style.width = Some(Length::px(640.0));
+
+  let mut item_style = ComputedStyle::default();
+  item_style.display = Display::Block;
+  item_style.width = Some(Length::px(8.0));
+  item_style.height = Some(Length::px(8.0));
+
+  let root_style = Arc::new(root_style);
+  let grid_style = Arc::new(grid_style);
+  let item_style = Arc::new(item_style);
+
+  let mut grids = Vec::with_capacity(grid_containers);
+  for _ in 0..grid_containers {
+    let mut items = Vec::with_capacity(children_per_grid);
+    for _ in 0..children_per_grid {
+      items.push(BoxNode::new_block(
+        item_style.clone(),
+        FormattingContextType::Block,
+        vec![],
+      ));
+    }
+    grids.push(BoxNode::new_block(
+      grid_style.clone(),
+      FormattingContextType::Grid,
+      items,
+    ));
+  }
+
+  let root = BoxNode::new_block(root_style, FormattingContextType::Block, grids);
+  BoxTree::new(root)
+}
+
 fn bench_layout_parallel(c: &mut Criterion) {
   let box_tree = build_table(40, 18);
   let viewport = Size::new(1280.0, 900.0);
@@ -442,6 +526,64 @@ fn bench_flex_cache_contention(c: &mut Criterion) {
   bench_flex_cache_contention_case(c, 32, 64, true);
 }
 
+fn bench_taffy_node_cache_contention(c: &mut Criterion) {
+  let viewport = Size::new(1280.0, 900.0);
+  let font_ctx = FontContext::new();
+
+  let mut serial_config = LayoutConfig::for_viewport(viewport);
+  serial_config.enable_cache = true;
+  let serial_engine = LayoutEngine::with_font_context(serial_config, font_ctx.clone());
+
+  let parallelism = LayoutParallelism::enabled(8)
+    .with_min_fanout(4)
+    .with_max_threads(Some(num_cpus::get().max(2)));
+  let mut parallel_config = LayoutConfig::for_viewport(viewport).with_parallelism(parallelism);
+  parallel_config.enable_cache = true;
+  let parallel_engine = LayoutEngine::with_font_context(parallel_config, font_ctx);
+
+  let flex_tree = build_flex_sibling_containers_fixed(256, 8);
+  serial_engine.layout_tree(&flex_tree).unwrap();
+  parallel_engine.layout_tree(&flex_tree).unwrap();
+
+  let mut group = c.benchmark_group("layout_taffy_node_cache_contention_flex");
+  group.bench_function("serial_reuse", |b| {
+    b.iter(|| {
+      serial_engine
+        .layout_tree_reuse_caches(black_box(&flex_tree))
+        .unwrap()
+    })
+  });
+  group.bench_function("parallel_reuse", |b| {
+    b.iter(|| {
+      parallel_engine
+        .layout_tree_reuse_caches(black_box(&flex_tree))
+        .unwrap()
+    })
+  });
+  group.finish();
+
+  let grid_tree = build_grid_sibling_containers_fixed(256, 16);
+  serial_engine.layout_tree(&grid_tree).unwrap();
+  parallel_engine.layout_tree(&grid_tree).unwrap();
+
+  let mut group = c.benchmark_group("layout_taffy_node_cache_contention_grid");
+  group.bench_function("serial_reuse", |b| {
+    b.iter(|| {
+      serial_engine
+        .layout_tree_reuse_caches(black_box(&grid_tree))
+        .unwrap()
+    })
+  });
+  group.bench_function("parallel_reuse", |b| {
+    b.iter(|| {
+      parallel_engine
+        .layout_tree_reuse_caches(black_box(&grid_tree))
+        .unwrap()
+    })
+  });
+  group.finish();
+}
+
 criterion_group!(
   layout_parallel,
   bench_layout_parallel,
@@ -449,6 +591,7 @@ criterion_group!(
   bench_block_parallel,
   bench_flex_parallel,
   bench_flex_cache_contention,
+  bench_taffy_node_cache_contention,
   bench_grid_parallel
 );
 criterion_main!(layout_parallel);
