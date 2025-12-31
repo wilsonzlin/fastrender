@@ -29,6 +29,13 @@ fn resource_cache_diagnostics_surface_hits_and_misses() {
       .expect("resource cache misses should be present")
       >= 1
   );
+  assert_eq!(
+    first_stats
+      .resources
+      .resource_cache_stale_hits
+      .expect("resource cache stale hits should be present"),
+    0
+  );
 
   let second = renderer
     .render_html_with_diagnostics(html, options)
@@ -43,5 +50,12 @@ fn resource_cache_diagnostics_surface_hits_and_misses() {
       .resource_cache_fresh_hits
       .expect("resource cache hits should be present")
       >= 1
+  );
+  assert_eq!(
+    second_stats
+      .resources
+      .resource_cache_stale_hits
+      .expect("resource cache stale hits should be present"),
+    0
   );
 }
