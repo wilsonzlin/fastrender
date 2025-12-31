@@ -119,6 +119,13 @@ const CORE_FIXTURES: &[CoreFixture] = &[
     MediaType::Screen,
   ),
   (
+    "dom_parse_stress",
+    "tests/pages/fixtures/dom_parse_stress/index.html",
+    (1040, 1240),
+    1.0,
+    MediaType::Screen,
+  ),
+  (
     "paginated_report_print",
     "tests/pages/fixtures/paginated_report/index.html",
     (920, 1180),
@@ -403,6 +410,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   } else {
     print_stage_breakdown(&sorted_by_total, sorted_by_total.len());
   }
+  print_dom_parse_note(&summary);
 
   if let Some(baseline) = baseline {
     let regressions = find_regressions(&summary, &baseline, args.threshold);
@@ -428,6 +436,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   }
 
   Ok(())
+}
+
+fn print_dom_parse_note(summary: &PerfSmokeSummary) {
+  let Some(fixture) = summary
+    .fixtures
+    .iter()
+    .find(|fixture| fixture.name.eq_ignore_ascii_case("dom_parse_stress"))
+  else {
+    return;
+  };
+
+  // `dom_parse_ms` is already printed in the per-fixture stage breakdown, but it may be
+  // omitted when `--top` filters the stderr output. Print a dedicated line so the parsing
+  // signal for this fixture is always visible.
+  eprintln!(
+    "dom_parse_stress: dom_parse_ms={:.3} (HTML parsing + DOM build)",
+    fixture.timings_ms.dom_parse_ms
+  );
 }
 
 fn fixture_specs_for_suite(suite: Suite) -> Result<Vec<FixtureSpec>, Box<dyn std::error::Error>> {
