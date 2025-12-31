@@ -253,6 +253,23 @@ fn starts_with_ignore_ascii_case(haystack: &str, prefix: &str) -> bool {
     .unwrap_or(false)
 }
 
+fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+  let needle_bytes = needle.as_bytes();
+  if needle_bytes.is_empty() {
+    return true;
+  }
+  let haystack_bytes = haystack.as_bytes();
+  if needle_bytes.len() > haystack_bytes.len() {
+    return false;
+  }
+  haystack_bytes.windows(needle_bytes.len()).any(|window| {
+    window
+      .iter()
+      .zip(needle_bytes.iter().copied())
+      .all(|(b, n)| b.to_ascii_lowercase() == n.to_ascii_lowercase())
+  })
+}
+
 fn strip_suffix_ignore_ascii_case<'a>(haystack: &'a str, suffix: &str) -> Option<&'a str> {
   let start = haystack.len().checked_sub(suffix.len())?;
   let tail = haystack.get(start..)?;
@@ -5807,10 +5824,10 @@ pub fn apply_declaration_with_base(
     },
     "grid-template" => {
       if let PropertyValue::Keyword(kw) = &resolved_value {
-        if kw.to_ascii_lowercase().contains("subgrid") {
+        if contains_ignore_ascii_case(kw, "subgrid") {
           let mut parts = kw.split('/');
           if let Some(row_part) = parts.next() {
-            if row_part.to_ascii_lowercase().contains("subgrid") {
+            if contains_ignore_ascii_case(row_part, "subgrid") {
               if let Some(names) = parse_subgrid_line_names(row_part) {
                 styles.grid_row_subgrid = true;
                 styles.subgrid_row_line_names = names.clone();
@@ -5832,7 +5849,7 @@ pub fn apply_declaration_with_base(
           }
 
           if let Some(col_part) = parts.next() {
-            if col_part.to_ascii_lowercase().contains("subgrid") {
+            if contains_ignore_ascii_case(col_part, "subgrid") {
               if let Some(names) = parse_subgrid_line_names(col_part) {
                 styles.grid_column_subgrid = true;
                 styles.subgrid_column_line_names = names.clone();
