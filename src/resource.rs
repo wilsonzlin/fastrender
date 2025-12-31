@@ -568,6 +568,30 @@ fn jitter_duration(max: Duration, seed: u64) -> Duration {
   Duration::new(secs, nanos)
 }
 
+fn sleep_with_deadline(
+  deadline: Option<&render_control::RenderDeadline>,
+  stage: RenderStage,
+  duration: Duration,
+) -> std::result::Result<(), RenderError> {
+  if duration.is_zero() {
+    return Ok(());
+  }
+
+  let Some(deadline) = deadline.filter(|deadline| deadline.is_enabled()) else {
+    thread::sleep(duration);
+    return Ok(());
+  };
+
+  let mut remaining = duration;
+  while !remaining.is_zero() {
+    deadline.check(stage)?;
+    let slice = remaining.min(Duration::from_millis(10));
+    thread::sleep(slice);
+    remaining = remaining.saturating_sub(slice);
+  }
+  Ok(())
+}
+
 fn compute_backoff(policy: &HttpRetryPolicy, retry_count: usize, url: &str) -> Duration {
   // Exponential backoff with "equal jitter":
   //   sleep = backoff/2 + rand(0..backoff/2)
@@ -1409,6 +1433,10 @@ impl HttpFetcher {
       self.policy.ensure_url_allowed(&current)?;
       for attempt in 1..=max_attempts {
         self.policy.ensure_url_allowed(&current)?;
+        let stage_hint = render_stage_hint_from_url(&current);
+        if let Some(deadline) = deadline.as_ref().filter(|d| d.is_enabled()) {
+          deadline.check(stage_hint).map_err(Error::Render)?;
+        }
         let allowed_limit = self.policy.allowed_response_limit()?;
         let per_request_timeout = self.deadline_aware_timeout(deadline.as_ref(), &current)?;
         let effective_timeout = per_request_timeout.unwrap_or(self.policy.request_timeout);
@@ -1458,15 +1486,15 @@ impl HttpFetcher {
                   }
                 }
               }
-              if can_retry {
-                let reason = err.to_string();
-                log_http_retry(&reason, attempt, max_attempts, &current, backoff);
-                if !backoff.is_zero() {
-                  thread::sleep(backoff);
-                }
-                continue;
-              }
-            }
+               if can_retry {
+                 let reason = err.to_string();
+                 log_http_retry(&reason, attempt, max_attempts, &current, backoff);
+                 if !backoff.is_zero() {
+                  sleep_with_deadline(deadline.as_ref(), stage_hint, backoff).map_err(Error::Render)?;
+                 }
+                 continue;
+               }
+             }
 
             let overall_timeout = deadline.as_ref().and_then(|d| d.timeout_limit());
             let mut message = err.to_string();
@@ -1595,19 +1623,19 @@ impl HttpFetcher {
                 }
 
                 if can_retry {
-                  log_http_retry(
-                    &format!("empty body (status {status_code})"),
-                    attempt,
-                    max_attempts,
-                    &current,
-                    backoff,
-                  );
-                  if !backoff.is_zero() {
-                    thread::sleep(backoff);
-                  }
-                  continue;
-                }
-              }
+                   log_http_retry(
+                     &format!("empty body (status {status_code})"),
+                     attempt,
+                     max_attempts,
+                     &current,
+                     backoff,
+                   );
+                   if !backoff.is_zero() {
+                    sleep_with_deadline(deadline.as_ref(), stage_hint, backoff).map_err(Error::Render)?;
+                   }
+                   continue;
+                 }
+               }
 
               let mut message = "empty HTTP response body".to_string();
               if attempt < max_attempts {
@@ -1640,19 +1668,19 @@ impl HttpFetcher {
                   }
                 }
                 if can_retry {
-                  log_http_retry(
-                    &format!("status {status_code}"),
-                    attempt,
-                    max_attempts,
-                    &current,
-                    backoff,
-                  );
-                  if !backoff.is_zero() {
-                    thread::sleep(backoff);
-                  }
-                  continue;
-                }
-              }
+                   log_http_retry(
+                     &format!("status {status_code}"),
+                     attempt,
+                     max_attempts,
+                     &current,
+                     backoff,
+                   );
+                   if !backoff.is_zero() {
+                    sleep_with_deadline(deadline.as_ref(), stage_hint, backoff).map_err(Error::Render)?;
+                   }
+                   continue;
+                 }
+               }
 
               let mut message = if attempt < max_attempts {
                 "retryable HTTP status (retry aborted: render deadline exceeded)".to_string()
@@ -1723,15 +1751,15 @@ impl HttpFetcher {
                   }
                 }
               }
-              if can_retry {
-                let reason = err.to_string();
-                log_http_retry(&reason, attempt, max_attempts, &current, backoff);
-                if !backoff.is_zero() {
-                  thread::sleep(backoff);
-                }
-                continue;
-              }
-            }
+               if can_retry {
+                 let reason = err.to_string();
+                 log_http_retry(&reason, attempt, max_attempts, &current, backoff);
+                 if !backoff.is_zero() {
+                  sleep_with_deadline(deadline.as_ref(), stage_hint, backoff).map_err(Error::Render)?;
+                 }
+                 continue;
+               }
+             }
 
             let overall_timeout = deadline.as_ref().and_then(|d| d.timeout_limit());
             let mut message = err.to_string();
@@ -4968,6 +4996,22 @@ mod tests {
     let deadline = render_control::RenderDeadline::new(Some(Duration::from_millis(0)), None);
     let err = render_control::with_deadline(Some(&deadline), || fetcher.fetch(url))
       .expect_err("expected deadline-exceeded fetch to fail");
+    match err {
+      Error::Render(RenderError::Timeout { stage, .. }) => {
+        assert_eq!(stage, RenderStage::Css);
+      }
+      other => panic!("expected timeout error, got {other:?}"),
+    }
+  }
+
+  #[test]
+  fn http_fetch_cancel_callback_surfaces_as_timeout() {
+    let fetcher = HttpFetcher::new();
+    let url = "http://example.com/style.css";
+    let cancel: Arc<crate::render_control::CancelCallback> = Arc::new(|| true);
+    let deadline = render_control::RenderDeadline::new(None, Some(cancel));
+    let err = render_control::with_deadline(Some(&deadline), || fetcher.fetch(url))
+      .expect_err("expected cancelled fetch to fail");
     match err {
       Error::Render(RenderError::Timeout { stage, .. }) => {
         assert_eq!(stage, RenderStage::Css);
