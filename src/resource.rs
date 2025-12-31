@@ -465,6 +465,10 @@ impl Default for HttpRetryPolicy {
 }
 
 fn retryable_http_status(status: u16) -> bool {
+  is_transient_http_status(status)
+}
+
+fn is_transient_http_status(status: u16) -> bool {
   matches!(status, 202 | 429 | 500 | 502 | 503 | 504)
 }
 
@@ -2494,19 +2498,34 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
             )
           }
         } else {
-          let stored_at = SystemTime::now();
-          if let Some(entry) = self.build_cache_entry(&res, stored_at) {
-            self.cache_entry(url, entry, res.final_url.as_deref());
-          } else if res
-            .cache_policy
-            .as_ref()
-            .map(|p| p.no_store)
+          if res
+            .status
+            .map(is_transient_http_status)
             .unwrap_or(false)
           {
-            self.remove_cached(url);
+            if let Some(snapshot) = plan.cached.as_ref() {
+              let fallback = snapshot.value.as_result();
+              let is_ok = fallback.is_ok();
+              (fallback, is_ok)
+            } else {
+              record_cache_miss();
+              (Ok(res), false)
+            }
+          } else {
+            let stored_at = SystemTime::now();
+            if let Some(entry) = self.build_cache_entry(&res, stored_at) {
+              self.cache_entry(url, entry, res.final_url.as_deref());
+            } else if res
+              .cache_policy
+              .as_ref()
+              .map(|p| p.no_store)
+              .unwrap_or(false)
+            {
+              self.remove_cached(url);
+            }
+            record_cache_miss();
+            (Ok(res), false)
           }
-          record_cache_miss();
-          (Ok(res), false)
         }
       }
       Err(err) => {
@@ -4487,6 +4506,51 @@ mod tests {
       "validators should update after 304 with new etag"
     );
     assert_eq!(calls[2].last_modified.as_deref(), Some("lm2"));
+  }
+
+  #[test]
+  fn caching_fetcher_falls_back_on_transient_status() {
+    let fetcher = ScriptedFetcher::new(vec![
+      MockResponse {
+        status: 200,
+        body: b"cached".to_vec(),
+        etag: Some("etag1".to_string()),
+        last_modified: None,
+        cache_policy: None,
+      },
+      MockResponse {
+        status: 503,
+        body: b"transient".to_vec(),
+        etag: None,
+        last_modified: None,
+        cache_policy: None,
+      },
+      MockResponse {
+        status: 200,
+        body: b"fresh".to_vec(),
+        etag: Some("etag2".to_string()),
+        last_modified: None,
+        cache_policy: None,
+      },
+    ]);
+
+    let cache = CachingFetcher::new(fetcher.clone());
+    let url = "http://example.com/resource";
+
+    let first = cache.fetch(url).expect("initial fetch");
+    assert_eq!(first.bytes, b"cached");
+
+    let second = cache.fetch(url).expect("fallback fetch");
+    assert_eq!(
+      second.bytes,
+      b"cached",
+      "should fall back to cached bytes on transient status"
+    );
+
+    let third = cache.fetch(url).expect("fresh fetch");
+    assert_eq!(third.bytes, b"fresh");
+
+    assert_eq!(fetcher.calls().len(), 3, "fetcher should be called 3 times");
   }
 
   #[test]

@@ -769,44 +769,59 @@ impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
             )
           }
         } else {
-          let stored_at = SystemTime::now();
-          if let Some(entry) = self.memory.build_cache_entry(&res, stored_at) {
-            let canonical = self
-              .memory
-              .cache_entry(url, entry, res.final_url.as_deref());
-            if let Some(snapshot) = self.memory.cached_snapshot(&canonical) {
-              self.persist_snapshot(&canonical, &snapshot);
-            } else {
-              let http_cache = res
-                .cache_policy
-                .as_ref()
-                .and_then(|p| CachedHttpMetadata::from_policy(p, stored_at));
-              self.persist_resource(
-                &canonical,
-                &res,
-                res.etag.as_deref(),
-                res.last_modified.as_deref(),
-                http_cache.as_ref(),
-              );
-            }
-            if canonical != url {
-              self.persist_alias(url, &canonical);
-            }
-          } else if res
-            .cache_policy
-            .as_ref()
-            .map(|p| p.no_store)
+          if res
+            .status
+            .map(super::is_transient_http_status)
             .unwrap_or(false)
           {
-            self.memory.remove_cached(url);
-            let canonical = self.canonical_url(url, res.final_url.as_deref());
-            self.remove_entry_for_url(&canonical);
-            if canonical != url {
-              self.remove_alias_for(url);
+            if let Some(snapshot) = plan.cached.as_ref() {
+              let fallback = snapshot.value.as_result();
+              let is_ok = fallback.is_ok();
+              (fallback, is_ok)
+            } else {
+              super::record_cache_miss();
+              (Ok(res), false)
             }
+          } else {
+            let stored_at = SystemTime::now();
+            if let Some(entry) = self.memory.build_cache_entry(&res, stored_at) {
+              let canonical = self
+                .memory
+                .cache_entry(url, entry, res.final_url.as_deref());
+              if let Some(snapshot) = self.memory.cached_snapshot(&canonical) {
+                self.persist_snapshot(&canonical, &snapshot);
+              } else {
+                let http_cache = res
+                  .cache_policy
+                  .as_ref()
+                  .and_then(|p| CachedHttpMetadata::from_policy(p, stored_at));
+                self.persist_resource(
+                  &canonical,
+                  &res,
+                  res.etag.as_deref(),
+                  res.last_modified.as_deref(),
+                  http_cache.as_ref(),
+                );
+              }
+              if canonical != url {
+                self.persist_alias(url, &canonical);
+              }
+            } else if res
+              .cache_policy
+              .as_ref()
+              .map(|p| p.no_store)
+              .unwrap_or(false)
+            {
+              self.memory.remove_cached(url);
+              let canonical = self.canonical_url(url, res.final_url.as_deref());
+              self.remove_entry_for_url(&canonical);
+              if canonical != url {
+                self.remove_alias_for(url);
+              }
+            }
+            super::record_cache_miss();
+            (Ok(res), false)
           }
-          super::record_cache_miss();
-          (Ok(res), false)
         }
       }
       Err(err) => {
@@ -1235,6 +1250,49 @@ mod tests {
       counter.load(Ordering::SeqCst),
       2,
       "different namespaces should not share disk cache entries"
+    );
+  }
+
+  #[test]
+  fn disk_cache_does_not_persist_transient_status_responses() {
+    #[derive(Clone)]
+    struct TransientFetcher {
+      count: Arc<AtomicUsize>,
+    }
+
+    impl ResourceFetcher for TransientFetcher {
+      fn fetch(&self, url: &str) -> Result<FetchedResource> {
+        self.count.fetch_add(1, Ordering::SeqCst);
+        let mut resource =
+          FetchedResource::new(b"transient".to_vec(), Some("text/plain".to_string()));
+        resource.status = Some(503);
+        resource.final_url = Some(url.to_string());
+        Ok(resource)
+      }
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let url = "https://example.com/transient";
+
+    let first_fetcher = TransientFetcher {
+      count: Arc::clone(&counter),
+    };
+    let disk = DiskCachingFetcher::new(first_fetcher, tmp.path());
+    let first = disk.fetch(url).expect("first fetch");
+    assert_eq!(first.bytes, b"transient");
+    assert_eq!(counter.load(Ordering::SeqCst), 1);
+
+    let second_fetcher = TransientFetcher {
+      count: Arc::clone(&counter),
+    };
+    let disk_again = DiskCachingFetcher::new(second_fetcher, tmp.path());
+    let second = disk_again.fetch(url).expect("second fetch");
+    assert_eq!(second.bytes, b"transient");
+    assert_eq!(
+      counter.load(Ordering::SeqCst),
+      2,
+      "transient responses should not be persisted to disk"
     );
   }
 
