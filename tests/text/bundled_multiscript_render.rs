@@ -13,10 +13,12 @@ fn bundled_fonts_render_common_scripts() {
 
   let samples = [
     ("arabic", "مرحبا بالعالم ١٢٣"),
+    ("hebrew", "שלום עולם"),
     ("cyrillic", "Привет мир"),
     ("greek", "Καλημέρα κόσμε"),
     ("devanagari", "नमस्ते दुनिया"),
     ("bengali", "বাংলা লেখা পরীক্ষা"),
+    ("thai", "สวัสดีชาวโลก"),
     ("cjk", "界面元素テスト日本語韓国어"),
     ("symbols", "←→↔ ✓✕★⚠"),
   ];
@@ -30,6 +32,13 @@ fn bundled_fonts_render_common_scripts() {
       .shape(text, &style, &font_ctx)
       .unwrap_or_else(|_| panic!("shape {label} sample"));
     assert!(!runs.is_empty(), "{label} sample should produce runs");
+    assert!(
+      runs
+        .iter()
+        .flat_map(|run| run.glyphs.iter())
+        .all(|g| g.glyph_id != 0),
+      "{label} sample should not shape missing glyphs with bundled fonts"
+    );
 
     let mut pixmap = Pixmap::new(512, 160).expect("pixmap");
     let mut rasterizer = TextRasterizer::new();
@@ -140,6 +149,15 @@ fn bundled_generics_prefer_bundled_text_fonts() {
   assert_eq!(db.load_font(sans).unwrap().family, "Noto Sans");
   assert_eq!(db.load_font(serif).unwrap().family, "Noto Serif");
   assert_eq!(db.load_font(mono).unwrap().family, "Noto Sans Mono");
+
+  let hebrew = db
+    .query("Noto Sans Hebrew", FontWeight::NORMAL, FontStyle::Normal)
+    .expect("Noto Sans Hebrew bundled face");
+  let thai = db
+    .query("Noto Sans Thai", FontWeight::NORMAL, FontStyle::Normal)
+    .expect("Noto Sans Thai bundled face");
+  assert_eq!(db.load_font(hebrew).unwrap().family, "Noto Sans Hebrew");
+  assert_eq!(db.load_font(thai).unwrap().family, "Noto Sans Thai");
 
   let math = FallbackChain::new()
     .add_generic(GenericFamily::Math)

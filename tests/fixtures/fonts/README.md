@@ -33,6 +33,8 @@ pip install -r tests/fixtures/fonts/requirements.txt
     (U+0300–036F) for mixed clusters.
   - `NotoSansDevanagari-subset.ttf`: Devanagari + Vedic extensions with joiners + combining marks (U+0300–036F).
   - `NotoSansBengali-subset.ttf`: Bengali + joiners + combining marks (U+0300–036F).
+  - `NotoSansHebrew-subset.ttf`: Hebrew + joiners + combining marks (U+0300–036F).
+  - `NotoSansThai-subset.ttf`: Thai + joiners + combining marks (U+0300–036F).
   - `NotoSansSC-subset.ttf` / `NotoSansJP-subset.ttf` / `NotoSansKR-subset.ttf`: CJK Unified Ideographs (U+3400–4DBF,
     U+4E00–9FFF), CJK punctuation/fullwidth forms, and common combining marks (U+0300–036F); JP adds kana (U+3040–31FF)
     and KR adds Hangul (U+1100–11FF, U+AC00–D7AF).
