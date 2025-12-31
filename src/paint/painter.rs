@@ -9802,6 +9802,42 @@ fn clip_mask_dirty_bounds(rect: Rect, width: u32, height: u32) -> Option<ClipMas
   }
 }
 
+fn hard_clip_pixmap_outside_rect_rgba(pixmap: &mut Pixmap, rect: Rect) {
+  let width = pixmap.width();
+  let height = pixmap.height();
+
+  // Hard-clip pixels outside the rectangle to avoid filter bleed.
+  //
+  // This is intentionally done using integer bounds (floor/ceil) so that any pixels outside the
+  // clip rect are *fully* cleared even when the clip coordinates are fractional. Filters can
+  // otherwise sample premultiplied RGB values outside the clip and bleed them back in.
+  let x0 = (rect.x().floor().max(0.0) as u32).min(width);
+  let y0 = (rect.y().floor().max(0.0) as u32).min(height);
+  let x1 = (rect.x() + rect.width()).ceil().min(width as f32) as u32;
+  let y1 = (rect.y() + rect.height()).ceil().min(height as f32) as u32;
+  if x0 == 0 && y0 == 0 && x1 == width && y1 == height {
+    return;
+  }
+
+  let stride = width as usize * 4;
+  let data = pixmap.data_mut();
+
+  // Clear fully outside rows in one contiguous fill.
+  data[..y0 as usize * stride].fill(0);
+  data[y1 as usize * stride..].fill(0);
+
+  let left_bytes = x0 as usize * 4;
+  let right_start = x1 as usize * 4;
+  if left_bytes != 0 || right_start != stride {
+    for row in y0..y1 {
+      let offset = row as usize * stride;
+      let row = &mut data[offset..offset + stride];
+      row[..left_bytes].fill(0);
+      row[right_start..].fill(0);
+    }
+  }
+}
+
 fn apply_clip_mask_rect(pixmap: &mut Pixmap, rect: Rect, radii: BorderRadii) {
   if rect.width() <= 0.0 || rect.height() <= 0.0 {
     return;
@@ -9855,6 +9891,25 @@ fn apply_clip_mask_rect(pixmap: &mut Pixmap, rect: Rect, radii: BorderRadii) {
     return;
   }
 
+  // Fast path: pure hard clip for pixel-aligned axis-aligned rects with no radii. For these
+  // rectangles the rounded-rect mask would be all-0/255 and therefore equivalent to a hard clip,
+  // so we can avoid generating and applying the mask entirely.
+  if radii.is_zero() {
+    let is_int = |v: f32| v.is_finite() && (v - v.round()).abs() <= 1e-6;
+    if is_int(rect.x()) && is_int(rect.y()) && is_int(rect.width()) && is_int(rect.height()) {
+      hard_clip_pixmap_outside_rect_rgba(pixmap, rect);
+      if diag_enabled {
+        with_paint_diagnostics(|stats| {
+          stats.clip_mask_pixels += u64::from(width) * u64::from(height);
+          if let Some(start) = clip_timer {
+            stats.clip_mask_ms += start.elapsed().as_secs_f64() * 1000.0;
+          }
+        });
+      }
+      return;
+    }
+  }
+
   // Generate a rounded-rect alpha mask, reusing a thread-local scratch pixmap to avoid per-call
   // allocations. We clear only the region touched by the previous call.
   let applied_mask = CLIP_MASK_SCRATCH.with(|cell| {
@@ -9904,34 +9959,7 @@ fn apply_clip_mask_rect(pixmap: &mut Pixmap, rect: Rect, radii: BorderRadii) {
     return;
   }
 
-  // Hard-clip pixels outside the rectangle to avoid filter bleed.
-  //
-  // This is intentionally done using integer bounds (floor/ceil) so that any pixels outside the
-  // clip rect are *fully* cleared even when the clip coordinates are fractional. Filters can
-  // otherwise sample premultiplied RGB values outside the clip and bleed them back in.
-  let x0 = rect.x().floor().max(0.0) as u32;
-  let y0 = rect.y().floor().max(0.0) as u32;
-  let x1 = (rect.x() + rect.width()).ceil().min(width as f32) as u32;
-  let y1 = (rect.y() + rect.height()).ceil().min(height as f32) as u32;
-  if x0 != 0 || y0 != 0 || x1 != width || y1 != height {
-    let stride = width as usize * 4;
-    let data = pixmap.data_mut();
-
-    // Clear fully outside rows in one contiguous fill.
-    data[..y0 as usize * stride].fill(0);
-    data[y1 as usize * stride..].fill(0);
-
-    let left_bytes = x0 as usize * 4;
-    let right_start = x1 as usize * 4;
-    if left_bytes != 0 || right_start != stride {
-      for row in y0..y1 {
-        let offset = row as usize * stride;
-        let row = &mut data[offset..offset + stride];
-        row[..left_bytes].fill(0);
-        row[right_start..].fill(0);
-      }
-    }
-  }
+  hard_clip_pixmap_outside_rect_rgba(pixmap, rect);
 
   if diag_enabled {
     with_paint_diagnostics(|stats| {
@@ -15476,6 +15504,21 @@ mod tests {
   }
 
   #[test]
+  fn clip_mask_integer_aligned_rect_without_radii_matches_reference() {
+    let mut optimized = new_pixmap(10, 10).expect("pixmap");
+    let mut reference = new_pixmap(10, 10).expect("pixmap");
+    fill_solid_rgba(&mut optimized, (0, 255, 0, 255));
+    fill_solid_rgba(&mut reference, (0, 255, 0, 255));
+
+    let rect = Rect::from_xywh(2.0, 1.0, 6.0, 7.0);
+
+    apply_clip_mask_rect(&mut optimized, rect, BorderRadii::ZERO);
+    apply_clip_mask_rect_reference(&mut reference, rect, BorderRadii::ZERO);
+
+    assert_eq!(optimized.data(), reference.data());
+  }
+
+  #[test]
   fn clip_mask_hard_clips_using_integer_bounds() {
     let mut pixmap = new_pixmap(4, 4).expect("pixmap");
     fill_solid_rgba(&mut pixmap, (10, 20, 30, 255));
@@ -15515,6 +15558,22 @@ mod tests {
     apply_clip_mask_rect(&mut pixmap, rect, BorderRadii::ZERO);
 
     assert_eq!(pixmap.data(), before.as_slice());
+  }
+
+  #[test]
+  fn clip_mask_integer_aligned_rect_without_radii_avoids_scratch_allocation() {
+    let mut pixmap = new_pixmap(8, 8).expect("pixmap");
+    fill_solid_rgba(&mut pixmap, (255, 0, 0, 255));
+    let rect = Rect::from_xywh(1.0, 1.0, 6.0, 6.0);
+
+    let recorder = NewPixmapAllocRecorder::start();
+    apply_clip_mask_rect(&mut pixmap, rect, BorderRadii::ZERO);
+    let allocs = recorder.take();
+
+    assert!(
+      allocs.is_empty(),
+      "expected no scratch new_pixmap allocations for integer-aligned rects without radii, got {allocs:?}"
+    );
   }
 
   #[test]
