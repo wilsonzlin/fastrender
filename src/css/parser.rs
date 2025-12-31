@@ -4355,7 +4355,7 @@ mod tests {
     let html = r#"
       <head>
         <style id="one">body { color: red; }</style>
-        <link rel="StyleSheet alternate" href="a.css" media="screen">
+        <link rel="StyleSheet alternate" href="a.css" media="screen" as="style">
         <style id="two" media="print">p { color: blue; }</style>
       </head>
     "#;
@@ -4375,6 +4375,7 @@ mod tests {
       StylesheetSource::External(link) => {
         assert_eq!(link.href, "a.css");
         assert!(rel_list_contains_stylesheet(&link.rel));
+        assert_eq!(link.as_attr.as_deref(), Some("style"));
         assert_eq!(link.media.as_deref(), Some("screen"));
       }
       other => panic!("expected external stylesheet link, got {:?}", other),
