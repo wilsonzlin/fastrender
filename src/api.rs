@@ -5580,6 +5580,34 @@ impl FastRender {
     dom: &DomNode,
     options: RenderOptions,
   ) -> Result<AccessibilityNode> {
+    let deadline = RenderDeadline::new(options.timeout, options.cancel_callback.clone());
+    let _deadline_guard = DeadlineGuard::install(Some(&deadline));
+    self.accessibility_tree_with_options_for_dom(dom, options)
+  }
+
+  /// Computes the accessibility tree for an HTML string using render options.
+  pub fn accessibility_tree_html(
+    &mut self,
+    html: &str,
+    options: RenderOptions,
+  ) -> Result<AccessibilityNode> {
+    let deadline = RenderDeadline::new(options.timeout, options.cancel_callback.clone());
+    let _deadline_guard = DeadlineGuard::install(Some(&deadline));
+
+    let base_hint = self.base_url.clone().unwrap_or_default();
+    let base_url = infer_base_url(html, &base_hint).into_owned();
+    if !base_url.is_empty() {
+      self.set_base_url(base_url);
+    }
+    let dom = self.parse_html(html)?;
+    self.accessibility_tree_with_options_for_dom(&dom, options)
+  }
+
+  fn accessibility_tree_with_options_for_dom(
+    &mut self,
+    dom: &DomNode,
+    options: RenderOptions,
+  ) -> Result<AccessibilityNode> {
     let (width, height) = options
       .viewport
       .unwrap_or((self.default_width, self.default_height));
@@ -5594,9 +5622,6 @@ impl FastRender {
     if let Some(dpr) = options.device_pixel_ratio {
       self.device_pixel_ratio = dpr;
     }
-
-    let deadline = RenderDeadline::new(options.timeout, options.cancel_callback.clone());
-    let _deadline_guard = DeadlineGuard::install(Some(&deadline));
 
     let result = (|| -> Result<AccessibilityNode> {
       let requested_viewport = Size::new(width as f32, height as f32);
@@ -5678,21 +5703,6 @@ impl FastRender {
     }
 
     result
-  }
-
-  /// Computes the accessibility tree for an HTML string using render options.
-  pub fn accessibility_tree_html(
-    &mut self,
-    html: &str,
-    options: RenderOptions,
-  ) -> Result<AccessibilityNode> {
-    let base_hint = self.base_url.clone().unwrap_or_default();
-    let base_url = infer_base_url(html, &base_hint).into_owned();
-    if !base_url.is_empty() {
-      self.set_base_url(base_url);
-    }
-    let dom = self.parse_html(html)?;
-    self.accessibility_tree_with_options(&dom, options)
   }
 
   /// Convenience helper to serialize the accessibility tree to JSON.
@@ -10167,6 +10177,28 @@ mod tests {
       .with_viewport(10, 10)
       .with_timeout(Some(std::time::Duration::from_millis(0)));
     let result = renderer.accessibility_tree_with_options(&dom, options);
+
+    match result {
+      Err(Error::Render(RenderError::Timeout { stage, .. })) => {
+        assert_eq!(stage, RenderStage::DomParse);
+      }
+      Ok(_) => panic!("expected dom_parse timeout, got Ok"),
+      Err(err) => panic!("expected dom_parse timeout, got {err}"),
+    }
+  }
+
+  #[test]
+  fn accessibility_tree_html_timeout_is_cooperative() {
+    let mut renderer = FastRender::with_config(FastRenderConfig {
+      font_config: FontConfig::bundled_only(),
+      ..FastRenderConfig::default()
+    })
+    .unwrap();
+
+    let options = RenderOptions::new()
+      .with_viewport(10, 10)
+      .with_timeout(Some(std::time::Duration::from_millis(0)));
+    let result = renderer.accessibility_tree_html("<div>Hello</div>", options);
 
     match result {
       Err(Error::Render(RenderError::Timeout { stage, .. })) => {
