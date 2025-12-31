@@ -39,6 +39,7 @@ use types::{
 thread_local! {
     static SUBGRID_OVERRIDES: std::cell::RefCell<Map<NodeId, SubgridOverride>> =
         std::cell::RefCell::new(Map::new());
+    static SUBGRID_OVERRIDE_DEPTH: std::cell::Cell<usize> = std::cell::Cell::new(0);
 }
 
 type Ident = DefaultCheapStr;
@@ -54,6 +55,62 @@ struct SubgridAxisOverride {
 struct SubgridOverride {
   rows: Option<SubgridAxisOverride>,
   columns: Option<SubgridAxisOverride>,
+}
+
+/// A scoped guard that isolates subgrid overrides for the duration of a layout run.
+///
+/// Subgrid overrides are stored in a thread-local map keyed by `NodeId`. Layout implementations
+/// may be re-entrant (for example when a measure function triggers a nested Taffy layout run on the
+/// same thread). Without scoping, nested layout runs can clobber the outer run's overrides (both by
+/// clearing the map and due to `NodeId` collisions between independent trees).
+///
+/// This guard ensures:
+/// - Outermost layout runs start with an empty overrides map and clear it on exit.
+/// - Nested layout runs swap the current map out and restore it on exit.
+#[cfg(feature = "std")]
+pub(crate) struct SubgridOverrideGuard {
+  previous: Option<Map<NodeId, SubgridOverride>>,
+}
+
+#[cfg(feature = "std")]
+impl SubgridOverrideGuard {
+  pub(crate) fn new() -> Self {
+    let depth_before = SUBGRID_OVERRIDE_DEPTH.with(|depth| {
+      let prev = depth.get();
+      depth.set(prev + 1);
+      prev
+    });
+
+    if depth_before == 0 {
+      // Outermost layout run: clear any stale overrides from a previous run.
+      SUBGRID_OVERRIDES.with(|map| map.borrow_mut().clear());
+      Self { previous: None }
+    } else {
+      // Nested layout run: isolate the current overrides map so we don't clobber the outer run.
+      let previous = SUBGRID_OVERRIDES.with(|map| std::mem::take(&mut *map.borrow_mut()));
+      Self { previous: Some(previous) }
+    }
+  }
+}
+
+#[cfg(feature = "std")]
+impl Drop for SubgridOverrideGuard {
+  fn drop(&mut self) {
+    SUBGRID_OVERRIDE_DEPTH.with(|depth| {
+      let current = depth.get();
+      debug_assert!(current > 0);
+      depth.set(current.saturating_sub(1));
+    });
+
+    SUBGRID_OVERRIDES.with(|map| {
+      if let Some(previous) = self.previous.take() {
+        *map.borrow_mut() = previous;
+      } else {
+        // Outermost layout run: clear to avoid leaking state into subsequent runs.
+        map.borrow_mut().clear();
+      }
+    });
+  }
 }
 
 #[cfg(feature = "std")]
@@ -75,14 +132,6 @@ fn store_subgrid_override(_node: NodeId, _data: SubgridOverride) {}
 fn take_subgrid_override(_node: NodeId) -> Option<SubgridOverride> {
   None
 }
-
-#[cfg(feature = "std")]
-pub(crate) fn clear_subgrid_overrides() {
-  SUBGRID_OVERRIDES.with(|map| map.borrow_mut().clear());
-}
-
-#[cfg(not(feature = "std"))]
-pub(crate) fn clear_subgrid_overrides() {}
 
 #[cfg(all(test, feature = "std"))]
 pub(crate) fn subgrid_overrides_len() -> usize {

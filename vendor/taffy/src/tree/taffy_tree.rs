@@ -1049,9 +1049,10 @@ impl<NodeContext> TaffyTree<NodeContext> {
         &Style,
       ) -> Size<f32>
   {
-    // Clear any lingering state from a previous aborted/panicked layout run.
-    #[cfg(feature = "grid")]
-    crate::compute::grid::clear_subgrid_overrides();
+    // Subgrid overrides are stored in thread-local state. Scope them to this layout pass so that
+    // nested layout calls (e.g. from measure functions) don't clobber the outer layout's overrides.
+    #[cfg(all(feature = "grid", feature = "std"))]
+    let _subgrid_guard = crate::compute::grid::SubgridOverrideGuard::new();
 
     let use_rounding = self.config.use_rounding;
     let mut taffy_view = TaffyView {
@@ -1070,16 +1071,9 @@ impl<NodeContext> TaffyTree<NodeContext> {
 
       match result {
         Ok(()) => {
-          // Ensure no state from successful layout runs leaks into future layout passes.
-          #[cfg(feature = "grid")]
-          crate::compute::grid::clear_subgrid_overrides();
           Ok(())
         }
         Err(payload) => {
-          // Ensure no state from aborted/panicked layout runs leaks into future layout passes.
-          #[cfg(feature = "grid")]
-          crate::compute::grid::clear_subgrid_overrides();
-
           if payload.is::<crate::util::LayoutAbort>() {
             return Err(TaffyError::LayoutAborted);
           }
@@ -1095,8 +1089,6 @@ impl<NodeContext> TaffyTree<NodeContext> {
       if use_rounding {
         round_layout(&mut taffy_view, node_id);
       }
-      #[cfg(feature = "grid")]
-      crate::compute::grid::clear_subgrid_overrides();
       Ok(())
     }
   }
@@ -1910,6 +1902,43 @@ mod tests {
     }));
 
     assert!(result.is_err());
+    assert_eq!(subgrid_overrides_len(), 0);
+  }
+
+  #[cfg(all(feature = "grid", feature = "std", panic = "unwind"))]
+  #[test]
+  fn subgrid_overrides_are_scoped_across_nested_layout_runs() {
+    use crate::compute::grid::{insert_dummy_subgrid_override, subgrid_overrides_len};
+    use std::cell::RefCell;
+
+    let mut outer: TaffyTree<()> = TaffyTree::new();
+    let outer_root = outer.new_leaf(Style::default()).unwrap();
+
+    let mut inner: TaffyTree<()> = TaffyTree::new();
+    let inner_root = inner.new_leaf(Style::default()).unwrap();
+    let inner = RefCell::new(inner);
+
+    outer
+      .compute_layout_with_measure(
+        outer_root,
+        Size::MAX_CONTENT,
+        move |_, _, _, _, _| {
+          insert_dummy_subgrid_override(NodeId::new(1));
+          assert_eq!(subgrid_overrides_len(), 1);
+
+          // Nested layout runs should not clobber the outer run's overrides map.
+          inner
+            .borrow_mut()
+            .compute_layout(inner_root, Size::MAX_CONTENT)
+            .unwrap();
+          assert_eq!(subgrid_overrides_len(), 1);
+
+          Size::ZERO
+        },
+      )
+      .unwrap();
+
+    // Outermost layout runs clear the overrides map on exit to avoid leaking state.
     assert_eq!(subgrid_overrides_len(), 0);
   }
 }
