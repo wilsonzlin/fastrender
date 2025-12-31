@@ -123,6 +123,7 @@ use tiny_skia::BlendMode as SkiaBlendMode;
 use tiny_skia::GradientStop as SkiaGradientStop;
 use tiny_skia::IntSize;
 use tiny_skia::Mask;
+#[cfg(test)]
 use tiny_skia::MaskType;
 use tiny_skia::PathBuilder;
 use tiny_skia::Pattern;
@@ -3664,8 +3665,16 @@ impl DisplayListRenderer {
         ResolvedMaskImage::Raster(image) => self.image_data_to_pixmap(image),
       };
       let Some(tile) = tile else { continue };
-      let Some(mask_tile) = mask_tile_from_image(&tile, layer.mode) else {
-        continue;
+      let mut converted_tile = None;
+      let mask_tile = match layer.mode {
+        MaskMode::Alpha => tile.as_ref(),
+        MaskMode::Luminance => {
+          let Some(mask_tile) = mask_tile_from_image(tile.as_ref(), layer.mode) else {
+            continue;
+          };
+          converted_tile = Some(mask_tile);
+          converted_tile.as_ref().unwrap()
+        }
       };
 
       let canvas_w = self.canvas.width() as i32;
@@ -3695,7 +3704,7 @@ impl DisplayListRenderer {
         for tx in positions_x.iter().copied() {
           paint_mask_tile(
             &mut mask_pixmap,
-            &mask_tile,
+            mask_tile,
             tx,
             ty,
             tile_w,
@@ -3707,8 +3716,18 @@ impl DisplayListRenderer {
         }
       }
 
+      let mut layer_mask = Mask::new(region_w, region_h)?;
+      {
+        let mut src_idx = 3usize;
+        let src = mask_pixmap.data();
+        for dst in layer_mask.data_mut().iter_mut() {
+          *dst = src[src_idx];
+          src_idx += 4;
+        }
+      }
+
       let layer_mask = CompositeMask::Region(OffsetMask {
-        mask: Mask::from_pixmap(mask_pixmap.as_ref(), MaskType::Alpha),
+        mask: layer_mask,
         origin: (x0, y0),
       });
 
