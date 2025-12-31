@@ -1240,7 +1240,11 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
       progress.notes = format!("read: {note_msg}");
       progress.hotspot = "fetch".to_string();
       let progress = progress.merge_preserving_manual(progress_before, current_sha.as_deref());
-      let _ = write_progress(&args.progress_path, &progress);
+      let _ = write_progress_with_sentinel(
+        &args.progress_path,
+        args.stage_path.as_deref(),
+        &progress,
+      );
       if let Some(path) = &args.log_path {
         let _ = write_text_file(path, &log);
       }
@@ -1416,7 +1420,11 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
         progress.notes = format!("renderer init: {note_msg}");
         progress.hotspot = "unknown".to_string();
         let progress = progress.merge_preserving_manual(progress_before, current_sha.as_deref());
-        let _ = write_progress(&args.progress_path, &progress);
+        let _ = write_progress_with_sentinel(
+          &args.progress_path,
+          args.stage_path.as_deref(),
+          &progress,
+        );
         if let Some(path) = &args.log_path {
           let _ = write_text_file(path, &log);
         }
@@ -1519,12 +1527,31 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     progress.hotspot = guess_hotspot(&progress.stages_ms).to_string();
   }
 
+  let progress = progress.merge_preserving_manual(progress_before, current_sha.as_deref());
+  let wrote_progress = write_progress_with_sentinel(
+    &args.progress_path,
+    args.stage_path.as_deref(),
+    &progress,
+  );
+  if let Err(err) = wrote_progress {
+    log.push_str(&format!(
+      "Progress write failed (skipping dumps): {}\n",
+      format_error_with_chain(&err, args.verbose)
+    ));
+    flush_log(&log, &args.log_path);
+    record_stage(StageHeartbeat::Done);
+    return Ok(());
+  }
+
   if let Some(level) = dump_level_for_progress(&args, &progress) {
     log.push_str(&format!(
       "Capturing {} dump for {}...\n",
       level.as_str(),
       progress.status.as_str()
     ));
+    // Flush before attempting the (optional) dump capture so a later kill doesn't discard the
+    // already-captured progress metadata.
+    flush_log(&log, &args.log_path);
     capture_dump_for_page(
       level,
       &args,
@@ -1536,9 +1563,6 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
       &mut log,
     );
   }
-
-  let progress = progress.merge_preserving_manual(progress_before, current_sha.as_deref());
-  let _ = write_progress(&args.progress_path, &progress);
 
   flush_log(&log, &args.log_path);
 
@@ -1778,6 +1802,13 @@ fn capture_dump_for_page(
   dump_soft_timeout_ms: Option<u64>,
   log: &mut String,
 ) {
+  if let Some(delay) = std::env::var("FASTR_TEST_DUMP_DELAY_MS")
+    .ok()
+    .and_then(|v| v.parse::<u64>().ok())
+  {
+    std::thread::sleep(Duration::from_millis(delay));
+  }
+
   let RenderConfigBundle {
     config,
     mut options,
@@ -1915,6 +1946,25 @@ fn stage_tmp_path(path: &Path) -> PathBuf {
     .map(|name| format!("{}.tmp", name.to_string_lossy()))
     .unwrap_or_else(|| "stage.tmp".to_string());
   path.with_file_name(tmp_name)
+}
+
+fn progress_sentinel_path(stage_path: &Path) -> PathBuf {
+  stage_path.with_extension("progress")
+}
+
+fn write_progress_with_sentinel(
+  progress_path: &Path,
+  stage_path: Option<&Path>,
+  progress: &PageProgress,
+) -> io::Result<()> {
+  write_progress(progress_path, progress)?;
+  if let Some(stage_path) = stage_path {
+    let sentinel_path = progress_sentinel_path(stage_path);
+    // Best-effort marker so the parent can distinguish "worker wrote progress for this run"
+    // from a stale progress artifact left over from a previous invocation.
+    atomic_write(&sentinel_path, b"written\n")?;
+  }
+  Ok(())
 }
 
 fn read_stage_file(path: &Path) -> Option<StageHeartbeat> {
@@ -3302,6 +3352,7 @@ fn run_queue(
       };
       let _ = fs::remove_file(&item.stage_path);
       let _ = fs::remove_file(stage_tmp_path(&item.stage_path));
+      let _ = fs::remove_file(progress_sentinel_path(&item.stage_path));
       let child = spawn_worker(
         exe,
         args,
@@ -3321,12 +3372,30 @@ fn run_queue(
     let mut i = 0usize;
     while i < running.len() {
       let elapsed = running[i].started.elapsed();
-      let timed_out = elapsed >= kill_timeout;
+      let progress_written = progress_sentinel_path(&running[i].item.stage_path).exists();
+      let effective_kill_timeout = if progress_written {
+        kill_timeout
+      } else {
+        worker_timeout
+      };
+      let timed_out = elapsed >= effective_kill_timeout;
 
       if timed_out {
         let mut entry = running.swap_remove(i);
         let _ = entry.child.kill();
         let _ = entry.child.wait();
+        let progress_written = progress_sentinel_path(&entry.item.stage_path).exists();
+        if progress_written {
+          // The worker already committed progress and is now likely stuck in optional dump capture.
+          // Don't overwrite the committed progress file with a synthetic timeout.
+          let _ = append_log_line(
+            &entry.item.stderr_path,
+            "parent killed worker during dump capture (progress already written)",
+          );
+          eprintln!("KILLED_AFTER_PROGRESS {}", entry.item.cache_stem);
+          continue;
+        }
+
         append_timeout_stderr_note(&entry.item.stderr_path, elapsed);
 
         let previous = read_progress(&entry.item.progress_path);
@@ -3338,9 +3407,9 @@ fn run_queue(
           .to_string();
         let mut progress = PageProgress::new(entry.item.url.clone());
         progress.status = ProgressStatus::Timeout;
-        progress.total_ms = Some(kill_timeout.as_secs_f64() * 1000.0);
+        progress.total_ms = Some(worker_timeout.as_secs_f64() * 1000.0);
         progress.notes = append_stage_to_note(
-          &format!("hard timeout after {:.2}s", kill_timeout.as_secs_f64()),
+          &format!("hard timeout after {:.2}s", worker_timeout.as_secs_f64()),
           heartbeat_stage,
         );
         progress.hotspot = timeout_hotspot.clone();
@@ -3350,7 +3419,7 @@ fn run_queue(
         progress.timeout_stage = timeout_stage;
         ensure_note_includes(
           &mut progress,
-          &format!("hard timeout after {:.2}s", kill_timeout.as_secs_f64()),
+          &format!("hard timeout after {:.2}s", worker_timeout.as_secs_f64()),
         );
         if let Some(stage) = heartbeat_stage {
           ensure_note_includes(&mut progress, &format!("stage: {}", stage.as_str()));
@@ -3362,7 +3431,7 @@ fn run_queue(
           &format!(
             "=== {} ===\nStatus: TIMEOUT\nKilled after {:.2}s\n",
             entry.item.cache_stem,
-            kill_timeout.as_secs_f64()
+            worker_timeout.as_secs_f64()
           ),
         );
 
@@ -3914,7 +3983,7 @@ fn worker(args: WorkerArgs) -> io::Result<()> {
       if let Some(stage) = heartbeat_stage {
         ensure_note_includes(&mut progress, &format!("stage: {}", stage.as_str()));
       }
-      let _ = write_progress(&progress_path, &progress);
+      let _ = write_progress_with_sentinel(&progress_path, stage_path.as_deref(), &progress);
       if let Some(path) = &log_path {
         let _ = write_text_file(
           path,
@@ -4033,6 +4102,19 @@ mod tests {
     fn drop(&mut self) {
       std::env::remove_var(self.key);
     }
+  }
+
+  fn pageset_progress_exe() -> Option<PathBuf> {
+    std::env::var("CARGO_BIN_EXE_pageset_progress")
+      .ok()
+      .map(PathBuf::from)
+      .or_else(|| {
+        let candidate = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+          .join("target")
+          .join("debug")
+          .join("pageset_progress");
+        candidate.exists().then_some(candidate)
+      })
   }
 
   fn basic_run_args(base: &Path) -> RunArgs {
@@ -4531,26 +4613,9 @@ mod tests {
 
   #[test]
   fn hard_timeout_prefers_heartbeat_stage() {
-    let exe = std::env::var("CARGO_BIN_EXE_pageset_progress")
-      .map(PathBuf::from)
-      .map_err(|_| ())
-      .or_else(|_| {
-        let candidate = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-          .join("target")
-          .join("debug")
-          .join("pageset_progress");
-        if candidate.exists() {
-          Ok(candidate)
-        } else {
-          Err(())
-        }
-      });
-    let exe = match exe {
-      Ok(path) => path,
-      Err(_) => {
-        eprintln!("Skipping test: pageset_progress binary not found");
-        return;
-      }
+    let Some(exe) = pageset_progress_exe() else {
+      eprintln!("Skipping test: pageset_progress binary not found");
+      return;
     };
 
     let dir = tempdir().unwrap();
@@ -4598,6 +4663,78 @@ mod tests {
       progress.notes.contains(heartbeat_stage.as_str()),
       "notes missing stage: {}",
       progress.notes
+    );
+  }
+
+  #[test]
+  fn kill_after_progress_during_dump_capture_does_not_overwrite_progress() {
+    let Some(exe) = pageset_progress_exe() else {
+      eprintln!("Skipping test: pageset_progress binary not found");
+      return;
+    };
+
+    let dir = tempdir().unwrap();
+    let cache_path = dir.path().join("page.html");
+    fs::write(&cache_path, "<html><body>ok</body></html>").unwrap();
+    let progress_path = dir.path().join("page.json");
+    let log_path = dir.path().join("page.log");
+    let stage_path = dir.path().join("page.stage");
+    let stderr_path = dir.path().join("page.stderr.log");
+
+    let item = WorkItem {
+      stem: "dumpkill".to_string(),
+      cache_stem: "dumpkill".to_string(),
+      url: url_hint_from_cache_path(&cache_path),
+      cache_path: cache_path.clone(),
+      progress_path: progress_path.clone(),
+      log_path: log_path.clone(),
+      stderr_path: stderr_path.clone(),
+      stage_path: stage_path.clone(),
+      trace_out: None,
+    };
+
+    let mut args = basic_run_args(dir.path());
+    // Avoid scanning system fonts in tests.
+    args.fonts.bundled_fonts = true;
+
+    let dump_settings = DumpSettings {
+      failures: None,
+      slow: Some(DumpLevel::Summary),
+      slow_ms: Some(0.0),
+      dir: dir.path().join("dumps"),
+      timeout_secs: 1,
+      soft_timeout_ms: None,
+    };
+    fs::create_dir_all(&dump_settings.dir).unwrap();
+
+    let render_kill_timeout = Duration::from_secs(2);
+    let overall_kill_timeout = Duration::from_secs(3);
+    let _guard = EnvVarGuard::set("FASTR_TEST_DUMP_DELAY_MS", "10000");
+    let queue = VecDeque::from(vec![item]);
+    run_queue(
+      &exe,
+      &args,
+      queue,
+      render_kill_timeout,
+      overall_kill_timeout,
+      None,
+      args.diagnostics,
+      args.jobs,
+      Some(&dump_settings),
+    )
+    .unwrap();
+
+    let stderr_contents = fs::read_to_string(&stderr_path).expect("stderr log");
+    assert!(
+      stderr_contents.contains("parent killed worker during dump capture"),
+      "expected parent to kill during dump capture, stderr log was:\n{stderr_contents}"
+    );
+
+    let progress = read_progress(&progress_path).expect("progress");
+    assert_ne!(
+      progress.status,
+      ProgressStatus::Timeout,
+      "progress was overwritten after worker was killed post-progress"
     );
   }
 }
