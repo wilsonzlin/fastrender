@@ -255,11 +255,21 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     }
     hasher.update(url.as_bytes());
     let digest = hasher.finalize();
-    digest.iter().map(|b| format!("{:02x}", b)).collect()
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(64);
+    for &b in digest.iter() {
+      out.push(HEX[(b >> 4) as usize] as char);
+      out.push(HEX[(b & 0x0f) as usize] as char);
+    }
+    out
   }
 
   fn data_path(&self, url: &str) -> PathBuf {
-    self.cache_dir.join(format!("{}.bin", self.cache_key(url)))
+    self.data_path_for_key(&self.cache_key(url))
+  }
+
+  fn data_path_for_key(&self, key: &str) -> PathBuf {
+    self.cache_dir.join(format!("{key}.bin"))
   }
 
   fn meta_path_for_data(&self, data_path: &Path) -> PathBuf {
@@ -269,9 +279,11 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
   }
 
   fn alias_path(&self, url: &str) -> PathBuf {
-    self
-      .cache_dir
-      .join(format!("{}.alias", self.cache_key(url)))
+    self.alias_path_for_key(&self.cache_key(url))
+  }
+
+  fn alias_path_for_key(&self, key: &str) -> PathBuf {
+    self.cache_dir.join(format!("{key}.alias"))
   }
 
   fn lock_is_active(&self, data_path: &Path) -> bool {
@@ -440,7 +452,7 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
 
     loop {
       let key = self.cache_key(&current);
-      let data_path = self.data_path(&current);
+      let data_path = self.data_path_for_key(&key);
       let meta_path = self.meta_path_for_data(&data_path);
 
       match self.try_read_snapshot(&key, &current, &data_path, &meta_path) {
@@ -612,7 +624,7 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     self.remove_alias_for(url);
 
     let key = self.cache_key(url);
-    let data_path = self.data_path(url);
+    let data_path = self.data_path_for_key(&key);
     if let Some(parent) = data_path.parent() {
       let _ = fs::create_dir_all(parent);
     }
@@ -723,7 +735,7 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
 
   fn remove_entry_for_url(&self, url: &str) {
     let key = self.cache_key(url);
-    let data_path = self.data_path(url);
+    let data_path = self.data_path_for_key(&key);
     let meta_path = self.meta_path_for_data(&data_path);
     let _ = self.remove_entry(&key, &data_path, &meta_path);
     self.remove_alias_for(url);
