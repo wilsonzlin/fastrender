@@ -565,8 +565,7 @@ fn picture_sources_for(styled: &StyledNode) -> Option<(usize, Vec<PictureSource>
       continue;
     };
 
-    let lower = child_tag.to_ascii_lowercase();
-    if lower == "source" {
+    if child_tag.eq_ignore_ascii_case("source") {
       if fallback_img.is_some() {
         continue;
       }
@@ -602,7 +601,7 @@ fn picture_sources_for(styled: &StyledNode) -> Option<(usize, Vec<PictureSource>
       continue;
     }
 
-    if lower == "img" {
+    if child_tag.eq_ignore_ascii_case("img") {
       fallback_img = Some(child);
       break;
     }
