@@ -170,25 +170,23 @@ impl DiskCacheIndex {
     meta_path: &Path,
   ) {
     let mut state = self.state.lock().unwrap();
-    if state.loaded && state.entries.contains_key(key) {
+    // Reads should remain cheap: most pageset workers only ever *read* the cache, and loading the
+    // full journal in every process defeats the point of having a disk cache. Only writer
+    // processes (which call `record_*`) need a fully loaded index for eviction.
+    if !state.loaded {
       return;
-    }
-    if self.refresh_locked(&mut state).is_err() {
-      let _ = self.rebuild_from_disk(&mut state);
     }
     if state.entries.contains_key(key) {
       return;
     }
-    let record = JournalRecord::Insert {
-      key: key.to_string(),
+    self.apply_insert(
+      &mut state,
+      key.to_string(),
       stored_at,
       len,
-      data_file: self.relative_path(data_path),
-      meta_file: self.relative_path(meta_path),
-    };
-    if self.append_record_locked(&mut state, &record).is_err() {
-      let _ = self.rebuild_from_disk(&mut state);
-    }
+      data_path.to_path_buf(),
+      meta_path.to_path_buf(),
+    );
   }
 
   pub(super) fn evict_if_needed<F>(&self, max_bytes: u64, mut can_remove: F)
@@ -337,31 +335,58 @@ impl DiskCacheIndex {
     let mut reader = BufReader::new(file);
     reader.seek(SeekFrom::Start(offset))?;
     let mut line = String::new();
-    let mut bytes_read: u64 = 0;
+    let mut processed_bytes: u64 = 0;
     loop {
       let n = reader.read_line(&mut line)?;
       if n == 0 {
         break;
       }
-      bytes_read = bytes_read.saturating_add(n as u64);
       if line.trim().is_empty() {
+        processed_bytes = processed_bytes.saturating_add(n as u64);
         line.clear();
         continue;
       }
-      let record: JournalRecord = serde_json::from_str(&line).map_err(|err| {
-        std::io::Error::new(
-          std::io::ErrorKind::InvalidData,
-          format!("invalid journal line: {err}"),
-        )
-      })?;
+      let record: JournalRecord = match serde_json::from_str(&line) {
+        Ok(record) => record,
+        Err(err) => {
+          let valid_len = offset.saturating_add(processed_bytes);
+          if valid_len == 0 {
+            return Err(std::io::Error::new(
+              std::io::ErrorKind::InvalidData,
+              format!("invalid journal line: {err}"),
+            ));
+          }
+
+          // Writers can be hard-killed (pageset timeouts) mid-append, leaving a partial JSON line
+          // at EOF (or garbage where subsequent appends were concatenated onto it). Rebuilding the
+          // whole index by scanning the cache directory is expensive, so prefer truncating the
+          // corrupted tail and continuing with a best-effort index.
+          if let Ok(file) = OpenOptions::new().write(true).open(&self.journal_path) {
+            if file.set_len(valid_len).is_ok() {
+              #[cfg(test)]
+              {
+                state.journal_replays += 1;
+              }
+              state.journal_len = valid_len;
+              return Ok(());
+            }
+          }
+
+          return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("invalid journal line: {err}"),
+          ));
+        }
+      };
       self.apply_record(state, record);
+      processed_bytes = processed_bytes.saturating_add(n as u64);
       line.clear();
     }
     #[cfg(test)]
     {
       state.journal_replays += 1;
     }
-    state.journal_len = offset.saturating_add(bytes_read);
+    state.journal_len = offset.saturating_add(processed_bytes);
     Ok(())
   }
 
@@ -715,5 +740,47 @@ mod tests {
       serde_json::from_str::<JournalRecord>(line)
         .unwrap_or_else(|err| panic!("invalid journal line {idx}: {err} (raw={line:?})"));
     }
+  }
+
+  #[test]
+  fn refresh_truncates_corrupt_tail_instead_of_rebuilding() {
+    let tmp = tempfile::tempdir().unwrap();
+    let journal_path = tmp.path().join("index.jsonl");
+
+    let record1 = JournalRecord::Insert {
+      key: "first".to_string(),
+      stored_at: 1_700_000_000,
+      len: 1,
+      data_file: "first.bin".to_string(),
+      meta_file: "first.bin.meta".to_string(),
+    };
+    let record2 = JournalRecord::Insert {
+      key: "second".to_string(),
+      stored_at: 1_700_000_001,
+      len: 2,
+      data_file: "second.bin".to_string(),
+      meta_file: "second.bin.meta".to_string(),
+    };
+
+    let line1 = serde_json::to_string(&record1).unwrap();
+    let line2 = serde_json::to_string(&record2).unwrap();
+
+    // Simulate a writer being killed mid-write, leaving a partial line, then another writer
+    // appending a full record directly after it (concatenating onto the partial bytes).
+    let corrupt_tail = format!("{line1}\n{{\"op\":\"insert\",\"key\":\"partial\"{line2}\n");
+    fs::write(&journal_path, corrupt_tail).unwrap();
+
+    let index = DiskCacheIndex::new(tmp.path().to_path_buf());
+    index.refresh();
+    assert_eq!(
+      index.debug_stats().rebuilds,
+      0,
+      "corrupt journal tail should be truncated instead of forcing a full rebuild"
+    );
+
+    let journal = fs::read_to_string(&journal_path).unwrap();
+    let lines: Vec<&str> = journal.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert_eq!(lines.len(), 1, "corrupt tail should be removed");
+    serde_json::from_str::<JournalRecord>(lines[0]).expect("remaining line should parse");
   }
 }
