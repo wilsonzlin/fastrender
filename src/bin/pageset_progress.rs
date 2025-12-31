@@ -1164,14 +1164,13 @@ pub(crate) fn hotspot_from_error(
   err: &fastrender::Error,
   diagnostics: Option<&RenderDiagnostics>,
 ) -> Option<&'static str> {
-  if let Some(stage) = diagnostics.and_then(|d| d.failure_stage) {
-    return Some(hotspot_from_timeout_stage(stage));
-  }
   match err {
     fastrender::Error::Resource(_)
     | fastrender::Error::Navigation(_)
     | fastrender::Error::Io(_) => Some("fetch"),
-    _ => None,
+    _ => diagnostics
+      .and_then(|d| d.failure_stage)
+      .map(hotspot_from_timeout_stage),
   }
 }
 
@@ -1525,6 +1524,14 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
       log.push_str("Status: PANIC\n");
       log.push_str(&format!("Panic: {}\n", progress.notes));
     }
+  }
+
+  if is_bad_status(progress.status)
+    && progress.timeout_stage.is_none()
+    && progress.failure_stage.is_none()
+  {
+    let stage = heartbeat.last_stage().and_then(progress_stage_from_heartbeat);
+    progress.failure_stage = stage;
   }
 
   if progress.notes.trim().is_empty() {
@@ -1899,6 +1906,10 @@ impl StageHeartbeatWriter {
   fn listener(&self) -> Arc<dyn Fn(StageHeartbeat) + Send + Sync> {
     let writer = self.clone();
     Arc::new(move |stage| writer.record(stage))
+  }
+
+  fn last_stage(&self) -> Option<StageHeartbeat> {
+    self.last.lock().ok().and_then(|guard| *guard)
   }
 
   fn record(&self, stage: StageHeartbeat) {
