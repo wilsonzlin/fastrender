@@ -185,6 +185,7 @@ use crate::tree::fragment_tree::{
   enable_fragment_instrumentation, reset_fragment_instrumentation_counters,
 };
 use fontdb::Database as FontDbDatabase;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
@@ -4705,118 +4706,194 @@ impl FastRender {
   ) -> Result<StyleSet> {
     let scoped_sources = extract_scoped_css_sources(dom);
     let fetcher = Arc::clone(&self.fetcher);
-    let resource_context = self.resource_context.as_ref();
-    let inline_loader = CssImportFetcher::new(
-      self.base_url.clone(),
-      Arc::clone(&fetcher),
-      self.resource_context.clone(),
-    );
+    let base_url = self.base_url.clone();
+    let resource_context = self.resource_context.clone();
+    let diagnostics = self.diagnostics.clone();
+    let deadline = crate::render_control::active_deadline();
 
-    let collect_from_sources = |sources: &[StylesheetSource],
-                                cache: &mut MediaQueryCache|
-     -> Result<StyleSheet> {
-      let mut combined_rules = Vec::new();
+    enum StylesheetTask {
+      Inline { css: String },
+      External { url: String },
+    }
 
-      for source in sources {
-        match source {
-          StylesheetSource::Inline(inline) => {
-            if inline.disabled || !Self::stylesheet_type_is_css(inline.type_attr.as_deref()) {
-              continue;
-            }
-            if !Self::media_attr_allows(inline.media.as_deref(), media_ctx, cache) {
-              continue;
-            }
-            if inline.css.trim().is_empty() {
-              continue;
-            }
+    impl StylesheetTask {
+      fn execute(
+        self,
+        fetcher: &Arc<dyn ResourceFetcher>,
+        document_base_url: &Option<String>,
+        resource_context: &Option<ResourceContext>,
+        media_ctx: &MediaContext,
+        diagnostics: &Option<Arc<Mutex<RenderDiagnostics>>>,
+        deadline: &Option<RenderDeadline>,
+      ) -> Result<(Option<StyleSheet>, MediaQueryCache)> {
+        // Parallel work runs on rayon threads; propagate any active deadline to keep cancellation
+        // effective inside stylesheet parsing/import resolution and resource fetch timeouts.
+        let _deadline_guard = DeadlineGuard::install(deadline.as_ref());
+        let mut local_media_cache = MediaQueryCache::default();
 
-            let sheet = parse_stylesheet(&inline.css)?;
+        match self {
+          StylesheetTask::Inline { css } => {
+            let sheet = parse_stylesheet(&css)?;
+            let loader = CssImportFetcher::new(
+              document_base_url.clone(),
+              Arc::clone(fetcher),
+              resource_context.clone(),
+            );
             let resolved = sheet.resolve_imports_with_cache(
-              &inline_loader,
-              self.base_url.as_deref(),
+              &loader,
+              document_base_url.as_deref(),
               media_ctx,
-              Some(cache),
+              Some(&mut local_media_cache),
             )?;
-            combined_rules.extend(resolved.rules);
+            Ok((Some(resolved), local_media_cache))
           }
-          StylesheetSource::External(link) => {
-            if link.disabled
-              || !rel_list_contains_stylesheet(&link.rel)
-              || !Self::stylesheet_type_is_css(link.type_attr.as_deref())
-            {
-              continue;
-            }
-            if !Self::media_attr_allows(link.media.as_deref(), media_ctx, cache) {
-              continue;
-            }
-            if link.href.trim().is_empty() {
-              continue;
-            }
-
-            let Some(stylesheet_url) = resolve_href_with_base(self.base_url.as_deref(), &link.href)
-            else {
-              continue;
-            };
-
-            if let Some(ctx) = resource_context {
-              if ctx
-                .check_allowed(ResourceKind::Stylesheet, &stylesheet_url)
-                .is_err()
-              {
-                continue;
-              }
-            }
-
-            match fetcher.fetch(&stylesheet_url) {
-              Ok(resource) => {
-                if let Some(ctx) = resource_context {
-                  if ctx
-                    .check_allowed_with_final(
-                      ResourceKind::Stylesheet,
-                      &stylesheet_url,
-                      resource.final_url.as_deref(),
-                    )
-                    .is_err()
-                  {
-                    continue;
-                  }
-                }
-                let mut css_text =
-                  decode_css_bytes(&resource.bytes, resource.content_type.as_deref());
-                css_text = absolutize_css_urls(&css_text, &stylesheet_url)?;
-
-                let sheet = parse_stylesheet(&css_text)?;
-                let loader = CssImportFetcher::new(
-                  Some(stylesheet_url.clone()),
-                  Arc::clone(&fetcher),
-                  resource_context.cloned(),
-                );
-                let resolved = sheet.resolve_imports_with_cache(
-                  &loader,
-                  Some(&stylesheet_url),
-                  media_ctx,
-                  Some(cache),
-                )?;
-                combined_rules.extend(resolved.rules);
-              }
+          StylesheetTask::External { url } => {
+            let resource = match fetcher.fetch(&url) {
+              Ok(resource) => resource,
               Err(err) => {
                 // Per spec, stylesheet loads are best-effort. On failure, continue.
-                if let Some(diag) = &self.diagnostics {
+                if let Some(diag) = diagnostics.as_ref() {
                   if let Ok(mut guard) = diag.lock() {
-                    guard.record_error(ResourceKind::Stylesheet, &stylesheet_url, &err);
+                    guard.record_error(ResourceKind::Stylesheet, &url, &err);
                   }
                 }
-                continue;
+                return Ok((None, local_media_cache));
+              }
+            };
+
+            if let Some(ctx) = resource_context.as_ref() {
+              if ctx
+                .check_allowed_with_final(
+                  ResourceKind::Stylesheet,
+                  &url,
+                  resource.final_url.as_deref(),
+                )
+                .is_err()
+              {
+                return Ok((None, local_media_cache));
               }
             }
+
+            let sheet_base = resource.final_url.clone().unwrap_or_else(|| url.clone());
+            let mut css_text = decode_css_bytes(&resource.bytes, resource.content_type.as_deref());
+            css_text = absolutize_css_urls(&css_text, &sheet_base)?;
+
+            let sheet = parse_stylesheet(&css_text)?;
+            let loader = CssImportFetcher::new(
+              Some(sheet_base.clone()),
+              Arc::clone(fetcher),
+              resource_context.clone(),
+            );
+            let resolved = sheet.resolve_imports_with_cache(
+              &loader,
+              Some(&sheet_base),
+              media_ctx,
+              Some(&mut local_media_cache),
+            )?;
+            Ok((Some(resolved), local_media_cache))
           }
         }
       }
+    }
 
-      Ok(StyleSheet {
-        rules: combined_rules,
-      })
-    };
+    let collect_from_sources =
+      |sources: &[StylesheetSource], cache: &mut MediaQueryCache| -> Result<StyleSheet> {
+        let mut tasks = Vec::new();
+
+        for source in sources {
+          match source {
+            StylesheetSource::Inline(inline) => {
+              if inline.disabled || !Self::stylesheet_type_is_css(inline.type_attr.as_deref()) {
+                continue;
+              }
+              if !Self::media_attr_allows(inline.media.as_deref(), media_ctx, cache) {
+                continue;
+              }
+              if inline.css.trim().is_empty() {
+                continue;
+              }
+              tasks.push(StylesheetTask::Inline {
+                css: inline.css.clone(),
+              });
+            }
+            StylesheetSource::External(link) => {
+              if link.disabled
+                || !rel_list_contains_stylesheet(&link.rel)
+                || !Self::stylesheet_type_is_css(link.type_attr.as_deref())
+              {
+                continue;
+              }
+              if !Self::media_attr_allows(link.media.as_deref(), media_ctx, cache) {
+                continue;
+              }
+              if link.href.trim().is_empty() {
+                continue;
+              }
+
+              let Some(stylesheet_url) = resolve_href_with_base(base_url.as_deref(), &link.href)
+              else {
+                continue;
+              };
+
+              if let Some(ctx) = resource_context.as_ref() {
+                if ctx
+                  .check_allowed(ResourceKind::Stylesheet, &stylesheet_url)
+                  .is_err()
+                {
+                  continue;
+                }
+              }
+
+              tasks.push(StylesheetTask::External {
+                url: stylesheet_url,
+              });
+            }
+          }
+        }
+
+        let results: Vec<Result<(Option<StyleSheet>, MediaQueryCache)>> = if tasks.len() > 1 {
+          tasks
+            .into_par_iter()
+            .map(|task| {
+              task.execute(
+                &fetcher,
+                &base_url,
+                &resource_context,
+                media_ctx,
+                &diagnostics,
+                &deadline,
+              )
+            })
+            .collect()
+        } else {
+          tasks
+            .into_iter()
+            .map(|task| {
+              task.execute(
+                &fetcher,
+                &base_url,
+                &resource_context,
+                media_ctx,
+                &diagnostics,
+                &deadline,
+              )
+            })
+            .collect()
+        };
+
+        let mut combined_rules = Vec::new();
+        for result in results {
+          let (sheet, local_cache) = result?;
+          cache.merge_from(local_cache);
+          if let Some(sheet) = sheet {
+            combined_rules.extend(sheet.rules);
+          }
+        }
+
+        Ok(StyleSheet {
+          rules: combined_rules,
+        })
+      };
 
     let document = collect_from_sources(&scoped_sources.document, media_query_cache)?;
     let mut shadows = HashMap::new();

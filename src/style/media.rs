@@ -615,6 +615,32 @@ impl MediaQueryCache {
     self.results.is_empty()
   }
 
+  /// Merge cached results from another [`MediaQueryCache`].
+  ///
+  /// This is used when independent stages (or parallel work) accumulate media-query
+  /// evaluations that can be reused later in the pipeline.
+  pub(crate) fn merge_from(&mut self, other: MediaQueryCache) {
+    let MediaQueryCache { results, context } = other;
+    if results.is_empty() {
+      return;
+    }
+
+    match context {
+      None => {
+        // Cache entries without a context fingerprint can be merged directly. This case should be
+        // rare (most evaluations install a fingerprint), but keeping it makes the merge robust.
+        self.results.extend(results);
+      }
+      Some(other_ctx) => {
+        if self.context.as_ref() != Some(&other_ctx) {
+          self.results.clear();
+          self.context = Some(other_ctx);
+        }
+        self.results.extend(results);
+      }
+    }
+  }
+
   fn ensure_context(&mut self, fingerprint: MediaContextFingerprint) {
     if self.context.as_ref() != Some(&fingerprint) {
       self.results.clear();
