@@ -3504,9 +3504,13 @@ fn run_queue(
             progress.total_ms = Some(entry.started.elapsed().as_secs_f64() * 1000.0);
             let note = synthesize_missing_progress_note(exit_summary);
             progress.notes = append_stage_to_note(&note, heartbeat_stage);
-            progress.hotspot = heartbeat_stage
-              .map(|stage| stage.hotspot().to_string())
-              .unwrap_or_else(|| "unknown".to_string());
+            progress.failure_stage = heartbeat_stage.and_then(progress_stage_from_heartbeat);
+            if let Some(stage) = heartbeat_stage {
+              maybe_apply_hotspot(&mut progress, previous.as_ref(), stage.hotspot(), false);
+            }
+            if progress.hotspot.trim().is_empty() {
+              progress.hotspot = "unknown".to_string();
+            }
             if let Some(tail) = stderr_tail(&entry.item.stderr_path, 2048, 20) {
               ensure_note_includes(
                 &mut progress,
@@ -3550,9 +3554,13 @@ fn run_queue(
           progress.status = ProgressStatus::Panic;
           progress.total_ms = Some(entry.started.elapsed().as_secs_f64() * 1000.0);
           progress.notes = "worker try_wait failed".to_string();
-          progress.hotspot = heartbeat_stage
-            .map(|stage| stage.hotspot().to_string())
-            .unwrap_or_else(|| "unknown".to_string());
+          progress.failure_stage = heartbeat_stage.and_then(progress_stage_from_heartbeat);
+          if let Some(stage) = heartbeat_stage {
+            maybe_apply_hotspot(&mut progress, previous.as_ref(), stage.hotspot(), false);
+          }
+          if progress.hotspot.trim().is_empty() {
+            progress.hotspot = "unknown".to_string();
+          }
           if let Some(tail) = stderr_tail(&entry.item.stderr_path, 2048, 20) {
             ensure_note_includes(
               &mut progress,
@@ -3566,6 +3574,9 @@ fn run_queue(
           let mut progress = progress.merge_preserving_manual(previous, current_sha.as_deref());
           if let Some(stage) = heartbeat_stage {
             ensure_note_includes(&mut progress, &format!("stage: {}", stage.as_str()));
+            if is_hotspot_unset(&progress.hotspot) {
+              progress.hotspot = stage.hotspot().to_string();
+            }
           }
           let _ = write_progress(&entry.item.progress_path, &progress);
           eprintln!("PANIC {} (try_wait failed)", entry.item.cache_stem);
@@ -4011,12 +4022,19 @@ fn worker(args: WorkerArgs) -> io::Result<()> {
       progress.status = ProgressStatus::Panic;
       progress.total_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
       progress.notes = panic_to_string(panic);
-      progress.hotspot = heartbeat_stage
-        .map(|stage| stage.hotspot().to_string())
-        .unwrap_or_else(|| "unknown".to_string());
+      progress.failure_stage = heartbeat_stage.and_then(progress_stage_from_heartbeat);
+      if let Some(stage) = heartbeat_stage {
+        maybe_apply_hotspot(&mut progress, previous.as_ref(), stage.hotspot(), false);
+      }
+      if progress.hotspot.trim().is_empty() {
+        progress.hotspot = "unknown".to_string();
+      }
       let mut progress = progress.merge_preserving_manual(previous, current_sha.as_deref());
       if let Some(stage) = heartbeat_stage {
         ensure_note_includes(&mut progress, &format!("stage: {}", stage.as_str()));
+        if is_hotspot_unset(&progress.hotspot) {
+          progress.hotspot = stage.hotspot().to_string();
+        }
       }
       let _ = write_progress_with_sentinel(&progress_path, stage_path.as_deref(), &progress);
       if let Some(path) = &log_path {
