@@ -674,9 +674,19 @@ fn apply_filters_scoped(
     return Ok(());
   }
 
-  let Some(mut region) = new_pixmap(region_w, region_h) else {
-    apply_filters(pixmap, filters, scale, bbox, cache)?;
-    return Ok(());
+  let mut scratch = BACKDROP_FILTER_SCRATCH.with(|cell| std::mem::take(&mut *cell.borrow_mut()));
+  let mut region = match scratch.region.take() {
+    Some(existing) if existing.width() == region_w && existing.height() == region_h => existing,
+    _ => match new_pixmap(region_w, region_h) {
+      Some(p) => p,
+      None => {
+        BACKDROP_FILTER_SCRATCH.with(|cell| {
+          *cell.borrow_mut() = scratch;
+        });
+        apply_filters(pixmap, filters, scale, bbox, cache)?;
+        return Ok(());
+      }
+    },
   };
 
   let bytes_per_row = pixmap.width() as usize * 4;
@@ -698,7 +708,13 @@ fn apply_filters_scoped(
     bbox.width(),
     bbox.height(),
   );
-  apply_filters(&mut region, filters, scale, local_bbox, cache)?;
+  if let Err(err) = apply_filters(&mut region, filters, scale, local_bbox, cache) {
+    scratch.region = Some(region);
+    BACKDROP_FILTER_SCRATCH.with(|cell| {
+      *cell.borrow_mut() = scratch;
+    });
+    return Err(err);
+  }
 
   for row in 0..region_h as usize {
     let dst_idx = (clamped_y as usize + row) * bytes_per_row + clamped_x as usize * 4;
@@ -708,6 +724,10 @@ fn apply_filters_scoped(
     dst.copy_from_slice(src);
   }
 
+  scratch.region = Some(region);
+  BACKDROP_FILTER_SCRATCH.with(|cell| {
+    *cell.borrow_mut() = scratch;
+  });
   Ok(())
 }
 fn apply_backdrop_filters(
@@ -8225,6 +8245,31 @@ mod tests {
     assert!(
       allocations.is_empty(),
       "expected apply_backdrop_filters to reuse scratch pixmaps, got {allocations:?}"
+    );
+  }
+
+  #[test]
+  fn apply_filters_scoped_reuses_region_scratch_pixmap() {
+    BACKDROP_FILTER_SCRATCH.with(|cell| {
+      *cell.borrow_mut() = BackdropFilterScratch::default();
+    });
+
+    let mut pixmap = new_pixmap(8, 8).unwrap();
+    pixmap.data_mut().fill(200);
+    let bounds = Rect::from_xywh(1.0, 1.0, 6.0, 6.0);
+    let filters = vec![ResolvedFilter::Brightness(1.25)];
+
+    apply_filters_scoped(&mut pixmap, &filters, 1.0, bounds, Some(&bounds), None)
+      .expect("apply filter warm-up");
+
+    let recorder = crate::paint::pixmap::NewPixmapAllocRecorder::start();
+    apply_filters_scoped(&mut pixmap, &filters, 1.0, bounds, Some(&bounds), None)
+      .expect("apply filter reuse");
+    let allocations = recorder.take();
+
+    assert!(
+      allocations.is_empty(),
+      "expected apply_filters_scoped to reuse scratch pixmaps, got {allocations:?}"
     );
   }
 
