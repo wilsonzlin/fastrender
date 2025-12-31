@@ -1419,6 +1419,27 @@ impl BlockFormattingContext {
       margin_ctx.mark_content_encountered();
     }
 
+    let trace_positioned = trace_positioned_ids();
+    let trace_block_text = trace_block_text_ids();
+    if let Some(result) = self.try_parallel_block_children(
+      parent,
+      constraints,
+      nearest_positioned_cb,
+      margin_ctx.clone(),
+      &relative_cb,
+      containing_width,
+      float_ctx.is_empty(),
+    ) {
+      return result;
+    }
+
+    let inline_fc = InlineFormattingContext::with_font_context_viewport_and_cb(
+      self.font_context.clone(),
+      self.viewport_size,
+      *nearest_positioned_cb,
+    )
+    .with_parallelism(self.parallelism);
+
     let flush_inline_buffer = |buffer: &mut Vec<BoxNode>,
                                fragments: &mut Vec<FragmentNode>,
                                current_y: &mut f32,
@@ -1483,12 +1504,6 @@ impl BlockFormattingContext {
       // If the inline container would start below the current cursor because of pending
       // margins, advance to that baseline first.
       let inline_y = *current_y;
-      let inline_fc = InlineFormattingContext::with_font_context_viewport_and_cb(
-        self.font_context.clone(),
-        self.viewport_size,
-        *nearest_positioned_cb,
-      )
-      .with_parallelism(self.parallelism);
       let inline_constraints =
         LayoutConstraints::new(AvailableSpace::Definite(containing_width), available_height);
       let mut inline_fragment = match inline_fc.layout_with_floats(
@@ -1519,19 +1534,6 @@ impl BlockFormattingContext {
       Ok(())
     };
 
-    let trace_positioned = trace_positioned_ids();
-    let trace_block_text = trace_block_text_ids();
-    if let Some(result) = self.try_parallel_block_children(
-      parent,
-      constraints,
-      nearest_positioned_cb,
-      margin_ctx.clone(),
-      &relative_cb,
-      containing_width,
-      float_ctx.is_empty(),
-    ) {
-      return result;
-    }
     for (child_idx, child) in parent.children.iter().enumerate() {
       if let Err(RenderError::Timeout { elapsed, .. }) =
         check_active_periodic(&mut deadline_counter, 16, RenderStage::Layout)
