@@ -40,6 +40,12 @@ disk cache reads, single-flight inflight waits, and total network fetch time). T
 `pageset_progress report --verbose-stats` and stored under `diagnostics.stats` in the per-page JSON
 when present.
 
+Common fields in `stats.resources`:
+- `resource_cache_*` (hits/misses/bytes when serving from the in-process cache)
+- `fetch_inflight_wait*` (time/count waiting on single-flight in-flight fetches)
+- `disk_cache_*` (disk-backed cache hits/misses/bytes/time + lock wait breakdown)
+- `network_fetch*` (HTTP fetch count/bytes/time for actual network work)
+
 If you need the full detail, check the per-page log (`target/pageset/logs/<stem>.log`) or rerun with `--diagnostics verbose`.
 
 ## 2) Tracing (timelines you can “see”)
