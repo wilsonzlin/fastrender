@@ -130,6 +130,34 @@ struct PagesetDiffArgs {
   #[arg(long)]
   fail_on_regression: bool,
 
+  /// Exit non-zero when timeout/panic/error pages are missing `failure_stage`/`timeout_stage`
+  ///
+  /// When `--fail-on-regression` is set, this gate is enabled automatically unless explicitly
+  /// disabled with `--no-fail-on-missing-stages`.
+  #[arg(long)]
+  fail_on_missing_stages: bool,
+
+  /// Disable the implicit `--fail-on-missing-stages` gate enabled by `--fail-on-regression`
+  #[arg(
+    long = "no-fail-on-missing-stages",
+    conflicts_with = "fail_on_missing_stages"
+  )]
+  no_fail_on_missing_stages: bool,
+
+  /// Exit non-zero when ok pages are missing per-stage timings (`stages_ms`)
+  ///
+  /// When `--fail-on-regression` is set, this gate is enabled automatically unless explicitly
+  /// disabled with `--no-fail-on-missing-stage-timings`.
+  #[arg(long)]
+  fail_on_missing_stage_timings: bool,
+
+  /// Disable the implicit `--fail-on-missing-stage-timings` gate enabled by `--fail-on-regression`
+  #[arg(
+    long = "no-fail-on-missing-stage-timings",
+    conflicts_with = "fail_on_missing_stage_timings"
+  )]
+  no_fail_on_missing_stage_timings: bool,
+
   #[command(flatten)]
   pageset: PagesetArgs,
 }
@@ -531,6 +559,12 @@ fn run_pageset_diff(args: PagesetDiffArgs) -> Result<()> {
     baseline_dir.display()
   );
 
+  let fail_on_missing_stages =
+    (args.fail_on_missing_stages || args.fail_on_regression) && !args.no_fail_on_missing_stages;
+  let fail_on_missing_stage_timings = (args.fail_on_missing_stage_timings
+    || args.fail_on_regression)
+    && !args.no_fail_on_missing_stage_timings;
+
   let mut cmd = Command::new("cargo");
   cmd
     .arg("run")
@@ -545,8 +579,28 @@ fn run_pageset_diff(args: PagesetDiffArgs) -> Result<()> {
   if args.fail_on_regression {
     cmd.arg("--fail-on-regression");
   }
+  if fail_on_missing_stages {
+    cmd.arg("--fail-on-missing-stages");
+  }
+  if fail_on_missing_stage_timings {
+    cmd.arg("--fail-on-missing-stage-timings");
+  }
 
-  run_command(cmd)?;
+  print_command(&cmd);
+  let status = cmd
+    .status()
+    .with_context(|| format!("failed to run {:?}", cmd.get_program()))?;
+  if !status.success() {
+    if status.code() == Some(2) && (fail_on_missing_stages || fail_on_missing_stage_timings) {
+      bail!(
+        "pageset_progress report failed with status {status}. \
+         If the error above mentions an unexpected argument, ensure pageset_progress includes \
+         the report diagnostic gates (Task 44) or re-run with \
+         --no-fail-on-missing-stages/--no-fail-on-missing-stage-timings."
+      );
+    }
+    bail!("command failed with status {status}");
+  }
   drop(baseline_temp);
   Ok(())
 }
