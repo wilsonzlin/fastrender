@@ -1,19 +1,19 @@
 use crate::geometry::Size;
 use crate::layout::flex_profile::{self, CacheKind};
 use crate::tree::fragment_tree::FragmentNode;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::RwLock;
 
 pub(crate) type FlexCacheKey = (Option<u32>, Option<u32>);
-pub(crate) type FlexCacheEntry = HashMap<FlexCacheKey, (Size, Arc<FragmentNode>)>;
+pub(crate) type FlexCacheEntry = FxHashMap<FlexCacheKey, (Size, Arc<FragmentNode>)>;
 
 const DEFAULT_SHARD_COUNT: usize = 64;
 
 #[derive(Default)]
 struct FlexCacheShard {
-  map: RwLock<HashMap<u64, FlexCacheEntry>>,
+  map: RwLock<FxHashMap<u64, FlexCacheEntry>>,
   hits: AtomicU64,
   misses: AtomicU64,
 }
