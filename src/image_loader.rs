@@ -7,7 +7,7 @@ use crate::api::{RenderDiagnostics, ResourceContext, ResourceKind};
 use crate::debug::runtime;
 use crate::error::{Error, ImageError, RenderError, RenderStage, Result};
 use crate::paint::pixmap::{new_pixmap, MAX_PIXMAP_BYTES};
-use crate::render_control::{check_active, check_active_periodic};
+use crate::render_control::{self, check_active, check_active_periodic};
 use crate::resource::CachingFetcher;
 use crate::resource::CachingFetcherConfig;
 use crate::resource::FetchedResource;
@@ -46,7 +46,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::Condvar;
 use std::sync::Mutex;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tiny_skia::Pixmap;
 use url::Url;
 
@@ -1086,10 +1086,27 @@ impl DecodeInFlight {
     }
   }
 
-  fn wait(&self) -> Result<Arc<CachedImage>> {
+  fn wait(&self, url: &str) -> Result<Arc<CachedImage>> {
     let mut guard = self.result.lock().unwrap();
+    let deadline = render_control::active_deadline().filter(|d| d.timeout_limit().is_some());
     while guard.is_none() {
-      guard = self.cv.wait(guard).unwrap();
+      if let Some(deadline) = deadline.as_ref() {
+        match deadline.remaining_timeout() {
+          Some(remaining) if !remaining.is_zero() => {
+            let wait_for = remaining.min(Duration::from_millis(10));
+            guard = self.cv.wait_timeout(guard, wait_for).unwrap().0;
+          }
+          _ => {
+            return Err(Error::Image(ImageError::LoadFailed {
+              url: url.to_string(),
+              reason: "render deadline exceeded while waiting for in-flight image decode"
+                .to_string(),
+            }));
+          }
+        }
+      } else {
+        guard = self.cv.wait(guard).unwrap();
+      }
     }
     guard.as_ref().unwrap().as_result()
   }
@@ -1130,10 +1147,26 @@ impl ProbeInFlight {
     }
   }
 
-  fn wait(&self) -> Result<Arc<CachedImageMetadata>> {
+  fn wait(&self, url: &str) -> Result<Arc<CachedImageMetadata>> {
     let mut guard = self.result.lock().unwrap();
+    let deadline = render_control::active_deadline().filter(|d| d.timeout_limit().is_some());
     while guard.is_none() {
-      guard = self.cv.wait(guard).unwrap();
+      if let Some(deadline) = deadline.as_ref() {
+        match deadline.remaining_timeout() {
+          Some(remaining) if !remaining.is_zero() => {
+            let wait_for = remaining.min(Duration::from_millis(10));
+            guard = self.cv.wait_timeout(guard, wait_for).unwrap().0;
+          }
+          _ => {
+            return Err(Error::Image(ImageError::LoadFailed {
+              url: url.to_string(),
+              reason: "render deadline exceeded while waiting for in-flight image probe".to_string(),
+            }));
+          }
+        }
+      } else {
+        guard = self.cv.wait(guard).unwrap();
+      }
     }
     guard.as_ref().unwrap().as_result()
   }
@@ -1183,6 +1216,98 @@ pub struct ImageCache {
   diagnostics: Option<Arc<Mutex<RenderDiagnostics>>>,
   /// Optional resource context (policy + diagnostics).
   resource_context: Option<ResourceContext>,
+}
+
+struct DecodeInFlightOwnerGuard<'a> {
+  cache: &'a ImageCache,
+  url: &'a str,
+  flight: Arc<DecodeInFlight>,
+  finished: bool,
+}
+
+impl<'a> DecodeInFlightOwnerGuard<'a> {
+  fn new(cache: &'a ImageCache, url: &'a str, flight: Arc<DecodeInFlight>) -> Self {
+    Self {
+      cache,
+      url,
+      flight,
+      finished: false,
+    }
+  }
+
+  fn finish(&mut self, result: SharedImageResult) {
+    if self.finished {
+      return;
+    }
+    self.finished = true;
+    self.cache.finish_inflight(self.url, &self.flight, result);
+  }
+}
+
+impl Drop for DecodeInFlightOwnerGuard<'_> {
+  fn drop(&mut self) {
+    if self.finished {
+      return;
+    }
+
+    self.finished = true;
+    let err = Error::Image(ImageError::LoadFailed {
+      url: self.url.to_string(),
+      reason: "in-flight image decode owner dropped without resolving".to_string(),
+    });
+    self.cache.record_image_error(self.url, &err);
+    self
+      .cache
+      .finish_inflight(self.url, &self.flight, SharedImageResult::Error(err));
+  }
+}
+
+struct ProbeInFlightOwnerGuard<'a> {
+  cache: &'a ImageCache,
+  url: &'a str,
+  flight: Arc<ProbeInFlight>,
+  finished: bool,
+}
+
+impl<'a> ProbeInFlightOwnerGuard<'a> {
+  fn new(cache: &'a ImageCache, url: &'a str, flight: Arc<ProbeInFlight>) -> Self {
+    Self {
+      cache,
+      url,
+      flight,
+      finished: false,
+    }
+  }
+
+  fn finish(&mut self, result: SharedMetaResult) {
+    if self.finished {
+      return;
+    }
+    self.finished = true;
+    self
+      .cache
+      .finish_meta_inflight(self.url, &self.flight, result);
+  }
+}
+
+impl Drop for ProbeInFlightOwnerGuard<'_> {
+  fn drop(&mut self) {
+    if self.finished {
+      return;
+    }
+
+    self.finished = true;
+    let err = Error::Image(ImageError::LoadFailed {
+      url: self.url.to_string(),
+      reason: "in-flight image probe owner dropped without resolving".to_string(),
+    });
+    self.cache.record_image_error(self.url, &err);
+    self.cache.finish_meta_inflight(
+      self.url,
+      &self.flight,
+      SharedMetaResult::Error(err),
+    );
+  }
 }
 
 impl ImageCache {
@@ -1357,8 +1482,10 @@ impl ImageCache {
     let (flight, is_owner) = self.join_inflight(&resolved_url);
     if !is_owner {
       record_image_cache_hit();
-      return flight.wait();
+      return flight.wait(&resolved_url);
     }
+
+    let mut inflight_guard = DecodeInFlightOwnerGuard::new(self, &resolved_url, flight);
 
     if let Some(resource) = self.take_raw_cached_resource(&resolved_url) {
       record_image_cache_hit();
@@ -1370,7 +1497,7 @@ impl ImageCache {
           SharedImageResult::Error(err.clone())
         }
       };
-      self.finish_inflight(&resolved_url, &flight, shared);
+      inflight_guard.finish(shared);
       return result;
     }
 
@@ -1380,7 +1507,7 @@ impl ImageCache {
       Ok(img) => SharedImageResult::Success(Arc::clone(img)),
       Err(err) => SharedImageResult::Error(err.clone()),
     };
-    self.finish_inflight(&resolved_url, &flight, shared);
+    inflight_guard.finish(shared);
 
     result
   }
@@ -1404,8 +1531,10 @@ impl ImageCache {
     let (flight, is_owner) = self.join_meta_inflight(&resolved_url);
     if !is_owner {
       record_image_cache_hit();
-      return flight.wait();
+      return flight.wait(&resolved_url);
     }
+
+    let mut inflight_guard = ProbeInFlightOwnerGuard::new(self, &resolved_url, flight);
 
     record_image_cache_miss();
     let result = self.fetch_and_probe(&resolved_url);
@@ -1413,7 +1542,7 @@ impl ImageCache {
       Ok(meta) => SharedMetaResult::Success(Arc::clone(meta)),
       Err(err) => SharedMetaResult::Error(err.clone()),
     };
-    self.finish_meta_inflight(&resolved_url, &flight, shared);
+    inflight_guard.finish(shared);
 
     result
   }
@@ -3335,5 +3464,169 @@ mod tests {
 
     let pixel = image.image.to_rgba8().get_pixel(2, 2).0;
     assert_green_pixel(pixel);
+  }
+
+  #[test]
+  fn decode_inflight_wait_respects_render_deadline() {
+    use std::sync::mpsc;
+    use std::sync::Barrier;
+    use std::thread;
+
+    struct BlockingFetcher {
+      started: Arc<Barrier>,
+      release: Arc<Barrier>,
+      url: String,
+    }
+
+    impl ResourceFetcher for BlockingFetcher {
+      fn fetch(&self, url: &str) -> Result<FetchedResource> {
+        if url == self.url {
+          self.started.wait();
+          self.release.wait();
+          return Ok(FetchedResource::new(
+            b"not an image".to_vec(),
+            Some("image/png".to_string()),
+          ));
+        }
+
+        Err(Error::Resource(crate::error::ResourceError::new(
+          url.to_string(),
+          "unexpected url",
+        )))
+      }
+    }
+
+    let started = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let url = "https://example.com/blocked.png".to_string();
+    let cache = ImageCache::with_fetcher(Arc::new(BlockingFetcher {
+      started: Arc::clone(&started),
+      release: Arc::clone(&release),
+      url: url.clone(),
+    }));
+
+    let owner_cache = cache.clone();
+    let owner_url = url.clone();
+    let owner_handle = thread::spawn(move || owner_cache.load(&owner_url));
+
+    // Wait until the owner has entered the fetcher (and therefore registered the in-flight entry).
+    started.wait();
+
+    let waiter_cache = cache.clone();
+    let waiter_url = url.clone();
+    let (tx, rx) = mpsc::channel();
+    let waiter_handle = thread::spawn(move || {
+      let deadline = render_control::RenderDeadline::new(Some(Duration::from_millis(50)), None);
+      let start = Instant::now();
+      let result = render_control::with_deadline(Some(&deadline), || waiter_cache.load(&waiter_url));
+      tx.send((result, start.elapsed())).unwrap();
+    });
+
+    let (result, elapsed) = match rx.recv_timeout(Duration::from_secs(1)) {
+      Ok(value) => value,
+      Err(err) => {
+        // Make sure we don't leave the owner thread blocked on the barrier.
+        release.wait();
+        let _ = owner_handle.join();
+        drop(waiter_handle);
+        panic!("waiter decode did not complete under deadline: {err}");
+      }
+    };
+
+    let err = match result {
+      Ok(_) => panic!("waiter decode should fail under deadline"),
+      Err(err) => err,
+    };
+    let message = err.to_string();
+    assert!(
+      message.contains("render deadline exceeded") && message.contains("in-flight"),
+      "unexpected error after {elapsed:?}: {message}"
+    );
+
+    // Let the owner thread exit so it can resolve the in-flight entry.
+    release.wait();
+    let _ = owner_handle.join();
+    let _ = waiter_handle.join();
+  }
+
+  #[test]
+  fn probe_inflight_wait_respects_render_deadline() {
+    use std::sync::mpsc;
+    use std::sync::Barrier;
+    use std::thread;
+
+    struct BlockingFetcher {
+      started: Arc<Barrier>,
+      release: Arc<Barrier>,
+      url: String,
+    }
+
+    impl ResourceFetcher for BlockingFetcher {
+      fn fetch(&self, url: &str) -> Result<FetchedResource> {
+        if url == self.url {
+          self.started.wait();
+          self.release.wait();
+          return Ok(FetchedResource::new(
+            b"not an image".to_vec(),
+            Some("image/png".to_string()),
+          ));
+        }
+
+        Err(Error::Resource(crate::error::ResourceError::new(
+          url.to_string(),
+          "unexpected url",
+        )))
+      }
+    }
+
+    let started = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let url = "https://example.com/blocked-probe.png".to_string();
+    let cache = ImageCache::with_fetcher(Arc::new(BlockingFetcher {
+      started: Arc::clone(&started),
+      release: Arc::clone(&release),
+      url: url.clone(),
+    }));
+
+    let owner_cache = cache.clone();
+    let owner_url = url.clone();
+    let owner_handle = thread::spawn(move || owner_cache.probe(&owner_url));
+
+    started.wait();
+
+    let waiter_cache = cache.clone();
+    let waiter_url = url.clone();
+    let (tx, rx) = mpsc::channel();
+    let waiter_handle = thread::spawn(move || {
+      let deadline = render_control::RenderDeadline::new(Some(Duration::from_millis(50)), None);
+      let start = Instant::now();
+      let result =
+        render_control::with_deadline(Some(&deadline), || waiter_cache.probe(&waiter_url));
+      tx.send((result, start.elapsed())).unwrap();
+    });
+
+    let (result, elapsed) = match rx.recv_timeout(Duration::from_secs(1)) {
+      Ok(value) => value,
+      Err(err) => {
+        release.wait();
+        let _ = owner_handle.join();
+        drop(waiter_handle);
+        panic!("waiter probe did not complete under deadline: {err}");
+      }
+    };
+
+    let err = match result {
+      Ok(_) => panic!("waiter probe should fail under deadline"),
+      Err(err) => err,
+    };
+    let message = err.to_string();
+    assert!(
+      message.contains("render deadline exceeded") && message.contains("in-flight"),
+      "unexpected error after {elapsed:?}: {message}"
+    );
+
+    release.wait();
+    let _ = owner_handle.join();
+    let _ = waiter_handle.join();
   }
 }
