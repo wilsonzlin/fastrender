@@ -1031,27 +1031,11 @@ mod tests {
   use std::io;
   use std::io::{Read, Write};
   use std::net::TcpListener;
-  #[cfg(unix)]
-  use std::os::unix::fs::PermissionsExt;
-  use std::path::PathBuf;
   use std::sync::atomic::AtomicUsize;
   use std::sync::atomic::Ordering;
   use std::sync::Arc;
   use std::sync::Mutex;
   use std::thread;
-
-  #[cfg(unix)]
-  struct RestorePermissions {
-    path: PathBuf,
-    original: fs::Permissions,
-  }
-
-  #[cfg(unix)]
-  impl Drop for RestorePermissions {
-    fn drop(&mut self) {
-      let _ = fs::set_permissions(&self.path, self.original.clone());
-    }
-  }
 
   fn try_bind_localhost(context: &str) -> Option<TcpListener> {
     match TcpListener::bind("127.0.0.1:0") {
@@ -1918,7 +1902,6 @@ mod tests {
     assert!(!lock_path.exists());
   }
 
-  #[cfg(unix)]
   #[test]
   fn stale_lock_removal_failure_is_treated_as_active() {
     let tmp = tempfile::tempdir().unwrap();
@@ -1927,15 +1910,10 @@ mod tests {
     let data_path = disk.data_path(url);
     let lock_path = lock_path_for(&data_path);
 
-    fs::write(&lock_path, b"").unwrap();
+    // Make lock removal fail deterministically by creating a directory at the lock path.
+    // `remove_file` can't delete directories, regardless of permissions.
+    fs::create_dir(&lock_path).unwrap();
     filetime::set_file_mtime(&lock_path, FileTime::from_unix_time(0, 0)).unwrap();
-
-    let original = fs::metadata(tmp.path()).unwrap().permissions();
-    let _restore = RestorePermissions {
-      path: tmp.path().to_path_buf(),
-      original,
-    };
-    fs::set_permissions(tmp.path(), fs::Permissions::from_mode(0o555)).unwrap();
 
     assert!(
       disk.lock_is_active(&data_path),
