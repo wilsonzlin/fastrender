@@ -422,6 +422,10 @@ thread_local! {
   static CONTAINER_QUERY_MEMO: RefCell<ContainerQueryMemo> = RefCell::new(ContainerQueryMemo::default());
 }
 
+thread_local! {
+  static CONTAINER_QUERY_GUARD: RefCell<Vec<usize>> = RefCell::new(Vec::new());
+}
+
 fn reset_container_query_memo() {
   CONTAINER_QUERY_MEMO.with(|memo| memo.borrow_mut().clear());
 }
@@ -2358,14 +2362,17 @@ impl ContainerQueryContext {
       return true;
     }
 
-    let mut guard = Vec::new();
-    self.matches_with_guard(
-      node_id,
-      ancestor_ids,
-      conditions,
-      &mut guard,
-      MAX_RECURSION_DEPTH,
-    )
+    CONTAINER_QUERY_GUARD.with(|guard_cell| {
+      let mut guard = guard_cell.borrow_mut();
+      guard.clear();
+      self.matches_with_guard(
+        node_id,
+        ancestor_ids,
+        conditions,
+        &mut guard,
+        MAX_RECURSION_DEPTH,
+      )
+    })
   }
 
   fn matches_with_guard(
