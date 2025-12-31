@@ -2663,6 +2663,42 @@ fn paint_summary(paint: &PaintDiagnostics) -> Option<String> {
   push_opt_usize(&mut parts, "display_items", paint.display_items);
   push_opt_usize(&mut parts, "optimized_items", paint.optimized_items);
   push_opt_usize(&mut parts, "culled_items", paint.culled_items);
+  push_opt_usize(
+    &mut parts,
+    "transparent_removed",
+    paint.transparent_removed,
+  );
+  push_opt_usize(&mut parts, "noop_removed", paint.noop_removed);
+  push_opt_usize(&mut parts, "merged_items", paint.merged_items);
+  push_opt_ms(&mut parts, "gradient", paint.gradient_ms);
+  push_opt_u64(&mut parts, "gradient_pixels", paint.gradient_pixels);
+  push_opt_u64(
+    &mut parts,
+    "image_pixmap_cache_hits",
+    paint.image_pixmap_cache_hits,
+  );
+  push_opt_u64(
+    &mut parts,
+    "image_pixmap_cache_misses",
+    paint.image_pixmap_cache_misses,
+  );
+  push_opt_ms(&mut parts, "image_pixmap", paint.image_pixmap_ms);
+  push_opt_u64(&mut parts, "background_tiles", paint.background_tiles);
+  push_opt_ms(&mut parts, "background", paint.background_ms);
+  push_opt_u64(&mut parts, "clip_mask_calls", paint.clip_mask_calls);
+  push_opt_ms(&mut parts, "clip_mask", paint.clip_mask_ms);
+  push_opt_u64(&mut parts, "clip_mask_pixels", paint.clip_mask_pixels);
+  push_opt_u64(&mut parts, "layer_allocations", paint.layer_allocations);
+  push_opt_u64(&mut parts, "layer_alloc_bytes", paint.layer_alloc_bytes);
+  push_opt_usize(&mut parts, "parallel_tasks", paint.parallel_tasks);
+  push_opt_usize(&mut parts, "parallel_threads", paint.parallel_threads);
+  push_opt_ms(&mut parts, "parallel", paint.parallel_ms);
+  push_opt_ms(&mut parts, "serial", paint.serial_ms);
+  push_opt_usize(&mut parts, "filter_cache_hits", paint.filter_cache_hits);
+  push_opt_usize(&mut parts, "filter_cache_misses", paint.filter_cache_misses);
+  push_opt_usize(&mut parts, "blur_cache_hits", paint.blur_cache_hits);
+  push_opt_usize(&mut parts, "blur_cache_misses", paint.blur_cache_misses);
+  push_opt_usize(&mut parts, "blur_tiles", paint.blur_tiles);
   if parts.is_empty() {
     None
   } else {
