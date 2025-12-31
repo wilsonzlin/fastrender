@@ -877,8 +877,10 @@ impl FontContext {
     used_codepoints: Option<&[u32]>,
     options: WebFontLoadOptions,
   ) -> Result<WebFontLoadReport> {
-    let max_fonts = runtime::runtime_toggles().usize_with_default("FASTR_MAX_WEB_FONTS", 8);
-    if max_fonts == 0 {
+    let toggles = runtime::runtime_toggles();
+    let max_fonts = toggles.usize_with_default("FASTR_MAX_WEB_FONTS", 8);
+    let max_subset_fonts = toggles.usize_with_default("FASTR_MAX_WEB_FONT_SUBSETS", 64);
+    if max_fonts == 0 && (used_codepoints.is_none() || max_subset_fonts == 0) {
       return Ok(WebFontLoadReport::default());
     }
 
@@ -891,6 +893,16 @@ impl FontContext {
 
     let filter_by_codepoints = used_codepoints.is_some();
     let used_codepoints = used_codepoints.unwrap_or(&[]);
+    let allow_remote = options.policy.permits_remote_fetch();
+    let selected_faces = Self::select_web_font_faces_for_load(
+      faces,
+      allow_remote,
+      filter_by_codepoints,
+      used_codepoints,
+      max_fonts,
+      max_subset_fonts,
+    );
+    let mut selected_iter = selected_faces.iter().copied().peekable();
     let mut started_count = 0usize;
     let (block_tx, block_rx) = mpsc::channel::<usize>();
     let mut blocking_jobs: Vec<(usize, Instant, String, FontDisplay)> = Vec::new();
@@ -904,16 +916,13 @@ impl FontContext {
         Some(Instant::now() + timeout)
       }
     };
-    let allow_remote = options.policy.permits_remote_fetch();
     for (order, face) in faces.iter().enumerate() {
-      if started_count >= max_fonts {
-        break;
-      }
       let family = match &face.family {
         Some(f) => f.clone(),
         None => continue,
       };
       self.declare_web_family(&family);
+      let selected = selected_iter.peek().copied() == Some(order);
 
       if filter_by_codepoints
         && (used_codepoints.is_empty()
@@ -924,10 +933,16 @@ impl FontContext {
           &events,
           FontLoadEvent::skipped(&family, None, face.display, "unicode-range filtered"),
         );
+        if selected {
+          selected_iter.next();
+        }
         continue;
       }
 
       if face.sources.is_empty() {
+        if selected {
+          selected_iter.next();
+        }
         continue;
       }
 
@@ -941,8 +956,16 @@ impl FontContext {
           &events,
           FontLoadEvent::skipped(&family, None, face.display, "remote font loading disabled"),
         );
+        if selected {
+          selected_iter.next();
+        }
         continue;
       }
+
+      if !selected {
+        continue;
+      }
+      selected_iter.next();
 
       let face_clone = face.clone();
       let family_clone = family.clone();
@@ -1084,6 +1107,115 @@ impl FontContext {
     ranges
       .iter()
       .any(|range| Self::range_matches_used(*range, used))
+  }
+
+  #[inline]
+  fn is_full_unicode_range(ranges: &[(u32, u32)]) -> bool {
+    ranges.is_empty() || (ranges.len() == 1 && ranges[0] == (0, 0x10ffff))
+  }
+
+  fn unicode_range_used_intersection_count(ranges: &[(u32, u32)], used: &[u32]) -> usize {
+    if used.is_empty() {
+      return 0;
+    }
+    if Self::is_full_unicode_range(ranges) {
+      return used.len();
+    }
+
+    let mut sorted = ranges.to_vec();
+    sorted.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+
+    let mut merged: Vec<(u32, u32)> = Vec::new();
+    for (start, end) in sorted {
+      if let Some((_, merged_end)) = merged.last_mut() {
+        if start <= merged_end.saturating_add(1) {
+          *merged_end = (*merged_end).max(end);
+          continue;
+        }
+      }
+      merged.push((start, end));
+    }
+
+    merged
+      .into_iter()
+      .map(|(start, end)| {
+        let start_idx = used.partition_point(|cp| *cp < start);
+        let end_idx = used.partition_point(|cp| *cp <= end);
+        end_idx.saturating_sub(start_idx)
+      })
+      .sum()
+  }
+
+  fn select_web_font_faces_for_load(
+    faces: &[FontFaceRule],
+    allow_remote: bool,
+    filter_by_codepoints: bool,
+    used_codepoints: &[u32],
+    max_fonts: usize,
+    max_subset_fonts: usize,
+  ) -> Vec<usize> {
+    if max_fonts == 0 && (!filter_by_codepoints || max_subset_fonts == 0) {
+      return Vec::new();
+    }
+
+    let local_only = !allow_remote;
+    let mut subset_candidates: Vec<(usize, usize)> = Vec::new();
+    let mut unknown_candidates: Vec<usize> = Vec::new();
+
+    for (order, face) in faces.iter().enumerate() {
+      if face.family.is_none() || face.sources.is_empty() {
+        continue;
+      }
+      if local_only
+        && !face
+          .sources
+          .iter()
+          .any(|src| matches!(src, FontFaceSource::Local(_)))
+      {
+        continue;
+      }
+
+      if filter_by_codepoints {
+        if used_codepoints.is_empty() {
+          continue;
+        }
+
+        if !Self::is_full_unicode_range(&face.unicode_ranges) {
+          let overlap =
+            Self::unicode_range_used_intersection_count(&face.unicode_ranges, used_codepoints);
+          if overlap > 0 {
+            subset_candidates.push((order, overlap));
+          }
+          continue;
+        }
+      }
+
+      unknown_candidates.push(order);
+    }
+
+    if unknown_candidates.len() > max_fonts {
+      unknown_candidates.truncate(max_fonts);
+    }
+
+    let subset_indices = if !filter_by_codepoints || max_subset_fonts == 0 {
+      Vec::new()
+    } else if subset_candidates.len() <= max_subset_fonts {
+      let mut indices: Vec<usize> = subset_candidates.into_iter().map(|(order, _)| order).collect();
+      indices.sort_unstable();
+      indices
+    } else {
+      subset_candidates.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+      subset_candidates.truncate(max_subset_fonts);
+      let mut indices: Vec<usize> = subset_candidates.into_iter().map(|(order, _)| order).collect();
+      indices.sort_unstable();
+      indices
+    };
+
+    let mut selected = unknown_candidates;
+    selected.extend(subset_indices);
+    selected.sort_unstable();
+    selected.dedup();
+    selected
   }
 
   fn load_face_sources_with_report(
@@ -2679,6 +2811,99 @@ mod tests {
       !ctx.has_web_faces("Skip"),
       "non-intersecting range should be skipped"
     );
+  }
+
+  #[test]
+  fn web_font_subset_faces_load_past_max_web_fonts() {
+    let faces: Vec<FontFaceRule> = (0..9)
+      .map(|i| FontFaceRule {
+        family: Some("SubsetFamily".to_string()),
+        sources: vec![FontFaceSource::url(format!(
+          "https://example.com/subset{}.woff2",
+          i
+        ))],
+        unicode_ranges: vec![(0xE000 + i, 0xE000 + i)],
+        ..Default::default()
+      })
+      .collect();
+    let used_codepoints: Vec<u32> = (0..9).map(|i| 0xE000 + i).collect();
+
+    let selected = FontContext::select_web_font_faces_for_load(
+      &faces,
+      true,
+      true,
+      &used_codepoints,
+      8,
+      64,
+    );
+    assert_eq!(selected, (0..9).collect::<Vec<_>>());
+  }
+
+  #[test]
+  fn web_font_unknown_faces_still_respect_max_web_fonts() {
+    let faces: Vec<FontFaceRule> = (0..10)
+      .map(|i| FontFaceRule {
+        family: Some(format!("UnknownFamily{}", i)),
+        sources: vec![FontFaceSource::url(format!(
+          "https://example.com/unknown{}.woff2",
+          i
+        ))],
+        unicode_ranges: vec![(0, 0x10ffff)],
+        ..Default::default()
+      })
+      .collect();
+    let used_codepoints = vec![0x0041];
+
+    let selected = FontContext::select_web_font_faces_for_load(
+      &faces,
+      true,
+      true,
+      &used_codepoints,
+      8,
+      64,
+    );
+    assert_eq!(selected, (0..8).collect::<Vec<_>>());
+  }
+
+  #[test]
+  fn web_font_subset_cap_drops_least_relevant_deterministically() {
+    let used_codepoints = vec![10, 11, 12, 13];
+    let faces = vec![
+      FontFaceRule {
+        family: Some("CapFamily".to_string()),
+        sources: vec![FontFaceSource::url("https://example.com/all.woff2".to_string())],
+        unicode_ranges: vec![(10, 13)],
+        ..Default::default()
+      },
+      FontFaceRule {
+        family: Some("CapFamily".to_string()),
+        sources: vec![FontFaceSource::url("https://example.com/first.woff2".to_string())],
+        unicode_ranges: vec![(10, 11)],
+        ..Default::default()
+      },
+      FontFaceRule {
+        family: Some("CapFamily".to_string()),
+        sources: vec![FontFaceSource::url("https://example.com/second.woff2".to_string())],
+        unicode_ranges: vec![(12, 13)],
+        ..Default::default()
+      },
+      FontFaceRule {
+        family: Some("CapFamily".to_string()),
+        sources: vec![FontFaceSource::url("https://example.com/one.woff2".to_string())],
+        unicode_ranges: vec![(10, 10)],
+        ..Default::default()
+      },
+    ];
+
+    let selected = FontContext::select_web_font_faces_for_load(
+      &faces,
+      true,
+      true,
+      &used_codepoints,
+      0,
+      2,
+    );
+    assert_eq!(selected, vec![0, 1]);
   }
 
   #[test]
