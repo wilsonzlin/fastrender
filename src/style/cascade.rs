@@ -5298,7 +5298,7 @@ fn ua_default_rules(
 
   match tag.as_str() {
         "a" | "area" | "link" => {
-            if node.get_attribute("href").is_some() {
+            if node.get_attribute_ref("href").is_some() {
                 let is_true = |name: &str| {
                     node.get_attribute_ref(name)
                         .map(|v| v.eq_ignore_ascii_case("true"))
