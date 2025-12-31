@@ -802,6 +802,28 @@ fn normalize_missing_cache_placeholder(progress: &mut PageProgress, cache_exists
   }
 }
 
+fn merge_alias_manual_fields(progress: &mut PageProgress, alias: &PageProgress) {
+  if progress.status == ProgressStatus::Ok {
+    return;
+  }
+  if progress.notes.trim().is_empty() && !alias.notes.trim().is_empty() {
+    progress.notes = alias.notes.clone();
+  }
+  if is_hotspot_unset(&progress.hotspot) && !is_hotspot_unset(&alias.hotspot) {
+    progress.hotspot = alias.hotspot.clone();
+  }
+  if is_manual_field_unset(&progress.last_good_commit)
+    && !is_manual_field_unset(&alias.last_good_commit)
+  {
+    progress.last_good_commit = alias.last_good_commit.clone();
+  }
+  if is_manual_field_unset(&progress.last_regression_commit)
+    && !is_manual_field_unset(&alias.last_regression_commit)
+  {
+    progress.last_regression_commit = alias.last_regression_commit.clone();
+  }
+}
+
 fn normalize_hotspot_filter(h: &str) -> String {
   normalize_hotspot(h).to_ascii_lowercase()
 }
@@ -1197,6 +1219,51 @@ fn collect_cached_html_paths_in(dir: &Path) -> io::Result<BTreeMap<String, PathB
   Ok(entries)
 }
 
+fn collect_alias_progress(
+  progress_dir: &Path,
+  pageset_by_cache: &HashMap<String, &PagesetEntry>,
+  pageset_by_stem: &HashMap<String, Vec<&PagesetEntry>>,
+) -> HashMap<String, PageProgress> {
+  let mut aliases: HashMap<String, PageProgress> = HashMap::new();
+  let entries = match fs::read_dir(progress_dir) {
+    Ok(entries) => entries,
+    Err(_) => return aliases,
+  };
+
+  for entry in entries.flatten() {
+    let path = entry.path();
+    if path.extension().and_then(|e| e.to_str()) != Some("json") {
+      continue;
+    }
+    let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+      continue;
+    };
+    let Some(pageset_entry) =
+      resolve_pageset_entry_for_cache_stem(stem, pageset_by_cache, pageset_by_stem)
+    else {
+      continue;
+    };
+    if pageset_entry.cache_stem == stem {
+      continue;
+    }
+    let Some(mut progress) = read_progress(&path) else {
+      continue;
+    };
+    migrate_legacy_notes(&mut progress);
+    let key = pageset_entry.cache_stem.clone();
+    aliases
+      .entry(key)
+      .and_modify(|existing| {
+        if existing.notes.trim().is_empty() && !progress.notes.trim().is_empty() {
+          *existing = progress.clone();
+        }
+      })
+      .or_insert(progress);
+  }
+
+  aliases
+}
+
 fn prune_stale_progress(progress_dir: &Path, keep: &BTreeSet<String>) -> io::Result<usize> {
   let mut pruned = 0usize;
   for entry in fs::read_dir(progress_dir)? {
@@ -1230,11 +1297,26 @@ fn sync(args: SyncArgs) -> io::Result<()> {
   };
   let cached_by_stem = cached_html_index_by_pageset_stem(&cached_paths);
 
+  let pageset_entries = pageset_entries();
+  let pageset_by_cache: HashMap<String, &PagesetEntry> = pageset_entries
+    .iter()
+    .map(|entry| (entry.cache_stem.clone(), entry))
+    .collect();
+  let mut pageset_by_stem: HashMap<String, Vec<&PagesetEntry>> = HashMap::new();
+  for entry in &pageset_entries {
+    pageset_by_stem
+      .entry(entry.stem.clone())
+      .or_default()
+      .push(entry);
+  }
+  let alias_progress =
+    collect_alias_progress(&args.progress_dir, &pageset_by_cache, &pageset_by_stem);
+
   let mut stems: BTreeSet<String> = BTreeSet::new();
   let mut created = 0usize;
   let mut updated = 0usize;
 
-  for entry in pageset_entries() {
+  for entry in &pageset_entries {
     let progress_path = args.progress_dir.join(format!("{}.json", entry.cache_stem));
     let cache_path = cached_html_path_for_pageset_entry(&entry, &cached_paths, &cached_by_stem);
     let cache_exists = cache_path.is_some();
@@ -1268,6 +1350,10 @@ fn sync(args: SyncArgs) -> io::Result<()> {
       progress.failure_stage = None;
       progress.timeout_stage = None;
       progress.diagnostics = None;
+    }
+
+    if let Some(alias) = alias_progress.get(&entry.cache_stem) {
+      merge_alias_manual_fields(&mut progress, alias);
     }
 
     stems.insert(entry.cache_stem.clone());
@@ -5887,6 +5973,110 @@ mod tests {
     normalize_missing_cache_placeholder(&mut progress, true);
 
     assert_eq!(progress.auto_notes, "not run");
+  }
+
+  #[test]
+  fn merge_alias_manual_fields_copies_unset_fields() {
+    let mut progress = PageProgress {
+      url: "https://example.com".to_string(),
+      status: ProgressStatus::Timeout,
+      notes: String::new(),
+      hotspot: String::new(),
+      last_good_commit: String::new(),
+      last_regression_commit: String::new(),
+      ..PageProgress::default()
+    };
+
+    let alias = PageProgress {
+      url: "https://www.example.com".to_string(),
+      status: ProgressStatus::Timeout,
+      notes: "manual blocker".to_string(),
+      hotspot: "layout".to_string(),
+      last_good_commit: "abc1234".to_string(),
+      last_regression_commit: "def5678".to_string(),
+      ..PageProgress::default()
+    };
+
+    merge_alias_manual_fields(&mut progress, &alias);
+    assert_eq!(progress.notes, "manual blocker");
+    assert_eq!(progress.hotspot, "layout");
+    assert_eq!(progress.last_good_commit, "abc1234");
+    assert_eq!(progress.last_regression_commit, "def5678");
+  }
+
+  #[test]
+  fn merge_alias_manual_fields_does_not_override_existing() {
+    let mut progress = PageProgress {
+      url: "https://example.com".to_string(),
+      status: ProgressStatus::Timeout,
+      notes: "keep".to_string(),
+      hotspot: "paint".to_string(),
+      last_good_commit: "keepgood".to_string(),
+      last_regression_commit: "keepregress".to_string(),
+      ..PageProgress::default()
+    };
+
+    let alias = PageProgress {
+      url: "https://www.example.com".to_string(),
+      status: ProgressStatus::Timeout,
+      notes: "override".to_string(),
+      hotspot: "layout".to_string(),
+      last_good_commit: "overridegood".to_string(),
+      last_regression_commit: "overrideregress".to_string(),
+      ..PageProgress::default()
+    };
+
+    merge_alias_manual_fields(&mut progress, &alias);
+    assert_eq!(progress.notes, "keep");
+    assert_eq!(progress.hotspot, "paint");
+    assert_eq!(progress.last_good_commit, "keepgood");
+    assert_eq!(progress.last_regression_commit, "keepregress");
+  }
+
+  #[test]
+  fn collect_alias_progress_resolves_www_and_migrates_legacy_notes() {
+    let dir = tempdir().unwrap();
+    let alias_path = dir.path().join("www.example.com.json");
+    let alias_progress = PageProgress {
+      url: "https://www.example.com".to_string(),
+      status: ProgressStatus::Timeout,
+      notes: "manual blocker\nhard timeout after 5.00s\nstage: layout".to_string(),
+      ..PageProgress::default()
+    };
+    fs::write(
+      &alias_path,
+      format!(
+        "{}\n",
+        serde_json::to_string_pretty(&alias_progress).expect("progress json")
+      ),
+    )
+    .unwrap();
+
+    let pageset_entries = vec![PagesetEntry {
+      url: "https://example.com".to_string(),
+      stem: "example.com".to_string(),
+      cache_stem: "example.com".to_string(),
+    }];
+    let pageset_by_cache: std::collections::HashMap<String, &PagesetEntry> = pageset_entries
+      .iter()
+      .map(|entry| (entry.cache_stem.clone(), entry))
+      .collect();
+    let mut pageset_by_stem: std::collections::HashMap<String, Vec<&PagesetEntry>> =
+      std::collections::HashMap::new();
+    for entry in &pageset_entries {
+      pageset_by_stem
+        .entry(entry.stem.clone())
+        .or_default()
+        .push(entry);
+    }
+
+    let alias_map = collect_alias_progress(dir.path(), &pageset_by_cache, &pageset_by_stem);
+    let migrated = alias_map.get("example.com").expect("alias progress");
+    assert_eq!(migrated.notes, "manual blocker");
+    assert_eq!(
+      migrated.auto_notes,
+      "hard timeout after 5.00s\nstage: layout"
+    );
   }
 
   #[test]
