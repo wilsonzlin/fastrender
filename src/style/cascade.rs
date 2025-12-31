@@ -6138,6 +6138,7 @@ mod tests {
         layer_order: layer_order_with_tree_scope(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
+        scope_signature: ScopeSignature::compute(&rule.scopes),
         scope: RuleScope::Document,
         starting_style: rule.starting_style,
       })
