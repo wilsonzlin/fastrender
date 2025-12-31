@@ -14284,10 +14284,15 @@ fn find_matching_rules<'a>(
           // Slotted selectors target a light-DOM element but originate from a shadow tree. Compare
           // them against other matching rules in the element's tree scope so specificity can
           // participate in the cascade.
-          let mut layer_order = rule.layer_order.clone();
-          if let Some(prefix) = layer_order.first_mut() {
-            *prefix = node_tree_scope_prefix;
-          }
+          let layer_order = if rule.layer_order.first().copied() == Some(node_tree_scope_prefix) {
+            Arc::clone(&rule.layer_order)
+          } else {
+            let mut layer_order = rule.layer_order.to_vec();
+            if let Some(prefix) = layer_order.first_mut() {
+              *prefix = node_tree_scope_prefix;
+            }
+            layer_order.into()
+          };
           matches.push(MatchedRule {
             origin: rule.origin,
             specificity: best_specificity,
