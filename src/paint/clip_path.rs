@@ -1,7 +1,6 @@
 use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::paint::display_list::BorderRadii;
-use crate::paint::pixmap::new_pixmap;
 use crate::style::types::BackgroundPosition;
 use crate::style::types::BasicShape;
 use crate::style::types::ClipPath;
@@ -15,7 +14,6 @@ use crate::text::font_loader::FontContext;
 use tiny_skia::FillRule as SkFillRule;
 use tiny_skia::IntSize;
 use tiny_skia::Mask;
-use tiny_skia::MaskType;
 use tiny_skia::PathBuilder;
 use tiny_skia::Rect as SkRect;
 use tiny_skia::Transform;
@@ -116,10 +114,7 @@ impl ResolvedClipPath {
     if size.width() == 0 || size.height() == 0 {
       return None;
     }
-    let mut mask_pixmap = new_pixmap(size.width(), size.height())?;
-    let mut paint = tiny_skia::Paint::default();
-    paint.anti_alias = true;
-    paint.set_color(tiny_skia::Color::from_rgba8(255, 255, 255, 255));
+    let mut mask = Mask::new(size.width(), size.height())?;
 
     match self {
       ResolvedClipPath::Inset { rect, radii } => {
@@ -147,7 +142,7 @@ impl ResolvedClipPath {
           scaled.height(),
           &scaled_radii,
         ) {
-          mask_pixmap.fill_path(&path, &paint, SkFillRule::Winding, transform, None);
+          mask.fill_path(&path, SkFillRule::Winding, true, transform);
         }
       }
       ResolvedClipPath::Circle { center, radius } => {
@@ -157,7 +152,7 @@ impl ResolvedClipPath {
         let r = *radius * scale;
         let rect = SkRect::from_xywh(center.x * scale - r, center.y * scale - r, r * 2.0, r * 2.0)?;
         if let Some(path) = PathBuilder::from_oval(rect) {
-          mask_pixmap.fill_path(&path, &paint, SkFillRule::Winding, transform, None);
+          mask.fill_path(&path, SkFillRule::Winding, true, transform);
         }
       }
       ResolvedClipPath::Ellipse {
@@ -175,7 +170,7 @@ impl ResolvedClipPath {
           radius_y * 2.0 * scale,
         )?;
         if let Some(path) = PathBuilder::from_oval(rect) {
-          mask_pixmap.fill_path(&path, &paint, SkFillRule::Winding, transform, None);
+          mask.fill_path(&path, SkFillRule::Winding, true, transform);
         }
       }
       ResolvedClipPath::Polygon { points, fill_rule } => {
@@ -189,12 +184,12 @@ impl ResolvedClipPath {
         }
         builder.close();
         if let Some(path) = builder.finish() {
-          mask_pixmap.fill_path(&path, &paint, *fill_rule, transform, None);
+          mask.fill_path(&path, *fill_rule, true, transform);
         }
       }
     }
 
-    Some(Mask::from_pixmap(mask_pixmap.as_ref(), MaskType::Alpha))
+    Some(mask)
   }
 }
 
@@ -706,7 +701,10 @@ fn inset_rect(rect: Rect, left: f32, top: f32, right: f32, bottom: f32) -> Rect 
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::paint::pixmap::new_pixmap;
+  use crate::paint::pixmap::NewPixmapAllocRecorder;
   use crate::style::types::BorderCornerRadius;
+  use tiny_skia::MaskType;
 
   #[test]
   fn clip_path_box_uses_border_radius() {
@@ -787,5 +785,154 @@ mod tests {
 
     assert!((radii.top_left.x - 10.0).abs() < 0.01);
     assert!((radii.top_left.y - 20.0).abs() < 0.01);
+  }
+
+  fn mask_reference(clip: &ResolvedClipPath, scale: f32, size: IntSize, transform: Transform) -> Option<Mask> {
+    if size.width() == 0 || size.height() == 0 {
+      return None;
+    }
+
+    let mut mask_pixmap = new_pixmap(size.width(), size.height())?;
+    let mut paint = tiny_skia::Paint::default();
+    paint.anti_alias = true;
+    paint.set_color(tiny_skia::Color::from_rgba8(255, 255, 255, 255));
+
+    match clip {
+      ResolvedClipPath::Inset { rect, radii } => {
+        let scaled = Rect::from_xywh(
+          rect.x() * scale,
+          rect.y() * scale,
+          rect.width() * scale,
+          rect.height() * scale,
+        );
+        if scaled.width() <= 0.0 || scaled.height() <= 0.0 {
+          return None;
+        }
+        let scaled_radii = BorderRadii {
+          top_left: radii.top_left * scale,
+          top_right: radii.top_right * scale,
+          bottom_right: radii.bottom_right * scale,
+          bottom_left: radii.bottom_left * scale,
+        }
+        .clamped(scaled.width(), scaled.height());
+
+        if let Some(path) = crate::paint::rasterize::build_rounded_rect_path(
+          scaled.x(),
+          scaled.y(),
+          scaled.width(),
+          scaled.height(),
+          &scaled_radii,
+        ) {
+          mask_pixmap.fill_path(&path, &paint, SkFillRule::Winding, transform, None);
+        }
+      }
+      ResolvedClipPath::Circle { center, radius } => {
+        if *radius <= 0.0 {
+          return None;
+        }
+        let r = *radius * scale;
+        let rect =
+          SkRect::from_xywh(center.x * scale - r, center.y * scale - r, r * 2.0, r * 2.0)?;
+        if let Some(path) = PathBuilder::from_oval(rect) {
+          mask_pixmap.fill_path(&path, &paint, SkFillRule::Winding, transform, None);
+        }
+      }
+      ResolvedClipPath::Ellipse {
+        center,
+        radius_x,
+        radius_y,
+      } => {
+        if *radius_x <= 0.0 || *radius_y <= 0.0 {
+          return None;
+        }
+        let rect = SkRect::from_xywh(
+          (center.x - radius_x) * scale,
+          (center.y - radius_y) * scale,
+          radius_x * 2.0 * scale,
+          radius_y * 2.0 * scale,
+        )?;
+        if let Some(path) = PathBuilder::from_oval(rect) {
+          mask_pixmap.fill_path(&path, &paint, SkFillRule::Winding, transform, None);
+        }
+      }
+      ResolvedClipPath::Polygon { points, fill_rule } => {
+        if points.len() < 3 {
+          return None;
+        }
+        let mut builder = PathBuilder::new();
+        builder.move_to(points[0].x * scale, points[0].y * scale);
+        for p in &points[1..] {
+          builder.line_to(p.x * scale, p.y * scale);
+        }
+        builder.close();
+        if let Some(path) = builder.finish() {
+          mask_pixmap.fill_path(&path, &paint, *fill_rule, transform, None);
+        }
+      }
+    }
+
+    Some(Mask::from_pixmap(mask_pixmap.as_ref(), MaskType::Alpha))
+  }
+
+  #[test]
+  fn clip_path_mask_matches_reference() {
+    let size = IntSize::from_wh(32, 32).expect("size");
+    let transform = Transform::from_translate(1.25, -0.5);
+    let scale = 1.3;
+
+    let clips = vec![
+      ResolvedClipPath::Inset {
+        rect: Rect::from_xywh(2.0, 3.0, 14.0, 12.0),
+        radii: BorderRadii::uniform(4.0),
+      },
+      ResolvedClipPath::Circle {
+        center: Point::new(12.4, 10.8),
+        radius: 6.5,
+      },
+      ResolvedClipPath::Ellipse {
+        center: Point::new(14.2, 16.1),
+        radius_x: 8.0,
+        radius_y: 5.0,
+      },
+      ResolvedClipPath::Polygon {
+        points: vec![
+          Point::new(4.0, 4.0),
+          Point::new(20.0, 6.0),
+          Point::new(26.0, 24.0),
+          Point::new(8.0, 28.0),
+        ],
+        fill_rule: SkFillRule::EvenOdd,
+      },
+    ];
+
+    for clip in clips {
+      let optimized = clip.mask(scale, size, transform).expect("mask");
+      let reference = mask_reference(&clip, scale, size, transform).expect("mask");
+      assert_eq!(
+        optimized.data(),
+        reference.data(),
+        "clip-path mask mismatch for {clip:?}"
+      );
+    }
+  }
+
+  #[test]
+  fn clip_path_mask_avoids_new_pixmap_allocations() {
+    let size = IntSize::from_wh(16, 16).expect("size");
+    let clip = ResolvedClipPath::Circle {
+      center: Point::new(8.0, 8.0),
+      radius: 6.0,
+    };
+    let recorder = NewPixmapAllocRecorder::start();
+
+    let _mask = clip
+      .mask(1.0, size, Transform::identity())
+      .expect("expected mask");
+
+    let allocs = recorder.take();
+    assert!(
+      allocs.is_empty(),
+      "expected clip_path masks to avoid new_pixmap allocations, got {allocs:?}"
+    );
   }
 }

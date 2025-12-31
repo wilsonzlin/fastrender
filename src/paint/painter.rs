@@ -2651,9 +2651,16 @@ impl Painter {
         if let Some(ref clip_path) = clip_path {
           let clip_path_start = profile_enabled.then(Instant::now);
           if let Some(size) = IntSize::from_wh(base_painter.pixmap.width(), base_painter.pixmap.height()) {
-            let transform = Transform::from_translate(-offset.x * self.scale, -offset.y * self.scale);
+            let transform =
+              Transform::from_translate(-offset.x * self.scale, -offset.y * self.scale);
             if let Some(mask) = clip_path.mask(self.scale, size, transform) {
-              base_painter.pixmap.apply_mask(&mask);
+              let clip_bounds_device = base_painter.device_rect(clip_path.bounds());
+              let dirty = clip_mask_dirty_bounds(
+                clip_bounds_device,
+                base_painter.pixmap.width(),
+                base_painter.pixmap.height(),
+              );
+              apply_mask_with_dirty_bounds_rgba(&mut base_painter.pixmap, &mask, dirty);
             }
           }
           if let Some(start) = clip_path_start {
