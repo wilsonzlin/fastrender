@@ -1,16 +1,16 @@
 {
   "url": "https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_multicol_layout/Using_multi-column_layouts",
   "status": "ok",
-  "total_ms": 2928.918126,
+  "total_ms": 814.916942,
   "stages_ms": {
-    "fetch": 3.672275,
-    "css": 2226.3606290000002,
+    "fetch": 2.322686,
+    "css": 17.388122,
     "cascade": 0.0,
-    "layout": 678.9045970000002,
-    "paint": 9.819491
+    "layout": 588.0850450000003,
+    "paint": 9.16479
   },
   "notes": "",
-  "hotspot": "css",
+  "hotspot": "layout",
   "failure_stage": null,
   "timeout_stage": null,
   "last_good_commit": "833aa788ed1a7102190a18ae8eae4a0af8876bc4",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 3.672275,
-        "css_inlining_ms": 2226.3606290000002,
+        "dom_parse_ms": 2.322686,
+        "css_inlining_ms": 17.388122,
         "css_parse_ms": null,
         "cascade_ms": null,
         "box_tree_ms": null,
-        "layout_ms": 608.058039,
-        "text_fallback_ms": 64.04520800000003,
-        "text_shape_ms": 70.84655800000017,
-        "paint_build_ms": 0.30409600000000003,
+        "layout_ms": 532.2431300000001,
+        "text_fallback_ms": 52.84297300000008,
+        "text_shape_ms": 55.84191500000024,
+        "paint_build_ms": 0.224526,
         "paint_optimize_ms": null,
-        "paint_rasterize_ms": 7.990921999999999,
-        "text_rasterize_ms": 1.524473,
+        "paint_rasterize_ms": 7.6240939999999995,
+        "text_rasterize_ms": 1.3161700000000003,
         "encode_ms": null
       },
       "counts": {
@@ -38,16 +38,31 @@
         "styled_nodes": 1360,
         "box_nodes": 623,
         "fragments": 323,
-        "shaped_runs": 5972,
-        "glyphs": 44793,
+        "shaped_runs": 5970,
+        "glyphs": 44753,
         "color_glyph_rasters": 0,
-        "fallback_cache_hits": 14713,
-        "fallback_cache_misses": 31698
+        "fallback_cache_hits": 14697,
+        "fallback_cache_misses": 31650,
+        "last_resort_font_fallbacks": 0,
+        "glyph_cache_hits": 0,
+        "glyph_cache_misses": 0,
+        "glyph_cache_evictions": 0,
+        "glyph_cache_bytes": 0,
+        "color_glyph_cache_hits": 0,
+        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_evictions": 0,
+        "color_glyph_cache_bytes": 0
       },
       "cascade": {
         "nodes": null,
         "rule_candidates": null,
         "rule_matches": null,
+        "rule_candidates_pruned": null,
+        "rule_candidates_by_id": null,
+        "rule_candidates_by_class": null,
+        "rule_candidates_by_tag": null,
+        "rule_candidates_by_attr": null,
+        "rule_candidates_universal": null,
         "selector_time_ms": null,
         "declaration_time_ms": null,
         "pseudo_time_ms": null,
@@ -59,12 +74,12 @@
         "has_evaluated": null
       },
       "layout": {
-        "intrinsic_lookups": 4137,
-        "intrinsic_hits": 3397,
-        "intrinsic_stores": 740,
-        "block_intrinsic": 3949,
+        "intrinsic_lookups": 4127,
+        "intrinsic_hits": 3391,
+        "intrinsic_stores": 736,
+        "block_intrinsic": 3939,
         "flex_intrinsic": 188,
-        "inline_intrinsic": 579,
+        "inline_intrinsic": 577,
         "layout_cache_lookups": 526,
         "layout_cache_hits": 429,
         "layout_cache_stores": 87,
@@ -86,14 +101,25 @@
         "noop_removed": null,
         "merged_items": null,
         "gradient_ms": 0.0,
-        "gradient_pixels": 0
+        "gradient_pixels": 0,
+        "parallel_tasks": 0,
+        "parallel_threads": 1,
+        "parallel_ms": 0.0,
+        "serial_ms": 7.8486199999999995,
+        "filter_cache_hits": 0,
+        "filter_cache_misses": 0,
+        "blur_cache_hits": 0,
+        "blur_cache_misses": 0,
+        "blur_tiles": 0
       },
       "resources": {
         "fetch_counts": {
+          "Image": 1,
           "Stylesheet": 10
         },
         "image_cache_hits": 0,
-        "image_cache_misses": 0
+        "image_cache_misses": 1,
+        "image_decode_ms": 4.50999
       }
     }
   }

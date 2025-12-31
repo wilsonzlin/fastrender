@@ -1,7 +1,7 @@
 {
-  "url": "https://htmldog.com/",
+  "url": "https://htmldog.com",
   "status": "timeout",
-  "total_ms": 4800.72357,
+  "total_ms": 5000.0,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,
@@ -9,7 +9,7 @@
     "layout": 0.0,
     "paint": 0.0
   },
-  "notes": "timeout at layout after 4.750035427s",
+  "notes": "timeout at layout after 4.750035427s\nhard timeout after 5.00s\nstage: layout",
   "hotspot": "layout",
   "failure_stage": null,
   "timeout_stage": "layout",

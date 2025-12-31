@@ -1,13 +1,13 @@
 {
   "url": "https://fast.com/",
   "status": "ok",
-  "total_ms": 4409.530522,
+  "total_ms": 1259.054667,
   "stages_ms": {
-    "fetch": 1.558462,
-    "css": 2212.878345,
+    "fetch": 1.298302,
+    "css": 563.652642,
     "cascade": 0.0,
-    "layout": 62.139311,
-    "paint": 2080.205692
+    "layout": 308.16326000000004,
+    "paint": 263.064307
   },
   "notes": "",
   "hotspot": "css",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 1.558462,
-        "css_inlining_ms": 2212.878345,
+        "dom_parse_ms": 1.298302,
+        "css_inlining_ms": 563.652642,
         "css_parse_ms": null,
         "cascade_ms": null,
         "box_tree_ms": null,
-        "layout_ms": 61.730543,
-        "text_fallback_ms": 0.424859,
-        "text_shape_ms": 0.40876799999999996,
-        "paint_build_ms": 0.06997099999999999,
+        "layout_ms": 307.77099000000004,
+        "text_fallback_ms": 0.36512,
+        "text_shape_ms": 0.3922699999999999,
+        "paint_build_ms": 0.120283,
         "paint_optimize_ms": null,
-        "paint_rasterize_ms": 2079.735614,
-        "text_rasterize_ms": 0.40010700000000005,
+        "paint_rasterize_ms": 262.561534,
+        "text_rasterize_ms": 0.38249,
         "encode_ms": null
       },
       "counts": {
@@ -42,12 +42,27 @@
         "glyphs": 40,
         "color_glyph_rasters": 0,
         "fallback_cache_hits": 0,
-        "fallback_cache_misses": 44
+        "fallback_cache_misses": 44,
+        "last_resort_font_fallbacks": 0,
+        "glyph_cache_hits": 0,
+        "glyph_cache_misses": 0,
+        "glyph_cache_evictions": 0,
+        "glyph_cache_bytes": 0,
+        "color_glyph_cache_hits": 0,
+        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_evictions": 0,
+        "color_glyph_cache_bytes": 0
       },
       "cascade": {
         "nodes": null,
         "rule_candidates": null,
         "rule_matches": null,
+        "rule_candidates_pruned": null,
+        "rule_candidates_by_id": null,
+        "rule_candidates_by_class": null,
+        "rule_candidates_by_tag": null,
+        "rule_candidates_by_attr": null,
+        "rule_candidates_universal": null,
         "selector_time_ms": null,
         "declaration_time_ms": null,
         "pseudo_time_ms": null,
@@ -85,16 +100,26 @@
         "transparent_removed": null,
         "noop_removed": null,
         "merged_items": null,
-        "gradient_ms": 0.853907,
-        "gradient_pixels": 27776
+        "gradient_ms": 0.7604190000000001,
+        "gradient_pixels": 27776,
+        "parallel_tasks": 0,
+        "parallel_threads": 1,
+        "parallel_ms": 0.0,
+        "serial_ms": 262.68181699999997,
+        "filter_cache_hits": 0,
+        "filter_cache_misses": 0,
+        "blur_cache_hits": 0,
+        "blur_cache_misses": 0,
+        "blur_tiles": 0
       },
       "resources": {
         "fetch_counts": {
-          "Stylesheet": 2,
-          "Image": 2
+          "Image": 2,
+          "Stylesheet": 2
         },
         "image_cache_hits": 0,
-        "image_cache_misses": 2
+        "image_cache_misses": 2,
+        "image_decode_ms": 1.040915
       }
     }
   }

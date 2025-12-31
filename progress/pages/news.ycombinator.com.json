@@ -1,16 +1,16 @@
 {
   "url": "https://news.ycombinator.com/",
   "status": "ok",
-  "total_ms": 3410.972659,
+  "total_ms": 897.4815860000001,
   "stages_ms": {
-    "fetch": 2.212755,
-    "css": 2200.389062,
+    "fetch": 3.138496,
+    "css": 264.060717,
     "cascade": 0.0,
-    "layout": 401.84410200000013,
-    "paint": 812.059322
+    "layout": 300.24738099999996,
+    "paint": 227.023443
   },
   "notes": "",
-  "hotspot": "css",
+  "hotspot": "layout",
   "failure_stage": null,
   "timeout_stage": null,
   "last_good_commit": "833aa788ed1a7102190a18ae8eae4a0af8876bc4",
@@ -19,35 +19,50 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 2.212755,
-        "css_inlining_ms": 2200.389062,
+        "dom_parse_ms": 3.138496,
+        "css_inlining_ms": 264.060717,
         "css_parse_ms": null,
         "cascade_ms": null,
         "box_tree_ms": null,
-        "layout_ms": 349.491192,
-        "text_fallback_ms": 101.3231359999997,
-        "text_shape_ms": 52.35291000000012,
-        "paint_build_ms": 2.430649,
+        "layout_ms": 277.518153,
+        "text_fallback_ms": 55.19572500000013,
+        "text_shape_ms": 22.72922799999998,
+        "paint_build_ms": 2.086021,
         "paint_optimize_ms": null,
-        "paint_rasterize_ms": 795.778118,
-        "text_rasterize_ms": 13.850554999999988,
+        "paint_rasterize_ms": 214.171527,
+        "text_rasterize_ms": 10.765895000000002,
         "encode_ms": null
       },
       "counts": {
-        "dom_nodes": 1299,
-        "styled_nodes": 1299,
-        "box_nodes": 1739,
-        "fragments": 2035,
-        "shaped_runs": 4100,
-        "glyphs": 30466,
+        "dom_nodes": 1291,
+        "styled_nodes": 1291,
+        "box_nodes": 1728,
+        "fragments": 2028,
+        "shaped_runs": 2082,
+        "glyphs": 13850,
         "color_glyph_rasters": 0,
-        "fallback_cache_hits": 14369,
-        "fallback_cache_misses": 24532
+        "fallback_cache_hits": 5271,
+        "fallback_cache_misses": 10276,
+        "last_resort_font_fallbacks": 0,
+        "glyph_cache_hits": 0,
+        "glyph_cache_misses": 0,
+        "glyph_cache_evictions": 0,
+        "glyph_cache_bytes": 0,
+        "color_glyph_cache_hits": 0,
+        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_evictions": 0,
+        "color_glyph_cache_bytes": 0
       },
       "cascade": {
         "nodes": null,
         "rule_candidates": null,
         "rule_matches": null,
+        "rule_candidates_pruned": null,
+        "rule_candidates_by_id": null,
+        "rule_candidates_by_class": null,
+        "rule_candidates_by_tag": null,
+        "rule_candidates_by_attr": null,
+        "rule_candidates_universal": null,
         "selector_time_ms": null,
         "declaration_time_ms": null,
         "pseudo_time_ms": null,
@@ -59,12 +74,12 @@
         "has_evaluated": null
       },
       "layout": {
-        "intrinsic_lookups": 1196,
-        "intrinsic_hits": 124,
-        "intrinsic_stores": 1072,
-        "block_intrinsic": 1196,
+        "intrinsic_lookups": 450,
+        "intrinsic_hits": 0,
+        "intrinsic_stores": 450,
+        "block_intrinsic": 450,
         "flex_intrinsic": 0,
-        "inline_intrinsic": 564,
+        "inline_intrinsic": 196,
         "layout_cache_lookups": 163,
         "layout_cache_hits": 0,
         "layout_cache_stores": 163,
@@ -79,22 +94,32 @@
         "fragment_traversed": 0
       },
       "paint": {
-        "display_items": 564,
+        "display_items": 560,
         "optimized_items": null,
         "culled_items": null,
         "transparent_removed": null,
         "noop_removed": null,
         "merged_items": null,
-        "gradient_ms": 0.097051,
-        "gradient_pixels": 3000
+        "gradient_ms": 0.130036,
+        "gradient_pixels": 2900,
+        "parallel_tasks": 0,
+        "parallel_threads": 1,
+        "parallel_ms": 0.0,
+        "serial_ms": 216.25754799999999,
+        "filter_cache_hits": 0,
+        "filter_cache_misses": 0,
+        "blur_cache_hits": 0,
+        "blur_cache_misses": 0,
+        "blur_tiles": 0
       },
       "resources": {
         "fetch_counts": {
-          "Stylesheet": 1,
-          "Image": 2
+          "Image": 4,
+          "Stylesheet": 1
         },
-        "image_cache_hits": 29,
-        "image_cache_misses": 2
+        "image_cache_hits": 28,
+        "image_cache_misses": 4,
+        "image_decode_ms": 0.35712799999999995
       }
     }
   }

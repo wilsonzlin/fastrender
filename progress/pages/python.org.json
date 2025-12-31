@@ -1,16 +1,16 @@
 {
   "url": "https://www.python.org/",
   "status": "ok",
-  "total_ms": 4594.7331,
+  "total_ms": 2871.690614,
   "stages_ms": {
-    "fetch": 3.516952,
-    "css": 2173.5657279999996,
+    "fetch": 4.09944,
+    "css": 600.456385,
     "cascade": 0.0,
-    "layout": 1424.0027,
-    "paint": 947.467279
+    "layout": 1596.344403,
+    "paint": 561.5183559999999
   },
   "notes": "",
-  "hotspot": "css",
+  "hotspot": "layout",
   "failure_stage": null,
   "timeout_stage": null,
   "last_good_commit": "833aa788ed1a7102190a18ae8eae4a0af8876bc4",
@@ -19,35 +19,50 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 3.516952,
-        "css_inlining_ms": 2173.5657279999996,
+        "dom_parse_ms": 4.09944,
+        "css_inlining_ms": 600.456385,
         "css_parse_ms": null,
         "cascade_ms": null,
         "box_tree_ms": null,
-        "layout_ms": 1417.364513,
-        "text_fallback_ms": 19.354301000000024,
-        "text_shape_ms": 6.638187000000003,
-        "paint_build_ms": 0.8990279999999999,
+        "layout_ms": 1588.991704,
+        "text_fallback_ms": 32.541646,
+        "text_shape_ms": 7.352699000000008,
+        "paint_build_ms": 1.434005,
         "paint_optimize_ms": null,
-        "paint_rasterize_ms": 935.1937879999999,
-        "text_rasterize_ms": 11.374463000000002,
+        "paint_rasterize_ms": 550.484008,
+        "text_rasterize_ms": 9.600342999999992,
         "encode_ms": null
       },
       "counts": {
         "dom_nodes": 1558,
         "styled_nodes": 1558,
         "box_nodes": 1542,
-        "fragments": 1472,
-        "shaped_runs": 595,
-        "glyphs": 8812,
+        "fragments": 1474,
+        "shaped_runs": 596,
+        "glyphs": 9372,
         "color_glyph_rasters": 0,
-        "fallback_cache_hits": 3295,
-        "fallback_cache_misses": 5096
+        "fallback_cache_hits": 3778,
+        "fallback_cache_misses": 5160,
+        "last_resort_font_fallbacks": 0,
+        "glyph_cache_hits": 0,
+        "glyph_cache_misses": 0,
+        "glyph_cache_evictions": 0,
+        "glyph_cache_bytes": 0,
+        "color_glyph_cache_hits": 0,
+        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_evictions": 0,
+        "color_glyph_cache_bytes": 0
       },
       "cascade": {
         "nodes": null,
         "rule_candidates": null,
         "rule_matches": null,
+        "rule_candidates_pruned": null,
+        "rule_candidates_by_id": null,
+        "rule_candidates_by_class": null,
+        "rule_candidates_by_tag": null,
+        "rule_candidates_by_attr": null,
+        "rule_candidates_universal": null,
         "selector_time_ms": null,
         "declaration_time_ms": null,
         "pseudo_time_ms": null,
@@ -79,22 +94,32 @@
         "fragment_traversed": 0
       },
       "paint": {
-        "display_items": 311,
+        "display_items": 312,
         "optimized_items": null,
         "culled_items": null,
         "transparent_removed": null,
         "noop_removed": null,
         "merged_items": null,
-        "gradient_ms": 114.312488,
-        "gradient_pixels": 4530176
+        "gradient_ms": 113.67961799999999,
+        "gradient_pixels": 4560656,
+        "parallel_tasks": 0,
+        "parallel_threads": 1,
+        "parallel_ms": 0.0,
+        "serial_ms": 551.918013,
+        "filter_cache_hits": 0,
+        "filter_cache_misses": 0,
+        "blur_cache_hits": 0,
+        "blur_cache_misses": 0,
+        "blur_tiles": 0
       },
       "resources": {
         "fetch_counts": {
-          "Stylesheet": 3,
-          "Image": 1
+          "Image": 1,
+          "Stylesheet": 3
         },
         "image_cache_hits": 0,
-        "image_cache_misses": 1
+        "image_cache_misses": 1,
+        "image_decode_ms": 0.42308
       }
     }
   }

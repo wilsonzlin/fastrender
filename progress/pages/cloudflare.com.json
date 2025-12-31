@@ -9,10 +9,10 @@
     "layout": 0.0,
     "paint": 0.0
   },
-  "notes": "[paint] Invalid paint parameters: Layout failed: MissingContext(\"Shaping failed (fonts=8): Text(ShapingFailed { text: <omitted>, reason: \\\"No suitable font found for cluster 犧\\\\u{345}\\\" })\")",
-  "hotspot": "css",
+  "notes": "[paint] Invalid paint parameters: Layout failed: MissingContext(\"Shaping failed (fonts=8): Text(ShapingFailed { text: <omitted>, reason: \\\"No suitable font found for cluster 犧\\\\u{345}\\\" })\")\nhard timeout after 5.00s\nstage: cascade",
+  "hotspot": "cascade",
   "failure_stage": null,
-  "timeout_stage": null,
+  "timeout_stage": "cascade",
   "last_good_commit": "",
   "last_regression_commit": ""
 }

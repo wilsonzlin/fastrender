@@ -1,13 +1,13 @@
 {
   "url": "https://text.npr.org/",
   "status": "ok",
-  "total_ms": 117.44651400000001,
+  "total_ms": 136.711488,
   "stages_ms": {
-    "fetch": 0.273866,
-    "css": 0.065002,
+    "fetch": 0.282567,
+    "css": 0.078822,
     "cascade": 0.0,
-    "layout": 55.420325999999996,
-    "paint": 28.760275999999998
+    "layout": 50.666302,
+    "paint": 15.991532000000001
   },
   "notes": "",
   "hotspot": "layout",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 0.273866,
-        "css_inlining_ms": 0.065002,
+        "dom_parse_ms": 0.282567,
+        "css_inlining_ms": 0.078822,
         "css_parse_ms": null,
         "cascade_ms": null,
         "box_tree_ms": null,
-        "layout_ms": 53.284231,
-        "text_fallback_ms": 22.13462599999999,
-        "text_shape_ms": 2.136095,
-        "paint_build_ms": 0.265676,
+        "layout_ms": 49.177086,
+        "text_fallback_ms": 10.686819000000003,
+        "text_shape_ms": 1.4892160000000003,
+        "paint_build_ms": 0.257116,
         "paint_optimize_ms": null,
-        "paint_rasterize_ms": 15.500405,
-        "text_rasterize_ms": 12.994194999999996,
+        "paint_rasterize_ms": 8.62693,
+        "text_rasterize_ms": 7.1074860000000015,
         "encode_ms": null
       },
       "counts": {
@@ -39,15 +39,30 @@
         "box_nodes": 254,
         "fragments": 250,
         "shaped_runs": 76,
-        "glyphs": 3304,
+        "glyphs": 3190,
         "color_glyph_rasters": 0,
-        "fallback_cache_hits": 1048,
-        "fallback_cache_misses": 1246
+        "fallback_cache_hits": 1018,
+        "fallback_cache_misses": 1190,
+        "last_resort_font_fallbacks": 0,
+        "glyph_cache_hits": 0,
+        "glyph_cache_misses": 0,
+        "glyph_cache_evictions": 0,
+        "glyph_cache_bytes": 0,
+        "color_glyph_cache_hits": 0,
+        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_evictions": 0,
+        "color_glyph_cache_bytes": 0
       },
       "cascade": {
         "nodes": null,
         "rule_candidates": null,
         "rule_matches": null,
+        "rule_candidates_pruned": null,
+        "rule_candidates_by_id": null,
+        "rule_candidates_by_class": null,
+        "rule_candidates_by_tag": null,
+        "rule_candidates_by_attr": null,
+        "rule_candidates_universal": null,
         "selector_time_ms": null,
         "declaration_time_ms": null,
         "pseudo_time_ms": null,
@@ -86,12 +101,22 @@
         "noop_removed": null,
         "merged_items": null,
         "gradient_ms": 0.0,
-        "gradient_pixels": 0
+        "gradient_pixels": 0,
+        "parallel_tasks": 0,
+        "parallel_threads": 1,
+        "parallel_ms": 0.0,
+        "serial_ms": 8.884046,
+        "filter_cache_hits": 0,
+        "filter_cache_misses": 0,
+        "blur_cache_hits": 0,
+        "blur_cache_misses": 0,
+        "blur_tiles": 0
       },
       "resources": {
         "fetch_counts": {},
         "image_cache_hits": 0,
-        "image_cache_misses": 0
+        "image_cache_misses": 0,
+        "image_decode_ms": 0.0
       }
     }
   }

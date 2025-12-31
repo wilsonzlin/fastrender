@@ -1,13 +1,13 @@
 {
   "url": "https://sqlite.org/",
   "status": "ok",
-  "total_ms": 4790.240438,
+  "total_ms": 1903.793806,
   "stages_ms": {
-    "fetch": 0.7061240000000001,
-    "css": 3087.921413,
+    "fetch": 0.511232,
+    "css": 1661.5379400000002,
     "cascade": 0.0,
-    "layout": 63.419556,
-    "paint": 1595.450394
+    "layout": 77.15796900000001,
+    "paint": 60.914067
   },
   "notes": "",
   "hotspot": "css",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 0.7061240000000001,
-        "css_inlining_ms": 3087.921413,
+        "dom_parse_ms": 0.511232,
+        "css_inlining_ms": 1661.5379400000002,
         "css_parse_ms": null,
         "cascade_ms": null,
         "box_tree_ms": null,
-        "layout_ms": 59.213322,
-        "text_fallback_ms": 8.758553,
-        "text_shape_ms": 4.2062339999999985,
-        "paint_build_ms": 0.219334,
+        "layout_ms": 72.948205,
+        "text_fallback_ms": 6.763302999999999,
+        "text_shape_ms": 4.209764,
+        "paint_build_ms": 0.344579,
         "paint_optimize_ms": null,
-        "paint_rasterize_ms": 1586.612607,
-        "text_rasterize_ms": 8.618453,
+        "paint_rasterize_ms": 53.680287,
+        "text_rasterize_ms": 6.889200999999999,
         "encode_ms": null
       },
       "counts": {
@@ -42,12 +42,27 @@
         "glyphs": 3104,
         "color_glyph_rasters": 0,
         "fallback_cache_hits": 1033,
-        "fallback_cache_misses": 2348
+        "fallback_cache_misses": 2348,
+        "last_resort_font_fallbacks": 0,
+        "glyph_cache_hits": 0,
+        "glyph_cache_misses": 0,
+        "glyph_cache_evictions": 0,
+        "glyph_cache_bytes": 0,
+        "color_glyph_cache_hits": 0,
+        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_evictions": 0,
+        "color_glyph_cache_bytes": 0
       },
       "cascade": {
         "nodes": null,
         "rule_candidates": null,
         "rule_matches": null,
+        "rule_candidates_pruned": null,
+        "rule_candidates_by_id": null,
+        "rule_candidates_by_class": null,
+        "rule_candidates_by_tag": null,
+        "rule_candidates_by_attr": null,
+        "rule_candidates_universal": null,
         "selector_time_ms": null,
         "declaration_time_ms": null,
         "pseudo_time_ms": null,
@@ -86,15 +101,25 @@
         "noop_removed": null,
         "merged_items": null,
         "gradient_ms": 0.0,
-        "gradient_pixels": 0
+        "gradient_pixels": 0,
+        "parallel_tasks": 0,
+        "parallel_threads": 1,
+        "parallel_ms": 0.0,
+        "serial_ms": 54.024866,
+        "filter_cache_hits": 0,
+        "filter_cache_misses": 0,
+        "blur_cache_hits": 0,
+        "blur_cache_misses": 0,
+        "blur_tiles": 0
       },
       "resources": {
         "fetch_counts": {
-          "Image": 1,
-          "Stylesheet": 1
+          "Stylesheet": 1,
+          "Image": 2
         },
         "image_cache_hits": 0,
-        "image_cache_misses": 1
+        "image_cache_misses": 2,
+        "image_decode_ms": 1.951078
       }
     }
   }

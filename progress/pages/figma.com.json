@@ -1,13 +1,13 @@
 {
   "url": "https://www.figma.com/login",
   "status": "ok",
-  "total_ms": 235.81449400000002,
+  "total_ms": 1283.2375140000001,
   "stages_ms": {
-    "fetch": 0.17031300000000002,
-    "css": 0.022141,
+    "fetch": 0.231876,
+    "css": 0.035200999999999996,
     "cascade": 0.0,
-    "layout": 56.793431,
-    "paint": 55.41212
+    "layout": 575.830367,
+    "paint": 371.090377
   },
   "notes": "",
   "hotspot": "layout",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 0.17031300000000002,
-        "css_inlining_ms": 0.022141,
+        "dom_parse_ms": 0.231876,
+        "css_inlining_ms": 0.035200999999999996,
         "css_parse_ms": null,
         "cascade_ms": null,
         "box_tree_ms": null,
-        "layout_ms": 50.408421000000004,
-        "text_fallback_ms": 12.295403999999996,
-        "text_shape_ms": 6.385009999999992,
-        "paint_build_ms": 0.072852,
+        "layout_ms": 569.466733,
+        "text_fallback_ms": 13.221930000000008,
+        "text_shape_ms": 6.363634000000001,
+        "paint_build_ms": 0.155174,
         "paint_optimize_ms": null,
-        "paint_rasterize_ms": 48.361961,
-        "text_rasterize_ms": 6.977307000000001,
+        "paint_rasterize_ms": 363.88908,
+        "text_rasterize_ms": 7.0461230000000015,
         "encode_ms": null
       },
       "counts": {
@@ -105,7 +105,7 @@
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 48.434813,
+        "serial_ms": 364.04425399999997,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -118,7 +118,7 @@
         },
         "image_cache_hits": 0,
         "image_cache_misses": 4,
-        "image_decode_ms": 0.166993
+        "image_decode_ms": 0.222405
       }
     }
   }

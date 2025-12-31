@@ -1,16 +1,16 @@
 {
   "url": "https://www.bloomberg.com/",
   "status": "ok",
-  "total_ms": 2235.820491,
+  "total_ms": 169.631272,
   "stages_ms": {
-    "fetch": 0.206314,
-    "css": 0.03183,
+    "fetch": 0.287047,
+    "css": 0.037481,
     "cascade": 0.0,
-    "layout": 15.358946,
-    "paint": 2193.350309
+    "layout": 32.824097,
+    "paint": 20.656071999999998
   },
   "notes": "",
-  "hotspot": "paint",
+  "hotspot": "layout",
   "failure_stage": null,
   "timeout_stage": null,
   "last_good_commit": "833aa788ed1a7102190a18ae8eae4a0af8876bc4",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 0.206314,
-        "css_inlining_ms": 0.03183,
+        "dom_parse_ms": 0.287047,
+        "css_inlining_ms": 0.037481,
         "css_parse_ms": null,
         "cascade_ms": null,
         "box_tree_ms": null,
-        "layout_ms": 14.360251,
-        "text_fallback_ms": 2.2990769999999996,
-        "text_shape_ms": 0.998695,
-        "paint_build_ms": 0.100922,
+        "layout_ms": 31.856043,
+        "text_fallback_ms": 2.214037,
+        "text_shape_ms": 0.9680539999999999,
+        "paint_build_ms": 0.134483,
         "paint_optimize_ms": null,
-        "paint_rasterize_ms": 2188.219416,
-        "text_rasterize_ms": 5.029971000000001,
+        "paint_rasterize_ms": 15.698521,
+        "text_rasterize_ms": 4.823067999999999,
         "encode_ms": null
       },
       "counts": {
@@ -41,13 +41,28 @@
         "shaped_runs": 52,
         "glyphs": 1438,
         "color_glyph_rasters": 0,
-        "fallback_cache_hits": 676,
-        "fallback_cache_misses": 582
+        "fallback_cache_hits": 682,
+        "fallback_cache_misses": 570,
+        "last_resort_font_fallbacks": 0,
+        "glyph_cache_hits": 0,
+        "glyph_cache_misses": 0,
+        "glyph_cache_evictions": 0,
+        "glyph_cache_bytes": 0,
+        "color_glyph_cache_hits": 0,
+        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_evictions": 0,
+        "color_glyph_cache_bytes": 0
       },
       "cascade": {
         "nodes": null,
         "rule_candidates": null,
         "rule_matches": null,
+        "rule_candidates_pruned": null,
+        "rule_candidates_by_id": null,
+        "rule_candidates_by_class": null,
+        "rule_candidates_by_tag": null,
+        "rule_candidates_by_attr": null,
+        "rule_candidates_universal": null,
         "selector_time_ms": null,
         "declaration_time_ms": null,
         "pseudo_time_ms": null,
@@ -86,14 +101,24 @@
         "noop_removed": null,
         "merged_items": null,
         "gradient_ms": 0.0,
-        "gradient_pixels": 0
+        "gradient_pixels": 0,
+        "parallel_tasks": 0,
+        "parallel_threads": 1,
+        "parallel_ms": 0.0,
+        "serial_ms": 15.833003999999999,
+        "filter_cache_hits": 0,
+        "filter_cache_misses": 0,
+        "blur_cache_hits": 0,
+        "blur_cache_misses": 0,
+        "blur_tiles": 0
       },
       "resources": {
         "fetch_counts": {
           "Image": 1
         },
         "image_cache_hits": 0,
-        "image_cache_misses": 1
+        "image_cache_misses": 1,
+        "image_decode_ms": 0.596095
       }
     }
   }

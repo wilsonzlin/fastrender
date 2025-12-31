@@ -1,7 +1,7 @@
 {
-  "url": "https://nyu.edu",
+  "url": "https://www.nyu.edu/",
   "status": "timeout",
-  "total_ms": 5000.0,
+  "total_ms": 4818.447626,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,
@@ -12,7 +12,7 @@
   "notes": "hard timeout after 5.00s",
   "hotspot": "css",
   "failure_stage": null,
-  "timeout_stage": null,
+  "timeout_stage": "css",
   "last_good_commit": "",
   "last_regression_commit": ""
 }

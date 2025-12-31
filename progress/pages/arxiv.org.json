@@ -1,16 +1,16 @@
 {
   "url": "https://arxiv.org/",
   "status": "ok",
-  "total_ms": 4055.175881,
+  "total_ms": 688.6336600000001,
   "stages_ms": {
-    "fetch": 3.7560160000000002,
-    "css": 2260.91732,
+    "fetch": 2.5345400000000002,
+    "css": 173.38108899999997,
     "cascade": 0.0,
-    "layout": 1749.6361319999999,
-    "paint": 50.824963000000004
+    "layout": 406.641097,
+    "paint": 35.30906500000001
   },
   "notes": "",
-  "hotspot": "css",
+  "hotspot": "layout",
   "failure_stage": null,
   "timeout_stage": null,
   "last_good_commit": "833aa788ed1a7102190a18ae8eae4a0af8876bc4",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 3.7560160000000002,
-        "css_inlining_ms": 2260.91732,
+        "dom_parse_ms": 2.5345400000000002,
+        "css_inlining_ms": 173.38108899999997,
         "css_parse_ms": null,
         "cascade_ms": null,
         "box_tree_ms": null,
-        "layout_ms": 1714.7952289999998,
-        "text_fallback_ms": 66.94501799999999,
-        "text_shape_ms": 34.84090299999998,
-        "paint_build_ms": 2.680675,
+        "layout_ms": 369.889786,
+        "text_fallback_ms": 66.13377100000008,
+        "text_shape_ms": 36.75131099999999,
+        "paint_build_ms": 2.739325,
         "paint_optimize_ms": null,
-        "paint_rasterize_ms": 30.140511,
-        "text_rasterize_ms": 18.003777000000007,
+        "paint_rasterize_ms": 21.411758,
+        "text_rasterize_ms": 11.157982000000011,
         "encode_ms": null
       },
       "counts": {
@@ -42,12 +42,27 @@
         "glyphs": 28022,
         "color_glyph_rasters": 0,
         "fallback_cache_hits": 17226,
-        "fallback_cache_misses": 9268
+        "fallback_cache_misses": 9268,
+        "last_resort_font_fallbacks": 0,
+        "glyph_cache_hits": 0,
+        "glyph_cache_misses": 0,
+        "glyph_cache_evictions": 0,
+        "glyph_cache_bytes": 0,
+        "color_glyph_cache_hits": 0,
+        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_evictions": 0,
+        "color_glyph_cache_bytes": 0
       },
       "cascade": {
         "nodes": null,
         "rule_candidates": null,
         "rule_matches": null,
+        "rule_candidates_pruned": null,
+        "rule_candidates_by_id": null,
+        "rule_candidates_by_class": null,
+        "rule_candidates_by_tag": null,
+        "rule_candidates_by_attr": null,
+        "rule_candidates_universal": null,
         "selector_time_ms": null,
         "declaration_time_ms": null,
         "pseudo_time_ms": null,
@@ -60,11 +75,11 @@
       },
       "layout": {
         "intrinsic_lookups": 1506,
-        "intrinsic_hits": 730,
-        "intrinsic_stores": 776,
+        "intrinsic_hits": 727,
+        "intrinsic_stores": 779,
         "block_intrinsic": 1250,
         "flex_intrinsic": 256,
-        "inline_intrinsic": 582,
+        "inline_intrinsic": 583,
         "layout_cache_lookups": 120,
         "layout_cache_hits": 54,
         "layout_cache_stores": 66,
@@ -86,15 +101,25 @@
         "noop_removed": null,
         "merged_items": null,
         "gradient_ms": 0.0,
-        "gradient_pixels": 0
+        "gradient_pixels": 0,
+        "parallel_tasks": 0,
+        "parallel_threads": 1,
+        "parallel_ms": 0.0,
+        "serial_ms": 24.151083,
+        "filter_cache_hits": 0,
+        "filter_cache_misses": 0,
+        "blur_cache_hits": 0,
+        "blur_cache_misses": 0,
+        "blur_tiles": 0
       },
       "resources": {
         "fetch_counts": {
           "Stylesheet": 2,
-          "Image": 2
+          "Image": 7
         },
         "image_cache_hits": 2,
-        "image_cache_misses": 2
+        "image_cache_misses": 7,
+        "image_decode_ms": 2.1373900000000003
       }
     }
   }

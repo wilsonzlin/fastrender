@@ -163,9 +163,9 @@ impl PlacedFragment {
   }
 }
 
-#[derive(Clone)]
 struct PositionedCandidate {
-  child: BoxNode,
+  child_id: usize,
+  original_style: Arc<ComputedStyle>,
   layout_child: BoxNode,
   cb: ContainingBlock,
   fragment: FragmentNode,
@@ -456,7 +456,7 @@ impl FormattingContext for FlexFormattingContext {
 
     // Partition children: out-of-flow abs/fixed are handled after flex layout per CSS positioning.
     let mut in_flow_children: Vec<(usize, &BoxNode)> = Vec::new();
-    let mut positioned_children = Vec::new();
+    let mut positioned_children: Vec<&BoxNode> = Vec::new();
     let mut running_children: Vec<(usize, BoxNode)> = Vec::new();
     for (idx, child) in box_node.children.iter().enumerate() {
       if child.style.running_position.is_some() {
@@ -467,7 +467,7 @@ impl FormattingContext for FlexFormattingContext {
       }
       match child.style.position {
         crate::style::position::Position::Absolute | crate::style::position::Position::Fixed => {
-          positioned_children.push(child.clone());
+          positioned_children.push(child);
         }
         _ => in_flow_children.push((idx, child)),
       }
@@ -1979,6 +1979,9 @@ impl FormattingContext for FlexFormattingContext {
 
       let mut positioned_candidates: Vec<PositionedCandidate> = Vec::new();
       for child in positioned_children {
+        let child_id = child.id;
+        let original_style = child.style.clone();
+        let is_replaced = child.is_replaced();
         let cb = match child.style.position {
           Position::Fixed => {
             if establishes_fixed_cb {
@@ -2016,11 +2019,9 @@ impl FormattingContext for FlexFormattingContext {
         let child_fragment = fc.layout(&layout_child, &child_constraints)?;
 
         let positioned_style =
-          resolve_positioned_style(&child.style, &cb, self.viewport_size, &self.font_context);
+          resolve_positioned_style(&original_style, &cb, self.viewport_size, &self.font_context);
         let needs_inline_intrinsics = positioned_style.width.is_auto()
-          && (positioned_style.left.is_auto()
-            || positioned_style.right.is_auto()
-            || child.is_replaced());
+          && (positioned_style.left.is_auto() || positioned_style.right.is_auto() || is_replaced);
         let needs_block_intrinsics = positioned_style.height.is_auto()
           && (positioned_style.top.is_auto() || positioned_style.bottom.is_auto());
         let preferred_min_inline = if needs_inline_intrinsics {
@@ -2049,7 +2050,8 @@ impl FormattingContext for FlexFormattingContext {
         };
 
         positioned_candidates.push(PositionedCandidate {
-          child: child.clone(),
+          child_id,
+          original_style,
           layout_child,
           cb,
           fragment: child_fragment,
@@ -2058,7 +2060,7 @@ impl FormattingContext for FlexFormattingContext {
           preferred_inline,
           preferred_min_block,
           preferred_block,
-          is_replaced: child.is_replaced(),
+          is_replaced,
         });
       }
 
@@ -2072,12 +2074,12 @@ impl FormattingContext for FlexFormattingContext {
         )
         .unwrap_or_default();
 
-      for candidate in positioned_candidates {
+      for mut candidate in positioned_candidates {
         let mut input = AbsoluteLayoutInput::new(
           candidate.positioned_style,
           candidate.fragment.bounds.size,
           static_positions
-            .get(&candidate.child.id)
+            .get(&candidate.child_id)
             .copied()
             .unwrap_or(Point::ZERO),
         );
@@ -2102,15 +2104,15 @@ impl FormattingContext for FlexFormattingContext {
             CrateAvailableSpace::Definite(result.size.width),
             CrateAvailableSpace::Definite(result.size.height),
           );
-          let mut relayout_child = candidate.layout_child.clone();
-          let mut relayout_style = (*relayout_child.style).clone();
-          relayout_style.width = Some(Length::px(result.size.width));
-          relayout_style.height = Some(Length::px(result.size.height));
-          relayout_child.style = Arc::new(relayout_style);
-          child_fragment = fc.layout(&relayout_child, &relayout_constraints)?;
+          {
+            let relayout_style = Arc::make_mut(&mut candidate.layout_child.style);
+            relayout_style.width = Some(Length::px(result.size.width));
+            relayout_style.height = Some(Length::px(result.size.height));
+          }
+          child_fragment = fc.layout(&candidate.layout_child, &relayout_constraints)?;
         }
         child_fragment.bounds = Rect::new(result.position, result.size);
-        child_fragment.style = Some(candidate.child.style.clone());
+        child_fragment.style = Some(candidate.original_style.clone());
         fragment.children_mut().push(child_fragment);
       }
     }
@@ -4478,7 +4480,7 @@ impl FlexFormattingContext {
 
     let mut positioned_index: HashMap<usize, usize> = HashMap::new();
     for (idx, candidate) in positioned.iter().enumerate() {
-      positioned_index.insert(candidate.child.id, idx);
+      positioned_index.insert(candidate.child_id, idx);
     }
 
     let mut taffy: TaffyTree<*const BoxNode> = TaffyTree::new();
@@ -4507,7 +4509,7 @@ impl FlexFormattingContext {
         let node = taffy.new_leaf(style).map_err(|e| {
           LayoutError::MissingContext(format!("Failed to create Taffy leaf: {:?}", e))
         })?;
-        node_lookup.insert(candidate.child.id, node);
+        node_lookup.insert(candidate.child_id, node);
         child_nodes.push(node);
       } else {
         let size = inflow_sizes
@@ -4542,10 +4544,10 @@ impl FlexFormattingContext {
       .map_err(|e| LayoutError::MissingContext(format!("Taffy layout failed: {:?}", e)))?;
 
     for candidate in positioned {
-      if let Some(node_id) = node_lookup.get(&candidate.child.id) {
+      if let Some(node_id) = node_lookup.get(&candidate.child_id) {
         if let Ok(layout) = taffy.layout(*node_id) {
           positions.insert(
-            candidate.child.id,
+            candidate.child_id,
             Point::new(
               layout.location.x - padding_origin.x,
               layout.location.y - padding_origin.y,
@@ -5287,6 +5289,10 @@ mod tests {
     assert_eq!(abs_fragment.bounds.y(), 15.0);
     assert_eq!(abs_fragment.bounds.width(), 20.0);
     assert_eq!(abs_fragment.bounds.height(), 10.0);
+    let abs_fragment_style = abs_fragment.style.as_ref().expect("abs style preserved");
+    assert_eq!(abs_fragment_style.position, Position::Absolute);
+    assert_eq!(abs_fragment_style.left, Some(Length::px(5.0)));
+    assert_eq!(abs_fragment_style.top, Some(Length::px(7.0)));
   }
 
   #[test]
@@ -5327,6 +5333,10 @@ mod tests {
     let abs_fragment = &fragment.children[0];
     assert_eq!(abs_fragment.bounds.x(), 25.0);
     assert_eq!(abs_fragment.bounds.y(), 37.0);
+    let abs_fragment_style = abs_fragment.style.as_ref().expect("abs style preserved");
+    assert_eq!(abs_fragment_style.position, Position::Absolute);
+    assert_eq!(abs_fragment_style.left, Some(Length::px(5.0)));
+    assert_eq!(abs_fragment_style.top, Some(Length::px(7.0)));
   }
 
   #[test]

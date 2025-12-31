@@ -1,13 +1,13 @@
 {
   "url": "https://tripadvisor.com/",
   "status": "ok",
-  "total_ms": 51.482535000000006,
+  "total_ms": 119.5699,
   "stages_ms": {
-    "fetch": 0.233445,
-    "css": 0.0263,
+    "fetch": 0.183444,
+    "css": 0.025120999999999997,
     "cascade": 0.0,
-    "layout": 6.36042,
-    "paint": 2.0664219999999998
+    "layout": 24.672081,
+    "paint": 1.709822
   },
   "notes": "",
   "hotspot": "layout",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 0.233445,
-        "css_inlining_ms": 0.0263,
+        "dom_parse_ms": 0.183444,
+        "css_inlining_ms": 0.025120999999999997,
         "css_parse_ms": null,
         "cascade_ms": null,
         "box_tree_ms": null,
-        "layout_ms": 6.116855,
-        "text_fallback_ms": 0.182134,
-        "text_shape_ms": 0.243565,
-        "paint_build_ms": 0.023391,
+        "layout_ms": 24.500297,
+        "text_fallback_ms": 0.14054399999999997,
+        "text_shape_ms": 0.171784,
+        "paint_build_ms": 0.037561000000000004,
         "paint_optimize_ms": null,
-        "paint_rasterize_ms": 1.325667,
-        "text_rasterize_ms": 0.717364,
+        "paint_rasterize_ms": 1.072306,
+        "text_rasterize_ms": 0.599955,
         "encode_ms": null
       },
       "counts": {
@@ -42,12 +42,27 @@
         "glyphs": 86,
         "color_glyph_rasters": 0,
         "fallback_cache_hits": 26,
-        "fallback_cache_misses": 34
+        "fallback_cache_misses": 34,
+        "last_resort_font_fallbacks": 0,
+        "glyph_cache_hits": 0,
+        "glyph_cache_misses": 0,
+        "glyph_cache_evictions": 0,
+        "glyph_cache_bytes": 0,
+        "color_glyph_cache_hits": 0,
+        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_evictions": 0,
+        "color_glyph_cache_bytes": 0
       },
       "cascade": {
         "nodes": null,
         "rule_candidates": null,
         "rule_matches": null,
+        "rule_candidates_pruned": null,
+        "rule_candidates_by_id": null,
+        "rule_candidates_by_class": null,
+        "rule_candidates_by_tag": null,
+        "rule_candidates_by_attr": null,
+        "rule_candidates_universal": null,
         "selector_time_ms": null,
         "declaration_time_ms": null,
         "pseudo_time_ms": null,
@@ -86,12 +101,22 @@
         "noop_removed": null,
         "merged_items": null,
         "gradient_ms": 0.0,
-        "gradient_pixels": 0
+        "gradient_pixels": 0,
+        "parallel_tasks": 0,
+        "parallel_threads": 1,
+        "parallel_ms": 0.0,
+        "serial_ms": 1.109867,
+        "filter_cache_hits": 0,
+        "filter_cache_misses": 0,
+        "blur_cache_hits": 0,
+        "blur_cache_misses": 0,
+        "blur_tiles": 0
       },
       "resources": {
         "fetch_counts": {},
         "image_cache_hits": 0,
-        "image_cache_misses": 0
+        "image_cache_misses": 0,
+        "image_decode_ms": 0.0
       }
     }
   }

@@ -1,7 +1,7 @@
 {
-  "url": "https://www.espn.com/",
+  "url": "https://espn.com",
   "status": "timeout",
-  "total_ms": 4800.4969360000005,
+  "total_ms": 5000.0,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,
@@ -9,10 +9,10 @@
     "layout": 0.0,
     "paint": 0.0
   },
-  "notes": "hard timeout after 5.00s",
-  "hotspot": "css",
+  "notes": "hard timeout after 5.00s\nstage: dom_parse",
+  "hotspot": "fetch",
   "failure_stage": null,
-  "timeout_stage": "css",
+  "timeout_stage": "dom_parse",
   "last_good_commit": "",
   "last_regression_commit": ""
 }

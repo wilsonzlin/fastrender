@@ -1,13 +1,13 @@
 {
   "url": "https://www.wsj.com/",
   "status": "ok",
-  "total_ms": 47.3248,
+  "total_ms": 262.74304,
   "stages_ms": {
-    "fetch": 0.179644,
-    "css": 0.036411,
+    "fetch": 0.154644,
+    "css": 0.019371000000000003,
     "cascade": 0.0,
-    "layout": 6.536153,
-    "paint": 1.93126
+    "layout": 74.20936200000001,
+    "paint": 1.8380450000000002
   },
   "notes": "",
   "hotspot": "layout",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 0.179644,
-        "css_inlining_ms": 0.036411,
+        "dom_parse_ms": 0.154644,
+        "css_inlining_ms": 0.019371000000000003,
         "css_parse_ms": null,
         "cascade_ms": null,
         "box_tree_ms": null,
-        "layout_ms": 6.317339,
-        "text_fallback_ms": 0.230185,
-        "text_shape_ms": 0.218814,
-        "paint_build_ms": 0.029750000000000002,
+        "layout_ms": 73.97841700000001,
+        "text_fallback_ms": 0.13778400000000002,
+        "text_shape_ms": 0.230945,
+        "paint_build_ms": 0.051661,
         "paint_optimize_ms": null,
-        "paint_rasterize_ms": 1.193905,
-        "text_rasterize_ms": 0.707605,
+        "paint_rasterize_ms": 1.115847,
+        "text_rasterize_ms": 0.670537,
         "encode_ms": null
       },
       "counts": {
@@ -42,12 +42,27 @@
         "glyphs": 86,
         "color_glyph_rasters": 0,
         "fallback_cache_hits": 26,
-        "fallback_cache_misses": 34
+        "fallback_cache_misses": 34,
+        "last_resort_font_fallbacks": 0,
+        "glyph_cache_hits": 0,
+        "glyph_cache_misses": 0,
+        "glyph_cache_evictions": 0,
+        "glyph_cache_bytes": 0,
+        "color_glyph_cache_hits": 0,
+        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_evictions": 0,
+        "color_glyph_cache_bytes": 0
       },
       "cascade": {
         "nodes": null,
         "rule_candidates": null,
         "rule_matches": null,
+        "rule_candidates_pruned": null,
+        "rule_candidates_by_id": null,
+        "rule_candidates_by_class": null,
+        "rule_candidates_by_tag": null,
+        "rule_candidates_by_attr": null,
+        "rule_candidates_universal": null,
         "selector_time_ms": null,
         "declaration_time_ms": null,
         "pseudo_time_ms": null,
@@ -86,12 +101,22 @@
         "noop_removed": null,
         "merged_items": null,
         "gradient_ms": 0.0,
-        "gradient_pixels": 0
+        "gradient_pixels": 0,
+        "parallel_tasks": 0,
+        "parallel_threads": 1,
+        "parallel_ms": 0.0,
+        "serial_ms": 1.167508,
+        "filter_cache_hits": 0,
+        "filter_cache_misses": 0,
+        "blur_cache_hits": 0,
+        "blur_cache_misses": 0,
+        "blur_tiles": 0
       },
       "resources": {
         "fetch_counts": {},
         "image_cache_hits": 0,
-        "image_cache_misses": 0
+        "image_cache_misses": 0,
+        "image_decode_ms": 0.0
       }
     }
   }

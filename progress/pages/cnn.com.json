@@ -12,7 +12,7 @@
   "notes": "worker exited (exit signal 6) without writing progress\nhard timeout after 5.00s\nstage: cascade",
   "hotspot": "cascade",
   "failure_stage": null,
-  "timeout_stage": null,
+  "timeout_stage": "cascade",
   "last_good_commit": "",
   "last_regression_commit": ""
 }

@@ -1,13 +1,13 @@
 {
   "url": "https://www.bbc.co.uk/",
   "status": "ok",
-  "total_ms": 3859.090523,
+  "total_ms": 2121.889981,
   "stages_ms": {
-    "fetch": 9.427832,
-    "css": 3.659765,
+    "fetch": 8.953252,
+    "css": 3.9770339999999997,
     "cascade": 0.0,
-    "layout": 3755.718461,
-    "paint": 55.936775999999995
+    "layout": 2007.4901659999998,
+    "paint": 37.64546200000001
   },
   "notes": "",
   "hotspot": "layout",
@@ -19,35 +19,50 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 9.427832,
-        "css_inlining_ms": 3.659765,
+        "dom_parse_ms": 8.953252,
+        "css_inlining_ms": 3.9770339999999997,
         "css_parse_ms": null,
         "cascade_ms": null,
         "box_tree_ms": null,
-        "layout_ms": 3641.113428,
-        "text_fallback_ms": 690.5898560000004,
-        "text_shape_ms": 114.60503299999986,
-        "paint_build_ms": 12.748789,
+        "layout_ms": 1899.135241,
+        "text_fallback_ms": 577.3646290000005,
+        "text_shape_ms": 108.35492499999991,
+        "paint_build_ms": 5.7762,
         "paint_optimize_ms": null,
-        "paint_rasterize_ms": 26.820394,
-        "text_rasterize_ms": 16.367592999999996,
+        "paint_rasterize_ms": 20.299132,
+        "text_rasterize_ms": 11.570130000000006,
         "encode_ms": null
       },
       "counts": {
-        "dom_nodes": 3860,
-        "styled_nodes": 3860,
-        "box_nodes": 3155,
-        "fragments": 4296,
-        "shaped_runs": 5675,
-        "glyphs": 216808,
+        "dom_nodes": 3808,
+        "styled_nodes": 3808,
+        "box_nodes": 3114,
+        "fragments": 4242,
+        "shaped_runs": 5588,
+        "glyphs": 204048,
         "color_glyph_rasters": 0,
-        "fallback_cache_hits": 72798,
-        "fallback_cache_misses": 94300
+        "fallback_cache_hits": 67804,
+        "fallback_cache_misses": 90826,
+        "last_resort_font_fallbacks": 0,
+        "glyph_cache_hits": 0,
+        "glyph_cache_misses": 0,
+        "glyph_cache_evictions": 0,
+        "glyph_cache_bytes": 0,
+        "color_glyph_cache_hits": 0,
+        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_evictions": 0,
+        "color_glyph_cache_bytes": 0
       },
       "cascade": {
         "nodes": null,
         "rule_candidates": null,
         "rule_matches": null,
+        "rule_candidates_pruned": null,
+        "rule_candidates_by_id": null,
+        "rule_candidates_by_class": null,
+        "rule_candidates_by_tag": null,
+        "rule_candidates_by_attr": null,
+        "rule_candidates_universal": null,
         "selector_time_ms": null,
         "declaration_time_ms": null,
         "pseudo_time_ms": null,
@@ -59,17 +74,17 @@
         "has_evaluated": null
       },
       "layout": {
-        "intrinsic_lookups": 15058,
-        "intrinsic_hits": 9487,
-        "intrinsic_stores": 5571,
-        "block_intrinsic": 11639,
-        "flex_intrinsic": 3419,
-        "inline_intrinsic": 1108,
-        "layout_cache_lookups": 5133,
-        "layout_cache_hits": 2797,
-        "layout_cache_stores": 2038,
-        "layout_cache_evictions": 626,
-        "layout_cache_clones": 2797,
+        "intrinsic_lookups": 14975,
+        "intrinsic_hits": 9409,
+        "intrinsic_stores": 5566,
+        "block_intrinsic": 11512,
+        "flex_intrinsic": 3463,
+        "inline_intrinsic": 1102,
+        "layout_cache_lookups": 5059,
+        "layout_cache_hits": 2745,
+        "layout_cache_stores": 2010,
+        "layout_cache_evictions": 594,
+        "layout_cache_clones": 2745,
         "flex_cache_clones": 0,
         "taffy_nodes_built": 0,
         "taffy_nodes_reused": 0,
@@ -79,21 +94,31 @@
         "fragment_traversed": 0
       },
       "paint": {
-        "display_items": 346,
+        "display_items": 339,
         "optimized_items": null,
         "culled_items": null,
         "transparent_removed": null,
         "noop_removed": null,
         "merged_items": null,
         "gradient_ms": 0.0,
-        "gradient_pixels": 0
+        "gradient_pixels": 0,
+        "parallel_tasks": 0,
+        "parallel_threads": 1,
+        "parallel_ms": 0.0,
+        "serial_ms": 26.075332,
+        "filter_cache_hits": 0,
+        "filter_cache_misses": 0,
+        "blur_cache_hits": 0,
+        "blur_cache_misses": 0,
+        "blur_tiles": 0
       },
       "resources": {
         "fetch_counts": {
-          "Image": 1
+          "Image": 9
         },
-        "image_cache_hits": 1,
-        "image_cache_misses": 1
+        "image_cache_hits": 7,
+        "image_cache_misses": 9,
+        "image_decode_ms": 0.48607200000000006
       }
     }
   }

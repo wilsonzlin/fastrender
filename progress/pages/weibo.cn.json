@@ -1,13 +1,13 @@
 {
   "url": "https://weibo.cn/pub/",
   "status": "ok",
-  "total_ms": 2223.5651230000003,
+  "total_ms": 1117.715523,
   "stages_ms": {
-    "fetch": 0.286576,
-    "css": 0.155753,
+    "fetch": 0.226686,
+    "css": 0.097472,
     "cascade": 0.0,
-    "layout": 2180.7287170000004,
-    "paint": 4.4458400000000005
+    "layout": 984.0213269999999,
+    "paint": 9.699052000000002
   },
   "notes": "",
   "hotspot": "layout",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 0.286576,
-        "css_inlining_ms": 0.155753,
+        "dom_parse_ms": 0.226686,
+        "css_inlining_ms": 0.097472,
         "css_parse_ms": null,
         "cascade_ms": null,
         "box_tree_ms": null,
-        "layout_ms": 2179.6993420000003,
-        "text_fallback_ms": 40.132955,
-        "text_shape_ms": 1.0293750000000004,
-        "paint_build_ms": 0.149213,
+        "layout_ms": 983.020142,
+        "text_fallback_ms": 40.55983099999999,
+        "text_shape_ms": 1.001185,
+        "paint_build_ms": 0.209916,
         "paint_optimize_ms": null,
-        "paint_rasterize_ms": 2.7217949999999997,
-        "text_rasterize_ms": 1.5748320000000002,
+        "paint_rasterize_ms": 5.4332720000000005,
+        "text_rasterize_ms": 4.055864000000001,
         "encode_ms": null
       },
       "counts": {
@@ -38,16 +38,31 @@
         "styled_nodes": 94,
         "box_nodes": 108,
         "fragments": 146,
-        "shaped_runs": 112,
-        "glyphs": 582,
+        "shaped_runs": 130,
+        "glyphs": 538,
         "color_glyph_rasters": 0,
-        "fallback_cache_hits": 28,
-        "fallback_cache_misses": 526
+        "fallback_cache_hits": 21,
+        "fallback_cache_misses": 496,
+        "last_resort_font_fallbacks": 0,
+        "glyph_cache_hits": 0,
+        "glyph_cache_misses": 0,
+        "glyph_cache_evictions": 0,
+        "glyph_cache_bytes": 0,
+        "color_glyph_cache_hits": 0,
+        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_evictions": 0,
+        "color_glyph_cache_bytes": 0
       },
       "cascade": {
         "nodes": null,
         "rule_candidates": null,
         "rule_matches": null,
+        "rule_candidates_pruned": null,
+        "rule_candidates_by_id": null,
+        "rule_candidates_by_class": null,
+        "rule_candidates_by_tag": null,
+        "rule_candidates_by_attr": null,
+        "rule_candidates_universal": null,
         "selector_time_ms": null,
         "declaration_time_ms": null,
         "pseudo_time_ms": null,
@@ -86,14 +101,24 @@
         "noop_removed": null,
         "merged_items": null,
         "gradient_ms": 0.0,
-        "gradient_pixels": 0
+        "gradient_pixels": 0,
+        "parallel_tasks": 0,
+        "parallel_threads": 1,
+        "parallel_ms": 0.0,
+        "serial_ms": 5.643188,
+        "filter_cache_hits": 0,
+        "filter_cache_misses": 0,
+        "blur_cache_hits": 0,
+        "blur_cache_misses": 0,
+        "blur_tiles": 0
       },
       "resources": {
         "fetch_counts": {
           "Image": 1
         },
         "image_cache_hits": 1,
-        "image_cache_misses": 1
+        "image_cache_misses": 1,
+        "image_decode_ms": 0.08360200000000001
       }
     }
   }

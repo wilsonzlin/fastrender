@@ -1,7 +1,7 @@
 {
-  "url": "https://www.youtube.com/",
+  "url": "https://youtube.com",
   "status": "timeout",
-  "total_ms": 4822.979391999999,
+  "total_ms": 5000.0,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,
@@ -9,10 +9,10 @@
     "layout": 0.0,
     "paint": 0.0
   },
-  "notes": "timeout at css after 4.831666921s",
-  "hotspot": "css",
+  "notes": "timeout at css after 4.831666921s\nhard timeout after 5.00s\nstage: done",
+  "hotspot": "unknown",
   "failure_stage": null,
-  "timeout_stage": "css",
+  "timeout_stage": null,
   "last_good_commit": "",
   "last_regression_commit": "833aa788ed1a7102190a18ae8eae4a0af8876bc4"
 }

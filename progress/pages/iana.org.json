@@ -1,13 +1,13 @@
 {
   "url": "https://www.iana.org/",
   "status": "ok",
-  "total_ms": 3695.1404549999997,
+  "total_ms": 2205.982115,
   "stages_ms": {
-    "fetch": 0.814477,
-    "css": 2219.096441,
+    "fetch": 1.095766,
+    "css": 865.631893,
     "cascade": 0.0,
-    "layout": 612.360153,
-    "paint": 833.9070750000001
+    "layout": 837.172773,
+    "paint": 362.226072
   },
   "notes": "",
   "hotspot": "css",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 0.814477,
-        "css_inlining_ms": 2219.096441,
+        "dom_parse_ms": 1.095766,
+        "css_inlining_ms": 865.631893,
         "css_parse_ms": null,
         "cascade_ms": null,
         "box_tree_ms": null,
-        "layout_ms": 605.546739,
-        "text_fallback_ms": 19.246654000000003,
-        "text_shape_ms": 6.813414000000001,
-        "paint_build_ms": 0.39028799999999997,
+        "layout_ms": 831.574477,
+        "text_fallback_ms": 15.729399000000004,
+        "text_shape_ms": 5.598296000000002,
+        "paint_build_ms": 0.301358,
         "paint_optimize_ms": null,
-        "paint_rasterize_ms": 825.632665,
-        "text_rasterize_ms": 7.884121999999996,
+        "paint_rasterize_ms": 353.098777,
+        "text_rasterize_ms": 8.825937000000001,
         "encode_ms": null
       },
       "counts": {
@@ -42,12 +42,27 @@
         "glyphs": 6406,
         "color_glyph_rasters": 0,
         "fallback_cache_hits": 3284,
-        "fallback_cache_misses": 3322
+        "fallback_cache_misses": 3322,
+        "last_resort_font_fallbacks": 0,
+        "glyph_cache_hits": 0,
+        "glyph_cache_misses": 0,
+        "glyph_cache_evictions": 0,
+        "glyph_cache_bytes": 0,
+        "color_glyph_cache_hits": 0,
+        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_evictions": 0,
+        "color_glyph_cache_bytes": 0
       },
       "cascade": {
         "nodes": null,
         "rule_candidates": null,
         "rule_matches": null,
+        "rule_candidates_pruned": null,
+        "rule_candidates_by_id": null,
+        "rule_candidates_by_class": null,
+        "rule_candidates_by_tag": null,
+        "rule_candidates_by_attr": null,
+        "rule_candidates_universal": null,
         "selector_time_ms": null,
         "declaration_time_ms": null,
         "pseudo_time_ms": null,
@@ -86,7 +101,16 @@
         "noop_removed": null,
         "merged_items": null,
         "gradient_ms": 0.0,
-        "gradient_pixels": 0
+        "gradient_pixels": 0,
+        "parallel_tasks": 0,
+        "parallel_threads": 1,
+        "parallel_ms": 0.0,
+        "serial_ms": 353.400135,
+        "filter_cache_hits": 0,
+        "filter_cache_misses": 0,
+        "blur_cache_hits": 0,
+        "blur_cache_misses": 0,
+        "blur_tiles": 0
       },
       "resources": {
         "fetch_counts": {
@@ -94,7 +118,8 @@
           "Stylesheet": 1
         },
         "image_cache_hits": 0,
-        "image_cache_misses": 1
+        "image_cache_misses": 1,
+        "image_decode_ms": 0.743738
       }
     }
   }

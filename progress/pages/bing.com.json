@@ -1,13 +1,13 @@
 {
-  "url": "https://www.bing.com/?toWww=1&redig=A750FA46635A4BFDB5B29C9DE55235EB",
+  "url": "https://www.bing.com/?toWww=1&redig=82CA66E6F1954B2488A5B0C956BDE925",
   "status": "ok",
-  "total_ms": 3706.294571,
+  "total_ms": 894.188916,
   "stages_ms": {
-    "fetch": 2.429469,
-    "css": 2809.83547,
+    "fetch": 2.363807,
+    "css": 364.03042600000003,
     "cascade": 0.0,
-    "layout": 108.12548,
-    "paint": 746.225303
+    "layout": 202.815993,
+    "paint": 147.587797
   },
   "notes": "",
   "hotspot": "css",
@@ -19,35 +19,50 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 2.429469,
-        "css_inlining_ms": 2809.83547,
+        "dom_parse_ms": 2.363807,
+        "css_inlining_ms": 364.03042600000003,
         "css_parse_ms": null,
         "cascade_ms": null,
         "box_tree_ms": null,
-        "layout_ms": 106.209626,
-        "text_fallback_ms": 5.43991,
-        "text_shape_ms": 1.9158540000000006,
-        "paint_build_ms": 0.194284,
+        "layout_ms": 200.527772,
+        "text_fallback_ms": 6.789615,
+        "text_shape_ms": 2.2882209999999983,
+        "paint_build_ms": 0.340988,
         "paint_optimize_ms": null,
-        "paint_rasterize_ms": 744.670802,
-        "text_rasterize_ms": 1.360217,
+        "paint_rasterize_ms": 146.128562,
+        "text_rasterize_ms": 1.1182470000000002,
         "encode_ms": null
       },
       "counts": {
         "dom_nodes": 300,
         "styled_nodes": 300,
         "box_nodes": 151,
-        "fragments": 197,
-        "shaped_runs": 178,
-        "glyphs": 899,
+        "fragments": 195,
+        "shaped_runs": 174,
+        "glyphs": 817,
         "color_glyph_rasters": 0,
-        "fallback_cache_hits": 304,
-        "fallback_cache_misses": 756
+        "fallback_cache_hits": 235,
+        "fallback_cache_misses": 754,
+        "last_resort_font_fallbacks": 0,
+        "glyph_cache_hits": 0,
+        "glyph_cache_misses": 0,
+        "glyph_cache_evictions": 0,
+        "glyph_cache_bytes": 0,
+        "color_glyph_cache_hits": 0,
+        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_evictions": 0,
+        "color_glyph_cache_bytes": 0
       },
       "cascade": {
         "nodes": null,
         "rule_candidates": null,
         "rule_matches": null,
+        "rule_candidates_pruned": null,
+        "rule_candidates_by_id": null,
+        "rule_candidates_by_class": null,
+        "rule_candidates_by_tag": null,
+        "rule_candidates_by_attr": null,
+        "rule_candidates_universal": null,
         "selector_time_ms": null,
         "declaration_time_ms": null,
         "pseudo_time_ms": null,
@@ -59,12 +74,12 @@
         "has_evaluated": null
       },
       "layout": {
-        "intrinsic_lookups": 789,
-        "intrinsic_hits": 480,
-        "intrinsic_stores": 309,
-        "block_intrinsic": 758,
+        "intrinsic_lookups": 791,
+        "intrinsic_hits": 476,
+        "intrinsic_stores": 315,
+        "block_intrinsic": 760,
         "flex_intrinsic": 31,
-        "inline_intrinsic": 93,
+        "inline_intrinsic": 95,
         "layout_cache_lookups": 136,
         "layout_cache_hits": 54,
         "layout_cache_stores": 54,
@@ -85,16 +100,26 @@
         "transparent_removed": null,
         "noop_removed": null,
         "merged_items": null,
-        "gradient_ms": 13.973391999999999,
-        "gradient_pixels": 878400
+        "gradient_ms": 13.762073999999998,
+        "gradient_pixels": 878400,
+        "parallel_tasks": 0,
+        "parallel_threads": 1,
+        "parallel_ms": 0.0,
+        "serial_ms": 146.46955,
+        "filter_cache_hits": 0,
+        "filter_cache_misses": 0,
+        "blur_cache_hits": 0,
+        "blur_cache_misses": 0,
+        "blur_tiles": 0
       },
       "resources": {
         "fetch_counts": {
-          "Image": 2,
+          "Image": 6,
           "Stylesheet": 5
         },
         "image_cache_hits": 0,
-        "image_cache_misses": 2
+        "image_cache_misses": 6,
+        "image_decode_ms": 0.587494
       }
     }
   }

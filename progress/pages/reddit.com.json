@@ -1,13 +1,13 @@
 {
   "url": "https://www.reddit.com/",
   "status": "ok",
-  "total_ms": 2853.7262299999998,
+  "total_ms": 585.0997209999999,
   "stages_ms": {
-    "fetch": 0.5791219999999999,
-    "css": 0.768575,
+    "fetch": 0.698727,
+    "css": 0.834,
     "cascade": 0.0,
-    "layout": 2784.9305940000004,
-    "paint": 13.450801000000002
+    "layout": 427.35131099999995,
+    "paint": 9.794519000000001
   },
   "notes": "",
   "hotspot": "layout",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 0.5791219999999999,
-        "css_inlining_ms": 0.768575,
+        "dom_parse_ms": 0.698727,
+        "css_inlining_ms": 0.834,
         "css_parse_ms": null,
         "cascade_ms": null,
         "box_tree_ms": null,
-        "layout_ms": 2782.954364,
-        "text_fallback_ms": 16.01381600000001,
-        "text_shape_ms": 1.9762299999999997,
-        "paint_build_ms": 0.092631,
+        "layout_ms": 425.85126499999996,
+        "text_fallback_ms": 9.420539999999999,
+        "text_shape_ms": 1.500046,
+        "paint_build_ms": 0.095862,
         "paint_optimize_ms": null,
-        "paint_rasterize_ms": 10.920861,
-        "text_rasterize_ms": 2.437309,
+        "paint_rasterize_ms": 8.086107,
+        "text_rasterize_ms": 1.6125500000000001,
         "encode_ms": null
       },
       "counts": {
@@ -42,12 +42,27 @@
         "glyphs": 1922,
         "color_glyph_rasters": 0,
         "fallback_cache_hits": 1230,
-        "fallback_cache_misses": 688
+        "fallback_cache_misses": 688,
+        "last_resort_font_fallbacks": 0,
+        "glyph_cache_hits": 0,
+        "glyph_cache_misses": 0,
+        "glyph_cache_evictions": 0,
+        "glyph_cache_bytes": 0,
+        "color_glyph_cache_hits": 0,
+        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_evictions": 0,
+        "color_glyph_cache_bytes": 0
       },
       "cascade": {
         "nodes": null,
         "rule_candidates": null,
         "rule_matches": null,
+        "rule_candidates_pruned": null,
+        "rule_candidates_by_id": null,
+        "rule_candidates_by_class": null,
+        "rule_candidates_by_tag": null,
+        "rule_candidates_by_attr": null,
+        "rule_candidates_universal": null,
         "selector_time_ms": null,
         "declaration_time_ms": null,
         "pseudo_time_ms": null,
@@ -86,14 +101,24 @@
         "noop_removed": null,
         "merged_items": null,
         "gradient_ms": 0.0,
-        "gradient_pixels": 0
+        "gradient_pixels": 0,
+        "parallel_tasks": 0,
+        "parallel_threads": 1,
+        "parallel_ms": 0.0,
+        "serial_ms": 8.181969,
+        "filter_cache_hits": 0,
+        "filter_cache_misses": 0,
+        "blur_cache_hits": 0,
+        "blur_cache_misses": 0,
+        "blur_tiles": 0
       },
       "resources": {
         "fetch_counts": {
           "Image": 1
         },
         "image_cache_hits": 1,
-        "image_cache_misses": 1
+        "image_cache_misses": 1,
+        "image_decode_ms": 1.194199
       }
     }
   }

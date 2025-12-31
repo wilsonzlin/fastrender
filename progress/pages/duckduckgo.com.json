@@ -1,13 +1,13 @@
 {
   "url": "https://html.duckduckgo.com/html",
   "status": "ok",
-  "total_ms": 3650.369247,
+  "total_ms": 419.144539,
   "stages_ms": {
-    "fetch": 0.432919,
-    "css": 2240.887474,
+    "fetch": 0.484612,
+    "css": 170.763719,
     "cascade": 0.0,
-    "layout": 39.011823,
-    "paint": 1340.158866
+    "layout": 50.212348,
+    "paint": 16.171592
   },
   "notes": "",
   "hotspot": "css",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 0.432919,
-        "css_inlining_ms": 2240.887474,
+        "dom_parse_ms": 0.484612,
+        "css_inlining_ms": 170.763719,
         "css_parse_ms": null,
         "cascade_ms": null,
         "box_tree_ms": null,
-        "layout_ms": 38.869938,
-        "text_fallback_ms": 0.10520199999999999,
-        "text_shape_ms": 0.141885,
-        "paint_build_ms": 0.049851,
+        "layout_ms": 50.037313,
+        "text_fallback_ms": 0.145602,
+        "text_shape_ms": 0.17503500000000005,
+        "paint_build_ms": 0.057941,
         "paint_optimize_ms": null,
-        "paint_rasterize_ms": 1339.972702,
-        "text_rasterize_ms": 0.136313,
+        "paint_rasterize_ms": 16.046879,
+        "text_rasterize_ms": 0.066772,
         "encode_ms": null
       },
       "counts": {
@@ -42,12 +42,27 @@
         "glyphs": 64,
         "color_glyph_rasters": 0,
         "fallback_cache_hits": 12,
-        "fallback_cache_misses": 40
+        "fallback_cache_misses": 40,
+        "last_resort_font_fallbacks": 0,
+        "glyph_cache_hits": 0,
+        "glyph_cache_misses": 0,
+        "glyph_cache_evictions": 0,
+        "glyph_cache_bytes": 0,
+        "color_glyph_cache_hits": 0,
+        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_evictions": 0,
+        "color_glyph_cache_bytes": 0
       },
       "cascade": {
         "nodes": null,
         "rule_candidates": null,
         "rule_matches": null,
+        "rule_candidates_pruned": null,
+        "rule_candidates_by_id": null,
+        "rule_candidates_by_class": null,
+        "rule_candidates_by_tag": null,
+        "rule_candidates_by_attr": null,
+        "rule_candidates_universal": null,
         "selector_time_ms": null,
         "declaration_time_ms": null,
         "pseudo_time_ms": null,
@@ -85,16 +100,26 @@
         "transparent_removed": null,
         "noop_removed": null,
         "merged_items": null,
-        "gradient_ms": 1.4576,
-        "gradient_pixels": 41000
+        "gradient_ms": 1.0467950000000001,
+        "gradient_pixels": 41000,
+        "parallel_tasks": 0,
+        "parallel_threads": 1,
+        "parallel_ms": 0.0,
+        "serial_ms": 16.10482,
+        "filter_cache_hits": 0,
+        "filter_cache_misses": 0,
+        "blur_cache_hits": 0,
+        "blur_cache_misses": 0,
+        "blur_tiles": 0
       },
       "resources": {
         "fetch_counts": {
-          "Image": 2,
-          "Stylesheet": 1
+          "Stylesheet": 1,
+          "Image": 2
         },
         "image_cache_hits": 0,
-        "image_cache_misses": 2
+        "image_cache_misses": 2,
+        "image_decode_ms": 0.780769
       }
     }
   }

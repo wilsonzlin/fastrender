@@ -1,16 +1,16 @@
 {
   "url": "https://xkcd.com/",
   "status": "ok",
-  "total_ms": 4664.178909,
+  "total_ms": 1308.6864110000001,
   "stages_ms": {
-    "fetch": 0.5939819999999999,
-    "css": 2176.326354,
+    "fetch": 0.5000920000000001,
+    "css": 66.275589,
     "cascade": 0.0,
-    "layout": 2408.7244860000005,
-    "paint": 46.092206
+    "layout": 502.40422300000006,
+    "paint": 542.2459190000001
   },
   "notes": "",
-  "hotspot": "layout",
+  "hotspot": "paint",
   "failure_stage": null,
   "timeout_stage": null,
   "last_good_commit": "833aa788ed1a7102190a18ae8eae4a0af8876bc4",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 0.5939819999999999,
-        "css_inlining_ms": 2176.326354,
+        "dom_parse_ms": 0.5000920000000001,
+        "css_inlining_ms": 66.275589,
         "css_parse_ms": null,
         "cascade_ms": null,
         "box_tree_ms": null,
-        "layout_ms": 2404.2720590000004,
-        "text_fallback_ms": 10.371435,
-        "text_shape_ms": 4.452427,
-        "paint_build_ms": 0.281266,
+        "layout_ms": 497.90457100000003,
+        "text_fallback_ms": 10.379346000000007,
+        "text_shape_ms": 4.499651999999998,
+        "paint_build_ms": 0.4063,
         "paint_optimize_ms": null,
-        "paint_rasterize_ms": 40.751677,
-        "text_rasterize_ms": 5.059262999999997,
+        "paint_rasterize_ms": 536.7975160000001,
+        "text_rasterize_ms": 5.042102999999999,
         "encode_ms": null
       },
       "counts": {
@@ -39,15 +39,30 @@
         "box_nodes": 433,
         "fragments": 337,
         "shaped_runs": 402,
-        "glyphs": 5288,
+        "glyphs": 5384,
         "color_glyph_rasters": 0,
-        "fallback_cache_hits": 2266,
-        "fallback_cache_misses": 1896
+        "fallback_cache_hits": 2310,
+        "fallback_cache_misses": 1904,
+        "last_resort_font_fallbacks": 0,
+        "glyph_cache_hits": 0,
+        "glyph_cache_misses": 0,
+        "glyph_cache_evictions": 0,
+        "glyph_cache_bytes": 0,
+        "color_glyph_cache_hits": 0,
+        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_evictions": 0,
+        "color_glyph_cache_bytes": 0
       },
       "cascade": {
         "nodes": null,
         "rule_candidates": null,
         "rule_matches": null,
+        "rule_candidates_pruned": null,
+        "rule_candidates_by_id": null,
+        "rule_candidates_by_class": null,
+        "rule_candidates_by_tag": null,
+        "rule_candidates_by_attr": null,
+        "rule_candidates_universal": null,
         "selector_time_ms": null,
         "declaration_time_ms": null,
         "pseudo_time_ms": null,
@@ -86,7 +101,16 @@
         "noop_removed": null,
         "merged_items": null,
         "gradient_ms": 0.0,
-        "gradient_pixels": 0
+        "gradient_pixels": 0,
+        "parallel_tasks": 0,
+        "parallel_threads": 1,
+        "parallel_ms": 0.0,
+        "serial_ms": 537.2038160000001,
+        "filter_cache_hits": 0,
+        "filter_cache_misses": 0,
+        "blur_cache_hits": 0,
+        "blur_cache_misses": 0,
+        "blur_tiles": 0
       },
       "resources": {
         "fetch_counts": {
@@ -94,7 +118,8 @@
           "Image": 4
         },
         "image_cache_hits": 1,
-        "image_cache_misses": 4
+        "image_cache_misses": 4,
+        "image_decode_ms": 4.434178
       }
     }
   }

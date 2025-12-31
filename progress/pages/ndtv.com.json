@@ -1,16 +1,16 @@
 {
   "url": "https://www.ndtv.com/",
   "status": "ok",
-  "total_ms": 52.768131000000004,
+  "total_ms": 124.891401,
   "stages_ms": {
-    "fetch": 0.076362,
-    "css": 0.02052,
+    "fetch": 0.12798299999999999,
+    "css": 0.027541,
     "cascade": 0.0,
-    "layout": 5.956238,
-    "paint": 6.343869
+    "layout": 20.429145000000002,
+    "paint": 3.8076220000000003
   },
   "notes": "",
-  "hotspot": "paint",
+  "hotspot": "layout",
   "failure_stage": null,
   "timeout_stage": null,
   "last_good_commit": "833aa788ed1a7102190a18ae8eae4a0af8876bc4",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 0.076362,
-        "css_inlining_ms": 0.02052,
+        "dom_parse_ms": 0.12798299999999999,
+        "css_inlining_ms": 0.027541,
         "css_parse_ms": null,
         "cascade_ms": null,
         "box_tree_ms": null,
-        "layout_ms": 5.604203,
-        "text_fallback_ms": 0.357657,
-        "text_shape_ms": 0.352035,
-        "paint_build_ms": 0.048390999999999997,
+        "layout_ms": 20.145799,
+        "text_fallback_ms": 0.300116,
+        "text_shape_ms": 0.283346,
+        "paint_build_ms": 0.042221,
         "paint_optimize_ms": null,
-        "paint_rasterize_ms": 3.4458100000000003,
-        "text_rasterize_ms": 2.849668,
+        "paint_rasterize_ms": 2.06483,
+        "text_rasterize_ms": 1.700571,
         "encode_ms": null
       },
       "counts": {
@@ -39,15 +39,30 @@
         "box_nodes": 18,
         "fragments": 24,
         "shaped_runs": 8,
-        "glyphs": 378,
+        "glyphs": 366,
         "color_glyph_rasters": 0,
-        "fallback_cache_hits": 110,
-        "fallback_cache_misses": 158
+        "fallback_cache_hits": 106,
+        "fallback_cache_misses": 154,
+        "last_resort_font_fallbacks": 0,
+        "glyph_cache_hits": 0,
+        "glyph_cache_misses": 0,
+        "glyph_cache_evictions": 0,
+        "glyph_cache_bytes": 0,
+        "color_glyph_cache_hits": 0,
+        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_evictions": 0,
+        "color_glyph_cache_bytes": 0
       },
       "cascade": {
         "nodes": null,
         "rule_candidates": null,
         "rule_matches": null,
+        "rule_candidates_pruned": null,
+        "rule_candidates_by_id": null,
+        "rule_candidates_by_class": null,
+        "rule_candidates_by_tag": null,
+        "rule_candidates_by_attr": null,
+        "rule_candidates_universal": null,
         "selector_time_ms": null,
         "declaration_time_ms": null,
         "pseudo_time_ms": null,
@@ -86,12 +101,22 @@
         "noop_removed": null,
         "merged_items": null,
         "gradient_ms": 0.0,
-        "gradient_pixels": 0
+        "gradient_pixels": 0,
+        "parallel_tasks": 0,
+        "parallel_threads": 1,
+        "parallel_ms": 0.0,
+        "serial_ms": 2.1070510000000002,
+        "filter_cache_hits": 0,
+        "filter_cache_misses": 0,
+        "blur_cache_hits": 0,
+        "blur_cache_misses": 0,
+        "blur_tiles": 0
       },
       "resources": {
         "fetch_counts": {},
         "image_cache_hits": 0,
-        "image_cache_misses": 0
+        "image_cache_misses": 0,
+        "image_decode_ms": 0.0
       }
     }
   }

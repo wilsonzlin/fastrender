@@ -1,16 +1,16 @@
 {
   "url": "https://error.alibaba.com/error404.htm",
   "status": "ok",
-  "total_ms": 4500.556299000001,
+  "total_ms": 2186.019896,
   "stages_ms": {
-    "fetch": 2.50507,
-    "css": 591.955803,
+    "fetch": 1.896115,
+    "css": 1353.300551,
     "cascade": 0.0,
-    "layout": 710.96864,
-    "paint": 905.579217
+    "layout": 307.779739,
+    "paint": 25.260239000000002
   },
   "notes": "",
-  "hotspot": "paint",
+  "hotspot": "css",
   "failure_stage": null,
   "timeout_stage": null,
   "last_good_commit": "833aa788ed1a7102190a18ae8eae4a0af8876bc4",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 2.50507,
-        "css_inlining_ms": 591.955803,
+        "dom_parse_ms": 1.896115,
+        "css_inlining_ms": 1353.300551,
         "css_parse_ms": null,
         "cascade_ms": null,
         "box_tree_ms": null,
-        "layout_ms": 708.092069,
-        "text_fallback_ms": 25.277418000000004,
-        "text_shape_ms": 2.8765709999999984,
-        "paint_build_ms": 0.268245,
+        "layout_ms": 304.64551,
+        "text_fallback_ms": 8.457829999999996,
+        "text_shape_ms": 3.134229,
+        "paint_build_ms": 0.29560699999999995,
         "paint_optimize_ms": null,
-        "paint_rasterize_ms": 903.816752,
-        "text_rasterize_ms": 1.4942199999999994,
+        "paint_rasterize_ms": 23.789844000000002,
+        "text_rasterize_ms": 1.1747880000000002,
         "encode_ms": null
       },
       "counts": {
@@ -42,12 +42,27 @@
         "glyphs": 2072,
         "color_glyph_rasters": 0,
         "fallback_cache_hits": 480,
-        "fallback_cache_misses": 2060
+        "fallback_cache_misses": 2060,
+        "last_resort_font_fallbacks": 0,
+        "glyph_cache_hits": 0,
+        "glyph_cache_misses": 0,
+        "glyph_cache_evictions": 0,
+        "glyph_cache_bytes": 0,
+        "color_glyph_cache_hits": 0,
+        "color_glyph_cache_misses": 0,
+        "color_glyph_cache_evictions": 0,
+        "color_glyph_cache_bytes": 0
       },
       "cascade": {
         "nodes": null,
         "rule_candidates": null,
         "rule_matches": null,
+        "rule_candidates_pruned": null,
+        "rule_candidates_by_id": null,
+        "rule_candidates_by_class": null,
+        "rule_candidates_by_tag": null,
+        "rule_candidates_by_attr": null,
+        "rule_candidates_universal": null,
         "selector_time_ms": null,
         "declaration_time_ms": null,
         "pseudo_time_ms": null,
@@ -86,15 +101,25 @@
         "noop_removed": null,
         "merged_items": null,
         "gradient_ms": 0.0,
-        "gradient_pixels": 0
+        "gradient_pixels": 0,
+        "parallel_tasks": 0,
+        "parallel_threads": 1,
+        "parallel_ms": 0.0,
+        "serial_ms": 24.085451000000003,
+        "filter_cache_hits": 0,
+        "filter_cache_misses": 0,
+        "blur_cache_hits": 0,
+        "blur_cache_misses": 0,
+        "blur_tiles": 0
       },
       "resources": {
         "fetch_counts": {
-          "Image": 1,
-          "Stylesheet": 3
+          "Stylesheet": 3,
+          "Image": 1
         },
         "image_cache_hits": 1,
-        "image_cache_misses": 1
+        "image_cache_misses": 1,
+        "image_decode_ms": 0.269436
       }
     }
   }

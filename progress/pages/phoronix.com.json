@@ -1,7 +1,7 @@
 {
-  "url": "https://phoronix.com",
+  "url": "https://www.phoronix.com/",
   "status": "timeout",
-  "total_ms": 5000.0,
+  "total_ms": 4888.398509,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,
@@ -12,7 +12,7 @@
   "notes": "[paint] Invalid paint parameters: Layout failed: MissingContext(\"Shaping failed (fonts=8): Text(ShapingFailed { text: <omitted>, reason: \\\"No suitable font found for cluster ˽\\\\u{365}\\\" })\")",
   "hotspot": "layout",
   "failure_stage": null,
-  "timeout_stage": null,
+  "timeout_stage": "layout",
   "last_good_commit": "",
   "last_regression_commit": ""
 }

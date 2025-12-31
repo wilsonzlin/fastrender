@@ -1,7 +1,7 @@
 {
-  "url": "https://developer.mozilla.org/en-US/docs/Web/CSS/text-combine-upright",
-  "status": "timeout",
-  "total_ms": 5000.0,
+  "url": "https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/text-combine-upright",
+  "status": "error",
+  "total_ms": 3352.3335850000003,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,
