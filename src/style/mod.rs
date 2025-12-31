@@ -1273,13 +1273,29 @@ pub(crate) fn normalize_language_tag(tag: &str) -> String {
     return String::new();
   }
 
-  trimmed
-    .replace('_', "-")
-    .split('-')
-    .filter(|s| !s.is_empty())
-    .map(|s| s.to_ascii_lowercase())
-    .collect::<Vec<_>>()
-    .join("-")
+  // Normalize in a single pass to avoid intermediate allocations.
+  // - underscores become hyphens
+  // - ASCII is lowercased
+  // - consecutive/leading/trailing separators are collapsed
+  let mut out = String::with_capacity(trimmed.len());
+  let mut last_was_sep = true;
+  for ch in trimmed.chars() {
+    let ch = if ch == '_' { '-' } else { ch };
+    if ch == '-' {
+      if last_was_sep {
+        continue;
+      }
+      out.push('-');
+      last_was_sep = true;
+    } else {
+      out.push(ch.to_ascii_lowercase());
+      last_was_sep = false;
+    }
+  }
+  if last_was_sep {
+    out.pop();
+  }
+  out
 }
 
 #[cfg(test)]
