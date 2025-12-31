@@ -2496,6 +2496,41 @@ mod tests {
   }
 
   #[test]
+  fn blur_cache_does_not_store_when_deadline_exceeded_mixed_anisotropic() {
+    let mut cache = BlurCache::new(FilterCacheConfig {
+      max_items: 8,
+      max_bytes: 1024 * 1024,
+    });
+    let mut pixmap = new_pixmap(64, 2048).unwrap();
+    for (i, px) in pixmap.pixels_mut().iter_mut().enumerate() {
+      let a = (i % 256) as u8;
+      *px = PremultipliedColorU8::from_rgba(a, a, a, a).unwrap();
+    }
+    let original = pixmap.data().to_vec();
+
+    // Trigger the mixed box/kernel anisotropic path (sigma_x > FAST_GAUSS_THRESHOLD_SIGMA, sigma_y <= threshold).
+    let cancel: Arc<crate::render_control::CancelCallback> = Arc::new(|| true);
+    let deadline = RenderDeadline::new(None, Some(cancel));
+    let err = with_deadline(Some(&deadline), || {
+      apply_gaussian_blur_cached(&mut pixmap, 12.0, 2.0, Some(&mut cache), 1.0).unwrap_err()
+    });
+    assert!(matches!(
+      err,
+      RenderError::Timeout {
+        stage: RenderStage::Paint,
+        ..
+      }
+    ));
+
+    assert_eq!(pixmap.data(), original.as_slice());
+    assert_eq!(
+      cache.lru.len(),
+      0,
+      "expected blur cache to remain empty when blur fails due to deadline"
+    );
+  }
+
+  #[test]
   fn tile_blur_respects_deadline_cancellation() {
     let mut cache = BlurCache::new(FilterCacheConfig {
       max_items: 0,
