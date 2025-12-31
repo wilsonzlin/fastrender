@@ -2687,7 +2687,7 @@ impl Painter {
           ) {
             apply_mask_with_dirty_bounds_rgba(
               &mut base_painter.pixmap,
-              &rendered.mask,
+              rendered.mask(),
               rendered.dirty,
             );
           }
@@ -2931,9 +2931,25 @@ impl Painter {
       Some(viewport),
     );
     let mut combined: Option<Mask> = None;
-    let mut combined_dirty: Option<ClipMaskDirtyRect> = None;
     let mut combined_bounds: Option<ClipMaskDirtyRect> = None;
     let canvas_clip = layer_bounds;
+
+    let CssMaskScratch {
+      mask: mut reusable_mask,
+      last_dirty: mut reusable_dirty,
+    } = CSS_MASK_SCRATCH.with(|cell| std::mem::take(&mut *cell.borrow_mut()));
+    if let Some(existing) = reusable_mask.as_ref() {
+      if existing.width() != device_size.0 || existing.height() != device_size.1 {
+        reusable_mask = None;
+        reusable_dirty = None;
+      }
+    }
+    if let Some(prev_dirty) = reusable_dirty {
+      if let Some(mask) = reusable_mask.as_mut() {
+        clear_mask_rect(mask, prev_dirty);
+      }
+      reusable_dirty = None;
+    }
 
     for layer in style.mask_layers.iter().rev() {
       let Some(image) = &layer.image else { continue };
@@ -3041,23 +3057,16 @@ impl Painter {
         BackgroundImage::Url(_) | BackgroundImage::None => None,
       };
       let Some(tile) = tile else { continue };
-      let Some(mask_tile) = mask_tile_from_image(&tile, layer.mode) else {
-        continue;
-      };
+      let mut mask_tile = tile;
+      if matches!(layer.mode, MaskMode::Luminance) {
+        let Some(converted) = mask_tile_from_image(&mask_tile, layer.mode) else {
+          continue;
+        };
+        mask_tile = converted;
+      }
 
       let device_clip = self.device_rect(clip_rect_css);
       let dirty = clip_mask_dirty_bounds(device_clip, device_size.0, device_size.1);
-      if let Some(layer_dirty) = dirty {
-        combined_dirty = match combined_dirty {
-          Some(prev) => Some(ClipMaskDirtyRect {
-            x0: prev.x0.min(layer_dirty.x0),
-            y0: prev.y0.min(layer_dirty.y0),
-            x1: prev.x1.max(layer_dirty.x1),
-            y1: prev.y1.max(layer_dirty.y1),
-          }),
-          None => Some(layer_dirty),
-        };
-      }
 
       MASK_LAYER_PIXMAP_SCRATCH.with(|cell| {
         let mut scratch = cell.borrow_mut();
@@ -3116,8 +3125,13 @@ impl Painter {
         }
 
         if combined.is_none() {
-          let mut mask = Mask::new(device_size.0, device_size.1)?;
-          mask.data_mut().fill(0);
+          let mut mask = if let Some(mask) = reusable_mask.take() {
+            mask
+          } else {
+            let mut mask = Mask::new(device_size.0, device_size.1)?;
+            mask.data_mut().fill(0);
+            mask
+          };
           if let Some(dirty) = dirty {
             copy_pixmap_alpha_to_mask(&mut mask, mask_pixmap, dirty);
           }
@@ -3171,10 +3185,20 @@ impl Painter {
       })?;
     }
 
-    combined.map(|mask| RenderedMask {
-      mask,
-      dirty: combined_dirty,
-    })
+    match combined {
+      Some(mask) => Some(RenderedMask {
+        mask: Some(mask),
+        dirty: combined_bounds,
+      }),
+      None => {
+        CSS_MASK_SCRATCH.with(|cell| {
+          let mut scratch = cell.borrow_mut();
+          scratch.mask = reusable_mask;
+          scratch.last_dirty = reusable_dirty;
+        });
+        None
+      }
+    }
   }
 
   /// Paints the background of a fragment
@@ -9894,10 +9918,41 @@ struct ClipMaskDirtyRect {
   y1: u32,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Default)]
+struct CssMaskScratch {
+  mask: Option<Mask>,
+  last_dirty: Option<ClipMaskDirtyRect>,
+}
+
+thread_local! {
+  static CSS_MASK_SCRATCH: RefCell<CssMaskScratch> = RefCell::new(CssMaskScratch::default());
+}
+
+#[derive(Debug)]
 struct RenderedMask {
-  mask: Mask,
+  mask: Option<Mask>,
   dirty: Option<ClipMaskDirtyRect>,
+}
+
+impl RenderedMask {
+  #[inline]
+  fn mask(&self) -> &Mask {
+    self
+      .mask
+      .as_ref()
+      .expect("RenderedMask must contain a mask until dropped")
+  }
+}
+
+impl Drop for RenderedMask {
+  fn drop(&mut self) {
+    let Some(mask) = self.mask.take() else { return };
+    CSS_MASK_SCRATCH.with(|cell| {
+      let mut scratch = cell.borrow_mut();
+      scratch.mask = Some(mask);
+      scratch.last_dirty = self.dirty;
+    });
+  }
 }
 
 #[derive(Default)]
@@ -16501,7 +16556,7 @@ mod tests {
       render_mask_reference(&mut reference_painter, &style, css_bounds, layer_bounds, device_size)
         .expect("mask");
 
-    assert_eq!(optimized.mask.data(), reference.data());
+    assert_eq!(optimized.mask().data(), reference.data());
   }
 
   #[test]
@@ -16531,7 +16586,23 @@ mod tests {
       render_mask_reference(&mut reference_painter, &style, css_bounds, layer_bounds, device_size)
         .expect("mask");
 
-    assert_eq!(optimized.mask.data(), reference.data());
+    assert_eq!(optimized.mask().data(), reference.data());
+
+    let viewport = (optimized_painter.css_width, optimized_painter.css_height);
+    let rects = background_rects(
+      css_bounds.x(),
+      css_bounds.y(),
+      css_bounds.width(),
+      css_bounds.height(),
+      &style,
+      Some(viewport),
+    );
+    let expected_dirty = clip_mask_dirty_bounds(
+      optimized_painter.device_rect(rects.content),
+      device_size.0,
+      device_size.1,
+    );
+    assert_eq!(optimized.dirty, expected_dirty);
   }
 
   #[test]
@@ -16561,7 +16632,120 @@ mod tests {
       render_mask_reference(&mut reference_painter, &style, css_bounds, layer_bounds, device_size)
         .expect("mask");
 
-    assert_eq!(optimized.mask.data(), reference.data());
+    assert_eq!(optimized.mask().data(), reference.data());
+
+    let viewport = (optimized_painter.css_width, optimized_painter.css_height);
+    let rects = background_rects(
+      css_bounds.x(),
+      css_bounds.y(),
+      css_bounds.width(),
+      css_bounds.height(),
+      &style,
+      Some(viewport),
+    );
+    let expected_dirty = clip_mask_dirty_bounds(
+      optimized_painter.device_rect(rects.content),
+      device_size.0,
+      device_size.1,
+    );
+    assert_eq!(optimized.dirty, expected_dirty);
+  }
+
+  #[test]
+  fn render_mask_reuses_combined_mask_scratch_between_scopes() {
+    CSS_MASK_SCRATCH.with(|cell| {
+      *cell.borrow_mut() = CssMaskScratch::default();
+    });
+
+    let mut style = ComputedStyle::default();
+    style.mask_layers = vec![make_alpha_gradient_mask_layer(
+      MaskClip::BorderBox,
+      MaskComposite::Add,
+      0.0,
+      1.0,
+    )];
+
+    let css_bounds = Rect::from_xywh(0.0, 0.0, 32.0, 32.0);
+    let layer_bounds = css_bounds;
+    let device_size = (64, 64);
+
+    let ptr_first = {
+      let mut painter = Painter::new(device_size.0, device_size.1, Rgba::WHITE).expect("painter");
+      let rendered = painter
+        .render_mask(&style, css_bounds, layer_bounds, device_size)
+        .expect("mask");
+      rendered.mask().data().as_ptr()
+    };
+
+    let ptr_second = {
+      let mut painter = Painter::new(device_size.0, device_size.1, Rgba::WHITE).expect("painter");
+      let rendered = painter
+        .render_mask(&style, css_bounds, layer_bounds, device_size)
+        .expect("mask");
+      rendered.mask().data().as_ptr()
+    };
+
+    assert_eq!(
+      ptr_first, ptr_second,
+      "expected render_mask to reuse the combined mask allocation between scopes"
+    );
+  }
+
+  #[test]
+  fn render_mask_clears_previous_combined_mask_scratch_between_calls() {
+    CSS_MASK_SCRATCH.with(|cell| {
+      *cell.borrow_mut() = CssMaskScratch::default();
+    });
+
+    let css_bounds = Rect::from_xywh(0.0, 0.0, 32.0, 32.0);
+    let layer_bounds = css_bounds;
+    let device_size = (64, 64);
+
+    let mut border_style = ComputedStyle::default();
+    border_style.mask_layers = vec![make_alpha_gradient_mask_layer(
+      MaskClip::BorderBox,
+      MaskComposite::Add,
+      0.0,
+      1.0,
+    )];
+
+    let mut content_style = ComputedStyle::default();
+    content_style.padding_top = Length::px(4.0);
+    content_style.padding_right = Length::px(4.0);
+    content_style.padding_bottom = Length::px(4.0);
+    content_style.padding_left = Length::px(4.0);
+    content_style.mask_layers = vec![make_alpha_gradient_mask_layer(
+      MaskClip::ContentBox,
+      MaskComposite::Add,
+      1.0,
+      0.0,
+    )];
+
+    {
+      let mut painter = Painter::new(device_size.0, device_size.1, Rgba::WHITE).expect("painter");
+      let _mask = painter
+        .render_mask(&border_style, css_bounds, layer_bounds, device_size)
+        .expect("mask");
+    }
+
+    let mut optimized_painter =
+      Painter::new(device_size.0, device_size.1, Rgba::WHITE).expect("painter");
+    let optimized = optimized_painter
+      .render_mask(&content_style, css_bounds, layer_bounds, device_size)
+      .expect("mask");
+
+    let mut reference_painter =
+      Painter::new(device_size.0, device_size.1, Rgba::WHITE).expect("painter");
+    let reference = render_mask_reference(
+      &mut reference_painter,
+      &content_style,
+      css_bounds,
+      layer_bounds,
+      device_size,
+    )
+    .expect("mask");
+
+    assert_eq!(optimized.mask().data(), reference.data());
   }
 
   #[test]
