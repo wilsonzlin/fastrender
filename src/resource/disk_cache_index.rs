@@ -25,6 +25,7 @@ struct IndexState {
   order: BTreeMap<OrderKey, String>,
   total_bytes: u64,
   journal_len: u64,
+  journal_append: Option<File>,
   next_order: u64,
   #[cfg(test)]
   rebuilds: usize,
@@ -261,10 +262,6 @@ impl DiskCacheIndex {
     }
 
     let start_offset = state.journal_len;
-    let mut file = OpenOptions::new()
-      .create(true)
-      .append(true)
-      .open(&self.journal_path)?;
 
     let mut buf = Vec::new();
     for record in records {
@@ -273,10 +270,12 @@ impl DiskCacheIndex {
       buf.extend_from_slice(&line);
     }
 
-    file.write_all(&buf)?;
-    file.flush()?;
-    let end_offset = file.stream_position()?;
-    drop(file);
+    let end_offset = {
+      let file = self.append_file_locked(state)?;
+      file.write_all(&buf)?;
+      file.flush()?;
+      file.stream_position()?
+    };
 
     let actual_start = end_offset.saturating_sub(buf.len() as u64);
     if actual_start == start_offset {
@@ -465,6 +464,7 @@ impl DiskCacheIndex {
     state.order.clear();
     state.total_bytes = 0;
     state.journal_len = 0;
+    state.journal_append = None;
     state.next_order = 0;
 
     let mut entries: Vec<(u64, u64, PathBuf, PathBuf, String)> = Vec::new();
@@ -538,6 +538,7 @@ impl DiskCacheIndex {
   }
 
   fn write_full_journal(&self, state: &mut IndexState) -> std::io::Result<()> {
+    state.journal_append = None;
     let mut file = OpenOptions::new()
       .create(true)
       .write(true)
@@ -571,17 +572,15 @@ impl DiskCacheIndex {
     record: &JournalRecord,
   ) -> std::io::Result<()> {
     let start_offset = state.journal_len;
-    let mut file = OpenOptions::new()
-      .create(true)
-      .append(true)
-      .open(&self.journal_path)?;
     let mut bytes = serde_json::to_vec(record)?;
     bytes.push(b'\n');
 
-    file.write_all(&bytes)?;
-    file.flush()?;
-    let end_offset = file.stream_position()?;
-    drop(file);
+    let end_offset = {
+      let file = self.append_file_locked(state)?;
+      file.write_all(&bytes)?;
+      file.flush()?;
+      file.stream_position()?
+    };
 
     let expected_start = start_offset;
     let actual_start = end_offset.saturating_sub(bytes.len() as u64);
@@ -633,6 +632,18 @@ impl DiskCacheIndex {
       rebuilds: state.rebuilds,
       journal_replays: state.journal_replays,
     }
+  }
+
+  fn append_file_locked(&self, state: &mut IndexState) -> std::io::Result<&mut File> {
+    if state.journal_append.is_none() {
+      state.journal_append = Some(
+        OpenOptions::new()
+          .create(true)
+          .append(true)
+          .open(&self.journal_path)?,
+      );
+    }
+    Ok(state.journal_append.as_mut().expect("just set"))
   }
 }
 
