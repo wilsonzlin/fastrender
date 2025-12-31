@@ -547,13 +547,17 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       let meta_path = self.meta_path_for_data(&data_path);
 
       match self.try_read_snapshot(&key, &current, &data_path, &meta_path) {
-        SnapshotRead::Hit(snapshot) => return Some((current, snapshot)),
+        SnapshotRead::Hit(snapshot) => {
+          super::record_disk_cache_hit();
+          return Some((current, snapshot));
+        }
         SnapshotRead::Locked => {
           let max_wait = self.deadline_aware_lock_wait(READ_LOCK_WAIT_TIMEOUT);
           if !max_wait.is_zero() && self.wait_for_unlock(&data_path, max_wait) {
             if let SnapshotRead::Hit(snapshot) =
               self.try_read_snapshot(&key, &current, &data_path, &meta_path)
             {
+              super::record_disk_cache_hit();
               return Some((current, snapshot));
             }
           }
@@ -562,11 +566,13 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       }
 
       let Some(next) = self.read_alias_target(&current) else {
+        super::record_disk_cache_miss();
         return None;
       };
 
       if hops >= MAX_ALIAS_HOPS || next == current {
         self.remove_alias_for(&current);
+        super::record_disk_cache_miss();
         return None;
       }
 

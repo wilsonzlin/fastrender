@@ -1784,6 +1784,14 @@ pub struct ResourceDiagnostics {
   pub resource_cache_revalidated_hits: Option<usize>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub resource_cache_misses: Option<usize>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub disk_cache_hits: Option<usize>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub disk_cache_misses: Option<usize>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub network_fetches: Option<usize>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub network_fetch_ms: Option<f64>,
   pub image_cache_hits: Option<usize>,
   pub image_cache_misses: Option<usize>,
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -1842,6 +1850,10 @@ fn merge_resource_cache_diagnostics(stats: &mut RenderStats) {
     stats.resources.resource_cache_fresh_hits = Some(resource_stats.fresh_hits);
     stats.resources.resource_cache_revalidated_hits = Some(resource_stats.revalidated_hits);
     stats.resources.resource_cache_misses = Some(resource_stats.misses);
+    stats.resources.disk_cache_hits = Some(resource_stats.disk_cache_hits);
+    stats.resources.disk_cache_misses = Some(resource_stats.disk_cache_misses);
+    stats.resources.network_fetches = Some(resource_stats.network_fetches);
+    stats.resources.network_fetch_ms = Some(resource_stats.network_fetch_ms);
   }
 }
 

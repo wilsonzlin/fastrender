@@ -29,20 +29,19 @@ use flate2::read::{DeflateDecoder, GzDecoder, ZlibDecoder};
 use http::HeaderMap;
 use httpdate::parse_http_date;
 use lru::LruCache;
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::io::{self, Cursor, Read};
 use std::path::Path;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::Condvar;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::thread;
 use std::time::Duration;
+use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use ureq::ResponseExt;
@@ -1426,9 +1425,11 @@ impl HttpFetcher {
           }
         }
 
+        let mut network_timer = start_network_fetch_diagnostics();
         let mut response = match request.call() {
           Ok(resp) => resp,
           Err(err) => {
+            finish_network_fetch_diagnostics(network_timer.take());
             if attempt < max_attempts && is_retryable_ureq_error(&err) {
               let mut backoff = compute_backoff(&self.retry_policy, attempt, &current);
               let mut can_retry = true;
@@ -1491,6 +1492,7 @@ impl HttpFetcher {
               .and_then(|base| base.join(loc).ok())
               .map(|u| u.to_string())
               .unwrap_or_else(|| loc.to_string());
+            finish_network_fetch_diagnostics(network_timer.take());
             self.policy.ensure_url_allowed(&next)?;
             current = next;
             validators = None;
@@ -1541,9 +1543,11 @@ impl HttpFetcher {
                 Err(ContentDecodeError::DecompressionFailed { .. })
                   if accept_encoding.is_none() =>
                 {
+                  finish_network_fetch_diagnostics(network_timer.take());
                   return self.fetch_http_with_accept(&current, Some("identity"), validators);
                 }
                 Err(err) => {
+                  finish_network_fetch_diagnostics(network_timer.take());
                   let err =
                     err.into_resource_error(current.clone(), status.as_u16(), final_url.clone());
                   return Err(Error::Resource(err));
@@ -1553,6 +1557,7 @@ impl HttpFetcher {
             let is_retryable_status = retryable_http_status(status_code);
 
             if bytes.is_empty() && !http_status_allows_empty_body(status_code) {
+              finish_network_fetch_diagnostics(network_timer.take());
               let mut can_retry = attempt < max_attempts;
               if can_retry {
                 let mut backoff = compute_backoff(&self.retry_policy, attempt, &current);
@@ -1599,6 +1604,7 @@ impl HttpFetcher {
             }
 
             if is_retryable_status {
+              finish_network_fetch_diagnostics(network_timer.take());
               let mut can_retry = attempt < max_attempts;
               if can_retry {
                 let mut backoff = compute_backoff(&self.retry_policy, attempt, &current);
@@ -1644,6 +1650,7 @@ impl HttpFetcher {
             }
 
             if bytes.len() > allowed_limit {
+              finish_network_fetch_diagnostics(network_timer.take());
               if let Some(remaining) = self.policy.remaining_budget() {
                 if bytes.len() > remaining {
                   let err = ResourceError::new(
@@ -1673,6 +1680,7 @@ impl HttpFetcher {
               return Err(Error::Resource(err));
             }
 
+            finish_network_fetch_diagnostics(network_timer.take());
             self.policy.reserve_budget(bytes.len())?;
             let mut resource =
               FetchedResource::with_final_url(bytes, content_type, Some(final_url));
@@ -1683,6 +1691,7 @@ impl HttpFetcher {
             return Ok(resource);
           }
           Err(err) => {
+            finish_network_fetch_diagnostics(network_timer.take());
             if attempt < max_attempts && is_retryable_io_error(&err) {
               let mut backoff = compute_backoff(&self.retry_policy, attempt, &current);
               let mut can_retry = true;
@@ -2033,45 +2042,142 @@ pub struct ResourceCacheDiagnostics {
   pub fresh_hits: usize,
   pub revalidated_hits: usize,
   pub misses: usize,
+  pub disk_cache_hits: usize,
+  pub disk_cache_misses: usize,
+  pub network_fetches: usize,
+  pub network_fetch_ms: f64,
 }
 
-thread_local! {
-  static RESOURCE_CACHE_DIAGNOSTICS: RefCell<Option<ResourceCacheDiagnostics>> =
-    RefCell::new(None);
+struct ResourceCacheDiagnosticsState {
+  enabled: AtomicBool,
+  fresh_hits: AtomicUsize,
+  revalidated_hits: AtomicUsize,
+  misses: AtomicUsize,
+  disk_cache_hits: AtomicUsize,
+  disk_cache_misses: AtomicUsize,
+  network_fetches: AtomicUsize,
+  network_fetch_ns: AtomicU64,
 }
+
+static RESOURCE_CACHE_DIAGNOSTICS: ResourceCacheDiagnosticsState = ResourceCacheDiagnosticsState {
+  enabled: AtomicBool::new(false),
+  fresh_hits: AtomicUsize::new(0),
+  revalidated_hits: AtomicUsize::new(0),
+  misses: AtomicUsize::new(0),
+  disk_cache_hits: AtomicUsize::new(0),
+  disk_cache_misses: AtomicUsize::new(0),
+  network_fetches: AtomicUsize::new(0),
+  network_fetch_ns: AtomicU64::new(0),
+};
 
 pub(crate) fn enable_resource_cache_diagnostics() {
-  RESOURCE_CACHE_DIAGNOSTICS.with(|cell| {
-    *cell.borrow_mut() = Some(ResourceCacheDiagnostics::default());
-  });
+  RESOURCE_CACHE_DIAGNOSTICS.fresh_hits.store(0, Ordering::Relaxed);
+  RESOURCE_CACHE_DIAGNOSTICS
+    .revalidated_hits
+    .store(0, Ordering::Relaxed);
+  RESOURCE_CACHE_DIAGNOSTICS.misses.store(0, Ordering::Relaxed);
+  RESOURCE_CACHE_DIAGNOSTICS
+    .disk_cache_hits
+    .store(0, Ordering::Relaxed);
+  RESOURCE_CACHE_DIAGNOSTICS
+    .disk_cache_misses
+    .store(0, Ordering::Relaxed);
+  RESOURCE_CACHE_DIAGNOSTICS
+    .network_fetches
+    .store(0, Ordering::Relaxed);
+  RESOURCE_CACHE_DIAGNOSTICS
+    .network_fetch_ns
+    .store(0, Ordering::Relaxed);
+  RESOURCE_CACHE_DIAGNOSTICS.enabled.store(true, Ordering::Relaxed);
 }
 
 pub(crate) fn take_resource_cache_diagnostics() -> Option<ResourceCacheDiagnostics> {
-  RESOURCE_CACHE_DIAGNOSTICS.with(|cell| cell.borrow_mut().take())
+  if !RESOURCE_CACHE_DIAGNOSTICS.enabled.swap(false, Ordering::Relaxed) {
+    return None;
+  }
+  let network_fetch_ns = RESOURCE_CACHE_DIAGNOSTICS
+    .network_fetch_ns
+    .swap(0, Ordering::Relaxed);
+  Some(ResourceCacheDiagnostics {
+    fresh_hits: RESOURCE_CACHE_DIAGNOSTICS.fresh_hits.swap(0, Ordering::Relaxed),
+    revalidated_hits: RESOURCE_CACHE_DIAGNOSTICS
+      .revalidated_hits
+      .swap(0, Ordering::Relaxed),
+    misses: RESOURCE_CACHE_DIAGNOSTICS.misses.swap(0, Ordering::Relaxed),
+    disk_cache_hits: RESOURCE_CACHE_DIAGNOSTICS
+      .disk_cache_hits
+      .swap(0, Ordering::Relaxed),
+    disk_cache_misses: RESOURCE_CACHE_DIAGNOSTICS
+      .disk_cache_misses
+      .swap(0, Ordering::Relaxed),
+    network_fetches: RESOURCE_CACHE_DIAGNOSTICS
+      .network_fetches
+      .swap(0, Ordering::Relaxed),
+    network_fetch_ms: (network_fetch_ns as f64) / 1_000_000.0,
+  })
 }
 
 fn record_cache_fresh_hit() {
-  RESOURCE_CACHE_DIAGNOSTICS.with(|cell| {
-    if let Some(stats) = cell.borrow_mut().as_mut() {
-      stats.fresh_hits += 1;
-    }
-  });
+  if RESOURCE_CACHE_DIAGNOSTICS.enabled.load(Ordering::Relaxed) {
+    RESOURCE_CACHE_DIAGNOSTICS
+      .fresh_hits
+      .fetch_add(1, Ordering::Relaxed);
+  }
 }
 
 fn record_cache_revalidated_hit() {
-  RESOURCE_CACHE_DIAGNOSTICS.with(|cell| {
-    if let Some(stats) = cell.borrow_mut().as_mut() {
-      stats.revalidated_hits += 1;
-    }
-  });
+  if RESOURCE_CACHE_DIAGNOSTICS.enabled.load(Ordering::Relaxed) {
+    RESOURCE_CACHE_DIAGNOSTICS
+      .revalidated_hits
+      .fetch_add(1, Ordering::Relaxed);
+  }
 }
 
 fn record_cache_miss() {
-  RESOURCE_CACHE_DIAGNOSTICS.with(|cell| {
-    if let Some(stats) = cell.borrow_mut().as_mut() {
-      stats.misses += 1;
-    }
-  });
+  if RESOURCE_CACHE_DIAGNOSTICS.enabled.load(Ordering::Relaxed) {
+    RESOURCE_CACHE_DIAGNOSTICS
+      .misses
+      .fetch_add(1, Ordering::Relaxed);
+  }
+}
+
+#[cfg(feature = "disk_cache")]
+fn record_disk_cache_hit() {
+  if RESOURCE_CACHE_DIAGNOSTICS.enabled.load(Ordering::Relaxed) {
+    RESOURCE_CACHE_DIAGNOSTICS
+      .disk_cache_hits
+      .fetch_add(1, Ordering::Relaxed);
+  }
+}
+
+#[cfg(feature = "disk_cache")]
+fn record_disk_cache_miss() {
+  if RESOURCE_CACHE_DIAGNOSTICS.enabled.load(Ordering::Relaxed) {
+    RESOURCE_CACHE_DIAGNOSTICS
+      .disk_cache_misses
+      .fetch_add(1, Ordering::Relaxed);
+  }
+}
+
+fn start_network_fetch_diagnostics() -> Option<Instant> {
+  if !RESOURCE_CACHE_DIAGNOSTICS.enabled.load(Ordering::Relaxed) {
+    return None;
+  }
+  RESOURCE_CACHE_DIAGNOSTICS
+    .network_fetches
+    .fetch_add(1, Ordering::Relaxed);
+  Some(Instant::now())
+}
+
+fn finish_network_fetch_diagnostics(start: Option<Instant>) {
+  let Some(start) = start else {
+    return;
+  };
+  let elapsed = start.elapsed();
+  let nanos = u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX);
+  RESOURCE_CACHE_DIAGNOSTICS
+    .network_fetch_ns
+    .fetch_add(nanos, Ordering::Relaxed);
 }
 
 /// Reserve bytes against a configured policy for a resource being returned to a caller.
@@ -3044,6 +3150,7 @@ mod tests {
   use std::sync::Arc;
   use std::sync::Barrier;
   use std::sync::Mutex;
+  use std::sync::OnceLock;
   use std::thread;
   use std::time::Instant;
 
@@ -3056,6 +3163,141 @@ mod tests {
       }
       Err(err) => panic!("bind {context}: {err}"),
     }
+  }
+
+  static RESOURCE_CACHE_DIAGNOSTICS_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+  fn resource_cache_diagnostics_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    RESOURCE_CACHE_DIAGNOSTICS_TEST_LOCK
+      .get_or_init(|| Mutex::new(()))
+      .lock()
+      .unwrap()
+  }
+
+  struct ResourceCacheDiagnosticsGuard;
+
+  impl ResourceCacheDiagnosticsGuard {
+    fn new() -> Self {
+      enable_resource_cache_diagnostics();
+      Self
+    }
+  }
+
+  impl Drop for ResourceCacheDiagnosticsGuard {
+    fn drop(&mut self) {
+      let _ = take_resource_cache_diagnostics();
+    }
+  }
+
+  #[test]
+  fn resource_cache_diagnostics_aggregate_across_threads() {
+    let _lock = resource_cache_diagnostics_test_lock();
+    let _guard = ResourceCacheDiagnosticsGuard::new();
+
+    let threads = 4usize;
+    let barrier = Arc::new(Barrier::new(threads + 1));
+    let mut handles = Vec::new();
+    for _ in 0..threads {
+      let barrier = Arc::clone(&barrier);
+      handles.push(thread::spawn(move || {
+        barrier.wait();
+        for _ in 0..10 {
+          record_cache_fresh_hit();
+        }
+        for _ in 0..7 {
+          record_cache_revalidated_hit();
+        }
+        for _ in 0..5 {
+          record_cache_miss();
+        }
+      }));
+    }
+    barrier.wait();
+
+    for handle in handles {
+      handle.join().unwrap();
+    }
+
+    let stats = take_resource_cache_diagnostics().expect("diagnostics should be enabled");
+    assert_eq!(stats.fresh_hits, threads * 10);
+    assert_eq!(stats.revalidated_hits, threads * 7);
+    assert_eq!(stats.misses, threads * 5);
+  }
+
+  #[test]
+  fn resource_cache_diagnostics_record_network_fetches() {
+    let _lock = resource_cache_diagnostics_test_lock();
+    let Some(listener) = try_bind_localhost("resource_cache_diagnostics_record_network_fetches")
+    else {
+      return;
+    };
+
+    let addr = listener.local_addr().unwrap();
+    let _guard = ResourceCacheDiagnosticsGuard::new();
+    let handle = thread::spawn(move || {
+      let (mut stream, _) = listener.accept().unwrap();
+      let mut buf = [0u8; 1024];
+      let _ = stream.read(&mut buf);
+      let body = b"ok";
+      let headers = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+      );
+      stream.write_all(headers.as_bytes()).unwrap();
+      stream.write_all(body).unwrap();
+    });
+
+    let fetcher = HttpFetcher::new().with_timeout(Duration::from_secs(2));
+    let url = format!("http://{}/", addr);
+    let res = fetcher.fetch(&url).expect("fetch should succeed");
+    assert_eq!(res.bytes, b"ok");
+    handle.join().unwrap();
+
+    let stats = take_resource_cache_diagnostics().expect("diagnostics should be enabled");
+    assert_eq!(stats.network_fetches, 1);
+    assert!(stats.network_fetch_ms >= 0.0);
+  }
+
+  #[cfg(feature = "disk_cache")]
+  #[test]
+  fn resource_cache_diagnostics_record_disk_cache_hits() {
+    let _lock = resource_cache_diagnostics_test_lock();
+
+    #[derive(Clone)]
+    struct SeedFetcher;
+
+    impl ResourceFetcher for SeedFetcher {
+      fn fetch(&self, url: &str) -> Result<FetchedResource> {
+        let mut resource =
+          FetchedResource::new(b"cached".to_vec(), Some("text/plain".to_string()));
+        resource.final_url = Some(url.to_string());
+        Ok(resource)
+      }
+    }
+
+    #[derive(Clone)]
+    struct PanicFetcher;
+
+    impl ResourceFetcher for PanicFetcher {
+      fn fetch(&self, _url: &str) -> Result<FetchedResource> {
+        panic!("inner fetcher should not be called for disk cache hit");
+      }
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let url = "https://example.com/resource";
+    let seed = DiskCachingFetcher::new(SeedFetcher, tmp.path());
+    let first = seed.fetch(url).expect("seed disk cache");
+    assert_eq!(first.bytes, b"cached");
+
+    let disk = DiskCachingFetcher::new(PanicFetcher, tmp.path());
+    let _guard = ResourceCacheDiagnosticsGuard::new();
+    let second = disk.fetch(url).expect("disk cache hit fetch");
+    assert_eq!(second.bytes, b"cached");
+
+    let stats = take_resource_cache_diagnostics().expect("diagnostics should be enabled");
+    assert_eq!(stats.disk_cache_hits, 1);
+    assert_eq!(stats.disk_cache_misses, 0);
   }
 
   #[test]
