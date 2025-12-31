@@ -725,7 +725,7 @@ fn select_color_scheme(
 
 fn selector_has_nonempty_content(decls: &[Declaration]) -> bool {
   for decl in decls {
-    if decl.property.eq_ignore_ascii_case("content") {
+    if decl.property == "content" {
       // Treat any value other than 'none' or 'normal' as generating content (including empty strings)
       if let PropertyValue::Keyword(kw) = &decl.value {
         if kw.eq_ignore_ascii_case("none") || kw.eq_ignore_ascii_case("normal") {
@@ -2937,7 +2937,7 @@ impl<'a> RuleIndex<'a> {
         .rule
         .declarations
         .iter()
-        .any(|decl| decl.property.eq_ignore_ascii_case("content"));
+        .any(|decl| decl.property == "content");
       let rule_idx = index.rules.len();
       index.rules.push(rule);
       index.rule_sets_content.push(sets_content);
