@@ -8,16 +8,8 @@ use std::time::{Duration, Instant};
 
 const MAX_WAIT: Duration = Duration::from_secs(3);
 
-fn try_bind_localhost(context: &str) -> Option<TcpListener> {
-  match TcpListener::bind("127.0.0.1:0") {
-    Ok(listener) => Some(listener),
-    Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
-      eprintln!("skipping {context}: cannot bind localhost in this environment: {err}");
-      None
-    }
-    Err(err) => panic!("bind {context}: {err}"),
-  }
-}
+mod test_support;
+use test_support::net::try_bind_localhost;
 
 fn read_request(stream: &mut std::net::TcpStream) -> Vec<u8> {
   let mut buf = Vec::new();

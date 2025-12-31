@@ -2,11 +2,14 @@ use fastrender::api::{FastRender, RenderArtifactRequest, RenderOptions};
 use fastrender::ResourceKind;
 use std::fmt::Write as FmtWrite;
 use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpListener};
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
+
+mod test_support;
+use test_support::net::try_bind_localhost;
 
 #[derive(Clone)]
 struct TestResponse {
@@ -23,10 +26,11 @@ struct TestServer {
 
 impl TestServer {
   fn start(
+    context: &str,
     expected: usize,
     handler: impl Fn(&str) -> TestResponse + Send + Sync + 'static,
-  ) -> Self {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+  ) -> Option<Self> {
+    let listener = try_bind_localhost(context)?;
     listener
       .set_nonblocking(true)
       .expect("set nonblocking listener");
@@ -93,11 +97,11 @@ impl TestServer {
       }
     });
 
-    Self {
+    Some(Self {
       addr,
       served,
       handle,
-    }
+    })
   }
 
   fn url(&self, path: &str) -> String {
@@ -115,7 +119,7 @@ impl TestServer {
 
 #[test]
 fn same_origin_stylesheet_allowed() {
-  let server = TestServer::start(1, |path| {
+  let Some(server) = TestServer::start("same_origin_stylesheet_allowed", 1, |path| {
     if path == "/style.css" {
       return TestResponse {
         status: 200,
@@ -128,7 +132,9 @@ fn same_origin_stylesheet_allowed() {
       headers: Vec::new(),
       body: String::new(),
     }
-  });
+  }) else {
+    return;
+  };
 
   let html = r#"<!doctype html><link rel="stylesheet" href="/style.css"><body>ok</body>"#;
   let base = format!("http://{}/", server.addr);
@@ -157,16 +163,21 @@ fn same_origin_stylesheet_allowed() {
 
 #[test]
 fn cross_origin_stylesheet_blocked() {
-  let origin_server = TestServer::start(0, |_path| TestResponse {
+  let Some(origin_server) = TestServer::start("cross_origin_stylesheet_blocked origin", 0, |_path| TestResponse {
     status: 404,
     headers: Vec::new(),
     body: String::new(),
-  });
-  let blocked_server = TestServer::start(0, |_path| TestResponse {
+  }) else {
+    return;
+  };
+  let Some(blocked_server) = TestServer::start("cross_origin_stylesheet_blocked blocked", 0, |_path| TestResponse {
     status: 200,
     headers: vec![("Content-Type".into(), "text/css".into())],
     body: "body { color: red; }".into(),
-  });
+  }) else {
+    origin_server.join();
+    return;
+  };
 
   let css_url = blocked_server.url("blocked.css");
   let html = format!(
@@ -208,18 +219,23 @@ fn cross_origin_stylesheet_blocked() {
 
 #[test]
 fn redirects_to_cross_origin_are_blocked() {
-  let cross_origin = TestServer::start(1, |_path| TestResponse {
+  let Some(cross_origin) = TestServer::start("redirects_to_cross_origin_are_blocked cross_origin", 1, |_path| TestResponse {
     status: 200,
     headers: vec![("Content-Type".into(), "text/css".into())],
     body: "body { color: blue; }".into(),
-  });
+  }) else {
+    return;
+  };
 
   let redirect_target = cross_origin.url("final.css");
-  let redirect_origin = TestServer::start(1, move |_path| TestResponse {
+  let Some(redirect_origin) = TestServer::start("redirects_to_cross_origin_are_blocked redirect_origin", 1, move |_path| TestResponse {
     status: 302,
     headers: vec![("Location".into(), redirect_target.clone())],
     body: String::new(),
-  });
+  }) else {
+    cross_origin.join();
+    return;
+  };
 
   let html = format!(
     "<!doctype html><link rel=\"stylesheet\" href=\"{}\">",

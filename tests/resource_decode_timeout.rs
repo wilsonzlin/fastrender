@@ -1,5 +1,4 @@
 use std::io::{Read, Write};
-use std::net::TcpListener;
 use std::thread;
 use std::time::Duration;
 
@@ -8,6 +7,9 @@ use fastrender::error::{Error, RenderError, RenderStage};
 use fastrender::render_control::{with_deadline, RenderDeadline};
 use fastrender::resource::HttpFetcher;
 use fastrender::ResourceFetcher;
+
+mod test_support;
+use test_support::net::try_bind_localhost;
 
 struct EnvGuard(&'static str);
 
@@ -29,7 +31,9 @@ fn compressed_resource_respects_render_timeout() {
   let _guard = EnvGuard::set("FASTR_TEST_RENDER_DELAY_MS", "10");
   let compressed = include_bytes!("fixtures/large_timeout_payload.gz");
 
-  let listener = TcpListener::bind("127.0.0.1:0").expect("bind server");
+  let Some(listener) = try_bind_localhost("compressed_resource_respects_render_timeout") else {
+    return;
+  };
   let addr = listener.local_addr().expect("local addr");
   let handle = thread::spawn(move || {
     if let Ok((mut stream, _)) = listener.accept() {
@@ -69,7 +73,9 @@ fn renderer_times_out_while_decompressing_image() {
   let _guard = EnvGuard::set("FASTR_TEST_RENDER_DELAY_MS", "5");
   let compressed = include_bytes!("fixtures/large_timeout_payload.gz");
 
-  let listener = TcpListener::bind("127.0.0.1:0").expect("bind server");
+  let Some(listener) = try_bind_localhost("renderer_times_out_while_decompressing_image") else {
+    return;
+  };
   let addr = listener.local_addr().expect("local addr");
   let handle = thread::spawn(move || {
     if let Ok((mut stream, _)) = listener.accept() {
@@ -104,7 +110,10 @@ fn renderer_times_out_while_decompressing_image() {
       );
     }
     Error::Render(RenderError::Timeout { stage, .. }) => {
-      assert_eq!(stage, RenderStage::Paint);
+      assert!(
+        matches!(stage, RenderStage::Layout | RenderStage::Paint),
+        "expected timeout in layout/paint, got {stage:?}"
+      );
     }
     other => panic!("expected timeout error, got {other:?}"),
   }

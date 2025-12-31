@@ -1,6 +1,6 @@
+use crate::test_support::net::try_bind_localhost;
 use std::io::Read;
 use std::io::Write;
-use std::net::TcpListener;
 use std::process::Command;
 use std::thread;
 
@@ -17,7 +17,10 @@ fn file_and_url_paths_render_the_same_with_external_css() {
   std::fs::write(&html_path, html).expect("write html");
   std::fs::write(&css_path, css).expect("write css");
 
-  let listener = TcpListener::bind("127.0.0.1:0").expect("bind http listener");
+  let Some(listener) = try_bind_localhost("file_and_url_paths_render_the_same_with_external_css")
+  else {
+    return;
+  };
   let addr = listener.local_addr().expect("addr");
   let html_body = html.to_string();
   let css_body = css.to_string();

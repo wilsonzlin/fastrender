@@ -13,16 +13,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 const MAX_WAIT: Duration = Duration::from_secs(3);
 
-fn try_bind_localhost(context: &str) -> Option<TcpListener> {
-  match TcpListener::bind("127.0.0.1:0") {
-    Ok(listener) => Some(listener),
-    Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
-      eprintln!("skipping {context}: cannot bind localhost in this environment: {err}");
-      None
-    }
-    Err(err) => panic!("bind {context}: {err}"),
-  }
-}
+mod test_support;
+use test_support::net::try_bind_localhost;
 
 fn spawn_server<F>(
   listener: TcpListener,
@@ -137,7 +129,7 @@ fn etag_revalidation_uses_validators() {
   let hits_thread = Arc::clone(&hits);
   let captured_requests = Arc::new(Mutex::new(Vec::new()));
   let captured_requests_thread = Arc::clone(&captured_requests);
-  let handle = spawn_server(listener, 2, move |count, req, stream| {
+  let handle = spawn_server(listener, 3, move |count, req, stream| {
     hits_thread.fetch_add(1, Ordering::SeqCst);
     captured_requests_thread.lock().unwrap().push(req.clone());
     let request = String::from_utf8_lossy(&req).to_lowercase();

@@ -24,21 +24,13 @@ use tempfile::TempDir;
 
 const MAX_WAIT: Duration = Duration::from_secs(3);
 
+mod test_support;
+use test_support::net::try_bind_localhost;
+
 fn disk_cache_namespace() -> String {
   let ua = normalize_user_agent_for_log(DEFAULT_USER_AGENT).trim();
   let lang = DEFAULT_ACCEPT_LANGUAGE.trim();
   format!("user-agent:{ua}\naccept-language:{lang}")
-}
-
-fn try_bind_localhost(context: &str) -> Option<TcpListener> {
-  match TcpListener::bind("127.0.0.1:0") {
-    Ok(listener) => Some(listener),
-    Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
-      eprintln!("skipping {context}: cannot bind localhost in this environment: {err}");
-      None
-    }
-    Err(err) => panic!("bind {context}: {err}"),
-  }
 }
 
 fn spawn_server(

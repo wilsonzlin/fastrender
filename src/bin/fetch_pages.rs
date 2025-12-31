@@ -417,7 +417,12 @@ mod tests {
   fn try_bind_localhost(context: &str) -> Option<std::net::TcpListener> {
     match std::net::TcpListener::bind("127.0.0.1:0") {
       Ok(listener) => Some(listener),
-      Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+      Err(err)
+        if matches!(
+          err.kind(),
+          std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::AddrNotAvailable
+        ) =>
+      {
         eprintln!("skipping {context}: cannot bind localhost in this environment: {err}");
         None
       }
