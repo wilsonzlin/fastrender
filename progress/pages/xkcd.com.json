@@ -1,13 +1,13 @@
 {
-  "url": "https://xkcd.com/",
+  "url": "https://xkcd.com",
   "status": "ok",
-  "total_ms": 1308.6864110000001,
+  "total_ms": 991.489291,
   "stages_ms": {
-    "fetch": 0.5000920000000001,
-    "css": 66.275589,
-    "cascade": 0.0,
-    "layout": 502.40422300000006,
-    "paint": 542.2459190000001
+    "fetch": 0.551702,
+    "css": 15.632719,
+    "cascade": 250.646682,
+    "layout": 35.134282999999996,
+    "paint": 276.33076199999994
   },
   "notes": "",
   "hotspot": "paint",
@@ -19,23 +19,23 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 0.5000920000000001,
-        "css_inlining_ms": 66.275589,
-        "css_parse_ms": null,
-        "cascade_ms": null,
-        "box_tree_ms": null,
-        "layout_ms": 497.90457100000003,
-        "text_fallback_ms": 10.379346000000007,
-        "text_shape_ms": 4.499651999999998,
-        "paint_build_ms": 0.4063,
-        "paint_optimize_ms": null,
-        "paint_rasterize_ms": 536.7975160000001,
-        "text_rasterize_ms": 5.042102999999999,
+        "dom_parse_ms": 0.551702,
+        "css_inlining_ms": null,
+        "css_parse_ms": 15.632719,
+        "cascade_ms": 34.94923,
+        "box_tree_ms": 215.697452,
+        "layout_ms": 29.752793,
+        "text_fallback_ms": 13.830833,
+        "text_shape_ms": 5.381489999999999,
+        "paint_build_ms": 0.537922,
+        "paint_optimize_ms": 0.0,
+        "paint_rasterize_ms": 267.200591,
+        "text_rasterize_ms": 8.592249,
         "encode_ms": null
       },
       "counts": {
-        "dom_nodes": 312,
-        "styled_nodes": 312,
+        "dom_nodes": 310,
+        "styled_nodes": 310,
         "box_nodes": 433,
         "fragments": 337,
         "shaped_runs": 402,
@@ -79,7 +79,9 @@
         "intrinsic_stores": 16,
         "block_intrinsic": 32,
         "flex_intrinsic": 0,
-        "inline_intrinsic": 2,
+        "inline_intrinsic": 0,
+        "table_cell_intrinsic_measurements": null,
+        "table_cell_layouts": null,
         "layout_cache_lookups": 2,
         "layout_cache_hits": 1,
         "layout_cache_stores": 1,
@@ -105,7 +107,7 @@
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 537.2038160000001,
+        "serial_ms": 267.73851299999995,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -117,9 +119,12 @@
           "Stylesheet": 1,
           "Image": 4
         },
+        "resource_cache_fresh_hits": 1,
+        "resource_cache_revalidated_hits": 0,
+        "resource_cache_misses": 4,
         "image_cache_hits": 1,
         "image_cache_misses": 4,
-        "image_decode_ms": 4.434178
+        "image_decode_ms": 6.608305
       }
     }
   }

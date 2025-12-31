@@ -1,13 +1,13 @@
 {
-  "url": "https://www.openbsd.org/",
+  "url": "https://openbsd.org",
   "status": "ok",
-  "total_ms": 990.005846,
+  "total_ms": 1318.2018,
   "stages_ms": {
-    "fetch": 0.501262,
-    "css": 344.668209,
-    "cascade": 0.0,
-    "layout": 126.07423999999999,
-    "paint": 400.79438300000004
+    "fetch": 0.287857,
+    "css": 15.347422,
+    "cascade": 49.455173,
+    "layout": 21.648472000000005,
+    "paint": 848.63569
   },
   "notes": "",
   "hotspot": "paint",
@@ -19,23 +19,23 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 0.501262,
-        "css_inlining_ms": 344.668209,
-        "css_parse_ms": null,
-        "cascade_ms": null,
-        "box_tree_ms": null,
-        "layout_ms": 121.97205799999999,
-        "text_fallback_ms": 3.500457000000001,
-        "text_shape_ms": 4.102182000000002,
-        "paint_build_ms": 0.298177,
-        "paint_optimize_ms": null,
-        "paint_rasterize_ms": 393.806485,
-        "text_rasterize_ms": 6.689720999999998,
+        "dom_parse_ms": 0.287857,
+        "css_inlining_ms": null,
+        "css_parse_ms": 15.347422,
+        "cascade_ms": 25.284774,
+        "box_tree_ms": 24.170399,
+        "layout_ms": 17.125642,
+        "text_fallback_ms": 3.8419329999999983,
+        "text_shape_ms": 4.522830000000004,
+        "paint_build_ms": 0.405049,
+        "paint_optimize_ms": 0.0,
+        "paint_rasterize_ms": 839.622332,
+        "text_rasterize_ms": 8.608309000000002,
         "encode_ms": null
       },
       "counts": {
-        "dom_nodes": 236,
-        "styled_nodes": 236,
+        "dom_nodes": 233,
+        "styled_nodes": 233,
         "box_nodes": 347,
         "fragments": 343,
         "shaped_runs": 336,
@@ -79,7 +79,9 @@
         "intrinsic_stores": 158,
         "block_intrinsic": 158,
         "flex_intrinsic": 0,
-        "inline_intrinsic": 124,
+        "inline_intrinsic": 0,
+        "table_cell_intrinsic_measurements": null,
+        "table_cell_layouts": null,
         "layout_cache_lookups": 5,
         "layout_cache_hits": 0,
         "layout_cache_stores": 5,
@@ -105,7 +107,7 @@
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 394.104662,
+        "serial_ms": 840.027381,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -117,9 +119,12 @@
           "Stylesheet": 1,
           "Image": 2
         },
+        "resource_cache_fresh_hits": 1,
+        "resource_cache_revalidated_hits": 0,
+        "resource_cache_misses": 2,
         "image_cache_hits": 0,
         "image_cache_misses": 2,
-        "image_decode_ms": 1.651431
+        "image_decode_ms": 1.836021
       }
     }
   }

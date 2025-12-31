@@ -1,13 +1,13 @@
 {
-  "url": "https://www.facebook.com/",
+  "url": "https://facebook.com",
   "status": "ok",
-  "total_ms": 1276.114971,
+  "total_ms": 1152.963933,
   "stages_ms": {
-    "fetch": 0.149533,
-    "css": 0.032511,
-    "cascade": 0.0,
-    "layout": 909.631626,
-    "paint": 1.98239
+    "fetch": 0.101792,
+    "css": 16.760844,
+    "cascade": 183.469353,
+    "layout": 622.536458,
+    "paint": 2.6495499999999996
   },
   "notes": "",
   "hotspot": "layout",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 0.149533,
-        "css_inlining_ms": 0.032511,
-        "css_parse_ms": null,
-        "cascade_ms": null,
-        "box_tree_ms": null,
-        "layout_ms": 909.32811,
-        "text_fallback_ms": 0.771079,
-        "text_shape_ms": 0.303516,
-        "paint_build_ms": 0.069452,
-        "paint_optimize_ms": null,
-        "paint_rasterize_ms": 1.152798,
-        "text_rasterize_ms": 0.76014,
+        "dom_parse_ms": 0.101792,
+        "css_inlining_ms": null,
+        "css_parse_ms": 16.760844,
+        "cascade_ms": 14.947963,
+        "box_tree_ms": 168.52139,
+        "layout_ms": 621.996988,
+        "text_fallback_ms": 1.703766,
+        "text_shape_ms": 0.5394700000000001,
+        "paint_build_ms": 0.108513,
+        "paint_optimize_ms": 0.0,
+        "paint_rasterize_ms": 1.448603,
+        "text_rasterize_ms": 1.092434,
         "encode_ms": null
       },
       "counts": {
@@ -80,6 +80,8 @@
         "block_intrinsic": 2,
         "flex_intrinsic": 0,
         "inline_intrinsic": 0,
+        "table_cell_intrinsic_measurements": null,
+        "table_cell_layouts": null,
         "layout_cache_lookups": 0,
         "layout_cache_hits": 0,
         "layout_cache_stores": 0,
@@ -105,7 +107,7 @@
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 1.22225,
+        "serial_ms": 1.557116,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -116,9 +118,12 @@
         "fetch_counts": {
           "Image": 1
         },
+        "resource_cache_fresh_hits": 0,
+        "resource_cache_revalidated_hits": 0,
+        "resource_cache_misses": 1,
         "image_cache_hits": 1,
         "image_cache_misses": 1,
-        "image_decode_ms": 0.064601
+        "image_decode_ms": 0.062052
       }
     }
   }

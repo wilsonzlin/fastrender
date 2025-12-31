@@ -1,16 +1,16 @@
 {
-  "url": "https://www.rfc-editor.org/",
+  "url": "https://rfc-editor.org",
   "status": "ok",
-  "total_ms": 1818.7190260000002,
+  "total_ms": 1147.735397,
   "stages_ms": {
-    "fetch": 1.972208,
-    "css": 778.372925,
-    "cascade": 0.0,
-    "layout": 230.562285,
-    "paint": 675.420939
+    "fetch": 1.625266,
+    "css": 99.687084,
+    "cascade": 366.023766,
+    "layout": 48.503552000000006,
+    "paint": 211.03107
   },
   "notes": "",
-  "hotspot": "css",
+  "hotspot": "cascade",
   "failure_stage": "paint",
   "timeout_stage": null,
   "last_good_commit": "02eacedd5340344865616a4f4d19e08dd6f218fe",
@@ -19,26 +19,26 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 1.972208,
-        "css_inlining_ms": 778.372925,
-        "css_parse_ms": null,
-        "cascade_ms": null,
-        "box_tree_ms": null,
-        "layout_ms": 224.521995,
-        "text_fallback_ms": 10.704446000000003,
-        "text_shape_ms": 6.040290000000003,
-        "paint_build_ms": 0.768339,
-        "paint_optimize_ms": null,
-        "paint_rasterize_ms": 666.637535,
-        "text_rasterize_ms": 8.015065000000007,
+        "dom_parse_ms": 1.625266,
+        "css_inlining_ms": null,
+        "css_parse_ms": 99.687084,
+        "cascade_ms": 113.712427,
+        "box_tree_ms": 252.31133900000003,
+        "layout_ms": 39.447129999999994,
+        "text_fallback_ms": 10.708175,
+        "text_shape_ms": 9.05642200000001,
+        "paint_build_ms": 1.34895,
+        "paint_optimize_ms": 0.0,
+        "paint_rasterize_ms": 200.508483,
+        "text_rasterize_ms": 9.173637,
         "encode_ms": null
       },
       "counts": {
-        "dom_nodes": 472,
-        "styled_nodes": 472,
+        "dom_nodes": 470,
+        "styled_nodes": 470,
         "box_nodes": 472,
-        "fragments": 700,
-        "shaped_runs": 500,
+        "fragments": 694,
+        "shaped_runs": 496,
         "glyphs": 7021,
         "color_glyph_rasters": 0,
         "fallback_cache_hits": 4281,
@@ -79,7 +79,9 @@
         "intrinsic_stores": 234,
         "block_intrinsic": 234,
         "flex_intrinsic": 0,
-        "inline_intrinsic": 188,
+        "inline_intrinsic": 0,
+        "table_cell_intrinsic_measurements": null,
+        "table_cell_layouts": null,
         "layout_cache_lookups": 0,
         "layout_cache_hits": 0,
         "layout_cache_stores": 0,
@@ -94,7 +96,7 @@
         "fragment_traversed": 0
       },
       "paint": {
-        "display_items": 258,
+        "display_items": 255,
         "optimized_items": null,
         "culled_items": null,
         "transparent_removed": null,
@@ -105,7 +107,7 @@
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 667.4058739999999,
+        "serial_ms": 201.857433,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -117,9 +119,12 @@
           "Stylesheet": 5,
           "Image": 6
         },
+        "resource_cache_fresh_hits": 3,
+        "resource_cache_revalidated_hits": 0,
+        "resource_cache_misses": 2,
         "image_cache_hits": 1,
         "image_cache_misses": 6,
-        "image_decode_ms": 15.858496
+        "image_decode_ms": 13.369948
       }
     }
   }

@@ -1,16 +1,16 @@
 {
-  "url": "https://www.fandom.com/",
+  "url": "https://fandom.com",
   "status": "ok",
-  "total_ms": 3771.7439050000003,
+  "total_ms": 2811.803742,
   "stages_ms": {
-    "fetch": 3.7209,
-    "css": 1390.5075140000001,
-    "cascade": 0.0,
-    "layout": 1484.166099,
-    "paint": 623.599703
+    "fetch": 3.098589,
+    "css": 106.524227,
+    "cascade": 1204.946493,
+    "layout": 366.0578059999999,
+    "paint": 745.9326209999999
   },
   "notes": "",
-  "hotspot": "layout",
+  "hotspot": "cascade",
   "failure_stage": null,
   "timeout_stage": null,
   "last_good_commit": "02eacedd5340344865616a4f4d19e08dd6f218fe",
@@ -19,23 +19,23 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 3.7209,
-        "css_inlining_ms": 1390.5075140000001,
-        "css_parse_ms": null,
-        "cascade_ms": null,
-        "box_tree_ms": null,
-        "layout_ms": 1456.055716,
-        "text_fallback_ms": 100.23993200000005,
-        "text_shape_ms": 28.110382999999985,
-        "paint_build_ms": 3.4326339999999997,
-        "paint_optimize_ms": null,
-        "paint_rasterize_ms": 606.941237,
-        "text_rasterize_ms": 13.225831999999995,
+        "dom_parse_ms": 3.098589,
+        "css_inlining_ms": null,
+        "css_parse_ms": 106.524227,
+        "cascade_ms": 357.157138,
+        "box_tree_ms": 847.789355,
+        "layout_ms": 334.78988999999996,
+        "text_fallback_ms": 92.222734,
+        "text_shape_ms": 31.267915999999975,
+        "paint_build_ms": 3.710733,
+        "paint_optimize_ms": 0.0,
+        "paint_rasterize_ms": 727.6938349999999,
+        "text_rasterize_ms": 14.528052999999998,
         "encode_ms": null
       },
       "counts": {
-        "dom_nodes": 2176,
-        "styled_nodes": 2176,
+        "dom_nodes": 2174,
+        "styled_nodes": 2174,
         "box_nodes": 2845,
         "fragments": 2356,
         "shaped_runs": 2082,
@@ -75,11 +75,13 @@
       },
       "layout": {
         "intrinsic_lookups": 6623,
-        "intrinsic_hits": 3391,
-        "intrinsic_stores": 3232,
+        "intrinsic_hits": 3579,
+        "intrinsic_stores": 3044,
         "block_intrinsic": 5309,
         "flex_intrinsic": 1314,
-        "inline_intrinsic": 2136,
+        "inline_intrinsic": 0,
+        "table_cell_intrinsic_measurements": null,
+        "table_cell_layouts": null,
         "layout_cache_lookups": 611,
         "layout_cache_hits": 311,
         "layout_cache_stores": 292,
@@ -100,12 +102,12 @@
         "transparent_removed": null,
         "noop_removed": null,
         "merged_items": null,
-        "gradient_ms": 56.632244,
-        "gradient_pixels": 2287660,
+        "gradient_ms": 74.393679,
+        "gradient_pixels": 1894124,
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 610.373871,
+        "serial_ms": 731.4045679999999,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -114,12 +116,15 @@
       },
       "resources": {
         "fetch_counts": {
-          "Image": 32,
-          "Stylesheet": 9
+          "Stylesheet": 9,
+          "Image": 32
         },
+        "resource_cache_fresh_hits": 0,
+        "resource_cache_revalidated_hits": 0,
+        "resource_cache_misses": 25,
         "image_cache_hits": 22,
         "image_cache_misses": 32,
-        "image_decode_ms": 205.28878399999996
+        "image_decode_ms": 228.03386100000003
       }
     }
   }

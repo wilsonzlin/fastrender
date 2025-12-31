@@ -1,16 +1,16 @@
 {
-  "url": "https://www.icloud.com/",
+  "url": "https://icloud.com",
   "status": "ok",
-  "total_ms": 3568.820443,
+  "total_ms": 2106.8597950000003,
   "stages_ms": {
-    "fetch": 1.265691,
-    "css": 1095.718336,
-    "cascade": 0.0,
-    "layout": 2310.211685,
-    "paint": 17.025004
+    "fetch": 0.33335800000000004,
+    "css": 1752.592861,
+    "cascade": 55.513718,
+    "layout": 3.022188,
+    "paint": 29.365586
   },
   "notes": "",
-  "hotspot": "layout",
+  "hotspot": "css",
   "failure_stage": null,
   "timeout_stage": null,
   "last_good_commit": "02eacedd5340344865616a4f4d19e08dd6f218fe",
@@ -19,23 +19,23 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 1.265691,
-        "css_inlining_ms": 1095.718336,
-        "css_parse_ms": null,
-        "cascade_ms": null,
-        "box_tree_ms": null,
-        "layout_ms": 2310.211685,
+        "dom_parse_ms": 0.33335800000000004,
+        "css_inlining_ms": null,
+        "css_parse_ms": 1752.592861,
+        "cascade_ms": 39.706886,
+        "box_tree_ms": 15.806832,
+        "layout_ms": 3.022188,
         "text_fallback_ms": 0.0,
         "text_shape_ms": 0.0,
-        "paint_build_ms": 0.079042,
-        "paint_optimize_ms": null,
-        "paint_rasterize_ms": 16.945961999999998,
+        "paint_build_ms": 0.08826200000000001,
+        "paint_optimize_ms": 0.0,
+        "paint_rasterize_ms": 29.277324,
         "text_rasterize_ms": 0.0,
         "encode_ms": null
       },
       "counts": {
-        "dom_nodes": 63,
-        "styled_nodes": 63,
+        "dom_nodes": 61,
+        "styled_nodes": 61,
         "box_nodes": 16,
         "fragments": 16,
         "shaped_runs": 0,
@@ -75,11 +75,13 @@
       },
       "layout": {
         "intrinsic_lookups": 53,
-        "intrinsic_hits": 22,
-        "intrinsic_stores": 31,
+        "intrinsic_hits": 23,
+        "intrinsic_stores": 30,
         "block_intrinsic": 31,
         "flex_intrinsic": 22,
-        "inline_intrinsic": 2,
+        "inline_intrinsic": 0,
+        "table_cell_intrinsic_measurements": null,
+        "table_cell_layouts": null,
         "layout_cache_lookups": 8,
         "layout_cache_hits": 0,
         "layout_cache_stores": 8,
@@ -105,7 +107,7 @@
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 17.025004,
+        "serial_ms": 29.365586,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -117,9 +119,12 @@
           "Stylesheet": 1,
           "Image": 2
         },
+        "resource_cache_fresh_hits": 0,
+        "resource_cache_revalidated_hits": 0,
+        "resource_cache_misses": 0,
         "image_cache_hits": 0,
         "image_cache_misses": 2,
-        "image_decode_ms": 0.356349
+        "image_decode_ms": 0.549392
       }
     }
   }

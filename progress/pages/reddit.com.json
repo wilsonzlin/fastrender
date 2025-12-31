@@ -1,16 +1,16 @@
 {
-  "url": "https://www.reddit.com/",
+  "url": "https://reddit.com",
   "status": "ok",
-  "total_ms": 585.0997209999999,
+  "total_ms": 614.364837,
   "stages_ms": {
-    "fetch": 0.698727,
-    "css": 0.834,
-    "cascade": 0.0,
-    "layout": 427.35131099999995,
-    "paint": 9.794519000000001
+    "fetch": 0.962381,
+    "css": 19.223179,
+    "cascade": 100.718937,
+    "layout": 29.812796,
+    "paint": 10.631319
   },
   "notes": "",
-  "hotspot": "layout",
+  "hotspot": "cascade",
   "failure_stage": null,
   "timeout_stage": null,
   "last_good_commit": "833aa788ed1a7102190a18ae8eae4a0af8876bc4",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 0.698727,
-        "css_inlining_ms": 0.834,
-        "css_parse_ms": null,
-        "cascade_ms": null,
-        "box_tree_ms": null,
-        "layout_ms": 425.85126499999996,
-        "text_fallback_ms": 9.420539999999999,
-        "text_shape_ms": 1.500046,
-        "paint_build_ms": 0.095862,
-        "paint_optimize_ms": null,
-        "paint_rasterize_ms": 8.086107,
-        "text_rasterize_ms": 1.6125500000000001,
+        "dom_parse_ms": 0.962381,
+        "css_inlining_ms": null,
+        "css_parse_ms": 19.223179,
+        "cascade_ms": 30.316157,
+        "box_tree_ms": 70.40277999999999,
+        "layout_ms": 28.167068,
+        "text_fallback_ms": 16.167415000000002,
+        "text_shape_ms": 1.6457280000000003,
+        "paint_build_ms": 0.165004,
+        "paint_optimize_ms": 0.0,
+        "paint_rasterize_ms": 8.689024,
+        "text_rasterize_ms": 1.7772910000000002,
         "encode_ms": null
       },
       "counts": {
@@ -75,11 +75,13 @@
       },
       "layout": {
         "intrinsic_lookups": 114,
-        "intrinsic_hits": 59,
-        "intrinsic_stores": 55,
+        "intrinsic_hits": 61,
+        "intrinsic_stores": 53,
         "block_intrinsic": 54,
         "flex_intrinsic": 60,
-        "inline_intrinsic": 19,
+        "inline_intrinsic": 0,
+        "table_cell_intrinsic_measurements": null,
+        "table_cell_layouts": null,
         "layout_cache_lookups": 25,
         "layout_cache_hits": 2,
         "layout_cache_stores": 23,
@@ -105,7 +107,7 @@
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 8.181969,
+        "serial_ms": 8.854028,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -116,9 +118,12 @@
         "fetch_counts": {
           "Image": 1
         },
+        "resource_cache_fresh_hits": 0,
+        "resource_cache_revalidated_hits": 0,
+        "resource_cache_misses": 1,
         "image_cache_hits": 1,
         "image_cache_misses": 1,
-        "image_decode_ms": 1.194199
+        "image_decode_ms": 1.048674
       }
     }
   }

@@ -1,16 +1,16 @@
 {
-  "url": "https://openai.com/",
+  "url": "https://openai.com",
   "status": "ok",
-  "total_ms": 113.93464300000001,
+  "total_ms": 479.412236,
   "stages_ms": {
-    "fetch": 0.17403500000000002,
-    "css": 0.037341,
-    "cascade": 0.0,
-    "layout": 18.993990000000004,
-    "paint": 1.475686
+    "fetch": 0.160434,
+    "css": 29.769055,
+    "cascade": 39.964321,
+    "layout": 8.105678999999999,
+    "paint": 2.463246
   },
   "notes": "",
-  "hotspot": "layout",
+  "hotspot": "cascade",
   "failure_stage": null,
   "timeout_stage": null,
   "last_good_commit": "02eacedd5340344865616a4f4d19e08dd6f218fe",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 0.17403500000000002,
-        "css_inlining_ms": 0.037341,
-        "css_parse_ms": null,
-        "cascade_ms": null,
-        "box_tree_ms": null,
-        "layout_ms": 18.592882000000003,
-        "text_fallback_ms": 1.309134,
-        "text_shape_ms": 0.4011080000000001,
-        "paint_build_ms": 0.042081,
-        "paint_optimize_ms": null,
-        "paint_rasterize_ms": 1.1127070000000001,
-        "text_rasterize_ms": 0.320898,
+        "dom_parse_ms": 0.160434,
+        "css_inlining_ms": null,
+        "css_parse_ms": 29.769055,
+        "cascade_ms": 28.292621,
+        "box_tree_ms": 11.6717,
+        "layout_ms": 7.505448,
+        "text_fallback_ms": 2.441485,
+        "text_shape_ms": 0.600231,
+        "paint_build_ms": 0.102713,
+        "paint_optimize_ms": 0.0,
+        "paint_rasterize_ms": 1.7796,
+        "text_rasterize_ms": 0.5809329999999999,
         "encode_ms": null
       },
       "counts": {
@@ -79,7 +79,9 @@
         "intrinsic_stores": 27,
         "block_intrinsic": 38,
         "flex_intrinsic": 5,
-        "inline_intrinsic": 11,
+        "inline_intrinsic": 0,
+        "table_cell_intrinsic_measurements": null,
+        "table_cell_layouts": null,
         "layout_cache_lookups": 1,
         "layout_cache_hits": 0,
         "layout_cache_stores": 1,
@@ -105,7 +107,7 @@
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 1.1547880000000001,
+        "serial_ms": 1.882313,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -116,9 +118,12 @@
         "fetch_counts": {
           "Image": 1
         },
+        "resource_cache_fresh_hits": 0,
+        "resource_cache_revalidated_hits": 0,
+        "resource_cache_misses": 0,
         "image_cache_hits": 0,
         "image_cache_misses": 1,
-        "image_decode_ms": 0.327038
+        "image_decode_ms": 0.44051
       }
     }
   }

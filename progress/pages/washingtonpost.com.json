@@ -1,5 +1,5 @@
 {
-  "url": "https://washingtonpost.com/",
+  "url": "https://washingtonpost.com",
   "status": "error",
   "total_ms": null,
   "stages_ms": {
@@ -11,6 +11,8 @@
   },
   "notes": "fetch failed: [resource] https://washingtonpost.com: timeout: global",
   "hotspot": "fetch",
+  "failure_stage": null,
+  "timeout_stage": null,
   "last_good_commit": "",
   "last_regression_commit": ""
 }

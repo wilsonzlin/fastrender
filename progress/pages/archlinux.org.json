@@ -1,16 +1,16 @@
 {
-  "url": "https://archlinux.org/",
+  "url": "https://archlinux.org",
   "status": "ok",
-  "total_ms": 1325.102564,
+  "total_ms": 1391.338256,
   "stages_ms": {
-    "fetch": 1.299061,
-    "css": 406.46007299999997,
-    "cascade": 0.0,
-    "layout": 790.647717,
-    "paint": 50.75574299999998
+    "fetch": 1.572385,
+    "css": 20.61012,
+    "cascade": 1027.646696,
+    "layout": 77.372913,
+    "paint": 85.65324100000001
   },
   "notes": "",
-  "hotspot": "layout",
+  "hotspot": "cascade",
   "failure_stage": null,
   "timeout_stage": null,
   "last_good_commit": "02eacedd5340344865616a4f4d19e08dd6f218fe",
@@ -19,30 +19,30 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 1.299061,
-        "css_inlining_ms": 406.46007299999997,
-        "css_parse_ms": null,
-        "cascade_ms": null,
-        "box_tree_ms": null,
-        "layout_ms": 775.202181,
-        "text_fallback_ms": 19.047317000000017,
-        "text_shape_ms": 15.445535999999988,
-        "paint_build_ms": 1.424084,
-        "paint_optimize_ms": null,
-        "paint_rasterize_ms": 26.280713000000002,
-        "text_rasterize_ms": 23.050945999999982,
+        "dom_parse_ms": 1.572385,
+        "css_inlining_ms": null,
+        "css_parse_ms": 20.61012,
+        "cascade_ms": 72.819554,
+        "box_tree_ms": 954.827142,
+        "layout_ms": 61.189505,
+        "text_fallback_ms": 18.789309999999983,
+        "text_shape_ms": 16.183407999999996,
+        "paint_build_ms": 3.947688,
+        "paint_optimize_ms": 0.0,
+        "paint_rasterize_ms": 43.343497,
+        "text_rasterize_ms": 38.36205600000002,
         "encode_ms": null
       },
       "counts": {
-        "dom_nodes": 923,
-        "styled_nodes": 923,
+        "dom_nodes": 921,
+        "styled_nodes": 921,
         "box_nodes": 1520,
         "fragments": 1455,
         "shaped_runs": 894,
         "glyphs": 23012,
         "color_glyph_rasters": 0,
-        "fallback_cache_hits": 12348,
-        "fallback_cache_misses": 11600,
+        "fallback_cache_hits": 12354,
+        "fallback_cache_misses": 11588,
         "last_resort_font_fallbacks": 0,
         "glyph_cache_hits": 0,
         "glyph_cache_misses": 0,
@@ -79,7 +79,9 @@
         "intrinsic_stores": 708,
         "block_intrinsic": 708,
         "flex_intrinsic": 0,
-        "inline_intrinsic": 542,
+        "inline_intrinsic": 0,
+        "table_cell_intrinsic_measurements": null,
+        "table_cell_layouts": null,
         "layout_cache_lookups": 40,
         "layout_cache_hits": 0,
         "layout_cache_stores": 40,
@@ -105,7 +107,7 @@
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 27.704797000000003,
+        "serial_ms": 47.291185,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -114,12 +116,15 @@
       },
       "resources": {
         "fetch_counts": {
-          "Image": 5,
-          "Stylesheet": 1
+          "Stylesheet": 1,
+          "Image": 5
         },
+        "resource_cache_fresh_hits": 1,
+        "resource_cache_revalidated_hits": 0,
+        "resource_cache_misses": 4,
         "image_cache_hits": 7,
         "image_cache_misses": 5,
-        "image_decode_ms": 0.394979
+        "image_decode_ms": 0.477442
       }
     }
   }

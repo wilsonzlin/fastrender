@@ -1,13 +1,13 @@
 {
-  "url": "https://lobste.rs/",
+  "url": "https://lobste.rs",
   "status": "ok",
-  "total_ms": 3001.449916,
+  "total_ms": 2047.712335,
   "stages_ms": {
-    "fetch": 3.474764,
-    "css": 424.258064,
-    "cascade": 0.0,
-    "layout": 903.899728,
-    "paint": 1524.5126690000002
+    "fetch": 2.951806,
+    "css": 45.132517,
+    "cascade": 359.03052,
+    "layout": 138.254263,
+    "paint": 785.626055
   },
   "notes": "",
   "hotspot": "paint",
@@ -19,30 +19,30 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 3.474764,
-        "css_inlining_ms": 424.258064,
-        "css_parse_ms": null,
-        "cascade_ms": null,
-        "box_tree_ms": null,
-        "layout_ms": 894.650977,
-        "text_fallback_ms": 36.25339999999999,
-        "text_shape_ms": 9.248751000000015,
-        "paint_build_ms": 1.6649399999999999,
-        "paint_optimize_ms": null,
-        "paint_rasterize_ms": 1505.2446530000002,
-        "text_rasterize_ms": 17.603075999999994,
+        "dom_parse_ms": 2.951806,
+        "css_inlining_ms": null,
+        "css_parse_ms": 45.132517,
+        "cascade_ms": 209.110615,
+        "box_tree_ms": 149.919905,
+        "layout_ms": 125.063531,
+        "text_fallback_ms": 61.247125999999966,
+        "text_shape_ms": 13.190731999999992,
+        "paint_build_ms": 4.774826,
+        "paint_optimize_ms": 0.0,
+        "paint_rasterize_ms": 759.162378,
+        "text_rasterize_ms": 21.68885099999999,
         "encode_ms": null
       },
       "counts": {
-        "dom_nodes": 2271,
-        "styled_nodes": 2271,
-        "box_nodes": 2947,
-        "fragments": 1750,
-        "shaped_runs": 991,
-        "glyphs": 6956,
+        "dom_nodes": 2240,
+        "styled_nodes": 2240,
+        "box_nodes": 2918,
+        "fragments": 1737,
+        "shaped_runs": 981,
+        "glyphs": 6750,
         "color_glyph_rasters": 0,
-        "fallback_cache_hits": 1540,
-        "fallback_cache_misses": 4336,
+        "fallback_cache_hits": 1472,
+        "fallback_cache_misses": 4262,
         "last_resort_font_fallbacks": 0,
         "glyph_cache_hits": 0,
         "glyph_cache_misses": 0,
@@ -75,11 +75,13 @@
       },
       "layout": {
         "intrinsic_lookups": 492,
-        "intrinsic_hits": 173,
-        "intrinsic_stores": 319,
+        "intrinsic_hits": 195,
+        "intrinsic_stores": 297,
         "block_intrinsic": 393,
         "flex_intrinsic": 99,
-        "inline_intrinsic": 170,
+        "inline_intrinsic": 0,
+        "table_cell_intrinsic_measurements": null,
+        "table_cell_layouts": null,
         "layout_cache_lookups": 32,
         "layout_cache_hits": 0,
         "layout_cache_stores": 32,
@@ -94,7 +96,7 @@
         "fragment_traversed": 0
       },
       "paint": {
-        "display_items": 551,
+        "display_items": 542,
         "optimized_items": null,
         "culled_items": null,
         "transparent_removed": null,
@@ -105,7 +107,7 @@
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 1506.909593,
+        "serial_ms": 763.937204,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -114,12 +116,15 @@
       },
       "resources": {
         "fetch_counts": {
-          "Image": 24,
-          "Stylesheet": 8
+          "Stylesheet": 8,
+          "Image": 24
         },
+        "resource_cache_fresh_hits": 0,
+        "resource_cache_revalidated_hits": 0,
+        "resource_cache_misses": 24,
         "image_cache_hits": 2,
         "image_cache_misses": 24,
-        "image_decode_ms": 1.8879750000000004
+        "image_decode_ms": 2.26463
       }
     }
   }

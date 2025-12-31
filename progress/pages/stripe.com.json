@@ -1,7 +1,7 @@
 {
   "url": "https://stripe.com",
   "status": "timeout",
-  "total_ms": 5000.0,
+  "total_ms": 7351.458894,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,
@@ -10,9 +10,9 @@
     "paint": 0.0
   },
   "notes": "timeout at css after 4.761287492s\nhard timeout after 5.00s\nstage: cascade",
-  "hotspot": "cascade",
+  "hotspot": "layout",
   "failure_stage": null,
-  "timeout_stage": "cascade",
+  "timeout_stage": "layout",
   "last_good_commit": "",
   "last_regression_commit": ""
 }

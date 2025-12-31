@@ -1,13 +1,13 @@
 {
-  "url": "https://www.google.com/",
+  "url": "https://google.com",
   "status": "ok",
-  "total_ms": 3460.1689960000003,
+  "total_ms": 1798.7133,
   "stages_ms": {
-    "fetch": 1.836184,
-    "css": 149.649701,
-    "cascade": 0.0,
-    "layout": 2380.533966,
-    "paint": 799.6127039999999
+    "fetch": 3.175761,
+    "css": 116.420567,
+    "cascade": 196.649648,
+    "layout": 986.53902,
+    "paint": 93.887487
   },
   "notes": "",
   "hotspot": "layout",
@@ -19,30 +19,30 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 1.836184,
-        "css_inlining_ms": 149.649701,
-        "css_parse_ms": null,
-        "cascade_ms": null,
-        "box_tree_ms": null,
-        "layout_ms": 2378.156892,
-        "text_fallback_ms": 4.588419999999999,
-        "text_shape_ms": 2.3770740000000004,
-        "paint_build_ms": 0.184954,
-        "paint_optimize_ms": null,
-        "paint_rasterize_ms": 794.122039,
-        "text_rasterize_ms": 5.305710999999999,
+        "dom_parse_ms": 3.175761,
+        "css_inlining_ms": null,
+        "css_parse_ms": 116.420567,
+        "cascade_ms": 161.194597,
+        "box_tree_ms": 35.455051000000005,
+        "layout_ms": 982.756915,
+        "text_fallback_ms": 5.942498000000001,
+        "text_shape_ms": 3.782105,
+        "paint_build_ms": 0.377788,
+        "paint_optimize_ms": 0.0,
+        "paint_rasterize_ms": 84.288161,
+        "text_rasterize_ms": 9.221538000000002,
         "encode_ms": null
       },
       "counts": {
-        "dom_nodes": 476,
-        "styled_nodes": 476,
-        "box_nodes": 139,
-        "fragments": 149,
-        "shaped_runs": 151,
-        "glyphs": 5825,
+        "dom_nodes": 540,
+        "styled_nodes": 540,
+        "box_nodes": 208,
+        "fragments": 234,
+        "shaped_runs": 185,
+        "glyphs": 6049,
         "color_glyph_rasters": 0,
-        "fallback_cache_hits": 2303,
-        "fallback_cache_misses": 1820,
+        "fallback_cache_hits": 2322,
+        "fallback_cache_misses": 2072,
         "last_resort_font_fallbacks": 0,
         "glyph_cache_hits": 0,
         "glyph_cache_misses": 0,
@@ -74,17 +74,19 @@
         "has_evaluated": null
       },
       "layout": {
-        "intrinsic_lookups": 628,
-        "intrinsic_hits": 346,
-        "intrinsic_stores": 282,
-        "block_intrinsic": 401,
-        "flex_intrinsic": 227,
-        "inline_intrinsic": 131,
-        "layout_cache_lookups": 125,
-        "layout_cache_hits": 19,
-        "layout_cache_stores": 98,
-        "layout_cache_evictions": 35,
-        "layout_cache_clones": 19,
+        "intrinsic_lookups": 898,
+        "intrinsic_hits": 538,
+        "intrinsic_stores": 360,
+        "block_intrinsic": 667,
+        "flex_intrinsic": 231,
+        "inline_intrinsic": 0,
+        "table_cell_intrinsic_measurements": null,
+        "table_cell_layouts": null,
+        "layout_cache_lookups": 170,
+        "layout_cache_hits": 53,
+        "layout_cache_stores": 109,
+        "layout_cache_evictions": 31,
+        "layout_cache_clones": 53,
         "flex_cache_clones": 0,
         "taffy_nodes_built": 0,
         "taffy_nodes_reused": 0,
@@ -94,7 +96,7 @@
         "fragment_traversed": 0
       },
       "paint": {
-        "display_items": 37,
+        "display_items": 40,
         "optimized_items": null,
         "culled_items": null,
         "transparent_removed": null,
@@ -105,7 +107,7 @@
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 794.3069929999999,
+        "serial_ms": 84.665949,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -115,11 +117,14 @@
       "resources": {
         "fetch_counts": {
           "Stylesheet": 1,
-          "Image": 5
+          "Image": 6
         },
+        "resource_cache_fresh_hits": 0,
+        "resource_cache_revalidated_hits": 0,
+        "resource_cache_misses": 2,
         "image_cache_hits": 1,
-        "image_cache_misses": 5,
-        "image_decode_ms": 0.954192
+        "image_cache_misses": 6,
+        "image_decode_ms": 1.492121
       }
     }
   }

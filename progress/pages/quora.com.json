@@ -1,16 +1,16 @@
 {
-  "url": "https://www.quora.com/",
+  "url": "https://quora.com",
   "status": "ok",
-  "total_ms": 254.406472,
+  "total_ms": 426.801412,
   "stages_ms": {
-    "fetch": 0.143924,
-    "css": 0.033151,
-    "cascade": 0.0,
-    "layout": 41.159602,
-    "paint": 101.43186899999999
+    "fetch": 0.158374,
+    "css": 9.274197,
+    "cascade": 38.209391999999994,
+    "layout": 4.036179,
+    "paint": 13.226166
   },
   "notes": "",
-  "hotspot": "paint",
+  "hotspot": "cascade",
   "failure_stage": null,
   "timeout_stage": null,
   "last_good_commit": "833aa788ed1a7102190a18ae8eae4a0af8876bc4",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 0.143924,
-        "css_inlining_ms": 0.033151,
-        "css_parse_ms": null,
-        "cascade_ms": null,
-        "box_tree_ms": null,
-        "layout_ms": 40.799023,
-        "text_fallback_ms": 0.39253,
-        "text_shape_ms": 0.36057900000000004,
-        "paint_build_ms": 0.032091,
-        "paint_optimize_ms": null,
-        "paint_rasterize_ms": 100.946207,
-        "text_rasterize_ms": 0.453571,
+        "dom_parse_ms": 0.158374,
+        "css_inlining_ms": null,
+        "css_parse_ms": 9.274197,
+        "cascade_ms": 17.567832,
+        "box_tree_ms": 20.64156,
+        "layout_ms": 3.569659,
+        "text_fallback_ms": 0.677725,
+        "text_shape_ms": 0.46651999999999993,
+        "paint_build_ms": 0.069272,
+        "paint_optimize_ms": 0.0,
+        "paint_rasterize_ms": 12.631232,
+        "text_rasterize_ms": 0.525662,
         "encode_ms": null
       },
       "counts": {
@@ -79,7 +79,9 @@
         "intrinsic_stores": 7,
         "block_intrinsic": 9,
         "flex_intrinsic": 1,
-        "inline_intrinsic": 2,
+        "inline_intrinsic": 0,
+        "table_cell_intrinsic_measurements": null,
+        "table_cell_layouts": null,
         "layout_cache_lookups": 1,
         "layout_cache_hits": 0,
         "layout_cache_stores": 1,
@@ -105,7 +107,7 @@
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 100.978298,
+        "serial_ms": 12.700504,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -116,9 +118,12 @@
         "fetch_counts": {
           "Image": 1
         },
+        "resource_cache_fresh_hits": 0,
+        "resource_cache_revalidated_hits": 0,
+        "resource_cache_misses": 1,
         "image_cache_hits": 0,
         "image_cache_misses": 1,
-        "image_decode_ms": 0.255386
+        "image_decode_ms": 0.288997
       }
     }
   }

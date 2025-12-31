@@ -1,13 +1,13 @@
 {
-  "url": "https://docs.python.org/3/",
+  "url": "https://docs.python.org",
   "status": "ok",
-  "total_ms": 866.223386,
+  "total_ms": 869.513042,
   "stages_ms": {
-    "fetch": 1.477546,
-    "css": 61.804818,
-    "cascade": 0.0,
-    "layout": 675.9237390000001,
-    "paint": 23.613636
+    "fetch": 1.076024,
+    "css": 35.01268099999999,
+    "cascade": 208.816369,
+    "layout": 377.278846,
+    "paint": 26.44229200000001
   },
   "notes": "",
   "hotspot": "layout",
@@ -19,23 +19,23 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 1.477546,
-        "css_inlining_ms": 61.804818,
-        "css_parse_ms": null,
-        "cascade_ms": null,
-        "box_tree_ms": null,
-        "layout_ms": 663.870941,
-        "text_fallback_ms": 219.72977899999992,
-        "text_shape_ms": 12.05279800000002,
-        "paint_build_ms": 0.517502,
-        "paint_optimize_ms": null,
-        "paint_rasterize_ms": 13.436995999999999,
-        "text_rasterize_ms": 9.659138000000002,
+        "dom_parse_ms": 1.076024,
+        "css_inlining_ms": null,
+        "css_parse_ms": 35.01268099999999,
+        "cascade_ms": 89.75744300000001,
+        "box_tree_ms": 119.058926,
+        "layout_ms": 364.276967,
+        "text_fallback_ms": 325.34615700000023,
+        "text_shape_ms": 13.00187900000001,
+        "paint_build_ms": 0.826618,
+        "paint_optimize_ms": 0.0,
+        "paint_rasterize_ms": 15.136748,
+        "text_rasterize_ms": 10.478926000000008,
         "encode_ms": null
       },
       "counts": {
-        "dom_nodes": 801,
-        "styled_nodes": 801,
+        "dom_nodes": 799,
+        "styled_nodes": 799,
         "box_nodes": 799,
         "fragments": 695,
         "shaped_runs": 734,
@@ -75,11 +75,13 @@
       },
       "layout": {
         "intrinsic_lookups": 729,
-        "intrinsic_hits": 284,
-        "intrinsic_stores": 445,
+        "intrinsic_hits": 291,
+        "intrinsic_stores": 438,
         "block_intrinsic": 699,
         "flex_intrinsic": 30,
-        "inline_intrinsic": 341,
+        "inline_intrinsic": 0,
+        "table_cell_intrinsic_measurements": null,
+        "table_cell_layouts": null,
         "layout_cache_lookups": 25,
         "layout_cache_hits": 0,
         "layout_cache_stores": 25,
@@ -105,7 +107,7 @@
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 13.954498,
+        "serial_ms": 15.963366,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -117,9 +119,12 @@
           "Stylesheet": 4,
           "Image": 2
         },
+        "resource_cache_fresh_hits": 0,
+        "resource_cache_revalidated_hits": 0,
+        "resource_cache_misses": 1,
         "image_cache_hits": 4,
         "image_cache_misses": 2,
-        "image_decode_ms": 0.329368
+        "image_decode_ms": 0.334878
       }
     }
   }

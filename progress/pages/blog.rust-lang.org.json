@@ -1,13 +1,13 @@
 {
-  "url": "https://blog.rust-lang.org/",
+  "url": "https://blog.rust-lang.org",
   "status": "ok",
-  "total_ms": 2001.2159170000002,
+  "total_ms": 2070.1023090000003,
   "stages_ms": {
-    "fetch": 4.758556,
-    "css": 357.629709,
-    "cascade": 0.0,
-    "layout": 1562.9372819999999,
-    "paint": 77.65488799999999
+    "fetch": 6.369332,
+    "css": 66.893783,
+    "cascade": 720.621227,
+    "layout": 1242.0793180000005,
+    "paint": 68.605513
   },
   "notes": "",
   "hotspot": "layout",
@@ -19,30 +19,30 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 4.758556,
-        "css_inlining_ms": 357.629709,
-        "css_parse_ms": null,
-        "cascade_ms": null,
-        "box_tree_ms": null,
-        "layout_ms": 1211.5545359999999,
-        "text_fallback_ms": 9250.905037999984,
-        "text_shape_ms": 351.38274599999994,
-        "paint_build_ms": 15.224029,
-        "paint_optimize_ms": null,
-        "paint_rasterize_ms": 35.383368,
-        "text_rasterize_ms": 27.04749099999999,
+        "dom_parse_ms": 6.369332,
+        "css_inlining_ms": null,
+        "css_parse_ms": 66.893783,
+        "cascade_ms": 262.804013,
+        "box_tree_ms": 457.817214,
+        "layout_ms": 835.333397,
+        "text_fallback_ms": 52802.696208,
+        "text_shape_ms": 406.7459210000003,
+        "paint_build_ms": 8.868598,
+        "paint_optimize_ms": 0.0,
+        "paint_rasterize_ms": 33.429306,
+        "text_rasterize_ms": 26.307609000000006,
         "encode_ms": null
       },
       "counts": {
-        "dom_nodes": 3915,
-        "styled_nodes": 3915,
+        "dom_nodes": 3913,
+        "styled_nodes": 3913,
         "box_nodes": 7922,
         "fragments": 8267,
-        "shaped_runs": 7745,
-        "glyphs": 136448,
+        "shaped_runs": 7727,
+        "glyphs": 135952,
         "color_glyph_rasters": 0,
-        "fallback_cache_hits": 37571,
-        "fallback_cache_misses": 142404,
+        "fallback_cache_hits": 37329,
+        "fallback_cache_misses": 141896,
         "last_resort_font_fallbacks": 0,
         "glyph_cache_hits": 0,
         "glyph_cache_misses": 0,
@@ -74,12 +74,14 @@
         "has_evaluated": null
       },
       "layout": {
-        "intrinsic_lookups": 22533,
-        "intrinsic_hits": 376,
-        "intrinsic_stores": 22157,
-        "block_intrinsic": 22427,
+        "intrinsic_lookups": 22507,
+        "intrinsic_hits": 424,
+        "intrinsic_stores": 22083,
+        "block_intrinsic": 22401,
         "flex_intrinsic": 106,
-        "inline_intrinsic": 13346,
+        "inline_intrinsic": 0,
+        "table_cell_intrinsic_measurements": null,
+        "table_cell_layouts": null,
         "layout_cache_lookups": 33,
         "layout_cache_hits": 14,
         "layout_cache_stores": 17,
@@ -105,7 +107,7 @@
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 50.607397,
+        "serial_ms": 42.297904,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -114,12 +116,15 @@
       },
       "resources": {
         "fetch_counts": {
-          "Image": 12,
-          "Stylesheet": 7
+          "Stylesheet": 5,
+          "Image": 12
         },
+        "resource_cache_fresh_hits": 0,
+        "resource_cache_revalidated_hits": 0,
+        "resource_cache_misses": 6,
         "image_cache_hits": 6,
         "image_cache_misses": 12,
-        "image_decode_ms": 4.344156
+        "image_decode_ms": 3.618202
       }
     }
   }

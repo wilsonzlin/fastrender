@@ -1,7 +1,7 @@
 {
   "url": "https://msnbc.com",
   "status": "timeout",
-  "total_ms": 5000.0,
+  "total_ms": 5868.281744,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,
@@ -10,9 +10,9 @@
     "paint": 0.0
   },
   "notes": "[paint] Invalid paint parameters: Layout failed: MissingContext(\"Shaping failed (fonts=8): Text(ShapingFailed { text: <omitted>, reason: \\\"No suitable font found for cluster 鑬\\\\u{7ef}\\\" })\")\nhard timeout after 5.00s\nstage: layout",
-  "hotspot": "layout",
+  "hotspot": "cascade",
   "failure_stage": null,
-  "timeout_stage": "layout",
+  "timeout_stage": "cascade",
   "last_good_commit": "",
   "last_regression_commit": ""
 }

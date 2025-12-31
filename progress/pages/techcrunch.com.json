@@ -1,7 +1,7 @@
 {
   "url": "https://techcrunch.com",
   "status": "timeout",
-  "total_ms": 5000.0,
+  "total_ms": 6598.038076,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

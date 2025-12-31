@@ -1,16 +1,16 @@
 {
-  "url": "https://www.walmart.com/src",
+  "url": "https://walmart.com",
   "status": "ok",
-  "total_ms": 2688.554795,
+  "total_ms": 1303.564683,
   "stages_ms": {
-    "fetch": 1.605099,
-    "css": 721.948212,
-    "cascade": 0.0,
-    "layout": 1179.0738279999998,
-    "paint": 460.54725499999995
+    "fetch": 1.32511,
+    "css": 320.964641,
+    "cascade": 247.62232500000005,
+    "layout": 54.944385999999994,
+    "paint": 39.167485
   },
   "notes": "",
-  "hotspot": "layout",
+  "hotspot": "css",
   "failure_stage": null,
   "timeout_stage": null,
   "last_good_commit": "02eacedd5340344865616a4f4d19e08dd6f218fe",
@@ -19,23 +19,23 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 1.605099,
-        "css_inlining_ms": 721.948212,
-        "css_parse_ms": null,
-        "cascade_ms": null,
-        "box_tree_ms": null,
-        "layout_ms": 1174.208025,
-        "text_fallback_ms": 23.251903000000002,
-        "text_shape_ms": 4.865802999999998,
-        "paint_build_ms": 0.318947,
-        "paint_optimize_ms": null,
-        "paint_rasterize_ms": 457.628253,
-        "text_rasterize_ms": 2.6000550000000002,
+        "dom_parse_ms": 1.32511,
+        "css_inlining_ms": null,
+        "css_parse_ms": 320.964641,
+        "cascade_ms": 154.39714500000002,
+        "box_tree_ms": 93.22518,
+        "layout_ms": 50.199639999999995,
+        "text_fallback_ms": 24.893488,
+        "text_shape_ms": 4.744746,
+        "paint_build_ms": 0.375018,
+        "paint_optimize_ms": 0.0,
+        "paint_rasterize_ms": 36.519065000000005,
+        "text_rasterize_ms": 2.2734020000000004,
         "encode_ms": null
       },
       "counts": {
-        "dom_nodes": 257,
-        "styled_nodes": 257,
+        "dom_nodes": 255,
+        "styled_nodes": 255,
         "box_nodes": 214,
         "fragments": 308,
         "shaped_runs": 250,
@@ -79,7 +79,9 @@
         "intrinsic_stores": 315,
         "block_intrinsic": 470,
         "flex_intrinsic": 140,
-        "inline_intrinsic": 98,
+        "inline_intrinsic": 0,
+        "table_cell_intrinsic_measurements": null,
+        "table_cell_layouts": null,
         "layout_cache_lookups": 78,
         "layout_cache_hits": 20,
         "layout_cache_stores": 46,
@@ -105,7 +107,7 @@
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 457.94719999999995,
+        "serial_ms": 36.894083,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -114,12 +116,15 @@
       },
       "resources": {
         "fetch_counts": {
-          "Stylesheet": 1,
+          "Stylesheet": 2,
           "Image": 5
         },
+        "resource_cache_fresh_hits": 0,
+        "resource_cache_revalidated_hits": 0,
+        "resource_cache_misses": 3,
         "image_cache_hits": 1,
         "image_cache_misses": 5,
-        "image_decode_ms": 6.447315000000001
+        "image_decode_ms": 7.070578
       }
     }
   }

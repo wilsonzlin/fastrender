@@ -1,7 +1,7 @@
 {
   "url": "https://github.com",
   "status": "timeout",
-  "total_ms": 5000.0,
+  "total_ms": 7398.232068,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,
@@ -10,9 +10,9 @@
     "paint": 0.0
   },
   "notes": "hard timeout after 5.00s\nstage: css_inline",
-  "hotspot": "css",
+  "hotspot": "cascade",
   "failure_stage": null,
-  "timeout_stage": "css",
+  "timeout_stage": "cascade",
   "last_good_commit": "",
   "last_regression_commit": ""
 }

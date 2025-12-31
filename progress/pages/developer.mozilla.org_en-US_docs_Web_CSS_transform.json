@@ -1,7 +1,7 @@
 {
-  "url": "https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/transform",
+  "url": "https://developer.mozilla.org/en-US/docs/Web/CSS/transform",
   "status": "error",
-  "total_ms": 3170.110228,
+  "total_ms": 4179.633143,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,
@@ -11,7 +11,7 @@
   },
   "notes": "timeout at cascade after 4.750341633s",
   "hotspot": "cascade",
-  "failure_stage": null,
+  "failure_stage": "paint",
   "timeout_stage": null,
   "last_good_commit": "",
   "last_regression_commit": ""

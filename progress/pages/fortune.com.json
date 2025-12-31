@@ -1,7 +1,7 @@
 {
   "url": "https://fortune.com",
-  "status": "timeout",
-  "total_ms": 5000.0,
+  "status": "error",
+  "total_ms": 5010.651099999999,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,
@@ -11,7 +11,7 @@
   },
   "notes": "timeout at layout after 4.874342085s\nhard timeout after 5.00s\nstage: done",
   "hotspot": "unknown",
-  "failure_stage": null,
+  "failure_stage": "layout",
   "timeout_stage": null,
   "last_good_commit": "",
   "last_regression_commit": ""

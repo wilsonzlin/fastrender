@@ -1,16 +1,16 @@
 {
-  "url": "https://www.w3.org/",
+  "url": "https://www.w3.org",
   "status": "ok",
-  "total_ms": 3820.762017,
+  "total_ms": 1408.387102,
   "stages_ms": {
-    "fetch": 3.414463,
-    "css": 1087.631528,
-    "cascade": 0.0,
-    "layout": 2415.101371,
-    "paint": 198.062071
+    "fetch": 1.583195,
+    "css": 149.77305099999998,
+    "cascade": 484.211632,
+    "layout": 250.61486,
+    "paint": 271.9810779999999
   },
   "notes": "",
-  "hotspot": "layout",
+  "hotspot": "cascade",
   "failure_stage": null,
   "timeout_stage": null,
   "last_good_commit": "02eacedd5340344865616a4f4d19e08dd6f218fe",
@@ -19,29 +19,29 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 3.414463,
-        "css_inlining_ms": 1087.631528,
-        "css_parse_ms": null,
-        "cascade_ms": null,
-        "box_tree_ms": null,
-        "layout_ms": 2389.5000880000002,
-        "text_fallback_ms": 78.28393800000005,
-        "text_shape_ms": 25.601282999999967,
-        "paint_build_ms": 1.036325,
-        "paint_optimize_ms": null,
-        "paint_rasterize_ms": 185.195798,
-        "text_rasterize_ms": 11.829948,
+        "dom_parse_ms": 1.583195,
+        "css_inlining_ms": null,
+        "css_parse_ms": 149.77305099999998,
+        "cascade_ms": 95.005669,
+        "box_tree_ms": 389.205963,
+        "layout_ms": 221.86912,
+        "text_fallback_ms": 118.08324100000006,
+        "text_shape_ms": 28.745740000000012,
+        "paint_build_ms": 1.592995,
+        "paint_optimize_ms": 0.0,
+        "paint_rasterize_ms": 258.07577799999996,
+        "text_rasterize_ms": 12.312305,
         "encode_ms": null
       },
       "counts": {
-        "dom_nodes": 957,
-        "styled_nodes": 957,
+        "dom_nodes": 955,
+        "styled_nodes": 955,
         "box_nodes": 906,
-        "fragments": 1015,
-        "shaped_runs": 1284,
+        "fragments": 873,
+        "shaped_runs": 1213,
         "glyphs": 38738,
         "color_glyph_rasters": 0,
-        "fallback_cache_hits": 24968,
+        "fallback_cache_hits": 24986,
         "fallback_cache_misses": 13348,
         "last_resort_font_fallbacks": 0,
         "glyph_cache_hits": 0,
@@ -74,12 +74,14 @@
         "has_evaluated": null
       },
       "layout": {
-        "intrinsic_lookups": 2141,
-        "intrinsic_hits": 1028,
-        "intrinsic_stores": 1113,
-        "block_intrinsic": 1732,
+        "intrinsic_lookups": 2134,
+        "intrinsic_hits": 1147,
+        "intrinsic_stores": 987,
+        "block_intrinsic": 1725,
         "flex_intrinsic": 409,
-        "inline_intrinsic": 827,
+        "inline_intrinsic": 0,
+        "table_cell_intrinsic_measurements": null,
+        "table_cell_layouts": null,
         "layout_cache_lookups": 156,
         "layout_cache_hits": 33,
         "layout_cache_stores": 123,
@@ -94,7 +96,7 @@
         "fragment_traversed": 0
       },
       "paint": {
-        "display_items": 291,
+        "display_items": 220,
         "optimized_items": null,
         "culled_items": null,
         "transparent_removed": null,
@@ -105,7 +107,7 @@
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 186.232123,
+        "serial_ms": 259.66877299999993,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -114,12 +116,15 @@
       },
       "resources": {
         "fetch_counts": {
-          "Image": 13,
-          "Stylesheet": 2
+          "Stylesheet": 1,
+          "Image": 13
         },
+        "resource_cache_fresh_hits": 1,
+        "resource_cache_revalidated_hits": 0,
+        "resource_cache_misses": 8,
         "image_cache_hits": 4,
         "image_cache_misses": 13,
-        "image_decode_ms": 26.492023
+        "image_decode_ms": 35.506355000000006
       }
     }
   }

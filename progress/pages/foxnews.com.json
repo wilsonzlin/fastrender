@@ -1,7 +1,7 @@
 {
   "url": "https://foxnews.com",
   "status": "timeout",
-  "total_ms": 5000.0,
+  "total_ms": 5769.447019,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

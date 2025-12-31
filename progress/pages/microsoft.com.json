@@ -1,13 +1,13 @@
 {
-  "url": "https://www.microsoft.com/",
+  "url": "https://microsoft.com",
   "status": "ok",
-  "total_ms": 3896.038483,
+  "total_ms": 3697.624815,
   "stages_ms": {
-    "fetch": 4.203332,
-    "css": 420.36014900000004,
-    "cascade": 0.0,
-    "layout": 3260.0805419999997,
-    "paint": 32.377666000000005
+    "fetch": 4.309286,
+    "css": 174.26525800000002,
+    "cascade": 211.377526,
+    "layout": 2901.3960019999995,
+    "paint": 64.133025
   },
   "notes": "",
   "hotspot": "layout",
@@ -19,26 +19,26 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 4.203332,
-        "css_inlining_ms": 420.36014900000004,
-        "css_parse_ms": null,
-        "cascade_ms": null,
-        "box_tree_ms": null,
-        "layout_ms": 3249.425124,
-        "text_fallback_ms": 45.61295899999998,
-        "text_shape_ms": 10.65541800000001,
-        "paint_build_ms": 1.154088,
-        "paint_optimize_ms": null,
-        "paint_rasterize_ms": 26.607295999999998,
-        "text_rasterize_ms": 4.616282000000006,
+        "dom_parse_ms": 4.309286,
+        "css_inlining_ms": null,
+        "css_parse_ms": 174.26525800000002,
+        "cascade_ms": 118.33621,
+        "box_tree_ms": 93.041316,
+        "layout_ms": 2889.7353209999997,
+        "text_fallback_ms": 69.059966,
+        "text_shape_ms": 11.660680999999991,
+        "paint_build_ms": 1.442242,
+        "paint_optimize_ms": 0.0,
+        "paint_rasterize_ms": 57.522243,
+        "text_rasterize_ms": 5.168539999999998,
         "encode_ms": null
       },
       "counts": {
-        "dom_nodes": 497,
-        "styled_nodes": 497,
+        "dom_nodes": 495,
+        "styled_nodes": 495,
         "box_nodes": 397,
         "fragments": 1850,
-        "shaped_runs": 972,
+        "shaped_runs": 974,
         "glyphs": 5116,
         "color_glyph_rasters": 0,
         "fallback_cache_hits": 1967,
@@ -75,11 +75,13 @@
       },
       "layout": {
         "intrinsic_lookups": 437,
-        "intrinsic_hits": 192,
-        "intrinsic_stores": 245,
+        "intrinsic_hits": 188,
+        "intrinsic_stores": 249,
         "block_intrinsic": 430,
         "flex_intrinsic": 7,
-        "inline_intrinsic": 181,
+        "inline_intrinsic": 0,
+        "table_cell_intrinsic_measurements": null,
+        "table_cell_layouts": null,
         "layout_cache_lookups": 101,
         "layout_cache_hits": 69,
         "layout_cache_stores": 32,
@@ -105,7 +107,7 @@
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 27.761384,
+        "serial_ms": 58.964485,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -114,12 +116,15 @@
       },
       "resources": {
         "fetch_counts": {
-          "Image": 1,
-          "Stylesheet": 3
+          "Stylesheet": 3,
+          "Image": 1
         },
+        "resource_cache_fresh_hits": 0,
+        "resource_cache_revalidated_hits": 0,
+        "resource_cache_misses": 1,
         "image_cache_hits": 1,
         "image_cache_misses": 1,
-        "image_decode_ms": 0.081272
+        "image_decode_ms": 0.117493
       }
     }
   }

@@ -1,13 +1,13 @@
 {
-  "url": "https://slashdot.org/ajax.pl?op=nel",
+  "url": "https://slashdot.org",
   "status": "ok",
-  "total_ms": 2643.7375460000003,
+  "total_ms": 1275.906887,
   "stages_ms": {
-    "fetch": 0.355519,
-    "css": 0.231405,
-    "cascade": 0.0,
-    "layout": 2513.3829410000003,
-    "paint": 15.1795
+    "fetch": 0.508402,
+    "css": 61.86555,
+    "cascade": 96.884372,
+    "layout": 889.106776,
+    "paint": 10.32431
   },
   "notes": "",
   "hotspot": "layout",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 0.355519,
-        "css_inlining_ms": 0.231405,
-        "css_parse_ms": null,
-        "cascade_ms": null,
-        "box_tree_ms": null,
-        "layout_ms": 2512.6943960000003,
-        "text_fallback_ms": 0.6361950000000001,
-        "text_shape_ms": 0.6885450000000001,
-        "paint_build_ms": 0.136323,
-        "paint_optimize_ms": null,
-        "paint_rasterize_ms": 8.797715,
-        "text_rasterize_ms": 6.245462,
+        "dom_parse_ms": 0.508402,
+        "css_inlining_ms": null,
+        "css_parse_ms": 61.86555,
+        "cascade_ms": 43.222264,
+        "box_tree_ms": 53.662108,
+        "layout_ms": 888.2926679999999,
+        "text_fallback_ms": 0.758576,
+        "text_shape_ms": 0.814108,
+        "paint_build_ms": 0.164964,
+        "paint_optimize_ms": 0.0,
+        "paint_rasterize_ms": 5.972453,
+        "text_rasterize_ms": 4.1868929999999995,
         "encode_ms": null
       },
       "counts": {
@@ -79,7 +79,9 @@
         "intrinsic_stores": 16,
         "block_intrinsic": 28,
         "flex_intrinsic": 0,
-        "inline_intrinsic": 14,
+        "inline_intrinsic": 0,
+        "table_cell_intrinsic_measurements": null,
+        "table_cell_layouts": null,
         "layout_cache_lookups": 1,
         "layout_cache_hits": 0,
         "layout_cache_stores": 1,
@@ -105,7 +107,7 @@
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 8.934038000000001,
+        "serial_ms": 6.137417,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -116,9 +118,12 @@
         "fetch_counts": {
           "Image": 1
         },
+        "resource_cache_fresh_hits": 0,
+        "resource_cache_revalidated_hits": 0,
+        "resource_cache_misses": 1,
         "image_cache_hits": 1,
         "image_cache_misses": 1,
-        "image_decode_ms": 0.21638500000000002
+        "image_decode_ms": 0.216785
       }
     }
   }

@@ -3,7 +3,7 @@
   "default_budget_ms": 5000.0,
   "fixtures": [
     {
-      "name": "abcnews.go.com",
+      "name": "latimes.com",
       "viewport": [
         1200,
         800
@@ -13,7 +13,7 @@
       "budget_ms": 5000.0
     },
     {
-      "name": "airbnb.com",
+      "name": "github.com",
       "viewport": [
         1200,
         800
@@ -23,7 +23,7 @@
       "budget_ms": 5000.0
     },
     {
-      "name": "aljazeera.com",
+      "name": "stripe.com",
       "viewport": [
         1200,
         800
@@ -43,7 +43,7 @@
       "budget_ms": 5000.0
     },
     {
-      "name": "apple.com",
+      "name": "linkedin.com",
       "viewport": [
         1200,
         800
@@ -53,7 +53,7 @@
       "budget_ms": 5000.0
     },
     {
-      "name": "arstechnica.com",
+      "name": "techcrunch.com",
       "viewport": [
         1200,
         800
@@ -63,7 +63,7 @@
       "budget_ms": 5000.0
     },
     {
-      "name": "bbc.com",
+      "name": "dailymail.co.uk",
       "viewport": [
         1200,
         800
@@ -73,7 +73,7 @@
       "budget_ms": 5000.0
     },
     {
-      "name": "berkeley.edu",
+      "name": "ft.com",
       "viewport": [
         1200,
         800
@@ -83,7 +83,7 @@
       "budget_ms": 5000.0
     },
     {
-      "name": "blog.rust-lang.org",
+      "name": "msnbc.com",
       "viewport": [
         1200,
         800
@@ -93,7 +93,7 @@
       "budget_ms": 5000.0
     },
     {
-      "name": "britannica.com",
+      "name": "nytimes.com",
       "viewport": [
         1200,
         800
@@ -103,7 +103,7 @@
       "budget_ms": 5000.0
     },
     {
-      "name": "buzzfeed.com",
+      "name": "foxnews.com",
       "viewport": [
         1200,
         800

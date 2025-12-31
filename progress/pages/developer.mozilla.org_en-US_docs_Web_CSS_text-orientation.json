@@ -1,7 +1,7 @@
 {
-  "url": "https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/text-orientation",
+  "url": "https://developer.mozilla.org/en-US/docs/Web/CSS/text-orientation",
   "status": "error",
-  "total_ms": 3229.823845,
+  "total_ms": 3663.636366,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,
@@ -11,7 +11,7 @@
   },
   "notes": "timeout at layout after 4.754897014s",
   "hotspot": "css",
-  "failure_stage": null,
+  "failure_stage": "paint",
   "timeout_stage": null,
   "last_good_commit": "",
   "last_regression_commit": ""

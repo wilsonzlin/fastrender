@@ -1,13 +1,13 @@
 {
-  "url": "https://open.spotify.com/",
+  "url": "https://spotify.com",
   "status": "ok",
-  "total_ms": 2483.527467,
+  "total_ms": 749.477751,
   "stages_ms": {
-    "fetch": 1.130198,
-    "css": 2044.764437,
-    "cascade": 0.0,
-    "layout": 314.073254,
-    "paint": 0.369469
+    "fetch": 0.27704599999999996,
+    "css": 307.180743,
+    "cascade": 112.340817,
+    "layout": 1.3217,
+    "paint": 0.7968270000000001
   },
   "notes": "",
   "hotspot": "css",
@@ -19,23 +19,23 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 1.130198,
-        "css_inlining_ms": 2044.764437,
-        "css_parse_ms": null,
-        "cascade_ms": null,
-        "box_tree_ms": null,
-        "layout_ms": 314.073254,
+        "dom_parse_ms": 0.27704599999999996,
+        "css_inlining_ms": null,
+        "css_parse_ms": 307.180743,
+        "cascade_ms": 100.026292,
+        "box_tree_ms": 12.314525,
+        "layout_ms": 1.3217,
         "text_fallback_ms": 0.0,
         "text_shape_ms": 0.0,
-        "paint_build_ms": 0.017391,
-        "paint_optimize_ms": null,
-        "paint_rasterize_ms": 0.352078,
+        "paint_build_ms": 0.051831,
+        "paint_optimize_ms": 0.0,
+        "paint_rasterize_ms": 0.7449960000000001,
         "text_rasterize_ms": 0.0,
         "encode_ms": null
       },
       "counts": {
-        "dom_nodes": 61,
-        "styled_nodes": 61,
+        "dom_nodes": 59,
+        "styled_nodes": 59,
         "box_nodes": 4,
         "fragments": 5,
         "shaped_runs": 0,
@@ -80,6 +80,8 @@
         "block_intrinsic": 1,
         "flex_intrinsic": 1,
         "inline_intrinsic": 0,
+        "table_cell_intrinsic_measurements": null,
+        "table_cell_layouts": null,
         "layout_cache_lookups": 1,
         "layout_cache_hits": 0,
         "layout_cache_stores": 1,
@@ -105,7 +107,7 @@
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 0.369469,
+        "serial_ms": 0.7968270000000001,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -116,6 +118,9 @@
         "fetch_counts": {
           "Stylesheet": 1
         },
+        "resource_cache_fresh_hits": 0,
+        "resource_cache_revalidated_hits": 0,
+        "resource_cache_misses": 0,
         "image_cache_hits": 0,
         "image_cache_misses": 0,
         "image_decode_ms": 0.0

@@ -1,7 +1,7 @@
 {
   "url": "https://latimes.com",
   "status": "timeout",
-  "total_ms": 5000.0,
+  "total_ms": 7970.345073,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,

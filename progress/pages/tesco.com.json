@@ -1,5 +1,5 @@
 {
-  "url": "https://tesco.com/",
+  "url": "https://tesco.com",
   "status": "error",
   "total_ms": null,
   "stages_ms": {
@@ -11,6 +11,8 @@
   },
   "notes": "fetch failed: [resource] https://tesco.com: timeout: global",
   "hotspot": "fetch",
+  "failure_stage": null,
+  "timeout_stage": null,
   "last_good_commit": "",
   "last_regression_commit": ""
 }

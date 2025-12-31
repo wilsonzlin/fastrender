@@ -1,13 +1,13 @@
 {
-  "url": "https://www.engadget.com/",
+  "url": "https://engadget.com",
   "status": "ok",
-  "total_ms": 2701.7879869999997,
+  "total_ms": 2256.5596600000003,
   "stages_ms": {
-    "fetch": 3.2948500000000003,
-    "css": 528.637293,
-    "cascade": 0.0,
-    "layout": 1633.740582,
-    "paint": 341.99393100000003
+    "fetch": 4.816587,
+    "css": 74.528713,
+    "cascade": 694.766211,
+    "layout": 1021.340914,
+    "paint": 88.290867
   },
   "notes": "",
   "hotspot": "layout",
@@ -19,30 +19,30 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 3.2948500000000003,
-        "css_inlining_ms": 528.637293,
-        "css_parse_ms": null,
-        "cascade_ms": null,
-        "box_tree_ms": null,
-        "layout_ms": 1582.3053919999998,
-        "text_fallback_ms": 320.73096899999905,
-        "text_shape_ms": 51.435190000000034,
-        "paint_build_ms": 1.466146,
-        "paint_optimize_ms": null,
-        "paint_rasterize_ms": 330.35746700000004,
-        "text_rasterize_ms": 10.170318,
+        "dom_parse_ms": 4.816587,
+        "css_inlining_ms": null,
+        "css_parse_ms": 74.528713,
+        "cascade_ms": 489.537592,
+        "box_tree_ms": 205.228619,
+        "layout_ms": 958.435583,
+        "text_fallback_ms": 429.0804169999995,
+        "text_shape_ms": 62.905330999999975,
+        "paint_build_ms": 2.671469,
+        "paint_optimize_ms": 0.0,
+        "paint_rasterize_ms": 73.013509,
+        "text_rasterize_ms": 12.605889000000005,
         "encode_ms": null
       },
       "counts": {
-        "dom_nodes": 1047,
-        "styled_nodes": 1047,
-        "box_nodes": 872,
-        "fragments": 1244,
-        "shaped_runs": 2031,
-        "glyphs": 84001,
+        "dom_nodes": 1021,
+        "styled_nodes": 1021,
+        "box_nodes": 863,
+        "fragments": 1231,
+        "shaped_runs": 2025,
+        "glyphs": 83923,
         "color_glyph_rasters": 0,
-        "fallback_cache_hits": 41487,
-        "fallback_cache_misses": 39358,
+        "fallback_cache_hits": 41458,
+        "fallback_cache_misses": 39286,
         "last_resort_font_fallbacks": 0,
         "glyph_cache_hits": 0,
         "glyph_cache_misses": 0,
@@ -74,17 +74,19 @@
         "has_evaluated": null
       },
       "layout": {
-        "intrinsic_lookups": 6213,
-        "intrinsic_hits": 4169,
-        "intrinsic_stores": 2044,
-        "block_intrinsic": 4045,
-        "flex_intrinsic": 2168,
-        "inline_intrinsic": 732,
-        "layout_cache_lookups": 1695,
-        "layout_cache_hits": 593,
-        "layout_cache_stores": 954,
+        "intrinsic_lookups": 6158,
+        "intrinsic_hits": 4151,
+        "intrinsic_stores": 2007,
+        "block_intrinsic": 4015,
+        "flex_intrinsic": 2143,
+        "inline_intrinsic": 0,
+        "table_cell_intrinsic_measurements": null,
+        "table_cell_layouts": null,
+        "layout_cache_lookups": 1684,
+        "layout_cache_hits": 590,
+        "layout_cache_stores": 946,
         "layout_cache_evictions": 338,
-        "layout_cache_clones": 593,
+        "layout_cache_clones": 590,
         "flex_cache_clones": 0,
         "taffy_nodes_built": 0,
         "taffy_nodes_reused": 0,
@@ -94,7 +96,7 @@
         "fragment_traversed": 0
       },
       "paint": {
-        "display_items": 224,
+        "display_items": 223,
         "optimized_items": null,
         "culled_items": null,
         "transparent_removed": null,
@@ -105,7 +107,7 @@
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 331.823613,
+        "serial_ms": 75.684978,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -114,12 +116,15 @@
       },
       "resources": {
         "fetch_counts": {
-          "Image": 7,
-          "Stylesheet": 5
+          "Stylesheet": 5,
+          "Image": 7
         },
+        "resource_cache_fresh_hits": 0,
+        "resource_cache_revalidated_hits": 0,
+        "resource_cache_misses": 1,
         "image_cache_hits": 0,
         "image_cache_misses": 7,
-        "image_decode_ms": 0.7400889999999999
+        "image_decode_ms": 1.140645
       }
     }
   }

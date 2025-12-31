@@ -1,7 +1,7 @@
 {
-  "url": "https://nhk.or.jp/",
-  "status": "ok",
-  "total_ms": 120.6726,
+  "url": "https://nhk.or.jp",
+  "status": "error",
+  "total_ms": null,
   "stages_ms": {
     "fetch": 0.0,
     "css": 0.0,
@@ -9,8 +9,10 @@
     "layout": 0.0,
     "paint": 0.0
   },
-  "notes": "",
-  "hotspot": "unknown",
+  "notes": "missing cache",
+  "hotspot": "fetch",
+  "failure_stage": null,
+  "timeout_stage": null,
   "last_good_commit": "",
   "last_regression_commit": ""
 }

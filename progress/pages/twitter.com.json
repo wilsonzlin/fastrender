@@ -1,16 +1,16 @@
 {
-  "url": "https://x.com/",
+  "url": "https://twitter.com",
   "status": "ok",
-  "total_ms": 160.679621,
+  "total_ms": 600.746013,
   "stages_ms": {
-    "fetch": 0.950103,
-    "css": 1.686711,
-    "cascade": 0.0,
-    "layout": 32.389088,
-    "paint": 6.176843
+    "fetch": 1.030112,
+    "css": 150.465717,
+    "cascade": 125.229873,
+    "layout": 6.2349,
+    "paint": 8.880568
   },
   "notes": "",
-  "hotspot": "layout",
+  "hotspot": "css",
   "failure_stage": null,
   "timeout_stage": null,
   "last_good_commit": "833aa788ed1a7102190a18ae8eae4a0af8876bc4",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 0.950103,
-        "css_inlining_ms": 1.686711,
-        "css_parse_ms": null,
-        "cascade_ms": null,
-        "box_tree_ms": null,
-        "layout_ms": 31.835625,
-        "text_fallback_ms": 0.640526,
-        "text_shape_ms": 0.5534629999999998,
-        "paint_build_ms": 0.09166300000000001,
-        "paint_optimize_ms": null,
-        "paint_rasterize_ms": 3.620148,
-        "text_rasterize_ms": 2.4650319999999994,
+        "dom_parse_ms": 1.030112,
+        "css_inlining_ms": null,
+        "css_parse_ms": 150.465717,
+        "cascade_ms": 90.57401,
+        "box_tree_ms": 34.655863000000004,
+        "layout_ms": 5.560114,
+        "text_fallback_ms": 1.223498,
+        "text_shape_ms": 0.674786,
+        "paint_build_ms": 0.17760399999999998,
+        "paint_optimize_ms": 0.0,
+        "paint_rasterize_ms": 5.132395,
+        "text_rasterize_ms": 3.5705690000000008,
         "encode_ms": null
       },
       "counts": {
@@ -80,6 +80,8 @@
         "block_intrinsic": 16,
         "flex_intrinsic": 0,
         "inline_intrinsic": 0,
+        "table_cell_intrinsic_measurements": null,
+        "table_cell_layouts": null,
         "layout_cache_lookups": 4,
         "layout_cache_hits": 0,
         "layout_cache_stores": 0,
@@ -105,7 +107,7 @@
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 3.711811,
+        "serial_ms": 5.3099989999999995,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -116,9 +118,12 @@
         "fetch_counts": {
           "Image": 1
         },
+        "resource_cache_fresh_hits": 0,
+        "resource_cache_revalidated_hits": 0,
+        "resource_cache_misses": 0,
         "image_cache_hits": 0,
         "image_cache_misses": 1,
-        "image_decode_ms": 0.174754
+        "image_decode_ms": 0.194464
       }
     }
   }

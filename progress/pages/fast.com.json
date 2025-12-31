@@ -1,16 +1,16 @@
 {
-  "url": "https://fast.com/",
+  "url": "https://fast.com",
   "status": "ok",
-  "total_ms": 1259.054667,
+  "total_ms": 649.3544380000001,
   "stages_ms": {
-    "fetch": 1.298302,
-    "css": 563.652642,
-    "cascade": 0.0,
-    "layout": 308.16326000000004,
-    "paint": 263.064307
+    "fetch": 1.593965,
+    "css": 49.412553,
+    "cascade": 132.644459,
+    "layout": 5.6983559999999995,
+    "paint": 108.602502
   },
   "notes": "",
-  "hotspot": "css",
+  "hotspot": "cascade",
   "failure_stage": null,
   "timeout_stage": null,
   "last_good_commit": "833aa788ed1a7102190a18ae8eae4a0af8876bc4",
@@ -19,23 +19,23 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 1.298302,
-        "css_inlining_ms": 563.652642,
-        "css_parse_ms": null,
-        "cascade_ms": null,
-        "box_tree_ms": null,
-        "layout_ms": 307.77099000000004,
-        "text_fallback_ms": 0.36512,
-        "text_shape_ms": 0.3922699999999999,
-        "paint_build_ms": 0.120283,
-        "paint_optimize_ms": null,
-        "paint_rasterize_ms": 262.561534,
-        "text_rasterize_ms": 0.38249,
+        "dom_parse_ms": 1.593965,
+        "css_inlining_ms": null,
+        "css_parse_ms": 49.412553,
+        "cascade_ms": 71.057775,
+        "box_tree_ms": 61.586684000000005,
+        "layout_ms": 5.226946,
+        "text_fallback_ms": 0.5972230000000001,
+        "text_shape_ms": 0.4714099999999999,
+        "paint_build_ms": 0.185314,
+        "paint_optimize_ms": 0.0,
+        "paint_rasterize_ms": 107.818135,
+        "text_rasterize_ms": 0.5990530000000001,
         "encode_ms": null
       },
       "counts": {
-        "dom_nodes": 635,
-        "styled_nodes": 635,
+        "dom_nodes": 633,
+        "styled_nodes": 633,
         "box_nodes": 155,
         "fragments": 107,
         "shaped_runs": 12,
@@ -79,7 +79,9 @@
         "intrinsic_stores": 46,
         "block_intrinsic": 48,
         "flex_intrinsic": 0,
-        "inline_intrinsic": 34,
+        "inline_intrinsic": 0,
+        "table_cell_intrinsic_measurements": null,
+        "table_cell_layouts": null,
         "layout_cache_lookups": 5,
         "layout_cache_hits": 0,
         "layout_cache_stores": 5,
@@ -100,12 +102,12 @@
         "transparent_removed": null,
         "noop_removed": null,
         "merged_items": null,
-        "gradient_ms": 0.7604190000000001,
+        "gradient_ms": 1.135656,
         "gradient_pixels": 27776,
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 262.68181699999997,
+        "serial_ms": 108.003449,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -114,12 +116,15 @@
       },
       "resources": {
         "fetch_counts": {
-          "Image": 2,
-          "Stylesheet": 2
+          "Stylesheet": 2,
+          "Image": 2
         },
+        "resource_cache_fresh_hits": 0,
+        "resource_cache_revalidated_hits": 0,
+        "resource_cache_misses": 2,
         "image_cache_hits": 0,
         "image_cache_misses": 2,
-        "image_decode_ms": 1.040915
+        "image_decode_ms": 1.916003
       }
     }
   }

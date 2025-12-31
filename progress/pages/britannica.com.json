@@ -1,16 +1,16 @@
 {
-  "url": "https://www.britannica.com/",
+  "url": "https://britannica.com",
   "status": "ok",
-  "total_ms": 130.96354399999998,
+  "total_ms": 322.317517,
   "stages_ms": {
-    "fetch": 0.171654,
-    "css": 0.032211000000000004,
-    "cascade": 0.0,
-    "layout": 19.899092,
-    "paint": 14.567123
+    "fetch": 0.201924,
+    "css": 11.906586,
+    "cascade": 48.204126,
+    "layout": 4.1678820000000005,
+    "paint": 38.774624
   },
   "notes": "",
-  "hotspot": "layout",
+  "hotspot": "cascade",
   "failure_stage": null,
   "timeout_stage": null,
   "last_good_commit": "02eacedd5340344865616a4f4d19e08dd6f218fe",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 0.171654,
-        "css_inlining_ms": 0.032211000000000004,
-        "css_parse_ms": null,
-        "cascade_ms": null,
-        "box_tree_ms": null,
-        "layout_ms": 19.528164,
-        "text_fallback_ms": 0.391849,
-        "text_shape_ms": 0.3709280000000001,
-        "paint_build_ms": 0.031031000000000003,
-        "paint_optimize_ms": null,
-        "paint_rasterize_ms": 14.116182,
-        "text_rasterize_ms": 0.41991,
+        "dom_parse_ms": 0.201924,
+        "css_inlining_ms": null,
+        "css_parse_ms": 11.906586,
+        "cascade_ms": 24.401375,
+        "box_tree_ms": 23.802751,
+        "layout_ms": 3.687132,
+        "text_fallback_ms": 0.6346240000000001,
+        "text_shape_ms": 0.48075,
+        "paint_build_ms": 0.099402,
+        "paint_optimize_ms": 0.0,
+        "paint_rasterize_ms": 37.878285,
+        "text_rasterize_ms": 0.7969369999999999,
         "encode_ms": null
       },
       "counts": {
@@ -79,7 +79,9 @@
         "intrinsic_stores": 10,
         "block_intrinsic": 11,
         "flex_intrinsic": 2,
-        "inline_intrinsic": 3,
+        "inline_intrinsic": 0,
+        "table_cell_intrinsic_measurements": null,
+        "table_cell_layouts": null,
         "layout_cache_lookups": 1,
         "layout_cache_hits": 0,
         "layout_cache_stores": 1,
@@ -105,7 +107,7 @@
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 14.147213,
+        "serial_ms": 37.977687,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -116,9 +118,12 @@
         "fetch_counts": {
           "Image": 1
         },
+        "resource_cache_fresh_hits": 0,
+        "resource_cache_revalidated_hits": 0,
+        "resource_cache_misses": 1,
         "image_cache_hits": 0,
         "image_cache_misses": 1,
-        "image_decode_ms": 0.17081400000000002
+        "image_decode_ms": 0.335798
       }
     }
   }

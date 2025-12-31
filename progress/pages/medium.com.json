@@ -1,16 +1,16 @@
 {
-  "url": "https://medium.com/",
+  "url": "https://medium.com",
   "status": "ok",
-  "total_ms": 433.442457,
+  "total_ms": 533.399721,
   "stages_ms": {
-    "fetch": 0.19586399999999998,
-    "css": 0.026959999999999998,
-    "cascade": 0.0,
-    "layout": 28.775177,
-    "paint": 103.754317
+    "fetch": 0.233706,
+    "css": 100.792488,
+    "cascade": 78.109123,
+    "layout": 4.43581,
+    "paint": 18.990993999999997
   },
   "notes": "",
-  "hotspot": "paint",
+  "hotspot": "css",
   "failure_stage": null,
   "timeout_stage": null,
   "last_good_commit": "833aa788ed1a7102190a18ae8eae4a0af8876bc4",
@@ -19,18 +19,18 @@
     "stats": {
       "timings": {
         "html_decode_ms": null,
-        "dom_parse_ms": 0.19586399999999998,
-        "css_inlining_ms": 0.026959999999999998,
-        "css_parse_ms": null,
-        "cascade_ms": null,
-        "box_tree_ms": null,
-        "layout_ms": 28.376248,
-        "text_fallback_ms": 0.499703,
-        "text_shape_ms": 0.39892900000000003,
-        "paint_build_ms": 0.045391,
-        "paint_optimize_ms": null,
-        "paint_rasterize_ms": 103.227995,
-        "text_rasterize_ms": 0.480931,
+        "dom_parse_ms": 0.233706,
+        "css_inlining_ms": null,
+        "css_parse_ms": 100.792488,
+        "cascade_ms": 46.248762,
+        "box_tree_ms": 31.860360999999997,
+        "layout_ms": 3.902238,
+        "text_fallback_ms": 0.701106,
+        "text_shape_ms": 0.533572,
+        "paint_build_ms": 0.08032199999999999,
+        "paint_optimize_ms": 0.0,
+        "paint_rasterize_ms": 18.071883,
+        "text_rasterize_ms": 0.838789,
         "encode_ms": null
       },
       "counts": {
@@ -79,7 +79,9 @@
         "intrinsic_stores": 10,
         "block_intrinsic": 11,
         "flex_intrinsic": 2,
-        "inline_intrinsic": 3,
+        "inline_intrinsic": 0,
+        "table_cell_intrinsic_measurements": null,
+        "table_cell_layouts": null,
         "layout_cache_lookups": 1,
         "layout_cache_hits": 0,
         "layout_cache_stores": 1,
@@ -105,7 +107,7 @@
         "parallel_tasks": 0,
         "parallel_threads": 1,
         "parallel_ms": 0.0,
-        "serial_ms": 103.273386,
+        "serial_ms": 18.152205,
         "filter_cache_hits": 0,
         "filter_cache_misses": 0,
         "blur_cache_hits": 0,
@@ -116,9 +118,12 @@
         "fetch_counts": {
           "Image": 1
         },
+        "resource_cache_fresh_hits": 0,
+        "resource_cache_revalidated_hits": 0,
+        "resource_cache_misses": 1,
         "image_cache_hits": 0,
         "image_cache_misses": 1,
-        "image_decode_ms": 0.252566
+        "image_decode_ms": 0.386099
       }
     }
   }
