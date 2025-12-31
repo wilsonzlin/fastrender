@@ -3417,7 +3417,7 @@ pub struct InlineStyle {
   pub disabled: bool,
 }
 
-/// External stylesheet reference extracted from a `<link>` element.
+/// External stylesheet candidate extracted from a `<link>` element.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StylesheetLink {
   /// The href value, as-authored.
@@ -3439,7 +3439,7 @@ pub struct StylesheetLink {
 pub enum StylesheetSource {
   /// Inline `<style>` element.
   Inline(InlineStyle),
-  /// External `<link rel="stylesheet">` reference.
+  /// External `<link>` reference (eligibility depends on rel/as and runtime toggles).
   External(StylesheetLink),
 }
 
@@ -3500,7 +3500,7 @@ fn is_inert_template(node: &DomNode) -> bool {
   !matches!(mode_attr.to_ascii_lowercase().as_str(), "open" | "closed")
 }
 
-/// Extract inline `<style>` blocks and external `<link rel="stylesheet">` entries from a DOM.
+/// Extract inline `<style>` blocks and external `<link>` entries from a DOM.
 ///
 /// Each stylesheet is tagged with the DOM tree scope it belongs to (document vs. a particular
 /// shadow root). Document order is preserved within each scope by walking the tree preorder.
