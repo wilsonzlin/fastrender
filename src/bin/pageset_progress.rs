@@ -2337,6 +2337,29 @@ fn nodes_summary(counts: &RenderCounts) -> Option<String> {
   }
 }
 
+fn text_summary(counts: &RenderCounts) -> Option<String> {
+  let mut parts = Vec::new();
+  push_opt_usize(&mut parts, "runs", counts.shaped_runs);
+  push_opt_usize(&mut parts, "glyphs", counts.glyphs);
+  push_opt_usize(&mut parts, "fallback_hits", counts.fallback_cache_hits);
+  push_opt_usize(&mut parts, "fallback_misses", counts.fallback_cache_misses);
+  push_opt_usize(
+    &mut parts,
+    "last_resort_fallbacks",
+    counts.last_resort_font_fallbacks,
+  );
+  if let Some(samples) = &counts.last_resort_font_fallback_samples {
+    if !samples.is_empty() {
+      parts.push(format!("last_resort_samples=[{}]", samples.join("; ")));
+    }
+  }
+  if parts.is_empty() {
+    None
+  } else {
+    Some(parts.join(" "))
+  }
+}
+
 fn cascade_summary(cascade: &CascadeDiagnostics) -> Option<String> {
   let mut parts = Vec::new();
   push_opt_u64(&mut parts, "nodes", cascade.nodes);
@@ -2537,6 +2560,9 @@ fn print_render_stats(stats: &RenderStats, indent: &str) -> bool {
 
   if let Some(nodes) = nodes_summary(&stats.counts) {
     lines.push(("nodes", nodes));
+  }
+  if let Some(text) = text_summary(&stats.counts) {
+    lines.push(("text", text));
   }
   if let Some(cascade) = cascade_summary(&stats.cascade) {
     lines.push(("cascade", cascade));
