@@ -3,7 +3,7 @@
 FastRender extracts CSS from:
 
 - Inline `<style>` blocks in the document
-- Linked stylesheets (`<link rel="stylesheet" href="…">`)
+- Linked stylesheets (`<link rel="stylesheet" href="…">`, plus `<link rel="preload" as="style" href="…">` when `FASTR_FETCH_PRELOAD_STYLESHEETS` is enabled; `modulepreload` is opt-in via `FASTR_FETCH_MODULEPRELOAD_STYLESHEETS`)
 - `@import` rules inside stylesheets
 
 In the render pipeline:

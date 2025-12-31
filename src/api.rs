@@ -11301,6 +11301,43 @@ mod tests {
   }
 
   #[test]
+  fn fetch_link_css_toggle_disables_linked_stylesheets_via_builder() {
+    let base_url = "https://example.com/page.html";
+    let fetcher = Arc::new(
+      RecordingFetcher::default()
+        .with_entry("https://example.com/a.css", "div { color: rgb(1, 2, 3); }"),
+    );
+
+    let toggles = RuntimeToggles::from_map(HashMap::from([(
+      "FASTR_FETCH_LINK_CSS".to_string(),
+      "0".to_string(),
+    )]));
+    let mut renderer = FastRender::builder()
+      .base_url(base_url.to_string())
+      .fetcher(fetcher.clone() as Arc<dyn ResourceFetcher>)
+      .runtime_toggles(toggles)
+      .build()
+      .unwrap();
+
+    let html = r#"
+      <style>div { color: rgb(200, 0, 0); }</style>
+      <link rel="stylesheet" href="a.css">
+      <div>Link toggle</div>
+    "#;
+    let dom = renderer.parse_html(html).unwrap();
+    let tree = renderer.layout_document(&dom, 200, 200).unwrap();
+
+    let fetched_urls = fetcher.fetched_urls();
+    assert!(
+      !fetched_urls.contains(&"https://example.com/a.css".to_string()),
+      "expected linked stylesheet fetch to be suppressed when FASTR_FETCH_LINK_CSS=0; fetched={fetched_urls:?}"
+    );
+
+    let color = text_color_for(&tree, "Link toggle").unwrap();
+    assert_eq!(color, Rgba::rgb(200, 0, 0));
+  }
+
+  #[test]
   fn preload_stylesheets_apply_from_dom_links() {
     let base_url = "https://example.com/page.html";
     let fetcher = MapFetcher::default().with_entry(
