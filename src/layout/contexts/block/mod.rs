@@ -2152,6 +2152,20 @@ impl BlockFormattingContext {
     }
   }
 
+  fn clone_with_children(parent: &BoxNode, children: Vec<BoxNode>) -> BoxNode {
+    BoxNode {
+      style: parent.style.clone(),
+      starting_style: parent.starting_style.clone(),
+      box_type: parent.box_type.clone(),
+      children,
+      id: parent.id,
+      debug_info: parent.debug_info.clone(),
+      styled_node_id: parent.styled_node_id,
+      first_line_style: parent.first_line_style.clone(),
+      first_letter_style: parent.first_letter_style.clone(),
+    }
+  }
+
   fn translate_with_logical(
     fragment: &mut FragmentNode,
     dx: f32,
@@ -2193,8 +2207,7 @@ impl BlockFormattingContext {
     }
 
     if column_count <= 1 {
-      let mut parent_clone = parent.clone();
-      parent_clone.children = children.to_vec();
+      let parent_clone = Self::clone_with_children(parent, children.to_vec());
       let (frags, height, positioned) = self.layout_children(
         &parent_clone,
         &LayoutConstraints::new(AvailableSpace::Definite(column_width), available_height),
@@ -2203,8 +2216,7 @@ impl BlockFormattingContext {
       return Ok((frags, height, positioned, height));
     }
 
-    let mut parent_clone = parent.clone();
-    parent_clone.children = children.to_vec();
+    let parent_clone = Self::clone_with_children(parent, children.to_vec());
     let column_constraints =
       LayoutConstraints::new(AvailableSpace::Definite(column_width), available_height);
     let (flow_fragments, flow_height, flow_positioned) =
@@ -2592,8 +2604,8 @@ impl BlockFormattingContext {
       }
 
       if let Some(span_idx) = next_span {
-        let mut span_parent = parent.clone();
-        span_parent.children = vec![parent.children[span_idx].clone()];
+        let span_parent =
+          Self::clone_with_children(parent, vec![parent.children[span_idx].clone()]);
         let span_constraints = LayoutConstraints::new(
           AvailableSpace::Definite(available_inline),
           constraints.available_height,
@@ -4144,6 +4156,127 @@ mod tests {
 
     assert_eq!(fragment.bounds.width(), 800.0);
     assert_eq!(fragment.bounds.height(), 200.0);
+  }
+
+  #[test]
+  fn multicol_column_span_all_fragment_positions_are_stable() {
+    fn block_with_id(id: usize, style: Arc<ComputedStyle>) -> BoxNode {
+      let mut node = BoxNode::new_block(style, FormattingContextType::Block, vec![]);
+      node.id = id;
+      node
+    }
+
+    fn fragments_with_id<'a>(root: &'a FragmentNode, id: usize) -> Vec<&'a FragmentNode> {
+      fn walk<'a>(node: &'a FragmentNode, id: usize, out: &mut Vec<&'a FragmentNode>) {
+        if let FragmentContent::Block {
+          box_id: Some(box_id),
+        } = &node.content
+        {
+          if *box_id == id {
+            out.push(node);
+          }
+        }
+        for child in node.children.iter() {
+          walk(child, id, out);
+        }
+      }
+
+      let mut out = Vec::new();
+      walk(root, id, &mut out);
+      out
+    }
+
+    let mut multicol_style = ComputedStyle::default();
+    multicol_style.display = Display::Block;
+    multicol_style.column_count = Some(2);
+    multicol_style.column_gap = Length::px(20.0);
+    let multicol_style = Arc::new(multicol_style);
+
+    let child_style = block_style_with_height(20.0);
+    let span_style = {
+      let mut style = (*block_style_with_height(10.0)).clone();
+      style.column_span = ColumnSpan::All;
+      Arc::new(style)
+    };
+
+    let mut multicol = BoxNode::new_block(
+      multicol_style,
+      FormattingContextType::Block,
+      vec![
+        block_with_id(5001, child_style.clone()),
+        block_with_id(5002, child_style.clone()),
+        block_with_id(5003, child_style.clone()),
+        block_with_id(5004, child_style.clone()),
+        block_with_id(5005, span_style),
+        block_with_id(5006, child_style.clone()),
+        block_with_id(5007, child_style.clone()),
+        block_with_id(5008, child_style.clone()),
+        block_with_id(5009, child_style),
+      ],
+    );
+    multicol.id = 5000;
+
+    let fc = BlockFormattingContext::new();
+    let constraints =
+      LayoutConstraints::new(AvailableSpace::Definite(200.0), AvailableSpace::Indefinite);
+    let fragment = fc.layout(&multicol, &constraints).expect("multicol layout");
+
+    let col_width = (200.0 - 20.0) / 2.0;
+    let col2_x = col_width + 20.0;
+    let segment_height = 40.0;
+    let span_height = 10.0;
+    let after_y = segment_height + span_height;
+
+    let expected = [
+      (5001, 0.0, 0.0, col_width, 20.0),
+      (5002, 0.0, 20.0, col_width, 20.0),
+      (5003, col2_x, 0.0, col_width, 20.0),
+      (5004, col2_x, 20.0, col_width, 20.0),
+      (5005, 0.0, segment_height, 200.0, span_height),
+      (5006, 0.0, after_y, col_width, 20.0),
+      (5007, 0.0, after_y + 20.0, col_width, 20.0),
+      (5008, col2_x, after_y, col_width, 20.0),
+      (5009, col2_x, after_y + 20.0, col_width, 20.0),
+    ];
+
+    for (id, x, y, w, h) in expected {
+      let hits = fragments_with_id(&fragment, id);
+      assert_eq!(
+        hits.len(),
+        1,
+        "expected exactly one fragment for box_id={}",
+        id
+      );
+      let frag = hits[0];
+      assert!(
+        (frag.bounds.x() - x).abs() < 0.1,
+        "box_id={} expected x≈{}, got {}",
+        id,
+        x,
+        frag.bounds.x()
+      );
+      assert!(
+        (frag.bounds.y() - y).abs() < 0.1,
+        "box_id={} expected y≈{}, got {}",
+        id,
+        y,
+        frag.bounds.y()
+      );
+      assert!(
+        (frag.bounds.width() - w).abs() < 0.1,
+        "box_id={} expected width≈{}, got {}",
+        id,
+        w,
+        frag.bounds.width()
+      );
+      assert!(
+        (frag.bounds.height() - h).abs() < 0.1,
+        "box_id={} expected height≈{}, got {}",
+        id,
+        h,
+        frag.bounds.height()
+      );
+    }
   }
 
   #[test]
