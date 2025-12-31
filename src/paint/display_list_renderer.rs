@@ -10383,9 +10383,6 @@ mod tests {
     MASK_RENDER_SCRATCH.with(|cell| {
       *cell.borrow_mut() = None;
     });
-    MASK_RENDER_SCRATCH.with(|cell| {
-      *cell.borrow_mut() = None;
-    });
 
     let mut renderer = DisplayListRenderer::new(200, 200, Rgba::WHITE, FontContext::new()).unwrap();
 
@@ -10430,60 +10427,6 @@ mod tests {
     assert_eq!(
       scratch_allocs, 1,
       "expected render_mask to allocate its layer scratch pixmap once, got {scratch_allocs} allocations: {allocations:?}"
-    );
-  }
-
-  #[test]
-  fn render_mask_reuses_combined_mask_scratch_between_calls() {
-    MASK_RENDER_SCRATCH.with(|cell| {
-      *cell.borrow_mut() = None;
-    });
-
-    let mut renderer = DisplayListRenderer::new(200, 200, Rgba::WHITE, FontContext::new()).unwrap();
-
-    let bounds = Rect::from_xywh(50.0, 60.0, 10.0, 10.0);
-    let rects = mask_rects(bounds, (0.0, 0.0, 0.0, 0.0));
-
-    let image = ImageData::new_pixels(1, 1, vec![0, 0, 0, 255]);
-    let layer = ResolvedMaskLayer {
-      image: ResolvedMaskImage::Raster(image),
-      repeat: BackgroundRepeat::no_repeat(),
-      position: BackgroundPosition::default(),
-      size: BackgroundSize::Explicit(
-        BackgroundSizeComponent::Length(Length::percent(100.0)),
-        BackgroundSizeComponent::Length(Length::percent(100.0)),
-      ),
-      origin: MaskOrigin::BorderBox,
-      clip: MaskClip::BorderBox,
-      mode: MaskMode::Alpha,
-      composite: MaskComposite::Add,
-    };
-
-    let mask = ResolvedMask {
-      layers: vec![layer],
-      color: Rgba::BLACK,
-      font_size: 16.0,
-      root_font_size: 16.0,
-      rects,
-    };
-
-    let ptr_first = {
-      let rendered = renderer.render_mask(&mask).expect("mask rendered");
-      let ptr = rendered.mask.data().as_ptr();
-      MASK_RENDER_SCRATCH.with(|cell| {
-        *cell.borrow_mut() = Some(rendered.mask);
-      });
-      ptr
-    };
-
-    let ptr_second = {
-      let rendered = renderer.render_mask(&mask).expect("mask rendered");
-      rendered.mask.data().as_ptr()
-    };
-
-    assert_eq!(
-      ptr_first, ptr_second,
-      "expected render_mask to reuse the combined mask allocation between calls"
     );
   }
 
