@@ -80,8 +80,10 @@ use selectors::context::QuirksMode;
 use selectors::context::SelectorCaches;
 use selectors::context::VisitedHandlingMode;
 use selectors::matching::matches_selector;
+use selectors::matching::selector_may_match;
 use selectors::matching::MatchingContext;
 use selectors::matching::MatchingMode;
+use selectors::parser::AncestorHashes;
 use selectors::parser::Selector;
 use selectors::parser::SelectorList;
 use selectors::Element;
@@ -116,6 +118,9 @@ static CASCADE_PROFILE_CANDIDATES_BY_ATTR: AtomicU64 = AtomicU64::new(0);
 static CASCADE_PROFILE_CANDIDATES_UNIVERSAL: AtomicU64 = AtomicU64::new(0);
 static CASCADE_PROFILE_SELECTOR_BLOOM_BUILT: AtomicU64 = AtomicU64::new(0);
 static CASCADE_PROFILE_SELECTOR_BLOOM_TIME_NS: AtomicU64 = AtomicU64::new(0);
+static CASCADE_PROFILE_SELECTOR_BLOOM_FAST_REJECTS: AtomicU64 = AtomicU64::new(0);
+static CASCADE_PROFILE_SELECTOR_ATTEMPTS_TOTAL: AtomicU64 = AtomicU64::new(0);
+static CASCADE_PROFILE_SELECTOR_ATTEMPTS_AFTER_BLOOM: AtomicU64 = AtomicU64::new(0);
 
 const CASCADE_NODE_DEADLINE_STRIDE: usize = 1024;
 const CASCADE_SELECTOR_DEADLINE_STRIDE: usize = 64;
@@ -505,6 +510,9 @@ pub struct CascadeProfileStats {
   pub rule_candidates_by_tag: u64,
   pub rule_candidates_by_attr: u64,
   pub rule_candidates_universal: u64,
+  pub selector_bloom_fast_rejects: u64,
+  pub selector_attempts_total: u64,
+  pub selector_attempts_after_bloom: u64,
   pub selector_time_ns: u64,
   pub declaration_time_ns: u64,
   pub pseudo_time_ns: u64,
@@ -521,6 +529,9 @@ pub fn capture_cascade_profile() -> CascadeProfileStats {
     rule_candidates_by_tag: CASCADE_PROFILE_CANDIDATES_BY_TAG.load(Ordering::Relaxed),
     rule_candidates_by_attr: CASCADE_PROFILE_CANDIDATES_BY_ATTR.load(Ordering::Relaxed),
     rule_candidates_universal: CASCADE_PROFILE_CANDIDATES_UNIVERSAL.load(Ordering::Relaxed),
+    selector_bloom_fast_rejects: CASCADE_PROFILE_SELECTOR_BLOOM_FAST_REJECTS.load(Ordering::Relaxed),
+    selector_attempts_total: CASCADE_PROFILE_SELECTOR_ATTEMPTS_TOTAL.load(Ordering::Relaxed),
+    selector_attempts_after_bloom: CASCADE_PROFILE_SELECTOR_ATTEMPTS_AFTER_BLOOM.load(Ordering::Relaxed),
     selector_time_ns: CASCADE_PROFILE_FIND_TIME_NS.load(Ordering::Relaxed),
     declaration_time_ns: CASCADE_PROFILE_DECL_TIME_NS.load(Ordering::Relaxed),
     pseudo_time_ns: CASCADE_PROFILE_PSEUDO_TIME_NS.load(Ordering::Relaxed),
@@ -544,6 +555,9 @@ pub fn reset_cascade_profile() {
   CASCADE_PROFILE_CANDIDATES_UNIVERSAL.store(0, Ordering::Relaxed);
   CASCADE_PROFILE_SELECTOR_BLOOM_BUILT.store(0, Ordering::Relaxed);
   CASCADE_PROFILE_SELECTOR_BLOOM_TIME_NS.store(0, Ordering::Relaxed);
+  CASCADE_PROFILE_SELECTOR_BLOOM_FAST_REJECTS.store(0, Ordering::Relaxed);
+  CASCADE_PROFILE_SELECTOR_ATTEMPTS_TOTAL.store(0, Ordering::Relaxed);
+  CASCADE_PROFILE_SELECTOR_ATTEMPTS_AFTER_BLOOM.store(0, Ordering::Relaxed);
   CASCADE_PROFILE_FIND_TIME_NS.store(0, Ordering::Relaxed);
   CASCADE_PROFILE_DECL_TIME_NS.store(0, Ordering::Relaxed);
   CASCADE_PROFILE_PSEUDO_TIME_NS.store(0, Ordering::Relaxed);
@@ -556,6 +570,11 @@ fn log_cascade_profile(elapsed_ms: f64) {
   let pruned = CASCADE_PROFILE_RULE_PRUNED.load(Ordering::Relaxed);
   let bloom_built = CASCADE_PROFILE_SELECTOR_BLOOM_BUILT.load(Ordering::Relaxed);
   let bloom_time_ns = CASCADE_PROFILE_SELECTOR_BLOOM_TIME_NS.load(Ordering::Relaxed);
+  let selector_attempts_total = CASCADE_PROFILE_SELECTOR_ATTEMPTS_TOTAL.load(Ordering::Relaxed);
+  let selector_attempts_after_bloom =
+    CASCADE_PROFILE_SELECTOR_ATTEMPTS_AFTER_BLOOM.load(Ordering::Relaxed);
+  let selector_bloom_fast_rejects =
+    CASCADE_PROFILE_SELECTOR_BLOOM_FAST_REJECTS.load(Ordering::Relaxed);
   let find_time_ns = CASCADE_PROFILE_FIND_TIME_NS.load(Ordering::Relaxed);
   let decl_time_ns = CASCADE_PROFILE_DECL_TIME_NS.load(Ordering::Relaxed);
   let pseudo_time_ns = CASCADE_PROFILE_PSEUDO_TIME_NS.load(Ordering::Relaxed);
@@ -573,8 +592,28 @@ fn log_cascade_profile(elapsed_ms: f64) {
   } else {
     0.0
   };
+  let avg_selector_attempts = if nodes > 0 {
+    selector_attempts_total as f64 / nodes as f64
+  } else {
+    0.0
+  };
+  let avg_selector_attempts_after_bloom = if nodes > 0 {
+    selector_attempts_after_bloom as f64 / nodes as f64
+  } else {
+    0.0
+  };
+  let bloom_reject_pct = if selector_attempts_total > 0 {
+    selector_bloom_fast_rejects as f64 * 100.0 / selector_attempts_total as f64
+  } else {
+    0.0
+  };
+  let after_bloom_pct = if selector_attempts_total > 0 {
+    selector_attempts_after_bloom as f64 * 100.0 / selector_attempts_total as f64
+  } else {
+    0.0
+  };
   eprintln!(
-    "cascade profile: total_ms={:.2} nodes={} candidates={} pruned={} matches={} avg_candidates={:.1} avg_matches={:.1} bloom_built={} bloom_ms={:.2} find_ms={:.2} decl_ms={:.2} pseudo_ms={:.2}",
+    "cascade profile: total_ms={:.2} nodes={} candidates={} pruned={} matches={} avg_candidates={:.1} avg_matches={:.1} selector_attempts={} after_bloom={} bloom_rejects={} bloom_reject_pct={:.1}% after_bloom_pct={:.1}% avg_selector_attempts={:.1} avg_after_bloom={:.1} bloom_built={} bloom_ms={:.2} find_ms={:.2} decl_ms={:.2} pseudo_ms={:.2}",
     elapsed_ms,
     nodes,
     candidates,
@@ -582,6 +621,13 @@ fn log_cascade_profile(elapsed_ms: f64) {
     matches,
     avg_candidates,
     avg_matches,
+    selector_attempts_total,
+    selector_attempts_after_bloom,
+    selector_bloom_fast_rejects,
+    bloom_reject_pct,
+    after_bloom_pct,
+    avg_selector_attempts,
+    avg_selector_attempts_after_bloom,
     bloom_built,
     bloom_ms,
     find_ms,
@@ -929,6 +975,59 @@ fn record_pseudo_time(elapsed: std::time::Duration) {
   }
 }
 
+fn build_ancestor_bloom_filter(ancestors: &[&DomNode]) -> Option<selectors::bloom::BloomFilter> {
+  if !crate::dom::selector_bloom_enabled() {
+    return None;
+  }
+
+  let mut filter = selectors::bloom::BloomFilter::new();
+  for ancestor in ancestors.iter() {
+    if !ancestor.is_element() {
+      continue;
+    }
+    let ancestor_ref = ElementRef::new(*ancestor);
+    let _ = ancestor_ref.add_element_unique_hashes(&mut filter);
+  }
+
+  Some(filter)
+}
+
+#[inline(always)]
+fn matches_selector_cascade(
+  selector: &Selector<FastRenderSelectorImpl>,
+  hashes: Option<&AncestorHashes>,
+  element: &ElementRef,
+  context: &mut MatchingContext<FastRenderSelectorImpl>,
+) -> bool {
+  let profiling = cascade_profile_enabled();
+  if profiling {
+    CASCADE_PROFILE_SELECTOR_ATTEMPTS_TOTAL.fetch_add(1, Ordering::Relaxed);
+  }
+
+  if let Some(filter) = context.bloom_filter {
+    let computed_hashes;
+    let hashes = match hashes {
+      Some(hashes) => hashes,
+      None => {
+        computed_hashes = AncestorHashes::new(selector, context.quirks_mode());
+        &computed_hashes
+      }
+    };
+    if !selector_may_match(hashes, filter) {
+      if profiling {
+        CASCADE_PROFILE_SELECTOR_BLOOM_FAST_REJECTS.fetch_add(1, Ordering::Relaxed);
+      }
+      return false;
+    }
+  }
+
+  if profiling {
+    CASCADE_PROFILE_SELECTOR_ATTEMPTS_AFTER_BLOOM.fetch_add(1, Ordering::Relaxed);
+  }
+
+  matches_selector(selector, 0, None, element, context)
+}
+
 /// The origin of a style rule for cascade ordering.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum StyleOrigin {
@@ -1235,6 +1334,8 @@ struct IndexedSelector<'a> {
   rule_idx: usize,
   selector: &'a Selector<crate::css::selectors::FastRenderSelectorImpl>,
   specificity: u32,
+  ancestor_hashes_non_quirks: AncestorHashes,
+  ancestor_hashes_quirks: AncestorHashes,
   metadata: SelectorMetadata,
 }
 
@@ -2659,10 +2760,14 @@ impl<'a> RuleIndex<'a> {
           {
             index.has_has_requirements = true;
           }
+          let ancestor_hashes_non_quirks = AncestorHashes::new(selector, QuirksMode::NoQuirks);
+          let ancestor_hashes_quirks = AncestorHashes::new(selector, QuirksMode::Quirks);
           index.pseudo_selectors.push(IndexedSelector {
             rule_idx,
             selector,
             specificity: selector.specificity(),
+            ancestor_hashes_non_quirks,
+            ancestor_hashes_quirks,
             metadata,
           });
           for key in pseudo_selector_subject_keys(selector) {
@@ -2688,10 +2793,14 @@ impl<'a> RuleIndex<'a> {
         {
           index.has_has_requirements = true;
         }
+        let ancestor_hashes_non_quirks = AncestorHashes::new(selector, QuirksMode::NoQuirks);
+        let ancestor_hashes_quirks = AncestorHashes::new(selector, QuirksMode::Quirks);
         index.selectors.push(IndexedSelector {
           rule_idx,
           selector,
           specificity: selector.specificity(),
+          ancestor_hashes_non_quirks,
+          ancestor_hashes_quirks,
           metadata,
         });
         for key in selector_keys(selector) {
@@ -7322,6 +7431,46 @@ mod tests {
     );
     assert!(!prepared.needs_selector_bloom_summaries);
     assert!(prepared.dom_maps.selector_blooms().is_none());
+  }
+
+  #[test]
+  fn cascade_profile_tracks_bloom_fast_rejects() {
+    crate::dom::set_selector_bloom_enabled(true);
+
+    let prev_profile_enabled = cascade_profile_enabled();
+    set_cascade_profile_enabled(true);
+    reset_cascade_profile();
+
+    let dom = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("class".to_string(), "b".to_string())],
+      },
+      children: vec![],
+    };
+    let stylesheet = parse_stylesheet(".a .b { color: red; }").unwrap();
+    let _styled = apply_styles(&dom, &stylesheet);
+
+    let stats = capture_cascade_profile();
+    assert!(
+      stats.selector_attempts_total > 0,
+      "expected selector attempts to be recorded: {:?}",
+      stats
+    );
+    assert!(
+      stats.selector_bloom_fast_rejects > 0,
+      "expected at least one bloom fast reject: {:?}",
+      stats
+    );
+    assert_eq!(
+      stats.selector_attempts_after_bloom + stats.selector_bloom_fast_rejects,
+      stats.selector_attempts_total,
+      "selector attempt accounting should be lossless: {:?}",
+      stats
+    );
+
+    set_cascade_profile_enabled(prev_profile_enabled);
   }
 
   fn child_font_weight(parent_style: &str, child_style: &str) -> u16 {
@@ -12181,7 +12330,7 @@ fn resolve_scopes<'a>(
         let matches = context.nest_for_scope_condition(Some(base_ref.opaque()), |ctx| {
           start_selectors
             .iter()
-            .any(|sel| matches_selector(sel, 0, None, &candidate_ref, ctx))
+            .any(|sel| matches_selector_cascade(sel, None, &candidate_ref, ctx))
         });
         if matches {
           matched_root = Some(idx);
@@ -12213,7 +12362,7 @@ fn resolve_scopes<'a>(
         let blocked = context.nest_for_scope_condition(Some(scope_ref.opaque()), |ctx| {
           limit_selectors
             .iter()
-            .any(|sel| matches_selector(sel, 0, None, &candidate_ref, ctx))
+            .any(|sel| matches_selector_cascade(sel, None, &candidate_ref, ctx))
         });
         if blocked {
           return None;
@@ -12305,9 +12454,10 @@ fn find_matching_rules<'a>(
   };
 
   // Create selector caches and matching context
+  let bloom_filter = build_ancestor_bloom_filter(ancestors);
   let mut context = MatchingContext::new_for_visited(
     MatchingMode::Normal,
-    None,
+    bloom_filter.as_ref(),
     selector_caches,
     VisitedHandlingMode::AllLinksVisitedAndUnvisited,
     IncludeStartingStyle::No,
@@ -12412,31 +12562,50 @@ fn find_matching_rules<'a>(
         }
 
         let selector = indexed.selector;
+        let selector_hashes = if matches!(quirks_mode, QuirksMode::Quirks) {
+          &indexed.ancestor_hashes_quirks
+        } else {
+          &indexed.ancestor_hashes_non_quirks
+        };
         let mut selector_matches = match scope_match {
           ScopeMatchResult::Scoped(scope_root) => {
             let (root, root_ancestors) = scope_root.root_and_ancestors(node, ancestors);
             let scope_ref = ElementRef::with_ancestors(root, root_ancestors);
             match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
               ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
-                matches_selector(selector, 0, None, &element_ref, ctx)
+                matches_selector_cascade(selector, Some(selector_hashes), &element_ref, ctx)
               })
             })
           }
           ScopeMatchResult::Unscoped => {
             match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
-              matches_selector(selector, 0, None, &element_ref, ctx)
+              matches_selector_cascade(selector, Some(selector_hashes), &element_ref, ctx)
             })
           }
         };
         take_matching_error(&mut context)?;
 
         if allow_shadow_host && !selector_matches && selector_contains_host_context(selector) {
-          selector_matches =
-            match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
-              ctx.with_featureless(false, |ctx| {
-                matches_selector(selector, 0, None, &element_ref, ctx)
+          selector_matches = match scope_match {
+            ScopeMatchResult::Scoped(scope_root) => {
+              let (root, root_ancestors) = scope_root.root_and_ancestors(node, ancestors);
+              let scope_ref = ElementRef::with_ancestors(root, root_ancestors);
+              match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
+                ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
+                  ctx.with_featureless(false, |ctx| {
+                    matches_selector_cascade(selector, Some(selector_hashes), &element_ref, ctx)
+                  })
+                })
               })
-            });
+            }
+            ScopeMatchResult::Unscoped => {
+              match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
+                ctx.with_featureless(false, |ctx| {
+                  matches_selector_cascade(selector, Some(selector_hashes), &element_ref, ctx)
+                })
+              })
+            }
+          };
           take_matching_error(&mut context)?;
         }
 
@@ -12585,7 +12754,7 @@ fn find_matching_rules<'a>(
               |ctx| {
                 ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
                   for sel in args.iter() {
-                    if matches_selector(sel, 0, None, &element_ref, ctx) {
+                    if matches_selector_cascade(sel, None, &element_ref, ctx) {
                       let spec = sel.specificity();
                       best_arg_specificity =
                         Some(best_arg_specificity.map_or(spec, |best| best.max(spec)));
@@ -12604,7 +12773,7 @@ fn find_matching_rules<'a>(
               shadow_host_for_slotted,
               |ctx| {
                 for sel in args.iter() {
-                  if matches_selector(sel, 0, None, &element_ref, ctx) {
+                  if matches_selector_cascade(sel, None, &element_ref, ctx) {
                     let spec = sel.specificity();
                     best_arg_specificity =
                       Some(best_arg_specificity.map_or(spec, |best| best.max(spec)));
@@ -12635,7 +12804,11 @@ fn find_matching_rules<'a>(
                 shadow_host_for_slotted,
                 |ctx| {
                   ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
-                    matches_selector(prelude, 0, None, &slot_ref, ctx)
+                    let prev_bloom_filter = ctx.bloom_filter;
+                    ctx.bloom_filter = None;
+                    let matched = matches_selector_cascade(prelude, None, &slot_ref, ctx);
+                    ctx.bloom_filter = prev_bloom_filter;
+                    matched
                   })
                 },
               )
@@ -12644,7 +12817,13 @@ fn find_matching_rules<'a>(
               allow_shadow_host,
               &mut context,
               shadow_host_for_slotted,
-              |ctx| matches_selector(prelude, 0, None, &slot_ref, ctx),
+              |ctx| {
+                let prev_bloom_filter = ctx.bloom_filter;
+                ctx.bloom_filter = None;
+                let matched = matches_selector_cascade(prelude, None, &slot_ref, ctx);
+                ctx.bloom_filter = prev_bloom_filter;
+                matched
+              },
             ),
           };
           take_matching_error(&mut context)?;
@@ -12773,9 +12952,10 @@ fn find_pseudo_element_rules<'a>(
   };
 
   // Create selector caches and matching context
+  let bloom_filter = build_ancestor_bloom_filter(ancestors);
   let mut context = MatchingContext::new(
     MatchingMode::ForStatelessPseudoElement,
-    None,
+    bloom_filter.as_ref(),
     selector_caches,
     quirks_mode,
     selectors::matching::NeedsSelectorFlags::No,
@@ -12830,30 +13010,49 @@ fn find_pseudo_element_rules<'a>(
     };
 
     let selector = indexed.selector;
+    let selector_hashes = if matches!(quirks_mode, QuirksMode::Quirks) {
+      &indexed.ancestor_hashes_quirks
+    } else {
+      &indexed.ancestor_hashes_non_quirks
+    };
     let mut selector_matches = match scope_match {
       ScopeMatchResult::Scoped(scope_root) => {
         let (root, root_ancestors) = scope_root.root_and_ancestors(node, ancestors);
         let scope_ref = ElementRef::with_ancestors(root, root_ancestors);
         match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
           ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
-            matches_selector(selector, 0, None, &element_ref, ctx)
+            matches_selector_cascade(selector, Some(selector_hashes), &element_ref, ctx)
           })
         })
       }
       ScopeMatchResult::Unscoped => {
         match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
-          matches_selector(selector, 0, None, &element_ref, ctx)
+          matches_selector_cascade(selector, Some(selector_hashes), &element_ref, ctx)
         })
       }
     };
 
     if allow_shadow_host && !selector_matches && selector_contains_host_context(selector) {
-      selector_matches =
-        match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
-          ctx.with_featureless(false, |ctx| {
-            matches_selector(selector, 0, None, &element_ref, ctx)
+      selector_matches = match scope_match {
+        ScopeMatchResult::Scoped(scope_root) => {
+          let (root, root_ancestors) = scope_root.root_and_ancestors(node, ancestors);
+          let scope_ref = ElementRef::with_ancestors(root, root_ancestors);
+          match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
+            ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
+              ctx.with_featureless(false, |ctx| {
+                matches_selector_cascade(selector, Some(selector_hashes), &element_ref, ctx)
+              })
+            })
           })
-        });
+        }
+        ScopeMatchResult::Unscoped => {
+          match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
+            ctx.with_featureless(false, |ctx| {
+              matches_selector_cascade(selector, Some(selector_hashes), &element_ref, ctx)
+            })
+          })
+        }
+      };
     }
 
     if selector_matches {

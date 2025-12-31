@@ -231,7 +231,7 @@ static SELECTOR_CACHE_EPOCH: AtomicUsize = AtomicUsize::new(1);
 const SELECTOR_BLOOM_SUMMARY_BITS: usize = 256;
 const SELECTOR_BLOOM_SUMMARY_WORDS: usize = SELECTOR_BLOOM_SUMMARY_BITS / 64;
 
-fn selector_bloom_enabled() -> bool {
+pub(crate) fn selector_bloom_enabled() -> bool {
   SELECTOR_BLOOM_ENV_INITIALIZED.get_or_init(|| {
     if let Ok(value) = std::env::var("FASTR_SELECTOR_BLOOM") {
       if value.trim() == "0" {
@@ -273,6 +273,14 @@ fn node_is_html_element(node: &DomNode) -> bool {
 fn add_selector_bloom_hashes(node: &DomNode, add: &mut impl FnMut(u32)) {
   if !node.is_element() {
     return;
+  }
+
+  if let Some(namespace) = node.namespace() {
+    add(selector_bloom_hash(namespace));
+    // Treat missing namespaces as HTML for selector matching (see `ElementRef::has_namespace`).
+    if namespace.is_empty() {
+      add(selector_bloom_hash(HTML_NAMESPACE));
+    }
   }
 
   let is_html = node_is_html_element(node);
