@@ -1061,22 +1061,17 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
     out
   }
 
-  fn svg_uses_document_css(styled: &StyledNode) -> bool {
-    let mut stack = vec![styled];
-    while let Some(node) = stack.pop() {
-      if node.node.get_attribute_ref("class").is_some() || node.node.get_attribute_ref("id").is_some() {
+  fn svg_uses_document_css(node: &StyledNode) -> bool {
+    if node.node.get_attribute_ref("class").is_some() || node.node.get_attribute_ref("id").is_some()
+    {
+      return true;
+    }
+    if let Some(tag) = node.node.tag_name() {
+      if tag.eq_ignore_ascii_case("foreignObject") {
         return true;
       }
-      if let Some(tag) = node.node.tag_name() {
-        if tag.eq_ignore_ascii_case("foreignObject") {
-          return true;
-        }
-      }
-      for child in node.children.iter() {
-        stack.push(child);
-      }
     }
-    false
+    node.children.iter().any(svg_uses_document_css)
   }
 
   let embed_document_css = !document_css.trim().is_empty()
