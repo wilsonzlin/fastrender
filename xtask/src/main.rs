@@ -454,7 +454,7 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
     run_command(cmd)?;
   }
 
-  if disk_cache_enabled && !args.no_fetch {
+  if disk_cache_enabled {
     // The asset prefetcher is expected to live in `src/bin/prefetch_assets.rs` (or equivalently
     // `src/bin/prefetch_assets/main.rs`). Guard execution so `cargo xtask pageset` keeps working on
     // checkouts that predate the binary landing.
@@ -1787,6 +1787,8 @@ mod tests {
               "block_intrinsic": null,
               "flex_intrinsic": null,
               "inline_intrinsic": null,
+              "table_cell_intrinsic_measurements": null,
+              "table_cell_layouts": null,
               "layout_cache_lookups": null,
               "layout_cache_hits": null,
               "layout_cache_stores": null,
