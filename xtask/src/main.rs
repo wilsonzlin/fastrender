@@ -1049,6 +1049,19 @@ fn media_label(media: MediaType) -> &'static str {
 fn accumulate_timings(target: &mut RenderStageTimings, timings: &RenderStageTimings) {
   add_timing(&mut target.html_decode_ms, timings.html_decode_ms);
   add_timing(&mut target.dom_parse_ms, timings.dom_parse_ms);
+  add_timing(&mut target.dom_html5ever_ms, timings.dom_html5ever_ms);
+  add_timing(&mut target.dom_convert_ms, timings.dom_convert_ms);
+  add_timing(
+    &mut target.dom_shadow_attach_ms,
+    timings.dom_shadow_attach_ms,
+  );
+  add_timing(&mut target.dom_compat_ms, timings.dom_compat_ms);
+  add_timing(
+    &mut target.dom_meta_viewport_ms,
+    timings.dom_meta_viewport_ms,
+  );
+  add_timing(&mut target.dom_clone_ms, timings.dom_clone_ms);
+  add_timing(&mut target.dom_top_layer_ms, timings.dom_top_layer_ms);
   add_timing(&mut target.css_inlining_ms, timings.css_inlining_ms);
   add_timing(&mut target.css_parse_ms, timings.css_parse_ms);
   add_timing(&mut target.cascade_ms, timings.cascade_ms);
@@ -1076,6 +1089,9 @@ fn sum_timings(timings: &RenderStageTimings) -> Option<f64> {
   for value in [
     timings.html_decode_ms,
     timings.dom_parse_ms,
+    timings.dom_meta_viewport_ms,
+    timings.dom_clone_ms,
+    timings.dom_top_layer_ms,
     timings.css_inlining_ms,
     timings.css_parse_ms,
     timings.cascade_ms,
@@ -1721,6 +1737,13 @@ mod tests {
         "stage_time_ms": {
           "html_decode_ms": 1.0,
           "dom_parse_ms": 2.0,
+          "dom_html5ever_ms": null,
+          "dom_convert_ms": null,
+          "dom_shadow_attach_ms": null,
+          "dom_compat_ms": null,
+          "dom_meta_viewport_ms": null,
+          "dom_clone_ms": null,
+          "dom_top_layer_ms": null,
           "css_inlining_ms": null,
           "css_parse_ms": null,
           "cascade_ms": null,
@@ -1750,6 +1773,13 @@ mod tests {
             "timings": {
               "html_decode_ms": 1.0,
               "dom_parse_ms": 2.0,
+              "dom_html5ever_ms": null,
+              "dom_convert_ms": null,
+              "dom_shadow_attach_ms": null,
+              "dom_compat_ms": null,
+              "dom_meta_viewport_ms": null,
+              "dom_clone_ms": null,
+              "dom_top_layer_ms": null,
               "css_inlining_ms": null,
               "css_parse_ms": null,
               "cascade_ms": 2.5,

@@ -37,8 +37,10 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::thread_local;
+use std::time::Instant;
 use unicode_bidi::bidi_class;
 
 pub const HTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
@@ -90,6 +92,57 @@ impl DomParseOptions {
     Self {
       compatibility_mode: DomCompatibilityMode::Compatibility,
     }
+  }
+}
+
+#[derive(Debug, Default, Clone)]
+pub(crate) struct DomParseDiagnostics {
+  pub html5ever_ms: f64,
+  pub convert_ms: f64,
+  pub shadow_attach_ms: f64,
+  pub compat_ms: f64,
+}
+
+static DOM_PARSE_DIAGNOSTICS: OnceLock<Mutex<DomParseDiagnostics>> = OnceLock::new();
+static DOM_PARSE_DIAGNOSTICS_ENABLED: AtomicBool = AtomicBool::new(false);
+
+fn dom_parse_diagnostics_cell() -> &'static Mutex<DomParseDiagnostics> {
+  DOM_PARSE_DIAGNOSTICS.get_or_init(|| Mutex::new(DomParseDiagnostics::default()))
+}
+
+pub(crate) fn enable_dom_parse_diagnostics() {
+  DOM_PARSE_DIAGNOSTICS_ENABLED.store(true, Ordering::Release);
+  if let Ok(mut diag) = dom_parse_diagnostics_cell().lock() {
+    *diag = DomParseDiagnostics::default();
+  }
+}
+
+pub(crate) fn take_dom_parse_diagnostics() -> Option<DomParseDiagnostics> {
+  if !DOM_PARSE_DIAGNOSTICS_ENABLED.swap(false, Ordering::AcqRel) {
+    return None;
+  }
+
+  dom_parse_diagnostics_cell()
+    .lock()
+    .ok()
+    .map(|diag| diag.clone())
+}
+
+fn dom_parse_diagnostics_enabled() -> bool {
+  DOM_PARSE_DIAGNOSTICS_ENABLED.load(Ordering::Acquire)
+}
+
+fn dom_parse_diagnostics_timer() -> Option<Instant> {
+  dom_parse_diagnostics_enabled().then(Instant::now)
+}
+
+fn with_dom_parse_diagnostics(f: impl FnOnce(&mut DomParseDiagnostics)) {
+  if !dom_parse_diagnostics_enabled() {
+    return;
+  }
+
+  if let Ok(mut diag) = dom_parse_diagnostics_cell().lock() {
+    f(&mut diag);
   }
 }
 
@@ -658,6 +711,7 @@ pub fn parse_html_with_options(html: &str, options: DomParseOptions) -> Result<D
     ..Default::default()
   };
 
+  let html5ever_timer = dom_parse_diagnostics_timer();
   let dom = parse_document(RcDom::default(), opts)
     .from_utf8()
     .read_from(&mut html.as_bytes())
@@ -667,18 +721,46 @@ pub fn parse_html_with_options(html: &str, options: DomParseOptions) -> Result<D
         line: 0,
       })
     })?;
+  if let Some(start) = html5ever_timer {
+    let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+    with_dom_parse_diagnostics(|diag| {
+      diag.html5ever_ms += elapsed_ms;
+    });
+  }
 
   let quirks_mode = map_quirks_mode(dom.quirks_mode.get());
 
+  let convert_timer = dom_parse_diagnostics_timer();
   let mut root =
     convert_handle_to_node(&dom.document, quirks_mode).expect("DOM must have a document root node");
+  if let Some(start) = convert_timer {
+    let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+    with_dom_parse_diagnostics(|diag| {
+      diag.convert_ms += elapsed_ms;
+    });
+  }
+
+  let shadow_attach_timer = dom_parse_diagnostics_timer();
   attach_shadow_roots(&mut root);
+  if let Some(start) = shadow_attach_timer {
+    let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+    with_dom_parse_diagnostics(|diag| {
+      diag.shadow_attach_ms += elapsed_ms;
+    });
+  }
 
   if matches!(
     options.compatibility_mode,
     DomCompatibilityMode::Compatibility
   ) {
+    let compat_timer = dom_parse_diagnostics_timer();
     apply_dom_compatibility_mutations(&mut root);
+    if let Some(start) = compat_timer {
+      let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+      with_dom_parse_diagnostics(|diag| {
+        diag.compat_ms += elapsed_ms;
+      });
+    }
   }
 
   Ok(root)

@@ -1593,6 +1593,20 @@ impl Default for DiagnosticsLevel {
 pub struct RenderStageTimings {
   pub html_decode_ms: Option<f64>,
   pub dom_parse_ms: Option<f64>,
+  #[serde(default)]
+  pub dom_html5ever_ms: Option<f64>,
+  #[serde(default)]
+  pub dom_convert_ms: Option<f64>,
+  #[serde(default)]
+  pub dom_shadow_attach_ms: Option<f64>,
+  #[serde(default)]
+  pub dom_compat_ms: Option<f64>,
+  #[serde(default)]
+  pub dom_meta_viewport_ms: Option<f64>,
+  #[serde(default)]
+  pub dom_clone_ms: Option<f64>,
+  #[serde(default)]
+  pub dom_top_layer_ms: Option<f64>,
   pub css_inlining_ms: Option<f64>,
   pub css_parse_ms: Option<f64>,
   pub cascade_ms: Option<f64>,
@@ -1763,6 +1777,15 @@ fn merge_resource_cache_diagnostics(stats: &mut RenderStats) {
     stats.resources.resource_cache_fresh_hits = Some(resource_stats.fresh_hits);
     stats.resources.resource_cache_revalidated_hits = Some(resource_stats.revalidated_hits);
     stats.resources.resource_cache_misses = Some(resource_stats.misses);
+  }
+}
+
+fn merge_dom_parse_diagnostics(stats: &mut RenderStats) {
+  if let Some(dom_stats) = crate::dom::take_dom_parse_diagnostics() {
+    stats.timings.dom_html5ever_ms = Some(dom_stats.html5ever_ms);
+    stats.timings.dom_convert_ms = Some(dom_stats.convert_ms);
+    stats.timings.dom_shadow_attach_ms = Some(dom_stats.shadow_attach_ms);
+    stats.timings.dom_compat_ms = Some(dom_stats.compat_ms);
   }
 }
 
@@ -3373,6 +3396,7 @@ impl FastRender {
       crate::image_loader::enable_image_cache_diagnostics();
       crate::paint::painter::enable_paint_diagnostics();
       crate::text::pipeline::enable_text_diagnostics();
+      crate::dom::enable_dom_parse_diagnostics();
       intrinsic_cache_reset_counters();
       crate::layout::formatting_context::layout_cache_reset_counters();
       if matches!(diagnostics_level, DiagnosticsLevel::Verbose) {
@@ -3395,6 +3419,7 @@ impl FastRender {
           let _ = crate::image_loader::take_image_cache_diagnostics();
           let _ = crate::paint::painter::take_paint_diagnostics();
           let _ = crate::text::pipeline::take_text_diagnostics();
+          let _ = crate::dom::take_dom_parse_diagnostics();
         }
         if let Some(previous) = restore_cascade_profile {
           crate::style::cascade::set_cascade_profile_enabled(previous);
@@ -3405,6 +3430,7 @@ impl FastRender {
 
     if let Some(recorder) = stats_recorder {
       let mut stats = recorder.finish();
+      merge_dom_parse_diagnostics(&mut stats);
       merge_text_diagnostics(&mut stats);
       merge_image_cache_diagnostics(&mut stats);
       merge_resource_cache_diagnostics(&mut stats);
@@ -3640,11 +3666,22 @@ impl FastRender {
 
     let requested_viewport = Size::new(width as f32, height as f32);
     let base_dpr = self.device_pixel_ratio;
+    let meta_viewport_timer = if self.apply_meta_viewport {
+      stats.as_deref().and_then(|rec| rec.timer())
+    } else {
+      None
+    };
     let meta_viewport = if self.apply_meta_viewport {
       crate::html::viewport::extract_viewport(&dom)
     } else {
       None
     };
+    if let Some(rec) = stats.as_deref_mut() {
+      RenderStatsRecorder::record_ms(
+        &mut rec.stats.timings.dom_meta_viewport_ms,
+        meta_viewport_timer,
+      );
+    }
     let resolved_viewport = resolve_viewport(requested_viewport, base_dpr, meta_viewport.as_ref());
     let layout_width = resolved_viewport.layout_viewport.width.max(1.0).round() as u32;
     let layout_height = resolved_viewport.layout_viewport.height.max(1.0).round() as u32;
@@ -4377,6 +4414,7 @@ impl FastRender {
       crate::image_loader::enable_image_cache_diagnostics();
       crate::paint::painter::enable_paint_diagnostics();
       crate::text::pipeline::enable_text_diagnostics();
+      crate::dom::enable_dom_parse_diagnostics();
       intrinsic_cache_reset_counters();
       crate::layout::formatting_context::layout_cache_reset_counters();
       if stats.verbose() {
@@ -4402,6 +4440,7 @@ impl FastRender {
               guard.document_error = Some(e.to_string());
               if let Some(recorder) = stats_recorder.take() {
                 let mut stats = recorder.finish();
+                merge_dom_parse_diagnostics(&mut stats);
                 merge_text_diagnostics(&mut stats);
                 merge_image_cache_diagnostics(&mut stats);
                 merge_resource_cache_diagnostics(&mut stats);
@@ -4440,6 +4479,7 @@ impl FastRender {
       )?;
       if let Some(recorder) = stats_recorder.take() {
         let mut stats = recorder.finish();
+        merge_dom_parse_diagnostics(&mut stats);
         merge_text_diagnostics(&mut stats);
         merge_image_cache_diagnostics(&mut stats);
         merge_resource_cache_diagnostics(&mut stats);
@@ -4460,6 +4500,7 @@ impl FastRender {
       let _ = crate::image_loader::take_image_cache_diagnostics();
       let _ = crate::paint::painter::take_paint_diagnostics();
       let _ = crate::text::pipeline::take_text_diagnostics();
+      let _ = crate::dom::take_dom_parse_diagnostics();
     }
     drop(_root_span);
     trace.finalize(result)
@@ -4541,6 +4582,7 @@ impl FastRender {
       crate::image_loader::enable_image_cache_diagnostics();
       crate::paint::painter::enable_paint_diagnostics();
       crate::text::pipeline::enable_text_diagnostics();
+      crate::dom::enable_dom_parse_diagnostics();
       intrinsic_cache_reset_counters();
       crate::layout::formatting_context::layout_cache_reset_counters();
     }
@@ -4587,6 +4629,7 @@ impl FastRender {
           let _ = crate::image_loader::take_image_cache_diagnostics();
           let _ = crate::paint::painter::take_paint_diagnostics();
           let _ = crate::text::pipeline::take_text_diagnostics();
+          let _ = crate::dom::take_dom_parse_diagnostics();
         }
         return Err(err);
       }
@@ -4601,6 +4644,7 @@ impl FastRender {
     };
     if let Some(recorder) = local_recorder {
       let mut finished = recorder.finish();
+      merge_dom_parse_diagnostics(&mut finished);
       merge_text_diagnostics(&mut finished);
       merge_image_cache_diagnostics(&mut finished);
       merge_resource_cache_diagnostics(&mut finished);
@@ -4652,6 +4696,7 @@ impl FastRender {
         crate::image_loader::enable_image_cache_diagnostics();
         crate::paint::painter::enable_paint_diagnostics();
         crate::text::pipeline::enable_text_diagnostics();
+        crate::dom::enable_dom_parse_diagnostics();
         intrinsic_cache_reset_counters();
         crate::layout::formatting_context::layout_cache_reset_counters();
         if stats.verbose() {
@@ -4699,6 +4744,7 @@ impl FastRender {
         match result.as_mut() {
           Ok(report) => {
             let mut stats = recorder.finish();
+            merge_dom_parse_diagnostics(&mut stats);
             merge_text_diagnostics(&mut stats);
             merge_image_cache_diagnostics(&mut stats);
             merge_resource_cache_diagnostics(&mut stats);
@@ -4712,6 +4758,7 @@ impl FastRender {
             let _ = crate::image_loader::take_image_cache_diagnostics();
             let _ = crate::paint::painter::take_paint_diagnostics();
             let _ = crate::text::pipeline::take_text_diagnostics();
+            let _ = crate::dom::take_dom_parse_diagnostics();
           }
         }
       }
@@ -5605,10 +5652,15 @@ impl FastRender {
     deadline: Option<&RenderDeadline>,
     trace: &TraceHandle,
     layout_parallelism: LayoutParallelism,
-    stats: Option<&mut RenderStatsRecorder>,
+    mut stats: Option<&mut RenderStatsRecorder>,
   ) -> Result<LayoutArtifacts> {
+    let clone_timer = stats.as_deref().and_then(|rec| rec.timer());
+    let dom_with_state = dom.clone();
+    if let Some(rec) = stats.as_deref_mut() {
+      RenderStatsRecorder::add_ms(&mut rec.stats.timings.dom_clone_ms, clone_timer);
+    }
     self.layout_document_for_media_with_artifacts_owned(
-      dom.clone(),
+      dom_with_state,
       width,
       height,
       media_type,
@@ -5644,8 +5696,12 @@ impl FastRender {
     let timings_enabled = toggles.truthy("FASTR_RENDER_TIMINGS");
     let overall_start = timings_enabled.then(Instant::now);
 
+    let top_layer_timer = stats.as_deref().and_then(|rec| rec.timer());
     let modal_open = modal_dialog_present(&dom_with_state);
     apply_top_layer_state(&mut dom_with_state, modal_open, false);
+    if let Some(rec) = stats.as_deref_mut() {
+      RenderStatsRecorder::add_ms(&mut rec.stats.timings.dom_top_layer_ms, top_layer_timer);
+    }
 
     let viewport_size = Size::new(width as f32, height as f32);
     let device_size = self.pending_device_size.take().unwrap_or(viewport_size);

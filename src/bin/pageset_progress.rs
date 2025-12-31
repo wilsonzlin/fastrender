@@ -1094,7 +1094,11 @@ fn buckets_from_diagnostics(diag: &RenderDiagnostics) -> StageBuckets {
     return StageBuckets::default();
   };
   let t = &stats.timings;
-  let fetch = t.html_decode_ms.unwrap_or(0.0) + t.dom_parse_ms.unwrap_or(0.0);
+  let fetch = t.html_decode_ms.unwrap_or(0.0)
+    + t.dom_parse_ms.unwrap_or(0.0)
+    + t.dom_meta_viewport_ms.unwrap_or(0.0)
+    + t.dom_clone_ms.unwrap_or(0.0)
+    + t.dom_top_layer_ms.unwrap_or(0.0);
   let css = t.css_inlining_ms.unwrap_or(0.0) + t.css_parse_ms.unwrap_or(0.0);
   let cascade = t.cascade_ms.unwrap_or(0.0) + t.box_tree_ms.unwrap_or(0.0);
   let layout = t.layout_ms.unwrap_or(0.0) + t.text_shape_ms.unwrap_or(0.0);
@@ -1671,6 +1675,19 @@ fn append_stage_summary(log: &mut String, diagnostics: &RenderDiagnostics) {
   log.push_str("Stage timings:\n");
   log.push_str(&format!("  html_decode: {}\n", fmt(t.html_decode_ms)));
   log.push_str(&format!("  dom_parse: {}\n", fmt(t.dom_parse_ms)));
+  log.push_str(&format!("  dom_html5ever: {}\n", fmt(t.dom_html5ever_ms)));
+  log.push_str(&format!("  dom_convert: {}\n", fmt(t.dom_convert_ms)));
+  log.push_str(&format!(
+    "  dom_shadow_attach: {}\n",
+    fmt(t.dom_shadow_attach_ms)
+  ));
+  log.push_str(&format!("  dom_compat: {}\n", fmt(t.dom_compat_ms)));
+  log.push_str(&format!(
+    "  dom_meta_viewport: {}\n",
+    fmt(t.dom_meta_viewport_ms)
+  ));
+  log.push_str(&format!("  dom_clone: {}\n", fmt(t.dom_clone_ms)));
+  log.push_str(&format!("  dom_top_layer: {}\n", fmt(t.dom_top_layer_ms)));
   log.push_str(&format!("  css_inlining: {}\n", fmt(t.css_inlining_ms)));
   log.push_str(&format!("  css_parse: {}\n", fmt(t.css_parse_ms)));
   log.push_str(&format!("  cascade: {}\n", fmt(t.cascade_ms)));
@@ -4408,6 +4425,9 @@ mod tests {
     let timings = RenderStageTimings {
       html_decode_ms: Some(1.0),
       dom_parse_ms: Some(2.0),
+      dom_meta_viewport_ms: Some(0.5),
+      dom_clone_ms: Some(0.25),
+      dom_top_layer_ms: Some(0.75),
       css_inlining_ms: Some(3.0),
       css_parse_ms: Some(4.0),
       cascade_ms: Some(5.0),
@@ -4429,7 +4449,7 @@ mod tests {
       ..RenderDiagnostics::default()
     };
     let buckets = buckets_from_diagnostics(&diag);
-    assert_eq!(buckets.fetch, 3.0);
+    assert_eq!(buckets.fetch, 4.5);
     assert_eq!(buckets.css, 7.0);
     assert_eq!(buckets.cascade, 11.0);
     assert_eq!(buckets.layout, 15.0);

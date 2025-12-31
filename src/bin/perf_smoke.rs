@@ -732,7 +732,13 @@ fn timings_from_stats(stats: &fastrender::RenderStats) -> StageTimingsSummary {
 fn stage_breakdown_from_stats(stats: &fastrender::RenderStats) -> StageBreakdown {
   let t = &stats.timings;
   StageBreakdown {
-    fetch: round_ms(sum_timings(&[t.html_decode_ms, t.dom_parse_ms])),
+    fetch: round_ms(sum_timings(&[
+      t.html_decode_ms,
+      t.dom_parse_ms,
+      t.dom_meta_viewport_ms,
+      t.dom_clone_ms,
+      t.dom_top_layer_ms,
+    ])),
     css: round_ms(sum_timings(&[t.css_inlining_ms, t.css_parse_ms])),
     cascade: round_ms(sum_timings(&[t.cascade_ms, t.box_tree_ms])),
     layout: round_ms(sum_timings(&[t.layout_ms])),
