@@ -2549,6 +2549,20 @@ fn resources_summary(resources: &ResourceDiagnostics) -> Option<String> {
     parts.push(format!("image_cache {}", cache_parts.join(" ")));
   }
 
+  let mut resource_cache_parts = Vec::new();
+  if let Some(hits) = resources.resource_cache_fresh_hits {
+    resource_cache_parts.push(format!("fresh_hits={hits}"));
+  }
+  if let Some(hits) = resources.resource_cache_revalidated_hits {
+    resource_cache_parts.push(format!("revalidated_hits={hits}"));
+  }
+  if let Some(misses) = resources.resource_cache_misses {
+    resource_cache_parts.push(format!("misses={misses}"));
+  }
+  if !resource_cache_parts.is_empty() {
+    parts.push(format!("resource_cache {}", resource_cache_parts.join(" ")));
+  }
+
   if parts.is_empty() {
     None
   } else {

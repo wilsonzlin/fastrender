@@ -1713,6 +1713,12 @@ pub struct PaintDiagnostics {
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct ResourceDiagnostics {
   pub fetch_counts: BTreeMap<ResourceKind, usize>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub resource_cache_fresh_hits: Option<usize>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub resource_cache_revalidated_hits: Option<usize>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub resource_cache_misses: Option<usize>,
   pub image_cache_hits: Option<usize>,
   pub image_cache_misses: Option<usize>,
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -1754,6 +1760,14 @@ fn merge_image_cache_diagnostics(stats: &mut RenderStats) {
         .entry(ResourceKind::Image)
         .or_default() += image_stats.cache_misses;
     }
+  }
+}
+
+fn merge_resource_cache_diagnostics(stats: &mut RenderStats) {
+  if let Some(resource_stats) = crate::resource::take_resource_cache_diagnostics() {
+    stats.resources.resource_cache_fresh_hits = Some(resource_stats.fresh_hits);
+    stats.resources.resource_cache_revalidated_hits = Some(resource_stats.revalidated_hits);
+    stats.resources.resource_cache_misses = Some(resource_stats.misses);
   }
 }
 
@@ -3335,6 +3349,7 @@ impl FastRender {
       None
     };
     if stats_recorder.is_some() {
+      crate::resource::enable_resource_cache_diagnostics();
       crate::image_loader::enable_image_cache_diagnostics();
       crate::paint::painter::enable_paint_diagnostics();
       crate::text::pipeline::enable_text_diagnostics();
@@ -3356,6 +3371,7 @@ impl FastRender {
       Ok(outputs) => outputs,
       Err(err) => {
         if stats_recorder.is_some() {
+          let _ = crate::resource::take_resource_cache_diagnostics();
           let _ = crate::image_loader::take_image_cache_diagnostics();
           let _ = crate::paint::painter::take_paint_diagnostics();
           let _ = crate::text::pipeline::take_text_diagnostics();
@@ -3371,6 +3387,7 @@ impl FastRender {
       let mut stats = recorder.finish();
       merge_text_diagnostics(&mut stats);
       merge_image_cache_diagnostics(&mut stats);
+      merge_resource_cache_diagnostics(&mut stats);
       if let Ok(mut guard) = diagnostics.lock() {
         guard.stats = Some(stats);
       }
@@ -4329,6 +4346,7 @@ impl FastRender {
       None
     };
     if let Some(stats) = stats_recorder.as_mut() {
+      crate::resource::enable_resource_cache_diagnostics();
       crate::image_loader::enable_image_cache_diagnostics();
       crate::paint::painter::enable_paint_diagnostics();
       crate::text::pipeline::enable_text_diagnostics();
@@ -4359,6 +4377,7 @@ impl FastRender {
                 let mut stats = recorder.finish();
                 merge_text_diagnostics(&mut stats);
                 merge_image_cache_diagnostics(&mut stats);
+                merge_resource_cache_diagnostics(&mut stats);
                 let _ = crate::paint::painter::take_paint_diagnostics();
                 guard.stats = Some(stats);
               }
@@ -4396,6 +4415,7 @@ impl FastRender {
         let mut stats = recorder.finish();
         merge_text_diagnostics(&mut stats);
         merge_image_cache_diagnostics(&mut stats);
+        merge_resource_cache_diagnostics(&mut stats);
         if let Ok(mut guard) = diagnostics.lock() {
           guard.stats = Some(stats);
         }
@@ -4409,6 +4429,7 @@ impl FastRender {
       crate::style::cascade::set_cascade_profile_enabled(previous);
     }
     if result.is_err() && stats_recorder.is_some() {
+      let _ = crate::resource::take_resource_cache_diagnostics();
       let _ = crate::image_loader::take_image_cache_diagnostics();
       let _ = crate::paint::painter::take_paint_diagnostics();
       let _ = crate::text::pipeline::take_text_diagnostics();
@@ -4489,6 +4510,7 @@ impl FastRender {
         None
       };
     if stats.is_none() && local_recorder.is_some() {
+      crate::resource::enable_resource_cache_diagnostics();
       crate::image_loader::enable_image_cache_diagnostics();
       crate::paint::painter::enable_paint_diagnostics();
       crate::text::pipeline::enable_text_diagnostics();
@@ -4534,6 +4556,7 @@ impl FastRender {
       Ok(outputs) => outputs,
       Err(err) => {
         if local_recorder.is_some() {
+          let _ = crate::resource::take_resource_cache_diagnostics();
           let _ = crate::image_loader::take_image_cache_diagnostics();
           let _ = crate::paint::painter::take_paint_diagnostics();
           let _ = crate::text::pipeline::take_text_diagnostics();
@@ -4553,6 +4576,7 @@ impl FastRender {
       let mut finished = recorder.finish();
       merge_text_diagnostics(&mut finished);
       merge_image_cache_diagnostics(&mut finished);
+      merge_resource_cache_diagnostics(&mut finished);
       report.diagnostics.stats = Some(finished);
     }
     Ok(report)
@@ -4598,6 +4622,7 @@ impl FastRender {
         None
       };
       if let Some(stats) = stats_recorder.as_mut() {
+        crate::resource::enable_resource_cache_diagnostics();
         crate::image_loader::enable_image_cache_diagnostics();
         crate::paint::painter::enable_paint_diagnostics();
         crate::text::pipeline::enable_text_diagnostics();
@@ -4650,12 +4675,14 @@ impl FastRender {
             let mut stats = recorder.finish();
             merge_text_diagnostics(&mut stats);
             merge_image_cache_diagnostics(&mut stats);
+            merge_resource_cache_diagnostics(&mut stats);
             if let Ok(mut guard) = diagnostics.lock() {
               guard.stats = Some(stats.clone());
             }
             report.diagnostics.stats = Some(stats);
           }
           Err(_) => {
+            let _ = crate::resource::take_resource_cache_diagnostics();
             let _ = crate::image_loader::take_image_cache_diagnostics();
             let _ = crate::paint::painter::take_paint_diagnostics();
             let _ = crate::text::pipeline::take_text_diagnostics();
