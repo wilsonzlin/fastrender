@@ -1103,6 +1103,25 @@ fn write_progress(path: &Path, progress: &PageProgress) -> io::Result<()> {
   atomic_write(path, formatted.as_bytes())
 }
 
+fn collect_cached_html_paths_in(dir: &Path) -> io::Result<BTreeMap<String, PathBuf>> {
+  let mut entries: BTreeMap<String, PathBuf> = BTreeMap::new();
+  for entry in fs::read_dir(dir)
+    .map_err(|e| io::Error::new(e.kind(), format!("{}: {}", dir.display(), e)))?
+  {
+    let entry = entry?;
+    if entry.file_type()?.is_dir() {
+      continue;
+    }
+    let path = entry.path();
+    if path.extension().map(|x| x == "html").unwrap_or(false) {
+      if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+        entries.insert(stem.to_string(), path);
+      }
+    }
+  }
+  Ok(entries)
+}
+
 fn prune_stale_progress(progress_dir: &Path, keep: &BTreeSet<String>) -> io::Result<usize> {
   let mut pruned = 0usize;
   for entry in fs::read_dir(progress_dir)? {
@@ -1129,14 +1148,21 @@ fn prune_stale_progress(progress_dir: &Path, keep: &BTreeSet<String>) -> io::Res
 fn sync(args: SyncArgs) -> io::Result<()> {
   fs::create_dir_all(&args.progress_dir)?;
 
+  let cached_paths = match collect_cached_html_paths_in(&args.html_dir) {
+    Ok(paths) => paths,
+    Err(err) if err.kind() == io::ErrorKind::NotFound => BTreeMap::new(),
+    Err(err) => return Err(err),
+  };
+  let cached_by_stem = cached_html_index_by_pageset_stem(&cached_paths);
+
   let mut stems: BTreeSet<String> = BTreeSet::new();
   let mut created = 0usize;
   let mut updated = 0usize;
 
   for entry in pageset_entries() {
     let progress_path = args.progress_dir.join(format!("{}.json", entry.cache_stem));
-    let cache_path = args.html_dir.join(format!("{}.html", entry.cache_stem));
-    let cache_exists = cache_path.exists();
+    let cache_path = cached_html_path_for_pageset_entry(&entry, &cached_paths, &cached_by_stem);
+    let cache_exists = cache_path.is_some();
 
     let previous = read_progress(&progress_path);
     let mut progress = if let Some(ref prev) = previous {
@@ -1148,7 +1174,10 @@ fn sync(args: SyncArgs) -> io::Result<()> {
       new_progress
     };
 
-    progress.url = entry.url.clone();
+    progress.url = cache_path
+      .as_ref()
+      .and_then(|path| cached_url_from_cache_meta(path))
+      .unwrap_or_else(|| entry.url.clone());
 
     if !cache_exists {
       progress.status = ProgressStatus::Error;
@@ -3968,22 +3997,7 @@ fn dump_level_for_progress(args: &WorkerArgs, progress: &PageProgress) -> Option
 }
 
 fn collect_cached_html_paths() -> io::Result<BTreeMap<String, PathBuf>> {
-  let mut entries: BTreeMap<String, PathBuf> = BTreeMap::new();
-  for entry in fs::read_dir(CACHE_HTML_DIR)
-    .map_err(|e| io::Error::new(e.kind(), format!("{}: {}", CACHE_HTML_DIR, e)))?
-  {
-    let entry = entry?;
-    if entry.file_type()?.is_dir() {
-      continue;
-    }
-    let path = entry.path();
-    if path.extension().map(|x| x == "html").unwrap_or(false) {
-      if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-        entries.insert(stem.to_string(), path);
-      }
-    }
-  }
-  Ok(entries)
+  collect_cached_html_paths_in(Path::new(CACHE_HTML_DIR))
 }
 
 fn work_item_from_cache(
