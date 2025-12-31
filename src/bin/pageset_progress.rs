@@ -1433,7 +1433,13 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
         let mut progress = PageProgress::new(url);
         progress.status = ProgressStatus::Error;
         progress.notes = format!("renderer init: {note_msg}");
-        progress.hotspot = "unknown".to_string();
+        progress.failure_stage = heartbeat.last_stage().and_then(progress_stage_from_heartbeat);
+        if let Some(hotspot) = hotspot_from_error(&e, None) {
+          maybe_apply_hotspot(&mut progress, progress_before.as_ref(), hotspot, false);
+        }
+        if progress.hotspot.trim().is_empty() {
+          progress.hotspot = "unknown".to_string();
+        }
         let progress = progress.merge_preserving_manual(progress_before, current_sha.as_deref());
         let _ =
           write_progress_with_sentinel(&args.progress_path, args.stage_path.as_deref(), &progress);
