@@ -2139,9 +2139,8 @@ fn find_selected_option_label(node: &DomNode, optgroup_disabled: bool) -> Option
     return None;
   };
 
-  let lower = tag.to_ascii_lowercase();
-  let is_option = lower == "option";
-  let is_optgroup = lower == "optgroup";
+  let is_option = tag.eq_ignore_ascii_case("option");
+  let is_optgroup = tag.eq_ignore_ascii_case("optgroup");
   let this_disabled = optgroup_disabled
     || (is_option && node.get_attribute_ref("disabled").is_some())
     || (is_optgroup && node.get_attribute_ref("disabled").is_some());
@@ -2166,9 +2165,8 @@ fn first_enabled_option_label(node: &DomNode, optgroup_disabled: bool) -> Option
     return None;
   };
 
-  let lower = tag.to_ascii_lowercase();
-  let is_option = lower == "option";
-  let is_optgroup = lower == "optgroup";
+  let is_option = tag.eq_ignore_ascii_case("option");
+  let is_optgroup = tag.eq_ignore_ascii_case("optgroup");
   let this_disabled = optgroup_disabled
     || (is_option && node.get_attribute_ref("disabled").is_some())
     || (is_optgroup && node.get_attribute_ref("disabled").is_some());
@@ -2235,10 +2233,18 @@ fn parse_f32_attr(node: &DomNode, name: &str) -> Option<f32> {
 }
 
 fn create_form_control_replaced(styled: &StyledNode) -> Option<FormControl> {
-  let tag = styled.node.tag_name()?.to_ascii_lowercase();
+  let tag = styled.node.tag_name()?;
   let appearance = styled.styles.appearance.clone();
 
   if matches!(appearance, Appearance::None) {
+    return None;
+  }
+
+  if !tag.eq_ignore_ascii_case("input")
+    && !tag.eq_ignore_ascii_case("textarea")
+    && !tag.eq_ignore_ascii_case("select")
+    && !tag.eq_ignore_ascii_case("button")
+  {
     return None;
   }
 
@@ -2274,8 +2280,7 @@ fn create_form_control_replaced(styled: &StyledNode) -> Option<FormControl> {
     && !element_ref.accessibility_is_valid()
     && !disabled;
 
-  match tag.as_str() {
-    "input" => {
+  if tag.eq_ignore_ascii_case("input") {
       let input_type = styled
         .node
         .get_attribute("type")
@@ -2406,8 +2411,8 @@ fn create_form_control_replaced(styled: &StyledNode) -> Option<FormControl> {
         required,
         invalid,
       })
-    }
-    "textarea" => Some(FormControl {
+    } else if tag.eq_ignore_ascii_case("textarea") {
+      Some(FormControl {
       control: FormControlKind::TextArea {
         value: collect_text_content(&styled.node),
         rows: styled
@@ -2425,8 +2430,8 @@ fn create_form_control_replaced(styled: &StyledNode) -> Option<FormControl> {
       focus_visible,
       required,
       invalid,
-    }),
-    "select" => {
+    })
+    } else if tag.eq_ignore_ascii_case("select") {
       let label = select_label(&styled.node).unwrap_or_else(|| "Select".to_string());
       Some(FormControl {
         control: FormControlKind::Select {
@@ -2440,8 +2445,8 @@ fn create_form_control_replaced(styled: &StyledNode) -> Option<FormControl> {
         required,
         invalid,
       })
-    }
-    "button" => Some(FormControl {
+    } else if tag.eq_ignore_ascii_case("button") {
+      Some(FormControl {
       control: FormControlKind::Button {
         label: button_label(styled),
       },
@@ -2451,9 +2456,11 @@ fn create_form_control_replaced(styled: &StyledNode) -> Option<FormControl> {
       focus_visible,
       required,
       invalid,
-    }),
-    _ => None,
-  }
+    })
+    } else {
+      None
+    }
+}
 }
 
 /// Checks if an element is a replaced element
