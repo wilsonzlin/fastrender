@@ -1281,7 +1281,10 @@ fn parse_supports_bare_declaration<'i, 't>(
   parser: &mut Parser<'i, 't>,
 ) -> Option<SupportsCondition> {
   parser.skip_whitespace();
-  let property = parser.expect_ident().ok()?.to_string();
+  let mut property = parser.expect_ident().ok()?.to_string();
+  if !property.starts_with("--") {
+    property.make_ascii_lowercase();
+  }
   parser.skip_whitespace();
   if parser.expect_colon().is_err() {
     return None;
@@ -1294,14 +1297,12 @@ fn parse_supports_bare_declaration<'i, 't>(
     parser.skip_whitespace();
     let state = parser.state();
 
-    let operator = match parser.next() {
-      Ok(Token::Ident(kw)) if kw.eq_ignore_ascii_case("and") || kw.eq_ignore_ascii_case("or") => {
-        Some(kw.to_ascii_lowercase())
-      }
-      _ => None,
-    };
+    let operator = matches!(
+      parser.next(),
+      Ok(Token::Ident(kw)) if kw.eq_ignore_ascii_case("and") || kw.eq_ignore_ascii_case("or")
+    );
 
-    if operator.is_some() {
+    if operator {
       parser.skip_whitespace();
       let boundary = parser.expect_ident().is_ok() && parser.expect_colon().is_ok();
       parser.reset(&state);
@@ -1323,7 +1324,7 @@ fn parse_supports_bare_declaration<'i, 't>(
   }
 
   Some(SupportsCondition::Declaration {
-    property: property.to_ascii_lowercase(),
+    property,
     value: value.to_string(),
   })
 }
@@ -1332,7 +1333,10 @@ fn parse_supports_declaration_in_parens<'i, 't>(
   parser: &mut Parser<'i, 't>,
 ) -> Option<SupportsCondition> {
   parser.skip_whitespace();
-  let property = parser.expect_ident().ok()?.to_string();
+  let mut property = parser.expect_ident().ok()?.to_string();
+  if !property.starts_with("--") {
+    property.make_ascii_lowercase();
+  }
   parser.skip_whitespace();
   if parser.expect_colon().is_err() {
     return None;
@@ -1348,7 +1352,7 @@ fn parse_supports_declaration_in_parens<'i, 't>(
   }
 
   Some(SupportsCondition::Declaration {
-    property: property.to_ascii_lowercase(),
+    property,
     value: value.to_string(),
   })
 }
@@ -1458,12 +1462,17 @@ fn parse_page_selectors<'i, 't>(
       let mut pseudo = None;
       if parser.try_parse(|p| p.expect_colon()).is_ok() {
         if let Ok(pseudo_ident) = parser.expect_ident() {
-          pseudo = match pseudo_ident.as_ref().to_ascii_lowercase().as_str() {
-            "first" => Some(PagePseudoClass::First),
-            "left" => Some(PagePseudoClass::Left),
-            "right" => Some(PagePseudoClass::Right),
-            "blank" => Some(PagePseudoClass::Blank),
-            _ => None,
+          let pseudo_ident = pseudo_ident.as_ref();
+          pseudo = if pseudo_ident.eq_ignore_ascii_case("first") {
+            Some(PagePseudoClass::First)
+          } else if pseudo_ident.eq_ignore_ascii_case("left") {
+            Some(PagePseudoClass::Left)
+          } else if pseudo_ident.eq_ignore_ascii_case("right") {
+            Some(PagePseudoClass::Right)
+          } else if pseudo_ident.eq_ignore_ascii_case("blank") {
+            Some(PagePseudoClass::Blank)
+          } else {
+            None
           };
         }
       }
@@ -1515,7 +1524,7 @@ fn parse_page_block<'i, 't>(
     let state = parser.state();
     match parser.next_including_whitespace() {
       Ok(Token::AtKeyword(kw)) => {
-        if let Some(area) = parse_margin_area(&kw.to_string()) {
+        if let Some(area) = parse_margin_area(kw.as_ref()) {
           parser.expect_curly_bracket_block().map_err(|_| {
             parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent("expected {".into()))
           })?;
@@ -1547,24 +1556,40 @@ fn parse_page_block<'i, 't>(
 }
 
 fn parse_margin_area(name: &str) -> Option<PageMarginArea> {
-  match name.to_ascii_lowercase().as_str() {
-    "top-left-corner" => Some(PageMarginArea::TopLeftCorner),
-    "top-left" => Some(PageMarginArea::TopLeft),
-    "top-center" => Some(PageMarginArea::TopCenter),
-    "top-right" => Some(PageMarginArea::TopRight),
-    "top-right-corner" => Some(PageMarginArea::TopRightCorner),
-    "right-top" => Some(PageMarginArea::RightTop),
-    "right-middle" => Some(PageMarginArea::RightMiddle),
-    "right-bottom" => Some(PageMarginArea::RightBottom),
-    "bottom-right-corner" => Some(PageMarginArea::BottomRightCorner),
-    "bottom-right" => Some(PageMarginArea::BottomRight),
-    "bottom-center" => Some(PageMarginArea::BottomCenter),
-    "bottom-left" => Some(PageMarginArea::BottomLeft),
-    "bottom-left-corner" => Some(PageMarginArea::BottomLeftCorner),
-    "left-bottom" => Some(PageMarginArea::LeftBottom),
-    "left-middle" => Some(PageMarginArea::LeftMiddle),
-    "left-top" => Some(PageMarginArea::LeftTop),
-    _ => None,
+  if name.eq_ignore_ascii_case("top-left-corner") {
+    Some(PageMarginArea::TopLeftCorner)
+  } else if name.eq_ignore_ascii_case("top-left") {
+    Some(PageMarginArea::TopLeft)
+  } else if name.eq_ignore_ascii_case("top-center") {
+    Some(PageMarginArea::TopCenter)
+  } else if name.eq_ignore_ascii_case("top-right") {
+    Some(PageMarginArea::TopRight)
+  } else if name.eq_ignore_ascii_case("top-right-corner") {
+    Some(PageMarginArea::TopRightCorner)
+  } else if name.eq_ignore_ascii_case("right-top") {
+    Some(PageMarginArea::RightTop)
+  } else if name.eq_ignore_ascii_case("right-middle") {
+    Some(PageMarginArea::RightMiddle)
+  } else if name.eq_ignore_ascii_case("right-bottom") {
+    Some(PageMarginArea::RightBottom)
+  } else if name.eq_ignore_ascii_case("bottom-right-corner") {
+    Some(PageMarginArea::BottomRightCorner)
+  } else if name.eq_ignore_ascii_case("bottom-right") {
+    Some(PageMarginArea::BottomRight)
+  } else if name.eq_ignore_ascii_case("bottom-center") {
+    Some(PageMarginArea::BottomCenter)
+  } else if name.eq_ignore_ascii_case("bottom-left") {
+    Some(PageMarginArea::BottomLeft)
+  } else if name.eq_ignore_ascii_case("bottom-left-corner") {
+    Some(PageMarginArea::BottomLeftCorner)
+  } else if name.eq_ignore_ascii_case("left-bottom") {
+    Some(PageMarginArea::LeftBottom)
+  } else if name.eq_ignore_ascii_case("left-middle") {
+    Some(PageMarginArea::LeftMiddle)
+  } else if name.eq_ignore_ascii_case("left-top") {
+    Some(PageMarginArea::LeftTop)
+  } else {
+    None
   }
 }
 
@@ -1638,8 +1663,9 @@ fn parse_font_face_descriptors<'i, 't>(
       full_value.trim_end_matches(';').trim()
     };
 
-    let prop = property.to_ascii_lowercase();
-    match prop.as_str() {
+    let mut property = property;
+    property.make_ascii_lowercase();
+    match property.as_str() {
       "font-family" => {
         face.family = parse_font_face_family(trimmed_value);
       }
@@ -1933,7 +1959,9 @@ fn parse_font_palette_descriptors<'i, 't>(
       full_value.trim_end_matches(';').trim()
     };
 
-    match property.to_ascii_lowercase().as_str() {
+    let mut property = property;
+    property.make_ascii_lowercase();
+    match property.as_str() {
       "font-family" => {
         if let Some(PropertyValue::FontFamily(families)) =
           super::properties::parse_property_value("font-family", trimmed_value)
@@ -1944,17 +1972,18 @@ fn parse_font_palette_descriptors<'i, 't>(
         }
       }
       "base-palette" => {
-        let lower = trimmed_value.to_ascii_lowercase();
-        if let Ok(idx) = lower.parse::<i32>() {
+        let trimmed = trimmed_value.trim();
+        if let Ok(idx) = trimmed.parse::<i32>() {
           if idx >= 0 {
             rule.base_palette = FontPaletteBase::Index(idx as u16);
           }
         } else {
-          match lower.as_str() {
-            "light" => rule.base_palette = FontPaletteBase::Light,
-            "dark" => rule.base_palette = FontPaletteBase::Dark,
-            "normal" => rule.base_palette = FontPaletteBase::Normal,
-            _ => {}
+          if trimmed.eq_ignore_ascii_case("light") {
+            rule.base_palette = FontPaletteBase::Light;
+          } else if trimmed.eq_ignore_ascii_case("dark") {
+            rule.base_palette = FontPaletteBase::Dark;
+          } else if trimmed.eq_ignore_ascii_case("normal") {
+            rule.base_palette = FontPaletteBase::Normal;
           }
         }
       }
@@ -2369,15 +2398,16 @@ fn parse_range_descriptor(value: &str) -> Option<Vec<(i64, i64)>> {
       Ok(Token::Number {
         int_value: Some(v), ..
       }) => numbers.push(*v as i64),
-      Ok(Token::Ident(ident)) => match ident.to_ascii_lowercase().as_str() {
-        "infinite" => numbers.push(i64::MAX),
-        "-infinite" => numbers.push(i64::MIN),
-        other => {
-          if let Ok(parsed) = other.parse::<i64>() {
-            numbers.push(parsed)
-          }
+      Ok(Token::Ident(ident)) => {
+        let ident = ident.as_ref();
+        if ident.eq_ignore_ascii_case("infinite") {
+          numbers.push(i64::MAX);
+        } else if ident.eq_ignore_ascii_case("-infinite") {
+          numbers.push(i64::MIN);
+        } else if let Ok(parsed) = ident.parse::<i64>() {
+          numbers.push(parsed);
         }
-      },
+      }
       Ok(Token::Comma) => continue,
       _ => break,
     }
@@ -2471,11 +2501,14 @@ fn parse_single_keyframe<'i, 't>(
     }
     match parser.next_including_whitespace() {
       Ok(Token::Percentage { unit_value, .. }) => offsets.push(unit_value.clamp(0.0, 1.0)),
-      Ok(Token::Ident(id)) => match id.to_ascii_lowercase().as_str() {
-        "from" => offsets.push(0.0),
-        "to" => offsets.push(1.0),
-        _ => {}
-      },
+      Ok(Token::Ident(id)) => {
+        let id = id.as_ref();
+        if id.eq_ignore_ascii_case("from") {
+          offsets.push(0.0);
+        } else if id.eq_ignore_ascii_case("to") {
+          offsets.push(1.0);
+        }
+      }
       Ok(Token::Comma) => {}
       Ok(Token::CurlyBracketBlock) => {
         if offsets.is_empty() {
@@ -2525,32 +2558,29 @@ fn parse_font_face_family(value: &str) -> Option<String> {
 }
 
 fn parse_font_face_style(value: &str) -> Option<FontFaceStyle> {
-  let tokens: Vec<&str> = value.split_whitespace().collect();
-  if tokens.is_empty() {
-    return None;
+  let mut tokens = value.split_ascii_whitespace();
+  let first = tokens.next()?;
+  if first.eq_ignore_ascii_case("normal") {
+    return Some(FontFaceStyle::Normal);
   }
-  match tokens[0].to_ascii_lowercase().as_str() {
-    "normal" => Some(FontFaceStyle::Normal),
-    "italic" => Some(FontFaceStyle::Italic),
-    "oblique" => {
-      let angles: Vec<f32> = tokens[1..]
-        .iter()
-        .filter_map(|t| parse_angle_token(t))
-        .collect();
-      let range = match angles.as_slice() {
-        [a, b] => Some((a.min(*b), a.max(*b))),
-        [a] => Some((*a, *a)),
-        _ => None,
-      };
-      Some(FontFaceStyle::Oblique { range })
-    }
-    _ => None,
+  if first.eq_ignore_ascii_case("italic") {
+    return Some(FontFaceStyle::Italic);
   }
+  if first.eq_ignore_ascii_case("oblique") {
+    let angles: Vec<f32> = tokens.filter_map(parse_angle_token).collect();
+    let range = match angles.as_slice() {
+      [a, b] => Some((a.min(*b), a.max(*b))),
+      [a] => Some((*a, *a)),
+      _ => None,
+    };
+    return Some(FontFaceStyle::Oblique { range });
+  }
+  None
 }
 
 fn parse_font_face_weight(value: &str) -> Option<(u16, u16)> {
   let weights: Vec<u16> = value
-    .split_whitespace()
+    .split_ascii_whitespace()
     .filter_map(|token| parse_weight_token(token))
     .collect();
   match weights.as_slice() {
@@ -2565,7 +2595,7 @@ fn parse_font_face_weight(value: &str) -> Option<(u16, u16)> {
 
 fn parse_font_face_stretch(value: &str) -> Option<(f32, f32)> {
   let stretches: Vec<f32> = value
-    .split_whitespace()
+    .split_ascii_whitespace()
     .filter_map(|token| parse_stretch_token(token))
     .collect();
   match stretches.as_slice() {
@@ -2579,13 +2609,19 @@ fn parse_font_face_stretch(value: &str) -> Option<(f32, f32)> {
 }
 
 fn parse_font_display(value: &str) -> Option<FontDisplay> {
-  match value.trim().to_ascii_lowercase().as_str() {
-    "auto" => Some(FontDisplay::Auto),
-    "block" => Some(FontDisplay::Block),
-    "swap" => Some(FontDisplay::Swap),
-    "fallback" => Some(FontDisplay::Fallback),
-    "optional" => Some(FontDisplay::Optional),
-    _ => None,
+  let value = value.trim();
+  if value.eq_ignore_ascii_case("auto") {
+    Some(FontDisplay::Auto)
+  } else if value.eq_ignore_ascii_case("block") {
+    Some(FontDisplay::Block)
+  } else if value.eq_ignore_ascii_case("swap") {
+    Some(FontDisplay::Swap)
+  } else if value.eq_ignore_ascii_case("fallback") {
+    Some(FontDisplay::Fallback)
+  } else if value.eq_ignore_ascii_case("optional") {
+    Some(FontDisplay::Optional)
+  } else {
+    None
   }
 }
 
@@ -2598,7 +2634,7 @@ fn parse_unicode_range_list(value: &str) -> Vec<(u32, u32)> {
 
 fn parse_unicode_range(part: &str) -> Option<(u32, u32)> {
   let part = part.trim();
-  if !part.to_ascii_lowercase().starts_with("u+") {
+  if !part.get(0..2).is_some_and(|prefix| prefix.eq_ignore_ascii_case("u+")) {
     return None;
   }
   let body = &part[2..];
