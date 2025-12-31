@@ -1341,37 +1341,9 @@ fn tile_blur(
     offset_y: u32,
   }
 
-  let mut jobs = Vec::new();
-  let mut y = 0;
-  while y < height {
-    let copy_h = tile_h.min(height - y);
-    let mut x = 0;
-    while x < width {
-      let copy_w = tile_w.min(width - x);
-      let src_min_x = x.saturating_sub(pad_x);
-      let src_min_y = y.saturating_sub(pad_y);
-      let src_max_x = (x + copy_w + pad_x).min(width);
-      let src_max_y = (y + copy_h + pad_y).min(height);
-      let src_w = src_max_x.saturating_sub(src_min_x);
-      let src_h = src_max_y.saturating_sub(src_min_y);
-      jobs.push(TileJob {
-        x,
-        y,
-        copy_w,
-        copy_h,
-        src_min_x,
-        src_min_y,
-        src_w,
-        src_h,
-        offset_x: x - src_min_x,
-        offset_y: y - src_min_y,
-      });
-      x = x.saturating_add(tile_w);
-    }
-    y = y.saturating_add(tile_h);
-  }
-
-  let tiles = jobs.len();
+  let tiles_x = ((width as u64 + tile_w as u64 - 1) / tile_w as u64) as u32;
+  let tiles_y = ((height as u64 + tile_h as u64 - 1) / tile_h as u64) as u32;
+  let tiles = usize::try_from(tiles_x as u64 * tiles_y as u64).unwrap_or(usize::MAX);
   if tiles == 0 {
     return Ok(None);
   }
@@ -1477,12 +1449,74 @@ fn tile_blur(
     };
 
     if deadline_enabled {
-      jobs.into_par_iter().for_each_init(
+      (0..tiles_y as usize).into_par_iter().for_each_init(
         || DeadlineGuard::install(deadline.as_ref()),
-        |_, job| blur_job(job),
+        |_, ty| {
+          let y = (ty as u32).saturating_mul(tile_h);
+          if y >= height {
+            return;
+          }
+          let copy_h = tile_h.min(height - y);
+          for tx in 0..tiles_x as usize {
+            let x = (tx as u32).saturating_mul(tile_w);
+            if x >= width {
+              break;
+            }
+            let copy_w = tile_w.min(width - x);
+            let src_min_x = x.saturating_sub(pad_x);
+            let src_min_y = y.saturating_sub(pad_y);
+            let src_max_x = (x + copy_w + pad_x).min(width);
+            let src_max_y = (y + copy_h + pad_y).min(height);
+            let src_w = src_max_x.saturating_sub(src_min_x);
+            let src_h = src_max_y.saturating_sub(src_min_y);
+            blur_job(TileJob {
+              x,
+              y,
+              copy_w,
+              copy_h,
+              src_min_x,
+              src_min_y,
+              src_w,
+              src_h,
+              offset_x: x - src_min_x,
+              offset_y: y - src_min_y,
+            });
+          }
+        },
       );
     } else {
-      jobs.into_par_iter().for_each(|job| blur_job(job));
+      (0..tiles_y as usize).into_par_iter().for_each(|ty| {
+        let y = (ty as u32).saturating_mul(tile_h);
+        if y >= height {
+          return;
+        }
+        let copy_h = tile_h.min(height - y);
+        for tx in 0..tiles_x as usize {
+          let x = (tx as u32).saturating_mul(tile_w);
+          if x >= width {
+            break;
+          }
+          let copy_w = tile_w.min(width - x);
+          let src_min_x = x.saturating_sub(pad_x);
+          let src_min_y = y.saturating_sub(pad_y);
+          let src_max_x = (x + copy_w + pad_x).min(width);
+          let src_max_y = (y + copy_h + pad_y).min(height);
+          let src_w = src_max_x.saturating_sub(src_min_x);
+          let src_h = src_max_y.saturating_sub(src_min_y);
+          blur_job(TileJob {
+            x,
+            y,
+            copy_w,
+            copy_h,
+            src_min_x,
+            src_min_y,
+            src_w,
+            src_h,
+            offset_x: x - src_min_x,
+            offset_y: y - src_min_y,
+          });
+        }
+      });
     }
 
     if let Ok(mut slot) = error.lock() {
@@ -1501,51 +1535,67 @@ fn tile_blur(
 
   let mut deadline_counter = 0usize;
   let mut cancelled = false;
-  for job in jobs {
-    if blur_deadline_exceeded(&mut deadline_counter) {
-      cancelled = true;
-      break;
-    }
+  for ty in 0..tiles_y {
+    let y = ty.saturating_mul(tile_h);
+    let copy_h = tile_h.min(height - y);
+    for tx in 0..tiles_x {
+      let x = tx.saturating_mul(tile_w);
+      let copy_w = tile_w.min(width - x);
+      let src_min_x = x.saturating_sub(pad_x);
+      let src_min_y = y.saturating_sub(pad_y);
+      let src_max_x = (x + copy_w + pad_x).min(width);
+      let src_max_y = (y + copy_h + pad_y).min(height);
+      let src_w = src_max_x.saturating_sub(src_min_x);
+      let src_h = src_max_y.saturating_sub(src_min_y);
+      let offset_x = (x - src_min_x) as usize;
+      let offset_y = (y - src_min_y) as usize;
 
-    let mut tile = new_pixmap_with_context(job.src_w, job.src_h, "tile blur tile")?;
-    let tile_stride = job.src_w as usize * 4;
-    for row in 0..job.src_h as usize {
       if blur_deadline_exceeded(&mut deadline_counter) {
         cancelled = true;
         break;
       }
-      let src_start = (job.src_min_y as usize + row) * row_stride + job.src_min_x as usize * 4;
-      let dst_start = row * tile_stride;
-      tile.data_mut()[dst_start..dst_start + tile_stride]
-        .copy_from_slice(&source[src_start..src_start + tile_stride]);
-    }
-    if cancelled {
-      break;
-    }
 
-    blur_anisotropic_body(&mut tile, sigma_x, sigma_y)?;
-
-    // If the blur was cancelled mid-tile, skip the entire tiled blur and leave the pixmap unchanged.
-    if deadline_enabled && check_active(RenderStage::Paint).is_err() {
-      cancelled = true;
-      break;
-    }
-
-    let offset_x = job.offset_x as usize;
-    let offset_y = job.offset_y as usize;
-    let copy_w_bytes = job.copy_w as usize * 4;
-    let tile_data = tile.data();
-    {
-      let out_data = out.data_mut();
-      for row in 0..job.copy_h as usize {
+      let mut tile = new_pixmap_with_context(src_w, src_h, "tile blur tile")?;
+      let tile_stride = src_w as usize * 4;
+      for row in 0..src_h as usize {
         if blur_deadline_exceeded(&mut deadline_counter) {
           cancelled = true;
           break;
         }
-        let src_start = (offset_y + row) * tile_stride + offset_x * 4;
-        let dst_start = (job.y as usize + row) * row_stride + job.x as usize * 4;
-        out_data[dst_start..dst_start + copy_w_bytes]
-          .copy_from_slice(&tile_data[src_start..src_start + copy_w_bytes]);
+        let src_start = (src_min_y as usize + row) * row_stride + src_min_x as usize * 4;
+        let dst_start = row * tile_stride;
+        tile.data_mut()[dst_start..dst_start + tile_stride]
+          .copy_from_slice(&source[src_start..src_start + tile_stride]);
+      }
+      if cancelled {
+        break;
+      }
+
+      blur_anisotropic_body(&mut tile, sigma_x, sigma_y)?;
+
+      // If the blur was cancelled mid-tile, skip the entire tiled blur and leave the pixmap unchanged.
+      if deadline_enabled && check_active(RenderStage::Paint).is_err() {
+        cancelled = true;
+        break;
+      }
+
+      let copy_w_bytes = copy_w as usize * 4;
+      let tile_data = tile.data();
+      {
+        let out_data = out.data_mut();
+        for row in 0..copy_h as usize {
+          if blur_deadline_exceeded(&mut deadline_counter) {
+            cancelled = true;
+            break;
+          }
+          let src_start = (offset_y + row) * tile_stride + offset_x * 4;
+          let dst_start = (y as usize + row) * row_stride + x as usize * 4;
+          out_data[dst_start..dst_start + copy_w_bytes]
+            .copy_from_slice(&tile_data[src_start..src_start + copy_w_bytes]);
+        }
+      }
+      if cancelled {
+        break;
       }
     }
     if cancelled {
