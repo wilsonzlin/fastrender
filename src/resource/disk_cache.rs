@@ -753,18 +753,24 @@ impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
       policy.ensure_url_allowed(url)?;
     }
 
-    let disk_snapshot = self.read_disk_entry(url);
-    if let Some((ref canonical, ref snapshot)) = disk_snapshot {
-      self.memory.prime_cache_with_snapshot(url, snapshot.clone());
-      if canonical != url {
-        self.persist_alias(url, canonical);
+    let mut disk_snapshot: Option<(String, CachedSnapshot)> = None;
+    let mut cached = self.memory.cached_snapshot(url);
+    let should_read_disk = match cached.as_ref() {
+      Some(snapshot) => matches!(snapshot.value, super::CacheValue::Error(_)),
+      None => true,
+    };
+    if should_read_disk {
+      disk_snapshot = self.read_disk_entry(url);
+      if let Some((ref canonical, ref snapshot)) = disk_snapshot {
+        self.memory.prime_cache_with_snapshot(url, snapshot.clone());
+        if canonical != url {
+          self.persist_alias(url, canonical);
+        }
+        cached = self.memory.cached_snapshot(url);
       }
     }
 
-    let cached = self
-      .memory
-      .cached_snapshot(url)
-      .or_else(|| disk_snapshot.map(|(_, snapshot)| snapshot));
+    let cached = cached.or_else(|| disk_snapshot.map(|(_, snapshot)| snapshot));
     let plan = self
       .memory
       .plan_cache_use(url, cached.clone(), self.disk_config.max_age);
@@ -2004,6 +2010,51 @@ mod tests {
     let res = disk.fetch(url).expect("fetch");
     assert_eq!(res.bytes, bytes);
     assert_eq!(res.content_type.as_deref(), Some("text/plain"));
+    handle.join().unwrap();
+  }
+
+  #[test]
+  fn memory_hits_do_not_wait_for_disk_locks() {
+    let tmp = tempfile::tempdir().unwrap();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let disk = DiskCachingFetcher::new(
+      CountingFetcher {
+        count: Arc::clone(&counter),
+      },
+      tmp.path(),
+    );
+    let url = "https://example.com/memory-hit-lock";
+
+    let first = disk.fetch(url).expect("initial fetch");
+    assert_eq!(first.bytes, b"hello");
+    assert_eq!(counter.load(Ordering::SeqCst), 1);
+
+    let data_path = disk.data_path(url);
+    let lock_path = lock_path_for(&data_path);
+    let contents = LockFileContents {
+      pid: std::process::id(),
+      started_at: now_seconds(),
+    };
+    fs::write(&lock_path, serde_json::to_vec(&contents).unwrap()).unwrap();
+
+    let handle = thread::spawn({
+      let lock_path = lock_path.clone();
+      move || {
+        thread::sleep(READ_LOCK_WAIT_TIMEOUT * 2);
+        let _ = fs::remove_file(lock_path);
+      }
+    });
+
+    let start = Instant::now();
+    let second = disk.fetch(url).expect("memory fetch");
+    let elapsed = start.elapsed();
+    assert_eq!(second.bytes, b"hello");
+    assert_eq!(counter.load(Ordering::SeqCst), 1);
+    assert!(
+      elapsed < READ_LOCK_WAIT_TIMEOUT / 2,
+      "memory hits should not wait on disk locks: {elapsed:?}"
+    );
+
     handle.join().unwrap();
   }
 
