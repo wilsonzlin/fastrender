@@ -216,24 +216,39 @@ pub(crate) fn parse_sizes_length(value: &str) -> Option<Length> {
     Ok(Token::Dimension {
       value, ref unit, ..
     }) => {
-      let unit = unit.as_ref().to_ascii_lowercase();
-      match unit.as_str() {
-        "px" => Some(Length::px(*value)),
-        "em" => Some(Length::em(*value)),
-        "rem" => Some(Length::rem(*value)),
-        "ex" => Some(Length::ex(*value)),
-        "ch" => Some(Length::ch(*value)),
-        "pt" => Some(Length::pt(*value)),
-        "pc" => Some(Length::pc(*value)),
-        "in" => Some(Length::inches(*value)),
-        "cm" => Some(Length::cm(*value)),
-        "mm" => Some(Length::mm(*value)),
-        "q" => Some(Length::q(*value)),
-        "vw" => Some(Length::new(*value, LengthUnit::Vw)),
-        "vh" => Some(Length::new(*value, LengthUnit::Vh)),
-        "vmin" => Some(Length::new(*value, LengthUnit::Vmin)),
-        "vmax" => Some(Length::new(*value, LengthUnit::Vmax)),
-        _ => None,
+      let unit = unit.as_ref();
+      if unit.eq_ignore_ascii_case("px") {
+        Some(Length::px(*value))
+      } else if unit.eq_ignore_ascii_case("em") {
+        Some(Length::em(*value))
+      } else if unit.eq_ignore_ascii_case("rem") {
+        Some(Length::rem(*value))
+      } else if unit.eq_ignore_ascii_case("ex") {
+        Some(Length::ex(*value))
+      } else if unit.eq_ignore_ascii_case("ch") {
+        Some(Length::ch(*value))
+      } else if unit.eq_ignore_ascii_case("pt") {
+        Some(Length::pt(*value))
+      } else if unit.eq_ignore_ascii_case("pc") {
+        Some(Length::pc(*value))
+      } else if unit.eq_ignore_ascii_case("in") {
+        Some(Length::inches(*value))
+      } else if unit.eq_ignore_ascii_case("cm") {
+        Some(Length::cm(*value))
+      } else if unit.eq_ignore_ascii_case("mm") {
+        Some(Length::mm(*value))
+      } else if unit.eq_ignore_ascii_case("q") {
+        Some(Length::q(*value))
+      } else if unit.eq_ignore_ascii_case("vw") {
+        Some(Length::new(*value, LengthUnit::Vw))
+      } else if unit.eq_ignore_ascii_case("vh") {
+        Some(Length::new(*value, LengthUnit::Vh))
+      } else if unit.eq_ignore_ascii_case("vmin") {
+        Some(Length::new(*value, LengthUnit::Vmin))
+      } else if unit.eq_ignore_ascii_case("vmax") {
+        Some(Length::new(*value, LengthUnit::Vmax))
+      } else {
+        None
       }
     }
     Ok(Token::Function(ref name)) if name.eq_ignore_ascii_case("calc") => {
@@ -2117,20 +2132,19 @@ fn collect_text_content(node: &DomNode) -> String {
 }
 
 fn option_label_from_node(node: &DomNode) -> Option<String> {
-  let label_attr = node
-    .get_attribute("label")
-    .or_else(|| node.get_attribute("value"));
-  if let Some(label) = label_attr {
-    if !label.is_empty() {
-      return Some(label);
-    }
+  if let Some(label) = node.get_attribute_ref("label").filter(|l| !l.is_empty()) {
+    return Some(label.to_string());
+  }
+  if let Some(label) = node.get_attribute_ref("value").filter(|v| !v.is_empty()) {
+    return Some(label.to_string());
   }
 
-  let text = collect_text_content(node).trim().to_string();
-  if text.is_empty() {
+  let text = collect_text_content(node);
+  let trimmed = text.trim();
+  if trimmed.is_empty() {
     None
   } else {
-    Some(text)
+    Some(trimmed.to_string())
   }
 }
 
@@ -2200,29 +2214,33 @@ fn select_label(node: &DomNode) -> Option<String> {
 }
 
 fn input_label(node: &DomNode, input_type: &str) -> String {
-  let from_value = node.get_attribute("value").unwrap_or_default();
-  if !from_value.is_empty() {
-    return from_value;
+  if let Some(value) = node.get_attribute_ref("value").filter(|v| !v.is_empty()) {
+    return value.to_string();
   }
 
-  match input_type {
-    "submit" => "Submit".to_string(),
-    "reset" => "Reset".to_string(),
-    "button" => "Button".to_string(),
-    other => other.to_ascii_uppercase(),
+  if input_type.eq_ignore_ascii_case("submit") {
+    "Submit".to_string()
+  } else if input_type.eq_ignore_ascii_case("reset") {
+    "Reset".to_string()
+  } else if input_type.eq_ignore_ascii_case("button") {
+    "Button".to_string()
+  } else {
+    input_type.to_ascii_uppercase()
   }
 }
 
 fn button_label(node: &StyledNode) -> String {
-  let text = collect_text_content(&node.node).trim().to_string();
-  if !text.is_empty() {
-    return text;
+  let text = collect_text_content(&node.node);
+  let trimmed = text.trim();
+  if !trimmed.is_empty() {
+    return trimmed.to_string();
   }
 
   node
     .node
-    .get_attribute("value")
+    .get_attribute_ref("value")
     .filter(|v| !v.is_empty())
+    .map(|v| v.to_string())
     .unwrap_or_else(|| "Button".to_string())
 }
 
@@ -2281,138 +2299,139 @@ fn create_form_control_replaced(styled: &StyledNode) -> Option<FormControl> {
     && !disabled;
 
   if tag.eq_ignore_ascii_case("input") {
-      let input_type = styled
-        .node
-        .get_attribute("type")
-        .unwrap_or_else(|| "text".to_string())
-        .to_ascii_lowercase();
+    let input_type = styled.node.get_attribute_ref("type").unwrap_or("text");
+    if input_type.eq_ignore_ascii_case("hidden") {
+      return None;
+    }
 
-      if input_type == "hidden" {
-        return None;
+    let control = if input_type.eq_ignore_ascii_case("checkbox") {
+      FormControlKind::Checkbox {
+        is_radio: false,
+        checked: styled.node.get_attribute_ref("checked").is_some(),
+        indeterminate: styled
+          .node
+          .get_attribute_ref("indeterminate")
+          .map(|v| v.eq_ignore_ascii_case("true"))
+          .unwrap_or(false)
+          || styled
+            .node
+            .get_attribute_ref("aria-checked")
+            .map(|v| v.eq_ignore_ascii_case("mixed"))
+            .unwrap_or(false),
       }
+    } else if input_type.eq_ignore_ascii_case("radio") {
+      FormControlKind::Checkbox {
+        is_radio: true,
+        checked: styled.node.get_attribute_ref("checked").is_some(),
+        indeterminate: false,
+      }
+    } else if input_type.eq_ignore_ascii_case("button")
+      || input_type.eq_ignore_ascii_case("submit")
+      || input_type.eq_ignore_ascii_case("reset")
+    {
+      FormControlKind::Button {
+        label: input_label(&styled.node, input_type),
+      }
+    } else if input_type.eq_ignore_ascii_case("range") {
+      FormControlKind::Range {
+        value: parse_f32_attr(&styled.node, "value").unwrap_or(50.0),
+        min: parse_f32_attr(&styled.node, "min"),
+        max: parse_f32_attr(&styled.node, "max"),
+      }
+    } else if input_type.eq_ignore_ascii_case("color") {
+      let raw_value = styled.node.get_attribute_ref("value").filter(|v| !v.is_empty());
+      let parsed = raw_value.and_then(parse_color_attribute);
+      let color_value = parsed.unwrap_or(Rgba {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 1.0,
+      });
+      if raw_value.is_some() && parsed.is_none() && !disabled {
+        invalid = true;
+      }
+      FormControlKind::Color {
+        value: color_value,
+        raw: raw_value.map(|v| v.to_string()),
+      }
+    } else {
+      let size_attr = styled
+        .node
+        .get_attribute_ref("size")
+        .and_then(|s| s.parse::<u32>().ok());
+      let mut placeholder = styled
+        .node
+        .get_attribute_ref("placeholder")
+        .filter(|p| !p.is_empty())
+        .map(|p| p.to_string());
+      let value = styled
+        .node
+        .get_attribute_ref("value")
+        .filter(|v| !v.is_empty())
+        .map(|v| v.to_string())
+        .unwrap_or_default();
 
-      let control = match input_type.as_str() {
-        "checkbox" => FormControlKind::Checkbox {
-          is_radio: false,
-          checked: styled.node.get_attribute_ref("checked").is_some(),
-          indeterminate: styled
-            .node
-            .get_attribute_ref("indeterminate")
-            .map(|v| v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false)
-            || styled
-              .node
-              .get_attribute_ref("aria-checked")
-              .map(|v| v.eq_ignore_ascii_case("mixed"))
-              .unwrap_or(false),
-        },
-        "radio" => FormControlKind::Checkbox {
-          is_radio: true,
-          checked: styled.node.get_attribute_ref("checked").is_some(),
-          indeterminate: false,
-        },
-        "button" | "submit" | "reset" => FormControlKind::Button {
-          label: input_label(&styled.node, &input_type),
-        },
-        "range" => FormControlKind::Range {
-          value: parse_f32_attr(&styled.node, "value").unwrap_or(50.0),
-          min: parse_f32_attr(&styled.node, "min"),
-          max: parse_f32_attr(&styled.node, "max"),
-        },
-        "color" => {
-          let raw_value = styled.node.get_attribute("value").filter(|v| !v.is_empty());
-          let parsed = raw_value.as_ref().and_then(|v| parse_color_attribute(v));
-          let color_value = parsed.unwrap_or(Rgba {
-            r: 0,
-            g: 0,
-            b: 0,
-            a: 1.0,
-          });
-          if raw_value.is_some() && parsed.is_none() && !disabled {
-            invalid = true;
-          }
-          FormControlKind::Color {
-            value: color_value,
-            raw: raw_value,
-          }
-        }
-        _ => {
-          let size_attr = styled
-            .node
-            .get_attribute("size")
-            .and_then(|s| s.parse::<u32>().ok());
-          let raw_placeholder = styled
-            .node
-            .get_attribute("placeholder")
-            .filter(|p| !p.is_empty());
-          let mut placeholder = raw_placeholder.clone();
-          let value = styled.node.get_attribute("value").unwrap_or_default();
-
-          let kind = match input_type.as_str() {
-            "password" => TextControlKind::Password,
-            "number" => TextControlKind::Number,
-            "date" => {
-              placeholder.get_or_insert_with(|| "yyyy-mm-dd".to_string());
-              TextControlKind::Date
-            }
-            "datetime-local" => {
-              placeholder.get_or_insert_with(|| "yyyy-mm-dd hh:mm".to_string());
-              TextControlKind::Date
-            }
-            "month" => {
-              placeholder.get_or_insert_with(|| "yyyy-mm".to_string());
-              TextControlKind::Date
-            }
-            "week" => {
-              placeholder.get_or_insert_with(|| "yyyy-Www".to_string());
-              TextControlKind::Date
-            }
-            "time" => {
-              placeholder.get_or_insert_with(|| "hh:mm".to_string());
-              TextControlKind::Date
-            }
-            "text" | "search" | "url" | "tel" | "email" | "" => TextControlKind::Plain,
-            other => {
-              let label = if let Some(val) = raw_placeholder {
-                Some(val)
-              } else if let Some(val) = styled.node.get_attribute("value").filter(|v| !v.is_empty())
-              {
-                Some(val)
-              } else {
-                Some(other.to_ascii_uppercase())
-              };
-              return Some(FormControl {
-                control: FormControlKind::Unknown { label },
-                appearance,
-                disabled,
-                focused,
-                focus_visible,
-                required,
-                invalid,
-              });
-            }
-          };
-
-          FormControlKind::Text {
-            value,
-            placeholder,
-            size_attr,
-            kind,
-          }
-        }
+      let kind = if input_type.eq_ignore_ascii_case("password") {
+        TextControlKind::Password
+      } else if input_type.eq_ignore_ascii_case("number") {
+        TextControlKind::Number
+      } else if input_type.eq_ignore_ascii_case("date") {
+        placeholder.get_or_insert_with(|| "yyyy-mm-dd".to_string());
+        TextControlKind::Date
+      } else if input_type.eq_ignore_ascii_case("datetime-local") {
+        placeholder.get_or_insert_with(|| "yyyy-mm-dd hh:mm".to_string());
+        TextControlKind::Date
+      } else if input_type.eq_ignore_ascii_case("month") {
+        placeholder.get_or_insert_with(|| "yyyy-mm".to_string());
+        TextControlKind::Date
+      } else if input_type.eq_ignore_ascii_case("week") {
+        placeholder.get_or_insert_with(|| "yyyy-Www".to_string());
+        TextControlKind::Date
+      } else if input_type.eq_ignore_ascii_case("time") {
+        placeholder.get_or_insert_with(|| "hh:mm".to_string());
+        TextControlKind::Date
+      } else if input_type.is_empty()
+        || input_type.eq_ignore_ascii_case("text")
+        || input_type.eq_ignore_ascii_case("search")
+        || input_type.eq_ignore_ascii_case("url")
+        || input_type.eq_ignore_ascii_case("tel")
+        || input_type.eq_ignore_ascii_case("email")
+      {
+        TextControlKind::Plain
+      } else {
+        let label = placeholder
+          .or_else(|| (!value.is_empty()).then_some(value))
+          .or_else(|| Some(input_type.to_ascii_uppercase()));
+        return Some(FormControl {
+          control: FormControlKind::Unknown { label },
+          appearance,
+          disabled,
+          focused,
+          focus_visible,
+          required,
+          invalid,
+        });
       };
 
-      Some(FormControl {
-        control,
-        appearance,
-        disabled,
-        focused,
-        focus_visible,
-        required,
-        invalid,
-      })
-    } else if tag.eq_ignore_ascii_case("textarea") {
-      Some(FormControl {
+      FormControlKind::Text {
+        value,
+        placeholder,
+        size_attr,
+        kind,
+      }
+    };
+
+    Some(FormControl {
+      control,
+      appearance,
+      disabled,
+      focused,
+      focus_visible,
+      required,
+      invalid,
+    })
+  } else if tag.eq_ignore_ascii_case("textarea") {
+    Some(FormControl {
       control: FormControlKind::TextArea {
         value: collect_text_content(&styled.node),
         rows: styled
@@ -2431,22 +2450,22 @@ fn create_form_control_replaced(styled: &StyledNode) -> Option<FormControl> {
       required,
       invalid,
     })
-    } else if tag.eq_ignore_ascii_case("select") {
-      let label = select_label(&styled.node).unwrap_or_else(|| "Select".to_string());
-      Some(FormControl {
-        control: FormControlKind::Select {
-          label,
-          multiple: styled.node.get_attribute_ref("multiple").is_some(),
-        },
-        appearance,
-        disabled,
-        focused,
-        focus_visible,
-        required,
-        invalid,
-      })
-    } else if tag.eq_ignore_ascii_case("button") {
-      Some(FormControl {
+  } else if tag.eq_ignore_ascii_case("select") {
+    let label = select_label(&styled.node).unwrap_or_else(|| "Select".to_string());
+    Some(FormControl {
+      control: FormControlKind::Select {
+        label,
+        multiple: styled.node.get_attribute_ref("multiple").is_some(),
+      },
+      appearance,
+      disabled,
+      focused,
+      focus_visible,
+      required,
+      invalid,
+    })
+  } else if tag.eq_ignore_ascii_case("button") {
+    Some(FormControl {
       control: FormControlKind::Button {
         label: button_label(styled),
       },
@@ -2457,10 +2476,9 @@ fn create_form_control_replaced(styled: &StyledNode) -> Option<FormControl> {
       required,
       invalid,
     })
-    } else {
-      None
-    }
-}
+  } else {
+    None
+  }
 }
 
 /// Checks if an element is a replaced element
@@ -2490,18 +2508,22 @@ fn create_replaced_box_from_styled(
 
   // Get src attribute if available
   let src = styled.node.get_attribute("src").unwrap_or_default();
-  let alt = styled.node.get_attribute("alt").filter(|s| !s.is_empty());
+  let alt = styled
+    .node
+    .get_attribute_ref("alt")
+    .filter(|s| !s.is_empty())
+    .map(|s| s.to_string());
   let poster = styled
     .node
-    .get_attribute("poster")
-    .filter(|s| !s.is_empty());
-  let srcset_attr = styled.node.get_attribute("srcset");
-  let sizes_attr = styled.node.get_attribute("sizes");
-  let srcset = srcset_attr
-    .as_ref()
-    .map(|s| parse_srcset(s))
+    .get_attribute_ref("poster")
+    .filter(|s| !s.is_empty())
+    .map(|s| s.to_string());
+  let srcset = styled
+    .node
+    .get_attribute_ref("srcset")
+    .map(parse_srcset)
     .unwrap_or_default();
-  let sizes = sizes_attr.as_ref().and_then(|s| parse_sizes(s));
+  let sizes = styled.node.get_attribute_ref("sizes").and_then(parse_sizes);
   let data_attr = styled.node.get_attribute("data").unwrap_or_default();
 
   // Determine replaced type
@@ -2526,8 +2548,9 @@ fn create_replaced_box_from_styled(
   } else if tag.eq_ignore_ascii_case("iframe") {
     let srcdoc = styled
       .node
-      .get_attribute("srcdoc")
-      .filter(|s| !s.is_empty());
+      .get_attribute_ref("srcdoc")
+      .filter(|s| !s.is_empty())
+      .map(|s| s.to_string());
     ReplacedType::Iframe { src, srcdoc }
   } else if tag.eq_ignore_ascii_case("embed") {
     ReplacedType::Embed { src }
