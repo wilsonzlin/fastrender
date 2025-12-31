@@ -6,8 +6,10 @@
 //! - When the callback indicates cancellation, layout aborts by panicking with a dedicated payload
 //!   (`LayoutAbort`). The high-level API catches this and converts it to a structured error.
 //!
-//! The cancellation mechanism is behind the `std` feature. In `no_std` builds, this module
-//! compiles to no-ops so behaviour remains unchanged.
+//! The cancellation mechanism is behind the `std` feature. In `no_std` builds, periodic
+//! cancellation is disabled (installing a callback isn't supported and [`check_layout_abort`]
+//! is a no-op) so layout behaviour remains unchanged unless callers explicitly invoke
+//! [`abort_now`].
 
 #[cfg(feature = "std")]
 use std::cell::{Cell, RefCell};
