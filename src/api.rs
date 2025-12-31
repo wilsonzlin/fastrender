@@ -5898,6 +5898,8 @@ impl FastRender {
     layout_parallelism: LayoutParallelism,
     mut stats: Option<&mut RenderStatsRecorder>,
   ) -> Result<LayoutArtifacts> {
+    let inherited_deadline = crate::render_control::active_deadline();
+    let deadline = deadline.or(inherited_deadline.as_ref());
     let _deadline_guard = DeadlineGuard::install(deadline);
     let clone_timer = stats.as_deref().and_then(|rec| rec.timer());
     let (dom_with_state, needs_top_layer_state) =
@@ -10313,6 +10315,55 @@ mod tests {
       .with_viewport(10, 10)
       .with_timeout(Some(std::time::Duration::from_millis(0)));
     let result = renderer.snapshot_pipeline("<div>Hello</div>", "https://example.com/", options);
+
+    match result {
+      Err(Error::Render(RenderError::Timeout { stage, .. })) => {
+        assert_eq!(stage, RenderStage::DomParse);
+      }
+      Ok(_) => panic!("expected dom_parse timeout, got Ok"),
+      Err(err) => panic!("expected dom_parse timeout, got {err}"),
+    }
+  }
+
+  #[test]
+  fn layout_document_timeout_is_cooperative() {
+    let mut renderer = FastRender::with_config(FastRenderConfig {
+      font_config: FontConfig::bundled_only(),
+      ..FastRenderConfig::default()
+    })
+    .unwrap();
+
+    let mut dom = DomNode {
+      node_type: DomNodeType::Document {
+        quirks_mode: selectors::context::QuirksMode::NoQuirks,
+      },
+      children: vec![DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "div".to_string(),
+          namespace: crate::dom::HTML_NAMESPACE.to_string(),
+          attributes: vec![],
+        },
+        children: vec![],
+      }],
+    };
+
+    let mut current = &mut dom.children[0];
+    for _ in 0..(1024 * 2) {
+      current.children.push(DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "div".to_string(),
+          namespace: crate::dom::HTML_NAMESPACE.to_string(),
+          attributes: vec![],
+        },
+        children: vec![],
+      });
+      current = current.children.last_mut().expect("child pushed");
+    }
+
+    let deadline = RenderDeadline::new(Some(std::time::Duration::from_millis(0)), None);
+    let result = crate::render_control::with_deadline(Some(&deadline), || {
+      renderer.layout_document(&dom, 10, 10)
+    });
 
     match result {
       Err(Error::Render(RenderError::Timeout { stage, .. })) => {
