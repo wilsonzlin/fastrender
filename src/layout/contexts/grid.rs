@@ -1743,26 +1743,38 @@ impl GridFormattingContext {
       let needs_block_intrinsics = positioned_style.height.is_auto()
         && (positioned_style.top.is_auto() || positioned_style.bottom.is_auto());
       let preferred_min_inline = if needs_inline_intrinsics {
-        fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
-          .ok()
+        match fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent) {
+          Ok(size) => Some(size),
+          Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+          Err(_) => None,
+        }
       } else {
         None
       };
       let preferred_inline = if needs_inline_intrinsics {
-        fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent)
-          .ok()
+        match fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent) {
+          Ok(size) => Some(size),
+          Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+          Err(_) => None,
+        }
       } else {
         None
       };
       let preferred_min_block = if needs_block_intrinsics {
-        fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent)
-          .ok()
+        match fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent) {
+          Ok(size) => Some(size),
+          Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+          Err(_) => None,
+        }
       } else {
         None
       };
       let preferred_block = if needs_block_intrinsics {
-        fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent)
-          .ok()
+        match fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent) {
+          Ok(size) => Some(size),
+          Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+          Err(_) => None,
+        }
       } else {
         None
       };
@@ -2364,12 +2376,14 @@ impl GridFormattingContext {
           .justify_self
           .unwrap_or(container_justify_items);
         if justify != AlignItems::Stretch {
-          if let Ok(intrinsic_width) =
-            fc.compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MaxContent)
-          {
-            let used_width = intrinsic_width.min(area_width);
-            constraints.available_width = CrateAvailableSpace::Definite(used_width);
-            constraints.inline_percentage_base = Some(area_width);
+          match fc.compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MaxContent) {
+            Ok(intrinsic_width) => {
+              let used_width = intrinsic_width.min(area_width);
+              constraints.available_width = CrateAvailableSpace::Definite(used_width);
+              constraints.inline_percentage_base = Some(area_width);
+            }
+            Err(LayoutError::Timeout { .. }) => taffy::abort_layout_now(),
+            Err(_) => {}
           }
         }
       }
@@ -3217,26 +3231,38 @@ impl FormattingContext for GridFormattingContext {
         let needs_block_intrinsics = positioned_style.height.is_auto()
           && (positioned_style.top.is_auto() || positioned_style.bottom.is_auto());
         let preferred_min_inline = if needs_inline_intrinsics {
-          fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
-            .ok()
+          match fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent) {
+            Ok(size) => Some(size),
+            Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+            Err(_) => None,
+          }
         } else {
           None
         };
         let preferred_inline = if needs_inline_intrinsics {
-          fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent)
-            .ok()
+          match fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent) {
+            Ok(size) => Some(size),
+            Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+            Err(_) => None,
+          }
         } else {
           None
         };
         let preferred_min_block = if needs_block_intrinsics {
-          fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent)
-            .ok()
+          match fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent) {
+            Ok(size) => Some(size),
+            Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+            Err(_) => None,
+          }
         } else {
           None
         };
         let preferred_block = if needs_block_intrinsics {
-          fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent)
-            .ok()
+          match fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent) {
+            Ok(size) => Some(size),
+            Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+            Err(_) => None,
+          }
         } else {
           None
         };
