@@ -427,6 +427,19 @@ impl Default for FormattingContextFactory {
   }
 }
 
+#[cfg(test)]
+impl FormattingContextFactory {
+  pub(crate) fn cached_context_is_initialized(&self, fc_type: FormattingContextType) -> bool {
+    match fc_type {
+      FormattingContextType::Block => self.cached_contexts.block.get().is_some(),
+      FormattingContextType::Inline => self.cached_contexts.inline.get().is_some(),
+      FormattingContextType::Flex => self.cached_contexts.flex.get().is_some(),
+      FormattingContextType::Grid => self.cached_contexts.grid.get().is_some(),
+      FormattingContextType::Table => false,
+    }
+  }
+}
+
 // =============================================================================
 // Tests
 // =============================================================================
@@ -607,6 +620,15 @@ mod tests {
     let table_a = factory.get(FormattingContextType::Table);
     let table_b = factory.get(FormattingContextType::Table);
     assert!(!Arc::ptr_eq(&table_a, &table_b));
+  }
+
+  #[test]
+  fn test_get_does_not_cache_table_instances() {
+    let factory = FormattingContextFactory::new();
+    let a = factory.get(FormattingContextType::Table);
+    let b = factory.get(FormattingContextType::Table);
+    assert!(!Arc::ptr_eq(&a, &b));
+    assert!(!factory.cached_context_is_initialized(FormattingContextType::Table));
   }
 
   #[test]

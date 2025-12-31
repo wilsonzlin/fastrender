@@ -917,8 +917,7 @@ impl LayoutEngine {
       LayoutError::MissingContext("Box does not establish a formatting context".to_string())
     })?;
 
-    // Create the appropriate formatting context via factory
-    let fc = factory.create(fc_type);
+    let fc = factory.get(fc_type);
 
     // Optional slow-layout logging for debugging large pages.
     let slow_threshold_ms = runtime::runtime_toggles().u128("FASTR_LOG_SLOW_LAYOUT_MS");
@@ -998,7 +997,7 @@ impl LayoutEngine {
       LayoutError::MissingContext("Box does not establish a formatting context".to_string())
     })?;
 
-    let fc = self.factory.create(fc_type);
+    let fc = self.factory.get(fc_type);
     fc.compute_intrinsic_inline_size(box_node, mode)
   }
 
@@ -1356,6 +1355,24 @@ mod tests {
       let result = engine.layout_tree(&box_tree);
       assert!(result.is_ok());
     }
+  }
+
+  #[test]
+  fn test_layout_tree_reuses_cached_formatting_contexts() {
+    let engine = LayoutEngine::with_defaults();
+    let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]);
+    let tree = BoxTree::new(root);
+
+    let (_, _, _, factory) = engine.resolve_parallelism_for_tree(&tree);
+    assert!(!factory.cached_context_is_initialized(FormattingContextType::Block));
+
+    engine.layout_tree_inner(&factory, &tree, true, None).unwrap();
+    assert!(factory.cached_context_is_initialized(FormattingContextType::Block));
+
+    let first = factory.get(FormattingContextType::Block);
+    engine.layout_tree_inner(&factory, &tree, true, None).unwrap();
+    let second = factory.get(FormattingContextType::Block);
+    assert!(Arc::ptr_eq(&first, &second));
   }
 
   #[test]
