@@ -1733,6 +1733,7 @@ impl HttpFetcher {
             resource.etag = etag;
             resource.last_modified = last_modified;
             resource.cache_policy = cache_policy;
+            render_control::check_active(decode_stage).map_err(Error::Render)?;
             return Ok(resource);
           }
           Err(err) => {
@@ -1847,6 +1848,7 @@ impl HttpFetcher {
     self.policy.reserve_budget(bytes.len())?;
 
     let content_type = guess_content_type_from_path(path);
+    render_control::check_active(render_stage_hint_from_url(url)).map_err(Error::Render)?;
     Ok(FetchedResource::with_final_url(
       bytes,
       content_type,
@@ -1874,6 +1876,7 @@ impl HttpFetcher {
       )));
     }
     self.policy.reserve_budget(len)?;
+    render_control::check_active(render_stage_hint_from_url(url)).map_err(Error::Render)?;
     Ok(resource)
   }
 }
@@ -1893,6 +1896,7 @@ impl Default for HttpFetcher {
 
 impl ResourceFetcher for HttpFetcher {
   fn fetch(&self, url: &str) -> Result<FetchedResource> {
+    render_control::check_active(render_stage_hint_from_url(url)).map_err(Error::Render)?;
     match self.policy.ensure_url_allowed(url)? {
       ResourceScheme::Data => self.fetch_data(url),
       ResourceScheme::File => self.fetch_file(url),
@@ -1908,6 +1912,7 @@ impl ResourceFetcher for HttpFetcher {
     etag: Option<&str>,
     last_modified: Option<&str>,
   ) -> Result<FetchedResource> {
+    render_control::check_active(render_stage_hint_from_url(url)).map_err(Error::Render)?;
     match self.policy.ensure_url_allowed(url)? {
       ResourceScheme::Http | ResourceScheme::Https => self.fetch_http_with_accept(
         url,
