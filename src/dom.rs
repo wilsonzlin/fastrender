@@ -756,6 +756,7 @@ impl SiblingListCache {
 }
 
 const ELEMENT_ATTR_CACHE_ATTR_INDEX_THRESHOLD: usize = 10;
+const ELEMENT_ATTR_CACHE_CLASS_INDEX_THRESHOLD: usize = 8;
 const ELEMENT_ATTR_CACHE_FNV_OFFSET_BASIS: u64 = 14695981039346656037;
 const ELEMENT_ATTR_CACHE_FNV_PRIME: u64 = 1099511628211;
 
@@ -834,7 +835,25 @@ fn element_attr_cache_name_matches(actual: &str, expected: &str, is_html: bool) 
 enum CachedClassTokens {
   None,
   Unparsed(*const str),
-  Parsed { raw: *const str, ranges: Box<[std::ops::Range<usize>]> },
+  Parsed {
+    raw: *const str,
+    ranges: Box<[std::ops::Range<usize>]>,
+    index_sensitive: CachedClassIndex,
+    index_ascii: CachedClassIndex,
+  },
+}
+
+#[derive(Debug, Clone)]
+enum CachedClassIndex {
+  Pending,
+  Disabled,
+  Built(HashMap<u64, ClassBucket, ElementAttrCacheBuildHasher>),
+}
+
+#[derive(Debug, Clone)]
+enum ClassBucket {
+  Single(usize),
+  Multi(Vec<usize>),
 }
 
 #[derive(Debug, Clone)]
@@ -894,29 +913,159 @@ impl ElementAttrCacheEntry {
     }
   }
 
-  fn class_ranges(&mut self) -> Option<(*const str, &[std::ops::Range<usize>])> {
+  fn ensure_class_parsed(&mut self) {
     let raw_ptr = match &self.class {
       CachedClassTokens::Unparsed(ptr) => Some(*ptr),
       _ => None,
     };
 
-    if let Some(ptr) = raw_ptr {
-      let raw: &str = unsafe { &*ptr };
-      let base_ptr = raw.as_ptr() as usize;
-      let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
-      for token in raw.split_whitespace() {
-        let start = token.as_ptr() as usize - base_ptr;
-        ranges.push(start..start + token.len());
+    let Some(ptr) = raw_ptr else {
+      return;
+    };
+
+    let raw: &str = unsafe { &*ptr };
+    let base_ptr = raw.as_ptr() as usize;
+    let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
+    for token in raw.split_whitespace() {
+      let start = token.as_ptr() as usize - base_ptr;
+      ranges.push(start..start + token.len());
+    }
+    let ranges = ranges.into_boxed_slice();
+    let index_state = if ranges.len() >= ELEMENT_ATTR_CACHE_CLASS_INDEX_THRESHOLD {
+      CachedClassIndex::Pending
+    } else {
+      CachedClassIndex::Disabled
+    };
+
+    self.class = CachedClassTokens::Parsed {
+      raw: ptr,
+      ranges,
+      index_sensitive: index_state.clone(),
+      index_ascii: index_state,
+    };
+  }
+
+  fn class_index<'a>(
+    index: &'a mut CachedClassIndex,
+    raw: &str,
+    ranges: &[std::ops::Range<usize>],
+    case_sensitivity: CaseSensitivity,
+  ) -> Option<&'a HashMap<u64, ClassBucket, ElementAttrCacheBuildHasher>> {
+    if matches!(index, CachedClassIndex::Pending) {
+      let mut map: HashMap<u64, ClassBucket, ElementAttrCacheBuildHasher> = HashMap::default();
+      for (idx, range) in ranges.iter().enumerate() {
+        let token = &raw[range.start..range.end];
+        if token.is_empty() {
+          continue;
+        }
+        let hash = match case_sensitivity {
+          CaseSensitivity::CaseSensitive => element_attr_cache_hash_str(token),
+          CaseSensitivity::AsciiCaseInsensitive => element_attr_cache_hash_ascii_lowercase(token),
+        };
+        match map.entry(hash) {
+          std::collections::hash_map::Entry::Vacant(entry) => {
+            entry.insert(ClassBucket::Single(idx));
+          }
+          std::collections::hash_map::Entry::Occupied(mut entry) => {
+            let bucket = entry.get_mut();
+            let is_dup = match bucket {
+              ClassBucket::Single(existing) => {
+                let existing_range = ranges.get(*existing);
+                existing_range.is_some_and(|r| match case_sensitivity {
+                  CaseSensitivity::CaseSensitive => &raw[r.start..r.end] == token,
+                  CaseSensitivity::AsciiCaseInsensitive => raw[r.start..r.end].eq_ignore_ascii_case(token),
+                })
+              }
+              ClassBucket::Multi(existing) => existing.iter().any(|existing| {
+                let Some(r) = ranges.get(*existing) else {
+                  return false;
+                };
+                match case_sensitivity {
+                  CaseSensitivity::CaseSensitive => &raw[r.start..r.end] == token,
+                  CaseSensitivity::AsciiCaseInsensitive => raw[r.start..r.end].eq_ignore_ascii_case(token),
+                }
+              }),
+            };
+            if is_dup {
+              continue;
+            }
+            match bucket {
+              ClassBucket::Single(existing) => {
+                let prev = *existing;
+                *bucket = ClassBucket::Multi(vec![prev, idx]);
+              }
+              ClassBucket::Multi(existing) => existing.push(idx),
+            }
+          }
+        }
       }
-      self.class = CachedClassTokens::Parsed {
-        raw: ptr,
-        ranges: ranges.into_boxed_slice(),
-      };
+      *index = CachedClassIndex::Built(map);
     }
 
-    match &self.class {
-      CachedClassTokens::Parsed { raw, ranges } => Some((*raw, ranges.as_ref())),
+    match index {
+      CachedClassIndex::Built(map) => Some(map),
       _ => None,
+    }
+  }
+
+  fn has_class(&mut self, class: &str, case_sensitivity: CaseSensitivity) -> bool {
+    self.ensure_class_parsed();
+    let CachedClassTokens::Parsed {
+      raw,
+      ranges,
+      index_sensitive,
+      index_ascii,
+    } = &mut self.class
+    else {
+      return false;
+    };
+
+    let raw: &str = unsafe { &**raw };
+    let ranges = ranges.as_ref();
+
+    let index = match case_sensitivity {
+      CaseSensitivity::CaseSensitive => {
+        Self::class_index(index_sensitive, raw, ranges, CaseSensitivity::CaseSensitive)
+      }
+      CaseSensitivity::AsciiCaseInsensitive => {
+        Self::class_index(index_ascii, raw, ranges, CaseSensitivity::AsciiCaseInsensitive)
+      }
+    };
+
+    if let Some(index) = index {
+      let query_hash = match case_sensitivity {
+        CaseSensitivity::CaseSensitive => element_attr_cache_hash_str(class),
+        CaseSensitivity::AsciiCaseInsensitive => element_attr_cache_hash_ascii_lowercase(class),
+      };
+      if let Some(bucket) = index.get(&query_hash) {
+        let indices: &[usize] = match bucket {
+          ClassBucket::Single(idx) => std::slice::from_ref(idx),
+          ClassBucket::Multi(list) => list.as_slice(),
+        };
+        for idx in indices {
+          let Some(range) = ranges.get(*idx) else {
+            continue;
+          };
+          let token = &raw[range.start..range.end];
+          let matches = match case_sensitivity {
+            CaseSensitivity::CaseSensitive => token == class,
+            CaseSensitivity::AsciiCaseInsensitive => token.eq_ignore_ascii_case(class),
+          };
+          if matches {
+            return true;
+          }
+        }
+        return false;
+      }
+    }
+
+    match case_sensitivity {
+      CaseSensitivity::CaseSensitive => ranges
+        .iter()
+        .any(|range| &raw[range.start..range.end] == class),
+      CaseSensitivity::AsciiCaseInsensitive => ranges
+        .iter()
+        .any(|range| raw[range.start..range.end].eq_ignore_ascii_case(class)),
     }
   }
 
@@ -1020,19 +1169,7 @@ impl ElementAttrCache {
     class: &str,
     case_sensitivity: CaseSensitivity,
   ) -> bool {
-    let mut entry = self.entry_mut(node);
-    let Some((raw_ptr, ranges)) = entry.class_ranges() else {
-      return false;
-    };
-    let raw: &str = unsafe { &*raw_ptr };
-    match case_sensitivity {
-      CaseSensitivity::CaseSensitive => ranges
-        .iter()
-        .any(|range| &raw[range.start..range.end] == class),
-      CaseSensitivity::AsciiCaseInsensitive => ranges
-        .iter()
-        .any(|range| raw[range.start..range.end].eq_ignore_ascii_case(class)),
-    }
+    self.entry_mut(node).has_class(class, case_sensitivity)
   }
 
   pub fn attr_value<'a>(&self, node: &'a DomNode, name: &str) -> Option<&'a str> {
@@ -6335,6 +6472,34 @@ mod tests {
     assert_eq!(
       uncached.has_class(&missing, CaseSensitivity::AsciiCaseInsensitive),
       cached.has_class(&missing, CaseSensitivity::AsciiCaseInsensitive)
+    );
+  }
+
+  #[test]
+  fn has_class_large_token_list_matches_with_and_without_attr_cache() {
+    let node = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("class".to_string(), "c0 C1 c2 C3 c4 C5 c6 C7".to_string())],
+      },
+      children: vec![],
+    };
+
+    let cache = ElementAttrCache::new(0);
+    let cached = ElementRef::new(&node).with_attr_cache(Some(&cache));
+    let uncached = ElementRef::new(&node);
+
+    let query = CssString::from("c3");
+    assert!(!uncached.has_class(&query, CaseSensitivity::CaseSensitive));
+    assert!(uncached.has_class(&query, CaseSensitivity::AsciiCaseInsensitive));
+    assert_eq!(
+      uncached.has_class(&query, CaseSensitivity::CaseSensitive),
+      cached.has_class(&query, CaseSensitivity::CaseSensitive)
+    );
+    assert_eq!(
+      uncached.has_class(&query, CaseSensitivity::AsciiCaseInsensitive),
+      cached.has_class(&query, CaseSensitivity::AsciiCaseInsensitive)
     );
   }
 
