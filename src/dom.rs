@@ -333,19 +333,20 @@ fn add_selector_bloom_hashes(node: &DomNode, add: &mut impl FnMut(u32)) {
     }
   }
 
-  if let Some(id) = node.get_attribute_ref("id") {
-    add(selector_bloom_hash(id));
-  }
-
-  if let Some(class_attr) = node.get_attribute_ref("class") {
-    for class in class_attr.split_whitespace() {
-      if !class.is_empty() {
+  let mut saw_id = false;
+  let mut saw_class = false;
+  for (name, value) in node.attributes_iter() {
+    if !saw_id && name.eq_ignore_ascii_case("id") {
+      add(selector_bloom_hash(value));
+      saw_id = true;
+    }
+    if !saw_class && name.eq_ignore_ascii_case("class") {
+      for class in value.split_ascii_whitespace() {
         add(selector_bloom_hash(class));
       }
+      saw_class = true;
     }
-  }
 
-  for (name, _) in node.attributes_iter() {
     add(selector_bloom_hash(name));
     if name.bytes().any(|b| b.is_ascii_uppercase()) {
       let lower = name.to_ascii_lowercase();
@@ -374,38 +375,40 @@ pub(crate) fn for_each_ancestor_bloom_hash(
   }
 
   let quirks_case_fold = matches!(quirks_mode, QuirksMode::Quirks) && is_html;
-  if let Some(id) = node.get_attribute_ref("id") {
-    if quirks_case_fold {
-      let lower = to_ascii_lowercase_cow(id);
-      add(selector_bloom_hash(lower.as_ref()));
-      if lower.as_ref() != id {
-        add(selector_bloom_hash(id));
-      }
-    } else {
-      add(selector_bloom_hash(id));
-    }
-  }
-
-  if let Some(class_attr) = node.get_attribute_ref("class") {
-    for class in class_attr.split_whitespace() {
-      if class.is_empty() {
-        continue;
-      }
-      if quirks_case_fold {
-        let lower = to_ascii_lowercase_cow(class);
-        add(selector_bloom_hash(lower.as_ref()));
-        if lower.as_ref() != class {
-          add(selector_bloom_hash(class));
-        }
-      } else {
-        add(selector_bloom_hash(class));
-      }
-    }
-  }
-
-  for (name, _) in node.attributes_iter() {
+  let mut saw_id = false;
+  let mut saw_class = false;
+  for (name, value) in node.attributes_iter() {
     let lower = to_ascii_lowercase_cow(name);
     add(selector_bloom_hash(lower.as_ref()));
+
+    if !saw_id && name.eq_ignore_ascii_case("id") {
+      saw_id = true;
+      if quirks_case_fold {
+        let lower = to_ascii_lowercase_cow(value);
+        add(selector_bloom_hash(lower.as_ref()));
+        if lower.as_ref() != value {
+          add(selector_bloom_hash(value));
+        }
+      } else {
+        add(selector_bloom_hash(value));
+      }
+      continue;
+    }
+
+    if !saw_class && name.eq_ignore_ascii_case("class") {
+      saw_class = true;
+      for class in value.split_ascii_whitespace() {
+        if quirks_case_fold {
+          let lower = to_ascii_lowercase_cow(class);
+          add(selector_bloom_hash(lower.as_ref()));
+          if lower.as_ref() != class {
+            add(selector_bloom_hash(class));
+          }
+        } else {
+          add(selector_bloom_hash(class));
+        }
+      }
+    }
   }
 }
 static HAS_EVALS: AtomicU64 = AtomicU64::new(0);
@@ -926,7 +929,7 @@ impl ElementAttrCacheEntry {
     let raw: &str = unsafe { &*ptr };
     let base_ptr = raw.as_ptr() as usize;
     let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
-    for token in raw.split_whitespace() {
+    for token in raw.split_ascii_whitespace() {
       let start = token.as_ptr() as usize - base_ptr;
       ranges.push(start..start + token.len());
     }
@@ -2450,7 +2453,7 @@ pub fn compute_part_export_map_with_ids(
     ) {
       if let Some(parts) = node.get_attribute_ref("part") {
         let node_id = ids.get(&(node as *const DomNode)).copied().unwrap_or(0);
-        for part in parts.split_whitespace().filter(|p| !p.is_empty()) {
+        for part in parts.split_ascii_whitespace() {
           push_part_export(exports, part, node_id);
         }
       }
@@ -2534,7 +2537,7 @@ fn apply_dom_compatibility_mutations(
     let mut classes: Vec<String> = attributes
       .iter()
       .find(|(k, _)| k.eq_ignore_ascii_case("class"))
-      .map(|(_, v)| v.split_whitespace().map(|s| s.to_string()).collect())
+      .map(|(_, v)| v.split_ascii_whitespace().map(|s| s.to_string()).collect())
       .unwrap_or_default();
     let mut changed = false;
 
@@ -2797,7 +2800,7 @@ impl DomNode {
   /// Check if this element has a specific class
   pub fn has_class(&self, class: &str) -> bool {
     if let Some(class_attr) = self.get_attribute_ref("class") {
-      class_attr.split_whitespace().any(|c| c == class)
+      class_attr.split_ascii_whitespace().any(|c| c == class)
     } else {
       false
     }
@@ -4745,9 +4748,11 @@ impl<'a> Element for ElementRef<'a> {
     };
 
     match case_sensitivity {
-      CaseSensitivity::CaseSensitive => classes.split_whitespace().any(|c| c == class.as_str()),
+      CaseSensitivity::CaseSensitive => classes
+        .split_ascii_whitespace()
+        .any(|c| c == class.as_str()),
       CaseSensitivity::AsciiCaseInsensitive => classes
-        .split_whitespace()
+        .split_ascii_whitespace()
         .any(|c| c.eq_ignore_ascii_case(class.as_str())),
     }
   }
@@ -4771,7 +4776,7 @@ impl<'a> Element for ElementRef<'a> {
     self
       .node
       .get_attribute_ref("part")
-      .map(|value| value.split_whitespace().any(|token| token == name.as_str()))
+      .map(|value| value.split_ascii_whitespace().any(|token| token == name.as_str()))
       .unwrap_or(false)
   }
 
