@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
 use std::io::ErrorKind;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::thread;
@@ -38,6 +39,12 @@ pub struct DiskCacheConfig {
   /// Maximum age for entries before they are treated as stale and re-fetched.
   /// Also caps HTTP-provided freshness metadata when serving from disk.
   pub max_age: Option<Duration>,
+  /// Maximum age of `.lock` files before they are treated as stale and removed.
+  ///
+  /// Pageset workers can be hard-killed (e.g. timeout) while persisting a cache entry, leaving a
+  /// `.lock` file behind. Keeping this small avoids long stretches where disk caching is disabled
+  /// due to a dead writer.
+  pub lock_stale_after: Duration,
 }
 
 impl Default for DiskCacheConfig {
@@ -45,16 +52,48 @@ impl Default for DiskCacheConfig {
     Self {
       max_bytes: 512 * 1024 * 1024,
       max_age: Some(Duration::from_secs(60 * 60 * 24 * 7)), // 7 days
+      lock_stale_after: DEFAULT_LOCK_STALE_AFTER,
     }
   }
 }
 
-const LOCK_STALE_AFTER: Duration = Duration::from_secs(30);
+const DEFAULT_LOCK_STALE_AFTER: Duration = Duration::from_secs(8);
 const LOCK_WAIT_TIMEOUT: Duration = Duration::from_millis(500);
 const LOCK_RETRY_DELAY: Duration = Duration::from_millis(10);
 const READ_LOCK_WAIT_TIMEOUT: Duration = Duration::from_millis(200);
 const READ_LOCK_RETRY_INITIAL_DELAY: Duration = Duration::from_millis(5);
 const READ_LOCK_RETRY_MAX_DELAY: Duration = Duration::from_millis(50);
+
+#[derive(Debug, Serialize, Deserialize)]
+struct LockFileContents {
+  pid: u32,
+  started_at: u64,
+}
+
+#[cfg(unix)]
+fn pid_is_alive(pid: u32) -> Option<bool> {
+  // `kill(0)` is special-cased to signal the current process group.
+  if pid == 0 || pid > i32::MAX as u32 {
+    return None;
+  }
+
+  // SAFETY: signal 0 performs error checking without sending a signal.
+  let result = unsafe { libc::kill(pid as i32, 0) };
+  if result == 0 {
+    return Some(true);
+  }
+  let err = std::io::Error::last_os_error();
+  match err.raw_os_error() {
+    Some(code) if code == libc::ESRCH => Some(false),
+    Some(code) if code == libc::EPERM => Some(true),
+    _ => None,
+  }
+}
+
+#[cfg(not(unix))]
+fn pid_is_alive(_pid: u32) -> Option<bool> {
+  None
+}
 
 #[derive(Debug, Clone)]
 pub struct DiskCachingFetcher<F: ResourceFetcher> {
@@ -101,12 +140,6 @@ fn lock_age_from_metadata(meta: &fs::Metadata) -> Option<Duration> {
     .or_else(|_| meta.created())
     .ok()
     .and_then(|time| SystemTime::now().duration_since(time).ok())
-}
-
-fn lock_age(lock_path: &Path) -> Option<Duration> {
-  fs::metadata(lock_path)
-    .ok()
-    .and_then(|meta| lock_age_from_metadata(&meta))
 }
 
 impl<F: ResourceFetcher> DiskCachingFetcher<F> {
@@ -190,8 +223,18 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     let lock_path = lock_path_for(data_path);
     match fs::metadata(&lock_path) {
       Ok(meta) => {
+        let maybe_pid = fs::read(&lock_path)
+          .ok()
+          .and_then(|bytes| serde_json::from_slice::<LockFileContents>(&bytes).ok())
+          .map(|c| c.pid);
+        if let Some(pid) = maybe_pid {
+          if let Some(false) = pid_is_alive(pid) {
+            let _ = fs::remove_file(&lock_path);
+            return false;
+          }
+        }
         if let Some(age) = lock_age_from_metadata(&meta) {
-          if age > LOCK_STALE_AFTER {
+          if age > self.disk_config.lock_stale_after {
             let _ = fs::remove_file(&lock_path);
             return false;
           }
@@ -204,7 +247,8 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
 
   fn acquire_lock(&self, data_path: &Path) -> Option<EntryLock> {
     let lock_path = lock_path_for(data_path);
-    let deadline = Instant::now() + LOCK_WAIT_TIMEOUT;
+    let max_wait = self.deadline_aware_lock_wait(LOCK_WAIT_TIMEOUT);
+    let deadline = Instant::now() + max_wait;
 
     loop {
       match OpenOptions::new()
@@ -212,20 +256,27 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
         .create_new(true)
         .open(&lock_path)
       {
-        Ok(_) => return Some(EntryLock { path: lock_path }),
+        Ok(mut file) => {
+          let contents = LockFileContents {
+            pid: std::process::id(),
+            started_at: now_seconds(),
+          };
+          if let Ok(serialized) = serde_json::to_vec(&contents) {
+            let _ = file.write_all(&serialized);
+          }
+          return Some(EntryLock { path: lock_path });
+        }
         Err(err) if err.kind() == ErrorKind::AlreadyExists => {
-          if let Some(age) = lock_age(&lock_path) {
-            if age > LOCK_STALE_AFTER {
-              let _ = fs::remove_file(&lock_path);
-              continue;
-            }
+          if !self.lock_is_active(data_path) {
+            continue;
           }
 
-          if Instant::now() >= deadline {
+          if max_wait.is_zero() || Instant::now() >= deadline {
             return None;
           }
 
-          thread::sleep(LOCK_RETRY_DELAY);
+          let now = Instant::now();
+          thread::sleep(LOCK_RETRY_DELAY.min(deadline.saturating_duration_since(now)));
         }
         Err(_) => return None,
       }
@@ -846,6 +897,7 @@ fn secs_to_system_time(secs: u64) -> Option<SystemTime> {
 mod tests {
   use super::super::{HttpFetcher, ResourcePolicy};
   use super::*;
+  use filetime::FileTime;
   use std::collections::VecDeque;
   use std::fs;
   use std::io;
@@ -1217,6 +1269,7 @@ mod tests {
       DiskCacheConfig {
         max_bytes: 96,
         max_age: None,
+        ..DiskCacheConfig::default()
       },
     );
 
@@ -1432,6 +1485,50 @@ mod tests {
     fn fetch(&self, _url: &str) -> Result<FetchedResource> {
       panic!("inner fetch should not be called");
     }
+  }
+
+  #[test]
+  fn removes_stale_lock_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let url = "https://example.com/stale-lock";
+    let disk = DiskCachingFetcher::new(PanicFetcher, tmp.path());
+    let data_path = disk.data_path(url);
+    let lock_path = lock_path_for(&data_path);
+
+    let contents = LockFileContents {
+      pid: std::process::id(),
+      started_at: now_seconds(),
+    };
+    fs::write(&lock_path, serde_json::to_vec(&contents).unwrap()).unwrap();
+    filetime::set_file_mtime(&lock_path, FileTime::from_unix_time(0, 0)).unwrap();
+
+    assert!(!disk.lock_is_active(&data_path));
+    assert!(!lock_path.exists());
+  }
+
+  #[test]
+  fn acquire_lock_times_out_when_entry_is_locked() {
+    let tmp = tempfile::tempdir().unwrap();
+    let url = "https://example.com/lock-timeout";
+    let disk = DiskCachingFetcher::new(PanicFetcher, tmp.path());
+    let data_path = disk.data_path(url);
+    let lock_path = lock_path_for(&data_path);
+
+    let contents = LockFileContents {
+      pid: std::process::id(),
+      started_at: now_seconds(),
+    };
+    fs::write(&lock_path, serde_json::to_vec(&contents).unwrap()).unwrap();
+
+    let start = Instant::now();
+    let lock = disk.acquire_lock(&data_path);
+    let elapsed = start.elapsed();
+
+    assert!(lock.is_none(), "should not acquire lock while it exists");
+    assert!(
+      elapsed < LOCK_WAIT_TIMEOUT + Duration::from_millis(250),
+      "acquire_lock waited too long: {elapsed:?}"
+    );
   }
 
   #[test]

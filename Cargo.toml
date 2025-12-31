@@ -13,7 +13,7 @@ resolver = "2"
 [features]
 default = ["preserve3d_warp"]
 box_generation_demo = []
-disk_cache = ["sha2"]
+disk_cache = ["sha2", "libc"]
 preserve3d_warp = []
 
 [dependencies]
@@ -70,11 +70,13 @@ tar = "0.4"
 sha2 = { version = "0.10", optional = true }
 httpdate = "1.0"
 http = "1"
+libc = { version = "0.2", optional = true }
 read-fonts = "0.20"
 skrifa = "0.20"
 
 [dev-dependencies]
 criterion = "0.5"
+filetime = "0.2"
 
 [[bench]]
 name = "perf_regressions"
