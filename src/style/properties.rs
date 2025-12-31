@@ -53,6 +53,12 @@ thread_local! {
 /// Default viewport used by tests and legacy callers.
 pub const DEFAULT_VIEWPORT: Size = Size::new(1200.0, 800.0);
 
+static DEFAULT_COMPUTED_STYLE: OnceLock<ComputedStyle> = OnceLock::new();
+
+fn default_computed_style() -> &'static ComputedStyle {
+  DEFAULT_COMPUTED_STYLE.get_or_init(ComputedStyle::default)
+}
+
 /// Executes a closure with the image-set selection density overridden.
 /// Restores the previous value afterward.
 pub fn with_image_set_dpr<T>(dpr: f32, f: impl FnOnce() -> T) -> T {
@@ -4123,12 +4129,11 @@ pub fn apply_declaration_with_viewport(
   root_font_size: f32,
   viewport: Size,
 ) {
-  let defaults = ComputedStyle::default();
   apply_declaration_with_base(
     styles,
     decl,
     parent_styles,
-    &defaults,
+    default_computed_style(),
     None,
     parent_font_size,
     root_font_size,
@@ -4182,11 +4187,10 @@ pub fn apply_declaration_with_base(
   };
   let order = styles.logical.next_order();
   if let Some(global) = global_keyword(&resolved_value) {
-    let defaults = ComputedStyle::default();
     if apply_global_keyword(
       styles,
       parent_styles,
-      &defaults,
+      default_computed_style(),
       revert_base,
       revert_layer_base,
       property,
@@ -4210,12 +4214,11 @@ pub fn apply_declaration_with_base(
       let Some(global) = global_keyword(&resolved_value) else {
         return;
       };
-      let defaults = ComputedStyle::default();
       let Some(source) = global_keyword_source(
         global,
         "all",
         parent_styles,
-        &defaults,
+        default_computed_style(),
         revert_base,
         revert_layer_base,
       ) else {
@@ -10431,7 +10434,7 @@ fn parse_font_shorthand(
 
   // `initial`/`revert` -> reset to initial font values
   if trimmed.eq_ignore_ascii_case("initial") || trimmed.eq_ignore_ascii_case("revert") {
-    let defaults = ComputedStyle::default();
+    let defaults = default_computed_style();
     return Some((
       defaults.font_style,
       defaults.font_weight,
@@ -12659,7 +12662,7 @@ fn parse_border_width_keyword(kw: &str) -> Option<Length> {
 fn apply_outline_shorthand(styles: &mut ComputedStyle, value: &PropertyValue) {
   // The outline shorthand resets color/style/width to their initial values
   // before applying provided tokens (offset is not part of the shorthand).
-  let defaults = ComputedStyle::default();
+  let defaults = default_computed_style();
   styles.outline_style = defaults.outline_style;
   styles.outline_width = defaults.outline_width;
   styles.outline_color = defaults.outline_color;
