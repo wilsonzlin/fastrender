@@ -21,7 +21,7 @@ base64 = "0.22"
 avif-decode = { version = "1.0", default-features = false }
 avif-parse = "1.4"
 brotli = "6"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 chrono = "0.4.42"
 csscolorparser = "0.6"
 cssparser = "0.35"
