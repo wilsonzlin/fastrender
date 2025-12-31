@@ -9655,6 +9655,29 @@ mod tests {
   }
 
   #[test]
+  fn diagnostics_populates_style_and_layout_stage_timings_without_author_css() {
+    let mut renderer = FastRender::new().unwrap();
+    let html = r#"<!DOCTYPE html><div>Hello</div>"#;
+
+    let options = RenderOptions::new()
+      .with_viewport(64, 64)
+      .with_diagnostics_level(DiagnosticsLevel::Basic);
+    let result = renderer
+      .render_html_with_diagnostics(html, options)
+      .unwrap();
+
+    let stats = result
+      .diagnostics
+      .stats
+      .as_ref()
+      .expect("expected RenderDiagnostics.stats when diagnostics are enabled");
+    assert!(stats.timings.css_parse_ms.is_some());
+    assert!(stats.timings.cascade_ms.is_some());
+    assert!(stats.timings.box_tree_ms.is_some());
+    assert!(stats.timings.layout_ms.is_some());
+  }
+
+  #[test]
   fn diagnostics_populates_style_and_layout_stage_timings_with_external_stylesheet() {
     let fetcher = MapFetcher::default().with_entry(
       "https://example.com/style.css",
