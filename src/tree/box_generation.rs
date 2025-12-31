@@ -396,16 +396,62 @@ fn attach_styled_id(mut node: BoxNode, styled: &StyledNode) -> BoxNode {
   node
 }
 
+fn push_escaped_text(out: &mut String, value: &str) {
+  let mut last = 0usize;
+  for (idx, b) in value.as_bytes().iter().enumerate() {
+    let replacement = match b {
+      b'&' => Some("&amp;"),
+      b'<' => Some("&lt;"),
+      _ => None,
+    };
+    let Some(replacement) = replacement else {
+      continue;
+    };
+    if last < idx {
+      out.push_str(&value[last..idx]);
+    }
+    out.push_str(replacement);
+    last = idx + 1;
+  }
+  if last < value.len() {
+    out.push_str(&value[last..]);
+  }
+}
+
+fn push_escaped_attr(out: &mut String, value: &str) {
+  let mut last = 0usize;
+  for (idx, b) in value.as_bytes().iter().enumerate() {
+    let replacement = match b {
+      b'&' => Some("&amp;"),
+      b'<' => Some("&lt;"),
+      b'"' => Some("&quot;"),
+      b'\'' => Some("&apos;"),
+      _ => None,
+    };
+    let Some(replacement) = replacement else {
+      continue;
+    };
+    if last < idx {
+      out.push_str(&value[last..idx]);
+    }
+    out.push_str(replacement);
+    last = idx + 1;
+  }
+  if last < value.len() {
+    out.push_str(&value[last..]);
+  }
+}
+
 fn escape_attr(value: &str) -> String {
-  value
-    .replace('&', "&amp;")
-    .replace('<', "&lt;")
-    .replace('"', "&quot;")
-    .replace('\'', "&apos;")
+  let mut out = String::with_capacity(value.len());
+  push_escaped_attr(&mut out, value);
+  out
 }
 
 fn escape_text(value: &str) -> String {
-  value.replace('&', "&amp;").replace('<', "&lt;")
+  let mut out = String::with_capacity(value.len());
+  push_escaped_text(&mut out, value);
+  out
 }
 
 fn collect_document_css(styled: &StyledNode, deadline_counter: &mut usize) -> Result<String> {
@@ -604,7 +650,7 @@ fn serialize_dom_subtree(node: &crate::dom::DomNode) -> String {
         out.push_str(name);
         out.push('=');
         out.push('"');
-        out.push_str(&escape_attr(value));
+        push_escaped_attr(&mut out, value);
         out.push('"');
       }
       out.push('>');
@@ -627,7 +673,7 @@ fn serialize_dom_subtree(node: &crate::dom::DomNode) -> String {
         out.push_str(name);
         out.push('=');
         out.push('"');
-        out.push_str(&escape_attr(value));
+        push_escaped_attr(&mut out, value);
         out.push('"');
       }
       out.push('>');
@@ -690,7 +736,7 @@ fn serialize_node_with_namespaces(
         out.push_str(name);
         out.push('=');
         out.push('"');
-        out.push_str(&escape_attr(value));
+        push_escaped_attr(out, value);
         out.push('"');
       }
       out.push('>');
@@ -699,7 +745,7 @@ fn serialize_node_with_namespaces(
       }
       out.push_str("</slot>");
     }
-    crate::dom::DomNodeType::Text { content } => out.push_str(&escape_text(content)),
+    crate::dom::DomNodeType::Text { content } => push_escaped_text(out, content),
     crate::dom::DomNodeType::Element {
       tag_name,
       namespace,
@@ -735,7 +781,7 @@ fn serialize_node_with_namespaces(
         out.push_str(name);
         out.push('=');
         out.push('"');
-        out.push_str(&escape_attr(value));
+        push_escaped_attr(out, value);
         out.push('"');
       }
       out.push('>');
@@ -1113,8 +1159,8 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
         }
       }
       crate::dom::DomNodeType::Text { content } => {
-        out.push_str(&escape_text(content));
-        fallback_out.push_str(&escape_text(content));
+        push_escaped_text(out, content);
+        push_escaped_text(fallback_out, content);
       }
       crate::dom::DomNodeType::Element {
         tag_name,
@@ -1169,8 +1215,8 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
           fallback_out.push('=');
           out.push('"');
           fallback_out.push('"');
-          out.push_str(&escape_attr(value));
-          fallback_out.push_str(&escape_attr(value));
+          push_escaped_attr(out, value);
+          push_escaped_attr(fallback_out, value);
           out.push('"');
           fallback_out.push('"');
         }
@@ -1332,10 +1378,11 @@ fn generate_boxes_for_styled(
   // Replaced elements short-circuit to a single replaced box unless they're display: contents.
   if let Some(tag) = styled.node.tag_name() {
     // Non-rendered elements: <source>, <track>, <option>, <optgroup> never create boxes.
-    if matches!(
-      tag.to_ascii_lowercase().as_str(),
-      "source" | "track" | "option" | "optgroup"
-    ) {
+    if tag.eq_ignore_ascii_case("source")
+      || tag.eq_ignore_ascii_case("track")
+      || tag.eq_ignore_ascii_case("option")
+      || tag.eq_ignore_ascii_case("optgroup")
+    {
       counters.leave_scope();
       return Ok(Vec::new());
     }
@@ -1893,14 +1940,16 @@ fn apply_counter_properties_from_style(styled: &StyledNode, counters: &mut Count
     return;
   }
 
-  let tag_name = styled.node.tag_name().map(|t| t.to_ascii_lowercase());
-  let is_ol = tag_name.as_deref() == Some("ol");
+  let tag_name = styled.node.tag_name();
+  let is_ol = tag_name.is_some_and(|t| t.eq_ignore_ascii_case("ol"));
   let reversed = is_ol && styled.node.get_attribute("reversed").is_some();
 
-  let is_list_container = matches!(
-    tag_name.as_deref(),
-    Some("ol") | Some("ul") | Some("menu") | Some("dir")
-  );
+  let is_list_container = tag_name.is_some_and(|tag| {
+    tag.eq_ignore_ascii_case("ol")
+      || tag.eq_ignore_ascii_case("ul")
+      || tag.eq_ignore_ascii_case("menu")
+      || tag.eq_ignore_ascii_case("dir")
+  });
 
   if is_list_container {
     // Each list establishes its own default step; child lists shouldn't inherit reversed steps.
@@ -1988,13 +2037,15 @@ fn apply_counter_properties_from_style(styled: &StyledNode, counters: &mut Count
 fn list_item_count(styled: &StyledNode) -> usize {
   fn walk(node: &StyledNode, in_nested_list: bool, acc: &mut usize) {
     for child in node.children.iter() {
-      let tag = child.node.tag_name().map(|t| t.to_ascii_lowercase());
-      let is_list = matches!(
-        tag.as_deref(),
-        Some("ol") | Some("ul") | Some("menu") | Some("dir")
-      );
+      let tag = child.node.tag_name();
+      let is_list = tag.is_some_and(|tag| {
+        tag.eq_ignore_ascii_case("ol")
+          || tag.eq_ignore_ascii_case("ul")
+          || tag.eq_ignore_ascii_case("menu")
+          || tag.eq_ignore_ascii_case("dir")
+      });
       let now_nested = in_nested_list || is_list;
-      if !now_nested && tag.as_deref() == Some("li") {
+      if !now_nested && tag.is_some_and(|tag| tag.eq_ignore_ascii_case("li")) {
         *acc += 1;
       }
       // Do not count descendants of nested lists toward the ancestor list's item count.
@@ -2362,10 +2413,15 @@ fn create_form_control_replaced(styled: &StyledNode) -> Option<FormControl> {
 /// Replaced elements are those whose content is replaced by an external resource,
 /// such as images, videos, iframes, etc. These elements have intrinsic dimensions.
 pub fn is_replaced_element(tag: &str) -> bool {
-  matches!(
-    tag.to_lowercase().as_str(),
-    "img" | "video" | "canvas" | "svg" | "iframe" | "embed" | "object" | "audio" | "math"
-  )
+  tag.eq_ignore_ascii_case("img")
+    || tag.eq_ignore_ascii_case("video")
+    || tag.eq_ignore_ascii_case("canvas")
+    || tag.eq_ignore_ascii_case("svg")
+    || tag.eq_ignore_ascii_case("iframe")
+    || tag.eq_ignore_ascii_case("embed")
+    || tag.eq_ignore_ascii_case("object")
+    || tag.eq_ignore_ascii_case("audio")
+    || tag.eq_ignore_ascii_case("math")
 }
 
 /// Creates a BoxNode for a replaced element from a StyledNode
@@ -2394,36 +2450,42 @@ fn create_replaced_box_from_styled(
   let data_attr = styled.node.get_attribute("data").unwrap_or_default();
 
   // Determine replaced type
-  let replaced_type = match tag.to_lowercase().as_str() {
-    "img" => ReplacedType::Image {
+  let replaced_type = if tag.eq_ignore_ascii_case("img") {
+    ReplacedType::Image {
       src,
       alt,
       srcset,
       sizes,
       picture_sources: picture_sources.to_vec(),
-    },
-    "video" => ReplacedType::Video { src, poster },
-    "audio" => ReplacedType::Audio { src },
-    "canvas" => ReplacedType::Canvas,
-    "svg" => ReplacedType::Svg {
-      content: serialize_svg_subtree(styled, document_css),
-    },
-    "iframe" => {
-      let srcdoc = styled
-        .node
-        .get_attribute("srcdoc")
-        .filter(|s| !s.is_empty());
-      ReplacedType::Iframe { src, srcdoc }
     }
-    "embed" => ReplacedType::Embed { src },
-    "object" => ReplacedType::Object { data: data_attr },
-    _ => ReplacedType::Image {
+  } else if tag.eq_ignore_ascii_case("video") {
+    ReplacedType::Video { src, poster }
+  } else if tag.eq_ignore_ascii_case("audio") {
+    ReplacedType::Audio { src }
+  } else if tag.eq_ignore_ascii_case("canvas") {
+    ReplacedType::Canvas
+  } else if tag.eq_ignore_ascii_case("svg") {
+    ReplacedType::Svg {
+      content: serialize_svg_subtree(styled, document_css),
+    }
+  } else if tag.eq_ignore_ascii_case("iframe") {
+    let srcdoc = styled
+      .node
+      .get_attribute("srcdoc")
+      .filter(|s| !s.is_empty());
+    ReplacedType::Iframe { src, srcdoc }
+  } else if tag.eq_ignore_ascii_case("embed") {
+    ReplacedType::Embed { src }
+  } else if tag.eq_ignore_ascii_case("object") {
+    ReplacedType::Object { data: data_attr }
+  } else {
+    ReplacedType::Image {
       src,
       alt,
       sizes: None,
       srcset: Vec::new(),
       picture_sources: Vec::new(),
-    },
+    }
   };
 
   let width_attr = styled.node.get_attribute("width");
