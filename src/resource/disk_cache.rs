@@ -610,7 +610,7 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       let _ = fs::create_dir_all(parent);
     }
 
-    let Some(_lock) = self.acquire_lock(&data_path) else {
+    let Some(entry_lock) = self.acquire_lock(&data_path) else {
       return;
     };
 
@@ -687,6 +687,10 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       let _ = self.remove_entry(&key, &data_path, &meta_path);
       return;
     }
+
+    // The entry is now fully consistent on disk; release the per-entry lock before touching the
+    // shared index / eviction paths to minimize time that readers block on `.lock` files.
+    drop(entry_lock);
 
     self.index.record_insert_and_evict_if_needed(
       &key,
