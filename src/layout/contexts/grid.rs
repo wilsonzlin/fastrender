@@ -48,8 +48,8 @@ use crate::layout::taffy_integration::{
   record_taffy_compute, record_taffy_invocation, record_taffy_measure_call,
   record_taffy_node_cache_hit, record_taffy_node_cache_miss, record_taffy_style_cache_hit,
   record_taffy_style_cache_miss, taffy_constraint_key, CachedTaffyTemplate, SendSyncStyle,
-  TaffyAdapterKind, TaffyNodeCache, TaffyNodeCacheKey, TAFFY_ABORT_CHECK_STRIDE,
-  DEFAULT_TAFFY_CACHE_LIMIT,
+  TaffyAdapterKind, TaffyNodeCache, TaffyNodeCacheKey, DEFAULT_TAFFY_CACHE_LIMIT,
+  TAFFY_ABORT_CHECK_STRIDE,
 };
 use crate::layout::utils::resolve_length_with_percentage_metrics;
 use crate::layout::utils::resolve_scrollbar_width;
@@ -72,11 +72,11 @@ use crate::style::ComputedStyle;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
+#[cfg(test)]
+use std::cell::Cell;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-#[cfg(test)]
-use std::cell::Cell;
 use std::sync::Arc;
 use taffy::geometry::Line;
 use taffy::prelude::TaffyFitContent;
@@ -461,7 +461,8 @@ impl GridFormattingContext {
     style: &ComputedStyle,
     percentage_base: f32,
   ) -> (f32, f32, f32, f32, f32, f32, f32, f32) {
-    let mut padding_left = self.resolve_length_for_width(style.padding_left, percentage_base, style);
+    let mut padding_left =
+      self.resolve_length_for_width(style.padding_left, percentage_base, style);
     let mut padding_right =
       self.resolve_length_for_width(style.padding_right, percentage_base, style);
     let mut padding_top = self.resolve_length_for_width(style.padding_top, percentage_base, style);
@@ -2149,63 +2150,63 @@ impl GridFormattingContext {
       .filter(|deadline| deadline.is_enabled())
       .map(|_| Arc::new(|| check_active(RenderStage::Layout).is_err()) as _);
     let compute_result = taffy.compute_layout_with_measure_and_cancel(
-        root_id,
-        available_space,
-        {
-          let factory = self.factory.clone();
-          let viewport_size = self.viewport_size;
-          let mut cache: HashMap<MeasureKey, taffy::geometry::Size<f32>> = HashMap::new();
-          move |known_dimensions,
-                available_space,
-                node_id,
-                node_context,
-                _style: &taffy::style::Style| {
-            if taffy_perf_enabled {
-              record_taffy_measure_call(TaffyAdapterKind::Grid);
-            }
-            if node_id == root_id {
-              return taffy::geometry::Size::ZERO;
-            }
-            let Some(node_ptr) = node_context.as_ref().map(|p| **p) else {
-              return taffy::geometry::Size::ZERO;
-            };
-            let box_node = unsafe { &*node_ptr };
-            let mut available_space = available_space;
-            if known_dimensions.width.is_none()
-              && matches!(
-                available_space.width,
-                taffy::style::AvailableSpace::Definite(_)
-              )
-              && box_node.style.width.is_none()
-            {
-              available_space.width = taffy::style::AvailableSpace::MaxContent;
-            }
-
-            let key = MeasureKey::new(node_ptr, known_dimensions, available_space);
-            if let Some(size) = cache.get(&key) {
-              return *size;
-            }
-            let fc_type = box_node
-              .formatting_context()
-              .unwrap_or(FormattingContextType::Block);
-            let fc = factory.get(fc_type);
-            let constraints =
-              constraints_from_taffy(viewport_size, known_dimensions, available_space, None);
-            let fragment = match fc.layout(box_node, &constraints) {
-              Ok(fragment) => fragment,
-              Err(LayoutError::Timeout { .. }) => taffy::abort_layout_now(),
-              Err(_) => return taffy::geometry::Size::ZERO,
-            };
-            let size = taffy::geometry::Size {
-              width: fragment.bounds.width().max(0.0),
-              height: fragment.bounds.height().max(0.0),
-            };
-            cache.insert(key, size);
-            size
+      root_id,
+      available_space,
+      {
+        let factory = self.factory.clone();
+        let viewport_size = self.viewport_size;
+        let mut cache: HashMap<MeasureKey, taffy::geometry::Size<f32>> = HashMap::new();
+        move |known_dimensions,
+              available_space,
+              node_id,
+              node_context,
+              _style: &taffy::style::Style| {
+          if taffy_perf_enabled {
+            record_taffy_measure_call(TaffyAdapterKind::Grid);
           }
-        },
-        cancel,
-        TAFFY_ABORT_CHECK_STRIDE,
+          if node_id == root_id {
+            return taffy::geometry::Size::ZERO;
+          }
+          let Some(node_ptr) = node_context.as_ref().map(|p| **p) else {
+            return taffy::geometry::Size::ZERO;
+          };
+          let box_node = unsafe { &*node_ptr };
+          let mut available_space = available_space;
+          if known_dimensions.width.is_none()
+            && matches!(
+              available_space.width,
+              taffy::style::AvailableSpace::Definite(_)
+            )
+            && box_node.style.width.is_none()
+          {
+            available_space.width = taffy::style::AvailableSpace::MaxContent;
+          }
+
+          let key = MeasureKey::new(node_ptr, known_dimensions, available_space);
+          if let Some(size) = cache.get(&key) {
+            return *size;
+          }
+          let fc_type = box_node
+            .formatting_context()
+            .unwrap_or(FormattingContextType::Block);
+          let fc = factory.get(fc_type);
+          let constraints =
+            constraints_from_taffy(viewport_size, known_dimensions, available_space, None);
+          let fragment = match fc.layout(box_node, &constraints) {
+            Ok(fragment) => fragment,
+            Err(LayoutError::Timeout { .. }) => taffy::abort_layout_now(),
+            Err(_) => return taffy::geometry::Size::ZERO,
+          };
+          let size = taffy::geometry::Size {
+            width: fragment.bounds.width().max(0.0),
+            height: fragment.bounds.height().max(0.0),
+          };
+          cache.insert(key, size);
+          size
+        }
+      },
+      cancel,
+      TAFFY_ABORT_CHECK_STRIDE,
     );
     if let Some(start) = taffy_compute_start {
       record_taffy_compute(TaffyAdapterKind::Grid, start.elapsed());
@@ -2317,28 +2318,7 @@ impl GridFormattingContext {
       };
     }
 
-    let mut intrinsic_height: Option<f32> = None;
-    if known_dimensions.height.is_none() {
-      intrinsic_height = match available_space.height {
-        taffy::style::AvailableSpace::MinContent => Some(
-          match fc.compute_intrinsic_block_size(box_node, IntrinsicSizingMode::MinContent) {
-            Ok(size) => size,
-            Err(LayoutError::Timeout { .. }) => taffy::abort_layout_now(),
-            Err(_) => 0.0,
-          },
-        ),
-        taffy::style::AvailableSpace::MaxContent => Some(
-          match fc.compute_intrinsic_block_size(box_node, IntrinsicSizingMode::MaxContent) {
-            Ok(size) => size,
-            Err(LayoutError::Timeout { .. }) => taffy::abort_layout_now(),
-            Err(_) => 0.0,
-          },
-        ),
-        _ => None,
-      };
-    }
-
-    if intrinsic_width.is_some() || intrinsic_height.is_some() {
+    if intrinsic_width.is_some() {
       let percentage_base = match available_space.width {
         taffy::style::AvailableSpace::Definite(w) => w,
         _ => parent_inline_base.unwrap_or(0.0),
@@ -2346,12 +2326,12 @@ impl GridFormattingContext {
       let (
         padding_left,
         padding_right,
-        padding_top,
-        padding_bottom,
+        _padding_top,
+        _padding_bottom,
         border_left,
         border_right,
-        border_top,
-        border_bottom,
+        _border_top,
+        _border_bottom,
       ) = self.resolved_padding_border_for_measure(&box_node.style, percentage_base);
 
       let width = intrinsic_width
@@ -2360,11 +2340,7 @@ impl GridFormattingContext {
         })
         .unwrap_or_else(|| fallback_size(known_dimensions.width, available_space.width).max(0.0));
 
-      let height = intrinsic_height
-        .map(|border_height| {
-          (border_height - padding_top - padding_bottom - border_top - border_bottom).max(0.0)
-        })
-        .unwrap_or_else(|| fallback_size(known_dimensions.height, available_space.height).max(0.0));
+      let height = fallback_size(known_dimensions.height, available_space.height).max(0.0);
 
       let size = taffy::geometry::Size { width, height };
       measure_cache.borrow_mut().insert(key, size);
@@ -2902,112 +2878,110 @@ impl FormattingContext for GridFormattingContext {
     let measured_node_keys: Rc<RefCell<HashMap<TaffyNodeId, Vec<MeasureKey>>>> =
       Rc::new(RefCell::new(HashMap::new()));
     let compute_result = taffy.compute_layout_with_measure_and_cancel(
-        root_id,
-        available_space,
-        {
-          let this = self.clone();
-          let parent_inline_base = constraints.inline_percentage_base;
-          let container_justify_items = box_node.style.justify_items;
-          let cache = measure_cache.clone();
-          let measured = measured_fragments.clone();
-          let measured_keys = measured_node_keys.clone();
-          move |known_dimensions,
-                available_space,
-                node_id,
-                node_context,
-                _style: &taffy::style::Style| {
-            if taffy_perf_enabled {
-              record_taffy_measure_call(TaffyAdapterKind::Grid);
-            }
-            let fallback_size =
-              |known: Option<f32>, avail_dim: taffy::style::AvailableSpace| {
-                known.unwrap_or(match avail_dim {
-                  taffy::style::AvailableSpace::Definite(v) => v,
-                  _ => 0.0,
-                })
-              };
-
-            if node_id == root_id {
-              let outer_width = fallback_size(known_dimensions.width, available_space.width);
-              let outer_height = known_dimensions.height.unwrap_or(0.0);
-              let Some(node_ptr) = node_context.as_ref().map(|p| **p) else {
-                return taffy::geometry::Size {
-                  width: outer_width,
-                  height: outer_height,
-                };
-              };
-              let root_box_node = unsafe { &*node_ptr };
-              let percentage_base = outer_width;
-              let padding_left = this.resolve_length_for_width(
-                root_box_node.style.padding_left,
-                percentage_base,
-                &root_box_node.style,
-              );
-              let padding_right = this.resolve_length_for_width(
-                root_box_node.style.padding_right,
-                percentage_base,
-                &root_box_node.style,
-              );
-              let padding_top = this.resolve_length_for_width(
-                root_box_node.style.padding_top,
-                percentage_base,
-                &root_box_node.style,
-              );
-              let padding_bottom = this.resolve_length_for_width(
-                root_box_node.style.padding_bottom,
-                percentage_base,
-                &root_box_node.style,
-              );
-              let border_left = this.resolve_length_for_width(
-                root_box_node.style.border_left_width,
-                percentage_base,
-                &root_box_node.style,
-              );
-              let border_right = this.resolve_length_for_width(
-                root_box_node.style.border_right_width,
-                percentage_base,
-                &root_box_node.style,
-              );
-              let border_top = this.resolve_length_for_width(
-                root_box_node.style.border_top_width,
-                percentage_base,
-                &root_box_node.style,
-              );
-              let border_bottom = this.resolve_length_for_width(
-                root_box_node.style.border_bottom_width,
-                percentage_base,
-                &root_box_node.style,
-              );
-              let content_width =
-                (outer_width - padding_left - padding_right - border_left - border_right).max(0.0);
-              let content_height =
-                (outer_height - padding_top - padding_bottom - border_top - border_bottom)
-                  .max(0.0);
-              return taffy::geometry::Size {
-                width: content_width,
-                height: content_height,
-              };
-            }
-
-            let Some(node_ptr) = node_context.as_ref().map(|p| **p) else {
-              return taffy::geometry::Size::ZERO;
-            };
-            this.measure_grid_item(
-              node_ptr,
-              node_id,
-              known_dimensions,
+      root_id,
+      available_space,
+      {
+        let this = self.clone();
+        let parent_inline_base = constraints.inline_percentage_base;
+        let container_justify_items = box_node.style.justify_items;
+        let cache = measure_cache.clone();
+        let measured = measured_fragments.clone();
+        let measured_keys = measured_node_keys.clone();
+        move |known_dimensions,
               available_space,
-              parent_inline_base,
-              container_justify_items,
-              &this.factory,
-              &cache,
-              &measured,
-              &measured_keys,
-            )
+              node_id,
+              node_context,
+              _style: &taffy::style::Style| {
+          if taffy_perf_enabled {
+            record_taffy_measure_call(TaffyAdapterKind::Grid);
           }
-        },
-        cancel,
-        TAFFY_ABORT_CHECK_STRIDE,
+          let fallback_size = |known: Option<f32>, avail_dim: taffy::style::AvailableSpace| {
+            known.unwrap_or(match avail_dim {
+              taffy::style::AvailableSpace::Definite(v) => v,
+              _ => 0.0,
+            })
+          };
+
+          if node_id == root_id {
+            let outer_width = fallback_size(known_dimensions.width, available_space.width);
+            let outer_height = known_dimensions.height.unwrap_or(0.0);
+            let Some(node_ptr) = node_context.as_ref().map(|p| **p) else {
+              return taffy::geometry::Size {
+                width: outer_width,
+                height: outer_height,
+              };
+            };
+            let root_box_node = unsafe { &*node_ptr };
+            let percentage_base = outer_width;
+            let padding_left = this.resolve_length_for_width(
+              root_box_node.style.padding_left,
+              percentage_base,
+              &root_box_node.style,
+            );
+            let padding_right = this.resolve_length_for_width(
+              root_box_node.style.padding_right,
+              percentage_base,
+              &root_box_node.style,
+            );
+            let padding_top = this.resolve_length_for_width(
+              root_box_node.style.padding_top,
+              percentage_base,
+              &root_box_node.style,
+            );
+            let padding_bottom = this.resolve_length_for_width(
+              root_box_node.style.padding_bottom,
+              percentage_base,
+              &root_box_node.style,
+            );
+            let border_left = this.resolve_length_for_width(
+              root_box_node.style.border_left_width,
+              percentage_base,
+              &root_box_node.style,
+            );
+            let border_right = this.resolve_length_for_width(
+              root_box_node.style.border_right_width,
+              percentage_base,
+              &root_box_node.style,
+            );
+            let border_top = this.resolve_length_for_width(
+              root_box_node.style.border_top_width,
+              percentage_base,
+              &root_box_node.style,
+            );
+            let border_bottom = this.resolve_length_for_width(
+              root_box_node.style.border_bottom_width,
+              percentage_base,
+              &root_box_node.style,
+            );
+            let content_width =
+              (outer_width - padding_left - padding_right - border_left - border_right).max(0.0);
+            let content_height =
+              (outer_height - padding_top - padding_bottom - border_top - border_bottom).max(0.0);
+            return taffy::geometry::Size {
+              width: content_width,
+              height: content_height,
+            };
+          }
+
+          let Some(node_ptr) = node_context.as_ref().map(|p| **p) else {
+            return taffy::geometry::Size::ZERO;
+          };
+          this.measure_grid_item(
+            node_ptr,
+            node_id,
+            known_dimensions,
+            available_space,
+            parent_inline_base,
+            container_justify_items,
+            &this.factory,
+            &cache,
+            &measured,
+            &measured_keys,
+          )
+        }
+      },
+      cancel,
+      TAFFY_ABORT_CHECK_STRIDE,
     );
     if let Some(start) = taffy_compute_start {
       record_taffy_compute(TaffyAdapterKind::Grid, start.elapsed());
@@ -3344,6 +3318,7 @@ mod tests {
   use crate::style::types::GridTrack;
   use crate::style::types::Overflow;
   use crate::style::types::ScrollbarWidth;
+  use crate::style::types::WordBreak;
   use crate::style::types::WritingMode;
   use crate::text::font_db::FontConfig;
   use crate::tree::box_tree::BoxTree;
@@ -3577,10 +3552,8 @@ mod tests {
   }
 
   #[test]
-  fn measure_grid_item_short_circuits_min_content_height_probes() {
+  fn measure_grid_item_height_probes_respect_known_inline_size() {
     use taffy::style::AvailableSpace;
-
-    reset_grid_measure_layout_calls();
 
     let gc = GridFormattingContext::new();
     let factory =
@@ -3596,92 +3569,81 @@ mod tests {
     let measured_node_keys: Rc<RefCell<HashMap<TaffyNodeId, Vec<MeasureKey>>>> =
       Rc::new(RefCell::new(HashMap::new()));
 
-    let mut node = make_text_item("hello world", 16.0);
-    node.id = 1;
-    let node_ptr = &node as *const _;
+    for (probe_height, label) in [
+      (AvailableSpace::MinContent, "min-content"),
+      (AvailableSpace::MaxContent, "max-content"),
+    ] {
+      let mut style = ComputedStyle::default();
+      style.font_size = 16.0;
+      style.word_break = WordBreak::BreakAll;
+      let style = Arc::new(style);
+      let text_child = BoxNode::new_text(style.clone(), "a".repeat(64));
+      let mut node = BoxNode::new_block(style, FormattingContextType::Inline, vec![text_child]);
+      node.id = 1;
+      let node_ptr = &node as *const _;
 
-    let size = gc.measure_grid_item(
-      node_ptr,
-      TaffyNodeId::from(1u64),
-      taffy::geometry::Size {
-        width: Some(200.0),
-        height: None,
-      },
-      taffy::geometry::Size {
-        width: AvailableSpace::Definite(200.0),
-        height: AvailableSpace::MinContent,
-      },
-      Some(200.0),
-      AlignItems::Stretch,
-      &factory,
-      &measure_cache,
-      &measured_fragments,
-      &measured_node_keys,
-    );
-
-    assert!(
-      size.height > 0.0,
-      "min-content height probe should return a non-zero intrinsic height"
-    );
-    assert_eq!(
-      grid_measure_layout_calls(),
-      0,
-      "min-content height probe should not require full layout"
-    );
-  }
-
-  #[test]
-  fn measure_grid_item_short_circuits_max_content_height_probes() {
-    use taffy::style::AvailableSpace;
-
-    reset_grid_measure_layout_calls();
-
-    let gc = GridFormattingContext::new();
-    let factory =
-      crate::layout::contexts::factory::FormattingContextFactory::with_font_context_viewport_and_cb(
-        gc.font_context.clone(),
-        gc.viewport_size,
-        gc.nearest_positioned_cb,
+      let wide_width = gc.viewport_size.width;
+      reset_grid_measure_layout_calls();
+      let wide = gc.measure_grid_item(
+        node_ptr,
+        TaffyNodeId::from(1u64),
+        taffy::geometry::Size {
+          width: Some(wide_width),
+          height: None,
+        },
+        taffy::geometry::Size {
+          width: AvailableSpace::Definite(wide_width),
+          height: probe_height,
+        },
+        Some(wide_width),
+        AlignItems::Stretch,
+        &factory,
+        &measure_cache,
+        &measured_fragments,
+        &measured_node_keys,
       );
-    let measure_cache: Rc<RefCell<HashMap<MeasureKey, taffy::geometry::Size<f32>>>> =
-      Rc::new(RefCell::new(HashMap::new()));
-    let measured_fragments: Rc<RefCell<HashMap<MeasureKey, FragmentNode>>> =
-      Rc::new(RefCell::new(HashMap::new()));
-    let measured_node_keys: Rc<RefCell<HashMap<TaffyNodeId, Vec<MeasureKey>>>> =
-      Rc::new(RefCell::new(HashMap::new()));
+      assert!(
+        wide.height > 0.0,
+        "{label} height probe should return a non-zero intrinsic height"
+      );
+      assert_eq!(
+        grid_measure_layout_calls(),
+        1,
+        "{label} height probe should measure by laying out the item with the known inline size"
+      );
 
-    let mut node = make_text_item("hello world", 16.0);
-    node.id = 1;
-    let node_ptr = &node as *const _;
-
-    let size = gc.measure_grid_item(
-      node_ptr,
-      TaffyNodeId::from(1u64),
-      taffy::geometry::Size {
-        width: Some(200.0),
-        height: None,
-      },
-      taffy::geometry::Size {
-        width: AvailableSpace::Definite(200.0),
-        height: AvailableSpace::MaxContent,
-      },
-      Some(200.0),
-      AlignItems::Stretch,
-      &factory,
-      &measure_cache,
-      &measured_fragments,
-      &measured_node_keys,
-    );
-
-    assert!(
-      size.height > 0.0,
-      "max-content height probe should return a non-zero intrinsic height"
-    );
-    assert_eq!(
-      grid_measure_layout_calls(),
-      0,
-      "max-content height probe should not require full layout"
-    );
+      let narrow_width = 50.0;
+      reset_grid_measure_layout_calls();
+      let narrow = gc.measure_grid_item(
+        node_ptr,
+        TaffyNodeId::from(1u64),
+        taffy::geometry::Size {
+          width: Some(narrow_width),
+          height: None,
+        },
+        taffy::geometry::Size {
+          width: AvailableSpace::Definite(narrow_width),
+          height: probe_height,
+        },
+        Some(narrow_width),
+        AlignItems::Stretch,
+        &factory,
+        &measure_cache,
+        &measured_fragments,
+        &measured_node_keys,
+      );
+      assert!(
+        narrow.height > wide.height,
+        "{label} height probe should respect the known inline size (narrow={:.2}, wide={:.2})",
+        narrow.height,
+        wide.height
+      );
+      assert_eq!(
+        grid_measure_layout_calls(),
+        1,
+        "{label} height probe should measure by laying out the item with the known inline size"
+      );
+    }
   }
 
   #[test]
