@@ -2734,6 +2734,152 @@ mod tests {
     }
   }
 
+  fn reference_convolve_row_horizontal_fixed(
+    src_row: &[u8],
+    out_row: &mut [u8],
+    width: usize,
+    kernel: &[i32],
+    radius: usize,
+    scale: i32,
+  ) {
+    debug_assert_eq!(src_row.len(), width * 4);
+    debug_assert_eq!(out_row.len(), width * 4);
+    let bias = scale / 2;
+    let max_x = width.saturating_sub(1) as isize;
+    for x in 0..width {
+      let mut acc_r: i32 = 0;
+      let mut acc_g: i32 = 0;
+      let mut acc_b: i32 = 0;
+      let mut acc_a: i32 = 0;
+      for (i, &w) in kernel.iter().enumerate() {
+        let offset = i as isize - radius as isize;
+        let cx = (x as isize + offset).clamp(0, max_x) as usize;
+        let idx = cx * 4;
+        acc_r += w * src_row[idx] as i32;
+        acc_g += w * src_row[idx + 1] as i32;
+        acc_b += w * src_row[idx + 2] as i32;
+        acc_a += w * src_row[idx + 3] as i32;
+      }
+      let out_idx = x * 4;
+      let a = ((acc_a + bias) / scale).clamp(0, 255);
+      let r = (acc_r + bias) / scale;
+      let g = (acc_g + bias) / scale;
+      let b = (acc_b + bias) / scale;
+      out_row[out_idx] = r.clamp(0, a) as u8;
+      out_row[out_idx + 1] = g.clamp(0, a) as u8;
+      out_row[out_idx + 2] = b.clamp(0, a) as u8;
+      out_row[out_idx + 3] = a as u8;
+    }
+  }
+
+  fn reference_convolve_row_vertical_fixed(
+    src: &[u8],
+    out_row: &mut [u8],
+    width: usize,
+    height: usize,
+    y: usize,
+    kernel: &[i32],
+    radius: usize,
+    scale: i32,
+  ) {
+    let row_stride = width * 4;
+    debug_assert_eq!(src.len(), row_stride * height);
+    debug_assert_eq!(out_row.len(), row_stride);
+    let bias = scale / 2;
+    let max_y = height.saturating_sub(1) as isize;
+    for x in 0..width {
+      let mut acc_r: i32 = 0;
+      let mut acc_g: i32 = 0;
+      let mut acc_b: i32 = 0;
+      let mut acc_a: i32 = 0;
+      for (i, &w) in kernel.iter().enumerate() {
+        let offset = i as isize - radius as isize;
+        let cy = (y as isize + offset).clamp(0, max_y) as usize;
+        let idx = cy * row_stride + x * 4;
+        acc_r += w * src[idx] as i32;
+        acc_g += w * src[idx + 1] as i32;
+        acc_b += w * src[idx + 2] as i32;
+        acc_a += w * src[idx + 3] as i32;
+      }
+      let out_idx = x * 4;
+      let a = ((acc_a + bias) / scale).clamp(0, 255);
+      let r = (acc_r + bias) / scale;
+      let g = (acc_g + bias) / scale;
+      let b = (acc_b + bias) / scale;
+      out_row[out_idx] = r.clamp(0, a) as u8;
+      out_row[out_idx + 1] = g.clamp(0, a) as u8;
+      out_row[out_idx + 2] = b.clamp(0, a) as u8;
+      out_row[out_idx + 3] = a as u8;
+    }
+  }
+
+  #[test]
+  fn gaussian_convolve_helpers_match_reference() {
+    let sizes = [(1, 1), (2, 3), (3, 2), (8, 5), (17, 9)];
+    let sigmas = [0.5f32, 1.0, 2.0, 3.0];
+    for (width, height) in sizes {
+      let row_stride = width * 4;
+      for sigma in sigmas {
+        let (kernel, radius, scale) = gaussian_kernel_fixed(sigma);
+        if radius == 0 || kernel.is_empty() || scale <= 0 {
+          continue;
+        }
+        let mut seed = (width as u32)
+          .wrapping_mul(0x9E37_79B9)
+          .wrapping_add(height as u32)
+          .wrapping_add(sigma.to_bits());
+        let mut src = vec![0u8; row_stride * height];
+        for px in src.chunks_exact_mut(4) {
+          seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+          let a = (seed & 0xFF) as u8;
+          seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+          let r = (seed & 0xFF) as u8 % a.saturating_add(1);
+          seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+          let g = (seed & 0xFF) as u8 % a.saturating_add(1);
+          seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+          let b = (seed & 0xFF) as u8 % a.saturating_add(1);
+          px[0] = r;
+          px[1] = g;
+          px[2] = b;
+          px[3] = a;
+        }
+
+        for y in 0..height {
+          let row_start = y * row_stride;
+          let src_row = &src[row_start..row_start + row_stride];
+          let mut fast = vec![0u8; row_stride];
+          let mut reference = vec![0u8; row_stride];
+          convolve_row_horizontal_fixed(src_row, &mut fast, width, &kernel, radius, scale);
+          reference_convolve_row_horizontal_fixed(src_row, &mut reference, width, &kernel, radius, scale);
+          assert_eq!(
+            fast, reference,
+            "horizontal kernel mismatch: {width}x{height} sigma={sigma} y={y}"
+          );
+        }
+
+        for y in 0..height {
+          let mut fast = vec![0u8; row_stride];
+          let mut reference = vec![0u8; row_stride];
+          convolve_row_vertical_fixed(&src, &mut fast, width, height, y, &kernel, radius, scale);
+          reference_convolve_row_vertical_fixed(
+            &src,
+            &mut reference,
+            width,
+            height,
+            y,
+            &kernel,
+            radius,
+            scale,
+          );
+          assert_eq!(
+            fast, reference,
+            "vertical kernel mismatch: {width}x{height} sigma={sigma} y={y}"
+          );
+        }
+      }
+    }
+  }
+
   #[test]
   fn blur_with_zero_sigma_x_only_blurs_vertically() {
     let mut pixmap = new_pixmap(3, 5).unwrap();
