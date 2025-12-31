@@ -7736,18 +7736,73 @@ fn apply_mask_composite_into_src(
   let out_data = src.mask.data_mut();
   let dst_data = dest.mask.data();
 
-  for y in oy0..oy1 {
-    let out_y = (y - src.origin.1) as usize;
-    let dst_y = (y - dest.origin.1) as usize;
-    let out_row = out_y * out_w;
-    let dst_row = dst_y * dst_w;
-    for x in ox0..ox1 {
-      let out_x = (x - src.origin.0) as usize;
-      let dst_x = (x - dest.origin.0) as usize;
-      let idx_out = out_row + out_x;
-      let dst = dst_data[dst_row + dst_x];
-      let src_v = out_data[idx_out];
-      out_data[idx_out] = apply_mask_composite_pixel(dst, src_v, op);
+  match op {
+    MaskComposite::Add => {
+      for y in oy0..oy1 {
+        let out_y = (y - src.origin.1) as usize;
+        let dst_y = (y - dest.origin.1) as usize;
+        let out_row = out_y * out_w;
+        let dst_row = dst_y * dst_w;
+        for x in ox0..ox1 {
+          let out_x = (x - src.origin.0) as usize;
+          let dst_x = (x - dest.origin.0) as usize;
+          let idx_out = out_row + out_x;
+          let dst = dst_data[dst_row + dst_x] as u16;
+          let src_v = out_data[idx_out] as u16;
+          let out = src_v + div_255(dst * (255 - src_v));
+          out_data[idx_out] = out.min(255) as u8;
+        }
+      }
+    }
+    MaskComposite::Subtract => {
+      for y in oy0..oy1 {
+        let out_y = (y - src.origin.1) as usize;
+        let dst_y = (y - dest.origin.1) as usize;
+        let out_row = out_y * out_w;
+        let dst_row = dst_y * dst_w;
+        for x in ox0..ox1 {
+          let out_x = (x - src.origin.0) as usize;
+          let dst_x = (x - dest.origin.0) as usize;
+          let idx_out = out_row + out_x;
+          let dst = dst_data[dst_row + dst_x] as u16;
+          let src_v = out_data[idx_out] as u16;
+          out_data[idx_out] = div_255(src_v * (255 - dst)) as u8;
+        }
+      }
+    }
+    MaskComposite::Intersect => {
+      for y in oy0..oy1 {
+        let out_y = (y - src.origin.1) as usize;
+        let dst_y = (y - dest.origin.1) as usize;
+        let out_row = out_y * out_w;
+        let dst_row = dst_y * dst_w;
+        for x in ox0..ox1 {
+          let out_x = (x - src.origin.0) as usize;
+          let dst_x = (x - dest.origin.0) as usize;
+          let idx_out = out_row + out_x;
+          let dst = dst_data[dst_row + dst_x] as u16;
+          let src_v = out_data[idx_out] as u16;
+          out_data[idx_out] = div_255(src_v * dst) as u8;
+        }
+      }
+    }
+    MaskComposite::Exclude => {
+      for y in oy0..oy1 {
+        let out_y = (y - src.origin.1) as usize;
+        let dst_y = (y - dest.origin.1) as usize;
+        let out_row = out_y * out_w;
+        let dst_row = dst_y * dst_w;
+        for x in ox0..ox1 {
+          let out_x = (x - src.origin.0) as usize;
+          let dst_x = (x - dest.origin.0) as usize;
+          let idx_out = out_row + out_x;
+          let dst = dst_data[dst_row + dst_x] as u16;
+          let src_v = out_data[idx_out] as u16;
+          let src_out = div_255(src_v * (255 - dst));
+          let dst_out = div_255(dst * (255 - src_v));
+          out_data[idx_out] = (src_out + dst_out).min(255) as u8;
+        }
+      }
     }
   }
 }
@@ -7763,37 +7818,75 @@ fn apply_mask_composite_into_dest(
   let dst_data = dest.mask.data_mut();
   let src_data = src.mask.data();
 
-  for y in oy0..oy1 {
-    let dst_y = (y - dest.origin.1) as usize;
-    let src_y = (y - src.origin.1) as usize;
-    let dst_row = dst_y * dst_w;
-    let src_row = src_y * src_w;
-    for x in ox0..ox1 {
-      let dst_x = (x - dest.origin.0) as usize;
-      let src_x = (x - src.origin.0) as usize;
-      let idx_dst = dst_row + dst_x;
-      let dst = dst_data[idx_dst];
-      let src_v = src_data[src_row + src_x];
-      dst_data[idx_dst] = apply_mask_composite_pixel(dst, src_v, op);
+  match op {
+    MaskComposite::Add => {
+      for y in oy0..oy1 {
+        let dst_y = (y - dest.origin.1) as usize;
+        let src_y = (y - src.origin.1) as usize;
+        let dst_row = dst_y * dst_w;
+        let src_row = src_y * src_w;
+        for x in ox0..ox1 {
+          let dst_x = (x - dest.origin.0) as usize;
+          let src_x = (x - src.origin.0) as usize;
+          let idx_dst = dst_row + dst_x;
+          let dst = dst_data[idx_dst] as u16;
+          let src_v = src_data[src_row + src_x] as u16;
+          let out = src_v + div_255(dst * (255 - src_v));
+          dst_data[idx_dst] = out.min(255) as u8;
+        }
+      }
+    }
+    MaskComposite::Subtract => {
+      for y in oy0..oy1 {
+        let dst_y = (y - dest.origin.1) as usize;
+        let src_y = (y - src.origin.1) as usize;
+        let dst_row = dst_y * dst_w;
+        let src_row = src_y * src_w;
+        for x in ox0..ox1 {
+          let dst_x = (x - dest.origin.0) as usize;
+          let src_x = (x - src.origin.0) as usize;
+          let idx_dst = dst_row + dst_x;
+          let dst = dst_data[idx_dst] as u16;
+          let src_v = src_data[src_row + src_x] as u16;
+          dst_data[idx_dst] = div_255(src_v * (255 - dst)) as u8;
+        }
+      }
+    }
+    MaskComposite::Intersect => {
+      for y in oy0..oy1 {
+        let dst_y = (y - dest.origin.1) as usize;
+        let src_y = (y - src.origin.1) as usize;
+        let dst_row = dst_y * dst_w;
+        let src_row = src_y * src_w;
+        for x in ox0..ox1 {
+          let dst_x = (x - dest.origin.0) as usize;
+          let src_x = (x - src.origin.0) as usize;
+          let idx_dst = dst_row + dst_x;
+          let dst = dst_data[idx_dst] as u16;
+          let src_v = src_data[src_row + src_x] as u16;
+          dst_data[idx_dst] = div_255(src_v * dst) as u8;
+        }
+      }
+    }
+    MaskComposite::Exclude => {
+      for y in oy0..oy1 {
+        let dst_y = (y - dest.origin.1) as usize;
+        let src_y = (y - src.origin.1) as usize;
+        let dst_row = dst_y * dst_w;
+        let src_row = src_y * src_w;
+        for x in ox0..ox1 {
+          let dst_x = (x - dest.origin.0) as usize;
+          let src_x = (x - src.origin.0) as usize;
+          let idx_dst = dst_row + dst_x;
+          let dst = dst_data[idx_dst] as u16;
+          let src_v = src_data[src_row + src_x] as u16;
+          let src_out = div_255(src_v * (255 - dst));
+          let dst_out = div_255(dst * (255 - src_v));
+          dst_data[idx_dst] = (src_out + dst_out).min(255) as u8;
+        }
+      }
     }
   }
-}
-
-fn apply_mask_composite_pixel(dst: u8, src: u8, op: MaskComposite) -> u8 {
-  let src = src as u16;
-  let dst = dst as u16;
-  // `src` and `dst` are in the 0..=255 range, so intermediate products fit in u16 (max 65025).
-  let out = match op {
-    MaskComposite::Add => src + div_255(dst * (255 - src)),
-    MaskComposite::Subtract => div_255(src * (255 - dst)),
-    MaskComposite::Intersect => div_255(src * dst),
-    MaskComposite::Exclude => {
-      let src_out = div_255(src * (255 - dst));
-      let dst_out = div_255(dst * (255 - src));
-      src_out + dst_out
-    }
-  };
-  out.min(255) as u8
 }
 
 #[inline]
