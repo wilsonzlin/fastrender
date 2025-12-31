@@ -3577,9 +3577,9 @@ impl FormattingContext for BlockFormattingContext {
     let log_children = !log_ids.is_empty() && log_ids.contains(&box_node.id);
 
     let mut inline_width = 0.0f32;
-    let mut inline_run: Vec<BoxNode> = Vec::new();
+    let mut inline_run: Vec<&BoxNode> = Vec::new();
     let mut flush_inline_run =
-      |run: &mut Vec<BoxNode>, widest: &mut f32| -> Result<(), LayoutError> {
+      |run: &mut Vec<&BoxNode>, widest: &mut f32| -> Result<(), LayoutError> {
         if run.is_empty() {
           return Ok(());
         }
@@ -3596,8 +3596,7 @@ impl FormattingContext for BlockFormattingContext {
           return Ok(());
         }
 
-        let inline_container = BoxNode::new_inline(box_node.style.clone(), run.clone());
-        let width = inline_fc.compute_intrinsic_inline_size(&inline_container, mode)?;
+        let width = inline_fc.intrinsic_width_for_children(&box_node.style, run.as_slice(), mode);
         inline_run_cache.insert((key, mode), width);
         if log_children {
           let ids: Vec<usize> = run.iter().map(|c| c.id()).collect();
@@ -3634,7 +3633,7 @@ impl FormattingContext for BlockFormattingContext {
         if log_children {
           inline_child_debug.push((child.id, child.style.display));
         }
-        inline_run.push(child.clone());
+        inline_run.push(child);
       }
     }
     flush_inline_run(&mut inline_run, &mut inline_width)?;
@@ -5030,5 +5029,61 @@ mod tests {
     assert_eq!(abs_frag.bounds.y(), 7.0);
     assert_eq!(abs_frag.bounds.width(), 30.0);
     assert_eq!(abs_frag.bounds.height(), 12.0);
+  }
+
+  #[test]
+  fn table_cell_intrinsic_width_uses_inline_children_path() {
+    let mut cell_style = ComputedStyle::default();
+    cell_style.display = Display::TableCell;
+    cell_style.font_size = 16.0;
+    let cell_style = Arc::new(cell_style);
+
+    let mut text_style = ComputedStyle::default();
+    text_style.display = Display::Inline;
+    text_style.font_size = 16.0;
+    let text_style = Arc::new(text_style);
+
+    let text1 = BoxNode::new_text(text_style.clone(), "hello ".to_string());
+    let text2 = BoxNode::new_text(text_style, "world".to_string());
+    let cell = BoxNode::new_block(
+      cell_style.clone(),
+      FormattingContextType::Block,
+      vec![text1, text2],
+    );
+
+    let fc = BlockFormattingContext::new();
+    let inline_fc = InlineFormattingContext::with_font_context_viewport_and_cb(
+      fc.font_context.clone(),
+      fc.viewport_size,
+      fc.nearest_positioned_cb,
+    );
+    let inline_container = BoxNode::new_inline(cell_style, cell.children.clone());
+
+    let expected_min = inline_fc
+      .compute_intrinsic_inline_size(&inline_container, IntrinsicSizingMode::MinContent)
+      .expect("inline min");
+    let expected_max = inline_fc
+      .compute_intrinsic_inline_size(&inline_container, IntrinsicSizingMode::MaxContent)
+      .expect("inline max");
+
+    let actual_min = fc
+      .compute_intrinsic_inline_size(&cell, IntrinsicSizingMode::MinContent)
+      .expect("block min");
+    let actual_max = fc
+      .compute_intrinsic_inline_size(&cell, IntrinsicSizingMode::MaxContent)
+      .expect("block max");
+
+    assert!(
+      (actual_min - expected_min).abs() < 0.01,
+      "min-content: expected {}, got {}",
+      expected_min,
+      actual_min
+    );
+    assert!(
+      (actual_max - expected_max).abs() < 0.01,
+      "max-content: expected {}, got {}",
+      expected_max,
+      actual_max
+    );
   }
 }

@@ -1137,14 +1137,43 @@ impl InlineFormattingContext {
         );
       }
     }
+    self.collect_inline_items_internal_for_children(
+      box_node.children.len(),
+      |idx| &box_node.children[idx],
+      available_width,
+      available_height,
+      pending_space,
+      base_direction,
+      positioned_children,
+      bidi_stack,
+      positioned_cb_stack,
+      boundary,
+    )
+  }
+
+  #[allow(clippy::cognitive_complexity)]
+  fn collect_inline_items_internal_for_children<'a, F>(
+    &self,
+    children_len: usize,
+    child_at: F,
+    available_width: f32,
+    available_height: Option<f32>,
+    pending_space: &mut Option<PendingSpace>,
+    base_direction: crate::style::types::Direction,
+    positioned_children: &mut Vec<PositionedChild>,
+    bidi_stack: &mut Vec<(UnicodeBidi, Direction)>,
+    positioned_cb_stack: &mut Vec<usize>,
+    boundary: CombineBoundary,
+  ) -> Result<Vec<InlineItem>, LayoutError>
+  where
+    F: Fn(usize) -> &'a BoxNode,
+  {
     let mut items = Vec::new();
     let mut deadline_counter = 0usize;
 
-    let combinable_indices: Vec<usize> = box_node
-      .children
-      .iter()
-      .enumerate()
-      .filter_map(|(i, c)| {
+    let combinable_indices: Vec<usize> = (0..children_len)
+      .filter_map(|i| {
+        let c = child_at(i);
         if is_vertical_typographic_mode(c.style.writing_mode)
           && !matches!(c.style.text_combine_upright, TextCombineUpright::None)
         {
@@ -1160,7 +1189,8 @@ impl InlineFormattingContext {
     let first_combinable = combinable_indices.first().copied();
     let last_combinable = combinable_indices.last().copied();
 
-    for (idx, child) in box_node.children.iter().enumerate() {
+    for idx in 0..children_len {
+      let child = child_at(idx);
       if let Err(RenderError::Timeout { elapsed, .. }) =
         check_active_periodic(&mut deadline_counter, 32, RenderStage::Layout)
       {
@@ -1226,8 +1256,12 @@ impl InlineFormattingContext {
           let boundary = if is_vertical_typographic_mode(child.style.writing_mode)
             && !matches!(child.style.text_combine_upright, TextCombineUpright::None)
           {
-            let mut b =
-              compute_combine_boundary(&box_node.children, idx, child.style.text_combine_upright);
+            let mut b = compute_combine_boundary_for_child_at(
+              children_len,
+              &child_at,
+              idx,
+              child.style.text_combine_upright,
+            );
             b.prev |= inherited_boundary.prev;
             b.next |= inherited_boundary.next;
             b
@@ -1283,8 +1317,12 @@ impl InlineFormattingContext {
             let boundary = if is_vertical_typographic_mode(child.style.writing_mode)
               && !matches!(child.style.text_combine_upright, TextCombineUpright::None)
             {
-              let mut b =
-                compute_combine_boundary(&box_node.children, idx, child.style.text_combine_upright);
+              let mut b = compute_combine_boundary_for_child_at(
+                children_len,
+                &child_at,
+                idx,
+                child.style.text_combine_upright,
+              );
               b.prev |= inherited_boundary.prev;
               b.next |= inherited_boundary.next;
               b
@@ -5019,6 +5057,105 @@ impl InlineFormattingContext {
     width
   }
 
+  pub(crate) fn intrinsic_width_for_children(
+    &self,
+    container_style: &Arc<ComputedStyle>,
+    children: &[&BoxNode],
+    mode: IntrinsicSizingMode,
+  ) -> f32 {
+    self.calculate_intrinsic_width_for_children(container_style, children, mode)
+  }
+
+  fn calculate_intrinsic_width_for_children(
+    &self,
+    container_style: &Arc<ComputedStyle>,
+    children: &[&BoxNode],
+    mode: IntrinsicSizingMode,
+  ) -> f32 {
+    let style = container_style;
+    if style.containment.size || style.containment.inline_size {
+      let edges = resolve_length_for_width(
+        style.padding_left,
+        0.0,
+        style,
+        &self.font_context,
+        self.viewport_size,
+      ) + resolve_length_for_width(
+        style.padding_right,
+        0.0,
+        style,
+        &self.font_context,
+        self.viewport_size,
+      ) + resolve_length_for_width(
+        style.border_left_width,
+        0.0,
+        style,
+        &self.font_context,
+        self.viewport_size,
+      ) + resolve_length_for_width(
+        style.border_right_width,
+        0.0,
+        style,
+        &self.font_context,
+        self.viewport_size,
+      );
+      return edges;
+    }
+
+    let base_direction = resolve_base_direction_for_style_and_children(style, children);
+    let mut positioned = Vec::new();
+    let items = match self.collect_inline_items_for_children_with_base(
+      container_style,
+      children,
+      f32::INFINITY,
+      None,
+      base_direction,
+      &mut positioned,
+    ) {
+      Ok(items) => items,
+      Err(_) => return 0.0,
+    };
+    let _indent_value = resolve_length_with_percentage_inline(
+      style.text_indent.length,
+      None,
+      style,
+      &self.font_context,
+      self.viewport_size,
+    )
+    .unwrap_or(0.0);
+
+    match mode {
+      IntrinsicSizingMode::MinContent => self.min_content_width(&items),
+      IntrinsicSizingMode::MaxContent => self.max_content_width(&items),
+    }
+  }
+
+  fn collect_inline_items_for_children_with_base<'a>(
+    &self,
+    container_style: &Arc<ComputedStyle>,
+    children: &'a [&'a BoxNode],
+    available_width: f32,
+    available_height: Option<f32>,
+    base_direction: crate::style::types::Direction,
+    positioned_children: &mut Vec<PositionedChild>,
+  ) -> Result<Vec<InlineItem>, LayoutError> {
+    let mut pending_space: Option<PendingSpace> = None;
+    let mut bidi_stack = vec![(container_style.unicode_bidi, container_style.direction)];
+    let mut positioned_cb_stack = Vec::new();
+    self.collect_inline_items_internal_for_children(
+      children.len(),
+      |idx| children[idx],
+      available_width,
+      available_height,
+      &mut pending_space,
+      base_direction,
+      positioned_children,
+      &mut bidi_stack,
+      &mut positioned_cb_stack,
+      CombineBoundary::default(),
+    )
+  }
+
   fn min_content_width(&self, items: &[InlineItem]) -> f32 {
     let mut tracker = SegmentTracker::new();
     self.accumulate_min_segments(items, &mut tracker);
@@ -8418,23 +8555,25 @@ fn trailing_edge_combinability(node: &BoxNode, mode: TextCombineUpright) -> Comb
   edge_combinability(node, mode, CombineEdge::Trailing)
 }
 
-fn compute_combine_boundary(
-  children: &[BoxNode],
+fn compute_combine_boundary_for_child_at<'a, F: Fn(usize) -> &'a BoxNode>(
+  children_len: usize,
+  child_at: &F,
   idx: usize,
   mode: TextCombineUpright,
 ) -> CombineBoundary {
   let mut boundary = CombineBoundary::default();
-  let leading_state = leading_edge_combinability(&children[idx], mode);
-  let trailing_state = trailing_edge_combinability(&children[idx], mode);
+  let leading_state = leading_edge_combinability(child_at(idx), mode);
+  let trailing_state = trailing_edge_combinability(child_at(idx), mode);
 
   if matches!(leading_state, CombineEdgeState::Combinable) {
     let mut i = idx;
     while i > 0 {
       i -= 1;
-      if !participates_in_combine_sequence(&children[i]) {
+      let prev = child_at(i);
+      if !participates_in_combine_sequence(prev) {
         break;
       }
-      match trailing_edge_combinability(&children[i], mode) {
+      match trailing_edge_combinability(prev, mode) {
         CombineEdgeState::Combinable => {
           boundary.prev = true;
           break;
@@ -8447,11 +8586,12 @@ fn compute_combine_boundary(
 
   if matches!(trailing_state, CombineEdgeState::Combinable) {
     let mut j = idx + 1;
-    while j < children.len() {
-      if !participates_in_combine_sequence(&children[j]) {
+    while j < children_len {
+      let next = child_at(j);
+      if !participates_in_combine_sequence(next) {
         break;
       }
-      match leading_edge_combinability(&children[j], mode) {
+      match leading_edge_combinability(next, mode) {
         CombineEdgeState::Combinable => {
           boundary.next = true;
           break;
@@ -8466,6 +8606,15 @@ fn compute_combine_boundary(
   }
 
   boundary
+}
+
+fn compute_combine_boundary(
+  children: &[BoxNode],
+  idx: usize,
+  mode: TextCombineUpright,
+) -> CombineBoundary {
+  let child_at = |i: usize| &children[i];
+  compute_combine_boundary_for_child_at(children.len(), &child_at, idx, mode)
 }
 
 fn can_combine_for_mode(ch: char, mode: TextCombineUpright) -> bool {
@@ -8653,6 +8802,49 @@ fn collect_logical_text_for_direction(node: &BoxNode, out: &mut String) {
 
   for child in node.children.iter() {
     collect_logical_text_for_direction(child, out);
+  }
+}
+
+fn resolve_base_direction_for_style_and_children(
+  style: &ComputedStyle,
+  children: &[&BoxNode],
+) -> crate::style::types::Direction {
+  if matches!(
+    style.writing_mode,
+    crate::style::types::WritingMode::VerticalRl | crate::style::types::WritingMode::VerticalLr
+  ) && matches!(style.text_orientation, crate::style::types::TextOrientation::Upright)
+  {
+    return crate::style::types::Direction::Ltr;
+  }
+
+  if !matches!(
+    style.unicode_bidi,
+    crate::style::types::UnicodeBidi::Plaintext
+  ) {
+    return style.direction;
+  }
+
+  // Match `resolve_base_direction_for_box` as closely as possible for a synthetic inline
+  // container: include an object replacement character for the container itself before
+  // appending child content.
+  const OBJECT_REPLACEMENT: char = '\u{FFFC}';
+  let mut logical = String::new();
+  logical.push(OBJECT_REPLACEMENT);
+  for child in children {
+    collect_logical_text_for_direction(child, &mut logical);
+  }
+  if logical.is_empty() {
+    return style.direction;
+  }
+  let info = unicode_bidi::BidiInfo::new(&logical, None);
+  if let Some(p) = info.paragraphs.first() {
+    if p.level.is_rtl() {
+      crate::style::types::Direction::Rtl
+    } else {
+      crate::style::types::Direction::Ltr
+    }
+  } else {
+    style.direction
   }
 }
 
@@ -9222,6 +9414,45 @@ mod tests {
     BoxNode::new_block(default_style(), FormattingContextType::Block, children)
   }
 
+  fn assert_intrinsic_width_children_matches_container(
+    ifc: &InlineFormattingContext,
+    container_style: Arc<ComputedStyle>,
+    children: Vec<BoxNode>,
+  ) {
+    let inline_container = BoxNode::new_inline(container_style.clone(), children.clone());
+    let min_expected = ifc
+      .compute_intrinsic_inline_size(&inline_container, IntrinsicSizingMode::MinContent)
+      .expect("min intrinsic size");
+    let max_expected = ifc
+      .compute_intrinsic_inline_size(&inline_container, IntrinsicSizingMode::MaxContent)
+      .expect("max intrinsic size");
+
+    let child_refs: Vec<&BoxNode> = children.iter().collect();
+    let min_actual = ifc.intrinsic_width_for_children(
+      &container_style,
+      child_refs.as_slice(),
+      IntrinsicSizingMode::MinContent,
+    );
+    let max_actual = ifc.intrinsic_width_for_children(
+      &container_style,
+      child_refs.as_slice(),
+      IntrinsicSizingMode::MaxContent,
+    );
+
+    assert!(
+      (min_expected - min_actual).abs() < 0.01,
+      "min-content: expected {}, got {}",
+      min_expected,
+      min_actual
+    );
+    assert!(
+      (max_expected - max_actual).abs() < 0.01,
+      "max-content: expected {}, got {}",
+      max_expected,
+      max_actual
+    );
+  }
+
   #[test]
   fn vertical_align_length_resolves_viewport_units() {
     let ctx = InlineFormattingContext::with_font_context_and_viewport(
@@ -9237,6 +9468,58 @@ mod tests {
         align,
         crate::layout::contexts::inline::baseline::VerticalAlign::Length(v) if (v - 40.0).abs() < 1e-3
     ));
+  }
+
+  #[test]
+  fn intrinsic_width_for_children_matches_text() {
+    let ifc = InlineFormattingContext::new();
+    let style = default_style();
+    let children = vec![BoxNode::new_text(style.clone(), "Hello World".to_string())];
+    assert_intrinsic_width_children_matches_container(&ifc, style, children);
+  }
+
+  #[test]
+  fn intrinsic_width_for_children_matches_mixed_inline_content() {
+    let ifc = InlineFormattingContext::new();
+    let style = default_style();
+    let span = BoxNode::new_inline(
+      style.clone(),
+      vec![BoxNode::new_text(style.clone(), "Hello".to_string())],
+    );
+    let children = vec![span, BoxNode::new_text(style.clone(), " World".to_string())];
+    assert_intrinsic_width_children_matches_container(&ifc, style, children);
+  }
+
+  #[test]
+  fn intrinsic_width_for_children_matches_replaced_elements() {
+    let ifc = InlineFormattingContext::new();
+    let style = default_style();
+    let replaced = BoxNode::new_replaced(
+      style.clone(),
+      ReplacedType::Canvas,
+      Some(Size::new(32.0, 10.0)),
+      None,
+    );
+    let children = vec![make_text_box("Hi "), replaced, make_text_box(" there")];
+    assert_intrinsic_width_children_matches_container(&ifc, style, children);
+  }
+
+  #[test]
+  fn intrinsic_width_for_children_matches_inline_block_children() {
+    let ifc = InlineFormattingContext::new();
+    let container_style = default_style();
+    let mut inline_block_style = (*container_style).clone();
+    inline_block_style.display = Display::InlineBlock;
+    inline_block_style.width = Some(Length::px(50.0));
+    let inline_block_style = Arc::new(inline_block_style);
+
+    let inline_block = BoxNode::new_inline_block(
+      inline_block_style,
+      FormattingContextType::Block,
+      vec![make_text_box("inline-block")],
+    );
+    let children = vec![make_text_box("x"), inline_block, make_text_box("y")];
+    assert_intrinsic_width_children_matches_container(&ifc, container_style, children);
   }
 
   fn marker_and_text_positions(fragment: &FragmentNode) -> (Option<f32>, Option<f32>) {
