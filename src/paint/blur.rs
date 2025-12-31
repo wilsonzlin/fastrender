@@ -2583,6 +2583,157 @@ mod tests {
     }
   }
 
+  fn reference_box_blur_row_horizontal(
+    src_row: &[u8],
+    out_row: &mut [u8],
+    width: usize,
+    radius: usize,
+    window: i32,
+    half: i32,
+  ) {
+    debug_assert_eq!(src_row.len(), width * 4);
+    debug_assert_eq!(out_row.len(), width * 4);
+    let max_x = width.saturating_sub(1) as isize;
+    for x in 0..width {
+      let mut sum_r: i32 = 0;
+      let mut sum_g: i32 = 0;
+      let mut sum_b: i32 = 0;
+      let mut sum_a: i32 = 0;
+      for dx in -(radius as isize)..=(radius as isize) {
+        let cx = (x as isize + dx).clamp(0, max_x) as usize;
+        let idx = cx * 4;
+        sum_r += src_row[idx] as i32;
+        sum_g += src_row[idx + 1] as i32;
+        sum_b += src_row[idx + 2] as i32;
+        sum_a += src_row[idx + 3] as i32;
+      }
+      let out_idx = x * 4;
+      let a = ((sum_a + half) / window).clamp(0, 255);
+      let r = (sum_r + half) / window;
+      let g = (sum_g + half) / window;
+      let b = (sum_b + half) / window;
+      out_row[out_idx] = r.clamp(0, a).clamp(0, 255) as u8;
+      out_row[out_idx + 1] = g.clamp(0, a).clamp(0, 255) as u8;
+      out_row[out_idx + 2] = b.clamp(0, a).clamp(0, 255) as u8;
+      out_row[out_idx + 3] = a as u8;
+    }
+  }
+
+  fn reference_box_blur_column_vertical(
+    src: &[u8],
+    dst: &mut [u8],
+    width: usize,
+    height: usize,
+    x: usize,
+    radius: usize,
+    window: i32,
+    half: i32,
+  ) {
+    let row_stride = width * 4;
+    let max_y = height.saturating_sub(1) as isize;
+    let x_offset = x * 4;
+    for y in 0..height {
+      let mut sum_r: i32 = 0;
+      let mut sum_g: i32 = 0;
+      let mut sum_b: i32 = 0;
+      let mut sum_a: i32 = 0;
+      for dy in -(radius as isize)..=(radius as isize) {
+        let cy = (y as isize + dy).clamp(0, max_y) as usize;
+        let idx = cy * row_stride + x_offset;
+        sum_r += src[idx] as i32;
+        sum_g += src[idx + 1] as i32;
+        sum_b += src[idx + 2] as i32;
+        sum_a += src[idx + 3] as i32;
+      }
+      let out_idx = y * row_stride + x_offset;
+      let a = ((sum_a + half) / window).clamp(0, 255);
+      let r = (sum_r + half) / window;
+      let g = (sum_g + half) / window;
+      let b = (sum_b + half) / window;
+      dst[out_idx] = r.clamp(0, a).clamp(0, 255) as u8;
+      dst[out_idx + 1] = g.clamp(0, a).clamp(0, 255) as u8;
+      dst[out_idx + 2] = b.clamp(0, a).clamp(0, 255) as u8;
+      dst[out_idx + 3] = a as u8;
+    }
+  }
+
+  #[test]
+  fn box_blur_helpers_match_reference() {
+    let sizes = [(1, 1), (2, 3), (3, 2), (8, 5), (17, 9)];
+    for (width, height) in sizes {
+      for radius in 1usize..=6 {
+        let window = (radius * 2 + 1) as i32;
+        let half = window / 2;
+        let div = FastDivU32::new(window as u32);
+        let mut seed = (width as u32).wrapping_mul(0x9E37_79B9).wrapping_add(height as u32);
+
+        let mut src = vec![0u8; width * height * 4];
+        for px in src.chunks_exact_mut(4) {
+          seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+          let a = (seed & 0xFF) as u8;
+          seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+          let r = (seed & 0xFF) as u8 % (a.saturating_add(1));
+          seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+          let g = (seed & 0xFF) as u8 % (a.saturating_add(1));
+          seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+          let b = (seed & 0xFF) as u8 % (a.saturating_add(1));
+          px[0] = r;
+          px[1] = g;
+          px[2] = b;
+          px[3] = a;
+        }
+
+        // Horizontal helper.
+        for y in 0..height {
+          let row_stride = width * 4;
+          let row_start = y * row_stride;
+          let src_row = &src[row_start..row_start + row_stride];
+          let mut fast_row = vec![0u8; row_stride];
+          let mut ref_row = vec![0u8; row_stride];
+          box_blur_row_horizontal(src_row, &mut fast_row, width, radius, half, div);
+          reference_box_blur_row_horizontal(src_row, &mut ref_row, width, radius, window, half);
+          assert_eq!(
+            fast_row, ref_row,
+            "horizontal mismatch: {width}x{height} radius={radius} y={y}"
+          );
+        }
+
+        // Vertical helper.
+        let row_stride = width * 4;
+        let mut fast = vec![0u8; width * height * 4];
+        let mut reference = vec![0u8; width * height * 4];
+        for x in 0..width {
+          unsafe {
+            box_blur_column_vertical_to_ptr(
+              &src,
+              fast.as_mut_ptr(),
+              row_stride,
+              height,
+              x * 4,
+              radius,
+              half,
+              div,
+            );
+          }
+          reference_box_blur_column_vertical(
+            &src,
+            &mut reference,
+            width,
+            height,
+            x,
+            radius,
+            window,
+            half,
+          );
+        }
+        assert_eq!(
+          fast, reference,
+          "vertical mismatch: {width}x{height} radius={radius}"
+        );
+      }
+    }
+  }
+
   #[test]
   fn blur_with_zero_sigma_x_only_blurs_vertically() {
     let mut pixmap = new_pixmap(3, 5).unwrap();
