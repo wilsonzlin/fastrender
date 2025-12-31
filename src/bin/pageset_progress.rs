@@ -420,6 +420,14 @@ struct ReportArgs {
   /// Print structured stats for the listed pages when present
   #[arg(long = "verbose-stats", visible_alias = "show-counts")]
   verbose_stats: bool,
+
+  /// Exit non-zero when any timeout/panic/error entry lacks stage attribution
+  #[arg(long)]
+  fail_on_missing_stages: bool,
+
+  /// Exit non-zero when ok entries have `total_ms` but no per-stage timings (all stage buckets are zero)
+  #[arg(long)]
+  fail_on_missing_stage_timings: bool,
 }
 
 #[derive(Args, Debug)]
@@ -619,6 +627,12 @@ struct StageBuckets {
   cascade: f64,
   layout: f64,
   paint: f64,
+}
+
+impl StageBuckets {
+  fn sum(&self) -> f64 {
+    self.fetch + self.css + self.cascade + self.layout + self.paint
+  }
 }
 
 pub(crate) fn current_git_sha() -> Option<String> {
@@ -2609,6 +2623,77 @@ fn print_render_stats(stats: &RenderStats, indent: &str) -> bool {
   true
 }
 
+const REPORT_OFFENDING_STEMS_LIMIT: usize = 25;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReportError {
+  missing_stages: Vec<String>,
+  missing_stage_timings: Vec<String>,
+}
+
+impl ReportError {
+  fn is_empty(&self) -> bool {
+    self.missing_stages.is_empty() && self.missing_stage_timings.is_empty()
+  }
+}
+
+fn evaluate_report_checks(
+  args: &ReportArgs,
+  progresses: &[LoadedProgress],
+) -> Result<(), ReportError> {
+  let mut error = ReportError {
+    missing_stages: Vec::new(),
+    missing_stage_timings: Vec::new(),
+  };
+
+  if args.fail_on_missing_stages {
+    for entry in progresses {
+      if is_bad_status(entry.progress.status)
+        && entry.progress.timeout_stage.is_none()
+        && entry.progress.failure_stage.is_none()
+      {
+        error.missing_stages.push(entry.stem.clone());
+      }
+    }
+  }
+
+  if args.fail_on_missing_stage_timings {
+    for entry in progresses {
+      if entry.progress.status == ProgressStatus::Ok
+        && entry.progress.total_ms.is_some()
+        && entry.progress.stages_ms.sum() == 0.0
+      {
+        error.missing_stage_timings.push(entry.stem.clone());
+      }
+    }
+  }
+
+  if error.is_empty() {
+    return Ok(());
+  }
+
+  error.missing_stages.sort();
+  error.missing_stages.dedup();
+  error.missing_stage_timings.sort();
+  error.missing_stage_timings.dedup();
+
+  Err(error)
+}
+
+fn eprint_offending_stems(stems: &[String]) {
+  let shown = stems.len().min(REPORT_OFFENDING_STEMS_LIMIT);
+  for stem in stems.iter().take(shown) {
+    eprintln!("  {stem}");
+  }
+  if stems.len() > shown {
+    eprintln!(
+      "  {} and {} more",
+      PROGRESS_NOTE_ELLIPSIS,
+      stems.len() - shown
+    );
+  }
+}
+
 fn report(args: ReportArgs) -> io::Result<()> {
   if args.fail_on_regression && args.compare.is_none() {
     eprintln!("--fail-on-regression requires --compare");
@@ -2926,6 +3011,29 @@ fn report(args: ReportArgs) -> io::Result<()> {
       }
     }
     println!();
+  }
+
+  if let Err(err) = evaluate_report_checks(&args, &progresses) {
+    let mut printed_any = false;
+    if !err.missing_stages.is_empty() {
+      eprintln!(
+        "Failing due to {} timeout/panic/error page(s) missing stage attribution:",
+        err.missing_stages.len()
+      );
+      eprint_offending_stems(&err.missing_stages);
+      printed_any = true;
+    }
+    if !err.missing_stage_timings.is_empty() {
+      if printed_any {
+        eprintln!();
+      }
+      eprintln!(
+        "Failing due to {} ok page(s) with total_ms but zero per-stage timing buckets:",
+        err.missing_stage_timings.len()
+      );
+      eprint_offending_stems(&err.missing_stage_timings);
+    }
+    std::process::exit(1);
   }
 
   if args.fail_on_bad && (status_counts.timeout > 0 || status_counts.panic > 0) {
@@ -3837,12 +3945,65 @@ mod tests {
     }
   }
 
+  fn basic_report_args() -> ReportArgs {
+    ReportArgs {
+      progress_dir: PathBuf::new(),
+      top: 10,
+      compare: None,
+      fail_on_regression: false,
+      regression_threshold_percent: 10.0,
+      fail_on_bad: false,
+      include_trace: false,
+      trace_progress_dir: PathBuf::new(),
+      trace_dir: PathBuf::new(),
+      verbose_stats: false,
+      fail_on_missing_stages: false,
+      fail_on_missing_stage_timings: false,
+    }
+  }
+
   fn status_set(statuses: &[ProgressStatus]) -> HashSet<ProgressStatus> {
     let mut set = HashSet::new();
     for status in statuses {
       set.insert(*status);
     }
     set
+  }
+
+  #[test]
+  fn report_gate_fails_on_missing_failure_stage() {
+    let mut missing = make_progress("missing", ProgressStatus::Timeout, None, "unknown");
+    missing.progress.timeout_stage = None;
+    missing.progress.failure_stage = None;
+
+    let mut ok = make_progress("ok", ProgressStatus::Timeout, None, "unknown");
+    ok.progress.timeout_stage = Some(ProgressStage::Layout);
+
+    let progresses = vec![missing, ok];
+
+    let mut args = basic_report_args();
+    args.fail_on_missing_stages = true;
+
+    let err = evaluate_report_checks(&args, &progresses).unwrap_err();
+    assert_eq!(err.missing_stages, vec!["missing".to_string()]);
+    assert!(err.missing_stage_timings.is_empty());
+  }
+
+  #[test]
+  fn report_gate_fails_on_missing_stage_timings() {
+    let missing = make_progress("missing", ProgressStatus::Ok, Some(15.0), "layout");
+
+    let mut ok = make_progress("ok", ProgressStatus::Ok, Some(12.0), "layout");
+    ok.progress.stages_ms.fetch = 1.0;
+
+    let progresses = vec![missing, ok];
+
+    let mut args = basic_report_args();
+    args.fail_on_missing_stage_timings = true;
+
+    let err = evaluate_report_checks(&args, &progresses).unwrap_err();
+    assert_eq!(err.missing_stage_timings, vec!["missing".to_string()]);
+    assert!(err.missing_stages.is_empty());
   }
 
   struct EnvVarGuard {
