@@ -13,8 +13,8 @@
 use crate::geometry::Size;
 use crate::layout::constraints::AvailableSpace as CrateAvailableSpace;
 use crate::layout::constraints::LayoutConstraints;
-use rustc_hash::FxHasher;
-use std::collections::{HashMap, VecDeque};
+use rustc_hash::{FxHashMap, FxHasher};
+use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -468,7 +468,7 @@ impl CachedTaffyTemplate {
 
 #[derive(Default)]
 struct TaffyNodeCacheInner {
-  templates: HashMap<TaffyNodeCacheKey, Arc<CachedTaffyTemplate>>,
+  templates: FxHashMap<TaffyNodeCacheKey, Arc<CachedTaffyTemplate>>,
   order: VecDeque<TaffyNodeCacheKey>,
 }
 
