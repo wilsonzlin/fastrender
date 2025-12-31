@@ -2325,7 +2325,6 @@ struct LayerChild {
 #[derive(Debug, Default, Clone)]
 struct LayerRegistry {
   root: LayerNode,
-  next_anonymous: u32,
 }
 
 impl LayerRegistry {
@@ -2346,9 +2345,12 @@ impl LayerRegistry {
   }
 
   fn register_anonymous(&mut self, base: &[u32]) {
-    let name = format!("__anon{}", self.next_anonymous);
-    self.next_anonymous += 1;
-    self.register_path(base, &[name]);
+    let node: &mut LayerNode = if let Some(existing) = self.get_node_mut(base) {
+      existing
+    } else {
+      &mut self.root
+    };
+    let _ = node.ensure_anonymous_child();
   }
 
   fn ensure_path(&mut self, base: &[u32], name: &[String]) -> Arc<[u32]> {
@@ -2406,9 +2408,19 @@ impl LayerRegistry {
   }
 
   fn ensure_anonymous(&mut self, base: &[u32]) -> Arc<[u32]> {
-    let name = format!("__anon{}", self.next_anonymous);
-    self.next_anonymous += 1;
-    self.ensure_path(base, &[name])
+    let (base, node): (&[u32], &mut LayerNode) = if let Some(existing) = self.get_node_mut(base) {
+      (base, existing)
+    } else {
+      (&[], &mut self.root)
+    };
+
+    let (order, _next, path_slot) = node.ensure_anonymous_child();
+    let mut path = Vec::with_capacity(base.len().saturating_add(1));
+    path.extend_from_slice(base);
+    path.push(order);
+    let arc: Arc<[u32]> = Arc::from(path);
+    *path_slot = Some(arc.clone());
+    arc
   }
 
   fn get_node_mut(&mut self, path: &[u32]) -> Option<&mut LayerNode> {
@@ -2440,6 +2452,21 @@ impl LayerNode {
     let order = self.children.len() as u32;
     self.children.push(LayerChild {
       name: name.to_string(),
+      order,
+      node: LayerNode::default(),
+      path: None,
+    });
+    let len = self.children.len();
+    let child = &mut self.children[len - 1];
+    (child.order, &mut child.node, &mut child.path)
+  }
+
+  fn ensure_anonymous_child(&mut self) -> (u32, &mut LayerNode, &mut Option<Arc<[u32]>>) {
+    let order = self.children.len() as u32;
+    self.children.push(LayerChild {
+      // Anonymous layers cannot be referred to by name and are always unique. Use an empty string
+      // (invalid for authored names) so named lookups never match anonymous siblings.
+      name: String::new(),
       order,
       node: LayerNode::default(),
       path: None,
