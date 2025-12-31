@@ -916,6 +916,10 @@ thread_local! {
     RefCell::new(MaskLayerPixmapScratch::default());
 }
 
+thread_local! {
+  static MASK_RENDER_SCRATCH: RefCell<Option<Mask>> = RefCell::new(None);
+}
+
 fn clip_mask_dirty_bounds(rect: Rect, width: u32, height: u32) -> Option<ClipMaskDirtyRect> {
   let x0 = rect.x().floor().max(0.0) as u32;
   let y0 = rect.y().floor().max(0.0) as u32;
@@ -3505,6 +3509,8 @@ impl DisplayListRenderer {
   }
 
   fn render_mask(&mut self, mask: &ResolvedMask) -> Option<OffsetMask> {
+    let mut reusable_mask = MASK_RENDER_SCRATCH.with(|cell| cell.borrow_mut().take());
+
     let viewport = (
       self.canvas.width() as f32 / self.scale,
       self.canvas.height() as f32 / self.scale,
@@ -3709,7 +3715,18 @@ impl DisplayListRenderer {
         continue;
       }
 
-      let layer_mask = MASK_LAYER_PIXMAP_SCRATCH.with(|cell| {
+      let wants_reuse =
+        reusable_mask.is_some() && matches!(combined, None | Some(CompositeMask::Transparent));
+      let mut layer_mask = if wants_reuse {
+        match reusable_mask.take() {
+          Some(mask) if mask.width() == region_w && mask.height() == region_h => mask,
+          Some(_) | None => Mask::new(region_w, region_h)?,
+        }
+      } else {
+        Mask::new(region_w, region_h)?
+      };
+
+      MASK_LAYER_PIXMAP_SCRATCH.with(|cell| {
         let mut scratch = cell.borrow_mut();
         let replace = match scratch.pixmap.as_ref() {
           Some(existing) => existing.width() != region_w || existing.height() != region_h,
@@ -3738,14 +3755,13 @@ impl DisplayListRenderer {
           }
         }
 
-        let mut layer_mask = Mask::new(region_w, region_h)?;
         let mut src_idx = 3usize;
         let src = mask_pixmap.data();
         for dst in layer_mask.data_mut().iter_mut() {
           *dst = src[src_idx];
           src_idx += 4;
         }
-        Some(layer_mask)
+        Some(())
       })?;
 
       let layer_mask = CompositeMask::Region(OffsetMask {
@@ -3760,7 +3776,12 @@ impl DisplayListRenderer {
     }
 
     match combined {
-      None => None,
+      None => {
+        MASK_RENDER_SCRATCH.with(|cell| {
+          *cell.borrow_mut() = reusable_mask;
+        });
+        None
+      }
       Some(CompositeMask::Region(mask)) => Some(mask),
       Some(CompositeMask::Transparent) => {
         let mut mask = Mask::new(1, 1)?;
@@ -5203,7 +5224,15 @@ impl DisplayListRenderer {
 
           if let Some(mask_style) = record.mask.as_ref() {
             if let Some(mask) = self.render_mask(mask_style) {
-              if !apply_mask_with_offset(&mut layer, origin, &mask.mask, mask.origin) {
+              let OffsetMask {
+                mask,
+                origin: mask_origin,
+              } = mask;
+              let applied = apply_mask_with_offset(&mut layer, origin, &mask, mask_origin);
+              MASK_RENDER_SCRATCH.with(|cell| {
+                *cell.borrow_mut() = Some(mask);
+              });
+              if !applied {
                 return Ok(());
               }
             }
@@ -10351,6 +10380,12 @@ mod tests {
     MASK_LAYER_PIXMAP_SCRATCH.with(|cell| {
       *cell.borrow_mut() = MaskLayerPixmapScratch::default();
     });
+    MASK_RENDER_SCRATCH.with(|cell| {
+      *cell.borrow_mut() = None;
+    });
+    MASK_RENDER_SCRATCH.with(|cell| {
+      *cell.borrow_mut() = None;
+    });
 
     let mut renderer = DisplayListRenderer::new(200, 200, Rgba::WHITE, FontContext::new()).unwrap();
 
@@ -10395,6 +10430,114 @@ mod tests {
     assert_eq!(
       scratch_allocs, 1,
       "expected render_mask to allocate its layer scratch pixmap once, got {scratch_allocs} allocations: {allocations:?}"
+    );
+  }
+
+  #[test]
+  fn render_mask_reuses_combined_mask_scratch_between_calls() {
+    MASK_RENDER_SCRATCH.with(|cell| {
+      *cell.borrow_mut() = None;
+    });
+
+    let mut renderer = DisplayListRenderer::new(200, 200, Rgba::WHITE, FontContext::new()).unwrap();
+
+    let bounds = Rect::from_xywh(50.0, 60.0, 10.0, 10.0);
+    let rects = mask_rects(bounds, (0.0, 0.0, 0.0, 0.0));
+
+    let image = ImageData::new_pixels(1, 1, vec![0, 0, 0, 255]);
+    let layer = ResolvedMaskLayer {
+      image: ResolvedMaskImage::Raster(image),
+      repeat: BackgroundRepeat::no_repeat(),
+      position: BackgroundPosition::default(),
+      size: BackgroundSize::Explicit(
+        BackgroundSizeComponent::Length(Length::percent(100.0)),
+        BackgroundSizeComponent::Length(Length::percent(100.0)),
+      ),
+      origin: MaskOrigin::BorderBox,
+      clip: MaskClip::BorderBox,
+      mode: MaskMode::Alpha,
+      composite: MaskComposite::Add,
+    };
+
+    let mask = ResolvedMask {
+      layers: vec![layer],
+      color: Rgba::BLACK,
+      font_size: 16.0,
+      root_font_size: 16.0,
+      rects,
+    };
+
+    let ptr_first = {
+      let rendered = renderer.render_mask(&mask).expect("mask rendered");
+      let ptr = rendered.mask.data().as_ptr();
+      MASK_RENDER_SCRATCH.with(|cell| {
+        *cell.borrow_mut() = Some(rendered.mask);
+      });
+      ptr
+    };
+
+    let ptr_second = {
+      let rendered = renderer.render_mask(&mask).expect("mask rendered");
+      rendered.mask.data().as_ptr()
+    };
+
+    assert_eq!(
+      ptr_first, ptr_second,
+      "expected render_mask to reuse the combined mask allocation between calls"
+    );
+  }
+
+  #[test]
+  fn render_mask_reuses_combined_mask_scratch_between_calls() {
+    MASK_RENDER_SCRATCH.with(|cell| {
+      *cell.borrow_mut() = None;
+    });
+
+    let mut renderer = DisplayListRenderer::new(200, 200, Rgba::WHITE, FontContext::new()).unwrap();
+
+    let bounds = Rect::from_xywh(50.0, 60.0, 10.0, 10.0);
+    let rects = mask_rects(bounds, (0.0, 0.0, 0.0, 0.0));
+
+    let image = ImageData::new_pixels(1, 1, vec![0, 0, 0, 255]);
+    let layer = ResolvedMaskLayer {
+      image: ResolvedMaskImage::Raster(image),
+      repeat: BackgroundRepeat::no_repeat(),
+      position: BackgroundPosition::default(),
+      size: BackgroundSize::Explicit(
+        BackgroundSizeComponent::Length(Length::percent(100.0)),
+        BackgroundSizeComponent::Length(Length::percent(100.0)),
+      ),
+      origin: MaskOrigin::BorderBox,
+      clip: MaskClip::BorderBox,
+      mode: MaskMode::Alpha,
+      composite: MaskComposite::Add,
+    };
+
+    let mask = ResolvedMask {
+      layers: vec![layer],
+      color: Rgba::BLACK,
+      font_size: 16.0,
+      root_font_size: 16.0,
+      rects,
+    };
+
+    let ptr_first = {
+      let rendered = renderer.render_mask(&mask).expect("mask rendered");
+      let ptr = rendered.mask.data().as_ptr();
+      MASK_RENDER_SCRATCH.with(|cell| {
+        *cell.borrow_mut() = Some(rendered.mask);
+      });
+      ptr
+    };
+
+    let ptr_second = {
+      let rendered = renderer.render_mask(&mask).expect("mask rendered");
+      rendered.mask.data().as_ptr()
+    };
+
+    assert_eq!(
+      ptr_first, ptr_second,
+      "expected render_mask to reuse the combined mask allocation between calls"
     );
   }
 
@@ -10655,81 +10798,4 @@ mod tests {
     // Root background tinted by opacity.
     assert_eq!(pixel(&pixmap, 0, 0), (255, 128, 128, 255));
     // Child content is affected by the same stacking context opacity.
-    assert_eq!(pixel(&pixmap, 1, 1), (128, 128, 255, 255));
-  }
-
-  #[test]
-  fn opacity_groups_composite_as_layers() {
-    let renderer = DisplayListRenderer::new(8, 8, Rgba::WHITE, FontContext::new()).unwrap();
-    let mut list = DisplayList::new();
-    list.push(DisplayItem::PushOpacity(OpacityItem { opacity: 0.5 }));
-    list.push(DisplayItem::FillRect(FillRectItem {
-      rect: Rect::from_xywh(0.0, 0.0, 6.0, 6.0),
-      color: Rgba::rgb(255, 0, 0),
-    }));
-    list.push(DisplayItem::FillRect(FillRectItem {
-      rect: Rect::from_xywh(3.0, 3.0, 6.0, 6.0),
-      color: Rgba::rgb(255, 0, 0),
-    }));
-    list.push(DisplayItem::PopOpacity);
-
-    let pixmap = renderer.render(&list).unwrap();
-    let single = pixel(&pixmap, 1, 1);
-    let overlap = pixel(&pixmap, 4, 4);
-
-    assert_eq!(
-      single, overlap,
-      "opacity should apply once across the group"
-    );
-    assert_eq!(single, (255, 128, 128, 255));
-  }
-
-  fn generate_spread_test_pixmap(width: u32, height: u32, seed: u32) -> Pixmap {
-    let mut pixmap = new_pixmap(width, height).unwrap();
-    let pixels = pixmap.pixels_mut();
-    for y in 0..height {
-      for x in 0..width {
-        let idx = (y * width + x) as usize;
-        let base = seed
-          .wrapping_add(idx as u32 * 37)
-          .wrapping_add(x * 17)
-          .wrapping_add(y * 23);
-        let r = (base % 256) as u8;
-        let g = ((base * 3 + 7) % 256) as u8;
-        let b = ((base * 5 + 11) % 256) as u8;
-        let a = ((base * 7 + 13) % 256) as u8;
-        pixels[idx] =
-          PremultipliedColorU8::from_rgba(r, g, b, a).unwrap_or(PremultipliedColorU8::TRANSPARENT);
-      }
-    }
-    pixmap
-  }
-
-  #[test]
-  fn apply_spread_matches_reference() {
-    let cases = [
-      (2, 3, vec![4.0, -4.0]),
-      (3, 3, vec![1.0, -1.0, 2.0, -2.5]),
-      (5, 4, vec![3.0, -3.5, 1.5]),
-    ];
-
-    for (width, height, spreads) in cases {
-      let base = generate_spread_test_pixmap(width, height, width + height);
-      for spread in spreads {
-        let mut fast = base.clone();
-        apply_spread(&mut fast, spread);
-
-        let mut reference = base.clone();
-        apply_spread_slow_reference(&mut reference, spread);
-
-        assert_eq!(
-          fast.data(),
-          reference.data(),
-          "spread {spread} on {}x{}",
-          width,
-          height
-        );
-      }
-    }
-  }
-}
+    assert_eq!(pixel(&pixmap, 1, 1), (128,
