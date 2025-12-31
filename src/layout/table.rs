@@ -83,7 +83,7 @@ use rayon::prelude::*;
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 fn check_layout_deadline(counter: &mut usize) -> Result<(), LayoutError> {
@@ -3902,14 +3902,25 @@ pub(crate) struct TableLayoutStats {
   pub(crate) cell_layouts: usize,
 }
 
+static TABLE_STATS_ENABLED: AtomicBool = AtomicBool::new(false);
 static TABLE_CELL_INTRINSIC_MEASUREMENTS: AtomicUsize = AtomicUsize::new(0);
 static TABLE_CELL_LAYOUTS: AtomicUsize = AtomicUsize::new(0);
 
+pub(crate) fn set_table_stats_enabled(enabled: bool) {
+  TABLE_STATS_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
 fn record_table_cell_intrinsic_measurement() {
+  if !TABLE_STATS_ENABLED.load(Ordering::Relaxed) {
+    return;
+  }
   TABLE_CELL_INTRINSIC_MEASUREMENTS.fetch_add(1, Ordering::Relaxed);
 }
 
 fn record_table_cell_layout() {
+  if !TABLE_STATS_ENABLED.load(Ordering::Relaxed) {
+    return;
+  }
   TABLE_CELL_LAYOUTS.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -3926,9 +3937,6 @@ pub(crate) fn table_stats_counters() -> TableLayoutStats {
 }
 
 pub(crate) fn log_table_stats() {
-  if !runtime::runtime_toggles().truthy("FASTR_TABLE_STATS") {
-    return;
-  }
   let stats = table_stats_counters();
   eprintln!(
     "table_stats cell_intrinsic_measurements={} cell_layouts={} (FASTR_TABLE_STATS=1)",

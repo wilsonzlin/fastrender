@@ -729,6 +729,11 @@ impl LayoutEngine {
       crate::layout::fragment_clone_profile::fragment_clone_profile_enabled();
     let _fragment_instrumentation_guard = instrument_fragments
       .then(|| crate::tree::fragment_tree::enable_fragment_instrumentation(true));
+    let table_stats_enabled = runtime::runtime_toggles().truthy("FASTR_TABLE_STATS");
+    crate::layout::table::set_table_stats_enabled(table_stats_enabled);
+    if table_stats_enabled {
+      crate::layout::table::reset_table_stats_counters();
+    }
     let use_cache = self.config.enable_cache;
     let reset_for_run = reset_caches || !use_cache;
 
