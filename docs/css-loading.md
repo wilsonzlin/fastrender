@@ -14,7 +14,10 @@ In the render pipeline:
 - URL resolution and `url(...)` rewriting helpers live in `src/css/loader.rs`.
 
 FastRender also exposes `inline_stylesheets_*` helpers that explicitly fetch linked stylesheets and
-inject a `<style>` block into HTML for tooling. These helpers are not used by the main render path.
+inject a `<style>` block into HTML. These are currently used by `FastRender::render_url` /
+`FastRender::render_fetched_html_with_options*` to inline external CSS before DOM parsing (including
+heuristic extraction of CSS URLs embedded in scripts/attributes). This pre-pass exists to improve
+coverage on pages that rely heavily on JavaScript-driven stylesheet loading.
 
 ## Link resolution rules (high level)
 
