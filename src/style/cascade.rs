@@ -2080,6 +2080,7 @@ struct CascadeScratch {
   part_seen: CandidateSet,
   scope_cache: ScopeResolutionCache,
   presentational_hint_layer_orders: FxHashMap<u32, Arc<[u32]>>,
+  unlayered_layer_orders: FxHashMap<u32, Arc<[u32]>>,
 }
 
 impl CascadeScratch {
@@ -2095,6 +2096,7 @@ impl CascadeScratch {
       part_seen: CandidateSet::new(rule_count),
       scope_cache: ScopeResolutionCache::default(),
       presentational_hint_layer_orders: FxHashMap::default(),
+      unlayered_layer_orders: FxHashMap::default(),
     }
   }
 
@@ -2107,6 +2109,20 @@ impl CascadeScratch {
     let layer_order: Arc<[u32]> = Arc::from([tree_scope_prefix].as_slice());
     self
       .presentational_hint_layer_orders
+      .insert(tree_scope_prefix, layer_order.clone());
+    layer_order
+  }
+
+  fn unlayered_layer_order(&mut self, tree_scope_prefix: u32) -> Arc<[u32]> {
+    if tree_scope_prefix == DOCUMENT_TREE_SCOPE_PREFIX {
+      return document_unlayered_layer_order();
+    }
+    if let Some(hit) = self.unlayered_layer_orders.get(&tree_scope_prefix) {
+      return hit.clone();
+    }
+    let layer_order: Arc<[u32]> = Arc::from([tree_scope_prefix, u32::MAX].as_slice());
+    self
+      .unlayered_layer_orders
       .insert(tree_scope_prefix, layer_order.clone());
     layer_order
   }
@@ -5317,7 +5333,7 @@ fn append_presentational_hints<'a>(
 fn ua_default_rules(
   node: &DomNode,
   parent_direction: Direction,
-  tree_scope_prefix: u32,
+  layer_order: &Arc<[u32]>,
 ) -> Vec<MatchedRule<'static>> {
   let mut rules = Vec::new();
   let tag = match node.tag_name() {
@@ -5327,7 +5343,7 @@ fn ua_default_rules(
   // UA default rules should participate in the same tree-scope-prefixed layer ordering as UA
   // stylesheet rules so higher-order UA defaults (e.g. link pseudo-state overrides) can outrank
   // baseline UA stylesheet declarations.
-  let layer_order = layer_order_with_tree_scope(&[u32::MAX], tree_scope_prefix);
+  let layer_order = layer_order.clone();
 
   let mut add_rule = |decls: Cow<'static, [Declaration]>, order: usize| {
     rules.push(MatchedRule {
@@ -6152,7 +6168,7 @@ fn compute_base_styles<'a>(
   matching_rules.extend(ua_default_rules(
     node,
     parent_styles.direction,
-    inline_tree_scope,
+    &scratch.unlayered_layer_order(inline_tree_scope),
   ));
   if include_starting_style {
     prioritize_starting_style_rules(&mut matching_rules);
