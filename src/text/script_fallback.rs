@@ -16,7 +16,12 @@ use crate::text::pipeline::Script;
 
 pub(crate) fn preferred_families(script: Script, language: &str) -> &'static [&'static str] {
   match script {
-    Script::Common => &["Noto Sans Symbols 2", "Noto Sans Symbols", "STIX Two Math"],
+    Script::Common => &[
+      "Noto Sans",
+      "Noto Sans Symbols 2",
+      "Noto Sans Symbols",
+      "STIX Two Math",
+    ],
     Script::Latin | Script::Greek | Script::Cyrillic => &[
       "Noto Sans",
       "Noto Sans Symbols 2",
@@ -26,66 +31,77 @@ pub(crate) fn preferred_families(script: Script, language: &str) -> &'static [&'
     ],
     Script::Hebrew => &[
       "Noto Sans Hebrew",
+      "Noto Sans",
       "Noto Sans Symbols 2",
       "Noto Sans Symbols",
       "STIX Two Math",
     ],
     Script::Thai => &[
       "Noto Sans Thai",
+      "Noto Sans",
       "Noto Sans Symbols 2",
       "Noto Sans Symbols",
       "STIX Two Math",
     ],
     Script::Bengali => &[
       "Noto Sans Bengali",
+      "Noto Sans",
       "Noto Sans Symbols 2",
       "Noto Sans Symbols",
       "STIX Two Math",
     ],
     Script::Devanagari => &[
       "Noto Sans Devanagari",
+      "Noto Sans",
       "Noto Sans Symbols 2",
       "Noto Sans Symbols",
       "STIX Two Math",
     ],
     Script::Tamil => &[
       "Noto Sans Tamil",
+      "Noto Sans",
       "Noto Sans Symbols 2",
       "Noto Sans Symbols",
       "STIX Two Math",
     ],
     Script::Arabic => &[
       "Noto Sans Arabic",
+      "Noto Sans",
       "Noto Sans Symbols 2",
       "Noto Sans Symbols",
       "STIX Two Math",
     ],
     Script::Syriac => &[
       "Noto Sans Syriac",
+      "Noto Sans",
       "Noto Sans Symbols 2",
       "Noto Sans Symbols",
       "STIX Two Math",
     ],
     Script::Thaana => &[
       "Noto Sans Thaana",
+      "Noto Sans",
       "Noto Sans Symbols 2",
       "Noto Sans Symbols",
       "STIX Two Math",
     ],
     Script::Nko => &[
       "Noto Sans NKo",
+      "Noto Sans",
       "Noto Sans Symbols 2",
       "Noto Sans Symbols",
       "STIX Two Math",
     ],
     Script::Javanese => &[
       "Noto Sans Javanese",
+      "Noto Sans",
       "Noto Sans Symbols 2",
       "Noto Sans Symbols",
       "STIX Two Math",
     ],
     Script::Hangul => &[
       "Noto Sans KR",
+      "Noto Sans",
       "Noto Sans Symbols 2",
       "Noto Sans Symbols",
       "STIX Two Math",
@@ -109,6 +125,10 @@ mod tests {
       (Script::Tamil, "Noto Sans Tamil"),
     ] {
       assert_eq!(preferred_families(script, "")[0], expected_first);
+      assert!(
+        preferred_families(script, "").contains(&"Noto Sans"),
+        "expected {script:?} fallback list to include general text face"
+      );
     }
   }
 
