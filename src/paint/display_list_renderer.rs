@@ -750,9 +750,18 @@ fn apply_backdrop_filters(
     return Ok(());
   }
 
-  let mut region = match new_pixmap(region_w, region_h) {
-    Some(p) => p,
-    None => return Ok(()),
+  let mut scratch = BACKDROP_FILTER_SCRATCH.with(|cell| std::mem::take(&mut *cell.borrow_mut()));
+  let mut region = match scratch.region.take() {
+    Some(existing) if existing.width() == region_w && existing.height() == region_h => existing,
+    _ => match new_pixmap(region_w, region_h) {
+      Some(p) => p,
+      None => {
+        BACKDROP_FILTER_SCRATCH.with(|cell| {
+          *cell.borrow_mut() = scratch;
+        });
+        return Ok(());
+      }
+    },
   };
 
   let bytes_per_row = pixmap.width() as usize * 4;
@@ -774,12 +783,27 @@ fn apply_backdrop_filters(
     bounds.width(),
     bounds.height(),
   );
-  apply_filters(&mut region, filters, scale, local_bbox, cache)?;
+  if let Err(err) = apply_filters(&mut region, filters, scale, local_bbox, cache) {
+    scratch.region = Some(region);
+    BACKDROP_FILTER_SCRATCH.with(|cell| {
+      *cell.borrow_mut() = scratch;
+    });
+    return Err(err);
+  }
 
   let radii_mask = if !radii.is_zero() {
-    let mut mask = match Mask::new(region_w, region_h) {
-      Some(m) => m,
-      None => return Ok(()),
+    let mut mask = match scratch.radii_mask.take() {
+      Some(existing) if existing.width() == region_w && existing.height() == region_h => existing,
+      _ => match Mask::new(region_w, region_h) {
+        Some(m) => m,
+        None => {
+          scratch.region = Some(region);
+          BACKDROP_FILTER_SCRATCH.with(|cell| {
+            *cell.borrow_mut() = scratch;
+          });
+          return Ok(());
+        }
+      },
     };
     mask.data_mut().fill(0);
     let local_x = bounds.x() - clamped_x as f32;
@@ -792,6 +816,11 @@ fn apply_backdrop_filters(
       bounds.height(),
       &clamped,
     ) else {
+      scratch.region = Some(region);
+      scratch.radii_mask = Some(mask);
+      BACKDROP_FILTER_SCRATCH.with(|cell| {
+        *cell.borrow_mut() = scratch;
+      });
       return Ok(());
     };
     mask.fill_path(
@@ -808,11 +837,25 @@ fn apply_backdrop_filters(
   let mut write_rect = *bounds;
   if let Some(clip) = clip_bounds {
     let Some(intersection) = write_rect.intersection(clip) else {
+      scratch.region = Some(region);
+      if let Some(mask) = radii_mask {
+        scratch.radii_mask = Some(mask);
+      }
+      BACKDROP_FILTER_SCRATCH.with(|cell| {
+        *cell.borrow_mut() = scratch;
+      });
       return Ok(());
     };
     write_rect = intersection;
   }
   if write_rect.width() <= 0.0 || write_rect.height() <= 0.0 {
+    scratch.region = Some(region);
+    if let Some(mask) = radii_mask {
+      scratch.radii_mask = Some(mask);
+    }
+    BACKDROP_FILTER_SCRATCH.with(|cell| {
+      *cell.borrow_mut() = scratch;
+    });
     return Ok(());
   }
 
@@ -825,80 +868,97 @@ fn apply_backdrop_filters(
     .min(pix_h - write_y as i32)
     .max(0) as u32;
   if write_w == 0 || write_h == 0 {
+    scratch.region = Some(region);
+    if let Some(mask) = radii_mask {
+      scratch.radii_mask = Some(mask);
+    }
+    BACKDROP_FILTER_SCRATCH.with(|cell| {
+      *cell.borrow_mut() = scratch;
+    });
     return Ok(());
   }
 
   let src_start_x = (write_x as i32 - clamped_x as i32) as u32;
   let src_start_y = (write_y as i32 - clamped_y as i32) as u32;
-  let dest_data = pixmap.data_mut();
-  let src_data = region.data();
-  let region_width = region.width() as usize;
-  let clip_mask_data =
-    clip_mask.map(|mask| (mask.data(), mask.width() as usize, mask.height() as usize));
-  let radii_mask_data = radii_mask.as_ref().map(|mask| mask.data());
+  {
+    let dest_data = pixmap.data_mut();
+    let src_data = region.data();
+    let region_width = region.width() as usize;
+    let clip_mask_data =
+      clip_mask.map(|mask| (mask.data(), mask.width() as usize, mask.height() as usize));
+    let radii_mask_data = radii_mask.as_ref().map(|mask| mask.data());
 
-  if clip_mask_data.is_none() && radii_mask_data.is_none() {
-    let row_bytes = write_w as usize * 4;
-    for row in 0..write_h as usize {
-      let dst_idx = (write_y as usize + row) * bytes_per_row + write_x as usize * 4;
-      let src_idx = ((src_start_y as usize + row) * region_width + src_start_x as usize) * 4;
-      dest_data[dst_idx..dst_idx + row_bytes]
-        .copy_from_slice(&src_data[src_idx..src_idx + row_bytes]);
-    }
-    return Ok(());
-  }
+    if clip_mask_data.is_none() && radii_mask_data.is_none() {
+      let row_bytes = write_w as usize * 4;
+      for row in 0..write_h as usize {
+        let dst_idx = (write_y as usize + row) * bytes_per_row + write_x as usize * 4;
+        let src_idx = ((src_start_y as usize + row) * region_width + src_start_x as usize) * 4;
+        dest_data[dst_idx..dst_idx + row_bytes]
+          .copy_from_slice(&src_data[src_idx..src_idx + row_bytes]);
+      }
+    } else {
+      for row in 0..write_h as usize {
+        let dst_idx = (write_y as usize + row) * bytes_per_row + write_x as usize * 4;
+        let src_idx = ((src_start_y as usize + row) * region_width + src_start_x as usize) * 4;
+        let mask_y = write_y as usize + row;
 
-  for row in 0..write_h as usize {
-    let dst_idx = (write_y as usize + row) * bytes_per_row + write_x as usize * 4;
-    let src_idx = ((src_start_y as usize + row) * region_width + src_start_x as usize) * 4;
-    let mask_y = write_y as usize + row;
+        for col in 0..write_w as usize {
+          let dest_offset = dst_idx + col * 4;
+          let src_offset = src_idx + col * 4;
+          let mut coverage = 255u16;
 
-    for col in 0..write_w as usize {
-      let dest_offset = dst_idx + col * 4;
-      let src_offset = src_idx + col * 4;
-      let mut coverage = 255u16;
+          if let Some((mask_data, mask_w, mask_h)) = &clip_mask_data {
+            let mask_x = write_x as usize + col;
+            if mask_x >= *mask_w || mask_y >= *mask_h {
+              coverage = 0;
+            } else {
+              let mask_idx = mask_y * mask_w + mask_x;
+              coverage = div_255(coverage * mask_data[mask_idx] as u16);
+            }
+          }
 
-        if let Some((mask_data, mask_w, mask_h)) = &clip_mask_data {
-          let mask_x = write_x as usize + col;
-          if mask_x >= *mask_w || mask_y >= *mask_h {
-            coverage = 0;
-          } else {
-            let mask_idx = mask_y * mask_w + mask_x;
+          if coverage == 0 {
+            continue;
+          }
+
+          if let Some(mask_data) = radii_mask_data {
+            let mask_idx =
+              (src_start_y as usize + row) * region_width + (src_start_x as usize + col);
             coverage = div_255(coverage * mask_data[mask_idx] as u16);
           }
+
+          if coverage >= 255 {
+            dest_data[dest_offset..dest_offset + 4]
+              .copy_from_slice(&src_data[src_offset..src_offset + 4]);
+            continue;
+          }
+
+          if coverage == 0 {
+            continue;
+          }
+
+          let cov = coverage as f32 / 255.0;
+          let inv = 1.0 - cov;
+          let src_px = &src_data[src_offset..src_offset + 4];
+          let dst_slice = &mut dest_data[dest_offset..dest_offset + 4];
+          for i in 0..4 {
+            let val = (src_px[i] as f32 * cov + dst_slice[i] as f32 * inv)
+              .round()
+              .clamp(0.0, 255.0) as u8;
+            dst_slice[i] = val;
+          }
         }
-
-        if coverage == 0 {
-          continue;
-        }
-
-        if let Some(mask_data) = radii_mask_data {
-          let mask_idx = (src_start_y as usize + row) * region_width + (src_start_x as usize + col);
-          coverage = div_255(coverage * mask_data[mask_idx] as u16);
-        }
-
-      if coverage >= 255 {
-        dest_data[dest_offset..dest_offset + 4]
-          .copy_from_slice(&src_data[src_offset..src_offset + 4]);
-        continue;
-      }
-
-      if coverage == 0 {
-        continue;
-      }
-
-      let cov = coverage as f32 / 255.0;
-      let inv = 1.0 - cov;
-      let src_px = &src_data[src_offset..src_offset + 4];
-      let dst_slice = &mut dest_data[dest_offset..dest_offset + 4];
-      for i in 0..4 {
-        let val = (src_px[i] as f32 * cov + dst_slice[i] as f32 * inv)
-          .round()
-          .clamp(0.0, 255.0) as u8;
-        dst_slice[i] = val;
       }
     }
   }
+
+  scratch.region = Some(region);
+  if let Some(mask) = radii_mask {
+    scratch.radii_mask = Some(mask);
+  }
+  BACKDROP_FILTER_SCRATCH.with(|cell| {
+    *cell.borrow_mut() = scratch;
+  });
   Ok(())
 }
 
@@ -933,6 +993,17 @@ thread_local! {
 
 thread_local! {
   static MASK_RENDER_SCRATCH: RefCell<Option<Mask>> = RefCell::new(None);
+}
+
+#[derive(Default)]
+struct BackdropFilterScratch {
+  region: Option<Pixmap>,
+  radii_mask: Option<Mask>,
+}
+
+thread_local! {
+  static BACKDROP_FILTER_SCRATCH: RefCell<BackdropFilterScratch> =
+    RefCell::new(BackdropFilterScratch::default());
 }
 
 fn clip_mask_dirty_bounds(rect: Rect, width: u32, height: u32) -> Option<ClipMaskDirtyRect> {
@@ -8080,6 +8151,10 @@ mod tests {
 
   #[test]
   fn backdrop_filters_radii_mask_avoids_extra_pixmap_allocation() {
+    BACKDROP_FILTER_SCRATCH.with(|cell| {
+      *cell.borrow_mut() = BackdropFilterScratch::default();
+    });
+
     let mut pixmap = new_pixmap(8, 8).unwrap();
     pixmap.data_mut().fill(200);
     let bounds = Rect::from_xywh(1.0, 1.0, 6.0, 6.0);
@@ -8106,6 +8181,51 @@ mod tests {
       "expected only the filtered region pixmap allocation, got {allocations:?}"
     );
     assert_eq!((allocations[0].width, allocations[0].height), (6, 6));
+  }
+
+  #[test]
+  fn backdrop_filters_reuses_filtered_region_scratch_pixmap() {
+    BACKDROP_FILTER_SCRATCH.with(|cell| {
+      *cell.borrow_mut() = BackdropFilterScratch::default();
+    });
+
+    let mut pixmap = new_pixmap(8, 8).unwrap();
+    pixmap.data_mut().fill(200);
+    let bounds = Rect::from_xywh(1.0, 1.0, 6.0, 6.0);
+    let filters = vec![ResolvedFilter::Brightness(1.25)];
+
+    apply_backdrop_filters(
+      &mut pixmap,
+      &bounds,
+      &filters,
+      BorderRadii::uniform(2.0),
+      1.0,
+      None,
+      None,
+      bounds,
+      None,
+    )
+    .expect("backdrop filter warm-up");
+
+    let recorder = crate::paint::pixmap::NewPixmapAllocRecorder::start();
+    apply_backdrop_filters(
+      &mut pixmap,
+      &bounds,
+      &filters,
+      BorderRadii::uniform(2.0),
+      1.0,
+      None,
+      None,
+      bounds,
+      None,
+    )
+    .expect("backdrop filter reuse");
+    let allocations = recorder.take();
+
+    assert!(
+      allocations.is_empty(),
+      "expected apply_backdrop_filters to reuse scratch pixmaps, got {allocations:?}"
+    );
   }
 
   fn expected_linear_red_blue(
