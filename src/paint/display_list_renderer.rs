@@ -853,7 +853,7 @@ fn apply_backdrop_filters(
             coverage = 0;
           } else {
             let mask_idx = mask_y * mask_w + mask_x;
-            coverage = div_255(coverage.saturating_mul(mask_data[mask_idx] as u16));
+            coverage = div_255(coverage * mask_data[mask_idx] as u16);
           }
         }
 
@@ -863,7 +863,7 @@ fn apply_backdrop_filters(
 
         if let Some(mask_data) = radii_mask_data {
           let mask_idx = (src_start_y as usize + row) * region_width + (src_start_x as usize + col);
-          coverage = div_255(coverage.saturating_mul(mask_data[mask_idx] as u16));
+          coverage = div_255(coverage * mask_data[mask_idx] as u16);
         }
 
       if coverage >= 255 {
