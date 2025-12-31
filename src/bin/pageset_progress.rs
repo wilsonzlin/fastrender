@@ -1142,8 +1142,8 @@ pub(crate) fn progress_stage_from_heartbeat(stage: StageHeartbeat) -> Option<Pro
     StageHeartbeat::ReadCache | StageHeartbeat::FollowRedirects | StageHeartbeat::DomParse => {
       Some(ProgressStage::DomParse)
     }
-    StageHeartbeat::CssInline => Some(ProgressStage::Css),
-    StageHeartbeat::Cascade => Some(ProgressStage::Cascade),
+    StageHeartbeat::CssInline | StageHeartbeat::CssParse => Some(ProgressStage::Css),
+    StageHeartbeat::Cascade | StageHeartbeat::BoxTree => Some(ProgressStage::Cascade),
     StageHeartbeat::Layout => Some(ProgressStage::Layout),
     StageHeartbeat::PaintBuild | StageHeartbeat::PaintRasterize => Some(ProgressStage::Paint),
     StageHeartbeat::Done => None,
@@ -4485,10 +4485,36 @@ mod tests {
     assert_eq!(StageHeartbeat::FollowRedirects.hotspot(), "fetch");
     assert_eq!(StageHeartbeat::DomParse.hotspot(), "fetch");
     assert_eq!(StageHeartbeat::CssInline.hotspot(), "css");
+    assert_eq!(StageHeartbeat::CssParse.hotspot(), "css");
     assert_eq!(StageHeartbeat::Cascade.hotspot(), "cascade");
+    assert_eq!(StageHeartbeat::BoxTree.hotspot(), "cascade");
     assert_eq!(StageHeartbeat::Layout.hotspot(), "layout");
     assert_eq!(StageHeartbeat::PaintBuild.hotspot(), "paint");
     assert_eq!(StageHeartbeat::PaintRasterize.hotspot(), "paint");
+  }
+
+  #[test]
+  fn heartbeat_stage_roundtrips_new_markers() {
+    for (raw, stage) in [
+      ("css_parse", StageHeartbeat::CssParse),
+      ("box_tree", StageHeartbeat::BoxTree),
+    ] {
+      assert_eq!(stage.as_str(), raw);
+      assert_eq!(StageHeartbeat::from_str(raw), Some(stage));
+      assert_eq!(StageHeartbeat::from_str(stage.as_str()), Some(stage));
+    }
+  }
+
+  #[test]
+  fn heartbeat_stage_maps_to_progress_stage() {
+    assert_eq!(
+      progress_stage_from_heartbeat(StageHeartbeat::CssParse),
+      Some(ProgressStage::Css)
+    );
+    assert_eq!(
+      progress_stage_from_heartbeat(StageHeartbeat::BoxTree),
+      Some(ProgressStage::Cascade)
+    );
   }
 
   #[test]

@@ -30,7 +30,13 @@ pub enum StageHeartbeat {
   FollowRedirects,
   CssInline,
   DomParse,
+  CssParse,
   Cascade,
+  /// DOM + computed styles → box tree.
+  ///
+  /// The heartbeat marker string is `box_tree` (not `box_gen`) so downstream
+  /// tooling can keep a stable mapping.
+  BoxTree,
   Layout,
   PaintBuild,
   PaintRasterize,
@@ -44,7 +50,9 @@ impl StageHeartbeat {
       StageHeartbeat::FollowRedirects => "follow_redirects",
       StageHeartbeat::CssInline => "css_inline",
       StageHeartbeat::DomParse => "dom_parse",
+      StageHeartbeat::CssParse => "css_parse",
       StageHeartbeat::Cascade => "cascade",
+      StageHeartbeat::BoxTree => "box_tree",
       StageHeartbeat::Layout => "layout",
       StageHeartbeat::PaintBuild => "paint_build",
       StageHeartbeat::PaintRasterize => "paint_rasterize",
@@ -58,7 +66,9 @@ impl StageHeartbeat {
       "follow_redirects" => Some(StageHeartbeat::FollowRedirects),
       "css_inline" => Some(StageHeartbeat::CssInline),
       "dom_parse" => Some(StageHeartbeat::DomParse),
+      "css_parse" => Some(StageHeartbeat::CssParse),
       "cascade" => Some(StageHeartbeat::Cascade),
+      "box_tree" => Some(StageHeartbeat::BoxTree),
       "layout" => Some(StageHeartbeat::Layout),
       "paint_build" => Some(StageHeartbeat::PaintBuild),
       "paint_rasterize" => Some(StageHeartbeat::PaintRasterize),
@@ -72,8 +82,8 @@ impl StageHeartbeat {
       StageHeartbeat::ReadCache | StageHeartbeat::FollowRedirects | StageHeartbeat::DomParse => {
         "fetch"
       }
-      StageHeartbeat::CssInline => "css",
-      StageHeartbeat::Cascade => "cascade",
+      StageHeartbeat::CssInline | StageHeartbeat::CssParse => "css",
+      StageHeartbeat::Cascade | StageHeartbeat::BoxTree => "cascade",
       StageHeartbeat::Layout => "layout",
       StageHeartbeat::PaintBuild | StageHeartbeat::PaintRasterize => "paint",
       StageHeartbeat::Done => "unknown",

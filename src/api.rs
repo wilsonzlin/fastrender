@@ -5390,6 +5390,7 @@ impl FastRender {
     let css_parse_timer = stats.as_deref().and_then(|rec| rec.timer());
     let css_parse_start = timings_enabled.then(Instant::now);
     let mut media_query_cache = MediaQueryCache::default();
+    record_stage(StageHeartbeat::CssParse);
     let style_set = {
       let _span = trace.span("css_parse", "style");
       self.collect_document_style_set(&dom_with_state, &media_ctx, &mut media_query_cache)?
@@ -5556,6 +5557,7 @@ impl FastRender {
     let box_tree_timer = stats.as_deref().and_then(|rec| rec.timer());
     let box_gen_options = self.box_generation_options();
     let box_gen_start = timings_enabled.then(Instant::now);
+    record_stage(StageHeartbeat::BoxTree);
     let mut box_tree = {
       let _span = trace.span("box_gen", "layout");
       crate::tree::box_generation::generate_box_tree_with_anonymous_fixup_with_options(
@@ -5871,6 +5873,7 @@ impl FastRender {
         let log_container_ids = toggles.usize_list("FASTR_LOG_CONTAINER_IDS");
 
         let container_cascade_timer = stats.as_deref().and_then(|rec| rec.timer());
+        record_stage(StageHeartbeat::Cascade);
         let new_styled_tree = apply_style_set_with_media_target_and_imports_cached_with_deadline(
           &dom_with_state,
           &style_set,
@@ -5931,6 +5934,7 @@ impl FastRender {
           if let Some(rec) = stats.as_deref_mut() {
             RenderStatsRecorder::add_ms(&mut rec.stats.timings.cascade_ms, container_cascade_timer);
           }
+          record_stage(StageHeartbeat::Layout);
         } else {
           if log_container_pass {
             let mut diff = 0usize;
@@ -5994,12 +5998,12 @@ impl FastRender {
               }
             }
           }
-
           if let Some(rec) = stats.as_deref_mut() {
             RenderStatsRecorder::add_ms(&mut rec.stats.timings.cascade_ms, container_cascade_timer);
           }
 
           let container_box_tree_timer = stats.as_deref().and_then(|rec| rec.timer());
+          record_stage(StageHeartbeat::BoxTree);
           box_tree =
             crate::tree::box_generation::generate_box_tree_with_anonymous_fixup(&styled_tree)?;
           self.resolve_replaced_intrinsic_sizes_for_media(
@@ -6043,6 +6047,7 @@ impl FastRender {
 
           layout_start = timings_enabled.then(Instant::now);
           let relayout_timer = stats.as_deref().and_then(|rec| rec.timer());
+          record_stage(StageHeartbeat::Layout);
           fragment_tree = self
             .layout_engine
             .layout_tree_reuse_caches_with_trace(&box_tree, trace)
