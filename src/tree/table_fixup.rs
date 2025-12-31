@@ -259,9 +259,13 @@ impl TableStructureFixer {
   }
 
   /// Creates an anonymous table row
+  #[cfg(test)]
   fn create_anonymous_row(cells: Vec<BoxNode>, parent_style: &ComputedStyle) -> BoxNode {
     let style = Self::inherited_table_style(parent_style, Display::TableRow);
+    Self::create_anonymous_row_with_style(cells, style)
+  }
 
+  fn create_anonymous_row_with_style(cells: Vec<BoxNode>, style: Arc<ComputedStyle>) -> BoxNode {
     BoxNode {
       style,
       starting_style: None,
@@ -278,9 +282,16 @@ impl TableStructureFixer {
   }
 
   /// Creates an anonymous table row group (tbody)
+  #[cfg(test)]
   fn create_anonymous_row_group(rows: Vec<BoxNode>, parent_style: &ComputedStyle) -> BoxNode {
     let style = Self::inherited_table_style(parent_style, Display::TableRowGroup);
+    Self::create_anonymous_row_group_with_style(rows, style)
+  }
 
+  fn create_anonymous_row_group_with_style(
+    rows: Vec<BoxNode>,
+    style: Arc<ComputedStyle>,
+  ) -> BoxNode {
     BoxNode {
       style,
       starting_style: None,
@@ -297,9 +308,16 @@ impl TableStructureFixer {
   }
 
   /// Creates an anonymous table cell
+  #[cfg(test)]
   fn create_anonymous_cell(children: Vec<BoxNode>, parent_style: &ComputedStyle) -> BoxNode {
     let style = Self::inherited_table_style(parent_style, Display::TableCell);
+    Self::create_anonymous_cell_with_style(children, style)
+  }
 
+  fn create_anonymous_cell_with_style(
+    children: Vec<BoxNode>,
+    style: Arc<ComputedStyle>,
+  ) -> BoxNode {
     BoxNode {
       style,
       starting_style: None,
@@ -407,6 +425,8 @@ impl TableStructureFixer {
   ) -> Result<Vec<BoxNode>> {
     let mut result = Vec::new();
     let mut loose_cells: Vec<BoxNode> = Vec::new();
+    let mut anonymous_row_style: Option<Arc<ComputedStyle>> = None;
+    let mut anonymous_cell_style: Option<Arc<ComputedStyle>> = None;
 
     for child in children {
       check_active_periodic(
@@ -420,7 +440,13 @@ impl TableStructureFixer {
       } else if Self::is_table_row_group(&child) {
         // Flush loose cells first
         if !loose_cells.is_empty() {
-          let anon_row = Self::create_anonymous_row(std::mem::take(&mut loose_cells), parent_style);
+          let style = anonymous_row_style.get_or_insert_with(|| {
+            Self::inherited_table_style(parent_style, Display::TableRow)
+          });
+          let anon_row = Self::create_anonymous_row_with_style(
+            std::mem::take(&mut loose_cells),
+            style.clone(),
+          );
           result.push(anon_row);
         }
 
@@ -430,7 +456,13 @@ impl TableStructureFixer {
       } else if Self::is_table_row(&child) {
         // Flush loose cells
         if !loose_cells.is_empty() {
-          let anon_row = Self::create_anonymous_row(std::mem::take(&mut loose_cells), parent_style);
+          let style = anonymous_row_style.get_or_insert_with(|| {
+            Self::inherited_table_style(parent_style, Display::TableRow)
+          });
+          let anon_row = Self::create_anonymous_row_with_style(
+            std::mem::take(&mut loose_cells),
+            style.clone(),
+          );
           result.push(anon_row);
         }
         result.push(Self::fixup_row(child, deadline_counter)?);
@@ -440,20 +472,32 @@ impl TableStructureFixer {
       {
         // Caption, colgroup, col - pass through (flush loose cells first)
         if !loose_cells.is_empty() {
-          let anon_row = Self::create_anonymous_row(std::mem::take(&mut loose_cells), parent_style);
+          let style = anonymous_row_style.get_or_insert_with(|| {
+            Self::inherited_table_style(parent_style, Display::TableRow)
+          });
+          let anon_row = Self::create_anonymous_row_with_style(
+            std::mem::take(&mut loose_cells),
+            style.clone(),
+          );
           result.push(anon_row);
         }
         result.push(child);
       } else {
         // Other non-table content - wrap in anonymous cell first
-        let anon_cell = Self::create_anonymous_cell(vec![child], parent_style);
+        let style = anonymous_cell_style.get_or_insert_with(|| {
+          Self::inherited_table_style(parent_style, Display::TableCell)
+        });
+        let anon_cell = Self::create_anonymous_cell_with_style(vec![child], style.clone());
         loose_cells.push(anon_cell);
       }
     }
 
     // Flush remaining loose cells
     if !loose_cells.is_empty() {
-      let anon_row = Self::create_anonymous_row(loose_cells, parent_style);
+      let style = anonymous_row_style.unwrap_or_else(|| {
+        Self::inherited_table_style(parent_style, Display::TableRow)
+      });
+      let anon_row = Self::create_anonymous_row_with_style(loose_cells, style);
       result.push(anon_row);
     }
 
@@ -462,9 +506,15 @@ impl TableStructureFixer {
 
   /// Fixes row group to ensure cells are in rows
   fn fixup_row_group(mut group: BoxNode, deadline_counter: &mut usize) -> Result<BoxNode> {
+    if !Self::row_group_needs_cell_fixup(&group) {
+      return Ok(group);
+    }
+
     let children = std::mem::take(&mut group.children);
     let mut result = Vec::new();
     let mut loose_cells: Vec<BoxNode> = Vec::new();
+    let mut anonymous_row_style: Option<Arc<ComputedStyle>> = None;
+    let mut anonymous_cell_style: Option<Arc<ComputedStyle>> = None;
 
     for child in children {
       check_active_periodic(
@@ -476,24 +526,42 @@ impl TableStructureFixer {
         loose_cells.push(child);
       } else if Self::is_table_row(&child) {
         if !loose_cells.is_empty() {
-          let anon_row = Self::create_anonymous_row(std::mem::take(&mut loose_cells), &group.style);
+          let style = anonymous_row_style.get_or_insert_with(|| {
+            Self::inherited_table_style(&group.style, Display::TableRow)
+          });
+          let anon_row = Self::create_anonymous_row_with_style(
+            std::mem::take(&mut loose_cells),
+            style.clone(),
+          );
           result.push(anon_row);
         }
         result.push(Self::fixup_row(child, deadline_counter)?);
       } else {
         // Unexpected content - wrap in anonymous cell then add to loose cells
         if !loose_cells.is_empty() {
-          let anon_row = Self::create_anonymous_row(std::mem::take(&mut loose_cells), &group.style);
+          let style = anonymous_row_style.get_or_insert_with(|| {
+            Self::inherited_table_style(&group.style, Display::TableRow)
+          });
+          let anon_row = Self::create_anonymous_row_with_style(
+            std::mem::take(&mut loose_cells),
+            style.clone(),
+          );
           result.push(anon_row);
         }
 
-        let anon_cell = Self::create_anonymous_cell(vec![child], &group.style);
+        let style = anonymous_cell_style.get_or_insert_with(|| {
+          Self::inherited_table_style(&group.style, Display::TableCell)
+        });
+        let anon_cell = Self::create_anonymous_cell_with_style(vec![child], style.clone());
         loose_cells.push(anon_cell);
       }
     }
 
     if !loose_cells.is_empty() {
-      let anon_row = Self::create_anonymous_row(loose_cells, &group.style);
+      let style = anonymous_row_style.unwrap_or_else(|| {
+        Self::inherited_table_style(&group.style, Display::TableRow)
+      });
+      let anon_row = Self::create_anonymous_row_with_style(loose_cells, style);
       result.push(anon_row);
     }
 
@@ -503,9 +571,14 @@ impl TableStructureFixer {
 
   /// Wraps non-cell row children in anonymous table cells.
   fn fixup_row(mut row: BoxNode, deadline_counter: &mut usize) -> Result<BoxNode> {
+    if !Self::row_needs_cell_fixup(&row) {
+      return Ok(row);
+    }
+
     let children = std::mem::take(&mut row.children);
     let mut fixed_children = Vec::new();
     let mut pending_non_cells: Vec<BoxNode> = Vec::new();
+    let anonymous_cell_style = Self::inherited_table_style(&row.style, Display::TableCell);
     for child in children {
       check_active_periodic(
         deadline_counter,
@@ -514,8 +587,10 @@ impl TableStructureFixer {
       )?;
       if Self::is_table_cell(&child) {
         if !pending_non_cells.is_empty() {
-          let anon_cell =
-            Self::create_anonymous_cell(std::mem::take(&mut pending_non_cells), &row.style);
+          let anon_cell = Self::create_anonymous_cell_with_style(
+            std::mem::take(&mut pending_non_cells),
+            anonymous_cell_style.clone(),
+          );
           fixed_children.push(anon_cell);
         }
         fixed_children.push(child);
@@ -524,7 +599,10 @@ impl TableStructureFixer {
       }
     }
     if !pending_non_cells.is_empty() {
-      fixed_children.push(Self::create_anonymous_cell(pending_non_cells, &row.style));
+      fixed_children.push(Self::create_anonymous_cell_with_style(
+        pending_non_cells,
+        anonymous_cell_style,
+      ));
     }
     row.children = fixed_children;
     Ok(row)
@@ -555,6 +633,8 @@ impl TableStructureFixer {
   ) -> Result<Vec<BoxNode>> {
     let mut result = Vec::new();
     let mut loose_rows: Vec<BoxNode> = Vec::new();
+    let anonymous_row_group_style =
+      Self::inherited_table_style(parent_style, Display::TableRowGroup);
 
     for child in children {
       check_active_periodic(
@@ -568,16 +648,20 @@ impl TableStructureFixer {
       } else if Self::is_table_row_group(&child) {
         // Flush loose rows first
         if !loose_rows.is_empty() {
-          let anon_tbody =
-            Self::create_anonymous_row_group(std::mem::take(&mut loose_rows), parent_style);
+          let anon_tbody = Self::create_anonymous_row_group_with_style(
+            std::mem::take(&mut loose_rows),
+            anonymous_row_group_style.clone(),
+          );
           result.push(anon_tbody);
         }
         result.push(child);
       } else {
         // Caption, colgroup, etc. - pass through
         if !loose_rows.is_empty() {
-          let anon_tbody =
-            Self::create_anonymous_row_group(std::mem::take(&mut loose_rows), parent_style);
+          let anon_tbody = Self::create_anonymous_row_group_with_style(
+            std::mem::take(&mut loose_rows),
+            anonymous_row_group_style.clone(),
+          );
           result.push(anon_tbody);
         }
         result.push(child);
@@ -586,7 +670,8 @@ impl TableStructureFixer {
 
     // Flush remaining loose rows
     if !loose_rows.is_empty() {
-      let anon_tbody = Self::create_anonymous_row_group(loose_rows, parent_style);
+      let anon_tbody =
+        Self::create_anonymous_row_group_with_style(loose_rows, anonymous_row_group_style);
       result.push(anon_tbody);
     }
 
