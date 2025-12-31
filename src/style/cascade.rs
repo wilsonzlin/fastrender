@@ -3737,6 +3737,7 @@ struct MatchedDeclaration<'a> {
   rule_order: usize,
   decl_order: usize,
   layer_order: Arc<[u32]>,
+  is_custom_property: bool,
   declaration: Cow<'a, Declaration>,
   starting_style: bool,
 }
@@ -15221,11 +15222,13 @@ fn apply_cascaded_declarations<'a, F>(
     let origin = rule.origin;
     let specificity = rule.specificity;
     let order = rule.order;
-    let layer_order = rule.layer_order.clone();
+    let layer_order = rule.layer_order;
+    let starting_style = rule.starting_style;
 
     match rule.declarations {
       Cow::Borrowed(decls) => {
         for (decl_order, declaration) in decls.iter().enumerate() {
+          let is_custom_property = declaration.property.starts_with("--");
           flattened.push(MatchedDeclaration {
             important: declaration.important,
             origin,
@@ -15233,13 +15236,15 @@ fn apply_cascaded_declarations<'a, F>(
             rule_order: order,
             decl_order,
             layer_order: layer_order.clone(),
+            is_custom_property,
             declaration: Cow::Borrowed(declaration),
-            starting_style: rule.starting_style,
+            starting_style,
           });
         }
       }
       Cow::Owned(decls) => {
         for (decl_order, declaration) in decls.into_iter().enumerate() {
+          let is_custom_property = declaration.property.starts_with("--");
           flattened.push(MatchedDeclaration {
             important: declaration.important,
             origin,
@@ -15247,8 +15252,9 @@ fn apply_cascaded_declarations<'a, F>(
             rule_order: order,
             decl_order,
             layer_order: layer_order.clone(),
+            is_custom_property,
             declaration: Cow::Owned(declaration),
-            starting_style: rule.starting_style,
+            starting_style,
           });
         }
       }
@@ -15260,6 +15266,7 @@ fn apply_cascaded_declarations<'a, F>(
     match inline {
       Cow::Borrowed(decls) => {
         for (decl_order, declaration) in decls.iter().enumerate() {
+          let is_custom_property = declaration.property.starts_with("--");
           flattened.push(MatchedDeclaration {
             important: declaration.important,
             origin: StyleOrigin::Inline,
@@ -15267,6 +15274,7 @@ fn apply_cascaded_declarations<'a, F>(
             rule_order: INLINE_RULE_ORDER,
             decl_order,
             layer_order: inline_layer_order.clone(),
+            is_custom_property,
             declaration: Cow::Borrowed(declaration),
             starting_style: false,
           });
@@ -15274,6 +15282,7 @@ fn apply_cascaded_declarations<'a, F>(
       }
       Cow::Owned(decls) => {
         for (decl_order, declaration) in decls.into_iter().enumerate() {
+          let is_custom_property = declaration.property.starts_with("--");
           flattened.push(MatchedDeclaration {
             important: declaration.important,
             origin: StyleOrigin::Inline,
@@ -15281,6 +15290,7 @@ fn apply_cascaded_declarations<'a, F>(
             rule_order: INLINE_RULE_ORDER,
             decl_order,
             layer_order: inline_layer_order.clone(),
+            is_custom_property,
             declaration: Cow::Owned(declaration),
             starting_style: false,
           });
@@ -15370,13 +15380,13 @@ fn apply_cascaded_declarations<'a, F>(
   // First apply custom properties so later var() resolutions can see them
   // Avoid repeated property.starts_with for the hot loop by checking once.
   for entry in flattened.iter() {
-    if entry.declaration.property.starts_with("--") {
+    if entry.is_custom_property {
       apply_entry(entry);
     }
   }
   // Then apply all other declarations in cascade order
   for entry in flattened.iter() {
-    if !entry.declaration.property.starts_with("--") {
+    if !entry.is_custom_property {
       apply_entry(entry);
     }
   }
