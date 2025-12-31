@@ -1848,8 +1848,8 @@ mod tests {
       }
     }
 
-    assert_eq!(ctx.find_fit(10.0, 1.0, 0.0), 100.0);
-    let (x, y) = ctx.compute_float_position(FloatSide::Left, 10.0, 1.0, 0.0);
+    assert_eq!(ctx.find_fit(60.0, 1.0, 0.0), 100.0);
+    let (x, y) = ctx.compute_float_position(FloatSide::Left, 60.0, 1.0, 0.0);
     assert_eq!(y, 100.0);
     assert_eq!(x, 0.0);
   }
