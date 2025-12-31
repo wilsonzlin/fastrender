@@ -17,6 +17,13 @@ use crate::text::pipeline::Script;
 pub(crate) fn preferred_families(script: Script, language: &str) -> &'static [&'static str] {
   match script {
     Script::Common => &["Noto Sans Symbols 2", "Noto Sans Symbols"],
+    Script::Latin | Script::Greek | Script::Cyrillic => &[
+      "Noto Sans",
+      "Noto Sans Symbols 2",
+      "Noto Sans Symbols",
+      "Noto Sans Mono",
+      "STIX Two Math",
+    ],
     Script::Hebrew => &["Noto Sans Hebrew"],
     Script::Thai => &["Noto Sans Thai"],
     Script::Bengali => &["Noto Sans Bengali"],
@@ -47,6 +54,20 @@ mod tests {
       &["Noto Sans Javanese"]
     );
     assert_eq!(preferred_families(Script::Tamil, ""), &["Noto Sans Tamil"]);
+  }
+
+  #[test]
+  fn preferred_families_include_bundled_symbol_fonts_for_latin_runs() {
+    assert_eq!(
+      preferred_families(Script::Latin, ""),
+      &[
+        "Noto Sans",
+        "Noto Sans Symbols 2",
+        "Noto Sans Symbols",
+        "Noto Sans Mono",
+        "STIX Two Math"
+      ]
+    );
   }
 }
 
