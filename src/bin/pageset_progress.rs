@@ -3525,8 +3525,14 @@ fn report(args: ReportArgs) -> io::Result<()> {
           let stats = entry.stats.as_ref().expect("stats should be present");
           let bytes = stats.resources.network_fetch_bytes.unwrap_or(0) as u64;
           let fetches = stats.resources.network_fetches.unwrap_or(0);
+          let total_ms = entry.progress.total_ms.unwrap_or(0.0);
+          let share = if total_ms > 0.0 {
+            *ms / total_ms * 100.0
+          } else {
+            0.0
+          };
           println!(
-            "  {}. {} fetches={fetches} bytes={} ms={ms:.2}ms url={}",
+            "  {}. {} fetches={fetches} bytes={} ms={ms:.2}ms ({share:.1}%) total={total_ms:.2}ms url={}",
             idx + 1,
             entry.stem,
             format_bytes(bytes),
@@ -3561,8 +3567,14 @@ fn report(args: ReportArgs) -> io::Result<()> {
         for (idx, (entry, ms)) in inflight_sorted.iter().take(inflight_top).enumerate() {
           let stats = entry.stats.as_ref().expect("stats should be present");
           let waits = stats.resources.fetch_inflight_waits.unwrap_or(0);
+          let total_ms = entry.progress.total_ms.unwrap_or(0.0);
+          let share = if total_ms > 0.0 {
+            *ms / total_ms * 100.0
+          } else {
+            0.0
+          };
           println!(
-            "  {}. {} waits={waits} ms={ms:.2}ms url={}",
+            "  {}. {} waits={waits} ms={ms:.2}ms ({share:.1}%) total={total_ms:.2}ms url={}",
             idx + 1,
             entry.stem,
             entry.progress.url
@@ -3599,8 +3611,14 @@ fn report(args: ReportArgs) -> io::Result<()> {
           let misses = stats.resources.disk_cache_misses.unwrap_or(0);
           let bytes = stats.resources.disk_cache_bytes.unwrap_or(0) as u64;
           let lock_wait_ms = stats.resources.disk_cache_lock_wait_ms.unwrap_or(0.0);
+          let total_ms = entry.progress.total_ms.unwrap_or(0.0);
+          let share = if total_ms > 0.0 {
+            *ms / total_ms * 100.0
+          } else {
+            0.0
+          };
           println!(
-            "  {}. {} hits={hits} misses={misses} bytes={} lock_wait={lock_wait_ms:.2}ms ms={ms:.2}ms url={}",
+            "  {}. {} hits={hits} misses={misses} bytes={} lock_wait={lock_wait_ms:.2}ms ms={ms:.2}ms ({share:.1}%) total={total_ms:.2}ms url={}",
             idx + 1,
             entry.stem,
             format_bytes(bytes),
@@ -3639,9 +3657,15 @@ fn report(args: ReportArgs) -> io::Result<()> {
         {
           let stats = entry.stats.as_ref().expect("stats should be present");
           let waits = stats.resources.disk_cache_lock_waits.unwrap_or(0);
-          let total_ms = stats.resources.disk_cache_ms.unwrap_or(0.0);
+          let disk_total_ms = stats.resources.disk_cache_ms.unwrap_or(0.0);
+          let render_total_ms = entry.progress.total_ms.unwrap_or(0.0);
+          let share = if render_total_ms > 0.0 {
+            *ms / render_total_ms * 100.0
+          } else {
+            0.0
+          };
           println!(
-            "  {}. {} waits={waits} lock_wait={ms:.2}ms total={total_ms:.2}ms url={}",
+            "  {}. {} waits={waits} lock_wait={ms:.2}ms ({share:.1}%) disk_total={disk_total_ms:.2}ms render_total={render_total_ms:.2}ms url={}",
             idx + 1,
             entry.stem,
             entry.progress.url
