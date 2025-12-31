@@ -2662,13 +2662,17 @@ impl Painter {
         }
         if let Some(ref mask_style) = mask {
           let mask_start = profile_enabled.then(Instant::now);
-          if let Some(mask) = base_painter.render_mask(
+          if let Some(rendered) = base_painter.render_mask(
             mask_style,
             context_rect,
             bounds,
             (base_painter.pixmap.width(), base_painter.pixmap.height()),
           ) {
-            base_painter.pixmap.apply_mask(&mask);
+            apply_mask_with_dirty_bounds_rgba(
+              &mut base_painter.pixmap,
+              &rendered.mask,
+              rendered.dirty,
+            );
           }
           if let Some(start) = mask_start {
             mask_ms = start.elapsed().as_secs_f64() * 1000.0;
@@ -2899,7 +2903,7 @@ impl Painter {
     css_bounds: Rect,
     layer_bounds: Rect,
     device_size: (u32, u32),
-  ) -> Option<Mask> {
+  ) -> Option<RenderedMask> {
     let viewport = (self.css_width, self.css_height);
     let rects = background_rects(
       css_bounds.x(),
@@ -2910,6 +2914,7 @@ impl Painter {
       Some(viewport),
     );
     let mut combined: Option<Mask> = None;
+    let mut combined_dirty: Option<ClipMaskDirtyRect> = None;
     let canvas_clip = layer_bounds;
 
     for layer in style.mask_layers.iter().rev() {
@@ -3022,6 +3027,20 @@ impl Painter {
         continue;
       };
 
+      let device_clip = self.device_rect(clip_rect_css);
+      let dirty = clip_mask_dirty_bounds(device_clip, device_size.0, device_size.1);
+      if let Some(layer_dirty) = dirty {
+        combined_dirty = match combined_dirty {
+          Some(prev) => Some(ClipMaskDirtyRect {
+            x0: prev.x0.min(layer_dirty.x0),
+            y0: prev.y0.min(layer_dirty.y0),
+            x1: prev.x1.max(layer_dirty.x1),
+            y1: prev.y1.max(layer_dirty.y1),
+          }),
+          None => Some(layer_dirty),
+        };
+      }
+
       let layer_mask = MASK_LAYER_PIXMAP_SCRATCH.with(|cell| {
         let mut scratch = cell.borrow_mut();
 
@@ -3034,8 +3053,6 @@ impl Painter {
           scratch.last_dirty = None;
         }
 
-        let device_clip = self.device_rect(clip_rect_css);
-        let dirty = clip_mask_dirty_bounds(device_clip, device_size.0, device_size.1);
         let prev_dirty = scratch.last_dirty;
 
         let layer_mask = {
@@ -3094,7 +3111,10 @@ impl Painter {
       }
     }
 
-    combined
+    combined.map(|mask| RenderedMask {
+      mask,
+      dirty: combined_dirty,
+    })
   }
 
   /// Paints the background of a fragment
@@ -9814,6 +9834,12 @@ struct ClipMaskDirtyRect {
   y1: u32,
 }
 
+#[derive(Clone, Debug)]
+struct RenderedMask {
+  mask: Mask,
+  dirty: Option<ClipMaskDirtyRect>,
+}
+
 #[derive(Default)]
 struct ClipMaskScratch {
   mask: Option<Mask>,
@@ -10018,6 +10044,34 @@ fn apply_mask_rect_rgba(pixmap: &mut Pixmap, mask: &Mask, rect: ClipMaskDirtyRec
       px[3] = mul_div_255_round(px[3], m);
     }
   }
+}
+
+fn apply_mask_with_dirty_bounds_rgba(
+  pixmap: &mut Pixmap,
+  mask: &Mask,
+  dirty: Option<ClipMaskDirtyRect>,
+) {
+  if pixmap.width() != mask.width() || pixmap.height() != mask.height() {
+    return;
+  }
+
+  let Some(dirty) = dirty else {
+    pixmap.data_mut().fill(0);
+    return;
+  };
+
+  let w = dirty.x1.saturating_sub(dirty.x0);
+  let h = dirty.y1.saturating_sub(dirty.y0);
+  if w == 0 || h == 0 {
+    pixmap.data_mut().fill(0);
+    return;
+  }
+
+  hard_clip_pixmap_outside_rect_rgba(
+    pixmap,
+    Rect::from_xywh(dirty.x0 as f32, dirty.y0 as f32, w as f32, h as f32),
+  );
+  apply_mask_rect_rgba(pixmap, mask, dirty);
 }
 
 fn clip_mask_dirty_bounds(rect: Rect, width: u32, height: u32) -> Option<ClipMaskDirtyRect> {
@@ -16210,7 +16264,7 @@ mod tests {
       render_mask_reference(&mut reference_painter, &style, css_bounds, layer_bounds, device_size)
         .expect("mask");
 
-    assert_eq!(optimized.data(), reference.data());
+    assert_eq!(optimized.mask.data(), reference.data());
   }
 
   #[test]
@@ -16245,6 +16299,42 @@ mod tests {
       scratch_allocs, 1,
       "expected render_mask to allocate its layer scratch pixmap once, got {scratch_allocs} allocations: {allocs:?}"
     );
+  }
+
+  #[test]
+  fn mask_apply_with_dirty_bounds_matches_tiny_skia() {
+    let mut base = new_pixmap(8, 8).expect("pixmap");
+    for (idx, chunk) in base.data_mut().chunks_exact_mut(4).enumerate() {
+      let v = (idx as u8).wrapping_mul(37).wrapping_add(11);
+      chunk.copy_from_slice(&[v, v.rotate_left(1), v.rotate_left(2), v.rotate_left(3)]);
+    }
+
+    let mut expected = new_pixmap(8, 8).expect("pixmap");
+    expected.data_mut().copy_from_slice(base.data());
+    let mut actual = new_pixmap(8, 8).expect("pixmap");
+    actual.data_mut().copy_from_slice(base.data());
+
+    let mut mask = Mask::new(8, 8).expect("mask");
+    mask.data_mut().fill(0);
+    for y in 2..6 {
+      for x in 1..7 {
+        mask.data_mut()[(y * 8 + x) as usize] = (x * 17 + y * 13) as u8;
+      }
+    }
+
+    expected.apply_mask(&mask);
+    apply_mask_with_dirty_bounds_rgba(
+      &mut actual,
+      &mask,
+      Some(ClipMaskDirtyRect {
+        x0: 1,
+        y0: 2,
+        x1: 7,
+        y1: 6,
+      }),
+    );
+
+    assert_eq!(actual.data(), expected.data());
   }
 
   #[test]
