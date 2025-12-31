@@ -235,6 +235,86 @@ fn shared_system_fontdb() -> Arc<FontDbDatabase> {
   }))
 }
 
+fn set_bundled_generic_fallbacks(db: &mut FontDbDatabase) {
+  let faces: Vec<&fontdb::FaceInfo> = db.faces().collect();
+  let Some(primary_family) = faces
+    .iter()
+    .find(|face| {
+      face
+        .families
+        .iter()
+        .all(|(name, _)| !FontDatabase::family_name_is_emoji_font(name))
+    })
+    .or_else(|| faces.first())
+    .and_then(|face| face.families.first().map(|(name, _)| name.clone()))
+  else {
+    return;
+  };
+
+  let first_matching_family = |candidates: &[&str]| -> Option<String> {
+    for face in faces.iter().filter(|face| {
+      face
+        .families
+        .iter()
+        .all(|(name, _)| !FontDatabase::family_name_is_emoji_font(name))
+    }) {
+      for (name, _) in &face.families {
+        if candidates
+          .iter()
+          .any(|candidate| candidate.eq_ignore_ascii_case(name))
+        {
+          return Some(name.clone());
+        }
+      }
+    }
+
+    for face in &faces {
+      for (name, _) in &face.families {
+        if candidates
+          .iter()
+          .any(|candidate| candidate.eq_ignore_ascii_case(name))
+        {
+          return Some(name.clone());
+        }
+      }
+    }
+
+    None
+  };
+
+  // Prefer stable bundled defaults; fall back to the first bundled family if those are missing.
+  let serif = first_matching_family(&["Noto Serif"]).unwrap_or_else(|| primary_family.clone());
+  let sans = first_matching_family(&["Noto Sans"]).unwrap_or_else(|| primary_family.clone());
+  let monospace =
+    first_matching_family(&["Noto Sans Mono"]).unwrap_or_else(|| primary_family.clone());
+
+  db.set_serif_family(serif);
+  db.set_sans_serif_family(sans.clone());
+  db.set_monospace_family(monospace);
+  db.set_cursive_family(sans.clone());
+  db.set_fantasy_family(sans);
+}
+
+fn shared_bundled_fontdb() -> Arc<FontDbDatabase> {
+  static BUNDLED_FONT_DB: OnceLock<Arc<FontDbDatabase>> = OnceLock::new();
+  Arc::clone(BUNDLED_FONT_DB.get_or_init(|| {
+    let mut db = FontDbDatabase::new();
+
+    for font in BUNDLED_FONTS {
+      db.load_font_data(font.data.to_vec());
+    }
+
+    if should_load_bundled_emoji_fonts() {
+      for font in BUNDLED_EMOJI_FONTS {
+        db.load_font_data(font.data.to_vec());
+      }
+    }
+
+    set_bundled_generic_fallbacks(&mut db);
+    Arc::new(db)
+  }))
+}
+
 #[inline]
 fn parse_face_with_counter<'a>(
   data: &'a [u8],
@@ -862,6 +942,10 @@ impl FontDatabase {
   /// Bundled fonts are always used as a final fallback to ensure text shaping
   /// works in minimal environments where no system fonts are present.
   pub fn with_config(config: &FontConfig) -> Self {
+    if !config.use_system_fonts && config.use_bundled_fonts && config.font_dirs.is_empty() {
+      return Self::shared_bundled();
+    }
+
     let mut this = Self {
       db: Arc::new(FontDbDatabase::new()),
       cache: RwLock::new(HashMap::new()),
@@ -904,6 +988,21 @@ impl FontDatabase {
   /// Returns the shared system font metadata handle.
   pub fn shared_system_db() -> Arc<FontDbDatabase> {
     shared_system_fontdb()
+  }
+
+  /// Creates a new font database that reuses the shared bundled font list while keeping caches private.
+  pub fn shared_bundled() -> Self {
+    Self::with_shared_bundled_db_and_cache(FontCacheConfig::default())
+  }
+
+  /// Returns the shared bundled font metadata handle.
+  pub fn shared_bundled_db() -> Arc<FontDbDatabase> {
+    shared_bundled_fontdb()
+  }
+
+  /// Creates a new font database that reuses the shared bundled font list with custom cache sizing.
+  pub fn with_shared_bundled_db_and_cache(cache: FontCacheConfig) -> Self {
+    Self::with_shared_db_and_cache(shared_bundled_fontdb(), cache)
   }
 
   /// Creates a new font database that shares the underlying font list with other instances
