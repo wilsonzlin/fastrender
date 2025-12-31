@@ -2414,11 +2414,8 @@ fn input_range_bounds(node: &DomNode) -> Option<(f64, f64)> {
     return None;
   }
 
-  let input_type = node
-    .get_attribute_ref("type")
-    .map(|t| t.to_ascii_lowercase())
-    .unwrap_or_else(|| "text".to_string());
-  if input_type != "range" {
+  let input_type = node.get_attribute_ref("type");
+  if !matches!(input_type, Some(t) if t.eq_ignore_ascii_case("range")) {
     return None;
   }
 
@@ -2894,7 +2891,7 @@ impl<'a> ElementRef<'a> {
   }
 
   /// Return the language of this element, inherited from ancestors if absent.
-  fn language(&self) -> Option<String> {
+  fn language(&self) -> Option<&'a str> {
     // Walk from self up through ancestors (closest first) for lang/xml:lang
     if let Some(lang) = self.lang_attribute(self.node) {
       return Some(lang);
@@ -2908,76 +2905,77 @@ impl<'a> ElementRef<'a> {
     None
   }
 
-  fn lang_attribute(&self, node: &DomNode) -> Option<String> {
+  fn lang_attribute(&self, node: &'a DomNode) -> Option<&'a str> {
     node
       .get_attribute_ref("lang")
       .or_else(|| node.get_attribute_ref("xml:lang"))
-      .map(|l| l.to_ascii_lowercase())
   }
 
   fn supports_disabled(&self) -> bool {
     if !self.is_html_element() {
       return false;
     }
-    self
-      .node
-      .tag_name()
-      .map(|tag| match tag.to_ascii_lowercase().as_str() {
-        "button" | "input" | "select" | "textarea" | "option" | "optgroup" | "fieldset" => true,
-        _ => false,
-      })
-      .unwrap_or(false)
+    self.node.tag_name().is_some_and(|tag| {
+      tag.eq_ignore_ascii_case("button")
+        || tag.eq_ignore_ascii_case("input")
+        || tag.eq_ignore_ascii_case("select")
+        || tag.eq_ignore_ascii_case("textarea")
+        || tag.eq_ignore_ascii_case("option")
+        || tag.eq_ignore_ascii_case("optgroup")
+        || tag.eq_ignore_ascii_case("fieldset")
+    })
   }
 
   fn is_disabled(&self) -> bool {
-    if let Some(tag) = self.node.tag_name() {
-      let lower = tag.to_ascii_lowercase();
+    let Some(tag) = self.node.tag_name() else {
+      return false;
+    };
 
-      if self.supports_disabled() && self.node.get_attribute_ref("disabled").is_some() {
-        return true;
-      }
+    if self.supports_disabled() && self.node.get_attribute_ref("disabled").is_some() {
+      return true;
+    }
 
-      // Fieldset disabled state propagates to descendants except those inside the first legend.
-      for (i, ancestor) in self.all_ancestors.iter().enumerate().rev() {
-        if let Some(a_tag) = ancestor.tag_name() {
-          if a_tag.eq_ignore_ascii_case("fieldset")
-            && ancestor.get_attribute_ref("disabled").is_some()
-          {
-            // Find first legend child of this fieldset.
-            let element_children = ancestor.element_children();
-            let first_legend = element_children.iter().find(|child| {
-              child
-                .tag_name()
-                .map(|t| t.eq_ignore_ascii_case("legend"))
-                .unwrap_or(false)
-            });
+    // Fieldset disabled state propagates to descendants except those inside the first legend.
+    for (i, ancestor) in self.all_ancestors.iter().enumerate().rev() {
+      if let Some(a_tag) = ancestor.tag_name() {
+        if a_tag.eq_ignore_ascii_case("fieldset") && ancestor.get_attribute_ref("disabled").is_some()
+        {
+          // Find first legend child of this fieldset.
+          let element_children = ancestor.element_children();
+          let first_legend = element_children.iter().find(|child| {
+            child
+              .tag_name()
+              .map(|t| t.eq_ignore_ascii_case("legend"))
+              .unwrap_or(false)
+          });
 
-            if let Some(legend) = first_legend {
-              // If we are inside this legend, the fieldset doesn't disable us.
-              let in_legend = self
-                .all_ancestors
-                .get(i + 1..)
-                .into_iter()
-                .flatten()
-                .any(|n| ptr::eq(*n, *legend));
-              if in_legend {
-                continue;
-              }
+          if let Some(legend) = first_legend {
+            // If we are inside this legend, the fieldset doesn't disable us.
+            let in_legend = self
+              .all_ancestors
+              .get(i + 1..)
+              .into_iter()
+              .flatten()
+              .any(|n| ptr::eq(*n, *legend));
+            if in_legend {
+              continue;
             }
-
-            return true;
           }
+
+          return true;
         }
       }
+    }
 
-      if lower == "option" || lower == "optgroup" {
-        for ancestor in self.all_ancestors.iter().rev() {
-          if let Some(a_tag) = ancestor.tag_name() {
-            let a_lower = a_tag.to_ascii_lowercase();
-            if matches!(a_lower.as_str(), "select" | "optgroup" | "fieldset") {
-              if ancestor.get_attribute_ref("disabled").is_some() {
-                return true;
-              }
+    if tag.eq_ignore_ascii_case("option") || tag.eq_ignore_ascii_case("optgroup") {
+      for ancestor in self.all_ancestors.iter().rev() {
+        if let Some(a_tag) = ancestor.tag_name() {
+          if a_tag.eq_ignore_ascii_case("select")
+            || a_tag.eq_ignore_ascii_case("optgroup")
+            || a_tag.eq_ignore_ascii_case("fieldset")
+          {
+            if ancestor.get_attribute_ref("disabled").is_some() {
+              return true;
             }
           }
         }
@@ -2992,8 +2990,7 @@ impl<'a> ElementRef<'a> {
       return false;
     }
     if let Some(value) = self.node.get_attribute_ref("contenteditable") {
-      let v = value.to_ascii_lowercase();
-      return v.is_empty() || v == "true";
+      return value.is_empty() || value.eq_ignore_ascii_case("true");
     }
     false
   }
@@ -3009,31 +3006,23 @@ impl<'a> ElementRef<'a> {
       return false;
     }
 
-    let input_type = self
-      .node
-      .get_attribute_ref("type")
-      .map(|t| t.to_ascii_lowercase());
-
-    input_type
-      .as_deref()
-      .map(|t| {
-        matches!(
-          t,
-          "text"
-            | "search"
-            | "url"
-            | "tel"
-            | "email"
-            | "password"
-            | "number"
-            | "date"
-            | "datetime-local"
-            | "month"
-            | "week"
-            | "time"
-        )
-      })
-      .unwrap_or(true)
+    match self.node.get_attribute_ref("type") {
+      None => true,
+      Some(t) => {
+        t.eq_ignore_ascii_case("text")
+          || t.eq_ignore_ascii_case("search")
+          || t.eq_ignore_ascii_case("url")
+          || t.eq_ignore_ascii_case("tel")
+          || t.eq_ignore_ascii_case("email")
+          || t.eq_ignore_ascii_case("password")
+          || t.eq_ignore_ascii_case("number")
+          || t.eq_ignore_ascii_case("date")
+          || t.eq_ignore_ascii_case("datetime-local")
+          || t.eq_ignore_ascii_case("month")
+          || t.eq_ignore_ascii_case("week")
+          || t.eq_ignore_ascii_case("time")
+      }
+    }
   }
 
   fn is_option_selected(&self) -> bool {
@@ -3076,11 +3065,8 @@ impl<'a> ElementRef<'a> {
     };
 
     if tag.eq_ignore_ascii_case("input") {
-      let input_type = self
-        .node
-        .get_attribute_ref("type")
-        .map(|t| t.to_ascii_lowercase());
-      if matches!(input_type.as_deref(), Some("checkbox") | Some("radio")) {
+      let input_type = self.node.get_attribute_ref("type");
+      if matches!(input_type, Some(t) if t.eq_ignore_ascii_case("checkbox") || t.eq_ignore_ascii_case("radio")) {
         return self.node.get_attribute_ref("checked").is_some();
       }
       return false;
@@ -3126,23 +3112,20 @@ impl<'a> ElementRef<'a> {
       return false;
     };
 
-    let lower = tag.to_ascii_lowercase();
-    match lower.as_str() {
-      "select" | "textarea" => true,
-      "input" => {
-        let t = self
-          .node
-          .get_attribute_ref("type")
-          .map(|s| s.to_ascii_lowercase())
-          .unwrap_or_else(|| "text".to_string());
-
-        !matches!(
-          t.as_str(),
-          "hidden" | "button" | "reset" | "submit" | "image"
-        )
-      }
-      _ => false,
+    if tag.eq_ignore_ascii_case("select") || tag.eq_ignore_ascii_case("textarea") {
+      return true;
     }
+
+    if tag.eq_ignore_ascii_case("input") {
+      let t = self.node.get_attribute_ref("type").unwrap_or("text");
+      return !t.eq_ignore_ascii_case("hidden")
+        && !t.eq_ignore_ascii_case("button")
+        && !t.eq_ignore_ascii_case("reset")
+        && !t.eq_ignore_ascii_case("submit")
+        && !t.eq_ignore_ascii_case("image");
+    }
+
+    false
   }
 
   fn is_required(&self) -> bool {
@@ -3158,33 +3141,31 @@ impl<'a> ElementRef<'a> {
     let Some(tag) = self.node.tag_name() else {
       return false;
     };
-    let lower = tag.to_ascii_lowercase();
-    match lower.as_str() {
-      "textarea" | "select" => true,
-      "input" => {
-        let t = self
-          .node
-          .get_attribute_ref("type")
-          .map(|s| s.to_ascii_lowercase())
-          .unwrap_or_else(|| "text".to_string());
-        !matches!(
-          t.as_str(),
-          "button" | "reset" | "submit" | "image" | "hidden"
-        )
-      }
-      _ => false,
+    if tag.eq_ignore_ascii_case("textarea") || tag.eq_ignore_ascii_case("select") {
+      return true;
     }
+
+    if tag.eq_ignore_ascii_case("input") {
+      let t = self.node.get_attribute_ref("type").unwrap_or("text");
+      return !t.eq_ignore_ascii_case("button")
+        && !t.eq_ignore_ascii_case("reset")
+        && !t.eq_ignore_ascii_case("submit")
+        && !t.eq_ignore_ascii_case("image")
+        && !t.eq_ignore_ascii_case("hidden");
+    }
+
+    false
   }
 
   fn control_value(&self) -> Option<String> {
-    let tag = self.node.tag_name()?.to_ascii_lowercase();
-    if tag == "textarea" {
+    let tag = self.node.tag_name()?;
+    if tag.eq_ignore_ascii_case("textarea") {
       return Some(textarea_value(self.node));
     }
-    if tag == "select" {
+    if tag.eq_ignore_ascii_case("select") {
       return self.select_value();
     }
-    if tag == "input" {
+    if tag.eq_ignore_ascii_case("input") {
       if let Some(value) = input_range_value(self.node) {
         return Some(format_number(value));
       }
@@ -3260,7 +3241,6 @@ impl<'a> ElementRef<'a> {
     let Some(tag) = self.node.tag_name() else {
       return false;
     };
-    let lower = tag.to_ascii_lowercase();
 
     let value = self.control_value().unwrap_or_default();
 
@@ -3268,29 +3248,28 @@ impl<'a> ElementRef<'a> {
       return false;
     }
 
-    if lower == "select" {
+    if tag.eq_ignore_ascii_case("select") {
       return true;
     }
 
-    if lower == "textarea" {
+    if tag.eq_ignore_ascii_case("textarea") {
       return true;
     }
 
-    if lower == "input" {
-      let input_type = self
-        .node
-        .get_attribute_ref("type")
-        .map(|s| s.to_ascii_lowercase())
-        .unwrap_or_else(|| "text".to_string());
+    if tag.eq_ignore_ascii_case("input") {
+      let input_type = self.node.get_attribute_ref("type").unwrap_or("text");
 
-      if matches!(
-        input_type.as_str(),
-        "text" | "search" | "url" | "tel" | "email" | "password"
-      ) {
+      if input_type.eq_ignore_ascii_case("text")
+        || input_type.eq_ignore_ascii_case("search")
+        || input_type.eq_ignore_ascii_case("url")
+        || input_type.eq_ignore_ascii_case("tel")
+        || input_type.eq_ignore_ascii_case("email")
+        || input_type.eq_ignore_ascii_case("password")
+      {
         return true;
       }
 
-      if matches!(input_type.as_str(), "number" | "range") {
+      if input_type.eq_ignore_ascii_case("number") || input_type.eq_ignore_ascii_case("range") {
         if value.trim().is_empty() {
           return !self.is_required();
         }
@@ -3300,7 +3279,7 @@ impl<'a> ElementRef<'a> {
         return false;
       }
 
-      if matches!(input_type.as_str(), "checkbox" | "radio") {
+      if input_type.eq_ignore_ascii_case("checkbox") || input_type.eq_ignore_ascii_case("radio") {
         if self.is_required() {
           return self.node.get_attribute_ref("checked").is_some();
         }
@@ -3318,16 +3297,12 @@ impl<'a> ElementRef<'a> {
     if !tag.eq_ignore_ascii_case("input") {
       return None;
     }
-    let input_type = self
-      .node
-      .get_attribute_ref("type")
-      .map(|s| s.to_ascii_lowercase())
-      .unwrap_or_else(|| "text".to_string());
-    if !matches!(input_type.as_str(), "number" | "range") {
+    let input_type = self.node.get_attribute_ref("type").unwrap_or("text");
+    if !input_type.eq_ignore_ascii_case("number") && !input_type.eq_ignore_ascii_case("range") {
       return None;
     }
 
-    if input_type == "range" {
+    if input_type.eq_ignore_ascii_case("range") {
       let (min, max) = input_range_bounds(self.node)?;
       let value = input_range_value(self.node)?;
       return Some(value >= min && value <= max);
@@ -3348,13 +3323,9 @@ impl<'a> ElementRef<'a> {
       return false;
     };
     if tag.eq_ignore_ascii_case("input") {
-      let input_type = self
-        .node
-        .get_attribute_ref("type")
-        .map(|t| t.to_ascii_lowercase())
-        .unwrap_or_else(|| "text".to_string());
+      let input_type = self.node.get_attribute_ref("type").unwrap_or("text");
 
-      if input_type == "checkbox" {
+      if input_type.eq_ignore_ascii_case("checkbox") {
         return self.node.get_attribute_ref("indeterminate").is_some();
       }
       return false;
@@ -3384,15 +3355,14 @@ impl<'a> ElementRef<'a> {
     let Some(tag) = node.tag_name() else {
       return false;
     };
-    let lower = tag.to_ascii_lowercase();
 
-    let is_submit_input = lower == "input"
+    let is_submit_input = tag.eq_ignore_ascii_case("input")
       && node
         .get_attribute_ref("type")
         .map(|t| t.eq_ignore_ascii_case("submit") || t.eq_ignore_ascii_case("image"))
         .unwrap_or(false);
 
-    let is_button_submit = lower == "button"
+    let is_button_submit = tag.eq_ignore_ascii_case("button")
       && node
         .get_attribute_ref("type")
         .map(|t| t.eq_ignore_ascii_case("submit"))
@@ -3454,11 +3424,17 @@ impl<'a> ElementRef<'a> {
     node
       .get_attribute_ref("dir")
       .or_else(|| node.get_attribute_ref("xml:dir"))
-      .and_then(|d| match d.to_ascii_lowercase().as_str() {
-        "ltr" => Some(TextDirection::Ltr),
-        "rtl" => Some(TextDirection::Rtl),
-        "auto" => resolve_first_strong_direction(resolve_root),
-        _ => None,
+      .and_then(|d| {
+        if d.eq_ignore_ascii_case("ltr") {
+          return Some(TextDirection::Ltr);
+        }
+        if d.eq_ignore_ascii_case("rtl") {
+          return Some(TextDirection::Rtl);
+        }
+        if d.eq_ignore_ascii_case("auto") {
+          return resolve_first_strong_direction(resolve_root);
+        }
+        None
       })
   }
 
@@ -3472,21 +3448,13 @@ impl<'a> ElementRef<'a> {
         return false;
       }
 
-      let input_type = self
-        .node
-        .get_attribute_ref("type")
-        .map(|t| t.to_ascii_lowercase());
+      let input_type = self.node.get_attribute_ref("type");
 
-      if !supports_placeholder(&input_type) {
+      if !supports_placeholder(input_type) {
         return false;
       }
 
-      let value = self
-        .node
-        .get_attribute_ref("value")
-        .map(|v| v.to_string())
-        .unwrap_or_default();
-      return value.is_empty();
+      return self.node.get_attribute_ref("value").unwrap_or("").is_empty();
     }
 
     if tag.eq_ignore_ascii_case("textarea") {
@@ -3611,8 +3579,7 @@ impl<'a> ElementRef<'a> {
     }
 
     if let Some(tag) = node.tag_name() {
-      let lower = tag.to_ascii_lowercase();
-      if matches!(lower.as_str(), "a" | "area") {
+      if tag.eq_ignore_ascii_case("a") || tag.eq_ignore_ascii_case("area") {
         if let Some(name) = node.get_attribute_ref("name") {
           if name == target {
             return true;
@@ -3661,22 +3628,50 @@ fn lang_matches(range: &str, lang: &str) -> bool {
   if range.eq_ignore_ascii_case(lang) {
     return true;
   }
-  // Prefix match with boundary
-  lang.starts_with(range) && lang.as_bytes().get(range.len()) == Some(&b'-')
+  // Prefix match with boundary (BCP47 language tags are ASCII-case-insensitive).
+  let Some(prefix) = lang.as_bytes().get(..range.len()) else {
+    return false;
+  };
+  prefix.eq_ignore_ascii_case(range.as_bytes()) && lang.as_bytes().get(range.len()) == Some(&b'-')
 }
 
-fn supports_placeholder(input_type: &Option<String>) -> bool {
-  let Some(t) = input_type.as_ref() else {
+fn supports_placeholder(input_type: Option<&str>) -> bool {
+  let Some(t) = input_type else {
     return true;
   };
 
-  match t.as_str() {
-    // Per HTML spec, placeholder is supported for text-like controls; unknown types default to text.
-    "text" | "search" | "url" | "tel" | "email" | "password" | "number" => true,
-    "hidden" | "submit" | "reset" | "button" | "image" | "file" | "checkbox" | "radio"
-    | "range" | "color" | "date" | "datetime-local" | "month" | "week" | "time" => false,
-    _ => true,
+  // Per HTML spec, placeholder is supported for text-like controls; unknown types default to text.
+  if t.eq_ignore_ascii_case("text")
+    || t.eq_ignore_ascii_case("search")
+    || t.eq_ignore_ascii_case("url")
+    || t.eq_ignore_ascii_case("tel")
+    || t.eq_ignore_ascii_case("email")
+    || t.eq_ignore_ascii_case("password")
+    || t.eq_ignore_ascii_case("number")
+  {
+    return true;
   }
+
+  if t.eq_ignore_ascii_case("hidden")
+    || t.eq_ignore_ascii_case("submit")
+    || t.eq_ignore_ascii_case("reset")
+    || t.eq_ignore_ascii_case("button")
+    || t.eq_ignore_ascii_case("image")
+    || t.eq_ignore_ascii_case("file")
+    || t.eq_ignore_ascii_case("checkbox")
+    || t.eq_ignore_ascii_case("radio")
+    || t.eq_ignore_ascii_case("range")
+    || t.eq_ignore_ascii_case("color")
+    || t.eq_ignore_ascii_case("date")
+    || t.eq_ignore_ascii_case("datetime-local")
+    || t.eq_ignore_ascii_case("month")
+    || t.eq_ignore_ascii_case("week")
+    || t.eq_ignore_ascii_case("time")
+  {
+    return false;
+  }
+
+  true
 }
 
 fn select_has_explicit_selection(select: &DomNode) -> bool {
@@ -3715,12 +3710,12 @@ fn option_value_from_node(node: &DomNode) -> String {
 }
 
 fn collect_selected_option_values(node: &DomNode, optgroup_disabled: bool, out: &mut Vec<String>) {
-  let tag = node.tag_name().map(|t| t.to_ascii_lowercase());
-  let is_option = tag.as_deref() == Some("option");
+  let tag = node.tag_name().unwrap_or("");
+  let is_option = tag.eq_ignore_ascii_case("option");
+  let is_optgroup = tag.eq_ignore_ascii_case("optgroup");
 
   let option_disabled = node.get_attribute_ref("disabled").is_some();
-  let next_optgroup_disabled =
-    optgroup_disabled || (tag.as_deref() == Some("optgroup") && option_disabled);
+  let next_optgroup_disabled = optgroup_disabled || (is_optgroup && option_disabled);
 
   if is_option
     && node.get_attribute_ref("selected").is_some()
@@ -3735,12 +3730,12 @@ fn collect_selected_option_values(node: &DomNode, optgroup_disabled: bool, out: 
 }
 
 fn find_selected_option_value(node: &DomNode, optgroup_disabled: bool) -> Option<String> {
-  let tag = node.tag_name().map(|t| t.to_ascii_lowercase());
-  let is_option = tag.as_deref() == Some("option");
+  let tag = node.tag_name().unwrap_or("");
+  let is_option = tag.eq_ignore_ascii_case("option");
+  let is_optgroup = tag.eq_ignore_ascii_case("optgroup");
 
   let option_disabled = node.get_attribute_ref("disabled").is_some();
-  let next_optgroup_disabled =
-    optgroup_disabled || (tag.as_deref() == Some("optgroup") && option_disabled);
+  let next_optgroup_disabled = optgroup_disabled || (is_optgroup && option_disabled);
 
   if is_option
     && node.get_attribute_ref("selected").is_some()
@@ -3758,12 +3753,12 @@ fn find_selected_option_value(node: &DomNode, optgroup_disabled: bool) -> Option
 }
 
 fn first_enabled_option<'a>(node: &'a DomNode, optgroup_disabled: bool) -> Option<&'a DomNode> {
-  let tag = node.tag_name().map(|t| t.to_ascii_lowercase());
-  let is_option = tag.as_deref() == Some("option");
+  let tag = node.tag_name().unwrap_or("");
+  let is_option = tag.eq_ignore_ascii_case("option");
+  let is_optgroup = tag.eq_ignore_ascii_case("optgroup");
 
   let option_disabled = node.get_attribute_ref("disabled").is_some();
-  let next_optgroup_disabled =
-    optgroup_disabled || (tag.as_deref() == Some("optgroup") && option_disabled);
+  let next_optgroup_disabled = optgroup_disabled || (is_optgroup && option_disabled);
 
   if is_option && !(option_disabled || optgroup_disabled) {
     return Some(node);
@@ -4121,7 +4116,7 @@ impl<'a> Element for ElementRef<'a> {
         .unwrap_or(false),
       PseudoClass::Lang(langs) => {
         if let Some(lang) = self.language() {
-          langs.iter().any(|range| lang_matches(range, &lang))
+          langs.iter().any(|range| lang_matches(range, lang))
         } else {
           false
         }
@@ -4156,21 +4151,16 @@ impl<'a> Element for ElementRef<'a> {
       PseudoClass::Indeterminate => self.is_indeterminate(),
       PseudoClass::Default => {
         if let Some(tag) = self.node.tag_name() {
-          let lower = tag.to_ascii_lowercase();
-          if lower == "option" {
+          if tag.eq_ignore_ascii_case("option") {
             return self.is_checked();
           }
-          if lower == "input" {
-            let t = self
-              .node
-              .get_attribute_ref("type")
-              .map(|s| s.to_ascii_lowercase())
-              .unwrap_or_else(|| "text".to_string());
-            if t == "checkbox" || t == "radio" {
+          if tag.eq_ignore_ascii_case("input") {
+            let t = self.node.get_attribute_ref("type").unwrap_or("text");
+            if t.eq_ignore_ascii_case("checkbox") || t.eq_ignore_ascii_case("radio") {
               return self.node.get_attribute_ref("checked").is_some();
             }
           }
-          if matches!(lower.as_str(), "input" | "button") {
+          if tag.eq_ignore_ascii_case("input") || tag.eq_ignore_ascii_case("button") {
             return self.is_default_submit();
           }
         }
@@ -4216,7 +4206,10 @@ impl<'a> Element for ElementRef<'a> {
       return false;
     };
     let has_href = self.node.get_attribute_ref("href").is_some();
-    has_href && matches!(tag.to_ascii_lowercase().as_str(), "a" | "area" | "link")
+    has_href
+      && (tag.eq_ignore_ascii_case("a")
+        || tag.eq_ignore_ascii_case("area")
+        || tag.eq_ignore_ascii_case("link"))
   }
 
   fn is_html_slot_element(&self) -> bool {
@@ -6466,6 +6459,35 @@ mod tests {
     let visited = DomNode {
       node_type: DomNodeType::Element {
         tag_name: "a".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![
+          ("href".to_string(), "https://example.com".to_string()),
+          ("data-fastr-visited".to_string(), "true".to_string()),
+        ],
+      },
+      children: vec![],
+    };
+    assert!(!matches(&visited, &[], &PseudoClass::Link));
+    assert!(matches(&visited, &[], &PseudoClass::Visited));
+  }
+
+  #[test]
+  fn link_pseudo_classes_match_case_insensitive_tag_names() {
+    let unvisited = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "A".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("href".to_string(), "https://example.com".to_string())],
+      },
+      children: vec![],
+    };
+    assert!(matches(&unvisited, &[], &PseudoClass::AnyLink));
+    assert!(matches(&unvisited, &[], &PseudoClass::Link));
+    assert!(!matches(&unvisited, &[], &PseudoClass::Visited));
+
+    let visited = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "A".to_string(),
         namespace: HTML_NAMESPACE.to_string(),
         attributes: vec![
           ("href".to_string(), "https://example.com".to_string()),

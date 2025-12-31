@@ -104,6 +104,10 @@ name = "selector_bloom_bench"
 harness = false
 
 [[bench]]
+name = "selector_link_bench"
+harness = false
+
+[[bench]]
 name = "layout_parallel"
 harness = false
 
