@@ -9533,6 +9533,82 @@ slot[name=\"s\"]::slotted(.assigned) { color: rgb(4, 5, 6); }"
   }
 
   #[test]
+  fn ancestor_bloom_shadow_scoping_preserves_host_outer_ancestors() {
+    let _lock = cascade_global_test_lock();
+    let _ancestor_bloom = AncestorBloomEnabledGuard::new(true);
+
+    let css = r#"
+      body :host(#host) .target { color: rgb(10, 20, 30); }
+    "#;
+
+    let style_node = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "style".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![],
+      },
+      children: vec![DomNode {
+        node_type: DomNodeType::Text {
+          content: css.to_string(),
+        },
+        children: vec![],
+      }],
+    };
+
+    let shadow_root = DomNode {
+      node_type: DomNodeType::ShadowRoot {
+        mode: crate::dom::ShadowRootMode::Open,
+        delegates_focus: false,
+      },
+      children: vec![
+        style_node,
+        DomNode {
+          node_type: DomNodeType::Element {
+            tag_name: "span".to_string(),
+            namespace: HTML_NAMESPACE.to_string(),
+            attributes: vec![
+              ("id".to_string(), "target".to_string()),
+              ("class".to_string(), "target".to_string()),
+            ],
+          },
+          children: vec![],
+        },
+      ],
+    };
+
+    let dom = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "body".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![],
+      },
+      children: vec![DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "div".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: vec![("id".to_string(), "host".to_string())],
+        },
+        children: vec![shadow_root],
+      }],
+    };
+
+    let stylesheet = StyleSheet::new();
+    let styled_without_scoping = {
+      let _guard = ShadowBloomScopingGuard::new(false);
+      apply_styles(&dom, &stylesheet)
+    };
+    let styled_with_scoping = {
+      let _guard = ShadowBloomScopingGuard::new(true);
+      apply_styles(&dom, &stylesheet)
+    };
+
+    assert_styled_trees_equal(&styled_with_scoping, &styled_without_scoping);
+
+    let target = find_styled_node_by_id(&styled_with_scoping, "target").expect("target node");
+    assert_eq!(target.styles.color, Rgba::rgb(10, 20, 30));
+  }
+
+  #[test]
   fn ancestor_bloom_shadow_scoping_increases_fast_rejects() {
     let _lock = cascade_global_test_lock();
     let _ancestor_bloom = AncestorBloomEnabledGuard::new(true);
@@ -14790,6 +14866,40 @@ fn find_matching_rules<'a>(
           take_matching_error(&mut context)?;
         }
 
+        // `:host(...)` can also bridge from a shadow tree to the outer document when there are
+        // additional ancestor sequences to the left (e.g. `body :host(.x) .y`). The shadow-scoped
+        // bloom filter intentionally omits outer-ancestor hashes, so avoid bloom fast-reject when
+        // such a selector is otherwise rejected.
+        if allow_shadow_host && !selector_matches && selector_contains_nonleftmost_host(selector) {
+          selector_matches = match scope_match {
+            ScopeMatchResult::Scoped(scope_root) => {
+              let (root, root_ancestors) = scope_root.root_and_ancestors(node, ancestors);
+              let scope_ref = ElementRef::with_ancestors(root, root_ancestors);
+              match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
+                ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
+                  let prev_bloom_filter = ctx.bloom_filter;
+                  ctx.bloom_filter = None;
+                  let matched =
+                    matches_selector_cascade(selector, Some(&indexed.ancestor_hashes), &element_ref, ctx);
+                  ctx.bloom_filter = prev_bloom_filter;
+                  matched
+                })
+              })
+            }
+            ScopeMatchResult::Unscoped => {
+              match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
+                let prev_bloom_filter = ctx.bloom_filter;
+                ctx.bloom_filter = None;
+                let matched =
+                  matches_selector_cascade(selector, Some(&indexed.ancestor_hashes), &element_ref, ctx);
+                ctx.bloom_filter = prev_bloom_filter;
+                matched
+              })
+            }
+          };
+          take_matching_error(&mut context)?;
+        }
+
         if selector_matches {
           let spec = indexed.specificity;
           best_specificity = Some(best_specificity.map_or(spec, |best| best.max(spec)));
@@ -15258,6 +15368,39 @@ fn find_pseudo_element_rules<'a>(
               ctx.bloom_filter = prev_bloom_filter;
               matched
             })
+          })
+        }
+      };
+    }
+
+    if allow_shadow_host && !selector_matches && selector_contains_nonleftmost_host(selector) {
+      selector_matches = match scope_match {
+        ScopeMatchResult::Scoped(scope_root) => {
+          let (root, root_ancestors) = scope_root.root_and_ancestors(node, ancestors);
+          let scope_ref = ElementRef::with_ancestors(root, root_ancestors);
+          match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
+            ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
+              let prev_bloom_filter = ctx.bloom_filter;
+              ctx.bloom_filter = None;
+              let matched = matches_selector_cascade(
+                selector,
+                Some(&indexed.ancestor_hashes),
+                &element_ref,
+                ctx,
+              );
+              ctx.bloom_filter = prev_bloom_filter;
+              matched
+            })
+          })
+        }
+        ScopeMatchResult::Unscoped => {
+          match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
+            let prev_bloom_filter = ctx.bloom_filter;
+            ctx.bloom_filter = None;
+            let matched =
+              matches_selector_cascade(selector, Some(&indexed.ancestor_hashes), &element_ref, ctx);
+            ctx.bloom_filter = prev_bloom_filter;
+            matched
           })
         }
       };
@@ -16448,6 +16591,64 @@ fn selector_contains_host_context(
   }
 
   contains(selector)
+}
+
+fn selector_contains_nonleftmost_host(
+  selector: &Selector<crate::css::selectors::FastRenderSelectorImpl>,
+) -> bool {
+  use selectors::parser::Component;
+
+  fn contains_host(selector: &Selector<crate::css::selectors::FastRenderSelectorImpl>) -> bool {
+    for component in selector.iter_raw_match_order() {
+      match component {
+        Component::Host(..) => return true,
+        Component::NonTSPseudoClass(pseudo) => {
+          if matches!(pseudo, crate::css::selectors::PseudoClass::Host(..)) {
+            return true;
+          }
+        }
+        Component::Is(list) | Component::Where(list) | Component::Negation(list) => {
+          if list.slice().iter().any(contains_host) {
+            return true;
+          }
+        }
+        _ => {}
+      }
+    }
+    false
+  }
+
+  let mut iter = selector.iter();
+  loop {
+    let mut host_in_sequence = false;
+    while let Some(component) = iter.next() {
+      match component {
+        Component::Host(..) => host_in_sequence = true,
+        Component::NonTSPseudoClass(pseudo) => {
+          if matches!(pseudo, crate::css::selectors::PseudoClass::Host(..)) {
+            host_in_sequence = true;
+          }
+        }
+        Component::Is(list) | Component::Where(list) | Component::Negation(list) => {
+          if list.slice().iter().any(contains_host) {
+            host_in_sequence = true;
+          }
+        }
+        _ => {}
+      }
+    }
+
+    match iter.next_sequence() {
+      Some(_) => {
+        if host_in_sequence {
+          return true;
+        }
+      }
+      None => break,
+    }
+  }
+
+  false
 }
 
 /// Compute styles for a pseudo-element (::before or ::after)
