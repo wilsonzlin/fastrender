@@ -1479,15 +1479,13 @@ pub(crate) fn apply_mask_with_offset(
   let pixmap_height = pixmap.height() as usize;
   let pix_data = pixmap.data_mut();
 
-  // Clear rows above the intersection.
-  for y in 0..local_y0 {
-    let row = &mut pix_data[y * pixmap_stride..(y + 1) * pixmap_stride];
-    row.fill(0);
+  // Clear rows above/below the intersection. Use one contiguous fill per region rather than
+  // per-row loops to keep the hot path in `memset`.
+  if local_y0 > 0 {
+    pix_data[..local_y0 * pixmap_stride].fill(0);
   }
-  // Clear rows below the intersection.
-  for y in local_y1..pixmap_height {
-    let row = &mut pix_data[y * pixmap_stride..(y + 1) * pixmap_stride];
-    row.fill(0);
+  if local_y1 < pixmap_height {
+    pix_data[local_y1 * pixmap_stride..].fill(0);
   }
 
   let mask_stride = mask.width() as usize;
