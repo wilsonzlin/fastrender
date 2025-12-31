@@ -1413,25 +1413,18 @@ pub(crate) fn crop_mask(
     return None;
   }
 
-  let mut pixmap = new_pixmap(crop_w, crop_h)?;
-  let dst = pixmap.data_mut();
+  let mut out = Mask::new(crop_w, crop_h)?;
   let src = mask.data();
+  let dst = out.data_mut();
   let src_stride = mask_width as usize;
-  let dst_stride = crop_w as usize * 4;
+  let dst_stride = crop_w as usize;
   for row in 0..crop_h as usize {
     let src_idx = (origin_y as usize + row) * src_stride + origin_x as usize;
     let dst_idx = row * dst_stride;
-    for col in 0..crop_w as usize {
-      let alpha = src[src_idx + col];
-      let base = dst_idx + col * 4;
-      dst[base] = 0;
-      dst[base + 1] = 0;
-      dst[base + 2] = 0;
-      dst[base + 3] = alpha;
-    }
+    dst[dst_idx..dst_idx + dst_stride].copy_from_slice(&src[src_idx..src_idx + dst_stride]);
   }
 
-  Some(Mask::from_pixmap(pixmap.as_ref(), MaskType::Alpha))
+  Some(out)
 }
 
 /// Applies a mask that is positioned in a larger coordinate space.
@@ -2071,6 +2064,40 @@ mod tests {
     assert!(
       allocations.is_empty(),
       "expected no new_pixmap allocations for rect clip fast-path, got {allocations:?}"
+    );
+  }
+
+  #[test]
+  fn crop_mask_extracts_expected_bytes() {
+    let mut mask = Mask::new(5, 4).unwrap();
+    for (idx, dst) in mask.data_mut().iter_mut().enumerate() {
+      *dst = (idx as u8).wrapping_mul(17);
+    }
+
+    let cropped = crop_mask(&mask, 1, 1, 10, 10).unwrap();
+    assert_eq!(cropped.width(), 4);
+    assert_eq!(cropped.height(), 3);
+
+    let mut expected = Vec::new();
+    let src = mask.data();
+    let src_stride = mask.width() as usize;
+    for row in 0..3usize {
+      let src_idx = (1 + row) * src_stride + 1;
+      expected.extend_from_slice(&src[src_idx..src_idx + 4]);
+    }
+
+    assert_eq!(cropped.data(), expected.as_slice());
+  }
+
+  #[test]
+  fn crop_mask_does_not_allocate_pixmaps() {
+    let mask = Mask::new(16, 16).unwrap();
+
+    let recorder = NewPixmapAllocRecorder::start();
+    let _ = crop_mask(&mask, 0, 0, 8, 8).unwrap();
+    assert!(
+      recorder.take().is_empty(),
+      "crop_mask should not allocate Pixmaps"
     );
   }
 }
