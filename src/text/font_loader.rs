@@ -34,6 +34,7 @@ use crate::debug::runtime;
 use crate::error::Error;
 use crate::error::FontError;
 use crate::error::Result;
+use crate::render_control;
 use crate::resource::{FetchedResource, ResourceFetcher};
 use crate::text::face_cache;
 use crate::text::font_db::FontCacheConfig;
@@ -989,7 +990,15 @@ impl FontContext {
     let events: Arc<Mutex<Vec<FontLoadEvent>>> = Arc::new(Mutex::new(Vec::new()));
     let expired_jobs: Arc<Mutex<HashSet<usize>>> = Arc::new(Mutex::new(HashSet::new()));
     let policy_deadline = {
-      let timeout = options.policy.blocking_timeout();
+      let mut timeout = options.policy.blocking_timeout();
+      if let Some(deadline) = render_control::active_deadline()
+        .filter(|d| d.timeout_limit().is_some())
+      {
+        timeout = deadline
+          .remaining_timeout()
+          .map(|remaining| timeout.min(remaining))
+          .unwrap_or(Duration::ZERO);
+      }
       if timeout.is_zero() {
         None
       } else {
@@ -1154,6 +1163,15 @@ impl FontContext {
   ///
   /// Returns true if all pending loads finished within the timeout.
   pub fn wait_for_pending_web_fonts(&self, timeout: Duration) -> bool {
+    let mut timeout = timeout;
+    if let Some(deadline) = render_control::active_deadline()
+      .filter(|d| d.timeout_limit().is_some())
+    {
+      timeout = deadline
+        .remaining_timeout()
+        .map(|remaining| timeout.min(remaining))
+        .unwrap_or(Duration::ZERO);
+    }
     let deadline = Instant::now() + timeout;
     let (lock, cvar) = &*self.pending_async;
     let mut guard = lock.lock().unwrap();
@@ -2697,6 +2715,114 @@ mod tests {
 
     let ctx = FontContext::with_database(db);
     assert_eq!(ctx.font_count(), count);
+  }
+
+  #[test]
+  fn web_font_blocking_wait_respects_render_deadline() {
+    use std::sync::mpsc;
+
+    let font_data =
+      fs::read("tests/fixtures/fonts/NotoSans-subset.ttf").expect("read font fixture");
+    let url = "https://example.com/font.ttf".to_string();
+    let (started_tx, started_rx) = mpsc::channel::<()>();
+    let release = Arc::new(std::sync::Barrier::new(2));
+
+    #[derive(Clone)]
+    struct BlockingFetcher {
+      url: String,
+      bytes: Vec<u8>,
+      started: mpsc::Sender<()>,
+      release: Arc<std::sync::Barrier>,
+    }
+
+    impl FontFetcher for BlockingFetcher {
+      fn fetch(&self, url: &str) -> Result<FetchedResource> {
+        if url == self.url {
+          let _ = self.started.send(());
+          self.release.wait();
+          return Ok(FetchedResource::with_final_url(
+            self.bytes.clone(),
+            Some("font/ttf".to_string()),
+            Some(url.to_string()),
+          ));
+        }
+
+        Err(Error::Font(FontError::LoadFailed {
+          family: url.to_string(),
+          reason: "unexpected url".to_string(),
+        }))
+      }
+    }
+
+    let ctx = FontContext::with_database_and_fetcher(
+      Arc::new(FontDatabase::empty()),
+      Arc::new(BlockingFetcher {
+        url: url.clone(),
+        bytes: font_data,
+        started: started_tx,
+        release: Arc::clone(&release),
+      }),
+    );
+
+    let face = FontFaceRule {
+      family: Some("DeadlineFont".to_string()),
+      sources: vec![FontFaceSource::url(url.clone())],
+      display: FontDisplay::Block,
+      ..Default::default()
+    };
+
+    let (tx, rx) = mpsc::channel();
+    let ctx_worker = ctx.clone();
+    let face_vec = vec![face];
+    let worker = thread::spawn(move || {
+      let deadline = render_control::RenderDeadline::new(Some(Duration::from_millis(50)), None);
+      let start = Instant::now();
+      let result = render_control::with_deadline(Some(&deadline), || {
+        ctx_worker.load_web_fonts_with_policy(
+          &face_vec,
+          None,
+          None,
+          WebFontPolicy::BlockUntilLoaded {
+            timeout: Duration::from_secs(2),
+          },
+        )
+      });
+      tx.send((result, start.elapsed())).unwrap();
+    });
+
+    // Ensure the fetch thread has started and is now blocked on `release`.
+    started_rx
+      .recv_timeout(Duration::from_secs(1))
+      .expect("font fetch should start");
+
+    let (result, elapsed) = match rx.recv_timeout(Duration::from_secs(1)) {
+      Ok(value) => value,
+      Err(err) => {
+        // Unblock the fetch thread so we don't hang the test process.
+        release.wait();
+        let _ = worker.join();
+        panic!("load_web_fonts did not complete under deadline: {err}");
+      }
+    };
+
+    // Unblock the fetch thread so the detached loader can exit.
+    release.wait();
+
+    assert!(
+      elapsed < Duration::from_secs(1),
+      "load_web_fonts took too long under deadline: {elapsed:?}"
+    );
+
+    let report = result.expect("load_web_fonts should return report even under deadline");
+    assert!(
+      report.events.iter().any(|event| match &event.status {
+        FontLoadStatus::Skipped { reason } => reason.contains("block period elapsed"),
+        _ => false,
+      }),
+      "expected a skipped load event after deadline, got: {report:?}"
+    );
+
+    worker.join().expect("worker thread should not panic");
   }
 
   #[test]
