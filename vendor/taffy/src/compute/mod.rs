@@ -62,6 +62,7 @@ pub fn compute_root_layout(
   root: NodeId,
   available_space: Size<AvailableSpace>,
 ) {
+  check_layout_abort();
   let mut known_dimensions = Size::NONE;
 
   #[cfg(feature = "block_layout")]
@@ -339,12 +340,14 @@ pub fn compute_hidden_layout(
   tree: &mut (impl LayoutPartialTree + CacheTree),
   node: NodeId,
 ) -> LayoutOutput {
+  check_layout_abort();
   // Clear cache and set zeroed-out layout for the node
   tree.cache_clear(node);
   tree.set_unrounded_layout(node, &Layout::with_order(0));
 
   // Perform hidden layout on all children
   for index in 0..tree.child_count(node) {
+    check_layout_abort();
     let child_id = tree.get_child_id(node, index);
     tree.compute_child_layout(child_id, LayoutInput::HIDDEN);
   }
