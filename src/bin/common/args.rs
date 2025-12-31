@@ -9,13 +9,38 @@ use std::time::Duration;
 
 /// Default on-disk cache budget (512MB).
 ///
-/// Keep in sync with `fastrender::resource::DiskCacheConfig::default()`.
+/// This matches `fastrender::resource::DiskCacheConfig::default()` when built with `disk_cache`.
 pub const DEFAULT_DISK_CACHE_MAX_BYTES: u64 = 512 * 1024 * 1024;
 
 /// Default on-disk cache max age (7 days) expressed as seconds.
 ///
-/// Keep in sync with `fastrender::resource::DiskCacheConfig::default()`.
+/// This matches `fastrender::resource::DiskCacheConfig::default()` when built with `disk_cache`.
 pub const DEFAULT_DISK_CACHE_MAX_AGE_SECS: u64 = 60 * 60 * 24 * 7;
+
+fn default_disk_cache_max_bytes() -> u64 {
+  #[cfg(feature = "disk_cache")]
+  {
+    fastrender::resource::DiskCacheConfig::default().max_bytes
+  }
+  #[cfg(not(feature = "disk_cache"))]
+  {
+    DEFAULT_DISK_CACHE_MAX_BYTES
+  }
+}
+
+fn default_disk_cache_max_age_secs() -> u64 {
+  #[cfg(feature = "disk_cache")]
+  {
+    fastrender::resource::DiskCacheConfig::default()
+      .max_age
+      .map(|age| age.as_secs())
+      .unwrap_or(0)
+  }
+  #[cfg(not(feature = "disk_cache"))]
+  {
+    DEFAULT_DISK_CACHE_MAX_AGE_SECS
+  }
+}
 
 #[derive(Debug, Clone, Args)]
 pub struct ViewportArgs {
@@ -282,7 +307,7 @@ pub struct DiskCacheArgs {
   #[arg(
     long = "disk-cache-max-bytes",
     env = "FASTR_DISK_CACHE_MAX_BYTES",
-    default_value_t = DEFAULT_DISK_CACHE_MAX_BYTES,
+    default_value_t = default_disk_cache_max_bytes(),
     value_name = "BYTES"
   )]
   pub max_bytes: u64,
@@ -293,7 +318,7 @@ pub struct DiskCacheArgs {
   #[arg(
     long = "disk-cache-max-age-secs",
     env = "FASTR_DISK_CACHE_MAX_AGE_SECS",
-    default_value_t = DEFAULT_DISK_CACHE_MAX_AGE_SECS,
+    default_value_t = default_disk_cache_max_age_secs(),
     value_name = "SECS"
   )]
   pub max_age_secs: u64,
