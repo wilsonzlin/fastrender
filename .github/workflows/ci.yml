@@ -377,7 +377,7 @@ jobs:
           key: ${{ runner.os }}-fuzz-target-${{ steps.nightly_toolchain.outputs.rustc_hash }}-${{ hashFiles('Cargo.lock', 'fuzz/Cargo.toml') }}
 
       - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz --locked
+        uses: taiki-e/install-action@cargo-fuzz
 
       - name: Run fuzz smoke tests
         working-directory: fuzz
