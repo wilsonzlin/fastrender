@@ -333,7 +333,7 @@ fn clamp_channel_to_alpha(channel: i32, alpha: i32) -> u8 {
   channel.clamp(0, alpha).clamp(0, 255) as u8
 }
 
-fn gaussian_convolve_premultiplied(pixmap: &mut Pixmap, sigma: f32) -> Result<(), RenderError> {
+fn gaussian_convolve_premultiplied(pixmap: &mut Pixmap, sigma: f32) -> Result<bool, RenderError> {
   gaussian_convolve_premultiplied_with_parallelism(pixmap, sigma, BlurParallelism::Auto)
 }
 
@@ -341,16 +341,16 @@ fn gaussian_convolve_premultiplied_with_parallelism(
   pixmap: &mut Pixmap,
   sigma: f32,
   parallelism: BlurParallelism,
-) -> Result<(), RenderError> {
+) -> Result<bool, RenderError> {
   let (kernel, radius, scale) = gaussian_kernel_fixed(sigma);
   if radius == 0 || kernel.is_empty() || scale <= 0 {
-    return Ok(());
+    return Ok(false);
   }
 
   let width = pixmap.width() as usize;
   let height = pixmap.height() as usize;
   if width == 0 || height == 0 {
-    return Ok(());
+    return Ok(false);
   }
 
   let use_parallel = match parallelism {
@@ -361,6 +361,7 @@ fn gaussian_convolve_premultiplied_with_parallelism(
 
   let len = blur_buffer_len(width, height, "gaussian blur")?;
   let mut error: Option<RenderError> = None;
+  let mut skipped = false;
   BLUR_SCRATCH.with(|scratch| {
     let mut scratch = scratch.borrow_mut();
     let (src, buf) = match scratch.split(len, "gaussian blur") {
@@ -382,6 +383,7 @@ fn gaussian_convolve_premultiplied_with_parallelism(
       // Horizontal pass: src -> buf
       for y in 0..height {
         if blur_deadline_exceeded(&mut deadline_counter) {
+          skipped = true;
           pixmap.data_mut().copy_from_slice(src);
           return;
         }
@@ -416,6 +418,7 @@ fn gaussian_convolve_premultiplied_with_parallelism(
       let dst = pixmap.data_mut();
       for y in 0..height {
         if blur_deadline_exceeded(&mut deadline_counter) {
+          skipped = true;
           dst.copy_from_slice(src);
           return;
         }
@@ -501,6 +504,7 @@ fn gaussian_convolve_premultiplied_with_parallelism(
       }
 
       if cancelled.load(Ordering::Relaxed) {
+        skipped = true;
         pixmap.data_mut().copy_from_slice(src);
         return;
       }
@@ -557,6 +561,7 @@ fn gaussian_convolve_premultiplied_with_parallelism(
       }
 
       if cancelled.load(Ordering::Relaxed) {
+        skipped = true;
         dst.copy_from_slice(src);
       }
     }
@@ -564,7 +569,7 @@ fn gaussian_convolve_premultiplied_with_parallelism(
   if let Some(err) = error {
     Err(err)
   } else {
-    Ok(())
+    Ok(!skipped)
   }
 }
 
@@ -873,7 +878,7 @@ fn box_blur_v_parallel(
   cancelled.load(Ordering::Relaxed)
 }
 
-fn gaussian_blur_box_approx(pixmap: &mut Pixmap, sigma: f32) -> Result<(), RenderError> {
+fn gaussian_blur_box_approx(pixmap: &mut Pixmap, sigma: f32) -> Result<bool, RenderError> {
   gaussian_blur_box_approx_with_parallelism(pixmap, sigma, BlurParallelism::Auto)
 }
 
@@ -881,15 +886,15 @@ fn gaussian_blur_box_approx_with_parallelism(
   pixmap: &mut Pixmap,
   sigma: f32,
   parallelism: BlurParallelism,
-) -> Result<(), RenderError> {
+) -> Result<bool, RenderError> {
   let sigma = sigma.abs();
   if sigma <= 0.0 {
-    return Ok(());
+    return Ok(false);
   }
   let width = pixmap.width() as usize;
   let height = pixmap.height() as usize;
   if width == 0 || height == 0 {
-    return Ok(());
+    return Ok(false);
   }
 
   let use_parallel = match parallelism {
@@ -900,6 +905,7 @@ fn gaussian_blur_box_approx_with_parallelism(
 
   let len = blur_buffer_len(width, height, "box blur")?;
   let mut error: Option<RenderError> = None;
+  let mut skipped = false;
   BLUR_SCRATCH.with(|scratch| {
     let mut scratch = scratch.borrow_mut();
     let (a, b) = match scratch.split(len, "box blur") {
@@ -926,6 +932,7 @@ fn gaussian_blur_box_approx_with_parallelism(
           radius,
           &mut deadline_counter,
         ) {
+          skipped = true;
           return;
         }
         if box_blur_v(
@@ -936,6 +943,7 @@ fn gaussian_blur_box_approx_with_parallelism(
           radius,
           &mut deadline_counter,
         ) {
+          skipped = true;
           return;
         }
       }
@@ -963,6 +971,7 @@ fn gaussian_blur_box_approx_with_parallelism(
         &cancelled,
         &deadline_counter,
       ) {
+        skipped = true;
         return;
       }
       if box_blur_v_parallel(
@@ -976,11 +985,13 @@ fn gaussian_blur_box_approx_with_parallelism(
         &cancelled,
         &deadline_counter,
       ) {
+        skipped = true;
         return;
       }
     }
 
     if cancelled.load(Ordering::Relaxed) {
+      skipped = true;
       return;
     }
 
@@ -989,15 +1000,15 @@ fn gaussian_blur_box_approx_with_parallelism(
   if let Some(err) = error {
     Err(err)
   } else {
-    Ok(())
+    Ok(!skipped)
   }
 }
 
-fn blur_isotropic_body(pixmap: &mut Pixmap, sigma: f32) -> Result<(), RenderError> {
+fn blur_isotropic_body(pixmap: &mut Pixmap, sigma: f32) -> Result<bool, RenderError> {
   let sigma = sigma.abs();
   let radius = (sigma * 3.0).ceil() as usize;
   if radius == 0 {
-    return Ok(());
+    return Ok(false);
   }
 
   let fast_enabled = runtime::runtime_toggles().truthy("FASTR_FAST_BLUR");
@@ -1012,7 +1023,7 @@ fn blur_anisotropic_body(
   pixmap: &mut Pixmap,
   sigma_x: f32,
   sigma_y: f32,
-) -> Result<(), RenderError> {
+) -> Result<bool, RenderError> {
   blur_anisotropic_body_with_parallelism(pixmap, sigma_x, sigma_y, BlurParallelism::Auto)
 }
 
@@ -1021,7 +1032,7 @@ fn blur_anisotropic_body_with_parallelism(
   sigma_x: f32,
   sigma_y: f32,
   parallelism: BlurParallelism,
-) -> Result<(), RenderError> {
+) -> Result<bool, RenderError> {
   let sigma_x = sigma_x.abs();
   let sigma_y = sigma_y.abs();
   if sigma_x == sigma_y {
@@ -1029,19 +1040,19 @@ fn blur_anisotropic_body_with_parallelism(
   }
 
   if sigma_x == 0.0 && sigma_y == 0.0 {
-    return Ok(());
+    return Ok(false);
   }
 
   let width = pixmap.width() as usize;
   let height = pixmap.height() as usize;
   if width == 0 || height == 0 {
-    return Ok(());
+    return Ok(false);
   }
 
   let (kernel_x, radius_x, scale_x) = gaussian_kernel_fixed(sigma_x);
   let (kernel_y, radius_y, scale_y) = gaussian_kernel_fixed(sigma_y);
   if (radius_x == 0 || kernel_x.is_empty()) && (radius_y == 0 || kernel_y.is_empty()) {
-    return Ok(());
+    return Ok(false);
   }
 
   let use_parallel = match parallelism {
@@ -1052,6 +1063,7 @@ fn blur_anisotropic_body_with_parallelism(
 
   let len = blur_buffer_len(width, height, "anisotropic blur")?;
   let mut error: Option<RenderError> = None;
+  let mut skipped = false;
   BLUR_SCRATCH.with(|scratch| {
     let mut scratch = scratch.borrow_mut();
     let (src, tmp) = match scratch.split(len, "anisotropic blur") {
@@ -1076,6 +1088,7 @@ fn blur_anisotropic_body_with_parallelism(
       } else {
         for y in 0..height {
           if blur_deadline_exceeded(&mut deadline_counter) {
+            skipped = true;
             pixmap.data_mut().copy_from_slice(src);
             return;
           }
@@ -1120,6 +1133,7 @@ fn blur_anisotropic_body_with_parallelism(
       }
       for y in 0..height {
         if blur_deadline_exceeded(&mut deadline_counter) {
+          skipped = true;
           dst.copy_from_slice(src);
           return;
         }
@@ -1209,6 +1223,7 @@ fn blur_anisotropic_body_with_parallelism(
         }
 
         if cancelled.load(Ordering::Relaxed) {
+          skipped = true;
           pixmap.data_mut().copy_from_slice(src);
           return;
         }
@@ -1276,6 +1291,7 @@ fn blur_anisotropic_body_with_parallelism(
       }
 
       if cancelled.load(Ordering::Relaxed) {
+        skipped = true;
         dst.copy_from_slice(src);
       }
     }
@@ -1283,7 +1299,7 @@ fn blur_anisotropic_body_with_parallelism(
   if let Some(err) = error {
     Err(err)
   } else {
-    Ok(())
+    Ok(!skipped)
   }
 }
 
@@ -1411,16 +1427,22 @@ fn tile_blur(
           .copy_from_slice(&source[src_start..src_start + tile_stride]);
       }
 
-      if let Err(err) =
-        blur_anisotropic_body_with_parallelism(&mut tile, sigma_x, sigma_y, BlurParallelism::Serial)
+      match blur_anisotropic_body_with_parallelism(&mut tile, sigma_x, sigma_y, BlurParallelism::Serial)
       {
-        cancelled.store(true, Ordering::Relaxed);
-        if let Ok(mut slot) = error.lock() {
-          if slot.is_none() {
-            *slot = Some(err);
-          }
+        Ok(true) => {}
+        Ok(false) => {
+          cancelled.store(true, Ordering::Relaxed);
+          return;
         }
-        return;
+        Err(err) => {
+          cancelled.store(true, Ordering::Relaxed);
+          if let Ok(mut slot) = error.lock() {
+            if slot.is_none() {
+              *slot = Some(err);
+            }
+          }
+          return;
+        }
       }
 
       if deadline_enabled && check_active(RenderStage::Paint).is_err() {
@@ -1619,7 +1641,11 @@ fn tile_blur(
         break;
       }
 
-      blur_anisotropic_body(&mut tile, sigma_x, sigma_y)?;
+      let blurred = blur_anisotropic_body(&mut tile, sigma_x, sigma_y)?;
+      if !blurred {
+        cancelled = true;
+        break;
+      }
 
       // If the blur was cancelled mid-tile, skip the entire tiled blur and leave the pixmap unchanged.
       if deadline_enabled && check_active(RenderStage::Paint).is_err() {
@@ -1694,19 +1720,23 @@ fn apply_blur_internal(
   let config = cache_config.unwrap_or_else(FilterCacheConfig::from_env);
 
   let mut tile_count = 0usize;
+  let mut blur_applied = false;
   if let Some((tiled, tiles)) = tile_blur(pixmap, sigma_x, sigma_y, &config)? {
     tile_count = tiles;
+    blur_applied = tiles > 0;
     *pixmap = tiled;
   } else if sigma_x == sigma_y {
-    blur_isotropic_body(pixmap, sigma_x)?;
+    blur_applied = blur_isotropic_body(pixmap, sigma_x)?;
   } else {
-    blur_anisotropic_body(pixmap, sigma_x, sigma_y)?;
+    blur_applied = blur_anisotropic_body(pixmap, sigma_x, sigma_y)?;
   }
 
   record_blur_tiles(tile_count);
 
-  if let (Some(key), Some(cache)) = (cache_key, cache) {
-    cache.put(key, pixmap);
+  if blur_applied {
+    if let (Some(key), Some(cache)) = (cache_key, cache) {
+      cache.put(key, pixmap);
+    }
   }
 
   Ok(())
@@ -1814,6 +1844,33 @@ mod tests {
     assert!(
       pixmap.pixels().iter().any(|p| p.alpha() > 0),
       "expected blurred output to retain some alpha"
+    );
+  }
+
+  #[test]
+  fn blur_cache_does_not_store_when_deadline_exceeded() {
+    let mut cache = BlurCache::new(FilterCacheConfig {
+      max_items: 8,
+      max_bytes: 1024 * 1024,
+    });
+    let mut pixmap = new_pixmap(64, 2048).unwrap();
+    for (i, px) in pixmap.pixels_mut().iter_mut().enumerate() {
+      let a = (i % 256) as u8;
+      *px = PremultipliedColorU8::from_rgba(a, a, a, a).unwrap();
+    }
+    let original = pixmap.data().to_vec();
+
+    let cancel: Arc<crate::render_control::CancelCallback> = Arc::new(|| true);
+    let deadline = RenderDeadline::new(None, Some(cancel));
+    with_deadline(Some(&deadline), || {
+      apply_gaussian_blur_cached(&mut pixmap, 3.0, 3.0, Some(&mut cache), 1.0).unwrap();
+    });
+
+    assert_eq!(pixmap.data(), original.as_slice());
+    assert_eq!(
+      cache.lru.len(),
+      0,
+      "expected blur cache to remain empty when blur is skipped due to deadline"
     );
   }
 
