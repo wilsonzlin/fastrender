@@ -14,98 +14,56 @@
 
 use crate::text::pipeline::Script;
 
+const NOTO_SANS: &str = "Noto Sans";
+const NOTO_SANS_MONO: &str = "Noto Sans Mono";
+const NOTO_SANS_SC: &str = "Noto Sans SC";
+const NOTO_SANS_JP: &str = "Noto Sans JP";
+const NOTO_SANS_KR: &str = "Noto Sans KR";
+const NOTO_SANS_SYMBOLS_2: &str = "Noto Sans Symbols 2";
+const NOTO_SANS_SYMBOLS: &str = "Noto Sans Symbols";
+const STIX_TWO_MATH: &str = "STIX Two Math";
+
+const COMMON_FALLBACKS: &[&str] = &[
+  NOTO_SANS,
+  NOTO_SANS_SYMBOLS_2,
+  NOTO_SANS_SYMBOLS,
+  STIX_TWO_MATH,
+];
+const LATIN_FALLBACKS: &[&str] = &[
+  NOTO_SANS,
+  NOTO_SANS_SYMBOLS_2,
+  NOTO_SANS_SYMBOLS,
+  NOTO_SANS_MONO,
+  STIX_TWO_MATH,
+];
+
+macro_rules! script_fallbacks {
+  ($primary:expr) => {
+    &[
+      $primary,
+      NOTO_SANS,
+      NOTO_SANS_SYMBOLS_2,
+      NOTO_SANS_SYMBOLS,
+      STIX_TWO_MATH,
+    ]
+  };
+}
+
 pub(crate) fn preferred_families(script: Script, language: &str) -> &'static [&'static str] {
   match script {
-    Script::Common => &[
-      "Noto Sans",
-      "Noto Sans Symbols 2",
-      "Noto Sans Symbols",
-      "STIX Two Math",
-    ],
-    Script::Latin | Script::Greek | Script::Cyrillic => &[
-      "Noto Sans",
-      "Noto Sans Symbols 2",
-      "Noto Sans Symbols",
-      "Noto Sans Mono",
-      "STIX Two Math",
-    ],
-    Script::Hebrew => &[
-      "Noto Sans Hebrew",
-      "Noto Sans",
-      "Noto Sans Symbols 2",
-      "Noto Sans Symbols",
-      "STIX Two Math",
-    ],
-    Script::Thai => &[
-      "Noto Sans Thai",
-      "Noto Sans",
-      "Noto Sans Symbols 2",
-      "Noto Sans Symbols",
-      "STIX Two Math",
-    ],
-    Script::Bengali => &[
-      "Noto Sans Bengali",
-      "Noto Sans",
-      "Noto Sans Symbols 2",
-      "Noto Sans Symbols",
-      "STIX Two Math",
-    ],
-    Script::Devanagari => &[
-      "Noto Sans Devanagari",
-      "Noto Sans",
-      "Noto Sans Symbols 2",
-      "Noto Sans Symbols",
-      "STIX Two Math",
-    ],
-    Script::Tamil => &[
-      "Noto Sans Tamil",
-      "Noto Sans",
-      "Noto Sans Symbols 2",
-      "Noto Sans Symbols",
-      "STIX Two Math",
-    ],
-    Script::Arabic => &[
-      "Noto Sans Arabic",
-      "Noto Sans",
-      "Noto Sans Symbols 2",
-      "Noto Sans Symbols",
-      "STIX Two Math",
-    ],
-    Script::Syriac => &[
-      "Noto Sans Syriac",
-      "Noto Sans",
-      "Noto Sans Symbols 2",
-      "Noto Sans Symbols",
-      "STIX Two Math",
-    ],
-    Script::Thaana => &[
-      "Noto Sans Thaana",
-      "Noto Sans",
-      "Noto Sans Symbols 2",
-      "Noto Sans Symbols",
-      "STIX Two Math",
-    ],
-    Script::Nko => &[
-      "Noto Sans NKo",
-      "Noto Sans",
-      "Noto Sans Symbols 2",
-      "Noto Sans Symbols",
-      "STIX Two Math",
-    ],
-    Script::Javanese => &[
-      "Noto Sans Javanese",
-      "Noto Sans",
-      "Noto Sans Symbols 2",
-      "Noto Sans Symbols",
-      "STIX Two Math",
-    ],
-    Script::Hangul => &[
-      "Noto Sans KR",
-      "Noto Sans",
-      "Noto Sans Symbols 2",
-      "Noto Sans Symbols",
-      "STIX Two Math",
-    ],
+    Script::Common => COMMON_FALLBACKS,
+    Script::Latin | Script::Greek | Script::Cyrillic => LATIN_FALLBACKS,
+    Script::Hebrew => script_fallbacks!("Noto Sans Hebrew"),
+    Script::Thai => script_fallbacks!("Noto Sans Thai"),
+    Script::Bengali => script_fallbacks!("Noto Sans Bengali"),
+    Script::Devanagari => script_fallbacks!("Noto Sans Devanagari"),
+    Script::Tamil => script_fallbacks!("Noto Sans Tamil"),
+    Script::Arabic => script_fallbacks!("Noto Sans Arabic"),
+    Script::Syriac => script_fallbacks!("Noto Sans Syriac"),
+    Script::Thaana => script_fallbacks!("Noto Sans Thaana"),
+    Script::Nko => script_fallbacks!("Noto Sans NKo"),
+    Script::Javanese => script_fallbacks!("Noto Sans Javanese"),
+    Script::Hangul => script_fallbacks!(NOTO_SANS_KR),
     Script::Han | Script::Hiragana | Script::Katakana => cjk_fallback_families(language),
     _ => &[],
   }
@@ -126,7 +84,7 @@ mod tests {
     ] {
       assert_eq!(preferred_families(script, "")[0], expected_first);
       assert!(
-        preferred_families(script, "").contains(&"Noto Sans"),
+        preferred_families(script, "").contains(&NOTO_SANS),
         "expected {script:?} fallback list to include general text face"
       );
     }
@@ -135,18 +93,18 @@ mod tests {
   #[test]
   fn preferred_families_include_bundled_symbol_fonts_for_latin_runs() {
     let families = preferred_families(Script::Latin, "");
-    assert_eq!(families[0], "Noto Sans");
-    assert!(families.contains(&"Noto Sans Symbols 2"));
-    assert!(families.contains(&"Noto Sans Symbols"));
-    assert!(families.contains(&"STIX Two Math"));
+    assert_eq!(families[0], NOTO_SANS);
+    assert!(families.contains(&NOTO_SANS_SYMBOLS_2));
+    assert!(families.contains(&NOTO_SANS_SYMBOLS));
+    assert!(families.contains(&STIX_TWO_MATH));
   }
 
   #[test]
   fn preferred_families_include_symbol_fallbacks_for_script_fonts() {
     let families = preferred_families(Script::Javanese, "");
     assert_eq!(families[0], "Noto Sans Javanese");
-    assert!(families.contains(&"Noto Sans Symbols 2"));
-    assert!(families.contains(&"Noto Sans Symbols"));
+    assert!(families.contains(&NOTO_SANS_SYMBOLS_2));
+    assert!(families.contains(&NOTO_SANS_SYMBOLS));
   }
 }
 
@@ -160,31 +118,31 @@ fn cjk_fallback_families(language: &str) -> &'static [&'static str] {
     // Japanese prefers JP glyph shapes, but keep SC/KR as backups when the face
     // isn't available in the font database.
     &[
-      "Noto Sans JP",
-      "Noto Sans SC",
-      "Noto Sans KR",
-      "Noto Sans Symbols 2",
-      "Noto Sans Symbols",
-      "STIX Two Math",
+      NOTO_SANS_JP,
+      NOTO_SANS_SC,
+      NOTO_SANS_KR,
+      NOTO_SANS_SYMBOLS_2,
+      NOTO_SANS_SYMBOLS,
+      STIX_TWO_MATH,
     ]
   } else if primary.eq_ignore_ascii_case("ko") {
     &[
-      "Noto Sans KR",
-      "Noto Sans SC",
-      "Noto Sans JP",
-      "Noto Sans Symbols 2",
-      "Noto Sans Symbols",
-      "STIX Two Math",
+      NOTO_SANS_KR,
+      NOTO_SANS_SC,
+      NOTO_SANS_JP,
+      NOTO_SANS_SYMBOLS_2,
+      NOTO_SANS_SYMBOLS,
+      STIX_TWO_MATH,
     ]
   } else {
     // Default to Simplified Chinese when language is unknown.
     &[
-      "Noto Sans SC",
-      "Noto Sans JP",
-      "Noto Sans KR",
-      "Noto Sans Symbols 2",
-      "Noto Sans Symbols",
-      "STIX Two Math",
+      NOTO_SANS_SC,
+      NOTO_SANS_JP,
+      NOTO_SANS_KR,
+      NOTO_SANS_SYMBOLS_2,
+      NOTO_SANS_SYMBOLS,
+      STIX_TWO_MATH,
     ]
   }
 }
