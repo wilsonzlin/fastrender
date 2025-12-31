@@ -5038,8 +5038,9 @@ impl FastRender {
     media_query_cache: &mut MediaQueryCache,
     stats: Option<&mut RenderStatsRecorder>,
   ) -> Result<StyleSet> {
-    let fetch_link_css =
-      runtime::runtime_toggles().truthy_with_default("FASTR_FETCH_LINK_CSS", true);
+    let fetch_link_css = self
+      .runtime_toggles
+      .truthy_with_default("FASTR_FETCH_LINK_CSS", true);
     let scoped_sources = extract_scoped_css_sources(dom);
     let fetcher = Arc::clone(&self.fetcher);
     let base_url = self.base_url.clone();
@@ -5286,8 +5287,9 @@ impl FastRender {
     media_query_cache: &mut MediaQueryCache,
     stats: Option<&mut RenderStatsRecorder>,
   ) -> Result<StyleSheet> {
-    let fetch_link_css =
-      runtime::runtime_toggles().truthy_with_default("FASTR_FETCH_LINK_CSS", true);
+    let fetch_link_css = self
+      .runtime_toggles
+      .truthy_with_default("FASTR_FETCH_LINK_CSS", true);
     let mut combined_rules = Vec::new();
     let sources = extract_css_sources(dom);
     let fetcher = Arc::clone(&self.fetcher);
