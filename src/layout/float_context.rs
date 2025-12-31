@@ -228,18 +228,67 @@ impl FloatSweepState {
   }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ClearanceSideState {
+  cursor: usize,
+  current_y: f32,
+  max_bottom: f32,
+}
+
+impl ClearanceSideState {
+  fn new() -> Self {
+    Self {
+      cursor: 0,
+      current_y: f32::NEG_INFINITY,
+      max_bottom: f32::NEG_INFINITY,
+    }
+  }
+
+  fn reset(&mut self) {
+    *self = Self::new();
+  }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ClearanceSweepState {
+  left: ClearanceSideState,
+  right: ClearanceSideState,
+}
+
+impl ClearanceSweepState {
+  fn new() -> Self {
+    Self {
+      left: ClearanceSideState::new(),
+      right: ClearanceSideState::new(),
+    }
+  }
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FloatProfileStats {
   pub width_queries: u64,
   pub range_queries: u64,
   pub boundary_steps: u64,
+  pub clearance_queries: u64,
+  pub clearance_steps: u64,
 }
 
 static FLOAT_WIDTH_QUERIES: AtomicU64 = AtomicU64::new(0);
 static FLOAT_RANGE_QUERIES: AtomicU64 = AtomicU64::new(0);
 static FLOAT_BOUNDARY_STEPS: AtomicU64 = AtomicU64::new(0);
+static FLOAT_CLEARANCE_QUERIES: AtomicU64 = AtomicU64::new(0);
+static FLOAT_CLEARANCE_STEPS: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(test)]
+thread_local! {
+  static FLOAT_PROFILE_OVERRIDE: Cell<Option<bool>> = Cell::new(None);
+}
 
 fn profile_enabled() -> bool {
+  #[cfg(test)]
+  if let Some(enabled) = FLOAT_PROFILE_OVERRIDE.with(|cell| cell.get()) {
+    return enabled;
+  }
   runtime::runtime_toggles().truthy("FASTR_LAYOUT_PROFILE")
 }
 
@@ -261,6 +310,18 @@ fn profile_count_boundary_step(delta: u64) {
   }
 }
 
+fn profile_count_clearance_query() {
+  if profile_enabled() {
+    FLOAT_CLEARANCE_QUERIES.fetch_add(1, AtomicOrdering::Relaxed);
+  }
+}
+
+fn profile_count_clearance_step(delta: u64) {
+  if profile_enabled() {
+    FLOAT_CLEARANCE_STEPS.fetch_add(delta, AtomicOrdering::Relaxed);
+  }
+}
+
 fn clamp_positive_finite(value: f32) -> f32 {
   if value.is_finite() && value > 0.0 {
     value
@@ -273,6 +334,8 @@ pub fn reset_float_profile_counters() {
   FLOAT_WIDTH_QUERIES.store(0, AtomicOrdering::Relaxed);
   FLOAT_RANGE_QUERIES.store(0, AtomicOrdering::Relaxed);
   FLOAT_BOUNDARY_STEPS.store(0, AtomicOrdering::Relaxed);
+  FLOAT_CLEARANCE_QUERIES.store(0, AtomicOrdering::Relaxed);
+  FLOAT_CLEARANCE_STEPS.store(0, AtomicOrdering::Relaxed);
 }
 
 pub fn float_profile_stats() -> FloatProfileStats {
@@ -280,7 +343,15 @@ pub fn float_profile_stats() -> FloatProfileStats {
     width_queries: FLOAT_WIDTH_QUERIES.load(AtomicOrdering::Relaxed),
     range_queries: FLOAT_RANGE_QUERIES.load(AtomicOrdering::Relaxed),
     boundary_steps: FLOAT_BOUNDARY_STEPS.load(AtomicOrdering::Relaxed),
+    clearance_queries: FLOAT_CLEARANCE_QUERIES.load(AtomicOrdering::Relaxed),
+    clearance_steps: FLOAT_CLEARANCE_STEPS.load(AtomicOrdering::Relaxed),
   }
+}
+
+fn float_vertical_span(float: &FloatInfo) -> (f32, f32) {
+  let a = float.top();
+  let b = float.bottom();
+  (a.min(b), a.max(b))
 }
 
 /// Float context for managing floats within a block formatting context
@@ -341,6 +412,11 @@ pub struct FloatContext {
   /// Sweep state used to answer monotonic Y queries efficiently.
   sweep_state: RefCell<FloatSweepState>,
 
+  clearance_state: RefCell<ClearanceSweepState>,
+
+  clearance_left_ordered: bool,
+  clearance_right_ordered: bool,
+
   /// Recorded timeout if any float queries exceed the layout deadline.
   timeout_elapsed: Cell<Option<Duration>>,
 
@@ -372,6 +448,9 @@ impl FloatContext {
       float_map: Vec::new(),
       events: Vec::new(),
       sweep_state: RefCell::new(FloatSweepState::new(0)),
+      clearance_state: RefCell::new(ClearanceSweepState::new()),
+      clearance_left_ordered: true,
+      clearance_right_ordered: true,
       timeout_elapsed: Cell::new(None),
       current_y: 0.0,
     }
@@ -384,6 +463,10 @@ impl FloatContext {
 
   fn reset_sweep_state(&mut self) {
     self.sweep_state = RefCell::new(FloatSweepState::new(self.float_map.len()));
+  }
+
+  fn reset_clearance_state(&mut self) {
+    self.clearance_state = RefCell::new(ClearanceSweepState::new());
   }
 
   fn record_timeout(&self, elapsed: Duration) {
@@ -750,18 +833,29 @@ impl FloatContext {
       FloatSide::Left => (&mut self.left_floats, FloatSide::Left),
       FloatSide::Right => (&mut self.right_floats, FloatSide::Right),
     };
+    let (start_y, end_y) = float_vertical_span(&float_info);
+    if side == FloatSide::Left && self.clearance_left_ordered {
+      if let Some(previous) = storage.last() {
+        let (prev_start, _) = float_vertical_span(previous);
+        if start_y < prev_start {
+          self.clearance_left_ordered = false;
+        }
+      }
+    }
+    if side == FloatSide::Right && self.clearance_right_ordered {
+      if let Some(previous) = storage.last() {
+        let (prev_start, _) = float_vertical_span(previous);
+        if start_y < prev_start {
+          self.clearance_right_ordered = false;
+        }
+      }
+    }
     let index = storage.len();
     storage.push(float_info);
 
     let id = self.float_map.len();
     self.float_map.push(FloatRef { side, index });
 
-    let float = self.float_info(id);
-    let (start_y, end_y) = if float.bottom() < float.top() {
-      (float.bottom(), float.top())
-    } else {
-      (float.top(), float.bottom())
-    };
     self.events.push(FloatEvent {
       y: start_y,
       kind: FloatEventKind::Start,
@@ -774,6 +868,50 @@ impl FloatContext {
     });
     self.sort_events();
     self.reset_sweep_state();
+  }
+
+  fn clearance_side_max_bottom(
+    &self,
+    y: f32,
+    floats: &[FloatInfo],
+    state: &mut ClearanceSideState,
+  ) -> f32 {
+    if y < state.current_y {
+      state.reset();
+    }
+
+    let mut steps = 0u64;
+    while let Some(float) = floats.get(state.cursor) {
+      let (top, bottom) = float_vertical_span(float);
+      if top <= y {
+        state.max_bottom = state.max_bottom.max(bottom);
+        state.cursor += 1;
+        steps += 1;
+      } else {
+        break;
+      }
+    }
+    state.current_y = y;
+    if steps > 0 {
+      profile_count_clearance_step(steps);
+    }
+    state.max_bottom
+  }
+
+  fn clearance_side_max_bottom_slow(&self, y: f32, floats: &[FloatInfo]) -> f32 {
+    let mut max_bottom = f32::NEG_INFINITY;
+    let mut steps = 0u64;
+    for float in floats {
+      steps += 1;
+      let (top, bottom) = float_vertical_span(float);
+      if top <= y {
+        max_bottom = max_bottom.max(bottom);
+      }
+    }
+    if steps > 0 {
+      profile_count_clearance_step(steps);
+    }
+    max_bottom
   }
 
   /// Get the left edge at a given Y position (accounting for left floats)
@@ -918,29 +1056,30 @@ impl FloatContext {
       return y;
     }
 
-    let mut clear_y = y;
-
-    // Find the bottom of all left floats that we need to clear
-    if clear.clears_left() {
-      for float in &self.left_floats {
-        // We need to clear floats that start at or before our position
-        let top = float.top().min(float.bottom());
-        let bottom = float.top().max(float.bottom());
-        if top <= y {
-          clear_y = clear_y.max(bottom);
-        }
-      }
+    if y.is_nan() {
+      return y;
     }
 
-    // Find the bottom of all right floats that we need to clear
+    profile_count_clearance_query();
+    let mut clear_y = y;
+    let mut state = self.clearance_state.borrow_mut();
+
+    if clear.clears_left() {
+      let max_bottom = if self.clearance_left_ordered {
+        self.clearance_side_max_bottom(y, &self.left_floats, &mut state.left)
+      } else {
+        self.clearance_side_max_bottom_slow(y, &self.left_floats)
+      };
+      clear_y = clear_y.max(max_bottom);
+    }
+
     if clear.clears_right() {
-      for float in &self.right_floats {
-        let top = float.top().min(float.bottom());
-        let bottom = float.top().max(float.bottom());
-        if top <= y {
-          clear_y = clear_y.max(bottom);
-        }
-      }
+      let max_bottom = if self.clearance_right_ordered {
+        self.clearance_side_max_bottom(y, &self.right_floats, &mut state.right)
+      } else {
+        self.clearance_side_max_bottom_slow(y, &self.right_floats)
+      };
+      clear_y = clear_y.max(max_bottom);
     }
 
     clear_y
@@ -1146,6 +1285,9 @@ impl FloatContext {
     self.float_map.clear();
     self.events.clear();
     self.reset_sweep_state();
+    self.reset_clearance_state();
+    self.clearance_left_ordered = true;
+    self.clearance_right_ordered = true;
     self.timeout_elapsed.set(None);
   }
 
@@ -1166,9 +1308,35 @@ impl Default for FloatContext {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::debug::runtime::{with_runtime_toggles, RuntimeToggles};
-  use std::collections::HashMap;
-  use std::sync::Arc;
+  use std::sync::Mutex;
+
+  static FLOAT_PROFILE_LOCK: Mutex<()> = Mutex::new(());
+
+  struct FloatProfileGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+    previous_override: Option<bool>,
+  }
+
+  impl FloatProfileGuard {
+    fn new(enabled: bool) -> Self {
+      let lock = FLOAT_PROFILE_LOCK.lock().expect("float profile lock poisoned");
+      let previous_override = FLOAT_PROFILE_OVERRIDE.with(|cell| {
+        let previous = cell.get();
+        cell.set(Some(enabled));
+        previous
+      });
+      Self {
+        _lock: lock,
+        previous_override,
+      }
+    }
+  }
+
+  impl Drop for FloatProfileGuard {
+    fn drop(&mut self) {
+      FLOAT_PROFILE_OVERRIDE.with(|cell| cell.set(self.previous_override));
+    }
+  }
 
   // ==================== FloatInfo Tests ====================
 
@@ -1647,21 +1815,17 @@ mod tests {
 
   #[test]
   fn float_sweep_counts_events_instead_of_rescanning() {
-    let mut toggles = HashMap::new();
-    toggles.insert("FASTR_LAYOUT_PROFILE".to_string(), "1".to_string());
-    let toggles = RuntimeToggles::from_map(toggles);
-    let stats = with_runtime_toggles(Arc::new(toggles), || {
-      reset_float_profile_counters();
-      let mut ctx = FloatContext::new(200.0);
-      for i in 0..100 {
-        ctx.add_float_at(FloatSide::Left, 0.0, i as f32 * 5.0, 20.0, 5.0);
-      }
+    let _guard = FloatProfileGuard::new(true);
+    reset_float_profile_counters();
+    let mut ctx = FloatContext::new(200.0);
+    for i in 0..100 {
+      ctx.add_float_at(FloatSide::Left, 0.0, i as f32 * 5.0, 20.0, 5.0);
+    }
 
-      for y in 0..500 {
-        let _ = ctx.available_width_at_y(y as f32);
-      }
-      float_profile_stats()
-    });
+    for y in 0..500 {
+      let _ = ctx.available_width_at_y(y as f32);
+    }
+    let stats = float_profile_stats();
 
     assert_eq!(stats.range_queries, 0);
     assert_eq!(stats.width_queries, 500);
@@ -1692,29 +1856,105 @@ mod tests {
 
   #[test]
   fn range_queries_reuse_sweep_state_for_dense_boundaries() {
-    let mut toggles = HashMap::new();
-    toggles.insert("FASTR_LAYOUT_PROFILE".to_string(), "1".to_string());
-    let toggles = RuntimeToggles::from_map(toggles);
-    let stats = with_runtime_toggles(Arc::new(toggles), || {
-      reset_float_profile_counters();
-      let mut ctx = FloatContext::new(200.0);
-      for i in 0..500 {
-        let y = i as f32;
-        ctx.add_float_at(FloatSide::Left, 0.0, y, 100.0, 1.0);
-        ctx.add_float_at(FloatSide::Right, 100.0, y, 100.0, 1.0);
-      }
+    let _guard = FloatProfileGuard::new(true);
+    reset_float_profile_counters();
+    let mut ctx = FloatContext::new(200.0);
+    for i in 0..500 {
+      let y = i as f32;
+      ctx.add_float_at(FloatSide::Left, 0.0, y, 100.0, 1.0);
+      ctx.add_float_at(FloatSide::Right, 100.0, y, 100.0, 1.0);
+    }
 
-      for i in 0..500 {
-        let start = i as f32;
-        let _ = ctx.available_width_in_range(start, start + 1.0);
-      }
-      float_profile_stats()
-    });
+    for i in 0..500 {
+      let start = i as f32;
+      let _ = ctx.available_width_in_range(start, start + 1.0);
+    }
+    let stats = float_profile_stats();
 
     assert!(
       stats.boundary_steps <= 2500,
       "range queries should sweep floats once, got {}",
       stats.boundary_steps
     );
+  }
+
+  #[test]
+  fn clearance_matches_naive_scan() {
+    fn naive(ctx: &FloatContext, y: f32, clear: Clear) -> f32 {
+      if !clear.is_clearing() {
+        return y;
+      }
+      let mut clear_y = y;
+      if clear.clears_left() {
+        for float in ctx.left_floats() {
+          let (top, bottom) = float_vertical_span(float);
+          if top <= y {
+            clear_y = clear_y.max(bottom);
+          }
+        }
+      }
+      if clear.clears_right() {
+        for float in ctx.right_floats() {
+          let (top, bottom) = float_vertical_span(float);
+          if top <= y {
+            clear_y = clear_y.max(bottom);
+          }
+        }
+      }
+      clear_y
+    }
+
+    let mut ctx = FloatContext::new(800.0);
+    for i in 0..1000usize {
+      let y = (i as f32) * 2.0;
+      if i % 2 == 0 {
+        ctx.add_float_at(FloatSide::Left, 0.0, y, 100.0, 5.0);
+      } else {
+        ctx.add_float_at(FloatSide::Right, 700.0, y, 100.0, 3.0);
+      }
+    }
+
+    for i in 0..2000usize {
+      let y = i as f32;
+      for clear in [Clear::Left, Clear::Right, Clear::Both, Clear::None] {
+        assert_eq!(ctx.compute_clearance(y, clear), naive(&ctx, y, clear));
+      }
+    }
+
+    for &y in &[250.0, 125.0, 375.0, 10.0, 999.0, 0.0, 500.0] {
+      for clear in [Clear::Left, Clear::Right, Clear::Both] {
+        assert_eq!(ctx.compute_clearance(y, clear), naive(&ctx, y, clear));
+      }
+    }
+  }
+
+  #[test]
+  fn clearance_queries_scale_with_insertions() {
+    let _guard = FloatProfileGuard::new(true);
+    reset_float_profile_counters();
+    let mut ctx = FloatContext::new(200.0);
+    for i in 0..2000usize {
+      let y = i as f32;
+      ctx.add_float_at(FloatSide::Left, 0.0, y, 20.0, 1.0);
+      ctx.add_float_at(FloatSide::Right, 180.0, y, 20.0, 1.0);
+      let _ = ctx.compute_clearance(y, Clear::Both);
+    }
+    let stats = float_profile_stats();
+
+    assert_eq!(stats.clearance_queries, 2000);
+    assert!(
+      stats.clearance_steps <= 4500,
+      "clearance should advance incrementally, got {} steps",
+      stats.clearance_steps
+    );
+  }
+
+  #[test]
+  fn clearance_falls_back_for_out_of_order_floats() {
+    let mut ctx = FloatContext::new(800.0);
+    ctx.add_float_at(FloatSide::Left, 0.0, 100.0, 200.0, 50.0);
+    ctx.add_float_at(FloatSide::Left, 0.0, 50.0, 200.0, 25.0);
+
+    assert_eq!(ctx.compute_clearance(60.0, Clear::Left), 75.0);
   }
 }
