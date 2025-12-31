@@ -128,6 +128,52 @@ fn generate_descendant_styles(class_variants: usize, chain_lengths: &[usize]) ->
 }
 
 fn build_has_tree_html(depth: usize, branching: usize, needle_stride: usize) -> String {
+  fn estimated_has_tree_element_count(depth: usize, branching: usize) -> Option<u128> {
+    // This builder expands an exponential tree:
+    // - 1 <section> at every recursion node (levels 0..=depth)
+    // - At non-leaf nodes (levels 0..depth-1):
+    //   - `branching` gate <div> wrappers
+    //   - 1 filler <div>
+    // - At leaf nodes (level == depth): 2 <div> children (leaf + trail)
+    //
+    // These counts are approximate but good enough to prevent accidental OOM.
+    if branching == 0 {
+      return Some(0);
+    }
+
+    let b = branching as u128;
+    let d = depth as u32;
+
+    // geometric sums
+    let pow_d = b.checked_pow(d)?;
+    let pow_d1 = b.checked_pow(d.saturating_add(1))?;
+
+    // sections: sum_{i=0..d} b^i = (b^(d+1)-1)/(b-1)   (or d+1 when b==1)
+    let sections = if b == 1 {
+      (depth as u128).saturating_add(1)
+    } else {
+      pow_d1.saturating_sub(1) / (b - 1)
+    };
+
+    // non-leaf nodes: sum_{i=0..d-1} b^i
+    let non_leaf = if depth == 0 {
+      0
+    } else if b == 1 {
+      depth as u128
+    } else {
+      pow_d.saturating_sub(1) / (b - 1)
+    };
+
+    let gate_divs = b.checked_mul(non_leaf)?;
+    let filler_divs = non_leaf;
+    let leaf_divs = 2u128.checked_mul(pow_d)?;
+
+    sections
+      .checked_add(gate_divs)?
+      .checked_add(filler_divs)?
+      .checked_add(leaf_divs)
+  }
+
   fn build_level(
     html: &mut String,
     level: usize,
@@ -197,6 +243,21 @@ fn build_has_tree_html(depth: usize, branching: usize, needle_stride: usize) -> 
 
   let mut html = String::from("<html><head></head><body>");
   let mut counter = 0usize;
+
+  // Guardrail: prevent accidental runaway allocations during benches.
+  // If you need a larger stress case, explicitly raise this cap.
+  let max_elems: u128 = std::env::var("FASTR_BLOOM_BENCH_MAX_ELEMS")
+    .ok()
+    .and_then(|v| v.trim().parse::<u128>().ok())
+    .unwrap_or(2_000_000);
+  if let Some(estimated) = estimated_has_tree_element_count(depth, branching) {
+    assert!(
+      estimated <= max_elems,
+      "has-tree bench would generate ~{estimated} elements (depth={depth}, branching={branching}); \
+set FASTR_BLOOM_BENCH_MAX_ELEMS to raise the cap"
+    );
+  }
+
   build_level(&mut html, 0, depth, branching, needle_stride, &mut counter);
   html.push_str("</body></html>");
   html
@@ -299,8 +360,10 @@ fn has_selector_bloom_benchmark(c: &mut Criterion) {
 }
 
 fn has_selector_summary_benchmark(c: &mut Criterion) {
-  let depth = 10;
-  let branching = 6;
+  // Keep this benchmark representative but *safe* by default.
+  // Previous values could generate hundreds of millions of elements and OOM machines.
+  let depth = 8;
+  let branching = 4;
   let needle_stride = 23;
 
   let html = build_has_tree_html(depth, branching, needle_stride);

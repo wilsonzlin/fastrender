@@ -15,6 +15,7 @@ If a document can’t be kept accurate, delete it and replace it with something 
 - Debugging renders: [debugging.md](debugging.md)
 - Profiling & perf logging: [perf-logging.md](perf-logging.md)
 - Profiling on Linux (perf/samply/flamegraph): [profiling-linux.md](profiling-linux.md)
+- Resource limits (RAM/CPU/time): [resource-limits.md](resource-limits.md)
 - Runtime environment variables: [env-vars.md](env-vars.md)
 - Instrumentation patterns: [instrumentation.md](instrumentation.md)
 - Testing: [testing.md](testing.md)

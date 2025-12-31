@@ -24,6 +24,12 @@ Disk cache tuning knobs (useful for reproducibility when long-lived caches would
 - `FASTR_DISK_CACHE_MAX_AGE_SECS=0` pins cached subresources (never expire purely due to age).
 - `FASTR_DISK_CACHE_MAX_BYTES=<bytes>` increases the on-disk cache eviction budget (0 disables eviction).
 
+**Hard memory cap (recommended for any long-running command):**
+
+```bash
+scripts/run_limited.sh --as 8G -- cargo bench --bench selector_bloom_bench
+```
+
 **Profile one page (terminal-only; writes a profile file + prints a summary):**
 
 ```bash
