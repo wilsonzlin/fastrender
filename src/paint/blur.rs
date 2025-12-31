@@ -333,10 +333,17 @@ fn gaussian_kernel_fixed(sigma: f32) -> (Vec<i32>, usize, i32) {
 
 #[inline]
 fn clamp_channel_to_alpha(channel: i32, alpha: i32) -> u8 {
-  debug_assert!(alpha >= 0 && alpha <= 255);
-  // All callers clamp alpha to 0..=255, so clamping the color channel to alpha
-  // implicitly keeps it within the u8 range as well.
+  let alpha = alpha.clamp(0, 255);
+  // Clamping to alpha keeps the channel within the u8 range.
   channel.clamp(0, alpha) as u8
+}
+
+#[inline]
+fn div_pow2_trunc_i32(value: i32, shift: u32) -> i32 {
+  // Signed right-shift rounds toward -infinity for negative values, but Rust's `/` rounds toward zero.
+  // Adjust negative values so the shift matches truncating division by a power of two.
+  let mask = (1i32 << shift) - 1;
+  (value + ((value >> 31) & mask)) >> shift
 }
 
 #[inline]
@@ -374,10 +381,10 @@ fn convolve_row_horizontal_fixed(
       acc_a += w * src_row[idx + 3] as i32;
     }
     let out_idx = x * 4;
-    let a = ((acc_a + bias) >> shift).clamp(0, 255);
-    let r = (acc_r + bias) >> shift;
-    let g = (acc_g + bias) >> shift;
-    let b = (acc_b + bias) >> shift;
+    let a = div_pow2_trunc_i32(acc_a + bias, shift).clamp(0, 255);
+    let r = div_pow2_trunc_i32(acc_r + bias, shift);
+    let g = div_pow2_trunc_i32(acc_g + bias, shift);
+    let b = div_pow2_trunc_i32(acc_b + bias, shift);
     out_row[out_idx] = clamp_channel_to_alpha(r, a);
     out_row[out_idx + 1] = clamp_channel_to_alpha(g, a);
     out_row[out_idx + 2] = clamp_channel_to_alpha(b, a);
@@ -412,10 +419,10 @@ fn convolve_row_horizontal_fixed(
       acc_a += w * src_row[idx + 3] as i32;
       idx += 4;
     }
-    let a = ((acc_a + bias) >> shift).clamp(0, 255);
-    let r = (acc_r + bias) >> shift;
-    let g = (acc_g + bias) >> shift;
-    let b = (acc_b + bias) >> shift;
+    let a = div_pow2_trunc_i32(acc_a + bias, shift).clamp(0, 255);
+    let r = div_pow2_trunc_i32(acc_r + bias, shift);
+    let g = div_pow2_trunc_i32(acc_g + bias, shift);
+    let b = div_pow2_trunc_i32(acc_b + bias, shift);
     out_row[out_idx] = clamp_channel_to_alpha(r, a);
     out_row[out_idx + 1] = clamp_channel_to_alpha(g, a);
     out_row[out_idx + 2] = clamp_channel_to_alpha(b, a);
@@ -469,10 +476,10 @@ fn convolve_row_vertical_fixed(
         acc_a += w * src[idx + 3] as i32;
       }
       let out_idx = x * 4;
-      let a = ((acc_a + bias) >> shift).clamp(0, 255);
-      let r = (acc_r + bias) >> shift;
-      let g = (acc_g + bias) >> shift;
-      let b = (acc_b + bias) >> shift;
+      let a = div_pow2_trunc_i32(acc_a + bias, shift).clamp(0, 255);
+      let r = div_pow2_trunc_i32(acc_r + bias, shift);
+      let g = div_pow2_trunc_i32(acc_g + bias, shift);
+      let b = div_pow2_trunc_i32(acc_b + bias, shift);
       out_row[out_idx] = clamp_channel_to_alpha(r, a);
       out_row[out_idx + 1] = clamp_channel_to_alpha(g, a);
       out_row[out_idx + 2] = clamp_channel_to_alpha(b, a);
@@ -497,10 +504,10 @@ fn convolve_row_vertical_fixed(
       acc_a += w * src[idx + 3] as i32;
       idx += row_stride;
     }
-    let a = ((acc_a + bias) >> shift).clamp(0, 255);
-    let r = (acc_r + bias) >> shift;
-    let g = (acc_g + bias) >> shift;
-    let b = (acc_b + bias) >> shift;
+    let a = div_pow2_trunc_i32(acc_a + bias, shift).clamp(0, 255);
+    let r = div_pow2_trunc_i32(acc_r + bias, shift);
+    let g = div_pow2_trunc_i32(acc_g + bias, shift);
+    let b = div_pow2_trunc_i32(acc_b + bias, shift);
     out_row[out_idx] = clamp_channel_to_alpha(r, a);
     out_row[out_idx + 1] = clamp_channel_to_alpha(g, a);
     out_row[out_idx + 2] = clamp_channel_to_alpha(b, a);
