@@ -9,10 +9,19 @@ import pathlib
 import tempfile
 import urllib.request
 
-from fontTools import subset
 from urllib import parse
-from fontTools.ttLib import TTFont
-from fontTools.varLib import instancer
+
+try:
+  from fontTools import subset
+  from fontTools.ttLib import TTFont
+  from fontTools.varLib import instancer
+except ImportError as exc:
+  raise SystemExit(
+    "Missing dependency: fontTools.\n\n"
+    "Regenerate bundled font subsets by installing the pinned Python deps:\n"
+    "  python3 -m venv .venv && . .venv/bin/activate\n"
+    "  pip install -r tests/fixtures/fonts/requirements.txt\n"
+  ) from exc
 
 
 FIXTURES = pathlib.Path(__file__).parent

@@ -7,10 +7,15 @@ and tests can run in fully hermetic environments without relying on platform fon
 
 ### Bundled text/script coverage (Noto subsets + math)
 - **Sources:** [Noto Sans families](https://github.com/google/fonts/tree/main/ofl) (OFL, see `Noto-LICENSE-OFL.txt`),
-  [STIX Math v2.0.0](https://github.com/stipub/stixfonts) (OFL, see `STIXTwoMath-OFL.txt`),
-  and `FastRenderEmoji.ttf` (CC0) for color emoji.
-- **Regeneration:** `python tests/fixtures/fonts/generate_bundled_noto_subsets.py` (pins deterministic timestamps and
-  instantiates the CJK faces at `wght=400` before subsetting).
+   [STIX Math v2.0.0](https://github.com/stipub/stixfonts) (OFL, see `STIXTwoMath-OFL.txt`),
+   and `FastRenderEmoji.ttf` (CC0) for color emoji.
+- **Regeneration:** From the repository root:
+  ```bash
+  python3 -m venv .venv && . .venv/bin/activate
+  pip install -r tests/fixtures/fonts/requirements.txt
+  python tests/fixtures/fonts/generate_bundled_noto_subsets.py
+  ```
+  (pins deterministic timestamps and instantiates the CJK faces at `wght=400` before subsetting).
 - **Coverage:**
   - `NotoSans-subset.ttf` / `NotoSerif-subset.ttf`: Basic + Extended Latin plus IPA/modifier-letter support
     (U+0250–02FF, U+1D00–1D7F), combining marks, Greek, Cyrillic, and punctuation (U+2000–206F) for bundled
