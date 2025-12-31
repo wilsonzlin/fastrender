@@ -10,6 +10,7 @@ use fastrender::style::cascade::{
 };
 use fastrender::style::media::MediaContext;
 use std::fmt::Write;
+use std::time::Duration;
 
 fn generate_cascade_html(nodes: usize, class_variants: usize) -> String {
   let mut html = String::from("<html><head><style>body{margin:0;padding:0;}</style></head><body>");
@@ -300,11 +301,92 @@ fn has_selector_benchmark(c: &mut Criterion) {
   });
 }
 
+fn generate_candidate_heavy_html(nodes: usize, class_variants: usize) -> String {
+  let mut class_attr = String::new();
+  for i in 0..class_variants {
+    class_attr.push_str(&format!("c{} ", i));
+  }
+  if !class_attr.is_empty() {
+    class_attr.pop();
+  }
+
+  let mut html = String::from("<html><body><div id=\"root\">");
+  for i in 0..nodes {
+    html.push_str(&format!(
+      "<div class=\"{}\" id=\"item{}\"></div>",
+      class_attr, i
+    ));
+  }
+  html.push_str("</div></body></html>");
+  html
+}
+
+fn generate_candidate_heavy_css(rules: usize, class_variants: usize) -> String {
+  let mut selector_list = String::new();
+  for i in 0..class_variants {
+    if i > 0 {
+      selector_list.push_str(", ");
+    }
+    selector_list.push_str(&format!(".c{}", i));
+  }
+
+  let mut css = String::new();
+  for i in 0..rules {
+    css.push_str(&selector_list);
+    css.push_str(&format!(
+      " {{ color: rgb({}, {}, {}); }}\n",
+      i % 255,
+      (i * 3) % 255,
+      (i * 7) % 255
+    ));
+  }
+  css
+}
+
+fn candidate_heavy_benchmark(c: &mut Criterion) {
+  let node_count = 200;
+  let class_variants = 32;
+  let rule_count = 256;
+  let html = generate_candidate_heavy_html(node_count, class_variants);
+  let css = generate_candidate_heavy_css(rule_count, class_variants);
+
+  let dom = parse_html(&html).expect("parse html");
+  let stylesheet = parse_stylesheet(&css).expect("parse stylesheet");
+  let media = MediaContext::screen(1280.0, 720.0);
+
+  c.bench_function(
+    "cascade apply_styles candidate-heavy 200 nodes 256x32 selectors",
+    |b| {
+      b.iter(|| {
+        let styled = apply_styles_with_media(black_box(&dom), black_box(&stylesheet), &media);
+        black_box(styled);
+      });
+    },
+  );
+}
+
+fn cascade_bench_config() -> Criterion {
+  if std::env::var("FASTR_CASCADE_PROFILE")
+    .map(|value| !value.trim().is_empty() && value.trim() != "0")
+    .unwrap_or(false)
+  {
+    Criterion::default()
+      .sample_size(10)
+      .warm_up_time(Duration::from_millis(100))
+      .measurement_time(Duration::from_millis(300))
+  } else {
+    Criterion::default()
+  }
+}
+
 criterion_group!(
-  benches,
-  cascade_benchmark,
-  cascade_not_benchmark,
-  has_selector_benchmark,
-  pseudo_selector_candidate_benchmark
+  name = benches;
+  config = cascade_bench_config();
+  targets =
+    cascade_benchmark,
+    cascade_not_benchmark,
+    has_selector_benchmark,
+    pseudo_selector_candidate_benchmark,
+    candidate_heavy_benchmark
 );
 criterion_main!(benches);

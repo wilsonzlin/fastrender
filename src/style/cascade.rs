@@ -87,6 +87,8 @@ use selectors::parser::SelectorList;
 use selectors::Element;
 use std::borrow::Cow;
 use std::cell::RefCell;
+use std::cmp::Ordering as CmpOrdering;
+use std::collections::BinaryHeap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::hash::{BuildHasherDefault, Hasher};
@@ -1354,9 +1356,11 @@ impl MatchIndex {
 
 struct CascadeScratch {
   candidates: Vec<usize>,
+  slotted_candidates: Vec<usize>,
   match_index: MatchIndex,
   candidate_seen: CandidateSet,
   candidate_stats: CandidateStats,
+  candidate_merge: CandidateMergeScratch,
   part_candidates: Vec<usize>,
   part_seen: CandidateSet,
   scope_cache: ScopeResolutionCache,
@@ -1366,9 +1370,11 @@ impl CascadeScratch {
   fn new(rule_count: usize) -> Self {
     Self {
       candidates: Vec::new(),
+      slotted_candidates: Vec::new(),
       match_index: MatchIndex::new(rule_count),
       candidate_seen: CandidateSet::new(rule_count),
       candidate_stats: CandidateStats::default(),
+      candidate_merge: CandidateMergeScratch::default(),
       part_candidates: Vec::new(),
       part_seen: CandidateSet::new(rule_count),
       scope_cache: ScopeResolutionCache::default(),
@@ -1441,6 +1447,101 @@ impl CandidateStats {
   fn total(&self) -> u64 {
     self.by_id + self.by_class + self.by_tag + self.by_attr + self.universal
   }
+}
+
+#[derive(Clone, Copy)]
+enum CandidateBucket {
+  Id,
+  Class,
+  Tag,
+  Attr,
+  Universal,
+}
+
+impl CandidateBucket {
+  fn rank(self) -> u8 {
+    match self {
+      CandidateBucket::Id => 0,
+      CandidateBucket::Class => 1,
+      CandidateBucket::Tag => 2,
+      CandidateBucket::Attr => 3,
+      CandidateBucket::Universal => 4,
+    }
+  }
+}
+
+struct CandidateCursor {
+  ptr: *const usize,
+  len: usize,
+  pos: usize,
+  bucket: CandidateBucket,
+}
+
+impl CandidateCursor {
+  fn new(list: &[usize], bucket: CandidateBucket) -> Self {
+    Self {
+      ptr: list.as_ptr(),
+      len: list.len(),
+      pos: 0,
+      bucket,
+    }
+  }
+
+  fn current(&self) -> Option<usize> {
+    if self.pos < self.len {
+      // Safety: `pos < len` ensures the pointer remains within the slice.
+      Some(unsafe { *self.ptr.add(self.pos) })
+    } else {
+      None
+    }
+  }
+}
+
+#[derive(Clone, Copy)]
+struct CandidateHeapItem {
+  rule_idx: usize,
+  specificity: u32,
+  selector_idx: usize,
+  bucket_rank: u8,
+  cursor_idx: usize,
+}
+
+impl PartialEq for CandidateHeapItem {
+  fn eq(&self, other: &Self) -> bool {
+    self.rule_idx == other.rule_idx
+      && self.specificity == other.specificity
+      && self.selector_idx == other.selector_idx
+      && self.bucket_rank == other.bucket_rank
+      && self.cursor_idx == other.cursor_idx
+  }
+}
+
+impl Eq for CandidateHeapItem {}
+
+impl PartialOrd for CandidateHeapItem {
+  fn partial_cmp(&self, other: &Self) -> Option<CmpOrdering> {
+    Some(self.cmp(other))
+  }
+}
+
+impl Ord for CandidateHeapItem {
+  fn cmp(&self, other: &Self) -> CmpOrdering {
+    // `BinaryHeap` is a max heap; reverse comparisons to pop the smallest
+    // (rule_idx asc, specificity desc) item first.
+    other
+      .rule_idx
+      .cmp(&self.rule_idx)
+      .then_with(|| self.specificity.cmp(&other.specificity))
+      .then_with(|| other.selector_idx.cmp(&self.selector_idx))
+      .then_with(|| other.bucket_rank.cmp(&self.bucket_rank))
+      .then_with(|| other.cursor_idx.cmp(&self.cursor_idx))
+  }
+}
+
+#[derive(Default)]
+struct CandidateMergeScratch {
+  cursors: Vec<CandidateCursor>,
+  heap: BinaryHeap<CandidateHeapItem>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1606,6 +1707,12 @@ fn scope_cache_context_key(context: &MatchingContext<FastRenderSelectorImpl>) ->
     VisitedHandlingMode::RelevantLinkVisited => 2u8,
   };
   mode | (visited << 2)
+}
+
+#[derive(Clone)]
+struct ScopeMatch<'a> {
+  root: &'a DomNode,
+  ancestors: Vec<&'a DomNode>,
 }
 
 fn push_key(keys: &mut Vec<SelectorKey>, key: SelectorKey) {
@@ -2205,8 +2312,61 @@ impl<'a> RuleIndex<'a> {
     }
 
     index.build_part_index();
+    index.sort_selector_buckets();
 
     index
+  }
+
+  fn sort_selector_buckets(&mut self) {
+    fn sort_bucket(list: &mut Vec<usize>, selectors: &[IndexedSelector<'_>]) {
+      list.sort_unstable_by(|a, b| {
+        let a_sel = &selectors[*a];
+        let b_sel = &selectors[*b];
+        a_sel
+          .rule_idx
+          .cmp(&b_sel.rule_idx)
+          .then(b_sel.specificity.cmp(&a_sel.specificity))
+          .then(a.cmp(b))
+      });
+    }
+
+    let selectors = &self.selectors;
+    for list in self.by_id.values_mut() {
+      sort_bucket(list, selectors);
+    }
+    for list in self.by_class.values_mut() {
+      sort_bucket(list, selectors);
+    }
+    for list in self.by_tag.values_mut() {
+      sort_bucket(list, selectors);
+    }
+    for list in self.by_attr.values_mut() {
+      sort_bucket(list, selectors);
+    }
+    sort_bucket(&mut self.universal, selectors);
+
+    fn sort_slotted_bucket(list: &mut Vec<usize>, selectors: &[IndexedSlottedSelector<'_>]) {
+      list.sort_unstable_by(|a, b| {
+        let a_sel = &selectors[*a];
+        let b_sel = &selectors[*b];
+        a_sel.rule_idx.cmp(&b_sel.rule_idx).then(a.cmp(b))
+      });
+    }
+
+    let slotted_selectors = &self.slotted_selectors;
+    for list in self.slotted_buckets.by_id.values_mut() {
+      sort_slotted_bucket(list, slotted_selectors);
+    }
+    for list in self.slotted_buckets.by_class.values_mut() {
+      sort_slotted_bucket(list, slotted_selectors);
+    }
+    for list in self.slotted_buckets.by_tag.values_mut() {
+      sort_slotted_bucket(list, slotted_selectors);
+    }
+    for list in self.slotted_buckets.by_attr.values_mut() {
+      sort_slotted_bucket(list, slotted_selectors);
+    }
+    sort_slotted_bucket(&mut self.slotted_buckets.universal, slotted_selectors);
   }
 
   fn has_pseudo_content(&self, pseudo: &PseudoElement) -> bool {
@@ -2239,46 +2399,52 @@ impl<'a> RuleIndex<'a> {
     out: &mut Vec<usize>,
     seen: &mut CandidateSet,
     stats: &mut CandidateStats,
+    merge: &mut CandidateMergeScratch,
   ) {
     out.clear();
     seen.reset();
+    merge.cursors.clear();
+    merge.heap.clear();
     if !node.is_element() {
       return;
     }
 
-    let mut consider_candidate = |idx: usize, bucket: &mut u64| {
-      if !selector_metadata_matches_node(&self.selectors[idx].metadata, node, summary, quirks_mode)
-      {
-        if seen.mark_seen(idx) {
-          stats.pruned += 1;
-        }
+    let selectors = &self.selectors;
+    let mut push_list = |list: &[usize], bucket: CandidateBucket| {
+      if list.is_empty() {
         return;
       }
-      if seen.mark_seen(idx) {
-        out.push(idx);
-        *bucket += 1;
-      }
+      let cursor_idx = merge.cursors.len();
+      merge.cursors.push(CandidateCursor::new(list, bucket));
+      let selector_idx = list[0];
+      let indexed = &selectors[selector_idx];
+      merge.heap.push(CandidateHeapItem {
+        rule_idx: indexed.rule_idx,
+        specificity: indexed.specificity,
+        selector_idx,
+        bucket_rank: bucket.rank(),
+        cursor_idx,
+      });
     };
 
     if !self.by_id.is_empty() {
       if let Some(id) = node.get_attribute_ref("id") {
         let key = selector_bucket_id(id);
         if let Some(list) = self.by_id.get(&key) {
-          for idx in list {
-            consider_candidate(*idx, &mut stats.by_id);
-          }
+          push_list(list.as_slice(), CandidateBucket::Id);
         }
       }
     }
 
-    if let Some(class_attr) = node.get_attribute_ref("class") {
-      for cls in class_attr.split_whitespace() {
-        if !cls.is_empty() {
+    if !self.by_class.is_empty() {
+      if let Some(class_attr) = node.get_attribute_ref("class") {
+        for cls in class_attr.split_whitespace() {
+          if cls.is_empty() {
+            continue;
+          }
           let key = selector_bucket_class(cls);
           if let Some(list) = self.by_class.get(&key) {
-            for idx in list {
-              consider_candidate(*idx, &mut stats.by_class);
-            }
+            push_list(list.as_slice(), CandidateBucket::Class);
           }
         }
       }
@@ -2288,15 +2454,11 @@ impl<'a> RuleIndex<'a> {
       if let Some(tag) = node.tag_name() {
         let key = selector_bucket_tag(tag);
         if let Some(list) = self.by_tag.get(&key) {
-          for idx in list {
-            consider_candidate(*idx, &mut stats.by_tag);
-          }
+          push_list(list.as_slice(), CandidateBucket::Tag);
         }
         let star = selector_bucket_tag("*");
         if let Some(list) = self.by_tag.get(&star) {
-          for idx in list {
-            consider_candidate(*idx, &mut stats.by_tag);
-          }
+          push_list(list.as_slice(), CandidateBucket::Tag);
         }
       }
     }
@@ -2305,15 +2467,80 @@ impl<'a> RuleIndex<'a> {
       for (name, _) in node.attributes_iter() {
         let key = selector_bucket_attr(name);
         if let Some(list) = self.by_attr.get(&key) {
-          for idx in list {
-            consider_candidate(*idx, &mut stats.by_attr);
-          }
+          push_list(list.as_slice(), CandidateBucket::Attr);
         }
       }
     }
 
-    for idx in &self.universal {
-      consider_candidate(*idx, &mut stats.universal);
+    push_list(self.universal.as_slice(), CandidateBucket::Universal);
+
+    if merge.cursors.len() == 1 {
+      let cursor = &merge.cursors[0];
+      for offset in 0..cursor.len {
+        // Safety: `offset < len` ensures the pointer remains within the slice.
+        let selector_idx = unsafe { *cursor.ptr.add(offset) };
+        if !seen.mark_seen(selector_idx) {
+          continue;
+        }
+        if !selector_metadata_matches_node(
+          &selectors[selector_idx].metadata,
+          node,
+          summary,
+          quirks_mode,
+        ) {
+          stats.pruned += 1;
+          continue;
+        }
+        out.push(selector_idx);
+        match cursor.bucket {
+          CandidateBucket::Id => stats.by_id += 1,
+          CandidateBucket::Class => stats.by_class += 1,
+          CandidateBucket::Tag => stats.by_tag += 1,
+          CandidateBucket::Attr => stats.by_attr += 1,
+          CandidateBucket::Universal => stats.universal += 1,
+        }
+      }
+      return;
+    }
+
+    while let Some(item) = merge.heap.pop() {
+      let cursor = &mut merge.cursors[item.cursor_idx];
+      let Some(selector_idx) = cursor.current() else {
+        continue;
+      };
+      debug_assert_eq!(selector_idx, item.selector_idx);
+      cursor.pos += 1;
+      if let Some(next_idx) = cursor.current() {
+        let indexed = &selectors[next_idx];
+        merge.heap.push(CandidateHeapItem {
+          rule_idx: indexed.rule_idx,
+          specificity: indexed.specificity,
+          selector_idx: next_idx,
+          bucket_rank: cursor.bucket.rank(),
+          cursor_idx: item.cursor_idx,
+        });
+      }
+
+      if !seen.mark_seen(selector_idx) {
+        continue;
+      }
+      if !selector_metadata_matches_node(
+        &selectors[selector_idx].metadata,
+        node,
+        summary,
+        quirks_mode,
+      ) {
+        stats.pruned += 1;
+        continue;
+      }
+      out.push(selector_idx);
+      match cursor.bucket {
+        CandidateBucket::Id => stats.by_id += 1,
+        CandidateBucket::Class => stats.by_class += 1,
+        CandidateBucket::Tag => stats.by_tag += 1,
+        CandidateBucket::Attr => stats.by_attr += 1,
+        CandidateBucket::Universal => stats.universal += 1,
+      }
     }
   }
 
@@ -2325,80 +2552,151 @@ impl<'a> RuleIndex<'a> {
     out: &mut Vec<usize>,
     seen: &mut CandidateSet,
     stats: &mut CandidateStats,
+    merge: &mut CandidateMergeScratch,
   ) {
     out.clear();
     seen.reset();
+    merge.cursors.clear();
+    merge.heap.clear();
     if !node.is_element() {
       return;
     }
 
-    let mut consider_candidate = |idx: usize, bucket: &mut u64| {
-      if !selector_metadata_matches_node(
-        &self.slotted_selectors[idx].metadata,
-        node,
-        summary,
-        quirks_mode,
-      ) {
-        if seen.mark_seen(idx) {
-          stats.pruned += 1;
-        }
+    let selectors = &self.slotted_selectors;
+    let mut push_list = |list: &[usize], bucket: CandidateBucket| {
+      if list.is_empty() {
         return;
       }
-      if seen.mark_seen(idx) {
-        out.push(idx);
-        *bucket += 1;
-      }
+      let cursor_idx = merge.cursors.len();
+      merge.cursors.push(CandidateCursor::new(list, bucket));
+      let selector_idx = list[0];
+      let indexed = &selectors[selector_idx];
+      merge.heap.push(CandidateHeapItem {
+        rule_idx: indexed.rule_idx,
+        specificity: 0,
+        selector_idx,
+        bucket_rank: bucket.rank(),
+        cursor_idx,
+      });
     };
 
-    if let Some(id) = node.get_attribute_ref("id") {
-      let key = selector_bucket_id(id);
-      if let Some(list) = self.slotted_buckets.by_id.get(&key) {
-        for idx in list {
-          consider_candidate(*idx, &mut stats.by_id);
+    if !self.slotted_buckets.by_id.is_empty() {
+      if let Some(id) = node.get_attribute_ref("id") {
+        let key = selector_bucket_id(id);
+        if let Some(list) = self.slotted_buckets.by_id.get(&key) {
+          push_list(list.as_slice(), CandidateBucket::Id);
         }
       }
     }
 
-    if let Some(class_attr) = node.get_attribute_ref("class") {
-      for cls in class_attr.split_whitespace() {
-        if cls.is_empty() {
-          continue;
-        }
-        let key = selector_bucket_class(cls);
-        if let Some(list) = self.slotted_buckets.by_class.get(&key) {
-          for idx in list {
-            consider_candidate(*idx, &mut stats.by_class);
+    if !self.slotted_buckets.by_class.is_empty() {
+      if let Some(class_attr) = node.get_attribute_ref("class") {
+        for cls in class_attr.split_whitespace() {
+          if cls.is_empty() {
+            continue;
+          }
+          let key = selector_bucket_class(cls);
+          if let Some(list) = self.slotted_buckets.by_class.get(&key) {
+            push_list(list.as_slice(), CandidateBucket::Class);
           }
         }
       }
     }
 
-    if let Some(tag) = node.tag_name() {
-      let key = selector_bucket_tag(tag);
-      if let Some(list) = self.slotted_buckets.by_tag.get(&key) {
-        for idx in list {
-          consider_candidate(*idx, &mut stats.by_tag);
+    if !self.slotted_buckets.by_tag.is_empty() {
+      if let Some(tag) = node.tag_name() {
+        let key = selector_bucket_tag(tag);
+        if let Some(list) = self.slotted_buckets.by_tag.get(&key) {
+          push_list(list.as_slice(), CandidateBucket::Tag);
         }
-      }
-      let star = selector_bucket_tag("*");
-      if let Some(list) = self.slotted_buckets.by_tag.get(&star) {
-        for idx in list {
-          consider_candidate(*idx, &mut stats.by_tag);
-        }
-      }
-    }
-
-    for (name, _) in node.attributes_iter() {
-      let key = selector_bucket_attr(name);
-      if let Some(list) = self.slotted_buckets.by_attr.get(&key) {
-        for idx in list {
-          consider_candidate(*idx, &mut stats.by_attr);
+        let star = selector_bucket_tag("*");
+        if let Some(list) = self.slotted_buckets.by_tag.get(&star) {
+          push_list(list.as_slice(), CandidateBucket::Tag);
         }
       }
     }
 
-    for idx in &self.slotted_buckets.universal {
-      consider_candidate(*idx, &mut stats.universal);
+    if !self.slotted_buckets.by_attr.is_empty() {
+      for (name, _) in node.attributes_iter() {
+        let key = selector_bucket_attr(name);
+        if let Some(list) = self.slotted_buckets.by_attr.get(&key) {
+          push_list(list.as_slice(), CandidateBucket::Attr);
+        }
+      }
+    }
+
+    push_list(
+      self.slotted_buckets.universal.as_slice(),
+      CandidateBucket::Universal,
+    );
+
+    if merge.cursors.len() == 1 {
+      let cursor = &merge.cursors[0];
+      for offset in 0..cursor.len {
+        // Safety: `offset < len` ensures the pointer remains within the slice.
+        let selector_idx = unsafe { *cursor.ptr.add(offset) };
+        if !seen.mark_seen(selector_idx) {
+          continue;
+        }
+        if !selector_metadata_matches_node(
+          &selectors[selector_idx].metadata,
+          node,
+          summary,
+          quirks_mode,
+        ) {
+          stats.pruned += 1;
+          continue;
+        }
+        out.push(selector_idx);
+        match cursor.bucket {
+          CandidateBucket::Id => stats.by_id += 1,
+          CandidateBucket::Class => stats.by_class += 1,
+          CandidateBucket::Tag => stats.by_tag += 1,
+          CandidateBucket::Attr => stats.by_attr += 1,
+          CandidateBucket::Universal => stats.universal += 1,
+        }
+      }
+      return;
+    }
+
+    while let Some(item) = merge.heap.pop() {
+      let cursor = &mut merge.cursors[item.cursor_idx];
+      let Some(selector_idx) = cursor.current() else {
+        continue;
+      };
+      debug_assert_eq!(selector_idx, item.selector_idx);
+      cursor.pos += 1;
+      if let Some(next_idx) = cursor.current() {
+        let indexed = &selectors[next_idx];
+        merge.heap.push(CandidateHeapItem {
+          rule_idx: indexed.rule_idx,
+          specificity: 0,
+          selector_idx: next_idx,
+          bucket_rank: cursor.bucket.rank(),
+          cursor_idx: item.cursor_idx,
+        });
+      }
+
+      if !seen.mark_seen(selector_idx) {
+        continue;
+      }
+      if !selector_metadata_matches_node(
+        &selectors[selector_idx].metadata,
+        node,
+        summary,
+        quirks_mode,
+      ) {
+        stats.pruned += 1;
+        continue;
+      }
+      out.push(selector_idx);
+      match cursor.bucket {
+        CandidateBucket::Id => stats.by_id += 1,
+        CandidateBucket::Class => stats.by_class += 1,
+        CandidateBucket::Tag => stats.by_tag += 1,
+        CandidateBucket::Attr => stats.by_attr += 1,
+        CandidateBucket::Universal => stats.universal += 1,
+      }
     }
   }
 
@@ -3462,7 +3760,9 @@ impl<'a> PreparedCascade<'a> {
     let id_map = enumerate_dom_ids(dom);
     let has_has_selectors = stylesheet_uses_has(ua_stylesheet)
       || stylesheet_uses_has(document_ref)
-      || shadow_sheets.iter().any(|(_, sheet)| stylesheet_uses_has(sheet));
+      || shadow_sheets
+        .iter()
+        .any(|(_, sheet)| stylesheet_uses_has(sheet));
     let build_selector_blooms = has_has_selectors && id_map.len() >= SELECTOR_BLOOM_MIN_NODES;
     let dom_maps = DomMaps::new(dom, id_map, build_selector_blooms);
     let slot_assignment = compute_slot_assignment(dom);
@@ -3483,7 +3783,11 @@ impl<'a> PreparedCascade<'a> {
         )
         .len()
       } else {
-        filter_starting_rules(sheet_ref.collect_style_rules(media_ctx), include_starting_style).len()
+        filter_starting_rules(
+          sheet_ref.collect_style_rules(media_ctx),
+          include_starting_style,
+        )
+        .len()
       };
       max_author_rules = max_author_rules.max(count);
     }
@@ -5883,17 +6187,7 @@ mod tests {
     let media_ctx = MediaContext::screen(800.0, 600.0);
 
     let legacy_first = apply_style_set_with_media_target_and_imports_cached_with_deadline(
-      &dom,
-      &style_set,
-      &media_ctx,
-      None,
-      None,
-      None,
-      None,
-      None,
-      None,
-      None,
-      None,
+      &dom, &style_set, &media_ctx, None, None, None, None, None, None, None, None,
     )
     .expect("legacy first cascade");
 
@@ -6253,6 +6547,7 @@ mod tests {
     let mut out = Vec::new();
     let mut seen = CandidateSet::new(index.selectors.len());
     let mut stats = CandidateStats::default();
+    let mut merge = CandidateMergeScratch::default();
     index.selector_candidates(
       &node,
       None,
@@ -6260,6 +6555,7 @@ mod tests {
       &mut out,
       &mut seen,
       &mut stats,
+      &mut merge,
     );
 
     let mut selected: Vec<String> = out
@@ -6307,6 +6603,7 @@ mod tests {
     let mut out = Vec::new();
     let mut seen = CandidateSet::new(index.selectors.len());
     let mut stats = CandidateStats::default();
+    let mut merge = CandidateMergeScratch::default();
     index.selector_candidates(
       &node,
       None,
@@ -6314,6 +6611,7 @@ mod tests {
       &mut out,
       &mut seen,
       &mut stats,
+      &mut merge,
     );
 
     assert_eq!(out.len(), 2);
@@ -6370,6 +6668,7 @@ mod tests {
     let mut candidates: Vec<usize> = Vec::new();
     let mut seen = CandidateSet::new(index.selectors.len());
     let mut stats = CandidateStats::default();
+    let mut merge = CandidateMergeScratch::default();
     index.selector_candidates(
       &dom,
       Some(summary),
@@ -6377,6 +6676,7 @@ mod tests {
       &mut candidates,
       &mut seen,
       &mut stats,
+      &mut merge,
     );
     assert_eq!(candidates, vec![0]);
   }
@@ -6432,6 +6732,7 @@ mod tests {
     let mut candidates: Vec<usize> = Vec::new();
     let mut seen = CandidateSet::new(index.selectors.len());
     let mut stats = CandidateStats::default();
+    let mut merge = CandidateMergeScratch::default();
     index.selector_candidates(
       &dom,
       Some(summary),
@@ -6439,6 +6740,7 @@ mod tests {
       &mut candidates,
       &mut seen,
       &mut stats,
+      &mut merge,
     );
     assert_eq!(candidates, vec![0]);
   }
@@ -6494,6 +6796,7 @@ mod tests {
     let mut candidates: Vec<usize> = Vec::new();
     let mut seen = CandidateSet::new(index.selectors.len());
     let mut stats = CandidateStats::default();
+    let mut merge = CandidateMergeScratch::default();
     index.selector_candidates(
       &dom,
       Some(summary),
@@ -6501,6 +6804,7 @@ mod tests {
       &mut candidates,
       &mut seen,
       &mut stats,
+      &mut merge,
     );
     assert_eq!(candidates, vec![0]);
   }
@@ -11455,36 +11759,25 @@ fn find_matching_rules<'a>(
     candidates,
     &mut scratch.candidate_seen,
     &mut scratch.candidate_stats,
+    &mut scratch.candidate_merge,
   );
-  let mut slotted_candidates: Vec<usize> = Vec::new();
+  let slotted_candidates = &mut scratch.slotted_candidates;
+  slotted_candidates.clear();
   if assigned_slot.is_some() {
     rules.slotted_candidates(
       node,
       node_summary,
       quirks_mode,
-      &mut slotted_candidates,
+      slotted_candidates,
       &mut scratch.candidate_seen,
       &mut scratch.candidate_stats,
+      &mut scratch.candidate_merge,
     );
   }
   if candidates.is_empty() && slotted_candidates.is_empty() {
     scratch.match_index.reset();
     return Ok(Vec::new());
   }
-  candidates.sort_unstable_by(|a, b| {
-    let a = &rules.selectors[*a];
-    let b = &rules.selectors[*b];
-    a.rule_idx
-      .cmp(&b.rule_idx)
-      // Prefer higher-specificity selectors first within a rule so we can stop once we find
-      // the winning match.
-      .then(b.specificity.cmp(&a.specificity))
-  });
-  slotted_candidates.sort_unstable_by(|a, b| {
-    let a = &rules.slotted_selectors[*a];
-    let b = &rules.slotted_selectors[*b];
-    a.rule_idx.cmp(&b.rule_idx)
-  });
   let mut matches: Vec<MatchedRule<'a>> = Vec::new();
   let mut deadline_counter = 0usize;
 

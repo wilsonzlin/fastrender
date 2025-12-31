@@ -32,6 +32,7 @@ mod order_property_test;
 mod required_optional_pseudo_test;
 mod root_font_size_percent_test;
 mod rule_index_normalization_test;
+mod rule_selector_specificity_order_test;
 mod running_position_test;
 mod scope_pseudo_root_test;
 mod scope_rule_test;
