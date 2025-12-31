@@ -12,8 +12,8 @@ mod common;
 
 use clap::{ArgAction, Parser};
 use common::args::{
-  AllowPartialArgs, BaseUrlArgs, CompatArgs, LayoutParallelArgs, MediaArgs, OutputFormatArgs,
-  ResourceAccessArgs, TimeoutArgs, ViewportArgs,
+  AllowPartialArgs, BaseUrlArgs, CompatArgs, DiskCacheArgs, LayoutParallelArgs, MediaArgs,
+  OutputFormatArgs, ResourceAccessArgs, TimeoutArgs, ViewportArgs,
 };
 use common::media_prefs::MediaPreferences;
 use common::render_pipeline::{
@@ -28,8 +28,6 @@ use fastrender::resource::url_to_filename;
 #[cfg(not(feature = "disk_cache"))]
 use fastrender::resource::CachingFetcher;
 use fastrender::resource::CachingFetcherConfig;
-#[cfg(feature = "disk_cache")]
-use fastrender::resource::DiskCacheConfig;
 #[cfg(feature = "disk_cache")]
 use fastrender::resource::DiskCachingFetcher;
 use fastrender::resource::ResourceFetcher;
@@ -110,6 +108,9 @@ struct Args {
   /// Disable serving fresh cached HTTP responses without revalidation
   #[arg(long, action = ArgAction::SetTrue)]
   no_http_freshness: bool,
+
+  #[command(flatten)]
+  disk_cache: DiskCacheArgs,
   #[command(flatten)]
   layout_parallel: LayoutParallelArgs,
 
@@ -262,7 +263,7 @@ fn try_main(args: Args) -> Result<()> {
     http,
     ASSET_CACHE_DIR,
     memory_config,
-    DiskCacheConfig::default(),
+    args.disk_cache.to_config(),
   ));
   #[cfg(not(feature = "disk_cache"))]
   let fetcher: Arc<dyn ResourceFetcher> =

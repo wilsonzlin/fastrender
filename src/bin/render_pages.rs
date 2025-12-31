@@ -9,7 +9,7 @@ mod common;
 use clap::{ArgAction, Args as ClapArgs, Parser, Subcommand, ValueEnum};
 use common::args::{
   parse_bool_preference, parse_color_scheme, parse_contrast, parse_shard, parse_viewport,
-  CompatArgs, LayoutParallelArgs, ResourceAccessArgs,
+  CompatArgs, DiskCacheArgs, LayoutParallelArgs, ResourceAccessArgs,
 };
 use common::render_pipeline::{
   append_timeout_stderr_note, apply_test_render_delay, apply_worker_common_args,
@@ -29,8 +29,6 @@ use fastrender::resource::normalize_user_agent_for_log;
 #[cfg(not(feature = "disk_cache"))]
 use fastrender::resource::CachingFetcher;
 use fastrender::resource::CachingFetcherConfig;
-#[cfg(feature = "disk_cache")]
-use fastrender::resource::DiskCacheConfig;
 #[cfg(feature = "disk_cache")]
 use fastrender::resource::DiskCachingFetcher;
 use fastrender::resource::ResourceFetcher;
@@ -173,6 +171,9 @@ struct Args {
   /// Disable serving fresh cached HTTP responses without revalidation
   #[arg(long, action = ArgAction::SetTrue)]
   no_http_freshness: bool,
+
+  #[command(flatten)]
+  disk_cache: DiskCacheArgs,
 
   /// Maximum number of external stylesheets to fetch
   #[arg(long)]
@@ -641,7 +642,7 @@ fn build_render_shared(
     http,
     ASSET_DIR,
     memory_config,
-    DiskCacheConfig::default(),
+    args.disk_cache.to_config(),
   ));
   #[cfg(not(feature = "disk_cache"))]
   let fetcher: Arc<dyn ResourceFetcher> =
@@ -1057,6 +1058,11 @@ fn spawn_worker(
       compat: &args.compat,
     },
   );
+  cmd
+    .arg("--disk-cache-max-bytes")
+    .arg(args.disk_cache.max_bytes.to_string())
+    .arg("--disk-cache-max-age-secs")
+    .arg(args.disk_cache.max_age_secs.to_string());
   if args.diagnostics_json {
     cmd.arg("--diagnostics-json");
   }

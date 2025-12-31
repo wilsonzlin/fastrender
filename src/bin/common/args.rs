@@ -5,6 +5,17 @@ use fastrender::image_output::OutputFormat;
 use fastrender::layout::engine::LayoutParallelism;
 use fastrender::layout::engine::DEFAULT_LAYOUT_MIN_FANOUT;
 use fastrender::style::media::MediaType;
+use std::time::Duration;
+
+/// Default on-disk cache budget (512MB).
+///
+/// Keep in sync with `fastrender::resource::DiskCacheConfig::default()`.
+pub const DEFAULT_DISK_CACHE_MAX_BYTES: u64 = 512 * 1024 * 1024;
+
+/// Default on-disk cache max age (7 days) expressed as seconds.
+///
+/// Keep in sync with `fastrender::resource::DiskCacheConfig::default()`.
+pub const DEFAULT_DISK_CACHE_MAX_AGE_SECS: u64 = 60 * 60 * 24 * 7;
 
 #[derive(Debug, Clone, Args)]
 pub struct ViewportArgs {
@@ -266,6 +277,47 @@ pub struct ResourceAccessArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+pub struct DiskCacheArgs {
+  /// Maximum total bytes to keep in the on-disk subresource cache (0 disables eviction).
+  #[arg(
+    long = "disk-cache-max-bytes",
+    env = "FASTR_DISK_CACHE_MAX_BYTES",
+    default_value_t = DEFAULT_DISK_CACHE_MAX_BYTES,
+    value_name = "BYTES"
+  )]
+  pub max_bytes: u64,
+
+  /// Maximum age in seconds for on-disk cached entries before they are treated as stale.
+  ///
+  /// Use `0` to disable age-based eviction/revalidation (never expire purely due to age).
+  #[arg(
+    long = "disk-cache-max-age-secs",
+    env = "FASTR_DISK_CACHE_MAX_AGE_SECS",
+    default_value_t = DEFAULT_DISK_CACHE_MAX_AGE_SECS,
+    value_name = "SECS"
+  )]
+  pub max_age_secs: u64,
+}
+
+pub fn disk_cache_max_age_from_secs(secs: u64) -> Option<Duration> {
+  if secs == 0 {
+    None
+  } else {
+    Some(Duration::from_secs(secs))
+  }
+}
+
+#[cfg(feature = "disk_cache")]
+impl DiskCacheArgs {
+  pub fn to_config(&self) -> fastrender::resource::DiskCacheConfig {
+    fastrender::resource::DiskCacheConfig {
+      max_bytes: self.max_bytes,
+      max_age: disk_cache_max_age_from_secs(self.max_age_secs),
+    }
+  }
+}
+
+#[derive(Debug, Clone, Args)]
 pub struct TimeoutArgs {
   /// Timeout in seconds (0 = no timeout)
   #[arg(long)]
@@ -438,5 +490,14 @@ mod tests {
     };
     assert_eq!(webp.extension(), "webp");
     assert_eq!(webp.output_format(), OutputFormat::WebP(50));
+  }
+
+  #[test]
+  fn disk_cache_max_age_from_secs_maps_zero_to_none() {
+    assert_eq!(disk_cache_max_age_from_secs(0), None);
+    assert_eq!(
+      disk_cache_max_age_from_secs(123),
+      Some(Duration::from_secs(123))
+    );
   }
 }

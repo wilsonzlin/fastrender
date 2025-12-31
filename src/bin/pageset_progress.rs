@@ -14,7 +14,7 @@ mod common;
 
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 use common::args::{
-  parse_shard, CompatArgs, CompatProfileArg, DomCompatArg, LayoutParallelArgs,
+  parse_shard, CompatArgs, CompatProfileArg, DiskCacheArgs, DomCompatArg, LayoutParallelArgs,
   LayoutParallelModeArg, ResourceAccessArgs,
 };
 use common::render_pipeline::{
@@ -37,8 +37,6 @@ use fastrender::resource::parse_cached_html_meta;
 #[cfg(not(feature = "disk_cache"))]
 use fastrender::resource::CachingFetcher;
 use fastrender::resource::CachingFetcherConfig;
-#[cfg(feature = "disk_cache")]
-use fastrender::resource::DiskCacheConfig;
 #[cfg(feature = "disk_cache")]
 use fastrender::resource::DiskCachingFetcher;
 use fastrender::resource::HttpFetcher;
@@ -275,6 +273,9 @@ struct RunArgs {
   #[arg(long, action = ArgAction::SetTrue)]
   no_http_freshness: bool,
 
+  #[command(flatten)]
+  disk_cache: DiskCacheArgs,
+
   /// Maximum number of external stylesheets to fetch
   #[arg(long)]
   css_limit: Option<usize>,
@@ -462,6 +463,9 @@ struct WorkerArgs {
   /// Disable serving fresh cached HTTP responses without revalidation
   #[arg(long, action = ArgAction::SetTrue)]
   no_http_freshness: bool,
+
+  #[command(flatten)]
+  disk_cache: DiskCacheArgs,
 
   /// Maximum number of external stylesheets to fetch
   #[arg(long)]
@@ -1288,7 +1292,7 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
   };
   #[cfg(feature = "disk_cache")]
   let fetcher: std::sync::Arc<dyn ResourceFetcher> = std::sync::Arc::new(
-    DiskCachingFetcher::with_configs(http, ASSET_DIR, memory_config, DiskCacheConfig::default()),
+    DiskCachingFetcher::with_configs(http, ASSET_DIR, memory_config, args.disk_cache.to_config()),
   );
   #[cfg(not(feature = "disk_cache"))]
   let fetcher: std::sync::Arc<dyn ResourceFetcher> =
@@ -2972,6 +2976,10 @@ fn spawn_worker(
     .arg(&args.user_agent)
     .arg("--accept-language")
     .arg(&args.accept_language)
+    .arg("--disk-cache-max-bytes")
+    .arg(args.disk_cache.max_bytes.to_string())
+    .arg("--disk-cache-max-age-secs")
+    .arg(args.disk_cache.max_age_secs.to_string())
     .arg("--diagnostics")
     .arg(format!("{:?}", diagnostics).to_ascii_lowercase())
     .arg("--timeout")
