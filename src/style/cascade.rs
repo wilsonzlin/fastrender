@@ -6991,10 +6991,7 @@ fn apply_styles_internal_with_ancestors<'a>(
     let node_id = frame.node_id;
     let styled = StyledNode {
       node_id,
-      node: DomNode {
-        node_type: frame.node.node_type.clone(),
-        children: Vec::new(),
-      },
+      node: frame.node.clone_without_children(),
       styles,
       starting_styles,
       before_styles,

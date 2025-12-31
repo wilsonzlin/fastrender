@@ -452,6 +452,13 @@ fn push_escaped_attr(out: &mut String, value: &str) {
   }
 }
 
+fn dom_subtree_from_styled(node: &StyledNode) -> DomNode {
+  DomNode {
+    node_type: node.node.node_type.clone(),
+    children: node.children.iter().map(dom_subtree_from_styled).collect(),
+  }
+}
+
 fn escape_attr(value: &str) -> String {
   let mut out = String::with_capacity(value.len());
   push_escaped_attr(&mut out, value);
@@ -1409,7 +1416,8 @@ fn generate_boxes_for_styled(
 
   if let Some(tag) = styled.node.tag_name() {
     if tag.eq_ignore_ascii_case("math") {
-      let math_root = crate::math::parse_mathml(&styled.node)
+      let dom_subtree = dom_subtree_from_styled(styled);
+      let math_root = crate::math::parse_mathml(&dom_subtree)
         .unwrap_or_else(|| crate::math::MathNode::Row(Vec::new()));
       counters.leave_scope();
       let box_node = BoxNode::new_replaced(
@@ -2121,21 +2129,34 @@ fn list_item_count(styled: &StyledNode) -> usize {
   count
 }
 
-fn collect_text_content(node: &DomNode) -> String {
-  let mut text = String::new();
-  node.walk_tree(&mut |n| {
-    if let DomNodeType::Text { content } = &n.node_type {
-      text.push_str(content);
+fn collect_text_content(node: &StyledNode) -> String {
+  fn walk(node: &StyledNode, out: &mut String) {
+    if let DomNodeType::Text { content } = &node.node.node_type {
+      out.push_str(content);
     }
-  });
+    for child in node.children.iter() {
+      walk(child, out);
+    }
+  }
+
+  let mut text = String::new();
+  walk(node, &mut text);
   text
 }
 
-fn option_label_from_node(node: &DomNode) -> Option<String> {
-  if let Some(label) = node.get_attribute_ref("label").filter(|l| !l.is_empty()) {
+fn option_label_from_node(node: &StyledNode) -> Option<String> {
+  if let Some(label) = node
+    .node
+    .get_attribute_ref("label")
+    .filter(|l| !l.is_empty())
+  {
     return Some(label.to_string());
   }
-  if let Some(label) = node.get_attribute_ref("value").filter(|v| !v.is_empty()) {
+  if let Some(label) = node
+    .node
+    .get_attribute_ref("value")
+    .filter(|v| !v.is_empty())
+  {
     return Some(label.to_string());
   }
 
@@ -2148,23 +2169,23 @@ fn option_label_from_node(node: &DomNode) -> Option<String> {
   }
 }
 
-fn find_selected_option_label(node: &DomNode, optgroup_disabled: bool) -> Option<String> {
-  let Some(tag) = node.tag_name() else {
+fn find_selected_option_label(node: &StyledNode, optgroup_disabled: bool) -> Option<String> {
+  let Some(tag) = node.node.tag_name() else {
     return None;
   };
 
   let is_option = tag.eq_ignore_ascii_case("option");
   let is_optgroup = tag.eq_ignore_ascii_case("optgroup");
   let this_disabled = optgroup_disabled
-    || (is_option && node.get_attribute_ref("disabled").is_some())
-    || (is_optgroup && node.get_attribute_ref("disabled").is_some());
+    || (is_option && node.node.get_attribute_ref("disabled").is_some())
+    || (is_optgroup && node.node.get_attribute_ref("disabled").is_some());
 
-  if is_option && !this_disabled && node.get_attribute_ref("selected").is_some() {
+  if is_option && !this_disabled && node.node.get_attribute_ref("selected").is_some() {
     return option_label_from_node(node);
   }
 
   let next_optgroup_disabled =
-    optgroup_disabled || (is_optgroup && node.get_attribute_ref("disabled").is_some());
+    optgroup_disabled || (is_optgroup && node.node.get_attribute_ref("disabled").is_some());
   for child in node.children.iter() {
     if let Some(val) = find_selected_option_label(child, next_optgroup_disabled) {
       return Some(val);
@@ -2174,23 +2195,23 @@ fn find_selected_option_label(node: &DomNode, optgroup_disabled: bool) -> Option
   None
 }
 
-fn first_enabled_option_label(node: &DomNode, optgroup_disabled: bool) -> Option<String> {
-  let Some(tag) = node.tag_name() else {
+fn first_enabled_option_label(node: &StyledNode, optgroup_disabled: bool) -> Option<String> {
+  let Some(tag) = node.node.tag_name() else {
     return None;
   };
 
   let is_option = tag.eq_ignore_ascii_case("option");
   let is_optgroup = tag.eq_ignore_ascii_case("optgroup");
   let this_disabled = optgroup_disabled
-    || (is_option && node.get_attribute_ref("disabled").is_some())
-    || (is_optgroup && node.get_attribute_ref("disabled").is_some());
+    || (is_option && node.node.get_attribute_ref("disabled").is_some())
+    || (is_optgroup && node.node.get_attribute_ref("disabled").is_some());
 
   if is_option && !this_disabled {
     return option_label_from_node(node);
   }
 
   let next_optgroup_disabled =
-    optgroup_disabled || (is_optgroup && node.get_attribute_ref("disabled").is_some());
+    optgroup_disabled || (is_optgroup && node.node.get_attribute_ref("disabled").is_some());
   for child in node.children.iter() {
     if let Some(val) = first_enabled_option_label(child, next_optgroup_disabled) {
       return Some(val);
@@ -2200,13 +2221,13 @@ fn first_enabled_option_label(node: &DomNode, optgroup_disabled: bool) -> Option
   None
 }
 
-fn select_label(node: &DomNode) -> Option<String> {
+fn select_label(node: &StyledNode) -> Option<String> {
   let explicit = find_selected_option_label(node, false);
   if explicit.is_some() {
     return explicit;
   }
 
-  if node.get_attribute_ref("multiple").is_some() {
+  if node.node.get_attribute_ref("multiple").is_some() {
     return None;
   }
 
@@ -2230,7 +2251,7 @@ fn input_label(node: &DomNode, input_type: &str) -> String {
 }
 
 fn button_label(node: &StyledNode) -> String {
-  let text = collect_text_content(&node.node);
+  let text = collect_text_content(node);
   let trimmed = text.trim();
   if !trimmed.is_empty() {
     return trimmed.to_string();
@@ -2292,7 +2313,10 @@ fn create_form_control_replaced(styled: &StyledNode) -> Option<FormControl> {
     focused = false;
     focus_visible = false;
   }
-  let element_ref = ElementRef::new(&styled.node);
+  let dom_subtree = (tag.eq_ignore_ascii_case("textarea") || tag.eq_ignore_ascii_case("select"))
+    .then(|| dom_subtree_from_styled(styled));
+  let validation_node = dom_subtree.as_ref().unwrap_or(&styled.node);
+  let element_ref = ElementRef::new(validation_node);
   let required = element_ref.accessibility_required() && !disabled;
   let mut invalid = element_ref.accessibility_supports_validation()
     && !element_ref.accessibility_is_valid()
@@ -2433,7 +2457,7 @@ fn create_form_control_replaced(styled: &StyledNode) -> Option<FormControl> {
   } else if tag.eq_ignore_ascii_case("textarea") {
     Some(FormControl {
       control: FormControlKind::TextArea {
-        value: collect_text_content(&styled.node),
+        value: collect_text_content(styled),
         rows: styled
           .node
           .get_attribute_ref("rows")
@@ -2451,7 +2475,7 @@ fn create_form_control_replaced(styled: &StyledNode) -> Option<FormControl> {
       invalid,
     })
   } else if tag.eq_ignore_ascii_case("select") {
-    let label = select_label(&styled.node).unwrap_or_else(|| "Select".to_string());
+    let label = select_label(styled).unwrap_or_else(|| "Select".to_string());
     Some(FormControl {
       control: FormControlKind::Select {
         label,

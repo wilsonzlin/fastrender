@@ -2699,6 +2699,13 @@ fn convert_handle_to_node(
 }
 
 impl DomNode {
+  pub(crate) fn clone_without_children(&self) -> DomNode {
+    DomNode {
+      node_type: self.node_type.clone(),
+      children: Vec::new(),
+    }
+  }
+
   pub fn get_attribute_ref(&self, name: &str) -> Option<&str> {
     match &self.node_type {
       DomNodeType::Element { attributes, .. } => attributes
