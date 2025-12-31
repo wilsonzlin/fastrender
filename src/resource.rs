@@ -2079,9 +2079,22 @@ struct ResourceCacheDiagnosticsSnapshot {
   network_fetch_ns: u64,
 }
 
+#[derive(Default)]
+struct ResourceCacheDiagnosticsBaseline {
+  baseline: Option<ResourceCacheDiagnosticsSnapshot>,
+}
+
+impl Drop for ResourceCacheDiagnosticsBaseline {
+  fn drop(&mut self) {
+    if self.baseline.is_some() {
+      end_resource_cache_diagnostics_session();
+    }
+  }
+}
+
 thread_local! {
-  static RESOURCE_CACHE_DIAGNOSTICS_BASELINE: RefCell<Option<ResourceCacheDiagnosticsSnapshot>> =
-    RefCell::new(None);
+  static RESOURCE_CACHE_DIAGNOSTICS_BASELINE: RefCell<ResourceCacheDiagnosticsBaseline> =
+    RefCell::new(ResourceCacheDiagnosticsBaseline::default());
 }
 
 static RESOURCE_CACHE_DIAGNOSTICS_ACTIVE_SESSIONS: AtomicUsize = AtomicUsize::new(0);
@@ -2114,22 +2127,39 @@ fn resource_cache_diagnostics_enabled() -> bool {
   RESOURCE_CACHE_DIAGNOSTICS_ACTIVE_SESSIONS.load(Ordering::Relaxed) > 0
 }
 
-pub(crate) fn enable_resource_cache_diagnostics() {
-  let already_enabled = RESOURCE_CACHE_DIAGNOSTICS_BASELINE.with(|cell| cell.borrow().is_some());
-  if already_enabled {
-    return;
-  }
+fn end_resource_cache_diagnostics_session() {
+  // Avoid underflow: diagnostics state can leak when callers enable collection but never call
+  // `take_resource_cache_diagnostics()` (e.g. panic during a diagnostics-enabled render). Use
+  // `fetch_update` so a leaked session doesn't permanently keep diagnostics enabled.
+  let _ = RESOURCE_CACHE_DIAGNOSTICS_ACTIVE_SESSIONS.fetch_update(
+    Ordering::Relaxed,
+    Ordering::Relaxed,
+    |value| value.checked_sub(1),
+  );
+}
 
+pub(crate) fn enable_resource_cache_diagnostics() {
   let baseline = resource_cache_diagnostics_snapshot();
-  RESOURCE_CACHE_DIAGNOSTICS_BASELINE.with(|cell| {
-    *cell.borrow_mut() = Some(baseline);
+  let enabled = RESOURCE_CACHE_DIAGNOSTICS_BASELINE.with(|cell| {
+    let mut guard = cell.borrow_mut();
+    if guard.baseline.is_some() {
+      false
+    } else {
+      guard.baseline = Some(baseline);
+      true
+    }
   });
-  RESOURCE_CACHE_DIAGNOSTICS_ACTIVE_SESSIONS.fetch_add(1, Ordering::Relaxed);
+  if enabled {
+    RESOURCE_CACHE_DIAGNOSTICS_ACTIVE_SESSIONS.fetch_add(1, Ordering::Relaxed);
+  }
 }
 
 pub(crate) fn take_resource_cache_diagnostics() -> Option<ResourceCacheDiagnostics> {
-  let baseline = RESOURCE_CACHE_DIAGNOSTICS_BASELINE.with(|cell| cell.borrow_mut().take())?;
-  RESOURCE_CACHE_DIAGNOSTICS_ACTIVE_SESSIONS.fetch_sub(1, Ordering::Relaxed);
+  let baseline = RESOURCE_CACHE_DIAGNOSTICS_BASELINE.with(|cell| {
+    let mut guard = cell.borrow_mut();
+    guard.baseline.take()
+  })?;
+  end_resource_cache_diagnostics_session();
 
   let current = resource_cache_diagnostics_snapshot();
   let network_fetch_ns = current.network_fetch_ns.saturating_sub(baseline.network_fetch_ns);
