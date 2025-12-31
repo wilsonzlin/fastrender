@@ -1245,6 +1245,48 @@ fn shadow_tree_scope_prefix(shadow_root_id: usize) -> u32 {
 static DOCUMENT_UNLAYERED_LAYER_ORDER: OnceLock<Arc<[u32]>> = OnceLock::new();
 static UNPREFIXED_UNLAYERED_LAYER_ORDER: OnceLock<Arc<[u32]>> = OnceLock::new();
 
+const LAYER_ORDER_INTERN_STACK_LEN: usize = 16;
+
+#[derive(Default)]
+struct LayerOrderInterner {
+  interned: FxHashSet<Arc<[u32]>>,
+}
+
+impl LayerOrderInterner {
+  fn intern_prefixed(&mut self, layer_order: &[u32], tree_scope_prefix: u32) -> Arc<[u32]> {
+    if tree_scope_prefix == DOCUMENT_TREE_SCOPE_PREFIX
+      && layer_order.len() == 1
+      && layer_order[0] == u32::MAX
+    {
+      return document_unlayered_layer_order();
+    }
+
+    let total_len = layer_order.len().saturating_add(1);
+    if total_len <= LAYER_ORDER_INTERN_STACK_LEN {
+      let mut buf = [0u32; LAYER_ORDER_INTERN_STACK_LEN];
+      buf[0] = tree_scope_prefix;
+      buf[1..total_len].copy_from_slice(layer_order);
+      let slice = &buf[..total_len];
+      if let Some(hit) = self.interned.get(slice) {
+        return hit.clone();
+      }
+      let arc: Arc<[u32]> = Arc::from(slice);
+      self.interned.insert(arc.clone());
+      return arc;
+    }
+
+    let mut prefixed = Vec::with_capacity(total_len);
+    prefixed.push(tree_scope_prefix);
+    prefixed.extend_from_slice(layer_order);
+    if let Some(hit) = self.interned.get(prefixed.as_slice()) {
+      return hit.clone();
+    }
+    let arc: Arc<[u32]> = Arc::from(prefixed);
+    self.interned.insert(arc.clone());
+    arc
+  }
+}
+
 fn document_unlayered_layer_order() -> Arc<[u32]> {
   DOCUMENT_UNLAYERED_LAYER_ORDER
     .get_or_init(|| Arc::from(vec![DOCUMENT_TREE_SCOPE_PREFIX, u32::MAX]))
@@ -3860,7 +3902,7 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
   let shadow_order_base = document_order_base.saturating_mul(2);
 
   let quirks_mode = quirks_mode_for_dom(dom);
-
+  let mut layer_order_interner = LayerOrderInterner::default();
   let ua_index = RuleIndex::new(
     ua_rules
       .iter()
@@ -3869,7 +3911,7 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
         origin: StyleOrigin::UserAgent,
         order,
         rule: rule.rule,
-        layer_order: layer_order_with_tree_scope(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
+        layer_order: layer_order_interner.intern_prefixed(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope_signature: ScopeSignature::compute(&rule.scopes),
@@ -3888,7 +3930,7 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
         origin: StyleOrigin::Author,
         order: document_order_base + idx,
         rule: rule.rule,
-        layer_order: layer_order_with_tree_scope(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
+        layer_order: layer_order_interner.intern_prefixed(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope_signature: ScopeSignature::compute(&rule.scopes),
@@ -3919,10 +3961,8 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
         origin: StyleOrigin::Author,
         order: shadow_order_base + idx,
         rule: rule.rule,
-        layer_order: layer_order_with_tree_scope(
-          &rule.layer_order,
-          shadow_tree_scope_prefix(*shadow_root_id),
-        ),
+        layer_order: layer_order_interner
+          .intern_prefixed(&rule.layer_order, shadow_tree_scope_prefix(*shadow_root_id)),
         container_conditions: rule.container_conditions.clone(),
         scopes: rule.scopes.clone(),
         scope_signature: ScopeSignature::compute(&rule.scopes),
@@ -4315,7 +4355,7 @@ impl<'a> PreparedCascade<'a> {
     let shadow_order_base = document_order_base.saturating_mul(2);
 
     let quirks_mode = quirks_mode_for_dom(dom);
-
+    let mut layer_order_interner = LayerOrderInterner::default();
     let ua_index = RuleIndex::new(
       ua_rules
         .iter()
@@ -4324,7 +4364,8 @@ impl<'a> PreparedCascade<'a> {
           origin: StyleOrigin::UserAgent,
           order,
           rule: rule.rule,
-          layer_order: layer_order_with_tree_scope(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
+          layer_order: layer_order_interner
+            .intern_prefixed(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
           container_conditions: rule.container_conditions.clone(),
           scopes: rule.scopes.clone(),
           scope_signature: ScopeSignature::compute(&rule.scopes),
@@ -4343,7 +4384,8 @@ impl<'a> PreparedCascade<'a> {
           origin: StyleOrigin::Author,
           order: document_order_base + idx,
           rule: rule.rule,
-          layer_order: layer_order_with_tree_scope(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
+          layer_order: layer_order_interner
+            .intern_prefixed(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
           container_conditions: rule.container_conditions.clone(),
           scopes: rule.scopes.clone(),
           scope_signature: ScopeSignature::compute(&rule.scopes),
@@ -4379,7 +4421,7 @@ impl<'a> PreparedCascade<'a> {
           origin: StyleOrigin::Author,
           order: shadow_order_base + idx,
           rule: rule.rule,
-          layer_order: layer_order_with_tree_scope(
+          layer_order: layer_order_interner.intern_prefixed(
             &rule.layer_order,
             shadow_tree_scope_prefix(shadow_root_id),
           ),
