@@ -2801,12 +2801,17 @@ impl FlexFormattingContext {
           !container_main_is_inline
         };
 
+        let item_fc_type = box_node
+          .formatting_context()
+          .unwrap_or(FormattingContextType::Block);
+        let item_fc = self.factory.get(item_fc_type);
+
         if container_main_is_horizontal {
           if min_width_dimension == Dimension::AUTO
             && matches!(style.overflow_x, CssOverflow::Visible)
           {
             if let Ok(min_content) =
-              self.compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MinContent)
+              item_fc.compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MinContent)
             {
               if min_content.is_finite() && min_content > 0.0 {
                 min_width_dimension = Dimension::length(min_content);
@@ -2817,7 +2822,7 @@ impl FlexFormattingContext {
           && matches!(style.overflow_y, CssOverflow::Visible)
         {
           if let Ok(min_content) =
-            self.compute_intrinsic_block_size(box_node, IntrinsicSizingMode::MinContent)
+            item_fc.compute_intrinsic_block_size(box_node, IntrinsicSizingMode::MinContent)
           {
             if min_content.is_finite() && min_content > 0.0 {
               min_height_dimension = Dimension::length(min_content);
