@@ -54,6 +54,15 @@
           "Font": 2,
           "Other": 0
         },
+        "resource_cache_fresh_hits": 10,
+        "resource_cache_stale_hits": 2,
+        "resource_cache_revalidated_hits": 1,
+        "resource_cache_misses": 3,
+        "disk_cache_hits": 4,
+        "disk_cache_misses": 1,
+        "disk_cache_ms": 12.34,
+        "network_fetches": 5,
+        "network_fetch_ms": 67.89,
         "image_cache_hits": 5,
         "image_cache_misses": 3
       }

@@ -98,8 +98,9 @@ fn pageset_progress_report_outputs_stats_when_verbose() {
     "layout: layout_cache lookups=450 hits=300 stores=120 evictions=10 | intrinsic lookups=50 hits=20 | parallel enabled=true items=12 threads=2"
   ));
   assert!(stdout.contains("paint: display_items=800 optimized_items=500 culled_items=120"));
-  assert!(stdout
-    .contains("resources: fetches doc=1 css=4 img=6 font=2 other=0 | image_cache hits=5 misses=3"));
+  assert!(stdout.contains(
+    "resources: fetches doc=1 css=4 img=6 font=2 other=0 | image_cache hits=5 misses=3 | resource_cache fresh_hits=10 stale_hits=2 revalidated_hits=1 misses=3 | disk_cache hits=4 misses=1 ms=12.34ms | network fetches=5 ms=67.89ms"
+  ));
 }
 
 #[test]
