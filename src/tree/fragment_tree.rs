@@ -52,9 +52,9 @@
 //!   subtree for mutation.
 //! - When adding new mutation sites, prefer `FragmentNode::clone_without_children` and
 //!   `FragmentNode::set_children` to avoid accidentally deep-cloning child lists.
-//! - Fragment clone instrumentation (`FASTR_PROFILE_FRAGMENT_CLONES=1`) records deep clone events and
-//!   traversal counts when translation routines walk subtrees. Enable it when validating structural
-//!   sharing or cache reuse.
+//! - Fragment clone instrumentation (`FASTR_PROFILE_FRAGMENT_CLONES=1`) records shallow clone calls,
+//!   deep clone events, and traversal counts when translation routines walk subtrees. Enable it when
+//!   validating structural sharing or cache reuse.
 
 use crate::css::types::KeyframesRule;
 use crate::geometry::Point;
@@ -66,6 +66,7 @@ use crate::style::types::BorderStyle;
 use crate::style::ComputedStyle;
 use crate::text::pipeline::ShapedRun;
 use crate::tree::box_tree::{BoxNode, BoxTree, ReplacedType};
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::fmt;
 use std::ops::{Deref, DerefMut};
@@ -74,21 +75,29 @@ use std::sync::Arc;
 
 static FRAGMENT_DEEP_CLONES: AtomicUsize = AtomicUsize::new(0);
 static FRAGMENT_TRAVERSAL_NODES: AtomicUsize = AtomicUsize::new(0);
+static FRAGMENT_SHALLOW_CLONES: AtomicUsize = AtomicUsize::new(0);
 static FRAGMENT_INSTRUMENTATION_ENABLED: AtomicBool = AtomicBool::new(false);
+
+thread_local! {
+  static FRAGMENT_INSTRUMENTATION_THREAD_ENABLED: Cell<bool> = const { Cell::new(false) };
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct FragmentInstrumentationCounters {
+  pub shallow_clones: usize,
   pub deep_clones: usize,
   pub traversed_nodes: usize,
 }
 
 pub fn reset_fragment_instrumentation_counters() {
+  FRAGMENT_SHALLOW_CLONES.store(0, Ordering::Relaxed);
   FRAGMENT_DEEP_CLONES.store(0, Ordering::Relaxed);
   FRAGMENT_TRAVERSAL_NODES.store(0, Ordering::Relaxed);
 }
 
 pub fn fragment_instrumentation_counters() -> FragmentInstrumentationCounters {
   FragmentInstrumentationCounters {
+    shallow_clones: FRAGMENT_SHALLOW_CLONES.load(Ordering::Relaxed),
     deep_clones: FRAGMENT_DEEP_CLONES.load(Ordering::Relaxed),
     traversed_nodes: FRAGMENT_TRAVERSAL_NODES.load(Ordering::Relaxed),
   }
@@ -100,16 +109,23 @@ pub fn set_fragment_instrumentation_enabled(enabled: bool) {
 
 pub(crate) fn fragment_instrumentation_enabled() -> bool {
   FRAGMENT_INSTRUMENTATION_ENABLED.load(Ordering::Relaxed)
+    || FRAGMENT_INSTRUMENTATION_THREAD_ENABLED.with(|flag| flag.get())
 }
 
 pub(crate) fn record_fragment_traversal(nodes: usize) {
-  if FRAGMENT_INSTRUMENTATION_ENABLED.load(Ordering::Relaxed) && nodes > 0 {
+  if fragment_instrumentation_enabled() && nodes > 0 {
     FRAGMENT_TRAVERSAL_NODES.fetch_add(nodes, Ordering::Relaxed);
   }
 }
 
+fn record_shallow_clone() {
+  if fragment_instrumentation_enabled() {
+    FRAGMENT_SHALLOW_CLONES.fetch_add(1, Ordering::Relaxed);
+  }
+}
+
 fn record_deep_clone() {
-  if FRAGMENT_INSTRUMENTATION_ENABLED.load(Ordering::Relaxed) {
+  if fragment_instrumentation_enabled() {
     FRAGMENT_DEEP_CLONES.fetch_add(1, Ordering::Relaxed);
   }
 }
@@ -127,6 +143,23 @@ impl Drop for FragmentInstrumentationGuard {
 pub fn enable_fragment_instrumentation(enabled: bool) -> FragmentInstrumentationGuard {
   let previous = FRAGMENT_INSTRUMENTATION_ENABLED.swap(enabled, Ordering::Relaxed);
   FragmentInstrumentationGuard { previous }
+}
+
+pub struct FragmentInstrumentationThreadGuard {
+  previous: bool,
+}
+
+impl Drop for FragmentInstrumentationThreadGuard {
+  fn drop(&mut self) {
+    FRAGMENT_INSTRUMENTATION_THREAD_ENABLED.with(|flag| flag.set(self.previous));
+  }
+}
+
+pub fn enable_fragment_instrumentation_for_current_thread(
+  enabled: bool,
+) -> FragmentInstrumentationThreadGuard {
+  let previous = FRAGMENT_INSTRUMENTATION_THREAD_ENABLED.with(|flag| flag.replace(enabled));
+  FragmentInstrumentationThreadGuard { previous }
 }
 
 /// Shared, copy-on-write fragment children storage.
@@ -518,7 +551,7 @@ pub struct BlockFragmentMetadata {
 /// assert_eq!(fragment.bounds.width(), 100.0);
 /// assert!(fragment.content.is_block());
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct FragmentNode {
   /// The positioned rectangle of this fragment
   ///
@@ -592,6 +625,30 @@ pub struct FragmentNode {
 
   /// Fragmentation metadata for nested fragmentainers (e.g., multi-column containers).
   pub fragmentation: Option<FragmentationInfo>,
+}
+
+impl Clone for FragmentNode {
+  fn clone(&self) -> Self {
+    record_shallow_clone();
+    Self {
+      bounds: self.bounds,
+      block_metadata: self.block_metadata.clone(),
+      logical_override: self.logical_override,
+      content: self.content.clone(),
+      table_borders: self.table_borders.clone(),
+      baseline: self.baseline,
+      children: self.children.clone(),
+      style: self.style.clone(),
+      starting_style: self.starting_style.clone(),
+      fragment_index: self.fragment_index,
+      fragment_count: self.fragment_count,
+      fragmentainer_index: self.fragmentainer_index,
+      fragmentainer: self.fragmentainer,
+      slice_info: self.slice_info,
+      scroll_overflow: self.scroll_overflow,
+      fragmentation: self.fragmentation.clone(),
+    }
+  }
 }
 
 /// Fragmentation metadata for a fragment.

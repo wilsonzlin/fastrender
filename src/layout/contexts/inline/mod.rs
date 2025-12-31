@@ -9520,7 +9520,10 @@ mod tests {
   use crate::tree::box_tree::ReplacedBox;
   use crate::tree::box_tree::ReplacedType;
   use crate::tree::box_tree::{self};
-  use crate::tree::fragment_tree::FragmentContent;
+  use crate::tree::fragment_tree::{
+    enable_fragment_instrumentation_for_current_thread, fragment_instrumentation_counters,
+    reset_fragment_instrumentation_counters, FragmentContent,
+  };
   use rayon::ThreadPoolBuilder;
   use std::sync::Arc;
 
@@ -14265,6 +14268,36 @@ mod tests {
     assert!(
       left >= 39.9 && (120.0 - width - left).abs() < 0.2,
       "float context should shorten line space at y=0; left={left}, width={width}"
+    );
+  }
+
+  #[test]
+  fn layout_with_floats_merge_moves_fragments_without_cloning() {
+    let _instrumentation = enable_fragment_instrumentation_for_current_thread(true);
+    reset_fragment_instrumentation_counters();
+
+    let text_style = Arc::new(ComputedStyle::default());
+    let text = "word word word word word word word word word word word";
+    let node = BoxNode::new_text(text_style.clone(), text.to_string());
+    let root = BoxNode::new_inline(text_style, vec![node]);
+
+    let ifc = InlineFormattingContext::new();
+    let constraints = LayoutConstraints::definite_width(30.0);
+    let fragment = ifc
+      .layout_with_floats(&root, &constraints, None, 0.0)
+      .expect("layout with floats");
+
+    let line_count = fragment
+      .children
+      .iter()
+      .filter(|child| matches!(child.content, FragmentContent::Line { .. }))
+      .count();
+    assert!(line_count > 1, "expected text to wrap into multiple lines");
+
+    let counters = fragment_instrumentation_counters();
+    assert_eq!(
+      counters.shallow_clones, 0,
+      "IFC merge should move fragments instead of cloning"
     );
   }
 
