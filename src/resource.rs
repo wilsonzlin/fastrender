@@ -2045,25 +2045,30 @@ pub(crate) enum CacheAction {
 pub(crate) struct CachePlan {
   pub(crate) cached: Option<CachedSnapshot>,
   pub(crate) action: CacheAction,
+  pub(crate) is_stale: bool,
 }
 
 #[derive(Debug, Default, Clone)]
 pub struct ResourceCacheDiagnostics {
   pub fresh_hits: usize,
+  pub stale_hits: usize,
   pub revalidated_hits: usize,
   pub misses: usize,
   pub disk_cache_hits: usize,
   pub disk_cache_misses: usize,
+  pub disk_cache_ms: f64,
   pub network_fetches: usize,
   pub network_fetch_ms: f64,
 }
 
 struct ResourceCacheDiagnosticsState {
   fresh_hits: AtomicUsize,
+  stale_hits: AtomicUsize,
   revalidated_hits: AtomicUsize,
   misses: AtomicUsize,
   disk_cache_hits: AtomicUsize,
   disk_cache_misses: AtomicUsize,
+  disk_cache_ns: AtomicU64,
   network_fetches: AtomicUsize,
   network_fetch_ns: AtomicU64,
 }
@@ -2071,10 +2076,12 @@ struct ResourceCacheDiagnosticsState {
 #[derive(Clone, Copy)]
 struct ResourceCacheDiagnosticsSnapshot {
   fresh_hits: usize,
+  stale_hits: usize,
   revalidated_hits: usize,
   misses: usize,
   disk_cache_hits: usize,
   disk_cache_misses: usize,
+  disk_cache_ns: u64,
   network_fetches: usize,
   network_fetch_ns: u64,
 }
@@ -2101,25 +2108,43 @@ static RESOURCE_CACHE_DIAGNOSTICS_ACTIVE_SESSIONS: AtomicUsize = AtomicUsize::ne
 
 static RESOURCE_CACHE_DIAGNOSTICS: ResourceCacheDiagnosticsState = ResourceCacheDiagnosticsState {
   fresh_hits: AtomicUsize::new(0),
+  stale_hits: AtomicUsize::new(0),
   revalidated_hits: AtomicUsize::new(0),
   misses: AtomicUsize::new(0),
   disk_cache_hits: AtomicUsize::new(0),
   disk_cache_misses: AtomicUsize::new(0),
+  disk_cache_ns: AtomicU64::new(0),
   network_fetches: AtomicUsize::new(0),
   network_fetch_ns: AtomicU64::new(0),
 };
 
 fn resource_cache_diagnostics_snapshot() -> ResourceCacheDiagnosticsSnapshot {
   ResourceCacheDiagnosticsSnapshot {
-    fresh_hits: RESOURCE_CACHE_DIAGNOSTICS.fresh_hits.load(Ordering::Relaxed),
-    revalidated_hits: RESOURCE_CACHE_DIAGNOSTICS.revalidated_hits.load(Ordering::Relaxed),
+    fresh_hits: RESOURCE_CACHE_DIAGNOSTICS
+      .fresh_hits
+      .load(Ordering::Relaxed),
+    stale_hits: RESOURCE_CACHE_DIAGNOSTICS
+      .stale_hits
+      .load(Ordering::Relaxed),
+    revalidated_hits: RESOURCE_CACHE_DIAGNOSTICS
+      .revalidated_hits
+      .load(Ordering::Relaxed),
     misses: RESOURCE_CACHE_DIAGNOSTICS.misses.load(Ordering::Relaxed),
-    disk_cache_hits: RESOURCE_CACHE_DIAGNOSTICS.disk_cache_hits.load(Ordering::Relaxed),
+    disk_cache_hits: RESOURCE_CACHE_DIAGNOSTICS
+      .disk_cache_hits
+      .load(Ordering::Relaxed),
     disk_cache_misses: RESOURCE_CACHE_DIAGNOSTICS
       .disk_cache_misses
       .load(Ordering::Relaxed),
-    network_fetches: RESOURCE_CACHE_DIAGNOSTICS.network_fetches.load(Ordering::Relaxed),
-    network_fetch_ns: RESOURCE_CACHE_DIAGNOSTICS.network_fetch_ns.load(Ordering::Relaxed),
+    disk_cache_ns: RESOURCE_CACHE_DIAGNOSTICS
+      .disk_cache_ns
+      .load(Ordering::Relaxed),
+    network_fetches: RESOURCE_CACHE_DIAGNOSTICS
+      .network_fetches
+      .load(Ordering::Relaxed),
+    network_fetch_ns: RESOURCE_CACHE_DIAGNOSTICS
+      .network_fetch_ns
+      .load(Ordering::Relaxed),
   }
 }
 
@@ -2162,18 +2187,27 @@ pub(crate) fn take_resource_cache_diagnostics() -> Option<ResourceCacheDiagnosti
   end_resource_cache_diagnostics_session();
 
   let current = resource_cache_diagnostics_snapshot();
-  let network_fetch_ns = current.network_fetch_ns.saturating_sub(baseline.network_fetch_ns);
+  let disk_cache_ns = current.disk_cache_ns.saturating_sub(baseline.disk_cache_ns);
+  let network_fetch_ns = current
+    .network_fetch_ns
+    .saturating_sub(baseline.network_fetch_ns);
   Some(ResourceCacheDiagnostics {
     fresh_hits: current.fresh_hits.saturating_sub(baseline.fresh_hits),
+    stale_hits: current.stale_hits.saturating_sub(baseline.stale_hits),
     revalidated_hits: current
       .revalidated_hits
       .saturating_sub(baseline.revalidated_hits),
     misses: current.misses.saturating_sub(baseline.misses),
-    disk_cache_hits: current.disk_cache_hits.saturating_sub(baseline.disk_cache_hits),
+    disk_cache_hits: current
+      .disk_cache_hits
+      .saturating_sub(baseline.disk_cache_hits),
     disk_cache_misses: current
       .disk_cache_misses
       .saturating_sub(baseline.disk_cache_misses),
-    network_fetches: current.network_fetches.saturating_sub(baseline.network_fetches),
+    disk_cache_ms: (disk_cache_ns as f64) / 1_000_000.0,
+    network_fetches: current
+      .network_fetches
+      .saturating_sub(baseline.network_fetches),
     network_fetch_ms: (network_fetch_ns as f64) / 1_000_000.0,
   })
 }
@@ -2184,6 +2218,15 @@ fn record_cache_fresh_hit() {
   }
   RESOURCE_CACHE_DIAGNOSTICS
     .fresh_hits
+    .fetch_add(1, Ordering::Relaxed);
+}
+
+fn record_cache_stale_hit() {
+  if !resource_cache_diagnostics_enabled() {
+    return;
+  }
+  RESOURCE_CACHE_DIAGNOSTICS
+    .stale_hits
     .fetch_add(1, Ordering::Relaxed);
 }
 
@@ -2223,6 +2266,23 @@ fn record_disk_cache_miss() {
   RESOURCE_CACHE_DIAGNOSTICS
     .disk_cache_misses
     .fetch_add(1, Ordering::Relaxed);
+}
+
+#[cfg(feature = "disk_cache")]
+fn start_disk_cache_diagnostics() -> Option<Instant> {
+  resource_cache_diagnostics_enabled().then(Instant::now)
+}
+
+#[cfg(feature = "disk_cache")]
+fn finish_disk_cache_diagnostics(start: Option<Instant>) {
+  let Some(start) = start else {
+    return;
+  };
+  let elapsed = start.elapsed();
+  let nanos = u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX);
+  RESOURCE_CACHE_DIAGNOSTICS
+    .disk_cache_ns
+    .fetch_add(nanos, Ordering::Relaxed);
 }
 
 fn start_network_fetch_diagnostics() -> Option<Instant> {
@@ -2453,6 +2513,7 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
       return CachePlan {
         cached: None,
         action: CacheAction::Fetch,
+        is_stale: false,
       };
     };
 
@@ -2466,6 +2527,7 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
       return CachePlan {
         cached,
         action: CacheAction::UseCached,
+        is_stale: false,
       };
     }
 
@@ -2475,6 +2537,7 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
           return CachePlan {
             cached: None,
             action: CacheAction::Fetch,
+            is_stale: false,
           };
         }
         let now = SystemTime::now();
@@ -2484,6 +2547,7 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
           return CachePlan {
             cached,
             action: CacheAction::UseCached,
+            is_stale: false,
           };
         }
         if self.config.stale_policy == CacheStalePolicy::UseStaleWhenDeadline
@@ -2495,6 +2559,7 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
           return CachePlan {
             cached,
             action: CacheAction::UseCached,
+            is_stale: true,
           };
         }
         if self.config.honor_http_cache_headers && has_validators {
@@ -2504,16 +2569,19 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
               etag,
               last_modified,
             },
+            is_stale: false,
           };
         }
         return CachePlan {
           cached,
           action: CacheAction::Fetch,
+          is_stale: false,
         };
       } else if !self.config.honor_http_cache_headers {
         return CachePlan {
           cached,
           action: CacheAction::UseCached,
+          is_stale: false,
         };
       }
     }
@@ -2525,11 +2593,13 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
           etag,
           last_modified,
         },
+        is_stale: false,
       }
     } else {
       CachePlan {
         cached,
         action: CacheAction::UseCached,
+        is_stale: false,
       }
     }
   }
@@ -2792,7 +2862,11 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
     let plan = self.plan_cache_use(url, cached.clone(), None);
     if let CacheAction::UseCached = plan.action {
       if let Some(snapshot) = plan.cached.as_ref() {
-        record_cache_fresh_hit();
+        if plan.is_stale {
+          record_cache_stale_hit();
+        } else {
+          record_cache_fresh_hit();
+        }
         let result = snapshot.value.as_result();
         if let Ok(ref res) = result {
           reserve_policy_bytes(&self.policy, res)?;
@@ -2881,6 +2955,7 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
         } else {
           if res.status.map(is_transient_http_status).unwrap_or(false) {
             if let Some(snapshot) = plan.cached.as_ref() {
+              record_cache_stale_hit();
               let fallback = snapshot.value.as_result();
               let is_ok = fallback.is_ok();
               (fallback, is_ok)
@@ -2907,6 +2982,7 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
       }
       Err(err) => {
         if let Some(snapshot) = plan.cached.as_ref() {
+          record_cache_stale_hit();
           let fallback = snapshot.value.as_result();
           let is_ok = fallback.is_ok();
           (fallback, is_ok)
@@ -3349,6 +3425,64 @@ mod tests {
     );
   }
 
+  #[test]
+  fn resource_cache_diagnostics_record_stale_hits_under_deadline() {
+    let _lock = resource_cache_diagnostics_test_lock();
+
+    #[derive(Clone)]
+    struct CountingFetcher {
+      calls: Arc<AtomicUsize>,
+    }
+
+    impl ResourceFetcher for CountingFetcher {
+      fn fetch(&self, url: &str) -> Result<FetchedResource> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let mut resource = FetchedResource::new(b"cached".to_vec(), Some("text/plain".to_string()));
+        resource.final_url = Some(url.to_string());
+        resource.cache_policy = Some(HttpCachePolicy {
+          max_age: Some(0),
+          ..Default::default()
+        });
+        Ok(resource)
+      }
+    }
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let fetcher = CachingFetcher::with_config(
+      CountingFetcher {
+        calls: Arc::clone(&calls),
+      },
+      CachingFetcherConfig {
+        honor_http_cache_freshness: true,
+        stale_policy: CacheStalePolicy::UseStaleWhenDeadline,
+        ..CachingFetcherConfig::default()
+      },
+    );
+
+    let url = "https://example.com/stale";
+    let first = fetcher.fetch(url).expect("seed fetch");
+    assert_eq!(first.bytes, b"cached");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+    enable_resource_cache_diagnostics();
+    let deadline = render_control::RenderDeadline::new(Some(Duration::from_secs(1)), None);
+    let second = render_control::with_deadline(Some(&deadline), || fetcher.fetch(url))
+      .expect("deadline stale hit should succeed");
+    assert_eq!(second.bytes, b"cached");
+    assert_eq!(
+      calls.load(Ordering::SeqCst),
+      1,
+      "stale_policy should serve cached bytes under deadline"
+    );
+
+    let stats = take_resource_cache_diagnostics().expect("diagnostics should be enabled");
+    assert!(
+      stats.stale_hits >= 1,
+      "expected stale hit counter to increment (got {})",
+      stats.stale_hits
+    );
+  }
+
   #[cfg(feature = "disk_cache")]
   #[test]
   fn resource_cache_diagnostics_record_disk_cache_hits() {
@@ -3359,8 +3493,7 @@ mod tests {
 
     impl ResourceFetcher for SeedFetcher {
       fn fetch(&self, url: &str) -> Result<FetchedResource> {
-        let mut resource =
-          FetchedResource::new(b"cached".to_vec(), Some("text/plain".to_string()));
+        let mut resource = FetchedResource::new(b"cached".to_vec(), Some("text/plain".to_string()));
         resource.final_url = Some(url.to_string());
         Ok(resource)
       }
@@ -4148,7 +4281,10 @@ mod tests {
         }
       }
 
-      panic!("server did not receive request within {:?}", start.elapsed());
+      panic!(
+        "server did not receive request within {:?}",
+        start.elapsed()
+      );
     });
 
     let fetcher = HttpFetcher::new().with_timeout(Duration::from_secs(5));

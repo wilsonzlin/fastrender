@@ -715,8 +715,10 @@ fn is_manual_field_unset(value: &str) -> bool {
 
 fn is_legacy_auto_note_line(line: &str) -> bool {
   let trimmed = line.trim();
-  matches!(trimmed, "not run" | "missing cache" | "timeout" | "panic" | "error")
-    || trimmed.starts_with("hard timeout after ")
+  matches!(
+    trimmed,
+    "not run" | "missing cache" | "timeout" | "panic" | "error"
+  ) || trimmed.starts_with("hard timeout after ")
     || trimmed.starts_with("timeout at ")
     || trimmed.starts_with("worker exited")
     || trimmed.starts_with("worker try_wait failed")
@@ -2625,12 +2627,7 @@ fn layout_summary(layout: &LayoutDiagnostics) -> Option<String> {
     parts.push(format!("intrinsic {}", intrinsic_parts.join(" ")));
   }
 
-  fn push_profile_kind(
-    parts: &mut Vec<String>,
-    label: &str,
-    ms: Option<f64>,
-    calls: Option<u64>,
-  ) {
+  fn push_profile_kind(parts: &mut Vec<String>, label: &str, ms: Option<f64>, calls: Option<u64>) {
     match (ms, calls) {
       (Some(ms), Some(calls)) => {
         if ms > 0.0 || calls > 0 {
@@ -2722,11 +2719,7 @@ fn paint_summary(paint: &PaintDiagnostics) -> Option<String> {
   push_opt_usize(&mut parts, "display_items", paint.display_items);
   push_opt_usize(&mut parts, "optimized_items", paint.optimized_items);
   push_opt_usize(&mut parts, "culled_items", paint.culled_items);
-  push_opt_usize(
-    &mut parts,
-    "transparent_removed",
-    paint.transparent_removed,
-  );
+  push_opt_usize(&mut parts, "transparent_removed", paint.transparent_removed);
   push_opt_usize(&mut parts, "noop_removed", paint.noop_removed);
   push_opt_usize(&mut parts, "merged_items", paint.merged_items);
   push_opt_ms(&mut parts, "gradient", paint.gradient_ms);
@@ -2814,6 +2807,9 @@ fn resources_summary(resources: &ResourceDiagnostics) -> Option<String> {
   if let Some(hits) = resources.resource_cache_fresh_hits {
     resource_cache_parts.push(format!("fresh_hits={hits}"));
   }
+  if let Some(hits) = resources.resource_cache_stale_hits {
+    resource_cache_parts.push(format!("stale_hits={hits}"));
+  }
   if let Some(hits) = resources.resource_cache_revalidated_hits {
     resource_cache_parts.push(format!("revalidated_hits={hits}"));
   }
@@ -2830,6 +2826,9 @@ fn resources_summary(resources: &ResourceDiagnostics) -> Option<String> {
   }
   if let Some(misses) = resources.disk_cache_misses {
     disk_cache_parts.push(format!("misses={misses}"));
+  }
+  if let Some(ms) = resources.disk_cache_ms {
+    disk_cache_parts.push(format!("ms={ms:.2}ms"));
   }
   if !disk_cache_parts.is_empty() {
     parts.push(format!("disk_cache {}", disk_cache_parts.join(" ")));

@@ -1795,6 +1795,8 @@ pub struct ResourceDiagnostics {
   #[serde(skip_serializing_if = "Option::is_none")]
   pub resource_cache_fresh_hits: Option<usize>,
   #[serde(skip_serializing_if = "Option::is_none")]
+  pub resource_cache_stale_hits: Option<usize>,
+  #[serde(skip_serializing_if = "Option::is_none")]
   pub resource_cache_revalidated_hits: Option<usize>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub resource_cache_misses: Option<usize>,
@@ -1802,6 +1804,8 @@ pub struct ResourceDiagnostics {
   pub disk_cache_hits: Option<usize>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub disk_cache_misses: Option<usize>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub disk_cache_ms: Option<f64>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub network_fetches: Option<usize>,
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -1887,10 +1891,12 @@ fn merge_image_cache_diagnostics(stats: &mut RenderStats) {
 fn merge_resource_cache_diagnostics(stats: &mut RenderStats) {
   if let Some(resource_stats) = crate::resource::take_resource_cache_diagnostics() {
     stats.resources.resource_cache_fresh_hits = Some(resource_stats.fresh_hits);
+    stats.resources.resource_cache_stale_hits = Some(resource_stats.stale_hits);
     stats.resources.resource_cache_revalidated_hits = Some(resource_stats.revalidated_hits);
     stats.resources.resource_cache_misses = Some(resource_stats.misses);
     stats.resources.disk_cache_hits = Some(resource_stats.disk_cache_hits);
     stats.resources.disk_cache_misses = Some(resource_stats.disk_cache_misses);
+    stats.resources.disk_cache_ms = Some(resource_stats.disk_cache_ms);
     stats.resources.network_fetches = Some(resource_stats.network_fetches);
     stats.resources.network_fetch_ms = Some(resource_stats.network_fetch_ms);
   }
