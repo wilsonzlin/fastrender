@@ -1146,6 +1146,40 @@ pub(crate) fn hotspot_from_progress_stage(stage: ProgressStage) -> &'static str 
   }
 }
 
+pub(crate) fn hotspot_from_error(
+  err: &fastrender::Error,
+  diagnostics: Option<&RenderDiagnostics>,
+) -> Option<&'static str> {
+  if let Some(stage) = diagnostics.and_then(|d| d.failure_stage) {
+    return Some(hotspot_from_timeout_stage(stage));
+  }
+  match err {
+    fastrender::Error::Resource(_) | fastrender::Error::Navigation(_) | fastrender::Error::Io(_) => {
+      Some("fetch")
+    }
+    _ => None,
+  }
+}
+
+fn maybe_apply_hotspot(
+  progress: &mut PageProgress,
+  previous: Option<&PageProgress>,
+  hotspot: &str,
+  authoritative: bool,
+) {
+  if authoritative {
+    progress.hotspot = hotspot.to_string();
+    return;
+  }
+  if !is_hotspot_unset(&progress.hotspot) {
+    return;
+  }
+  let prev_hotspot = previous.map(|p| p.hotspot.as_str()).unwrap_or("");
+  if is_hotspot_unset(prev_hotspot) {
+    progress.hotspot = hotspot.to_string();
+  }
+}
+
 pub(crate) fn apply_diagnostics_to_progress(
   progress: &mut PageProgress,
   diagnostics: &RenderDiagnostics,
@@ -1414,7 +1448,14 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
         _ => {
           progress.status = ProgressStatus::Error;
           progress.notes = format_error_with_chain(&err, args.verbose);
-          progress.hotspot = "unknown".to_string();
+          // Avoid clobbering manual `hotspot` edits in committed progress files: only set the
+          // inferred hotspot when the previous value is unset/unknown (or when explicitly marked
+          // authoritative).
+          if let Some(hotspot) = hotspot_from_error(&err, None) {
+            maybe_apply_hotspot(&mut progress, progress_before.as_ref(), hotspot, false);
+          } else {
+            progress.hotspot = "unknown".to_string();
+          }
         }
       }
 
@@ -4088,6 +4129,35 @@ mod tests {
       ..PageProgress::default()
     };
     let merged = new_progress.merge_preserving_manual(Some(previous), None);
+    assert_eq!(merged.hotspot, "layout");
+  }
+
+  #[test]
+  fn resource_errors_map_to_fetch_hotspot() {
+    let err = fastrender::Error::Resource(fastrender::error::ResourceError::new(
+      "https://example.com/style.css",
+      "fetch failed",
+    ));
+    assert_eq!(hotspot_from_error(&err, None), Some("fetch"));
+  }
+
+  #[test]
+  fn inferred_hotspot_does_not_override_manual_hotspot() {
+    let err = fastrender::Error::Resource(fastrender::error::ResourceError::new(
+      "https://example.com/style.css",
+      "fetch failed",
+    ));
+    let previous = PageProgress {
+      url: "https://example.com".to_string(),
+      hotspot: "layout".to_string(),
+      ..PageProgress::default()
+    };
+    let mut progress = PageProgress::new(previous.url.clone());
+    progress.status = ProgressStatus::Error;
+    if let Some(hotspot) = hotspot_from_error(&err, None) {
+      maybe_apply_hotspot(&mut progress, Some(&previous), hotspot, false);
+    }
+    let merged = progress.merge_preserving_manual(Some(previous), None);
     assert_eq!(merged.hotspot, "layout");
   }
 
