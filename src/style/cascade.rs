@@ -6186,7 +6186,7 @@ fn compute_base_styles<'a>(
     &mut ua_styles,
     ua_matches,
     None,
-    inline_tree_scope,
+    None,
     parent_ua_styles,
     parent_ua_styles.font_size,
     ua_root_font_size,
@@ -6241,12 +6241,17 @@ fn compute_base_styles<'a>(
   );
   let inline_decls =
     cached_inline_style_declarations(inline_style_decls, node, node_id).map(Cow::Borrowed);
+  let inline_layer_order = if inline_decls.is_some() {
+    Some(scratch.unlayered_layer_order(inline_tree_scope))
+  } else {
+    None
+  };
   let decl_start = prof.then(|| Instant::now());
   apply_cascaded_declarations(
     &mut styles,
     matching_rules,
     inline_decls,
-    inline_tree_scope,
+    inline_layer_order,
     parent_styles,
     parent_styles.font_size,
     root_font_size,
@@ -15182,7 +15187,7 @@ fn apply_cascaded_declarations<'a, F>(
   styles: &mut ComputedStyle,
   matched_rules: Vec<MatchedRule<'a>>,
   inline_declarations: Option<Cow<'a, [Declaration]>>,
-  inline_tree_scope: u32,
+  inline_layer_order: Option<Arc<[u32]>>,
   parent_styles: &ComputedStyle,
   parent_font_size: f32,
   root_font_size: f32,
@@ -15246,7 +15251,7 @@ fn apply_cascaded_declarations<'a, F>(
   }
 
   if let Some(inline) = inline_declarations {
-    let inline_layer_order = layer_order_with_tree_scope(&[u32::MAX], inline_tree_scope);
+    let inline_layer_order = inline_layer_order.expect("inline layer order missing");
     match inline {
       Cow::Borrowed(decls) => {
         for (decl_order, declaration) in decls.iter().enumerate() {
@@ -16232,7 +16237,7 @@ fn compute_pseudo_element_styles(
     &mut ua_styles,
     ua_matches,
     None,
-    DOCUMENT_TREE_SCOPE_PREFIX,
+    None,
     ua_parent_styles,
     ua_parent_styles.font_size,
     ua_root_font_size,
@@ -16260,7 +16265,7 @@ fn compute_pseudo_element_styles(
     &mut styles,
     matching_rules,
     None,
-    DOCUMENT_TREE_SCOPE_PREFIX,
+    None,
     parent_styles,
     parent_styles.font_size,
     root_font_size,
@@ -16396,7 +16401,7 @@ fn compute_first_line_styles(
     &mut ua_styles,
     ua_matches,
     None,
-    DOCUMENT_TREE_SCOPE_PREFIX,
+    None,
     base_ua_styles,
     base_ua_styles.font_size,
     ua_root_font_size,
@@ -16418,7 +16423,7 @@ fn compute_first_line_styles(
     &mut styles,
     matching_rules,
     None,
-    DOCUMENT_TREE_SCOPE_PREFIX,
+    None,
     base_styles,
     base_styles.font_size,
     root_font_size,
@@ -16500,7 +16505,7 @@ fn compute_first_letter_styles(
     &mut ua_styles,
     ua_matches,
     None,
-    DOCUMENT_TREE_SCOPE_PREFIX,
+    None,
     base_ua_styles,
     base_ua_styles.font_size,
     ua_root_font_size,
@@ -16522,7 +16527,7 @@ fn compute_first_letter_styles(
     &mut styles,
     matching_rules,
     None,
-    DOCUMENT_TREE_SCOPE_PREFIX,
+    None,
     base_styles,
     base_styles.font_size,
     root_font_size,
@@ -16610,7 +16615,7 @@ fn compute_marker_styles(
     &mut ua_styles,
     ua_matches,
     None,
-    DOCUMENT_TREE_SCOPE_PREFIX,
+    None,
     ua_list_item_styles,
     ua_list_item_styles.font_size,
     ua_root_font_size,
@@ -16642,7 +16647,7 @@ fn compute_marker_styles(
     &mut styles,
     matching_rules,
     None,
-    DOCUMENT_TREE_SCOPE_PREFIX,
+    None,
     list_item_styles,
     list_item_styles.font_size,
     root_font_size,
