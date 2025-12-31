@@ -19,4 +19,7 @@ This directory contains the **committed pageset scoreboard**: one tiny JSON file
 - `notes` is intended for durable human explanations; `auto_notes` is machine-generated last-run diagnostics and is rewritten on each run.
 - Renderer-provided `failure_stage`/`timeout_stage` fields stay `null` on placeholders and are populated directly from diagnostics during runs for programmatic triage.
 
+`pageset_progress report --verbose-stats` prints these per-page resource breakdowns plus aggregated
+totals and top-N rankings (network/inflight/disk) to speed up performance triage.
+
 See `AGENTS.md` for the intent and schema.
