@@ -486,9 +486,20 @@ impl std::hash::Hash for PseudoElement {
     std::mem::discriminant(self).hash(state);
     match self {
       PseudoElement::Slotted(selectors) => {
+        struct HashWriter<'a, H: std::hash::Hasher>(&'a mut H);
+
+        impl<H: std::hash::Hasher> fmt::Write for HashWriter<'_, H> {
+          fn write_str(&mut self, s: &str) -> fmt::Result {
+            self.0.write(s.as_bytes());
+            Ok(())
+          }
+        }
+
         selectors.len().hash(state);
+        let mut writer = HashWriter(state);
         for selector in selectors.iter() {
-          selector.to_css_string().hash(state);
+          writer.0.write_u8(0);
+          let _ = selector.to_css(&mut writer);
         }
       }
       PseudoElement::Part(name) => name.hash(state),

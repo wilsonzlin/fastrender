@@ -77,6 +77,7 @@ use crate::style::ComputedStyle;
 use crate::style::Direction;
 use crate::style::TopLayerKind;
 use crate::{error::RenderError, error::RenderStage};
+#[cfg(test)]
 use cssparser::ToCss;
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use selectors::context::IncludeStartingStyle;
@@ -2804,45 +2805,53 @@ fn slotted_selector_keys(pe: &PseudoElement) -> Vec<SelectorKey> {
 fn parse_slotted_prelude(
   selector: &Selector<crate::css::selectors::FastRenderSelectorImpl>,
 ) -> Option<Selector<crate::css::selectors::FastRenderSelectorImpl>> {
-  use selectors::parser::Combinator;
+  use selectors::parser::Component;
 
-  // Walk sequences right-to-left to see if the compound immediately preceding
-  // ::slotted() is empty (implicit universal) and whether there is any prelude
-  // at all to match against the assigned slot.
-  let mut iter = selector.iter();
-  while iter.next().is_some() {}
-  let Some(Combinator::PseudoElement) = iter.next_sequence() else {
-    return None;
-  };
-  let mut empty_slot_sequence = true;
-  while iter.next().is_some() {
-    empty_slot_sequence = false;
-  }
-  let has_more_to_left = iter.next_sequence().is_some();
-  if empty_slot_sequence && !has_more_to_left {
+  // Drop the rightmost pseudo-element component and its implicit combinator,
+  // leaving the selector that matches the assigned slot.
+  let components: Vec<Component<FastRenderSelectorImpl>> =
+    selector.iter_raw_match_order().skip(2).cloned().collect();
+  if components.is_empty() {
     return None;
   }
 
-  let css = selector.to_css_string();
-  let lower = css.to_ascii_lowercase();
-  let idx = lower.find("::slotted(")?;
-  let mut prelude = css[..idx].to_string();
-  if empty_slot_sequence {
-    prelude.push('*');
+  // Convert from match-order (right-to-left) representation to parse-order
+  // (left-to-right) without reversing the component order within each compound.
+  let mut sequences: Vec<Vec<Component<FastRenderSelectorImpl>>> = Vec::new();
+  let mut combinators: Vec<selectors::parser::Combinator> = Vec::new();
+  let mut current: Vec<Component<FastRenderSelectorImpl>> = Vec::new();
+
+  for component in components {
+    match component {
+      Component::Combinator(c) => {
+        sequences.push(current);
+        current = Vec::new();
+        combinators.push(c);
+      }
+      other => current.push(other),
+    }
   }
-  let prelude = prelude.trim();
-  if prelude.is_empty() {
-    return None;
+  sequences.push(current);
+
+  // An empty compound selector immediately preceding ::slotted() is an implicit
+  // universal selector. Make it explicit so the synthesized selector is valid.
+  if sequences.first().is_some_and(|seq| seq.is_empty()) {
+    sequences[0].push(Component::ExplicitUniversalType);
   }
-  let mut input = cssparser::ParserInput::new(prelude);
-  let mut parser = cssparser::Parser::new(&mut input);
-  SelectorList::parse(
-    &crate::css::selectors::PseudoClassParser,
-    &mut parser,
-    selectors::parser::ParseRelative::No,
-  )
-  .ok()
-  .and_then(|list| list.slice().first().cloned())
+
+  sequences.reverse();
+  combinators.reverse();
+
+  let mut parse_components: Vec<Component<FastRenderSelectorImpl>> =
+    Vec::with_capacity(sequences.iter().map(|s| s.len()).sum::<usize>() + combinators.len());
+  for (idx, seq) in sequences.into_iter().enumerate() {
+    parse_components.extend(seq);
+    if idx < combinators.len() {
+      parse_components.push(Component::Combinator(combinators[idx]));
+    }
+  }
+
+  Some(Selector::from_components(parse_components))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -7890,6 +7899,195 @@ mod tests {
 
     let index = RuleIndex::new(rules, QuirksMode::NoQuirks);
     assert_eq!(index.slotted_selectors.len(), 1);
+  }
+
+  #[test]
+  fn parse_slotted_prelude_synthesizes_expected_selector() {
+    let stylesheet = parse_stylesheet(
+      r"
+        :host(.foo) ::slotted(.a) { color: red; }
+        slot[name=foo]::slotted(.a) { color: red; }
+      ",
+    )
+    .unwrap();
+    let media_ctx = MediaContext::default();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+
+    let selector_host = collected[0]
+      .rule
+      .selectors
+      .slice()
+      .first()
+      .expect("host slotted selector");
+    let selector_named = collected[1]
+      .rule
+      .selectors
+      .slice()
+      .first()
+      .expect("named slotted selector");
+
+    let prelude_host = parse_slotted_prelude(selector_host).expect("host prelude");
+    let prelude_named = parse_slotted_prelude(selector_named).expect("named prelude");
+
+    assert_eq!(prelude_host.to_css_string(), ":host(.foo) *");
+    assert_eq!(prelude_named.to_css_string(), "slot[name=foo]");
+
+    use selectors::parser::Component;
+    use selectors::parser::Combinator;
+    for prelude in [&prelude_host, &prelude_named] {
+      assert!(
+        !prelude
+          .iter_raw_match_order()
+          .any(|c| matches!(c, Component::Combinator(Combinator::PseudoElement))),
+        "slotted preludes should not retain pseudo-element combinators"
+      );
+      assert!(
+        !prelude
+          .iter_raw_match_order()
+          .any(|c| matches!(c, Component::PseudoElement(..))),
+        "slotted preludes should not retain pseudo-elements"
+      );
+    }
+  }
+
+  #[test]
+  fn slotted_prelude_matches_assigned_slot_element() {
+    let stylesheet = parse_stylesheet(":host(.foo) ::slotted(.a) { color: red; }").unwrap();
+    let media_ctx = MediaContext::default();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+    let selector = collected[0]
+      .rule
+      .selectors
+      .slice()
+      .first()
+      .expect("slotted selector");
+    let prelude = parse_slotted_prelude(selector).expect("prelude selector");
+
+    let host = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("class".to_string(), "foo".to_string())],
+      },
+      children: vec![DomNode {
+        node_type: DomNodeType::ShadowRoot {
+          mode: crate::dom::ShadowRootMode::Open,
+          delegates_focus: false,
+        },
+        children: vec![DomNode {
+          node_type: DomNodeType::Slot {
+            namespace: HTML_NAMESPACE.to_string(),
+            attributes: vec![],
+            assigned: false,
+          },
+          children: vec![],
+        }],
+      }],
+    };
+
+    let shadow_root = &host.children[0];
+    let slot = &shadow_root.children[0];
+    let slot_ancestors = [&host, shadow_root];
+    let slot_ref = ElementRef::with_ancestors(slot, &slot_ancestors);
+    let host_ref = ElementRef::new(&host);
+
+    let mut caches = SelectorCaches::default();
+    let cache_epoch = next_selector_cache_epoch();
+    caches.set_epoch(cache_epoch);
+    let sibling_cache = SiblingListCache::new(cache_epoch);
+    let mut context = MatchingContext::new(
+      MatchingMode::Normal,
+      None,
+      &mut caches,
+      QuirksMode::NoQuirks,
+      selectors::matching::NeedsSelectorFlags::No,
+      selectors::matching::MatchingForInvalidation::No,
+    );
+    context.extra_data = ShadowMatchData::default().with_sibling_cache(&sibling_cache);
+
+    let matches = with_shadow_host(&mut context, Some(host_ref), |ctx| {
+      matches_selector(&prelude, 0, None, &slot_ref, ctx)
+    });
+
+    assert!(matches, "prelude should match the slot when the host matches");
+  }
+
+  #[test]
+  fn slotted_prelude_matches_named_slot_only() {
+    let stylesheet = parse_stylesheet("slot[name=foo]::slotted(.a) { color: red; }").unwrap();
+    let media_ctx = MediaContext::default();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+    let selector = collected[0]
+      .rule
+      .selectors
+      .slice()
+      .first()
+      .expect("slotted selector");
+    let prelude = parse_slotted_prelude(selector).expect("prelude selector");
+
+    let host = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![],
+      },
+      children: vec![DomNode {
+        node_type: DomNodeType::ShadowRoot {
+          mode: crate::dom::ShadowRootMode::Open,
+          delegates_focus: false,
+        },
+        children: vec![
+          DomNode {
+            node_type: DomNodeType::Slot {
+              namespace: HTML_NAMESPACE.to_string(),
+              attributes: vec![("name".to_string(), "foo".to_string())],
+              assigned: false,
+            },
+            children: vec![],
+          },
+          DomNode {
+            node_type: DomNodeType::Slot {
+              namespace: HTML_NAMESPACE.to_string(),
+              attributes: vec![("name".to_string(), "bar".to_string())],
+              assigned: false,
+            },
+            children: vec![],
+          },
+        ],
+      }],
+    };
+
+    let shadow_root = &host.children[0];
+    let slot_foo = &shadow_root.children[0];
+    let slot_bar = &shadow_root.children[1];
+    let slot_ancestors = [&host, shadow_root];
+    let slot_foo_ref = ElementRef::with_ancestors(slot_foo, &slot_ancestors);
+    let slot_bar_ref = ElementRef::with_ancestors(slot_bar, &slot_ancestors);
+    let host_ref = ElementRef::new(&host);
+
+    let mut caches = SelectorCaches::default();
+    let cache_epoch = next_selector_cache_epoch();
+    caches.set_epoch(cache_epoch);
+    let sibling_cache = SiblingListCache::new(cache_epoch);
+    let mut context = MatchingContext::new(
+      MatchingMode::Normal,
+      None,
+      &mut caches,
+      QuirksMode::NoQuirks,
+      selectors::matching::NeedsSelectorFlags::No,
+      selectors::matching::MatchingForInvalidation::No,
+    );
+    context.extra_data = ShadowMatchData::default().with_sibling_cache(&sibling_cache);
+
+    let foo_matches = with_shadow_host(&mut context, Some(host_ref), |ctx| {
+      matches_selector(&prelude, 0, None, &slot_foo_ref, ctx)
+    });
+    let bar_matches = with_shadow_host(&mut context, Some(host_ref), |ctx| {
+      matches_selector(&prelude, 0, None, &slot_bar_ref, ctx)
+    });
+
+    assert!(foo_matches);
+    assert!(!bar_matches);
   }
 
   #[test]
@@ -13631,6 +13829,9 @@ fn find_matching_rules<'a>(
   }
   let assigned_slot = slot_assignment.node_to_slot.get(&node_id);
   let current_shadow = dom_maps.containing_shadow_root(node_id);
+  let node_tree_scope_prefix = current_shadow
+    .map(shadow_tree_scope_prefix)
+    .unwrap_or(DOCUMENT_TREE_SCOPE_PREFIX);
   let profiling = cascade_profile_enabled();
   let start = profiling.then(|| Instant::now());
   let node_summary = if rules.has_has_requirements {
@@ -14080,11 +14281,18 @@ fn find_matching_rules<'a>(
         } else {
           let pos = matches.len();
           scratch.match_index.insert(rule_idx, pos);
+          // Slotted selectors target a light-DOM element but originate from a shadow tree. Compare
+          // them against other matching rules in the element's tree scope so specificity can
+          // participate in the cascade.
+          let mut layer_order = rule.layer_order.clone();
+          if let Some(prefix) = layer_order.first_mut() {
+            *prefix = node_tree_scope_prefix;
+          }
           matches.push(MatchedRule {
             origin: rule.origin,
             specificity: best_specificity,
             order: rule.order,
-            layer_order: rule.layer_order.clone(),
+            layer_order,
             declarations: Cow::Borrowed(&rule.rule.declarations),
             starting_style: rule.starting_style,
           });

@@ -1135,6 +1135,22 @@ impl<Impl: SelectorImpl> Selector<Impl> {
         self.0.slice()[..self.len() - offset].iter().rev()
     }
 
+    /// Creates a Selector from a vec of Components, specified in parse order.
+    ///
+    /// This is useful for synthesizing selectors derived from existing parsed selectors without
+    /// going through CSS serialization and reparsing.
+    pub fn from_components(vec: Vec<Component<Impl>>) -> Self {
+        let mut builder = SelectorBuilder::default();
+        for component in vec.into_iter() {
+            if let Some(combinator) = component.as_combinator() {
+                builder.push_combinator(combinator);
+            } else {
+                builder.push_simple_selector(component);
+            }
+        }
+        Selector(builder.build(ParseRelative::No))
+    }
+
     /// Creates a Selector from a vec of Components, specified in parse order. Used in tests.
     #[allow(dead_code)]
     pub(crate) fn from_vec(
