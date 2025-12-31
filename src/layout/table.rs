@@ -56,6 +56,7 @@ use crate::style::color::Rgba;
 use crate::style::computed::Visibility;
 use crate::style::display::Display;
 use crate::style::display::FormattingContextType;
+use crate::style::types::BoxSizing;
 use crate::style::types::BorderCollapse;
 use crate::style::types::BorderStyle;
 use crate::style::types::CaptionSide;
@@ -63,6 +64,7 @@ use crate::style::types::Direction;
 use crate::style::types::EmptyCells;
 use crate::style::types::TableLayout;
 use crate::style::types::VerticalAlign;
+use crate::style::values::CalcLength;
 use crate::style::values::Length;
 use crate::style::values::LengthUnit;
 use crate::style::ComputedStyle;
@@ -1245,6 +1247,66 @@ impl StyleOverrideCache {
 fn apply_style_overrides(base: &ComputedStyle, flags: StyleOverrideFlags) -> ComputedStyle {
   let mut style = base.clone();
   if flags.contains(StyleOverrideFlags::STRIP_PADDING_BORDERS) {
+    // `measure_cell_intrinsic_widths` strips horizontal padding/borders from the cell to measure
+    // its content-box intrinsic sizes, then re-adds padding/borders once.
+    //
+    // For `box-sizing: border-box`, authored `width`/`min-width`/`max-width` apply to the
+    // border-box. If we zero padding/borders without also converting these sizing properties to
+    // content-box equivalents, intrinsic measurement would interpret the authored border-box
+    // width as a content-box width and then add padding/borders again (double-counting).
+    //
+    // Convert border-box sizing hints to content-box hints by subtracting the stripped horizontal
+    // edges (padding + borders). Use calc-term arithmetic so this stays allocation-free and does
+    // not depend on percentage base resolution.
+    if style.box_sizing == BoxSizing::BorderBox {
+      let mut horizontal_edges = CalcLength::empty();
+      let to_calc = |len: Length| len.calc.unwrap_or_else(|| CalcLength::single(len.unit, len.value));
+      for edge in [
+        style.padding_left,
+        style.padding_right,
+        style.border_left_width,
+        style.border_right_width,
+      ] {
+        let edge_calc = to_calc(edge);
+        if let Some(next) = horizontal_edges.add_scaled(&edge_calc, 1.0) {
+          horizontal_edges = next;
+        } else {
+          // Expression too complex; bail out and keep original widths to avoid churn.
+          horizontal_edges = CalcLength::empty();
+          break;
+        }
+      }
+
+      if !horizontal_edges.is_zero() {
+        let adjust = |value: &mut Option<Length>| {
+          let Some(len) = value.take() else {
+            return;
+          };
+          let base_calc = to_calc(len);
+          if let Some(adjusted) = base_calc.add_scaled(&horizontal_edges, -1.0) {
+            let resolved = if let Some(px) = adjusted.absolute_sum() {
+              Length::px(px.max(0.0))
+            } else if let Some(term) = adjusted.single_term() {
+              Length::new(term.value, term.unit)
+            } else {
+              Length::calc(adjusted)
+            };
+            *value = Some(resolved);
+          } else {
+            // Keep the original length when the calc term budget would overflow.
+            *value = Some(len);
+          }
+        };
+
+        adjust(&mut style.width);
+        adjust(&mut style.min_width);
+        adjust(&mut style.max_width);
+      }
+
+      // After converting sizing hints to content-box terms, ensure subsequent code treats them
+      // accordingly.
+      style.box_sizing = BoxSizing::ContentBox;
+    }
     style.padding_left = Length::px(0.0);
     style.padding_right = Length::px(0.0);
     style.border_left_width = Length::px(0.0);
@@ -9338,6 +9400,73 @@ mod tests {
     assert!(
       (col.min_width - 70.0).abs() < 0.5,
       "min width should include padding only once"
+    );
+  }
+
+  #[test]
+  fn cell_border_box_width_does_not_double_count_padding_in_intrinsic_measurement() {
+    let make_cell = |box_sizing: BoxSizing| {
+      let mut cell_style = ComputedStyle::default();
+      cell_style.display = Display::TableCell;
+      cell_style.box_sizing = box_sizing;
+      cell_style.width = Some(Length::px(100.0));
+      cell_style.padding_left = Length::px(10.0);
+      cell_style.padding_right = Length::px(10.0);
+      // Keep borders at zero so the test focuses on padding behavior.
+      cell_style.border_left_width = Length::px(0.0);
+      cell_style.border_right_width = Length::px(0.0);
+
+      let text = BoxNode::new_text(Arc::new(ComputedStyle::default()), "hello".to_string());
+      BoxNode::new_block(
+        Arc::new(cell_style),
+        FormattingContextType::Block,
+        vec![text],
+      )
+    };
+
+    let tfc = TableFormattingContext::new();
+    let cell_bfc = BlockFormattingContext::with_font_context_and_viewport(
+      tfc.factory.font_context().clone(),
+      tfc.factory.viewport_size(),
+    )
+    .with_parallelism(tfc.parallelism);
+    let style_overrides = StyleOverrideCache::default();
+
+    // `box-sizing: border-box` means the specified width already includes padding.
+    let border_box_cell = make_cell(BoxSizing::BorderBox);
+    let (min, max) = tfc.measure_cell_intrinsic_widths(
+      &border_box_cell,
+      BorderCollapse::Separate,
+      None,
+      &cell_bfc,
+      &style_overrides,
+    );
+    assert!(
+      (min - 100.0).abs() < 0.5,
+      "border-box intrinsic min width should match authored border-box width (got {min:.2})"
+    );
+    assert!(
+      (max - 100.0).abs() < 0.5,
+      "border-box intrinsic max width should match authored border-box width (got {max:.2})"
+    );
+
+    // `box-sizing: content-box` means the specified width excludes padding, so padding is added
+    // once to reach the border-box intrinsic size.
+    let content_box_cell = make_cell(BoxSizing::ContentBox);
+    let (min, max) = tfc.measure_cell_intrinsic_widths(
+      &content_box_cell,
+      BorderCollapse::Separate,
+      None,
+      &cell_bfc,
+      &style_overrides,
+    );
+    assert!(
+      (min - 120.0).abs() < 0.5,
+      "content-box intrinsic min width should include padding once (got {min:.2})"
+    );
+    assert!(
+      (max - 120.0).abs() < 0.5,
+      "content-box intrinsic max width should include padding once (got {max:.2})"
     );
   }
 
