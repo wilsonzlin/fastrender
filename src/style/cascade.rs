@@ -88,6 +88,7 @@ use selectors::Element;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::hash::{BuildHasherDefault, Hasher};
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -964,41 +965,131 @@ struct IndexedSlottedSelector<'a> {
   metadata: SelectorMetadata,
 }
 
+type SelectorBucketKey = u64;
+
+// The rule index stores pre-hashed selector keys (ids, classes, tags, attribute names) so we can:
+//   1. Avoid allocating/cloning `String`s when building the index.
+//   2. Avoid hashing variable-length strings with SipHash during candidate lookup.
+//
+// Hash collisions only widen the candidate set (extra rules get checked by full selector matching),
+// so correctness does not depend on the hash being collision-free.
+const FNV_OFFSET_BASIS: u64 = 14695981039346656037;
+const FNV_PRIME: u64 = 1099511628211;
+
+#[inline]
+fn selector_hash_bytes(bytes: &[u8]) -> SelectorBucketKey {
+  let mut hash = FNV_OFFSET_BASIS;
+  for &byte in bytes {
+    hash ^= byte as u64;
+    hash = hash.wrapping_mul(FNV_PRIME);
+  }
+  hash
+}
+
+#[inline]
+fn selector_hash_str(value: &str) -> SelectorBucketKey {
+  selector_hash_bytes(value.as_bytes())
+}
+
+#[inline]
+fn selector_hash_ascii_lowercase(value: &str) -> SelectorBucketKey {
+  let mut hash = FNV_OFFSET_BASIS;
+  for byte in value.bytes() {
+    let folded = if byte >= b'A' && byte <= b'Z' {
+      byte + 32
+    } else {
+      byte
+    };
+    hash ^= folded as u64;
+    hash = hash.wrapping_mul(FNV_PRIME);
+  }
+  hash
+}
+
+#[inline]
+fn selector_bucket_id(value: &str) -> SelectorBucketKey {
+  selector_hash_str(value)
+}
+
+#[inline]
+fn selector_bucket_class(value: &str) -> SelectorBucketKey {
+  selector_hash_str(value)
+}
+
+#[inline]
+fn selector_bucket_tag(value: &str) -> SelectorBucketKey {
+  selector_hash_ascii_lowercase(value)
+}
+
+#[inline]
+fn selector_bucket_attr(value: &str) -> SelectorBucketKey {
+  selector_hash_ascii_lowercase(value)
+}
+
+#[derive(Default)]
+struct SelectorBucketHasher(u64);
+
+impl Hasher for SelectorBucketHasher {
+  fn write(&mut self, bytes: &[u8]) {
+    // `Hash` for `u64` uses `write_u64`. This is a fallback for unexpected key types.
+    self.0 = selector_hash_bytes(bytes);
+  }
+
+  fn write_u64(&mut self, i: u64) {
+    self.0 = i;
+  }
+
+  fn write_u32(&mut self, i: u32) {
+    self.0 = i as u64;
+  }
+
+  fn write_usize(&mut self, i: usize) {
+    self.0 = i as u64;
+  }
+
+  fn finish(&self) -> u64 {
+    self.0
+  }
+}
+
+type SelectorBucketBuildHasher = BuildHasherDefault<SelectorBucketHasher>;
+type SelectorBucketMap<V> = HashMap<SelectorBucketKey, V, SelectorBucketBuildHasher>;
+
 struct PseudoBuckets {
-  by_id: HashMap<String, Vec<usize>>,
-  by_class: HashMap<String, Vec<usize>>,
-  by_tag: HashMap<String, Vec<usize>>,
-  by_attr: HashMap<String, Vec<usize>>,
+  by_id: SelectorBucketMap<Vec<usize>>,
+  by_class: SelectorBucketMap<Vec<usize>>,
+  by_tag: SelectorBucketMap<Vec<usize>>,
+  by_attr: SelectorBucketMap<Vec<usize>>,
   universal: Vec<usize>,
 }
 
 impl PseudoBuckets {
   fn new() -> Self {
     Self {
-      by_id: HashMap::new(),
-      by_class: HashMap::new(),
-      by_tag: HashMap::new(),
-      by_attr: HashMap::new(),
+      by_id: SelectorBucketMap::default(),
+      by_class: SelectorBucketMap::default(),
+      by_tag: SelectorBucketMap::default(),
+      by_attr: SelectorBucketMap::default(),
       universal: Vec::new(),
     }
   }
 }
 
 struct SlottedBuckets {
-  by_id: HashMap<String, Vec<usize>>,
-  by_class: HashMap<String, Vec<usize>>,
-  by_tag: HashMap<String, Vec<usize>>,
-  by_attr: HashMap<String, Vec<usize>>,
+  by_id: SelectorBucketMap<Vec<usize>>,
+  by_class: SelectorBucketMap<Vec<usize>>,
+  by_tag: SelectorBucketMap<Vec<usize>>,
+  by_attr: SelectorBucketMap<Vec<usize>>,
   universal: Vec<usize>,
 }
 
 impl SlottedBuckets {
   fn new() -> Self {
     Self {
-      by_id: HashMap::new(),
-      by_class: HashMap::new(),
-      by_tag: HashMap::new(),
-      by_attr: HashMap::new(),
+      by_id: SelectorBucketMap::default(),
+      by_class: SelectorBucketMap::default(),
+      by_tag: SelectorBucketMap::default(),
+      by_attr: SelectorBucketMap::default(),
       universal: Vec::new(),
     }
   }
@@ -1014,10 +1105,10 @@ struct RuleIndex<'a> {
   rule_sets_content: Vec<bool>,
   has_has_requirements: bool,
   selectors: Vec<IndexedSelector<'a>>,
-  by_id: HashMap<String, Vec<usize>>,
-  by_class: HashMap<String, Vec<usize>>,
-  by_tag: HashMap<String, Vec<usize>>,
-  by_attr: HashMap<String, Vec<usize>>,
+  by_id: SelectorBucketMap<Vec<usize>>,
+  by_class: SelectorBucketMap<Vec<usize>>,
+  by_tag: SelectorBucketMap<Vec<usize>>,
+  by_attr: SelectorBucketMap<Vec<usize>>,
   universal: Vec<usize>,
   pseudo_selectors: Vec<IndexedSelector<'a>>,
   pseudo_buckets: HashMap<PseudoElement, PseudoBuckets>,
@@ -1215,17 +1306,26 @@ fn selector_keys_with_polarity(
       match component {
         Component::ID(ident) => {
           if matches!(polarity, SelectorKeyPolarity::Matches) {
-            push_key(&mut keys, SelectorKey::Id(ident.0.clone()));
+            push_key(
+              &mut keys,
+              SelectorKey::Id(selector_bucket_id(ident.as_str())),
+            );
           }
         }
         Component::Class(cls) => {
           if matches!(polarity, SelectorKeyPolarity::Matches) {
-            push_key(&mut keys, SelectorKey::Class(cls.0.clone()));
+            push_key(
+              &mut keys,
+              SelectorKey::Class(selector_bucket_class(cls.as_str())),
+            );
           }
         }
         Component::LocalName(local) => {
           if matches!(polarity, SelectorKeyPolarity::Matches) {
-            push_key(&mut keys, SelectorKey::Tag(local.lower_name.0.clone()));
+            push_key(
+              &mut keys,
+              SelectorKey::Tag(selector_bucket_tag(local.lower_name.as_str())),
+            );
           }
         }
         Component::AttributeInNoNamespaceExists {
@@ -1234,20 +1334,23 @@ fn selector_keys_with_polarity(
           if matches!(polarity, SelectorKeyPolarity::Matches) {
             push_key(
               &mut keys,
-              SelectorKey::Attribute(local_name_lower.0.clone()),
+              SelectorKey::Attribute(selector_bucket_attr(local_name_lower.as_str())),
             );
           }
         }
         Component::AttributeInNoNamespace { local_name, .. } => {
           if matches!(polarity, SelectorKeyPolarity::Matches) {
-            push_key(&mut keys, SelectorKey::Attribute(local_name.0.clone()));
+            push_key(
+              &mut keys,
+              SelectorKey::Attribute(selector_bucket_attr(local_name.as_str())),
+            );
           }
         }
         Component::AttributeOther(other) => {
           if matches!(polarity, SelectorKeyPolarity::Matches) && other.namespace.is_none() {
             push_key(
               &mut keys,
-              SelectorKey::Attribute(other.local_name_lower.0.clone()),
+              SelectorKey::Attribute(selector_bucket_attr(other.local_name_lower.as_str())),
             );
           }
         }
@@ -1504,12 +1607,12 @@ fn parse_slotted_prelude(
   .and_then(|list| list.slice().first().cloned())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum SelectorKey {
-  Id(String),
-  Class(String),
-  Tag(String),
-  Attribute(String),
+  Id(SelectorBucketKey),
+  Class(SelectorBucketKey),
+  Tag(SelectorBucketKey),
+  Attribute(SelectorBucketKey),
   Universal,
 }
 
@@ -1520,10 +1623,10 @@ impl<'a> RuleIndex<'a> {
       rule_sets_content: Vec::new(),
       has_has_requirements: false,
       selectors: Vec::new(),
-      by_id: HashMap::new(),
-      by_class: HashMap::new(),
-      by_tag: HashMap::new(),
-      by_attr: HashMap::new(),
+      by_id: SelectorBucketMap::default(),
+      by_class: SelectorBucketMap::default(),
+      by_tag: SelectorBucketMap::default(),
+      by_attr: SelectorBucketMap::default(),
       universal: Vec::new(),
       pseudo_selectors: Vec::new(),
       pseudo_buckets: HashMap::new(),
@@ -1715,8 +1818,9 @@ impl<'a> RuleIndex<'a> {
     };
 
     if !self.by_id.is_empty() {
-      if let Some(id) = node.get_attribute("id") {
-        if let Some(list) = self.by_id.get(&id) {
+      if let Some(id) = node.get_attribute_ref("id") {
+        let key = selector_bucket_id(id);
+        if let Some(list) = self.by_id.get(&key) {
           for idx in list {
             consider_candidate(*idx, &mut stats.by_id);
           }
@@ -1724,10 +1828,11 @@ impl<'a> RuleIndex<'a> {
       }
     }
 
-    if let Some(class_attr) = node.get_attribute("class") {
+    if let Some(class_attr) = node.get_attribute_ref("class") {
       for cls in class_attr.split_whitespace() {
         if !cls.is_empty() {
-          if let Some(list) = self.by_class.get(cls) {
+          let key = selector_bucket_class(cls);
+          if let Some(list) = self.by_class.get(&key) {
             for idx in list {
               consider_candidate(*idx, &mut stats.by_class);
             }
@@ -1738,20 +1843,14 @@ impl<'a> RuleIndex<'a> {
 
     if !self.by_tag.is_empty() {
       if let Some(tag) = node.tag_name() {
-        if let Some(list) = self.by_tag.get(tag) {
+        let key = selector_bucket_tag(tag);
+        if let Some(list) = self.by_tag.get(&key) {
           for idx in list {
             consider_candidate(*idx, &mut stats.by_tag);
           }
         }
-        let lower_tag = tag.to_ascii_lowercase();
-        if lower_tag != tag {
-          if let Some(list) = self.by_tag.get(&lower_tag) {
-            for idx in list {
-              consider_candidate(*idx, &mut stats.by_tag);
-            }
-          }
-        }
-        if let Some(list) = self.by_tag.get("*") {
+        let star = selector_bucket_tag("*");
+        if let Some(list) = self.by_tag.get(&star) {
           for idx in list {
             consider_candidate(*idx, &mut stats.by_tag);
           }
@@ -1761,7 +1860,7 @@ impl<'a> RuleIndex<'a> {
 
     if !self.by_attr.is_empty() {
       for (name, _) in node.attributes_iter() {
-        let key = name.to_ascii_lowercase();
+        let key = selector_bucket_attr(name);
         if let Some(list) = self.by_attr.get(&key) {
           for idx in list {
             consider_candidate(*idx, &mut stats.by_attr);
@@ -1808,20 +1907,22 @@ impl<'a> RuleIndex<'a> {
       }
     };
 
-    if let Some(id) = node.get_attribute("id") {
-      if let Some(list) = self.slotted_buckets.by_id.get(&id) {
+    if let Some(id) = node.get_attribute_ref("id") {
+      let key = selector_bucket_id(id);
+      if let Some(list) = self.slotted_buckets.by_id.get(&key) {
         for idx in list {
           consider_candidate(*idx, &mut stats.by_id);
         }
       }
     }
 
-    if let Some(class_attr) = node.get_attribute("class") {
+    if let Some(class_attr) = node.get_attribute_ref("class") {
       for cls in class_attr.split_whitespace() {
         if cls.is_empty() {
           continue;
         }
-        if let Some(list) = self.slotted_buckets.by_class.get(cls) {
+        let key = selector_bucket_class(cls);
+        if let Some(list) = self.slotted_buckets.by_class.get(&key) {
           for idx in list {
             consider_candidate(*idx, &mut stats.by_class);
           }
@@ -1830,12 +1931,14 @@ impl<'a> RuleIndex<'a> {
     }
 
     if let Some(tag) = node.tag_name() {
-      if let Some(list) = self.slotted_buckets.by_tag.get(tag) {
+      let key = selector_bucket_tag(tag);
+      if let Some(list) = self.slotted_buckets.by_tag.get(&key) {
         for idx in list {
           consider_candidate(*idx, &mut stats.by_tag);
         }
       }
-      if let Some(list) = self.slotted_buckets.by_tag.get("*") {
+      let star = selector_bucket_tag("*");
+      if let Some(list) = self.slotted_buckets.by_tag.get(&star) {
         for idx in list {
           consider_candidate(*idx, &mut stats.by_tag);
         }
@@ -1843,7 +1946,7 @@ impl<'a> RuleIndex<'a> {
     }
 
     for (name, _) in node.attributes_iter() {
-      let key = name.to_ascii_lowercase();
+      let key = selector_bucket_attr(name);
       if let Some(list) = self.slotted_buckets.by_attr.get(&key) {
         for idx in list {
           consider_candidate(*idx, &mut stats.by_attr);
@@ -1895,8 +1998,9 @@ impl<'a> RuleIndex<'a> {
     };
 
     if !bucket.by_id.is_empty() {
-      if let Some(id) = node.get_attribute("id") {
-        if let Some(list) = bucket.by_id.get(&id) {
+      if let Some(id) = node.get_attribute_ref("id") {
+        let key = selector_bucket_id(id);
+        if let Some(list) = bucket.by_id.get(&key) {
           for idx in list {
             consider_candidate(*idx, &mut stats.by_id);
           }
@@ -1905,10 +2009,11 @@ impl<'a> RuleIndex<'a> {
     }
 
     if !bucket.by_class.is_empty() {
-      if let Some(class_attr) = node.get_attribute("class") {
+      if let Some(class_attr) = node.get_attribute_ref("class") {
         for cls in class_attr.split_whitespace() {
           if !cls.is_empty() {
-            if let Some(list) = bucket.by_class.get(cls) {
+            let key = selector_bucket_class(cls);
+            if let Some(list) = bucket.by_class.get(&key) {
               for idx in list {
                 consider_candidate(*idx, &mut stats.by_class);
               }
@@ -1920,20 +2025,14 @@ impl<'a> RuleIndex<'a> {
 
     if !bucket.by_tag.is_empty() {
       if let Some(tag) = node.tag_name() {
-        if let Some(list) = bucket.by_tag.get(tag) {
+        let key = selector_bucket_tag(tag);
+        if let Some(list) = bucket.by_tag.get(&key) {
           for idx in list {
             consider_candidate(*idx, &mut stats.by_tag);
           }
         }
-        let lower_tag = tag.to_ascii_lowercase();
-        if lower_tag != tag {
-          if let Some(list) = bucket.by_tag.get(&lower_tag) {
-            for idx in list {
-              consider_candidate(*idx, &mut stats.by_tag);
-            }
-          }
-        }
-        if let Some(list) = bucket.by_tag.get("*") {
+        let star = selector_bucket_tag("*");
+        if let Some(list) = bucket.by_tag.get(&star) {
           for idx in list {
             consider_candidate(*idx, &mut stats.by_tag);
           }
@@ -1943,7 +2042,7 @@ impl<'a> RuleIndex<'a> {
 
     if !bucket.by_attr.is_empty() {
       for (name, _) in node.attributes_iter() {
-        let key = name.to_ascii_lowercase();
+        let key = selector_bucket_attr(name);
         if let Some(list) = bucket.by_attr.get(&key) {
           for idx in list {
             consider_candidate(*idx, &mut stats.by_attr);
@@ -5063,8 +5162,124 @@ mod tests {
 
     let index = RuleIndex::new(rules);
     assert_eq!(index.selectors.len(), 1);
-    let class_bucket_len = index.by_class.get("foo").map(|v| v.len()).unwrap_or(0);
+    let class_bucket_len = index
+      .by_class
+      .get(&selector_bucket_class("foo"))
+      .map(|v| v.len())
+      .unwrap_or(0);
     assert_eq!(class_bucket_len, 1);
+  }
+
+  #[test]
+  fn rule_index_bucket_keys_preserve_case_sensitivity_for_id_and_class() {
+    let stylesheet = parse_stylesheet(
+      "#Foo { color: red; } #foo { color: blue; } .Bar { color: green; } .bar { color: yellow; }",
+    )
+    .unwrap();
+    let media_ctx = MediaContext::default();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+
+    let rules: Vec<CascadeRule<'_>> = collected
+      .iter()
+      .enumerate()
+      .map(|(order, rule)| CascadeRule {
+        origin: StyleOrigin::Author,
+        order,
+        rule: rule.rule,
+        layer_order: layer_order_with_tree_scope(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+        scope: RuleScope::Document,
+        starting_style: rule.starting_style,
+      })
+      .collect();
+
+    let index = RuleIndex::new(rules);
+    assert!(index.by_id.contains_key(&selector_bucket_id("Foo")));
+    assert!(index.by_id.contains_key(&selector_bucket_id("foo")));
+    assert!(index.by_class.contains_key(&selector_bucket_class("Bar")));
+    assert!(index.by_class.contains_key(&selector_bucket_class("bar")));
+
+    let node = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![
+          ("id".to_string(), "Foo".to_string()),
+          ("class".to_string(), "Bar".to_string()),
+        ],
+      },
+      children: vec![],
+    };
+
+    let mut out = Vec::new();
+    let mut seen = CandidateSet::new(index.selectors.len());
+    let mut stats = CandidateStats::default();
+    index.selector_candidates(
+      &node,
+      None,
+      QuirksMode::NoQuirks,
+      &mut out,
+      &mut seen,
+      &mut stats,
+    );
+
+    let mut selected: Vec<String> = out
+      .iter()
+      .map(|idx| index.selectors[*idx].selector.to_css_string())
+      .collect();
+    selected.sort();
+
+    assert_eq!(selected.len(), 2);
+    assert!(selected.contains(&"#Foo".to_string()));
+    assert!(selected.contains(&".Bar".to_string()));
+  }
+
+  #[test]
+  fn rule_index_bucket_keys_fold_ascii_case_for_tag_and_attribute_names() {
+    let stylesheet = parse_stylesheet("DIV { color: red; } [data-Test] { color: blue; }").unwrap();
+    let media_ctx = MediaContext::default();
+    let collected = stylesheet.collect_style_rules(&media_ctx);
+
+    let rules: Vec<CascadeRule<'_>> = collected
+      .iter()
+      .enumerate()
+      .map(|(order, rule)| CascadeRule {
+        origin: StyleOrigin::Author,
+        order,
+        rule: rule.rule,
+        layer_order: layer_order_with_tree_scope(&rule.layer_order, DOCUMENT_TREE_SCOPE_PREFIX),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+        scope: RuleScope::Document,
+        starting_style: rule.starting_style,
+      })
+      .collect();
+
+    let index = RuleIndex::new(rules);
+
+    let node = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "DiV".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("DATA-TEST".to_string(), "1".to_string())],
+      },
+      children: vec![],
+    };
+
+    let mut out = Vec::new();
+    let mut seen = CandidateSet::new(index.selectors.len());
+    let mut stats = CandidateStats::default();
+    index.selector_candidates(
+      &node,
+      None,
+      QuirksMode::NoQuirks,
+      &mut out,
+      &mut seen,
+      &mut stats,
+    );
+
+    assert_eq!(out.len(), 2);
   }
 
   fn child_font_weight(parent_style: &str, child_style: &str) -> u16 {

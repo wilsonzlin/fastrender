@@ -1230,16 +1230,13 @@ impl DomNode {
       .any(|c| matches!(c.node_type, DomNodeType::ShadowRoot { .. }))
   }
 
-  pub fn attributes_iter(&self) -> Box<dyn Iterator<Item = (&str, &str)> + '_> {
-    match &self.node_type {
-      DomNodeType::Element { attributes, .. } => {
-        Box::new(attributes.iter().map(|(k, v)| (k.as_str(), v.as_str())))
-      }
-      DomNodeType::Slot { attributes, .. } => {
-        Box::new(attributes.iter().map(|(k, v)| (k.as_str(), v.as_str())))
-      }
-      _ => Box::new(std::iter::empty()),
-    }
+  pub fn attributes_iter(&self) -> impl Iterator<Item = (&str, &str)> + '_ {
+    let attrs: &[(String, String)] = match &self.node_type {
+      DomNodeType::Element { attributes, .. } => attributes,
+      DomNodeType::Slot { attributes, .. } => attributes,
+      _ => &[],
+    };
+    attrs.iter().map(|(k, v)| (k.as_str(), v.as_str()))
   }
 
   pub fn is_element(&self) -> bool {
