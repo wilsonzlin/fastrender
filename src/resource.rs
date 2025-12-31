@@ -487,7 +487,15 @@ fn is_transient_http_status(status: u16) -> bool {
 }
 
 fn http_status_allows_empty_body(status: u16) -> bool {
-  matches!(status, 204 | 205 | 304) || (100..200).contains(&status)
+  // Most 2xx responses are allowed to omit a response body, but we treat empty bodies as
+  // suspicious by default because they often indicate a broken fetch (truncated connection,
+  // wrong server, etc). The exceptions here are statuses where an empty body is explicitly
+  // expected or common in practice.
+  //
+  // Note: 202 (Accepted) frequently returns an empty body and is used by some CDNs/API gateways
+  // to indicate "try again later". We still treat it as transient/retryable, but the caller may
+  // want to proceed even if retries are exhausted.
+  matches!(status, 202 | 204 | 205 | 304) || (100..200).contains(&status)
 }
 
 fn http_retry_logging_enabled() -> bool {
@@ -1679,19 +1687,25 @@ impl HttpFetcher {
                     sleep_with_deadline(deadline.as_ref(), stage_hint, backoff).map_err(Error::Render)?;
                    }
                    continue;
-                 }
-               }
+                  }
+                }
 
-              let mut message = if attempt < max_attempts {
-                "retryable HTTP status (retry aborted: render deadline exceeded)".to_string()
-              } else {
-                "retryable HTTP status (retries exhausted)".to_string()
-              };
-              message.push_str(&format_attempt_suffix(attempt, max_attempts));
-              let err = ResourceError::new(current.clone(), message)
-                .with_status(status_code)
-                .with_final_url(final_url.clone());
-              return Err(Error::Resource(err));
+              // 202 (Accepted) is a "success" status code that is often used to mean "poll again
+              // later". We still treat it as transient and retryable, but once retries are
+              // exhausted (or a render deadline prevents further retries) we return `Ok` and let
+              // higher-level code decide how to handle the empty/placeholder body.
+              if status_code != 202 {
+                let mut message = if attempt < max_attempts {
+                  "retryable HTTP status (retry aborted: render deadline exceeded)".to_string()
+                } else {
+                  "retryable HTTP status (retries exhausted)".to_string()
+                };
+                message.push_str(&format_attempt_suffix(attempt, max_attempts));
+                let err = ResourceError::new(current.clone(), message)
+                  .with_status(status_code)
+                  .with_final_url(final_url.clone());
+                return Err(Error::Resource(err));
+              }
             }
 
             if bytes.len() > allowed_limit {
