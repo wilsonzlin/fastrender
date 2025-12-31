@@ -1252,13 +1252,13 @@ fn gaussian_blur_box_approx_anisotropic_with_parallelism(
         return;
       }
     };
-    a[..len].copy_from_slice(pixmap.data());
 
     let sizes_x = box_sizes_for_gauss(sigma_x, 3);
     let sizes_y = box_sizes_for_gauss(sigma_y, 3);
 
     let mut cur = &mut a[..len];
     let mut tmp = &mut b[..len];
+    let mut cur_valid = false;
 
     if !use_parallel {
       let mut deadline_counter = 0usize;
@@ -1269,11 +1269,13 @@ fn gaussian_blur_box_approx_anisotropic_with_parallelism(
           continue;
         }
         did_work = true;
-        if let Err(err) = box_blur_h(&cur[..], tmp, width, height, radius, &mut deadline_counter) {
+        let src = if cur_valid { &cur[..] } else { pixmap.data() };
+        if let Err(err) = box_blur_h(src, tmp, width, height, radius, &mut deadline_counter) {
           error = Some(err);
           return;
         }
         std::mem::swap(&mut cur, &mut tmp);
+        cur_valid = true;
       }
       for size in sizes_y {
         let radius = size.saturating_sub(1) / 2;
@@ -1281,11 +1283,13 @@ fn gaussian_blur_box_approx_anisotropic_with_parallelism(
           continue;
         }
         did_work = true;
-        if let Err(err) = box_blur_v(&cur[..], tmp, width, height, radius, &mut deadline_counter) {
+        let src = if cur_valid { &cur[..] } else { pixmap.data() };
+        if let Err(err) = box_blur_v(src, tmp, width, height, radius, &mut deadline_counter) {
           error = Some(err);
           return;
         }
         std::mem::swap(&mut cur, &mut tmp);
+        cur_valid = true;
       }
       if did_work {
         pixmap.data_mut().copy_from_slice(&cur[..len]);
@@ -1308,7 +1312,7 @@ fn gaussian_blur_box_approx_anisotropic_with_parallelism(
       }
       did_work = true;
       if let Err(err) = box_blur_h_parallel(
-        &cur[..],
+        if cur_valid { &cur[..] } else { pixmap.data() },
         tmp,
         width,
         height,
@@ -1323,6 +1327,7 @@ fn gaussian_blur_box_approx_anisotropic_with_parallelism(
         return;
       }
       std::mem::swap(&mut cur, &mut tmp);
+      cur_valid = true;
     }
     for size in sizes_y {
       let radius = size.saturating_sub(1) / 2;
@@ -1331,7 +1336,7 @@ fn gaussian_blur_box_approx_anisotropic_with_parallelism(
       }
       did_work = true;
       if let Err(err) = box_blur_v_parallel(
-        &cur[..],
+        if cur_valid { &cur[..] } else { pixmap.data() },
         tmp,
         width,
         height,
@@ -1346,6 +1351,7 @@ fn gaussian_blur_box_approx_anisotropic_with_parallelism(
         return;
       }
       std::mem::swap(&mut cur, &mut tmp);
+      cur_valid = true;
     }
 
     if cancelled.load(Ordering::Relaxed) {
@@ -1405,11 +1411,11 @@ fn blur_anisotropic_box_kernel_mixed_with_parallelism(
         return;
       }
     };
-    a[..len].copy_from_slice(pixmap.data());
 
     let row_stride = width * 4;
     let mut cur: &mut [u8] = &mut a[..len];
     let mut tmp: &mut [u8] = &mut b[..len];
+    let mut cur_valid = false;
 
     let mut sizes_x = [1usize; 3];
     let mut sizes_y = [1usize; 3];
@@ -1442,26 +1448,29 @@ fn blur_anisotropic_box_kernel_mixed_with_parallelism(
             continue;
           }
           did_work = true;
-          if let Err(err) = box_blur_h(&cur[..], tmp, width, height, radius, &mut deadline_counter)
-          {
+          let src = if cur_valid { &cur[..] } else { pixmap.data() };
+          if let Err(err) = box_blur_h(src, tmp, width, height, radius, &mut deadline_counter) {
             error = Some(err);
             return;
           }
           std::mem::swap(&mut cur, &mut tmp);
+          cur_valid = true;
         }
       } else if radius_x != 0 && !kernel_x.is_empty() && scale_x > 0 {
         did_work = true;
+        let src = if cur_valid { &cur[..] } else { pixmap.data() };
         for y in 0..height {
           if let Some(err) = blur_deadline_exceeded(&mut deadline_counter) {
             error = Some(err);
             return;
           }
           let row_start = y * row_stride;
-          let src_row = &cur[row_start..row_start + row_stride];
+          let src_row = &src[row_start..row_start + row_stride];
           let out_row = &mut tmp[row_start..row_start + row_stride];
           convolve_row_horizontal_fixed(src_row, out_row, width, &kernel_x, radius_x, scale_x);
         }
         std::mem::swap(&mut cur, &mut tmp);
+        cur_valid = true;
       }
 
       if use_box_y {
@@ -1471,15 +1480,17 @@ fn blur_anisotropic_box_kernel_mixed_with_parallelism(
             continue;
           }
           did_work = true;
-          if let Err(err) = box_blur_v(&cur[..], tmp, width, height, radius, &mut deadline_counter)
-          {
+          let src = if cur_valid { &cur[..] } else { pixmap.data() };
+          if let Err(err) = box_blur_v(src, tmp, width, height, radius, &mut deadline_counter) {
             error = Some(err);
             return;
           }
           std::mem::swap(&mut cur, &mut tmp);
+          cur_valid = true;
         }
       } else if radius_y != 0 && !kernel_y.is_empty() && scale_y > 0 {
         did_work = true;
+        let src = if cur_valid { &cur[..] } else { pixmap.data() };
         for y in 0..height {
           if let Some(err) = blur_deadline_exceeded(&mut deadline_counter) {
             error = Some(err);
@@ -1487,7 +1498,7 @@ fn blur_anisotropic_box_kernel_mixed_with_parallelism(
           }
           let out_row = &mut tmp[y * row_stride..(y + 1) * row_stride];
           convolve_row_vertical_fixed(
-            &cur[..],
+            src,
             out_row,
             width,
             height,
@@ -1498,6 +1509,7 @@ fn blur_anisotropic_box_kernel_mixed_with_parallelism(
           );
         }
         std::mem::swap(&mut cur, &mut tmp);
+        cur_valid = true;
       }
 
       if did_work {
@@ -1522,7 +1534,7 @@ fn blur_anisotropic_box_kernel_mixed_with_parallelism(
         }
         did_work = true;
         if let Err(err) = box_blur_h_parallel(
-          &cur[..],
+          if cur_valid { &cur[..] } else { pixmap.data() },
           tmp,
           width,
           height,
@@ -1537,10 +1549,11 @@ fn blur_anisotropic_box_kernel_mixed_with_parallelism(
           return;
         }
         std::mem::swap(&mut cur, &mut tmp);
+        cur_valid = true;
       }
     } else if radius_x != 0 && !kernel_x.is_empty() && scale_x > 0 {
       did_work = true;
-      let src = &cur[..];
+      let src = if cur_valid { &cur[..] } else { pixmap.data() };
       let convolve_row_x = |y: usize, out_row: &mut [u8]| {
         if cancelled.load(Ordering::Relaxed) {
           return;
@@ -1578,6 +1591,7 @@ fn blur_anisotropic_box_kernel_mixed_with_parallelism(
         return;
       }
       std::mem::swap(&mut cur, &mut tmp);
+      cur_valid = true;
     }
 
     if use_box_y {
@@ -1588,7 +1602,7 @@ fn blur_anisotropic_box_kernel_mixed_with_parallelism(
         }
         did_work = true;
         if let Err(err) = box_blur_v_parallel(
-          &cur[..],
+          if cur_valid { &cur[..] } else { pixmap.data() },
           tmp,
           width,
           height,
@@ -1603,10 +1617,11 @@ fn blur_anisotropic_box_kernel_mixed_with_parallelism(
           return;
         }
         std::mem::swap(&mut cur, &mut tmp);
+        cur_valid = true;
       }
     } else if radius_y != 0 && !kernel_y.is_empty() && scale_y > 0 {
       did_work = true;
-      let src = &cur[..];
+      let src = if cur_valid { &cur[..] } else { pixmap.data() };
       let convolve_row_y = |y: usize, out_row: &mut [u8]| {
         if cancelled.load(Ordering::Relaxed) {
           return;
@@ -1644,6 +1659,7 @@ fn blur_anisotropic_box_kernel_mixed_with_parallelism(
         return;
       }
       std::mem::swap(&mut cur, &mut tmp);
+      cur_valid = true;
     }
 
     if cancelled.load(Ordering::Relaxed) {
@@ -1689,6 +1705,7 @@ fn gaussian_blur_box_approx_with_parallelism(
 
   let len = blur_buffer_len(width, height, "box blur")?;
   let mut error: Option<RenderError> = None;
+  let mut blur_applied = false;
   BLUR_SCRATCH.with(|scratch| {
     let mut scratch = scratch.borrow_mut();
     let (a, b) = match scratch.split(len, "box blur") {
@@ -1698,17 +1715,19 @@ fn gaussian_blur_box_approx_with_parallelism(
         return;
       }
     };
-    a[..len].copy_from_slice(pixmap.data());
     let sizes = box_sizes_for_gauss(sigma, 3);
     if !use_parallel {
       let mut deadline_counter = 0usize;
+      let mut did_work = false;
+      let mut src: &[u8] = pixmap.data();
       for size in sizes {
         let radius = size.saturating_sub(1) / 2;
         if radius == 0 {
           continue;
         }
+        did_work = true;
         if let Err(err) = box_blur_h(
-          &a[..len],
+          src,
           &mut b[..len],
           width,
           height,
@@ -1729,8 +1748,12 @@ fn gaussian_blur_box_approx_with_parallelism(
           error = Some(err);
           return;
         }
+        src = &a[..len];
       }
-      pixmap.data_mut().copy_from_slice(&a[..len]);
+      if did_work {
+        pixmap.data_mut().copy_from_slice(&a[..len]);
+      }
+      blur_applied = did_work;
       return;
     }
 
@@ -1739,13 +1762,16 @@ fn gaussian_blur_box_approx_with_parallelism(
     let cancelled = AtomicBool::new(false);
     let deadline_counter = AtomicUsize::new(0);
     let deadline_error: Mutex<Option<RenderError>> = Mutex::new(None);
+    let mut did_work = false;
+    let mut src: &[u8] = pixmap.data();
     for size in sizes {
       let radius = size.saturating_sub(1) / 2;
       if radius == 0 {
         continue;
       }
+      did_work = true;
       if let Err(err) = box_blur_h_parallel(
-        &a[..len],
+        src,
         &mut b[..len],
         width,
         height,
@@ -1774,6 +1800,7 @@ fn gaussian_blur_box_approx_with_parallelism(
         error = Some(err);
         return;
       }
+      src = &a[..len];
     }
 
     if cancelled.load(Ordering::Relaxed) {
@@ -1785,12 +1812,15 @@ fn gaussian_blur_box_approx_with_parallelism(
       return;
     }
 
-    pixmap.data_mut().copy_from_slice(&a[..len]);
+    if did_work {
+      pixmap.data_mut().copy_from_slice(&a[..len]);
+    }
+    blur_applied = did_work;
   });
   if let Some(err) = error {
     Err(err)
   } else {
-    Ok(true)
+    Ok(blur_applied)
   }
 }
 
