@@ -246,9 +246,26 @@ fn split_layers(tokens: &[PropertyValue]) -> Vec<Vec<PropertyValue>> {
   layers
 }
 
+fn starts_with_ignore_ascii_case(haystack: &str, prefix: &str) -> bool {
+  haystack
+    .get(..prefix.len())
+    .map(|head| head.eq_ignore_ascii_case(prefix))
+    .unwrap_or(false)
+}
+
+fn strip_suffix_ignore_ascii_case<'a>(haystack: &'a str, suffix: &str) -> Option<&'a str> {
+  let start = haystack.len().checked_sub(suffix.len())?;
+  let tail = haystack.get(start..)?;
+  if tail.eq_ignore_ascii_case(suffix) {
+    haystack.get(..start)
+  } else {
+    None
+  }
+}
+
 fn parse_background_image_value(value: &PropertyValue) -> Option<BackgroundImage> {
   match value {
-    PropertyValue::Keyword(kw) if kw.to_ascii_lowercase().starts_with("image-set(") => {
+    PropertyValue::Keyword(kw) if starts_with_ignore_ascii_case(kw, "image-set(") => {
       parse_image_set(kw)
     }
     PropertyValue::Url(url) => Some(BackgroundImage::Url(url.clone())),
@@ -338,33 +355,29 @@ fn parse_background_image_value(value: &PropertyValue) -> Option<BackgroundImage
       },
       stops: stops.clone(),
     }),
-    PropertyValue::Keyword(kw) if kw == "none" => Some(BackgroundImage::None),
+    PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("none") => Some(BackgroundImage::None),
     _ => None,
   }
 }
 
 fn parse_image_set_resolution(token: &str) -> Option<f32> {
-  let lower = token.trim().to_ascii_lowercase();
-  lower
-    .strip_suffix('x')
+  let token = token.trim();
+  strip_suffix_ignore_ascii_case(token, "x")
     .and_then(|rest| rest.parse::<f32>().ok())
     .filter(|v| *v > 0.0)
     .or_else(|| {
-      lower
-        .strip_suffix("dppx")
+      strip_suffix_ignore_ascii_case(token, "dppx")
         .and_then(|rest| rest.parse::<f32>().ok())
         .filter(|v| *v > 0.0)
     })
     .or_else(|| {
-      lower
-        .strip_suffix("dpi")
+      strip_suffix_ignore_ascii_case(token, "dpi")
         .and_then(|rest| rest.parse::<f32>().ok())
         .filter(|v| *v > 0.0)
         .map(|dpi| dpi / 96.0)
     })
     .or_else(|| {
-      lower
-        .strip_suffix("dpcm")
+      strip_suffix_ignore_ascii_case(token, "dpcm")
         .and_then(|rest| rest.parse::<f32>().ok())
         .filter(|v| *v > 0.0)
         .map(|dpcm| (dpcm * 2.54) / 96.0)
@@ -443,7 +456,7 @@ fn split_image_set_candidates(inner: &str) -> Vec<String> {
 
 pub(crate) fn parse_image_set(text: &str) -> Option<BackgroundImage> {
   let trimmed = text.trim();
-  if !trimmed.to_ascii_lowercase().starts_with("image-set(") {
+  if !starts_with_ignore_ascii_case(trimmed, "image-set(") {
     return None;
   }
 
@@ -479,13 +492,12 @@ pub(crate) fn parse_image_set(text: &str) -> Option<BackgroundImage> {
       continue;
     }
     let image_token = &tokens[0];
-    let image = if image_token.trim().to_ascii_lowercase().starts_with("url(")
-      && image_token.trim().ends_with(')')
+    let image_token = image_token.trim();
+    let image = if starts_with_ignore_ascii_case(image_token, "url(") && image_token.ends_with(')')
     {
-      let trimmed = image_token.trim();
-      let open = trimmed.find('(').unwrap_or(0);
-      let inner = trimmed
-        .get(open + 1..trimmed.len() - 1)
+      let open = image_token.find('(').unwrap_or(0);
+      let inner = image_token
+        .get(open + 1..image_token.len() - 1)
         .unwrap_or("")
         .trim()
         .trim_matches(|c| c == '"' || c == '\'')
@@ -702,7 +714,7 @@ fn parse_cursor(value: &PropertyValue) -> Option<(Vec<CursorImage>, CursorKeywor
           hotspot,
         });
       }
-      PropertyValue::Keyword(kw) if kw.to_ascii_lowercase().starts_with("image-set(") => {
+      PropertyValue::Keyword(kw) if starts_with_ignore_ascii_case(kw, "image-set(") => {
         if let Some(BackgroundImage::Url(url)) = parse_image_set(kw) {
           images.push(CursorImage { url, hotspot: None });
         }
@@ -12415,8 +12427,8 @@ fn parse_list_style_position(value: &PropertyValue) -> Option<ListStylePosition>
 
 fn parse_list_style_image(value: &PropertyValue) -> Option<ListStyleImage> {
   match value {
-    PropertyValue::Keyword(kw) if kw == "none" => Some(ListStyleImage::None),
-    PropertyValue::Keyword(kw) if kw.to_ascii_lowercase().starts_with("image-set(") => {
+    PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("none") => Some(ListStyleImage::None),
+    PropertyValue::Keyword(kw) if starts_with_ignore_ascii_case(kw, "image-set(") => {
       parse_image_set(kw).and_then(|img| match img {
         BackgroundImage::Url(url) => Some(ListStyleImage::Url(url)),
         _ => None,
@@ -21033,14 +21045,14 @@ fn parse_background_shorthand(
           idx += 1;
           continue;
         }
-        PropertyValue::Keyword(kw) if kw.to_ascii_lowercase().starts_with("image-set(") => {
+        PropertyValue::Keyword(kw) if starts_with_ignore_ascii_case(kw, "image-set(") => {
           if let Some(img) = parse_image_set(kw) {
             shorthand.image = Some(img);
             idx += 1;
             continue;
           }
         }
-        PropertyValue::Keyword(kw) if kw == "none" => {
+        PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("none") => {
           shorthand.image = None;
           idx += 1;
           continue;
