@@ -3657,8 +3657,8 @@ impl FastRender {
     let result = (|| -> Result<RenderOutputs> {
       self.device_pixel_ratio = resolved_viewport.device_pixel_ratio;
       self.pending_device_size = Some(resolved_viewport.visual_viewport);
-      let layout_artifacts = self.layout_document_for_media_with_artifacts(
-        &dom,
+      let layout_artifacts = self.layout_document_for_media_with_artifacts_owned(
+        dom,
         layout_width,
         layout_height,
         media_type,
@@ -5598,10 +5598,35 @@ impl FastRender {
     Ok(artifacts.fragment_tree)
   }
 
-  #[allow(clippy::cognitive_complexity)]
   fn layout_document_for_media_with_artifacts(
     &mut self,
     dom: &DomNode,
+    width: u32,
+    height: u32,
+    media_type: MediaType,
+    options: LayoutDocumentOptions,
+    deadline: Option<&RenderDeadline>,
+    trace: &TraceHandle,
+    layout_parallelism: LayoutParallelism,
+    stats: Option<&mut RenderStatsRecorder>,
+  ) -> Result<LayoutArtifacts> {
+    self.layout_document_for_media_with_artifacts_owned(
+      dom.clone(),
+      width,
+      height,
+      media_type,
+      options,
+      deadline,
+      trace,
+      layout_parallelism,
+      stats,
+    )
+  }
+
+  #[allow(clippy::cognitive_complexity)]
+  fn layout_document_for_media_with_artifacts_owned(
+    &mut self,
+    mut dom_with_state: DomNode,
     width: u32,
     height: u32,
     media_type: MediaType,
@@ -5616,7 +5641,6 @@ impl FastRender {
     let timings_enabled = toggles.truthy("FASTR_RENDER_TIMINGS");
     let overall_start = timings_enabled.then(Instant::now);
 
-    let mut dom_with_state = dom.clone();
     let modal_open = modal_dialog_present(&dom_with_state);
     apply_top_layer_state(&mut dom_with_state, modal_open, false);
 
