@@ -2751,6 +2751,7 @@ fn evaluate_report_checks(
   if args.fail_on_missing_stages {
     for entry in progresses {
       if is_bad_status(entry.progress.status)
+        && entry.progress.total_ms.is_some()
         && entry.progress.timeout_stage.is_none()
         && entry.progress.failure_stage.is_none()
       {
@@ -4142,11 +4143,11 @@ mod tests {
 
   #[test]
   fn report_gate_fails_on_missing_failure_stage() {
-    let mut missing = make_progress("missing", ProgressStatus::Timeout, None, "unknown");
+    let mut missing = make_progress("missing", ProgressStatus::Timeout, Some(15.0), "unknown");
     missing.progress.timeout_stage = None;
     missing.progress.failure_stage = None;
 
-    let mut ok = make_progress("ok", ProgressStatus::Timeout, None, "unknown");
+    let mut ok = make_progress("ok", ProgressStatus::Timeout, Some(12.0), "unknown");
     ok.progress.timeout_stage = Some(ProgressStage::Layout);
 
     let progresses = vec![missing, ok];
@@ -4157,6 +4158,26 @@ mod tests {
     let err = evaluate_report_checks(&args, &progresses).unwrap_err();
     assert_eq!(err.missing_stages, vec!["missing".to_string()]);
     assert!(err.missing_stage_timings.is_empty());
+  }
+
+  #[test]
+  fn report_gate_ignores_placeholder_failures_missing_stages() {
+    let mut placeholder_timeout =
+      make_progress("placeholder_timeout", ProgressStatus::Timeout, None, "unknown");
+    placeholder_timeout.progress.timeout_stage = None;
+    placeholder_timeout.progress.failure_stage = None;
+
+    let mut placeholder_error =
+      make_progress("placeholder_error", ProgressStatus::Error, None, "unknown");
+    placeholder_error.progress.timeout_stage = None;
+    placeholder_error.progress.failure_stage = None;
+
+    let progresses = vec![placeholder_timeout, placeholder_error];
+
+    let mut args = basic_report_args();
+    args.fail_on_missing_stages = true;
+
+    assert!(evaluate_report_checks(&args, &progresses).is_ok());
   }
 
   #[test]
