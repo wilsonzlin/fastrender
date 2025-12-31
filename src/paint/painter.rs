@@ -9204,12 +9204,21 @@ fn apply_backdrop_filters(
     return Ok(());
   }
 
-  let mut region = match new_pixmap(region_w, region_h) {
-    Some(p) => {
-      record_layer_allocation(region_w, region_h);
-      p
-    }
-    None => return Ok(()),
+  let mut scratch = BACKDROP_FILTER_SCRATCH.with(|cell| std::mem::take(&mut *cell.borrow_mut()));
+  let mut region = match scratch.region.take() {
+    Some(existing) if existing.width() == region_w && existing.height() == region_h => existing,
+    _ => match new_pixmap(region_w, region_h) {
+      Some(p) => {
+        record_layer_allocation(region_w, region_h);
+        p
+      }
+      None => {
+        BACKDROP_FILTER_SCRATCH.with(|cell| {
+          *cell.borrow_mut() = scratch;
+        });
+        return Ok(());
+      }
+    },
   };
 
   // Copy region
@@ -9232,7 +9241,13 @@ fn apply_backdrop_filters(
     bounds.width(),
     bounds.height(),
   );
-  apply_filters(&mut region, filters, scale, local_bbox)?;
+  if let Err(err) = apply_filters(&mut region, filters, scale, local_bbox) {
+    scratch.region = Some(region);
+    BACKDROP_FILTER_SCRATCH.with(|cell| {
+      *cell.borrow_mut() = scratch;
+    });
+    return Err(err);
+  }
   if !radii.is_zero() {
     apply_clip_mask_rect(&mut region, local_bbox, radii);
   }
@@ -9247,6 +9262,11 @@ fn apply_backdrop_filters(
     Transform::identity(),
     None,
   );
+
+  scratch.region = Some(region);
+  BACKDROP_FILTER_SCRATCH.with(|cell| {
+    *cell.borrow_mut() = scratch;
+  });
   Ok(())
 }
 
@@ -9980,6 +10000,16 @@ struct MaskLayerPixmapScratch {
 thread_local! {
   static MASK_LAYER_PIXMAP_SCRATCH: RefCell<MaskLayerPixmapScratch> =
     RefCell::new(MaskLayerPixmapScratch::default());
+}
+
+#[derive(Default)]
+struct BackdropFilterScratch {
+  region: Option<Pixmap>,
+}
+
+thread_local! {
+  static BACKDROP_FILTER_SCRATCH: RefCell<BackdropFilterScratch> =
+    RefCell::new(BackdropFilterScratch::default());
 }
 
 #[derive(Default)]
@@ -16823,6 +16853,45 @@ mod tests {
     assert_eq!(
       scratch_allocs, 1,
       "expected render_mask to allocate its layer scratch pixmap once, got {scratch_allocs} allocations: {allocs:?}"
+    );
+  }
+
+  #[test]
+  fn backdrop_filters_reuse_region_pixmap_scratch() {
+    BACKDROP_FILTER_SCRATCH.with(|cell| {
+      *cell.borrow_mut() = BackdropFilterScratch::default();
+    });
+
+    let mut pixmap = new_pixmap(8, 8).expect("pixmap");
+    pixmap.data_mut().fill(200);
+    let bounds = Rect::from_xywh(1.0, 1.0, 6.0, 6.0);
+    let filters = vec![ResolvedFilter::Brightness(1.25)];
+
+    apply_backdrop_filters(
+      &mut pixmap,
+      &bounds,
+      &filters,
+      BorderRadii::uniform(2.0),
+      1.0,
+      bounds,
+    )
+    .expect("backdrop filter warm-up");
+
+    let recorder = NewPixmapAllocRecorder::start();
+    apply_backdrop_filters(
+      &mut pixmap,
+      &bounds,
+      &filters,
+      BorderRadii::uniform(2.0),
+      1.0,
+      bounds,
+    )
+    .expect("backdrop filter reuse");
+    let allocations = recorder.take();
+
+    assert!(
+      allocations.is_empty(),
+      "expected apply_backdrop_filters to reuse scratch pixmaps, got {allocations:?}"
     );
   }
 
