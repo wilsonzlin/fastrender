@@ -2992,7 +2992,15 @@ fn apply_primitive(
         color_interpolation_filters,
       )?
     }
-    FilterPrimitive::Image(prim) => render_fe_image(prim, filter_region),
+    FilterPrimitive::Image(prim) => render_fe_image(
+      prim,
+      css_bbox,
+      scale_x,
+      scale_y,
+      source.pixmap.width(),
+      source.pixmap.height(),
+      filter_region,
+    ),
     FilterPrimitive::Tile { input } => {
       resolve_input(input, source, results, current, filter_region)
         .and_then(|img| tile_pixmap(img, filter_region))
@@ -3116,24 +3124,68 @@ fn resolve_input(
   }
 }
 
-fn render_fe_image(prim: &ImagePrimitive, filter_region: Rect) -> Option<FilterResult> {
-  let canvas_width = filter_region.width().max(0.0).round() as u32;
-  let canvas_height = filter_region.height().max(0.0).round() as u32;
-  let mut out = new_pixmap(canvas_width.max(1), canvas_height.max(1))?;
+fn render_fe_image(
+  prim: &ImagePrimitive,
+  css_bbox: &Rect,
+  scale_x: f32,
+  scale_y: f32,
+  target_width: u32,
+  target_height: u32,
+  primitive_region: Rect,
+) -> Option<FilterResult> {
+  let mut out = new_pixmap(target_width.max(1), target_height.max(1))?;
   let src_w = prim.pixmap.width() as f32;
   let src_h = prim.pixmap.height() as f32;
   if src_w == 0.0 || src_h == 0.0 {
-    return Some(FilterResult::full_region(out, filter_region));
+    return Some(FilterResult::full_region(out, primitive_region));
   }
 
-  let dest_w = prim.width.resolve(prim.units, canvas_width as f32);
-  let dest_h = prim.height.resolve(prim.units, canvas_height as f32);
-  if dest_w <= 0.0 || dest_h <= 0.0 || !dest_w.is_finite() || !dest_h.is_finite() {
-    return Some(FilterResult::full_region(out, filter_region));
-  }
+  let scale_x = if scale_x.is_finite() && scale_x > 0.0 {
+    scale_x
+  } else {
+    1.0
+  };
+  let scale_y = if scale_y.is_finite() && scale_y > 0.0 {
+    scale_y
+  } else {
+    1.0
+  };
 
-  let dest_x = prim.x.resolve(prim.units, canvas_width as f32);
-  let dest_y = prim.y.resolve(prim.units, canvas_height as f32);
+  // `feImage` position/size is resolved in the coordinate system established by
+  // `primitiveUnits`. For `objectBoundingBox`, the reference is the filtered element's bbox,
+  // not the primitive subregion itself.
+  let bbox_w = css_bbox.width();
+  let bbox_h = css_bbox.height();
+
+  let resolve_pos_x_css = |len: SvgLength| match prim.units {
+    SvgCoordinateUnits::ObjectBoundingBox => css_bbox.min_x() + len.resolve(prim.units, bbox_w),
+    SvgCoordinateUnits::UserSpaceOnUse => match len {
+      SvgLength::Percent(_) => css_bbox.min_x() + len.resolve(prim.units, bbox_w),
+      SvgLength::Number(_) => len.resolve(prim.units, bbox_w),
+    },
+  };
+  let resolve_pos_y_css = |len: SvgLength| match prim.units {
+    SvgCoordinateUnits::ObjectBoundingBox => css_bbox.min_y() + len.resolve(prim.units, bbox_h),
+    SvgCoordinateUnits::UserSpaceOnUse => match len {
+      SvgLength::Percent(_) => css_bbox.min_y() + len.resolve(prim.units, bbox_h),
+      SvgLength::Number(_) => len.resolve(prim.units, bbox_h),
+    },
+  };
+
+  let dest_x = resolve_pos_x_css(prim.x) * scale_x;
+  let dest_y = resolve_pos_y_css(prim.y) * scale_y;
+  let dest_w = prim.width.resolve(prim.units, bbox_w) * scale_x;
+  let dest_h = prim.height.resolve(prim.units, bbox_h) * scale_y;
+
+  if dest_w <= 0.0
+    || dest_h <= 0.0
+    || !dest_x.is_finite()
+    || !dest_y.is_finite()
+    || !dest_w.is_finite()
+    || !dest_h.is_finite()
+  {
+    return Some(FilterResult::full_region(out, primitive_region));
+  }
 
   let mut paint = PixmapPaint::default();
   paint.blend_mode = tiny_skia::BlendMode::SourceOver;
@@ -3146,7 +3198,7 @@ fn render_fe_image(prim: &ImagePrimitive, filter_region: Rect) -> Option<FilterR
       let scale_x = dest_w / src_w;
       let scale_y = dest_h / src_h;
       if !scale_x.is_finite() || !scale_y.is_finite() {
-        return Some(FilterResult::full_region(out, filter_region));
+        return Some(FilterResult::full_region(out, primitive_region));
       }
       let transform = Transform::from_row(scale_x, 0.0, 0.0, scale_y, dest_x, dest_y);
       out.draw_pixmap(0, 0, prim.pixmap.as_ref(), &paint, transform, None);
@@ -3154,7 +3206,7 @@ fn render_fe_image(prim: &ImagePrimitive, filter_region: Rect) -> Option<FilterR
     PreserveAspectRatio::XMidYMidMeet => {
       let scale = (dest_w / src_w).min(dest_h / src_h);
       if !scale.is_finite() || scale <= 0.0 {
-        return Some(FilterResult::full_region(out, filter_region));
+        return Some(FilterResult::full_region(out, primitive_region));
       }
       let scaled_w = src_w * scale;
       let scaled_h = src_h * scale;
@@ -3165,7 +3217,7 @@ fn render_fe_image(prim: &ImagePrimitive, filter_region: Rect) -> Option<FilterR
     }
   }
 
-  Some(FilterResult::new(out, dest_region, filter_region))
+  Some(FilterResult::new(out, dest_region, primitive_region))
 }
 
 fn lighting_color_in_space(
@@ -4911,7 +4963,10 @@ mod tests {
     assert_eq!(px.green(), 0);
     assert_eq!(px.blue(), 0);
 
-    let expected_alpha = (255.0f32 * (0.2126 * 1.0 + 0.7152 * 0.5 + 0.0722 * 0.0))
+    let expected_alpha = (255.0f32
+      * (0.2126 * srgb_to_linear(1.0)
+        + 0.7152 * srgb_to_linear(0.5)
+        + 0.0722 * srgb_to_linear(0.0)))
       .round()
       .clamp(0.0, 255.0) as u8;
     assert_eq!(px.alpha(), expected_alpha);
@@ -4940,7 +4995,7 @@ mod tests {
 
     assert_eq!(
       pixels_to_vec(&pixmap),
-      vec![(64, 45, 0, 128), (143, 115, 48, 191)]
+      vec![(81, 54, 0, 128), (168, 114, 48, 191)]
     );
   }
 
@@ -4962,7 +5017,7 @@ mod tests {
 
     assert_eq!(
       pixels_to_vec(&pixmap),
-      vec![(37, 0, 0, 255), (135, 0, 0, 255)]
+      vec![(90, 0, 0, 255), (156, 0, 0, 255)]
     );
   }
 
@@ -4986,7 +5041,7 @@ mod tests {
 
     assert_eq!(
       pixels_to_vec(&pixmap),
-      vec![(16, 115, 0, 191), (130, 115, 0, 191)]
+      vec![(24, 93, 0, 191), (122, 93, 0, 191)]
     );
   }
 

@@ -10079,7 +10079,7 @@ slot[name=\"s\"]::slotted(.assigned) { color: rgb(4, 5, 6); }"
     let media = MediaContext::screen(800.0, 600.0).with_color_scheme(ColorScheme::Light);
     let styled = apply_styles_with_media(&dom, &stylesheet, &media);
     assert_eq!(styled.styles.color, Rgba::BLACK);
-    assert_eq!(styled.styles.background_color, Rgba::WHITE);
+    assert_eq!(styled.styles.background_color, Rgba::TRANSPARENT);
   }
 
   #[test]
@@ -10458,7 +10458,7 @@ slot[name=\"s\"]::slotted(.assigned) { color: rgb(4, 5, 6); }"
   }
 
   #[test]
-  fn html_defaults_to_white_background() {
+  fn html_defaults_to_transparent_background() {
     let dom = DomNode {
       node_type: DomNodeType::Element {
         tag_name: "html".to_string(),
@@ -10469,7 +10469,7 @@ slot[name=\"s\"]::slotted(.assigned) { color: rgb(4, 5, 6); }"
     };
 
     let styled = apply_styles(&dom, &StyleSheet::new());
-    assert_eq!(styled.styles.background_color, Rgba::WHITE);
+    assert_eq!(styled.styles.background_color, Rgba::TRANSPARENT);
   }
 
   #[test]
