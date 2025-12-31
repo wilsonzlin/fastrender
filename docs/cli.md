@@ -17,7 +17,7 @@ The full pageset workflow is:
 
 `fetch_pages` (HTML) → `prefetch_assets` (CSS/@import/fonts into `fetches/assets/`) → `pageset_progress` (render + write `progress/pages/*.json`).
 
-`cargo xtask pageset` runs all three steps (the prefetch step is skipped when disk cache is disabled). `scripts/pageset.sh` is a lighter wrapper that currently runs `fetch_pages` → `pageset_progress`.
+`cargo xtask pageset` runs all three steps (the prefetch step is skipped when disk cache is disabled). `scripts/pageset.sh` is a lighter wrapper that runs `fetch_pages` → `prefetch_assets` (disk cache only) → `pageset_progress`.
 
 Pageset wrappers enable the disk-backed subresource cache by default, persisting assets under
 `fetches/assets/` for repeatable/offline runs. Set `NO_DISK_CACHE=1` or `DISK_CACHE=0` (or pass
