@@ -1057,7 +1057,7 @@ struct CascadeRule<'a> {
   origin: StyleOrigin,
   order: usize,
   rule: &'a StyleRule,
-  layer_order: Vec<u32>,
+  layer_order: Arc<[u32]>,
   container_conditions: Vec<ContainerCondition>,
   scopes: Vec<ScopeContext<'a>>,
   scope_signature: ScopeSignature,
@@ -1257,11 +1257,32 @@ fn shadow_tree_scope_prefix(shadow_root_id: usize) -> u32 {
   u32::try_from(shadow_root_id).unwrap_or(DOCUMENT_TREE_SCOPE_PREFIX.saturating_sub(1))
 }
 
-fn layer_order_with_tree_scope(layer_order: &[u32], tree_scope_prefix: u32) -> Vec<u32> {
+static DOCUMENT_UNLAYERED_LAYER_ORDER: OnceLock<Arc<[u32]>> = OnceLock::new();
+static UNPREFIXED_UNLAYERED_LAYER_ORDER: OnceLock<Arc<[u32]>> = OnceLock::new();
+
+fn document_unlayered_layer_order() -> Arc<[u32]> {
+  DOCUMENT_UNLAYERED_LAYER_ORDER
+    .get_or_init(|| Arc::from(vec![DOCUMENT_TREE_SCOPE_PREFIX, u32::MAX]))
+    .clone()
+}
+
+fn unprefixed_unlayered_layer_order() -> Arc<[u32]> {
+  UNPREFIXED_UNLAYERED_LAYER_ORDER
+    .get_or_init(|| Arc::from(vec![u32::MAX]))
+    .clone()
+}
+
+fn layer_order_with_tree_scope(layer_order: &[u32], tree_scope_prefix: u32) -> Arc<[u32]> {
+  if tree_scope_prefix == DOCUMENT_TREE_SCOPE_PREFIX
+    && layer_order.len() == 1
+    && layer_order[0] == u32::MAX
+  {
+    return document_unlayered_layer_order();
+  }
   let mut prefixed = Vec::with_capacity(layer_order.len().saturating_add(1));
   prefixed.push(tree_scope_prefix);
   prefixed.extend_from_slice(layer_order);
-  prefixed
+  Arc::from(prefixed)
 }
 
 fn tree_scope_prefix_for_node(dom_maps: &DomMaps, node_id: usize) -> u32 {
@@ -3310,7 +3331,7 @@ struct MatchedRule<'a> {
   origin: StyleOrigin,
   specificity: u32,
   order: usize,
-  layer_order: Vec<u32>,
+  layer_order: Arc<[u32]>,
   declarations: Cow<'a, [Declaration]>,
   starting_style: bool,
 }
@@ -3339,7 +3360,7 @@ struct MatchedDeclaration<'a> {
   specificity: u32,
   rule_order: usize,
   decl_order: usize,
-  layer_order: Vec<u32>,
+  layer_order: Arc<[u32]>,
   declaration: Cow<'a, Declaration>,
   starting_style: bool,
 }
@@ -4845,40 +4866,48 @@ fn append_presentational_hints<'a>(
   parent_direction: Direction,
   matching_rules: &mut Vec<MatchedRule<'a>>,
 ) {
-  if let Some(presentational_rule) = dir_presentational_hint(node, parent_direction, 0) {
+  // Preserve legacy cascade behavior: presentational hints use an unlayered sentinel without the
+  // tree-scope prefix so they remain strictly below authored stylesheet rules within the same
+  // origin.
+  let layer_order = unprefixed_unlayered_layer_order();
+  if let Some(presentational_rule) =
+    dir_presentational_hint(node, parent_direction, &layer_order, 0)
+  {
     matching_rules.push(presentational_rule);
   }
-  if let Some(presentational_rule) = list_type_presentational_hint(node, 1) {
+  if let Some(presentational_rule) = list_type_presentational_hint(node, &layer_order, 1) {
     matching_rules.push(presentational_rule);
   }
-  if let Some(presentational_rule) = alignment_presentational_hint(node, 2) {
+  if let Some(presentational_rule) = alignment_presentational_hint(node, &layer_order, 2) {
     matching_rules.push(presentational_rule);
   }
-  if let Some(presentational_rule) = dimension_presentational_hint(node, 3) {
+  if let Some(presentational_rule) = dimension_presentational_hint(node, &layer_order, 3) {
     matching_rules.push(presentational_rule);
   }
-  if let Some(presentational_rule) = bgcolor_presentational_hint(node, 4) {
+  if let Some(presentational_rule) = bgcolor_presentational_hint(node, &layer_order, 4) {
     matching_rules.push(presentational_rule);
   }
-  if let Some(presentational_rule) = border_presentational_hint(node, ancestors, 5) {
+  if let Some(presentational_rule) = border_presentational_hint(node, ancestors, &layer_order, 5) {
     matching_rules.push(presentational_rule);
   }
-  if let Some(presentational_rule) = bordercolor_presentational_hint(node, 6) {
+  if let Some(presentational_rule) = bordercolor_presentational_hint(node, &layer_order, 6) {
     matching_rules.push(presentational_rule);
   }
-  if let Some(presentational_rule) = cellspacing_presentational_hint(node, 7) {
+  if let Some(presentational_rule) = cellspacing_presentational_hint(node, &layer_order, 7) {
     matching_rules.push(presentational_rule);
   }
-  if let Some(presentational_rule) = cellpadding_presentational_hint(node, ancestors, 8) {
+  if let Some(presentational_rule) =
+    cellpadding_presentational_hint(node, ancestors, &layer_order, 8)
+  {
     matching_rules.push(presentational_rule);
   }
-  if let Some(presentational_rule) = replaced_alignment_presentational_hint(node, 9) {
+  if let Some(presentational_rule) = replaced_alignment_presentational_hint(node, &layer_order, 9) {
     matching_rules.push(presentational_rule);
   }
-  if let Some(presentational_rule) = nowrap_presentational_hint(node, 10) {
+  if let Some(presentational_rule) = nowrap_presentational_hint(node, &layer_order, 10) {
     matching_rules.push(presentational_rule);
   }
-  if let Some(presentational_rule) = hidden_presentational_hint(node, 11) {
+  if let Some(presentational_rule) = hidden_presentational_hint(node, &layer_order, 11) {
     matching_rules.push(presentational_rule);
   }
 }
@@ -4889,13 +4918,14 @@ fn ua_default_rules(node: &DomNode, parent_direction: Direction) -> Vec<MatchedR
     Some(t) => t.to_ascii_lowercase(),
     None => return rules,
   };
+  let layer_order = unprefixed_unlayered_layer_order();
 
   let mut add_rule = |decls: Cow<'static, [Declaration]>, order: usize| {
     rules.push(MatchedRule {
       origin: StyleOrigin::UserAgent,
       specificity: 1, // tag selector specificity
       order,
-      layer_order: vec![u32::MAX],
+      layer_order: layer_order.clone(),
       declarations: decls,
       starting_style: false,
     });
@@ -4917,7 +4947,7 @@ fn ua_default_rules(node: &DomNode, parent_direction: Direction) -> Vec<MatchedR
                         origin: StyleOrigin::UserAgent,
                         specificity,
                         order: base_order + 1,
-                        layer_order: vec![u32::MAX],
+                        layer_order: layer_order.clone(),
                         declarations: cached_declarations(
                             &UA_LINK_VISITED_DECLS,
                             "color: rgb(85, 26, 139);",
@@ -4931,7 +4961,7 @@ fn ua_default_rules(node: &DomNode, parent_direction: Direction) -> Vec<MatchedR
                         origin: StyleOrigin::UserAgent,
                         specificity,
                         order: base_order + 2,
-                        layer_order: vec![u32::MAX],
+                        layer_order: layer_order.clone(),
                         declarations: cached_declarations(
                             &UA_LINK_ACTIVE_DECLS,
                             "color: rgb(255, 0, 0);",
@@ -4945,7 +4975,7 @@ fn ua_default_rules(node: &DomNode, parent_direction: Direction) -> Vec<MatchedR
                         origin: StyleOrigin::UserAgent,
                         specificity,
                         order: base_order + 3,
-                        layer_order: vec![u32::MAX],
+                        layer_order: layer_order.clone(),
                         declarations: cached_declarations(
                             &UA_LINK_HOVER_DECLS,
                             "color: rgb(255, 0, 0);",
@@ -4959,7 +4989,7 @@ fn ua_default_rules(node: &DomNode, parent_direction: Direction) -> Vec<MatchedR
                         origin: StyleOrigin::UserAgent,
                         specificity,
                         order: base_order + 4,
-                        layer_order: vec![u32::MAX],
+                        layer_order: layer_order.clone(),
                         declarations: cached_declarations(
                             &UA_LINK_FOCUS_DECLS,
                             "outline: 1px dotted rgb(0, 0, 0); outline-offset: 2px;",
@@ -5011,7 +5041,7 @@ fn ua_default_rules(node: &DomNode, parent_direction: Direction) -> Vec<MatchedR
                     origin: StyleOrigin::UserAgent,
                     specificity: 11, // input[type=\"hidden\"] should outrank generic UA form rules
                     order: 0,
-                    layer_order: vec![u32::MAX],
+                    layer_order: layer_order.clone(),
                     declarations: cached_declarations(&UA_INPUT_HIDDEN_DECLS, "display: none;"),
                     starting_style: false,
                 });
@@ -7814,6 +7844,24 @@ mod tests {
     let styled = apply_styles(&dom, &stylesheet);
     // The child layer ui.controls should override its parent ui declarations.
     assert_eq!(styled.styles.color, Rgba::rgb(1, 2, 3));
+  }
+
+  #[test]
+  fn nested_layer_sibling_order_respected() {
+    let dom = element_with_id_and_class("target", "", None);
+    let stylesheet = parse_stylesheet(
+      r"
+            @layer outer {
+              #target { color: rgb(1, 2, 3); }
+              @layer inner1 { #target { color: rgb(4, 5, 6); } }
+              @layer inner2 { #target { color: rgb(7, 8, 9); } }
+            }
+        ",
+    )
+    .unwrap();
+
+    let styled = apply_styles(&dom, &stylesheet);
+    assert_eq!(styled.styles.color, Rgba::rgb(7, 8, 9));
   }
 
   #[test]
@@ -13192,6 +13240,7 @@ fn apply_cascaded_declarations<'a, F>(
   }
 
   if let Some(inline) = inline_declarations {
+    let inline_layer_order = layer_order_with_tree_scope(&[u32::MAX], inline_tree_scope);
     for (decl_order, declaration) in inline.into_iter().enumerate() {
       flattened.push(MatchedDeclaration {
         important: declaration.important,
@@ -13199,7 +13248,7 @@ fn apply_cascaded_declarations<'a, F>(
         specificity: INLINE_SPECIFICITY,
         rule_order: INLINE_RULE_ORDER,
         decl_order,
-        layer_order: layer_order_with_tree_scope(&[u32::MAX], inline_tree_scope),
+        layer_order: inline_layer_order.clone(),
         declaration: Cow::Owned(declaration),
         starting_style: false,
       });
@@ -13227,10 +13276,13 @@ fn apply_cascaded_declarations<'a, F>(
       .cmp(&b.important)
       .then(a.origin.rank().cmp(&b.origin.rank()))
       .then_with(|| {
+        if Arc::ptr_eq(&a.layer_order, &b.layer_order) {
+          return std::cmp::Ordering::Equal;
+        }
         if a.important {
-          cmp_layer_order_important(&a.layer_order, &b.layer_order)
+          cmp_layer_order_important(a.layer_order.as_ref(), b.layer_order.as_ref())
         } else {
-          cmp_layer_order_normal(&a.layer_order, &b.layer_order)
+          cmp_layer_order_normal(a.layer_order.as_ref(), b.layer_order.as_ref())
         }
       })
       .then(a.specificity.cmp(&b.specificity))
@@ -13241,7 +13293,7 @@ fn apply_cascaded_declarations<'a, F>(
   let defaults = ComputedStyle::default();
   // Scope revert-layer bases to the current cascade stratum (origin + importance) so that
   // important declarations don't reuse snapshots from the normal cascade segment.
-  let mut layer_snapshots: HashMap<Vec<u32>, ComputedStyle> = HashMap::new();
+  let mut layer_snapshots: HashMap<Arc<[u32]>, ComputedStyle> = HashMap::new();
   let mut layer_snapshot_stratum: Option<(u8, bool)> = None;
 
   let mut apply_entry = |entry: &MatchedDeclaration<'_>| {
@@ -13293,6 +13345,7 @@ fn apply_cascaded_declarations<'a, F>(
 fn dir_presentational_hint(
   node: &DomNode,
   fallback_direction: Direction,
+  layer_order: &Arc<[u32]>,
   order: usize,
 ) -> Option<MatchedRule<'static>> {
   let tag = node.tag_name().map(|t| t.to_ascii_lowercase());
@@ -13308,7 +13361,7 @@ fn dir_presentational_hint(
         origin: StyleOrigin::Author,
         specificity: 0,
         order,
-        layer_order: vec![u32::MAX],
+        layer_order: layer_order.clone(),
         declarations: Cow::Owned(declarations),
         starting_style: false,
       })
@@ -13330,7 +13383,7 @@ fn dir_presentational_hint(
         origin: StyleOrigin::Author,
         specificity: 0,
         order,
-        layer_order: vec![u32::MAX],
+        layer_order: layer_order.clone(),
         declarations: Cow::Owned(declarations),
         starting_style: false,
       })
@@ -13339,7 +13392,11 @@ fn dir_presentational_hint(
   }
 }
 
-fn list_type_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRule<'static>> {
+fn list_type_presentational_hint(
+  node: &DomNode,
+  layer_order: &Arc<[u32]>,
+  order: usize,
+) -> Option<MatchedRule<'static>> {
   let tag = node.tag_name()?.to_ascii_lowercase();
   let ty = node.get_attribute("type")?;
   let mapped = match tag.as_str() {
@@ -13352,7 +13409,7 @@ fn list_type_presentational_hint(node: &DomNode, order: usize) -> Option<Matched
     origin: StyleOrigin::Author,
     specificity: 0,
     order,
-    layer_order: vec![u32::MAX],
+    layer_order: layer_order.clone(),
     declarations: Cow::Owned(declarations),
     starting_style: false,
   })
@@ -13378,7 +13435,11 @@ fn map_ul_type(value: &str) -> Option<&'static str> {
   }
 }
 
-fn alignment_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRule<'static>> {
+fn alignment_presentational_hint(
+  node: &DomNode,
+  layer_order: &Arc<[u32]>,
+  order: usize,
+) -> Option<MatchedRule<'static>> {
   let tag = node.tag_name()?.to_ascii_lowercase();
   let mut declarations = String::new();
 
@@ -13434,13 +13495,17 @@ fn alignment_presentational_hint(node: &DomNode, order: usize) -> Option<Matched
     origin: StyleOrigin::Author,
     specificity: 0,
     order,
-    layer_order: vec![u32::MAX],
+    layer_order: layer_order.clone(),
     declarations: Cow::Owned(parse_declarations(&declarations)),
     starting_style: false,
   })
 }
 
-fn dimension_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRule<'static>> {
+fn dimension_presentational_hint(
+  node: &DomNode,
+  layer_order: &Arc<[u32]>,
+  order: usize,
+) -> Option<MatchedRule<'static>> {
   let width = node
     .get_attribute("width")
     .and_then(|width| parse_dimension_attribute(&width));
@@ -13466,13 +13531,17 @@ fn dimension_presentational_hint(node: &DomNode, order: usize) -> Option<Matched
     origin: StyleOrigin::Author,
     specificity: 0,
     order,
-    layer_order: vec![u32::MAX],
+    layer_order: layer_order.clone(),
     declarations: Cow::Owned(parse_declarations(&css)),
     starting_style: false,
   })
 }
 
-fn bgcolor_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRule<'static>> {
+fn bgcolor_presentational_hint(
+  node: &DomNode,
+  layer_order: &Arc<[u32]>,
+  order: usize,
+) -> Option<MatchedRule<'static>> {
   let color = node
     .get_attribute("bgcolor")
     .and_then(|color| parse_color_attribute(&color))?;
@@ -13481,13 +13550,17 @@ fn bgcolor_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRu
     origin: StyleOrigin::Author,
     specificity: 0,
     order,
-    layer_order: vec![u32::MAX],
+    layer_order: layer_order.clone(),
     declarations: Cow::Owned(parse_declarations(&css)),
     starting_style: false,
   })
 }
 
-fn bordercolor_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRule<'static>> {
+fn bordercolor_presentational_hint(
+  node: &DomNode,
+  layer_order: &Arc<[u32]>,
+  order: usize,
+) -> Option<MatchedRule<'static>> {
   let color = node
     .get_attribute("bordercolor")
     .and_then(|color| parse_color_attribute(&color))?;
@@ -13496,7 +13569,7 @@ fn bordercolor_presentational_hint(node: &DomNode, order: usize) -> Option<Match
     origin: StyleOrigin::Author,
     specificity: 0,
     order,
-    layer_order: vec![u32::MAX],
+    layer_order: layer_order.clone(),
     declarations: Cow::Owned(parse_declarations(&css)),
     starting_style: false,
   })
@@ -13562,6 +13635,7 @@ fn find_table_border_value(ancestors: &[&DomNode], node: &DomNode) -> Option<Len
 fn border_presentational_hint(
   node: &DomNode,
   ancestors: &[&DomNode],
+  layer_order: &Arc<[u32]>,
   order: usize,
 ) -> Option<MatchedRule<'static>> {
   let tag = node.tag_name()?.to_ascii_lowercase();
@@ -13580,13 +13654,17 @@ fn border_presentational_hint(
     origin: StyleOrigin::Author,
     specificity: 0,
     order,
-    layer_order: vec![u32::MAX],
+    layer_order: layer_order.clone(),
     declarations: Cow::Owned(parse_declarations(&css)),
     starting_style: false,
   })
 }
 
-fn cellspacing_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRule<'static>> {
+fn cellspacing_presentational_hint(
+  node: &DomNode,
+  layer_order: &Arc<[u32]>,
+  order: usize,
+) -> Option<MatchedRule<'static>> {
   let tag = node.tag_name()?.to_ascii_lowercase();
   if tag != "table" {
     return None;
@@ -13598,7 +13676,7 @@ fn cellspacing_presentational_hint(node: &DomNode, order: usize) -> Option<Match
     origin: StyleOrigin::Author,
     specificity: 0,
     order,
-    layer_order: vec![u32::MAX],
+    layer_order: layer_order.clone(),
     declarations: Cow::Owned(parse_declarations(&css)),
     starting_style: false,
   })
@@ -13629,6 +13707,7 @@ fn find_cellpadding(ancestors: &[&DomNode], node: &DomNode) -> Option<Length> {
 fn cellpadding_presentational_hint(
   node: &DomNode,
   ancestors: &[&DomNode],
+  layer_order: &Arc<[u32]>,
   order: usize,
 ) -> Option<MatchedRule<'static>> {
   let tag = node.tag_name()?.to_ascii_lowercase();
@@ -13641,7 +13720,7 @@ fn cellpadding_presentational_hint(
     origin: StyleOrigin::Author,
     specificity: 0,
     order,
-    layer_order: vec![u32::MAX],
+    layer_order: layer_order.clone(),
     declarations: Cow::Owned(parse_declarations(&css)),
     starting_style: false,
   })
@@ -13672,6 +13751,7 @@ fn map_valign(value: &str) -> Option<&'static str> {
 
 fn replaced_alignment_presentational_hint(
   node: &DomNode,
+  layer_order: &Arc<[u32]>,
   order: usize,
 ) -> Option<MatchedRule<'static>> {
   let tag = node.tag_name()?.to_ascii_lowercase();
@@ -13704,13 +13784,17 @@ fn replaced_alignment_presentational_hint(
     origin: StyleOrigin::Author,
     specificity: 0,
     order,
-    layer_order: vec![u32::MAX],
+    layer_order: layer_order.clone(),
     declarations: Cow::Owned(parse_declarations(&declarations)),
     starting_style: false,
   })
 }
 
-fn nowrap_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRule<'static>> {
+fn nowrap_presentational_hint(
+  node: &DomNode,
+  layer_order: &Arc<[u32]>,
+  order: usize,
+) -> Option<MatchedRule<'static>> {
   let tag = node.tag_name()?.to_ascii_lowercase();
   if tag != "td" && tag != "th" {
     return None;
@@ -13721,20 +13805,24 @@ fn nowrap_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRul
     origin: StyleOrigin::Author,
     specificity: 0,
     order,
-    layer_order: vec![u32::MAX],
+    layer_order: layer_order.clone(),
     declarations: Cow::Owned(parse_declarations("white-space: nowrap;")),
     starting_style: false,
   })
 }
 
-fn hidden_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRule<'static>> {
+fn hidden_presentational_hint(
+  node: &DomNode,
+  layer_order: &Arc<[u32]>,
+  order: usize,
+) -> Option<MatchedRule<'static>> {
   node.get_attribute("hidden")?;
 
   Some(MatchedRule {
     origin: StyleOrigin::Author,
     specificity: 0,
     order,
-    layer_order: vec![u32::MAX],
+    layer_order: layer_order.clone(),
     declarations: Cow::Owned(parse_declarations("display: none;")),
     starting_style: false,
   })

@@ -9,8 +9,49 @@ use fastrender::style::cascade::{
   set_cascade_profile_enabled,
 };
 use fastrender::style::media::MediaContext;
+use std::alloc::{GlobalAlloc, Layout, System};
 use std::fmt::Write;
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
+
+struct CountingAllocator;
+
+static ALLOC_CALLS: AtomicUsize = AtomicUsize::new(0);
+static ALLOC_BYTES: AtomicUsize = AtomicUsize::new(0);
+
+unsafe impl GlobalAlloc for CountingAllocator {
+  unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+    ALLOC_CALLS.fetch_add(1, Ordering::Relaxed);
+    ALLOC_BYTES.fetch_add(layout.size(), Ordering::Relaxed);
+    System.alloc(layout)
+  }
+
+  unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+    ALLOC_CALLS.fetch_add(1, Ordering::Relaxed);
+    ALLOC_BYTES.fetch_add(layout.size(), Ordering::Relaxed);
+    System.alloc_zeroed(layout)
+  }
+
+  unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+    ALLOC_CALLS.fetch_add(1, Ordering::Relaxed);
+    ALLOC_BYTES.fetch_add(new_size, Ordering::Relaxed);
+    System.realloc(ptr, layout, new_size)
+  }
+
+  unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+    System.dealloc(ptr, layout)
+  }
+}
+
+#[global_allocator]
+static GLOBAL: CountingAllocator = CountingAllocator;
+
+fn allocation_counts() -> (usize, usize) {
+  (
+    ALLOC_CALLS.load(Ordering::Relaxed),
+    ALLOC_BYTES.load(Ordering::Relaxed),
+  )
+}
 
 fn generate_cascade_html(nodes: usize, class_variants: usize) -> String {
   let mut html = String::from("<html><head><style>body{margin:0;padding:0;}</style></head><body>");
@@ -207,6 +248,30 @@ fn pseudo_selector_candidate_benchmark(c: &mut Criterion) {
   );
 }
 
+fn generate_layer_heavy_css(layers: usize, rules_per_layer: usize) -> String {
+  let mut css = String::new();
+
+  for layer_idx in 0..layers {
+    css.push_str(&format!("@layer l{layer_idx} {{ @layer a {{ @layer b {{\n"));
+    for rule_idx in 0..rules_per_layer {
+      // Use a mix of custom properties and a couple of normal properties to exercise both
+      // cascade passes in `apply_cascaded_declarations`.
+      css.push_str("#target{");
+      css.push_str(&format!("--l{layer_idx}_r{rule_idx}: {rule_idx};"));
+      css.push_str(&format!(
+        "color: rgb({}, {}, {});",
+        (layer_idx * 31) % 255,
+        (rule_idx * 47) % 255,
+        (layer_idx * 11 + rule_idx * 13) % 255
+      ));
+      css.push_str("margin: 0; padding: 0;}");
+      css.push('\n');
+    }
+    css.push_str("}}}\n}\n");
+  }
+
+  css
+}
 fn cascade_benchmark(c: &mut Criterion) {
   let node_count = 400;
   let class_variants = 24;
@@ -221,6 +286,43 @@ fn cascade_benchmark(c: &mut Criterion) {
     b.iter(|| {
       let styled = apply_styles_with_media(black_box(&dom), black_box(&stylesheet), &media);
       black_box(styled);
+    });
+  });
+}
+
+fn cascade_layer_heavy_benchmark(c: &mut Criterion) {
+  let layers = 64;
+  let rules_per_layer = 16;
+  let html = "<html><body><div id=\"target\"></div></body></html>";
+  let css = generate_layer_heavy_css(layers, rules_per_layer);
+
+  let dom = parse_html(html).expect("parse html");
+  let stylesheet = parse_stylesheet(&css).expect("parse stylesheet");
+  let media = MediaContext::screen(1280.0, 720.0);
+  static PRINTED: AtomicBool = AtomicBool::new(false);
+
+  c.bench_function("cascade apply_styles layer-heavy 64x16", |b| {
+    b.iter_custom(|iters| {
+      let (calls_start, bytes_start) = allocation_counts();
+      let start = Instant::now();
+      for _ in 0..iters {
+        let styled = apply_styles_with_media(black_box(&dom), black_box(&stylesheet), &media);
+        black_box(styled);
+      }
+      let duration = start.elapsed();
+      let (calls_end, bytes_end) = allocation_counts();
+      let calls = calls_end.saturating_sub(calls_start);
+      let bytes = bytes_end.saturating_sub(bytes_start);
+      black_box((calls, bytes));
+
+      if !PRINTED.swap(true, Ordering::Relaxed) {
+        let iters_usize = iters as usize;
+        let per_call_calls = calls / iters_usize.max(1);
+        let per_call_bytes = bytes / iters_usize.max(1);
+        eprintln!("layer-heavy allocations/call: calls={per_call_calls} bytes={per_call_bytes}");
+      }
+
+      duration
     });
   });
 }
@@ -426,6 +528,7 @@ criterion_group!(
   config = cascade_bench_config();
   targets =
     cascade_benchmark,
+    cascade_layer_heavy_benchmark,
     cascade_not_benchmark,
     has_selector_benchmark,
     pseudo_selector_candidate_benchmark,

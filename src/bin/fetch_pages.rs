@@ -664,8 +664,13 @@ mod tests {
     });
   
     let url = format!("http://{}/start", addr);
-    let res = fetch_page(&url, Some(5), DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE)
-      .expect("fetch succeeds");
+    let res = fetch_page(
+      &url,
+      Some(5),
+      DEFAULT_USER_AGENT,
+      DEFAULT_ACCEPT_LANGUAGE,
+    )
+    .expect("fetch succeeds");
     handle.join().unwrap();
 
     let dir = tempfile::tempdir().expect("temp dir");
@@ -708,7 +713,12 @@ mod tests {
     });
   
     let url = format!("http://{}", addr);
-    let result = fetch_page(&url, Some(5), DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE);
+    let result = fetch_page(
+      &url,
+      Some(5),
+      DEFAULT_USER_AGENT,
+      DEFAULT_ACCEPT_LANGUAGE,
+    );
     assert!(
       result.is_err(),
       "empty bodies should be treated as failures"
@@ -745,8 +755,13 @@ mod tests {
     });
   
     let url = format!("http://{}/", addr);
-    let res =
-      fetch_page(&url, Some(5), DEFAULT_USER_AGENT, "es-MX,es;q=0.8").expect("fetch succeeds");
+    let res = fetch_page(
+      &url,
+      Some(5),
+      DEFAULT_USER_AGENT,
+      "es-MX,es;q=0.8",
+    )
+    .expect("fetch succeeds");
     handle.join().unwrap();
 
     assert_eq!(res.bytes, b"ok");
@@ -801,8 +816,13 @@ mod tests {
     });
   
     let url = format!("http://{}/", addr);
-    let res = fetch_page(&url, Some(5), DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE)
-      .expect("fetch succeeds");
+    let res = fetch_page(
+      &url,
+      Some(5),
+      DEFAULT_USER_AGENT,
+      DEFAULT_ACCEPT_LANGUAGE,
+    )
+    .expect("fetch succeeds");
     handle.join().unwrap();
 
     let expected_final = format!("http://{}/next", addr);
@@ -859,8 +879,13 @@ mod tests {
     });
   
     let url = format!("http://{}/", addr);
-    let res = fetch_page(&url, Some(5), DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE)
-      .expect("fetch succeeds");
+    let res = fetch_page(
+      &url,
+      Some(5),
+      DEFAULT_USER_AGENT,
+      DEFAULT_ACCEPT_LANGUAGE,
+    )
+    .expect("fetch succeeds");
     handle.join().unwrap();
 
     let expected_final = format!("http://{}/js", addr);
@@ -915,8 +940,13 @@ mod tests {
     });
   
     let url = format!("http://{}/", addr);
-    let res = fetch_page(&url, Some(5), DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE)
-      .expect("fetch succeeds");
+    let res = fetch_page(
+      &url,
+      Some(5),
+      DEFAULT_USER_AGENT,
+      DEFAULT_ACCEPT_LANGUAGE,
+    )
+    .expect("fetch succeeds");
     handle.join().unwrap();
 
     assert_eq!(
