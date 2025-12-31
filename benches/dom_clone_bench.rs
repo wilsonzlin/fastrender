@@ -156,8 +156,8 @@ fn top_layer_dialog_nodes() -> Vec<DomNode> {
 }
 
 fn modal_dialog_tail() -> DomNode {
-  // Place the modal dialog at the end of the tree so `modal_dialog_present` must traverse the
-  // full document in the common case.
+  // Place the modal dialog at the end of the tree so any modal detection must traverse a large
+  // portion of the DOM in the worst case.
   element(
     "dialog",
     vec![("data-fastr-open".to_string(), "modal".to_string())],
@@ -204,15 +204,13 @@ fn dom_clone_benchmarks(c: &mut Criterion) {
   // Run the traversal benchmark on a single, already-initialized DOM to keep clone and traversal
   // costs separate.
   let mut dom_for_traversal = dom.clone();
-  let modal_open = dom::modal_dialog_present(&dom_for_traversal);
-  dom::apply_top_layer_state(&mut dom_for_traversal, modal_open);
+  let _modal_open = dom::apply_top_layer_state_auto(&mut dom_for_traversal);
   let traversal_dom = RefCell::new(dom_for_traversal);
 
   group.bench_function("top_layer_traversal", |b| {
     b.iter(|| {
       let mut node = traversal_dom.borrow_mut();
-      let modal_open = dom::modal_dialog_present(black_box(&*node));
-      dom::apply_top_layer_state(&mut node, modal_open);
+      let modal_open = dom::apply_top_layer_state_auto(black_box(&mut *node));
       black_box(modal_open);
     })
   });

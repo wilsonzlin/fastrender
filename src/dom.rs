@@ -919,6 +919,55 @@ fn apply_top_layer_open_state_with_deadline(node: &mut DomNode) -> Result<bool> 
   Ok(modal_open)
 }
 
+fn apply_top_layer_open_state(node: &mut DomNode) -> bool {
+  let mut modal_open = false;
+  let mut stack = vec![node as *mut DomNode];
+
+  while let Some(ptr) = stack.pop() {
+    // Safety: `node` is mutably borrowed for the duration of this traversal, and we never mutate
+    // the `children` vectors (only element attributes), so raw pointers remain stable.
+    let current = unsafe { &mut *ptr };
+
+    let dialog_info = dialog_state(current);
+    if let Some((_, modal)) = dialog_info {
+      modal_open |= modal;
+    }
+
+    let has_popover = current.get_attribute_ref("popover").is_some();
+    let popover_is_open = has_popover && popover_open(current);
+
+    if let DomNodeType::Element {
+      tag_name,
+      attributes,
+      ..
+    } = &mut current.node_type
+    {
+      let is_dialog = tag_name.eq_ignore_ascii_case("dialog");
+      let should_open = if is_dialog {
+        dialog_info.is_some()
+      } else if has_popover {
+        popover_is_open
+      } else {
+        false
+      };
+
+      if is_dialog || has_popover {
+        if should_open {
+          set_attr(attributes, "open", "");
+        } else {
+          remove_attr(attributes, "open");
+        }
+      }
+    }
+
+    for child in current.children.iter_mut().rev() {
+      stack.push(child as *mut DomNode);
+    }
+  }
+
+  modal_open
+}
+
 fn apply_top_layer_state_inner(node: &mut DomNode, modal_open: bool, inside_modal: bool) -> bool {
   let mut within_modal = inside_modal;
   let dialog_info = dialog_state(node);
@@ -1059,6 +1108,88 @@ fn apply_top_layer_inert_state_with_deadline(node: &mut DomNode) -> Result<()> {
   }
 
   Ok(())
+}
+
+fn apply_top_layer_inert_state(node: &mut DomNode) {
+  struct Frame {
+    node: *mut DomNode,
+    inside_modal: bool,
+    entered: bool,
+    next_child: usize,
+    within_modal: bool,
+    subtree_has_modal: bool,
+  }
+
+  let mut stack = vec![Frame {
+    node: node as *mut _,
+    inside_modal: false,
+    entered: false,
+    next_child: 0,
+    within_modal: false,
+    subtree_has_modal: false,
+  }];
+
+  while let Some(mut frame) = stack.pop() {
+    // Safety: `node` is mutably borrowed for the duration of the traversal, and we never mutate the
+    // `children` vectors, so raw pointers remain stable for this post-order walk.
+    let current = unsafe { &mut *frame.node };
+
+    if !frame.entered {
+      frame.entered = true;
+      frame.within_modal = frame.inside_modal;
+      frame.subtree_has_modal = frame.within_modal;
+
+      if !frame.within_modal {
+        if let Some((_, modal)) = dialog_state(current) {
+          if modal {
+            frame.within_modal = true;
+            frame.subtree_has_modal = true;
+          }
+        }
+      }
+    }
+
+    if frame.next_child < current.children.len() {
+      let child_ptr = &mut current.children[frame.next_child] as *mut DomNode;
+      frame.next_child += 1;
+      let child_inside_modal = frame.within_modal;
+
+      stack.push(frame);
+      stack.push(Frame {
+        node: child_ptr,
+        inside_modal: child_inside_modal,
+        entered: false,
+        next_child: 0,
+        within_modal: false,
+        subtree_has_modal: false,
+      });
+      continue;
+    }
+
+    if let DomNodeType::Element { attributes, .. } = &mut current.node_type {
+      if !frame.subtree_has_modal {
+        set_attr(attributes, "data-fastr-inert", "true");
+      }
+    }
+
+    let subtree_has_modal = frame.subtree_has_modal;
+    if let Some(parent) = stack.last_mut() {
+      parent.subtree_has_modal |= subtree_has_modal;
+    }
+  }
+}
+
+/// Applies dialog/popover open state, then propagates `data-fastr-inert` if a modal dialog is open.
+///
+/// This is a benchmarking helper mirroring the render pipeline's top-layer preprocessing
+/// without deadline checks.
+#[doc(hidden)]
+pub fn apply_top_layer_state_auto(node: &mut DomNode) -> bool {
+  let modal_open = apply_top_layer_open_state(node);
+  if modal_open {
+    apply_top_layer_inert_state(node);
+  }
+  modal_open
 }
 
 pub(crate) fn apply_top_layer_state_with_deadline(node: &mut DomNode) -> Result<()> {
