@@ -21,7 +21,6 @@ const PARALLEL_BLUR_MIN_PIXELS: usize = 512 * 512;
 enum BlurParallelism {
   Auto,
   Serial,
-  Parallel,
 }
 
 type BlurHasher = BuildHasherDefault<DefaultHasher>;
@@ -355,7 +354,6 @@ fn gaussian_convolve_premultiplied_with_parallelism(
 
   let use_parallel = match parallelism {
     BlurParallelism::Serial => false,
-    BlurParallelism::Parallel => true,
     BlurParallelism::Auto => blur_should_parallelize(width, height),
   };
 
@@ -899,7 +897,6 @@ fn gaussian_blur_box_approx_with_parallelism(
 
   let use_parallel = match parallelism {
     BlurParallelism::Serial => false,
-    BlurParallelism::Parallel => true,
     BlurParallelism::Auto => blur_should_parallelize(width, height),
   };
 
@@ -1057,7 +1054,6 @@ fn blur_anisotropic_body_with_parallelism(
 
   let use_parallel = match parallelism {
     BlurParallelism::Serial => false,
-    BlurParallelism::Parallel => true,
     BlurParallelism::Auto => blur_should_parallelize(width, height),
   };
 
@@ -1939,7 +1935,7 @@ mod tests {
 
   #[test]
   fn parallel_blur_matches_serial_output() {
-    let mut base = new_pixmap(32, 24).unwrap();
+    let mut base = new_pixmap(512, 512).unwrap();
     let w = base.width() as usize;
     for y in 0..base.height() as usize {
       for x in 0..w {
@@ -1953,12 +1949,16 @@ mod tests {
       }
     }
 
+    let pool = ThreadPoolBuilder::new().num_threads(2).build().unwrap();
+
     let mut serial = base.clone();
-    let mut parallel = base.clone();
     gaussian_convolve_premultiplied_with_parallelism(&mut serial, 3.0, BlurParallelism::Serial)
       .unwrap();
-    gaussian_convolve_premultiplied_with_parallelism(&mut parallel, 3.0, BlurParallelism::Parallel)
-      .unwrap();
+    let mut parallel = base.clone();
+    pool.install(|| {
+      gaussian_convolve_premultiplied_with_parallelism(&mut parallel, 3.0, BlurParallelism::Auto)
+        .unwrap();
+    });
     assert_eq!(
       serial.data(),
       parallel.data(),
@@ -1966,10 +1966,11 @@ mod tests {
     );
 
     let mut serial = base.clone();
-    let mut parallel = base.clone();
     gaussian_blur_box_approx_with_parallelism(&mut serial, 8.0, BlurParallelism::Serial).unwrap();
-    gaussian_blur_box_approx_with_parallelism(&mut parallel, 8.0, BlurParallelism::Parallel)
-      .unwrap();
+    let mut parallel = base.clone();
+    pool.install(|| {
+      gaussian_blur_box_approx_with_parallelism(&mut parallel, 8.0, BlurParallelism::Auto).unwrap();
+    });
     assert_eq!(
       serial.data(),
       parallel.data(),
@@ -1977,10 +1978,12 @@ mod tests {
     );
 
     let mut serial = base.clone();
-    let mut parallel = base.clone();
     blur_anisotropic_body_with_parallelism(&mut serial, 2.0, 5.0, BlurParallelism::Serial).unwrap();
-    blur_anisotropic_body_with_parallelism(&mut parallel, 2.0, 5.0, BlurParallelism::Parallel)
-      .unwrap();
+    let mut parallel = base.clone();
+    pool.install(|| {
+      blur_anisotropic_body_with_parallelism(&mut parallel, 2.0, 5.0, BlurParallelism::Auto)
+        .unwrap();
+    });
     assert_eq!(
       serial.data(),
       parallel.data(),
