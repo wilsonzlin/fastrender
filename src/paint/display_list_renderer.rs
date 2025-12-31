@@ -10401,7 +10401,7 @@ mod tests {
     let layer = ResolvedMaskLayer {
       image: ResolvedMaskImage::Raster(image.clone()),
       repeat: BackgroundRepeat::no_repeat(),
-      position: BackgroundPosition::default(),
+      position: MaskLayer::default().position,
       size: BackgroundSize::Explicit(
         BackgroundSizeComponent::Length(Length::percent(100.0)),
         BackgroundSizeComponent::Length(Length::percent(100.0)),
@@ -10453,7 +10453,7 @@ mod tests {
     let layer = ResolvedMaskLayer {
       image: ResolvedMaskImage::Raster(image),
       repeat: BackgroundRepeat::no_repeat(),
-      position: BackgroundPosition::default(),
+      position: MaskLayer::default().position,
       size: BackgroundSize::Explicit(
         BackgroundSizeComponent::Length(Length::percent(100.0)),
         BackgroundSizeComponent::Length(Length::percent(100.0)),
@@ -10749,4 +10749,6 @@ mod tests {
     // Root background tinted by opacity.
     assert_eq!(pixel(&pixmap, 0, 0), (255, 128, 128, 255));
     // Child content is affected by the same stacking context opacity.
-    assert_eq!(pixel(&pixmap, 1, 1), (128,
+    assert_eq!(pixel(&pixmap, 1, 1), (128, 128, 255, 255));
+  }
+}

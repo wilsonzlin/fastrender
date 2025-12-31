@@ -15966,46 +15966,6 @@ fn first_letter_allows_property(property: &str) -> bool {
   false
 }
 
-fn marker_allows_property(property: &str) -> bool {
-  let p = property.to_ascii_lowercase();
-  if p == "content" {
-    return true;
-  }
-  if p == "font" || p.starts_with("font-") {
-    return true;
-  }
-  if matches!(
-    p.as_str(),
-    "color"
-      | "white-space"
-      | "unicode-bidi"
-      | "direction"
-      | "text-transform"
-      | "text-combine-upright"
-      | "letter-spacing"
-      | "word-spacing"
-      | "line-height"
-      | "text-shadow"
-      | "cursor"
-  ) {
-    return true;
-  }
-  if p.starts_with("text-decoration")
-    || matches!(
-      p.as_str(),
-      "text-underline-offset"
-        | "text-underline-position"
-        | "text-emphasis"
-        | "text-emphasis-style"
-        | "text-emphasis-color"
-        | "text-emphasis-position"
-    )
-  {
-    return true;
-  }
-  false
-}
-
 fn compute_first_line_styles(
   node: &DomNode,
   rule_scopes: &RuleScopes<'_>,
