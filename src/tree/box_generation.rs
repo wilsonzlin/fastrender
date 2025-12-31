@@ -321,15 +321,99 @@ fn clone_starting_style(style: &Option<Box<ComputedStyle>>) -> Option<Arc<Comput
   style.as_ref().map(|s| Arc::new((**s).clone()))
 }
 
+struct BoxGenerationPrepass<'a> {
+  document_css: String,
+  picture_sources: HashMap<usize, Vec<PictureSource>>,
+  styled_lookup: HashMap<usize, &'a StyledNode>,
+}
+
+fn collect_box_generation_prepass<'a>(
+  styled: &'a StyledNode,
+  deadline_counter: &mut usize,
+) -> Result<BoxGenerationPrepass<'a>> {
+  const MAX_EMBEDDED_SVG_CSS_BYTES: usize = 64 * 1024;
+
+  struct CssState {
+    enabled: bool,
+  }
+
+  fn walk<'a>(
+    node: &'a StyledNode,
+    out: &mut BoxGenerationPrepass<'a>,
+    deadline_counter: &mut usize,
+    max_css_bytes: usize,
+    css: &mut CssState,
+    css_allowed: bool,
+  ) -> Result<()> {
+    check_active_periodic(
+      deadline_counter,
+      BOX_GEN_DEADLINE_STRIDE,
+      RenderStage::Cascade,
+    )?;
+
+    out.styled_lookup.insert(node.node_id, node);
+    if let Some((img_id, sources)) = picture_sources_for(node) {
+      out.picture_sources.insert(img_id, sources);
+    }
+
+    let mut children_css_allowed = css_allowed;
+    if css_allowed && css.enabled {
+      if let Some(tag) = node.node.tag_name() {
+        if tag.eq_ignore_ascii_case("template")
+          && node.node.get_attribute_ref("shadowroot").is_none()
+          && node.node.get_attribute_ref("shadowrootmode").is_none()
+        {
+          children_css_allowed = false;
+        } else if tag.eq_ignore_ascii_case("style") {
+          for child in node.children.iter() {
+            if let Some(text) = child.node.text_content() {
+              out.document_css.push_str(text);
+              out.document_css.push('\n');
+              if out.document_css.len() > max_css_bytes {
+                out.document_css.clear();
+                css.enabled = false;
+                break;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    for child in node.children.iter() {
+      walk(
+        child,
+        out,
+        deadline_counter,
+        max_css_bytes,
+        css,
+        children_css_allowed,
+      )?;
+    }
+    Ok(())
+  }
+
+  let max_css_bytes = foreign_object_css_limit_bytes().max(MAX_EMBEDDED_SVG_CSS_BYTES);
+  let mut out = BoxGenerationPrepass {
+    document_css: String::new(),
+    picture_sources: HashMap::new(),
+    styled_lookup: HashMap::new(),
+  };
+  let mut css = CssState { enabled: true };
+  walk(styled, &mut out, deadline_counter, max_css_bytes, &mut css, true)?;
+  Ok(out)
+}
+
 fn build_box_tree_root(
   styled: &StyledNode,
   options: &BoxGenerationOptions,
   deadline_counter: &mut usize,
 ) -> Result<BoxNode> {
-  let document_css = collect_document_css(styled, deadline_counter)?;
-  let picture_sources = collect_picture_source_map(styled, deadline_counter)?;
-  let mut styled_lookup: HashMap<usize, &StyledNode> = HashMap::new();
-  build_styled_lookup(styled, &mut styled_lookup, deadline_counter)?;
+  let BoxGenerationPrepass {
+    document_css,
+    picture_sources,
+    styled_lookup,
+  } = collect_box_generation_prepass(styled, deadline_counter)?;
   let mut counters = CounterManager::new_with_styles(styled.styles.counter_styles.clone());
   counters.enter_scope();
   let mut roots = generate_boxes_for_styled(
@@ -471,72 +555,6 @@ fn escape_text(value: &str) -> String {
   out
 }
 
-fn collect_document_css(styled: &StyledNode, deadline_counter: &mut usize) -> Result<String> {
-  const MAX_EMBEDDED_SVG_CSS_BYTES: usize = 64 * 1024;
-
-  fn walk(
-    node: &StyledNode,
-    out: &mut String,
-    deadline_counter: &mut usize,
-    max_bytes: usize,
-  ) -> Result<bool> {
-    check_active_periodic(
-      deadline_counter,
-      BOX_GEN_DEADLINE_STRIDE,
-      RenderStage::Cascade,
-    )?;
-    if let Some(tag) = node.node.tag_name() {
-      if tag.eq_ignore_ascii_case("template")
-        && node.node.get_attribute_ref("shadowroot").is_none()
-        && node.node.get_attribute_ref("shadowrootmode").is_none()
-      {
-        return Ok(true);
-      }
-      if tag.eq_ignore_ascii_case("style") {
-        for child in node.children.iter() {
-          if let Some(text) = child.node.text_content() {
-            out.push_str(text);
-            out.push('\n');
-            if out.len() > max_bytes {
-              out.clear();
-              return Ok(false);
-            }
-          }
-        }
-      }
-    }
-
-    for child in node.children.iter() {
-      if !walk(child, out, deadline_counter, max_bytes)? {
-        return Ok(false);
-      }
-    }
-    Ok(true)
-  }
-
-  let mut css = String::new();
-  let max_bytes = foreign_object_css_limit_bytes().max(MAX_EMBEDDED_SVG_CSS_BYTES);
-  let _ = walk(styled, &mut css, deadline_counter, max_bytes)?;
-  Ok(css)
-}
-
-fn build_styled_lookup<'a>(
-  node: &'a StyledNode,
-  out: &mut HashMap<usize, &'a StyledNode>,
-  deadline_counter: &mut usize,
-) -> Result<()> {
-  check_active_periodic(
-    deadline_counter,
-    BOX_GEN_DEADLINE_STRIDE,
-    RenderStage::Cascade,
-  )?;
-  out.insert(node.node_id, node);
-  for child in node.children.iter() {
-    build_styled_lookup(child, out, deadline_counter)?;
-  }
-  Ok(())
-}
-
 enum ComposedChildren<'a> {
   Slice(&'a [StyledNode]),
   Refs(Vec<&'a StyledNode>),
@@ -647,35 +665,6 @@ fn picture_sources_for(styled: &StyledNode) -> Option<(usize, Vec<PictureSource>
   }
 
   fallback_img.map(|img| (img.node_id, sources))
-}
-
-fn collect_picture_source_map(
-  styled: &StyledNode,
-  deadline_counter: &mut usize,
-) -> Result<HashMap<usize, Vec<PictureSource>>> {
-  fn walk(
-    node: &StyledNode,
-    out: &mut HashMap<usize, Vec<PictureSource>>,
-    deadline_counter: &mut usize,
-  ) -> Result<()> {
-    check_active_periodic(
-      deadline_counter,
-      BOX_GEN_DEADLINE_STRIDE,
-      RenderStage::Cascade,
-    )?;
-    if let Some((img_id, sources)) = picture_sources_for(node) {
-      out.insert(img_id, sources);
-    }
-
-    for child in node.children.iter() {
-      walk(child, out, deadline_counter)?;
-    }
-    Ok(())
-  }
-
-  let mut map = HashMap::new();
-  walk(styled, &mut map, deadline_counter)?;
-  Ok(map)
 }
 
 fn parse_svg_number(value: &str) -> Option<f32> {
