@@ -2638,11 +2638,11 @@ impl FlexFormattingContext {
       let mut child_styles = Vec::with_capacity(root_children.len());
       for child in root_children {
         child_styles.push(std::sync::Arc::new(SendSyncStyle(
-          self.computed_style_to_taffy(child, false, Some(&box_node.style)),
+          self.computed_style_to_taffy(child, false, Some(&box_node.style))?,
         )));
       }
       let root_style = std::sync::Arc::new(SendSyncStyle(
-        self.computed_style_to_taffy(box_node, true, None),
+        self.computed_style_to_taffy(box_node, true, None)?,
       ));
       let template = std::sync::Arc::new(CachedTaffyTemplate {
         root_style,
@@ -2692,7 +2692,7 @@ impl FlexFormattingContext {
     root_children: Option<&[&BoxNode]>,
   ) -> Result<NodeId, LayoutError> {
     // Convert style to Taffy style
-    let taffy_style = self.computed_style_to_taffy(box_node, is_root, containing_flex);
+    let taffy_style = self.computed_style_to_taffy(box_node, is_root, containing_flex)?;
 
     // Create Taffy node
     let children_iter: Vec<&BoxNode> = if is_root {
@@ -2755,7 +2755,7 @@ impl FlexFormattingContext {
     box_node: &BoxNode,
     is_root: bool,
     containing_flex: Option<&ComputedStyle>,
-  ) -> taffy::style::Style {
+  ) -> Result<taffy::style::Style, LayoutError> {
     let style = &box_node.style;
     let inline_positive_container = self.inline_axis_positive(style);
     let block_positive_container = self.block_axis_positive(style);
@@ -2836,29 +2836,33 @@ impl FlexFormattingContext {
           if min_width_dimension == Dimension::AUTO
             && matches!(style.overflow_x, CssOverflow::Visible)
           {
-            if let Ok(min_content) =
-              item_fc.compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MinContent)
-            {
-              if min_content.is_finite() && min_content > 0.0 {
-                min_width_dimension = Dimension::length(min_content);
+            match item_fc.compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MinContent) {
+              Ok(min_content) => {
+                if min_content.is_finite() && min_content > 0.0 {
+                  min_width_dimension = Dimension::length(min_content);
+                }
               }
-            }
+              Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+              Err(_) => {}
+            };
           }
         } else if min_height_dimension == Dimension::AUTO
           && matches!(style.overflow_y, CssOverflow::Visible)
         {
-          if let Ok(min_content) =
-            item_fc.compute_intrinsic_block_size(box_node, IntrinsicSizingMode::MinContent)
-          {
-            if min_content.is_finite() && min_content > 0.0 {
-              min_height_dimension = Dimension::length(min_content);
+          match item_fc.compute_intrinsic_block_size(box_node, IntrinsicSizingMode::MinContent) {
+            Ok(min_content) => {
+              if min_content.is_finite() && min_content > 0.0 {
+                min_height_dimension = Dimension::length(min_content);
+              }
             }
-          }
+            Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+            Err(_) => {}
+          };
         }
       }
     }
 
-    taffy::style::Style {
+    Ok(taffy::style::Style {
       // Display mode - only root is Flex, children are Block (flex items)
       display: self.display_to_taffy(style, is_root),
 
@@ -2945,7 +2949,7 @@ impl FlexFormattingContext {
       scrollbar_width: resolve_scrollbar_width(style),
 
       ..Default::default()
-    }
+    })
   }
 
   /// Computes the size for a node
@@ -4701,7 +4705,7 @@ impl FlexFormattingContext {
       if let Some(&pos_idx) = positioned_index.get(&child.id) {
         let candidate = &positioned[pos_idx];
         let mut style =
-          self.computed_style_to_taffy(&candidate.layout_child, false, Some(&box_node.style));
+          self.computed_style_to_taffy(&candidate.layout_child, false, Some(&box_node.style))?;
         style.size.width = Dimension::length(candidate.fragment.bounds.width().max(0.0));
         style.size.height = Dimension::length(candidate.fragment.bounds.height().max(0.0));
         let node = taffy.new_leaf(style).map_err(|e| {
@@ -4714,7 +4718,7 @@ impl FlexFormattingContext {
           .get(&child.id)
           .cloned()
           .unwrap_or(Size::new(0.0, 0.0));
-        let mut style = self.computed_style_to_taffy(child, false, Some(&box_node.style));
+        let mut style = self.computed_style_to_taffy(child, false, Some(&box_node.style))?;
         style.size.width = Dimension::length(size.width.max(0.0));
         style.size.height = Dimension::length(size.height.max(0.0));
         let node = taffy.new_leaf(style).map_err(|e| {
@@ -4724,7 +4728,7 @@ impl FlexFormattingContext {
       }
     }
 
-    let mut root_style = self.computed_style_to_taffy(box_node, true, None);
+    let mut root_style = self.computed_style_to_taffy(box_node, true, None)?;
     root_style.size.width = Dimension::length(fragment.bounds.width());
     root_style.size.height = Dimension::length(fragment.bounds.height());
     let root = taffy
@@ -5234,7 +5238,9 @@ mod tests {
 
     let node = BoxNode::new_block(Arc::new(style), FormattingContextType::Flex, vec![]);
     let fc = FlexFormattingContext::new();
-    let taffy_style = fc.computed_style_to_taffy(&node, true, None);
+    let taffy_style = fc
+      .computed_style_to_taffy(&node, true, None)
+      .expect("taffy style");
 
     assert_eq!(
       taffy_style.scrollbar_width,
@@ -5242,6 +5248,46 @@ mod tests {
     );
     assert_eq!(taffy_style.overflow.x, TaffyOverflow::Scroll);
     assert_eq!(taffy_style.overflow.y, TaffyOverflow::Hidden);
+  }
+
+  #[test]
+  fn flex_auto_min_size_timeout_propagates() {
+    use crate::render_control::{DeadlineGuard, RenderDeadline};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    // Allow the initial flex pre-check to pass, then trigger cancellation during the flex-item
+    // auto-min-size intrinsic probe. If that probe swallows the timeout, the remainder of the
+    // layout run would complete successfully because the cancellation callback is one-shot.
+    let counter = Arc::new(AtomicUsize::new(0));
+    let counter_clone = counter.clone();
+    let deadline = RenderDeadline::new(
+      None,
+      Some(Arc::new(move || {
+        let prev = counter_clone.fetch_add(1, Ordering::SeqCst);
+        prev == 1
+      })),
+    );
+    let _guard = DeadlineGuard::install(Some(&deadline));
+
+    let mut text_style = ComputedStyle::default();
+    text_style.display = Display::Inline;
+    text_style.font_size = 16.0;
+    let text_style = Arc::new(text_style);
+    let item_children = (0..32usize)
+      .map(|idx| BoxNode::new_text(text_style.clone(), format!("x{idx}")))
+      .collect::<Vec<_>>();
+
+    let mut item_style = ComputedStyle::default();
+    item_style.overflow_x = Overflow::Visible;
+    let child =
+      BoxNode::new_block(Arc::new(item_style), FormattingContextType::Block, item_children);
+
+    let container = BoxNode::new_block(create_flex_style(), FormattingContextType::Flex, vec![child]);
+    let constraints = LayoutConstraints::definite(200.0, 200.0);
+
+    let fc = FlexFormattingContext::new();
+    let result = fc.layout(&container, &constraints);
+    assert!(matches!(result, Err(LayoutError::Timeout { .. })));
   }
 
   #[test]
