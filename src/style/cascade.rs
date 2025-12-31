@@ -15527,7 +15527,38 @@ fn apply_cascaded_declarations<'a, F>(
         return true;
       }
     }
-    false
+    if !bytes.contains(&b'\\') {
+      return false;
+    }
+
+    fn contains_revert_layer_in_parser<'i, 't>(parser: &mut cssparser::Parser<'i, 't>) -> bool {
+      while let Ok(token) = parser.next_including_whitespace_and_comments() {
+        match token {
+          cssparser::Token::Ident(ident) if ident.eq_ignore_ascii_case("revert-layer") => {
+            return true;
+          }
+          cssparser::Token::Function(_)
+          | cssparser::Token::ParenthesisBlock
+          | cssparser::Token::SquareBracketBlock
+          | cssparser::Token::CurlyBracketBlock => {
+            if let Ok(nested_found) = parser.parse_nested_block(|nested| {
+              Ok::<_, cssparser::ParseError<'i, ()>>(contains_revert_layer_in_parser(nested))
+            }) {
+              if nested_found {
+                return true;
+              }
+            }
+          }
+          _ => {}
+        }
+      }
+
+      false
+    }
+
+    let mut input = cssparser::ParserInput::new(haystack);
+    let mut parser = cssparser::Parser::new(&mut input);
+    contains_revert_layer_in_parser(&mut parser)
   }
 
   // `revert-layer` is rare, but when we track layer bases we clone the current `ComputedStyle` at
