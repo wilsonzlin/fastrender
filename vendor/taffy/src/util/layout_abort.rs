@@ -207,7 +207,14 @@ pub fn abort_now() -> ! {
   std::panic::panic_any(LayoutAbort)
 }
 
-/// `no_std` stub: does nothing.
+/// Abort the current layout computation in `no_std` builds.
+///
+/// Cooperative cancellation (installing a callback and catching the abort at the outer boundary)
+/// requires the `std` feature. However, callers may still want a convenient way to stop layout
+/// from inside a measure function. In `no_std` builds we can't convert this into a structured
+/// `TaffyError`, so we unconditionally panic.
 #[cfg(not(feature = "std"))]
 #[inline]
-pub fn abort_now() {}
+pub fn abort_now() -> ! {
+  panic!("Layout computation was aborted")
+}
