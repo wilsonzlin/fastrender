@@ -18,6 +18,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::env;
 use std::hash::{BuildHasherDefault, Hash, Hasher};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
@@ -130,6 +131,19 @@ fn reset_filter_cache_for_tests(config: FilterCacheConfig) {
 #[cfg(test)]
 fn filter_cache_len() -> usize {
   filter_cache().lock().unwrap().len()
+}
+
+#[cfg(test)]
+fn reset_filter_result_cache_for_tests(config: FilterCacheConfig) {
+  filter_result_cache_config_state().store(config);
+  if let Ok(mut cache) = filter_result_cache().lock() {
+    *cache = FilterResultCache::new(config);
+  }
+}
+
+#[cfg(test)]
+fn filter_result_cache_len() -> usize {
+  filter_result_cache().lock().unwrap().len()
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -317,11 +331,51 @@ impl FilterResultCache {
       }
     }
   }
+
+  #[cfg(test)]
+  fn len(&self) -> usize {
+    self.lru.len()
+  }
+}
+
+struct FilterResultCacheConfigState {
+  max_items: AtomicUsize,
+  max_bytes: AtomicUsize,
+}
+
+impl FilterResultCacheConfigState {
+  fn new(config: FilterCacheConfig) -> Self {
+    Self {
+      max_items: AtomicUsize::new(config.max_items),
+      max_bytes: AtomicUsize::new(config.max_bytes),
+    }
+  }
+
+  fn load(&self) -> FilterCacheConfig {
+    FilterCacheConfig {
+      max_items: self.max_items.load(Ordering::Relaxed),
+      max_bytes: self.max_bytes.load(Ordering::Relaxed),
+    }
+  }
+
+  fn store(&self, config: FilterCacheConfig) {
+    self.max_items.store(config.max_items, Ordering::Relaxed);
+    self.max_bytes.store(config.max_bytes, Ordering::Relaxed);
+  }
+}
+
+fn filter_result_cache_config_state() -> &'static FilterResultCacheConfigState {
+  static STATE: OnceLock<FilterResultCacheConfigState> = OnceLock::new();
+  STATE.get_or_init(|| FilterResultCacheConfigState::new(FilterCacheConfig::from_env()))
+}
+
+fn filter_result_cache_config() -> FilterCacheConfig {
+  filter_result_cache_config_state().load()
 }
 
 fn filter_result_cache() -> &'static Mutex<FilterResultCache> {
   static CACHE: OnceLock<Mutex<FilterResultCache>> = OnceLock::new();
-  CACHE.get_or_init(|| Mutex::new(FilterResultCache::new(FilterCacheConfig::from_env())))
+  CACHE.get_or_init(|| Mutex::new(FilterResultCache::new(filter_result_cache_config())))
 }
 
 static SVG_BLUR_CACHE: OnceLock<Mutex<BlurCache>> = OnceLock::new();
@@ -2579,12 +2633,11 @@ fn apply_svg_filter_scaled(
     return Ok(());
   };
 
-  let cache_enabled = match filter_result_cache().lock() {
-    Ok(cache) => cache.config.max_items > 0,
-    Err(_) => false,
-  };
+  let cache_config = filter_result_cache_config();
+  let weight = pixmap.data().len();
+  let cacheable = cache_config.max_items > 0 && (cache_config.max_bytes == 0 || weight <= cache_config.max_bytes);
 
-  let cache_key = if cache_enabled {
+  let cache_key = if cacheable {
     SvgFilterCacheKey::new(def, pixmap, scale_x, scale_y, css_bbox, filter_region)
   } else {
     None
@@ -5474,6 +5527,142 @@ mod filter_cache_tests {
       "cache should be keyed by resolved URL"
     );
     assert_eq!(filter_cache_len(), 1);
+  }
+}
+
+#[cfg(test)]
+mod filter_result_cache_tests {
+  use super::*;
+  use crate::paint::painter::{enable_paint_diagnostics, take_paint_diagnostics};
+  use tiny_skia::ColorU8;
+
+  fn test_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+  }
+
+  fn make_source_pixmap(width: u32, height: u32) -> Pixmap {
+    let mut pixmap = new_pixmap(width, height).expect("create pixmap");
+    pixmap.fill(tiny_skia::Color::from_rgba8(0, 0, 0, 0));
+
+    let fill = ColorU8::from_rgba(200, 40, 10, 255).premultiply();
+    let start_x = width / 4;
+    let end_x = width.saturating_sub(start_x);
+    let start_y = height / 4;
+    let end_y = height.saturating_sub(start_y);
+    let stride = width as usize;
+    for y in start_y..end_y {
+      for x in start_x..end_x {
+        pixmap.pixels_mut()[(y as usize) * stride + (x as usize)] = fill;
+      }
+    }
+    pixmap
+  }
+
+  fn make_invert_filter(width: u32, height: u32) -> SvgFilter {
+    // Invert RGB while preserving alpha:
+    // r' = 1 - r, g' = 1 - g, b' = 1 - b, a' = a.
+    let invert = [
+      -1.0, 0.0, 0.0, 0.0, 1.0, //
+      0.0, -1.0, 0.0, 0.0, 1.0, //
+      0.0, 0.0, -1.0, 0.0, 1.0, //
+      0.0, 0.0, 0.0, 1.0, 0.0, //
+    ];
+
+    let mut filter = SvgFilter {
+      color_interpolation_filters: ColorInterpolationFilters::LinearRGB,
+      steps: vec![FilterStep {
+        result: None,
+        color_interpolation_filters: None,
+        primitive: FilterPrimitive::ColorMatrix {
+          input: FilterInput::SourceGraphic,
+          kind: ColorMatrixKind::Matrix(invert),
+        },
+        region: None,
+      }],
+      region: SvgFilterRegion {
+        x: SvgLength::Number(0.0),
+        y: SvgLength::Number(0.0),
+        width: SvgLength::Number(width as f32),
+        height: SvgLength::Number(height as f32),
+        units: SvgFilterUnits::UserSpaceOnUse,
+      },
+      filter_res: None,
+      primitive_units: SvgFilterUnits::UserSpaceOnUse,
+      fingerprint: 0,
+    };
+    filter.refresh_fingerprint();
+    filter
+  }
+
+  #[test]
+  fn filter_result_cache_hits_on_identical_input() {
+    let _guard = test_lock().lock().unwrap();
+    reset_filter_result_cache_for_tests(FilterCacheConfig {
+      max_items: 64,
+      max_bytes: 1024 * 1024,
+    });
+    enable_paint_diagnostics();
+
+    let filter = make_invert_filter(8, 8);
+    let bbox = Rect::from_xywh(0.0, 0.0, 8.0, 8.0);
+
+    let mut first = make_source_pixmap(8, 8);
+    let mut second = make_source_pixmap(8, 8);
+    apply_svg_filter(&filter, &mut first, 1.0, bbox).unwrap();
+    apply_svg_filter(&filter, &mut second, 1.0, bbox).unwrap();
+    let _ = filter_result_cache_len();
+
+    let stats = take_paint_diagnostics().expect("diagnostics enabled");
+    assert_eq!(stats.filter_cache_misses, 1);
+    assert_eq!(stats.filter_cache_hits, 1);
+    assert_eq!(first.data(), second.data());
+  }
+
+  #[test]
+  fn filter_result_cache_skips_when_disabled() {
+    let _guard = test_lock().lock().unwrap();
+    reset_filter_result_cache_for_tests(FilterCacheConfig {
+      max_items: 0,
+      max_bytes: 1024 * 1024,
+    });
+    enable_paint_diagnostics();
+
+    let filter = make_invert_filter(8, 8);
+    let bbox = Rect::from_xywh(0.0, 0.0, 8.0, 8.0);
+
+    let mut first = make_source_pixmap(8, 8);
+    let mut second = make_source_pixmap(8, 8);
+    apply_svg_filter(&filter, &mut first, 1.0, bbox).unwrap();
+    apply_svg_filter(&filter, &mut second, 1.0, bbox).unwrap();
+
+    let stats = take_paint_diagnostics().expect("diagnostics enabled");
+    assert_eq!(stats.filter_cache_hits, 0);
+    assert_eq!(stats.filter_cache_misses, 0);
+    assert_eq!(first.data(), second.data());
+  }
+
+  #[test]
+  fn filter_result_cache_skips_when_entry_too_large() {
+    let _guard = test_lock().lock().unwrap();
+    reset_filter_result_cache_for_tests(FilterCacheConfig {
+      max_items: 64,
+      max_bytes: 1024,
+    });
+    enable_paint_diagnostics();
+
+    let filter = make_invert_filter(64, 64);
+    let bbox = Rect::from_xywh(0.0, 0.0, 64.0, 64.0);
+
+    let mut first = make_source_pixmap(64, 64);
+    let mut second = make_source_pixmap(64, 64);
+    apply_svg_filter(&filter, &mut first, 1.0, bbox).unwrap();
+    apply_svg_filter(&filter, &mut second, 1.0, bbox).unwrap();
+
+    let stats = take_paint_diagnostics().expect("diagnostics enabled");
+    assert_eq!(stats.filter_cache_hits, 0);
+    assert_eq!(stats.filter_cache_misses, 0);
+    assert_eq!(first.data(), second.data());
   }
 }
 
