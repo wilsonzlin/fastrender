@@ -2264,6 +2264,102 @@ fn select_label(node: &StyledNode) -> Option<String> {
   first_enabled_option_label(node, false)
 }
 
+fn option_value_from_node(node: &StyledNode) -> String {
+  if let Some(value) = node.node.get_attribute_ref("value") {
+    return value.to_string();
+  }
+
+  let mut value = String::new();
+  for child in node.children.iter() {
+    if let DomNodeType::Text { content } = &child.node.node_type {
+      value.push_str(content);
+    }
+  }
+  value
+}
+
+fn collect_selected_option_values(node: &StyledNode, optgroup_disabled: bool, out: &mut Vec<String>) {
+  let tag = node.node.tag_name().unwrap_or("");
+  let is_option = tag.eq_ignore_ascii_case("option");
+  let is_optgroup = tag.eq_ignore_ascii_case("optgroup");
+
+  let option_disabled = node.node.get_attribute_ref("disabled").is_some();
+  let next_optgroup_disabled = optgroup_disabled || (is_optgroup && option_disabled);
+
+  if is_option
+    && node.node.get_attribute_ref("selected").is_some()
+    && !(option_disabled || optgroup_disabled)
+  {
+    out.push(option_value_from_node(node));
+  }
+
+  for child in node.children.iter() {
+    collect_selected_option_values(child, next_optgroup_disabled, out);
+  }
+}
+
+fn find_selected_option_value(node: &StyledNode, optgroup_disabled: bool) -> Option<String> {
+  let tag = node.node.tag_name().unwrap_or("");
+  let is_option = tag.eq_ignore_ascii_case("option");
+  let is_optgroup = tag.eq_ignore_ascii_case("optgroup");
+
+  let option_disabled = node.node.get_attribute_ref("disabled").is_some();
+  let next_optgroup_disabled = optgroup_disabled || (is_optgroup && option_disabled);
+
+  if is_option
+    && node.node.get_attribute_ref("selected").is_some()
+    && !(option_disabled || optgroup_disabled)
+  {
+    return Some(option_value_from_node(node));
+  }
+
+  for child in node.children.iter() {
+    if let Some(val) = find_selected_option_value(child, next_optgroup_disabled) {
+      return Some(val);
+    }
+  }
+  None
+}
+
+fn first_enabled_option_value(node: &StyledNode, optgroup_disabled: bool) -> Option<String> {
+  let tag = node.node.tag_name().unwrap_or("");
+  let is_option = tag.eq_ignore_ascii_case("option");
+  let is_optgroup = tag.eq_ignore_ascii_case("optgroup");
+
+  let option_disabled = node.node.get_attribute_ref("disabled").is_some();
+  let next_optgroup_disabled = optgroup_disabled || (is_optgroup && option_disabled);
+
+  if is_option && !(option_disabled || optgroup_disabled) {
+    return Some(option_value_from_node(node));
+  }
+
+  for child in node.children.iter() {
+    if let Some(val) = first_enabled_option_value(child, next_optgroup_disabled) {
+      return Some(val);
+    }
+  }
+  None
+}
+
+fn select_value(node: &StyledNode) -> Option<String> {
+  let multiple = node.node.get_attribute_ref("multiple").is_some();
+  if multiple {
+    let mut values = Vec::new();
+    collect_selected_option_values(node, false, &mut values);
+    if values.is_empty() {
+      return None;
+    }
+    return Some(values.join(", "));
+  }
+
+  let explicit = find_selected_option_value(node, false);
+  if explicit.is_some() {
+    return explicit;
+  }
+
+  first_enabled_option_value(node, false)
+}
+
 fn input_label(node: &DomNode, input_type: &str) -> String {
   if let Some(value) = node.get_attribute_ref("value").filter(|v| !v.is_empty()) {
     return value.to_string();
@@ -2343,14 +2439,26 @@ fn create_form_control_replaced(styled: &StyledNode) -> Option<FormControl> {
     focused = false;
     focus_visible = false;
   }
-  let dom_subtree = (tag.eq_ignore_ascii_case("textarea") || tag.eq_ignore_ascii_case("select"))
-    .then(|| dom_subtree_from_styled(styled));
-  let validation_node = dom_subtree.as_ref().unwrap_or(&styled.node);
-  let element_ref = ElementRef::new(validation_node);
+  let textarea_value = tag
+    .eq_ignore_ascii_case("textarea")
+    .then(|| collect_text_content(styled));
+  let element_ref = ElementRef::new(&styled.node);
   let required = element_ref.accessibility_required() && !disabled;
-  let mut invalid = element_ref.accessibility_supports_validation()
-    && !element_ref.accessibility_is_valid()
-    && !disabled;
+  let mut invalid = element_ref.accessibility_supports_validation() && !disabled;
+  if invalid {
+    if tag.eq_ignore_ascii_case("textarea") {
+      invalid = required
+        && textarea_value
+          .as_deref()
+          .unwrap_or_default()
+          .trim()
+          .is_empty();
+    } else if tag.eq_ignore_ascii_case("select") {
+      invalid = required && select_value(styled).unwrap_or_default().trim().is_empty();
+    } else {
+      invalid = !element_ref.accessibility_is_valid();
+    }
+  }
 
   if tag.eq_ignore_ascii_case("input") {
     let input_type = styled.node.get_attribute_ref("type").unwrap_or("text");
@@ -2487,7 +2595,7 @@ fn create_form_control_replaced(styled: &StyledNode) -> Option<FormControl> {
   } else if tag.eq_ignore_ascii_case("textarea") {
     Some(FormControl {
       control: FormControlKind::TextArea {
-        value: collect_text_content(styled),
+        value: textarea_value.unwrap_or_else(|| collect_text_content(styled)),
         rows: styled
           .node
           .get_attribute_ref("rows")
