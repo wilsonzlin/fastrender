@@ -1911,6 +1911,12 @@ impl StageHeartbeatWriter {
 
   fn record(&self, stage: StageHeartbeat) {
     let Some(path) = &self.path else {
+      if let Ok(mut guard) = self.last.lock() {
+        if guard.as_ref() == Some(&stage) {
+          return;
+        }
+        *guard = Some(stage);
+      }
       return;
     };
     {
