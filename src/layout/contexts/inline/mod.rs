@@ -8140,10 +8140,12 @@ impl InlineFormattingContext {
       let abs = AbsoluteLayout::with_font_context(self.font_context.clone());
       let font_context = self.font_context.clone();
       let viewport_size = self.viewport_size;
-      let layout_positioned_child = |PositionedChild {
-                                       node: child,
-                                       containing_block_id,
-                                     }| {
+      let parallelism = self.parallelism;
+      let layout_positioned_child = |positioned_child: &PositionedChild| {
+        let PositionedChild {
+          node: child,
+          containing_block_id,
+        } = positioned_child;
         let custom_cb = containing_block_id
           .and_then(|id| positioned_containing_blocks.get(&id))
           .copied();
@@ -8187,7 +8189,8 @@ impl InlineFormattingContext {
           font_context.clone(),
           viewport_size,
           child_cb,
-        );
+        )
+        .with_parallelism(parallelism);
         let fc_type = layout_child
           .formatting_context()
           .unwrap_or(crate::style::display::FormattingContextType::Block);
@@ -8267,18 +8270,22 @@ impl InlineFormattingContext {
         .should_parallelize(positioned_children.len())
       {
         let deadline = active_deadline();
-        let positioned_fragments = positioned_children
-          .into_par_iter()
+        // Rayon collects indexed parallel iterators in-order, but we explicitly stage the results
+        // so we can append positioned fragments in document order even when work is parallelized.
+        let positioned_results = positioned_children
+          .par_iter()
           .map(|child| {
             with_deadline(deadline.as_ref(), || {
               crate::layout::engine::debug_record_parallel_work();
               layout_positioned_child(child)
             })
           })
-          .collect::<Result<Vec<_>, _>>()?;
-        merged_children.extend(positioned_fragments);
+          .collect::<Vec<_>>();
+        for result in positioned_results {
+          merged_children.push(result?);
+        }
       } else {
-        for child in positioned_children {
+        for child in &positioned_children {
           merged_children.push(layout_positioned_child(child)?);
         }
       }
@@ -8921,8 +8928,10 @@ fn resolve_base_direction_for_style_and_children(
   if matches!(
     style.writing_mode,
     crate::style::types::WritingMode::VerticalRl | crate::style::types::WritingMode::VerticalLr
-  ) && matches!(style.text_orientation, crate::style::types::TextOrientation::Upright)
-  {
+  ) && matches!(
+    style.text_orientation,
+    crate::style::types::TextOrientation::Upright
+  ) {
     return crate::style::types::Direction::Ltr;
   }
 
@@ -9476,6 +9485,10 @@ fn width_span(lines: &[Line]) -> f32 {
 mod tests {
   use super::*;
   use crate::geometry::Size;
+  use crate::layout::engine::{
+    enable_layout_parallel_debug_counters, layout_parallel_debug_counters,
+    reset_layout_parallel_debug_counters,
+  };
   use crate::layout::formatting_context::IntrinsicSizingMode;
   use crate::style::color::Rgba;
   use crate::style::display::Display;
@@ -9584,6 +9597,8 @@ mod tests {
       .num_threads(2)
       .build()
       .expect("thread pool");
+    enable_layout_parallel_debug_counters(true);
+    reset_layout_parallel_debug_counters();
     let fragment = pool.install(|| {
       assert!(rayon::current_num_threads() > 1);
       let ifc = InlineFormattingContext::new().with_parallelism(LayoutParallelism::enabled(8));
@@ -9591,6 +9606,9 @@ mod tests {
       let constraints = LayoutConstraints::definite_width(200.0);
       ifc.layout(&root, &constraints).expect("layout")
     });
+    let counters = layout_parallel_debug_counters();
+    enable_layout_parallel_debug_counters(false);
+    reset_layout_parallel_debug_counters();
 
     let mut abs_x_positions = Vec::new();
     for child in fragment.children.iter() {
@@ -9601,6 +9619,14 @@ mod tests {
         abs_x_positions.push(child.bounds.x());
       }
     }
+    assert!(
+      counters.work_items > 0,
+      "expected parallel positioned layout to record work items, counters={counters:?}"
+    );
+    assert!(
+      counters.worker_threads > 1,
+      "expected positioned layout to use multiple rayon threads, counters={counters:?}"
+    );
     assert_eq!(abs_x_positions.len(), 64);
     for (idx, x) in abs_x_positions.into_iter().enumerate() {
       assert!(
