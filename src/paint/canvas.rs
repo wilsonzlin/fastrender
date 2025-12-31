@@ -1251,10 +1251,48 @@ impl Canvas {
   }
 
   fn build_clip_mask(&self, rect: Rect, radii: BorderRadii) -> Option<Mask> {
-    if rect.width() <= 0.0 || rect.height() <= 0.0 || self.width() == 0 || self.height() == 0 {
+    if rect.width() <= 0.0
+      || rect.height() <= 0.0
+      || self.width() == 0
+      || self.height() == 0
+      || !rect.x().is_finite()
+      || !rect.y().is_finite()
+      || !rect.width().is_finite()
+      || !rect.height().is_finite()
+    {
       return None;
     }
 
+    // Fast path: axis-aligned rectangular clips with identity transforms don't need the
+    // full pixmap rasterization step. Filling the mask directly avoids allocating a
+    // temporary RGBA pixmap (4 bytes/pixel) per clip.
+    if radii.is_zero() && self.current_state.transform == Transform::identity() {
+      return self.build_clip_mask_fast_rect(rect);
+    }
+
+    self.build_clip_mask_slow_path(rect, radii)
+  }
+
+  fn build_clip_mask_fast_rect(&self, rect: Rect) -> Option<Mask> {
+    let mut mask = Mask::new(self.width(), self.height())?;
+    mask.data_mut().fill(0);
+
+    let paint = {
+      let mut p = Paint::default();
+      p.set_color_rgba8(255, 255, 255, 255);
+      p
+    };
+    let path = self.build_rounded_rect_path(rect, BorderRadii::ZERO)?;
+    mask.fill_path(
+      &path,
+      FillRule::Winding,
+      paint.anti_alias,
+      self.current_state.transform,
+    );
+    Some(mask)
+  }
+
+  fn build_clip_mask_slow_path(&self, rect: Rect, radii: BorderRadii) -> Option<Mask> {
     let mut mask_pixmap = new_pixmap(self.width(), self.height())?;
     let paint = {
       let mut p = Paint::default();
@@ -1546,6 +1584,7 @@ impl BlendModeExt for BlendMode {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::paint::pixmap::NewPixmapAllocRecorder;
 
   fn pixel(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
     let width = pixmap.width();
@@ -1990,5 +2029,48 @@ mod tests {
     assert_eq!(pixel(&pixmap, 0, 0), (255, 255, 255, 255));
     assert_eq!(pixel(&pixmap, 7, 7), (255, 255, 255, 255));
     assert_eq!(pixel(&pixmap, 3, 3), (0, 255, 0, 255));
+  }
+
+  #[test]
+  fn fast_rect_clip_mask_matches_slow_path() {
+    let canvas = Canvas::new_transparent(24, 24).unwrap();
+    let rects = [
+      // Integer-aligned.
+      Rect::from_xywh(2.0, 3.0, 8.0, 6.0),
+      // Fractional coordinates.
+      Rect::from_xywh(1.2, 2.8, 10.7, 5.3),
+      // Very thin rectangles.
+      Rect::from_xywh(5.0, 5.0, 0.3, 10.0),
+      Rect::from_xywh(7.4, 9.1, 8.0, 0.4),
+      // Edge-clamped rectangles.
+      Rect::from_xywh(-3.0, -2.0, 6.0, 5.0),
+      Rect::from_xywh(20.0, 20.0, 10.0, 10.0),
+    ];
+
+    for rect in rects {
+      let fast = canvas
+        .build_clip_mask(rect, BorderRadii::ZERO)
+        .expect("fast mask");
+      let slow = canvas
+        .build_clip_mask_slow_path(rect, BorderRadii::ZERO)
+        .expect("slow mask");
+      assert_eq!(
+        fast.data(),
+        slow.data(),
+        "fast-path mask differs from slow-path for {rect:?}"
+      );
+    }
+  }
+
+  #[test]
+  fn rect_clip_fast_path_avoids_pixmap_allocation() {
+    let mut canvas = Canvas::new_transparent(8, 8).unwrap();
+    let recorder = NewPixmapAllocRecorder::start();
+    canvas.set_clip_with_radii(Rect::from_xywh(1.0, 1.0, 6.0, 6.0), None);
+    let allocations = recorder.take();
+    assert!(
+      allocations.is_empty(),
+      "expected no new_pixmap allocations for rect clip fast-path, got {allocations:?}"
+    );
   }
 }
