@@ -1507,7 +1507,6 @@ fn is_mark_only_cluster(text: &str) -> bool {
   }
   saw_mark
 }
-
 fn cluster_base_and_relevant_chars(text: &str) -> (char, Vec<char>) {
   let mut chars: Vec<char> = text.chars().collect();
   let mut base = chars
@@ -1725,7 +1724,7 @@ fn assign_fonts_internal(
       }
 
       if !skip_resolution && resolved.is_none() {
-        let coverage_chars = if relevant_chars.is_empty() {
+        let coverage_chars_all = if relevant_chars.is_empty() {
           vec![base_char]
         } else {
           relevant_chars.clone()
@@ -1734,7 +1733,7 @@ fn assign_fonts_internal(
           base_char,
           run.script,
           language,
-          &coverage_chars,
+          &coverage_chars_all,
           &families,
           weight_value,
           font_style,
@@ -1743,6 +1742,32 @@ fn assign_fonts_internal(
           font_context,
           emoji_pref,
         );
+
+        if resolved.is_none() {
+          let mut coverage_chars_required: Vec<char> = coverage_chars_all
+            .iter()
+            .copied()
+            .filter(|c| !is_unicode_mark(*c))
+            .collect();
+          if coverage_chars_required.is_empty() {
+            coverage_chars_required.push(base_char);
+          }
+          if coverage_chars_required.len() != coverage_chars_all.len() {
+            resolved = resolve_font_for_cluster(
+              base_char,
+              run.script,
+              language,
+              &coverage_chars_required,
+              &families,
+              weight_value,
+              font_style,
+              requested_oblique,
+              font_stretch,
+              font_context,
+              emoji_pref,
+            );
+          }
+        }
       }
 
       if resolved.is_none() {
@@ -3346,6 +3371,7 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
 
   let mut glyphs = Vec::with_capacity(glyph_infos.len());
   let mut inline_position = 0.0_f32;
+  let mark_only = is_mark_only_cluster(&run.text);
 
   for (info, pos) in glyph_infos.iter().zip(glyph_positions.iter()) {
     let cluster_in_shape = info.cluster as usize;
@@ -3353,13 +3379,14 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
       .as_ref()
       .map(|map| map_cluster_offset(cluster_in_shape, map))
       .unwrap_or(cluster_in_shape);
-    let is_bidi_control = run
-      .text
-      .get(logical_cluster..)
-      .and_then(|s| s.chars().next())
-      .is_some_and(is_bidi_control_char);
+    let char_at_cluster = run.text.get(logical_cluster..).and_then(|s| s.chars().next());
+    let is_bidi_control = char_at_cluster.is_some_and(is_bidi_control_char);
 
     if !is_bidi_control {
+      if info.glyph_id == 0 && !mark_only && char_at_cluster.is_some_and(is_unicode_mark) {
+        continue;
+      }
+
       let (x_offset, y_offset, x_advance, y_advance) =
         map_hb_position(run.vertical, run.baseline_shift, scale, pos);
 
@@ -3375,8 +3402,7 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
     }
   }
 
-  if inline_position.abs() <= f32::EPSILON && !glyphs.is_empty() && is_mark_only_cluster(&run.text)
-  {
+  if inline_position.abs() <= f32::EPSILON && !glyphs.is_empty() && mark_only {
     // HarfBuzz gives combining marks zero advance because they normally attach to a base glyph.
     // When the entire run is marks (e.g. standalone Arabic diacritics), that would collapse the
     // run to zero width and allow higher-level layout to drop it entirely. Ensure mark-only runs
@@ -4570,6 +4596,44 @@ mod tests {
       "bidi controls should not change advance ({} vs {})",
       clean_adv,
       iso_adv
+    );
+  }
+
+  #[test]
+  fn combining_marks_do_not_force_last_resort_fallback_or_render_notdef() {
+    let style = ComputedStyle::default();
+    let ctx = FontContext::with_config(FontConfig::bundled_only());
+    assert!(
+      !ctx.database().is_empty(),
+      "bundled font context should load deterministic fonts for tests"
+    );
+
+    let pipeline = ShapingPipeline::new();
+    let text = "中\u{1AB0}";
+    let combining_offset = text
+      .char_indices()
+      .nth(1)
+      .expect("string should contain two chars")
+      .0;
+
+    let shaped = pipeline.shape(text, &style, &ctx).expect("shape succeeds");
+    assert!(!shaped.is_empty(), "shaping should produce at least one run");
+
+    let base_has_glyph = shaped.iter().flat_map(|run| run.glyphs.iter()).any(|glyph| {
+      glyph.cluster == 0 && glyph.glyph_id != 0
+    });
+    assert!(
+      base_has_glyph,
+      "base character should render with a real glyph even when followed by an unsupported combining mark"
+    );
+
+    let has_notdef_for_mark = shaped
+      .iter()
+      .flat_map(|run| run.glyphs.iter())
+      .any(|glyph| glyph.cluster as usize == combining_offset && glyph.glyph_id == 0);
+    assert!(
+      !has_notdef_for_mark,
+      "unsupported combining marks should not emit .notdef glyphs"
     );
   }
 
