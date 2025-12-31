@@ -23,7 +23,8 @@ mod disk_cache_main {
   };
   use fastrender::pageset::{cache_html_path, pageset_entries, PagesetEntry, PagesetFilter};
   use fastrender::resource::{
-    DiskCachingFetcher, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT,
+    CachingFetcherConfig, DiskCachingFetcher, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE,
+    DEFAULT_USER_AGENT,
   };
   use fastrender::style::media::MediaType;
   use rayon::prelude::*;
@@ -32,7 +33,7 @@ mod disk_cache_main {
   use std::path::PathBuf;
   use std::sync::Arc;
 
-  use crate::common::args::{parse_shard, TimeoutArgs};
+  use crate::common::args::{parse_shard, DiskCacheArgs, TimeoutArgs};
   use crate::common::render_pipeline::{build_http_fetcher, read_cached_document};
 
   const DEFAULT_ASSET_DIR: &str = "fetches/assets";
@@ -46,6 +47,9 @@ mod disk_cache_main {
 
     #[command(flatten)]
     timeout: TimeoutArgs,
+
+    #[command(flatten)]
+    disk_cache: DiskCacheArgs,
 
     /// Prefetch font URLs referenced by fetched CSS (true/false)
     #[arg(
@@ -330,8 +334,15 @@ mod disk_cache_main {
     }
 
     let http = build_http_fetcher(DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE, timeout_secs);
-    let fetcher: Arc<dyn ResourceFetcher> =
-      Arc::new(DiskCachingFetcher::new(http, args.cache_dir.clone()));
+    let fetcher: Arc<dyn ResourceFetcher> = Arc::new(DiskCachingFetcher::with_configs(
+      http,
+      args.cache_dir.clone(),
+      CachingFetcherConfig {
+        honor_http_cache_freshness: true,
+        ..CachingFetcherConfig::default()
+      },
+      args.disk_cache.to_config(),
+    ));
 
     println!(
       "Prefetching assets for {} page(s) ({} parallel, {}s timeout, fonts={})...",
@@ -344,6 +355,15 @@ mod disk_cache_main {
       println!("Shard: {}/{}", index, total);
     }
     println!("Cache dir: {}", args.cache_dir.display());
+    let max_age = if args.disk_cache.max_age_secs == 0 {
+      "none".to_string()
+    } else {
+      format!("{}s", args.disk_cache.max_age_secs)
+    };
+    println!(
+      "Disk cache: max_bytes={} max_age={}",
+      args.disk_cache.max_bytes, max_age
+    );
     println!();
 
     let pool = ThreadPoolBuilder::new()
