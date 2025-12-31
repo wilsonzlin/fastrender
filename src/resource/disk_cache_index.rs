@@ -241,10 +241,10 @@ impl DiskCacheIndex {
     };
     let len = meta.len();
     if len < state.journal_len {
-      return Err(std::io::Error::new(
-        std::io::ErrorKind::Other,
-        "index truncated",
-      ));
+      self.reset_for_replay(state);
+      self.replay_from_offset(state, 0)?;
+      state.loaded = true;
+      return Ok(());
     }
     if len > state.journal_len {
       self.replay_from_offset(state, state.journal_len)?;
@@ -285,8 +285,13 @@ impl DiskCacheIndex {
       state.loaded = true;
       state.journal_len = end_offset;
       Ok(())
-    } else {
+    } else if actual_start > start_offset {
       self.replay_from_offset(state, start_offset)?;
+      state.loaded = true;
+      Ok(())
+    } else {
+      self.reset_for_replay(state);
+      self.replay_from_offset(state, 0)?;
       state.loaded = true;
       Ok(())
     }
@@ -589,8 +594,13 @@ impl DiskCacheIndex {
       state.loaded = true;
       state.journal_len = end_offset;
       Ok(())
-    } else {
+    } else if actual_start > expected_start {
       self.replay_from_offset(state, start_offset)?;
+      state.loaded = true;
+      Ok(())
+    } else {
+      self.reset_for_replay(state);
+      self.replay_from_offset(state, 0)?;
       state.loaded = true;
       Ok(())
     }
@@ -644,6 +654,16 @@ impl DiskCacheIndex {
       );
     }
     Ok(state.journal_append.as_mut().expect("just set"))
+  }
+
+  fn reset_for_replay(&self, state: &mut IndexState) {
+    state.entries.clear();
+    state.order.clear();
+    state.total_bytes = 0;
+    state.journal_len = 0;
+    state.journal_append = None;
+    state.next_order = 0;
+    state.loaded = false;
   }
 }
 
