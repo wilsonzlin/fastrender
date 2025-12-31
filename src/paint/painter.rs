@@ -10841,6 +10841,11 @@ pub fn paint_tree_display_list_with_resources_scaled_offset_depth(
       diag.image_pixmap_cache_hits += report.image_pixmap_cache_hits;
       diag.image_pixmap_cache_misses += report.image_pixmap_cache_misses;
       diag.image_pixmap_ms += report.image_pixmap_ms;
+      diag.clip_mask_calls += report.clip_mask_calls;
+      diag.clip_mask_ms += report.clip_mask_ms;
+      diag.clip_mask_pixels += report.clip_mask_pixels;
+      diag.layer_allocations += report.layer_allocations;
+      diag.layer_alloc_bytes += report.layer_alloc_bytes;
       diag.parallel_tasks += report.parallel_tasks;
       diag.parallel_threads = diag.parallel_threads.max(report.parallel_threads);
       diag.parallel_ms += report.parallel_duration.as_secs_f64() * 1000.0;

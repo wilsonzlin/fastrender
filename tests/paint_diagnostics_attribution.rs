@@ -140,6 +140,22 @@ fn paint_diagnostics_include_attribution_counters() {
     dl_paint.image_pixmap_ms.unwrap_or(0.0) > 0.0,
     "expected image pixmap ms in display list renderer"
   );
+  assert!(
+    dl_paint.clip_mask_calls.unwrap_or(0) > 0,
+    "expected clip mask calls in display list renderer"
+  );
+  assert!(
+    dl_paint.clip_mask_pixels.unwrap_or(0) > 0,
+    "expected clip mask pixel accounting in display list renderer"
+  );
+  assert!(
+    dl_paint.layer_allocations.unwrap_or(0) > 0,
+    "expected layer allocations in display list renderer"
+  );
+  assert!(
+    dl_paint.layer_alloc_bytes.unwrap_or(0) > 0,
+    "expected layer allocation bytes in display list renderer"
+  );
 
   restore_backend(prev_backend);
 }

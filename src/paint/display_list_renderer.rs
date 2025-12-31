@@ -861,7 +861,12 @@ fn apply_backdrop_filters(
   Ok(())
 }
 
-fn apply_clip_mask_rect(pixmap: &mut Pixmap, rect: Rect, radii: BorderRadii) {
+fn apply_clip_mask_rect(
+  pixmap: &mut Pixmap,
+  rect: Rect,
+  radii: BorderRadii,
+  diagnostics: Option<&Arc<ClipMaskDiagnostics>>,
+) {
   if rect.width() <= 0.0 || rect.height() <= 0.0 {
     return;
   }
@@ -872,9 +877,22 @@ fn apply_clip_mask_rect(pixmap: &mut Pixmap, rect: Rect, radii: BorderRadii) {
     return;
   }
 
+  let timer = diagnostics.map(|_| Instant::now());
+  let pixels = diagnostics
+    .map(|_| u64::from(width).saturating_mul(u64::from(height)))
+    .unwrap_or(0);
+  let record = |timer: Option<Instant>| {
+    if let (Some(diag), Some(start)) = (diagnostics, timer) {
+      diag.record(pixels, start.elapsed());
+    }
+  };
+
   let mut mask_pixmap = match new_pixmap(width, height) {
     Some(p) => p,
-    None => return,
+    None => {
+      record(timer);
+      return;
+    }
   };
   let clamped = radii.clamped(rect.width(), rect.height());
   let _ = fill_rounded_rect(
@@ -908,6 +926,7 @@ fn apply_clip_mask_rect(pixmap: &mut Pixmap, rect: Rect, radii: BorderRadii) {
       }
     }
   }
+  record(timer);
 }
 
 fn rect_int_bounds(rect: &Rect) -> (i32, i32, i32, i32) {
@@ -1411,6 +1430,16 @@ pub struct RenderReport {
   pub image_pixmap_cache_misses: u64,
   /// Time spent converting image buffers into pixmaps during paint.
   pub image_pixmap_ms: f64,
+  /// Clip mask operations performed during paint.
+  pub clip_mask_calls: u64,
+  /// Time spent building/applying clip masks during paint.
+  pub clip_mask_ms: f64,
+  /// Total pixels covered by clip masks during paint (counts mask buffer pixels).
+  pub clip_mask_pixels: u64,
+  /// Offscreen layer pixmap allocations during paint (stacking contexts, opacity, shadows).
+  pub layer_allocations: u64,
+  /// Total bytes allocated for offscreen layers during paint.
+  pub layer_alloc_bytes: u64,
   /// Number of parallel tasks spawned during rasterization.
   pub parallel_tasks: usize,
   /// Unique threads observed while painting.
@@ -1464,6 +1493,78 @@ impl ImagePixmapDiagnostics {
 impl ImagePixmapSnapshot {
   fn millis(self) -> f64 {
     self.nanos as f64 / 1_000_000.0
+  }
+}
+
+#[derive(Default)]
+struct ClipMaskDiagnostics {
+  calls: AtomicU64,
+  pixels: AtomicU64,
+  nanos: AtomicU64,
+}
+
+#[derive(Clone, Copy, Default)]
+struct ClipMaskSnapshot {
+  calls: u64,
+  pixels: u64,
+  nanos: u64,
+}
+
+impl ClipMaskDiagnostics {
+  #[inline]
+  fn record(&self, pixels: u64, duration: Duration) {
+    self.calls.fetch_add(1, Ordering::Relaxed);
+    if pixels > 0 {
+      self.pixels.fetch_add(pixels, Ordering::Relaxed);
+    }
+    let nanos = duration.as_nanos().min(u128::from(u64::MAX)) as u64;
+    self.nanos.fetch_add(nanos, Ordering::Relaxed);
+  }
+
+  fn snapshot(&self) -> ClipMaskSnapshot {
+    ClipMaskSnapshot {
+      calls: self.calls.load(Ordering::Relaxed),
+      pixels: self.pixels.load(Ordering::Relaxed),
+      nanos: self.nanos.load(Ordering::Relaxed),
+    }
+  }
+}
+
+impl ClipMaskSnapshot {
+  fn millis(self) -> f64 {
+    self.nanos as f64 / 1_000_000.0
+  }
+}
+
+#[derive(Default)]
+struct LayerAllocationDiagnostics {
+  allocations: AtomicU64,
+  bytes: AtomicU64,
+}
+
+#[derive(Clone, Copy, Default)]
+struct LayerAllocationSnapshot {
+  allocations: u64,
+  bytes: u64,
+}
+
+impl LayerAllocationDiagnostics {
+  #[inline]
+  fn record(&self, width: u32, height: u32) {
+    self.allocations.fetch_add(1, Ordering::Relaxed);
+    let bytes = u64::from(width)
+      .saturating_mul(u64::from(height))
+      .saturating_mul(4);
+    if bytes > 0 {
+      self.bytes.fetch_add(bytes, Ordering::Relaxed);
+    }
+  }
+
+  fn snapshot(&self) -> LayerAllocationSnapshot {
+    LayerAllocationSnapshot {
+      allocations: self.allocations.load(Ordering::Relaxed),
+      bytes: self.bytes.load(Ordering::Relaxed),
+    }
   }
 }
 
@@ -1532,6 +1633,8 @@ pub struct DisplayListRenderer {
   #[cfg(test)]
   image_cache_misses: Arc<AtomicUsize>,
   image_pixmap_diagnostics: Option<Arc<ImagePixmapDiagnostics>>,
+  clip_mask_diagnostics: Option<Arc<ClipMaskDiagnostics>>,
+  layer_alloc_diagnostics: Option<Arc<LayerAllocationDiagnostics>>,
   warp_cache: WarpCache,
   blur_cache: BlurCache,
   gradient_cache: GradientLutCache,
@@ -2133,6 +2236,9 @@ impl DisplayListRenderer {
       image_cache_misses: Arc::new(AtomicUsize::new(0)),
       image_pixmap_diagnostics: diagnostics_enabled
         .then(|| Arc::new(ImagePixmapDiagnostics::default())),
+      clip_mask_diagnostics: diagnostics_enabled.then(|| Arc::new(ClipMaskDiagnostics::default())),
+      layer_alloc_diagnostics: diagnostics_enabled
+        .then(|| Arc::new(LayerAllocationDiagnostics::default())),
       warp_cache: WarpCache::new(WARP_CACHE_CAPACITY),
       blur_cache: BlurCache::default(),
       gradient_cache: GradientLutCache::default(),
@@ -2145,6 +2251,13 @@ impl DisplayListRenderer {
   fn record_gradient_usage(&mut self, pixels: u64, start: Instant) {
     if self.diagnostics_enabled {
       self.gradient_stats.record(pixels, start.elapsed());
+    }
+  }
+
+  #[inline]
+  fn record_layer_allocation(&self, width: u32, height: u32) {
+    if let Some(diag) = self.layer_alloc_diagnostics.as_ref() {
+      diag.record(width, height);
     }
   }
 
@@ -3693,6 +3806,16 @@ impl DisplayListRenderer {
         .as_ref()
         .map(|d| d.snapshot())
         .unwrap_or_default();
+      let clip_stats = self
+        .clip_mask_diagnostics
+        .as_ref()
+        .map(|d| d.snapshot())
+        .unwrap_or_default();
+      let layer_stats = self
+        .layer_alloc_diagnostics
+        .as_ref()
+        .map(|d| d.snapshot())
+        .unwrap_or_default();
       return Ok(RenderReport {
         pixmap,
         parallel_used: true,
@@ -3703,6 +3826,11 @@ impl DisplayListRenderer {
         image_pixmap_cache_hits: image_stats.hits,
         image_pixmap_cache_misses: image_stats.misses,
         image_pixmap_ms: image_stats.millis(),
+        clip_mask_calls: clip_stats.calls,
+        clip_mask_ms: clip_stats.millis(),
+        clip_mask_pixels: clip_stats.pixels,
+        layer_allocations: layer_stats.allocations,
+        layer_alloc_bytes: layer_stats.bytes,
         parallel_tasks: tiles,
         parallel_threads: threads_used,
         parallel_duration,
@@ -3717,6 +3845,16 @@ impl DisplayListRenderer {
       .as_ref()
       .map(|d| d.snapshot())
       .unwrap_or_default();
+    let clip_stats = self
+      .clip_mask_diagnostics
+      .as_ref()
+      .map(|d| d.snapshot())
+      .unwrap_or_default();
+    let layer_stats = self
+      .layer_alloc_diagnostics
+      .as_ref()
+      .map(|d| d.snapshot())
+      .unwrap_or_default();
     Ok(RenderReport {
       pixmap: self.canvas.into_pixmap(),
       parallel_used: false,
@@ -3727,6 +3865,11 @@ impl DisplayListRenderer {
       image_pixmap_cache_hits: image_stats.hits,
       image_pixmap_cache_misses: image_stats.misses,
       image_pixmap_ms: image_stats.millis(),
+      clip_mask_calls: clip_stats.calls,
+      clip_mask_ms: clip_stats.millis(),
+      clip_mask_pixels: clip_stats.pixels,
+      layer_allocations: layer_stats.allocations,
+      layer_alloc_bytes: layer_stats.bytes,
       parallel_tasks: 0,
       parallel_threads: 1,
       parallel_duration: Duration::ZERO,
@@ -4018,6 +4161,8 @@ impl DisplayListRenderer {
           renderer.gradient_cache = self.gradient_cache.clone();
           renderer.diagnostics_enabled = self.diagnostics_enabled;
           renderer.image_pixmap_diagnostics = self.image_pixmap_diagnostics.clone();
+          renderer.clip_mask_diagnostics = self.clip_mask_diagnostics.clone();
+          renderer.layer_alloc_diagnostics = self.layer_alloc_diagnostics.clone();
           if work.render_x > 0 || work.render_y > 0 {
             renderer
               .canvas
@@ -4195,6 +4340,8 @@ impl DisplayListRenderer {
     renderer.gradient_cache = self.gradient_cache.clone();
     renderer.diagnostics_enabled = self.diagnostics_enabled;
     renderer.image_pixmap_diagnostics = self.image_pixmap_diagnostics.clone();
+    renderer.clip_mask_diagnostics = self.clip_mask_diagnostics.clone();
+    renderer.layer_alloc_diagnostics = self.layer_alloc_diagnostics.clone();
     let report = renderer.render_with_report(&list)?;
     self.gradient_stats.merge(&report.gradient_stats);
     Ok(Some(report.pixmap))
@@ -4681,6 +4828,7 @@ impl DisplayListRenderer {
               self.canvas.push_layer_with_blend(1.0, Some(blend))?;
             }
           }
+          self.record_layer_allocation(self.canvas.width(), self.canvas.height());
           if projective_transform.is_some() {
             self.canvas.clear_clip();
           }
@@ -4793,7 +4941,12 @@ impl DisplayListRenderer {
               record.mask_bounds.height() + out_t + out_b,
             );
             if let Some(local_clip) = self.layer_space_bounds(clip_rect, origin, &layer) {
-              apply_clip_mask_rect(&mut layer, local_clip, record.radii);
+              apply_clip_mask_rect(
+                &mut layer,
+                local_clip,
+                record.radii,
+                self.clip_mask_diagnostics.as_ref(),
+              );
             }
           }
 
@@ -4922,6 +5075,7 @@ impl DisplayListRenderer {
       DisplayItem::PopClip => self.pop_clip(),
       DisplayItem::PushOpacity(OpacityItem { opacity }) => {
         self.canvas.push_layer(*opacity)?;
+        self.record_layer_allocation(self.canvas.width(), self.canvas.height());
       }
       DisplayItem::PopOpacity => {
         self.canvas.pop_layer()?;
@@ -4942,11 +5096,13 @@ impl DisplayListRenderer {
       DisplayItem::PushBlendMode(mode) => {
         if is_manual_blend(mode.mode) {
           self.canvas.push_layer(1.0)?;
+          self.record_layer_allocation(self.canvas.width(), self.canvas.height());
           self.blend_stack.push(Some(mode.mode));
         } else {
           self
             .canvas
             .push_layer_with_blend(1.0, Some(map_blend_mode(mode.mode)))?;
+          self.record_layer_allocation(self.canvas.width(), self.canvas.height());
           self.blend_stack.push(None);
         }
       }
@@ -5402,6 +5558,7 @@ impl DisplayListRenderer {
       let Some(mut shadow_pixmap) = new_pixmap(shadow_width, shadow_height) else {
         continue;
       };
+      self.record_layer_allocation(shadow_width, shadow_height);
 
       let mut paint = tiny_skia::Paint::default();
       let alpha = (shadow.color.a * opacity).clamp(0.0, 1.0);
@@ -5816,6 +5973,12 @@ impl DisplayListRenderer {
   }
 
   fn push_clip(&mut self, clip: &ClipItem) {
+    let diag = self.clip_mask_diagnostics.as_ref();
+    let timer = diag.map(|_| Instant::now());
+    let pixels = diag
+      .map(|_| u64::from(self.canvas.width()).saturating_mul(u64::from(self.canvas.height())))
+      .unwrap_or(0);
+
     self.canvas.save();
     match &clip.shape {
       ClipShape::Rect { rect, radii } => {
@@ -5825,6 +5988,10 @@ impl DisplayListRenderer {
       ClipShape::Path { path } => {
         self.canvas.set_clip_path(path, self.scale);
       }
+    }
+
+    if let (Some(diag), Some(start)) = (diag, timer) {
+      diag.record(pixels, start.elapsed());
     }
   }
 
