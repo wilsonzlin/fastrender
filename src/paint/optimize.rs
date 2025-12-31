@@ -42,25 +42,6 @@ use crate::render_control::{check_active, check_active_periodic};
 
 const DEADLINE_STRIDE: usize = 256;
 
-fn retain_by_sorted_indices(items: &mut Vec<DisplayItem>, indices: &[usize]) {
-  debug_assert!(
-    indices.windows(2).all(|window| window[0] < window[1]),
-    "indices must be strictly increasing"
-  );
-
-  let mut keep_iter = indices.iter().copied();
-  let mut next_keep = keep_iter.next();
-  let mut current = 0usize;
-  items.retain(|_| {
-    let keep = next_keep == Some(current);
-    if keep {
-      next_keep = keep_iter.next();
-    }
-    current += 1;
-    keep
-  });
-}
-
 // ============================================================================
 // Optimization Configuration
 // ============================================================================
@@ -213,10 +194,7 @@ impl DisplayListOptimizer {
     let original_count = list.len();
     check_active(RenderStage::Paint).map_err(Error::Render)?;
 
-    // Clone display items so we can apply in-place optimization passes (fill merging and retention)
-    // without mutating the input list. This also ensures callers can fall back to the original
-    // list on timeout.
-    let mut items: Vec<DisplayItem> = list.items().to_vec();
+    let items = list.items();
     let mut indices: Vec<usize> = (0..items.len()).collect();
     let mut scratch_indices: Vec<usize> = Vec::with_capacity(indices.len());
     let mut stats = OptimizationStats {
@@ -271,29 +249,53 @@ impl DisplayListOptimizer {
       stats.culled_count = before - indices.len();
     }
 
-    // Pass 4: Merge adjacent fills
+    let tail = self
+      .balance_stack_tail(items, &indices)
+      .map_err(Error::Render)?;
+    let mut out = Vec::with_capacity(indices.len() + tail.len());
+
     if self.config.enable_fill_merging {
-      let before = indices.len();
-      self
-        .merge_adjacent_fills_indices_checked(
-          &mut items,
-          &indices,
-          &mut scratch_indices,
-          &mut deadline_counter,
-        )
-        .map_err(Error::Render)?;
-      std::mem::swap(&mut indices, &mut scratch_indices);
-      stats.merged_count = before - indices.len();
+      let mut pending_fill: Option<FillRectItem> = None;
+      for &idx in &indices {
+        check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)
+          .map_err(Error::Render)?;
+        match &items[idx] {
+          DisplayItem::FillRect(fill) => {
+            if let Some(prev) = pending_fill.take() {
+              if let Some(merged) = Self::try_merge_fills(&prev, fill) {
+                pending_fill = Some(merged);
+                stats.merged_count += 1;
+              } else {
+                out.push(DisplayItem::FillRect(prev));
+                pending_fill = Some(fill.clone());
+              }
+            } else {
+              pending_fill = Some(fill.clone());
+            }
+          }
+          other => {
+            if let Some(prev) = pending_fill.take() {
+              out.push(DisplayItem::FillRect(prev));
+            }
+            out.push(other.clone());
+          }
+        }
+      }
+      if let Some(prev) = pending_fill.take() {
+        out.push(DisplayItem::FillRect(prev));
+      }
+    } else {
+      for &idx in &indices {
+        check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)
+          .map_err(Error::Render)?;
+        out.push(items[idx].clone());
+      }
     }
 
-    let tail = self
-      .balance_stack_tail(&items, &indices)
-      .map_err(Error::Render)?;
-    retain_by_sorted_indices(&mut items, &indices);
-    items.extend(tail);
+    out.extend(tail);
 
-    stats.final_count = items.len();
-    Ok((DisplayList::from_items(items), stats))
+    stats.final_count = out.len();
+    Ok((DisplayList::from_items(out), stats))
   }
 
   /// Extract only the items that intersect the viewport while preserving stack
@@ -895,63 +897,6 @@ impl DisplayListOptimizer {
     }
 
     Ok(tail)
-  }
-
-  fn merge_adjacent_fills_indices_checked(
-    &self,
-    items: &mut [DisplayItem],
-    indices: &[usize],
-    out: &mut Vec<usize>,
-    counter: &mut usize,
-  ) -> std::result::Result<(), RenderError> {
-    out.clear();
-    out.reserve(indices.len());
-
-    if indices.len() < 2 {
-      out.extend(indices.iter().copied());
-      return Ok(());
-    }
-
-    let mut pending_fill: Option<usize> = None;
-
-    for &idx in indices {
-      check_active_periodic(counter, DEADLINE_STRIDE, RenderStage::Paint)?;
-
-      match &items[idx] {
-        DisplayItem::FillRect(_) => {
-          let current = match &items[idx] {
-            DisplayItem::FillRect(item) => item.clone(),
-            _ => unreachable!(),
-          };
-
-          if let Some(prev_idx) = pending_fill {
-            let prev = match &items[prev_idx] {
-              DisplayItem::FillRect(item) => item.clone(),
-              _ => unreachable!(),
-            };
-            if let Some(merged) = Self::try_merge_fills(&prev, &current) {
-              items[prev_idx] = DisplayItem::FillRect(merged);
-              continue;
-            }
-            out.push(prev_idx);
-          }
-
-          pending_fill = Some(idx);
-        }
-        _ => {
-          if let Some(prev_idx) = pending_fill.take() {
-            out.push(prev_idx);
-          }
-          out.push(idx);
-        }
-      }
-    }
-
-    if let Some(prev_idx) = pending_fill {
-      out.push(prev_idx);
-    }
-
-    Ok(())
   }
 
   fn item_bounds(&self, item: &DisplayItem) -> Option<Rect> {
