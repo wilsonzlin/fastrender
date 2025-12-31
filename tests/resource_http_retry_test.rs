@@ -150,6 +150,60 @@ fn http_fetch_retries_on_empty_body() {
 }
 
 #[test]
+fn http_fetch_retries_on_202_empty_body() {
+  let Some(listener) = try_bind_localhost("http_fetch_retries_on_202_empty_body") else {
+    return;
+  };
+  let addr = listener.local_addr().unwrap();
+  let handle = spawn_server(listener, 2, move |count, _req, stream| match count {
+    1 => {
+      let response = "HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+      let _ = stream.write_all(response.as_bytes());
+    }
+    _ => {
+      let body = b"ready";
+      let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+      );
+      let _ = stream.write_all(response.as_bytes());
+      let _ = stream.write_all(body);
+    }
+  });
+
+  let fetcher = fast_retry_fetcher();
+  let url = format!("http://{addr}/accepted");
+  let res = fetcher
+    .fetch(&url)
+    .expect("fetch should retry 202 empty body");
+  assert_eq!(res.bytes, b"ready");
+
+  handle.join().unwrap();
+}
+
+#[test]
+fn http_fetch_empty_body_error_mentions_attempts() {
+  let Some(listener) = try_bind_localhost("http_fetch_empty_body_error_mentions_attempts") else {
+    return;
+  };
+  let addr = listener.local_addr().unwrap();
+  let handle = spawn_server(listener, 2, move |_count, _req, stream| {
+    let response = "HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    let _ = stream.write_all(response.as_bytes());
+  });
+
+  let fetcher = fast_retry_fetcher();
+  let url = format!("http://{addr}/accepted");
+  let err = fetcher.fetch(&url).expect_err("fetch should fail after retries");
+  assert!(
+    err.to_string().contains("attempt 2/2"),
+    "error should include attempt info: {err}"
+  );
+
+  handle.join().unwrap();
+}
+
+#[test]
 fn http_fetch_retries_on_timeout() {
   let Some(listener) = try_bind_localhost("http_fetch_retries_on_timeout") else {
     return;

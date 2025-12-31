@@ -40,6 +40,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Condvar;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::thread;
 use std::time::Duration;
 use std::time::SystemTime;
@@ -456,9 +457,9 @@ pub struct HttpRetryPolicy {
 impl Default for HttpRetryPolicy {
   fn default() -> Self {
     Self {
-      max_attempts: 3,
-      backoff_base: Duration::from_millis(50),
-      backoff_cap: Duration::from_millis(500),
+      max_attempts: 6,
+      backoff_base: Duration::from_millis(200),
+      backoff_cap: Duration::from_secs(2),
       respect_retry_after: true,
     }
   }
@@ -474,6 +475,45 @@ fn is_transient_http_status(status: u16) -> bool {
 
 fn http_status_allows_empty_body(status: u16) -> bool {
   matches!(status, 204 | 205 | 304) || (100..200).contains(&status)
+}
+
+fn http_retry_logging_enabled() -> bool {
+  static ENABLED: OnceLock<bool> = OnceLock::new();
+  *ENABLED.get_or_init(|| {
+    std::env::var("FASTR_HTTP_LOG_RETRIES")
+      .ok()
+      .map(|raw| {
+        !matches!(
+          raw.trim().to_ascii_lowercase().as_str(),
+          "0" | "false" | "no" | "off"
+        )
+      })
+      .unwrap_or(false)
+  })
+}
+
+fn log_http_retry(
+  reason: &str,
+  attempt: usize,
+  max_attempts: usize,
+  url: &str,
+  backoff: Duration,
+) {
+  if !http_retry_logging_enabled() {
+    return;
+  }
+  eprintln!(
+    "http retry {attempt}/{max_attempts} {url}: {reason} (sleep {}ms)",
+    backoff.as_millis()
+  );
+}
+
+fn format_attempt_suffix(attempt: usize, max_attempts: usize) -> String {
+  if max_attempts <= 1 {
+    String::new()
+  } else {
+    format!(" (attempt {attempt}/{max_attempts})")
+  }
 }
 
 fn parse_retry_after(headers: &HeaderMap) -> Option<Duration> {
@@ -1356,6 +1396,7 @@ impl HttpFetcher {
         self.policy.ensure_url_allowed(&current)?;
         let allowed_limit = self.policy.allowed_response_limit()?;
         let per_request_timeout = self.deadline_aware_timeout(deadline.as_ref(), &current)?;
+        let effective_timeout = per_request_timeout.unwrap_or(self.policy.request_timeout);
 
         let accept_encoding_value = accept_encoding.unwrap_or(SUPPORTED_ACCEPT_ENCODING);
         let mut request = agent
@@ -1365,8 +1406,8 @@ impl HttpFetcher {
           .header("Accept-Language", &self.accept_language)
           .header("Accept-Encoding", accept_encoding_value);
 
-        if let Some(timeout) = per_request_timeout {
-          request = request.config().timeout_global(Some(timeout)).build();
+        if !effective_timeout.is_zero() {
+          request = request.config().timeout_global(Some(effective_timeout)).build();
         }
 
         if let Some(v) = validators {
@@ -1398,6 +1439,8 @@ impl HttpFetcher {
                 }
               }
               if can_retry {
+                let reason = err.to_string();
+                log_http_retry(&reason, attempt, max_attempts, &current, backoff);
                 if !backoff.is_zero() {
                   thread::sleep(backoff);
                 }
@@ -1405,7 +1448,24 @@ impl HttpFetcher {
               }
             }
 
-            let err = ResourceError::new(current.clone(), err.to_string())
+            let overall_timeout = deadline.as_ref().and_then(|d| d.timeout_limit());
+            let mut message = err.to_string();
+            let lower = message.to_ascii_lowercase();
+            if lower.contains("timeout") || lower.contains("timed out") {
+              if let Some(overall) = overall_timeout {
+                message.push_str(&format!(
+                  " (attempt {attempt}/{max_attempts}, per_attempt_timeout={effective_timeout:?}, overall_timeout={overall:?})"
+                ));
+              } else {
+                message.push_str(&format!(
+                  " (attempt {attempt}/{max_attempts}, per_attempt_timeout={effective_timeout:?})"
+                ));
+              }
+            } else {
+              message.push_str(&format_attempt_suffix(attempt, max_attempts));
+            }
+
+            let err = ResourceError::new(current.clone(), message)
               .with_final_url(current.clone())
               .with_source(err);
             return Err(Error::Resource(err));
@@ -1483,16 +1543,61 @@ impl HttpFetcher {
                 }
               };
 
-            if bytes.is_empty()
-              && !http_status_allows_empty_body(status_code)
-              && !retryable_http_status(status_code)
-            {
-              if attempt < max_attempts {
+            let is_retryable_status = retryable_http_status(status_code);
+
+            if bytes.is_empty() && !http_status_allows_empty_body(status_code) {
+              let mut can_retry = attempt < max_attempts;
+              if can_retry {
                 let mut backoff = compute_backoff(&self.retry_policy, attempt, &current);
                 if let Some(retry_after) = retry_after {
                   backoff = backoff.max(retry_after);
                 }
-                let mut can_retry = true;
+
+                if let Some(deadline) = deadline.as_ref() {
+                  if deadline.timeout_limit().is_some() {
+                    match deadline.remaining_timeout() {
+                      Some(remaining) if !remaining.is_zero() => {
+                        let max_sleep = remaining.saturating_sub(Duration::from_millis(1));
+                        backoff = backoff.min(max_sleep);
+                      }
+                      _ => can_retry = false,
+                    }
+                  }
+                }
+
+                if can_retry {
+                  log_http_retry(
+                    &format!("empty body (status {status_code})"),
+                    attempt,
+                    max_attempts,
+                    &current,
+                    backoff,
+                  );
+                  if !backoff.is_zero() {
+                    thread::sleep(backoff);
+                  }
+                  continue;
+                }
+              }
+
+              let mut message = "empty HTTP response body".to_string();
+              if attempt < max_attempts {
+                message.push_str(" (retry aborted: render deadline exceeded)");
+              }
+              message.push_str(&format_attempt_suffix(attempt, max_attempts));
+              let err = ResourceError::new(current.clone(), message)
+                .with_status(status_code)
+                .with_final_url(final_url.clone());
+              return Err(Error::Resource(err));
+            }
+
+            if is_retryable_status {
+              let mut can_retry = attempt < max_attempts;
+              if can_retry {
+                let mut backoff = compute_backoff(&self.retry_policy, attempt, &current);
+                if let Some(retry_after) = retry_after {
+                  backoff = backoff.max(retry_after);
+                }
                 if let Some(deadline) = deadline.as_ref() {
                   if deadline.timeout_limit().is_some() {
                     match deadline.remaining_timeout() {
@@ -1505,6 +1610,13 @@ impl HttpFetcher {
                   }
                 }
                 if can_retry {
+                  log_http_retry(
+                    &format!("status {status_code}"),
+                    attempt,
+                    max_attempts,
+                    &current,
+                    backoff,
+                  );
                   if !backoff.is_zero() {
                     thread::sleep(backoff);
                   }
@@ -1512,35 +1624,16 @@ impl HttpFetcher {
                 }
               }
 
-              let err = ResourceError::new(current.clone(), "empty HTTP response body")
+              let mut message = if attempt < max_attempts {
+                "retryable HTTP status (retry aborted: render deadline exceeded)".to_string()
+              } else {
+                "retryable HTTP status (retries exhausted)".to_string()
+              };
+              message.push_str(&format_attempt_suffix(attempt, max_attempts));
+              let err = ResourceError::new(current.clone(), message)
                 .with_status(status_code)
                 .with_final_url(final_url.clone());
               return Err(Error::Resource(err));
-            }
-
-            if retryable_http_status(status_code) && attempt < max_attempts {
-              let mut backoff = compute_backoff(&self.retry_policy, attempt, &current);
-              if let Some(retry_after) = retry_after {
-                backoff = backoff.max(retry_after);
-              }
-              let mut can_retry = true;
-              if let Some(deadline) = deadline.as_ref() {
-                if deadline.timeout_limit().is_some() {
-                  match deadline.remaining_timeout() {
-                    Some(remaining) if !remaining.is_zero() => {
-                      let max_sleep = remaining.saturating_sub(Duration::from_millis(1));
-                      backoff = backoff.min(max_sleep);
-                    }
-                    _ => can_retry = false,
-                  }
-                }
-              }
-              if can_retry {
-                if !backoff.is_zero() {
-                  thread::sleep(backoff);
-                }
-                continue;
-              }
             }
 
             if bytes.len() > allowed_limit {
@@ -1598,6 +1691,8 @@ impl HttpFetcher {
                 }
               }
               if can_retry {
+                let reason = err.to_string();
+                log_http_retry(&reason, attempt, max_attempts, &current, backoff);
                 if !backoff.is_zero() {
                   thread::sleep(backoff);
                 }
@@ -1605,7 +1700,23 @@ impl HttpFetcher {
               }
             }
 
-            let err = ResourceError::new(current.clone(), err.to_string())
+            let overall_timeout = deadline.as_ref().and_then(|d| d.timeout_limit());
+            let mut message = err.to_string();
+            if err.kind() == io::ErrorKind::TimedOut {
+              if let Some(overall) = overall_timeout {
+                message.push_str(&format!(
+                  " (attempt {attempt}/{max_attempts}, per_attempt_timeout={effective_timeout:?}, overall_timeout={overall:?})"
+                ));
+              } else {
+                message.push_str(&format!(
+                  " (attempt {attempt}/{max_attempts}, per_attempt_timeout={effective_timeout:?})"
+                ));
+              }
+            } else {
+              message.push_str(&format_attempt_suffix(attempt, max_attempts));
+            }
+
+            let err = ResourceError::new(current.clone(), message)
               .with_status(status.as_u16())
               .with_final_url(final_url)
               .with_source(err);

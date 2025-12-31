@@ -25,7 +25,6 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::time::Duration;
 use url::Url;
 
 /// Fetch and cache HTML pages for testing
@@ -151,16 +150,21 @@ fn write_cached_html(
 
 fn fetch_page(
   url: &str,
-  timeout: Duration,
+  timeout_secs: Option<u64>,
   user_agent: &str,
   accept_language: &str,
 ) -> Result<FetchedResource, String> {
-  let fetcher = build_http_fetcher(user_agent, accept_language, Some(timeout.as_secs()));
+  let fetcher = build_http_fetcher(user_agent, accept_language, timeout_secs);
 
   let fetch = |target: &str| -> Result<(FetchedResource, String), String> {
     let mut res = fetcher.fetch(target).map_err(|e| e.to_string())?;
     if res.bytes.is_empty() {
-      return Err("empty response body".to_string());
+      let status = res
+        .status
+        .map(|code| code.to_string())
+        .unwrap_or_else(|| "<unknown>".to_string());
+      let final_url = res.final_url.clone().unwrap_or_else(|| target.to_string());
+      return Err(format!("empty response body (status {status}, final url {final_url})"));
     }
     let canonical_url = res.final_url.clone().unwrap_or_else(|| target.to_string());
     res.final_url.get_or_insert_with(|| canonical_url.clone());
@@ -254,14 +258,15 @@ fn main() {
     }
   }
 
-  let timeout_secs = args.timeout.seconds(Some(30)).unwrap_or(0);
-  let timeout = Duration::from_secs(timeout_secs);
+  let timeout_secs = args.timeout.seconds(Some(60));
+  let timeout_label = timeout_secs
+    .map(|secs| format!("{secs}s"))
+    .unwrap_or_else(|| "no timeout".to_string());
 
   println!(
-    "Fetching {} pages ({} parallel, {}s timeout)...",
+    "Fetching {} pages ({} parallel, timeout={timeout_label})...",
     selected.len(),
     args.jobs,
-    timeout_secs
   );
   println!("User-Agent: {}", args.user_agent);
   println!("Accept-Language: {}", args.accept_language);
@@ -309,7 +314,7 @@ fn main() {
         } else {
           None
         };
-        match fetch_page(&entry.url, timeout, &user_agent, &accept_language) {
+        match fetch_page(&entry.url, timeout_secs, &user_agent, &accept_language) {
           Ok(res) => {
             let canonical_url = res.final_url.as_deref().unwrap_or(&entry.url);
             if write_cached_html(
@@ -384,6 +389,7 @@ mod tests {
   use super::*;
   use fastrender::pageset::{pageset_stem, PAGESET_URLS};
   use std::collections::HashSet;
+  use std::time::Duration;
 
   fn try_bind_localhost(context: &str) -> Option<std::net::TcpListener> {
     match std::net::TcpListener::bind("127.0.0.1:0") {
