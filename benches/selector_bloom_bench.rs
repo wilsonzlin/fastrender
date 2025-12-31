@@ -3,6 +3,8 @@ use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::Criterion;
 use fastrender::css::parser::parse_stylesheet;
+use fastrender::dom::build_selector_bloom_store;
+use fastrender::dom::enumerate_dom_ids;
 use fastrender::dom::parse_html;
 use fastrender::dom::set_selector_bloom_enabled;
 use fastrender::style::cascade::apply_styles_with_media;
@@ -392,10 +394,77 @@ fn has_selector_summary_benchmark(c: &mut Criterion) {
   set_selector_bloom_enabled(true);
 }
 
+fn selector_bloom_lookup_benchmark(c: &mut Criterion) {
+  // Focused micro-benchmark: compare per-element bloom summary lookups using the dense
+  // node-id indexed store vs a legacy pointer-keyed HashMap.
+  let depth = 9;
+  let branching = 4;
+  let needle_stride = 29;
+
+  set_selector_bloom_enabled(true);
+  let html = build_has_tree_html(depth, branching, needle_stride);
+  let dom = parse_html(&html).expect("parse html");
+
+  let id_map = enumerate_dom_ids(&dom);
+  let store = build_selector_bloom_store(&dom, &id_map).expect("build selector bloom store");
+
+  // Collect stable traversal order of element nodes and construct a legacy HashMap to compare.
+  let mut elements: Vec<(usize, *const fastrender::dom::DomNode)> = Vec::new();
+  for (ptr, id) in id_map.iter() {
+    // Safety: pointers originate from the immutable DOM tree.
+    let node = unsafe { &**ptr };
+    if !node.is_element() {
+      continue;
+    }
+    elements.push((*id, *ptr));
+  }
+
+  elements.sort_unstable_by_key(|(id, _)| *id);
+  let mut node_ids: Vec<usize> = Vec::with_capacity(elements.len());
+  let mut node_ptrs: Vec<*const fastrender::dom::DomNode> = Vec::with_capacity(elements.len());
+  for (id, ptr) in elements.iter().copied() {
+    node_ids.push(id);
+    node_ptrs.push(ptr);
+  }
+
+  let mut legacy = std::collections::HashMap::with_capacity(node_ptrs.len());
+  for (id, ptr) in elements.iter().copied() {
+    if let Some(summary) = store.summary_for_id(id).copied() {
+      legacy.insert(ptr, summary);
+    }
+  }
+
+  let mut group = c.benchmark_group("selector_bloom_summary_lookup");
+  group.bench_function("dense_store_by_id", |b| {
+    b.iter(|| {
+      let mut acc = 0usize;
+      for id in node_ids.iter().copied() {
+        if let Some(summary) = store.summary_for_id(id) {
+          acc ^= std::ptr::from_ref(summary) as usize;
+        }
+      }
+      black_box(acc);
+    });
+  });
+  group.bench_function("hashmap_by_ptr", |b| {
+    b.iter(|| {
+      let mut acc = 0usize;
+      for node_ptr in node_ptrs.iter().copied() {
+        if let Some(summary) = legacy.get(&node_ptr) {
+          acc ^= std::ptr::from_ref(summary) as usize;
+        }
+      }
+      black_box(acc);
+    });
+  });
+  group.finish();
+}
+
 criterion_group!(
   benches,
   selector_bloom_benchmark,
   has_selector_bloom_benchmark,
-  has_selector_summary_benchmark
+  has_selector_summary_benchmark,
+  selector_bloom_lookup_benchmark
 );
 criterion_main!(benches);

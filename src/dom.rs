@@ -317,43 +317,6 @@ fn add_selector_bloom_hashes(node: &DomNode, add: &mut impl FnMut(u32)) {
   }
 }
 
-pub fn build_selector_bloom_map(root: &DomNode) -> Option<SelectorBloomMap> {
-  if !selector_bloom_enabled() {
-    return None;
-  }
-
-  fn walk(node: &DomNode, map: &mut SelectorBloomMap) -> SelectorBloomSummary {
-    let mut summary = SelectorBloomSummary::default();
-    if node.is_element() {
-      add_selector_bloom_hashes(node, &mut |hash| summary.insert_hash(hash));
-    }
-
-    for child in node.children.iter() {
-      let child_summary = if matches!(child.node_type, DomNodeType::ShadowRoot { .. }) {
-        walk(child, map);
-        None
-      } else {
-        Some(walk(child, map))
-      };
-      if node.is_element() {
-        if let Some(summary_child) = child_summary.as_ref() {
-          summary.merge(summary_child);
-        }
-      }
-    }
-
-    if node.is_element() {
-      map.insert(node as *const DomNode, summary.clone());
-    }
-
-    summary
-  }
-
-  let mut blooms: SelectorBloomMap = SelectorBloomMap::new();
-  walk(root, &mut blooms);
-  Some(blooms)
-}
-
 static HAS_EVALS: AtomicU64 = AtomicU64::new(0);
 static HAS_CACHE_HITS: AtomicU64 = AtomicU64::new(0);
 static HAS_PRUNES: AtomicU64 = AtomicU64::new(0);
@@ -396,7 +359,7 @@ pub fn capture_has_counters() -> HasCounters {
   }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SelectorBloomSummary {
   bits: [u64; SELECTOR_BLOOM_SUMMARY_WORDS],
 }
@@ -432,7 +395,114 @@ impl SelectorBloomSummary {
   }
 }
 
-pub type SelectorBloomMap = HashMap<*const DomNode, SelectorBloomSummary>;
+/// A dense, node-id indexed store of selector bloom summaries.
+///
+/// Contract: `node_id` comes from [`enumerate_dom_ids`] and starts at 1. Index 0 is unused.
+#[derive(Debug, Clone)]
+pub struct SelectorBloomStore {
+  summaries: Vec<SelectorBloomSummary>,
+}
+
+impl SelectorBloomStore {
+  pub fn summary_for_id(&self, node_id: usize) -> Option<&SelectorBloomSummary> {
+    if node_id == 0 {
+      return None;
+    }
+    self.summaries.get(node_id)
+  }
+}
+
+/// Build selector bloom summaries for each element node, indexed by `node_id`.
+pub fn build_selector_bloom_store(
+  root: &DomNode,
+  id_map: &HashMap<*const DomNode, usize>,
+) -> Option<SelectorBloomStore> {
+  if !selector_bloom_enabled() {
+    return None;
+  }
+
+  let mut summaries = vec![SelectorBloomSummary::default(); id_map.len() + 1];
+
+  fn walk(
+    node: &DomNode,
+    id_map: &HashMap<*const DomNode, usize>,
+    out: &mut [SelectorBloomSummary],
+  ) -> SelectorBloomSummary {
+    let is_element = node.is_element();
+    let mut summary = SelectorBloomSummary::default();
+    if is_element {
+      add_selector_bloom_hashes(node, &mut |hash| summary.insert_hash(hash));
+    }
+
+    for child in node.children.iter() {
+      let child_summary = if matches!(child.node_type, DomNodeType::ShadowRoot { .. }) {
+        walk(child, id_map, out);
+        None
+      } else {
+        Some(walk(child, id_map, out))
+      };
+      if is_element {
+        if let Some(summary_child) = child_summary.as_ref() {
+          summary.merge(summary_child);
+        }
+      }
+    }
+
+    if is_element {
+      if let Some(id) = id_map.get(&(node as *const DomNode)).copied() {
+        if id < out.len() {
+          out[id] = summary;
+        }
+      }
+    }
+
+    summary
+  }
+
+  walk(root, id_map, &mut summaries);
+  Some(SelectorBloomStore { summaries })
+}
+
+#[cfg(test)]
+type SelectorBloomMapLegacy = HashMap<*const DomNode, SelectorBloomSummary>;
+
+#[cfg(test)]
+fn build_selector_bloom_map_legacy(root: &DomNode) -> Option<SelectorBloomMapLegacy> {
+  if !selector_bloom_enabled() {
+    return None;
+  }
+
+  fn walk(node: &DomNode, map: &mut SelectorBloomMapLegacy) -> SelectorBloomSummary {
+    let mut summary = SelectorBloomSummary::default();
+    if node.is_element() {
+      add_selector_bloom_hashes(node, &mut |hash| summary.insert_hash(hash));
+    }
+
+    for child in node.children.iter() {
+      let child_summary = if matches!(child.node_type, DomNodeType::ShadowRoot { .. }) {
+        walk(child, map);
+        None
+      } else {
+        Some(walk(child, map))
+      };
+      if node.is_element() {
+        if let Some(summary_child) = child_summary.as_ref() {
+          summary.merge(summary_child);
+        }
+      }
+    }
+
+    if node.is_element() {
+      map.insert(node as *const DomNode, summary);
+    }
+
+    summary
+  }
+
+  let mut blooms: SelectorBloomMapLegacy = SelectorBloomMapLegacy::new();
+  walk(root, &mut blooms);
+  Some(blooms)
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct SiblingPosition {
@@ -1935,6 +2005,7 @@ fn input_range_value(node: &DomNode) -> Option<f64> {
 #[derive(Debug, Clone, Copy)]
 pub struct ElementRef<'a> {
   pub node: &'a DomNode,
+  pub node_id: usize,
   pub parent: Option<&'a DomNode>,
   all_ancestors: &'a [&'a DomNode],
   slot_map: Option<&'a crate::css::selectors::SlotAssignmentMap<'a>>,
@@ -1944,6 +2015,7 @@ impl<'a> ElementRef<'a> {
   pub fn new(node: &'a DomNode) -> Self {
     Self {
       node,
+      node_id: 0,
       parent: None,
       all_ancestors: &[],
       slot_map: None,
@@ -1954,10 +2026,16 @@ impl<'a> ElementRef<'a> {
     let parent = ancestors.last().copied();
     Self {
       node,
+      node_id: 0,
       parent,
       all_ancestors: ancestors,
       slot_map: None,
     }
+  }
+
+  pub fn with_node_id(mut self, node_id: usize) -> Self {
+    self.node_id = node_id;
+    self
   }
 
   pub fn with_slot_map(
@@ -3286,6 +3364,7 @@ impl<'a> Element for ElementRef<'a> {
       if ptr::eq(child, self.node) {
         return prev.map(|node| ElementRef {
           node,
+          node_id: 0,
           parent: self.parent,
           all_ancestors: self.all_ancestors,
           slot_map: self.slot_map,
@@ -3306,6 +3385,7 @@ impl<'a> Element for ElementRef<'a> {
       if seen_self {
         return Some(ElementRef {
           node: child,
+          node_id: 0,
           parent: self.parent,
           all_ancestors: self.all_ancestors,
           slot_map: self.slot_map,
@@ -3679,6 +3759,7 @@ impl<'a> Element for ElementRef<'a> {
     let parent = slot.ancestors.last().copied();
     Some(ElementRef {
       node: slot.slot,
+      node_id: 0,
       parent,
       all_ancestors: slot.ancestors,
       slot_map: Some(slot_map),
@@ -3747,6 +3828,7 @@ impl<'a> Element for ElementRef<'a> {
       if child.is_element() {
         return Some(ElementRef {
           node: child,
+          node_id: 0,
           parent: Some(self.node),
           all_ancestors: self.all_ancestors,
           slot_map: self.slot_map,
@@ -3876,6 +3958,10 @@ fn matches_has_relative(
     ctx.nest_for_scope(Some(anchor.opaque()), |ctx| {
       let mut ancestors = RelativeSelectorAncestorStack::new(anchor.all_ancestors);
       let mut deadline_counter = 0usize;
+      let anchor_summary = ctx
+        .extra_data
+        .selector_blooms
+        .and_then(|store| store.summary_for_id(anchor.node_id));
 
       for selector in selectors.iter() {
         HAS_EVALS.fetch_add(1, Ordering::Relaxed);
@@ -3903,18 +3989,16 @@ fn matches_has_relative(
         if selector.match_hint.is_descendant_direction()
           && !matches!(quirks_mode, selectors::context::QuirksMode::Quirks)
         {
-          if let Some(map) = ctx.extra_data.selector_blooms {
-            if let Some(summary) = map.get(&(anchor.node as *const DomNode)) {
-              let hashes = selector.bloom_hashes.hashes_for_mode(quirks_mode);
-              if !hashes.is_empty() && hashes.iter().any(|hash| !summary.contains_hash(*hash)) {
-                HAS_PRUNES.fetch_add(1, Ordering::Relaxed);
-                ctx.selector_caches.relative_selector.add(
-                  anchor.opaque(),
-                  selector,
-                  RelativeSelectorCachedMatch::NotMatched,
-                );
-                continue;
-              }
+          if let Some(summary) = anchor_summary {
+            let hashes = selector.bloom_hashes.hashes_for_mode(quirks_mode);
+            if !hashes.is_empty() && hashes.iter().any(|hash| !summary.contains_hash(*hash)) {
+              HAS_PRUNES.fetch_add(1, Ordering::Relaxed);
+              ctx.selector_caches.relative_selector.add(
+                anchor.opaque(),
+                selector,
+                RelativeSelectorCachedMatch::NotMatched,
+              );
+              continue;
             }
           }
         }
@@ -4572,10 +4656,79 @@ mod tests {
   }
 
   #[test]
+  fn selector_bloom_store_matches_legacy_map() {
+    set_selector_bloom_enabled(true);
+
+    let dom = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("id".to_string(), "host".to_string())],
+      },
+      children: vec![
+        DomNode {
+          node_type: DomNodeType::Element {
+            tag_name: "span".to_string(),
+            namespace: HTML_NAMESPACE.to_string(),
+            attributes: vec![("class".to_string(), "light".to_string())],
+          },
+          children: vec![],
+        },
+        DomNode {
+          node_type: DomNodeType::ShadowRoot {
+            mode: ShadowRootMode::Open,
+            delegates_focus: false,
+          },
+          children: vec![DomNode {
+            node_type: DomNodeType::Element {
+              tag_name: "span".to_string(),
+              namespace: HTML_NAMESPACE.to_string(),
+              attributes: vec![("class".to_string(), "shadow".to_string())],
+            },
+            children: vec![],
+          }],
+        },
+      ],
+    };
+
+    let id_map = enumerate_dom_ids(&dom);
+    let store =
+      build_selector_bloom_store(&dom, &id_map).expect("selector bloom store");
+    let legacy =
+      build_selector_bloom_map_legacy(&dom).expect("legacy selector bloom map");
+
+    assert!(
+      store.summary_for_id(0).is_none(),
+      "selector bloom store index 0 must remain unused"
+    );
+
+    for (ptr, id) in id_map.iter() {
+      // Safety: ids are built from stable DOM pointers.
+      let node = unsafe { &**ptr };
+      if !node.is_element() {
+        continue;
+      }
+      let summary_store = store
+        .summary_for_id(*id)
+        .unwrap_or_else(|| panic!("store missing summary for node_id={id}"));
+      let summary_legacy = legacy
+        .get(ptr)
+        .unwrap_or_else(|| panic!("legacy missing summary for node_id={id}"));
+      assert_eq!(
+        summary_store, summary_legacy,
+        "selector bloom summary mismatch for node_id={id}"
+      );
+    }
+  }
+
+  #[test]
   fn bloom_pruning_skips_expensive_evaluations() {
     reset_has_counters();
+    set_selector_bloom_enabled(true);
     let dom = element("div", vec![element("span", vec![])]);
-    let bloom_map: SelectorBloomMap = build_selector_bloom_map(&dom).expect("bloom map");
+    let id_map = enumerate_dom_ids(&dom);
+    let bloom_store =
+      build_selector_bloom_store(&dom, &id_map).expect("selector bloom store");
 
     let mut caches = SelectorCaches::default();
     caches.set_epoch(next_selector_cache_epoch());
@@ -4587,14 +4740,14 @@ mod tests {
       NeedsSelectorFlags::No,
       MatchingForInvalidation::No,
     );
-    context.extra_data = ShadowMatchData::for_document().with_selector_blooms(Some(&bloom_map));
+    context.extra_data = ShadowMatchData::for_document().with_selector_blooms(Some(&bloom_store));
 
     let mut input = ParserInput::new(".missing");
     let mut parser = Parser::new(&mut input);
     let list =
       SelectorList::parse(&PseudoClassParser, &mut parser, ParseRelative::ForHas).expect("parse");
     let selectors = build_relative_selectors(list);
-    let anchor = ElementRef::with_ancestors(&dom, &[]);
+    let anchor = ElementRef::with_ancestors(&dom, &[]).with_node_id(1);
 
     assert!(
       !matches_has_relative(&anchor, &selectors, &mut context),
@@ -4609,6 +4762,7 @@ mod tests {
   #[test]
   fn bloom_pruning_preserves_matches() {
     reset_has_counters();
+    set_selector_bloom_enabled(true);
     let dom = DomNode {
       node_type: DomNodeType::Element {
         tag_name: "div".into(),
@@ -4624,7 +4778,9 @@ mod tests {
         children: vec![],
       }],
     };
-    let bloom_map: SelectorBloomMap = build_selector_bloom_map(&dom).expect("bloom map");
+    let id_map = enumerate_dom_ids(&dom);
+    let bloom_store =
+      build_selector_bloom_store(&dom, &id_map).expect("selector bloom store");
 
     let mut caches = SelectorCaches::default();
     caches.set_epoch(next_selector_cache_epoch());
@@ -4636,14 +4792,14 @@ mod tests {
       NeedsSelectorFlags::No,
       MatchingForInvalidation::No,
     );
-    context.extra_data = ShadowMatchData::for_document().with_selector_blooms(Some(&bloom_map));
+    context.extra_data = ShadowMatchData::for_document().with_selector_blooms(Some(&bloom_store));
 
     let mut input = ParserInput::new(".foo");
     let mut parser = Parser::new(&mut input);
     let list =
       SelectorList::parse(&PseudoClassParser, &mut parser, ParseRelative::ForHas).expect("parse");
     let selectors = build_relative_selectors(list);
-    let anchor = ElementRef::with_ancestors(&dom, &[]);
+    let anchor = ElementRef::with_ancestors(&dom, &[]).with_node_id(1);
 
     assert!(
       matches_has_relative(&anchor, &selectors, &mut context),

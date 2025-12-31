@@ -5,7 +5,7 @@
 use super::types::CssString;
 use crate::dom::AssignedSlot;
 use crate::dom::DomNode;
-use crate::dom::SelectorBloomMap;
+use crate::dom::SelectorBloomStore;
 use crate::dom::SiblingListCache;
 use crate::error::RenderError;
 use cssparser::ParseError;
@@ -50,7 +50,7 @@ pub struct ShadowMatchData<'a> {
   /// Deferred error from deadline checks performed during selector matching.
   pub deadline_error: Option<RenderError>,
   /// Precomputed selector bloom summaries for fast :has() pruning.
-  pub selector_blooms: Option<&'a SelectorBloomMap>,
+  pub selector_blooms: Option<&'a SelectorBloomStore>,
   /// Cached sibling positions for structural pseudo-classes.
   pub sibling_cache: Option<&'a SiblingListCache>,
 }
@@ -83,7 +83,10 @@ impl<'a> ShadowMatchData<'a> {
     }
   }
 
-  pub fn with_selector_blooms(mut self, selector_blooms: Option<&'a SelectorBloomMap>) -> Self {
+  pub fn with_selector_blooms(
+    mut self,
+    selector_blooms: Option<&'a SelectorBloomStore>,
+  ) -> Self {
     self.selector_blooms = selector_blooms;
     self
   }

@@ -26,7 +26,7 @@ use crate::css::types::ScopeContext;
 use crate::css::types::StyleRule;
 use crate::css::types::StyleSheet;
 use crate::debug::runtime;
-use crate::dom::build_selector_bloom_map;
+use crate::dom::build_selector_bloom_store;
 use crate::dom::compute_slot_assignment;
 use crate::dom::enumerate_dom_ids;
 use crate::dom::next_selector_cache_epoch;
@@ -37,7 +37,7 @@ use crate::dom::with_target_fragment;
 use crate::dom::DomNode;
 use crate::dom::DomNodeType;
 use crate::dom::ElementRef;
-use crate::dom::SelectorBloomMap;
+use crate::dom::SelectorBloomStore;
 use crate::dom::SelectorBloomSummary;
 use crate::dom::SiblingListCache;
 use crate::dom::SlotAssignment;
@@ -1072,7 +1072,7 @@ struct DomMaps {
   parent_map: HashMap<usize, usize>,
   shadow_hosts: HashMap<usize, usize>,
   exportparts_map: HashMap<usize, Vec<(String, String)>>,
-  selector_blooms: Option<SelectorBloomMap>,
+  selector_blooms: Option<SelectorBloomStore>,
 }
 
 const SELECTOR_BLOOM_MIN_NODES: usize = 32;
@@ -1145,7 +1145,7 @@ impl DomMaps {
     }
     let profiling = cascade_profile_enabled();
     let start = profiling.then(Instant::now);
-    let blooms = build_selector_bloom_map(root);
+    let blooms = build_selector_bloom_store(root, &self.id_map);
     if let Some(start) = start {
       let elapsed = start.elapsed();
       CASCADE_PROFILE_SELECTOR_BLOOM_TIME_NS
@@ -1190,7 +1190,7 @@ impl DomMaps {
     self.exportparts_map.get(id)
   }
 
-  fn selector_blooms(&self) -> Option<&SelectorBloomMap> {
+  fn selector_blooms(&self) -> Option<&SelectorBloomStore> {
     self.selector_blooms.as_ref()
   }
 }
@@ -5297,11 +5297,11 @@ fn match_part_rules<'a>(
           // allow_shadow_host prevents document-scope ::part selectors from exposing :host context.
           let part_matches = find_pseudo_element_rules(
             host,
+            scope_host.unwrap_or(0),
             rules,
             selector_caches,
             scratch,
             host_ancestors,
-            scope_host.unwrap_or(0),
             slot_map,
             dom_maps.selector_blooms(),
             sibling_cache,
@@ -5517,11 +5517,11 @@ fn collect_pseudo_matching_rules<'a>(
   };
   let mut matches = find_pseudo_element_rules(
     node,
+    node_id,
     &scopes.ua,
     selector_caches,
     scratch,
     ancestors,
-    node_id,
     current_slot_map,
     dom_maps.selector_blooms(),
     sibling_cache,
@@ -5533,11 +5533,11 @@ fn collect_pseudo_matching_rules<'a>(
   if let Some((base, allow_shadow_host)) = scope_rule_index_with_shadow_host(scopes, scope_host) {
     matches.extend(find_pseudo_element_rules(
       node,
+      node_id,
       base,
       selector_caches,
       scratch,
       ancestors,
-      node_id,
       base_slot_map,
       dom_maps.selector_blooms(),
       sibling_cache,
@@ -5552,11 +5552,11 @@ fn collect_pseudo_matching_rules<'a>(
       if scopes.shadows.contains_key(&host) {
         matches.extend(find_pseudo_element_rules(
           node,
+          node_id,
           &scopes.document,
           selector_caches,
           scratch,
           ancestors,
-          node_id,
           current_slot_map,
           dom_maps.selector_blooms(),
           sibling_cache,
@@ -5571,11 +5571,11 @@ fn collect_pseudo_matching_rules<'a>(
   if let Some(host) = scopes.host_rules.get(&node_id) {
     matches.extend(find_pseudo_element_rules(
       node,
+      node_id,
       host,
       selector_caches,
       scratch,
       ancestors,
-      node_id,
       slot_map_for_host(node_id),
       dom_maps.selector_blooms(),
       sibling_cache,
@@ -7202,9 +7202,7 @@ mod tests {
     let mut dom_maps = DomMaps::new(&dom, id_map);
     dom_maps.ensure_selector_blooms(&dom);
     let blooms = dom_maps.selector_blooms().expect("bloom map");
-    let summary = blooms
-      .get(&(std::ptr::addr_of!(dom) as *const DomNode))
-      .expect("summary");
+    let summary = blooms.summary_for_id(1).expect("summary");
 
     let stylesheet = parse_stylesheet("div:has(.a, .b) { color: red; }").unwrap();
     let media_ctx = MediaContext::default();
@@ -7267,9 +7265,7 @@ mod tests {
     let mut dom_maps = DomMaps::new(&dom, id_map);
     dom_maps.ensure_selector_blooms(&dom);
     let blooms = dom_maps.selector_blooms().expect("bloom map");
-    let summary = blooms
-      .get(&(std::ptr::addr_of!(dom) as *const DomNode))
-      .expect("summary");
+    let summary = blooms.summary_for_id(1).expect("summary");
 
     let stylesheet = parse_stylesheet("div:is(:has(.a), .b) { color: red; }").unwrap();
     let media_ctx = MediaContext::default();
@@ -7332,9 +7328,7 @@ mod tests {
     let mut dom_maps = DomMaps::new(&dom, id_map);
     dom_maps.ensure_selector_blooms(&dom);
     let blooms = dom_maps.selector_blooms().expect("bloom map");
-    let summary = blooms
-      .get(&(std::ptr::addr_of!(dom) as *const DomNode))
-      .expect("summary");
+    let summary = blooms.summary_for_id(1).expect("summary");
 
     let stylesheet = parse_stylesheet("div:not(:has(.a)) { color: red; }").unwrap();
     let media_ctx = MediaContext::default();
@@ -11485,7 +11479,7 @@ mod tests {
       "should collect the authored li::marker rule"
     );
     let ancestors: Vec<&DomNode> = vec![&dom]; // ul ancestor for the li
-    let element_ref = build_element_ref_chain(&dom.children[0], &ancestors, None);
+    let element_ref = build_element_ref_chain(&dom.children[0], 0, &ancestors, None);
     let mut caches = SelectorCaches::default();
     let cache_epoch = next_selector_cache_epoch();
     caches.set_epoch(cache_epoch);
@@ -11516,11 +11510,11 @@ mod tests {
     let mut scratch = CascadeScratch::new(rule_index.rules.len());
     let marker_matches = find_pseudo_element_rules(
       &dom.children[0],
+      0,
       &rule_index,
       &mut caches,
       &mut scratch,
       &ancestors,
-      2,
       None,
       None,
       &sibling_cache,
@@ -12409,7 +12403,7 @@ fn find_matching_rules<'a>(
   let node_summary = if rules.has_has_requirements {
     dom_maps
       .selector_blooms()
-      .and_then(|map| map.get(&(node as *const DomNode)))
+      .and_then(|store| store.summary_for_id(node_id))
   } else {
     None
   };
@@ -12446,7 +12440,7 @@ fn find_matching_rules<'a>(
   let mut deadline_counter = 0usize;
 
   // Build ElementRef chain with proper parent links
-  let element_ref = build_element_ref_chain(node, ancestors, slot_map);
+  let element_ref = build_element_ref_chain(node, node_id, ancestors, slot_map);
   let shadow_host = if allow_shadow_host {
     shadow_host_ref(node, ancestors, slot_map)
   } else {
@@ -12890,13 +12884,13 @@ fn find_matching_rules<'a>(
 /// Find rules that match an element with a specific pseudo-element
 fn find_pseudo_element_rules<'a>(
   node: &DomNode,
+  node_id: usize,
   rules: &'a RuleIndex<'a>,
   selector_caches: &mut SelectorCaches,
   scratch: &mut CascadeScratch,
   ancestors: &[&DomNode],
-  node_id: usize,
   slot_map: Option<&SlotAssignmentMap<'a>>,
-  selector_blooms: Option<&SelectorBloomMap>,
+  selector_blooms: Option<&SelectorBloomStore>,
   sibling_cache: &SiblingListCache,
   pseudo: &PseudoElement,
   allow_shadow_host: bool,
@@ -12911,7 +12905,7 @@ fn find_pseudo_element_rules<'a>(
   let profiling = cascade_profile_enabled();
   let start = profiling.then(|| Instant::now());
   let node_summary = if rules.has_has_requirements {
-    selector_blooms.and_then(|map| map.get(&(node as *const DomNode)))
+    selector_blooms.and_then(|store| store.summary_for_id(node_id))
   } else {
     None
   };
@@ -12944,7 +12938,7 @@ fn find_pseudo_element_rules<'a>(
   let mut matches: Vec<MatchedRule<'a>> = Vec::new();
 
   // Build ElementRef chain with proper parent links
-  let element_ref = build_element_ref_chain(node, ancestors, slot_map);
+  let element_ref = build_element_ref_chain(node, node_id, ancestors, slot_map);
   let shadow_host = if allow_shadow_host {
     shadow_host_ref(node, ancestors, slot_map)
   } else {
@@ -13770,15 +13764,20 @@ fn propagate_text_decorations(styles: &mut ComputedStyle, parent: &ComputedStyle
 /// Build an ElementRef with ancestor context
 fn build_element_ref_chain<'a>(
   node: &'a DomNode,
+  node_id: usize,
   ancestors: &'a [&'a DomNode],
   slot_map: Option<&'a SlotAssignmentMap<'a>>,
 ) -> ElementRef<'a> {
   if ancestors.is_empty() {
-    return ElementRef::new(node).with_slot_map(slot_map);
+    return ElementRef::new(node)
+      .with_node_id(node_id)
+      .with_slot_map(slot_map);
   }
 
   // Create ElementRef with all ancestors
-  ElementRef::with_ancestors(node, ancestors).with_slot_map(slot_map)
+  ElementRef::with_ancestors(node, ancestors)
+    .with_node_id(node_id)
+    .with_slot_map(slot_map)
 }
 
 fn is_shadow_host_node(node: &DomNode) -> bool {

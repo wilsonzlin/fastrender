@@ -2036,49 +2036,81 @@ fn collect_relative_selector_hashes<Impl: SelectorImpl>(
     quirks_mode: QuirksMode,
     out: &mut SmallVec<[u32; RELATIVE_SELECTOR_BLOOM_HASHES_INLINE_CAPACITY]>,
 ) {
-    for component in selector.iter_raw_parse_order_from(0) {
-        match component {
-            Component::LocalName(local) => {
-                let hash_source = if local.name == local.lower_name {
-                    &local.name
-                } else {
-                    &local.lower_name
-                };
-                out.push(hash_source.precomputed_hash() & BLOOM_HASH_MASK);
-            },
-            Component::ID(id) => {
-                if !matches!(quirks_mode, QuirksMode::Quirks) {
-                    out.push(id.precomputed_hash() & BLOOM_HASH_MASK);
-                }
-            },
-            Component::Class(class) => {
-                if !matches!(quirks_mode, QuirksMode::Quirks) {
-                    out.push(class.precomputed_hash() & BLOOM_HASH_MASK);
-                }
-            },
-            Component::AttributeInNoNamespaceExists { ref local_name, .. } => {
-                out.push(local_name.precomputed_hash() & BLOOM_HASH_MASK);
-            },
-            Component::AttributeInNoNamespace { ref local_name, .. } => {
-                out.push(local_name.precomputed_hash() & BLOOM_HASH_MASK);
-            },
-            Component::AttributeOther(selector) => {
-                out.push(selector.local_name.precomputed_hash() & BLOOM_HASH_MASK);
-                if selector.local_name != selector.local_name_lower {
-                    out.push(selector.local_name_lower.precomputed_hash() & BLOOM_HASH_MASK);
-                }
-            },
-            Component::Is(list) | Component::Where(list) => {
-                let slice = list.slice();
-                if slice.len() == 1 {
-                    collect_relative_selector_hashes(&slice[0], quirks_mode, out);
-                }
-            },
-            _ => {},
+    fn collect_impl<Impl: SelectorImpl>(
+        selector: &Selector<Impl>,
+        quirks_mode: QuirksMode,
+        tags: &mut SmallVec<[u32; RELATIVE_SELECTOR_BLOOM_HASHES_INLINE_CAPACITY]>,
+        classes: &mut SmallVec<[u32; RELATIVE_SELECTOR_BLOOM_HASHES_INLINE_CAPACITY]>,
+        ids: &mut SmallVec<[u32; RELATIVE_SELECTOR_BLOOM_HASHES_INLINE_CAPACITY]>,
+        attrs: &mut SmallVec<[u32; RELATIVE_SELECTOR_BLOOM_HASHES_INLINE_CAPACITY]>,
+    ) {
+        for component in selector.iter_raw_parse_order_from(0) {
+            match component {
+                Component::LocalName(local) => {
+                    let hash_source = if local.name == local.lower_name {
+                        &local.name
+                    } else {
+                        &local.lower_name
+                    };
+                    tags.push(hash_source.precomputed_hash() & BLOOM_HASH_MASK);
+                },
+                Component::ID(id) => {
+                    if !matches!(quirks_mode, QuirksMode::Quirks) {
+                        ids.push(id.precomputed_hash() & BLOOM_HASH_MASK);
+                    }
+                },
+                Component::Class(class) => {
+                    if !matches!(quirks_mode, QuirksMode::Quirks) {
+                        classes.push(class.precomputed_hash() & BLOOM_HASH_MASK);
+                    }
+                },
+                Component::AttributeInNoNamespaceExists {
+                    ref local_name,
+                    ref local_name_lower,
+                    ..
+                } => {
+                    attrs.push(local_name.precomputed_hash() & BLOOM_HASH_MASK);
+                    if local_name != local_name_lower {
+                        attrs.push(local_name_lower.precomputed_hash() & BLOOM_HASH_MASK);
+                    }
+                },
+                Component::AttributeInNoNamespace { ref local_name, .. } => {
+                    attrs.push(local_name.precomputed_hash() & BLOOM_HASH_MASK);
+                },
+                Component::AttributeOther(selector) => {
+                    attrs.push(selector.local_name.precomputed_hash() & BLOOM_HASH_MASK);
+                    if selector.local_name != selector.local_name_lower {
+                        attrs.push(selector.local_name_lower.precomputed_hash() & BLOOM_HASH_MASK);
+                    }
+                },
+                Component::Is(list) | Component::Where(list) => {
+                    let slice = list.slice();
+                    if slice.len() == 1 {
+                        collect_impl(&slice[0], quirks_mode, tags, classes, ids, attrs);
+                    }
+                },
+                _ => {},
+            }
+
+            let total = tags.len() + classes.len() + ids.len() + attrs.len();
+            if total >= RELATIVE_SELECTOR_BLOOM_HASHES_INLINE_CAPACITY {
+                break;
+            }
         }
-        if out.len() >= RELATIVE_SELECTOR_BLOOM_HASHES_INLINE_CAPACITY {
-            break;
-        }
+    }
+
+    let mut tags = SmallVec::new();
+    let mut classes = SmallVec::new();
+    let mut ids = SmallVec::new();
+    let mut attrs = SmallVec::new();
+    collect_impl(selector, quirks_mode, &mut tags, &mut classes, &mut ids, &mut attrs);
+
+    out.extend(tags);
+    out.extend(classes);
+    out.extend(ids);
+    out.extend(attrs);
+    if out.len() > RELATIVE_SELECTOR_BLOOM_HASHES_INLINE_CAPACITY {
+        out.truncate(RELATIVE_SELECTOR_BLOOM_HASHES_INLINE_CAPACITY);
     }
 }
 
