@@ -15776,7 +15776,7 @@ fn border_presentational_hint(
     None
   }?;
 
-  let mut declarations = Vec::with_capacity(3);
+  let mut declarations = Vec::with_capacity(4);
   declarations.push(Declaration {
     property: "border-width".to_string(),
     value: PropertyValue::Length(border_len),
@@ -15786,6 +15786,14 @@ fn border_presentational_hint(
   declarations.push(Declaration {
     property: "border-style".to_string(),
     value: PropertyValue::Keyword("solid".to_string()),
+    raw_value: String::new(),
+    important: false,
+  });
+  // Match the `border: <width> solid` shorthand behavior: unspecified border-color resets to
+  // currentColor (not the ComputedStyle default black).
+  declarations.push(Declaration {
+    property: "border-color".to_string(),
+    value: PropertyValue::Keyword("currentcolor".to_string()),
     raw_value: String::new(),
     important: false,
   });
