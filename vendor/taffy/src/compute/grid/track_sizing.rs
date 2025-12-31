@@ -507,6 +507,7 @@ fn resolve_item_baselines(
   // Iterate over grid rows
   let mut remaining_items = &mut items[0..];
   while !remaining_items.is_empty() {
+    check_layout_abort();
     // Get the row index of the current row
     let current_row = remaining_items[0].placement(other_axis).start;
 
