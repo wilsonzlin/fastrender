@@ -9301,6 +9301,82 @@ slot[name=\"s\"]::slotted(.assigned) { color: rgb(4, 5, 6); }"
   }
 
   #[test]
+  fn ancestor_bloom_shadow_scoping_preserves_nested_host_context_outer_ancestors() {
+    let _lock = cascade_global_test_lock();
+    let _ancestor_bloom = AncestorBloomEnabledGuard::new(true);
+
+    let css = r#"
+      body :is(:host-context(.outer), .never) .target { color: rgb(10, 20, 30); }
+    "#;
+
+    let style_node = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "style".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![],
+      },
+      children: vec![DomNode {
+        node_type: DomNodeType::Text {
+          content: css.to_string(),
+        },
+        children: vec![],
+      }],
+    };
+
+    let shadow_root = DomNode {
+      node_type: DomNodeType::ShadowRoot {
+        mode: crate::dom::ShadowRootMode::Open,
+        delegates_focus: false,
+      },
+      children: vec![
+        style_node,
+        DomNode {
+          node_type: DomNodeType::Element {
+            tag_name: "span".to_string(),
+            namespace: HTML_NAMESPACE.to_string(),
+            attributes: vec![
+              ("id".to_string(), "target".to_string()),
+              ("class".to_string(), "target".to_string()),
+            ],
+          },
+          children: vec![],
+        },
+      ],
+    };
+
+    let dom = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "body".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("class".to_string(), "outer".to_string())],
+      },
+      children: vec![DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "div".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: vec![("id".to_string(), "host".to_string())],
+        },
+        children: vec![shadow_root],
+      }],
+    };
+
+    let stylesheet = StyleSheet::new();
+    let styled_without_scoping = {
+      let _guard = ShadowBloomScopingGuard::new(false);
+      apply_styles(&dom, &stylesheet)
+    };
+    let styled_with_scoping = {
+      let _guard = ShadowBloomScopingGuard::new(true);
+      apply_styles(&dom, &stylesheet)
+    };
+
+    assert_styled_trees_equal(&styled_with_scoping, &styled_without_scoping);
+
+    let target = find_styled_node_by_id(&styled_with_scoping, "target").expect("target node");
+    assert_eq!(target.styles.color, Rgba::rgb(10, 20, 30));
+  }
+
+  #[test]
   fn ancestor_bloom_shadow_scoping_increases_fast_rejects() {
     let _lock = cascade_global_test_lock();
     let _ancestor_bloom = AncestorBloomEnabledGuard::new(true);
@@ -16069,21 +16145,26 @@ fn selector_contains_host_context(
 ) -> bool {
   use selectors::parser::Component;
 
-  let mut iter = selector.iter();
-  loop {
-    while let Some(component) = iter.next() {
-      if let Component::NonTSPseudoClass(pseudo) = component {
-        if matches!(pseudo, crate::css::selectors::PseudoClass::HostContext(..)) {
-          return true;
+  fn contains(selector: &Selector<crate::css::selectors::FastRenderSelectorImpl>) -> bool {
+    for component in selector.iter_raw_match_order() {
+      match component {
+        Component::NonTSPseudoClass(pseudo) => {
+          if matches!(pseudo, crate::css::selectors::PseudoClass::HostContext(..)) {
+            return true;
+          }
         }
+        Component::Is(list) | Component::Where(list) | Component::Negation(list) => {
+          if list.slice().iter().any(contains) {
+            return true;
+          }
+        }
+        _ => {}
       }
     }
-    if iter.next_sequence().is_none() {
-      break;
-    }
+    false
   }
 
-  false
+  contains(selector)
 }
 
 /// Compute styles for a pseudo-element (::before or ::after)
