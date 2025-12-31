@@ -678,6 +678,265 @@ fn box_sizes_for_gauss(sigma: f32, n: usize) -> [usize; 3] {
   sizes
 }
 
+#[inline]
+fn box_blur_row_horizontal(
+  src_row: &[u8],
+  out_row: &mut [u8],
+  width: usize,
+  radius: usize,
+  window: i32,
+  half: i32,
+) {
+  debug_assert!(radius > 0);
+  debug_assert_eq!(src_row.len(), width * 4);
+  debug_assert_eq!(out_row.len(), width * 4);
+  debug_assert!(width > 0);
+
+  let last_x = width - 1;
+  let last_x_isize = last_x as isize;
+
+  let mut sum_r: i32 = 0;
+  let mut sum_g: i32 = 0;
+  let mut sum_b: i32 = 0;
+  let mut sum_a: i32 = 0;
+  for dx in -(radius as isize)..=(radius as isize) {
+    let cx = dx.clamp(0, last_x_isize) as usize;
+    let idx = cx * 4;
+    sum_r += src_row[idx] as i32;
+    sum_g += src_row[idx + 1] as i32;
+    sum_b += src_row[idx + 2] as i32;
+    sum_a += src_row[idx + 3] as i32;
+  }
+
+  let edge_r0 = src_row[0] as i32;
+  let edge_g0 = src_row[1] as i32;
+  let edge_b0 = src_row[2] as i32;
+  let edge_a0 = src_row[3] as i32;
+  let edge_last_idx = last_x * 4;
+  let edge_rl = src_row[edge_last_idx] as i32;
+  let edge_gl = src_row[edge_last_idx + 1] as i32;
+  let edge_bl = src_row[edge_last_idx + 2] as i32;
+  let edge_al = src_row[edge_last_idx + 3] as i32;
+
+  let radius_plus_one = radius + 1;
+  let inner_start = radius.min(width);
+  let inner_end = width.saturating_sub(radius_plus_one);
+
+  if inner_start >= inner_end {
+    for x in 0..width {
+      let out_idx = x * 4;
+      let a = ((sum_a + half) / window).clamp(0, 255);
+      let r = (sum_r + half) / window;
+      let g = (sum_g + half) / window;
+      let b = (sum_b + half) / window;
+      out_row[out_idx] = clamp_channel_to_alpha(r, a);
+      out_row[out_idx + 1] = clamp_channel_to_alpha(g, a);
+      out_row[out_idx + 2] = clamp_channel_to_alpha(b, a);
+      out_row[out_idx + 3] = a as u8;
+
+      let remove_x = (x as isize - radius as isize).clamp(0, last_x_isize) as usize;
+      let add_x = (x as isize + radius as isize + 1).clamp(0, last_x_isize) as usize;
+      let rem_idx = remove_x * 4;
+      let add_idx = add_x * 4;
+      sum_r += src_row[add_idx] as i32 - src_row[rem_idx] as i32;
+      sum_g += src_row[add_idx + 1] as i32 - src_row[rem_idx + 1] as i32;
+      sum_b += src_row[add_idx + 2] as i32 - src_row[rem_idx + 2] as i32;
+      sum_a += src_row[add_idx + 3] as i32 - src_row[rem_idx + 3] as i32;
+    }
+    return;
+  }
+
+  // Left edge: remove_x is clamped to 0.
+  for x in 0..inner_start {
+    let out_idx = x * 4;
+    let a = ((sum_a + half) / window).clamp(0, 255);
+    let r = (sum_r + half) / window;
+    let g = (sum_g + half) / window;
+    let b = (sum_b + half) / window;
+    out_row[out_idx] = clamp_channel_to_alpha(r, a);
+    out_row[out_idx + 1] = clamp_channel_to_alpha(g, a);
+    out_row[out_idx + 2] = clamp_channel_to_alpha(b, a);
+    out_row[out_idx + 3] = a as u8;
+
+    debug_assert!(x + radius_plus_one <= last_x);
+    let add_idx = (x + radius_plus_one) * 4;
+    sum_r += src_row[add_idx] as i32 - edge_r0;
+    sum_g += src_row[add_idx + 1] as i32 - edge_g0;
+    sum_b += src_row[add_idx + 2] as i32 - edge_b0;
+    sum_a += src_row[add_idx + 3] as i32 - edge_a0;
+  }
+
+  // Interior: remove_x/add_x are both in-bounds.
+  for x in inner_start..inner_end {
+    let out_idx = x * 4;
+    let a = ((sum_a + half) / window).clamp(0, 255);
+    let r = (sum_r + half) / window;
+    let g = (sum_g + half) / window;
+    let b = (sum_b + half) / window;
+    out_row[out_idx] = clamp_channel_to_alpha(r, a);
+    out_row[out_idx + 1] = clamp_channel_to_alpha(g, a);
+    out_row[out_idx + 2] = clamp_channel_to_alpha(b, a);
+    out_row[out_idx + 3] = a as u8;
+
+    let rem_idx = (x - radius) * 4;
+    let add_idx = (x + radius_plus_one) * 4;
+    sum_r += src_row[add_idx] as i32 - src_row[rem_idx] as i32;
+    sum_g += src_row[add_idx + 1] as i32 - src_row[rem_idx + 1] as i32;
+    sum_b += src_row[add_idx + 2] as i32 - src_row[rem_idx + 2] as i32;
+    sum_a += src_row[add_idx + 3] as i32 - src_row[rem_idx + 3] as i32;
+  }
+
+  // Right edge: add_x is clamped to last_x.
+  for x in inner_end..width {
+    let out_idx = x * 4;
+    let a = ((sum_a + half) / window).clamp(0, 255);
+    let r = (sum_r + half) / window;
+    let g = (sum_g + half) / window;
+    let b = (sum_b + half) / window;
+    out_row[out_idx] = clamp_channel_to_alpha(r, a);
+    out_row[out_idx + 1] = clamp_channel_to_alpha(g, a);
+    out_row[out_idx + 2] = clamp_channel_to_alpha(b, a);
+    out_row[out_idx + 3] = a as u8;
+
+    let rem_idx = (x - radius) * 4;
+    sum_r += edge_rl - src_row[rem_idx] as i32;
+    sum_g += edge_gl - src_row[rem_idx + 1] as i32;
+    sum_b += edge_bl - src_row[rem_idx + 2] as i32;
+    sum_a += edge_al - src_row[rem_idx + 3] as i32;
+  }
+}
+
+#[inline]
+unsafe fn box_blur_column_vertical_to_ptr(
+  src: &[u8],
+  dst_ptr: *mut u8,
+  row_stride: usize,
+  height: usize,
+  x_offset: usize,
+  radius: usize,
+  window: i32,
+  half: i32,
+) {
+  debug_assert!(radius > 0);
+  debug_assert!(height > 0);
+  let last_y = height - 1;
+  let last_y_isize = last_y as isize;
+
+  let mut sum_r: i32 = 0;
+  let mut sum_g: i32 = 0;
+  let mut sum_b: i32 = 0;
+  let mut sum_a: i32 = 0;
+  for dy in -(radius as isize)..=(radius as isize) {
+    let cy = dy.clamp(0, last_y_isize) as usize;
+    let idx = cy * row_stride + x_offset;
+    sum_r += src[idx] as i32;
+    sum_g += src[idx + 1] as i32;
+    sum_b += src[idx + 2] as i32;
+    sum_a += src[idx + 3] as i32;
+  }
+
+  let radius_plus_one = radius + 1;
+  let inner_start = radius.min(height);
+  let inner_end = height.saturating_sub(radius_plus_one);
+
+  if inner_start >= inner_end {
+    for y in 0..height {
+      let out_idx = y * row_stride + x_offset;
+      let a = ((sum_a + half) / window).clamp(0, 255);
+      let r = (sum_r + half) / window;
+      let g = (sum_g + half) / window;
+      let b = (sum_b + half) / window;
+      let out = dst_ptr.add(out_idx);
+      *out = clamp_channel_to_alpha(r, a);
+      *out.add(1) = clamp_channel_to_alpha(g, a);
+      *out.add(2) = clamp_channel_to_alpha(b, a);
+      *out.add(3) = a as u8;
+
+      let remove_y = (y as isize - radius as isize).clamp(0, last_y_isize) as usize;
+      let add_y = (y as isize + radius as isize + 1).clamp(0, last_y_isize) as usize;
+      let rem_idx = remove_y * row_stride + x_offset;
+      let add_idx = add_y * row_stride + x_offset;
+      sum_r += src[add_idx] as i32 - src[rem_idx] as i32;
+      sum_g += src[add_idx + 1] as i32 - src[rem_idx + 1] as i32;
+      sum_b += src[add_idx + 2] as i32 - src[rem_idx + 2] as i32;
+      sum_a += src[add_idx + 3] as i32 - src[rem_idx + 3] as i32;
+    }
+    return;
+  }
+
+  // Left edge: remove_y is clamped to 0.
+  let rem_idx_0 = x_offset;
+  let edge_r0 = src[rem_idx_0] as i32;
+  let edge_g0 = src[rem_idx_0 + 1] as i32;
+  let edge_b0 = src[rem_idx_0 + 2] as i32;
+  let edge_a0 = src[rem_idx_0 + 3] as i32;
+  for y in 0..inner_start {
+    let out_idx = y * row_stride + x_offset;
+    let a = ((sum_a + half) / window).clamp(0, 255);
+    let r = (sum_r + half) / window;
+    let g = (sum_g + half) / window;
+    let b = (sum_b + half) / window;
+    let out = dst_ptr.add(out_idx);
+    *out = clamp_channel_to_alpha(r, a);
+    *out.add(1) = clamp_channel_to_alpha(g, a);
+    *out.add(2) = clamp_channel_to_alpha(b, a);
+    *out.add(3) = a as u8;
+
+    debug_assert!(y + radius_plus_one <= last_y);
+    let add_idx = (y + radius_plus_one) * row_stride + x_offset;
+    sum_r += src[add_idx] as i32 - edge_r0;
+    sum_g += src[add_idx + 1] as i32 - edge_g0;
+    sum_b += src[add_idx + 2] as i32 - edge_b0;
+    sum_a += src[add_idx + 3] as i32 - edge_a0;
+  }
+
+  // Interior: remove_y/add_y are both in-bounds.
+  for y in inner_start..inner_end {
+    let out_idx = y * row_stride + x_offset;
+    let a = ((sum_a + half) / window).clamp(0, 255);
+    let r = (sum_r + half) / window;
+    let g = (sum_g + half) / window;
+    let b = (sum_b + half) / window;
+    let out = dst_ptr.add(out_idx);
+    *out = clamp_channel_to_alpha(r, a);
+    *out.add(1) = clamp_channel_to_alpha(g, a);
+    *out.add(2) = clamp_channel_to_alpha(b, a);
+    *out.add(3) = a as u8;
+
+    let rem_idx = (y - radius) * row_stride + x_offset;
+    let add_idx = (y + radius_plus_one) * row_stride + x_offset;
+    sum_r += src[add_idx] as i32 - src[rem_idx] as i32;
+    sum_g += src[add_idx + 1] as i32 - src[rem_idx + 1] as i32;
+    sum_b += src[add_idx + 2] as i32 - src[rem_idx + 2] as i32;
+    sum_a += src[add_idx + 3] as i32 - src[rem_idx + 3] as i32;
+  }
+
+  // Right edge: add_y is clamped to last_y.
+  let add_idx = last_y * row_stride + x_offset;
+  let edge_rl = src[add_idx] as i32;
+  let edge_gl = src[add_idx + 1] as i32;
+  let edge_bl = src[add_idx + 2] as i32;
+  let edge_al = src[add_idx + 3] as i32;
+  for y in inner_end..height {
+    let out_idx = y * row_stride + x_offset;
+    let a = ((sum_a + half) / window).clamp(0, 255);
+    let r = (sum_r + half) / window;
+    let g = (sum_g + half) / window;
+    let b = (sum_b + half) / window;
+    let out = dst_ptr.add(out_idx);
+    *out = clamp_channel_to_alpha(r, a);
+    *out.add(1) = clamp_channel_to_alpha(g, a);
+    *out.add(2) = clamp_channel_to_alpha(b, a);
+    *out.add(3) = a as u8;
+
+    let rem_idx = (y - radius) * row_stride + x_offset;
+    sum_r += edge_rl - src[rem_idx] as i32;
+    sum_g += edge_gl - src[rem_idx + 1] as i32;
+    sum_b += edge_bl - src[rem_idx + 2] as i32;
+    sum_a += edge_al - src[rem_idx + 3] as i32;
+  }
+}
+
 fn box_blur_h(
   src: &[u8],
   dst: &mut [u8],
@@ -692,44 +951,15 @@ fn box_blur_h(
   }
   let window = (radius * 2 + 1) as i32;
   let half = window / 2;
+  let row_stride = width * 4;
   for y in 0..height {
     if let Some(err) = blur_deadline_exceeded(deadline_counter) {
       return Err(err);
     }
-    let row_start = y * width * 4;
-    let mut sum_r: i32 = 0;
-    let mut sum_g: i32 = 0;
-    let mut sum_b: i32 = 0;
-    let mut sum_a: i32 = 0;
-    for dx in -(radius as isize)..=(radius as isize) {
-      let cx = dx.clamp(0, width as isize - 1) as usize;
-      let idx = row_start + cx * 4;
-      sum_r += src[idx] as i32;
-      sum_g += src[idx + 1] as i32;
-      sum_b += src[idx + 2] as i32;
-      sum_a += src[idx + 3] as i32;
-    }
-
-    for x in 0..width {
-      let out_idx = row_start + x * 4;
-      let a = ((sum_a + half) / window).clamp(0, 255);
-      let r = (sum_r + half) / window;
-      let g = (sum_g + half) / window;
-      let b = (sum_b + half) / window;
-      dst[out_idx] = clamp_channel_to_alpha(r, a);
-      dst[out_idx + 1] = clamp_channel_to_alpha(g, a);
-      dst[out_idx + 2] = clamp_channel_to_alpha(b, a);
-      dst[out_idx + 3] = a as u8;
-
-      let remove_x = (x as isize - radius as isize).clamp(0, width as isize - 1) as usize;
-      let add_x = (x as isize + radius as isize + 1).clamp(0, width as isize - 1) as usize;
-      let rem_idx = row_start + remove_x * 4;
-      let add_idx = row_start + add_x * 4;
-      sum_r += src[add_idx] as i32 - src[rem_idx] as i32;
-      sum_g += src[add_idx + 1] as i32 - src[rem_idx + 1] as i32;
-      sum_b += src[add_idx + 2] as i32 - src[rem_idx + 2] as i32;
-      sum_a += src[add_idx + 3] as i32 - src[rem_idx + 3] as i32;
-    }
+    let row_start = y * row_stride;
+    let src_row = &src[row_start..row_start + row_stride];
+    let out_row = &mut dst[row_start..row_start + row_stride];
+    box_blur_row_horizontal(src_row, out_row, width, radius, window, half);
   }
   Ok(())
 }
@@ -769,39 +999,7 @@ fn box_blur_h_parallel(
     }
 
     let src_row = &src[y * row_stride..(y + 1) * row_stride];
-    let mut sum_r: i32 = 0;
-    let mut sum_g: i32 = 0;
-    let mut sum_b: i32 = 0;
-    let mut sum_a: i32 = 0;
-    for dx in -(radius as isize)..=(radius as isize) {
-      let cx = dx.clamp(0, width as isize - 1) as usize;
-      let idx = cx * 4;
-      sum_r += src_row[idx] as i32;
-      sum_g += src_row[idx + 1] as i32;
-      sum_b += src_row[idx + 2] as i32;
-      sum_a += src_row[idx + 3] as i32;
-    }
-
-    for x in 0..width {
-      let out_idx = x * 4;
-      let a = ((sum_a + half) / window).clamp(0, 255);
-      let r = (sum_r + half) / window;
-      let g = (sum_g + half) / window;
-      let b = (sum_b + half) / window;
-      out_row[out_idx] = clamp_channel_to_alpha(r, a);
-      out_row[out_idx + 1] = clamp_channel_to_alpha(g, a);
-      out_row[out_idx + 2] = clamp_channel_to_alpha(b, a);
-      out_row[out_idx + 3] = a as u8;
-
-      let remove_x = (x as isize - radius as isize).clamp(0, width as isize - 1) as usize;
-      let add_x = (x as isize + radius as isize + 1).clamp(0, width as isize - 1) as usize;
-      let rem_idx = remove_x * 4;
-      let add_idx = add_x * 4;
-      sum_r += src_row[add_idx] as i32 - src_row[rem_idx] as i32;
-      sum_g += src_row[add_idx + 1] as i32 - src_row[rem_idx + 1] as i32;
-      sum_b += src_row[add_idx + 2] as i32 - src_row[rem_idx + 2] as i32;
-      sum_a += src_row[add_idx + 3] as i32 - src_row[rem_idx + 3] as i32;
-    }
+    box_blur_row_horizontal(src_row, out_row, width, radius, window, half);
   };
 
   if deadline_enabled {
@@ -843,42 +1041,23 @@ fn box_blur_v(
   }
   let window = (radius * 2 + 1) as i32;
   let half = window / 2;
+  let row_stride = width * 4;
   for x in 0..width {
     if let Some(err) = blur_deadline_exceeded(deadline_counter) {
       return Err(err);
     }
-    let mut sum_r: i32 = 0;
-    let mut sum_g: i32 = 0;
-    let mut sum_b: i32 = 0;
-    let mut sum_a: i32 = 0;
-    for dy in -(radius as isize)..=(radius as isize) {
-      let cy = dy.clamp(0, height as isize - 1) as usize;
-      let idx = (cy * width + x) * 4;
-      sum_r += src[idx] as i32;
-      sum_g += src[idx + 1] as i32;
-      sum_b += src[idx + 2] as i32;
-      sum_a += src[idx + 3] as i32;
-    }
-
-    for y in 0..height {
-      let out_idx = (y * width + x) * 4;
-      let a = ((sum_a + half) / window).clamp(0, 255);
-      let r = (sum_r + half) / window;
-      let g = (sum_g + half) / window;
-      let b = (sum_b + half) / window;
-      dst[out_idx] = clamp_channel_to_alpha(r, a);
-      dst[out_idx + 1] = clamp_channel_to_alpha(g, a);
-      dst[out_idx + 2] = clamp_channel_to_alpha(b, a);
-      dst[out_idx + 3] = a as u8;
-
-      let remove_y = (y as isize - radius as isize).clamp(0, height as isize - 1) as usize;
-      let add_y = (y as isize + radius as isize + 1).clamp(0, height as isize - 1) as usize;
-      let rem_idx = (remove_y * width + x) * 4;
-      let add_idx = (add_y * width + x) * 4;
-      sum_r += src[add_idx] as i32 - src[rem_idx] as i32;
-      sum_g += src[add_idx + 1] as i32 - src[rem_idx + 1] as i32;
-      sum_b += src[add_idx + 2] as i32 - src[rem_idx + 2] as i32;
-      sum_a += src[add_idx + 3] as i32 - src[rem_idx + 3] as i32;
+    let x_offset = x * 4;
+    unsafe {
+      box_blur_column_vertical_to_ptr(
+        src,
+        dst.as_mut_ptr(),
+        row_stride,
+        height,
+        x_offset,
+        radius,
+        window,
+        half,
+      );
     }
   }
   Ok(())
@@ -905,6 +1084,7 @@ fn box_blur_v_parallel(
   let half = window / 2;
   let blocks = (width + COLUMN_BLOCK - 1) / COLUMN_BLOCK;
   let dst_base = dst.as_mut_ptr() as usize;
+  let row_stride = width * 4;
 
   let blur_block = |block: usize| {
     let x_start = block * COLUMN_BLOCK;
@@ -925,41 +1105,11 @@ fn box_blur_v_parallel(
         return;
       }
 
-      let mut sum_r: i32 = 0;
-      let mut sum_g: i32 = 0;
-      let mut sum_b: i32 = 0;
-      let mut sum_a: i32 = 0;
-      for dy in -(radius as isize)..=(radius as isize) {
-        let cy = dy.clamp(0, height as isize - 1) as usize;
-        let idx = (cy * width + x) * 4;
-        sum_r += src[idx] as i32;
-        sum_g += src[idx + 1] as i32;
-        sum_b += src[idx + 2] as i32;
-        sum_a += src[idx + 3] as i32;
-      }
-
-      for y in 0..height {
-        let out_idx = (y * width + x) * 4;
-        let a = ((sum_a + half) / window).clamp(0, 255);
-        let r = (sum_r + half) / window;
-        let g = (sum_g + half) / window;
-        let b = (sum_b + half) / window;
-        unsafe {
-          let out = dst_ptr.add(out_idx);
-          *out = clamp_channel_to_alpha(r, a);
-          *out.add(1) = clamp_channel_to_alpha(g, a);
-          *out.add(2) = clamp_channel_to_alpha(b, a);
-          *out.add(3) = a as u8;
-        }
-
-        let remove_y = (y as isize - radius as isize).clamp(0, height as isize - 1) as usize;
-        let add_y = (y as isize + radius as isize + 1).clamp(0, height as isize - 1) as usize;
-        let rem_idx = (remove_y * width + x) * 4;
-        let add_idx = (add_y * width + x) * 4;
-        sum_r += src[add_idx] as i32 - src[rem_idx] as i32;
-        sum_g += src[add_idx + 1] as i32 - src[rem_idx + 1] as i32;
-        sum_b += src[add_idx + 2] as i32 - src[rem_idx + 2] as i32;
-        sum_a += src[add_idx + 3] as i32 - src[rem_idx + 3] as i32;
+      let x_offset = x * 4;
+      unsafe {
+        box_blur_column_vertical_to_ptr(
+          src, dst_ptr, row_stride, height, x_offset, radius, window, half,
+        );
       }
     }
   };
@@ -1216,7 +1366,8 @@ fn blur_anisotropic_box_kernel_mixed_with_parallelism(
             continue;
           }
           did_work = true;
-          if let Err(err) = box_blur_h(&cur[..], tmp, width, height, radius, &mut deadline_counter) {
+          if let Err(err) = box_blur_h(&cur[..], tmp, width, height, radius, &mut deadline_counter)
+          {
             error = Some(err);
             return;
           }
@@ -1244,7 +1395,8 @@ fn blur_anisotropic_box_kernel_mixed_with_parallelism(
             continue;
           }
           did_work = true;
-          if let Err(err) = box_blur_v(&cur[..], tmp, width, height, radius, &mut deadline_counter) {
+          if let Err(err) = box_blur_v(&cur[..], tmp, width, height, radius, &mut deadline_counter)
+          {
             error = Some(err);
             return;
           }
@@ -1258,7 +1410,16 @@ fn blur_anisotropic_box_kernel_mixed_with_parallelism(
             return;
           }
           let out_row = &mut tmp[y * row_stride..(y + 1) * row_stride];
-          convolve_row_vertical_fixed(&cur[..], out_row, width, height, y, &kernel_y, radius_y, scale_y);
+          convolve_row_vertical_fixed(
+            &cur[..],
+            out_row,
+            width,
+            height,
+            y,
+            &kernel_y,
+            radius_y,
+            scale_y,
+          );
         }
         std::mem::swap(&mut cur, &mut tmp);
       }
@@ -1322,13 +1483,10 @@ fn blur_anisotropic_box_kernel_mixed_with_parallelism(
       };
 
       if deadline_enabled {
-        tmp
-          .par_chunks_mut(row_stride)
-          .enumerate()
-          .for_each_init(
-            || DeadlineGuard::install(deadline.as_ref()),
-            |_, (y, out_row)| convolve_row_x(y, out_row),
-          );
+        tmp.par_chunks_mut(row_stride).enumerate().for_each_init(
+          || DeadlineGuard::install(deadline.as_ref()),
+          |_, (y, out_row)| convolve_row_x(y, out_row),
+        );
       } else {
         tmp
           .par_chunks_mut(row_stride)
@@ -1390,13 +1548,10 @@ fn blur_anisotropic_box_kernel_mixed_with_parallelism(
       };
 
       if deadline_enabled {
-        tmp
-          .par_chunks_mut(row_stride)
-          .enumerate()
-          .for_each_init(
-            || DeadlineGuard::install(deadline.as_ref()),
-            |_, (y, out_row)| convolve_row_y(y, out_row),
-          );
+        tmp.par_chunks_mut(row_stride).enumerate().for_each_init(
+          || DeadlineGuard::install(deadline.as_ref()),
+          |_, (y, out_row)| convolve_row_y(y, out_row),
+        );
       } else {
         tmp
           .par_chunks_mut(row_stride)
@@ -1613,7 +1768,12 @@ fn blur_anisotropic_body_with_parallelism(
   let use_box_y = !fast_enabled && sigma_y > FAST_GAUSS_THRESHOLD_SIGMA;
   match (use_box_x, use_box_y) {
     (true, true) => {
-      return gaussian_blur_box_approx_anisotropic_with_parallelism(pixmap, sigma_x, sigma_y, parallelism);
+      return gaussian_blur_box_approx_anisotropic_with_parallelism(
+        pixmap,
+        sigma_x,
+        sigma_y,
+        parallelism,
+      );
     }
     (true, false) | (false, true) => {
       return blur_anisotropic_box_kernel_mixed_with_parallelism(
@@ -1694,7 +1854,9 @@ fn blur_anisotropic_body_with_parallelism(
           return;
         }
         let out_row = &mut dst[y * row_stride..(y + 1) * row_stride];
-        convolve_row_vertical_fixed(src_for_y, out_row, width, height, y, &kernel_y, radius_y, scale_y);
+        convolve_row_vertical_fixed(
+          src_for_y, out_row, width, height, y, &kernel_y, radius_y, scale_y,
+        );
       }
     } else {
       let deadline = active_deadline();
@@ -1770,7 +1932,9 @@ fn blur_anisotropic_body_with_parallelism(
           }
           return;
         }
-        convolve_row_vertical_fixed(src_for_y, out_row, width, height, y, &kernel_y, radius_y, scale_y);
+        convolve_row_vertical_fixed(
+          src_for_y, out_row, width, height, y, &kernel_y, radius_y, scale_y,
+        );
       };
 
       if deadline_enabled {
@@ -2419,7 +2583,11 @@ mod tests {
 
     apply_gaussian_blur_cached(&mut first, 2.0, 2.0, Some(&mut cache), 1.0).unwrap();
     apply_gaussian_blur_cached(&mut second, 2.0, 2.0, Some(&mut cache), 1.0).unwrap();
-    assert_eq!(first.data(), second.data(), "expected cached blur output to match");
+    assert_eq!(
+      first.data(),
+      second.data(),
+      "expected cached blur output to match"
+    );
 
     let diag = take_paint_diagnostics().unwrap();
     assert_eq!(diag.blur_cache_hits, 1);
@@ -2565,126 +2733,4 @@ mod tests {
     assert_eq!(
       pixmap.data(),
       original.as_slice(),
-      "expected tiled blur to leave pixmap unchanged when deadline is cancelled"
-    );
-  }
-
-  #[test]
-  fn tile_blur_matches_direct_output() {
-    let mut base = new_pixmap(32, 24).unwrap();
-    let w = base.width() as usize;
-    for y in 0..base.height() as usize {
-      for x in 0..w {
-        let a = ((x * 29 + y * 31) % 256) as u8;
-        let r0 = ((x * 11 + y * 7) % 256) as u8;
-        let g0 = ((x * 5 + y * 13) % 256) as u8;
-        let b0 = ((x * 17 + y * 19) % 256) as u8;
-        let premul = |c: u8| ((c as u16 * a as u16) / 255) as u8;
-        base.pixels_mut()[y * w + x] =
-          PremultipliedColorU8::from_rgba(premul(r0), premul(g0), premul(b0), a).unwrap();
-      }
-    }
-
-    let mut direct = base.clone();
-    apply_gaussian_blur(&mut direct, 3.0).unwrap();
-
-    let mut tiled = base.clone();
-    let mut cache = BlurCache::new(FilterCacheConfig {
-      max_items: 0,
-      max_bytes: 2048,
-    });
-
-    // Ensure the tile-parallel branch is exercised even when the global rayon pool is single-threaded.
-    ThreadPoolBuilder::new()
-      .num_threads(2)
-      .build()
-      .unwrap()
-      .install(|| apply_gaussian_blur_cached(&mut tiled, 3.0, 3.0, Some(&mut cache), 1.0).unwrap());
-
-    assert_eq!(direct.data(), tiled.data(), "tiled blur output mismatch");
-  }
-
-  #[test]
-  fn parallel_blur_matches_serial_output() {
-    let mut base = new_pixmap(512, 512).unwrap();
-    let w = base.width() as usize;
-    for y in 0..base.height() as usize {
-      for x in 0..w {
-        let a = ((x * 29 + y * 31) % 256) as u8;
-        let r0 = ((x * 11 + y * 7) % 256) as u8;
-        let g0 = ((x * 5 + y * 13) % 256) as u8;
-        let b0 = ((x * 17 + y * 19) % 256) as u8;
-        let premul = |c: u8| ((c as u16 * a as u16) / 255) as u8;
-        base.pixels_mut()[y * w + x] =
-          PremultipliedColorU8::from_rgba(premul(r0), premul(g0), premul(b0), a).unwrap();
-      }
-    }
-
-    let pool = ThreadPoolBuilder::new().num_threads(2).build().unwrap();
-
-    let mut serial = base.clone();
-    gaussian_convolve_premultiplied_with_parallelism(&mut serial, 3.0, BlurParallelism::Serial)
-      .unwrap();
-    let mut parallel = base.clone();
-    pool.install(|| {
-      gaussian_convolve_premultiplied_with_parallelism(&mut parallel, 3.0, BlurParallelism::Auto)
-        .unwrap();
-    });
-    assert_eq!(
-      serial.data(),
-      parallel.data(),
-      "isotropic gaussian output mismatch"
-    );
-
-    let mut serial = base.clone();
-    gaussian_blur_box_approx_with_parallelism(&mut serial, 8.0, BlurParallelism::Serial).unwrap();
-    let mut parallel = base.clone();
-    pool.install(|| {
-      gaussian_blur_box_approx_with_parallelism(&mut parallel, 8.0, BlurParallelism::Auto).unwrap();
-    });
-    assert_eq!(
-      serial.data(),
-      parallel.data(),
-      "isotropic box blur output mismatch"
-    );
-
-    let mut serial = base.clone();
-    blur_anisotropic_body_with_parallelism(&mut serial, 2.0, 5.0, BlurParallelism::Serial).unwrap();
-    let mut parallel = base.clone();
-    pool.install(|| {
-      blur_anisotropic_body_with_parallelism(&mut parallel, 2.0, 5.0, BlurParallelism::Auto)
-        .unwrap();
-    });
-    assert_eq!(
-      serial.data(),
-      parallel.data(),
-      "anisotropic gaussian output mismatch"
-    );
-
-    let mut serial = base.clone();
-    blur_anisotropic_body_with_parallelism(&mut serial, 8.0, 12.0, BlurParallelism::Serial).unwrap();
-    let mut parallel = base.clone();
-    pool.install(|| {
-      blur_anisotropic_body_with_parallelism(&mut parallel, 8.0, 12.0, BlurParallelism::Auto)
-        .unwrap();
-    });
-    assert_eq!(
-      serial.data(),
-      parallel.data(),
-      "anisotropic box blur output mismatch"
-    );
-
-    let mut serial = base.clone();
-    blur_anisotropic_body_with_parallelism(&mut serial, 12.0, 2.0, BlurParallelism::Serial).unwrap();
-    let mut parallel = base.clone();
-    pool.install(|| {
-      blur_anisotropic_body_with_parallelism(&mut parallel, 12.0, 2.0, BlurParallelism::Auto)
-        .unwrap();
-    });
-    assert_eq!(
-      serial.data(),
-      parallel.data(),
-      "mixed box/kernel anisotropic blur output mismatch"
-    );
-  }
-}
+      "expected tiled blur to leave pixmap 
