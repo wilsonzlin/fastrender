@@ -503,7 +503,7 @@ fn pages_regression_suite() {
 #[test]
 fn aborting_pages_render_without_panic() {
   const STACK_SIZE: usize = 64 * 1024 * 1024;
-  let fixtures = ["cnn_com", "figma_com", "ikea_com"];
+  let fixtures = ["cnn.com", "figma.com", "ikea.com"];
   thread::Builder::new()
     .stack_size(STACK_SIZE)
     .spawn(move || {
