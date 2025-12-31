@@ -8,6 +8,7 @@ use std::{
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use fastrender::resource::HttpFetcher;
+use fastrender::ResourceFetcher;
 
 fn start_keep_alive_server(
   body: &'static [u8],
@@ -84,8 +85,7 @@ fn bench_agent_pool(c: &mut Criterion) {
 
       let mut resp = agent.get(&url).call().expect("one-off fetch");
       assert_eq!(resp.status(), 200);
-      let mut out = Vec::new();
-      resp.body_mut().read_to_end(&mut out).unwrap();
+      let out = resp.body_mut().with_config().read_to_vec().unwrap();
       assert_eq!(out, body);
     });
   });

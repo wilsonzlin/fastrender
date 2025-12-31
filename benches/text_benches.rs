@@ -65,7 +65,6 @@ fn bench_line_break_dense_paragraph(c: &mut Criterion) {
     Ok(runs) => runs,
     Err(_) => return,
   };
-  TextItem::apply_spacing_to_runs(&mut runs, &text, style.letter_spacing, style.word_spacing);
   let metrics = TextItem::metrics_from_runs(&runs, style.font_size, style.font_size);
   let mut item = TextItem::new(
     runs,

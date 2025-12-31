@@ -61,7 +61,7 @@ fn allocation_delta<R, F: FnOnce() -> R>(f: F) -> (usize, usize, R) {
 fn text_fragment(label: &str) -> FragmentNode {
   FragmentNode::new_text(
     Rect::from_xywh(0.0, 0.0, 4.0 * label.len() as f32, 12.0),
-    label.into(),
+    label,
     10.0,
   )
 }
