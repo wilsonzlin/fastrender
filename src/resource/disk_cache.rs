@@ -348,7 +348,7 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
         return SnapshotRead::Miss;
       }
     };
-    if bytes.is_empty() || meta.len != bytes.len() {
+    if meta.len != bytes.len() {
       self.remove_entry_if_unlocked(key, data_path, meta_path);
       return SnapshotRead::Miss;
     }
@@ -883,6 +883,22 @@ mod tests {
   }
 
   #[derive(Clone)]
+  struct EmptyFetcher {
+    count: Arc<AtomicUsize>,
+  }
+
+  impl ResourceFetcher for EmptyFetcher {
+    fn fetch(&self, url: &str) -> Result<FetchedResource> {
+      self.count.fetch_add(1, Ordering::SeqCst);
+      Ok(FetchedResource::with_final_url(
+        Vec::new(),
+        Some("text/css".to_string()),
+        Some(url.to_string()),
+      ))
+    }
+  }
+
+  #[derive(Clone)]
   struct SizedFetcher {
     count: Arc<AtomicUsize>,
     size: usize,
@@ -921,6 +937,63 @@ mod tests {
     assert_eq!(counter.load(Ordering::SeqCst), 1, "should hit disk cache");
     assert_eq!(second.content_type.as_deref(), Some("text/plain"));
     assert_eq!(second.final_url.as_deref(), Some(url));
+  }
+
+  #[test]
+  fn disk_cache_persists_empty_resources() {
+    let tmp = tempfile::tempdir().unwrap();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let fetcher = EmptyFetcher {
+      count: Arc::clone(&counter),
+    };
+    let disk = DiskCachingFetcher::new(fetcher, tmp.path());
+    let url = "https://example.com/empty.css";
+
+    let first = disk.fetch(url).expect("first fetch");
+    assert_eq!(counter.load(Ordering::SeqCst), 1);
+    assert!(first.bytes.is_empty());
+    assert_eq!(first.content_type.as_deref(), Some("text/css"));
+    assert_eq!(first.final_url.as_deref(), Some(url));
+
+    let second_fetcher = EmptyFetcher {
+      count: Arc::clone(&counter),
+    };
+    let disk_again = DiskCachingFetcher::new(second_fetcher, tmp.path());
+    let second = disk_again.fetch(url).expect("cached fetch");
+    assert_eq!(counter.load(Ordering::SeqCst), 1, "should hit disk cache");
+    assert!(second.bytes.is_empty());
+    assert_eq!(second.content_type.as_deref(), Some("text/css"));
+    assert_eq!(second.final_url.as_deref(), Some(url));
+  }
+
+  #[test]
+  fn disk_cache_rebuild_preserves_empty_resources() {
+    let tmp = tempfile::tempdir().unwrap();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let fetcher = EmptyFetcher {
+      count: Arc::clone(&counter),
+    };
+    let disk = DiskCachingFetcher::new(fetcher, tmp.path());
+    let url = "https://example.com/empty-rebuild.css";
+
+    let first = disk.fetch(url).expect("first fetch");
+    assert_eq!(counter.load(Ordering::SeqCst), 1);
+    assert!(first.bytes.is_empty());
+
+    // Delete the journal to force the next instance to rebuild the index from the actual files.
+    fs::remove_file(tmp.path().join("index.jsonl")).expect("remove journal");
+
+    let second_fetcher = EmptyFetcher {
+      count: Arc::clone(&counter),
+    };
+    let disk_again = DiskCachingFetcher::new(second_fetcher, tmp.path());
+    let second = disk_again.fetch(url).expect("cached fetch");
+    assert_eq!(
+      counter.load(Ordering::SeqCst),
+      1,
+      "index rebuild should not discard zero-length entries"
+    );
+    assert!(second.bytes.is_empty());
   }
 
   #[derive(Clone)]

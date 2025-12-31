@@ -372,9 +372,6 @@ impl DiskCacheIndex {
     let meta_bytes = fs::read(meta_path).ok()?;
     let meta: StoredMetadata = serde_json::from_slice(&meta_bytes).ok()?;
     let len = meta.len as u64;
-    if len == 0 {
-      return None;
-    }
     let Ok(data_meta) = fs::metadata(data_path) else {
       return None;
     };
