@@ -1053,9 +1053,14 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
     attrs: &[(String, String)],
     _document_css: &str,
     out: &mut String,
-    fallback_out: &mut String,
+    fallback_out: &mut Option<String>,
     foreign_objects: &mut Vec<ForeignObjectInfo>,
   ) -> bool {
+    // ForeignObject output can diverge between the primary SVG (placeholder comment for later
+    // replacement) and the fallback SVG (best-effort placeholder rendering). Only allocate and
+    // populate the fallback buffer once we know we need it.
+    let fallback_out = fallback_out.get_or_insert_with(|| out.clone());
+
     let mut x = 0.0f32;
     let mut y = 0.0f32;
     let mut width: Option<f32> = None;
@@ -1126,7 +1131,7 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
     parent_ns: Option<&str>,
     is_root: bool,
     out: &mut String,
-    fallback_out: &mut String,
+    fallback_out: &mut Option<String>,
     foreign_objects: &mut Vec<ForeignObjectInfo>,
   ) {
     match &styled.node.node_type {
@@ -1160,7 +1165,9 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
       }
       crate::dom::DomNodeType::Text { content } => {
         push_escaped_text(out, content);
-        push_escaped_text(fallback_out, content);
+        if let Some(fallback_out) = fallback_out.as_mut() {
+          push_escaped_text(fallback_out, content);
+        }
       }
       crate::dom::DomNodeType::Element {
         tag_name,
@@ -1203,29 +1210,49 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
         }
 
         out.push('<');
-        fallback_out.push('<');
+        if let Some(fallback_out) = fallback_out.as_mut() {
+          fallback_out.push('<');
+        }
         out.push_str(tag_name);
-        fallback_out.push_str(tag_name);
+        if let Some(fallback_out) = fallback_out.as_mut() {
+          fallback_out.push_str(tag_name);
+        }
         for (name, value) in &attrs {
           out.push(' ');
-          fallback_out.push(' ');
+          if let Some(fallback_out) = fallback_out.as_mut() {
+            fallback_out.push(' ');
+          }
           out.push_str(name);
-          fallback_out.push_str(name);
+          if let Some(fallback_out) = fallback_out.as_mut() {
+            fallback_out.push_str(name);
+          }
           out.push('=');
-          fallback_out.push('=');
+          if let Some(fallback_out) = fallback_out.as_mut() {
+            fallback_out.push('=');
+          }
           out.push('"');
-          fallback_out.push('"');
+          if let Some(fallback_out) = fallback_out.as_mut() {
+            fallback_out.push('"');
+          }
           push_escaped_attr(out, value);
-          push_escaped_attr(fallback_out, value);
+          if let Some(fallback_out) = fallback_out.as_mut() {
+            push_escaped_attr(fallback_out, value);
+          }
           out.push('"');
-          fallback_out.push('"');
+          if let Some(fallback_out) = fallback_out.as_mut() {
+            fallback_out.push('"');
+          }
         }
         out.push('>');
-        fallback_out.push('>');
+        if let Some(fallback_out) = fallback_out.as_mut() {
+          fallback_out.push('>');
+        }
 
         if is_root && embed_document_css {
           append_style_with_cdata(out, document_css);
-          append_style_with_cdata(fallback_out, document_css);
+          if let Some(fallback_out) = fallback_out.as_mut() {
+            append_style_with_cdata(fallback_out, document_css);
+          }
         }
 
         for child in &styled.children {
@@ -1242,17 +1269,23 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
         }
 
         out.push_str("</");
-        fallback_out.push_str("</");
+        if let Some(fallback_out) = fallback_out.as_mut() {
+          fallback_out.push_str("</");
+        }
         out.push_str(tag_name);
-        fallback_out.push_str(tag_name);
+        if let Some(fallback_out) = fallback_out.as_mut() {
+          fallback_out.push_str(tag_name);
+        }
         out.push('>');
-        fallback_out.push('>');
+        if let Some(fallback_out) = fallback_out.as_mut() {
+          fallback_out.push('>');
+        }
       }
     }
   }
 
   let mut out = String::new();
-  let mut fallback_out = String::new();
+  let mut fallback_out = None;
   let mut foreign_objects: Vec<ForeignObjectInfo> = Vec::new();
   serialize_node(
     styled,
@@ -1265,6 +1298,12 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
     &mut foreign_objects,
   );
 
+  let fallback_svg = if foreign_objects.is_empty() {
+    String::new()
+  } else {
+    fallback_out.unwrap_or_else(|| out.clone())
+  };
+
   let shared_css = if !foreign_objects.is_empty()
     && document_css.as_bytes().len() <= foreign_object_css_limit_bytes()
   {
@@ -1275,7 +1314,7 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
 
   SvgContent {
     svg: out,
-    fallback_svg: fallback_out,
+    fallback_svg,
     foreign_objects,
     shared_css,
   }

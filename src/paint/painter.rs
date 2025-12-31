@@ -5509,31 +5509,33 @@ impl Painter {
         ) {
           return;
         }
-        if self.paint_svg(
-          &content.fallback_svg,
-          style,
-          content_rect.x(),
-          content_rect.y(),
-          content_rect.width(),
-          content_rect.height(),
-        ) {
-          return;
-        }
-        let fallback_source = crate::tree::box_tree::SelectedImageSource {
-          url: content.fallback_svg.as_str(),
-          descriptor: None,
-          density: None,
-          from_picture: false,
-        };
-        if self.paint_image_from_src(
-          &fallback_source,
-          style,
-          content_rect.x(),
-          content_rect.y(),
-          content_rect.width(),
-          content_rect.height(),
-        ) {
-          return;
+        if !content.fallback_svg.is_empty() {
+          if self.paint_svg(
+            &content.fallback_svg,
+            style,
+            content_rect.x(),
+            content_rect.y(),
+            content_rect.width(),
+            content_rect.height(),
+          ) {
+            return;
+          }
+          let fallback_source = crate::tree::box_tree::SelectedImageSource {
+            url: content.fallback_svg.as_str(),
+            descriptor: None,
+            density: None,
+            from_picture: false,
+          };
+          if self.paint_image_from_src(
+            &fallback_source,
+            style,
+            content_rect.x(),
+            content_rect.y(),
+            content_rect.width(),
+            content_rect.height(),
+          ) {
+            return;
+          }
         }
       }
       ReplacedType::Iframe {
@@ -5652,13 +5654,11 @@ impl Painter {
     width: f32,
     height: f32,
   ) -> bool {
-    let svg_markup = if content.foreign_objects.is_empty() {
-      Some(content.svg.clone())
-    } else {
-      self.inline_svg_with_foreign_objects(content)
-    };
+    if content.foreign_objects.is_empty() {
+      return self.paint_svg(&content.svg, style, x, y, width, height);
+    }
 
-    if let Some(svg) = svg_markup {
+    if let Some(svg) = self.inline_svg_with_foreign_objects(content) {
       return self.paint_svg(&svg, style, x, y, width, height);
     }
 
