@@ -272,20 +272,31 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     let lock_path = lock_path_for(data_path);
     match fs::metadata(&lock_path) {
       Ok(meta) => {
-        let maybe_pid = fs::read(&lock_path)
+        let meta_age = lock_age_from_metadata(&meta);
+        if meta_age
+          .map(|age| age > self.disk_config.lock_stale_after)
+          .unwrap_or(false)
+        {
+          let _ = fs::remove_file(&lock_path);
+          return false;
+        }
+
+        let contents = fs::read(&lock_path)
           .ok()
-          .and_then(|bytes| serde_json::from_slice::<LockFileContents>(&bytes).ok())
-          .map(|c| c.pid);
-        if let Some(pid) = maybe_pid {
-          if let Some(false) = pid_is_alive(pid) {
+          .and_then(|bytes| serde_json::from_slice::<LockFileContents>(&bytes).ok());
+        if let Some(contents) = contents {
+          if let Some(false) = pid_is_alive(contents.pid) {
             let _ = fs::remove_file(&lock_path);
             return false;
           }
-        }
-        if let Some(age) = lock_age_from_metadata(&meta) {
-          if age > self.disk_config.lock_stale_after {
-            let _ = fs::remove_file(&lock_path);
-            return false;
+          // On platforms/filesystems where we can't rely on mtime/ctime, fall back to the stored
+          // timestamp in the lockfile itself.
+          if meta_age.is_none() {
+            let lock_age = Duration::from_secs(now_seconds().saturating_sub(contents.started_at));
+            if lock_age > self.disk_config.lock_stale_after {
+              let _ = fs::remove_file(&lock_path);
+              return false;
+            }
           }
         }
         true
