@@ -1,17 +1,16 @@
 //! Instrumentation hooks for Taffy-backed layout
 //!
 //! This module provides lightweight counters that track when the vendored
-//! Taffy engine is invoked. The counters are compiled only in debug/test
-//! builds to avoid any release overhead. They backstop the invariant that
-//! Taffy must only be used for flex/grid layout, never for tables.
+//! Taffy engine is invoked. Counters are available in release builds but are
+//! disabled by default; call sites can enable them at runtime when collecting
+//! render statistics.
 
 use crate::geometry::Size;
 use crate::layout::constraints::AvailableSpace as CrateAvailableSpace;
 use crate::layout::constraints::LayoutConstraints;
-#[cfg(any(test, debug_assertions))]
-use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use taffy::style::Style as TaffyStyle;
 
@@ -47,87 +46,194 @@ pub(crate) enum TaffyAdapterKind {
   Grid,
 }
 
-#[cfg(any(test, debug_assertions))]
-thread_local! {
-  static COUNTERS: RefCell<TaffyUsageCounters> = RefCell::new(TaffyUsageCounters::default());
+static TAFFY_COUNTERS_ENABLED: AtomicBool = AtomicBool::new(false);
+
+struct TaffyUsageAtomicCounters {
+  flex: AtomicU64,
+  grid: AtomicU64,
+  flex_nodes_built: AtomicU64,
+  flex_nodes_reused: AtomicU64,
+  grid_nodes_built: AtomicU64,
+  grid_nodes_reused: AtomicU64,
+  flex_style_cache_hits: AtomicU64,
+  flex_style_cache_misses: AtomicU64,
+  grid_style_cache_hits: AtomicU64,
+  grid_style_cache_misses: AtomicU64,
 }
 
-/// Records that a Taffy layout was executed. No-ops in release builds.
-#[inline]
-pub(crate) fn record_taffy_invocation(_kind: TaffyAdapterKind) {
-  #[cfg(any(test, debug_assertions))]
-  COUNTERS.with(|counts| {
-    let mut counts = counts.borrow_mut();
-    match _kind {
-      TaffyAdapterKind::Flex => counts.flex += 1,
-      TaffyAdapterKind::Grid => counts.grid += 1,
+impl TaffyUsageAtomicCounters {
+  const fn new() -> Self {
+    Self {
+      flex: AtomicU64::new(0),
+      grid: AtomicU64::new(0),
+      flex_nodes_built: AtomicU64::new(0),
+      flex_nodes_reused: AtomicU64::new(0),
+      grid_nodes_built: AtomicU64::new(0),
+      grid_nodes_reused: AtomicU64::new(0),
+      flex_style_cache_hits: AtomicU64::new(0),
+      flex_style_cache_misses: AtomicU64::new(0),
+      grid_style_cache_hits: AtomicU64::new(0),
+      grid_style_cache_misses: AtomicU64::new(0),
     }
-  });
+  }
+
+  fn reset(&self) {
+    self.flex.store(0, Ordering::Relaxed);
+    self.grid.store(0, Ordering::Relaxed);
+    self.flex_nodes_built.store(0, Ordering::Relaxed);
+    self.flex_nodes_reused.store(0, Ordering::Relaxed);
+    self.grid_nodes_built.store(0, Ordering::Relaxed);
+    self.grid_nodes_reused.store(0, Ordering::Relaxed);
+    self.flex_style_cache_hits.store(0, Ordering::Relaxed);
+    self.flex_style_cache_misses.store(0, Ordering::Relaxed);
+    self.grid_style_cache_hits.store(0, Ordering::Relaxed);
+    self.grid_style_cache_misses.store(0, Ordering::Relaxed);
+  }
+
+  fn snapshot(&self) -> TaffyUsageCounters {
+    TaffyUsageCounters {
+      flex: self.flex.load(Ordering::Relaxed),
+      grid: self.grid.load(Ordering::Relaxed),
+      flex_nodes_built: self.flex_nodes_built.load(Ordering::Relaxed),
+      flex_nodes_reused: self.flex_nodes_reused.load(Ordering::Relaxed),
+      grid_nodes_built: self.grid_nodes_built.load(Ordering::Relaxed),
+      grid_nodes_reused: self.grid_nodes_reused.load(Ordering::Relaxed),
+      flex_style_cache_hits: self.flex_style_cache_hits.load(Ordering::Relaxed),
+      flex_style_cache_misses: self.flex_style_cache_misses.load(Ordering::Relaxed),
+      grid_style_cache_hits: self.grid_style_cache_hits.load(Ordering::Relaxed),
+      grid_style_cache_misses: self.grid_style_cache_misses.load(Ordering::Relaxed),
+    }
+  }
+}
+
+static TAFFY_COUNTERS: TaffyUsageAtomicCounters = TaffyUsageAtomicCounters::new();
+
+pub struct TaffyUsageCountersGuard {
+  previous: bool,
+}
+
+impl Drop for TaffyUsageCountersGuard {
+  fn drop(&mut self) {
+    TAFFY_COUNTERS_ENABLED.store(self.previous, Ordering::Relaxed);
+  }
+}
+
+pub fn enable_taffy_counters(enabled: bool) -> TaffyUsageCountersGuard {
+  let previous = TAFFY_COUNTERS_ENABLED.swap(enabled, Ordering::Relaxed);
+  TaffyUsageCountersGuard { previous }
+}
+
+pub fn set_taffy_counters_enabled(enabled: bool) {
+  TAFFY_COUNTERS_ENABLED.store(enabled, Ordering::Relaxed);
 }
 
 #[inline]
-pub(crate) fn record_taffy_node_cache_hit(_kind: TaffyAdapterKind, count: u64) {
-  #[cfg(any(test, debug_assertions))]
-  COUNTERS.with(|counts| {
-    let mut counts = counts.borrow_mut();
-    match _kind {
-      TaffyAdapterKind::Flex => counts.flex_nodes_reused += count,
-      TaffyAdapterKind::Grid => counts.grid_nodes_reused += count,
+fn taffy_counters_enabled() -> bool {
+  TAFFY_COUNTERS_ENABLED.load(Ordering::Relaxed)
+}
+
+/// Records that a Taffy layout was executed.
+#[inline]
+pub(crate) fn record_taffy_invocation(kind: TaffyAdapterKind) {
+  if !taffy_counters_enabled() {
+    return;
+  }
+  match kind {
+    TaffyAdapterKind::Flex => {
+      TAFFY_COUNTERS.flex.fetch_add(1, Ordering::Relaxed);
     }
-  });
+    TaffyAdapterKind::Grid => {
+      TAFFY_COUNTERS.grid.fetch_add(1, Ordering::Relaxed);
+    }
+  }
 }
 
 #[inline]
-pub(crate) fn record_taffy_node_cache_miss(_kind: TaffyAdapterKind, count: u64) {
-  #[cfg(any(test, debug_assertions))]
-  COUNTERS.with(|counts| {
-    let mut counts = counts.borrow_mut();
-    match _kind {
-      TaffyAdapterKind::Flex => counts.flex_nodes_built += count,
-      TaffyAdapterKind::Grid => counts.grid_nodes_built += count,
+pub(crate) fn record_taffy_node_cache_hit(kind: TaffyAdapterKind, count: u64) {
+  if !taffy_counters_enabled() || count == 0 {
+    return;
+  }
+  match kind {
+    TaffyAdapterKind::Flex => {
+      TAFFY_COUNTERS
+        .flex_nodes_reused
+        .fetch_add(count, Ordering::Relaxed);
     }
-  });
+    TaffyAdapterKind::Grid => {
+      TAFFY_COUNTERS
+        .grid_nodes_reused
+        .fetch_add(count, Ordering::Relaxed);
+    }
+  }
 }
 
 #[inline]
-pub(crate) fn record_taffy_style_cache_hit(_kind: TaffyAdapterKind, count: u64) {
-  #[cfg(any(test, debug_assertions))]
-  COUNTERS.with(|counts| {
-    let mut counts = counts.borrow_mut();
-    match _kind {
-      TaffyAdapterKind::Flex => counts.flex_style_cache_hits += count,
-      TaffyAdapterKind::Grid => counts.grid_style_cache_hits += count,
+pub(crate) fn record_taffy_node_cache_miss(kind: TaffyAdapterKind, count: u64) {
+  if !taffy_counters_enabled() || count == 0 {
+    return;
+  }
+  match kind {
+    TaffyAdapterKind::Flex => {
+      TAFFY_COUNTERS
+        .flex_nodes_built
+        .fetch_add(count, Ordering::Relaxed);
     }
-  });
+    TaffyAdapterKind::Grid => {
+      TAFFY_COUNTERS
+        .grid_nodes_built
+        .fetch_add(count, Ordering::Relaxed);
+    }
+  }
 }
 
 #[inline]
-pub(crate) fn record_taffy_style_cache_miss(_kind: TaffyAdapterKind, count: u64) {
-  #[cfg(any(test, debug_assertions))]
-  COUNTERS.with(|counts| {
-    let mut counts = counts.borrow_mut();
-    match _kind {
-      TaffyAdapterKind::Flex => counts.flex_style_cache_misses += count,
-      TaffyAdapterKind::Grid => counts.grid_style_cache_misses += count,
+pub(crate) fn record_taffy_style_cache_hit(kind: TaffyAdapterKind, count: u64) {
+  if !taffy_counters_enabled() || count == 0 {
+    return;
+  }
+  match kind {
+    TaffyAdapterKind::Flex => {
+      TAFFY_COUNTERS
+        .flex_style_cache_hits
+        .fetch_add(count, Ordering::Relaxed);
     }
-  });
+    TaffyAdapterKind::Grid => {
+      TAFFY_COUNTERS
+        .grid_style_cache_hits
+        .fetch_add(count, Ordering::Relaxed);
+    }
+  }
 }
 
-/// Resets counters for the current thread. No-ops in release builds.
+#[inline]
+pub(crate) fn record_taffy_style_cache_miss(kind: TaffyAdapterKind, count: u64) {
+  if !taffy_counters_enabled() || count == 0 {
+    return;
+  }
+  match kind {
+    TaffyAdapterKind::Flex => {
+      TAFFY_COUNTERS
+        .flex_style_cache_misses
+        .fetch_add(count, Ordering::Relaxed);
+    }
+    TaffyAdapterKind::Grid => {
+      TAFFY_COUNTERS
+        .grid_style_cache_misses
+        .fetch_add(count, Ordering::Relaxed);
+    }
+  }
+}
+
+/// Resets counters for the current process.
 #[inline]
 pub fn reset_taffy_counters() {
-  #[cfg(any(test, debug_assertions))]
-  COUNTERS.with(|counts| *counts.borrow_mut() = TaffyUsageCounters::default());
+  TAFFY_COUNTERS.reset();
 }
 
-/// Returns the current counters for the current thread.
+/// Returns a snapshot of the current counters for the current process.
 #[inline]
 pub fn taffy_counters() -> TaffyUsageCounters {
-  #[cfg(any(test, debug_assertions))]
-  return COUNTERS.with(|counts| *counts.borrow());
-
-  #[allow(unreachable_code)]
-  TaffyUsageCounters::default()
+  TAFFY_COUNTERS.snapshot()
 }
 
 /// Convenience accessor for the total number of Taffy invocations observed.

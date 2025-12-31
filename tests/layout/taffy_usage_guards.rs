@@ -1,14 +1,23 @@
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use fastrender::layout::taffy_integration::{
-  reset_taffy_counters, taffy_counters, total_taffy_invocations,
+  enable_taffy_counters, reset_taffy_counters, taffy_counters, total_taffy_invocations,
 };
 use fastrender::style::display::Display;
 use fastrender::{
   BoxNode, ComputedStyle, FastRender, FormattingContextFactory, FormattingContextType,
   LayoutConstraints,
 };
+
+static TAFFY_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn lock_taffy_counters() -> std::sync::MutexGuard<'static, ()> {
+  TAFFY_TEST_LOCK
+    .get_or_init(|| Mutex::new(()))
+    .lock()
+    .expect("taffy test lock poisoned")
+}
 
 fn with_large_stack<F, R>(f: F) -> R
 where
@@ -28,6 +37,8 @@ where
 
 #[test]
 fn flex_and_grid_route_through_taffy() {
+  let _lock = lock_taffy_counters();
+  let _guard = enable_taffy_counters(true);
   reset_taffy_counters();
 
   let mut flex_style = ComputedStyle::default();
@@ -55,6 +66,8 @@ fn flex_and_grid_route_through_taffy() {
 #[test]
 fn tables_do_not_invoke_taffy() {
   with_large_stack(|| {
+    let _lock = lock_taffy_counters();
+    let _guard = enable_taffy_counters(true);
     reset_taffy_counters();
 
     let fixture =
@@ -77,6 +90,8 @@ fn tables_do_not_invoke_taffy() {
 
 #[test]
 fn taffy_reuses_cached_nodes_for_repeated_layouts() {
+  let _lock = lock_taffy_counters();
+  let _guard = enable_taffy_counters(true);
   reset_taffy_counters();
 
   let mut flex_style = ComputedStyle::default();

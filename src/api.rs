@@ -1799,9 +1799,6 @@ pub struct RenderStatsRecorder {
 
 impl RenderStatsRecorder {
   fn new(level: DiagnosticsLevel) -> Self {
-    if level != DiagnosticsLevel::None {
-      crate::layout::taffy_integration::reset_taffy_counters();
-    }
     Self {
       level,
       stats: RenderStats::default(),
@@ -5638,6 +5635,12 @@ impl FastRender {
   ) -> Result<LayoutArtifacts> {
     let _deadline_guard = DeadlineGuard::install(deadline);
     let toggles = runtime::runtime_toggles();
+    let taffy_stats_enabled = stats.is_some() || toggles.truthy("FASTR_TAFFY_STATS");
+    let _taffy_stats_guard =
+      crate::layout::taffy_integration::enable_taffy_counters(taffy_stats_enabled);
+    if taffy_stats_enabled {
+      crate::layout::taffy_integration::reset_taffy_counters();
+    }
     let timings_enabled = toggles.truthy("FASTR_RENDER_TIMINGS");
     let overall_start = timings_enabled.then(Instant::now);
 
