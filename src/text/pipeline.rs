@@ -105,6 +105,7 @@ use ttf_parser::Tag;
 use unicode_bidi::BidiInfo;
 use unicode_bidi::Level;
 use unicode_bidi_mirroring::get_mirrored;
+use unicode_general_category::{get_general_category, GeneralCategory};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_vo::char_orientation;
 use unicode_vo::Orientation as VerticalOrientation;
@@ -394,6 +395,12 @@ pub enum Script {
   Latin,
   /// Arabic script
   Arabic,
+  /// Syriac script
+  Syriac,
+  /// Thaana script
+  Thaana,
+  /// N'Ko script
+  Nko,
   /// Hebrew script
   Hebrew,
   /// Greek script
@@ -408,6 +415,8 @@ pub enum Script {
   Tamil,
   /// Thai script
   Thai,
+  /// Javanese script
+  Javanese,
   /// Han script (Chinese, Japanese kanji, Korean hanja)
   Han,
   /// Hiragana script (Japanese)
@@ -424,6 +433,19 @@ impl Script {
   /// Uses Unicode character ranges for script detection.
   pub fn detect(c: char) -> Self {
     let cp = c as u32;
+
+    // Combining marks should never trigger a script run split. Itemization will
+    // treat them as inheriting the surrounding script, which keeps extended
+    // grapheme clusters intact even when a mark lives in an "unexpected"
+    // Unicode block (seen in real-world pagesets).
+    if matches!(
+      get_general_category(c),
+      GeneralCategory::NonspacingMark
+        | GeneralCategory::SpacingMark
+        | GeneralCategory::EnclosingMark
+    ) {
+      return Self::Inherited;
+    }
 
     // ASCII and Basic Latin
     if (0x0000..=0x007f).contains(&cp) {
@@ -467,6 +489,21 @@ impl Script {
       return Self::Arabic;
     }
 
+    // Syriac
+    if (0x0700..=0x074f).contains(&cp) {
+      return Self::Syriac;
+    }
+
+    // Thaana
+    if (0x0780..=0x07bf).contains(&cp) {
+      return Self::Thaana;
+    }
+
+    // N'Ko
+    if (0x07c0..=0x07ff).contains(&cp) {
+      return Self::Nko;
+    }
+
     // Devanagari
     if (0x0900..=0x097f).contains(&cp) || (0xa8e0..=0xa8ff).contains(&cp) {
       return Self::Devanagari;
@@ -485,6 +522,11 @@ impl Script {
     // Thai
     if (0x0e00..=0x0e7f).contains(&cp) {
       return Self::Thai;
+    }
+
+    // Javanese
+    if (0xa980..=0xa9df).contains(&cp) {
+      return Self::Javanese;
     }
 
     // Hangul (Korean)
@@ -520,14 +562,6 @@ impl Script {
       || (0x2f800..=0x2fa1f).contains(&cp)
     {
       return Self::Han;
-    }
-
-    // Combining marks (Inherited)
-    if (0x0300..=0x036f).contains(&cp)
-      || (0x1ab0..=0x1aff).contains(&cp)
-      || (0x1dc0..=0x1dff).contains(&cp)
-    {
-      return Self::Inherited;
     }
 
     // General punctuation, symbols, numbers
@@ -581,6 +615,9 @@ impl Script {
     let tag: Option<[u8; 4]> = match self {
       Self::Latin => Some(*b"Latn"),
       Self::Arabic => Some(*b"Arab"),
+      Self::Syriac => Some(*b"Syrc"),
+      Self::Thaana => Some(*b"Thaa"),
+      Self::Nko => Some(*b"Nkoo"),
       Self::Hebrew => Some(*b"Hebr"),
       Self::Greek => Some(*b"Grek"),
       Self::Cyrillic => Some(*b"Cyrl"),
@@ -588,6 +625,7 @@ impl Script {
       Self::Bengali => Some(*b"Beng"),
       Self::Tamil => Some(*b"Taml"),
       Self::Thai => Some(*b"Thai"),
+      Self::Javanese => Some(*b"Java"),
       Self::Han => Some(*b"Hani"),
       Self::Hiragana => Some(*b"Hira"),
       Self::Katakana => Some(*b"Kana"),
@@ -4249,6 +4287,30 @@ mod tests {
   }
 
   #[test]
+  fn test_script_detection_syriac() {
+    assert_eq!(Script::detect('ܐ'), Script::Syriac);
+    assert_eq!(Script::detect('ܒ'), Script::Syriac);
+  }
+
+  #[test]
+  fn test_script_detection_thaana() {
+    assert_eq!(Script::detect('ހ'), Script::Thaana);
+    assert_eq!(Script::detect('ށ'), Script::Thaana);
+  }
+
+  #[test]
+  fn test_script_detection_nko() {
+    assert_eq!(Script::detect('ߊ'), Script::Nko);
+    assert_eq!(Script::detect('ߞ'), Script::Nko);
+  }
+
+  #[test]
+  fn test_script_detection_javanese() {
+    assert_eq!(Script::detect('ꦄ'), Script::Javanese);
+    assert_eq!(Script::detect('ꦧ'), Script::Javanese);
+  }
+
+  #[test]
   fn test_script_detection_hebrew() {
     assert_eq!(Script::detect('ש'), Script::Hebrew);
     assert_eq!(Script::detect('ל'), Script::Hebrew);
@@ -4279,6 +4341,13 @@ mod tests {
     assert_eq!(Script::detect(' '), Script::Common);
     assert_eq!(Script::detect('1'), Script::Common);
     assert_eq!(Script::detect('.'), Script::Common);
+  }
+
+  #[test]
+  fn test_script_detection_combining_marks_are_inherited() {
+    // U+07EB is a N'Ko combining tone mark. It must not be classified as N'Ko,
+    // otherwise script itemization could split an extended grapheme cluster.
+    assert_eq!(Script::detect('\u{07EB}'), Script::Inherited);
   }
 
   #[test]
@@ -4539,6 +4608,26 @@ mod tests {
   }
 
   #[test]
+  fn itemization_keeps_combining_marks_with_base_script() {
+    // U+07EB is a N'Ko combining mark. When it appears after a Hangul base
+    // character it should not force a script run break.
+    let style = ComputedStyle::default();
+    let text = "가\u{07EB}\u{07CA}"; // Hangul + N'Ko combining mark + N'Ko letter
+    let bidi = BidiAnalysis::analyze(text, &style);
+    let runs = itemize_text(text, &bidi);
+
+    assert_eq!(
+      runs.len(),
+      2,
+      "combining marks should not start a new script run"
+    );
+    assert_eq!(runs[0].text, "가\u{07EB}");
+    assert_eq!(runs[0].script, Script::Hangul);
+    assert_eq!(runs[1].text, "\u{07CA}");
+    assert_eq!(runs[1].script, Script::Nko);
+  }
+
+  #[test]
   fn test_itemize_empty() {
     let style = ComputedStyle::default();
     let bidi = BidiAnalysis::analyze("", &style);
@@ -4729,7 +4818,11 @@ mod tests {
     // Specific scripts should return Some
     assert!(Script::Latin.to_harfbuzz().is_some());
     assert!(Script::Arabic.to_harfbuzz().is_some());
+    assert!(Script::Syriac.to_harfbuzz().is_some());
+    assert!(Script::Thaana.to_harfbuzz().is_some());
+    assert!(Script::Nko.to_harfbuzz().is_some());
     assert!(Script::Hebrew.to_harfbuzz().is_some());
+    assert!(Script::Javanese.to_harfbuzz().is_some());
     // Common/neutral scripts should return None (auto-detect)
     assert!(Script::Common.to_harfbuzz().is_none());
     assert!(Script::Inherited.to_harfbuzz().is_none());
