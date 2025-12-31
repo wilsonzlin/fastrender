@@ -143,6 +143,86 @@ struct SvgFilterCacheKey {
   bbox: [u32; 4],
 }
 
+fn pixel_fingerprint_in_region(pixmap: &Pixmap, region: Rect) -> u64 {
+  const PRIME: u64 = 0x9E37_79B1_85EB_CA87;
+  let width = pixmap.width() as i32;
+  let height = pixmap.height() as i32;
+  if width == 0 || height == 0 {
+    return 0;
+  }
+
+  let min_x = region.min_x().floor() as i32;
+  let min_y = region.min_y().floor() as i32;
+  let max_x = region.max_x().ceil() as i32;
+  let max_y = region.max_y().ceil() as i32;
+
+  let clamped_min_x = min_x.clamp(0, width);
+  let clamped_min_y = min_y.clamp(0, height);
+  let clamped_max_x = max_x.clamp(0, width);
+  let clamped_max_y = max_y.clamp(0, height);
+
+  if clamped_min_x == 0 && clamped_min_y == 0 && clamped_max_x == width && clamped_max_y == height {
+    return pixel_fingerprint(pixmap.data());
+  }
+
+  let region_w = (clamped_max_x - clamped_min_x).max(0) as usize;
+  let region_h = (clamped_max_y - clamped_min_y).max(0) as usize;
+  let bytes_per_row = region_w * 4;
+  let total_len = bytes_per_row * region_h;
+  if total_len == 0 {
+    return 0;
+  }
+
+  let mut hash = (total_len as u64).wrapping_mul(PRIME);
+  let data = pixmap.data();
+  let row_stride = pixmap.width() as usize * 4;
+
+  let mut pending = [0u8; 8];
+  let mut pending_len = 0usize;
+
+  for y in clamped_min_y..clamped_max_y {
+    let start = y as usize * row_stride + clamped_min_x as usize * 4;
+    let end = start + bytes_per_row;
+    let mut slice = &data[start..end];
+
+    if pending_len != 0 {
+      let needed = 8 - pending_len;
+      if slice.len() >= needed {
+        pending[pending_len..].copy_from_slice(&slice[..needed]);
+        hash ^= u64::from_le_bytes(pending)
+          .wrapping_mul(PRIME)
+          .rotate_left(7);
+        pending_len = 0;
+        slice = &slice[needed..];
+      } else {
+        pending[pending_len..pending_len + slice.len()].copy_from_slice(slice);
+        pending_len += slice.len();
+        continue;
+      }
+    }
+
+    let mut chunks = slice.chunks_exact(8);
+    for chunk in &mut chunks {
+      let mut buf = [0u8; 8];
+      buf.copy_from_slice(chunk);
+      hash ^= u64::from_le_bytes(buf).wrapping_mul(PRIME).rotate_left(7);
+    }
+    let rem = chunks.remainder();
+    if !rem.is_empty() {
+      pending[..rem.len()].copy_from_slice(rem);
+      pending_len = rem.len();
+    }
+  }
+
+  if pending_len != 0 {
+    let mut buf = [0u8; 8];
+    buf[..pending_len].copy_from_slice(&pending[..pending_len]);
+    hash ^= u64::from_le_bytes(buf).wrapping_mul(PRIME).rotate_left(11);
+  }
+
+  hash
+}
+
 impl SvgFilterCacheKey {
   fn new(
     filter: &SvgFilter,
@@ -150,13 +230,14 @@ impl SvgFilterCacheKey {
     scale_x: f32,
     scale_y: f32,
     bbox: Rect,
+    filter_region: Rect,
   ) -> Option<Self> {
     if pixmap.width() == 0 || pixmap.height() == 0 {
       return None;
     }
     Some(Self {
       filter_hash: svg_filter_fingerprint(filter),
-      source_hash: pixel_fingerprint(pixmap.data()),
+      source_hash: pixel_fingerprint_in_region(pixmap, filter_region),
       scale_x_bits: scale_x.to_bits(),
       scale_y_bits: scale_y.to_bits(),
       width: pixmap.width(),
@@ -2498,7 +2579,16 @@ fn apply_svg_filter_scaled(
     return Ok(());
   };
 
-  let cache_key = SvgFilterCacheKey::new(def, pixmap, scale_x, scale_y, css_bbox);
+  let cache_enabled = match filter_result_cache().lock() {
+    Ok(cache) => cache.config.max_items > 0,
+    Err(_) => false,
+  };
+
+  let cache_key = if cache_enabled {
+    SvgFilterCacheKey::new(def, pixmap, scale_x, scale_y, css_bbox, filter_region)
+  } else {
+    None
+  };
   if let Some(key) = cache_key.as_ref() {
     if let Ok(mut cache) = filter_result_cache().lock() {
       if let Some(cached) = cache.get(key) {
@@ -2508,6 +2598,8 @@ fn apply_svg_filter_scaled(
       }
     }
   }
+
+  clip_to_region(pixmap, filter_region);
 
   let default_primitive_region = SvgFilterRegion {
     x: def.region.x,
@@ -4894,6 +4986,38 @@ mod tests {
         assert!((base_frequency.1 - 0.2).abs() < 1e-6);
       }
       _ => panic!("expected turbulence primitive"),
+    }
+  }
+}
+
+#[cfg(test)]
+mod filter_region_input_clipping_tests {
+  use super::*;
+
+  #[test]
+  fn sampling_primitives_do_not_pull_pixels_from_outside_filter_region() {
+    let cache = ImageCache::new();
+    let svg = "<svg xmlns='http://www.w3.org/2000/svg'><filter id='f' filterUnits='userSpaceOnUse' x='0' y='0' width='4' height='4'><feOffset dx='-2' dy='0'/></filter></svg>";
+    let filter = parse_filter_definition(svg, Some("f"), &cache).expect("parsed filter");
+
+    let mut pixmap = new_pixmap(8, 8).unwrap();
+    for px in pixmap.pixels_mut() {
+      *px = PremultipliedColorU8::TRANSPARENT;
+    }
+    pixmap.pixels_mut()[1 * 8 + 5] = PremultipliedColorU8::from_rgba(255, 255, 255, 255)
+      .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+
+    let bbox = Rect::from_xywh(0.0, 0.0, 8.0, 8.0);
+    apply_svg_filter(filter.as_ref(), &mut pixmap, 1.0, bbox).unwrap();
+
+    for y in 0..4 {
+      for x in 0..4 {
+        assert_eq!(
+          pixmap.pixel(x, y).unwrap().alpha(),
+          0,
+          "expected pixel at ({x},{y}) to remain transparent"
+        );
+      }
     }
   }
 }
