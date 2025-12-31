@@ -1591,12 +1591,16 @@ fn convert_handle_to_node(
     },
     NodeData::Element { name, attrs, .. } => {
       let tag_name = name.local.to_string();
-      let namespace = name.ns.to_string();
-      let attributes = attrs
-        .borrow()
-        .iter()
-        .map(|attr| (attr.name.local.to_string(), attr.value.to_string()))
-        .collect();
+      let namespace = if name.ns.as_ref() == HTML_NAMESPACE {
+        String::new()
+      } else {
+        name.ns.to_string()
+      };
+      let attrs_ref = attrs.borrow();
+      let mut attributes = Vec::with_capacity(attrs_ref.len());
+      for attr in attrs_ref.iter() {
+        attributes.push((attr.name.local.to_string(), attr.value.to_string()));
+      }
 
       let is_html_slot = tag_name.eq_ignore_ascii_case("slot")
         && (namespace.is_empty() || namespace == HTML_NAMESPACE);
@@ -1630,22 +1634,26 @@ fn convert_handle_to_node(
     } => {
       if name.local.as_ref().eq_ignore_ascii_case("template") {
         let borrowed = template_contents.borrow();
-        let mut out = Vec::new();
-        if let Some(content) = &*borrowed {
-          for child in content.children.borrow().iter() {
-            if let Some(node) =
-              convert_handle_to_node(child, document_quirks_mode, deadline_counter)?
-            {
-              out.push(node);
+        match &*borrowed {
+          Some(content) => {
+            let children_ref = content.children.borrow();
+            let mut out = Vec::with_capacity(children_ref.len());
+            for child in children_ref.iter() {
+              if let Some(node) =
+                convert_handle_to_node(child, document_quirks_mode, deadline_counter)?
+              {
+                out.push(node);
+              }
             }
+            out
           }
+          None => Vec::new(),
         }
-        out
       } else {
-        let mut out = Vec::new();
-        for child in handle.children.borrow().iter() {
-          if let Some(node) = convert_handle_to_node(child, document_quirks_mode, deadline_counter)?
-          {
+        let children_ref = handle.children.borrow();
+        let mut out = Vec::with_capacity(children_ref.len());
+        for child in children_ref.iter() {
+          if let Some(node) = convert_handle_to_node(child, document_quirks_mode, deadline_counter)? {
             out.push(node);
           }
         }
@@ -1653,8 +1661,9 @@ fn convert_handle_to_node(
       }
     }
     NodeData::Document => {
-      let mut out = Vec::new();
-      for child in handle.children.borrow().iter() {
+      let children_ref = handle.children.borrow();
+      let mut out = Vec::with_capacity(children_ref.len());
+      for child in children_ref.iter() {
         if let Some(node) = convert_handle_to_node(child, document_quirks_mode, deadline_counter)? {
           out.push(node);
         }
@@ -1669,6 +1678,7 @@ fn convert_handle_to_node(
   // be styled/selected.
   if let DomNodeType::Element { tag_name, .. } = &node_type {
     if tag_name.eq_ignore_ascii_case("wbr") {
+      children.reserve(1);
       children.push(DomNode {
         node_type: DomNodeType::Text {
           content: "\u{200B}".to_string(),
@@ -4253,6 +4263,24 @@ mod tests {
       dom.document_quirks_mode(),
       QuirksMode::Quirks,
       "missing doctype should trigger quirks mode"
+    );
+  }
+
+  #[test]
+  fn parse_html_uses_empty_namespace_for_html_elements() {
+    let dom =
+      parse_html("<!doctype html><html><body><div id='x'></div></body></html>").expect("parse");
+    let div = find_element_by_id(&dom, "x").expect("div element");
+    assert_eq!(
+      div.namespace(),
+      Some(""),
+      "HTML elements should store an empty namespace to avoid per-node allocations"
+    );
+
+    let div_ref = ElementRef::new(div);
+    assert!(
+      div_ref.has_namespace(HTML_NAMESPACE),
+      "namespace matching should treat the empty namespace as HTML"
     );
   }
 
