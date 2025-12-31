@@ -1174,32 +1174,38 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
         namespace,
         attributes,
       } => {
-        let mut current_ns = namespace.clone();
+        let mut current_ns = namespace.as_str();
         if is_root && current_ns.is_empty() {
-          current_ns = SVG_NAMESPACE.to_string();
+          current_ns = SVG_NAMESPACE;
         }
 
-        let mut attrs = attributes.clone();
-        let has_xmlns = attrs
+        let has_xmlns = attributes
           .iter()
           .any(|(name, _)| name.eq_ignore_ascii_case("xmlns"));
-        if (!current_ns.is_empty() && parent_ns != Some(current_ns.as_str()))
-          || (is_root && !has_xmlns)
-        {
-          if !has_xmlns {
-            attrs.push(("xmlns".to_string(), current_ns.clone()));
-          }
-        }
+        let needs_xmlns = (!current_ns.is_empty() && parent_ns != Some(current_ns))
+          || (is_root && !has_xmlns);
+        let needs_xmlns_attr = needs_xmlns && !has_xmlns;
 
-        if is_root {
-          let style_attr = root_style(&styled.styles);
-          merge_style_attribute(&mut attrs, &style_attr);
-        }
+        let mut owned_attrs: Option<Vec<(String, String)>> = None;
+        let attrs: &[(String, String)] = if needs_xmlns_attr || is_root {
+          let mut attrs = attributes.clone();
+          if needs_xmlns_attr {
+            attrs.push(("xmlns".to_string(), current_ns.to_string()));
+          }
+          if is_root {
+            let style_attr = root_style(&styled.styles);
+            merge_style_attribute(&mut attrs, &style_attr);
+          }
+          owned_attrs = Some(attrs);
+          owned_attrs.as_deref().unwrap()
+        } else {
+          attributes
+        };
 
         if tag_name.eq_ignore_ascii_case("foreignObject") {
           if serialize_foreign_object(
             styled,
-            &attrs,
+            attrs,
             document_css,
             out,
             fallback_out,
@@ -1217,7 +1223,7 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
         if let Some(fallback_out) = fallback_out.as_mut() {
           fallback_out.push_str(tag_name);
         }
-        for (name, value) in &attrs {
+        for (name, value) in attrs {
           out.push(' ');
           if let Some(fallback_out) = fallback_out.as_mut() {
             fallback_out.push(' ');
@@ -1260,7 +1266,7 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
             child,
             document_css,
             embed_document_css,
-            Some(current_ns.as_str()),
+            Some(current_ns),
             false,
             out,
             fallback_out,
