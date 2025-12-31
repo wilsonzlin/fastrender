@@ -117,8 +117,10 @@ use crate::layout::fragment_clone_profile::{
 use crate::layout::fragmentation::FragmentationOptions;
 use crate::layout::pagination::{paginate_fragment_tree_with_options, PaginateOptions};
 use crate::layout::profile::layout_profile_enabled;
+use crate::layout::profile::layout_profile_snapshot;
 use crate::layout::profile::log_layout_profile;
 use crate::layout::profile::reset_layout_profile;
+use crate::layout::profile::LayoutProfileSnapshot;
 use crate::paint::display_list_builder::DisplayListBuilder;
 use crate::paint::display_list_renderer::PaintParallelism;
 use crate::paint::painter::paint_backend_from_env;
@@ -1698,6 +1700,30 @@ pub struct LayoutDiagnostics {
   pub taffy_style_cache_misses: Option<usize>,
   pub fragment_deep_clones: Option<usize>,
   pub fragment_traversed: Option<usize>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub layout_block_ms: Option<f64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub layout_block_calls: Option<u64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub layout_inline_ms: Option<f64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub layout_inline_calls: Option<u64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub layout_flex_ms: Option<f64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub layout_flex_calls: Option<u64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub layout_grid_ms: Option<f64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub layout_grid_calls: Option<u64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub layout_table_ms: Option<f64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub layout_table_calls: Option<u64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub layout_absolute_ms: Option<f64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub layout_absolute_calls: Option<u64>,
 }
 
 /// Paint pipeline statistics.
@@ -6128,8 +6154,11 @@ impl FastRender {
     if report_layout_cache {
       crate::layout::flex_profile::reset_layout_cache_clones();
     }
+    let diagnostics_enabled = stats.as_deref().map_or(false, |rec| rec.enabled());
     let layout_profile = layout_profile_enabled();
-    if layout_profile {
+    let capture_layout_profile_stats = diagnostics_enabled && layout_profile;
+    let mut layout_profile_totals = LayoutProfileSnapshot::default();
+    if diagnostics_enabled || layout_profile {
       reset_layout_profile();
     }
     let flex_profile = flex_profile_enabled();
@@ -6375,6 +6404,9 @@ impl FastRender {
           if report_table_stats {
             crate::layout::table::reset_table_stats_counters();
           }
+          if capture_layout_profile_stats {
+            layout_profile_totals += layout_profile_snapshot();
+          }
           if layout_profile {
             reset_layout_profile();
           }
@@ -6561,6 +6593,22 @@ impl FastRender {
       } else {
         rec.stats.layout.layout_parallel_work_items = Some(0);
         rec.stats.layout.layout_parallel_worker_threads = Some(0);
+      }
+
+      if capture_layout_profile_stats {
+        layout_profile_totals += layout_profile_snapshot();
+        rec.stats.layout.layout_block_ms = Some(layout_profile_totals.block_ms);
+        rec.stats.layout.layout_block_calls = Some(layout_profile_totals.block_calls);
+        rec.stats.layout.layout_inline_ms = Some(layout_profile_totals.inline_ms);
+        rec.stats.layout.layout_inline_calls = Some(layout_profile_totals.inline_calls);
+        rec.stats.layout.layout_flex_ms = Some(layout_profile_totals.flex_ms);
+        rec.stats.layout.layout_flex_calls = Some(layout_profile_totals.flex_calls);
+        rec.stats.layout.layout_grid_ms = Some(layout_profile_totals.grid_ms);
+        rec.stats.layout.layout_grid_calls = Some(layout_profile_totals.grid_calls);
+        rec.stats.layout.layout_table_ms = Some(layout_profile_totals.table_ms);
+        rec.stats.layout.layout_table_calls = Some(layout_profile_totals.table_calls);
+        rec.stats.layout.layout_absolute_ms = Some(layout_profile_totals.absolute_ms);
+        rec.stats.layout.layout_absolute_calls = Some(layout_profile_totals.absolute_calls);
       }
     }
 

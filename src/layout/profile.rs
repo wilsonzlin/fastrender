@@ -5,6 +5,39 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
+#[derive(Copy, Clone, Debug, Default)]
+pub struct LayoutProfileSnapshot {
+  pub block_ms: f64,
+  pub block_calls: u64,
+  pub inline_ms: f64,
+  pub inline_calls: u64,
+  pub flex_ms: f64,
+  pub flex_calls: u64,
+  pub grid_ms: f64,
+  pub grid_calls: u64,
+  pub table_ms: f64,
+  pub table_calls: u64,
+  pub absolute_ms: f64,
+  pub absolute_calls: u64,
+}
+
+impl std::ops::AddAssign for LayoutProfileSnapshot {
+  fn add_assign(&mut self, other: Self) {
+    self.block_ms += other.block_ms;
+    self.block_calls += other.block_calls;
+    self.inline_ms += other.inline_ms;
+    self.inline_calls += other.inline_calls;
+    self.flex_ms += other.flex_ms;
+    self.flex_calls += other.flex_calls;
+    self.grid_ms += other.grid_ms;
+    self.grid_calls += other.grid_calls;
+    self.table_ms += other.table_ms;
+    self.table_calls += other.table_calls;
+    self.absolute_ms += other.absolute_ms;
+    self.absolute_calls += other.absolute_calls;
+  }
+}
+
 #[derive(Copy, Clone, Debug)]
 pub enum LayoutKind {
   Block,
@@ -103,6 +136,27 @@ impl Drop for LayoutTimerGuard {
 
 pub fn layout_timer(kind: LayoutKind) -> LayoutTimerGuard {
   LayoutTimerGuard(start_timer(kind))
+}
+
+pub fn layout_profile_snapshot() -> LayoutProfileSnapshot {
+  if !enabled() {
+    return LayoutProfileSnapshot::default();
+  }
+  LayoutProfileSnapshot {
+    block_ms: TIME_NS[LayoutKind::Block.as_usize()].load(Ordering::Relaxed) as f64 / 1_000_000.0,
+    block_calls: CALLS[LayoutKind::Block.as_usize()].load(Ordering::Relaxed),
+    inline_ms: TIME_NS[LayoutKind::Inline.as_usize()].load(Ordering::Relaxed) as f64 / 1_000_000.0,
+    inline_calls: CALLS[LayoutKind::Inline.as_usize()].load(Ordering::Relaxed),
+    flex_ms: TIME_NS[LayoutKind::Flex.as_usize()].load(Ordering::Relaxed) as f64 / 1_000_000.0,
+    flex_calls: CALLS[LayoutKind::Flex.as_usize()].load(Ordering::Relaxed),
+    grid_ms: TIME_NS[LayoutKind::Grid.as_usize()].load(Ordering::Relaxed) as f64 / 1_000_000.0,
+    grid_calls: CALLS[LayoutKind::Grid.as_usize()].load(Ordering::Relaxed),
+    table_ms: TIME_NS[LayoutKind::Table.as_usize()].load(Ordering::Relaxed) as f64 / 1_000_000.0,
+    table_calls: CALLS[LayoutKind::Table.as_usize()].load(Ordering::Relaxed),
+    absolute_ms: TIME_NS[LayoutKind::Absolute.as_usize()].load(Ordering::Relaxed) as f64
+      / 1_000_000.0,
+    absolute_calls: CALLS[LayoutKind::Absolute.as_usize()].load(Ordering::Relaxed),
+  }
 }
 
 pub fn log_layout_profile(total: Duration) {
