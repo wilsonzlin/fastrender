@@ -9758,7 +9758,8 @@ struct ClipMaskDirtyRect {
 #[derive(Default)]
 struct ClipMaskScratch {
   mask: Option<Mask>,
-  dirty: Option<ClipMaskDirtyRect>,
+  last_rect: Option<Rect>,
+  last_radii: Option<BorderRadii>,
 }
 
 thread_local! {
@@ -9920,12 +9921,20 @@ fn apply_clip_mask_rect(pixmap: &mut Pixmap, rect: Rect, radii: BorderRadii) {
     };
     if replace {
       scratch.mask = Mask::new(width, height);
+      scratch.last_rect = None;
+      scratch.last_radii = None;
     }
-    let dirty = clip_mask_dirty_bounds(rect, width, height);
+
+    let clamped = radii.clamped(rect.width(), rect.height());
+    let needs_rebuild = scratch.last_rect != Some(rect) || scratch.last_radii != Some(clamped);
+
     {
       let Some(mask) = scratch.mask.as_mut() else {
         return false;
       };
+
+      if needs_rebuild {
+      let dirty = clip_mask_dirty_bounds(rect, width, height);
       if let Some(dirty) = dirty {
         clear_mask_rect(mask, dirty);
       } else {
@@ -9933,7 +9942,7 @@ fn apply_clip_mask_rect(pixmap: &mut Pixmap, rect: Rect, radii: BorderRadii) {
         // entire mask so we don't reuse stale data.
         mask.data_mut().fill(0);
       }
-      let clamped = radii.clamped(rect.width(), rect.height());
+
       let Some(path) = crate::paint::rasterize::build_rounded_rect_path(
         rect.x(),
         rect.y(),
@@ -9943,6 +9952,7 @@ fn apply_clip_mask_rect(pixmap: &mut Pixmap, rect: Rect, radii: BorderRadii) {
       ) else {
         return false;
       };
+
       // Match `fill_rounded_rect` semantics (anti-aliased) without allocating an intermediate RGBA
       // pixmap or converting it to a mask.
       mask.fill_path(
@@ -9951,9 +9961,15 @@ fn apply_clip_mask_rect(pixmap: &mut Pixmap, rect: Rect, radii: BorderRadii) {
         true,
         Transform::identity(),
       );
-      pixmap.apply_mask(mask);
     }
-    scratch.dirty = dirty;
+
+    pixmap.apply_mask(mask);
+    }
+
+    if needs_rebuild {
+      scratch.last_rect = Some(rect);
+      scratch.last_radii = Some(clamped);
+    }
     true
   });
   if !applied_mask {
