@@ -22,6 +22,7 @@ use criterion::Criterion;
 use fastrender::build_stacking_tree;
 use fastrender::geometry::Point;
 use fastrender::geometry::Rect;
+use fastrender::paint::blur::{apply_gaussian_blur, apply_gaussian_blur_anisotropic};
 use fastrender::paint::display_list::BorderRadius;
 use fastrender::paint::display_list::ClipShape;
 use fastrender::paint::display_list_builder::DisplayListBuilder;
@@ -789,26 +790,49 @@ fn bench_parallel_display_list_raster(c: &mut Criterion) {
 
 fn bench_filter_blur(c: &mut Criterion) {
   let mut group = c.benchmark_group("filters_blur");
-  let mut base = Pixmap::new(512, 512).expect("pixmap");
-  {
-    let pixels = base.pixels_mut();
-    let color = PremultipliedColorU8::from_rgba(200, 80, 60, 255).unwrap();
-    let width = base.width() as usize;
-    for y in 180..332 {
-      let row = y as usize * width;
-      for x in 180..332 {
-        pixels[row + x] = color;
+  group.sample_size(10);
+
+  for size in [256u32, 1024, 2048] {
+    let mut base = Pixmap::new(size, size).expect("pixmap");
+    {
+      let width = base.width() as usize;
+      let pixels = base.pixels_mut();
+      let color = PremultipliedColorU8::from_rgba(200, 80, 60, 255).unwrap();
+      let start = size / 3;
+      let end = (size * 2) / 3;
+      for y in start..end {
+        let row = y as usize * width;
+        for x in start..end {
+          pixels[row + x as usize] = color;
+        }
       }
     }
+
+    group.bench_with_input(
+      BenchmarkId::new("gaussian_blur_isotropic_sigma3", size),
+      &base,
+      |b, base| {
+        b.iter(|| {
+          let mut pixmap = base.clone();
+          apply_gaussian_blur(&mut pixmap, 3.0).unwrap();
+          black_box(pixmap);
+        })
+      },
+    );
+
+    group.bench_with_input(
+      BenchmarkId::new("gaussian_blur_anisotropic_sigma2_5", size),
+      &base,
+      |b, base| {
+        b.iter(|| {
+          let mut pixmap = base.clone();
+          apply_gaussian_blur_anisotropic(&mut pixmap, 2.0, 5.0).unwrap();
+          black_box(pixmap);
+        })
+      },
+    );
   }
 
-  group.bench_function("gaussian_blur_512_r8", |b| {
-    b.iter(|| {
-      let mut pixmap = base.clone();
-      apply_gaussian_blur(&mut pixmap, 8.0).unwrap();
-      black_box(pixmap);
-    })
-  });
   group.finish();
 }
 
@@ -893,8 +917,8 @@ fn sample_stop_color(stops: &[(f32, Rgba)], pos: f32) -> Rgba {
 }
 
 fn bench_conic_gradient(c: &mut Criterion) {
-  let width = 256;
-  let height = 256;
+  let width: u32 = 256;
+  let height: u32 = 256;
   let center = Point::new(width as f32 / 2.0, height as f32 / 2.0);
   let stops = vec![
     (0.0, Rgba::new(255, 0, 0, 1.0)),

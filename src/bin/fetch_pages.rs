@@ -166,7 +166,9 @@ fn fetch_page(
         .map(|code| code.to_string())
         .unwrap_or_else(|| "<unknown>".to_string());
       let final_url = res.final_url.clone().unwrap_or_else(|| target.to_string());
-      return Err(format!("empty response body (status {status}, final url {final_url})"));
+      return Err(format!(
+        "empty response body (status {status}, final url {final_url})"
+      ));
     }
     let canonical_url = res.final_url.clone().unwrap_or_else(|| target.to_string());
     res.final_url.get_or_insert_with(|| canonical_url.clone());

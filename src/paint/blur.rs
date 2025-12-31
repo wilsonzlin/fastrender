@@ -3,14 +3,25 @@ use crate::error::{RenderError, RenderStage};
 use crate::paint::painter::with_paint_diagnostics;
 use crate::paint::pixmap::{guard_allocation_bytes, new_pixmap_with_context};
 use crate::paint::svg_filter::FilterCacheConfig;
-use crate::render_control::check_active_periodic;
+use crate::render_control::{active_deadline, check_active, check_active_periodic, with_deadline};
 use lru::LruCache;
+use rayon::prelude::*;
 use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::BuildHasherDefault;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tiny_skia::Pixmap;
 
 const FAST_GAUSS_THRESHOLD_SIGMA: f32 = 4.0;
+const BLUR_DEADLINE_STRIDE: usize = 2048;
+const PARALLEL_BLUR_MIN_PIXELS: usize = 512 * 512;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BlurParallelism {
+  Auto,
+  Serial,
+  Parallel,
+}
 
 type BlurHasher = BuildHasherDefault<DefaultHasher>;
 
@@ -161,7 +172,28 @@ impl Default for BlurCache {
 
 #[inline]
 fn blur_deadline_exceeded(counter: &mut usize) -> bool {
-  check_active_periodic(counter, 2048, RenderStage::Paint).is_err()
+  check_active_periodic(counter, BLUR_DEADLINE_STRIDE, RenderStage::Paint).is_err()
+}
+
+#[inline]
+fn blur_should_parallelize(width: usize, height: usize) -> bool {
+  if rayon::current_num_threads() <= 1 {
+    return false;
+  }
+  width.checked_mul(height).unwrap_or(usize::MAX) >= PARALLEL_BLUR_MIN_PIXELS
+}
+
+#[inline]
+fn blur_deadline_exceeded_parallel(deadline_enabled: bool, counter: &AtomicUsize) -> bool {
+  if !deadline_enabled {
+    return false;
+  }
+  let next = counter.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
+  if next % BLUR_DEADLINE_STRIDE == 0 {
+    check_active(RenderStage::Paint).is_err()
+  } else {
+    false
+  }
 }
 
 fn record_blur_cache_hit() {
@@ -301,6 +333,14 @@ fn clamp_channel_to_alpha(channel: i32, alpha: i32) -> u8 {
 }
 
 fn gaussian_convolve_premultiplied(pixmap: &mut Pixmap, sigma: f32) -> Result<(), RenderError> {
+  gaussian_convolve_premultiplied_with_parallelism(pixmap, sigma, BlurParallelism::Auto)
+}
+
+fn gaussian_convolve_premultiplied_with_parallelism(
+  pixmap: &mut Pixmap,
+  sigma: f32,
+  parallelism: BlurParallelism,
+) -> Result<(), RenderError> {
   let (kernel, radius, scale) = gaussian_kernel_fixed(sigma);
   if radius == 0 || kernel.is_empty() || scale <= 0 {
     return Ok(());
@@ -311,6 +351,12 @@ fn gaussian_convolve_premultiplied(pixmap: &mut Pixmap, sigma: f32) -> Result<()
   if width == 0 || height == 0 {
     return Ok(());
   }
+
+  let use_parallel = match parallelism {
+    BlurParallelism::Serial => false,
+    BlurParallelism::Parallel => true,
+    BlurParallelism::Auto => blur_should_parallelize(width, height),
+  };
 
   let len = blur_buffer_len(width, height, "gaussian blur")?;
   let mut error: Option<RenderError> = None;
@@ -324,71 +370,185 @@ fn gaussian_convolve_premultiplied(pixmap: &mut Pixmap, sigma: f32) -> Result<()
       }
     };
     src[..len].copy_from_slice(pixmap.data());
-    let mut deadline_counter = 0usize;
 
-    // Horizontal pass: src -> buf
-    for y in 0..height {
-      if blur_deadline_exceeded(&mut deadline_counter) {
+    let row_stride = width * 4;
+    let src = &src[..len];
+    let buf = &mut buf[..len];
+
+    if !use_parallel {
+      let mut deadline_counter = 0usize;
+
+      // Horizontal pass: src -> buf
+      for y in 0..height {
+        if blur_deadline_exceeded(&mut deadline_counter) {
+          pixmap.data_mut().copy_from_slice(src);
+          return;
+        }
+        let row_start = y * width * 4;
+        for x in 0..width {
+          let mut acc_r: i32 = 0;
+          let mut acc_g: i32 = 0;
+          let mut acc_b: i32 = 0;
+          let mut acc_a: i32 = 0;
+          for (i, &w) in kernel.iter().enumerate() {
+            let offset = i as isize - radius as isize;
+            let cx = (x as isize + offset).clamp(0, width as isize - 1) as usize;
+            let idx = row_start + cx * 4;
+            acc_r += w * src[idx] as i32;
+            acc_g += w * src[idx + 1] as i32;
+            acc_b += w * src[idx + 2] as i32;
+            acc_a += w * src[idx + 3] as i32;
+          }
+          let out_idx = row_start + x * 4;
+          let a = ((acc_a + scale / 2) / scale).clamp(0, 255);
+          let r = (acc_r + scale / 2) / scale;
+          let g = (acc_g + scale / 2) / scale;
+          let b = (acc_b + scale / 2) / scale;
+          buf[out_idx] = clamp_channel_to_alpha(r, a);
+          buf[out_idx + 1] = clamp_channel_to_alpha(g, a);
+          buf[out_idx + 2] = clamp_channel_to_alpha(b, a);
+          buf[out_idx + 3] = a as u8;
+        }
+      }
+
+      // Vertical pass: buf -> pixmap data
+      let dst = pixmap.data_mut();
+      for y in 0..height {
+        if blur_deadline_exceeded(&mut deadline_counter) {
+          dst.copy_from_slice(src);
+          return;
+        }
+        for x in 0..width {
+          let mut acc_r: i32 = 0;
+          let mut acc_g: i32 = 0;
+          let mut acc_b: i32 = 0;
+          let mut acc_a: i32 = 0;
+          for (i, &w) in kernel.iter().enumerate() {
+            let offset = i as isize - radius as isize;
+            let cy = (y as isize + offset).clamp(0, height as isize - 1) as usize;
+            let idx = (cy * width + x) * 4;
+            acc_r += w * buf[idx] as i32;
+            acc_g += w * buf[idx + 1] as i32;
+            acc_b += w * buf[idx + 2] as i32;
+            acc_a += w * buf[idx + 3] as i32;
+          }
+          let out_idx = (y * width + x) * 4;
+          let a = ((acc_a + scale / 2) / scale).clamp(0, 255);
+          let r = (acc_r + scale / 2) / scale;
+          let g = (acc_g + scale / 2) / scale;
+          let b = (acc_b + scale / 2) / scale;
+          dst[out_idx] = clamp_channel_to_alpha(r, a);
+          dst[out_idx + 1] = clamp_channel_to_alpha(g, a);
+          dst[out_idx + 2] = clamp_channel_to_alpha(b, a);
+          dst[out_idx + 3] = a as u8;
+        }
+      }
+    } else {
+      let deadline = active_deadline();
+      let deadline_enabled = deadline.as_ref().map_or(false, |d| d.is_enabled());
+      let cancelled = AtomicBool::new(false);
+      let deadline_counter = AtomicUsize::new(0);
+
+      let convolve_row_x = |y: usize, out_row: &mut [u8]| {
+        if cancelled.load(Ordering::Relaxed) {
+          return;
+        }
+        if blur_deadline_exceeded_parallel(deadline_enabled, &deadline_counter) {
+          cancelled.store(true, Ordering::Relaxed);
+          return;
+        }
+        let src_row = &src[y * row_stride..(y + 1) * row_stride];
+        for x in 0..width {
+          let mut acc_r: i32 = 0;
+          let mut acc_g: i32 = 0;
+          let mut acc_b: i32 = 0;
+          let mut acc_a: i32 = 0;
+          for (i, &w) in kernel.iter().enumerate() {
+            let offset = i as isize - radius as isize;
+            let cx = (x as isize + offset).clamp(0, width as isize - 1) as usize;
+            let idx = cx * 4;
+            acc_r += w * src_row[idx] as i32;
+            acc_g += w * src_row[idx + 1] as i32;
+            acc_b += w * src_row[idx + 2] as i32;
+            acc_a += w * src_row[idx + 3] as i32;
+          }
+          let out_idx = x * 4;
+          let a = ((acc_a + scale / 2) / scale).clamp(0, 255);
+          let r = (acc_r + scale / 2) / scale;
+          let g = (acc_g + scale / 2) / scale;
+          let b = (acc_b + scale / 2) / scale;
+          out_row[out_idx] = clamp_channel_to_alpha(r, a);
+          out_row[out_idx + 1] = clamp_channel_to_alpha(g, a);
+          out_row[out_idx + 2] = clamp_channel_to_alpha(b, a);
+          out_row[out_idx + 3] = a as u8;
+        }
+      };
+
+      buf
+        .par_chunks_mut(row_stride)
+        .enumerate()
+        .for_each(|(y, out_row)| {
+          if deadline_enabled {
+            with_deadline(deadline.as_ref(), || convolve_row_x(y, out_row));
+          } else {
+            convolve_row_x(y, out_row);
+          }
+        });
+
+      if cancelled.load(Ordering::Relaxed) {
         pixmap.data_mut().copy_from_slice(src);
         return;
       }
-      let row_start = y * width * 4;
-      for x in 0..width {
-        let mut acc_r: i32 = 0;
-        let mut acc_g: i32 = 0;
-        let mut acc_b: i32 = 0;
-        let mut acc_a: i32 = 0;
-        for (i, &w) in kernel.iter().enumerate() {
-          let offset = i as isize - radius as isize;
-          let cx = (x as isize + offset).clamp(0, width as isize - 1) as usize;
-          let idx = row_start + cx * 4;
-          acc_r += w * src[idx] as i32;
-          acc_g += w * src[idx + 1] as i32;
-          acc_b += w * src[idx + 2] as i32;
-          acc_a += w * src[idx + 3] as i32;
-        }
-        let out_idx = row_start + x * 4;
-        let a = ((acc_a + scale / 2) / scale).clamp(0, 255);
-        let r = (acc_r + scale / 2) / scale;
-        let g = (acc_g + scale / 2) / scale;
-        let b = (acc_b + scale / 2) / scale;
-        buf[out_idx] = clamp_channel_to_alpha(r, a);
-        buf[out_idx + 1] = clamp_channel_to_alpha(g, a);
-        buf[out_idx + 2] = clamp_channel_to_alpha(b, a);
-        buf[out_idx + 3] = a as u8;
-      }
-    }
 
-    // Vertical pass: buf -> pixmap data
-    let dst = pixmap.data_mut();
-    for y in 0..height {
-      if blur_deadline_exceeded(&mut deadline_counter) {
-        dst.copy_from_slice(src);
-        return;
-      }
-      for x in 0..width {
-        let mut acc_r: i32 = 0;
-        let mut acc_g: i32 = 0;
-        let mut acc_b: i32 = 0;
-        let mut acc_a: i32 = 0;
-        for (i, &w) in kernel.iter().enumerate() {
-          let offset = i as isize - radius as isize;
-          let cy = (y as isize + offset).clamp(0, height as isize - 1) as usize;
-          let idx = (cy * width + x) * 4;
-          acc_r += w * buf[idx] as i32;
-          acc_g += w * buf[idx + 1] as i32;
-          acc_b += w * buf[idx + 2] as i32;
-          acc_a += w * buf[idx + 3] as i32;
+      let buf = &*buf;
+      let dst = pixmap.data_mut();
+      let convolve_row_y = |y: usize, out_row: &mut [u8]| {
+        if cancelled.load(Ordering::Relaxed) {
+          return;
         }
-        let out_idx = (y * width + x) * 4;
-        let a = ((acc_a + scale / 2) / scale).clamp(0, 255);
-        let r = (acc_r + scale / 2) / scale;
-        let g = (acc_g + scale / 2) / scale;
-        let b = (acc_b + scale / 2) / scale;
-        dst[out_idx] = clamp_channel_to_alpha(r, a);
-        dst[out_idx + 1] = clamp_channel_to_alpha(g, a);
-        dst[out_idx + 2] = clamp_channel_to_alpha(b, a);
-        dst[out_idx + 3] = a as u8;
+        if blur_deadline_exceeded_parallel(deadline_enabled, &deadline_counter) {
+          cancelled.store(true, Ordering::Relaxed);
+          return;
+        }
+        for x in 0..width {
+          let mut acc_r: i32 = 0;
+          let mut acc_g: i32 = 0;
+          let mut acc_b: i32 = 0;
+          let mut acc_a: i32 = 0;
+          for (i, &w) in kernel.iter().enumerate() {
+            let offset = i as isize - radius as isize;
+            let cy = (y as isize + offset).clamp(0, height as isize - 1) as usize;
+            let idx = cy * row_stride + x * 4;
+            acc_r += w * buf[idx] as i32;
+            acc_g += w * buf[idx + 1] as i32;
+            acc_b += w * buf[idx + 2] as i32;
+            acc_a += w * buf[idx + 3] as i32;
+          }
+          let out_idx = x * 4;
+          let a = ((acc_a + scale / 2) / scale).clamp(0, 255);
+          let r = (acc_r + scale / 2) / scale;
+          let g = (acc_g + scale / 2) / scale;
+          let b = (acc_b + scale / 2) / scale;
+          out_row[out_idx] = clamp_channel_to_alpha(r, a);
+          out_row[out_idx + 1] = clamp_channel_to_alpha(g, a);
+          out_row[out_idx + 2] = clamp_channel_to_alpha(b, a);
+          out_row[out_idx + 3] = a as u8;
+        }
+      };
+
+      dst
+        .par_chunks_mut(row_stride)
+        .enumerate()
+        .for_each(|(y, out_row)| {
+          if deadline_enabled {
+            with_deadline(deadline.as_ref(), || convolve_row_y(y, out_row));
+          } else {
+            convolve_row_y(y, out_row);
+          }
+        });
+
+      if cancelled.load(Ordering::Relaxed) {
+        dst.copy_from_slice(src);
       }
     }
   });
@@ -616,6 +776,15 @@ fn blur_anisotropic_body(
   sigma_x: f32,
   sigma_y: f32,
 ) -> Result<(), RenderError> {
+  blur_anisotropic_body_with_parallelism(pixmap, sigma_x, sigma_y, BlurParallelism::Auto)
+}
+
+fn blur_anisotropic_body_with_parallelism(
+  pixmap: &mut Pixmap,
+  sigma_x: f32,
+  sigma_y: f32,
+  parallelism: BlurParallelism,
+) -> Result<(), RenderError> {
   let sigma_x = sigma_x.abs();
   let sigma_y = sigma_y.abs();
   if sigma_x == sigma_y {
@@ -638,6 +807,12 @@ fn blur_anisotropic_body(
     return Ok(());
   }
 
+  let use_parallel = match parallelism {
+    BlurParallelism::Serial => false,
+    BlurParallelism::Parallel => true,
+    BlurParallelism::Auto => blur_should_parallelize(width, height),
+  };
+
   let len = blur_buffer_len(width, height, "anisotropic blur")?;
   let mut error: Option<RenderError> = None;
   BLUR_SCRATCH.with(|scratch| {
@@ -650,84 +825,213 @@ fn blur_anisotropic_body(
       }
     };
     src[..len].copy_from_slice(pixmap.data());
-    let mut deadline_counter = 0usize;
 
-    // Horizontal pass (if needed): src -> tmp, otherwise copy
-    if radius_x == 0 || kernel_x.is_empty() {
-      tmp[..len].copy_from_slice(src);
-    } else {
+    let row_stride = width * 4;
+    let src = &src[..len];
+    let tmp = &mut tmp[..len];
+
+    if !use_parallel {
+      let mut deadline_counter = 0usize;
+
+      // Horizontal pass (if needed): src -> tmp, otherwise copy
+      if radius_x == 0 || kernel_x.is_empty() {
+        tmp[..len].copy_from_slice(src);
+      } else {
+        for y in 0..height {
+          if blur_deadline_exceeded(&mut deadline_counter) {
+            pixmap.data_mut().copy_from_slice(src);
+            return;
+          }
+          let row_start = y * width * 4;
+          for x in 0..width {
+            let mut acc_r: i32 = 0;
+            let mut acc_g: i32 = 0;
+            let mut acc_b: i32 = 0;
+            let mut acc_a: i32 = 0;
+            for (i, &w) in kernel_x.iter().enumerate() {
+              let offset = i as isize - radius_x as isize;
+              let cx = (x as isize + offset).clamp(0, width as isize - 1) as usize;
+              let idx = row_start + cx * 4;
+              acc_r += w * src[idx] as i32;
+              acc_g += w * src[idx + 1] as i32;
+              acc_b += w * src[idx + 2] as i32;
+              acc_a += w * src[idx + 3] as i32;
+            }
+            let out_idx = row_start + x * 4;
+            let a = ((acc_a + scale_x / 2) / scale_x).clamp(0, 255);
+            let r = (acc_r + scale_x / 2) / scale_x;
+            let g = (acc_g + scale_x / 2) / scale_x;
+            let b = (acc_b + scale_x / 2) / scale_x;
+            tmp[out_idx] = clamp_channel_to_alpha(r, a);
+            tmp[out_idx + 1] = clamp_channel_to_alpha(g, a);
+            tmp[out_idx + 2] = clamp_channel_to_alpha(b, a);
+            tmp[out_idx + 3] = a as u8;
+          }
+        }
+      }
+
+      // Vertical pass (if needed): tmp/src -> pixmap
+      let src_for_y = if radius_x == 0 || kernel_x.is_empty() {
+        src
+      } else {
+        &tmp[..len]
+      };
+      let dst = pixmap.data_mut();
+      if radius_y == 0 || kernel_y.is_empty() {
+        dst.copy_from_slice(src_for_y);
+        return;
+      }
       for y in 0..height {
         if blur_deadline_exceeded(&mut deadline_counter) {
-          pixmap.data_mut().copy_from_slice(src);
+          dst.copy_from_slice(src);
           return;
         }
-        let row_start = y * width * 4;
         for x in 0..width {
           let mut acc_r: i32 = 0;
           let mut acc_g: i32 = 0;
           let mut acc_b: i32 = 0;
           let mut acc_a: i32 = 0;
-          for (i, &w) in kernel_x.iter().enumerate() {
-            let offset = i as isize - radius_x as isize;
-            let cx = (x as isize + offset).clamp(0, width as isize - 1) as usize;
-            let idx = row_start + cx * 4;
-            acc_r += w * src[idx] as i32;
-            acc_g += w * src[idx + 1] as i32;
-            acc_b += w * src[idx + 2] as i32;
-            acc_a += w * src[idx + 3] as i32;
+          for (i, &w) in kernel_y.iter().enumerate() {
+            let offset = i as isize - radius_y as isize;
+            let cy = (y as isize + offset).clamp(0, height as isize - 1) as usize;
+            let idx = (cy * width + x) * 4;
+            acc_r += w * src_for_y[idx] as i32;
+            acc_g += w * src_for_y[idx + 1] as i32;
+            acc_b += w * src_for_y[idx + 2] as i32;
+            acc_a += w * src_for_y[idx + 3] as i32;
           }
-          let out_idx = row_start + x * 4;
-          let a = ((acc_a + scale_x / 2) / scale_x).clamp(0, 255);
-          let r = (acc_r + scale_x / 2) / scale_x;
-          let g = (acc_g + scale_x / 2) / scale_x;
-          let b = (acc_b + scale_x / 2) / scale_x;
-          tmp[out_idx] = clamp_channel_to_alpha(r, a);
-          tmp[out_idx + 1] = clamp_channel_to_alpha(g, a);
-          tmp[out_idx + 2] = clamp_channel_to_alpha(b, a);
-          tmp[out_idx + 3] = a as u8;
+          let out_idx = (y * width + x) * 4;
+          let a = ((acc_a + scale_y / 2) / scale_y).clamp(0, 255);
+          let r = (acc_r + scale_y / 2) / scale_y;
+          let g = (acc_g + scale_y / 2) / scale_y;
+          let b = (acc_b + scale_y / 2) / scale_y;
+          dst[out_idx] = clamp_channel_to_alpha(r, a);
+          dst[out_idx + 1] = clamp_channel_to_alpha(g, a);
+          dst[out_idx + 2] = clamp_channel_to_alpha(b, a);
+          dst[out_idx + 3] = a as u8;
         }
       }
-    }
-
-    // Vertical pass (if needed): tmp/src -> pixmap
-    let src_for_y = if radius_x == 0 || kernel_x.is_empty() {
-      &src[..len]
     } else {
-      &tmp[..len]
-    };
-    let dst = pixmap.data_mut();
-    if radius_y == 0 || kernel_y.is_empty() {
-      dst.copy_from_slice(src_for_y);
-      return;
-    }
-    for y in 0..height {
-      if blur_deadline_exceeded(&mut deadline_counter) {
-        dst.copy_from_slice(src);
+      let deadline = active_deadline();
+      let deadline_enabled = deadline.as_ref().map_or(false, |d| d.is_enabled());
+      let cancelled = AtomicBool::new(false);
+      let deadline_counter = AtomicUsize::new(0);
+
+      // Horizontal pass (if needed): src -> tmp, otherwise copy
+      if radius_x == 0 || kernel_x.is_empty() {
+        tmp.copy_from_slice(src);
+      } else {
+        let convolve_row_x = |y: usize, out_row: &mut [u8]| {
+          if cancelled.load(Ordering::Relaxed) {
+            return;
+          }
+          if blur_deadline_exceeded_parallel(deadline_enabled, &deadline_counter) {
+            cancelled.store(true, Ordering::Relaxed);
+            return;
+          }
+          let src_row = &src[y * row_stride..(y + 1) * row_stride];
+          for x in 0..width {
+            let mut acc_r: i32 = 0;
+            let mut acc_g: i32 = 0;
+            let mut acc_b: i32 = 0;
+            let mut acc_a: i32 = 0;
+            for (i, &w) in kernel_x.iter().enumerate() {
+              let offset = i as isize - radius_x as isize;
+              let cx = (x as isize + offset).clamp(0, width as isize - 1) as usize;
+              let idx = cx * 4;
+              acc_r += w * src_row[idx] as i32;
+              acc_g += w * src_row[idx + 1] as i32;
+              acc_b += w * src_row[idx + 2] as i32;
+              acc_a += w * src_row[idx + 3] as i32;
+            }
+            let out_idx = x * 4;
+            let a = ((acc_a + scale_x / 2) / scale_x).clamp(0, 255);
+            let r = (acc_r + scale_x / 2) / scale_x;
+            let g = (acc_g + scale_x / 2) / scale_x;
+            let b = (acc_b + scale_x / 2) / scale_x;
+            out_row[out_idx] = clamp_channel_to_alpha(r, a);
+            out_row[out_idx + 1] = clamp_channel_to_alpha(g, a);
+            out_row[out_idx + 2] = clamp_channel_to_alpha(b, a);
+            out_row[out_idx + 3] = a as u8;
+          }
+        };
+
+        tmp
+          .par_chunks_mut(row_stride)
+          .enumerate()
+          .for_each(|(y, out_row)| {
+            if deadline_enabled {
+              with_deadline(deadline.as_ref(), || convolve_row_x(y, out_row));
+            } else {
+              convolve_row_x(y, out_row);
+            }
+          });
+
+        if cancelled.load(Ordering::Relaxed) {
+          pixmap.data_mut().copy_from_slice(src);
+          return;
+        }
+      }
+
+      // Vertical pass (if needed): tmp/src -> pixmap
+      let src_for_y: &[u8] = if radius_x == 0 || kernel_x.is_empty() {
+        src
+      } else {
+        &*tmp
+      };
+      let dst = pixmap.data_mut();
+      if radius_y == 0 || kernel_y.is_empty() {
+        dst.copy_from_slice(src_for_y);
         return;
       }
-      for x in 0..width {
-        let mut acc_r: i32 = 0;
-        let mut acc_g: i32 = 0;
-        let mut acc_b: i32 = 0;
-        let mut acc_a: i32 = 0;
-        for (i, &w) in kernel_y.iter().enumerate() {
-          let offset = i as isize - radius_y as isize;
-          let cy = (y as isize + offset).clamp(0, height as isize - 1) as usize;
-          let idx = (cy * width + x) * 4;
-          acc_r += w * src_for_y[idx] as i32;
-          acc_g += w * src_for_y[idx + 1] as i32;
-          acc_b += w * src_for_y[idx + 2] as i32;
-          acc_a += w * src_for_y[idx + 3] as i32;
+
+      let convolve_row_y = |y: usize, out_row: &mut [u8]| {
+        if cancelled.load(Ordering::Relaxed) {
+          return;
         }
-        let out_idx = (y * width + x) * 4;
-        let a = ((acc_a + scale_y / 2) / scale_y).clamp(0, 255);
-        let r = (acc_r + scale_y / 2) / scale_y;
-        let g = (acc_g + scale_y / 2) / scale_y;
-        let b = (acc_b + scale_y / 2) / scale_y;
-        dst[out_idx] = clamp_channel_to_alpha(r, a);
-        dst[out_idx + 1] = clamp_channel_to_alpha(g, a);
-        dst[out_idx + 2] = clamp_channel_to_alpha(b, a);
-        dst[out_idx + 3] = a as u8;
+        if blur_deadline_exceeded_parallel(deadline_enabled, &deadline_counter) {
+          cancelled.store(true, Ordering::Relaxed);
+          return;
+        }
+        for x in 0..width {
+          let mut acc_r: i32 = 0;
+          let mut acc_g: i32 = 0;
+          let mut acc_b: i32 = 0;
+          let mut acc_a: i32 = 0;
+          for (i, &w) in kernel_y.iter().enumerate() {
+            let offset = i as isize - radius_y as isize;
+            let cy = (y as isize + offset).clamp(0, height as isize - 1) as usize;
+            let idx = cy * row_stride + x * 4;
+            acc_r += w * src_for_y[idx] as i32;
+            acc_g += w * src_for_y[idx + 1] as i32;
+            acc_b += w * src_for_y[idx + 2] as i32;
+            acc_a += w * src_for_y[idx + 3] as i32;
+          }
+          let out_idx = x * 4;
+          let a = ((acc_a + scale_y / 2) / scale_y).clamp(0, 255);
+          let r = (acc_r + scale_y / 2) / scale_y;
+          let g = (acc_g + scale_y / 2) / scale_y;
+          let b = (acc_b + scale_y / 2) / scale_y;
+          out_row[out_idx] = clamp_channel_to_alpha(r, a);
+          out_row[out_idx + 1] = clamp_channel_to_alpha(g, a);
+          out_row[out_idx + 2] = clamp_channel_to_alpha(b, a);
+          out_row[out_idx + 3] = a as u8;
+        }
+      };
+
+      dst
+        .par_chunks_mut(row_stride)
+        .enumerate()
+        .for_each(|(y, out_row)| {
+          if deadline_enabled {
+            with_deadline(deadline.as_ref(), || convolve_row_y(y, out_row));
+          } else {
+            convolve_row_y(y, out_row);
+          }
+        });
+
+      if cancelled.load(Ordering::Relaxed) {
+        dst.copy_from_slice(src);
       }
     }
   });
@@ -883,7 +1187,7 @@ pub fn apply_gaussian_blur(pixmap: &mut Pixmap, sigma: f32) -> Result<(), Render
   apply_blur_internal(pixmap, sigma, sigma, None, 1.0)
 }
 
-pub(crate) fn apply_gaussian_blur_anisotropic(
+pub fn apply_gaussian_blur_anisotropic(
   pixmap: &mut Pixmap,
   sigma_x: f32,
   sigma_y: f32,
@@ -978,6 +1282,46 @@ mod tests {
     assert!(
       pixmap.pixels().iter().any(|p| p.alpha() > 0),
       "expected blurred output to retain some alpha"
+    );
+  }
+
+  #[test]
+  fn parallel_blur_matches_serial_output() {
+    let mut base = new_pixmap(32, 24).unwrap();
+    let w = base.width() as usize;
+    for y in 0..base.height() as usize {
+      for x in 0..w {
+        let a = ((x * 29 + y * 31) % 256) as u8;
+        let r0 = ((x * 11 + y * 7) % 256) as u8;
+        let g0 = ((x * 5 + y * 13) % 256) as u8;
+        let b0 = ((x * 17 + y * 19) % 256) as u8;
+        let premul = |c: u8| ((c as u16 * a as u16) / 255) as u8;
+        base.pixels_mut()[y * w + x] =
+          PremultipliedColorU8::from_rgba(premul(r0), premul(g0), premul(b0), a).unwrap();
+      }
+    }
+
+    let mut serial = base.clone();
+    let mut parallel = base.clone();
+    gaussian_convolve_premultiplied_with_parallelism(&mut serial, 3.0, BlurParallelism::Serial)
+      .unwrap();
+    gaussian_convolve_premultiplied_with_parallelism(&mut parallel, 3.0, BlurParallelism::Parallel)
+      .unwrap();
+    assert_eq!(
+      serial.data(),
+      parallel.data(),
+      "isotropic gaussian output mismatch"
+    );
+
+    let mut serial = base.clone();
+    let mut parallel = base.clone();
+    blur_anisotropic_body_with_parallelism(&mut serial, 2.0, 5.0, BlurParallelism::Serial).unwrap();
+    blur_anisotropic_body_with_parallelism(&mut parallel, 2.0, 5.0, BlurParallelism::Parallel)
+      .unwrap();
+    assert_eq!(
+      serial.data(),
+      parallel.data(),
+      "anisotropic gaussian output mismatch"
     );
   }
 }
