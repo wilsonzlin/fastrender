@@ -388,14 +388,45 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       return !self.lock_is_active(data_path);
     }
 
+    let lock_path = lock_path_for(data_path);
+    if !self.lock_is_active(data_path) {
+      return true;
+    }
+
     let deadline = Instant::now() + max_wait;
     let mut delay = READ_LOCK_RETRY_INITIAL_DELAY;
     let path_hash = hash_u64(&data_path.to_string_lossy());
     let mut attempt: u64 = 0;
-    while self.lock_is_active(data_path) {
+    let mut last_age: Option<Duration> = None;
+    loop {
       let now = Instant::now();
       if now >= deadline {
         return false;
+      }
+      match fs::metadata(&lock_path) {
+        Ok(meta) => {
+          let meta_age = lock_age_from_metadata(&meta);
+          if let Some(age) = meta_age {
+            if age > self.disk_config.lock_stale_after {
+              if clear_lock_file(&lock_path) {
+                return true;
+              }
+            } else if let Some(prev) = last_age {
+              if age < prev {
+                // Lockfile likely re-created (pid changed); fall back to the full check so we can
+                // clear dead PID locks promptly.
+                if !self.lock_is_active(data_path) {
+                  return true;
+                }
+              }
+            }
+            last_age = Some(age);
+          } else if !self.lock_is_active(data_path) {
+            return true;
+          }
+        }
+        Err(err) if err.kind() == ErrorKind::NotFound => return true,
+        Err(_) => {}
       }
       let remaining = deadline.saturating_duration_since(now);
       let sleep_cap = delay.min(remaining);
@@ -417,8 +448,6 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       delay = delay.saturating_mul(2).min(READ_LOCK_RETRY_MAX_DELAY);
       attempt = attempt.wrapping_add(1);
     }
-
-    true
   }
 
   fn remove_entry_if_unlocked(&self, key: &str, data_path: &Path, meta_path: &Path) {
