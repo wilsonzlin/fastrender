@@ -3322,6 +3322,39 @@ mod tests {
   }
 
   #[test]
+  fn grid_taffy_abort_surfaces_as_timeout() {
+    use crate::render_control::{DeadlineGuard, RenderDeadline};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    // Ensure the deadline is not tripped by the initial check, but is tripped during Taffy.
+    let counter = Arc::new(AtomicUsize::new(0));
+    let counter_clone = counter.clone();
+    let deadline = RenderDeadline::new(
+      None,
+      Some(Arc::new(move || {
+        let prev = counter_clone.fetch_add(1, Ordering::SeqCst);
+        prev >= 1
+      })),
+    );
+    let _guard = DeadlineGuard::install(Some(&deadline));
+
+    let child = BoxNode::new_block(make_item_style(), FormattingContextType::Block, vec![]);
+    let container = BoxNode::new_block(make_grid_style(), FormattingContextType::Grid, vec![child]);
+    let constraints = LayoutConstraints::definite(100.0, 100.0);
+
+    let gc = GridFormattingContext::new();
+    let result = gc.layout(&container, &constraints);
+
+    match result {
+      Err(LayoutError::Timeout { elapsed }) => {
+        assert!(elapsed >= Duration::from_secs(0));
+      }
+      other => panic!("expected LayoutError::Timeout from Taffy abort, got {other:?}"),
+    }
+  }
+
+  #[test]
   fn measure_key_quantizes_definite_sizes() {
     use taffy::style::AvailableSpace;
 

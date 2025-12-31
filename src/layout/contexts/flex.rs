@@ -4988,6 +4988,41 @@ mod tests {
   }
 
   #[test]
+  fn flex_taffy_abort_surfaces_as_timeout() {
+    use crate::render_control::{DeadlineGuard, RenderDeadline};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    // Ensure the deadline is not tripped by the first pre-layout check, but is tripped during Taffy.
+    let counter = Arc::new(AtomicUsize::new(0));
+    let counter_clone = counter.clone();
+    let deadline = RenderDeadline::new(
+      None,
+      Some(Arc::new(move || {
+        let prev = counter_clone.fetch_add(1, Ordering::SeqCst);
+        prev >= 1
+      })),
+    );
+    let _guard = DeadlineGuard::install(Some(&deadline));
+
+    // Build a minimal flex container so layout reaches the Taffy compute call.
+    let child = BoxNode::new_block(create_item_style(10.0, 10.0), FormattingContextType::Block, vec![]);
+    let container = BoxNode::new_block(create_flex_style(), FormattingContextType::Flex, vec![child]);
+    let constraints = LayoutConstraints::definite(100.0, 100.0);
+
+    let fc = FlexFormattingContext::new();
+    let result = fc.layout(&container, &constraints);
+
+    match result {
+      Err(LayoutError::Timeout { elapsed }) => {
+        // Should have some elapsed time recorded by RenderDeadline, even if tiny.
+        assert!(elapsed >= Duration::from_secs(0));
+      }
+      other => panic!("expected LayoutError::Timeout from Taffy abort, got {other:?}"),
+    }
+  }
+
+  #[test]
   fn taffy_style_maps_overflow_and_scrollbar_width() {
     let mut style = ComputedStyle::default();
     style.display = Display::Flex;
