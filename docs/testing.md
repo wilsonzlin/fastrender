@@ -37,7 +37,7 @@ Comparisons are strict by default. To allow small local differences (fonts, GPU,
 
 - `FIXTURE_TOLERANCE=5` (per-channel tolerance)
 - `FIXTURE_MAX_DIFFERENT_PERCENT=0.5` (percent of pixels allowed to differ)
-- `FIXTURE_FUZZY=1` (preset: tolerance 10, up to 1% different, no alpha compare)
+- `FIXTURE_FUZZY=1` (preset: tolerance 10, up to 1% different, no alpha compare, max perceptual distance 0.05)
 - `FIXTURE_IGNORE_ALPHA=1` (ignore alpha differences even without fuzzy)
 - `FIXTURE_MAX_PERCEPTUAL_DISTANCE=0.05` (allow minor perceptual differences using SSIM-style scoring)
 
@@ -50,7 +50,7 @@ New columns/transform/form fixtures ship with checked-in goldens; keep these up 
 
 This suite renders a curated set of realistic pages under `tests/pages/fixtures/` (flex/grid/table, multicol, pagination, masks/filters, SVG, writing modes, form controls, plus a positioned-child regression) and compares them against goldens in `tests/pages/golden/`.
 
-Artifacts for failures land in `target/pages_diffs/<page>_{actual,expected,diff}.png`. Comparison defaults to strict pixel matching but respects the same knobs as the fixture harness with `PAGES_TOLERANCE`, `PAGES_MAX_DIFFERENT_PERCENT`, and `PAGES_FUZZY=1`.
+Artifacts for failures land in `target/pages_diffs/<page>_{actual,expected,diff}.png`. Comparison defaults to strict pixel matching but respects the same knobs as the fixture harness with `PAGES_TOLERANCE`, `PAGES_MAX_DIFFERENT_PERCENT`, `PAGES_FUZZY=1`, `PAGES_IGNORE_ALPHA=1`, and `PAGES_MAX_PERCEPTUAL_DISTANCE=0.05`.
 
 ### Importing new offline page fixtures
 

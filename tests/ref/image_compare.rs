@@ -17,6 +17,10 @@ pub struct CompareEnvVars<'a> {
   pub tolerance: &'a str,
   /// Optional percentage override for the number of differing pixels.
   pub max_diff_percent: &'a str,
+  /// When set, ignore alpha differences even without fuzzy mode.
+  pub ignore_alpha: &'a str,
+  /// Optional perceptual distance override.
+  pub max_perceptual_distance: &'a str,
 }
 
 impl CompareEnvVars<'_> {
@@ -26,6 +30,8 @@ impl CompareEnvVars<'_> {
       fuzzy: "FIXTURE_FUZZY",
       tolerance: "FIXTURE_TOLERANCE",
       max_diff_percent: "FIXTURE_MAX_DIFFERENT_PERCENT",
+      ignore_alpha: "FIXTURE_IGNORE_ALPHA",
+      max_perceptual_distance: "FIXTURE_MAX_PERCEPTUAL_DISTANCE",
     }
   }
 
@@ -35,6 +41,8 @@ impl CompareEnvVars<'_> {
       fuzzy: "PAGES_FUZZY",
       tolerance: "PAGES_TOLERANCE",
       max_diff_percent: "PAGES_MAX_DIFFERENT_PERCENT",
+      ignore_alpha: "PAGES_IGNORE_ALPHA",
+      max_perceptual_distance: "PAGES_MAX_PERCEPTUAL_DISTANCE",
     }
   }
 }
@@ -59,6 +67,20 @@ pub fn compare_config_from_env(env: CompareEnvVars<'_>) -> Result<CompareConfig,
       .parse::<f64>()
       .map_err(|e| format!("Invalid {} '{}': {}", env.max_diff_percent, percent, e))?;
     config = config.with_max_different_percent(parsed);
+  }
+
+  if std::env::var(env.ignore_alpha).is_ok() {
+    config = config.with_compare_alpha(false);
+  }
+
+  if let Ok(distance) = std::env::var(env.max_perceptual_distance) {
+    let parsed = distance.parse::<f64>().map_err(|e| {
+      format!(
+        "Invalid {} '{}': {}",
+        env.max_perceptual_distance, distance, e
+      )
+    })?;
+    config = config.with_max_perceptual_distance(Some(parsed));
   }
 
   // Always generate diff images to aid debugging.
