@@ -837,6 +837,17 @@ fn apply_backdrop_filters(
     clip_mask.map(|mask| (mask.data(), mask.width() as usize, mask.height() as usize));
   let radii_mask_data = radii_mask.as_ref().map(|mask| mask.data());
 
+  if clip_mask_data.is_none() && radii_mask_data.is_none() {
+    let row_bytes = write_w as usize * 4;
+    for row in 0..write_h as usize {
+      let dst_idx = (write_y as usize + row) * bytes_per_row + write_x as usize * 4;
+      let src_idx = ((src_start_y as usize + row) * region_width + src_start_x as usize) * 4;
+      dest_data[dst_idx..dst_idx + row_bytes]
+        .copy_from_slice(&src_data[src_idx..src_idx + row_bytes]);
+    }
+    return Ok(());
+  }
+
   for row in 0..write_h as usize {
     let dst_idx = (write_y as usize + row) * bytes_per_row + write_x as usize * 4;
     let src_idx = ((src_start_y as usize + row) * region_width + src_start_x as usize) * 4;
