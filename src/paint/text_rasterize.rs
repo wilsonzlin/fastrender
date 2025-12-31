@@ -912,22 +912,18 @@ impl TextRasterizer {
     let raster_timer = text_diagnostics_timer();
     let diag_enabled = raster_timer.is_some();
     let mut color_glyph_rasters = 0usize;
-    let (outline_before, color_before) = if diag_enabled {
-      (
-        self
-          .cache
-          .lock()
-          .map(|cache| cache.stats())
-          .unwrap_or_default(),
-        self
-          .color_cache
-          .lock()
-          .map(|cache| cache.stats())
-          .unwrap_or_default(),
-      )
-    } else {
-      (GlyphCacheStats::default(), GlyphCacheStats::default())
-    };
+    // Note: The shared glyph/color caches are used from multiple threads when paint parallelism is
+    // enabled. Computing cache deltas from "before" and "after" snapshots taken outside the cache
+    // lock can double-count (other threads can bump the counters between snapshots). To keep
+    // diagnostics stable and correct, accumulate per-lock deltas instead.
+    let mut outline_hits = 0u64;
+    let mut outline_misses = 0u64;
+    let mut outline_evictions = 0u64;
+    let mut outline_bytes = 0usize;
+    let mut color_hits = 0u64;
+    let mut color_misses = 0u64;
+    let mut color_evictions = 0u64;
+    let mut color_bytes = 0usize;
 
     // Create paint with text color
     let mut paint = Paint::default();
@@ -985,11 +981,23 @@ impl TextRasterizer {
         transform_signature,
       );
 
-      let mut color_glyph = self
-        .color_cache
-        .lock()
-        .ok()
-        .and_then(|mut cache| cache.get(&color_key));
+      let mut color_glyph = if let Ok(mut cache) = self.color_cache.lock() {
+        if diag_enabled {
+          let before = cache.stats();
+          let value = cache.get(&color_key);
+          let after = cache.stats();
+          let delta = after.delta_from(&before);
+          color_hits = color_hits.saturating_add(delta.hits);
+          color_misses = color_misses.saturating_add(delta.misses);
+          color_evictions = color_evictions.saturating_add(delta.evictions);
+          color_bytes = color_bytes.max(after.bytes);
+          value
+        } else {
+          cache.get(&color_key)
+        }
+      } else {
+        None
+      };
       if color_glyph.is_none() {
         color_glyph = self.color_renderer.render(
           font,
@@ -1006,7 +1014,18 @@ impl TextRasterizer {
         );
         if let Some(ref rendered) = color_glyph {
           if let Ok(mut cache) = self.color_cache.lock() {
-            cache.insert(color_key, rendered.clone());
+            if diag_enabled {
+              let before = cache.stats();
+              cache.insert(color_key, rendered.clone());
+              let after = cache.stats();
+              let delta = after.delta_from(&before);
+              color_hits = color_hits.saturating_add(delta.hits);
+              color_misses = color_misses.saturating_add(delta.misses);
+              color_evictions = color_evictions.saturating_add(delta.evictions);
+              color_bytes = color_bytes.max(after.bytes);
+            } else {
+              cache.insert(color_key, rendered.clone());
+            }
           }
         }
       }
@@ -1039,9 +1058,23 @@ impl TextRasterizer {
         }
       } else {
         let cached_path = if let Ok(mut cache) = self.cache.lock() {
-          cache
-            .get_or_build(font, &instance, glyph.glyph_id)
-            .and_then(|glyph| glyph.path.clone())
+          if diag_enabled {
+            let before = cache.stats();
+            let path = cache
+              .get_or_build(font, &instance, glyph.glyph_id)
+              .and_then(|glyph| glyph.path.clone());
+            let after = cache.stats();
+            let delta = after.delta_from(&before);
+            outline_hits = outline_hits.saturating_add(delta.hits);
+            outline_misses = outline_misses.saturating_add(delta.misses);
+            outline_evictions = outline_evictions.saturating_add(delta.evictions);
+            outline_bytes = outline_bytes.max(after.bytes);
+            path
+          } else {
+            cache
+              .get_or_build(font, &instance, glyph.glyph_id)
+              .and_then(|glyph| glyph.path.clone())
+          }
         } else {
           None
         };
@@ -1076,32 +1109,28 @@ impl TextRasterizer {
     }
 
     if diag_enabled {
-      let outline_after = self
-        .cache
-        .lock()
-        .map(|cache| cache.stats())
-        .unwrap_or_default();
-      let color_after = self
-        .color_cache
-        .lock()
-        .map(|cache| cache.stats())
-        .unwrap_or_default();
-      let outline_delta = outline_after.delta_from(&outline_before);
-      let color_delta = color_after.delta_from(&color_before);
+      // Preserve the previous behavior of reporting cache sizes even when this run happens to be
+      // entirely color glyphs (or otherwise doesn't touch one of the caches).
+      if let Ok(cache) = self.cache.lock() {
+        outline_bytes = outline_bytes.max(cache.stats().bytes);
+      }
+      if let Ok(cache) = self.color_cache.lock() {
+        color_bytes = color_bytes.max(cache.stats().bytes);
+      }
       record_text_rasterize(
         raster_timer,
         color_glyph_rasters,
         TextCacheStats {
-          hits: outline_delta.hits,
-          misses: outline_delta.misses,
-          evictions: outline_delta.evictions,
-          bytes: outline_after.bytes,
+          hits: outline_hits,
+          misses: outline_misses,
+          evictions: outline_evictions,
+          bytes: outline_bytes,
         },
         TextCacheStats {
-          hits: color_delta.hits,
-          misses: color_delta.misses,
-          evictions: color_delta.evictions,
-          bytes: color_after.bytes,
+          hits: color_hits,
+          misses: color_misses,
+          evictions: color_evictions,
+          bytes: color_bytes,
         },
       );
     } else {

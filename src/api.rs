@@ -191,7 +191,7 @@ use std::io;
 use std::mem;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 #[cfg(test)]
 use url::Url;
 
@@ -1832,6 +1832,31 @@ fn diagnostics_level_from_env() -> DiagnosticsLevel {
     Ok(v) if v == "basic" || v == "1" => DiagnosticsLevel::Basic,
     Ok(v) if v == "none" || v == "0" => DiagnosticsLevel::None,
     _ => DiagnosticsLevel::None,
+  }
+}
+
+fn diagnostics_session_mutex() -> &'static Mutex<()> {
+  static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+  LOCK.get_or_init(|| Mutex::new(()))
+}
+
+/// Ensures only one diagnostics-enabled render executes at a time.
+///
+/// The various `*_diagnostics` modules use global state (enabled flag + accumulator). If multiple
+/// renders run concurrently in the same process with diagnostics enabled, their counters can
+/// clobber each other (including dropping `text_shape_ms` entirely). Serialize diagnostics sessions
+/// to keep metrics consistent for both users and tests.
+struct DiagnosticsSessionGuard {
+  _guard: std::sync::MutexGuard<'static, ()>,
+}
+
+impl DiagnosticsSessionGuard {
+  fn acquire() -> Self {
+    Self {
+      _guard: diagnostics_session_mutex()
+        .lock()
+        .expect("diagnostics session lock poisoned"),
+    }
   }
 }
 
@@ -3498,6 +3523,11 @@ impl FastRender {
     } else {
       None
     };
+    let _diagnostics_session = if stats_recorder.is_some() {
+      Some(DiagnosticsSessionGuard::acquire())
+    } else {
+      None
+    };
     if stats_recorder.is_some() {
       crate::resource::enable_resource_cache_diagnostics();
       crate::image_loader::enable_image_cache_diagnostics();
@@ -4567,6 +4597,11 @@ impl FastRender {
     } else {
       None
     };
+    let _diagnostics_session = if stats_recorder.is_some() {
+      Some(DiagnosticsSessionGuard::acquire())
+    } else {
+      None
+    };
     if let Some(stats) = stats_recorder.as_mut() {
       crate::resource::enable_resource_cache_diagnostics();
       crate::image_loader::enable_image_cache_diagnostics();
@@ -4735,6 +4770,11 @@ impl FastRender {
       } else {
         None
       };
+    let _diagnostics_session = if stats.is_none() && local_recorder.is_some() {
+      Some(DiagnosticsSessionGuard::acquire())
+    } else {
+      None
+    };
     if stats.is_none() && local_recorder.is_some() {
       crate::resource::enable_resource_cache_diagnostics();
       crate::image_loader::enable_image_cache_diagnostics();
@@ -4846,6 +4886,11 @@ impl FastRender {
         .then(|| RenderStatsRecorder::new(diagnostics_level));
       let restore_cascade_profile = if stats_recorder.as_ref().is_some_and(|rec| rec.verbose()) {
         Some(crate::style::cascade::cascade_profile_enabled())
+      } else {
+        None
+      };
+      let _diagnostics_session = if stats_recorder.is_some() {
+        Some(DiagnosticsSessionGuard::acquire())
       } else {
         None
       };

@@ -1992,6 +1992,7 @@ fn is_inherited_property(name: &str) -> bool {
       | "text-rendering"
       | "text-indent"
       | "text-decoration-skip-ink"
+      | "text-shadow"
       | "text-underline-offset"
       | "text-underline-position"
       | "text-emphasis-style"

@@ -71,7 +71,7 @@ use crate::paint::rasterize::render_box_shadow;
 use crate::paint::rasterize::BoxShadow;
 use crate::paint::text_rasterize::{
   shared_color_cache, shared_color_renderer, shared_glyph_cache, ColorGlyphCache, GlyphCache,
-  TextRasterizer,
+  TextRasterizer, TextRenderState,
 };
 use crate::paint::text_shadow::PathBounds;
 use crate::paint::transform3d::backface_is_hidden;
@@ -104,9 +104,10 @@ use crate::style::values::Length;
 use crate::text::color_fonts::ColorFontRenderer;
 use crate::text::font_db::LoadedFont;
 use crate::text::font_loader::FontContext;
-use crate::text::pipeline::{record_text_rasterize, text_diagnostics_timer, TextCacheStats};
+use crate::text::pipeline::GlyphPosition;
 use lru::LruCache;
 use rayon::prelude::*;
+use rustybuzz::Variation;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
@@ -5131,24 +5132,8 @@ impl DisplayListRenderer {
       );
     };
 
-    let face = crate::text::face_cache::get_ttf_face(&font).ok_or_else(|| {
-      RenderError::RasterizationFailed {
-        reason: "Unable to parse font face for text shadows".into(),
-      }
-    })?;
-
-    let text_timer = text_diagnostics_timer();
-    let (paths, bounds) = self.glyph_paths(face.face(), item);
-    if !item.shadows.is_empty() && !paths.is_empty() && bounds.is_valid() {
-      self.render_text_shadows(&paths, &bounds, item)?;
-    }
-    if text_timer.is_some() {
-      record_text_rasterize(
-        text_timer,
-        0,
-        TextCacheStats::default(),
-        TextCacheStats::default(),
-      );
+    if !item.shadows.is_empty() {
+      self.render_text_shadows(&font, item)?;
     }
 
     self.canvas.draw_text(
@@ -5436,112 +5421,154 @@ impl DisplayListRenderer {
     Ok(())
   }
 
-  fn glyph_paths(
-    &self,
-    face: &ttf_parser::Face<'_>,
-    item: &TextItem,
-  ) -> (Vec<tiny_skia::Path>, PathBounds) {
-    let units_per_em = face.units_per_em() as f32;
-    let scale = item.font_size / units_per_em;
-    let mut paths = Vec::with_capacity(item.glyphs.len());
+  fn text_shadow_bounds(&self, font: &LoadedFont, item: &TextItem) -> PathBounds {
     let mut bounds = PathBounds::new();
 
-    for glyph in &item.glyphs {
-      let x = item.origin.x + glyph.offset.x;
-      let y = item.origin.y + glyph.offset.y;
-      if let Some(path) = Self::build_glyph_path(
-        face,
-        glyph.glyph_id as u16,
-        x,
-        y,
-        scale,
-        item.synthetic_oblique,
-      ) {
-        bounds.include(&path.bounds());
-        paths.push(path);
-      }
+    if item.glyphs.is_empty() || !item.font_size.is_finite() || item.font_size <= 0.0 {
+      return bounds;
     }
 
-    (paths, bounds)
-  }
+    let ascent = item.font_size;
+    let descent = item.font_size * 0.25;
 
-  fn build_glyph_path(
-    face: &ttf_parser::Face<'_>,
-    glyph_id: u16,
-    x: f32,
-    baseline_y: f32,
-    scale: f32,
-    synthetic_oblique: f32,
-  ) -> Option<tiny_skia::Path> {
-    use ttf_parser::OutlineBuilder;
+    // Prefer per-glyph bounding boxes from the parsed face; unlike outline extraction, this does
+    // not require walking the glyph outline for each glyph.
+    let face = crate::text::face_cache::get_ttf_face(font).map(|cached| cached.clone_face());
+    let face = face.as_ref();
 
-    struct PathConverter {
-      builder: PathBuilder,
-      scale: f32,
-      x: f32,
-      y: f32,
-      skew: f32,
-    }
-
-    impl OutlineBuilder for PathConverter {
-      fn move_to(&mut self, px: f32, py: f32) {
-        self.builder.move_to(
-          self.x + (px + self.skew * py) * self.scale,
-          self.y - py * self.scale,
-        );
+    let (scale, has_bbox) = if let Some(face) = face {
+      let units_per_em = face.units_per_em() as f32;
+      if units_per_em > 0.0 && units_per_em.is_finite() {
+        (item.font_size / units_per_em, !face.is_variable())
+      } else {
+        (0.0, false)
       }
-
-      fn line_to(&mut self, px: f32, py: f32) {
-        self.builder.line_to(
-          self.x + (px + self.skew * py) * self.scale,
-          self.y - py * self.scale,
-        );
-      }
-
-      fn quad_to(&mut self, x1: f32, y1: f32, px: f32, py: f32) {
-        self.builder.quad_to(
-          self.x + (x1 + self.skew * y1) * self.scale,
-          self.y - y1 * self.scale,
-          self.x + (px + self.skew * py) * self.scale,
-          self.y - py * self.scale,
-        );
-      }
-
-      fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, px: f32, py: f32) {
-        self.builder.cubic_to(
-          self.x + (x1 + self.skew * y1) * self.scale,
-          self.y - y1 * self.scale,
-          self.x + (x2 + self.skew * y2) * self.scale,
-          self.y - y2 * self.scale,
-          self.x + (px + self.skew * py) * self.scale,
-          self.y - py * self.scale,
-        );
-      }
-
-      fn close(&mut self) {
-        self.builder.close();
-      }
-    }
-
-    let mut converter = PathConverter {
-      builder: PathBuilder::new(),
-      scale,
-      x,
-      y: baseline_y,
-      skew: synthetic_oblique,
+    } else {
+      (0.0, false)
     };
 
-    face.outline_glyph(ttf_parser::GlyphId(glyph_id), &mut converter)?;
-    converter.builder.finish()
+    let mut cursor_x = item.origin.x;
+    let mut cursor_y = 0.0_f32;
+    let skew = if item.synthetic_oblique.is_finite() {
+      item.synthetic_oblique
+    } else {
+      0.0
+    };
+
+    for glyph in &item.glyphs {
+      let glyph_x = cursor_x + glyph.offset.x;
+      let glyph_y = item.origin.y + cursor_y + glyph.offset.y;
+
+      if has_bbox {
+        if let (Some(face), Ok(glyph_id)) =
+          (face, u16::try_from(glyph.glyph_id).map(ttf_parser::GlyphId))
+        {
+          if let Some(bbox) = face.glyph_bounding_box(glyph_id) {
+            let corners = [
+              (bbox.x_min as f32, bbox.y_min as f32),
+              (bbox.x_min as f32, bbox.y_max as f32),
+              (bbox.x_max as f32, bbox.y_min as f32),
+              (bbox.x_max as f32, bbox.y_max as f32),
+            ];
+            for (px, py) in corners {
+              let x = glyph_x + (px + skew * py) * scale;
+              let y = glyph_y - py * scale;
+              bounds.min_x = bounds.min_x.min(x);
+              bounds.max_x = bounds.max_x.max(x);
+              bounds.min_y = bounds.min_y.min(y);
+              bounds.max_y = bounds.max_y.max(y);
+            }
+          } else {
+            let x0 = glyph_x.min(glyph_x + glyph.advance);
+            let x1 = glyph_x.max(glyph_x + glyph.advance);
+            bounds.min_x = bounds.min_x.min(x0);
+            bounds.max_x = bounds.max_x.max(x1);
+            bounds.min_y = bounds.min_y.min(glyph_y - ascent);
+            bounds.max_y = bounds.max_y.max(glyph_y + descent);
+          }
+        }
+      } else {
+        let x0 = glyph_x.min(glyph_x + glyph.advance);
+        let x1 = glyph_x.max(glyph_x + glyph.advance);
+        bounds.min_x = bounds.min_x.min(x0);
+        bounds.max_x = bounds.max_x.max(x1);
+        bounds.min_y = bounds.min_y.min(glyph_y - ascent);
+        bounds.max_y = bounds.max_y.max(glyph_y + descent);
+      }
+
+      cursor_x += glyph.advance;
+      cursor_y += 0.0;
+    }
+
+    if !bounds.is_valid() {
+      if let Some(rect) = item.cached_bounds {
+        bounds.min_x = rect.min_x();
+        bounds.min_y = rect.min_y();
+        bounds.max_x = rect.max_x();
+        bounds.max_y = rect.max_y();
+      }
+    }
+
+    if bounds.is_valid() {
+      let bold_pad = if item.synthetic_bold.is_finite() {
+        item.synthetic_bold.abs()
+      } else {
+        0.0
+      };
+      let oblique_pad = skew.abs() * (ascent + descent);
+      let pad_x = bold_pad + oblique_pad + 1.0;
+      let pad_y = bold_pad + 1.0;
+      bounds.min_x -= pad_x;
+      bounds.max_x += pad_x;
+      bounds.min_y -= pad_y;
+      bounds.max_y += pad_y;
+    }
+
+    bounds
   }
 
-  fn render_text_shadows(
-    &mut self,
-    paths: &[tiny_skia::Path],
-    bounds: &PathBounds,
-    item: &TextItem,
-  ) -> Result<()> {
+  fn render_text_shadows(&mut self, font: &LoadedFont, item: &TextItem) -> Result<()> {
+    if item.shadows.is_empty() || item.glyphs.is_empty() {
+      return Ok(());
+    }
+
+    let bounds = self.text_shadow_bounds(font, item);
+    if !bounds.is_valid() {
+      return Ok(());
+    }
+
     let opacity = self.canvas.opacity().clamp(0.0, 1.0);
+    if opacity == 0.0 {
+      return Ok(());
+    }
+
+    let glyph_positions: Vec<GlyphPosition> = item
+      .glyphs
+      .iter()
+      .map(|g| GlyphPosition {
+        glyph_id: g.glyph_id,
+        cluster: 0,
+        x_offset: g.offset.x,
+        y_offset: g.offset.y,
+        x_advance: g.advance,
+        y_advance: 0.0,
+      })
+      .collect();
+    let variations: Vec<Variation> = item
+      .variations
+      .iter()
+      .map(|v| Variation {
+        tag: v.tag,
+        value: v.value(),
+      })
+      .collect();
+
+    let mut rasterizer = TextRasterizer::with_caches(
+      self.glyph_cache.clone(),
+      self.color_renderer.clone(),
+      self.color_cache.clone(),
+    );
+
     for shadow in &item.shadows {
       let blur_margin = (shadow.blur_radius.abs() * 3.0).ceil();
       let shadow_min_x = bounds.min_x + shadow.offset.x - blur_margin;
@@ -5560,21 +5587,37 @@ impl DisplayListRenderer {
       };
       self.record_layer_allocation(shadow_width, shadow_height);
 
-      let mut paint = tiny_skia::Paint::default();
-      let alpha = (shadow.color.a * opacity).clamp(0.0, 1.0);
-      paint.set_color_rgba8(
-        shadow.color.r,
-        shadow.color.g,
-        shadow.color.b,
-        (alpha * 255.0).round().clamp(0.0, 255.0) as u8,
-      );
-      paint.anti_alias = true;
-
       let translate_x = -bounds.min_x + blur_margin;
       let translate_y = -bounds.min_y + blur_margin;
-      let transform = Transform::from_translate(translate_x, translate_y);
-      for path in paths {
-        shadow_pixmap.fill_path(path, &paint, tiny_skia::FillRule::EvenOdd, transform, None);
+      let state = TextRenderState {
+        transform: Transform::from_translate(translate_x, translate_y),
+        opacity,
+        blend_mode: SkiaBlendMode::SourceOver,
+        clip_mask: None,
+      };
+
+      // Ignore text rasterizer failures so shadows don't prevent painting the rest of the scene.
+      if rasterizer
+        .render_glyph_run(
+          &glyph_positions,
+          font,
+          item.font_size,
+          item.synthetic_bold,
+          item.synthetic_oblique,
+          item.palette_index,
+          &[],
+          0,
+          &variations,
+          None,
+          item.origin.x,
+          item.origin.y,
+          shadow.color,
+          state,
+          &mut shadow_pixmap,
+        )
+        .is_err()
+      {
+        continue;
       }
 
       if shadow.blur_radius > 0.0 {
@@ -5591,12 +5634,11 @@ impl DisplayListRenderer {
       let dest_y = shadow_min_y.floor() as i32;
       let frac_x = shadow_min_x - dest_x as f32;
       let frac_y = shadow_min_y - dest_y as f32;
-      let mut pixmap_paint = tiny_skia::PixmapPaint {
+      let pixmap_paint = tiny_skia::PixmapPaint {
         opacity: 1.0,
         blend_mode: self.canvas.blend_mode(),
         ..Default::default()
       };
-      pixmap_paint.opacity = opacity;
       let clip = self.canvas.clip_mask().cloned();
       let transform =
         Transform::from_translate(frac_x, frac_y).post_concat(self.canvas.transform());
@@ -5609,6 +5651,7 @@ impl DisplayListRenderer {
         clip.as_ref(),
       );
     }
+
     Ok(())
   }
 
@@ -8995,7 +9038,7 @@ mod tests {
       "shadow offset should scale with DPR (expected ~4, got {})",
       scaled_item.shadows[0].offset.x
     );
-    let (_paths, bounds) = renderer.glyph_paths(&face, &scaled_item);
+    let bounds = renderer.text_shadow_bounds(&font, &scaled_item);
     let shadow = &scaled_item.shadows[0];
     let shadow_min_x = bounds.min_x + shadow.offset.x;
     let shadow_max_x = bounds.max_x + shadow.offset.x;
@@ -9086,7 +9129,7 @@ mod tests {
       "blur radius should scale with DPR (expected ~8, got {})",
       scaled_item.shadows[0].blur_radius
     );
-    let (_paths, bounds) = renderer.glyph_paths(&face, &scaled_item);
+    let bounds = renderer.text_shadow_bounds(&font, &scaled_item);
     let shadow = &scaled_item.shadows[0];
     let blur_margin = (shadow.blur_radius.abs() * 3.0).ceil();
     let shadow_min_x = bounds.min_x + shadow.offset.x - blur_margin;

@@ -6347,6 +6347,7 @@ pub(crate) fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle)
   styles.text_indent = parent.text_indent;
   styles.text_wrap = parent.text_wrap;
   styles.text_decoration_skip_ink = parent.text_decoration_skip_ink;
+  styles.text_shadow = parent.text_shadow.clone();
   styles.text_underline_offset = parent.text_underline_offset;
   styles.text_underline_position = parent.text_underline_position;
   styles.text_emphasis_style = parent.text_emphasis_style.clone();
