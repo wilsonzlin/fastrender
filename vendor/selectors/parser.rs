@@ -1222,6 +1222,7 @@ impl<Impl: SelectorImpl> Selector<Impl> {
                     RelativeSelector {
                         match_hint: s.match_hint,
                         bloom_hashes: RelativeSelectorBloomHashes::new(&selector),
+                        ancestor_hashes: RelativeSelectorAncestorHashes::new(&selector),
                         selector,
                     }
                 })
@@ -2031,6 +2032,29 @@ pub struct RelativeSelectorBloomHashes {
     quirks_hashes: SmallVec<[u32; RELATIVE_SELECTOR_BLOOM_HASHES_INLINE_CAPACITY]>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RelativeSelectorAncestorHashes {
+    non_quirks_hashes: AncestorHashes,
+    quirks_hashes: AncestorHashes,
+}
+
+impl RelativeSelectorAncestorHashes {
+    pub fn new<Impl: SelectorImpl>(selector: &Selector<Impl>) -> Self {
+        Self {
+            non_quirks_hashes: AncestorHashes::new(selector, QuirksMode::NoQuirks),
+            quirks_hashes: AncestorHashes::new(selector, QuirksMode::Quirks),
+        }
+    }
+
+    #[inline]
+    pub fn hashes_for_mode(&self, quirks_mode: QuirksMode) -> &AncestorHashes {
+        match quirks_mode {
+            QuirksMode::Quirks => &self.quirks_hashes,
+            _ => &self.non_quirks_hashes,
+        }
+    }
+}
+
 fn collect_relative_selector_hashes<Impl: SelectorImpl>(
     selector: &Selector<Impl>,
     quirks_mode: QuirksMode,
@@ -2143,6 +2167,7 @@ pub struct RelativeSelector<Impl: SelectorImpl> {
     #[cfg_attr(feature = "to_shmem", shmem(field_bound))]
     pub selector: Selector<Impl>,
     pub bloom_hashes: RelativeSelectorBloomHashes,
+    pub ancestor_hashes: RelativeSelectorAncestorHashes,
 }
 
 bitflags! {
@@ -2178,6 +2203,11 @@ impl CombinatorComposition {
 }
 
 impl<Impl: SelectorImpl> RelativeSelector<Impl> {
+    #[inline]
+    pub fn ancestor_hashes_for_mode(&self, quirks_mode: QuirksMode) -> &AncestorHashes {
+        self.ancestor_hashes.hashes_for_mode(quirks_mode)
+    }
+
     fn from_selector_list(selector_list: SelectorList<Impl>) -> Box<[Self]> {
         selector_list
             .slice()
@@ -2210,6 +2240,7 @@ impl<Impl: SelectorImpl> RelativeSelector<Impl> {
                     match_hint,
                     selector: selector.clone(),
                     bloom_hashes: RelativeSelectorBloomHashes::new(selector),
+                    ancestor_hashes: RelativeSelectorAncestorHashes::new(selector),
                 }
             })
             .collect()

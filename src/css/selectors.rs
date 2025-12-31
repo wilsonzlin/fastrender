@@ -17,7 +17,8 @@ use selectors::parser::SelectorImpl;
 use selectors::parser::SelectorList;
 use selectors::parser::SelectorParseErrorKind;
 use selectors::parser::{
-  Combinator, RelativeSelector, RelativeSelectorBloomHashes, RelativeSelectorMatchHint,
+  Combinator, RelativeSelector, RelativeSelectorAncestorHashes, RelativeSelectorBloomHashes,
+  RelativeSelectorMatchHint,
 };
 use selectors::OpaqueElement;
 use std::collections::HashMap;
@@ -799,10 +800,12 @@ pub(crate) fn build_relative_selectors(
         has_adjacent_or_next_siblings,
       );
       let bloom_hashes = RelativeSelectorBloomHashes::new(selector);
+      let ancestor_hashes = RelativeSelectorAncestorHashes::new(selector);
 
       RelativeSelector {
         match_hint,
         bloom_hashes,
+        ancestor_hashes,
         selector: selector.clone(),
       }
     })

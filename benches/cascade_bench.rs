@@ -356,7 +356,9 @@ fn generate_has_bench_html(depth: usize, fan_out: usize) -> String {
     html.push_str(&format!("<div class=\"branch level{}\">", level));
     if level + 1 == depth {
       if place_target {
-        html.push_str("<span class=\"target\"></span>");
+        html.push_str("<span class=\"target c\"></span>");
+      } else {
+        html.push_str("<span class=\"c\"></span>");
       }
     } else {
       for i in 0..fan_out {
@@ -373,8 +375,13 @@ fn generate_has_bench_html(depth: usize, fan_out: usize) -> String {
   }
 
   let mut html = String::from("<div class=\"has-bench\">");
+  // Include an `.a` element to defeat subtree bloom-summary pruning for `.a .b .c`
+  // relative selector benches, while ensuring it can never be an ancestor of `.c`.
+  html.push_str("<div class=\"a\"></div>");
   for i in 0..fan_out {
+    html.push_str("<div class=\"b\">");
     build_branch(0, depth, fan_out, i == fan_out - 1, &mut html);
+    html.push_str("</div>");
   }
   html.push_str("</div>");
   html
@@ -383,6 +390,7 @@ fn generate_has_bench_html(depth: usize, fan_out: usize) -> String {
 fn has_selector_css() -> &'static str {
   r#"
       .has-bench:has(.target) { outline: 1px solid #ccc; }
+      .has-bench:has(.a .b .c) { outline: 2px dotted #999; }
       .branch:has(.target) { color: #111; }
       .branch:has(> .branch .target) { border-left: 1px solid #ddd; }
       .branch:has(+ .branch .target) { background: #fafafa; }

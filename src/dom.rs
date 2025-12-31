@@ -18,10 +18,12 @@ use html5ever::ParseOpts;
 use markup5ever_rcdom::Handle;
 use markup5ever_rcdom::NodeData;
 use markup5ever_rcdom::RcDom;
+use selectors::bloom::BloomFilter;
 use selectors::attr::AttrSelectorOperation;
 use selectors::attr::CaseSensitivity;
 use selectors::context::QuirksMode;
 use selectors::matching::matches_selector;
+use selectors::matching::selector_may_match;
 use selectors::matching::MatchingContext;
 use selectors::parser::RelativeSelector;
 use selectors::relative_selector::cache::RelativeSelectorCachedMatch;
@@ -4430,6 +4432,8 @@ fn matches_has_relative(
     ctx.nest_for_scope(Some(anchor.opaque()), |ctx| {
       let mut ancestors = RelativeSelectorAncestorStack::new(anchor.all_ancestors);
       let mut deadline_counter = 0usize;
+      let use_ancestor_bloom = selector_bloom_enabled();
+      let mut ancestor_bloom_filter = BloomFilter::new();
       let anchor_summary = ctx
         .extra_data
         .selector_blooms
@@ -4499,11 +4503,14 @@ fn matches_has_relative(
           selector,
           anchor.node,
           &mut ancestors,
+          &mut ancestor_bloom_filter,
+          use_ancestor_bloom,
           ctx,
           &mut deadline_counter,
         );
         debug_assert_eq!(ancestors.len(), ancestors.baseline_len());
         ancestors.reset();
+        debug_assert!(!use_ancestor_bloom || ancestor_bloom_filter.is_zeroed());
 
         if ctx.extra_data.deadline_error.is_some() {
           return false;
@@ -4523,6 +4530,7 @@ fn matches_has_relative(
           return true;
         }
       }
+
       false
     })
   })
@@ -4538,6 +4546,8 @@ fn match_relative_selector<'a>(
   selector: &RelativeSelector<FastRenderSelectorImpl>,
   anchor: &'a DomNode,
   ancestors: &mut RelativeSelectorAncestorStack<'a>,
+  bloom_filter: &mut BloomFilter,
+  use_ancestor_bloom: bool,
   context: &mut MatchingContext<FastRenderSelectorImpl>,
   deadline_counter: &mut usize,
 ) -> bool {
@@ -4550,12 +4560,22 @@ fn match_relative_selector<'a>(
       selector,
       anchor,
       ancestors,
+      bloom_filter,
+      use_ancestor_bloom,
       context,
       deadline_counter,
     );
   }
 
-  match_relative_selector_siblings(selector, anchor, ancestors, context, deadline_counter)
+  match_relative_selector_siblings(
+    selector,
+    anchor,
+    ancestors,
+    bloom_filter,
+    use_ancestor_bloom,
+    context,
+    deadline_counter,
+  )
 }
 
 fn in_shadow_tree(ancestors: &[&DomNode]) -> bool {
@@ -4605,10 +4625,17 @@ fn match_relative_selector_descendants<'a>(
   selector: &RelativeSelector<FastRenderSelectorImpl>,
   anchor: &'a DomNode,
   ancestors: &mut RelativeSelectorAncestorStack<'a>,
+  bloom_filter: &mut BloomFilter,
+  use_ancestor_bloom: bool,
   context: &mut MatchingContext<FastRenderSelectorImpl>,
   deadline_counter: &mut usize,
 ) -> bool {
+  let ancestor_hashes = selector.ancestor_hashes_for_mode(context.quirks_mode());
   ancestors.with_pushed(anchor, |ancestors| {
+    if use_ancestor_bloom {
+      add_selector_bloom_hashes(anchor, &mut |hash| bloom_filter.insert_hash(hash));
+    }
+    let mut found = false;
     for child in anchor.children.iter().filter(|c| c.is_element()) {
       if let Err(err) = check_active_periodic(
         deadline_counter,
@@ -4616,23 +4643,40 @@ fn match_relative_selector_descendants<'a>(
         RenderStage::Cascade,
       ) {
         context.extra_data.record_deadline_error(err);
-        return false;
+        found = false;
+        break;
       }
       let child_ref = ElementRef::with_ancestors(child, ancestors.as_slice())
         .with_slot_map(context.extra_data.slot_map);
-      let mut matched = matches_selector(&selector.selector, 0, None, &child_ref, context);
+      let mut matched = if use_ancestor_bloom && !selector_may_match(ancestor_hashes, bloom_filter) {
+        false
+      } else {
+        matches_selector(&selector.selector, 0, None, &child_ref, context)
+      };
       if context.extra_data.deadline_error.is_some() {
-        return false;
+        found = false;
+        break;
       }
       if !matched && selector.match_hint.is_subtree() {
-        matched =
-          match_relative_selector_subtree(selector, child, ancestors, context, deadline_counter);
+        matched = match_relative_selector_subtree(
+          selector,
+          child,
+          ancestors,
+          bloom_filter,
+          use_ancestor_bloom,
+          context,
+          deadline_counter,
+        );
       }
       if matched {
-        return true;
+        found = true;
+        break;
       }
     }
-    false
+    if use_ancestor_bloom {
+      add_selector_bloom_hashes(anchor, &mut |hash| bloom_filter.remove_hash(hash));
+    }
+    found
   })
 }
 
@@ -4640,9 +4684,12 @@ fn match_relative_selector_siblings<'a>(
   selector: &RelativeSelector<FastRenderSelectorImpl>,
   anchor: &'a DomNode,
   ancestors: &mut RelativeSelectorAncestorStack<'a>,
+  bloom_filter: &mut BloomFilter,
+  use_ancestor_bloom: bool,
   context: &mut MatchingContext<FastRenderSelectorImpl>,
   deadline_counter: &mut usize,
 ) -> bool {
+  let ancestor_hashes = selector.ancestor_hashes_for_mode(context.quirks_mode());
   let parent = match ancestors.parent() {
     Some(p) => p,
     None => return false,
@@ -4669,9 +4716,21 @@ fn match_relative_selector_siblings<'a>(
     let sibling_ref = ElementRef::with_ancestors(sibling, ancestors.as_slice())
       .with_slot_map(context.extra_data.slot_map);
     let matched = if selector.match_hint.is_subtree() {
-      match_relative_selector_subtree(selector, sibling, ancestors, context, deadline_counter)
+      match_relative_selector_subtree(
+        selector,
+        sibling,
+        ancestors,
+        bloom_filter,
+        use_ancestor_bloom,
+        context,
+        deadline_counter,
+      )
     } else {
-      matches_selector(&selector.selector, 0, None, &sibling_ref, context)
+      if use_ancestor_bloom && !selector_may_match(ancestor_hashes, bloom_filter) {
+        false
+      } else {
+        matches_selector(&selector.selector, 0, None, &sibling_ref, context)
+      }
     };
     if context.extra_data.deadline_error.is_some() {
       return false;
@@ -4693,12 +4752,19 @@ fn match_relative_selector_subtree<'a>(
   selector: &RelativeSelector<FastRenderSelectorImpl>,
   node: &'a DomNode,
   ancestors: &mut RelativeSelectorAncestorStack<'a>,
+  bloom_filter: &mut BloomFilter,
+  use_ancestor_bloom: bool,
   context: &mut MatchingContext<FastRenderSelectorImpl>,
   deadline_counter: &mut usize,
 ) -> bool {
   debug_assert!(selector.match_hint.is_subtree());
 
+  let ancestor_hashes = selector.ancestor_hashes_for_mode(context.quirks_mode());
   ancestors.with_pushed(node, |ancestors| {
+    if use_ancestor_bloom {
+      add_selector_bloom_hashes(node, &mut |hash| bloom_filter.insert_hash(hash));
+    }
+    let mut found = false;
     for child in node.children.iter().filter(|c| c.is_element()) {
       if let Err(err) = check_active_periodic(
         deadline_counter,
@@ -4706,21 +4772,38 @@ fn match_relative_selector_subtree<'a>(
         RenderStage::Cascade,
       ) {
         context.extra_data.record_deadline_error(err);
-        return false;
+        found = false;
+        break;
       }
       let child_ref = ElementRef::with_ancestors(child, ancestors.as_slice())
         .with_slot_map(context.extra_data.slot_map);
-      if matches_selector(&selector.selector, 0, None, &child_ref, context) {
+      if (!use_ancestor_bloom || selector_may_match(ancestor_hashes, bloom_filter))
+        && matches_selector(&selector.selector, 0, None, &child_ref, context)
+      {
         if context.extra_data.deadline_error.is_some() {
-          return false;
+          found = false;
+          break;
         }
-        return true;
+        found = true;
+        break;
       }
-      if match_relative_selector_subtree(selector, child, ancestors, context, deadline_counter) {
-        return true;
+      if match_relative_selector_subtree(
+        selector,
+        child,
+        ancestors,
+        bloom_filter,
+        use_ancestor_bloom,
+        context,
+        deadline_counter,
+      ) {
+        found = true;
+        break;
       }
     }
-    false
+    if use_ancestor_bloom {
+      add_selector_bloom_hashes(node, &mut |hash| bloom_filter.remove_hash(hash));
+    }
+    found
   })
 }
 
@@ -5304,6 +5387,145 @@ mod tests {
     let counters = capture_has_counters();
     assert_eq!(counters.prunes, 0);
     assert_eq!(counters.evaluated, 1);
+  }
+
+  fn eval_relative_selector_with_ancestor_bloom(
+    dom: &DomNode,
+    selector: &RelativeSelector<FastRenderSelectorImpl>,
+    use_ancestor_bloom: bool,
+  ) -> bool {
+    let mut caches = SelectorCaches::default();
+    let cache_epoch = next_selector_cache_epoch();
+    caches.set_epoch(cache_epoch);
+    let sibling_cache = SiblingListCache::new(cache_epoch);
+    let mut context = MatchingContext::new(
+      MatchingMode::Normal,
+      None,
+      &mut caches,
+      QuirksMode::NoQuirks,
+      NeedsSelectorFlags::No,
+      MatchingForInvalidation::No,
+    );
+    context.extra_data = ShadowMatchData::for_document().with_sibling_cache(&sibling_cache);
+
+    let anchor = ElementRef::with_ancestors(dom, &[]);
+    context.nest_for_relative_selector(anchor.opaque(), |ctx| {
+      ctx.nest_for_scope(Some(anchor.opaque()), |ctx| {
+        let mut ancestors = RelativeSelectorAncestorStack::new(anchor.all_ancestors);
+        let mut deadline_counter = 0usize;
+        let mut ancestor_bloom_filter = BloomFilter::new();
+
+        let matched = match_relative_selector(
+          selector,
+          anchor.node,
+          &mut ancestors,
+          &mut ancestor_bloom_filter,
+          use_ancestor_bloom,
+          ctx,
+          &mut deadline_counter,
+        );
+        debug_assert_eq!(ancestors.len(), ancestors.baseline_len());
+        debug_assert!(!use_ancestor_bloom || ancestor_bloom_filter.is_zeroed());
+        matched
+      })
+    })
+  }
+
+  #[test]
+  fn has_relative_selector_ancestor_bloom_matches_without_bloom() {
+    let dom = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".into(),
+        namespace: HTML_NAMESPACE.into(),
+        attributes: vec![],
+      },
+      children: vec![DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "div".into(),
+          namespace: HTML_NAMESPACE.into(),
+          attributes: vec![("class".into(), "a".into())],
+        },
+        children: vec![DomNode {
+          node_type: DomNodeType::Element {
+            tag_name: "div".into(),
+            namespace: HTML_NAMESPACE.into(),
+            attributes: vec![("class".into(), "b".into())],
+          },
+          children: vec![DomNode {
+            node_type: DomNodeType::Element {
+              tag_name: "div".into(),
+              namespace: HTML_NAMESPACE.into(),
+              attributes: vec![("class".into(), "c".into())],
+            },
+            children: vec![],
+          }],
+        }],
+      }],
+    };
+
+    let mut input = ParserInput::new(".a .b .c");
+    let mut parser = Parser::new(&mut input);
+    let list =
+      SelectorList::parse(&PseudoClassParser, &mut parser, ParseRelative::ForHas).expect("parse");
+    let selectors = build_relative_selectors(list);
+    assert_eq!(selectors.len(), 1);
+
+    let with_bloom = eval_relative_selector_with_ancestor_bloom(&dom, &selectors[0], true);
+    let without_bloom = eval_relative_selector_with_ancestor_bloom(&dom, &selectors[0], false);
+    assert!(with_bloom);
+    assert_eq!(with_bloom, without_bloom);
+  }
+
+  #[test]
+  fn has_relative_selector_ancestor_bloom_rejects_by_ancestor_chain() {
+    // Contains `.a`, `.b` and many `.c` nodes, but `.b` is not a descendant of `.a`,
+    // so `.a .b .c` can never match.
+    let dom = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".into(),
+        namespace: HTML_NAMESPACE.into(),
+        attributes: vec![],
+      },
+      children: vec![
+        DomNode {
+          node_type: DomNodeType::Element {
+            tag_name: "div".into(),
+            namespace: HTML_NAMESPACE.into(),
+            attributes: vec![("class".into(), "a".into())],
+          },
+          children: vec![],
+        },
+        DomNode {
+          node_type: DomNodeType::Element {
+            tag_name: "div".into(),
+            namespace: HTML_NAMESPACE.into(),
+            attributes: vec![("class".into(), "b".into())],
+          },
+          children: (0..32)
+            .map(|_| DomNode {
+              node_type: DomNodeType::Element {
+                tag_name: "div".into(),
+                namespace: HTML_NAMESPACE.into(),
+                attributes: vec![("class".into(), "c".into())],
+              },
+              children: vec![],
+            })
+            .collect(),
+        },
+      ],
+    };
+
+    let mut input = ParserInput::new(".a .b .c");
+    let mut parser = Parser::new(&mut input);
+    let list =
+      SelectorList::parse(&PseudoClassParser, &mut parser, ParseRelative::ForHas).expect("parse");
+    let selectors = build_relative_selectors(list);
+    assert_eq!(selectors.len(), 1);
+
+    let with_bloom = eval_relative_selector_with_ancestor_bloom(&dom, &selectors[0], true);
+    let without_bloom = eval_relative_selector_with_ancestor_bloom(&dom, &selectors[0], false);
+    assert!(!with_bloom);
+    assert_eq!(with_bloom, without_bloom);
   }
 
   #[test]
