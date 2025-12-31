@@ -5505,9 +5505,15 @@ impl FastRender {
     );
 
     let target_fragment = self.current_target_fragment();
-    let mut dom_with_state = dom::clone_dom_with_deadline(dom, RenderStage::DomParse)?;
-    let modal_open = dom::modal_dialog_present_with_deadline(&dom_with_state)?;
-    dom::apply_top_layer_state_with_deadline(&mut dom_with_state, modal_open)?;
+    let dom_with_state = if needs_top_layer_state(dom) {
+      let mut dom_with_state = dom::clone_dom_with_deadline(dom, RenderStage::DomParse)?;
+      let modal_open = dom::modal_dialog_present_with_deadline(&dom_with_state)?;
+      dom::apply_top_layer_state_with_deadline(&mut dom_with_state, modal_open)?;
+      Some(dom_with_state)
+    } else {
+      None
+    };
+    let dom_for_style = dom_with_state.as_ref().unwrap_or(dom);
     let viewport_size = resolved_viewport.layout_viewport;
     let device_size = resolved_viewport.visual_viewport;
     let media_ctx = match options.media_type {
@@ -5523,7 +5529,7 @@ impl FastRender {
     let mut media_query_cache = MediaQueryCache::default();
     record_stage(StageHeartbeat::CssInline);
     let style_set =
-      self.collect_document_style_set(&dom_with_state, &media_ctx, &mut media_query_cache, None)?;
+      self.collect_document_style_set(dom_for_style, &media_ctx, &mut media_query_cache, None)?;
     // Style and accessibility tree construction are deeply recursive. Run them on a larger-stack
     // helper thread to avoid stack overflows on debug builds and on documents with deep nesting.
     let result = std::thread::scope(|scope| {
@@ -5533,7 +5539,7 @@ impl FastRender {
         .spawn_scoped(scope, || {
           let mut local_media_query_cache = MediaQueryCache::default();
           let styled_tree = apply_style_set_with_media_target_and_imports_cached(
-            &dom_with_state,
+            dom_for_style,
             &style_set,
             &media_ctx,
             target_fragment.as_deref(),
@@ -5805,11 +5811,13 @@ impl FastRender {
     let timings_enabled = toggles.truthy("FASTR_RENDER_TIMINGS");
     let overall_start = timings_enabled.then(Instant::now);
 
-    let top_layer_timer = stats.as_deref().and_then(|rec| rec.timer());
-    let modal_open = dom::modal_dialog_present_with_deadline(&dom_with_state)?;
-    dom::apply_top_layer_state_with_deadline(&mut dom_with_state, modal_open)?;
-    if let Some(rec) = stats.as_deref_mut() {
-      RenderStatsRecorder::add_ms(&mut rec.stats.timings.dom_top_layer_ms, top_layer_timer);
+    if needs_top_layer_state(&dom_with_state) {
+      let top_layer_timer = stats.as_deref().and_then(|rec| rec.timer());
+      let modal_open = dom::modal_dialog_present_with_deadline(&dom_with_state)?;
+      dom::apply_top_layer_state_with_deadline(&mut dom_with_state, modal_open)?;
+      if let Some(rec) = stats.as_deref_mut() {
+        RenderStatsRecorder::add_ms(&mut rec.stats.timings.dom_top_layer_ms, top_layer_timer);
+      }
     }
 
     let viewport_size = Size::new(width as f32, height as f32);
@@ -9351,6 +9359,62 @@ fn build_styled_lookup<'a>(styled: &'a StyledNode, out: &mut HashMap<usize, *con
     build_styled_lookup(child, out);
   }
 }
+
+fn needs_top_layer_state(node: &DomNode) -> bool {
+  let mut stack = vec![node];
+  while let Some(current) = stack.pop() {
+    // We intentionally avoid descending into shadow roots and inert template contents. This keeps
+    // the scan cheap and mirrors other early DOM walks (e.g. viewport extraction).
+    match &current.node_type {
+      crate::dom::DomNodeType::ShadowRoot { .. } => {
+        // Shadow roots may contain dialogs/popovers but are not scanned here; conservatively keep
+        // the legacy top-layer traversal enabled when shadow DOM is present.
+        return true;
+      }
+      crate::dom::DomNodeType::Element {
+        tag_name,
+        namespace,
+        attributes,
+      } => {
+        if (namespace.is_empty() || namespace == crate::dom::HTML_NAMESPACE)
+          && tag_name.eq_ignore_ascii_case("dialog")
+        {
+          return true;
+        }
+
+        if tag_name.eq_ignore_ascii_case("template") {
+          continue;
+        }
+
+        for (name, _) in attributes {
+          if name.eq_ignore_ascii_case("popover")
+            || name.eq_ignore_ascii_case("data-fastr-open")
+            || name.eq_ignore_ascii_case("data-fastr-modal")
+          {
+            return true;
+          }
+        }
+      }
+      crate::dom::DomNodeType::Slot { attributes, .. } => {
+        for (name, _) in attributes {
+          if name.eq_ignore_ascii_case("popover")
+            || name.eq_ignore_ascii_case("data-fastr-open")
+            || name.eq_ignore_ascii_case("data-fastr-modal")
+          {
+            return true;
+          }
+        }
+      }
+      crate::dom::DomNodeType::Document { .. } | crate::dom::DomNodeType::Text { .. } => {}
+    }
+
+    for child in current.children.iter().rev() {
+      stack.push(child);
+    }
+  }
+
+  false
+}
 /// Renders an HTML fragment using shared font/image resources. This is used for nested rendering
 /// such as SVG `<foreignObject>` content so we can reuse the outer renderer's caches.
 pub(crate) fn render_html_with_shared_resources(
@@ -9628,6 +9692,183 @@ mod tests {
     let mut out = Vec::new();
     helper(styled, id, &mut out);
     out
+  }
+
+  fn find_dom_by_id<'a>(node: &'a DomNode, id: &str) -> Option<&'a DomNode> {
+    if node.get_attribute_ref("id") == Some(id) {
+      return Some(node);
+    }
+    node
+      .children
+      .iter()
+      .find_map(|child| find_dom_by_id(child, id))
+  }
+
+  fn dom_equivalent(a: &DomNode, b: &DomNode) -> bool {
+    fn node_type_equivalent(a: &DomNodeType, b: &DomNodeType) -> bool {
+      match (a, b) {
+        (DomNodeType::Document { quirks_mode: a }, DomNodeType::Document { quirks_mode: b }) => {
+          a == b
+        }
+        (
+          DomNodeType::ShadowRoot {
+            mode: a_mode,
+            delegates_focus: a_focus,
+          },
+          DomNodeType::ShadowRoot {
+            mode: b_mode,
+            delegates_focus: b_focus,
+          },
+        ) => a_mode == b_mode && a_focus == b_focus,
+        (
+          DomNodeType::Slot {
+            namespace: a_ns,
+            attributes: a_attrs,
+            assigned: a_assigned,
+          },
+          DomNodeType::Slot {
+            namespace: b_ns,
+            attributes: b_attrs,
+            assigned: b_assigned,
+          },
+        ) => a_ns == b_ns && a_attrs == b_attrs && a_assigned == b_assigned,
+        (
+          DomNodeType::Element {
+            tag_name: a_name,
+            namespace: a_ns,
+            attributes: a_attrs,
+          },
+          DomNodeType::Element {
+            tag_name: b_name,
+            namespace: b_ns,
+            attributes: b_attrs,
+          },
+        ) => a_name == b_name && a_ns == b_ns && a_attrs == b_attrs,
+        (DomNodeType::Text { content: a }, DomNodeType::Text { content: b }) => a == b,
+        _ => false,
+      }
+    }
+
+    if !node_type_equivalent(&a.node_type, &b.node_type) {
+      return false;
+    }
+    if a.children.len() != b.children.len() {
+      return false;
+    }
+    a.children
+      .iter()
+      .zip(b.children.iter())
+      .all(|(a, b)| dom_equivalent(a, b))
+  }
+
+  fn accessibility_contains_id(node: &AccessibilityNode, id: &str) -> bool {
+    if node.id.as_deref() == Some(id) {
+      return true;
+    }
+    node
+      .children
+      .iter()
+      .any(|child| accessibility_contains_id(child, id))
+  }
+
+  #[test]
+  fn skips_top_layer_state_when_document_has_no_dialog_or_popover() {
+    let mut renderer = FastRender::new().unwrap();
+    let dom = renderer
+      .parse_html("<div><p id=content>Hello</p></div>")
+      .unwrap();
+    let trace = TraceHandle::disabled();
+    let mut stats = RenderStatsRecorder::new(DiagnosticsLevel::Basic);
+    let artifacts = renderer
+      .layout_document_for_media_with_artifacts(
+        &dom,
+        200,
+        200,
+        MediaType::Screen,
+        LayoutDocumentOptions::default(),
+        None,
+        &trace,
+        LayoutParallelism::default(),
+        Some(&mut stats),
+      )
+      .unwrap();
+    let stats = stats.finish();
+
+    assert_eq!(
+      stats.timings.dom_top_layer_ms, None,
+      "expected top-layer state work to be skipped when no candidates exist"
+    );
+    assert!(
+      dom_equivalent(&dom, &artifacts.dom),
+      "DOM should be unchanged when no top-layer candidates exist"
+    );
+  }
+
+  #[test]
+  fn top_layer_state_applies_for_open_dialog_and_popover() {
+    let renderer = FastRender::new().unwrap();
+    let dom = renderer
+      .parse_html(
+        "<dialog id=dlg data-fastr-open=modal><div id=pop popover data-fastr-open=true>Pop</div></dialog><p id=outside>Outside</p>",
+      )
+      .unwrap();
+    let trace = TraceHandle::disabled();
+    let mut renderer = renderer;
+    let mut stats = RenderStatsRecorder::new(DiagnosticsLevel::Basic);
+    let artifacts = renderer
+      .layout_document_for_media_with_artifacts(
+        &dom,
+        200,
+        200,
+        MediaType::Screen,
+        LayoutDocumentOptions::default(),
+        None,
+        &trace,
+        LayoutParallelism::default(),
+        Some(&mut stats),
+      )
+      .unwrap();
+    let stats = stats.finish();
+
+    assert!(
+      stats.timings.dom_top_layer_ms.is_some(),
+      "expected top-layer state work to run when dialogs/popovers are present"
+    );
+
+    let dialog = find_dom_by_id(&artifacts.dom, "dlg").expect("dialog node");
+    assert!(
+      dialog.get_attribute_ref("open").is_some(),
+      "expected dialog open state to be applied"
+    );
+    assert!(
+      dialog.get_attribute_ref("data-fastr-inert").is_none(),
+      "modal dialog subtree should not be inert"
+    );
+
+    let popover = find_dom_by_id(&artifacts.dom, "pop").expect("popover node");
+    assert!(
+      popover.get_attribute_ref("open").is_some(),
+      "expected popover open state to be applied"
+    );
+    assert!(
+      popover.get_attribute_ref("data-fastr-inert").is_none(),
+      "popover inside modal subtree should not be inert"
+    );
+
+    let outside = find_dom_by_id(&artifacts.dom, "outside").expect("outside node");
+    assert_eq!(
+      outside.get_attribute_ref("data-fastr-inert"),
+      Some("true"),
+      "expected nodes outside the modal dialog to become inert"
+    );
+
+    let tree = renderer
+      .accessibility_tree_with_options(&dom, RenderOptions::new().with_viewport(200, 200))
+      .unwrap();
+    assert!(
+      !accessibility_contains_id(&tree, "outside"),
+      "expected inert nodes outside the modal dialog to be suppressed from the accessibility tree"
+    );
   }
 
   #[test]
