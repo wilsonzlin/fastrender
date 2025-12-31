@@ -2532,6 +2532,10 @@ fn push_opt_u64(parts: &mut Vec<String>, label: &str, value: Option<u64>) {
   }
 }
 
+fn saturating_usize_from_u64(value: u64) -> usize {
+  usize::try_from(value).unwrap_or(usize::MAX)
+}
+
 fn format_bytes(bytes: u64) -> String {
   const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
   let mut value = bytes as f64;
@@ -3250,6 +3254,109 @@ fn report(args: ReportArgs) -> io::Result<()> {
       stage_mean.fetch, stage_mean.css, stage_mean.cascade, stage_mean.layout, stage_mean.paint
     );
     println!();
+  }
+
+  if args.verbose_stats {
+    let mut pages_with_stats = 0usize;
+    let mut totals = ResourceDiagnostics::default();
+    let mut saw = ResourceDiagnostics {
+      fetch_counts: BTreeMap::new(),
+      ..Default::default()
+    };
+
+    for entry in &progresses {
+      let Some(stats) = entry.stats.as_ref() else {
+        continue;
+      };
+      pages_with_stats += 1;
+
+      for (kind, count) in &stats.resources.fetch_counts {
+        *totals.fetch_counts.entry(*kind).or_default() += *count;
+      }
+
+      let res = &stats.resources;
+      macro_rules! add_u64 {
+        ($field:ident) => {
+          if let Some(v) = res.$field {
+            saw.$field = Some(0);
+            let current = totals.$field.unwrap_or(0) as u64;
+            totals.$field = Some(saturating_usize_from_u64(current.saturating_add(v as u64)));
+          }
+        };
+      }
+      macro_rules! add_f64 {
+        ($field:ident) => {
+          if let Some(v) = res.$field {
+            saw.$field = Some(0.0);
+            let current = totals.$field.unwrap_or(0.0);
+            totals.$field = Some(current + v);
+          }
+        };
+      }
+
+      add_u64!(resource_cache_fresh_hits);
+      add_u64!(resource_cache_stale_hits);
+      add_u64!(resource_cache_revalidated_hits);
+      add_u64!(resource_cache_misses);
+      add_u64!(resource_cache_bytes);
+      add_u64!(disk_cache_hits);
+      add_u64!(disk_cache_misses);
+      add_u64!(disk_cache_bytes);
+      add_f64!(disk_cache_ms);
+      add_u64!(disk_cache_lock_waits);
+      add_f64!(disk_cache_lock_wait_ms);
+      add_u64!(fetch_inflight_waits);
+      add_f64!(fetch_inflight_wait_ms);
+      add_u64!(network_fetches);
+      add_u64!(network_fetch_bytes);
+      add_f64!(network_fetch_ms);
+
+      add_u64!(image_cache_hits);
+      add_u64!(image_cache_misses);
+    }
+
+    // Clear fields that were never present so older progress files don't show misleading zeros.
+    macro_rules! maybe_clear_u64 {
+      ($field:ident) => {
+        if saw.$field.is_none() {
+          totals.$field = None;
+        }
+      };
+    }
+    macro_rules! maybe_clear_f64 {
+      ($field:ident) => {
+        if saw.$field.is_none() {
+          totals.$field = None;
+        }
+      };
+    }
+
+    maybe_clear_u64!(resource_cache_fresh_hits);
+    maybe_clear_u64!(resource_cache_stale_hits);
+    maybe_clear_u64!(resource_cache_revalidated_hits);
+    maybe_clear_u64!(resource_cache_misses);
+    maybe_clear_u64!(resource_cache_bytes);
+    maybe_clear_u64!(disk_cache_hits);
+    maybe_clear_u64!(disk_cache_misses);
+    maybe_clear_u64!(disk_cache_bytes);
+    maybe_clear_f64!(disk_cache_ms);
+    maybe_clear_u64!(disk_cache_lock_waits);
+    maybe_clear_f64!(disk_cache_lock_wait_ms);
+    maybe_clear_u64!(fetch_inflight_waits);
+    maybe_clear_f64!(fetch_inflight_wait_ms);
+    maybe_clear_u64!(network_fetches);
+    maybe_clear_u64!(network_fetch_bytes);
+    maybe_clear_f64!(network_fetch_ms);
+    maybe_clear_u64!(image_cache_hits);
+    maybe_clear_u64!(image_cache_misses);
+
+    if pages_with_stats > 0 {
+      if let Some(summary) = resources_summary(&totals) {
+        println!("Resource totals (pages with stats: {pages_with_stats}):");
+        println!("  {summary}");
+        println!();
+      }
+    }
   }
 
   if let Some(compare_dir) = args.compare.as_ref() {
