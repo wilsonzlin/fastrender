@@ -538,9 +538,11 @@ pub fn capture_cascade_profile() -> CascadeProfileStats {
     rule_candidates_by_tag: CASCADE_PROFILE_CANDIDATES_BY_TAG.load(Ordering::Relaxed),
     rule_candidates_by_attr: CASCADE_PROFILE_CANDIDATES_BY_ATTR.load(Ordering::Relaxed),
     rule_candidates_universal: CASCADE_PROFILE_CANDIDATES_UNIVERSAL.load(Ordering::Relaxed),
-    selector_bloom_fast_rejects: CASCADE_PROFILE_SELECTOR_BLOOM_FAST_REJECTS.load(Ordering::Relaxed),
+    selector_bloom_fast_rejects: CASCADE_PROFILE_SELECTOR_BLOOM_FAST_REJECTS
+      .load(Ordering::Relaxed),
     selector_attempts_total: CASCADE_PROFILE_SELECTOR_ATTEMPTS_TOTAL.load(Ordering::Relaxed),
-    selector_attempts_after_bloom: CASCADE_PROFILE_SELECTOR_ATTEMPTS_AFTER_BLOOM.load(Ordering::Relaxed),
+    selector_attempts_after_bloom: CASCADE_PROFILE_SELECTOR_ATTEMPTS_AFTER_BLOOM
+      .load(Ordering::Relaxed),
     selector_time_ns: CASCADE_PROFILE_FIND_TIME_NS.load(Ordering::Relaxed),
     declaration_time_ns: CASCADE_PROFILE_DECL_TIME_NS.load(Ordering::Relaxed),
     pseudo_time_ns: CASCADE_PROFILE_PSEUDO_TIME_NS.load(Ordering::Relaxed),
@@ -3702,6 +3704,8 @@ pub struct StartingStyleSet {
 pub struct StyledNode {
   /// Stable identifier for this node within the DOM traversal (pre-order index).
   pub node_id: usize,
+  /// Shallow copy of the DOM node. The styled tree structure is represented by `children`;
+  /// `node.children` is intentionally left empty to avoid duplicating the DOM subtree.
   pub node: DomNode,
   pub styles: ComputedStyle,
   /// Starting-style snapshots populated when @starting-style rules are present.
@@ -6333,12 +6337,7 @@ fn apply_styles_internal(
     deadline,
     has_starting_styles,
   )?;
-  Ok(*styled)
-}
-
-#[inline(never)]
-fn clone_styled_subtree_boxed(node: &StyledNode) -> Box<StyledNode> {
-  Box::new(node.clone())
+  Ok(styled)
 }
 
 #[inline(never)]
@@ -6542,7 +6541,7 @@ fn try_reuse_styled_subtree(
   container_scope: Option<&HashSet<usize>>,
   reuse_map: Option<&HashMap<usize, *const StyledNode>>,
   reuse_counter: &mut Option<&mut usize>,
-) -> Option<Box<StyledNode>> {
+) -> Option<StyledNode> {
   let scope = container_scope?;
   let map = reuse_map?;
   if scope.contains(&node_id) {
@@ -6558,7 +6557,7 @@ fn try_reuse_styled_subtree(
   if let Some(counter) = reuse_counter.as_deref_mut() {
     *counter += reused_size;
   }
-  Some(clone_styled_subtree_boxed(reused_ref))
+  Some(reused_ref.clone())
 }
 
 fn apply_styles_internal_with_ancestors<'a>(
@@ -6591,10 +6590,24 @@ fn apply_styles_internal_with_ancestors<'a>(
   deadline_counter: &mut usize,
   deadline: Option<&RenderDeadline>,
   has_starting_styles: bool,
-) -> Result<Box<StyledNode>, RenderError> {
+) -> Result<StyledNode, RenderError> {
+  struct Frame<'a> {
+    node: &'a DomNode,
+    scope_host: Option<usize>,
+    node_id: usize,
+    base: NodeBaseStyles,
+    starting_base: Option<NodeBaseStyles>,
+    children: Vec<StyledNode>,
+    next_child: usize,
+    is_shadow_root: bool,
+    push_ancestor_bloom: bool,
+  }
+
+  let mut reuse_counter = reuse_counter;
+
   record_node_visit(node);
 
-  let node_id = *node_counter;
+  let root_id = *node_counter;
   *node_counter += 1;
   if let Some(deadline) = deadline {
     deadline.check_periodic(
@@ -6604,12 +6617,10 @@ fn apply_styles_internal_with_ancestors<'a>(
     )?;
   }
 
-  let mut reuse_counter = reuse_counter;
-
   // If this node lies outside any container scope during a container-query recascade,
   // reuse the prior styled subtree to avoid recomputing unaffected branches.
   if let Some(reused) = try_reuse_styled_subtree(
-    node_id,
+    root_id,
     node_counter,
     container_scope,
     reuse_map,
@@ -6618,7 +6629,7 @@ fn apply_styles_internal_with_ancestors<'a>(
     return Ok(reused);
   }
 
-  let mut base = compute_base_styles(
+  let root_base = compute_base_styles(
     node,
     rule_scopes,
     scope_host,
@@ -6634,7 +6645,7 @@ fn apply_styles_internal_with_ancestors<'a>(
     ancestors.as_slice(),
     ancestor_bloom_enabled.then_some(&*ancestor_bloom_filter),
     ancestor_ids.as_slice(),
-    node_id,
+    root_id,
     container_ctx,
     dom_maps,
     slot_assignment,
@@ -6642,7 +6653,7 @@ fn apply_styles_internal_with_ancestors<'a>(
     element_attr_cache,
     false,
   )?;
-  let mut starting_base = if has_starting_styles {
+  let root_starting_base = if has_starting_styles {
     let start_parent_styles = parent_starting_styles.unwrap_or(parent_styles);
     let start_root_font_size = parent_starting_styles
       .map(|s| s.root_font_size)
@@ -6663,7 +6674,7 @@ fn apply_styles_internal_with_ancestors<'a>(
       ancestors.as_slice(),
       ancestor_bloom_enabled.then_some(&*ancestor_bloom_filter),
       ancestor_ids.as_slice(),
-      node_id,
+      root_id,
       container_ctx,
       dom_maps,
       slot_assignment,
@@ -6675,9 +6686,19 @@ fn apply_styles_internal_with_ancestors<'a>(
     None
   };
 
-  let mut children = Vec::with_capacity(node.children.len());
-
+  let mut stack: Vec<Frame<'a>> = Vec::new();
   let push_ancestor_bloom = ancestor_bloom_enabled && node.is_element() && !node.children.is_empty();
+  stack.push(Frame {
+    node,
+    scope_host,
+    node_id: root_id,
+    base: root_base,
+    starting_base: root_starting_base,
+    children: Vec::with_capacity(node.children.len()),
+    next_child: 0,
+    is_shadow_root: matches!(node.node_type, DomNodeType::ShadowRoot { .. }),
+    push_ancestor_bloom,
+  });
   if push_ancestor_bloom {
     #[cfg(test)]
     ANCESTOR_BLOOM_HASH_INSERTS.with(|counter| counter.set(counter.get().saturating_add(1)));
@@ -6686,133 +6707,250 @@ fn apply_styles_internal_with_ancestors<'a>(
     });
   }
   ancestors.push(node);
-  ancestor_ids.push(node_id);
-  let parent_is_shadow_root = matches!(node.node_type, DomNodeType::ShadowRoot { .. });
-  for child in node.children.iter() {
-    let child_reuse = reuse_counter.as_deref_mut();
-    let child_scope = match (parent_is_shadow_root, &child.node_type) {
-      (true, _) => scope_host,
-      (false, DomNodeType::ShadowRoot { .. }) => Some(node_id),
-      (false, _) => scope_host,
+  ancestor_ids.push(root_id);
+
+  loop {
+    let child_info = {
+      let frame = stack
+        .last_mut()
+        .expect("style traversal stack must contain at least one frame");
+      if frame.next_child >= frame.node.children.len() {
+        None
+      } else {
+        let child = &frame.node.children[frame.next_child];
+        frame.next_child += 1;
+        let child_scope = match (frame.is_shadow_root, &child.node_type) {
+          (true, _) => frame.scope_host,
+          (false, DomNodeType::ShadowRoot { .. }) => Some(frame.node_id),
+          (false, _) => frame.scope_host,
+        };
+        Some((child, child_scope))
+      }
     };
-    let child_styled = apply_styles_internal_with_ancestors(
-      child,
-      rule_scopes,
-      child_scope,
-      selector_caches,
-      scratch,
-      inline_style_decls,
-      &base.styles,
-      starting_base.as_ref().map(|b| &b.styles),
-      &base.ua_styles,
-      base.current_root_font_size,
-      base.current_ua_root_font_size,
-      viewport,
-      color_scheme_pref,
-      ancestors,
-      ancestor_bloom_filter,
-      ancestor_bloom_enabled,
-      node_counter,
-      ancestor_ids,
-      container_ctx,
-      container_scope,
-      reuse_map,
-      child_reuse,
-      dom_maps,
-      slot_assignment,
-      sibling_cache,
-      element_attr_cache,
-      deadline_counter,
-      deadline,
-      has_starting_styles,
-    )?;
-    children.push(*child_styled);
-  }
-  ancestors.pop();
-  ancestor_ids.pop();
-  if push_ancestor_bloom {
-    for_each_ancestor_bloom_hash(node, rule_scopes.quirks_mode, |hash| {
-      ancestor_bloom_filter.remove_hash(hash);
-    });
-  }
 
-  let (before_styles, after_styles, marker_styles, first_line_styles, first_letter_styles) =
-    compute_pseudo_styles(
-      node,
-      rule_scopes,
-      scope_host,
-      selector_caches,
-      scratch,
-      ancestors.as_slice(),
-      ancestor_bloom_enabled.then_some(&*ancestor_bloom_filter),
-      node_id,
-      dom_maps,
-      sibling_cache,
-      element_attr_cache,
-      &mut base.styles,
-      &base.ua_styles,
-      base.current_root_font_size,
-      base.current_ua_root_font_size,
-      viewport,
-      false,
-    );
+    if let Some((child, child_scope)) = child_info {
+      record_node_visit(child);
+      let child_id = *node_counter;
+      *node_counter += 1;
+      if let Some(deadline) = deadline {
+        deadline.check_periodic(
+          deadline_counter,
+          CASCADE_NODE_DEADLINE_STRIDE,
+          RenderStage::Cascade,
+        )?;
+      }
 
-  let mut starting_styles = StartingStyleSet::default();
-  if let Some(mut start) = starting_base {
-    let (before, after, marker, first_line, first_letter) = compute_pseudo_styles(
-      node,
-      rule_scopes,
-      scope_host,
-      selector_caches,
-      scratch,
-      ancestors.as_slice(),
-      ancestor_bloom_enabled.then_some(&*ancestor_bloom_filter),
+      if let Some(reused) = try_reuse_styled_subtree(
+        child_id,
+        node_counter,
+        container_scope,
+        reuse_map,
+        &mut reuse_counter,
+      ) {
+        stack
+          .last_mut()
+          .expect("parent frame should still be on the stack")
+          .children
+          .push(reused);
+        continue;
+      }
+
+      let (child_base, child_starting_base) = {
+        let parent = stack
+          .last()
+          .expect("parent frame should still be on the stack");
+
+        let base = compute_base_styles(
+          child,
+          rule_scopes,
+          child_scope,
+          selector_caches,
+          scratch,
+          inline_style_decls,
+          &parent.base.styles,
+          &parent.base.ua_styles,
+          parent.base.current_root_font_size,
+          parent.base.current_ua_root_font_size,
+          viewport,
+          color_scheme_pref,
+          ancestors.as_slice(),
+          ancestor_bloom_enabled.then_some(&*ancestor_bloom_filter),
+          ancestor_ids.as_slice(),
+          child_id,
+          container_ctx,
+          dom_maps,
+          slot_assignment,
+          sibling_cache,
+          element_attr_cache,
+          false,
+        )?;
+
+        let starting_base = if has_starting_styles {
+          let parent_start = parent.starting_base.as_ref().map(|b| &b.styles);
+          let start_parent_styles = parent_start.unwrap_or(&parent.base.styles);
+          let start_root_font_size = parent_start
+            .map(|s| s.root_font_size)
+            .unwrap_or(parent.base.current_root_font_size);
+          Some(compute_base_styles(
+            child,
+            rule_scopes,
+            child_scope,
+            selector_caches,
+            scratch,
+            inline_style_decls,
+            start_parent_styles,
+            &parent.base.ua_styles,
+            start_root_font_size,
+            parent.base.current_ua_root_font_size,
+            viewport,
+            color_scheme_pref,
+            ancestors.as_slice(),
+            ancestor_bloom_enabled.then_some(&*ancestor_bloom_filter),
+            ancestor_ids.as_slice(),
+            child_id,
+            container_ctx,
+            dom_maps,
+            slot_assignment,
+            sibling_cache,
+            element_attr_cache,
+            true,
+          )?)
+        } else {
+          None
+        };
+
+        (base, starting_base)
+      };
+
+      let child_push_ancestor_bloom =
+        ancestor_bloom_enabled && child.is_element() && !child.children.is_empty();
+      stack.push(Frame {
+        node: child,
+        scope_host: child_scope,
+        node_id: child_id,
+        base: child_base,
+        starting_base: child_starting_base,
+        children: Vec::with_capacity(child.children.len()),
+        next_child: 0,
+        is_shadow_root: matches!(child.node_type, DomNodeType::ShadowRoot { .. }),
+        push_ancestor_bloom: child_push_ancestor_bloom,
+      });
+
+      if child_push_ancestor_bloom {
+        #[cfg(test)]
+        ANCESTOR_BLOOM_HASH_INSERTS.with(|counter| counter.set(counter.get().saturating_add(1)));
+        for_each_ancestor_bloom_hash(child, rule_scopes.quirks_mode, |hash| {
+          ancestor_bloom_filter.insert_hash(hash);
+        });
+      }
+      ancestors.push(child);
+      ancestor_ids.push(child_id);
+      continue;
+    }
+
+    ancestors.pop();
+    ancestor_ids.pop();
+
+    let frame = stack
+      .pop()
+      .expect("style traversal stack must contain at least one frame");
+
+    if frame.push_ancestor_bloom {
+      for_each_ancestor_bloom_hash(frame.node, rule_scopes.quirks_mode, |hash| {
+        ancestor_bloom_filter.remove_hash(hash);
+      });
+    }
+
+    let mut base = frame.base;
+    let (before_styles, after_styles, marker_styles, first_line_styles, first_letter_styles) =
+      compute_pseudo_styles(
+        frame.node,
+        rule_scopes,
+        frame.scope_host,
+        selector_caches,
+        scratch,
+        ancestors.as_slice(),
+        ancestor_bloom_enabled.then_some(&*ancestor_bloom_filter),
+        frame.node_id,
+        dom_maps,
+        sibling_cache,
+        element_attr_cache,
+        &mut base.styles,
+        &base.ua_styles,
+        base.current_root_font_size,
+        base.current_ua_root_font_size,
+        viewport,
+        false,
+      );
+
+    let mut starting_styles = StartingStyleSet::default();
+    if let Some(mut start) = frame.starting_base {
+      let (before, after, marker, first_line, first_letter) = compute_pseudo_styles(
+        frame.node,
+        rule_scopes,
+        frame.scope_host,
+        selector_caches,
+        scratch,
+        ancestors.as_slice(),
+        ancestor_bloom_enabled.then_some(&*ancestor_bloom_filter),
+        frame.node_id,
+        dom_maps,
+        sibling_cache,
+        element_attr_cache,
+        &mut start.styles,
+        &start.ua_styles,
+        start.current_root_font_size,
+        start.current_ua_root_font_size,
+        viewport,
+        true,
+      );
+      starting_styles = StartingStyleSet {
+        base: Some(Box::new(start.styles)),
+        before,
+        after,
+        marker,
+        first_line,
+        first_letter,
+      };
+    }
+
+    let NodeBaseStyles {
+      styles,
+      ua_styles: _,
+      current_root_font_size: _,
+      current_ua_root_font_size: _,
+    } = base;
+
+    let node_id = frame.node_id;
+    let styled = StyledNode {
       node_id,
-      dom_maps,
-      sibling_cache,
-      element_attr_cache,
-      &mut start.styles,
-      &start.ua_styles,
-      start.current_root_font_size,
-      start.current_ua_root_font_size,
-      viewport,
-      true,
-    );
-    starting_styles = StartingStyleSet {
-      base: Some(Box::new(start.styles)),
-      before,
-      after,
-      marker,
-      first_line,
-      first_letter,
+      node: DomNode {
+        node_type: frame.node.node_type.clone(),
+        children: Vec::new(),
+      },
+      styles,
+      starting_styles,
+      before_styles,
+      after_styles,
+      marker_styles,
+      first_line_styles,
+      first_letter_styles,
+      assigned_slot: slot_assignment.node_to_slot.get(&node_id).cloned(),
+      slotted_node_ids: slot_assignment
+        .slot_to_nodes
+        .get(&node_id)
+        .cloned()
+        .unwrap_or_default(),
+      children: frame.children,
     };
+
+    if let Some(parent) = stack.last_mut() {
+      parent.children.push(styled);
+      continue;
+    }
+
+    return Ok(styled);
   }
-
-  let NodeBaseStyles {
-    styles,
-    ua_styles: _,
-    current_root_font_size: _,
-    current_ua_root_font_size: _,
-  } = base;
-
-  Ok(Box::new(StyledNode {
-    node_id,
-    node: node.clone(),
-    styles,
-    starting_styles,
-    before_styles,
-    after_styles,
-    marker_styles,
-    first_line_styles,
-    first_letter_styles,
-    assigned_slot: slot_assignment.node_to_slot.get(&node_id).cloned(),
-    slotted_node_ids: slot_assignment
-      .slot_to_nodes
-      .get(&node_id)
-      .cloned()
-      .unwrap_or_default(),
-    children,
-  }))
 }
 
 pub(crate) fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
@@ -7196,6 +7334,58 @@ mod tests {
     for (child_a, child_b) in a.children.iter().zip(b.children.iter()) {
       assert_styled_trees_equal(child_a, child_b);
     }
+  }
+
+  #[test]
+  fn styled_node_holds_shallow_dom_copy_and_handles_deep_trees() {
+    let depth = 256;
+
+    let mut dom = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: Vec::new(),
+      },
+      children: Vec::new(),
+    };
+
+    for _ in 0..depth {
+      dom = DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "div".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: Vec::new(),
+        },
+        children: vec![dom],
+      };
+    }
+
+    let stylesheet = parse_stylesheet("div { color: rgb(1, 2, 3); }").expect("parse stylesheet");
+    let media_ctx = MediaContext::screen(800.0, 600.0);
+    let styled = apply_styles_with_media(&dom, &stylesheet, &media_ctx);
+
+    let mut seen = 0usize;
+    let mut cursor = &styled;
+    loop {
+      assert!(
+        cursor.node.children.is_empty(),
+        "StyledNode.node must not clone DOM children (node_id={})",
+        cursor.node_id
+      );
+      seen += 1;
+      if cursor.children.is_empty() {
+        break;
+      }
+      assert_eq!(
+        cursor.children.len(),
+        1,
+        "expected a single-child chain at node_id={}",
+        cursor.node_id
+      );
+      cursor = &cursor.children[0];
+    }
+
+    assert_eq!(seen, depth + 1);
   }
 
   #[test]
