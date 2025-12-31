@@ -3228,13 +3228,16 @@ fn parse_declaration<'i, 't>(
   parser: &mut Parser<'i, 't>,
   context: DeclarationContext,
 ) -> Option<Declaration> {
-  let property = match parser.expect_ident() {
+  let mut property = match parser.expect_ident() {
     Ok(ident) => ident.to_string(),
     Err(_) => {
       skip_to_semicolon(parser);
       return None;
     }
   };
+  if !property.starts_with("--") {
+    property.make_ascii_lowercase();
+  }
 
   if parser.expect_colon().is_err() {
     skip_to_semicolon(parser);
@@ -3295,13 +3298,16 @@ fn parse_declaration_collecting_errors<'i, 't>(
   css_source: &str,
 ) -> Option<Declaration> {
   let decl_location = parser.current_source_location();
-  let property = match parser.expect_ident() {
+  let mut property = match parser.expect_ident() {
     Ok(ident) => ident.to_string(),
     Err(_) => {
       skip_to_semicolon(parser);
       return None;
     }
   };
+  if !property.starts_with("--") {
+    property.make_ascii_lowercase();
+  }
 
   if parser.expect_colon().is_err() {
     errors.push(CssParseError::with_snippet(
@@ -3972,6 +3978,14 @@ mod tests {
       other => panic!("expected custom value, got {:?}", other),
     }
     assert_eq!(decls[0].raw_value, "  10px  var(--bar)");
+  }
+
+  #[test]
+  fn property_names_parse_case_insensitively() {
+    let decls = parse_declarations("COLOR: red; --Foo: 1;");
+    assert_eq!(decls.len(), 2);
+    assert_eq!(decls[0].property, "color");
+    assert_eq!(decls[1].property, "--Foo");
   }
 
   #[test]

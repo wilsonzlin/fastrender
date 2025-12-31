@@ -16090,12 +16090,12 @@ fn compute_pseudo_element_styles(
 }
 
 fn first_line_allows_property(property: &str) -> bool {
-  let p = property.to_ascii_lowercase();
+  let p = property;
   if p == "font" || p.starts_with("font-") {
     return true;
   }
   if matches!(
-    p.as_str(),
+    p,
     "color" | "text-transform" | "letter-spacing" | "word-spacing" | "line-height"
   ) {
     return true;
@@ -16105,7 +16105,7 @@ fn first_line_allows_property(property: &str) -> bool {
   }
   if p.starts_with("text-decoration")
     || matches!(
-      p.as_str(),
+      p,
       "text-underline-offset"
         | "text-underline-position"
         | "text-shadow"
@@ -16121,8 +16121,8 @@ fn first_line_allows_property(property: &str) -> bool {
 }
 
 fn first_letter_allows_property(property: &str) -> bool {
-  let p = property.to_ascii_lowercase();
-  if first_line_allows_property(&p) {
+  let p = property;
+  if first_line_allows_property(p) {
     return true;
   }
   if p == "background-color" {
@@ -16555,12 +16555,12 @@ pub(crate) fn reset_marker_box_properties(styles: &mut ComputedStyle) {
 }
 
 fn marker_allows_property(property: &str) -> bool {
-  let p = property.to_ascii_lowercase();
+  let p = property;
 
   // Marker boxes honor a limited set of box-level properties
   // (CSS Lists 3 § 3.1.1).
   if matches!(
-    p.as_str(),
+    p,
     "content" | "direction" | "unicode-bidi" | "text-combine-upright"
   ) {
     return true;
@@ -16587,7 +16587,7 @@ fn marker_allows_property(property: &str) -> bool {
   }
 
   matches!(
-    p.as_str(),
+    p,
     "color"
       | "white-space"
       | "line-height"
