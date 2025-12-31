@@ -747,8 +747,9 @@ fn box_blur_row_horizontal(
   }
 
   // Left edge: remove_x is clamped to 0.
+  let mut out_idx = 0usize;
+  let mut add_idx = radius_plus_one * 4;
   for x in 0..inner_start {
-    let out_idx = x * 4;
     let a = ((sum_a + half) / window).clamp(0, 255);
     let r = (sum_r + half) / window;
     let g = (sum_g + half) / window;
@@ -759,16 +760,20 @@ fn box_blur_row_horizontal(
     out_row[out_idx + 3] = a as u8;
 
     debug_assert!(x + radius_plus_one <= last_x);
-    let add_idx = (x + radius_plus_one) * 4;
     sum_r += src_row[add_idx] as i32 - edge_r0;
     sum_g += src_row[add_idx + 1] as i32 - edge_g0;
     sum_b += src_row[add_idx + 2] as i32 - edge_b0;
     sum_a += src_row[add_idx + 3] as i32 - edge_a0;
+
+    out_idx += 4;
+    add_idx += 4;
   }
 
   // Interior: remove_x/add_x are both in-bounds.
-  for x in inner_start..inner_end {
-    let out_idx = x * 4;
+  let mut out_idx = inner_start * 4;
+  let mut rem_idx = (inner_start - radius) * 4;
+  let mut add_idx = (inner_start + radius_plus_one) * 4;
+  for _x in inner_start..inner_end {
     let a = ((sum_a + half) / window).clamp(0, 255);
     let r = (sum_r + half) / window;
     let g = (sum_g + half) / window;
@@ -778,17 +783,20 @@ fn box_blur_row_horizontal(
     out_row[out_idx + 2] = clamp_channel_to_alpha(b, a);
     out_row[out_idx + 3] = a as u8;
 
-    let rem_idx = (x - radius) * 4;
-    let add_idx = (x + radius_plus_one) * 4;
     sum_r += src_row[add_idx] as i32 - src_row[rem_idx] as i32;
     sum_g += src_row[add_idx + 1] as i32 - src_row[rem_idx + 1] as i32;
     sum_b += src_row[add_idx + 2] as i32 - src_row[rem_idx + 2] as i32;
     sum_a += src_row[add_idx + 3] as i32 - src_row[rem_idx + 3] as i32;
+
+    out_idx += 4;
+    rem_idx += 4;
+    add_idx += 4;
   }
 
   // Right edge: add_x is clamped to last_x.
-  for x in inner_end..width {
-    let out_idx = x * 4;
+  let mut out_idx = inner_end * 4;
+  let mut rem_idx = (inner_end - radius) * 4;
+  for _x in inner_end..width {
     let a = ((sum_a + half) / window).clamp(0, 255);
     let r = (sum_r + half) / window;
     let g = (sum_g + half) / window;
@@ -798,11 +806,13 @@ fn box_blur_row_horizontal(
     out_row[out_idx + 2] = clamp_channel_to_alpha(b, a);
     out_row[out_idx + 3] = a as u8;
 
-    let rem_idx = (x - radius) * 4;
     sum_r += edge_rl - src_row[rem_idx] as i32;
     sum_g += edge_gl - src_row[rem_idx + 1] as i32;
     sum_b += edge_bl - src_row[rem_idx + 2] as i32;
     sum_a += edge_al - src_row[rem_idx + 3] as i32;
+
+    out_idx += 4;
+    rem_idx += 4;
   }
 }
 
@@ -870,8 +880,9 @@ unsafe fn box_blur_column_vertical_to_ptr(
   let edge_g0 = src[rem_idx_0 + 1] as i32;
   let edge_b0 = src[rem_idx_0 + 2] as i32;
   let edge_a0 = src[rem_idx_0 + 3] as i32;
+  let mut out_idx = x_offset;
+  let mut add_idx = radius_plus_one * row_stride + x_offset;
   for y in 0..inner_start {
-    let out_idx = y * row_stride + x_offset;
     let a = ((sum_a + half) / window).clamp(0, 255);
     let r = (sum_r + half) / window;
     let g = (sum_g + half) / window;
@@ -883,16 +894,20 @@ unsafe fn box_blur_column_vertical_to_ptr(
     *out.add(3) = a as u8;
 
     debug_assert!(y + radius_plus_one <= last_y);
-    let add_idx = (y + radius_plus_one) * row_stride + x_offset;
     sum_r += src[add_idx] as i32 - edge_r0;
     sum_g += src[add_idx + 1] as i32 - edge_g0;
     sum_b += src[add_idx + 2] as i32 - edge_b0;
     sum_a += src[add_idx + 3] as i32 - edge_a0;
+
+    out_idx += row_stride;
+    add_idx += row_stride;
   }
 
   // Interior: remove_y/add_y are both in-bounds.
-  for y in inner_start..inner_end {
-    let out_idx = y * row_stride + x_offset;
+  let mut out_idx = inner_start * row_stride + x_offset;
+  let mut rem_idx = (inner_start - radius) * row_stride + x_offset;
+  let mut add_idx = (inner_start + radius_plus_one) * row_stride + x_offset;
+  for _y in inner_start..inner_end {
     let a = ((sum_a + half) / window).clamp(0, 255);
     let r = (sum_r + half) / window;
     let g = (sum_g + half) / window;
@@ -903,12 +918,14 @@ unsafe fn box_blur_column_vertical_to_ptr(
     *out.add(2) = clamp_channel_to_alpha(b, a);
     *out.add(3) = a as u8;
 
-    let rem_idx = (y - radius) * row_stride + x_offset;
-    let add_idx = (y + radius_plus_one) * row_stride + x_offset;
     sum_r += src[add_idx] as i32 - src[rem_idx] as i32;
     sum_g += src[add_idx + 1] as i32 - src[rem_idx + 1] as i32;
     sum_b += src[add_idx + 2] as i32 - src[rem_idx + 2] as i32;
     sum_a += src[add_idx + 3] as i32 - src[rem_idx + 3] as i32;
+
+    out_idx += row_stride;
+    rem_idx += row_stride;
+    add_idx += row_stride;
   }
 
   // Right edge: add_y is clamped to last_y.
@@ -917,8 +934,9 @@ unsafe fn box_blur_column_vertical_to_ptr(
   let edge_gl = src[add_idx + 1] as i32;
   let edge_bl = src[add_idx + 2] as i32;
   let edge_al = src[add_idx + 3] as i32;
-  for y in inner_end..height {
-    let out_idx = y * row_stride + x_offset;
+  let mut out_idx = inner_end * row_stride + x_offset;
+  let mut rem_idx = (inner_end - radius) * row_stride + x_offset;
+  for _y in inner_end..height {
     let a = ((sum_a + half) / window).clamp(0, 255);
     let r = (sum_r + half) / window;
     let g = (sum_g + half) / window;
@@ -929,11 +947,13 @@ unsafe fn box_blur_column_vertical_to_ptr(
     *out.add(2) = clamp_channel_to_alpha(b, a);
     *out.add(3) = a as u8;
 
-    let rem_idx = (y - radius) * row_stride + x_offset;
     sum_r += edge_rl - src[rem_idx] as i32;
     sum_g += edge_gl - src[rem_idx + 1] as i32;
     sum_b += edge_bl - src[rem_idx + 2] as i32;
     sum_a += edge_al - src[rem_idx + 3] as i32;
+
+    out_idx += row_stride;
+    rem_idx += row_stride;
   }
 }
 
