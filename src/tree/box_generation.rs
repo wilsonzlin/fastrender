@@ -1868,11 +1868,12 @@ fn create_pseudo_element_box(
         if values.is_empty() {
           text_buf.push_str(&styles.counter_styles.format_value(0, style_name));
         } else {
-          let formatted: Vec<String> = values
-            .iter()
-            .map(|v| styles.counter_styles.format_value(*v, style_name.clone()))
-            .collect();
-          text_buf.push_str(&formatted.join(separator));
+          for (idx, value) in values.iter().enumerate() {
+            if idx != 0 {
+              text_buf.push_str(separator);
+            }
+            text_buf.push_str(&styles.counter_styles.format_value(*value, style_name.clone()));
+          }
         }
       }
       ContentItem::StringReference { name, kind } => {
@@ -2033,11 +2034,12 @@ pub(crate) fn marker_content_from_style(
             if values.is_empty() {
               text.push_str(&marker_style.counter_styles.format_value(0, style));
             } else {
-              let formatted: Vec<String> = values
-                .iter()
-                .map(|v| marker_style.counter_styles.format_value(*v, style.clone()))
-                .collect();
-              text.push_str(&formatted.join(separator));
+              for (idx, value) in values.iter().enumerate() {
+                if idx != 0 {
+                  text.push_str(separator);
+                }
+                text.push_str(&marker_style.counter_styles.format_value(*value, style.clone()));
+              }
             }
           }
           ContentItem::StringReference { name, kind } => {
