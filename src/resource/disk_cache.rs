@@ -1734,6 +1734,39 @@ mod tests {
     );
   }
 
+  #[cfg(unix)]
+  #[test]
+  fn removes_lock_files_for_dead_pid_even_when_fresh() {
+    let tmp = tempfile::tempdir().unwrap();
+    let url = "https://example.com/dead-pid-lock";
+    let disk = DiskCachingFetcher::new(PanicFetcher, tmp.path());
+    let data_path = disk.data_path(url);
+    let lock_path = lock_path_for(&data_path);
+
+    let mut child = std::process::Command::new("sh")
+      .arg("-c")
+      .arg("exit 0")
+      .spawn()
+      .unwrap();
+    let pid = child.id();
+    let _ = child.wait();
+
+    assert_eq!(
+      pid_is_alive(pid),
+      Some(false),
+      "test requires a PID that is no longer alive"
+    );
+
+    let contents = LockFileContents {
+      pid,
+      started_at: now_seconds(),
+    };
+    fs::write(&lock_path, serde_json::to_vec(&contents).unwrap()).unwrap();
+
+    assert!(!disk.lock_is_active(&data_path));
+    assert!(!lock_path.exists());
+  }
+
   #[test]
   fn waits_for_lock_then_reads_cached_entry() {
     let tmp = tempfile::tempdir().unwrap();
