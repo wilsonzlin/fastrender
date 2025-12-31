@@ -5427,9 +5427,9 @@ impl FastRender {
     );
 
     let target_fragment = self.current_target_fragment();
-    let mut dom_with_state = dom.clone();
-    let modal_open = dom::modal_dialog_present(&dom_with_state);
-    dom::apply_top_layer_state(&mut dom_with_state, modal_open);
+    let mut dom_with_state = dom::clone_dom_with_deadline(dom, RenderStage::DomParse)?;
+    let modal_open = dom::modal_dialog_present_with_deadline(&dom_with_state)?;
+    dom::apply_top_layer_state_with_deadline(&mut dom_with_state, modal_open)?;
     let viewport_size = resolved_viewport.layout_viewport;
     let device_size = resolved_viewport.visual_viewport;
     let media_ctx = match options.media_type {
@@ -5685,7 +5685,7 @@ impl FastRender {
     mut stats: Option<&mut RenderStatsRecorder>,
   ) -> Result<LayoutArtifacts> {
     let clone_timer = stats.as_deref().and_then(|rec| rec.timer());
-    let dom_with_state = dom.clone();
+    let dom_with_state = dom::clone_dom_with_deadline(dom, RenderStage::DomParse)?;
     if let Some(rec) = stats.as_deref_mut() {
       RenderStatsRecorder::add_ms(&mut rec.stats.timings.dom_clone_ms, clone_timer);
     }
@@ -5727,8 +5727,8 @@ impl FastRender {
     let overall_start = timings_enabled.then(Instant::now);
 
     let top_layer_timer = stats.as_deref().and_then(|rec| rec.timer());
-    let modal_open = dom::modal_dialog_present(&dom_with_state);
-    dom::apply_top_layer_state(&mut dom_with_state, modal_open);
+    let modal_open = dom::modal_dialog_present_with_deadline(&dom_with_state)?;
+    dom::apply_top_layer_state_with_deadline(&mut dom_with_state, modal_open)?;
     if let Some(rec) = stats.as_deref_mut() {
       RenderStatsRecorder::add_ms(&mut rec.stats.timings.dom_top_layer_ms, top_layer_timer);
     }
@@ -9272,7 +9272,6 @@ fn build_styled_lookup<'a>(styled: &'a StyledNode, out: &mut HashMap<usize, *con
     build_styled_lookup(child, out);
   }
 }
-
 /// Renders an HTML fragment using shared font/image resources. This is used for nested rendering
 /// such as SVG `<foreignObject>` content so we can reuse the outer renderer's caches.
 pub(crate) fn render_html_with_shared_resources(

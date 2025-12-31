@@ -32,6 +32,7 @@ use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::io;
 use std::ptr;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
@@ -49,6 +50,9 @@ pub const MATHML_NAMESPACE: &str = "http://www.w3.org/1998/Math/MathML";
 
 const RELATIVE_SELECTOR_DEADLINE_STRIDE: usize = 64;
 const NTH_DEADLINE_STRIDE: usize = 64;
+const DOM_PARSE_READ_DEADLINE_STRIDE: usize = 1;
+const DOM_PARSE_NODE_DEADLINE_STRIDE: usize = 1024;
+const DOM_PARSE_READ_MAX_CHUNK_BYTES: usize = 16 * 1024;
 
 #[cfg(test)]
 thread_local! {
@@ -838,6 +842,136 @@ pub fn apply_top_layer_state(node: &mut DomNode, modal_open: bool) {
   let _ = apply_top_layer_state_inner(node, modal_open, false);
 }
 
+pub(crate) fn modal_dialog_present_with_deadline(node: &DomNode) -> Result<bool> {
+  let mut deadline_counter = 0usize;
+  let mut stack = vec![node];
+  while let Some(current) = stack.pop() {
+    check_active_periodic(
+      &mut deadline_counter,
+      DOM_PARSE_NODE_DEADLINE_STRIDE,
+      RenderStage::DomParse,
+    )?;
+    if let Some((_, modal)) = dialog_state(current) {
+      if modal {
+        return Ok(true);
+      }
+    }
+    for child in current.children.iter().rev() {
+      stack.push(child);
+    }
+  }
+
+  Ok(false)
+}
+
+pub(crate) fn apply_top_layer_state_with_deadline(
+  node: &mut DomNode,
+  modal_open: bool,
+) -> Result<()> {
+  struct Frame {
+    node: *mut DomNode,
+    inside_modal: bool,
+    entered: bool,
+    next_child: usize,
+    within_modal: bool,
+    subtree_has_modal: bool,
+  }
+
+  let mut deadline_counter = 0usize;
+  let mut stack = vec![Frame {
+    node: node as *mut _,
+    inside_modal: false,
+    entered: false,
+    next_child: 0,
+    within_modal: false,
+    subtree_has_modal: false,
+  }];
+
+  while let Some(mut frame) = stack.pop() {
+    // Safety: `node` is mutably borrowed for the duration of the traversal, and we never mutate the
+    // `children` vectors, so raw pointers remain stable for this post-order walk.
+    let current = unsafe { &mut *frame.node };
+
+    if !frame.entered {
+      check_active_periodic(
+        &mut deadline_counter,
+        DOM_PARSE_NODE_DEADLINE_STRIDE,
+        RenderStage::DomParse,
+      )?;
+
+      frame.entered = true;
+      frame.within_modal = frame.inside_modal;
+      frame.subtree_has_modal = frame.within_modal;
+
+      let dialog_info = dialog_state(current);
+      let has_popover = current.get_attribute_ref("popover").is_some();
+      let popover_is_open = has_popover && popover_open(current);
+
+      if let DomNodeType::Element {
+        tag_name,
+        attributes,
+        ..
+      } = &mut current.node_type
+      {
+        let tag_lower = tag_name.to_ascii_lowercase();
+        let mut should_open = false;
+
+        if tag_lower == "dialog" {
+          if let Some((open, modal)) = dialog_info {
+            should_open = open;
+            if modal {
+              frame.within_modal = true;
+              frame.subtree_has_modal = true;
+            }
+          }
+        } else if has_popover {
+          should_open = popover_is_open;
+        }
+
+        if tag_lower == "dialog" || has_popover {
+          if should_open {
+            set_attr(attributes, "open", "");
+          } else {
+            remove_attr(attributes, "open");
+          }
+        }
+      }
+    }
+
+    if frame.next_child < current.children.len() {
+      let child_ptr = &mut current.children[frame.next_child] as *mut DomNode;
+      frame.next_child += 1;
+      let child_inside_modal = frame.within_modal;
+
+      stack.push(frame);
+      stack.push(Frame {
+        node: child_ptr,
+        inside_modal: child_inside_modal,
+        entered: false,
+        next_child: 0,
+        within_modal: false,
+        subtree_has_modal: false,
+      });
+      continue;
+    }
+
+    if modal_open {
+      if let DomNodeType::Element { attributes, .. } = &mut current.node_type {
+        if !frame.subtree_has_modal {
+          set_attr(attributes, "data-fastr-inert", "true");
+        }
+      }
+    }
+
+    let subtree_has_modal = frame.subtree_has_modal;
+    if let Some(parent) = stack.last_mut() {
+      parent.subtree_has_modal |= subtree_has_modal;
+    }
+  }
+
+  Ok(())
+}
+
 pub fn parse_html(html: &str) -> Result<DomNode> {
   parse_html_with_options(html, DomParseOptions::default())
 }
@@ -847,6 +981,35 @@ fn map_quirks_mode(mode: HtmlQuirksMode) -> QuirksMode {
     HtmlQuirksMode::Quirks => QuirksMode::Quirks,
     HtmlQuirksMode::LimitedQuirks => QuirksMode::LimitedQuirks,
     HtmlQuirksMode::NoQuirks => QuirksMode::NoQuirks,
+  }
+}
+
+struct DeadlineCheckedRead<R> {
+  inner: R,
+  deadline_counter: usize,
+}
+
+impl<R> DeadlineCheckedRead<R> {
+  fn new(inner: R) -> Self {
+    Self {
+      inner,
+      deadline_counter: 0,
+    }
+  }
+}
+
+impl<R: io::Read> io::Read for DeadlineCheckedRead<R> {
+  fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+    if let Err(err) = check_active_periodic(
+      &mut self.deadline_counter,
+      DOM_PARSE_READ_DEADLINE_STRIDE,
+      RenderStage::DomParse,
+    ) {
+      return Err(io::Error::new(io::ErrorKind::TimedOut, err));
+    }
+
+    let len = buf.len().min(DOM_PARSE_READ_MAX_CHUNK_BYTES);
+    self.inner.read(&mut buf[..len])
   }
 }
 
@@ -861,10 +1024,28 @@ pub fn parse_html_with_options(html: &str, options: DomParseOptions) -> Result<D
   };
 
   let html5ever_timer = dom_parse_diagnostics_timer();
+  let reader = io::Cursor::new(html.as_bytes());
+  let mut reader = DeadlineCheckedRead::new(reader);
   let dom = parse_document(RcDom::default(), opts)
     .from_utf8()
-    .read_from(&mut html.as_bytes())
+    .read_from(&mut reader)
     .map_err(|e| {
+      if e.kind() == io::ErrorKind::TimedOut {
+        if let Some(timeout) = e
+          .get_ref()
+          .and_then(|inner| inner.downcast_ref::<crate::error::RenderError>())
+        {
+          return Error::Render(timeout.clone());
+        }
+        return Error::Render(crate::error::RenderError::Timeout {
+          stage: RenderStage::DomParse,
+          elapsed: crate::render_control::active_deadline()
+            .as_ref()
+            .map(|deadline| deadline.elapsed())
+            .unwrap_or_default(),
+        });
+      }
+
       Error::Parse(ParseError::InvalidHtml {
         message: format!("Failed to parse HTML: {}", e),
         line: 0,
@@ -880,8 +1061,9 @@ pub fn parse_html_with_options(html: &str, options: DomParseOptions) -> Result<D
   let quirks_mode = map_quirks_mode(dom.quirks_mode.get());
 
   let convert_timer = dom_parse_diagnostics_timer();
-  let mut root =
-    convert_handle_to_node(&dom.document, quirks_mode).expect("DOM must have a document root node");
+  let mut deadline_counter = 0usize;
+  let mut root = convert_handle_to_node(&dom.document, quirks_mode, &mut deadline_counter)?
+    .expect("DOM must have a document root node");
   if let Some(start) = convert_timer {
     let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
     with_dom_parse_diagnostics(|diag| {
@@ -890,7 +1072,7 @@ pub fn parse_html_with_options(html: &str, options: DomParseOptions) -> Result<D
   }
 
   let shadow_attach_timer = dom_parse_diagnostics_timer();
-  attach_shadow_roots(&mut root);
+  attach_shadow_roots(&mut root, &mut deadline_counter)?;
   if let Some(start) = shadow_attach_timer {
     let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
     with_dom_parse_diagnostics(|diag| {
@@ -903,11 +1085,68 @@ pub fn parse_html_with_options(html: &str, options: DomParseOptions) -> Result<D
     DomCompatibilityMode::Compatibility
   ) {
     let compat_timer = dom_parse_diagnostics_timer();
-    apply_dom_compatibility_mutations(&mut root);
+    apply_dom_compatibility_mutations(&mut root, &mut deadline_counter)?;
     if let Some(start) = compat_timer {
       let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
       with_dom_parse_diagnostics(|diag| {
         diag.compat_ms += elapsed_ms;
+      });
+    }
+  }
+
+  Ok(root)
+}
+
+/// Clone a DOM tree while periodically checking any active render deadline.
+///
+/// Unlike `DomNode::clone`, this uses an explicit stack so deeply nested documents don't risk a
+/// stack overflow and so `RenderOptions::timeout` can abort pathological `dom_parse` workloads
+/// cooperatively.
+pub(crate) fn clone_dom_with_deadline(node: &DomNode, stage: RenderStage) -> Result<DomNode> {
+  struct Frame {
+    src: *const DomNode,
+    dst: *mut DomNode,
+    next_child: usize,
+  }
+
+  let mut deadline_counter = 0usize;
+  check_active_periodic(&mut deadline_counter, DOM_PARSE_NODE_DEADLINE_STRIDE, stage)?;
+
+  let mut root = DomNode {
+    node_type: node.node_type.clone(),
+    children: Vec::with_capacity(node.children.len()),
+  };
+
+  let mut stack = vec![Frame {
+    src: node as *const _,
+    dst: &mut root as *mut _,
+    next_child: 0,
+  }];
+
+  while let Some(mut frame) = stack.pop() {
+    let src = unsafe { &*frame.src };
+    // Safety: destination nodes are owned by `root` and its descendants, and we never mutate a
+    // node's children while a frame borrowing that node is active. This keeps raw pointers stable
+    // for the duration of the DFS clone.
+    let dst = unsafe { &mut *frame.dst };
+
+    if frame.next_child < src.children.len() {
+      let child_src = &src.children[frame.next_child];
+      frame.next_child += 1;
+
+      check_active_periodic(&mut deadline_counter, DOM_PARSE_NODE_DEADLINE_STRIDE, stage)?;
+
+      dst.children.push(DomNode {
+        node_type: child_src.node_type.clone(),
+        children: Vec::with_capacity(child_src.children.len()),
+      });
+      let child_dst = dst.children.last_mut().expect("child was just pushed") as *mut DomNode;
+
+      stack.push(frame);
+      stack.push(Frame {
+        src: child_src as *const _,
+        dst: child_dst,
+        next_child: 0,
       });
     }
   }
@@ -945,7 +1184,13 @@ fn parse_shadow_root_definition(template: &DomNode) -> Option<(ShadowRootMode, b
   Some((mode, delegates_focus))
 }
 
-fn attach_shadow_roots(node: &mut DomNode) {
+fn attach_shadow_roots(node: &mut DomNode, deadline_counter: &mut usize) -> Result<()> {
+  check_active_periodic(
+    deadline_counter,
+    DOM_PARSE_NODE_DEADLINE_STRIDE,
+    RenderStage::DomParse,
+  )?;
+
   for child in &mut node.children {
     let is_inert_template = matches!(
       child.tag_name(),
@@ -957,11 +1202,11 @@ fn attach_shadow_roots(node: &mut DomNode) {
     if is_inert_template {
       continue;
     }
-    attach_shadow_roots(child);
+    attach_shadow_roots(child, deadline_counter)?;
   }
 
   if !node.is_element() {
-    return;
+    return Ok(());
   }
 
   let mut shadow_template = None;
@@ -973,7 +1218,7 @@ fn attach_shadow_roots(node: &mut DomNode) {
   }
 
   let Some((template_idx, mode, delegates_focus)) = shadow_template else {
-    return;
+    return Ok(());
   };
 
   // Only the first declarative shadow template is promoted to a shadow root, matching browsers.
@@ -993,6 +1238,8 @@ fn attach_shadow_roots(node: &mut DomNode) {
     combined.extend(light_children);
     combined
   };
+
+  Ok(())
 }
 
 fn collect_slot_names(node: &DomNode, out: &mut HashSet<String>) {
@@ -1267,7 +1514,16 @@ pub fn compute_part_export_map_with_ids(
 /// `jsl10n-visible` after client-side localization. Since we do not run author scripts,
 /// mirror those initializations so content that relies on the class flip (e.g., initial
 /// opacity) is visible in static renders.
-fn apply_dom_compatibility_mutations(node: &mut DomNode) {
+fn apply_dom_compatibility_mutations(
+  node: &mut DomNode,
+  deadline_counter: &mut usize,
+) -> Result<()> {
+  check_active_periodic(
+    deadline_counter,
+    DOM_PARSE_NODE_DEADLINE_STRIDE,
+    RenderStage::DomParse,
+  )?;
+
   if let DomNodeType::Element {
     tag_name,
     attributes,
@@ -1312,11 +1568,23 @@ fn apply_dom_compatibility_mutations(node: &mut DomNode) {
   }
 
   for child in &mut node.children {
-    apply_dom_compatibility_mutations(child);
+    apply_dom_compatibility_mutations(child, deadline_counter)?;
   }
+
+  Ok(())
 }
 
-fn convert_handle_to_node(handle: &Handle, document_quirks_mode: QuirksMode) -> Option<DomNode> {
+fn convert_handle_to_node(
+  handle: &Handle,
+  document_quirks_mode: QuirksMode,
+  deadline_counter: &mut usize,
+) -> Result<Option<DomNode>> {
+  check_active_periodic(
+    deadline_counter,
+    DOM_PARSE_NODE_DEADLINE_STRIDE,
+    RenderStage::DomParse,
+  )?;
+
   let node_type = match &handle.data {
     NodeData::Document => DomNodeType::Document {
       quirks_mode: document_quirks_mode,
@@ -1351,7 +1619,7 @@ fn convert_handle_to_node(handle: &Handle, document_quirks_mode: QuirksMode) -> 
       let content = contents.borrow().to_string();
       DomNodeType::Text { content }
     }
-    _ => return None,
+    _ => return Ok(None),
   };
 
   let mut children: Vec<DomNode> = match &handle.data {
@@ -1362,30 +1630,37 @@ fn convert_handle_to_node(handle: &Handle, document_quirks_mode: QuirksMode) -> 
     } => {
       if name.local.as_ref().eq_ignore_ascii_case("template") {
         let borrowed = template_contents.borrow();
-        match &*borrowed {
-          Some(content) => content
-            .children
-            .borrow()
-            .iter()
-            .filter_map(|child| convert_handle_to_node(child, document_quirks_mode))
-            .collect(),
-          None => Vec::new(),
+        let mut out = Vec::new();
+        if let Some(content) = &*borrowed {
+          for child in content.children.borrow().iter() {
+            if let Some(node) =
+              convert_handle_to_node(child, document_quirks_mode, deadline_counter)?
+            {
+              out.push(node);
+            }
+          }
         }
+        out
       } else {
-        handle
-          .children
-          .borrow()
-          .iter()
-          .filter_map(|child| convert_handle_to_node(child, document_quirks_mode))
-          .collect::<Vec<_>>()
+        let mut out = Vec::new();
+        for child in handle.children.borrow().iter() {
+          if let Some(node) = convert_handle_to_node(child, document_quirks_mode, deadline_counter)?
+          {
+            out.push(node);
+          }
+        }
+        out
       }
     }
-    NodeData::Document => handle
-      .children
-      .borrow()
-      .iter()
-      .filter_map(|child| convert_handle_to_node(child, document_quirks_mode))
-      .collect(),
+    NodeData::Document => {
+      let mut out = Vec::new();
+      for child in handle.children.borrow().iter() {
+        if let Some(node) = convert_handle_to_node(child, document_quirks_mode, deadline_counter)? {
+          out.push(node);
+        }
+      }
+      out
+    }
     _ => Vec::new(),
   };
 
@@ -1403,10 +1678,10 @@ fn convert_handle_to_node(handle: &Handle, document_quirks_mode: QuirksMode) -> 
     }
   }
 
-  Some(DomNode {
+  Ok(Some(DomNode {
     node_type,
     children,
-  })
+  }))
 }
 
 impl DomNode {
@@ -3881,6 +4156,7 @@ mod tests {
   use crate::css::selectors::build_relative_selectors;
   use crate::css::selectors::PseudoClassParser;
   use crate::css::selectors::ShadowMatchData;
+  use crate::render_control::{with_deadline, RenderDeadline};
   use cssparser::{Parser, ParserInput};
   use selectors::context::QuirksMode;
   use selectors::matching::MatchingContext;
@@ -3945,6 +4221,19 @@ mod tests {
       return true;
     }
     node.children.iter().any(contains_shadow_root)
+  }
+
+  #[test]
+  fn dom_parse_timeout_is_cooperative() {
+    let deadline = RenderDeadline::new(Some(std::time::Duration::from_millis(0)), None);
+    let result = with_deadline(Some(&deadline), || parse_html("<div>hello</div>"));
+
+    match result {
+      Err(Error::Render(crate::error::RenderError::Timeout { stage, .. })) => {
+        assert_eq!(stage, RenderStage::DomParse);
+      }
+      other => panic!("expected dom_parse timeout, got {other:?}"),
+    }
   }
 
   #[test]
