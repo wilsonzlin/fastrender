@@ -8,6 +8,7 @@ mod fetch_and_render_help_test;
 mod fetch_and_render_output_paths;
 mod fetch_pages_exit_test;
 mod file_stylesheet_parity;
+mod inspect_frag_external_css_test;
 mod inspect_frag_help_test;
 mod pageset_progress_commit_tracking_test;
 mod pageset_progress_dump_failures_test;

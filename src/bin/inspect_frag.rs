@@ -4,15 +4,8 @@ use clap::Parser;
 use common::args::{parse_viewport, CompatArgs, MediaPreferenceArgs};
 use common::media_prefs::MediaPreferences;
 use fastrender::api::FastRender;
-use fastrender::css::encoding::decode_css_bytes;
-use fastrender::css::loader::absolutize_css_urls;
-use fastrender::css::loader::extract_css_links;
-use fastrender::css::loader::extract_embedded_css_urls;
 use fastrender::css::loader::infer_base_url;
-use fastrender::css::loader::inject_css_into_html;
-use fastrender::css::loader::inline_imports;
-use fastrender::css::loader::InlineImportState;
-use fastrender::css::parser::extract_css;
+use fastrender::debug::runtime::{self, RuntimeToggles};
 use fastrender::dom::DomNodeType;
 use fastrender::dom::{self};
 use fastrender::geometry::Point;
@@ -24,14 +17,14 @@ use fastrender::paint::display_list::Transform3D;
 use fastrender::paint::display_list_builder::DisplayListBuilder;
 use fastrender::paint::stacking::creates_stacking_context;
 use fastrender::resource::HttpFetcher;
-use fastrender::resource::ResourceFetcher;
 use fastrender::resource::DEFAULT_ACCEPT_LANGUAGE;
 use fastrender::resource::DEFAULT_USER_AGENT;
 use fastrender::scroll::ScrollState;
-use fastrender::style::cascade::apply_styles_with_media_and_target;
+use fastrender::style::cascade::apply_style_set_with_media_target_and_imports_cached_with_deadline;
 use fastrender::style::cascade::StyledNode;
 use fastrender::style::computed::Visibility;
 use fastrender::style::display::Display;
+use fastrender::style::media::MediaQueryCache;
 use fastrender::style::media::MediaType;
 use fastrender::style::position::Position;
 use fastrender::style::ComputedStyle;
@@ -40,9 +33,9 @@ use fastrender::tree::box_tree::BoxNode;
 use fastrender::tree::fragment_tree::FragmentContent;
 use fastrender::tree::fragment_tree::FragmentNode;
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::env;
 use std::fs;
+use std::sync::Arc;
 use std::time::Duration;
 use url::Url;
 
@@ -140,10 +133,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     (args.file.clone(), input)
   };
 
-  let mut html = fs::read_to_string(&path)?;
+  let html = fs::read_to_string(&path)?;
   let resource_base = infer_base_url(&html, &input_url).into_owned();
 
   media_prefs.apply_env();
+  let runtime_toggles = RuntimeToggles::from_env();
+  let _runtime_guard = runtime::set_runtime_toggles(Arc::new(runtime_toggles.clone()));
 
   if args.scroll_x != 0.0 || args.scroll_y != 0.0 {
     eprintln!(
@@ -152,12 +147,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
   }
 
-  let mut renderer = FastRender::builder()
+  let fetcher = Arc::new(
+    HttpFetcher::new()
+      .with_user_agent(args.user_agent.clone())
+      .with_accept_language(args.accept_language.clone()),
+  );
+  let renderer = FastRender::builder()
     .device_pixel_ratio(args.dpr)
     .compat_mode(args.compat.compat_profile())
     .dom_compatibility_mode(args.compat.dom_compat_mode())
+    .base_url(resource_base.clone())
+    .fetcher(fetcher)
+    .runtime_toggles(runtime_toggles)
     .build()?;
-  renderer.set_base_url(resource_base.clone());
 
   if let Ok(val) = env::var("FASTR_TRACE_BOXES") {
     eprintln!("FASTR_TRACE_BOXES env in inspect_frag: {val}");
@@ -166,69 +168,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
     .unwrap_or(false);
 
-  // Optionally fetch and inline external CSS links to mirror the render_pages pipeline.
-  let fetch_css = env::var("FASTR_FETCH_LINK_CSS")
-    .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-    .unwrap_or(true);
-  if fetch_css {
-    let mut css_links = extract_css_links(&html, &resource_base, MediaType::Screen)?;
-    let mut seen_links: HashSet<String> = css_links.iter().cloned().collect();
-    for extra in extract_embedded_css_urls(&html, &resource_base)? {
-      if seen_links.insert(extra.clone()) {
-        css_links.push(extra);
-      }
-    }
-    if !css_links.is_empty() {
-      let fetcher = HttpFetcher::new()
-        .with_user_agent(args.user_agent.clone())
-        .with_accept_language(args.accept_language.clone());
-      let mut combined_css = String::new();
-      let mut import_state = InlineImportState::new();
-      for link in css_links {
-        let mut diag = |_url: &str, _reason: &str| {};
-        if !import_state.try_register_stylesheet_with_budget(&link, &mut diag) {
-          continue;
-        }
-        match fetcher.fetch(&link) {
-          Ok(res) => {
-            let css_text = decode_css_bytes(&res.bytes, res.content_type.as_deref());
-            let rewritten = absolutize_css_urls(&css_text, &link)?;
-            let fetcher_for_imports = fetcher.clone();
-            let mut import_fetch = move |u: &str| {
-              fetcher_for_imports
-                .fetch(u)
-                .map(|res| decode_css_bytes(&res.bytes, res.content_type.as_deref()))
-            };
-            match inline_imports(
-              &rewritten,
-              &link,
-              &mut import_fetch,
-              &mut import_state,
-              None,
-            ) {
-              Ok(inlined) => combined_css.push_str(&inlined),
-              Err(err) => {
-                eprintln!("warn: failed to inline @import rules in {link}: {err}");
-                combined_css.push_str(&rewritten);
-              }
-            }
-            combined_css.push('\n');
-          }
-          Err(err) => eprintln!("warn: failed to fetch css {link}: {err}"),
-        }
-      }
-      if !combined_css.is_empty() {
-        html = inject_css_into_html(&html, &combined_css);
-      }
-    }
-  }
-
-  let dom = dom::parse_html(&html)?;
+  let dom = renderer.parse_html(&html)?;
 
   let media_ctx =
     media_prefs.media_context_with_overrides((viewport_w, viewport_h), args.dpr, MediaType::Screen);
-  let stylesheet = extract_css(&dom)?;
-  let styled = apply_styles_with_media_and_target(&dom, &stylesheet, &media_ctx, None);
+  let mut media_query_cache = MediaQueryCache::default();
+  let style_set = renderer.collect_document_style_set(&dom, &media_ctx, &mut media_query_cache)?;
+  let styled = apply_style_set_with_media_target_and_imports_cached_with_deadline(
+    &dom,
+    &style_set,
+    &media_ctx,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    Some(&mut media_query_cache),
+    None,
+  )?;
 
   let mut styled_text = 0;
   let mut styled_text_visible = 0;

@@ -4839,13 +4839,15 @@ impl FastRender {
     )
   }
 
-  fn collect_document_style_set(
+  pub fn collect_document_style_set(
     &self,
     dom: &DomNode,
     media_ctx: &MediaContext,
     media_query_cache: &mut MediaQueryCache,
   ) -> Result<StyleSet> {
     let scoped_sources = extract_scoped_css_sources(dom);
+    let fetch_link_css =
+      runtime::runtime_toggles().truthy_with_default("FASTR_FETCH_LINK_CSS", true);
     let fetcher = Arc::clone(&self.fetcher);
     let base_url = self.base_url.clone();
     let resource_context = self.resource_context.clone();
@@ -4967,6 +4969,9 @@ impl FastRender {
               });
             }
             StylesheetSource::External(link) => {
+              if !fetch_link_css {
+                continue;
+              }
               if link.disabled
                 || !Self::link_rel_is_stylesheet_candidate(
                   link,
@@ -5059,7 +5064,7 @@ impl FastRender {
     Ok(StyleSet { document, shadows })
   }
 
-  fn collect_document_stylesheet(
+  pub fn collect_document_stylesheet(
     &self,
     dom: &DomNode,
     media_ctx: &MediaContext,
@@ -5067,6 +5072,8 @@ impl FastRender {
   ) -> Result<StyleSheet> {
     let mut combined_rules = Vec::new();
     let sources = extract_css_sources(dom);
+    let fetch_link_css =
+      runtime::runtime_toggles().truthy_with_default("FASTR_FETCH_LINK_CSS", true);
     let fetcher = Arc::clone(&self.fetcher);
     let resource_context = self.resource_context.as_ref();
     let preload_stylesheets_enabled = self
@@ -5111,6 +5118,9 @@ impl FastRender {
           combined_rules.extend(resolved.rules);
         }
         StylesheetSource::External(link) => {
+          if !fetch_link_css {
+            continue;
+          }
           if link.disabled
             || !Self::link_rel_is_stylesheet_candidate(
               &link,

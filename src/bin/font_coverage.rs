@@ -80,12 +80,16 @@ fn should_skip_codepoint(ch: char) -> bool {
 }
 
 fn script_label(script: Script) -> &'static str {
+  #[allow(unreachable_patterns)]
   match script {
     Script::Common => "Common",
     Script::Inherited => "Inherited",
     Script::Unknown => "Unknown",
     Script::Latin => "Latin",
     Script::Arabic => "Arabic",
+    Script::Syriac => "Syriac",
+    Script::Thaana => "Thaana",
+    Script::Nko => "N'Ko",
     Script::Hebrew => "Hebrew",
     Script::Greek => "Greek",
     Script::Cyrillic => "Cyrillic",
@@ -93,27 +97,35 @@ fn script_label(script: Script) -> &'static str {
     Script::Bengali => "Bengali",
     Script::Tamil => "Tamil",
     Script::Thai => "Thai",
+    Script::Javanese => "Javanese",
     Script::Han => "Han",
     Script::Hiragana => "Hiragana",
     Script::Katakana => "Katakana",
     Script::Hangul => "Hangul",
+    _ => "Other",
   }
 }
 
 fn noto_suggestion(script: Script) -> Option<&'static str> {
+  #[allow(unreachable_patterns)]
   match script {
     Script::Arabic => Some("Noto Sans Arabic"),
+    Script::Syriac => Some("Noto Sans Syriac"),
+    Script::Thaana => Some("Noto Sans Thaana"),
+    Script::Nko => Some("Noto Sans NKo"),
     Script::Hebrew => Some("Noto Sans Hebrew"),
     Script::Devanagari => Some("Noto Sans Devanagari"),
     Script::Bengali => Some("Noto Sans Bengali"),
     Script::Tamil => Some("Noto Sans Tamil"),
     Script::Thai => Some("Noto Sans Thai"),
+    Script::Javanese => Some("Noto Sans Javanese"),
     Script::Han => Some("Noto Sans CJK (SC/TC/JP/KR)"),
     Script::Hiragana | Script::Katakana => Some("Noto Sans JP"),
     Script::Hangul => Some("Noto Sans KR"),
     Script::Latin | Script::Greek | Script::Cyrillic | Script::Inherited => Some("Noto Sans"),
     Script::Common => Some("Noto Sans Symbols 2"),
     Script::Unknown => None,
+    _ => None,
   }
 }
 
