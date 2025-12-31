@@ -336,6 +336,160 @@ fn clamp_channel_to_alpha(channel: i32, alpha: i32) -> u8 {
   channel.clamp(0, alpha).clamp(0, 255) as u8
 }
 
+#[inline]
+fn convolve_row_horizontal_fixed(
+  src_row: &[u8],
+  out_row: &mut [u8],
+  width: usize,
+  kernel: &[i32],
+  radius: usize,
+  scale: i32,
+) {
+  debug_assert_eq!(src_row.len(), width * 4);
+  debug_assert_eq!(out_row.len(), width * 4);
+
+  let bias = scale / 2;
+  let max_x = width.saturating_sub(1) as isize;
+
+  let convolve_edge = |x: usize, out_row: &mut [u8]| {
+    let mut acc_r: i32 = 0;
+    let mut acc_g: i32 = 0;
+    let mut acc_b: i32 = 0;
+    let mut acc_a: i32 = 0;
+    for (i, &w) in kernel.iter().enumerate() {
+      let offset = i as isize - radius as isize;
+      let cx = (x as isize + offset).clamp(0, max_x) as usize;
+      let idx = cx * 4;
+      acc_r += w * src_row[idx] as i32;
+      acc_g += w * src_row[idx + 1] as i32;
+      acc_b += w * src_row[idx + 2] as i32;
+      acc_a += w * src_row[idx + 3] as i32;
+    }
+    let out_idx = x * 4;
+    let a = ((acc_a + bias) / scale).clamp(0, 255);
+    let r = (acc_r + bias) / scale;
+    let g = (acc_g + bias) / scale;
+    let b = (acc_b + bias) / scale;
+    out_row[out_idx] = clamp_channel_to_alpha(r, a);
+    out_row[out_idx + 1] = clamp_channel_to_alpha(g, a);
+    out_row[out_idx + 2] = clamp_channel_to_alpha(b, a);
+    out_row[out_idx + 3] = a as u8;
+  };
+
+  let inner_start = radius.min(width);
+  let inner_end = width.saturating_sub(radius);
+  if inner_start >= inner_end {
+    for x in 0..width {
+      convolve_edge(x, out_row);
+    }
+    return;
+  }
+
+  for x in 0..inner_start {
+    convolve_edge(x, out_row);
+  }
+
+  for x in inner_start..inner_end {
+    let mut acc_r: i32 = 0;
+    let mut acc_g: i32 = 0;
+    let mut acc_b: i32 = 0;
+    let mut acc_a: i32 = 0;
+    let base = (x - radius) * 4;
+    for (i, &w) in kernel.iter().enumerate() {
+      let idx = base + i * 4;
+      acc_r += w * src_row[idx] as i32;
+      acc_g += w * src_row[idx + 1] as i32;
+      acc_b += w * src_row[idx + 2] as i32;
+      acc_a += w * src_row[idx + 3] as i32;
+    }
+    let out_idx = x * 4;
+    let a = ((acc_a + bias) / scale).clamp(0, 255);
+    let r = (acc_r + bias) / scale;
+    let g = (acc_g + bias) / scale;
+    let b = (acc_b + bias) / scale;
+    out_row[out_idx] = clamp_channel_to_alpha(r, a);
+    out_row[out_idx + 1] = clamp_channel_to_alpha(g, a);
+    out_row[out_idx + 2] = clamp_channel_to_alpha(b, a);
+    out_row[out_idx + 3] = a as u8;
+  }
+
+  for x in inner_end..width {
+    convolve_edge(x, out_row);
+  }
+}
+
+#[inline]
+fn convolve_row_vertical_fixed(
+  src: &[u8],
+  out_row: &mut [u8],
+  width: usize,
+  height: usize,
+  y: usize,
+  kernel: &[i32],
+  radius: usize,
+  scale: i32,
+) {
+  let row_stride = width * 4;
+  debug_assert_eq!(out_row.len(), row_stride);
+
+  let bias = scale / 2;
+  let max_y = height.saturating_sub(1) as isize;
+  let inner_end = height.saturating_sub(radius);
+
+  if y < radius || y >= inner_end {
+    for x in 0..width {
+      let mut acc_r: i32 = 0;
+      let mut acc_g: i32 = 0;
+      let mut acc_b: i32 = 0;
+      let mut acc_a: i32 = 0;
+      for (i, &w) in kernel.iter().enumerate() {
+        let offset = i as isize - radius as isize;
+        let cy = (y as isize + offset).clamp(0, max_y) as usize;
+        let idx = cy * row_stride + x * 4;
+        acc_r += w * src[idx] as i32;
+        acc_g += w * src[idx + 1] as i32;
+        acc_b += w * src[idx + 2] as i32;
+        acc_a += w * src[idx + 3] as i32;
+      }
+      let out_idx = x * 4;
+      let a = ((acc_a + bias) / scale).clamp(0, 255);
+      let r = (acc_r + bias) / scale;
+      let g = (acc_g + bias) / scale;
+      let b = (acc_b + bias) / scale;
+      out_row[out_idx] = clamp_channel_to_alpha(r, a);
+      out_row[out_idx + 1] = clamp_channel_to_alpha(g, a);
+      out_row[out_idx + 2] = clamp_channel_to_alpha(b, a);
+      out_row[out_idx + 3] = a as u8;
+    }
+    return;
+  }
+
+  let base_y = (y - radius) * row_stride;
+  for x in 0..width {
+    let mut acc_r: i32 = 0;
+    let mut acc_g: i32 = 0;
+    let mut acc_b: i32 = 0;
+    let mut acc_a: i32 = 0;
+    let base = base_y + x * 4;
+    for (i, &w) in kernel.iter().enumerate() {
+      let idx = base + i * row_stride;
+      acc_r += w * src[idx] as i32;
+      acc_g += w * src[idx + 1] as i32;
+      acc_b += w * src[idx + 2] as i32;
+      acc_a += w * src[idx + 3] as i32;
+    }
+    let out_idx = x * 4;
+    let a = ((acc_a + bias) / scale).clamp(0, 255);
+    let r = (acc_r + bias) / scale;
+    let g = (acc_g + bias) / scale;
+    let b = (acc_b + bias) / scale;
+    out_row[out_idx] = clamp_channel_to_alpha(r, a);
+    out_row[out_idx + 1] = clamp_channel_to_alpha(g, a);
+    out_row[out_idx + 2] = clamp_channel_to_alpha(b, a);
+    out_row[out_idx + 3] = a as u8;
+  }
+}
+
 fn gaussian_convolve_premultiplied(pixmap: &mut Pixmap, sigma: f32) -> Result<bool, RenderError> {
   gaussian_convolve_premultiplied_with_parallelism(pixmap, sigma, BlurParallelism::Auto)
 }
@@ -388,31 +542,10 @@ fn gaussian_convolve_premultiplied_with_parallelism(
           pixmap.data_mut().copy_from_slice(src);
           return;
         }
-        let row_start = y * width * 4;
-        for x in 0..width {
-          let mut acc_r: i32 = 0;
-          let mut acc_g: i32 = 0;
-          let mut acc_b: i32 = 0;
-          let mut acc_a: i32 = 0;
-          for (i, &w) in kernel.iter().enumerate() {
-            let offset = i as isize - radius as isize;
-            let cx = (x as isize + offset).clamp(0, width as isize - 1) as usize;
-            let idx = row_start + cx * 4;
-            acc_r += w * src[idx] as i32;
-            acc_g += w * src[idx + 1] as i32;
-            acc_b += w * src[idx + 2] as i32;
-            acc_a += w * src[idx + 3] as i32;
-          }
-          let out_idx = row_start + x * 4;
-          let a = ((acc_a + scale / 2) / scale).clamp(0, 255);
-          let r = (acc_r + scale / 2) / scale;
-          let g = (acc_g + scale / 2) / scale;
-          let b = (acc_b + scale / 2) / scale;
-          buf[out_idx] = clamp_channel_to_alpha(r, a);
-          buf[out_idx + 1] = clamp_channel_to_alpha(g, a);
-          buf[out_idx + 2] = clamp_channel_to_alpha(b, a);
-          buf[out_idx + 3] = a as u8;
-        }
+        let row_start = y * row_stride;
+        let src_row = &src[row_start..row_start + row_stride];
+        let out_row = &mut buf[row_start..row_start + row_stride];
+        convolve_row_horizontal_fixed(src_row, out_row, width, &kernel, radius, scale);
       }
 
       // Vertical pass: buf -> pixmap data
@@ -423,30 +556,8 @@ fn gaussian_convolve_premultiplied_with_parallelism(
           dst.copy_from_slice(src);
           return;
         }
-        for x in 0..width {
-          let mut acc_r: i32 = 0;
-          let mut acc_g: i32 = 0;
-          let mut acc_b: i32 = 0;
-          let mut acc_a: i32 = 0;
-          for (i, &w) in kernel.iter().enumerate() {
-            let offset = i as isize - radius as isize;
-            let cy = (y as isize + offset).clamp(0, height as isize - 1) as usize;
-            let idx = (cy * width + x) * 4;
-            acc_r += w * buf[idx] as i32;
-            acc_g += w * buf[idx + 1] as i32;
-            acc_b += w * buf[idx + 2] as i32;
-            acc_a += w * buf[idx + 3] as i32;
-          }
-          let out_idx = (y * width + x) * 4;
-          let a = ((acc_a + scale / 2) / scale).clamp(0, 255);
-          let r = (acc_r + scale / 2) / scale;
-          let g = (acc_g + scale / 2) / scale;
-          let b = (acc_b + scale / 2) / scale;
-          dst[out_idx] = clamp_channel_to_alpha(r, a);
-          dst[out_idx + 1] = clamp_channel_to_alpha(g, a);
-          dst[out_idx + 2] = clamp_channel_to_alpha(b, a);
-          dst[out_idx + 3] = a as u8;
-        }
+        let out_row = &mut dst[y * row_stride..(y + 1) * row_stride];
+        convolve_row_vertical_fixed(buf, out_row, width, height, y, &kernel, radius, scale);
       }
     } else {
       let deadline = active_deadline();
@@ -469,30 +580,7 @@ fn gaussian_convolve_premultiplied_with_parallelism(
           return;
         }
         let src_row = &src[y * row_stride..(y + 1) * row_stride];
-        for x in 0..width {
-          let mut acc_r: i32 = 0;
-          let mut acc_g: i32 = 0;
-          let mut acc_b: i32 = 0;
-          let mut acc_a: i32 = 0;
-          for (i, &w) in kernel.iter().enumerate() {
-            let offset = i as isize - radius as isize;
-            let cx = (x as isize + offset).clamp(0, width as isize - 1) as usize;
-            let idx = cx * 4;
-            acc_r += w * src_row[idx] as i32;
-            acc_g += w * src_row[idx + 1] as i32;
-            acc_b += w * src_row[idx + 2] as i32;
-            acc_a += w * src_row[idx + 3] as i32;
-          }
-          let out_idx = x * 4;
-          let a = ((acc_a + scale / 2) / scale).clamp(0, 255);
-          let r = (acc_r + scale / 2) / scale;
-          let g = (acc_g + scale / 2) / scale;
-          let b = (acc_b + scale / 2) / scale;
-          out_row[out_idx] = clamp_channel_to_alpha(r, a);
-          out_row[out_idx + 1] = clamp_channel_to_alpha(g, a);
-          out_row[out_idx + 2] = clamp_channel_to_alpha(b, a);
-          out_row[out_idx + 3] = a as u8;
-        }
+        convolve_row_horizontal_fixed(src_row, out_row, width, &kernel, radius, scale);
       };
 
       if deadline_enabled {
@@ -532,30 +620,7 @@ fn gaussian_convolve_premultiplied_with_parallelism(
           }
           return;
         }
-        for x in 0..width {
-          let mut acc_r: i32 = 0;
-          let mut acc_g: i32 = 0;
-          let mut acc_b: i32 = 0;
-          let mut acc_a: i32 = 0;
-          for (i, &w) in kernel.iter().enumerate() {
-            let offset = i as isize - radius as isize;
-            let cy = (y as isize + offset).clamp(0, height as isize - 1) as usize;
-            let idx = cy * row_stride + x * 4;
-            acc_r += w * buf[idx] as i32;
-            acc_g += w * buf[idx + 1] as i32;
-            acc_b += w * buf[idx + 2] as i32;
-            acc_a += w * buf[idx + 3] as i32;
-          }
-          let out_idx = x * 4;
-          let a = ((acc_a + scale / 2) / scale).clamp(0, 255);
-          let r = (acc_r + scale / 2) / scale;
-          let g = (acc_g + scale / 2) / scale;
-          let b = (acc_b + scale / 2) / scale;
-          out_row[out_idx] = clamp_channel_to_alpha(r, a);
-          out_row[out_idx + 1] = clamp_channel_to_alpha(g, a);
-          out_row[out_idx + 2] = clamp_channel_to_alpha(b, a);
-          out_row[out_idx + 3] = a as u8;
-        }
+        convolve_row_vertical_fixed(buf, out_row, width, height, y, &kernel, radius, scale);
       };
 
       if deadline_enabled {
@@ -1167,30 +1232,7 @@ fn blur_anisotropic_box_kernel_mixed_with_parallelism(
           let row_start = y * row_stride;
           let src_row = &cur[row_start..row_start + row_stride];
           let out_row = &mut tmp[row_start..row_start + row_stride];
-          for x in 0..width {
-            let mut acc_r: i32 = 0;
-            let mut acc_g: i32 = 0;
-            let mut acc_b: i32 = 0;
-            let mut acc_a: i32 = 0;
-            for (i, &w) in kernel_x.iter().enumerate() {
-              let offset = i as isize - radius_x as isize;
-              let cx = (x as isize + offset).clamp(0, width as isize - 1) as usize;
-              let idx = cx * 4;
-              acc_r += w * src_row[idx] as i32;
-              acc_g += w * src_row[idx + 1] as i32;
-              acc_b += w * src_row[idx + 2] as i32;
-              acc_a += w * src_row[idx + 3] as i32;
-            }
-            let out_idx = x * 4;
-            let a = ((acc_a + scale_x / 2) / scale_x).clamp(0, 255);
-            let r = (acc_r + scale_x / 2) / scale_x;
-            let g = (acc_g + scale_x / 2) / scale_x;
-            let b = (acc_b + scale_x / 2) / scale_x;
-            out_row[out_idx] = clamp_channel_to_alpha(r, a);
-            out_row[out_idx + 1] = clamp_channel_to_alpha(g, a);
-            out_row[out_idx + 2] = clamp_channel_to_alpha(b, a);
-            out_row[out_idx + 3] = a as u8;
-          }
+          convolve_row_horizontal_fixed(src_row, out_row, width, &kernel_x, radius_x, scale_x);
         }
         std::mem::swap(&mut cur, &mut tmp);
       }
@@ -1216,30 +1258,7 @@ fn blur_anisotropic_box_kernel_mixed_with_parallelism(
             return;
           }
           let out_row = &mut tmp[y * row_stride..(y + 1) * row_stride];
-          for x in 0..width {
-            let mut acc_r: i32 = 0;
-            let mut acc_g: i32 = 0;
-            let mut acc_b: i32 = 0;
-            let mut acc_a: i32 = 0;
-            for (i, &w) in kernel_y.iter().enumerate() {
-              let offset = i as isize - radius_y as isize;
-              let cy = (y as isize + offset).clamp(0, height as isize - 1) as usize;
-              let idx = cy * row_stride + x * 4;
-              acc_r += w * cur[idx] as i32;
-              acc_g += w * cur[idx + 1] as i32;
-              acc_b += w * cur[idx + 2] as i32;
-              acc_a += w * cur[idx + 3] as i32;
-            }
-            let out_idx = x * 4;
-            let a = ((acc_a + scale_y / 2) / scale_y).clamp(0, 255);
-            let r = (acc_r + scale_y / 2) / scale_y;
-            let g = (acc_g + scale_y / 2) / scale_y;
-            let b = (acc_b + scale_y / 2) / scale_y;
-            out_row[out_idx] = clamp_channel_to_alpha(r, a);
-            out_row[out_idx + 1] = clamp_channel_to_alpha(g, a);
-            out_row[out_idx + 2] = clamp_channel_to_alpha(b, a);
-            out_row[out_idx + 3] = a as u8;
-          }
+          convolve_row_vertical_fixed(&cur[..], out_row, width, height, y, &kernel_y, radius_y, scale_y);
         }
         std::mem::swap(&mut cur, &mut tmp);
       }
@@ -1299,30 +1318,7 @@ fn blur_anisotropic_box_kernel_mixed_with_parallelism(
           return;
         }
         let src_row = &src[y * row_stride..(y + 1) * row_stride];
-        for x in 0..width {
-          let mut acc_r: i32 = 0;
-          let mut acc_g: i32 = 0;
-          let mut acc_b: i32 = 0;
-          let mut acc_a: i32 = 0;
-          for (i, &w) in kernel_x.iter().enumerate() {
-            let offset = i as isize - radius_x as isize;
-            let cx = (x as isize + offset).clamp(0, width as isize - 1) as usize;
-            let idx = cx * 4;
-            acc_r += w * src_row[idx] as i32;
-            acc_g += w * src_row[idx + 1] as i32;
-            acc_b += w * src_row[idx + 2] as i32;
-            acc_a += w * src_row[idx + 3] as i32;
-          }
-          let out_idx = x * 4;
-          let a = ((acc_a + scale_x / 2) / scale_x).clamp(0, 255);
-          let r = (acc_r + scale_x / 2) / scale_x;
-          let g = (acc_g + scale_x / 2) / scale_x;
-          let b = (acc_b + scale_x / 2) / scale_x;
-          out_row[out_idx] = clamp_channel_to_alpha(r, a);
-          out_row[out_idx + 1] = clamp_channel_to_alpha(g, a);
-          out_row[out_idx + 2] = clamp_channel_to_alpha(b, a);
-          out_row[out_idx + 3] = a as u8;
-        }
+        convolve_row_horizontal_fixed(src_row, out_row, width, &kernel_x, radius_x, scale_x);
       };
 
       if deadline_enabled {
@@ -1390,30 +1386,7 @@ fn blur_anisotropic_box_kernel_mixed_with_parallelism(
           }
           return;
         }
-        for x in 0..width {
-          let mut acc_r: i32 = 0;
-          let mut acc_g: i32 = 0;
-          let mut acc_b: i32 = 0;
-          let mut acc_a: i32 = 0;
-          for (i, &w) in kernel_y.iter().enumerate() {
-            let offset = i as isize - radius_y as isize;
-            let cy = (y as isize + offset).clamp(0, height as isize - 1) as usize;
-            let idx = cy * row_stride + x * 4;
-            acc_r += w * src[idx] as i32;
-            acc_g += w * src[idx + 1] as i32;
-            acc_b += w * src[idx + 2] as i32;
-            acc_a += w * src[idx + 3] as i32;
-          }
-          let out_idx = x * 4;
-          let a = ((acc_a + scale_y / 2) / scale_y).clamp(0, 255);
-          let r = (acc_r + scale_y / 2) / scale_y;
-          let g = (acc_g + scale_y / 2) / scale_y;
-          let b = (acc_b + scale_y / 2) / scale_y;
-          out_row[out_idx] = clamp_channel_to_alpha(r, a);
-          out_row[out_idx + 1] = clamp_channel_to_alpha(g, a);
-          out_row[out_idx + 2] = clamp_channel_to_alpha(b, a);
-          out_row[out_idx + 3] = a as u8;
-        }
+        convolve_row_vertical_fixed(src, out_row, width, height, y, &kernel_y, radius_y, scale_y);
       };
 
       if deadline_enabled {
@@ -1696,31 +1669,10 @@ fn blur_anisotropic_body_with_parallelism(
             pixmap.data_mut().copy_from_slice(src);
             return;
           }
-          let row_start = y * width * 4;
-          for x in 0..width {
-            let mut acc_r: i32 = 0;
-            let mut acc_g: i32 = 0;
-            let mut acc_b: i32 = 0;
-            let mut acc_a: i32 = 0;
-            for (i, &w) in kernel_x.iter().enumerate() {
-              let offset = i as isize - radius_x as isize;
-              let cx = (x as isize + offset).clamp(0, width as isize - 1) as usize;
-              let idx = row_start + cx * 4;
-              acc_r += w * src[idx] as i32;
-              acc_g += w * src[idx + 1] as i32;
-              acc_b += w * src[idx + 2] as i32;
-              acc_a += w * src[idx + 3] as i32;
-            }
-            let out_idx = row_start + x * 4;
-            let a = ((acc_a + scale_x / 2) / scale_x).clamp(0, 255);
-            let r = (acc_r + scale_x / 2) / scale_x;
-            let g = (acc_g + scale_x / 2) / scale_x;
-            let b = (acc_b + scale_x / 2) / scale_x;
-            tmp[out_idx] = clamp_channel_to_alpha(r, a);
-            tmp[out_idx + 1] = clamp_channel_to_alpha(g, a);
-            tmp[out_idx + 2] = clamp_channel_to_alpha(b, a);
-            tmp[out_idx + 3] = a as u8;
-          }
+          let row_start = y * row_stride;
+          let src_row = &src[row_start..row_start + row_stride];
+          let out_row = &mut tmp[row_start..row_start + row_stride];
+          convolve_row_horizontal_fixed(src_row, out_row, width, &kernel_x, radius_x, scale_x);
         }
       }
 
@@ -1741,30 +1693,8 @@ fn blur_anisotropic_body_with_parallelism(
           dst.copy_from_slice(src);
           return;
         }
-        for x in 0..width {
-          let mut acc_r: i32 = 0;
-          let mut acc_g: i32 = 0;
-          let mut acc_b: i32 = 0;
-          let mut acc_a: i32 = 0;
-          for (i, &w) in kernel_y.iter().enumerate() {
-            let offset = i as isize - radius_y as isize;
-            let cy = (y as isize + offset).clamp(0, height as isize - 1) as usize;
-            let idx = (cy * width + x) * 4;
-            acc_r += w * src_for_y[idx] as i32;
-            acc_g += w * src_for_y[idx + 1] as i32;
-            acc_b += w * src_for_y[idx + 2] as i32;
-            acc_a += w * src_for_y[idx + 3] as i32;
-          }
-          let out_idx = (y * width + x) * 4;
-          let a = ((acc_a + scale_y / 2) / scale_y).clamp(0, 255);
-          let r = (acc_r + scale_y / 2) / scale_y;
-          let g = (acc_g + scale_y / 2) / scale_y;
-          let b = (acc_b + scale_y / 2) / scale_y;
-          dst[out_idx] = clamp_channel_to_alpha(r, a);
-          dst[out_idx + 1] = clamp_channel_to_alpha(g, a);
-          dst[out_idx + 2] = clamp_channel_to_alpha(b, a);
-          dst[out_idx + 3] = a as u8;
-        }
+        let out_row = &mut dst[y * row_stride..(y + 1) * row_stride];
+        convolve_row_vertical_fixed(src_for_y, out_row, width, height, y, &kernel_y, radius_y, scale_y);
       }
     } else {
       let deadline = active_deadline();
@@ -1790,30 +1720,7 @@ fn blur_anisotropic_body_with_parallelism(
             return;
           }
           let src_row = &src[y * row_stride..(y + 1) * row_stride];
-          for x in 0..width {
-            let mut acc_r: i32 = 0;
-            let mut acc_g: i32 = 0;
-            let mut acc_b: i32 = 0;
-            let mut acc_a: i32 = 0;
-            for (i, &w) in kernel_x.iter().enumerate() {
-              let offset = i as isize - radius_x as isize;
-              let cx = (x as isize + offset).clamp(0, width as isize - 1) as usize;
-              let idx = cx * 4;
-              acc_r += w * src_row[idx] as i32;
-              acc_g += w * src_row[idx + 1] as i32;
-              acc_b += w * src_row[idx + 2] as i32;
-              acc_a += w * src_row[idx + 3] as i32;
-            }
-            let out_idx = x * 4;
-            let a = ((acc_a + scale_x / 2) / scale_x).clamp(0, 255);
-            let r = (acc_r + scale_x / 2) / scale_x;
-            let g = (acc_g + scale_x / 2) / scale_x;
-            let b = (acc_b + scale_x / 2) / scale_x;
-            out_row[out_idx] = clamp_channel_to_alpha(r, a);
-            out_row[out_idx + 1] = clamp_channel_to_alpha(g, a);
-            out_row[out_idx + 2] = clamp_channel_to_alpha(b, a);
-            out_row[out_idx + 3] = a as u8;
-          }
+          convolve_row_horizontal_fixed(src_row, out_row, width, &kernel_x, radius_x, scale_x);
         };
 
         if deadline_enabled {
@@ -1863,30 +1770,7 @@ fn blur_anisotropic_body_with_parallelism(
           }
           return;
         }
-        for x in 0..width {
-          let mut acc_r: i32 = 0;
-          let mut acc_g: i32 = 0;
-          let mut acc_b: i32 = 0;
-          let mut acc_a: i32 = 0;
-          for (i, &w) in kernel_y.iter().enumerate() {
-            let offset = i as isize - radius_y as isize;
-            let cy = (y as isize + offset).clamp(0, height as isize - 1) as usize;
-            let idx = cy * row_stride + x * 4;
-            acc_r += w * src_for_y[idx] as i32;
-            acc_g += w * src_for_y[idx + 1] as i32;
-            acc_b += w * src_for_y[idx + 2] as i32;
-            acc_a += w * src_for_y[idx + 3] as i32;
-          }
-          let out_idx = x * 4;
-          let a = ((acc_a + scale_y / 2) / scale_y).clamp(0, 255);
-          let r = (acc_r + scale_y / 2) / scale_y;
-          let g = (acc_g + scale_y / 2) / scale_y;
-          let b = (acc_b + scale_y / 2) / scale_y;
-          out_row[out_idx] = clamp_channel_to_alpha(r, a);
-          out_row[out_idx + 1] = clamp_channel_to_alpha(g, a);
-          out_row[out_idx + 2] = clamp_channel_to_alpha(b, a);
-          out_row[out_idx + 3] = a as u8;
-        }
+        convolve_row_vertical_fixed(src_for_y, out_row, width, height, y, &kernel_y, radius_y, scale_y);
       };
 
       if deadline_enabled {
