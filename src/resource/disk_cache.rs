@@ -158,6 +158,14 @@ fn lock_age_from_metadata(meta: &fs::Metadata) -> Option<Duration> {
     .and_then(|time| SystemTime::now().duration_since(time).ok())
 }
 
+fn clear_lock_file(lock_path: &Path) -> bool {
+  match fs::remove_file(lock_path) {
+    Ok(()) => true,
+    Err(err) if err.kind() == ErrorKind::NotFound => true,
+    Err(_) => false,
+  }
+}
+
 fn hash_u64(input: &str) -> u64 {
   let mut hash: u64 = 0xcbf29ce484222325;
   for &b in input.as_bytes() {
@@ -277,8 +285,7 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
           .map(|age| age > self.disk_config.lock_stale_after)
           .unwrap_or(false)
         {
-          let _ = fs::remove_file(&lock_path);
-          return false;
+          return !clear_lock_file(&lock_path);
         }
 
         let contents = fs::read(&lock_path)
@@ -286,16 +293,14 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
           .and_then(|bytes| serde_json::from_slice::<LockFileContents>(&bytes).ok());
         if let Some(contents) = contents {
           if let Some(false) = pid_is_alive(contents.pid) {
-            let _ = fs::remove_file(&lock_path);
-            return false;
+            return !clear_lock_file(&lock_path);
           }
           // On platforms/filesystems where we can't rely on mtime/ctime, fall back to the stored
           // timestamp in the lockfile itself.
           if meta_age.is_none() {
             let lock_age = Duration::from_secs(now_seconds().saturating_sub(contents.started_at));
             if lock_age > self.disk_config.lock_stale_after {
-              let _ = fs::remove_file(&lock_path);
-              return false;
+              return !clear_lock_file(&lock_path);
             }
           }
         }
