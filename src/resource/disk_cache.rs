@@ -569,7 +569,11 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
         }
         SnapshotRead::Locked => {
           let max_wait = self.deadline_aware_lock_wait(READ_LOCK_WAIT_TIMEOUT);
-          if !max_wait.is_zero() && self.wait_for_unlock(&data_path, max_wait) {
+          if !max_wait.is_zero() {
+            let lock_wait_timer = super::start_disk_cache_lock_wait_diagnostics();
+            let unlocked = self.wait_for_unlock(&data_path, max_wait);
+            super::finish_disk_cache_lock_wait_diagnostics(lock_wait_timer);
+            if unlocked {
             match self.try_read_snapshot(&key, &current, &data_path, &meta_path) {
               SnapshotRead::Hit(snapshot) => {
                 let payload_bytes = match &snapshot.value {
@@ -586,6 +590,7 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
                 return Err(Error::Render(err));
               }
               _ => {}
+            }
             }
           }
         }

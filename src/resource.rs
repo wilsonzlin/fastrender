@@ -2070,6 +2070,10 @@ pub struct ResourceCacheDiagnostics {
   pub disk_cache_misses: usize,
   pub disk_cache_bytes: usize,
   pub disk_cache_ms: f64,
+  /// Number of times disk cache reads waited for an in-progress writer to release a `.lock` file.
+  pub disk_cache_lock_waits: usize,
+  /// Time spent waiting for disk cache `.lock` files to clear.
+  pub disk_cache_lock_wait_ms: f64,
   pub network_fetches: usize,
   pub network_fetch_bytes: usize,
   pub network_fetch_ms: f64,
@@ -2085,6 +2089,8 @@ struct ResourceCacheDiagnosticsState {
   disk_cache_misses: AtomicUsize,
   disk_cache_bytes: AtomicUsize,
   disk_cache_ns: AtomicU64,
+  disk_cache_lock_waits: AtomicUsize,
+  disk_cache_lock_wait_ns: AtomicU64,
   network_fetches: AtomicUsize,
   network_fetch_bytes: AtomicUsize,
   network_fetch_ns: AtomicU64,
@@ -2101,6 +2107,8 @@ struct ResourceCacheDiagnosticsSnapshot {
   disk_cache_misses: usize,
   disk_cache_bytes: usize,
   disk_cache_ns: u64,
+  disk_cache_lock_waits: usize,
+  disk_cache_lock_wait_ns: u64,
   network_fetches: usize,
   network_fetch_bytes: usize,
   network_fetch_ns: u64,
@@ -2136,6 +2144,8 @@ static RESOURCE_CACHE_DIAGNOSTICS: ResourceCacheDiagnosticsState = ResourceCache
   disk_cache_misses: AtomicUsize::new(0),
   disk_cache_bytes: AtomicUsize::new(0),
   disk_cache_ns: AtomicU64::new(0),
+  disk_cache_lock_waits: AtomicUsize::new(0),
+  disk_cache_lock_wait_ns: AtomicU64::new(0),
   network_fetches: AtomicUsize::new(0),
   network_fetch_bytes: AtomicUsize::new(0),
   network_fetch_ns: AtomicU64::new(0),
@@ -2167,6 +2177,12 @@ fn resource_cache_diagnostics_snapshot() -> ResourceCacheDiagnosticsSnapshot {
       .load(Ordering::Relaxed),
     disk_cache_ns: RESOURCE_CACHE_DIAGNOSTICS
       .disk_cache_ns
+      .load(Ordering::Relaxed),
+    disk_cache_lock_waits: RESOURCE_CACHE_DIAGNOSTICS
+      .disk_cache_lock_waits
+      .load(Ordering::Relaxed),
+    disk_cache_lock_wait_ns: RESOURCE_CACHE_DIAGNOSTICS
+      .disk_cache_lock_wait_ns
       .load(Ordering::Relaxed),
     network_fetches: RESOURCE_CACHE_DIAGNOSTICS
       .network_fetches
@@ -2220,6 +2236,9 @@ pub(crate) fn take_resource_cache_diagnostics() -> Option<ResourceCacheDiagnosti
 
   let current = resource_cache_diagnostics_snapshot();
   let disk_cache_ns = current.disk_cache_ns.saturating_sub(baseline.disk_cache_ns);
+  let disk_cache_lock_wait_ns = current
+    .disk_cache_lock_wait_ns
+    .saturating_sub(baseline.disk_cache_lock_wait_ns);
   let network_fetch_ns = current
     .network_fetch_ns
     .saturating_sub(baseline.network_fetch_ns);
@@ -2243,6 +2262,10 @@ pub(crate) fn take_resource_cache_diagnostics() -> Option<ResourceCacheDiagnosti
       .disk_cache_bytes
       .saturating_sub(baseline.disk_cache_bytes),
     disk_cache_ms: (disk_cache_ns as f64) / 1_000_000.0,
+    disk_cache_lock_waits: current
+      .disk_cache_lock_waits
+      .saturating_sub(baseline.disk_cache_lock_waits),
+    disk_cache_lock_wait_ms: (disk_cache_lock_wait_ns as f64) / 1_000_000.0,
     network_fetches: current
       .network_fetches
       .saturating_sub(baseline.network_fetches),
@@ -2342,6 +2365,29 @@ fn finish_disk_cache_diagnostics(start: Option<Instant>) {
   let nanos = u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX);
   RESOURCE_CACHE_DIAGNOSTICS
     .disk_cache_ns
+    .fetch_add(nanos, Ordering::Relaxed);
+}
+
+#[cfg(feature = "disk_cache")]
+fn start_disk_cache_lock_wait_diagnostics() -> Option<Instant> {
+  if !resource_cache_diagnostics_enabled() {
+    return None;
+  }
+  RESOURCE_CACHE_DIAGNOSTICS
+    .disk_cache_lock_waits
+    .fetch_add(1, Ordering::Relaxed);
+  Some(Instant::now())
+}
+
+#[cfg(feature = "disk_cache")]
+fn finish_disk_cache_lock_wait_diagnostics(start: Option<Instant>) {
+  let Some(start) = start else {
+    return;
+  };
+  let elapsed = start.elapsed();
+  let nanos = u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX);
+  RESOURCE_CACHE_DIAGNOSTICS
+    .disk_cache_lock_wait_ns
     .fetch_add(nanos, Ordering::Relaxed);
 }
 
@@ -3647,6 +3693,17 @@ mod tests {
       stats.resource_cache_bytes >= b"cached".len(),
       "expected resource cache byte counter to include returned cached bytes (got {})",
       stats.resource_cache_bytes
+    );
+    assert_eq!(
+      stats.disk_cache_lock_waits, 0,
+      "expected disk cache hit to avoid lock waits"
+    );
+    assert!(
+      stats.disk_cache_lock_wait_ms.is_finite()
+        && stats.disk_cache_lock_wait_ms >= 0.0
+        && stats.disk_cache_lock_wait_ms <= stats.disk_cache_ms,
+      "expected lock wait ms to be finite and bounded by total disk cache time (got {})",
+      stats.disk_cache_lock_wait_ms
     );
   }
 

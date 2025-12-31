@@ -2848,6 +2848,12 @@ fn resources_summary(resources: &ResourceDiagnostics) -> Option<String> {
   if let Some(bytes) = resources.disk_cache_bytes {
     disk_cache_parts.push(format!("bytes={}", format_bytes(bytes as u64)));
   }
+  if let Some(waits) = resources.disk_cache_lock_waits {
+    disk_cache_parts.push(format!("lock_waits={waits}"));
+  }
+  if let Some(ms) = resources.disk_cache_lock_wait_ms {
+    disk_cache_parts.push(format!("lock_wait={ms:.2}ms"));
+  }
   if let Some(ms) = resources.disk_cache_ms {
     disk_cache_parts.push(format!("ms={ms:.2}ms"));
   }

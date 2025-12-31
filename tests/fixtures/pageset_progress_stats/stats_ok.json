@@ -63,6 +63,8 @@
         "disk_cache_misses": 1,
         "disk_cache_bytes": 67890,
         "disk_cache_ms": 12.34,
+        "disk_cache_lock_waits": 2,
+        "disk_cache_lock_wait_ms": 3.21,
         "network_fetches": 5,
         "network_fetch_bytes": 4242,
         "network_fetch_ms": 67.89,
