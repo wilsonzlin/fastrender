@@ -5169,6 +5169,7 @@ impl FastRender {
     .with_device_pixel_ratio(resolved_viewport.device_pixel_ratio)
     .with_env_overrides();
     let mut media_query_cache = MediaQueryCache::default();
+    record_stage(StageHeartbeat::CssInline);
     let style_set =
       self.collect_document_style_set(&dom_with_state, &media_ctx, &mut media_query_cache)?;
     // Style and accessibility tree construction are deeply recursive. Run them on a larger-stack
@@ -5433,6 +5434,7 @@ impl FastRender {
     let mut media_query_cache = MediaQueryCache::default();
     let style_set = {
       let _span = trace.span("css_parse", "style");
+      record_stage(StageHeartbeat::CssInline);
       self.collect_document_style_set(&dom_with_state, &media_ctx, &mut media_query_cache)?
     };
     let mut stylesheet = style_set.document.clone();
@@ -9062,7 +9064,7 @@ mod tests {
   use base64::Engine;
   use std::collections::{HashMap, HashSet};
   use std::io;
-  use std::sync::Arc;
+  use std::sync::{Arc, Mutex};
 
   #[derive(Clone, Default)]
   struct MapFetcher {
@@ -9189,6 +9191,84 @@ mod tests {
     let mut out = Vec::new();
     helper(styled, id, &mut out);
     out
+  }
+
+  #[test]
+  fn stage_heartbeats_record_css_loading_between_dom_parse_and_cascade() {
+    use crate::render_control::set_stage_listener;
+
+    struct StageListenerGuard;
+
+    impl Drop for StageListenerGuard {
+      fn drop(&mut self) {
+        set_stage_listener(None);
+      }
+    }
+
+    let stages: Arc<Mutex<Vec<StageHeartbeat>>> = Arc::new(Mutex::new(Vec::new()));
+    let thread_id = std::thread::current().id();
+    let stages_for_listener = Arc::clone(&stages);
+    let listener = Arc::new(move |stage: StageHeartbeat| {
+      if std::thread::current().id() != thread_id {
+        return;
+      }
+      stages_for_listener.lock().unwrap().push(stage);
+    });
+    set_stage_listener(Some(listener));
+    let _guard = StageListenerGuard;
+
+    let fetcher = MapFetcher::default()
+      .with_entry("https://example.com/style.css", "body { color: rgb(255, 0, 0); }");
+    let mut renderer = FastRender::builder()
+      .base_url("https://example.com/")
+      .fetcher(Arc::new(fetcher))
+      .build()
+      .unwrap();
+
+    let html = r#"
+      <!doctype html>
+      <html>
+        <head>
+          <link rel="stylesheet" href="style.css">
+        </head>
+        <body>Hello</body>
+      </html>
+    "#;
+    renderer.render_html(html, 10, 10).unwrap();
+    set_stage_listener(None);
+
+    let stages = stages.lock().unwrap().clone();
+    let dom_idx = stages
+      .iter()
+      .position(|stage| *stage == StageHeartbeat::DomParse)
+      .expect(&format!(
+        "expected DomParse stage heartbeat, got: {stages:?}"
+      ));
+    let css_idx = stages
+      .iter()
+      .enumerate()
+      .skip(dom_idx + 1)
+      .find_map(|(idx, stage)| (*stage == StageHeartbeat::CssInline).then_some(idx))
+      .expect(&format!(
+        "expected CssInline stage heartbeat after DomParse, got: {stages:?}"
+      ));
+    let cascade_idx = stages
+      .iter()
+      .enumerate()
+      .skip(css_idx + 1)
+      .find_map(|(idx, stage)| (*stage == StageHeartbeat::Cascade).then_some(idx))
+      .expect(&format!(
+        "expected Cascade stage heartbeat after CssInline, got: {stages:?}"
+      ));
+
+    assert!(
+      dom_idx < css_idx,
+      "expected DomParse stage before CssInline stage, got: {stages:?}"
+    );
+    assert!(
+      css_idx < cascade_idx,
+      "expected CssInline stage before Cascade stage, got: {stages:?}"
+    );
   }
 
   #[test]
