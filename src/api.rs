@@ -3033,6 +3033,34 @@ fn build_image_cache(
   }
 }
 
+struct RuntimeTogglesSwap {
+  target: *mut Arc<RuntimeToggles>,
+  previous: Option<Arc<RuntimeToggles>>,
+}
+
+impl RuntimeTogglesSwap {
+  fn new(target: &mut Arc<RuntimeToggles>, next: Arc<RuntimeToggles>) -> Self {
+    let previous = Some(std::mem::replace(target, next));
+    Self {
+      target: target as *mut _,
+      previous,
+    }
+  }
+}
+
+impl Drop for RuntimeTogglesSwap {
+  fn drop(&mut self) {
+    let Some(previous) = self.previous.take() else {
+      return;
+    };
+    // SAFETY: `target` comes from a mutable reference to a renderer field, and this guard is
+    // scoped to the call site so it is dropped before the renderer can move.
+    unsafe {
+      *self.target = previous;
+    }
+  }
+}
+
 impl FastRender {
   fn resolve_scaled_metrics(&self, style: &ComputedStyle) -> Option<ScaledMetrics> {
     let italic = matches!(style.font_style, crate::style::types::FontStyle::Italic);
@@ -3453,9 +3481,8 @@ impl FastRender {
     stats: Option<&mut RenderStatsRecorder>,
   ) -> Result<RenderOutputs> {
     let toggles = self.resolve_runtime_toggles(&options);
-    let previous_toggles = self.runtime_toggles.clone();
-    self.runtime_toggles = toggles.clone();
-    let result = runtime::with_runtime_toggles(toggles, || {
+    let _toggles_guard = RuntimeTogglesSwap::new(&mut self.runtime_toggles, toggles.clone());
+    runtime::with_runtime_toggles(toggles, || {
       let trace = TraceSession::from_options(Some(&options));
       let trace_handle = trace.handle();
       let _root_span = trace_handle.span("render", "pipeline");
@@ -3471,9 +3498,7 @@ impl FastRender {
       );
       drop(_root_span);
       trace.finalize(result)
-    });
-    self.runtime_toggles = previous_toggles;
-    result
+    })
   }
 
   fn render_html_with_options_internal_with_deadline(
@@ -4604,9 +4629,8 @@ impl FastRender {
     artifacts: RenderArtifactRequest,
   ) -> Result<RenderReport> {
     let toggles = self.resolve_runtime_toggles(&options);
-    let previous_toggles = self.runtime_toggles.clone();
-    self.runtime_toggles = toggles.clone();
-    let result = runtime::with_runtime_toggles(toggles, || {
+    let _toggles_guard = RuntimeTogglesSwap::new(&mut self.runtime_toggles, toggles.clone());
+    runtime::with_runtime_toggles(toggles, || {
       if matches!(options.diagnostics_level, DiagnosticsLevel::None) {
         let env_level = diagnostics_level_from_env();
         if !matches!(env_level, DiagnosticsLevel::None) {
@@ -4698,9 +4722,7 @@ impl FastRender {
       }
       drop(_root_span);
       trace.finalize(result)
-    });
-    self.runtime_toggles = previous_toggles;
-    result
+    })
   }
   /// Generate a debug snapshot of the full rendering pipeline for an HTML string.
   pub fn snapshot_pipeline(
