@@ -1204,7 +1204,12 @@ fn normalize_scheme_slashes(s: &str) -> String {
   format!("{}{}", normalized, suffix)
 }
 
-/// Extract `<link rel="stylesheet">` URLs from an HTML document.
+/// Extract stylesheet candidate `<link>` URLs from an HTML document.
+///
+/// This includes normal `<link rel=stylesheet>` entries, plus the common
+/// preload-as-style pattern (`<link rel=preload as=style>`) when enabled via
+/// `FASTR_FETCH_PRELOAD_STYLESHEETS` (and `modulepreload` behind
+/// `FASTR_FETCH_MODULEPRELOAD_STYLESHEETS`).
 pub fn extract_css_links(
   html: &str,
   base_url: &str,
