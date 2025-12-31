@@ -37,6 +37,7 @@ pip install -r tests/fixtures/fonts/requirements.txt
     Wikipedia-language-list coverage in bundled-font runs.
   - `NotoSansDevanagari-subset.ttf`: Devanagari + Vedic extensions with joiners + combining marks (U+0300–036F).
   - `NotoSansBengali-subset.ttf`: Bengali + joiners + combining marks (U+0300–036F).
+  - `NotoSansJavanese-subset.ttf`: Javanese block (U+A980–A9DF) with joiners + combining marks (U+0300–036F).
   - `NotoSansTamil-subset.ttf`: Tamil (U+0B80–0BFF) plus common punctuation and joiners.
   - `NotoSansThai-subset.ttf`: Thai (U+0E00–0E7F) plus common punctuation and joiners.
   - `NotoSansThaana-subset.ttf`: Thaana (U+0780–07BF) with joiners + combining marks (U+0300–036F).

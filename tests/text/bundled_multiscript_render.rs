@@ -139,6 +139,36 @@ fn bundled_fonts_cover_spacing_modifier_letters() {
 }
 
 #[test]
+fn bundled_fonts_cover_javanese_punctuation_cluster() {
+  let mut pipeline = ShapingPipeline::new();
+  let font_ctx = FontContext::with_config(FontConfig::bundled_only());
+  let db = font_ctx.database();
+  let base = '\u{A9DF}'; // ꧟ JAVANESE PADA ISEN-ISEN
+
+  assert!(
+    db.faces().any(|face| db.has_glyph(face.id, base)),
+    "bundled fonts should contain a glyph for U+A9DF (꧟)"
+  );
+
+  let mut style = ComputedStyle::default();
+  style.font_family = vec!["sans-serif".to_string()];
+  style.font_size = 32.0;
+
+  let text = "\u{A9DF}\u{0333}";
+  let runs = pipeline
+    .shape(text, &style, &font_ctx)
+    .expect("shape javanese punctuation cluster");
+  assert!(!runs.is_empty(), "javanese cluster should produce runs");
+
+  let glyphs: Vec<_> = runs.iter().flat_map(|run| run.glyphs.iter()).collect();
+  assert!(!glyphs.is_empty(), "javanese cluster should produce glyphs");
+  assert!(
+    glyphs.iter().all(|glyph| glyph.glyph_id != 0),
+    "javanese cluster should not shape with .notdef glyphs"
+  );
+}
+
+#[test]
 fn bundled_generics_prefer_bundled_text_fonts() {
   let db = FontDatabase::with_config(&FontConfig::bundled_only());
 
