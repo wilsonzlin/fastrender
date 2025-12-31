@@ -3467,6 +3467,46 @@ fn report(args: ReportArgs) -> io::Result<()> {
         }
         println!();
       }
+
+      let mut disk_lock_sorted: Vec<(&LoadedProgress, f64)> = progresses
+        .iter()
+        .filter_map(|entry| {
+          let stats = entry.stats.as_ref()?;
+          let ms = stats.resources.disk_cache_lock_wait_ms?;
+          if ms <= 0.0 {
+            return None;
+          }
+          Some((entry, ms))
+        })
+        .collect();
+      disk_lock_sorted.sort_by(|(a_entry, a_ms), (b_entry, b_ms)| {
+        b_ms
+          .total_cmp(a_ms)
+          .then_with(|| a_entry.stem.cmp(&b_entry.stem))
+      });
+      let disk_lock_top = args.top.min(disk_lock_sorted.len());
+      if disk_lock_top > 0 {
+        println!(
+          "Top disk cache lock wait time (top {disk_lock_top} of {} with stats):",
+          disk_lock_sorted.len()
+        );
+        for (idx, (entry, ms)) in disk_lock_sorted
+          .iter()
+          .take(disk_lock_top)
+          .enumerate()
+        {
+          let stats = entry.stats.as_ref().expect("stats should be present");
+          let waits = stats.resources.disk_cache_lock_waits.unwrap_or(0);
+          let total_ms = stats.resources.disk_cache_ms.unwrap_or(0.0);
+          println!(
+            "  {}. {} waits={waits} lock_wait={ms:.2}ms total={total_ms:.2}ms url={}",
+            idx + 1,
+            entry.stem,
+            entry.progress.url
+          );
+        }
+        println!();
+      }
     }
   }
 
