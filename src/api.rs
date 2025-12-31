@@ -1912,8 +1912,27 @@ impl RenderStatsRecorder {
   }
 }
 
-fn count_dom_nodes_api(node: &DomNode) -> usize {
-  1 + node.children.iter().map(count_dom_nodes_api).sum::<usize>()
+fn count_dom_nodes_api_with_deadline(node: &DomNode) -> Result<usize> {
+  const DOM_COUNT_DEADLINE_STRIDE: usize = 1024;
+  let mut count = 0usize;
+  let mut stack = vec![node];
+  let mut deadline_counter = 0usize;
+
+  while let Some(current) = stack.pop() {
+    crate::render_control::check_active_periodic(
+      &mut deadline_counter,
+      DOM_COUNT_DEADLINE_STRIDE,
+      RenderStage::DomParse,
+    )
+    .map_err(Error::Render)?;
+
+    count += 1;
+    for child in current.children.iter().rev() {
+      stack.push(child);
+    }
+  }
+
+  Ok(count)
 }
 
 fn count_box_nodes_api(node: &BoxNode) -> usize {
@@ -3699,11 +3718,11 @@ impl FastRender {
     };
     if let Some(rec) = stats.as_deref_mut() {
       RenderStatsRecorder::record_ms(&mut rec.stats.timings.dom_parse_ms, parse_timer);
-      rec.stats.counts.dom_nodes = Some(count_dom_nodes_api(&dom));
+      rec.stats.counts.dom_nodes = Some(count_dom_nodes_api_with_deadline(&dom)?);
     }
     if let Some(store) = artifacts.as_deref_mut() {
       if store.request().dom {
-        store.dom = Some(dom.clone());
+        store.dom = Some(dom::clone_dom_with_deadline(&dom, RenderStage::DomParse)?);
       }
     }
     check_deadline(deadline, RenderStage::DomParse)?;
@@ -5734,6 +5753,7 @@ impl FastRender {
     layout_parallelism: LayoutParallelism,
     mut stats: Option<&mut RenderStatsRecorder>,
   ) -> Result<LayoutArtifacts> {
+    let _deadline_guard = DeadlineGuard::install(deadline);
     let clone_timer = stats.as_deref().and_then(|rec| rec.timer());
     let dom_with_state = dom::clone_dom_with_deadline(dom, RenderStage::DomParse)?;
     if let Some(rec) = stats.as_deref_mut() {
