@@ -570,27 +570,23 @@ fn picture_sources_for(styled: &StyledNode) -> Option<(usize, Vec<PictureSource>
         continue;
       }
 
-      let srcset_attr = match child.node.get_attribute("srcset") {
-        Some(val) => val,
-        None => continue,
+      let Some(srcset_attr) = child.node.get_attribute_ref("srcset") else {
+        continue;
       };
-      let parsed_srcset = parse_srcset(&srcset_attr);
+      let parsed_srcset = parse_srcset(srcset_attr);
       if parsed_srcset.is_empty() {
         continue;
       }
 
-      let sizes = child
-        .node
-        .get_attribute("sizes")
-        .and_then(|s| parse_sizes(&s));
+      let sizes = child.node.get_attribute_ref("sizes").and_then(parse_sizes);
       let media = child
         .node
-        .get_attribute("media")
-        .and_then(|m| MediaQuery::parse_list(&m).ok());
+        .get_attribute_ref("media")
+        .and_then(|m| MediaQuery::parse_list(m).ok());
       let mime_type = child
         .node
-        .get_attribute("type")
-        .and_then(|t| normalize_mime_type(&t));
+        .get_attribute_ref("type")
+        .and_then(normalize_mime_type);
 
       sources.push(PictureSource {
         srcset: parsed_srcset,
