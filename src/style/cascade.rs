@@ -76,7 +76,7 @@ use crate::style::Direction;
 use crate::style::TopLayerKind;
 use crate::{error::RenderError, error::RenderStage};
 use cssparser::ToCss;
-use rustc_hash::{FxHashSet, FxHasher};
+use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use selectors::context::IncludeStartingStyle;
 use selectors::context::QuirksMode;
 use selectors::context::SelectorCaches;
@@ -1917,6 +1917,7 @@ struct CascadeScratch {
   part_candidates: Vec<usize>,
   part_seen: CandidateSet,
   scope_cache: ScopeResolutionCache,
+  presentational_hint_layer_orders: FxHashMap<u32, Arc<[u32]>>,
 }
 
 impl CascadeScratch {
@@ -1931,7 +1932,22 @@ impl CascadeScratch {
       part_candidates: Vec::new(),
       part_seen: CandidateSet::new(rule_count),
       scope_cache: ScopeResolutionCache::default(),
+      presentational_hint_layer_orders: FxHashMap::default(),
     }
+  }
+
+  fn presentational_hint_layer_order(&mut self, tree_scope_prefix: u32) -> Arc<[u32]> {
+    if tree_scope_prefix == DOCUMENT_TREE_SCOPE_PREFIX {
+      return unprefixed_unlayered_layer_order();
+    }
+    if let Some(hit) = self.presentational_hint_layer_orders.get(&tree_scope_prefix) {
+      return hit.clone();
+    }
+    let layer_order: Arc<[u32]> = Arc::from(vec![tree_scope_prefix]);
+    self
+      .presentational_hint_layer_orders
+      .insert(tree_scope_prefix, layer_order.clone());
+    layer_order
   }
 }
 
@@ -4922,12 +4938,14 @@ fn append_presentational_hints<'a>(
   node: &DomNode,
   ancestors: &[&DomNode],
   parent_direction: Direction,
+  tree_scope_prefix: u32,
+  scratch: &mut CascadeScratch,
   matching_rules: &mut Vec<MatchedRule<'a>>,
 ) {
-  // Preserve legacy cascade behavior: presentational hints use an unlayered sentinel without the
-  // tree-scope prefix so they remain strictly below authored stylesheet rules within the same
-  // origin.
-  let layer_order = unprefixed_unlayered_layer_order();
+  // Presentational hints behave like an author rule that sits below any stylesheet/inline rule in
+  // the same tree scope. Represent them with a "tree-scope-only" layer order sentinel so they sort
+  // below prefixed layer vectors (which always include at least one additional layer component).
+  let layer_order = scratch.presentational_hint_layer_order(tree_scope_prefix);
   if let Some(presentational_rule) =
     dir_presentational_hint(node, parent_direction, &layer_order, 0)
   {
@@ -5831,6 +5849,8 @@ fn compute_base_styles<'a>(
     node,
     ancestors,
     parent_styles.direction,
+    inline_tree_scope,
+    scratch,
     &mut matching_rules,
   );
   let inline_decls = node
@@ -10472,6 +10492,42 @@ slot[name=\"s\"]::slotted(.assigned) { color: rgb(4, 5, 6); }"
     let styled = apply_styles(&dom, &StyleSheet::new());
     assert!(matches!(
       styled.styles.text_align,
+      crate::style::types::TextAlign::Left
+    ));
+  }
+
+  #[test]
+  fn inline_styles_override_presentational_hints_in_shadow_trees() {
+    let dom = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![],
+      },
+      children: vec![DomNode {
+        node_type: DomNodeType::ShadowRoot {
+          mode: crate::dom::ShadowRootMode::Open,
+          delegates_focus: false,
+        },
+        children: vec![DomNode {
+          node_type: DomNodeType::Element {
+            tag_name: "div".to_string(),
+            namespace: HTML_NAMESPACE.to_string(),
+            attributes: vec![
+              ("align".to_string(), "center".to_string()),
+              ("style".to_string(), "text-align: left;".to_string()),
+            ],
+          },
+          children: vec![],
+        }],
+      }],
+    };
+
+    let styled = apply_styles(&dom, &StyleSheet::new());
+    let shadow_root = styled.children.first().expect("shadow root");
+    let inner = shadow_root.children.first().expect("inner element");
+    assert!(matches!(
+      inner.styles.text_align,
       crate::style::types::TextAlign::Left
     ));
   }
