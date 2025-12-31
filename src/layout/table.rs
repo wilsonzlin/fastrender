@@ -84,7 +84,7 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 fn check_layout_deadline(counter: &mut usize) -> Result<(), LayoutError> {
   if let Err(RenderError::Timeout { elapsed, .. }) =
@@ -1219,12 +1219,178 @@ struct StyleOverrideKey {
   flags: StyleOverrideFlags,
 }
 
-#[derive(Default)]
 struct StyleOverrideCache {
-  cache: Mutex<HashMap<StyleOverrideKey, Arc<ComputedStyle>>>,
+  cache: HashMap<StyleOverrideKey, Arc<ComputedStyle>>,
+  expect_precomputed: bool,
+  #[cfg(debug_assertions)]
+  profile: StyleOverrideCacheProfile,
+}
+
+#[cfg(debug_assertions)]
+struct StyleOverrideCacheProfile {
+  enabled: bool,
+  context: &'static str,
+  table_id: usize,
+  hits: std::sync::atomic::AtomicU64,
+  misses: std::sync::atomic::AtomicU64,
+}
+
+#[cfg(debug_assertions)]
+impl StyleOverrideCacheProfile {
+  fn new(context: &'static str, table_id: usize) -> Self {
+    let enabled = runtime::runtime_toggles().truthy("FASTR_PROFILE_TABLE_STYLE_OVERRIDES");
+    Self {
+      enabled,
+      context,
+      table_id,
+      hits: std::sync::atomic::AtomicU64::new(0),
+      misses: std::sync::atomic::AtomicU64::new(0),
+    }
+  }
+
+  #[inline]
+  fn record_hit(&self) {
+    if self.enabled {
+      self.hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+  }
+
+  #[inline]
+  fn record_miss(&self) {
+    if self.enabled {
+      self
+        .misses
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+  }
+}
+
+#[cfg(debug_assertions)]
+impl Drop for StyleOverrideCache {
+  fn drop(&mut self) {
+    if !self.profile.enabled {
+      return;
+    }
+    let hits = self.profile.hits.load(std::sync::atomic::Ordering::Relaxed);
+    let misses = self
+      .profile
+      .misses
+      .load(std::sync::atomic::Ordering::Relaxed);
+    eprintln!(
+      "table style overrides: context={} table_id={} style_override_derive_hits={} style_override_derive_misses={} entries={} (FASTR_PROFILE_TABLE_STYLE_OVERRIDES=1)",
+      self.profile.context,
+      self.profile.table_id,
+      hits,
+      misses,
+      self.cache.len(),
+    );
+  }
 }
 
 impl StyleOverrideCache {
+  fn empty(_context: &'static str, _table_id: usize) -> Self {
+    Self {
+      cache: HashMap::new(),
+      expect_precomputed: false,
+      #[cfg(debug_assertions)]
+      profile: StyleOverrideCacheProfile::new(_context, _table_id),
+    }
+  }
+
+  fn for_table_layout(
+    context: &'static str,
+    table_id: usize,
+    source_rows: &[&BoxNode],
+    structure: &TableStructure,
+    mode: DistributionMode,
+  ) -> Self {
+    Self::build(
+      context,
+      table_id,
+      source_rows,
+      structure,
+      mode == DistributionMode::Auto,
+      true,
+    )
+  }
+
+  fn for_intrinsic_measurement(
+    context: &'static str,
+    table_id: usize,
+    table_box: &BoxNode,
+    structure: &TableStructure,
+    mode: DistributionMode,
+  ) -> Self {
+    if mode != DistributionMode::Auto || structure.cells.is_empty() {
+      return Self::empty(context, table_id);
+    }
+    let source_rows = collect_source_rows(table_box);
+    Self::build(context, table_id, &source_rows, structure, true, false)
+  }
+
+  fn build(
+    context: &'static str,
+    table_id: usize,
+    source_rows: &[&BoxNode],
+    structure: &TableStructure,
+    include_intrinsic: bool,
+    include_layout: bool,
+  ) -> Self {
+    if !include_intrinsic && !include_layout {
+      return Self::empty(context, table_id);
+    }
+
+    let mut cache: HashMap<StyleOverrideKey, Arc<ComputedStyle>> = HashMap::new();
+
+    let mut layout_flags = StyleOverrideFlags::LAYOUT_CLEAR_WIDTHS_AND_MARGINS;
+    if include_layout && structure.border_collapse == BorderCollapse::Collapse {
+      layout_flags |= StyleOverrideFlags::COLLAPSE_ZERO_BORDERS;
+    }
+
+    for cell in &structure.cells {
+      let Some(row) = source_rows.get(cell.source_row) else {
+        continue;
+      };
+      let Some(cell_box) = row.children.get(cell.box_index) else {
+        continue;
+      };
+      let base = &cell_box.style;
+      let base_ptr = Arc::as_ptr(base) as usize;
+
+      let mut insert_override = |flags: StyleOverrideFlags| {
+        if flags.is_empty() {
+          return;
+        }
+        let key = StyleOverrideKey { base_ptr, flags };
+        cache
+          .entry(key)
+          .or_insert_with(|| Arc::new(apply_style_overrides(base, flags)));
+      };
+
+      if include_intrinsic {
+        insert_override(StyleOverrideFlags::STRIP_PADDING_BORDERS);
+      }
+
+      if include_layout {
+        insert_override(layout_flags);
+        if structure.border_collapse == BorderCollapse::Separate
+          && base.empty_cells == EmptyCells::Hide
+        {
+          insert_override(
+            layout_flags | StyleOverrideFlags::HIDE_EMPTY_RESET_BG_AND_TRANSPARENT_BORDERS,
+          );
+        }
+      }
+    }
+
+    Self {
+      cache,
+      expect_precomputed: true,
+      #[cfg(debug_assertions)]
+      profile: StyleOverrideCacheProfile::new(context, table_id),
+    }
+  }
+
   fn derive(&self, base: &Arc<ComputedStyle>, flags: StyleOverrideFlags) -> Arc<ComputedStyle> {
     if flags.is_empty() {
       debug_assert_eq!(flags, StyleOverrideFlags::NONE);
@@ -1234,16 +1400,32 @@ impl StyleOverrideCache {
       base_ptr: Arc::as_ptr(base) as usize,
       flags,
     };
-    {
-      let cache = self.cache.lock().expect("override cache poisoned");
-      if let Some(hit) = cache.get(&key) {
-        return hit.clone();
-      }
+    if let Some(hit) = self.cache.get(&key) {
+      #[cfg(debug_assertions)]
+      self.profile.record_hit();
+      return hit.clone();
     }
 
-    let derived = Arc::new(apply_style_overrides(base, flags));
-    let mut cache = self.cache.lock().expect("override cache poisoned");
-    cache.entry(key).or_insert_with(|| derived.clone()).clone()
+    // This should be unreachable once call sites precompute the needed override keys.
+    // Keep the fallback for correctness in case new call paths are added without updating
+    // the precompute logic.
+    #[cfg(debug_assertions)]
+    self.profile.record_miss();
+    #[cfg(debug_assertions)]
+    if self.expect_precomputed {
+      debug_assert!(
+        false,
+        "missing precomputed table cell style override: base_ptr={:#x} flags={:?}",
+        key.base_ptr, key.flags
+      );
+    }
+    Arc::new(apply_style_overrides(base, flags))
+  }
+}
+
+impl Default for StyleOverrideCache {
+  fn default() -> Self {
+    Self::empty("default", 0)
   }
 }
 
@@ -4746,7 +4928,6 @@ impl FormattingContext for TableFormattingContext {
     let has_running_children = !running_children.is_empty();
 
     let structure = table_structure_cached(table_box);
-    let style_override_cache = StyleOverrideCache::default();
     if dump {
       let cw = match constraints.available_width {
         AvailableSpace::Definite(w) => format!("{:.2}", w),
@@ -5116,6 +5297,8 @@ impl FormattingContext for TableFormattingContext {
     } else {
       DistributionMode::Auto
     };
+    let style_override_cache =
+      StyleOverrideCache::for_table_layout("layout", table_box.id, &source_rows, &structure, mode);
     let spacing = structure.total_horizontal_spacing();
     let edge_consumption = padding_h
       + if structure.border_collapse == BorderCollapse::Collapse {
@@ -6547,7 +6730,13 @@ impl FormattingContext for TableFormattingContext {
     } else {
       DistributionMode::Auto
     };
-    let style_override_cache = StyleOverrideCache::default();
+    let style_override_cache = StyleOverrideCache::for_intrinsic_measurement(
+      "intrinsic",
+      table_box.id,
+      table_box,
+      &structure,
+      distribution_mode,
+    );
     let mut column_constraints = self.column_constraints_cached(
       table_box,
       &structure,
@@ -7812,13 +8001,20 @@ mod tests {
       .map(|_| ColumnConstraints::new(0.0, 0.0))
       .collect();
     let tfc = TableFormattingContext::new();
+    let style_overrides = StyleOverrideCache::for_intrinsic_measurement(
+      "test_intrinsic",
+      table.id,
+      &table,
+      &structure,
+      DistributionMode::Auto,
+    );
     tfc.populate_column_constraints(
       &table,
       &structure,
       &mut constraints,
       DistributionMode::Auto,
       None,
-      &StyleOverrideCache::default(),
+      &style_overrides,
     );
 
     assert!(
@@ -7880,13 +8076,20 @@ mod tests {
       .map(|_| ColumnConstraints::new(0.0, 0.0))
       .collect();
     let tfc = TableFormattingContext::new();
+    let style_overrides = StyleOverrideCache::for_intrinsic_measurement(
+      "test_intrinsic",
+      table.id,
+      &table,
+      &structure,
+      DistributionMode::Auto,
+    );
     tfc.populate_column_constraints(
       &table,
       &structure,
       &mut constraints,
       DistributionMode::Auto,
       None,
-      &StyleOverrideCache::default(),
+      &style_overrides,
     );
 
     let total_min: f32 = constraints.iter().map(|c| c.min_width).sum();
@@ -7949,7 +8152,13 @@ mod tests {
       .map(|_| ColumnConstraints::new(0.0, 0.0))
       .collect();
     let tfc = TableFormattingContext::new();
-    let style_overrides = StyleOverrideCache::default();
+    let style_overrides = StyleOverrideCache::for_intrinsic_measurement(
+      "test_intrinsic",
+      table.id,
+      &table,
+      &structure,
+      DistributionMode::Auto,
+    );
     let source_rows = collect_source_rows(&table);
     let cell_bfc = BlockFormattingContext::with_font_context_and_viewport(
       tfc.factory.font_context().clone(),
@@ -8036,13 +8245,20 @@ mod tests {
       .map(|_| ColumnConstraints::new(0.0, 0.0))
       .collect();
     let tfc = TableFormattingContext::new();
+    let style_overrides = StyleOverrideCache::for_intrinsic_measurement(
+      "test_intrinsic",
+      table.id,
+      &table,
+      &structure,
+      DistributionMode::Auto,
+    );
     tfc.populate_column_constraints(
       &table,
       &structure,
       &mut constraints,
       DistributionMode::Auto,
       None,
-      &StyleOverrideCache::default(),
+      &style_overrides,
     );
 
     let min = constraints.first().map(|c| c.min_width).unwrap_or(0.0);
@@ -8084,13 +8300,20 @@ mod tests {
       .map(|_| ColumnConstraints::new(0.0, 0.0))
       .collect();
     let tfc = TableFormattingContext::new();
+    let style_overrides = StyleOverrideCache::for_intrinsic_measurement(
+      "test_intrinsic",
+      table.id,
+      &table,
+      &structure,
+      DistributionMode::Auto,
+    );
     tfc.populate_column_constraints(
       &table,
       &structure,
       &mut constraints,
       DistributionMode::Auto,
       Some(200.0),
-      &StyleOverrideCache::default(),
+      &style_overrides,
     );
 
     let min = constraints.first().map(|c| c.min_width).unwrap_or(0.0);
@@ -8131,13 +8354,20 @@ mod tests {
       .map(|_| ColumnConstraints::new(0.0, 0.0))
       .collect();
     let tfc = TableFormattingContext::new();
+    let style_overrides = StyleOverrideCache::for_intrinsic_measurement(
+      "test_intrinsic",
+      table.id,
+      &table,
+      &structure,
+      DistributionMode::Auto,
+    );
     tfc.populate_column_constraints(
       &table,
       &structure,
       &mut constraints,
       DistributionMode::Auto,
       None,
-      &StyleOverrideCache::default(),
+      &style_overrides,
     );
 
     let min = constraints.first().map(|c| c.min_width).unwrap_or(0.0);
@@ -8240,7 +8470,13 @@ mod tests {
     let mut constraints: Vec<ColumnConstraints> = (0..structure.column_count)
       .map(|_| ColumnConstraints::new(0.0, 0.0))
       .collect();
-    let style_overrides = StyleOverrideCache::default();
+    let style_overrides = StyleOverrideCache::for_intrinsic_measurement(
+      "test_intrinsic",
+      table.id,
+      &table,
+      &structure,
+      DistributionMode::Auto,
+    );
     let tfc = TableFormattingContext::new();
     tfc.populate_column_constraints(
       &table,
@@ -8310,13 +8546,20 @@ mod tests {
       .map(|_| ColumnConstraints::new(0.0, 0.0))
       .collect();
     let tfc = TableFormattingContext::new();
+    let style_overrides = StyleOverrideCache::for_intrinsic_measurement(
+      "test_intrinsic",
+      table.id,
+      &table,
+      &structure,
+      DistributionMode::Auto,
+    );
     tfc.populate_column_constraints(
       &table,
       &structure,
       &mut constraints,
       DistributionMode::Auto,
       None,
-      &StyleOverrideCache::default(),
+      &style_overrides,
     );
 
     let constraint = constraints
@@ -8368,13 +8611,20 @@ mod tests {
       .map(|_| ColumnConstraints::new(0.0, 0.0))
       .collect();
     let tfc = TableFormattingContext::new();
+    let style_overrides = StyleOverrideCache::for_intrinsic_measurement(
+      "test_intrinsic",
+      table.id,
+      &table,
+      &structure,
+      DistributionMode::Auto,
+    );
     tfc.populate_column_constraints(
       &table,
       &structure,
       &mut constraints,
       DistributionMode::Auto,
       None,
-      &StyleOverrideCache::default(),
+      &style_overrides,
     );
 
     let min = constraints.first().map(|c| c.min_width).unwrap_or(0.0);
@@ -8428,13 +8678,20 @@ mod tests {
       .map(|_| ColumnConstraints::new(0.0, 0.0))
       .collect();
     let tfc = TableFormattingContext::new();
+    let style_overrides = StyleOverrideCache::for_intrinsic_measurement(
+      "test_intrinsic",
+      table.id,
+      &table,
+      &structure,
+      DistributionMode::Auto,
+    );
     tfc.populate_column_constraints(
       &table,
       &structure,
       &mut constraints,
       DistributionMode::Auto,
       None,
-      &StyleOverrideCache::default(),
+      &style_overrides,
     );
 
     let constraint = constraints
@@ -8487,13 +8744,20 @@ mod tests {
       .map(|_| ColumnConstraints::new(0.0, 0.0))
       .collect();
     let tfc = TableFormattingContext::new();
+    let style_overrides = StyleOverrideCache::for_intrinsic_measurement(
+      "test_intrinsic",
+      table.id,
+      &table,
+      &structure,
+      DistributionMode::Auto,
+    );
     tfc.populate_column_constraints(
       &table,
       &structure,
       &mut constraints,
       DistributionMode::Auto,
       Some(200.0),
-      &StyleOverrideCache::default(),
+      &style_overrides,
     );
 
     let min = constraints.first().map(|c| c.min_width).unwrap_or(0.0);
@@ -8538,13 +8802,20 @@ mod tests {
       .collect();
     let tfc = TableFormattingContext::new();
     // percent_base None to mimic auto table width
+    let style_overrides = StyleOverrideCache::for_intrinsic_measurement(
+      "test_intrinsic",
+      table.id,
+      &table,
+      &structure,
+      DistributionMode::Auto,
+    );
     tfc.populate_column_constraints(
       &table,
       &structure,
       &mut constraints,
       DistributionMode::Auto,
       None,
-      &StyleOverrideCache::default(),
+      &style_overrides,
     );
 
     let min = constraints.first().map(|c| c.min_width).unwrap_or(0.0);
@@ -8587,13 +8858,20 @@ mod tests {
       .map(|_| ColumnConstraints::new(0.0, 0.0))
       .collect();
     let tfc = TableFormattingContext::new();
+    let style_overrides = StyleOverrideCache::for_intrinsic_measurement(
+      "test_intrinsic",
+      table.id,
+      &table,
+      &structure,
+      DistributionMode::Auto,
+    );
     tfc.populate_column_constraints(
       &table,
       &structure,
       &mut constraints,
       DistributionMode::Auto,
       Some(200.0),
-      &StyleOverrideCache::default(),
+      &style_overrides,
     );
 
     let col = constraints.first().expect("column constraints");
@@ -8640,13 +8918,20 @@ mod tests {
       .map(|_| ColumnConstraints::new(0.0, 0.0))
       .collect();
     let tfc = TableFormattingContext::new();
+    let style_overrides = StyleOverrideCache::for_intrinsic_measurement(
+      "test_intrinsic",
+      table.id,
+      &table,
+      &structure,
+      DistributionMode::Auto,
+    );
     tfc.populate_column_constraints(
       &table,
       &structure,
       &mut constraints,
       DistributionMode::Auto,
       None,
-      &StyleOverrideCache::default(),
+      &style_overrides,
     );
 
     let col = constraints.first().expect("column constraints");
@@ -9463,13 +9748,20 @@ mod tests {
       .map(|_| ColumnConstraints::new(0.0, 0.0))
       .collect();
     let tfc = TableFormattingContext::new();
+    let style_overrides = StyleOverrideCache::for_intrinsic_measurement(
+      "test_intrinsic",
+      table.id,
+      &table,
+      &structure,
+      DistributionMode::Auto,
+    );
     tfc.populate_column_constraints(
       &table,
       &structure,
       &mut constraints,
       DistributionMode::Auto,
       None,
-      &StyleOverrideCache::default(),
+      &style_overrides,
     );
 
     assert_eq!(constraints.len(), 1);
@@ -9877,13 +10169,20 @@ mod tests {
     let spacing = structure.total_horizontal_spacing();
     let edge_consumption = 0.0;
     let available_content = (200.0 - spacing - edge_consumption).max(0.0);
+    let style_overrides = StyleOverrideCache::for_intrinsic_measurement(
+      "test_intrinsic",
+      table.id,
+      &table,
+      &structure,
+      DistributionMode::Fixed,
+    );
     tfc.populate_column_constraints(
       &table,
       &structure,
       &mut column_constraints,
       DistributionMode::Fixed,
       Some(available_content),
-      &StyleOverrideCache::default(),
+      &style_overrides,
     );
     let distribution = ColumnDistributor::new(DistributionMode::Fixed)
       .distribute(&column_constraints, available_content);
@@ -13275,13 +13574,20 @@ mod tests {
     let structure = TableStructure::from_box_tree(&table);
     let mut constraints = vec![ColumnConstraints::new(0.0, 0.0); structure.column_count];
     let percent_base = Some(200.0);
+    let style_overrides = StyleOverrideCache::for_intrinsic_measurement(
+      "test_intrinsic",
+      table.id,
+      &table,
+      &structure,
+      DistributionMode::Auto,
+    );
     tfc.populate_column_constraints(
       &table,
       &structure,
       &mut constraints,
       DistributionMode::Auto,
       percent_base,
-      &StyleOverrideCache::default(),
+      &style_overrides,
     );
     tfc.normalize_percentage_constraints(&mut constraints, percent_base);
 
