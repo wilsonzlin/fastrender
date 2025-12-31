@@ -15353,7 +15353,12 @@ fn list_type_presentational_hint(
   } else {
     None
   }?;
-  let declarations = parse_declarations(&format!("list-style-type: {};", mapped));
+  let declarations = vec![Declaration {
+    property: "list-style-type".to_string(),
+    value: PropertyValue::Keyword(mapped.to_string()),
+    raw_value: String::new(),
+    important: false,
+  }];
   Some(MatchedRule {
     origin: StyleOrigin::Author,
     specificity: 0,
@@ -15406,7 +15411,7 @@ fn alignment_presentational_hint(
     return None;
   }
 
-  let mut declarations = String::new();
+  let mut declarations: Vec<Declaration> = Vec::new();
 
   if let Some(align) = align {
     if let Some(mapped) = map_align(align) {
@@ -15422,14 +15427,57 @@ fn alignment_presentational_hint(
         || tag.eq_ignore_ascii_case("h5")
         || tag.eq_ignore_ascii_case("h6")
       {
-        use std::fmt::Write;
-        let _ = writeln!(declarations, "text-align: {};", mapped);
+        declarations.push(Declaration {
+          property: "text-align".to_string(),
+          value: PropertyValue::Keyword(mapped.to_string()),
+          raw_value: String::new(),
+          important: false,
+        });
       }
       if tag.eq_ignore_ascii_case("table") {
         match mapped {
-          "center" => declarations.push_str("margin-left: auto; margin-right: auto;"),
-          "right" => declarations.push_str("margin-left: auto; margin-right: 0;"),
-          "left" => declarations.push_str("margin-left: 0; margin-right: auto;"),
+          "center" => {
+            declarations.push(Declaration {
+              property: "margin-left".to_string(),
+              value: PropertyValue::Keyword("auto".to_string()),
+              raw_value: String::new(),
+              important: false,
+            });
+            declarations.push(Declaration {
+              property: "margin-right".to_string(),
+              value: PropertyValue::Keyword("auto".to_string()),
+              raw_value: String::new(),
+              important: false,
+            });
+          }
+          "right" => {
+            declarations.push(Declaration {
+              property: "margin-left".to_string(),
+              value: PropertyValue::Keyword("auto".to_string()),
+              raw_value: String::new(),
+              important: false,
+            });
+            declarations.push(Declaration {
+              property: "margin-right".to_string(),
+              value: PropertyValue::Length(Length::px(0.0)),
+              raw_value: String::new(),
+              important: false,
+            });
+          }
+          "left" => {
+            declarations.push(Declaration {
+              property: "margin-left".to_string(),
+              value: PropertyValue::Length(Length::px(0.0)),
+              raw_value: String::new(),
+              important: false,
+            });
+            declarations.push(Declaration {
+              property: "margin-right".to_string(),
+              value: PropertyValue::Keyword("auto".to_string()),
+              raw_value: String::new(),
+              important: false,
+            });
+          }
           _ => {}
         }
       }
@@ -15439,8 +15487,12 @@ fn alignment_presentational_hint(
   if is_cell {
     if let Some(valign) = valign {
       if let Some(mapped) = map_valign(valign) {
-        use std::fmt::Write;
-        let _ = write!(declarations, "vertical-align: {};", mapped);
+        declarations.push(Declaration {
+          property: "vertical-align".to_string(),
+          value: PropertyValue::Keyword(mapped.to_string()),
+          raw_value: String::new(),
+          important: false,
+        });
       }
     }
   }
@@ -15454,7 +15506,7 @@ fn alignment_presentational_hint(
     specificity: 0,
     order,
     layer_order: layer_order.clone(),
-    declarations: Cow::Owned(parse_declarations(&declarations)),
+    declarations: Cow::Owned(declarations),
     starting_style: false,
   })
 }
@@ -15475,14 +15527,22 @@ fn dimension_presentational_hint(
     return None;
   }
 
-  let mut css = String::new();
+  let mut declarations = Vec::with_capacity(width.is_some() as usize + height.is_some() as usize);
   if let Some(w) = width {
-    use std::fmt::Write;
-    let _ = write!(css, "width: {};", w);
+    declarations.push(Declaration {
+      property: "width".to_string(),
+      value: PropertyValue::Length(w),
+      raw_value: String::new(),
+      important: false,
+    });
   }
   if let Some(h) = height {
-    use std::fmt::Write;
-    let _ = write!(css, "height: {};", h);
+    declarations.push(Declaration {
+      property: "height".to_string(),
+      value: PropertyValue::Length(h),
+      raw_value: String::new(),
+      important: false,
+    });
   }
 
   Some(MatchedRule {
@@ -15490,7 +15550,7 @@ fn dimension_presentational_hint(
     specificity: 0,
     order,
     layer_order: layer_order.clone(),
-    declarations: Cow::Owned(parse_declarations(&css)),
+    declarations: Cow::Owned(declarations),
     starting_style: false,
   })
 }
@@ -15503,13 +15563,18 @@ fn bgcolor_presentational_hint(
   let color = node
     .get_attribute_ref("bgcolor")
     .and_then(parse_color_attribute)?;
-  let css = format!("background-color: {};", color);
+  let declarations = vec![Declaration {
+    property: "background-color".to_string(),
+    value: PropertyValue::Color(Color::Rgba(color)),
+    raw_value: String::new(),
+    important: false,
+  }];
   Some(MatchedRule {
     origin: StyleOrigin::Author,
     specificity: 0,
     order,
     layer_order: layer_order.clone(),
-    declarations: Cow::Owned(parse_declarations(&css)),
+    declarations: Cow::Owned(declarations),
     starting_style: false,
   })
 }
@@ -15522,13 +15587,18 @@ fn bordercolor_presentational_hint(
   let color = node
     .get_attribute_ref("bordercolor")
     .and_then(parse_color_attribute)?;
-  let css = format!("border-color: {};", color);
+  let declarations = vec![Declaration {
+    property: "border-color".to_string(),
+    value: PropertyValue::Color(Color::Rgba(color)),
+    raw_value: String::new(),
+    important: false,
+  }];
   Some(MatchedRule {
     origin: StyleOrigin::Author,
     specificity: 0,
     order,
     layer_order: layer_order.clone(),
-    declarations: Cow::Owned(parse_declarations(&css)),
+    declarations: Cow::Owned(declarations),
     starting_style: false,
   })
 }
@@ -15635,13 +15705,18 @@ fn cellspacing_presentational_hint(
   }
   let spacing = node.get_attribute_ref("cellspacing")?;
   let length = parse_dimension_attribute(spacing)?;
-  let css = format!("border-spacing: {} {};", length, length);
+  let declarations = vec![Declaration {
+    property: "border-spacing".to_string(),
+    value: PropertyValue::Length(length),
+    raw_value: String::new(),
+    important: false,
+  }];
   Some(MatchedRule {
     origin: StyleOrigin::Author,
     specificity: 0,
     order,
     layer_order: layer_order.clone(),
-    declarations: Cow::Owned(parse_declarations(&css)),
+    declarations: Cow::Owned(declarations),
     starting_style: false,
   })
 }
@@ -15679,13 +15754,18 @@ fn cellpadding_presentational_hint(
     return None;
   }
   let padding = find_cellpadding(ancestors, node)?;
-  let css = format!("padding: {};", padding);
+  let declarations = vec![Declaration {
+    property: "padding".to_string(),
+    value: PropertyValue::Length(padding),
+    raw_value: String::new(),
+    important: false,
+  }];
   Some(MatchedRule {
     origin: StyleOrigin::Author,
     specificity: 0,
     order,
     layer_order: layer_order.clone(),
-    declarations: Cow::Owned(parse_declarations(&css)),
+    declarations: Cow::Owned(declarations),
     starting_style: false,
   })
 }
@@ -15750,9 +15830,9 @@ fn replaced_alignment_presentational_hint(
   let align = node.get_attribute_ref("align")?;
   let align = align.trim();
   let float = if align.eq_ignore_ascii_case("left") {
-    Some("float: left;")
+    Some("left")
   } else if align.eq_ignore_ascii_case("right") {
-    Some("float: right;")
+    Some("right")
   } else {
     None
   };
@@ -15761,17 +15841,22 @@ fn replaced_alignment_presentational_hint(
     return None;
   }
 
-  let mut declarations = String::new();
+  let mut declarations = Vec::with_capacity(float.is_some() as usize + valign.is_some() as usize);
   if let Some(float) = float {
-    declarations.push_str(float);
+    declarations.push(Declaration {
+      property: "float".to_string(),
+      value: PropertyValue::Keyword(float.to_string()),
+      raw_value: String::new(),
+      important: false,
+    });
   }
   if let Some(valign) = valign {
-    use std::fmt::Write;
-    let _ = writeln!(declarations, "vertical-align: {};", valign);
-  }
-
-  if declarations.is_empty() {
-    return None;
+    declarations.push(Declaration {
+      property: "vertical-align".to_string(),
+      value: PropertyValue::Keyword(valign.to_string()),
+      raw_value: String::new(),
+      important: false,
+    });
   }
 
   Some(MatchedRule {
@@ -15779,7 +15864,7 @@ fn replaced_alignment_presentational_hint(
     specificity: 0,
     order,
     layer_order: layer_order.clone(),
-    declarations: Cow::Owned(parse_declarations(&declarations)),
+    declarations: Cow::Owned(declarations),
     starting_style: false,
   })
 }
