@@ -1720,16 +1720,21 @@ fn assign_fonts_internal(
           emoji_pref,
         );
 
-        if resolved.is_none() {
-          let mut coverage_chars_required: Vec<char> = coverage_chars_all
-            .iter()
-            .copied()
-            .filter(|c| !is_unicode_mark(*c))
-            .collect();
-          if coverage_chars_required.is_empty() {
-            coverage_chars_required.push(base_char);
-          }
-          if coverage_chars_required.len() != coverage_chars_all.len() {
+        let mut coverage_chars_required: Vec<char> = coverage_chars_all
+          .iter()
+          .copied()
+          .filter(|c| !is_unicode_mark(*c))
+          .collect();
+        if coverage_chars_required.is_empty() {
+          coverage_chars_required.push(base_char);
+        }
+
+        if coverage_chars_required.len() != coverage_chars_all.len() {
+          let needs_retry = match resolved.as_ref() {
+            Some(font) => !font_supports_all_chars(font, &coverage_chars_all),
+            None => true,
+          };
+          if needs_retry {
             resolved = resolve_font_for_cluster(
               base_char,
               run.script,
@@ -2475,6 +2480,13 @@ fn resolve_font_for_char(
         {
           return Some(font);
         }
+        if let Some(font) =
+          font_context.match_web_font_for_family(family, weight, style, stretch, oblique_angle)
+        {
+          let is_emoji_font = font_is_emoji_font(db, None, &font);
+          let idx = picker.bump_order();
+          picker.record_any(&font, is_emoji_font, idx);
+        }
         for stretch_choice in &stretch_preferences {
           for slope in slope_preferences {
             for weight_choice in &weight_preferences {
@@ -2506,6 +2518,13 @@ fn resolve_font_for_char(
         font_context.match_web_font_for_char(name, weight, style, stretch, oblique_angle, ch)
       {
         return Some(font);
+      }
+      if let Some(font) =
+        font_context.match_web_font_for_family(name, weight, style, stretch, oblique_angle)
+      {
+        let is_emoji_font = font_is_emoji_font(db, None, &font);
+        let idx = picker.bump_order();
+        picker.record_any(&font, is_emoji_font, idx);
       }
       if font_context.is_web_family_declared(name) {
         continue;
@@ -2671,22 +2690,19 @@ fn resolve_font_for_cluster(
   for entry in families {
     if let FamilyEntry::Generic(crate::text::font_db::GenericFamily::Math) = entry {
       for family in &math_families {
-        if let Some(font) = font_context.match_web_font_for_char(
-          family,
-          weight,
-          style,
-          stretch,
-          oblique_angle,
-          base_char,
-        ) {
+        let web_font = font_context
+          .match_web_font_for_char(family, weight, style, stretch, oblique_angle, base_char)
+          .or_else(|| {
+            font_context.match_web_font_for_family(family, weight, style, stretch, oblique_angle)
+          });
+        if let Some(font) = web_font {
           let is_emoji_font = font_is_emoji_font(db, None, &font);
           let idx = picker.bump_order();
-          if !require_base_glyph || font_supports_all_chars(&font, &[base_char]) {
-            picker.record_any(&font, is_emoji_font, idx);
-            if font_supports_all_chars(&font, &needed) {
-              if let Some(font) = picker.consider(font, is_emoji_font, idx) {
-                return Some(font);
-              }
+          picker.record_any(&font, is_emoji_font, idx);
+          let base_ok = !require_base_glyph || font_supports_all_chars(&font, &[base_char]);
+          if base_ok && font_supports_all_chars(&font, &needed) {
+            if let Some(font) = picker.consider(font, is_emoji_font, idx) {
+              return Some(font);
             }
           }
         }
@@ -2701,13 +2717,10 @@ fn resolve_font_for_cluster(
               };
               if let Some(id) = db.inner().query(&query) {
                 if let Some(font) = db.load_font(id) {
-                  if !base_supported(id) {
-                    continue;
-                  }
                   let is_emoji_font = font_is_emoji_font(db, Some(id), &font);
                   let idx = picker.bump_order();
                   picker.record_any(&font, is_emoji_font, idx);
-                  if covers_needed(id) {
+                  if base_supported(id) && covers_needed(id) {
                     if let Some(font) = picker.consider(font, is_emoji_font, idx) {
                       return Some(font);
                     }
@@ -2720,17 +2733,19 @@ fn resolve_font_for_cluster(
       }
     }
     if let FamilyEntry::Named(name) = entry {
-      if let Some(font) =
-        font_context.match_web_font_for_char(name, weight, style, stretch, oblique_angle, base_char)
-      {
+      let web_font = font_context
+        .match_web_font_for_char(name, weight, style, stretch, oblique_angle, base_char)
+        .or_else(|| {
+          font_context.match_web_font_for_family(name, weight, style, stretch, oblique_angle)
+        });
+      if let Some(font) = web_font {
         let is_emoji_font = font_is_emoji_font(db, None, &font);
         let idx = picker.bump_order();
-        if !require_base_glyph || font_supports_all_chars(&font, &[base_char]) {
-          picker.record_any(&font, is_emoji_font, idx);
-          if font_supports_all_chars(&font, &needed) {
-            if let Some(font) = picker.consider(font, is_emoji_font, idx) {
-              return Some(font);
-            }
+        picker.record_any(&font, is_emoji_font, idx);
+        let base_ok = !require_base_glyph || font_supports_all_chars(&font, &[base_char]);
+        if base_ok && font_supports_all_chars(&font, &needed) {
+          if let Some(font) = picker.consider(font, is_emoji_font, idx) {
+            return Some(font);
           }
         }
       }
@@ -2759,13 +2774,10 @@ fn resolve_font_for_cluster(
 
           if let Some(id) = db.inner().query(&query) {
             if let Some(font) = db.load_font(id) {
-              if !base_supported(id) {
-                continue;
-              }
               let is_emoji_font = font_is_emoji_font(db, Some(id), &font);
               let idx = picker.bump_order();
               picker.record_any(&font, is_emoji_font, idx);
-              if covers_needed(id) {
+              if base_supported(id) && covers_needed(id) {
                 if let Some(font) = picker.consider(font, is_emoji_font, idx) {
                   return Some(font);
                 }
@@ -2789,13 +2801,10 @@ fn resolve_font_for_cluster(
               };
               if let Some(id) = db.inner().query(&query) {
                 if let Some(font) = db.load_font(id) {
-                  if !base_supported(id) {
-                    continue;
-                  }
                   let is_emoji_font = font_is_emoji_font(db, Some(id), &font);
                   let idx = picker.bump_order();
                   picker.record_any(&font, is_emoji_font, idx);
-                  if covers_needed(id) {
+                  if base_supported(id) && covers_needed(id) {
                     if let Some(font) = picker.consider(font, is_emoji_font, idx) {
                       return Some(font);
                     }
@@ -2812,12 +2821,9 @@ fn resolve_font_for_cluster(
   if is_emoji && !picker.avoid_emoji {
     for id in db.find_emoji_fonts() {
       if let Some(font) = db.load_font(id) {
-        if !base_supported(id) {
-          continue;
-        }
         let idx = picker.bump_order();
         picker.record_any(&font, true, idx);
-        if covers_needed(id) {
+        if base_supported(id) && covers_needed(id) {
           if let Some(font) = picker.consider(font, true, idx) {
             return Some(font);
           }
@@ -2838,13 +2844,10 @@ fn resolve_font_for_cluster(
           };
           if let Some(id) = db.inner().query(&query) {
             if let Some(font) = db.load_font(id) {
-              if !base_supported(id) {
-                continue;
-              }
               let is_emoji_font = font_is_emoji_font(db, Some(id), &font);
               let idx = picker.bump_order();
               picker.record_any(&font, is_emoji_font, idx);
-              if covers_needed(id) {
+              if base_supported(id) && covers_needed(id) {
                 if let Some(font) = picker.consider(font, is_emoji_font, idx) {
                   return Some(font);
                 }
@@ -2858,13 +2861,10 @@ fn resolve_font_for_cluster(
 
   for face in db.faces() {
     if let Some(font) = db.load_font(face.id) {
-      if !base_supported(face.id) {
-        continue;
-      }
       let is_emoji_font = font_is_emoji_font(db, Some(face.id), &font);
       let idx = picker.bump_order();
       picker.record_any(&font, is_emoji_font, idx);
-      if covers_needed(face.id) {
+      if base_supported(face.id) && covers_needed(face.id) {
         if let Some(font) = picker.consider(font, is_emoji_font, idx) {
           return Some(font);
         }
@@ -4620,6 +4620,47 @@ mod tests {
       !has_notdef_for_mark,
       "unsupported combining marks should not emit .notdef glyphs"
     );
+  }
+
+  #[test]
+  fn missing_base_glyph_clusters_fall_back_to_notdef() {
+    let data = fs::read("tests/fixtures/fonts/NotoSans-subset.ttf").expect("read Noto Sans subset");
+    let ctx = load_font_context_with_data(data).expect("load font context");
+    let font = ctx
+      .database()
+      .first_font()
+      .expect("font context should contain at least one font");
+    let face = crate::text::face_cache::get_ttf_face(&font).expect("parse font");
+
+    let pipeline = ShapingPipeline::new();
+    let mut style = ComputedStyle::default();
+    style.font_family = vec![font.family.clone()];
+    style.font_size = 16.0;
+
+    for text in ["뮝\u{07FD}", "犧\u{0345}"] {
+      let clusters = atomic_shaping_clusters(text);
+      assert_eq!(clusters, vec![(0, text.len())], "expected a single cluster");
+
+      let base_char = text.chars().next().expect("string should have base char");
+      assert!(
+        !face.has_glyph(base_char),
+        "fixture font unexpectedly supports base character U+{:04X}",
+        base_char as u32
+      );
+
+      let shaped = pipeline.shape(text, &style, &ctx).expect("shape succeeds");
+      let glyphs: Vec<_> = shaped.iter().flat_map(|run| run.glyphs.iter()).collect();
+      assert!(
+        !glyphs.is_empty(),
+        "shaping should produce at least one glyph"
+      );
+      assert!(
+        glyphs
+          .iter()
+          .any(|glyph| glyph.cluster == 0 && glyph.glyph_id == 0),
+        "base cluster should emit .notdef when glyph is missing"
+      );
+    }
   }
 
   #[test]

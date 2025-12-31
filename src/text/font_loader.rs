@@ -1522,6 +1522,17 @@ impl FontContext {
     self.select_web_font(family, weight, style, stretch, oblique_angle, Some(ch))
   }
 
+  pub(crate) fn match_web_font_for_family(
+    &self,
+    family: &str,
+    weight: u16,
+    style: FontStyle,
+    stretch: FontStretch,
+    oblique_angle: Option<f32>,
+  ) -> Option<LoadedFont> {
+    self.select_web_font(family, weight, style, stretch, oblique_angle, None)
+  }
+
   fn select_web_font(
     &self,
     family: &str,
