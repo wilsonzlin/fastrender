@@ -426,30 +426,39 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
     run_command(cmd)?;
   }
 
-  if disk_cache_enabled {
-    let mut cmd = Command::new("cargo");
-    cmd
-      .arg("run")
-      .arg("--release")
-      .apply_disk_cache_feature(true)
-      .args(["--bin", "prefetch_assets"])
-      .arg("--")
-      .arg("--jobs")
-      .arg(args.jobs.to_string())
-      .arg("--timeout")
-      .arg(args.fetch_timeout.to_string());
-    if let Some(pages) = &pages_arg {
-      cmd.arg("--pages").arg(pages);
-    }
-    if let Some(shard) = &shard_arg {
-      cmd.arg("--shard").arg(shard);
-    }
-    println!(
-      "Prefetching subresources into fetches/assets/ (jobs={}, timeout={}s)...",
-      args.jobs, args.fetch_timeout
-    );
-    if let Err(err) = run_command(cmd) {
-      eprintln!("Warning: prefetch_assets failed (continuing): {err}");
+  if disk_cache_enabled && !args.no_fetch {
+    // The asset prefetcher is expected to live in `src/bin/prefetch_assets.rs` (or equivalently
+    // `src/bin/prefetch_assets/main.rs`). Guard execution so `cargo xtask pageset` keeps working on
+    // checkouts that predate the binary landing.
+    let prefetch_assets_path = repo_root().join("src/bin/prefetch_assets.rs");
+    let prefetch_assets_dir = repo_root().join("src/bin/prefetch_assets/main.rs");
+    if prefetch_assets_path.is_file() || prefetch_assets_dir.is_file() {
+      let mut cmd = Command::new("cargo");
+      cmd
+        .arg("run")
+        .arg("--release")
+        .apply_disk_cache_feature(true)
+        .args(["--bin", "prefetch_assets"])
+        .arg("--")
+        .arg("--jobs")
+        .arg(args.jobs.to_string())
+        .arg("--timeout")
+        .arg(args.fetch_timeout.to_string());
+      if let Some(pages) = &pages_arg {
+        cmd.arg("--pages").arg(pages);
+      }
+      if let Some(shard) = &shard_arg {
+        cmd.arg("--shard").arg(shard);
+      }
+      println!(
+        "Prefetching subresources into fetches/assets/ (jobs={}, timeout={}s)...",
+        args.jobs, args.fetch_timeout
+      );
+      if let Err(err) = run_command(cmd) {
+        eprintln!("Warning: prefetch_assets failed (continuing): {err}");
+      }
+    } else {
+      println!("Skipping asset prefetch (prefetch_assets binary not found).");
     }
   }
 
@@ -968,9 +977,12 @@ fn accumulate_timings(target: &mut RenderStageTimings, timings: &RenderStageTimi
   add_timing(&mut target.cascade_ms, timings.cascade_ms);
   add_timing(&mut target.box_tree_ms, timings.box_tree_ms);
   add_timing(&mut target.layout_ms, timings.layout_ms);
+  add_timing(&mut target.text_fallback_ms, timings.text_fallback_ms);
+  add_timing(&mut target.text_shape_ms, timings.text_shape_ms);
   add_timing(&mut target.paint_build_ms, timings.paint_build_ms);
   add_timing(&mut target.paint_optimize_ms, timings.paint_optimize_ms);
   add_timing(&mut target.paint_rasterize_ms, timings.paint_rasterize_ms);
+  add_timing(&mut target.text_rasterize_ms, timings.text_rasterize_ms);
   add_timing(&mut target.encode_ms, timings.encode_ms);
 }
 
@@ -992,9 +1004,12 @@ fn sum_timings(timings: &RenderStageTimings) -> Option<f64> {
     timings.cascade_ms,
     timings.box_tree_ms,
     timings.layout_ms,
+    timings.text_fallback_ms,
+    timings.text_shape_ms,
     timings.paint_build_ms,
     timings.paint_optimize_ms,
     timings.paint_rasterize_ms,
+    timings.text_rasterize_ms,
     timings.encode_ms,
   ] {
     if let Some(value) = value {
