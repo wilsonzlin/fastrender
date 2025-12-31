@@ -373,6 +373,7 @@ struct ContainerQueryMemo {
   // Intern container names to avoid storing strings in every cache key.
   name_ids: HashMap<String, u32>,
   next_name_id: u32,
+  active_ctx_ptr: Option<usize>,
 }
 
 impl Default for ContainerQueryMemo {
@@ -383,6 +384,7 @@ impl Default for ContainerQueryMemo {
       condition_sigs: HashMap::new(),
       name_ids: HashMap::new(),
       next_name_id: 1,
+      active_ctx_ptr: None,
     }
   }
 }
@@ -394,6 +396,7 @@ impl ContainerQueryMemo {
     self.condition_sigs.clear();
     self.name_ids.clear();
     self.next_name_id = 1;
+    self.active_ctx_ptr = None;
   }
 
   fn intern_name(&mut self, name: &str) -> u32 {
@@ -2366,6 +2369,10 @@ impl ContainerQueryContext {
     let ctx_ptr = self as *const _ as usize;
     CONTAINER_QUERY_MEMO.with(|memo_cell| {
       let mut memo = memo_cell.borrow_mut();
+      if memo.active_ctx_ptr != Some(ctx_ptr) {
+        memo.clear();
+        memo.active_ctx_ptr = Some(ctx_ptr);
+      }
       for condition in conditions {
         let condition_ptr = condition as *const _ as usize;
         let (name_id, support_mask) = match memo.condition_sigs.get(&condition_ptr).copied() {
