@@ -2217,12 +2217,17 @@ impl FormattingContext for FlexFormattingContext {
           CrateAvailableSpace::Definite(fragment.bounds.width()),
           CrateAvailableSpace::Indefinite,
         );
-        if let Ok(snapshot_fragment) = fc.layout(&snapshot_node, &snapshot_constraints) {
-          let anchor_bounds =
-            Rect::from_xywh(anchor_x, anchor_y + (order as f32) * 1e-4, 0.0, 0.01);
-          let mut anchor = FragmentNode::new_running_anchor(anchor_bounds, name, snapshot_fragment);
-          anchor.style = Some(running_child.style.clone());
-          fragment.children_mut().push(anchor);
+        match fc.layout(&snapshot_node, &snapshot_constraints) {
+          Ok(snapshot_fragment) => {
+            let anchor_bounds =
+              Rect::from_xywh(anchor_x, anchor_y + (order as f32) * 1e-4, 0.0, 0.01);
+            let mut anchor =
+              FragmentNode::new_running_anchor(anchor_bounds, name, snapshot_fragment);
+            anchor.style = Some(running_child.style.clone());
+            fragment.children_mut().push(anchor);
+          }
+          Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+          Err(_) => {}
         }
       }
     }
@@ -3394,17 +3399,21 @@ impl FlexFormattingContext {
           } else {
             mc_constraints
           };
-          if let Ok(mc_fragment) = fc.layout(layout_node, &mc_constraints) {
-            flex_profile::record_node_layout(work.child_box.id, mc_selector.as_deref(), mc_timer);
-            let mc_fragment = mc_fragment;
-            let mut mc_size = Self::fragment_subtree_size(&mc_fragment);
-            if rect.width().is_finite() && rect.width() > 0.0 {
-              mc_size.width = mc_size.width.min(rect.width());
+          match fc.layout(layout_node, &mc_constraints) {
+            Ok(mc_fragment) => {
+              flex_profile::record_node_layout(work.child_box.id, mc_selector.as_deref(), mc_timer);
+              let mc_fragment = mc_fragment;
+              let mut mc_size = Self::fragment_subtree_size(&mc_fragment);
+              if rect.width().is_finite() && rect.width() > 0.0 {
+                mc_size.width = mc_size.width.min(rect.width());
+              }
+              if rect.height().is_finite() && rect.height() > 0.0 {
+                mc_size.height = mc_size.height.min(rect.height());
+              }
+              max_content = Some((mc_fragment, mc_size));
             }
-            if rect.height().is_finite() && rect.height() > 0.0 {
-              mc_size.height = mc_size.height.min(rect.height());
-            }
-            max_content = Some((mc_fragment, mc_size));
+            Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+            Err(_) => {}
           }
         }
 
