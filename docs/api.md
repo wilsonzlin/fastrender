@@ -152,6 +152,12 @@ for error in &result.diagnostics.fetch_errors {
 if let Some(stats) = &result.diagnostics.stats {
     eprintln!("DOM nodes: {:?}", stats.counts.dom_nodes);
     eprintln!("Paint time (ms): {:?}", stats.timings.paint_rasterize_ms);
+    if let Some(fetch_ms) = stats.resources.network_fetch_ms {
+        eprintln!("Network fetch time (ms): {fetch_ms}");
+    }
+    if let Some(hits) = stats.resources.resource_cache_fresh_hits {
+        eprintln!("Resource cache hits: {hits}");
+    }
     if let Some(samples) = &stats.counts.last_resort_font_fallback_samples {
         eprintln!("Last-resort font fallback samples: {samples:?}");
     }
