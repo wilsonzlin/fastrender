@@ -1746,6 +1746,12 @@ pub struct PaintDiagnostics {
   #[serde(skip_serializing_if = "Option::is_none")]
   pub background_tiles: Option<u64>,
   #[serde(skip_serializing_if = "Option::is_none")]
+  pub background_tiles_painted: Option<u64>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub background_layers: Option<u64>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub background_pattern_fast_paths: Option<u64>,
+  #[serde(skip_serializing_if = "Option::is_none")]
   pub background_ms: Option<f64>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub clip_mask_calls: Option<u64>,
@@ -4104,6 +4110,13 @@ impl FastRender {
           }
           if diag.background_tiles > 0 {
             rec.stats.paint.background_tiles = Some(diag.background_tiles);
+            rec.stats.paint.background_tiles_painted = Some(diag.background_tiles);
+          }
+          if diag.background_layers > 0 {
+            rec.stats.paint.background_layers = Some(diag.background_layers);
+          }
+          if diag.background_pattern_fast_paths > 0 {
+            rec.stats.paint.background_pattern_fast_paths = Some(diag.background_pattern_fast_paths);
           }
           if diag.background_ms > 0.0 {
             rec.stats.paint.background_ms = Some(diag.background_ms);

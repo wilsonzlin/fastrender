@@ -14,6 +14,8 @@
 //! cargo bench --bench paint_benches
 //! ```
 
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
 use criterion::black_box;
 use criterion::criterion_group;
 use criterion::criterion_main;
@@ -61,9 +63,12 @@ use fastrender::OpacityItem;
 use fastrender::OptimizationConfig;
 use fastrender::StrokeRectItem;
 use fastrender::TextRasterizer;
+use fastrender::{FastRender, RenderOptions};
+use image::codecs::png::PngEncoder;
+use image::ColorType;
+use image::ImageEncoder;
 use std::sync::Arc;
-use std::time::Duration;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tiny_skia::Pixmap;
 use tiny_skia::PremultipliedColorU8;
 use tiny_skia::SpreadMode;
@@ -769,6 +774,50 @@ fn bench_paint_stress_tests(c: &mut Criterion) {
   group.finish();
 }
 
+fn bench_large_repeating_background(c: &mut Criterion) {
+  std::env::set_var("FASTR_PAINT_BACKEND", "legacy");
+
+  let img = image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 0, 0, 255]));
+  let mut bytes = Vec::new();
+  PngEncoder::new(&mut bytes)
+    .write_image(
+      img.as_raw(),
+      img.width(),
+      img.height(),
+      ColorType::Rgba8.into(),
+    )
+    .expect("encode png");
+  let img_data_url = format!("data:image/png;base64,{}", STANDARD.encode(bytes));
+  let html = format!(
+    r#"<!doctype html>
+<style>
+  html, body {{ margin: 0; }}
+  .big {{
+    width: 800px;
+    height: 200000px;
+    background-image: url("{img_data_url}");
+    background-repeat: repeat;
+    background-size: 50px 50px;
+  }}
+</style>
+<div class="big"></div>
+"#
+  );
+
+  let mut renderer = FastRender::new().expect("renderer");
+  let options = RenderOptions::new().with_viewport(800, 600);
+  let doc = renderer
+    .prepare_html(&html, options)
+    .expect("prepare document");
+  let _ = doc.paint_default().expect("warm paint");
+
+  let mut group = c.benchmark_group("background_tiling");
+  group.bench_function("repeat_large_element", |b| {
+    b.iter(|| black_box(doc.paint_default().expect("paint")))
+  });
+  group.finish();
+}
+
 // ============================================================================
 // Text Rasterization Benchmarks
 // ============================================================================
@@ -1164,6 +1213,7 @@ criterion_group!(
   bench_display_item_creation,
   bench_fragment_tree_operations,
   bench_paint_stress_tests,
+  bench_large_repeating_background,
   bench_parallel_display_list_raster,
   bench_tiled_background_image_src_rect,
   bench_text_rasterizer_cache,

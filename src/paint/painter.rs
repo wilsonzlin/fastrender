@@ -251,6 +251,8 @@ pub struct PaintDiagnosticsSummary {
   pub image_pixmap_ms: f64,
   pub background_tiles: u64,
   pub background_ms: f64,
+  pub background_layers: u64,
+  pub background_pattern_fast_paths: u64,
   pub clip_mask_calls: u64,
   pub clip_mask_ms: f64,
   pub clip_mask_pixels: u64,
@@ -1170,6 +1172,15 @@ impl Painter {
   fn record_gradient_usage(&mut self, pixels: u64, start: Instant) {
     if self.diagnostics_enabled {
       self.gradient_stats.record(pixels, start.elapsed());
+    }
+  }
+
+  #[inline]
+  fn record_background_layer(&mut self) {
+    if self.diagnostics_enabled {
+      with_paint_diagnostics(|diag| {
+        diag.background_layers = diag.background_layers.saturating_add(1);
+      });
     }
   }
 
@@ -3158,6 +3169,18 @@ impl Painter {
       return;
     }
 
+    let canvas_rect_css = Rect::from_xywh(0.0, 0.0, self.css_width, self.css_height);
+    let Some(visible_clip_css) = clip_rect_css.intersection(canvas_rect_css) else {
+      return;
+    };
+    if visible_clip_css.width() <= 0.0 || visible_clip_css.height() <= 0.0 {
+      return;
+    }
+
+    if !matches!(bg, BackgroundImage::None) {
+      self.record_background_layer();
+    }
+
     let clip_rect = self.device_rect(clip_rect_css);
     let clip_radii = self.device_radii(clip_radii);
 
@@ -3228,32 +3251,9 @@ impl Painter {
           (self.css_width, self.css_height),
         );
 
-        let positions_x = tile_positions(
-          layer.repeat.x,
-          origin_rect_css.x(),
-          origin_rect_css.width(),
-          tile_w,
-          offset_x,
-          clip_rect_css.min_x(),
-          clip_rect_css.max_x(),
-        );
-        let positions_y = tile_positions(
-          layer.repeat.y,
-          origin_rect_css.y(),
-          origin_rect_css.height(),
-          tile_h,
-          offset_y,
-          clip_rect_css.min_y(),
-          clip_rect_css.max_y(),
-        );
-
         let pixmap_w = tile_w.ceil().max(1.0) as u32;
         let pixmap_h = tile_h.ceil().max(1.0) as u32;
         let quality = Self::filter_quality_for_image(Some(style));
-        let viewport_rect_css = Rect::from_xywh(0.0, 0.0, self.css_width, self.css_height);
-        let Some(visible_clip_css) = clip_rect_css.intersection(viewport_rect_css) else {
-          return;
-        };
 
         let tile_bytes = pixmap_allocation_bytes(pixmap_w, pixmap_h);
         let tile_too_large = tile_bytes
@@ -3265,8 +3265,52 @@ impl Painter {
 
         if !tile_too_large {
           if let Some(pixmap) = self.render_generated_image(bg, style, pixmap_w, pixmap_h) {
-            let max_x = clip_rect_css.max_x();
-            let max_y = clip_rect_css.max_y();
+            let repeat_both_axes = matches!(
+              layer.repeat.x,
+              BackgroundRepeatKeyword::Repeat | BackgroundRepeatKeyword::Round
+            ) && matches!(
+              layer.repeat.y,
+              BackgroundRepeatKeyword::Repeat | BackgroundRepeatKeyword::Round
+            );
+
+            if repeat_both_axes {
+              let anchor_x = origin_rect_css.x() + offset_x;
+              let anchor_y = origin_rect_css.y() + offset_y;
+              if self.paint_background_repeat_pattern(
+                &pixmap,
+                anchor_x,
+                anchor_y,
+                tile_w,
+                tile_h,
+                visible_clip_css,
+                clip_mask.as_ref(),
+                layer.blend_mode,
+                quality,
+              ) {
+                return;
+              }
+            }
+
+            let positions_x = tile_positions(
+              layer.repeat.x,
+              origin_rect_css.x(),
+              origin_rect_css.width(),
+              tile_w,
+              offset_x,
+              visible_clip_css.min_x(),
+              visible_clip_css.max_x(),
+            );
+            let positions_y = tile_positions(
+              layer.repeat.y,
+              origin_rect_css.y(),
+              origin_rect_css.height(),
+              tile_h,
+              offset_y,
+              visible_clip_css.min_y(),
+              visible_clip_css.max_y(),
+            );
+            let max_x = visible_clip_css.max_x();
+            let max_y = visible_clip_css.max_y();
 
             for ty in positions_y.iter().copied() {
               for tx in positions_x.iter().copied() {
@@ -3282,7 +3326,7 @@ impl Painter {
                   ty,
                   tile_w,
                   tile_h,
-                  clip_rect_css,
+                  visible_clip_css,
                   clip_mask.as_ref(),
                   layer.blend_mode,
                   quality,
@@ -3298,6 +3342,24 @@ impl Painter {
           }
         }
 
+        let positions_x = tile_positions(
+          layer.repeat.x,
+          origin_rect_css.x(),
+          origin_rect_css.width(),
+          tile_w,
+          offset_x,
+          visible_clip_css.min_x(),
+          visible_clip_css.max_x(),
+        );
+        let positions_y = tile_positions(
+          layer.repeat.y,
+          origin_rect_css.y(),
+          origin_rect_css.height(),
+          tile_h,
+          offset_y,
+          visible_clip_css.min_y(),
+          visible_clip_css.max_y(),
+        );
         let max_x = visible_clip_css.max_x();
         let max_y = visible_clip_css.max_y();
 
@@ -3432,14 +3494,41 @@ impl Painter {
           (self.css_width, self.css_height),
         );
 
+        let repeat_both_axes = matches!(
+          layer.repeat.x,
+          BackgroundRepeatKeyword::Repeat | BackgroundRepeatKeyword::Round
+        ) && matches!(
+          layer.repeat.y,
+          BackgroundRepeatKeyword::Repeat | BackgroundRepeatKeyword::Round
+        );
+
+        let quality = Self::filter_quality_for_image(Some(style));
+        if repeat_both_axes {
+          let anchor_x = origin_rect_css.x() + offset_x;
+          let anchor_y = origin_rect_css.y() + offset_y;
+          if self.paint_background_repeat_pattern(
+            &pixmap,
+            anchor_x,
+            anchor_y,
+            tile_w,
+            tile_h,
+            visible_clip_css,
+            clip_mask.as_ref(),
+            layer.blend_mode,
+            quality,
+          ) {
+            return;
+          }
+        }
+
         let positions_x = tile_positions(
           layer.repeat.x,
           origin_rect_css.x(),
           origin_rect_css.width(),
           tile_w,
           offset_x,
-          clip_rect_css.min_x(),
-          clip_rect_css.max_x(),
+          visible_clip_css.min_x(),
+          visible_clip_css.max_x(),
         );
         let positions_y = tile_positions(
           layer.repeat.y,
@@ -3447,13 +3536,12 @@ impl Painter {
           origin_rect_css.height(),
           tile_h,
           offset_y,
-          clip_rect_css.min_y(),
-          clip_rect_css.max_y(),
+          visible_clip_css.min_y(),
+          visible_clip_css.max_y(),
         );
 
-        let max_x = clip_rect_css.max_x();
-        let max_y = clip_rect_css.max_y();
-        let quality = Self::filter_quality_for_image(Some(style));
+        let max_x = visible_clip_css.max_x();
+        let max_y = visible_clip_css.max_y();
 
         for ty in positions_y.iter().copied() {
           for tx in positions_x.iter().copied() {
@@ -3469,7 +3557,7 @@ impl Painter {
               ty,
               tile_w,
               tile_h,
-              clip_rect_css,
+              visible_clip_css,
               clip_mask.as_ref(),
               layer.blend_mode,
               quality,
@@ -3720,6 +3808,117 @@ impl Painter {
         clip_mask,
       );
     }
+  }
+
+  fn paint_background_repeat_pattern(
+    &mut self,
+    pixmap: &Pixmap,
+    anchor_x: f32,
+    anchor_y: f32,
+    tile_w: f32,
+    tile_h: f32,
+    visible_clip_css: Rect,
+    mask: Option<&Mask>,
+    blend_mode: MixBlendMode,
+    quality: FilterQuality,
+  ) -> bool {
+    if tile_w <= 0.0
+      || tile_h <= 0.0
+      || !tile_w.is_finite()
+      || !tile_h.is_finite()
+      || visible_clip_css.width() <= 0.0
+      || visible_clip_css.height() <= 0.0
+      || pixmap.width() == 0
+      || pixmap.height() == 0
+    {
+      return false;
+    }
+
+    let start_x = aligned_start(anchor_x, tile_w, visible_clip_css.min_x());
+    let start_y = aligned_start(anchor_y, tile_h, visible_clip_css.min_y());
+    if !start_x.is_finite() || !start_y.is_finite() {
+      return false;
+    }
+
+    let span_x = visible_clip_css.max_x() - start_x;
+    let span_y = visible_clip_css.max_y() - start_y;
+    let tiles_x = if span_x > 0.0 && span_x.is_finite() {
+      (span_x / tile_w).ceil().max(0.0) as u64
+    } else {
+      0
+    };
+    let tiles_y = if span_y > 0.0 && span_y.is_finite() {
+      (span_y / tile_h).ceil().max(0.0) as u64
+    } else {
+      0
+    };
+
+    let clip_rect = self.device_rect(visible_clip_css);
+    if clip_rect.width() <= 0.0 || clip_rect.height() <= 0.0 {
+      return false;
+    }
+    let Some(dest_rect) = SkiaRect::from_xywh(
+      clip_rect.x(),
+      clip_rect.y(),
+      clip_rect.width(),
+      clip_rect.height(),
+    ) else {
+      return false;
+    };
+
+    let scale_x = self.device_length(tile_w) / pixmap.width() as f32;
+    let scale_y = self.device_length(tile_h) / pixmap.height() as f32;
+    if !scale_x.is_finite()
+      || !scale_y.is_finite()
+      || scale_x <= 0.0
+      || scale_y <= 0.0
+      || !start_x.is_finite()
+      || !start_y.is_finite()
+    {
+      return false;
+    }
+
+    let translate_x = self.device_length(start_x);
+    let translate_y = self.device_length(start_y);
+    let tiles_painted = tiles_x.saturating_mul(tiles_y);
+    if self.diagnostics_enabled {
+      with_paint_diagnostics(|diag| {
+        diag.background_pattern_fast_paths = diag.background_pattern_fast_paths.saturating_add(1);
+        if tiles_painted > 0 {
+          diag.background_tiles = diag.background_tiles.saturating_add(tiles_painted);
+        }
+      });
+    }
+
+    let mut paint = Paint::default();
+    paint.shader = Pattern::new(
+      pixmap.as_ref(),
+      SpreadMode::Repeat,
+      quality,
+      1.0,
+      Transform::from_row(scale_x, 0.0, 0.0, scale_y, translate_x, translate_y),
+    );
+    paint.anti_alias = false;
+
+    if is_hsl_blend(blend_mode) {
+      if let Some(mut layer) = new_pixmap(self.pixmap.width(), self.pixmap.height()) {
+        paint.blend_mode = SkiaBlendMode::SourceOver;
+        layer.fill_rect(dest_rect, &paint, Transform::identity(), mask);
+        composite_hsl_layer(&mut self.pixmap, &layer, 1.0, blend_mode, Some(clip_rect));
+      } else {
+        paint.blend_mode = map_blend_mode(blend_mode);
+        self
+          .pixmap
+          .fill_rect(dest_rect, &paint, Transform::identity(), mask);
+      }
+    } else {
+      paint.blend_mode = map_blend_mode(blend_mode);
+      self
+        .pixmap
+        .fill_rect(dest_rect, &paint, Transform::identity(), mask);
+    }
+
+    true
   }
 
   fn paint_background_tile(
