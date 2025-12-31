@@ -1952,13 +1952,12 @@ impl CascadeScratch {
   }
 
   fn presentational_hint_layer_order(&mut self, tree_scope_prefix: u32) -> Arc<[u32]> {
-    if tree_scope_prefix == DOCUMENT_TREE_SCOPE_PREFIX {
-      return unprefixed_unlayered_layer_order();
-    }
     if let Some(hit) = self.presentational_hint_layer_orders.get(&tree_scope_prefix) {
       return hit.clone();
     }
-    let layer_order: Arc<[u32]> = Arc::from(vec![tree_scope_prefix]);
+    // Store a tree-scope-only layer order so presentational hints always sort below authored
+    // stylesheet/inline rules within the same scope.
+    let layer_order: Arc<[u32]> = Arc::from([tree_scope_prefix].as_slice());
     self
       .presentational_hint_layer_orders
       .insert(tree_scope_prefix, layer_order.clone());
