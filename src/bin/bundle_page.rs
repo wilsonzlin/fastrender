@@ -16,14 +16,11 @@ use fastrender::resource::bundle::{
   Bundle, BundleManifest, BundleRenderConfig, BundledDocument, BundledFetcher, BundledResourceInfo,
   BUNDLE_MANIFEST, BUNDLE_VERSION,
 };
-use fastrender::resource::{
-  url_to_filename, FetchedResource, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT,
-};
+use fastrender::resource::{FetchedResource, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT};
 use fastrender::style::media::MediaType;
 use fastrender::{OutputFormat, Result};
-use std::collections::{hash_map::DefaultHasher, BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
-use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -411,12 +408,9 @@ fn build_manifest(
   urls.sort();
   for (idx, url) in urls.iter().enumerate() {
     let res = recorded.get(url).unwrap();
-    let path = format!(
-      "resources/{:05}_{}.{}",
-      idx,
-      safe_stem(url),
-      extension_for_resource(res, url)
-    );
+    // Bundles are often written as tar archives; `tar::Header::set_path` enforces the USTAR path
+    // limit, so keep resource paths short to avoid failures on pages with very long URLs.
+    let path = format!("resources/{:05}.{}", idx, extension_for_resource(res, url));
     let info = BundledResourceInfo {
       path: path.clone(),
       content_type: res.content_type.clone(),
@@ -581,30 +575,6 @@ fn extension_for_resource(res: &FetchedResource, url: &str) -> String {
   }
 
   "bin".to_string()
-}
-
-fn safe_stem(url: &str) -> String {
-  const MAX_STEM_LEN: usize = 180;
-
-  let mut stem = url_to_filename(url);
-  if stem.is_empty() {
-    stem = "resource".to_string();
-  }
-
-  if stem.len() > MAX_STEM_LEN {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
-    let mut hasher = DefaultHasher::new();
-    url.hash(&mut hasher);
-    let hash = hasher.finish();
-
-    let keep_len = MAX_STEM_LEN.saturating_sub(18);
-    let prefix = &stem[..keep_len.min(stem.len())];
-    stem = format!("{prefix}__{:016x}", hash);
-  }
-
-  stem
 }
 
 fn fetch_document(

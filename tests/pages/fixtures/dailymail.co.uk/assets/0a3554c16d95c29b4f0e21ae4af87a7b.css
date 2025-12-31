@@ -1,0 +1,302 @@
+
+  @import url('bdf8fc0ca61a8c5e4157d07d465bda7d.css');
+
+  :root {
+    font-family: Inter, sans-serif;
+    font-feature-settings: 'liga' 1, 'calt' 1;
+    /* fix for Chrome */
+  }
+
+  @supports (font-variation-settings: normal) {
+    :root {
+      font-family: InterVariable, sans-serif;
+    }
+  }
+
+  html {
+    box-sizing: border-box;
+    cursor: default;
+    padding: 0;
+    margin: 0;
+    -ms-text-size-adjust: 100%;
+    -webkit-text-size-adjust: 100%;
+    position: relative;
+    width: 100vw;
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+    font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    
+    margin: 0;
+  }
+
+  body {
+    font-family: 'Inter', sans-serif;
+    background-color: #191919;
+    color: #fff;
+    font-size: 14px;
+    line-height: 16px;
+    margin: 0;
+    padding: 0;
+    overflow-x: hidden;
+    margin: 0;
+    border-top: 3px white solid;
+    height: auto;
+    padding: 10px 10px 10px 10px;
+  }
+
+
+
+  *,
+  :after,
+  :before {
+    -moz-box-sizing: border-box;
+    -webkit-box-sizing: border-box;
+    box-sizing: border-box;
+  }
+
+  div,
+  main,
+  section,
+  p,
+  ul,
+  li {
+    margin: 0;
+    padding: 0;
+  }
+
+  .dd-scroll-list-x {
+    display: flex;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    width: max-content; /* Allow container to expand with all cards */
+    transform: translateX(0);
+    transition: transform 0.6s ease-in-out;
+  }
+
+  /* Viewport wrapper styles moved to existing .dd_home_scroller rule below */
+
+  .dd_car_card {
+    border-radius: 9px;
+    border: 1px solid #fff;
+    background: #191919;
+    display: flex;
+    flex-direction: column;
+    font-family: 'Inter', sans-serif;
+    flex-shrink: 0;
+    flex-grow: 0;
+    width: 180px;
+    margin: 0;
+    padding: 0;
+    margin-bottom: 15px;
+    margin-top: 10px;
+    margin-left: 5px;
+  }
+
+  .dd_card_cover {
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+    position: relative;
+    overflow: hidden;
+    border: 0.5px solid #fff;
+  }
+
+  .dd_card_cover:before {
+    background-color: var(--Grey-B5, #191919);
+    display: block;
+    content: "";
+    width: 100%;
+    height: 100%;
+    padding-top: 100%;
+  }
+
+
+  .dd_card_content {
+    padding: 15px 8px 8px;
+    position: relative;
+  }
+
+  .dd_card_thumb {
+    background-color: var(--Grey-B5, #b5b5b5);
+    border-radius: var(--Spacing-SP4, 4px);
+    height: 60px;
+    position: absolute;
+    left: 8px;
+    top: -38px;
+    width: 60px;
+  }
+
+
+  .dd_card_title {
+    color: var(--Grey-22, #fff);
+    font-family: 'Inter', sans-serif;
+    font-size: 16px;
+    font-weight: 425;
+    line-height: 22px;
+    font-weight: 800;
+    margin-bottom: 20px;
+  }
+
+  .dd_card_footer {
+    display: flex;
+    align-items: center;
+    gap: 0 8px;
+    padding: 0 8px 8px;
+    margin-top: auto;
+  }
+
+  .dd_car_card:hover {
+    transform: translate(-3px, -3px);
+    box-shadow: 3px 3px white;
+  }
+
+  .dd_btn_art {
+    align-items: center;
+    border-radius: 10px;
+    border: 1px solid#fff;
+    background: #191919;
+    color: #fff;
+    cursor: pointer;
+    display: flex;
+    height: 40px;
+    font-family: 'Inter', sans-serif;
+    font-size: 15px;
+    font-style: normal;
+    font-weight: 400;
+    line-height: 20px;
+    justify-content: center;
+    gap: 4px;
+    padding: 10px;
+    width: 100%;
+  }
+
+  .dd_car_card:hover > .dd_card_cover > .lazy-img {
+    opacity: 0.8;
+  }
+
+  .dd_car_card:hover > .dd_card_footer > .dd_btn_art {
+    background: #fff;
+    color: #191919;
+  }
+
+  .dd_car_card:hover > .dd_card_footer > .dd_btn_art svg {
+    filter: invert();
+  }
+
+  a {
+    text-decoration: none !important;
+  }
+  
+  .lazy-img {
+    height: auto;
+    left: 0;
+    position: absolute;
+    right: 0;
+    top: 0;
+    object-fit: cover;
+    width: 100%;
+    border-radius: 0px;
+    border: 0.5px solid white;
+  }
+
+  .new{
+    max-width: 40px;
+    position: relative;
+    z-index: 100;
+    font-weight: 900;
+    color: #fff;
+    margin-bottom: -17px;
+    transform: translate(-1px, 8.5px);
+  }
+  
+
+  .new span{
+    background-color: #191919;
+    border: #fff solid 1px;
+    padding: 8px;
+    border-radius: 5px;
+  }
+
+
+  /* Scrollbar styles removed since we're using programmatic infinite scroll */
+
+  .cls-1 {
+    fill: #fff;
+    transform: translateY(5px);
+  }
+
+  .head_img img {
+    max-width: 170px;
+    padding-top: 15px;
+    padding-bottom: 10px;
+    transform: translateY(5px);
+    float: left;
+  }
+
+  .dd_home_scroller {
+    /* border-bottom: 1px white solid; */
+    padding-bottom: 20px;
+    overflow: hidden; /* Hide cards that are outside the viewport */
+    width: 100%;
+  }
+
+    .prompt{
+      font-size: 16px;
+      margin-bottom: 20px;
+      border-bottom: #fff 1px solid;
+      padding-bottom: 15px;
+    }
+
+    .award_wrapper{
+      align-content: right;
+      width: 160px;
+      float: right;
+    }
+
+    .award{
+      font-size: 14px;
+      width: 100%;
+      text-align: left;
+      line-height: 22px;
+      margin-top: 10px;
+      font-weight: 500;
+    }
+
+    .PA_logo{
+      max-width: 120px;
+      transform: translateY(12px);
+      margin-right: 10px;
+    }
+
+    .head_wrapper{
+      width: 100%;
+      height: 80px;
+    }
+
+  @media screen and (max-width: 500px) {
+
+    .head_img img {
+    max-width: 120px;
+    transform: translateY(10px);
+  }
+
+  .PA_logo{
+      max-width: 100px;
+    }
+
+    .head_wrapper{
+      height: 64px;
+    }
+
+    .award{
+      font-size: 12px;
+    }
+
+    .award_wrapper{
+      width: 130px;
+    }
+
+  }

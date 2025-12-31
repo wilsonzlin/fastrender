@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html data-widget-id="ae2c7c07-67da-4491-a030-8f34fd37d6b7" lang="en">
+  <head>
+    <base target="_top" />
+    <meta charset="utf-8" />
+    <meta name="googlebot" content="noindex,indexifembedded" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1.0,user-scalable=no"
+    />
+    <link rel="stylesheet" href="style/style.css" />
+  </head>
+
+  <body>
+    <main class="dd_home_scroller">
+      <div class="head_wrapper">
+        <div class="award_wrapper">
+          <img class="PA_logo" src="Logos/PA_logo_long.png" />
+          <p class="award"><span>Innovation of the year</span></p>
+        </div>
+
+        <div class="head_img">
+          <a
+            href="https://www.dailymail.co.uk/news/deep-dive/index.html?ico=article_topics_module"
+            target="_top"
+          >
+            <img src="https://i.dailymail.co.uk/i/html_modules/library/logos/dd_logo_white.svg" />
+          </a>
+        </div>
+      </div>
+
+      <ul class="dd-scroll-list-x" id="carousel-container">
+        <!-- Cards will be dynamically generated here -->
+      </ul>
+    </main>
+  </body>
+
+  <script>
+    document.addEventListener("touchstart", function () {}, true);
+  </script>
+
+  <script>
+    window.addEventListener("load", onLoadFunction);
+
+    function onLoadFunction(e) {
+      onResizeFunction();
+      window.addEventListener("resize", onResizeFunction);
+    }
+
+    function onResizeFunction(e) {
+      var iFrameResize = document.getElementById("graphic");
+      window.parent.postMessage(
+        { data: { height: iFrameResize.clientHeight } },
+        "*"
+      );
+    }
+  </script>
+
+  <script>
+    (() => {
+      setInterval(() => {
+        window.parent.postMessage(
+          {
+            sentinel: "amp",
+            type: "embed-size",
+            height: document.body.scrollHeight,
+          },
+          "*"
+        );
+      }, 1000);
+    })();
+  </script>
+  <script>
+    // Card data array - easy to maintain and update
+    // Here you add the cards you want to display in the carousel
+    // The data is in the format:
+    // {
+    //   url: "https://www.dailymail.co.uk/news/article-14932585/Harry-Meghan-Markle-DEEP-DIVE-popularity-timeline.html",
+    //   image: "images/25.jpg",
+    //   title: "What happened to Harry and Meghan",
+    //   isLatest: true,
+    // }
+    // isLatest property is used to display the "LATEST" badge on the card
+    // image property is the image that will be displayed on the card
+    // url property is the url that will be opened when the card is clicked
+    // title property is the title that will be displayed on the card
+    // isLatest property is used to display the "LATEST" badge on the card
+    const cardsData = [
+          {
+        url: "https://www.dailymail.co.uk/news/article-15009799/DEEP-DIVE-Maddie-McCann-disappearance-bed-Algarve.html?ito=deepdive-maddie",
+        image: "images/28.webp",
+        title: "The disappearance of Maddie McCann",
+        isLatest: true,
+      },
+      {
+        url: "https://www.dailymail.co.uk/news/article-15089377/assassination-Charlie-Kirk-reconstruction-DEEP-DIVE.html?ito=deepdive-charlie-kirk",
+        image: "images/27.webp",
+        title: "The assassination of Charlie Kirk",
+      },
+      {
+        url: "https://www.dailymail.co.uk/news/article-14961857/Bayesian-superyacht-unsinkable-truth-DEEP-DIVE.html?ito=deepdive-bayesian",
+        image: "images/26.webp",
+        title: "How the Bayesian yacht really sank",
+      },
+      {
+        url: "https://www.dailymail.co.uk/news/royals/article-14932585/Harry-Meghan-Markle-DEEP-DIVE-popularity-timeline.html",
+        image: "images/25.jpg",
+        title: "What happened to Harry and Meghan",
+      },
+      {
+        url: "https://www.dailymail.co.uk/news/article-14914715/Idaho-murders-Bryan-Kohberger-reconstruction-DEEP-DIVE.html",
+        image: "images/24.jpg",
+        title: "Reconstruction of the Idaho murders",
+      },
+      {
+        url: "https://www.dailymail.co.uk/news/article-14853263/DEEP-DIVE-sucked-oil-trapped-podcast.html",
+        image: "images/22.jpg",
+        title: "Left to die: The pipeline disaster",
+      },
+      {
+        url: "https://www.dailymail.co.uk/news/article-14820021/Titan-submersible-DEEP-DIVE-final-moments.html?ito=deepdive-titan",
+        image: "images/21.jpg",
+        title: "How the Titan disaster unfolded",
+      },
+      {
+        url: "https://www.dailymail.co.uk/tvshowbiz/article-14783079/Diddy-DEEP-DIVE-allegations-timeline.html?ito=deepdive-diddy",
+        image: "images/20.jpg",
+        title: "Downfall of Diddy: All the allegations",
+      },
+      {
+        url: "https://www.dailymail.co.uk/news/article-14518353/DEEP-DIVE-Covid-map-spread-pandemic.html?ito=deepdive-covid",
+        image: "images/17.jpg",
+        title: "How Covid spread like wildfire",
+      },
+      {
+        url: "https://www.dailymail.co.uk/news/article-14421247/DEEP-DIVE-Putin-nuke-WW3.html?ito=deepdive-nukes",
+        image: "images/16.jpg",
+        title: "How Russia would nuke the West",
+      },
+      {
+        url: "https://www.dailymail.co.uk/news/article-14220803/Charlie-Hebdo-massacre-Deep-Dive.html?ito=deepdive-hebdo",
+        image: "images/15.jpg",
+        title: "Charlie Hebdo: The massacre retraced",
+      },
+      {
+        url: "https://www.dailymail.co.uk/news/article-13924167/Strike-Hamas-atrocities-Israel-deepdive.html?ito=deepdive-hamas",
+        image: "images/09.png",
+        title: "Hamas's October 7 atrocities exposed",
+      },
+      {
+        url: "https://www.dailymail.co.uk/news/article-14209377/Hour-petrifying-hour-Boxing-Day-tsunami.html?ito=deepdive-tsunami",
+        image: "images/14.jpg",
+        title: "The worst tsunami in recorded history",
+      },
+      {
+        url: "https://www.dailymail.co.uk/news/article-14047959/Trump-unthinkable-triumph-Donald-won-America.html?ito=deepdive-us-election",
+        image: "images/12.jpg",
+        title: "How Trump won America back",
+      },
+      {
+        url: "https://www.dailymail.co.uk/news/article-13541767/China-invade-Taiwan-nuclear-Armageddon-graphic.html?ito=deepdive-WW3",
+        image: "images/03.png",
+        title: "China's battleplan to seize Taiwan",
+      },
+    ];
+
+    // Reusable function to create a card element
+    function createCard(cardData) {
+      const cardHtml = `
+      <a href="${cardData.url}" target="_top">
+        <li class="dd_car_card">
+          ${cardData.isLatest ? '<p class="new"><span>LATEST</span></p>' : ""}
+          <div class="dd_card_cover">
+            <img class="lazy-img" loading="lazy" src="${cardData.image}">
+          </div>
+          <div class="dd_card_content">
+            <p class="dd_card_title">${cardData.title}</p>
+          </div>
+          <div class="dd_card_footer">
+            <button class="dd_btn_art">
+              Read more
+              <svg width="20" height="21" viewBox="0 0 20 21" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <polygon class="cls-1" points="11.7 3.89 0 3.89 0 5.72 11.67 5.72 9.09 8.31 10.36 9.58 15.15 4.79 10.35 0 9.08 1.27 11.7 3.89" />
+              </svg>
+            </button>
+          </div>
+        </li>
+      </a>
+    `;
+
+      const tempDiv = document.createElement("div");
+      tempDiv.innerHTML = cardHtml.trim();
+      return tempDiv.firstChild;
+    }
+
+    // Initialize carousel when DOM is loaded
+    document.addEventListener("DOMContentLoaded", () => {
+      const scrollContainer = document.querySelector("#carousel-container");
+
+      // Generate cards from data
+      cardsData.forEach((cardData) => {
+        const cardElement = createCard(cardData);
+        scrollContainer.appendChild(cardElement);
+      });
+
+      // Get all generated cards
+      const items = Array.from(
+        scrollContainer.querySelectorAll(".dd_car_card")
+      );
+      const totalItems = items.length;
+
+      if (totalItems === 0) return; // Exit if no items found
+
+      // Clone items for seamless infinite scroll
+      const clonedItems = items.map((item) =>
+        item.parentElement.cloneNode(true)
+      );
+      clonedItems.forEach((clone) => scrollContainer.appendChild(clone));
+
+      let currentIndex = 0;
+      let isScrolling = false;
+      let autoScrollInterval = null;
+
+      // Get the width of one card including gap
+      const getCardWidth = () => {
+        const cardStyle = window.getComputedStyle(items[0]);
+        const cardWidth = items[0].offsetWidth;
+        const marginLeft = parseInt(cardStyle.marginLeft) || 0;
+        const marginRight = parseInt(cardStyle.marginRight) || 0;
+        return cardWidth + marginLeft + marginRight + 8; // 8px gap from CSS
+      };
+
+      function scrollCarousel() {
+        if (isScrolling) return;
+        isScrolling = true;
+
+        const cardWidth = getCardWidth();
+        currentIndex++;
+
+        // Apply smooth transition
+        scrollContainer.style.transition = "transform 0.6s ease-in-out";
+        scrollContainer.style.transform = `translateX(-${
+          currentIndex * cardWidth
+        }px)`;
+
+        // Reset to beginning when we've scrolled through all original items
+        if (currentIndex >= totalItems) {
+          setTimeout(() => {
+            scrollContainer.style.transition = "none";
+            scrollContainer.style.transform = "translateX(0px)";
+            currentIndex = 0;
+
+            setTimeout(() => {
+              isScrolling = false;
+            }, 50);
+          }, 600); // Match transition duration
+        } else {
+          setTimeout(() => {
+            isScrolling = false;
+          }, 600);
+        }
+      }
+
+      // Auto-scroll management
+      // This is the function that will start the auto-scroll
+      // The interval is set to 3000ms (3 seconds)
+      // You can change the interval to whatever you want
+      // The lower the interval, the faster the carousel will scroll
+      // The higher the interval, the slower the carousel will scroll
+      function startAutoScroll() {
+        if (autoScrollInterval) clearInterval(autoScrollInterval);
+        autoScrollInterval = setInterval(scrollCarousel, 3000);
+      }
+
+      function stopAutoScroll() {
+        if (autoScrollInterval) {
+          clearInterval(autoScrollInterval);
+          autoScrollInterval = null;
+        }
+      }
+
+      // Initialize auto-scroll
+      startAutoScroll();
+
+      // Hover controls
+      scrollContainer.addEventListener("mouseenter", stopAutoScroll);
+      scrollContainer.addEventListener("mouseleave", startAutoScroll);
+
+      // Cleanup
+      window.addEventListener("beforeunload", stopAutoScroll);
+    });
+  </script>
+</html>

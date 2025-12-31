@@ -1,0 +1,890 @@
+<!DOCTYPE html>
+<html xmlns="https://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+<head>
+
+	<meta charset="utf-8" />
+<meta name="Author" content="Apple Inc." />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<link rel="shortcut icon" href="assets/missing_7d14b9f72ec429f1cb3870a6bf2d9277.bin" />
+<link rel="icon" href="assets/missing_7d14b9f72ec429f1cb3870a6bf2d9277.bin" />
+<link rel="mask-icon" href="assets/missing_c852c29bdbe9152e7d7bd26840acd27b.bin" color="#333333">
+
+<link rel="stylesheet" href="assets/11e37bc5b7aa2b2da84e401ed49f916a.css" type="text/css" />
+<link rel="stylesheet" href="assets/missing_16a961d6e98d1b1ec00bea818ed3c553.bin" type="text/css" media="(prefers-color-scheme: dark)" data-color-scheme="dark" />
+<link rel="stylesheet" href="assets/5f36debfee9c82a8f8a4d95bd02a16d9.css" type="text/css" />
+
+<script src="assets/missing_76289bd137dc7c9bdd82a89c600d0aea.bin"></script>
+<script src="assets/missing_44f5cc47ef89311553171091d34556ee.bin"></script>
+<script src="assets/missing_bfa09a73867c382560207616213ad973.bin"></script>
+<script src="assets/missing_26280f3f14e09bb30b682e13dde9f60d.bin"></script>
+<script src="assets/missing_b050afbbe97e772485be519ead9c373a.bin"></script>
+
+<script async src="assets/missing_9968b35f83a4ffcc25668f1798b98d87.bin"></script>
+<script src="assets/missing_31510bbf6dad560564a76bd606661399.bin"></script>
+
+<script async crossorigin src="assets/missing_41fcf494761b37ea60f1988208dcd14f.bin"></script>
+<link rel="stylesheet" href="assets/missing_b18f3c573afcf093e518a1c4e5f3bb03.bin" type="text/css" />
+
+
+
+
+
+	<link rel="stylesheet" href="assets/missing_9fff042843e0cd232bc03b4b35d26b3e.bin">
+<link rel="stylesheet" href="assets/missing_8b93071fbbe51f48c3b22cf56cee10a8.bin" type="text/css" />
+<link rel="stylesheet" href="assets/missing_aba10bed584c4aa7407bfe0f859901e9.bin" type="text/css" />
+	<title>Apple Developer</title>
+	<meta name="omni_page" content="Apple Developer - (English)" />
+	<meta name="Description" content="There’s never been a better time to develop for Apple platforms." />
+
+	<meta property="og:locale" content="en_US" />
+	<meta property="og:site_name" content="Apple Developer" />
+	<meta property="og:type" content="website" />
+	<meta property="og:image" content="." />
+	<meta property="og:title" content="Apple Developer" />
+	<meta property="og:description" content="There’s never been a better time to develop for Apple platforms." />
+	<meta property="og:url" content="." />
+
+	<meta name="twitter:card" content="summary_large_image">
+	<meta name="twitter:image" content=".">
+	<meta name="twitter:description" content="There’s never been a better time to develop for Apple platforms.">
+	<meta name="twitter:title" content="Apple Developer">
+	<meta name="twitter:url" content=".">
+
+	<link rel="alternate" href="assets/missing_c6502dd343d62996fd04e231f1346759.bin" hreflang="en" />
+	<link rel="alternate" href="assets/missing_f69e4342685823a2f83eabd8f2ea2f7a.bin" hreflang="zh-CN" />
+	<link rel="alternate" href="assets/missing_688221fa466b95d6171581ad9a3326d0.bin" hreflang="ja-JP" />
+	<link rel="alternate" href="assets/missing_3e071184b4a1c2b1f71c7a0fc5067da8.bin" hreflang="ko-KR" />
+	<link rel="canonical" href="assets/missing_c6502dd343d62996fd04e231f1346759.bin" />
+
+	<link rel="stylesheet" href="assets/a5013ef9e5fea1ed98e8cb22482b6a6c.css">
+	
+	<link rel="stylesheet" href="assets/2bfd69bf0f2a6fe674d86d0052e8c2ed.css" type="text/css" />
+	<link rel="stylesheet" href="assets/f5bf7d1d5349f29f55580353d9826488.css" type="text/css" />
+	
+</head>
+
+<body id="home">
+	<script>
+	// Execute immediately to avoid UI flash
+	(function () {
+		const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+		const body = document.body;
+
+		// If theme-dark or theme-light is already applied, do nothing and lock it
+		if (body.classList.contains("theme-dark") || body.classList.contains("theme-light")) {
+
+			// Set the data-color-scheme attribute based on the existing theme
+			body.setAttribute('data-color-scheme', body.classList.contains("theme-dark") ? "dark" : "light");
+
+			// Prevent future modifications
+			window.__disableColorScheme = true;
+
+			// Hide the color picker immediately
+			const style = document.createElement('style');
+			style.textContent = '.color-scheme-toggle { display: none !important; }';
+			document.head.appendChild(style);
+
+			return;
+		}
+
+		// Otherwise, set theme normally based on user settings or system preference
+		if (window.Settings && window.Settings.preferredColorScheme) {
+			const colorTheme = (window.Settings.preferredColorScheme === 'auto') && !prefersDark ? 'light'
+				: (window.Settings.preferredColorScheme === 'light') ? 'light' : 'dark';
+			body.setAttribute('data-color-scheme', colorTheme);
+			colorTheme === "dark" ? body.classList.add("theme-dark") : body.classList.add("theme-light");
+		} else {
+			const colorTheme = prefersDark ? 'dark' : 'light';
+			body.setAttribute('data-color-scheme', colorTheme);
+			prefersDark ? body.classList.add("theme-dark") : body.classList.add("theme-light");
+		}
+	})();
+</script>
+<link rel="stylesheet" href="assets/0c68313a70effd52b6bb18a359204f4e.css" type="text/css" />
+
+<link rel="stylesheet" href="assets/8910b3adb8bd90b8314beca21d64d464.css" type="text/css" />
+<div id="suggest-lang" class="ribbon hide" lang="en">
+	<div class="ribbon-content-wrapper">
+		<div class="ribbon-content row">
+			<div class="column large-12 large-centered">
+				<p><a href="#" id="suggest-link" class="ribbon-link more">View in English</a></p>
+				<button id="suggest-closer" class="icon icon-after icon-reset" aria-label="Dismiss language suggestion" tabindex="0"></button>
+			</div>
+		</div>
+	</div>
+</div>
+<script src="assets/missing_2818ba6d25b5bbfb703dd57da6a3adbd.bin"></script>
+<aside id="ac-gn-segmentbar" class="ac-gn-segmentbar" lang="en-US" dir="ltr">
+</aside>
+<input type="checkbox" id="ac-gn-menustate" class="ac-gn-menustate" />
+<nav id="ac-globalnav" class="no-js" role="navigation" aria-label="Global" data-hires="false" data-analytics-region="global nav" lang="en-US" dir="ltr"
+    data-www-domain="www.apple.com"
+    data-store-locale="us"
+    data-store-root-path="/us"
+    data-store-api="/[storefront]/shop/bag/status"
+    data-search-locale="en_US"
+    data-search-suggestions-api="/search-services/suggestions/"
+    data-search-defaultlinks-api="/search-services/suggestions/defaultlinks/"
+    data-search-suggestions-enabled="false">
+	<div class="ac-gn-content">
+		<ul class="ac-gn-header">
+			<li class="ac-gn-item ac-gn-menuicon">
+				<label class="ac-gn-menuicon-label" for="ac-gn-menustate" aria-hidden="true">
+					<span class="ac-gn-menuicon-bread ac-gn-menuicon-bread-top">
+						<span class="ac-gn-menuicon-bread-crust ac-gn-menuicon-bread-crust-top"></span>
+					</span>
+					<span class="ac-gn-menuicon-bread ac-gn-menuicon-bread-bottom">
+						<span class="ac-gn-menuicon-bread-crust ac-gn-menuicon-bread-crust-bottom"></span>
+					</span>
+				</label>
+				<a href="#ac-gn-menustate" role="button" class="ac-gn-menuanchor ac-gn-menuanchor-open" id="ac-gn-menuanchor-open">
+					<span class="ac-gn-menuanchor-label">Global Nav Open Menu</span>
+				</a>
+				<a href="#" role="button" class="ac-gn-menuanchor ac-gn-menuanchor-close" id="ac-gn-menuanchor-close">
+					<span class="ac-gn-menuanchor-label">Global Nav Close Menu</span>
+				</a>
+			</li>
+			<li class="ac-gn-item ac-gn-apple">
+				<a class="ac-gn-link ac-gn-link-apple-developer" href="assets/missing_c6502dd343d62996fd04e231f1346759.bin" data-analytics-title="appledeveloper home" id="ac-gn-firstfocus-small">
+					<span class="ac-gn-link-text">Apple Developer</span>
+				</a>
+			</li>
+		</ul>
+		<div class="ac-gn-search-placeholder-container" role="search">
+			<div class="ac-gn-search ac-gn-search-small">
+				<a id="ac-gn-link-search-small" class="ac-gn-link" href="assets/missing_55f4a1faa7c399d2091f8ea387fa174c.bin" data-analytics-title="search" data-analytics-click="search" data-analytics-intrapage-link aria-label="Search">
+					<div class="ac-gn-search-placeholder-bar">
+						<div class="ac-gn-search-placeholder-input">
+							<div class="ac-gn-search-placeholder-input-text" aria-hidden="true">
+								<div class="ac-gn-link-search ac-gn-search-placeholder-input-icon"></div>
+								<span class="ac-gn-search-placeholder">Search</span>
+							</div>
+						</div>
+						<div class="ac-gn-searchview-close ac-gn-searchview-close-small ac-gn-search-placeholder-searchview-close">
+							<span class="ac-gn-searchview-close-cancel" aria-hidden="true">Cancel</span>
+						</div>
+					</div>
+				</a>
+			</div>
+		</div>
+		<ul class="ac-gn-list">
+			<li class="ac-gn-item ac-gn-apple">
+				<a class="ac-gn-link ac-gn-link-apple-developer" href="assets/missing_c6502dd343d62996fd04e231f1346759.bin" data-analytics-title="appledeveloper home" id="ac-gn-firstfocus">
+					<span class="ac-gn-link-text">Apple Developer</span>
+					</a>
+			</li>
+			<li class="ac-gn-item ac-gn-item-menu ac-gn-news">
+				<a class="ac-gn-link ac-gn-link-news" href="assets/missing_0b21c6d4481c8e65ed28826f6f41c25f.bin" data-analytics-title="news">
+					<span class="ac-gn-link-text">News</span>
+					</a>
+			</li>
+			<li class="ac-gn-item ac-gn-item-menu ac-gn-discover">
+				<a class="ac-gn-link ac-gn-link-discover" href="assets/missing_1737b2418744b0c547ec9d2ef709231f.bin" data-analytics-title="discover">
+					<span class="ac-gn-link-text">Discover</span>
+					</a>
+			</li>
+			<li class="ac-gn-item ac-gn-item-menu ac-gn-design">
+				<a class="ac-gn-link ac-gn-link-design" href="assets/missing_fb1c1a6233ba5adf6130f5a51e8167d8.bin" data-analytics-title="design">
+					<span class="ac-gn-link-text">Design</span>
+					</a>
+			</li>
+			<li class="ac-gn-item ac-gn-item-menu ac-gn-develop">
+				<a class="ac-gn-link ac-gn-link-develop" href="assets/missing_24b9644e96bd2646aeaee7f26dc8a5a1.bin" data-analytics-title="develop">
+					<span class="ac-gn-link-text">Develop</span>
+					</a>
+			</li>
+			<li class="ac-gn-item ac-gn-item-menu ac-gn-distribute">
+				<a class="ac-gn-link ac-gn-link-distribute" href="assets/missing_fdeab54680616e6577a02ec9db8e0ca7.bin" data-analytics-title="distribute">
+					<span class="ac-gn-link-text">Distribute</span>
+					</a>
+			</li>
+			<li class="ac-gn-item ac-gn-item-menu ac-gn-dsupport">
+				<a class="ac-gn-link ac-gn-link-dsupport" href="assets/missing_6b6615db0b7463efe6115c5e5ca83b57.bin" data-analytics-title="dsupport">
+					<span class="ac-gn-link-text">Support</span>
+					</a>
+			</li>
+			<li class="ac-gn-item ac-gn-item-menu ac-gn-account">
+				<a class="ac-gn-link ac-gn-link-account" href="assets/missing_a2e85aeff6b68069eacdcf90ff17a965.bin" data-analytics-title="account">
+					<span class="ac-gn-link-text">Account</span>
+					</a>
+			</li>
+			<li class="ac-gn-item ac-gn-item-menu ac-gn-search" role="search">
+				<a id="ac-gn-link-search" class="ac-gn-link ac-gn-link-search" href="assets/missing_55f4a1faa7c399d2091f8ea387fa174c.bin" data-analytics-title="search" data-analytics-click="search" data-analytics-intrapage-link aria-label="Search"></a>
+			</li>
+		</ul>
+		<aside id="ac-gn-searchview" class="ac-gn-searchview" role="search" data-analytics-region="search">
+			<div class="ac-gn-searchview-content">
+				<div class="ac-gn-searchview-bar">
+					<div class="ac-gn-searchview-bar-wrapper">
+						<form id="ac-gn-searchform" class="ac-gn-searchform" action="/search/" method="get">
+							<div class="ac-gn-searchform-wrapper">
+								<input id="ac-gn-searchform-input" class="ac-gn-searchform-input" type="text" name="q" aria-label="Search" placeholder="Search" autocorrect="off" autocapitalize="off" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="true" aria-owns="quicklinks suggestions" />
+								<button id="ac-gn-searchform-submit" class="ac-gn-searchform-submit" type="submit" disabled aria-label="Submit Search"></button>
+								<button id="ac-gn-searchform-reset" class="ac-gn-searchform-reset" type="reset" disabled aria-label="Clear Search">
+										<span class="ac-gn-searchform-reset-background"></span>
+									</button>
+							</div>
+						</form>
+						<button id="ac-gn-searchview-close-small" class="ac-gn-searchview-close ac-gn-searchview-close-small" aria-label="Cancel Search">
+								<span class="ac-gn-searchview-close-cancel" aria-hidden="true">
+									Cancel
+								</span>
+							</button>
+					</div>
+				</div>
+				<aside id="ac-gn-searchresults" class="ac-gn-searchresults hidden" data-string-quicklinks="Quick Links" data-string-suggestions="Suggested Searches" data-string-noresults="">
+                    <section class="ac-gn-searchresults-section ac-gn-searchresults-section-defaultlinks">
+                        <div class="ac-gn-searchresults-section-wrapper">
+							<div class="search-group-checkbox hidden"><input id="group-input" type="checkbox" name="group-filter" checked>Only search within “<span id="group-search-label"></span>”</div>
+                            <h3 class="ac-gn-searchresults-header ac-gn-searchresults-animated">Quick Links</h3>
+                            <ul class="ac-gn-searchresults-list" id="defaultlinks" role="listbox">
+                            </ul>
+                            <span role="status" class="ac-gn-searchresults-count" aria-live="polite">5 Quick Links</span>
+                        </div>
+                    </section>
+                </aside>
+			</div>
+			<button id="ac-gn-searchview-close" class="ac-gn-searchview-close" aria-label="Cancel Search">
+					<span class="ac-gn-searchview-close-wrapper">
+						<span class="ac-gn-searchview-close-left"></span>
+						<span class="ac-gn-searchview-close-right"></span>
+					</span>
+				</button>
+		</aside>
+			</div>
+</nav>
+<div class="ac-gn-blur"></div>
+<div id="ac-gn-curtain" class="ac-gn-curtain"></div>
+<div id="ac-gn-placeholder" class="ac-nav-placeholder"></div>
+<script src="assets/missing_e9e1b9a4d3a5b81465a4df7da983ee06.bin"></script>
+<link rel="stylesheet" href="assets/d6def358d235c472c0251ea3ae46e841.css">
+<script src="assets/missing_43d7e4551c38a5ba171b30dff8fd1dd2.bin"></script>
+
+	<!-- metrics -->
+<script>
+	/* RSID: */
+	var s_account="awdappledeveloper"
+</script>	
+<script src="assets/missing_fa01cee4493ef56464324d868a43ed8e.bin"></script>
+<script>
+	s_sections = [
+		{
+			"pattern": "^/documentation",
+			"channel": "www.documentation.developer"
+		},
+		{
+			"pattern": "^/library",
+			"channel": "www.documentation.developer"
+		},
+		{
+			"pattern": "^/tutorials",
+			"channel": "www.documentation.developer"
+		},	
+		{
+			"pattern": "human\\-interface\\-guidelines",
+			"channel": "www.hig.developer"
+		},
+		{
+			"pattern": "/testflight/",
+			"channel": "www.appstoreconnect.developer"
+		},
+		{
+			"pattern": "/app\\-store\\-connect/",
+			"channel": "www.appstoreconnect.developer"
+		},
+		{
+			"pattern": "/support/app\\-store\\-connect/",
+			"channel": "www.appstoreconnect.developer"
+		},
+		{
+			"pattern": "/help/app\\-store\\-connect/",
+			"channel": "www.appstoreconnect.developer"
+		},
+		{
+			"pattern": "/wwdc/",
+			"channel": "www.wwdc.developer"
+		},
+		{
+			"pattern": "/wwdc\\d{2}/",
+			"channel": "www.wwdc.developer"
+		},
+		{
+			"pattern": "/videos/",
+			"channel": "www.videos.developer"
+		},
+		{
+			"pattern": "^/account",
+			"channel": "www.account.developer"
+		},
+		{
+			"pattern": "downloads?",
+			"channel": "www.download.developer"
+		},
+		{
+			"pattern": "/localization/",
+			"channel": "www.appstore.developer"
+		},	
+		{
+			"pattern": "/app\\-store/",
+			"channel": "www.appstore.developer"
+		},
+		{
+			"pattern": "/in\\-app\\-purchase/",
+			"channel": "www.appstore.developer"
+		},
+		{
+			"pattern": "/cn/",
+			"channel": "www.cn.developer"
+		},
+		{
+			"pattern": "/jp/",
+			"channel": "www.jp.developer"
+		},
+		{
+			"pattern": "/kr/",
+			"channel": "www.kr.developer"
+		},
+		{
+			"pattern": "/de/",
+			"channel": "www.de.developer"
+		},
+		{
+			"pattern": "/la/",
+			"channel": "www.la.developer"
+		},
+		{
+			"pattern": "/fr/",
+			"channel": "www.fr.developer"
+		},
+		{
+			"pattern": "/it/",
+			"channel": "www.it.developer"
+		},
+		{
+			"pattern": "/br/",
+			"channel": "www.br.developer"
+		}
+	];
+	
+	s.pageName= AC && AC.Tracking && AC.Tracking.pageName();
+	s.channel="www.en.developer";
+	
+	s_sections.forEach((s_section) => {
+		var regex = new RegExp(s_section.pattern);
+		
+		if(location.pathname.search(regex) !== -1) {
+			s.channel=s_section.channel;
+		}
+	});
+	
+	/************* DO NOT ALTER ANYTHING BELOW THIS LINE ! **************/
+	var s_code=s.t();if(s_code)document.write(s_code)
+</script>
+<!-- /metrics -->
+
+	<main class="main">
+		<!-- <div class="ribbon ribbon-blue">
+			<div class="ribbon-drop-wrapper">
+				<div class="ribbon-content-wrapper">
+					<div class="ribbon-content row">
+						<div class="column large-centered large-12">
+							<p>
+								<sf-symbol class="breathe by-layer" name="play.rectangle" weight="regular" loading="eager" aria-hidden="true"></sf-symbol> <a href="assets/missing_b3ae5303bd47cef24929ea88bd7f09c3.bin" class="ribbon-link">Showcase: Learn how apps are integrating the new design and Liquid&nbsp;Glass (Watch the livestream)</a>
+							</p>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div> -->
+
+		<section class="homepage-section section-heroes">
+			<ul class="homepage-section-positions homepage-section-item-new-design-sfb-large">
+				<li class="homepage-section-item hero-position homepage-section-light-copy">
+					<div class="hero promo-managed-unit hero-large">
+						<div class="unit-wrapper unit-wrapper-new-design-center">
+							<a href="assets/missing_1fdae27b0895a0fe96907fbb1102a801.bin" class="unit-link" tabindex="0"><span class="visuallyhidden unit-link-vo"></span></a>
+							<div class="unit-image-wrapper">
+								<figure class="unit-image unit-image-feature-large unit-image-new-design-sfb-large"></figure>
+							</div>
+							<div class="unit-copy-wrapper lv-no-padding mv-no-padding mv-no-padding mv-no-padding">
+
+								<h4 class="headline">Let’s talk Liquid Glass</h4>
+								<h5 class="subhead">Create the next generation of apps by joining us for an all-new set of interactive design&nbsp;activities.</h5>
+								<div class="cta-links typography-intro">
+									<a class="more nowrap" href="assets/missing_1fdae27b0895a0fe96907fbb1102a801.bin">Explore the new&nbsp;design</a>
+									<a class="more nowrap" href="assets/missing_5ab470dd1aaae3db048385a1e0bc858e.bin">Browse examples</a>
+								</div>
+							</div>
+						</div>
+					</div>
+				</li>
+			</ul>
+		</section>
+
+		<section class="homepage-section section-promos">
+			<ul class="homepage-section-positions promo-positions">
+				<li class="homepage-section-item promo-position homepage-section-item-events-promo homepage-section-light-copy" data-promo-type="show-hide">
+					<div class="promo promo-managed-unit">
+						<div class="unit-wrapper unit-wrapper-reverse">
+							<a class="unit-link" href="assets/missing_b1489ba47e1ecb2b280cf481c04289b9.bin" tabindex="0"><span class="visuallyhidden"></span></a>
+							<div class="unit-copy-wrapper">
+
+								<h4 class="headline"><span class="nowrap">Meet with Apple</span></h4>
+								<h5 class="subhead"><span class="nowrap">Explore in-person and online activities.</span></h5>
+								<!-- MAE -->
+							</div>
+							<div class="unit-image-wrapper image-constraints-full">
+								<figure class="unit-image unit-image-meet-apple unit-image-black-fade" id="meet-with-apple"></figure>
+							</div>
+						</div>
+						<script src="assets/missing_5943934389a7c107847e4e44ce4698a2.bin"></script>
+					</div>
+				</li>
+				<li class="homepage-section-item promo-position promo-position-1 homepage-section-item-asa25 homepage-section-light-copy" data-promo-type="show-hide">
+					<div class="promo promo-managed-unit">
+						<div class="unit-wrapper">
+							<a class="unit-link" href="assets/missing_4050a61849ab2a6140bc35dffe3297ad.bin" target="_self" tabindex="0"><span class="visuallyhidden"></span></a>
+							<div class="unit-copy-wrapper text-center">
+
+								<h4 class="headline"> App Store Awards</h4>
+								<h5 class="subhead">2025</h5>
+							</div>
+							<div class="unit-image-wrapper image-constraints-full">
+								<figure class="unit-image unit-image-asa25 unit-image-asa25-w"></figure>
+							</div>
+						</div>
+					</div>
+				</li>
+			</ul>
+		</section>
+
+		<section class="section section-pathways">
+			<div class="unit-wrapper">
+				<a class="unit-link" href="assets/missing_9a593659b02aa42a84f005aca75f6df9.bin" tabindex="0"><span class="visuallyhidden"></span></a>
+				<div class="section-content">
+					<div class="row">
+						<div class="column large-centered large-9 medium-10 small-12 text-center padding-top-small">
+
+							<h2 class="headline">Get started with&nbsp;Pathways</h2>
+							<h5 class="subhead">Your first step to creating for Apple platforms. All you need is a Mac and&nbsp;an&nbsp;idea.</h5>
+						</div>
+					</div>
+					<div class="row">
+						<div class="column large-centered large-12 small-12 text-center">
+							<picture>
+								<source media="(max-width: 734px)" srcset="assets/missing_2b15eae072736b6a9d8dd5b99df8ceea.bin">
+								<img class="hero-pathways-image" src="assets/7761a7376c60501a1eed8e834788d618.png" width="100%" alt="">
+							</picture>
+						</div>
+					</div>
+				</div>
+			</div>
+		</section>
+
+		<section class="homepage-section section-promos">
+			<ul class="homepage-section-positions promo-positions">
+				<li class="homepage-section-item promo-position homepage-section-item-ios-15" data-promo-type="show-hide">
+					<div class="promo promo-managed-unit">
+						<div class="unit-wrapper">
+							<a class="unit-link" href="assets/missing_ef0f2222259501c05e8efc55d4e147f0.bin" tabindex="0"><span class="visuallyhidden"></span></a>
+							<div class="unit-copy-wrapper">
+
+								<h4 class="headline">iOS 26</h4>
+							</div>
+							<div class="unit-image-wrapper image-constraints-full">
+								<picture>
+									<source srcset="assets/missing_0dc87fac30a1b9d539a11c34bd9b516b.bin" type="image/webp" />
+									<img class="unit-image unit-image-centered" src="assets/missing_211229e756197c43623a0c53b4d8be6b.bin" alt="" width="165" height="337">
+								</picture>
+							</div>
+						</div>
+					</div>
+				</li>
+				<li class="homepage-section-item promo-position homepage-section-item-ipados-15" data-promo-type="show-hide">
+					<div class="promo promo-managed-unit">
+						<div class="unit-wrapper">
+							<a class="unit-link" href="assets/missing_2989f362f97a2b314276e8a625f60b5f.bin" tabindex="0"><span class="visuallyhidden"></span></a>
+							<div class="unit-copy-wrapper">
+
+								<h4 class="headline">iPadOS 26</h4>
+							</div>
+							<div class="unit-image-wrapper image-constraints-full">
+								<picture>
+									<source srcset="assets/missing_a1045a482d0c25e6ac70df68d8d4477c.bin" type="image/webp" />
+									<img class="unit-image unit-image-centered" src="assets/missing_7b862818c79e4dd00e710181fec84c23.bin" alt="" width="439" height="313">
+								</picture>
+							</div>
+						</div>
+					</div>
+				</li>
+				<li class="homepage-section-item promo-position homepage-section-item-macos-12" data-promo-type="show-hide">
+					<div class="promo promo-managed-unit">
+						<div class="unit-wrapper">
+							<a class="unit-link" href="assets/missing_96f7d6b6b77ca7f29c9c0a0a2ad4edcb.bin" tabindex="0"><span class="visuallyhidden"></span></a>
+							<div class="unit-copy-wrapper">
+
+								<h4 class="headline">macOS 26</h4>
+							</div>
+							<div class="unit-image-wrapper image-constraints-full">
+								<picture>
+									<source srcset="assets/missing_13abccd06112d0791b06e8c7fa736df0.bin" type="image/webp" />
+									<img class="unit-image unit-image-centered" src="assets/missing_4126498139dff9d44352ad5827a0f401.bin" alt="" width="576" height="337">
+								</picture>
+							</div>
+						</div>
+					</div>
+				</li>
+				<li class="homepage-section-item promo-position homepage-section-item-tvos" data-promo-type="show-hide">
+					<div class="promo promo-managed-unit">
+						<div class="unit-wrapper">
+							<a class="unit-link" href="assets/missing_6048d252d07f58f9db555677e98b949b.bin" tabindex="0"><span class="visuallyhidden"></span></a>
+							<div class="unit-copy-wrapper">
+
+								<h4 class="headline">tvOS 26</h4>
+							</div>
+							<div class="unit-image-wrapper image-constraints-full">
+								<picture>
+									<source srcset="assets/missing_e1b125146312dfa59f58b35962854177.bin" type="image/webp" />
+									<img class="unit-image unit-image-centered" src="assets/missing_1397d7536e59318c71949006d4367ca7.bin" alt="" width="500" height="296">
+								</picture>
+							</div>
+						</div>
+					</div>
+				</li>
+				<li class="homepage-section-item promo-position homepage-section-item-vision" data-promo-type="show-hide">
+					<div class="promo promo-managed-unit">
+						<div class="unit-wrapper">
+							<a class="unit-link" href="assets/missing_0bb395c2cad872e36ccc6fbabcbe7d0b.bin" tabindex="0"><span class="visuallyhidden"></span></a>
+							<div class="unit-copy-wrapper">
+
+								<h4 class="headline">visionOS 26</h4>
+							</div>
+							<div class="unit-image-wrapper image-constraints-full">
+								<img class="unit-image unit-image-centered unit-image-full-centered-1" src="assets/missing_231ed3548f4e7472eb168248b491ec04.bin" alt="" width="440" height="257">
+							</div>
+						</div>
+					</div>
+				</li>
+				<li class="homepage-section-item promo-position homepage-section-item-watchos-8" data-promo-type="show-hide">
+					<div class="promo promo-managed-unit">
+						<div class="unit-wrapper">
+							<a class="unit-link" href="assets/missing_3c257947e2e88122c4c007a78a968c8a.bin" tabindex="0"><span class="visuallyhidden"></span></a>
+							<div class="unit-copy-wrapper">
+
+								<h4 class="headline">watchOS 26</h4>
+							</div>
+							<div class="unit-image-wrapper image-constraints-full">
+								<picture>
+									<source srcset="assets/missing_30e89cab754ddeff4367570c1f02833a.bin" type="image/webp" />
+									<img class="unit-image unit-image-centered" src="assets/missing_1a6e107fc4e28365e4cf2ac94aae8fcf.bin" alt="" width="191" height="300">
+								</picture>
+							</div>
+						</div>
+					</div>
+				</li>
+			</ul>
+		</section>
+
+		<section class="section section-whats-new">
+			<div class="unit-wrapper">
+				<a class="unit-link" href="assets/missing_460af36c2879df472e76368ceb6ce06f.bin" tabindex="0"><span class="visuallyhidden"></span></a>
+				<div class="section-content">
+					<div class="row">
+						<div class="column large-centered large-8 medium-10 small-12 text-center">
+							<img src="assets/f8974455e7943e3b32d35964d6484492.png" width="128" alt="" />
+
+							<h2>What’s new for Apple developers</h2>
+							<h5 class="subhead">Discover even more new and updated technologies across Apple platforms, so you can create your best apps yet.</h5>
+						</div>
+					</div>
+				</div>
+			</div>
+		</section>
+
+		<section class="section section-adp theme-dark">
+			<div class="unit-wrapper">
+				<a class="unit-link" href="assets/missing_977a0a5924f7438b3d40379ef87f25e2.bin" tabindex="0"><span class="visuallyhidden"></span></a>
+				<div class="section-content">
+					<div class="row">
+						<div class="column large-centered large-8 medium-8 small-12 text-center">
+							<img class="filter-w" src="assets/87bad58d233677e545cae3d4a5ffe2ff.svg" width="144" alt="">
+
+							<h2>Apple Developer Program</h2>
+							<h5 class="subhead">Join the <span class="nowrap">Apple Developer</span> Program to reach customers around the world on the <span class="nowrap">App Store</span> for iPhone, iPad, Mac, <span class="nowrap">Apple Watch,</span> <span class="nowrap">Apple TV,</span> and <span class="nowrap">Apple Vision Pro</span>. You’ll also get access to beta software, advanced app capabilities, extensive beta testing tools, and app&nbsp;analytics.</h5>
+						</div>
+					</div>
+				</div>
+			</div>
+		</section>
+	</main>
+	<link rel="stylesheet" type="text/css" href="assets/a5013ef9e5fea1ed98e8cb22482b6a6c.css" />
+<aside class="section developer-router-links bg-alt">
+	<div class="section-content">
+		<div class="row">
+			<div class="column large-3 medium-6 small-6">
+				<a href="assets/missing_bc173912e68f23e0e06928dd079368d4.bin" class="block text-center">
+					<div style="color: var(--color-fill-blue);font-size:70px">
+						<sf-symbol name="arrow.down.circle" weight="light" scale="small" mode="monochrome"></sf-symbol>
+					</div>
+					<p><span class="block-link">Get the latest tools and beta SDKs<span class="loc-en-only"></span></span></p>
+				</a>
+			</div>
+			<div class="column large-3 medium-6 small-6">
+				<a href="assets/missing_2db07768511b21c33c2d0f592d5a4a33.bin" class="block text-center">
+					<div style="color: var(--color-fill-blue);font-size:70px">
+						<sf-symbol name="book.pages" weight="light" scale="small" mode="monochrome"></sf-symbol>
+					</div>
+					<p><span class="block-link">Browse the latest documentation<span class="loc-en-only"></span></span></p>
+				</a>
+<!-- 
+				<a href="assets/missing_1107d66727cc8186be481d5d71ed95ba.bin" class="block text-center"><span class="block-link">浏览简体中文文档</span></a>
+				<a href="assets/missing_3664d17c19e8d2963bcc91be8525a381.bin" class="block text-center"><span class="block-link">日本語ドキュメント</span></a>
+ -->
+			</div>
+			<div class="column large-3 medium-6 small-6">
+				<a href="assets/missing_62ac993dc065a5857cec61aaaf9999bf.bin" class="block text-center">
+					<div style="color: var(--color-fill-blue);font-size:70px">
+						<sf-symbol name="play.circle" weight="light" scale="small" mode="monochrome"></sf-symbol>
+					</div>
+					<p><span class="block-link">Watch the latest session&nbsp;videos</span></p>
+				</a>
+			</div>
+			<div class="column large-3 medium-6 small-6">
+				<a href="assets/missing_a16aa381eac08eca300d62711a813567.bin" class="block text-center">
+					<div style="color: var(--color-fill-blue);font-size:70px">
+						<sf-symbol name="bubble.left.and.bubble.right" weight="light" scale="small" mode="monochrome"></sf-symbol>
+					</div>
+					<p><span class="block-link">Ask questions on the&nbsp;forums<span class="loc-en-only"></span></span></p>
+				</a>
+			</div>
+		</div>
+	</div>
+</aside>
+	<link rel="stylesheet" href="assets/ecead9b773ce4243ea0c751b58daa020.css">
+<footer id="footer" class="footer" role="contentinfo" aria-labelledby="footer-label">
+    <div class="footer-content">
+        <h2 class="footer-label" id="footer-label">Developer Footer</h2>
+	        <nav class="footer-directory" aria-label="Apple Developer Directory" role="navigation">
+	<!--googleoff: all-->
+	<div class="footer-directory-column">
+		<input class="footer-directory-column-section-state" type="checkbox" id="footer-directory-column-section-state-platform" />
+		<div class="footer-directory-column-section">
+			<label class="footer-directory-column-section-label" for="footer-directory-column-section-state-platform">
+				<h3 class="footer-directory-column-section-title">Platforms</h3>
+			</label>
+			<a href="#footer-directory-column-section-state-platform" class="footer-directory-column-section-anchor footer-directory-column-section-anchor-open"> <span class="footer-directory-column-section-anchor-label">Open Menu</span> </a>
+			<a href="#" class="footer-directory-column-section-anchor footer-directory-column-section-anchor-close"> <span class="footer-directory-column-section-anchor-label">Close Menu</span> </a>
+			<ul class="footer-directory-column-section-list">
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_ef0f2222259501c05e8efc55d4e147f0.bin">iOS</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_2989f362f97a2b314276e8a625f60b5f.bin">iPadOS</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_96f7d6b6b77ca7f29c9c0a0a2ad4edcb.bin">macOS</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_6048d252d07f58f9db555677e98b949b.bin">tvOS</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_0bb395c2cad872e36ccc6fbabcbe7d0b.bin">visionOS</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_3c257947e2e88122c4c007a78a968c8a.bin">watchOS</a></li>
+			</ul>
+		</div>
+
+		<input class="footer-directory-column-section-state" type="checkbox" id="footer-directory-column-section-state-tools" />
+		<div class="footer-directory-column-section">
+			<label class="footer-directory-column-section-label" for="footer-directory-column-section-state-tools">
+				<h3 class="footer-directory-column-section-title">Tools</h3>
+			</label>
+			<a href="#footer-directory-column-section-state-tools" class="footer-directory-column-section-anchor footer-directory-column-section-anchor-open"> <span class="footer-directory-column-section-anchor-label">Open Menu</span> </a>
+			<a href="#" class="footer-directory-column-section-anchor footer-directory-column-section-anchor-close"> <span class="footer-directory-column-section-anchor-label">Close Menu</span> </a>
+			<ul class="footer-directory-column-section-list">
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_033ee3547da03cadd7f16b0e9923b84d.bin">Swift</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_06a8c68ef354eb80cf4bc1a1b5228275.bin">SwiftUI</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_8ddc8a4a8befd834df8dcdc15e949456.bin">Swift Playground</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_e5ba36fb0a560f4e8409d6a27448f9b8.bin">TestFlight</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_b4896d3c28e9c69feca2f9fdcaaf6394.bin">Xcode</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_7fc3b9bede5d3928eca54b4f1a5cdc3f.bin">Xcode Cloud</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_0d131ba06bce409fccc8e40c8c90b00a.bin">Icon Composer</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_f39c68996ed27b040f8c7c6d35d699c9.bin">SF Symbols</a></li>
+
+			</ul>
+		</div>
+	</div>
+
+	<div class="footer-directory-column">
+		<input class="footer-directory-column-section-state" type="checkbox" id="footer-directory-column-section-state-topics" />
+		<div class="footer-directory-column-section">
+			<label class="footer-directory-column-section-label" for="footer-directory-column-section-state-topics">
+				<h3 class="footer-directory-column-section-title">Topics &amp; Technologies</h3>
+			</label>
+			<a href="#footer-directory-column-section-state-topics" class="footer-directory-column-section-anchor footer-directory-column-section-anchor-open"> <span class="footer-directory-column-section-anchor-label">Open Menu</span> </a>
+			<a href="#" class="footer-directory-column-section-anchor footer-directory-column-section-anchor-close"> <span class="footer-directory-column-section-anchor-label">Close Menu</span> </a>
+			<ul class="footer-directory-column-section-list">
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_897864fa2fcad2b833bf172e4a89096c.bin">Accessibility</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_52e600323416a6439ffc0459434051f6.bin">Accessories</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_3cdacff5b0a403100c909c85a7360469.bin">Apple Intelligence</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_eeb1d82472badb0bfa159bb97c5e8c2a.bin">App Store</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_84fb1d1da9502086270ef4663f2034ca.bin">Audio &amp; Video</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_bd117e746e32e5451232d3b5f86a15c7.bin">Augmented Reality</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_f9a74a74161244a270d3c1e09478e062.bin">Business</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_fb1c1a6233ba5adf6130f5a51e8167d8.bin">Design</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_fdeab54680616e6577a02ec9db8e0ca7.bin">Distribution</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_835dcb3611cb72fae31fd5412f365e4c.bin">Education</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_dd261c4feb873e263743717d622a188d.bin">Fonts</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_b97e4a616808872515028fc52e3c5801.bin">Games</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_e580fefbdc786e988bf2da794c44b47c.bin">Health &amp; Fitness</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_39ddba79d6f7fc1f22a530c4d63e2126.bin">In-App Purchase</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_05b5080c9a991fae0cfdbf52a02dca4e.bin">Localization</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_265af1c4473535fd366b21ce9fecb64f.bin">Maps &amp; Location</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_256cc84cbabcf3488428bfb2f86d12a2.bin">Machine Learning & AI</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_d1a6d447367d59a57d9b5668ed372aaa.bin">Open Source</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_88a90ef9ceaacca33a9df5cfef109a84.bin">Security</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_0069c9d99933b8a754f5cd7b96e4bb13.bin">Safari &amp; Web</a></li>
+			</ul>
+		</div>
+	</div>
+
+	<div class="footer-directory-column">
+		<input class="footer-directory-column-section-state" type="checkbox" id="footer-directory-column-section-state-resources" />
+		<div class="footer-directory-column-section">
+			<label class="footer-directory-column-section-label" for="footer-directory-column-section-state-resources">
+				<h3 class="footer-directory-column-section-title">Resources</h3>
+			</label>
+			<a href="#footer-directory-column-section-state-resources" class="footer-directory-column-section-anchor footer-directory-column-section-anchor-open"> <span class="footer-directory-column-section-anchor-label">Open Menu</span> </a>
+			<a href="#" class="footer-directory-column-section-anchor footer-directory-column-section-anchor-close"> <span class="footer-directory-column-section-anchor-label">Close Menu</span> </a>
+			<ul class="footer-directory-column-section-list">
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_2db07768511b21c33c2d0f592d5a4a33.bin">Documentation</a></li>
+					<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_db087436e3f529a0887268a879d9a8f5.bin">Sample Code</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_0dd3d1f571712d2af75a6742b6d97831.bin">Tutorials</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_bc173912e68f23e0e06928dd079368d4.bin">Downloads</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_a16aa381eac08eca300d62711a813567.bin">Forums</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_62ac993dc065a5857cec61aaaf9999bf.bin">Videos</a></li>
+			</ul>
+		</div>
+
+		<input class="footer-directory-column-section-state" type="checkbox" id="footer-directory-column-section-state-support" />
+		<div class="footer-directory-column-section">
+			<label class="footer-directory-column-section-label" for="footer-directory-column-section-state-support">
+				<h3 class="footer-directory-column-section-title">Support</h3>
+			</label>
+			<a href="#footer-directory-column-section-state-support" class="footer-directory-column-section-anchor footer-directory-column-section-anchor-open"> <span class="footer-directory-column-section-anchor-label">Open Menu</span> </a>
+			<a href="#" class="footer-directory-column-section-anchor footer-directory-column-section-anchor-close"> <span class="footer-directory-column-section-anchor-label">Close Menu</span> </a>
+			<ul class="footer-directory-column-section-list">
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_4e5196400355b2d8420fe8243e710922.bin">Support Articles</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_e66b8b8c5b4e92ffd04d5db956dc824c.bin">Contact Us</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_58137f1284b23aacc0d7dab3a7a6127b.bin">Bug Reporting</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_66904ef5c49bc7dec8791535061f623e.bin">System Status</a></li>
+			</ul>
+		</div>
+
+		<input class="footer-directory-column-section-state" type="checkbox" id="footer-directory-column-section-state-account" />
+		<div class="footer-directory-column-section">
+			<label class="footer-directory-column-section-label" for="footer-directory-column-section-state-account">
+				<h3 class="footer-directory-column-section-title">Account</h3>
+			</label>
+			<a href="#footer-directory-column-section-state-account" class="footer-directory-column-section-anchor footer-directory-column-section-anchor-open"> <span class="footer-directory-column-section-anchor-label">Open Menu</span> </a>
+			<a href="#" class="footer-directory-column-section-anchor footer-directory-column-section-anchor-close"> <span class="footer-directory-column-section-anchor-label">Close Menu</span> </a>
+			<ul class="footer-directory-column-section-list">
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_a2e85aeff6b68069eacdcf90ff17a965.bin">Apple Developer</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_a04d2effdd5dc3bfd9a2823fe74a7dc5.bin">App Store Connect</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_d158e6fe63f3c667e996262585e66bac.bin">Certificates, IDs, &amp; Profiles</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_39c61640c6db1581e2ed900af908ee8c.bin">Feedback Assistant</a></li>
+			</ul>
+		</div>
+	</div>
+	
+	<div class="footer-directory-column">
+		<input class="footer-directory-column-section-state" type="checkbox" id="footer-directory-column-section-state-programs" />
+		<div class="footer-directory-column-section">
+			<label class="footer-directory-column-section-label" for="footer-directory-column-section-state-programs">
+				<h3 class="footer-directory-column-section-title">Programs</h3>
+			</label>
+			<a href="#footer-directory-column-section-state-programs" class="footer-directory-column-section-anchor footer-directory-column-section-anchor-open"> <span class="footer-directory-column-section-anchor-label">Open Menu</span> </a>
+			<a href="#" class="footer-directory-column-section-anchor footer-directory-column-section-anchor-close"> <span class="footer-directory-column-section-anchor-label">Close Menu</span> </a>
+			<ul class="footer-directory-column-section-list">
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_977a0a5924f7438b3d40379ef87f25e2.bin">Apple Developer Program</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_1ed9085b9556b96b2a361da5d19c7a8d.bin">Apple Developer Enterprise Program</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_bfe67e463c7e3c7166ea058f79657bd6.bin">App Store Small Business Program</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_e53c1fc12388caa7081712c8e6697f5c.bin">MFi Program</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_4a858baac719ec221fd30cdd5297a3ab.bin">Mini Apps Partner Program</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_257cc768c33486f6fcf0d5eeaef7c8ee.bin">News Partner Program</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_bce7a0c79558a27ebdfd930fdea72071.bin">Video Partner Program</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_a130e7ba7ccfe2b02280a991c28c62b3.bin">Security Bounty Program</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_05e144eda38e5fa16e46cfd9e40d5450.bin">Security Research Device Program</a></li>
+			</ul>
+		</div>
+
+		<input class="footer-directory-column-section-state" type="checkbox" id="footer-directory-column-section-state-events" />
+		<div class="footer-directory-column-section">
+			<label class="footer-directory-column-section-label" for="footer-directory-column-section-state-events">
+				<h3 class="footer-directory-column-section-title">Events</h3>
+			</label>
+			<a href="#footer-directory-column-section-state-events" class="footer-directory-column-section-anchor footer-directory-column-section-anchor-open"> <span class="footer-directory-column-section-anchor-label">Open Menu</span> </a>
+			<a href="#" class="footer-directory-column-section-anchor footer-directory-column-section-anchor-close"> <span class="footer-directory-column-section-anchor-label">Close Menu</span> </a>
+			<ul class="footer-directory-column-section-list">
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_330263465dfeaa4424af4b8e852bdefc.bin">Meet with Apple</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_3d4e5838b45806772abc9a8c75a4a56b.bin">Apple Developer Centers</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_f26b87881612ca547eca9d1ab19b3626.bin">App Store Awards</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_dfa54cfe17674e83c1d0808937335f92.bin">Apple Design Awards</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_c7dd0fadd6a7e3a05f2715860161af4e.bin">Apple Developer Academies</a></li>
+				<li class="footer-directory-column-section-item"><a class="footer-directory-column-section-link" href="assets/missing_6dc8ea39a0b0c02c155e2f645c261b98.bin">WWDC</a></li>
+			</ul>
+		</div>
+	</div>
+	<!--googleon: all-->
+</nav>
+        <section class="footer-mini" vocab="http://schema.org/" typeof="Organization">
+	<div class="footer-mini-news">
+		<div class="copy">
+			Get the <a href="assets/missing_6b8de7ad4bccf4210679c40e44b35e23.bin">Apple Developer app</a>.
+		</div>
+		<div class="content">
+			<div class="color-scheme-toggle"
+				role="radiogroup"
+				tabindex="0"
+				aria-label="Select a color scheme preference">
+
+				<label data-color-scheme-option="light">
+
+					<input type="radio" value="light" autocomplete="off"
+						onchange="window.setPreferredColorScheme(event.target.value)" />
+
+					<div class="text">Light</div>
+
+				</label>
+
+				<label data-color-scheme-option="dark">
+
+					<input type="radio" value="dark" autocomplete="off"
+						onchange="window.setPreferredColorScheme(event.target.value)" />
+
+					<div class="text">Dark</div>
+
+				</label>
+
+				<label data-color-scheme-option="auto">
+
+					<input type="radio" value="auto" autocomplete="off"
+						onchange="window.setPreferredColorScheme(event.target.value)" />
+
+					<div class="text">Auto</div>
+
+				</label>
+
+			</div>
+			<script async src="assets/missing_0f87db7e77255e02df3ebb681345dcd5.bin"></script>
+		</div>
+	</div>
+	<link rel="stylesheet" href="assets/4fea7c12148b952cf6ab041f02cc3a94.css">
+	<div class="language-dropdown dropdown-container legacy-form hidden">
+		<select class="dropdown" aria-label="Language Dropdown"></select>
+		<span class="dropdown-icon icon icon-chevrondown" aria-hidden="true"></span>
+	</div>
+	<script src="assets/missing_9fe9b4f669650bb624c9fb1edae14939.bin"></script>
+	<div class="footer-mini-legal">
+		<div class="footer-mini-legal-copyright">Copyright ©  2025 <a href="assets/missing_9e49cf4943550ed15085ca1e47265b88.bin">Apple Inc.</a> All rights reserved.</div>
+		<div class="footer-mini-legal-links">
+			<a class="footer-mini-legal-link" href="assets/missing_9410245cc2fd13c44cab01e4449536b7.bin" class="first">Terms of Use</a>
+			<a class="footer-mini-legal-link" href="assets/missing_ba62c2519162d4d2937b5ded08a42f57.bin">Privacy Policy</a>
+			<a class="footer-mini-legal-link" href="assets/missing_96513c7eafdec3acd3ccd0537ddb3e2d.bin">Agreements and Guidelines</a>
+		</div>
+	</div>
+</section>
+    </div>
+</footer>
+</body>
+</html>

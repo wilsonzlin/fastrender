@@ -1,0 +1,270 @@
+.developer-router-links {
+	background: #f5f5f7;
+}
+.developer-router-links a.block {
+	width: 216px;
+	margin-left: auto;
+	margin-right: auto;
+}
+.developer-router-links a.block span.block-link.more {
+	color: #0066cc;
+}
+
+.developer-router-links.fixed-width a.block {
+	width: 250px;
+}
+
+@media only screen and (max-width: 1068px) {
+	.developer-router-links.fixed-width a.block {
+		width: 216px;
+	}
+}
+
+@media only screen and (max-width: 734px) {
+	.developer-router-links.fixed-width a.block {
+		width: 250px;
+	}
+}
+
+@media only screen and (max-width: 480px) {
+	.developer-router-links .small-6 {
+		width: 100%;
+		flex-basis: 100%;
+		max-width: 100%;
+	}
+}
+
+/* Blue router */
+.router-tutorials {
+	height: 55px !important;
+	margin-top: -5px;
+}
+
+.svg-convert {
+	filter: brightness(0) saturate(100%) invert(42%) sepia(70%) saturate(961%) hue-rotate(191deg) brightness(83%) contrast(108%);
+}
+
+
+/* Legacy router */
+.router-icon {
+	margin: 4px auto 10px;
+	height: 50px;
+	width: 50px;
+	background-size: 100% 100%;
+	background-repeat: no-repeat;
+	background-position: center;
+}
+
+.router-icon-asc,
+.router-icon-manage {
+	height: 64px;
+	width: 64px;
+	margin-top: -10px;
+	background-image: url("missing_01bc63dfcf42e6e1525573cecae66e4a.bin");
+}
+.router-icon-asc-outline,
+.router-icon-manage-outline {
+	height: 64px;
+	width: 64px;
+	margin-top: -10px;
+	background-image: url("missing_efc34f22c954514cd3a62ab39a447e93.bin");
+}
+.router-icon-bugs,
+.router-icon-bug-reporting {
+	background-image: url("missing_3ab39b83a975de782e608fdb5d5cf2f3.bin");
+}
+.router-icon-chat {
+	background-image: url("missing_95e564eeea7d26cc808486c88ba131a5.bin");
+}
+.router-icon-code {
+	background-image: url("missing_fa47d8b4f1c839fd9ee18a1a725a9997.bin");
+}
+.router-icon-connect {
+	background-image: url("missing_0612a47221fd718a644f871a57381af9.bin");
+}
+.router-icon-contact {
+	background-image: url("missing_95e564eeea7d26cc808486c88ba131a5.bin");
+}
+.router-icon-design,
+.router-icon-guidelines {
+	background-image: url("missing_0f21cf765aa2ba1e13c0d813a7705dc1.bin");
+}
+.router-icon-download,
+.router-icon-downloads {
+	background-image: url("missing_606a427fc481f96711f5dbb2ca70ed91.bin");
+}
+.router-icon-document {
+	background-image: url("missing_eb81b0c457681ff62f785582faa22c8c.bin");
+}
+.router-icon-documentation {
+	background-image: url("missing_8cf7efe6a41a29cacd4a030c00e21a09.bin");
+}
+.router-icon-feedback {
+	background-image: url("missing_a8bd24e2118ba168dcdf41864aeee025.bin");
+}
+.router-icon-forum,
+.router-icon-forums {
+	background-image: url("missing_837613f62d258e9acff68eb06810daf5.bin");
+}
+.router-icon-framework {
+	background-image: url("missing_53b7f4c2cae26249c2e26b3e20109a01.bin");
+}
+.router-icon-help {
+	height: 64px;
+	width: 64px;
+	margin-top: -10px;
+	background-image: url("missing_5fa50fe0a7f03226005168e282faac7a.bin");
+}
+.router-icon-itc {
+	background-image: url("missing_3eab888558b46e3eb6f4ae550eb0a192.bin");
+}
+.router-icon-news {
+	background-image: url("missing_43d9d88ede40adf774dafde64db2953c.bin");
+}
+.router-icon-payment {
+	background-image: url("missing_03824b965c7ad3e2bc2905dacca886ea.bin");
+}
+.router-icon-phone {
+	background-image: url("missing_2500a1f2b9eb72b6ae42f9bb9a5654cc.bin");
+}
+.router-icon-phone-outline {
+	background-image: url("missing_f4d84e43347ffbe7177344942d9946b4.bin");
+}
+.router-icon-program {
+	background-image: url("missing_7ec333546e87026fb88060c4a34f9f6e.bin");
+}
+.router-icon-promote {
+	height: 64px;
+	width: 64px;
+	margin-top: -10px;
+	background-image: url("missing_dc58d399c56672dbb33f3fc754f3009b.bin");
+}
+.router-icon-promote-outline {
+	height: 64px;
+	width: 64px;
+	margin-top: -10px;
+	background-image: url("missing_3371d99f994fa06be2f843f9b28309f4.bin");
+}
+.router-icon-testflight {
+	background-image: url("missing_6fc7973e77e99f9d8f5526464168e2e0.bin");
+}
+.router-icon-service {
+	background-image: url("missing_4c7f1d26a8c54ee738a61af38b89501e.bin");
+}
+.router-icon-submit {
+	height: 64px;
+	width: 64px;
+	margin-top: -10px;
+	background-image: url("missing_7173a5fb2d0be8b3154442362d0bcce5.bin");
+}
+.router-icon-video,
+.router-icon-videos,
+.router-icon-play {
+	background-image: url("missing_a2a32390749172fb4a069a11e999bd94.bin");
+}
+
+#globalfooter-wrapper > *:first-child,
+.footer .footer-content > :nth-child(2) {
+	border-top: 1px solid #d2d2d7;
+}
+
+.theme-dark .developer-router-links {
+	background-color: #1d1d1f;
+}
+.theme-dark .developer-router-links a.block span.block-link.more {
+	color: #2997ff;
+}
+.theme-dark .router-icon-asc,
+.theme-dark .router-icon-manage {
+	background-image: url("missing_2f255c06a0a5b1a4b75a17ea971dd162.bin");
+}
+.theme-dark .router-icon-asc-outline,
+.theme-dark .router-icon-manage-outline {
+	background-image: url("missing_661ad8a0d9e4fddd7e00aeae09fdf264.bin");
+}
+.theme-dark .router-icon-bugs,
+.theme-dark .router-icon-bug-reporting {
+	background-image: url("missing_50d0fee6e4dbc02d3364aad9ca2f3ac0.bin");
+}
+.theme-dark .router-icon-chat {
+	background-image: url("missing_8d14c55ea43512ec4af037beeb6d7bb8.bin");
+}
+.theme-dark .router-icon-code {
+	background-image: url("missing_eb7bbdfb310eb2340191d813ea1f5e38.bin");
+}
+.theme-dark .router-icon-connect {
+	background-image: url("missing_b0f66d75a42dea2402401378b6eb3bd0.bin");
+}
+.theme-dark .router-icon-contact {
+	background-image: url("missing_8d14c55ea43512ec4af037beeb6d7bb8.bin");
+}
+.theme-dark .router-icon-design,
+.theme-dark .router-icon-guidelines {
+	background-image: url("missing_a153aa954d17f3597eafcd48038ab128.bin");
+}
+.theme-dark .router-icon-download,
+.theme-dark .router-icon-downloads {
+	background-image: url("missing_7379565d0548a0a51a6e865cb4c09fad.bin");
+}
+.theme-dark .router-icon-document {
+	background-image: url("missing_b4dce04cd0fbe7ef6db57c3b12f1d649.bin");
+}
+.theme-dark .router-icon-documentation {
+	background-image: url("missing_b5bfa149014f591f0b0db96bb8dc05e9.bin");
+}
+.theme-dark .router-icon-feedback {
+	background-image: url("missing_0b7714bbf725e1d32a0f021c7eb042d1.bin");
+}
+.theme-dark .router-icon-forum,
+.theme-dark .router-icon-forums {
+	background-image: url("missing_2863128e847527a40a7a18de1c37448d.bin");
+}
+.theme-dark .router-icon-framework {
+	background-image: url("missing_c56619cec82ae4c0b2fc0133e1993cdd.bin");
+}
+.theme-dark .router-icon-help {
+	background-image: url("missing_361a5ad0c8ed2433dff6b8c1e20ec356.bin");
+}
+.theme-dark .router-icon-itc {
+	background-image: url("missing_f2bf0ea879c5bf12d8485bb361e0242e.bin");
+}
+.theme-dark .router-icon-news {
+	background-image: url("missing_445b9f70e6a6d8213bb85bee1f98d1d2.bin");
+}
+.theme-dark .router-icon-payment {
+	background-image: url("missing_e7f5e220752534307c154f02ea296981.bin");
+}
+.theme-dark .router-icon-phone {
+	background-image: url("missing_f6f4998dc1d65c671e6dcc3378b4ccba.bin");
+}
+.theme-dark .router-icon-phone-outline {
+	background-image: url("missing_7f19f1723d7df062b163c0cfe4137153.bin");
+}
+.theme-dark .router-icon-program {
+	background-image: url("missing_cc837e873b438d37fcfdecaff4cbc6e3.bin");
+}
+.theme-dark .router-icon-promote {
+	background-image: url("missing_0655a6952041f15c3ac2ab75ccd21672.bin");
+}
+.theme-dark .router-icon-promote-outline {
+	background-image: url("missing_09653183d29de60520f7b3e1969f3e18.bin");
+}
+.theme-dark .router-icon-testflight {
+	background-image: url("missing_d843bbd5137cec28b03e889cc7439b3f.bin");
+}
+.theme-dark .router-icon-service {
+	background-image: url("missing_f7f4c9ed51d557ecc3987ef3ea90d4ef.bin");
+}
+.theme-dark .router-icon-submit {
+	background-image: url("missing_ff6cba26e7310013ef4c228938ff8938.bin");
+}
+.theme-dark .router-icon-video,
+.theme-dark .router-icon-videos,
+.theme-dark .router-icon-play {
+	background-image: url("missing_2597368020963aa87e44dce1ab5b4b09.bin");
+}
+
+.theme-dark #globalfooter-wrapper > *:first-child,
+.theme-dark .footer .footer-content > :nth-child(2) {
+	border-top: 1px solid #424245;
+}

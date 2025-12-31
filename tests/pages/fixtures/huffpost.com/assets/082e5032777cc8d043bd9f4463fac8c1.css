@@ -1,0 +1,85 @@
+/*
+ * The Typekit service used to deliver this font or fonts for use on websites
+ * is provided by Adobe and is subject to these Terms of Use
+ * http://www.adobe.com/products/eulas/tou_typekit. For font license
+ * information, see the list below.
+ *
+ * bookmania:
+ *   - http://typekit.com/eulas/00000000000000007735e593
+ *   - http://typekit.com/eulas/00000000000000007735e595
+ *   - http://typekit.com/eulas/00000000000000007735e591
+ *   - http://typekit.com/eulas/00000000000000007735e58f
+ *   - http://typekit.com/eulas/00000000000000007735e594
+ *   - http://typekit.com/eulas/00000000000000007735e590
+ *   - http://typekit.com/eulas/00000000000000007735e592
+ *   - http://typekit.com/eulas/00000000000000007735e58e
+ *   - http://typekit.com/eulas/00000000000000007735e58d
+ *   - http://typekit.com/eulas/00000000000000007735e58c
+ *
+ * © 2009-2025 Adobe Systems Incorporated. All Rights Reserved.
+ */
+/*{"last_published":"2024-09-03 14:14:06 UTC"}*/
+
+@import url("1c0ff118a4290c99f39c90abb38703a8.css");
+
+@font-face {
+font-family:"bookmania";
+src:url("0c575794581788caa8f69834e2d2d80e.bin") format("woff2"),url("missing_70fbb8a5fa2f9d2762d3af15dd1c2808.bin") format("woff"),url("missing_a5dc4fc85ef1e3074db4e144e4e8de24.bin") format("opentype");
+font-display:auto;font-style:italic;font-weight:900;font-stretch:normal;
+}
+
+@font-face {
+font-family:"bookmania";
+src:url("b485aa4cc2191018e12702dee81d08f9.bin") format("woff2"),url("missing_3857dd95de52c701372de2cc268f39bb.bin") format("woff"),url("missing_3508a5689c8a43a7306ddbf2a57fb093.bin") format("opentype");
+font-display:auto;font-style:normal;font-weight:900;font-stretch:normal;
+}
+
+@font-face {
+font-family:"bookmania";
+src:url("6b25db76e78b8c5ca8d38a65506ba178.bin") format("woff2"),url("missing_db06f78ccc920bf0c1ee986b9642e20e.bin") format("woff"),url("missing_136b5789d8b67f10f7e6c22502a0447d.bin") format("opentype");
+font-display:auto;font-style:italic;font-weight:700;font-stretch:normal;
+}
+
+@font-face {
+font-family:"bookmania";
+src:url("5e893e385da1b2c5c870fa1f7cd9f635.bin") format("woff2"),url("missing_1abacd5d844300bee75013332fe3f57d.bin") format("woff"),url("missing_97e9d3adb3dc7ab8825d20dde21420ac.bin") format("opentype");
+font-display:auto;font-style:normal;font-weight:700;font-stretch:normal;
+}
+
+@font-face {
+font-family:"bookmania";
+src:url("missing_ec35638d2d53bf377f17dc04f8d42565.bin") format("woff2"),url("missing_73346fc3ff5a953bcf4ec2f6109fb08d.bin") format("woff"),url("missing_1afbc7229a7affb435b4691721f6f4de.bin") format("opentype");
+font-display:auto;font-style:italic;font-weight:300;font-stretch:normal;
+}
+
+@font-face {
+font-family:"bookmania";
+src:url("missing_6cbd89ef7351fdbd9e1825b96389aee9.bin") format("woff2"),url("missing_2da4b2c1505ac247df0b8dbde85aed1d.bin") format("woff"),url("missing_b3480e35683280c2ef4c9e25983ec9cd.bin") format("opentype");
+font-display:auto;font-style:normal;font-weight:300;font-stretch:normal;
+}
+
+@font-face {
+font-family:"bookmania";
+src:url("missing_49f51623372d3dea7db489e82df160a5.bin") format("woff2"),url("missing_46b272c48b3493f648c45d5a4e0fd30f.bin") format("woff"),url("missing_a7ee367ff24dc8dfff3da9653b2bbc7e.bin") format("opentype");
+font-display:auto;font-style:italic;font-weight:400;font-stretch:normal;
+}
+
+@font-face {
+font-family:"bookmania";
+src:url("missing_7688adc357d2dabd34ea38545e67262a.bin") format("woff2"),url("missing_2c8dd056116864aaa1c13dec913bb4b9.bin") format("woff"),url("missing_e029862c7fda1d34cda6860ba7b2f928.bin") format("opentype");
+font-display:auto;font-style:normal;font-weight:400;font-stretch:normal;
+}
+
+@font-face {
+font-family:"bookmania";
+src:url("missing_2a5519b087b4e0d73de8b5c885f43071.bin") format("woff2"),url("missing_d0c236a14ebc4efb2778b0b4d03dec2e.bin") format("woff"),url("missing_2c242a3b163531b6ef974b11083407f1.bin") format("opentype");
+font-display:auto;font-style:normal;font-weight:600;font-stretch:normal;
+}
+
+@font-face {
+font-family:"bookmania";
+src:url("missing_a99e04457f9f1daf7852e48fdc5f01ea.bin") format("woff2"),url("missing_d985a331dd5ff35adb4ddd30cedd8508.bin") format("woff"),url("missing_858d679dbdf11feb93b6c74d4b73c94c.bin") format("opentype");
+font-display:auto;font-style:italic;font-weight:600;font-stretch:normal;
+}
+
+.tk-bookmania { font-family: "bookmania",serif; }

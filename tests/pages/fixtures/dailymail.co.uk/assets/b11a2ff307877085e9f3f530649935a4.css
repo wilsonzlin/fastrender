@@ -1,0 +1,205 @@
+[data-mol-fe-xpmodule-story-tips] {
+  margin-bottom: 10px;
+}
+
+  [data-mol-fe-xpmodule-story-tips].home,
+  [data-mol-fe-xpmodule-story-tips].dailymailtv,
+  [data-mol-fe-xpmodule-story-tips].video {
+    color: #004db3;
+  }
+
+  [data-mol-fe-xpmodule-story-tips].lifestyle,
+  [data-mol-fe-xpmodule-story-tips].femail {
+    color: #c562a5;
+  }
+
+  [data-mol-fe-xpmodule-story-tips].health {
+    color: #3cc;
+  }
+
+  [data-mol-fe-xpmodule-story-tips].money {
+    color: #451344;
+  }
+
+  [data-mol-fe-xpmodule-story-tips].news,
+  [data-mol-fe-xpmodule-story-tips].sportsnews {
+    color: #00aad2;
+  }
+
+  [data-mol-fe-xpmodule-story-tips].sciencetech {
+    color: #f60;
+  }
+
+  [data-mol-fe-xpmodule-story-tips].sport {
+    color: #0cac0c;
+  }
+
+  [data-mol-fe-xpmodule-story-tips].travel {
+    color: #082340;
+  }
+
+  [data-mol-fe-xpmodule-story-tips].tvshowbiz {
+    color: #e01c44;
+  }
+
+  [data-mol-fe-xpmodule-story-tips].debate {
+    color: #c6c3fc;
+  }
+
+  [data-mol-fe-xpmodule-story-tips].royal_wedding,
+  [data-mol-fe-xpmodule-story-tips].royals {
+    color: #540c75;
+  }
+
+  [data-mol-fe-xpmodule-story-tips].event,
+  [data-mol-fe-xpmodule-story-tips].moslive {
+    color: #00b1a6;
+  }
+
+  [data-mol-fe-xpmodule-story-tips].motoring {
+    color: #666;
+  }
+
+  [data-mol-fe-xpmodule-story-tips].pictures {
+    color: #f00;
+  }
+
+  [data-mol-fe-xpmodule-story-tips].property {
+    color: #ac46c6;
+  }
+
+  [data-mol-fe-xpmodule-story-tips].you {
+    color: #d42699;
+  }
+
+  [data-mol-fe-xpmodule-story-tips].metro {
+    color: #ffc000;
+  }
+
+  [data-mol-fe-xpmodule-story-tips] .container {
+    background: currentcolor;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    font-family: Arial, sans-serif;
+    justify-content: space-between;
+    margin: 0 auto;
+    padding: 25px 20px 20px;
+    position: relative;
+  }
+
+  [data-mol-fe-xpmodule-story-tips] .title,
+  [data-mol-fe-xpmodule-story-tips] .subText {
+    color: #fff;
+    font-weight: bold;
+  }
+
+  [data-mol-fe-xpmodule-story-tips] .subText {
+    font-size: 12px;
+  }
+
+  [data-mol-fe-xpmodule-story-tips] .subText .text {
+      font-weight: normal;
+    }
+
+  [data-mol-fe-xpmodule-story-tips] .subText a {
+      color: #fff;
+      text-decoration: underline;
+    }
+
+  [data-mol-fe-xpmodule-story-tips] .title svg {
+    height: 31px;
+    position: absolute;
+    right: 20px;
+    top: 25px;
+    width: 30px;
+  }
+
+  [data-mol-fe-xpmodule-story-tips] .button {
+    align-items: center;
+    background: #fff;
+    display: flex;
+    font-size: 14px;
+    height: 30px;
+    justify-content: center;
+    position: relative;
+  }
+
+  [data-mol-fe-xpmodule-story-tips] .button a {
+      color: currentColor;
+      font-weight: bold;
+      text-align: center;
+      width: 100%;
+    }
+
+  [data-mol-fe-xpmodule-story-tips] .button a:hover {
+        cursor: pointer;
+        text-decoration: none;
+      }
+
+  [data-mol-fe-xpmodule-story-tips] .button svg {
+      height: 14px;
+      position: absolute;
+      right: 10px;
+      width: 7px;
+    }
+
+  [data-mol-fe-xpmodule-story-tips] .breakpoint-single .title, [data-mol-fe-xpmodule-story-tips] .breakpoint-side-rail .title {
+      font-size: 16px;
+    }
+
+  [data-mol-fe-xpmodule-story-tips] .breakpoint-single .button, [data-mol-fe-xpmodule-story-tips] .breakpoint-side-rail .button {
+      width: 100%;
+    }
+
+  [data-mol-fe-xpmodule-story-tips] .breakpoint-double .title, [data-mol-fe-xpmodule-story-tips] .breakpoint-triple .title {
+      font-size: 16px;
+    }
+
+  [data-mol-fe-xpmodule-story-tips] .breakpoint-double .subText, [data-mol-fe-xpmodule-story-tips] .breakpoint-triple .subText {
+      font-size: 16px;
+      margin-bottom: 10px;
+    }
+
+  [data-mol-fe-xpmodule-story-tips] .breakpoint-double .button, [data-mol-fe-xpmodule-story-tips] .breakpoint-triple .button {
+      font-size: 16px;
+      width: 195px;
+    }
+
+  [data-mol-fe-xpmodule-story-tips] .breakpoint-double .title {
+    font-size: 20px;
+  }
+
+  [data-mol-fe-xpmodule-story-tips] .breakpoint-triple .title {
+    font-size: 26px;
+  }
+
+  [data-mol-fe-xpmodule-story-tips] .breakpoint-side-rail .title {
+    width: 217px;
+  }
+
+  [data-mol-fe-xpmodule-story-tips] .breakpoint-side-rail {
+    height: 152px;
+    max-width: 308px;
+  }
+
+  [data-mol-fe-xpmodule-story-tips] .breakpoint-single {
+    max-width: 375px;
+  }
+
+  [data-mol-fe-xpmodule-story-tips] .breakpoint-double {
+    max-width: 636px;
+  }
+
+  [data-mol-fe-xpmodule-story-tips] .breakpoint-triple {
+    height: 151px;
+    max-width: 964px;
+  }
+
+  [data-mol-fe-xpmodule-story-tips] .breakpoint-single,
+  [data-mol-fe-xpmodule-story-tips] .breakpoint-double {
+    height: 144px;
+  }
+
+
+/*# sourceMappingURL=index.css.map*/

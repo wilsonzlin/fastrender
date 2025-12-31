@@ -1,0 +1,809 @@
+/* .loc-en-only */
+
+:not(:lang(en)) .loc-en-only:after {
+	display: inline;
+}
+
+:not(:lang(en)) .more.loc-en-only:before {
+	display: inline;
+}
+
+:not(:lang(en)) .more.nowrap.loc-en-only {
+	display: inline;
+}
+
+:not(:lang(en)) .more.loc-en-only:after {
+	display: inline-block;
+}
+
+:lang(ko-KR) > .loc-en-only:after {
+	content: "(영문)";
+}
+
+:lang(ja-JP) > .loc-en-only:after {
+	content: "\00a0（英語）\00a0";
+}
+
+:lang(zh-CN) > .loc-en-only:after {
+	content: " (英文)";
+}
+
+:lang(zh-TW) > .loc-en-only:after {
+	content: " (英文)";
+}
+
+:lang(it-IT) > .loc-en-only:after {
+	content: " (inglese)";
+}
+
+:lang(fr-FR) > .loc-en-only:after {
+	content: " (anglais)";
+}
+
+:lang(de-DE) > .loc-en-only:after {
+	content: " (Englisch)";
+}
+
+:lang(pt-BR) > .loc-en-only:after {
+	content: " (Inglês)";
+}
+
+:lang(es-lamr) > .loc-en-only:after {
+	content: " (inglés)";
+}
+
+:lang(ko-KR) > .more.loc-en-only:before {
+	font-family: "SF Pro KR", "SF Pro Text", "SF Pro Icons", "Apple Gothic", "HY Gulim", "MalgunGothic", "HY Dotum", "Lexi Gulim", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: "(영문)";
+}
+
+:lang(ja-JP) > .more.loc-en-only:before {
+	font-family: "SF Pro JP", "SF Pro Text", "SF Pro Icons", "Hiragino Kaku Gothic Pro", "ヒラギノ角ゴ Pro W3", "メイリオ", "Meiryo", "ＭＳ Ｐゴシック", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: "\00a0（英語）\00a0";
+}
+
+:lang(zh-CN) > .more.loc-en-only:before {
+	font-family: "SF Pro SC", "SF Pro Text", "SF Pro Icons", "PingFang SC", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: " (英文)";
+}
+
+:lang(zh-TW) > .more.loc-en-only:before {
+	font-family: "SF Pro TC", "SF Pro Text", "SF Pro Icons", "PingFang TC", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: " (英文)";
+}
+
+:lang(it-IT) > .more.loc-en-only:before {
+	font-family: "SF Pro Text", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: " (inglese)";
+}
+
+:lang(fr-FR) > .more.loc-en-only:before {
+	font-family: "SF Pro Text", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: " (anglais)";
+}
+
+:lang(de-DE) > .more.loc-en-only:before {
+	font-family: "SF Pro Text", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: " (Englisch)";
+}
+
+:lang(pt-BR) > .more.loc-en-only:before {
+	font-family: "SF Pro Text", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: " (Inglês)";
+}
+
+:lang(es-lamr) > .more.loc-en-only:before {
+	font-family: "SF Pro Text", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: " (inglés)";
+}
+
+:lang(ko-KR) > .more.loc-en-only:after {
+	content: " ";
+}
+
+:lang(ja-JP) > .more.loc-en-only:after {
+	content: " ";
+}
+
+:lang(zh-CN) > .more.loc-en-only:after {
+	content: " ";
+}
+
+:lang(zh-TW) > .more.loc-en-only:after {
+	content: " ";
+}
+
+:lang(it-IT) > .more.loc-en-only:after {
+	content: " ";
+}
+
+:lang(fr-FR) > .more.loc-en-only:after {
+	content: " ";
+}
+
+:lang(de-DE) > .more.loc-en-only:after {
+	content: " ";
+}
+
+:lang(pt-BR) > .more.loc-en-only:after {
+	content: " ";
+}
+
+:lang(es-lamr) > .more.loc-en-only:after {
+	content: " ";
+}
+
+/* .loc-c */
+
+:not(:lang(en)) .loc-c:after {
+	display: inline;
+}
+
+:not(:lang(en)) .more.loc-c:before {
+	display: inline;
+}
+
+:not(:lang(en)) .more.nowrap.loc-c {
+	display: inline;
+}
+
+:not(:lang(en)) .more.loc-c:after {
+	display: inline-block;
+}
+
+:lang(ko-KR) > .loc-c:after {
+	content: "(영문)";
+}
+
+:lang(ja-JP) > .loc-c:after {
+	content: "\00a0（英語）\00a0";
+}
+
+:lang(zh-CN) > .loc-c:after {
+	content: "";
+}
+
+:lang(zh-TW) > .loc-c:after {
+	content: " (英文)";
+}
+
+:lang(it-IT) > .loc-c:after {
+	content: " (inglese)";
+}
+
+:lang(fr-FR) > .loc-c:after {
+	content: " (anglais)";
+}
+
+:lang(de-DE) > .loc-c:after {
+	content: " (Englisch)";
+}
+
+:lang(pt-BR) > .loc-c:after {
+	content: " (Inglês)";
+}
+
+:lang(es-lamr) > .loc-c:after {
+	content: " (inglés)";
+}
+
+:lang(ko-KR) > .more.loc-c:before {
+	font-family: "SF Pro KR", "SF Pro Text", "SF Pro Icons", "Apple Gothic", "HY Gulim", "MalgunGothic", "HY Dotum", "Lexi Gulim", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: "(영문)";
+}
+
+:lang(ja-JP) > .more.loc-c:before {
+	font-family: "SF Pro JP", "SF Pro Text", "SF Pro Icons", "Hiragino Kaku Gothic Pro", "ヒラギノ角ゴ Pro W3", "メイリオ", "Meiryo", "ＭＳ Ｐゴシック", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: "\00a0（英語）\00a0";
+}
+
+:lang(zh-CN) > .more.loc-c:before {
+	font-family: "SF Pro SC", "SF Pro Text", "SF Pro Icons", "PingFang SC", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: "";
+}
+
+:lang(zh-TW) > .more.loc-c:before {
+	font-family: "SF Pro TC", "SF Pro Text", "SF Pro Icons", "PingFang TC", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: " (英文)";
+}
+
+:lang(it-IT) > .more.loc-c:before {
+	font-family: "SF Pro Text", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: " (inglese)";
+}
+
+:lang(fr-FR) > .more.loc-c:before {
+	font-family: "SF Pro Text", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: " (anglais)";
+}
+
+:lang(de-DE) > .more.loc-c:before {
+	font-family: "SF Pro Text", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: " (Englisch)";
+}
+
+:lang(pt-BR) > .more.loc-c:before {
+	font-family: "SF Pro Text", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: " (Inglês)";
+}
+
+:lang(es-lamr) > .more.loc-c:before {
+	font-family: "SF Pro Text", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: " (inglés)";
+}
+
+:lang(ko-KR) > .more.loc-c:after {
+	content: " ";
+}
+
+:lang(ja-JP) > .more.loc-c:after {
+	content: " ";
+}
+
+:lang(zh-CN) > .more.loc-c:after {
+	content: "";
+}
+
+:lang(zh-TW) > .more.loc-c:after {
+	content: " ";
+}
+
+:lang(it-IT) > .more.loc-c:after {
+	content: " ";
+}
+
+:lang(fr-FR) > .more.loc-c:after {
+	content: " ";
+}
+
+:lang(de-DE) > .more.loc-c:after {
+	content: " ";
+}
+
+:lang(pt-BR) > .more.loc-c:after {
+	content: " ";
+}
+
+:lang(es-lamr) > .more.loc-c:after {
+	content: " ";
+}
+
+/* .loc-j */
+
+:not(:lang(en)) .loc-j:after {
+	display: inline;
+}
+
+:not(:lang(en)) .more.loc-j:before {
+	display: inline;
+}
+
+:not(:lang(en)) .more.nowrap.loc-j {
+	display: inline;
+}
+
+:not(:lang(en)) .more.loc-j:after {
+	display: inline-block;
+}
+
+:lang(ko-KR) > .loc-j:after {
+	content: "(영문)";
+}
+
+:lang(ja-JP) > .loc-j:after {
+	content: "";
+}
+
+:lang(zh-CN) > .loc-j:after {
+	content: " (英文)";
+}
+
+:lang(zh-TW) > .loc-j:after {
+	content: " (英文)";
+}
+
+:lang(it-IT) > .loc-j:after {
+	content: " (inglese)";
+}
+
+:lang(fr-FR) > .loc-j:after {
+	content: " (anglais)";
+}
+
+:lang(de-DE) > .loc-j:after {
+	content: " (Englisch)";
+}
+
+:lang(pt-BR) > .loc-j:after {
+	content: " (Inglês)";
+}
+
+:lang(es-lamr) > .loc-j:after {
+	content: " (inglés)";
+}
+
+:lang(ko-KR) > .more.loc-j:before {
+	font-family: "SF Pro KR", "SF Pro Text", "SF Pro Icons", "Apple Gothic", "HY Gulim", "MalgunGothic", "HY Dotum", "Lexi Gulim", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: "(영문)";
+}
+
+:lang(ja-JP) > .more.loc-j:before {
+	font-family: "SF Pro JP", "SF Pro Text", "SF Pro Icons", "Hiragino Kaku Gothic Pro", "ヒラギノ角ゴ Pro W3", "メイリオ", "Meiryo", "ＭＳ Ｐゴシック", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: "";
+}
+
+:lang(zh-CN) > .more.loc-j:before {
+	font-family: "SF Pro SC", "SF Pro Text", "SF Pro Icons", "PingFang SC", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: " (英文)";
+}
+
+:lang(zh-TW) > .more.loc-j:before {
+	font-family: "SF Pro TC", "SF Pro Text", "SF Pro Icons", "PingFang TC", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: " (英文)";
+}
+
+:lang(it-IT) > .more.loc-j:before {
+	font-family: "SF Pro Text", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: " (inglese)";
+}
+
+:lang(fr-FR) > .more.loc-j:before {
+	font-family: "SF Pro Text", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: " (anglais)";
+}
+
+:lang(de-DE) > .more.loc-j:before {
+	font-family: "SF Pro Text", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: " (Englisch)";
+}
+
+:lang(pt-BR) > .more.loc-j:before {
+	font-family: "SF Pro Text", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: " (Inglês)";
+}
+
+:lang(es-lamr) > .more.loc-j:before {
+	font-family: "SF Pro Text", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: " (inglés)";
+}
+
+:lang(ko-KR) > .more.loc-j:after {
+	content: " ";
+}
+
+:lang(ja-JP) > .more.loc-j:after {
+	content: "";
+}
+
+:lang(zh-CN) > .more.loc-j:after {
+	content: " ";
+}
+
+:lang(zh-TW) > .more.loc-j:after {
+	content: " ";
+}
+
+:lang(it-IT) > .more.loc-j:after {
+	content: " ";
+}
+
+:lang(fr-FR) > .more.loc-j:after {
+	content: " ";
+}
+
+:lang(de-DE) > .more.loc-j:after {
+	content: " ";
+}
+
+:lang(pt-BR) > .more.loc-j:after {
+	content: " ";
+}
+
+:lang(es-lamr) > .more.loc-j:after {
+	content: " ";
+}
+
+/* .loc-apac */
+
+:not(:lang(en)) .loc-apac:after {
+	display: inline;
+}
+
+:not(:lang(en)) .more.loc-apac:before {
+	display: inline;
+}
+
+:not(:lang(en)) .more.nowrap.loc-apac {
+	display: inline;
+}
+
+:not(:lang(en)) .more.loc-apac:after {
+	display: inline-block;
+}
+
+:lang(ko-KR) > .loc-apac:after {
+	content: "";
+}
+
+:lang(ja-JP) > .loc-apac:after {
+	content: "";
+}
+
+:lang(zh-CN) > .loc-apac:after {
+	content: "";
+}
+
+:lang(zh-TW) > .loc-apac:after {
+	content: " (英文)";
+}
+
+:lang(it-IT) > .loc-apac:after {
+	content: " (inglese)";
+}
+
+:lang(fr-FR) > .loc-apac:after {
+	content: " (anglais)";
+}
+
+:lang(de-DE) > .loc-apac:after {
+	content: " (Englisch)";
+}
+
+:lang(pt-BR) > .loc-apac:after {
+	content: " (Inglês)";
+}
+
+:lang(es-lamr) > .loc-apac:after {
+	content: " (inglés)";
+}
+
+:lang(ko-KR) > .more.loc-apac:before {
+	font-family: "SF Pro KR", "SF Pro Text", "SF Pro Icons", "Apple Gothic", "HY Gulim", "MalgunGothic", "HY Dotum", "Lexi Gulim", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: "";
+}
+
+:lang(ja-JP) > .more.loc-apac:before {
+	font-family: "SF Pro JP", "SF Pro Text", "SF Pro Icons", "Hiragino Kaku Gothic Pro", "ヒラギノ角ゴ Pro W3", "メイリオ", "Meiryo", "ＭＳ Ｐゴシック", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: "";
+}
+
+:lang(zh-CN) > .more.loc-apac:before {
+	font-family: "SF Pro SC", "SF Pro Text", "SF Pro Icons", "PingFang SC", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: "";
+}
+
+:lang(zh-TW) > .more.loc-apac:before {
+	font-family: "SF Pro TC", "SF Pro Text", "SF Pro Icons", "PingFang TC", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: " (英文)";
+}
+
+:lang(it-IT) > .more.loc-apac:before {
+	font-family: "SF Pro Text", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: " (inglese)";
+}
+
+:lang(fr-FR) > .more.loc-apac:before {
+	font-family: "SF Pro Text", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: " (anglais)";
+}
+
+:lang(de-DE) > .more.loc-apac:before {
+	font-family: "SF Pro Text", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: " (Englisch)";
+}
+
+:lang(pt-BR) > .more.loc-apac:before {
+	font-family: "SF Pro Text", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: " (Inglês)";
+}
+
+:lang(es-lamr) > .more.loc-apac:before {
+	font-family: "SF Pro Text", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: " (inglés)";
+}
+
+:lang(ko-KR) > .more.loc-apac:after {
+	content: "";
+}
+
+:lang(ja-JP) > .more.loc-apac:after {
+	content: "";
+}
+
+:lang(zh-CN) > .more.loc-apac:after {
+	content: "";
+}
+
+:lang(zh-TW) > .more.loc-apac:after {
+	content: "";
+}
+
+:lang(it-IT) > .more.loc-apac:after {
+	content: " ";
+}
+
+:lang(fr-FR) > .more.loc-apac:after {
+	content: " ";
+}
+
+:lang(de-DE) > .more.loc-apac:after {
+	content: " ";
+}
+
+:lang(pt-BR) > .more.loc-apac:after {
+	content: " ";
+}
+
+:lang(es-lamr) > .more.loc-apac:after {
+	content: " ";
+}
+
+/* .loc-cj */
+
+:not(:lang(en)) .loc-cj:after {
+	display: inline;
+}
+
+:not(:lang(en)) .more.loc-cj:before {
+	display: inline;
+}
+
+:not(:lang(en)) .more.nowrap.loc-cj {
+	display: inline;
+}
+
+:not(:lang(en)) .more.loc-cj:after {
+	display: inline-block;
+}
+
+:lang(ko-KR) > .loc-cj:after {
+	content: "(영문)";
+}
+
+:lang(ja-JP) > .loc-cj:after {
+	content: "";
+}
+
+:lang(zh-CN) > .loc-cj:after {
+	content: "";
+}
+
+:lang(zh-TW) > .loc-cj:after {
+	content: " (英文)";
+}
+
+:lang(it-IT) > .loc-cj:after {
+	content: " (inglese)";
+}
+
+:lang(fr-FR) > .loc-cj:after {
+	content: " (anglais)";
+}
+
+:lang(de-DE) > .loc-cj:after {
+	content: " (Englisch)";
+}
+
+:lang(pt-BR) > .loc-cj:after {
+	content: " (Inglês)";
+}
+
+:lang(es-lamr) > .loc-cj:after {
+	content: " (inglés)";
+}
+
+:lang(ko-KR) > .more.loc-cj:before {
+	font-family: "SF Pro KR", "SF Pro Text", "SF Pro Icons", "Apple Gothic", "HY Gulim", "MalgunGothic", "HY Dotum", "Lexi Gulim", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: "(영문)";
+}
+
+:lang(ja-JP) > .more.loc-cj:before {
+	font-family: "SF Pro JP", "SF Pro Text", "SF Pro Icons", "Hiragino Kaku Gothic Pro", "ヒラギノ角ゴ Pro W3", "メイリオ", "Meiryo", "ＭＳ Ｐゴシック", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: "";
+}
+
+:lang(zh-CN) > .more.loc-cj:before {
+	font-family: "SF Pro SC", "SF Pro Text", "SF Pro Icons", "PingFang SC", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: "";
+}
+
+:lang(zh-TW) > .more.loc-cj:before {
+	font-family: "SF Pro TC", "SF Pro Text", "SF Pro Icons", "PingFang TC", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: " (英文)";
+}
+
+:lang(it-IT) > .more.loc-cj:before {
+	font-family: "SF Pro Text", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: " (inglese)";
+}
+
+:lang(fr-FR) > .more.loc-cj:before {
+	font-family: "SF Pro Text", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: " (anglais)";
+}
+
+:lang(de-DE) > .more.loc-cj:before {
+	font-family: "SF Pro Text", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: " (Englisch)";
+}
+
+:lang(pt-BR) > .more.loc-cj:before {
+	font-family: "SF Pro Text", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: " (Inglês)";
+}
+
+:lang(es-lamr) > .more.loc-cj:before {
+	font-family: "SF Pro Text", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: " (inglés)";
+}
+
+:lang(ko-KR) > .more.loc-cj:after {
+	content: " ";
+}
+
+:lang(ja-JP) > .more.loc-cj:after {
+	content: "";
+}
+
+:lang(zh-CN) > .more.loc-cj:after {
+	content: "";
+}
+
+:lang(zh-TW) > .more.loc-cj:after {
+	content: " ";
+}
+
+:lang(it-IT) > .more.loc-cj:after {
+	content: " ";
+}
+
+:lang(fr-FR) > .more.loc-cj:after {
+	content: " ";
+}
+
+:lang(de-DE) > .more.loc-cj:after {
+	content: " ";
+}
+
+:lang(pt-BR) > .more.loc-cj:after {
+	content: " ";
+}
+
+:lang(es-lamr) > .more.loc-cj:after {
+	content: " ";
+}
+
+/* .loc-4apac */
+
+:not(:lang(en)) .loc-4apac:after {
+	display: inline;
+}
+
+:not(:lang(en)) .more.loc-4apac:before {
+	display: inline;
+}
+
+:not(:lang(en)) .more.nowrap.loc-4apac {
+	display: inline;
+}
+
+:not(:lang(en)) .more.loc-4apac:after {
+	display: inline-block;
+}
+
+:lang(ko-KR) > .loc-4apac:after {
+	content: "";
+}
+
+:lang(ja-JP) > .loc-4apac:after {
+	content: "";
+}
+
+:lang(zh-CN) > .loc-4apac:after {
+	content: "";
+}
+
+:lang(zh-TW) > .loc-4apac:after {
+	content: "";
+}
+
+:lang(it-IT) > .loc-4apac:after {
+	content: " (inglese)";
+}
+
+:lang(fr-FR) > .loc-4apac:after {
+	content: " (anglais)";
+}
+
+:lang(de-DE) > .loc-4apac:after {
+	content: " (Englisch)";
+}
+
+:lang(pt-BR) > .loc-4apac:after {
+	content: " (Inglês)";
+}
+
+:lang(es-lamr) > .loc-4apac:after {
+	content: " (inglés)";
+}
+
+:lang(ko-KR) > .more.loc-4apac:before {
+	font-family: "SF Pro KR", "SF Pro Text", "SF Pro Icons", "Apple Gothic", "HY Gulim", "MalgunGothic", "HY Dotum", "Lexi Gulim", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: "";
+}
+
+:lang(ja-JP) > .more.loc-4apac:before {
+	font-family: "SF Pro JP", "SF Pro Text", "SF Pro Icons", "Hiragino Kaku Gothic Pro", "ヒラギノ角ゴ Pro W3", "メイリオ", "Meiryo", "ＭＳ Ｐゴシック", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: "";
+}
+
+:lang(zh-CN) > .more.loc-4apac:before {
+	font-family: "SF Pro SC", "SF Pro Text", "SF Pro Icons", "PingFang SC", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: "";
+}
+
+:lang(zh-TW) > .more.loc-4apac:before {
+	font-family: "SF Pro TC", "SF Pro Text", "SF Pro Icons", "PingFang TC", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: "";
+}
+
+:lang(it-IT) > .more.loc-4apac:before {
+	font-family: "SF Pro Text", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: " (inglese)";
+}
+
+:lang(fr-FR) > .more.loc-4apac:before {
+	font-family: "SF Pro Text", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: " (anglais)";
+}
+
+:lang(de-DE) > .more.loc-4apac:before {
+	font-family: "SF Pro Text", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: " (Englisch)";
+}
+
+:lang(pt-BR) > .more.loc-4apac:before {
+	font-family: "SF Pro Text", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: " (Inglês)";
+}
+
+:lang(es-lamr) > .more.loc-4apac:before {
+	font-family: "SF Pro Text", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+	content: " (inglés)";
+}
+
+:lang(ko-KR) > .more.loc-4apac:after {
+	content: "";
+}
+
+:lang(ja-JP) > .more.loc-4apac:after {
+	content: "";
+}
+
+:lang(zh-CN) > .more.loc-4apac:after {
+	content: "";
+}
+
+:lang(zh-TW) > .more.loc-4apac:after {
+	content: "";
+}
+
+:lang(it-IT) > .more.loc-4apac:after {
+	content: " ";
+}
+
+:lang(fr-FR) > .more.loc-4apac:after {
+	content: " ";
+}
+
+:lang(de-DE) > .more.loc-4apac:after {
+	content: " ";
+}
+
+:lang(pt-BR) > .more.loc-4apac:after {
+	content: " ";
+}
+
+:lang(es-lamr) > .more.loc-4apac:after {
+	content: " ";
+}

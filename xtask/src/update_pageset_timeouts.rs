@@ -329,6 +329,11 @@ fn read_progress_entries(progress_dir: &Path) -> Result<Vec<ProgressEntry>> {
   Ok(entries)
 }
 
+fn ok_page_reserve(count: usize) -> usize {
+  let target = ((count as f64) * 0.2).ceil() as usize;
+  target.clamp(1, 5)
+}
+
 fn select_pages(
   entries: &[ProgressEntry],
   count: usize,
@@ -438,10 +443,14 @@ fn select_pages_coverage(entries: &[ProgressEntry], count: usize) -> Vec<Progres
   }
   let desired_ok_slots = hotspot_categories_present.len();
 
-  // Reserve enough slots for one OK page per hotspot category when possible, but do not reserve
-  // more than we can fit alongside the timeout-stage representatives.
+  // Reserve enough slots for OK pages to cover hotspot categories (and keep a handful of slow OK
+  // pages for successful-render hotspot coverage), but do not reserve more than we can fit
+  // alongside the timeout-stage representatives.
   let max_ok_slots = count.saturating_sub(stage_reps.len().min(count));
-  let ok_slots = desired_ok_slots.min(max_ok_slots);
+  let ok_slots = desired_ok_slots
+    .max(ok_page_reserve(count))
+    .min(ok.len())
+    .min(max_ok_slots);
   let timeout_slots = count.saturating_sub(ok_slots);
 
   let mut selected_timeouts = Vec::new();
@@ -450,12 +459,60 @@ fn select_pages_coverage(entries: &[ProgressEntry], count: usize) -> Vec<Progres
     selected_timeout_names.insert(entry.name.clone());
     selected_timeouts.push(entry);
   }
-  for entry in &timeouts {
-    if selected_timeouts.len() >= timeout_slots {
-      break;
+
+  if selected_timeouts.len() < timeout_slots {
+    // Round-robin additional timeouts across stages so a large suite doesn't overrepresent one
+    // timeout stage.
+    let mut timeout_buckets: Vec<Vec<ProgressEntry>> = vec![Vec::new(); 6];
+    for entry in &timeouts {
+      let idx = match entry.timeout_stage {
+        Some(ProgressStage::DomParse) => 0,
+        Some(ProgressStage::Css) => 1,
+        Some(ProgressStage::Cascade) => 2,
+        Some(ProgressStage::Layout) => 3,
+        Some(ProgressStage::Paint) => 4,
+        None => 5,
+      };
+      timeout_buckets[idx].push(entry.clone());
     }
-    if selected_timeout_names.insert(entry.name.clone()) {
-      selected_timeouts.push(entry.clone());
+
+    let mut timeout_offsets = vec![0usize; timeout_buckets.len()];
+    for (idx, bucket) in timeout_buckets.iter().enumerate() {
+      if let Some(first) = bucket.first() {
+        if selected_timeout_names.contains(&first.name) {
+          timeout_offsets[idx] = 1;
+        }
+      }
+    }
+
+    let mut made_progress = true;
+    while selected_timeouts.len() < timeout_slots && made_progress {
+      made_progress = false;
+      for (idx, bucket) in timeout_buckets.iter().enumerate() {
+        if selected_timeouts.len() >= timeout_slots {
+          break;
+        }
+        let offset = timeout_offsets[idx];
+        if offset >= bucket.len() {
+          continue;
+        }
+        timeout_offsets[idx] += 1;
+        let candidate = &bucket[offset];
+        if selected_timeout_names.insert(candidate.name.clone()) {
+          selected_timeouts.push(candidate.clone());
+          made_progress = true;
+        }
+      }
+    }
+
+    // Fall back to the global list if buckets were exhausted early.
+    for entry in &timeouts {
+      if selected_timeouts.len() >= timeout_slots {
+        break;
+      }
+      if selected_timeout_names.insert(entry.name.clone()) {
+        selected_timeouts.push(entry.clone());
+      }
     }
   }
   selected_timeouts.sort_by(entry_slowest_first);

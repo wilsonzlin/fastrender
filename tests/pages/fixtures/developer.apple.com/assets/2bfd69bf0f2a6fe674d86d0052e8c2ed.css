@@ -1,0 +1,286 @@
+@charset "UTF-8";
+.chapternav {
+  background: rgba(242, 242, 242, 0.7);
+  overflow: hidden;
+  padding: 0;
+  padding-top: 12px;
+  padding-bottom: 12px;
+  position: relative;
+  text-align: center;
+  width: 100%;
+  height: 86px;
+  z-index: 9987; }
+  @supports (backdrop-filter: initial) {
+    .chapternav {
+      backdrop-filter: saturate(180%) blur(20px);
+      background: rgba(242, 242, 242, 0.9); } }
+  .ac-nav-overlap .chapternav,
+  .chapternav-overlap .chapternav {
+    position: absolute;
+    top: 0;
+    left: 0; }
+  .ac-nav-overlap .chapternav {
+    margin-top: 44px; }
+    @media only screen and (max-width: 767px) {
+      .ac-nav-overlap .chapternav {
+        margin-top: 48px; } }
+  .theme-dark .chapternav, .chapternav.theme-dark {
+    background: rgba(51, 51, 51, 0.9); }
+    @supports (backdrop-filter: initial) {
+      .theme-dark .chapternav, .chapternav.theme-dark {
+        background: rgba(51, 51, 51, 0.9); } }
+  .chapternav-wrapper {
+    position: relative;
+    height: 100%;
+    z-index: 1; }
+
+.chapternav-items {
+  list-style: none;
+  margin: 0 34px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 50px;
+  white-space: nowrap; }
+  @media only screen and (orientation: landscape) {
+    .chapternav-items {
+      padding-bottom: 49px; } }
+  html.touch .chapternav-items {
+    margin: 0;
+    padding-left: 34px;
+    padding-right: 34px; }
+
+.chapternav-item {
+  display: inline-block;
+  vertical-align: top;
+  margin: 0 -0.11765em;
+  padding: 0 18px; }
+  .chapternav-item:first-child {
+    margin-left: 0;
+    padding-left: 0; }
+  .chapternav-item:last-child {
+    margin-right: 0;
+    padding-right: 0; }
+
+.chapternav-icon {
+  background: center bottom no-repeat;
+  display: block;
+  margin: 0 auto  6px;
+  height: 54px; }
+
+.chapternav-label {
+  font-size: 11px;
+  line-height: 1.09091;
+  font-weight: 400;
+  letter-spacing: 0.005em;
+  font-family: "SF Pro Text", "SF Pro Icons", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+  display: block;
+  margin: 0; }
+  .chapternav-label:lang(ar) {
+    font-family: "SF Pro AR", "SF Pro Gulf", "SF Pro Text", "SF Pro Icons", "Helvetica Neue", "Helvetica", "Arial", sans-serif; }
+  .chapternav-label:lang(ja) {
+    font-family: "SF Pro JP", "SF Pro Text", "SF Pro Icons", "Hiragino Kaku Gothic Pro", "ヒラギノ角ゴ Pro W3", "メイリオ", "Meiryo", "ＭＳ Ｐゴシック", "Helvetica Neue", "Helvetica", "Arial", sans-serif; }
+  .chapternav-label:lang(ko) {
+    font-family: "SF Pro KR", "SF Pro Text", "SF Pro Icons", "Apple Gothic", "HY Gulim", "MalgunGothic", "HY Dotum", "Lexi Gulim", "Helvetica Neue", "Helvetica", "Arial", sans-serif; }
+  .chapternav-label:lang(th) {
+    font-family: "SF Pro TH", "SF Pro Text", "SF Pro Icons", "Helvetica Neue", "Helvetica", "Arial", sans-serif; }
+  .chapternav-label:lang(zh-CN) {
+    font-family: "SF Pro SC", "SF Pro Text", "SF Pro Icons", "PingFang SC", "Helvetica Neue", "Helvetica", "Arial", sans-serif; }
+  .chapternav-label:lang(zh-HK) {
+    font-family: "SF Pro HK", "SF Pro Text", "SF Pro Icons", "PingFang HK", "Helvetica Neue", "Helvetica", "Arial", sans-serif; }
+  .chapternav-label:lang(zh-MO) {
+    font-family: "SF Pro TC", "SF Pro Text", "SF Pro Icons", "PingFang TC", "Helvetica Neue", "Helvetica", "Arial", sans-serif; }
+  .chapternav-label:lang(zh-TW) {
+    font-family: "SF Pro TC", "SF Pro Text", "SF Pro Icons", "PingFang TC", "Helvetica Neue", "Helvetica", "Arial", sans-serif; }
+
+.chapternav-new {
+  font-size: 9px;
+  line-height: 1.22226;
+  font-weight: 400;
+  letter-spacing: 0.017em;
+  font-family: "SF Pro Text", "SF Pro Icons", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+  color: #e85d00;
+  display: block;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  width: 100%; }
+  .chapternav-new:lang(ar) {
+    font-family: "SF Pro AR", "SF Pro Gulf", "SF Pro Text", "SF Pro Icons", "Helvetica Neue", "Helvetica", "Arial", sans-serif; }
+  .chapternav-new:lang(ja) {
+    font-family: "SF Pro JP", "SF Pro Text", "SF Pro Icons", "Hiragino Kaku Gothic Pro", "ヒラギノ角ゴ Pro W3", "メイリオ", "Meiryo", "ＭＳ Ｐゴシック", "Helvetica Neue", "Helvetica", "Arial", sans-serif; }
+  .chapternav-new:lang(ko) {
+    font-family: "SF Pro KR", "SF Pro Text", "SF Pro Icons", "Apple Gothic", "HY Gulim", "MalgunGothic", "HY Dotum", "Lexi Gulim", "Helvetica Neue", "Helvetica", "Arial", sans-serif; }
+  .chapternav-new:lang(th) {
+    font-family: "SF Pro TH", "SF Pro Text", "SF Pro Icons", "Helvetica Neue", "Helvetica", "Arial", sans-serif; }
+  .chapternav-new:lang(zh-CN) {
+    font-family: "SF Pro SC", "SF Pro Text", "SF Pro Icons", "PingFang SC", "Helvetica Neue", "Helvetica", "Arial", sans-serif; }
+  .chapternav-new:lang(zh-HK) {
+    font-family: "SF Pro HK", "SF Pro Text", "SF Pro Icons", "PingFang HK", "Helvetica Neue", "Helvetica", "Arial", sans-serif; }
+  .chapternav-new:lang(zh-MO) {
+    font-family: "SF Pro TC", "SF Pro Text", "SF Pro Icons", "PingFang TC", "Helvetica Neue", "Helvetica", "Arial", sans-serif; }
+  .chapternav-new:lang(zh-TW) {
+    font-family: "SF Pro TC", "SF Pro Text", "SF Pro Icons", "PingFang TC", "Helvetica Neue", "Helvetica", "Arial", sans-serif; }
+  .theme-dark .chapternav-new {
+    color: #f46c0e; }
+
+.chapternav-link {
+  color: #333333;
+  display: block;
+  margin-top: 3px;
+  padding: 0;
+  position: relative;
+  z-index: 1; }
+  .chapternav-link:hover {
+    color: #0070c9;
+    text-decoration: none; }
+  .chapternav-link:focus {
+    outline-offset: 0; }
+  .chapternav-link.current {
+    color: #333333;
+    cursor: default;
+    opacity: 0.6; }
+  .theme-dark .chapternav-link {
+    color: white; }
+    .theme-dark .chapternav-link:hover {
+      color: #66bbff; }
+    .theme-dark .chapternav-link.current {
+      color: white; }
+
+@-webkit-keyframes chapternav-slidein {
+  0% {
+    opacity: 0; }
+  1% {
+    -webkit-transform: translateX(160px);
+            transform: translateX(160px); }
+  100% {
+    opacity: 1;
+    -webkit-transform: translateX(0);
+            transform: translateX(0); } }
+
+@keyframes chapternav-slidein {
+  0% {
+    opacity: 0; }
+  1% {
+    -webkit-transform: translateX(160px);
+            transform: translateX(160px); }
+  100% {
+    opacity: 1;
+    -webkit-transform: translateX(0);
+            transform: translateX(0); } }
+
+.chapternav-item {
+  -webkit-animation: chapternav-slidein 350ms backwards;
+          animation: chapternav-slidein 350ms backwards; }
+
+html.touch .chapternav-paddles {
+  display: none; }
+
+.chapternav-paddle {
+  font-size: 20px;
+  line-height: 1.5;
+  font-weight: 300;
+  letter-spacing: 0em;
+  font-family: "SF Pro Display", "SF Pro Icons", "Helvetica Neue", "Helvetica", "Arial", sans-serif;
+  border: 0 solid rgba(51, 51, 51, 0.2);
+  color: black;
+  opacity: 1;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  text-align: center;
+  width: 33px;
+  transition: opacity 150ms ease-out; }
+  .chapternav-paddle:lang(ar) {
+    font-family: "SF Pro AR", "SF Pro Gulf", "SF Pro Display", "SF Pro Icons", "Helvetica Neue", "Helvetica", "Arial", sans-serif; }
+  .chapternav-paddle:lang(ja) {
+    font-family: "SF Pro JP", "SF Pro Display", "SF Pro Icons", "Hiragino Kaku Gothic Pro", "ヒラギノ角ゴ Pro W3", "メイリオ", "Meiryo", "ＭＳ Ｐゴシック", "Helvetica Neue", "Helvetica", "Arial", sans-serif; }
+  .chapternav-paddle:lang(ko) {
+    font-family: "SF Pro KR", "SF Pro Display", "SF Pro Icons", "Apple Gothic", "HY Gulim", "MalgunGothic", "HY Dotum", "Lexi Gulim", "Helvetica Neue", "Helvetica", "Arial", sans-serif; }
+  .chapternav-paddle:lang(th) {
+    font-family: "SF Pro TH", "SF Pro Display", "SF Pro Icons", "Helvetica Neue", "Helvetica", "Arial", sans-serif; }
+  .chapternav-paddle:lang(zh-CN) {
+    font-family: "SF Pro SC", "SF Pro Display", "SF Pro Icons", "PingFang SC", "Helvetica Neue", "Helvetica", "Arial", sans-serif; }
+  .chapternav-paddle:lang(zh-HK) {
+    font-family: "SF Pro HK", "SF Pro Display", "SF Pro Icons", "PingFang HK", "Helvetica Neue", "Helvetica", "Arial", sans-serif; }
+  .chapternav-paddle:lang(zh-MO) {
+    font-family: "SF Pro TC", "SF Pro Display", "SF Pro Icons", "PingFang TC", "Helvetica Neue", "Helvetica", "Arial", sans-serif; }
+  .chapternav-paddle:lang(zh-TW) {
+    font-family: "SF Pro TC", "SF Pro Display", "SF Pro Icons", "PingFang TC", "Helvetica Neue", "Helvetica", "Arial", sans-serif; }
+  .chapternav-paddle:after {
+    opacity: 0.8;
+    transition: opacity 200ms linear; }
+  .chapternav-paddle:disabled {
+    opacity: 0; }
+  .chapternav-paddle:hover:after {
+    opacity: 1; }
+  .chapternav-paddle:focus {
+    outline: none; }
+    .chapternav-paddle:focus:after {
+      outline: 3px solid #c1e0fe;
+      outline: 3px solid rgba(131, 192, 253, 0.5);
+      outline-offset: 4px;
+      opacity: 1; }
+      .chapternav-paddle:focus:after[data-focus-method="mouse"]:not(input):not(textarea):not(select), .chapternav-paddle:focus:after[data-focus-method="touch"]:not(input):not(textarea):not(select) {
+        outline: none; }
+  .chapternav-paddle:active {
+    outline: none; }
+    .chapternav-paddle:active:after {
+      outline: none;
+      opacity: 1; }
+  .theme-dark .chapternav-paddle {
+    border-color: rgba(255, 255, 255, 0.2);
+    color: white; }
+  .chapternav-paddle-left {
+    border-right-width: 1px;
+    left: 0; }
+    .chapternav-paddle-left:before, .chapternav-paddle-left:after {
+      font-family: "SF Pro Icons";
+      color: inherit;
+      display: inline-block;
+      font-style: normal;
+      font-weight: inherit;
+      font-size: inherit;
+      line-height: 1;
+      text-decoration: underline;
+      position: relative;
+      z-index: 1;
+      alt: ''; }
+    .chapternav-paddle-left:before, .chapternav-paddle-left:after {
+      text-decoration: none; }
+    .chapternav-paddle-left:before {
+      display: none; }
+    .chapternav-paddle-left:before, .chapternav-paddle-left:after {
+      content: ""; }
+    .chapternav-paddle-left:after {
+      margin-left: 8px; }
+  .chapternav-paddle-right {
+    border-left-width: 1px;
+    right: 0; }
+    .chapternav-paddle-right:before, .chapternav-paddle-right:after {
+      font-family: "SF Pro Icons";
+      color: inherit;
+      display: inline-block;
+      font-style: normal;
+      font-weight: inherit;
+      font-size: inherit;
+      line-height: 1;
+      text-decoration: underline;
+      position: relative;
+      z-index: 1;
+      alt: ''; }
+    .chapternav-paddle-right:before, .chapternav-paddle-right:after {
+      text-decoration: none; }
+    .chapternav-paddle-right:before {
+      display: none; }
+    .chapternav-paddle-right:before, .chapternav-paddle-right:after {
+      content: ""; }
+    .chapternav-paddle-right:after {
+      margin-right: 8px; }
+
+.chapternav-overlap .chapternav {
+  top: auto; }
+
+.chapternav {
+  -o-box-sizing: content-box;
+  box-sizing: content-box; }

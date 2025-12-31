@@ -1,0 +1,26 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+    
+    <!-- filters -->
+    <defs>
+        <filter id="blur">
+            <feGaussianBlur in="SourceGraphic" stdDeviation="55" />
+        </filter>
+        <filter id='noiseFilter'>
+            <feTurbulence type='noise' baseFrequency='0.70' numOctaves='3' stitchTiles='stitch' />
+        </filter>
+    </defs>
+    
+    <!-- background element -->
+    <rect class="bg" width="100%" height="100%" fill="#132A13" />
+
+    <!-- vector blobs -->
+    <g filter="url(#blur)" style="opacity: none">
+        <path class="top-right" d="M540 -19L273 -31C27.6936 471.386 58.4687 571.716 540 291V-19Z" fill="#4F772D" />
+        <path class="bottom-right" d="M337 257C277.632 359.207 191.377 515.372 172 541H595L555 367C458.325 87.9509 413.357 120.41 337 257Z" fill="#31572C" />
+        <path class="bottom-left" d="M-43 331C-93 411 -43 531 -15 546H278C340 531 261.323 413.963 168 399C41.251 378.678 60.4659 339.447 106 266C168 206 215.537 262.054 259 281C259 219 223 185 132 171C41 157 7 251 -43 331Z" fill="#296A12" />
+        <path class="top-left" d="M338 183C338 183 385.544 53.4645 279 -37L-64 -65V125C-22.7792 172.517 -3.32398 153.271 27 64C28.024 169.496 77.3033 189.457 169 222C141.389 100.438 140.915 54.067 197 54C259.863 18.2985 343.277 146.528 338 183Z" fill="#90A955" />
+    </g>
+
+    <!-- noise -->
+    <rect width='100%' height='100%' filter='url(#noiseFilter)' style="opacity: 0.25"/>
+</svg>

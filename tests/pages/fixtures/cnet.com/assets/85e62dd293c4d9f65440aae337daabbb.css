@@ -1,0 +1,51 @@
+/* Pogo */
+div[data-pogo] { display: flex; justify-content: center; align-content: center; flex-wrap: wrap; }
+div[data-pogo="top"] { display: block; }
+div[data-pogo="sidebar"], div[data-pogo="main"], div[data-pogo="mainbb"], div[data-pogo="double"], div[data-pogo="incontent"], div[data-pogo="incontentplus"], div[data-pogo="incontentall"] { min-height: 250px; }
+.c-adDisplay_container_interstitial, [data-ad="interstitial"], .c-adDisplay_container_mobile-interstitial, [data-ad="mobile-interstitial"] { display: none !important; }
+.c-adDisplay_container + .c-adDisplay_container:has(div[data-disable-initial-load]) { display: none; }
+
+body.hasPogoQS #__nuxt.pogoPgWrap:has(.c-gifticleArticleHeader_bg) { overflow-y: hidden; }
+
+
+body { --qs-reserved: 0px; }
+body div.c-adSkyBox { aspect-ratio: unset !important; }
+body.hasPogoQS div.c-adSkyBox > div { display: block; height: 100%; }
+
+body div.c-adSkyBox_expanded { aspect-ratio: unset !important; min-height: unset; }
+body div.c-adSkyBox_expanded { min-height: calc((100vw - var(--scroll-bar-width, 0px)) / 1.77884615384615);  }
+body { --qs-reserved: max(18vw, 50px); }
+body:has(.c-adSkyBox_expanded) { --qs-reserved: calc((100vw - var(--scroll-bar-width, 0px)) / 1.77884615384615) }
+body .c-adSkyBox.rendered:not(.fixed) { min-height: var(--qs-reserved, 90px); }
+
+
+@media (min-width: 768px) {
+  body { --qs-reserved: max(6.5vw, 90px); }
+}
+
+@media (min-width: 640px) and (max-width: 1919px) {
+  body div.c-adSkyBox_expanded { min-height: calc((100vw - var(--scroll-bar-width, 0px)) / 5.485714285714286);  }
+  body:has(.c-adSkyBox_expanded) { --qs-reserved: calc((100vw - var(--scroll-bar-width, 0px)) / 5.485714285714286) }
+}
+@media (min-width: 1024px) and (max-width: 1293px) {
+  body { --qs-reserved: 9.7vw; }
+  body div.c-adSkyBox_expanded { min-height: calc((100vw - var(--scroll-bar-width, 0px)) / 5.485714285714286);  }
+  body:has(.c-adSkyBox_expanded) { --qs-reserved: calc((100vw - var(--scroll-bar-width, 0px)) / 5.485714285714286) }
+}
+
+@media (min-width: 1920px) {
+  body div.c-adSkyBox_expanded { min-height: 350px; }
+  body:has(.c-adSkyBox_expanded) { --qs-reserved: 350px; }
+}
+
+
+
+body.hasPogoQS div.fb_lightbox-overlay { z-index: 923456789; }
+body.hasPogoQS div[role="dialog"].preloaded_lightbox { z-index: 999999999 !important; }
+
+@media (min-width: 1024px) {
+div[data-pogo="top"][data-ad*="incontent-all-top"] { min-height: 250px; }
+
+}
+
+
