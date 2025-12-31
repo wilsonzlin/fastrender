@@ -115,6 +115,10 @@ harness = false
 name = "dom_clone_bench"
 harness = false
 
+[[bench]]
+name = "dom_parse_bench"
+harness = false
+
 [profile.release]
 opt-level = 3
 lto = true
