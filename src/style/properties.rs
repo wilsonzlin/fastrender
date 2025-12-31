@@ -924,7 +924,7 @@ fn parse_overscroll_keyword(kw: &str) -> Option<OverscrollBehavior> {
   }
 }
 
-fn parse_scroll_snap_type_keywords(parts: &[String]) -> Option<ScrollSnapType> {
+fn parse_scroll_snap_type_keywords(parts: &[&str]) -> Option<ScrollSnapType> {
   if parts.is_empty() || parts.len() > 2 {
     return None;
   }
@@ -957,7 +957,7 @@ fn parse_scroll_snap_type_keywords(parts: &[String]) -> Option<ScrollSnapType> {
   Some(ScrollSnapType { axis, strictness })
 }
 
-fn parse_scroll_snap_align_keywords(parts: &[String]) -> Option<ScrollSnapAlignments> {
+fn parse_scroll_snap_align_keywords(parts: &[&str]) -> Option<ScrollSnapAlignments> {
   if parts.is_empty() || parts.len() > 2 {
     return None;
   }
@@ -975,9 +975,9 @@ fn parse_scroll_snap_align_keywords(parts: &[String]) -> Option<ScrollSnapAlignm
     }
   };
 
-  let first = parse_align(parts[0].as_str())?;
+  let first = parse_align(parts[0])?;
   let second = if parts.len() == 2 {
-    parse_align(parts[1].as_str())?
+    parse_align(parts[1])?
   } else {
     first
   };
@@ -6175,18 +6175,21 @@ pub fn apply_declaration_with_base(
     }
     "column-fill" => {
       if let PropertyValue::Keyword(kw) = &resolved_value {
-        styles.column_fill = match kw.to_ascii_lowercase().as_str() {
-          "auto" => ColumnFill::Auto,
-          "balance" => ColumnFill::Balance,
-          _ => styles.column_fill,
+        styles.column_fill = if kw.eq_ignore_ascii_case("auto") {
+          ColumnFill::Auto
+        } else if kw.eq_ignore_ascii_case("balance") {
+          ColumnFill::Balance
+        } else {
+          styles.column_fill
         };
       }
     }
     "column-span" => {
       if let PropertyValue::Keyword(kw) = &resolved_value {
-        styles.column_span = match kw.to_ascii_lowercase().as_str() {
-          "all" => ColumnSpan::All,
-          _ => ColumnSpan::None,
+        styles.column_span = if kw.eq_ignore_ascii_case("all") {
+          ColumnSpan::All
+        } else {
+          ColumnSpan::None
         };
       }
     }
@@ -6606,10 +6609,12 @@ pub fn apply_declaration_with_base(
     }
     "font-optical-sizing" => {
       if let PropertyValue::Keyword(raw) = &resolved_value {
-        styles.font_optical_sizing = match raw.to_ascii_lowercase().as_str() {
-          "auto" => FontOpticalSizing::Auto,
-          "none" => FontOpticalSizing::None,
-          _ => styles.font_optical_sizing,
+        styles.font_optical_sizing = if raw.eq_ignore_ascii_case("auto") {
+          FontOpticalSizing::Auto
+        } else if raw.eq_ignore_ascii_case("none") {
+          FontOpticalSizing::None
+        } else {
+          styles.font_optical_sizing
         };
       }
     }
@@ -6627,12 +6632,16 @@ pub fn apply_declaration_with_base(
     },
     "font-variant-emoji" => {
       if let PropertyValue::Keyword(raw) = &resolved_value {
-        styles.font_variant_emoji = match raw.to_ascii_lowercase().as_str() {
-          "emoji" => crate::style::types::FontVariantEmoji::Emoji,
-          "text" => crate::style::types::FontVariantEmoji::Text,
-          "unicode" => crate::style::types::FontVariantEmoji::Unicode,
-          "normal" => crate::style::types::FontVariantEmoji::Normal,
-          _ => styles.font_variant_emoji,
+        styles.font_variant_emoji = if raw.eq_ignore_ascii_case("emoji") {
+          crate::style::types::FontVariantEmoji::Emoji
+        } else if raw.eq_ignore_ascii_case("text") {
+          crate::style::types::FontVariantEmoji::Text
+        } else if raw.eq_ignore_ascii_case("unicode") {
+          crate::style::types::FontVariantEmoji::Unicode
+        } else if raw.eq_ignore_ascii_case("normal") {
+          crate::style::types::FontVariantEmoji::Normal
+        } else {
+          styles.font_variant_emoji
         };
       }
     }
@@ -6673,13 +6682,16 @@ pub fn apply_declaration_with_base(
     }
     "font-palette" => {
       if let PropertyValue::Keyword(raw) = &resolved_value {
-        let lower = raw.trim().to_ascii_lowercase();
-        if !lower.is_empty() {
-          styles.font_palette = match lower.as_str() {
-            "normal" => FontPalette::Normal,
-            "light" => FontPalette::Light,
-            "dark" => FontPalette::Dark,
-            _ => FontPalette::Named(lower),
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+          styles.font_palette = if trimmed.eq_ignore_ascii_case("normal") {
+            FontPalette::Normal
+          } else if trimmed.eq_ignore_ascii_case("light") {
+            FontPalette::Light
+          } else if trimmed.eq_ignore_ascii_case("dark") {
+            FontPalette::Dark
+          } else {
+            FontPalette::Named(trimmed.to_ascii_lowercase())
           };
         }
       }
@@ -6864,12 +6876,16 @@ pub fn apply_declaration_with_base(
     }
     "text-rendering" => {
       if let PropertyValue::Keyword(kw) = &resolved_value {
-        styles.text_rendering = match kw.to_ascii_lowercase().as_str() {
-          "auto" => TextRendering::Auto,
-          "optimizespeed" => TextRendering::OptimizeSpeed,
-          "optimizelegibility" => TextRendering::OptimizeLegibility,
-          "geometricprecision" => TextRendering::GeometricPrecision,
-          _ => styles.text_rendering,
+        styles.text_rendering = if kw.eq_ignore_ascii_case("auto") {
+          TextRendering::Auto
+        } else if kw.eq_ignore_ascii_case("optimizespeed") {
+          TextRendering::OptimizeSpeed
+        } else if kw.eq_ignore_ascii_case("optimizelegibility") {
+          TextRendering::OptimizeLegibility
+        } else if kw.eq_ignore_ascii_case("geometricprecision") {
+          TextRendering::GeometricPrecision
+        } else {
+          styles.text_rendering
         };
       }
     }
@@ -6887,11 +6903,9 @@ pub fn apply_declaration_with_base(
     }
     "text-size-adjust" => {
       styles.text_size_adjust = match &resolved_value {
-        PropertyValue::Keyword(kw) => match kw.to_ascii_lowercase().as_str() {
-          "auto" => TextSizeAdjust::Auto,
-          "none" => TextSizeAdjust::None,
-          _ => styles.text_size_adjust,
-        },
+        PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("auto") => TextSizeAdjust::Auto,
+        PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("none") => TextSizeAdjust::None,
+        PropertyValue::Keyword(_) => styles.text_size_adjust,
         PropertyValue::Percentage(p) if *p >= 0.0 => TextSizeAdjust::Percentage(*p),
         _ => styles.text_size_adjust,
       };
@@ -7361,11 +7375,14 @@ pub fn apply_declaration_with_base(
     }
     "forced-color-adjust" => {
       if let PropertyValue::Keyword(kw) = &resolved_value {
-        styles.forced_color_adjust = match kw.to_ascii_lowercase().as_str() {
-          "auto" => ForcedColorAdjust::Auto,
-          "none" => ForcedColorAdjust::None,
-          "preserve-parent-color" => ForcedColorAdjust::PreserveParentColor,
-          _ => styles.forced_color_adjust,
+        styles.forced_color_adjust = if kw.eq_ignore_ascii_case("auto") {
+          ForcedColorAdjust::Auto
+        } else if kw.eq_ignore_ascii_case("none") {
+          ForcedColorAdjust::None
+        } else if kw.eq_ignore_ascii_case("preserve-parent-color") {
+          ForcedColorAdjust::PreserveParentColor
+        } else {
+          styles.forced_color_adjust
         };
       }
     }
@@ -7566,16 +7583,16 @@ pub fn apply_declaration_with_base(
       }
     }
     "scroll-snap-type" => {
-      let mut parts = Vec::new();
+      let mut parts: Vec<&str> = Vec::new();
       match &resolved_value {
-        PropertyValue::Keyword(kw) => parts.extend(kw.split_whitespace().map(|s| s.to_string())),
+        PropertyValue::Keyword(kw) => parts.extend(kw.split_whitespace()),
         PropertyValue::Multiple(tokens) => {
           for token in tokens {
             if let PropertyValue::Keyword(k) = token {
               if k == "," {
                 continue;
               }
-              parts.push(k.to_ascii_lowercase());
+              parts.push(k.as_str());
             }
           }
         }
@@ -7586,16 +7603,16 @@ pub fn apply_declaration_with_base(
       }
     }
     "scroll-snap-align" => {
-      let mut parts = Vec::new();
+      let mut parts: Vec<&str> = Vec::new();
       match &resolved_value {
-        PropertyValue::Keyword(kw) => parts.extend(kw.split_whitespace().map(|s| s.to_string())),
+        PropertyValue::Keyword(kw) => parts.extend(kw.split_whitespace()),
         PropertyValue::Multiple(tokens) => {
           for token in tokens {
             if let PropertyValue::Keyword(k) = token {
               if k == "," {
                 continue;
               }
-              parts.push(k.to_ascii_lowercase());
+              parts.push(k.as_str());
             }
           }
         }
@@ -7607,10 +7624,12 @@ pub fn apply_declaration_with_base(
     }
     "scroll-snap-stop" => {
       if let PropertyValue::Keyword(kw) = &resolved_value {
-        styles.scroll_snap_stop = match kw.to_ascii_lowercase().as_str() {
-          "normal" => ScrollSnapStop::Normal,
-          "always" => ScrollSnapStop::Always,
-          _ => styles.scroll_snap_stop,
+        styles.scroll_snap_stop = if kw.eq_ignore_ascii_case("normal") {
+          ScrollSnapStop::Normal
+        } else if kw.eq_ignore_ascii_case("always") {
+          ScrollSnapStop::Always
+        } else {
+          styles.scroll_snap_stop
         };
       }
     }
@@ -7685,30 +7704,45 @@ pub fn apply_declaration_with_base(
     }
     "pointer-events" => {
       if let PropertyValue::Keyword(kw) = &resolved_value {
-        styles.pointer_events = match kw.to_ascii_lowercase().as_str() {
-          "auto" => PointerEvents::Auto,
-          "none" => PointerEvents::None,
-          "visiblepainted" => PointerEvents::VisiblePainted,
-          "visiblefill" => PointerEvents::VisibleFill,
-          "visiblestroke" => PointerEvents::VisibleStroke,
-          "visible" => PointerEvents::Visible,
-          "painted" => PointerEvents::Painted,
-          "fill" => PointerEvents::Fill,
-          "stroke" => PointerEvents::Stroke,
-          "all" => PointerEvents::All,
-          _ => styles.pointer_events,
-        }
+        styles.pointer_events = if kw.eq_ignore_ascii_case("auto") {
+          PointerEvents::Auto
+        } else if kw.eq_ignore_ascii_case("none") {
+          PointerEvents::None
+        } else if kw.eq_ignore_ascii_case("visiblepainted") {
+          PointerEvents::VisiblePainted
+        } else if kw.eq_ignore_ascii_case("visiblefill") {
+          PointerEvents::VisibleFill
+        } else if kw.eq_ignore_ascii_case("visiblestroke") {
+          PointerEvents::VisibleStroke
+        } else if kw.eq_ignore_ascii_case("visible") {
+          PointerEvents::Visible
+        } else if kw.eq_ignore_ascii_case("painted") {
+          PointerEvents::Painted
+        } else if kw.eq_ignore_ascii_case("fill") {
+          PointerEvents::Fill
+        } else if kw.eq_ignore_ascii_case("stroke") {
+          PointerEvents::Stroke
+        } else if kw.eq_ignore_ascii_case("all") {
+          PointerEvents::All
+        } else {
+          styles.pointer_events
+        };
       }
     }
     "user-select" => {
       if let PropertyValue::Keyword(kw) = &resolved_value {
-        styles.user_select = match kw.to_ascii_lowercase().as_str() {
-          "auto" => UserSelect::Auto,
-          "text" => UserSelect::Text,
-          "none" => UserSelect::None,
-          "all" => UserSelect::All,
-          "contain" => UserSelect::Contain,
-          _ => styles.user_select,
+        styles.user_select = if kw.eq_ignore_ascii_case("auto") {
+          UserSelect::Auto
+        } else if kw.eq_ignore_ascii_case("text") {
+          UserSelect::Text
+        } else if kw.eq_ignore_ascii_case("none") {
+          UserSelect::None
+        } else if kw.eq_ignore_ascii_case("all") {
+          UserSelect::All
+        } else if kw.eq_ignore_ascii_case("contain") {
+          UserSelect::Contain
+        } else {
+          styles.user_select
         };
       }
     }
@@ -7736,36 +7770,48 @@ pub fn apply_declaration_with_base(
     },
     "scrollbar-width" => {
       if let PropertyValue::Keyword(kw) = &resolved_value {
-        styles.scrollbar_width = match kw.to_ascii_lowercase().as_str() {
-          "auto" => ScrollbarWidth::Auto,
-          "thin" => ScrollbarWidth::Thin,
-          "none" => ScrollbarWidth::None,
-          _ => styles.scrollbar_width,
-        }
+        styles.scrollbar_width = if kw.eq_ignore_ascii_case("auto") {
+          ScrollbarWidth::Auto
+        } else if kw.eq_ignore_ascii_case("thin") {
+          ScrollbarWidth::Thin
+        } else if kw.eq_ignore_ascii_case("none") {
+          ScrollbarWidth::None
+        } else {
+          styles.scrollbar_width
+        };
       }
     }
     "scrollbar-color" => {
       if let Some((thumb, track)) = extract_color_pair_with(&resolved_value, &resolve_color_value) {
         styles.scrollbar_color = ScrollbarColor::Colors { thumb, track };
       } else if let PropertyValue::Keyword(kw) = &resolved_value {
-        styles.scrollbar_color = match kw.to_ascii_lowercase().as_str() {
-          "auto" => ScrollbarColor::Auto,
-          "dark" => ScrollbarColor::Dark,
-          "light" => ScrollbarColor::Light,
-          _ => styles.scrollbar_color,
+        styles.scrollbar_color = if kw.eq_ignore_ascii_case("auto") {
+          ScrollbarColor::Auto
+        } else if kw.eq_ignore_ascii_case("dark") {
+          ScrollbarColor::Dark
+        } else if kw.eq_ignore_ascii_case("light") {
+          ScrollbarColor::Light
+        } else {
+          styles.scrollbar_color
         };
       }
     }
     "resize" => {
       if let PropertyValue::Keyword(kw) = &resolved_value {
-        styles.resize = match kw.to_ascii_lowercase().as_str() {
-          "none" => Resize::None,
-          "both" => Resize::Both,
-          "horizontal" => Resize::Horizontal,
-          "vertical" => Resize::Vertical,
-          "block" => Resize::Block,
-          "inline" => Resize::Inline,
-          _ => styles.resize,
+        styles.resize = if kw.eq_ignore_ascii_case("none") {
+          Resize::None
+        } else if kw.eq_ignore_ascii_case("both") {
+          Resize::Both
+        } else if kw.eq_ignore_ascii_case("horizontal") {
+          Resize::Horizontal
+        } else if kw.eq_ignore_ascii_case("vertical") {
+          Resize::Vertical
+        } else if kw.eq_ignore_ascii_case("block") {
+          Resize::Block
+        } else if kw.eq_ignore_ascii_case("inline") {
+          Resize::Inline
+        } else {
+          styles.resize
         };
       }
     }
@@ -9473,21 +9519,28 @@ fn parse_transform_origin(value: &PropertyValue) -> Option<TransformOrigin> {
 }
 
 fn parse_transform_box(kw: &str) -> Option<TransformBox> {
-  match kw.to_ascii_lowercase().as_str() {
-    "border-box" => Some(TransformBox::BorderBox),
-    "content-box" => Some(TransformBox::ContentBox),
-    "fill-box" => Some(TransformBox::FillBox),
-    "stroke-box" => Some(TransformBox::StrokeBox),
-    "view-box" => Some(TransformBox::ViewBox),
-    _ => None,
+  if kw.eq_ignore_ascii_case("border-box") {
+    Some(TransformBox::BorderBox)
+  } else if kw.eq_ignore_ascii_case("content-box") {
+    Some(TransformBox::ContentBox)
+  } else if kw.eq_ignore_ascii_case("fill-box") {
+    Some(TransformBox::FillBox)
+  } else if kw.eq_ignore_ascii_case("stroke-box") {
+    Some(TransformBox::StrokeBox)
+  } else if kw.eq_ignore_ascii_case("view-box") {
+    Some(TransformBox::ViewBox)
+  } else {
+    None
   }
 }
 
 fn parse_transform_style(kw: &str) -> Option<TransformStyle> {
-  match kw.to_ascii_lowercase().as_str() {
-    "flat" => Some(TransformStyle::Flat),
-    "preserve-3d" => Some(TransformStyle::Preserve3d),
-    _ => None,
+  if kw.eq_ignore_ascii_case("flat") {
+    Some(TransformStyle::Flat)
+  } else if kw.eq_ignore_ascii_case("preserve-3d") {
+    Some(TransformStyle::Preserve3d)
+  } else {
+    None
   }
 }
 
@@ -9499,20 +9552,22 @@ fn parse_angle_value<'i, 't>(
     Token::Dimension {
       value, ref unit, ..
     } => {
-      let u = unit.to_ascii_lowercase();
-      let deg = match u.as_str() {
-        "deg" => *value,
-        "grad" => *value * (360.0 / 400.0),
-        "rad" => value.to_degrees(),
-        "turn" => *value * 360.0,
-        _ => {
-          return Err(cssparser::ParseError {
-            kind: cssparser::ParseErrorKind::Basic(BasicParseErrorKind::UnexpectedToken(
-              token.clone(),
-            )),
-            location: input.current_source_location(),
-          })
-        }
+      let unit = unit.as_ref();
+      let deg = if unit.eq_ignore_ascii_case("deg") {
+        *value
+      } else if unit.eq_ignore_ascii_case("grad") {
+        *value * (360.0 / 400.0)
+      } else if unit.eq_ignore_ascii_case("rad") {
+        value.to_degrees()
+      } else if unit.eq_ignore_ascii_case("turn") {
+        *value * 360.0
+      } else {
+        return Err(cssparser::ParseError {
+          kind: cssparser::ParseErrorKind::Basic(BasicParseErrorKind::UnexpectedToken(
+            token.clone(),
+          )),
+          location: input.current_source_location(),
+        });
       };
       Ok(deg)
     }
@@ -9894,10 +9949,12 @@ fn parse_offset_anchor(value: &PropertyValue) -> Option<OffsetAnchor> {
 }
 
 fn parse_backface_visibility(kw: &str) -> Option<BackfaceVisibility> {
-  match kw.to_ascii_lowercase().as_str() {
-    "visible" => Some(BackfaceVisibility::Visible),
-    "hidden" => Some(BackfaceVisibility::Hidden),
-    _ => None,
+  if kw.eq_ignore_ascii_case("visible") {
+    Some(BackfaceVisibility::Visible)
+  } else if kw.eq_ignore_ascii_case("hidden") {
+    Some(BackfaceVisibility::Hidden)
+  } else {
+    None
   }
 }
 
@@ -9937,13 +9994,18 @@ fn property_value_to_string(value: &PropertyValue) -> Option<String> {
 }
 
 fn parse_container_type_keyword(text: &str) -> Option<ContainerType> {
-  match text.to_ascii_lowercase().as_str() {
-    "none" => Some(ContainerType::None),
-    "normal" => Some(ContainerType::Normal),
-    "style" => Some(ContainerType::Style),
-    "size" => Some(ContainerType::Size),
-    "inline-size" => Some(ContainerType::InlineSize),
-    _ => None,
+  if text.eq_ignore_ascii_case("none") {
+    Some(ContainerType::None)
+  } else if text.eq_ignore_ascii_case("normal") {
+    Some(ContainerType::Normal)
+  } else if text.eq_ignore_ascii_case("style") {
+    Some(ContainerType::Style)
+  } else if text.eq_ignore_ascii_case("size") {
+    Some(ContainerType::Size)
+  } else if text.eq_ignore_ascii_case("inline-size") {
+    Some(ContainerType::InlineSize)
+  } else {
+    None
   }
 }
 
@@ -11346,21 +11408,18 @@ fn parse_background_position_component_x(
   value: &PropertyValue,
 ) -> Option<BackgroundPositionComponent> {
   match value {
-    PropertyValue::Keyword(kw) => match kw.to_ascii_lowercase().as_str() {
-      "left" => Some(BackgroundPositionComponent {
+    PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("left") => Some(BackgroundPositionComponent {
         alignment: 0.0,
         offset: Length::px(0.0),
       }),
-      "right" => Some(BackgroundPositionComponent {
+    PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("right") => Some(BackgroundPositionComponent {
         alignment: 1.0,
         offset: Length::px(0.0),
       }),
-      "center" => Some(BackgroundPositionComponent {
+    PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("center") => Some(BackgroundPositionComponent {
         alignment: 0.5,
         offset: Length::px(0.0),
       }),
-      _ => None,
-    },
     PropertyValue::Length(len) => Some(BackgroundPositionComponent {
       alignment: 0.0,
       offset: *len,
@@ -11381,21 +11440,18 @@ fn parse_background_position_component_y(
   value: &PropertyValue,
 ) -> Option<BackgroundPositionComponent> {
   match value {
-    PropertyValue::Keyword(kw) => match kw.as_str() {
-      "top" => Some(BackgroundPositionComponent {
+    PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("top") => Some(BackgroundPositionComponent {
         alignment: 0.0,
         offset: Length::px(0.0),
       }),
-      "bottom" => Some(BackgroundPositionComponent {
+    PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("bottom") => Some(BackgroundPositionComponent {
         alignment: 1.0,
         offset: Length::px(0.0),
       }),
-      "center" => Some(BackgroundPositionComponent {
+    PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("center") => Some(BackgroundPositionComponent {
         alignment: 0.5,
         offset: Length::px(0.0),
       }),
-      _ => None,
-    },
     PropertyValue::Length(len) => Some(BackgroundPositionComponent {
       alignment: 0.0,
       offset: *len,
@@ -11722,16 +11778,14 @@ fn parse_polygon_shape<'i, 't>(
     let state = nested.state();
     let mut fill_rule = FillRule::NonZero;
     if let Ok(rule) = nested.try_parse(|p| p.expect_ident_cloned()) {
-      match rule.to_ascii_lowercase().as_str() {
-        "evenodd" => {
-          fill_rule = FillRule::EvenOdd;
-          let _ = nested.try_parse(|p| p.expect_comma());
-        }
-        "nonzero" => {
-          fill_rule = FillRule::NonZero;
-          let _ = nested.try_parse(|p| p.expect_comma());
-        }
-        _ => nested.reset(&state),
+      if rule.eq_ignore_ascii_case("evenodd") {
+        fill_rule = FillRule::EvenOdd;
+        let _ = nested.try_parse(|p| p.expect_comma());
+      } else if rule.eq_ignore_ascii_case("nonzero") {
+        fill_rule = FillRule::NonZero;
+        let _ = nested.try_parse(|p| p.expect_comma());
+      } else {
+        nested.reset(&state);
       }
     }
 
@@ -11767,13 +11821,15 @@ fn parse_shape_radius<'i, 't>(
   }
 
   let ident = input.expect_ident()?;
-  match &*ident.to_ascii_lowercase() {
-    "closest-side" => Ok(ShapeRadius::ClosestSide),
-    "farthest-side" => Ok(ShapeRadius::FarthestSide),
-    _ => Err(cssparser::ParseError {
+  if ident.eq_ignore_ascii_case("closest-side") {
+    Ok(ShapeRadius::ClosestSide)
+  } else if ident.eq_ignore_ascii_case("farthest-side") {
+    Ok(ShapeRadius::FarthestSide)
+  } else {
+    Err(cssparser::ParseError {
       kind: cssparser::ParseErrorKind::Custom(()),
       location: input.current_source_location(),
-    }),
+    })
   }
 }
 
@@ -11936,27 +11992,46 @@ fn parse_function_length_token<'i, 't>(
 }
 
 fn length_unit_from_str(unit: &str) -> Option<LengthUnit> {
-  match unit.to_ascii_lowercase().as_str() {
-    "px" => Some(LengthUnit::Px),
-    "pt" => Some(LengthUnit::Pt),
-    "pc" => Some(LengthUnit::Pc),
-    "in" => Some(LengthUnit::In),
-    "cm" => Some(LengthUnit::Cm),
-    "mm" => Some(LengthUnit::Mm),
-    "q" => Some(LengthUnit::Q),
-    "em" => Some(LengthUnit::Em),
-    "rem" => Some(LengthUnit::Rem),
-    "ex" => Some(LengthUnit::Ex),
-    "ch" => Some(LengthUnit::Ch),
-    "vw" => Some(LengthUnit::Vw),
-    "vh" => Some(LengthUnit::Vh),
-    "vmin" => Some(LengthUnit::Vmin),
-    "vmax" => Some(LengthUnit::Vmax),
-    "dvw" => Some(LengthUnit::Dvw),
-    "dvh" => Some(LengthUnit::Dvh),
-    "dvmin" => Some(LengthUnit::Dvmin),
-    "dvmax" => Some(LengthUnit::Dvmax),
-    _ => None,
+  if unit.eq_ignore_ascii_case("px") {
+    Some(LengthUnit::Px)
+  } else if unit.eq_ignore_ascii_case("pt") {
+    Some(LengthUnit::Pt)
+  } else if unit.eq_ignore_ascii_case("pc") {
+    Some(LengthUnit::Pc)
+  } else if unit.eq_ignore_ascii_case("in") {
+    Some(LengthUnit::In)
+  } else if unit.eq_ignore_ascii_case("cm") {
+    Some(LengthUnit::Cm)
+  } else if unit.eq_ignore_ascii_case("mm") {
+    Some(LengthUnit::Mm)
+  } else if unit.eq_ignore_ascii_case("q") {
+    Some(LengthUnit::Q)
+  } else if unit.eq_ignore_ascii_case("em") {
+    Some(LengthUnit::Em)
+  } else if unit.eq_ignore_ascii_case("rem") {
+    Some(LengthUnit::Rem)
+  } else if unit.eq_ignore_ascii_case("ex") {
+    Some(LengthUnit::Ex)
+  } else if unit.eq_ignore_ascii_case("ch") {
+    Some(LengthUnit::Ch)
+  } else if unit.eq_ignore_ascii_case("vw") {
+    Some(LengthUnit::Vw)
+  } else if unit.eq_ignore_ascii_case("vh") {
+    Some(LengthUnit::Vh)
+  } else if unit.eq_ignore_ascii_case("vmin") {
+    Some(LengthUnit::Vmin)
+  } else if unit.eq_ignore_ascii_case("vmax") {
+    Some(LengthUnit::Vmax)
+  } else if unit.eq_ignore_ascii_case("dvw") {
+    Some(LengthUnit::Dvw)
+  } else if unit.eq_ignore_ascii_case("dvh") {
+    Some(LengthUnit::Dvh)
+  } else if unit.eq_ignore_ascii_case("dvmin") {
+    Some(LengthUnit::Dvmin)
+  } else if unit.eq_ignore_ascii_case("dvmax") {
+    Some(LengthUnit::Dvmax)
+  } else {
+    None
   }
 }
 
@@ -11971,17 +12046,16 @@ fn parse_text_decoration_line(value: &PropertyValue) -> Option<TextDecorationLin
 
   for comp in components {
     if let PropertyValue::Keyword(kw) = comp {
-      let kw = kw.to_ascii_lowercase();
-      match kw.as_str() {
-        "none" => {
-          saw_none = true;
-          lines = TextDecorationLine::NONE;
-          break;
-        }
-        "underline" => lines.insert(TextDecorationLine::UNDERLINE),
-        "overline" => lines.insert(TextDecorationLine::OVERLINE),
-        "line-through" => lines.insert(TextDecorationLine::LINE_THROUGH),
-        _ => {}
+      if kw.eq_ignore_ascii_case("none") {
+        saw_none = true;
+        lines = TextDecorationLine::NONE;
+        break;
+      } else if kw.eq_ignore_ascii_case("underline") {
+        lines.insert(TextDecorationLine::UNDERLINE);
+      } else if kw.eq_ignore_ascii_case("overline") {
+        lines.insert(TextDecorationLine::OVERLINE);
+      } else if kw.eq_ignore_ascii_case("line-through") {
+        lines.insert(TextDecorationLine::LINE_THROUGH);
       }
     }
   }
@@ -11997,14 +12071,22 @@ fn parse_text_decoration_line(value: &PropertyValue) -> Option<TextDecorationLin
 
 fn parse_text_decoration_style(value: &PropertyValue) -> Option<TextDecorationStyle> {
   match value {
-    PropertyValue::Keyword(kw) => match kw.to_ascii_lowercase().as_str() {
-      "solid" => Some(TextDecorationStyle::Solid),
-      "double" => Some(TextDecorationStyle::Double),
-      "dotted" => Some(TextDecorationStyle::Dotted),
-      "dashed" => Some(TextDecorationStyle::Dashed),
-      "wavy" => Some(TextDecorationStyle::Wavy),
-      _ => None,
-    },
+    PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("solid") => {
+      Some(TextDecorationStyle::Solid)
+    }
+    PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("double") => {
+      Some(TextDecorationStyle::Double)
+    }
+    PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("dotted") => {
+      Some(TextDecorationStyle::Dotted)
+    }
+    PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("dashed") => {
+      Some(TextDecorationStyle::Dashed)
+    }
+    PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("wavy") => {
+      Some(TextDecorationStyle::Wavy)
+    }
+    PropertyValue::Keyword(_) => None,
     _ => None,
   }
 }
@@ -12307,11 +12389,13 @@ fn parse_text_decoration_thickness(
   _root_font_size: f32,
 ) -> Option<TextDecorationThickness> {
   match value {
-    PropertyValue::Keyword(kw) => match kw.to_ascii_lowercase().as_str() {
-      "auto" => Some(TextDecorationThickness::Auto),
-      "from-font" => Some(TextDecorationThickness::FromFont),
-      _ => None,
-    },
+    PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("auto") => {
+      Some(TextDecorationThickness::Auto)
+    }
+    PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("from-font") => {
+      Some(TextDecorationThickness::FromFont)
+    }
+    PropertyValue::Keyword(_) => None,
     PropertyValue::Length(l) => Some(TextDecorationThickness::Length(*l)),
     PropertyValue::Percentage(p) => Some(TextDecorationThickness::Length(Length::percent(*p))),
     _ => None,
@@ -12320,12 +12404,15 @@ fn parse_text_decoration_thickness(
 
 fn parse_text_decoration_skip_ink(value: &PropertyValue) -> Option<TextDecorationSkipInk> {
   if let PropertyValue::Keyword(kw) = value {
-    return match kw.to_ascii_lowercase().as_str() {
-      "auto" => Some(TextDecorationSkipInk::Auto),
-      "none" => Some(TextDecorationSkipInk::None),
-      "all" => Some(TextDecorationSkipInk::All),
-      _ => None,
-    };
+    if kw.eq_ignore_ascii_case("auto") {
+      return Some(TextDecorationSkipInk::Auto);
+    }
+    if kw.eq_ignore_ascii_case("none") {
+      return Some(TextDecorationSkipInk::None);
+    }
+    if kw.eq_ignore_ascii_case("all") {
+      return Some(TextDecorationSkipInk::All);
+    }
   }
   None
 }
@@ -12333,25 +12420,30 @@ fn parse_text_decoration_skip_ink(value: &PropertyValue) -> Option<TextDecoratio
 fn parse_text_combine_upright(value: &PropertyValue) -> Option<TextCombineUpright> {
   match value {
     PropertyValue::Keyword(kw) => {
-      let kw = kw.to_ascii_lowercase();
-      match kw.as_str() {
-        "none" => Some(TextCombineUpright::None),
-        "all" => Some(TextCombineUpright::All),
-        "digits" => Some(TextCombineUpright::Digits(2)),
-        other if other.starts_with("digits") => {
-          let tail = other["digits".len()..].trim();
-          if tail.is_empty() {
-            return Some(TextCombineUpright::Digits(2));
-          }
-          if let Ok(count) = tail.parse::<i32>() {
-            if (2..=4).contains(&count) {
-              return Some(TextCombineUpright::Digits(count as u8));
-            }
-          }
-          None
-        }
-        _ => None,
+      if kw.eq_ignore_ascii_case("none") {
+        return Some(TextCombineUpright::None);
       }
+      if kw.eq_ignore_ascii_case("all") {
+        return Some(TextCombineUpright::All);
+      }
+      if kw.eq_ignore_ascii_case("digits") {
+        return Some(TextCombineUpright::Digits(2));
+      }
+
+      let prefix = kw.get(.."digits".len())?;
+      if !prefix.eq_ignore_ascii_case("digits") {
+        return None;
+      }
+      let tail = kw.get("digits".len()..)?.trim();
+      if tail.is_empty() {
+        return Some(TextCombineUpright::Digits(2));
+      }
+      if let Ok(count) = tail.parse::<i32>() {
+        if (2..=4).contains(&count) {
+          return Some(TextCombineUpright::Digits(count as u8));
+        }
+      }
+      None
     }
     PropertyValue::Multiple(values) => {
       if values.is_empty() {
