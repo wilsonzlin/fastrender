@@ -459,9 +459,12 @@ impl BlockFormattingContext {
       let fc = factory.create(fc_type);
       let preferred_min_content =
         fc.compute_intrinsic_inline_size(child, IntrinsicSizingMode::MinContent)?;
-      let preferred_content = fc
-        .compute_intrinsic_inline_size(child, IntrinsicSizingMode::MaxContent)
-        .unwrap_or(preferred_min_content);
+      let preferred_content =
+        match fc.compute_intrinsic_inline_size(child, IntrinsicSizingMode::MaxContent) {
+          Ok(value) => value,
+          Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+          Err(_) => preferred_min_content,
+        };
 
       let preferred_min = preferred_min_content + horizontal_edges;
       let preferred = preferred_content + horizontal_edges;
@@ -834,18 +837,30 @@ impl BlockFormattingContext {
         // padding/border offsets, so use the content origin when no flow position was
         // recorded.
         let static_pos = static_position.unwrap_or(Point::ZERO);
-        let preferred_min_inline = fc
-          .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
-          .ok();
-        let preferred_inline = fc
-          .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent)
-          .ok();
-        let preferred_min_block = fc
-          .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent)
-          .ok();
-        let preferred_block = fc
-          .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent)
-          .ok();
+        let preferred_min_inline =
+          match fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent) {
+            Ok(value) => Some(value),
+            Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+            Err(_) => None,
+          };
+        let preferred_inline =
+          match fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent) {
+            Ok(value) => Some(value),
+            Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+            Err(_) => None,
+          };
+        let preferred_min_block =
+          match fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent) {
+            Ok(value) => Some(value),
+            Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+            Err(_) => None,
+          };
+        let preferred_block =
+          match fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent) {
+            Ok(value) => Some(value),
+            Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+            Err(_) => None,
+          };
 
         let mut input = crate::layout::absolute_positioning::AbsoluteLayoutInput::new(
           positioned_style,
@@ -1802,12 +1817,18 @@ impl BlockFormattingContext {
           .formatting_context()
           .unwrap_or(FormattingContextType::Block);
         let fc = factory.create(fc_type);
-        let preferred_min_content = fc
-          .compute_intrinsic_inline_size(child, IntrinsicSizingMode::MinContent)
-          .unwrap_or(0.0);
-        let preferred_content = fc
-          .compute_intrinsic_inline_size(child, IntrinsicSizingMode::MaxContent)
-          .unwrap_or(preferred_min_content);
+        let preferred_min_content =
+          match fc.compute_intrinsic_inline_size(child, IntrinsicSizingMode::MinContent) {
+            Ok(value) => value,
+            Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+            Err(_) => 0.0,
+          };
+        let preferred_content =
+          match fc.compute_intrinsic_inline_size(child, IntrinsicSizingMode::MaxContent) {
+            Ok(value) => value,
+            Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+            Err(_) => preferred_min_content,
+          };
 
         let preferred_min = preferred_min_content + horizontal_edges;
         let preferred = preferred_content + horizontal_edges;
@@ -3015,9 +3036,12 @@ impl FormattingContext for BlockFormattingContext {
       let fc = factory.create(fc_type);
       let preferred_min_content =
         fc.compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MinContent)?;
-      let preferred_content = fc
-        .compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MaxContent)
-        .unwrap_or(preferred_min_content);
+      let preferred_content =
+        match fc.compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MaxContent) {
+          Ok(value) => value,
+          Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+          Err(_) => preferred_min_content,
+        };
 
       let preferred_min = preferred_min_content + horizontal_edges;
       let preferred = preferred_content + horizontal_edges;
@@ -3061,13 +3085,17 @@ impl FormattingContext for BlockFormattingContext {
         AvailableSpace::MinContent => IntrinsicSizingMode::MinContent,
         _ => IntrinsicSizingMode::MaxContent,
       };
-      if let Ok(intrinsic_border) = self.compute_intrinsic_inline_size(box_node, intrinsic_mode) {
-        let horizontal_edges = computed_width.border_left
-          + computed_width.padding_left
-          + computed_width.padding_right
-          + computed_width.border_right;
-        let intrinsic_content = (intrinsic_border - horizontal_edges).max(0.0);
-        computed_width.content_width = intrinsic_content;
+      match self.compute_intrinsic_inline_size(box_node, intrinsic_mode) {
+        Ok(intrinsic_border) => {
+          let horizontal_edges = computed_width.border_left
+            + computed_width.padding_left
+            + computed_width.padding_right
+            + computed_width.border_right;
+          let intrinsic_content = (intrinsic_border - horizontal_edges).max(0.0);
+          computed_width.content_width = intrinsic_content;
+        }
+        Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+        Err(_) => {}
       }
     }
     let horizontal_edges = computed_width.border_left
@@ -3457,18 +3485,30 @@ impl FormattingContext for BlockFormattingContext {
         // padding/border offsets, so use the content origin when no flow position was
         // recorded.
         let static_pos = static_position.unwrap_or(Point::ZERO);
-        let preferred_min_inline = fc
-          .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
-          .ok();
-        let preferred_inline = fc
-          .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent)
-          .ok();
-        let preferred_min_block = fc
-          .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent)
-          .ok();
-        let preferred_block = fc
-          .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent)
-          .ok();
+        let preferred_min_inline =
+          match fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent) {
+            Ok(value) => Some(value),
+            Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+            Err(_) => None,
+          };
+        let preferred_inline =
+          match fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent) {
+            Ok(value) => Some(value),
+            Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+            Err(_) => None,
+          };
+        let preferred_min_block =
+          match fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent) {
+            Ok(value) => Some(value),
+            Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+            Err(_) => None,
+          };
+        let preferred_block =
+          match fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent) {
+            Ok(value) => Some(value),
+            Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+            Err(_) => None,
+          };
 
         let mut input = crate::layout::absolute_positioning::AbsoluteLayoutInput::new(
           positioned_style,
@@ -3655,7 +3695,8 @@ impl FormattingContext for BlockFormattingContext {
           return Ok(());
         }
 
-        let width = inline_fc.intrinsic_width_for_children(&box_node.style, run.as_slice(), mode);
+        let width =
+          inline_fc.intrinsic_width_for_children(&box_node.style, run.as_slice(), mode)?;
         inline_run_cache.insert((key, mode), width);
         if log_children {
           let ids: Vec<usize> = run.iter().map(|c| c.id()).collect();

@@ -4280,8 +4280,8 @@ impl TableFormattingContext {
     mode: DistributionMode,
     percent_base: Option<f32>,
     style_overrides: &StyleOverrideCache,
-  ) -> Vec<ColumnConstraints> {
-    let build = || {
+  ) -> Result<Vec<ColumnConstraints>, LayoutError> {
+    let build = || -> Result<Vec<ColumnConstraints>, LayoutError> {
       let mut constraints: Vec<ColumnConstraints> = (0..structure.column_count)
         .map(|_| ColumnConstraints::new(0.0, 0.0))
         .collect();
@@ -4292,8 +4292,8 @@ impl TableFormattingContext {
         mode,
         percent_base,
         style_overrides,
-      );
-      constraints
+      )?;
+      Ok(constraints)
     };
 
     let box_id = table_box.id();
@@ -4315,19 +4315,25 @@ impl TableFormattingContext {
       percent_base_bits: percent_bits,
       collapsed,
     };
+    let cached = COLUMN_CONSTRAINT_CACHE.with(|cache| {
+      cache
+        .borrow()
+        .get(&key)
+        .map(|entry| (*entry.constraints).clone())
+    });
+    if let Some(constraints) = cached {
+      return Ok(constraints);
+    }
+    let constraints = build()?;
     COLUMN_CONSTRAINT_CACHE.with(|cache| {
-      if let Some(entry) = cache.borrow().get(&key) {
-        return (*entry.constraints).clone();
-      }
-      let constraints = build();
       cache.borrow_mut().insert(
         key,
         ColumnConstraintCacheEntry {
           constraints: Arc::new(constraints.clone()),
         },
       );
-      constraints
-    })
+    });
+    Ok(constraints)
   }
 
   /// Gets the table structure, building it if necessary
@@ -4355,13 +4361,15 @@ impl TableFormattingContext {
     let mut min_sum = 0.0;
     let mut max_sum = 0.0;
     for cell in cells {
-      let (min, max) = self.measure_cell_intrinsic_widths(
-        cell,
-        border_collapse,
-        percent_base,
-        &cell_bfc,
-        &style_overrides,
-      );
+      let (min, max) = self
+        .measure_cell_intrinsic_widths(
+          cell,
+          border_collapse,
+          percent_base,
+          &cell_bfc,
+          &style_overrides,
+        )
+        .unwrap_or((0.0, 0.0));
       min_sum += min;
       max_sum += max;
     }
@@ -4396,7 +4404,8 @@ impl TableFormattingContext {
       mode,
       percent_base,
       &style_overrides,
-    );
+    )
+    .unwrap_or_else(|err| panic!("bench_column_constraints_and_distribute: {err}"));
     self.normalize_percentage_constraints(&mut constraints, percent_base);
     let distributor = ColumnDistributor::new(mode).with_min_column_width(0.0);
     let distribution = distributor.distribute(&constraints, available_content_width);
@@ -4431,7 +4440,7 @@ impl TableFormattingContext {
     percent_base: Option<f32>,
     cell_bfc: &BlockFormattingContext,
     style_overrides: &StyleOverrideCache,
-  ) -> (f32, f32) {
+  ) -> Result<(f32, f32), LayoutError> {
     record_table_cell_intrinsic_measurement();
     let length_is_percent = |len: &crate::style::values::Length| {
       matches!(len.unit, LengthUnit::Percent | LengthUnit::Calc)
@@ -4471,7 +4480,7 @@ impl TableFormattingContext {
     };
     if let Some(key) = cache_key {
       if let Some(entry) = CELL_INTRINSIC_CACHE.with(|cache| cache.borrow().get(&key).copied()) {
-        return (entry.min, entry.max);
+        return Ok((entry.min, entry.max));
       }
     }
 
@@ -4484,22 +4493,30 @@ impl TableFormattingContext {
     stripped_cell.style =
       style_overrides.derive(&cell_box.style, StyleOverrideFlags::STRIP_PADDING_BORDERS);
 
-    let measure_with_fc = |fc: &dyn FormattingContext| -> (f32, f32) {
-      let min = fc
+    let measure_with_fc = |fc: &dyn FormattingContext| -> Result<(f32, f32), LayoutError> {
+      let min = match fc
         .compute_intrinsic_inline_size(&stripped_cell, IntrinsicSizingMode::MinContent)
-        .unwrap_or(0.0);
-      let max = fc
+      {
+        Ok(value) => value,
+        Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+        Err(_) => 0.0,
+      };
+      let max = match fc
         .compute_intrinsic_inline_size(&stripped_cell, IntrinsicSizingMode::MaxContent)
-        .unwrap_or(min);
-      (min, max)
+      {
+        Ok(value) => value,
+        Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+        Err(_) => min,
+      };
+      Ok((min, max))
     };
     let (mut min, mut max) = match fc_type {
-      FormattingContextType::Block => measure_with_fc(cell_bfc),
+      FormattingContextType::Block => measure_with_fc(cell_bfc)?,
       FormattingContextType::Table => {
         let fc = self.factory.create(fc_type);
-        measure_with_fc(fc.as_ref())
+        measure_with_fc(fc.as_ref())?
       }
-      _ => self.factory.with_fc(fc_type, |fc| measure_with_fc(fc)),
+      _ => self.factory.with_fc(fc_type, |fc| measure_with_fc(fc))?,
     };
 
     // Add horizontal padding (and borders in separate model) to intrinsic widths
@@ -4526,7 +4543,7 @@ impl TableFormattingContext {
         );
       });
     }
-    result
+    Ok(result)
   }
 
   /// Populates column constraints from cell intrinsic widths and explicit widths
@@ -4538,7 +4555,7 @@ impl TableFormattingContext {
     mode: DistributionMode,
     percent_base: Option<f32>,
     style_overrides: &StyleOverrideCache,
-  ) {
+  ) -> Result<(), LayoutError> {
     let source_rows = collect_source_rows(table_box);
     let cell_bfc = BlockFormattingContext::with_font_context_and_viewport(
       self.factory.font_context().clone(),
@@ -4556,41 +4573,41 @@ impl TableFormattingContext {
           .map(|cell| {
             with_deadline(deadline.as_ref(), || {
               let Some(row) = source_rows.get(cell.source_row) else {
-                return None;
+                return Ok(None);
               };
               let Some(cell_box) = row.children.get(cell.box_index) else {
-                return None;
+                return Ok(None);
               };
-              Some(self.measure_cell_intrinsic_widths(
+              Ok(Some(self.measure_cell_intrinsic_widths(
                 cell_box,
                 structure.border_collapse,
                 percent_base,
                 &cell_bfc,
                 style_overrides,
-              ))
+              )?))
             })
           })
-          .collect()
+          .collect::<Result<Vec<_>, LayoutError>>()?
       } else {
         structure
           .cells
           .iter()
           .map(|cell| {
             let Some(row) = source_rows.get(cell.source_row) else {
-              return None;
+              return Ok(None);
             };
             let Some(cell_box) = row.children.get(cell.box_index) else {
-              return None;
+              return Ok(None);
             };
-            Some(self.measure_cell_intrinsic_widths(
+            Ok(Some(self.measure_cell_intrinsic_widths(
               cell_box,
               structure.border_collapse,
               percent_base,
               &cell_bfc,
               style_overrides,
-            ))
+            )?))
           })
-          .collect()
+          .collect::<Result<Vec<_>, LayoutError>>()?
       }
     } else {
       Vec::new()
@@ -4808,6 +4825,7 @@ impl TableFormattingContext {
         constraint.has_max_cap = true;
       }
     }
+    Ok(())
   }
 
   /// Layout a single cell with the given width
@@ -5045,35 +5063,36 @@ impl FormattingContext for TableFormattingContext {
     // Captions impose a minimum width on the table: CSS 2.1 §17.4 requires the table box to be
     // at least as wide as its caption. Resolve authored widths first; otherwise fall back to the
     // caption's intrinsic max-content width.
-    let caption_pref_width = captions
-      .iter()
-      .copied()
-      .filter(|c| {
-        !matches!(
-          c.style.position,
-          crate::style::position::Position::Absolute | crate::style::position::Position::Fixed
-        )
-      })
-      .map(|caption| {
-        if let Some(width) = caption.style.width.as_ref() {
-          resolve_length_against(width, caption.style.font_size, containing_width).unwrap_or(0.0)
-        } else {
-          let fc_type = caption
-            .formatting_context()
-            .unwrap_or(FormattingContextType::Block);
-          match fc_type {
-            FormattingContextType::Table => {
-              let fc = self.factory.create(fc_type);
-              fc.compute_intrinsic_inline_size(caption, IntrinsicSizingMode::MaxContent)
-            }
-            _ => self.factory.with_fc(fc_type, |fc| {
-              fc.compute_intrinsic_inline_size(caption, IntrinsicSizingMode::MaxContent)
-            }),
+    let mut caption_pref_width: f32 = 0.0;
+    for caption in captions.iter().copied().filter(|c| {
+      !matches!(
+        c.style.position,
+        crate::style::position::Position::Absolute | crate::style::position::Position::Fixed
+      )
+    }) {
+      let width = if let Some(width) = caption.style.width.as_ref() {
+        resolve_length_against(width, caption.style.font_size, containing_width).unwrap_or(0.0)
+      } else {
+        let fc_type = caption
+          .formatting_context()
+          .unwrap_or(FormattingContextType::Block);
+        let res = match fc_type {
+          FormattingContextType::Table => {
+            let fc = self.factory.create(fc_type);
+            fc.compute_intrinsic_inline_size(caption, IntrinsicSizingMode::MaxContent)
           }
-          .unwrap_or(0.0)
+          _ => self.factory.with_fc(fc_type, |fc| {
+            fc.compute_intrinsic_inline_size(caption, IntrinsicSizingMode::MaxContent)
+          }),
+        };
+        match res {
+          Ok(value) => value,
+          Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+          Err(_) => 0.0,
         }
-      })
-      .fold(0.0, f32::max);
+      };
+      caption_pref_width = caption_pref_width.max(width);
+    }
 
     // Honor explicit table width if present.
     let font_size = table_box.style.font_size;
@@ -5196,24 +5215,37 @@ impl FormattingContext for TableFormattingContext {
             AvailableSpace::Definite(cb.rect.size.height),
           );
           let mut child_fragment = fc.layout(&layout_child, &child_constraints)?;
-          let positioned_style = resolve_positioned_style(
-            &child.style,
-            &cb,
-            self.viewport_size,
-            self.factory.font_context(),
-          );
-          let preferred_min_inline = fc
-            .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
-            .ok();
-          let preferred_inline = fc
-            .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent)
-            .ok();
-          let preferred_min_block = fc
-            .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent)
-            .ok();
-          let preferred_block = fc
-            .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent)
-            .ok();
+           let positioned_style = resolve_positioned_style(
+             &child.style,
+             &cb,
+             self.viewport_size,
+             self.factory.font_context(),
+           );
+           let preferred_min_inline =
+             match fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
+             {
+               Ok(value) => Some(value),
+               Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+               Err(_) => None,
+             };
+           let preferred_inline =
+             match fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent) {
+               Ok(value) => Some(value),
+               Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+               Err(_) => None,
+             };
+           let preferred_min_block =
+             match fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent) {
+               Ok(value) => Some(value),
+               Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+               Err(_) => None,
+             };
+           let preferred_block =
+             match fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent) {
+               Ok(value) => Some(value),
+               Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+               Err(_) => None,
+             };
           // Static position should start at the containing block origin; AbsoluteLayout
           // adds padding/border offsets, so use the content origin here to avoid double
           // counting padding.
@@ -5257,19 +5289,23 @@ impl FormattingContext for TableFormattingContext {
           snapshot_style.position = crate::style::position::Position::Static;
           snapshot_node.style = Arc::new(snapshot_style);
 
-          let fc_type = snapshot_node
-            .formatting_context()
-            .unwrap_or(FormattingContextType::Block);
-          let fc = self.factory.create(fc_type);
-          if let Ok(snapshot_fragment) = fc.layout(&snapshot_node, &snapshot_constraints) {
-            let anchor_bounds = Rect::from_xywh(0.0, (order as f32) * 1e-4, 0.0, 0.01);
-            let mut anchor =
-              FragmentNode::new_running_anchor(anchor_bounds, name, snapshot_fragment);
-            anchor.style = Some(running_child.style.clone());
-            fragment.children_mut().push(anchor);
-          }
-        }
-      }
+           let fc_type = snapshot_node
+             .formatting_context()
+             .unwrap_or(FormattingContextType::Block);
+           let fc = self.factory.create(fc_type);
+           match fc.layout(&snapshot_node, &snapshot_constraints) {
+             Ok(snapshot_fragment) => {
+               let anchor_bounds = Rect::from_xywh(0.0, (order as f32) * 1e-4, 0.0, 0.01);
+               let mut anchor =
+                 FragmentNode::new_running_anchor(anchor_bounds, name, snapshot_fragment);
+               anchor.style = Some(running_child.style.clone());
+               fragment.children_mut().push(anchor);
+             }
+             Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+             Err(_) => {}
+           }
+         }
+       }
       if !positioned_children.is_empty() {
         let cb = if table_box.style.position.is_positioned() {
           let padding_origin = Point::new(border_left + pad_left, border_top + pad_top);
@@ -5330,7 +5366,7 @@ impl FormattingContext for TableFormattingContext {
       mode,
       percent_base,
       &style_override_cache,
-    );
+    )?;
     self.normalize_percentage_constraints(&mut column_constraints, percent_base);
 
     if dump {
@@ -6487,19 +6523,23 @@ impl FormattingContext for TableFormattingContext {
           snapshot_style.position = crate::style::position::Position::Static;
           snapshot_node.style = Arc::new(snapshot_style);
 
-          let fc_type = snapshot_node
-            .formatting_context()
-            .unwrap_or(FormattingContextType::Block);
-          let fc = self.factory.create(fc_type);
-          if let Ok(snapshot_fragment) = fc.layout(&snapshot_node, &snapshot_constraints) {
-            let anchor_bounds = Rect::from_xywh(0.0, (order as f32) * 1e-4, 0.0, 0.01);
-            let mut anchor =
-              FragmentNode::new_running_anchor(anchor_bounds, name, snapshot_fragment);
-            anchor.style = Some(running_child.style.clone());
-            fragment.children_mut().push(anchor);
-          }
-        }
-      }
+           let fc_type = snapshot_node
+             .formatting_context()
+             .unwrap_or(FormattingContextType::Block);
+           let fc = self.factory.create(fc_type);
+           match fc.layout(&snapshot_node, &snapshot_constraints) {
+             Ok(snapshot_fragment) => {
+               let anchor_bounds = Rect::from_xywh(0.0, (order as f32) * 1e-4, 0.0, 0.01);
+               let mut anchor =
+                 FragmentNode::new_running_anchor(anchor_bounds, name, snapshot_fragment);
+               anchor.style = Some(running_child.style.clone());
+               fragment.children_mut().push(anchor);
+             }
+             Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+             Err(_) => {}
+           }
+         }
+       }
       if !has_running_children {
         layout_cache_store(
           box_node,
@@ -6654,11 +6694,17 @@ impl FormattingContext for TableFormattingContext {
           .formatting_context()
           .unwrap_or(FormattingContextType::Block);
         let fc = self.factory.create(fc_type);
-        if let Ok(snapshot_fragment) = fc.layout(&snapshot_node, &snapshot_constraints) {
-          let anchor_bounds = Rect::from_xywh(0.0, anchor_y + (order as f32) * 1e-4, 0.0, 0.01);
-          let mut anchor = FragmentNode::new_running_anchor(anchor_bounds, name, snapshot_fragment);
-          anchor.style = Some(running_child.style.clone());
-          wrapper_fragment.children_mut().push(anchor);
+        match fc.layout(&snapshot_node, &snapshot_constraints) {
+          Ok(snapshot_fragment) => {
+            let anchor_bounds =
+              Rect::from_xywh(0.0, anchor_y + (order as f32) * 1e-4, 0.0, 0.01);
+            let mut anchor =
+              FragmentNode::new_running_anchor(anchor_bounds, name, snapshot_fragment);
+            anchor.style = Some(running_child.style.clone());
+            wrapper_fragment.children_mut().push(anchor);
+          }
+          Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+          Err(_) => {}
         }
       }
     }
@@ -6759,7 +6805,7 @@ impl FormattingContext for TableFormattingContext {
       distribution_mode,
       percent_base,
       &style_override_cache,
-    );
+    )?;
     self.normalize_percentage_constraints(&mut column_constraints, percent_base);
 
     let edges = if structure.border_collapse == BorderCollapse::Collapse {
@@ -6850,8 +6896,10 @@ impl FormattingContext for TableFormattingContext {
           .factory
           .with_fc(fc_type, |fc| fc.compute_intrinsic_inline_size(child, mode)),
       };
-      if let Ok(w) = res {
-        caption_min = caption_min.max(w);
+      match res {
+        Ok(w) => caption_min = caption_min.max(w),
+        Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+        Err(_) => {}
       }
     }
     let width = base.max(caption_min);
@@ -6881,6 +6929,7 @@ mod tests {
   use crate::layout::constraints::LayoutConstraints;
   use crate::layout::formatting_context::intrinsic_cache_epoch;
   use crate::layout::formatting_context::intrinsic_cache_use_epoch;
+  use crate::render_control::{with_deadline, RenderDeadline};
   use crate::style::color::Rgba;
   use crate::style::computed::Visibility;
   use crate::style::display::Display;
@@ -8031,7 +8080,8 @@ mod tests {
       DistributionMode::Auto,
       None,
       &style_overrides,
-    );
+    )
+    .expect("populate constraints");
 
     assert!(
       (constraints[0].min_width - 40.0).abs() < 1.0,
@@ -8106,7 +8156,8 @@ mod tests {
       DistributionMode::Auto,
       None,
       &style_overrides,
-    );
+    )
+    .expect("populate constraints");
 
     let total_min: f32 = constraints.iter().map(|c| c.min_width).sum();
     assert!(
@@ -8185,13 +8236,15 @@ mod tests {
       .get(structure.cells[0].source_row)
       .and_then(|row| row.children.get(structure.cells[0].box_index))
       .expect("span cell");
-    let (span_min, span_max) = tfc.measure_cell_intrinsic_widths(
-      span_box,
-      structure.border_collapse,
-      percent_base,
-      &cell_bfc,
-      &style_overrides,
-    );
+    let (span_min, span_max) = tfc
+      .measure_cell_intrinsic_widths(
+        span_box,
+        structure.border_collapse,
+        percent_base,
+        &cell_bfc,
+        &style_overrides,
+      )
+      .expect("cell intrinsic widths");
     let resolved_width = span_box
       .style
       .width
@@ -8217,7 +8270,8 @@ mod tests {
       DistributionMode::Auto,
       percent_base,
       &style_overrides,
-    );
+    )
+    .expect("populate constraints");
 
     let percent_sum: f32 = constraints.iter().filter_map(|c| c.percentage).sum();
     assert!(
@@ -8275,7 +8329,8 @@ mod tests {
       DistributionMode::Auto,
       None,
       &style_overrides,
-    );
+    )
+    .expect("populate constraints");
 
     let min = constraints.first().map(|c| c.min_width).unwrap_or(0.0);
     assert!(
@@ -8330,7 +8385,8 @@ mod tests {
       DistributionMode::Auto,
       Some(200.0),
       &style_overrides,
-    );
+    )
+    .expect("populate constraints");
 
     let min = constraints.first().map(|c| c.min_width).unwrap_or(0.0);
     assert!(
@@ -8384,7 +8440,8 @@ mod tests {
       DistributionMode::Auto,
       None,
       &style_overrides,
-    );
+    )
+    .expect("populate constraints");
 
     let min = constraints.first().map(|c| c.min_width).unwrap_or(0.0);
     assert!(
@@ -8501,7 +8558,8 @@ mod tests {
       DistributionMode::Auto,
       None,
       &style_overrides,
-    );
+    )
+    .expect("populate constraints");
 
     let flex_expected = 100.0;
     let grid_expected = 120.0;
@@ -8576,7 +8634,8 @@ mod tests {
       DistributionMode::Auto,
       None,
       &style_overrides,
-    );
+    )
+    .expect("populate constraints");
 
     let constraint = constraints
       .first()
@@ -8641,7 +8700,8 @@ mod tests {
       DistributionMode::Auto,
       None,
       &style_overrides,
-    );
+    )
+    .expect("populate constraints");
 
     let min = constraints.first().map(|c| c.min_width).unwrap_or(0.0);
     assert!(
@@ -8708,7 +8768,8 @@ mod tests {
       DistributionMode::Auto,
       None,
       &style_overrides,
-    );
+    )
+    .expect("populate constraints");
 
     let constraint = constraints
       .first()
@@ -8774,7 +8835,8 @@ mod tests {
       DistributionMode::Auto,
       Some(200.0),
       &style_overrides,
-    );
+    )
+    .expect("populate constraints");
 
     let min = constraints.first().map(|c| c.min_width).unwrap_or(0.0);
     assert!(
@@ -8832,7 +8894,8 @@ mod tests {
       DistributionMode::Auto,
       None,
       &style_overrides,
-    );
+    )
+    .expect("populate constraints");
 
     let min = constraints.first().map(|c| c.min_width).unwrap_or(0.0);
     assert!(
@@ -8888,7 +8951,8 @@ mod tests {
       DistributionMode::Auto,
       Some(200.0),
       &style_overrides,
-    );
+    )
+    .expect("populate constraints");
 
     let col = constraints.first().expect("column constraints");
     assert!(
@@ -8948,7 +9012,8 @@ mod tests {
       DistributionMode::Auto,
       None,
       &style_overrides,
-    );
+    )
+    .expect("populate constraints");
 
     let col = constraints.first().expect("column constraints");
     assert!(
@@ -9778,7 +9843,8 @@ mod tests {
       DistributionMode::Auto,
       None,
       &style_overrides,
-    );
+    )
+    .expect("populate constraints");
 
     assert_eq!(constraints.len(), 1);
     let col = &constraints[0];
@@ -9820,13 +9886,15 @@ mod tests {
 
     // `box-sizing: border-box` means the specified width already includes padding.
     let border_box_cell = make_cell(BoxSizing::BorderBox);
-    let (min, max) = tfc.measure_cell_intrinsic_widths(
-      &border_box_cell,
-      BorderCollapse::Separate,
-      None,
-      &cell_bfc,
-      &style_overrides,
-    );
+    let (min, max) = tfc
+      .measure_cell_intrinsic_widths(
+        &border_box_cell,
+        BorderCollapse::Separate,
+        None,
+        &cell_bfc,
+        &style_overrides,
+      )
+      .expect("cell intrinsic widths");
     assert!(
       (min - 100.0).abs() < 0.5,
       "border-box intrinsic min width should match authored border-box width (got {min:.2})"
@@ -9839,13 +9907,15 @@ mod tests {
     // `box-sizing: content-box` means the specified width excludes padding, so padding is added
     // once to reach the border-box intrinsic size.
     let content_box_cell = make_cell(BoxSizing::ContentBox);
-    let (min, max) = tfc.measure_cell_intrinsic_widths(
-      &content_box_cell,
-      BorderCollapse::Separate,
-      None,
-      &cell_bfc,
-      &style_overrides,
-    );
+    let (min, max) = tfc
+      .measure_cell_intrinsic_widths(
+        &content_box_cell,
+        BorderCollapse::Separate,
+        None,
+        &cell_bfc,
+        &style_overrides,
+      )
+      .expect("cell intrinsic widths");
     assert!(
       (min - 120.0).abs() < 0.5,
       "content-box intrinsic min width should include padding once (got {min:.2})"
@@ -9904,7 +9974,8 @@ mod tests {
       DistributionMode::Fixed,
       None,
       &StyleOverrideCache::default(),
-    );
+    )
+    .expect("populate constraints");
 
     assert_eq!(constraints.len(), 2);
     assert!(
@@ -10262,7 +10333,8 @@ mod tests {
       DistributionMode::Fixed,
       Some(available_content),
       &style_overrides,
-    );
+    )
+    .expect("populate constraints");
     let distribution = ColumnDistributor::new(DistributionMode::Fixed)
       .distribute(&column_constraints, available_content);
     let fragment = tfc.layout(&table, &constraints).expect("table layout");
@@ -12442,6 +12514,36 @@ mod tests {
   }
 
   #[test]
+  fn caption_intrinsic_width_timeout_propagates() {
+    let caption_children = (0..32usize)
+      .map(|idx| BoxNode::new_text(make_style(Display::Inline), format!("c{idx}")))
+      .collect::<Vec<_>>();
+    let caption = BoxNode::new_block(
+      make_style(Display::TableCaption),
+      FormattingContextType::Block,
+      caption_children,
+    );
+
+    let mut table_style = ComputedStyle::default();
+    table_style.display = Display::Table;
+    table_style.border_spacing_horizontal = Length::px(0.0);
+    table_style.border_spacing_vertical = Length::px(0.0);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![caption],
+    );
+
+    let fc = TableFormattingContext::new();
+    let deadline = RenderDeadline::new(None, Some(Arc::new(|| true)));
+    let result = with_deadline(Some(&deadline), || {
+      fc.layout(&table, &LayoutConstraints::definite_width(200.0))
+    });
+
+    assert!(matches!(result, Err(LayoutError::Timeout { .. })));
+  }
+
+  #[test]
   fn caption_min_width_expands_table_width() {
     let mut caption_style = ComputedStyle::default();
     caption_style.display = Display::TableCaption;
@@ -13667,7 +13769,8 @@ mod tests {
       DistributionMode::Auto,
       percent_base,
       &style_overrides,
-    );
+    )
+    .expect("populate constraints");
     tfc.normalize_percentage_constraints(&mut constraints, percent_base);
 
     let percents: Vec<f32> = constraints

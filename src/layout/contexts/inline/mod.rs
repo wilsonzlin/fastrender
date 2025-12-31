@@ -1855,12 +1855,18 @@ impl InlineFormattingContext {
 
     // CSS 2.1 §10.3.9: inline-block width auto -> shrink-to-fit:
     // min(max(preferred_min, available), preferred)
-    let preferred_min_content = fc
-      .compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MinContent)
-      .unwrap_or(0.0);
-    let preferred_content = fc
-      .compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MaxContent)
-      .unwrap_or(preferred_min_content);
+    let preferred_min_content =
+      match fc.compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MinContent) {
+        Ok(value) => value,
+        Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+        Err(_) => 0.0,
+      };
+    let preferred_content =
+      match fc.compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MaxContent) {
+        Ok(value) => value,
+        Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+        Err(_) => preferred_min_content,
+      };
 
     let horizontal_edges = horizontal_padding_and_borders(
       style,
@@ -5108,7 +5114,11 @@ impl InlineFormattingContext {
   }
 
   /// Calculates intrinsic width for inline content
-  fn calculate_intrinsic_width(&self, box_node: &BoxNode, mode: IntrinsicSizingMode) -> f32 {
+  fn calculate_intrinsic_width(
+    &self,
+    box_node: &BoxNode,
+    mode: IntrinsicSizingMode,
+  ) -> Result<f32, LayoutError> {
     let style = &box_node.style;
     if style.containment.size || style.containment.inline_size {
       let edges = resolve_length_for_width(
@@ -5136,7 +5146,7 @@ impl InlineFormattingContext {
         &self.font_context,
         self.viewport_size,
       );
-      return edges;
+      return Ok(edges);
     }
 
     let base_direction = resolve_base_direction_for_box(box_node);
@@ -5149,7 +5159,8 @@ impl InlineFormattingContext {
       &mut positioned,
     ) {
       Ok(items) => items,
-      Err(_) => return 0.0,
+      Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+      Err(_) => return Ok(0.0),
     };
     let _indent_value = resolve_length_with_percentage_inline(
       style.text_indent.length,
@@ -5165,7 +5176,7 @@ impl InlineFormattingContext {
       IntrinsicSizingMode::MaxContent => self.max_content_width(&items),
     };
 
-    width
+    Ok(width)
   }
 
   pub(crate) fn intrinsic_width_for_children(
@@ -5173,7 +5184,7 @@ impl InlineFormattingContext {
     container_style: &Arc<ComputedStyle>,
     children: &[&BoxNode],
     mode: IntrinsicSizingMode,
-  ) -> f32 {
+  ) -> Result<f32, LayoutError> {
     self.calculate_intrinsic_width_for_children(container_style, children, mode)
   }
 
@@ -5182,7 +5193,7 @@ impl InlineFormattingContext {
     container_style: &Arc<ComputedStyle>,
     children: &[&BoxNode],
     mode: IntrinsicSizingMode,
-  ) -> f32 {
+  ) -> Result<f32, LayoutError> {
     let style = container_style;
     if style.containment.size || style.containment.inline_size {
       let edges = resolve_length_for_width(
@@ -5210,7 +5221,7 @@ impl InlineFormattingContext {
         &self.font_context,
         self.viewport_size,
       );
-      return edges;
+      return Ok(edges);
     }
 
     let base_direction = resolve_base_direction_for_style_and_children(style, children);
@@ -5224,7 +5235,8 @@ impl InlineFormattingContext {
       &mut positioned,
     ) {
       Ok(items) => items,
-      Err(_) => return 0.0,
+      Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+      Err(_) => return Ok(0.0),
     };
     let _indent_value = resolve_length_with_percentage_inline(
       style.text_indent.length,
@@ -5235,10 +5247,10 @@ impl InlineFormattingContext {
     )
     .unwrap_or(0.0);
 
-    match mode {
+    Ok(match mode {
       IntrinsicSizingMode::MinContent => self.min_content_width(&items),
       IntrinsicSizingMode::MaxContent => self.max_content_width(&items),
-    }
+    })
   }
 
   fn collect_inline_items_for_children_with_base<'a>(
@@ -6524,7 +6536,7 @@ impl FormattingContext for InlineFormattingContext {
     // Inline intrinsic widths can vary subtly with inline formatting context construction
     // (e.g., cached fragments from prior layout passes). Recompute each time instead of
     // using the shared intrinsic cache to avoid reusing layout-sized results.
-    Ok(self.calculate_intrinsic_width(box_node, mode))
+    self.calculate_intrinsic_width(box_node, mode)
   }
 }
 
@@ -6890,12 +6902,18 @@ impl InlineFormattingContext {
       .formatting_context()
       .unwrap_or(FormattingContextType::Block);
     let fc = factory.create(fc_type);
-    let preferred_min_content = fc
-      .compute_intrinsic_inline_size(&float_node, IntrinsicSizingMode::MinContent)
-      .unwrap_or(0.0);
-    let preferred_content = fc
-      .compute_intrinsic_inline_size(&float_node, IntrinsicSizingMode::MaxContent)
-      .unwrap_or(preferred_min_content);
+    let preferred_min_content =
+      match fc.compute_intrinsic_inline_size(&float_node, IntrinsicSizingMode::MinContent) {
+        Ok(value) => value,
+        Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+        Err(_) => 0.0,
+      };
+    let preferred_content =
+      match fc.compute_intrinsic_inline_size(&float_node, IntrinsicSizingMode::MaxContent) {
+        Ok(value) => value,
+        Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+        Err(_) => preferred_min_content,
+      };
 
     let preferred_min = preferred_min_content + horizontal_edges;
     let preferred = preferred_content + horizontal_edges;
@@ -8308,26 +8326,38 @@ impl InlineFormattingContext {
         let needs_block_intrinsics = positioned_style.height.is_auto()
           && (positioned_style.top.is_auto() || positioned_style.bottom.is_auto());
         let preferred_min_inline = if needs_inline_intrinsics {
-          fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
-            .ok()
+          match fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent) {
+            Ok(value) => Some(value),
+            Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+            Err(_) => None,
+          }
         } else {
           None
         };
         let preferred_inline = if needs_inline_intrinsics {
-          fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent)
-            .ok()
+          match fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent) {
+            Ok(value) => Some(value),
+            Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+            Err(_) => None,
+          }
         } else {
           None
         };
         let preferred_min_block = if needs_block_intrinsics {
-          fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent)
-            .ok()
+          match fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent) {
+            Ok(value) => Some(value),
+            Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+            Err(_) => None,
+          }
         } else {
           None
         };
         let preferred_block = if needs_block_intrinsics {
-          fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent)
-            .ok()
+          match fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent) {
+            Ok(value) => Some(value),
+            Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+            Err(_) => None,
+          }
         } else {
           None
         };
@@ -9656,12 +9686,14 @@ mod tests {
       &container_style,
       child_refs.as_slice(),
       IntrinsicSizingMode::MinContent,
-    );
+    )
+    .expect("min intrinsic width for children");
     let max_actual = ifc.intrinsic_width_for_children(
       &container_style,
       child_refs.as_slice(),
       IntrinsicSizingMode::MaxContent,
-    );
+    )
+    .expect("max intrinsic width for children");
 
     assert!(
       (min_expected - min_actual).abs() < 0.01,
@@ -9675,6 +9707,25 @@ mod tests {
       max_expected,
       max_actual
     );
+  }
+
+  #[test]
+  fn intrinsic_inline_size_propagates_deadline_timeout() {
+    let mut container_style = ComputedStyle::default();
+    container_style.display = Display::Inline;
+    container_style.font_size = 16.0;
+    let container_style = Arc::new(container_style);
+
+    let children = (0..32).map(|_| make_text_box("x")).collect::<Vec<_>>();
+    let inline_container = BoxNode::new_inline(container_style, children);
+
+    let ifc = InlineFormattingContext::new();
+    let deadline = RenderDeadline::new(None, Some(Arc::new(|| true)));
+    let result = crate::render_control::with_deadline(Some(&deadline), || {
+      ifc.compute_intrinsic_inline_size(&inline_container, IntrinsicSizingMode::MaxContent)
+    });
+
+    assert!(matches!(result, Err(LayoutError::Timeout { .. })));
   }
 
   #[test]
@@ -13540,8 +13591,12 @@ mod tests {
       )],
     );
     let ifc = InlineFormattingContext::new();
-    let breaking_min = ifc.calculate_intrinsic_width(&breaking, IntrinsicSizingMode::MinContent);
-    let normal_min = ifc.calculate_intrinsic_width(&normal, IntrinsicSizingMode::MinContent);
+    let breaking_min = ifc
+      .calculate_intrinsic_width(&breaking, IntrinsicSizingMode::MinContent)
+      .expect("min-content width");
+    let normal_min = ifc
+      .calculate_intrinsic_width(&normal, IntrinsicSizingMode::MinContent)
+      .expect("min-content width");
     assert!(
       breaking_min < normal_min * 0.75,
       "break-word should add anywhere-style break opportunities and shrink min-content width"
@@ -13557,7 +13612,9 @@ mod tests {
         "longtoken".to_string(),
       )],
     );
-    let anywhere_min = ifc.calculate_intrinsic_width(&anywhere, IntrinsicSizingMode::MinContent);
+    let anywhere_min = ifc
+      .calculate_intrinsic_width(&anywhere, IntrinsicSizingMode::MinContent)
+      .expect("min-content width");
     assert!(
       anywhere_min < normal_min * 0.75,
       "word-break:anywhere should also shrink the min-content width"
@@ -13618,8 +13675,12 @@ mod tests {
         "longtoken".to_string(),
       )],
     );
-    let anywhere_min = ifc.calculate_intrinsic_width(&breaking, IntrinsicSizingMode::MinContent);
-    let normal_min = ifc.calculate_intrinsic_width(&normal, IntrinsicSizingMode::MinContent);
+    let anywhere_min = ifc
+      .calculate_intrinsic_width(&breaking, IntrinsicSizingMode::MinContent)
+      .expect("min-content width");
+    let normal_min = ifc
+      .calculate_intrinsic_width(&normal, IntrinsicSizingMode::MinContent)
+      .expect("min-content width");
     assert!(
       anywhere_min < normal_min * 0.75,
       "word-break:anywhere should shrink min-content width with added break opportunities"
@@ -13735,8 +13796,12 @@ mod tests {
       )],
     );
     let ifc = InlineFormattingContext::new();
-    let breaking_min = ifc.calculate_intrinsic_width(&breaking, IntrinsicSizingMode::MinContent);
-    let normal_min = ifc.calculate_intrinsic_width(&normal, IntrinsicSizingMode::MinContent);
+    let breaking_min = ifc
+      .calculate_intrinsic_width(&breaking, IntrinsicSizingMode::MinContent)
+      .expect("min-content width");
+    let normal_min = ifc
+      .calculate_intrinsic_width(&normal, IntrinsicSizingMode::MinContent)
+      .expect("min-content width");
     assert!(
       (breaking_min - normal_min).abs() < 0.1,
       "overflow-wrap: break-word should not reduce min-content widths"
