@@ -1833,6 +1833,9 @@ fn capture_dump_for_page(
   {
     std::thread::sleep(Duration::from_millis(delay));
   }
+  if std::env::var("FASTR_TEST_DUMP_PANIC").is_ok() {
+    panic!("FASTR_TEST_DUMP_PANIC");
+  }
 
   let RenderConfigBundle {
     config,
@@ -3275,6 +3278,8 @@ fn spawn_worker(
     .arg(args.disk_cache.max_bytes.to_string())
     .arg("--disk-cache-max-age-secs")
     .arg(args.disk_cache.max_age_secs.to_string())
+    .arg("--disk-cache-lock-stale-secs")
+    .arg(args.disk_cache.lock_stale_secs.to_string())
     .arg("--diagnostics")
     .arg(format!("{:?}", diagnostics).to_ascii_lowercase())
     .arg("--timeout")
@@ -4027,6 +4032,23 @@ fn worker(args: WorkerArgs) -> io::Result<()> {
   match result {
     Ok(res) => res,
     Err(panic) => {
+      let panic_msg = panic_to_string(panic);
+      let progress_written = stage_path
+        .as_ref()
+        .map(|path| progress_sentinel_path(path).exists())
+        .unwrap_or(false);
+      if progress_written {
+        // Progress for this run was already committed; don't overwrite it just because an optional
+        // dump capture panicked.
+        if let Some(path) = &log_path {
+          let _ = append_log_line(
+            path,
+            &format!("Panic after progress was written (during dump capture?): {panic_msg}"),
+          );
+        }
+        return Ok(());
+      }
+
       let previous = read_progress(&progress_path);
       let url = url_hint_from_cache_path(&cache_path);
       let heartbeat_stage = stage_path
@@ -4035,7 +4057,7 @@ fn worker(args: WorkerArgs) -> io::Result<()> {
       let mut progress = PageProgress::new(url);
       progress.status = ProgressStatus::Panic;
       progress.total_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
-      progress.notes = panic_to_string(panic);
+      progress.notes = panic_msg;
       progress.failure_stage = heartbeat_stage.and_then(progress_stage_from_heartbeat);
       if let Some(stage) = heartbeat_stage {
         maybe_apply_hotspot(&mut progress, previous.as_ref(), stage.hotspot(), false);
@@ -4828,6 +4850,78 @@ mod tests {
       progress.status,
       ProgressStatus::Timeout,
       "progress was overwritten after worker was killed post-progress"
+    );
+  }
+
+  #[test]
+  fn dump_capture_panic_does_not_overwrite_progress() {
+    let Some(exe) = pageset_progress_exe() else {
+      eprintln!("Skipping test: pageset_progress binary not found");
+      return;
+    };
+
+    let dir = tempdir().unwrap();
+    let cache_path = dir.path().join("page.html");
+    fs::write(&cache_path, "<html><body>ok</body></html>").unwrap();
+    let progress_path = dir.path().join("page.json");
+    let log_path = dir.path().join("page.log");
+    let stage_path = dir.path().join("page.stage");
+    let stderr_path = dir.path().join("page.stderr.log");
+
+    let item = WorkItem {
+      stem: "dumppanic".to_string(),
+      cache_stem: "dumppanic".to_string(),
+      url: url_hint_from_cache_path(&cache_path),
+      cache_path: cache_path.clone(),
+      progress_path: progress_path.clone(),
+      log_path: log_path.clone(),
+      stderr_path: stderr_path.clone(),
+      stage_path: stage_path.clone(),
+      trace_out: None,
+    };
+
+    let mut args = basic_run_args(dir.path());
+    // Avoid scanning system fonts in tests.
+    args.fonts.bundled_fonts = true;
+
+    let dump_settings = DumpSettings {
+      failures: None,
+      slow: Some(DumpLevel::Summary),
+      slow_ms: Some(0.0),
+      dir: dir.path().join("dumps"),
+      timeout_secs: 1,
+      soft_timeout_ms: None,
+    };
+    fs::create_dir_all(&dump_settings.dir).unwrap();
+
+    let render_kill_timeout = Duration::from_secs(5);
+    let overall_kill_timeout = Duration::from_secs(6);
+    let _guard = EnvVarGuard::set("FASTR_TEST_DUMP_PANIC", "1");
+    let queue = VecDeque::from(vec![item]);
+    run_queue(
+      &exe,
+      &args,
+      queue,
+      render_kill_timeout,
+      overall_kill_timeout,
+      None,
+      args.diagnostics,
+      args.jobs,
+      Some(&dump_settings),
+    )
+    .unwrap();
+
+    let progress = read_progress(&progress_path).expect("progress");
+    assert_ne!(
+      progress.status,
+      ProgressStatus::Panic,
+      "progress was overwritten after dump capture panic"
+    );
+
+    let log_contents = fs::read_to_string(&log_path).expect("page log");
+    assert!(
+      log_contents.contains("Panic after progress was written"),
+      "expected panic to be recorded in the per-page log, got:\n{log_contents}"
     );
   }
 }
