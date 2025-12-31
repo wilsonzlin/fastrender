@@ -1190,10 +1190,7 @@ impl DomMaps {
 
         let class_start = selector_keys.class_keys.len();
         if let Some(class_attr) = node.get_attribute_ref("class") {
-          for cls in class_attr.split_whitespace() {
-            if cls.is_empty() {
-              continue;
-            }
+          for cls in class_attr.split_ascii_whitespace() {
             selector_keys.class_keys.push(selector_bucket_class(cls));
           }
         }
@@ -3610,10 +3607,7 @@ impl<'a, 'dom> SelectorCandidateBench<'a, 'dom> {
         let tag_key = node.tag_name().map(selector_bucket_tag).unwrap_or_default();
         let id_key = node.get_attribute_ref("id").map(selector_bucket_id);
         if let Some(class_attr) = node.get_attribute_ref("class") {
-          for cls in class_attr.split_whitespace() {
-            if cls.is_empty() {
-              continue;
-            }
+          for cls in class_attr.split_ascii_whitespace() {
             self.tmp_class_keys.push(selector_bucket_class(cls));
           }
         }
@@ -5547,7 +5541,7 @@ fn part_names(node: &DomNode) -> Vec<CssString> {
 
   let mut names = Vec::new();
   let mut seen: HashSet<&str> = HashSet::new();
-  for token in attr.split_whitespace().filter(|t| !t.is_empty()) {
+  for token in attr.split_ascii_whitespace() {
     if seen.insert(token) {
       names.push(CssString::from(token));
     }
@@ -7241,10 +7235,7 @@ mod tests {
     let tag_key = node.tag_name().map(selector_bucket_tag).unwrap_or_default();
     let id_key = node.get_attribute_ref("id").map(selector_bucket_id);
     if let Some(class_attr) = node.get_attribute_ref("class") {
-      for cls in class_attr.split_whitespace() {
-        if cls.is_empty() {
-          continue;
-        }
+      for cls in class_attr.split_ascii_whitespace() {
         class_keys.push(selector_bucket_class(cls));
       }
     }
