@@ -1227,6 +1227,7 @@ pub(crate) fn populate_timeout_progress(
 }
 
 fn render_worker(args: WorkerArgs) -> io::Result<()> {
+  let _cleanup_delay_guard = WorkerCleanupDelayGuard::from_env();
   let heartbeat = StageHeartbeatWriter::new(args.stage_path.clone());
   let _heartbeat_guard = StageListenerGuard::new(heartbeat.listener());
   record_stage(StageHeartbeat::ReadCache);
@@ -1591,7 +1592,7 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     ));
     flush_log(&log, &args.log_path);
     record_stage(StageHeartbeat::Done);
-    return Ok(());
+    std::process::exit(0);
   }
 
   if let Some(level) = dump_level_for_progress(&args, &progress) {
@@ -1618,7 +1619,13 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
   flush_log(&log, &args.log_path);
 
   record_stage(StageHeartbeat::Done);
-  Ok(())
+  if let Some(delay) = std::env::var("FASTR_TEST_POST_DONE_SLEEP_MS")
+    .ok()
+    .and_then(|v| v.parse::<u64>().ok())
+  {
+    std::thread::sleep(Duration::from_millis(delay));
+  }
+  std::process::exit(0);
 }
 
 fn append_fetch_error_summary(log: &mut String, diagnostics: &RenderDiagnostics) {
@@ -1947,6 +1954,9 @@ impl StageHeartbeatWriter {
   }
 
   fn record(&self, stage: StageHeartbeat) {
+    if stage == StageHeartbeat::Done {
+      return;
+    }
     let Some(path) = &self.path else {
       if let Ok(mut guard) = self.last.lock() {
         if guard.as_ref() == Some(&stage) {
@@ -2023,6 +2033,9 @@ fn write_progress_with_sentinel(
 ) -> io::Result<()> {
   write_progress(progress_path, progress)?;
   if let Some(stage_path) = stage_path {
+    if std::env::var_os("FASTR_TEST_SKIP_PROGRESS_SENTINEL").is_some() {
+      return Ok(());
+    }
     let sentinel_path = progress_sentinel_path(stage_path);
     // Best-effort marker so the parent can distinguish "worker wrote progress for this run"
     // from a stale progress artifact left over from a previous invocation.
@@ -3481,11 +3494,8 @@ fn run_queue(
 
         let previous = read_progress(&entry.item.progress_path);
         let heartbeat_stage = read_stage_heartbeat(&entry.item.stage_path);
-        let timeout_stage = heartbeat_stage.and_then(progress_stage_from_heartbeat);
-        let timeout_hotspot = timeout_stage
-          .map(hotspot_from_progress_stage)
-          .unwrap_or("unknown")
-          .to_string();
+        let timeout_stage = infer_hard_timeout_stage(heartbeat_stage, previous.as_ref());
+        let timeout_hotspot = hotspot_from_progress_stage(timeout_stage).to_string();
         let mut progress = PageProgress::new(entry.item.url.clone());
         progress.status = ProgressStatus::Timeout;
         progress.total_ms = Some(worker_timeout.as_secs_f64() * 1000.0);
@@ -3494,10 +3504,10 @@ fn run_queue(
           heartbeat_stage,
         );
         progress.hotspot = timeout_hotspot.clone();
-        progress.timeout_stage = timeout_stage;
+        progress.timeout_stage = Some(timeout_stage);
         let mut progress = progress.merge_preserving_manual(previous, current_sha.as_deref());
         progress.hotspot = timeout_hotspot;
-        progress.timeout_stage = timeout_stage;
+        progress.timeout_stage = Some(timeout_stage);
         ensure_note_includes(
           &mut progress,
           &format!("hard timeout after {:.2}s", worker_timeout.as_secs_f64()),
@@ -3643,6 +3653,41 @@ fn run_queue(
   }
 
   Ok(())
+}
+
+struct WorkerCleanupDelayGuard(Option<Duration>);
+
+impl WorkerCleanupDelayGuard {
+  fn from_env() -> Self {
+    let delay = std::env::var("FASTR_TEST_WORKER_DROP_DELAY_MS")
+      .ok()
+      .and_then(|v| v.parse::<u64>().ok())
+      .map(Duration::from_millis);
+    Self(delay)
+  }
+}
+
+impl Drop for WorkerCleanupDelayGuard {
+  fn drop(&mut self) {
+    if let Some(delay) = self.0 {
+      std::thread::sleep(delay);
+    }
+  }
+}
+
+fn infer_hard_timeout_stage(
+  heartbeat_stage: Option<StageHeartbeat>,
+  previous: Option<&PageProgress>,
+) -> ProgressStage {
+  heartbeat_stage
+    .and_then(|stage| {
+      progress_stage_from_heartbeat(stage)
+        .or_else(|| (stage == StageHeartbeat::Done).then_some(ProgressStage::Paint))
+    })
+    .or_else(|| {
+      previous.and_then(|p| p.timeout_stage.or(p.failure_stage)).or(Some(ProgressStage::DomParse))
+    })
+    .unwrap_or(ProgressStage::DomParse)
 }
 
 fn run(args: RunArgs) -> io::Result<()> {
