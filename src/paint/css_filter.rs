@@ -305,16 +305,11 @@ pub(crate) fn apply_drop_shadow(
     apply_gaussian_blur(&mut shadow, blur_radius)?;
   }
 
-  let mut result = match new_pixmap(width, height) {
-    Some(p) => p,
-    None => return Ok(()),
-  };
-
   let dest_x = min_x as i32 - pad as i32;
   let dest_y = min_y as i32 - pad as i32;
   let mut paint = PixmapPaint::default();
-  paint.blend_mode = SkiaBlendMode::SourceOver;
-  result.draw_pixmap(
+  paint.blend_mode = SkiaBlendMode::DestinationOver;
+  pixmap.draw_pixmap(
     dest_x,
     dest_y,
     shadow.as_ref(),
@@ -322,9 +317,6 @@ pub(crate) fn apply_drop_shadow(
     Transform::from_translate(offset_x, offset_y),
     None,
   );
-  result.draw_pixmap(0, 0, pixmap.as_ref(), &paint, Transform::identity(), None);
-
-  *pixmap = result;
   Ok(())
 }
 

@@ -9438,17 +9438,9 @@ fn apply_drop_shadow(
     apply_gaussian_blur(&mut shadow, blur_radius)?;
   }
 
-  let mut result = match new_pixmap(width, height) {
-    Some(p) => {
-      record_layer_allocation(width, height);
-      p
-    }
-    None => return Ok(()),
-  };
-
   let mut paint = PixmapPaint::default();
-  paint.blend_mode = SkiaBlendMode::SourceOver;
-  result.draw_pixmap(
+  paint.blend_mode = SkiaBlendMode::DestinationOver;
+  pixmap.draw_pixmap(
     0,
     0,
     shadow.as_ref(),
@@ -9456,9 +9448,6 @@ fn apply_drop_shadow(
     Transform::from_translate(offset_x, offset_y),
     None,
   );
-  result.draw_pixmap(0, 0, pixmap.as_ref(), &paint, Transform::identity(), None);
-
-  *pixmap = result;
   Ok(())
 }
 
@@ -13021,6 +13010,29 @@ mod tests {
       l < l0 && t < t0 && r < r0 && b < b0,
       "reduced spread should shrink outsets"
     );
+  }
+
+  #[test]
+  fn drop_shadow_avoids_extra_result_pixmap_allocation() {
+    let mut pixmap = new_pixmap(8, 8).expect("pixmap");
+    for y in 0..pixmap.height() {
+      for x in 0..pixmap.width() {
+        let idx = ((y * pixmap.width() + x) * 4) as usize;
+        pixmap.data_mut()[idx] = 200;
+        pixmap.data_mut()[idx + 3] = 255;
+      }
+    }
+
+    let recorder = NewPixmapAllocRecorder::start();
+    apply_drop_shadow(&mut pixmap, 0.0, 0.0, 0.0, 0.0, Rgba::BLACK).expect("drop shadow");
+    let allocations = recorder.take();
+
+    assert_eq!(
+      allocations.len(),
+      1,
+      "expected only the shadow pixmap allocation, got {allocations:?}"
+    );
+    assert_eq!((allocations[0].width, allocations[0].height), (8, 8));
   }
 
   #[test]

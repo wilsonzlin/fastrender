@@ -1434,14 +1434,9 @@ fn apply_drop_shadow(
     apply_gaussian_blur_cached(&mut shadow, blur_radius, blur_radius, cache, 1.0)?;
   }
 
-  let mut result = match new_pixmap(width, height) {
-    Some(p) => p,
-    None => return Ok(()),
-  };
-
   let mut paint = PixmapPaint::default();
-  paint.blend_mode = SkiaBlendMode::SourceOver;
-  result.draw_pixmap(
+  paint.blend_mode = SkiaBlendMode::DestinationOver;
+  pixmap.draw_pixmap(
     min_x as i32 - pad as i32,
     min_y as i32 - pad as i32,
     shadow.as_ref(),
@@ -1449,9 +1444,6 @@ fn apply_drop_shadow(
     Transform::from_translate(offset_x, offset_y),
     None,
   );
-  result.draw_pixmap(0, 0, pixmap.as_ref(), &paint, Transform::identity(), None);
-
-  *pixmap = result;
   Ok(())
 }
 
@@ -9400,6 +9392,31 @@ mod tests {
     let pixmap = renderer.render(&list).unwrap();
     // Center of the box should have darkened pixels due to shadow.
     assert!(pixel(&pixmap, 3, 3).3 > 200);
+  }
+
+  #[test]
+  fn drop_shadow_avoids_extra_result_pixmap_allocation() {
+    let mut pixmap = new_pixmap(8, 8).unwrap();
+    pixmap.data_mut().fill(0);
+    for y in 2..6u32 {
+      for x in 2..6u32 {
+        let idx = ((y * pixmap.width() + x) * 4) as usize;
+        pixmap.data_mut()[idx] = 200;
+        pixmap.data_mut()[idx + 3] = 255;
+      }
+    }
+
+    let recorder = crate::paint::pixmap::NewPixmapAllocRecorder::start();
+    apply_drop_shadow(&mut pixmap, 0.0, 0.0, 0.0, 0.0, Rgba::BLACK, None)
+      .expect("drop shadow");
+    let allocations = recorder.take();
+
+    assert_eq!(
+      allocations.len(),
+      1,
+      "expected only the shadow pixmap allocation, got {allocations:?}"
+    );
+    assert_eq!((allocations[0].width, allocations[0].height), (4, 4));
   }
 
   #[test]
