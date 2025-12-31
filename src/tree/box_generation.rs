@@ -1560,7 +1560,7 @@ fn generate_boxes_for_styled_into(
   }
 
   let composed_children = composed_children(styled, styled_lookup);
-  let mut children: Vec<BoxNode> = Vec::new();
+  let mut children: Vec<BoxNode> = Vec::with_capacity(composed_children.len());
   let mut idx = 0;
   while idx < composed_children.len() {
     let child = composed_children.get(idx);
@@ -1621,30 +1621,43 @@ fn generate_boxes_for_styled_into(
     idx += 1;
   }
 
-  // Generate ::before pseudo-element box if styles exist
+  // Generate ::before/::after/::marker in a single pass without repeated `insert(0, ...)` shifts.
+  let mut before_box: Option<BoxNode> = None;
+  let mut marker_box: Option<BoxNode> = None;
+  let mut after_box: Option<BoxNode> = None;
+
   if let Some(before_styles) = &styled.before_styles {
     let before_start = clone_starting_style(&styled.starting_styles.before);
-    if let Some(before_box) =
-      create_pseudo_element_box(styled, before_styles, before_start, "before", counters)
-    {
-      children.insert(0, before_box);
-    }
+    before_box =
+      create_pseudo_element_box(styled, before_styles, before_start, "before", counters);
   }
 
   if styled.styles.display == Display::ListItem {
-    if let Some(marker_box) = create_marker_box(styled, counters) {
-      children.insert(0, marker_box);
-    }
+    marker_box = create_marker_box(styled, counters);
   }
 
-  // Generate ::after pseudo-element box if styles exist
   if let Some(after_styles) = &styled.after_styles {
     let after_start = clone_starting_style(&styled.starting_styles.after);
-    if let Some(after_box) =
-      create_pseudo_element_box(styled, after_styles, after_start, "after", counters)
-    {
-      children.push(after_box);
+    after_box =
+      create_pseudo_element_box(styled, after_styles, after_start, "after", counters);
+  }
+
+  if before_box.is_some() || marker_box.is_some() || after_box.is_some() {
+    let extra = usize::from(before_box.is_some())
+      + usize::from(marker_box.is_some())
+      + usize::from(after_box.is_some());
+    let mut combined = Vec::with_capacity(children.len() + extra);
+    if let Some(marker_box) = marker_box {
+      combined.push(marker_box);
     }
+    if let Some(before_box) = before_box {
+      combined.push(before_box);
+    }
+    combined.append(&mut children);
+    if let Some(after_box) = after_box {
+      combined.push(after_box);
+    }
+    children = combined;
   }
 
   // display: contents contributes its children directly.
