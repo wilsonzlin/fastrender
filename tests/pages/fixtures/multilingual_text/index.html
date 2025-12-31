@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Multilingual text coverage</title>
+    <style>
+      :root {
+        --ink: #111827;
+        --subtle: #4b5563;
+        --border: #d1d5db;
+        --surface: #f9fafb;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        padding: 28px;
+        font-family: sans-serif;
+        background: white;
+        color: var(--ink);
+      }
+
+      h1 {
+        margin: 0 0 8px 0;
+        font-size: 24px;
+      }
+
+      p {
+        margin: 0;
+        line-height: 1.5;
+      }
+
+      .muted {
+        color: var(--subtle);
+      }
+
+      .block {
+        margin-top: 14px;
+        padding: 14px 16px;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: var(--surface);
+      }
+
+      h2 {
+        margin: 0 0 8px 0;
+        font-size: 15px;
+        letter-spacing: 0.02em;
+      }
+
+      .sample {
+        font-size: 22px;
+      }
+
+      .rtl {
+        direction: rtl;
+        unicode-bidi: isolate;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Bundled multilingual font coverage</h1>
+    <p class="muted">
+      This fixture is rendered in tests with <code>FontConfig::bundled_only()</code> to ensure the
+      bundled font subsets cover common pageset scripts without falling back to tofu.
+    </p>
+
+    <section class="block">
+      <h2>Arabic (RTL)</h2>
+      <p class="sample rtl" lang="ar">مرحبا بالعالم</p>
+    </section>
+
+    <section class="block">
+      <h2>Hebrew (RTL)</h2>
+      <p class="sample rtl" lang="he">שלום עולם</p>
+    </section>
+
+    <section class="block">
+      <h2>Devanagari</h2>
+      <p class="sample" lang="hi">नमस्ते दुनिया</p>
+    </section>
+
+    <section class="block">
+      <h2>Bengali</h2>
+      <p class="sample" lang="bn">বাংলা লেখা পরীক্ষা</p>
+    </section>
+
+    <section class="block">
+      <h2>Tamil</h2>
+      <p class="sample" lang="ta">தமிழ் வணக்கம்</p>
+    </section>
+
+    <section class="block">
+      <h2>Thai</h2>
+      <p class="sample" lang="th">สวัสดีชาวโลก</p>
+    </section>
+
+    <section class="block">
+      <h2>CJK</h2>
+      <p class="sample" lang="zh">中文字体测试</p>
+      <p class="sample" lang="ja">界面要素テスト日本語</p>
+      <p class="sample" lang="ko">한국어 테스트</p>
+    </section>
+
+    <section class="block">
+      <h2>Greek + Cyrillic</h2>
+      <p class="sample" lang="el">Καλημέρα κόσμε</p>
+      <p class="sample" lang="ru">Привет мир</p>
+    </section>
+
+    <section class="block">
+      <h2>Symbols</h2>
+      <p class="sample">←→↔ ✓✕★⚠</p>
+    </section>
+  </body>
+</html>

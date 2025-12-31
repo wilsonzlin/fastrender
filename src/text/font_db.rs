@@ -83,6 +83,10 @@ const BUNDLED_FONTS: &[BundledFont] = &[
     data: include_bytes!("../../tests/fixtures/fonts/NotoSansArabic-subset.ttf"),
   },
   BundledFont {
+    name: "Noto Sans Hebrew",
+    data: include_bytes!("../../tests/fixtures/fonts/NotoSansHebrew-subset.ttf"),
+  },
+  BundledFont {
     name: "Noto Sans Devanagari",
     data: include_bytes!("../../tests/fixtures/fonts/NotoSansDevanagari-subset.ttf"),
   },
@@ -91,8 +95,8 @@ const BUNDLED_FONTS: &[BundledFont] = &[
     data: include_bytes!("../../tests/fixtures/fonts/NotoSansBengali-subset.ttf"),
   },
   BundledFont {
-    name: "Noto Sans Hebrew",
-    data: include_bytes!("../../tests/fixtures/fonts/NotoSansHebrew-subset.ttf"),
+    name: "Noto Sans Tamil",
+    data: include_bytes!("../../tests/fixtures/fonts/NotoSansTamil-subset.ttf"),
   },
   BundledFont {
     name: "Noto Sans Thai",

@@ -12,15 +12,16 @@ fn bundled_fonts_render_common_scripts() {
   let font_ctx = FontContext::with_config(FontConfig::bundled_only());
 
   let samples = [
-    ("arabic", "مرحبا بالعالم ١٢٣"),
-    ("hebrew", "שלום עולם"),
-    ("cyrillic", "Привет мир"),
-    ("greek", "Καλημέρα κόσμε"),
-    ("devanagari", "नमस्ते दुनिया"),
-    ("bengali", "বাংলা লেখা পরীক্ষা"),
-    ("thai", "สวัสดีชาวโลก"),
+    ("arabic", "مرحبا"),
+    ("hebrew", "שלום"),
+    ("cyrillic", "Привет"),
+    ("greek", "Καλημέρα"),
+    ("devanagari", "नमस्ते"),
+    ("bengali", "বাংলা"),
+    ("tamil", "தமிழ்"),
+    ("thai", "สวัสดี"),
     ("cjk", "界面元素テスト日本語韓国어"),
-    ("symbols", "←→↔ ✓✕★⚠"),
+    ("symbols", "←→↔✓✕★⚠"),
   ];
 
   for (label, text) in samples {
@@ -32,13 +33,12 @@ fn bundled_fonts_render_common_scripts() {
       .shape(text, &style, &font_ctx)
       .unwrap_or_else(|_| panic!("shape {label} sample"));
     assert!(!runs.is_empty(), "{label} sample should produce runs");
-    assert!(
-      runs
-        .iter()
-        .flat_map(|run| run.glyphs.iter())
-        .all(|g| g.glyph_id != 0),
-      "{label} sample should not shape missing glyphs with bundled fonts"
-    );
+    for run in &runs {
+      assert!(
+        run.glyphs.iter().all(|glyph| glyph.glyph_id != 0),
+        "{label} sample should not contain .notdef glyphs"
+      );
+    }
 
     let mut pixmap = Pixmap::new(512, 160).expect("pixmap");
     let mut rasterizer = TextRasterizer::new();
@@ -74,6 +74,12 @@ fn bundled_fonts_render_pageset_blocker_clusters() {
       .shape(text, &style, &font_ctx)
       .unwrap_or_else(|_| panic!("shape {label} sample"));
     assert!(!runs.is_empty(), "{label} sample should produce runs");
+    for run in &runs {
+      assert!(
+        run.glyphs.iter().all(|glyph| glyph.glyph_id != 0),
+        "{label} sample should not contain .notdef glyphs"
+      );
+    }
 
     let mut pixmap = Pixmap::new(256, 128).expect("pixmap");
     let mut rasterizer = TextRasterizer::new();

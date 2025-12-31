@@ -31,10 +31,12 @@ pip install -r tests/fixtures/fonts/requirements.txt
   - `NotoSansMono-subset.ttf`: ASCII, punctuation, arrows, and box-drawing glyphs for monospace fallback.
   - `NotoSansArabic-subset.ttf`: Arabic + Supplement/Extended ranges, presentation forms, ZWNJ/ZWJ, and combining marks
     (U+0300–036F) for mixed clusters.
+  - `NotoSansHebrew-subset.ttf`: Hebrew (U+0590–05FF) plus presentation forms (U+FB1D–FB4F) and common punctuation for
+    Wikipedia-language-list coverage in bundled-font runs.
   - `NotoSansDevanagari-subset.ttf`: Devanagari + Vedic extensions with joiners + combining marks (U+0300–036F).
   - `NotoSansBengali-subset.ttf`: Bengali + joiners + combining marks (U+0300–036F).
-  - `NotoSansHebrew-subset.ttf`: Hebrew + joiners + combining marks (U+0300–036F).
-  - `NotoSansThai-subset.ttf`: Thai + joiners + combining marks (U+0300–036F).
+  - `NotoSansTamil-subset.ttf`: Tamil (U+0B80–0BFF) plus common punctuation and joiners.
+  - `NotoSansThai-subset.ttf`: Thai (U+0E00–0E7F) plus common punctuation and joiners.
   - `NotoSansSC-subset.ttf` / `NotoSansJP-subset.ttf` / `NotoSansKR-subset.ttf`: CJK Unified Ideographs (U+3400–4DBF,
     U+4E00–9FFF), CJK punctuation/fullwidth forms, and common combining marks (U+0300–036F); JP adds kana (U+3040–31FF)
     and KR adds Hangul (U+1100–11FF, U+AC00–D7AF).
