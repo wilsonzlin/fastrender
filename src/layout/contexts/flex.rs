@@ -1483,9 +1483,11 @@ impl FormattingContext for FlexFormattingContext {
     }
     compute_result
       .map_err(|e| match e {
-        taffy::TaffyError::LayoutAborted => match check_active(RenderStage::Layout) {
-          Err(RenderError::Timeout { elapsed, .. }) => LayoutError::Timeout { elapsed },
-          _ => LayoutError::MissingContext("Taffy layout aborted".to_string()),
+        taffy::TaffyError::LayoutAborted => match active_deadline() {
+          Some(deadline) => LayoutError::Timeout {
+            elapsed: deadline.elapsed(),
+          },
+          None => LayoutError::MissingContext("Taffy layout aborted".to_string()),
         },
         _ => LayoutError::MissingContext(format!("Taffy layout failed: {:?}", e)),
       })?;
@@ -4750,9 +4752,11 @@ impl FlexFormattingContext {
         TAFFY_ABORT_CHECK_STRIDE,
       )
       .map_err(|e| match e {
-        taffy::TaffyError::LayoutAborted => match check_active(RenderStage::Layout) {
-          Err(RenderError::Timeout { elapsed, .. }) => LayoutError::Timeout { elapsed },
-          _ => LayoutError::MissingContext("Taffy layout aborted".to_string()),
+        taffy::TaffyError::LayoutAborted => match active_deadline() {
+          Some(deadline) => LayoutError::Timeout {
+            elapsed: deadline.elapsed(),
+          },
+          None => LayoutError::MissingContext("Taffy layout aborted".to_string()),
         },
         _ => LayoutError::MissingContext(format!("Taffy layout failed: {:?}", e)),
       })?;
@@ -5185,7 +5189,7 @@ mod tests {
       None,
       Some(Arc::new(move || {
         let prev = counter_clone.fetch_add(1, Ordering::SeqCst);
-        prev >= 1
+        prev == 1
       })),
     );
     let _guard = DeadlineGuard::install(Some(&deadline));
