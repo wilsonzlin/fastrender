@@ -442,7 +442,8 @@ fn build_box_tree_root(
   } = collect_box_generation_prepass(styled, deadline_counter)?;
   let mut counters = CounterManager::new_with_styles(styled.styles.counter_styles.clone());
   counters.enter_scope();
-  let mut roots = generate_boxes_for_styled(
+  let mut roots = Vec::new();
+  generate_boxes_for_styled_into(
     styled,
     &styled_lookup,
     &mut counters,
@@ -451,6 +452,7 @@ fn build_box_tree_root(
     &mut picture_sources,
     options,
     deadline_counter,
+    &mut roots,
   )?;
   counters.leave_scope();
   match roots.len() {
@@ -1403,7 +1405,7 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
 
 /// Recursively generates BoxNodes from a StyledNode, honoring display: contents by
 /// splicing grandchildren into the parent’s child list rather than creating a box.
-fn generate_boxes_for_styled(
+fn generate_boxes_for_styled_into(
   styled: &StyledNode,
   styled_lookup: &StyledLookup<'_>,
   counters: &mut CounterManager,
@@ -1412,7 +1414,8 @@ fn generate_boxes_for_styled(
   picture_sources: &mut HashMap<usize, Vec<PictureSource>>,
   options: &BoxGenerationOptions,
   deadline_counter: &mut usize,
-) -> Result<Vec<BoxNode>> {
+  out: &mut Vec<BoxNode>,
+) -> Result<()> {
   check_active_periodic(
     deadline_counter,
     BOX_GEN_DEADLINE_STRIDE,
@@ -1434,7 +1437,8 @@ fn generate_boxes_for_styled(
       }
       let mut box_node = BoxNode::new_text(style, text.to_string());
       box_node.starting_style = clone_starting_style(&styled.starting_styles.base);
-      return Ok(vec![attach_styled_id(box_node, styled)]);
+      out.push(attach_styled_id(box_node, styled));
+      return Ok(());
     }
   }
 
@@ -1452,7 +1456,7 @@ fn generate_boxes_for_styled(
           || class_attr.contains("should-hold-space"))
       {
         counters.leave_scope();
-        return Ok(Vec::new());
+        return Ok(());
       }
     }
   }
@@ -1460,7 +1464,7 @@ fn generate_boxes_for_styled(
   // display:none suppresses box generation entirely.
   if styled.styles.display == Display::None {
     counters.leave_scope();
-    return Ok(Vec::new());
+    return Ok(());
   }
 
   if let Some(tag) = styled.node.tag_name() {
@@ -1480,7 +1484,8 @@ fn generate_boxes_for_styled(
       );
       let mut box_node = box_node;
       box_node.starting_style = clone_starting_style(&styled.starting_styles.base);
-      return Ok(vec![attach_debug_info(box_node, styled)]);
+      out.push(attach_debug_info(box_node, styled));
+      return Ok(());
     }
   }
 
@@ -1493,7 +1498,8 @@ fn generate_boxes_for_styled(
       None,
       None,
     );
-    return Ok(vec![attach_debug_info(box_node, styled)]);
+    out.push(attach_debug_info(box_node, styled));
+    return Ok(());
   }
 
   // Replaced elements short-circuit to a single replaced box unless they're display: contents.
@@ -1505,7 +1511,7 @@ fn generate_boxes_for_styled(
       || tag.eq_ignore_ascii_case("optgroup")
     {
       counters.leave_scope();
-      return Ok(Vec::new());
+      return Ok(());
     }
 
     if is_replaced_element(tag) && styled.styles.display != Display::Contents {
@@ -1531,7 +1537,8 @@ fn generate_boxes_for_styled(
         );
         let mut box_node = box_node;
         box_node.starting_style = clone_starting_style(&styled.starting_styles.base);
-        return Ok(vec![attach_debug_info(box_node, styled)]);
+        out.push(attach_debug_info(box_node, styled));
+        return Ok(());
       }
     }
   }
@@ -1562,7 +1569,7 @@ fn generate_boxes_for_styled(
               if let Some(class_attr) = next.node.get_attribute_ref("class") {
                 if class_attr.contains("FocusTrapContainer-") {
                   for grandchild in &next.children {
-                    children.extend(generate_boxes_for_styled(
+                    generate_boxes_for_styled_into(
                       grandchild,
                       styled_lookup,
                       counters,
@@ -1571,7 +1578,8 @@ fn generate_boxes_for_styled(
                       picture_sources,
                       options,
                       deadline_counter,
-                    )?);
+                      &mut children,
+                    )?;
                   }
                   idx += 1;
                 }
@@ -1583,7 +1591,7 @@ fn generate_boxes_for_styled(
         }
       }
     }
-    children.extend(generate_boxes_for_styled(
+    generate_boxes_for_styled_into(
       child,
       styled_lookup,
       counters,
@@ -1592,7 +1600,8 @@ fn generate_boxes_for_styled(
       picture_sources,
       options,
       deadline_counter,
-    )?);
+      &mut children,
+    )?;
     idx += 1;
   }
 
@@ -1625,7 +1634,8 @@ fn generate_boxes_for_styled(
   // display: contents contributes its children directly.
   if styled.styles.display == Display::Contents {
     counters.leave_scope();
-    return Ok(children);
+    out.extend(children);
+    return Ok(());
   }
 
   let style = Arc::new(styled.styles.clone());
@@ -1678,7 +1688,8 @@ fn generate_boxes_for_styled(
     .map(|style| Arc::new((**style).clone()));
 
   counters.leave_scope();
-  Ok(vec![attach_debug_info(box_node, styled)])
+  out.push(attach_debug_info(box_node, styled));
+  Ok(())
 }
 
 fn attach_debug_info(mut box_node: BoxNode, styled: &StyledNode) -> BoxNode {
