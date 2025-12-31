@@ -52,6 +52,8 @@ use fastrender::OptimizationConfig;
 use fastrender::StrokeRectItem;
 use fastrender::TextRasterizer;
 use std::sync::Arc;
+use std::time::Duration;
+use std::time::Instant;
 use tiny_skia::Pixmap;
 use tiny_skia::PremultipliedColorU8;
 use tiny_skia::SpreadMode;
@@ -417,6 +419,35 @@ fn bench_display_list_optimization(c: &mut Criterion) {
     let optimizer = DisplayListOptimizer::with_config(config);
     b.iter(|| optimizer.optimize(black_box(list.clone()), black_box(viewport)))
   });
+
+  group.finish();
+}
+
+fn bench_display_list_optimization_large(c: &mut Criterion) {
+  let mut group = c.benchmark_group("display_list_optimization_large");
+  group.sample_size(10);
+
+  let viewport = Rect::from_xywh(0.0, 0.0, 800.0, 600.0);
+  for count in [10_000usize, 50_000, 100_000].iter() {
+    let list = create_display_list(*count);
+    group.bench_with_input(
+      BenchmarkId::new("full_optimize", count),
+      &list,
+      |b, list| {
+        let optimizer = DisplayListOptimizer::new();
+        b.iter_custom(|iters| {
+          let mut elapsed = Duration::ZERO;
+          for _ in 0..iters {
+            let input = list.clone();
+            let start = Instant::now();
+            black_box(optimizer.optimize(input, viewport));
+            elapsed += start.elapsed();
+          }
+          elapsed
+        });
+      },
+    );
+  }
 
   group.finish();
 }
@@ -1071,6 +1102,7 @@ criterion_group!(
   bench_display_list_operations,
   bench_display_list_builder,
   bench_display_list_optimization,
+  bench_display_list_optimization_large,
   bench_stacking_context,
   bench_display_item_creation,
   bench_fragment_tree_operations,

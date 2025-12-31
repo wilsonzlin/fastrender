@@ -2317,6 +2317,14 @@ impl DisplayList {
   pub fn iter(&self) -> impl Iterator<Item = &DisplayItem> {
     self.items.iter()
   }
+
+  /// Consume the display list and return the underlying item vector.
+  ///
+  /// This is useful for optimization passes that take ownership of the list and
+  /// want to avoid cloning potentially large display items.
+  pub fn into_items(self) -> Vec<DisplayItem> {
+    self.items
+  }
 }
 
 impl Default for DisplayList {

@@ -42,6 +42,25 @@ use crate::render_control::{check_active, check_active_periodic};
 
 const DEADLINE_STRIDE: usize = 256;
 
+fn retain_by_sorted_indices(items: &mut Vec<DisplayItem>, indices: &[usize]) {
+  debug_assert!(
+    indices.windows(2).all(|window| window[0] < window[1]),
+    "indices must be strictly increasing"
+  );
+
+  let mut keep_iter = indices.iter().copied();
+  let mut next_keep = keep_iter.next();
+  let mut current = 0usize;
+  items.retain(|_| {
+    let keep = next_keep == Some(current);
+    if keep {
+      next_keep = keep_iter.next();
+    }
+    current += 1;
+    keep
+  });
+}
+
 // ============================================================================
 // Optimization Configuration
 // ============================================================================
@@ -112,7 +131,7 @@ impl OptimizationStats {
     if self.original_count == 0 {
       return 0.0;
     }
-    let removed = self.original_count - self.final_count;
+    let removed = self.original_count.saturating_sub(self.final_count);
     (removed as f32 / self.original_count as f32) * 100.0
   }
 }
@@ -178,7 +197,9 @@ impl DisplayListOptimizer {
     viewport: Rect,
   ) -> Result<(DisplayList, OptimizationStats)> {
     let original_count = list.len();
-    let mut items: Vec<DisplayItem> = list.items().to_vec();
+    let mut items: Vec<DisplayItem> = list.into_items();
+    let mut indices: Vec<usize> = (0..items.len()).collect();
+    let mut scratch_indices: Vec<usize> = Vec::with_capacity(indices.len());
     let mut stats = OptimizationStats {
       original_count,
       ..Default::default()
@@ -189,39 +210,70 @@ impl DisplayListOptimizer {
 
     // Pass 1: Remove transparent items
     if self.config.enable_transparent_removal {
-      let before = items.len();
-      items = self
-        .remove_transparent_items_checked(items, &mut deadline_counter)
+      let before = indices.len();
+      self
+        .remove_transparent_indices_checked(
+          &items,
+          &indices,
+          &mut scratch_indices,
+          &mut deadline_counter,
+        )
         .map_err(Error::Render)?;
-      stats.transparent_removed = before - items.len();
+      std::mem::swap(&mut indices, &mut scratch_indices);
+      stats.transparent_removed = before - indices.len();
     }
 
     // Pass 2: Remove no-op operations
     if self.config.enable_noop_removal {
-      let before = items.len();
-      items = self
-        .remove_noop_items_checked(items, &mut deadline_counter)
+      let before = indices.len();
+      self
+        .remove_noop_indices_checked(
+          &items,
+          &indices,
+          &mut scratch_indices,
+          &mut deadline_counter,
+        )
         .map_err(Error::Render)?;
-      stats.noop_removed = before - items.len();
+      std::mem::swap(&mut indices, &mut scratch_indices);
+      stats.noop_removed = before - indices.len();
     }
 
     // Pass 3: Cull items outside viewport
     if self.config.enable_culling {
-      let before = items.len();
-      items = self
-        .cull_items_checked(items, viewport, &mut deadline_counter)
+      let before = indices.len();
+      self
+        .intersect_indices_filtered_checked(
+          &items,
+          &indices,
+          viewport,
+          &mut scratch_indices,
+          &mut deadline_counter,
+        )
         .map_err(Error::Render)?;
-      stats.culled_count = before - items.len();
+      std::mem::swap(&mut indices, &mut scratch_indices);
+      stats.culled_count = before - indices.len();
     }
 
     // Pass 4: Merge adjacent fills
     if self.config.enable_fill_merging {
-      let before = items.len();
-      items = self
-        .merge_adjacent_fills_checked(items, &mut deadline_counter)
+      let before = indices.len();
+      self
+        .merge_adjacent_fills_indices_checked(
+          &mut items,
+          &indices,
+          &mut scratch_indices,
+          &mut deadline_counter,
+        )
         .map_err(Error::Render)?;
-      stats.merged_count = before - items.len();
+      std::mem::swap(&mut indices, &mut scratch_indices);
+      stats.merged_count = before - indices.len();
     }
+
+    let tail = self
+      .balance_stack_tail(&items, &indices)
+      .map_err(Error::Render)?;
+    retain_by_sorted_indices(&mut items, &indices);
+    items.extend(tail);
 
     stats.final_count = items.len();
     Ok((DisplayList::from_items(items), stats))
@@ -236,12 +288,17 @@ impl DisplayListOptimizer {
   }
 
   pub fn intersect_checked(&self, list: &DisplayList, viewport: Rect) -> Result<DisplayList> {
-    let items = list.items().to_vec();
-    Ok(DisplayList::from_items(
-      self
-        .cull_items_checked(items, viewport, &mut 0usize)
-        .map_err(Error::Render)?,
-    ))
+    let items = list.items();
+    let indices = self
+      .intersect_indices(items, viewport)
+      .map_err(Error::Render)?;
+    let tail = self
+      .balance_stack_tail(items, &indices)
+      .map_err(Error::Render)?;
+    let mut out = Vec::with_capacity(indices.len() + tail.len());
+    out.extend(indices.into_iter().map(|idx| items[idx].clone()));
+    out.extend(tail);
+    Ok(DisplayList::from_items(out))
   }
 
   /// Extract indices of items that intersect the viewport while preserving stack operations.
@@ -252,6 +309,42 @@ impl DisplayListOptimizer {
   ) -> std::result::Result<Vec<usize>, RenderError> {
     let mut result = Vec::with_capacity(items.len());
     let mut deadline_counter = 0usize;
+    self.intersect_indices_iter_checked(
+      items.iter().enumerate(),
+      viewport,
+      &mut result,
+      &mut deadline_counter,
+    )?;
+    Ok(result)
+  }
+
+  fn intersect_indices_filtered_checked(
+    &self,
+    items: &[DisplayItem],
+    indices: &[usize],
+    viewport: Rect,
+    out: &mut Vec<usize>,
+    deadline_counter: &mut usize,
+  ) -> std::result::Result<(), RenderError> {
+    self.intersect_indices_iter_checked(
+      indices.iter().map(|&idx| (idx, &items[idx])),
+      viewport,
+      out,
+      deadline_counter,
+    )
+  }
+
+  fn intersect_indices_iter_checked<'a, I>(
+    &self,
+    iter: I,
+    viewport: Rect,
+    result: &mut Vec<usize>,
+    deadline_counter: &mut usize,
+  ) -> std::result::Result<(), RenderError>
+  where
+    I: IntoIterator<Item = (usize, &'a DisplayItem)>,
+  {
+    result.clear();
     let mut transform_state = TransformState::default();
     let mut transform_stack: Vec<TransformState> = Vec::new();
     let mut context_stack: Vec<ContextRecord> = Vec::new();
@@ -287,10 +380,11 @@ impl DisplayListOptimizer {
         false
       };
 
-    for (index, item) in items.iter().enumerate() {
-      check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)?;
+    for (index, item) in iter {
+      check_active_periodic(deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)?;
       let mut include_item = false;
       let mut transformed_bounds: Option<Rect> = None;
+      let culled_by_clip = clip_stack.last().map(|c| c.can_cull).unwrap_or(false);
 
       match item {
         DisplayItem::PushTransform(t) => {
@@ -324,503 +418,6 @@ impl DisplayListOptimizer {
             }
             transform_state.current = context_transform.clone();
             if sc.child_perspective.is_some() {
-              transform_state.suppress_culling = true;
-            }
-          }
-          let filters_outset = filter_outset_with_bounds(&sc.filters, 1.0, Some(sc.bounds));
-          let backdrop_outset =
-            filter_outset_with_bounds(&sc.backdrop_filters, 1.0, Some(sc.bounds));
-          let max_outset = filters_outset.max_side().max(backdrop_outset.max_side());
-          let world_outset = if matches!(context_transform, TransformMapping::Unsupported) {
-            0.0
-          } else if max_outset == 0.0 {
-            0.0
-          } else {
-            max_outset * Self::transform_scale_factor(&context_transform, sc.bounds)
-          };
-          filter_stack.push(world_outset);
-          filter_outset_sum += world_outset;
-
-          let transform_for_bounds = if matches!(context_transform, TransformMapping::Unsupported) {
-            None
-          } else {
-            Some(context_transform.clone())
-          };
-
-          context_stack.push(ContextRecord {
-            start_index: result.len(),
-            bounds: None,
-            item: sc.clone(),
-            transform_for_bounds,
-            clipped_by_clip: clips_can_cull_any,
-            culling_disabled: context_culling_disabled,
-            pushed_transform,
-          });
-          include_item = true;
-        }
-        DisplayItem::PopStackingContext => {
-          include_item = true;
-          if let Some(record) = context_stack.pop() {
-            if record.pushed_transform {
-              if let Some(previous) = transform_stack.pop() {
-                transform_state = previous;
-              }
-            }
-            if let Some(outset) = filter_stack.pop() {
-              filter_outset_sum -= outset;
-            }
-
-            if record.culling_disabled {
-              // Keep conservatively when transforms prevented culling
-            } else if record.clipped_by_clip {
-              result.truncate(record.start_index);
-              refresh_context_clipping(&mut context_stack, clips_can_cull_any);
-              continue;
-            } else {
-              let ctx_bounds = self.stacking_context_bounds(
-                &record.item,
-                record.bounds,
-                record.transform_for_bounds.as_ref(),
-              );
-              let keep = if record.item.mask.is_some() {
-                true
-              } else {
-                ctx_bounds
-                  .map(|bounds| viewport.intersects(bounds))
-                  .unwrap_or(true)
-              };
-              if keep {
-                if let Some(parent) = context_stack.last_mut() {
-                  if !parent.culling_disabled && active_cull_clips == 0 {
-                    if let Some(ctx_bounds) = ctx_bounds {
-                      parent.bounds = Some(match parent.bounds {
-                        Some(bounds) => bounds.union(ctx_bounds),
-                        None => ctx_bounds,
-                      });
-                    }
-                  }
-                }
-              } else {
-                result.truncate(record.start_index);
-                refresh_context_clipping(&mut context_stack, clips_can_cull_any);
-                continue;
-              }
-            }
-          }
-        }
-        DisplayItem::PushClip(clip) => {
-          let local_bounds = match &clip.shape {
-            crate::paint::display_list::ClipShape::Rect { rect, .. } => *rect,
-            crate::paint::display_list::ClipShape::Path { path } => path.bounds(),
-          };
-          let can_cull = if transform_state.culling_disabled() {
-            false
-          } else if let Some(mut world_bounds) =
-            Self::transform_rect_any(&transform_state.current, local_bounds)
-          {
-            let inflate = filter_outset_sum;
-            if inflate > 0.0 {
-              world_bounds = world_bounds.inflate(inflate);
-            }
-            !viewport.intersects(world_bounds)
-          } else {
-            false
-          };
-          clip_stack.push(ClipRecord {
-            start_index: result.len(),
-            can_cull,
-          });
-          if can_cull {
-            active_cull_clips += 1;
-          }
-          clips_can_cull_any = active_cull_clips > 0;
-          refresh_context_clipping(&mut context_stack, clips_can_cull_any);
-          include_item = true;
-        }
-        DisplayItem::PopClip => {
-          if let Some(record) = clip_stack.pop() {
-            if record.can_cull {
-              active_cull_clips = active_cull_clips.saturating_sub(1);
-            }
-            clips_can_cull_any = active_cull_clips > 0;
-            refresh_context_clipping(&mut context_stack, clips_can_cull_any);
-            if record.can_cull {
-              result.truncate(record.start_index);
-              continue;
-            }
-          }
-          clips_can_cull_any = active_cull_clips > 0;
-          include_item = true;
-        }
-        _ => {}
-      }
-
-      if !include_item {
-        if transform_state.culling_disabled() {
-          include_item = true;
-        } else if let Some(local_bounds) = self.item_bounds(item) {
-          if let Some(mut bounds) = Self::transform_rect_any(&transform_state.current, local_bounds)
-          {
-            let inflate = filter_outset_sum;
-            if inflate > 0.0 {
-              bounds = bounds.inflate(inflate);
-            }
-            include_item = viewport.intersects(bounds);
-            transformed_bounds = Some(bounds);
-          } else {
-            include_item = true;
-          }
-        } else {
-          include_item = item.is_stack_operation();
-        }
-      }
-
-      if include_item {
-        result.push(index);
-        if transformed_bounds.is_none() && !transform_state.culling_disabled() {
-          if let Some(local_bounds) = self.item_bounds(item) {
-            if let Some(mut bounds) =
-              Self::transform_rect_any(&transform_state.current, local_bounds)
-            {
-              let inflate = filter_outset_sum;
-              if inflate > 0.0 {
-                bounds = bounds.inflate(inflate);
-              }
-              transformed_bounds = Some(bounds);
-            }
-          }
-        }
-        if let Some(bounds) = transformed_bounds {
-          if !transform_state.culling_disabled() && active_cull_clips == 0 {
-            if let Some(context) = context_stack.last_mut() {
-              context.bounds = Some(match context.bounds {
-                Some(existing) => existing.union(bounds),
-                None => bounds,
-              });
-            }
-          }
-        }
-      }
-    }
-
-    Ok(result)
-  }
-
-  /// Build a display list view containing only the items that intersect the viewport.
-  pub fn intersect_view<'a>(
-    &self,
-    items: &'a [DisplayItem],
-    viewport: Rect,
-  ) -> std::result::Result<DisplayListView<'a>, RenderError> {
-    let indices = self.intersect_indices(items, viewport)?;
-    let tail = self.balance_stack_tail(items, &indices)?;
-    Ok(DisplayListView::new(items, indices, tail))
-  }
-
-  /// Remove fully transparent items
-  fn remove_transparent_items(&self, items: Vec<DisplayItem>) -> Vec<DisplayItem> {
-    let mut counter = 0usize;
-    self
-      .remove_transparent_items_checked(items, &mut counter)
-      .unwrap_or_default()
-  }
-
-  fn remove_transparent_items_checked(
-    &self,
-    items: Vec<DisplayItem>,
-    counter: &mut usize,
-  ) -> std::result::Result<Vec<DisplayItem>, RenderError> {
-    let mut result = Vec::with_capacity(items.len());
-    let mut skip_opacity_depth: usize = 0;
-
-    for item in items {
-      check_active_periodic(counter, DEADLINE_STRIDE, RenderStage::Paint)?;
-      if skip_opacity_depth > 0 {
-        match &item {
-          DisplayItem::PushOpacity(_) => skip_opacity_depth += 1,
-          DisplayItem::PopOpacity => {
-            skip_opacity_depth -= 1;
-          }
-          _ => {}
-        }
-        continue;
-      }
-
-      if let DisplayItem::PushOpacity(opacity) = &item {
-        if opacity.opacity <= 0.0 {
-          skip_opacity_depth = 1;
-          continue;
-        }
-      }
-
-      if Self::is_transparent(&item) {
-        continue;
-      }
-
-      result.push(item);
-    }
-
-    Ok(result)
-  }
-
-  /// Check if an item is fully transparent
-  fn is_transparent(item: &DisplayItem) -> bool {
-    match item {
-      DisplayItem::FillRect(item) => item.color.a == 0.0,
-      DisplayItem::StrokeRect(item) => item.color.a == 0.0,
-      DisplayItem::FillRoundedRect(item) => item.color.a == 0.0,
-      DisplayItem::StrokeRoundedRect(item) => item.color.a == 0.0,
-      DisplayItem::Text(item) => item.color.a == 0.0,
-      DisplayItem::Outline(item) => {
-        item.width <= 0.0
-          || matches!(
-            item.style,
-            crate::style::types::BorderStyle::None | crate::style::types::BorderStyle::Hidden
-          )
-          || item.color.a == 0.0
-      }
-      DisplayItem::Border(border) => {
-        let invisible = |side: &crate::paint::display_list::BorderSide| {
-          side.width <= 0.0
-            || matches!(
-              side.style,
-              crate::style::types::BorderStyle::None | crate::style::types::BorderStyle::Hidden
-            )
-            || side.color.a == 0.0
-        };
-        invisible(&border.top)
-          && invisible(&border.right)
-          && invisible(&border.bottom)
-          && invisible(&border.left)
-      }
-      DisplayItem::TextDecoration(item) => item.decorations.iter().all(|d| {
-        d.color.a == 0.0
-          || (d.underline.is_none() && d.overline.is_none() && d.line_through.is_none())
-      }),
-      DisplayItem::BoxShadow(item) => item.color.a == 0.0,
-      _ => false,
-    }
-  }
-
-  /// Remove no-op operations (identity transforms, 1.0 opacity, normal blend)
-  fn remove_noop_items(&self, items: Vec<DisplayItem>) -> Vec<DisplayItem> {
-    let mut counter = 0usize;
-    self
-      .remove_noop_items_checked(items, &mut counter)
-      .unwrap_or_default()
-  }
-
-  fn remove_noop_items_checked(
-    &self,
-    items: Vec<DisplayItem>,
-    counter: &mut usize,
-  ) -> std::result::Result<Vec<DisplayItem>, RenderError> {
-    let mut result = Vec::with_capacity(items.len());
-    let mut opacity_stack: Vec<bool> = Vec::new();
-    let mut transform_stack: Vec<bool> = Vec::new();
-    let mut blend_stack: Vec<bool> = Vec::new();
-    let mut stacking_context_stack: Vec<bool> = Vec::new();
-    let mut culled_transform_depth = 0usize;
-    let mut culled_clip_depth = 0usize;
-
-    for item in items {
-      check_active_periodic(counter, DEADLINE_STRIDE, RenderStage::Paint)?;
-      if culled_transform_depth > 0 {
-        match &item {
-          DisplayItem::PushTransform(_) => culled_transform_depth += 1,
-          DisplayItem::PopTransform => culled_transform_depth -= 1,
-          _ => {}
-        }
-        continue;
-      }
-      if culled_clip_depth > 0 {
-        match &item {
-          DisplayItem::PushClip(_) => culled_clip_depth += 1,
-          DisplayItem::PopClip => culled_clip_depth -= 1,
-          _ => {}
-        }
-        continue;
-      }
-      match &item {
-        DisplayItem::PushOpacity(op) => {
-          let removed = op.opacity >= 1.0;
-          opacity_stack.push(removed);
-          if removed {
-            continue;
-          }
-        }
-        DisplayItem::PopOpacity => {
-          if let Some(removed) = opacity_stack.pop() {
-            if removed {
-              continue;
-            }
-          }
-        }
-        DisplayItem::PushTransform(t) => {
-          let removed = t.transform.is_identity();
-          let collapses = Self::transform_collapses(&t.transform);
-          if collapses {
-            culled_transform_depth = 1;
-            continue;
-          }
-          transform_stack.push(removed);
-          if removed {
-            continue;
-          }
-        }
-        DisplayItem::PopTransform => {
-          if let Some(removed) = transform_stack.pop() {
-            if removed {
-              continue;
-            }
-          }
-        }
-        DisplayItem::PushBlendMode(b) => {
-          let removed = b.mode == BlendMode::Normal;
-          blend_stack.push(removed);
-          if removed {
-            continue;
-          }
-        }
-        DisplayItem::PopBlendMode => {
-          if let Some(removed) = blend_stack.pop() {
-            if removed {
-              continue;
-            }
-          }
-        }
-        DisplayItem::PushStackingContext(sc) => {
-          let removed = Self::is_noop_stacking_context(sc);
-          stacking_context_stack.push(removed);
-          if removed {
-            continue;
-          }
-        }
-        DisplayItem::PopStackingContext => {
-          if let Some(removed) = stacking_context_stack.pop() {
-            if removed {
-              continue;
-            }
-          }
-        }
-        DisplayItem::PushClip(clip) => {
-          if Self::clip_is_empty(clip) {
-            culled_clip_depth = 1;
-            continue;
-          }
-        }
-        DisplayItem::PopClip => {}
-        _ => {}
-      }
-      result.push(item);
-    }
-
-    Ok(result)
-  }
-
-  fn is_noop_stacking_context(item: &StackingContextItem) -> bool {
-    item.child_perspective.is_none()
-      && item.transform.is_none()
-      && item.filters.is_empty()
-      && item.backdrop_filters.is_empty()
-      && item.mask.is_none()
-      && item.mix_blend_mode == BlendMode::Normal
-      && !item.is_isolated
-      && item.radii.is_zero()
-  }
-
-  /// Cull items outside the viewport
-  #[allow(clippy::cognitive_complexity)]
-  fn cull_items(&self, items: Vec<DisplayItem>, viewport: Rect) -> Vec<DisplayItem> {
-    let mut counter = 0usize;
-    self
-      .cull_items_checked(items, viewport, &mut counter)
-      .unwrap_or_default()
-  }
-
-  fn cull_items_checked(
-    &self,
-    items: Vec<DisplayItem>,
-    viewport: Rect,
-    counter: &mut usize,
-  ) -> std::result::Result<Vec<DisplayItem>, RenderError> {
-    let mut result = Vec::with_capacity(items.len());
-    let mut transform_state = TransformState::default();
-    let mut transform_stack: Vec<TransformState> = Vec::new();
-    let mut context_stack: Vec<ContextRecord> = Vec::new();
-    let mut clip_stack: Vec<ClipRecord> = Vec::new();
-    let mut filter_stack: Vec<f32> = Vec::new();
-    // Running aggregates to avoid repeatedly scanning the stacks.
-    let mut filter_outset_sum = 0.0f32;
-    let mut active_cull_clips: usize = 0;
-    let mut clips_can_cull_any = false;
-
-    let refresh_context_clipping = |contexts: &mut [ContextRecord], clips_can_cull_any: bool| {
-      for ctx in contexts {
-        ctx.clipped_by_clip = clips_can_cull_any;
-      }
-    };
-
-    let disable_clip_culling =
-      |clip_stack: &mut [ClipRecord], active_cull_clips: &mut usize| -> bool {
-        if *active_cull_clips == 0 {
-          return false;
-        }
-        let mut disabled = 0usize;
-        for clip in clip_stack {
-          if clip.can_cull {
-            clip.can_cull = false;
-            disabled += 1;
-          }
-        }
-        if disabled > 0 {
-          *active_cull_clips = active_cull_clips.saturating_sub(disabled);
-          return true;
-        }
-        false
-      };
-
-    for item in items {
-      check_active_periodic(counter, DEADLINE_STRIDE, RenderStage::Paint)?;
-      let mut include_item = false;
-      let mut transformed_bounds: Option<Rect> = None;
-      let culled_by_clip = clip_stack.last().map(|c| c.can_cull).unwrap_or(false);
-
-      match &item {
-        DisplayItem::PushTransform(t) => {
-          transform_stack.push(transform_state.clone());
-          let mapping = Self::transform_mapping(&t.transform);
-          transform_state.current = transform_state.current.multiply(&mapping);
-          include_item = true;
-        }
-        DisplayItem::PopTransform => {
-          if let Some(previous) = transform_stack.pop() {
-            transform_state = previous;
-          }
-          include_item = true;
-        }
-        DisplayItem::PushStackingContext(sc) => {
-          let pushed_transform = sc.transform.is_some() || sc.child_perspective.is_some();
-          let mut context_transform = transform_state.current.clone();
-          if let Some(transform) = sc.transform.as_ref() {
-            let mapping = Self::transform_mapping(transform);
-            context_transform = context_transform.multiply(&mapping);
-          }
-          let context_culling_disabled = transform_state.culling_disabled()
-            || matches!(context_transform, TransformMapping::Unsupported);
-          if pushed_transform {
-            transform_stack.push(transform_state.clone());
-            if !clip_stack.is_empty()
-              && disable_clip_culling(&mut clip_stack, &mut active_cull_clips)
-            {
-              clips_can_cull_any = active_cull_clips > 0;
-              refresh_context_clipping(&mut context_stack, clips_can_cull_any);
-            }
-            transform_state.current = context_transform.clone();
-            if sc.child_perspective.is_some() {
-              // Perspective applies to descendants, not the stacking context plane itself.
-              // Keep the mapping so the root can still be culled while avoiding aggressive
-              // culling within the projected subtree.
               transform_state.suppress_culling = true;
             }
           }
@@ -960,7 +557,7 @@ impl DisplayListOptimizer {
       if !include_item {
         if transform_state.culling_disabled() {
           include_item = true;
-        } else if let Some(local_bounds) = self.item_bounds(&item) {
+        } else if let Some(local_bounds) = self.item_bounds(item) {
           if let Some(mut bounds) = Self::transform_rect_any(&transform_state.current, local_bounds)
           {
             let inflate = filter_outset_sum;
@@ -978,9 +575,9 @@ impl DisplayListOptimizer {
       }
 
       if include_item {
-        result.push(item.clone());
+        result.push(index);
         if transformed_bounds.is_none() && !transform_state.culling_disabled() {
-          if let Some(local_bounds) = self.item_bounds(result.last().unwrap()) {
+          if let Some(local_bounds) = self.item_bounds(item) {
             if let Some(mut bounds) =
               Self::transform_rect_any(&transform_state.current, local_bounds)
             {
@@ -1005,65 +602,225 @@ impl DisplayListOptimizer {
       }
     }
 
-    // Balance any orphaned pops
-    self.balance_stack_operations(result, counter)
+    Ok(())
   }
 
-  /// Ensure push/pop operations are balanced
-  fn balance_stack_operations(
+  /// Build a display list view containing only the items that intersect the viewport.
+  pub fn intersect_view<'a>(
     &self,
-    items: Vec<DisplayItem>,
-    counter: &mut usize,
-  ) -> std::result::Result<Vec<DisplayItem>, RenderError> {
-    let mut clip_depth = 0i32;
-    let mut opacity_depth = 0i32;
-    let mut transform_depth = 0i32;
-    let mut blend_depth = 0i32;
-    let mut stacking_depth = 0i32;
+    items: &'a [DisplayItem],
+    viewport: Rect,
+  ) -> std::result::Result<DisplayListView<'a>, RenderError> {
+    let indices = self.intersect_indices(items, viewport)?;
+    let tail = self.balance_stack_tail(items, &indices)?;
+    Ok(DisplayListView::new(items, indices, tail))
+  }
 
-    // Count depths
-    for item in &items {
+  /// Remove fully transparent items (and fully transparent opacity scopes) from an index list.
+  fn remove_transparent_indices_checked(
+    &self,
+    items: &[DisplayItem],
+    indices: &[usize],
+    out: &mut Vec<usize>,
+    counter: &mut usize,
+  ) -> std::result::Result<(), RenderError> {
+    out.clear();
+    out.reserve(indices.len());
+
+    let mut skip_opacity_depth: usize = 0;
+
+    for &idx in indices {
       check_active_periodic(counter, DEADLINE_STRIDE, RenderStage::Paint)?;
+      let item = &items[idx];
+
+      if skip_opacity_depth > 0 {
+        match item {
+          DisplayItem::PushOpacity(_) => skip_opacity_depth += 1,
+          DisplayItem::PopOpacity => skip_opacity_depth -= 1,
+          _ => {}
+        }
+        continue;
+      }
+
+      if let DisplayItem::PushOpacity(opacity) = item {
+        if opacity.opacity <= 0.0 {
+          skip_opacity_depth = 1;
+          continue;
+        }
+      }
+
+      if Self::is_transparent(item) {
+        continue;
+      }
+
+      out.push(idx);
+    }
+
+    Ok(())
+  }
+
+  /// Check if an item is fully transparent
+  fn is_transparent(item: &DisplayItem) -> bool {
+    match item {
+      DisplayItem::FillRect(item) => item.color.a == 0.0,
+      DisplayItem::StrokeRect(item) => item.color.a == 0.0,
+      DisplayItem::FillRoundedRect(item) => item.color.a == 0.0,
+      DisplayItem::StrokeRoundedRect(item) => item.color.a == 0.0,
+      DisplayItem::Text(item) => item.color.a == 0.0,
+      DisplayItem::Outline(item) => {
+        item.width <= 0.0
+          || matches!(
+            item.style,
+            crate::style::types::BorderStyle::None | crate::style::types::BorderStyle::Hidden
+          )
+          || item.color.a == 0.0
+      }
+      DisplayItem::Border(border) => {
+        let invisible = |side: &crate::paint::display_list::BorderSide| {
+          side.width <= 0.0
+            || matches!(
+              side.style,
+              crate::style::types::BorderStyle::None | crate::style::types::BorderStyle::Hidden
+            )
+            || side.color.a == 0.0
+        };
+        invisible(&border.top)
+          && invisible(&border.right)
+          && invisible(&border.bottom)
+          && invisible(&border.left)
+      }
+      DisplayItem::TextDecoration(item) => item.decorations.iter().all(|d| {
+        d.color.a == 0.0
+          || (d.underline.is_none() && d.overline.is_none() && d.line_through.is_none())
+      }),
+      DisplayItem::BoxShadow(item) => item.color.a == 0.0,
+      _ => false,
+    }
+  }
+
+  /// Remove no-op operations (identity transforms, 1.0 opacity, normal blend)
+  fn remove_noop_indices_checked(
+    &self,
+    items: &[DisplayItem],
+    indices: &[usize],
+    out: &mut Vec<usize>,
+    counter: &mut usize,
+  ) -> std::result::Result<(), RenderError> {
+    out.clear();
+    out.reserve(indices.len());
+
+    let mut opacity_stack: Vec<bool> = Vec::new();
+    let mut transform_stack: Vec<bool> = Vec::new();
+    let mut blend_stack: Vec<bool> = Vec::new();
+    let mut stacking_context_stack: Vec<bool> = Vec::new();
+    let mut culled_transform_depth = 0usize;
+    let mut culled_clip_depth = 0usize;
+
+    for &idx in indices {
+      check_active_periodic(counter, DEADLINE_STRIDE, RenderStage::Paint)?;
+      let item = &items[idx];
+      if culled_transform_depth > 0 {
+        match item {
+          DisplayItem::PushTransform(_) => culled_transform_depth += 1,
+          DisplayItem::PopTransform => culled_transform_depth -= 1,
+          _ => {}
+        }
+        continue;
+      }
+      if culled_clip_depth > 0 {
+        match item {
+          DisplayItem::PushClip(_) => culled_clip_depth += 1,
+          DisplayItem::PopClip => culled_clip_depth -= 1,
+          _ => {}
+        }
+        continue;
+      }
       match item {
-        DisplayItem::PushClip(_) => clip_depth += 1,
-        DisplayItem::PopClip => clip_depth -= 1,
-        DisplayItem::PushOpacity(_) => opacity_depth += 1,
-        DisplayItem::PopOpacity => opacity_depth -= 1,
-        DisplayItem::PushTransform(_) => transform_depth += 1,
-        DisplayItem::PopTransform => transform_depth -= 1,
-        DisplayItem::PushBlendMode(_) => blend_depth += 1,
-        DisplayItem::PopBlendMode => blend_depth -= 1,
-        DisplayItem::PushStackingContext(_) => stacking_depth += 1,
-        DisplayItem::PopStackingContext => stacking_depth -= 1,
+        DisplayItem::PushOpacity(op) => {
+          let removed = op.opacity >= 1.0;
+          opacity_stack.push(removed);
+          if removed {
+            continue;
+          }
+        }
+        DisplayItem::PopOpacity => {
+          if let Some(removed) = opacity_stack.pop() {
+            if removed {
+              continue;
+            }
+          }
+        }
+        DisplayItem::PushTransform(t) => {
+          let removed = t.transform.is_identity();
+          let collapses = Self::transform_collapses(&t.transform);
+          if collapses {
+            culled_transform_depth = 1;
+            continue;
+          }
+          transform_stack.push(removed);
+          if removed {
+            continue;
+          }
+        }
+        DisplayItem::PopTransform => {
+          if let Some(removed) = transform_stack.pop() {
+            if removed {
+              continue;
+            }
+          }
+        }
+        DisplayItem::PushBlendMode(b) => {
+          let removed = b.mode == BlendMode::Normal;
+          blend_stack.push(removed);
+          if removed {
+            continue;
+          }
+        }
+        DisplayItem::PopBlendMode => {
+          if let Some(removed) = blend_stack.pop() {
+            if removed {
+              continue;
+            }
+          }
+        }
+        DisplayItem::PushStackingContext(sc) => {
+          let removed = Self::is_noop_stacking_context(sc);
+          stacking_context_stack.push(removed);
+          if removed {
+            continue;
+          }
+        }
+        DisplayItem::PopStackingContext => {
+          if let Some(removed) = stacking_context_stack.pop() {
+            if removed {
+              continue;
+            }
+          }
+        }
+        DisplayItem::PushClip(clip) => {
+          if Self::clip_is_empty(clip) {
+            culled_clip_depth = 1;
+            continue;
+          }
+        }
+        DisplayItem::PopClip => {}
         _ => {}
       }
+      out.push(idx);
     }
 
-    let mut result = items;
+    Ok(())
+  }
 
-    // Add missing pops
-    while clip_depth > 0 {
-      result.push(DisplayItem::PopClip);
-      clip_depth -= 1;
-    }
-    while opacity_depth > 0 {
-      result.push(DisplayItem::PopOpacity);
-      opacity_depth -= 1;
-    }
-    while transform_depth > 0 {
-      result.push(DisplayItem::PopTransform);
-      transform_depth -= 1;
-    }
-    while blend_depth > 0 {
-      result.push(DisplayItem::PopBlendMode);
-      blend_depth -= 1;
-    }
-    while stacking_depth > 0 {
-      result.push(DisplayItem::PopStackingContext);
-      stacking_depth -= 1;
-    }
-
-    Ok(result)
+  fn is_noop_stacking_context(item: &StackingContextItem) -> bool {
+    item.child_perspective.is_none()
+      && item.transform.is_none()
+      && item.filters.is_empty()
+      && item.backdrop_filters.is_empty()
+      && item.mask.is_none()
+      && item.mix_blend_mode == BlendMode::Normal
+      && !item.is_isolated
+      && item.radii.is_zero()
   }
 
   /// Generate the missing pop operations needed to balance the provided item indices.
@@ -1123,55 +880,61 @@ impl DisplayListOptimizer {
     Ok(tail)
   }
 
-  /// Merge adjacent fills with the same color
-  fn merge_adjacent_fills(&self, items: Vec<DisplayItem>) -> Vec<DisplayItem> {
-    let mut counter = 0usize;
-    self
-      .merge_adjacent_fills_checked(items, &mut counter)
-      .unwrap_or_default()
-  }
-
-  fn merge_adjacent_fills_checked(
+  fn merge_adjacent_fills_indices_checked(
     &self,
-    items: Vec<DisplayItem>,
+    items: &mut [DisplayItem],
+    indices: &[usize],
+    out: &mut Vec<usize>,
     counter: &mut usize,
-  ) -> std::result::Result<Vec<DisplayItem>, RenderError> {
-    if items.len() < 2 {
-      return Ok(items);
+  ) -> std::result::Result<(), RenderError> {
+    out.clear();
+    out.reserve(indices.len());
+
+    if indices.len() < 2 {
+      out.extend(indices.iter().copied());
+      return Ok(());
     }
 
-    let mut result = Vec::with_capacity(items.len());
-    let mut pending_fill: Option<FillRectItem> = None;
+    let mut pending_fill: Option<usize> = None;
 
-    for item in items {
+    for &idx in indices {
       check_active_periodic(counter, DEADLINE_STRIDE, RenderStage::Paint)?;
-      match item {
-        DisplayItem::FillRect(current) => {
-          if let Some(prev) = pending_fill.take() {
+
+      match &items[idx] {
+        DisplayItem::FillRect(_) => {
+          let current = match &items[idx] {
+            DisplayItem::FillRect(item) => item.clone(),
+            _ => unreachable!(),
+          };
+
+          if let Some(prev_idx) = pending_fill {
+            let prev = match &items[prev_idx] {
+              DisplayItem::FillRect(item) => item.clone(),
+              _ => unreachable!(),
+            };
             if let Some(merged) = Self::try_merge_fills(&prev, &current) {
-              pending_fill = Some(merged);
-            } else {
-              result.push(DisplayItem::FillRect(prev));
-              pending_fill = Some(current);
+              items[prev_idx] = DisplayItem::FillRect(merged);
+              continue;
             }
-          } else {
-            pending_fill = Some(current);
+            out.push(prev_idx);
           }
+
+          pending_fill = Some(idx);
         }
-        other => {
-          if let Some(prev) = pending_fill.take() {
-            result.push(DisplayItem::FillRect(prev));
+        _ => {
+          if let Some(prev_idx) = pending_fill.take() {
+            out.push(prev_idx);
           }
-          result.push(other);
+          out.push(idx);
         }
       }
     }
 
-    if let Some(prev) = pending_fill {
-      result.push(DisplayItem::FillRect(prev));
+    if let Some(prev_idx) = pending_fill {
+      out.push(prev_idx);
     }
 
-    Ok(result)
+    Ok(())
   }
 
   fn item_bounds(&self, item: &DisplayItem) -> Option<Rect> {
