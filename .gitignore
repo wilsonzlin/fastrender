@@ -1,3 +1,4 @@
 /fetches/
 target/
 target_pages/
+/.venv/
