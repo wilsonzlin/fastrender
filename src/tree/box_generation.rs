@@ -1590,9 +1590,10 @@ fn generate_boxes_for_styled_into(
   }
 
   let composed_children = composed_children(styled, styled_lookup);
-  let mut children: Vec<BoxNode> = Vec::with_capacity(composed_children.len());
+  let composed_len = composed_children.len();
+  let mut children: Vec<BoxNode> = Vec::with_capacity(composed_len);
   let mut idx = 0;
-  while idx < composed_children.len() {
+  while idx < composed_len {
     let child = composed_children.get(idx);
     if site_compat {
       if let Some(testid) = child.node.get_attribute_ref("data-testid") {
@@ -1602,7 +1603,7 @@ fn generate_boxes_for_styled_into(
           if overlay_hidden {
             // Skip the overlay and the subsequent focus-trap container when the overlay is hidden (menu closed).
             idx += 1;
-            while idx < composed_children.len() {
+            while idx < composed_len {
               let next = composed_children.get(idx);
               // Skip over whitespace/text nodes between the overlay and drawer.
               if let crate::dom::DomNodeType::Text { content } = &next.node.node_type {
