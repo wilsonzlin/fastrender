@@ -6,8 +6,8 @@ use crate::paint::svg_filter::FilterCacheConfig;
 use crate::render_control::{active_deadline, check_active, check_active_periodic, DeadlineGuard};
 use lru::LruCache;
 use rayon::prelude::*;
+use rustc_hash::FxHasher;
 use std::cell::RefCell;
-use std::collections::hash_map::DefaultHasher;
 use std::hash::BuildHasherDefault;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
@@ -24,7 +24,7 @@ enum BlurParallelism {
   Serial,
 }
 
-type BlurHasher = BuildHasherDefault<DefaultHasher>;
+type BlurHasher = BuildHasherDefault<FxHasher>;
 
 #[derive(Default)]
 struct BlurScratch {

@@ -11,6 +11,7 @@ use crate::tree::box_tree::ReplacedType;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
 use crate::Rgba;
 use lru::LruCache;
+use rustc_hash::FxHasher;
 use rayon::prelude::*;
 use roxmltree::Document;
 use std::cell::Cell;
@@ -31,7 +32,7 @@ const DEFAULT_FILTER_CACHE_BYTES: usize = 4 * 1024 * 1024;
 pub(crate) const ENV_FILTER_CACHE_ITEMS: &str = "FASTR_SVG_FILTER_CACHE_ITEMS";
 pub(crate) const ENV_FILTER_CACHE_BYTES: &str = "FASTR_SVG_FILTER_CACHE_BYTES";
 
-type FilterHasher = BuildHasherDefault<DefaultHasher>;
+type FilterHasher = BuildHasherDefault<FxHasher>;
 type RenderResult<T> = std::result::Result<T, RenderError>;
 
 const MAX_FILTER_RES: u32 = 4096;
