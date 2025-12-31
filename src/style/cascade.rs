@@ -344,6 +344,12 @@ fn cq_condition_support_mask(condition: &ContainerCondition) -> u8 {
     .fold(0u8, |acc, query| acc | cq_query_support_mask(query))
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ConditionSignature {
+  name_id: u32,
+  support_mask: u8,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct FindContainerCacheKey {
   ctx_ptr: usize,
@@ -365,6 +371,7 @@ struct ContainerQueryMemo {
   // Map from (query-container lookup key) -> selected container id (or None).
   find_container: HashMap<FindContainerCacheKey, Option<usize>>,
   query_eval: HashMap<QueryEvalCacheKey, bool>,
+  condition_sigs: HashMap<usize, ConditionSignature>,
   // Intern container names to avoid storing strings in every cache key.
   name_ids: HashMap<String, u32>,
   next_name_id: u32,
@@ -375,6 +382,7 @@ impl Default for ContainerQueryMemo {
     Self {
       find_container: HashMap::new(),
       query_eval: HashMap::new(),
+      condition_sigs: HashMap::new(),
       name_ids: HashMap::new(),
       next_name_id: 1,
     }
@@ -385,6 +393,7 @@ impl ContainerQueryMemo {
   fn clear(&mut self) {
     self.find_container.clear();
     self.query_eval.clear();
+    self.condition_sigs.clear();
     self.name_ids.clear();
     self.next_name_id = 1;
   }
@@ -2356,17 +2365,28 @@ impl ContainerQueryContext {
     guard: &mut Vec<usize>,
     depth_limit: usize,
   ) -> bool {
+    let ctx_ptr = self as *const _ as usize;
     for condition in conditions {
-      let support_mask = cq_condition_support_mask(condition);
       let container_id = CONTAINER_QUERY_MEMO.with(|memo_cell| {
         let mut memo = memo_cell.borrow_mut();
-        let name_id = condition
-          .name
-          .as_deref()
-          .map(|name| memo.intern_name(name))
-          .unwrap_or(0);
+        let condition_ptr = condition as *const _ as usize;
+        let (name_id, support_mask) = match memo.condition_sigs.get(&condition_ptr).copied() {
+          Some(sig) => (sig.name_id, sig.support_mask),
+          None => {
+            let support_mask = cq_condition_support_mask(condition);
+            let name_id = condition
+              .name
+              .as_deref()
+              .map(|name| memo.intern_name(name))
+              .unwrap_or(0);
+            memo
+              .condition_sigs
+              .insert(condition_ptr, ConditionSignature { name_id, support_mask });
+            (name_id, support_mask)
+          }
+        };
         let key = FindContainerCacheKey {
-          ctx_ptr: self as *const _ as usize,
+          ctx_ptr,
           node_id,
           name_id,
           support_mask,
