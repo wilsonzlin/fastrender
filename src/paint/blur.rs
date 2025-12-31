@@ -839,9 +839,18 @@ fn apply_blur_internal(
     return Ok(());
   }
 
-  let cache_key = cache
-    .as_ref()
-    .and_then(|_| BlurCacheKey::new(sigma_x, sigma_y, scale, pixmap));
+  let cache_config = cache.as_ref().map(|cache| cache.config);
+  let cache_key = match cache_config {
+    Some(config) if config.max_items != 0 => {
+      let weight = pixmap.data().len();
+      if config.max_bytes > 0 && weight > config.max_bytes {
+        None
+      } else {
+        BlurCacheKey::new(sigma_x, sigma_y, scale, pixmap)
+      }
+    }
+    _ => None,
+  };
   if let (Some(key), Some(cache)) = (cache_key.as_ref(), cache.as_deref_mut()) {
     if let Some(cached) = cache.get(key) {
       pixmap.data_mut().copy_from_slice(cached.data());
@@ -849,10 +858,7 @@ fn apply_blur_internal(
     }
   }
 
-  let config = cache
-    .as_ref()
-    .map(|c| c.config)
-    .unwrap_or_else(FilterCacheConfig::from_env);
+  let config = cache_config.unwrap_or_else(FilterCacheConfig::from_env);
 
   let mut tile_count = 0usize;
   if let Some((tiled, tiles)) = tile_blur(pixmap, sigma_x, sigma_y, &config)? {
@@ -899,6 +905,7 @@ pub(crate) fn apply_gaussian_blur_cached(
 mod tests {
   use super::*;
   use crate::paint::pixmap::new_pixmap;
+  use crate::paint::painter::{enable_paint_diagnostics, take_paint_diagnostics};
   use tiny_skia::PremultipliedColorU8;
 
   #[test]
@@ -924,6 +931,53 @@ mod tests {
     assert!(
       center_non_zero > 1,
       "expected vertical spread in center column"
+    );
+  }
+
+  #[test]
+  fn blur_cache_skips_lookup_when_pixmap_exceeds_max_bytes() {
+    enable_paint_diagnostics();
+    let mut cache = BlurCache::new(FilterCacheConfig {
+      max_items: 8,
+      max_bytes: 8 * 1024,
+    });
+    let mut pixmap = new_pixmap(64, 64).unwrap();
+    let idx = 32 * 64 + 32;
+    pixmap.pixels_mut()[idx] = PremultipliedColorU8::from_rgba(255, 255, 255, 255).unwrap();
+
+    // The pixmap is larger than max_bytes, so caching is skipped entirely.
+    apply_gaussian_blur_cached(&mut pixmap, 1.0, 1.0, Some(&mut cache), 1.0).unwrap();
+    apply_gaussian_blur_cached(&mut pixmap, 1.0, 1.0, Some(&mut cache), 1.0).unwrap();
+
+    let diag = take_paint_diagnostics().unwrap();
+    assert_eq!(diag.blur_cache_hits, 0);
+    assert_eq!(diag.blur_cache_misses, 0);
+    assert!(
+      pixmap.pixels().iter().any(|p| p.alpha() > 0),
+      "expected blurred output to retain some alpha"
+    );
+  }
+
+  #[test]
+  fn blur_cache_skips_lookup_when_max_items_is_zero() {
+    enable_paint_diagnostics();
+    let mut cache = BlurCache::new(FilterCacheConfig {
+      max_items: 0,
+      max_bytes: 32 * 1024,
+    });
+    let mut pixmap = new_pixmap(32, 32).unwrap();
+    let idx = 16 * 32 + 16;
+    pixmap.pixels_mut()[idx] = PremultipliedColorU8::from_rgba(255, 255, 255, 255).unwrap();
+
+    apply_gaussian_blur_cached(&mut pixmap, 1.0, 1.0, Some(&mut cache), 1.0).unwrap();
+    apply_gaussian_blur_cached(&mut pixmap, 1.0, 1.0, Some(&mut cache), 1.0).unwrap();
+
+    let diag = take_paint_diagnostics().unwrap();
+    assert_eq!(diag.blur_cache_hits, 0);
+    assert_eq!(diag.blur_cache_misses, 0);
+    assert!(
+      pixmap.pixels().iter().any(|p| p.alpha() > 0),
+      "expected blurred output to retain some alpha"
     );
   }
 }
