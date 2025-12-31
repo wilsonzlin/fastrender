@@ -4200,6 +4200,9 @@ impl FastRender {
       }));
     }
 
+    let deadline = RenderDeadline::new(options.timeout, options.cancel_callback.clone());
+    let _deadline_guard = DeadlineGuard::install(Some(&deadline));
+
     let timings_enabled = std::env::var_os("FASTR_RENDER_TIMINGS").is_some();
     let mut stage_start = timings_enabled.then(Instant::now);
 
@@ -4240,7 +4243,7 @@ impl FastRender {
           page_stacking: PageStacking::Stacked { gap: 0.0 },
           animation_time: options.animation_time,
         },
-        None,
+        Some(&deadline),
         &trace,
         layout_parallelism,
         None,
@@ -5515,84 +5518,90 @@ impl FastRender {
     }
 
     let original_dpr = self.device_pixel_ratio;
+    let restore_dpr = options.device_pixel_ratio.is_some();
     if let Some(dpr) = options.device_pixel_ratio {
       self.device_pixel_ratio = dpr;
     }
 
-    let requested_viewport = Size::new(width as f32, height as f32);
-    let meta_viewport = if self.apply_meta_viewport {
-      crate::html::viewport::extract_viewport_with_deadline(dom)?
-    } else {
-      None
-    };
-    let resolved_viewport = resolve_viewport(
-      requested_viewport,
-      self.device_pixel_ratio,
-      meta_viewport.as_ref(),
-    );
+    let deadline = RenderDeadline::new(options.timeout, options.cancel_callback.clone());
+    let _deadline_guard = DeadlineGuard::install(Some(&deadline));
 
-    let target_fragment = self.current_target_fragment();
-    let dom_with_state = if needs_top_layer_state(dom) {
-      let mut dom_with_state = dom::clone_dom_with_deadline(dom, RenderStage::DomParse)?;
-      dom::apply_top_layer_state_with_deadline(&mut dom_with_state)?;
-      Some(dom_with_state)
-    } else {
-      None
-    };
-    let dom_for_style = dom_with_state.as_ref().unwrap_or(dom);
-    let viewport_size = resolved_viewport.layout_viewport;
-    let device_size = resolved_viewport.visual_viewport;
-    let media_ctx = match options.media_type {
-      MediaType::Print => MediaContext::print(viewport_size.width, viewport_size.height),
-      MediaType::Screen => MediaContext::screen(viewport_size.width, viewport_size.height),
-      other => {
-        MediaContext::screen(viewport_size.width, viewport_size.height).with_media_type(other)
+    let result = (|| -> Result<AccessibilityNode> {
+      let requested_viewport = Size::new(width as f32, height as f32);
+      let meta_viewport = if self.apply_meta_viewport {
+        crate::html::viewport::extract_viewport_with_deadline(dom)?
+      } else {
+        None
+      };
+      let resolved_viewport = resolve_viewport(
+        requested_viewport,
+        self.device_pixel_ratio,
+        meta_viewport.as_ref(),
+      );
+
+      let target_fragment = self.current_target_fragment();
+      let dom_with_state = if needs_top_layer_state(dom) {
+        let mut dom_with_state = dom::clone_dom_with_deadline(dom, RenderStage::DomParse)?;
+        dom::apply_top_layer_state_with_deadline(&mut dom_with_state)?;
+        Some(dom_with_state)
+      } else {
+        None
+      };
+      let dom_for_style = dom_with_state.as_ref().unwrap_or(dom);
+      let viewport_size = resolved_viewport.layout_viewport;
+      let device_size = resolved_viewport.visual_viewport;
+      let media_ctx = match options.media_type {
+        MediaType::Print => MediaContext::print(viewport_size.width, viewport_size.height),
+        MediaType::Screen => MediaContext::screen(viewport_size.width, viewport_size.height),
+        other => {
+          MediaContext::screen(viewport_size.width, viewport_size.height).with_media_type(other)
+        }
       }
-    }
-    .with_device_size(device_size.width, device_size.height)
-    .with_device_pixel_ratio(resolved_viewport.device_pixel_ratio)
-    .with_env_overrides();
-    let mut media_query_cache = MediaQueryCache::default();
-    record_stage(StageHeartbeat::CssInline);
-    let style_set =
-      self.collect_document_style_set(dom_for_style, &media_ctx, &mut media_query_cache, None)?;
-    // Style and accessibility tree construction are deeply recursive. Run them on a larger-stack
-    // helper thread to avoid stack overflows on debug builds and on documents with deep nesting.
-    let result = std::thread::scope(|scope| {
-      let handle = std::thread::Builder::new()
-        .name("fastr-accessibility".to_string())
-        .stack_size(8 * 1024 * 1024)
-        .spawn_scoped(scope, || {
-          let mut local_media_query_cache = MediaQueryCache::default();
-          let styled_tree = apply_style_set_with_media_target_and_imports_cached(
-            dom_for_style,
-            &style_set,
-            &media_ctx,
-            target_fragment.as_deref(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some(&mut local_media_query_cache),
-          );
+      .with_device_size(device_size.width, device_size.height)
+      .with_device_pixel_ratio(resolved_viewport.device_pixel_ratio)
+      .with_env_overrides();
+      let mut media_query_cache = MediaQueryCache::default();
+      record_stage(StageHeartbeat::CssInline);
+      let style_set =
+        self.collect_document_style_set(dom_for_style, &media_ctx, &mut media_query_cache, None)?;
+      // Style and accessibility tree construction are deeply recursive. Run them on a larger-stack
+      // helper thread to avoid stack overflows on debug builds and on documents with deep nesting.
+      std::thread::scope(|scope| {
+        let handle = std::thread::Builder::new()
+          .name("fastr-accessibility".to_string())
+          .stack_size(8 * 1024 * 1024)
+          .spawn_scoped(scope, || {
+            let mut local_media_query_cache = MediaQueryCache::default();
+            let styled_tree = apply_style_set_with_media_target_and_imports_cached(
+              dom_for_style,
+              &style_set,
+              &media_ctx,
+              target_fragment.as_deref(),
+              None,
+              None,
+              None,
+              None,
+              None,
+              Some(&mut local_media_query_cache),
+            );
 
-          crate::accessibility::build_accessibility_tree(&styled_tree)
-        })
-        .map_err(|e| {
-          Error::Render(RenderError::InvalidParameters {
-            message: format!("Failed to spawn accessibility worker: {e}"),
+            crate::accessibility::build_accessibility_tree(&styled_tree)
           })
-        })?;
+          .map_err(|e| {
+            Error::Render(RenderError::InvalidParameters {
+              message: format!("Failed to spawn accessibility worker: {e}"),
+            })
+          })?;
 
-      handle.join().map_err(|_| {
-        Error::Render(RenderError::InvalidParameters {
-          message: "Accessibility worker thread panicked".to_string(),
+        handle.join().map_err(|_| {
+          Error::Render(RenderError::InvalidParameters {
+            message: "Accessibility worker thread panicked".to_string(),
+          })
         })
       })
-    });
+    })();
 
-    if options.device_pixel_ratio.is_some() {
+    if restore_dpr {
       self.device_pixel_ratio = original_dpr;
     }
 
@@ -10017,6 +10026,79 @@ mod tests {
       css_idx < cascade_idx,
       "expected CssInline stage before Cascade stage, got: {stages:?}"
     );
+  }
+
+  #[test]
+  fn prepare_html_timeout_is_cooperative() {
+    let mut renderer = FastRender::with_config(FastRenderConfig {
+      font_config: FontConfig::bundled_only(),
+      ..FastRenderConfig::default()
+    })
+    .unwrap();
+
+    let options = RenderOptions::new()
+      .with_viewport(10, 10)
+      .with_timeout(Some(std::time::Duration::from_millis(0)));
+    let result = renderer.prepare_html("<div>Hello</div>", options);
+
+    match result {
+      Err(Error::Render(RenderError::Timeout { stage, .. })) => {
+        assert_eq!(stage, RenderStage::DomParse);
+      }
+      Ok(_) => panic!("expected dom_parse timeout, got Ok"),
+      Err(err) => panic!("expected dom_parse timeout, got {err}"),
+    }
+  }
+
+  #[test]
+  fn accessibility_tree_timeout_is_cooperative() {
+    let mut renderer = FastRender::with_config(FastRenderConfig {
+      font_config: FontConfig::bundled_only(),
+      ..FastRenderConfig::default()
+    })
+    .unwrap();
+
+    let mut dom = DomNode {
+      node_type: DomNodeType::Document {
+        quirks_mode: selectors::context::QuirksMode::NoQuirks,
+      },
+      children: vec![DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "div".to_string(),
+          namespace: crate::dom::HTML_NAMESPACE.to_string(),
+          attributes: vec![("data-fastr-open".to_string(), "true".to_string())],
+        },
+        children: vec![],
+      }],
+    };
+
+    // Ensure the cloned DOM triggers periodic deadline checks while still keeping the overall test
+    // deterministic (we use a 0ms timeout, so the first check will always trip).
+    let mut current = &mut dom.children[0];
+    for _ in 0..(1024 * 2) {
+      current.children.push(DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "div".to_string(),
+          namespace: crate::dom::HTML_NAMESPACE.to_string(),
+          attributes: vec![],
+        },
+        children: vec![],
+      });
+      current = current.children.last_mut().expect("child pushed");
+    }
+
+    let options = RenderOptions::new()
+      .with_viewport(10, 10)
+      .with_timeout(Some(std::time::Duration::from_millis(0)));
+    let result = renderer.accessibility_tree_with_options(&dom, options);
+
+    match result {
+      Err(Error::Render(RenderError::Timeout { stage, .. })) => {
+        assert_eq!(stage, RenderStage::DomParse);
+      }
+      Ok(_) => panic!("expected dom_parse timeout, got Ok"),
+      Err(err) => panic!("expected dom_parse timeout, got {err}"),
+    }
   }
 
   #[test]
