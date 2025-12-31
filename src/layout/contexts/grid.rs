@@ -2176,6 +2176,7 @@ impl GridFormattingContext {
               constraints_from_taffy(viewport_size, known_dimensions, available_space, None);
             let fragment = match fc.layout(box_node, &constraints) {
               Ok(fragment) => fragment,
+              Err(LayoutError::Timeout { .. }) => taffy::abort_layout_now(),
               Err(_) => return taffy::geometry::Size::ZERO,
             };
             let size = taffy::geometry::Size {
@@ -2279,12 +2280,18 @@ impl GridFormattingContext {
     if known_dimensions.width.is_none() {
       intrinsic_width = match available_space.width {
         taffy::style::AvailableSpace::MinContent => Some(
-          fc.compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MinContent)
-            .unwrap_or(0.0),
+          match fc.compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MinContent) {
+            Ok(size) => size,
+            Err(LayoutError::Timeout { .. }) => taffy::abort_layout_now(),
+            Err(_) => 0.0,
+          },
         ),
         taffy::style::AvailableSpace::MaxContent => Some(
-          fc.compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MaxContent)
-            .unwrap_or(0.0),
+          match fc.compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MaxContent) {
+            Ok(size) => size,
+            Err(LayoutError::Timeout { .. }) => taffy::abort_layout_now(),
+            Err(_) => 0.0,
+          },
         ),
         _ => None,
       };
@@ -2294,12 +2301,18 @@ impl GridFormattingContext {
     if known_dimensions.height.is_none() {
       intrinsic_height = match available_space.height {
         taffy::style::AvailableSpace::MinContent => Some(
-          fc.compute_intrinsic_block_size(box_node, IntrinsicSizingMode::MinContent)
-            .unwrap_or(0.0),
+          match fc.compute_intrinsic_block_size(box_node, IntrinsicSizingMode::MinContent) {
+            Ok(size) => size,
+            Err(LayoutError::Timeout { .. }) => taffy::abort_layout_now(),
+            Err(_) => 0.0,
+          },
         ),
         taffy::style::AvailableSpace::MaxContent => Some(
-          fc.compute_intrinsic_block_size(box_node, IntrinsicSizingMode::MaxContent)
-            .unwrap_or(0.0),
+          match fc.compute_intrinsic_block_size(box_node, IntrinsicSizingMode::MaxContent) {
+            Ok(size) => size,
+            Err(LayoutError::Timeout { .. }) => taffy::abort_layout_now(),
+            Err(_) => 0.0,
+          },
         ),
         _ => None,
       };
@@ -2365,6 +2378,7 @@ impl GridFormattingContext {
     record_measure_layout_call();
     let mut fragment = match fc.layout(box_node, &constraints) {
       Ok(fragment) => fragment,
+      Err(LayoutError::Timeout { .. }) => taffy::abort_layout_now(),
       Err(_) => return taffy::geometry::Size::ZERO,
     };
     let percentage_base = match available_space.width {
@@ -3887,6 +3901,7 @@ mod tests {
 
               let mut fragment = match fc.layout(box_node, &child_constraints) {
                 Ok(fragment) => fragment,
+                Err(LayoutError::Timeout { .. }) => taffy::abort_layout_now(),
                 Err(_) => return taffy::geometry::Size::ZERO,
               };
               let percentage_base = match available_space.width {

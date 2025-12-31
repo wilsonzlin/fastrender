@@ -1217,8 +1217,11 @@ impl FormattingContext for FlexFormattingContext {
                         constraints.available_width,
                         CrateAvailableSpace::MaxContent | CrateAvailableSpace::MinContent
                     ) {
-                        fc.compute_intrinsic_inline_size(measure_box, IntrinsicSizingMode::MaxContent)
-                            .ok()
+                        match fc.compute_intrinsic_inline_size(measure_box, IntrinsicSizingMode::MaxContent) {
+                          Ok(size) => Some(size),
+                          Err(LayoutError::Timeout { .. }) => taffy::abort_layout_now(),
+                          Err(_) => None,
+                        }
                     } else {
                         None
                     };
@@ -1228,17 +1231,26 @@ impl FormattingContext for FlexFormattingContext {
                         .and_then(|_| measure_box.debug_info.as_ref().map(|d| d.to_selector()));
                     let mut fragment = match fc.layout(measure_box, &constraints) {
                          Ok(f) => {
+                              flex_profile::record_node_layout(
+                                  measure_box.id,
+                                 selector_for_profile.as_deref(),
+                                 node_timer,
+                             );
+                             f
+                         }
+                         Err(LayoutError::Timeout { .. }) => {
                              flex_profile::record_node_layout(
                                  measure_box.id,
-                                selector_for_profile.as_deref(),
-                                node_timer,
-                            );
-                            f
-                        }
-                        Err(_) => {
-                            flex_profile::record_node_layout(
-                                measure_box.id,
-                                selector_for_profile.as_deref(),
+                                 selector_for_profile.as_deref(),
+                                 node_timer,
+                             );
+                             flex_profile::record_measure_time(measure_timer);
+                             taffy::abort_layout_now();
+                         }
+                         Err(_) => {
+                             flex_profile::record_node_layout(
+                                 measure_box.id,
+                                 selector_for_profile.as_deref(),
                                 node_timer,
                             );
                             let size = taffy::geometry::Size {
