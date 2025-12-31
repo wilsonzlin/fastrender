@@ -3390,6 +3390,38 @@ fn report(args: ReportArgs) -> io::Result<()> {
         }
         println!();
       }
+
+      let mut inflight_sorted: Vec<(&LoadedProgress, f64)> = progresses
+        .iter()
+        .filter_map(|entry| {
+          let stats = entry.stats.as_ref()?;
+          let ms = stats.resources.fetch_inflight_wait_ms?;
+          Some((entry, ms))
+        })
+        .collect();
+      inflight_sorted.sort_by(|(a_entry, a_ms), (b_entry, b_ms)| {
+        b_ms
+          .total_cmp(a_ms)
+          .then_with(|| a_entry.stem.cmp(&b_entry.stem))
+      });
+      let inflight_top = args.top.min(inflight_sorted.len());
+      if inflight_top > 0 {
+        println!(
+          "Top inflight wait time (top {inflight_top} of {} with stats):",
+          inflight_sorted.len()
+        );
+        for (idx, (entry, ms)) in inflight_sorted.iter().take(inflight_top).enumerate() {
+          let stats = entry.stats.as_ref().expect("stats should be present");
+          let waits = stats.resources.fetch_inflight_waits.unwrap_or(0);
+          println!(
+            "  {}. {} waits={waits} ms={ms:.2}ms url={}",
+            idx + 1,
+            entry.stem,
+            entry.progress.url
+          );
+        }
+        println!();
+      }
     }
   }
 
