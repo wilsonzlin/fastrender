@@ -1551,21 +1551,29 @@ fn is_mark_only_cluster(text: &str) -> bool {
   }
   saw_mark
 }
-fn cluster_base_and_relevant_chars(text: &str) -> (char, Vec<char>) {
-  let mut chars: Vec<char> = text.chars().collect();
-  let mut base = chars
-    .iter()
-    .copied()
-    .find(|c| !is_non_rendering_for_coverage(*c))
-    .unwrap_or_else(|| chars.first().copied().unwrap_or('\0'));
-  if base == '\0' {
-    base = ' ';
+fn cluster_base_and_relevant_chars(text: &str) -> (char, Vec<char>, usize) {
+  let mut first = None;
+  let mut base = None;
+  let mut relevant = Vec::new();
+  let mut count = 0usize;
+
+  for ch in text.chars() {
+    if first.is_none() {
+      first = Some(ch);
+    }
+    count += 1;
+
+    if is_non_rendering_for_coverage(ch) {
+      continue;
+    }
+    if base.is_none() {
+      base = Some(ch);
+    }
+    relevant.push(ch);
   }
-  let relevant: Vec<char> = chars
-    .drain(..)
-    .filter(|c| !is_non_rendering_for_coverage(*c))
-    .collect();
-  (base, relevant)
+
+  let base = base.or(first).unwrap_or(' ');
+  (base, relevant, count)
 }
 
 fn cluster_emoji_preference(text: &str, variant: FontVariantEmoji) -> EmojiPreference {
@@ -1677,9 +1685,9 @@ fn assign_fonts_internal(
 
     for (cluster_start, cluster_end) in atomic_shaping_clusters(&run.text) {
       let cluster_text = &run.text[cluster_start..cluster_end];
-      let cluster_char_count = cluster_text.chars().count();
       let emoji_pref = cluster_emoji_preference(cluster_text, style.font_variant_emoji);
-      let (base_char, mut relevant_chars) = cluster_base_and_relevant_chars(cluster_text);
+      let (base_char, mut relevant_chars, cluster_char_count) =
+        cluster_base_and_relevant_chars(cluster_text);
       let require_base_glyph = !is_non_rendering_for_coverage(base_char);
       let descriptor = font_cache.map(|_| {
         FallbackCacheDescriptor::new(
@@ -1694,10 +1702,14 @@ fn assign_fonts_internal(
           require_base_glyph,
         )
       });
-      let cluster_cache_key = descriptor.map(|descriptor| ClusterFallbackCacheKey {
-        descriptor,
-        signature: cluster_signature(cluster_text),
-      });
+      let cluster_cache_key = if cluster_char_count > 1 {
+        descriptor.map(|descriptor| ClusterFallbackCacheKey {
+          descriptor,
+          signature: cluster_signature(cluster_text),
+        })
+      } else {
+        None
+      };
       if relevant_chars.is_empty()
         && cluster_char_count == 1
         && !is_non_rendering_for_coverage(base_char)
