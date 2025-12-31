@@ -57,7 +57,7 @@ enum Commands {
   UpdateGoldens(UpdateGoldensArgs),
   /// Render a single page via the fetch_and_render binary
   RenderPage(RenderPageArgs),
-  /// Fetch pages and update the committed pageset scoreboard (`progress/pages/*.json`)
+  /// Fetch pages, prefetch subresources, and update the committed pageset scoreboard (`progress/pages/*.json`)
   Pageset(PagesetArgs),
   /// Refresh the pageset scoreboard and compare against a baseline
   PagesetDiff(PagesetDiffArgs),
@@ -93,7 +93,7 @@ struct PagesetArgs {
   #[arg(long, value_parser = parse_shard)]
   shard: Option<(usize, usize)>,
 
-  /// Skip fetching and only update progress from the existing cache
+  /// Skip fetching HTML and only prefetch/render from the existing cache
   #[arg(long)]
   no_fetch: bool,
 
