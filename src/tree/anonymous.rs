@@ -123,7 +123,7 @@ impl AnonymousBoxCreator {
 
   fn fixup_tree_with_parent(
     mut box_node: BoxNode,
-    parent_style: Option<&ComputedStyle>,
+    parent_style: Option<&Arc<ComputedStyle>>,
     deadline_counter: &mut usize,
   ) -> Result<BoxNode> {
     check_active_periodic(
@@ -155,7 +155,7 @@ impl AnonymousBoxCreator {
   fn fixup_children(
     children: Vec<BoxNode>,
     parent_type: &BoxType,
-    parent_style: &ComputedStyle,
+    parent_style: &Arc<ComputedStyle>,
   ) -> Vec<BoxNode> {
     if children.is_empty() {
       return children;
@@ -163,7 +163,7 @@ impl AnonymousBoxCreator {
 
     match parent_type {
       // Block containers need block fixup
-      BoxType::Block(_) => Self::fixup_block_children(children, parent_style),
+      BoxType::Block(_) => Self::fixup_block_children(children, parent_style.as_ref()),
 
       // Inline containers need inline fixup
       BoxType::Inline(_) => Self::fixup_inline_children(children, parent_style),
@@ -175,7 +175,7 @@ impl AnonymousBoxCreator {
           AnonymousType::Block | AnonymousType::TableCell
         ) =>
       {
-        Self::fixup_block_children(children, parent_style)
+        Self::fixup_block_children(children, parent_style.as_ref())
       }
 
       // Anonymous inline containers need inline fixup
@@ -400,13 +400,16 @@ impl AnonymousBoxCreator {
   /// CSS 2.1 Section 9.2.2.1: "Any text that is directly contained inside
   /// a block container element (not inside an inline element) must be
   /// treated as an anonymous inline element."
-  fn fixup_inline_children(children: Vec<BoxNode>, parent_style: &ComputedStyle) -> Vec<BoxNode> {
+  fn fixup_inline_children(
+    children: Vec<BoxNode>,
+    parent_style: &Arc<ComputedStyle>,
+  ) -> Vec<BoxNode> {
     // Wrap bare text nodes in anonymous inline boxes
     children
       .into_iter()
       .map(|child| {
         if child.is_text() {
-          Self::create_anonymous_inline(Arc::new(parent_style.clone()), vec![child])
+          Self::create_anonymous_inline(parent_style.clone(), vec![child])
         } else {
           child
         }
@@ -435,6 +438,7 @@ impl AnonymousBoxCreator {
   ) -> Vec<BoxNode> {
     let mut result = Vec::new();
     let mut inline_run: Vec<BoxNode> = Vec::new();
+    let mut anonymous_block_style: Option<Arc<ComputedStyle>> = None;
 
     for child in children {
       if Self::is_inline_level_child(&child) {
@@ -443,7 +447,13 @@ impl AnonymousBoxCreator {
       } else {
         // Block box encountered - flush any inline run
         if !inline_run.is_empty() {
-          let anon_block = Self::create_anonymous_block_from_run(&mut inline_run, parent_style);
+          let style = anonymous_block_style.get_or_insert_with(|| {
+            let mut style = inherited_style(parent_style);
+            style.display = Display::Block;
+            Arc::new(style)
+          });
+          let anon_block =
+            Self::create_anonymous_block(style.clone(), std::mem::take(&mut inline_run));
           result.push(anon_block);
         }
         result.push(child);
@@ -452,7 +462,13 @@ impl AnonymousBoxCreator {
 
     // Flush remaining inline run at end
     if !inline_run.is_empty() {
-      let anon_block = Self::create_anonymous_block_from_run(&mut inline_run, parent_style);
+      let style = anonymous_block_style.get_or_insert_with(|| {
+        let mut style = inherited_style(parent_style);
+        style.display = Display::Block;
+        Arc::new(style)
+      });
+      let anon_block =
+        Self::create_anonymous_block(style.clone(), std::mem::take(&mut inline_run));
       result.push(anon_block);
     }
 
@@ -467,31 +483,23 @@ impl AnonymousBoxCreator {
     children: Vec<BoxNode>,
     parent_style: &ComputedStyle,
   ) -> Vec<BoxNode> {
+    let mut inherited_inline_style: Option<Arc<ComputedStyle>> = None;
     children
       .into_iter()
       .map(|child| {
         if child.is_text() {
           // Wrap text in anonymous inline
-          let inherited = inherited_style(parent_style);
-          Self::create_anonymous_inline(Arc::new(inherited), vec![child])
+          let style = inherited_inline_style.get_or_insert_with(|| {
+            let mut inherited = inherited_style(parent_style);
+            inherited.display = Display::Inline;
+            Arc::new(inherited)
+          });
+          Self::create_anonymous_inline(style.clone(), vec![child])
         } else {
           child
         }
       })
       .collect()
-  }
-
-  /// Creates an anonymous block box from a run of inline boxes
-  ///
-  /// Takes ownership of the inline run and clears it.
-  fn create_anonymous_block_from_run(
-    inline_run: &mut Vec<BoxNode>,
-    parent_style: &ComputedStyle,
-  ) -> BoxNode {
-    let mut style = inherited_style(parent_style);
-    style.display = Display::Block;
-    let children = std::mem::take(inline_run);
-    Self::create_anonymous_block(Arc::new(style), children)
   }
 
   /// Creates an anonymous block box
@@ -506,10 +514,15 @@ impl AnonymousBoxCreator {
   /// Currently uses default style as a placeholder - proper inheritance
   /// should be handled during style computation.
   pub fn create_anonymous_block(style: Arc<ComputedStyle>, children: Vec<BoxNode>) -> BoxNode {
-    let mut style = (*style).clone();
-    style.display = Display::Block;
+    let style = if style.display == Display::Block {
+      style
+    } else {
+      let mut style = (*style).clone();
+      style.display = Display::Block;
+      Arc::new(style)
+    };
     BoxNode {
-      style: Arc::new(style),
+      style,
       starting_style: None,
       box_type: BoxType::Anonymous(AnonymousBox {
         anonymous_type: AnonymousType::Block,
@@ -531,10 +544,15 @@ impl AnonymousBoxCreator {
   /// a block container element (not inside an inline element) must be
   /// treated as an anonymous inline element."
   pub fn create_anonymous_inline(style: Arc<ComputedStyle>, children: Vec<BoxNode>) -> BoxNode {
-    let mut style = (*style).clone();
-    style.display = Display::Inline;
+    let style = if style.display == Display::Inline {
+      style
+    } else {
+      let mut style = (*style).clone();
+      style.display = Display::Inline;
+      Arc::new(style)
+    };
     BoxNode {
-      style: Arc::new(style),
+      style,
       starting_style: None,
       box_type: BoxType::Anonymous(AnonymousBox {
         anonymous_type: AnonymousType::Inline,
