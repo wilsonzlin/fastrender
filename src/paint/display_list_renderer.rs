@@ -9569,6 +9569,93 @@ mod tests {
   }
 
   #[test]
+  fn mask_composite_with_offsets_intersect_disjoint_becomes_transparent() {
+    let mut dst = Mask::new(4, 4).unwrap();
+    dst.data_mut().fill(255);
+    let mut src = Mask::new(4, 4).unwrap();
+    src.data_mut().fill(255);
+
+    let result = apply_mask_composite(
+      CompositeMask::Region(OffsetMask {
+        mask: dst,
+        origin: (0, 0),
+      }),
+      CompositeMask::Region(OffsetMask {
+        mask: src,
+        origin: (10, 0),
+      }),
+      MaskComposite::Intersect,
+    )
+    .expect("composite");
+
+    assert!(matches!(result, CompositeMask::Transparent));
+  }
+
+  #[test]
+  fn mask_composite_with_offsets_subtract_overlap() {
+    let mut dst = Mask::new(4, 4).unwrap();
+    dst.data_mut().fill(255);
+    let mut src = Mask::new(4, 4).unwrap();
+    src.data_mut().fill(255);
+
+    let result = apply_mask_composite(
+      CompositeMask::Region(OffsetMask {
+        mask: dst,
+        origin: (0, 0),
+      }),
+      CompositeMask::Region(OffsetMask {
+        mask: src,
+        origin: (2, 0),
+      }),
+      MaskComposite::Subtract,
+    )
+    .expect("composite");
+
+    let CompositeMask::Region(composed) = result else {
+      panic!("expected region mask");
+    };
+    assert_eq!(composed.origin, (2, 0));
+    assert_eq!(composed.mask.width(), 4);
+    assert_eq!(composed.mask.height(), 4);
+
+    for row in composed.mask.data().chunks(composed.mask.width() as usize) {
+      assert_eq!(row, &[0, 0, 255, 255]);
+    }
+  }
+
+  #[test]
+  fn mask_composite_with_offsets_exclude_overlap() {
+    let mut dst = Mask::new(4, 4).unwrap();
+    dst.data_mut().fill(255);
+    let mut src = Mask::new(4, 4).unwrap();
+    src.data_mut().fill(255);
+
+    let result = apply_mask_composite(
+      CompositeMask::Region(OffsetMask {
+        mask: dst,
+        origin: (0, 0),
+      }),
+      CompositeMask::Region(OffsetMask {
+        mask: src,
+        origin: (2, 0),
+      }),
+      MaskComposite::Exclude,
+    )
+    .expect("composite");
+
+    let CompositeMask::Region(composed) = result else {
+      panic!("expected region mask");
+    };
+    assert_eq!(composed.origin, (0, 0));
+    assert_eq!(composed.mask.width(), 6);
+    assert_eq!(composed.mask.height(), 4);
+
+    for row in composed.mask.data().chunks(composed.mask.width() as usize) {
+      assert_eq!(row, &[255, 255, 0, 0, 255, 255]);
+    }
+  }
+
+  #[test]
   fn stacking_context_opacity_affects_descendants() {
     let mut root_style = ComputedStyle::default();
     root_style.background_color = Rgba::RED;
