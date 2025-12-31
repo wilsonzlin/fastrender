@@ -324,7 +324,33 @@ fn clone_starting_style(style: &Option<Box<ComputedStyle>>) -> Option<Arc<Comput
 struct BoxGenerationPrepass<'a> {
   document_css: String,
   picture_sources: HashMap<usize, Vec<PictureSource>>,
-  styled_lookup: HashMap<usize, &'a StyledNode>,
+  styled_lookup: StyledLookup<'a>,
+}
+
+struct StyledLookup<'a> {
+  nodes: Vec<Option<&'a StyledNode>>,
+}
+
+impl<'a> StyledLookup<'a> {
+  fn new() -> Self {
+    Self { nodes: Vec::new() }
+  }
+
+  fn insert(&mut self, node_id: usize, node: &'a StyledNode) {
+    if node_id == self.nodes.len() {
+      self.nodes.push(Some(node));
+      return;
+    }
+
+    if node_id >= self.nodes.len() {
+      self.nodes.resize(node_id + 1, None);
+    }
+    self.nodes[node_id] = Some(node);
+  }
+
+  fn get(&self, node_id: usize) -> Option<&'a StyledNode> {
+    self.nodes.get(node_id).copied().flatten()
+  }
 }
 
 fn collect_box_generation_prepass<'a>(
@@ -397,7 +423,7 @@ fn collect_box_generation_prepass<'a>(
   let mut out = BoxGenerationPrepass {
     document_css: String::new(),
     picture_sources: HashMap::new(),
-    styled_lookup: HashMap::new(),
+    styled_lookup: StyledLookup::new(),
   };
   let mut css = CssState { enabled: true };
   walk(styled, &mut out, deadline_counter, max_css_bytes, &mut css, true)?;
@@ -576,10 +602,7 @@ impl<'a> ComposedChildren<'a> {
   }
 }
 
-fn composed_children<'a>(
-  styled: &'a StyledNode,
-  lookup: &'a HashMap<usize, &'a StyledNode>,
-) -> ComposedChildren<'a> {
+fn composed_children<'a>(styled: &'a StyledNode, lookup: &'a StyledLookup<'a>) -> ComposedChildren<'a> {
   if let Some(shadow_root) = styled
     .children
     .iter()
@@ -591,10 +614,10 @@ fn composed_children<'a>(
   if matches!(styled.node.node_type, crate::dom::DomNodeType::Slot { .. })
     && !styled.slotted_node_ids.is_empty()
   {
-    let mut resolved: Vec<&'a StyledNode> = Vec::new();
+    let mut resolved: Vec<&'a StyledNode> = Vec::with_capacity(styled.slotted_node_ids.len());
     for id in &styled.slotted_node_ids {
-      if let Some(node) = lookup.get(id) {
-        resolved.push(*node);
+      if let Some(node) = lookup.get(*id) {
+        resolved.push(node);
       }
     }
     return ComposedChildren::Refs(resolved);
@@ -1382,7 +1405,7 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
 /// splicing grandchildren into the parent’s child list rather than creating a box.
 fn generate_boxes_for_styled(
   styled: &StyledNode,
-  styled_lookup: &HashMap<usize, &StyledNode>,
+  styled_lookup: &StyledLookup<'_>,
   counters: &mut CounterManager,
   _is_root: bool,
   document_css: &str,
