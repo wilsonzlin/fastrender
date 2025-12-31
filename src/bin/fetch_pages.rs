@@ -156,6 +156,8 @@ fn fetch_page(
 ) -> Result<FetchedResource, String> {
   let fetcher = build_http_fetcher(user_agent, accept_language, timeout_secs);
 
+  let is_error_status = |status: Option<u16>| status.is_some_and(|code| code >= 400);
+
   let fetch = |target: &str| -> Result<(FetchedResource, String), String> {
     let mut res = fetcher.fetch(target).map_err(|e| e.to_string())?;
     if res.bytes.is_empty() {
@@ -180,9 +182,19 @@ fn fetch_page(
       if let Ok(next) = base.join(&refresh) {
         match fetch(next.as_str()) {
           Ok((next_res, next_url)) => {
-            res = next_res;
-            current_url = next_url;
-            html = decode_html_bytes(&res.bytes, res.content_type.as_deref());
+            if is_error_status(next_res.status) {
+              eprintln!(
+                "Warning: meta refresh fetch failed: status {} (keeping original)",
+                next_res
+                  .status
+                  .map(|code| code.to_string())
+                  .unwrap_or_else(|| "<unknown>".to_string())
+              );
+            } else {
+              res = next_res;
+              current_url = next_url;
+              html = decode_html_bytes(&res.bytes, res.content_type.as_deref());
+            }
           }
           Err(e) => eprintln!(
             "Warning: meta refresh fetch failed: {} (keeping original)",
@@ -199,8 +211,18 @@ fn fetch_page(
       if let Ok(next) = base.join(&js_redirect) {
         match fetch(next.as_str()) {
           Ok((next_res, next_url)) => {
-            res = next_res;
-            current_url = next_url;
+            if is_error_status(next_res.status) {
+              eprintln!(
+                "Warning: js redirect fetch failed: status {} (keeping original)",
+                next_res
+                  .status
+                  .map(|code| code.to_string())
+                  .unwrap_or_else(|| "<unknown>".to_string())
+              );
+            } else {
+              res = next_res;
+              current_url = next_url;
+            }
           }
           Err(e) => eprintln!(
             "Warning: js redirect fetch failed: {} (keeping original)",
@@ -389,7 +411,6 @@ mod tests {
   use super::*;
   use fastrender::pageset::{pageset_stem, PAGESET_URLS};
   use std::collections::HashSet;
-  use std::time::Duration;
 
   fn try_bind_localhost(context: &str) -> Option<std::net::TcpListener> {
     match std::net::TcpListener::bind("127.0.0.1:0") {
@@ -643,7 +664,7 @@ mod tests {
     let url = format!("http://{}/start", addr);
     let res = fetch_page(
       &url,
-      Duration::from_secs(5),
+      Some(5),
       DEFAULT_USER_AGENT,
       DEFAULT_ACCEPT_LANGUAGE,
     )
@@ -692,7 +713,7 @@ mod tests {
     let url = format!("http://{}", addr);
     let result = fetch_page(
       &url,
-      Duration::from_secs(5),
+      Some(5),
       DEFAULT_USER_AGENT,
       DEFAULT_ACCEPT_LANGUAGE,
     );
@@ -734,7 +755,7 @@ mod tests {
     let url = format!("http://{}/", addr);
     let res = fetch_page(
       &url,
-      Duration::from_secs(5),
+      Some(5),
       DEFAULT_USER_AGENT,
       "es-MX,es;q=0.8",
     )
@@ -795,7 +816,7 @@ mod tests {
     let url = format!("http://{}/", addr);
     let res = fetch_page(
       &url,
-      Duration::from_secs(5),
+      Some(5),
       DEFAULT_USER_AGENT,
       DEFAULT_ACCEPT_LANGUAGE,
     )
@@ -858,7 +879,7 @@ mod tests {
     let url = format!("http://{}/", addr);
     let res = fetch_page(
       &url,
-      Duration::from_secs(5),
+      Some(5),
       DEFAULT_USER_AGENT,
       DEFAULT_ACCEPT_LANGUAGE,
     )
@@ -919,7 +940,7 @@ mod tests {
     let url = format!("http://{}/", addr);
     let res = fetch_page(
       &url,
-      Duration::from_secs(5),
+      Some(5),
       DEFAULT_USER_AGENT,
       DEFAULT_ACCEPT_LANGUAGE,
     )
