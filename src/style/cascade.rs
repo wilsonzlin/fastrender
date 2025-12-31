@@ -116,6 +116,13 @@ static CASCADE_PROFILE_CANDIDATES_UNIVERSAL: AtomicU64 = AtomicU64::new(0);
 const CASCADE_NODE_DEADLINE_STRIDE: usize = 1024;
 const CASCADE_SELECTOR_DEADLINE_STRIDE: usize = 64;
 
+fn quirks_mode_for_dom(dom: &DomNode) -> QuirksMode {
+  match &dom.node_type {
+    DomNodeType::Document { quirks_mode } => *quirks_mode,
+    _ => QuirksMode::NoQuirks,
+  }
+}
+
 fn is_root_element(ancestors: &[&DomNode]) -> bool {
   ancestors.is_empty()
     || (ancestors.len() == 1 && matches!(ancestors[0].node_type, DomNodeType::Document { .. }))
@@ -2820,7 +2827,7 @@ fn apply_styles_with_media_target_and_imports_cached_with_deadline_impl(
     host_rules: shadow_host_indices,
     slot_maps,
     fallback_document_rules_in_shadow_scopes: true,
-    quirks_mode: dom.document_quirks_mode(),
+    quirks_mode: quirks_mode_for_dom(dom),
   };
 
   let counter_styles = {
@@ -3371,7 +3378,7 @@ fn apply_style_set_with_media_target_and_imports_cached_with_deadline_impl(
     host_rules: shadow_host_indices,
     slot_maps,
     fallback_document_rules_in_shadow_scopes: false,
-    quirks_mode: dom.document_quirks_mode(),
+    quirks_mode: quirks_mode_for_dom(dom),
   };
 
   let counter_styles = {
@@ -10256,6 +10263,135 @@ mod tests {
   }
 
   #[test]
+  fn container_conditions_reject_entire_rule() {
+    let dom = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![],
+      },
+      children: vec![DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "div".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: vec![
+            ("id".to_string(), "target".to_string()),
+            ("class".to_string(), "foo".to_string()),
+          ],
+        },
+        children: vec![],
+      }],
+    };
+    let stylesheet = parse_stylesheet(
+      r"
+        @container (min-width: 200px) {
+          #target { color: red; }
+        }
+        .foo { color: blue; }
+      ",
+    )
+    .unwrap();
+
+    // Root node_id = 1, child node_id = 2. Provide a container that fails the min-width query.
+    let mut containers = HashMap::new();
+    containers.insert(
+      1,
+      ContainerQueryInfo {
+        inline_size: 100.0,
+        block_size: 100.0,
+        container_type: ContainerType::Size,
+        names: Vec::new(),
+        font_size: 16.0,
+        styles: Arc::new(ComputedStyle::default()),
+      },
+    );
+    let container_ctx = ContainerQueryContext {
+      base_media: MediaContext::screen(800.0, 600.0),
+      containers,
+    };
+
+    let media_ctx = MediaContext::screen(800.0, 600.0);
+    let styled = apply_styles_with_media_target_and_imports(
+      &dom,
+      &stylesheet,
+      &media_ctx,
+      None,
+      None,
+      None,
+      Some(&container_ctx),
+      None,
+      None,
+    );
+    let child = styled.children.first().expect("child");
+    assert_eq!(
+      child.styles.color,
+      Rgba::BLUE,
+      "@container rule should be rejected when container query does not match"
+    );
+  }
+
+  #[test]
+  fn scope_constraints_are_enforced() {
+    let dom = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![],
+      },
+      children: vec![
+        DomNode {
+          node_type: DomNodeType::Element {
+            tag_name: "div".to_string(),
+            namespace: HTML_NAMESPACE.to_string(),
+            attributes: vec![("class".to_string(), "scope".to_string())],
+          },
+          children: vec![DomNode {
+            node_type: DomNodeType::Element {
+              tag_name: "p".to_string(),
+              namespace: HTML_NAMESPACE.to_string(),
+              attributes: vec![("class".to_string(), "target".to_string())],
+            },
+            children: vec![],
+          }],
+        },
+        DomNode {
+          node_type: DomNodeType::Element {
+            tag_name: "p".to_string(),
+            namespace: HTML_NAMESPACE.to_string(),
+            attributes: vec![("class".to_string(), "target".to_string())],
+          },
+          children: vec![],
+        },
+      ],
+    };
+
+    let stylesheet = parse_stylesheet(
+      r"
+        * { color: blue; }
+        @scope (.scope) {
+          .target { color: red; }
+        }
+      ",
+    )
+    .unwrap();
+
+    let styled = apply_styles(&dom, &stylesheet);
+    let in_scope = styled
+      .children
+      .first()
+      .and_then(|node| node.children.first())
+      .expect("in-scope node");
+    let out_of_scope = styled.children.get(1).expect("out-of-scope node");
+
+    assert_eq!(in_scope.styles.color, Rgba::RED);
+    assert_eq!(
+      out_of_scope.styles.color,
+      Rgba::BLUE,
+      "scoped rule should not apply outside its scope root"
+    );
+  }
+
+  #[test]
   fn font_weight_relative_keywords_follow_css_fonts_table() {
     assert_eq!(
       child_font_weight("font-weight: 50;", "font-weight: bolder;"),
@@ -10550,6 +10686,20 @@ fn find_matching_rules<'a>(
     scratch.match_index.reset();
     return Ok(Vec::new());
   }
+  candidates.sort_unstable_by(|a, b| {
+    let a = &rules.selectors[*a];
+    let b = &rules.selectors[*b];
+    a.rule_idx
+      .cmp(&b.rule_idx)
+      // Prefer higher-specificity selectors first within a rule so we can stop once we find
+      // the winning match.
+      .then(b.specificity.cmp(&a.specificity))
+  });
+  slotted_candidates.sort_unstable_by(|a, b| {
+    let a = &rules.slotted_selectors[*a];
+    let b = &rules.slotted_selectors[*b];
+    a.rule_idx.cmp(&b.rule_idx)
+  });
   let mut matches: Vec<MatchedRule<'a>> = Vec::new();
   let mut deadline_counter = 0usize;
 
@@ -10581,9 +10731,6 @@ fn find_matching_rules<'a>(
     sibling_cache: Some(sibling_cache),
   };
 
-  let mut scoped_rule_idx: Option<usize> = None;
-  let mut scoped_match: Option<Option<ScopeMatch<'_>>> = None;
-
   let scope_allows = |scope: &RuleScope, is_slotted: bool| -> bool {
     match scope {
       RuleScope::Document => !is_slotted,
@@ -10599,137 +10746,126 @@ fn find_matching_rules<'a>(
     }
   };
 
-  for &selector_idx in candidates.iter() {
-    let indexed = &rules.selectors[selector_idx];
-    check_active_periodic(
-      &mut deadline_counter,
-      CASCADE_SELECTOR_DEADLINE_STRIDE,
-      RenderStage::Cascade,
-    )?;
-    if let Some(pos) = scratch.match_index.get(indexed.rule_idx) {
-      if indexed.specificity <= matches[pos].specificity {
+  {
+    let mut idx = 0;
+    while idx < candidates.len() {
+      let first = &rules.selectors[candidates[idx]];
+      let rule_idx = first.rule_idx;
+      let mut end = idx + 1;
+      while end < candidates.len() && rules.selectors[candidates[end]].rule_idx == rule_idx {
+        end += 1;
+      }
+
+      let rule = &rules.rules[rule_idx];
+      let pos = scratch.match_index.get(rule_idx);
+      let mut best_specificity = pos.map(|pos| matches[pos].specificity);
+
+      // If we already have a stronger match for this rule, skip the entire group.
+      if let Some(best) = best_specificity {
+        if first.specificity <= best {
+          idx = end;
+          continue;
+        }
+      }
+
+      if !scope_allows(&rule.scope, false) {
+        idx = end;
         continue;
       }
-    }
 
-    let rule = &rules.rules[indexed.rule_idx];
-    if !scope_allows(&rule.scope, false) {
-      continue;
-    }
+      if !rule.container_conditions.is_empty() {
+        match container_ctx {
+          Some(ctx) if ctx.matches(node_id, ancestor_ids, &rule.container_conditions) => {}
+          _ => {
+            idx = end;
+            continue;
+          }
+        }
+      }
 
-    let scope_for_rule = if scoped_rule_idx == Some(indexed.rule_idx) {
-      scoped_match.clone()
-    } else {
-      let resolved = if rule.scopes.is_empty() {
+      let scope_for_rule = if rule.scopes.is_empty() {
         Some(None)
       } else {
         resolve_scopes(node, ancestors, &rule.scopes, &mut context).map(Some)
       };
       take_matching_error(&mut context)?;
-      scoped_rule_idx = Some(indexed.rule_idx);
-      scoped_match = resolved.clone();
-      resolved
-    };
+      let Some(scope_for_rule) = scope_for_rule else {
+        idx = end;
+        continue;
+      };
 
-    let Some(scope_for_rule) = scope_for_rule else {
-      continue;
-    };
+      for &selector_idx in &candidates[idx..end] {
+        let indexed = &rules.selectors[selector_idx];
+        check_active_periodic(
+          &mut deadline_counter,
+          CASCADE_SELECTOR_DEADLINE_STRIDE,
+          RenderStage::Cascade,
+        )?;
 
-    let selector = indexed.selector;
-    let mut selector_matches = if let Some(scope_root) = &scope_for_rule {
-      let scope_ref = ElementRef::with_ancestors(scope_root.root, &scope_root.ancestors);
-      match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
-        ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
-          matches_selector(selector, 0, None, &element_ref, ctx)
-        })
-      })
-    } else {
-      match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
-        matches_selector(selector, 0, None, &element_ref, ctx)
-      })
-    };
-    take_matching_error(&mut context)?;
-
-    if allow_shadow_host && !selector_matches && selector_contains_host_context(selector) {
-      selector_matches =
-        match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
-          ctx.with_featureless(false, |ctx| {
-            matches_selector(selector, 0, None, &element_ref, ctx)
-          })
-        });
-      take_matching_error(&mut context)?;
-    }
-
-    if selector_matches {
-      let spec = indexed.specificity;
-      if let Some(pos) = scratch.match_index.get(indexed.rule_idx) {
-        if spec > matches[pos].specificity {
-          matches[pos].specificity = spec;
-        }
-      } else {
-        let rule = &rules.rules[indexed.rule_idx];
-        if !rule.container_conditions.is_empty() {
-          match container_ctx {
-            Some(ctx) if ctx.matches(node_id, ancestor_ids, &rule.container_conditions) => {}
-            _ => continue,
+        if let Some(best) = best_specificity {
+          if indexed.specificity <= best {
+            continue;
           }
         }
-        let pos = matches.len();
-        scratch.match_index.insert(indexed.rule_idx, pos);
-        matches.push(MatchedRule {
-          origin: rule.origin,
-          specificity: spec,
-          order: rule.order,
-          layer_order: rule.layer_order.clone(),
-          declarations: Cow::Borrowed(&rule.rule.declarations),
-          starting_style: rule.starting_style,
-        });
+
+        let selector = indexed.selector;
+        let mut selector_matches = if let Some(scope_root) = &scope_for_rule {
+          let scope_ref = ElementRef::with_ancestors(scope_root.root, &scope_root.ancestors);
+          match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
+            ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
+              matches_selector(selector, 0, None, &element_ref, ctx)
+            })
+          })
+        } else {
+          match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
+            matches_selector(selector, 0, None, &element_ref, ctx)
+          })
+        };
+        take_matching_error(&mut context)?;
+
+        if allow_shadow_host && !selector_matches && selector_contains_host_context(selector) {
+          selector_matches =
+            match_with_shadow_host(allow_shadow_host, &mut context, shadow_host, |ctx| {
+              ctx.with_featureless(false, |ctx| {
+                matches_selector(selector, 0, None, &element_ref, ctx)
+              })
+            });
+          take_matching_error(&mut context)?;
+        }
+
+        if selector_matches {
+          let spec = indexed.specificity;
+          best_specificity = Some(best_specificity.map_or(spec, |best| best.max(spec)));
+          // Selectors are ordered by descending specificity; once we find a match,
+          // no remaining selectors can beat it.
+          break;
+        }
       }
+
+      if let Some(best_specificity) = best_specificity {
+        if let Some(pos) = pos {
+          if best_specificity > matches[pos].specificity {
+            matches[pos].specificity = best_specificity;
+          }
+        } else {
+          let pos = matches.len();
+          scratch.match_index.insert(rule_idx, pos);
+          matches.push(MatchedRule {
+            origin: rule.origin,
+            specificity: best_specificity,
+            order: rule.order,
+            layer_order: rule.layer_order.clone(),
+            declarations: Cow::Borrowed(&rule.rule.declarations),
+            starting_style: rule.starting_style,
+          });
+        }
+      }
+
+      idx = end;
     }
   }
 
-  for &selector_idx in slotted_candidates.iter() {
-    let indexed = &rules.slotted_selectors[selector_idx];
-    check_active_periodic(
-      &mut deadline_counter,
-      CASCADE_SELECTOR_DEADLINE_STRIDE,
-      RenderStage::Cascade,
-    )?;
-    let rule = &rules.rules[indexed.rule_idx];
-    if !scope_allows(&rule.scope, true) {
-      continue;
-    }
-
-    let scope_for_rule = if scoped_rule_idx == Some(indexed.rule_idx) {
-      scoped_match.clone()
-    } else {
-      let resolved = if rule.scopes.is_empty() {
-        Some(None)
-      } else {
-        resolve_scopes(node, ancestors, &rule.scopes, &mut context).map(Some)
-      };
-      take_matching_error(&mut context)?;
-      scoped_rule_idx = Some(indexed.rule_idx);
-      scoped_match = resolved.clone();
-      resolved
-    };
-
-    let Some(scope_for_rule) = scope_for_rule else {
-      continue;
-    };
-
-    if !rule.container_conditions.is_empty() {
-      match container_ctx {
-        Some(ctx) if ctx.matches(node_id, ancestor_ids, &rule.container_conditions) => {}
-        _ => continue,
-      }
-    }
-
-    let args = match indexed.selector.pseudo_element() {
-      Some(PseudoElement::Slotted(args)) => args,
-      _ => continue,
-    };
-
+  if !slotted_candidates.is_empty() {
     let slot_shadow_host = assigned_slot.and_then(|slot| {
       dom_maps
         .shadow_hosts
@@ -10747,105 +10883,181 @@ fn find_matching_rules<'a>(
       .map(|(host_node, ancestors)| ElementRef::with_ancestors(*host_node, ancestors.as_slice()))
       .or(shadow_host);
 
-    let mut best_arg_specificity: Option<u32> = None;
-    if let Some(scope_root) = &scope_for_rule {
-      let scope_ref = ElementRef::with_ancestors(scope_root.root, &scope_root.ancestors);
-      match_with_shadow_host(
-        allow_shadow_host,
-        &mut context,
-        shadow_host_for_slotted,
-        |ctx| {
-          ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
-            for sel in args.iter() {
-              if matches_selector(sel, 0, None, &element_ref, ctx) {
-                let spec = sel.specificity();
-                best_arg_specificity =
-                  Some(best_arg_specificity.map_or(spec, |best| best.max(spec)));
-              }
-            }
-            best_arg_specificity.is_some()
-          })
-        },
-      );
-      take_matching_error(&mut context)?;
-    } else {
-      match_with_shadow_host(
-        allow_shadow_host,
-        &mut context,
-        shadow_host_for_slotted,
-        |ctx| {
-          for sel in args.iter() {
-            if matches_selector(sel, 0, None, &element_ref, ctx) {
-              let spec = sel.specificity();
-              best_arg_specificity = Some(best_arg_specificity.map_or(spec, |best| best.max(spec)));
-            }
-          }
-        },
-      );
-      take_matching_error(&mut context)?;
-    }
-
-    let Some(best_arg_specificity) = best_arg_specificity else {
-      continue;
-    };
-
-    if let Some(prelude) = &indexed.prelude {
-      let Some(slot_info) = assigned_slot else {
-        continue;
-      };
-      let Some(slot_ptr) = dom_maps.id_to_node.get(&slot_info.slot_node_id) else {
-        continue;
-      };
+    let slot_node_and_ancestors = assigned_slot.and_then(|slot_info| {
+      let slot_ptr = dom_maps.id_to_node.get(&slot_info.slot_node_id)?;
       // Safety: DOM nodes outlive selector matching; pointers are derived from the immutable DOM tree.
       let slot_node = unsafe { &**slot_ptr };
       let slot_ancestors = dom_maps.ancestors_for(slot_info.slot_node_id);
-      let slot_ref = ElementRef::with_ancestors(slot_node, &slot_ancestors);
-      let slot_matches = if let Some(scope_root) = &scope_for_rule {
-        let scope_ref = ElementRef::with_ancestors(scope_root.root, &scope_root.ancestors);
-        match_with_shadow_host(
-          allow_shadow_host,
-          &mut context,
-          shadow_host_for_slotted,
-          |ctx| {
-            ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
-              matches_selector(prelude, 0, None, &slot_ref, ctx)
-            })
-          },
-        )
-      } else {
-        match_with_shadow_host(
-          allow_shadow_host,
-          &mut context,
-          shadow_host_for_slotted,
-          |ctx| matches_selector(prelude, 0, None, &slot_ref, ctx),
-        )
-      };
-      take_matching_error(&mut context)?;
-      if !slot_matches {
+      Some((slot_node, slot_ancestors))
+    });
+
+    let mut idx = 0;
+    while idx < slotted_candidates.len() {
+      let rule_idx = rules.slotted_selectors[slotted_candidates[idx]].rule_idx;
+      let mut end = idx + 1;
+      while end < slotted_candidates.len()
+        && rules.slotted_selectors[slotted_candidates[end]].rule_idx == rule_idx
+      {
+        end += 1;
+      }
+
+      let rule = &rules.rules[rule_idx];
+      if !scope_allows(&rule.scope, true) {
+        idx = end;
         continue;
       }
-    }
 
-    let spec = indexed
-      .prelude_specificity
-      .saturating_add(best_arg_specificity)
-      // ::slotted() is a pseudo-element and contributes element-level specificity.
-      .saturating_add(1);
-    if let Some(pos) = scratch.match_index.get(indexed.rule_idx) {
-      if spec > matches[pos].specificity {
-        matches[pos].specificity = spec;
+      if !rule.container_conditions.is_empty() {
+        match container_ctx {
+          Some(ctx) if ctx.matches(node_id, ancestor_ids, &rule.container_conditions) => {}
+          _ => {
+            idx = end;
+            continue;
+          }
+        }
       }
-    } else {
-      let pos = matches.len();
-      scratch.match_index.insert(indexed.rule_idx, pos);
-      matches.push(MatchedRule {
-        origin: rule.origin,
-        specificity: spec,
-        order: rule.order,
-        layer_order: rule.layer_order.clone(),
-        declarations: Cow::Borrowed(&rule.rule.declarations),
-        starting_style: rule.starting_style,
-      });
+
+      let scope_for_rule = if rule.scopes.is_empty() {
+        Some(None)
+      } else {
+        resolve_scopes(node, ancestors, &rule.scopes, &mut context).map(Some)
+      };
+      take_matching_error(&mut context)?;
+      let Some(scope_for_rule) = scope_for_rule else {
+        idx = end;
+        continue;
+      };
+
+      let pos = scratch.match_index.get(rule_idx);
+      let mut best_specificity = pos.map(|pos| matches[pos].specificity);
+
+      for &selector_idx in &slotted_candidates[idx..end] {
+        let indexed = &rules.slotted_selectors[selector_idx];
+        check_active_periodic(
+          &mut deadline_counter,
+          CASCADE_SELECTOR_DEADLINE_STRIDE,
+          RenderStage::Cascade,
+        )?;
+
+        let args = match indexed.selector.pseudo_element() {
+          Some(PseudoElement::Slotted(args)) => args,
+          _ => continue,
+        };
+
+        // Only attempt to match when this selector can outrank the current best for the rule.
+        if let Some(best) = best_specificity {
+          let max_arg_spec = args.iter().map(|sel| sel.specificity()).max().unwrap_or(0);
+          let max_possible = indexed
+            .prelude_specificity
+            .saturating_add(max_arg_spec)
+            .saturating_add(1);
+          if max_possible <= best {
+            continue;
+          }
+        }
+
+        let mut best_arg_specificity: Option<u32> = None;
+        if let Some(scope_root) = &scope_for_rule {
+          let scope_ref = ElementRef::with_ancestors(scope_root.root, &scope_root.ancestors);
+          match_with_shadow_host(
+            allow_shadow_host,
+            &mut context,
+            shadow_host_for_slotted,
+            |ctx| {
+              ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
+                for sel in args.iter() {
+                  if matches_selector(sel, 0, None, &element_ref, ctx) {
+                    let spec = sel.specificity();
+                    best_arg_specificity =
+                      Some(best_arg_specificity.map_or(spec, |best| best.max(spec)));
+                  }
+                }
+                best_arg_specificity.is_some()
+              })
+            },
+          );
+          take_matching_error(&mut context)?;
+        } else {
+          match_with_shadow_host(
+            allow_shadow_host,
+            &mut context,
+            shadow_host_for_slotted,
+            |ctx| {
+              for sel in args.iter() {
+                if matches_selector(sel, 0, None, &element_ref, ctx) {
+                  let spec = sel.specificity();
+                  best_arg_specificity =
+                    Some(best_arg_specificity.map_or(spec, |best| best.max(spec)));
+                }
+              }
+            },
+          );
+          take_matching_error(&mut context)?;
+        }
+
+        let Some(best_arg_specificity) = best_arg_specificity else {
+          continue;
+        };
+
+        if let Some(prelude) = &indexed.prelude {
+          let Some((slot_node, slot_ancestors)) = slot_node_and_ancestors.as_ref() else {
+            continue;
+          };
+          let slot_ref = ElementRef::with_ancestors(*slot_node, slot_ancestors.as_slice());
+          let slot_matches = if let Some(scope_root) = &scope_for_rule {
+            let scope_ref = ElementRef::with_ancestors(scope_root.root, &scope_root.ancestors);
+            match_with_shadow_host(
+              allow_shadow_host,
+              &mut context,
+              shadow_host_for_slotted,
+              |ctx| {
+                ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
+                  matches_selector(prelude, 0, None, &slot_ref, ctx)
+                })
+              },
+            )
+          } else {
+            match_with_shadow_host(
+              allow_shadow_host,
+              &mut context,
+              shadow_host_for_slotted,
+              |ctx| matches_selector(prelude, 0, None, &slot_ref, ctx),
+            )
+          };
+          take_matching_error(&mut context)?;
+          if !slot_matches {
+            continue;
+          }
+        }
+
+        let spec = indexed
+          .prelude_specificity
+          .saturating_add(best_arg_specificity)
+          // ::slotted() is a pseudo-element and contributes element-level specificity.
+          .saturating_add(1);
+        best_specificity = Some(best_specificity.map_or(spec, |best| best.max(spec)));
+      }
+
+      if let Some(best_specificity) = best_specificity {
+        if let Some(pos) = pos {
+          if best_specificity > matches[pos].specificity {
+            matches[pos].specificity = best_specificity;
+          }
+        } else {
+          let pos = matches.len();
+          scratch.match_index.insert(rule_idx, pos);
+          matches.push(MatchedRule {
+            origin: rule.origin,
+            specificity: best_specificity,
+            order: rule.order,
+            layer_order: rule.layer_order.clone(),
+            declarations: Cow::Borrowed(&rule.rule.declarations),
+            starting_style: rule.starting_style,
+          });
+        }
+      }
+
+      idx = end;
     }
   }
 
