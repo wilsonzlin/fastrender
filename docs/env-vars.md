@@ -12,7 +12,7 @@ The rendering pipeline parses the environment once into a typed [`RuntimeToggles
 
 ## Pageset disk cache tuning
 
-These are parsed by the pageset CLI binaries (`render_pages`, `pageset_progress`, `fetch_and_render`) and wire into `DiskCacheConfig` when built with the `disk_cache` cargo feature.
+These are parsed by the pageset CLI binaries (`prefetch_assets`, `render_pages`, `pageset_progress`, `fetch_and_render`) and wire into `DiskCacheConfig` when built with the `disk_cache` cargo feature.
 
 - `FASTR_DISK_CACHE_MAX_BYTES=<bytes>` – on-disk subresource cache size limit (0 disables eviction; default 512MB).
 - `FASTR_DISK_CACHE_MAX_AGE_SECS=<secs>` – cap cached entry age (0 disables age-based expiry; default 7 days).

@@ -57,6 +57,7 @@ Pageset wrappers enable the disk-backed subresource cache by default, persisting
 - Run: `cargo run --release --bin prefetch_assets -- --help`
 - Most useful when built with `--features disk_cache` (so cache entries persist across processes).
 - Key flags: page selection (`--pages`), deterministic sharding (`--shard <index>/<total>`), parallelism (`--jobs`), and fetch timeout (`--timeout`). See `--help` for the full flag list.
+- Disk cache tuning flags (`--disk-cache-max-age-secs`, `--disk-cache-max-bytes`, or `FASTR_DISK_CACHE_MAX_*`) match the pageset render binaries.
 
 ## `render_pages`
 
@@ -135,7 +136,7 @@ Pageset wrappers enable the disk-backed subresource cache by default, persisting
   - `fetch_pages` writes HTML under `fetches/html/` and a `*.html.meta` sidecar with the original content-type and final URL.
   - `render_pages` and `fetch_and_render` use the shared disk-backed fetcher (when built with `--features disk_cache`; enabled by default in `scripts/pageset.sh`, `cargo xtask pageset`, and the profiling scripts) for subresources, writing into `fetches/assets/`. After one online render, you can re-run against the same caches without network access (new URLs will still fail). Use `--no-disk-cache`, `DISK_CACHE=0`, or `NO_DISK_CACHE=1` to opt out.
   - Fresh HTTP caching headers are honored by default for disk-backed fetches; add `--no-http-freshness` to `fetch_and_render`, `render_pages`, or `pageset_progress` to force revalidation even when Cache-Control/Expires mark entries as fresh.
-  - Disk-backed cache tuning (applies to `pageset_progress`, `render_pages`, and `fetch_and_render` when built with `disk_cache`):
+  - Disk-backed cache tuning (applies to `prefetch_assets`, `pageset_progress`, `render_pages`, and `fetch_and_render` when built with `disk_cache`):
     - `--disk-cache-max-age-secs <secs>` (or `FASTR_DISK_CACHE_MAX_AGE_SECS=<secs>`) caps how long cached subresources are trusted before forcing a refetch. Use `0` to disable age-based expiry (never age out).
     - `--disk-cache-max-bytes <bytes>` (or `FASTR_DISK_CACHE_MAX_BYTES=<bytes>`) sets the eviction budget for on-disk cached bytes. Use `0` to disable eviction.
     - Defaults are `512MB` and `7d`. Example: `pageset_progress run --disk-cache-max-age-secs 0` keeps cached subresources pinned to avoid surprise refetches during short timeout runs.

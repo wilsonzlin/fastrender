@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Convenience wrapper for the main planner loop:
-#   fetch_pages -> pageset_progress
+#   fetch_pages -> prefetch_assets -> pageset_progress
 #
 # Environment overrides:
 #   JOBS=8 FETCH_TIMEOUT=30 RENDER_TIMEOUT=5 DISK_CACHE=0 NO_DISK_CACHE=1
