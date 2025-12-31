@@ -66,8 +66,6 @@ impl Default for DiskCacheConfig {
       max_age: Some(Duration::from_secs(60 * 60 * 24 * 7)), // 7 days
       lock_stale_after: DEFAULT_LOCK_STALE_AFTER,
       namespace: None,
-      lock_stale_after: DEFAULT_LOCK_STALE_AFTER,
-      namespace: None,
     }
   }
 }
