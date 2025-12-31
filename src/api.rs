@@ -1790,6 +1790,13 @@ impl RenderStatsRecorder {
     }
   }
 
+  fn add_ms(target: &mut Option<f64>, start: Option<Instant>) {
+    if let Some(s) = start {
+      let elapsed = s.elapsed().as_secs_f64() * 1000.0;
+      *target = Some(target.as_ref().copied().unwrap_or(0.0) + elapsed);
+    }
+  }
+
   fn record_fetch(&mut self, kind: ResourceKind) {
     *self.stats.resources.fetch_counts.entry(kind).or_default() += 1;
   }
@@ -3509,7 +3516,6 @@ impl FastRender {
     let result = (|| -> Result<RenderOutputs> {
       self.device_pixel_ratio = resolved_viewport.device_pixel_ratio;
       self.pending_device_size = Some(resolved_viewport.visual_viewport);
-      let layout_timer = stats.as_deref().and_then(|rec| rec.timer());
       let layout_artifacts = self.layout_document_for_media_with_artifacts(
         &dom,
         layout_width,
@@ -3522,9 +3528,9 @@ impl FastRender {
         deadline,
         trace,
         layout_parallelism,
+        stats.as_deref_mut(),
       )?;
       if let Some(rec) = stats.as_deref_mut() {
-        RenderStatsRecorder::record_ms(&mut rec.stats.timings.layout_ms, layout_timer);
         rec.stats.counts.styled_nodes = Some(count_styled_nodes_api(&layout_artifacts.styled_tree));
         rec.stats.counts.box_nodes = Some(count_box_nodes_api(&layout_artifacts.box_tree.root));
         rec.stats.counts.fragments = Some(layout_artifacts.fragment_tree.fragment_count());
@@ -3912,6 +3918,7 @@ impl FastRender {
         None,
         &trace,
         layout_parallelism,
+        None,
       )
     })();
 
@@ -5223,6 +5230,7 @@ impl FastRender {
       None,
       &trace,
       self.layout_parallelism,
+      None,
     )?;
     let LayoutArtifacts {
       dom,
@@ -5259,6 +5267,7 @@ impl FastRender {
       deadline,
       &trace,
       self.layout_parallelism,
+      None,
     )?;
     Ok(artifacts.fragment_tree)
   }
@@ -5274,6 +5283,7 @@ impl FastRender {
     deadline: Option<&RenderDeadline>,
     trace: &TraceHandle,
     layout_parallelism: LayoutParallelism,
+    mut stats: Option<&mut RenderStatsRecorder>,
   ) -> Result<LayoutArtifacts> {
     let _deadline_guard = DeadlineGuard::install(deadline);
     let toggles = runtime::runtime_toggles();
@@ -5300,11 +5310,11 @@ impl FastRender {
     // CSS fetching/parsing happens before cascade; keep the stage heartbeat in sync so
     // render runners can attribute stalls/timeouts correctly.
     record_stage(StageHeartbeat::CssInline);
+    let css_parse_timer = stats.as_deref().and_then(|rec| rec.timer());
     let css_parse_start = timings_enabled.then(Instant::now);
     let mut media_query_cache = MediaQueryCache::default();
     let style_set = {
       let _span = trace.span("css_parse", "style");
-      record_stage(StageHeartbeat::CssInline);
       self.collect_document_style_set(&dom_with_state, &media_ctx, &mut media_query_cache)?
     };
     let mut stylesheet = style_set.document.clone();
@@ -5335,9 +5345,14 @@ impl FastRender {
     let keyframes =
       stylesheet.collect_keyframes_with_cache(&media_ctx, Some(&mut media_query_cache));
     let has_container_queries = stylesheet.has_container_rules();
+    if let Some(rec) = stats.as_deref_mut() {
+      RenderStatsRecorder::add_ms(&mut rec.stats.timings.css_parse_ms, css_parse_timer);
+    }
     if let Some(start) = style_load_start {
       eprintln!("timing:style_prepare {:?}", start.elapsed());
     }
+
+    let cascade_timer = stats.as_deref().and_then(|rec| rec.timer());
     let style_apply_start = timings_enabled.then(Instant::now);
     record_stage(StageHeartbeat::Cascade);
     let mut styled_tree = {
@@ -5450,6 +5465,10 @@ impl FastRender {
       None
     };
 
+    if let Some(rec) = stats.as_deref_mut() {
+      RenderStatsRecorder::add_ms(&mut rec.stats.timings.cascade_ms, cascade_timer);
+    }
+
     if let Some(start) = stage_start.as_mut() {
       let now = Instant::now();
       eprintln!("timing:cascade {:?}", now - *start);
@@ -5457,6 +5476,7 @@ impl FastRender {
     }
 
     // Generate box tree
+    let box_tree_timer = stats.as_deref().and_then(|rec| rec.timer());
     let box_gen_options = self.box_generation_options();
     let box_gen_start = timings_enabled.then(Instant::now);
     let mut box_tree = {
@@ -5482,6 +5502,9 @@ impl FastRender {
     }
     if let Some(start) = intrinsic_start {
       eprintln!("timing:intrinsic_sizes {:?}", start.elapsed());
+    }
+    if let Some(rec) = stats.as_deref_mut() {
+      RenderStatsRecorder::add_ms(&mut rec.stats.timings.box_tree_ms, box_tree_timer);
     }
 
     if let Some(start) = stage_start.as_mut() {
@@ -5699,6 +5722,7 @@ impl FastRender {
         layout_viewport.height,
       )))
     };
+    let layout_timer = stats.as_deref().and_then(|rec| rec.timer());
     let mut fragment_tree = self
       .layout_engine
       .layout_tree_with_trace(&box_tree, trace)
@@ -5711,6 +5735,9 @@ impl FastRender {
           message: format!("Layout failed: {:?}", other),
         }),
       })?;
+    if let Some(rec) = stats.as_deref_mut() {
+      RenderStatsRecorder::add_ms(&mut rec.stats.timings.layout_ms, layout_timer);
+    }
     let capture_container_fields = toggles.truthy("FASTR_LOG_CONTAINER_FIELDS");
     let first_styled_snapshot = if has_container_queries && capture_container_fields {
       Some(styled_tree.clone())
@@ -5766,6 +5793,7 @@ impl FastRender {
         }
         let log_container_ids = toggles.usize_list("FASTR_LOG_CONTAINER_IDS");
 
+        let container_cascade_timer = stats.as_deref().and_then(|rec| rec.timer());
         let new_styled_tree = apply_style_set_with_media_target_and_imports_cached_with_deadline(
           &dom_with_state,
           &style_set,
@@ -5823,6 +5851,9 @@ impl FastRender {
           let mut box_map = HashMap::new();
           collect_box_nodes(&box_tree.root, &mut box_map);
           refresh_fragment_styles(&mut fragment_tree.root, &box_map, &style_map);
+          if let Some(rec) = stats.as_deref_mut() {
+            RenderStatsRecorder::add_ms(&mut rec.stats.timings.cascade_ms, container_cascade_timer);
+          }
         } else {
           if log_container_pass {
             let mut diff = 0usize;
@@ -5886,6 +5917,12 @@ impl FastRender {
               }
             }
           }
+
+          if let Some(rec) = stats.as_deref_mut() {
+            RenderStatsRecorder::add_ms(&mut rec.stats.timings.cascade_ms, container_cascade_timer);
+          }
+
+          let container_box_tree_timer = stats.as_deref().and_then(|rec| rec.timer());
           box_tree =
             crate::tree::box_generation::generate_box_tree_with_anonymous_fixup(&styled_tree)?;
           self.resolve_replaced_intrinsic_sizes_for_media(
@@ -5898,6 +5935,12 @@ impl FastRender {
             &box_gen_options,
           )?;
           self.resolve_replaced_intrinsic_sizes(&mut box_tree.root, layout_viewport);
+          if let Some(rec) = stats.as_deref_mut() {
+            RenderStatsRecorder::add_ms(
+              &mut rec.stats.timings.box_tree_ms,
+              container_box_tree_timer,
+            );
+          }
 
           intrinsic_cache_clear();
           if report_intrinsic {
@@ -5922,6 +5965,7 @@ impl FastRender {
           };
 
           layout_start = timings_enabled.then(Instant::now);
+          let relayout_timer = stats.as_deref().and_then(|rec| rec.timer());
           fragment_tree = self
             .layout_engine
             .layout_tree_reuse_caches_with_trace(&box_tree, trace)
@@ -5930,6 +5974,9 @@ impl FastRender {
                 message: format!("Layout failed: {:?}", e),
               })
             })?;
+          if let Some(rec) = stats.as_deref_mut() {
+            RenderStatsRecorder::add_ms(&mut rec.stats.timings.layout_ms, relayout_timer);
+          }
         }
       }
     }
@@ -5977,6 +6024,7 @@ impl FastRender {
     }
 
     if !page_rules.is_empty() {
+      let paginate_timer = stats.as_deref().and_then(|rec| rec.timer());
       let viewport = first_page_style
         .as_ref()
         .map(|s| s.total_size)
@@ -6004,6 +6052,9 @@ impl FastRender {
       })?;
       fragment_tree = FragmentTree::from_fragments(pages, viewport);
       fragment_tree.ensure_scroll_metadata();
+      if let Some(rec) = stats.as_deref_mut() {
+        RenderStatsRecorder::add_ms(&mut rec.stats.timings.layout_ms, paginate_timer);
+      }
     }
 
     if let Some(defs) = svg_filter_defs.clone() {
@@ -6093,6 +6144,7 @@ impl FastRender {
       None,
       &trace,
       self.layout_parallelism,
+      None,
     )?;
 
     crate::debug::inspect::inspect(
@@ -9087,8 +9139,10 @@ mod tests {
     set_stage_listener(Some(listener));
     let _guard = StageListenerGuard;
 
-    let fetcher = MapFetcher::default()
-      .with_entry("https://example.com/style.css", "body { color: rgb(255, 0, 0); }");
+    let fetcher = MapFetcher::default().with_entry(
+      "https://example.com/style.css",
+      "body { color: rgb(255, 0, 0); }",
+    );
     let mut renderer = FastRender::builder()
       .base_url("https://example.com/")
       .fetcher(Arc::new(fetcher))
@@ -9139,6 +9193,31 @@ mod tests {
       css_idx < cascade_idx,
       "expected CssInline stage before Cascade stage, got: {stages:?}"
     );
+  }
+
+  #[test]
+  fn diagnostics_populates_style_and_layout_stage_timings() {
+    let mut renderer = FastRender::new().unwrap();
+    let html = r#"<!DOCTYPE html>
+<style>div { color: red; }</style>
+<div>Hello</div>"#;
+
+    let options = RenderOptions::new()
+      .with_viewport(64, 64)
+      .with_diagnostics_level(DiagnosticsLevel::Basic);
+    let result = renderer
+      .render_html_with_diagnostics(html, options)
+      .unwrap();
+
+    let stats = result
+      .diagnostics
+      .stats
+      .as_ref()
+      .expect("expected RenderDiagnostics.stats when diagnostics are enabled");
+    assert!(stats.timings.css_parse_ms.is_some());
+    assert!(stats.timings.cascade_ms.is_some());
+    assert!(stats.timings.box_tree_ms.is_some());
+    assert!(stats.timings.layout_ms.is_some());
   }
 
   #[test]
