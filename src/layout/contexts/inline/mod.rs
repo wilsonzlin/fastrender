@@ -65,7 +65,7 @@ use crate::layout::utils::border_size_from_box_sizing;
 use crate::layout::utils::compute_replaced_size;
 use crate::layout::utils::resolve_font_relative_length;
 use crate::layout::utils::resolve_length_with_percentage_metrics;
-use crate::render_control::{check_active, check_active_periodic};
+use crate::render_control::{active_deadline, check_active, check_active_periodic, with_deadline};
 use crate::style::display::Display;
 use crate::style::display::FormattingContextType;
 use crate::style::types::Direction;
@@ -130,6 +130,7 @@ use line_builder::RunningInfo;
 use line_builder::StaticPositionAnchor;
 use line_builder::TabItem;
 use line_builder::TextItem;
+use rayon::prelude::*;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::atomic::AtomicUsize;
@@ -8047,11 +8048,12 @@ impl InlineFormattingContext {
       };
 
       let abs = AbsoluteLayout::with_font_context(self.font_context.clone());
-      for PositionedChild {
-        node: child,
-        containing_block_id,
-      } in positioned_children
-      {
+      let font_context = self.font_context.clone();
+      let viewport_size = self.viewport_size;
+      let layout_positioned_child = |PositionedChild {
+                                       node: child,
+                                       containing_block_id,
+                                     }| {
         let custom_cb = containing_block_id
           .and_then(|id| positioned_containing_blocks.get(&id))
           .copied();
@@ -8060,7 +8062,7 @@ impl InlineFormattingContext {
           crate::style::position::Position::Fixed
         ) {
           (
-            ContainingBlock::viewport(self.viewport_size),
+            ContainingBlock::viewport(viewport_size),
             custom_cb.is_some(),
           )
         } else if let Some(cb) = custom_cb {
@@ -8092,8 +8094,8 @@ impl InlineFormattingContext {
         layout_child.style = Arc::new(child_style);
 
         let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
-          self.font_context.clone(),
-          self.viewport_size,
+          font_context.clone(),
+          viewport_size,
           child_cb,
         );
         let fc_type = layout_child
@@ -8108,12 +8110,8 @@ impl InlineFormattingContext {
             .unwrap_or(AvailableSpace::Indefinite),
         );
         let mut child_fragment = fc.layout(&layout_child, &child_constraints)?;
-        let positioned_style = resolve_positioned_style(
-          &child.style,
-          &child_cb,
-          self.viewport_size,
-          &self.font_context,
-        );
+        let positioned_style =
+          resolve_positioned_style(&child.style, &child_cb, viewport_size, &font_context);
         let needs_inline_intrinsics = positioned_style.width.is_auto()
           && (positioned_style.left.is_auto()
             || positioned_style.right.is_auto()
@@ -8171,7 +8169,28 @@ impl InlineFormattingContext {
         }
         child_fragment.bounds = Rect::new(result.position, result.size);
         child_fragment.style = Some(original_style);
-        merged_children.push(child_fragment);
+        Ok(child_fragment)
+      };
+
+      if self
+        .parallelism
+        .should_parallelize(positioned_children.len())
+      {
+        let deadline = active_deadline();
+        let positioned_fragments = positioned_children
+          .into_par_iter()
+          .map(|child| {
+            with_deadline(deadline.as_ref(), || {
+              crate::layout::engine::debug_record_parallel_work();
+              layout_positioned_child(child)
+            })
+          })
+          .collect::<Result<Vec<_>, _>>()?;
+        merged_children.extend(positioned_fragments);
+      } else {
+        for child in positioned_children {
+          merged_children.push(layout_positioned_child(child)?);
+        }
       }
     }
 
@@ -9371,6 +9390,7 @@ mod tests {
   use crate::style::color::Rgba;
   use crate::style::display::Display;
   use crate::style::display::FormattingContextType;
+  use crate::style::position::Position;
   use crate::style::types::CaseTransform;
   use crate::style::types::FontSizeAdjust;
   use crate::style::types::HyphensMode;
@@ -9398,6 +9418,7 @@ mod tests {
   use crate::tree::box_tree::ReplacedType;
   use crate::tree::box_tree::{self};
   use crate::tree::fragment_tree::FragmentContent;
+  use rayon::ThreadPoolBuilder;
   use std::sync::Arc;
 
   fn default_style() -> Arc<ComputedStyle> {
@@ -9451,6 +9472,52 @@ mod tests {
       max_expected,
       max_actual
     );
+  }
+
+  #[test]
+  fn positioned_children_layout_parallelism_preserves_order_and_count() {
+    let mut children = vec![make_text_box("anchor")];
+    for idx in 0..64usize {
+      let mut style = ComputedStyle::default();
+      style.font_size = 16.0;
+      style.position = Position::Absolute;
+      style.left = Some(Length::px(idx as f32));
+      style.top = Some(Length::px(0.0));
+      style.width = Some(Length::px(1.0));
+      style.height = Some(Length::px(1.0));
+      let abs_child = BoxNode::new_block(Arc::new(style), FormattingContextType::Block, vec![]);
+      children.push(abs_child);
+    }
+    let root = make_inline_container(children);
+
+    let pool = ThreadPoolBuilder::new()
+      .num_threads(2)
+      .build()
+      .expect("thread pool");
+    let fragment = pool.install(|| {
+      assert!(rayon::current_num_threads() > 1);
+      let ifc = InlineFormattingContext::new().with_parallelism(LayoutParallelism::enabled(8));
+      assert!(ifc.parallelism.should_parallelize(64));
+      let constraints = LayoutConstraints::definite_width(200.0);
+      ifc.layout(&root, &constraints).expect("layout")
+    });
+
+    let mut abs_x_positions = Vec::new();
+    for child in fragment.children.iter() {
+      if matches!(
+        child.style.as_deref().map(|s| s.position),
+        Some(Position::Absolute)
+      ) {
+        abs_x_positions.push(child.bounds.x());
+      }
+    }
+    assert_eq!(abs_x_positions.len(), 64);
+    for (idx, x) in abs_x_positions.into_iter().enumerate() {
+      assert!(
+        (x - idx as f32).abs() < 1e-3,
+        "expected positioned child {idx} x≈{idx}, got {x}"
+      );
+    }
   }
 
   #[test]

@@ -21,7 +21,9 @@ fn timeout_records_stage_and_hotspot() {
   assert_eq!(value["status"], json!("timeout"));
   assert_eq!(
     value["hotspot"],
-    json!(pageset_progress::hotspot_from_timeout_stage(RenderStage::Cascade))
+    json!(pageset_progress::hotspot_from_timeout_stage(
+      RenderStage::Cascade
+    ))
   );
   assert_eq!(value["timeout_stage"], json!("cascade"));
 }

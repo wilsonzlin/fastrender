@@ -136,10 +136,10 @@ fn diffuse_lighting_colors_flat_surface() {
       height: SvgLength::Number(1.0),
       units: SvgFilterUnits::UserSpaceOnUse,
     },
-  filter_res: None,
-  primitive_units: SvgFilterUnits::UserSpaceOnUse,
-  fingerprint: 0,
-});
+    filter_res: None,
+    primitive_units: SvgFilterUnits::UserSpaceOnUse,
+    fingerprint: 0,
+  });
 
   apply_svg_filter(&filter, &mut pixmap, 1.0, bbox).unwrap();
 
@@ -181,10 +181,10 @@ fn specular_lighting_colors_flat_surface() {
       height: SvgLength::Number(1.0),
       units: SvgFilterUnits::UserSpaceOnUse,
     },
-  filter_res: None,
-  primitive_units: SvgFilterUnits::UserSpaceOnUse,
-  fingerprint: 0,
-});
+    filter_res: None,
+    primitive_units: SvgFilterUnits::UserSpaceOnUse,
+    fingerprint: 0,
+  });
 
   apply_svg_filter(&filter, &mut pixmap, 1.0, bbox).unwrap();
 
@@ -223,10 +223,10 @@ fn render_diffuse(color_space: ColorInterpolationFilters) -> PremultipliedColorU
       height: SvgLength::Number(1.0),
       units: SvgFilterUnits::UserSpaceOnUse,
     },
-  filter_res: None,
-  primitive_units: SvgFilterUnits::UserSpaceOnUse,
-  fingerprint: 0,
-});
+    filter_res: None,
+    primitive_units: SvgFilterUnits::UserSpaceOnUse,
+    fingerprint: 0,
+  });
 
   apply_svg_filter(&filter, &mut pixmap, 1.0, bbox).unwrap();
   pixmap.pixel(0, 0).unwrap().clone()
@@ -296,10 +296,10 @@ fn userspace_percent_regions_resolve_against_bbox() {
       height: SvgLength::Number(bbox.height()),
       units: SvgFilterUnits::UserSpaceOnUse,
     },
-  filter_res: None,
-  primitive_units: SvgFilterUnits::UserSpaceOnUse,
-  fingerprint: 0,
-});
+    filter_res: None,
+    primitive_units: SvgFilterUnits::UserSpaceOnUse,
+    fingerprint: 0,
+  });
 
   apply_svg_filter(&filter, &mut pixmap, 1.0, bbox).unwrap();
 
@@ -337,10 +337,10 @@ fn point_light_percentages_follow_bbox_in_userspace() {
       height: SvgLength::Number(4.0),
       units: SvgFilterUnits::UserSpaceOnUse,
     },
-  filter_res: None,
-  primitive_units: SvgFilterUnits::UserSpaceOnUse,
-  fingerprint: 0,
-});
+    filter_res: None,
+    primitive_units: SvgFilterUnits::UserSpaceOnUse,
+    fingerprint: 0,
+  });
 
   apply_svg_filter(&filter, &mut pixmap, 1.0, bbox).unwrap();
 
