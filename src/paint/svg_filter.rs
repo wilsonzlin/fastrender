@@ -249,8 +249,13 @@ impl SvgFilterCacheKey {
     if pixmap.width() == 0 || pixmap.height() == 0 {
       return None;
     }
+    debug_assert_eq!(
+      filter.fingerprint,
+      svg_filter_fingerprint(filter),
+      "SvgFilter fingerprint out of date; call SvgFilter::refresh_fingerprint after mutating"
+    );
     Some(Self {
-      filter_hash: svg_filter_fingerprint(filter),
+      filter_hash: filter.fingerprint,
       source_hash: pixel_fingerprint_in_region(pixmap, filter_region),
       scale_x_bits: scale_x.to_bits(),
       scale_y_bits: scale_y.to_bits(),
@@ -286,22 +291,35 @@ impl FilterResultCache {
     }
   }
 
-  fn get(&mut self, key: &SvgFilterCacheKey) -> Option<Pixmap> {
-    let hit = self.lru.get(key).map(|entry| entry.pixmap.clone());
-    if hit.is_some() {
+  fn can_cache_bytes(&self, len: usize) -> bool {
+    if self.config.max_items == 0 {
+      return false;
+    }
+    if self.config.max_bytes > 0 && len > self.config.max_bytes {
+      return false;
+    }
+    true
+  }
+
+  fn copy_into(&mut self, key: &SvgFilterCacheKey, dst: &mut Pixmap) -> bool {
+    let hit = self.lru.get(key);
+    if let Some(entry) = hit {
+      if entry.pixmap.width() == dst.width() && entry.pixmap.height() == dst.height() {
+        dst.data_mut().copy_from_slice(entry.pixmap.data());
+      } else {
+        *dst = entry.pixmap.clone();
+      }
       record_filter_cache_hit();
+      true
     } else {
       record_filter_cache_miss();
+      false
     }
-    hit
   }
 
   fn insert(&mut self, key: SvgFilterCacheKey, pixmap: &Pixmap) {
-    if self.config.max_items == 0 {
-      return;
-    }
     let weight = pixmap.data().len();
-    if self.config.max_bytes > 0 && weight > self.config.max_bytes {
+    if !self.can_cache_bytes(weight) {
       return;
     }
 
@@ -2635,7 +2653,8 @@ fn apply_svg_filter_scaled(
 
   let cache_config = filter_result_cache_config();
   let weight = pixmap.data().len();
-  let cacheable = cache_config.max_items > 0 && (cache_config.max_bytes == 0 || weight <= cache_config.max_bytes);
+  let cacheable =
+    cache_config.max_items > 0 && (cache_config.max_bytes == 0 || weight <= cache_config.max_bytes);
 
   let cache_key = if cacheable {
     SvgFilterCacheKey::new(def, pixmap, scale_x, scale_y, css_bbox, filter_region)
@@ -2644,9 +2663,7 @@ fn apply_svg_filter_scaled(
   };
   if let Some(key) = cache_key.as_ref() {
     if let Ok(mut cache) = filter_result_cache().lock() {
-      if let Some(cached) = cache.get(key) {
-        *pixmap = cached;
-        clip_to_region(pixmap, filter_region);
+      if cache.copy_into(key, pixmap) {
         return Ok(());
       }
     }
@@ -5610,7 +5627,13 @@ mod filter_result_cache_tests {
     let mut first = make_source_pixmap(8, 8);
     let mut second = make_source_pixmap(8, 8);
     apply_svg_filter(&filter, &mut first, 1.0, bbox).unwrap();
+    let ptr_before = second.data().as_ptr();
     apply_svg_filter(&filter, &mut second, 1.0, bbox).unwrap();
+    assert_eq!(
+      ptr_before,
+      second.data().as_ptr(),
+      "cache hit should copy into destination pixmap without reallocating"
+    );
     let _ = filter_result_cache_len();
 
     let stats = take_paint_diagnostics().expect("diagnostics enabled");
