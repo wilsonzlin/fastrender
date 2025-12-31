@@ -9736,17 +9736,24 @@ fn build_rounded_rect_mask(
     return None;
   }
 
-  let mut mask_pixmap = new_pixmap(canvas_w, canvas_h)?;
-  let _ = fill_rounded_rect(
-    &mut mask_pixmap,
+  let Some(path) = crate::paint::rasterize::build_rounded_rect_path(
     rect.x(),
     rect.y(),
     rect.width(),
     rect.height(),
     &radii,
-    Rgba::new(255, 255, 255, 1.0),
+  ) else {
+    return None;
+  };
+
+  let mut mask = Mask::new(canvas_w, canvas_h)?;
+  mask.fill_path(
+    &path,
+    tiny_skia::FillRule::Winding,
+    true,
+    Transform::identity(),
   );
-  Some(Mask::from_pixmap(mask_pixmap.as_ref(), MaskType::Alpha))
+  Some(mask)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -15583,6 +15590,54 @@ mod tests {
         }
       }
     }
+  }
+
+  fn build_rounded_rect_mask_reference(
+    rect: Rect,
+    radii: BorderRadii,
+    canvas_w: u32,
+    canvas_h: u32,
+  ) -> Option<Mask> {
+    if canvas_w == 0 || canvas_h == 0 || rect.width() <= 0.0 || rect.height() <= 0.0 {
+      return None;
+    }
+    let mut mask_pixmap = new_pixmap(canvas_w, canvas_h)?;
+    let _ = fill_rounded_rect(
+      &mut mask_pixmap,
+      rect.x(),
+      rect.y(),
+      rect.width(),
+      rect.height(),
+      &radii,
+      Rgba::new(255, 255, 255, 1.0),
+    );
+    Some(Mask::from_pixmap(mask_pixmap.as_ref(), MaskType::Alpha))
+  }
+
+  #[test]
+  fn rounded_rect_mask_matches_reference() {
+    let rect = Rect::from_xywh(1.0, 1.0, 8.0, 8.0);
+    let radii = BorderRadii::uniform(3.0);
+
+    let optimized = build_rounded_rect_mask(rect, radii, 10, 10).expect("mask");
+    let reference = build_rounded_rect_mask_reference(rect, radii, 10, 10).expect("mask");
+
+    assert_eq!(optimized.data(), reference.data());
+  }
+
+  #[test]
+  fn rounded_rect_mask_avoids_new_pixmap_allocations() {
+    let rect = Rect::from_xywh(1.0, 1.0, 8.0, 8.0);
+    let radii = BorderRadii::uniform(2.0);
+    let recorder = NewPixmapAllocRecorder::start();
+
+    let _mask = build_rounded_rect_mask(rect, radii, 10, 10).expect("mask");
+
+    let allocs = recorder.take();
+    assert!(
+      allocs.is_empty(),
+      "expected build_rounded_rect_mask to avoid new_pixmap allocations, got {allocs:?}"
+    );
   }
 
   #[test]
