@@ -880,6 +880,139 @@ fn gaussian_blur_box_approx(pixmap: &mut Pixmap, sigma: f32) -> Result<bool, Ren
   gaussian_blur_box_approx_with_parallelism(pixmap, sigma, BlurParallelism::Auto)
 }
 
+fn gaussian_blur_box_approx_anisotropic_with_parallelism(
+  pixmap: &mut Pixmap,
+  sigma_x: f32,
+  sigma_y: f32,
+  parallelism: BlurParallelism,
+) -> Result<bool, RenderError> {
+  let sigma_x = sigma_x.abs();
+  let sigma_y = sigma_y.abs();
+  if sigma_x <= 0.0 && sigma_y <= 0.0 {
+    return Ok(false);
+  }
+  let width = pixmap.width() as usize;
+  let height = pixmap.height() as usize;
+  if width == 0 || height == 0 {
+    return Ok(false);
+  }
+
+  let use_parallel = match parallelism {
+    BlurParallelism::Serial => false,
+    BlurParallelism::Auto => blur_should_parallelize(width, height),
+  };
+
+  let len = blur_buffer_len(width, height, "anisotropic box blur")?;
+  let mut error: Option<RenderError> = None;
+  let mut skipped = false;
+  BLUR_SCRATCH.with(|scratch| {
+    let mut scratch = scratch.borrow_mut();
+    let (a, b) = match scratch.split(len, "anisotropic box blur") {
+      Ok(parts) => parts,
+      Err(err) => {
+        error = Some(err);
+        return;
+      }
+    };
+    a[..len].copy_from_slice(pixmap.data());
+
+    let sizes_x = box_sizes_for_gauss(sigma_x, 3);
+    let sizes_y = box_sizes_for_gauss(sigma_y, 3);
+
+    let mut cur = &mut a[..len];
+    let mut tmp = &mut b[..len];
+
+    if !use_parallel {
+      let mut deadline_counter = 0usize;
+      for size in sizes_x {
+        let radius = size.saturating_sub(1) / 2;
+        if radius == 0 {
+          continue;
+        }
+        if box_blur_h(&cur[..], tmp, width, height, radius, &mut deadline_counter) {
+          skipped = true;
+          return;
+        }
+        std::mem::swap(&mut cur, &mut tmp);
+      }
+      for size in sizes_y {
+        let radius = size.saturating_sub(1) / 2;
+        if radius == 0 {
+          continue;
+        }
+        if box_blur_v(&cur[..], tmp, width, height, radius, &mut deadline_counter) {
+          skipped = true;
+          return;
+        }
+        std::mem::swap(&mut cur, &mut tmp);
+      }
+      pixmap.data_mut().copy_from_slice(&cur[..len]);
+      return;
+    }
+
+    let deadline = active_deadline();
+    let deadline_enabled = deadline.as_ref().map_or(false, |d| d.is_enabled());
+    let cancelled = AtomicBool::new(false);
+    let deadline_counter = AtomicUsize::new(0);
+
+    for size in sizes_x {
+      let radius = size.saturating_sub(1) / 2;
+      if radius == 0 {
+        continue;
+      }
+      if box_blur_h_parallel(
+        &cur[..],
+        tmp,
+        width,
+        height,
+        radius,
+        &deadline,
+        deadline_enabled,
+        &cancelled,
+        &deadline_counter,
+      ) {
+        skipped = true;
+        return;
+      }
+      std::mem::swap(&mut cur, &mut tmp);
+    }
+    for size in sizes_y {
+      let radius = size.saturating_sub(1) / 2;
+      if radius == 0 {
+        continue;
+      }
+      if box_blur_v_parallel(
+        &cur[..],
+        tmp,
+        width,
+        height,
+        radius,
+        &deadline,
+        deadline_enabled,
+        &cancelled,
+        &deadline_counter,
+      ) {
+        skipped = true;
+        return;
+      }
+      std::mem::swap(&mut cur, &mut tmp);
+    }
+
+    if cancelled.load(Ordering::Relaxed) {
+      skipped = true;
+      return;
+    }
+
+    pixmap.data_mut().copy_from_slice(&cur[..len]);
+  });
+
+  if let Some(err) = error {
+    Err(err)
+  } else {
+    Ok(!skipped)
+  }
+}
+
 fn gaussian_blur_box_approx_with_parallelism(
   pixmap: &mut Pixmap,
   sigma: f32,
@@ -1044,6 +1177,11 @@ fn blur_anisotropic_body_with_parallelism(
   let height = pixmap.height() as usize;
   if width == 0 || height == 0 {
     return Ok(false);
+  }
+
+  let fast_enabled = runtime::runtime_toggles().truthy("FASTR_FAST_BLUR");
+  if !fast_enabled && sigma_x > FAST_GAUSS_THRESHOLD_SIGMA && sigma_y > FAST_GAUSS_THRESHOLD_SIGMA {
+    return gaussian_blur_box_approx_anisotropic_with_parallelism(pixmap, sigma_x, sigma_y, parallelism);
   }
 
   let (kernel_x, radius_x, scale_x) = gaussian_kernel_fixed(sigma_x);
@@ -1988,6 +2126,19 @@ mod tests {
       serial.data(),
       parallel.data(),
       "anisotropic gaussian output mismatch"
+    );
+
+    let mut serial = base.clone();
+    blur_anisotropic_body_with_parallelism(&mut serial, 8.0, 12.0, BlurParallelism::Serial).unwrap();
+    let mut parallel = base.clone();
+    pool.install(|| {
+      blur_anisotropic_body_with_parallelism(&mut parallel, 8.0, 12.0, BlurParallelism::Auto)
+        .unwrap();
+    });
+    assert_eq!(
+      serial.data(),
+      parallel.data(),
+      "anisotropic box blur output mismatch"
     );
   }
 }
