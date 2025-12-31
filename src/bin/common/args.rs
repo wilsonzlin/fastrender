@@ -313,6 +313,7 @@ impl DiskCacheArgs {
     fastrender::resource::DiskCacheConfig {
       max_bytes: self.max_bytes,
       max_age: disk_cache_max_age_from_secs(self.max_age_secs),
+      ..fastrender::resource::DiskCacheConfig::default()
     }
   }
 }

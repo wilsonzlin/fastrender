@@ -129,6 +129,18 @@ pub fn build_http_fetcher(
   fetcher
 }
 
+/// Compute a stable namespace for the disk-backed subresource cache based on request headers.
+///
+/// The disk cache is keyed by URL only by default; callers that vary headers between runs
+/// (e.g. `User-Agent` or `Accept-Language`) should provide a namespace to avoid cross-contaminating
+/// variants.
+#[cfg(feature = "disk_cache")]
+pub fn disk_cache_namespace(user_agent: &str, accept_language: &str) -> String {
+  let ua = fastrender::resource::normalize_user_agent_for_log(user_agent).trim();
+  let lang = accept_language.trim();
+  format!("user-agent:{ua}\naccept-language:{lang}")
+}
+
 /// Rendered HTML along with its resolved base information.
 #[derive(Debug, Clone)]
 pub struct PreparedDocument {

@@ -52,6 +52,11 @@ pub struct DiskCacheConfig {
   /// `.lock` file behind. Keeping this small avoids long stretches where disk caching is disabled
   /// due to a dead writer.
   pub lock_stale_after: Duration,
+  /// Optional namespace used to partition the cache across differing request headers.
+  ///
+  /// When unset or empty, keys are hashed exactly like the legacy cache (`sha256(url)`) for
+  /// backwards compatibility.
+  pub namespace: Option<String>,
 }
 
 impl Default for DiskCacheConfig {
@@ -60,6 +65,9 @@ impl Default for DiskCacheConfig {
       max_bytes: 512 * 1024 * 1024,
       max_age: Some(Duration::from_secs(60 * 60 * 24 * 7)), // 7 days
       lock_stale_after: DEFAULT_LOCK_STALE_AFTER,
+      namespace: None,
+      lock_stale_after: DEFAULT_LOCK_STALE_AFTER,
+      namespace: None,
     }
   }
 }
@@ -203,15 +211,20 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     final_url.unwrap_or(requested).to_string()
   }
 
-  fn cache_key(url: &str) -> String {
+  fn cache_key(&self, url: &str) -> String {
     let mut hasher = Sha256::new();
+    let namespace = self.disk_config.namespace.as_deref().unwrap_or("");
+    if !namespace.is_empty() {
+      hasher.update(namespace.as_bytes());
+      hasher.update(b"\n");
+    }
     hasher.update(url.as_bytes());
     let digest = hasher.finalize();
     digest.iter().map(|b| format!("{:02x}", b)).collect()
   }
 
   fn data_path(&self, url: &str) -> PathBuf {
-    self.cache_dir.join(format!("{}.bin", Self::cache_key(url)))
+    self.cache_dir.join(format!("{}.bin", self.cache_key(url)))
   }
 
   fn meta_path_for_data(&self, data_path: &Path) -> PathBuf {
@@ -223,7 +236,7 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
   fn alias_path(&self, url: &str) -> PathBuf {
     self
       .cache_dir
-      .join(format!("{}.alias", Self::cache_key(url)))
+      .join(format!("{}.alias", self.cache_key(url)))
   }
 
   fn lock_is_active(&self, data_path: &Path) -> bool {
@@ -333,7 +346,7 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
     let mut hops = 0usize;
 
     loop {
-      let key = Self::cache_key(&current);
+      let key = self.cache_key(&current);
       let data_path = self.data_path(&current);
       let meta_path = self.meta_path_for_data(&data_path);
 
@@ -505,7 +518,7 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
 
     self.remove_alias_for(url);
 
-    let key = Self::cache_key(url);
+    let key = self.cache_key(url);
     let data_path = self.data_path(url);
     if let Some(parent) = data_path.parent() {
       let _ = fs::create_dir_all(parent);
@@ -615,7 +628,7 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
   }
 
   fn remove_entry_for_url(&self, url: &str) {
-    let key = Self::cache_key(url);
+    let key = self.cache_key(url);
     let data_path = self.data_path(url);
     let meta_path = self.meta_path_for_data(&data_path);
     let _ = self.remove_entry(&key, &data_path, &meta_path);
@@ -1093,6 +1106,7 @@ mod tests {
       DiskCacheConfig {
         max_bytes: 0,
         max_age: Some(Duration::from_secs(1)),
+        ..DiskCacheConfig::default()
       },
     );
 
@@ -1142,6 +1156,7 @@ mod tests {
       DiskCacheConfig {
         max_bytes: 0,
         max_age: Some(Duration::from_secs(1)),
+        ..DiskCacheConfig::default()
       },
     );
 
@@ -1171,6 +1186,52 @@ mod tests {
       "stale entry should trigger a network call"
     );
     assert_eq!(res.bytes, b"hello");
+  }
+
+  #[test]
+  fn partitions_cache_by_namespace() {
+    let tmp = tempfile::tempdir().unwrap();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let url = "https://example.com/resource";
+
+    let memory_config = CachingFetcherConfig {
+      honor_http_cache_freshness: true,
+      ..CachingFetcherConfig::default()
+    };
+
+    let first_fetcher = CountingFetcher {
+      count: Arc::clone(&counter),
+    };
+    let disk_a = DiskCachingFetcher::with_configs(
+      first_fetcher,
+      tmp.path(),
+      memory_config,
+      DiskCacheConfig {
+        namespace: Some("namespace-a".to_string()),
+        ..DiskCacheConfig::default()
+      },
+    );
+    let _ = disk_a.fetch(url).expect("first fetch");
+    assert_eq!(counter.load(Ordering::SeqCst), 1);
+
+    let second_fetcher = CountingFetcher {
+      count: Arc::clone(&counter),
+    };
+    let disk_b = DiskCachingFetcher::with_configs(
+      second_fetcher,
+      tmp.path(),
+      memory_config,
+      DiskCacheConfig {
+        namespace: Some("namespace-b".to_string()),
+        ..DiskCacheConfig::default()
+      },
+    );
+    let _ = disk_b.fetch(url).expect("second fetch");
+    assert_eq!(
+      counter.load(Ordering::SeqCst),
+      2,
+      "different namespaces should not share disk cache entries"
+    );
   }
 
   #[derive(Clone)]
@@ -1367,6 +1428,7 @@ mod tests {
       DiskCacheConfig {
         max_bytes: 0,
         max_age: Some(Duration::from_secs(0)),
+        ..DiskCacheConfig::default()
       },
     );
     let url = "https://example.com/resource";

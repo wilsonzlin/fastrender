@@ -1325,8 +1325,17 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
     ..CachingFetcherConfig::default()
   };
   #[cfg(feature = "disk_cache")]
+  let mut disk_config = args.disk_cache.to_config();
+  #[cfg(feature = "disk_cache")]
+  {
+    disk_config.namespace = Some(common::render_pipeline::disk_cache_namespace(
+      &args.user_agent,
+      &args.accept_language,
+    ));
+  }
+  #[cfg(feature = "disk_cache")]
   let fetcher: std::sync::Arc<dyn ResourceFetcher> = std::sync::Arc::new(
-    DiskCachingFetcher::with_configs(http, ASSET_DIR, memory_config, args.disk_cache.to_config()),
+    DiskCachingFetcher::with_configs(http, ASSET_DIR, memory_config, disk_config),
   );
   #[cfg(not(feature = "disk_cache"))]
   let fetcher: std::sync::Arc<dyn ResourceFetcher> =
