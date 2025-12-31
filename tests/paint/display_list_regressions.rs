@@ -102,6 +102,7 @@ fn overflow_clip_masks_content() {
         width: 40px;
         height: 40px;
         overflow: hidden;
+        position: relative;
         background: rgb(200 200 200);
       }
       .content {

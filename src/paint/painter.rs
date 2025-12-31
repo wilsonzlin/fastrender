@@ -9747,6 +9747,61 @@ fn build_rounded_rect_mask(
   Some(Mask::from_pixmap(mask_pixmap.as_ref(), MaskType::Alpha))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ClipMaskDirtyRect {
+  x0: u32,
+  y0: u32,
+  x1: u32,
+  y1: u32,
+}
+
+#[derive(Default)]
+struct ClipMaskScratch {
+  pixmap: Option<Pixmap>,
+  dirty: Option<ClipMaskDirtyRect>,
+}
+
+thread_local! {
+  static CLIP_MASK_SCRATCH: RefCell<ClipMaskScratch> = RefCell::new(ClipMaskScratch::default());
+}
+
+fn clear_pixmap_rect_rgba(pixmap: &mut Pixmap, rect: ClipMaskDirtyRect) {
+  if rect.x0 >= rect.x1 || rect.y0 >= rect.y1 {
+    return;
+  }
+  let width = pixmap.width() as usize;
+  let stride = width * 4;
+  let data = pixmap.data_mut();
+  let x0 = rect.x0 as usize * 4;
+  let x1 = rect.x1 as usize * 4;
+  let y0 = rect.y0 as usize;
+  let y1 = rect.y1 as usize;
+  if x0 == 0 && x1 == stride {
+    data[y0 * stride..y1 * stride].fill(0);
+    return;
+  }
+  for row in y0..y1 {
+    let offset = row * stride;
+    data[offset + x0..offset + x1].fill(0);
+  }
+}
+
+fn clip_mask_dirty_bounds(rect: Rect, width: u32, height: u32) -> Option<ClipMaskDirtyRect> {
+  let x0 = rect.x().floor().max(0.0) as u32;
+  let y0 = rect.y().floor().max(0.0) as u32;
+  let x1 = (rect.x() + rect.width()).ceil().max(0.0) as u32;
+  let y1 = (rect.y() + rect.height()).ceil().max(0.0) as u32;
+  let x0 = x0.saturating_sub(1).min(width);
+  let y0 = y0.saturating_sub(1).min(height);
+  let x1 = x1.saturating_add(1).min(width);
+  let y1 = y1.saturating_add(1).min(height);
+  if x0 >= x1 || y0 >= y1 {
+    None
+  } else {
+    Some(ClipMaskDirtyRect { x0, y0, x1, y1 })
+  }
+}
+
 fn apply_clip_mask_rect(pixmap: &mut Pixmap, rect: Rect, radii: BorderRadii) {
   if rect.width() <= 0.0 || rect.height() <= 0.0 {
     return;
@@ -9756,65 +9811,136 @@ fn apply_clip_mask_rect(pixmap: &mut Pixmap, rect: Rect, radii: BorderRadii) {
   if width == 0 || height == 0 {
     return;
   }
-
   let diag_enabled = paint_diagnostics_enabled();
-  let timer = diag_enabled.then(Instant::now);
-  let clip_pixels = if diag_enabled {
-    u64::from(width).saturating_mul(u64::from(height))
-  } else {
-    0
-  };
-  let record = |timer: Option<Instant>| {
-    if let Some(start) = timer {
-      let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-      with_paint_diagnostics(|diag| {
-        diag.clip_mask_calls += 1;
-        diag.clip_mask_ms += elapsed_ms;
-        diag.clip_mask_pixels += clip_pixels;
-      });
-    }
-  };
+  let clip_timer = diag_enabled.then(Instant::now);
+  if diag_enabled {
+    with_paint_diagnostics(|stats| {
+      stats.clip_mask_calls += 1;
+    });
+  }
 
-  let mut mask_pixmap = match new_pixmap(width, height) {
-    Some(p) => p,
-    None => {
-      record(timer);
+  // No-op fast path: clipping to a full-coverage axis-aligned rect without radii.
+  if radii.is_zero() {
+    let right = rect.x() + rect.width();
+    let bottom = rect.y() + rect.height();
+    if rect.x() <= 0.5
+      && rect.y() <= 0.5
+      && right >= width as f32 - 0.5
+      && bottom >= height as f32 - 0.5
+    {
+      if diag_enabled {
+        with_paint_diagnostics(|stats| {
+          if let Some(start) = clip_timer {
+            stats.clip_mask_ms += start.elapsed().as_secs_f64() * 1000.0;
+          }
+        });
+      }
       return;
     }
-  };
-  let clamped = radii.clamped(rect.width(), rect.height());
-  let _ = fill_rounded_rect(
-    &mut mask_pixmap,
-    rect.x(),
-    rect.y(),
-    rect.width(),
-    rect.height(),
-    &clamped,
-    Rgba::new(255, 255, 255, 1.0),
-  );
+  }
 
-  let mask = Mask::from_pixmap(mask_pixmap.as_ref(), MaskType::Alpha);
-  pixmap.apply_mask(&mask);
+  // Fast path: fully outside the pixmap bounds.
+  let right = rect.x() + rect.width();
+  let bottom = rect.y() + rect.height();
+  if right <= 0.0 || bottom <= 0.0 || rect.x() >= width as f32 || rect.y() >= height as f32 {
+    pixmap.data_mut().fill(0);
+    if diag_enabled {
+      with_paint_diagnostics(|stats| {
+        stats.clip_mask_pixels += u64::from(width) * u64::from(height);
+        if let Some(start) = clip_timer {
+          stats.clip_mask_ms += start.elapsed().as_secs_f64() * 1000.0;
+        }
+      });
+    }
+    return;
+  }
+
+  // Generate a rounded-rect alpha mask, reusing a thread-local scratch pixmap to avoid per-call
+  // allocations. We clear only the region touched by the previous call.
+  let applied_mask = CLIP_MASK_SCRATCH.with(|cell| {
+    let mut scratch = cell.borrow_mut();
+    let replace = match scratch.pixmap.as_ref() {
+      Some(existing) => existing.width() != width || existing.height() != height,
+      None => true,
+    };
+    if replace {
+      scratch.pixmap = new_pixmap(width, height);
+      scratch.dirty = None;
+    }
+    let prev_dirty = scratch.dirty.take();
+    let next_dirty = clip_mask_dirty_bounds(rect, width, height);
+    {
+      let Some(mask_pixmap) = scratch.pixmap.as_mut() else {
+        scratch.dirty = prev_dirty;
+        return false;
+      };
+      if let Some(dirty) = prev_dirty {
+        clear_pixmap_rect_rgba(mask_pixmap, dirty);
+      }
+      let clamped = radii.clamped(rect.width(), rect.height());
+      let _ = fill_rounded_rect(
+        mask_pixmap,
+        rect.x(),
+        rect.y(),
+        rect.width(),
+        rect.height(),
+        &clamped,
+        Rgba::new(255, 255, 255, 1.0),
+      );
+      let mask = Mask::from_pixmap(mask_pixmap.as_ref(), MaskType::Alpha);
+      pixmap.apply_mask(&mask);
+    }
+    scratch.dirty = next_dirty;
+    true
+  });
+  if !applied_mask {
+    if diag_enabled {
+      with_paint_diagnostics(|stats| {
+        if let Some(start) = clip_timer {
+          stats.clip_mask_ms += start.elapsed().as_secs_f64() * 1000.0;
+        }
+      });
+    }
+    return;
+  }
 
   // Hard-clip pixels outside the rectangle to avoid filter bleed.
+  //
+  // This is intentionally done using integer bounds (floor/ceil) so that any pixels outside the
+  // clip rect are *fully* cleared even when the clip coordinates are fractional. Filters can
+  // otherwise sample premultiplied RGB values outside the clip and bleed them back in.
   let x0 = rect.x().floor().max(0.0) as u32;
   let y0 = rect.y().floor().max(0.0) as u32;
   let x1 = (rect.x() + rect.width()).ceil().min(width as f32) as u32;
   let y1 = (rect.y() + rect.height()).ceil().min(height as f32) as u32;
-  let data = pixmap.data_mut();
-  let stride = (width as usize) * 4;
-  for y in 0..height {
-    for x in 0..width {
-      if x < x0 || x >= x1 || y < y0 || y >= y1 {
-        let idx = (y as usize * stride) + (x as usize * 4);
-        data[idx] = 0;
-        data[idx + 1] = 0;
-        data[idx + 2] = 0;
-        data[idx + 3] = 0;
+  if x0 != 0 || y0 != 0 || x1 != width || y1 != height {
+    let stride = width as usize * 4;
+    let data = pixmap.data_mut();
+
+    // Clear fully outside rows in one contiguous fill.
+    data[..y0 as usize * stride].fill(0);
+    data[y1 as usize * stride..].fill(0);
+
+    let left_bytes = x0 as usize * 4;
+    let right_start = x1 as usize * 4;
+    if left_bytes != 0 || right_start != stride {
+      for row in y0..y1 {
+        let offset = row as usize * stride;
+        let row = &mut data[offset..offset + stride];
+        row[..left_bytes].fill(0);
+        row[right_start..].fill(0);
       }
     }
   }
-  record(timer);
+
+  if diag_enabled {
+    with_paint_diagnostics(|stats| {
+      stats.clip_mask_pixels += u64::from(width) * u64::from(height);
+      if let Some(start) = clip_timer {
+        stats.clip_mask_ms += start.elapsed().as_secs_f64() * 1000.0;
+      }
+    });
+  }
 }
 
 fn mask_value_from_pixel(pixel: &[u8], mode: MaskMode) -> u8 {
@@ -11210,6 +11336,7 @@ mod tests {
   use crate::geometry::Rect;
   use crate::image_loader::ImageCache;
   use crate::paint::display_list::BorderRadii;
+  use crate::paint::pixmap::NewPixmapAllocRecorder;
   use crate::style::types::BackgroundAttachment;
   use crate::style::types::BackgroundBox;
   use crate::style::types::BackgroundImage;
@@ -15272,6 +15399,141 @@ mod tests {
     assert!(
       center.red() > 200 && center.green() < 50 && center.blue() < 50,
       "iframe srcdoc should paint red"
+    );
+  }
+
+  fn fill_solid_rgba(pixmap: &mut Pixmap, rgba: (u8, u8, u8, u8)) {
+    for px in pixmap.data_mut().chunks_exact_mut(4) {
+      px[0] = rgba.0;
+      px[1] = rgba.1;
+      px[2] = rgba.2;
+      px[3] = rgba.3;
+    }
+  }
+
+  fn apply_clip_mask_rect_reference(pixmap: &mut Pixmap, rect: Rect, radii: BorderRadii) {
+    if rect.width() <= 0.0 || rect.height() <= 0.0 {
+      return;
+    }
+    let width = pixmap.width();
+    let height = pixmap.height();
+    if width == 0 || height == 0 {
+      return;
+    }
+
+    let mut mask_pixmap = match new_pixmap(width, height) {
+      Some(p) => p,
+      None => return,
+    };
+    let clamped = radii.clamped(rect.width(), rect.height());
+    let _ = fill_rounded_rect(
+      &mut mask_pixmap,
+      rect.x(),
+      rect.y(),
+      rect.width(),
+      rect.height(),
+      &clamped,
+      Rgba::new(255, 255, 255, 1.0),
+    );
+
+    let mask = Mask::from_pixmap(mask_pixmap.as_ref(), MaskType::Alpha);
+    pixmap.apply_mask(&mask);
+
+    // Hard-clip pixels outside the rectangle to avoid filter bleed.
+    let x0 = rect.x().floor().max(0.0) as u32;
+    let y0 = rect.y().floor().max(0.0) as u32;
+    let x1 = (rect.x() + rect.width()).ceil().min(width as f32) as u32;
+    let y1 = (rect.y() + rect.height()).ceil().min(height as f32) as u32;
+    let data = pixmap.data_mut();
+    let stride = width as usize * 4;
+    for y in 0..height {
+      for x in 0..width {
+        if x < x0 || x >= x1 || y < y0 || y >= y1 {
+          let idx = y as usize * stride + x as usize * 4;
+          data[idx] = 0;
+          data[idx + 1] = 0;
+          data[idx + 2] = 0;
+          data[idx + 3] = 0;
+        }
+      }
+    }
+  }
+
+  #[test]
+  fn clip_mask_rounded_rect_matches_reference() {
+    let mut optimized = new_pixmap(10, 10).expect("pixmap");
+    let mut reference = new_pixmap(10, 10).expect("pixmap");
+    fill_solid_rgba(&mut optimized, (255, 0, 0, 255));
+    fill_solid_rgba(&mut reference, (255, 0, 0, 255));
+
+    let rect = Rect::from_xywh(1.0, 1.0, 8.0, 8.0);
+    let radii = BorderRadii::uniform(3.0);
+
+    apply_clip_mask_rect(&mut optimized, rect, radii);
+    apply_clip_mask_rect_reference(&mut reference, rect, radii);
+
+    assert_eq!(optimized.data(), reference.data());
+  }
+
+  #[test]
+  fn clip_mask_hard_clips_using_integer_bounds() {
+    let mut pixmap = new_pixmap(4, 4).expect("pixmap");
+    fill_solid_rgba(&mut pixmap, (10, 20, 30, 255));
+    let rect = Rect::from_xywh(1.2, 1.2, 1.0, 1.0);
+
+    apply_clip_mask_rect(&mut pixmap, rect, BorderRadii::ZERO);
+
+    // Hard clip uses floor/ceil bounds, so only pixels in [1..3)×[1..3) remain potentially
+    // non-zero.
+    for y in 0..4 {
+      for x in 0..4 {
+        let px = pixmap.pixel(x, y).expect("pixel in bounds");
+        let inside = (1..3).contains(&x) && (1..3).contains(&y);
+        if inside {
+          assert!(
+            px.alpha() > 0,
+            "expected ({x},{y}) to remain inside the clip"
+          );
+        } else {
+          assert_eq!((px.red(), px.green(), px.blue(), px.alpha()), (0, 0, 0, 0));
+        }
+      }
+    }
+  }
+
+  #[test]
+  fn clip_mask_noop_fast_path_keeps_pixmap_unchanged() {
+    let mut pixmap = new_pixmap(3, 3).expect("pixmap");
+    for (idx, px) in pixmap.data_mut().chunks_exact_mut(4).enumerate() {
+      let v = (idx * 17) as u8;
+      px.copy_from_slice(&[v, v.wrapping_add(1), v.wrapping_add(2), 255]);
+    }
+    let before = pixmap.data().to_vec();
+
+    // Covers the full pixmap within the 0.5px tolerance.
+    let rect = Rect::from_xywh(-0.25, -0.25, 3.5, 3.5);
+    apply_clip_mask_rect(&mut pixmap, rect, BorderRadii::ZERO);
+
+    assert_eq!(pixmap.data(), before.as_slice());
+  }
+
+  #[test]
+  fn clip_mask_reuses_scratch_pixmap_on_second_call() {
+    let mut pixmap = new_pixmap(8, 8).expect("pixmap");
+    fill_solid_rgba(&mut pixmap, (255, 0, 0, 255));
+    let rect = Rect::from_xywh(1.0, 1.0, 6.0, 6.0);
+    let radii = BorderRadii::uniform(2.0);
+
+    let recorder = NewPixmapAllocRecorder::start();
+
+    apply_clip_mask_rect(&mut pixmap, rect, radii);
+    let _ = recorder.take();
+
+    apply_clip_mask_rect(&mut pixmap, rect, radii);
+    let second = recorder.take();
+    assert!(
+      second.is_empty(),
+      "expected no new_pixmap allocations on second call, got {second:?}"
     );
   }
 }
