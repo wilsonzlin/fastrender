@@ -39,6 +39,27 @@ fn resource_cache_diagnostics_surface_hits_and_misses() {
   assert_eq!(
     first_stats
       .resources
+      .fetch_inflight_waits
+      .expect("inflight waits should be present"),
+    0
+  );
+  assert_eq!(
+    first_stats
+      .resources
+      .disk_cache_lock_waits
+      .expect("disk cache lock waits should be present"),
+    0
+  );
+  assert!(
+    first_stats
+      .resources
+      .disk_cache_lock_wait_ms
+      .expect("disk cache lock wait ms should be present")
+      .is_finite()
+  );
+  assert_eq!(
+    first_stats
+      .resources
       .network_fetches
       .expect("network fetch count should be present"),
     0
@@ -71,6 +92,27 @@ fn resource_cache_diagnostics_surface_hits_and_misses() {
       .resource_cache_stale_hits
       .expect("resource cache stale hits should be present"),
     0
+  );
+  assert_eq!(
+    second_stats
+      .resources
+      .fetch_inflight_waits
+      .expect("inflight waits should be present"),
+    0
+  );
+  assert_eq!(
+    second_stats
+      .resources
+      .disk_cache_lock_waits
+      .expect("disk cache lock waits should be present"),
+    0
+  );
+  assert!(
+    second_stats
+      .resources
+      .disk_cache_lock_wait_ms
+      .expect("disk cache lock wait ms should be present")
+      .is_finite()
   );
   assert!(
     second_stats
