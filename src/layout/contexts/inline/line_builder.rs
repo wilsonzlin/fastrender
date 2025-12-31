@@ -52,6 +52,7 @@ use crate::text::justify::InlineAxis;
 use crate::text::line_break::BreakOpportunity;
 use crate::text::line_break::BreakType;
 use crate::text::pipeline::shaping_style_hash;
+use crate::text::pipeline::ExplicitBidiContext;
 use crate::text::pipeline::ShapedRun;
 use crate::text::pipeline::ShapingPipeline;
 use crate::tree::box_tree::ReplacedType;
@@ -290,6 +291,8 @@ pub struct TextItem {
   pub style: Arc<ComputedStyle>,
   /// Base paragraph direction used for shaping
   pub base_direction: Direction,
+  /// Explicit bidi context used during shaping (embedding level + override flag).
+  pub explicit_bidi: Option<ExplicitBidiContext>,
   /// Whether this text item is a list marker
   pub is_marker: bool,
   /// Additional paint offset applied at fragment creation (used for outside markers)
@@ -338,6 +341,8 @@ struct ReshapeCacheKey {
   text_id: u64,
   range_start: usize,
   range_end: usize,
+  base_direction_rtl: bool,
+  explicit_bidi: Option<(u8, bool)>,
   letter_spacing_bits: u32,
   word_spacing_bits: u32,
 }
@@ -378,6 +383,7 @@ impl TextItem {
       font_size,
       style,
       base_direction,
+      explicit_bidi: None,
       is_marker: false,
       paint_offset: 0.0,
       cluster_advances,
@@ -550,7 +556,15 @@ impl TextItem {
       let mut hyphen_buf = [0u8; 3];
       let hyphen_text = INSERTED_HYPHEN.encode_utf8(&mut hyphen_buf);
       let offset = before_text.len();
-      let mut hyphen_runs = shaper.shape(hyphen_text, &self.style, font_context).ok()?;
+      let mut hyphen_runs = shaper
+        .shape_with_context(
+          hyphen_text,
+          &self.style,
+          font_context,
+          pipeline_dir_from_style(self.base_direction),
+          self.explicit_bidi,
+        )
+        .ok()?;
       TextItem::apply_spacing_to_runs(
         &mut hyphen_runs,
         hyphen_text,
@@ -601,6 +615,7 @@ impl TextItem {
     )
     .with_vertical_align(self.vertical_align);
     before_item.box_id = self.box_id;
+    before_item.explicit_bidi = self.explicit_bidi;
     before_item.source_id = self.source_id;
     before_item.source_range = self.source_range.start..self.source_range.start + split_offset;
 
@@ -628,6 +643,7 @@ impl TextItem {
     )
     .with_vertical_align(self.vertical_align);
     after_item.box_id = self.box_id;
+    after_item.explicit_bidi = self.explicit_bidi;
     after_item.source_id = self.source_id;
     after_item.source_range = self.source_range.start + split_offset..self.source_range.end;
 
@@ -657,6 +673,7 @@ impl TextItem {
       )
       .with_vertical_align(self.vertical_align);
       before_item.box_id = self.box_id;
+      before_item.explicit_bidi = self.explicit_bidi;
       before_item.source_id = self.source_id;
       before_item.source_range = self.source_range.start..self.source_range.start + split_offset;
 
@@ -684,6 +701,7 @@ impl TextItem {
       )
       .with_vertical_align(self.vertical_align);
       after_item.box_id = self.box_id;
+      after_item.explicit_bidi = self.explicit_bidi;
       after_item.source_id = self.source_id;
       after_item.source_range = self.source_range.start + split_offset..self.source_range.end;
     }
@@ -1245,6 +1263,10 @@ impl ReshapeCache {
       text_id: item.source_id,
       range_start: item.source_range.start + range.start,
       range_end: item.source_range.start + range.end,
+      base_direction_rtl: matches!(item.base_direction, Direction::Rtl),
+      explicit_bidi: item
+        .explicit_bidi
+        .map(|ctx| (ctx.level.number(), ctx.override_all)),
       letter_spacing_bits: item.style.letter_spacing.to_bits(),
       word_spacing_bits: item.style.word_spacing.to_bits(),
     };
@@ -1253,7 +1275,15 @@ impl ReshapeCache {
       return Some((**cached).clone());
     }
 
-    let mut runs = shaper.shape(text_slice, &item.style, font_context).ok()?;
+    let mut runs = shaper
+      .shape_with_context(
+        text_slice,
+        &item.style,
+        font_context,
+        pipeline_dir_from_style(item.base_direction),
+        item.explicit_bidi,
+      )
+      .ok()?;
     TextItem::apply_spacing_to_runs(
       &mut runs,
       text_slice,
@@ -2234,6 +2264,21 @@ impl<'a> LineBuilder<'a> {
     self.current_line.items.push(positioned);
   }
 
+  pub(crate) fn split_text_item(
+    &mut self,
+    item: &TextItem,
+    byte_offset: usize,
+    insert_hyphen: bool,
+  ) -> Option<(TextItem, TextItem)> {
+    item.split_at(
+      byte_offset,
+      insert_hyphen,
+      &self.shaper,
+      &self.font_context,
+      &mut self.reshape_cache,
+    )
+  }
+
   /// Forces a line break (e.g., from mandatory break)
   pub fn force_break(&mut self) {
     self.current_line.ends_with_hard_break = true;
@@ -2885,7 +2930,8 @@ fn slice_text_item(
       text: item.text[range.clone()].to_string(),
       font_size: item.font_size,
       style: item.style.clone(),
-      base_direction: item.base_direction,
+      base_direction,
+      explicit_bidi: bidi_context,
       is_marker: item.is_marker,
       paint_offset: item.paint_offset,
       cluster_advances,
@@ -2935,10 +2981,11 @@ fn slice_text_item(
     breaks,
     forced,
     item.style.clone(),
-    item.base_direction,
+    base_direction,
   )
   .with_vertical_align(item.vertical_align);
   new_item.box_id = item.box_id;
+  new_item.explicit_bidi = bidi_context;
   new_item.source_id = item.source_id;
   new_item.source_range =
     item.source_range.start + range.start..item.source_range.start + range.end;
@@ -3028,6 +3075,7 @@ mod tests {
   use super::*;
   use crate::geometry::Rect;
   use crate::layout::contexts::inline::explicit_bidi_context;
+  use crate::style::types::FontKerning;
   use crate::style::ComputedStyle;
   use crate::text::font_loader::FontContext;
   use crate::text::line_break::find_break_opportunities;
@@ -3126,6 +3174,7 @@ mod tests {
       font_size: 16.0,
       style: style.clone(),
       base_direction: crate::style::types::Direction::Ltr,
+      explicit_bidi: None,
       is_marker: false,
       paint_offset: 0.0,
       cluster_advances,
@@ -3177,6 +3226,209 @@ mod tests {
     }
 
     best_break
+  }
+
+  fn glyph_signature_sequence(item: &TextItem) -> Vec<(usize, u8, bool)> {
+    item
+      .runs
+      .iter()
+      .flat_map(|run| {
+        let rtl = run.direction.is_rtl();
+        run.glyphs.iter().map(move |glyph| {
+          (
+            item.source_range.start + run.start + glyph.cluster as usize,
+            run.level,
+            rtl,
+          )
+        })
+      })
+      .collect()
+  }
+
+  fn force_split_fallback(item: &mut TextItem) {
+    for boundary in &mut item.cluster_advances {
+      boundary.run_index = None;
+      boundary.glyph_end = None;
+    }
+  }
+
+  fn make_shaped_text_item(
+    text: &str,
+    style: Arc<ComputedStyle>,
+    base_direction: Direction,
+    explicit_bidi: Option<crate::text::pipeline::ExplicitBidiContext>,
+    pipeline: &ShapingPipeline,
+    font_context: &FontContext,
+  ) -> TextItem {
+    let mut runs = pipeline
+      .shape_with_context(
+        text,
+        &style,
+        font_context,
+        pipeline_dir_from_style(base_direction),
+        explicit_bidi,
+      )
+      .expect("text shaping should succeed in tests");
+    TextItem::apply_spacing_to_runs(&mut runs, text, style.letter_spacing, style.word_spacing);
+    let metrics = TextItem::metrics_from_runs(&runs, 16.0, style.font_size);
+    let breaks = find_break_opportunities(text);
+    let mut item = TextItem::new(
+      runs,
+      text.to_string(),
+      metrics,
+      breaks,
+      Vec::new(),
+      style,
+      base_direction,
+    );
+    item.explicit_bidi = explicit_bidi;
+    item
+  }
+
+  fn assert_split_matches_original(
+    item: &TextItem,
+    split_offset: usize,
+    before: &TextItem,
+    after: &TextItem,
+  ) {
+    const EPS: f32 = 0.05;
+    assert!(
+      (before.advance + after.advance - item.advance).abs() < EPS,
+      "split advances should add up: {} + {} vs {}",
+      before.advance,
+      after.advance,
+      item.advance
+    );
+
+    let signatures = glyph_signature_sequence(item);
+    let expected_before: Vec<(usize, u8, bool)> = signatures
+      .iter()
+      .copied()
+      .filter(|(cluster, _, _)| *cluster < split_offset)
+      .collect();
+    let expected_after: Vec<(usize, u8, bool)> = signatures
+      .iter()
+      .copied()
+      .filter(|(cluster, _, _)| *cluster >= split_offset)
+      .collect();
+
+    assert_eq!(glyph_signature_sequence(before), expected_before);
+    assert_eq!(glyph_signature_sequence(after), expected_after);
+  }
+
+  #[test]
+  fn reshape_cache_preserves_base_direction_and_explicit_bidi() {
+    let pipeline = ShapingPipeline::new();
+    let font_context = FontContext::new();
+    let mut style = ComputedStyle::default();
+    style.direction = Direction::Ltr;
+    style.font_kerning = FontKerning::None;
+    let style = Arc::new(style);
+    let mut reshape_cache = ReshapeCache::default();
+
+    // Explicit override case: should reorder Latin text in RTL override.
+    let text = "abcd";
+    let explicit = explicit_bidi_context(
+      Direction::Rtl,
+      &[(UnicodeBidi::BidiOverride, Direction::Rtl)],
+    )
+    .expect("expected explicit bidi context");
+    let mut overridden = make_shaped_text_item(
+      text,
+      style.clone(),
+      Direction::Rtl,
+      Some(explicit),
+      &pipeline,
+      &font_context,
+    );
+    overridden.box_id = 1;
+    assert!(
+      overridden.runs.iter().all(|run| run.direction.is_rtl()),
+      "explicit bidi override should force RTL runs"
+    );
+
+    force_split_fallback(&mut overridden);
+    let (before, after) = overridden
+      .split_at(2, false, &pipeline, &font_context, &mut reshape_cache)
+      .expect("split should succeed");
+    let ctx_key = |item: &TextItem| {
+      item
+        .explicit_bidi
+        .map(|ctx| (ctx.level.number(), ctx.override_all))
+    };
+    assert_eq!(ctx_key(&before), ctx_key(&overridden));
+    assert_eq!(ctx_key(&after), ctx_key(&overridden));
+    assert_split_matches_original(&overridden, 2, &before, &after);
+
+    // Same text/style/base-direction but without explicit override should not reuse the cached override shaping.
+    pipeline.clear_cache();
+    let mut plain = make_shaped_text_item(
+      text,
+      style.clone(),
+      Direction::Rtl,
+      None,
+      &pipeline,
+      &font_context,
+    );
+    force_split_fallback(&mut plain);
+    let (before_plain, after_plain) = plain
+      .split_at(2, false, &pipeline, &font_context, &mut reshape_cache)
+      .expect("split should succeed");
+    assert_split_matches_original(&plain, 2, &before_plain, &after_plain);
+
+    // Base-direction case: mixed LTR/RTL content should shape differently when the paragraph base differs.
+    pipeline.clear_cache();
+    let mixed = "ABC אבג";
+    let split_offset = mixed
+      .find('ב')
+      .expect("expected hebrew letter in test string");
+    let mut rtl_base = make_shaped_text_item(
+      mixed,
+      style.clone(),
+      Direction::Rtl,
+      None,
+      &pipeline,
+      &font_context,
+    );
+    pipeline.clear_cache();
+    let mut ltr_base = make_shaped_text_item(
+      mixed,
+      style.clone(),
+      Direction::Ltr,
+      None,
+      &pipeline,
+      &font_context,
+    );
+    assert_ne!(
+      glyph_signature_sequence(&rtl_base),
+      glyph_signature_sequence(&ltr_base),
+      "base direction should affect bidi levels/directions"
+    );
+
+    force_split_fallback(&mut rtl_base);
+    let (before_rtl, after_rtl) = rtl_base
+      .split_at(
+        split_offset,
+        false,
+        &pipeline,
+        &font_context,
+        &mut reshape_cache,
+      )
+      .expect("split should succeed");
+    assert_split_matches_original(&rtl_base, split_offset, &before_rtl, &after_rtl);
+
+    pipeline.clear_cache();
+    force_split_fallback(&mut ltr_base);
+    let (before_ltr, after_ltr) = ltr_base
+      .split_at(
+        split_offset,
+        false,
+        &pipeline,
+        &font_context,
+        &mut reshape_cache,
+      )
+      .expect("split should succeed");
+    assert_split_matches_original(&ltr_base, split_offset, &before_ltr, &after_ltr);
   }
 
   #[test]

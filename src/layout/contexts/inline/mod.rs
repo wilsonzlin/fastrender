@@ -164,7 +164,6 @@ pub struct InlineFormattingContext {
   /// Text shaping pipeline (bidi/script/fallback aware)
   pipeline: ShapingPipeline,
   font_context: FontContext,
-  reshape_cache: Mutex<ReshapeCache>,
   default_hyphenator: Option<Hyphenator>,
   viewport_size: crate::geometry::Size,
   nearest_positioned_cb: crate::layout::contexts::positioned::ContainingBlock,
@@ -222,7 +221,6 @@ impl InlineFormattingContext {
     Self {
       pipeline: ShapingPipeline::new(),
       font_context: FontContext::new(),
-      reshape_cache: Mutex::new(ReshapeCache::default()),
       default_hyphenator: Hyphenator::new("en-us").ok(),
       viewport_size: crate::geometry::Size::new(800.0, 600.0),
       nearest_positioned_cb: crate::layout::contexts::positioned::ContainingBlock::viewport(
@@ -266,7 +264,6 @@ impl InlineFormattingContext {
     Self {
       pipeline,
       font_context,
-      reshape_cache: Mutex::new(ReshapeCache::default()),
       default_hyphenator: Hyphenator::new("en-us").ok(),
       viewport_size,
       nearest_positioned_cb,
@@ -2628,22 +2625,20 @@ impl InlineFormattingContext {
     let mut parts = Vec::new();
     let mut current = item;
     let mut consumed = 0;
+    let mut reshape_cache = ReshapeCache::default();
 
     for offset in offsets {
       if offset <= consumed {
         continue;
       }
       let relative = offset - consumed;
-      if let Some((before, after)) = {
-        let mut cache = self.reshape_cache.lock().expect("reshape cache lock");
-        current.split_at(
-          relative,
-          false,
-          &self.pipeline,
-          &self.font_context,
-          &mut cache,
-        )
-      } {
+      if let Some((before, after)) = current.split_at(
+        relative,
+        false,
+        &self.pipeline,
+        &self.font_context,
+        &mut reshape_cache,
+      ) {
         parts.push(before);
         current = after;
         consumed = offset;
@@ -2976,6 +2971,7 @@ impl InlineFormattingContext {
       base_direction,
     )
     .with_vertical_align(va);
+    item.explicit_bidi = bidi_context;
 
     if allow_soft_wrap && style.line_break == LineBreak::Anywhere {
       item.add_breaks_at_clusters();
@@ -3979,10 +3975,7 @@ impl InlineFormattingContext {
         }
 
         if pos > 0 {
-          if let Some((before, after)) = {
-            let mut cache = self.reshape_cache.lock().expect("reshape cache lock");
-            remaining.split_at(pos, false, &self.pipeline, &self.font_context, &mut cache)
-          } {
+          if let Some((before, after)) = builder.split_text_item(&remaining, pos, false) {
             if before.advance > 0.0 {
               builder.add_item(InlineItem::Text(before));
             }
@@ -4005,16 +3998,7 @@ impl InlineFormattingContext {
             .map(|c| c.len_utf8())
             .unwrap_or(1);
           if pos + skip_bytes < remaining.text.len() {
-            if let Some((_, after)) = {
-              let mut cache = self.reshape_cache.lock().expect("reshape cache lock");
-              remaining.split_at(
-                pos + skip_bytes,
-                false,
-                &self.pipeline,
-                &self.font_context,
-                &mut cache,
-              )
-            } {
+            if let Some((_, after)) = builder.split_text_item(&remaining, pos + skip_bytes, false) {
               remaining = after;
               continue;
             }
@@ -4396,6 +4380,7 @@ impl InlineFormattingContext {
     let mut segments = Vec::new();
     let mut remaining = item.clone();
     let mut consumed = 0usize;
+    let mut reshape_cache = ReshapeCache::default();
     let mut break_offsets: Vec<usize> = match mode {
       TextJustify::InterCharacter | TextJustify::Distribute => {
         let mut offsets: Vec<usize> = item
@@ -4458,10 +4443,13 @@ impl InlineFormattingContext {
         continue;
       }
       let local = target - consumed;
-      if let Some((before, after)) = {
-        let mut cache = self.reshape_cache.lock().expect("reshape cache lock");
-        remaining.split_at(local, false, &self.pipeline, &self.font_context, &mut cache)
-      } {
+      if let Some((before, after)) = remaining.split_at(
+        local,
+        false,
+        &self.pipeline,
+        &self.font_context,
+        &mut reshape_cache,
+      ) {
         consumed = target;
         segments.push(before);
         remaining = after;
@@ -7177,17 +7165,16 @@ impl InlineFormattingContext {
       return Some(item.clone());
     }
 
-    {
-      let mut cache = self.reshape_cache.lock().expect("reshape cache lock");
-      item.split_at(
+    let mut reshape_cache = ReshapeCache::default();
+    item
+      .split_at(
         offset,
         false,
         &self.pipeline,
         &self.font_context,
-        &mut cache,
+        &mut reshape_cache,
       )
-    }
-    .map(|(before, _)| before)
+      .map(|(before, _)| before)
   }
 
   fn truncate_text_item_from_start(&self, item: &TextItem, max_width: f32) -> Option<TextItem> {
@@ -7211,17 +7198,16 @@ impl InlineFormattingContext {
     }
 
     let offset = best?;
-    {
-      let mut cache = self.reshape_cache.lock().expect("reshape cache lock");
-      item.split_at(
+    let mut reshape_cache = ReshapeCache::default();
+    item
+      .split_at(
         offset,
         false,
         &self.pipeline,
         &self.font_context,
-        &mut cache,
+        &mut reshape_cache,
       )
-    }
-    .map(|(_, after)| after)
+      .map(|(_, after)| after)
   }
 
   fn line_items_width(&self, items: &[InlineItem]) -> f32 {
@@ -7303,9 +7289,6 @@ impl InlineFormattingContext {
     float_base_y: f32,
   ) -> Result<FragmentNode, LayoutError> {
     let _profile = layout_timer(LayoutKind::Inline);
-    if let Ok(mut cache) = self.reshape_cache.lock() {
-      cache.clear();
-    }
     let mut transformed: Option<BoxNode> = None;
     let box_node = if let Some(letter_style) = box_node.first_letter_style.as_ref() {
       if Self::first_letter_eligible(box_node) {
