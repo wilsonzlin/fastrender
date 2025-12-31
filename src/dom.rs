@@ -421,14 +421,20 @@ pub fn build_selector_bloom_store(
     return None;
   }
 
-  let mut summaries = vec![SelectorBloomSummary::default(); id_map.len() + 1];
+  // Keep index 0 unused so the 1-based `node_id` from `enumerate_dom_ids` can be used directly.
+  //
+  // We still accept `id_map` to reserve the right size up-front, but we avoid doing a pointer-keyed
+  // HashMap lookup per element by assigning ids during a pre-order traversal (the same order as
+  // `enumerate_dom_ids`).
+  let mut summaries: Vec<SelectorBloomSummary> =
+    Vec::with_capacity(id_map.len().saturating_add(1));
+  summaries.push(SelectorBloomSummary::default());
 
-  fn walk(
-    node: &DomNode,
-    id_map: &HashMap<*const DomNode, usize>,
-    out: &mut [SelectorBloomSummary],
-  ) -> SelectorBloomSummary {
+  fn walk(node: &DomNode, out: &mut Vec<SelectorBloomSummary>) -> SelectorBloomSummary {
     let is_element = node.is_element();
+    let id = out.len();
+    out.push(SelectorBloomSummary::default());
+
     let mut summary = SelectorBloomSummary::default();
     if is_element {
       add_selector_bloom_hashes(node, &mut |hash| summary.insert_hash(hash));
@@ -436,10 +442,10 @@ pub fn build_selector_bloom_store(
 
     for child in node.children.iter() {
       let child_summary = if matches!(child.node_type, DomNodeType::ShadowRoot { .. }) {
-        walk(child, id_map, out);
+        walk(child, out);
         None
       } else {
-        Some(walk(child, id_map, out))
+        Some(walk(child, out))
       };
       if is_element {
         if let Some(summary_child) = child_summary.as_ref() {
@@ -449,17 +455,18 @@ pub fn build_selector_bloom_store(
     }
 
     if is_element {
-      if let Some(id) = id_map.get(&(node as *const DomNode)).copied() {
-        if id < out.len() {
-          out[id] = summary;
-        }
-      }
+      out[id] = summary;
     }
 
     summary
   }
 
-  walk(root, id_map, &mut summaries);
+  walk(root, &mut summaries);
+  debug_assert_eq!(
+    summaries.len(),
+    id_map.len().saturating_add(1),
+    "selector bloom store should align with enumerate_dom_ids node ids"
+  );
   Some(SelectorBloomStore { summaries })
 }
 
