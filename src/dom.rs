@@ -285,13 +285,18 @@ fn add_selector_bloom_hashes(node: &DomNode, add: &mut impl FnMut(u32)) {
 
   let is_html = node_is_html_element(node);
   if let Some(tag) = node.tag_name() {
-    let tag_key = if is_html {
-      tag.to_ascii_lowercase()
+    if is_html {
+      let has_upper = tag.bytes().any(|b| b.is_ascii_uppercase());
+      if has_upper {
+        let lower = tag.to_ascii_lowercase();
+        add(selector_bloom_hash(&lower));
+        add(selector_bloom_hash(tag));
+      } else {
+        // Most HTML tag names are already lowercase (html5ever lowercases), so avoid allocating.
+        add(selector_bloom_hash(tag));
+      }
     } else {
-      tag.to_string()
-    };
-    add(selector_bloom_hash(&tag_key));
-    if is_html && tag != tag_key {
+      // Foreign elements are case-sensitive, so hash the tag as-is.
       add(selector_bloom_hash(tag));
     }
   }
@@ -310,8 +315,8 @@ fn add_selector_bloom_hashes(node: &DomNode, add: &mut impl FnMut(u32)) {
 
   for (name, _) in node.attributes_iter() {
     add(selector_bloom_hash(name));
-    let lower = name.to_ascii_lowercase();
-    if lower != name {
+    if name.bytes().any(|b| b.is_ascii_uppercase()) {
+      let lower = name.to_ascii_lowercase();
       add(selector_bloom_hash(&lower));
     }
   }
