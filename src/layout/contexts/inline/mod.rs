@@ -6441,56 +6441,52 @@ impl InlineFormattingContext {
         TextWrap::Balance | TextWrap::Pretty | TextWrap::Stable
       );
 
-    // `text-wrap: balance|pretty|stable` may rebuild lines multiple times. In the common greedy case,
-    // avoid cloning the inline items by consuming them directly. Only keep a cloned copy when we may
-    // need a second build.
-    let rebalance_items = if needs_rebalance && float_ctx.map_or(true, FloatContext::is_empty) {
-      let has_mandatory = items.iter().any(|item| {
-        let InlineItem::Text(text_item) = item else {
-          return false;
-        };
-        text_item.break_opportunities.iter().any(|b| {
-          if b.break_type != BreakType::Mandatory {
-            return false;
-          }
-          b.byte_offset < text_item.text.len()
-            || text_item.forced_break_offsets.contains(&b.byte_offset)
-        })
-      });
+    if !needs_rebalance {
+      return self.build_lines(
+        items,
+        first_width,
+        subsequent_line_width,
+        use_first_line_width,
+        text_wrap,
+        indent,
+        indent_hanging,
+        indent_each_line,
+        strut_metrics,
+        base_level,
+        root_direction,
+        root_unicode_bidi,
+        float_ctx,
+        float_base_y,
+      );
+    }
 
-      let mut x = 0.0f32;
-      let mut fits = true;
-      for item in &items {
-        let w = match item {
-          InlineItem::Tab(tab) => {
-            let interval = tab.interval();
-            if !interval.is_finite() || interval <= 0.0 {
-              0.0
-            } else {
-              let remainder = x.rem_euclid(interval);
-              if remainder == 0.0 {
-                interval
-              } else {
-                interval - remainder
-              }
-            }
-          }
-          _ => item.width(),
-        };
-        if x + w > first_width {
-          fits = false;
-          break;
-        }
-        x += w;
+    if let Some(ctx) = float_ctx {
+      if !ctx.is_empty() {
+        // Float-shortened lines vary in width per line; keep greedy results to avoid instability.
+        return self.build_lines(
+          items,
+          first_width,
+          subsequent_line_width,
+          use_first_line_width,
+          text_wrap,
+          indent,
+          indent_hanging,
+          indent_each_line,
+          strut_metrics,
+          base_level,
+          root_direction,
+          root_unicode_bidi,
+          float_ctx,
+          float_base_y,
+        );
       }
+    }
 
-      (has_mandatory || !fits).then(|| items.clone())
-    } else {
-      None
-    };
-
+    // Balance/pretty/stable may need additional candidate line builds. Preserve an immutable copy
+    // of the original items and build the greedy baseline from a clone.
+    let original_items = items;
     let mut lines = self.build_lines(
-      items,
+      original_items.clone(),
       first_width,
       subsequent_line_width,
       use_first_line_width,
@@ -6506,53 +6502,48 @@ impl InlineFormattingContext {
       float_base_y,
     );
 
-    if use_first_line_width
-      && matches!(
-        text_wrap,
-        TextWrap::Balance | TextWrap::Pretty | TextWrap::Stable
-      )
-    {
-      if let Some(items) = rebalance_items {
-        if lines.len() > 1 && matches!(text_wrap, TextWrap::Stable) {
-          let stable_factor = 0.9;
-          let candidate_width = (subsequent_line_width * stable_factor).max(1.0);
-          let stable_first = candidate_width;
-          return self.build_lines(
-            items,
-            stable_first,
-            candidate_width,
-            true,
-            text_wrap,
-            indent,
-            indent_hanging,
-            indent_each_line,
-            strut_metrics,
-            base_level,
-            root_direction,
-            root_unicode_bidi,
-            float_ctx,
-            float_base_y,
-          );
-        }
-
-        lines = self.rebalance_text_wrap(
-          lines,
-          &items,
-          first_width,
-          subsequent_line_width,
-          text_wrap,
-          indent,
-          indent_hanging,
-          indent_each_line,
-          strut_metrics,
-          base_level,
-          root_direction,
-          root_unicode_bidi,
-          float_ctx,
-          float_base_y,
-        );
-      }
+    if lines.len() <= 1 {
+      return lines;
     }
+
+    if matches!(text_wrap, TextWrap::Stable) {
+      let stable_factor = 0.9;
+      let candidate_width = (subsequent_line_width * stable_factor).max(1.0);
+      let stable_first = candidate_width;
+      return self.build_lines(
+        original_items,
+        stable_first,
+        candidate_width,
+        true,
+        text_wrap,
+        indent,
+        indent_hanging,
+        indent_each_line,
+        strut_metrics,
+        base_level,
+        root_direction,
+        root_unicode_bidi,
+        float_ctx,
+        float_base_y,
+      );
+    }
+
+    lines = self.rebalance_text_wrap(
+      lines,
+      &original_items,
+      first_width,
+      subsequent_line_width,
+      text_wrap,
+      indent,
+      indent_hanging,
+      indent_each_line,
+      strut_metrics,
+      base_level,
+      root_direction,
+      root_unicode_bidi,
+      float_ctx,
+      float_base_y,
+    );
 
     lines
   }
