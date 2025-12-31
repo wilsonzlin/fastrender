@@ -411,6 +411,7 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
 
   let pages_arg = args.pages.as_ref().map(|pages| pages.join(","));
   let shard_arg = args.shard.map(|(index, total)| format!("{index}/{total}"));
+  let disk_cache_extra_args = extract_disk_cache_args(&args.extra);
 
   let disk_cache_enabled = disk_cache_enabled(args.disk_cache);
   let disk_cache_status = if disk_cache_enabled {
@@ -472,6 +473,7 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
     if let Some(shard) = &shard_arg {
       cmd.arg("--shard").arg(shard);
     }
+    cmd.args(&disk_cache_extra_args);
     println!(
       "Prefetching subresources into fetches/assets/ (jobs={}, timeout={}s)...",
       args.jobs, args.fetch_timeout
@@ -506,6 +508,38 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
   run_command(cmd)?;
 
   Ok(())
+}
+
+fn extract_disk_cache_args(extra: &[String]) -> Vec<String> {
+  let flags = [
+    "--disk-cache-max-bytes",
+    "--disk-cache-max-age-secs",
+    "--disk-cache-lock-stale-secs",
+  ];
+  let mut out = Vec::new();
+  let mut iter = extra.iter().peekable();
+  while let Some(arg) = iter.next() {
+    let mut matched = None;
+    for flag in &flags {
+      if arg == flag {
+        matched = Some(*flag);
+        break;
+      }
+      let prefix = format!("{flag}=");
+      if arg.starts_with(&prefix) {
+        out.push(arg.clone());
+        matched = None;
+        break;
+      }
+    }
+    if let Some(flag) = matched {
+      out.push(flag.to_string());
+      if let Some(value) = iter.next() {
+        out.push(value.clone());
+      }
+    }
+  }
+  out
 }
 
 fn run_pageset_diff(args: PagesetDiffArgs) -> Result<()> {
