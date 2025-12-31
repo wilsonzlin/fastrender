@@ -7,6 +7,7 @@ use crate::api::{RenderDiagnostics, ResourceContext, ResourceKind};
 use crate::debug::runtime;
 use crate::error::{Error, ImageError, RenderError, RenderStage, Result};
 use crate::paint::pixmap::{new_pixmap, MAX_PIXMAP_BYTES};
+use crate::paint::painter::with_paint_diagnostics;
 use crate::render_control::{self, check_active, check_active_periodic};
 use crate::resource::CachingFetcher;
 use crate::resource::CachingFetcherConfig;
@@ -1619,10 +1620,16 @@ impl ImageCache {
       if let Some(cached) = cache.get_cloned(&key) {
         record_raster_pixmap_cache_hit();
         record_raster_pixmap_cache_bytes(cache.current_bytes());
+        with_paint_diagnostics(|diag| {
+          diag.image_pixmap_cache_hits = diag.image_pixmap_cache_hits.saturating_add(1);
+        });
         return Ok(Some(cached));
       }
     }
     record_raster_pixmap_cache_miss();
+    with_paint_diagnostics(|diag| {
+      diag.image_pixmap_cache_misses = diag.image_pixmap_cache_misses.saturating_add(1);
+    });
 
     let image = self.load(&resolved_url)?;
     if image.is_vector {

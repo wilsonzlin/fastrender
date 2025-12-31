@@ -93,8 +93,24 @@ fn paint_diagnostics_include_attribution_counters() {
     "expected background timing"
   );
   assert!(
+    legacy_paint.background_layers.unwrap_or(0) > 0,
+    "expected background layer count"
+  );
+  assert!(
+    legacy_paint.background_pattern_fast_paths.unwrap_or(0) > 0,
+    "expected background pattern fast paths"
+  );
+  assert!(
     legacy_paint.image_pixmap_ms.unwrap_or(0.0) > 0.0,
     "expected image pixmap conversion time"
+  );
+  assert!(
+    legacy_paint.image_pixmap_cache_misses.unwrap_or(0) > 0,
+    "expected legacy image pixmap cache misses"
+  );
+  assert!(
+    legacy_paint.image_pixmap_cache_hits.unwrap_or(0) > 0,
+    "expected legacy image pixmap cache hits"
   );
   assert!(
     legacy_paint.clip_mask_calls.unwrap_or(0) > 0,
@@ -131,6 +147,14 @@ fn paint_diagnostics_include_attribution_counters() {
   assert!(
     dl_paint.background_ms.unwrap_or(0.0) > 0.0,
     "expected display list background timing"
+  );
+  assert!(
+    dl_paint.background_layers.unwrap_or(0) > 0,
+    "expected display list background layer count"
+  );
+  assert!(
+    dl_paint.background_pattern_fast_paths.unwrap_or(0) > 0,
+    "expected display list background pattern fast paths"
   );
   assert!(
     dl_paint.image_pixmap_cache_misses.unwrap_or(0) > 0,

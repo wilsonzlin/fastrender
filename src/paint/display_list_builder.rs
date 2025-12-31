@@ -188,6 +188,8 @@ pub struct DisplayListBuilder {
   parallel_min_explicit: bool,
   parallel_stats: Option<Arc<ParallelStats>>,
   background_tiles: Option<Arc<AtomicU64>>,
+  background_layers: Option<Arc<AtomicU64>>,
+  background_pattern_fast_paths: Option<Arc<AtomicU64>>,
   estimated_fragments: Option<usize>,
   scroll_state: ScrollState,
   max_iframe_depth: usize,
@@ -620,13 +622,36 @@ impl DisplayListBuilder {
   fn finish(mut self) -> Result<DisplayList> {
     if paint_diagnostics_enabled() {
       self.record_parallel_diagnostics();
-      if let Some(counter) = self.background_tiles.as_ref() {
-        let tiles = counter.load(Ordering::Relaxed);
-        if tiles > 0 {
-          with_paint_diagnostics(|diag| {
-            diag.background_tiles += tiles;
-          });
-        }
+      let background_tiles = self
+        .background_tiles
+        .as_ref()
+        .map(|counter| counter.load(Ordering::Relaxed))
+        .unwrap_or(0);
+      let background_layers = self
+        .background_layers
+        .as_ref()
+        .map(|counter| counter.load(Ordering::Relaxed))
+        .unwrap_or(0);
+      let background_pattern_fast_paths = self
+        .background_pattern_fast_paths
+        .as_ref()
+        .map(|counter| counter.load(Ordering::Relaxed))
+        .unwrap_or(0);
+
+      if background_tiles > 0 || background_layers > 0 || background_pattern_fast_paths > 0 {
+        with_paint_diagnostics(|diag| {
+          if background_tiles > 0 {
+            diag.background_tiles = diag.background_tiles.saturating_add(background_tiles);
+          }
+          if background_layers > 0 {
+            diag.background_layers = diag.background_layers.saturating_add(background_layers);
+          }
+          if background_pattern_fast_paths > 0 {
+            diag.background_pattern_fast_paths = diag
+              .background_pattern_fast_paths
+              .saturating_add(background_pattern_fast_paths);
+          }
+        });
       }
     }
     if let Some(err) = self.error.take() {
@@ -695,6 +720,9 @@ impl DisplayListBuilder {
       parallel_min_explicit,
       parallel_stats: paint_diagnostics_enabled().then(|| Arc::new(ParallelStats::default())),
       background_tiles: paint_diagnostics_enabled().then(|| Arc::new(AtomicU64::new(0))),
+      background_layers: paint_diagnostics_enabled().then(|| Arc::new(AtomicU64::new(0))),
+      background_pattern_fast_paths: paint_diagnostics_enabled()
+        .then(|| Arc::new(AtomicU64::new(0))),
       estimated_fragments: None,
       scroll_state: ScrollState::default(),
       max_iframe_depth: DEFAULT_MAX_IFRAME_DEPTH,
@@ -728,6 +756,9 @@ impl DisplayListBuilder {
       parallel_min_explicit,
       parallel_stats: paint_diagnostics_enabled().then(|| Arc::new(ParallelStats::default())),
       background_tiles: paint_diagnostics_enabled().then(|| Arc::new(AtomicU64::new(0))),
+      background_layers: paint_diagnostics_enabled().then(|| Arc::new(AtomicU64::new(0))),
+      background_pattern_fast_paths: paint_diagnostics_enabled()
+        .then(|| Arc::new(AtomicU64::new(0))),
       estimated_fragments: None,
       scroll_state: ScrollState::default(),
       max_iframe_depth: DEFAULT_MAX_IFRAME_DEPTH,
@@ -3260,6 +3291,8 @@ impl DisplayListBuilder {
       parallel_min_explicit: self.parallel_min_explicit,
       parallel_stats: self.parallel_stats.clone(),
       background_tiles: self.background_tiles.clone(),
+      background_layers: self.background_layers.clone(),
+      background_pattern_fast_paths: self.background_pattern_fast_paths.clone(),
       estimated_fragments: self.estimated_fragments,
       scroll_state: self.scroll_state.clone(),
       max_iframe_depth: self.max_iframe_depth,
@@ -3811,6 +3844,12 @@ impl DisplayListBuilder {
       None => clip_rect,
     };
 
+    if !matches!(bg, BackgroundImage::None) {
+      if let Some(counter) = self.background_layers.as_ref() {
+        counter.fetch_add(1, Ordering::Relaxed);
+      }
+    }
+
     let clip_radii = Self::resolve_clip_radii(style, rects, clip_box, self.viewport);
     let blend_mode = Self::convert_blend_mode(layer.blend_mode);
     let use_blend = blend_mode != BlendMode::Normal;
@@ -4268,6 +4307,9 @@ impl DisplayListBuilder {
               // Fast path: for the common `repeat`/`round` in both axes case, emit a single pattern
               // fill instead of one item per tile.
               if repeat_both_axes {
+                if let Some(counter) = self.background_pattern_fast_paths.as_ref() {
+                  counter.fetch_add(1, Ordering::Relaxed);
+                }
                 if let Some(counter) = self.background_tiles.as_ref() {
                   let positions_x = Self::tile_positions(
                     layer.repeat.x,

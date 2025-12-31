@@ -2748,6 +2748,12 @@ fn paint_summary(paint: &PaintDiagnostics) -> Option<String> {
   );
   push_opt_ms(&mut parts, "image_pixmap", paint.image_pixmap_ms);
   push_opt_u64(&mut parts, "background_tiles", paint.background_tiles);
+  push_opt_u64(&mut parts, "background_layers", paint.background_layers);
+  push_opt_u64(
+    &mut parts,
+    "background_pattern_fast_paths",
+    paint.background_pattern_fast_paths,
+  );
   push_opt_ms(&mut parts, "background", paint.background_ms);
   push_opt_u64(&mut parts, "clip_mask_calls", paint.clip_mask_calls);
   push_opt_ms(&mut parts, "clip_mask", paint.clip_mask_ms);
