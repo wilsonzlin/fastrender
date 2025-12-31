@@ -333,7 +333,7 @@ struct StyledLookup<'a> {
 
 impl<'a> StyledLookup<'a> {
   fn new() -> Self {
-    Self { nodes: Vec::new() }
+    Self { nodes: vec![None] }
   }
 
   fn insert(&mut self, node_id: usize, node: &'a StyledNode) {
@@ -983,36 +983,52 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
   }
 
   fn root_style(style: &ComputedStyle) -> String {
-    let mut parts: Vec<String> = Vec::new();
-    parts.push(format!("color: {}", format_css_color(style.color)));
+    use std::fmt::Write as _;
+
+    let mut out = String::with_capacity(64);
+    out.push_str("color: rgba(");
+    let color = style.color;
+    let _ = write!(
+      &mut out,
+      "{},{},{},{:.3}",
+      color.r,
+      color.g,
+      color.b,
+      color.a.clamp(0.0, 1.0)
+    );
+    out.push(')');
+
     // Make unstyled shapes pick up the computed text color (common for icon SVGs).
-    parts.push("fill: currentColor".to_string());
+    out.push_str("; fill: currentColor");
 
     if !style.font_family.is_empty() {
-      let families: Vec<String> = style
-        .font_family
-        .iter()
-        .map(|f| {
-          if f.contains(' ') && !(f.starts_with('"') && f.ends_with('"')) {
-            format!("\"{}\"", f)
-          } else {
-            f.clone()
-          }
-        })
-        .collect();
-      parts.push(format!("font-family: {}", families.join(", ")));
+      out.push_str("; font-family: ");
+      for (idx, family) in style.font_family.iter().enumerate() {
+        if idx != 0 {
+          out.push_str(", ");
+        }
+        if family.contains(' ') && !(family.starts_with('"') && family.ends_with('"')) {
+          out.push('"');
+          out.push_str(family);
+          out.push('"');
+        } else {
+          out.push_str(family);
+        }
+      }
     }
 
-    parts.push(format!("font-size: {:.2}px", style.font_size));
-    parts.push(format!("font-weight: {}", style.font_weight.to_u16()));
+    let _ = write!(&mut out, "; font-size: {:.2}px", style.font_size);
+    let _ = write!(&mut out, "; font-weight: {}", style.font_weight.to_u16());
     match style.font_style {
-      FontStyle::Italic => parts.push("font-style: italic".to_string()),
-      FontStyle::Oblique(Some(angle)) => parts.push(format!("font-style: oblique {}deg", angle)),
-      FontStyle::Oblique(None) => parts.push("font-style: oblique".to_string()),
+      FontStyle::Italic => out.push_str("; font-style: italic"),
+      FontStyle::Oblique(Some(angle)) => {
+        let _ = write!(&mut out, "; font-style: oblique {}deg", angle);
+      }
+      FontStyle::Oblique(None) => out.push_str("; font-style: oblique"),
       FontStyle::Normal => {}
     }
 
-    parts.join("; ")
+    out
   }
 
   fn svg_uses_document_css(styled: &StyledNode) -> bool {
@@ -2702,28 +2718,20 @@ fn create_replaced_box_from_styled(
 ) -> BoxNode {
   let tag = styled.node.tag_name().unwrap_or("img");
 
-  // Get src attribute if available
-  let src = styled.node.get_attribute("src").unwrap_or_default();
-  let alt = styled
-    .node
-    .get_attribute_ref("alt")
-    .filter(|s| !s.is_empty())
-    .map(|s| s.to_string());
-  let poster = styled
-    .node
-    .get_attribute_ref("poster")
-    .filter(|s| !s.is_empty())
-    .map(|s| s.to_string());
-  let srcset = styled
-    .node
-    .get_attribute_ref("srcset")
-    .map(parse_srcset)
-    .unwrap_or_default();
-  let sizes = styled.node.get_attribute_ref("sizes").and_then(parse_sizes);
-  let data_attr = styled.node.get_attribute("data").unwrap_or_default();
-
   // Determine replaced type
   let replaced_type = if tag.eq_ignore_ascii_case("img") {
+    let src = styled.node.get_attribute("src").unwrap_or_default();
+    let alt = styled
+      .node
+      .get_attribute_ref("alt")
+      .filter(|s| !s.is_empty())
+      .map(|s| s.to_string());
+    let srcset = styled
+      .node
+      .get_attribute_ref("srcset")
+      .map(parse_srcset)
+      .unwrap_or_default();
+    let sizes = styled.node.get_attribute_ref("sizes").and_then(parse_sizes);
     ReplacedType::Image {
       src,
       alt,
@@ -2732,8 +2740,15 @@ fn create_replaced_box_from_styled(
       picture_sources,
     }
   } else if tag.eq_ignore_ascii_case("video") {
+    let src = styled.node.get_attribute("src").unwrap_or_default();
+    let poster = styled
+      .node
+      .get_attribute_ref("poster")
+      .filter(|s| !s.is_empty())
+      .map(|s| s.to_string());
     ReplacedType::Video { src, poster }
   } else if tag.eq_ignore_ascii_case("audio") {
+    let src = styled.node.get_attribute("src").unwrap_or_default();
     ReplacedType::Audio { src }
   } else if tag.eq_ignore_ascii_case("canvas") {
     ReplacedType::Canvas
@@ -2742,6 +2757,7 @@ fn create_replaced_box_from_styled(
       content: serialize_svg_subtree(styled, document_css),
     }
   } else if tag.eq_ignore_ascii_case("iframe") {
+    let src = styled.node.get_attribute("src").unwrap_or_default();
     let srcdoc = styled
       .node
       .get_attribute_ref("srcdoc")
@@ -2749,10 +2765,18 @@ fn create_replaced_box_from_styled(
       .map(|s| s.to_string());
     ReplacedType::Iframe { src, srcdoc }
   } else if tag.eq_ignore_ascii_case("embed") {
+    let src = styled.node.get_attribute("src").unwrap_or_default();
     ReplacedType::Embed { src }
   } else if tag.eq_ignore_ascii_case("object") {
-    ReplacedType::Object { data: data_attr }
+    let data = styled.node.get_attribute("data").unwrap_or_default();
+    ReplacedType::Object { data }
   } else {
+    let src = styled.node.get_attribute("src").unwrap_or_default();
+    let alt = styled
+      .node
+      .get_attribute_ref("alt")
+      .filter(|s| !s.is_empty())
+      .map(|s| s.to_string());
     ReplacedType::Image {
       src,
       alt,
@@ -2762,18 +2786,18 @@ fn create_replaced_box_from_styled(
     }
   };
 
-  let width_attr = styled.node.get_attribute("width");
-  let height_attr = styled.node.get_attribute("height");
-  let view_box_attr = styled.node.get_attribute("viewBox");
-  let preserve_aspect_ratio_attr = styled.node.get_attribute("preserveAspectRatio");
+  let width_attr = styled.node.get_attribute_ref("width");
+  let height_attr = styled.node.get_attribute_ref("height");
 
   let (mut intrinsic_size, mut aspect_ratio) = match &replaced_type {
     ReplacedType::Svg { .. } => {
+      let view_box_attr = styled.node.get_attribute_ref("viewBox");
+      let preserve_aspect_ratio_attr = styled.node.get_attribute_ref("preserveAspectRatio");
       let svg_intrinsic = svg_intrinsic_dimensions_from_attributes(
-        width_attr.as_deref(),
-        height_attr.as_deref(),
-        view_box_attr.as_deref(),
-        preserve_aspect_ratio_attr.as_deref(),
+        width_attr,
+        height_attr,
+        view_box_attr,
+        preserve_aspect_ratio_attr,
       );
 
       let size = match (svg_intrinsic.width, svg_intrinsic.height) {
@@ -2785,9 +2809,9 @@ fn create_replaced_box_from_styled(
       (Some(size), svg_intrinsic.aspect_ratio)
     }
     _ => {
-      let intrinsic_width = width_attr.as_ref().and_then(|w| w.parse::<f32>().ok());
+      let intrinsic_width = width_attr.and_then(|w| w.parse::<f32>().ok());
 
-      let intrinsic_height = height_attr.as_ref().and_then(|h| h.parse::<f32>().ok());
+      let intrinsic_height = height_attr.and_then(|h| h.parse::<f32>().ok());
 
       let intrinsic_size = match (intrinsic_width, intrinsic_height) {
         (Some(w), Some(h)) => Some(Size::new(w, h)),
@@ -2804,7 +2828,7 @@ fn create_replaced_box_from_styled(
   };
 
   if intrinsic_size.is_none() && aspect_ratio.is_none() {
-    match replaced_type {
+    match &replaced_type {
       ReplacedType::Canvas
       | ReplacedType::Video { .. }
       | ReplacedType::Iframe { .. }
