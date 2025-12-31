@@ -3186,16 +3186,19 @@ impl Painter {
     let clip_rect = self.device_rect(clip_rect_css);
     let clip_radii = self.device_radii(clip_radii);
 
-    let clip_mask = if clip_radii.is_zero() {
+    let mut clip_mask_guard = if clip_radii.is_zero() {
       None
     } else {
-      build_rounded_rect_mask(
+      Some(BackgroundClipMaskGuard::take())
+    };
+    let clip_mask = clip_mask_guard.as_mut().and_then(|guard| {
+      guard.mask(
         clip_rect,
         clip_radii,
         self.pixmap.width(),
         self.pixmap.height(),
       )
-    };
+    });
 
     match bg {
       BackgroundImage::LinearGradient { .. }
@@ -3285,7 +3288,7 @@ impl Painter {
                 tile_w,
                 tile_h,
                 visible_clip_css,
-                clip_mask.as_ref(),
+                clip_mask,
                 layer.blend_mode,
                 quality,
               ) {
@@ -3329,7 +3332,7 @@ impl Painter {
                   tile_w,
                   tile_h,
                   visible_clip_css,
-                  clip_mask.as_ref(),
+                  clip_mask,
                   layer.blend_mode,
                   quality,
                 );
@@ -3388,7 +3391,7 @@ impl Painter {
               intersection_css,
               pixmap_w,
               pixmap_h,
-              clip_mask.as_ref(),
+              clip_mask,
               layer.blend_mode,
               quality,
             );
@@ -3515,7 +3518,7 @@ impl Painter {
             tile_w,
             tile_h,
             visible_clip_css,
-            clip_mask.as_ref(),
+            clip_mask,
             layer.blend_mode,
             quality,
           ) {
@@ -3560,7 +3563,7 @@ impl Painter {
               tile_w,
               tile_h,
               visible_clip_css,
-              clip_mask.as_ref(),
+              clip_mask,
               layer.blend_mode,
               quality,
             );
@@ -9775,6 +9778,99 @@ thread_local! {
   static CLIP_MASK_SCRATCH: RefCell<ClipMaskScratch> = RefCell::new(ClipMaskScratch::default());
 }
 
+#[derive(Default)]
+struct BackgroundClipMaskScratch {
+  mask: Option<Mask>,
+  last_rect: Option<Rect>,
+  last_radii: Option<BorderRadii>,
+}
+
+thread_local! {
+  static BACKGROUND_CLIP_MASK_SCRATCH: RefCell<BackgroundClipMaskScratch> =
+    RefCell::new(BackgroundClipMaskScratch::default());
+}
+
+struct BackgroundClipMaskGuard {
+  scratch: BackgroundClipMaskScratch,
+}
+
+impl BackgroundClipMaskGuard {
+  fn take() -> Self {
+    let scratch = BACKGROUND_CLIP_MASK_SCRATCH.with(|cell| {
+      std::mem::take(&mut *cell.borrow_mut())
+    });
+    Self { scratch }
+  }
+
+  fn mask(
+    &mut self,
+    rect: Rect,
+    radii: BorderRadii,
+    canvas_w: u32,
+    canvas_h: u32,
+  ) -> Option<&Mask> {
+    if canvas_w == 0 || canvas_h == 0 || rect.width() <= 0.0 || rect.height() <= 0.0 {
+      return None;
+    }
+
+    let replace = match self.scratch.mask.as_ref() {
+      Some(existing) => existing.width() != canvas_w || existing.height() != canvas_h,
+      None => true,
+    };
+    if replace {
+      self.scratch.mask = Mask::new(canvas_w, canvas_h);
+      self.scratch.last_rect = None;
+      self.scratch.last_radii = None;
+    }
+
+    let clamped = radii.clamped(rect.width(), rect.height());
+    let needs_rebuild =
+      self.scratch.last_rect != Some(rect) || self.scratch.last_radii != Some(clamped);
+
+    let Some(mask) = self.scratch.mask.as_mut() else {
+      return None;
+    };
+
+    if needs_rebuild {
+      if let Some(dirty) = clip_mask_dirty_bounds(rect, canvas_w, canvas_h) {
+        clear_mask_rect(mask, dirty);
+      } else {
+        mask.data_mut().fill(0);
+      }
+
+      let Some(path) = crate::paint::rasterize::build_rounded_rect_path(
+        rect.x(),
+        rect.y(),
+        rect.width(),
+        rect.height(),
+        &clamped,
+      ) else {
+        return None;
+      };
+
+      mask.fill_path(
+        &path,
+        tiny_skia::FillRule::Winding,
+        true,
+        Transform::identity(),
+      );
+
+      self.scratch.last_rect = Some(rect);
+      self.scratch.last_radii = Some(clamped);
+    }
+
+    Some(mask)
+  }
+}
+
+impl Drop for BackgroundClipMaskGuard {
+  fn drop(&mut self) {
+    BACKGROUND_CLIP_MASK_SCRATCH.with(|cell| {
+      *cell.borrow_mut() = std::mem::take(&mut self.scratch);
+    });
+  }
+}
+
 fn clear_mask_rect(mask: &mut Mask, rect: ClipMaskDirtyRect) {
   if rect.x0 >= rect.x1 || rect.y0 >= rect.y1 {
     return;
@@ -15765,6 +15861,53 @@ mod tests {
     assert!(
       allocs.is_empty(),
       "expected build_rounded_rect_mask to avoid new_pixmap allocations, got {allocs:?}"
+    );
+  }
+
+  #[test]
+  fn background_clip_mask_guard_reuses_mask_between_scopes() {
+    let rect = Rect::from_xywh(1.0, 1.0, 8.0, 8.0);
+    let radii = BorderRadii::uniform(2.0);
+
+    let ptr_first = {
+      let mut guard = BackgroundClipMaskGuard::take();
+      let mask = guard.mask(rect, radii, 10, 10).expect("mask");
+      mask.data().as_ptr()
+    };
+
+    let ptr_second = {
+      let mut guard = BackgroundClipMaskGuard::take();
+      let mask = guard.mask(rect, radii, 10, 10).expect("mask");
+      mask.data().as_ptr()
+    };
+
+    assert_eq!(
+      ptr_first, ptr_second,
+      "expected BackgroundClipMaskGuard to reuse the thread-local mask allocation"
+    );
+  }
+
+  #[test]
+  fn background_clip_mask_guard_skips_rebuild_for_same_clip() {
+    let rect = Rect::from_xywh(1.0, 1.0, 8.0, 8.0);
+    let radii = BorderRadii::uniform(2.0);
+
+    let mut guard = BackgroundClipMaskGuard::take();
+    guard.mask(rect, radii, 10, 10).expect("mask");
+
+    let idx = 5 * 10 + 5;
+    guard
+      .scratch
+      .mask
+      .as_mut()
+      .expect("mask")
+      .data_mut()[idx] = 123;
+
+    guard.mask(rect, radii, 10, 10).expect("mask");
+    assert_eq!(
+      guard.scratch.mask.as_ref().expect("mask").data()[idx],
+      123,
+      "expected BackgroundClipMaskGuard to reuse the cached mask when clip parameters are unchanged"
     );
   }
 
